@@ -207,26 +207,43 @@ avisar — por eso es un fallo duro y no un aviso.
 
 ## 6. Añadir un sexto idioma
 
-La lista vive en **cinco** sitios (no se pueden colapsar: el boot corre antes de que
-exista ningún módulo, el CHECK debe ser SQL, el backend no puede importar JS):
+[P2-I18N-ESPEJOS-SIN-ANCLA · 2026-08-21] Esta sección decía «**cinco** sitios» y el test
+«falla si los cinco divergen». **Son doce**, y siete no estaban anclados por nada. No se
+pueden colapsar: el boot corre antes de que exista ningún módulo, el CHECK debe ser SQL, y
+el backend no puede importar JS.
 
-1. `frontend/src/i18n/locales.js` — **SSOT**
-2. `frontend/index.html` — array `SUPPORTED` del boot
-3. `migrations/p1_i18n_dashboard_locale_2026_08_15.sql` — el `CHECK`
-4. `backend/migrations/…` — la misma migración (P3-MIGRATIONS-SSOT)
-5. `backend/routers/user_data.py` — `_LOCALE_VALUES`
+La columna que importa es la última: **un idioma que falte en un espejo no rompe nada**.
+Esa superficie sale en español y ya. Por eso el drift aquí es más callado que el de
+`P1-DIET-CANON-SSOT` —donde tres tablas de dieta drifearon y a la del filtro se le olvidó
+`'vegetariana'`, y el sistema servía Pollo a vegetarianas—: allí al menos alguien lo veía.
 
-Más el loader en `LOADERS` (i18n/index.js) y el JSON en `i18n/locales/`.
+| # | Sitio | Qué se ve si falta |
+|---|---|---|
+| 1 | `frontend/src/i18n/locales.js` | **SSOT.** El idioma no existe: ni sale en el selector. |
+| 2 | `frontend/src/i18n/locales/<code>.json` | El `import()` revienta, `loadLocale` se traga la excepción y devuelve `false`: la app entera en español, sin error en consola. |
+| 3 | `frontend/src/i18n/index.js` → `LOADERS` | El selector acepta el idioma y el catálogo no se descarga nunca. Mismo síntoma que el anterior, causa distinta. |
+| 4 | `frontend/index.html` → `SUPPORTED` | `<html lang>` arranca en `es-DO` hasta que React monta: parpadeo, y un lector de pantalla leyendo francés con voz española en el arranque en frío. |
+| 5 | `migrations/p1_i18n_dashboard_locale_2026_08_15.sql` → `CHECK` | El `PATCH` revienta contra la constraint: el usuario elige el idioma, el navegador cambia, y al recargar vuelve al anterior. |
+| 6 | `backend/migrations/…` (misma migración, P3-MIGRATIONS-SSOT) | Igual que la 5 en el entorno que despliegue esa copia. Las dos tienen que ser byte-idénticas. |
+| 7 | `backend/routers/user_data.py` → `_LOCALE_VALUES` | El endpoint rechaza el valor antes de llegar a la DB. El usuario cree que la app «no guarda» su elección. |
+| 8 | `backend/prompts/chat_agent.py` → `_COACH_LANGUAGE_NAMES` | La app en ese idioma y el coach contestando en español. |
+| 9 | `backend/prompts/chat_agent.py` → `_TITLE_LANGUAGE_DIRECTIVES` | Los títulos de conversación del chat nacen en español dentro de una app en otro idioma. |
+| 10 | `backend/plan_display_i18n.py` → `_DISPLAY_LANGUAGE_DIRECTIVES` | `_build_prompt` devuelve `None` y el enriquecimiento se salta ENTERO: plan y recetas en español, sin error. |
+| 11 | `backend/plan_display_i18n.py` → `_PLAN_NAME_ADDENDUM` | Los platos salen traducidos y el nombre del plan se queda en español: media pantalla en cada idioma. |
+| 12 | `backend/plan_display_i18n.py` → `_INSIGHTS_ADDENDUM` | Igual que la 11, con el razonamiento del panel de insights. |
 
-`test_p1_i18n_dashboard.py` **falla si los cinco divergen**. Es la misma clase de drift
-que cerró `P1-DIET-CANON-SSOT`: tres tablas de dieta escritas a mano drifearon y a la
-del filtro se le olvidó `'vegetariana'` — el sistema servía Pollo a vegetarianas.
+Cada fila tiene **su propio test** en
+[`test_p2_i18n_espejos_sin_ancla.py`](../tests/test_p2_i18n_espejos_sin_ancla.py), y eso es
+deliberado: un único test que compare los doce conjuntos dice «algo divergió» y te deja
+buscando; uno por espejo dice cuál y qué se ve. Verificado por mutación — añadir `'de-DE'`
+al SSOT pone rojos los nueve por separado.
 
 ## 7. Tests
 
 | Test | Qué ancla |
 |---|---|
-| [`test_p1_i18n_dashboard.py`](../tests/test_p1_i18n_dashboard.py) | Paridad de los 5 espejos, idempotencia de la migración, whitelist + validación de valor, `es-DO` sin catálogo, existencia del validador. |
+| [`test_p1_i18n_dashboard.py`](../tests/test_p1_i18n_dashboard.py) | Paridad de los espejos históricos (boot, CHECK, backend), idempotencia de la migración, whitelist + validación de valor, `es-DO` sin catálogo, existencia del validador. |
+| [`test_p2_i18n_espejos_sin_ancla.py`](../tests/test_p2_i18n_espejos_sin_ancla.py) | Los DOCE espejos de la lista de idiomas, uno por test, con la consecuencia de cada divergencia en el mensaje. |
 | `frontend/src/__tests__/I18n.p1_i18n_dashboard.test.js` | Contrato del motor: fallback al español, fail-closed del locale, interpolación (placeholder sin valor se queda **literal**), plural, `<html lang>`, formato por locale. |
 | `test_p3_i18n_deferred.py` | **Reconvertido**: ya no guarda «es-DO permanente» sino «no añadas una librería de i18n encima del motor propio». |
 
