@@ -2829,7 +2829,7 @@ def _pantry_token_variants(token: str) -> set:
     return variants
 
 
-def pantry_names_match(a: str, b: str) -> bool:
+def pantry_names_match(a: str, b: str, *, use_catalog_aliases: bool = True) -> bool:
     """¿`a` y `b` nombran la MISMA fila física de la Nevera?
 
     Compara token a token sobre la clave canónica, aceptando equivalencia
@@ -2844,12 +2844,142 @@ def pantry_names_match(a: str, b: str) -> bool:
     if key_a == key_b:
         return True
     toks_a, toks_b = key_a.split(), key_b.split()
-    if len(toks_a) != len(toks_b) or not toks_a:
-        return False
-    return all(
+    if len(toks_a) == len(toks_b) and toks_a and all(
         _pantry_token_variants(ta) & _pantry_token_variants(tb)
         for ta, tb in zip(toks_a, toks_b)
-    )
+    ):
+        return True
+    # [P2-PANTRY-REGIONAL-SYNONYMS · 2026-08-21] Peldaño 4: el mismo alimento con OTRO NOMBRE.
+    #
+    # Los tres peldaños de arriba son léxicos (mayúsculas, acentos, cantidad, plural, token a
+    # token) y por eso reconocían 0 de 22 sinónimos regionales que el propio catálogo declara:
+    # `pimiento`↔`Ají morrón`, `palta`↔`Aguacate`, `ejotes`↔`Vainitas`, `patata`↔`Papa`. Un español
+    # marcaba la compra, la Nevera guardaba «Ají morrón», y al comerse el plato que pide «pimiento»
+    # la deducción NO encontraba la fila: sin descuento, sin fila en `failed_inventory_deductions`
+    # y sin alerta. Es la mitad de PALABRA que le faltaba a P1-PANTRY-NAME-RESOLUTION, que cerró la
+    # de FORMA.
+    #
+    # La fuente es la columna `aliases` del catálogo, NO `GLOBAL_REVERSE_MAP` ni los
+    # `*_SYNONYMS` de este módulo: ésos colapsan `pechuga`→`pollo` a propósito, así que comerte una
+    # pechuga descontaría del muslo — CLAUDE.md lo prohíbe por escrito para esta pregunta.
+    #
+    # Y sólo alias INEQUÍVOCOS. Barrido del catálogo vivo: 5 claves de 1487 las reclama más de una
+    # fila y son genuinamente ambiguas (`nueces` la reclaman Almendras fileteadas Y Nueces mixtas;
+    # `mariscos`, tres filas). Emparejar por ellas descontaría del alimento equivocado, que es el
+    # error caro del lado contrario. La exclusión se CALCULA del dato: no hay lista que mantener
+    # cuando el catálogo crezca.
+    if use_catalog_aliases and _pantry_alias_match_enabled():
+        _idx = _pantry_alias_canon_index()
+        if _idx:
+            def _canon_de(_k):
+                for _v in _pantry_key_variants(_k):
+                    _hit = _idx.get(_v)
+                    if _hit:
+                        return _hit
+                return None
+            _ca, _cb = _canon_de(key_a), _canon_de(key_b)
+            if _ca and _cb and _ca == _cb:
+                return True
+    return False
+
+
+# tooltip-anchor: P2-PANTRY-REGIONAL-SYNONYMS
+_PANTRY_ALIAS_INDEX_CACHE = None
+_PANTRY_ALIAS_INDEX_AT = 0.0
+_PANTRY_ALIAS_INDEX_TTL_S = 300.0
+
+
+def _pantry_alias_match_enabled() -> bool:
+    """Cambia lo que el usuario ve descontarse de su Nevera ⇒ knob propio."""
+    return str(os.getenv("MEALFIT_PANTRY_ALIAS_MATCH", "true")).strip().lower() not in (
+        "0", "false", "no", "off")
+
+
+def _pantry_key_variants(key: str) -> set:
+    """Formas singular/plural de una clave completa. «pimientos» ↔ «pimiento».
+
+    Se expanden LOS DOS lados (índice y consulta) a propósito: el plural puede estar en el
+    catálogo (`Molondrones`) o en lo que teclea el usuario («2 pimientos»), y una expansión de un
+    solo lado acierta en un caso y falla en el otro. Tope de 12 combinaciones para que una clave
+    larga no convierta el índice en un producto cartesiano."""
+    toks = (key or "").split()
+    if not toks or len(toks) > 3:
+        return {key} if key else set()
+    salida = {""}
+    for t in toks:
+        vs = _pantry_token_variants(t) or {t}
+        salida = {(s + " " + v).strip() for s in salida for v in vs}
+        if len(salida) > 12:
+            return {key}
+    return salida or {key}
+
+
+def _reset_pantry_alias_index_cache() -> None:
+    """Para los tests y para cualquier recarga de catálogo."""
+    global _PANTRY_ALIAS_INDEX_CACHE, _PANTRY_ALIAS_INDEX_AT
+    _PANTRY_ALIAS_INDEX_CACHE, _PANTRY_ALIAS_INDEX_AT = None, 0.0
+
+
+def _pantry_alias_canon_index() -> dict:
+    """{clave de Nevera → nombre canónico}, SÓLO para claves que reclama UNA fila.
+
+    Import perezoso de `shopping_calculator` a propósito: este módulo es el más bajo de la
+    jerarquía y todos importan de él. Fail-open a `{}` — si el catálogo no está disponible la
+    Nevera sigue funcionando con lo léxico, que es la conducta de siempre."""
+    global _PANTRY_ALIAS_INDEX_CACHE, _PANTRY_ALIAS_INDEX_AT
+    import time as _t_pa
+    _ahora = _t_pa.monotonic()
+    if _PANTRY_ALIAS_INDEX_CACHE is not None and (_ahora - _PANTRY_ALIAS_INDEX_AT) < _PANTRY_ALIAS_INDEX_TTL_S:
+        return _PANTRY_ALIAS_INDEX_CACHE
+    _idx: dict = {}
+    try:
+        from shopping_calculator import get_master_ingredients as _gmi_pa
+        # EL ORDEN ES LOAD-BEARING: la ambigüedad se cuenta sobre TODOS los reclamantes, ANTES de
+        # aplicar el filtro de contención. Contarla después la destruye — `nueces` la reclaman
+        # `Nueces mixtas` (que el filtro descarta por contención) y `Almendras fileteadas` (que
+        # sobrevive), así que la clave quedaba «inequívoca» apuntando a las almendras y comerse
+        # unas nueces mixtas habría descontado de ellas. Lo destapó la mutación: el primer test de
+        # ambigüedad comparaba dos nombres CANÓNICOS, que nunca chocan entre sí.
+        _duenos: dict = {}
+        _reclamantes: dict = {}
+        for _row in (_gmi_pa() or []):
+            _canon = str(_row.get("name") or "").strip()
+            if not _canon:
+                continue
+            _canon_toks = set(canonical_pantry_key(_canon).split())
+            _claves = [_canon] + [str(_a) for _a in (_row.get("aliases") or []) if _a]
+            for _k in _claves:
+                _kk = canonical_pantry_key(_k)
+                if len(_kk) < 3:
+                    continue
+                for _kv0 in _pantry_key_variants(_kk):
+                    _reclamantes.setdefault(_kv0, set()).add(_canon)
+                # Si los tokens del alias CONTIENEN o ESTÁN CONTENIDOS en los del nombre canónico,
+                # no es un sinónimo: es el mismo alimento con un calificativo puesto o quitado.
+                #
+                # Un sinónimo REBAUTIZA (`pimiento`↔`Ají morrón`, `palta`↔`Aguacate`); un
+                # calificativo GENERALIZA o ESPECIFICA, y ese salto es justo el que rompe la regla
+                # original de este matcher —el MISMO número de tokens, para que «arroz integral» no
+                # matchee «arroz»— y lo que CLAUDE.md prohíbe aquí por escrito.
+                #
+                # Los dos sentidos hacen falta, y el segundo lo destapó un test vecino:
+                #   · hacia abajo: `pollo` es alias de `Pechuga de pollo` (y `platano` de `Plátano
+                #     verde`, que además para un español es el GUINEO — el país al que sirve esto).
+                #   · hacia arriba: `lomo de cerdo` es alias de `Cerdo`, así que sin esta mitad un
+                #     corte concreto colapsaba con el genérico.
+                # La distinción sale del dato, no de una lista que mantener.
+                _k_toks = set(_kk.split())
+                if _k_toks and _canon_toks and (
+                        _k_toks < _canon_toks or _k_toks > _canon_toks):
+                    continue
+                for _kv in _pantry_key_variants(_kk):
+                    _duenos.setdefault(_kv, set()).add(_canon)
+        _idx = {_k: next(iter(_v)) for _k, _v in _duenos.items()
+                if len(_v) == 1 and len(_reclamantes.get(_k) or ()) == 1}
+    except Exception:
+        _idx = {}
+    _PANTRY_ALIAS_INDEX_CACHE, _PANTRY_ALIAS_INDEX_AT = _idx, _ahora
+    return _idx
 
 
 # ------------------------------------------------------------------
@@ -2942,7 +3072,13 @@ def resolve_scanned_food(detected_name: str, catalog_names, aliases_by_name=None
     #    robe la identidad a un alimento propio: «repollo morado» es alias de
     #    «Repollo» Y nombre de «Repollo morado» — gana el nombre.
     for name in catalog_names:
-        if pantry_names_match(detected, name):
+        # [P2-PANTRY-REGIONAL-SYNONYMS · 2026-08-21] `use_catalog_aliases=False`: este resolvedor
+        # recibe su universo de alias por parámetro (`aliases_by_name`) y lo aplica en su propia
+        # regla 3. Dejarle consultar además el índice global rompería su contrato — pasó de ser
+        # función pura de sus argumentos a depender del catálogo vivo, y un caso que construye a
+        # propósito un catálogo SIN alias quedaba pisado por el de producción. Es la clase «el
+        # guard mide el entorno, no el contrato» que esta ola ya vio tres veces.
+        if pantry_names_match(detected, name, use_catalog_aliases=False):
             return name
 
     # 2. Identidad canónica contra los ALIASES. Único, o nada: 4 aliases del
@@ -2952,7 +3088,8 @@ def resolve_scanned_food(detected_name: str, catalog_names, aliases_by_name=None
     if aliases_by_name:
         por_alias = [
             name for name in catalog_names
-            if any(pantry_names_match(detected, a) for a in (aliases_by_name.get(name) or ()))
+            if any(pantry_names_match(detected, a, use_catalog_aliases=False)
+                   for a in (aliases_by_name.get(name) or ()))
         ]
         if len(por_alias) == 1:
             return por_alias[0]
