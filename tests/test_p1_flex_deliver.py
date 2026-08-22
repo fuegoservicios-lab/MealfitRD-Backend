@@ -48,16 +48,50 @@ def test_maquinaria_de_honestidad_se_conserva():
 
 
 def test_post_merge_tercera_guarda_tambien_omite_en_flexible():
-    # La 3ª guarda (post-merge, _PantryViolationPostMerge) re-imponía strict en flexible y
-    # revivía el ciclo con OTRA reason (pantry_violation_post_merge) — medido: lista 85→191.
+    """La guarda dura post-merge (`_PantryViolationPostMerge`) re-imponía strict en flexible y
+    revivía el ciclo con OTRA reason (`pantry_violation_post_merge`) — medido: lista 85→191.
+
+    [P3-FLEX-GUARD-ANCHOR-SSOT · 2026-08-22] Este caso anclaba en `_p04_flex_skip` y en la lectura
+    a pelo de `_pantry_flexible_mode`. `P1-POSTMERGE-WAIVER-SSOT` (2026-08-22) sustituyó ese
+    mecanismo por una delegación a `_pantry_gate_waiver_reason` — y lo hizo **justamente porque**
+    leer el flag a mano honraba 1 de los 4 waivers. O sea: el guard exigía la forma concreta que
+    resultó ser el defecto.
+
+    Se reconvierte, no se borra. La propiedad sigue siendo la misma —esta guarda no puede tumbar
+    un chunk ya perdonado— y ahora se ancla en el SSOT, que es lo que la hace cierta para los
+    cuatro waivers y no sólo para uno.
+    """
     i = _CT.find("HARD VALIDATION POST-MERGE")
     assert i > 0, "el bloque post-merge desapareció"
     blk = _CT[i: _CT.find("Recalcular contadores absolutos", i)]
-    assert "_p04_flex_skip" in blk and "_pantry_flexible_mode" in blk, (
-        "el guard duro post-merge debe omitirse en modo flexible TTL-escalado (3ª cabeza del ciclo)")
-    assert "not _p04_advisory_skip and not _p04_flex_skip" in blk, (
-        "el skip flexible debe componerse con el advisory, no reemplazarlo")
+
+    assert "_pantry_gate_waiver_reason(" in blk, (
+        "la guarda dura post-merge dejó de delegar en `_pantry_gate_waiver_reason`. Decidir aquí "
+        "con lecturas sueltas de form_data es exactamente lo que hacía que honrara 1 de los 4 "
+        "waivers"
+    )
+    assert "not _p04_advisory_skip and not _p04_waiver" in blk, (
+        "el waiver debe COMPONERSE con el advisory, no reemplazarlo: son dos condiciones "
+        "distintas y quitar cualquiera resucita una cabeza del ciclo"
+    )
     assert "_PantryViolationPostMerge(" in blk, "el raise sigue vivo para el modo estricto"
+
+
+def test_post_merge_no_vuelve_a_decidir_por_su_cuenta():
+    """La otra mitad, en negativo — y el caso que este fichero no tenía.
+
+    Lo que rompió la cuarta guarda no fue que le faltara una condición: fue que se la leyó ELLA
+    MISMA. Un guard que sólo exige «llama al SSOT» se satisface con una llamada decorativa junto a
+    la lectura a mano de siempre. Así que además se prohíbe la lectura suelta del flag dentro del
+    bloque."""
+    i = _CT.find("HARD VALIDATION POST-MERGE")
+    blk = _CT[i: _CT.find("Recalcular contadores absolutos", i)]
+    codigo = "\n".join(l for l in blk.splitlines() if not l.strip().startswith("#"))
+    assert 'form_data.get("_pantry_flexible_mode")' not in codigo, (
+        "la guarda dura post-merge vuelve a leer `_pantry_flexible_mode` por su cuenta. Ése es "
+        "el mecanismo que honraba 1 de los 4 waivers: la decisión es de "
+        "`_pantry_gate_waiver_reason`, no de este bloque"
+    )
 
 
 def test_pausa_sigue_viva_para_stale_snapshot():
