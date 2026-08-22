@@ -24,11 +24,13 @@ _TESTS = Path(__file__).resolve().parent
 
 # Los dos módulos que `app` necesita al importar y que los tests stubean: un stub
 # parcial de cualquiera de los dos mata el siguiente `import app` del worker.
+# El nombre puede ser literal ('sentry_sdk') o una VARIABLE de un bucle (mod_name): el
+# causante original iteraba una tupla. Lo que lo define como stub es el VALOR
+# (ModuleType/MagicMock), no el nombre — el cargador por ruta del repo registra un
+# módulo REAL bajo `module_name` y no entra aquí.
+# (Prosa FUERA de la asignación: test_p1_renewal_stub_clobber lee el span entero del
+# Assign y un comentario dentro de los paréntesis cuenta como código.)
 _SENTRY_STUB_DIRECT = re.compile(
-    # El nombre puede ser literal ('sentry_sdk') o una VARIABLE de un bucle (mod_name):
-    # el causante original iteraba una tupla. Lo que lo define como stub es el VALOR
-    # (ModuleType/MagicMock), no el nombre — el cargador por ruta del repo escribe
-    # `sys.modules[module_name] = module` con un módulo REAL y no entra aquí.
     r"""sys\.modules(\.setdefault\(|\[)\s*(['"](sentry_sdk|apscheduler[.\w]*)['"]|\w+)\s*[,\]]\s*=?\s*(types\.ModuleType|MagicMock)"""
 )
 
