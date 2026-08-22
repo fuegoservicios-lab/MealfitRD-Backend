@@ -125,3 +125,25 @@ def test_la_clave_del_boton_de_apple_vive_en_los_cuatro_catalogos():
     for loc in ("en-US", "fr-FR", "it-IT", "pt-BR"):
         cat = json.loads(_read(f"src/i18n/locales/{loc}.json"))
         assert cat.get("Continuar con Apple"), loc
+
+
+def test_webview_ios_sin_rubber_band_ni_inset_automatico():
+    """[P1-IOS-WEBVIEW-SCROLL \u00b7 2026-08-22] Primer build en el iPhone: \u00abel scroll del login
+    sobrepasa lo normal, como si se saliera de la pantalla\u00bb.
+
+    Dos causas que se suman, medidas en el c\u00f3digo:
+      - El WebView de Capacitor vive dentro de un UIScrollView NATIVO que rebota
+        (rubber-band). `overscroll-behavior-y: none` en `body` no lo frena: eso es CSS
+        del documento, y el que rebota es el contenedor nativo. `scrollEnabled: false`
+        deja el scroll al contenido web, que s\u00ed obedece al CSS.
+      - `contentInset: 'automatic'` suma el alto de la barra de estado al \u00e1rea
+        desplazable; el login mide `min-height: 100dvh` y la p\u00e1gina acaba midiendo
+        100dvh + inset: al llegar abajo \u00absobra\u00bb justo esa franja. `'never'` deja que el
+        CSS gestione el notch con `env(safe-area-inset-*)`, que el login YA hace."""
+    src = _read("capacitor.config.ts")
+    assert re.search(r"scrollEnabled:\s*false", src), (
+        "ios.scrollEnabled debe ser false: el UIScrollView nativo rebota y ning\u00fan CSS lo frena."
+    )
+    assert re.search(r"contentInset:\s*'never'", src), (
+        "ios.contentInset debe ser 'never': 'automatic' suma la barra de estado a un login de 100dvh."
+    )
