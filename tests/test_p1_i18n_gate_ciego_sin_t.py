@@ -252,7 +252,17 @@ def test_el_trinquete_existe_y_esta_desglosado_por_fichero() -> None:
     b = json.loads(_BASELINE.read_text(encoding="utf-8"))
     assert isinstance(b.get("total"), int), f"El trinquete no declara `total`. [{_MARKER}]"
     por = b.get("porArchivo") or {}
-    assert por, f"El trinquete no tiene desglose por fichero. [{_MARKER}]"
+    # [P2-I18N-ESCANER-RECALL · 2026-08-22] El desglose se exige mientras HAYA deuda. El
+    # trinquete llegó a CERO el 2026-08-22, y ahí un desglose vacío es el estado correcto —
+    # no la ausencia de la defensa. Condicionarlo al total endurece además el test: ahora
+    # también caza un `total > 0` que se quede sin desglose, que antes pasaba si alguien
+    # escribía la cifra a mano.
+    if b["total"] > 0:
+        assert por, f"El trinquete declara {b['total']} pero no tiene desglose. [{_MARKER}]"
+    else:
+        assert not por, (
+            f"El trinquete dice 0 y trae desglose: {por}. [{_MARKER}]"
+        )
     assert sum(por.values()) == b["total"], (
         f"El total del trinquete ({b['total']}) no cuadra con la suma del desglose "
         f"({sum(por.values())}). [{_MARKER}]"
