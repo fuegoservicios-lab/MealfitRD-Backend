@@ -9594,7 +9594,11 @@ def run_shopping_coherence_guard(plan_result: dict, *, mode_override: str = None
     _day_basis_applied = False
     if _get_coherence_day_basis_norm_knob() and (plan_result.get("aggregated_shopping_list_weekly")):
         try:
-            _n_days_basis = len(plan_result.get("days") or [])
+            # [P1-COH-BASIS-SSOT · 2026-08-22] MISMA fuente que el agregador (SSOT
+            # `shopping_source_days`). Leer `plan_result["days"]` aquí inflaba el esperado
+            # ×7/3 en planes con días archivados: 46 alimentos del plan 2245eb45 con ratio
+            # 0.424-0.431. Detalle: docs/shopping_list_cycle_days.md § el espejo a medias.
+            _n_days_basis = len(shopping_source_days(plan_result))
         except Exception:
             _n_days_basis = 0
         if _n_days_basis > 0:

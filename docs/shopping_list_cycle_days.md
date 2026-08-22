@@ -121,6 +121,30 @@ proteínas pasan de `[Huevo]` a `[Habichuelas negras, Huevo, Pechuga de pollo, Q
 ricotta, Soya texturizada]`. Los 23 recuperados son exactamente los que el chunk pausado
 reclamaba como «COMPLETAMENTE INEXISTENTES».
 
+## El espejo a medias (`P1-COH-BASIS-SSOT`, mismo día)
+
+El guard tiene **tres** lecturas de la base de días, no dos. Este P-fix movió el
+agregador y `expected_sum_from_recipes` al SSOT y dejó la tercera —`_basis_scale`, que
+espeja la proyección `base_duration_scale = 7.0 / num_days` para poder comparar contra la
+lista SEMANAL— leyendo `plan_result["days"]` a pelo.
+
+Con 3 días vivos y 4 archivados: el agregador proyecta ×7/7 = 1.0 y el espejo inflaba el
+lado esperado ×7/3 = 2.33. Medido en el plan `2245eb45`: **46 alimentos** con ratio
+comprado/esperado entre **0.424 y 0.431** — dos alimentos sin relación con ratio idéntico
+⇒ factor estructural, exactamente el criterio con el que ese bloque había diagnosticado su
+bug original. Tras el fix: **48 divergencias → 2**.
+
+Sólo se manifiesta en planes ya shifteados; uno recién generado da los dos lados iguales.
+Por eso `7af0499b` marcaba 0 undersupply mientras `2245eb45` marcaba 46, y por eso era
+fácil archivarlo como deuda preexistente.
+
+No bloqueaba nada (`MEALFIT_GUARD_UNDERSUPPLY_SEVERE=False`), pero ese knob existe para
+encenderse «tras medir el history» — y el history se estaba llenando de fantasmas. Con
+esto dentro, encenderlo habría rechazado todo plan que hubiera vivido un shift.
+
+`test_p1_coh_basis_ssot.py::TestLasTresLecturasUsanElSSOT` ancla que las **tres** lecturas
+llamen a `shopping_source_days`, para que una cuarta falle ahí antes que en producción.
+
 ## Lo que este fix NO cierra
 
 - **`get_realtime_pantry`** (`shopping_calculator.py`) sigue leyendo
