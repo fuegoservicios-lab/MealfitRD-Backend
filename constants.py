@@ -4033,6 +4033,48 @@ Sancocho: 4-5 horas. Extrema condensación de viandas pesadas y caldos grasos.
 </biblioteca_culinaria_local>
 """
 
+# [P2-COACH-COUNTRY · 2026-08-21] El coach le hablaba de mangu a un espanol.
+#
+# La biblioteca de arriba son SEIS platos dominicanos con sus tiempos de digestion, y el prompt del
+# coach no los ofrece como contexto: le da una ORDEN («TIENES LA ORDEN de citar explicitamente sus
+# horas estimadas de digestion») al ver uno de ellos. Para un usuario de Espana, Mexico o Colombia
+# eso es a la vez inutil y falso — nunca se va a comer una yaroa, y mientras tanto el coach afirma
+# conocer a fondo una cultura que no es la suya. El mecanismo del producto que regana CON
+# FUNDAMENTO queda inerte para 5 de los 6 paises.
+#
+# LO QUE NO SE HACE, Y ES LA LINEA IMPORTANTE: no se inventan tiempos de digestion para la paella,
+# el pozole ni la bandeja paisa. Un tiempo de digestion es una AFIRMACION CLINICA; fabricarla de
+# memoria es exactamente lo que costo la auditoria de procedencia del catalogo. Curarlas con fuente
+# es trabajo de contenido, hermano de P1-BETA-FRAGMENT-DEPTH.
+#
+# Asi que en beta el coach conserva el PRINCIPIO y pierde el catalogo ajeno: menos capacidad de la
+# ideal, y honesta. Vaciar la biblioteca del todo seria peor — el prompt referencia la etiqueta
+# `<biblioteca_culinaria_local>` por su nombre y se quedaria hablando de un bloque que no existe.
+# tooltip-anchor: P2-COACH-COUNTRY
+_CULINARY_KNOWLEDGE_BASE_BETA = """
+<biblioteca_culinaria_local>
+[PRINCIPIOS DE CARGA DIGESTIVA — sin catálogo local todavía]
+No dispones de una base de platos locales medidos para este país. NO inventes horas de digestión
+concretas para un plato: si no tienes el dato, razona con estos principios y dilo en general.
+Fritura profunda + almidón denso: carga digestiva alta, riesgo de reflujo nocturno y pico
+insulínico si se consume cerca de dormir.
+Grasa saturada abundante junto a carbohidrato puro: digestión lenta y sueño de peor calidad.
+Guisos muy condensados de tubérculos y caldos grasos: digestión lenta.
+</biblioteca_culinaria_local>
+"""
+
+
+def culinary_knowledge_base_for_country(country=None) -> str:
+    """Biblioteca culinaria del coach segun el pais. DO devuelve el objeto de siempre."""
+    try:
+        if not _env_bool("MEALFIT_COUNTRY_SYSTEM", False):
+            return CULINARY_KNOWLEDGE_BASE
+        return (CULINARY_KNOWLEDGE_BASE if canonicalize_country(country) == "DO"
+                else _CULINARY_KNOWLEDGE_BASE_BETA)
+    except Exception:
+        return CULINARY_KNOWLEDGE_BASE
+
+
 def _to_base_unit(qty: float, unit: str):
     unit = unit.lower() if unit else 'unidad'
     # Weights -> g

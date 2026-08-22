@@ -8,7 +8,7 @@ import re
 import unicodedata
 logger = logging.getLogger(__name__)
 
-from constants import strip_accents, CULINARY_KNOWLEDGE_BASE, validate_ingredients_against_pantry, _to_base_unit
+from constants import strip_accents, CULINARY_KNOWLEDGE_BASE, culinary_knowledge_base_for_country, validate_ingredients_against_pantry, _to_base_unit
 # [P0-DEEPSEEK-MIGRATION · 2026-06-12] Gemini → DeepSeek con router por tier.
 from llm_provider import (ChatDeepSeek, DEEPSEEK_FLASH, GPT56_LUNA,
                           build_chat_llm, is_openai_model, resolve_model_for_user)
@@ -5843,6 +5843,16 @@ def chat_with_agent(session_id: str, prompt: str, current_plan: Optional[dict] =
         rag_context += "---------------------------------------------\n"
 
     schedule_type = form_data.get("scheduleType", "standard") if form_data else "standard"
+    # [P2-COACH-COUNTRY · 2026-08-21] La `<biblioteca_culinaria_local>` son SEIS platos
+    # dominicanos con sus tiempos de digestión, y el prompt no los ofrece: ORDENA citarlos.
+    # A un español eso le llega como una reprimenda por una yaroa que no comió. El país sale
+    # de la ÚNICA puerta (`country_for_form_data`); un segundo canonicalizador aquí sería la
+    # tabla que P1-DIET-CANON-SSOT ya pagó una vez.
+    try:
+        from constants import country_for_form_data as _cffd_coach
+        _coach_country = _cffd_coach(form_data or {})
+    except Exception:
+        _coach_country = "DO"
     # Determinar si es un usuario autenticado o invitado
     is_authenticated = user_id and user_id != session_id and user_id != "guest"
 
@@ -5851,7 +5861,7 @@ def chat_with_agent(session_id: str, prompt: str, current_plan: Optional[dict] =
     # `_chat_prompt_static_prefix`. Puro reorden; rama else = orden legacy.
     if _chat_prompt_static_prefix():
         system_prompt = CHAT_AGENT_INLINE_PROMPT
-        system_prompt += f"\n{CULINARY_KNOWLEDGE_BASE}"
+        system_prompt += f"\n{culinary_knowledge_base_for_country(_coach_country)}"
         system_prompt += build_tools_instructions(user_id, plan_en_pausa=bool(current_plan) and plan_vigente is None)
         # --- bloques dinámicos (volátiles) al final ---
         system_prompt += build_temporal_context()
@@ -5864,7 +5874,7 @@ def chat_with_agent(session_id: str, prompt: str, current_plan: Optional[dict] =
         system_prompt += build_temporal_context()
         system_prompt += build_circadian_context(schedule_type)
         system_prompt += build_temporal_proactive_context()
-        system_prompt += f"\n{CULINARY_KNOWLEDGE_BASE}"
+        system_prompt += f"\n{culinary_knowledge_base_for_country(_coach_country)}"
         if rag_context:
             system_prompt += f"\n{rag_context}"
         system_prompt += build_tools_instructions(user_id, plan_en_pausa=bool(current_plan) and plan_vigente is None)
@@ -6310,6 +6320,16 @@ def chat_with_agent_stream(session_id: str, prompt: str, current_plan: Optional[
         rag_context += "Úsalo para responder de forma súper personalizada.\n⚠️ REGLA DE CONFLICTO: LOS HECHOS PERMANENTES SON LEY.\n---------------------------------------------\n"
 
     schedule_type = form_data.get("scheduleType", "standard") if form_data else "standard"
+    # [P2-COACH-COUNTRY · 2026-08-21] La `<biblioteca_culinaria_local>` son SEIS platos
+    # dominicanos con sus tiempos de digestión, y el prompt no los ofrece: ORDENA citarlos.
+    # A un español eso le llega como una reprimenda por una yaroa que no comió. El país sale
+    # de la ÚNICA puerta (`country_for_form_data`); un segundo canonicalizador aquí sería la
+    # tabla que P1-DIET-CANON-SSOT ya pagó una vez.
+    try:
+        from constants import country_for_form_data as _cffd_coach
+        _coach_country = _cffd_coach(form_data or {})
+    except Exception:
+        _coach_country = "DO"
     _base_inline = CHAT_VOICE_MODE_PROMPT if is_call_mode else CHAT_STREAM_INLINE_PROMPT
 
     # [P2-CHAT-PROMPT-STATIC-PREFIX · 2026-06-01] Estáticos al frente, volátiles
@@ -6317,7 +6337,7 @@ def chat_with_agent_stream(session_id: str, prompt: str, current_plan: Optional[
     # (nota en chat_with_agent). Puro reorden; rama else = orden legacy.
     if _chat_prompt_static_prefix():
         system_prompt = _base_inline
-        system_prompt += f"\n{CULINARY_KNOWLEDGE_BASE}"
+        system_prompt += f"\n{culinary_knowledge_base_for_country(_coach_country)}"
         system_prompt += build_tools_instructions_stream(user_id, plan_en_pausa=bool(current_plan) and plan_vigente is None)
         # --- bloques dinámicos (volátiles) al final ---
         system_prompt += build_temporal_context(local_date=local_date, tz_offset=tz_offset)
@@ -6336,7 +6356,7 @@ def chat_with_agent_stream(session_id: str, prompt: str, current_plan: Optional[
         # 🎭 Inyectar personalidad adaptativa basada en el sentimiento detectado
         if sentiment_result.get("instruction"):
             system_prompt += f"\n\n{sentiment_result['instruction']}"
-        system_prompt += f"\n{CULINARY_KNOWLEDGE_BASE}"
+        system_prompt += f"\n{culinary_knowledge_base_for_country(_coach_country)}"
         if rag_context: system_prompt += f"\n{rag_context}"
         system_prompt += build_tools_instructions_stream(user_id, plan_en_pausa=bool(current_plan) and plan_vigente is None)
 
