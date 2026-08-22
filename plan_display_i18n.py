@@ -453,6 +453,77 @@ def _extract_canonical_name(ingredient_line: str) -> str:
 
 
 # ============================================================
+# Vocabulario cerrado de las recetas (P1-DISPLAY-VOCAB-CERRADO · 2026-08-21)
+# ============================================================
+
+# Un paso de receta NO es prosa lisa: empieza por una etiqueta de seccion, o es una
+# ANOTACION en vez de una accion. Los tres parsers del frontend —`RecipesView.jsx`,
+# `MobileRecipes.jsx`, `utils/recipeSteps.js`— casan ESPANOL LITERAL, asi que una
+# etiqueta traducida deja el paso sin reconocer.
+#
+# MEDIDO sobre los 1.904 pasos vivos (2026-08-21): 1.816 llevan una de estas marcas
+# —el 95,4 %—; 599 «Montaje», 598 «Mise en place», 484 «Toque de fuego» y 135
+# anotaciones. Y lo caro no es el formato: una anotacion que pierde su etiqueta pasa a
+# NUMERARSE como accion de cocina, que es el defecto que `P2-RECIPE-NOTES-NOT-STEPS`
+# cerro en su dia — «Nota del nutricionista» convertida en «Step 2».
+#
+# El criterio es el mismo que ya rige para los nombres de alimento: esto es un
+# IDENTIFICADOR, no prosa. Se conserva literal en el DATO y se traduce en la PANTALLA.
+#
+# UN SOLO SITIO, a proposito: la leccion de P1-DIET-CANON-SSOT, donde tres tablas a mano
+# driftearon y la del filtro olvido 'vegetariana'. Si anades una etiqueta aqui, hay que
+# anadirla tambien a los parsers del frontend Y al catalogo de traduccion — el test
+# `test_p1_display_vocab_cerrado.py` verifica las dos puntas.
+#
+# Los patrones replican EXACTAMENTE los del frontend, incluida la tolerancia a emoji
+# inicial y la variante sin «El» de «Toque de Fuego». El `:` va PEGADO a proposito: la
+# tipografia francesa emite «Mise en place : » con espacio delante y el parser no lo
+# reconoce, asi que esa forma tiene que contar como PERDIDA, no como conservada.
+_VOCAB_CERRADO = (
+    ("mise_en_place", re.compile(r"^mise en place:", re.IGNORECASE)),
+    ("toque_de_fuego", re.compile(r"^(el\s+)?toque de fuego:", re.IGNORECASE)),
+    ("montaje", re.compile(r"^montaje:", re.IGNORECASE)),
+    ("nota_nutricionista", re.compile(r"nota del nutricionista", re.IGNORECASE)),
+    ("seguridad_alimentaria", re.compile(r"seguridad alimentaria\s*:", re.IGNORECASE)),
+    ("porciones_ajustadas", re.compile(r"ajustamos ligeramente las porciones",
+                                       re.IGNORECASE)),
+)
+
+# Los parsers limpian la cabeza antes de casar (un paso puede venir con emoji delante),
+# asi que aqui se limpia igual: comparar sobre la linea cruda dejaria fuera las 62
+# «🔬 Nota del nutricionista» del corpus.
+_CABEZA_NO_ALFANUM = re.compile(r"^[^\w\u00C0-\u024F]+", re.UNICODE)
+
+
+def _marca_de_vocab_cerrado(linea) -> Optional[str]:
+    """Devuelve la marca de vocabulario cerrado de esta linea, o `None`.
+
+    Sobre los primeros 80 caracteres, que es la misma ventana que usa
+    `isRecipeAnnotation` — buscar «nota del nutricionista» en la linea entera marcaria
+    un paso de cocina que la mencione de pasada.
+    """
+    if not isinstance(linea, str) or not linea.strip():
+        return None
+    cabeza = _CABEZA_NO_ALFANUM.sub("", linea.strip())[:80]
+    for marca, rx in _VOCAB_CERRADO:
+        if rx.search(cabeza):
+            return marca
+    return None
+
+
+def _conserva_el_vocab_cerrado(original: str, traducido: str) -> bool:
+    """¿La traduccion conserva la marca que traia el original?
+
+    Si el original no lleva marca, no hay nada que proteger y la linea pasa — el 4,6 %
+    de pasos que son prosa lisa se traduce y punto.
+    """
+    marca = _marca_de_vocab_cerrado(original)
+    if marca is None:
+        return True
+    return _marca_de_vocab_cerrado(traducido) == marca
+
+
+# ============================================================
 # Directivas de idioma NATIVAS por locale + prompt (UN lote por llamada)
 #
 # [Finding 3 · fix round 1] La v1 de Task 1 escribía la directiva ENTERA en
@@ -480,7 +551,8 @@ _DISPLAY_LANGUAGE_DIRECTIVES = {
         "as in the original (it is a system identifier).\n"
         "2. The output arrays 'recipe' and 'ingredients' MUST have EXACTLY the same number "
         "of elements as the original, in the SAME order (aligned by index).\n"
-        "3. Reply with ONLY valid JSON, no markdown, no text outside the JSON, with this "
+        "3. Some 'recipe' lines start with a SECTION label or are a NOTE, not a cooking action. These labels are system identifiers, exactly like the canonical food name: copy them VERBATIM in Spanish, with the same punctuation and no space before the colon — \"Mise en place:\", \"El Toque de Fuego:\", \"Montaje:\", \"Nota del nutricionista:\", \"Seguridad alimentaria:\". Translate only the text AFTER the label. The app renders the label in English on screen; a translated label makes the app show a nutritionist note as if it were a numbered cooking step.\n"
+        "4. Reply with ONLY valid JSON, no markdown, no text outside the JSON, with this "
         "exact contract:\n"
         '{"meals":[{"i":0,"name":"...","description":"...","recipe":["...","..."],'
         '"ingredients":["...","..."]}]}'
@@ -497,7 +569,8 @@ _DISPLAY_LANGUAGE_DIRECTIVES = {
         "traduzir, exatamente como no original (é um identificador do sistema).\n"
         "2. Os arrays 'recipe' e 'ingredients' de saída DEVEM ter EXATAMENTE a mesma "
         "quantidade de elementos que o original, na MESMA ordem (alinhados por índice).\n"
-        "3. Responda APENAS com JSON válido, sem markdown, sem texto fora do JSON, com este "
+        "3. Algumas linhas de 'recipe' comecam com um rotulo de SECAO ou sao uma NOTA, nao uma acao de cozinha. Esses rotulos sao identificadores do sistema, exatamente como o nome canonico do alimento: copie-os LITERALMENTE em espanhol, com a mesma pontuacao e sem espaco antes dos dois-pontos — \"Mise en place:\", \"El Toque de Fuego:\", \"Montaje:\", \"Nota del nutricionista:\", \"Seguridad alimentaria:\". Traduza somente o texto DEPOIS do rotulo. O aplicativo exibe o rotulo em portugues na tela; um rotulo traduzido faz o app mostrar uma nota do nutricionista como se fosse um passo numerado.\n"
+        "4. Responda APENAS com JSON válido, sem markdown, sem texto fora do JSON, com este "
         "contrato exato:\n"
         '{"meals":[{"i":0,"name":"...","description":"...","recipe":["...","..."],'
         '"ingredients":["...","..."]}]}'
@@ -515,7 +588,8 @@ _DISPLAY_LANGUAGE_DIRECTIVES = {
         "identifiant du système).\n"
         "2. Les tableaux 'recipe' et 'ingredients' de sortie DOIVENT avoir EXACTEMENT le "
         "même nombre d'éléments que l'original, dans le MÊME ordre (alignés par indice).\n"
-        "3. Réponds UNIQUEMENT avec du JSON valide, sans markdown, sans texte hors du JSON, "
+        "3. Certaines lignes de 'recipe' commencent par une etiquette de SECTION ou sont une NOTE, pas une action de cuisine. Ces etiquettes sont des identifiants du systeme, exactement comme le nom canonique de l'aliment : recopie-les LITTERALEMENT en espagnol, avec la meme ponctuation et SANS espace avant les deux-points — \"Mise en place:\", \"El Toque de Fuego:\", \"Montaje:\", \"Nota del nutricionista:\", \"Seguridad alimentaria:\". Attention : la typographie francaise mettrait une espace avant les deux-points ; ici il ne faut PAS. Traduis uniquement le texte APRES l'etiquette. L'application affiche l'etiquette en francais a l'ecran ; une etiquette traduite fait afficher une note du nutritionniste comme une etape numerotee.\n"
+        "4. Réponds UNIQUEMENT avec du JSON valide, sans markdown, sans texte hors du JSON, "
         "avec ce contrat exact :\n"
         '{"meals":[{"i":0,"name":"...","description":"...","recipe":["...","..."],'
         '"ingredients":["...","..."]}]}'
@@ -533,7 +607,8 @@ _DISPLAY_LANGUAGE_DIRECTIVES = {
         "sistema).\n"
         "2. Gli array 'recipe' e 'ingredients' in uscita DEVONO avere ESATTAMENTE lo stesso "
         "numero di elementi dell'originale, nello STESSO ordine (allineati per indice).\n"
-        "3. Rispondi SOLO con JSON valido, senza markdown, senza testo fuori dal JSON, con "
+        "3. Alcune righe di 'recipe' iniziano con un'etichetta di SEZIONE o sono una NOTA, non un'azione di cucina. Queste etichette sono identificatori di sistema, esattamente come il nome canonico dell'alimento: copiale ALLA LETTERA in spagnolo, con la stessa punteggiatura e senza spazio prima dei due punti — \"Mise en place:\", \"El Toque de Fuego:\", \"Montaje:\", \"Nota del nutricionista:\", \"Seguridad alimentaria:\". Traduci solo il testo DOPO l'etichetta. L'app mostra l'etichetta in italiano sullo schermo; un'etichetta tradotta fa comparire una nota del nutrizionista come se fosse un passo numerato.\n"
+        "4. Rispondi SOLO con JSON valido, senza markdown, senza testo fuori dal JSON, con "
         "questo contratto esatto:\n"
         '{"meals":[{"i":0,"name":"...","description":"...","recipe":["...","..."],'
         '"ingredients":["...","..."]}]}'
@@ -1110,7 +1185,15 @@ def _validate_and_build_display(original: dict, item: dict) -> Optional[dict]:
         step = step if isinstance(step, str) else str(step)
         original_step = original["recipe"][idx]
         original_step = original_step if isinstance(original_step, str) else str(original_step)
-        final_recipe.append(step if _conserva_las_cifras(original_step, step) else original_step)
+        # [P1-DISPLAY-VOCAB-CERRADO · 2026-08-21] Dos checks per-linea, el mismo
+        # fallback: se descarta LA LINEA (no el meal) y se cae al espanol.
+        #   - cifras: un «180 g» convertido a «1 cup» descuadra pantalla y calculo.
+        #   - vocabulario cerrado: sin el prefijo, el parser de pantalla no reconoce la
+        #     seccion, y sin la etiqueta de nota una ANOTACION pasa a numerarse como
+        #     accion de cocina.
+        ok = (_conserva_las_cifras(original_step, step)
+              and _conserva_el_vocab_cerrado(original_step, step))
+        final_recipe.append(step if ok else original_step)
 
     return {
         "name": name.strip(),
