@@ -14612,23 +14612,87 @@ _ALLERGEN_SYNONYMS = {
 # es una trampa silenciosa, y las palabras de CATEGORÍA del Reglamento UE ('moluscos',
 # 'crustáceos') son estándar de etiquetado en España, donde mucha gente es alérgica a uno y no al
 # otro. tooltip-anchor: _ALLERGEN_DECLARATION_ALIASES (test_p0_allergen_vocab_i18n.py)
+#
+# [P0-I18N-ALERGENOS-FR-IT-PT · 2026-08-22] Y las TRES lenguas que faltaban.
+#
+# El cierre de arriba (2026-08-21) resolvió español e inglés porque ese era el alcance del
+# sistema de PAÍSES. El sistema de IDIOMAS añadió después fr-FR, it-IT y pt-BR, y este
+# vocabulario nunca los aprendió: no es una regresión, son dos proyectos cuyos alcances no
+# llegaron a tocarse. MEDIDO ejecutando `clinical_backstop_for_meal` sobre platos que SÍ
+# contienen el alérgeno, antes de este bloque:
+#
+#     declara 'Cacahuete' (es-ES) -> 1 violación      declara 'Arachide'  (fr) -> 0
+#     declara 'Peanut'    (en)    -> 1 violación      declara 'Arachidi'  (it) -> 0
+#                                                     declara 'Amendoim'  (pt) -> 0
+#     'Gluten'/'Glúten' -> 1                          'Glutine'   (it) -> 0
+#
+# 10 de 21 combinaciones no bloqueaban. El italiano «Glutine» fallaba mientras «Gluten» y
+# «Glúten» pasaban — por coincidencia ortográfica con el español, no por diseño, que es la
+# peor forma de estar cubierto: parece que funciona hasta que cambias de palabra.
+#
+# POR DÓNDE ENTRA, que acota el daño y también el arreglo: los CHIPS están bien. QAllergies
+# manda `val` canónico español («Mani», «Mariscos», «Pescado») y traduce sólo el `label`. La
+# exposición es el campo libre «Otra…» y `update_form_field(field='allergies')` desde el
+# coach. O sea la vía que P2-ALLERGEN-CHIPS-REACH-ENGINE describió como «media seguridad de
+# un chip es que el usuario no tenga que acordarse», invertida: aquí, si te acuerdas y lo
+# escribes en tu idioma, tampoco funciona. Y falla EN SILENCIO — ni violación, ni aviso, ni
+# fila de telemetría.
+#
+# LO QUE NO SE TOCA, a propósito: la resolución por subcadena de `_expand_allergy_declarations`.
+# Parece la trampa registrada («sal» ⊂ «salsa») y NO lo es aquí — la sobre-detección es el
+# sesgo declarado del módulo ('nuts' ⊂ 'peanuts' es consejo clínico habitual) y ponerle
+# frontera de palabra la desactivaría. La dirección peligrosa es servir el alérgeno, y esa
+# no se abre. Por eso este arreglo es DATO y nada más.
+#
+# Se evitan a propósito los tokens ultracortos aunque sean correctos (fr «blé», it «grano»):
+# con matching por subcadena, un token de 3 letras casa dentro de palabras que no tienen nada
+# que ver, y la lección de «sal» ⊂ «salsa» aplica igual aquí aunque el sesgo sea seguro.
 _ALLERGEN_DECLARATION_ALIASES = {
-    "mani": ["peanuts", "peanut allergy", "groundnut", "groundnuts"],
-    "frutos secos": ["nuts", "tree nuts", "tree-nuts", "treenuts", "nut allergy"],
+    "mani": ["peanuts", "peanut allergy", "groundnut", "groundnuts",
+             # fr / it / pt
+             "arachide", "arachides", "arachidi", "amendoim", "amendoins"],
+    "frutos secos": ["nuts", "tree nuts", "tree-nuts", "treenuts", "nut allergy",
+                     # fr / it / pt
+                     "fruits a coque", "fruits secs", "noix",
+                     "frutta a guscio", "frutta secca", "noci",
+                     "oleaginosas", "nozes", "castanhas"],
     "mariscos": ["shellfish", "shellfish allergy", "crustacean", "crustaceans", "mollusc",
                  "molluscs", "mollusk", "mollusks",
                  # Categorías del Reglamento UE 1169/2011 (nº 2 crustáceos, nº 14 moluscos):
                  # ningún ingrediente se llama así, pero es como se declara en España.
-                 "moluscos", "molusco", "crustaceos", "crustaceo"],
-    "pescado": ["fish", "fish allergy", "seafood"],
-    "lacteos": ["dairy", "milk", "cows milk", "cow milk", "dairy allergy", "casein"],
+                 "moluscos", "molusco", "crustaceos", "crustaceo",
+                 # fr / it / pt — las mismas dos categorías del Reglamento en cada lengua
+                 "fruits de mer", "crustaces", "mollusques",
+                 "frutti di mare", "crostacei", "molluschi",
+                 "frutos do mar", "crustaceos do mar"],
+    "pescado": ["fish", "fish allergy", "seafood",
+                # fr / it / pt
+                "poisson", "poissons", "pesce", "peixe", "peixes"],
+    "lacteos": ["dairy", "milk", "cows milk", "cow milk", "dairy allergy", "casein",
+                # fr / it / pt
+                "produits laitiers", "produit laitier", "laitier", "laitiers", "lait",
+                "latticini", "latte",
+                "laticinios", "leite", "caseina"],
     "lactosa": ["lactose", "lactose intolerance", "lactose intolerant",
-                "intolerancia a la lactosa", "intolerante a la lactosa"],
-    "huevo": ["egg", "eggs", "egg allergy"],
+                "intolerancia a la lactosa", "intolerante a la lactosa",
+                # fr / it / pt
+                "intolerance au lactose", "lattosio", "intolleranza al lattosio",
+                "intolerancia a lactose"],
+    "huevo": ["egg", "eggs", "egg allergy",
+              # fr / it / pt
+              "oeuf", "oeufs", "uovo", "uova", "ovo", "ovos"],
     "gluten": ["celiac", "coeliac", "celiaco", "celiaca", "celiaquia", "gluten allergy",
-               "gluten intolerance", "enfermedad celiaca"],
-    "soya": ["soy", "soybean", "soybeans", "soya bean"],
-    "sesamo": ["sesame", "sesame seeds", "sesame allergy", "ajonjoli"],
+               "gluten intolerance", "enfermedad celiaca",
+               # fr / it / pt — «glúten» pierde la tilde al normalizar y ya casaba;
+               # «glutine» NO, que es lo que dejaba al italiano sin defensa.
+               "glutine", "celiachia", "maladie coeliaque", "coeliaque",
+               "doenca celiaca", "frumento"],
+    "soya": ["soy", "soybean", "soybeans", "soya bean",
+             # it (fr/pt «soja» ya casa con el sinónimo español del mismo nombre)
+             "soia"],
+    "sesamo": ["sesame", "sesame seeds", "sesame allergy", "ajonjoli",
+               # fr / it / pt
+               "sesamo", "graines de sesame", "semi di sesamo", "gergelim"],
 }
 
 
