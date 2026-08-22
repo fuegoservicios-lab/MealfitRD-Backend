@@ -405,11 +405,38 @@ def _normalize_day_indices(day_indices, days_len: int) -> list:
 #      dominicano") NO están en esta lista — se conservan a propósito.
 # ============================================================
 
+# [P1-I18N-DISPLAY-CANONICO-PARTITIVO · 2026-08-22] Dos ampliaciones, las dos por lo mismo:
+# lo que NO se consume como cantidad acaba DENTRO del «nombre canónico», y entonces el check
+# rechaza un gloss correcto y esa línea se queda en español.
+#
+#   '2 dientes de ajo'          -> canónico 'dientes de ajo'   (debería ser 'ajo')
+#   '½ pedazo de ñame (≈150 g)' -> canónico 'pedazo de ñame'   (debería ser 'ñame')
+#   '⅓ taza de yogurt griego'   -> la fracción no se consumía siquiera
+#
+# MEDIDO con una corrida dirigida contra el modelo real sobre días reales: fr-FR tenía 8 de
+# 186 líneas de ingrediente caídas al español (4,3 %), y SEIS de esas ocho son de estas dos
+# clases. El ajo aparece en casi todos los platos salados, así que además son siempre las
+# MISMAS líneas: el usuario ve su receta en francés con una de cada ~20 líneas en español, y
+# siempre la del ajo. Es justo el «mitad francés mitad español en la misma pantalla» que el
+# fallback per-línea existe para evitar, produciéndose por un defecto del extractor.
+#
+#   (1) Fracciones vulgares COMPLETAS y guiones de rango. Antes sólo ½¼¾, así que '⅓' y el
+#       '–' de '1–2 dientes' bloqueaban el prefijo entero.
+#   (2) Los sustantivos PARTITIVOS entran en la lista de unidades. No es una categoría nueva:
+#       la lista ya contenía a sus hermanos 'lonjas/rebanadas/rodajas/lascas', que son
+#       exactamente lo mismo (una porción contable de un alimento que no es el alimento).
+#
+# NO se toca el `\b` del final ni el orden: la lección de alternación-no-longest-match que
+# documenta el comentario de abajo sigue viva, y los partitivos nuevos comparten prefijo
+# entre sí ('pedazo'/'pedazos') igual que 'unidad'/'unidades'.
 _QTY_UNIT_PREFIX_RE = re.compile(
-    r"^\s*[\d.,/½¼¾\s]*\s*"
+    r"^\s*[\d.,/½¼¾⅓⅔⅕⅖⅗⅘⅙⅚⅛⅜⅝⅞\s–—-]*\s*"
     r"(kg|kilos?|g|gr|gramos?|ml|mls?|l|litros?|tazas?|taza|cditas?|cdtas?|cdas?|cucharadas?|"
     r"cucharaditas?|unidad(?:es)?|unids?|piezas?|pza|oz|onzas?|lb|lbs|libras?|"
-    r"lonjas?|rebanadas?|rodajas?|lascas?)?\b\s*",
+    r"lonjas?|rebanadas?|rodajas?|lascas?|"
+    # Partitivos: porción contable que NO es el alimento. Mismo papel que 'rodajas'.
+    r"dientes?|pedazos?|tortas?|ramitas?|ramas?|hojas?|tallos?|filetes?|"
+    r"pu[ñn]ados?|gajos?|cabezas?|latas?|paquetes?|sobres?|potes?|fundas?|manojos?)?\b\s*",
     # [Finding 1 fix, iteración 2] `\b` tras el grupo de unidad: sin esto la
     # alternativa CORTA "l"/"g"/"lb" (que aparece antes en la lista por orden
     # alfabético natural) consume solo el prefijo de una palabra más larga
@@ -1638,11 +1665,37 @@ def enrich_plan_display(
                     )
                     response = llm.invoke([SystemMessage(content=prompt)])
                 except Exception as e:
+                    # [P1-I18N-DISPLAY-LOTE-PERDIDO-SIN-SENAL · 2026-08-22] Antes esto era
+                    # un `continue` seco: el lote desaparecía sin reintento Y sin contarse.
+                    #
+                    # El resultado era la peor combinación posible. Un timeout transitorio
+                    # de 60 s dejaba media traducción persistida y la otra media en
+                    # español, PERMANENTEMENTE —el disparador 4 sólo mira el primer y el
+                    # último día, así que no vuelve salvo que el usuario cambie de idioma
+                    # otra vez— y `targets_perdidos` reportaba 0, de modo que la telemetría
+                    # decía éxito limpio. Un fallo que no se reintenta y encima no se
+                    # cuenta es indistinguible de que no hubiera pasado nada.
+                    #
+                    # Se reencola mientras quede presupuesto (el techo
+                    # `_max_invocaciones_por_ciclo` ya existe, así que no hay riesgo de
+                    # bucle: si el proveedor está caído de verdad, el techo lo para y la
+                    # rama de arriba lo contabiliza). Sin presupuesto, se suma a
+                    # `targets_perdidos` igual que hace la rama de JSON no parseable —
+                    # que es el mismo fallo con otra causa y ya se contaba bien.
                     logger.warning(
                         f"[P1-PLAN-DISPLAY-I18N] LLM invoke falló plan={plan_id} "
                         f"locale={locale} comidas={len(targets)}: {e!r}"
                     )
                     last_skip_reason = "llm_exception"
+                    if _presupuesto_invocaciones > 0:
+                        _pendientes.append(targets)
+                    else:
+                        targets_perdidos += len(targets)
+                        logger.error(
+                            f"[P1-PLAN-DISPLAY-I18N] lote perdido tras fallo de invoke y "
+                            f"sin presupuesto plan={plan_id} locale={locale}: "
+                            f"{len(targets)} comida(s) se quedan en español."
+                        )
                     continue
 
                 # [Finding 7 · fix round 1] Telemetría INMEDIATAMENTE tras el invoke
@@ -1756,18 +1809,42 @@ def enrich_plan_display(
                 "targets": len(_todos_los_targets),
                 "targets_perdidos": targets_perdidos,
                 "mismatch": mismatch_total,
-                "reason": None if total_written > 0 else (
-                    "persist_stale_mismatch" if mismatch_total else last_skip_reason
+                # [P1-I18N-DISPLAY-LOTE-PERDIDO-SIN-SENAL · 2026-08-22] `reason` ya no
+                # colapsa a None en cuanto se escribió ALGO. Con `total_written > 0` y
+                # `targets_perdidos > 0` a la vez, el usuario tiene el plan MEDIO
+                # traducido y permanentemente así — y la fila decía `reason: None`, o sea
+                # éxito limpio. Media traducción no es un éxito: es el único estado que
+                # el fallback per-línea existe para evitar, servido de golpe.
+                "reason": (
+                    "partial_loss" if (total_written > 0 and targets_perdidos > 0)
+                    else None if total_written > 0
+                    else ("persist_stale_mismatch" if mismatch_total else last_skip_reason)
                 ),
             }
             _emit_result_telemetry(plan_id, user_id, locale, _resumen)
 
             if total_written > 0:
-                logger.info(
-                    f"[P1-PLAN-DISPLAY-I18N] enriquecidos {total_written} meal(s) en "
-                    f"{len(lotes_iniciales)} lote(s) plan={plan_id} locale={locale} perdidas={targets_perdidos}"
-                )
-                return {"enriched_meals": total_written, "skipped": None}
+                if targets_perdidos:
+                    # [P1-I18N-DISPLAY-LOTE-PERDIDO-SIN-SENAL · 2026-08-22] `error`, no
+                    # `info`, y la elección de nivel ES el arreglo: con
+                    # `DEFAULT_EVENT_LEVEL=ERROR` un `info` no sube a Sentry, así que un
+                    # plan medio traducido para siempre no dejaba ni una señal que alguien
+                    # pudiera ver. Mismo criterio que la rama de cero escrituras de abajo.
+                    logger.error(
+                        f"[P1-PLAN-DISPLAY-I18N] enriquecimiento PARCIAL plan={plan_id} "
+                        f"locale={locale}: {total_written} meal(s) traducidos y "
+                        f"{targets_perdidos} perdidos — el usuario ve el plan mitad "
+                        f"traducido y el disparador no vuelve solo."
+                    )
+                else:
+                    logger.info(
+                        f"[P1-PLAN-DISPLAY-I18N] enriquecidos {total_written} meal(s) en "
+                        f"{len(lotes_iniciales)} lote(s) plan={plan_id} locale={locale} perdidas={targets_perdidos}"
+                    )
+                return {
+                    "enriched_meals": total_written,
+                    "skipped": "partial_loss" if targets_perdidos else None,
+                }
 
             if mismatch_total:
                 last_skip_reason = "persist_stale_mismatch"

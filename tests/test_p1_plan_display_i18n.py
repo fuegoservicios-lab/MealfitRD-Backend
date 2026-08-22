@@ -824,7 +824,14 @@ def test_batching_splits_by_day_and_persists_each_batch(engine, monkeypatch):
 
     result = pdi.enrich_plan_display("plan-1", "user-1", "en-US")
 
-    assert result == {"enriched_meals": 1, "skipped": None}
+    # [P1-I18N-DISPLAY-LOTE-PERDIDO-SIN-SENAL · 2026-08-22] Antes esto exigía
+    # `skipped: None`, o sea ÉXITO LIMPIO — para un plan que queda MITAD traducido y
+    # mitad en español, y permanentemente así (el disparador sólo mira el primer y el
+    # último día, no vuelve). El test estaba codificando el contrato equivocado: la
+    # recuperación parcial que celebra es real y es buena —un lote malo no tumba al
+    # otro—, pero lo que se le devuelve al operador no puede ser lo mismo que un ciclo
+    # completo. `partial_loss` es esa diferencia.
+    assert result == {"enriched_meals": 1, "skipped": "partial_loss"}
     assert "_display" in engine["plan_data"]["days"][0]["meals"][0]
     assert "_display" not in engine["plan_data"]["days"][1]["meals"][0]
     assert len(engine["persist_calls"]) == 1  # solo el lote que sí validó persiste
