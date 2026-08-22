@@ -54,14 +54,27 @@ def test_helper_no_corre_en_el_camino_con_precio():
 @pytest.mark.e2e
 def test_categoria_real_resuelve_para_filas_vivas():
     """Lookup vivo contra el catálogo (e2e, no corre en el gate): las filas del incidente
-    resuelven a su pasillo real."""
+    resuelven a su pasillo real.
+
+    [reconvertido · P2-COUNTRY-HOUSEKEEPING · 2026-08-21] Antes esperaba la categoría CRUDA de la
+    base («Vegetales»), y eso era media solución: la rama CON precio emite el label de DISPLAY
+    («VEGETALES»), el Dashboard agrupa por la cadena literal, y el usuario acababa viendo DOS
+    secciones del mismo pasillo del súper — una con doce ítems y otra con las Acelgas solas. El
+    helper devuelve ahora el label de display, así que ambas ramas caen en el mismo sitio.
+
+    Se ancla contra `_get_display_category`, no contra literales, para que un cambio del mapa de
+    pasillos no obligue a re-teclear este test."""
     import db_core
     if db_core.connection_pool is None:
         pytest.skip("connection_pool es None — e2e")
     db_core.connection_pool.open()
     import shopping_calculator as sc
-    assert sc._master_category_for_unpriced_item("Acelgas") == "Vegetales"
-    assert sc._master_category_for_unpriced_item("Membrillo") == "Frutas"
-    assert sc._master_category_for_unpriced_item("Jamón serrano") == "Proteínas"
-    assert sc._master_category_for_unpriced_item("Hummus") == "Despensa"
+    for nombre, cruda in (("Acelgas", "Vegetales"), ("Membrillo", "Frutas"),
+                          ("Jamón serrano", "Proteínas"), ("Hummus", "Despensa")):
+        got = sc._master_category_for_unpriced_item(nombre)
+        assert got == sc._get_display_category(cruda, nombre), (
+            f"{nombre!r} → {got!r}: no es el MISMO pasillo que emite la rama con precio, así que "
+            f"el Dashboard volvería a pintar dos secciones para el mismo estante"
+        )
+        assert got != cruda, f"{nombre!r} devolvió la categoría cruda de la DB, no el label"
     assert sc._master_category_for_unpriced_item("nombre-que-no-existe-xyz") is None

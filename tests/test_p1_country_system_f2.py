@@ -1672,7 +1672,13 @@ def test_jamon_serrano_no_se_dropea_en_silencio_via_unpriced_keep(sc, monkeypatc
     # [P2-SHOPLIST-BETA-POLISH · 2026-08-18] pasillo REAL del súper, no el label interno
     # 'CATÁLOGO SIN PRECIO' que se filtraba al PDF (el estado beta lo cuenta el banner).
     # 'Proteínas' es la categoría de la fila viva en master_ingredients.
-    assert jamon.get("display_category") == "Proteínas"
+    # [reconvertido · P2-COUNTRY-HOUSEKEEPING · 2026-08-21] Era «Proteínas» (la categoría CRUDA de
+    # la base). La rama CON precio emite el label de DISPLAY «PROTEÍNAS» y el Dashboard agrupa por
+    # la cadena literal: con las dos grafías el usuario veía DOS secciones del mismo pasillo del
+    # súper. La invariante que importa —y la que se ancla— es que el ítem sin precio caiga en el
+    # MISMO pasillo que uno con precio, no la grafía concreta.
+    assert jamon.get("display_category") == sc._get_display_category("Proteínas", "Jamón serrano")
+    assert jamon.get("display_category") == "PROTEÍNAS"
 
 
 @pytest.mark.e2e
@@ -2583,7 +2589,12 @@ def test_tortilla_de_maiz_knob_encendido_sobrevive_como_catalogo_sin_precio(sc, 
     assert tortilla is not None, "con el knob encendido, 'Tortilla de maíz' debe sobrevivir"
     assert tortilla.get("estimated_cost_rd") is None
     # [P2-SHOPLIST-BETA-POLISH · 2026-08-18] pasillo real del master (era el label interno).
-    assert tortilla.get("display_category") == "Despensa"
+    # [reconvertido · P2-COUNTRY-HOUSEKEEPING · 2026-08-21] El label de DISPLAY, no la categoría
+    # cruda de la base: la rama con precio emite «DESPENSA» y el Dashboard agrupa por la cadena
+    # literal, así que las dos grafías pintaban dos secciones del mismo pasillo.
+    assert tortilla.get("display_category") == sc._get_display_category("Despensa",
+                                                                       "Tortilla de maíz")
+    assert tortilla.get("display_category") == "DESPENSA"
 
 
 @pytest.mark.e2e
@@ -3536,10 +3547,15 @@ def test_filas_pais_sobreviven_como_si_mismas_bajo_catalogo_sin_precio_fix_round
     assert item.get("estimated_cost_rd") is None, (
         f"{nombre!r} no debe llevar costo RD inventado (rama unpriced-keep)"
     )
-    assert item.get("display_category") in (
-        "Despensa", "Frutas", "Lácteos", "Proteínas", "Vegetales", "Víveres",
-        "CATÁLOGO SIN PRECIO",
-    ), (
+    # [reconvertido · P2-COUNTRY-HOUSEKEEPING · 2026-08-21] Eran las categorías CRUDAS de la base.
+    # La rama CON precio emite el label de DISPLAY (mayúsculas) y el Dashboard agrupa por la cadena
+    # literal: con las dos grafías conviviendo, el usuario veía DOS secciones del mismo pasillo del
+    # súper —una con doce ítems y otra con las Acelgas solas—. La invariante es «el ítem sin precio
+    # cae en el MISMO pasillo que uno con precio», así que se ancla contra el propio mapa de
+    # display en vez de contra una lista de literales que habría que re-teclear.
+    _pasillos_display = {sc._get_display_category(_c, "x") for _c in
+                         ("Despensa", "Frutas", "Lácteos", "Proteínas", "Vegetales", "Víveres")}
+    assert item.get("display_category") in (_pasillos_display | {"CATÁLOGO SIN PRECIO"}), (
         f"{nombre!r} sobrevivió pero con categoría inesperada: {item.get('display_category')!r}"
     )
 
