@@ -129,8 +129,8 @@ def _perfil(idx, label, *, gender, age, weight, height, goal, activity,
     }
 
 
-def build_landing_profiles() -> list:
-    """La matriz: 20 perfiles que cubren TODOS los chips del formulario al menos una vez.
+def build_landing_profiles(country: str = "DO") -> list:
+    """La matriz: 25 perfiles que cubren TODOS los chips del formulario al menos una vez.
 
     Diseño (ver docs/landing_benchmarks.md → «Matriz de perfiles»):
       - 1 chip de condición por perfil dedicado, con el medicamento típico de esa condición.
@@ -139,10 +139,19 @@ def build_landing_profiles() -> list:
       - Las 6 alergias repartidas en 2 perfiles multi-alergia.
       - vegetariana pura y vegana×DM2 (cruce dieta×condición).
       - 2 baselines sanos como referencia de precisión.
+    [P2-LANDING-BENCH-COUNTRY · 2026-08-21] `country` (default 'DO' ⇒ la matriz de siempre)
+    permite correr la MISMA matriz clínica bajo otro país. Fail-safe por `canonicalize_country`:
+    un valor que no reconoce cae a 'DO', igual que el resto del sistema.
+
     tooltip-anchor: P1-LANDING-BENCH-1-MATRIX
     """
     e = dict  # brevedad
-    return [
+    try:
+        from constants import canonicalize_country as _cc_lb
+        _cc = _cc_lb(country)
+    except Exception:
+        _cc = "DO"
+    _perfiles = [
         _perfil(1, "baseline_m", gender="male", age=35, weight=90, height=180,
                 goal="lose_fat", activity="moderate"),
         _perfil(2, "baseline_f", gender="female", age=27, weight=58, height=163,
@@ -263,6 +272,17 @@ def build_landing_profiles() -> list:
                 medications=["Antidepresivo IMAO"],
                 expect=e(medication_rules=["maoi"], fs9=True)),
     ]
+    # [P2-LANDING-BENCH-COUNTRY · 2026-08-21] El país se estampa AQUÍ y sólo aquí. El wizard lo
+    # emite desde Fase 0, así que sin este campo la promesa del docstring de `_perfil` —«la MISMA
+    # forma que emite el wizard»— era falsa desde el día del flip, y un banco que no reproduce la
+    # entrada real mide otra cosa.
+    #
+    # Un parámetro `country=` en `_perfil` sería código MUERTO: ningún perfil de la matriz elige
+    # país propio, es una dimensión de la CORRIDA entera. La mutación lo destapó — quitarlo de
+    # `_perfil` no rompía ningún test porque este bucle ya ponía el campo.
+    for _p in _perfiles:
+        _p["country"] = _cc
+    return _perfiles
 
 
 def strip_benchmark_meta(profile: dict) -> dict:
@@ -411,7 +431,55 @@ def structural_facts() -> dict:
         # Contables solo con DB (el runner los completa best-effort; None = sin DB).
         "alimentos_catalogo": None,
         "productos_supermercado": None,
+        # [P2-LANDING-BENCH-COUNTRY · 2026-08-21] Eje de país. El banco evaluaba sus perfiles
+        # TODOS como dominicanos, así que ninguna de las regresiones de la ola de países habría
+        # movido una sola cifra — y dos de ellas se ven CONTANDO CARACTERES:
+        # `P1-VERIFIED-CATALOG-COUNTRY` (el bloque «USA EXCLUSIVAMENTE ESTOS ALIMENTOS»
+        # byte-idéntico entre España y RD, 3824 chars) y `P1-COUNTRY-CATALOG-BY-COUNTRY` (los
+        # cinco beta idénticos entre sí, 5777). Dos columnas iguales en esta tabla las habrían
+        # enseñado sin abrir un plan.
+        #
+        # Va en el modo `structural` porque ahí es GRATIS: se deriva del código, sin LLM ni red.
+        # Sin DB los tamaños salen en 0 y el resto del hecho sigue siendo válido.
+        "por_pais": _structural_facts_por_pais(),
     }
+
+
+def _structural_facts_por_pais() -> dict:
+    """Por país: cuánto mide su catálogo verificado y si el contexto temporal lo nombra.
+
+    Las dos magnitudes elegidas no son arbitrarias: son exactamente las que acusan los dos gaps
+    que esta ola encontró a ojo. Añadir más aquí es barato; lo que no debe pasar es que la tabla
+    tenga una sola columna, porque entonces no compara nada.
+    tooltip-anchor: P2-LANDING-BENCH-COUNTRY"""
+    out = {}
+    try:
+        from constants import COUNTRY_PROFILES
+        paises = list(COUNTRY_PROFILES)
+    except Exception:
+        return out
+    for cc in paises:
+        fila = {"catalogo_verificado_chars": 0, "contexto_temporal_chars": 0,
+                "contexto_temporal_habla_del_caribe": False}
+        try:
+            from graph_orchestrator import _get_verified_catalog_instruction as _gvci
+            fila["catalogo_verificado_chars"] = len(_gvci({"country": cc}) or "")
+        except Exception:
+            pass
+        try:
+            # El contexto temporal no NOMBRA el país (medido): lo que hace es incluir el bloque
+            # caribeño —«Temporada Caribeña», «Hace MUCHO calor en el Caribe»— sólo para RD, y
+            # omitirlo en beta en vez de inventarle a España un equivalente climático. Así que el
+            # hecho útil es el TAMAÑO y si aparece el Caribe: antes de
+            # `P1-TIME-CONTEXT-COUNTRY`, a un español se le decía que hace calor en el Caribe.
+            from prompts.plan_generator import build_time_context as _btc
+            _ctx = _btc(country=cc) or ""
+            fila["contexto_temporal_chars"] = len(_ctx)
+            fila["contexto_temporal_habla_del_caribe"] = "Caribe" in _ctx
+        except Exception:
+            pass
+        out[cc] = fila
+    return out
 
 
 # ════════════════════════════════════════════════════════════════════════════════════════════
