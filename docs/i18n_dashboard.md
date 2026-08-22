@@ -15,18 +15,27 @@ Se traduce **la interfaz**. No se traduce **el contenido**.
 | Superficie | ¿Traducida? | Por qué |
 |---|---|---|
 | Chrome del dashboard (nav, botones, títulos, Configuración, toasts, validaciones, `aria-label`) | **Sí** | Es lo que hace la app usable por alguien que no lee español. |
-| Plan, recetas, lista de compras | **No** | Las genera el LLM en español. Traducirlas es cambiar los prompts que arman el CONTENIDO, y eso multiplica el coste por token y abre un frente de calidad clínica en 5 idiomas. Los nombres de alimentos/platos nunca se tocan (fila de abajo). |
+| Plan, recetas y nombre del plan | **Sí**, desde [P1-PLAN-DISPLAY-I18N · 2026-08-19] | Capa `_display[locale]` paralela: el LLM traduce para LEER y el motor sigue operando sobre el español canónico. Detalle en [`plan_display_i18n.md`](plan_display_i18n.md). El fallback al español es conducta ESPERADA, no fallo: si la traducción falta, no cuadra por longitud o pierde una cifra o una etiqueta de sección, esa línea se pinta en español (P2-DISPLAY-VALIDADOR-SIN-CIFRAS, P1-DISPLAY-VOCAB-CERRADO). Knob `MEALFIT_PLAN_DISPLAY_I18N`, default `True`. |
+| Lista de compras | **Bilingüe** | Cada línea lleva el gloss en el idioma del usuario Y el nombre canónico español entre paréntesis — «30 g dried red beans (Habichuelas rojas)». El paréntesis no es cortesía: es el identificador con el que resuelve el motor, y el validador descarta la línea que lo pierda. |
 | Respuestas del coach (chat + notificaciones proactivas) | **Sí** | [P1-COUNTRY-SYSTEM-F2 · T3 · 2026-08-17] La PROSA del coach sigue `locale` — es el pedido en vivo del dueño (Addendum §2), no parte del sistema de países en oscuro. Frontera dura: los nombres de alimentos/platos que el coach cita, y toda tool call, SIGUEN en español canónico SIEMPRE (mismo motivo que la fila de abajo). Ver `prompts.chat_agent.build_language_directive`. |
 | Nombres de alimentos y platos (`master_ingredients`, 206 alimentos + 60 platos criollos) | **No, jamás** | Son el **SSOT del motor**. `pantry_names_match` (P1-PANTRY-NAME-RESOLUTION), el guard de coherencia recetas↔lista y el backstop clínico de alergias resuelven por esos nombres exactos. Traducir «Pollo» rompe las tres cosas a la vez, y dos de ellas en silencio. |
 | Páginas legales (Privacidad, Términos — 601 cadenas) | **No** | Traducir un contrato genera obligaciones en cada jurisdicción. Es una decisión legal, no de producto. |
 | Landing (`bioboros.com`) | **No** | Son 14 páginas estáticas fuera del build de React (`project_landing_cinematico_v2`). Fuera del alcance pedido («dentro del dashboard»). |
 
-**La consecuencia honesta**: un usuario en japonés —o en francés— ve un menú traducido
-alrededor de «Pollo guisado con arroz blanco», aunque el coach que se lo explica ya le
-responde en su idioma (P1-COUNTRY-SYSTEM-F2 · T3). Es deliberado y se le dice en la propia
-pantalla de Configuración: *«Tu plan y tus recetas siguen en español; el coach te
-responde en tu idioma.»* Traducir el CONTENIDO (plan/recetas) es un proyecto distinto,
-no una fase más de este.
+**La frontera, que es lo único que no se mueve**: se traduce lo que el usuario LEE; no
+se traduce lo que el motor USA COMO IDENTIFICADOR. Por eso el plato entero puede salir en
+francés mientras «Habichuelas rojas» sigue apareciendo, literal, dentro de la línea de
+ingredientes — y por eso el prefijo «Mise en place:» viaja en español en el dato aunque la
+pantalla lo pinte como «Mise en place» traducido. `pantry_names_match`, el guard de
+coherencia recetas↔lista y el backstop clínico de alergias resuelven por esas cadenas
+exactas, y dos de las tres fallarían en silencio.
+
+**Lo que este párrafo decía antes**, hasta [P2-I18N-DOC-ALCANCE-MIENTE · 2026-08-21]: que
+plan y recetas NO se traducían, y lo llamaba «la consecuencia honesta». Llevaba siendo
+falso desde el 2026-08-19. Se anota en vez de borrarse porque el daño no fue teórico: esta
+doc es la que leyó la auditoría de alcance del sistema de idiomas, y por creerle dejó fuera
+de la primera pasada la superficie i18n más cara del producto. Una doc canónica equivocada
+no confunde solo a las personas.
 
 ## 2. Los 5 idiomas
 

@@ -103,3 +103,66 @@ def test_documenta_por_que_estricto():
     assert "npm run i18n:check          -> exit 0" in s, (
         "falta la medicion que justifica el --strict")
     assert "npm run i18n:check:strict   -> exit 1" in s
+
+
+# ============================================================
+# [P2-I18N-DEPLOY-ESCOTILLA · 2026-08-21] La escotilla es PEGAJOSA
+# ============================================================
+#
+# `MEALFIT_CI_I18N_STRICT=0` baja el chequeo a permisivo, y el propio comentario de
+# `run_ci.ps1` dice «sirve para una tanda larga a medio traducir; no para desplegar».
+# Pero en PowerShell una variable de entorno vive TODA la sesion: quien la puso por la
+# manana la sigue teniendo puesta cuando despliega por la tarde. Y el unico efecto
+# observable era un `Write-Host` amarillo a 2.000 lineas del final de un log de 20 min.
+#
+# Hasta hoy este fichero ni siquiera ABRIA `deploy-mealfit.ps1`, que es donde el
+# descuido se paga: el deploy invocaba el gate sin mencionar la variable.
+
+_DEPLOY = _ROOT / "deploy-mealfit.ps1"
+
+# La INVOCACION del gate, no cualquier mencion: `scripts/run_ci.ps1` aparece antes
+# en prosa (el bloque que explica que hace el gate), asi que anclar en la primera
+# aparicion medía la documentacion y no el codigo.
+_INVOCA_GATE = re.compile(r"&\s*pwsh\b.*run_ci\.ps1")
+
+
+def _deploy() -> str:
+    if not _DEPLOY.exists():
+        pytest.skip(f"{_DEPLOY} no existe en este checkout")
+    return _DEPLOY.read_text(encoding="utf-8")
+
+
+def test_el_deploy_aborta_con_la_escotilla_puesta():
+    s = _deploy()
+    assert "MEALFIT_CI_I18N_STRICT" in s, (
+        "deploy-mealfit.ps1 no menciona la escotilla del gate de i18n. Con la variable "
+        "puesta en la sesion, el chequeo corre PERMISIVO y una pantalla a medio traducir "
+        "se despliega en silencio. [P2-I18N-DEPLOY-ESCOTILLA]"
+    )
+    i_var = s.index("MEALFIT_CI_I18N_STRICT")
+    m = re.search(_INVOCA_GATE, s)
+    assert m, "no encontre la invocacion de run_ci.ps1 en deploy-mealfit.ps1"
+    i_gate = m.start()
+    assert i_var < i_gate, (
+        "la comprobacion de la escotilla esta DESPUES de invocar el gate: para cuando "
+        "salta, el gate permisivo ya dio verde. [P2-I18N-DEPLOY-ESCOTILLA]"
+    )
+
+
+def test_el_deploy_ofrece_la_valvula_por_invocacion():
+    """No se prohibe la escotilla: el caso legitimo existe. Se exige DECIRLO.
+
+    `-SkipTests` deja rastro POR INVOCACION en vez de por sesion, y esa es exactamente
+    la diferencia: una la escribes cada vez, la otra se te olvida puesta.
+    """
+    s = _deploy()
+    i_var = s.index("MEALFIT_CI_I18N_STRICT")
+    bloque = s[i_var: re.search(_INVOCA_GATE, s).start()]
+    assert "-SkipTests" in bloque, (
+        "el aborto por la escotilla no le dice al operador cual es la salida legitima. "
+        "Un guard que bloquea sin ofrecer la alternativa se acaba desactivando. "
+        "[P2-I18N-DEPLOY-ESCOTILLA]"
+    )
+    assert "throw" in bloque, (
+        "la escotilla solo AVISA en el deploy; tiene que abortar. [P2-I18N-DEPLOY-ESCOTILLA]"
+    )
