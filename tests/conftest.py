@@ -387,7 +387,14 @@ def seeded_user_profile():
             "allergies": [],
             "budget": "medium",
             "householdSize": 1,
-            "tz_offset_minutes": -240,
+            # [P3-FIXTURE-TZ-SIGN · 2026-08-22] +240, no -240. Convención `getTimezoneOffset()`:
+            # POSITIVO al OESTE, así que República Dominicana es +240. Con el signo invertido este
+            # fixture situaba a cada usuario de e2e en UTC+4 —Bakú, ocho horas de diferencia—
+            # mientras decía modelar RD, y un caso de frontera de día montado así es
+            # autoconsistente: pasa igual contra el código correcto que contra el del signo al
+            # revés, porque el error se cancela consigo mismo.
+            # Verificado contra las cinco cuentas reales de producción, que llevan +240 todas.
+            "tz_offset_minutes": 240,
         }
         execute_sql_write(
             "INSERT INTO user_profiles (id, email, health_profile) VALUES (%s, %s, %s::jsonb) "
