@@ -70,10 +70,20 @@ def test_dos_usuarios_en_husos_distintos_no_comparten_fecha(tools, monkeypatch):
 
 def test_el_signo_es_el_de_getTimezoneOffset(tools, monkeypatch):
     """Positivo = OESTE de UTC. Invertirlo duplica el error y encima parece correcto en República
-    Dominicana, que es donde se prueba — el modo de fallo exacto de P1-AVG-MEAL-HOUR-SIGN."""
-    monkeypatch.setattr(tools, "user_tz_offset_min", lambda uid: 240)
-    assert tools._local_date_str_for_user("u1") == _fecha_esperada(240)
-    assert tools._local_date_str_for_user("u1") != _fecha_esperada(-240)
+    Dominicana, que es donde se prueba — el modo de fallo exacto de P1-AVG-MEAL-HOUR-SIGN.
+
+    ⚠️ 720, no 240. La primera versión usaba ±240: ocho horas de separación, así que los dos
+    instantes caen en el MISMO día salvo en una ventana de 8 h de cada 24. El test pasaba por la
+    hora a la que lo corrí y se puso rojo a las 04:25 UTC de otro día, contra el código correcto.
+    ±720 deja los dos instantes a exactamente 24 h: la fecha difiere SIEMPRE.
+
+    Lo doloroso es que el principio estaba escrito dos funciones más arriba, en
+    `test_dos_usuarios_en_husos_distintos_no_comparten_fecha`, con estas palabras: «un caso que
+    sólo falla a ciertas horas es un test intermitente, no una defensa». Lo enuncié y acto seguido
+    lo incumplí."""
+    monkeypatch.setattr(tools, "user_tz_offset_min", lambda uid: 720)
+    assert tools._local_date_str_for_user("u1") == _fecha_esperada(720)
+    assert tools._local_date_str_for_user("u1") != _fecha_esperada(-720)
 
 
 # ── C. Fail-safe ────────────────────────────────────────────────────────────────────────────────
