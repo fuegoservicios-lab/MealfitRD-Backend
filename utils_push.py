@@ -44,6 +44,39 @@ def send_push_notification(user_id: str, title: str, body: str, url: str = "/das
             logger.debug(f"ℹ️ [PUSH] Usuario {user_id} no tiene suscripciones Push activas.")
             return False
 
+        # [P1-I18N-PUSH-CRON-ESPANOL · 2026-08-22] El idioma se resuelve AQUÍ, que es el
+        # cuello de botella por el que pasa TODO push sin excepción
+        # (`_dispatch_push_notification` es un envoltorio de esta función).
+        #
+        # Atarlo al ACTO y no a los 35 call sites es la decisión que importa: un push nuevo
+        # queda cubierto sin wiring. Es la lección que este repo ya pagó dos veces —el pop
+        # de `_display` colgando de siete funciones con nombre (P2-DISPLAY-POP-VECINO) y
+        # «gatear call sites uno a uno es el agujero, no el cierre» (P1-COUNTRY-SYSTEM-F1).
+        #
+        # `P2-I18N-PUSH-SIN-LOCALE` no se ve afectado: su título ya llega resuelto, aquí no
+        # encuentra clave y pasa tal cual.
+        #
+        # Best-effort de punta a punta: si la consulta del perfil falla, sale en español.
+        # Una notificación en español es una degradación; una que no sale es un fallo.
+        _locale = None
+        try:
+            _perfil = execute_sql_query(
+                "SELECT locale FROM user_profiles WHERE id = %s",
+                (user_id,),
+                fetch_all=False,
+            )
+            if _perfil:
+                _locale = _perfil.get("locale") if hasattr(_perfil, "get") else None
+        except Exception as _loc_err:  # noqa: BLE001
+            logger.debug(f"[P1-I18N-PUSH-CRON-ESPANOL] sin locale ({_loc_err!r}); se envía en español")
+
+        try:
+            from push_i18n import translate_push_text
+            title = translate_push_text(title, _locale)
+            body = translate_push_text(body, _locale)
+        except Exception as _tr_err:  # noqa: BLE001
+            logger.debug(f"[P1-I18N-PUSH-CRON-ESPANOL] traducción no aplicada ({_tr_err!r})")
+
         push_payload = json.dumps({
             "title": title,
             "body": body,

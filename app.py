@@ -31,7 +31,7 @@ _PROCESS_START_ISO = datetime.now(timezone.utc).isoformat()
 #     y fechas anteriores al floor (último audit cerrado).
 #   - Si subes el floor del test, sube también el valor aquí — el commit
 #     que sube uno sin el otro debería fallar el test en CI.
-_LAST_KNOWN_PFIX = "P1-I18N-CHAT-TITULOS-SERVIDOR · 2026-08-22"
+_LAST_KNOWN_PFIX = "P1-IOS-CORS-NATIVE-ORIGIN · 2026-08-22"
 
 # [P1-SENTRY-SAMPLE-COST · 2026-05-12] Sentry sampling driven from env vars
 # con default seguro 0.1 (10%). Pre-fix tenía `traces_sample_rate=1.0` y
@@ -2213,8 +2213,14 @@ app.add_middleware(
         # se sirva desde otro host.
         "https://bioboros.com",
         "https://www.bioboros.com",
-        "https://app.bioboros.com"
-    ], # Dominios de producción (servidos por nginx en el VPS Oracle)
+        "https://app.bioboros.com",
+        # [P1-IOS-CORS-NATIVE-ORIGIN · 2026-08-22] La app nativa (Capacitor,
+        # App Store) vive en este origen y llama a app.bioboros.com: es la
+        # PRIMERA vez que esta lista deja de ser inerte. Sin la entrada, toda
+        # fetch de la app muere en el preflight (medido con TestClient:
+        # «Disallowed CORS origin»). Android sería https://localhost.
+        "capacitor://localhost",
+    ], # Dominios de producción (servidos por nginx en el VPS Oracle) + app nativa
     allow_credentials=True,
     allow_methods=["GET", "POST", "PUT", "PATCH", "DELETE", "OPTIONS"],
     allow_headers=[
@@ -2227,6 +2233,14 @@ app.add_middleware(
         # podría inyectarlo en futuro) o desde scripts SRE/curl manuales.
         # Si el header llega → reusado server-side; si no → generamos uno.
         "X-Correlation-ID",
+        # [P1-IOS-CORS-NATIVE-ORIGIN · 2026-08-22] Token de sesión first-party
+        # en header (P1-FIRST-PARTY-SESSION): la cookie `__Host-mf_session` es
+        # same-site y NO viaja desde capacitor://, así que en la app nativa
+        # este header es el ÚNICO mecanismo de sesión. El comentario de arriba
+        # pedía extender la lista al añadir un `X-*`; el header se añadió y la
+        # lista no — inerte en la web (mismo origen, sin preflight), muro en
+        # nativo.
+        "X-MF-Session",
     ],
     # [H2 / P3-CORRELATION-ID · 2026-05-20] expose_headers permite que el
     # browser JS lea `X-Correlation-ID` de la response — útil para que el
