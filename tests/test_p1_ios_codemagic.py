@@ -1,4 +1,4 @@
-"""[P1-IOS-CODEMAGIC · 2026-08-22] Fase 2 de P1-IOS-NATIVE-SHELL: el binario nace en
+r"""[P1-IOS-CODEMAGIC · 2026-08-22] Fase 2 de P1-IOS-NATIVE-SHELL: el binario nace en
 Codemagic y llega a TestFlight sin una Mac.
 
 Parser-based sobre `frontend/codemagic.yaml`, `frontend/package.json` y

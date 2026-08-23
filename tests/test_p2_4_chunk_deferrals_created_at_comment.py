@@ -1,4 +1,4 @@
-"""[P2-4 · 2026-05-10] Regression guard: `chunk_deferrals.created_at`
+r"""[P2-4 · 2026-05-10] Regression guard: `chunk_deferrals.created_at`
 documenta su semántica (buffer time, no flush time) y el flush counta
 el fallback cuando `buffered_at` falta.
 

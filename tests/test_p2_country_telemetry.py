@@ -92,7 +92,7 @@ def test_el_pais_sale_de_la_unica_puerta(go):
 
 
 def _argumentos_del_call_site(src: str) -> str:
-    """Los argumentos de la llamada a `_emit_slot_drift_metric_best_effort`, balanceando paréntesis.
+    r"""Los argumentos de la llamada a `_emit_slot_drift_metric_best_effort`, balanceando paréntesis.
 
     Un `\(([^)]*)\)` no vale aquí: el argumento es `state.get("form_data")` y lleva un `)` DENTRO,
     así que la clase negada se corta en el paréntesis equivocado y el test falla contra código

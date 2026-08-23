@@ -1,4 +1,4 @@
-"""[P1-PDF-XSS-BLANKET · 2026-05-12] Defensa preventiva contra XSS via
+r"""[P1-PDF-XSS-BLANKET · 2026-05-12] Defensa preventiva contra XSS via
 `element.innerHTML = ...` en frontend bundle.
 
 Estado actual: el único `innerHTML =` activo es el del PDF builder de

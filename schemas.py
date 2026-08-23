@@ -1,4 +1,4 @@
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, ConfigDict
 from typing import List, Optional, Literal
 
 class MacrosModel(BaseModel):
@@ -157,5 +157,7 @@ class HealthProfileSchema(BaseModel):
     householdSize: Optional[int] = 1
     groceryDuration: Optional[str] = 'weekly'
     totalDays: Optional[int] = 3
-    class Config:
-        extra = 'allow'
+    # [2026-08-23] `class Config` esta deprecado desde Pydantic V2 y emite
+    # PydanticDeprecatedSince20 en cada arranque y en cada corrida del gate.
+    # `ConfigDict` es su reemplazo exacto; se retira en V3.
+    model_config = ConfigDict(extra='allow')

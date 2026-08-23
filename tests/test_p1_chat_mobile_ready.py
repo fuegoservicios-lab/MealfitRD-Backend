@@ -200,7 +200,13 @@ def test_el_contenedor_encoge_con_el_teclado():
     lee."""
     assert "var(--kb-inset, 0px)" in _AP, "el alto móvil debe restar el teclado"
     i = _AP.find("const updateInputPosition")
-    win = _AP[i:i + 4200]
+    # [reapuntado 2026-08-23] La ventana acaba donde acaba el HANDLER, no a los N chars:
+    # con un tope fijo, un comentario nuevo dentro del handler empuja el código real
+    # fuera de la ventana y el guard se pone rojo sin que nada se haya roto (pasó con
+    # P1-CHAT-KB-SCROLL-QUIETO, y ya había pasado antes con otro tope de 4200).
+    _fin = _AP.find("\n        };", i)
+    assert _fin > i, "no encontré el final del handler updateInputPosition"
+    win = _AP[i:_fin]
     assert "setProperty('--kb-inset'" in win, "el handler debe publicar el alto del teclado"
     assert "closest('.agent-container')" in win, (
         "la variable va en el CONTENEDOR, no en :root: esta página sobrevive oculta "
