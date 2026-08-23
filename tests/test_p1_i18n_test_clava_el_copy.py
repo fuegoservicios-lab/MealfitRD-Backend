@@ -45,7 +45,22 @@ _DASHBOARD = _SRC / "pages" / "Dashboard.jsx"
 
 _MARKER = "P1-I18N-TEST-CLAVA-EL-COPY"
 
-# Las cuatro cadenas de esta tanda. Cada una tiene que estar DENTRO de un `t(...)`.
+# Las cadenas liberadas. Cada una tiene que estar DENTRO de un `t(...)`.
+#
+# [P1-I18N-BOTON-CAMBIAR-PLATO-CLAVADO-POR-TEST · 2026-08-23] Eran cuatro y se añade la
+# quinta, que era la MÁS visible de todas y se quedó fuera: el botón principal de cada
+# comida del menú. `P1_weeknav_mobile_size.test.js` exigía `Cambiar Plato</span>` y el
+# código llevaba escrito «SIN t(): el test exige la cadena literal». Un usuario en francés
+# leía siete avisos que decían «usa *Changer de plat*» nombrando un botón que en su
+# pantalla se llamaba «Cambiar Plato». El test se reancló por estructura (`data-testid`).
+#
+# ⚠️ «Cambiar Plato» NO está en esta lista, y es a propósito. Lo intenté y la mutación lo
+# desmontó: con el rótulo del botón clavado otra vez, este guard seguía VERDE, porque el
+# fichero ya tiene TRES `t('Cambiar Plato')` en otros sitios (los avisos que lo nombran en
+# negrita). Este guard mide «existe un t(cadena) en el fichero», no «ESE sitio pasa por t»,
+# y para una cadena que aparece en varios sitios eso es inerte. El ancla que sí distingue
+# el botón es `P1_weeknav_mobile_size.test.js` (por `data-testid`, verificada por mutación).
+# Añadirla aquí daría cobertura de papel.
 _CADENAS_LIBERADAS = [
     "¡Menú Actualizado!",
     "¿Bloquear este plato?",
