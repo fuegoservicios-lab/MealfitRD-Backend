@@ -223,7 +223,14 @@ def test_visualviewport_handler_solo_escribe_transform():
     src = _read(_AGENT_PAGE)
     i = src.find("const updateInputPosition")
     assert i != -1, "no se encontró el handler del visualViewport"
-    body = _strip_js_comments(src[i:i + 4200])
+    # [P1-CHAT-FOCO-NO-MUEVE · 2026-08-23] La ventana acaba donde acaba el handler, no a
+    # N caracteres. Era `i + 4200` y un comentario nuevo empujó
+    # `wrapper.style.transform` a 5.127: el guard se puso rojo SIN que la propiedad
+    # hubiera cambiado — la línea seguía ahí, fuera de la mirilla. Una ventana fija
+    # mide la PROSA además del código, y la prosa crece.
+    _fin = src.find("\n        };", i)
+    assert _fin > i, "no se encontró el cierre de updateInputPosition"
+    body = _strip_js_comments(src[i:_fin])
     assert "wrapper.style.transform" in body, (
         "el handler debe seguir siendo el único dueño de `transform` en el wrapper "
         "(hoy lo usa para LIMPIARLO: el lift lo hace el encogimiento del contenedor)"
@@ -231,21 +238,37 @@ def test_visualviewport_handler_solo_escribe_transform():
     assert "paddingBottom" not in body, (
         "el handler visualViewport no debe escribir paddingBottom — React posee "
         "`padding` vía shorthand; el colapso con teclado abierto lo da el CSS "
-        "`.input-wrapper:focus-within`"
+        "(hoy `html[data-kb-open] .input-wrapper`)"
     )
 
 
 @_SKIP_NO_FRONTEND
 def test_css_cubre_el_colapso_con_teclado_abierto():
-    """Si alguien borra la regla `:focus-within`, el colapso del padding con el
-    teclado abierto desaparece sin que nada más lo cubra (el handler ya no lo
-    hace)."""
+    """El colapso del padding con el teclado abierto lo cubre el CSS — el handler ya no
+    lo hace—, y lo dispara EL TECLADO, no el foco.
+
+    [P1-CHAT-FOCO-NO-MUEVE · 2026-08-23] Hasta hoy la regla era
+    `.input-wrapper:focus-within`. La propiedad que este caso protege no ha cambiado
+    (que el colapso exista y viva en CSS); lo que cambió es el disparador, y ese cambio
+    es el arreglo: hay foco SIN teclado —escritorio estrechado por debajo de 1024, la
+    vista de móvil de las DevTools, un iPad con teclado físico— y ahí la caja soltaba
+    sus 64 px de reserva mientras la barra de pestañas, que sólo se esconde con teclado
+    de verdad, seguía en su sitio. Medido en un banco aislado con las dos reglas
+    reales: al enfocar, el borde inferior de la caja pasaba de 851 a 915 con la barra
+    en 868 —debajo de ella—; sin la regla, 851 y 851.
+
+    Por eso el caso exige ADEMÁS que el disparador viejo no vuelva: reanclar a la
+    propiedad sin prohibir la grafiía que la rompía dejaría la puerta abierta."""
     src = _read(_AGENT_PAGE)
     assert re.search(
-        r"\.input-wrapper:focus-within\s*\{[^}]*padding-bottom:[^}]*!important",
+        r"html\[data-kb-open\]\s+\.input-wrapper\s*\{[^}]*padding-bottom:[^}]*!important",
         src,
         re.DOTALL,
-    ), "falta la regla CSS que colapsa el padding-bottom con foco (teclado abierto)"
+    ), "falta la regla CSS que colapsa el padding-bottom con el TECLADO abierto"
+    assert not re.search(r"^\s*\.input-wrapper:focus-within\s*\{", src, re.M), (
+        "el colapso volvió a colgar del FOCO: sin teclado (escritorio estrecho, "
+        "DevTools, iPad con teclado físico) la caja se mete debajo de la barra"
+    )
 
 
 # ---------------------------------------------------------------------------
