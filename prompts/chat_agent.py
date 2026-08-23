@@ -782,6 +782,79 @@ def plan_seed_messages(locale, goal_code) -> tuple:
     return _PLAN_SEED_USER[loc].format(goal=goal), _PLAN_SEED_MODEL[loc]
 
 
+# [P3-I18N-PROMPT-VISION-CLIENTE-ESPANOL · 2026-08-23] El contexto de una foto, compuesto en el
+# SERVIDOR y añadido al SYSTEM prompt. Hasta hoy lo componía el cliente (`AgentPage.jsx`) en
+# español y lo metía DENTRO DEL TURNO DEL USUARIO: cuatro bloques «[Sistema: …] Instrucción:
+# …» que el modelo leía como si el usuario hablara español — la señal más fuerte que existe
+# hacia el español, justo la que `build_language_directive` intenta vencer. Aquí van en
+# español como el resto del system prompt (es español entero por diseño; la directiva manda
+# la salida), y el turno del usuario vuelve a ser SOLO lo que el usuario escribió.
+#
+# `vision`: {"kind": "unavailable"|"otro"|"items"|"plato", "description": str|None,
+#            "reason": "busy"|"down"|None, "has_text": bool}
+_VISION_REASONS = {
+    "busy": "el escáner está procesando otra foto en este momento",
+    "down": "el analizador de imágenes no está disponible ahora mismo",
+}
+
+
+def build_vision_context(vision) -> str:
+    """Bloque de contexto para el system prompt cuando el turno trae una foto. "" si no hay."""
+    if not isinstance(vision, dict) or not vision.get("kind"):
+        return ""
+    kind = str(vision.get("kind"))
+    desc = str(vision.get("description") or "").strip()[:2000]
+    has_text = bool(vision.get("has_text"))
+    if kind == "unavailable":
+        motivo = _VISION_REASONS.get(str(vision.get("reason") or ""), _VISION_REASONS["down"])
+        return (
+            f"\n\n📷 CONTEXTO DE FOTO: El usuario subió una foto pero {motivo}, así que NO tienes "
+            f"análisis de la imagen. Discúlpate brevemente, pídele que lo intente de nuevo en un "
+            f"momento o que te describa la comida por texto"
+            + (", y responde a su mensaje" if has_text else "") + "."
+        )
+    if kind == "otro":
+        return (
+            f"\n\n📷 CONTEXTO DE FOTO: El usuario subió una imagen pero el análisis NO detectó comida "
+            f"en ella. Lo que se vio: \"{desc}\". Dile amablemente que no reconociste comida en la "
+            f"foto (menciona brevemente lo que sí se ve) y pídele otra toma del plato o de los alimentos."
+        )
+    if kind == "items":
+        base = (
+            f"\n\n📷 CONTEXTO DE FOTO: El usuario subió una foto de ALIMENTOS SUELTOS o una COMPRA (no "
+            f"un plato servido). Análisis de la imagen: \"{desc}\"."
+        )
+        if has_text:
+            return base + (
+                " Si el usuario quiere, agrégalos a su Nevera con modify_pantry_inventory tras su "
+                "confirmación. Responde a su mensaje."
+            )
+        return base + (
+            " Lista con viñetas los alimentos detectados (cantidad + nombre en **negritas**) y "
+            "pregúntale si quiere que los agregues a su Nevera. SOLO cuando el usuario confirme, usa la "
+            "herramienta modify_pantry_inventory con items_to_add copiando el formato del análisis "
+            "(ej: '2 unidades de Manzana', '1 lb de Pollo'); si corrige cantidades o quita items, "
+            "ajusta la lista antes de ejecutar. NO registres esto como comida consumida (no es un "
+            "plato). Responde directo y conversacional."
+        )
+    # plato (o cualquier otro valor: se trata como plato, la conducta de siempre)
+    base = f"\n\n📷 CONTEXTO DE FOTO: El usuario subió una imagen de comida. Análisis de la imagen: \"{desc}\"."
+    if has_text:
+        return base + " Responde a su mensaje teniendo en cuenta la foto."
+    return base + (
+        " Actúa proactivamente. Menciona amigablemente lo que ves en la foto. REGLA VISUAL DE "
+        "FORMATO: Usa SIEMPRE una lista con viñetas para desglosar sus macros y usa **negritas** para "
+        "resaltarlos. Revisa detalladamente tu 'DIARIO DE HOY' en el system prompt: SI el usuario YA "
+        "tiene registrada la comida principal de esta hora (ej: si ya cenó), NO le preguntes si esto "
+        "es su cena, asume que es un snack extra o pregúntale por qué está comiendo algo adicional; "
+        "si NO tiene nada registrado para esta hora, entonces SÍ pregúntale brevemente si esta foto "
+        "corresponde a su comida del momento (ej: su cena). Si el usuario confirma que se la comió, "
+        "registra con log_consumed_meal usando los macros del análisis, pasando meal_type; si dice "
+        "que fue de OTRO día (ej: 'es el almuerzo de ayer'), pasa también days_ago (1=ayer) para que "
+        "NO cuente en las macros de hoy. Sólo responde directo y conversacional."
+    )
+
+
 _LANGUAGE_DIRECTIVE_CACHE: dict = {}
 
 

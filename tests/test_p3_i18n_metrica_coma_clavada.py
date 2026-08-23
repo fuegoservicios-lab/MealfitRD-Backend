@@ -208,19 +208,19 @@ def test_el_unico_ordenador_de_texto_sigue_al_idioma_activo():
 # ───────────────────────── 6. P3-I18N-HORA-COACH-12H ───────────────────────────────
 
 def test_la_hora_del_coach_la_decide_el_idioma_y_no_un_hour12_forzado():
+    """[P3-I18N-PROMPT-VISION-CLIENTE-ESPANOL · 2026-08-23] Reanclado: el cliente YA NO manda
+    la hora en el prompt (ni con `timeStyle: 'short'` ni de ninguna forma) — la pone el servidor
+    en `build_temporal_context`, en 24 h (test 6b). Lo que este guard vigila ahora es que el
+    cliente no vuelva a componer la hora, ni con `hour12` ni sin él."""
     src = _leer(_FRONT / "src" / "pages" / "AgentPage.jsx")
     codigo = _sin_lineas_de_comentario(src)
     assert "hour12" not in codigo, (
         "`hour12` volvio al codigo: ANULA al formateador que si lee el locale y fuerza "
         "AM/PM a los cinco idiomas, cuando el frances, el italiano y el espanol usan 24 h"
     )
-    assert "timeStyle: 'short'" in codigo
-    # Comentario-vence-guard, en la direccion «mi prosa dispara el guard»: el comentario
-    # que explica el arreglo CITA `hour12: true`. Se exige que las apariciones esten todas
-    # en comentarios, no que la palabra desaparezca del fichero.
-    assert "hour12" in src, (
-        "desaparecio tambien el comentario que explica por que no se usa `hour12`. Sin el, "
-        "el proximo que quiera «arreglar» el formato de hora lo reanade"
+    # La COMPOSICIÓN (interpolando la hora), no la regex que limpia el historial viejo.
+    assert "Hora actual del usuario: ${" not in codigo, (
+        "el cliente vuelve a meter la hora en el turno del usuario; la pone el servidor"
     )
 
 
