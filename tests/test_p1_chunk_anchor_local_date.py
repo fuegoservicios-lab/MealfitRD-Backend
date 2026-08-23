@@ -46,6 +46,7 @@ Cubre:
 """
 from __future__ import annotations
 
+import ast
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
@@ -165,20 +166,49 @@ def test_el_ceiling_sigue_diciendo_no_opino_sin_snapshot():
 # ── E. Parser-based ─────────────────────────────────────────────────────────────────────────────
 
 def test_los_tres_sitios_comparten_la_aritmetica():
-    """La fórmula vivía COPIADA en tres sitios —encolado, recovery y techo— y ésa es la razón de
-    que el defecto sobreviviera a dos P-fixes de esta misma familia. Un cuarto copista futuro
-    encuentra este guard antes que producción."""
+    """El SSOT gobierna encolado, recovery y ahora también el gate temporal; el techo lo
+    consume dentro de constants. AST cuenta las derivaciones reales de fecha y no sólo dos
+    grafías literales: la cuarta forma que originó G15 ya no puede quedar invisible."""
     cron = _CRON.read_text(encoding="utf-8", errors="replace")
     const = _CONSTANTS.read_text(encoding="utf-8", errors="replace")
     assert "P1-CHUNK-ANCHOR-LOCAL-DATE" in const
     assert "def chunk_anchor_local_midnight_utc" in const
-    assert cron.count("chunk_anchor_local_midnight_utc") >= 2, (
-        "el encolado y el recovery deben llamar al SSOT, no repetir la aritmética"
+    tree = ast.parse(cron)
+
+    aliases = {
+        alias.asname or alias.name
+        for node in ast.walk(tree)
+        if isinstance(node, ast.ImportFrom) and node.module == "constants"
+        for alias in node.names
+        if alias.name == "chunk_anchor_local_midnight_utc"
+    }
+    ssot_calls = [
+        node
+        for node in ast.walk(tree)
+        if isinstance(node, ast.Call)
+        and isinstance(node.func, ast.Name)
+        and node.func.id in aliases
+    ]
+    anchor_date_calls = [
+        node
+        for node in ast.walk(tree)
+        if isinstance(node, ast.Call)
+        and isinstance(node.func, ast.Attribute)
+        and node.func.attr == "date"
+        and any(
+            isinstance(child, ast.Name)
+            and child.id in {"plan_start_dt", "anchor_start_dt"}
+            for child in ast.walk(node.func.value)
+        )
+    ]
+
+    assert len(anchor_date_calls) == 3, (
+        "cambió el número de fallbacks que derivan fecha del ancla; auditar cada sitio"
     )
-    # La forma vieja no puede sobrevivir en ninguno de los dos sitios de programación.
-    codigo = "\n".join(l.split("#", 1)[0] for l in cron.splitlines())
-    assert "datetime.combine(\n            anchor_start_dt.date()" not in codigo
-    assert "datetime.combine(\n                        anchor_start_dt.date()" not in codigo
+    assert len(ssot_calls) == len(anchor_date_calls), (
+        "cada derivación de fecha del ancla en cron debe tener una llamada al SSOT; "
+        f"date_calls={len(anchor_date_calls)}, ssot_calls={len(ssot_calls)}"
+    )
 
 
 def test_el_guard_del_techo_ya_prueba_offsets_negativos():

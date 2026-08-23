@@ -24308,7 +24308,27 @@ def _check_chunk_learning_ready(user_id: str, meal_plan_id: str, week_number: in
     # del plan original terminó el día antes del primer día del refill). Para chunks
     # subsiguientes del refill (cuyo prev SÍ es del refill), el cálculo legacy es
     # correcto porque el chunk previo se ancla al new_plan_start_iso.
-    _prev_end_date = (plan_start_dt + timedelta(days=prev_end_day - 1 + _shift_days_accumulated)).date()
+    # [P1-CHUNK-GATE-PREVEND-LOCAL · 2026-08-23] `plan_start_dt` es el instante UTC
+    # de la medianoche LOCAL. Su `.date()` abre el gate un día antes en España porque
+    # allí ese instante cae en el día UTC anterior. Recuperar primero la medianoche
+    # local con el mismo SSOT de encolado/recovery mantiene el último día idéntico en
+    # los siete offsets. Si el helper no opina, preservamos literalmente la fórmula
+    # anterior (incluido su TypeError ante `plan_start_dt=None`): no ensanchamos el
+    # fail-open de este worker.
+    from constants import chunk_anchor_local_midnight_utc as _calmu_gate
+    _anchor_local = _calmu_gate(plan_start_dt, _tz_offset_min)
+    _prev_end_date = (
+        (
+            _anchor_local
+            + timedelta(days=prev_end_day - 1 + _shift_days_accumulated)
+            - timedelta(minutes=_tz_offset_min)
+        ).date()
+        if _anchor_local is not None
+        else (
+            plan_start_dt
+            + timedelta(days=prev_end_day - 1 + _shift_days_accumulated)
+        ).date()
+    )
 
     _is_continuation = bool(form_data.get("_is_continuation"))
     _anchor_iso = form_data.get("_continuation_anchor_iso")
