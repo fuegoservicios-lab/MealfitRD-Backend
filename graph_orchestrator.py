@@ -5298,6 +5298,24 @@ def _day_system_instruction_for_diet(form_data) -> str:
 _VERIFIED_CATALOG_INSTRUCTION_CACHE = {}
 
 
+def _patron_termino_alergeno(termino: str) -> str:
+    """Regex con frontera y plural español para un término clínico normalizado.
+
+    [P0-ALLERGEN-EU14-CLASES-I18N · 2026-08-23] El plural regular histórico
+    ``(?:s|es)?`` no puede convertir ``-z`` en ``-ces``. Esta construcción es
+    compartida por el backstop y el catálogo cerrado para que una alergia libre
+    (también fuera de las clases conocidas) no tenga una capa más débil que otra.
+    """
+    t = str(termino or "")
+    if not t:
+        return r"(?!)"
+    if t.endswith("z"):
+        cuerpo = _re.escape(t[:-1]) + r"(?:z|ces)"
+    else:
+        cuerpo = _re.escape(t) + r"(?:s|es)?"
+    return r"\b" + cuerpo + r"\b"
+
+
 def _verified_catalog_excluded_tokens(form_data) -> frozenset:
     """[P2-VERIFIED-CATALOG-NOT-FILTERED · 2026-06-22] (audit fresco P2-3) Tokens (acent-stripped) que NO
     deben aparecer en el catálogo verificado servido al day-gen: alérgenos declarados (+ sinónimos DD,
@@ -5406,7 +5424,10 @@ def _get_verified_catalog_instruction(form_data=None) -> str:
             # guards) — no tiene sentido listarlos como "USA EXCLUSIVAMENTE" si el mismo prompt los prohíbe.
             def _is_excluded(_nm: str) -> bool:
                 _nl = strip_accents(_nm.lower())
-                return any(_t and _re_vc.search(r"\b" + _re_vc.escape(_t) + r"(?:s|es)?\b", _nl) for _t in excluded)
+                return any(
+                    _t and _re_vc.search(_patron_termino_alergeno(_t), _nl)
+                    for _t in excluded
+                )
             names = [n for n in names if not _is_excluded(n)]
         if not names:
             return ""
@@ -14575,6 +14596,18 @@ _ALLERGEN_SYNONYMS = {
     "soya": ["soya", "soja", "tofu", "salsa de soya", "edamame", "miso", "tempeh",
              "salsa teriyaki", "teriyaki", "natto", "lecitina de soya", "proteina de soya",
              "proteina vegetal texturizada", "tvp"],
+    # [P0-ALLERGEN-EU14-CLASES-I18N · 2026-08-23] Clases 9, 10, 12 y 13 del
+    # Reglamento UE 1169/2011. Son nombres de ALIMENTO/vehículo en español
+    # canónico; las formas declarativas de los cinco idiomas viven en el dict
+    # separado de abajo.
+    "apio": ["apio", "apionabo", "sal de apio"],
+    "mostaza": ["mostaza", "dijon", "mostaza en grano"],
+    # Decisión explícita para sulfitos: sí se modela el aditivo y sólo sus cuatro
+    # vehículos concretos auditados. No se añaden categorías amplias como
+    # «fruta seca» o «condimentos», que borrarían alimentos sin evidencia.
+    "sulfitos": ["sulfito", "sulfitos", "dioxido de azufre", "metabisulfito",
+                 "vino", "vinagre de vino", "orejon", "orejones", "pasa", "pasas"],
+    "altramuces": ["altramuz", "altramuces", "lupino", "chocho"],
     # [P0-ALLERGEN-VOCAB-I18N · 2026-08-21] Clase NUEVA. El comentario M5 de la ola final de F2
     # (arriba) la declaró «candidato de clase futura si aparece evidencia real (medido, no
     # especulativo)». Esta es la evidencia: el catálogo vivo tiene CUATRO filas con sésamo
@@ -14690,6 +14723,10 @@ _ALLERGEN_DECLARATION_ALIASES = {
     "soya": ["soy", "soybean", "soybeans", "soya bean",
              # it (fr/pt «soja» ya casa con el sinónimo español del mismo nombre)
              "soia"],
+    "apio": ["celery", "celeri", "sedano", "aipo"],
+    "mostaza": ["mustard", "moutarde", "senape", "mostarda"],
+    "sulfitos": ["sulfite", "sulfites", "sulphite", "sulphites", "solfiti"],
+    "altramuces": ["lupin", "lupins", "lupini", "tremoco", "tremocos"],
     "sesamo": ["sesame", "sesame seeds", "sesame allergy", "ajonjoli",
                # fr / it / pt
                "sesamo", "graines de sesame", "semi di sesamo", "gergelim"],
@@ -14813,7 +14850,7 @@ def _declaracion_casa(a_low: str, termino: str) -> bool:
         return False
     if len(t) >= 6:
         return t in a_low or a_low in t
-    return _re.search(r"\b" + _re.escape(t) + r"(?:s|es)?\b", a_low) is not None
+    return _re.search(_patron_termino_alergeno(t), a_low) is not None
 
 
 def _sinonimo_alimento_casa(a_low: str, termino: str) -> bool:
@@ -14830,10 +14867,7 @@ def _sinonimo_alimento_casa(a_low: str, termino: str) -> bool:
         return False
 
     def _termino_completo(needle: str, haystack: str) -> bool:
-        return _re.search(
-            r"(?<!\w)" + _re.escape(needle) + r"(?:s|es)?(?!\w)",
-            haystack,
-        ) is not None
+        return _re.search(_patron_termino_alergeno(needle), haystack) is not None
 
     return _termino_completo(t, a_low) or _termino_completo(a_low, t)
 
@@ -15032,9 +15066,9 @@ def _scan_allergen_violations(plan: dict, allergies) -> list:
             for ing in meal.get("ingredients", []):
                 ing_low = strip_accents(str(ing).lower())
                 for f in forbidden:
-                    # `(?:s|es)?` captura el plural español (fresa→fresas, pan→panes,
-                    # camaron→camarones) SIN falsos positivos de prefijo (leche≠lechosa).
-                    _m_al = _re.search(r"\b" + _re.escape(f) + r"(?:s|es)?\b", ing_low) if f else None
+                    # El patrón SSOT captura plural regular (fresa→fresas, pan→panes,
+                    # camaron→camarones) y -z→-ces, sin prefijos (leche≠lechosa).
+                    _m_al = _re.search(_patron_termino_alergeno(f), ing_low) if f else None
                     if _m_al:
                         # [P1-REVIEWER-VERIFICATION-ADVISORY · 2026-08-08] misma excusa plant-adj
                         # del scan de dieta: «leche de coco»/«mantequilla de maní»/«yogur de soya»

@@ -99,5 +99,5 @@ def test_mutacion_no_puede_restaurar_la_subcadena_cruda() -> None:
 
 
 def test_pfix_marker_cierra_g56() -> None:
-    app = (BACKEND_ROOT / "app.py").read_text(encoding="utf-8")
-    assert "P1-ALLERGEN-DECL-SUBSTR-LAIT · 2026-08-23" in app
+    source = (BACKEND_ROOT / "graph_orchestrator.py").read_text(encoding="utf-8")
+    assert "P1-ALLERGEN-DECL-SUBSTR-LAIT · 2026-08-23" in source
