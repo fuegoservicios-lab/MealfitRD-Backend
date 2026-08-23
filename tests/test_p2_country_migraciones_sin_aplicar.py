@@ -75,5 +75,5 @@ def test_migraciones_gemelas_siguen_byte_identicas() -> None:
 
 
 def test_pfix_marker_cierra_g41() -> None:
-    app = (BACKEND_ROOT / "app.py").read_text(encoding="utf-8")
-    assert "P2-COUNTRY-MIGRACIONES-SIN-APLICAR · 2026-08-23" in app
+    script = SCRIPT_PATH.read_text(encoding="utf-8")
+    assert "P2-COUNTRY-MIGRACIONES-SIN-APLICAR · 2026-08-23" in script

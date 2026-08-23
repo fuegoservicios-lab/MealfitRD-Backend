@@ -14816,6 +14816,28 @@ def _declaracion_casa(a_low: str, termino: str) -> bool:
     return _re.search(r"\b" + _re.escape(t) + r"(?:s|es)?\b", a_low) is not None
 
 
+def _sinonimo_alimento_casa(a_low: str, termino: str) -> bool:
+    """Compara declaración y nombre de alimento sin casar dentro de otra palabra.
+
+    [P1-ALLERGEN-DECL-SUBSTR-LAIT · 2026-08-23] Esta frontera pertenece sólo a
+    ``_ALLERGEN_SYNONYMS``. Los alias declarativos conservan su matcher separado y su
+    sobre-detección intencional. La comparación sigue siendo bidireccional y tolera los
+    plurales que ya soporta el escáner (``camarón`` ↔ ``camarones``), pero ``lait`` ya no
+    puede casar dentro de ``bacalaitos``.
+    """
+    t = _norm_declaracion(termino)
+    if not t or not a_low:
+        return False
+
+    def _termino_completo(needle: str, haystack: str) -> bool:
+        return _re.search(
+            r"(?<!\w)" + _re.escape(needle) + r"(?:s|es)?(?!\w)",
+            haystack,
+        ) is not None
+
+    return _termino_completo(t, a_low) or _termino_completo(a_low, t)
+
+
 def _expand_allergy_declarations(allergies) -> set:
     """[P0-ALLERGEN-VOCAB-I18N · 2026-08-21] SSOT de la expansión declaración → términos a buscar
     en el plato.
@@ -14858,7 +14880,7 @@ def _expand_allergy_declarations(allergies) -> set:
             _decl = list(_ALLERGEN_DECLARATION_ALIASES.get(cat, ())) \
                 + list(_ALLERGEN_FOOD_ALIASES.get(cat, ()))
             if a_low == cat_n or cat_n in a_low or a_low in cat_n or \
-               any(a_low in strip_accents(s) or strip_accents(s) in a_low for s in syns) or \
+               any(_sinonimo_alimento_casa(a_low, s) for s in syns) or \
                any(_declaracion_casa(a_low, s) for s in _decl):
                 out.update(strip_accents(s) for s in syns)
                 matched = True
