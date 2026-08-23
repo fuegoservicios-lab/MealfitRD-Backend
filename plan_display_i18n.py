@@ -527,8 +527,15 @@ def _extract_canonical_name(ingredient_line: str) -> str:
     if not s:
         return ""
     s = _QTY_UNIT_PREFIX_RE.sub("", s, count=1).strip()
-    s = _LEADING_LINKER_RE.sub("", s, count=1).strip()
+    # [P2-I18N-DISPLAY-CANONICO-SE-COME-EL-CONECTOR · 2026-08-23] Los paréntesis ANTES que
+    # el conector. Con «0.75 cda (5 g) de Almendras» —la forma que el motor emite para
+    # cucharadas y tazas con su equivalente en gramos, 24,6 % de las líneas de un plan
+    # vivo— tras quitar el prefijo queda «(5 g) de Almendras»: el `de` no está al principio,
+    # no se quita, el paréntesis sí, y el canónico sale como «de Almendras». El validador
+    # busca ESO como palabra en la traducción, no lo encuentra, y una línea CORRECTA cae al
+    # español. Quitando el paréntesis primero, el conector vuelve a estar al principio.
     s = _PARENTHETICAL_RE.sub("", s).strip()
+    s = _LEADING_LINKER_RE.sub("", s, count=1).strip()
     s = _TRAILING_MODIFIER_RE.sub("", s).strip()
     return s
 
