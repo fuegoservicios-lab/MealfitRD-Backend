@@ -353,3 +353,44 @@ y el slice arranca por el principio. O sea que `MAX_LOCALES=1`, el valor al que 
 operador cuando el jsonb se le está yendo, conservaba los cinco idiomas pareciendo que había
 hecho algo. El default 2 no se toca: sigue siendo el cruce calculado en la sección de
 retención. Sólo se arregla la aritmética del extremo.
+
+### Los cinco P2 de la misma ola (2026-08-23)
+
+Cinco defectos más de la misma auditoría, todos en este módulo, cada uno con su test.
+
+**El semáforo se fugaba si el hilo no arrancaba.** [P2-I18N-DISPLAY-SEMAFORO-SE-FUGA-SI-EL-HILO-NO-ARRANCA]
+`_INFLIGHT_SEMAPHORE.acquire()` iba ANTES de `Thread(...).start()`, y `start()` puede lanzar
+(`RuntimeError: can't start new thread` bajo presión de memoria o límite de hilos del
+sistema). Cada fallo dejaba un permiso cobrado sin devolver; con `MAX_INFLIGHT=2`, dos
+fallos y el enriquecimiento quedaba apagado PARA SIEMPRE sin un solo log. Ahora el `start`
+va en `try`, y la excepción libera el permiso antes de propagarse.
+
+**La excepción final no dejaba rastro.** [P2-I18N-DISPLAY-EXCEPCION-NO-DEJA-RASTRO] El
+`except Exception` de cierre del worker loggeaba y salía: **sin fila en `pipeline_metrics`**
+y sin alerta. Un enriquecimiento que muere por excepción era indistinguible de uno que nunca
+corrió, justo el caso que la telemetría existe para distinguir. Ahora emite
+`_emit_result_telemetry(..., {"enriched_meals": 0, "reason": "exception", "error": ...})`.
+
+**`reason` nula con cero comidas.** [P2-I18N-DISPLAY-REASON-NULA-CON-CERO-COMIDAS] El
+`last_skip_reason = None` se ejecutaba si se había escrito el NOMBRE del plan o los insights
+aunque ninguna comida hubiera pasado el validador. Resultado: `enriched_meals: 0` con
+`reason: null` — una fila que dice «no traduje nada» sin decir por qué. Ahora sólo un
+`written` real (comidas) limpia la razón.
+
+**El validador era ciego a la unidad.** [P2-I18N-DISPLAY-VALIDADOR-CIEGO-A-LA-UNIDAD] Se
+comprobaba que la cantidad NUMÉRICA del ingrediente traducido coincidiera con la original, y
+no la unidad: «200 g» → «200 kg» pasaba. Nuevo `_conserva_la_unidad` con `_UNIDAD_MAGNITUD`
+(número + unidad, con las abreviaturas canónicas) en la validación de ingredientes y de pasos
+de receta.
+
+**El canónico se comía el conector.** [P2-I18N-DISPLAY-CANONICO-SE-COME-EL-CONECTOR]
+Con el formato «0.75 cda (5 g) de Almendras» —el que el motor emite para cucharadas y tazas
+con su equivalente en gramos— `_extract_canonical_name` quitaba el prefijo de cantidad, luego
+el conector inicial y DESPUÉS el paréntesis: tras el prefijo queda «(5 g) de Almendras», el
+`de` ya no está al principio y sobrevive, y el canónico sale «de Almendras». El gloss del
+modelo («0.75 tbsp (5 g) of almonds (Almendras)») es correcto, pero el validador busca «de
+Almendras» como palabra en la línea traducida, no lo encuentra, y la línea cae al español.
+**Medido sobre un plan vivo: el 24,6 % de las líneas de ingredientes lleva esa forma** — una
+de cada cuatro líneas correctas se descartaba. El arreglo es de orden: paréntesis antes que
+conector.
+

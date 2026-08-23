@@ -24,6 +24,8 @@ Se traduce **la interfaz**. No se traduce **el contenido**.
 | Notificaciones push (43 mensajes de 6 crons) | **Sí** | [P1-I18N-PUSH-CRON-ESPANOL · 2026-08-22] Traducidas en el CUELLO DE BOTELLA (`utils_push.send_push_notification`), no en los 35 call sites: un cron nuevo queda cubierto sin wiring. Catálogo SSOT [`push_i18n.py`](../push_i18n.py), fail-open. |
 | Help bot e insights | **Sí** | [P1-HELP-BOT-I18N + P1-INSIGHTS-I18N · 2026-08-20] El razonamiento del panel de insights lo genera el LLM bajo `_INSIGHTS_ADDENDUM` (espejo #12); el help bot resuelve por catálogo. |
 | Autodetección del idioma en el primer arranque | **Sí** | [P1-AUTO-LOCALE] Se lee del navegador cuando el perfil no trae `locale`. Depende de que la columna admita `NULL`: mientras tuvo `NOT NULL DEFAULT 'es-DO'`, el primer login sembraba un valor y apagaba la autodetección PARA SIEMPRE (P1-I18N-PROFILE-DEFAULT-PISA-INERTE, migración aplicada 2026-08-22). |
+| Splash (lo primero que se pinta en cada arranque en frío) | **Sí** | [P1-SPLASH-I18N · 2026-08-20 · declarado P2-I18N-ALCANCE-SIN-SPLASH-NI-MANIFIESTO · 2026-08-23] Vive en `index.html`, en `<body>`, ANTES de que React exista: la traducción es una tabla `TAGLINE`/`CARGANDO` del boot que lee `window.__mfLocale`. Esta fila faltaba y es la superficie más vista de la app — cada apertura pasa por ella. Sin entrada para un idioma: español, sin error. Espejo #16 de §6. |
+| Nombre y atajos de la PWA (manifiesto) | **Sí** | [P2-I18N-MANIFEST-MONOLINGUE · 2026-08-21 · declarado 2026-08-23] `scripts/build-manifests-i18n.mjs` genera `manifest.<locale>.json` en `postbuild` y el boot cambia el `href`. Es lo ÚNICO que el sistema operativo recuerda de la app: el nombre bajo el icono, para siempre. Sin entrada para un idioma: «Nutrición con IA». Espejo #15 de §6. Medido 2026-08-23: el `postbuild` llevaba sin correr en CI desde el 21-ago (`P2-I18N-ROJO-AMBIENTE-HACE-INVISIBLE-EL-ROJO-DEL-GATE`). |
 | Páginas legales (Privacidad, Términos — 601 cadenas) | **No** | Traducir un contrato genera obligaciones en cada jurisdicción. Es una decisión legal, no de producto. |
 | Landing (`bioboros.com`) | **No** | [P3-I18N-DOC-LANDING-NO-ES-ESTATICO · 2026-08-22] Esta fila decía «14 páginas estáticas fuera del build de React». **Es falso**: son 19 rutas en `PAPER_SURFACE_ROUTES` (`utils/paperSurface.js`, el SSOT), componentes React cargados con `lazy()` DENTRO del mismo build de Vite. La exclusión sigue siendo correcta y la razón real es otra: traducirlas exige URLs por idioma y `hreflang`, que es un cambio de arquitectura de rutas y de SEO, no de copy. Importa arreglarlo porque una razón falsa invita a «corregirla» metiendo el landing donde ya está. |
 
@@ -253,7 +255,7 @@ la asimetría es el diseño:
 ## 6. Añadir un sexto idioma
 
 [P2-I18N-ESPEJOS-SIN-ANCLA · 2026-08-21] Esta sección decía «**cinco** sitios» y el test
-«falla si los cinco divergen». **Son doce**, y siete no estaban anclados por nada. No se
+«falla si los cinco divergen». **Son dieciocho** (doce hasta el 2026-08-22; [P2-I18N-SEXTO-IDIOMA-ESPEJOS-CONGELADOS · 2026-08-23] sumó los seis que viven fuera de React o en el copy de servidor), y siete no estaban anclados por nada. No se
 pueden colapsar: el boot corre antes de que exista ningún módulo, el CHECK debe ser SQL, y
 el backend no puede importar JS.
 
@@ -276,6 +278,12 @@ Esa superficie sale en español y ya. Por eso el drift aquí es más callado que
 | 10 | `backend/plan_display_i18n.py` → `_DISPLAY_LANGUAGE_DIRECTIVES` | `_build_prompt` devuelve `None` y el enriquecimiento se salta ENTERO: plan y recetas en español, sin error. |
 | 11 | `backend/plan_display_i18n.py` → `_PLAN_NAME_ADDENDUM` | Los platos salen traducidos y el nombre del plan se queda en español: media pantalla en cada idioma. |
 | 12 | `backend/plan_display_i18n.py` → `_INSIGHTS_ADDENDUM` | Igual que la 11, con el razonamiento del panel de insights. |
+| 13 | `backend/push_i18n.py` → `_LOCALES` + `_TITULOS`/`_CUERPOS` | `translate_push_text` devuelve el español para ese idioma aunque el catálogo lo tuviera: cada notificación en la pantalla de bloqueo, en castellano. |
+| 14 | `backend/prompts/chat_agent.py` → `_PUSH_NUDGE_TITLES`, `_EMPTY_RESPONSE_FALLBACKS`, `_PLAN_SEED_*` | El copy de SERVIDOR del coach que no escribe el LLM: el título del nudge, el mensaje de reserva cuando el modelo calla, el par sembrado tras generar el plan. Sale en español y se PERSISTE en la conversación. |
+| 15 | `frontend/scripts/build-manifests-i18n.mjs` → `TRADUCCIONES` | No se genera `manifest.<code>.json`: el usuario instala la PWA desde una app ya en su idioma y el icono del escritorio dice «Nutrición con IA». |
+| 16 | `frontend/index.html` → `TAGLINE`/`CARGANDO` (splash) | Lo primero que se pinta en cada arranque en frío, en español, antes de que React exista. |
+| 17 | `frontend/ios/App/App/Info.plist` → `CFBundleLocalizations` + `<lang>.lproj/InfoPlist.strings` | Los prompts de permisos del SISTEMA (cámara, fotos, notificaciones) en español dentro de una app en otro idioma. iOS ni mira el `.lproj` si no está declarado. |
+| 18 | `frontend/src/i18n/glosario.json` → el término en cada idioma | **Nada, y ese es el problema.** `revisarGlosario` hace `if (!esperada) continue`: el idioma sin entrada no se REVISA — 0 desvíos, trinquete en 0, gate verde — sin haber medido nada. Es el único espejo que al faltar pone un gate duro en VERDE. Una exención deliberada se declara con `sin_pacto: [...]` + `nota` (caso «Plato»: tres sentidos en inglés, dos en francés); la que no está declarada es un olvido y sale rojo. |
 
 Los espejos tienen tests **por separado** y no uno que compare los doce conjuntos, y eso es
 deliberado: un único test diría «algo divergió» y te dejaría buscando; uno por espejo dice
@@ -283,8 +291,8 @@ cuál y qué se ve. Verificado por mutación — añadir `'de-DE'` al SSOT los p
 
 **Dónde vive el ancla de cada fila** [P2-I18N-DOC-ESPEJOS-INCOMPLETOS · 2026-08-22]: esta
 sección decía «cada fila tiene su propio test» y no es exacto —
-[`test_p2_i18n_espejos_sin_ancla.py`](../tests/test_p2_i18n_espejos_sin_ancla.py) cubre 10
-espejos con 9 funciones (una parametrizada sobre los dos addenda del display), y las filas
+[`test_p2_i18n_espejos_sin_ancla.py`](../tests/test_p2_i18n_espejos_sin_ancla.py) cubre 16
+espejos con 15 funciones (dos parametrizadas, más el control de que el extractor no esté vacío: los dos addenda del display y las cinco tablas de copy de servidor del coach), y las filas
 **5 y 6** —las dos copias del `CHECK`— las ancla
 [`test_p1_i18n_dashboard.py`](../tests/test_p1_i18n_dashboard.py), que es donde vive la
 paridad de migraciones. La cifra la vigila ahora `test_p2_i18n_doc_espejos_incompletos.py`: si alguien
@@ -303,7 +311,7 @@ agosto-15.
 | Test | Qué ancla |
 |---|---|
 | [`test_p1_i18n_dashboard.py`](../tests/test_p1_i18n_dashboard.py) | Paridad de los espejos históricos (boot, CHECK, backend), idempotencia de la migración, whitelist + validación de valor, `es-DO` sin catálogo, existencia del validador. |
-| [`test_p2_i18n_espejos_sin_ancla.py`](../tests/test_p2_i18n_espejos_sin_ancla.py) | 10 de los 12 espejos de la lista de idiomas (9 funciones, una parametrizada), con la consecuencia de cada divergencia en el mensaje. Los dos `CHECK` los ancla `test_p1_i18n_dashboard.py`. |
+| [`test_p2_i18n_espejos_sin_ancla.py`](../tests/test_p2_i18n_espejos_sin_ancla.py) | 16 de los 18 espejos de la lista de idiomas (15 funciones: dos parametrizadas y un control), con la consecuencia de cada divergencia en el mensaje. Los dos `CHECK` los ancla `test_p1_i18n_dashboard.py`. Verificado por mutación 2026-08-23: `de-DE` en el SSOT → 19 rojos. |
 | [`test_p2_i18n_doc_espejos_incompletos.py`](../tests/test_p2_i18n_doc_espejos_incompletos.py) | Que la CIFRA de esta doc siga siendo la de la realidad: filas de la tabla ↔ espejos con ancla. |
 | `frontend/src/__tests__/I18n.p1_i18n_dashboard.test.js` | Contrato del motor: fallback al español, fail-closed del locale, interpolación (placeholder sin valor se queda **literal**), plural, `<html lang>`, formato por locale. |
 | `test_p3_i18n_deferred.py` | **Reconvertido**: ya no guarda «es-DO permanente» sino «no añadas una librería de i18n encima del motor propio». |

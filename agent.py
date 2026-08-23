@@ -4186,13 +4186,21 @@ def call_model(state: ChatState):
             )
         except Exception:
             pass
-        _fallback_copy = (
-            "No pude procesar esa solicitud por restricciones del modelo. "
-            "¿Puedes reformularla con otras palabras? Si lo que querías era "
-            "registrar una comida, intenta algo como: \"comí X gramos de Y "
-            "para el almuerzo\"."
-        )
-        response = AIMessage(content=_fallback_copy)
+        # [P2-I18N-CHAT-FALLBACK-VACIO-SIGUE-EN-ESPANOL · 2026-08-23] En el idioma del
+        # usuario: este mensaje se PERSISTE en la conversación, así que un francés lo leía
+        # en español y lo volvía a ver en cada apertura de la sesión. El locale se lee del
+        # perfil SÓLO en esta rama (respuesta vacía: rara) — `call_model` no lo recibe en el
+        # state y añadirlo a ChatState por un caso raro es más superficie. Guest/sin perfil
+        # ⇒ español, igual que el coach entero (Addendum §2).
+        _fallback_locale = None
+        try:
+            _fb_uid = state.get("user_id")
+            if _fb_uid and _fb_uid != "guest" and _fb_uid != state.get("session_id"):
+                _fallback_locale = (get_user_profile(_fb_uid) or {}).get("locale")
+        except Exception:
+            _fallback_locale = None
+        from prompts.chat_agent import empty_response_fallback as _empty_response_fallback
+        response = AIMessage(content=_empty_response_fallback(_fallback_locale))
 
     # [P2-CHAT-TOKEN-TELEMETRY · 2026-05-19] Best-effort post-invoke.
     # Importa lazy para evitar acoplamiento module-init con graph_orchestrator

@@ -78,6 +78,9 @@ _CHIP_Y_SU_ALIMENTO = [
     ("Soya", "100 g de Soya texturizada"),
     ("Pescado", "150 g de Boquerones"),
     ("Mani", "30 g de Mantequilla de maní"),
+    # [P2-I18N-CHIP-SESAMO-Y-LACTOSA-AUSENTES · 2026-08-23] los dos que quedaban con clase y sin chip.
+    ("Sesamo", "30 g de Tahini"),
+    ("Lactosa", "200 ml de Leche entera"),
 ]
 
 
