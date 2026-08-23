@@ -407,3 +407,11 @@ ahora aquí, en `active_plan_missing_locale(user_id, locale)` — al lado de las
 `->'_display'`/`->>'_display'` que parezcan SQL, el `pop` cuyo valor se USA (lo que destapó
 `db_plans.py`, que cuenta invalidaciones: permitido con razón), y dejó de escanear `venv/`
 (6.002 ficheros de terceros → 89).
+
+**Tres columnas muertas en la telemetría.** [P3-I18N-DISPLAY-TELEMETRIA-CON-TRES-COLUMNAS-MUERTAS]
+La fila de `pipeline_metrics` de cada ciclo salía con `duration_ms`, `retries` y
+`tokens_estimated` siempre en 0: `duration_ms` nadie lo ponía en el resumen, `retries`
+leía `batches_failed`, que nadie escribía, y `tokens_estimated` era un `0` literal. Sólo el
+jsonb decía algo; un panel que agrupe por las columnas numéricas veía ceros. Ahora el ciclo
+acumula su reloj, las invocaciones por encima de los lotes iniciales (= reintentos) y los
+tokens que el provider declara en cada respuesta (`_tokens_de`).
