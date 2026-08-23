@@ -14695,6 +14695,126 @@ _ALLERGEN_DECLARATION_ALIASES = {
                "sesamo", "graines de sesame", "semi di sesamo", "gergelim"],
 }
 
+# [P0-I18N-ALERGIA-TEXTO-LIBRE-SOLO-ES · 2026-08-23] La mitad que faltaba: el ALIMENTO.
+#
+# `_ALLERGEN_DECLARATION_ALIASES` cubría el nombre de la CLASE en los cinco idiomas —
+# «fruits de mer», «crostacei», «latticini»— y eso está bien: medido, 24 de 24 términos de
+# categoría bloquean. Pero en un campo libre la gente no escribe la clase, escribe lo que
+# come: «crevettes», «gamberetti», «camarão», «shrimp».
+#
+# MEDIDO antes de este alta, con `clinical_backstop_for_meal` sobre platos que SÍ contienen
+# el alérgeno: **46 de 62 combinaciones no bloqueaban**, y NUEVE eran en INGLÉS. Eso último
+# es lo que revela que no es un hueco de i18n sino estructural: en español funciona porque
+# `_ALLERGEN_SYNONYMS` —la tabla del ingrediente, la que se busca DENTRO del plato— está en
+# español, así que un hispanohablante que escribe «camarones» casa con ella de rebote. Cada
+# idioma nuevo heredó la mitad declarativa y ninguna de la mitad alimentaria.
+#
+# Va en una tabla APARTE y no fusionada con la de arriba a propósito: aquélla son formas de
+# DECLARAR una alergia («shellfish allergy», «maladie coeliaque») y ésta son nombres de
+# COMIDA en otro idioma. Se consumen igual, pero mezclarlas haría que la próxima persona no
+# pueda saber cuál de las dos está ampliando ni con qué criterio.
+#
+# ⚠️ SIGUEN SIN ENTRAR en `forbidden` ni espejarse en `_DIET_*_TERMS`: son declarativos. Lo
+# que se busca dentro del plato son SIEMPRE los sinónimos españoles de `_ALLERGEN_SYNONYMS`.
+#
+# tooltip-anchor: _ALLERGEN_FOOD_ALIASES (test_p0_i18n_alergia_texto_libre_solo_es.py)
+_ALLERGEN_FOOD_ALIASES = {
+    "mariscos": [
+        # fr
+        "crevette", "crevettes", "homard", "langoustine", "moule", "moules", "huitre",
+        "huitres", "coquillage", "coquillages", "crabe", "calmar", "poulpe", "palourde",
+        # it
+        "gambero", "gamberi", "gamberetto", "gamberetti", "scampi", "aragosta", "cozza",
+        "cozze", "vongola", "vongole", "ostrica", "ostriche", "granchio", "calamaro",
+        "calamari", "polpo", "capesante",
+        # pt
+        "camarao", "camaroes", "lagosta", "lagostim", "mexilhao", "mexilhoes", "ostra",
+        "ostras", "caranguejo", "lula", "polvo", "vieira",
+        # en
+        "shrimp", "shrimps", "prawn", "prawns", "lobster", "crab", "crabs", "mussel",
+        "mussels", "oyster", "oysters", "clam", "clams", "squid", "octopus", "scallop",
+        "scallops", "crayfish",
+    ],
+    "pescado": [
+        "saumon", "thon", "cabillaud", "morue", "sardine", "sardines", "anchois", "truite",
+        "maquereau", "merlu",
+        "salmone", "tonno", "merluzzo", "baccala", "sardina", "acciughe", "trota", "sgombro",
+        "nasello",
+        "salmao", "atum", "bacalhau", "sardinha", "sardinhas", "anchova", "truta", "cavala",
+        "pescada",
+        "tuna", "cod", "anchovy", "anchovies", "trout", "mackerel", "haddock", "tilapia",
+    ],
+    "frutos secos": [
+        "amande", "amandes", "noisette", "noisettes", "cajou", "pistache", "pistaches",
+        "pecan", "macadamia",
+        "mandorla", "mandorle", "nocciola", "nocciole", "anacardi", "pistacchio",
+        "pistacchi", "pinoli",
+        "amendoa", "amendoas", "avela", "avelas", "castanha", "castanhas", "pinhao",
+        "almond", "almonds", "hazelnut", "hazelnuts", "cashew", "cashews", "pistachio",
+        "pistachios", "pecans", "walnut",
+    ],
+    "lacteos": [
+        "fromage", "beurre", "creme", "yaourt",
+        "formaggio", "burro", "panna", "yogurt", "mozzarella", "parmigiano", "ricotta",
+        "queijo", "manteiga", "iogurte", "requeijao",
+        "cheese", "butter", "cream", "yoghurt", "whey", "buttermilk",
+    ],
+    "huevo": ["omelette", "frittata", "omelete"],
+    "gluten": [
+        "ble", "froment", "seigle", "orge", "epeautre", "farine de ble",
+        "grano", "farro", "orzo", "segale", "semola",
+        "trigo", "centeio", "cevada", "farinha de trigo",
+        "wheat", "barley", "rye", "spelt", "semolina",
+    ],
+}
+
+
+# [P0-I18N-ALERGIA-TEXTO-LIBRE-SOLO-ES · 2026-08-23] `strip_accents` usa NFKD, y NFKD NO
+# descompone las ligaduras: `œ` sigue siendo `œ`. MEDIDO contra producción:
+#
+#     strip_accents('œufs') -> 'œufs'
+#     declara 'oeufs' -> 1 violación   bloquea
+#     declara 'œufs'  -> 0 violaciones *** NO BLOQUEA ***
+#
+# O sea que la grafía CORRECTA del francés —la que produce un teclado francés— era justo la
+# que no protegía, y la que funcionaba era la que se teclea con dos letras. Se traduce ANTES
+# de quitar acentos porque después ya no hay nada que traducir.
+#
+# Va aquí y no dentro de `constants.strip_accents` a propósito: aquélla la llaman decenas de
+# sitios (nombres de alimento, categorías, claves de agrupación) y cambiar cómo normaliza es
+# mover el suelo de comparaciones que hoy cuadran. Aquí el radio es una función.
+_LIGADURAS = str.maketrans({"œ": "oe", "Œ": "OE", "æ": "ae", "Æ": "AE"})
+
+
+def _norm_declaracion(s) -> str:
+    """Normaliza una declaración de alergia del usuario: ligaduras → dígrafo, sin acentos,
+    minúsculas. tooltip-anchor: _norm_declaracion (test_p0_i18n_alergia_texto_libre_solo_es.py)"""
+    return strip_accents(str(s).translate(_LIGADURAS).strip().lower())
+
+
+def _declaracion_casa(a_low: str, termino: str) -> bool:
+    """¿La declaración del usuario `a_low` invoca el alias declarativo `termino`?
+
+    [P0-I18N-ALERGIA-TEXTO-LIBRE-SOLO-ES · 2026-08-23] Subcadena bidireccional para los
+    términos largos —la conducta de siempre, y la que hace que «allergie aux arachides» case
+    con «arachide»— y FRONTERA DE PALABRA para los cortos.
+
+    El corte no es estético. Sin él, añadir «ble» (fr, trigo) o «cod» (en, bacalao) al
+    vocabulario dispara con «roble», «problema» o «codorniz», y una alerta clínica que grita
+    de más es una alerta que se deja de leer. Con él, medido: 0 falsos positivos nuevos.
+
+    Y NO se aplica a `_ALLERGEN_SYNONYMS`: ahí la subcadena es load-bearing, porque es lo que
+    hace que «camaron» case con «camarones» dentro del texto del plato. Cambiarla también
+    ahí rompería la mitad que hoy funciona — que es justo el error de bulto que este fix
+    tenía a mano.
+    """
+    t = _norm_declaracion(termino)
+    if not t:
+        return False
+    if len(t) >= 6:
+        return t in a_low or a_low in t
+    return _re.search(r"\b" + _re.escape(t) + r"(?:s|es)?\b", a_low) is not None
+
 
 def _expand_allergy_declarations(allergies) -> set:
     """[P0-ALLERGEN-VOCAB-I18N · 2026-08-21] SSOT de la expansión declaración → términos a buscar
@@ -14727,16 +14847,19 @@ def _expand_allergy_declarations(allergies) -> set:
         allergies = [allergies]
     out = set()
     for a in (allergies or []):
-        a_low = strip_accents(str(a).strip().lower())
+        a_low = _norm_declaracion(a)
         if not a_low or a_low in _MEDICAL_NONE_SENTINELS:
             continue
         matched = False
         for cat, syns in _ALLERGEN_SYNONYMS.items():
             cat_n = strip_accents(cat)
-            _decl = _ALLERGEN_DECLARATION_ALIASES.get(cat, ())
+            # [P0-I18N-ALERGIA-TEXTO-LIBRE-SOLO-ES · 2026-08-23] Las dos mitades del
+            # vocabulario declarativo: cómo se llama la CLASE y cómo se llama el ALIMENTO.
+            _decl = list(_ALLERGEN_DECLARATION_ALIASES.get(cat, ())) \
+                + list(_ALLERGEN_FOOD_ALIASES.get(cat, ()))
             if a_low == cat_n or cat_n in a_low or a_low in cat_n or \
-               any(a_low in strip_accents(s) or strip_accents(s) in a_low
-                   for s in list(syns) + list(_decl)):
+               any(a_low in strip_accents(s) or strip_accents(s) in a_low for s in syns) or \
+               any(_declaracion_casa(a_low, s) for s in _decl):
                 out.update(strip_accents(s) for s in syns)
                 matched = True
         if not matched:
