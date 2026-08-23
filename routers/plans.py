@@ -2159,11 +2159,20 @@ def _postprocess_pipeline_result(
     if session_id:
         goal = data.get('mainGoal', 'Desconocido')
         try:
-            save_message(session_id, "user", f"Generar plan para mi objetivo: {goal}")
-            save_message(
-                session_id, "model",
-                "¡Aquí tienes tu estrategia nutricional personalizada generada analíticamente!",
-            )
+            # [P2-I18N-CHAT-SESIONES-TITULADAS-POR-MENSAJE-SEMBRADO · 2026-08-23] En el
+            # idioma del usuario y con el objetivo GLOSADO (era el código `lose_fat` pegado).
+            # 90 de 106 sesiones se titulan con este mensaje. Locale best-effort del perfil,
+            # guest ⇒ español. SSOT: `prompts.chat_agent.plan_seed_messages`.
+            _seed_locale = None
+            try:
+                if actual_user_id and actual_user_id != "guest":
+                    _seed_locale = (get_user_profile(actual_user_id) or {}).get("locale")
+            except Exception:
+                _seed_locale = None
+            from prompts.chat_agent import plan_seed_messages as _plan_seed_messages
+            _seed_user_text, _seed_model_text = _plan_seed_messages(_seed_locale, goal)
+            save_message(session_id, "user", _seed_user_text)
+            save_message(session_id, "model", _seed_model_text)
             background_tasks.add_task(summarize_and_prune, session_id)
         except Exception as _msg_err:
             logger.warning(f"⚠️ Error registrando mensajes de chat: {_msg_err}")

@@ -734,6 +734,48 @@ def empty_response_fallback(locale) -> str:
     return _EMPTY_RESPONSE_FALLBACKS.get(locale, _EMPTY_RESPONSE_FALLBACK_ES)
 
 
+# [P2-I18N-CHAT-SESIONES-TITULADAS-POR-MENSAJE-SEMBRADO · 2026-08-23] Tras generar el plan,
+# `routers/plans.py` siembra en la sesión de chat un par de mensajes: uno firmado como del
+# USUARIO («Generar plan para mi objetivo: …») y la respuesta del coach. Los dos estaban en
+# español fijo, y el «objetivo» era el CÓDIGO del formulario (`lose_fat`) tal cual. Medido:
+# 90 de 106 sesiones se titulan con ese mensaje sembrado — es lo primero que el usuario ve
+# de su historial de chat, y en francés salía en español con un identificador en inglés.
+#
+# El código del objetivo NO se traduce en el dato (es el identificador del motor); se glosa
+# al escribir el mensaje, que es PROSA. Un código desconocido se escribe tal cual: mejor
+# «lose_fat» que inventar.
+_PLAN_SEED_GOAL_LABELS = {
+    "es-DO": {"lose_fat": "perder grasa", "gain_muscle": "ganar músculo", "maintenance": "mantenimiento", "performance": "rendimiento"},
+    "en-US": {"lose_fat": "lose fat", "gain_muscle": "gain muscle", "maintenance": "maintenance", "performance": "performance"},
+    "pt-BR": {"lose_fat": "perder gordura", "gain_muscle": "ganhar músculo", "maintenance": "manutenção", "performance": "desempenho"},
+    "fr-FR": {"lose_fat": "perdre du gras", "gain_muscle": "prendre du muscle", "maintenance": "maintien", "performance": "performance"},
+    "it-IT": {"lose_fat": "perdere grasso", "gain_muscle": "aumentare la massa muscolare", "maintenance": "mantenimento", "performance": "prestazioni"},
+}
+_PLAN_SEED_USER = {
+    "es-DO": "Generar plan para mi objetivo: {goal}",
+    "en-US": "Generate a plan for my goal: {goal}",
+    "pt-BR": "Gerar um plano para o meu objetivo: {goal}",
+    "fr-FR": "Générer un plan pour mon objectif : {goal}",
+    "it-IT": "Genera un piano per il mio obiettivo: {goal}",
+}
+_PLAN_SEED_MODEL = {
+    "es-DO": "¡Aquí tienes tu estrategia nutricional personalizada generada analíticamente!",
+    "en-US": "Here is your personalized nutrition strategy, generated analytically!",
+    "pt-BR": "Aqui está a sua estratégia nutricional personalizada, gerada analiticamente!",
+    "fr-FR": "Voici ta stratégie nutritionnelle personnalisée, générée analytiquement !",
+    "it-IT": "Ecco la tua strategia nutrizionale personalizzata, generata analiticamente!",
+}
+
+
+def plan_seed_messages(locale, goal_code) -> tuple:
+    """Los dos mensajes que se siembran en el chat tras generar el plan, en el idioma del
+    usuario (español si no lo conocemos). Devuelve `(texto_usuario, texto_coach)`."""
+    loc = locale if isinstance(locale, str) and locale in _PLAN_SEED_USER else "es-DO"
+    code = goal_code if isinstance(goal_code, str) and goal_code else "Desconocido"
+    goal = _PLAN_SEED_GOAL_LABELS[loc].get(code, code)
+    return _PLAN_SEED_USER[loc].format(goal=goal), _PLAN_SEED_MODEL[loc]
+
+
 _LANGUAGE_DIRECTIVE_CACHE: dict = {}
 
 
