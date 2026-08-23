@@ -709,7 +709,8 @@ async def api_get_catalog(
         from db import execute_sql_query
         return execute_sql_query(
             """
-            SELECT id::text AS id, slug, name, name_en, category, aliases,
+            SELECT id::text AS id, slug, name, name_en,
+                   to_jsonb(mi)->>'gloss_es' AS gloss_es, category, aliases,
                    density_g_per_cup::float8 AS density_g_per_cup,
                    density_g_per_unit::float8 AS density_g_per_unit,
                    shelf_life_days,
@@ -723,7 +724,7 @@ async def api_get_catalog(
                    fats_g_per_100g::float8 AS fats_g_per_100g,
                    fiber_g_per_100g::float8 AS fiber_g_per_100g,
                    sodium_mg_per_100g::float8 AS sodium_mg_per_100g
-            FROM master_ingredients ORDER BY name ASC
+            FROM master_ingredients AS mi ORDER BY name ASC
             """,
             fetch_all=True,
         ) or []

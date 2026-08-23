@@ -1278,8 +1278,8 @@ def _country_catalog_unpriced_keep_enabled() -> bool:
 
 
 # ============================================================
-# [P1-PLAN-DISPLAY-I18N · Task 5 · 2026-08-19] Gloss bilingüe display-only
-# de un ingrediente ("Black beans (Habichuelas negras)") — fase 1b de
+# [P1-PLAN-DISPLAY-I18N · Task 5 · 2026-08-19] Glosses display-only
+# de un ingrediente ("Black beans (Habichuelas negras)" / "Lechosa (papaya)") — fase 1b de
 # docs/superpowers/specs/2026-08-19-plan-display-i18n-design.md, regla de
 # oro: la lista de compras es SIEMPRE bilingüe, jamás inglés puro. El
 # docstring de la función siguiente trae la RESTRICCIÓN DURA completa.
@@ -1320,6 +1320,24 @@ def _display_name_en_for_item(master_item: dict) -> "str | None":
         return None
     try:
         gloss = master_item.get("name_en") if isinstance(master_item, dict) else None
+    except Exception:
+        return None
+    if not isinstance(gloss, str):
+        return None
+    gloss = gloss.strip()
+    return gloss or None
+
+
+def _display_gloss_es_for_item(master_item: dict) -> "str | None":
+    """[P1-COUNTRY-GLOSS-SOLO-INGLES · 2026-08-23] Gloss panhispánico.
+
+    Display-only, igual que el gloss inglés hermano: solo lee ``gloss_es`` y
+    nunca cambia ``name``, aliases, categoría ni ninguna clave de matching.
+    ``None`` mantiene byte-idéntico el item si la migración aún no existe o si
+    el nombre canónico no es un regionalismo.
+    """
+    try:
+        gloss = master_item.get("gloss_es") if isinstance(master_item, dict) else None
     except Exception:
         return None
     if not isinstance(gloss, str):
@@ -12864,6 +12882,11 @@ def aggregate_and_deduct_shopping_list(plan_ingredients: list[str], consumed_ing
                 _name_en = _display_name_en_for_item(master_item)
                 if _name_en:
                     market_obj["display_name_en"] = _name_en
+                # [P1-COUNTRY-GLOSS-SOLO-INGLES · 2026-08-23] Gloss panhispánico
+                # display-only, hermano del inglés: «Lechosa (papaya)».
+                _gloss_es = _display_gloss_es_for_item(master_item)
+                if _gloss_es:
+                    market_obj["display_gloss_es"] = _gloss_es
                 market_obj["is_staple"] = False
                 # [P1-PDF-2] Cierra el drift de la heurística substring que vivía
                 # SOLO en frontend. Backend es ahora SSOT para perishable
@@ -12914,6 +12937,11 @@ def aggregate_and_deduct_shopping_list(plan_ingredients: list[str], consumed_ing
                 _name_en = _display_name_en_for_item(master_item)
                 if _name_en:
                     market_obj["display_name_en"] = _name_en
+                # [P1-COUNTRY-GLOSS-SOLO-INGLES · 2026-08-23] Gloss panhispánico
+                # display-only, hermano del inglés: «Lechosa (papaya)».
+                _gloss_es = _display_gloss_es_for_item(master_item)
+                if _gloss_es:
+                    market_obj["display_gloss_es"] = _gloss_es
                 market_obj["is_staple"] = False
                 # [P1-PDF-2] Mismo flag que arriba — todo item entrando a
                 # `aggregated_shopping_list` debe tener `is_perishable` para que

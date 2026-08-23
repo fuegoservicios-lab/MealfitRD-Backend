@@ -1717,8 +1717,12 @@ def _swap_engine(monkeypatch):
     state = {"plan_data": None, "atomic_calls": []}
 
     def _fake_execute_sql_query_sw(sql, params=None, **kwargs):
-        if "SELECT id FROM meal_plans" in sql:
-            return {"id": (params[0] if params else "plan-swap-1")}
+        # Anclado por PROPIEDAD (el FROM/WHERE del check de ownership), no por la
+        # forma exacta del SELECT: P1-COUNTRY-PLAN-VS-PERFIL-EN-BLOQUES le añadió
+        # `plan_data->>'_country'` a la proyección y el doble viejo (subcadena
+        # `SELECT id FROM meal_plans`) devolvía None → 404 fantasma.
+        if "FROM meal_plans WHERE id = %s AND user_id = %s" in sql:
+            return {"id": (params[0] if params else "plan-swap-1"), "plan_country": None}
         return None
 
     monkeypatch.setattr(db_core_module, "execute_sql_query", _fake_execute_sql_query_sw)
@@ -2734,6 +2738,7 @@ def test_display_name_en_for_item_never_touches_name_key(_sc_module):
 
 _ALLOWED_NAME_EN_FUNCTIONS = frozenset({
     "_display_name_en_for_item",
+    "_display_gloss_es_for_item",
     "aggregate_and_deduct_shopping_list",
 })
 
@@ -2757,16 +2762,17 @@ def test_guard_name_en_confined_to_display_only_functions(_shopping_calc_src):
     que no sea la zona display-only conocida -- así un futuro call site nuevo en
     normalize_name/un matcher/un alias no puede colarse en silencio."""
     blocks = _top_level_def_blocks(_shopping_calc_src)
-    offending = sorted(
-        name for name, chunks in blocks.items()
-        if any("name_en" in chunk for chunk in chunks)
-        and name not in _ALLOWED_NAME_EN_FUNCTIONS
-    )
-    assert not offending, (
-        f"'name_en' referenciado fuera de la zona display-only en: {offending} -- "
-        "restricción dura: name_en NUNCA entra a normalize_name/aliases/matchers/"
-        "pantry_names_match (P1-PANTRY-NAME-RESOLUTION es la misma clase de bug)."
-    )
+    for field in ("name_en", "gloss_es"):
+        offending = sorted(
+            name for name, chunks in blocks.items()
+            if any(field in chunk for chunk in chunks)
+            and name not in _ALLOWED_NAME_EN_FUNCTIONS
+        )
+        assert not offending, (
+            f"{field!r} referenciado fuera de la zona display-only en: {offending} -- "
+            "restricción dura: ningún gloss entra a normalize_name/aliases/matchers/"
+            "pantry_names_match (P1-PANTRY-NAME-RESOLUTION es la misma clase de bug)."
+        )
 
 
 def test_guard_normalize_name_never_references_name_en(_shopping_calc_src):
@@ -2785,11 +2791,43 @@ def test_guard_is_verified_for_shopping_never_references_name_en(_shopping_calc_
         assert "name_en" not in chunk
 
 
+# Funciones de constants.py autorizadas a LEER `name_en` de una fila del catálogo.
+# [P1-COUNTRY-CONDIMENT-PARITY-BETA · 2026-08-23] `_country_catalog_condiment_patterns`
+# deriva el ROL de condimento de la fila viva (`category` + `name_en`) porque varias
+# altas botánicas reales están categorizadas como `Vegetales`. Clasifica filas del
+# catálogo CONTRA SÍ MISMAS — jamás casa texto del usuario ni del plan —, así que no
+# viola la restricción que este guard protege (name_en fuera de pantry_names_match/
+# aliases/normalize). Ver el tooltip-anchor homónimo en constants.py.
+_ALLOWED_CONSTANTS_NAME_EN_FUNCTIONS = frozenset({
+    "_country_catalog_condiment_patterns",
+})
+
+
 def test_guard_constants_module_untouched_by_name_en():
-    """Defensa extra: esta task no debía tocar constants.py (SSOT de
-    `pantry_names_match`/`GLOBAL_REVERSE_MAP`/`canonicalize_*`) en absoluto."""
+    """Defensa: `name_en` no entra a constants.py (SSOT de `pantry_names_match`/
+    `GLOBAL_REVERSE_MAP`/`canonicalize_*`) salvo la excepción documentada arriba,
+    y `gloss_es` no entra en absoluto (cero usos legítimos fuera de display)."""
     constants_src = (_BACKEND_ROOT / "constants.py").read_text(encoding="utf-8")
-    assert "name_en" not in constants_src
+    blocks = _top_level_def_blocks(constants_src)
+    preamble = constants_src[: min(b for b, _ in
+        [(m.start(), 0) for m in re.finditer(r"^def \w+\(", constants_src, re.MULTILINE)] or [(len(constants_src), 0)])]
+    def _codigo_vivo(chunk: str) -> str:
+        # Solo cuenta el código, no la prosa: un comentario que EXPLICA la regla
+        # (o el bloque narrativo sobre el def vecino) no debe disparar el guard
+        # — ni satisfacerlo (lección comentario-vence-guard, 2026-08).
+        return "\n".join(l for l in chunk.splitlines() if not l.lstrip().startswith("#"))
+
+    for field, allowed in (("name_en", _ALLOWED_CONSTANTS_NAME_EN_FUNCTIONS), ("gloss_es", frozenset())):
+        offending = sorted(
+            name for name, chunks in blocks.items()
+            if any(field in _codigo_vivo(chunk) for chunk in chunks) and name not in allowed
+        )
+        assert not offending, (
+            f"{field!r} referenciado en constants.py fuera de la excepción documentada: {offending}"
+        )
+        # Y en el preámbulo (nivel módulo) puede aparecer solo en comentarios, no como clave viva.
+        vivo = [l for l in preamble.splitlines() if field in l and not l.lstrip().startswith("#")]
+        assert not vivo, f"{field!r} vivo a nivel módulo de constants.py: {vivo[:3]}"
 
 
 # ------------------------------------------------------------------

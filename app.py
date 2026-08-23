@@ -31,7 +31,13 @@ _PROCESS_START_ISO = datetime.now(timezone.utc).isoformat()
 #     y fechas anteriores al floor (último audit cerrado).
 #   - Si subes el floor del test, sube también el valor aquí — el commit
 #     que sube uno sin el otro debería fallar el test en CI.
-_LAST_KNOWN_PFIX = "P1-COACH-COUNTRY-UNNAMED · 2026-08-23"
+#
+# Huellas durables (supersession-safe): P-fixes cuyo test exige su ancla en app.py
+# aunque el marker de arriba ya viva más adelante. El marker es MÓVIL; esta lista no.
+#   P1-COACH-COUNTRY-UNNAMED · 2026-08-23 — el coach nombra el país en sus 4 ramas.
+#   P1-COUNTRY-CONDIMENT-PARITY-BETA · 2026-08-23 — exención de condimentos por país.
+#   P1-COUNTRY-GLOSS-SOLO-INGLES · 2026-08-23 — gloss panhispánico display-only.
+_LAST_KNOWN_PFIX = "P1-COUNTRY-GLOSS-SOLO-INGLES · 2026-08-23"
 
 # [P1-SENTRY-SAMPLE-COST · 2026-05-12] Sentry sampling driven from env vars
 # con default seguro 0.1 (10%). Pre-fix tenía `traces_sample_rate=1.0` y
