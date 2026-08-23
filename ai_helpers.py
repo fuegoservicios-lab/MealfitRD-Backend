@@ -176,6 +176,30 @@ def generate_plan_title(plan_data: dict) -> str:
             "health": "salud general"
         }
         goal_text = goal_map.get(goal, "nutrición personalizada")
+
+        # [P1-PLAN-TITLE-DO-CIEGO · 2026-08-23] El título pertenece al
+        # artefacto ya estampado. DO conserva estas dos líneas byte a byte;
+        # los países beta reciben su contexto sin ejemplos dominicanos.
+        from constants import COUNTRY_PROFILES, country_for_plan
+        _title_country = country_for_plan(plan_data, None)
+        if _title_country == "DO":
+            _title_country_rule = "- Puede ser metafórico o usar referencias dominicanas sutiles"
+            _title_country_examples = (
+                '- Ejemplos de buenos títulos: "Energía Tropical al Máximo", '
+                '"Sabor Sin Culpa", "Fuerza y Balance Criollo", '
+                '"Combustible Para Tu Meta", "Ruta Fit Dominicana", '
+                '"Poder Verde y Proteína"'
+            )
+        else:
+            _title_country_name = COUNTRY_PROFILES[_title_country]["name_es"]
+            _title_country_rule = (
+                "- Puede ser metafórico o usar referencias culturales sutiles de "
+                f"{_title_country_name}"
+            )
+            _title_country_examples = (
+                '- Ejemplos de buenos títulos: "Sabor Sin Culpa", '
+                '"Combustible Para Tu Meta", "Poder Verde y Proteína"'
+            )
         
         prompt = f"""Genera UN título corto y creativo en español para un plan de comidas. 
 REGLAS ESTRICTAS:
@@ -183,8 +207,8 @@ REGLAS ESTRICTAS:
 - Debe sonar motivador, atractivo y premium
 - NO incluir calorías, números ni emojis
 - NO usar la palabra "Plan" sola
-- Puede ser metafórico o usar referencias dominicanas sutiles
-- Ejemplos de buenos títulos: "Energía Tropical al Máximo", "Sabor Sin Culpa", "Fuerza y Balance Criollo", "Combustible Para Tu Meta", "Ruta Fit Dominicana", "Poder Verde y Proteína"
+{_title_country_rule}
+{_title_country_examples}
 
 Contexto:
 - Objetivo: {goal_text}
