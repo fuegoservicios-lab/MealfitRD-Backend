@@ -267,6 +267,39 @@ idioma distinto del base, el disparador se activa — y ahora hay telemetría en
 que es justo lo que faltaba para no enterarse tarde. Forzarlo antes exigiría escribir en el
 plan de un cliente y gastar en el proveedor, y esa es una decisión del dueño.
 
+### La ejecución contra un plan REAL, y los tres defectos que destapó
+
+[P1-DISPLAY-ECO-CONTENIDO · 2026-08-23] Con autorización explícita del dueño se ejecutó el
+enriquecimiento contra un plan de **cliente** —un idioma, un día, con respaldo previo y
+restauración verificada por hash— y el resultado justifica por sí solo que la puerta final
+existiera:
+
+    {'enriched_meals': 4}   en 14,2 s
+
+…y las cuatro comidas quedaron **en español** dentro de `_display['fr-FR']`, ingredientes
+incluidos (`¼ taza de avena (Avena)` donde debía leerse francés). **Cuatro éxitos declarados,
+cero traducciones.**
+
+1. **El contenido de cada comida no tenía defensa contra ecos.** `P2-DISPLAY-ECO-NOMBRE`
+   cubría el nombre del PLAN; `_validate_and_build_display` comprobaba tipos y longitudes y
+   nada más. Ahora se juzga por la DESCRIPCIÓN —un nombre puede coincidir legítimamente
+   entre idiomas, una frase entera no— y un lote sin traducir se descarta en vez de
+   persistirse.
+
+2. **El gate de «ya traducido» no reconocía un eco** [`P1-DISPLAY-ECO-PERSISTIDO`], así que
+   uno que entrara por cualquier vía quedaba permanente. Había uno VIVO en el único plan con `_display`:
+   `fr-FR → "Sazón Fuerte, Vida en Equilibrio"`, el español tal cual, mientras en-US y pt-BR
+   sí estaban traducidos.
+
+3. **La poda de idiomas tiraba trabajo pagado** [`P1-DISPLAY-PODA-TIRA-TRABAJO-PAGADO`]. El
+   tope era `2` clavado y la app traduce a
+   cuatro idiomas: el plan entró con tres locales y salió con dos. Ahora es knob
+   (`MEALFIT_PLAN_DISPLAY_I18N_MAX_LOCALES`, default 4 = el máximo posible), así que deja de
+   descartar en uso normal y vuelve a ser lo que debía: una red contra claves inesperadas.
+
+**Por qué ningún test lo veía:** todos usan dobles que devuelven texto traducido POR
+CONSTRUCCIÓN. La pregunta «¿y si el modelo devuelve el original?» no se le hacía a nadie.
+
 ### ⚠️ Lo que ninguna de esas líneas dice, y es lo que más importa
 
 [P1-I18N-SIN-EVIDENCIA-PRODUCCION] **Esta capa no ha traducido un plato en producción.**

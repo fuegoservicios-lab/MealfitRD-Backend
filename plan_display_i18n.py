@@ -898,22 +898,48 @@ def _build_prompt(targets: list, locale: str, plan_name: Optional[str] = None,
     return f"{directive}\n\n{header}\n{meals_block}"
 
 
-def _plan_name_already_translated(plan_data: dict, locale: str) -> bool:
-    """[fase 1c] True si `plan_data["_display"][locale]["name"]` ya existe y es un
-    string no-vacío. Evita retraducir el nombre del plan en CADA disparador
-    (swap/regenday/chatmod pueden llamar a `enrich_plan_display` decenas de veces
-    sobre el mismo plan) — el rename manual (`api_rename_plan`) popea esta key
-    (`- '_display'` a nivel plan), así que un rename real SÍ dispara una
-    retraducción en el próximo enriquecimiento."""
+def _plan_name_already_translated(
+    plan_data: dict, locale: str, original: Optional[str] = None
+) -> bool:
+    """[fase 1c] True si `plan_data["_display"][locale]["name"]` ya existe y SIRVE.
+
+    Evita retraducir el nombre del plan en CADA disparador (swap/regenday/chatmod pueden
+    llamar a `enrich_plan_display` decenas de veces sobre el mismo plan) — el rename manual
+    (`api_rename_plan`) popea esta key (`- '_display'` a nivel plan), así que un rename real
+    SÍ dispara una retraducción en el próximo enriquecimiento.
+
+    [P1-DISPLAY-ECO-PERSISTIDO · 2026-08-23] Un ECO no cuenta como traducido.
+
+    `P2-DISPLAY-ECO-NOMBRE` impide que un nombre devuelto SIN traducir se PERSISTA. Pero
+    este gate —el que decide si hay algo que reintentar— sólo miraba que la clave existiera
+    y no estuviera vacía. O sea que un eco que entró por cualquier otra vía (un plan
+    anterior al fix, un camino que no pase por `_validate_plan_name`) queda **permanente**:
+    el gate dice «ya está» y nadie lo reintenta jamás.
+
+    No es hipotético. Medido el 2026-08-23 en el ÚNICO plan de producción con `_display`:
+
+        en-US -> "Strong Flavor, Life in Balance"      (traducido)
+        pt-BR -> "Sabor Forte, Vida em Equilíbrio"     (traducido)
+        fr-FR -> "Sazón Fuerte, Vida en Equilibrio"    ← el ESPAÑOL, tal cual
+
+    Un eco persistido es peor que una ausencia: la ausencia se reintenta sola.
+
+    `original` es opcional para no romper llamadas viejas, pero sin él la comprobación se
+    degrada a la de antes — pásalo siempre que lo tengas.
+    """
     disp = plan_data.get("_display") if isinstance(plan_data, dict) else None
     if not isinstance(disp, dict):
         return False
     entry = disp.get(locale)
-    return (
-        isinstance(entry, dict)
-        and isinstance(entry.get("name"), str)
-        and bool(entry.get("name").strip())
-    )
+    if not (isinstance(entry, dict)
+            and isinstance(entry.get("name"), str)
+            and entry.get("name").strip()):
+        return False
+    if isinstance(original, str) and original.strip():
+        # Mismo comparador que usa el validador al persistir: tolerante a caja y acentos,
+        # porque «SAZON fuerte» tampoco es una traducción.
+        return not _eco_del_original(entry["name"], original)
+    return True
 
 
 def _eco_del_original(a: str, b: str) -> bool:
@@ -1192,13 +1218,36 @@ def _max_invocaciones_por_ciclo(n_lotes_iniciales: int) -> int:
 #
 # El activo NUNCA se poda; se descarta el resto por orden de inserción, que en un dict
 # de Python es el orden en que se visitaron.
-_MAX_LOCALES_DISPLAY = 2
+def _max_locales_display() -> int:
+    """Cuántos idiomas conserva el `_display` de un plan.
+
+    [P1-DISPLAY-PODA-TIRA-TRABAJO-PAGADO · 2026-08-23] Era `2`, clavado, y eso GARANTIZA
+    descartar traducciones ya pagadas.
+
+    La app traduce a cuatro idiomas (es-DO es la base y nunca lleva `_display`), así que un
+    tope de 2 significa que el tercer idioma que un usuario visite borra al primero. MEDIDO
+    ejecutando contra un plan real de producción: tenía `en-US`, `fr-FR` y `pt-BR`, y una
+    sola pasada dejó dos — el `Strong Flavor, Life in Balance` de en-US, con sus insights,
+    desapareció sin aviso.
+
+    El argumento del tope era «el jsonb crece y nadie lo evacua». Es cierto, pero incompleto:
+    lo que se evacúa aquí no es basura, es trabajo que se le pagó al proveedor y que hay que
+    volver a pagar si el usuario regresa a ese idioma. Un tope por debajo del máximo posible
+    convierte cada visita en un coste recurrente.
+
+    Por defecto 4 = todo lo que puede existir, o sea: el tope deja de descartar en uso normal
+    y pasa a ser lo que debía ser, una red contra claves inesperadas. Y es knob para poder
+    bajarlo sin redeploy si algún plan se vuelve problemático — la convención del repo para
+    exactamente este caso.
+    """
+    return max(1, _env_int("MEALFIT_PLAN_DISPLAY_I18N_MAX_LOCALES", 4))
 
 
 def _podar_locales(disp_map: dict, activo: str) -> dict:
-    if not isinstance(disp_map, dict) or len(disp_map) <= _MAX_LOCALES_DISPLAY:
+    tope = _max_locales_display()
+    if not isinstance(disp_map, dict) or len(disp_map) <= tope:
         return disp_map
-    conservar = [k for k in disp_map if k != activo][-(_MAX_LOCALES_DISPLAY - 1):]
+    conservar = [k for k in disp_map if k != activo][-(tope - 1):]
     conservar.append(activo)
     return {k: disp_map[k] for k in disp_map if k in conservar}
 
@@ -1267,6 +1316,27 @@ def _validate_and_build_display(original: dict, item: dict) -> Optional[dict]:
     if not isinstance(recipe, list) or len(recipe) != len(original["recipe"]):
         return None
     if not isinstance(ingredients, list) or len(ingredients) != len(original["ingredients"]):
+        return None
+
+    # [P1-DISPLAY-ECO-CONTENIDO · 2026-08-23] Un lote que vuelve SIN traducir no se persiste.
+    #
+    # `P2-DISPLAY-ECO-NOMBRE` cubría el nombre del PLAN. El contenido de cada comida no tenía
+    # esta defensa: se comprobaban tipos y longitudes, nada más. Así que un lote donde el
+    # modelo devuelve el español tal cual pasaba la validación entera, se persistía como si
+    # fuera la traducción, y el gate de «ya traducido» pasaba a decir SÍ — el plan se quedaba
+    # en español para siempre y nadie lo reintentaba.
+    #
+    # MEDIDO el 2026-08-23 ejecutando contra un plan REAL de producción: devolvió
+    # `enriched_meals: 4` y las cuatro comidas quedaron en español, ingredientes incluidos
+    # (`¼ taza de avena (Avena)` donde debía leerse en francés). Cuatro éxitos declarados,
+    # cero traducciones. Sin ejecutar contra datos reales esto no se ve: los tests usan
+    # dobles que devuelven texto traducido por construcción.
+    #
+    # Se juzga por la DESCRIPCIÓN y no por el nombre: un nombre puede coincidir
+    # legítimamente entre idiomas (una marca, un sustantivo propio como «Mangú»), pero una
+    # frase entera que sobrevive intacta a un cambio de idioma no es una traducción.
+    _desc_original = original.get("description") or ""
+    if _desc_original.strip() and _eco_del_original(description, _desc_original):
         return None
 
     final_ingredients = []
@@ -1722,7 +1792,9 @@ def enrich_plan_display(
                 _plan_name_texto
                 if isinstance(_plan_name_texto, str)
                 and _plan_name_texto.strip()
-                and not _plan_name_already_translated(plan_data, locale)
+                and not _plan_name_already_translated(
+                    plan_data, locale, original=_plan_name_texto
+                )
                 else None
             )
 
