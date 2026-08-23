@@ -5045,7 +5045,11 @@ _WEEKDAYS_ES = ("lunes", "martes", "miércoles", "jueves", "viernes", "sábado",
 _CYCLE_DURATION_DAYS = {"weekly": 7, "semanal": 7, "biweekly": 15, "quincenal": 15, "monthly": 30, "mensual": 30}
 
 
-def _build_plan_today_context(current_plan, local_date_str: Optional[str] = None) -> str:
+def _build_plan_today_context(
+    current_plan,
+    local_date_str: Optional[str] = None,
+    tz_offset: Optional[int] = None,
+) -> str:
     """[P1-CHAT-TODAY-CONTEXT · 2026-07-12] Ancla HOY al día del menú y al ciclo.
     Vivo: "actualiza el desayuno" → el agente preguntó "¿Opción A (Domingo) u
     Opción B (Lunes)?" siendo domingo — tenía la hora (build_temporal_context)
@@ -5058,11 +5062,20 @@ def _build_plan_today_context(current_plan, local_date_str: Optional[str] = None
         if not days:
             return ""
         from datetime import datetime, timezone, timedelta
+        # [P1-COACH-CYCLE-DAY-RD · 2026-08-23] La fecha local que manda el cliente
+        # y el instante UTC de inicio sólo son comparables usando el MISMO offset.
+        # Clamp compartido; ausencia/valor basura cae al SSOT global (RD por default),
+        # no a otro literal `4 h` inventado en este helper.
+        tz_offset_mins = _clamp_tz_offset_mins(
+            tz_offset,
+            default_mins=_DEFAULT_TZ_OFFSET_MIN,
+        )
         if local_date_str:
             today = datetime.strptime(str(local_date_str)[:10], "%Y-%m-%d").date()
         else:
-            # Convención del repo: fecha local RD = UTC-4 explícito.
-            today = (datetime.now(timezone.utc) - timedelta(hours=4)).date()
+            today = (
+                datetime.now(timezone.utc) - timedelta(minutes=tz_offset_mins)
+            ).date()
         wd = _WEEKDAYS_ES[today.weekday()]
 
         line = f"\n\n📅 HOY es {wd} {today.isoformat()}."
@@ -5087,7 +5100,11 @@ def _build_plan_today_context(current_plan, local_date_str: Optional[str] = None
         if start_raw and dur_days:
             try:
                 start_dt = datetime.fromisoformat(str(start_raw).replace("Z", "+00:00"))
-                start_local = (start_dt - timedelta(hours=4)).date() if start_dt.tzinfo else start_dt.date()
+                start_local = (
+                    (start_dt - timedelta(minutes=tz_offset_mins)).date()
+                    if start_dt.tzinfo
+                    else start_dt.date()
+                )
                 day_k = (today - start_local).days + 1
                 if day_k >= 1:
                     # `rem` INCLUYE hoy — mismo cálculo que el chip del Dashboard
@@ -5774,7 +5791,7 @@ def _build_final_content_from_messages(messages: list) -> str:
     return out
 
 
-def chat_with_agent(session_id: str, prompt: str, current_plan: Optional[dict] = None, user_id: Optional[str] = None, form_data: Optional[dict] = None):
+def chat_with_agent(session_id: str, prompt: str, current_plan: Optional[dict] = None, user_id: Optional[str] = None, form_data: Optional[dict] = None, local_date: Optional[str] = None, tz_offset: Optional[int] = None):
     # [P1-TOOLS-LLM-HARDENING · 2026-05-20] Wall-clock total para el path
     # non-stream del chat. Pre-fix: solo el stream emitía
     # `chat_stream_total_duration` (P1-CHAT-STREAM-DURATION), el
@@ -6087,9 +6104,9 @@ def chat_with_agent(session_id: str, prompt: str, current_plan: Optional[dict] =
         # [P1-CHAT-PANTRY-AWARE · 2026-07-12] Snapshot real de la Nevera.
         system_prompt += _build_pantry_context(user_id)
         # [P1-CHAT-TODAY-CONTEXT · 2026-07-12] HOY → día del menú + ciclo.
-        system_prompt += _build_plan_today_context(plan_vigente, local_date_str=None)
+        system_prompt += _build_plan_today_context(plan_vigente, local_date_str=local_date, tz_offset=tz_offset)
         # [P1-CHAT-PAST-DAYS · 2026-07-27] Paridad con el path stream. Este
-        # path no recibe `tz_offset` del cliente: el helper cae a 240 (RD).
+        # path ya recibe el `tz_offset` del cliente igual que el stream.
         # [P2-CHUNK-OVERDUE-SIGNAL · 2026-08-04] `plan_record` ya se resolvió
         # arriba para el shopping-delta — reenviar su `id` evita un 2º roundtrip
         # y permite filtrar el COUNT de la cola por `meal_plan_id`.
@@ -6575,7 +6592,7 @@ def chat_with_agent_stream(session_id: str, prompt: str, current_plan: Optional[
         # [P1-CHAT-PANTRY-AWARE · 2026-07-12] Snapshot real de la Nevera.
         system_prompt += _build_pantry_context(user_id)
         # [P1-CHAT-TODAY-CONTEXT · 2026-07-12] HOY → día del menú + ciclo.
-        system_prompt += _build_plan_today_context(plan_vigente, local_date_str=local_date)
+        system_prompt += _build_plan_today_context(plan_vigente, local_date_str=local_date, tz_offset=tz_offset)
         # [P1-CHAT-PAST-DAYS · 2026-07-27] Días que ya pasaron: plan prescrito
         # (índice barato) + diario real. Va DESPUÉS del DIARIO DE HOY y del
         # prefijo estático — ver docs/chat_past_days_memory.md §3 Pieza 2.

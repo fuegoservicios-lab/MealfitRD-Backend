@@ -900,6 +900,8 @@ def api_chat(background_tasks: BackgroundTasks, data: dict = Body(...), verified
         user_id = data.get("user_id", session_id)
         current_plan = data.get("current_plan", None)
         form_data = data.get("form_data", None)
+        local_date = data.get("local_date", None)
+        tz_offset = data.get("tz_offset", None)
 
         # Validación de seguridad IDOR
         if user_id and user_id != "guest" and user_id != session_id:
@@ -946,7 +948,15 @@ def api_chat(background_tasks: BackgroundTasks, data: dict = Body(...), verified
         if not current_plan and user_id and user_id != "guest":
             current_plan = get_latest_meal_plan(user_id)
 
-        response_text, updated_fields, new_plan = chat_with_agent(session_id, prompt, current_plan=current_plan, user_id=user_id, form_data=form_data)
+        response_text, updated_fields, new_plan = chat_with_agent(
+            session_id,
+            prompt,
+            current_plan=current_plan,
+            user_id=user_id,
+            form_data=form_data,
+            local_date=local_date,
+            tz_offset=tz_offset,
+        )
 
         # [P1-CHAT-UI-ACTION-INVENTORY · 2026-05-20] Mismo strip que el
         # endpoint /stream — cierra el ciclo del tag visible al refetch.

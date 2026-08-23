@@ -31,6 +31,7 @@ ancla es que sigan prefiriendo lo del usuario.
 """
 from __future__ import annotations
 
+import ast
 import re
 from pathlib import Path
 
@@ -111,17 +112,25 @@ def test_los_llamantes_legitimos_siguen_prefiriendo_la_fecha_del_usuario():
 def test_el_fallback_de_agent_usa_el_ssot():
     """La cuarta copia del 240 a mano, en el mismo fichero: `tz_offset_mins = ... else 240`.
     `P3-TZ-FALLBACK-SSOT` unificó tres respuestas a esta pregunta; ésta se quedó suelta."""
-    agente = _codigo((_BACKEND / "agent.py").read_text(encoding="utf-8", errors="replace"))
-    # EN POSITIVO y sobre la expresión COMPLETA, no por línea. La primera versión buscaba
-    # `if tz_offset is not None else 240` en una sola línea; el arreglo dejó la expresión partida
-    # en dos y la mutación se le escapó limpiamente. Un guard atado al salto de línea mide
-    # formato, no contrato — y aquí el contrato es de dónde sale el número.
-    m = re.search(r"tz_offset_mins\s*=\s*\(?[^\n]*(?:\n[^\n]*)?\)?", agente)
-    assert m, "desapareció la asignación de `tz_offset_mins`"
-    expr = m.group(0)
-    assert "_DEFAULT_TZ_OFFSET_MIN" in expr, (
-        f"`agent.py` sigue resolviendo el fallback de huso sin el SSOT: {expr!r}"
-    )
-    assert not re.search(r"\belse\s+240\b", expr), (
-        f"vuelve el 240 clavado como fallback de huso: {expr!r}"
-    )
+    agente = (_BACKEND / "agent.py").read_text(encoding="utf-8", errors="replace")
+    tree = ast.parse(agente)
+    assignments = [
+        node.value
+        for node in ast.walk(tree)
+        if isinstance(node, ast.Assign)
+        and any(
+            isinstance(target, ast.Name) and target.id == "tz_offset_mins"
+            for target in node.targets
+        )
+    ]
+    assert assignments, "desapareció la asignación de `tz_offset_mins`"
+    for expr in assignments:
+        names = {child.id for child in ast.walk(expr) if isinstance(child, ast.Name)}
+        assert "_DEFAULT_TZ_OFFSET_MIN" in names, (
+            "`agent.py` sigue resolviendo un fallback de huso sin el SSOT: "
+            f"{ast.unparse(expr)!r}"
+        )
+        assert not any(
+            isinstance(child, ast.Constant) and child.value == 240
+            for child in ast.walk(expr)
+        ), f"vuelve el 240 clavado como fallback de huso: {ast.unparse(expr)!r}"
