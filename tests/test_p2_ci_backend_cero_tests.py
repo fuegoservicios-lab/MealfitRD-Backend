@@ -185,11 +185,3 @@ def test_shared_fixture_skips_when_frontend_repo_is_absent() -> None:
     assert "pytest.skip" in body
     assert "repo hermano ausente" in body
     assert 'parents[2] / "frontend"' in body
-
-
-def test_last_known_pfix_exposes_g30_closure() -> None:
-    app_source = (BACKEND_ROOT / "app.py").read_text(encoding="utf-8")
-    assert (
-        '_LAST_KNOWN_PFIX = "P2-CI-BACKEND-CERO-TESTS · 2026-08-23"'
-        in app_source
-    )

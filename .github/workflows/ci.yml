@@ -100,3 +100,12 @@ jobs:
           # los tests cross-repo resuelven ../frontend mediante fixture y se saltan si el
           # checkout hermano no existe. Así un defecto no vuelve a ocultar toda la suite.
           pytest tests/ -v --tb=short -m "not e2e"
+
+      # [P2-CI-RAIZ-CERO-TESTS · 2026-08-23] Este aviso vivía sólo en el workflow
+      # muerto del workspace. Se porta ANTES de retirarlo para que un verde del
+      # backend siga distinguiendo «pasó» de «los e2e no se ejecutaron».
+      - name: Report unverified e2e count (does not gate)
+        if: always()
+        run: |
+          COUNT=$(pytest tests/ -m "e2e" --collect-only -q 2>/dev/null | tail -1 || echo "?")
+          echo "::notice title=E2E sin verificar::Este job corre SIN base de datos, así que los tests marcados @pytest.mark.e2e NO se ejecutan. Recuento: ${COUNT}. Verde aquí NO significa que estén verdes."
