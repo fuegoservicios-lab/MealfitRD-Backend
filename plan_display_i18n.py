@@ -115,6 +115,25 @@ def _plan_display_i18n_enabled() -> bool:
     return _env_bool("MEALFIT_PLAN_DISPLAY_I18N", True)
 
 
+def _plan_display_i18n_max_inflight() -> int:
+    """Cuántos enriquecimientos pueden estar en vuelo a la vez, en TODO el proceso.
+
+    [P3-I18N-DISPLAY-HILO-SIN-TECHO · 2026-08-22] El dedupe por (plan, idioma) impide dos
+    hilos para el mismo par; el cruce entre planes no lo acotaba nada. Cada hilo puede
+    vivir 20-29 minutos hablando con un proveedor pago.
+
+    Por debajo de 1 el techo dejaría de tener sentido y apagaría la feature por accidente
+    —un cero silencioso es peor que un knob mal puesto—, así que se acota abajo.
+    """
+    return max(1, _env_int("MEALFIT_PLAN_DISPLAY_I18N_MAX_INFLIGHT", 4))
+
+
+# `BoundedSemaphore` y no `Semaphore`: si un `release()` de más se colara, el acotado lo
+# convierte en un `ValueError` ruidoso en vez de subir el techo en silencio para siempre.
+# Un techo que se relaja solo no es un techo.
+_INFLIGHT_SEMAPHORE = threading.BoundedSemaphore(_plan_display_i18n_max_inflight())
+
+
 def _plan_display_i18n_model_name() -> str:
     return _env_str("MEALFIT_PLAN_DISPLAY_I18N_MODEL", DEEPSEEK_FLASH)
 
@@ -1963,6 +1982,28 @@ def schedule_plan_display_enrichment(
                 )
                 return
 
+        # [P3-I18N-DISPLAY-HILO-SIN-TECHO · 2026-08-22] Techo GLOBAL de hilos en vuelo.
+        #
+        # El dedupe de arriba impide dos hilos para el MISMO (plan, idioma). Lo que no
+        # acotaba nada es el cruce entre planes: cada uno arranca su propio
+        # `threading.Thread` crudo, y cada hilo puede vivir 20-29 minutos hablando con el
+        # proveedor. Con una cola de generación activa eso es un abanico sin tope sobre un
+        # recurso pago.
+        #
+        # `acquire(blocking=False)` a propósito: bloquear congelaría el hilo del request
+        # que programa el enriquecimiento. Esto es una conveniencia —el plan se sirve en
+        # español si no hay hueco— y una conveniencia jamás bloquea al que la pide.
+        if not _INFLIGHT_SEMAPHORE.acquire(blocking=False):
+            logger.info(
+                f"[P1-PLAN-DISPLAY-I18N] techo de hilos alcanzado "
+                f"({_plan_display_i18n_max_inflight()}) — plan={plan_id} locale={locale} "
+                f"queda en español"
+            )
+            _emit_result_telemetry(plan_id, user_id, locale, {
+                "enriched_meals": 0, "reason": "inflight_cap",
+            })
+            return
+
         def _run():
             try:
                 result = enrich_plan_display(
@@ -1979,6 +2020,11 @@ def schedule_plan_display_enrichment(
                     f"[P1-PLAN-DISPLAY-I18N] background enrich excepción "
                     f"(fail-open) plan={plan_id} locale={locale}: {e!r}"
                 )
+            finally:
+                # El `finally` es la mitad que importa: sin él, una excepción por la que
+                # nadie suelta el permiso convierte el techo en un candado permanente —
+                # la feature se apagaría sola y en silencio tras N fallos.
+                _INFLIGHT_SEMAPHORE.release()
 
         threading.Thread(target=_run, daemon=True).start()
     except Exception as e:

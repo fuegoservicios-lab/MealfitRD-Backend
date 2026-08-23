@@ -123,6 +123,27 @@ lo que permite el rollback sin redeploy).
 El bloque va **después** del último accesor: colocarlo antes daría `NameError` con los dos
 que se definen más abajo, que es exactamente el par que faltaba.
 
+### El techo de hilos (2026-08-22)
+
+[P3-I18N-DISPLAY-HILO-SIN-TECHO] El enriquecimiento corre en un `threading.Thread` crudo y
+puede vivir 20-29 minutos hablando con el proveedor. Había dedupe por `(plan, idioma)`, así
+que dos hilos nunca cubrían el mismo par — pero el cruce **entre planes** no lo acotaba
+nada: con una cola de generación activa, N planes son N hilos simultáneos sobre un recurso
+pago.
+
+`_INFLIGHT_SEMAPHORE` (knob `MEALFIT_PLAN_DISPLAY_I18N_MAX_INFLIGHT`, default 4) pone el
+techo. Tres decisiones que conviene no deshacer:
+
+- **`acquire(blocking=False)`**. Bloquear congelaría el hilo del request que programa el
+  enriquecimiento. Esto es una conveniencia —sin hueco, el plan se sirve en español— y una
+  conveniencia no bloquea a quien la pide. Sin hueco se emite `reason: "inflight_cap"`, que
+  se suma a los ocho caminos de salida con fila.
+- **`BoundedSemaphore`, no `Semaphore`**. Un `release()` de más sobre el segundo sube el
+  techo en silencio y para siempre; sobre el acotado lanza. Un techo que se relaja solo no
+  es un techo.
+- **El `release()` va en un `finally`**. Sin él, una excepción que nadie suelta convierte el
+  techo en un candado permanente: la feature se apagaría sola tras N fallos, sin decir nada.
+
 ### ⚠️ Lo que ninguna de esas líneas dice, y es lo que más importa
 
 [P1-I18N-SIN-EVIDENCIA-PRODUCCION] **Esta capa no ha traducido un plato en producción.**

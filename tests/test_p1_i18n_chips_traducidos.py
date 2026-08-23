@@ -123,12 +123,39 @@ def test_los_valores_del_motor_siguen_en_espanol_canonico() -> None:
     )
 
 
-def test_ninguna_etiqueta_traducida_se_coló_como_valor() -> None:
-    """La forma concreta del accidente: que el `val` pase a ser el texto en inglés."""
-    cat = json.loads(_leer(_LOCALES / "en-US.json"))
-    traducciones_en = {cat.get(k) for k in _etiquetas() if cat.get(k) and cat.get(k) != k}
-    colados = sorted(_valores() & traducciones_en)
+# [P2-I18N-DISLIKE-VALS-SIN-RED · 2026-08-22] Los cognados, que NO son un defecto.
+#
+# Al ensanchar el guard a los cuatro idiomas salen dos coincidencias, y las dos son
+# legítimas: «Cilantro» se escribe igual en inglés (ya está en `_EXCEPCIONES` por la nota
+# hoja/semilla) y «Gluten» es la misma palabra en español, inglés y francés.
+#
+# Contar valores idénticos a su traducción NO es contar valores traducidos — es la misma
+# cuenta que ya falló con las 266 cadenas de pt-BR. Un cognado es una traducción correcta,
+# no una ausencia. Por eso la excepción se documenta una a una y no se relaja el guard.
+_COGNADOS_LEGITIMOS = {
+    "Cilantro": "misma grafía en en-US; el `val` español y su traducción coinciden",
+    "Gluten": "cognado exacto en es/en/fr — no hay nada que traducir",
+}
+
+
+@pytest.mark.parametrize("locale", ["en-US", "pt-BR", "fr-FR", "it-IT"])
+def test_ninguna_etiqueta_traducida_se_coló_como_valor(locale: str) -> None:
+    """La forma concreta del accidente: que el `val` pase a ser el texto traducido.
+
+    [P2-I18N-DISLIKE-VALS-SIN-RED · 2026-08-22] Antes miraba SOLO en-US, y esa mitad de
+    guard dejaba pasar justo el caso que existe para cazar: `val: "Onion"` fallaba, pero
+    `val: "Oignon"` daba **10 passed**. Un guard que sólo vigila uno de los cuatro idiomas
+    en los que se lee la app no vigila el idioma: vigila el inglés.
+
+    El `val` es el identificador con el que `pantry_names_match`, el guard de coherencia y
+    el backstop clínico de alergias resuelven. Traducirlo rompe las tres, y dos en
+    silencio.
+    """
+    cat = json.loads(_leer(_LOCALES / f"{locale}.json"))
+    traducciones = {cat.get(k) for k in _etiquetas() if cat.get(k) and cat.get(k) != k}
+    colados = sorted((_valores() & traducciones) - set(_COGNADOS_LEGITIMOS))
     assert not colados, (
-        f"Estos `val` coinciden con una traducción inglesa: {colados}. El valor tiene "
-        f"que ser SIEMPRE el nombre español del catálogo del motor. [{_MARKER}]"
+        f"Estos `val` coinciden con una traducción a {locale}: {colados}. El valor tiene "
+        f"que ser SIEMPRE el nombre español del catálogo del motor. Si alguno es un "
+        f"cognado legítimo, va a `_COGNADOS_LEGITIMOS` con su razón. [{_MARKER}]"
     )

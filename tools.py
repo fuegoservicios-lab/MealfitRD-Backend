@@ -3638,12 +3638,27 @@ def mark_shopping_list_purchased(user_id: str, excluded_items: list[str] = None,
             return "La lista de compras Delta (ingredientes faltantes) está vacía, no hay nada nuevo que añadir a la despensa."
             
         # Normalizar bases a excluir
+        #
+        # [P2-I18N-TOOLCALL-NOMBRE-SIN-CANONICALIZAR · 2026-08-22] Se recuerda QUÉ pidió
+        # excluir el usuario, no sólo la base normalizada.
+        #
+        # Esta resolución es español-canónico y punto: si el usuario chatea en otro idioma,
+        # el coach emite el nombre en ESE idioma, la base no casa con ninguna, y la
+        # herramienta devolvía éxito habiendo excluido cero. El usuario dice «no compré el
+        # aguacate», la app dice «hecho», y el aguacate sigue marcado como comprado.
+        #
+        # No hay diccionario multilingüe de alimentos que consultar —el catálogo sólo tiene
+        # `name_en`, un gloss inglés— así que lo que se arregla no es la resolución: es el
+        # silencio. Un no-op indistinguible del éxito es peor que un fallo declarado.
         excluded_bases = set()
+        _excl_pedidos = {}
         if excluded_items:
             for item in excluded_items:
                 _, _, name = _parse_quantity(item)
                 base = normalize_ingredient_for_tracking(name) or strip_accents(name.lower().strip())
-                if base: excluded_bases.add(base)
+                if base:
+                    excluded_bases.add(base)
+                    _excl_pedidos[base] = name
                 
         # Normalizar bases a modificar
         modified_bases = set()
@@ -3654,6 +3669,7 @@ def mark_shopping_list_purchased(user_id: str, excluded_items: list[str] = None,
                 if base: modified_bases.add(base)
                 
         # Filtrar shop_list original (excluyendo o si fue modificado con otra cantidad)
+        _excl_casadas = set()
         final_shop_list = []
         for item in shop_list:
             val = item.get("display_string", str(item)) if isinstance(item, dict) else str(item)
@@ -3661,6 +3677,11 @@ def mark_shopping_list_purchased(user_id: str, excluded_items: list[str] = None,
             base = normalize_ingredient_for_tracking(name) or strip_accents(name.lower().strip())
             
             if base in excluded_bases or base in modified_bases:
+                # [P2-I18N-TOOLCALL-NOMBRE-SIN-CANONICALIZAR · 2026-08-22] Anotar la base
+                # que SÍ casó. Sin esto no hay forma de distinguir «excluí tres» de
+                # «no encontré ninguno de los tres».
+                if base in excluded_bases:
+                    _excl_casadas.add(base)
                 continue # Fue excluido o lo agregaremos con la nueva cantidad de modified_items
                 
             final_shop_list.append(val)
@@ -3676,9 +3697,29 @@ def mark_shopping_list_purchased(user_id: str, excluded_items: list[str] = None,
         if success:
             msg = f"¡Felicidades! Se han agregado los {len(final_shop_list)} ingredientes a tu Nevera Virtual."
             if excluded_items:
-                msg += f" (Se excluyeron {len(excluded_items)} ítems que indicaste)."
-                msg += f"\n\n[ALERTA INTERNA PARA LA IA]: El usuario no pudo comprar: {', '.join(excluded_items)}. "
-                msg += "Debes disparar INMEDIATAMENTE una recomendación proactiva en el chat preguntando si quiere que sustituyas los platos de esta semana que requerían esos ingredientes faltantes."
+                # [P2-I18N-TOOLCALL-NOMBRE-SIN-CANONICALIZAR · 2026-08-22] Se cuenta lo
+                # EXCLUIDO, no lo pedido. Antes decía «se excluyeron 3» aunque no hubiera
+                # casado ninguno — que es justo lo que pasa cuando el usuario chatea en
+                # otro idioma y el coach emite «Avocado» contra un catálogo en español.
+                _no_casaron = sorted(
+                    _excl_pedidos[b] for b in excluded_bases if b not in _excl_casadas
+                )
+                msg += f" (Se excluyeron {len(_excl_casadas)} ítems que indicaste)."
+                if _excl_casadas:
+                    msg += f"\n\n[ALERTA INTERNA PARA LA IA]: El usuario no pudo comprar: {', '.join(excluded_items)}. "
+                    msg += "Debes disparar INMEDIATAMENTE una recomendación proactiva en el chat preguntando si quiere que sustituyas los platos de esta semana que requerían esos ingredientes faltantes."
+                if _no_casaron:
+                    # Fail-loud hacia el propio agente: es la única capa que puede
+                    # preguntar «¿cuál de estos?» en el idioma del usuario. Callarlo deja
+                    # al usuario creyendo que excluyó algo que sigue en la lista.
+                    msg += (
+                        f"\n\n[ALERTA INTERNA PARA LA IA]: NO encontré en la lista de "
+                        f"compras estos ítems que el usuario dijo no haber comprado: "
+                        f"{', '.join(_no_casaron)}. La lista está en español canónico y "
+                        f"puede que el usuario los nombrara en otro idioma. NO afirmes que "
+                        f"se excluyeron: pregúntale a cuál de los ítems de la lista se "
+                        f"refería."
+                    )
             if modified_items:
                 msg += f" (Se modificaron/añadieron {len(modified_items)} ítems)."
             return msg
