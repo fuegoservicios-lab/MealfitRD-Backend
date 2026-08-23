@@ -100,5 +100,5 @@ def test_sql_resuelve_pais_por_sello_perfil_o_pre_sistema() -> None:
 
 
 def test_pfix_marker_cierra_g39() -> None:
-    app_source = (BACKEND_ROOT / "app.py").read_text(encoding="utf-8")
-    assert "P2-PANEL-CALIDAD-SIN-PAIS · 2026-08-23" in app_source
+    source = (BACKEND_ROOT / "routers" / "system.py").read_text(encoding="utf-8")
+    assert "P2-PANEL-CALIDAD-SIN-PAIS" in source

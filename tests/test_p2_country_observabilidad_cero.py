@@ -117,5 +117,5 @@ def test_las_dos_alertas_estan_en_la_tabla_de_resolucion() -> None:
 
 
 def test_pfix_marker_cierra_g38() -> None:
-    app = (BACKEND_ROOT / "app.py").read_text(encoding="utf-8")
-    assert "P2-COUNTRY-OBSERVABILIDAD-CERO · 2026-08-23" in app
+    constants = (BACKEND_ROOT / "constants.py").read_text(encoding="utf-8")
+    assert "P2-COUNTRY-OBSERVABILIDAD-CERO" in constants

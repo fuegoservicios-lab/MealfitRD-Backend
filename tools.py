@@ -255,7 +255,13 @@ def _valor_de_campo_para_perfil(field: str, new_value):
     if field != "country":
         return True, new_value
     try:
-        from constants import COUNTRY_PROFILES, canonicalize_country, strip_accents
+        from constants import (
+            COUNTRY_PROFILES,
+            UnsupportedCountryError,
+            assert_supported_country,
+            canonicalize_country,
+            strip_accents,
+        )
     except Exception:
         return False, None
     _raw = str(new_value or "").strip()
@@ -263,12 +269,18 @@ def _valor_de_campo_para_perfil(field: str, new_value):
         return False, None
     _canon = canonicalize_country(_raw)
     if _canon != "DO" or _raw.upper() == "DO":
-        return True, _canon
+        try:
+            return True, assert_supported_country(_canon)
+        except UnsupportedCountryError:
+            return False, None
     # No era un código: ¿es el NOMBRE de alguno de los países del SSOT?
     _obj = strip_accents(_raw.lower())
     for _cc, _perfil in COUNTRY_PROFILES.items():
         if strip_accents(str(_perfil.get("name_es") or "").lower()) == _obj:
-            return True, _cc
+            try:
+                return True, assert_supported_country(_cc)
+            except UnsupportedCountryError:
+                return False, None
     return False, None
 
 

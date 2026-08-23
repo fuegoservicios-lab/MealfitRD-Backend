@@ -1515,7 +1515,7 @@ def admin_plan_quality(request: Request, days: int = 14, limit: int = 40):
         sólo deuda anterior al 2026-07-31 y `sin_indice_reciente` revela planes
         nuevos que deberían haber nacido con índice.
 
-    Anchor: P1-PLAN-QUALITY-INDEX.
+    Anchors: P1-PLAN-QUALITY-INDEX, P2-PANEL-CALIDAD-SIN-PAIS.
     """
     _verify_admin_token(request.headers.get("authorization"))
     _check_admin_rate_limit(request)

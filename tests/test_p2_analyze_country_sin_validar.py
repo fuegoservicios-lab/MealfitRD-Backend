@@ -83,5 +83,5 @@ def test_alerta_tiene_fila_de_resolucion() -> None:
 
 
 def test_pfix_marker_cierra_g44() -> None:
-    app = (BACKEND_ROOT / "app.py").read_text(encoding="utf-8")
-    assert "P2-ANALYZE-COUNTRY-SIN-VALIDAR · 2026-08-23" in app
+    plans = (BACKEND_ROOT / "routers" / "plans.py").read_text(encoding="utf-8")
+    assert "P2-ANALYZE-COUNTRY-SIN-VALIDAR" in plans

@@ -39,6 +39,19 @@ from ai_helpers import generate_plan_title
 logger = logging.getLogger(__name__)
 
 
+def _assert_supported_country_for_service(form_data: Optional[dict]) -> None:
+    """400 antes de cualquier lectura/merge/escritura de health_profile."""
+    if not isinstance(form_data, dict) or "country" not in form_data:
+        return
+    from constants import UnsupportedCountryError, assert_supported_country
+
+    try:
+        assert_supported_country(form_data.get("country"))
+    except UnsupportedCountryError as exc:
+        from fastapi import HTTPException
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+
 def compute_plan_hash(plan_data: dict) -> str:
     """Calcula un hash SHA-256 truncado del plan basado en ingredientes y suplementos.
     Fuente única de verdad para detectar si un plan cambió."""
@@ -68,6 +81,10 @@ def merge_form_data_with_profile(user_id: str, form_data: Optional[dict]) -> dic
     Extracted to avoid DRY violation between /api/chat/stream and /api/chat.
     Returns the merged form_data dict.
     """
+    # [P2-COUNTRY-WRITE-UNVALIDATED · 2026-08-23] Deliberadamente FUERA del
+    # try fail-open inferior: un valor inválido es error de request, no un blip
+    # de lectura que deba devolverse/guardarse como si nada.
+    _assert_supported_country_for_service(form_data)
     merged = form_data or {}
     if not user_id or user_id == "guest" or user_id == "":
         return merged

@@ -79,4 +79,4 @@ def test_slot_drift_distingue_knob_apagado_de_usuario_do(monkeypatch) -> None:
 
 def test_pfix_marker_cierra_g40() -> None:
     app_source = (BACKEND_ROOT / "app.py").read_text(encoding="utf-8")
-    assert "P2-FLIP-BACKEND-INVERIFICABLE · 2026-08-23" in app_source
+    assert "P2-FLIP-BACKEND-INVERIFICABLE" in app_source

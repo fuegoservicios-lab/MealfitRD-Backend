@@ -1008,16 +1008,14 @@ async def api_patch_profile(
     # CHECK haría el trabajo devolviendo un 500 crudo de psycopg.
     # Tooltip-anchor: P3-COUNTRY-DB-CHECK-VALUE.
     if body.health_profile and body.health_profile.get("country") is not None:
-        from constants import COUNTRY_PROFILES
-        _pais = body.health_profile["country"]
-        if not isinstance(_pais, str) or _pais.strip() not in COUNTRY_PROFILES:
+        from constants import UnsupportedCountryError, assert_supported_country
+        try:
+            assert_supported_country(body.health_profile["country"])
+        except UnsupportedCountryError as exc:
             raise HTTPException(
                 status_code=400,
-                detail=(
-                    f"country no soportado: {_pais!r}. "
-                    f"Permitidos: {sorted(COUNTRY_PROFILES)}."
-                ),
-            )
+                detail=str(exc),
+            ) from exc
 
     if not body.health_profile and not fields:
         raise HTTPException(status_code=400, detail="Nada que actualizar.")
