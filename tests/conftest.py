@@ -111,6 +111,7 @@ except Exception as _e_go_eager:  # pragma: no cover - depende del entorno
     print(f"[P1-CONFTEST-EAGER-GO] no se pudo pre-importar graph_orchestrator: "
           f"{type(_e_go_eager).__name__}: {_e_go_eager}", file=_sys_go.stderr)
 
+import ast
 import sys
 import uuid
 import json
@@ -134,6 +135,149 @@ if connection_pool and not getattr(connection_pool, '_opened', False):
 # ---------------------------------------------------------------------------
 def pytest_configure(config):
     config.addinivalue_line("markers", "e2e: End-to-end tests requiring a live database")
+    config.addinivalue_line(
+        "markers",
+        "frontend_cross_repo: tests whose subject includes the sibling frontend repo",
+    )
+
+
+# [P2-DEPLOY-FRONTEND-SALTA-LA-PARIDAD · 2026-08-23] Clasificación por
+# propiedad: cada TEST que construya o consuma una ruta al repo frontend recibe
+# el marker. Una lista manual de 246 tests quedaría obsoleta el primer día que
+# nazca una paridad nueva; marcar el fichero entero ejecutaría miles de vecinos
+# backend-only de los grandes batch files.
+_FRONTEND_CROSS_REPO_CACHE: dict[Path, frozenset[str]] = {}
+
+
+def _frontend_literal_or_alias(node: ast.AST, known_names: set[str]) -> bool:
+    for child in ast.walk(node):
+        if isinstance(child, ast.Name):
+            identifier = child.id.lower()
+            if child.id in known_names or identifier == "frontend" or identifier.startswith(
+                ("frontend_", "_frontend", "_front")
+            ):
+                return True
+        if isinstance(child, ast.Constant) and isinstance(child.value, str):
+            literal = child.value.lower().replace("\\", "/").strip()
+            normalized_path = "/" + literal.strip("/") + "/"
+            if (
+                literal == "frontend"
+                or literal.startswith("../frontend")
+                or "/frontend/" in normalized_path
+                or "frontend/src" in literal
+            ):
+                return True
+    return False
+
+
+def _assigned_names(node: ast.AST) -> set[str]:
+    targets = []
+    if isinstance(node, ast.Assign):
+        targets.extend(node.targets)
+    elif isinstance(node, ast.AnnAssign):
+        targets.append(node.target)
+    return {
+        child.id
+        for target in targets
+        for child in ast.walk(target)
+        if isinstance(child, ast.Name)
+    }
+
+
+def _frontend_cross_repo_test_names(path: Path) -> frozenset[str]:
+    path = Path(path)
+    if path in _FRONTEND_CROSS_REPO_CACHE:
+        return _FRONTEND_CROSS_REPO_CACHE[path]
+    try:
+        source = path.read_text(encoding="utf-8", errors="replace")
+        tree = ast.parse(source, filename=str(path))
+    except (OSError, SyntaxError):
+        result = frozenset()
+        _FRONTEND_CROSS_REPO_CACHE[path] = result
+        return result
+
+    frontend_values = {"frontend_repo_path"}
+    changed = True
+    while changed:
+        changed = False
+        for statement in tree.body:
+            if not isinstance(statement, (ast.Assign, ast.AnnAssign)):
+                continue
+            value = statement.value
+            if value is None or not _frontend_literal_or_alias(value, frontend_values):
+                continue
+            before = len(frontend_values)
+            frontend_values.update(_assigned_names(statement))
+            changed = changed or len(frontend_values) != before
+
+    functions = [
+        node
+        for node in ast.walk(tree)
+        if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef))
+    ]
+    dependent_functions: set[str] = set()
+    changed = True
+    while changed:
+        changed = False
+        for function in functions:
+            body = function.body
+            if (
+                body
+                and isinstance(body[0], ast.Expr)
+                and isinstance(body[0].value, ast.Constant)
+                and isinstance(body[0].value.value, str)
+            ):
+                body = body[1:]
+            arguments = {
+                arg.arg
+                for arg in (
+                    *function.args.posonlyargs,
+                    *function.args.args,
+                    *function.args.kwonlyargs,
+                )
+            }
+            called_functions = {
+                node.func.id
+                for statement in body
+                for node in ast.walk(statement)
+                if isinstance(node, ast.Call) and isinstance(node.func, ast.Name)
+            }
+            depends = (
+                bool(arguments.intersection(dependent_functions))
+                or bool(called_functions.intersection(dependent_functions))
+                or any(
+                    _frontend_literal_or_alias(statement, frontend_values)
+                    for statement in body
+                )
+            )
+            if not depends:
+                continue
+            if function.name not in dependent_functions:
+                dependent_functions.add(function.name)
+                changed = True
+            for global_node in (
+                node for node in ast.walk(function) if isinstance(node, ast.Global)
+            ):
+                before = len(frontend_values)
+                frontend_values.update(global_node.names)
+                changed = changed or len(frontend_values) != before
+
+    result = frozenset(name for name in dependent_functions if name.startswith("test_"))
+    _FRONTEND_CROSS_REPO_CACHE[path] = result
+    return result
+
+
+def _is_frontend_cross_repo_test_file(path: Path) -> bool:
+    return bool(_frontend_cross_repo_test_names(path))
+
+
+def pytest_collection_modifyitems(config, items):
+    marker = pytest.mark.frontend_cross_repo
+    for item in items:
+        item_path = Path(str(getattr(item, "path", item.fspath)))
+        item_name = getattr(item, "originalname", None) or item.name.split("[", 1)[0]
+        if item_name in _frontend_cross_repo_test_names(item_path):
+            item.add_marker(marker)
 
 
 # ---------------------------------------------------------------------------
