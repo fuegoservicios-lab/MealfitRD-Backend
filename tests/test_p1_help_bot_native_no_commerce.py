@@ -53,3 +53,12 @@ def test_la_hoja_movil_reserva_el_notch():
     movil = css[css.index("@media (max-width: 640px)"):]
     assert re.search(r"\.header\s*\{[^}]*env\(safe-area-inset-top", movil), "la cabecera móvil debe sumar safe-area-inset-top"
     assert re.search(r"env\(safe-area-inset-bottom", movil), "el pie móvil debe sumar safe-area-inset-bottom"
+
+
+def test_la_hoja_movil_sigue_al_teclado():
+    """[P1-HELP-BOT-KEYBOARD · 2026-08-22] En iOS el teclado no encoge el layout viewport;
+    una hoja fixed a 100dvh deja el campo de texto debajo del teclado. El panel sigue al
+    visualViewport (alto + offsetTop) mientras hay teclado, como la hoja de la Nevera."""
+    src = (_FRONT / "HelpChatWidget.jsx").read_text(encoding="utf-8")
+    assert "window.visualViewport" in src
+    assert re.search(r"style=\{vvBox \? \{ top: vvBox\.top, bottom: 'auto', height: vvBox\.height \}", src)
