@@ -104,7 +104,11 @@ _POSICION_DE_COPY = re.compile(
     # `(?:\?\.|\.)` y no `\?\.?`: lo segundo exige el signo de interrogacion, asi que
     # `err.detail ||` —que existe en el arbol— era invisible. Lo cazo la mutacion de
     # control; el test principal estaba pasando sin ver una de las dos formas.
-    r"(?:toast\.(?:error|warning|success)?\s*\(|description:\s*)[^;\n]*?"
+    # [P1-I18N-CONSENT-MODAL-SERVIDOR-GANA · 2026-08-23] `message:` como tercera posición
+    # de copy. El modal «Tu Nevera no alcanza» recibía `message: newMealData.message || '…'`
+    # en un `return` de AssessmentContext —ni toast ni description— y este guard no lo veía.
+    # Es copy visible igual: el Dashboard lo pinta tal cual en el modal.
+    r"(?:toast\.(?:error|warning|success)?\s*\(|description:\s*|message:\s*)[^;\n]*?"
     r"(?P<receptor>[A-Za-z_$][\w$]*)(?:\?\.|\.)" + _CANALES_DEL_SERVIDOR
     # [P1-I18N-SERVER-COPY-GANA-SIGUE-ABIERTO · 2026-08-23] El fallback tiene que ser una
     # TRADUCCIÓN. Al abrir el canal a cualquier campo apareció
@@ -160,6 +164,17 @@ def test_ninguna_posicion_de_copy_pinta_el_detail_del_servidor() -> None:
         for m in _POSICION_DE_COPY.finditer(s):
             if _RECEPTOR_DE_EXCEPCION.search(m.group("receptor")):
                 continue  # `e.message` en un catch: el defecto vive en el throw
+            # [P1-I18N-CONSENT-MODAL-SERVIDOR-GANA · 2026-08-23] Al abrir `message:` como
+            # posición de copy aparecieron tres sitios en `authClient.js` que NO son
+            # víctimas: van bajo el contrato `mfCopy` (`mfCopy: !data?.message`), y
+            # `humanizeAuthError` sólo respeta el texto crudo cuando `mfCopy` es true — o
+            # sea, cuando GANÓ el fallback traducido. Un `message` del servidor de auth pasa
+            # por los heurísticos y se traduce por clase. Es un contrato de dos piezas que
+            # una línea sola no enseña; se reconoce por la PROPIEDAD (el `mfCopy` a
+            # continuación), no por el nombre del fichero.
+            cola = s[m.end():m.end() + 200]
+            if re.search(r"\bmfCopy\s*:", cola):
+                continue
             linea = s[:m.start()].count("\n") + 1
             culpables.append(f"{p.relative_to(_SRC).as_posix()}:{linea}")
 
