@@ -2048,6 +2048,71 @@ def _enqueue_remaining_chunks(
 _BG_SSE_FALLBACK_TASKS: set = set()
 
 
+def _assert_supported_country_for_request(raw):
+    """Traduce el helper de dominio al 400 común de las puertas HTTP."""
+    from constants import UnsupportedCountryError, assert_supported_country
+
+    try:
+        return assert_supported_country(raw)
+    except UnsupportedCountryError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+
+def _emit_country_profile_constraint_alert_best_effort(
+    user_id: Optional[str], raw_country, error: Exception
+) -> None:
+    """Alerta una divergencia entre validación de aplicación y CHECK de DB."""
+    _key_user_id = user_id or "unknown"
+    alert_key = f"country_profile_constraint_violation:{_key_user_id}"
+    try:
+        from db_core import execute_sql_write as _country_constraint_write
+
+        _country_constraint_write(
+            """
+            INSERT INTO system_alerts
+                (alert_key, alert_type, severity, title, message, metadata,
+                 triggered_at, resolved_at)
+            VALUES (%s, 'country_system', 'critical', %s, %s, %s::jsonb, NOW(), NULL)
+            ON CONFLICT (alert_key) DO UPDATE SET
+                severity = EXCLUDED.severity,
+                title = EXCLUDED.title,
+                message = EXCLUDED.message,
+                metadata = EXCLUDED.metadata,
+                triggered_at = NOW(),
+                resolved_at = NULL
+            """,
+            (
+                alert_key,
+                "La DB rechazó health_profile.country tras la validación HTTP",
+                "Revisar writers fuera de assert_supported_country y deriva del CHECK.",
+                _json.dumps(
+                    {
+                        "user_id": str(user_id) if user_id else None,
+                        "country": raw_country,
+                        "error_type": type(error).__name__,
+                        "error": str(error)[:500],
+                    },
+                    ensure_ascii=False,
+                ),
+            ),
+        )
+    except Exception as alert_error:
+        logger.warning(
+            "[P2-ANALYZE-COUNTRY-SIN-VALIDAR] no se pudo emitir %s: %r",
+            alert_key,
+            alert_error,
+        )
+
+
+def _is_country_profile_constraint_violation(error: Exception) -> bool:
+    diag = getattr(error, "diag", None)
+    constraint_name = getattr(diag, "constraint_name", None)
+    return (
+        constraint_name == "user_profiles_country_supported"
+        or "user_profiles_country_supported" in str(error)
+    )
+
+
 def _postprocess_pipeline_result(
     *,
     result: dict,
@@ -2129,6 +2194,11 @@ def _postprocess_pipeline_result(
         hp_data = {k: v for k, v in data.items() if k not in ('session_id', 'user_id', 'appMode')}
         hp_data["tz_offset_minutes"] = tz_offset_mins
         if hp_data:
+            # [P2-ANALYZE-COUNTRY-SIN-VALIDAR · 2026-08-23] Defensa en
+            # profundidad en el punto exacto de escritura. Va FUERA del try
+            # fail-open de DB: un 400 no puede convertirse en warning y seguir.
+            if "country" in hp_data:
+                _assert_supported_country_for_request(hp_data.get("country"))
             try:
                 # [P1-2] Atomic write con mutator que MERGEA `hp_data` ON TOP
                 # del estado actual bajo FOR UPDATE. Antes era un full-overwrite
@@ -2150,6 +2220,14 @@ def _postprocess_pipeline_result(
                 update_user_health_profile_atomic(actual_user_id, _post_pipeline_mutator)
                 logger.info(f"💾 health_profile guardado para user {actual_user_id}")
             except Exception as _hp_err:
+                if _is_country_profile_constraint_violation(_hp_err):
+                    _emit_country_profile_constraint_alert_best_effort(
+                        actual_user_id, hp_data.get("country"), _hp_err
+                    )
+                    raise HTTPException(
+                        status_code=500,
+                        detail="La base rechazó el país del perfil; el incidente fue reportado.",
+                    ) from _hp_err
                 logger.warning(f"⚠️ Error guardando health_profile: {_hp_err}")
 
     # 2. Chat messages + summarize background (consistente con sync — antes el
@@ -3246,22 +3324,29 @@ def _hydrate_country_from_profile_for_submit(data: dict, user_id: Optional[str])
 
     Como la mutación ocurre antes del persist compartido, `hp_data` re-escribe el
     MISMO valor del perfil (no-op) y el clobber muere en la misma jugada. Se copia
-    CRUDO, sin canonicalizar: la única puerta sigue siendo `country_for_form_data`
-    (P1-DIET-CANON-SSOT). Guests / sin perfil / error ⇒ no-op fail-open.
+    sin canonicalizar, pero se exige un código ISO exacto mediante
+    `assert_supported_country`: los lectores históricos conservan su fail-safe,
+    los escritores nuevos no pueden sembrar basura. Guests / sin perfil / error
+    de lectura ⇒ no-op fail-open; valor presente inválido ⇒ 400.
     tooltip-anchor: P1-COUNTRY-RENEWAL-PROFILE-WINS
     """
     if not user_id or user_id == "guest" or not isinstance(data, dict):
         return
+    prof_country = None
     try:
         from db import get_user_profile
         hp = (get_user_profile(user_id) or {}).get("health_profile") or {}
         prof_country = hp.get("country")
-        if not prof_country:
-            return
-        if data.get("update_reason") or not data.get("country"):
-            data["country"] = prof_country
     except Exception as _cty_err:
         logger.warning(f"⚠️ [P1-COUNTRY-RENEWAL-PROFILE-WINS] hidratación de país falló (fail-open): {_cty_err}")
+        return
+    if prof_country is None:
+        return
+    # [P2-ANALYZE-COUNTRY-SIN-VALIDAR · 2026-08-23] Fuera del try de
+    # hidratación: el HTTPException 400 debe propagarse, nunca caer en fail-open.
+    _assert_supported_country_for_request(prof_country)
+    if data.get("update_reason") or not data.get("country"):
+        data["country"] = prof_country
 
 
 @router.post("/analyze")
@@ -3295,6 +3380,8 @@ def api_analyze(
         # en renovaciones (update_reason set) y rellena si falta — ANTES del
         # pipeline y del merge a health_profile. Ver docstring del helper.
         _hydrate_country_from_profile_for_submit(data, verified_user_id)
+        if "country" in data:
+            _assert_supported_country_for_request(data.get("country"))
 
         # [P1-5] Validación temprana de campos mínimos. Antes payloads incompletos
         # llegaban al pipeline y producían un plan basado en defaults genéricos
@@ -3733,6 +3820,8 @@ async def api_analyze_stream(
         # endpoint sync: el país del perfil manda en renovaciones y rellena si
         # falta — ver docstring del helper.
         _hydrate_country_from_profile_for_submit(data, verified_user_id)
+        if "country" in data:
+            _assert_supported_country_for_request(data.get("country"))
 
         # [P1-5] Misma validación temprana que el endpoint sync. Lanzar 422 ANTES
         # de abrir el StreamingResponse: si el payload es inválido, el cliente

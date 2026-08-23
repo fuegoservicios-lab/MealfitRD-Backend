@@ -3568,6 +3568,29 @@ COUNTRY_PROFILES = {
 }
 
 
+class UnsupportedCountryError(ValueError):
+    """Valor presente que no cumple el contrato ISO del perfil de país."""
+
+
+def assert_supported_country(raw):
+    """Valida un valor que VA A ESCRIBIRSE en ``health_profile.country``.
+
+    Es deliberadamente distinto de :func:`canonicalize_country`: los lectores
+    históricos degradan desconocidos a DO para mantener compatibilidad, pero un
+    escritor nunca puede convertir silenciosamente «España», ``" ES "`` o un
+    tipo no-string a DO. ``None`` representa ausencia y sigue siendo válida.
+    Devuelve el mismo valor para que los callers puedan encadenarlo sin crear un
+    segundo canonicalizador.
+    """
+    if raw is None:
+        return None
+    if not isinstance(raw, str) or raw not in COUNTRY_PROFILES:
+        raise UnsupportedCountryError(
+            f"country no soportado: {raw!r}. Permitidos: {sorted(COUNTRY_PROFILES)}."
+        )
+    return raw
+
+
 def unit_system_for_country(raw) -> str:
     """'imperial' | 'metric'. Lo desconocido cae a 'imperial' — la conducta de hoy.
 

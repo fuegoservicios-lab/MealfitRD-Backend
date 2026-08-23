@@ -120,13 +120,16 @@ def test_excepcion_db_fail_open(monkeypatch):
 
 
 @requires_router
-def test_pais_se_copia_crudo_sin_canonicalizar(monkeypatch):
-    """La única puerta de canonicalización es country_for_form_data (P1-DIET-CANON-SSOT)."""
+def test_pais_invalido_del_perfil_se_rechaza_sin_canonicalizar(monkeypatch):
+    """El writer rechaza prosa; no la convierte silenciosamente a DO."""
     import db
+    from fastapi import HTTPException
     monkeypatch.setattr(db, "get_user_profile", lambda uid: {"health_profile": {"country": "españa"}})
     data = {"country": "DO", "update_reason": "variety"}
-    _HYDRATE(data, "user-1")
-    assert data["country"] == "españa", "el valor viaja CRUDO; canonicaliza el lector, no el writer"
+    with pytest.raises(HTTPException) as caught:
+        _HYDRATE(data, "user-1")
+    assert caught.value.status_code == 400
+    assert data["country"] == "DO", "el valor inválido no debe alcanzar el payload ni coercerse"
 
 
 # --------------------------------------------------------------------------------------

@@ -60,6 +60,9 @@ _EMITTER_FILES = (
     # los eventos de primer plan beta y cambio de régimen desde el mismo
     # helper que sella el artefacto; incluirlo evita un emisor invisible.
     _BACKEND / "constants.py",
+    # [P2-ANALYZE-COUNTRY-SIN-VALIDAR · 2026-08-23] La puerta de generación
+    # alerta si el CHECK de country contradice la validación previa.
+    _BACKEND / "routers" / "plans.py",
     # [P3-I18N-DISPLAY-METRICA-SIN-LECTOR - 2026-08-22] La capa `_display` emite su
     # propia alerta y este escaner no la veia: un `alert_key` fuera del conjunto
     # escaneado es un `alert_key` SIN contrato — puede nacer sin fila en la tabla y el
