@@ -1294,6 +1294,51 @@ def _conserva_las_cifras(original_line: str, translated_line: str) -> bool:
     return _cifras_de(original_line) == _cifras_de(translated_line)
 
 
+# [P2-I18N-DISPLAY-VALIDADOR-CIEGO-A-LA-UNIDAD · 2026-08-23] Las unidades de MAGNITUD, y sólo
+# ésas. «180 g» → «180 oz» conserva todas las cifras y es cinco veces más comida: el control
+# de cifras lo dejaba pasar como traducción buena, y el usuario leía una cantidad falsa en su
+# receta (el motor no: el canónico español sigue dentro de la línea).
+#
+# NO entran las unidades de cocina traducibles —taza→cup, cda→tbsp, diente→clove— porque ésas
+# SE TRADUCEN y exigirlas iguales tiraría todas las traducciones buenas. Entra lo que es una
+# magnitud física: si cambia, cambia la cantidad. Cada grupo es una clase de equivalencia
+# (g ≡ gr ≡ gramos) para que «100 gr» → «100 g» no cuente como cambio.
+_UNIDAD_MAGNITUD = re.compile(
+    r"(?<![A-Za-z])(?:"
+    r"(?P<mg>mg|miligramos?|milligrams?|milligrammes?|milligrammi)|"
+    r"(?P<kg>kg|kilos?|kilogramos?|kilograms?|kilogrammes?|chilogrammi|quilos?)|"
+    r"(?P<g>g|gr|gramos?|grams?|grammes?|grammi)|"
+    r"(?P<ml>ml|mls?|mililitros?|milliliters?|millilitres?|millilitri)|"
+    r"(?P<cl>cl|centilitros?|centiliters?|centilitres?|centilitri)|"
+    r"(?P<l>l|litros?|liters?|litres?|litri)|"
+    r"(?P<floz>fl\.?\s?oz)|"
+    r"(?P<oz>oz|onzas?|ounces?|onces?|once)|"
+    r"(?P<lb>lb|lbs|libras?|pounds?|livres?|libbre|libbra)"
+    r")(?![A-Za-z])",
+    re.IGNORECASE,
+)
+
+
+def _magnitudes_de(linea: str) -> list:
+    """Las clases de unidad de magnitud que aparecen en la línea, en orden."""
+    fuera = []
+    for m in _UNIDAD_MAGNITUD.finditer(linea or ""):
+        fuera.append(m.lastgroup)
+    return fuera
+
+
+def _conserva_la_unidad(original_line: str, translated_line: str) -> bool:
+    """¿La traducción conserva la MAGNITUD de la línea original?
+
+    Sólo se compara cuando el original lleva una unidad de magnitud; una línea sin unidad
+    («Sal al gusto») o con una traducible («2 tazas») no tiene nada que conservar y pasa.
+    """
+    orig = _magnitudes_de(original_line)
+    if not orig:
+        return True
+    return orig == _magnitudes_de(translated_line)
+
+
 def _canonico_presente(canonical: str, linea: str) -> bool:
     """¿El nombre canónico aparece en la línea COMO PALABRA?
 
@@ -1388,6 +1433,11 @@ def _validate_and_build_display(original: dict, item: dict) -> Optional[dict]:
         if not _conserva_las_cifras(original_line, translated_line):
             final_ingredients.append(original_line)
             continue
+        # [P2-I18N-DISPLAY-VALIDADOR-CIEGO-A-LA-UNIDAD · 2026-08-23] Y la MAGNITUD, no sólo
+        # las cifras: «180 g» → «180 oz» conserva los números y es cinco veces más comida.
+        if not _conserva_la_unidad(original_line, translated_line):
+            final_ingredients.append(original_line)
+            continue
         canonical = _extract_canonical_name(original_line)
         if not canonical:
             # Sin canónico identificable en el original: la línea pasa sin check
@@ -1419,6 +1469,7 @@ def _validate_and_build_display(original: dict, item: dict) -> Optional[dict]:
         #     seccion, y sin la etiqueta de nota una ANOTACION pasa a numerarse como
         #     accion de cocina.
         ok = (_conserva_las_cifras(original_step, step)
+              and _conserva_la_unidad(original_step, step)       # P2-I18N-DISPLAY-VALIDADOR-CIEGO-A-LA-UNIDAD
               and _conserva_el_vocab_cerrado(original_step, step))
         final_recipe.append(step if ok else original_step)
 
