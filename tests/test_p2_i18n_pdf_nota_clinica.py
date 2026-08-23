@@ -51,9 +51,33 @@ _DASHBOARD = _ROOT / "frontend" / "src" / "pages" / "Dashboard.jsx"
 
 _MARKER = "P2-I18N-PDF-NOTA-CLINICA"
 
-# Las variables que el backend concatena para componer la nota. Si nace una sexta rama
-# clínica, añadirla aquí es lo que la mete bajo el guard.
-_VARIABLES = ("_note", "_cap_txt", "_comorbid_txt", "_lc_note", "_mn_note", "_pg_note")
+# [P1-I18N-NOTA-MEDICAMENTOS-EN-ESPANOL · 2026-08-23] Esto era una TUPLA A MANO, y por eso
+# se quedó corta: la rama de MEDICAMENTOS —la que avisa de interacción fármaco-alimento
+# (warfarina/INR, levotiroxina, potasio)— usa `_med_note`, que no estaba en la lista. El
+# guard existía justamente para impedir «si alguien cambia el copy clínico, el glosador queda
+# inerte» y no podía ver la séptima rama, así que un francés con medicamento declarado
+# recibía el recuadro con el titular en francés y el cuerpo en español; y si además era
+# renal, el párrafo cambiaba de idioma a mitad de frase.
+#
+# Ahora se DERIVAN del código: cualquier variable que el backend meta en `"note"` entra bajo
+# el guard sin que nadie tenga que acordarse. La tupla de abajo queda sólo como suelo mínimo
+# —si la derivación se rompe, seguimos cubriendo lo que ya cubríamos— y su desajuste con lo
+# derivado lo denuncia `test_la_derivacion_cubre_al_menos_las_variables_conocidas`.
+_VARIABLES_MINIMAS = ("_note", "_cap_txt", "_comorbid_txt", "_lc_note", "_mn_note", "_pg_note")
+
+
+def _variables_de_la_nota(src: str) -> set:
+    """Los nombres que el backend asigna a `requires_professional_review["note"]`.
+
+    Dos formas, las dos vivas en `graph_orchestrator.py`:
+        "note": _med_note,
+        _existing["note"] = ((_existing.get("note") or "") + " " + _pg_note).strip()
+    """
+    nombres = set(_VARIABLES_MINIMAS)
+    nombres |= set(re.findall(r'"note"\s*:\s*(_[A-Za-z0-9_]+)', src))
+    for linea in re.findall(r'\["note"\]\s*=\s*(.+)', src):
+        nombres |= set(re.findall(r'\b(_[A-Za-z0-9_]*(?:note|txt))\b', linea))
+    return nombres
 
 # Un literal cuenta como PROSA (y por tanto es traducible) si lleva al menos un espacio y
 # 6 caracteres. Descarta de un plumazo las claves de `dict.get('protein_g')` y el separador
@@ -82,7 +106,7 @@ def _fragmentos_del_backend() -> set[str]:
         if not isinstance(nodo, ast.Assign):
             continue
         nombres = {t.id for t in nodo.targets if isinstance(t, ast.Name)}
-        if not (nombres & set(_VARIABLES)):
+        if not (nombres & _variables_de_la_nota(src)):
             continue
         for hijo in ast.walk(nodo.value):
             if isinstance(hijo, ast.Constant) and isinstance(hijo.value, str):
@@ -111,7 +135,8 @@ def test_todo_fragmento_del_backend_lo_reconoce_el_glosador() -> None:
     fragmentos = _fragmentos_del_backend()
     assert fragmentos, (
         f"no extraje ni un fragmento de {_ORQ.name}: se renombraron las variables "
-        f"{_VARIABLES} o cambió la forma de componer la nota. Con el extractor vacío este "
+        f"{sorted(_variables_de_la_nota(_fuente(_ORQ)))} o cambió la forma de componer la "
+        f"nota. Con el extractor vacío este "
         f"guard aprueba TODO. [{_MARKER}]"
     )
 
