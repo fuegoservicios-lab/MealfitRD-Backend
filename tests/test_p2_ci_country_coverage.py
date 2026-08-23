@@ -12,8 +12,8 @@ jamás.
 
 DOS CAMBIOS, y los dos van contra el mismo modo de fallo — el veredicto que no distingue:
 
-  1. **`-x` → `--maxfail=25`.** Un rojo cualquiera dejaba de esconder todo lo demás. El tope alto
-     acota el ruido de una suite que se desmorona sin volver a esconder el mapa.
+  1. **Sin `-x` ni `--maxfail`.** G30 demostró que un techo de 25 errores de colección volvió a
+     ocultar toda la suite. El gate debe devolver el mapa completo.
 
   2. **Los e2e dejan de callar.** No se ejecutan aquí —necesitan Neon y este job corre sin base de
      datos— y eso está bien; lo que no estaba bien es que no se dijera. «Añadirlos al gate daría
@@ -33,14 +33,32 @@ from pathlib import Path
 
 import pytest
 
-_CI = Path(__file__).resolve().parent.parent.parent / ".github" / "workflows" / "ci.yml"
+BACKEND_ROOT = Path(__file__).resolve().parents[1]
+WORKSPACE_ROOT = BACKEND_ROOT.parent
+_WORKFLOW_CANDIDATES = (
+    BACKEND_ROOT / ".github" / "workflows" / "ci.yml",
+    WORKSPACE_ROOT / ".github" / "workflows" / "ci.yml",
+)
+_WORKFLOWS = tuple(path for path in _WORKFLOW_CANDIDATES if path.is_file())
+
+
+def test_hay_al_menos_un_workflow_real_que_auditar():
+    assert _WORKFLOWS, "no encontré ningún workflow de CI que auditar"
+
+
+@pytest.fixture(
+    scope="module",
+    params=_WORKFLOWS or (None,),
+    ids=lambda path: path.parents[2].name if path else "workflow-ausente",
+)
+def ci_path(request) -> Path:
+    assert request.param is not None, "no encontré ningún workflow de CI que auditar"
+    return request.param
 
 
 @pytest.fixture(scope="module")
-def ci() -> str:
-    if not _CI.is_file():
-        pytest.skip("ci.yml no está en este árbol")
-    return _CI.read_text(encoding="utf-8", errors="replace")
+def ci(ci_path) -> str:
+    return ci_path.read_text(encoding="utf-8", errors="replace")
 
 
 @pytest.fixture(scope="module")
@@ -73,9 +91,9 @@ def test_un_fallo_ya_no_esconde_el_resto(paso_pytest):
     assert not re.search(r"(?<![\w-])-x(?![\w-])", paso_pytest), (
         "volvió el `-x`: un fallo cualquiera esconde todo lo que venga detrás"
     )
-    assert "--maxfail" in paso_pytest, (
-        "sin `--maxfail`, una suite que se desmorona escupe miles de líneas y el log deja de "
-        "leerse — que es esconder el mapa por el otro extremo"
+    assert "--maxfail" not in paso_pytest, (
+        "volvió un techo de errores: G30 demostró que 25 fallos de colección pueden impedir "
+        "que se ejecute una sola prueba"
     )
 
 
