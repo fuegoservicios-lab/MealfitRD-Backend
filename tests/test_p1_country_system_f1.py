@@ -2627,24 +2627,29 @@ def test_formvalidation_exporta_helpers_de_moneda_una_sola_vez():
         )
 
 
+def _parse_beta_currency_by_country(_text: str) -> dict:
+    """[P1-COUNTRY-BUDGET-CURRENCY-DEFAULT] El mapa ya no se copia a mano.
+
+    Deriva las mismas filas que consume `BETA_CURRENCY_BY_COUNTRY`: países beta cuya
+    moneda no es una de las dos opciones universales DOP/USD.
+    """
+    countries_src = (_FRONTEND / "src" / "config" / "countries.js").read_text(encoding="utf-8")
+    rows = re.findall(
+        r"code:\s*'([A-Z]{2})'[^}]*currency:\s*'([A-Z]{3})'[^}]*beta:\s*(true|false)",
+        countries_src,
+    )
+    assert rows, "No se pudieron parsear filas code/currency/beta de countries.js."
+    return {
+        code: currency
+        for code, currency, beta in rows
+        if beta == "true" and currency not in ("DOP", "USD")
+    }
+
+
 def test_formvalidation_mapa_beta_currency_por_pais():
     src = _read_form_validation_js()
-    assert re.search(r"ES:\s*'EUR'", src)
-    assert re.search(r"MX:\s*'MXN'", src)
-    assert re.search(r"CO:\s*'COP'", src)
-
-
-_BETA_CURRENCY_MAP_BLOCK = re.compile(r"BETA_CURRENCY_BY_COUNTRY\s*=\s*\{([^}]*)\}")
-_BETA_CURRENCY_PAIR = re.compile(r"(\w+):\s*'(\w+)'")
-
-
-def _parse_beta_currency_by_country(text: str) -> dict:
-    m = _BETA_CURRENCY_MAP_BLOCK.search(text)
-    if not m:
-        raise AssertionError(
-            "No se encontró `BETA_CURRENCY_BY_COUNTRY = {...}` en formValidation.js."
-        )
-    return dict(_BETA_CURRENCY_PAIR.findall(m.group(1)))
+    assert "Object.fromEntries" in src and "COUNTRIES" in src
+    assert _parse_beta_currency_by_country(src) == {"ES": "EUR", "MX": "MXN", "CO": "COP"}
 
 
 def test_parser_extrae_beta_currency_by_country_sanity():
@@ -2727,8 +2732,9 @@ def test_qbudget_currency_symbol_y_toggle_usan_effective_currency():
     assert m, "No se pudo aislar `const currencySymbol = ...;` en QBudget.jsx"
     symbol_body = m.group(1)
     assert "effectiveCurrency" in symbol_body, "currencySymbol debe derivar de effectiveCurrency."
-    assert "'USD'" in symbol_body and "US$" in symbol_body, "El símbolo USD debe seguir intacto."
-    assert "'RD$'" in symbol_body, "El fallback DOP debe seguir siendo 'RD$'."
+    # [P3-I18N-MONEDA-COMPUESTA-A-MANO-EN-EL-PRESUPUESTO] El símbolo ya no se arma con
+    # ramas literales locales: Intl/currencySymbolFor es el SSOT para los cinco idiomas.
+    assert "currencySymbolFor(effectiveCurrency)" in symbol_body
     assert re.search(r"value=\{effectiveCurrency\}", src), (
         "El UnitToggle no resalta `effectiveCurrency` — podría seguir resaltando una moneda STALE."
     )
