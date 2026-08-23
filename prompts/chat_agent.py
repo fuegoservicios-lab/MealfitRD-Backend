@@ -169,9 +169,15 @@ def build_temporal_context(local_date: Optional[str] = None,
         except (TypeError, ValueError):
             pass
 
+    # [P3-I18N-HORA-DEL-COACH-SIGUE-EN-12H · 2026-08-23] 24 h, no `%I:%M %p`. El cliente
+    # dejó de forzar AM/PM (P3-I18N-HORA-COACH-12H: la decide el locale) y este bloque seguía
+    # diciéndole al modelo «02:30 PM»: el modelo copia la forma que ve, y un francés recibía
+    # la hora en AM/PM dentro de una respuesta en francés. «14:30» es la forma universal —
+    # cada idioma la lee igual— y la prosa alrededor sigue en español a propósito: el
+    # system prompt es español entero y `build_language_directive` manda la salida.
     return (f"\n\n🕒 CONTEXTO TEMPORAL ACTUAL: Hoy es {dias_chat[now_chat.weekday()]}, "
             f"{now_chat.day} de {meses_chat[now_chat.month - 1]} de {now_chat.year}. "
-            f"La hora local es {now_chat.strftime('%I:%M %p')}.")
+            f"La hora local es {now_chat.strftime('%H:%M')} (formato 24 h).")
 
 
 def build_circadian_context(schedule_type: str) -> str:

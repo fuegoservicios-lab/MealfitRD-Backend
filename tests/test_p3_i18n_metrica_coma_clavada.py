@@ -362,3 +362,17 @@ def test_las_dos_copias_de_claudemd_siguen_siendo_la_misma():
         "las dos copias de CLAUDE.md divergieron. Anadir una fila a una sola es como "
         "empieza el drift"
     )
+
+
+# ───────────── 6b. P3-I18N-HORA-DEL-COACH-SIGUE-EN-12H (la mitad del servidor) ─────────────
+
+def test_el_bloque_temporal_del_prompt_da_la_hora_en_24h():
+    """El cierre del cliente (arriba) dejaba al SERVIDOR diciéndole al modelo «02:30 PM»;
+    el modelo copia la forma que ve. Se mide la CONDUCTA de la función, no el fichero."""
+    import re
+    from prompts.chat_agent import build_temporal_context
+    out = build_temporal_context(local_date="2026-07-26", tz_offset=240)
+    hora = re.search(r"La hora local es (\d{2}:\d{2})", out)
+    assert hora, f"el bloque temporal ya no dice la hora como HH:MM: {out!r}"
+    assert not re.search(r"\b[AP]M\b", out), f"la hora del prompt sigue en 12 h: {out!r}"
+    assert 0 <= int(hora.group(1)[:2]) <= 23
