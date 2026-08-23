@@ -1,3 +1,20 @@
+# [P2-I18N-CI-HERMANOS-ROJO-PERMANENTE · 2026-08-22] Este workflow es el del REPO BACKEND,
+# cuya RAÍZ es el backend. No es el de la raíz del workspace.
+#
+# Venía siendo una copia del workflow monorepo: pedía `backend/requirements.txt` y
+# `frontend/package-lock.json` en un checkout donde ni `backend/` ni `frontend/` existen como
+# subdirectorios. Los tres jobs morían en 15 segundos en `Set up Python` / `Set up Node`
+# —«No file matched», «Some specified paths were not resolved»— y ni un test llegaba a
+# ejecutarse. Medido con `gh run view --log-failed`, no deducido.
+#
+# Un CI que lleva 44 corridas en rojo sin haber ejecutado nada no es una red: es ruido que
+# entrena a ignorar el CI entero, y ahí dentro viven los pytest que anclan que el gate de
+# i18n es correcto.
+#
+# Los jobs de frontend salieron: ese código vive en otro repo, con su propio CI (que sí
+# ejecuta, y cuyo gate de i18n está verde). Duplicarlos aquí apuntando a un directorio que no
+# existe no es redundancia, es un rojo garantizado.
+
 # [P2-SUPPLY-CHAIN 2026-08-18] Acciones fijadas por SHA, no por tag.
 #
 # Un tag como `@v4` es un puntero MUTABLE: quien controle el repo de la accion
@@ -64,111 +81,22 @@ jobs:
         with:
           python-version: "3.12"
           cache: pip
-          cache-dependency-path: backend/requirements.txt
+          cache-dependency-path: requirements.txt
 
       - name: Install backend deps
-        working-directory: backend
         run: |
           python -m pip install --upgrade pip
           pip install -r requirements.txt
           pip install pytest pytest-asyncio
 
       - name: Run pytest (parser-based + functional)
-        working-directory: backend
         env:
           # Las suites parser-based no requieren DB real. Las E2E sí, pero
           # se marcan con @pytest.mark.e2e y se pueden filtrar en CI sin DB.
           PYTHONDONTWRITEBYTECODE: "1"
           PYTHONUNBUFFERED: "1"
         run: |
-          pytest tests/ -v --tb=short -m "not e2e" -x
-
-  frontend-tests:
-    name: Frontend Vitest
-    runs-on: ubuntu-latest
-    timeout-minutes: 10
-    steps:
-      - name: Checkout
-        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262  # v4
-
-      - name: Set up Node
-        uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020  # v4
-        with:
-          node-version: "20"
-          cache: npm
-          cache-dependency-path: frontend/package-lock.json
-
-      - name: Install frontend deps
-        working-directory: frontend
-        run: npm ci
-
-      - name: Run Vitest
-        working-directory: frontend
-        run: npm test
-
-  frontend-build:
-    name: Frontend build
-    runs-on: ubuntu-latest
-    timeout-minutes: 10
-    steps:
-      - name: Checkout
-        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262  # v4
-
-      - name: Set up Node
-        uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020  # v4
-        with:
-          node-version: "20"
-          cache: npm
-          cache-dependency-path: frontend/package-lock.json
-
-      - name: Install frontend deps
-        working-directory: frontend
-        run: npm ci
-
-      - name: Vite production build
-        working-directory: frontend
-        # Vite build valida tree-shaking + import resolution + bundle size.
-        # Falla si hay imports rotos, dependencias missing, o errores de
-        # transformación que pasan vitest pero rompen prod.
-        run: npm run build
-
-  # [P2-LIVE-1 · 2026-05-12] Lint job no-bloqueante.
-  #
-  # Estado al introducir el gate: 245 errores eslint + 13 warnings pre-existentes
-  # (deuda técnica acumulada — no-useless-escape regex, no-unused-vars, no-undef
-  # `process` en utils/analytics.js). Bloquear merges sobre esa baseline
-  # paralizaría todo. Por eso `continue-on-error: true`: el job EJECUTA y reporta
-  # status visible en GitHub UI, pero NO bloquea el merge.
-  #
-  # [P2-LINT-GATE · 2026-08-14] ROADMAP CUMPLIDO. El count llegó a 5 errores y se
-  # cerraron los cinco: cuatro `no-unused-vars` triviales y uno real —
-  # `useModalAccessibility` escribía un ref DURANTE el render, que no se arregla
-  # con un `disable` porque el hook gobierna el focus-trap y el ESC de los modales
-  # anidados. `continue-on-error` fuera: el job bloquea.
-  #
-  # ⚠️ Bloquea por ERRORES, no por warnings: quedan ~180 (localStorage crudo,
-  # directivas huérfanas) y son deuda conocida y tolerada. Si esto empezara a
-  # fallar por warnings, alguien lo revertiría al primer PR rojo y volveríamos a
-  # tener telemetría en vez de un gate.
-  frontend-lint:
-    name: Frontend lint
-    runs-on: ubuntu-latest
-    timeout-minutes: 5
-    steps:
-      - name: Checkout
-        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262  # v4
-
-      - name: Set up Node
-        uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020  # v4
-        with:
-          node-version: "20"
-          cache: npm
-          cache-dependency-path: frontend/package-lock.json
-
-      - name: Install frontend deps
-        working-directory: frontend
-        run: npm ci
-
-      - name: Run eslint
-        working-directory: frontend
-        run: npm run lint
+          # [P2-I18N-CI-HERMANOS-ROJO-PERMANENTE · 2026-08-22] `-x` fuera, igual que en el
+          # CI de la raíz. Paraba en el PRIMER fallo, así que un rojo cualquiera escondía
+          # todo lo que venía detrás y cada corrida devolvía UN dato en vez del mapa.
+          pytest tests/ -v --tb=short -m "not e2e" --maxfail=25
