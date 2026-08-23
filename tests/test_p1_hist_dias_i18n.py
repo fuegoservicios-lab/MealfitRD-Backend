@@ -43,6 +43,7 @@ from __future__ import annotations
 
 import io
 import json
+import os
 import re
 import shutil
 import subprocess
@@ -186,6 +187,7 @@ def test_el_checker_ignora_los_comentarios_pero_no_las_cadenas():
         r = subprocess.run(
             ["node", str(tmp / "scripts" / "i18n-check.mjs")],
             capture_output=True, text=True, encoding="utf-8", errors="replace",
+            env={**os.environ, "I18N_CHECK_SIN_GRAFO": "1"},  # src/ sintético sin entradas
         )
         return "ÁMBITO DE MÓDULO" in (r.stdout + r.stderr)
 

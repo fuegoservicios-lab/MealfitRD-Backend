@@ -135,6 +135,10 @@ def test_los_valores_del_motor_siguen_en_espanol_canonico() -> None:
 _COGNADOS_LEGITIMOS = {
     "Cilantro": "misma grafía en en-US; el `val` español y su traducción coinciden",
     "Gluten": "cognado exacto en es/en/fr — no hay nada que traducir",
+    # [P2-I18N-CHIP-SESAMO-Y-LACTOSA-AUSENTES · 2026-08-23] `val` sin acento («Sesamo», como
+    # sus vecinos `Lacteos`/`Mani`) coincide letra a letra con el italiano «Sesamo». Es el
+    # nombre español del catálogo del motor (el backstop lo casa), no una etiqueta colada.
+    "Sesamo": "sin acento por convención de los `val`; coincide con el italiano «Sesamo»",
 }
 
 

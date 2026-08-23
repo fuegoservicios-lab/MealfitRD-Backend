@@ -137,12 +137,15 @@ def test_user_inventory_select_includes_market_container():
 
 
 def test_render_item_card_uses_market_container_as_display():
-    """El render del item DEBE computar `displayUnit` priorizando
+    """[P2-I18N-UNIDADES-DE-ENVASE-CRUDAS-EN-NEVERA-Y-DIARIO · 2026-08-23] La prioridad
+    `market_container || item.unit` sigue; ahora envuelta en `glossUnitWord(..., t)` para pintar
+    el envase en el idioma del usuario (el DATO no cambia).
+    El render del item DEBE computar `displayUnit` priorizando
     `master_ingredients?.market_container` sobre `item.unit`.
     """
     src = _read_pantry()
     assert re.search(
-        r"const\s+displayUnit\s*=\s*item\.master_ingredients\?\.market_container\s*\|\|\s*item\.unit",
+        r"const\s+displayUnit\s*=\s*(?:glossUnitWord\()?item\.master_ingredients\?\.market_container\s*\|\|\s*item\.unit",
         src,
     ), (
         "El cálculo `const displayUnit = item.master_ingredients?.market_container "

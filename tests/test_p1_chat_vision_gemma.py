@@ -173,8 +173,15 @@ def test_agentpage_mode_wiring():
         "gemma tarda 30-90s: sin señal el usuario mira la nada durante el análisis"
     assert "visionKind === 'items'" in ap, "rama items → ofrecer Nevera"
     assert "visionKind === 'otro'" in ap, "rama sin comida → pedir otra toma"
-    assert "modify_pantry_inventory" in ap and "items_to_add" in ap
-    assert "NO tienes análisis de la imagen" in ap, \
+    # [P3-I18N-PROMPT-VISION-CLIENTE-ESPANOL · 2026-08-23] Las INSTRUCCIONES por modo (Nevera
+    # con modify_pantry_inventory/items_to_add, la rama honesta «NO tienes análisis») viven
+    # ahora en el servidor (`prompts.chat_agent.build_vision_context`); el cliente manda el
+    # contexto estructurado. Se ancla cada mitad donde vive.
+    assert "kind: 'unavailable'" in ap, "rama honesta: el cliente declara que no hay análisis"
+    from prompts.chat_agent import build_vision_context
+    items = build_vision_context({"kind": "items", "description": "2 manzanas"})
+    assert "modify_pantry_inventory" in items and "items_to_add" in items
+    assert "NO tienes análisis de la imagen" in build_vision_context({"kind": "unavailable", "reason": "down"}), \
         "rama honesta: antes la description de error se inyectaba como análisis real"
     assert "!visionFailed" in ap, "un analysis_failed no debe setear visionDescription"
 

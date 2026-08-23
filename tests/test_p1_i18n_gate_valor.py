@@ -36,6 +36,7 @@ modelar el SQL no ve el bug del SQL».
 from __future__ import annotations
 
 import json
+import os
 import shutil
 import subprocess
 from pathlib import Path
@@ -158,7 +159,9 @@ def _montar(tmp: Path, catalogo: dict) -> Path:
 def _correr(tmp: Path, catalogo: dict, estricto: bool = True):
     script = _montar(tmp, catalogo)
     cmd = ["node", str(script)] + (["--strict"] if estricto else [])
-    return subprocess.run(cmd, capture_output=True, text=True, encoding="utf-8", errors="replace")
+    # [P2-I18N-ALCANCE-COLAPSA-EN-SILENCIO] `src/` sintético sin entradas: válvula de arneses.
+    return subprocess.run(cmd, capture_output=True, text=True, encoding="utf-8", errors="replace",
+                          env={**os.environ, "I18N_CHECK_SIN_GRAFO": "1"})
 
 
 _BUENO = {"Hola": "Hello", "platos": {"one": "dish", "other": "dishes"}}
