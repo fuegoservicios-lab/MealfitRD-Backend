@@ -115,5 +115,6 @@ def test_lista_curada_es_exacta_y_no_contamina_ssot_de_compras() -> None:
 
 
 def test_pfix_marker_cierra_g04() -> None:
-    app = (BACKEND_ROOT / "app.py").read_text(encoding="utf-8")
-    assert "P1-BETA-CATALOG-DO-EXCLUSIVE · 2026-08-23" in app
+    """El cierre histórico vive en su implementación; `_LAST_KNOWN_PFIX` avanza por diseño."""
+    source = (BACKEND_ROOT / "graph_orchestrator.py").read_text(encoding="utf-8")
+    assert "[P1-BETA-CATALOG-DO-EXCLUSIVE · 2026-08-23]" in source

@@ -671,7 +671,7 @@ _RULE19_TRANSFORMADAS_DO = (
 _RULE19_TRANSFORMADAS_BETA = (
     "19. PREPARACIONES TRANSFORMADAS (el validador RECHAZA un plan de puros staples servidos):\n"
     "    - Un plato 'transformado' es una PREPARACIÓN real (de la cocina local o internacional del usuario) donde los\n"
-    "      ingredientes se integran: guisos, salteados, panqueques/tortitas con las harinas, bollitos/croquetas al\n"
+    "      ingredientes se integran: guisos, salteados, panqueques/tortitas con las harinas, bolitas/croquetas al\n"
     "      horno, revoltillos, gratines, ensaladas COMPUESTAS. NO cuenta:\n"
     "      proteína a la plancha + carbo hervido + vegetal crudo suelto servidos por separado (eso es un\n"
     "      'staple servido' y el validador lo rechaza si el día NO trae ninguna preparación transformada).\n"
@@ -724,6 +724,41 @@ _S15F_APETECIBLE_BETA = "El plato debe sonar APETECIBLE: piensa si tu usuario se
 _RULE12_HUEVOS_DESPERDICIO_DO = "desperdicio real en cocina dominicana"
 _RULE12_HUEVOS_DESPERDICIO_BETA = "desperdicio real en la cocina"
 
+# [P1-DAYGEN-PROMPT-NO-NEUTRALIZE · 2026-08-23] Guías POSITIVAS que no pertenecen al
+# neutralizador léxico global: aquí no se renombra ningún alimento canónico ni se inventa un
+# alias. El render beta deja de ordenar alimentos DO concretos y vuelve a la fuente que sí conoce
+# la oferta válida del usuario: los pools + el catálogo verificado. Las reglas negativas/técnicas
+# que sólo usan un alimento como ejemplo se preservan y pasan por el SSOT más abajo.
+_RULE2_AJI_CUBANELA_DO = (
+    "   - AJÍ MORRÓN ≠ AJÍ CUBANELA (son ingredientes DISTINTOS — no los confundas ni los intercambies):\n"
+    '     • "Ají morrón" = pimiento dulce / campana (rojo, verde o amarillo), grueso y carnoso. Úsalo cuando el plato lleva el pimiento dulce como PROTAGONISTA o como recipiente: "pimientos rellenos" / "morrones rellenos", fajitas, ensaladas, salteados con pimiento dulce, brochetas, pollo a la jardinera.\n'
+    '     • "Ají cubanela" = ají verde alargado y delgado de cocina. Úsalo SOLO como base de sazón/sofrito en guisos, habichuelas, carnes guisadas. NUNCA para rellenar.\n'
+    '     • REGLA DURA: para CUALQUIER plato de "rellenos" donde el pimiento es el que se rellena, el ingrediente DEBE ser "Ají morrón" (jamás "ají cubanela"). Si nombras un plato "Pimientos Rellenos", el ingrediente es "Ají morrón".'
+)
+_RULE2_AJI_CUBANELA_BETA = (
+    "   - PIMIENTO MORRÓN PARA RELLENOS (no confundas ingredientes parecidos del catálogo):\n"
+    "     • Para platos rellenos usa el pimiento morrón verificado del catálogo, que es grueso y carnoso.\n"
+    '     • REGLA DURA: si nombras un plato "Pimientos Rellenos", el ingrediente que actúa como recipiente DEBE ser "Ají morrón".'
+)
+
+_S15C_BATIDO_FRUTAS_DO = "         • Batido proteico con frutas (mamey, lechosa, guineo, fresas)"
+_S15C_BATIDO_FRUTAS_BETA = "         • Batido proteico con una fruta del pool asignado"
+
+_S15C_FRUTA_MANI_DO = (
+    "         • Fruta + mantequilla de maní/almendras (manzana con pb, guineo con pb) — SOLO FRUTA."
+)
+_S15C_FRUTA_MANI_BETA = (
+    "         • Fruta del pool asignado + mantequilla de maní/almendras — SOLO FRUTA."
+)
+
+_S15F_ROTACION_FRUTA_DO = (
+    "la merienda usa OTRA fruta (lechosa, guineo, fresa, piña, manzana…)"
+)
+_S15F_ROTACION_FRUTA_BETA = "la merienda usa OTRA fruta DEL POOL ASIGNADO"
+
+_S15G_FORMATOS_DO = "horneada (arepitas, panqueques, tortitas)"
+_S15G_FORMATOS_BETA = "horneada (tortitas, panqueques, preparaciones al horno)"
+
 # [P1-COUNTRY-SYSTEM-F2 · 2026-08-17 (Task 9, F5)] Los 2 sobrevivientes que el barrido con el
 # token-set AMPLIADO (casabe/moro/arepitas añadidos a `_DOMINICAN_TOKEN_RX` en el test) midió
 # como BUGS reales (no residuo incidental documentado): ambos PRESENTAN casabe como opción
@@ -750,7 +785,7 @@ _S15D_CARB_ROTATION_DO = (
     "Rota a otro carbo de cena: batata, yuca, ñame, casabe o pan integral (NUNCA arroz)."
 )
 _S15D_CARB_ROTATION_BETA = (
-    "Rota a otro carbo de cena: batata, yuca, ñame o pan integral (NUNCA arroz)."
+    "Rota a otro carbohidrato del pool asignado distinto del arroz (NUNCA arroz)."
 )
 
 # (target_por_dieta, beta_repl_por_dieta) — mismo shape de fila que _DIET_FRAGMENT_TABLE, pero
@@ -782,6 +817,12 @@ _BETA_FRAGMENT_TABLE = [
     (_diet_invariant(_S15C_CRUDITES_DO), _diet_invariant(_S15C_CRUDITES_BETA)),                   # finding 4d
     (_diet_invariant(_S15F_APETECIBLE_DO), _diet_invariant(_S15F_APETECIBLE_BETA)),               # finding 4e
     (_diet_invariant(_RULE12_HUEVOS_DESPERDICIO_DO), _diet_invariant(_RULE12_HUEVOS_DESPERDICIO_BETA)),  # finding 4f
+    # ── G05: guías positivas fuera del SSOT vuelven a pools+catálogo ─────────────────────────
+    (_diet_invariant(_RULE2_AJI_CUBANELA_DO), _diet_invariant(_RULE2_AJI_CUBANELA_BETA)),
+    (_diet_invariant(_S15C_BATIDO_FRUTAS_DO), _diet_invariant(_S15C_BATIDO_FRUTAS_BETA)),
+    (_diet_invariant(_S15C_FRUTA_MANI_DO), _diet_invariant(_S15C_FRUTA_MANI_BETA)),
+    (_diet_invariant(_S15F_ROTACION_FRUTA_DO), _diet_invariant(_S15F_ROTACION_FRUTA_BETA)),
+    (_diet_invariant(_S15G_FORMATOS_DO), _diet_invariant(_S15G_FORMATOS_BETA)),
     # ── Fase 2, Task 9 (F5): sobrevivientes casabe medidos con el token-set ampliado ─────────
     (_diet_invariant(_S15C_MERIENDA_CASABE_BULLET_DO), _diet_invariant(_S15C_MERIENDA_CASABE_BULLET_BETA)),  # F5a
     (_diet_invariant(_S15D_CARB_ROTATION_DO), _diet_invariant(_S15D_CARB_ROTATION_BETA)),                    # F5b
@@ -796,6 +837,14 @@ _BETA_FRAGMENT_TABLE = [
     (_diet_invariant(_SLOT_SSOT_RULES_BLOCK), _diet_invariant(_SLOT_SSOT_RULES_BLOCK_BETA)),      # Task 4 · §16
 ]
 
+# Única whitelist de la neutralización final: Casabe es un identificador vivo que G04 retira de
+# la OFERTA beta, pero esta frase no lo ofrece. Documenta el incidente de cocción y generaliza la
+# defensa a toda la clase de panes/tortas ya cocidos. Enmascararla evita el absurdo semántico
+# «pan tostado integral es una torta seca de yuca». Todo otro término del SSOT debe desaparecer.
+_BETA_NEUTRALIZATION_SURVIVORS = (
+    'TÉCNICA CORRECTA POR ALIMENTO [P1-CASABE-NO-BOIL · 2026-07-30]: el CASABE es una torta seca de yuca YA COCIDA — se sirve tal cual, se tuesta o se calienta en sartén/horno 1-2 min; JAMÁS se hierve, se cocina en agua ni "se deja reposar tapado" como si fuera arroz (un plan real instruyó "Cocina Casabe en 1½ tazas de agua con sal, tapa y hierve 15 minutos" — eso arruina el plato). Lo mismo aplica a pan, tostadas, galletas y tortillas ya horneadas: NUNCA les apliques la plantilla de cocción de granos (proporción agua:grano, hervir, reposar). Esa plantilla es SOLO para arroz, bulgur, quinoa, avena y granos crudos.',
+)
+
 _COUNTRY_PROMPT_RENDER_CACHE = {}
 
 
@@ -807,7 +856,12 @@ def build_day_generator_system_prompt(diet=None, country=None) -> str:
     `_BETA_FRAGMENT_TABLE` (almuerzo/cena/§15) y antepone la cabecera de país. Cacheado por
     (dieta_beta, país) en `_COUNTRY_PROMPT_RENDER_CACHE` — ≤3×5 entradas (pescatarian colapsa
     a la entrada 'balanced')."""
-    from constants import canonicalize_diet_type, canonicalize_country, COUNTRY_PROFILES
+    from constants import (
+        canonicalize_diet_type,
+        canonicalize_country,
+        COUNTRY_PROFILES,
+        neutralize_do_lexicon,
+    )
     canon = canonicalize_diet_type(diet)
     canon_country = canonicalize_country(country)
     if canon_country == "DO":
@@ -837,6 +891,20 @@ def build_day_generator_system_prompt(diet=None, country=None) -> str:
         "los platos dominicanos NO son requisito ni default.\n"
     )
     rendered = header + rendered
+
+    # G05: la tabla de fragmentos puede introducir léxico nuevo, por eso el SSOT corre al FINAL.
+    # Los sentinels sólo protegen reglas técnicas explícitamente auditadas; se restauran antes de
+    # cachear para que todos los consumidores reciban el texto final, nunca una forma intermedia.
+    preserved = []
+    for index, survivor in enumerate(_BETA_NEUTRALIZATION_SURVIVORS):
+        if survivor in rendered:
+            sentinel = f"§DAYGEN-DO-LEXICON-SURVIVOR-{index}§"
+            rendered = rendered.replace(survivor, sentinel)
+            preserved.append((sentinel, survivor))
+
+    rendered = neutralize_do_lexicon(rendered)
+    for sentinel, survivor in preserved:
+        rendered = rendered.replace(sentinel, survivor)
 
     _COUNTRY_PROMPT_RENDER_CACHE[cache_key] = rendered
     return rendered

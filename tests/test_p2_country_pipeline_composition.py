@@ -38,7 +38,6 @@ _RESIDUOS_MEDIDOS = {
     "mangu": "categoría de desayuno que asigna el Planificador («Mangú/…»)",
     "casabe": "regla de TÉCNICA P1-CASABE-NO-BOIL (no hervir una torta ya cocida)",
     "locrio": "lista de técnicas de plato fuerte prohibidas en merienda",
-    "queso de hoja": "ejemplo de queso alto en sodio (regla clínica)",
 }
 
 # Marcas que NO deben aparecer nunca en un prompt beta: son instrucciones de cocinar dominicano,
@@ -108,9 +107,9 @@ def test_dos_paises_beta_no_reciben_el_mismo_prompt(knob_on):
 
 
 def test_los_residuos_conocidos_son_exactamente_estos(knob_on):
-    """Caracterización, no umbral. Los cuatro nombres de plato que sobreviven salen de reglas de
-    TÉCNICA o CLÍNICAS donde el plato es un ejemplo — quitarlos exige curar ejemplos por país, que
-    es contenido (hermano de P1-BETA-FRAGMENT-DEPTH), no plomería.
+    """Caracterización, no umbral. Los tres nombres de plato que sobreviven salen de una regla de
+    TÉCNICA, una prohibición o el enum real del planner. G05 neutralizó el antiguo ejemplo clínico
+    «queso de hoja» mediante el SSOT; no es ya un residuo tolerado.
 
     Si aparece uno NUEVO, falla: sería un residuo sin revisar. Si desaparece uno de éstos, también:
     para que alguien actualice la nota en vez de dejarla mintiendo."""

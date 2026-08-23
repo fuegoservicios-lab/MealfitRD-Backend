@@ -517,47 +517,29 @@ _C_CLASS_CATALOG_ENUM = [
     "planificador asignó otra categoría.",
 ]
 
-# [P1-COUNTRY-SYSTEM-F2 · 2026-08-17 (Task 9, F5)] `_DOMINICAN_TOKEN_RX` gana 4 tokens
-# (casabe/moro/arepitas/mangu-sin-tilde — F5 del brief) que el guard NUNCA había escaneado. El
-# barrido con el token-set ampliado midió 7 ubicaciones nuevas; 2 eran BUGS reales (recomendaban
-# casabe como opción VÁLIDA para el usuario beta) y se corrigieron con nuevas filas de
-# `_BETA_FRAGMENT_TABLE` (F5a/F5b, ver day_generator.py) — ya no sobreviven, no se documentan
-# aquí. Las otras 5 son el mismo patrón (b)/(c) de arriba aplicado a casabe/arepitas/moro:
-#   (d) NOTA DE TÉCNICA DE COCCIÓN universal — el alimento nombrado es el ejemplo histórico del
-#       bug que motivó la regla (P1-CASABE-NO-BOIL), pero la regla se generaliza explícitamente
-#       ("Lo mismo aplica a pan, tostadas, galletas y tortillas ya horneadas") — no es una
-#       instrucción de SERVIR casabe, es cómo cocinarlo SI aparece.
-#   (e) ENUMERACIÓN/EJEMPLO ilustrativo donde el alimento es UNO de varios ítems listados para
-#       ilustrar un principio universal (no duplicar el carbohidrato que el plato YA tiene;
-#       evitar el choque fruta-dulce+salado; variar FORMATO entre comidas) — quitar el alimento
-#       de la lista no cambiaría la regla, así que no es "forzar" identidad dominicana.
+# [P1-DAYGEN-PROMPT-NO-NEUTRALIZE · 2026-08-23] La neutralización final eliminó las antiguas
+# clases (e) de ejemplos con Casabe/Arepitas; ya no son sobrevivientes. La única excepción
+# deliberada es (d): la nota universal que evita hervir una torta ya cocida. En producción se
+# enmascara exactamente este fragmento antes del SSOT, de modo que no acabe afirmando el absurdo
+# «pan tostado integral es una torta seca de yuca».
 _D_CLASS_TECHNIQUE_UNIVERSAL = [
     'TÉCNICA CORRECTA POR ALIMENTO [P1-CASABE-NO-BOIL · 2026-07-30]: el CASABE es una torta seca de yuca YA COCIDA — se sirve tal cual, se tuesta o se calienta en sartén/horno 1-2 min; JAMÁS se hierve, se cocina en agua ni "se deja reposar tapado" como si fuera arroz (un plan real instruyó "Cocina Casabe en 1½ tazas de agua con sal, tapa y hierve 15 minutos" — eso arruina el plato). Lo mismo aplica a pan, tostadas, galletas y tortillas ya horneadas: NUNCA les apliques la plantilla de cocción de granos (proporción agua:grano, hervir, reposar). Esa plantilla es SOLO para arroz, bulgur, quinoa, avena y granos crudos.',
 ]
-_E_CLASS_ILLUSTRATIVE_EXAMPLES = [
-    'si el plato YA tiene su\n       base de carbohidrato (tortilla/wrap, pan, casabe, ñame, yuca, batata, plátano, avena, papa, pasta,\n       o la fruta de una merienda), NO le añadas además una porción de arroz para cuadrar los carbos.',
-    'Pareo válido: "Revoltillo con\n         vegetales + casabe" y la fruta aparte si hace falta.',
-    'Cambia el FORMATO: cremosa/bowl ↔ horneada (arepitas, panqueques, tortitas) ↔ batida\n       (smoothie) ↔ en grano suelto (moro, ensalada de granos).',
-    '"Arepitas de Avena saladas con queso" (misma base, formato y perfil DISTINTOS — sí cuenta\n       como variedad).',
-]
-# [P1-COUNTRY-SYSTEM-F2 · 2026-08-17 (Task 9, F6)] Re-anclaje del guard de residuo criollo: antes
-# GRAPHEME-BOUND a un regex-string escrito a mano (`r"locrio|mofongo|mangú|bandera:"`) — cada
-# token nuevo (F5 añadió 4) exigía editar sintaxis de regex (escapar, decidir `\b`, no romper la
-# alternación). Ahora es una lista EXPANDABLE en dos tuplas por RIESGO DE COLISIÓN — la única
-# decisión que un futuro añadido debe tomar es "¿esta palabra es substring de una palabra
-# española común no-dominicana?" (sí ⇒ `_WORD_BOUNDARY`, no ⇒ `_PLAIN`), no sintaxis de regex.
-# `_DOMINICAN_TOKENS_WORD_BOUNDARY` existe porque 'mangu' ⊂ 'manguera' (manguera de jardín) y
-# 'moro' ⊂ 'moroso'/'enamorado'... no, 'moroso' sí contiene 'moro' como prefijo — verificado con
-# el propio scanner F5 (0 falsos positivos en el render real de los 3 dietas × 5 países beta).
-_DOMINICAN_TOKENS_PLAIN = ("locrio", "mofongo", "mangú", "casabe", "arepitas", "bandera:")
-_DOMINICAN_TOKENS_WORD_BOUNDARY = ("mangu", "moro")
-_DOMINICAN_TOKEN_RX = re.compile(
-    "|".join(
-        [re.escape(t) for t in _DOMINICAN_TOKENS_PLAIN]
-        + [r"\b" + re.escape(t) + r"\b" for t in _DOMINICAN_TOKENS_WORD_BOUNDARY]
-    ),
-    re.IGNORECASE,
-)
+def _dominican_token_hits(text: str) -> list[str]:
+    """Vocabulario derivado EN CADA llamada del SSOT de producción.
+
+    Añadir una fila a `_DO_LEXICON_NEUTRAL` amplía este guard sin editar el test. Es deliberado
+    no conservar aquí la antigua segunda tabla de ocho platos: su cobertura y el neutralizador
+    divergieron exactamente como predijo P1-DIET-CANON-SSOT.
+    """
+    from constants import _DO_LEXICON_NEUTRAL
+
+    scoped = text.casefold()
+    terms = sorted(
+        {source.casefold() for source, _replacement in _DO_LEXICON_NEUTRAL},
+        key=lambda value: (-len(value), value),
+    )
+    return [term for term in terms if term in scoped]
 
 
 def _scoped_out_sin_s16(out: str) -> str:
@@ -570,22 +552,13 @@ def _scoped_out_sin_s16(out: str) -> str:
     return out[:i16] + out[i17:]
 
 
-# Unión de las 4 clases documentadas — SSOT que ambos tests (balanced/vegan) consumen, para que
-# no puedan drifear entre sí (F5, Task 9).
-_ALL_DOCUMENTED_SURVIVORS = (
-    _B_CLASS_PROHIBICIONES
-    + _C_CLASS_CATALOG_ENUM
-    + _D_CLASS_TECHNIQUE_UNIVERSAL
-    + _E_CLASS_ILLUSTRATIVE_EXAMPLES
-)
+# Whitelist EXACTA del SSOT. Las prohibiciones B y el enum C siguen en el prompt, pero no son
+# términos de `_DO_LEXICON_NEUTRAL`; la clase E ya se neutraliza. Sólo D se excluye del scanner.
+_ALL_DOCUMENTED_SURVIVORS = _D_CLASS_TECHNIQUE_UNIVERSAL
 
 
 def test_finding5_guard_case_insensitive_sin_sobrevivientes_no_documentados():
-    """Guard HONESTO (no solo verde): escanea el render beta case-insensitive por los 8 tokens
-    duros (F5, Task 9: +casabe/moro/arepitas/mangu-sin-tilde sobre los 4 originales), excluye
-    §16 (T4) y los sobrevivientes DOCUMENTADOS arriba (clase b/c/d/e), y falla si queda
-    CUALQUIER OTRO hit — el mecanismo que impide que un futuro edit reintroduzca una orden
-    dominicana sin que nadie se entere."""
+    """Guard SSOT: excluye §16 y la única whitelist técnica; todo otro término falla."""
     from prompts.day_generator import build_day_generator_system_prompt as build
     scoped = _scoped_out_sin_s16(build("balanced", "ES"))
 
@@ -597,7 +570,7 @@ def test_finding5_guard_case_insensitive_sin_sobrevivientes_no_documentados():
         )
         scoped = scoped.replace(survivor, "", 1)
 
-    hits = _DOMINICAN_TOKEN_RX.findall(scoped)
+    hits = _dominican_token_hits(scoped)
     assert not hits, f"sobrevivientes NO documentados de contenido dominicano: {hits}"
 
 
@@ -611,7 +584,7 @@ def test_finding5_guard_vale_tambien_para_vegan():
         assert survivor in scoped, f"sobreviviente ausente en vegan: {survivor[:70]!r}"
         scoped = scoped.replace(survivor, "", 1)
 
-    hits = _DOMINICAN_TOKEN_RX.findall(scoped)
+    hits = _dominican_token_hits(scoped)
     assert not hits, f"sobrevivientes NO documentados (vegan): {hits}"
 
 
@@ -627,7 +600,7 @@ def test_finding5_guard_vale_tambien_para_vegetarian():
         assert survivor in scoped, f"sobreviviente ausente en vegetarian: {survivor[:70]!r}"
         scoped = scoped.replace(survivor, "", 1)
 
-    hits = _DOMINICAN_TOKEN_RX.findall(scoped)
+    hits = _dominican_token_hits(scoped)
     assert not hits, f"sobrevivientes NO documentados (vegetarian): {hits}"
 
 
@@ -648,7 +621,7 @@ def test_finding5_f5b_carb_rotation_sin_casabe():
     `_detect_slot_appropriateness`)."""
     from prompts.day_generator import build_day_generator_system_prompt as build
     out = build("balanced", "ES")
-    assert "Rota a otro carbo de cena: batata, yuca, ñame o pan integral (NUNCA arroz)." in out
+    assert "Rota a otro carbohidrato del pool asignado distinto del arroz (NUNCA arroz)." in out
     assert "Rota a otro carbo de cena: batata, yuca, ñame, casabe o pan integral" not in out
     # el párrafo ARROZ DE NOCHE (clase b) sigue verbatim — no se tocó:
     assert (
@@ -687,12 +660,15 @@ def test_finding5_mutacion_regex_sin_casabe_deja_pasar_el_bug():
         "Casabe / galletas integrales + queso bajo en sodio O aguacate",
     )
     scoped = _scoped_out_sin_s16(out_con_bug)
-    for survivor in _ALL_DOCUMENTED_SURVIVORS:
+    # Para reproducir el scanner histórico hay que retirar también sus antiguas clases B/C;
+    # ya no forman parte de la whitelist SSOT actual porque ninguno de sus términos vive en
+    # `_DO_LEXICON_NEUTRAL`.
+    for survivor in (_B_CLASS_PROHIBICIONES + _C_CLASS_CATALOG_ENUM + _D_CLASS_TECHNIQUE_UNIVERSAL):
         scoped = scoped.replace(survivor, "", 1)
     # El regex VIEJO no ve el bug reintroducido (falso verde):
     assert not pre_task9_rx.findall(scoped)
     # El regex NUEVO sí lo detecta:
-    assert _DOMINICAN_TOKEN_RX.findall(scoped)
+    assert _dominican_token_hits(scoped)
 
 
 def test_finding5_mutacion_sin_las_2_filas_nuevas_el_guard_falla():
@@ -708,13 +684,13 @@ def test_finding5_mutacion_sin_las_2_filas_nuevas_el_guard_falla():
         "Tostada integral / galletas integrales + queso bajo en sodio O aguacate",
         "Casabe / galletas integrales + queso bajo en sodio O aguacate",
     ).replace(
-        "Rota a otro carbo de cena: batata, yuca, ñame o pan integral (NUNCA arroz).",
+        "Rota a otro carbohidrato del pool asignado distinto del arroz (NUNCA arroz).",
         "Rota a otro carbo de cena: batata, yuca, ñame, casabe o pan integral (NUNCA arroz).",
     )
     scoped = _scoped_out_sin_s16(out_sin_fix)
     for survivor in _ALL_DOCUMENTED_SURVIVORS:
         scoped = scoped.replace(survivor, "", 1)
-    hits = _DOMINICAN_TOKEN_RX.findall(scoped)
+    hits = _dominican_token_hits(scoped)
     assert hits, "el guard debía detectar casabe reintroducido en merienda+cena, y no lo hizo"
 
 

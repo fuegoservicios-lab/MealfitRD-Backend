@@ -3734,6 +3734,10 @@ _DO_LEXICON_NEUTRAL = (
     ("lechosa", "papaya"),
     ("Lechosa", "Papaya"),
     ("víveres", "tubérculos"),
+    # Plural ANTES del singular: `str.replace("cubito", ...)` sobre "cubitos" producía
+    # «caldo concentrados» al incorporar el SSOT al day-generator (G05).
+    ("cubitos", "caldos concentrados"),
+    ("Cubitos", "Caldos concentrados"),
     ("cubito", "caldo concentrado"),
 )
 
