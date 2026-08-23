@@ -2248,7 +2248,19 @@ def schedule_plan_display_enrichment(
                 # la feature se apagaría sola y en silencio tras N fallos.
                 _INFLIGHT_SEMAPHORE.release()
 
-        threading.Thread(target=_run, daemon=True).start()
+        # [P2-I18N-DISPLAY-SEMAFORO-SE-FUGA-SI-EL-HILO-NO-ARRANCA · 2026-08-23] El
+        # `finally` de `_run` cubre todo lo que pase DENTRO del hilo, pero no este tramo: si
+        # `start()` lanza («can't start new thread»), `_run` no corre, nadie suelta el
+        # permiso, y con MAX_INFLIGHT fallos así la feature queda apagada para todo el
+        # proceso — con «reason: inflight_cap» en cada intento, que apunta a un techo
+        # alcanzado y no a uno fugado. Aquí se suelta si el hilo no llegó a existir. NO es
+        # un `finally` alrededor del `start()`: eso lo soltaría también cuando SÍ arranca,
+        # y el hilo lo soltaría otra vez (BoundedSemaphore lanza en el segundo release).
+        try:
+            threading.Thread(target=_run, daemon=True).start()
+        except Exception:
+            _INFLIGHT_SEMAPHORE.release()
+            raise
     except Exception as e:
         logger.warning(
             f"[P1-PLAN-DISPLAY-I18N] schedule_plan_display_enrichment falló "
