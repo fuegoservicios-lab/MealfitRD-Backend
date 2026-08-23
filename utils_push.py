@@ -58,13 +58,25 @@ def send_push_notification(user_id: str, title: str, body: str, url: str = "/das
         #
         # Best-effort de punta a punta: si la consulta del perfil falla, sale en español.
         # Una notificación en español es una degradación; una que no sale es un fallo.
+        # [P1-I18N-PUSH-LOCALE-SIEMPRE-NULO · 2026-08-23] `fetch_one=True`, no
+        # `fetch_all=False`. NO son lo mismo: `fetch_all=False` cae en la rama por defecto
+        # del helper, que hace `fetchall()` y devuelve una LISTA de dicts. Una lista no tiene
+        # `.get`, así que el `hasattr` de abajo salía False y `_locale` era None para TODOS
+        # los usuarios, siempre — con lo que el catálogo de push (43 mensajes × 4 idiomas)
+        # nunca pintó una sola traducción. Medido contra Neon: `[{'locale': 'es-DO'}]`.
+        #
+        # Se conserva el `hasattr` como red: si el helper vuelve a cambiar de forma, esto
+        # degrada al español en vez de reventar. Pero la red ya no es el camino normal, que
+        # es lo que la hacía invisible.
         _locale = None
         try:
             _perfil = execute_sql_query(
                 "SELECT locale FROM user_profiles WHERE id = %s",
                 (user_id,),
-                fetch_all=False,
+                fetch_one=True,
             )
+            if isinstance(_perfil, (list, tuple)):
+                _perfil = _perfil[0] if _perfil else None
             if _perfil:
                 _locale = _perfil.get("locale") if hasattr(_perfil, "get") else None
         except Exception as _loc_err:  # noqa: BLE001
