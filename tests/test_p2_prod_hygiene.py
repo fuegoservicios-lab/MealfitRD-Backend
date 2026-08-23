@@ -45,6 +45,7 @@ _APP = _REPO_ROOT / "backend" / "app.py"
 _DEPLOY = _REPO_ROOT / "deploy-mealfit.ps1"
 _ENV_PROD = _REPO_ROOT / "frontend" / ".env.production"
 _CI = _REPO_ROOT / "backend" / ".github" / "workflows" / "ci.yml"
+_CI_FRONTEND = _REPO_ROOT / "frontend" / ".github" / "workflows" / "ci.yml"
 _HOOK = _REPO_ROOT / "frontend" / "src" / "hooks" / "useModalAccessibility.js"
 
 
@@ -219,9 +220,34 @@ def test_el_gate_puede_pasar_de_verdad():
 # ---------------------------------------------------------------------------
 
 def test_el_lint_ya_no_es_no_bloqueante():
-    ci = _read(_CI)
-    m = re.search(r"frontend-lint:(.*?)(?=\n  \w|\Z)", ci, re.DOTALL)
-    assert m, "[P2-LINT-GATE] No se encontró el job `frontend-lint` en el CI."
+    """[P2-I18N-CI-HERMANOS-ROJO-PERMANENTE · 2026-08-23] Reanclado al CI del FRONTEND.
+
+    Este guard leía `backend/.github/workflows/ci.yml` y buscaba ahí un job `frontend-lint`.
+    Sobrevivía sólo porque esa copia era un fósil del workflow monorepo: en el CI vivo del
+    repo frontend ese job no existe — el lint corre dentro de `quality`.
+
+    O sea que llevaba validando una FORMA que ya no era la del CI que de verdad corre. Al
+    limpiar la copia monorepo se puso rojo, y eso fue el guard haciendo su último trabajo
+    útil con el ancla vieja: avisar de que miraba al sitio equivocado.
+
+    La propiedad no cambia —el lint BLOQUEA—; cambia dónde se comprueba.
+    """
+    ci = _read(_CI_FRONTEND)
+    m = re.search(r"\n  quality:(.*?)(?=\n  \w|\Z)", ci, re.DOTALL)
+    assert m, (
+        "[P2-LINT-GATE] No se encontró el job `quality` en el CI del frontend, que es donde "
+        "corre el lint. Si el job se renombró, este guard tiene que seguirlo — no borrarse."
+    )
+    # La INVOCACIÓN, no la palabra. El bloque `quality` menciona «eslint» cuatro veces en su
+    # propia prosa (explicando por qué el tope es 66 y qué cambió en el plugin de hooks), así
+    # que un `"eslint" in bloque` lo satisface el comentario aunque el paso ya no exista:
+    # sustituir el `run` por un `echo` dejaba este assert VERDE.
+    sin_comentarios = "\n".join(
+        l for l in m.group(1).splitlines() if not l.lstrip().startswith("#")
+    )
+    assert re.search(r"run:.*\beslint\b", sin_comentarios), (
+        "[P2-LINT-GATE] El job `quality` ya no INVOCA eslint: el gate de lint desapareció."
+    )
     assert "continue-on-error: true" not in m.group(1), (
         "[P2-LINT-GATE] El job de lint sigue en `continue-on-error: true`.\n"
         "Su propio comentario fija el roadmap: «tras cleanup incremental que "

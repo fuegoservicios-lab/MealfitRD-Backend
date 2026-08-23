@@ -144,6 +144,37 @@ techo. Tres decisiones que conviene no deshacer:
 - **El `release()` va en un `finally`**. Sin él, una excepción que nadie suelta convierte el
   techo en un candado permanente: la feature se apagaría sola tras N fallos, sin decir nada.
 
+### La telemetría gana un lector (2026-08-23)
+
+[P3-I18N-DISPLAY-METRICA-SIN-LECTOR] La capa escribía en `pipeline_metrics` y **nadie leía**:
+cero `alert_key`, cero cron, cero panel.
+
+Antes de diseñar el arreglo se midió, y la medición lo cambió: `pipeline_metrics` no tiene
+**ni una fila** con `node='plan_display_i18n'`, frente a 14.835 filas de la última semana. O
+sea que el problema no era «se escribe y nadie lee» sino **«no hay nada que leer»**, porque
+la capa apenas se ha ejecutado.
+
+Eso descarta el arreglo obvio —un cron que agregue la métrica—: sería un panel que informa
+cero indefinidamente, y un panel que siempre dice cero es un panel que nadie mira el día que
+deja de decirlo.
+
+Lo que sí sirve es una alerta **emitida** desde donde ya se detecta el fallo
+(`_emit_degraded_alert`, colgada de `_emit_result_telemetry`): cuesta cero mientras la capa
+no corra, y el día que corra y falle deja rastro sin esperar a la siguiente pasada de un
+cron. Es el modelo «Auto (implicit)» que la política de `system_alerts` ya tiene canonizado.
+
+Tres decisiones del diseño:
+
+- **`alert_key` por LOCALE**, no por plan. Lo que un operador necesita saber es «el francés
+  está cayendo», no tener cuarenta filas de cuarenta planes.
+- **`dedupe_locked` e `inflight_cap` NO alertan.** El primero es el caso normal bajo
+  concurrencia y el segundo es el techo de hilos haciendo su trabajo; contarlos fabricaría
+  una tasa de error que no existe. Es el mismo cuidado con el que
+  `P2-I18N-OBSERVABILIDAD-CERO` cuenta `SUPERSEDED` aparte de los fallos.
+- **El escáner de drift de `alert_key` pasó a mirar este módulo.** Miraba seis ficheros y
+  éste no estaba: un `alert_key` fuera del conjunto escaneado es un `alert_key` sin
+  contrato, y el drift bidireccional que ese test existe para impedir no se enteraría.
+
 ### ⚠️ Lo que ninguna de esas líneas dice, y es lo que más importa
 
 [P1-I18N-SIN-EVIDENCIA-PRODUCCION] **Esta capa no ha traducido un plato en producción.**
