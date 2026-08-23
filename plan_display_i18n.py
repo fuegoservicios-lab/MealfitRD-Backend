@@ -222,18 +222,10 @@ def _plan_display_i18n_max_output_tokens() -> int:
 #
 # Son cinco lecturas de entorno en el import y NO cachean nada: cada accesor sigue leyendo en
 # vivo, que es lo que permite el rollback sin redeploy. Esto sólo los DECLARA.
-for _declarar in (
-    _plan_display_i18n_enabled,
-    _plan_display_i18n_model_name,
-    _plan_display_i18n_timeout_s,
-    _plan_display_i18n_batch_days,
-    _plan_display_i18n_max_output_tokens,
-):
-    try:
-        _declarar()
-    except Exception:  # noqa: BLE001 — declarar un knob jamás puede tumbar el import
-        pass
-del _declarar
+# [P3-I18N-DISPLAY-KNOBS-TODOS-EN-EL-REGISTRY · 2026-08-23] El bloque se movió al FINAL del
+# módulo. Aquí sólo podía enumerar los accesores ya definidos, y por eso se quedó en cinco:
+# `_plan_display_i18n_max_inflight` y `_max_locales_display` nacen más abajo. Al final del
+# fichero están todos en ámbito, y el bloque deja de depender del orden de definición.
 
 
 def _circuit_breaker_can_proceed(model_name: str) -> bool:
@@ -1268,7 +1260,17 @@ def _podar_locales(disp_map: dict, activo: str) -> dict:
     tope = _max_locales_display()
     if not isinstance(disp_map, dict) or len(disp_map) <= tope:
         return disp_map
-    conservar = [k for k in disp_map if k != activo][-(tope - 1):]
+    # [P2-I18N-DISPLAY-PODA-INERTE-EN-SU-VALOR-MINIMO · 2026-08-23] `[-(tope - 1):]` con
+    # `tope = 1` es `lista[-0:]`, y `-0 == 0`: el slice arranca en el PRINCIPIO y devuelve la
+    # lista entera. O sea que el ajuste más agresivo del knob —el que un operador elige justo
+    # cuando el jsonb se le está yendo— dejaba la poda en no-op y conservaba los cinco
+    # idiomas, pareciendo que había hecho algo.
+    #
+    # `max(0, ...)` en vez de tocar el slice: deja explícito que con tope=1 no se conserva
+    # NINGÚN idioma extra, sólo el activo que se añade justo debajo.
+    extra = max(0, tope - 1)
+    otros = [k for k in disp_map if k != activo]
+    conservar = otros[-extra:] if extra else []
     conservar.append(activo)
     return {k: disp_map[k] for k in disp_map if k in conservar}
 
@@ -2201,3 +2203,35 @@ def schedule_plan_display_enrichment(
             f"[P1-PLAN-DISPLAY-I18N] schedule_plan_display_enrichment falló "
             f"(fail-open) plan={plan_id} locale={locale}: {e!r}"
         )
+
+
+# ---------------------------------------------------------------------------------------
+# [P3-I18N-DISPLAY-KNOBS-PEREZOSOS · 2026-08-22 · ampliado y RELOCALIZADO
+#  P3-I18N-DISPLAY-KNOBS-TODOS-EN-EL-REGISTRY · 2026-08-23] Los SIETE knobs, en el IMPORT.
+#
+# `knobs._env_*` registra en `_KNOBS_REGISTRY` al ser LLAMADO. Estos accesores viven dentro
+# de funciones que sólo corren cuando hay algo que traducir, así que
+# `get_knobs_registry_snapshot()` —lo que un operador consulta para saber qué puede tocar sin
+# redeploy— no los conocía hasta la primera ejecución. Y esta capa, medido el 2026-08-23, se
+# ha ejecutado NUEVE veces en toda su historia: en la práctica eran invisibles siempre.
+#
+# Va al FINAL del módulo y no junto a los primeros accesores, que es donde estaba: allí sólo
+# alcanzaban los cinco ya definidos, y los dos que nacen más abajo —`MAX_INFLIGHT` y
+# `MAX_LOCALES`— se quedaban fuera. Aquí no depende del orden de definición.
+#
+# Son siete lecturas de entorno y NO cachean nada: cada accesor sigue leyendo en vivo, que es
+# lo que permite el rollback sin redeploy. Esto sólo los DECLARA.
+for _declarar in (
+    _plan_display_i18n_enabled,
+    _plan_display_i18n_model_name,
+    _plan_display_i18n_timeout_s,
+    _plan_display_i18n_batch_days,
+    _plan_display_i18n_max_output_tokens,
+    _plan_display_i18n_max_inflight,
+    _max_locales_display,
+):
+    try:
+        _declarar()
+    except Exception:  # noqa: BLE001 — declarar un knob jamás puede tumbar el import
+        pass
+del _declarar
