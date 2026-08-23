@@ -17,7 +17,7 @@ def test_backend_owns_unverified_e2e_notice_before_root_ci_is_removed() -> None:
     assert "Report unverified e2e count" in source
     step = source[source.index("Report unverified e2e count") :]
     assert 'pytest tests/ -m "e2e" --collect-only' in step
+    assert "working-directory: backend" in step[:300]
     assert "::notice" in step
     assert "if: always()" in step
     assert "exit 1" not in step and "|| false" not in step
-

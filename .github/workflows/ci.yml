@@ -154,10 +154,26 @@ jobs:
           # checkout es lo único que hace que lleguen a ejecutarse en Actions alguna vez.
           pytest tests/ -v --tb=short -m "not e2e"
 
+      # [P2-E2E-CATALOGO-PAIS-SIN-NINGUN-GATE · 2026-08-23] Sólo el fichero
+      # read-only que contrasta el catálogo vivo. Nunca `-m e2e` sobre toda la
+      # suite: ese marker también es la llave que autoriza escrituras de tests.
+      - name: Country catalog live (read-only)
+        working-directory: backend
+        env:
+          NEON_DATABASE_URL: ${{ secrets.NEON_DATABASE_URL }}
+          MEALFIT_COUNTRY_SYSTEM: "true"
+        run: |
+          if [ -z "${NEON_DATABASE_URL:-}" ]; then
+            echo "::notice title=Catálogo vivo no verificado::NEON_DATABASE_URL no está configurada; se omite el subconjunto read-only de países."
+            exit 0
+          fi
+          pytest tests/test_p1_country_system_f2.py -m "e2e" -q --tb=short
+
       # [P2-CI-RAIZ-CERO-TESTS · 2026-08-23] Este aviso vivía sólo en el workflow
       # muerto del workspace. Se porta ANTES de retirarlo para que un verde del
       # backend siga distinguiendo «pasó» de «los e2e no se ejecutaron».
       - name: Report unverified e2e count (does not gate)
+        working-directory: backend
         if: always()
         run: |
           COUNT=$(pytest tests/ -m "e2e" --collect-only -q 2>/dev/null | tail -1 || echo "?")
