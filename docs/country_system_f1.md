@@ -183,6 +183,10 @@ una sin la otra dispara el bug de UI-sin-motor o motor-sin-UI documentado en la 
 - `sudo systemctl restart mealfit-backend`.
 - Verificar: `curl https://mealfitrd.com/ready` → `{status:ready,plan_graph:compiled,db:true}`;
   `curl https://mealfitrd.com/health/version` → `last_known_pfix` coincide con HEAD, `drift:false`.
+- En el mismo post-deploy, desde `backend/`: `python scripts/verify_country_schema.py`.
+  Debe terminar en `RESULTADO: las dos migraciones de país están aplicadas.` Si retorna 1,
+  aplicar primero `p1_country_keep_density_beta_2026_08_21.sql` y después
+  `p3_country_db_check_2026_08_22.sql`; el verificador es read-only y nunca las aplica.
 
 ### 2. Frontend — `VITE_COUNTRY_SYSTEM=true`
 
