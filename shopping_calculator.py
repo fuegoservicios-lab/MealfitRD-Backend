@@ -11942,6 +11942,9 @@ def aggregate_and_deduct_shopping_list(plan_ingredients: list[str], consumed_ing
     _LEGUMES_DRY_SUBSTRINGS_FOR_CAP = (
         'habichuela',   # habichuelas rojas/blancas/negras/pintas
         'frijol',       # frijoles rojos/negros/blancos
+        # [P1-COUNTRY-CAPS-DO-LEXICON · 2026-08-23] Misma familia, nombre ES.
+        # Se queda en la tabla ÚNICA de legumbres: no nace una variante por país.
+        'judia',        # judías blancas/pintas
         'gandules',
         'lentejas',
         'garbanzos',
@@ -12385,6 +12388,22 @@ def aggregate_and_deduct_shopping_list(plan_ingredients: list[str], consumed_ing
         # forma, está bien. Lácteos son perishable post-apertura, así que
         # cap por volumen total tiene sentido.
         'leche': 1.75,
+        # [P1-COUNTRY-CAPS-DO-LEXICON · 2026-08-23] Vocabulario beta de la
+        # MISMA familia. Los valores reutilizan las clases de arriba: queso
+        # fresco/cremoso, queso semiblando y lácteo líquido. No dependen del
+        # país y por eso un gemelo recibe el mismo tope que su fila canónica.
+        'requeson': 1.0,            # gemelo nutricional de ricotta
+        'cuajada': 0.75,
+        'queso de papa': 0.75,
+        'queso en hebras': 0.5,
+        'queso provolone': 0.5,
+        'crema agria': 1.0,
+        'crema mexicana': 1.0,
+        'crema mitad y mitad': 1.75,
+        'natilla': 1.0,             # antes de `nata`: match por substring
+        'nata': 1.0,
+        'suero costeno': 1.0,
+        'suero de mantequilla': 1.75,
     }
 
     for _name, _units in list(aggregated.items()):
