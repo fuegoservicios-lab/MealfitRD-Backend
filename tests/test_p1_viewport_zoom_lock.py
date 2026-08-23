@@ -121,3 +121,30 @@ def test_la_escala_de_fuente_del_so_sigue_viva() -> None:
         "`text-size-adjust: none` desactiva la escala de fuente del sistema. Con el "
         "pinch ya bloqueado, eso deja a un usuario con baja visión sin NINGUNA vía."
     )
+
+
+def test_p1_kb_resizes_content_meta_presente():
+    r"""[P1-KB-RESIZES-CONTENT · 2026-08-23] El teclado debe encoger el LAYOUT viewport.
+
+    Sin `interactive-widget=resizes-content`, iOS PANEA al abrirse el teclado: el layout
+    viewport no cambia, `100dvh` sigue midiendo la pantalla entera, y la única forma de
+    que la caja de escribir siga al teclado es recalcular el alto desde JS con los eventos
+    de `visualViewport` — que llegan durante la animación y después de ella. Ese cálculo
+    persiguiendo una animación es el origen medido del «retraso al cerrar» y del «a veces
+    se abre mal» que el dueño reportó cuatro veces entre el 22 y el 23 de agosto.
+
+    Con la propiedad puesta, el navegador redimensiona con la animación del sistema y el
+    JS sale del camino crítico (ver `documentoEncoge` en utils/keyboardViewport.js).
+
+    Quitarla es volver al camino de JS en TODOS los navegadores que la entienden, así que
+    este guard existe para que ese retroceso sea deliberado y no un efecto lateral de
+    tocar el meta viewport por otra razón.
+    """
+    html = _INDEX_HTML.read_text(encoding="utf-8")
+    m = re.search(r'<meta\s+name="viewport"\s+content="([^"]+)"', html)
+    assert m, "No encuentro el <meta name=viewport> en index.html."
+    assert "interactive-widget=resizes-content" in m.group(1), (
+        "el meta viewport perdió `interactive-widget=resizes-content`: el teclado vuelve "
+        "a panear en iOS y la caja de escribir vuelve a depender de un cálculo en JS que "
+        "llega tarde"
+    )
