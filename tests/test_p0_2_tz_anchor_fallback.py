@@ -59,9 +59,12 @@ def test_source_2_profile_today_when_snapshot_missing_start():
 
     assert source == "profile_today"
     assert tz_min == 240
-    today = datetime.now(timezone.utc).date()
-    assert start_dt.date() == today
-    assert start_dt.hour == 0 and start_dt.minute == 0
+    # [P1-ANCHOR-SSOT-VS-PLACEHOLDER] Ya no es un marcador 00:00Z: es el
+    # instante real de 00:00 LOCAL (04:00Z para offset JS +240).
+    local_start = start_dt - timedelta(minutes=tz_min)
+    local_today = (datetime.now(timezone.utc) - timedelta(minutes=tz_min)).date()
+    assert local_start.date() == local_today
+    assert local_start.hour == 0 and local_start.minute == 0
 
 
 def test_source_2_profile_today_when_snapshot_parse_fails():
@@ -97,6 +100,8 @@ def test_source_3_last_plan_when_profile_lacks_tz():
 
     assert source == "last_plan"
     assert tz_min == 300
+    local_start = start_dt - timedelta(minutes=tz_min)
+    assert local_start.hour == 0 and local_start.minute == 0
 
 
 def test_source_4_forced_8am_utc_when_all_fail():

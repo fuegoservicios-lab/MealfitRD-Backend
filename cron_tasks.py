@@ -13107,6 +13107,21 @@ def _get_user_tz_minutes_optional(user_id: str):
         return None
 
 
+def _local_midnight_for_fallback(tz_min: int) -> datetime:
+    """[P1-ANCHOR-SSOT-VS-PLACEHOLDER · 2026-08-23] Ancla real para fuentes 2/3.
+
+    ``profile_today`` y ``last_plan`` fabricaban ``00:00Z`` como MARCADOR de fecha y
+    devolvían al caller el offset por separado. Pero los consumidores tratan ``start_dt``
+    como un INSTANTE de medianoche local; aplicarles el SSOT a aquel marcador movía un día
+    hacia atrás a los cinco países al oeste. Esta función devuelve la misma semántica que la
+    fuente snapshot: instante UTC de la medianoche de HOY en la zona del usuario.
+    """
+    from constants import chunk_anchor_local_midnight_utc
+
+    _now_utc = datetime.now(timezone.utc)
+    return chunk_anchor_local_midnight_utc(_now_utc, tz_min)
+
+
 def _resolve_chunk_start_anchor(
     user_id: str,
     snapshot: dict,
@@ -13120,10 +13135,10 @@ def _resolve_chunk_start_anchor(
     del día (e.g., 3am local), rompiendo el contrato de "ejecución matutina".
 
     1. **snapshot**: usa `snapshot.form_data._plan_start_date` (path normal).
-    2. **profile_today**: lee TZ de `user_profiles.health_profile` y usa `today` UTC
-       como start_dt. El offset se aplica al combinar para llegar a midnight local.
+    2. **profile_today**: lee TZ de `user_profiles.health_profile` y devuelve el
+       instante UTC de la medianoche de hoy LOCAL.
     3. **last_plan**: si el perfil no tiene TZ, busca el último plan del usuario y
-       toma su TZ + today.
+       toma su TZ para construir el mismo tipo de instante local.
     4. **forced_8am_utc**: si nada existe, devuelve `(None, 0, "forced_8am_utc")`.
        El caller usará 8am UTC del día N como execute_after — peor que la TZ local,
        pero infinitamente mejor que NOW()+delay (que dispara a las 3am).
@@ -13165,10 +13180,7 @@ def _resolve_chunk_start_anchor(
     # === Source 2: user_profile TZ + today() ===
     profile_tz = _get_user_tz_minutes_optional(user_id)
     if profile_tz is not None:
-        today_utc = datetime.now(timezone.utc)
-        start_dt = datetime.combine(
-            today_utc.date(), datetime.min.time()
-        ).replace(tzinfo=timezone.utc)
+        start_dt = _local_midnight_for_fallback(int(profile_tz))
         _record_tz_fallback(
             user_id=user_id, meal_plan_id=meal_plan_id,
             week_number=week_number, reason="anchor_via_profile_today",
@@ -13198,10 +13210,7 @@ def _resolve_chunk_start_anchor(
                 except (TypeError, ValueError):
                     prior_tz = None
                 if prior_tz is not None:
-                    today_utc = datetime.now(timezone.utc)
-                    start_dt = datetime.combine(
-                        today_utc.date(), datetime.min.time()
-                    ).replace(tzinfo=timezone.utc)
+                    start_dt = _local_midnight_for_fallback(prior_tz)
                     _record_tz_fallback(
                         user_id=user_id, meal_plan_id=meal_plan_id,
                         week_number=week_number,
@@ -18798,6 +18807,8 @@ def _enqueue_plan_chunk(
         fresh_target = start_dt_midnight_utc + timedelta(
             days=fresh_delay_days, minutes=30
         )
+        # [P1-ANCHOR-SSOT-VS-PLACEHOLDER] Ya es semánticamente estable: las tres
+        # fuentes resolubles entregan un instante de medianoche local real.
         retry_target = anchor_start_dt + timedelta(days=retry_delay_days, hours=-3)
 
         execute_dt_min = datetime.now(timezone.utc) + timedelta(minutes=1)

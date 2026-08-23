@@ -106,6 +106,8 @@ def test_recalc_de_plan_beta_sellado_repara_regimen_ausente():
 def test_router_usa_el_helper_y_marker_movil_existe():
     router = (_BACKEND / "routers" / "plans.py").read_text(encoding="utf-8")
     app = (_BACKEND / "app.py").read_text(encoding="utf-8")
+    constants = (_BACKEND / "constants.py").read_text(encoding="utf-8")
 
     assert "apply_recalc_plan_regime" in router
-    assert "P1-COUNTRY-STAMP-NO-FALLBACK-WRITE" in app
+    assert "P1-COUNTRY-STAMP-NO-FALLBACK-WRITE" in constants
+    assert '_LAST_KNOWN_PFIX = "P' in app and " · 2026-" in app

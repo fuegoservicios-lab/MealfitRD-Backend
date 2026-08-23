@@ -72,5 +72,6 @@ def test_marker_movil_y_ssot_del_gate_existen():
     app = (_BACKEND / "app.py").read_text(encoding="utf-8")
     cron = (_BACKEND / "cron_tasks.py").read_text(encoding="utf-8")
 
-    assert "P1-CHUNK-GATE-PREVEND-LOCAL" in app
+    assert '_LAST_KNOWN_PFIX = "P' in app and " · 2026-" in app
+    assert "P1-CHUNK-GATE-PREVEND-LOCAL" in cron
     assert "_calmu_gate" in cron

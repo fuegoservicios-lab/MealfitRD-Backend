@@ -182,12 +182,16 @@ def test_los_tres_sitios_comparten_la_aritmetica():
         for alias in node.names
         if alias.name == "chunk_anchor_local_midnight_utc"
     }
+    # Las tres derivaciones con fallback importan aliases `_calmu_*`. G16 añadió una
+    # cuarta llamada directa dentro del normalizador de fuentes 2/3; no debe compensar
+    # una derivación sin SSOT ni convertir este conteo en un exact-marker histórico.
+    operational_aliases = {name for name in aliases if name.startswith("_calmu_")}
     ssot_calls = [
         node
         for node in ast.walk(tree)
         if isinstance(node, ast.Call)
         and isinstance(node.func, ast.Name)
-        and node.func.id in aliases
+        and node.func.id in operational_aliases
     ]
     anchor_date_calls = [
         node
