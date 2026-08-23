@@ -133,5 +133,5 @@ def test_mutacion_quitar_chorizo_del_fallback_pone_guard_rojo(catalogo_rte) -> N
 
 
 def test_pfix_marker_cierra_g03() -> None:
-    app = (BACKEND_ROOT / "app.py").read_text(encoding="utf-8")
-    assert "P0-PREG-CURED-BETA · 2026-08-23" in app
+    source = (BACKEND_ROOT / "graph_orchestrator.py").read_text(encoding="utf-8")
+    assert "P0-PREG-CURED-BETA · 2026-08-23" in source

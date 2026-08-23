@@ -5297,6 +5297,23 @@ def _day_system_instruction_for_diet(form_data) -> str:
 # key frozenset() → byte-equivalente al bloque previo = prompt-cache preservado para la mayoría.
 _VERIFIED_CATALOG_INSTRUCTION_CACHE = {}
 
+# [P1-BETA-CATALOG-DO-EXCLUSIVE · 2026-08-23] Preparaciones y gentilicios
+# inequívocamente dominicanos que no deben viajar al catálogo cerrado de los
+# cinco países beta. Esta lista es deliberadamente curada: NO deriva del léxico
+# (borraría alimentos universales) ni del registro de filas beta sin precio
+# (lo consumen las listas de compras sin país). Los nombres canónicos no cambian.
+_BETA_CATALOG_DO_EXCLUSIVE_NAMES = frozenset({
+    "Casabe",
+    "Casabe albahaca",
+    "Longaniza dominicana",
+    "Orégano dominicano",
+    "Queso de hoja",
+    "Salami",
+    "Harina de Negrito",
+    "Cundeamor",
+    "Mapuey",
+})
+
 
 def _patron_termino_alergeno(termino: str) -> str:
     """Regex con frontera y plural español para un término clínico normalizado.
@@ -5414,6 +5431,10 @@ def _get_verified_catalog_instruction(form_data=None) -> str:
             _iccui = None
 
         def _vc_comprable(r) -> bool:
+            if (_vc_beta
+                    and str(r.get("name") or "").strip()
+                    in _BETA_CATALOG_DO_EXCLUSIVE_NAMES):
+                return False
             if (r.get("price_per_lb") or 0) > 0 or (r.get("price_per_unit") or 0) > 0:
                 return True
             return bool(_iccui and _iccui(str(r.get("name") or ""), country=_vc_country))
