@@ -14482,7 +14482,11 @@ _ALLERGEN_SYNONYMS = {
                  # [P1-COUNTRY-SYSTEM-F2 · T5 · 2026-08-17] alta de catálogo ES (percebes, DROP en
                  # T1 country_catalog_gap.py --country ES): goose barnacle, crustáceo — sin esto un
                  # plan ES con 'Percebes' pasaba el backstop limpio para una alergia a mariscos.
-                 "percebe", "percebes"],
+                 "percebe", "percebes",
+                 # [P0-COUNTRY-ALLERGEN-FOOD-VOCAB · 2026-08-23] Nombre de alimento
+                 # peninsular ausente del vocabulario RD; frontera de palabra compartida
+                 # por G56 evita casar fragmentos dentro de otros nombres.
+                 "sepia"],
     "pescado": ["pescado", "bacalao", "atun", "salmon", "tilapia", "mero", "chillo",
                 "dorado", "sardina", "merluza", "carite", "anchoa", "anchoas",
                 "salsa de pescado", "surimi", "caviar", "salsa inglesa", "worcestershire",
@@ -14588,7 +14592,12 @@ _ALLERGEN_SYNONYMS = {
                "masa para pie",
                # alta de catálogo PR (Bacalaítos, DROP en T1): fritura en masa de HARINA DE
                # TRIGO -- mismo motivo que 'empanada'/'bizcocho' arriba (masa horneada/frita).
-               "bacalaitos"],
+               "bacalaitos",
+               # [P0-COUNTRY-ALLERGEN-FOOD-VOCAB · 2026-08-23] Panes, masas y
+               # platos de trigo de ES/MX/PR/US. Son nombres de ALIMENTO y por eso viven
+               # en este SSOT, no en los alias de declaración multilingüe.
+               "bocadillo", "baguette", "coca", "mollete", "torrija", "fideua",
+               "migas", "bolillo", "telera", "concha", "birote", "empanizado"],
     "huevo": ["huevo", "huevos", "clara", "claras", "yema", "yemas", "mayonesa", "merengue",
               "aioli", "alioli", "holandesa", "ponche", "mousse"],
     "huevos": ["huevo", "huevos", "clara", "claras", "yema", "yemas", "mayonesa", "merengue",
@@ -15166,6 +15175,9 @@ _DIET_SEAFOOD_TERMS = (  # pescado + mariscos
     # `_ALLERGEN_SYNONYMS['pescado']` (Bacalaítos, PR) — mismo guard
     # `test_paridad_dieta_alergeno_bidireccional`.
     "bacalaitos",
+    # [P0-COUNTRY-ALLERGEN-FOOD-VOCAB · 2026-08-23] Sepia es marisco tanto
+    # para la alergia como para la restricción vegetariana/vegana.
+    "sepia",
 )
 _DIET_EGG_TERMS = (
     "huevo", "huevos", "clara", "claras", "yema", "yemas",

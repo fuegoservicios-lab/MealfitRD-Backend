@@ -141,5 +141,5 @@ def test_do_sin_alergias_conserva_byte_identidad(catalogo_inyectado, monkeypatch
 
 
 def test_pfix_marker_cierra_g02() -> None:
-    app = (BACKEND_ROOT / "app.py").read_text(encoding="utf-8")
-    assert "P0-ALLERGEN-EU14-CLASES-I18N · 2026-08-23" in app
+    source = (BACKEND_ROOT / "graph_orchestrator.py").read_text(encoding="utf-8")
+    assert "P0-ALLERGEN-EU14-CLASES-I18N · 2026-08-23" in source
