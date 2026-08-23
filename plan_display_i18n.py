@@ -527,8 +527,15 @@ def _extract_canonical_name(ingredient_line: str) -> str:
     if not s:
         return ""
     s = _QTY_UNIT_PREFIX_RE.sub("", s, count=1).strip()
-    s = _LEADING_LINKER_RE.sub("", s, count=1).strip()
+    # [P2-I18N-DISPLAY-CANONICO-SE-COME-EL-CONECTOR · 2026-08-23] Los paréntesis ANTES que
+    # el conector. Con «0.75 cda (5 g) de Almendras» —la forma que el motor emite para
+    # cucharadas y tazas con su equivalente en gramos, 24,6 % de las líneas de un plan
+    # vivo— tras quitar el prefijo queda «(5 g) de Almendras»: el `de` no está al principio,
+    # no se quita, el paréntesis sí, y el canónico sale como «de Almendras». El validador
+    # busca ESO como palabra en la traducción, no lo encuentra, y una línea CORRECTA cae al
+    # español. Quitando el paréntesis primero, el conector vuelve a estar al principio.
     s = _PARENTHETICAL_RE.sub("", s).strip()
+    s = _LEADING_LINKER_RE.sub("", s, count=1).strip()
     s = _TRAILING_MODIFIER_RE.sub("", s).strip()
     return s
 
@@ -1294,6 +1301,51 @@ def _conserva_las_cifras(original_line: str, translated_line: str) -> bool:
     return _cifras_de(original_line) == _cifras_de(translated_line)
 
 
+# [P2-I18N-DISPLAY-VALIDADOR-CIEGO-A-LA-UNIDAD · 2026-08-23] Las unidades de MAGNITUD, y sólo
+# ésas. «180 g» → «180 oz» conserva todas las cifras y es cinco veces más comida: el control
+# de cifras lo dejaba pasar como traducción buena, y el usuario leía una cantidad falsa en su
+# receta (el motor no: el canónico español sigue dentro de la línea).
+#
+# NO entran las unidades de cocina traducibles —taza→cup, cda→tbsp, diente→clove— porque ésas
+# SE TRADUCEN y exigirlas iguales tiraría todas las traducciones buenas. Entra lo que es una
+# magnitud física: si cambia, cambia la cantidad. Cada grupo es una clase de equivalencia
+# (g ≡ gr ≡ gramos) para que «100 gr» → «100 g» no cuente como cambio.
+_UNIDAD_MAGNITUD = re.compile(
+    r"(?<![A-Za-z])(?:"
+    r"(?P<mg>mg|miligramos?|milligrams?|milligrammes?|milligrammi)|"
+    r"(?P<kg>kg|kilos?|kilogramos?|kilograms?|kilogrammes?|chilogrammi|quilos?)|"
+    r"(?P<g>g|gr|gramos?|grams?|grammes?|grammi)|"
+    r"(?P<ml>ml|mls?|mililitros?|milliliters?|millilitres?|millilitri)|"
+    r"(?P<cl>cl|centilitros?|centiliters?|centilitres?|centilitri)|"
+    r"(?P<l>l|litros?|liters?|litres?|litri)|"
+    r"(?P<floz>fl\.?\s?oz)|"
+    r"(?P<oz>oz|onzas?|ounces?|onces?|once)|"
+    r"(?P<lb>lb|lbs|libras?|pounds?|livres?|libbre|libbra)"
+    r")(?![A-Za-z])",
+    re.IGNORECASE,
+)
+
+
+def _magnitudes_de(linea: str) -> list:
+    """Las clases de unidad de magnitud que aparecen en la línea, en orden."""
+    fuera = []
+    for m in _UNIDAD_MAGNITUD.finditer(linea or ""):
+        fuera.append(m.lastgroup)
+    return fuera
+
+
+def _conserva_la_unidad(original_line: str, translated_line: str) -> bool:
+    """¿La traducción conserva la MAGNITUD de la línea original?
+
+    Sólo se compara cuando el original lleva una unidad de magnitud; una línea sin unidad
+    («Sal al gusto») o con una traducible («2 tazas») no tiene nada que conservar y pasa.
+    """
+    orig = _magnitudes_de(original_line)
+    if not orig:
+        return True
+    return orig == _magnitudes_de(translated_line)
+
+
 def _canonico_presente(canonical: str, linea: str) -> bool:
     """¿El nombre canónico aparece en la línea COMO PALABRA?
 
@@ -1388,6 +1440,11 @@ def _validate_and_build_display(original: dict, item: dict) -> Optional[dict]:
         if not _conserva_las_cifras(original_line, translated_line):
             final_ingredients.append(original_line)
             continue
+        # [P2-I18N-DISPLAY-VALIDADOR-CIEGO-A-LA-UNIDAD · 2026-08-23] Y la MAGNITUD, no sólo
+        # las cifras: «180 g» → «180 oz» conserva los números y es cinco veces más comida.
+        if not _conserva_la_unidad(original_line, translated_line):
+            final_ingredients.append(original_line)
+            continue
         canonical = _extract_canonical_name(original_line)
         if not canonical:
             # Sin canónico identificable en el original: la línea pasa sin check
@@ -1419,6 +1476,7 @@ def _validate_and_build_display(original: dict, item: dict) -> Optional[dict]:
         #     seccion, y sin la etiqueta de nota una ANOTACION pasa a numerarse como
         #     accion de cocina.
         ok = (_conserva_las_cifras(original_step, step)
+              and _conserva_la_unidad(original_step, step)       # P2-I18N-DISPLAY-VALIDADOR-CIEGO-A-LA-UNIDAD
               and _conserva_el_vocab_cerrado(original_step, step))
         final_recipe.append(step if ok else original_step)
 
@@ -2035,7 +2093,14 @@ def enrich_plan_display(
                 )
                 total_written += written
                 mismatch_total += mismatches
-                if written or _plan_name_written or _insights_written:
+                # [P2-I18N-DISPLAY-REASON-NULA-CON-CERO-COMIDAS · 2026-08-23] SÓLO las
+                # comidas limpian la razón. Antes «algo» incluía el nombre del plan y los
+                # insights, así que un ciclo con el título en francés y 0/12 platos salía
+                # con `reason: None` —éxito limpio, sin alerta—, que es exactamente el
+                # estado que se encontró en producción el 22-ago. Un ciclo que pidió
+                # comidas y no escribió ninguna ha fallado en lo que pidió, escriba lo que
+                # escriba de lo demás.
+                if written:
                     last_skip_reason = None
 
             if mismatch_total:
@@ -2114,6 +2179,16 @@ def enrich_plan_display(
             f"[P1-PLAN-DISPLAY-I18N] enrich_plan_display excepción no controlada "
             f"(fail-open) plan={plan_id} locale={locale}: {e!r}"
         )
+        # [P2-I18N-DISPLAY-EXCEPCION-NO-DEJA-RASTRO · 2026-08-23] Éste era el único camino
+        # de salida SIN fila de telemetría — y es el único que significa «está roto», no
+        # «no tocaba». Sin esto, un bug nuevo que reviente el motor deja `pipeline_metrics`
+        # en cero, que es lo que dice cuando NO SE EJECUTA: «no le toca a nadie» y «está
+        # roto» se vuelven indistinguibles, justo la confusión que costó una sesión medir.
+        # `exception` no es razón benigna, así que además alerta por locale.
+        _emit_result_telemetry(plan_id, user_id, locale, {
+            "enriched_meals": 0, "reason": "exception",
+            "error": f"{type(e).__name__}: {str(e)[:160]}",
+        })
         return {"enriched_meals": 0, "skipped": "exception"}
 
 
@@ -2197,7 +2272,19 @@ def schedule_plan_display_enrichment(
                 # la feature se apagaría sola y en silencio tras N fallos.
                 _INFLIGHT_SEMAPHORE.release()
 
-        threading.Thread(target=_run, daemon=True).start()
+        # [P2-I18N-DISPLAY-SEMAFORO-SE-FUGA-SI-EL-HILO-NO-ARRANCA · 2026-08-23] El
+        # `finally` de `_run` cubre todo lo que pase DENTRO del hilo, pero no este tramo: si
+        # `start()` lanza («can't start new thread»), `_run` no corre, nadie suelta el
+        # permiso, y con MAX_INFLIGHT fallos así la feature queda apagada para todo el
+        # proceso — con «reason: inflight_cap» en cada intento, que apunta a un techo
+        # alcanzado y no a uno fugado. Aquí se suelta si el hilo no llegó a existir. NO es
+        # un `finally` alrededor del `start()`: eso lo soltaría también cuando SÍ arranca,
+        # y el hilo lo soltaría otra vez (BoundedSemaphore lanza en el segundo release).
+        try:
+            threading.Thread(target=_run, daemon=True).start()
+        except Exception:
+            _INFLIGHT_SEMAPHORE.release()
+            raise
     except Exception as e:
         logger.warning(
             f"[P1-PLAN-DISPLAY-I18N] schedule_plan_display_enrichment falló "

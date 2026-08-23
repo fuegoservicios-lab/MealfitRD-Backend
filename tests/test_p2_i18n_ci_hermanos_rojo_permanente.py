@@ -42,6 +42,7 @@ tooltip-anchor: P2-I18N-CI-HERMANOS-ROJO-PERMANENTE
 from __future__ import annotations
 
 import io
+import re
 from pathlib import Path
 
 _BACKEND = Path(__file__).resolve().parent.parent
@@ -65,14 +66,27 @@ def _codigo_py(src: str) -> str:
 def test_el_ci_del_backend_no_busca_un_subdirectorio_backend():
     yml = _leer(_BACKEND / ".github" / "workflows" / "ci.yml")
     codigo = _codigo_py(yml)
-    assert "backend/requirements.txt" not in codigo, (
-        "el CI del repo BACKEND vuelve a pedir `backend/requirements.txt`. Su raíz ES el "
-        "backend: ese fichero no existe como subdirectorio y el job muere en 15 s en `Set "
-        f"up Python`, sin ejecutar un solo test [{_MARKER}]"
-    )
-    assert "working-directory: backend" not in codigo, (
-        "vuelve un `working-directory: backend` en el repo cuya raíz es el backend"
-    )
+    # [P1-I18N-CI-SIN-VEREDICTO · 2026-08-23] Misma reanclada que la de abajo: las rutas
+    # `backend/...` sólo son un error si el checkout no clona en `backend/`.
+    clona_en_backend = bool(re.search(r"path:\s*backend\b", codigo))
+    if "backend/requirements.txt" in codigo:
+        assert clona_en_backend, (
+            "el CI del repo BACKEND pide `backend/requirements.txt` sin clonar en `backend/`. "
+            "Su raíz ES el backend: ese fichero no existe como subdirectorio y el job muere "
+            f"en 15 s en `Set up Python`, sin ejecutar un solo test [{_MARKER}]"
+        )
+    # [P1-I18N-CI-SIN-VEREDICTO · 2026-08-23] Esto prohibía `working-directory: backend` a
+    # secas, y tenía razón ENTONCES: el job clonaba en la raíz y ese subdirectorio no
+    # existía. Ahora el checkout va con `path: backend` a propósito —para reproducir la
+    # disposición hermana que `parents[2]` asume en 400 tests— y el subdirectorio SÍ existe.
+    # La propiedad real nunca fue «jamás ese directorio»: es «las rutas del job son
+    # coherentes con dónde se clona». Un `working-directory: backend` sólo es un error si
+    # nadie clonó ahí.
+    if "working-directory: backend" in codigo:
+        assert re.search(r"path:\s*backend\b", codigo), (
+            "hay un `working-directory: backend` pero el checkout NO clona en `backend/`: el "
+            f"subdirectorio no existe y el job muere sin ejecutar un test [{_MARKER}]"
+        )
 
 
 def test_el_ci_del_backend_no_tiene_jobs_de_frontend():
@@ -91,7 +105,15 @@ def test_el_ci_del_backend_no_para_en_el_primer_fallo():
     assert '-m "not e2e" -x' not in codigo, (
         f"volvió el `-x`: un rojo cualquiera esconde el resto de la suite [{_MARKER}]"
     )
-    assert "--maxfail" in codigo
+    # [P1-I18N-CI-SIN-VEREDICTO · 2026-08-23] Esto EXIGÍA `--maxfail`, como alternativa al
+    # `-x`. Era mejor que `-x`, y aun así dejaba el job sin veredicto: con 25 errores de
+    # COLECCIÓN —ficheros que no se pueden importar, no tests rojos— el cupo se agotaba
+    # antes del primer test. Medido con `gh run view`. La propiedad de este test es «la
+    # corrida devuelve el mapa entero, no un dato»; `--maxfail` la cumplía a medias y
+    # ahora se exige que NO esté. `test_p1_i18n_ci_sin_veredicto.py` lo ancla también.
+    assert "--maxfail" not in codigo, (
+        f"`--maxfail` ha vuelto: con errores de colección la corrida termina sin veredicto [{_MARKER}]"
+    )
 
 
 # ───────────────────── 2. el test que sólo pasaba en RD ─────────────────────────────

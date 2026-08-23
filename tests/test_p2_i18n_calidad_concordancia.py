@@ -62,8 +62,17 @@ def test_pt_br_distingue_el_menu_de_comida_del_menu_de_navegacion() -> None:
     pt = _catalogo("pt-BR")
 
     comida_mal, navegacion_mal = [], []
-    for clave, valor in pt.items():
-        if not isinstance(valor, str) or "menú" not in clave.lower():
+    for clave, valor_raw in pt.items():
+        if "menú" not in clave.lower():
+            continue
+        # [P2-I18N-CARDAPIO-SUPERVIVIENTE-EN-CLAVE-PLURAL · 2026-08-23] Las claves PLURALES
+        # son un dict `{one, other}` y este guard las saltaba con `isinstance(valor, str)`:
+        # así sobrevivió «Seu menu de {n} dias já está pronto» —menú de COMIDA— mientras el
+        # guard cantaba que los 12 cardápio y los 5 menu estaban en su sitio. Se funden las
+        # formas y se juzgan juntas: una sola mal y la clave es culpable.
+        valor = valor_raw if isinstance(valor_raw, str) else " ".join(
+            v for v in (valor_raw or {}).values() if isinstance(v, str))
+        if not valor:
             continue
         es_navegacion = bool(_MENU_DE_NAVEGACION.match(clave))
         dice_cardapio = bool(re.search(r"card[áa]pio", valor, re.I))

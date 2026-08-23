@@ -67,7 +67,28 @@ _SRC = _ROOT / "frontend" / "src"
 # por la propiedad, que no dependa de cómo se escriba. La propiedad aquí es «una
 # expresión que viene del servidor gana sobre un fallback traducido», y el nombre del
 # campo es un detalle de implementación del endpoint que la emite.
-_CANALES_DEL_SERVIDOR = r"(?:detail|message|error_message|ai_interrupted_message|error)"
+# [P1-I18N-SERVER-COPY-GANA-SIGUE-ABIERTO · 2026-08-23] Y aun así seguía siendo una
+# ENUMERACIÓN. El cierre del 22-ago ensanchó de 1 canal a 5 y arregló los números de línea,
+# pero no convirtió el guard en una propiedad: un campo nuevo entra invisible. MEDIDO con el
+# regex de entonces, mutándolo sobre el árbol de hoy:
+#
+#     False | description: generatedPlan?._review_disclaimer || t('El plan se ajusto...')
+#     False | toast.error(data?.motivo || t('Algo fallo.'))
+#     True  | toast.error(data?.detail || t('Algo fallo.'))
+#
+# El peor de los invisibles es `_review_disclaimer` (`Plan.jsx`), que el backend compone
+# SIEMPRE en español: en la rama crítica el usuario lee el título traducido «Plan ajustado
+# por seguridad médica» y debajo, en español, «El sistema detectó violaciones críticas
+# (alergias o condiciones médicas)…».
+#
+# Ahora el canal es CUALQUIER campo. Lo que acota el guard deja de ser una lista de nombres
+# y pasa a ser lo que de verdad define el defecto: el RECEPTOR es payload del servidor y la
+# posición es copy visible. La lista blanca de abajo es de campos que son DATO y no prosa —
+# razonada uno a uno, no por conveniencia.
+_CANALES_DEL_SERVIDOR = r"(?!(?:" + r"|".join([
+    # Datos, no prosa: pintarlos crudos es correcto porque no son texto que traducir.
+    "length", "size", "count", "id", "status", "code", "name", "url", "type",
+]) + r")\b)[A-Za-z_$][\w$]*"
 
 # El RECEPTOR importa tanto como el canal. `e.message` / `err.message` dentro de un `catch`
 # NO es «el español del servidor»: es lo que puso el `throw`, y si ese throw ya tradujo,
@@ -83,8 +104,23 @@ _POSICION_DE_COPY = re.compile(
     # `(?:\?\.|\.)` y no `\?\.?`: lo segundo exige el signo de interrogacion, asi que
     # `err.detail ||` —que existe en el arbol— era invisible. Lo cazo la mutacion de
     # control; el test principal estaba pasando sin ver una de las dos formas.
-    r"(?:toast\.(?:error|warning|success)?\s*\(|description:\s*)[^;\n]*?"
-    r"(?P<receptor>[A-Za-z_$][\w$]*)(?:\?\.|\.)" + _CANALES_DEL_SERVIDOR + r"\s*\|\|"
+    # [P1-I18N-CONSENT-MODAL-SERVIDOR-GANA · 2026-08-23] `message:` como tercera posición
+    # de copy. El modal «Tu Nevera no alcanza» recibía `message: newMealData.message || '…'`
+    # en un `return` de AssessmentContext —ni toast ni description— y este guard no lo veía.
+    # Es copy visible igual: el Dashboard lo pinta tal cual en el modal.
+    r"(?:toast\.(?:error|warning|success)?\s*\(|description:\s*|message:\s*)[^;\n]*?"
+    r"(?P<receptor>[A-Za-z_$][\w$]*)(?:\?\.|\.)" + _CANALES_DEL_SERVIDOR
+    # [P1-I18N-SERVER-COPY-GANA-SIGUE-ABIERTO · 2026-08-23] El fallback tiene que ser una
+    # TRADUCCIÓN. Al abrir el canal a cualquier campo apareció
+    # `description: p.description || ''` (SupermarketPage), que es un campo de FORMULARIO y
+    # no copy: no hay ninguna traducción a la que el servidor le gane.
+    #
+    # Exigir `t(` cerca del `||` es lo que define el defecto de verdad —«el español del
+    # servidor gana sobre un fallback traducido»— en vez de aproximarlo por el nombre del
+    # campo. La ventana de 200 cubre el ternario de `Plan.jsx:1281`, cuyo fallback es
+    # `|| (Number.isFinite(…) ? t(…) : t(…))`.
+    + r"\s*\|\|[^;]{0,200}?\bt\(",
+    re.S,
 )
 
 
@@ -128,6 +164,17 @@ def test_ninguna_posicion_de_copy_pinta_el_detail_del_servidor() -> None:
         for m in _POSICION_DE_COPY.finditer(s):
             if _RECEPTOR_DE_EXCEPCION.search(m.group("receptor")):
                 continue  # `e.message` en un catch: el defecto vive en el throw
+            # [P1-I18N-CONSENT-MODAL-SERVIDOR-GANA · 2026-08-23] Al abrir `message:` como
+            # posición de copy aparecieron tres sitios en `authClient.js` que NO son
+            # víctimas: van bajo el contrato `mfCopy` (`mfCopy: !data?.message`), y
+            # `humanizeAuthError` sólo respeta el texto crudo cuando `mfCopy` es true — o
+            # sea, cuando GANÓ el fallback traducido. Un `message` del servidor de auth pasa
+            # por los heurísticos y se traduce por clase. Es un contrato de dos piezas que
+            # una línea sola no enseña; se reconoce por la PROPIEDAD (el `mfCopy` a
+            # continuación), no por el nombre del fichero.
+            cola = s[m.end():m.end() + 200]
+            if re.search(r"\bmfCopy\s*:", cola):
+                continue
             linea = s[:m.start()].count("\n") + 1
             culpables.append(f"{p.relative_to(_SRC).as_posix()}:{linea}")
 
