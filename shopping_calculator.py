@@ -13111,9 +13111,10 @@ def fetch_inventory_and_consumed_for_plan(user_id: str, plan_result: dict, is_ne
 def _strip_prices_for_beta_pricing_mode(res):
     """Muta `res` IN-PLACE anulando `estimated_cost_rd`/`estimated_cost` (si están presentes)
     en cada ítem — `list[dict]` (`structured=True, categorize=False`) o
-    `dict[categoria, list[dict]]` (`structured=True, categorize=True`). Texto plano
-    (`structured=False`) no lleva estos campos → no-op seguro. Retorna `res` para poder
-    encadenarse inline en el `return` del caller.
+    `dict[categoria, list[dict]]` (`structured=True, categorize=True`). En texto plano no hay
+    campos de costo, pero sí puede viajar el label de marca dentro de `display_string`, por lo
+    que también se sanea cada `str`. Retorna `res` para poder encadenarse inline en el `return`
+    del caller.
 
     tooltip-anchor: _strip_prices_for_beta_pricing_mode (test_p1_country_system_f1.py)
     """
@@ -13129,19 +13130,42 @@ def _strip_prices_for_beta_pricing_mode(res):
     # separador ' · ' es el que `_pkg_from_product_row` usa para pegar tamaño y marca.
     _BRAND_SEP = " · "
 
-    def _strip_brand(qty):
-        if not isinstance(qty, str) or _BRAND_SEP not in qty:
-            return qty
-        _abierto = qty.rfind("(")
-        if _abierto < 0:
-            return qty.split(_BRAND_SEP)[0].strip()
-        _cabeza, _cola = qty[:_abierto], qty[_abierto:]
-        if _BRAND_SEP not in _cola:
-            return qty
-        _sin_marca = _cola.split(_BRAND_SEP)[0].strip()
-        if not _sin_marca.endswith(")"):
-            _sin_marca += ")"
-        return (_cabeza + _sin_marca).strip()
+    # [P1-COACH-SHOPLIST-BRAND-LEAK · 2026-08-23] `display_qty` era el único campo saneado,
+    # pero ninguna de las dos rutas del coach lo narra: tools.py usa `display_string` de la
+    # salida estructurada y agent.py inserta la salida plana (que ES ese display_string) en el
+    # prompt. Además, el `rfind("(")` + truncado previo se comía TODO lo posterior al paréntesis:
+    # limpiar «1 cartón (1 Lt · marca) de Leche» devolvía «1 cartón (1 Lt)» y perdía el alimento.
+    # Se transforma únicamente el segmento parentético que contiene el separador SSOT, preservando
+    # el resto byte por byte y el sufijo `c/u`. `sku_size_label` es la única forma legítimamente
+    # desnuda (`tamaño · marca`), así que sólo ese campo habilita el fallback sin paréntesis.
+    _BRANDED_PARENS_RX = re.compile(r"\([^()]*\)")
+    _EACH_SUFFIX_RX = re.compile(r"(?:^|\s)c/u\s*$", re.IGNORECASE)
+
+    def _strip_brand(value, *, allow_bare=False):
+        if not isinstance(value, str) or _BRAND_SEP not in value:
+            return value
+
+        _changed = False
+
+        def _clean_parens(match):
+            nonlocal _changed
+            _segment = match.group(0)
+            if _BRAND_SEP not in _segment:
+                return _segment
+            _size, _brand_and_suffix = _segment.split(_BRAND_SEP, 1)
+            _brand = _brand_and_suffix[:-1].strip()  # quitar el `)` para inspeccionar `c/u`
+            _suffix = " c/u" if _EACH_SUFFIX_RX.search(_brand) else ""
+            _changed = True
+            return f"{_size.rstrip()}{_suffix})"
+
+        _cleaned = _BRANDED_PARENS_RX.sub(_clean_parens, value)
+        if _changed:
+            return _cleaned
+        if allow_bare and "(" not in value and ")" not in value:
+            _size, _brand = value.rsplit(_BRAND_SEP, 1)
+            _suffix = " c/u" if _EACH_SUFFIX_RX.search(_brand) else ""
+            return f"{_size.rstrip()}{_suffix}"
+        return value
 
     def _strip_item(it):
         if isinstance(it, dict):
@@ -13151,15 +13175,25 @@ def _strip_prices_for_beta_pricing_mode(res):
                 it["estimated_cost"] = None
             if "display_qty" in it:
                 it["display_qty"] = _strip_brand(it.get("display_qty"))
+            if "display_string" in it:
+                it["display_string"] = _strip_brand(it.get("display_string"))
+            if "sku_size_label" in it:
+                it["sku_size_label"] = _strip_brand(
+                    it.get("sku_size_label"), allow_bare=True)
+
+    def _strip_items(items):
+        for idx, it in enumerate(items):
+            if isinstance(it, str):
+                items[idx] = _strip_brand(it)
+            else:
+                _strip_item(it)
 
     if isinstance(res, dict):
         for items in res.values():
             if isinstance(items, list):
-                for it in items:
-                    _strip_item(it)
+                _strip_items(items)
     elif isinstance(res, list):
-        for it in res:
-            _strip_item(it)
+        _strip_items(res)
     return res
 
 
