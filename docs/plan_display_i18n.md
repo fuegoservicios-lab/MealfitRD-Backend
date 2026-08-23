@@ -321,6 +321,15 @@ CONSTRUCCIÓN. La pregunta «¿y si el modelo devuelve el original?» no se le h
 
 ### ⚠️ Lo que ninguna de esas líneas dice, y es lo que más importa
 
+> **Estado al 2026-08-23** [P3-I18N-DOC-DISPLAY-SE-CONTRADICE]: esta sección se escribió el 22
+> y la sección anterior («La primera traducción verificada») el 23, y leídas seguidas se
+> contradicen. Las dos son ciertas, con fecha: desde el 23 hay **ejecuciones reales medidas**
+> (un plato sembrado y la ejecución sobre un plan de cliente, que destapó los tres defectos
+> de «La ejecución contra un plan REAL»), y sigue siendo verdad que **ninguna traducción ha
+> llegado a un usuario de forma orgánica** —disparada por un usuario real con `locale`
+> distinto de es-DO— porque no hay ninguno todavía. Lo de abajo describe el 22; lo de arriba,
+> el 23.
+
 [P1-I18N-SIN-EVIDENCIA-PRODUCCION] **Esta capa no ha traducido un plato en producción.**
 Medido el 2026-08-22 sobre la base real: **5 ejecuciones en toda su historia** (contra 3.789
 del generador de días), **1 plan de 44** con `_display`, **0 comidas** traducidas, **0 filas**
