@@ -31,7 +31,7 @@ _PROCESS_START_ISO = datetime.now(timezone.utc).isoformat()
 #     y fechas anteriores al floor (último audit cerrado).
 #   - Si subes el floor del test, sube también el valor aquí — el commit
 #     que sube uno sin el otro debería fallar el test en CI.
-_LAST_KNOWN_PFIX = "P2-COUNTRY-OBSERVABILIDAD-CERO · 2026-08-23"
+_LAST_KNOWN_PFIX = "P2-FLIP-BACKEND-INVERIFICABLE · 2026-08-23"
 
 # [P1-SENTRY-SAMPLE-COST · 2026-05-12] Sentry sampling driven from env vars
 # con default seguro 0.1 (10%). Pre-fix tenía `traces_sample_rate=1.0` y
@@ -1800,6 +1800,8 @@ def health_version():
          `is_guest` siguen lloviendo).
       - `has_p1_perf_1_cache`: bool — `_SCHEDULER_JOBS_WITH_OPEN_ALERTS` en
          globals de app.py. Si False → binary PRE-P1-PERF-1 (PATCH spam).
+      - `MEALFIT_COUNTRY_SYSTEM`: bool — valor vivo del knob maestro de país,
+         leído en cada request (no el snapshot de import de `constants.py`).
 
     SOP UptimeRobot:
       - URL: `https://<base>/health/version`
@@ -1946,6 +1948,19 @@ def health_version():
         "_SCHEDULER_JOBS_WITH_OPEN_ALERTS" in globals()
     )
 
+    # [P2-FLIP-BACKEND-INVERIFICABLE · 2026-08-23] El flip de país vive en
+    # el .env del proceso y su default de código es False. Exponer el nombre
+    # exacto permite a un monitor blackbox distinguir «usuario DO» de «toda
+    # la flota colapsó a DO porque el knob se perdió». Lectura por request:
+    # no usar COUNTRY_SYSTEM_ENABLED, que es un snapshot tomado al importar.
+    try:
+        from knobs import _env_bool as _env_bool_country_health
+        country_system_enabled = _env_bool_country_health(
+            "MEALFIT_COUNTRY_SYSTEM", False
+        )
+    except Exception:
+        country_system_enabled = False
+
     # [P2-EMBED-TELEMETRY · 2026-05-24] Gauge del tamaño actual de los
     # embedding caches bounded (cierre del par natural de P1-EMBEDDING-CACHE-
     # BOUNDED 2026-05-24). Sin estas keys, un operador no puede detectar
@@ -1996,6 +2011,7 @@ def health_version():
         "last_pipeline_metrics_tick_at": last_pipeline_metrics_tick_at,
         "has_p0_prod_1_gate": has_p0_prod_1_gate,
         "has_p1_perf_1_cache": has_p1_perf_1_cache,
+        "MEALFIT_COUNTRY_SYSTEM": country_system_enabled,
         # [P2-EMBED-TELEMETRY · 2026-05-24] gauges de los embedding caches.
         "embedding_cache_size": embedding_cache_size,
         "pantry_embeddings_cache_size": pantry_embeddings_cache_size,

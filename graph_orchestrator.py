@@ -46706,6 +46706,13 @@ def _emit_slot_drift_metric_best_effort(slot_drift, plan, form_data=None) -> Non
             _country_sd = _cffd_sd(form_data if isinstance(form_data, dict) else {})
         except Exception:
             _country_sd = "DO"
+        try:
+            from knobs import _env_bool as _env_bool_country_sd
+            _country_system_enabled_sd = _env_bool_country_sd(
+                "MEALFIT_COUNTRY_SYSTEM", False
+            )
+        except Exception:
+            _country_system_enabled_sd = False
         execute_sql_write(
             """
             INSERT INTO pipeline_metrics
@@ -46718,7 +46725,9 @@ def _emit_slot_drift_metric_best_effort(slot_drift, plan, form_data=None) -> Non
                 None,
                 "slot_drift",
                 _json_sd.dumps({"slot_drift": slot_drift, "days": _days,
-                                "country": _country_sd}, ensure_ascii=False),
+                                "country": _country_sd,
+                                "MEALFIT_COUNTRY_SYSTEM": _country_system_enabled_sd},
+                               ensure_ascii=False),
             ),
         )
     except Exception as _e_sd:
