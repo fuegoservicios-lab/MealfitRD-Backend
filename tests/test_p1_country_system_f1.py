@@ -1694,7 +1694,9 @@ def test_g_swap_persist_country_prefetch_antes_del_lock():
     función (que cita el mismo texto en prosa, ANTES del pre-fetch)."""
     src = (_BACKEND / "routers" / "plans.py").read_text(encoding="utf-8")
     i_persist_def = src.index("def api_swap_meal_persist(")
-    i_prefetch = src.index("_swap_country = _cffd_swap(_micro_form)", i_persist_def)
+    # P1-COUNTRY-PLAN-VS-PERFIL-EN-BLOQUES cambió el resolvedor de perfil
+    # puro al SSOT del artefacto; el contrato de este guard sigue siendo el orden.
+    i_prefetch = src.index("_swap_country = _cfp_swap_persist(", i_persist_def)
     i_lock = src.index("result = update_plan_data_atomic(", i_persist_def)
     assert i_persist_def < i_prefetch < i_lock, (
         "el pre-fetch de country debe vivir ANTES de update_plan_data_atomic (patrón _micro_form)"
@@ -1724,14 +1726,14 @@ def test_g_recalculate_shopping_list_wire_finalize_con_pais():
 
 
 def test_g_swap_country_deriva_via_ssot_no_lector_crudo():
-    """El pre-fetch de _swap_country pasa por country_for_form_data (T1, la ÚNICA puerta) — NO
-    lee 'country' crudo de ningún dict ajeno a ese helper."""
+    """El pre-fetch pasa por el SSOT del plan; canonicaliza el sello y sólo
+    cae al perfil para artefactos legacy."""
     src = (_BACKEND / "routers" / "plans.py").read_text(encoding="utf-8")
     cuerpo_ini = src.index("def api_swap_meal_persist(")
     cuerpo_fin = src.index("\ndef ", cuerpo_ini + 10)
     cuerpo = src[cuerpo_ini:cuerpo_fin]
-    assert "country_for_form_data as _cffd_swap" in cuerpo
-    assert "_cffd_swap(_micro_form)" in cuerpo
+    assert "country_for_plan as _cfp_swap_persist" in cuerpo
+    assert "_cfp_swap_persist(" in cuerpo
 
 
 # ── T4 fix-round 1: finalizer país-aware (review IMPORTANT #3) ───────────────────────────────
@@ -4184,7 +4186,7 @@ def test_f2c_tools_comment_documenta_el_mecanismo_real_no_el_ruling_obsoleto():
     ciego al país."""
     src = (_BACKEND / "tools.py").read_text(encoding="utf-8")
     ini = src.index("def execute_modify_single_meal(")
-    fin = src.index("_modify_country = country_for_form_data(form_data)")
+    fin = src.index("_modify_country = country_for_plan(plan_data, form_data)")
     bloque = src[ini:fin]
     assert "merge_form_data_with_profile" in bloque
     assert "el chat-agent hoy no puebla" not in bloque, "el ruling T4 desactualizado sigue ahí"

@@ -1058,10 +1058,8 @@ def execute_modify_single_meal(user_id: str, day_number: int, meal_type: str, ch
     """Ejecuta la modificación de una comida individual en el plan activo del usuario."""
     logger.debug(f"\n🔧 [TOOL] modify_single_meal: Día {day_number}, {meal_type}, cambios: '{changes}'")
 
-    # [P1-COUNTRY-SYSTEM-F1 · 2026-08-16 (T4)] país vía la ÚNICA puerta (T1), derivado UNA vez —
-    # consumido por los 2 call sites de build_meal_timing_rules de abajo (guía proactiva del
-    # prompt + retry-feedback del backstop). `form_data` es lo único disponible barato en esta
-    # tool (no hay columna `form_data` en `meal_plans` — solo `plan_data`).
+    # [P1-COUNTRY-SYSTEM-F1 · 2026-08-16 (T4)] País derivado una vez y consumido
+    # por los dos call sites de build_meal_timing_rules de abajo.
     # [P1-COUNTRY-SYSTEM-F1 · 2026-08-16 (FINAL-FIX F2c)] Trazado el flujo completo (el ruling
     # T4 de arriba quedó desactualizado): `form_data` llega aquí desde `state['form_data']`
     # (agent.py, nodo `execute_tools`, rama `tool_name == "modify_single_meal"`), que
@@ -1073,13 +1071,7 @@ def execute_modify_single_meal(user_id: str, day_number: int, meal_type: str, ch
     # SUSTITUYE `merged` por el `health_profile` COMPLETO cuando el perfil existe
     # (`merged = existing_hp`, con el body del cliente solo pisando encima) — así que `country`
     # ya viaja en cuanto vive en `health_profile` (Fase 0: QCountry del wizard + selector de
-    # Configuración lo escriben ahí), SIN hidratador dedicado en esta superficie. Cae a 'DO' solo
-    # para perfiles legacy que nunca fijaron país (fail-safe correcto, no un gap pendiente).
-    from constants import country_for_form_data, slot_rules_for_country
-    _modify_country = country_for_form_data(form_data)
-    # [P1-COUNTRY-SYSTEM-F1 · 2026-08-16 (T4 fix-round 1)] tabla resuelta UNA vez, reusada por el
-    # backstop P1-CHAT-SLOT-BACKSTOP más abajo (mismo shape que _detect_slot_appropriateness).
-    _modify_rules_table = slot_rules_for_country(_modify_country)
+    # Configuración lo escriben ahí), SIN hidratador dedicado en esta superficie.
 
     # 1. Obtener el plan actual con su ID
     plan_record = get_latest_meal_plan_with_id(user_id)
@@ -1091,6 +1083,14 @@ def execute_modify_single_meal(user_id: str, day_number: int, meal_type: str, ch
     
     if not plan_data or not isinstance(plan_data, dict):
         return "ERROR: El plan guardado está corrupto o vacío."
+
+    # [P1-COUNTRY-PLAN-VS-PERFIL-EN-BLOQUES · 2026-08-23] Éste es un mutador
+    # de un artefacto existente: el sello del plan manda y el perfil fusionado
+    # sólo sirve de fallback para planes legacy.
+    from constants import country_for_plan, slot_rules_for_country
+    _modify_country = country_for_plan(plan_data, form_data)
+    # Tabla resuelta una vez, reusada por el backstop P1-CHAT-SLOT-BACKSTOP.
+    _modify_rules_table = slot_rules_for_country(_modify_country)
     
     # 2. Localizar la comida específica
     days = plan_data.get("days", [])

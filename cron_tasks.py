@@ -26263,6 +26263,31 @@ _FREEZE_GATE_SQL = """
 """
 
 
+def _merge_chunk_live_profile(form_data: dict, health_profile: dict) -> dict:
+    """[P1-COUNTRY-PLAN-VS-PERFIL-EN-BLOQUES · 2026-08-23]
+    Refresca señales editables del perfil sin cambiar la identidad del plan.
+
+    ``country`` pertenece al snapshot de generación igual que la fecha de inicio:
+    cambiar el perfil gobierna el próximo plan, no los bloques pendientes de éste.
+    Muta y devuelve ``form_data`` para conservar el contrato del worker.
+    """
+    if not isinstance(form_data, dict) or not isinstance(health_profile, dict):
+        return form_data
+    _protected_keys = {
+        "_plan_start_date",
+        "plan_start_date",
+        "generation_mode",
+        "session_id",
+        "user_id",
+        "total_days_requested",
+        "country",
+    }
+    for key, value in health_profile.items():
+        if not key.startswith("_") and key not in _protected_keys:
+            form_data[key] = value
+    return form_data
+
+
 @_with_worker_metrics
 def process_plan_chunk_queue(target_plan_id=None):
     """Worker que genera las semanas 2-N de planes de largo plazo. Corre cada minuto vía APScheduler.
@@ -30003,15 +30028,9 @@ __PLAN_MODE_GATE__
                     # Inyectar perfil en vivo para que los chunks asincronicos usen el objetivo (goal), peso, alergias y budget actualizados.
                     # Se protegen variables internas de generacion como _days_offset.
                     if chunk_health_profile:
-                        # [GAP 5] Blindar ambas variantes de plan_start_date para que el merge
-                        # de health_profile NO pise la fecha canonica guardada en form_data.
-                        _protected_keys = {
-                            '_plan_start_date', 'plan_start_date',
-                            'generation_mode', 'session_id', 'user_id', 'total_days_requested',
-                        }
-                        for k, v in chunk_health_profile.items():
-                            if not k.startswith('_') and k not in _protected_keys:
-                                form_data[k] = v
+                        # P1-COUNTRY-PLAN-VS-PERFIL-EN-BLOQUES: el perfil vivo actualiza
+                        # objetivos/señales, pero no la identidad del plan ya encolado.
+                        form_data = _merge_chunk_live_profile(form_data, chunk_health_profile)
 
                     form_data = _refresh_chunk_pantry(user_id, form_data, snapshot_form_data, task_id=task_id, week_number=week_number)
                     if form_data.get("_pantry_paused"):

@@ -43,6 +43,7 @@ disponible, nunca falla por infraestructura ausente.
 """
 from __future__ import annotations
 
+import ast
 import importlib.util
 import json
 import logging
@@ -1887,24 +1888,31 @@ def test_build_filtered_edge_recipe_day_gana_country_default_do():
 
 
 def test_edge_recipe_country_derivado_una_vez_y_reusado_en_los_4_callsites():
-    """[T5 · patrón T2] `_edge_recipe_country` se deriva UNA vez (`country_for_form_data(form_data)`)
-    y se reusa en los 4 call sites de `_build_filtered_edge_recipe_day` de este bloque del chunk
-    worker — no 4 derivaciones independientes que podrían driftar."""
+    """[Re-anclado] El país se deriva una vez para TODO el pantry guard y el
+    edge recipe reutiliza ese valor; no abre una segunda lectura que pueda driftar."""
     src = _sin_comentarios(_cron_tasks_source())
-    n_derivaciones = src.count("_edge_recipe_country = _country_for_form_data(form_data)")
-    assert n_derivaciones == 1, f"esperaba 1 derivación de _edge_recipe_country, hay {n_derivaciones}"
-    n_callsites = src.count("country=_edge_recipe_country,")
-    assert n_callsites == 4, f"esperaba 4 call sites usando _edge_recipe_country, hay {n_callsites}"
-    pos_derivacion = src.index("_edge_recipe_country = _country_for_form_data(form_data)")
-    for m in re.finditer(r"country=_edge_recipe_country,", src):
-        assert m.start() > pos_derivacion, "un call site usa _edge_recipe_country antes de derivarlo"
+    derivacion = "_pantry_guard_country = _country_for_pantry_guard(form_data)"
+    assert src.count(derivacion) == 1
+    assert src.count("_edge_recipe_country = _pantry_guard_country") == 1
+    tree = ast.parse(_cron_tasks_source())
+    edge_calls = [
+        node
+        for node in ast.walk(tree)
+        if isinstance(node, ast.Call)
+        and isinstance(node.func, ast.Name)
+        and node.func.id == "_build_filtered_edge_recipe_day"
+    ]
+    assert len(edge_calls) == 4
+    for call in edge_calls:
+        country_kw = next((kw.value for kw in call.keywords if kw.arg == "country"), None)
+        assert isinstance(country_kw, ast.Name) and country_kw.id == "_edge_recipe_country"
 
 
 def test_edge_recipe_country_usa_country_for_form_data_ssot():
     """La derivación debe pasar por la ÚNICA puerta de lectura de país (`country_for_form_data`),
     no leer `form_data['country']` crudo — knob apagado ⇒ siempre 'DO' (byte-identidad)."""
     src = _sin_comentarios(_cron_tasks_source())
-    assert "from constants import country_for_form_data as _country_for_form_data" in src
+    assert "from constants import country_for_form_data as _country_for_pantry_guard" in src
 
 
 # ── H12-H13. _culinary_judge_rubric_for_country / _dish_templates_path_for_country ─────────────
@@ -2002,10 +2010,11 @@ def test_el_mismo_dia_es_hard_para_do_control_de_que_el_mecanismo_discrimina(go,
     assert duras, "país DO debe seguir produciendo violaciones HARD (byte-identidad del mecanismo T4)"
 
 
-def test_dia_es_con_knob_apagado_es_byte_identico_a_do_ignora_country_form_data(go):
+def test_dia_es_con_knob_apagado_es_byte_identico_a_do_ignora_country_form_data(monkeypatch, go):
     """Control de byte-identidad: SIN monkeypatch del knob (default apagado en este proceso de
     test), el mismo día con `form_data={'country': 'ES'}` debe comportarse EXACTAMENTE como DO
     — `country_for_form_data` no lee el campo `country` en absoluto con el knob apagado."""
+    monkeypatch.setenv("MEALFIT_COUNTRY_SYSTEM", "false")
     dias = _dia_es_con_paella_en_desayuno()
     violaciones_es_knob_off = go._detect_slot_appropriateness(dias, {"country": "ES"})
     violaciones_do = go._detect_slot_appropriateness(dias, {"country": "DO"})

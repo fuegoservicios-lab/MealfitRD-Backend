@@ -6334,7 +6334,7 @@ def _pantry_sufficiency_gate_on() -> bool:
     return os.environ.get("MEALFIT_PANTRY_SUFFICIENCY_GATE", "false").strip().lower() in ("1", "true", "yes", "on")
 
 
-def _enrich_clinical_from_profile(data: dict, user_id: str) -> None:
+def _enrich_clinical_from_profile(data: dict, user_id: str) -> dict:
     """[P0-UPDATE-CLINICAL-GUARD · 2026-06-23] Enriquece `data` IN-PLACE con los campos clínicos
     leídos SERVER-SIDE desde health_profile (allergies UNIONADAS body+perfil + dietType), para que
     `swap_meal` (y por herencia `regenerate-day`, que hace loop de swaps) corra su backstop
@@ -6347,7 +6347,7 @@ def _enrich_clinical_from_profile(data: dict, user_id: str) -> None:
     backstop determinista de swap_meal sigue corriendo con lo que haya).
     tooltip-anchor: P0-UPDATE-CLINICAL-GUARD"""
     if not user_id or user_id == "guest" or not isinstance(data, dict):
-        return
+        return {}
     try:
         from db import get_user_profile
         hp = (get_user_profile(user_id) or {}).get("health_profile") or {}
@@ -6439,8 +6439,47 @@ def _enrich_clinical_from_profile(data: dict, user_id: str) -> None:
                         "weightUnit", "goal", "mainGoal", "bodyFat"):
                 if data.get(_bk) in (None, "", 0) and hp.get(_bk) not in (None, ""):
                     data[_bk] = hp.get(_bk)
+        return hp
     except Exception as _enrich_e:
         logger.warning(f"⚠️ [P0-UPDATE-CLINICAL-GUARD] enrich perfil falló (no bloquea): {_enrich_e}")
+        return {}
+
+
+def _load_swap_plan_country_stub(user_id: str, plan_id: Optional[str] = None) -> dict:
+    """[P1-COUNTRY-PLAN-VS-PERFIL-EN-BLOQUES · 2026-08-23]
+    Lee sólo el sello de país del plan que va a mutarse.
+
+    La ruta con ``plan_id`` siempre filtra también por propietario. Clientes legacy
+    sin id usan el plan más reciente, igual que las señales same-day del swap.
+    Fail-open a ``{}``: ``country_for_plan`` hará fallback al perfil en planes legacy.
+    """
+    if not user_id or user_id == "guest":
+        return {}
+    try:
+        from db_core import execute_sql_query as _exq_swap_country
+
+        if plan_id and isinstance(plan_id, str):
+            row = _exq_swap_country(
+                "SELECT plan_data->>'_country' AS plan_country "
+                "FROM meal_plans WHERE id = %s AND user_id = %s",
+                (plan_id, user_id),
+                fetch_one=True,
+            )
+        else:
+            row = _exq_swap_country(
+                "SELECT plan_data->>'_country' AS plan_country "
+                "FROM meal_plans WHERE user_id = %s ORDER BY created_at DESC LIMIT 1",
+                (user_id,),
+                fetch_one=True,
+            )
+        raw = row.get("plan_country") if isinstance(row, dict) else None
+        return {"_country": raw} if raw else {}
+    except Exception as _country_e:
+        logger.debug(
+            "[P1-COUNTRY-PLAN-VS-PERFIL-EN-BLOQUES] no se leyó sello del swap: "
+            f"{type(_country_e).__name__}: {_country_e}"
+        )
+        return {}
 
 
 def _same_day_other_meals_for_swap(user_id, rejected_meal):
@@ -6680,7 +6719,20 @@ def api_swap_meal(background_tasks: BackgroundTasks, data: dict = Body(...), ver
         # [P0-UPDATE-CLINICAL-GUARD · 2026-06-23] Enriquecer allergies/diet SERVER-SIDE desde el
         # perfil ANTES del gate de suficiencia y del swap → el backstop clínico de swap_meal corre
         # contra la verdad del perfil, no contra el body (cierra la ventana stale post-login).
-        _enrich_clinical_from_profile(data, user_id)
+        _swap_health_profile = _enrich_clinical_from_profile(data, user_id)
+        if user_id and user_id != "guest":
+            # [P1-COUNTRY-PLAN-VS-PERFIL-EN-BLOQUES · 2026-08-23] El plato se
+            # genera para el país DEL PLAN. El perfil vivo sólo manda si el plan
+            # es legacy y aún no trae sello.
+            from constants import country_for_plan as _cfp_swap_generate
+            _swap_plan_stub = _load_swap_plan_country_stub(
+                user_id,
+                data.get("plan_id"),
+            )
+            data["country"] = _cfp_swap_generate(
+                _swap_plan_stub,
+                _swap_health_profile,
+            )
 
         rejected_meal = data.get("rejected_meal")
         meal_type = data.get("meal_type", "")
@@ -7190,7 +7242,8 @@ def api_swap_meal_persist(
     from db_plans import update_plan_data_atomic
     try:
         owner = execute_sql_query(
-            "SELECT id FROM meal_plans WHERE id = %s AND user_id = %s",
+            "SELECT id, plan_data->>'_country' AS plan_country "
+            "FROM meal_plans WHERE id = %s AND user_id = %s",
             (plan_id, verified_user_id),
             fetch_one=True,
         )
@@ -7208,6 +7261,7 @@ def api_swap_meal_persist(
         _persist_allergies: list = []
         _persist_diet = None
         _swap_country = "DO"
+        _hp_micro = {}
         # [P1-PLAN-DISPLAY-I18N-MUTATOR-swap] locale del usuario para el despacho de
         # re-enriquecimiento post-persist (abajo, fuera del lock). Se hidrata del MISMO
         # round-trip que `_micro_form` (`_gup_micro(verified_user_id)` ya trae `locale`
@@ -7255,16 +7309,18 @@ def api_swap_meal_persist(
             # backstop clínico de abajo — nunca del body del cliente (espejo de I2 / P0-UPDATE-CLINICAL-GUARD).
             _persist_allergies = [str(a).strip() for a in (_hp_micro.get("allergies") or []) if str(a).strip()]
             _persist_diet = _hp_micro.get("dietType") or _hp_micro.get("diet_type")
-            # [P1-COUNTRY-SYSTEM-F2 · 2026-08-17 (Task 9, g)] Resuelto UNA vez aquí (fuera del
-            # lock, patrón `_micro_form`) y capturado por closure en `_swap_mutator` — cierra el
-            # gap disclosed en T4 fix-round 1 (docs/country_system_f1.md, "MUTATOR-PURITY").
-            # `country_for_form_data` es pure-compute (no toca DB), pero el VALOR que consume
-            # (`_micro_form['country']`) solo existe tras el SELECT de arriba — de ahí que se
-            # derive aquí y no como default de parámetro.
-            from constants import country_for_form_data as _cffd_swap
-            _swap_country = _cffd_swap(_micro_form)
         except Exception as _micro_form_e:
             logger.debug(f"[P2-SWAP-MICROS-STALE] no se pudo hidratar _micro_form: {_micro_form_e}")
+
+        # [P1-COUNTRY-PLAN-VS-PERFIL-EN-BLOQUES · 2026-08-23] Resuelto una
+        # vez ANTES del lock: el sello del plan gana al país vivo del perfil.
+        # Si el plan es legacy, country_for_plan conserva el fallback histórico.
+        from constants import country_for_plan as _cfp_swap_persist
+        _swap_country = _cfp_swap_persist(
+            {"_country": owner.get("plan_country")},
+            _hp_micro,
+        )
+        _micro_form["country"] = _swap_country
 
         # [P0-SWAP-PERSIST-CLINICAL · 2026-07-01] (audit P0-3) `/swap-meal/persist` era la ÚNICA superficie de
         # update con round-trip CLIENTE entre la generación validada y la persistencia: el body `new_meal` se
