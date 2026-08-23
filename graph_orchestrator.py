@@ -5314,6 +5314,26 @@ _BETA_CATALOG_DO_EXCLUSIVE_NAMES = frozenset({
     "Mapuey",
 })
 
+# [P1-COUNTRY-CATALOG-FILAS-GEMELAS · 2026-08-23] Fase 2 añadió
+# regionalismos como filas nuevas aunque el alimento ya tenía una fila canónica
+# comprable. Las dos identidades deben sobrevivir para planes/neveras históricas,
+# pero un catálogo CERRADO no puede ofrecer ambas y provocar compra doble.
+# Se oculta sólo la alta redundante en el país que la introdujo; el agregador
+# global sigue reconociéndola si un plan vivo ya la nombra.
+_COUNTRY_CATALOG_SHADOWED_TWINS = {
+    "ES": frozenset({"Judías pintas", "Judías blancas", "Requesón", "Gambas"}),
+}
+
+
+def _verified_catalog_name_allowed_for_country(name: str, country: str) -> bool:
+    """Filtro display-only del catálogo cerrado; jamás renombra ni borra filas."""
+    clean_name = str(name or "").strip()
+    if country == "DO":
+        return True
+    if clean_name in _BETA_CATALOG_DO_EXCLUSIVE_NAMES:
+        return False
+    return clean_name not in _COUNTRY_CATALOG_SHADOWED_TWINS.get(country, frozenset())
+
 
 def _patron_termino_alergeno(termino: str) -> str:
     """Regex con frontera y plural español para un término clínico normalizado.
@@ -5431,9 +5451,8 @@ def _get_verified_catalog_instruction(form_data=None) -> str:
             _iccui = None
 
         def _vc_comprable(r) -> bool:
-            if (_vc_beta
-                    and str(r.get("name") or "").strip()
-                    in _BETA_CATALOG_DO_EXCLUSIVE_NAMES):
+            if not _verified_catalog_name_allowed_for_country(
+                    str(r.get("name") or ""), _vc_country):
                 return False
             if (r.get("price_per_lb") or 0) > 0 or (r.get("price_per_unit") or 0) > 0:
                 return True
