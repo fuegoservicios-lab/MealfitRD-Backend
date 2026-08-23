@@ -127,9 +127,63 @@ def test_el_campo_embebido_sigue_ganando():
 
 def test_el_pdf_construye_el_indice_y_lo_pasa():
     dash = _sin_comentarios(_leer(_FRONT / "src" / "pages" / "Dashboard.jsx"))
-    assert "buildGlossIndex(getCachedMasterList()" in dash, (
+    # [P1-I18N-GLOSS-CACHE-FRIA · 2026-08-23] El índice se construye del catálogo en memoria
+    # o se lee de la caché persistida (`getCachedGlossIndex`) cuando la memoria está fría:
+    # cualquiera de las dos formas es «construir el índice».
+    assert "buildGlossIndex(" in dash and "getCachedGlossIndex()" in dash, (
         f"el PDF dejó de construir el índice de gloss [{_MARKER}]"
     )
     assert "_dashLocale, _glossIdx)" in dash, (
         "el índice se construye pero no llega al gloss: existe y no sirve"
     )
+
+
+# ─────────── [P3-I18N-GATE-HTML-CIEGO-A-LA-PROSA-PEGADA-A-INTERPOLACION · 2026-08-23] ───────────
+# La regla miraba cada `quasi` por separado y la forma de casi todas las líneas del PDF es
+# `<td>${qty} unidades de ${name}</td>`: « unidades de » no tiene etiqueta a ningún lado y
+# las etiquetas viven en otros quasis. Ahora se reconstruye el esqueleto del template.
+# Medido al cerrarlo: 0 hallazgos en el árbol (el copy del PDF ya pasa por `t()` dentro de
+# las interpolaciones) — era un riesgo, y se fija por INYECCIÓN, no por lectura.
+
+import json
+import shutil
+import subprocess
+
+
+def _detectar(fuente: str) -> list:
+    if shutil.which("node") is None:
+        pytest.skip("node no está en PATH")
+    tmp = _FRONT / "scripts" / "_t_p3_gate_html_interp.mjs"
+    tmp.write_text(
+        "import { detectarEnFuente } from './i18n-sin-envolver.mjs';\n"
+        f"console.log(JSON.stringify(detectarEnFuente({json.dumps(fuente)})));\n",
+        encoding="utf-8",
+    )
+    try:
+        r = subprocess.run(["node", str(tmp)], cwd=str(_FRONT), capture_output=True,
+                           text=True, encoding="utf-8", errors="replace")
+    finally:
+        tmp.unlink(missing_ok=True)
+    assert r.returncode == 0, r.stderr
+    return json.loads(r.stdout.strip().splitlines()[-1])
+
+
+def test_la_prosa_pegada_a_una_interpolacion_se_ve():
+    fuente = (
+        "export function fila(qty, name, total) {\n"
+        "  return `<tr><td>${qty} unidades de ${name}</td><td>Total estimado: ${total}</td></tr>`;\n"
+        "}\n"
+    )
+    textos = sorted(h["texto"] for h in _detectar(fuente) if h["posicion"] == "html-en-plantilla")
+    assert textos == ["Total estimado:", "unidades de"], (
+        f"la prosa pegada a `${{…}}` sigue siendo invisible: {textos} [{_MARKER}]")
+
+
+def test_el_copy_que_ya_pasa_por_t_no_se_reporta():
+    """CONTROL: la forma REAL del PDF de hoy."""
+    fuente = (
+        "export function fila(qty, name, t) {\n"
+        "  return `<tr><td>${qty} ${t('unidades de')} ${name}</td><td>${t('Total estimado:')} ${total}</td></tr>`;\n"
+        "}\n"
+    )
+    assert [h for h in _detectar(fuente) if h["posicion"] == "html-en-plantilla"] == []
