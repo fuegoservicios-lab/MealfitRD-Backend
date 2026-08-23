@@ -282,20 +282,29 @@ cero traducciones.**
 
 1. **El contenido de cada comida no tenía defensa contra ecos.** `P2-DISPLAY-ECO-NOMBRE`
    cubría el nombre del PLAN; `_validate_and_build_display` comprobaba tipos y longitudes y
-   nada más. Ahora se juzga por la DESCRIPCIÓN —un nombre puede coincidir legítimamente
-   entre idiomas, una frase entera no— y un lote sin traducir se descarta en vez de
-   persistirse.
+   nada más. Ahora se exigen DOS señales: nombre Y descripción idénticos. Una sola es
+   evidencia débil —un nombre puede coincidir legítimamente entre idiomas (una marca,
+   «Mangú») y una descripción muy corta también—, y juzgar por una sola rompió siete casos
+   legítimos de `P3-DISPLAY-SUBSTRING-FRONTERA`, donde la descripción es un marcador de
+   posición compartido y lo que se prueba es el fallback POR LÍNEA de los ingredientes. Que
+   los dos campos sobrevivan intactos es otra cosa: es el lote sin traducir, que es
+   exactamente lo que se midió en producción.
 
 2. **El gate de «ya traducido» no reconocía un eco** [`P1-DISPLAY-ECO-PERSISTIDO`], así que
    uno que entrara por cualquier vía quedaba permanente. Había uno VIVO en el único plan con `_display`:
    `fr-FR → "Sazón Fuerte, Vida en Equilibrio"`, el español tal cual, mientras en-US y pt-BR
    sí estaban traducidos.
 
-3. **La poda de idiomas tiraba trabajo pagado** [`P1-DISPLAY-PODA-TIRA-TRABAJO-PAGADO`]. El
-   tope era `2` clavado y la app traduce a
-   cuatro idiomas: el plan entró con tres locales y salió con dos. Ahora es knob
-   (`MEALFIT_PLAN_DISPLAY_I18N_MAX_LOCALES`, default 4 = el máximo posible), así que deja de
-   descartar en uso normal y vuelve a ser lo que debía: una red contra claves inesperadas.
+3. **La poda descarta trabajo pagado, y es a propósito**
+   [`P1-DISPLAY-PODA-TIRA-TRABAJO-PAGADO`]. El plan entró con tres locales y salió con dos.
+   Llegué a subir el tope de 2 a 4 y **estaba mal**: `P2-DISPLAY-RETENCION-LOCALES` ya pesó
+   las dos presiones —re-pagar la traducción entera al alternar contra un jsonb de cientos
+   de KB, ~60 KB por idioma en un plan de 30 días— y dejó escrito que «2 es donde se
+   cruzan». Revertido al 2.
+
+   Lo que queda es lo que sí faltaba: el umbral es ahora un KNOB
+   (`MEALFIT_PLAN_DISPLAY_I18N_MAX_LOCALES`, default 2), movible sin redeploy en cualquiera
+   de las dos direcciones si los datos reales dicen otra cosa.
 
 **Por qué ningún test lo veía:** todos usan dobles que devuelven texto traducido POR
 CONSTRUCCIÓN. La pregunta «¿y si el modelo devuelve el original?» no se le hacía a nadie.

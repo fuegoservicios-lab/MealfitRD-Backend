@@ -37,11 +37,19 @@ LOS TRES
    Ese `fr-FR` llevaba ahí desde antes del fix y **nadie lo iba a reintentar jamás**. Un eco
    persistido es peor que una ausencia: la ausencia se reintenta sola.
 
-3. **La poda de idiomas tiraba trabajo pagado.** El tope era `2` clavado, y la app traduce a
-   cuatro idiomas, así que el tercero que un usuario visitara borraba al primero. En el plan
-   real: entró con tres locales y salió con dos — el `en-US`, con sus insights, desapareció
-   sin aviso. El argumento del tope («el jsonb crece») era cierto pero incompleto: lo que se
-   evacúa no es basura, es dinero gastado que hay que volver a gastar.
+3. **La poda de idiomas descarta trabajo pagado — y es a propósito.** El plan real entró con
+   tres locales y salió con dos: el `en-US`, con sus insights, desapareció sin aviso.
+
+   Llegué a subir el tope de 2 a 4. **Estaba mal**, y es la segunda vez el mismo día que
+   reviertía una decisión sin leer su razonamiento: `P2-DISPLAY-RETENCION-LOCALES` pesó
+   explícitamente las dos presiones —re-pagar la traducción entera al alternar idiomas
+   contra un jsonb que va «de cientos de KB a MB», ~60 KB por idioma en un plan de 30
+   días— y dejó escrito que «2 es donde se cruzan». La pérdida es el coste conocido de esa
+   decisión, no un descuido.
+
+   Lo que sí faltaba y queda: que el umbral sea un KNOB. Era una constante, así que mover el
+   equilibrio exigía redeploy — y es justo el tipo de número que se querría ajustar mirando
+   datos reales.
 
 tooltip-anchor: P1-DISPLAY-ECO-CONTENIDO
 """
@@ -143,13 +151,23 @@ def test_sin_el_original_el_gate_degrada_a_la_conducta_previa():
 
 # ───────────────── 3. la poda no tira trabajo pagado ─────────────────
 
-def test_los_cuatro_idiomas_traducibles_caben():
+def test_el_tope_de_idiomas_sigue_siendo_dos_por_decision():
+    """El tope NO se subió, y esa es la corrección de este P-fix.
+
+    Ver la ejecución real destapó que un plan con tres idiomas sale con dos y pierde el
+    primero — trabajo ya pagado al proveedor. La observación es correcta; la conclusión de
+    subir el tope, no: `P2-DISPLAY-RETENCION-LOCALES` pesó explícitamente las dos presiones
+    (re-pagar traducciones contra un jsonb que va «de cientos de KB a MB», ~60 KB por idioma
+    en un plan de 30 días) y dejó escrito que «2 es donde se cruzan».
+
+    O sea que la pérdida es el COSTE CONOCIDO de una decisión tomada, no un descuido — y
+    revertirla no le toca a un arreglo de traducciones. Lo que sí faltaba, y queda, es que el
+    umbral sea movible sin redeploy.
+    """
     import plan_display_i18n as m
-    tres = {"en-US": {"name": "A"}, "fr-FR": {"name": "B"}, "pt-BR": {"name": "C"}}
-    quedan = m._podar_locales(dict(tres), "fr-FR")
-    assert set(quedan) == set(tres), (
-        "la poda volvió a descartar un idioma ya traducido. Lo que evacúa no es basura: es "
-        f"trabajo pagado al proveedor que hay que volver a pagar [{_MARKER}]"
+    assert m._max_locales_display() == 2, (
+        "el tope de idiomas dejó de ser 2. Si es deliberado, actualiza también "
+        f"`P2-DISPLAY-RETENCION-LOCALES`, que es donde vive el razonamiento [{_MARKER}]"
     )
 
 

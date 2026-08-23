@@ -1219,28 +1219,25 @@ def _max_invocaciones_por_ciclo(n_lotes_iniciales: int) -> int:
 # El activo NUNCA se poda; se descarta el resto por orden de inserción, que en un dict
 # de Python es el orden en que se visitaron.
 def _max_locales_display() -> int:
-    """Cuántos idiomas conserva el `_display` de un plan.
+    """Cuántos idiomas conserva el `_display` de un plan. Default **2**, a propósito.
 
-    [P1-DISPLAY-PODA-TIRA-TRABAJO-PAGADO · 2026-08-23] Era `2`, clavado, y eso GARANTIZA
-    descartar traducciones ya pagadas.
+    [P2-DISPLAY-RETENCION-LOCALES · 2026-08-21] El 2 no es arbitrario y su razonamiento está
+    escrito: desalojar el idioma anterior obligaría a re-pagar la traducción entera cada vez
+    que alguien alterna entre dos, y conservarlos todos multiplica por cinco un jsonb que ya
+    va «de cientos de KB a MB» (~60 KB por idioma en un plan de 30 días). Dos es donde se
+    cruzan las dos presiones: cubre el ir y venir real y acota el crecimiento a 2×.
 
-    La app traduce a cuatro idiomas (es-DO es la base y nunca lleva `_display`), así que un
-    tope de 2 significa que el tercer idioma que un usuario visite borra al primero. MEDIDO
-    ejecutando contra un plan real de producción: tenía `en-US`, `fr-FR` y `pt-BR`, y una
-    sola pasada dejó dos — el `Strong Flavor, Life in Balance` de en-US, con sus insights,
-    desapareció sin aviso.
+    [P1-DISPLAY-PODA-TIRA-TRABAJO-PAGADO · 2026-08-23] Llegué a subirlo a 4 tras ver, en una
+    ejecución contra un plan REAL, que un plan con tres idiomas salía con dos y perdía el
+    `en-US` con sus insights. La observación es correcta —se descarta trabajo pagado— pero la
+    conclusión no: eso es el COSTE CONOCIDO de la decisión de arriba, no un descuido. Subir
+    el tope revierte un cruce que alguien ya calculó, y no me toca a mí.
 
-    El argumento del tope era «el jsonb crece y nadie lo evacua». Es cierto, pero incompleto:
-    lo que se evacúa aquí no es basura, es trabajo que se le pagó al proveedor y que hay que
-    volver a pagar si el usuario regresa a ese idioma. Un tope por debajo del máximo posible
-    convierte cada visita en un coste recurrente.
-
-    Por defecto 4 = todo lo que puede existir, o sea: el tope deja de descartar en uso normal
-    y pasa a ser lo que debía ser, una red contra claves inesperadas. Y es knob para poder
-    bajarlo sin redeploy si algún plan se vuelve problemático — la convención del repo para
-    exactamente este caso.
+    Lo que sí faltaba y queda: que sea un KNOB. Antes era una constante, así que ajustar el
+    equilibrio exigía redeploy — y este es justo el tipo de umbral que se querría mover
+    mirando datos reales. Ahora se mueve sin desplegar, en cualquiera de las dos direcciones.
     """
-    return max(1, _env_int("MEALFIT_PLAN_DISPLAY_I18N_MAX_LOCALES", 4))
+    return max(1, _env_int("MEALFIT_PLAN_DISPLAY_I18N_MAX_LOCALES", 2))
 
 
 def _podar_locales(disp_map: dict, activo: str) -> dict:
@@ -1335,8 +1332,21 @@ def _validate_and_build_display(original: dict, item: dict) -> Optional[dict]:
     # Se juzga por la DESCRIPCIÓN y no por el nombre: un nombre puede coincidir
     # legítimamente entre idiomas (una marca, un sustantivo propio como «Mangú»), pero una
     # frase entera que sobrevive intacta a un cambio de idioma no es una traducción.
+    # Se exigen DOS señales, no una. Un solo campo idéntico es evidencia débil: el nombre
+    # puede coincidir legítimamente entre idiomas (una marca, «Mangú») y una descripción muy
+    # corta también (un «Desc.» de una palabra, o un plato descrito con un solo sustantivo).
+    # Que el nombre Y la descripción sobrevivan los dos intactos es otra cosa: es el lote sin
+    # traducir, que es justo lo que se midió en producción — allí echaban name, description,
+    # ingredientes y receta a la vez.
+    #
+    # Descartar por una sola señal rompía siete casos legítimos de
+    # `P3-DISPLAY-SUBSTRING-FRONTERA`, donde la descripción es un marcador de posición
+    # compartido y lo que se está probando es el fallback POR LÍNEA de los ingredientes.
     _desc_original = original.get("description") or ""
-    if _desc_original.strip() and _eco_del_original(description, _desc_original):
+    _nombre_original = original.get("name") or ""
+    if (_desc_original.strip() and _nombre_original.strip()
+            and _eco_del_original(description, _desc_original)
+            and _eco_del_original(name, _nombre_original)):
         return None
 
     final_ingredients = []
