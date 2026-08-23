@@ -848,10 +848,11 @@ def build_vision_context(vision) -> str:
         "tiene registrada la comida principal de esta hora (ej: si ya cenó), NO le preguntes si esto "
         "es su cena, asume que es un snack extra o pregúntale por qué está comiendo algo adicional; "
         "si NO tiene nada registrado para esta hora, entonces SÍ pregúntale brevemente si esta foto "
-        "corresponde a su comida del momento (ej: su cena). Si el usuario confirma que se la comió, "
-        "registra con log_consumed_meal usando los macros del análisis, pasando meal_type; si dice "
-        "que fue de OTRO día (ej: 'es el almuerzo de ayer'), pasa también days_ago (1=ayer) para que "
-        "NO cuente en las macros de hoy. Sólo responde directo y conversacional."
+        "corresponde a su comida del momento (ej: su cena). [P1-CHAT-ACT-DONT-ASK] Si el usuario ya "
+        "dijo en pasado que se la comió ('me comí esto', 'fue mi cena'), esa frase ES la confirmación: "
+        "registra EN ESE TURNO con log_consumed_meal usando los macros del análisis, pasando "
+        "meal_type; si dice que fue de OTRO día (ej: 'es el almuerzo de ayer'), pasa también days_ago "
+        "(1=ayer) para que NO cuente en las macros de hoy. Sólo responde directo y conversacional."
     )
 
 
