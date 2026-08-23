@@ -22,6 +22,16 @@
 | `MEALFIT_PLAN_DISPLAY_I18N` | `true` | Apaga el motor de traducción y el attach de `display_name_en` en el aggregator (FF-6). **No es «total»** — ver «Qué apaga el kill switch, y qué NO» |
 | `MEALFIT_PLAN_DISPLAY_I18N_MODEL` | flash | modelo del enriquecimiento |
 | `MEALFIT_PLAN_DISPLAY_I18N_BATCH_DAYS` | 4 | días por llamada (evita truncamiento) |
+| `MEALFIT_PLAN_DISPLAY_I18N_TIMEOUT_S` | 60 | timeout del cliente LLM por lote |
+| `MEALFIT_PLAN_DISPLAY_I18N_MAX_OUTPUT_TOKENS` | 8000 | cota de salida por lote, clamp [500, 32000] |
+| `MEALFIT_PLAN_DISPLAY_I18N_MAX_INFLIGHT` | 4 | techo de hilos de enriquecimiento por proceso — ver «El techo de hilos» |
+| `MEALFIT_PLAN_DISPLAY_I18N_MAX_LOCALES` | 2 | idiomas que conserva el `_display` de un plan; el activo nunca se poda — ver «Poda de idiomas» |
+
+[P3-I18N-DISPLAY-KNOBS-TODOS-EN-EL-REGISTRY · 2026-08-23] Esta tabla listaba **3 de los 7** y
+el bloque que los declara en el import enumeraba 5. No fue descuido: el bloque vivía antes
+de que `MAX_INFLIGHT` y `MAX_LOCALES` estuvieran definidos, así que **por orden** no podía
+incluirlos, y volvería a pasar con el octavo. Se movió al final del módulo y el guard ya no
+enumera nada: deriva los knobs del propio fuente y los compara con el registry vivo.
 
 Costo: a `llm_usage_events` con `node="plan_display_i18n"` — JAMÁS a `api_usage` (cero crédito del usuario).
 
@@ -320,3 +330,26 @@ Todo lo de arriba está verificado por tests y **ninguna cantidad de tests verde
 cerrar esa pregunta**: los tests miden el archivo, no el mundo. La condición de salida es
 una ejecución real por idioma contra un plan real. Hasta entonces, cada afirmación de esta
 doc sobre el comportamiento en vivo es una afirmación sobre el código, no sobre producción.
+
+### Las dos defensas que faltaban en la misma función (2026-08-23)
+
+**Insights sin red contra el eco.** [P1-I18N-DISPLAY-INSIGHTS-SIN-DEFENSA-DE-ECO] La misma
+llamada al LLM produce tres cosas —el `_display` de cada comida, el nombre del plan y los
+`insights`— y las dos primeras ganaron defensa contra el ECO (el modelo devuelve el español
+tal cual) el 21 y el 23 de agosto. Los insights, el tercer campo del mismo contrato JSON
+escrito por el mismo `_persist_batch`, no la tuvieron nunca: `_validate_insights` recibía
+`original` y sólo lo usaba para comparar la longitud. Es el único de los tres que, una vez
+persistido el eco, no se reparaba solo: `_insights_already_translated` decía «ya está» y el
+panel «Diagnóstico / Plan de Acción / Tip del Chef» se quedaba en español para siempre.
+Ahora las dos mitades espejan a las del nombre del plan: el validador descarta el lote
+entrante si **todas** las líneas son eco (dos señales, no una — una línea puede coincidir
+legítimamente), y el gate de «ya traducido» deja de dar por bueno un eco persistido, para
+que los planes que lo guardaron antes se reparen solos.
+
+**Poda inerte en su valor mínimo.** [P2-I18N-DISPLAY-PODA-INERTE-EN-SU-VALOR-MINIMO]
+`_podar_locales` conservaba el activo más los `tope - 1` últimos con un slice
+`[-(tope - 1):]`, y con `tope = 1` eso es `lista[-0:]` — **la lista entera**, porque `-0 == 0`
+y el slice arranca por el principio. O sea que `MAX_LOCALES=1`, el valor al que recurre un
+operador cuando el jsonb se le está yendo, conservaba los cinco idiomas pareciendo que había
+hecho algo. El default 2 no se toca: sigue siendo el cruce calculado en la sección de
+retención. Sólo se arregla la aritmética del extremo.
