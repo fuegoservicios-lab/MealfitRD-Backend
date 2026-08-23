@@ -145,4 +145,6 @@ def test_wiring_resuelve_pais_antes_de_cosechar_sentimiento_y_normaliza_una_vez(
 
 def test_marker_movil_del_gap():
     app = (_BACKEND / "app.py").read_text(encoding="utf-8")
-    assert "P1-COACH-PERSONA-CURIOSIDAD-DO" in app
+    agent = (_BACKEND / "agent.py").read_text(encoding="utf-8")
+    assert '_LAST_KNOWN_PFIX = "P' in app and " · 2026-" in app
+    assert "P1-COACH-PERSONA-CURIOSIDAD-DO" in agent

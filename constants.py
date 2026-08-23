@@ -4304,6 +4304,28 @@ Guisos muy condensados de tubérculos y caldos grasos: digestión lenta.
 """
 
 
+def coach_country_context(country=None) -> str:
+    """Nombra el país al coach sin reutilizar la cabecera del planner.
+
+    [P1-COACH-COUNTRY-UNNAMED · 2026-08-23] La biblioteca beta habla de
+    «este país» y necesita un referente explícito. DO retorna ``""`` para
+    conservar el prompt histórico byte a byte. No inventa platos ni exige
+    nombres locales: orienta recomendaciones y términos devueltos por tools.
+    """
+    canon = canonicalize_country(country)
+    if canon == "DO":
+        return ""
+    name_es = (COUNTRY_PROFILES.get(canon) or {}).get("name_es")
+    if not name_es:
+        return ""
+    return (
+        f"\n🌍 PAÍS DEL USUARIO: {name_es}. Adapta tus recomendaciones a ingredientes, "
+        f"cortes y preparaciones cotidianos y disponibles en {name_es}. Si una herramienta "
+        "devuelve un término regional que pueda no reconocerse allí, explícalo antes de "
+        "recomendarlo.\n"
+    )
+
+
 def culinary_knowledge_base_for_country(country=None) -> str:
     """Biblioteca culinaria del coach segun el pais. DO devuelve el objeto de siempre."""
     try:

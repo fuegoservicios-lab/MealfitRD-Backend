@@ -82,4 +82,6 @@ def test_titulo_beta_nombra_su_contexto_y_no_hereda_referencias_do(monkeypatch, 
 
 def test_marker_movil_del_gap():
     app = (_BACKEND / "app.py").read_text(encoding="utf-8")
-    assert "P1-PLAN-TITLE-DO-CIEGO" in app
+    helpers = (_BACKEND / "ai_helpers.py").read_text(encoding="utf-8")
+    assert '_LAST_KNOWN_PFIX = "P' in app and " · 2026-" in app
+    assert "P1-PLAN-TITLE-DO-CIEGO" in helpers

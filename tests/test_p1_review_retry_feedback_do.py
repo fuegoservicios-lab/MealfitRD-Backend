@@ -125,4 +125,6 @@ def test_memoria_legacy_se_neutraliza_al_leer_sin_renombrar_alimentos():
 
 def test_marker_movil_del_gap():
     app = (_BACKEND / "app.py").read_text(encoding="utf-8")
-    assert "P1-REVIEW-RETRY-FEEDBACK-DO" in app
+    graph = (_BACKEND / "graph_orchestrator.py").read_text(encoding="utf-8")
+    assert '_LAST_KNOWN_PFIX = "P' in app and " · 2026-" in app
+    assert "P1-REVIEW-RETRY-FEEDBACK-DO" in graph

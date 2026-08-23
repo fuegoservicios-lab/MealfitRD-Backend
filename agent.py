@@ -11,7 +11,7 @@ logger = logging.getLogger(__name__)
 # [P3-CONSULTAR-DIA-USER-TODAY . 2026-08-22] Cuarta copia del 240 a mano: el fallback
 # de huso lee el SSOT que P3-TZ-FALLBACK-SSOT unifico.
 from constants import DEFAULT_TZ_OFFSET_MIN as _DEFAULT_TZ_OFFSET_MIN
-from constants import strip_accents, CULINARY_KNOWLEDGE_BASE, culinary_knowledge_base_for_country, validate_ingredients_against_pantry, _to_base_unit
+from constants import strip_accents, CULINARY_KNOWLEDGE_BASE, coach_country_context, culinary_knowledge_base_for_country, validate_ingredients_against_pantry, _to_base_unit
 # [P0-DEEPSEEK-MIGRATION · 2026-06-12] Gemini → DeepSeek con router por tier.
 from llm_provider import (ChatDeepSeek, DEEPSEEK_FLASH, GPT56_LUNA,
                           build_chat_llm, is_openai_model, resolve_model_for_user)
@@ -5904,6 +5904,7 @@ def chat_with_agent(session_id: str, prompt: str, current_plan: Optional[dict] =
     # `_chat_prompt_static_prefix`. Puro reorden; rama else = orden legacy.
     if _chat_prompt_static_prefix():
         system_prompt = CHAT_AGENT_INLINE_PROMPT
+        system_prompt += coach_country_context(_coach_country)
         system_prompt += f"\n{culinary_knowledge_base_for_country(_coach_country)}"
         system_prompt += build_tools_instructions(user_id, plan_en_pausa=bool(current_plan) and plan_vigente is None)
         # --- bloques dinámicos (volátiles) al final ---
@@ -5917,6 +5918,7 @@ def chat_with_agent(session_id: str, prompt: str, current_plan: Optional[dict] =
         system_prompt += build_temporal_context()
         system_prompt += build_circadian_context(schedule_type)
         system_prompt += build_temporal_proactive_context()
+        system_prompt += coach_country_context(_coach_country)
         system_prompt += f"\n{culinary_knowledge_base_for_country(_coach_country)}"
         if rag_context:
             system_prompt += f"\n{rag_context}"
@@ -6384,6 +6386,7 @@ def chat_with_agent_stream(session_id: str, prompt: str, current_plan: Optional[
     # (nota en chat_with_agent). Puro reorden; rama else = orden legacy.
     if _chat_prompt_static_prefix():
         system_prompt = _base_inline
+        system_prompt += coach_country_context(_coach_country)
         system_prompt += f"\n{culinary_knowledge_base_for_country(_coach_country)}"
         system_prompt += build_tools_instructions_stream(user_id, plan_en_pausa=bool(current_plan) and plan_vigente is None)
         # --- bloques dinámicos (volátiles) al final ---
@@ -6407,6 +6410,7 @@ def chat_with_agent_stream(session_id: str, prompt: str, current_plan: Optional[
         # 🎭 Inyectar personalidad adaptativa basada en el sentimiento detectado
         if sentiment_result.get("instruction"):
             system_prompt += f"\n\n{sentiment_result['instruction']}"
+        system_prompt += coach_country_context(_coach_country)
         system_prompt += f"\n{culinary_knowledge_base_for_country(_coach_country)}"
         if rag_context: system_prompt += f"\n{rag_context}"
         system_prompt += build_tools_instructions_stream(user_id, plan_en_pausa=bool(current_plan) and plan_vigente is None)

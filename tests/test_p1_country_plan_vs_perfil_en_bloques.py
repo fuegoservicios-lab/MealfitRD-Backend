@@ -102,4 +102,6 @@ def test_swap_carga_solo_el_sello_del_plan_y_respeta_ownership(monkeypatch):
 
 def test_marker_movil_del_gap():
     app = (_BACKEND / "app.py").read_text(encoding="utf-8")
-    assert "P1-COUNTRY-PLAN-VS-PERFIL-EN-BLOQUES" in app
+    cron = (_BACKEND / "cron_tasks.py").read_text(encoding="utf-8")
+    assert '_LAST_KNOWN_PFIX = "P' in app and " · 2026-" in app
+    assert "P1-COUNTRY-PLAN-VS-PERFIL-EN-BLOQUES" in cron
