@@ -394,3 +394,16 @@ Almendras» como palabra en la línea traducida, no lo encuentra, y la línea ca
 de cada cuatro líneas correctas se descartaba. El arreglo es de orden: paréntesis antes que
 conector.
 
+
+### La lectura que el blanket no veía (2026-08-23)
+
+**El blanket era ciego al SQL.** [P3-I18N-DISPLAY-BLANKET-CIEGO-AL-SQL] El guard de la
+frontera (`test_p3_i18n_backend_sin_blanket_de_display.py`) lee el AST de Python y una
+clave dentro de una cadena SQL no es una clave para el AST: `routers/user_data.py`
+proyectaba `plan_data->…->'_display'` en el disparador 4 (PATCH de `locale`) para decidir si
+re-despachar, en un fichero sin permiso, y el blanket lo daba por limpio. La consulta vive
+ahora aquí, en `active_plan_missing_locale(user_id, locale)` — al lado de las otras lecturas
+«¿ya está traducido?» — y el router sólo despacha. El detector cuenta además las cadenas con
+`->'_display'`/`->>'_display'` que parezcan SQL, el `pop` cuyo valor se USA (lo que destapó
+`db_plans.py`, que cuenta invalidaciones: permitido con razón), y dejó de escanear `venv/`
+(6.002 ficheros de terceros → 89).
