@@ -4999,17 +4999,26 @@ def test_f_wiring_review_plan_node_llama_al_helper():
 
 
 def test_f_wiring_deriva_pais_via_ssot_no_lector_crudo():
-    """El call site deriva `_rpn_country` vía `country_for_form_data(form_data)` (T1, la ÚNICA
-    puerta) — NO lee `form_data['country']`/`form_data.get('country')` crudo. Reusa el regex
-    re-anclado de F6 (`_FORM_SHAPE_COUNTRY_READ_RX`, este mismo archivo) para no duplicar el
-    patrón (y para probar en el mismo golpe que F6 no tiene falsos-negativos aquí)."""
-    cuerpo = _review_plan_node_slot_gate_cuerpo()
-    assert "country_for_form_data(form_data)" in cuerpo
-    sin_comentarios = "\n".join(l for l in cuerpo.splitlines() if not l.strip().startswith("#"))
-    from test_p1_country_system_f1 import _FORM_SHAPE_COUNTRY_READ_RX as _f6_rx
-    assert not _f6_rx.search(sin_comentarios), (
-        "el call site del gate de slot-appropriateness lee form_data/data['country'] crudo"
+    """[Re-anclado por P1-REVIEW-RETRY-FEEDBACK-DO] La derivación se movió al
+    tope del nodo para gobernar también los gates que preceden al de horario."""
+    source = (_BACKEND / "graph_orchestrator.py").read_text(encoding="utf-8")
+    tree = ast.parse(source)
+    fn = next(
+        node
+        for node in ast.walk(tree)
+        if isinstance(node, ast.AsyncFunctionDef) and node.name == "review_plan_node"
     )
+    assignments = [
+        node
+        for node in ast.walk(fn)
+        if isinstance(node, ast.Assign)
+        and any(isinstance(target, ast.Name) and target.id == "_rpn_country" for target in node.targets)
+    ]
+    assert len(assignments) == 1
+    value = assignments[0].value
+    assert isinstance(value, ast.Call)
+    assert isinstance(value.func, ast.Name) and value.func.id == "country_for_form_data"
+    assert len(value.args) == 1 and isinstance(value.args[0], ast.Name) and value.args[0].id == "form_data"
 
 
 def test_f_wiring_marker_beta_early_solo_si_no_es_final():

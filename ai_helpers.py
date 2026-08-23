@@ -1066,6 +1066,29 @@ def _rotate_pairs(items, days: int = 3):
     return [(base[i % n], base[(i + 1) % n]) for i in range(days)]
 
 
+def _country_safe_reviewer_memory(value, country: str) -> str:
+    """[P1-REVIEW-RETRY-FEEDBACK-DO · 2026-08-23]
+    Neutraliza sólo la familia legacy de horario ``es-DO`` al leerla en beta.
+
+    Las filas quedan intactas en producción. No se hace reemplazo global de
+    gentilicios porque ``rejection_patterns`` también guarda nombres de platos:
+    «Longaniza dominicana» es un identificador de alimento, no prosa del reviewer.
+    """
+    text = str(value or "")
+    from constants import canonicalize_country
+
+    if canonicalize_country(country) == "DO":
+        return text
+    if "rechazo de coherencia cultural es-do" not in text.lower():
+        return text
+    day_match = re.search(r"(?i)D[íi]a\s+(\d+)", text)
+    day_text = f" Día {day_match.group(1)}." if day_match else ""
+    return (
+        "COMIDA FUERA DE HORARIO (memoria histórica neutralizada):"
+        f"{day_text} Cambia el plato por una opción propia de ese horario."
+    )
+
+
 def get_deterministic_variety_prompt(history_text: str, form_data: dict = None, user_id: str = None,
                                      rejection_reasons: list = None,
                                      out_assignment: dict = None,
@@ -2381,7 +2404,7 @@ def get_deterministic_variety_prompt(history_text: str, form_data: dict = None, 
                 if persisted_rejections:
                     blocked_text += "\n\n🧠 [MEMORIA DEL REVISOR MÉDICO - EVITA ESTOS ERRORES HISTÓRICOS]:"
                     for r in persisted_rejections[-5:]: # Solo los últimos 5 para no sobrecargar el prompt
-                        blocked_text += f"\n - {r}"
+                        blocked_text += f"\n - {_country_safe_reviewer_memory(r, _variety_country)}"
         except Exception as _rej_exc:
             # [P2-SILENT-DEGRADATION · 2026-05-13] DB blip / pool exhaustion:
             # el agente pierde memoria histórica de rechazos del Revisor Médico

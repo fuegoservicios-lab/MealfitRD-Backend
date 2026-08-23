@@ -41223,11 +41223,87 @@ def _slot_appropriateness_advisory_decision(issues: list, attempt: int, max_atte
     return advisory, has_hard, is_final, beta_soft_only
 
 
+def _review_country_feedback(country: str, kind: str, **values) -> str:
+    """[P1-REVIEW-RETRY-FEEDBACK-DO · 2026-08-23]
+    Renderiza los cuatro rechazos culturales del reviewer.
+
+    DO conserva los literales históricos; beta conserva el requisito medible
+    (variedad, transformación o contrato) sin convertir la cocina dominicana en
+    una regla universal. Función pura para que retry y memoria persistan el mismo texto.
+    """
+    from constants import canonicalize_country
+
+    is_do = canonicalize_country(country) == "DO"
+    if kind == "egg_overuse":
+        egg = int(values["egg"])
+        total = int(values["total"])
+        cap = int(values["cap"])
+        if is_do:
+            alternatives = (
+                "otras proteínas dominicanas (pollo guisado, pescado, atún, sardina, "
+                "res molida magra, queso de freír, yogur griego, habichuelas)"
+            )
+        else:
+            alternatives = (
+                "otras proteínas variadas compatibles con el perfil (aves, pescado, "
+                "legumbres y lácteos permitidos)"
+            )
+        return (
+            f"SOBREUSO DE HUEVO (rechazo de variedad): el huevo aparece en {egg} de {total} "
+            f"comidas (máximo {cap}). Reemplaza el huevo en al menos {egg - cap} comida(s) "
+            f"por {alternatives} — NO uses huevo como relleno por defecto. Mantén el huevo "
+            "solo en desayunos/platos donde es el protagonista."
+        )
+    if kind == "raw_staples":
+        count = values.get("count")
+        sample = str(values["sample"])
+        if is_do:
+            preparations = (
+                "PREPARACIONES dominicanas reales: guisos, locrios (almuerzo), "
+                "panqueques/arepitas con las harinas, bollitos de yuca, revoltillos, "
+                "ensaladas compuestas"
+            )
+        else:
+            preparations = (
+                "PREPARACIONES culinarias reales: guisos, salteados, panqueques/tortitas "
+                "con las harinas, croquetas u horneados, revoltillos, ensaladas compuestas"
+            )
+        return (
+            f"{count} plato(s) son ingredientes crudos/hervidos sin transformación culinaria "
+            f"({sample}). Convierte los platos en {preparations} — manteniendo los mismos macros."
+        )
+    if kind == "transform_minimum":
+        examples = (
+            "panqueques de avena, arepitas, bollitos de yuca, revoltillo, guiso, "
+            "locrio de almuerzo"
+            if is_do
+            else "panqueques de avena, tortitas, croquetas, revoltillo, guiso o salteado"
+        )
+        return (
+            "El plan no incluye NINGUNA preparación transformada: incluye al menos una "
+            f"preparación real con los mismos macros ({examples}) en vez de solo staples servidos."
+        )
+    if kind == "recipe_contract":
+        ratio_pct = int(values["ratio_pct"])
+        language = "español dominicano" if is_do else "español claro y natural"
+        return (
+            f"{ratio_pct}% de las recetas violan el contrato de pasos. Reescribe CADA receta "
+            "con los 3 pilares EN ORDEN — 'Mise en place:', 'El Toque de Fuego:' (con tiempo "
+            f"Y/O temperatura concreta) y 'Montaje:' — en {language}."
+        )
+    raise ValueError(f"review feedback kind desconocido: {kind}")
+
+
 @_node_label("reviewer")
 async def review_plan_node(state: PlanState) -> dict:
     """Revisa el plan generado para verificar seguridad médica."""
     plan = state["plan_result"]
     form_data = state["form_data"]
+    # [P1-REVIEW-RETRY-FEEDBACK-DO · 2026-08-23] Hoisted antes de TODOS
+    # los gates: el de huevo precedía la derivación histórica dentro del gate
+    # de horario. Una sola lectura SSOT gobierna los cuatro feedbacks y slots.
+    from constants import country_for_form_data
+    _rpn_country = country_for_form_data(form_data)
     taste_profile = state.get("taste_profile", "")
     attempt = state.get("attempt", 1)
     
@@ -41856,11 +41932,13 @@ Responde ÚNICAMENTE con el JSON de revisión.
                                    f"(cap {_cap}+{VARIETY_HARD_GATE_EGG_SLACK}) → rechazo para diversificar")
                     approved = False
                     issues.append(
-                        f"SOBREUSO DE HUEVO (rechazo de variedad): el huevo aparece en {_egg} de {_tot} "
-                        f"comidas (máximo {_cap}). Reemplaza el huevo en al menos {_egg - _cap} comida(s) "
-                        f"por otras proteínas dominicanas (pollo guisado, pescado, atún, sardina, res molida "
-                        f"magra, queso de freír, yogur griego, habichuelas) — NO uses huevo como relleno "
-                        f"por defecto. Mantén el huevo solo en desayunos/platos donde es el protagonista."
+                        _review_country_feedback(
+                            _rpn_country,
+                            "egg_overuse",
+                            egg=_egg,
+                            total=_tot,
+                            cap=_cap,
+                        )
                     )
                     severity = _severity_max(severity, "high")
                 # [P2-VARIETY-GATE-REPEAT] Fruta dulce repetida / plato-base repetido el mismo día →
@@ -41907,8 +41985,6 @@ Responde ÚNICAMENTE con el JSON de revisión.
                 # 9 · f) nunca activa la rama beta-soft-only. Derivado UNA vez aquí y reusado por
                 # closure en el autofix compuesto (abajo) y en el gate de retry (más abajo) —
                 # antes el autofix lo re-derivaba localmente.
-                from constants import country_for_form_data
-                _rpn_country = country_for_form_data(form_data)
                 # [P1-NIGHT-RICE-COMPOUND-FINAL · 2026-07-01] (audit slots GAP-2) Antes de degradar a
                 # advisory Y ENTREGAR un moro/locrio/chofán en la cena, intento de autofix compuesto de
                 # último recurso (nombre→guiso + arroz→tubérculo + pasos, determinista y coherente).
@@ -42084,11 +42160,12 @@ Responde ÚNICAMENTE con el JSON de revisión.
                     )
                     approved = False
                     issues.append(
-                        f"{_rsg.get('raw_staple_meals')} plato(s) son ingredientes crudos/hervidos sin "
-                        "transformación culinaria (proteína plancha + carbo blanco + vegetal suelto). "
-                        "Convierte los platos en PREPARACIONES dominicanas reales: guisos, locrios (almuerzo), "
-                        "panqueques/arepitas con las harinas, bollitos de yuca, revoltillos, ensaladas compuestas — "
-                        "manteniendo los mismos macros."
+                        _review_country_feedback(
+                            _rpn_country,
+                            "raw_staples",
+                            count=_rsg.get("raw_staple_meals"),
+                            sample="proteína plancha + carbo blanco + vegetal suelto",
+                        )
                     )
                     severity = _severity_max(severity, "high")
         except Exception as _rsg_e:
@@ -42118,10 +42195,10 @@ Responde ÚNICAMENTE con el JSON de revisión.
                     )
                     approved = False
                     issues.append(
-                        "El plan no incluye NINGUNA preparación transformada: incluye al menos una "
-                        "preparación real con los mismos macros (panqueques de avena, arepitas, "
-                        "bollitos de yuca, revoltillo, guiso, locrio de almuerzo) en vez de solo "
-                        "staples servidos."
+                        _review_country_feedback(
+                            _rpn_country,
+                            "transform_minimum",
+                        )
                     )
                     severity = _severity_max(severity, "high")
         except Exception as _tfg_e:
@@ -42193,10 +42270,11 @@ Responde ÚNICAMENTE con el JSON de revisión.
                     )
                     approved = False
                     issues.append(
-                        f"{int(round(_rcg_ratio * 100))}% de las recetas violan el contrato de pasos. "
-                        "Reescribe CADA receta con los 3 pilares EN ORDEN — 'Mise en place:', "
-                        "'El Toque de Fuego:' (con tiempo Y/O temperatura concreta) y 'Montaje:' — "
-                        "en español dominicano."
+                        _review_country_feedback(
+                            _rpn_country,
+                            "recipe_contract",
+                            ratio_pct=int(round(_rcg_ratio * 100)),
+                        )
                     )
                     severity = _severity_max(severity, "high")
         except Exception as _rcg_e:
