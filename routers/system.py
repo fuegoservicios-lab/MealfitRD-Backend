@@ -1507,13 +1507,13 @@ def admin_plan_quality(request: Request, days: int = 14, limit: int = 40):
       - `limit` (default 40, clamp [1, 200]): planes a listar.
 
     Retorna:
-      - `planes`: lista por plan → `{id, fecha, score, componentes, defectos,
+      - `planes`: lista por plan → `{id, fecha, pais, score, componentes, defectos,
         dias, degradado, usd, llm_calls, modelos}`. `usd`/`modelos` salen de
         `llm_usage_events` atribuidos (P1-COST-ATTRIBUTION); un plan anterior a
         esa atribución llega con `usd=None` — es ausencia de dato, NO coste 0.
-      - `resumen`: medias del periodo + `sin_indice` (planes guardados antes de
-        que el índice existiera; sirven de recordatorio de que la serie
-        histórica empieza el 2026-07-31, no antes).
+      - `resumen`: medias del periodo + bloque `por_pais`; `sin_indice` cuenta
+        sólo deuda anterior al 2026-07-31 y `sin_indice_reciente` revela planes
+        nuevos que deberían haber nacido con índice.
 
     Anchor: P1-PLAN-QUALITY-INDEX.
     """
@@ -1529,10 +1529,16 @@ def admin_plan_quality(request: Request, days: int = 14, limit: int = 40):
             SELECT m.id::text                                   AS id,
                    m.created_at                                 AS fecha,
                    m.plan_data->'_quality_index'                AS idx,
+                   COALESCE(NULLIF(m.plan_data->>'_country', ''),
+                            NULLIF(up.health_profile->>'country', ''),
+                            '(pre-sistema)')                    AS pais,
+                   m.created_at < TIMESTAMPTZ '2026-07-31 00:00:00+00'
+                                                                AS es_pre_indice,
                    COALESCE(c.usd, 0)                           AS usd,
                    COALESCE(c.calls, 0)                         AS calls,
                    c.modelos                                    AS modelos
               FROM meal_plans m
+              LEFT JOIN user_profiles up ON up.id = m.user_id
               LEFT JOIN (
                     SELECT plan_id,
                            SUM(COALESCE(cost_usd_micros,0))/1e6::numeric AS usd,
@@ -1552,16 +1558,43 @@ def admin_plan_quality(request: Request, days: int = 14, limit: int = 40):
         logger.error(f"[P1-PLAN-QUALITY-INDEX] query falló: {e!r}")
         raise HTTPException(status_code=500, detail="No se pudo leer el índice de calidad.")
 
-    planes, scores, sin_indice = [], [], 0
+    planes, scores = [], []
+    sin_indice, sin_indice_reciente = 0, 0
+    por_pais_raw = {}
     for r in rows:
+        pais = str(r.get("pais") or "(pre-sistema)")
+        pais_stats = por_pais_raw.setdefault(
+            pais,
+            {
+                "con_indice": 0,
+                "sin_indice": 0,
+                "sin_indice_reciente": 0,
+                "scores": [],
+                "usd": [],
+            },
+        )
+        # Mantener la distinción «sin dato» vs coste cero antes incluso de
+        # filtrar planes sin índice; es un contrato histórico del panel.
+        usd = round(float(r["usd"]), 5) if r.get("calls") else None
         idx = r.get("idx") or {}
         if not isinstance(idx, dict) or idx.get("score") is None:
-            sin_indice += 1
+            contador = "sin_indice" if r.get("es_pre_indice") else "sin_indice_reciente"
+            pais_stats[contador] += 1
+            if contador == "sin_indice":
+                sin_indice += 1
+            else:
+                sin_indice_reciente += 1
             continue
-        scores.append(float(idx["score"]))
+        score = float(idx["score"])
+        scores.append(score)
+        pais_stats["con_indice"] += 1
+        pais_stats["scores"].append(score)
+        if usd is not None:
+            pais_stats["usd"].append(usd)
         planes.append({
             "id": r.get("id"),
             "fecha": str(r.get("fecha")),
+            "pais": pais,
             "score": idx.get("score"),
             "componentes": idx.get("componentes"),
             "defectos": idx.get("defectos") or {},
@@ -1570,7 +1603,7 @@ def admin_plan_quality(request: Request, days: int = 14, limit: int = 40):
             # `None` (no 0) cuando el plan no tiene costo atribuido: distinguir
             # "no lo sabemos" de "fue gratis" es la diferencia entre una media
             # honesta y una que miente hacia abajo.
-            "usd": round(float(r["usd"]), 5) if r.get("calls") else None,
+            "usd": usd,
             "llm_calls": int(r.get("calls") or 0) or None,
             "modelos": r.get("modelos"),
         })
@@ -1585,6 +1618,22 @@ def admin_plan_quality(request: Request, days: int = 14, limit: int = 40):
                 if isinstance(p.get("componentes"), dict) and p["componentes"].get(k) is not None]
         comp_medias[k] = round(sum(vals) / len(vals), 1) if vals else None
 
+    por_pais = {}
+    for pais, stats in sorted(por_pais_raw.items()):
+        country_scores = stats.pop("scores")
+        country_usd = stats.pop("usd")
+        por_pais[pais] = {
+            **stats,
+            "score_medio": (
+                round(sum(country_scores) / len(country_scores), 1)
+                if country_scores else None
+            ),
+            "usd_medio_por_plan": (
+                round(sum(country_usd) / len(country_usd), 4)
+                if country_usd else None
+            ),
+        }
+
     return {
         "success": True,
         "ventana_dias": win_d,
@@ -1592,9 +1641,11 @@ def admin_plan_quality(request: Request, days: int = 14, limit: int = 40):
         "resumen": {
             "con_indice": len(planes),
             "sin_indice": sin_indice,
+            "sin_indice_reciente": sin_indice_reciente,
             "score_medio": round(sum(scores) / len(scores), 1) if scores else None,
             "componentes_medios": comp_medias,
             "usd_medio_por_plan": _media("usd"),
             "planes_con_costo_atribuido": sum(1 for p in planes if p.get("usd") is not None),
+            "por_pais": por_pais,
         },
     }
