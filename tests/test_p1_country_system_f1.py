@@ -1714,7 +1714,9 @@ def test_g_recalculate_shopping_list_wire_finalize_con_pais():
     de reentrar al pool dentro del `SELECT … FOR UPDATE`). Se re-ancla a ese ORDEN."""
     src = (_BACKEND / "routers" / "plans.py").read_text(encoding="utf-8")
     i_fn = src.index("def api_recalculate_shopping_list(")
-    i_fetch = src.index("_recalc_country = _cfp_rc(", i_fn)
+    # [P1-COUNTRY-STAMP-NO-FALLBACK-WRITE] También captura la procedencia; el ancla es
+    # la llamada al SSOT antes del finalizer, no una asignación de una sola variable.
+    i_fetch = src.index("_recalc_country, _recalc_country_source = _cfp_rc(", i_fn)
     i_call = src.index("_rc_fixed += _fin_rc_rc(_m, allergies=_rc_allergies, portion_floors=False,\n"
                         "                                                 country=_recalc_country)", i_fn)
     i_lock = src.index("update_plan_data_atomic(", i_fn)

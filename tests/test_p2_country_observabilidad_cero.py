@@ -83,9 +83,11 @@ def test_pricing_mode_removed_emite_metadata_diagnostica(monkeypatch) -> None:
 
 
 def test_recalculo_llama_alerta_antes_de_persistir_borrado() -> None:
-    source = (BACKEND_ROOT / "routers" / "plans.py").read_text(encoding="utf-8")
-    assert "_pricing_mode_removed = _had_pricing_mode and not _p1b_mode" in source
-    assert "emit_country_plan_regime_changed_best_effort" in source
+    router = (BACKEND_ROOT / "routers" / "plans.py").read_text(encoding="utf-8")
+    constants = (BACKEND_ROOT / "constants.py").read_text(encoding="utf-8")
+    assert "apply_recalc_plan_regime" in router
+    assert "_pricing_mode_removed = _had_pricing_mode and not _pricing_mode" in constants
+    assert "emit_country_plan_regime_changed_best_effort" in constants
 
 
 def test_stamp_sigue_puro_por_default(monkeypatch) -> None:

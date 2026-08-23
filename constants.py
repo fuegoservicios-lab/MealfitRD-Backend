@@ -3926,7 +3926,7 @@ def stamp_plan_country(plan_data, form_data, *, emit_observability: bool = False
     return _cc
 
 
-def country_for_plan(plan_data, health_profile) -> str:
+def country_for_plan(plan_data, health_profile, *, return_source: bool = False):
     """[P1-PLAN-STAMPS-COUNTRY · 2026-08-21] País de un plan YA GENERADO, para las superficies
     post-generación (recalc, swap, backstop, telemetría).
 
@@ -3937,7 +3937,8 @@ def country_for_plan(plan_data, health_profile) -> str:
 
     Fallback al perfil cuando el plan no trae sello: es el caso de TODO plan anterior a este
     P-fix, que debe seguir comportándose exactamente como hasta hoy. Sin ese fallback el fix
-    rompería el histórico entero.
+    rompería el histórico entero. ``return_source=True`` devuelve además ``'plan'`` o
+    ``'profile'``: leer un fallback no lo convierte en un hecho que un mutador pueda sellar.
 
     Fail-safe: un sello que no canoniza (jsonb tocado a mano) se ignora y manda el perfil — un
     dato corrupto no puede secuestrar el motor.
@@ -3946,9 +3947,67 @@ def country_for_plan(plan_data, health_profile) -> str:
     if isinstance(plan_data, dict):
         _raw = plan_data.get("_country")
         if isinstance(_raw, str) and _raw.strip().upper() in COUNTRY_PROFILES:
-            return country_for_form_data({"country": _raw})
+            _country = country_for_form_data({"country": _raw})
+            return (_country, "plan") if return_source else _country
     _hp = health_profile if isinstance(health_profile, dict) else {}
-    return country_for_form_data({"country": _hp.get("country")})
+    _country = country_for_form_data({"country": _hp.get("country")})
+    return (_country, "profile") if return_source else _country
+
+
+def apply_recalc_plan_regime(
+    plan_data,
+    health_profile,
+    *,
+    plan_id=None,
+    emit_observability: bool = False,
+):
+    """[P1-COUNTRY-STAMP-NO-FALLBACK-WRITE · 2026-08-23] Aplica sellos en un recálculo.
+
+    Un sello válido es un HECHO del artefacto y puede sanearse idempotentemente. Un país leído
+    del perfil es sólo el FALLBACK para esta operación: en un plan legacy no se puede saber si
+    la ausencia de ``_pricing_mode`` significa DO ni si su presencia significa beta. Por eso,
+    en fuente ``profile`` no se escribe ``_country`` y se conserva el régimen byte por byte.
+
+    Devuelve ``(country, effective_pricing_mode, source)`` para que el resumen de costo consuma
+    exactamente el régimen que quedó persistido. La generación nueva sigue usando
+    :func:`stamp_plan_country`, donde sí existe ``form_data`` y por tanto se escribe el hecho.
+
+    tooltip-anchor: apply_recalc_plan_regime (test_p1_country_stamp_no_fallback_write.py)
+    """
+    _country, _source = country_for_plan(
+        plan_data,
+        health_profile,
+        return_source=True,
+    )
+    if not isinstance(plan_data, dict):
+        return _country, None, _source
+
+    if _source != "plan":
+        return _country, plan_data.get("_pricing_mode"), _source
+
+    _previous_country = plan_data.get("_country")
+    _had_pricing_mode = "_pricing_mode" in plan_data
+    _previous_pricing_mode = plan_data.get("_pricing_mode")
+    _pricing_mode = pricing_mode_for_country(_country)
+
+    if _pricing_mode:
+        plan_data["_pricing_mode"] = _pricing_mode
+    else:
+        plan_data.pop("_pricing_mode", None)
+    plan_data["_country"] = _country
+
+    _country_changed = _previous_country != _country
+    _pricing_mode_removed = _had_pricing_mode and not _pricing_mode
+    if emit_observability and (_country_changed or _pricing_mode_removed):
+        emit_country_plan_regime_changed_best_effort(
+            plan_id,
+            previous_country=_previous_country,
+            country=_country,
+            previous_pricing_mode=_previous_pricing_mode,
+            pricing_mode=_pricing_mode,
+            pricing_mode_removed=_pricing_mode_removed,
+        )
+    return _country, _pricing_mode, _source
 
 
 def pricing_mode_for_form_data(form_data) -> "str | None":

@@ -27,10 +27,9 @@ El toast de Configuración promete lo contrario en las dos direcciones.
 LA POLÍTICA, ESCRITA. Aquí había que elegir y no había respuesta obvia: ¿manda el plan (snapshot
 de cuando se generó) o el perfil (lo que el usuario dice hoy)? Se elige **el plan manda para lo
 que YA se generó, el perfil manda para lo que se genera de nuevo**, con una excepción: el
-recálculo explícito de la lista re-deriva y ACTUALIZA el sello. Razón: recalcular es el gesto con
-el que el usuario pide que la lista refleje su realidad actual, y es el único endpoint que ya
-reconstruye las cuatro listas agregadas. Cualquier otra política deja al usuario sin forma de
-arreglar un plan que quedó con el régimen equivocado.
+recálculo explícito sanea un sello que YA existe. [P1-COUNTRY-STAMP-NO-FALLBACK-WRITE] supersede
+la escritura de un fallback: en un plan legacy la ausencia no prueba el país de origen, por lo
+que el perfil puede gobernar la lectura actual pero no convertirse en sello autoritativo.
 
 EL SELLO SE ESCRIBE SIEMPRE, TAMBIÉN PARA 'DO'. Si sólo se estampara en beta, la AUSENCIA de la
 clave significaría dos cosas distintas —«plan dominicano» y «plan anterior a este P-fix»— y esa
@@ -41,7 +40,7 @@ Cubre:
   A. El sello: se escribe siempre, con el valor de la única puerta.
   B. Los lectores post-generación prefieren el sello del plan sobre el perfil.
   C. Un plan sin sello (pre-P-fix) degrada al perfil, como hasta hoy.
-  D. El recálculo re-deriva el régimen de precios y actualiza el sello.
+  D. El recálculo sanea el régimen de planes sellados sin sellar fallbacks legacy.
   E. Byte-identidad DO y con el knob apagado.
   F. Parser-based.
 """
@@ -126,17 +125,16 @@ def test_un_sello_corrupto_no_gana(knob_on):
 
 # ── D. El recálculo re-deriva ───────────────────────────────────────────────────────────────────
 
-def test_el_recalculo_re_deriva_el_regimen_de_precios():
+def test_el_recalculo_delega_el_regimen_sin_escribir_fallback_directo():
     """`/recalculate-shopping-list` leía `plan_data.get('_pricing_mode')` —el valor viejo— aunque
     en el mismo endpoint ya hubiera resuelto el país desde el perfil actualizado. Las dos
     verdades convivían a 300 líneas de distancia."""
     src = _PLANS_PATH.read_text(encoding="utf-8", errors="replace")
     i = src.find("_recalc_country")
     assert i > 0, "el recálculo dejó de resolver el país"
-    ventana = src[i:i + 22000]
-    assert "P1-PRICING-MODE-REDERIVE" in ventana, (
-        "el recálculo no re-deriva el régimen de precios: un plan que quedó con el régimen "
-        "equivocado no tiene forma de arreglarse"
+    helper_i = src.find("apply_recalc_plan_regime", i)
+    assert helper_i > i, (
+        "el recálculo dejó de distinguir el sello real del fallback del perfil"
     )
     assert 'pricing_mode=plan_data_fresh.get("_pricing_mode")' not in src, (
         "el recálculo volvió a costear con el régimen congelado del jsonb"

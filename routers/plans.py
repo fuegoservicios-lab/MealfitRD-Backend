@@ -11399,14 +11399,15 @@ def api_recalculate_shopping_list(data: dict = Body(...), verified_user_id: Opti
             # Best-effort fail-open a [] (sin alergias conocidas el filtro es no-op, como pre-fix).
             _rc_allergies = []
             _recalc_country = "DO"
-            # [P1-PRICING-MODE-REDERIVE · 2026-08-21] Sentinel: `False` = «no se pudo resolver el
-            # perfil» y el costeo conserva el régimen persistido (fail-open, conducta previa).
-            # `None` es un valor LEGÍTIMO (país con precios nativos), así que no puede servir de
-            # sentinel — la clase de confusión que ya costó `action_taken` en el coherence guard.
-            _recalc_pricing_mode = False
+            _recalc_country_source = "profile"
+            _recalc_health_profile = {}
+            # Sentinel separado del valor: sólo autoriza el helper bajo lock si el perfil se
+            # preleyó bien. En error, el costeo conserva el régimen persistido (fail-open).
+            _recalc_regime_ready = False
             try:
                 from db import get_user_profile as _gup_rc
                 _hp_rc = (_gup_rc(user_id) or {}).get("health_profile") or {}
+                _recalc_health_profile = _hp_rc
                 _rc_allergies = [str(a).strip() for a in (_hp_rc.get("allergies") or []) if str(a).strip()]
                 # [P1-COUNTRY-SYSTEM-F2 · 2026-08-17 (Task 9, g · MUTATOR-PURITY)] Mismo pre-fetch
                 # ANTES de cualquier lock (patrón `_micro_form` de /swap-meal/persist, ya aplicado
@@ -11417,16 +11418,14 @@ def api_recalculate_shopping_list(data: dict = Body(...), verified_user_id: Opti
                 # dominicanas produce el híbrido que hoy existe (perfil 'DO', planes ES/US).
                 # Sin sello (todo plan pre-P-fix) cae al perfil, que es la conducta de hasta hoy.
                 from constants import country_for_plan as _cfp_rc
-                _recalc_country = _cfp_rc(plan_data, _hp_rc)
-                # [P1-PRICING-MODE-REDERIVE · 2026-08-21] Y con el país ya resuelto, el RÉGIMEN
-                # DE PRECIOS se re-deriva aquí en vez de leerse congelado del jsonb 300 líneas
-                # más abajo. Recalcular es el gesto con el que el usuario pide que su lista
-                # refleje su realidad actual; sin esto, un dominicano que se muda a España sigue
-                # viendo importes de colmado dominicano PARA SIEMPRE y un español que vuelve a RD
-                # nunca recupera precios. El toast de Configuración promete lo contrario en las
-                # dos direcciones.
-                from constants import pricing_mode_for_country as _pmc_rc
-                _recalc_pricing_mode = _pmc_rc(_recalc_country)
+                _recalc_country, _recalc_country_source = _cfp_rc(
+                    plan_data,
+                    _hp_rc,
+                    return_source=True,
+                )
+                # El régimen se decide sobre el dict FRESH bajo lock: sólo un sello real puede
+                # sanearse; un fallback legacy conserva la evidencia previa (G14).
+                _recalc_regime_ready = True
             except Exception as _rc_al_e:
                 logger.debug(f"[P0-VEG-GUARD-ALLERGEN] no se pudo hidratar alergias en /recalculate: {_rc_al_e}")
             _rc_fixed = 0
@@ -11778,40 +11777,22 @@ def api_recalculate_shopping_list(data: dict = Body(...), verified_user_id: Opti
                 from nutrition_calculator import refresh_budget_reconciliation as _p1b_rbr
                 # [P1-COUNTRY-SYSTEM-F1 · 2026-08-16 (T7)] plan_data_fresh trae la clave desde
                 # el INSERT del plan — beta ⇒ None, cero recalculo de costo/reconciliación.
-                # [P1-PRICING-MODE-REDERIVE · 2026-08-21] …pero leerla congelada era el defecto:
-                # el régimen re-derivado arriba (desde el país vigente del plan/perfil) MANDA, y
-                # se persiste para que el PDF y el banner de presupuesto dejen de discrepar con
-                # la lista. `False` = no se pudo resolver ⇒ conserva lo persistido.
-                _p1b_mode = (plan_data_fresh.get("_pricing_mode")
-                             if _recalc_pricing_mode is False else _recalc_pricing_mode)
-                if _recalc_pricing_mode is not False:
-                    _had_country = "_country" in plan_data_fresh
-                    _previous_country = plan_data_fresh.get("_country")
-                    _had_pricing_mode = "_pricing_mode" in plan_data_fresh
-                    _previous_pricing_mode = plan_data_fresh.get("_pricing_mode")
-                    if _p1b_mode:
-                        plan_data_fresh["_pricing_mode"] = _p1b_mode
-                    else:
-                        plan_data_fresh.pop("_pricing_mode", None)
-                    plan_data_fresh["_country"] = _recalc_country
-                    # [P2-COUNTRY-OBSERVABILIDAD-CERO · 2026-08-23] Cambiar el
-                    # sello o borrar un régimen que existía altera lo que el
-                    # usuario ve en lista/PDF. Antes no dejaba ninguna fila.
-                    _country_changed = (
-                        _had_country
-                        and _previous_country != _recalc_country
+                # Si el pre-fetch falló se conserva el régimen persistido. Si funcionó, el helper
+                # distingue el sello real del fallback antes de sanear o preservar (G14).
+                _p1b_mode = plan_data_fresh.get("_pricing_mode")
+                if _recalc_regime_ready:
+                    # [P1-COUNTRY-STAMP-NO-FALLBACK-WRITE · 2026-08-23] Re-resuelve sobre
+                    # el dict FRESH bajo lock. Sólo un sello del plan es un hecho escribible;
+                    # el fallback del perfil sirve para leer, pero un plan legacy conserva la
+                    # ausencia de `_country` y su `_pricing_mode` tal cual. El helper también
+                    # deja evento si un plan realmente sellado pierde el régimen.
+                    from constants import apply_recalc_plan_regime as _apply_recalc_regime
+                    _fresh_country, _p1b_mode, _fresh_country_source = _apply_recalc_regime(
+                        plan_data_fresh,
+                        _recalc_health_profile,
+                        plan_id=plan_id,
+                        emit_observability=True,
                     )
-                    _pricing_mode_removed = _had_pricing_mode and not _p1b_mode
-                    if _country_changed or _pricing_mode_removed:
-                        from constants import emit_country_plan_regime_changed_best_effort as _emit_country_regime
-                        _emit_country_regime(
-                            plan_id,
-                            previous_country=_previous_country,
-                            country=_recalc_country,
-                            previous_pricing_mode=_previous_pricing_mode,
-                            pricing_mode=_p1b_mode,
-                            pricing_mode_removed=_pricing_mode_removed,
-                        )
                 _p1b_summary = _p1b_ccs(scaled_7, scaled_15_hybrid, scaled_30_hybrid, grocery_duration,
                                          pricing_mode=_p1b_mode)
                 if _p1b_summary:
