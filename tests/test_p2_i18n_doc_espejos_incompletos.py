@@ -78,6 +78,7 @@ def test_la_cifra_de_espejos_de_la_doc_es_la_de_la_tabla() -> None:
     palabras = {
         "cinco": 5, "seis": 6, "siete": 7, "ocho": 8, "nueve": 9, "diez": 10,
         "once": 11, "doce": 12, "trece": 13, "catorce": 14, "quince": 15, "dieciséis": 16,
+        "diecisiete": 17, "dieciocho": 18, "diecinueve": 19, "veinte": 20,
     }
     m = re.search(r"\*\*Son (\w+)\*\*", src)
     assert m, (
@@ -134,6 +135,9 @@ def test_la_tabla_de_alcance_declara_las_superficies_que_siguen_el_idioma() -> N
             ("push", r"^\| Notificaciones push"),
             ("help bot / insights", r"^\| Help bot"),
             ("autodetección", r"^\| Autodetección"),
+            # [P2-I18N-ALCANCE-SIN-SPLASH-NI-MANIFIESTO · 2026-08-23] las dos más persistentes.
+            ("splash", r"^\| Splash"),
+            ("manifiesto / nombre de la PWA", r"^\| Nombre y atajos de la PWA"),
         )
         if not re.search(patron, alcance, re.M)
     ]

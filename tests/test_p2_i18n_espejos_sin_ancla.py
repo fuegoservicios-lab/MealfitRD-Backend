@@ -216,6 +216,109 @@ def test_cada_idioma_traducido_tiene_su_catalogo() -> None:
 
 
 # ---------------------------------------------------------------------------
+# [P2-I18N-SEXTO-IDIOMA-ESPEJOS-CONGELADOS · 2026-08-23] Los que la doc no contaba.
+#
+# La checklist decía DOCE espejos y había más: el copy de SERVIDOR (push, coach), las
+# superficies que vive fuera de React (manifiesto PWA, splash, prompts de permisos de iOS) y
+# el glosario, que es el par del trinquete: sin entrada para el idioma nuevo, el chequeo
+# de términos lo SALTA (`if (!esperada) continue`), da 0 desvíos y el gate queda verde sin
+# haber medido nada — descarta en silencio.
+# ---------------------------------------------------------------------------
+
+def test_el_catalogo_de_push_cubre_el_ssot() -> None:
+    src = _leer(_BACKEND / "push_i18n.py")
+    m = re.search(r"_LOCALES\s*=\s*\(([^)]+)\)", src)
+    assert m, f"no encontré `_LOCALES = (...)` en push_i18n.py [{_MARKER}]"
+    faltan = _ssot() - _codigos_en(m.group(1))
+    assert not faltan, (
+        f"`push_i18n._LOCALES` no conoce {sorted(faltan)}. LO QUE SE VE: `translate_push_text` "
+        f"devuelve el español para ese idioma aunque el catálogo de push lo tuviera — cada "
+        f"notificación en la pantalla de bloqueo en castellano. [{_MARKER}]"
+    )
+
+
+@pytest.mark.parametrize("tabla", [
+    "_PUSH_NUDGE_TITLES", "_EMPTY_RESPONSE_FALLBACKS", "_PLAN_SEED_USER", "_PLAN_SEED_MODEL",
+    "_PLAN_SEED_GOAL_LABELS",
+])
+def test_el_copy_de_servidor_del_coach_cubre_el_ssot(tabla: str) -> None:
+    src = _leer(_BACKEND / "prompts" / "chat_agent.py")
+    faltan = _traducidos() - _codigos_en(_bloque(src, tabla))
+    assert not faltan, (
+        f"`{tabla}` no cubre {sorted(faltan)}. LO QUE SE VE: ese texto del coach (el título "
+        f"del nudge, el mensaje de reserva cuando el modelo calla, o el par sembrado tras "
+        f"generar el plan) sale en español y se PERSISTE en la conversación. [{_MARKER}]"
+    )
+
+
+def test_el_manifiesto_pwa_cubre_el_ssot() -> None:
+    src = _leer(_FRONTEND / "scripts" / "build-manifests-i18n.mjs")
+    faltan = _traducidos() - _codigos_en(_bloque(src, "TRADUCCIONES"))
+    assert not faltan, (
+        f"`build-manifests-i18n.mjs` no genera manifiesto para {sorted(faltan)}. LO QUE SE "
+        f"VE: el usuario instala la PWA desde una app ya en su idioma y el icono de su "
+        f"escritorio dice «Nutrición con IA» — el nombre que el sistema operativo recuerda "
+        f"de la app, para siempre. [{_MARKER}]"
+    )
+
+
+def test_el_splash_cubre_el_ssot() -> None:
+    src = _leer(_FRONTEND / "index.html")
+    for tabla in ("TAGLINE", "CARGANDO"):
+        faltan = _traducidos() - _codigos_en(_bloque(src, f"var {tabla}"))
+        assert not faltan, (
+            f"el splash (`{tabla}`) no conoce {sorted(faltan)}. LO QUE SE VE: lo PRIMERO que "
+            f"pinta la app en cada arranque en frío, en español, antes de que React exista. "
+            f"[{_MARKER}]"
+        )
+
+
+def test_los_lproj_de_ios_cubren_el_ssot() -> None:
+    plist = _leer(_FRONTEND / "ios" / "App" / "App" / "Info.plist")
+    m = re.search(r"<key>CFBundleLocalizations</key>\s*<array>(.*?)</array>", plist, re.S)
+    assert m, f"Info.plist sin CFBundleLocalizations [{_MARKER}]"
+    declarados = set(re.findall(r"<string>([^<]+)</string>", m.group(1)))
+    # iOS usa la subetiqueta primaria salvo cuando la variante importa (pt-BR).
+    esperados = {"pt-BR" if c == "pt-BR" else c.split("-")[0] for c in _ssot()}
+    faltan = esperados - declarados
+    assert not faltan, (
+        f"CFBundleLocalizations no declara {sorted(faltan)}. LO QUE SE VE: los prompts de "
+        f"permisos del SISTEMA (cámara, fotos, notificaciones) en español dentro de una app "
+        f"en otro idioma — iOS ni mira el `.lproj` si no está declarado aquí. [{_MARKER}]"
+    )
+    for loc in esperados - {"es"}:
+        strings = _FRONTEND / "ios" / "App" / "App" / f"{loc}.lproj" / "InfoPlist.strings"
+        assert strings.exists(), f"falta {strings.name} para {loc} [{_MARKER}]"
+
+
+def test_el_glosario_tiene_el_termino_en_cada_idioma() -> None:
+    """El par del trinquete. `revisarGlosario` hace `if (!esperada) continue`: un idioma sin
+    entrada en `glosario.json` no se REVISA — 0 desvíos, trinquete en 0, gate verde — sin
+    haber medido nada. Es el único espejo que al faltar pone un gate duro en VERDE."""
+    p = _FRONTEND / "src" / "i18n" / "glosario.json"
+    datos = json.loads(_leer(p))
+    terminos = {k: v for k, v in datos.items() if not k.startswith("_") and isinstance(v, dict)}
+    assert terminos, "glosario.json sin términos"
+    # Una exención DECLARADA (`sin_pacto`, con su `nota`) no es un hueco: «Plato» tiene tres
+    # sentidos en inglés y dos en francés, medidos, y exigir uno marcaría usos correctos. Lo
+    # que este test caza es la exención que nadie declaró — la que se ve igual que un olvido.
+    huecos = {
+        f"{termino}:{loc}"
+        for termino, spec in terminos.items()
+        for loc in _traducidos()
+        if not spec.get(loc) and loc not in (spec.get("sin_pacto") or [])
+    }
+    for termino, spec in terminos.items():
+        if spec.get("sin_pacto"):
+            assert spec.get("nota"), f"«{termino}» declara sin_pacto sin decir por qué (falta `nota`)"
+    assert not huecos, (
+        f"glosario.json sin traducción pactada en {sorted(huecos)[:8]}. LO QUE SE VE: nada — "
+        f"y ese es el problema: el chequeo de términos SALTA ese idioma y el gate sigue "
+        f"verde sin vigilar que «Nevera» sea siempre la misma palabra. [{_MARKER}]"
+    )
+
+
+# ---------------------------------------------------------------------------
 # Control
 # ---------------------------------------------------------------------------
 
