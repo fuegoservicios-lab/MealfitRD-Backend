@@ -202,6 +202,38 @@ Se prefiere una promesa precisa a una total y falsa. Un operador que apaga un in
 mitad de un incidente necesita saber exactamente qué deja de pasar — y «total» le habría
 hecho esperar que lo ya servido cambiara solo.
 
+### La primera traducción verificada (2026-08-23)
+
+[P1-I18N-SIN-EVIDENCIA-PRODUCCION · parcial] Esta capa pasó de «nunca ha traducido un plato»
+a tener **una ejecución real medida**, contra la base de producción y con el proveedor de
+pago de verdad.
+
+No se hizo sobre el plan de un cliente. Se sembró un plato realista —`Mangú de plátano con
+huevo`, con descripción, cuatro ingredientes con gramos y cuatro pasos de receta— en el plan
+de un **usuario de test** que la propia suite e2e había dejado en la base, se ejecutó
+`enrich_plan_display(..., 'fr-FR', day_indices=[0])` y se restauró el plan a su estado
+anterior. Resultado: `{'enriched_meals': 1}` en **6,2 s**.
+
+Lo que la ejecución demuestra, y no es poco:
+
+- **La descripción y los pasos de receta se traducen.** «Purée de banane plantain verte avec
+  oignon mariné et œuf brouillé…», «Faire bouillir la banane plantain verte jusqu'à ce
+  qu'elle ramollisse.»
+- **La frontera aguanta donde tenía que aguantar.** El ingrediente sale
+  `200 g de banane plantain verte (Plátano verde)`: el usuario lee francés y el nombre
+  canónico español —el identificador con el que resuelven `pantry_names_match`, el guard de
+  coherencia y el backstop de alergias— viaja intacto entre paréntesis.
+- **El eco se descarta.** El NOMBRE del plato volvió sin traducir y `P2-DISPLAY-ECO-NOMBRE`
+  lo rechazó en vez de persistirlo, que es justo su trabajo: persistir un eco haría que el
+  gate de «ya traducido» dijera que sí y nadie lo reintentara nunca. (Con un plato cuyo
+  nombre es un sustantivo propio dominicano, además, dejarlo es defendible.)
+- **La telemetría escribe de verdad.** `pipeline_metrics` pasó de CERO filas históricas de
+  este nodo a tener las de estas ejecuciones.
+
+Lo que **NO** demuestra, y por eso el gap no se marca cerrado del todo: que el DISPARADOR se
+active solo en producción para un usuario real. Eso sigue necesitando un plan de cliente y la
+decisión del dueño — es una escritura en sus datos más gasto en un proveedor de pago.
+
 ### ⚠️ Lo que ninguna de esas líneas dice, y es lo que más importa
 
 [P1-I18N-SIN-EVIDENCIA-PRODUCCION] **Esta capa no ha traducido un plato en producción.**
