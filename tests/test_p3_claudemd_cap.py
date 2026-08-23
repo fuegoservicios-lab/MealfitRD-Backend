@@ -51,7 +51,13 @@ from pathlib import Path
 _REPO_ROOT = Path(__file__).resolve().parents[2]
 _CLAUDE_MD = _REPO_ROOT / "CLAUDE.md"
 
-_DEFAULT_CAP = 73400  # [P0-SHOPPING-CYCLE-DAYS · 2026-08-22] 72200→73400 (+1,66%, bajo el
+_DEFAULT_CAP = 74600  # [P2-I18N-MIGRACIONES-SIN-LIBRO + P3-I18N-DOC-CLAUDEMD-6-DE-9 · 2026-08-23]
+# 73400→74600 (+1,63%, bajo el threshold 10%): entran DOS líneas doc-first del plan de i18n
+# (el libro de migraciones `schema_migrations` y la lista real de 9 ficheros del escáner de
+# alert_key) que dejaron el margen en 402 bytes (<800, el suelo de test_p3_claudemd_margin_
+# restore). El detalle vive en backend/docs/migrations_ledger.md y en el propio test_p2_audit_4;
+# CLAUDE.md solo lleva el puntero. Bump anterior:
+# [P0-SHOPPING-CYCLE-DAYS · 2026-08-22] 72200→73400 (+1,66%, bajo el
 # threshold 10%): entran TRES P-fixes de un mismo incidente (la lista de compras nacía de una
 # ventana de días que encoge; la cuarta guarda de nevera decidía sola; el piso de la lista
 # contaba nombres y no comida) como DOS filas puntero-a-doc en "El path degradado necesita su

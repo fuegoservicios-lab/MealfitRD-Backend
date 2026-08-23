@@ -80,8 +80,13 @@ def test_guisantes_does_not_count_as_guiso():
 def test_detector_covers_what_the_rejection_message_promises():
     """Paridad bidireccional: cada familia nombrada en el mensaje de rechazo debe ser detectable.
     Si alguien añade un ejemplo al mensaje sin añadirlo al detector, vuelve el rechazo imposible."""
-    i = _GO.index("El plan no incluye NINGUNA preparación transformada")
-    msg = _GO[i:i + 400]
+    # [reapuntado 2026-08-23, P1-COUNTRY-*] Los ejemplos del mensaje se componen por
+    # país unas líneas ANTES de la frase (rama `transform_minimum` de
+    # `_review_country_feedback`): la ventana arranca en la rama, no en la frase,
+    # o los ejemplos quedan fuera del recorte. Las familias ancladas son las DO.
+    i = _GO.index('if kind == "transform_minimum"')
+    msg = _GO[i:_GO.index('if kind == ', i + 10)]
+    assert "El plan no incluye NINGUNA preparación transformada" in msg
     for familia, ejemplo in (("panqueque", "Panqueques de Avena"), ("arepita", "Arepitas de Yuca"),
                              ("bollito", "Bollitos de Yuca"), ("revoltillo", "Revoltillo de Huevo"),
                              ("guiso", "Pollo Guisado"), ("locrio", "Locrio de Pollo")):

@@ -115,7 +115,10 @@ def test_over_signaling_other_layers_preserved(jsx_src: str):
     # `${styles.fillPerc} ${...}` post-fix narrow — el regex acepta cualquier
     # className expression que contenga `styles.fillPerc` y termine en `{perc}%`.
     fill_perc_match = re.search(
-        r"styles\.fillPerc[\s\S]*?>\s*\n?\s*\{(\w+)\}%",
+        # [reapuntado 2026-08-23, lote 4 i18n] `{perc}%` paso a `{formatPercent(perc)}`
+        # (el % se formatea por locale). La propiedad medida no cambia: el argumento
+        # es `perc` (uncapped), no `fillWidth` (capped a 100).
+        r"styles\.fillPerc[\s\S]*?>\s*\{formatPercent\((\w+)\)\}",
         jsx_src,
     )
     assert fill_perc_match and fill_perc_match.group(1) == "perc", (

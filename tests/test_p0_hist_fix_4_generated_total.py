@@ -122,17 +122,20 @@ def test_missing_range_starts_from_generated_total_plus_one():
     (incluyendo expirados). Si _generatedTotal=3, el siguiente día
     pendiente es el 4, no el 3."""
     text = _HISTORY_JSX.read_text(encoding="utf-8")
-    # Singular: `el día ${_generatedTotal + 1}`.
+    # [reapuntado 2026-08-23, lote 4 i18n] El template literal `el día ${...}` pasó a
+    # `t('el día {n}', { n: _generatedTotal + 1 })`: la frase vive en el catálogo y el
+    # número viaja como argumento. La propiedad medida es la MISMA — el rango arranca
+    # en `_generatedTotal + 1`, no en `_planDaysLen + 1`.
     assert re.search(
-        r"el\s+d[ií]a\s*\$\{_generatedTotal\s*\+\s*1\}",
+        r"t\('el día \{n\}',\s*\{\s*n:\s*_generatedTotal\s*\+\s*1\s*\}\)",
         text,
     ), (
         "Missing range singular debe arrancar en `_generatedTotal + 1` "
         "(no en `_planDaysLen + 1`). El día expirado ocupa el slot "
         "ANTERIOR al primer día pendiente."
     )
-    # Plural start: `del día ${_generatedTotal + 1}`.
+    # Plural: `del día {desde} al día {hasta}` con desde = _generatedTotal + 1.
     assert re.search(
-        r"del\s+d[ií]a\s*\$\{_generatedTotal\s*\+\s*1\}",
+        r"desde:\s*_generatedTotal\s*\+\s*1\s*,\s*hasta:\s*_generatedTotal\s*\+\s*_missingDays",
         text,
     )

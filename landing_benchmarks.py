@@ -65,8 +65,10 @@ FORM_MEDICATION_CHIPS = (
 # —en un beta cuyo primer país es España— y «Frutos Secos» NO cubre el maní, que es una legumbre.
 # El guard `test_allergy_chips_match_wizard` cazó este espejo en cuanto los chips entraron: es
 # exactamente para lo que existe, y sin él la cifra pública de «6 alergias» habría quedado stale.
+# [P0-ALLERGEN-EU14-CLASES-I18N · 2026-08-23] El wizard ganó dos chips (Lactosa y
+# Sesamo, de las 4 clases EU-14 que faltaban); el espejo avanza con él.
 FORM_ALLERGY_CHIPS = ("Lacteos", "Gluten", "Huevo", "Mariscos", "Frutos Secos", "Soya",
-                      "Pescado", "Mani")
+                      "Pescado", "Mani", "Lactosa", "Sesamo")
 
 FORM_DIET_TYPES = ("balanced", "vegetarian", "vegan")
 
@@ -232,8 +234,11 @@ def build_landing_profiles(country: str = "DO") -> list:
                          fs9=True)),
         _perfil(17, "alergias_lacteo_gluten_huevo", gender="female", age=26, weight=55, height=160,
                 goal="lose_fat", activity="moderate",
-                allergies=["Lacteos", "Gluten", "Huevo"],
-                expect=e(allergens=["Lacteos", "Gluten", "Huevo"])),
+                # [P0-ALLERGEN-EU14-CLASES-I18N · 2026-08-23] Lactosa entra JUNTO a
+                # Lacteos a propósito: son la pareja confundible (intolerancia vs alergia)
+                # y este perfil es el que prueba que el motor las trata por separado.
+                allergies=["Lacteos", "Gluten", "Huevo", "Lactosa"],
+                expect=e(allergens=["Lacteos", "Gluten", "Huevo", "Lactosa"])),
         # [P2-ALLERGEN-CHIPS-REACH-ENGINE · 2026-08-21] +«Pescado» y +«Mani» en este perfil.
         # El guard `test_matrix_covers_every_chip_and_diet` exige que la matriz ejercite CADA chip
         # al menos una vez, y al añadir los dos chips nuevos al wizard la matriz se quedó corta —
@@ -242,8 +247,10 @@ def build_landing_profiles(country: str = "DO") -> list:
         # que el perfil que las mezcla es el que de verdad prueba que el motor las separa.
         _perfil(18, "alergias_mar_nuez_soya", gender="male", age=24, weight=72, height=178,
                 goal="performance", activity="athlete",
-                allergies=["Mariscos", "Frutos Secos", "Soya", "Pescado", "Mani"],
-                expect=e(allergens=["Mariscos", "Frutos Secos", "Soya", "Pescado", "Mani"])),
+                # Sesamo entra aquí por la misma razón: semilla que el usuario mezcla
+                # con los frutos secos, y este perfil es el que separa esas clases.
+                allergies=["Mariscos", "Frutos Secos", "Soya", "Pescado", "Mani", "Sesamo"],
+                expect=e(allergens=["Mariscos", "Frutos Secos", "Soya", "Pescado", "Mani", "Sesamo"])),
         _perfil(19, "vegetariana", gender="female", age=36, weight=62, height=167,
                 goal="maintenance", activity="moderate", diet="vegetarian",
                 expect=e(diet="vegetarian")),

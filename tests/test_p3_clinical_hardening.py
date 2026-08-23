@@ -94,8 +94,14 @@ def test_fs7_variety_hard_gate_en_review():
     src = _func_src("review_plan_node")
     assert "VARIETY_HARD_GATE_ENABLED" in src
     assert "variety_report" in src
-    # debe rechazar (approved=False) y escalar severity ante sobreuso de huevo
-    assert "SOBREUSO DE HUEVO" in src
+    # debe rechazar (approved=False) y escalar severity ante sobreuso de huevo.
+    # [reapuntado 2026-08-23] El texto literal se extrajo a `_review_country_feedback`
+    # (kind="egg_overuse") para que las alternativas se redacten por país; el nodo
+    # ancla ahora la LLAMADA con ese kind, y el literal se ancla en el helper.
+    assert '"egg_overuse"' in src
+    import graph_orchestrator as _go_mod
+    import inspect as _inspect
+    assert "SOBREUSO DE HUEVO" in _inspect.getsource(_go_mod._review_country_feedback)
 
 
 def test_fs8_supplement_wiring_en_assemble():

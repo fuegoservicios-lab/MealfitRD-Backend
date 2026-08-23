@@ -86,8 +86,21 @@ def test_prompts_teach_backdate_to_agent():
         "ambos builders (inline y stream) deben enseñar days_ago/meal_type/force"
     assert "days_ago" in prompts and "force=true" in prompts
 
+    # [reapuntado 2026-08-23, P3-I18N-PROMPT-VISION-CLIENTE-ESPANOL] La instrucción
+    # de la foto salió del cliente: AgentPage manda `vision:` estructurado y el
+    # COMPOSITOR del servidor (este mismo chat_agent.py) enseña days_ago. La
+    # propiedad es la misma — quien compone el turno de la foto enseña el registro
+    # en otro día — y ahora vive en un solo lado.
+    # (El literal vive partido en dos strings adyacentes — `"...days_ago "` +
+    # `"(1=ayer)..."` — así que se ancla la PROPIEDAD sobre el compositor entero:
+    # que `build_vision_context` exista y que su bloque enseñe days_ago y 1=ayer.)
+    assert "def build_vision_context(" in prompts, \
+        "el compositor server-side de la foto desapareció de chat_agent.py"
+    _vision_zone = prompts[prompts.index("def build_vision_context("):]
+    assert "days_ago" in _vision_zone and "(1=ayer)" in _vision_zone, \
+        "el compositor de la foto (server-side) dejó de enseñar el registro en otro día"
     with open(os.path.join(_ROOT, "frontend", "src", "pages", "AgentPage.jsx"),
               encoding="utf-8") as f:
         ap = f.read()
-    assert "days_ago (1=ayer)" in ap, \
-        "la instrucción de foto del chat menciona el registro en otro día"
+    assert "vision: visionPayload" in ap, \
+        "AgentPage ya no manda el contexto de la foto estructurado (vision:) al servidor"

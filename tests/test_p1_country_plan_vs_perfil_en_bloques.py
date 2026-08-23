@@ -63,9 +63,15 @@ def test_merge_del_worker_actualiza_perfil_sin_pisar_pais_del_snapshot():
     assert "_private" not in merged
 
 
-def test_el_ssot_del_plan_prefiere_es_sobre_perfil_do():
+def test_el_ssot_del_plan_prefiere_es_sobre_perfil_do(monkeypatch):
     from constants import country_for_plan
 
+    # Autosuficiente respecto al entorno: `country_for_form_data` lee el knob
+    # maestro POR LLAMADA, y sin él todo canoniza a DO — este test corría verde
+    # solo en los pasos del gate que exportan MEALFIT_COUNTRY_SYSTEM=true y rojo
+    # en la suite completa. La conducta bajo el knob apagado ya la ancla
+    # test_p1_country_system_f0; aquí se mide la POLÍTICA plan-sobre-perfil.
+    monkeypatch.setenv("MEALFIT_COUNTRY_SYSTEM", "true")
     assert country_for_plan({"_country": "ES"}, {"country": "DO"}) == "ES"
 
 

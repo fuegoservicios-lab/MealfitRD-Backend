@@ -8,6 +8,7 @@
 # Uso:
 #   pwsh -File scripts/run_ci.ps1
 #   pwsh -File scripts/run_ci.ps1 -SkipBackend     # solo frontend
+#   pwsh -File scripts/run_ci.ps1 -BackendCrossRepoOnly # frontend + paridad backend↔frontend
 #   pwsh -File scripts/run_ci.ps1 -SkipFrontend    # solo backend
 #   pwsh -File scripts/run_ci.ps1 -SkipBuild       # tests sin build prod
 #
@@ -19,6 +20,7 @@
 
 param(
     [switch]$SkipBackend,
+    [switch]$BackendCrossRepoOnly,
     [switch]$SkipFrontend,
     [switch]$SkipBuild
 )
@@ -26,6 +28,10 @@ param(
 $ErrorActionPreference = "Stop"
 $repoRoot = Split-Path -Parent $PSScriptRoot
 $failed = @()
+
+if ($SkipBackend -and $BackendCrossRepoOnly) {
+    throw "-SkipBackend y -BackendCrossRepoOnly son modos mutuamente excluyentes"
+}
 
 function Run-Step {
     param([string]$Label, [scriptblock]$Block)
@@ -119,7 +125,7 @@ function Resolve-BackendPython {
            "Configura la escotilla:  `$env:MEALFIT_PYTHON = 'C:\ruta\a\python.exe'")
 }
 
-if (-not $SkipBackend) {
+if (-not $SkipBackend -and -not $BackendCrossRepoOnly) {
     Run-Step "Backend pytest" {
         Push-Location "$repoRoot/backend"
         try {
@@ -312,6 +318,75 @@ if (-not $SkipBackend) {
         } finally {
             Pop-Location
         }
+    }
+}
+
+# [P2-DEPLOY-FRONTEND-SALTA-LA-PARIDAD · 2026-08-23] Un deploy frontend no
+# necesita las ~20k pruebas backend, pero sí las que usan al frontend como
+# sujeto. El marker se asigna automáticamente en conftest al detectar rutas al
+# repo hermano; una prueba nueva entra sin mantener esta lista.
+if ($BackendCrossRepoOnly) {
+    Run-Step "Backend frontend_cross_repo pytest" {
+        Push-Location "$repoRoot/backend"
+        $previousCountrySystem = $env:MEALFIT_COUNTRY_SYSTEM
+        try {
+            $py = Resolve-BackendPython -BackendDir "$repoRoot/backend"
+            $env:MEALFIT_COUNTRY_SYSTEM = "true"
+            & $py -m pytest tests/ -m "frontend_cross_repo and not e2e" -q --tb=short
+            if ($LASTEXITCODE -ne 0) {
+                throw "pytest frontend_cross_repo fallo (exit $LASTEXITCODE)"
+            }
+        } finally {
+            if ($null -eq $previousCountrySystem) {
+                Remove-Item Env:\MEALFIT_COUNTRY_SYSTEM -ErrorAction SilentlyContinue
+            } else {
+                $env:MEALFIT_COUNTRY_SYSTEM = $previousCountrySystem
+            }
+            Pop-Location
+        }
+    }
+}
+
+# [P2-E2E-CATALOGO-PAIS-SIN-NINGUN-GATE · 2026-08-23] Los e2e de país son
+# el único estrato que contrasta el catálogo VIVO. Se ejecuta sólo el fichero
+# read-only; nunca toda la marca `e2e`, porque esa marca también autoriza a los
+# tests a escribir en producción. Sin credencial el gate lo declara, no finge
+# que el catálogo pasó.
+if (-not $SkipBackend -and -not $BackendCrossRepoOnly) {
+    $backendEnv = Join-Path $repoRoot "backend/.env"
+    $hasNeonDatabase = -not [string]::IsNullOrWhiteSpace($env:NEON_DATABASE_URL)
+    if (-not $hasNeonDatabase -and (Test-Path -LiteralPath $backendEnv)) {
+        $neonLine = Select-String -LiteralPath $backendEnv `
+            -Pattern '^\s*NEON_DATABASE_URL\s*=\s*(.+)$' | Select-Object -First 1
+        if ($neonLine -and $neonLine.Matches[0].Groups[1].Value) {
+            $rawNeonValue = $neonLine.Matches[0].Groups[1].Value.Trim()
+            $hasNeonDatabase = $rawNeonValue -notin @('', '""', "''")
+        }
+    }
+
+    if ($hasNeonDatabase) {
+        Run-Step "Backend country catalog live (read-only)" {
+            Push-Location "$repoRoot/backend"
+            $previousCountrySystem = $env:MEALFIT_COUNTRY_SYSTEM
+            try {
+                $py = Resolve-BackendPython -BackendDir "$repoRoot/backend"
+                $env:MEALFIT_COUNTRY_SYSTEM = "true"
+                & $py -m pytest "tests/test_p1_country_system_f2.py" -m "e2e" -q --tb=short
+                if ($LASTEXITCODE -ne 0) {
+                    throw "country catalog live e2e fallo (exit $LASTEXITCODE)"
+                }
+            } finally {
+                if ($null -eq $previousCountrySystem) {
+                    Remove-Item Env:\MEALFIT_COUNTRY_SYSTEM -ErrorAction SilentlyContinue
+                } else {
+                    $env:MEALFIT_COUNTRY_SYSTEM = $previousCountrySystem
+                }
+                Pop-Location
+            }
+        }
+    } else {
+        Write-Host ""
+        Write-Host "==> Backend country catalog live (read-only): OMITIDO; NEON_DATABASE_URL no está configurada." -ForegroundColor Yellow
     }
 }
 

@@ -61,6 +61,7 @@ tooltip-anchor: P3-I18N-PDF-GATE-CIEGO-HTML
 from __future__ import annotations
 
 import io
+import re
 from pathlib import Path
 
 _BACKEND = Path(__file__).resolve().parent.parent
@@ -118,10 +119,15 @@ def test_el_campo_embebido_sigue_ganando():
     # posiciones de `displayNameEn` y `glossIndex.get` lo satisfacía la FIRMA de la función,
     # que nombra el parámetro antes que cualquier lógica. Invertir la precedencia dejaba el
     # guard verde.
-    assert "if (!_fuente && glossIndex" in src, (
-        "el índice del catálogo dejó de estar condicionado a que el campo embebido esté "
-        "vacío: se consulta siempre, o antes. El embebido tiene que ganar — puede llevar un "
-        f"nombre que el catálogo ya no conozca [{_MARKER}]"
+    # [reapuntado 2026-08-23, P1-COUNTRY-GLOSS-SOLO-INGLES] La consulta al índice ya no
+    # puede ser condicional: el gloss panhispánico (`gloss_es`) necesita la fila del
+    # catálogo AUNQUE el embebido inglés exista. La precedencia que este guard protege
+    # no cambió y ahora se ancla en su expresión: el valor del catálogo solo entra a
+    # `_fuente` cuando el embebido vino vacío.
+    assert "if (!_fuente) _fuente = _catalogEn" in src, (
+        "el embebido dejó de ganar: el catálogo tiene que ser respaldo (solo si "
+        "`_fuente` está vacío) — un plan puede traer un nombre que el catálogo ya no "
+        f"conozca [{_MARKER}]"
     )
 
 
@@ -133,7 +139,10 @@ def test_el_pdf_construye_el_indice_y_lo_pasa():
     assert "buildGlossIndex(" in dash and "getCachedGlossIndex()" in dash, (
         f"el PDF dejó de construir el índice de gloss [{_MARKER}]"
     )
-    assert "_dashLocale, _glossIdx)" in dash, (
+    # [reapuntado 2026-08-23] La llamada se partió en varias líneas al ganar dos
+    # argumentos (país + gloss del ítem): el ancla pasa a regex tolerante a
+    # whitespace, misma propiedad — el índice llega COMO ARGUMENTO a la llamada.
+    assert re.search(r"glossShoppingItemName\([\s\S]{0,200}?_glossIdx", dash), (
         "el índice se construye pero no llega al gloss: existe y no sirve"
     )
 

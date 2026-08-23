@@ -187,7 +187,10 @@ def test_la_alerta_esta_documentada_y_el_escaner_la_ve():
 
 def test_el_catalogo_envia_el_gloss_ingles():
     src = _leer(_BACKEND / "routers" / "user_data.py")
-    assert "slug, name, name_en, category" in src, (
+    # [P1-COUNTRY-GLOSS-SOLO-INGLES · 2026-08-23] La proyección ganó `gloss_es`
+    # y el SELECT se partió en dos líneas: el ancla pasa a la PROPIEDAD (que
+    # `name_en` siga proyectado), no a la forma exacta de la lista de columnas.
+    assert "slug, name, name_en," in src, (
         "el endpoint dejó de enviar `name_en`: buscar «chicken» o «rice» vuelve a devolver "
         "CERO resultados — sin error, simplemente vacío, que se lee como «ese alimento no "
         f"existe» [{_MARKER}]"

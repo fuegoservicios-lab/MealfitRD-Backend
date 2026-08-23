@@ -206,12 +206,16 @@ def test_el_gate_puede_pasar_de_verdad():
     m = re.search(r"&\s*pwsh[^\n]*run_ci\.ps1[^\n]*", deploy)
     assert m, "[P2-DEPLOY-CI-GATE] No se encontró la invocación de `run_ci.ps1`."
     ventana = deploy[max(0, m.start() - 400): m.end()]
-    assert "-SkipBackend" in ventana, (
-        "[P2-DEPLOY-CI-GATE] El gate volvió a incluir la suite del backend.\n"
-        "Si has limpiado la baseline roja (43 fallos el 2026-08-14), quita también "
-        "esta aserción y su explicación — el guard existe para que el cambio sea "
-        "deliberado, no para impedirlo. Si NO la has limpiado, el gate abortará "
-        "todos los despliegues y el operador aprenderá a pasar `-SkipTests`."
+    # [G34 · 2026-08-23] La baseline roja se limpió (el target `all` corre la
+    # suite entera y pasa) y el cambio deliberado que este guard pedía ocurrió:
+    # el target frontend ya no SALTA el backend — corre sus contratos cross-repo
+    # (`-BackendCrossRepoOnly`, tests con marker `frontend_cross_repo`) sin pagar
+    # la suite completa. El guard ahora ancla ESO: ni volver al salto total, ni
+    # colar la suite entera en un deploy de frontend.
+    assert "-BackendCrossRepoOnly" in ventana, (
+        "[P2-DEPLOY-CI-GATE] El target frontend perdió `-BackendCrossRepoOnly`: "
+        "o volvió a saltarse el backend entero (-SkipBackend, pierde los contratos "
+        "cross-repo) o corre la suite completa (y el operador aprenderá `-SkipTests`)."
     )
 
 

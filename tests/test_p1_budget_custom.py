@@ -140,9 +140,19 @@ def test_initial_form_data_has_budget_amount():
 # 6. [BUDGET-CURRENCY · 2026-05-31] Toggle de moneda RD$/US$ (default DOP/peso)
 # ---------------------------------------------------------------------------
 def test_budget_currency_toggle_defaults_to_dop():
-    # initialFormData: default 'DOP' (peso dominicano) — pedido del usuario.
-    assert re.search(r"budgetCurrency:\s*'DOP'", _CTX_JSX), (
-        "initialFormData no declara `budgetCurrency: 'DOP'` (default peso dominicano)."
+    # [reapuntado 2026-08-23, P1-COUNTRY-BUDGET-CURRENCY-DEFAULT] El literal
+    # `budgetCurrency: 'DOP'` salió de initialFormData: con 6 países, la moneda
+    # default se DERIVA del país (config/countries.js) y el campo nace vacío.
+    # La capacidad que este test afirma no cambia: el default efectivo para DO
+    # sigue siendo el peso — hoy lo garantiza el fallback `|| 'DOP'` de la tabla
+    # de países (y countryBudgetCurrencyDefault.p1.test.jsx cubre la derivación).
+    assert re.search(r"budgetCurrency:\s*''", _CTX_JSX), (
+        "initialFormData debe declarar `budgetCurrency: ''` (la moneda se deriva del país)."
+    )
+    _COUNTRIES_JS = (_REPO_ROOT / "frontend" / "src" / "config" / "countries.js").read_text(encoding="utf-8")
+    assert re.search(r"\|\|\s*'DOP'", _COUNTRIES_JS), (
+        "la tabla de países perdió el fallback a 'DOP': sin él, un país desconocido "
+        "deja al formulario sin moneda y el piso del presupuesto pierde su referencia."
     )
     # Frontend QBudget: toggle RD$/US$ que setea budgetCurrency.
     # [reapuntado 2026-08-14] Eran dos botones con la moneda escrita en el literal
@@ -169,8 +179,11 @@ def test_budget_currency_toggle_defaults_to_dop():
         "podría haber vuelto a un array de opciones hardcodeado por su cuenta."
     )
     # El default visible es RD$ (peso) cuando el campo no se ha tocado.
-    assert "formData.budgetCurrency || 'DOP'" in _IQ_JSX, (
-        "El default de la moneda debe ser 'DOP' (peso dominicano)."
+    # [reapuntado 2026-08-23] El literal `|| 'DOP'` de QBudget pasó a
+    # `defaultCurrencyForCountry(formData.country)` — la MISMA garantía, vía la
+    # tabla de países (cuyo fallback 'DOP' ancla el assert de arriba).
+    assert "formData.budgetCurrency || defaultCurrencyForCountry(formData.country)" in _IQ_JSX, (
+        "QBudget perdió la derivación del default de moneda por país."
     )
 
 
