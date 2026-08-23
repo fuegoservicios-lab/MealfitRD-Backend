@@ -66,7 +66,12 @@ exitoso (Finding 7) — antes solo se emitía en el camino feliz completo, dejan
 modos de fallo post-invoke (JSON roto, 0 meals válidos, persist fallido).
 
 Knobs (auto-registrados en `_KNOBS_REGISTRY` vía `knobs._env_bool/_env_str/_env_float/_env_int`):
-    MEALFIT_PLAN_DISPLAY_I18N                default True  — kill switch total.
+    MEALFIT_PLAN_DISPLAY_I18N                default True  — apaga el motor y el attach
+                                             del gloss. NO revierte lo ya persistido ni
+                                             toca la búsqueda: ver «Qué apaga el kill
+                                             switch, y qué NO» en
+                                             docs/plan_display_i18n.md
+                                             [P2-I18N-KILLSWITCH-NO-REVIERTE].
     MEALFIT_PLAN_DISPLAY_I18N_MODEL          default flash — convención P3-PREVIEW-MODEL-KNOB.
     MEALFIT_PLAN_DISPLAY_I18N_TIMEOUT_S      default 60.0  — timeout del cliente LLM.
     MEALFIT_PLAN_DISPLAY_I18N_BATCH_DAYS     default 4     — TOPE DURO en días por lote

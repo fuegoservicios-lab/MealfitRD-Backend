@@ -19,7 +19,7 @@
 
 | Knob | Default | Efecto |
 |---|---|---|
-| `MEALFIT_PLAN_DISPLAY_I18N` | `true` | kill switch TOTAL: motor + attach de `display_name_en` en el aggregator (FF-6) |
+| `MEALFIT_PLAN_DISPLAY_I18N` | `true` | Apaga el motor de traducción y el attach de `display_name_en` en el aggregator (FF-6). **No es «total»** — ver «Qué apaga el kill switch, y qué NO» |
 | `MEALFIT_PLAN_DISPLAY_I18N_MODEL` | flash | modelo del enriquecimiento |
 | `MEALFIT_PLAN_DISPLAY_I18N_BATCH_DAYS` | 4 | días por llamada (evita truncamiento) |
 
@@ -174,6 +174,33 @@ Tres decisiones del diseño:
 - **El escáner de drift de `alert_key` pasó a mirar este módulo.** Miraba seis ficheros y
   éste no estaba: un `alert_key` fuera del conjunto escaneado es un `alert_key` sin
   contrato, y el drift bidireccional que ese test existe para impedir no se enteraría.
+
+### Qué apaga el kill switch, y qué NO
+
+[P2-I18N-KILLSWITCH-NO-REVIERTE · 2026-08-23] Esta tabla decía «kill switch **TOTAL**: motor
++ attach de `display_name_en` en el aggregator». La segunda mitad es cierta —verificado: el
+attach lo lee en la primera línea de `_display_name_en_for_item`, vía `_knob_env_bool`, y
+cubre los DOS caminos del aggregator porque el gateo vive en la función y no en sus dos
+llamantes—. La palabra «total» no lo es.
+
+**Lo que apaga:**
+
+- el motor de traducción: no se vuelve a llamar al proveedor;
+- el attach del gloss en cada lista nueva.
+
+**Lo que NO apaga, y por qué:**
+
+- **Lo ya persistido.** Un plan con `_display` escrito lo conserva y el frontend lo sigue
+  pintando: el knob vive en el servidor y el pintado es del cliente. Desaparece al regenerar
+  el plan. Si hiciera falta revertir en caliente, el camino es un `UPDATE` que borre el
+  campo — no este interruptor.
+- **El `name_en` del catálogo.** Alimenta la BÚSQUEDA en inglés
+  (`P2-I18N-CATALOGO-BUSCADOR-SIN-PUENTE`), y buscar no es mostrar: apagar la capa de
+  traducción no debería dejar a un usuario en inglés sin poder encontrar «chicken».
+
+Se prefiere una promesa precisa a una total y falsa. Un operador que apaga un interruptor en
+mitad de un incidente necesita saber exactamente qué deja de pasar — y «total» le habría
+hecho esperar que lo ya servido cambiara solo.
 
 ### ⚠️ Lo que ninguna de esas líneas dice, y es lo que más importa
 
