@@ -54,6 +54,33 @@ calidad defendible es un producto; once con hindi y coreano de terminología
 nutricional sin revisar es una demo. **Añadir el sexto es un JSON y cuatro líneas** —
 ver §6.
 
+### El idioma que no ofrecemos cae al español — y es una decisión, no un hueco
+
+[P3-I18N-IDIOMA-NO-OFRECIDO-CAE-A-ESPANOL · 2026-08-23] Un visitante con el navegador en
+alemán, chino, japonés o árabe recibe la app en **es-DO**. Así se comportaba
+`detectBrowserLocale` desde el primer día (recorre `navigator.languages`, casa por código
+exacto y después por subetiqueta primaria, y si nada casa devuelve `DEFAULT_LOCALE`), pero
+nadie lo había escrito como decisión, y una conducta que nadie defendió por escrito vuelve
+a discutirse cada vez que alguien la ve.
+
+Por qué español y no inglés como segunda opción:
+
+- **es-DO es el único idioma con cobertura del 100 % por construcción**: no tiene catálogo,
+  es lo que el LLM escribe y lo que el motor usa como identificador. Cualquier otro fallback
+  es un catálogo que puede estar a medias en ese momento.
+- **La base de usuarios es dominicana** y el producto se vende en cinco países de habla
+  hispana más EE.UU.: para la mayoría de quien no encaja en los cinco idiomas, el español
+  es más probable que el inglés.
+- **Inglés como fallback sería una segunda decisión de producto**, con su propio coste: un
+  alemán que ve inglés cree que la app está en inglés y no busca el selector; uno que ve
+  español en una app vendida en España entiende de dónde viene.
+
+Lo que sí hace la app por ese visitante: el selector de idioma está **antes de tener
+cuenta** (Login y formulario, `P2-I18N-SIN-SELECTOR-ANTES-DE-TENER-CUENTA`), así que puede
+elegir uno de los cinco en la primera pantalla. Cambiar esta decisión es cambiar UNA línea
+(`return DEFAULT_LOCALE` al final de `detectBrowserLocale`) y este párrafo; no hay que
+tocar nada más. Ancla: `test_p2_i18n_doc_espejos_incompletos.py`.
+
 ### Las etiquetas: sin país, y el código NO sigue a la etiqueta
 
 `P1-I18N-LABEL-NEUTRAL · 2026-08-15`. El selector muestra **«Español», «English»,
