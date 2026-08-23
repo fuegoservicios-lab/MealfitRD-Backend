@@ -3674,14 +3674,18 @@ def mark_shopping_list_purchased(user_id: str, excluded_items: list[str] = None,
                 
         # Normalizar bases a modificar
         modified_bases = set()
+        _mod_pedidos = {}
         if modified_items:
             for item in modified_items:
                 _, _, name = _parse_quantity(item)
                 base = normalize_ingredient_for_tracking(name) or strip_accents(name.lower().strip())
-                if base: modified_bases.add(base)
+                if base:
+                    modified_bases.add(base)
+                    _mod_pedidos[base] = item
                 
         # Filtrar shop_list original (excluyendo o si fue modificado con otra cantidad)
         _excl_casadas = set()
+        _mod_casadas = set()
         final_shop_list = []
         for item in shop_list:
             val = item.get("display_string", str(item)) if isinstance(item, dict) else str(item)
@@ -3694,6 +3698,11 @@ def mark_shopping_list_purchased(user_id: str, excluded_items: list[str] = None,
                 # «no encontré ninguno de los tres».
                 if base in excluded_bases:
                     _excl_casadas.add(base)
+                # [P3-I18N-TOOLCALL-MODIFIED-ITEMS-SIN-RED · 2026-08-23] y la que casó
+                # como MODIFICADA: sin esto no se distingue «cambié la cantidad de tres»
+                # de «añadí tres extras con nombres que no están en la lista».
+                if base in modified_bases:
+                    _mod_casadas.add(base)
                 continue # Fue excluido o lo agregaremos con la nueva cantidad de modified_items
                 
             final_shop_list.append(val)
@@ -3733,7 +3742,26 @@ def mark_shopping_list_purchased(user_id: str, excluded_items: list[str] = None,
                         f"refería."
                     )
             if modified_items:
-                msg += f" (Se modificaron/añadieron {len(modified_items)} ítems)."
+                # [P3-I18N-TOOLCALL-MODIFIED-ITEMS-SIN-RED · 2026-08-23] La red que
+                # `excluded_items` ya tenía y ésta no. Un ítem modificado que no casa con la
+                # lista no se pierde: entra a la Nevera como EXTRA, tal cual lo escribió el
+                # usuario — y si chatea en inglés, eso es una fila «3 lbs of chicken» que
+                # `pantry_names_match` no resolverá nunca contra las recetas en español.
+                # Callarlo deja al usuario creyendo que cambió la cantidad del pollo.
+                _mod_no_casaron = sorted(
+                    _mod_pedidos[b] for b in modified_bases if b not in _mod_casadas
+                )
+                msg += f" (Se modificaron {len(_mod_casadas)} ítems de la lista"
+                msg += f" y se añadieron {len(_mod_no_casaron)} extras)." if _mod_no_casaron else ")."
+                if _mod_no_casaron:
+                    msg += (
+                        f"\n\n[ALERTA INTERNA PARA LA IA]: Estos ítems modificados NO casaron "
+                        f"con ningún ítem de la lista de compras y se añadieron a la Nevera "
+                        f"como EXTRA con el nombre tal cual: {', '.join(_mod_no_casaron)}. La "
+                        f"lista está en español canónico y puede que el usuario los nombrara "
+                        f"en otro idioma: si se refería a un ítem de la lista, pregúntale a "
+                        f"cuál y NO afirmes que cambiaste su cantidad."
+                    )
             return msg
         else:
             return "Hubo un error al intentar agregar los ingredientes a la despensa."
