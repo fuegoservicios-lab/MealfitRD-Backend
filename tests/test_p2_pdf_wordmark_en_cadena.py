@@ -40,6 +40,12 @@ _BACKEND = Path(__file__).resolve().parent.parent
 _ROOT = _BACKEND.parent
 _FRONT = _ROOT / "frontend" / "src"
 _WORDMARK = _FRONT / "components" / "common" / "Wordmark.jsx"
+# [P3-I18N-WORDMARK-SIN-COMPONENTE · 2026-08-22] El TEXTO de la marca se mudó a un
+# módulo sin componente: exportarlo junto al componente disparaba
+# `react-refresh/only-export-components` y subía el conteo de eslint por encima del
+# tope del gate. El componente sigue donde estaba; la constante, no. Este guard vigila
+# la constante, así que mira al fichero nuevo.
+_BRAND = _FRONT / "config" / "brand.js"
 _RECIPES = _FRONT / "pages" / "Recipes.jsx"
 _DASHBOARD = _FRONT / "pages" / "Dashboard.jsx"
 _NOMBRE = _FRONT / "utils" / "pdfFileName.js"
@@ -58,7 +64,7 @@ def _fuente(p: Path) -> str:
 
 def test_ningun_pdf_escribe_la_marca_a_mano() -> None:
     """La copia número trece. `Wordmark.jsx` existe para que no la haya."""
-    texto_marca = re.search(r"WORDMARK_TEXT = '([^']+)'", _fuente(_WORDMARK))
+    texto_marca = re.search(r"WORDMARK_TEXT = '([^']+)'", _fuente(_BRAND))
     assert texto_marca, f"desapareció `WORDMARK_TEXT` del SSOT [{_MARKER}]"
     marca = texto_marca.group(1)
 

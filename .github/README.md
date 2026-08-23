@@ -23,7 +23,7 @@ GitHub detecta el workflow file en el primer push y lo registra. Tras
 eso, cada push/PR ejecuta los jobs.
 
 Mientras tanto, los wrappers locales [`scripts/run_ci.ps1`](../scripts/run_ci.ps1)
-y [`scripts/run_ci.sh`](../scripts/run_ci.sh) reproducen los 3 jobs
+reproduce los jobs (`run_ci.sh` quedo deprecado, P3-I18N-RUN-CI-SH-FOSIL)
 principales offline.
 
 ---

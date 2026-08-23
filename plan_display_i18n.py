@@ -6,13 +6,26 @@ tooltip-anchor: P1-PLAN-DISPLAY-I18N
 Decisión arquitectónica (spec `docs/superpowers/specs/2026-08-19-plan-display-i18n-design.md`):
 el plan se GENERA y PERSISTE siempre en español canónico — los nombres de alimentos y platos
 son identificadores del sistema (`pantry_names_match`, coherence guard, backstop de alergias
-resuelven por esos strings exactos; P1-I18N-DASHBOARD). Este módulo NUNCA lee ese campo de
-vuelta ni condiciona su propia conducta a él — solo ESCRIBE un campo paralelo de solo-lectura:
+resuelven por esos strings exactos; P1-I18N-DASHBOARD). Este módulo escribe un campo
+paralelo de solo-lectura para el frontend:
 
     meal["_display"][locale] = {"name", "description", "recipe", "ingredients"}
 
 que el frontend consume con fallback campo a campo al original si falta (fase 2, fuera de
 este módulo). es-DO jamás lleva `_display` — byte-idéntico a hoy.
+
+[P3-I18N-DISPLAY-DOCSTRING-LEE-DISPLAY · 2026-08-22] Este párrafo decía que el módulo «NUNCA
+lee ese campo de vuelta ni condiciona su propia conducta a él». Desde
+`P2-DISPLAY-REDESPACHO-SIN-FILTRO` hace exactamente eso, y con razón: `_ya_traducido_*` lee
+su propio `_display` para no re-pagar una traducción que ya está — y para exigir que sea
+USABLE, no sólo que exista. Sin esa lectura, un display a medias dado por bueno deja esa
+comida en español para siempre porque nadie la reintenta.
+
+La frontera real, que sigue intacta, es otra: `_display` **jamás influye en el dato canónico
+ni en una decisión del motor**. Ni el generador, ni los guards, ni la resolución de nevera,
+ni el backstop clínico lo miran. Lo único que condiciona es si este módulo vuelve a gastar
+en traducir. Decirlo mal importa: un lector que crea que la regla es «nadie lo lee» borrará
+esa comprobación creyendo que restaura una invariante.
 
 Contrato:
     enrich_plan_display(plan_id, user_id, locale, day_indices=None) -> dict
@@ -172,6 +185,31 @@ def _plan_display_i18n_max_output_tokens() -> int:
         8000,
         validator=lambda v: 500 <= v <= 32000,
     )
+
+
+# [P3-I18N-DISPLAY-KNOBS-PEREZOSOS · 2026-08-22] Los cinco knobs, declarados en el IMPORT.
+#
+# `knobs._env_*` registra en `_KNOBS_REGISTRY` al ser LLAMADO. Estos cinco viven dentro de
+# funciones que sólo corren cuando hay algo que traducir, así que
+# `get_knobs_registry_snapshot()` —lo que un operador consulta para saber qué puede tocar sin
+# redeploy— no los conocía hasta que la feature se ejecutaba por primera vez. Y esta capa,
+# medido el 2026-08-22, se ha ejecutado CINCO veces en toda su historia: en la práctica los
+# knobs eran invisibles siempre.
+#
+# Son cinco lecturas de entorno en el import y NO cachean nada: cada accesor sigue leyendo en
+# vivo, que es lo que permite el rollback sin redeploy. Esto sólo los DECLARA.
+for _declarar in (
+    _plan_display_i18n_enabled,
+    _plan_display_i18n_model_name,
+    _plan_display_i18n_timeout_s,
+    _plan_display_i18n_batch_days,
+    _plan_display_i18n_max_output_tokens,
+):
+    try:
+        _declarar()
+    except Exception:  # noqa: BLE001 — declarar un knob jamás puede tumbar el import
+        pass
+del _declarar
 
 
 def _circuit_breaker_can_proceed(model_name: str) -> bool:
@@ -1413,7 +1451,10 @@ def _persist_batch(
                     locale_entry = {}
                 locale_entry["name"] = plan_name_display
                 plan_disp[locale] = locale_entry
-                pd["_display"] = plan_disp
+                # [P3-I18N-DISPLAY-PODA-SOLO-POR-COMIDA · 2026-08-22] El tope de idiomas se
+                # aplicaba SOLO al `_display` por comida; el de nivel plan acumulaba los
+                # cinco. Menos volumen, mismo argumento: nada lo evacuaba nunca.
+                pd["_display"] = _podar_locales(plan_disp, locale)
                 counters["plan_name_written"] = True
             else:
                 counters["plan_name_mismatch"] = True
@@ -1433,7 +1474,8 @@ def _persist_batch(
                     locale_entry = {}
                 locale_entry["insights"] = insights_display
                 plan_disp[locale] = locale_entry
-                pd["_display"] = plan_disp
+                # [P3-I18N-DISPLAY-PODA-SOLO-POR-COMIDA · 2026-08-22] Idem que el nombre.
+                pd["_display"] = _podar_locales(plan_disp, locale)
                 counters["insights_written"] = True
             else:
                 counters["insights_mismatch"] = True
@@ -1517,6 +1559,13 @@ def enrich_plan_display(
         cross_worker_claimed = False
         try:
             if not _try_claim_enrich_lock_cross_worker(plan_id, locale, requested_day_indices):
+                # [P3-I18N-DISPLAY-BREAKER-SIN-FILA · 2026-08-22] Fila también aquí. Los
+                # otros seis caminos la dejan; estos dos salían mudos, así que en la
+                # telemetría un plan bloqueado y un plan que nunca se pidió eran
+                # indistinguibles — y el dedupe es el caso NORMAL bajo concurrencia.
+                _emit_result_telemetry(plan_id, user_id, locale, {
+                    "enriched_meals": 0, "reason": "dedupe_locked",
+                })
                 return {"enriched_meals": 0, "skipped": "dedupe_locked"}
             cross_worker_claimed = True
 
@@ -1526,6 +1575,12 @@ def enrich_plan_display(
                     f"[P1-PLAN-DISPLAY-I18N] circuit breaker abierto model={model_name!r} "
                     f"plan={plan_id} locale={locale} — skip silente."
                 )
+                # [P3-I18N-DISPLAY-BREAKER-SIN-FILA · 2026-08-22] Este es el que más
+                # falta hacía: el breaker abierto significa que el proveedor está caído, y
+                # era justo el estado que no dejaba rastro en `pipeline_metrics`.
+                _emit_result_telemetry(plan_id, user_id, locale, {
+                    "enriched_meals": 0, "reason": "circuit_breaker_open",
+                })
                 return {"enriched_meals": 0, "skipped": "circuit_breaker_open"}
 
             batch_size = _plan_display_i18n_batch_days()

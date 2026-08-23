@@ -277,8 +277,21 @@ def test_c_migracion_en_ambos_directorios_y_byte_identica():
     assert _MIGRATION_BACKEND.exists(), (
         f"P1-I18N-DASHBOARD: falta {_MIGRATION_BACKEND} (P3-MIGRATIONS-SSOT)."
     )
-    assert _MIGRATION_ROOT.read_bytes() == _MIGRATION_BACKEND.read_bytes(), (
-        "P1-I18N-DASHBOARD: las dos copias de la migración DIFIEREN. Ese drift ya "
+    # [P3-I18N-MIGRACION-ESPEJO-CRLF · 2026-08-22] Se compara el CONTENIDO, no los bytes.
+    #
+    # Los dos ficheros viven en repos hermanos distintos, y git reescribe los finales de
+    # línea al pasar por el índice (todo este repo emite el aviso «LF will be replaced by
+    # CRLF» en cada commit). Un `read_bytes()` entre repos convierte esa reescritura en un
+    # fallo rojo intermitente que no significa nada — y un guard que se pone rojo sin
+    # defecto enseña a ignorarlo, que es justo lo que este no puede permitirse: el drift
+    # real que vigila ya ocurrió una vez (audit 2026-05-20).
+    #
+    # Lo que la invariante dice es «las dos copias dicen lo mismo». El final de línea no es
+    # parte de lo que dicen.
+    _norm = lambda p: p.read_text(encoding="utf-8").replace("\r\n", "\n")
+    assert _norm(_MIGRATION_ROOT) == _norm(_MIGRATION_BACKEND), (
+        "P1-I18N-DASHBOARD: las dos copias de la migración DIFIEREN en su CONTENIDO (los "
+        "finales de línea ya se normalizan, así que esto es drift real). Ese drift ya "
         "ocurrió antes (audit 2026-05-20: 4 files root-only + 1 backend-only). "
         "Copiar la buena sobre la otra y volver a correr."
     )

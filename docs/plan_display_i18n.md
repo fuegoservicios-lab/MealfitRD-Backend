@@ -84,6 +84,45 @@ auditoría dejara fuera la superficie i18n más cara del producto por creerle.
 | `P2-MUTATOR-PURITY` | El `mutator` corre DENTRO del `SELECT … FOR UPDATE` de `update_plan_data_atomic`: **puro, CPU-only, sin IO ni LLM ni re-entrada al pool** — sostener el lock durante los segundos que dura la llamada LLM no es viable, así que `targets` se construye FUERA y el TOCTOU se cierra por huella. Acumular en los dicts `counters` (closures en memoria) no viola esa pureza. |
 | `P2-DISPLAY-SIN-TELEMETRIA-RESULTADO` | El módulo instrumentaba lo que se GASTA (`llm_usage_events`) y nada de lo que PASA: cero referencias a `pipeline_metrics`. |
 
+### La pasada P3 del 2026-08-22
+
+[P3-I18N-DISPLAY-DOCSTRING-LEE-DISPLAY] El docstring del módulo afirmaba que **«NUNCA lee ese
+campo de vuelta ni condiciona su propia conducta a él»**. Es falso desde
+`P2-DISPLAY-REDESPACHO-SIN-FILTRO`: `_ya_traducido_*` lee su propio `_display` para no
+re-pagar una traducción que ya está — y para exigir que sea USABLE, no sólo que exista. Sin
+esa lectura, un display a medias dado por bueno deja esa comida en español para siempre,
+porque nadie la reintenta.
+
+La frontera real, que sigue intacta, es otra: **`_display` jamás influye en el dato canónico
+ni en una decisión del motor**. Ni el generador, ni los guards, ni la resolución de nevera,
+ni el backstop clínico lo miran. Lo único que condiciona es si este módulo vuelve a gastar.
+Decirlo mal importa: un lector que crea que la regla es «nadie lo lee» borrará esa
+comprobación creyendo que restaura una invariante.
+
+[P3-I18N-DISPLAY-PODA-SOLO-POR-COMIDA] El tope de idiomas (`_podar_locales`) se aplicaba
+**sólo** al `_display` por comida; el de nivel plan —nombre e insights— acumulaba los cinco y
+nada lo evacuaba nunca. Es menos volumen que el de las comidas, pero el argumento del tope es
+el mismo, así que ahora pasa por el mismo helper.
+
+[P3-I18N-DISPLAY-BREAKER-SIN-FILA] Seis de los ocho caminos de salida dejaban fila en
+`pipeline_metrics`; el abandono por dedupe (`dedupe_locked`) y el de breaker abierto
+(`circuit_breaker_open`) salían **mudos**. En la telemetría, un plan bloqueado y un plan que
+nunca se pidió eran indistinguibles — y el breaker abierto significa que el proveedor está
+caído, que era justo el estado sin rastro. El dedupe, además, es el caso NORMAL bajo
+concurrencia.
+
+[P3-I18N-DISPLAY-KNOBS-PEREZOSOS] Los cinco knobs (`MEALFIT_PLAN_DISPLAY_I18N` y sus cuatro
+`_MODEL` / `_TIMEOUT_S` / `_BATCH_DAYS` / `_MAX_OUTPUT_TOKENS`) se leen DENTRO de funciones, y
+`knobs._env_*` registra en `_KNOBS_REGISTRY` al ser **llamado**. Hasta que el enriquecimiento
+corría por primera vez, `get_knobs_registry_snapshot()` —lo que un operador consulta para
+saber qué puede tocar sin redeploy— no sabía que existían. Y esta capa se ha ejecutado cinco
+veces en toda su historia: en la práctica eran invisibles **siempre**. Ahora se declaran en
+el import con cinco llamadas que no cachean nada (cada accesor sigue leyendo en vivo, que es
+lo que permite el rollback sin redeploy).
+
+El bloque va **después** del último accesor: colocarlo antes daría `NameError` con los dos
+que se definen más abajo, que es exactamente el par que faltaba.
+
 ### ⚠️ Lo que ninguna de esas líneas dice, y es lo que más importa
 
 [P1-I18N-SIN-EVIDENCIA-PRODUCCION] **Esta capa no ha traducido un plato en producción.**

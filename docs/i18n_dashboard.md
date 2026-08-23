@@ -123,6 +123,34 @@ ese script este diseño es una trampa; con él, una red. Si alguien lo borra del
 | `tn(n, one, other, vars)` | Plural vía `Intl.PluralRules` del locale activo — **no** `n === 1`: el francés mete el 0 en singular y el portugués tiene categoría `many`. |
 | `t('Plan\|nav')` | Homógrafos. Se pinta lo anterior al `\|`. |
 | `formatDate` / `formatNumber` | `Intl` con el locale activo. Reemplazan los `toLocaleDateString('es-DO')` fijos. |
+| `formatCurrency(v, code)` | [P3-I18N-CHECKOUT-MONEDA-CLAVADA] Un importe. Traduce cómo se ESCRIBE, **no en qué se cobra**: el `currency_code` que viaja a PayPal no lo toca nadie. En es-DO devuelve `US$25.00`, byte-idéntico al `US$` a mano que sustituyó. |
+| `formatCurrencyName(code)` | El NOMBRE de una moneda, por locale. |
+
+### El separador decimal no es «la coma en español»
+
+[P3-I18N-METRICA-COMA-CLAVADA · 2026-08-22] El backend escribe las cantidades de la lista con
+COMA a mano (`_etiqueta_metrica` en `shopping_calculator.py`: «1,4 kg»), y su comentario lo
+justifica con «Coma decimal: la lista se lee en español».
+
+**Es falso, y no sólo para los otros cuatro idiomas.** `Intl` en **es-DO** devuelve `1.4`,
+con PUNTO: la República Dominicana escribe el decimal como Estados Unidos, no como España. El
+comentario confundió *español* con *España*, y el error llevaba ahí desde antes de que
+existieran los otros idiomas.
+
+La regla, entonces: **el separador decimal no se escribe nunca a mano, ni siquiera «en
+español»**. Se pregunta a `Intl` (`_separadorDecimal` en `shoppingHelpers.js` formatea `1.1`
+y se queda con el carácter de en medio — preguntar en vez de tabular, o acabas con la enésima
+tabla que drifea).
+
+Dos límites que el arreglo respeta y conviene no borrar:
+
+- **Se toca el separador, jamás la agrupación de millares.** Reagrupar convertiría «1250 g»
+  en «1.250 g», y en una lista de la compra eso se puede leer como mil doscientos cincuenta
+  veces más.
+- **Se glosa al RENDERIZAR, nunca en el dato.** `parseMarketQty(ing.display_qty)` lee el
+  campo CRUDO en el camino de `/restock`; reescribir el número al pintarlo no puede desviar
+  un gramo de lo que se descuenta de la Nevera. Meter el texto glosado en ese parser sí
+  podría, y hay un guard que lo prohíbe.
 
 ### La trampa: `t()` en ámbito de módulo
 
