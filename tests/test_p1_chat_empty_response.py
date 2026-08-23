@@ -131,14 +131,15 @@ def test_call_model_handles_empty_response_with_fallback():
         "fallback no se aplica."
     )
 
-    # Anchor 4: hay un copy fallback no-vacío.
-    fallback_match = re.search(
-        r"_fallback_copy\s*=\s*\(?\s*[\"']",
-        body,
-    )
-    assert fallback_match, (
-        "Variable `_fallback_copy` con string literal ausente — el copy "
-        "fallback no está definido."
+    # Anchor 4: el copy fallback sale del SSOT por idioma.
+    # [P2-I18N-CHAT-FALLBACK-VACIO-SIGUE-EN-ESPANOL · 2026-08-23] Antes el ancla era la
+    # variable `_fallback_copy` con un literal español pegado — y ese literal se persistía en
+    # la conversación de un usuario en francés. Ahora el copy viene de
+    # `prompts.chat_agent.empty_response_fallback(locale)`; el contrato («hay un fallback
+    # no vacío») lo mide `test_p2_i18n_chat_fallback_vacio.py` ejecutando la función.
+    assert re.search(r"AIMessage\(content=_empty_response_fallback\(", body), (
+        "El AIMessage de fallback no sale de `empty_response_fallback(locale)` — o volvió "
+        "el literal español fijo, o el fallback no está definido."
     )
 
 

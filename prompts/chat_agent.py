@@ -690,6 +690,50 @@ def push_nudge_title(locale) -> str:
     return _PUSH_NUDGE_TITLES.get(locale, _PUSH_NUDGE_TITLE_ES)
 
 
+# [P2-I18N-CHAT-FALLBACK-VACIO-SIGUE-EN-ESPANOL · 2026-08-23] Lo que dice el coach cuando el
+# modelo no devuelve nada (filtro del provider: content vacío y sin tool_calls). Era un párrafo
+# español fijo en `agent.py::call_model`, y SE PERSISTE en la conversación: un usuario en
+# francés lo veía en español y lo volvía a ver cada vez que abría la sesión. Mismo patrón que
+# `push_nudge_title`: tabla por locale + español como suelo. El ejemplo de comida («comí X
+# gramos de Y») va en el idioma del usuario porque es PROSA de ejemplo — el nombre real del
+# alimento que el usuario escriba sigue entrando al motor tal cual (frontera de nombres).
+_EMPTY_RESPONSE_FALLBACK_ES = (
+    "No pude procesar esa solicitud por restricciones del modelo. "
+    "¿Puedes reformularla con otras palabras? Si lo que querías era "
+    "registrar una comida, intenta algo como: \"comí X gramos de Y "
+    "para el almuerzo\"."
+)
+_EMPTY_RESPONSE_FALLBACKS = {
+    "en-US": (
+        "I couldn't process that request due to model restrictions. "
+        "Could you rephrase it? If you wanted to log a meal, try something like: "
+        "\"I ate X grams of Y for lunch\"."
+    ),
+    "pt-BR": (
+        "Não consegui processar esse pedido por restrições do modelo. "
+        "Pode reformular com outras palavras? Se queria registrar uma refeição, tente algo como: "
+        "\"comi X gramas de Y no almoço\"."
+    ),
+    "fr-FR": (
+        "Je n'ai pas pu traiter cette demande à cause des restrictions du modèle. "
+        "Peux-tu la reformuler ? Si tu voulais enregistrer un repas, essaie par exemple : "
+        "\"j'ai mangé X grammes de Y au déjeuner\"."
+    ),
+    "it-IT": (
+        "Non sono riuscito a elaborare la richiesta per restrizioni del modello. "
+        "Puoi riformularla con altre parole? Se volevi registrare un pasto, prova qualcosa come: "
+        "\"ho mangiato X grammi di Y a pranzo\"."
+    ),
+}
+
+
+def empty_response_fallback(locale) -> str:
+    """El mensaje de reserva del coach en el idioma del usuario, o el español si no lo conocemos."""
+    if not isinstance(locale, str):
+        return _EMPTY_RESPONSE_FALLBACK_ES
+    return _EMPTY_RESPONSE_FALLBACKS.get(locale, _EMPTY_RESPONSE_FALLBACK_ES)
+
+
 _LANGUAGE_DIRECTIVE_CACHE: dict = {}
 
 
