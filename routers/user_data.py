@@ -1069,32 +1069,15 @@ async def api_patch_profile(
     _p1_i18n_new_locale = fields.get("locale")
     if _p1_i18n_new_locale and _p1_i18n_new_locale != "es-DO":
         try:
-            def _p1_i18n_active_plan_display_edges():
-                from db import execute_sql_query as _p1_i18n_query
-                return _p1_i18n_query(
-                    """
-                    SELECT id::text AS id,
-                           plan_data->'days'->0->'meals'->0->'_display' AS disp_first,
-                           plan_data->'days'->-1->'meals'->0->'_display' AS disp_last
-                    FROM meal_plans WHERE user_id = %s
-                    ORDER BY created_at DESC LIMIT 1
-                    """,
-                    (uid,),
-                    fetch_one=True,
-                )
-
-            _p1_i18n_row = await asyncio.to_thread(_p1_i18n_active_plan_display_edges)
-            if _p1_i18n_row and _p1_i18n_row.get("id"):
-                def _p1_i18n_has_locale(disp) -> bool:
-                    return isinstance(disp, dict) and _p1_i18n_new_locale in disp
-
-                _p1_i18n_already = (
-                    _p1_i18n_has_locale(_p1_i18n_row.get("disp_first"))
-                    and _p1_i18n_has_locale(_p1_i18n_row.get("disp_last"))
-                )
-                if not _p1_i18n_already:
-                    from plan_display_i18n import schedule_plan_display_enrichment as _p1_i18n_schedule
-                    _p1_i18n_schedule(_p1_i18n_row["id"], uid, _p1_i18n_new_locale)
+            # [P3-I18N-DISPLAY-BLANKET-CIEGO-AL-SQL · 2026-08-23] La consulta que miraba
+            # `_display` en los dos extremos vive ahora en el SSOT (`plan_display_i18n`):
+            # este router solo despacha. Era una lectura de `_display` para decidir, por
+            # SQL, en un fichero sin permiso — invisible para el blanket.
+            from plan_display_i18n import schedule_plan_display_enrichment as _p1_i18n_schedule
+            from plan_display_i18n import active_plan_missing_locale as _p1_i18n_missing
+            _p1_i18n_plan_id = await asyncio.to_thread(_p1_i18n_missing, uid, _p1_i18n_new_locale)
+            if _p1_i18n_plan_id:
+                _p1_i18n_schedule(_p1_i18n_plan_id, uid, _p1_i18n_new_locale)
         except Exception as _p1_i18n_e:
             logger.warning(
                 f"[P1-PLAN-DISPLAY-I18N] dispatch PATCH /profile locale falló "

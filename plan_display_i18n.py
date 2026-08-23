@@ -2192,6 +2192,46 @@ def enrich_plan_display(
         return {"enriched_meals": 0, "skipped": "exception"}
 
 
+def active_plan_missing_locale(user_id: str, locale: str):
+    """[P3-I18N-DISPLAY-BLANKET-CIEGO-AL-SQL · 2026-08-23] El `plan_id` del plan ACTIVO (el
+    más reciente) del usuario si le FALTA `_display[locale]` en el primer o en el último
+    día; `None` si ya lo tiene en ambos o no hay plan.
+
+    Vivía inline en `routers/user_data.py` (PATCH /profile, disparador 4 de la spec) como
+    una consulta `plan_data->…->'_display'` — una lectura de `_display` para DECIDIR, en un
+    fichero sin permiso, invisible para el blanket porque iba dentro de una cadena SQL.
+    Aquí es donde ya viven las otras lecturas «¿ya está traducido?» (`_ya_traducido_*`,
+    P2-DISPLAY-REDESPACHO-SIN-FILTRO): un solo módulo relee lo que él mismo escribe.
+
+    Mirar AMBOS extremos cierra el freeze de un enriquecimiento parcial: el motor trocea
+    por lotes y un lote que falla no tumba a los demás; si solo mirásemos el primer día,
+    un plan cuyo último lote nunca corrió quedaría «ya enriquecido» para siempre.
+    Proyección jsonb O(1): no se baja `plan_data` entero para mirar dos claves; `->-1`
+    cuenta desde el final (con 1 solo día, primero y último coinciden — inofensivo).
+    """
+    from db import execute_sql_query
+    row = execute_sql_query(
+        """
+        SELECT id::text AS id,
+               plan_data->'days'->0->'meals'->0->'_display' AS disp_first,
+               plan_data->'days'->-1->'meals'->0->'_display' AS disp_last
+        FROM meal_plans WHERE user_id = %s
+        ORDER BY created_at DESC LIMIT 1
+        """,
+        (user_id,),
+        fetch_one=True,
+    )
+    if not row or not row.get("id"):
+        return None
+
+    def _tiene(disp) -> bool:
+        return isinstance(disp, dict) and locale in disp
+
+    if _tiene(row.get("disp_first")) and _tiene(row.get("disp_last")):
+        return None
+    return row["id"]
+
+
 def schedule_plan_display_enrichment(
     plan_id: str,
     user_id: str,

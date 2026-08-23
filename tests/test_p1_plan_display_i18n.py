@@ -1396,7 +1396,9 @@ def test_trigger_4_es_do_never_reaches_dispatch_code(_user_data_src):
     """es-DO es el locale base (0 bytes de `_display`, P1-I18N-DASHBOARD) — el
     gate `!= "es-DO"` debe preceder cualquier lectura del plan activo."""
     gate_idx = _user_data_src.index('_p1_i18n_new_locale != "es-DO"')
-    query_idx = _user_data_src.index("_p1_i18n_active_plan_display_edges")
+    # [P3-I18N-DISPLAY-BLANKET-CIEGO-AL-SQL · 2026-08-23] la lectura del plan activo vive
+    # en el SSOT (`active_plan_missing_locale`); el router la invoca como `_p1_i18n_missing`.
+    query_idx = _user_data_src.index("_p1_i18n_missing")
     assert gate_idx < query_idx
 
 
@@ -1405,14 +1407,19 @@ def test_trigger_4_select_is_o1_projection_not_full_plan_data(_user_data_src):
     claves `_display` (primer/último día) vía jsonb path — nunca bajar la
     columna `plan_data` completa (puede ser cientos de KB-MB con 30 días de
     recetas expandidas) solo para mirar si dos claves existen."""
-    assert "plan_data->'days'->0->'meals'->0->'_display'" in _user_data_src
-    assert "plan_data->'days'->-1->'meals'->0->'_display'" in _user_data_src
-    # El patrón viejo (bajar plan_data entero + json.loads defensivo) no debe
-    # sobrevivir en esta zona del archivo.
-    trigger_block_start = _user_data_src.index("P1-PLAN-DISPLAY-I18N-TRIGGER-4")
-    trigger_block = _user_data_src[trigger_block_start:trigger_block_start + 3000]
-    assert "SELECT id::text AS id, plan_data FROM meal_plans" not in trigger_block, (
+    # [P3-I18N-DISPLAY-BLANKET-CIEGO-AL-SQL · 2026-08-23] El SELECT vive en el SSOT
+    # (`plan_display_i18n.active_plan_missing_locale`): el router no lee `_display`.
+    pdi_src = _MODULE_SRC_PATH.read_text(encoding="utf-8")
+    fn_start = pdi_src.index("def active_plan_missing_locale(")
+    fn = pdi_src[fn_start:fn_start + 3000]
+    assert "plan_data->'days'->0->'meals'->0->'_display'" in fn
+    assert "plan_data->'days'->-1->'meals'->0->'_display'" in fn
+    assert "SELECT id::text AS id, plan_data FROM meal_plans" not in fn, (
         "el SELECT del trigger 4 volvió a bajar plan_data completo (F3)."
+    )
+    assert "'_display'" not in _user_data_src, (
+        "routers/user_data.py volvió a leer `_display` (por SQL o por clave): esa lectura "
+        "es del SSOT, no del router."
     )
 
 
