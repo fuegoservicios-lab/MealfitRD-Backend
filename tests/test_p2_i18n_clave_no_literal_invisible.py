@@ -142,5 +142,13 @@ def test_el_comentario_del_extractor_ya_no_promete_un_reporte_que_no_existe() ->
         f"el gate no importa clavesNoLiterales [{_MARKER}]")
     i = src.find("for (const h of clavesNoLiterales(src))")
     assert i > 0, f"el gate no recorre clavesNoLiterales [{_MARKER}]"
-    ventana = src[i: i + 600]
+    # [2026-08-23] Ventana por ESTRUCTURA, no por bytes. El `hardFail` NO está dentro del
+    # `for` que recoge los hallazgos, sino en el `if (clavesOpacas.length)` que viene
+    # después: se ancla a ese bloque y se corta en su `}` de columna 0. Una ventana fija
+    # (`i + 600`) la desborda el primer comentario que alguien añada en medio — le pasó el
+    # mismo día a `test_p1_chat_mobile_ready` con `_AP[i:i+4200]`, dos veces en el mismo sitio.
+    j = src.find("if (clavesOpacas.length) {", i)
+    assert j > i, f"el gate ya no escala los hallazgos en un `if (clavesOpacas.length)` [{_MARKER}]"
+    fin = src.find("\n}\n", j)
+    ventana = src[j: fin if fin > j else len(src)]
     assert "hardFail = true" in ventana, f"el hallazgo no escala a hardFail [{_MARKER}]"

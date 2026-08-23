@@ -1411,7 +1411,10 @@ def test_trigger_4_select_is_o1_projection_not_full_plan_data(_user_data_src):
     # (`plan_display_i18n.active_plan_missing_locale`): el router no lee `_display`.
     pdi_src = _MODULE_SRC_PATH.read_text(encoding="utf-8")
     fn_start = pdi_src.index("def active_plan_missing_locale(")
-    fn = pdi_src[fn_start:fn_start + 3000]
+    # [2026-08-23] La función acaba donde empieza la SIGUIENTE, no a los 3000 bytes: una
+    # ventana fija la desborda el primer comentario largo que alguien añada dentro.
+    _sig = pdi_src.find("\ndef ", fn_start + 1)
+    fn = pdi_src[fn_start: _sig if _sig > fn_start else len(pdi_src)]
     assert "plan_data->'days'->0->'meals'->0->'_display'" in fn
     assert "plan_data->'days'->-1->'meals'->0->'_display'" in fn
     assert "SELECT id::text AS id, plan_data FROM meal_plans" not in fn, (
