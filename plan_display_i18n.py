@@ -831,8 +831,19 @@ def _insights_already_translated(plan_data, locale) -> bool:
     if not isinstance(entrada, dict):
         return False
     ya = entrada.get("insights")
-    return isinstance(ya, list) and bool(ya) and all(
-        isinstance(x, str) and x.strip() for x in ya)
+    if not (isinstance(ya, list) and bool(ya) and all(
+            isinstance(x, str) and x.strip() for x in ya)):
+        return False
+    # [P1-I18N-DISPLAY-INSIGHTS-SIN-DEFENSA-DE-ECO · 2026-08-23] Un eco YA PERSISTIDO no
+    # cuenta como traducido. Sin esto, los planes que guardaron el español antes de que
+    # existiera la defensa de `_validate_insights` no se repararían nunca: el gate diría
+    # «ya está» en cada ciclo. Es la mitad que `_plan_name_already_translated` ya tenía y
+    # que a este le faltaba — el mismo par de funciones, la misma defensa, un campo menos.
+    original = plan_data.get("insights") if isinstance(plan_data, dict) else None
+    if isinstance(original, list) and len(original) == len(ya) and ya and all(
+            isinstance(o, str) and _eco_del_original(x, o) for x, o in zip(ya, original)):
+        return False
+    return True
 
 
 def _validate_insights(value, original) -> Optional[list]:
@@ -852,6 +863,19 @@ def _validate_insights(value, original) -> Optional[list]:
         if not isinstance(linea, str) or not linea.strip():
             return None
         fuera.append(linea.strip())
+    # [P1-I18N-DISPLAY-INSIGHTS-SIN-DEFENSA-DE-ECO · 2026-08-23] Defensa contra el ECO: que
+    # el modelo devuelva el español tal cual. Los otros dos campos que escribe ESTA MISMA
+    # llamada —el contenido de la comida y el nombre del plan— la ganaron el 21 y el 23 de
+    # agosto; los insights se quedaron fuera, y son el único de los tres que, una vez
+    # persistido el eco, NO se reintenta jamás: `_insights_already_translated` pasa a decir
+    # «ya está» y el panel se queda en español para siempre.
+    #
+    # DOS SEÑALES, no una. Una línea puede coincidir legítimamente con su original —un
+    # tecnicismo, un nombre propio— y tumbar el lote por eso tiraría traducciones buenas. Se
+    # descarta cuando TODAS son eco, que es la firma de «devolvió el original». Mismo
+    # criterio que `_validate_and_build_display` usa para la comida.
+    if fuera and all(_eco_del_original(a, b) for a, b in zip(fuera, original)):
+        return None
     return fuera
 
 
