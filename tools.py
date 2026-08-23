@@ -1606,7 +1606,9 @@ def execute_modify_single_meal(user_id: str, day_number: int, meal_type: str, ch
             ingreds = []
 
         if clean_ingredients and not allow_pantry_expansion:
-            val_result = validate_ingredients_against_pantry(ingreds, clean_ingredients)
+            val_result = validate_ingredients_against_pantry(
+                ingreds, clean_ingredients, country=_modify_country
+            )
             if val_result is not True:
                 logger.warning(val_result)
                 # Inyectar el feedback específico matematico al LLM para el próximo intento de @retry

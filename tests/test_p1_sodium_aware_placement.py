@@ -529,10 +529,10 @@ def test_e2e_knob_off_zero_flow_change(_sodium_swap_env, monkeypatch):
 def _fail_once_then_pass_pantry():
     """Fake de `validate_ingredients_against_pantry`: rechaza la 1ª llamada
     (simula pantry fallando en el intento 1, patrón real de logs de prod), pasa
-    el resto. Firma real: (ingreds, clean_ingredients, allow_external_count=0)."""
+    el resto. La firma conserva también el país del plan."""
     state = {"n": 0}
 
-    def _fake(ingreds, clean, allow_external_count=0):
+    def _fake(ingreds, clean, allow_external_count=0, country="DO"):
         state["n"] += 1
         if state["n"] == 1:
             return "PANTRY_VIOLATION: 'camarones' no está en tu nevera."

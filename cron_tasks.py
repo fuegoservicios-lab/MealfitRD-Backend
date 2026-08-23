@@ -11509,6 +11509,7 @@ def _validate_merged_days_against_pantry(
     merged_days: list,
     pantry_ingredients: list,
     new_chunk_day_range: tuple | None = None,
+    country: str = "DO",
 ) -> tuple:
     """[P0-4] Hard validation post-merge sobre cada día.
 
@@ -11569,7 +11570,10 @@ def _validate_merged_days_against_pantry(
         if not ingredients:
             continue
 
-        result = _vip(ingredients, pantry_ingredients, strict_quantities=True, tolerance=1.0)
+        result = _vip(
+            ingredients, pantry_ingredients, strict_quantities=True,
+            tolerance=1.0, country=country,
+        )
         if result is not True:
             violations.append({"day": day_num, "error": str(result)[:500]})
 
@@ -11744,7 +11748,9 @@ def compute_pantry_degraded_summary(plan_data: dict) -> dict:
     return summary
 
 
-def _mark_meals_violating_pantry(result: dict, pantry_ingredients: list) -> int:
+def _mark_meals_violating_pantry(
+    result: dict, pantry_ingredients: list, country: str = "DO"
+) -> int:
     """[P0-5] Marca per-comida `_pantry_violated=True` + `_pantry_violated_reason`
     en `result['days'][i]['meals'][j]` para cada comida cuyos ingredientes NO
     estén en pantry.
@@ -11795,7 +11801,9 @@ def _mark_meals_violating_pantry(result: dict, pantry_ingredients: list) -> int:
             ]
             if not ings:
                 continue
-            check = _vip(ings, pantry_ingredients, strict_quantities=False)
+            check = _vip(
+                ings, pantry_ingredients, strict_quantities=False, country=country
+            )
             if check is True:
                 continue
             m["_pantry_violated"] = True
@@ -12332,7 +12340,11 @@ def _validate_and_retry_initial_chunk_against_pantry(
         audit["validated_ok"] = True
         return initial_result, audit
 
-    from constants import validate_ingredients_against_pantry as _vip
+    from constants import (
+        country_for_form_data as _country_for_initial_pantry,
+        validate_ingredients_against_pantry as _vip,
+    )
+    _pantry_country = _country_for_initial_pantry(pipeline_data)
 
     qty_mode = audit["mode"]
     if qty_mode == "strict":
@@ -12371,7 +12383,10 @@ def _validate_and_retry_initial_chunk_against_pantry(
             pipeline_data.pop("_pantry_correction", None)
             return current_result, audit
 
-        existence = _vip(gen_ings, pantry_ingredients, strict_quantities=False)
+        existence = _vip(
+            gen_ings, pantry_ingredients, strict_quantities=False,
+            country=_pantry_country,
+        )
         if existence is not True:
             last_violation = str(existence)[:1000]
             audit["last_violation"] = last_violation
@@ -12390,7 +12405,7 @@ def _validate_and_retry_initial_chunk_against_pantry(
                 # [P0-5] Marcar per-meal qué platos son incocibles para que el frontend
                 # pueda renderizar warning específico en cada uno (no solo plan-level).
                 audit["meals_marked_violated"] = _mark_meals_violating_pantry(
-                    current_result, pantry_ingredients
+                    current_result, pantry_ingredients, country=_pantry_country
                 )
                 return current_result, audit
 
@@ -12418,7 +12433,7 @@ def _validate_and_retry_initial_chunk_against_pantry(
                     # [P0-5] current_result quedó con violaciones de existencia (la
                     # asignación arriba nunca se completó por el except). Marcar.
                     audit["meals_marked_violated"] = _mark_meals_violating_pantry(
-                        current_result, pantry_ingredients
+                        current_result, pantry_ingredients, country=_pantry_country
                     )
                     return current_result, audit
                 continue
@@ -12431,7 +12446,7 @@ def _validate_and_retry_initial_chunk_against_pantry(
             # [P0-5] Retries agotados con existencia violada: marcar comidas
             # ofensoras para granularidad UX (alineación con chunks 2+ que pausan).
             audit["meals_marked_violated"] = _mark_meals_violating_pantry(
-                current_result, pantry_ingredients
+                current_result, pantry_ingredients, country=_pantry_country
             )
             return current_result, audit
 
@@ -12444,7 +12459,8 @@ def _validate_and_retry_initial_chunk_against_pantry(
 
         # hybrid / strict: validar cantidades.
         qty_check = _vip(
-            gen_ings, pantry_ingredients, strict_quantities=True, tolerance=tolerance
+            gen_ings, pantry_ingredients, strict_quantities=True,
+            tolerance=tolerance, country=_pantry_country,
         )
         if qty_check is True:
             audit["validated_ok"] = True
@@ -26734,6 +26750,11 @@ __PLAN_MODE_GATE__
 
         form_data = copy.deepcopy(snap.get("form_data", {}))
         snapshot_form_data = snap.get("form_data", {}) or {}
+        # País resuelto una sola vez para TODAS las capas del guard de Nevera
+        # (LLM, shuffle, live-check y post-merge). El snapshot mantiene el país
+        # del plan aunque el perfil cambie durante un chunk en curso.
+        from constants import country_for_form_data as _country_for_pantry_guard
+        _pantry_guard_country = _country_for_pantry_guard(form_data)
 
         # [P0-5] Default-init names that are only conditionally bound deeper in the
         # function. Python's lexical scoping treats any later assignment as creating a
@@ -28661,8 +28682,7 @@ __PLAN_MODE_GATE__
                     # degradado — derivado UNA vez (mismo patrón que T2, `_day_system_instruction_for_diet`)
                     # y reusado en los 4 call sites de `_build_filtered_edge_recipe_day` de este bloque.
                     # Knob apagado ⇒ `country_for_form_data` siempre 'DO' (byte-idéntico).
-                    from constants import country_for_form_data as _country_for_form_data
-                    _edge_recipe_country = _country_for_form_data(form_data)
+                    _edge_recipe_country = _pantry_guard_country
 
                     # [P1-6 FIX] Construir edge recipes con catálogos ya filtrados por alergias/dislikes/dieta.
                     # [P0-C FIX] Pasar pantry para que solo elija ingredientes disponibles en la nevera.
@@ -28999,6 +29019,7 @@ __PLAN_MODE_GATE__
                                 _pantry_snap,
                                 strict_quantities=True,
                                 tolerance=_p1d_tolerance,
+                                country=_edge_recipe_country,
                             )
                             if _qty_check is True:
                                 _qty_validated = True
@@ -29054,7 +29075,8 @@ __PLAN_MODE_GATE__
                                     ]
                                     # [P1-D] Reusar tolerance per-usuario resuelto arriba.
                                     _edge_qty_check = validate_ingredients_against_pantry(
-                                        _edge_ing, _pantry_snap, strict_quantities=True, tolerance=_p1d_tolerance
+                                        _edge_ing, _pantry_snap, strict_quantities=True,
+                                        tolerance=_p1d_tolerance, country=_edge_recipe_country,
                                     )
                                     if _edge_qty_check is True:
                                         shuffled_day = edge_day
@@ -29288,11 +29310,13 @@ __PLAN_MODE_GATE__
                         _val_res = validate_ingredients_against_pantry(
                             _day_ingredients, form_data.get("current_pantry_ingredients", []),
                             strict_quantities=True, tolerance=1.0,
+                            country=_edge_recipe_country,
                         )
                         if _val_res is True:
                             _val_res = validate_ingredients_against_pantry(
                                 _day_ingredients, _pantry_snap,
                                 strict_quantities=True, tolerance=1.0,
+                                country=_edge_recipe_country,
                             )
                         if _val_res is not True:
                             # [G-C3 · P2-CRON-OPT-4 · 2026-05-31] Eliminado el dead-write per-día
@@ -30115,7 +30139,10 @@ __PLAN_MODE_GATE__
                         
                         from constants import validate_ingredients_against_pantry as _vip
                         _all_gen_ing = [ing for d in new_days for m in d.get("meals", []) for ing in m.get("ingredients", []) if isinstance(ing, str)]
-                        _live_check = _vip(_all_gen_ing, fresh_live_inv, strict_quantities=True, tolerance=1.0)
+                        _live_check = _vip(
+                            _all_gen_ing, fresh_live_inv, strict_quantities=True,
+                            tolerance=1.0, country=_pantry_guard_country,
+                        )
                         
                         logger.info(f"[P0-2/LIVE-VALIDATION] plan={meal_plan_id} chunk={week_number} drift={drift_pct*100:.1f}% live_check_failed={not _live_check}")
                         
@@ -30294,7 +30321,10 @@ __PLAN_MODE_GATE__
                                 if isinstance(ing, str) and ing.strip()
                             ]
                             from constants import validate_ingredients_against_pantry as _vip
-                            _val_result = _vip(_all_gen_ing, _pantry_snapshot, strict_quantities=False)
+                            _val_result = _vip(
+                                _all_gen_ing, _pantry_snapshot,
+                                strict_quantities=False, country=_pantry_guard_country,
+                            )
                             if _val_result is True:
                                 # [P0-B] Existencia OK. Validamos cantidades según el modo configurado.
                                 #   off      → aceptar tal cual.
@@ -30343,7 +30373,11 @@ __PLAN_MODE_GATE__
                                     form_data.pop("_pantry_correction", None)
                                     break
 
-                                _qty_result = _vip(_all_gen_ing, _pantry_snapshot, strict_quantities=True, tolerance=_tolerance)
+                                _qty_result = _vip(
+                                    _all_gen_ing, _pantry_snapshot,
+                                    strict_quantities=True, tolerance=_tolerance,
+                                    country=_pantry_guard_country,
+                                )
                                 if _qty_result is True:
                                     _final_validation = _finalize_live_pantry_validation(
                                         "Inventario actualizado durante generación. Por favor, ajusta el plan."
@@ -30522,7 +30556,10 @@ __PLAN_MODE_GATE__
                                     if isinstance(ing, str) and ing.strip()
                                 ]
                                 from constants import validate_ingredients_against_pantry as _vip
-                                _safe = _vip(_all_gen_ing, live_inv, strict_quantities=True)
+                                _safe = _vip(
+                                    _all_gen_ing, live_inv, strict_quantities=True,
+                                    country=_pantry_guard_country,
+                                )
                                 if _safe is not True:
                                     logger.warning(f"[P0-2] Chunk {week_number} generado con flexible_mode falló validación vs live inventory. Pausando chunk.")
 
@@ -31240,7 +31277,8 @@ __PLAN_MODE_GATE__
                             # estampa `_pantry_violated` per-comida para que el Dashboard pinte
                             # el aviso en ESE plato.
                             _p04_marked = _mark_meals_violating_pantry(
-                                {"days": merged_days}, _p04_pantry
+                                {"days": merged_days}, _p04_pantry,
+                                country=_pantry_guard_country,
                             )
                             logger.warning(
                                 f"🛒 [P1-POSTMERGE-WAIVER-SSOT] Plan {meal_plan_id} chunk {week_number}: "
@@ -31259,6 +31297,7 @@ __PLAN_MODE_GATE__
                                 merged_days,
                                 _p04_pantry,
                                 new_chunk_day_range=(_p04_new_start, _p04_new_end),
+                                country=_pantry_guard_country,
                             )
                             if not _p04_ok:
                                 _sample = _p04_violations[0] if _p04_violations else {}

@@ -42708,7 +42708,10 @@ Responde ÚNICAMENTE con el JSON de revisión.
                             f"ej={clean_pantry[:3]!r} update_reason={form_data.get('update_reason')!r} "
                             f"rotation={is_rotation} strict={is_strict_required}")
 
-                val_result = validate_ingredients_against_pantry(all_ingredients, clean_pantry, strict_quantities=False)
+                val_result = validate_ingredients_against_pantry(
+                    all_ingredients, clean_pantry, strict_quantities=False,
+                    country=country_for_form_data(form_data),
+                )
                 if val_result is not True:
                     approved = False
                     issues.append(val_result)  # val_result es el string de error generado por constants.py

@@ -4539,7 +4539,102 @@ _ALLOWED_CONDIMENTS_RES = [
 ]
 
 
-def validate_ingredients_against_pantry(generated_ingredients: list, pantry_ingredients: list, strict_quantities: bool = True, tolerance: float = 1.30, allow_external_count: int = 0, return_unauthorized: bool = False):
+# [P1-COUNTRY-CONDIMENT-PARITY-BETA · 2026-08-23] El catálogo cerrado de cada
+# país beta ofrece sazonadores locales que la lista DO de arriba no puede (ni
+# debe) convertir en globales. La membresía de país sigue viniendo del MISMO
+# registro que usa el catálogo verificado; el rol de condimento se deriva de la
+# fila viva (`category` + `name_en`) para no exentar el pool completo, que mezcla
+# jamones, carnes, pasta, legumbres y frutas.
+#
+# Varias altas botánicas reales (Epazote, Recao, Guascas y chiles frescos) están
+# categorizadas como `Vegetales`, no `Especias`. Ese dato imperfecto se conserva:
+# el fallback botánico exige además un rol inglés inequívoco (herb/pepper/chile/
+# culantro/leaf), por lo que un vegetal normal no se vuelve condimento. En
+# `Despensa` también se exige rol: la categoría sola incluiría Fideos/Judías.
+#
+# La caché está indexada POR PAÍS. Omitir el país aquí haría que el primer beta
+# atendido por el proceso prestara sus alias a todos los demás. DO retorna antes
+# de consultar catálogo y preserva su comportamiento histórico.
+# tooltip-anchor: P1-COUNTRY-CONDIMENT-PARITY-BETA
+_COUNTRY_CATALOG_CONDIMENT_CACHE: "dict[str, tuple]" = {}
+_COUNTRY_CONDIMENT_PANTRY_ROLE_HINTS = (
+    "seasoning", "spice", "saffron", "aioli", "achiote", "sauce",
+    "dressing", "ketchup", "chili powder",
+)
+_COUNTRY_CONDIMENT_BOTANICAL_ROLE_HINTS = (
+    "herb", "pepper", "chile", "culantro", "leaf",
+)
+
+
+def _country_catalog_condiment_patterns(country) -> tuple:
+    """Regex de nombres/alias de condimento ofrecidos al país canónico.
+
+    Fail-closed: si el catálogo no está disponible, no se inventa una exención.
+    No cacheamos el fallo/resultado vacío para que un pool que aún no abrió
+    pueda recuperarse en la siguiente validación.
+    """
+    cc = canonicalize_country(country)
+    if cc == "DO":
+        return ()
+    cached = _COUNTRY_CATALOG_CONDIMENT_CACHE.get(cc)
+    if cached is not None:
+        return cached
+    try:
+        from shopping_calculator import (
+            get_master_ingredients,
+            is_country_catalog_unpriced_item,
+        )
+        rows = get_master_ingredients() or []
+    except Exception:
+        return ()
+    if not rows:
+        return ()
+
+    def _role_has(role: str, hints) -> bool:
+        return any(
+            re.search(r"\b" + re.escape(h) + r"(?:s|es)?\b", role)
+            for h in hints
+        )
+
+    terms = []
+    for row in rows:
+        if not isinstance(row, dict):
+            continue
+        name = str(row.get("name") or "").strip()
+        if not name or not is_country_catalog_unpriced_item(name, country=cc):
+            continue
+        category = strip_accents(str(row.get("category") or "").strip().lower())
+        role = strip_accents(str(row.get("name_en") or "").strip().lower())
+        is_spice_category = category.startswith("especia")
+        is_pantry_condiment = (
+            category.startswith("despensa")
+            and _role_has(
+                role,
+                _COUNTRY_CONDIMENT_PANTRY_ROLE_HINTS
+                + _COUNTRY_CONDIMENT_BOTANICAL_ROLE_HINTS
+            )
+        )
+        is_botanical_condiment = (
+            category.startswith("vegetal")
+            and _role_has(role, _COUNTRY_CONDIMENT_BOTANICAL_ROLE_HINTS)
+        )
+        if not (is_spice_category or is_pantry_condiment or is_botanical_condiment):
+            continue
+        for raw_term in (name, *(row.get("aliases") or [])):
+            term = strip_accents(str(raw_term or "").strip().lower())
+            if term:
+                terms.append(term)
+
+    patterns = tuple(
+        re.compile(r"\b" + re.escape(term) + r"(?:e?s)?\b")
+        for term in dict.fromkeys(terms)
+    )
+    if patterns:
+        _COUNTRY_CATALOG_CONDIMENT_CACHE[cc] = patterns
+    return patterns
+
+
+def validate_ingredients_against_pantry(generated_ingredients: list, pantry_ingredients: list, strict_quantities: bool = True, tolerance: float = 1.30, allow_external_count: int = 0, return_unauthorized: bool = False, country: str = "DO"):
     """
     Función guardrail estricta y matemática. Comprueba:
     1. Que todos los ingredientes generados estén en la despensa.
@@ -4705,6 +4800,11 @@ def validate_ingredients_against_pantry(generated_ingredients: list, pantry_ingr
     if not pantry_bases:
         return (True, []) if return_unauthorized else True
 
+    # Resolver una vez por llamada, no por ingrediente. `country` ya llega por
+    # `country_for_form_data` desde los call sites productivos; el default DO
+    # mantiene compatibilidad para consumidores legacy/tests.
+    country_condiment_patterns = _country_catalog_condiment_patterns(country)
+
     unauthorized = []
     over_limit = []
     
@@ -4718,7 +4818,9 @@ def validate_ingredients_against_pantry(generated_ingredients: list, pantry_ingr
         
         item_lower = strip_accents(item.lower())
 
-        if base in _ALLOWED_CONDIMENTS or any(rx.search(item_lower) for rx in _ALLOWED_CONDIMENTS_RES):
+        if (base in _ALLOWED_CONDIMENTS
+                or any(rx.search(item_lower) for rx in _ALLOWED_CONDIMENTS_RES)
+                or any(rx.search(item_lower) for rx in country_condiment_patterns)):
             continue
             
         matched_pantry_key = None

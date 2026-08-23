@@ -102,7 +102,7 @@ def _make_vip_mock(reject_keywords=None):
     """
     reject_keywords = [k.lower() for k in (reject_keywords or [])]
 
-    def _vip(gen_ing, inv, strict_quantities=False, tolerance=1.0):
+    def _vip(gen_ing, inv, strict_quantities=False, tolerance=1.0, country="DO"):
         if not strict_quantities and reject_keywords:
             for ing in gen_ing:
                 for kw in reject_keywords:

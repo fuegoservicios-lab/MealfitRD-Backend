@@ -2349,6 +2349,7 @@ def swap_meal(form_data: dict, surface: str = "individual"):
                 ingreds,
                 clean_ingredients,
                 allow_external_count=_external_tolerance,
+                country=_swap_country,
             )
             if val_result is not True:
                 logger.warning(val_result)
@@ -3316,7 +3317,8 @@ def swap_meal(form_data: dict, surface: str = "individual"):
             if _changed and clean_ingredients:
                 # Pantry-strict: el rebalance pudo escalar una porción por encima de la Nevera → re-validar.
                 _reval = validate_ingredients_against_pantry(
-                    _out.get("ingredients") or [], clean_ingredients, allow_external_count=_external_tolerance
+                    _out.get("ingredients") or [], clean_ingredients,
+                    allow_external_count=_external_tolerance, country=_swap_country,
                 )
                 if _reval is not True:
                     logger.info(f"🎚 [P1-UPDATE-MACRO-REBALANCE] rebalance rompió pantry → revertido | {_reval}")
@@ -3358,7 +3360,8 @@ def swap_meal(form_data: dict, surface: str = "individual"):
                 _added = _close_protein_gap_for_meal(_out, float(target_protein), _cl_db, _cands)
                 if _added and clean_ingredients:
                     _reval_cl = validate_ingredients_against_pantry(
-                        _out.get("ingredients") or [], clean_ingredients, allow_external_count=_external_tolerance
+                        _out.get("ingredients") or [], clean_ingredients,
+                        allow_external_count=_external_tolerance, country=_swap_country,
                     )
                     if _reval_cl is not True:
                         logger.info(f"🎚 [P2-SWAP-PROTEIN-CLOSER] closer rompió pantry → revertido | {_reval_cl}")
@@ -3605,6 +3608,10 @@ def swap_meal_with_consent(form_data: dict) -> dict:
         Si el discovery TAMBIÉN falla o no revela nada accionable, se propaga el ValueError
         original (mismo soft-fail de siempre, cero regresión).
     """
+    # El mismo país debe gobernar tanto el intento normal como el probe de
+    # descubrimiento; importado antes del primer uso (el pricing del final lo
+    # reutiliza).
+    from constants import country_for_form_data
     if not _pantry_strict_updates_enabled():
         return swap_meal(form_data)
     try:
@@ -3632,6 +3639,7 @@ def swap_meal_with_consent(form_data: dict) -> dict:
                 _candidate.get("ingredients") or [], _universe,
                 strict_quantities=True, tolerance=1.30, allow_external_count=0,
                 return_unauthorized=True,
+                country=country_for_form_data(form_data),
             )
         except Exception as _val_e:
             logger.debug(f"[P1-PANTRY-STRICT-CONSENT] discovery diff no-op: {type(_val_e).__name__}: {_val_e}")

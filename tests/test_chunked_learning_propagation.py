@@ -1399,7 +1399,9 @@ def test_hybrid_mode_retries_on_quantity_violation_then_annotates(_coherencia_t2
     # advisory/hybrid annotation path, force the existence check (strict_quantities=False)
     # to pass and the quantity check (strict_quantities=True) to return the canonical
     # over-limit error string.
-    def _vip_with_qty_violation(gen_ing, inv, strict_quantities=False, tolerance=1.0):
+    def _vip_with_qty_violation(
+        gen_ing, inv, strict_quantities=False, tolerance=1.0, country="DO"
+    ):
         if not strict_quantities:
             return True
         return (
@@ -1467,7 +1469,9 @@ def test_advisory_mode_does_not_retry_on_quantity_violation(_coherencia_t2_warn_
 
     # [P0-5] Same VIP override as the hybrid test — the stubbed `_parse_quantity`
     # cannot extract numbers, so we force the validator response directly.
-    def _vip_with_qty_violation(gen_ing, inv, strict_quantities=False, tolerance=1.0):
+    def _vip_with_qty_violation(
+        gen_ing, inv, strict_quantities=False, tolerance=1.0, country="DO"
+    ):
         if not strict_quantities:
             return True
         return (
