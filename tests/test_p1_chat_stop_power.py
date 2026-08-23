@@ -16,14 +16,22 @@ attempts se reseteaba en bucle infinito. Fix: filtrado como display + exigir
 último=model + firma de episodio (mismo huérfano = mismos intentos).
 tooltip-anchor: P1-CHAT-STOP-POWER
 """
+
+import pytest
 import os
 
 _HERE = os.path.dirname(os.path.abspath(__file__))
 _ROOT = os.path.dirname(os.path.dirname(_HERE))
 
-with open(os.path.join(_ROOT, "frontend", "src", "pages", "AgentPage.jsx"),
-          encoding="utf-8") as f:
-    _AP = f.read()
+@pytest.fixture(scope="module", autouse=True)
+def _load_frontend_sibling_sources(frontend_repo_path):
+    # La fixture compartida salta el módulo antes de cualquier I/O si falta el hermano.
+    _ = frontend_repo_path
+    global _AP, f
+    with open(os.path.join(_ROOT, "frontend", "src", "pages", "AgentPage.jsx"),
+              encoding="utf-8") as f:
+        _AP = f.read()
+
 
 
 def test_stop_button_covers_recovery_phase():

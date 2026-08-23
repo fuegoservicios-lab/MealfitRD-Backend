@@ -40,7 +40,13 @@ AGENT = _read("agent.py")
 TOOLS = _read("tools.py")
 PLANS = _read("routers/plans.py")
 ORCH = _read("graph_orchestrator.py")
-DASHBOARD = _read("../frontend/src/pages/Dashboard.jsx")
+@pytest.fixture(scope="module", autouse=True)
+def _load_frontend_sibling_sources(frontend_repo_path):
+    # La fixture compartida salta el módulo antes de cualquier I/O si falta el hermano.
+    _ = frontend_repo_path
+    global DASHBOARD
+    DASHBOARD = _read("../frontend/src/pages/Dashboard.jsx")
+
 
 
 # ── P1-2: rebalanceador de macros en updates ──────────────────────────────────

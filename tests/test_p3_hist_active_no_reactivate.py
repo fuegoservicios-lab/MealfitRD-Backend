@@ -28,16 +28,24 @@ condicional de los banners), este test falla con apuntador al marker.
 """
 from __future__ import annotations
 
+import pytest
+
 from pathlib import Path
 
 
 _BACKEND_ROOT = Path(__file__).resolve().parent.parent
-_HISTORY_JSX = (
-    _BACKEND_ROOT.parent / "frontend" / "src" / "pages" / "History.jsx"
-).read_text(encoding="utf-8")
-_HISTORY_CSS = (
-    _BACKEND_ROOT.parent / "frontend" / "src" / "pages" / "History.module.css"
-).read_text(encoding="utf-8")
+@pytest.fixture(scope="module", autouse=True)
+def _load_frontend_sibling_sources(frontend_repo_path):
+    # La fixture compartida salta el módulo antes de cualquier I/O si falta el hermano.
+    _ = frontend_repo_path
+    global _HISTORY_CSS, _HISTORY_JSX
+    _HISTORY_JSX = (
+        _BACKEND_ROOT.parent / "frontend" / "src" / "pages" / "History.jsx"
+    ).read_text(encoding="utf-8")
+    _HISTORY_CSS = (
+        _BACKEND_ROOT.parent / "frontend" / "src" / "pages" / "History.module.css"
+    ).read_text(encoding="utf-8")
+
 _APP_PY = (_BACKEND_ROOT / "app.py").read_text(encoding="utf-8")
 
 

@@ -14,6 +14,8 @@ Fix bilateral: (a) `/history-list` incluye `mp.user_id` (cero riesgo IDOR: el WH
 por verified_user_id — el valor es siempre el del dueño); (b) el handler respeta el resultado.
 tooltip-anchor: P2-HIST-RESTORE-ROW-UID
 """
+
+import pytest
 import os
 import re
 
@@ -21,13 +23,19 @@ _HERE = os.path.dirname(os.path.abspath(__file__))
 _BACKEND = os.path.dirname(_HERE)
 _ROOT = os.path.dirname(_BACKEND)
 
-with open(os.path.join(_BACKEND, "routers", "plans.py"), encoding="utf-8") as f:
-    _PL = f.read()
-with open(os.path.join(_ROOT, "frontend", "src", "pages", "History.jsx"), encoding="utf-8") as f:
-    _HIST = f.read()
-with open(os.path.join(_ROOT, "frontend", "src", "context", "AssessmentContext.jsx"),
-          encoding="utf-8") as f:
-    _CTX = f.read()
+@pytest.fixture(scope="module", autouse=True)
+def _load_frontend_sibling_sources(frontend_repo_path):
+    # La fixture compartida salta el módulo antes de cualquier I/O si falta el hermano.
+    _ = frontend_repo_path
+    global _CTX, _HIST, _PL, f
+    with open(os.path.join(_BACKEND, "routers", "plans.py"), encoding="utf-8") as f:
+        _PL = f.read()
+    with open(os.path.join(_ROOT, "frontend", "src", "pages", "History.jsx"), encoding="utf-8") as f:
+        _HIST = f.read()
+    with open(os.path.join(_ROOT, "frontend", "src", "context", "AssessmentContext.jsx"),
+              encoding="utf-8") as f:
+        _CTX = f.read()
+
 
 
 def _history_list_body():

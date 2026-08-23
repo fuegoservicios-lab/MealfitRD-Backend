@@ -56,16 +56,22 @@ from pathlib import Path
 import pytest
 
 _REPO_ROOT = Path(__file__).resolve().parent.parent.parent
-_DASHBOARD = (_REPO_ROOT / "frontend" / "src" / "pages" / "Dashboard.jsx").read_text(
-    encoding="utf-8"
-)
+@pytest.fixture(scope="module", autouse=True)
+def _load_frontend_sibling_sources(frontend_repo_path):
+    # La fixture compartida salta el módulo antes de cualquier I/O si falta el hermano.
+    _ = frontend_repo_path
+    global _DASHBOARD, _PLANWINDOW
+    _DASHBOARD = (_REPO_ROOT / "frontend" / "src" / "pages" / "Dashboard.jsx").read_text(
+        encoding="utf-8"
+    )
+    _PLANWINDOW = (_REPO_ROOT / "frontend" / "src" / "utils" / "planWindow.js").read_text(encoding="utf-8")
+
 _APP_PY = (_REPO_ROOT / "backend" / "app.py").read_text(encoding="utf-8")
 # [P3-DASH-WINDOW-TEST · 2026-05-29] La lógica de la ventana rolling se extrajo de Dashboard.jsx a
 # `utils/planWindow.js` (función pura `computeRollingWindow` + cap `MAX_WINDOW`, con su propio test JS
 # `planWindow.test.js`). Este test parser-based se actualizó para verificar que el refactor PRESERVA la
 # garantía (arranca en hoy, cap=4, ventana que se achica, sin tabs de días pasados) apuntando a la
 # ubicación ACTUAL del código, en vez de la implementación inline vieja en Dashboard.jsx.
-_PLANWINDOW = (_REPO_ROOT / "frontend" / "src" / "utils" / "planWindow.js").read_text(encoding="utf-8")
 
 
 def test_marker_present_in_dashboard():

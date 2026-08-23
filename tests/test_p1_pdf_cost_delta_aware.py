@@ -13,15 +13,23 @@ Fix (frontend, handleDownloadShoppingList): cuando `deltaItemsRemoved > 0`:
 Sin exclusiones (delta=0) el SSOT del backend sigue mandando (paridad con la
 reconciliación de presupuesto). tooltip-anchor: P1-PDF-COST-DELTA-AWARE
 """
+
+import pytest
 import os
 import re
 
 _HERE = os.path.dirname(os.path.abspath(__file__))
 _ROOT = os.path.dirname(os.path.dirname(_HERE))
 
-with open(os.path.join(_ROOT, "frontend", "src", "pages", "Dashboard.jsx"),
-          encoding="utf-8") as f:
-    _DASH = f.read()
+@pytest.fixture(scope="module", autouse=True)
+def _load_frontend_sibling_sources(frontend_repo_path):
+    # La fixture compartida salta el módulo antes de cualquier I/O si falta el hermano.
+    _ = frontend_repo_path
+    global _DASH, f
+    with open(os.path.join(_ROOT, "frontend", "src", "pages", "Dashboard.jsx"),
+              encoding="utf-8") as f:
+        _DASH = f.read()
+
 
 
 def test_delta_aware_gate_present():

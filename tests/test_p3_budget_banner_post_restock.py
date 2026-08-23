@@ -7,13 +7,21 @@ RestockNudge (`!!planData?.is_restocked || sessionRestocked`); render condiciona
 → el layout colapsa sin hueco; reaparece al renovar el ciclo (is_restocked se
 resetea con el plan nuevo — CYCLE-RESET-ON-REGEN).
 """
+
+import pytest
 import os
 
 _BACKEND = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 _DASH = os.path.join(_BACKEND, "..", "frontend", "src", "pages", "Dashboard.jsx")
 
-with open(_DASH, encoding="utf-8") as f:
-    _SRC = f.read()
+@pytest.fixture(scope="module", autouse=True)
+def _load_frontend_sibling_sources(frontend_repo_path):
+    # La fixture compartida salta el módulo antes de cualquier I/O si falta el hermano.
+    _ = frontend_repo_path
+    global _SRC, f
+    with open(_DASH, encoding="utf-8") as f:
+        _SRC = f.read()
+
 
 
 def test_banner_hides_when_restocked():

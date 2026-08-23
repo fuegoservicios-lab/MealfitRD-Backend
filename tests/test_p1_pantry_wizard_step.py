@@ -23,6 +23,8 @@ tooltip-anchor: P1-PANTRY-WIZARD-STEP
 """
 from __future__ import annotations
 
+import pytest
+
 import re
 from pathlib import Path
 
@@ -33,9 +35,15 @@ _FLOW = _FRONT / "components" / "assessment" / "InteractiveAssessmentFlow.jsx"
 _QPB = _FRONT / "components" / "assessment" / "questions" / "QPantryBuilder.jsx"
 _QSUP = _FRONT / "components" / "assessment" / "questions" / "QSupplements.jsx"
 
-_FLOW_SRC = _FLOW.read_text(encoding="utf-8")
-_QPB_SRC = _QPB.read_text(encoding="utf-8")
-_QSUP_SRC = _QSUP.read_text(encoding="utf-8")
+@pytest.fixture(scope="module", autouse=True)
+def _load_frontend_sibling_sources(frontend_repo_path):
+    # La fixture compartida salta el módulo antes de cualquier I/O si falta el hermano.
+    _ = frontend_repo_path
+    global _FLOW_SRC, _QPB_SRC, _QSUP_SRC
+    _FLOW_SRC = _FLOW.read_text(encoding="utf-8")
+    _QPB_SRC = _QPB.read_text(encoding="utf-8")
+    _QSUP_SRC = _QSUP.read_text(encoding="utf-8")
+
 
 
 # ---------------------------------------------------------------------------

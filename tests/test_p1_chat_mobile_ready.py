@@ -25,6 +25,8 @@ gigante, y estas reglas viven en literales que ningún test de render alcanza.
 """
 from __future__ import annotations
 
+import pytest
+
 import os
 import re
 
@@ -40,8 +42,14 @@ def _read(*partes: str) -> str:
         return f.read()
 
 
-_AP = _read("pages", "AgentPage.jsx")
-_DL = _read("components", "dashboard", "DashboardLayout.jsx")
+@pytest.fixture(scope="module", autouse=True)
+def _load_frontend_sibling_sources(frontend_repo_path):
+    # La fixture compartida salta el módulo antes de cualquier I/O si falta el hermano.
+    _ = frontend_repo_path
+    global _AP, _DL
+    _AP = _read("pages", "AgentPage.jsx")
+    _DL = _read("components", "dashboard", "DashboardLayout.jsx")
+
 
 
 def _bloque_movil() -> str:

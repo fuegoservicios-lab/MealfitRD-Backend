@@ -38,13 +38,21 @@ Cross-link con ``test_p2_hist_audit_14_marker_test_link``: slug
 ``p3_newplan_no_budget_modal`` ↔ filename
 ``test_p3_newplan_no_budget_modal.py``.
 """
+
+import pytest
 import pathlib
 import re
 
 BACKEND_ROOT = pathlib.Path(__file__).parent.parent
 FRONTEND_ROOT = BACKEND_ROOT.parent / "frontend"
 
-DASHBOARD_JSX = (FRONTEND_ROOT / "src" / "pages" / "Dashboard.jsx").read_text(encoding="utf-8")
+@pytest.fixture(scope="module", autouse=True)
+def _load_frontend_sibling_sources(frontend_repo_path):
+    # La fixture compartida salta el módulo antes de cualquier I/O si falta el hermano.
+    _ = frontend_repo_path
+    global DASHBOARD_JSX
+    DASHBOARD_JSX = (FRONTEND_ROOT / "src" / "pages" / "Dashboard.jsx").read_text(encoding="utf-8")
+
 AI_HELPERS_PY = (BACKEND_ROOT / "ai_helpers.py").read_text(encoding="utf-8")
 APP_PY = (BACKEND_ROOT / "app.py").read_text(encoding="utf-8")
 

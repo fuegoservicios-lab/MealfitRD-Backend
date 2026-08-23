@@ -16,6 +16,8 @@ Dos bugs encadenados:
 3. Bonus: el gate del auto-refresh saltaba listas vacías ⇒ bloqueaba su propio
    self-heal. Ahora gatea por `days` (la fuente real del recalc).
 """
+
+import pytest
 import os
 
 _BACKEND = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
@@ -28,7 +30,13 @@ def _read(*parts) -> str:
 
 
 _PL = _read(_BACKEND, "routers", "plans.py")
-_DASH = _read(_FRONTEND, "src", "pages", "Dashboard.jsx")
+@pytest.fixture(scope="module", autouse=True)
+def _load_frontend_sibling_sources(frontend_repo_path):
+    # La fixture compartida salta el módulo antes de cualquier I/O si falta el hermano.
+    _ = frontend_repo_path
+    global _DASH
+    _DASH = _read(_FRONTEND, "src", "pages", "Dashboard.jsx")
+
 
 
 # ───────────── backend: flags stale se anulan ANTES de los híbridos ─────────────

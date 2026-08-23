@@ -116,6 +116,7 @@ import uuid
 import json
 import pytest
 from datetime import datetime, timezone
+from pathlib import Path
 
 import db_core
 from db_core import execute_sql_write, execute_sql_query, connection_pool
@@ -133,6 +134,24 @@ if connection_pool and not getattr(connection_pool, '_opened', False):
 # ---------------------------------------------------------------------------
 def pytest_configure(config):
     config.addinivalue_line("markers", "e2e: End-to-end tests requiring a live database")
+
+
+# ---------------------------------------------------------------------------
+# [P2-CI-BACKEND-CERO-TESTS · 2026-08-23] Repos hermanos opcionales
+# ---------------------------------------------------------------------------
+@pytest.fixture(scope="session")
+def frontend_repo_path() -> Path:
+    """Resuelve ``../frontend`` tarde y salta solo tests cross-repo si no está.
+
+    El workflow del repo backend hace checkout exclusivamente de backend. Las
+    pruebas de paridad pueden usar el frontend cuando existe en el workspace de
+    desarrollo, pero su ausencia nunca debe abortar la colección completa.
+    """
+
+    sibling = Path(__file__).resolve().parents[2] / "frontend"
+    if not (sibling / "src").is_dir():
+        pytest.skip(f"repo hermano ausente: {sibling}")
+    return sibling
 
 
 # ---------------------------------------------------------------------------

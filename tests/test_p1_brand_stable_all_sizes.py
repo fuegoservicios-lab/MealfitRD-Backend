@@ -12,13 +12,21 @@ Feedback del owner (2 pedidos):
    preserve_restock, fail-open) — cambios server-side (marcas default, precios
    vivos, fixes de costeo) aparecen sin tocar nada.
 """
+
+import pytest
 import re
 from pathlib import Path
 
 BACKEND = Path(__file__).resolve().parents[1]
-BRANDS_JSX = (BACKEND.parent / "frontend" / "src" / "components" / "dashboard"
-              / "SupermarketBrands.jsx").read_text(encoding="utf-8")
-DASH_JSX = (BACKEND.parent / "frontend" / "src" / "pages" / "Dashboard.jsx").read_text(encoding="utf-8")
+@pytest.fixture(scope="module", autouse=True)
+def _load_frontend_sibling_sources(frontend_repo_path):
+    # La fixture compartida salta el módulo antes de cualquier I/O si falta el hermano.
+    _ = frontend_repo_path
+    global BRANDS_JSX, DASH_JSX
+    BRANDS_JSX = (BACKEND.parent / "frontend" / "src" / "components" / "dashboard"
+                  / "SupermarketBrands.jsx").read_text(encoding="utf-8")
+    DASH_JSX = (BACKEND.parent / "frontend" / "src" / "pages" / "Dashboard.jsx").read_text(encoding="utf-8")
+
 
 
 # ─────────────── 1. estables: catálogo completo, tu tamaño primero ───────────────

@@ -42,7 +42,13 @@ import pytest
 _BACKEND_ROOT = Path(__file__).resolve().parent.parent
 _DB_PROFILES = (_BACKEND_ROOT / "db_profiles.py").read_text(encoding="utf-8")
 _FRONTEND_ROOT = _BACKEND_ROOT.parent / "frontend"
-_SETTINGS = (_FRONTEND_ROOT / "src" / "pages" / "Settings.jsx").read_text(encoding="utf-8")
+@pytest.fixture(scope="module", autouse=True)
+def _load_frontend_sibling_sources(frontend_repo_path):
+    # La fixture compartida salta el módulo antes de cualquier I/O si falta el hermano.
+    _ = frontend_repo_path
+    global _SETTINGS
+    _SETTINGS = (_FRONTEND_ROOT / "src" / "pages" / "Settings.jsx").read_text(encoding="utf-8")
+
 
 
 # ---------------------------------------------------------------------------

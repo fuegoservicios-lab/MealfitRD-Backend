@@ -96,7 +96,7 @@ jobs:
           PYTHONDONTWRITEBYTECODE: "1"
           PYTHONUNBUFFERED: "1"
         run: |
-          # [P2-I18N-CI-HERMANOS-ROJO-PERMANENTE · 2026-08-22] `-x` fuera, igual que en el
-          # CI de la raíz. Paraba en el PRIMER fallo, así que un rojo cualquiera escondía
-          # todo lo que venía detrás y cada corrida devolvía UN dato en vez del mapa.
-          pytest tests/ -v --tb=short -m "not e2e" --maxfail=25
+          # [P2-CI-BACKEND-CERO-TESTS · 2026-08-23] Sin techo de errores de colección:
+          # los tests cross-repo resuelven ../frontend mediante fixture y se saltan si el
+          # checkout hermano no existe. Así un defecto no vuelve a ocultar toda la suite.
+          pytest tests/ -v --tb=short -m "not e2e"

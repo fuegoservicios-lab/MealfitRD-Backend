@@ -38,6 +38,8 @@ UX [[p2_swap_422_ux_copy_2026_05_22]] que ya rendereaba toast honesto.
 Cross-link con ``test_p2_hist_audit_14_marker_test_link``: slug
 ``p3_swap_pantry_default`` ↔ filename ``test_p3_swap_pantry_default.py``.
 """
+
+import pytest
 import pathlib
 import re
 
@@ -46,7 +48,13 @@ FRONTEND_ROOT = BACKEND_ROOT.parent / "frontend"
 
 AGENT_PY = (BACKEND_ROOT / "agent.py").read_text(encoding="utf-8")
 APP_PY = (BACKEND_ROOT / "app.py").read_text(encoding="utf-8")
-DASHBOARD_JSX = (FRONTEND_ROOT / "src" / "pages" / "Dashboard.jsx").read_text(encoding="utf-8")
+@pytest.fixture(scope="module", autouse=True)
+def _load_frontend_sibling_sources(frontend_repo_path):
+    # La fixture compartida salta el módulo antes de cualquier I/O si falta el hermano.
+    _ = frontend_repo_path
+    global DASHBOARD_JSX
+    DASHBOARD_JSX = (FRONTEND_ROOT / "src" / "pages" / "Dashboard.jsx").read_text(encoding="utf-8")
+
 
 
 # ---------------------------------------------------------------------------

@@ -40,13 +40,21 @@ cambió es la GRAFÍA, en dos sitios:
 """
 from __future__ import annotations
 
+import pytest
+
 import re
 from pathlib import Path
 
-_DASH = (
-    Path(__file__).resolve().parent.parent.parent
-    / "frontend" / "src" / "pages" / "Dashboard.jsx"
-).read_text(encoding="utf-8")
+@pytest.fixture(scope="module", autouse=True)
+def _load_frontend_sibling_sources(frontend_repo_path):
+    # La fixture compartida salta el módulo antes de cualquier I/O si falta el hermano.
+    _ = frontend_repo_path
+    global _DASH
+    _DASH = (
+        Path(__file__).resolve().parent.parent.parent
+        / "frontend" / "src" / "pages" / "Dashboard.jsx"
+    ).read_text(encoding="utf-8")
+
 
 _FRASE_ACUSATORIA = "La IA no logró un plan óptimo"
 

@@ -12,13 +12,21 @@ swap/día pantry-strict → reaparecía el banner "Tu Nevera está vacía para e
 Fix: el backend señala `pantry_constrained` en el swap; el frontend NO limpia is_restocked para
 platos pantry-strict; y el recalc respeta `preserve_restock` cuando la Nevera no está vacía.
 """
+
+import pytest
 import os
 import re
 
 _ROOT = os.path.abspath(os.path.join(os.path.dirname(__file__), ".."))
 _AGENT = open(os.path.join(_ROOT, "agent.py"), encoding="utf-8").read()
 _PLANS = open(os.path.join(_ROOT, "routers", "plans.py"), encoding="utf-8").read()
-_ASSESS = open(os.path.join(_ROOT, "..", "frontend", "src", "context", "AssessmentContext.jsx"), encoding="utf-8").read()
+@pytest.fixture(scope="module", autouse=True)
+def _load_frontend_sibling_sources(frontend_repo_path):
+    # La fixture compartida salta el módulo antes de cualquier I/O si falta el hermano.
+    _ = frontend_repo_path
+    global _ASSESS
+    _ASSESS = open(os.path.join(_ROOT, "..", "frontend", "src", "context", "AssessmentContext.jsx"), encoding="utf-8").read()
+
 
 
 def test_swap_meal_emits_pantry_constrained():
