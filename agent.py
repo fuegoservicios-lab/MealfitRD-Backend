@@ -6261,6 +6261,7 @@ def chat_with_agent(session_id: str, prompt: str, current_plan: Optional[dict] =
 
 from typing import Generator
 from sentiment_classifier import classify_sentiment
+from prompts.sentiment import normalize_personality_instruction_for_country
 
 def chat_with_agent_stream(session_id: str, prompt: str, current_plan: Optional[dict] = None, user_id: Optional[str] = None, form_data: Optional[dict] = None, local_date: Optional[str] = None, tz_offset: Optional[int] = None, is_call_mode: bool = False, plan_tier: str = "gratis", vision: Optional[dict] = None) -> Generator[str, None, None]:
     """Generador síncrono de chat que emite eventos del modelo y herramientas mediante SSE (JSONlines).
@@ -6272,6 +6273,15 @@ def chat_with_agent_stream(session_id: str, prompt: str, current_plan: Optional[
     #  aparecia mas arriba habia que volver a moverlo, y una de esas veces se
     #  colo un NameError. Aqui ya no puede quedar por debajo de nadie.
     plan_vigente = _plan_vigente_para_prompt(user_id, current_plan)
+
+    # [P1-COACH-PERSONA-CURIOSIDAD-DO · 2026-08-23] País resuelto antes de
+    # cosechar sentimiento: la instrucción se normaliza una sola vez aguas
+    # arriba de las ramas static-prefix y legacy. Fail-safe conserva DO.
+    try:
+        from constants import country_for_form_data as _cffd_coach
+        _coach_country = _cffd_coach(form_data or {})
+    except Exception:
+        _coach_country = "DO"
 
     memory = build_memory_context(session_id, user_id)  # [P1-DREAMING-1] user_id → modelo del usuario
     
@@ -6304,6 +6314,10 @@ def chat_with_agent_stream(session_id: str, prompt: str, current_plan: Optional[
             if _f_sent is not None:
                 try:
                     sentiment_result = _f_sent.result() or {}
+                    if sentiment_result.get("instruction"):
+                        sentiment_result["instruction"] = normalize_personality_instruction_for_country(
+                            sentiment_result["instruction"], _coach_country
+                        )
                 except Exception as _se:
                     logger.warning(f"⚠️ [CHAT SENTIMENT] fallo (neutral fallback): {_se}")
                     sentiment_result = {}
@@ -6363,16 +6377,6 @@ def chat_with_agent_stream(session_id: str, prompt: str, current_plan: Optional[
         rag_context += "Úsalo para responder de forma súper personalizada.\n⚠️ REGLA DE CONFLICTO: LOS HECHOS PERMANENTES SON LEY.\n---------------------------------------------\n"
 
     schedule_type = form_data.get("scheduleType", "standard") if form_data else "standard"
-    # [P2-COACH-COUNTRY · 2026-08-21] La `<biblioteca_culinaria_local>` son SEIS platos
-    # dominicanos con sus tiempos de digestión, y el prompt no los ofrece: ORDENA citarlos.
-    # A un español eso le llega como una reprimenda por una yaroa que no comió. El país sale
-    # de la ÚNICA puerta (`country_for_form_data`); un segundo canonicalizador aquí sería la
-    # tabla que P1-DIET-CANON-SSOT ya pagó una vez.
-    try:
-        from constants import country_for_form_data as _cffd_coach
-        _coach_country = _cffd_coach(form_data or {})
-    except Exception:
-        _coach_country = "DO"
     _base_inline = CHAT_VOICE_MODE_PROMPT if is_call_mode else CHAT_STREAM_INLINE_PROMPT
 
     # [P2-CHAT-PROMPT-STATIC-PREFIX · 2026-06-01] Estáticos al frente, volátiles
