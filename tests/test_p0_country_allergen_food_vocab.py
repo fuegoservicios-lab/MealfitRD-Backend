@@ -117,5 +117,5 @@ def test_mutacion_quitar_bocadillo_pone_el_guard_rojo() -> None:
 
 
 def test_pfix_marker_cierra_g01() -> None:
-    app = (BACKEND_ROOT / "app.py").read_text(encoding="utf-8")
-    assert "P0-COUNTRY-ALLERGEN-FOOD-VOCAB · 2026-08-23" in app
+    source = (BACKEND_ROOT / "graph_orchestrator.py").read_text(encoding="utf-8")
+    assert "P0-COUNTRY-ALLERGEN-FOOD-VOCAB · 2026-08-23" in source

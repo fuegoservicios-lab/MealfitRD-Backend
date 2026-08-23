@@ -18619,7 +18619,12 @@ _PREGNANCY_SAFETY_CLAUSES = (
      ("yema y clara firmes",),
      "cocina el huevo POR COMPLETO (yema y clara firmes, sin puntos líquidos)"),
     ("deli", ("jamon", "salami", "mortadela", "fiambre", "embutido", "deli",
-              "salchicha", "salchichon", "pepperoni", "tocineta", "tocino"),
+              "salchicha", "salchichon", "pepperoni", "tocineta", "tocino",
+              # [P0-PREG-CURED-BETA · 2026-08-23] Curados/embutidos de los cinco
+              # catálogos beta. El catálogo dinámico de abajo amplía por fila exacta;
+              # estos tokens son el fallback fail-safe si la lectura no está disponible.
+              "chorizo", "sobrasada", "cecina", "embuchado", "morcilla", "butifarra",
+              "chistorra", "panceta", "longaniza", "chuleta ahumada"),
      ("74 °c", "74°c", "hasta que humee"),
      "calienta los embutidos/carnes tipo deli hasta que humeen (74 °C) y sírvelos al momento — "
      "fríos hay riesgo de listeria"),
@@ -18659,7 +18664,12 @@ _PREGNANCY_SAFETY_CLAUSES = (
 )
 # Lácteos: cláusula aparte porque el match es POR LÍNEA de ingrediente (la excusa vegetal
 # «leche de coco/almendras» debe absolver SU línea sin absolver el queso fresco del mismo plato).
-_PREGNANCY_DAIRY_TOKENS = ("leche", "yogur", "yogurt", "queso")
+_PREGNANCY_DAIRY_TOKENS = (
+    "leche", "yogur", "yogurt", "queso",
+    # [P0-PREG-CURED-BETA · 2026-08-23] Fallback estático de lácteos beta;
+    # la metadata ready_to_eat completa el resto sin depender de su grafía.
+    "cuajada", "suero costeno", "requeson", "nata",
+)
 _PREGNANCY_PLANT_DAIRY_RX = _re.compile(
     r"\b(?:leche|yogur[t]?|queso)\s+(?:de\s+|vegana?\s+de\s+)?(?:coco|almendras?|soya|soja|"
     r"avena|arroz|anacardo|mani|marañon|maranon|ajonjoli)", _re.IGNORECASE)
@@ -18677,6 +18687,55 @@ _PREGNANCY_LEGUME_CLAUSE = ("remoja y hierve las leguminosas secas hasta que est
 # El atún enlatado ya está cocido: si la ÚNICA fuente marina del plato es enlatada, la cláusula
 # de cocción de mariscos sería ruido. Contexto de lata sobre la línea del ingrediente.
 _PREGNANCY_CANNED_RX = _re.compile(r"en agua|en lata|enlatad|en aceite", _re.IGNORECASE)
+
+
+def _pregnancy_catalog_risk_tokens(catalog_rows=None) -> tuple[tuple[str, ...], tuple[str, ...], tuple[str, ...]]:
+    """Deriva triggers exactos de metadata culinaria, sin convertir dieta en clínica.
+
+    [P0-PREG-CURED-BETA · 2026-08-23] ``ready_to_eat=True`` identifica la
+    población que puede llegar al plato sin cocción. En Proteínas, los nombres
+    marinos se enrutan a la cláusula de cocción y los de huevo a su cláusula ya
+    existente; el resto son carnes deli/curadas. En Lácteos, se excluyen las
+    bebidas vegetales mediante la misma regex que usa la anotación por línea.
+
+    El catálogo es cacheado por ``get_master_ingredients``; aquí no se crea una
+    segunda caché ni una segunda taxonomía de nombres. Cualquier fallo conserva
+    el vocabulario estático fail-safe de arriba.
+    """
+    try:
+        if catalog_rows is None:
+            from shopping_calculator import get_master_ingredients
+
+            catalog_rows = get_master_ingredients() or []
+        from constants import strip_accents as _sa_catalog_risk
+
+        deli, dairy, marine = set(), set(), set()
+        for row in catalog_rows or []:
+            if not isinstance(row, dict) or row.get("ready_to_eat") is not True:
+                continue
+            name = _sa_catalog_risk(str(row.get("name") or "").strip().lower())
+            category = _sa_catalog_risk(str(row.get("category") or "").strip().lower())
+            if not name:
+                continue
+            if category == "lacteos":
+                if not _PREGNANCY_PLANT_DAIRY_RX.search(name):
+                    dairy.add(name)
+                continue
+            if category != "proteinas":
+                continue
+            if any(_name_has_token(t, name) for t in _DIET_EGG_TERMS):
+                continue  # la cláusula de huevo ya cubre la fila
+            if any(_name_has_token(t, name) for t in _DIET_SEAFOOD_TERMS):
+                marine.add(name)
+            else:
+                deli.add(name)
+        return tuple(sorted(deli)), tuple(sorted(dairy)), tuple(sorted(marine))
+    except Exception as exc:
+        logger.debug(
+            f"[P0-PREG-CURED-BETA] metadata culinaria no disponible; "
+            f"fallback estático: {type(exc).__name__}: {exc}"
+        )
+        return (), (), ()
 
 
 def _apply_pregnancy_food_safety_annotations(plan: dict, form_data: dict) -> int:
@@ -18700,6 +18759,7 @@ def _apply_pregnancy_food_safety_annotations(plan: dict, form_data: dict) -> int
         from constants import strip_accents as _sa_psn
     except Exception:
         return 0
+    _catalog_deli, _catalog_dairy, _catalog_marine = _pregnancy_catalog_risk_tokens()
     annotated = 0
     try:
         for day in plan.get("days") or []:
@@ -18715,7 +18775,12 @@ def _apply_pregnancy_food_safety_annotations(plan: dict, form_data: dict) -> int
                 rec_blob = _sa_psn(" ".join(base_rec).lower())
                 clauses = []
                 for _key, _toks, _covered, _text in _PREGNANCY_SAFETY_CLAUSES:
-                    if not any(_name_has_token(_t, blob) for _t in _toks):
+                    _effective_toks = _toks
+                    if _key == "deli":
+                        _effective_toks = _toks + _catalog_deli
+                    elif _key == "mariscos":
+                        _effective_toks = _toks + _catalog_marine
+                    if not any(_name_has_token(_t, blob) for _t in _effective_toks):
                         continue
                     # covered escanea receta + nombre + ingredientes: «canela de Ceilán» o
                     # «leche pasteurizada» EN la línea del ingrediente también absuelven.
@@ -18726,7 +18791,8 @@ def _apply_pregnancy_food_safety_annotations(plan: dict, form_data: dict) -> int
                         # si TODA línea marina es enlatada, ya está cocida → cláusula fuera.
                         _marine_lines = [
                             _l for _l in ings
-                            if any(_name_has_token(_t, _sa_psn(_l.lower())) for _t in _toks)]
+                            if any(_name_has_token(_t, _sa_psn(_l.lower()))
+                                   for _t in _effective_toks)]
                         if _marine_lines and all(
                                 _PREGNANCY_CANNED_RX.search(_l) for _l in _marine_lines):
                             continue
@@ -18736,7 +18802,8 @@ def _apply_pregnancy_food_safety_annotations(plan: dict, form_data: dict) -> int
                 if "pasteuriz" not in rec_blob and "pasteuriz" not in blob:
                     for _l in ings:
                         _ll = _sa_psn(_l.lower())
-                        if (any(_name_has_token(_t, _ll) for _t in _PREGNANCY_DAIRY_TOKENS)
+                        if (any(_name_has_token(_t, _ll)
+                                for _t in _PREGNANCY_DAIRY_TOKENS + _catalog_dairy)
                                 and not _PREGNANCY_PLANT_DAIRY_RX.search(_sa_psn(_l))):
                             clauses.append(_PREGNANCY_DAIRY_CLAUSE)
                             break

@@ -1,0 +1,277 @@
+[
+  {
+    "name": "Crema agria",
+    "category": "Lácteos",
+    "ready_to_eat": true
+  },
+  {
+    "name": "Crema mexicana",
+    "category": "Lácteos",
+    "ready_to_eat": true
+  },
+  {
+    "name": "Crema mitad y mitad",
+    "category": "Lácteos",
+    "ready_to_eat": true
+  },
+  {
+    "name": "Cuajada",
+    "category": "Lácteos",
+    "ready_to_eat": true
+  },
+  {
+    "name": "Kéfir",
+    "category": "Lácteos",
+    "ready_to_eat": true
+  },
+  {
+    "name": "Leche",
+    "category": "Lácteos",
+    "ready_to_eat": true
+  },
+  {
+    "name": "Leche de almendras",
+    "category": "Lácteos",
+    "ready_to_eat": true
+  },
+  {
+    "name": "Leche de cabra en polvo",
+    "category": "Lácteos",
+    "ready_to_eat": true
+  },
+  {
+    "name": "Leche de coco",
+    "category": "Lácteos",
+    "ready_to_eat": true
+  },
+  {
+    "name": "Leche de soya",
+    "category": "Lácteos",
+    "ready_to_eat": true
+  },
+  {
+    "name": "Leche descremada",
+    "category": "Lácteos",
+    "ready_to_eat": true
+  },
+  {
+    "name": "Leche evaporada",
+    "category": "Lácteos",
+    "ready_to_eat": true
+  },
+  {
+    "name": "Mantequilla",
+    "category": "Lácteos",
+    "ready_to_eat": true
+  },
+  {
+    "name": "Nata",
+    "category": "Lácteos",
+    "ready_to_eat": true
+  },
+  {
+    "name": "Natilla",
+    "category": "Lácteos",
+    "ready_to_eat": true
+  },
+  {
+    "name": "Queso blanco",
+    "category": "Lácteos",
+    "ready_to_eat": true
+  },
+  {
+    "name": "Queso cheddar",
+    "category": "Lácteos",
+    "ready_to_eat": true
+  },
+  {
+    "name": "Queso cottage",
+    "category": "Lácteos",
+    "ready_to_eat": true
+  },
+  {
+    "name": "Queso crema",
+    "category": "Lácteos",
+    "ready_to_eat": true
+  },
+  {
+    "name": "Queso de hoja",
+    "category": "Lácteos",
+    "ready_to_eat": true
+  },
+  {
+    "name": "Queso de papa",
+    "category": "Lácteos",
+    "ready_to_eat": true
+  },
+  {
+    "name": "Queso en hebras",
+    "category": "Lácteos",
+    "ready_to_eat": true
+  },
+  {
+    "name": "Queso gouda",
+    "category": "Lácteos",
+    "ready_to_eat": true
+  },
+  {
+    "name": "Queso mozzarella",
+    "category": "Lácteos",
+    "ready_to_eat": true
+  },
+  {
+    "name": "Queso parmesano",
+    "category": "Lácteos",
+    "ready_to_eat": true
+  },
+  {
+    "name": "Queso provolone",
+    "category": "Lácteos",
+    "ready_to_eat": true
+  },
+  {
+    "name": "Queso ricotta",
+    "category": "Lácteos",
+    "ready_to_eat": true
+  },
+  {
+    "name": "Requesón",
+    "category": "Lácteos",
+    "ready_to_eat": true
+  },
+  {
+    "name": "Suero costeño",
+    "category": "Lácteos",
+    "ready_to_eat": true
+  },
+  {
+    "name": "Suero de mantequilla",
+    "category": "Lácteos",
+    "ready_to_eat": true
+  },
+  {
+    "name": "Yogur de coco",
+    "category": "Lácteos",
+    "ready_to_eat": true
+  },
+  {
+    "name": "Yogurt",
+    "category": "Lácteos",
+    "ready_to_eat": true
+  },
+  {
+    "name": "Yogurt griego entero",
+    "category": "Lácteos",
+    "ready_to_eat": true
+  },
+  {
+    "name": "Yogurt griego sin azúcar",
+    "category": "Lácteos",
+    "ready_to_eat": true
+  },
+  {
+    "name": "Anchoas",
+    "category": "Proteínas",
+    "ready_to_eat": true
+  },
+  {
+    "name": "Atún en agua",
+    "category": "Proteínas",
+    "ready_to_eat": true
+  },
+  {
+    "name": "Bacalaítos",
+    "category": "Proteínas",
+    "ready_to_eat": true
+  },
+  {
+    "name": "Boquerones",
+    "category": "Proteínas",
+    "ready_to_eat": true
+  },
+  {
+    "name": "Cecina",
+    "category": "Proteínas",
+    "ready_to_eat": true
+  },
+  {
+    "name": "Chicharrón",
+    "category": "Proteínas",
+    "ready_to_eat": true
+  },
+  {
+    "name": "Chorizo español",
+    "category": "Proteínas",
+    "ready_to_eat": true
+  },
+  {
+    "name": "Chuleta ahumada",
+    "category": "Proteínas",
+    "ready_to_eat": true
+  },
+  {
+    "name": "Huevos rellenos",
+    "category": "Proteínas",
+    "ready_to_eat": true
+  },
+  {
+    "name": "Jamón de cocinar",
+    "category": "Proteínas",
+    "ready_to_eat": true
+  },
+  {
+    "name": "Jamón de pavo",
+    "category": "Proteínas",
+    "ready_to_eat": true
+  },
+  {
+    "name": "Jamón de sándwich",
+    "category": "Proteínas",
+    "ready_to_eat": true
+  },
+  {
+    "name": "Jamón ibérico",
+    "category": "Proteínas",
+    "ready_to_eat": true
+  },
+  {
+    "name": "Jamón serrano",
+    "category": "Proteínas",
+    "ready_to_eat": true
+  },
+  {
+    "name": "Lomo embuchado",
+    "category": "Proteínas",
+    "ready_to_eat": true
+  },
+  {
+    "name": "Morcilla",
+    "category": "Proteínas",
+    "ready_to_eat": true
+  },
+  {
+    "name": "Pepperoni",
+    "category": "Proteínas",
+    "ready_to_eat": true
+  },
+  {
+    "name": "Salami",
+    "category": "Proteínas",
+    "ready_to_eat": true
+  },
+  {
+    "name": "Salchichas",
+    "category": "Proteínas",
+    "ready_to_eat": true
+  },
+  {
+    "name": "Sardinas en lata",
+    "category": "Proteínas",
+    "ready_to_eat": true
+  },
+  {
+    "name": "Sobrasada",
+    "category": "Proteínas",
+    "ready_to_eat": true
+  }
+]
