@@ -64,6 +64,22 @@ _LOCALES = ("es-DO", "en-US", "pt-BR", "fr-FR", "it-IT")
 
 # ── TÍTULOS ────────────────────────────────────────────────────────────────────
 _TITULOS = {
+    # [P1-I18N-PUSH-GUARD-CIEGO-AL-THREAD · 2026-08-23] Los que escapaban al guard por ir
+    # envueltos en `threading.Thread(target=…, kwargs={"title": …})`: el nodo `Call` se
+    # llama `Thread`, así que el extractor por AST no los veía y el guard reportaba CERO
+    # faltantes mientras salían en español.
+    "Renovación pausada": {
+        "en-US": "Renewal paused",
+        "pt-BR": "Renovação pausada",
+        "fr-FR": "Renouvellement en pause",
+        "it-IT": "Rinnovo in pausa",
+    },
+    "Tu plan necesita tu feedback": {
+        "en-US": "Your plan needs your feedback",
+        "pt-BR": "Seu plano precisa do seu feedback",
+        "fr-FR": "Votre plan a besoin de votre avis",
+        "it-IT": "Il tuo piano ha bisogno del tuo feedback",
+    },
     "Actualiza tu nevera": {
         "en-US": "Update your fridge",
         "pt-BR": "Atualize sua geladeira",
@@ -218,6 +234,19 @@ _TITULOS = {
 
 # ── CUERPOS ────────────────────────────────────────────────────────────────────
 _CUERPOS = {
+    # [P1-I18N-PUSH-GUARD-CIEGO-AL-THREAD · 2026-08-23] Ver la nota en `_TITULOS`.
+    "Actualiza tu nevera para renovar tu plan.": {
+        "en-US": "Update your fridge to renew your plan.",
+        "pt-BR": "Atualize sua geladeira para renovar seu plano.",
+        "fr-FR": "Mettez votre frigo à jour pour renouveler votre plan.",
+        "it-IT": "Aggiorna il tuo Frigo per rinnovare il tuo piano.",
+    },
+    "Necesitamos que registres tus comidas para seguir personalizando tu menú.": {
+        "en-US": "We need you to log your meals to keep personalizing your menu.",
+        "pt-BR": "Precisamos que você registre suas refeições para continuar personalizando seu cardápio.",
+        "fr-FR": "Nous avons besoin que vous enregistriez vos repas pour continuer à personnaliser votre menu.",
+        "it-IT": "Abbiamo bisogno che tu registri i tuoi pasti per continuare a personalizzare il tuo menù.",
+    },
     "Actualiza 'Mi Nevera' para continuar con el siguiente bloque del plan. Si no, usaremos una opción flexible más adelante.": {
         "en-US": "Update 'My Fridge' to continue with the next block of your plan. Otherwise we'll use a flexible option later on.",
         "pt-BR": "Atualize 'Minha Geladeira' para continuar com o próximo bloco do plano. Caso contrário, usaremos uma opção flexível mais adiante.",

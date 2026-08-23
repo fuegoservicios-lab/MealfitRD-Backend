@@ -137,6 +137,42 @@ def _literales_de_los_call_sites() -> set:
             if not isinstance(nodo, ast.Call):
                 continue
             nombre = getattr(nodo.func, "id", None) or getattr(nodo.func, "attr", None)
+
+            # [P1-I18N-PUSH-GUARD-CIEGO-AL-THREAD · 2026-08-23] La forma envuelta.
+            #
+            # Ocho call sites no llaman al push directamente: son
+            # `threading.Thread(target=send_push_notification, kwargs={"title": …})`, donde
+            # el nodo `Call` se llama `Thread` y no `send_push_notification`. El guard veía
+            # 41 literales, los comparaba con el catálogo y reportaba CERO faltantes —
+            # mientras 16 textos (8 títulos + 8 cuerpos) salían en español. Entre ellos,
+            # palabra por palabra, el ejemplo que el propio P-fix usó para justificarse:
+            # «Tu plan necesita una revisión».
+            #
+            # El plan v2 pedía explícitamente resolver esta forma («resolver alias de import
+            # y `threading.Thread(kwargs={'title':…})`») y no se hizo.
+            if nombre == "Thread":
+                kw_t = {k.arg: k.value for k in nodo.keywords if k.arg}
+                objetivo = kw_t.get("target")
+                nombre_objetivo = (getattr(objetivo, "id", None)
+                                   or getattr(objetivo, "attr", None))
+                if nombre_objetivo not in _FUNCIONES_DE_PUSH:
+                    continue
+                candidatos = []
+                # `kwargs={"title": …, "body": …}`
+                dic = kw_t.get("kwargs")
+                if isinstance(dic, ast.Dict):
+                    for clave, valor in zip(dic.keys, dic.values):
+                        if isinstance(clave, ast.Constant) and clave.value in ("title", "body"):
+                            candidatos.append(valor)
+                # `args=(user_id, title, body, url)`
+                tup = kw_t.get("args")
+                if isinstance(tup, (ast.Tuple, ast.List)):
+                    candidatos += list(tup.elts[1:3])
+                for c in candidatos:
+                    if isinstance(c, ast.Constant) and isinstance(c.value, str) and c.value.strip():
+                        fuera.add(c.value)
+                continue
+
             if nombre not in _FUNCIONES_DE_PUSH:
                 continue
             kw = {k.arg: k.value for k in nodo.keywords if k.arg}
@@ -158,6 +194,24 @@ def test_todo_literal_que_emiten_los_call_sites_esta_en_el_catalogo() -> None:
     literales = _literales_de_los_call_sites()
     if not literales:
         pytest.skip("no se encontró ningún call site literal (¿refactor?)")
+
+    # [P1-I18N-PUSH-GUARD-CIEGO-AL-THREAD · 2026-08-23] El ALCANCE del extractor, aseverado
+    # en positivo.
+    #
+    # Sin esto, el guard es inmune a su propio agujero: si el extractor deja de ver una
+    # forma, encuentra MENOS literales, y «menos literales, todos en el catálogo» sale
+    # verde. Lo comprobé mutando —cegando la rama de `Thread`— y el test pasó igual. Un
+    # guard cuyo universo puede encogerse en silencio no vigila el universo, vigila lo que
+    # le queda.
+    #
+    # `Renovación pausada` vive SÓLO dentro de un `threading.Thread(kwargs={...})`
+    # (`cron_tasks.py`), así que su presencia demuestra que esa forma se alcanza.
+    assert "Renovación pausada" in literales, (
+        "el extractor dejó de ver los push envueltos en `threading.Thread(target=…, "
+        f"kwargs={{'title': …}})`. Encuentra {len(literales)} literales y le falta al menos "
+        f"uno que sólo existe en esa forma: el guard volvió a ser ciego justo donde lo era. "
+        f"[{_MARKER}]"
+    )
     faltan = sorted(literales - push_catalog_keys())
     assert not faltan, (
         f"{len(faltan)} texto(s) de push no están en `push_i18n`: {faltan[:6]}"
