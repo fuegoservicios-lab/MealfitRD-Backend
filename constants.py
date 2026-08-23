@@ -3752,7 +3752,112 @@ def beta_prompt_country_header(country) -> str:
     )
 
 
-def stamp_plan_country(plan_data, form_data) -> str:
+def _emit_country_beta_first_plan_best_effort(country: str) -> None:
+    """Emite una sola fila cuando nace el primer plan de un país beta.
+
+    ``ON CONFLICT DO NOTHING`` es parte del contrato: este helper corre en cada
+    assemble (también en chunks de continuación), pero el evento representa el
+    primer plan del país, no un contador de planes. Telemetría best-effort: un
+    fallo de observabilidad nunca invalida un plan ya generado.
+    """
+    if country == "DO" or country not in COUNTRY_PROFILES:
+        return
+    alert_key = f"country_beta_first_plan:{country}"
+    try:
+        import json as _json_country_alert
+        from db_core import execute_sql_write as _write_country_alert
+
+        _write_country_alert(
+            """
+            INSERT INTO system_alerts
+                (alert_key, alert_type, severity, title, message, metadata,
+                 triggered_at, resolved_at)
+            VALUES (%s, 'country_system', 'info', %s, %s, %s::jsonb, NOW(), NULL)
+            ON CONFLICT (alert_key) DO NOTHING
+            """,
+            (
+                alert_key,
+                f"Primer plan beta generado para {country}",
+                "Validar contenido culinario, lista de compras y régimen de precios del primer plan.",
+                _json_country_alert.dumps({"country": country}, ensure_ascii=False),
+            ),
+        )
+    except Exception as _country_alert_error:
+        try:
+            import logging as _logging_country_alert
+            _logging_country_alert.getLogger(__name__).debug(
+                "[P2-COUNTRY-OBSERVABILIDAD-CERO] no se pudo emitir %s: %r",
+                alert_key,
+                _country_alert_error,
+            )
+        except Exception:
+            pass
+
+
+def emit_country_plan_regime_changed_best_effort(
+    plan_id,
+    *,
+    previous_country=None,
+    country=None,
+    previous_pricing_mode=None,
+    pricing_mode=None,
+    pricing_mode_removed: bool = False,
+) -> None:
+    """Deja rastro cuando cambia la interpretación país/precios de un plan.
+
+    El alert es per-plan y se reabre si el mismo artefacto vuelve a cambiar. Los
+    valores previos/nuevos son metadata diagnóstica; el caller decide si hubo
+    cambio para que la ausencia legítima de ``_pricing_mode`` en DO no alerte.
+    """
+    if not plan_id:
+        return
+    alert_key = f"country_plan_regime_changed:{plan_id}"
+    try:
+        import json as _json_country_alert
+        from db_core import execute_sql_write as _write_country_alert
+
+        metadata = {
+            "plan_id": str(plan_id),
+            "previous_country": previous_country,
+            "country": country,
+            "previous_pricing_mode": previous_pricing_mode,
+            "pricing_mode": pricing_mode,
+            "pricing_mode_removed": bool(pricing_mode_removed),
+        }
+        _write_country_alert(
+            """
+            INSERT INTO system_alerts
+                (alert_key, alert_type, severity, title, message, metadata,
+                 triggered_at, resolved_at)
+            VALUES (%s, 'country_system', 'warning', %s, %s, %s::jsonb, NOW(), NULL)
+            ON CONFLICT (alert_key) DO UPDATE SET
+                severity = EXCLUDED.severity,
+                title = EXCLUDED.title,
+                message = EXCLUDED.message,
+                metadata = EXCLUDED.metadata,
+                triggered_at = NOW(),
+                resolved_at = NULL
+            """,
+            (
+                alert_key,
+                f"Cambió el régimen de país/precios del plan {plan_id}",
+                "Revisar si el cambio fue explícito o si un fallback reescribió evidencia del plan.",
+                _json_country_alert.dumps(metadata, ensure_ascii=False),
+            ),
+        )
+    except Exception as _country_alert_error:
+        try:
+            import logging as _logging_country_alert
+            _logging_country_alert.getLogger(__name__).debug(
+                "[P2-COUNTRY-OBSERVABILIDAD-CERO] no se pudo emitir %s: %r",
+                alert_key,
+                _country_alert_error,
+            )
+        except Exception:
+            pass
+
+
+def stamp_plan_country(plan_data, form_data, *, emit_observability: bool = False) -> str:
     """[P1-PLAN-STAMPS-COUNTRY · 2026-08-21] Sella el país DEL PLAN en `plan_data['_country']`.
 
     EL DEFECTO QUE CIERRA. `plan_data` guardaba `_pricing_mode` y NO el país, así que toda
@@ -3766,13 +3871,31 @@ def stamp_plan_country(plan_data, form_data) -> str:
     y esa ambigüedad es justo la que hace irreparables los planes que ya existen. Con el sello
     siempre presente, ausente = pre-sistema, que es una respuesta útil.
 
-    Aditivo: no toca ninguna otra clave de `plan_data` (invariante I7 — este helper NO persiste,
-    sólo prepara el dict que el caller ya va a escribir).
+    Aditivo: no toca ninguna otra clave de `plan_data` (invariante I7). Por defecto sigue siendo
+    puro y sólo prepara el dict que el caller ya va a escribir. El ensamblador de producción pasa
+    ``emit_observability=True``; tests y transformaciones locales no abren I/O accidentalmente.
 
     tooltip-anchor: stamp_plan_country (test_p1_plan_stamps_country.py)"""
     _cc = country_for_form_data(form_data)
     if isinstance(plan_data, dict):
+        _had_country = "_country" in plan_data
+        _previous_country = plan_data.get("_country")
         plan_data["_country"] = _cc
+        if emit_observability:
+            _emit_country_beta_first_plan_best_effort(_cc)
+        if emit_observability and _had_country and _previous_country != _cc:
+            _plan_id = (
+                (form_data or {}).get("plan_id")
+                if isinstance(form_data, dict)
+                else None
+            ) or plan_data.get("id") or plan_data.get("plan_id")
+            emit_country_plan_regime_changed_best_effort(
+                _plan_id,
+                previous_country=_previous_country,
+                country=_cc,
+                previous_pricing_mode=plan_data.get("_pricing_mode"),
+                pricing_mode=plan_data.get("_pricing_mode"),
+            )
     return _cc
 
 

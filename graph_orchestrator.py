@@ -38732,7 +38732,7 @@ async def assemble_plan_node(state: PlanState) -> dict:
     # la clave significaría a la vez «dominicano» y «plan pre-P-fix», que es la ambigüedad que
     # deja irreparables los planes que ya existen.
     from constants import stamp_plan_country
-    stamp_plan_country(result, form_data)
+    stamp_plan_country(result, form_data, emit_observability=True)
 
     from shopping_calculator import get_shopping_list_delta, fetch_inventory_and_consumed_for_plan, cycle_qty_multiplier, cycle_days_for_duration, active_trip_window_days
     from constants import compute_household_multiplier

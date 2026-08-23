@@ -11687,11 +11687,33 @@ def api_recalculate_shopping_list(data: dict = Body(...), verified_user_id: Opti
                 _p1b_mode = (plan_data_fresh.get("_pricing_mode")
                              if _recalc_pricing_mode is False else _recalc_pricing_mode)
                 if _recalc_pricing_mode is not False:
+                    _had_country = "_country" in plan_data_fresh
+                    _previous_country = plan_data_fresh.get("_country")
+                    _had_pricing_mode = "_pricing_mode" in plan_data_fresh
+                    _previous_pricing_mode = plan_data_fresh.get("_pricing_mode")
                     if _p1b_mode:
                         plan_data_fresh["_pricing_mode"] = _p1b_mode
                     else:
                         plan_data_fresh.pop("_pricing_mode", None)
                     plan_data_fresh["_country"] = _recalc_country
+                    # [P2-COUNTRY-OBSERVABILIDAD-CERO · 2026-08-23] Cambiar el
+                    # sello o borrar un régimen que existía altera lo que el
+                    # usuario ve en lista/PDF. Antes no dejaba ninguna fila.
+                    _country_changed = (
+                        _had_country
+                        and _previous_country != _recalc_country
+                    )
+                    _pricing_mode_removed = _had_pricing_mode and not _p1b_mode
+                    if _country_changed or _pricing_mode_removed:
+                        from constants import emit_country_plan_regime_changed_best_effort as _emit_country_regime
+                        _emit_country_regime(
+                            plan_id,
+                            previous_country=_previous_country,
+                            country=_recalc_country,
+                            previous_pricing_mode=_previous_pricing_mode,
+                            pricing_mode=_p1b_mode,
+                            pricing_mode_removed=_pricing_mode_removed,
+                        )
                 _p1b_summary = _p1b_ccs(scaled_7, scaled_15_hybrid, scaled_30_hybrid, grocery_duration,
                                          pricing_mode=_p1b_mode)
                 if _p1b_summary:
