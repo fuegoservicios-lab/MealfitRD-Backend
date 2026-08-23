@@ -223,10 +223,16 @@ Lo que la ejecución demuestra, y no es poco:
   `200 g de banane plantain verte (Plátano verde)`: el usuario lee francés y el nombre
   canónico español —el identificador con el que resuelven `pantry_names_match`, el guard de
   coherencia y el backstop de alergias— viaja intacto entre paréntesis.
-- **El eco se descarta.** El NOMBRE del plato volvió sin traducir y `P2-DISPLAY-ECO-NOMBRE`
-  lo rechazó en vez de persistirlo, que es justo su trabajo: persistir un eco haría que el
-  gate de «ya traducido» dijera que sí y nadie lo reintentara nunca. (Con un plato cuyo
-  nombre es un sustantivo propio dominicano, además, dejarlo es defendible.)
+- **El eco se descarta, y NO es que el nombre no se traduzca.** Con `Mangú de plátano con
+  huevo` el nombre volvió sin traducir y `P2-DISPLAY-ECO-NOMBRE` lo rechazó en vez de
+  persistirlo — persistir un eco haría que el gate de «ya traducido» dijera que sí y nadie
+  lo reintentara nunca.
+
+  Eso dejaba una duda razonable: ¿rechaza el eco, o es que los nombres nunca se traducen?
+  Se midió con una **segunda muestra de nombre común**, `Pollo al horno con papas`, y salió
+  **`Poulet rôti aux pommes de terre`**. O sea: el nombre SÍ se traduce, y lo de «Mangú» era
+  la defensa funcionando sobre un sustantivo propio dominicano. Una muestra no bastaba para
+  distinguir las dos explicaciones; dos sí.
 - **La telemetría escribe de verdad.** `pipeline_metrics` pasó de CERO filas históricas de
   este nodo a tener las de estas ejecuciones.
 
