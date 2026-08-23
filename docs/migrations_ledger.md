@@ -49,12 +49,52 @@ Dos falsos positivos de la auditoría que NO son pendientes: `p0_3_backfill_plan
 (la constraint que «falta» está citada en un comentario del fichero) y las constraints
 `permite`/`*_user_id_fkey` de `p1_new_5` (regex sobre prosa y sobre un esquema que no existe).
 
+## Medido vs supuesto — la corrección del mismo día (2026-08-23)
+
+[P3-I18N-DOC-LIBRO-MEDIDO-VS-SUPUESTO] El backfill de arriba anotó 35 migraciones de DATOS
+como «asumida aplicada: el producto corre sobre ella». Horas después, otra sesión midió una
+de ellas contra la base: `p1_country_keep_density_beta_2026_08_21.sql` tenía sus **13 filas
+objetivo con `density_g_per_cup` NULL** — nunca corrió. La fila del libro decía lo contrario.
+
+**El error no fue backfillear: fue que la nota decía «asumida aplicada» con la misma cara que
+«verificada».** El backfill era necesario —110 migraciones anteriores al libro— pero mezclar
+lo medido con lo supuesto convierte «no lo sé» en «aplicada», y entonces nadie vuelve a mirar.
+
+Y el razonamiento «el producto corre sobre ella» es **inválido justo para esta clase**: una
+migración de datos que no corre normalmente NO rompe nada — deja el dato mal en silencio. Con
+las densidades, «1 taza de Nata» seguía calculando 150 g en vez de 238, sin un solo error.
+
+Qué se hizo con las 35, midiendo antes de rotular:
+
+| | Cuántas | Nota en el libro |
+|---|---|---|
+| Estado final medido | 11 | `verificada 2026-08-23: …` — las 5 `UPDATE … WHERE col IS NULL` con 0 objetivos pendientes, 4 `INSERT` con su fila presente (muestreo), y las rondas 1 y 3 de provenance |
+| No medibles hoy | 24 | `SIN VERIFICAR (datos): …` — el `--status` las lista aparte |
+| Falsa | 1 | fila borrada; vuelve a PENDIENTE (densidades beta) |
+
+Dos matices que costaron una comprobación extra y valen para la próxima:
+
+- **Un objetivo «pendiente» puede ser el estado deseado.** La ronda 1 de provenance daba «1 de
+  19 con `fdc_id`»: era `Crema mexicana`, y la ronda 3 se lo **devuelve a propósito** (173443,
+  la fila USDA real). Falsa alarma, verificada con explicación en la nota.
+- **Una migración pisada por otra no es verificable por estado final.** La ronda 2 escribía un
+  `nutrition_source_ref` que la ronda 3 sobrescribe legítimamente: queda SIN VERIFICAR, que es
+  la respuesta honesta en vez de la cómoda.
+
+⚠️ **«Estado final medido» no es «aplicada».** Demuestra que el dato ES el correcto, no que lo
+produjera ESA migración. Para una migración de datos idempotente la distinción no cambia nada
+operativo —lo que importa es el dato— y por eso la etiqueta es ésa y no «aplicada».
+
 ## Lo que sigue sin resolver
 
 - Nada IMPIDE aplicar a mano fuera del runner. El libro registra lo que pasa por él; un
   `psql` suelto sigue siendo invisible hasta el siguiente `--status`.
 - `--status` no mira la base, mira el libro. Una fila anotada con `--record` vale lo que
-  valga su `note`.
+  valga su `note` — por eso las 24 sin evidencia se listan aparte en vez de contarse como
+  «al día» a secas.
+- **24 migraciones de datos siguen sin verificar.** Convertir cada una en un hecho es una
+  consulta a la base por migración; el modelo a seguir es `scripts/verify_country_schema.py`
+  (una sonda que responde «¿está el esquema al día?» con exit code).
 - Test: [`test_p2_i18n_migraciones_sin_libro.py`](../tests/test_p2_i18n_migraciones_sin_libro.py)
   (idempotencia de la migración, paridad de las dos copias, `clasificar()` pura, el orden
   ejecutar→anotar, y que sin libro se avisa en vez de reventar).

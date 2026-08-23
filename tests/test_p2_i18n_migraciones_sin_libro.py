@@ -120,3 +120,35 @@ def test_apply_ejecuta_el_sql_y_despues_anota(runner) -> None:
     i_exec = cuerpo.find("cur.execute(sql)")
     i_rec = cuerpo.find("_record(cur, name, checksum, note)")
     assert 0 < i_exec < i_rec, f"el runner anota antes de ejecutar, o no anota [{_MARKER}]"
+
+
+# ─────────── [P3-I18N-DOC-LIBRO-MEDIDO-VS-SUPUESTO · 2026-08-23] ───────────
+# El backfill anotó 35 migraciones de datos como «asumida aplicada», con la misma cara que
+# las verificadas. La primera que se pudo medir (densidades beta) resultó FALSA: sus 13 filas
+# objetivo seguían con density NULL. El libro no puede presentar lo supuesto como medido.
+
+def test_status_lista_las_sin_verificar_aparte() -> None:
+    """`--status` tiene que separar lo MEDIDO de lo SUPUESTO. Sin esta separación, «al día:
+    109» tapa 24 filas cuya nota dice que nadie miró la base."""
+    src = _RUNNER.read_text(encoding="utf-8")
+    assert 'COALESCE(note' in src, "el status ya no lee la nota: no puede distinguir medido de supuesto"
+    assert 'startswith("SIN VERIFICAR")' in src, (
+        f"desapareció el criterio de «sin verificar» [{_MARKER}]")
+    assert "SIN VERIFICAR (su nota lo dice)" in src, "el status dejó de listarlas aparte"
+    # No cambian el exit: son deuda de EVIDENCIA, no trabajo pendiente conocido.
+    i = src.index("SIN VERIFICAR (su nota lo dice)")
+    cola = src[i:]
+    assert "return 4 if (r[\"pendientes\"] or r[\"cambiadas\"]) else 0" in cola, (
+        "las SIN VERIFICAR no deben cambiar el exit code del gate")
+
+
+def test_la_doc_distingue_medido_de_supuesto() -> None:
+    doc = (_BACKEND / "docs" / "migrations_ledger.md").read_text(encoding="utf-8")
+    assert "## Medido vs supuesto" in doc, f"desapareció la sección [{_MARKER}]"
+    assert "no fue backfillear" in doc, (
+        "la lección se perdió: el error no fue backfillear, fue que la nota decía «asumida "
+        "aplicada» con la misma cara que «verificada»")
+    assert "deja el dato mal en silencio" in doc, (
+        "falta el porqué: una migración de datos que no corre NO rompe el producto")
+    assert "no es «aplicada»" in doc, (
+        "«estado final medido» demuestra el ESTADO, no que esa migración lo produjera")

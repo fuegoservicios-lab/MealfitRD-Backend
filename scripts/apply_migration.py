@@ -149,8 +149,14 @@ def status() -> int:
     with psycopg.connect(url) as conn:
         with conn.cursor() as cur:
             try:
-                cur.execute("SELECT name, checksum FROM public.schema_migrations")
-                libro = {r[0]: r[1] for r in cur.fetchall()}
+                cur.execute("SELECT name, checksum, COALESCE(note, '') FROM public.schema_migrations")
+                filas = cur.fetchall()
+                libro = {r[0]: r[1] for r in filas}
+                # [P3-I18N-DOC-LIBRO-MEDIDO-VS-SUPUESTO · 2026-08-23] Las filas cuya nota dice
+                # que el estado de la base NO se midió. El backfill del libro las anotaba como
+                # «asumida aplicada», con la misma cara que las verificadas — y la primera que
+                # se pudo medir (densidades beta) resultó falsa.
+                sin_verificar = sorted(r[0] for r in filas if str(r[2]).startswith("SIN VERIFICAR"))
             except psycopg.errors.UndefinedTable:
                 print(
                     f"[!] schema_migrations NO existe en {_mask(url)}: el libro no se ha creado. "
@@ -161,7 +167,8 @@ def status() -> int:
                 return 3
     r = clasificar(ficheros, libro)
     print(f"Destino: {_mask(url)} · {len(ficheros)} ficheros · {len(libro)} en el libro")
-    print(f"  al día                    : {len(r['al_dia'])}")
+    print(f"  al día                    : {len(r['al_dia'])}"
+          f"   (de ellas {len(sin_verificar)} SIN VERIFICAR)")
     print(f"  PENDIENTES (sin fila)     : {len(r['pendientes'])}")
     for n in r["pendientes"]:
         print(f"      · {n}")
@@ -172,7 +179,15 @@ def status() -> int:
         print(f"  en el libro sin fichero   : {len(r['solo_en_libro'])}")
         for n in r["solo_en_libro"]:
             print(f"      · {n}")
-    # Exit ≠ 0 si hay pendientes: para que un gate pueda leerlo.
+    if sin_verificar:
+        # No son un fallo: son honestidad. Se listan aparte para que «al día» no las tape.
+        print(f"  SIN VERIFICAR (su nota lo dice): {len(sin_verificar)}")
+        print("      migraciones de DATOS anotadas en el backfill sin medir el estado de la base.")
+        print("      Una que no corrió NO rompe el producto: deja el dato mal en silencio.")
+        for n in sin_verificar:
+            print(f"      · {n}")
+    # Exit ≠ 0 si hay pendientes: para que un gate pueda leerlo. Las SIN VERIFICAR no
+    # cambian el exit — son deuda de evidencia, no trabajo pendiente conocido.
     return 4 if (r["pendientes"] or r["cambiadas"]) else 0
 
 
