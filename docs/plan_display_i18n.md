@@ -236,9 +236,36 @@ Lo que la ejecución demuestra, y no es poco:
 - **La telemetría escribe de verdad.** `pipeline_metrics` pasó de CERO filas históricas de
   este nodo a tener las de estas ejecuciones.
 
-Lo que **NO** demuestra, y por eso el gap no se marca cerrado del todo: que el DISPARADOR se
-active solo en producción para un usuario real. Eso sigue necesitando un plan de cliente y la
-decisión del dueño — es una escritura en sus datos más gasto en un proveedor de pago.
+### Por qué nunca se disparó: no es un defecto, es que no hay a quién
+
+Queda una pregunta que la ejecución manual no contesta: ¿el DISPARADOR se activa solo? Se
+midió, y la respuesta reencuadra el gap entero.
+
+La condición está en `routers/plans.py` y es exactamente la que debe ser:
+
+```python
+_p1_i18n_locale = (get_user_profile(actual_user_id) or {}).get("locale")
+if _p1_i18n_locale and _p1_i18n_locale != "es-DO":
+    schedule_plan_display_enrichment(...)
+```
+
+Y la base, medida el 2026-08-23 sobre los usuarios REALES (excluyendo los de test que la
+suite e2e deja vivos): **8 usuarios, los 8 en `es-DO`. Cero activarían el disparador.**
+
+O sea que la capa no ha corrido **no porque esté rota, sino porque no tiene audiencia**. El
+cableado es correcto, la maquinaria funciona —verificado dos veces hoy con traducciones
+reales— y la condición `locale IS NOT NULL AND locale <> 'es-DO'` simplemente nunca se ha
+cumplido. Un `locale` NULL tampoco dispara, y eso también es correcto: sin preferencia
+declarada no hay nada que traducir.
+
+«No sabemos si funciona» y «funciona y no le toca a nadie todavía» son afirmaciones muy
+distintas, y sólo la segunda es cierta.
+
+**Cómo se cierra este gap, entonces:** solo. La primera vez que un usuario real elija un
+idioma distinto del base, el disparador se activa — y ahora hay telemetría en
+`pipeline_metrics` y una alerta `plan_display_i18n_degraded:<locale>` vigilando ese momento,
+que es justo lo que faltaba para no enterarse tarde. Forzarlo antes exigiría escribir en el
+plan de un cliente y gastar en el proveedor, y esa es una decisión del dueño.
 
 ### ⚠️ Lo que ninguna de esas líneas dice, y es lo que más importa
 
