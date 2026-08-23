@@ -208,19 +208,19 @@ def test_el_unico_ordenador_de_texto_sigue_al_idioma_activo():
 # ───────────────────────── 6. P3-I18N-HORA-COACH-12H ───────────────────────────────
 
 def test_la_hora_del_coach_la_decide_el_idioma_y_no_un_hour12_forzado():
+    """[P3-I18N-PROMPT-VISION-CLIENTE-ESPANOL · 2026-08-23] Reanclado: el cliente YA NO manda
+    la hora en el prompt (ni con `timeStyle: 'short'` ni de ninguna forma) — la pone el servidor
+    en `build_temporal_context`, en 24 h (test 6b). Lo que este guard vigila ahora es que el
+    cliente no vuelva a componer la hora, ni con `hour12` ni sin él."""
     src = _leer(_FRONT / "src" / "pages" / "AgentPage.jsx")
     codigo = _sin_lineas_de_comentario(src)
     assert "hour12" not in codigo, (
         "`hour12` volvio al codigo: ANULA al formateador que si lee el locale y fuerza "
         "AM/PM a los cinco idiomas, cuando el frances, el italiano y el espanol usan 24 h"
     )
-    assert "timeStyle: 'short'" in codigo
-    # Comentario-vence-guard, en la direccion «mi prosa dispara el guard»: el comentario
-    # que explica el arreglo CITA `hour12: true`. Se exige que las apariciones esten todas
-    # en comentarios, no que la palabra desaparezca del fichero.
-    assert "hour12" in src, (
-        "desaparecio tambien el comentario que explica por que no se usa `hour12`. Sin el, "
-        "el proximo que quiera «arreglar» el formato de hora lo reanade"
+    # La COMPOSICIÓN (interpolando la hora), no la regex que limpia el historial viejo.
+    assert "Hora actual del usuario: ${" not in codigo, (
+        "el cliente vuelve a meter la hora en el turno del usuario; la pone el servidor"
     )
 
 
@@ -362,3 +362,17 @@ def test_las_dos_copias_de_claudemd_siguen_siendo_la_misma():
         "las dos copias de CLAUDE.md divergieron. Anadir una fila a una sola es como "
         "empieza el drift"
     )
+
+
+# ───────────── 6b. P3-I18N-HORA-DEL-COACH-SIGUE-EN-12H (la mitad del servidor) ─────────────
+
+def test_el_bloque_temporal_del_prompt_da_la_hora_en_24h():
+    """El cierre del cliente (arriba) dejaba al SERVIDOR diciéndole al modelo «02:30 PM»;
+    el modelo copia la forma que ve. Se mide la CONDUCTA de la función, no el fichero."""
+    import re
+    from prompts.chat_agent import build_temporal_context
+    out = build_temporal_context(local_date="2026-07-26", tz_offset=240)
+    hora = re.search(r"La hora local es (\d{2}:\d{2})", out)
+    assert hora, f"el bloque temporal ya no dice la hora como HH:MM: {out!r}"
+    assert not re.search(r"\b[AP]M\b", out), f"la hora del prompt sigue en 12 h: {out!r}"
+    assert 0 <= int(hora.group(1)[:2]) <= 23

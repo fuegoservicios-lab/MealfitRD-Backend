@@ -252,7 +252,9 @@ def test_el_copy_es_una_funcion_de_t_y_no_una_cadena() -> None:
     )
     for linea in cuerpo.strip().split("\n"):
         if ":" in linea and "t(" in linea:
-            assert "(t) =>" in linea, f"esta entrada no es función de `t`: {linea.strip()[:70]}"
+            # [P2-I18N-PLAN-TOASTS-ERROR-MESSAGE · 2026-08-23] el contrato pasó a `(t, detail)`:
+            # una entrada puede necesitar un DATO del servidor (`max`). Sigue siendo función de `t`.
+            assert "(t) =>" in linea or "(t, d) =>" in linea, f"esta entrada no es función de `t`: {linea.strip()[:70]}"
 
 
 def test_el_detail_crudo_no_se_pierde_va_a_la_consola() -> None:

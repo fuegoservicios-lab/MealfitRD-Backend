@@ -54,6 +54,33 @@ calidad defendible es un producto; once con hindi y coreano de terminología
 nutricional sin revisar es una demo. **Añadir el sexto es un JSON y cuatro líneas** —
 ver §6.
 
+### El idioma que no ofrecemos cae al español — y es una decisión, no un hueco
+
+[P3-I18N-IDIOMA-NO-OFRECIDO-CAE-A-ESPANOL · 2026-08-23] Un visitante con el navegador en
+alemán, chino, japonés o árabe recibe la app en **es-DO**. Así se comportaba
+`detectBrowserLocale` desde el primer día (recorre `navigator.languages`, casa por código
+exacto y después por subetiqueta primaria, y si nada casa devuelve `DEFAULT_LOCALE`), pero
+nadie lo había escrito como decisión, y una conducta que nadie defendió por escrito vuelve
+a discutirse cada vez que alguien la ve.
+
+Por qué español y no inglés como segunda opción:
+
+- **es-DO es el único idioma con cobertura del 100 % por construcción**: no tiene catálogo,
+  es lo que el LLM escribe y lo que el motor usa como identificador. Cualquier otro fallback
+  es un catálogo que puede estar a medias en ese momento.
+- **La base de usuarios es dominicana** y el producto se vende en cinco países de habla
+  hispana más EE.UU.: para la mayoría de quien no encaja en los cinco idiomas, el español
+  es más probable que el inglés.
+- **Inglés como fallback sería una segunda decisión de producto**, con su propio coste: un
+  alemán que ve inglés cree que la app está en inglés y no busca el selector; uno que ve
+  español en una app vendida en España entiende de dónde viene.
+
+Lo que sí hace la app por ese visitante: el selector de idioma está **antes de tener
+cuenta** (Login y formulario, `P2-I18N-SIN-SELECTOR-ANTES-DE-TENER-CUENTA`), así que puede
+elegir uno de los cinco en la primera pantalla. Cambiar esta decisión es cambiar UNA línea
+(`return DEFAULT_LOCALE` al final de `detectBrowserLocale`) y este párrafo; no hay que
+tocar nada más. Ancla: `test_p2_i18n_doc_espejos_incompletos.py`.
+
 ### Las etiquetas: sin país, y el código NO sigue a la etiqueta
 
 `P1-I18N-LABEL-NEUTRAL · 2026-08-15`. El selector muestra **«Español», «English»,
@@ -127,6 +154,11 @@ ese script este diseño es una trampa; con él, una red. Si alguien lo borra del
 | `formatDate` / `formatNumber` | `Intl` con el locale activo. Reemplazan los `toLocaleDateString('es-DO')` fijos. |
 | `formatCurrency(v, code)` | [P3-I18N-CHECKOUT-MONEDA-CLAVADA] Un importe. Traduce cómo se ESCRIBE, **no en qué se cobra**: el `currency_code` que viaja a PayPal no lo toca nadie. En es-DO devuelve `US$25.00`, byte-idéntico al `US$` a mano que sustituyó. |
 | `formatCurrencyName(code)` | El NOMBRE de una moneda, por locale. |
+| `i18nKey(es)` | [P1-DISPLAY-VOCAB-CERRADO · P3-I18N-DOC-API-SIN-I18NKEY] Declara una clave que se RESUELVE en otro sitio (`{ titleKey: i18nKey('Montaje') }` → `t(sec.titleKey)`). Identidad pura: no lee el catálogo, así que en un `const` de módulo no congela nada — es toda la diferencia con `t()`. El gate la extrae (`KEY_DECL`) para que la traducción no salga huérfana. |
+| `currencySymbol(code)` | [P3-I18N-MONEDA-COMPUESTA-A-MANO-EN-EL-PRESUPUESTO] Sólo el símbolo («RD$», «€»), para el adorno de un input. Para un importe, `formatCurrency`. |
+| `formatPercent(puntos)` | [P3-I18N-PORCENTAJE-PEGADO-AL-NUMERO] «50%» o «50 %» según el idioma. Recibe puntos, no fracción. |
+| `formatTemperature(°C, {weightUnit})` | [P3-I18N-3C-CLAVADO] La escala la decide el usuario (`lb` → °F), no el idioma. |
+| `compareText(a, b)` | [P3-I18N-ORDEN-ALFABETICO-SIGUE-AL-NAVEGADOR] Orden con el idioma ACTIVO para lo que se PINTA; `localeCompare` sin locale ordena con el del navegador. No para comparar datos. |
 
 ### El separador decimal no es «la coma en español»
 
@@ -228,6 +260,21 @@ orden obvio:
 - Si el catálogo baja pero el `PATCH` falla, **el idioma se queda cambiado** y se avisa
   de que no se sincronizó. Revertirle la pantalla al usuario por una escritura fallida
   que a él no le consta es peor que una sincronización pendiente.
+
+## 4b. Knobs del sistema de idiomas (dónde los busca el operador)
+
+[P3-I18N-DOC-KNOBS-DISPERSOS · 2026-08-23] Los knobs vivían sólo en la doc del `_display` y en
+`.env.example`; un operador que busca «idioma» en esta doc no los encontraba. Todos, con su SSOT:
+
+| Knob | Dónde vive | Default | Efecto |
+|---|---|---|---|
+| `VITE_AUTO_LOCALE` | frontend (`.env`, Vite) | encendido | `off` apaga la autodetección del idioma en el boot Y en el motor (los dos leen la MISMA variable). Sin redeploy no: es build-time. |
+| `MEALFIT_PLAN_DISPLAY_I18N` | backend | `true` | Kill switch del enriquecimiento del plan y del `display_name_en` del aggregator. **No es total**: lo ya persistido sigue pintándose — ver [`plan_display_i18n.md`](plan_display_i18n.md#knobs). |
+| `MEALFIT_PLAN_DISPLAY_I18N_MODEL` / `_BATCH_DAYS` / `_TIMEOUT_S` / `_MAX_OUTPUT_TOKENS` / `_MAX_INFLIGHT` / `_MAX_LOCALES` | backend | ver tabla | Dimensionado del enriquecimiento; tabla completa y razones en [`plan_display_i18n.md`](plan_display_i18n.md#knobs). Todos en `_KNOBS_REGISTRY` (`test_p3_i18n_display_knobs_todos_en_el_registry.py`). |
+| `MEALFIT_CHAT_TITLE_MODEL` | backend | flash | El modelo que titula las conversaciones, en el idioma del usuario (`build_title_language_directive`). |
+
+Lo que NO es un knob, a propósito: la lista de idiomas (SSOT `locales.js`, §6), la frontera de
+lo que se traduce (§1) y el fallback al español (§2).
 
 ## 5. `npm run i18n:check` — la red
 

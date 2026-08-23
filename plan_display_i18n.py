@@ -1570,14 +1570,28 @@ def _emit_result_telemetry(plan_id: str, user_id: str, locale: str, resumen: dic
             (
                 user_id, plan_id, "plan_display_i18n",
                 int(resumen.get("duration_ms") or 0),
-                int(resumen.get("batches_failed") or 0),
-                0,
+                # [P3-I18N-DISPLAY-TELEMETRIA-CON-TRES-COLUMNAS-MUERTAS] `batches_failed`
+                # no lo escribía NADIE: `retries` salía 0 siempre, y `tokens_estimated`
+                # era un 0 literal. Ahora las tres vienen del ciclo.
+                int(resumen.get("retries") or 0),
+                int(resumen.get("tokens_estimated") or 0),
                 None,
                 json.dumps({"locale": locale, **resumen}, ensure_ascii=False),
             ),
         )
     except Exception as e:
         logger.debug(f"[P1-PLAN-DISPLAY-I18N] pipeline_metrics falló (best-effort): {e!r}")
+
+
+def _tokens_de(response) -> int:
+    """Tokens (entrada + salida) que el provider declaró en la respuesta; 0 si no los trae."""
+    try:
+        usage = getattr(response, "usage_metadata", None) or {}
+        if not isinstance(usage, dict):
+            return 0
+        return int(usage.get("input_tokens") or 0) + int(usage.get("output_tokens") or 0)
+    except Exception:
+        return 0
 
 
 def _emit_usage_telemetry(plan_id: str, user_id: str, model_name: str, response) -> None:
@@ -1852,6 +1866,16 @@ def enrich_plan_display(
             # mitad tambien. Se invierte para que el orden de consumo sea el natural.
             _pendientes = list(reversed(lotes_iniciales))
             _presupuesto_invocaciones = _max_invocaciones_por_ciclo(len(lotes_iniciales))
+            # [P3-I18N-DISPLAY-TELEMETRIA-CON-TRES-COLUMNAS-MUERTAS · 2026-08-23] Las tres
+            # columnas numéricas de `pipeline_metrics` (`duration_ms`, `retries`,
+            # `tokens_estimated`) salían siempre 0: la fila existía (P2-DISPLAY-SIN-
+            # TELEMETRIA-RESULTADO) pero sólo el jsonb decía algo. Tres acumuladores
+            # baratos: el reloj del ciclo, las invocaciones por ENCIMA de los lotes
+            # iniciales (= reintentos por mitades o por reencolado) y los tokens que el
+            # provider declaró en cada respuesta.
+            _presupuesto_inicial = _presupuesto_invocaciones
+            _t0_ciclo = time.monotonic()
+            _tokens_ciclo = 0
             targets_perdidos = 0
 
             total_written = 0
@@ -2005,6 +2029,7 @@ def enrich_plan_display(
                 # exitoso — el gasto ya ocurrió aquí, sin importar que el parseo,
                 # la validación o el persist de abajo fallen después.
                 _emit_usage_telemetry(plan_id, user_id, model_name, response)
+                _tokens_ciclo += _tokens_de(response)
 
                 raw_content = getattr(response, "content", "") or ""
                 parsed = _parse_json_response(raw_content)
@@ -2119,6 +2144,10 @@ def enrich_plan_display(
                 "targets": len(_todos_los_targets),
                 "targets_perdidos": targets_perdidos,
                 "mismatch": mismatch_total,
+                # [P3-I18N-DISPLAY-TELEMETRIA-CON-TRES-COLUMNAS-MUERTAS] las tres columnas.
+                "duration_ms": int((time.monotonic() - _t0_ciclo) * 1000),
+                "retries": max(0, (_presupuesto_inicial - _presupuesto_invocaciones) - len(lotes_iniciales)),
+                "tokens_estimated": _tokens_ciclo,
                 # [P1-I18N-DISPLAY-LOTE-PERDIDO-SIN-SENAL · 2026-08-22] `reason` ya no
                 # colapsa a None en cuanto se escribió ALGO. Con `total_written > 0` y
                 # `targets_perdidos > 0` a la vez, el usuario tiene el plan MEDIO
@@ -2190,6 +2219,46 @@ def enrich_plan_display(
             "error": f"{type(e).__name__}: {str(e)[:160]}",
         })
         return {"enriched_meals": 0, "skipped": "exception"}
+
+
+def active_plan_missing_locale(user_id: str, locale: str):
+    """[P3-I18N-DISPLAY-BLANKET-CIEGO-AL-SQL · 2026-08-23] El `plan_id` del plan ACTIVO (el
+    más reciente) del usuario si le FALTA `_display[locale]` en el primer o en el último
+    día; `None` si ya lo tiene en ambos o no hay plan.
+
+    Vivía inline en `routers/user_data.py` (PATCH /profile, disparador 4 de la spec) como
+    una consulta `plan_data->…->'_display'` — una lectura de `_display` para DECIDIR, en un
+    fichero sin permiso, invisible para el blanket porque iba dentro de una cadena SQL.
+    Aquí es donde ya viven las otras lecturas «¿ya está traducido?» (`_ya_traducido_*`,
+    P2-DISPLAY-REDESPACHO-SIN-FILTRO): un solo módulo relee lo que él mismo escribe.
+
+    Mirar AMBOS extremos cierra el freeze de un enriquecimiento parcial: el motor trocea
+    por lotes y un lote que falla no tumba a los demás; si solo mirásemos el primer día,
+    un plan cuyo último lote nunca corrió quedaría «ya enriquecido» para siempre.
+    Proyección jsonb O(1): no se baja `plan_data` entero para mirar dos claves; `->-1`
+    cuenta desde el final (con 1 solo día, primero y último coinciden — inofensivo).
+    """
+    from db import execute_sql_query
+    row = execute_sql_query(
+        """
+        SELECT id::text AS id,
+               plan_data->'days'->0->'meals'->0->'_display' AS disp_first,
+               plan_data->'days'->-1->'meals'->0->'_display' AS disp_last
+        FROM meal_plans WHERE user_id = %s
+        ORDER BY created_at DESC LIMIT 1
+        """,
+        (user_id,),
+        fetch_one=True,
+    )
+    if not row or not row.get("id"):
+        return None
+
+    def _tiene(disp) -> bool:
+        return isinstance(disp, dict) and locale in disp
+
+    if _tiene(row.get("disp_first")) and _tiene(row.get("disp_last")):
+        return None
+    return row["id"]
 
 
 def schedule_plan_display_enrichment(

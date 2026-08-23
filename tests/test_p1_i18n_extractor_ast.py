@@ -41,6 +41,7 @@ para eso y no hay nada que ganar cambiándolo.
 from __future__ import annotations
 
 import json
+import os
 import shutil
 import subprocess
 from pathlib import Path
@@ -123,9 +124,12 @@ def _correr(tmp: Path, fuente: str, catalogo: dict | None = None):
         except (OSError, NotImplementedError):
             pytest.skip("no puedo enlazar node_modules en esta plataforma")
 
+    # [P2-I18N-ALCANCE-COLAPSA-EN-SILENCIO] el `src/` sintético no tiene entradas de grafo:
+    # la válvula de arneses pone todo `src/` en alcance.
     return subprocess.run(
         ["node", str(tmp / "scripts" / "i18n-check.mjs")],
         capture_output=True, text=True, encoding="utf-8", errors="replace",
+        env={**os.environ, "I18N_CHECK_SIN_GRAFO": "1"},
     )
 
 

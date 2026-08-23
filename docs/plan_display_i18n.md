@@ -321,6 +321,15 @@ CONSTRUCCIÓN. La pregunta «¿y si el modelo devuelve el original?» no se le h
 
 ### ⚠️ Lo que ninguna de esas líneas dice, y es lo que más importa
 
+> **Estado al 2026-08-23** [P3-I18N-DOC-DISPLAY-SE-CONTRADICE]: esta sección se escribió el 22
+> y la sección anterior («La primera traducción verificada») el 23, y leídas seguidas se
+> contradicen. Las dos son ciertas, con fecha: desde el 23 hay **ejecuciones reales medidas**
+> (un plato sembrado y la ejecución sobre un plan de cliente, que destapó los tres defectos
+> de «La ejecución contra un plan REAL»), y sigue siendo verdad que **ninguna traducción ha
+> llegado a un usuario de forma orgánica** —disparada por un usuario real con `locale`
+> distinto de es-DO— porque no hay ninguno todavía. Lo de abajo describe el 22; lo de arriba,
+> el 23.
+
 [P1-I18N-SIN-EVIDENCIA-PRODUCCION] **Esta capa no ha traducido un plato en producción.**
 Medido el 2026-08-22 sobre la base real: **5 ejecuciones en toda su historia** (contra 3.789
 del generador de días), **1 plan de 44** con `_display`, **0 comidas** traducidas, **0 filas**
@@ -394,3 +403,24 @@ Almendras» como palabra en la línea traducida, no lo encuentra, y la línea ca
 de cada cuatro líneas correctas se descartaba. El arreglo es de orden: paréntesis antes que
 conector.
 
+
+### La lectura que el blanket no veía (2026-08-23)
+
+**El blanket era ciego al SQL.** [P3-I18N-DISPLAY-BLANKET-CIEGO-AL-SQL] El guard de la
+frontera (`test_p3_i18n_backend_sin_blanket_de_display.py`) lee el AST de Python y una
+clave dentro de una cadena SQL no es una clave para el AST: `routers/user_data.py`
+proyectaba `plan_data->…->'_display'` en el disparador 4 (PATCH de `locale`) para decidir si
+re-despachar, en un fichero sin permiso, y el blanket lo daba por limpio. La consulta vive
+ahora aquí, en `active_plan_missing_locale(user_id, locale)` — al lado de las otras lecturas
+«¿ya está traducido?» — y el router sólo despacha. El detector cuenta además las cadenas con
+`->'_display'`/`->>'_display'` que parezcan SQL, el `pop` cuyo valor se USA (lo que destapó
+`db_plans.py`, que cuenta invalidaciones: permitido con razón), y dejó de escanear `venv/`
+(6.002 ficheros de terceros → 89).
+
+**Tres columnas muertas en la telemetría.** [P3-I18N-DISPLAY-TELEMETRIA-CON-TRES-COLUMNAS-MUERTAS]
+La fila de `pipeline_metrics` de cada ciclo salía con `duration_ms`, `retries` y
+`tokens_estimated` siempre en 0: `duration_ms` nadie lo ponía en el resumen, `retries`
+leía `batches_failed`, que nadie escribía, y `tokens_estimated` era un `0` literal. Sólo el
+jsonb decía algo; un panel que agrupe por las columnas numéricas veía ceros. Ahora el ciclo
+acumula su reloj, las invocaciones por encima de los lotes iniciales (= reintentos) y los
+tokens que el provider declara en cada respuesta (`_tokens_de`).

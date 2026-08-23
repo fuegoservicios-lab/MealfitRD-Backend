@@ -423,6 +423,7 @@ from prompts import (
     build_swap_meal_prompt_template
 )
 from prompts.chat_agent import (
+    build_vision_context,
     CHAT_AGENT_INLINE_PROMPT,
     CHAT_VOICE_MODE_PROMPT,
     CHAT_STREAM_INLINE_PROMPT,
@@ -6244,7 +6245,7 @@ def chat_with_agent(session_id: str, prompt: str, current_plan: Optional[dict] =
 from typing import Generator
 from sentiment_classifier import classify_sentiment
 
-def chat_with_agent_stream(session_id: str, prompt: str, current_plan: Optional[dict] = None, user_id: Optional[str] = None, form_data: Optional[dict] = None, local_date: Optional[str] = None, tz_offset: Optional[int] = None, is_call_mode: bool = False, plan_tier: str = "gratis") -> Generator[str, None, None]:
+def chat_with_agent_stream(session_id: str, prompt: str, current_plan: Optional[dict] = None, user_id: Optional[str] = None, form_data: Optional[dict] = None, local_date: Optional[str] = None, tz_offset: Optional[int] = None, is_call_mode: bool = False, plan_tier: str = "gratis", vision: Optional[dict] = None) -> Generator[str, None, None]:
     """Generador síncrono de chat que emite eventos del modelo y herramientas mediante SSE (JSONlines).
     FastAPI ejecuta esto en un threadpool externo, liberando el Event Loop para concurrencia real."""
     # [P1-CHAT-PAUSED-PROMPT-BLOCKS · 2026-08-14 · subido P2-CHAT-PLAN-TOOLS-PAUSE
@@ -6366,6 +6367,8 @@ def chat_with_agent_stream(session_id: str, prompt: str, current_plan: Optional[
         system_prompt += build_tools_instructions_stream(user_id, plan_en_pausa=bool(current_plan) and plan_vigente is None)
         # --- bloques dinámicos (volátiles) al final ---
         system_prompt += build_temporal_context(local_date=local_date, tz_offset=tz_offset)
+        # [P3-I18N-PROMPT-VISION-CLIENTE-ESPANOL] la foto es contexto de SISTEMA, no turno del usuario.
+        system_prompt += build_vision_context(vision)
         system_prompt += build_circadian_context(schedule_type)
         system_prompt += build_temporal_proactive_context()
         # 🎭 Personalidad adaptativa basada en el sentimiento detectado (per-turn)
@@ -6376,6 +6379,8 @@ def chat_with_agent_stream(session_id: str, prompt: str, current_plan: Optional[
     else:
         system_prompt = _base_inline
         system_prompt += build_temporal_context(local_date=local_date, tz_offset=tz_offset)
+        # [P3-I18N-PROMPT-VISION-CLIENTE-ESPANOL] la foto es contexto de SISTEMA, no turno del usuario.
+        system_prompt += build_vision_context(vision)
         system_prompt += build_circadian_context(schedule_type)
         system_prompt += build_temporal_proactive_context()
         # 🎭 Inyectar personalidad adaptativa basada en el sentimiento detectado

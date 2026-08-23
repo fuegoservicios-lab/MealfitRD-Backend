@@ -210,3 +210,56 @@ def test_la_doc_del_display_declara_que_no_hay_evidencia_de_produccion() -> None
         f"19 usuarios con locale ≠ es-DO). Es lo ÚNICO que ningún test verde puede cerrar: "
         f"los tests miden el archivo, no el mundo. [{_MARKER}]"
     )
+
+
+def test_la_doc_declara_que_el_idioma_no_ofrecido_cae_al_espanol() -> None:
+    """[P3-I18N-IDIOMA-NO-OFRECIDO-CAE-A-ESPANOL · 2026-08-23] La conducta existía desde el
+    primer día y nadie la había escrito como decisión. El párrafo tiene que seguir en la doc
+    Y describir lo que el código hace: `detectBrowserLocale` devuelve `DEFAULT_LOCALE`
+    cuando nada casa."""
+    src = _doc()
+    assert "### El idioma que no ofrecemos cae al español" in src, (
+        f"desapareció la decisión sobre el idioma no ofrecido [{_MARKER}]")
+    locales_js = _ROOT / "frontend" / "src" / "i18n" / "locales.js"
+    if not locales_js.exists():
+        pytest.skip("frontend no está en este checkout")
+    fn = locales_js.read_text(encoding="utf-8")
+    i = fn.find("export function detectBrowserLocale")
+    assert i > 0
+    cuerpo = fn[i:]
+    cierre = cuerpo[: cuerpo.find("\n}\n") + 3]
+    assert cierre.rstrip().endswith("return DEFAULT_LOCALE;\n}"), (
+        "detectBrowserLocale ya no cae a DEFAULT_LOCALE: si es deliberado, reescribe la "
+        f"decisión en §2 de la doc antes [{_MARKER}]")
+
+
+
+def test_el_overview_del_sistema_menciona_el_idioma() -> None:
+    """[P3-I18N-DOC-OVERVIEW-SIN-IDIOMA · 2026-08-23] `system_overview.md` no mencionaba el
+    idioma ni una vez con la app en cinco. La sección tiene que seguir, enlazar a las dos docs
+    SSOT y decir la frontera."""
+    p = _BACKEND / "docs" / "system_overview.md"
+    src = p.read_text(encoding="utf-8")
+    assert "## 8. Idioma" in src, f"desapareció la sección de idioma del overview [{_MARKER}]"
+    for enlace in ("i18n_dashboard.md", "plan_display_i18n.md"):
+        assert enlace in src, f"el overview dejó de enlazar {enlace}"
+    assert "IDENTIFICADOR" in src, "la frontera (lo que el motor usa como identificador no se toca) dejó de estar"
+
+
+def test_la_tabla_api_documenta_i18nkey_y_los_formateadores() -> None:
+    """[P3-I18N-DOC-API-SIN-I18NKEY · 2026-08-23] `i18nKey()` existía desde el 21-ago y no
+    estaba en la tabla de API; los formateadores nuevos del 23 tampoco."""
+    src = _doc()
+    api = src.split("### API", 1)[1].split("###", 1)[0]
+    for simbolo in ("`i18nKey(es)`", "`formatPercent(", "`formatTemperature(", "`currencySymbol(", "`compareText("):
+        assert simbolo in api, f"la tabla de API no documenta {simbolo} [{_MARKER}]"
+
+
+def test_los_knobs_del_idioma_estan_en_la_doc_del_idioma() -> None:
+    """[P3-I18N-DOC-KNOBS-DISPERSOS · 2026-08-23] Un operador que busca «idioma» tiene que
+    encontrar los knobs aquí, no sólo en la doc del _display ni en .env.example."""
+    src = _doc()
+    assert "## 4b. Knobs del sistema de idiomas" in src, f"desapareció la tabla de knobs [{_MARKER}]"
+    seccion = src.split("## 4b. Knobs del sistema de idiomas", 1)[1].split("## 5.", 1)[0]
+    for knob in ("VITE_AUTO_LOCALE", "MEALFIT_PLAN_DISPLAY_I18N", "MEALFIT_CHAT_TITLE_MODEL"):
+        assert knob in seccion, f"la tabla de knobs dejó de listar {knob}"

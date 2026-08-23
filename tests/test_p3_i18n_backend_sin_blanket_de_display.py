@@ -45,12 +45,14 @@ tooltip-anchor: P3-I18N-BACKEND-SIN-BLANKET-DE-DISPLAY
 from __future__ import annotations
 
 import ast
+import re
 from pathlib import Path
 
 _BACKEND = Path(__file__).resolve().parent.parent
 _MARKER = "P3-I18N-BACKEND-SIN-BLANKET-DE-DISPLAY"
 
 _CLAVE = "_display"
+_re_sql = re.compile(r"\b(SELECT|WHERE|UPDATE|jsonb_set|jsonb_array_elements)\b", re.I)
 
 # Quien puede LEERLO, y por que. La razon es parte del contrato: una excepcion sin razon es
 # una puerta que nadie sabe si sigue haciendo falta.
@@ -61,15 +63,28 @@ _LECTORES_PERMITIDOS = {
     "routers/plans.py":
         "SIRVE los nombres traducidos al cliente en el preview del Historial "
         "(`display_names`). Es pasar el dato a quien lo pinta, no decidir con el",
+    # [P3-I18N-BLANKET-DISPLAY-POP-CON-USO · 2026-08-23] Lo destapó contar el `pop` con
+    # uso: `meal.pop("_display", None) is not None` en `_invalidar_display_de_comidas`
+    # cuenta CUÁNTAS invalidó para la telemetría. Usa el valor, sí — para saber si había
+    # algo que borrar, no para decidir con lo que decía.
+    "db_plans.py":
+        "cuenta las invalidaciones (`popeados`) para telemetria; no lee el contenido",
 }
 
-_IGNORAR_DIRS = {"tests", "test_venv", "scripts", "docs", "migrations", "__pycache__"}
+_IGNORAR_DIRS = {"tests", "scripts", "docs", "migrations", "__pycache__"}
+
+
+def _es_venv(parte: str) -> bool:
+    """[P3-I18N-BLANKET-DISPLAY-POP-CON-USO · 2026-08-23] `test_venv` estaba en la lista y
+    `venv`/`venv-test`/`.venv` no: el blanket escaneaba 6.002 ficheros de terceros que no
+    despliega nadie. Cualquier directorio con «venv» en el nombre, o oculto, queda fuera."""
+    return "venv" in parte.lower() or parte.startswith(".")
 
 
 def _ficheros():
     for p in sorted(_BACKEND.rglob("*.py")):
         rel = p.relative_to(_BACKEND)
-        if any(parte in _IGNORAR_DIRS for parte in rel.parts[:-1]):
+        if any(parte in _IGNORAR_DIRS or _es_venv(parte) for parte in rel.parts[:-1]):
             continue
         if p.name.startswith("test_"):
             continue
@@ -108,6 +123,14 @@ def _lecturas(src: str) -> list[int]:
                 if isinstance(blanco, ast.Subscript) and _es_clave(blanco.slice):
                     borrados.add((blanco.lineno, blanco.col_offset))
 
+    # [P3-I18N-BLANKET-DISPLAY-POP-CON-USO · 2026-08-23] Un `pop` es borrado SOLO si su
+    # valor se tira: `m.pop("_display", None)` como sentencia suelta. `x = m.pop(...)`,
+    # `if m.pop(...) is not None`, `f(m.pop(...))` USAN el valor — eso es leer.
+    pops_sueltos = set()
+    for nodo in ast.walk(arbol):
+        if isinstance(nodo, ast.Expr) and isinstance(nodo.value, ast.Call):
+            pops_sueltos.add((nodo.value.lineno, nodo.value.col_offset))
+
     lineas = []
     for nodo in ast.walk(arbol):
         if isinstance(nodo, ast.Subscript) and _es_clave(nodo.slice):
@@ -118,6 +141,21 @@ def _lecturas(src: str) -> list[int]:
               and nodo.func.attr in ("get", "setdefault") and nodo.args
               and _es_clave(nodo.args[0])):
             lineas.append(nodo.lineno)
+        elif (isinstance(nodo, ast.Call) and isinstance(nodo.func, ast.Attribute)
+              and nodo.func.attr == "pop" and nodo.args and _es_clave(nodo.args[0])
+              and (nodo.lineno, nodo.col_offset) not in pops_sueltos):
+            lineas.append(nodo.lineno)
+        # [P3-I18N-DISPLAY-BLANKET-CIEGO-AL-SQL · 2026-08-23] Una lectura por SQL:
+        # `->'_display'`, `->>'_display'` o `#>'{…,_display,…}'` dentro de una cadena. El
+        # AST no ve claves ahí, y ya había una (`routers/user_data.py`, el disparador 4)
+        # que decidía con ella. La cadena tiene que parecer SQL (SELECT/WHERE/jsonb_set)
+        # para que la prosa que explica esta regla no la dispare.
+        elif isinstance(nodo, ast.Constant) and isinstance(nodo.value, str):
+            v = nodo.value
+            if (("->'_display'" in v or "->>'_display'" in v or "_display,'" in v
+                 or ",_display" in v or "{_display" in v)
+                    and _re_sql.search(v)):
+                lineas.append(nodo.lineno)
     return sorted(set(lineas))
 
 
@@ -184,3 +222,43 @@ def test_el_detector_no_casa_con_los_hermanos_de_nombre():
         'd.setdefault("_display", {})',
     ):
         assert _lecturas(real), f"falso negativo: {real}"
+
+
+# ---------------------------------------------------------------------------
+# [P3-I18N-DISPLAY-BLANKET-CIEGO-AL-SQL + P3-I18N-BLANKET-DISPLAY-POP-CON-USO · 2026-08-23]
+# ---------------------------------------------------------------------------
+
+def test_la_lectura_por_sql_cuenta():
+    """Una consulta que proyecta `_display` para decidir con ella es una lectura aunque el
+    AST no vea ninguna clave: vive dentro de una cadena. Era el caso real de
+    `routers/user_data.py` (disparador 4), hoy movido al SSOT."""
+    sql = (
+        'row = q("""SELECT id, plan_data->\'days\'->0->\'meals\'->0->\'_display\' AS d '
+        'FROM meal_plans WHERE user_id = %s""", (uid,))'
+    )
+    assert _lecturas(sql), "la lectura por SQL no se cuenta"
+    assert _lecturas('q("SELECT plan_data->>\'_display\' FROM meal_plans WHERE id=%s")')
+    # Prosa que CITA la forma no es SQL: no dispara.
+    prosa = 'doc = "el blanket no veia ->\'_display\' dentro de una cadena"'
+    assert not _lecturas(prosa), "la prosa que explica la regla la dispara (comentario-vence-guard)"
+
+
+def test_el_pop_con_uso_cuenta_y_el_suelto_no():
+    assert not _lecturas('m.pop("_display", None)'), "el pop suelto es borrado"
+    for con_uso in (
+        'x = m.pop("_display", None)',
+        'if m.pop("_display", None) is not None:\n    n += 1',
+        'f(m.pop("_display"))',
+        'return m.pop("_display", {})',
+    ):
+        assert _lecturas(con_uso), f"el pop con uso no se cuenta: {con_uso!r}"
+
+
+def test_no_se_escanea_ningun_venv():
+    """Medido antes del cierre: 6.002 ficheros de `venv/` pasaban por el parser. Un blanket
+    que escanea terceros mide lo que nadie despliega, y tarda lo que nadie espera."""
+    rutas = [rel for _, rel in _ficheros()]
+    assert rutas, "el blanket no encuentra ningún fichero"
+    assert not [r for r in rutas if "venv" in r.lower() or r.startswith(".")], (
+        "el blanket vuelve a entrar en un venv u oculto")
+    assert len(rutas) < 400, f"{len(rutas)} ficheros: ¿volvió a entrar algún árbol de terceros?"

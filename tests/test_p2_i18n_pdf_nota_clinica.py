@@ -102,17 +102,31 @@ def _fragmentos_del_backend() -> set[str]:
     arbol = ast.parse(src)
 
     fragmentos: set[str] = set()
-    for nodo in ast.walk(arbol):
-        if not isinstance(nodo, ast.Assign):
-            continue
-        nombres = {t.id for t in nodo.targets if isinstance(t, ast.Name)}
-        if not (nombres & _variables_de_la_nota(src)):
-            continue
-        for hijo in ast.walk(nodo.value):
+    variables = _variables_de_la_nota(src)
+
+    def _recoger(valor) -> None:
+        for hijo in ast.walk(valor):
             if isinstance(hijo, ast.Constant) and isinstance(hijo.value, str):
                 texto = hijo.value
                 if len(texto) >= _MIN_LONGITUD and " " in texto:
                     fragmentos.add(texto)
+
+    def _es_disclaimer(objetivo) -> bool:
+        # [P1-I18N-SERVER-COPY-GANA-DISCLAIMER · 2026-08-23] `plan["_review_disclaimer"] = ("…")`:
+        # el glosador traduce TAMBIÉN el disclaimer, y el backend lo asigna por subíndice, no
+        # por variable. Sin esto, sus 6 claves salían como «fósiles que el backend no emite».
+        return (isinstance(objetivo, ast.Subscript) and isinstance(objetivo.slice, ast.Constant)
+                and objetivo.slice.value == "_review_disclaimer")
+
+    for nodo in ast.walk(arbol):
+        if isinstance(nodo, ast.Assign):
+            nombres = {t.id for t in nodo.targets if isinstance(t, ast.Name)}
+            if (nombres & variables) or any(_es_disclaimer(t) for t in nodo.targets):
+                _recoger(nodo.value)
+        elif isinstance(nodo, ast.Dict):
+            for k, v in zip(nodo.keys, nodo.values):
+                if isinstance(k, ast.Constant) and k.value == "_review_disclaimer" and v is not None:
+                    _recoger(v)
     return fragmentos
 
 
@@ -122,7 +136,11 @@ def _claves_del_glosador() -> set[str]:
     # Mismo criterio TEXTUAL que usa `i18n-check.mjs`: el literal escrito dentro de la
     # llamada. Ninguna de estas cadenas lleva comilla simple, así que no hay que tratar
     # escapes -- y si alguien añade una que sí, este test lo verá como clave ausente.
-    return set(re.findall(r"(?:\bt|\bi18nKey)\(\s*'([^'\\]+)'", src))
+    # Sólo CÓDIGO: un `t('…')` citado en un comentario (`// … || t('…')`) no es una clave —
+    # comentario-vence-guard, y la prosa que explica el fallback la disparaba.
+    codigo = "\n".join(l for l in src.splitlines()
+                       if not l.strip().startswith("//") and not l.strip().startswith("*"))
+    return set(re.findall(r"(?:\bt|\bi18nKey)\(\s*'([^'\\]+)'", codigo))
 
 
 def _sin_placeholders(clave: str) -> list[str]:

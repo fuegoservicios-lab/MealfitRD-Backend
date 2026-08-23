@@ -245,6 +245,30 @@ con su productor y su modelo de resolución está en
 
 ---
 
+## 8. Idioma: qué se traduce, dónde, y qué no se toca
+
+[P3-I18N-DOC-OVERVIEW-SIN-IDIOMA · 2026-08-23] Este documento no mencionaba el idioma ni una
+vez, y desde el 2026-08-15 la app se lee en cinco (es-DO base, en-US, pt-BR, fr-FR, it-IT).
+La regla que cruza todos los diagramas de arriba: **se traduce lo que el usuario LEE; no se
+toca lo que el motor usa como IDENTIFICADOR** (nombres de alimentos, `cat`, `unit`, claves
+de slot). Traducir «Pollo» rompería `pantry_names_match`, el guard de coherencia y el backstop
+de alergias — dos de los tres en silencio.
+
+```
+  usuario (locale en user_profiles, espejo en localStorage)
+     │
+     ├─ interfaz ──── catálogos fr/it/pt/en (la clave ES el texto español; es-DO sin catálogo)
+     ├─ plan ───────── capa _display[locale] (LLM, asíncrona, best-effort; el dato sigue en español)
+     ├─ coach ──────── build_language_directive en el system prompt; copy de servidor por tabla
+     ├─ push / PDF ─── push_i18n.py · gloss al PINTAR (cantidades, envases, anotaciones)
+     └─ lo que NO ──── nombres de alimentos, legales, landing
+```
+
+Dónde se decide cada cosa: [`i18n_dashboard.md`](i18n_dashboard.md) (motor, frontera, los 18
+espejos de la lista de idiomas, knobs) y [`plan_display_i18n.md`](plan_display_i18n.md) (la
+capa `_display`). El gate: `npm run i18n:check:strict` en el frontend (huérfanas, faltantes,
+español sin envolver, claves que no pueden vivir en un catálogo).
+
 ## Cómo re-verificar este documento
 
 | Diagrama | Fuente de verdad |
