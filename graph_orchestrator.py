@@ -7602,8 +7602,15 @@ async def plan_skeleton_node(state: PlanState) -> dict:
     # ── Scrub determinista del skeleton: enforce caps de proteínas restringidas ──
     # El planner LLM a veces ignora el cap del prompt e incluye atún/embutidos en múltiples
     # días. Aquí lo enforzamos a nivel estructural antes de que los workers reciban el pool.
-    _SKELETON_RESTRICTED = ['atún', 'atun', 'salami', 'longaniza', 'chorizo']
-    _EMBUTIDO_KEYS = ['salami', 'longaniza', 'chorizo']
+    # [P1-SEEDER-CURED-MEAT-BETA · 2026-08-23] El scrub consume el mismo SSOT
+    # que pondera el seeder; la copia DO de cinco términos dejaba pasar Morcilla,
+    # Cecina, Chistorra, Sobrasada, Butifarra y Lomo embuchado en los pools beta.
+    # Import lazy: ai_helpers tiene imports lazy de este módulo y uno top-level
+    # crearía un ciclo durante el arranque.
+    from ai_helpers import (_CURED_OR_PROCESSED_TOKENS as _CURADOS_RESTRICTED,
+                            _token_matches_wb as _curado_matches_wb)
+    _SKELETON_RESTRICTED = ('atún', 'atun', *_CURADOS_RESTRICTED)
+    _EMBUTIDO_KEYS = _CURADOS_RESTRICTED
 
     # [P1-FORM-AUDIT-BATCH · 2026-07-03] (C1) Escalera de fallback de proteína consciente de
     # alergias + dieta. Cada candidato lista sus tokens gatillo (si algún token aparece en las
@@ -7647,13 +7654,13 @@ async def plan_skeleton_node(state: PlanState) -> dict:
     for restricted in _SKELETON_RESTRICTED:
         days_with_it = [
             i for i, d in enumerate(skel_days)
-            if any(restricted in (p or '').lower() for p in d.get('protein_pool', []))
+            if any(_curado_matches_wb(p, (restricted,)) for p in d.get('protein_pool', []))
         ]
         if len(days_with_it) > 1:
             keep_idx = days_with_it[0]
             for idx in days_with_it[1:]:
                 original = skel_days[idx].get('protein_pool', [])
-                filtered = [p for p in original if restricted not in (p or '').lower()]
+                filtered = [p for p in original if not _curado_matches_wb(p, (restricted,))]
                 removed = [p for p in original if p not in filtered]
                 if removed:
                     skel_days[idx]['protein_pool'] = filtered
@@ -7663,9 +7670,8 @@ async def plan_skeleton_node(state: PlanState) -> dict:
     # 2. No combinar atún + embutido en el mismo día — remover embutidos si coexisten con atún
     for d in skel_days:
         pool = d.get('protein_pool', [])
-        pool_lower = ' '.join((p or '').lower() for p in pool)
-        has_atun = 'atún' in pool_lower or 'atun' in pool_lower
-        embutidos_in_pool = [p for p in pool if any(emb in (p or '').lower() for emb in _EMBUTIDO_KEYS)]
+        has_atun = any(_curado_matches_wb(p, ('atún', 'atun')) for p in pool)
+        embutidos_in_pool = [p for p in pool if _curado_matches_wb(p, _EMBUTIDO_KEYS)]
         if has_atun and embutidos_in_pool:
             d['protein_pool'] = [p for p in pool if p not in embutidos_in_pool]
             logger.info(f"🧹 [SKELETON SCRUB] Día {d.get('day')}: eliminados embutidos "
@@ -7967,17 +7973,16 @@ def harden_day_pools(skeleton: dict, form_data: dict, conditions=None, *, cohort
     # excluimos DURAMENTE del protein_pool (slot principal), universal (goal-independiente). Sigue
     # permitida como saborizante/acompañante (que el day-gen añade fuera del pool). Nunca vacía el pool.
     if HARDEN_SALTCURED_MAIN:
-        from constants import strip_accents as _sa5
-        # espeja ai_helpers._SALT_CURED_PROTEIN_TOKENS (P1-SODIUM-BOMB-POOL). tooltip-anchor: A1-SALTCURED-NEVER-MAIN
-        _SALT_CURED_NEVER_MAIN = ("bacalao", "arenque", "salami", "salchichon", "pepperoni",
-                                  "mortadela", "tocino", "panceta", "longaniza", "chorizo",
-                                  "salchicha", "embutido", "jamon")
+        # [P1-SEEDER-CURED-MEAT-BETA · 2026-08-23] Sin copia local: clase 5
+        # comparte el vocabulario beta y el matcher word-boundary del seeder.
+        from ai_helpers import (_CURED_OR_PROCESSED_TOKENS as _SALT_CURED_NEVER_MAIN,
+                                _token_matches_wb as _saltcured_matches_wb)
         for _d in days:
             _orig = _d.get("protein_pool") or []
             if not _orig:
                 continue
             _kept = [p for p in _orig
-                     if not any(t in _sa5(str(p).lower()) for t in _SALT_CURED_NEVER_MAIN)]
+                     if not _saltcured_matches_wb(p, _SALT_CURED_NEVER_MAIN)]
             if len(_kept) < len(_orig) and _kept:
                 counts["saltcured_removed"] += (len(_orig) - len(_kept))
                 _d["protein_pool"] = _kept

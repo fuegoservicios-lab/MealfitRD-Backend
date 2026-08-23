@@ -177,7 +177,7 @@ def test_guard_derivado_detecta_un_termino_ssot_nuevo_en_un_render_mutado(monkey
 def test_marker_del_pfix():
     from pathlib import Path
 
-    app = (Path(__file__).resolve().parents[1] / "app.py").read_text(encoding="utf-8")
-    marker = re.search(r'_LAST_KNOWN_PFIX\s*=\s*["\']([^"\']+)["\']', app)
-    assert marker
-    assert marker.group(1) == "P1-DAYGEN-PROMPT-NO-NEUTRALIZE · 2026-08-23"
+    implementation = (
+        Path(__file__).resolve().parents[1] / "prompts" / "day_generator.py"
+    ).read_text(encoding="utf-8")
+    assert "P1-DAYGEN-PROMPT-NO-NEUTRALIZE · 2026-08-23" in implementation

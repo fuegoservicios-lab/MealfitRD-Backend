@@ -301,6 +301,10 @@ _PROCESSED_MEAT_KEYWORDS = (
     "salami", "longaniza", "jamón", "jamon", "chorizo",
     "tocineta", "tocino", "salchichón", "salchichon", "salchicha",
     "mortadela", "embutido",
+    # [P1-SEEDER-CURED-MEAT-BETA · 2026-08-23] Términos medidos en los pools
+    # beta. No incluir `pernil`/`chicharrón`: pueden ser carne fresca y sus filas
+    # no sostienen clasificarlos universalmente como curados.
+    "morcilla", "embuchado", "chistorra", "sobrasada", "butifarra", "cecina",
 )
 # `_GOALS_PENALIZE_PROCESSED` NO sube aquí a propósito: sigue viviendo dentro de
 # `get_deterministic_variety_prompt`, junto al penalty del sorteo que decide con él y junto a
@@ -313,7 +317,8 @@ _PROCESSED_MEAT_KEYWORDS = (
 # call site) y, desde P1-PANTRY-FLOOR-CLINICAL-FILTER, criterio del filtro de la nevera.
 _SALT_CURED_PROTEIN_TOKENS = ("bacalao", "arenque", "salami", "salchichon", "pepperoni",
                               "mortadela", "tocino", "panceta", "longaniza", "chorizo",
-                              "salchicha", "embutido", "jamon")
+                              "salchicha", "embutido", "jamon", "morcilla", "embuchado",
+                              "chistorra", "sobrasada", "butifarra", "cecina")
 # [P1-BARIATRIC-PROTEIN-DENSITY · 2026-06-27] Frutas de ALTO índice glucémico: el revisor médico
 # rechazaba mango (clash) y guineo en porción grande por dumping (corr=5ffd78cf).
 _HIGH_GI_FRUITS = ("guineo", "banana", "mango", "uva", "pina", "platano", "melon", "sandia",
@@ -367,7 +372,7 @@ def _is_low_density_main(name, _is_bariatric: bool) -> bool:
         return True
     if _is_bariatric and _pl in _BARIATRIC_LOW_DENSITY_AS_MAIN:  # [P1-BARIATRIC-DENSE-ANCHOR] quesos-relleno
         return True
-    if _is_bariatric and _token_matches_wb(_pl, _PROCESSED_MEAT_KEYWORDS):
+    if _is_bariatric and _token_matches_wb(_pl, _CURED_OR_PROCESSED_TOKENS):
         return True
     return False
 
@@ -416,7 +421,7 @@ def _pantry_clinical_main_filter(extracted_p, extracted_f, *, penaliza_procesado
     #     por el camino en vez de cerrar el bypass.
     if _p and (penaliza_procesados or exige_densidad):
         _kept = [x for x in _p
-                 if not (penaliza_procesados and _token_matches_wb(x, _PROCESSED_MEAT_KEYWORDS))
+                 if not (penaliza_procesados and _token_matches_wb(x, _CURED_OR_PROCESSED_TOKENS))
                  and not (exige_densidad and _is_low_density_main(x, is_bariatric))]
         if len(_kept) < len(_p):
             logger.info(
@@ -1576,8 +1581,7 @@ def get_deterministic_variety_prompt(history_text: str, form_data: dict = None, 
         # el pool eligió 'Longaniza' → rechazo crítico.
         _penalized_count = 0
         for i, p in enumerate(available_proteins):
-            p_norm = strip_accents(p.lower())
-            if any(kw in p_norm for kw in _PROCESSED_MEAT_KEYWORDS):
+            if _token_matches_wb(p, _CURED_OR_PROCESSED_TOKENS):
                 protein_weights[i] *= 0.1
                 _penalized_count += 1
         if _penalized_count:
@@ -1617,8 +1621,7 @@ def get_deterministic_variety_prompt(history_text: str, form_data: dict = None, 
         # compartida con el filtro de la nevera).
         _salt_penalized = 0
         for i, p in enumerate(available_proteins):
-            p_norm = strip_accents(p.lower())
-            if any(kw in p_norm for kw in _SALT_CURED_PROTEIN_TOKENS):
+            if _token_matches_wb(p, _CURED_OR_PROCESSED_TOKENS):
                 protein_weights[i] *= _sb_penalty
                 _salt_penalized += 1
         if _salt_penalized:
