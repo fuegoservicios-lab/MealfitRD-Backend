@@ -1319,6 +1319,61 @@ def _validate_and_build_display(original: dict, item: dict) -> Optional[dict]:
     }
 
 
+# [P3-I18N-DISPLAY-METRICA-SIN-LECTOR · 2026-08-22] Razones que NO son un incidente.
+#
+# `dedupe_locked` es el caso NORMAL bajo concurrencia (otro worker ya está con ese par) e
+# `inflight_cap` es el techo de hilos HACIENDO su trabajo. Alertar por cualquiera de las dos
+# fabricaría una tasa de error que no existe — el mismo error que `P2-I18N-OBSERVABILIDAD-CERO`
+# evitó al contar `SUPERSEDED` aparte de los fallos.
+_RAZONES_BENIGNAS = frozenset({"dedupe_locked", "inflight_cap", "disabled", "ok"})
+
+
+def _emit_degraded_alert(plan_id: str, user_id: str, locale: str, razon: str) -> None:
+    """Deja fila en `system_alerts` cuando el enriquecimiento se cae por algo real.
+
+    Por qué una alerta EMITIDA y no un cron que agregue: medido el 2026-08-22,
+    `pipeline_metrics` no tiene ni una fila con `node='plan_display_i18n'` (contra 14.835 de
+    la semana). Un cron sobre esa tabla seria un panel que reporta cero indefinidamente, y un
+    panel que siempre dice cero es un panel que nadie mira el dia que deja de decirlo.
+
+    Emitida cuesta cero mientras la capa no corra, y el dia que corra y falle deja rastro sin
+    esperar a la siguiente pasada del cron. Es el modelo «Auto (implicit)» de la politica de
+    `system_alerts`: el productor re-emite mientras la condicion exista.
+
+    `alert_key` por LOCALE y no por plan: lo que un operador necesita saber es «el frances
+    esta cayendo», no tener 40 filas de 40 planes. Best-effort de verdad — esto jamas puede
+    tumbar el enriquecimiento, igual que sus dos hermanas de telemetria.
+    """
+    if razon in _RAZONES_BENIGNAS:
+        return
+    try:
+        execute_sql_write(
+            """
+            INSERT INTO system_alerts
+                (alert_key, alert_type, severity, title, message, metadata, affected_user_ids)
+            VALUES (%s, 'plan_display_i18n_degraded', 'warning', %s, %s, %s::jsonb, %s::jsonb)
+            ON CONFLICT (alert_key) DO UPDATE
+            SET triggered_at = NOW(),
+                metadata = EXCLUDED.metadata,
+                resolved_at = NULL
+            """,
+            (
+                f"plan_display_i18n_degraded:{locale}",
+                f"La traduccion del plan se cayo en {locale}",
+                (
+                    f"Motivo: {razon}. El plan {plan_id} se sirve en espanol canonico. "
+                    "El usuario ve la app en su idioma y el CONTENIDO del plan en espanol: "
+                    "es una degradacion silenciosa, no un error visible."
+                ),
+                json.dumps({"plan_id": str(plan_id), "locale": locale, "reason": razon},
+                           ensure_ascii=False),
+                json.dumps([str(user_id)] if user_id else []),
+            ),
+        )
+    except Exception as e:  # noqa: BLE001 — una alerta jamas tumba lo que vigila
+        logger.warning(f"[P1-PLAN-DISPLAY-I18N] no se pudo persistir alerta degraded: {e!r}")
+
+
 def _emit_result_telemetry(plan_id: str, user_id: str, locale: str, resumen: dict) -> None:
     """[P2-DISPLAY-SIN-TELEMETRIA-RESULTADO · 2026-08-21] El RESULTADO, no el coste.
 
@@ -1335,6 +1390,9 @@ def _emit_result_telemetry(plan_id: str, user_id: str, locale: str, resumen: dic
     Best-effort de verdad: esto NUNCA puede tumbar el enriquecimiento. Un fallo aquí
     se traga, igual que su hermano de coste.
     """
+    _razon = str(resumen.get("reason") or "")
+    if _razon:
+        _emit_degraded_alert(plan_id, user_id, locale, _razon)
     try:
         execute_sql_write(
             "INSERT INTO pipeline_metrics (user_id, session_id, node, "

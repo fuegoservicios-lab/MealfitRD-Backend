@@ -685,13 +685,31 @@ async def api_get_catalog(
 
     Lo que NO se abre: precios, densidades y datos de envase. Un buscador necesita
     nombres; el resto es el trabajo curado del producto y sigue detrás de la sesión.
+
+    [P2-I18N-CATALOGO-BUSCADOR-SIN-PUENTE · 2026-08-22] Se envía también `name_en`.
+
+    Está poblado al **347/347** y en **329** filas difiere del nombre español (medido contra
+    Neon, no supuesto), y el endpoint no lo mandaba: un usuario en inglés que escribía
+    «chicken» o «rice» en el buscador de básicos obtenía CERO resultados. No fallaba de
+    forma visible; simplemente no encontraba nada, que es peor, porque parece que el
+    alimento no existe — el mismo modo de fallo que `P1-GUEST-CATALOG` cerró para el
+    invitado.
+
+    ⚠️ **Esto cubre UN idioma de los cuatro.** `name_en` es un gloss inglés, no un catálogo
+    multilingüe: para fr/it/pt no hay columna que enviar y el buscador sigue exigiendo el
+    nombre español. Decirlo importa — un puente a medias presentado como puente completo es
+    peor que ninguno, porque nadie vuelve a mirarlo.
+
+    Y `name_en` es un NOMBRE, así que va en la proyección abierta al invitado por el mismo
+    argumento que `name`: lo que sigue detrás de la sesión son los precios y el trabajo
+    curado, no cómo se llama un alimento.
     """
 
     def _catalog():
         from db import execute_sql_query
         return execute_sql_query(
             """
-            SELECT id::text AS id, slug, name, category, aliases,
+            SELECT id::text AS id, slug, name, name_en, category, aliases,
                    density_g_per_cup::float8 AS density_g_per_cup,
                    density_g_per_unit::float8 AS density_g_per_unit,
                    shelf_life_days,
