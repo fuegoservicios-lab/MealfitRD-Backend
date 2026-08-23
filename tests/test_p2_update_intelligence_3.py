@@ -42,7 +42,13 @@ TOOLS = _read("tools.py")
 PLANS = _read("routers/plans.py")
 ORCH = _read("graph_orchestrator.py")
 APP = _read("app.py")
-ASSESS = _read(os.path.join("frontend", "src", "context", "AssessmentContext.jsx"), base=ROOT)
+@pytest.fixture(scope="module", autouse=True)
+def _load_frontend_sibling_sources(frontend_repo_path):
+    # La fixture compartida salta el módulo antes de cualquier I/O si falta el hermano.
+    _ = frontend_repo_path
+    global ASSESS
+    ASSESS = _read(os.path.join("frontend", "src", "context", "AssessmentContext.jsx"), base=ROOT)
+
 
 
 # ── P2-2: micros recompute en swap-persist + chat-modify ──────────────────────

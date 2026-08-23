@@ -14,13 +14,21 @@ tooltip-anchor: P1-PANTRY-SCAN-BRAND
 """
 from __future__ import annotations
 
+import pytest
+
 from pathlib import Path
 
 _BACKEND = Path(__file__).resolve().parents[1]
 _UD_SRC = (_BACKEND / "routers" / "user_data.py").read_text(encoding="utf-8")
 # [P1-PANTRY-DASH-PARITY] el flujo del scan vive en el componente compartido.
-_QPB_SRC = (_BACKEND.parent / "frontend" / "src" / "components" / "pantry"
-            / "PantryScanButton.jsx").read_text(encoding="utf-8")
+@pytest.fixture(scope="module", autouse=True)
+def _load_frontend_sibling_sources(frontend_repo_path):
+    # La fixture compartida salta el módulo antes de cualquier I/O si falta el hermano.
+    _ = frontend_repo_path
+    global _QPB_SRC
+    _QPB_SRC = (_BACKEND.parent / "frontend" / "src" / "components" / "pantry"
+                / "PantryScanButton.jsx").read_text(encoding="utf-8")
+
 
 
 def test_schema_and_prompt_capture_brand():

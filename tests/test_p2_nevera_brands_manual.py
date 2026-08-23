@@ -17,6 +17,8 @@ Playwright no aporta más señal que verificar los anclajes de contrato abajo.
 """
 from __future__ import annotations
 
+import pytest
+
 import os
 import re
 
@@ -30,7 +32,13 @@ def _read(*parts) -> str:
 
 
 _UD = _read(_BACKEND, "routers", "user_data.py")
-_PANTRY = _read(_FRONTEND, "src", "pages", "Pantry.jsx")
+@pytest.fixture(scope="module", autouse=True)
+def _load_frontend_sibling_sources(frontend_repo_path):
+    # La fixture compartida salta el módulo antes de cualquier I/O si falta el hermano.
+    _ = frontend_repo_path
+    global _PANTRY
+    _PANTRY = _read(_FRONTEND, "src", "pages", "Pantry.jsx")
+
 
 
 # ─────────────────────────── backend ───────────────────────────

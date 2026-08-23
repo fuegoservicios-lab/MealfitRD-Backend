@@ -13,15 +13,23 @@ ventana quedó expuesta porque gemma tarda 30-90s (la visión cloud previa
 (eso ocurre recién en /stream, después del análisis).
 tooltip-anchor: P1-CHAT-PHOTO-UX
 """
+
+import pytest
 import os
 import re
 
 _HERE = os.path.dirname(os.path.abspath(__file__))
 _ROOT = os.path.dirname(os.path.dirname(_HERE))
 
-with open(os.path.join(_ROOT, "frontend", "src", "pages", "AgentPage.jsx"),
-          encoding="utf-8") as f:
-    _AP = f.read()
+@pytest.fixture(scope="module", autouse=True)
+def _load_frontend_sibling_sources(frontend_repo_path):
+    # La fixture compartida salta el módulo antes de cualquier I/O si falta el hermano.
+    _ = frontend_repo_path
+    global _AP, f
+    with open(os.path.join(_ROOT, "frontend", "src", "pages", "AgentPage.jsx"),
+              encoding="utf-8") as f:
+        _AP = f.read()
+
 
 
 def test_welcome_never_clobbers_real_conversation():

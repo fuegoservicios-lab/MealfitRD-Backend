@@ -10,12 +10,20 @@ contenido — limpieza de _build_hybrid spawneada como follow-up):
      ELIMINADA la supresión por ventana is_restocked (isPostRestockRotation + _staleDedup).
   3. Los 3 sitios de fuente del delta usan getDeltaSourceList.
 """
+
+import pytest
 import os
 import re
 
 _FE = os.path.join(os.path.dirname(__file__), "..", "..", "frontend", "src")
-_DASH = open(os.path.join(_FE, "pages", "Dashboard.jsx"), encoding="utf-8").read()
-_HELPERS = open(os.path.join(_FE, "utils", "shoppingHelpers.js"), encoding="utf-8").read()
+@pytest.fixture(scope="module", autouse=True)
+def _load_frontend_sibling_sources(frontend_repo_path):
+    # La fixture compartida salta el módulo antes de cualquier I/O si falta el hermano.
+    _ = frontend_repo_path
+    global _DASH, _HELPERS
+    _DASH = open(os.path.join(_FE, "pages", "Dashboard.jsx"), encoding="utf-8").read()
+    _HELPERS = open(os.path.join(_FE, "utils", "shoppingHelpers.js"), encoding="utf-8").read()
+
 
 
 def test_helpers_exist():

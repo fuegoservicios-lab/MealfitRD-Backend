@@ -8,12 +8,20 @@ para 800 g → fuera, quedan tras el link '+N de otros tamaños en el catálogo'
 La variante YA elegida siempre visible; si el piso vaciara la lista → se enseña
 todo (fail-open).
 """
+
+import pytest
 import re
 from pathlib import Path
 
 BACKEND = Path(__file__).resolve().parents[1]
-BRANDS_JSX = (BACKEND.parent / "frontend" / "src" / "components" / "dashboard"
-              / "SupermarketBrands.jsx").read_text(encoding="utf-8")
+@pytest.fixture(scope="module", autouse=True)
+def _load_frontend_sibling_sources(frontend_repo_path):
+    # La fixture compartida salta el módulo antes de cualquier I/O si falta el hermano.
+    _ = frontend_repo_path
+    global BRANDS_JSX
+    BRANDS_JSX = (BACKEND.parent / "frontend" / "src" / "components" / "dashboard"
+                  / "SupermarketBrands.jsx").read_text(encoding="utf-8")
+
 
 
 def test_floor_ratio_is_70_pct():

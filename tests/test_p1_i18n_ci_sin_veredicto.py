@@ -70,11 +70,21 @@ def test_sin_el_secret_la_degradacion_es_visible_y_derivada() -> None:
         f"el job ya no declara en su resumen si corrió con o sin el frontend hermano. "
         f"Una degradación que no se ve es una cobertura que se da por buena. [{_MARKER}]"
     )
-    assert re.search(r"grep -lE .*frontend.* tests/test_\*\.py", ci), (
-        f"la deselección de los tests que leen el frontend ya no se deriva del árbol con "
-        f"grep: una lista a mano se queda atrás con el primer test nuevo. [{_MARKER}]"
+    # [P1-I18N-CI-SIN-VEREDICTO · fusionado con P2-CI-BACKEND-CERO-TESTS del dueño] La
+    # degradación sin secret la hace el fixture `frontend_repo_path` de `conftest.py` (skip
+    # por módulo, legible), no un `--ignore` derivado por grep: mi primera versión llevaba
+    # el grep y el commit del dueño llegó primero con el fixture, que es mejor como
+    # degradación. Lo que este guard exige es que el fixture EXISTA y que el resumen lo
+    # nombre — sin una de las dos, la degradación o no funciona o no se ve.
+    conftest = (Path(__file__).resolve().parent / "conftest.py").read_text(encoding="utf-8")
+    assert "def frontend_repo_path" in conftest, (
+        f"desapareció el fixture `frontend_repo_path` de conftest.py: sin el secret, los 400 "
+        f"tests que leen el frontend vuelven a reventar en colección. [{_MARKER}]"
     )
-    assert "--ignore=" in ci, f"sin `--ignore`, los ficheros que leen el frontend revientan en colección [{_MARKER}]"
+    assert "frontend_repo_path" in ci, (
+        f"el resumen del job ya no nombra el fixture que hace el skip: la degradación deja de "
+        f"verse. [{_MARKER}]"
+    )
 
 
 def test_el_pytest_del_ci_no_lleva_maxfail() -> None:

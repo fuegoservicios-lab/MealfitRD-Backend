@@ -27,6 +27,8 @@ la copia y los umbrales se comprueban CONTRA él. Así el próximo cambio de ran
 sólo tiene que tocar una línea de este fichero —la del valor que el owner
 decidió— y la coherencia interna se verifica sola.
 """
+
+import pytest
 import os
 import re
 
@@ -39,9 +41,15 @@ def _read(*parts) -> str:
         return f.read()
 
 
-_PLAN = _read(_FRONTEND, "src", "pages", "Plan.jsx")
-_APP = _read(_FRONTEND, "src", "App.jsx")
-_REC = _read(_FRONTEND, "src", "components", "PendingPipelineRecovery.jsx")
+@pytest.fixture(scope="module", autouse=True)
+def _load_frontend_sibling_sources(frontend_repo_path):
+    # La fixture compartida salta el módulo antes de cualquier I/O si falta el hermano.
+    _ = frontend_repo_path
+    global _APP, _PLAN, _REC
+    _PLAN = _read(_FRONTEND, "src", "pages", "Plan.jsx")
+    _APP = _read(_FRONTEND, "src", "App.jsx")
+    _REC = _read(_FRONTEND, "src", "components", "PendingPipelineRecovery.jsx")
+
 
 # El rango que la pantalla promete HOY. Es lo único que hay que editar cuando el
 # owner vuelva a moverlo; todo lo demás de este fichero se deriva de aquí.

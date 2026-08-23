@@ -116,8 +116,8 @@ jobs:
             {
               echo "## ⚠️ Sin frontend hermano"
               echo "El secret \`SIBLING_REPO_TOKEN\` no está definido, así que los ~400 tests que leen \`frontend/src\` "
-              echo "(55 de ellos guards de idiomas, incluido el P0 clínico de alérgenos) se DESELECCIONAN en vez de "
-              echo "reventar en colección. Este veredicto cubre solo los tests autónomos del backend."
+              echo "(55 de ellos guards de idiomas, incluido el P0 clínico de alérgenos) se SALTAN vía el fixture "
+              echo "\`frontend_repo_path\` en vez de reventar en colección. Este veredicto cubre solo los tests autónomos."
             } >> "$GITHUB_STEP_SUMMARY"
           fi
 
@@ -143,23 +143,13 @@ jobs:
           PYTHONDONTWRITEBYTECODE: "1"
           PYTHONUNBUFFERED: "1"
         run: |
-          # [P2-I18N-CI-HERMANOS-ROJO-PERMANENTE · 2026-08-22] `-x` fuera, igual que en el
-          # CI de la raíz. Paraba en el PRIMER fallo, así que un rojo cualquiera escondía
-          # todo lo que venía detrás y cada corrida devolvía UN dato en vez del mapa.
+          # [P2-CI-BACKEND-CERO-TESTS · 2026-08-23] Sin techo de errores de colección:
+          # los tests cross-repo resuelven ../frontend mediante fixture y se saltan si el
+          # checkout hermano no existe. Así un defecto no vuelve a ocultar toda la suite.
           #
-          # [P1-I18N-CI-SIN-VEREDICTO · 2026-08-23] `--maxfail` FUERA también. Con 25, los
-          # errores de COLECCIÓN (que no son fallos de test: son ficheros que no se pueden
-          # ni importar) agotaban el cupo antes del primer test y la corrida terminaba sin
-          # veredicto. Un CI que para a los N rojos devuelve N datos; el mapa entero es lo
-          # que hace falta para distinguir «un test roto» de «el entorno está mal».
-          #
-          # Sin el frontend hermano, los tests que lo leen se DESELECCIONAN por fichero
-          # (`--ignore`) en vez de reventar en colección. La lista se deriva del propio
-          # árbol, no se escribe a mano: un test nuevo que lea el frontend queda cubierto.
-          if [ ! -d ../frontend/src ]; then
-            IGNORAR=$(grep -lE "frontend[/\\\\]|['\"]frontend['\"]|_FRONTEND|FRONTEND_" tests/test_*.py | sed 's/^/--ignore=/' | tr '\n' ' ')
-            echo "sin frontend hermano: se ignoran $(echo $IGNORAR | wc -w) ficheros que lo leen"
-            pytest tests/ -v --tb=short -m "not e2e" $IGNORAR
-          else
-            pytest tests/ -v --tb=short -m "not e2e"
-          fi
+          # [P1-I18N-CI-SIN-VEREDICTO · 2026-08-23] Y con el checkout del hermano de arriba
+          # (secret `SIBLING_REPO_TOKEN`), esos mismos tests DEJAN de saltarse y corren de
+          # verdad — los 400, incluido el P0 clínico de alérgenos. Las dos piezas se
+          # complementan: el fixture es la degradación legible cuando falta el secret; el
+          # checkout es lo único que hace que lleguen a ejecutarse en Actions alguna vez.
+          pytest tests/ -v --tb=short -m "not e2e"

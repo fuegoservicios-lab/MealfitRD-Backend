@@ -24,14 +24,22 @@ Las cuatro trampas que rodean esta réplica, cada una con su test abajo:
 """
 from __future__ import annotations
 
+import pytest
+
 import re
 from pathlib import Path
 
 _BACKEND = Path(__file__).resolve().parent.parent
 _PLANS = (_BACKEND / "routers" / "plans.py").read_text(encoding="utf-8")
-_DASH = (
-    _BACKEND.parent / "frontend" / "src" / "pages" / "Dashboard.jsx"
-).read_text(encoding="utf-8")
+@pytest.fixture(scope="module", autouse=True)
+def _load_frontend_sibling_sources(frontend_repo_path):
+    # La fixture compartida salta el módulo antes de cualquier I/O si falta el hermano.
+    _ = frontend_repo_path
+    global _DASH
+    _DASH = (
+        _BACKEND.parent / "frontend" / "src" / "pages" / "Dashboard.jsx"
+    ).read_text(encoding="utf-8")
+
 
 
 def _cuerpo_de_chunk_status() -> str:

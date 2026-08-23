@@ -6,11 +6,19 @@ aunque el backend siguiera generando. tooltip-anchor: P1-DAY-REGEN-SERVER-FLAG
 """
 from __future__ import annotations
 
+import pytest
+
 from pathlib import Path
 
 _BACKEND = Path(__file__).resolve().parents[1]
 _PLANS = (_BACKEND / "routers" / "plans.py").read_text(encoding="utf-8")
-_CTX = (_BACKEND.parent / "frontend" / "src" / "context" / "AssessmentContext.jsx").read_text(encoding="utf-8")
+@pytest.fixture(scope="module", autouse=True)
+def _load_frontend_sibling_sources(frontend_repo_path):
+    # La fixture compartida salta el módulo antes de cualquier I/O si falta el hermano.
+    _ = frontend_repo_path
+    global _CTX
+    _CTX = (_BACKEND.parent / "frontend" / "src" / "context" / "AssessmentContext.jsx").read_text(encoding="utf-8")
+
 
 
 def test_server_flag_declares_inflight_regen():

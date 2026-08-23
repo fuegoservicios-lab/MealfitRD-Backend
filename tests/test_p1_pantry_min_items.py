@@ -16,6 +16,8 @@ tooltip-anchor: P1-PANTRY-MIN-ITEMS
 """
 from __future__ import annotations
 
+import pytest
+
 import re
 import sys
 from pathlib import Path
@@ -26,7 +28,13 @@ _QPB = (_BACKEND.parent / "frontend" / "src" / "components" / "assessment"
         / "questions" / "QPantryBuilder.jsx")
 
 _PLANS_SRC = (_BACKEND / "routers" / "plans.py").read_text(encoding="utf-8")
-_QPB_SRC = _QPB.read_text(encoding="utf-8")
+@pytest.fixture(scope="module", autouse=True)
+def _load_frontend_sibling_sources(frontend_repo_path):
+    # La fixture compartida salta el módulo antes de cualquier I/O si falta el hermano.
+    _ = frontend_repo_path
+    global _QPB_SRC
+    _QPB_SRC = _QPB.read_text(encoding="utf-8")
+
 
 
 # ---------------------------------------------------------------------------

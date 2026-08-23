@@ -18,6 +18,8 @@ Cadena completa anclada por estos tests:
 """
 from __future__ import annotations
 
+import pytest
+
 import re
 from pathlib import Path
 
@@ -27,15 +29,21 @@ _REPO_ROOT = _BACKEND_ROOT.parent
 _PLANS_PY = (_BACKEND_ROOT / "routers" / "plans.py").read_text(encoding="utf-8")
 _PLANGEN_PY = (_BACKEND_ROOT / "prompts" / "plan_generator.py").read_text(encoding="utf-8")
 _ORCH_PY = (_BACKEND_ROOT / "graph_orchestrator.py").read_text(encoding="utf-8")
-_IQ_JSX = (_REPO_ROOT / "frontend" / "src" / "components" / "assessment" / "questions" / "QBudget.jsx").read_text(encoding="utf-8")
-_FLOW_JSX = (_REPO_ROOT / "frontend" / "src" / "components" / "assessment" / "InteractiveAssessmentFlow.jsx").read_text(encoding="utf-8")
-_CTX_JSX = (_REPO_ROOT / "frontend" / "src" / "context" / "AssessmentContext.jsx").read_text(encoding="utf-8")
+@pytest.fixture(scope="module", autouse=True)
+def _load_frontend_sibling_sources(frontend_repo_path):
+    # La fixture compartida salta el módulo antes de cualquier I/O si falta el hermano.
+    _ = frontend_repo_path
+    global _CTX_JSX, _FLOW_JSX, _FORMVAL_JS, _IQ_JSX
+    _IQ_JSX = (_REPO_ROOT / "frontend" / "src" / "components" / "assessment" / "questions" / "QBudget.jsx").read_text(encoding="utf-8")
+    _FLOW_JSX = (_REPO_ROOT / "frontend" / "src" / "components" / "assessment" / "InteractiveAssessmentFlow.jsx").read_text(encoding="utf-8")
+    _CTX_JSX = (_REPO_ROOT / "frontend" / "src" / "context" / "AssessmentContext.jsx").read_text(encoding="utf-8")
+    _FORMVAL_JS = (_REPO_ROOT / "frontend" / "src" / "config" / "formValidation.js").read_text(encoding="utf-8")
+
 # [P1-COUNTRY-SYSTEM-F1 · fix-round 1 · review] `currencyOptionsForCountry` (por lo
 # tanto los literales `value:'DOP'/label:'RD$'` y `value:'USD'/label:'US$'`) y
 # `effectiveBudgetCurrency` viven en formValidation.js desde el fix-round 1 de Task 6
 # — QBudget/InteractiveAssessmentFlow/useBudgetFloor los IMPORTAN, ya no los definen
 # inline. Ver test_p1_country_system_f1.py sección T6 para el detalle completo.
-_FORMVAL_JS = (_REPO_ROOT / "frontend" / "src" / "config" / "formValidation.js").read_text(encoding="utf-8")
 
 
 # ---------------------------------------------------------------------------

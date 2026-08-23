@@ -17,6 +17,8 @@ tooltip-anchor: P1-PANTRY-ROUTE-ALIAS
 """
 from __future__ import annotations
 
+import pytest
+
 import re
 import sys
 from pathlib import Path
@@ -25,7 +27,13 @@ _BACKEND = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(_BACKEND))
 _FRONT = _BACKEND.parent / "frontend" / "src"
 
-_APP_SRC = (_FRONT / "App.jsx").read_text(encoding="utf-8")
+@pytest.fixture(scope="module", autouse=True)
+def _load_frontend_sibling_sources(frontend_repo_path):
+    # La fixture compartida salta el módulo antes de cualquier I/O si falta el hermano.
+    _ = frontend_repo_path
+    global _APP_SRC
+    _APP_SRC = (_FRONT / "App.jsx").read_text(encoding="utf-8")
+
 
 
 # ---------------------------------------------------------------------------
