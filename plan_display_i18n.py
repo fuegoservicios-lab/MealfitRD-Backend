@@ -2086,7 +2086,14 @@ def enrich_plan_display(
                 )
                 total_written += written
                 mismatch_total += mismatches
-                if written or _plan_name_written or _insights_written:
+                # [P2-I18N-DISPLAY-REASON-NULA-CON-CERO-COMIDAS · 2026-08-23] SÓLO las
+                # comidas limpian la razón. Antes «algo» incluía el nombre del plan y los
+                # insights, así que un ciclo con el título en francés y 0/12 platos salía
+                # con `reason: None` —éxito limpio, sin alerta—, que es exactamente el
+                # estado que se encontró en producción el 22-ago. Un ciclo que pidió
+                # comidas y no escribió ninguna ha fallado en lo que pidió, escriba lo que
+                # escriba de lo demás.
+                if written:
                     last_skip_reason = None
 
             if mismatch_total:
