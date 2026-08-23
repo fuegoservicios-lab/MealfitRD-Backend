@@ -96,8 +96,17 @@ def test_reclamar_va_antes_de_sincronizar():
 
 
 def test_el_estampado_usa_lo_reclamado_y_no_el_activo_crudo():
+    # [P1-I18N-CLAIM-Y-ESTAMPADO-SIN-GUARD-DE-CONDUCTA · 2026-08-23] Este test clavaba la
+    # grafía `if (!data.locale) {`. La decisión del estampado salió a una función pura,
+    # `localeParaEstampar(profileLocale, activoTrasReclamar)`, que tiene guard de CONDUCTA
+    # en vitest (`claimLocale.p1_i18n_guard_de_conducta.test.js`) — el que de verdad
+    # distingue «está escrito» de «funciona». Aquí queda la mitad que un test de backend sí
+    # puede ver: que el PATCH se alimente de esa decisión y reciba el ACTIVO reclamado,
+    # nunca un `getLocale()` crudo que en un dispositivo compartido es el del anterior.
     codigo = _sin_comentarios(_leer(_FRONT / "src" / "context" / "AssessmentContext.jsx"))
-    bloque = codigo[codigo.index("if (!data.locale) {"):][:600]
+    i = codigo.find("localeParaEstampar(data.locale")
+    assert i != -1, f"el estampado del perfil volvió a decidirse a mano [{_MARKER}]"
+    bloque = codigo[i:][:600]
     assert "getLocale()" not in bloque, (
         "el estampado volvió a leer el idioma ACTIVO en crudo. En un dispositivo "
         "compartido eso es la elección del usuario ANTERIOR, y acaba en el perfil del "
