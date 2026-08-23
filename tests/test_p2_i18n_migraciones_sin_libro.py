@@ -48,8 +48,11 @@ def test_la_migracion_existe_en_los_dos_dirs_y_es_idempotente() -> None:
         assert re.search(rf"^\s*{col}\s", src, re.M), f"la tabla no declara `{col}`, que el runner usa"
     root_copy = _ROOT / "migrations" / _MIG
     if root_copy.exists():
-        assert root_copy.read_bytes() == backend_copy.read_bytes(), (
-            f"las dos copias de {_MIG} difieren (P3-MIGRATIONS-SSOT: byte-idénticas)")
+        # Identidad de CONTENIDO: `core.autocrlf` deja una copia en CRLF y otra en LF según
+        # qué árbol la tocó git; comparar bytes crudos pondría rojo un no-cambio.
+        normal = lambda p: p.read_bytes().replace(b"\r\n", b"\n")
+        assert normal(root_copy) == normal(backend_copy), (
+            f"las dos copias de {_MIG} difieren (P3-MIGRATIONS-SSOT)")
     else:
         pytest.skip("migrations/ del workspace-root no está en este checkout (worktree)")
 
