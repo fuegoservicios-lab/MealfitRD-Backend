@@ -2165,6 +2165,16 @@ def enrich_plan_display(
             f"[P1-PLAN-DISPLAY-I18N] enrich_plan_display excepción no controlada "
             f"(fail-open) plan={plan_id} locale={locale}: {e!r}"
         )
+        # [P2-I18N-DISPLAY-EXCEPCION-NO-DEJA-RASTRO · 2026-08-23] Éste era el único camino
+        # de salida SIN fila de telemetría — y es el único que significa «está roto», no
+        # «no tocaba». Sin esto, un bug nuevo que reviente el motor deja `pipeline_metrics`
+        # en cero, que es lo que dice cuando NO SE EJECUTA: «no le toca a nadie» y «está
+        # roto» se vuelven indistinguibles, justo la confusión que costó una sesión medir.
+        # `exception` no es razón benigna, así que además alerta por locale.
+        _emit_result_telemetry(plan_id, user_id, locale, {
+            "enriched_meals": 0, "reason": "exception",
+            "error": f"{type(e).__name__}: {str(e)[:160]}",
+        })
         return {"enriched_meals": 0, "skipped": "exception"}
 
 
