@@ -1153,6 +1153,34 @@ _COUNTRY_CATALOG_UNPRICED_DEFAULT_G = 150.0
 # default de arriba no debe pisarla. Es la MISMA lista que consume el bloque de conversión — si
 # alguien añade una unidad allí y la olvida aquí, ese alimento vuelve a salir a 150 g fijos.
 _CONVERTIBLE_QTY_UNITS = ("g", "kg", "oz", "lb", "ml", "l")
+# [P1-COUNTRY-KEEP-COUNT-UNITS · 2026-08-23] Conteos que no tienen una masa
+# universal y deben sobrevivir hasta `apply_smart_market_units`. Son las formas
+# canónicas del SSOT `canonical_units.CANONICAL_UNIT_MAP`; no incluye envases ni
+# cantidades nominales (`pizca`/`al gusto`).
+_COUNTABLE_QTY_UNITS = frozenset((
+    "unidad", "cabeza", "diente", "hoja", "rebanada", "mazo",
+))
+
+
+def _country_keep_has_recipe_qty(units) -> bool:
+    """¿La fila beta sin precio conserva una demanda física comprable?
+
+    Peso/volumen continúan por el path existente. Los conteos permanecen como
+    conteos: convertirlos al default de 150 g inventaría masa y rompería el
+    escalamiento con el número de días.
+    """
+    if not _country_keep_respect_recipe_qty_enabled():
+        return False
+    for raw_unit, raw_qty in (units or {}).items():
+        try:
+            if float(raw_qty) <= 0.0001:
+                continue
+        except (TypeError, ValueError):
+            continue
+        unit = canonicalize_unit(raw_unit) or str(raw_unit or "").strip().lower()
+        if unit in _CONVERTIBLE_QTY_UNITS or unit in _COUNTABLE_QTY_UNITS:
+            return True
+    return False
 
 
 def _survives_shopping_list(name) -> bool:
@@ -12597,8 +12625,7 @@ def aggregate_and_deduct_shopping_list(plan_ingredients: list[str], consumed_ing
                 # cantidad» y acabó ganando siempre; aquí se invierte la precedencia y queda como
                 # último recurso. La rama de horneado de arriba NO cambia: 100 g de polvo de
                 # hornear ES la respuesta correcta a «1 cdta» porque ahí se compra el ENVASE.
-                _ccu_has_qty = (_country_keep_respect_recipe_qty_enabled()
-                                and any(_u in units for _u in _CONVERTIBLE_QTY_UNITS))
+                _ccu_has_qty = _country_keep_has_recipe_qty(units)
                 if not _ccu_has_qty:
                     weight_in_lbs = _COUNTRY_CATALOG_UNPRICED_DEFAULT_G / 453.592
                     has_weight = True
