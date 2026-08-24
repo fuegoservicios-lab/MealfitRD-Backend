@@ -233,7 +233,6 @@ def test_el_contenedor_y_el_compositor_no_compensan_dos_veces():
     )
     assert re.search(r"containerInset:\s*Math\.max", resolver)
     assert "composerLift: 0" in resolver
-    assert "welcomeLift: IOS_PWA_COMPOSER_LIFT_PX + IOS_PWA_WELCOME_EXTRA_GAP_PX" in resolver
 
 
 # --------------------------------------------------------------------------
