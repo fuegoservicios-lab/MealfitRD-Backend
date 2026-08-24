@@ -178,9 +178,7 @@ def test_los_mensajes_se_apilan_desde_abajo_en_movil():
     assert re.search(r"\.msg-log\s*\{[^}]*margin-top:\s*auto", bloque), (
         "la lista de mensajes debe anclarse abajo en móvil"
     )
-    assert re.search(r"className=\{`msg-log", _AP), (
-        "el contenedor del log debe conservar la clase base aunque añada variantes"
-    )
+    assert 'className="msg-log"' in _AP, "el contenedor del log debe llevar la clase"
     # El anclaje va en el HIJO: con justify-content:flex-end en el contenedor, al
     # desbordar el contenido el principio del scroll queda inalcanzable.
     i = bloque.find(".messages-container")
