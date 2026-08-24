@@ -261,9 +261,10 @@ def test_en_movil_enter_no_envia():
 def test_la_foto_que_el_servidor_rechaza_no_gasta_un_turno():
     """Se leía el cuerpo sin mirar el status: 413/415/429 salían como «el analizador no
     está disponible» y AUN ASÍ se enviaba el turno al chat."""
-    i = _AP.find("const uploadRes = await fetchWithAuth")
-    win = _AP[i:i + 2200]
-    assert "if (!uploadRes.ok)" in win, "hay que mirar el status antes que el cuerpo"
+    i = _AP.find("const uploadOne = async")
+    assert i >= 0, "no se encontró el uploader concurrente de adjuntos"
+    win = _AP[i:i + 3200]
+    assert "if (!response.ok)" in win, "hay que mirar el status antes que el cuerpo"
     for status in ("413", "415", "429"):
         assert status in win, f"falta el copy propio para {status}"
     api = _read("config", "api.ts")

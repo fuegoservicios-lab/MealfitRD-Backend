@@ -111,8 +111,11 @@ def test_migration_enforces_private_lifecycle_and_max_four():
     assert "jsonb_array_length(attachments) <= 4" in sql
     assert "ON DELETE CASCADE" in sql
     assert "WHERE client_message_id IS NOT NULL" in sql
-    assert "ENABLE ROW LEVEL SECURITY" in sql
-    assert "auth.uid()) = user_id" in sql
+    # Neon no tiene `auth.users`/`auth.uid()` de Supabase. La FK real y el
+    # aislamiento server-side deben quedar explícitos en la migración.
+    assert "REFERENCES public.user_profiles(id) ON DELETE CASCADE" in sql
+    assert "SIN RLS" in sql
+    assert "AND user_id = %s" in sql
     assert "WHERE message_id IS NULL" in sql
 
 

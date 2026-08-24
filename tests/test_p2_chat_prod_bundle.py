@@ -167,7 +167,7 @@ def test_p2_2_scroll_to_bottom_force_flag(agent_page_src: str) -> None:
     """[P2-CHAT-SCROLL-RACE] `scrollToBottom` acepta `force=false` y
     hace no-op silencioso si `userScrolledUpRef.current && !force`."""
     pattern = re.compile(
-        r"const scrollToBottom = \(force = false\) =>\s*\{[^}]*?if \(userScrolledUpRef\.current && !force\) return;",
+        r"const scrollToBottom = \(force = false(?:,\s*behaviorOverride = null)?\) =>\s*\{[^}]*?if \(userScrolledUpRef\.current && !force\) return;",
         re.DOTALL,
     )
     assert pattern.search(agent_page_src), (
@@ -187,7 +187,8 @@ def test_p2_2_handle_messages_scroll_threshold(agent_page_src: str) -> None:
         "(px desde el bottom). Cubre overshoot por scroll momentum mobile."
     )
     # Actualiza el ref, NO un setState.
-    assert "userScrolledUpRef.current = distanceFromBottom > 120;" in agent_page_src
+    assert "const scrolledUp = distanceFromBottom > 120;" in agent_page_src
+    assert "userScrolledUpRef.current = scrolledUp;" in agent_page_src
 
 
 def test_p2_2_container_has_ref_and_onscroll(agent_page_src: str) -> None:

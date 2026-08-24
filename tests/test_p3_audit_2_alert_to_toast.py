@@ -113,15 +113,14 @@ def test_agentpage_uses_toast_error(agentpage_src: str):
     """El replacement del `alert` debe ser `toast.error` (no `toast.info` o
     `toast.success`) — es feedback de un input inválido."""
     no_comments = _strip_comments(agentpage_src)
+    # El reducer de múltiples adjuntos centraliza todos los rechazos en un
+    # mapa de copy y los entrega a un único toast.error(copy).
     assert re.search(
-        _TOAST_ERROR_LITERAL + r"[Ff]ormato\s+no\s+soportado",
+        r"IMAGE_TYPE_INVALID\s*:\s*t\(['\"]Formato no soportado\.",
         no_comments,
-    ), (
-        "P3-AUDIT-2 regresión: `toast.error('Formato no soportado...')` no "
-        "encontrado en AgentPage.jsx. El replacement del `alert` original "
-        "debe usar el método error (rojo, lectura assertiva). "
-        "[P1-I18N-DASHBOARD] También vale `toast.error(t('Formato no "
-        "soportado...'))` — la clave de i18n ES el texto español."
+    ), "el rechazo de tipo debe conservar el copy accesible"
+    assert re.search(r"toast\.error\s*\(\s*copy\s*\)", no_comments), (
+        "los rechazos de adjuntos deben usar toast.error, nunca alert nativo"
     )
 
 

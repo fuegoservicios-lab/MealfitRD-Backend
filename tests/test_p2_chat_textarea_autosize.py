@@ -155,7 +155,10 @@ def test_agentpage_firma_incluye_valor_y_ancho_disponible():
     m = re.search(r"useAutosizeTextarea\s*\(\s*chatInputRef\s*,([^;]*?)\)\s*;", src, re.DOTALL)
     assert m is not None, "no se encontró el callsite del hook"
     signature = m.group(1)
-    for token in ("input", "isMobile", "showSidebar", "previewUrl"):
+    # El preview único fue sustituido por un rail de 1-4 adjuntos de altura
+    # fija. Su presencia cambia el espacio disponible; `attachments.length`
+    # es ahora la señal autoritativa.
+    for token in ("input", "isMobile", "showSidebar", "attachments.length"):
         assert token in signature, (
             f"la firma del autosize debe incluir `{token}` "
             f"(cambia contenido o ancho disponible); firma actual: {signature.strip()}"

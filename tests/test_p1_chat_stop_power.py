@@ -19,6 +19,7 @@ tooltip-anchor: P1-CHAT-STOP-POWER
 
 import pytest
 import os
+import re
 
 _HERE = os.path.dirname(os.path.abspath(__file__))
 _ROOT = os.path.dirname(os.path.dirname(_HERE))
@@ -63,8 +64,8 @@ def test_un_turno_en_vuelo_bloquea_el_siguiente():
     El guard lee el REF y no el state a propósito: dos toques dentro del mismo frame
     de React verían ambos el valor viejo (misma lección que P1-FORM-4)."""
     i = _AP.find("const handleSend = async")
-    win = _AP[i:i + 900]
-    assert "isTurnActiveRef.current) return;" in win, \
+    win = _AP[i:i + 1800]
+    assert re.search(r"\|\|\s*isTurnActiveRef\.current\)\s*return;", win), \
         "el guard de entrada debe mirar el turno, no el 'pensando'"
 
     # Encendido único y apagado único: si alguien apaga el turno en una rama
@@ -96,7 +97,7 @@ def test_stop_dismissal_survives_refresh_and_leaves_feedback():
     descarte vivía en un ref (muere con la página). Ahora se persiste en
     localStorage por firma del huérfano Y el stop deja constancia visible."""
     i = _AP.find("const handleStopGeneration")
-    win = _AP[i:i + 2400]
+    win = _AP[i:i + 4200]
     assert "safeLocalStorageSet(_orphanDismissKey(currentSessionId), _sig)" in win, \
         "el descarte debe sobrevivir al refresh"
     assert "⏹ Detenido" in win, "feedback visible al detener (pedido del owner)"

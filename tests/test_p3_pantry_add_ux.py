@@ -35,6 +35,7 @@ import pytest
 
 _REPO_ROOT = Path(__file__).resolve().parent.parent.parent
 _PANTRY_JSX = _REPO_ROOT / "frontend" / "src" / "pages" / "Pantry.jsx"
+_UNIT_SYSTEM_JS = _REPO_ROOT / "frontend" / "src" / "config" / "unitSystem.js"
 
 
 def _read_pantry() -> str:
@@ -116,21 +117,18 @@ def test_picker_states_declared(state_name):
 #    (botella, libra, paquete, etc.) que el usuario reconoce sin pensar.
 # ---------------------------------------------------------------------------
 def test_common_purchase_units_includes_realistic_options():
+    # [P2-NEVERA-UNIT-SYSTEM-POR-PAIS] La lista dejó de estar duplicada en
+    # Pantry.jsx: ahora vive en el SSOT que ordena las medidas por país.
     src = _read_pantry()
-    # Extraer el bloque del array para verificar que incluye los esenciales.
-    m = re.search(
-        r"COMMON_PURCHASE_UNITS\s*=\s*\[(.*?)\]",
-        src,
-        re.DOTALL,
-    )
-    assert m, "COMMON_PURCHASE_UNITS array no encontrado."
-    body = m.group(1).lower()
+    assert "unitOptionsForCountry" in src
+    assert "...unitOptionsForCountry(formData?.country)" in src
+    body = _UNIT_SYSTEM_JS.read_text(encoding="utf-8").lower()
     # El usuario citó explícitamente "botella" y "aceite/vinagre" como
     # ejemplos canónicos — botella DEBE estar. libra y paquete son
     # mínimos para el resto de la canasta dominicana.
     for required in ("botella", "libra", "paquete", "unidad"):
         assert f"'{required}'" in body or f'"{required}"' in body, (
-            f"COMMON_PURCHASE_UNITS debe incluir `{required}`. "
+            f"unitOptionsForCountry debe incluir `{required}`. "
             f"Sin estas unidades el picker fuerza al usuario al "
             f"default_unit del catálogo (poco intuitivo para envases reales)."
         )

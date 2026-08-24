@@ -25,10 +25,16 @@ _ROOT = os.path.dirname(os.path.dirname(_HERE))
 def _load_frontend_sibling_sources(frontend_repo_path):
     # La fixture compartida salta el módulo antes de cualquier I/O si falta el hermano.
     _ = frontend_repo_path
-    global _AP, f
+    global _AP, _PROCESSING, _ATTACHMENTS, f
     with open(os.path.join(_ROOT, "frontend", "src", "pages", "AgentPage.jsx"),
               encoding="utf-8") as f:
         _AP = f.read()
+    with open(os.path.join(_ROOT, "frontend", "src", "utils", "chatImageProcessing.js"),
+              encoding="utf-8") as f:
+        _PROCESSING = f.read()
+    with open(os.path.join(_ROOT, "frontend", "src", "hooks", "useChatAttachments.js"),
+              encoding="utf-8") as f:
+        _ATTACHMENTS = f.read()
 
 
 
@@ -52,21 +58,19 @@ def test_send_removes_welcome_immediately_no_late_shift():
 
 
 def test_image_bubble_never_ghost():
-    """La burbuja con foto siempre tiene imageUrl (fallback al blob del file)."""
-    assert re.search(r"bubbleBlobUrl = currentFile\s*\n?\s*\? \(currentPreview \|\| URL\.createObjectURL\(currentFile\)\)", _AP), \
-        "sin fallback, previewUrl null ⇒ burbuja fantasma sin imagen"
+    """La burbuja toma la mejor URL disponible y descarta entradas fantasma."""
+    assert "url: item.url || item.image_url || item.thumbDataUrl || item.previewUrl" in _AP
+    assert ").filter((item) => item.url);" in _AP
+    assert "previewUrl = URL.createObjectURL(file)" in _ATTACHMENTS
 
 
 def test_bubble_migrates_to_data_url_thumb():
-    """La imagen de la burbuja migra a dataURL: inmune a revokes/reloads y
-    sobrevive el cache localStorage del chat (no hay object storage aún)."""
-    assert "const fileToThumbDataUrl = (file" in _AP
-    assert "fileToThumbDataUrl(currentFile).then" in _AP
-    assert "m.imageUrl === bubbleBlobUrl" in _AP, \
-        "el swap debe matchear la burbuja por su blob original"
+    """El pipeline preparado produce thumbnail durable antes de renderizar."""
+    assert "const thumbDataUrl = thumbCanvas.toDataURL" in _PROCESSING
+    assert "return { file: uploadFile, thumbDataUrl, width, height };" in _PROCESSING
+    assert "prepareChatImage(job.sourceFile" in _ATTACHMENTS
 
 
 def test_loading_shows_literal_photo_status():
-    assert "startsWith('Analizando tu foto')" in _AP, \
-        "durante el análisis de foto se muestra el estado literal, no frases rotativas"
-    assert "Analizando tu foto… puede tardar un minuto" in _AP
+    assert "setStreamingStatus(t('Analizando tus fotos… puede tardar un minuto'))" in _AP, \
+        "durante el análisis múltiple se muestra el estado literal, no frases rotativas"

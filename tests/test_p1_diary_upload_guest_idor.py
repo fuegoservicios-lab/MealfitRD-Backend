@@ -60,7 +60,7 @@ def test_background_visual_entry_write_is_gated_on_actual_user_id():
     src = _src()
     # Buscar el bloque que gatea el add_task de _save_visual_entry_background.
     m = re.search(
-        r'if\s+actual_user_id\s*:\s*\n\s*background_tasks\.add_task\(\s*\n?\s*_save_visual_entry_background',
+        r'if\s+actual_user_id\s+and\s+purpose\s*==\s*["\']diary["\']\s*:\s*\n\s*background_tasks\.add_task\(\s*\n?\s*_save_visual_entry_background',
         src,
     )
     assert m is not None, (
