@@ -1360,6 +1360,20 @@ def test_backstop_conoce_cada_alimento_peligroso_del_catalogo_vivo():
             clave = (clase, constants.strip_accents(nombre).strip().lower())
             if clave in _G5_EXCUSADOS_PLANT_ADJ:
                 continue
+            # [P3-SEMOLA-MAIZ-GLUTEN-FP · 2026-08-23] Las excusas por BASE viven en
+            # producción (`_ALLERGEN_TERM_BASE_EXCUSES`), no en una segunda lista aquí: a un
+            # celíaco de EE.UU. se le quitaba la «Sémola de maíz», que no tiene gluten. El
+            # término dispara («sémola») pero su BASE lo desmiente («de maíz»), igual que
+            # «leche de almendras» no es lácteo.
+            #
+            # Se consulta el MISMO predicado que usa el backstop, no una copia: si mañana la
+            # excusa cambia, este test la sigue sola. Escribir aquí un segundo `{"semola":
+            # ("maiz",...)}` sería la segunda tabla que P1-DIET-CANON-SSOT ya pagó una vez.
+            _n = constants.strip_accents(nombre).strip().lower()
+            if any(go._allergen_term_base_excused(_t, _n[len(_t):])
+                   for _t in getattr(go, "_ALLERGEN_TERM_BASE_EXCUSES", {})
+                   if _n.startswith(_t)):
+                continue
             meal = {"name": "probe", "ingredients": [nombre]}
             if not go.clinical_backstop_for_meal(meal, allergies=[clase], diet_type=None):
                 faltantes.append((clase, nombre))

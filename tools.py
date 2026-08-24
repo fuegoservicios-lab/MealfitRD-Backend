@@ -1474,8 +1474,17 @@ def execute_modify_single_meal(user_id: str, day_number: int, meal_type: str, ch
     # — el plato modificado recupera la creatividad por recombinación de las 87 plantillas.
     try:
         from dish_library import build_swap_inspiration_context as _bsi_cm
+        # [P1-CHATMODIFY-DISH-COUNTRY · 2026-08-23] `P1-DISH-LIBRARY-COUNTRY` se declaró cerrado
+        # con «3 superficies (day-gen, swap, chat-modify)» y esta llamada era la que faltaba:
+        # medido, `build_swap_inspiration_context('Almuerzo', seed=3)` SIN country devolvía
+        # «Pastelón de yuca con pollo desmenuzado; La bandera…» mientras con country='ES' devuelve
+        # «Empanada gallega de sardinas; Tortilla española con patata y cebolla». Es el tramo más
+        # concreto del prompt, y P1-DIET-BLIND-DIRECTIVES ya midió que entre una directiva general
+        # y un ejemplo concreto el modelo obedece al ejemplo. Reusa `_modify_country`, derivado UNA
+        # vez al inicio de `execute_modify_single_meal` por la ÚNICA puerta — no una 2ª derivación.
         _insp_cm = _bsi_cm(str(meal_type or ""), seed=int(day_number or 1),
-                           avoid_names=[str(target_meal.get("name") or "")])
+                           avoid_names=[str(target_meal.get("name") or "")],
+                           country=_modify_country)
         if _insp_cm:
             context_extras += _insp_cm
     except Exception as _insp_cm_e:

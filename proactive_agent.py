@@ -429,9 +429,28 @@ def run_proactive_checks():
                     elif meal_rate < 0.30:
                         delay_hours = 2.5 # Evitar presión, retrasamos el nudge
                         
-                # Nudge dinámico ajustado según historial de adherencia específica
-                nudge_hour = avg_hr + delay_hours
-                
+                # Nudge dinámico ajustado según historial de adherencia específica.
+                #
+                # [P3-AVG-MEAL-HOUR-CIRCULAR · 2026-08-23] El `% 24` es LOAD-BEARING y va
+                # ANTES que el arreglo de la media, no después. `avg_hr` es una hora de
+                # reloj (0..23,99) y `delay_hours` llega hasta 2,5: la suma se sale del
+                # reloj en cuanto la comida es tardía. `current_hour_float` sólo vale
+                # 0..23, así que un `nudge_hour` de 24,0 NUNCA iguala a nada y el nudge
+                # de esa comida no se envía JAMÁS — silenciosamente, sin log ni error.
+                #
+                # Es un defecto con sesgo de país: una cena dominicana (~19:00) + 1,5 h
+                # cae en 20,5 y no se nota; una cena española (21:00-23:00, con picoteo)
+                # cae en 22,5-25,5 y se cae del reloj. Y ES PRERREQUISITO de la media
+                # circular: la media circular de [21,22,23,0] es ~22,5 (correcta), pero
+                # sumarle el delay sin `% 24` la empuja fuera del reloj más a menudo que
+                # la media aritmética rota, que tendía al centro del día. Arreglar la
+                # media sin arreglar esto EMPEORA el caso español.
+                #
+                # El nudge cruza la medianoche a propósito: si comes a las 23:30, el
+                # recordatorio de esa comida es a la 1:00 del día siguiente, no "nunca".
+                # tooltip-anchor: P3-AVG-MEAL-HOUR-CIRCULAR
+                nudge_hour = (avg_hr + delay_hours) % 24
+
                 # Comparamos si el cron actual (hora entera) coincide con la hora entera del nudge
                 if math.floor(current_hour_float) == math.floor(nudge_hour):
                     meal_to_check = meal

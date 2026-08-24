@@ -2664,13 +2664,17 @@ def swap_meal(form_data: dict, surface: str = "individual"):
                     _pc_used = set()
                     for _pb in (form_data.get("same_day_other_meal_blobs") or []):
                         _pc_used |= _pc_labels(str(_pb))
+                    # [P2-AGENT-PROTEIN-CLOSER-COUNTRY · 2026-08-23] `country=` en AMBAS (36 vs 43
+                    # candidatos medidos, ES): el closer reconstruye candidatos por dentro en la
+                    # rama lácteo-dulce, así que pasarlo sólo al pool deja media fuga abierta.
                     _g_pc = _pc_closer(
                         _pc_meal, _pc_target, _tu_db_holder[0],
-                        _pc_pool(_pc_allergies, _tu_db_holder[0]),
+                        _pc_pool(_pc_allergies, _tu_db_holder[0], country=_swap_country),
                         allergies=_pc_allergies, fill_pct=1.0,
                         slot_cal_target=float(target_calories or 0),
                         enforce_min_threshold=False,
                         day_used_proteins=_pc_used,
+                        country=_swap_country,
                     )
                     if _g_pc > 0:
                         try:
@@ -3357,8 +3361,12 @@ def swap_meal(form_data: dict, surface: str = "individual"):
             if float(_out.get("protein") or 0) < float(target_protein):
                 _cl_db = IngredientNutritionDB()
                 _snap_cl = _copy_cl.deepcopy(_out)
-                _cands = _safe_high_density_proteins(allergies, _cl_db)
-                _added = _close_protein_gap_for_meal(_out, float(target_protein), _cl_db, _cands)
+                # [P2-AGENT-PROTEIN-CLOSER-COUNTRY · 2026-08-23] ver el bloque de arriba: sin
+                # `country=` el candidato se elige del pool dominicano (36 filas) aunque el
+                # usuario compre en España (43). `_swap_country` ya está derivado en esta función.
+                _cands = _safe_high_density_proteins(allergies, _cl_db, country=_swap_country)
+                _added = _close_protein_gap_for_meal(_out, float(target_protein), _cl_db, _cands,
+                                                     country=_swap_country)
                 if _added and clean_ingredients:
                     _reval_cl = validate_ingredients_against_pantry(
                         _out.get("ingredients") or [], clean_ingredients,
@@ -3465,11 +3473,14 @@ def swap_meal(form_data: dict, surface: str = "individual"):
                 _cur_p = float(_out.get("protein") or 0)
                 if _cur_p < 0.90 * float(target_protein):
                     _out["_protein_closed"] = False
-                    _cands_pc = [c for c in _safe_pc(allergies, _cap_db, min_protein=18.0)
+                    # [P2-AGENT-PROTEIN-CLOSER-COUNTRY · 2026-08-23] tercer par del mismo defecto.
+                    _cands_pc = [c for c in _safe_pc(allergies, _cap_db, min_protein=18.0,
+                                                     country=_swap_country)
                                  if not any(_t in str(c[1]).lower()
                                             for _t in ("queso", "yogur", "leche", "ricotta", "cottage", "requeson"))]
                     if _cands_pc:
-                        _close_pc(_out, float(target_protein), _cap_db, _cands_pc, max_add_g=90)
+                        _close_pc(_out, float(target_protein), _cap_db, _cands_pc, max_add_g=90,
+                                  country=_swap_country)
             if _nd or _nb:
                 logger.info(f"🔒 [P1-SWAP-PORTION-CAP] plato de swap recortado: cap_dm2={_nd} "
                             f"cap_baria={_nb} | meal_type={meal_type}")
@@ -5908,14 +5919,14 @@ def chat_with_agent(session_id: str, prompt: str, current_plan: Optional[dict] =
         system_prompt += f"\n{culinary_knowledge_base_for_country(_coach_country)}"
         system_prompt += build_tools_instructions(user_id, plan_en_pausa=bool(current_plan) and plan_vigente is None)
         # --- bloques dinámicos (volátiles) al final ---
-        system_prompt += build_temporal_context()
+        system_prompt += build_temporal_context(local_date=local_date, tz_offset=tz_offset)
         system_prompt += build_circadian_context(schedule_type)
         system_prompt += build_temporal_proactive_context()
         if rag_context:
             system_prompt += f"\n{rag_context}"
     else:
         system_prompt = CHAT_AGENT_INLINE_PROMPT
-        system_prompt += build_temporal_context()
+        system_prompt += build_temporal_context(local_date=local_date, tz_offset=tz_offset)
         system_prompt += build_circadian_context(schedule_type)
         system_prompt += build_temporal_proactive_context()
         system_prompt += coach_country_context(_coach_country)
@@ -6054,7 +6065,16 @@ def chat_with_agent(session_id: str, prompt: str, current_plan: Optional[dict] =
     # Inyectar contexto del diario del día (paridad con stream)
     if user_id and user_id != "guest":
         try:
-            consumed_today = get_consumed_meals_today(user_id)
+            # [P3-CHAT-NOSTREAM-CONTEXTO-TEMPORAL-RD · 2026-08-23] Paridad EXACTA con el
+            # stream (`chat_with_agent_stream`), incluido el clamp y el `None` preservado:
+            # `get_consumed_meals_today` exige `date_str` Y `tz_offset_mins` no nulos para
+            # usar el día local, así que inventar un offset aquí cambiaría la ventana de los
+            # clientes que no mandan ninguno. Sin esto la ventana era la del huso por
+            # defecto: para un usuario en Madrid a las 00:30, la cena de anoche entraba como
+            # "registrado HOY" — el mismo defecto que `P1-DIARY-TZ-DEFAULT-RD` cerró en el
+            # stream y que este path nunca heredó.
+            _tz_diario = _clamp_tz_offset_mins(tz_offset) if tz_offset is not None else None
+            consumed_today = get_consumed_meals_today(user_id, date_str=local_date, tz_offset_mins=_tz_diario)
             if consumed_today:
                 total_consumed = sum(m.get('calories', 0) for m in consumed_today)
                 meals_text = ", ".join([f"{m.get('meal_name')} ({m.get('calories')} kcal)" for m in consumed_today])
@@ -6088,9 +6108,12 @@ def chat_with_agent(session_id: str, prompt: str, current_plan: Optional[dict] =
                         # [P1-TODAY-REMAINING · 2026-07-28] Tier factual/alertas +
                         # comidas del plan restantes hoy — SSOT compartida con el
                         # path stream (`_build_today_remaining_context`).
+                        # [P3-CHAT-NOSTREAM-CONTEXTO-TEMPORAL-RD · 2026-08-23] El `None` hacía
+                        # que "las comidas que te quedan HOY" se resolvieran contra el día del
+                        # servidor: en Madrid a las 00:30 el coach listaba las del día anterior.
                         system_prompt += _build_today_remaining_context(
                             plan_vigente, consumed_today, target_cal_int, total_consumed,
-                            local_date_str=None,
+                            local_date_str=local_date,
                         )
                     except ValueError:
                         pass
@@ -6100,9 +6123,13 @@ def chat_with_agent(session_id: str, prompt: str, current_plan: Optional[dict] =
             logger.error(f"⚠️ Error inyectando contexto de diario (non-stream): {e}")
 
         # [P3-AGENT-HYDRATION-CONTEXT · 2026-05-27] Inyectar hidratación
-        # viva si el toggle está activo. Non-stream path no recibe
-        # `local_date`, así que cae al UTC server-side dentro del helper.
-        system_prompt += _build_hydration_context(user_id, local_date_str=None)
+        # viva si el toggle está activo.
+        # [P3-CHAT-NOSTREAM-CONTEXTO-TEMPORAL-RD · 2026-08-23] Este bloque NO estaba roto
+        # (con `None` resuelve el día server-side desde `user_id` vía `_local_date_str_for_user`,
+        # que sí conoce el huso del usuario). Se le pasa `local_date` por PARIDAD con el stream:
+        # cuando el cliente ya mandó su fecha, usarla ahorra el round-trip y elimina la última
+        # forma en que los bloques de este prompt podían discrepar entre sí sobre qué día es hoy.
+        system_prompt += _build_hydration_context(user_id, local_date_str=local_date)
         # [P1-CHAT-PANTRY-AWARE · 2026-07-12] Snapshot real de la Nevera.
         system_prompt += _build_pantry_context(user_id)
         # [P1-CHAT-TODAY-CONTEXT · 2026-07-12] HOY → día del menú + ciclo.
@@ -6112,8 +6139,14 @@ def chat_with_agent(session_id: str, prompt: str, current_plan: Optional[dict] =
         # [P2-CHUNK-OVERDUE-SIGNAL · 2026-08-04] `plan_record` ya se resolvió
         # arriba para el shopping-delta — reenviar su `id` evita un 2º roundtrip
         # y permite filtrar el COUNT de la cola por `meal_plan_id`.
+        # [P3-CHAT-NONSTREAM-RD-DATE · 2026-08-23] … y la paridad que el comentario de
+        # arriba DECLARABA no existía: el stream pasa `local_date_str`/`tz_offset` y este
+        # path los omitía, así que "los días pasados" se contaban desde el día del
+        # servidor. Para un usuario en Madrid a las 00:30 eso desplaza la ventana entera
+        # un día: le resume el menú de anteayer como si fuera el de ayer.
         system_prompt += _build_past_days_context(
-            user_id, current_plan, plan_id=(plan_record or {}).get("id"),
+            user_id, current_plan, local_date_str=local_date, tz_offset=tz_offset,
+            plan_id=(plan_record or {}).get("id"),
         )
 
     # [P1-COACH-LANGUAGE-RECENCY · 2026-08-18] REFUERZO de la directiva de idioma como

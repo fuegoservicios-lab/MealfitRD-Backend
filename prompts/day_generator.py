@@ -848,6 +848,69 @@ _BETA_NEUTRALIZATION_SURVIVORS = (
 _COUNTRY_PROMPT_RENDER_CACHE = {}
 
 
+# [P2-CATALOG-ACHIOTE-MX-PR · 2026-08-23] SSOT de los ejemplos de «prohibido» de la regla 5.
+#
+# Medido cruzando el render del catálogo verificado contra su propia prosa: el bloque le decía al
+# mexicano y al puertorriqueño que OMITIERA el achiote y en la misma pantalla le ofrecía 'Achiote',
+# 'Aceite de achiote' y 'Sazón con culantro y achiote'; y a los SEIS países les prohibía la salsa de
+# soya y la mostaza, ambas filas vivas del catálogo (DO incluido). Es exactamente la
+# auto-contradicción que `P1-SPICES-CATALOG-SYNC` arregló a mano el 2026-07-01 para las especias del
+# lote 2, con su modo de fallo ya medido: «el LLM omitía sazones legítimas y los guisos salían
+# desabridos». El achiote es la base del pernil y del sofrito puertorriqueño.
+#
+# Escribir la lista a mano es lo que la hace envejecer: se arregló una vez y volvió a driftar en
+# cuanto Fase 2 dio de alta 141 filas. Por eso los ejemplos ya no se afirman, se DERIVAN: se filtra
+# de este literal todo el que el catálogo verificado ofrezca para ESE usuario. Una sola tupla para
+# las dos superficies (regla 5 aquí, prosa del bloque de catálogo en `graph_orchestrator`) — dos
+# listas serían dos tablas, y este repo ya sabe cómo terminan.
+PROHIBITED_EXAMPLE_FOODS = (
+    "achiote", "sazón en polvo", "clavo dulce", "pimienta de olor", "SALSA DE SOYA",
+    "salsa inglesa/Worcestershire", "salsa de pescado", "teriyaki", "BBQ", "mostaza",
+    "miel si no está listada",
+)
+
+# El literal TAL COMO vive dentro de la regla 5 (incluido el espacio de delante: si no queda ningún
+# ejemplo, se va también el espacio y la frase no se queda coja).
+RULE5_PROHIBITED_EXAMPLES_LITERAL = " (ej. " + ", ".join(PROHIBITED_EXAMPLE_FOODS) + ")"
+
+
+def prohibited_examples_not_offered(examples, offered_names) -> list:
+    """Los ejemplos de «prohibido» que el catálogo verificado NO le ofrece a este usuario.
+
+    Comparación por subcadena sin acentos y en minúsculas contra los NOMBRES del catálogo, no al
+    revés: la fila se llama 'Aceite de achiote' y el ejemplo es 'achiote'. Sin catálogo (lista
+    vacía) devuelve los ejemplos intactos — quedarse sin la advertencia es peor que repetirla.
+    """
+    if not offered_names:
+        return list(examples)
+    try:
+        from constants import strip_accents
+    except Exception:
+        def strip_accents(_s):
+            import unicodedata
+            return "".join(c for c in unicodedata.normalize("NFKD", str(_s))
+                           if not unicodedata.combining(c))
+    _offered = [strip_accents(str(n).lower()) for n in offered_names]
+    return [ex for ex in examples
+            if not any(strip_accents(str(ex).lower()) in _n for _n in _offered)]
+
+
+def strip_offered_prohibited_examples(prompt_text: str, offered_names) -> str:
+    """Reescribe los ejemplos de la regla 5 dejando fuera lo que el catálogo SÍ ofrece.
+
+    Idempotente y fail-open: si el literal no está (prompt distinto, regla reescrita) devuelve el
+    texto tal cual. La regla en sí —«PROHIBIDO inventar o usar cualquier alimento fuera del
+    catálogo»— no se toca nunca: lo que se poda son los EJEMPLOS que la contradecían.
+    """
+    if not isinstance(prompt_text, str) or RULE5_PROHIBITED_EXAMPLES_LITERAL not in prompt_text:
+        return prompt_text
+    kept = prohibited_examples_not_offered(PROHIBITED_EXAMPLE_FOODS, offered_names)
+    if len(kept) == len(PROHIBITED_EXAMPLE_FOODS):
+        return prompt_text
+    repl = (" (ej. " + ", ".join(kept) + ")") if kept else ""
+    return prompt_text.replace(RULE5_PROHIBITED_EXAMPLES_LITERAL, repl)
+
+
 def build_day_generator_system_prompt(diet=None, country=None) -> str:
     """Render del system prompt del day-gen por dieta canónica Y país (F1-T2), apilado SOBRE
     el render de dieta. `country` None/'DO' (o desconocido — `canonicalize_country` fail-safe)

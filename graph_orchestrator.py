@@ -5269,6 +5269,21 @@ _DAY_SYSTEM_INSTRUCTION_CACHED = (
 _DAY_SYSTEM_INSTRUCTION_BY_DIET_CACHE = {}
 
 
+def _strip_offered_prohibited_examples_for(prompt_text: str, form_data) -> str:
+    """Poda de la regla 5 los ejemplos de «prohibido» que el catálogo de ESTE usuario ofrece.
+
+    Fail-open a propósito: cualquier fallo devuelve el prompt intacto. Quedarse con una
+    advertencia de más es un guiso desabrido; quedarse sin prompt es no generar el plan.
+    """
+    try:
+        from prompts.day_generator import strip_offered_prohibited_examples as _sope
+        return _sope(prompt_text, _verified_catalog_names(form_data))
+    except Exception as _sope_e:
+        logger.debug("[P2-CATALOG-ACHIOTE-MX-PR] poda de ejemplos no-op: %s: %s",
+                     type(_sope_e).__name__, str(_sope_e)[:160])
+        return prompt_text
+
+
 def _day_system_instruction_for_diet(form_data) -> str:
     from constants import canonicalize_diet_type as _cdt, country_for_form_data
     from prompts.day_generator import build_day_generator_system_prompt as _bdgsp
@@ -5296,6 +5311,11 @@ def _day_system_instruction_for_diet(form_data) -> str:
 # la regla de exclusión del mismo prompt → subía rechazo→retry). El caso base (sin restricción) usa la
 # key frozenset() → byte-equivalente al bloque previo = prompt-cache preservado para la mayoría.
 _VERIFIED_CATALOG_INSTRUCTION_CACHE = {}
+# [P2-CATALOG-ACHIOTE-MX-PR · 2026-08-23] Los NOMBRES que el bloque de arriba le ofrece a este
+# usuario, con la MISMA clave. No es un segundo predicado: es el mismo cómputo, guardado, para
+# que la regla 5 del day-gen pueda podar sus ejemplos de «prohibido» con lo que el catálogo
+# realmente ofrece. Recalcularlos aparte sería el espejo que drifta.
+_VERIFIED_CATALOG_NAMES_CACHE = {}
 
 # [P1-BETA-CATALOG-DO-EXCLUSIVE · 2026-08-23] Preparaciones y gentilicios
 # inequívocamente dominicanos que no deben viajar al catálogo cerrado de los
@@ -5386,6 +5406,36 @@ def _verified_catalog_excluded_tokens(form_data) -> frozenset:
     return frozenset(excluded)
 
 
+def _verified_catalog_cache_key(form_data=None):
+    """Clave del catálogo verificado: (tokens excluidos por alergia/dieta, país canónico).
+
+    [P2-CATALOG-ACHIOTE-MX-PR · 2026-08-23] Extraída de `_get_verified_catalog_instruction`
+    para que el bloque y sus nombres se guarden bajo la MISMA clave sin escribir la derivación
+    dos veces — una segunda copia de esta clave es una manera de que las dos cachés se separen
+    en silencio. La derivación del país sigue siendo la ÚNICA puerta (`country_for_form_data`).
+    """
+    try:
+        from constants import country_for_form_data as _cffd_vc
+        _vc_country = _cffd_vc(form_data)
+    except Exception:
+        _vc_country = "DO"
+    return (_verified_catalog_excluded_tokens(form_data), _vc_country)
+
+
+def _verified_catalog_names(form_data=None) -> tuple:
+    """Los nombres del catálogo verificado que ESTE usuario tiene ofrecidos en su prompt.
+
+    Se puebla como efecto del builder del bloque (mismo cómputo, misma clave). Si la caché del
+    bloque fue vaciada —los tests de alérgenos lo hacen— se reconstruye: devolver nombres de una
+    corrida anterior mientras el bloque se recalcula es justo la clase de desfase que este
+    filtro existe para evitar. `()` cuando el knob está off o el catálogo no resuelve.
+    """
+    _key = _verified_catalog_cache_key(form_data)
+    if _key not in _VERIFIED_CATALOG_NAMES_CACHE or _key not in _VERIFIED_CATALOG_INSTRUCTION_CACHE:
+        _get_verified_catalog_instruction(form_data)
+    return _VERIFIED_CATALOG_NAMES_CACHE.get(_key, ())
+
+
 def _get_verified_catalog_instruction(form_data=None) -> str:
     try:
         from shopping_calculator import _verified_ingredients_only_enabled, get_master_ingredients
@@ -5400,12 +5450,8 @@ def _get_verified_catalog_instruction(form_data=None) -> str:
     # para todos los demás — en producción, el primer usuario decidiría lo que ven los otros.
     # Derivación por la ÚNICA puerta (`country_for_form_data`, espina T1): un segundo
     # canonicalizador aquí sería la tabla que P1-DIET-CANON-SSOT ya pagó una vez.
-    try:
-        from constants import country_for_form_data as _cffd_vc
-        _vc_country = _cffd_vc(form_data)
-    except Exception:
-        _vc_country = "DO"
-    _cache_key = (excluded, _vc_country)
+    _cache_key = _verified_catalog_cache_key(form_data)
+    _vc_country = _cache_key[1]
     _cached = _VERIFIED_CATALOG_INSTRUCTION_CACHE.get(_cache_key)
     if _cached is not None:
         return _cached
@@ -5464,13 +5510,37 @@ def _get_verified_catalog_instruction(form_data=None) -> str:
             # guards) — no tiene sentido listarlos como "USA EXCLUSIVAMENTE" si el mismo prompt los prohíbe.
             def _is_excluded(_nm: str) -> bool:
                 _nl = strip_accents(_nm.lower())
-                return any(
-                    _t and _re_vc.search(_patron_termino_alergeno(_t), _nl)
-                    for _t in excluded
-                )
+                for _t in excluded:
+                    if not _t:
+                        continue
+                    _m_vc = _re_vc.search(_patron_termino_alergeno(_t), _nl)
+                    if not _m_vc:
+                        continue
+                    # [P3-SEMOLA-MAIZ-GLUTEN-FP · 2026-08-23] MISMA excusa que el scanner
+                    # (`_allergen_term_base_excused`), no una segunda tabla: sin ella el celíaco
+                    # perdía «Sémola de maíz» del bloque «USA EXCLUSIVAMENTE» aunque el backstop
+                    # ya no la marcara — medido, la fila desaparecía del catálogo de un perfil US
+                    # con alergia a gluten y reaparecía sin la alergia.
+                    if _allergen_term_base_excused(_t, _nl[_m_vc.end(): _m_vc.end() + 18]):
+                        continue
+                    return True
+                return False
             names = [n for n in names if not _is_excluded(n)]
         if not names:
             return ""
+        # [P2-CATALOG-ACHIOTE-MX-PR · 2026-08-23] Los ejemplos de «prohibido» dejan de
+        # escribirse a mano y se DERIVAN de esta misma lista. Medido antes de tocar: para MX y
+        # PR el bloque decía «OMÍTELO (ej. achiote…)» mientras el render de abajo ofrecía
+        # 'Achiote', 'Aceite de achiote' y 'Sazón con culantro y achiote'; y para los SEIS
+        # países prohibía la salsa de soya y la mostaza, que son filas vivas del catálogo. La
+        # tupla de ejemplos es la MISMA que la regla 5 del day-gen (SSOT en prompts/day_generator).
+        try:
+            from prompts.day_generator import (PROHIBITED_EXAMPLE_FOODS as _pef_vc,
+                                               prohibited_examples_not_offered as _peno_vc)
+            _vc_kept = _peno_vc(_pef_vc, names)
+        except Exception:
+            _vc_kept = []
+        _vc_ej = (" (ej. " + ", ".join(_vc_kept) + ")") if _vc_kept else ""
         block = (
             "\n\n=== CATÁLOGO VERIFICADO — USA EXCLUSIVAMENTE ESTOS ALIMENTOS ===\n"
             "El usuario SOLO puede comprar alimentos con precio verificado en el supermercado. "
@@ -5481,8 +5551,8 @@ def _get_verified_catalog_instruction(form_data=None) -> str:
             # el lote 2 del catálogo (2026-06-26) verificó (comino/cúrcuma/laurel/tomillo/curry): la instrucción
             # era auto-contradictoria (aparecían en la lista "USA EXCLUSIVAMENTE" Y como ejemplo de prohibido) →
             # el LLM omitía sazones legítimas y los guisos salían desabridos. tooltip-anchor: P1-SPICES-CATALOG-SYNC
-            "Si una receta tradicional pide algo que no está aquí (ej. achiote, sazón en polvo, clavo "
-            "dulce, pimienta de olor, salsa de soya), OMÍTELO por completo — usa solo los sazonadores "
+            f"Si una receta tradicional pide algo que no está aquí{_vc_ej}, OMÍTELO por "
+            "completo — usa solo los sazonadores "
             "verificados de la lista (sal, ajo, cebolla, orégano, cilantro, perejil, y si aparecen abajo: "
             # [P1-VERIFIED-CATALOG-COUNTRY · 2026-08-21] «para dar sabor criollo real» viajaba al
             # ÚLTIMO bloque del prompt de un usuario de Madrid, mientras el resto del stack beta le
@@ -5506,6 +5576,7 @@ def _get_verified_catalog_instruction(form_data=None) -> str:
             "uno de estos):\n"
             + ", ".join(names)
         )
+        _VERIFIED_CATALOG_NAMES_CACHE[_cache_key] = tuple(names)
         _VERIFIED_CATALOG_INSTRUCTION_CACHE[_cache_key] = block
         return block
     except Exception as e:
@@ -6475,6 +6546,25 @@ def _dish_examples_block_from_file(path: str) -> str:
         )
 
 
+def _culinary_judge_hints_block(hint_table) -> str:
+    """El bloque «GUÍA POSITIVA POR HORARIO» a partir de una tabla de hints por slot.
+
+    [P2-JUDGE-POSITIVE-HINT-DEAD-PAIR · 2026-08-23] Extraído del cuerpo de la rúbrica (byte a
+    byte, mismo orden de slots) para poder RECONSTRUIR el bloque desde el espejo neutro en la
+    rama beta en vez de parchearlo con `.replace()`, que es lo que se había podrido.
+    """
+    _hint_lines = []
+    try:
+        for _sk, _label in _CULINARY_JUDGE_SLOT_LABELS.items():
+            _hint = (hint_table or {}).get(_sk)
+            if _hint:
+                _hint_lines.append(f"- {_label}: {_hint}")
+    except Exception:
+        pass
+    return ("GUÍA POSITIVA POR HORARIO (orientativa, NO una regla dura — ver aclaración "
+            "abajo):\n" + "\n".join(_hint_lines) + "\n\n") if _hint_lines else ""
+
+
 def _build_culinary_judge_rubric() -> str:
     """[P1-CULINARY-JUDGE] Construye la rúbrica ESTABLE del juez culinario — llamada UNA sola
     vez a import-time, asignada abajo a `_CULINARY_JUDGE_RUBRIC`. El prefix del prompt (este
@@ -6493,16 +6583,7 @@ def _build_culinary_judge_rubric() -> str:
     solo pierde los ejemplos curados). tooltip-anchor: P1-CULINARY-JUDGE-RUBRIC
     """
     _examples_block = _dish_examples_block_from_file(_DO_DISH_TEMPLATES_PATH)
-    _hint_lines = []
-    try:
-        for _sk, _label in _CULINARY_JUDGE_SLOT_LABELS.items():
-            _hint = SLOT_POSITIVE_HINT.get(_sk)
-            if _hint:
-                _hint_lines.append(f"- {_label}: {_hint}")
-    except Exception:
-        pass
-    _hints_block = ("GUÍA POSITIVA POR HORARIO (orientativa, NO una regla dura — ver aclaración "
-                     "abajo):\n" + "\n".join(_hint_lines) + "\n\n") if _hint_lines else ""
+    _hints_block = _culinary_judge_hints_block(SLOT_POSITIVE_HINT)
     return (
         "Eres un juez culinario dominicano experto evaluando un plan de alimentación generado "
         "por IA. Tu trabajo es señalar SOLO violaciones CLARAS e inequívocas de coherencia "
@@ -6671,18 +6752,34 @@ def _culinary_judge_rubric_for_country(country: str) -> str:
     # Sin tabla de gentilicios: decir «un español / un mexicano» exigiría una 2ª tabla (la que
     # P1-DIET-CANON-SSOT prohíbe). Se reformula con `name_es`, que ya está aquí — menos elegante
     # y sin nada que mantener.
+    # [P2-JUDGE-POSITIVE-HINT-DEAD-PAIR · 2026-08-23] La guía positiva se RECONSTRUYE desde el
+    # espejo neutro que ya existía (`constants._SLOT_POSITIVE_HINT_NEUTRAL`), no se parchea.
+    #
+    # El par que la parcheaba estaba MUERTO: anclaba «El desayuno dominicano va: mangú/tubérculos»
+    # y el literal SSOT dice «mangú/víveres». Su autor lo escribió contra el texto YA neutralizado,
+    # pero este bucle corre ANTES de `neutralize_do_lexicon`. Resultado medido: disparaba el par
+    # genérico, el neutralizador convertía víveres→tubérculos y el juez español leía «El desayuno
+    # de España va: mangú/tubérculos». Los otros tres slots ni siquiera tenían par: al juez de
+    # España se le decía que el almuerzo es «arroz+habichuela, locrio, moro, asopao, pasta criolla».
+    #
+    # Sustituir el bloque ENTERO cierra los cuatro slots de una vez y no puede volver a quedarse
+    # desincronizado con el literal: los dos lados salen del mismo constructor.
+    from constants import _SLOT_POSITIVE_HINT_NEUTRAL as _spht_neutral
+    _do_hints = _culinary_judge_hints_block(SLOT_POSITIVE_HINT)
+    _neutral_hints = _culinary_judge_hints_block(_spht_neutral)
+    if _do_hints and _neutral_hints:
+        rendered = rendered.replace(_do_hints, _neutral_hints)
     for _frase_do, _frase_beta in (
         ("si un dominicano lo vería", f"si alguien de {name_es} lo vería"),
         ("cenas dominicanas legítimas", "cenas locales legítimas"),
         ("la creatividad dominicana legítima", "la creatividad culinaria local legítima"),
         ("(dominicano o internacional)", "(local o internacional)"),
-        ("paladar dominicano", f"paladar de {name_es}"),
-        ("cocina dominicana", f"cocina de {name_es}"),
-        # La guía positiva por slot, que es la mitad que el audit señaló como no cambiada («el
-        # espejo negativo se cambió, el positivo no»). 'mangú' SÍ se sustituye AQUÍ —a diferencia
-        # del planner, donde F1 lo conserva dentro de un ejemplo INCORRECTO— porque aquí es guía
-        # POSITIVA: le está diciendo al juez qué debería ver en un desayuno.
-        ("El desayuno dominicano va: mangú/tubérculos", f"El desayuno de {name_es} va: tubérculos"),
+        # [P2-JUDGE-POSITIVE-HINT-DEAD-PAIR · 2026-08-23] Aquí vivían otros DOS pares muertos,
+        # «paladar dominicano» y «cocina dominicana»: ninguna de las dos frases existe en la
+        # rúbrica cruda sobre la que corre este bucle (medido con el blanket del test de este
+        # P-fix, que fue quien los encontró — nadie los había echado en falta porque un par
+        # muerto no cambia el render, sólo deja de arreglar lo que dice que arregla). Se van:
+        # código que afirma traducir y no traduce es peor que su ausencia.
         ("desayuno dominicano", f"desayuno de {name_es}"),
     ):
         rendered = rendered.replace(_frase_do, _frase_beta)
@@ -8587,9 +8684,15 @@ async def generate_days_parallel_node(state: PlanState) -> dict:
             # [P2-VERIFIED-CATALOG-NOT-FILTERED · 2026-06-22] Se pasa form_data → el catálogo excluye
             # alérgenos/dieta del usuario (cache keyed por set excluido; base sin restricción = idéntico).
             # [P1-DIET-BLIND-DIRECTIVES · 2026-08-08] Render por dieta (balanced = byte-idéntico).
+            # [P2-CATALOG-ACHIOTE-MX-PR · 2026-08-23] La regla 5 y el bloque de catálogo son las
+            # DOS superficies del mismo defecto, y sólo aquí conviven: el strip se aplica sobre
+            # el texto ya ensamblado, con los nombres que el propio bloque acaba de ofrecer.
+            # Determinista por (alergias/dieta, país) ⇒ el prompt-cache sigue dando hits.
             day_system_instruction = _day_system_instruction_for_diet(form_data) + _get_verified_catalog_instruction(form_data)
+            day_system_instruction = _strip_offered_prohibited_examples_for(day_system_instruction, form_data)
         else:
             streaming_prompt = prompt_text + _DAY_SCHEMA_INSTRUCTION + _get_verified_catalog_instruction(form_data)
+            streaming_prompt = _strip_offered_prohibited_examples_for(streaming_prompt, form_data)
             day_system_instruction = None
 
         # P1-10: HumanMessage/AIMessage/ToolMessage están a nivel módulo
@@ -14991,6 +15094,45 @@ _PLANT_ADJ_EXCUSE_RX = _re_mod.compile(
     r"(?:soya|soja|coco|almendra|almendras|avena|arroz|nuez|nueces|avellana|mani|cacahuate|cacahuete|"
     r"maranon|anacardo|cajuil|guisante|arveja|seitan|tempeh|vegan[oa]?|vegetal(?:es)?|plant)\b"
 )
+# [P3-SEMOLA-MAIZ-GLUTEN-FP · 2026-08-23] Excusa acotada AL TÉRMINO (la plant-adj de arriba es
+# universal: excusa cualquier término de cualquier categoría seguido de una base vegetal).
+#
+# Medido, barrido de las 347 filas del catálogo contra `clinical_backstop_for_meal(allergies=
+# ['Gluten'])`: 30 filas marcadas, y entre ellas «Sémola de maíz» (grits/polenta), que no lleva
+# gluten. Las vecinas se comportan bien («Tortilla de maíz» → 0), o sea que es un caso aislado y
+# no un fallo del criterio. Al celíaco estadounidense se le quitaba además del bloque «USA
+# EXCLUSIVAMENTE» (verificado: la fila desaparecía del catálogo verificado de un perfil US con
+# alergia a gluten y reaparecía sin ella).
+#
+# «Sémola de arroz» YA quedaba absuelta —'arroz' está en la plant-adj—, lo que confirma que la
+# forma del arreglo es la correcta y que sólo faltaban las bases que ese regex no lista.
+#
+# POR QUÉ NO SE AÑADE 'maiz' A LA PLANT-ADJ: esa excusa es universal, así que «Pan de maíz»
+# —que SÍ lleva trigo— dejaría de marcarse. Aquí la clave es el TÉRMINO que casó ('semola'), de
+# modo que la absolución no puede alcanzar a 'pan', 'harina' ni a ningún otro. La dirección
+# peligrosa (servir el alérgeno) no se abre: la sémola de trigo sigue marcada, y también la
+# desnuda («Sémola» sola), que es la que puede ser de trigo.
+# tooltip-anchor: P3-SEMOLA-MAIZ-GLUTEN-FP
+_ALLERGEN_TERM_BASE_EXCUSES = {
+    "semola": ("maiz", "yuca", "arroz"),
+}
+_ALLERGEN_TERM_BASE_EXCUSE_RX = {
+    _t: _re_mod.compile(r"^\s*de\s+(?:" + "|".join(_re_mod.escape(_b) for _b in _bases) + r")\b")
+    for _t, _bases in _ALLERGEN_TERM_BASE_EXCUSES.items()
+}
+
+
+def _allergen_term_base_excused(term, tail) -> bool:
+    """¿El término de alérgeno que acaba de casar va seguido de una base que lo hace inocuo?
+
+    `tail` es el texto INMEDIATAMENTE posterior al match (ya en minúsculas y sin acentos, igual
+    que la plant-adj). Devuelve False para cualquier término sin entrada — no hay excusa genérica.
+
+    tooltip-anchor: _ALLERGEN_TERM_BASE_EXCUSES (test_p3_semola_maiz_gluten_fp.py)"""
+    _rx = _ALLERGEN_TERM_BASE_EXCUSE_RX.get(str(term or "").strip().lower())
+    return bool(_rx and _rx.match(str(tail or "")))
+
+
 # [P1-ALLERGEN-NEGATION-EXCUSE · 2026-08-09] Excusa de PREFIJO (la plant-adj mira el sufijo): un
 # token de alérgeno inmediatamente precedido por negación («sin gluten», «libre de gluten», «cero
 # gluten», «no contiene gluten») declara AUSENCIA — el generador estaba CUMPLIENDO («avena
@@ -15129,6 +15271,12 @@ def _scan_allergen_violations(plan: dict, allergies) -> list:
                         # no violan la alergia a LÁCTEOS (el alérgico a maní/coco matchea vía su
                         # propio término directo).
                         if _PLANT_ADJ_EXCUSE_RX.match(ing_low[_m_al.end(): _m_al.end() + 18]):
+                            continue
+                        # [P3-SEMOLA-MAIZ-GLUTEN-FP · 2026-08-23] excusa acotada AL TÉRMINO que
+                        # casó: «sémola de maíz/yuca/arroz» no lleva gluten. 'pan' y 'harina' no
+                        # tienen entrada, así que «Pan de maíz» sigue marcado.
+                        if _allergen_term_base_excused(
+                                f, ing_low[_m_al.end(): _m_al.end() + 18]):
                             continue
                         # [P1-ALLERGEN-NEGATION-EXCUSE · 2026-08-09] «sin/libre de/cero/no
                         # contiene <token>» = ausencia declarada del token — no violación.

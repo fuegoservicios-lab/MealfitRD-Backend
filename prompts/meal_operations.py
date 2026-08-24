@@ -154,6 +154,15 @@ _MODIFY_RULE65_BETA = (
     'PREPARACIÓN, NUNCA en inventar alimentos fuera del catálogo verificado.'
 )
 
+# [P2-SWAP-MODIFY-COUNTRY-UNNAMED · 2026-08-23] Los dos renders beta estaban NEUTRALIZADOS pero
+# no nombraban el país: medido antes de tocar, `build_swap_meal_prompt_template` daba 3904 chars
+# byte-idénticos para ES, MX y US (ES==MX y ES==US ambos True), sin la cadena 'España' en ninguno,
+# y lo mismo el de modify (3674). Al modelo se le pedía «una preparación apetecible del contexto
+# local e internacional del usuario» sin decirle CUÁL es ese contexto. La cabecera es el SSOT
+# `constants.beta_prompt_country_header` (el mismo que ya usan planner.py y preferences.py), no una
+# segunda tabla de gentilicios. Va DENTRO del builder y antes del cacheo: `_MEAL_OPS_COUNTRY_CACHE`
+# ya está keyed por (superficie, país), así que aquí la clave ya estaba bien. DO corta arriba y
+# devuelve la constante intacta (ancla `is`), así que su render sigue byte-idéntico.
 _MEAL_OPS_COUNTRY_CACHE: dict = {}
 
 
@@ -163,7 +172,7 @@ def build_swap_meal_prompt_template(country=None) -> str:
 
     tooltip-anchor: build_swap_meal_prompt_template (test_p1_country_system_f1.py)
     """
-    from constants import canonicalize_country
+    from constants import beta_prompt_country_header, canonicalize_country
     canon = canonicalize_country(country)
     if canon == "DO":
         return SWAP_MEAL_PROMPT_TEMPLATE
@@ -172,6 +181,7 @@ def build_swap_meal_prompt_template(country=None) -> str:
         return cached
     rendered = SWAP_MEAL_PROMPT_TEMPLATE.replace(_SWAP_RULE25_DO, _SWAP_RULE25_BETA)
     rendered = rendered.replace(_SWAP_RULE3_DO, _SWAP_RULE3_BETA)
+    rendered = beta_prompt_country_header(canon) + rendered
     _MEAL_OPS_COUNTRY_CACHE[("swap", canon)] = rendered
     return rendered
 
@@ -182,7 +192,7 @@ def build_modify_meal_prompt_template(country=None) -> str:
 
     tooltip-anchor: build_modify_meal_prompt_template (test_p1_country_system_f1.py)
     """
-    from constants import canonicalize_country
+    from constants import beta_prompt_country_header, canonicalize_country
     canon = canonicalize_country(country)
     if canon == "DO":
         return MODIFY_MEAL_PROMPT_TEMPLATE
@@ -191,5 +201,6 @@ def build_modify_meal_prompt_template(country=None) -> str:
         return cached
     rendered = MODIFY_MEAL_PROMPT_TEMPLATE.replace(_MODIFY_RULE4_DO, _MODIFY_RULE4_BETA)
     rendered = rendered.replace(_MODIFY_RULE65_DO, _MODIFY_RULE65_BETA)
+    rendered = beta_prompt_country_header(canon) + rendered
     _MEAL_OPS_COUNTRY_CACHE[("modify", canon)] = rendered
     return rendered

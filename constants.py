@@ -1983,7 +1983,14 @@ COUNTRY_POOLS: dict[str, dict[str, list]] = {
         "proteins": [
             "Chorizo mexicano", "Chorizo verde", "Cecina", "Camarones", "Filete de pescado blanco",
             "Cerdo", "Pechuga de pollo", "Muslo de pollo", "Huevo", "Carne de res",
-            "Carne de res molida", "Longaniza dominicana", "Chivo", "Costilla de cerdo", "Salmón",
+            # [P2-COUNTRY-POOL-DO-RESIDUE · 2026-08-23] Era "Longaniza dominicana": el gentilicio
+            # de OTRO país dentro del pool de México. No es copy — ese string es el IDENTIFICADOR
+            # con el que resuelven la lista de compras, la nevera y el backstop, así que el
+            # seeder le asignaba al mexicano la fila dominicana de verdad. "Chicharrón" es fila
+            # viva de `master_ingredients` Y la reclama el bloque de catálogo de MX
+            # (`_COUNTRY_CATALOG_UNPRICED_BY_COUNTRY['MX']`), o sea que el destino EXISTE: sin
+            # eso el pool apuntaría a nada, que es peor que el residuo.
+            "Carne de res molida", "Chicharrón", "Chivo", "Costilla de cerdo", "Salmón",
             "Tilapia", "Bacalao", "Atún en agua", "Pavo molido", "Pechuga de pavo",
         ],
         "carbs": [
@@ -2004,7 +2011,12 @@ COUNTRY_POOLS: dict[str, dict[str, list]] = {
         "proteins": [
             "Chicharrón", "Chorizo santarrosano", "Trucha", "Gallina criolla", "Carne de res",
             "Carne de res molida", "Pechuga de pollo", "Costilla de cerdo", "Cerdo", "Huevo",
-            "Camarones", "Filete de pescado blanco", "Morcilla", "Longaniza dominicana", "Bacalao",
+            # [P2-COUNTRY-POOL-DO-RESIDUE · 2026-08-23] Mismo residuo que en MX. Aquí el
+            # reemplazo NO es una fila propia de Colombia: medido, el pool 'CO' ya reclama TODAS
+            # las filas de proteína que el catálogo le atribuye a Colombia, así que el destino
+            # honesto es un nombre panhispánico que resuelve a fila viva ("Muslo de pollo", ya en
+            # los pools de MX y PR) en vez de inventar disponibilidad local que nadie midió.
+            "Camarones", "Filete de pescado blanco", "Morcilla", "Muslo de pollo", "Bacalao",
             "Tilapia", "Salmón", "Atún en agua", "Pavo molido", "Chivo",
         ],
         "carbs": [

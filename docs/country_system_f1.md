@@ -246,25 +246,56 @@ Repetir en miniatura el QA offline de Task 10 pero contra `mealfitrd.com` real:
 > Antes de apagar el knob, decide qué hacer con esos chunks y hazlo:
 >
 > ```sql
+> -- [P2-ROLLBACK-QUERY-CIEGA-AL-NULL · 2026-08-23] LA VERSIÓN ANTERIOR DE ESTAS TRES
+> -- CONSULTAS DEVOLVÍA 0 SIEMPRE, y su 0 se leía como «rollback limpio».
+> --
+> -- Medido contra producción el 2026-08-23: 93 chunks vivos, de los cuales 86 tienen
+> -- `pipeline_snapshot->'form_data'->>'country'` a NULL. Y en SQL:
+> --     SELECT (NULL NOT IN ('DO')) IS NULL  →  true
+> -- o sea que `NOT IN` sobre un campo NULL no es ni verdadero ni falso: la fila se omite
+> -- EN SILENCIO. Los 86 no salían, y con ellos habría salido cualquier chunk beta.
+> --
+> -- El 0 de hoy es correcto (no hay chunks beta), y por eso el defecto era invisible: la
+> -- consulta acertaba por casualidad. Habría dado 0 igual con la cola llena de españoles.
+> --
+> -- Y medía la fuente equivocada: al hacer pickup, el worker sobreescribe `form_data` con
+> -- el perfil VIVO, y `country` no está en `_protected_keys`. Así que el país que decide de
+> -- verdad es el del perfil cuando el snapshot no lo trae. `COALESCE` reproduce esa misma
+> -- precedencia, y el `'DO'` final la cierra: sin país en ningún lado, es dominicano.
+> --
+> -- Comprobación de que ya no hay huecos (2026-08-23): agrupando los 93 por esta misma
+> -- expresión salen 93 clasificados, ninguno fuera.
+>
 > -- 1. ¿Cuántos hay? (si sale 0, el rollback es limpio y puedes seguir)
-> SELECT status, pipeline_snapshot->'form_data'->>'country' AS pais, count(*)
-> FROM plan_chunk_queue
-> WHERE status NOT IN ('completed','cancelled','failed')
->   AND pipeline_snapshot->'form_data'->>'country' NOT IN ('DO')
+> SELECT status,
+>        COALESCE(q.pipeline_snapshot->'form_data'->>'country',
+>                 up.health_profile->>'country', 'DO') AS pais,
+>        count(*)
+> FROM plan_chunk_queue q
+> LEFT JOIN user_profiles up ON up.id = q.user_id
+> WHERE q.status NOT IN ('completed','cancelled','failed')
+>   AND COALESCE(q.pipeline_snapshot->'form_data'->>'country',
+>                up.health_profile->>'country', 'DO') <> 'DO'
 > GROUP BY 1,2;
 >
 > -- 2a. OPCIÓN A — congelar: el plan se queda como está, sin días nuevos híbridos.
 > --     Es la conservadora: el usuario conserva lo generado y no recibe nada incoherente.
-> UPDATE plan_chunk_queue SET status = 'cancelled'
-> WHERE status NOT IN ('completed','cancelled','failed')
->   AND pipeline_snapshot->'form_data'->>'country' NOT IN ('DO');
+> UPDATE plan_chunk_queue q SET status = 'cancelled'
+> FROM user_profiles up
+> WHERE up.id = q.user_id
+>   AND q.status NOT IN ('completed','cancelled','failed')
+>   AND COALESCE(q.pipeline_snapshot->'form_data'->>'country',
+>                up.health_profile->>'country', 'DO') <> 'DO';
 >
 > -- 2b. OPCIÓN B — convertir a dominicano: el plan sigue rellenándose, en criollo y coherente
 > --     con el motor apagado. Elige ésta sólo si el usuario ACEPTA que su plan pase a ser DO.
-> UPDATE plan_chunk_queue
-> SET pipeline_snapshot = jsonb_set(pipeline_snapshot, '{form_data,country}', '"DO"')
-> WHERE status NOT IN ('completed','cancelled','failed')
->   AND pipeline_snapshot->'form_data'->>'country' NOT IN ('DO');
+> UPDATE plan_chunk_queue q
+> SET pipeline_snapshot = jsonb_set(q.pipeline_snapshot, '{form_data,country}', '"DO"')
+> FROM user_profiles up
+> WHERE up.id = q.user_id
+>   AND q.status NOT IN ('completed','cancelled','failed')
+>   AND COALESCE(q.pipeline_snapshot->'form_data'->>'country',
+>                up.health_profile->>'country', 'DO') <> 'DO';
 > ```
 >
 > Ninguna de las dos es obviamente correcta —una deja el plan incompleto, la otra le cambia la

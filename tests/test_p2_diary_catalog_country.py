@@ -88,14 +88,25 @@ def test_un_dominicano_fuera_de_rd_sigue_pudiendo_registrar_lo_suyo(fs, plato):
 
 
 def test_lo_que_falta_es_anadir_no_quitar(fs):
-    """Ancla del pendiente REAL, para que no se confunda con el gap descartado: hoy no hay platos
-    de los países beta que registrar. Cuando los haya, este test se actualiza; mientras tanto deja
-    escrito que la deuda es de contenido y se paga añadiendo."""
+    """[CERRADO 2026-08-23 · P1-COUNTRY-DIARY-DISHES-60-DE-60-DO] Este test pedía por escrito que
+    se actualizara «cuando haya platos de los países beta que registrar». Ya los hay: 185,
+    derivados de los `constituents` ya curados de las plantillas por país y resueltos contra
+    `master_ingredients` — el mismo camino que los 60 criollos, sin recetas inventadas.
+
+    Lo que medía sigue siendo el contrato —la deuda se paga AÑADIENDO, nunca filtrando— y ahora
+    se mide al derecho: los platos beta ESTÁN y los criollos también.
+
+    «pozole» y «bandeja paisa» NO entran en la lista a propósito. El primero es uno de los 18
+    mexicanos omitidos por faltar «Tortilla de maíz» en `master_ingredients`: publicarlo exigiría
+    dar macros incompletos, y una comida registrada de menos es peor que una no registrada porque
+    parece registrada.
+    """
     from constants import strip_accents
     etiquetas = " ".join(strip_accents(str(i.get("label") or "").lower())
                          for i in (fs.dishes_for_client() or []))
-    faltan = [p for p in ("paella", "pozole", "bandeja paisa", "tortilla espanola")
-              if p not in etiquetas]
-    assert faltan, (
-        "ya hay platos de países beta en el catálogo: actualiza este test y la nota de la cabecera"
-    )
+    for plato in ("paella", "arepa", "tortilla espanola"):
+        assert plato in etiquetas, f"«{plato}» desapareció del catálogo del diario"
+    for criollo in ("mangu", "moro", "sancocho"):
+        assert criollo in etiquetas, (
+            f"«{criollo}» desapareció: la deuda se paga añadiendo, nunca quitando"
+        )

@@ -1,0 +1,3184 @@
+{
+ "_note": "[P1-COUNTRY-DIARY-DISHES-60-DE-60-DO] Platos de ES para el buscador del diario, derivados de los constituyentes ya curados de dish_templates_es.json y resueltos contra master_ingredients. Se AÑADEN a los 60 dominicanos, no los sustituyen. Generado por scripts/build_country_dishes.py.",
+ "dishes": {
+  "tortilla_espanola_con_patata_y_cebolla": {
+   "label": "Tortilla española con patata y cebolla",
+   "method": "sartén",
+   "finished_g": 378,
+   "per_100g": {
+    "kcal": 141.7,
+    "protein": 6.5,
+    "carbs": 8.3,
+    "fats": 9.1
+   },
+   "resolution_coverage": 1.0,
+   "constituents": [
+    {
+     "name": "Huevo",
+     "g": 150.0,
+     "resolved": true,
+     "macros": {
+      "kcal": 208.4,
+      "protein": 18.9,
+      "carbs": 1.1,
+      "fats": 14.3
+     }
+    },
+    {
+     "name": "Papa",
+     "g": 200.0,
+     "resolved": true,
+     "macros": {
+      "kcal": 121.6,
+      "protein": 5.1,
+      "carbs": 24.8,
+      "fats": 0.2
+     }
+    },
+    {
+     "name": "Cebolla",
+     "g": 60.0,
+     "resolved": true,
+     "macros": {
+      "kcal": 25.6,
+      "protein": 0.7,
+      "carbs": 5.6,
+      "fats": 0.1
+     }
+    },
+    {
+     "name": "Aceite de oliva",
+     "g": 20.0,
+     "resolved": true,
+     "macros": {
+      "kcal": 180.0,
+      "protein": 0.0,
+      "carbs": 0.0,
+      "fats": 20.0
+     }
+    }
+   ],
+   "fndds_cross_check": null,
+   "provenance": "computed from catalog constituents of dish_templates_es.json (CC0)",
+   "country_origin": "ES"
+  },
+  "tortilla_de_patatas_con_jamon_serrano": {
+   "label": "Tortilla de patatas con jamón serrano",
+   "method": "sartén",
+   "finished_g": 339,
+   "per_100g": {
+    "kcal": 171.1,
+    "protein": 10.3,
+    "carbs": 6.9,
+    "fats": 11.4
+   },
+   "resolution_coverage": 1.0,
+   "constituents": [
+    {
+     "name": "Huevo",
+     "g": 150.0,
+     "resolved": true,
+     "macros": {
+      "kcal": 208.4,
+      "protein": 18.9,
+      "carbs": 1.1,
+      "fats": 14.3
+     }
+    },
+    {
+     "name": "Papa",
+     "g": 180.0,
+     "resolved": true,
+     "macros": {
+      "kcal": 109.4,
+      "protein": 4.6,
+      "carbs": 22.3,
+      "fats": 0.2
+     }
+    },
+    {
+     "name": "Jamón serrano",
+     "g": 40.0,
+     "resolved": true,
+     "macros": {
+      "kcal": 127.1,
+      "protein": 11.5,
+      "carbs": 0.1,
+      "fats": 9.0
+     }
+    },
+    {
+     "name": "Aceite de oliva",
+     "g": 15.0,
+     "resolved": true,
+     "macros": {
+      "kcal": 135.0,
+      "protein": 0.0,
+      "carbs": 0.0,
+      "fats": 15.0
+     }
+    }
+   ],
+   "fndds_cross_check": null,
+   "provenance": "computed from catalog constituents of dish_templates_es.json (CC0)",
+   "country_origin": "ES"
+  },
+  "paella_de_mariscos_con_gambas_y_almejas": {
+   "label": "Paella de mariscos con gambas y almejas",
+   "method": "guisado",
+   "finished_g": 414,
+   "per_100g": {
+    "kcal": 185.0,
+    "protein": 11.9,
+    "carbs": 31.3,
+    "fats": 1.1
+   },
+   "resolution_coverage": 1.0,
+   "constituents": [
+    {
+     "name": "Gambas",
+     "g": 150.0,
+     "resolved": true,
+     "macros": {
+      "kcal": 106.5,
+      "protein": 20.4,
+      "carbs": 1.4,
+      "fats": 1.5
+     }
+    },
+    {
+     "name": "Almejas",
+     "g": 120.0,
+     "resolved": true,
+     "macros": {
+      "kcal": 103.2,
+      "protein": 17.6,
+      "carbs": 4.3,
+      "fats": 1.1
+     }
+    },
+    {
+     "name": "Arroz blanco",
+     "g": 150.0,
+     "resolved": true,
+     "macros": {
+      "kcal": 537.9,
+      "protein": 10.6,
+      "carbs": 120.5,
+      "fats": 1.5
+     }
+    },
+    {
+     "name": "Ají morrón",
+     "g": 50.0,
+     "resolved": true,
+     "macros": {
+      "kcal": 15.4,
+      "protein": 0.5,
+      "carbs": 3.0,
+      "fats": 0.1
+     }
+    },
+    {
+     "name": "Azafrán",
+     "g": 1.0,
+     "resolved": true,
+     "macros": {
+      "kcal": 3.1,
+      "protein": 0.1,
+      "carbs": 0.7,
+      "fats": 0.1
+     }
+    }
+   ],
+   "fndds_cross_check": null,
+   "provenance": "computed from catalog constituents of dish_templates_es.json (CC0)",
+   "country_origin": "ES"
+  },
+  "paella_valenciana_con_pollo_y_conejo": {
+   "label": "Paella valenciana con pollo y conejo",
+   "method": "guisado",
+   "finished_g": 423,
+   "per_100g": {
+    "kcal": 252.9,
+    "protein": 19.9,
+    "carbs": 36.9,
+    "fats": 2.9
+   },
+   "resolution_coverage": 1.0,
+   "constituents": [
+    {
+     "name": "Pechuga de pollo",
+     "g": 150.0,
+     "resolved": true,
+     "macros": {
+      "kcal": 161.1,
+      "protein": 33.8,
+      "carbs": 0.0,
+      "fats": 2.9
+     }
+    },
+    {
+     "name": "Conejo",
+     "g": 120.0,
+     "resolved": true,
+     "macros": {
+      "kcal": 163.2,
+      "protein": 24.0,
+      "carbs": 0.0,
+      "fats": 6.7
+     }
+    },
+    {
+     "name": "Arroz blanco",
+     "g": 150.0,
+     "resolved": true,
+     "macros": {
+      "kcal": 537.9,
+      "protein": 10.6,
+      "carbs": 120.5,
+      "fats": 1.5
+     }
+    },
+    {
+     "name": "Habas",
+     "g": 60.0,
+     "resolved": true,
+     "macros": {
+      "kcal": 204.6,
+      "protein": 15.7,
+      "carbs": 35.0,
+      "fats": 0.9
+     }
+    },
+    {
+     "name": "Azafrán",
+     "g": 1.0,
+     "resolved": true,
+     "macros": {
+      "kcal": 3.1,
+      "protein": 0.1,
+      "carbs": 0.7,
+      "fats": 0.1
+     }
+    }
+   ],
+   "fndds_cross_check": null,
+   "provenance": "computed from catalog constituents of dish_templates_es.json (CC0)",
+   "country_origin": "ES"
+  },
+  "fabada_asturiana_con_judias_blancas_morcilla_y_panceta": {
+   "label": "Fabada asturiana con judías blancas, morcilla y panceta",
+   "method": "guisado",
+   "finished_g": 255,
+   "per_100g": {
+    "kcal": 404.4,
+    "protein": 20.9,
+    "carbs": 25.1,
+    "fats": 25.2
+   },
+   "resolution_coverage": 1.0,
+   "constituents": [
+    {
+     "name": "Judías blancas",
+     "g": 100.0,
+     "resolved": true,
+     "macros": {
+      "kcal": 333.0,
+      "protein": 23.4,
+      "carbs": 60.3,
+      "fats": 0.8
+     }
+    },
+    {
+     "name": "Morcilla",
+     "g": 80.0,
+     "resolved": true,
+     "macros": {
+      "kcal": 258.4,
+      "protein": 8.8,
+      "carbs": 2.6,
+      "fats": 24.0
+     }
+    },
+    {
+     "name": "Panceta ibérica",
+     "g": 60.0,
+     "resolved": true,
+     "macros": {
+      "kcal": 278.9,
+      "protein": 7.5,
+      "carbs": 0.3,
+      "fats": 28.0
+     }
+    },
+    {
+     "name": "Chorizo español",
+     "g": 50.0,
+     "resolved": true,
+     "macros": {
+      "kcal": 160.8,
+      "protein": 13.5,
+      "carbs": 0.9,
+      "fats": 11.6
+     }
+    }
+   ],
+   "fndds_cross_check": null,
+   "provenance": "computed from catalog constituents of dish_templates_es.json (CC0)",
+   "country_origin": "ES"
+  },
+  "cocido_madrileno_con_garbanzos_y_chorizo": {
+   "label": "Cocido madrileño con garbanzos y chorizo",
+   "method": "guisado",
+   "finished_g": 273,
+   "per_100g": {
+    "kcal": 275.7,
+    "protein": 21.6,
+    "carbs": 26.4,
+    "fats": 9.4
+   },
+   "resolution_coverage": 1.0,
+   "constituents": [
+    {
+     "name": "Garbanzos",
+     "g": 100.0,
+     "resolved": true,
+     "macros": {
+      "kcal": 388.4,
+      "protein": 20.5,
+      "carbs": 63.0,
+      "fats": 6.0
+     }
+    },
+    {
+     "name": "Chorizo español",
+     "g": 60.0,
+     "resolved": true,
+     "macros": {
+      "kcal": 193.0,
+      "protein": 16.2,
+      "carbs": 1.1,
+      "fats": 13.9
+     }
+    },
+    {
+     "name": "Carne de res",
+     "g": 100.0,
+     "resolved": true,
+     "macros": {
+      "kcal": 140.7,
+      "protein": 21.5,
+      "carbs": 0.8,
+      "fats": 5.7
+     }
+    },
+    {
+     "name": "Puerro",
+     "g": 50.0,
+     "resolved": true,
+     "macros": {
+      "kcal": 30.5,
+      "protein": 0.8,
+      "carbs": 7.1,
+      "fats": 0.1
+     }
+    }
+   ],
+   "fndds_cross_check": null,
+   "provenance": "computed from catalog constituents of dish_templates_es.json (CC0)",
+   "country_origin": "ES"
+  },
+  "lentejas_estofadas_con_chorizo_y_verduras": {
+   "label": "Lentejas estofadas con chorizo y verduras",
+   "method": "guisado",
+   "finished_g": 185,
+   "per_100g": {
+    "kcal": 301.6,
+    "protein": 21.2,
+    "carbs": 38.8,
+    "fats": 6.9
+   },
+   "resolution_coverage": 1.0,
+   "constituents": [
+    {
+     "name": "Lentejas",
+     "g": 100.0,
+     "resolved": true,
+     "macros": {
+      "kcal": 361.5,
+      "protein": 24.6,
+      "carbs": 63.4,
+      "fats": 1.1
+     }
+    },
+    {
+     "name": "Chorizo español",
+     "g": 50.0,
+     "resolved": true,
+     "macros": {
+      "kcal": 160.8,
+      "protein": 13.5,
+      "carbs": 0.9,
+      "fats": 11.6
+     }
+    },
+    {
+     "name": "Cebolla",
+     "g": 50.0,
+     "resolved": true,
+     "macros": {
+      "kcal": 21.4,
+      "protein": 0.6,
+      "carbs": 4.7,
+      "fats": 0.1
+     }
+    },
+    {
+     "name": "Ajo",
+     "g": 10.0,
+     "resolved": true,
+     "macros": {
+      "kcal": 14.3,
+      "protein": 0.7,
+      "carbs": 2.8,
+      "fats": 0.0
+     }
+    }
+   ],
+   "fndds_cross_check": null,
+   "provenance": "computed from catalog constituents of dish_templates_es.json (CC0)",
+   "country_origin": "ES"
+  },
+  "garbanzos_con_espinacas_y_bacalao": {
+   "label": "Garbanzos con espinacas y bacalao",
+   "method": "guisado",
+   "finished_g": 271,
+   "per_100g": {
+    "kcal": 190.4,
+    "protein": 16.5,
+    "carbs": 25.2,
+    "fats": 2.6
+   },
+   "resolution_coverage": 1.0,
+   "constituents": [
+    {
+     "name": "Garbanzos",
+     "g": 100.0,
+     "resolved": true,
+     "macros": {
+      "kcal": 388.4,
+      "protein": 20.5,
+      "carbs": 63.0,
+      "fats": 6.0
+     }
+    },
+    {
+     "name": "Bacalao",
+     "g": 120.0,
+     "resolved": true,
+     "macros": {
+      "kcal": 92.6,
+      "protein": 21.4,
+      "carbs": 0.0,
+      "fats": 0.8
+     }
+    },
+    {
+     "name": "Espinacas",
+     "g": 80.0,
+     "resolved": true,
+     "macros": {
+      "kcal": 23.6,
+      "protein": 2.3,
+      "carbs": 2.9,
+      "fats": 0.3
+     }
+    },
+    {
+     "name": "Ajo",
+     "g": 8.0,
+     "resolved": true,
+     "macros": {
+      "kcal": 11.4,
+      "protein": 0.5,
+      "carbs": 2.3,
+      "fats": 0.0
+     }
+    }
+   ],
+   "fndds_cross_check": null,
+   "provenance": "computed from catalog constituents of dish_templates_es.json (CC0)",
+   "country_origin": "ES"
+  },
+  "pollo_al_ajillo_con_patatas_panaderas": {
+   "label": "Pollo al ajillo con patatas panaderas",
+   "method": "guisado",
+   "finished_g": 378,
+   "per_100g": {
+    "kcal": 137.6,
+    "protein": 12.0,
+    "carbs": 7.7,
+    "fats": 6.2
+   },
+   "resolution_coverage": 1.0,
+   "constituents": [
+    {
+     "name": "Muslo de pollo",
+     "g": 200.0,
+     "resolved": true,
+     "macros": {
+      "kcal": 242.0,
+      "protein": 39.4,
+      "carbs": 0.0,
+      "fats": 8.3
+     }
+    },
+    {
+     "name": "Papa",
+     "g": 200.0,
+     "resolved": true,
+     "macros": {
+      "kcal": 121.6,
+      "protein": 5.1,
+      "carbs": 24.8,
+      "fats": 0.2
+     }
+    },
+    {
+     "name": "Ajo",
+     "g": 15.0,
+     "resolved": true,
+     "macros": {
+      "kcal": 21.4,
+      "protein": 1.0,
+      "carbs": 4.2,
+      "fats": 0.1
+     }
+    },
+    {
+     "name": "Aceite de oliva",
+     "g": 15.0,
+     "resolved": true,
+     "macros": {
+      "kcal": 135.0,
+      "protein": 0.0,
+      "carbs": 0.0,
+      "fats": 15.0
+     }
+    }
+   ],
+   "fndds_cross_check": null,
+   "provenance": "computed from catalog constituents of dish_templates_es.json (CC0)",
+   "country_origin": "ES"
+  },
+  "merluza_a_la_plancha_con_esparragos_trigueros": {
+   "label": "Merluza a la plancha con espárragos trigueros",
+   "method": "plancha",
+   "finished_g": 260,
+   "per_100g": {
+    "kcal": 114.0,
+    "protein": 14.9,
+    "carbs": 2.1,
+    "fats": 5.1
+   },
+   "resolution_coverage": 1.0,
+   "constituents": [
+    {
+     "name": "Filete de pescado blanco",
+     "g": 180.0,
+     "resolved": true,
+     "macros": {
+      "kcal": 172.3,
+      "protein": 36.2,
+      "carbs": 0.0,
+      "fats": 3.1
+     }
+    },
+    {
+     "name": "Espárragos",
+     "g": 100.0,
+     "resolved": true,
+     "macros": {
+      "kcal": 25.4,
+      "protein": 2.2,
+      "carbs": 3.9,
+      "fats": 0.1
+     }
+    },
+    {
+     "name": "Aceite de oliva",
+     "g": 10.0,
+     "resolved": true,
+     "macros": {
+      "kcal": 90.0,
+      "protein": 0.0,
+      "carbs": 0.0,
+      "fats": 10.0
+     }
+    },
+    {
+     "name": "Ajo",
+     "g": 6.0,
+     "resolved": true,
+     "macros": {
+      "kcal": 8.6,
+      "protein": 0.4,
+      "carbs": 1.7,
+      "fats": 0.0
+     }
+    }
+   ],
+   "fndds_cross_check": null,
+   "provenance": "computed from catalog constituents of dish_templates_es.json (CC0)",
+   "country_origin": "ES"
+  },
+  "albondigas_en_salsa_con_pure_de_patata": {
+   "label": "Albóndigas en salsa con puré de patata",
+   "method": "guisado",
+   "finished_g": 458,
+   "per_100g": {
+    "kcal": 105.6,
+    "protein": 8.1,
+    "carbs": 7.1,
+    "fats": 5.0
+   },
+   "resolution_coverage": 1.0,
+   "constituents": [
+    {
+     "name": "Carne de res molida",
+     "g": 180.0,
+     "resolved": true,
+     "macros": {
+      "kcal": 324.2,
+      "protein": 30.4,
+      "carbs": 0.0,
+      "fats": 22.5
+     }
+    },
+    {
+     "name": "Papa",
+     "g": 200.0,
+     "resolved": true,
+     "macros": {
+      "kcal": 121.6,
+      "protein": 5.1,
+      "carbs": 24.8,
+      "fats": 0.2
+     }
+    },
+    {
+     "name": "Tomate",
+     "g": 100.0,
+     "resolved": true,
+     "macros": {
+      "kcal": 20.9,
+      "protein": 0.9,
+      "carbs": 3.9,
+      "fats": 0.2
+     }
+    },
+    {
+     "name": "Cebolla",
+     "g": 40.0,
+     "resolved": true,
+     "macros": {
+      "kcal": 17.1,
+      "protein": 0.4,
+      "carbs": 3.7,
+      "fats": 0.0
+     }
+    }
+   ],
+   "fndds_cross_check": null,
+   "provenance": "computed from catalog constituents of dish_templates_es.json (CC0)",
+   "country_origin": "ES"
+  },
+  "arroz_con_pollo_y_pimiento": {
+   "label": "Arroz con pollo y pimiento",
+   "method": "guisado",
+   "finished_g": 378,
+   "per_100g": {
+    "kcal": 202.9,
+    "protein": 13.8,
+    "carbs": 33.8,
+    "fats": 1.4
+   },
+   "resolution_coverage": 1.0,
+   "constituents": [
+    {
+     "name": "Pechuga de pollo",
+     "g": 180.0,
+     "resolved": true,
+     "macros": {
+      "kcal": 193.3,
+      "protein": 40.5,
+      "carbs": 0.0,
+      "fats": 3.5
+     }
+    },
+    {
+     "name": "Arroz blanco",
+     "g": 150.0,
+     "resolved": true,
+     "macros": {
+      "kcal": 537.9,
+      "protein": 10.6,
+      "carbs": 120.5,
+      "fats": 1.5
+     }
+    },
+    {
+     "name": "Ají morrón",
+     "g": 60.0,
+     "resolved": true,
+     "macros": {
+      "kcal": 18.5,
+      "protein": 0.6,
+      "carbs": 3.6,
+      "fats": 0.2
+     }
+    },
+    {
+     "name": "Cebolla",
+     "g": 40.0,
+     "resolved": true,
+     "macros": {
+      "kcal": 17.1,
+      "protein": 0.4,
+      "carbs": 3.7,
+      "fats": 0.0
+     }
+    }
+   ],
+   "fndds_cross_check": null,
+   "provenance": "computed from catalog constituents of dish_templates_es.json (CC0)",
+   "country_origin": "ES"
+  },
+  "gazpacho_andaluz_con_tomate_y_pepino": {
+   "label": "Gazpacho andaluz con tomate y pepino",
+   "method": "licuado frío",
+   "finished_g": 370,
+   "per_100g": {
+    "kcal": 74.1,
+    "protein": 1.0,
+    "carbs": 4.9,
+    "fats": 5.6
+   },
+   "resolution_coverage": 1.0,
+   "constituents": [
+    {
+     "name": "Tomate",
+     "g": 300.0,
+     "resolved": true,
+     "macros": {
+      "kcal": 62.7,
+      "protein": 2.6,
+      "carbs": 11.7,
+      "fats": 0.6
+     }
+    },
+    {
+     "name": "Ají morrón",
+     "g": 60.0,
+     "resolved": true,
+     "macros": {
+      "kcal": 18.5,
+      "protein": 0.6,
+      "carbs": 3.6,
+      "fats": 0.2
+     }
+    },
+    {
+     "name": "Cebolla",
+     "g": 30.0,
+     "resolved": true,
+     "macros": {
+      "kcal": 12.8,
+      "protein": 0.3,
+      "carbs": 2.8,
+      "fats": 0.0
+     }
+    },
+    {
+     "name": "Aceite de oliva",
+     "g": 20.0,
+     "resolved": true,
+     "macros": {
+      "kcal": 180.0,
+      "protein": 0.0,
+      "carbs": 0.0,
+      "fats": 20.0
+     }
+    },
+    {
+     "name": "Vinagre blanco",
+     "g": 10.0,
+     "resolved": true,
+     "macros": {
+      "kcal": 0.0,
+      "protein": 0.0,
+      "carbs": 0.0,
+      "fats": 0.0
+     }
+    }
+   ],
+   "fndds_cross_check": null,
+   "provenance": "computed from catalog constituents of dish_templates_es.json (CC0)",
+   "country_origin": "ES"
+  },
+  "pisto_manchego_con_huevo_escalfado": {
+   "label": "Pisto manchego con huevo escalfado",
+   "method": "salteado",
+   "finished_g": 458,
+   "per_100g": {
+    "kcal": 52.5,
+    "protein": 3.7,
+    "carbs": 4.2,
+    "fats": 2.3
+   },
+   "resolution_coverage": 1.0,
+   "constituents": [
+    {
+     "name": "Huevo",
+     "g": 100.0,
+     "resolved": true,
+     "macros": {
+      "kcal": 138.9,
+      "protein": 12.6,
+      "carbs": 0.7,
+      "fats": 9.5
+     }
+    },
+    {
+     "name": "Calabacín",
+     "g": 150.0,
+     "resolved": true,
+     "macros": {
+      "kcal": 30.3,
+      "protein": 1.8,
+      "carbs": 4.7,
+      "fats": 0.5
+     }
+    },
+    {
+     "name": "Berenjena",
+     "g": 120.0,
+     "resolved": true,
+     "macros": {
+      "kcal": 34.9,
+      "protein": 1.2,
+      "carbs": 7.1,
+      "fats": 0.2
+     }
+    },
+    {
+     "name": "Tomate",
+     "g": 100.0,
+     "resolved": true,
+     "macros": {
+      "kcal": 20.9,
+      "protein": 0.9,
+      "carbs": 3.9,
+      "fats": 0.2
+     }
+    },
+    {
+     "name": "Ají morrón",
+     "g": 50.0,
+     "resolved": true,
+     "macros": {
+      "kcal": 15.4,
+      "protein": 0.5,
+      "carbs": 3.0,
+      "fats": 0.1
+     }
+    }
+   ],
+   "fndds_cross_check": null,
+   "provenance": "computed from catalog constituents of dish_templates_es.json (CC0)",
+   "country_origin": "ES"
+  },
+  "judias_blancas_estofadas_con_panceta_iberica": {
+   "label": "Judías blancas estofadas con panceta ibérica",
+   "method": "guisado",
+   "finished_g": 202,
+   "per_100g": {
+    "kcal": 358.0,
+    "protein": 17.6,
+    "carbs": 36.3,
+    "fats": 16.7
+   },
+   "resolution_coverage": 1.0,
+   "constituents": [
+    {
+     "name": "Judías blancas",
+     "g": 110.0,
+     "resolved": true,
+     "macros": {
+      "kcal": 366.3,
+      "protein": 25.7,
+      "carbs": 66.3,
+      "fats": 0.9
+     }
+    },
+    {
+     "name": "Panceta ibérica",
+     "g": 70.0,
+     "resolved": true,
+     "macros": {
+      "kcal": 325.4,
+      "protein": 8.8,
+      "carbs": 0.3,
+      "fats": 32.6
+     }
+    },
+    {
+     "name": "Cebolla",
+     "g": 40.0,
+     "resolved": true,
+     "macros": {
+      "kcal": 17.1,
+      "protein": 0.4,
+      "carbs": 3.7,
+      "fats": 0.0
+     }
+    },
+    {
+     "name": "Ajo",
+     "g": 10.0,
+     "resolved": true,
+     "macros": {
+      "kcal": 14.3,
+      "protein": 0.7,
+      "carbs": 2.8,
+      "fats": 0.0
+     }
+    }
+   ],
+   "fndds_cross_check": null,
+   "provenance": "computed from catalog constituents of dish_templates_es.json (CC0)",
+   "country_origin": "ES"
+  },
+  "potaje_de_garbanzos_con_acelgas": {
+   "label": "Potaje de garbanzos con acelgas",
+   "method": "guisado",
+   "finished_g": 293,
+   "per_100g": {
+    "kcal": 178.3,
+    "protein": 9.5,
+    "carbs": 30.0,
+    "fats": 2.5
+   },
+   "resolution_coverage": 1.0,
+   "constituents": [
+    {
+     "name": "Garbanzos",
+     "g": 110.0,
+     "resolved": true,
+     "macros": {
+      "kcal": 427.2,
+      "protein": 22.6,
+      "carbs": 69.3,
+      "fats": 6.6
+     }
+    },
+    {
+     "name": "Acelgas",
+     "g": 120.0,
+     "resolved": true,
+     "macros": {
+      "kcal": 22.8,
+      "protein": 2.2,
+      "carbs": 4.5,
+      "fats": 0.2
+     }
+    },
+    {
+     "name": "Papa",
+     "g": 100.0,
+     "resolved": true,
+     "macros": {
+      "kcal": 60.8,
+      "protein": 2.6,
+      "carbs": 12.4,
+      "fats": 0.1
+     }
+    },
+    {
+     "name": "Pimentón",
+     "g": 3.0,
+     "resolved": true,
+     "macros": {
+      "kcal": 11.7,
+      "protein": 0.4,
+      "carbs": 1.6,
+      "fats": 0.4
+     }
+    }
+   ],
+   "fndds_cross_check": null,
+   "provenance": "computed from catalog constituents of dish_templates_es.json (CC0)",
+   "country_origin": "ES"
+  },
+  "ensaladilla_rusa_con_atun_en_lata": {
+   "label": "Ensaladilla rusa con atún en lata",
+   "method": "frío",
+   "finished_g": 361,
+   "per_100g": {
+    "kcal": 125.6,
+    "protein": 10.4,
+    "carbs": 7.5,
+    "fats": 5.8
+   },
+   "resolution_coverage": 1.0,
+   "constituents": [
+    {
+     "name": "Papa",
+     "g": 200.0,
+     "resolved": true,
+     "macros": {
+      "kcal": 121.6,
+      "protein": 5.1,
+      "carbs": 24.8,
+      "fats": 0.2
+     }
+    },
+    {
+     "name": "Huevo",
+     "g": 100.0,
+     "resolved": true,
+     "macros": {
+      "kcal": 138.9,
+      "protein": 12.6,
+      "carbs": 0.7,
+      "fats": 9.5
+     }
+    },
+    {
+     "name": "Sardinas en lata",
+     "g": 80.0,
+     "resolved": true,
+     "macros": {
+      "kcal": 166.4,
+      "protein": 19.7,
+      "carbs": 0.0,
+      "fats": 9.2
+     }
+    },
+    {
+     "name": "Aceitunas",
+     "g": 30.0,
+     "resolved": true,
+     "macros": {
+      "kcal": 26.5,
+      "protein": 0.3,
+      "carbs": 1.7,
+      "fats": 2.1
+     }
+    }
+   ],
+   "fndds_cross_check": null,
+   "provenance": "computed from catalog constituents of dish_templates_es.json (CC0)",
+   "country_origin": "ES"
+  },
+  "boquerones_en_vinagre_con_ensalada_verde": {
+   "label": "Boquerones en vinagre con ensalada verde",
+   "method": "frío/marinado",
+   "finished_g": 192,
+   "per_100g": {
+    "kcal": 94.7,
+    "protein": 12.2,
+    "carbs": 2.3,
+    "fats": 4.1
+   },
+   "resolution_coverage": 1.0,
+   "constituents": [
+    {
+     "name": "Boquerones",
+     "g": 120.0,
+     "resolved": true,
+     "macros": {
+      "kcal": 152.6,
+      "protein": 21.1,
+      "carbs": 0.0,
+      "fats": 7.6
+     }
+    },
+    {
+     "name": "Vinagre blanco",
+     "g": 30.0,
+     "resolved": true,
+     "macros": {
+      "kcal": 0.1,
+      "protein": 0.0,
+      "carbs": 0.0,
+      "fats": 0.0
+     }
+    },
+    {
+     "name": "Ajo",
+     "g": 8.0,
+     "resolved": true,
+     "macros": {
+      "kcal": 11.4,
+      "protein": 0.5,
+      "carbs": 2.3,
+      "fats": 0.0
+     }
+    },
+    {
+     "name": "Espinacas",
+     "g": 60.0,
+     "resolved": true,
+     "macros": {
+      "kcal": 17.7,
+      "protein": 1.7,
+      "carbs": 2.2,
+      "fats": 0.2
+     }
+    }
+   ],
+   "fndds_cross_check": null,
+   "provenance": "computed from catalog constituents of dish_templates_es.json (CC0)",
+   "country_origin": "ES"
+  },
+  "pulpo_a_la_gallega_con_patata_y_pimenton": {
+   "label": "Pulpo a la gallega con patata y pimentón",
+   "method": "hervido",
+   "finished_g": 352,
+   "per_100g": {
+    "kcal": 121.5,
+    "protein": 10.0,
+    "carbs": 8.4,
+    "fats": 5.1
+   },
+   "resolution_coverage": 1.0,
+   "constituents": [
+    {
+     "name": "Pulpo",
+     "g": 200.0,
+     "resolved": true,
+     "macros": {
+      "kcal": 164.0,
+      "protein": 29.8,
+      "carbs": 4.4,
+      "fats": 2.1
+     }
+    },
+    {
+     "name": "Papa",
+     "g": 180.0,
+     "resolved": true,
+     "macros": {
+      "kcal": 109.4,
+      "protein": 4.6,
+      "carbs": 22.3,
+      "fats": 0.2
+     }
+    },
+    {
+     "name": "Pimentón",
+     "g": 5.0,
+     "resolved": true,
+     "macros": {
+      "kcal": 19.4,
+      "protein": 0.7,
+      "carbs": 2.7,
+      "fats": 0.7
+     }
+    },
+    {
+     "name": "Aceite de oliva",
+     "g": 15.0,
+     "resolved": true,
+     "macros": {
+      "kcal": 135.0,
+      "protein": 0.0,
+      "carbs": 0.0,
+      "fats": 15.0
+     }
+    }
+   ],
+   "fndds_cross_check": null,
+   "provenance": "computed from catalog constituents of dish_templates_es.json (CC0)",
+   "country_origin": "ES"
+  },
+  "calamares_a_la_plancha_con_limon": {
+   "label": "Calamares a la plancha con limón",
+   "method": "plancha",
+   "finished_g": 201,
+   "per_100g": {
+    "kcal": 139.8,
+    "protein": 14.3,
+    "carbs": 5.4,
+    "fats": 6.3
+   },
+   "resolution_coverage": 1.0,
+   "constituents": [
+    {
+     "name": "Calamar",
+     "g": 180.0,
+     "resolved": true,
+     "macros": {
+      "kcal": 165.6,
+      "protein": 28.1,
+      "carbs": 5.5,
+      "fats": 2.5
+     }
+    },
+    {
+     "name": "Limón",
+     "g": 30.0,
+     "resolved": true,
+     "macros": {
+      "kcal": 14.0,
+      "protein": 0.2,
+      "carbs": 3.1,
+      "fats": 0.1
+     }
+    },
+    {
+     "name": "Ajo",
+     "g": 8.0,
+     "resolved": true,
+     "macros": {
+      "kcal": 11.4,
+      "protein": 0.5,
+      "carbs": 2.3,
+      "fats": 0.0
+     }
+    },
+    {
+     "name": "Aceite de oliva",
+     "g": 10.0,
+     "resolved": true,
+     "macros": {
+      "kcal": 90.0,
+      "protein": 0.0,
+      "carbs": 0.0,
+      "fats": 10.0
+     }
+    }
+   ],
+   "fndds_cross_check": null,
+   "provenance": "computed from catalog constituents of dish_templates_es.json (CC0)",
+   "country_origin": "ES"
+  },
+  "revuelto_de_champinones_y_ajos_tiernos": {
+   "label": "Revuelto de champiñones y ajos tiernos",
+   "method": "revuelto",
+   "finished_g": 211,
+   "per_100g": {
+    "kcal": 141.9,
+    "protein": 8.9,
+    "carbs": 3.3,
+    "fats": 10.3
+   },
+   "resolution_coverage": 1.0,
+   "constituents": [
+    {
+     "name": "Huevo",
+     "g": 120.0,
+     "resolved": true,
+     "macros": {
+      "kcal": 166.7,
+      "protein": 15.1,
+      "carbs": 0.9,
+      "fats": 11.4
+     }
+    },
+    {
+     "name": "Champiñones",
+     "g": 100.0,
+     "resolved": true,
+     "macros": {
+      "kcal": 28.5,
+      "protein": 3.1,
+      "carbs": 3.3,
+      "fats": 0.3
+     }
+    },
+    {
+     "name": "Ajo",
+     "g": 10.0,
+     "resolved": true,
+     "macros": {
+      "kcal": 14.3,
+      "protein": 0.7,
+      "carbs": 2.8,
+      "fats": 0.0
+     }
+    },
+    {
+     "name": "Aceite de oliva",
+     "g": 10.0,
+     "resolved": true,
+     "macros": {
+      "kcal": 90.0,
+      "protein": 0.0,
+      "carbs": 0.0,
+      "fats": 10.0
+     }
+    }
+   ],
+   "fndds_cross_check": null,
+   "provenance": "computed from catalog constituents of dish_templates_es.json (CC0)",
+   "country_origin": "ES"
+  },
+  "tostada_con_tomate_aceite_de_oliva_y_jamon_serrano": {
+   "label": "Tostada con tomate, aceite de oliva y jamón serrano",
+   "method": "frío",
+   "finished_g": 167,
+   "per_100g": {
+    "kcal": 239.1,
+    "protein": 11.0,
+    "carbs": 20.5,
+    "fats": 12.7
+   },
+   "resolution_coverage": 1.0,
+   "constituents": [
+    {
+     "name": "Pan blanco familiar",
+     "g": 60.0,
+     "resolved": true,
+     "macros": {
+      "kcal": 165.5,
+      "protein": 6.2,
+      "carbs": 31.0,
+      "fats": 2.1
+     }
+    },
+    {
+     "name": "Tomate",
+     "g": 80.0,
+     "resolved": true,
+     "macros": {
+      "kcal": 16.7,
+      "protein": 0.7,
+      "carbs": 3.1,
+      "fats": 0.2
+     }
+    },
+    {
+     "name": "Jamón serrano",
+     "g": 40.0,
+     "resolved": true,
+     "macros": {
+      "kcal": 127.1,
+      "protein": 11.5,
+      "carbs": 0.1,
+      "fats": 9.0
+     }
+    },
+    {
+     "name": "Aceite de oliva",
+     "g": 10.0,
+     "resolved": true,
+     "macros": {
+      "kcal": 90.0,
+      "protein": 0.0,
+      "carbs": 0.0,
+      "fats": 10.0
+     }
+    }
+   ],
+   "fndds_cross_check": null,
+   "provenance": "computed from catalog constituents of dish_templates_es.json (CC0)",
+   "country_origin": "ES"
+  },
+  "bocadillo_de_tortilla_espanola": {
+   "label": "Bocadillo de tortilla española",
+   "method": "frío",
+   "finished_g": 238,
+   "per_100g": {
+    "kcal": 165.0,
+    "protein": 9.4,
+    "carbs": 20.7,
+    "fats": 5.1
+   },
+   "resolution_coverage": 1.0,
+   "constituents": [
+    {
+     "name": "Pan blanco familiar",
+     "g": 70.0,
+     "resolved": true,
+     "macros": {
+      "kcal": 193.1,
+      "protein": 7.2,
+      "carbs": 36.2,
+      "fats": 2.4
+     }
+    },
+    {
+     "name": "Huevo",
+     "g": 100.0,
+     "resolved": true,
+     "macros": {
+      "kcal": 138.9,
+      "protein": 12.6,
+      "carbs": 0.7,
+      "fats": 9.5
+     }
+    },
+    {
+     "name": "Papa",
+     "g": 100.0,
+     "resolved": true,
+     "macros": {
+      "kcal": 60.8,
+      "protein": 2.6,
+      "carbs": 12.4,
+      "fats": 0.1
+     }
+    }
+   ],
+   "fndds_cross_check": null,
+   "provenance": "computed from catalog constituents of dish_templates_es.json (CC0)",
+   "country_origin": "ES"
+  },
+  "cafe_con_leche_y_tostada_con_aceite": {
+   "label": "Café con leche y tostada con aceite",
+   "method": "frío",
+   "finished_g": 227,
+   "per_100g": {
+    "kcal": 146.2,
+    "protein": 5.1,
+    "carbs": 15.6,
+    "fats": 7.1
+   },
+   "resolution_coverage": 1.0,
+   "constituents": [
+    {
+     "name": "Leche",
+     "g": 200.0,
+     "resolved": true,
+     "macros": {
+      "kcal": 122.0,
+      "protein": 6.3,
+      "carbs": 9.6,
+      "fats": 6.5
+     }
+    },
+    {
+     "name": "Pan blanco familiar",
+     "g": 50.0,
+     "resolved": true,
+     "macros": {
+      "kcal": 137.9,
+      "protein": 5.2,
+      "carbs": 25.9,
+      "fats": 1.7
+     }
+    },
+    {
+     "name": "Aceite de oliva",
+     "g": 8.0,
+     "resolved": true,
+     "macros": {
+      "kcal": 72.0,
+      "protein": 0.0,
+      "carbs": 0.0,
+      "fats": 8.0
+     }
+    }
+   ],
+   "fndds_cross_check": null,
+   "provenance": "computed from catalog constituents of dish_templates_es.json (CC0)",
+   "country_origin": "ES"
+  },
+  "yogur_con_miel_y_almendra_marcona": {
+   "label": "Yogur con miel y almendra marcona",
+   "method": "frío",
+   "finished_g": 163,
+   "per_100g": {
+    "kcal": 155.9,
+    "protein": 12.1,
+    "carbs": 13.6,
+    "fats": 6.5
+   },
+   "resolution_coverage": 1.0,
+   "constituents": [
+    {
+     "name": "Yogurt griego sin azúcar",
+     "g": 150.0,
+     "resolved": true,
+     "macros": {
+      "kcal": 88.7,
+      "protein": 15.4,
+      "carbs": 5.5,
+      "fats": 0.6
+     }
+    },
+    {
+     "name": "Miel",
+     "g": 15.0,
+     "resolved": true,
+     "macros": {
+      "kcal": 49.6,
+      "protein": 0.0,
+      "carbs": 12.4,
+      "fats": 0.0
+     }
+    },
+    {
+     "name": "Almendra marcona",
+     "g": 20.0,
+     "resolved": true,
+     "macros": {
+      "kcal": 115.8,
+      "protein": 4.2,
+      "carbs": 4.3,
+      "fats": 10.0
+     }
+    }
+   ],
+   "fndds_cross_check": null,
+   "provenance": "computed from catalog constituents of dish_templates_es.json (CC0)",
+   "country_origin": "ES"
+  },
+  "sopa_de_picadillo_con_jamon_y_huevo_duro": {
+   "label": "Sopa de picadillo con jamón y huevo duro",
+   "method": "hervido",
+   "finished_g": 150,
+   "per_100g": {
+    "kcal": 172.4,
+    "protein": 14.6,
+    "carbs": 4.3,
+    "fats": 10.9
+   },
+   "resolution_coverage": 1.0,
+   "constituents": [
+    {
+     "name": "Jamón serrano",
+     "g": 30.0,
+     "resolved": true,
+     "macros": {
+      "kcal": 95.3,
+      "protein": 8.6,
+      "carbs": 0.1,
+      "fats": 6.8
+     }
+    },
+    {
+     "name": "Huevo",
+     "g": 100.0,
+     "resolved": true,
+     "macros": {
+      "kcal": 138.9,
+      "protein": 12.6,
+      "carbs": 0.7,
+      "fats": 9.5
+     }
+    },
+    {
+     "name": "Puerro",
+     "g": 40.0,
+     "resolved": true,
+     "macros": {
+      "kcal": 24.4,
+      "protein": 0.6,
+      "carbs": 5.7,
+      "fats": 0.1
+     }
+    }
+   ],
+   "fndds_cross_check": null,
+   "provenance": "computed from catalog constituents of dish_templates_es.json (CC0)",
+   "country_origin": "ES"
+  },
+  "sopa_de_fideos_con_jamon_serrano": {
+   "label": "Sopa de fideos con jamón serrano",
+   "method": "hervido",
+   "finished_g": 120,
+   "per_100g": {
+    "kcal": 292.4,
+    "protein": 14.5,
+    "carbs": 43.5,
+    "fats": 6.5
+   },
+   "resolution_coverage": 1.0,
+   "constituents": [
+    {
+     "name": "Fideos",
+     "g": 60.0,
+     "resolved": true,
+     "macros": {
+      "kcal": 222.6,
+      "protein": 7.8,
+      "carbs": 44.8,
+      "fats": 0.9
+     }
+    },
+    {
+     "name": "Jamón serrano",
+     "g": 30.0,
+     "resolved": true,
+     "macros": {
+      "kcal": 95.3,
+      "protein": 8.6,
+      "carbs": 0.1,
+      "fats": 6.8
+     }
+    },
+    {
+     "name": "Puerro",
+     "g": 40.0,
+     "resolved": true,
+     "macros": {
+      "kcal": 24.4,
+      "protein": 0.6,
+      "carbs": 5.7,
+      "fats": 0.1
+     }
+    },
+    {
+     "name": "Ajo",
+     "g": 6.0,
+     "resolved": true,
+     "macros": {
+      "kcal": 8.6,
+      "protein": 0.4,
+      "carbs": 1.7,
+      "fats": 0.0
+     }
+    }
+   ],
+   "fndds_cross_check": null,
+   "provenance": "computed from catalog constituents of dish_templates_es.json (CC0)",
+   "country_origin": "ES"
+  },
+  "croquetas_de_jamon_iberico_caseras": {
+   "label": "Croquetas de jamón ibérico caseras",
+   "method": "masa horneada",
+   "finished_g": 299,
+   "per_100g": {
+    "kcal": 205.8,
+    "protein": 14.4,
+    "carbs": 17.9,
+    "fats": 8.6
+   },
+   "resolution_coverage": 1.0,
+   "constituents": [
+    {
+     "name": "Jamón ibérico",
+     "g": 80.0,
+     "resolved": true,
+     "macros": {
+      "kcal": 241.1,
+      "protein": 25.8,
+      "carbs": 0.1,
+      "fats": 15.4
+     }
+    },
+    {
+     "name": "Harina de trigo",
+     "g": 60.0,
+     "resolved": true,
+     "macros": {
+      "kcal": 213.1,
+      "protein": 6.2,
+      "carbs": 45.8,
+      "fats": 0.6
+     }
+    },
+    {
+     "name": "Leche",
+     "g": 150.0,
+     "resolved": true,
+     "macros": {
+      "kcal": 91.5,
+      "protein": 4.7,
+      "carbs": 7.2,
+      "fats": 4.9
+     }
+    },
+    {
+     "name": "Huevo",
+     "g": 50.0,
+     "resolved": true,
+     "macros": {
+      "kcal": 69.5,
+      "protein": 6.3,
+      "carbs": 0.4,
+      "fats": 4.8
+     }
+    }
+   ],
+   "fndds_cross_check": null,
+   "provenance": "computed from catalog constituents of dish_templates_es.json (CC0)",
+   "country_origin": "ES"
+  },
+  "esparragos_trigueros_a_la_plancha_con_ajo": {
+   "label": "Espárragos trigueros a la plancha con ajo",
+   "method": "plancha",
+   "finished_g": 150,
+   "per_100g": {
+    "kcal": 94.9,
+    "protein": 2.6,
+    "carbs": 5.8,
+    "fats": 6.8
+   },
+   "resolution_coverage": 1.0,
+   "constituents": [
+    {
+     "name": "Espárragos",
+     "g": 150.0,
+     "resolved": true,
+     "macros": {
+      "kcal": 38.1,
+      "protein": 3.3,
+      "carbs": 5.8,
+      "fats": 0.2
+     }
+    },
+    {
+     "name": "Ajo",
+     "g": 10.0,
+     "resolved": true,
+     "macros": {
+      "kcal": 14.3,
+      "protein": 0.7,
+      "carbs": 2.8,
+      "fats": 0.0
+     }
+    },
+    {
+     "name": "Aceite de oliva",
+     "g": 10.0,
+     "resolved": true,
+     "macros": {
+      "kcal": 90.0,
+      "protein": 0.0,
+      "carbs": 0.0,
+      "fats": 10.0
+     }
+    }
+   ],
+   "fndds_cross_check": null,
+   "provenance": "computed from catalog constituents of dish_templates_es.json (CC0)",
+   "country_origin": "ES"
+  },
+  "ensalada_de_judias_blancas_con_atun_y_cebolla": {
+   "label": "Ensalada de judías blancas con atún y cebolla",
+   "method": "frío",
+   "finished_g": 220,
+   "per_100g": {
+    "kcal": 306.0,
+    "protein": 21.9,
+    "carbs": 34.6,
+    "fats": 9.2
+   },
+   "resolution_coverage": 1.0,
+   "constituents": [
+    {
+     "name": "Judías blancas",
+     "g": 120.0,
+     "resolved": true,
+     "macros": {
+      "kcal": 399.6,
+      "protein": 28.1,
+      "carbs": 72.4,
+      "fats": 1.0
+     }
+    },
+    {
+     "name": "Sardinas en lata",
+     "g": 80.0,
+     "resolved": true,
+     "macros": {
+      "kcal": 166.4,
+      "protein": 19.7,
+      "carbs": 0.0,
+      "fats": 9.2
+     }
+    },
+    {
+     "name": "Cebolla",
+     "g": 40.0,
+     "resolved": true,
+     "macros": {
+      "kcal": 17.1,
+      "protein": 0.4,
+      "carbs": 3.7,
+      "fats": 0.0
+     }
+    },
+    {
+     "name": "Aceite de oliva",
+     "g": 10.0,
+     "resolved": true,
+     "macros": {
+      "kcal": 90.0,
+      "protein": 0.0,
+      "carbs": 0.0,
+      "fats": 10.0
+     }
+    }
+   ],
+   "fndds_cross_check": null,
+   "provenance": "computed from catalog constituents of dish_templates_es.json (CC0)",
+   "country_origin": "ES"
+  },
+  "berenjenas_gratinadas_con_queso_blanco": {
+   "label": "Berenjenas gratinadas con queso blanco",
+   "method": "horneado",
+   "finished_g": 299,
+   "per_100g": {
+    "kcal": 84.9,
+    "protein": 4.5,
+    "carbs": 5.6,
+    "fats": 4.9
+   },
+   "resolution_coverage": 1.0,
+   "constituents": [
+    {
+     "name": "Berenjena",
+     "g": 200.0,
+     "resolved": true,
+     "macros": {
+      "kcal": 58.2,
+      "protein": 2.0,
+      "carbs": 11.8,
+      "fats": 0.4
+     }
+    },
+    {
+     "name": "Queso blanco",
+     "g": 60.0,
+     "resolved": true,
+     "macros": {
+      "kcal": 179.1,
+      "protein": 10.9,
+      "carbs": 1.8,
+      "fats": 14.3
+     }
+    },
+    {
+     "name": "Tomate",
+     "g": 80.0,
+     "resolved": true,
+     "macros": {
+      "kcal": 16.7,
+      "protein": 0.7,
+      "carbs": 3.1,
+      "fats": 0.2
+     }
+    }
+   ],
+   "fndds_cross_check": null,
+   "provenance": "computed from catalog constituents of dish_templates_es.json (CC0)",
+   "country_origin": "ES"
+  },
+  "salmorejo_cordobes_con_jamon_y_huevo_picado": {
+   "label": "Salmorejo cordobés con jamón y huevo picado",
+   "method": "licuado frío",
+   "finished_g": 383,
+   "per_100g": {
+    "kcal": 123.4,
+    "protein": 5.7,
+    "carbs": 8.6,
+    "fats": 7.4
+   },
+   "resolution_coverage": 1.0,
+   "constituents": [
+    {
+     "name": "Tomate",
+     "g": 300.0,
+     "resolved": true,
+     "macros": {
+      "kcal": 62.7,
+      "protein": 2.6,
+      "carbs": 11.7,
+      "fats": 0.6
+     }
+    },
+    {
+     "name": "Pan blanco familiar",
+     "g": 40.0,
+     "resolved": true,
+     "macros": {
+      "kcal": 110.3,
+      "protein": 4.1,
+      "carbs": 20.7,
+      "fats": 1.4
+     }
+    },
+    {
+     "name": "Jamón serrano",
+     "g": 30.0,
+     "resolved": true,
+     "macros": {
+      "kcal": 95.3,
+      "protein": 8.6,
+      "carbs": 0.1,
+      "fats": 6.8
+     }
+    },
+    {
+     "name": "Huevo",
+     "g": 50.0,
+     "resolved": true,
+     "macros": {
+      "kcal": 69.5,
+      "protein": 6.3,
+      "carbs": 0.4,
+      "fats": 4.8
+     }
+    },
+    {
+     "name": "Aceite de oliva",
+     "g": 15.0,
+     "resolved": true,
+     "macros": {
+      "kcal": 135.0,
+      "protein": 0.0,
+      "carbs": 0.0,
+      "fats": 15.0
+     }
+    }
+   ],
+   "fndds_cross_check": null,
+   "provenance": "computed from catalog constituents of dish_templates_es.json (CC0)",
+   "country_origin": "ES"
+  },
+  "sardinas_a_la_plancha_con_pimientos_asados": {
+   "label": "Sardinas a la plancha con pimientos asados",
+   "method": "plancha",
+   "finished_g": 211,
+   "per_100g": {
+    "kcal": 202.2,
+    "protein": 17.9,
+    "carbs": 2.3,
+    "fats": 13.0
+   },
+   "resolution_coverage": 1.0,
+   "constituents": [
+    {
+     "name": "Sardinas en lata",
+     "g": 150.0,
+     "resolved": true,
+     "macros": {
+      "kcal": 312.0,
+      "protein": 36.9,
+      "carbs": 0.0,
+      "fats": 17.2
+     }
+    },
+    {
+     "name": "Ají morrón",
+     "g": 80.0,
+     "resolved": true,
+     "macros": {
+      "kcal": 24.6,
+      "protein": 0.8,
+      "carbs": 4.8,
+      "fats": 0.2
+     }
+    },
+    {
+     "name": "Aceite de oliva",
+     "g": 10.0,
+     "resolved": true,
+     "macros": {
+      "kcal": 90.0,
+      "protein": 0.0,
+      "carbs": 0.0,
+      "fats": 10.0
+     }
+    }
+   ],
+   "fndds_cross_check": null,
+   "provenance": "computed from catalog constituents of dish_templates_es.json (CC0)",
+   "country_origin": "ES"
+  },
+  "habas_con_jamon_serrano_salteadas": {
+   "label": "Habas con jamón serrano salteadas",
+   "method": "salteado",
+   "finished_g": 183,
+   "per_100g": {
+    "kcal": 404.4,
+    "protein": 28.0,
+    "carbs": 49.1,
+    "fats": 11.7
+   },
+   "resolution_coverage": 1.0,
+   "constituents": [
+    {
+     "name": "Habas",
+     "g": 150.0,
+     "resolved": true,
+     "macros": {
+      "kcal": 511.5,
+      "protein": 39.1,
+      "carbs": 87.5,
+      "fats": 2.3
+     }
+    },
+    {
+     "name": "Jamón serrano",
+     "g": 40.0,
+     "resolved": true,
+     "macros": {
+      "kcal": 127.1,
+      "protein": 11.5,
+      "carbs": 0.1,
+      "fats": 9.0
+     }
+    },
+    {
+     "name": "Ajo",
+     "g": 8.0,
+     "resolved": true,
+     "macros": {
+      "kcal": 11.4,
+      "protein": 0.5,
+      "carbs": 2.3,
+      "fats": 0.0
+     }
+    },
+    {
+     "name": "Aceite de oliva",
+     "g": 10.0,
+     "resolved": true,
+     "macros": {
+      "kcal": 90.0,
+      "protein": 0.0,
+      "carbs": 0.0,
+      "fats": 10.0
+     }
+    }
+   ],
+   "fndds_cross_check": null,
+   "provenance": "computed from catalog constituents of dish_templates_es.json (CC0)",
+   "country_origin": "ES"
+  },
+  "pisto_con_huevo_frito": {
+   "label": "Pisto con huevo frito",
+   "method": "salteado",
+   "finished_g": 370,
+   "per_100g": {
+    "kcal": 57.6,
+    "protein": 4.3,
+    "carbs": 3.8,
+    "fats": 2.8
+   },
+   "resolution_coverage": 1.0,
+   "constituents": [
+    {
+     "name": "Huevo",
+     "g": 100.0,
+     "resolved": true,
+     "macros": {
+      "kcal": 138.9,
+      "protein": 12.6,
+      "carbs": 0.7,
+      "fats": 9.5
+     }
+    },
+    {
+     "name": "Calabacín",
+     "g": 120.0,
+     "resolved": true,
+     "macros": {
+      "kcal": 24.2,
+      "protein": 1.4,
+      "carbs": 3.7,
+      "fats": 0.4
+     }
+    },
+    {
+     "name": "Berenjena",
+     "g": 100.0,
+     "resolved": true,
+     "macros": {
+      "kcal": 29.1,
+      "protein": 1.0,
+      "carbs": 5.9,
+      "fats": 0.2
+     }
+    },
+    {
+     "name": "Tomate",
+     "g": 100.0,
+     "resolved": true,
+     "macros": {
+      "kcal": 20.9,
+      "protein": 0.9,
+      "carbs": 3.9,
+      "fats": 0.2
+     }
+    }
+   ],
+   "fndds_cross_check": null,
+   "provenance": "computed from catalog constituents of dish_templates_es.json (CC0)",
+   "country_origin": "ES"
+  },
+  "menestra_de_verduras_con_jamon_serrano": {
+   "label": "Menestra de verduras con jamón serrano",
+   "method": "salteado",
+   "finished_g": 273,
+   "per_100g": {
+    "kcal": 74.2,
+    "protein": 5.7,
+    "carbs": 7.7,
+    "fats": 2.7
+   },
+   "resolution_coverage": 1.0,
+   "constituents": [
+    {
+     "name": "Vainitas",
+     "g": 100.0,
+     "resolved": true,
+     "macros": {
+      "kcal": 40.0,
+      "protein": 2.0,
+      "carbs": 7.4,
+      "fats": 0.3
+     }
+    },
+    {
+     "name": "Alcachofa",
+     "g": 100.0,
+     "resolved": true,
+     "macros": {
+      "kcal": 47.0,
+      "protein": 3.3,
+      "carbs": 10.5,
+      "fats": 0.1
+     }
+    },
+    {
+     "name": "Espárragos",
+     "g": 80.0,
+     "resolved": true,
+     "macros": {
+      "kcal": 20.3,
+      "protein": 1.8,
+      "carbs": 3.1,
+      "fats": 0.1
+     }
+    },
+    {
+     "name": "Jamón serrano",
+     "g": 30.0,
+     "resolved": true,
+     "macros": {
+      "kcal": 95.3,
+      "protein": 8.6,
+      "carbs": 0.1,
+      "fats": 6.8
+     }
+    }
+   ],
+   "fndds_cross_check": null,
+   "provenance": "computed from catalog constituents of dish_templates_es.json (CC0)",
+   "country_origin": "ES"
+  },
+  "coliflor_gratinada_con_queso_blanco": {
+   "label": "Coliflor gratinada con queso blanco",
+   "method": "horneado",
+   "finished_g": 317,
+   "per_100g": {
+    "kcal": 91.0,
+    "protein": 5.4,
+    "carbs": 5.1,
+    "fats": 5.5
+   },
+   "resolution_coverage": 1.0,
+   "constituents": [
+    {
+     "name": "Coliflor",
+     "g": 220.0,
+     "resolved": true,
+     "macros": {
+      "kcal": 60.7,
+      "protein": 3.6,
+      "carbs": 10.4,
+      "fats": 0.5
+     }
+    },
+    {
+     "name": "Queso blanco",
+     "g": 60.0,
+     "resolved": true,
+     "macros": {
+      "kcal": 179.1,
+      "protein": 10.9,
+      "carbs": 1.8,
+      "fats": 14.3
+     }
+    },
+    {
+     "name": "Leche",
+     "g": 80.0,
+     "resolved": true,
+     "macros": {
+      "kcal": 48.8,
+      "protein": 2.5,
+      "carbs": 3.8,
+      "fats": 2.6
+     }
+    }
+   ],
+   "fndds_cross_check": null,
+   "provenance": "computed from catalog constituents of dish_templates_es.json (CC0)",
+   "country_origin": "ES"
+  },
+  "alcachofas_salteadas_con_jamon_serrano": {
+   "label": "Alcachofas salteadas con jamón serrano",
+   "method": "salteado",
+   "finished_g": 205,
+   "per_100g": {
+    "kcal": 145.0,
+    "protein": 8.0,
+    "carbs": 10.4,
+    "fats": 8.9
+   },
+   "resolution_coverage": 1.0,
+   "constituents": [
+    {
+     "name": "Alcachofa",
+     "g": 180.0,
+     "resolved": true,
+     "macros": {
+      "kcal": 84.6,
+      "protein": 5.9,
+      "carbs": 18.9,
+      "fats": 0.3
+     }
+    },
+    {
+     "name": "Jamón serrano",
+     "g": 35.0,
+     "resolved": true,
+     "macros": {
+      "kcal": 111.2,
+      "protein": 10.1,
+      "carbs": 0.1,
+      "fats": 7.9
+     }
+    },
+    {
+     "name": "Ajo",
+     "g": 8.0,
+     "resolved": true,
+     "macros": {
+      "kcal": 11.4,
+      "protein": 0.5,
+      "carbs": 2.3,
+      "fats": 0.0
+     }
+    },
+    {
+     "name": "Aceite de oliva",
+     "g": 10.0,
+     "resolved": true,
+     "macros": {
+      "kcal": 90.0,
+      "protein": 0.0,
+      "carbs": 0.0,
+      "fats": 10.0
+     }
+    }
+   ],
+   "fndds_cross_check": null,
+   "provenance": "computed from catalog constituents of dish_templates_es.json (CC0)",
+   "country_origin": "ES"
+  },
+  "pan_con_tomate_y_queso_manchego": {
+   "label": "Pan con tomate y queso manchego",
+   "method": "frío",
+   "finished_g": 150,
+   "per_100g": {
+    "kcal": 199.7,
+    "protein": 9.4,
+    "carbs": 23.3,
+    "fats": 7.8
+   },
+   "resolution_coverage": 1.0,
+   "constituents": [
+    {
+     "name": "Pan blanco familiar",
+     "g": 60.0,
+     "resolved": true,
+     "macros": {
+      "kcal": 165.5,
+      "protein": 6.2,
+      "carbs": 31.0,
+      "fats": 2.1
+     }
+    },
+    {
+     "name": "Tomate",
+     "g": 70.0,
+     "resolved": true,
+     "macros": {
+      "kcal": 14.6,
+      "protein": 0.6,
+      "carbs": 2.7,
+      "fats": 0.1
+     }
+    },
+    {
+     "name": "Queso blanco",
+     "g": 40.0,
+     "resolved": true,
+     "macros": {
+      "kcal": 119.4,
+      "protein": 7.2,
+      "carbs": 1.2,
+      "fats": 9.5
+     }
+    }
+   ],
+   "fndds_cross_check": null,
+   "provenance": "computed from catalog constituents of dish_templates_es.json (CC0)",
+   "country_origin": "ES"
+  },
+  "higos_con_jamon_serrano": {
+   "label": "Higos con jamón serrano",
+   "method": "frío",
+   "finished_g": 114,
+   "per_100g": {
+    "kcal": 148.5,
+    "protein": 8.2,
+    "carbs": 16.9,
+    "fats": 6.2
+   },
+   "resolution_coverage": 1.0,
+   "constituents": [
+    {
+     "name": "Higo",
+     "g": 100.0,
+     "resolved": true,
+     "macros": {
+      "kcal": 74.0,
+      "protein": 0.8,
+      "carbs": 19.2,
+      "fats": 0.3
+     }
+    },
+    {
+     "name": "Jamón serrano",
+     "g": 30.0,
+     "resolved": true,
+     "macros": {
+      "kcal": 95.3,
+      "protein": 8.6,
+      "carbs": 0.1,
+      "fats": 6.8
+     }
+    }
+   ],
+   "fndds_cross_check": null,
+   "provenance": "computed from catalog constituents of dish_templates_es.json (CC0)",
+   "country_origin": "ES"
+  },
+  "membrillo_con_queso_blanco": {
+   "label": "Membrillo con queso blanco",
+   "method": "frío",
+   "finished_g": 88,
+   "per_100g": {
+    "kcal": 327.5,
+    "protein": 10.5,
+    "carbs": 40.8,
+    "fats": 13.6
+   },
+   "resolution_coverage": 1.0,
+   "constituents": [
+    {
+     "name": "Membrillo dulce",
+     "g": 50.0,
+     "resolved": true,
+     "macros": {
+      "kcal": 139.0,
+      "protein": 0.2,
+      "carbs": 34.5,
+      "fats": 0.0
+     }
+    },
+    {
+     "name": "Queso blanco",
+     "g": 50.0,
+     "resolved": true,
+     "macros": {
+      "kcal": 149.2,
+      "protein": 9.1,
+      "carbs": 1.5,
+      "fats": 11.9
+     }
+    }
+   ],
+   "fndds_cross_check": null,
+   "provenance": "computed from catalog constituents of dish_templates_es.json (CC0)",
+   "country_origin": "ES"
+  },
+  "ensalada_de_espinacas_uva_y_almendra_marcona": {
+   "label": "Ensalada de espinacas, uva y almendra marcona",
+   "method": "frío",
+   "finished_g": 185,
+   "per_100g": {
+    "kcal": 157.0,
+    "protein": 4.2,
+    "carbs": 12.1,
+    "fats": 11.1
+   },
+   "resolution_coverage": 1.0,
+   "constituents": [
+    {
+     "name": "Espinacas",
+     "g": 100.0,
+     "resolved": true,
+     "macros": {
+      "kcal": 29.5,
+      "protein": 2.9,
+      "carbs": 3.6,
+      "fats": 0.4
+     }
+    },
+    {
+     "name": "Uva",
+     "g": 80.0,
+     "resolved": true,
+     "macros": {
+      "kcal": 55.2,
+      "protein": 0.6,
+      "carbs": 14.5,
+      "fats": 0.1
+     }
+    },
+    {
+     "name": "Almendra marcona",
+     "g": 20.0,
+     "resolved": true,
+     "macros": {
+      "kcal": 115.8,
+      "protein": 4.2,
+      "carbs": 4.3,
+      "fats": 10.0
+     }
+    },
+    {
+     "name": "Aceite de oliva",
+     "g": 10.0,
+     "resolved": true,
+     "macros": {
+      "kcal": 90.0,
+      "protein": 0.0,
+      "carbs": 0.0,
+      "fats": 10.0
+     }
+    }
+   ],
+   "fndds_cross_check": null,
+   "provenance": "computed from catalog constituents of dish_templates_es.json (CC0)",
+   "country_origin": "ES"
+  },
+  "merluza_en_salsa_verde_con_almejas": {
+   "label": "Merluza en salsa verde con almejas",
+   "method": "guisado",
+   "finished_g": 260,
+   "per_100g": {
+    "kcal": 105.5,
+    "protein": 19.9,
+    "carbs": 2.6,
+    "fats": 1.6
+   },
+   "resolution_coverage": 1.0,
+   "constituents": [
+    {
+     "name": "Filete de pescado blanco",
+     "g": 180.0,
+     "resolved": true,
+     "macros": {
+      "kcal": 172.3,
+      "protein": 36.2,
+      "carbs": 0.0,
+      "fats": 3.1
+     }
+    },
+    {
+     "name": "Almejas",
+     "g": 100.0,
+     "resolved": true,
+     "macros": {
+      "kcal": 86.0,
+      "protein": 14.7,
+      "carbs": 3.6,
+      "fats": 1.0
+     }
+    },
+    {
+     "name": "Ajo",
+     "g": 10.0,
+     "resolved": true,
+     "macros": {
+      "kcal": 14.3,
+      "protein": 0.7,
+      "carbs": 2.8,
+      "fats": 0.0
+     }
+    },
+    {
+     "name": "Perejil",
+     "g": 5.0,
+     "resolved": true,
+     "macros": {
+      "kcal": 1.8,
+      "protein": 0.1,
+      "carbs": 0.3,
+      "fats": 0.0
+     }
+    }
+   ],
+   "fndds_cross_check": null,
+   "provenance": "computed from catalog constituents of dish_templates_es.json (CC0)",
+   "country_origin": "ES"
+  },
+  "chuletas_de_cerdo_con_pimientos_del_piquillo": {
+   "label": "Chuletas de cerdo con pimientos del piquillo",
+   "method": "plancha",
+   "finished_g": 271,
+   "per_100g": {
+    "kcal": 140.7,
+    "protein": 16.1,
+    "carbs": 3.1,
+    "fats": 7.1
+   },
+   "resolution_coverage": 1.0,
+   "constituents": [
+    {
+     "name": "Cerdo",
+     "g": 200.0,
+     "resolved": true,
+     "macros": {
+      "kcal": 339.2,
+      "protein": 42.2,
+      "carbs": 0.0,
+      "fats": 18.9
+     }
+    },
+    {
+     "name": "Ají morrón",
+     "g": 100.0,
+     "resolved": true,
+     "macros": {
+      "kcal": 30.8,
+      "protein": 1.0,
+      "carbs": 6.0,
+      "fats": 0.3
+     }
+    },
+    {
+     "name": "Ajo",
+     "g": 8.0,
+     "resolved": true,
+     "macros": {
+      "kcal": 11.4,
+      "protein": 0.5,
+      "carbs": 2.3,
+      "fats": 0.0
+     }
+    }
+   ],
+   "fndds_cross_check": null,
+   "provenance": "computed from catalog constituents of dish_templates_es.json (CC0)",
+   "country_origin": "ES"
+  },
+  "conejo_al_ajillo_con_patatas": {
+   "label": "Conejo al ajillo con patatas",
+   "method": "guisado",
+   "finished_g": 366,
+   "per_100g": {
+    "kcal": 118.3,
+    "protein": 13.6,
+    "carbs": 7.5,
+    "fats": 3.4
+   },
+   "resolution_coverage": 1.0,
+   "constituents": [
+    {
+     "name": "Conejo",
+     "g": 220.0,
+     "resolved": true,
+     "macros": {
+      "kcal": 299.2,
+      "protein": 44.0,
+      "carbs": 0.0,
+      "fats": 12.2
+     }
+    },
+    {
+     "name": "Papa",
+     "g": 180.0,
+     "resolved": true,
+     "macros": {
+      "kcal": 109.4,
+      "protein": 4.6,
+      "carbs": 22.3,
+      "fats": 0.2
+     }
+    },
+    {
+     "name": "Ajo",
+     "g": 15.0,
+     "resolved": true,
+     "macros": {
+      "kcal": 21.4,
+      "protein": 1.0,
+      "carbs": 4.2,
+      "fats": 0.1
+     }
+    },
+    {
+     "name": "Laurel",
+     "g": 1.0,
+     "resolved": true,
+     "macros": {
+      "kcal": 3.1,
+      "protein": 0.1,
+      "carbs": 0.8,
+      "fats": 0.1
+     }
+    }
+   ],
+   "fndds_cross_check": null,
+   "provenance": "computed from catalog constituents of dish_templates_es.json (CC0)",
+   "country_origin": "ES"
+  },
+  "cordero_asado_con_patatas_panaderas": {
+   "label": "Cordero asado con patatas panaderas",
+   "method": "horneado",
+   "finished_g": 422,
+   "per_100g": {
+    "kcal": 176.5,
+    "protein": 10.3,
+    "carbs": 7.7,
+    "fats": 11.3
+   },
+   "resolution_coverage": 1.0,
+   "constituents": [
+    {
+     "name": "Cordero",
+     "g": 220.0,
+     "resolved": true,
+     "macros": {
+      "kcal": 587.4,
+      "protein": 37.2,
+      "carbs": 0.0,
+      "fats": 47.5
+     }
+    },
+    {
+     "name": "Papa",
+     "g": 200.0,
+     "resolved": true,
+     "macros": {
+      "kcal": 121.6,
+      "protein": 5.1,
+      "carbs": 24.8,
+      "fats": 0.2
+     }
+    },
+    {
+     "name": "Cebolla",
+     "g": 50.0,
+     "resolved": true,
+     "macros": {
+      "kcal": 21.4,
+      "protein": 0.6,
+      "carbs": 4.7,
+      "fats": 0.1
+     }
+    },
+    {
+     "name": "Ajo",
+     "g": 10.0,
+     "resolved": true,
+     "macros": {
+      "kcal": 14.3,
+      "protein": 0.7,
+      "carbs": 2.8,
+      "fats": 0.0
+     }
+    }
+   ],
+   "fndds_cross_check": null,
+   "provenance": "computed from catalog constituents of dish_templates_es.json (CC0)",
+   "country_origin": "ES"
+  },
+  "empanada_gallega_de_sardinas": {
+   "label": "Empanada gallega de sardinas",
+   "method": "masa horneada",
+   "finished_g": 290,
+   "per_100g": {
+    "kcal": 232.8,
+    "protein": 13.1,
+    "carbs": 34.5,
+    "fats": 4.4
+   },
+   "resolution_coverage": 1.0,
+   "constituents": [
+    {
+     "name": "Harina de trigo",
+     "g": 120.0,
+     "resolved": true,
+     "macros": {
+      "kcal": 426.2,
+      "protein": 12.4,
+      "carbs": 91.6,
+      "fats": 1.2
+     }
+    },
+    {
+     "name": "Sardinas en lata",
+     "g": 100.0,
+     "resolved": true,
+     "macros": {
+      "kcal": 208.0,
+      "protein": 24.6,
+      "carbs": 0.0,
+      "fats": 11.4
+     }
+    },
+    {
+     "name": "Cebolla",
+     "g": 60.0,
+     "resolved": true,
+     "macros": {
+      "kcal": 25.6,
+      "protein": 0.7,
+      "carbs": 5.6,
+      "fats": 0.1
+     }
+    },
+    {
+     "name": "Ají morrón",
+     "g": 50.0,
+     "resolved": true,
+     "macros": {
+      "kcal": 15.4,
+      "protein": 0.5,
+      "carbs": 3.0,
+      "fats": 0.1
+     }
+    }
+   ],
+   "fndds_cross_check": null,
+   "provenance": "computed from catalog constituents of dish_templates_es.json (CC0)",
+   "country_origin": "ES"
+  },
+  "turron_con_almendra_marcona_merienda_dulce": {
+   "label": "Turrón con almendra marcona (merienda dulce)",
+   "method": "frío",
+   "finished_g": 40,
+   "per_100g": {
+    "kcal": 515.5,
+    "protein": 10.4,
+    "carbs": 77.4,
+    "fats": 20.0
+   },
+   "resolution_coverage": 1.0,
+   "constituents": [
+    {
+     "name": "Turrón",
+     "g": 30.0,
+     "resolved": true,
+     "macros": {
+      "kcal": 119.4,
+      "protein": 1.0,
+      "carbs": 27.7,
+      "fats": 0.5
+     }
+    },
+    {
+     "name": "Almendra marcona",
+     "g": 15.0,
+     "resolved": true,
+     "macros": {
+      "kcal": 86.8,
+      "protein": 3.2,
+      "carbs": 3.2,
+      "fats": 7.5
+     }
+    }
+   ],
+   "fndds_cross_check": null,
+   "provenance": "computed from catalog constituents of dish_templates_es.json (CC0)",
+   "country_origin": "ES"
+  },
+  "champinones_al_ajillo_con_perejil": {
+   "label": "Champiñones al ajillo con perejil",
+   "method": "salteado",
+   "finished_g": 182,
+   "per_100g": {
+    "kcal": 88.0,
+    "protein": 3.6,
+    "carbs": 5.3,
+    "fats": 5.9
+   },
+   "resolution_coverage": 1.0,
+   "constituents": [
+    {
+     "name": "Champiñones",
+     "g": 180.0,
+     "resolved": true,
+     "macros": {
+      "kcal": 51.3,
+      "protein": 5.6,
+      "carbs": 5.9,
+      "fats": 0.6
+     }
+    },
+    {
+     "name": "Ajo",
+     "g": 12.0,
+     "resolved": true,
+     "macros": {
+      "kcal": 17.1,
+      "protein": 0.8,
+      "carbs": 3.4,
+      "fats": 0.1
+     }
+    },
+    {
+     "name": "Perejil",
+     "g": 5.0,
+     "resolved": true,
+     "macros": {
+      "kcal": 1.8,
+      "protein": 0.1,
+      "carbs": 0.3,
+      "fats": 0.0
+     }
+    },
+    {
+     "name": "Aceite de oliva",
+     "g": 10.0,
+     "resolved": true,
+     "macros": {
+      "kcal": 90.0,
+      "protein": 0.0,
+      "carbs": 0.0,
+      "fats": 10.0
+     }
+    }
+   ],
+   "fndds_cross_check": null,
+   "provenance": "computed from catalog constituents of dish_templates_es.json (CC0)",
+   "country_origin": "ES"
+  },
+  "coca_de_vegetales_con_anchoas": {
+   "label": "Coca de vegetales con anchoas",
+   "method": "masa horneada",
+   "finished_g": 211,
+   "per_100g": {
+    "kcal": 225.0,
+    "protein": 10.8,
+    "carbs": 39.6,
+    "fats": 2.4
+   },
+   "resolution_coverage": 1.0,
+   "constituents": [
+    {
+     "name": "Harina de trigo",
+     "g": 100.0,
+     "resolved": true,
+     "macros": {
+      "kcal": 355.2,
+      "protein": 10.3,
+      "carbs": 76.3,
+      "fats": 1.0
+     }
+    },
+    {
+     "name": "Anchoas",
+     "g": 40.0,
+     "resolved": true,
+     "macros": {
+      "kcal": 84.0,
+      "protein": 11.6,
+      "carbs": 0.0,
+      "fats": 3.9
+     }
+    },
+    {
+     "name": "Ají morrón",
+     "g": 60.0,
+     "resolved": true,
+     "macros": {
+      "kcal": 18.5,
+      "protein": 0.6,
+      "carbs": 3.6,
+      "fats": 0.2
+     }
+    },
+    {
+     "name": "Cebolla",
+     "g": 40.0,
+     "resolved": true,
+     "macros": {
+      "kcal": 17.1,
+      "protein": 0.4,
+      "carbs": 3.7,
+      "fats": 0.0
+     }
+    }
+   ],
+   "fndds_cross_check": null,
+   "provenance": "computed from catalog constituents of dish_templates_es.json (CC0)",
+   "country_origin": "ES"
+  },
+  "vieiras_a_la_plancha_con_puerro": {
+   "label": "Vieiras a la plancha con puerro",
+   "method": "plancha",
+   "finished_g": 194,
+   "per_100g": {
+    "kcal": 118.6,
+    "protein": 9.8,
+    "carbs": 6.8,
+    "fats": 5.6
+   },
+   "resolution_coverage": 1.0,
+   "constituents": [
+    {
+     "name": "Vieira",
+     "g": 150.0,
+     "resolved": true,
+     "macros": {
+      "kcal": 103.5,
+      "protein": 18.1,
+      "carbs": 4.8,
+      "fats": 0.7
+     }
+    },
+    {
+     "name": "Puerro",
+     "g": 60.0,
+     "resolved": true,
+     "macros": {
+      "kcal": 36.6,
+      "protein": 0.9,
+      "carbs": 8.5,
+      "fats": 0.2
+     }
+    },
+    {
+     "name": "Aceite de oliva",
+     "g": 10.0,
+     "resolved": true,
+     "macros": {
+      "kcal": 90.0,
+      "protein": 0.0,
+      "carbs": 0.0,
+      "fats": 10.0
+     }
+    }
+   ],
+   "fndds_cross_check": null,
+   "provenance": "computed from catalog constituents of dish_templates_es.json (CC0)",
+   "country_origin": "ES"
+  },
+  "percebes_al_vapor_con_limon": {
+   "label": "Percebes al vapor con limón",
+   "method": "hervido",
+   "finished_g": 152,
+   "per_100g": {
+    "kcal": 92.0,
+    "protein": 18.0,
+    "carbs": 1.4,
+    "fats": 1.1
+   },
+   "resolution_coverage": 1.0,
+   "constituents": [
+    {
+     "name": "Percebes",
+     "g": 150.0,
+     "resolved": true,
+     "macros": {
+      "kcal": 130.5,
+      "protein": 27.1,
+      "carbs": 0.1,
+      "fats": 1.6
+     }
+    },
+    {
+     "name": "Limón",
+     "g": 20.0,
+     "resolved": true,
+     "macros": {
+      "kcal": 9.3,
+      "protein": 0.1,
+      "carbs": 2.1,
+      "fats": 0.0
+     }
+    },
+    {
+     "name": "Sal",
+     "g": 3.0,
+     "resolved": true,
+     "macros": {
+      "kcal": 0.0,
+      "protein": 0.0,
+      "carbs": 0.0,
+      "fats": 0.0
+     }
+    }
+   ],
+   "fndds_cross_check": null,
+   "provenance": "computed from catalog constituents of dish_templates_es.json (CC0)",
+   "country_origin": "ES"
+  },
+  "chistorra_a_la_plancha_con_pimientos": {
+   "label": "Chistorra a la plancha con pimientos",
+   "method": "plancha",
+   "finished_g": 211,
+   "per_100g": {
+    "kcal": 311.2,
+    "protein": 9.3,
+    "carbs": 4.6,
+    "fats": 28.9
+   },
+   "resolution_coverage": 1.0,
+   "constituents": [
+    {
+     "name": "Chistorra",
+     "g": 120.0,
+     "resolved": true,
+     "macros": {
+      "kcal": 614.9,
+      "protein": 18.4,
+      "carbs": 1.1,
+      "fats": 60.6
+     }
+    },
+    {
+     "name": "Ají morrón",
+     "g": 80.0,
+     "resolved": true,
+     "macros": {
+      "kcal": 24.6,
+      "protein": 0.8,
+      "carbs": 4.8,
+      "fats": 0.2
+     }
+    },
+    {
+     "name": "Cebolla",
+     "g": 40.0,
+     "resolved": true,
+     "macros": {
+      "kcal": 17.1,
+      "protein": 0.4,
+      "carbs": 3.7,
+      "fats": 0.0
+     }
+    }
+   ],
+   "fndds_cross_check": null,
+   "provenance": "computed from catalog constituents of dish_templates_es.json (CC0)",
+   "country_origin": "ES"
+  },
+  "butifarra_con_alubias_blancas": {
+   "label": "Butifarra con alubias blancas",
+   "method": "guisado",
+   "finished_g": 255,
+   "per_100g": {
+    "kcal": 278.4,
+    "protein": 15.2,
+    "carbs": 28.3,
+    "fats": 12.1
+   },
+   "resolution_coverage": 1.0,
+   "constituents": [
+    {
+     "name": "Butifarra",
+     "g": 150.0,
+     "resolved": true,
+     "macros": {
+      "kcal": 359.7,
+      "protein": 15.0,
+      "carbs": 8.2,
+      "fats": 30.0
+     }
+    },
+    {
+     "name": "Judías blancas",
+     "g": 100.0,
+     "resolved": true,
+     "macros": {
+      "kcal": 333.0,
+      "protein": 23.4,
+      "carbs": 60.3,
+      "fats": 0.8
+     }
+    },
+    {
+     "name": "Cebolla",
+     "g": 40.0,
+     "resolved": true,
+     "macros": {
+      "kcal": 17.1,
+      "protein": 0.4,
+      "carbs": 3.7,
+      "fats": 0.0
+     }
+    }
+   ],
+   "fndds_cross_check": null,
+   "provenance": "computed from catalog constituents of dish_templates_es.json (CC0)",
+   "country_origin": "ES"
+  },
+  "sobrasada_con_pan_y_miel": {
+   "label": "Sobrasada con pan y miel",
+   "method": "frío",
+   "finished_g": 97,
+   "per_100g": {
+    "kcal": 450.3,
+    "protein": 11.7,
+    "carbs": 40.5,
+    "fats": 27.5
+   },
+   "resolution_coverage": 1.0,
+   "constituents": [
+    {
+     "name": "Sobrasada",
+     "g": 40.0,
+     "resolved": true,
+     "macros": {
+      "kcal": 238.2,
+      "protein": 5.2,
+      "carbs": 0.0,
+      "fats": 24.6
+     }
+    },
+    {
+     "name": "Pan blanco familiar",
+     "g": 60.0,
+     "resolved": true,
+     "macros": {
+      "kcal": 165.5,
+      "protein": 6.2,
+      "carbs": 31.0,
+      "fats": 2.1
+     }
+    },
+    {
+     "name": "Miel",
+     "g": 10.0,
+     "resolved": true,
+     "macros": {
+      "kcal": 33.1,
+      "protein": 0.0,
+      "carbs": 8.2,
+      "fats": 0.0
+     }
+    }
+   ],
+   "fndds_cross_check": null,
+   "provenance": "computed from catalog constituents of dish_templates_es.json (CC0)",
+   "country_origin": "ES"
+  }
+ }
+}

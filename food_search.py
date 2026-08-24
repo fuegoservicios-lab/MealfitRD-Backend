@@ -71,14 +71,33 @@ def load_dishes() -> dict:
     with _dishes_lock:
         if _dishes_cache is not None:
             return _dishes_cache
-        ruta = Path(__file__).resolve().parent / "data" / "dominican_dishes.json"
-        try:
-            data = json.loads(ruta.read_text(encoding="utf-8"))
-            dishes = data.get("dishes") if isinstance(data, dict) else None
-            _dishes_cache = dishes if isinstance(dishes, dict) else {}
-        except Exception as e:  # noqa: BLE001 — sin platos el registro por alimento sigue vivo
-            logger.error(f"❌ [P1-MANUAL-FOOD-LOG] No se pudo cargar dominican_dishes.json: {e}")
-            _dishes_cache = {}
+        # [P1-COUNTRY-DIARY-DISHES-60-DE-60-DO · 2026-08-23] Los 60 dominicanos eran los 60
+        # ÚNICOS: un usuario beta abría «Registrar comida», buscaba paella o tacos y no
+        # encontraba nada de su cocina (medido: paella 0, gazpacho 0, tacos 0, arepa 0). En modo
+        # seguimiento —que se vende como producto aparte— eso deja al usuario componiendo su
+        # comida ingrediente a ingrediente, que es justo lo que el componedor existe para
+        # evitarle.
+        #
+        # Se AÑADEN, no se filtran por país: la decisión de P2-DIARY-CATALOG-COUNTRY es correcta
+        # y un dominicano en Madrid sigue comiendo mangú. Los dominicanos van PRIMERO para que
+        # una colisión de slug nunca los desplace: son los que llevan cross-check contra FNDDS.
+        base = Path(__file__).resolve().parent / "data"
+        _dishes_cache = {}
+        for fichero in ("dominican_dishes.json", "spanish_dishes.json", "mexican_dishes.json",
+                        "colombian_dishes.json", "puertorican_dishes.json"):
+            ruta = base / fichero
+            try:
+                data = json.loads(ruta.read_text(encoding="utf-8"))
+                dishes = data.get("dishes") if isinstance(data, dict) else None
+                if isinstance(dishes, dict):
+                    # `setdefault` y no `update`: el primero que llega gana.
+                    for slug, plato in dishes.items():
+                        _dishes_cache.setdefault(slug, plato)
+            except FileNotFoundError:
+                # Un país sin catálogo generado no rompe el buscador: degrada a los que haya.
+                logger.warning(f"⚠ [P1-COUNTRY-DIARY-DISHES] falta {fichero}; se omite")
+            except Exception as e:  # noqa: BLE001 — sin platos el registro por alimento sigue vivo
+                logger.error(f"❌ [P1-MANUAL-FOOD-LOG] No se pudo cargar {fichero}: {e}")
         return _dishes_cache
 
 

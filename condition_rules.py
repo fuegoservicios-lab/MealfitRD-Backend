@@ -145,9 +145,43 @@ _DYSLIPIDEMIA_SATFAT_SUBS = (
 # durante el embarazo → un swap ciego de un staple barato sería over-restrictivo (degradaría calidad/costo);
 # el prompt_block ya advierte sobre 'atún grande'. preserve_qty=True (misma porción de pescado blanco).
 # 'Filete de pescado blanco' resuelve al catálogo (lo usa también _HTA_SODIUM_SUBS).
+# [P1-PREG-MERCURY-COUNTRY · 2026-08-23] La lista era la de la FDA traducida al español
+# dominicano: nombraba la ESPECIE y no el nombre con el que se VENDE. Medido con
+# `clinical_backstop_for_meal(country='ES', Embarazo)`: «Pez espada a la plancha» → 1 violación,
+# «Emperador a la plancha» → 0; «Tiburón guisado» → 2, «Cazón en adobo» → 0. «Emperador» es EL
+# nombre comercial del pez espada en toda pescadería española y el cazón en adobo es un plato
+# andaluz clásico. Swap, regenerate-day y chat-modify NO pasan por el grafo: su única defensa
+# determinista es este backstop.
+#
+# Las altas son NOMBRES de especies que ya estaban vetadas, no especies nuevas: AESAN nombra
+# literalmente «pez espada/emperador, atún rojo, tiburón (cazón, marrajo, mielgas, pintarroja y
+# tintorera) y lucio»; carite/sierra son los nombres caribeños del king mackerel, que ya vivía en
+# la tupla como «caballa gigante»/«macarela rey». La exclusión del 'atún' enlatado SIGUE EN PIE:
+# 'atun rojo' es un token de dos palabras y no toca al atún light (FDA Best/Good Choice).
+#
+# Colisión por subcadena VERIFICADA antes de añadir (el matcher es `token in texto`, no
+# word-boundary): barrido de los 20 candidatos contra 7.458 cadenas vivas —347 filas de
+# `master_ingredients` con sus alias y su `name_en`, los 12 JSON de `data/` (plantillas y
+# bibliotecas de platos de los 6 países) y los 24 pools— ⇒ CERO coincidencias, así que ninguna
+# salida dominicana cambia por estas altas.
+#
+# 'peto' (wahoo) se QUEDA FUERA a sabiendas: «espeto» —«espeto de sardinas», plato andaluz— lo
+# contiene como subcadena, y las sardinas son pescado RECOMENDADO en embarazo. Es la colisión
+# «sal ⊂ salsa» otra vez, y wahoo no está en la lista de evitar de la FDA. Los tokens van SIN
+# tilde a propósito: el motor de sustitución compara el token crudo contra un texto ya
+# accent-stripped (`_apply_substitutions_core._match`), así que un token acentuado es peso
+# muerto — 'tiburón'/'pez-espada' se conservan sólo por no tocar lo que ya estaba.
 _PREGNANCY_MERCURY_SUBS = (
     (("tiburon", "tiburón", "pez espada", "pez-espada", "marlin", "blanquillo",
-      "caballa gigante", "macarela rey", "king mackerel"),
+      "caballa gigante", "macarela rey", "king mackerel",
+      # nombres comerciales ES (AESAN): emperador = pez espada; los cinco escualos
+      "emperador", "cazon", "marrajo", "tintorera", "pintarroja", "mielga", "lucio",
+      # el atún que SÍ se evita (bluefin/bigeye); 'atun' desnudo sigue permitido
+      "atun rojo", "patudo",
+      # inglés (etiquetas y recetas importadas)
+      "swordfish", "shark", "tilefish",
+      # nombres caribeños del king mackerel ya vetado
+      "carite", "sierra"),
      "Filete de pescado blanco", "pescado alto en mercurio", True),
 )
 _PREGNANCY_MERCURY_NEGATIVES = ("bajo en mercurio", "blanco", "tilapia")
@@ -667,11 +701,17 @@ def collect_substitutions(form_data, diet_type=None) -> list:
     en un solo pase. Tolera filas legacy de 3 elementos (preserve_qty → False por defecto).
     [P2-13] `diet_type` (opcional) redirige reemplazos animales a proteína vegetal/pescado para veg*."""
     _dc = _canon_diet(diet_type) if diet_type else "balanced"
+    _cr_beta = _country_is_beta(form_data)  # [P2-COND-SUBS-COUNTRY-HALF · 2026-08-23]
     out = []
     for r in detect_active_rules(form_data):
         for sub in (r.substitutions or ()):
             tokens, repl, label = sub[0], sub[1], sub[2]
             preserve_qty = bool(sub[3]) if len(sub) > 3 else False
+            # [P2-COND-SUBS-COUNTRY-HALF · 2026-08-23] País ANTES que dieta: si algún día un
+            # equivalente neutro fuera proteína animal, el redirect veg* de abajo todavía lo
+            # alcanza. Al revés quedaría fuera de su alcance.
+            if _cr_beta and _is_do_only_target(repl):
+                repl = _neutralize_do_only_target(repl)
             repl = _redirect_replacement_for_diet(repl, _dc)  # [P2-13] diet-aware redirect
             out.append({"tokens": tokens, "replacement": repl, "label": label,
                         "negatives": r.sub_negatives or (), "condition": r.id,
@@ -806,6 +846,46 @@ _DO_ONLY_SUB_TARGETS = frozenset({
     "queso de freir", "queso de hoja", "salami dominicano", "longaniza dominicana",
     "molondrones", "name", "ajies cubanela", "aji cubanela",
 })
+
+
+# [P2-COND-SUBS-COUNTRY-HALF · 2026-08-23] La OTRA puerta de sustitución clínica.
+#
+# `P1-CONDITION-RULES-COUNTRY` cerró `collect_allergen_substitutions` omitiendo el target es-DO
+# (`continue`), y ahí está bien: para un ALÉRGENO omitir es seguro porque el plan cae al path
+# crítico→fallback, que RECHAZA el plato. `collect_substitutions` —la puerta de las condiciones
+# (embarazo, HTA, dislipidemia…)— no tiene ese path: omitir su sustitución no deja al usuario sin
+# plato, lo deja con el ingrediente CONTRAINDICADO dentro. Medido antes de tocar nada: de las 12
+# reglas, exactamente UNA emite un target es-DO — `pregnancy`, «Tayota» como reemplazo del
+# cundeamor (uterotónico/abortivo). Copiar el `continue` de la hermana habría convertido un P2 de
+# reconocibilidad en exposición clínica.
+#
+# Por eso aquí se REMAPEA en vez de omitir, y el mapa es CERRADO: sin entrada, se conserva el
+# target dominicano (peor nombre, misma seguridad) en vez de perder la sustitución. El destino
+# tiene que ser una fila VIVA de `master_ingredients` — «Calabacín» lo es, y sus alias
+# (`zucchini`, `calabacita`, `zapallito`, `courgette`) cubren las cinco plazas beta; inventar un
+# «chayote español» que el catálogo no garantiza sería afirmar una disponibilidad que nadie midió
+# (la lección de P2-SUBS-RESOLVE: un target que no resuelve es un fantasma en la lista).
+#
+# NO se aplica a `collect_allergen_substitutions` a propósito: su «Casabe» no tiene equivalente
+# panhispánico que resuelva hoy, y ahí omitir SÍ es seguro. Si algún día lo tiene, el sitio es
+# este mapa, no una segunda tabla.
+_DO_ONLY_TARGET_NEUTRAL_EQUIVALENTS = {
+    "tayota": "Calabacín",
+}
+
+
+def _neutralize_do_only_target(replacement):
+    """Target es-DO → equivalente panhispánico registrado; si no hay, el MISMO target.
+
+    Nunca devuelve vacío: la ausencia de equivalente jamás puede traducirse en «no sustituyas».
+
+    tooltip-anchor: _DO_ONLY_TARGET_NEUTRAL_EQUIVALENTS (test_p2_cond_subs_country_half.py)"""
+    try:
+        from constants import strip_accents as _sa_n
+        clave = _sa_n(str(replacement or "").strip().lower())
+    except Exception:
+        return replacement
+    return _DO_ONLY_TARGET_NEUTRAL_EQUIVALENTS.get(clave, replacement)
 
 
 def _is_do_only_target(replacement) -> bool:

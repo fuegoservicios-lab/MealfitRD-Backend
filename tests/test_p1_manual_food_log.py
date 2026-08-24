@@ -110,7 +110,11 @@ def test_custom_respeta_los_mismos_topes_que_la_via_de_fotos():
 
 def test_plato_una_racion_es_finished_g():
     dishes = fs.load_dishes()
-    assert len(dishes) == 60, "el catálogo de platos criollos dejó de tener 60"
+    # [reapuntado 2026-08-23, P1-COUNTRY-DIARY-DISHES-60-DE-60-DO] El catálogo dejó de ser
+    # sólo criollo: se le unieron los platos de los cuatro países beta (245 en total). El
+    # número exacto es un dato que crece; lo que este test mide es OTRA cosa —que una ración
+    # sea `finished_g`—, así que se ancla el suelo y se deja que el catálogo crezca.
+    assert len(dishes) >= 60, "el catálogo de platos perdió los 60 criollos"
     slug = "moro"
     d = dishes[slug]
     r = fs.resolve_line({"ref": f"dish:{slug}", "qty": 1, "unit": "racion"}, CATALOGO)
@@ -151,7 +155,8 @@ def test_la_vista_del_cliente_NO_lleva_constituyentes():
     # La deducción es server-side; mandar la receta entera al cliente es peso muerto y
     # una invitación a que alguien la use para deducir client-side (I6 en espíritu).
     vista = fs.dishes_for_client()
-    assert len(vista) == 60
+    # Mismo reapuntado: la vista del cliente sigue a la de servidor, y ambas crecen.
+    assert len(vista) == len(fs.load_dishes())
     assert all("constituents" not in p for p in vista)
     assert all(p.get("finished_g") for p in vista)
 

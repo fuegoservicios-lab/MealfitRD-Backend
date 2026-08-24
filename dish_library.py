@@ -127,14 +127,27 @@ def sample_templates_for_slot(slot_key: str, pool_ascii: str, k: int, seed: int,
     return picked
 
 
+def _canon_country_or_do(country=None) -> str:
+    """País canonicalizado por la ÚNICA puerta (`country_for_form_data`), 'DO' si falla.
+
+    Extraído de `_inspiration_heading` para que las dos decisiones de país de este módulo
+    (el encabezado y el trailer de transformados) salgan de la MISMA derivación: dos copias
+    de la misma pregunta es como nacen los espejos que driftan."""
+    try:
+        from constants import country_for_form_data
+        return country_for_form_data({"country": country}) if country else "DO"
+    except Exception:
+        return "DO"
+
+
 def _inspiration_heading(country=None) -> str:
     """[P1-DISH-LIBRARY-COUNTRY · 2026-08-21] Encabezado del bloque. DO conserva el literal
     histórico byte a byte; un país beta lee su propio nombre, tomado de
     `COUNTRY_PROFILES[cc]['name_es']` — el MISMO SSOT que usa el juez culinario para su variante,
     no una segunda tabla de gentilicios."""
     try:
-        from constants import country_for_form_data, COUNTRY_PROFILES
-        canon = country_for_form_data({"country": country}) if country else "DO"
+        from constants import COUNTRY_PROFILES
+        canon = _canon_country_or_do(country)
         if canon != "DO":
             _nm = (COUNTRY_PROFILES.get(canon) or {}).get("name_es")
             if _nm:
@@ -194,10 +207,21 @@ def build_dish_library_context(skeleton_day: dict, day_num: int, country=None) -
         # [P2-AUDIT-V6-BATCH · 2026-07-03] (P2-E) pedido explícito de mínimo transformado por día
         # (soft): "elige y adapta" era inspiración pura y el LLM podía ignorarla sin costo.
         _tf_min = int(DISH_LIBRARY_TRANSFORM_MIN)
+        # [P3-DISHLIB-TRANSFORM-DO-EXAMPLES · 2026-08-23] Este trailer es la ÚLTIMA frase del
+        # bloque más concreto del prompt. Medido antes de tocar: los renders de ES/MX/US/PR/CO
+        # terminaban TODOS con «panqueques/arepitas/bollitos», y 'arepitas' y 'bollitos' son
+        # entradas de `_DO_LEXICON_NEUTRAL` — o sea, léxico DO que el resto del stack beta ya
+        # neutraliza, colado en el último renglón que el modelo lee. La variante beta describe la
+        # FORMA (masas, tortitas, croquetas, horneados) en vez de recetas concretas: una categoría
+        # no pierde nada y no arrastra el nombre de un plato dominicano. NO se neutraliza el bloque
+        # entero con `neutralize_do_lexicon`: ese mapa manda `casabe → pan tostado integral` y
+        # `Casabe` es una fila VIVA del catálogo. DO conserva su literal byte a byte.
+        _tf_examples = ("panqueques/arepitas/bollitos/guiso u horneado con nombre propio"
+                        if _canon_country_or_do(country) == "DO"
+                        else "masas, tortitas, croquetas, guisos u horneados con nombre propio")
         _tf_line = (
-            f"\n   🎯 Incluye HOY al menos {_tf_min} plato(s) TRANSFORMADO(s) (panqueques/arepitas/"
-            "bollitos/guiso u horneado con nombre propio) siempre que encaje con los macros, el "
-            "horario y las reglas clínicas del día.\n"
+            f"\n   🎯 Incluye HOY al menos {_tf_min} plato(s) TRANSFORMADO(s) ({_tf_examples}) "
+            "siempre que encaje con los macros, el horario y las reglas clínicas del día.\n"
         ) if _tf_min > 0 else "\n"
         return (
             f"\n🍽️ {_inspiration_heading(country)} (biblioteca curada — ELIGE Y ADAPTA una, o crea un plato "

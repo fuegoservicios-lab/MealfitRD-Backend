@@ -803,6 +803,45 @@ def build_vision_context(vision) -> str:
     if not isinstance(vision, dict) or not vision.get("kind"):
         return ""
     kind = str(vision.get("kind"))
+    if kind == "multi":
+        raw_items = vision.get("items") if isinstance(vision.get("items"), list) else []
+        items = [item for item in raw_items[:4] if isinstance(item, dict)]
+        if not items:
+            return ""
+        lines = []
+        has_loose_items = False
+        unavailable = 0
+        for index, item in enumerate(items, start=1):
+            item_kind = str(item.get("kind") or "unavailable")
+            description = str(item.get("description") or "").strip()[:1500]
+            if item_kind == "items":
+                label = "ALIMENTOS SUELTOS/COMPRA"
+                has_loose_items = True
+            elif item_kind == "otro":
+                label = "SIN COMIDA DETECTADA"
+            elif item_kind == "unavailable":
+                label = "ANÁLISIS NO DISPONIBLE"
+                unavailable += 1
+            else:
+                label = "PLATO/COMIDA"
+            lines.append(f"{index}. {label}: {description or 'sin descripción fiable'}")
+        instruction = (
+            "Interpreta las fotos como un conjunto ordenado y no mezcles ingredientes entre imágenes. "
+            "Responde al mensaje del usuario teniendo en cuenta todas las que sí tienen análisis."
+        )
+        if has_loose_items:
+            instruction += (
+                " Para las fotos de compra, ofrece agregarlas a la Nevera y usa "
+                "modify_pantry_inventory solo después de confirmación."
+            )
+        if unavailable:
+            instruction += (
+                f" Indica brevemente que {unavailable} de {len(items)} foto(s) no pudo analizarse; "
+                "no inventes su contenido."
+            )
+        if not bool(vision.get("has_text")):
+            instruction += " Actúa proactivamente y resume con claridad lo detectado en cada foto."
+        return "\n\n📷 CONTEXTO DE VARIAS FOTOS (en orden):\n" + "\n".join(lines) + "\n" + instruction
     desc = str(vision.get("description") or "").strip()[:2000]
     has_text = bool(vision.get("has_text"))
     if kind == "unavailable":
