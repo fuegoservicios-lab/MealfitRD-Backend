@@ -806,9 +806,15 @@ def api_chat_stream(background_tasks: BackgroundTasks, data: dict = Body(...), v
         if attachment_ids and not _db_user_id:
             raise HTTPException(status_code=401, detail="Se requiere sesión para adjuntar imágenes.")
         if _db_user_id and client_message_id:
+            vision_items = (
+                vision.get("items", [])
+                if isinstance(vision, dict) and vision.get("kind") == "multi"
+                else ([vision] if isinstance(vision, dict) else [])
+            )
             save_message_with_attachments(
                 session_id, prompt, _db_user_id, attachment_ids,
                 client_message_id=str(client_message_id),
+                vision_items=vision_items,
             )
         else:
             save_message(session_id, "user", prompt, user_id=_db_user_id)

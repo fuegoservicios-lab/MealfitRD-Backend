@@ -171,19 +171,31 @@ def test_agentpage_mode_wiring():
         ap = f.read()
     assert "Analizando tu foto" in ap, \
         "gemma tarda 30-90s: sin señal el usuario mira la nada durante el análisis"
-    assert "visionKind === 'items'" in ap, "rama items → ofrecer Nevera"
-    assert "visionKind === 'otro'" in ap, "rama sin comida → pedir otra toma"
+    assert "kind: 'multi'" in ap, "el cliente debe agrupar todas las imágenes en orden"
+    assert "item.kind === 'items'" in ap, "rama items → ofrecer Nevera"
+    assert "item.kind === 'otro'" in ap, "rama sin comida → pedir otra toma"
     # [P3-I18N-PROMPT-VISION-CLIENTE-ESPANOL · 2026-08-23] Las INSTRUCCIONES por modo (Nevera
     # con modify_pantry_inventory/items_to_add, la rama honesta «NO tienes análisis») viven
     # ahora en el servidor (`prompts.chat_agent.build_vision_context`); el cliente manda el
     # contexto estructurado. Se ancla cada mitad donde vive.
-    assert "kind: 'unavailable'" in ap, "rama honesta: el cliente declara que no hay análisis"
+    assert ": 'unavailable'" in ap, "rama honesta: cada imagen puede declarar que no hay análisis"
     from prompts.chat_agent import build_vision_context
     items = build_vision_context({"kind": "items", "description": "2 manzanas"})
     assert "modify_pantry_inventory" in items and "items_to_add" in items
     assert "NO tienes análisis de la imagen" in build_vision_context({"kind": "unavailable", "reason": "down"}), \
         "rama honesta: antes la description de error se inyectaba como análisis real"
-    assert "!visionFailed" in ap, "un analysis_failed no debe setear visionDescription"
+    multi = build_vision_context({
+        "kind": "multi",
+        "items": [
+            {"kind": "items", "description": "2 manzanas"},
+            {"kind": "unavailable", "reason": "down"},
+        ],
+        "has_text": True,
+    })
+    assert "1. " in multi and "2. " in multi
+    assert "2 manzanas" in multi and "ANÁLISIS NO DISPONIBLE" in multi
+    assert "data.analysis_failed ? null : data.description" in ap, \
+        "un analysis_failed no debe persistirse como si fuera una descripción fiable"
 
 
 def test_scanmealmodal_redirects_items_to_fridge():

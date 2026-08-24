@@ -26,6 +26,7 @@ from db import (
     # (ver `api_get_consumed_range`). Vía la fachada `db`, no `db_core`
     # directo — convención P3-DB-IMPORTS-FACADE.
     execute_sql_query,
+    get_or_create_session, create_chat_attachment, build_chat_attachment_url,
 )
 from vision_agent import (
     process_image_with_vision, get_multimodal_embedding,
@@ -325,6 +326,7 @@ async def api_diary_upload(
     file: UploadFile = File(...),
     user_id: str = Form("guest"),
     session_id: str = Form(None),
+    purpose: str = Form("diary"),
     tz_offset_mins: int = Form(0),
     # [P1-MEAL-SCAN-GEMMA · 2026-07-12 → P1-VISION-LUNA · 2026-07-28 →
     # P1-VISION-NO-LOCAL · 2026-07-28] Quota-exempt PERMANENTE (doctrina
@@ -355,6 +357,11 @@ async def api_diary_upload(
         assert_valid_uuid(user_id, allow_guest=True)
         if session_id is not None:
             assert_valid_uuid(session_id, allow_guest=True)
+        purpose = (purpose or "diary").strip().lower()
+        if purpose not in {"diary", "chat"}:
+            raise HTTPException(status_code=422, detail="Propósito de imagen inválido.")
+        if purpose == "chat" and not session_id:
+            raise HTTPException(status_code=422, detail="El chat requiere session_id.")
         if user_id and user_id != "guest":
             if not verified_user_id or verified_user_id != user_id:
                 raise HTTPException(status_code=401, detail="No autorizado.")
@@ -446,10 +453,11 @@ async def api_diary_upload(
         unique_filename = f"{actual_user_id}/{uuid.uuid4().hex}.{file_ext}"
         
         image_url = ""
+        attachment_id = None
         upload_success = False
 
         # 1. Intentar subir al object storage de visual_diary
-        if _storage_client:
+        if _storage_client and purpose == "diary":
             try:
                 res = await asyncio.to_thread(
                     _storage_client.storage.from_("visual_diary_images").upload,
@@ -471,11 +479,34 @@ async def api_diary_upload(
         # vivo. La foto se analiza en memoria; sin storage solo se pierde la
         # miniatura del Diario Visual (image_url vacía), no el análisis ni
         # la description.
-        if not upload_success:
+        if not upload_success and purpose == "diary":
             logger.info(
                 "📷 [DIARY-UPLOAD] Sin object storage configurado — "
                 "la imagen se analiza en memoria y no se persiste (image_url vacía)."
             )
+
+        # El chat necesita persistencia privada aunque el proveedor externo de
+        # object storage no esté configurado. Guardamos el JPEG ya acotado por el
+        # cliente en Neon y lo servimos por URL HMAC temporal. Guests siguen
+        # fail-closed: no se atribuye media a una identidad no verificada.
+        if purpose == "chat" and actual_user_id and session_id:
+            await asyncio.to_thread(get_or_create_session, session_id, user_id=actual_user_id)
+            attachment_id = await asyncio.to_thread(
+                create_chat_attachment,
+                session_id,
+                actual_user_id,
+                file_bytes,
+                sniffed_ct,
+                file.filename,
+            )
+            if attachment_id:
+                image_url = build_chat_attachment_url(attachment_id)
+                upload_success = True
+            else:
+                raise HTTPException(
+                    status_code=503,
+                    detail="No pudimos guardar la imagen de forma privada. Reintenta en un momento.",
+                )
 
         # 3. Procesar imagen con Visión SINCRÓNICAMENTE
         logger.info("\n-------------------------------------------------------------")
@@ -625,7 +656,7 @@ async def api_diary_upload(
             # si la rama guest lo anuló (session_id reclamando identidad sin
             # token coincidente), NO persistir — evita el cross-user write a un
             # visual_diary ajeno (y el orphan row con user_id NULL).
-            if actual_user_id:
+            if actual_user_id and purpose == "diary":
                 background_tasks.add_task(
                     _save_visual_entry_background,
                     actual_user_id, image_url, description
@@ -653,6 +684,7 @@ async def api_diary_upload(
             "items": vision_result.get("items") or [],
             "description": description,
             "image_url": image_url,
+            "attachment_id": attachment_id,
             # [P2-DIARY-SCAN-MACROS · 2026-05-30] Macros estimadas + nombre corto
             # para el modal de registro del Dashboard. Cero costo extra (ya se
             # computaron en process_image_with_vision).
@@ -671,6 +703,8 @@ async def api_diary_upload(
                 "schedule_type": chrono_schedule_type,
             } if chrono_red_alert else None,
         }
+    except HTTPException:
+        raise
     except Exception as e:
         logger.error(f"❌ [ERROR] Error en /api/diary/upload: {str(e)}")
         raise HTTPException(status_code=500, detail=safe_error_detail(e))

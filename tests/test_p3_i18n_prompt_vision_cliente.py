@@ -75,4 +75,5 @@ def test_el_cliente_ya_no_compone_instrucciones_en_el_turno_del_usuario():
     assert not re.search(r"\n\[Sistema:", codigo), f"el cliente vuelve a meter instrucciones en el turno del usuario [{_MARKER}]"
     assert not re.search(r"\nInstrucci[oó]n:", codigo)
     assert re.search(r"vision:\s*visionPayload", codigo), "el cliente no manda el contexto estructurado"
-    assert "kind: 'unavailable'" in codigo and "has_text: !!userMsg" in codigo
+    assert "kind: 'multi'" in codigo and ": 'unavailable'" in codigo
+    assert "has_text: !!userMsg" in codigo
