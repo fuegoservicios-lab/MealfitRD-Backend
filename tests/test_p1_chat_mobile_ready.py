@@ -178,7 +178,9 @@ def test_los_mensajes_se_apilan_desde_abajo_en_movil():
     assert re.search(r"\.msg-log\s*\{[^}]*margin-top:\s*auto", bloque), (
         "la lista de mensajes debe anclarse abajo en móvil"
     )
-    assert 'className="msg-log"' in _AP, "el contenedor del log debe llevar la clase"
+    assert re.search(r"className=\{`msg-log", _AP), (
+        "el contenedor del log debe conservar la clase base aunque añada variantes"
+    )
     # El anclaje va en el HIJO: con justify-content:flex-end en el contenedor, al
     # desbordar el contenido el principio del scroll queda inalcanzable.
     i = bloque.find(".messages-container")
@@ -225,9 +227,13 @@ def test_el_contenedor_y_el_compositor_no_compensan_dos_veces():
     fin_resolver = _KB.find("\n/**", i_resolver)
     assert i_resolver >= 0 and fin_resolver > i_resolver
     resolver = _KB[i_resolver:fin_resolver]
-    assert "containerInset: 0, composerLift: IOS_PWA_COMPOSER_LIFT_PX" in resolver
+    assert re.search(
+        r"containerInset:\s*0,\s*composerLift:\s*IOS_PWA_COMPOSER_LIFT_PX",
+        resolver,
+    )
     assert re.search(r"containerInset:\s*Math\.max", resolver)
     assert "composerLift: 0" in resolver
+    assert "welcomeLift: IOS_PWA_COMPOSER_LIFT_PX + IOS_PWA_WELCOME_EXTRA_GAP_PX" in resolver
 
 
 # --------------------------------------------------------------------------
