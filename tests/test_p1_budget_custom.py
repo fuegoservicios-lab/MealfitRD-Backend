@@ -218,8 +218,21 @@ def test_budget_minimum_enforced_and_shared_ssot():
     # crudo habría re-abierto el bug de rollback que el review encontró (una moneda
     # beta STALE aceptando un monto que el backend, con el knob apagado, rechazaría) —
     # ahora pasa por `effectiveBudgetCurrency` antes de `minBudgetFor`.
-    assert "minBudgetFor(effectiveBudgetCurrency(fd" in _FLOW_JSX, (
-        "El validateExtra del flow no exige el mínimo vía minBudgetFor(effectiveBudgetCurrency(...))."
+    # [reapuntado 2026-08-23, P1-COUNTRY-BUDGET-FLOOR-FX] La llamada dejó de estar
+    # anidada: la moneda se extrae a una variable porque ahora TAMBIÉN decide si el piso
+    # bloquea o sólo orienta (`pisoSinProcedencia`). La propiedad que este test protege es
+    # la misma —el mínimo se resuelve con la moneda EFECTIVA, no con `fd.budgetCurrency`
+    # crudo, que reabriría el bug de la moneda beta stale— y se ancla en eso, no en la
+    # forma sintáctica.
+    _i = _FLOW_JSX.find("const isCustomBudgetValid")
+    assert _i > 0, "desapareció isCustomBudgetValid del flow"
+    _gate = _FLOW_JSX[_i:_FLOW_JSX.index("\n};", _i)]
+    assert "effectiveBudgetCurrency(fd?.country, fd?.budgetCurrency)" in _gate, (
+        "El gate resuelve la moneda sin effectiveBudgetCurrency: una moneda beta STALE "
+        "aceptaría un monto que el backend rechaza."
+    )
+    assert "minBudgetFor(moneda," in _gate, (
+        "El validateExtra del flow no exige el mínimo vía minBudgetFor con la moneda efectiva."
     )
     # QBudget usa el mismo helper (SSOT) para el hint + el input min + la advertencia.
     # [P1-BUDGET-FLOOR-PERSONALIZADO · 2026-07-09] QBudget ya no llama minBudgetFor

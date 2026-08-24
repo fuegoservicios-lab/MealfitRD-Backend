@@ -2399,10 +2399,21 @@ def test_knob_off_moneda_nueva_se_trata_como_dop_igual_que_antes(monkeypatch):
     assert ok_alto is True and detail_alto is None
 
 
-def test_knob_on_pais_es_eur_bajo_piso_rechaza(monkeypatch):
+# [P1-COUNTRY-BUDGET-FLOOR-FX · 2026-08-23] CONTRATO CAMBIADO A SABIENDAS.
+# Estos tests anclaban «bajo piso RECHAZA» para EUR/MXN/COP. Ese piso resultó ser una
+# conversión FX de la cesta dominicana (EUR=USD×0,95 · MXN=USD×18 · COP=USD×4200), no una
+# cesta de esos países: un colombiano con 200.000 COP/semana —cifra realista— no podía
+# generar plan contra un piso de 437.500 ≈ 1,88 M COP/mes para UNA persona, por encima de
+# su salario mínimo. Y pasado el gate el número era inútil: país beta ⇒ lista sin precios.
+# Ahora ORIENTA (aviso con las mismas cifras y el mismo mensaje) en vez de BLOQUEAR.
+# Lo que sigue anclado aquí es lo que NO cambió: la moneda, el piso calculado y el mensaje
+# en su símbolo propio, nunca «RD$». El gate duro sigue medido en DOP/USD (ver
+# test_p1_country_budget_floor_fx.py, que además cubre la mutación).
+def test_knob_on_pais_es_eur_bajo_piso_avisa(monkeypatch):
     monkeypatch.setenv("MEALFIT_COUNTRY_SYSTEM", "true")
     ok, detail = nc.validate_budget_sufficient(_budget_form("EUR", 1, country="ES"))
-    assert ok is False
+    assert ok is True, "ahora orienta en vez de bloquear (P1-COUNTRY-BUDGET-FLOOR-FX)"
+    assert detail["warning_code"] == "budget_below_goal_floor_advisory"
     assert detail["currency"] == "EUR"
     assert detail["min_budget"] > 0
     assert "EUR" in detail["message"]
@@ -2415,19 +2426,21 @@ def test_knob_on_pais_es_eur_sobre_piso_acepta(monkeypatch):
     assert ok is True and detail is None
 
 
-def test_knob_on_mx_mxn_bajo_piso_rechaza_con_mxn(monkeypatch):
+def test_knob_on_mx_mxn_bajo_piso_avisa_con_mxn(monkeypatch):
     monkeypatch.setenv("MEALFIT_COUNTRY_SYSTEM", "true")
     ok, detail = nc.validate_budget_sufficient(_budget_form("MXN", 1, country="MX"))
-    assert ok is False
+    assert ok is True, "ahora orienta en vez de bloquear (P1-COUNTRY-BUDGET-FLOOR-FX)"
+    assert detail["warning_code"] == "budget_below_goal_floor_advisory"
     assert detail["currency"] == "MXN"
     assert "MXN" in detail["message"]
     assert "RD$" not in detail["message"]
 
 
-def test_knob_on_co_cop_bajo_piso_rechaza_con_cop(monkeypatch):
+def test_knob_on_co_cop_bajo_piso_avisa_con_cop(monkeypatch):
     monkeypatch.setenv("MEALFIT_COUNTRY_SYSTEM", "true")
     ok, detail = nc.validate_budget_sufficient(_budget_form("COP", 1, country="CO"))
-    assert ok is False
+    assert ok is True, "ahora orienta en vez de bloquear (P1-COUNTRY-BUDGET-FLOOR-FX)"
+    assert detail["warning_code"] == "budget_below_goal_floor_advisory"
     assert detail["currency"] == "COP"
     assert "COP" in detail["message"]
     assert "RD$" not in detail["message"]
@@ -2437,7 +2450,10 @@ def test_knob_on_co_cop_bajo_piso_rechaza_con_cop(monkeypatch):
 def test_mensaje_nuevo_nunca_hardcodea_rd_simbolo(monkeypatch, currency, country):
     monkeypatch.setenv("MEALFIT_COUNTRY_SYSTEM", "true")
     ok, detail = nc.validate_budget_sufficient(_budget_form(currency, 1, country=country))
-    assert ok is False
+    assert ok is True  # [P1-COUNTRY-BUDGET-FLOOR-FX] orienta, no bloquea
+    assert detail["warning_code"] == "budget_below_goal_floor_advisory"
+    # El MENSAJE es lo que este test mide, y no cambió: mismas cifras, mismo
+    # símbolo propio de la moneda. Sólo dejó de venir dentro de un 422.
     assert "RD$" not in detail["message"], (
         f"El mensaje para {currency} contiene 'RD$' hardcodeado — viola el contrato de Task 6."
     )
@@ -2502,7 +2518,10 @@ def test_eur_path_mensaje_exacto_golden(monkeypatch):
     })
     ok, detail = nc.validate_budget_sufficient(
         {"budget": "custom", "budgetAmount": "50", "budgetCurrency": "EUR", "country": "ES"})
-    assert ok is False
+    assert ok is True  # [P1-COUNTRY-BUDGET-FLOOR-FX] orienta, no bloquea
+    assert detail["warning_code"] == "budget_below_goal_floor_advisory"
+    # El MENSAJE es lo que este test mide, y no cambió: mismas cifras, mismo
+    # símbolo propio de la moneda. Sólo dejó de venir dentro de un 422.
     assert detail["message"] == (
         "Tu presupuesto de EUR 50 es insuficiente para tus metas (2000 kcal/día × 7 días). "
         "El mínimo para un plan profesional es ~EUR 75. Sube tu presupuesto o ajusta tus "
@@ -2521,7 +2540,10 @@ def test_household_mayor_a_1_incluye_clausula_en_mensaje_eur(monkeypatch):
         "budget": "custom", "budgetAmount": "50", "budgetCurrency": "EUR",
         "country": "ES", "householdSize": 2,
     })
-    assert ok is False
+    assert ok is True  # [P1-COUNTRY-BUDGET-FLOOR-FX] orienta, no bloquea
+    assert detail["warning_code"] == "budget_below_goal_floor_advisory"
+    # El MENSAJE es lo que este test mide, y no cambió: mismas cifras, mismo
+    # símbolo propio de la moneda. Sólo dejó de venir dentro de un 422.
     assert "× 2 personas" in detail["message"]
 
 

@@ -2035,6 +2035,50 @@ def min_budget_for_goals(form_data: dict) -> dict:
     }
 
 
+def _piso_sin_procedencia(currency: str) -> bool:
+    """[P1-COUNTRY-BUDGET-FLOOR-FX · 2026-08-23] ¿El piso de esta moneda es un número
+    SIN procedencia, o sea una conversión FX de la cesta dominicana?
+
+    EL DEFECTO QUE CIERRA (medido contra el endpoint público de producción): un
+    colombiano que declara 200.000 COP/semana —cifra realista— recibía 422
+    `budget_below_goal_floor` y no podía generar plan. Para 2500 kcal el piso sube a
+    437.500 COP/semana ≈ 1,88 M COP/mes para UNA persona: por encima del salario mínimo
+    mensual de su país. El número no salía de ninguna cesta colombiana: el comentario de
+    la derivación lo dice, EUR=USD×0,95 · MXN=USD×18 · COP=USD×4200.
+
+    Y pasado el gate ese número es estructuralmente inútil: al ser país beta la lista sale
+    sin precios, `compute_shopping_cost_summary` devuelve None y el pase de abaratamiento
+    queda inalcanzable. O sea que bloqueaba con una cifra que después no usaba nadie.
+
+    *Un número sin procedencia puede orientar; no puede impedir una compra.* Mientras el
+    país no tenga precios propios, el piso pasa de BLOQUEO a AVISO: el hint se sigue
+    mostrando como orientación y el usuario puede generar su plan.
+
+    La condición es `has_native_prices` del SSOT de países, no una lista a mano: el día que
+    España tenga precios curados, su gate vuelve a ser duro SOLO, sin tocar este código.
+
+    ⚠️ USD queda FUERA a propósito, y conviene decir por qué en vez de que parezca un
+    olvido: su piso arrastra el MISMO defecto (4000/50=80, 7000/50=140, 13000/50=260 son
+    la cesta dominicana dividida entre 50), pero es la moneda del camino histórico —el que
+    lleva meses en producción— y ensancharle la puerta es una decisión de producto
+    separada, no un efecto lateral de arreglar el de Colombia. Curar cestas reales por país
+    con fuente citada (la salida (a) del gap) sigue abierto para las cinco.
+    """
+    cur = str(currency or "").upper()
+    if cur in ("DOP", "USD"):
+        return False
+    try:
+        from constants import COUNTRY_PROFILES
+    except Exception:
+        return False  # sin SSOT no se degrada nada: fail-closed respecto al cambio
+    perfiles = [p for p in COUNTRY_PROFILES.values() if str(p.get("currency", "")).upper() == cur]
+    if not perfiles:
+        return False
+    # Basta que UN país con esa moneda tenga precios propios para que el piso deje de ser
+    # un número inventado: ahí hay una cesta real detrás.
+    return not any(bool(p.get("has_native_prices")) for p in perfiles)
+
+
 def validate_budget_sufficient(form_data: dict) -> tuple:
     """Bloqueo pre-generación: si el presupuesto 'custom' declarado es insuficiente para las
     metas, retorna (False, detail) con los números para el mensaje accionable. Solo aplica a
@@ -2116,6 +2160,26 @@ def validate_budget_sufficient(form_data: dict) -> tuple:
             "calórica menor). No bajamos la calidad nutricional para encajar en un presupuesto "
             "demasiado bajo."
         )
+        # [P1-COUNTRY-BUDGET-FLOOR-FX · 2026-08-23] Aqui se decidia el 422. Si el piso de
+        # esta moneda es una conversion FX de la cesta dominicana (ver
+        # `_piso_sin_procedencia`), NO puede impedir una compra: se degrada a AVISO. El
+        # mensaje —el mismo, con sus cifras— sigue viajando para que el frontend lo muestre
+        # como orientacion; lo que cambia es que el plan se genera.
+        if new_currency and _piso_sin_procedencia(currency):
+            logger.info(
+                "[P1-COUNTRY-BUDGET-FLOOR-FX] aviso (no bloqueo) currency=%s declared=%s piso=%s",
+                currency, round(declared), round(min_in_currency),
+            )
+            return True, {
+                "warning_code": "budget_below_goal_floor_advisory",
+                "min_budget": round(min_in_currency),
+                "declared": round(declared),
+                "currency": currency,
+                "days": info["days"],
+                "household": info["household"],
+                "target_calories": info["target_calories"],
+                "message": msg,
+            }
         return False, {
             "error_code": "budget_below_goal_floor",
             "min_budget": round(min_in_currency),
