@@ -112,7 +112,14 @@ def test_la_condicion_es_has_native_prices_y_no_una_lista_de_monedas():
     fuente = _leer(_BACKEND / "nutrition_calculator.py")
     i = fuente.index("def _piso_sin_procedencia")
     cuerpo = fuente[i:fuente.index("\ndef ", i + 10)]
-    assert "has_native_prices" in cuerpo, "la condición dejó de leerse del SSOT de países"
+    # La condición se DELEGA en `pricing_mode_for_country`, la única puerta que decide si un
+    # país tiene precios propios. Consultar el campo del perfil aquí a mano sería la segunda
+    # tabla que P3-PRICING-MODE-SSOT-BLANKET prohíbe — y que cazó este código en el gate del
+    # deploy, antes de que llegara a producción.
+    codigo = "\n".join(l for l in cuerpo.split("\n") if not l.strip().startswith("#"))
+    assert "pricing_mode_for_country" in codigo, (
+        "la condición dejó de delegar en el SSOT de precios por país"
+    )
 
 
 def test_espana_con_precios_propios_volveria_a_bloquear(monkeypatch, _con_paises):

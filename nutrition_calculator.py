@@ -2036,47 +2036,51 @@ def min_budget_for_goals(form_data: dict) -> dict:
 
 
 def _piso_sin_procedencia(currency: str) -> bool:
-    """[P1-COUNTRY-BUDGET-FLOOR-FX · 2026-08-23] ¿El piso de esta moneda es un número
-    SIN procedencia, o sea una conversión FX de la cesta dominicana?
+    """[P1-COUNTRY-BUDGET-FLOOR-FX · 2026-08-23] ¿El piso de esta moneda es un número SIN
+    procedencia, o sea una conversión FX de la cesta dominicana en vez de una cesta real?
 
-    EL DEFECTO QUE CIERRA (medido contra el endpoint público de producción): un
-    colombiano que declara 200.000 COP/semana —cifra realista— recibía 422
-    `budget_below_goal_floor` y no podía generar plan. Para 2500 kcal el piso sube a
-    437.500 COP/semana ≈ 1,88 M COP/mes para UNA persona: por encima del salario mínimo
-    mensual de su país. El número no salía de ninguna cesta colombiana: el comentario de
-    la derivación lo dice, EUR=USD×0,95 · MXN=USD×18 · COP=USD×4200.
+    EL DEFECTO QUE CIERRA (medido contra el endpoint público de producción): un colombiano
+    que declara 200.000 COP/semana —cifra realista— recibía 422 y no podía generar plan. Para
+    2500 kcal el piso sube a 437.500 COP/semana ≈ 1,88 M COP/mes para UNA persona: por encima
+    del salario mínimo mensual de su país. El número no salía de ninguna cesta colombiana; el
+    comentario de la derivación lo dice: EUR=USD×0,95 · MXN=USD×18 · COP=USD×4200.
 
-    Y pasado el gate ese número es estructuralmente inútil: al ser país beta la lista sale
+    Y pasado el gate ese número era estructuralmente inútil: al ser país beta la lista sale
     sin precios, `compute_shopping_cost_summary` devuelve None y el pase de abaratamiento
     queda inalcanzable. O sea que bloqueaba con una cifra que después no usaba nadie.
 
-    *Un número sin procedencia puede orientar; no puede impedir una compra.* Mientras el
-    país no tenga precios propios, el piso pasa de BLOQUEO a AVISO: el hint se sigue
-    mostrando como orientación y el usuario puede generar su plan.
+    *Un número sin procedencia puede orientar; no puede impedir una compra.* Mientras el país
+    no tenga precios propios, el piso pasa de BLOQUEO a AVISO: el hint se sigue mostrando como
+    orientación y el usuario puede generar su plan.
 
-    La condición es `has_native_prices` del SSOT de países, no una lista a mano: el día que
-    España tenga precios curados, su gate vuelve a ser duro SOLO, sin tocar este código.
+    LA PREGUNTA YA TENÍA DUEÑO. Delega en `constants.pricing_mode_for_country`, la ÚNICA
+    puerta que decide si un país tiene precios propios. Consultar el campo del perfil aquí a
+    mano habría sido la segunda tabla que P1-DIET-CANON-SSOT ya pagó una vez, y que
+    P3-PRICING-MODE-SSOT-BLANKET vigila en CI: ese guard cazó exactamente este código en el
+    gate del deploy, antes de que llegara a producción. Las segundas tablas no nacen
+    divergiendo: divergen después, y en silencio.
 
-    ⚠️ USD queda FUERA a propósito, y conviene decir por qué en vez de que parezca un
-    olvido: su piso arrastra el MISMO defecto (4000/50=80, 7000/50=140, 13000/50=260 son
-    la cesta dominicana dividida entre 50), pero es la moneda del camino histórico —el que
-    lleva meses en producción— y ensancharle la puerta es una decisión de producto
-    separada, no un efecto lateral de arreglar el de Colombia. Curar cestas reales por país
-    con fuente citada (la salida (a) del gap) sigue abierto para las cinco.
+    ⚠️ USD queda FUERA a propósito, y conviene decirlo en vez de que parezca un olvido: su
+    piso arrastra el MISMO defecto (4000/50=80, 7000/50=140, 13000/50=260 son la cesta
+    dominicana entre 50), pero es la moneda del camino histórico —el que lleva meses en
+    producción— y ensancharle la puerta es una decisión de producto separada, no un efecto
+    lateral de arreglar el de Colombia. Curar cestas reales por país con fuente citada (la
+    salida (a) del gap) sigue abierta para las cinco.
     """
     cur = str(currency or "").upper()
     if cur in ("DOP", "USD"):
         return False
     try:
-        from constants import COUNTRY_PROFILES
+        from constants import COUNTRY_PROFILES, pricing_mode_for_country
     except Exception:
         return False  # sin SSOT no se degrada nada: fail-closed respecto al cambio
-    perfiles = [p for p in COUNTRY_PROFILES.values() if str(p.get("currency", "")).upper() == cur]
-    if not perfiles:
+    # Basta que UN país con esa moneda tenga precios propios para que el piso deje de ser un
+    # número inventado: ahí hay una cesta real detrás.
+    paises = [cc for cc, p in COUNTRY_PROFILES.items()
+              if str(p.get("currency", "")).upper() == cur]
+    if not paises:
         return False
-    # Basta que UN país con esa moneda tenga precios propios para que el piso deje de ser
-    # un número inventado: ahí hay una cesta real detrás.
-    return not any(bool(p.get("has_native_prices")) for p in perfiles)
+    return all(pricing_mode_for_country(cc) == "beta_no_prices" for cc in paises)
 
 
 def validate_budget_sufficient(form_data: dict) -> tuple:
