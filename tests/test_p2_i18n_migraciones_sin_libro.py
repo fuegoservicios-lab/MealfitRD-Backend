@@ -138,7 +138,9 @@ def test_status_lista_las_sin_verificar_aparte() -> None:
     # No cambian el exit: son deuda de EVIDENCIA, no trabajo pendiente conocido.
     i = src.index("SIN VERIFICAR (su nota lo dice)")
     cola = src[i:]
-    assert "return 4 if (r[\"pendientes\"] or r[\"cambiadas\"]) else 0" in cola, (
+    # [P3-LIBRO-CIEGO-AL-DIR-HERMANO] el exit lo mueven pendientes, cambiadas y divergencias
+    # del SSOT dual — nunca las SIN VERIFICAR, que son deuda de evidencia.
+    assert "sin_verificar" not in cola.split("return 4")[1][:80], (
         "las SIN VERIFICAR no deben cambiar el exit code del gate")
 
 
@@ -152,3 +154,49 @@ def test_la_doc_distingue_medido_de_supuesto() -> None:
         "falta el porqué: una migración de datos que no corre NO rompe el producto")
     assert "no es «aplicada»" in doc, (
         "«estado final medido» demuestra el ESTADO, no que esa migración lo produjera")
+
+
+# ─────────── [P3-LIBRO-CIEGO-AL-DIR-HERMANO · 2026-08-23] ───────────
+# El libro sólo miraba `backend/migrations/`. Una migración añadida sólo al `migrations/`
+# del workspace-root era INVISIBLE: `--status` cantaba «0 pendientes» teniéndola delante.
+# Pasó el mismo día que se creó el libro, con p1_chat_mobile_attachments_2026_08_24.sql.
+
+def test_el_status_mira_los_dos_directorios_del_ssot_dual(runner, tmp_path) -> None:
+    """`_ficheros_en_disco` es la UNIÓN de los dos dirs, y las divergencias se reportan."""
+    src = _RUNNER.read_text(encoding="utf-8")
+    assert "_MIGRATIONS_DIR_RAIZ" in src, f"el libro volvió a mirar un solo directorio [{_MARKER}]"
+    assert "def _divergencias_ssot_dual" in src
+    assert "SSOT DUAL ROTO" in src, "el status no reporta la divergencia"
+    # Y cuenta para el exit: una migración que sólo está en un dir es trabajo pendiente.
+    i = src.index('return 4 if (r["pendientes"]')
+    assert "divergencias" in src[i:i + 120], (
+        f"la divergencia del SSOT dual no cambia el exit code: un gate no la vería [{_MARKER}]")
+
+
+def test_divergencias_ssot_dual_detecta_los_tres_casos(runner, monkeypatch, tmp_path) -> None:
+    a, b = tmp_path / "backend_mig", tmp_path / "raiz_mig"
+    a.mkdir(); b.mkdir()
+    (a / "solo_backend.sql").write_text("SELECT 1;", encoding="utf-8")
+    (b / "solo_raiz.sql").write_text("SELECT 2;", encoding="utf-8")
+    (a / "difieren.sql").write_text("SELECT 3;", encoding="utf-8")
+    (b / "difieren.sql").write_text("SELECT 3; -- otra cosa", encoding="utf-8")
+    (a / "iguales.sql").write_text("SELECT 4;", encoding="utf-8")
+    (b / "iguales.sql").write_text("SELECT 4;", encoding="utf-8")
+    monkeypatch.setattr(runner, "_MIGRATIONS_DIR", str(a))
+    monkeypatch.setattr(runner, "_MIGRATIONS_DIR_RAIZ", str(b))
+    d = runner._divergencias_ssot_dual()
+    assert set(d) == {"solo_backend.sql", "solo_raiz.sql", "difieren.sql"}, d
+    assert "iguales.sql" not in d
+    # La unión incluye las de AMBOS dirs: ninguna migración es invisible.
+    assert set(runner._ficheros_en_disco()) == {"solo_backend.sql", "solo_raiz.sql", "difieren.sql", "iguales.sql"}
+
+
+def test_sin_workspace_root_no_inventa_divergencias(runner, monkeypatch, tmp_path) -> None:
+    """El repo backend suelto (sin el workspace-root al lado) no tiene con qué comparar:
+    reportar «solo en backend» para las 112 sería ruido que entrena a ignorar el aviso."""
+    a = tmp_path / "solo_backend_dir"; a.mkdir()
+    (a / "x.sql").write_text("SELECT 1;", encoding="utf-8")
+    monkeypatch.setattr(runner, "_MIGRATIONS_DIR", str(a))
+    monkeypatch.setattr(runner, "_MIGRATIONS_DIR_RAIZ", str(tmp_path / "no_existe"))
+    assert runner._divergencias_ssot_dual() == {}
+    assert set(runner._ficheros_en_disco()) == {"x.sql"}

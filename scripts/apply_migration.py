@@ -61,6 +61,12 @@ except Exception:
 import psycopg
 
 _MIGRATIONS_DIR = os.path.join(os.path.dirname(__file__), "..", "migrations")
+# [P3-LIBRO-CIEGO-AL-DIR-HERMANO · 2026-08-23] El OTRO directorio del SSOT dual
+# (P3-MIGRATIONS-SSOT: toda migration vive en `migrations/` del workspace-root Y en
+# `backend/migrations/`). El libro sólo miraba el del backend, así que una migración
+# añadida sólo a la raíz era INVISIBLE: `--status` cantaba «0 pendientes» con una
+# migración nueva esperando. Pasó el mismo día que se creó el libro.
+_MIGRATIONS_DIR_RAIZ = os.path.join(os.path.dirname(__file__), "..", "..", "migrations")
 
 
 def _mask(url: str) -> str:
@@ -131,13 +137,40 @@ def clasificar(ficheros: dict, libro: dict) -> dict:
     }
 
 
-def _ficheros_en_disco() -> dict:
+def _ficheros_de(directorio: str) -> dict:
+    if not os.path.isdir(directorio):
+        return {}
     out = {}
-    for f in sorted(os.listdir(_MIGRATIONS_DIR)):
+    for f in sorted(os.listdir(directorio)):
         if f.endswith(".sql"):
-            with open(os.path.join(_MIGRATIONS_DIR, f), encoding="utf-8") as fh:
+            with open(os.path.join(directorio, f), encoding="utf-8") as fh:
                 out[f] = _checksum(fh.read())
     return out
+
+
+def _ficheros_en_disco() -> dict:
+    """La UNIÓN de los dos directorios del SSOT dual. Un fichero que sólo está en uno
+    cuenta igual: si no, el libro es ciego justo al caso que más importa — la migración
+    recién añadida que todavía no se ha copiado al hermano."""
+    union = dict(_ficheros_de(_MIGRATIONS_DIR_RAIZ))
+    union.update(_ficheros_de(_MIGRATIONS_DIR))   # el del backend manda si difieren
+    return union
+
+
+def _divergencias_ssot_dual() -> dict:
+    """{nombre: motivo} de los ficheros que rompen P3-MIGRATIONS-SSOT."""
+    a, b = _ficheros_de(_MIGRATIONS_DIR), _ficheros_de(_MIGRATIONS_DIR_RAIZ)
+    if not b:
+        return {}   # checkout sin el workspace-root (repo backend suelto): nada que comparar
+    fuera = {}
+    for n in sorted(set(a) - set(b)):
+        fuera[n] = "sólo en backend/migrations/"
+    for n in sorted(set(b) - set(a)):
+        fuera[n] = "sólo en migrations/ (workspace-root)"
+    for n in sorted(set(a) & set(b)):
+        if a[n] != b[n]:
+            fuera[n] = "las dos copias DIFIEREN"
+    return fuera
 
 
 def status() -> int:
@@ -179,6 +212,13 @@ def status() -> int:
         print(f"  en el libro sin fichero   : {len(r['solo_en_libro'])}")
         for n in r["solo_en_libro"]:
             print(f"      · {n}")
+    divergencias = _divergencias_ssot_dual()
+    if divergencias:
+        print(f"  [!] SSOT DUAL ROTO (P3-MIGRATIONS-SSOT): {len(divergencias)}")
+        print("      toda migration vive en `migrations/` Y en `backend/migrations/`, copiada en el")
+        print("      mismo commit. Una que sólo está en uno viaja a un repo y no al otro.")
+        for n, motivo in divergencias.items():
+            print(f"      · {n}   ({motivo})")
     if sin_verificar:
         # No son un fallo: son honestidad. Se listan aparte para que «al día» no las tape.
         print(f"  SIN VERIFICAR (su nota lo dice): {len(sin_verificar)}")
@@ -188,7 +228,7 @@ def status() -> int:
             print(f"      · {n}")
     # Exit ≠ 0 si hay pendientes: para que un gate pueda leerlo. Las SIN VERIFICAR no
     # cambian el exit — son deuda de evidencia, no trabajo pendiente conocido.
-    return 4 if (r["pendientes"] or r["cambiadas"]) else 0
+    return 4 if (r["pendientes"] or r["cambiadas"] or divergencias) else 0
 
 
 # ---------------------------------------------------------------------------
