@@ -46,9 +46,10 @@ def _read(*partes: str) -> str:
 def _load_frontend_sibling_sources(frontend_repo_path):
     # La fixture compartida salta el módulo antes de cualquier I/O si falta el hermano.
     _ = frontend_repo_path
-    global _AP, _DL
+    global _AP, _DL, _KB
     _AP = _read("pages", "AgentPage.jsx")
     _DL = _read("components", "dashboard", "DashboardLayout.jsx")
+    _KB = _read("utils", "keyboardViewport.js")
 
 
 
@@ -193,7 +194,7 @@ def test_los_mensajes_se_apilan_desde_abajo_en_movil():
 # --------------------------------------------------------------------------
 # 5. El teclado de iOS
 # --------------------------------------------------------------------------
-def test_el_contenedor_encoge_con_el_teclado():
+def test_el_contenedor_y_el_compositor_no_compensan_dos_veces():
     """`dvh` en iOS NO encoge al abrirse el teclado: el contenedor seguía midiendo la
     pantalla entera y el final de la conversación quedaba detrás del teclado. El
     handler solo subía el input con `transform` — movía dónde se escribe, no dónde se
@@ -213,9 +214,20 @@ def test_el_contenedor_encoge_con_el_teclado():
         "con display:none al navegar (P1-AGENT-KEEP-ALIVE) y una variable global "
         "escrita desde un componente invisible contaminaría las demás rutas"
     )
-    assert "translateY(-" not in win, (
-        "el transform y el encogimiento no pueden convivir: levantarían el input dos veces"
-    )
+    assert "resolverPosicionTeclado" in win
+    assert "posicion.containerInset" in win
+    assert "posicion.composerLift" in win
+    # [P1-KB-PWA-COMPOSER-LIFT · 2026-08-24] El transform vuelve de forma
+    # deliberada SOLO para la PWA, donde 100dvh ya descontó el teclado. El
+    # resolvedor debe probar que no puede coexistir con el encogimiento: PWA
+    # devuelve inset 0; Safari devuelve lift 0.
+    i_resolver = _KB.find("export function resolverPosicionTeclado")
+    fin_resolver = _KB.find("\n/**", i_resolver)
+    assert i_resolver >= 0 and fin_resolver > i_resolver
+    resolver = _KB[i_resolver:fin_resolver]
+    assert "containerInset: 0, composerLift: IOS_PWA_COMPOSER_LIFT_PX" in resolver
+    assert re.search(r"containerInset:\s*Math\.max", resolver)
+    assert "composerLift: 0" in resolver
 
 
 # --------------------------------------------------------------------------
