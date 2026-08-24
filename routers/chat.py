@@ -14,6 +14,7 @@ from db import (
     get_user_chat_sessions, get_guest_chat_sessions, get_session_owner, delete_user_agent_sessions,
     delete_single_agent_session, update_session_title, get_session_messages, get_or_create_session,
     save_message, save_message_with_attachments, save_message_feedback, log_api_usage,
+    get_model_response_id_for_regeneration, replace_model_response_for_regeneration,
     get_chat_attachment, build_chat_attachment_url, verify_chat_attachment_signature,
 )
 from memory_manager import build_memory_context, summarize_and_prune
@@ -774,6 +775,10 @@ def api_chat_stream(background_tasks: BackgroundTasks, data: dict = Body(...), v
         client_message_id = data.get("client_message_id")
         if client_message_id:
             assert_valid_uuid(str(client_message_id))
+        regenerate_message_id = data.get("regenerate_message_id")
+        if regenerate_message_id:
+            assert_valid_uuid(str(regenerate_message_id))
+        regenerate_response_content = data.get("regenerate_response_content")
         
         # Validación de seguridad IDOR
         if user_id and user_id != "guest" and user_id != session_id:
@@ -803,9 +808,23 @@ def api_chat_stream(background_tasks: BackgroundTasks, data: dict = Body(...), v
         get_or_create_session(session_id, user_id=user_id if user_id != "guest" else None)
         # [P1-CHAT-DB-USER-ID-RLS · 2026-05-19] Pasar user_id explícito.
         _db_user_id = _resolve_user_id_for_db(user_id, session_id)
+        is_regeneration = bool(regenerate_message_id or regenerate_response_content)
+        _regenerate_target_id = None
+        if is_regeneration:
+            _regenerate_target_id = get_model_response_id_for_regeneration(
+                session_id,
+                message_id=str(regenerate_message_id) if regenerate_message_id else None,
+                content=str(regenerate_response_content) if regenerate_response_content else None,
+            )
+            if not _regenerate_target_id:
+                raise HTTPException(status_code=409, detail="La respuesta que intentas regenerar ya cambió. Recarga el chat.")
         if attachment_ids and not _db_user_id:
             raise HTTPException(status_code=401, detail="Se requiere sesión para adjuntar imágenes.")
-        if _db_user_id and client_message_id:
+        if is_regeneration:
+            # El turno de usuario original ya existe. Persistirlo otra vez
+            # produce pares user/model duplicados al recargar el historial.
+            pass
+        elif _db_user_id and client_message_id:
             vision_items = (
                 vision.get("items", [])
                 if isinstance(vision, dict) and vision.get("kind") == "multi"
@@ -916,10 +935,19 @@ def api_chat_stream(background_tasks: BackgroundTasks, data: dict = Body(...), v
                                     # closure scope. Persiste el ownership
                                     # de la respuesta del modelo al user
                                     # que envió el prompt.
-                                    save_message(
-                                        session_id, "model", response_text,
-                                        user_id=_db_user_id,
-                                    )
+                                    if _regenerate_target_id:
+                                        replaced = replace_model_response_for_regeneration(
+                                            session_id,
+                                            _regenerate_target_id,
+                                            response_text,
+                                        )
+                                        if not replaced:
+                                            raise RuntimeError("No se pudo sustituir la respuesta regenerada")
+                                    else:
+                                        save_message(
+                                            session_id, "model", response_text,
+                                            user_id=_db_user_id,
+                                        )
                                     # `done` con response no-vacío también garantiza
                                     # consumo de tokens incluso si por alguna razón
                                     # los chunks intermedios no se observaron.

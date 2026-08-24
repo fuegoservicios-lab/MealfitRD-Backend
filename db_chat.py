@@ -753,6 +753,58 @@ def save_message(
     # 3 fallos consecutivos a la DB es un incidente real, no transient.
     _save_message_insert_with_retry(session_id, role, content, user_id)
 
+
+def get_model_response_id_for_regeneration(
+    session_id: str,
+    *,
+    message_id: Optional[str] = None,
+    content: Optional[str] = None,
+) -> Optional[str]:
+    """Resuelve exactamente la respuesta del modelo que será regenerada.
+
+    El ``session_id`` ya pasó el control de ownership del router. Se exige
+    además role=model y pertenencia a esa sesión; el fallback por contenido
+    permite regenerar una respuesta recién emitida cuyo id todavía no conoce
+    el cliente. No modifica la fila: la respuesta previa se conserva si falla
+    la generación nueva.
+    """
+    if not connection_pool:
+        return None
+    if message_id:
+        row = execute_sql_query(
+            "SELECT id::text AS id FROM public.agent_messages "
+            "WHERE id = %s AND session_id = %s AND role = 'model'",
+            (message_id, session_id),
+            fetch_one=True,
+        )
+        if row:
+            return str(row["id"])
+    if not content:
+        return None
+    row = execute_sql_query(
+        "SELECT id::text AS id FROM public.agent_messages "
+        "WHERE session_id = %s AND role = 'model' AND content = %s "
+        "ORDER BY created_at DESC, id DESC LIMIT 1",
+        (session_id, content),
+        fetch_one=True,
+    )
+    return str(row["id"]) if row else None
+
+
+def replace_model_response_for_regeneration(
+    session_id: str,
+    message_id: str,
+    content: str,
+) -> bool:
+    """Sustituye la respuesta solo después de generar la nueva con éxito."""
+    rows = execute_sql_write(
+        "UPDATE public.agent_messages SET content = %s, feedback = NULL "
+        "WHERE id = %s AND session_id = %s AND role = 'model' RETURNING id",
+        (content, message_id, session_id),
+        returning=True,
+    )
+    return bool(rows)
+
 def save_message_feedback(session_id: str, content: str, feedback: Optional[str]):
     """Guarda o remueve la retroalimentación (up/down/null) para un mensaje del modelo."""
     if not connection_pool: return False
