@@ -33933,20 +33933,24 @@ def trigger_incremental_learning(user_id: str):
     import logging
     logger = logging.getLogger(__name__)
     try:
-        from db_core import execute_sql_query
+        from db import get_latest_usable_meal_plan
         from db_profiles import get_user_profile
         from db_facts import get_consumed_meals_since
         from datetime import datetime, timezone, timedelta
         
         # 1. Obtener el plan activo
-        plan_res = execute_sql_query(
-            "SELECT plan_data FROM meal_plans WHERE user_id = %s AND status = 'active' ORDER BY created_at DESC LIMIT 1",
-            (user_id,), fetch_all=True
-        )
-        if not plan_res:
+        # [P1-INCREMENTAL-LEARNING-ACTIVE-PLAN · 2026-09-02] Desde 2026-04-22 la query pedía
+        # `meal_plans.status = 'active'`, columna que la tabla NO tiene: cada comida registrada
+        # disparaba este hook y moría en el except con un logger.error, así que el aprendizaje
+        # intradía nunca corrió (el nocturno sí). «Plan activo» = el usable más reciente (el
+        # placeholder vacío de la cola no cuenta), el mismo SSOT que coach, tools e inventario.
+        plan_data = get_latest_usable_meal_plan(user_id) or {}
+        if isinstance(plan_data, str):
+            import json as _json
+            plan_data = _json.loads(plan_data)
+        if not plan_data:
             return
             
-        plan_data = plan_res[0].get('plan_data', {})
         days = plan_data.get('days', [])
         if not days:
             return
