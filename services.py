@@ -245,7 +245,7 @@ def _stamp_quality_index(plan_data: dict) -> dict:
         return plan_data
 
 
-def save_partial_plan_get_id(user_id: str, plan_data: dict, selected_techniques: Optional[list] = None, total_days_requested: int = 7) -> Optional[str]:
+def save_partial_plan_get_id(user_id: str, plan_data: dict, selected_techniques: Optional[list] = None, total_days_requested: int = 7, existing_plan_id: Optional[str] = None) -> Optional[str]:
     """Guarda la Semana 1 de un plan chunked de forma sincrónica y retorna el plan_id UUID.
     Usado exclusivamente por el flujo de Background Chunking para encolar las semanas restantes.
 
@@ -313,7 +313,13 @@ def save_partial_plan_get_id(user_id: str, plan_data: dict, selected_techniques:
         # Elimina la ventana TOCTOU entre guardar el plan y cancelar los chunks viejos.
         # return_id=True garantiza un UUID str (ver db_plans.save_new_meal_plan_atomic);
         # cast solo para descartar el Literal[True]/None inferido del helper sin anotación.
-        plan_id = cast("Optional[str]", save_new_meal_plan_atomic(user_id, insert_data, return_id=True))
+        # [P1-ARQ25-F1-LIFECYCLE · 2026-09-02] Bloque 1 vía cola: el placeholder ya existe
+        # (creado ANTES de generar, I1) → se rellena en vez de insertar otro plan.
+        if existing_plan_id:
+            from db_plans import fill_placeholder_meal_plan_atomic
+            plan_id = fill_placeholder_meal_plan_atomic(existing_plan_id, user_id, insert_data)
+        else:
+            plan_id = cast("Optional[str]", save_new_meal_plan_atomic(user_id, insert_data, return_id=True))
 
         # [P1-COST-ATTRIBUTION · 2026-07-31] Ruta CHUNKED (la de los planes de 7
         # días): mismo canje corr→plan_id que en `_save_plan_and_track_background`.
@@ -555,7 +561,7 @@ def _track_ingredient_frequencies(user_id: str, raw_ingredients: list) -> None:
 
 
 def _save_plan_and_track_background(user_id: str, plan_data: dict, selected_techniques: Optional[list] = None,
-                                    return_id: bool = False):
+                                    return_id: bool = False, existing_plan_id: Optional[str] = None):
     """Background task para guardar plan y actualizar frecuencias de ingredientes.
 
     [P1-NONCHUNKED-PERSIST-SYNC · 2026-06-15] (gap-audit G2) `return_id`: cuando True, el INSERT corre
@@ -674,13 +680,18 @@ def _save_plan_and_track_background(user_id: str, plan_data: dict, selected_tech
             insert_data["techniques"] = selected_techniques
 
         # 🛡️ Dedup guard: evitar duplicados si otro código path ya guardó el plan
-        if check_recent_meal_plan_exists(user_id, max_seconds=30):
+        if not existing_plan_id and check_recent_meal_plan_exists(user_id, max_seconds=30):
             logger.info(f"🛡️ [DEDUP] Plan ya guardado recientemente para {user_id}. Omitiendo duplicado.")
             return None
 
         # [P0-2/ATOMIC + P2-PARTIAL-PLAN-1] Cancelar chunks + liberar reservas + INSERT en
         # una sola transacción (Neon-native).
-        plan_id = save_new_meal_plan_atomic(user_id, insert_data, return_id=return_id)
+        if existing_plan_id:
+            # [P1-ARQ25-F1-LIFECYCLE · 2026-09-02] rellenar el placeholder de la cola (ver save_partial_plan_get_id)
+            from db_plans import fill_placeholder_meal_plan_atomic
+            plan_id = fill_placeholder_meal_plan_atomic(existing_plan_id, user_id, insert_data)
+        else:
+            plan_id = save_new_meal_plan_atomic(user_id, insert_data, return_id=return_id)
         logger.debug(f"💾 [DB BACKGROUND] Plan guardado exitosamente en meal_plans para {user_id}")
         # [P1-COST-ATTRIBUTION · 2026-07-31] Recién AHORA existe el plan_id
         # (invariante I1), así que es el primer momento en que se puede etiquetar

@@ -6501,10 +6501,42 @@ def _chunk_overdue_alert_job():
         logger.warning(f"[P2-CHUNK-OVERDUE-SIGNAL] barrido de resolución falló: {_sweep_e}")
 
 
+#: [P1-ARQ25-F1-LIFECYCLE · 2026-09-02] Referencia al scheduler del proceso líder para
+#: `wake_chunk_worker`. Sin líder local (proceso no-leader) queda None y el tick del minuto
+#: recoge el chunk igual: despertar es una optimización de latencia, no una autoridad.
+_SCHEDULER_REF = None
+
+
+def wake_chunk_worker(reason: str = "") -> bool:
+    """Adelanta el próximo tick de `process_plan_chunk_queue` a AHORA.
+
+    El chunk 0 (Bloque 1 vía cola) no puede esperar hasta 60 s a que el intervalo lo
+    recoja. `max_instances=1` + `coalesce=True` del job garantizan que un tick en curso
+    no se duplica. Devuelve True si pudo adelantar; False si no hay scheduler local o
+    el job no está registrado (no-leader, tests, arranque).
+    """
+    sched = _SCHEDULER_REF
+    if sched is None:
+        return False
+    try:
+        job = sched.get_job("process_plan_chunk_queue")
+        if job is None:
+            return False
+        from datetime import datetime as _dt, timezone as _tz
+        job.modify(next_run_time=_dt.now(_tz.utc))
+        logger.info(f"⏩ [ARQ25-F1] worker despertado ({reason or 'sin motivo'})")
+        return True
+    except Exception as e:
+        logger.debug(f"[ARQ25-F1] wake_chunk_worker no-op: {type(e).__name__}: {e}")
+        return False
+
+
 def register_plan_chunk_scheduler(scheduler) -> None:
     """Registra el polling del worker de chunks una sola vez en el scheduler global."""
     if not scheduler:
         return
+    global _SCHEDULER_REF
+    _SCHEDULER_REF = scheduler
 
     if not scheduler.get_job("process_plan_chunk_queue"):
         _add_job_jittered(scheduler,
@@ -25583,6 +25615,65 @@ def _emit_worker_run_metric(duration_s: float, pending_before: int, pending_afte
         )
 
 
+#: [P1-ARQ25-F1-LIFECYCLE · 2026-09-02] Drain cooperativo (roadmap 2.5 §5.5). En SIGTERM
+#: `request_worker_drain` levanta el evento: los ticks nuevos NO reclaman nada, y se espera
+#: hasta `MEALFIT_SHUTDOWN_DRAIN_S` a que el tick en curso (con sus `_chunk_worker` dentro
+#: del `ThreadPoolExecutor`) termine. Antes el shutdown era `scheduler.shutdown(wait=False)`
+#: a secas: un deploy mataba la generación en pleno LLM y el zombie rescue la reintentaba
+#: desde cero (tokens perdidos). Lo que no termine en la ventana lo recupera el rescue igual.
+import threading as _drain_threading
+import time as _drain_time
+
+_DRAIN_EVENT = _drain_threading.Event()
+_TICKS_IN_FLIGHT = 0
+_TICKS_LOCK = _drain_threading.Lock()
+_TICKS_IDLE = _drain_threading.Condition(_TICKS_LOCK)
+
+
+def worker_ticks_in_flight() -> int:
+    with _TICKS_LOCK:
+        return _TICKS_IN_FLIGHT
+
+
+def request_worker_drain(timeout_s: float = 90.0) -> bool:
+    """Deja de reclamar y espera a los ticks en vuelo. True si quedó vacío a tiempo."""
+    _DRAIN_EVENT.set()
+    deadline = _drain_time.monotonic() + max(0.0, float(timeout_s))
+    with _TICKS_IDLE:
+        while _TICKS_IN_FLIGHT > 0:
+            remaining = deadline - _drain_time.monotonic()
+            if remaining <= 0:
+                logger.warning(
+                    f"[ARQ25-F1/DRAIN] timeout ({timeout_s}s) con {_TICKS_IN_FLIGHT} tick(s) aún en vuelo; "
+                    "el zombie rescue recuperará lo que quede."
+                )
+                return False
+            _TICKS_IDLE.wait(timeout=min(remaining, 1.0))
+    logger.info("[ARQ25-F1/DRAIN] worker drenado.")
+    return True
+
+
+def _drain_aware(fn):
+    """Decorador: no arranca un tick si hay drain pedido; cuenta los ticks en vuelo."""
+    def wrapper(target_plan_id=None):
+        global _TICKS_IN_FLIGHT
+        if _DRAIN_EVENT.is_set():
+            logger.info("[ARQ25-F1/DRAIN] tick omitido: shutdown en curso.")
+            return None
+        with _TICKS_LOCK:
+            _TICKS_IN_FLIGHT += 1
+        try:
+            return fn(target_plan_id)
+        finally:
+            with _TICKS_IDLE:
+                _TICKS_IN_FLIGHT -= 1
+                _TICKS_IDLE.notify_all()
+    wrapper.__wrapped__ = getattr(fn, "__wrapped__", fn)  # tests siguen llegando al impl
+    wrapper.__doc__ = fn.__doc__
+    wrapper.__name__ = fn.__name__
+    return wrapper
+
+
 def _with_worker_metrics(fn):
     """[P1-5] Decorador que mide duración y backlog alrededor de cada corrida del worker."""
     def wrapper(target_plan_id=None):
@@ -26288,6 +26379,7 @@ def _merge_chunk_live_profile(form_data: dict, health_profile: dict) -> dict:
     return form_data
 
 
+@_drain_aware
 @_with_worker_metrics
 def process_plan_chunk_queue(target_plan_id=None):
     """Worker que genera las semanas 2-N de planes de largo plazo. Corre cada minuto vía APScheduler.
@@ -27135,6 +27227,18 @@ __PLAN_MODE_GATE__
 
         try:
             # [GAP 3 FIX: GUARD validar plan activo y no-fallido]
+            # [P1-ARQ25-F1-LIFECYCLE · 2026-09-02] Bloque 1 = chunk 0 — va DENTRO de este
+            # `try:` (su `finally` libera lock + heartbeat) y ANTES del guard legacy de plan
+            # activo (el placeholder está en 'generating', no 'failed'). El worker es la ÚNICA
+            # autoridad de generación (I19): el chunk `initial` entra por el mismo pickup
+            # (gates H1/H2 incluidos). El cuerpo vive en `generation_lifecycle.run_initial_chunk`
+            # y NUNCA lanza hacia el handler genérico: cada rama termina en su propio CAS.
+            # (El comentario `[GAP 3 FIX` queda pegado al `try:` a propósito: es el ancla de
+            # test_p1_new_3_chunk_user_locks_release_contract.)
+            if str(chunk_kind or "") == "initial":
+                from generation_lifecycle import run_initial_chunk
+                run_initial_chunk(task=task, snap=snap, form_data=form_data, pickup_attempts=_pickup_attempts)
+                return
             active_plan = execute_sql_query(
                 "SELECT id, plan_data->>'generation_status' as status FROM meal_plans WHERE id = %s",
                 (meal_plan_id,), fetch_one=True

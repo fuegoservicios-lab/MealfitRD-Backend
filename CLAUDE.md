@@ -93,6 +93,12 @@ Cinco regresiones históricas que este diseño protege (P1-G mode=block no-op, `
 
 ---
 
+## Lifecycle único de generación (roadmap 2.5, Fase 1)
+
+[P1-ARQ25-F1-LIFECYCLE · 2026-09-02] Detrás de `MEALFIT_INITIAL_VIA_QUEUE` (OFF) el Bloque 1 es un chunk `initial` de `plan_chunk_queue` con **placeholder** en `meal_plans` (I1; `meal_plan_id NULL` anularía el `NOT IN` del pickup para TODA la cola); **`attempts` es el token de fencing** (I10); `revision` sube por **trigger** (I12); `run_status`/`availability` se DERIVAN, no se almacenan; drain cooperativo en SIGTERM. Motor SSOT [`backend/generation_lifecycle.py`](backend/generation_lifecycle.py); doc [`backend/docs/generation_lifecycle_2_5.md`](backend/docs/generation_lifecycle_2_5.md); test [`test_p1_arq25_f1_lifecycle.py`](backend/tests/test_p1_arq25_f1_lifecycle.py).
+
+---
+
 ## RAG + Dreaming (consolidación de memoria offline)
 
 [P1-DREAMING-1 · 2026-06-13] Sistema híbrido: RAG de `user_facts` (Cohere embed-v4 + `match_user_facts`) + "Dreaming" — cron nocturno que de-duplica facts, aplica salience + decay, resuelve contradicciones cross-sesión y sintetiza `user_memory_profile` (`evidence_fact_ids` FK-verificada anti-confabulación). **Alergias/condiciones médicas EXENTAS**, fail-secure. Todo OFF por default. Motor SSOT [`backend/dreaming.py`](backend/dreaming.py); doc canónica (knobs/ciclo/fases/alertas/seguridad/costo) [`backend/docs/dreaming_consolidation.md`](backend/docs/dreaming_consolidation.md). Test ancla [`test_p1_dreaming_1_anchors.py`](backend/tests/test_p1_dreaming_1_anchors.py).

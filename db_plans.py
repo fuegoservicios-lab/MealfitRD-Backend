@@ -1679,6 +1679,90 @@ def save_new_meal_plan_atomic(user_id: str, insert_data: dict, return_id: bool =
     return plan_id if return_id else True
 
 
+def fill_placeholder_meal_plan_atomic(plan_id: str, user_id: str, insert_data: dict) -> Optional[str]:
+    """[P1-ARQ25-F1-LIFECYCLE · 2026-09-02] Rellena el PLACEHOLDER que creó la cola
+    (`generation_lifecycle.create_placeholder_plan_and_enqueue_initial`) con el plan ya
+    generado. Es el gemelo de `save_new_meal_plan_atomic` para el Bloque 1 vía cola: mismo
+    `insert_data`, pero UPDATE en vez de INSERT, y sin cancelar chunks (el chunk 0 que nos
+    está ejecutando es de este mismo plan).
+
+    Contrato:
+      · Sólo rellena filas con `generation_status='generating'` — si alguien ya la rellenó
+        (worker desplazado) devuelve None sin tocar nada.
+      · I2 (`AND user_id = %s`), I7 (advisory lock + `FOR UPDATE`), I11 (el finalize
+        CPU-bound corre ANTES de abrir la transacción, como en el atomic).
+      · Conserva del placeholder `_run_id` y las lecciones heredadas si el resultado no las trae.
+    Devuelve `plan_id` si actualizó exactamente 1 fila; None en cualquier otro caso.
+    """
+    if not connection_pool:
+        raise RuntimeError("db connection_pool is not available.")
+    import copy
+    import json
+    from psycopg.rows import dict_row
+    from psycopg.types.json import Jsonb
+
+    safe = copy.deepcopy(insert_data)
+    safe.pop("user_id", None)
+    _finalize_plan_data_for_insert(safe)
+    pd_new = safe.get("plan_data") if isinstance(safe.get("plan_data"), dict) else None
+    if pd_new is None:
+        return None
+    _PRESERVE = ("_run_id", "_lifetime_lessons_history", "_lifetime_lessons_summary",
+                 "_lifetime_lessons_inherited_from", "_placeholder_created_at")
+
+    with connection_pool.connection() as conn:
+        with conn.transaction():
+            with conn.cursor(row_factory=dict_row) as cursor:
+                set_meal_plan_for_update_timeouts(cursor)
+                acquire_meal_plan_advisory_lock(cursor, plan_id, purpose="general")
+                cursor.execute(
+                    "SELECT plan_data FROM meal_plans WHERE id = %s AND user_id = %s FOR UPDATE",
+                    (plan_id, user_id),
+                )
+                row = cursor.fetchone()
+                if not row:
+                    logger.warning(f"[ARQ25-F1/FILL] placeholder {str(plan_id)[:8]} no existe o no es de {str(user_id)[:8]}")
+                    return None
+                prev = row.get("plan_data")
+                if isinstance(prev, str):
+                    try:
+                        prev = json.loads(prev)
+                    except Exception:
+                        prev = {}
+                prev = prev if isinstance(prev, dict) else {}
+                if str(prev.get("generation_status") or "") != "generating":
+                    logger.warning(
+                        f"[ARQ25-F1/FILL] plan {str(plan_id)[:8]} ya no es placeholder "
+                        f"(status={prev.get('generation_status')!r}); no se sobrescribe."
+                    )
+                    return None
+                for k in _PRESERVE:
+                    if k in prev and not pd_new.get(k):
+                        pd_new[k] = prev[k]
+                _apply_inherited_lifetime_lessons(user_id, {"plan_data": pd_new}, cursor=cursor)
+
+                sets, vals = [], []
+                for col, v in safe.items():
+                    sets.append(f"{col} = %s")
+                    if col in _MEAL_PLAN_ARRAY_COLS:
+                        vals.append(v)
+                    elif col == "profile_embedding" and isinstance(v, list):
+                        vals.append(str(v))
+                    elif isinstance(v, (dict, list)):
+                        vals.append(Jsonb(v))
+                    else:
+                        vals.append(v)
+                vals.extend([plan_id, user_id])
+                cursor.execute(  # pyright: ignore[reportArgumentType]  # sql dinámico (mismo patrón que el INSERT builder)
+                    f"UPDATE meal_plans SET {', '.join(sets)} WHERE id = %s AND user_id = %s",
+                    vals,
+                )
+                if cursor.rowcount != 1:
+                    return None
+    logger.info(f"✅ [ARQ25-F1/FILL] placeholder {str(plan_id)[:8]} rellenado ({len(pd_new.get('days') or [])} días)")
+    return str(plan_id)
+
+
 def save_new_meal_plan_robust(insert_data: dict, additional_queries: Optional[List[Tuple[str, tuple]]] = None, return_id: bool = False):
     """Guarda un nuevo plan nutricional con fallback por si faltan columnas optimizadas.
 

@@ -2128,6 +2128,7 @@ def _postprocess_pipeline_result(
     plan_start_date: str,
     tz_offset_mins: int,
     transport_label: str = "sync",
+    existing_plan_id: Optional[str] = None,
 ) -> dict:
     """[P1-1] Post-procesa el resultado del pipeline tras la validación pantry:
     persiste perfil/mensajes/audit, expurga campos internos del payload,
@@ -2277,6 +2278,7 @@ def _postprocess_pipeline_result(
         assert actual_user_id is not None
         plan_id = save_partial_plan_get_id(
             actual_user_id, result, selected_techniques, total_days_requested,
+            existing_plan_id=existing_plan_id,  # [P1-ARQ25-F1-LIFECYCLE] cola: rellena el placeholder
         )
         if plan_id:
             # [P2-FREQ-TRACKING-CHUNKED · 2026-07-29] (audit solver+seeder v4) El tracking de
@@ -2348,6 +2350,7 @@ def _postprocess_pipeline_result(
         try:
             _pid = _save_plan_and_track_background(
                 actual_user_id, result, selected_techniques, return_id=True,
+                existing_plan_id=existing_plan_id,  # [P1-ARQ25-F1-LIFECYCLE] cola: rellena el placeholder
             )
             if _pid:
                 result["id"] = _pid

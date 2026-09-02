@@ -37,7 +37,7 @@ _PROCESS_START_ISO = datetime.now(timezone.utc).isoformat()
 #   P1-COACH-COUNTRY-UNNAMED · 2026-08-23 — el coach nombra el país en sus 4 ramas.
 #   P1-COUNTRY-CONDIMENT-PARITY-BETA · 2026-08-23 — exención de condimentos por país.
 #   P1-COUNTRY-GLOSS-SOLO-INGLES · 2026-08-23 — gloss panhispánico display-only.
-_LAST_KNOWN_PFIX = "P1-COUNTRY-CHECKOUT-BETA-MUDO · 2026-08-23"
+_LAST_KNOWN_PFIX = "P1-ARQ25-F1-LIFECYCLE · 2026-09-02"
 
 # [P1-SENTRY-SAMPLE-COST · 2026-05-12] Sentry sampling driven from env vars
 # con default seguro 0.1 (10%). Pre-fix tenía `traces_sample_rate=1.0` y
@@ -1542,6 +1542,17 @@ async def lifespan(app: FastAPI):
                 f"[P0-LIVE-1] Cancelación de hard-floor task lanzó: {_cancel_err}"
             )
 
+    # [P1-ARQ25-F1-LIFECYCLE · 2026-09-02] Drain cooperativo ANTES de apagar el scheduler:
+    # los ticks nuevos dejan de reclamar y se espera (acotado por MEALFIT_SHUTDOWN_DRAIN_S)
+    # a que el chunk en vuelo haga su commit. `to_thread` para no bloquear el loop durante
+    # la espera (las respuestas HTTP en curso siguen saliendo). Sin scheduler local es no-op.
+    try:
+        from cron_tasks import request_worker_drain as _req_drain
+        from generation_lifecycle import shutdown_drain_seconds as _drain_s
+        await asyncio.to_thread(_req_drain, _drain_s())
+    except Exception as _drain_err:
+        logger.warning(f"[ARQ25-F1/DRAIN] drain no-op: {type(_drain_err).__name__}: {_drain_err}")
+
     if HAS_SCHEDULER and scheduler:
         # [P2-OPS-SHUTDOWN · 2026-05-27] `wait=False`: deja de despachar jobs
         # inmediatamente sin BLOQUEAR el teardown esperando a que terminen los
@@ -1623,6 +1634,9 @@ app.include_router(discount_router)
 app.include_router(notifications_router)
 from routers.plans import router as plans_router
 app.include_router(plans_router)
+# [P1-ARQ25-F1-LIFECYCLE · 2026-09-02] Runs de generación durables (roadmap 2.5, Fase 1).
+from routers.plans_generation import router as plans_generation_router  # noqa: E402
+app.include_router(plans_generation_router)
 from routers.chat import router as chat_router
 app.include_router(chat_router)
 from routers.diary import router as diary_router

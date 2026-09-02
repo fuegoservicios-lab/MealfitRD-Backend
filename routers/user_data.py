@@ -1105,8 +1105,10 @@ async def api_get_latest_plan(
 
     def _latest():
         from db import execute_sql_query
+        # [P1-ARQ25-F1-LIFECYCLE · 2026-09-02] `revision` (I12): el frontend adopta el plan
+        # entero cuando la del servidor es mayor que la local (hydrateLatestPlan).
         cols = "id::text AS id, to_jsonb(created_at)#>>'{}' AS created_at, " \
-               "to_jsonb(updated_at)#>>'{}' AS updated_at"
+               "to_jsonb(updated_at)#>>'{}' AS updated_at, revision"
         if include_plan_data:
             cols += ", plan_data"
         return execute_sql_query(
@@ -1133,7 +1135,7 @@ async def api_get_plan_data(
     def _by_id():
         from db import execute_sql_query
         return execute_sql_query(
-            "SELECT id::text AS id, plan_data, "
+            "SELECT id::text AS id, plan_data, revision, "
             "to_jsonb(updated_at)#>>'{}' AS updated_at "
             "FROM meal_plans WHERE id = %s AND user_id = %s",
             (plan_id, uid),
