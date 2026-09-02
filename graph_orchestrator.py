@@ -6484,6 +6484,12 @@ CULINARY_JUDGE_MODEL = _env_str("MEALFIT_CULINARY_JUDGE_MODEL", _FLASH_MODEL_NAM
 CULINARY_JUDGE_THINKING = _env_bool("MEALFIT_CULINARY_JUDGE_THINKING", False)
 CULINARY_JUDGE_TIMEOUT_S = _env_int("MEALFIT_CULINARY_JUDGE_TIMEOUT_S", 45,
                                      validator=lambda v: 10 <= v <= 120)
+# [P1-CULINARY-JUDGE-RETRY · 2026-09-02] El juez era la ÚNICA llamada con max_retries=0: de los 6
+# errores de proveedor del 02-sep, 4 cayeron en él (fail-open) mientras los otros nodos se
+# recuperaron con el reintento del cliente. 1 reintento (conexión/timeout/429/5xx) y el timeout
+# exterior escala con él, o el wait_for mataría el reintento. Clamp [0, 3].
+CULINARY_JUDGE_MAX_RETRIES = max(0, min(3, _env_int("MEALFIT_CULINARY_JUDGE_MAX_RETRIES", 1,
+    "Reintentos del cliente para el juez culinario (0 = conducta previa: cualquier hipo del proveedor es fail-open)")))
 
 
 class CulinaryViolation(BaseModel):
@@ -6825,14 +6831,14 @@ async def run_culinary_judge(plan: dict, country: str = "DO"):
         _use_thinking = bool(CULINARY_JUDGE_THINKING and not _is_openai)
         if _use_thinking:
             _llm = ChatGLM(
-                model=_model, temperature=0.1, max_retries=0,
+                model=_model, temperature=0.1, max_retries=CULINARY_JUDGE_MAX_RETRIES,
                 timeout=CULINARY_JUDGE_TIMEOUT_S,
                 extra_body={"thinking": {"type": "enabled"}},
             )
             _judge = _llm.with_structured_output(CulinaryJudgeReport, method="json_mode")
         else:
             _llm = (ChatOpenAIInstrumented if _is_openai else ChatGLM)(
-                model=_model, temperature=0.1, max_retries=0,
+                model=_model, temperature=0.1, max_retries=CULINARY_JUDGE_MAX_RETRIES,
                 timeout=CULINARY_JUDGE_TIMEOUT_S,
             )
             _judge = _llm.with_structured_output(CulinaryJudgeReport)
@@ -6845,7 +6851,8 @@ async def run_culinary_judge(plan: dict, country: str = "DO"):
             SystemMessage(content=_culinary_judge_rubric_for_country(country)),
             HumanMessage(content=json.dumps({"meals": _meals}, ensure_ascii=False)),
         ]
-        return await asyncio.wait_for(_judge.ainvoke(_msg), timeout=CULINARY_JUDGE_TIMEOUT_S + 5)
+        # [P1-CULINARY-JUDGE-RETRY] el exterior debe caber (1 + reintentos) intentos, o mata el reintento
+        return await asyncio.wait_for(_judge.ainvoke(_msg), timeout=CULINARY_JUDGE_TIMEOUT_S * (1 + CULINARY_JUDGE_MAX_RETRIES) + 5)
     except Exception as _cj_e:
         logger.warning(
             f"⚖️ [P1-CULINARY-JUDGE] fail-open ({type(_cj_e).__name__}): el plan sigue su "
