@@ -95,7 +95,7 @@ Cinco regresiones históricas que este diseño protege (P1-G mode=block no-op, `
 
 ## Lifecycle único de generación (roadmap 2.5, Fase 1)
 
-[P1-ARQ25-F1-LIFECYCLE · 2026-09-02] Bloque 1 = chunk `initial` de `plan_chunk_queue` (placeholder en `meal_plans`, I1); `attempts` = token de fencing (I10); `revision` por trigger (I12). Cierre [P1-ARQ25-F1-CLOSE]: H6 `_ingredient_demand` + suite §13.2. Doc `backend/docs/generation_lifecycle_2_5.md`; tests `test_p1_arq25_f1_{lifecycle,close}.py`.
+[P1-ARQ25-F1-LIFECYCLE · 2026-09-02] Bloque 1 = chunk `initial` (I1); `attempts` = fencing (I10); `revision` por trigger (I12); [P1-ARQ25-F1-CLOSE]: H6 `_ingredient_demand` + suite §13.2. Doc `backend/docs/generation_lifecycle_2_5.md`; tests `test_p1_arq25_f1_*.py`.
 
 ## RAG + Dreaming (consolidación de memoria offline)
 
