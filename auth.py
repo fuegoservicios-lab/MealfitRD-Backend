@@ -386,6 +386,26 @@ _COACH_LIMITS = {
 }
 
 
+def coach_quota_snapshot(user_id: str) -> dict:
+    """[P1-COACH-QUOTA-METER · 2026-09-02] SSOT de la cuota mensual del coach: la misma
+    aritmética que el gate (`get_monthly_api_usage(kind="coach")` + `_COACH_LIMITS` por tier),
+    expuesta para el medidor del chat. `resets_at` = día 1 del mes siguiente (UTC), la misma
+    ventana que usa el contador. Un endpoint que la muestre no debe recalcularla por su cuenta."""
+    from datetime import datetime, timezone
+    used = int(get_monthly_api_usage(user_id, kind="coach") or 0)
+    plan_tier = "gratis"
+    profile = get_user_profile(user_id)
+    if profile:
+        plan_tier = profile.get("plan_tier", "gratis") or "gratis"
+    limit = int(_COACH_LIMITS.get(plan_tier, _COACH_LIMITS["gratis"]))
+    now = datetime.now(timezone.utc)
+    resets_at = datetime(now.year + (1 if now.month == 12 else 0), 1 if now.month == 12 else now.month + 1, 1, tzinfo=timezone.utc)
+    return {
+        "used": used, "limit": limit, "remaining": max(0, limit - used), "tier": plan_tier,
+        "period": "month", "resets_at": resets_at.isoformat(),
+    }
+
+
 def verify_coach_quota(verified_user_id: Optional[str] = Depends(get_verified_user_id)) -> Optional[str]:
     """[P1-COACH-METER · 2026-08-11] Paywall del CHAT, separado del de generación.
 
@@ -401,12 +421,20 @@ def verify_coach_quota(verified_user_id: Optional[str] = Depends(get_verified_us
             plan_tier = profile.get("plan_tier", "gratis")
         limit = _COACH_LIMITS.get(plan_tier, _COACH_LIMITS["gratis"])
         if used >= limit:
+            # [P1-COACH-QUOTA-METER · 2026-09-02] Cabeceras estructuradas para que el cliente
+            # pinte «se renueva el …» sin parsear la frase; el detail se conserva tal cual.
+            _snap = coach_quota_snapshot(verified_user_id)
             raise HTTPException(
                 status_code=402,
                 detail=(
                     f"Alcanzaste tus {limit} mensajes de coach de este mes. "
                     "Mejora tu plan para seguir conversando."
                 ),
+                headers={
+                    "X-Coach-Quota-Limit": str(limit),
+                    "X-Coach-Quota-Used": str(used),
+                    "X-Coach-Quota-Resets-At": _snap["resets_at"],
+                },
             )
     return verified_user_id
 

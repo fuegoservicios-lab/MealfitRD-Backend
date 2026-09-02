@@ -7,7 +7,7 @@ import logging
 import traceback
 import json
 
-from auth import get_verified_user_id, verify_api_quota, verify_coach_quota
+from auth import get_verified_user_id, verify_api_quota, verify_coach_quota, coach_quota_snapshot
 from path_validators import assert_valid_uuid
 from rate_limiter import RateLimiter
 from db import (
@@ -539,6 +539,20 @@ def _chat_stream_limiter_per_min() -> int:
     if raw > _CHAT_STREAM_LIMITER_PER_MIN_CLAMP_MAX:
         return _CHAT_STREAM_LIMITER_PER_MIN_CLAMP_MAX
     return raw
+
+
+# [P1-COACH-QUOTA-METER · 2026-09-02] Lectura de la cuota del coach para el medidor del chat.
+# Exenta del paywall (read-only, cero LLM): al llegar al tope el usuario necesita VER cuánto
+# le queda y cuándo se renueva, no otro 402. Anti-spam por RateLimiter, no por cuota.
+_COACH_QUOTA_LIMITER = RateLimiter(max_calls=30, period_seconds=60)
+
+
+@router.get("/quota")
+def api_chat_quota(verified_user_id: str = Depends(get_verified_user_id), _rl: None = Depends(_COACH_QUOTA_LIMITER)):
+    """[P1-COACH-QUOTA-METER] `{used, limit, remaining, tier, period, resets_at}` del mes en curso."""
+    if not verified_user_id:
+        raise HTTPException(status_code=401, detail="Authentication required")
+    return coach_quota_snapshot(verified_user_id)
 
 
 _CHAT_STREAM_LIMITER = RateLimiter(
