@@ -180,6 +180,10 @@ def build_initial_pipeline_inputs(data: dict, actual_user_id: str, session_id: O
         pipeline_data["_days_to_generate"] = PLAN_CHUNK_SIZE
     rp._enforce_days_to_generate_cap(pipeline_data, log_prefix="ROUTER /generation-runs")
     if actual_user_id:
+        # [P1-CHECKIN-QUEUE-PARITY · 2026-09-02] ANTES del JIT de señales: el historial del
+        # perfil (check-ins) manda; el JIT solo rellena `weight_history` desde `weight_log` si
+        # sigue vacío. Sin esto, desde el flip a la cola los check-ins nunca calibraban calorías.
+        inject_adaptive_renewal_from_profile(actual_user_id, pipeline_data)
         from cron_tasks import inject_learning_signals_from_profile
         inject_learning_signals_from_profile(actual_user_id, pipeline_data)
 
@@ -201,3 +205,36 @@ def build_initial_pipeline_inputs(data: dict, actual_user_id: str, session_id: O
         "start_date_iso": start_date_iso,
         "days_count": max(1, days_count),
     }
+
+
+def inject_adaptive_renewal_from_profile(actual_user_id: str, pipeline_data: dict) -> dict:
+    """[P1-CHECKIN-QUEUE-PARITY · 2026-09-02] Espejo server-side del bloque P1-ADAPTIVE-RENEWAL +
+    P1-CHECKIN-SIGNALS-GATE de `api_analyze_stream` (SSE), para el preparador COMÚN que usa la
+    cola. Fuente: `health_profile` (jamás el request — el strip P0-A2 vetaría, con razón, una
+    clave con guión bajo venida del cliente). Con 2+ pesos inyecta `weight_history` (el motor
+    «metabolismo evolutivo» no activa con menos) y, solo entonces, las señales del último
+    check-in en `_renewal_signals` (solo pueden ABLANDAR el ajuste). Knob de rollback compartido:
+    `MEALFIT_ADAPTIVE_RENEWAL_INJECT`. Fail-open: cualquier error deja `pipeline_data` intacto."""
+    if not actual_user_id or not isinstance(pipeline_data, dict):
+        return pipeline_data
+    if os.environ.get("MEALFIT_ADAPTIVE_RENEWAL_INJECT", "true").strip().lower() not in ("1", "true", "yes", "on"):
+        return pipeline_data
+    try:
+        from db_core import execute_sql_query as _esq
+        _row = _esq("SELECT health_profile FROM user_profiles WHERE id = %s", (actual_user_id,), fetch_one=True) or {}
+        _hp = _row.get("health_profile") or {}
+        if isinstance(_hp, str):
+            _hp = json.loads(_hp)
+        _wh = _hp.get("weight_history") or []
+        if isinstance(_wh, list) and len(_wh) >= 2:
+            pipeline_data["weight_history"] = _wh
+            logger.info(f"⚖️ [P1-CHECKIN-QUEUE-PARITY] weight_history inyectado en la cola ({len(_wh)} registros) → metabolismo evolutivo activo.")
+            _ck = _hp.get("_renewal_checkins") or []
+            if isinstance(_ck, list) and _ck and isinstance(_ck[-1], dict):
+                _sig = {k: _ck[-1].get(k) for k in ("hunger", "energy", "adherence_pct")}
+                if any(v is not None for v in _sig.values()):
+                    pipeline_data["_renewal_signals"] = _sig
+                    logger.info(f"🛡️ [P1-CHECKIN-QUEUE-PARITY] señales del último check-in inyectadas: {_sig}")
+    except Exception as _e:
+        logger.debug(f"[P1-CHECKIN-QUEUE-PARITY] inyección no-op: {type(_e).__name__}: {_e}")
+    return pipeline_data
