@@ -281,7 +281,7 @@ Todos se auto-registran en `_KNOBS_REGISTRY` vía `_env_int`/`_env_bool`
 | **Total añadido por turno** | **~2–3 KB** | **~600–900** |
 | Techo duro (cap por bloque × 2 bloques, default 3000) | **6 KB** | **~1.7k** |
 
-≈ +$0.0004/turno en `deepseek-v4-pro`. Frente a los 9–69k tokens que el plan
+≈ +$0.0004/turno en `glm-5.3`. Frente a los 9–69k tokens que el plan
 JSON ya mete en cada turno, es ruido. La tool solo cuesta cuando se invoca.
 
 [P1-CHAT-PAST-DAYS · 2026-07-28] La fila del techo se añadió al corregir la

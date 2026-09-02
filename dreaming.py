@@ -58,8 +58,8 @@ def _dreaming_inject_plan_enabled() -> bool:
 def _dreaming_model_name() -> str:
     # Override per-feature gana sobre el router por tier (P3-PREVIEW-MODEL-KNOB).
     # NUNCA pro: offline, no médico-crítico.
-    from llm_provider import DEEPSEEK_FLASH
-    return _env_str("MEALFIT_DREAMING_MODEL", DEEPSEEK_FLASH) or DEEPSEEK_FLASH
+    from llm_provider import GLM_FLASH
+    return _env_str("MEALFIT_DREAMING_MODEL", GLM_FLASH) or GLM_FLASH
 
 def _dreaming_interval_hours() -> int:
     return _env_int("MEALFIT_DREAMING_CONSOLIDATION_INTERVAL_HOURS", 24,
@@ -483,7 +483,7 @@ def consolidate_user(user_id: str) -> dict:
         # Circuit breaker del modelo (reusa el KV global por-modelo).
         # [P1-DREAMING-CB-KWARG · 2026-07-24] `model_name=` es OBLIGATORIO por nombre: el primer
         # parámetro posicional de `LLMCircuitBreaker` es `failure_threshold`. Pasar el model_id
-        # posicionalmente dejaba `threshold="deepseek-v4-flash"` (str) y `model_name=None`, con
+        # posicionalmente dejaba `threshold="glm-5.3-flash"` (str) y `model_name=None`, con
         # dos consecuencias silenciosas: (1) `failures >= threshold` lanzaba TypeError, que el
         # `except Exception: pass` de abajo se tragaba → el breaker NUNCA abría, y (2) las keys
         # quedaban sin sufijo de modelo → este cron escribía sobre el breaker global legacy.
@@ -500,8 +500,8 @@ def consolidate_user(user_id: str) -> dict:
         facts = facts[: _dreaming_max_facts_per_call()]
         prompt = _build_dream_prompt(facts)
 
-        from llm_provider import ChatDeepSeek
-        llm = ChatDeepSeek(model=model_id, temperature=0.2,
+        from llm_provider import ChatGLM
+        llm = ChatGLM(model=model_id, temperature=0.2,
                            timeout=_dreaming_llm_timeout_s(), max_retries=0
                            ).with_structured_output(DreamConsolidationResult)
         try:

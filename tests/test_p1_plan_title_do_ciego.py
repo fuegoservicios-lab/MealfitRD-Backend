@@ -47,7 +47,7 @@ def _render_title_prompt(monkeypatch, country=None) -> str:
             captured.append(prompt)
             return FakeResponse()
 
-    monkeypatch.setattr(ai_helpers, "ChatDeepSeek", FakeLLM)
+    monkeypatch.setattr(ai_helpers, "ChatGLM", FakeLLM)
     assert ai_helpers.generate_plan_title(_plan(country)) == "Energía Serena"
     assert len(captured) == 1
     return captured[0]

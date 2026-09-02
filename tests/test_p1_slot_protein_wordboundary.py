@@ -6,7 +6,7 @@ Observado en el benchmark de macros: `_detect_slot_incoherence` reportaba "la pr
 almuerzo). Causa: `_detect_main_items` usaba `alias in blob` (substring), así el alias
 'res' matcheaba "Queso Fresco", "Batido de Fresas", "purés", etc. Ese reporte falso se
 inyectaba al self-critique del generador → "CORRECCIONES OBLIGATORIAS" para arreglar una
-repetición inexistente → regens innecesarios (quema DeepSeek, agravó el circuit breaker
+repetición inexistente → regens innecesarios (quema GLM, agravó el circuit breaker
 durante el benchmark).
 
 Fix: match con FRONTERA DE PALABRA (`_name_has_token`, mismo SSOT que build_variety_report).

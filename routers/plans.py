@@ -4208,7 +4208,7 @@ async def api_analyze_stream(
             try:
                 # [P1-GUEST-INFLIGHT-GUARD · 2026-07-09] Espejo del guard autenticado (~línea 3116)
                 # para guests: si el guest ya tiene un pipeline activo < 15 min (recargó la pestaña
-                # mid-generación) rechazar el 2º pipeline → evita duplicar el gasto DeepSeek. Keyed en
+                # mid-generación) rechazar el 2º pipeline → evita duplicar el gasto GLM. Keyed en
                 # el session_id (misma KV pending_pipeline:<sid> que registra abajo). El dedup
                 # POST-completion (get_latest_meal_plan_with_id) NO aplica a guests: no persisten en
                 # meal_plans (FK a user_profiles) — su recovery vive en KV guest_plan:<sid>.

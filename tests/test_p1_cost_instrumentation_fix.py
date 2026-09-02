@@ -53,13 +53,13 @@ def _extract_method_body(class_body: str, method_name: str) -> str:
 def _instrumented_class_body() -> str:
     """Cuerpo de la clase donde VIVEN hoy los overrides instrumentados.
 
-    [reapuntado 2026-07-27] Estos tests buscaban `class ChatDeepSeek(_ChatDeepSeekBase):`. Los
-    overrides se movieron a `_LLMBackpressureCostMixin` y `ChatDeepSeek` quedó en un cascarón de
+    [reapuntado 2026-07-27] Estos tests buscaban `class ChatGLM(_ChatGLMBase):`. Los
+    overrides se movieron a `_LLMBackpressureCostMixin` y `ChatGLM` quedó en un cascarón de
     12 líneas SIN métodos, así que los 3 quedaron rojos.
 
     ⚠️ Relajar el regex para tolerar la tupla de bases NO bastaba: habría encontrado el cascarón
     vacío. Hay que escanear donde está el comportamiento, y anclar aparte que la clase use el
-    mixin (ver `test_chat_deepseek_hereda_el_mixin_instrumentado`).
+    mixin (ver `test_chat_glm_hereda_el_mixin_instrumentado`).
     """
     m = re.search(
         r"^class _LLMBackpressureCostMixin\b.*?(?=^class |\Z)",
@@ -70,23 +70,23 @@ def _instrumented_class_body() -> str:
     return m.group(0)
 
 
-def test_chat_deepseek_hereda_el_mixin_instrumentado():
+def test_chat_glm_hereda_el_mixin_instrumentado():
     """Ancla 'código presente, efecto ausente': el mixin puede existir intacto y no correr.
 
     Dos formas de romperlo en silencio: sacarlo de las bases, o ponerlo DESPUÉS del base — en ese
-    orden el MRO resuelve `ainvoke`/`astream`/`agenerate` contra `_ChatDeepSeekBase` y la
+    orden el MRO resuelve `ainvoke`/`astream`/`agenerate` contra `_ChatGLMBase` y la
     instrumentación de coste deja de ejecutarse sin que falle nada.
     """
-    m = re.search(r"^class ChatDeepSeek\((.*?)\)\s*:", _read_graph(), re.MULTILINE)
-    assert m, "Subclase `ChatDeepSeek` no encontrada."
+    m = re.search(r"^class ChatGLM\((.*?)\)\s*:", _read_graph(), re.MULTILINE)
+    assert m, "Subclase `ChatGLM` no encontrada."
     bases = [b.strip() for b in m.group(1).split(",") if b.strip()]
     assert "_LLMBackpressureCostMixin" in bases, (
-        f"`ChatDeepSeek` ya no hereda del mixin instrumentado (bases: {bases}) — "
+        f"`ChatGLM` ya no hereda del mixin instrumentado (bases: {bases}) — "
         "los eventos de coste dejarían de emitirse."
     )
     assert bases[0] == "_LLMBackpressureCostMixin", (
         f"El mixin debe ir PRIMERO en las bases (hoy: {bases}). Después del base, el MRO "
-        "resuelve los overrides contra `_ChatDeepSeekBase` y la instrumentación no corre."
+        "resuelve los overrides contra `_ChatGLMBase` y la instrumentación no corre."
     )
 
 
@@ -110,7 +110,7 @@ def test_ainvoke_override_captures_usage():
 
 
 def test_astream_override_accumulates_for_usage():
-    """`ChatDeepSeek.astream` debe acumular chunks y emitir
+    """`ChatGLM.astream` debe acumular chunks y emitir
     usage_metadata al final del stream. Sin esto, day_generator (único callsite
     de `.astream(...)` directo) no se contabiliza."""
     class_body = _instrumented_class_body()

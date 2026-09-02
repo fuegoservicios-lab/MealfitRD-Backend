@@ -12,7 +12,7 @@
 #
 # Cierra el gap "una regresión de precisión (cambio de modelo/solver/reconcile/catálogo/condition_rules)
 # es invisible hasta un audit manual". El mínimo fixture-based (test_p4_scoreboard.py) YA corre en el CI
-# estándar (sin LLM); ESTE job es el gate E2E que NO puede correr en el CI normal (necesita DEEPSEEK_API_KEY
+# estándar (sin LLM); ESTE job es el gate E2E que NO puede correr en el CI normal (necesita ZAI_API_KEY
 # + Neon). Corre el benchmark contra el set held-out y FALLA si la precisión regresa más allá de la tolerancia
 # vs el baseline commiteado (backend/tests/fixtures/macro_baseline.json).
 #
@@ -21,7 +21,7 @@
 # nunca lo ejecutaba. Copiado a `backend/.github/workflows/` (mismo dir + convención de paths `backend/...`
 # que `ci.yml`) para que sea alcanzable por Actions. Anclado por test_p2_macro_benchmark_nightly_workflow.py.
 #
-# ACTIVACIÓN (pendiente del owner): configurar los secrets DEEPSEEK_API_KEY / NEON_DATABASE_URL_POOLED /
+# ACTIVACIÓN (pendiente del owner): configurar los secrets ZAI_API_KEY / NEON_DATABASE_URL_POOLED /
 # NEON_DATABASE_URL / COHERE_API_KEY en el repo. Sin ellos el job se auto-salta (no falla). Tras estabilizar
 # G4/G6, refrescar macro_baseline.json con una corrida N=20 y bajar las tolerancias.
 name: macro-benchmark-nightly
@@ -41,7 +41,7 @@ jobs:
   macro-precision-no-regression:
     runs-on: ubuntu-latest
     env:
-      DEEPSEEK_API_KEY: ${{ secrets.DEEPSEEK_API_KEY }}
+      ZAI_API_KEY: ${{ secrets.ZAI_API_KEY }}
       COHERE_API_KEY: ${{ secrets.COHERE_API_KEY }}
       NEON_DATABASE_URL: ${{ secrets.NEON_DATABASE_URL }}
       NEON_DATABASE_URL_POOLED: ${{ secrets.NEON_DATABASE_URL_POOLED }}
@@ -58,16 +58,16 @@ jobs:
         # notara ("verde" que en realidad era skip). Ahora el skip se escribe al STEP SUMMARY (visible
         # en la lista de runs) con el puntero al SOP de activación (docs/nightly_benchmark_activation.md).
         run: |
-          if [ -z "$DEEPSEEK_API_KEY" ] || [ -z "$NEON_DATABASE_URL_POOLED" ]; then
+          if [ -z "$ZAI_API_KEY" ] || [ -z "$NEON_DATABASE_URL_POOLED" ]; then
             echo "skip=true" >> "$GITHUB_OUTPUT"
-            echo "::warning::Job AUTO-SALTADO — secrets ausentes (DEEPSEEK_API_KEY / NEON_DATABASE_URL_POOLED). El gate de no-regresión de macros NO está corriendo."
+            echo "::warning::Job AUTO-SALTADO — secrets ausentes (ZAI_API_KEY / NEON_DATABASE_URL_POOLED). El gate de no-regresión de macros NO está corriendo."
             {
               echo "## ⚠️ Benchmark nightly SALTADO (no corrió)"
               echo ""
               echo "Faltan secrets del repo — el gate de no-regresión de precisión de macros **no está activo**."
               echo ""
               echo "**Activación (owner):** Settings → Secrets and variables → Actions → New repository secret:"
-              echo "- \`DEEPSEEK_API_KEY\` · \`NEON_DATABASE_URL_POOLED\` · \`NEON_DATABASE_URL\` · \`COHERE_API_KEY\` (opcional)"
+              echo "- \`ZAI_API_KEY\` · \`NEON_DATABASE_URL_POOLED\` · \`NEON_DATABASE_URL\` · \`COHERE_API_KEY\` (opcional)"
               echo ""
               echo "SOP completo: \`docs/nightly_benchmark_activation.md\`."
             } >> "$GITHUB_STEP_SUMMARY"

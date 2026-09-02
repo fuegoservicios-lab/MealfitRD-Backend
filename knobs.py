@@ -163,10 +163,10 @@ def _env_bool(name: str, default: bool) -> bool:
     return value
 
 
-# [P0-DEEPSEEK-MIGRATION · 2026-06-12] `thinking_budget_kwargs` ELIMINADO.
+# [P0-LLM-PROVIDER-MIGRATION · 2026-06-12] `thinking_budget_kwargs` ELIMINADO.
 # Era el cap de reasoning-tokens de Gemini (P2-COST-THINKING-CAP-EXT): el
 # reasoning facturaba como output a ~$9/M y un runaway patológico dominaba el
-# costo del plan. DeepSeek-V4 gestiona el thinking nativamente (sin budget por
+# costo del plan. GLM-5.3 gestiona el thinking nativamente (sin budget por
 # request en el API OpenAI-compatible) y su output cuesta $0.28–0.87/M — el
 # problema de costo que motivaba el cap dejó de existir. Los knobs
 # `MEALFIT_*_THINKING_BUDGET` ya no se leen.

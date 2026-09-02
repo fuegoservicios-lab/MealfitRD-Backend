@@ -1,7 +1,7 @@
 """[P1-CULINARY-JUDGE · 2026-08-01] Calibración del sistema culinario (capa 1
 determinista + juez LLM, F3) contra el golden set (spec §6,
 `docs/superpowers/specs/2026-07-31-culinary-coherence-design.md`). MANUAL,
-reproducible; hace llamadas LLM REALES a DeepSeek flash — NO corre en CI (el
+reproducible; hace llamadas LLM REALES a GLM flash — NO corre en CI (el
 golden set en CI solo ejerce la capa 1 determinista, ver
 `tests/test_p1_culinary_golden.py`, que hace `pytest.skip` sin DB y jamás
 invoca `run_culinary_judge`).
@@ -39,7 +39,7 @@ path que sí toquemos), este script FALLA RUIDOSO en vez de reportar números
 falsos.
 
 Uso (desde backend/):
-    python scripts/calibrate_culinary_judge.py [--model deepseek-v4-flash] [--thinking]
+    python scripts/calibrate_culinary_judge.py [--model glm-5.3-flash] [--thinking]
 
 Salida por capa y por clase (stdout, se copia a mano a
 `docs/culinary_coherence.md` sección "Calibración <fecha>"):
@@ -92,7 +92,7 @@ _ap = argparse.ArgumentParser(description=__doc__)
 _ap.add_argument("--model", default=None,
                   help="override MEALFIT_CULINARY_JUDGE_MODEL (default: flash, directiva del owner)")
 _ap.add_argument("--thinking", action="store_true",
-                  help="activa MEALFIT_CULINARY_JUDGE_THINKING (DeepSeek-only, ignorado en modelos OpenAI)")
+                  help="activa MEALFIT_CULINARY_JUDGE_THINKING (GLM-only, ignorado en modelos OpenAI)")
 _args = _ap.parse_args()
 
 if _args.model:

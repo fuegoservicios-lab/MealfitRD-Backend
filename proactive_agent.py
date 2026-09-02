@@ -1,8 +1,8 @@
 import os
 import logging
 from datetime import datetime, timezone, timedelta
-# [P0-DEEPSEEK-MIGRATION · 2026-06-12] Gemini → DeepSeek.
-from llm_provider import ChatDeepSeek, DEEPSEEK_FLASH
+# [P0-LLM-PROVIDER-MIGRATION · 2026-06-12] Gemini → GLM.
+from llm_provider import ChatGLM, GLM_FLASH
 
 from db_core import connection_pool, execute_sql_query, execute_sql_write
 from db_chat import save_message, get_recent_messages
@@ -24,14 +24,14 @@ from prompts.chat_agent import build_language_directive
 #   - `classify_nudge_sentiment` (analiza respuestas del usuario al nudge).
 #   - `_compose_proactive_message` (genera el texto del nudge).
 #
-# [P0-DEEPSEEK-MIGRATION · 2026-06-12] Default DeepSeek V4 Flash: nudges y
+# [P0-LLM-PROVIDER-MIGRATION · 2026-06-12] Default GLM-5.3 Flash: nudges y
 # clasificación de sentiment son tareas aux baratas — mismo modelo para
 # todos los tiers. Swap sin redeploy:
-# `MEALFIT_PROACTIVE_SENTIMENT_MODEL=deepseek-v4-pro` + restart del worker.
+# `MEALFIT_PROACTIVE_SENTIMENT_MODEL=glm-5.3` + restart del worker.
 def _proactive_model_name() -> str:
     return os.environ.get(
         "MEALFIT_PROACTIVE_SENTIMENT_MODEL",
-        DEEPSEEK_FLASH,
+        GLM_FLASH,
     )
 
 
@@ -246,7 +246,7 @@ Respuesta del usuario: "{user_reply}"
 Devuelve ÚNICAMENTE un JSON válido con las claves "sentiment", "meal_logged" y "causal_reason". No uses bloques markdown."""
 
     try:
-        chat_llm = ChatDeepSeek(
+        chat_llm = ChatGLM(
             model=_proactive_model_name(),
             temperature=0.1,
             timeout=_proactive_llm_timeout_s(),  # [P2-LLM-TIMEOUT-SWEEP · 2026-05-30]
@@ -633,7 +633,7 @@ No uses demasiados emojis. Sé directo, breve y empático.
                 # "Resumen del día" arriba — ver esa nota para el contrato completo.
                 prompt += build_language_directive(_nudge_locale)
                 
-            chat_llm = ChatDeepSeek(
+            chat_llm = ChatGLM(
                 model=_proactive_model_name(),
                 temperature=0.8,
                 timeout=_proactive_llm_timeout_s(),  # [P2-LLM-TIMEOUT-SWEEP · 2026-05-30]

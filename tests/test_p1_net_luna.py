@@ -1,23 +1,23 @@
 """[P1-NET-LUNA · 2026-07-31] La red post-fallo del pipeline es CROSS-PROVIDER:
-`gpt-5.6-luna` (OpenAI) en vez de `deepseek-v4-pro`.
+`gpt-5.6-luna` (OpenAI) en vez de `glm-5.3`.
 
 Razón (decisión owner): flash y pro son el MISMO proveedor — el incidente que
-motivó la red actual (gym baseline: circuit breaker abierto 172×) fue DeepSeek
+motivó la red actual (gym baseline: circuit breaker abierto 172×) fue GLM
 rate-limiteando bajo carga, y en ese modo de fallo pro cae JUNTO con flash: la
 "red" no atrapaba nada y se caía al plan matemático. Luna es OpenAI (infra,
 key y límites propios) = diversidad REAL. Simetría cross-provider: el pipeline
-(DeepSeek) cae a OpenAI; el reviewer clínico (OpenAI, P1-REVIEWER-TIER-MODELS)
-cae a DeepSeek.
+(GLM) cae a OpenAI; el reviewer clínico (OpenAI, P1-REVIEWER-TIER-MODELS)
+cae a GLM.
 
 Contratos que ancla:
   A. `_plan_pro_model_name()` default = `GPT56_LUNA` (constante SSOT de
-     llm_provider); fail-safe sin OPENAI_API_KEY → `DEEPSEEK_PRO` (nunca sin
-     red); rollback `MEALFIT_PRO_MODEL=deepseek-v4-pro`.
+     llm_provider); fail-safe sin OPENAI_API_KEY → `GLM_PRO` (nunca sin
+     red); rollback `MEALFIT_PRO_MODEL=glm-5.3`.
   B. Los 8 consumidores de modelo variable construyen con dispatch por
-     proveedor — un modelo OpenAI construido con ChatDeepSeek iría al base_url
-     de DeepSeek con la key equivocada (lección P1-DAYGEN-LUNA-CANARY, que
+     proveedor — un modelo OpenAI construido con ChatGLM iría al base_url
+     de GLM con la key equivocada (lección P1-DAYGEN-LUNA-CANARY, que
      cerró el day-gen y dejó vivas estas superficies hermanas).
-  C. El thinking del corrector quirúrgico (extra_body DeepSeek-only) se salta
+  C. El thinking del corrector quirúrgico (extra_body GLM-only) se salta
      cuando la red es OpenAI.
   D. Marker bumpeado.
 """
@@ -48,7 +48,7 @@ def test_a2_failsafe_to_pro_without_key(monkeypatch):
 
     monkeypatch.delenv("MEALFIT_PRO_MODEL", raising=False)
     monkeypatch.delenv("OPENAI_API_KEY", raising=False)
-    assert go._plan_pro_model_name() == "deepseek-v4-pro", (
+    assert go._plan_pro_model_name() == "glm-5.3", (
         "sin OPENAI_API_KEY la red debe volver a pro — nunca quedarse sin red"
     )
 
@@ -56,37 +56,37 @@ def test_a2_failsafe_to_pro_without_key(monkeypatch):
 def test_a3_rollback_knob_wins(monkeypatch):
     import graph_orchestrator as go
 
-    monkeypatch.setenv("MEALFIT_PRO_MODEL", "deepseek-v4-pro")
+    monkeypatch.setenv("MEALFIT_PRO_MODEL", "glm-5.3")
     monkeypatch.setenv("OPENAI_API_KEY", "sk-test-dummy")
-    assert go._plan_pro_model_name() == "deepseek-v4-pro"
+    assert go._plan_pro_model_name() == "glm-5.3"
 
 
-def test_a4_deepseek_knob_needs_no_openai_key(monkeypatch):
+def test_a4_glm_knob_needs_no_openai_key(monkeypatch):
     import graph_orchestrator as go
 
-    monkeypatch.setenv("MEALFIT_PRO_MODEL", "deepseek-v4-pro")
+    monkeypatch.setenv("MEALFIT_PRO_MODEL", "glm-5.3")
     monkeypatch.delenv("OPENAI_API_KEY", raising=False)
-    assert go._plan_pro_model_name() == "deepseek-v4-pro"
+    assert go._plan_pro_model_name() == "glm-5.3"
 
 
 # ------------------------------------------------------------------
 # B. Dispatch por proveedor en TODOS los consumidores (parser)
 # ------------------------------------------------------------------
 
-def test_b_no_hardcoded_chatdeepseek_with_variable_model():
-    """Ningún ChatDeepSeek( con model= variable que pueda ser OpenAI.
-    Las construcciones legítimas restantes de ChatDeepSeek con modelo variable
-    deben estar en ramas ya gateadas a DeepSeek (thinking) — se enumeran."""
+def test_b_no_hardcoded_chatglm_with_variable_model():
+    """Ningún ChatGLM( con model= variable que pueda ser OpenAI.
+    Las construcciones legítimas restantes de ChatGLM con modelo variable
+    deben estar en ramas ya gateadas a GLM (thinking) — se enumeran."""
     hardcoded = re.findall(
-        r"ChatDeepSeek\(\s*\n?\s*model=(_PRO_MODEL_NAME|_evaluator_model|_corrector_model|planner_model)\b",
+        r"ChatGLM\(\s*\n?\s*model=(_PRO_MODEL_NAME|_evaluator_model|_corrector_model|planner_model)\b",
         _GO_SRC,
     )
-    # Únicas permitidas: las ramas thinking (DeepSeek-only por gate explícito).
+    # Únicas permitidas: las ramas thinking (GLM-only por gate explícito).
     # El corrector quirúrgico thinking usa _PRO_MODEL_NAME pero está gateado por
     # `and not _net_is_openai`.
     assert hardcoded.count("_PRO_MODEL_NAME") <= 1, (
-        f"construcciones ChatDeepSeek hardcodeadas con modelo variable: {hardcoded} — "
-        "deben usar el dispatch (ChatOpenAIInstrumented if is_openai_model(...) else ChatDeepSeek)"
+        f"construcciones ChatGLM hardcodeadas con modelo variable: {hardcoded} — "
+        "deben usar el dispatch (ChatOpenAIInstrumented if is_openai_model(...) else ChatGLM)"
     )
     assert "_evaluator_model" not in hardcoded
     assert "_corrector_model" not in hardcoded
@@ -99,18 +99,18 @@ def test_b2_dispatch_sites_present():
         "esperaba dispatch por proveedor en planner primario, planner fallback, "
         "evaluator y correctores"
     )
-    assert _GO_SRC.count("(ChatOpenAIInstrumented if _net_is_openai else ChatDeepSeek)(") >= 2, (
+    assert _GO_SRC.count("(ChatOpenAIInstrumented if _net_is_openai else ChatGLM)(") >= 2, (
         "esperaba dispatch en el corrector quirúrgico (estándar + diagnóstico raw)"
     )
 
 
-def test_c_surgical_thinking_gated_to_deepseek():
+def test_c_surgical_thinking_gated_to_glm():
     m = re.search(
         r"if SURGICAL_PRO_THINKING_ENABLED and not _net_is_openai:",
         _GO_SRC,
     )
     assert m, (
-        "el thinking del corrector quirúrgico (extra_body DeepSeek-only) debe "
+        "el thinking del corrector quirúrgico (extra_body GLM-only) debe "
         "saltarse cuando la red es OpenAI"
     )
 

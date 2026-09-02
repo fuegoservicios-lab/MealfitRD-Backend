@@ -14,7 +14,7 @@ New repository secret**:
 
 | Secret | Valor | Obligatorio |
 |---|---|---|
-| `DEEPSEEK_API_KEY` | la misma key del `.env` del VPS | ✅ |
+| `ZAI_API_KEY` | la misma key del `.env` del VPS | ✅ |
 | `NEON_DATABASE_URL_POOLED` | URL pooled de Neon (la del `.env`) | ✅ |
 | `NEON_DATABASE_URL` | URL directa de Neon | ✅ |
 | `COHERE_API_KEY` | key de Cohere (embeddings; sin ella degrada keyword) | opcional |
@@ -24,7 +24,7 @@ Un run verde = gate activo; el cron nightly (03:00 RD) queda armado.
 
 ## Costo y cadencia
 
-- N=20 con concurrency 2 ≈ 30-45 min y consume cuota DeepSeek compartida con prod (por eso corre
+- N=20 con concurrency 2 ≈ 30-45 min y consume cuota GLM compartida con prod (por eso corre
   a las 03:00 RD). Si la cuota aprieta, bajar el cron a 2-3 noches/semana editando el `schedule`.
 
 ## Post-activación (recomendado)

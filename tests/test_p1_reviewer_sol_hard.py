@@ -150,8 +150,8 @@ def test_d_sol_without_key_falls_back_to_flash(_go, monkeypatch):
     monkeypatch.setattr(_go, "get_user_tier", lambda uid: "plus")
     monkeypatch.setattr(_go, "_is_hard_clinical_profile", lambda fd: True)
     resolved = _go._reviewer_model_name(_RISK_FORM)
-    assert resolved == "deepseek-v4-flash"
-    assert ("reviewer", "deepseek-v4-flash") in _go._CLINICAL_MODEL_GUARD_WARNED
+    assert resolved == "glm-5.3-flash"
+    assert ("reviewer", "glm-5.3-flash") in _go._CLINICAL_MODEL_GUARD_WARNED
 
 
 # ------------------------------------------------------------------

@@ -46,11 +46,11 @@ import memory_manager
 # ---------------------------------------------------------------------------
 def test_summary_model_default_is_valid_gemini_id():
     """Default sin env var → el modelo barato del stack
-    ([P0-DEEPSEEK-MIGRATION · 2026-06-12] `deepseek-v4-flash`)."""
+    ([P0-LLM-PROVIDER-MIGRATION · 2026-06-12] `glm-5.3-flash`)."""
     # Limpiamos cualquier override del entorno actual.
     if os.environ.get("MEMORY_SUMMARY_MODEL"):
         pytest.skip("MEMORY_SUMMARY_MODEL ya está seteado, no podemos verificar default")
-    assert memory_manager.MEMORY_SUMMARY_MODEL == "deepseek-v4-flash"
+    assert memory_manager.MEMORY_SUMMARY_MODEL == "glm-5.3-flash"
 
 
 def test_summary_model_overridable_via_env_var(monkeypatch):
@@ -75,10 +75,10 @@ def test_summary_model_strips_whitespace(monkeypatch):
 
 def test_summary_model_falls_back_when_env_var_empty(monkeypatch):
     """Env var = '' (vacío después de strip) → fallback al default
-    ([P0-DEEPSEEK-MIGRATION] `_env_str` retorna el default con env vacío)."""
+    ([P0-LLM-PROVIDER-MIGRATION] `_env_str` retorna el default con env vacío)."""
     monkeypatch.setenv("MEMORY_SUMMARY_MODEL", "")
     importlib.reload(memory_manager)
-    assert memory_manager.MEMORY_SUMMARY_MODEL == "deepseek-v4-flash"
+    assert memory_manager.MEMORY_SUMMARY_MODEL == "glm-5.3-flash"
     monkeypatch.delenv("MEMORY_SUMMARY_MODEL", raising=False)
     importlib.reload(memory_manager)
 

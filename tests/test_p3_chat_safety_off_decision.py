@@ -96,9 +96,9 @@ def test_b_safety_off_decision_subsection_with_anchor():
     )
 
 
-# C) [P0-DEEPSEEK-MIGRATION · 2026-06-12] La decisión quedó SUPERSEDED:
+# C) [P0-LLM-PROVIDER-MIGRATION · 2026-06-12] La decisión quedó SUPERSEDED:
 # los `safety_settings` (HarmCategory/HarmBlockThreshold) eran exclusivos
-# del SDK de Gemini. DeepSeek no expone content-filters configurables
+# del SDK de Gemini. GLM no expone content-filters configurables
 # client-side, así que la INTENCIÓN de la decisión (no bloquear charla
 # nutricional legítima de déficit/ayuno) queda cubierta por el default del
 # provider. Este test ancla ahora el estado superseded: el bloque NO debe
@@ -107,18 +107,18 @@ def test_c_agent_safety_settings_match_decision():
     src = _read_agent_py()
     code_only = re.sub(r"#[^\n]*", "", src)
     assert "_safety_settings = {" not in code_only, (
-        "P0-DEEPSEEK-MIGRATION: el dict `_safety_settings` (Gemini-only) "
-        "reapareció en agent.py. El provider DeepSeek no acepta ese kwarg — "
+        "P0-LLM-PROVIDER-MIGRATION: el dict `_safety_settings` (Gemini-only) "
+        "reapareció en agent.py. El provider GLM no acepta ese kwarg — "
         "el wrapper lo swallowearía en silencio y daría falsa sensación de "
         "filtro configurado. Si se migra a un provider con safety settings, "
         "re-documentar la decisión en CLAUDE.md antes de reintroducirlo."
     )
     assert "from google.genai" not in code_only, (
-        "P0-DEEPSEEK-MIGRATION: import del SDK de Google reapareció en agent.py."
+        "P0-LLM-PROVIDER-MIGRATION: import del SDK de Google reapareció en agent.py."
     )
 
     claude_md = _read_claude_md()
     assert "SUPERSEDED" in claude_md.upper(), (
         "CLAUDE.md debe marcar la decisión P3-CHAT-SAFETY-OFF-DECISION como "
-        "superseded por P0-DEEPSEEK-MIGRATION."
+        "superseded por P0-LLM-PROVIDER-MIGRATION."
     )

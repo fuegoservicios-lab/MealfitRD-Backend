@@ -1,7 +1,7 @@
 """[P1-PLAN-QUALITY-INDEX · 2026-07-31] Medidor de VARIEDAD y COHERENCIA por plan.
 
 POR QUÉ EXISTE
-El owner preguntó si cambiar el generador (deepseek-flash → gpt-5.6-luna) subiría
+El owner preguntó si cambiar el generador (glm-flash → gpt-5.6-luna) subiría
 la calidad. La respuesta honesta era "no se puede saber": el sistema producía
 muchas señales sueltas —reporte de variedad, guard de coherencia recetas↔lista,
 panel de micros, banda de macros— pero **ninguna se guardaba junta ni comparable**,

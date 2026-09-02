@@ -321,7 +321,7 @@ def test_runner_and_doc_exist_with_all_modes():
 
 
 def test_openai_forcing_uses_only_sanctioned_knobs():
-    """El override GLOBAL de modelo fue eliminado adrede (P1-DEEPSEEK-ONLY-RESTORE:
+    """El override GLOBAL de modelo fue eliminado adrede (P1-SINGLE-PROVIDER-RESTORE:
     colapsaba también el reviewer clínico risk-tier a un provider de test). El
     forzado --provider openai del runner debe vivir SOLO en estos 4 knobs
     per-feature — si alguien le añade un knob del reviewer o reintroduce
@@ -335,13 +335,13 @@ def test_openai_forcing_uses_only_sanctioned_knobs():
         "MEALFIT_MODEL_PAID_TIER", "MEALFIT_PRO_MODEL",
     }, f"forzado fuera del set sancionado: {sorted(keys)}"
     assert "MEALFIT_LLM_MODEL_OVERRIDE" not in runner, (
-        "el override global eliminado (P1-DEEPSEEK-ONLY-RESTORE) no puede volver por el runner")
+        "el override global eliminado (P1-SINGLE-PROVIDER-RESTORE) no puede volver por el runner")
     assert "OPENAI_API_KEY" in runner, "--provider openai debe ser fail-loud sin key"
 
 
 def test_openai_forcing_actually_routes_pipeline_to_openai(monkeypatch):
     """Funcional: con los 4 knobs seteados, el router por tier y el modelo flash
-    del pipeline resuelven a la familia OpenAI (cero DeepSeek en la corrida).
+    del pipeline resuelven a la familia OpenAI (cero GLM en la corrida).
     La red post-fallo (`_pro_model_name`) se resuelve al boot del módulo, por eso
     el runner setea env ANTES de los imports lazy — aquí se validan los paths que
     leen env en call-time."""

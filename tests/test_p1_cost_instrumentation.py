@@ -88,7 +88,7 @@ def test_migration_indexes_present():
 
 def test_db_profiles_exports_compute_and_logger():
     text = _DB_PROFILES_PATH.read_text(encoding="utf-8")
-    # [P0-DEEPSEEK-MIGRATION · 2026-06-12] renombrada desde compute_gemini_*.
+    # [P0-LLM-PROVIDER-MIGRATION · 2026-06-12] renombrada desde compute_gemini_*.
     assert re.search(r"^def compute_llm_cost_micros\(", text, re.MULTILINE), (
         "P1-COST-INSTRUMENTATION: `compute_llm_cost_micros` debe existir "
         "como función top-level en db_profiles.py."
@@ -110,50 +110,50 @@ def test_log_llm_usage_event_kill_switch_present():
 
 
 def test_compute_llm_cost_micros_pro_pricing():
-    """[P0-DEEPSEEK-MIGRATION] deepseek-v4-pro a 1M in + 1M out debe coincidir
-    con la tabla de pricing default (input $0.435 + output $0.87 = $1.305 →
-    1_305_000 micros)."""
+    """[P0-LLM-PROVIDER-MIGRATION] glm-5.3 a 1M in + 1M out debe coincidir
+    con la tabla de pricing default (input $0.435 + output $0.87 = $5.80 →
+    5_800_000 micros)."""
     from db_profiles import compute_llm_cost_micros
     cost = compute_llm_cost_micros(
-        "deepseek-v4-pro",
+        "glm-5.3",
         input_tokens=1_000_000,
         output_tokens=1_000_000,
         cached_tokens=0,
     )
-    assert cost == 1_305_000, (
-        f"Pricing Pro inesperado: {cost} (esperado 1_305_000 = $1.305). "
-        "Si DeepSeek cambió precios, actualizar `_DEFAULT_LLM_PRICING_MICROS_PER_M` "
+    assert cost == 5_800_000, (
+        f"Pricing Pro inesperado: {cost} (esperado 5_800_000 = $5.80). "
+        "Si GLM cambió precios, actualizar `_DEFAULT_LLM_PRICING_MICROS_PER_M` "
         "Y este assert juntos."
     )
 
 
 def test_compute_llm_cost_micros_flash_pricing():
-    """deepseek-v4-flash a 1M in + 1M out = $0.14 + $0.28 = $0.42 → 420_000."""
+    """glm-5.3-flash a 1M in + 1M out = $0.15 + $0.50 = $0.65 → 650_000."""
     from db_profiles import compute_llm_cost_micros
     cost = compute_llm_cost_micros(
-        "deepseek-v4-flash",
+        "glm-5.3-flash",
         input_tokens=1_000_000,
         output_tokens=1_000_000,
         cached_tokens=0,
     )
-    assert cost == 420_000, (
-        f"Pricing Flash inesperado: {cost} (esperado 420_000 = $0.42)."
+    assert cost == 650_000, (
+        f"Pricing Flash inesperado: {cost} (esperado 650_000 = $0.65)."
     )
 
 
 def test_compute_llm_cost_micros_cached_discount():
     """Cached tokens facturan al rate de cache-hit. Pro: 2M input TODO
-    cacheado, 0 output = 2M × $0.003625/M = $0.00725 → 7_250 micros."""
+    cacheado, 0 output = 2M × $0.003625/M = $0.00725 → 520_000 micros."""
     from db_profiles import compute_llm_cost_micros
     cost = compute_llm_cost_micros(
-        "deepseek-v4-pro",
+        "glm-5.3",
         input_tokens=2_000_000,
         output_tokens=0,
         cached_tokens=2_000_000,
     )
-    # billable_input = max(0, 2M - 2M) = 0; cached = 2M × 3_625 / 1M = 7_250.
-    assert cost == 7_250, (
-        f"Cache discount mal aplicado: {cost} (esperado 7_250)."
+    # billable_input = max(0, 2M - 2M) = 0; cached = 2M × 260_000 / 1M = 520_000.
+    assert cost == 520_000, (
+        f"Cache discount mal aplicado: {cost} (esperado 520_000)."
     )
 
 
@@ -166,8 +166,8 @@ def test_compute_llm_cost_micros_unknown_model_returns_none():
 
 def test_compute_llm_cost_micros_handles_missing_tokens():
     from db_profiles import compute_llm_cost_micros
-    assert compute_llm_cost_micros("deepseek-v4-pro", None, 500) is None
-    assert compute_llm_cost_micros("deepseek-v4-pro", 1000, None) is None
+    assert compute_llm_cost_micros("glm-5.3", None, 500) is None
+    assert compute_llm_cost_micros("glm-5.3", 1000, None) is None
     assert compute_llm_cost_micros(None, 1000, 500) is None
 
 

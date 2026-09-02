@@ -385,7 +385,7 @@ def test_user_data_no_longer_has_own_ollama_client():
     (`_cloud_vision_scan` narra qué reemplazó) -- eso es narrativa legítima,
     ver blanket test arriba. Lo que este test ancla es que ya NO está
     DEFINIDA como función (mismo patrón que
-    test_p1_deepseek_only_restore.py::test_no_ollama_helper, que también
+    test_p1_glm_only_restore.py::test_no_ollama_helper, que también
     busca `"def _is_ollama_provider"` y no el substring desnudo)."""
     src = _src("routers/user_data.py")
     assert "def _ollama_vision_scan" not in src

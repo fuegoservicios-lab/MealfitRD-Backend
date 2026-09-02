@@ -366,7 +366,7 @@ class _FakeSwapLLM:
         return env
 
 
-class _FakeChatDeepSeekInstance:
+class _FakeChatGLMInstance:
     def __init__(self, envelopes):
         self._envelopes = envelopes
         self.swap_llm = None
@@ -435,18 +435,18 @@ def test_e2e_exceeds_then_fresh_candidate_accepted(_sodium_swap_env, monkeypatch
     ]
     fake_instance_holder = {}
 
-    def _fake_chat_deepseek(*a, **kw):
-        inst = _FakeChatDeepSeekInstance(envelopes)
+    def _fake_chat_glm(*a, **kw):
+        inst = _FakeChatGLMInstance(envelopes)
         fake_instance_holder["inst"] = inst
         return inst
 
     # [P1-SWAP-LUNA · 2026-08-05] El punto de intercepcion se movio: `swap_meal` ya no
-    # instancia `ChatDeepSeek` directamente, sino que pide el cliente a la fabrica por
+    # instancia `ChatGLM` directamente, sino que pide el cliente a la fabrica por
     # proveedor (`build_chat_llm`), porque el modelo del swap paso a ser de OpenAI.
-    # Parchear `agent.ChatDeepSeek` aqui dejaria de interceptar EN SILENCIO y este test
+    # Parchear `agent.ChatGLM` aqui dejaria de interceptar EN SILENCIO y este test
     # llamaria al proveedor DE VERDAD (medido: la suite tardo 149s haciendo llamadas
     # reales antes de corregir esto).
-    monkeypatch.setattr(agent, "build_chat_llm", _fake_chat_deepseek)
+    monkeypatch.setattr(agent, "build_chat_llm", _fake_chat_glm)
 
     result = agent.swap_meal(_base_form_data())
 
@@ -473,12 +473,12 @@ def test_e2e_still_exceeds_after_retry_is_accepted_not_failed(_sodium_swap_env, 
     ]
     fake_instance_holder = {}
 
-    def _fake_chat_deepseek(*a, **kw):
-        inst = _FakeChatDeepSeekInstance(envelopes)
+    def _fake_chat_glm(*a, **kw):
+        inst = _FakeChatGLMInstance(envelopes)
         fake_instance_holder["inst"] = inst
         return inst
 
-    monkeypatch.setattr(agent, "build_chat_llm", _fake_chat_deepseek)
+    monkeypatch.setattr(agent, "build_chat_llm", _fake_chat_glm)
 
     # No debe lanzar excepción — se acepta el 2º candidato pese a seguir sobre el techo.
     result = agent.swap_meal(_base_form_data())
@@ -503,12 +503,12 @@ def test_e2e_knob_off_zero_flow_change(_sodium_swap_env, monkeypatch):
     ]
     fake_instance_holder = {}
 
-    def _fake_chat_deepseek(*a, **kw):
-        inst = _FakeChatDeepSeekInstance(envelopes)
+    def _fake_chat_glm(*a, **kw):
+        inst = _FakeChatGLMInstance(envelopes)
         fake_instance_holder["inst"] = inst
         return inst
 
-    monkeypatch.setattr(agent, "build_chat_llm", _fake_chat_deepseek)
+    monkeypatch.setattr(agent, "build_chat_llm", _fake_chat_glm)
 
     result = agent.swap_meal(_base_form_data())
 
@@ -622,12 +622,12 @@ def test_e2e_composite_pantry_then_macros_then_sodium_final_attempt_never_fails(
     envelopes = [_fake_invoke_result(shrimp_meal) for _ in range(3)]
     fake_instance_holder = {}
 
-    def _fake_chat_deepseek(*a, **kw):
-        inst = _FakeChatDeepSeekInstance(envelopes)
+    def _fake_chat_glm(*a, **kw):
+        inst = _FakeChatGLMInstance(envelopes)
         fake_instance_holder["inst"] = inst
         return inst
 
-    monkeypatch.setattr(agent, "build_chat_llm", _fake_chat_deepseek)
+    monkeypatch.setattr(agent, "build_chat_llm", _fake_chat_glm)
 
     form_data = _base_form_data(
         # Puebla `clean_ingredients` (vía el fallback "current_pantry_ingredients" + el
@@ -669,10 +669,10 @@ def test_e2e_composite_final_attempt_accept_does_not_raise_swap_llm_retries_exha
     )
     envelopes = [_fake_invoke_result(shrimp_meal) for _ in range(3)]
 
-    def _fake_chat_deepseek(*a, **kw):
-        return _FakeChatDeepSeekInstance(envelopes)
+    def _fake_chat_glm(*a, **kw):
+        return _FakeChatGLMInstance(envelopes)
 
-    monkeypatch.setattr(agent, "build_chat_llm", _fake_chat_deepseek)
+    monkeypatch.setattr(agent, "build_chat_llm", _fake_chat_glm)
 
     form_data = _base_form_data(
         current_pantry_ingredients=["200 g de pollo", "1 taza de arroz", "1 aguacate"],
@@ -714,12 +714,12 @@ def test_impossible_budget_skips_postcheck_without_consuming_retry(monkeypatch):
     ))]
     fake_instance_holder = {}
 
-    def _fake_chat_deepseek(*a, **kw):
-        inst = _FakeChatDeepSeekInstance(envelopes)
+    def _fake_chat_glm(*a, **kw):
+        inst = _FakeChatGLMInstance(envelopes)
         fake_instance_holder["inst"] = inst
         return inst
 
-    monkeypatch.setattr(agent, "build_chat_llm", _fake_chat_deepseek)
+    monkeypatch.setattr(agent, "build_chat_llm", _fake_chat_glm)
 
     # Resto YA excede el techo (2200 > 2000) antes de sumar ningún candidato.
     result = agent.swap_meal(_base_form_data(sodium_resto_override_mg=2200.0))

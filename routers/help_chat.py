@@ -105,7 +105,7 @@ async def api_help_chat(
         raise HTTPException(status_code=400, detail=str(exc))
 
     # Lazy: ver docstring del módulo.
-    from llm_provider import ChatDeepSeek
+    from llm_provider import ChatGLM
     from langchain_core.messages import AIMessage, HumanMessage, SystemMessage
 
     # [P1-HELP-BOT-I18N - 2026-08-20] El idioma sale del cliente y solo SELECCIONA de
@@ -122,7 +122,7 @@ async def api_help_chat(
             lc_messages.append(AIMessage(content=msg["content"]))
 
     try:
-        llm = ChatDeepSeek(
+        llm = ChatGLM(
             model=_help_chat_model_name(),
             temperature=0.3,
             max_output_tokens=_HELP_CHAT_MAX_OUTPUT_TOKENS,

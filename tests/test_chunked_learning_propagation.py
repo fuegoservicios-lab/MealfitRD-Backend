@@ -1303,12 +1303,12 @@ def test_smart_shuffle_excludes_high_fatigue_days_using_learned_bases():
     }
 
     # El probe LLM debe fallar para que is_degraded se mantenga True.
-    # [P0-DEEPSEEK-MIGRATION · 2026-06-12] El probe GAP-6 ahora construye
-    # `ChatDeepSeek` (cron_tasks.py:26553, `from llm_provider import ChatDeepSeek`),
+    # [P0-LLM-PROVIDER-MIGRATION · 2026-06-12] El probe GAP-6 ahora construye
+    # `ChatGLM` (cron_tasks.py:26553, `from llm_provider import ChatGLM`),
     # NO `langchain_google_genai.ChatGoogleGenerativeAI` (Gemini eliminado).
-    # Patchear la clase vieja era un no-op → el probe DeepSeek corría sin mockear,
+    # Patchear la clase vieja era un no-op → el probe GLM corría sin mockear,
     # tenía éxito, restauraba modo AI y `run_plan_pipeline` se invocaba.
-    extra = {"mock_llm": "llm_provider.ChatDeepSeek"}
+    extra = {"mock_llm": "llm_provider.ChatGLM"}
     # [P0-5] Inventario debe cubrir los días sin pollo (res, pescado) — si no, el
     # filtro `_filter_days_by_fresh_pantry` (cron_tasks.py:13697) descarta esos
     # candidatos por baja cobertura, dejando sólo los días de pollo o cayendo a

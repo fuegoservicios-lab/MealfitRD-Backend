@@ -130,7 +130,7 @@ Cada fase es shippable de forma independiente y tendrá su **propio plan de impl
 **Cambios (diseño original, para referencia):**
 - **Semana-1 durable (GAP 3):** registro recuperable para la generación primaria; un cron de recovery marca `failed` + re-encola o empuja al usuario, en vez de spinner colgado por horas. (`routers/plans.py:3618` es el guard in-process actual.) Reusar el sentinel `_sse_completed_naturally` para no doble-persistir.
 - **Cola SSE acotada (GAP 7):** `asyncio.Queue(maxsize=...)` en `routers/plans.py:3241`.
-- **Guest 409 + dedup (GAP 4):** aplicar el guard de pipeline activo + `P1-DEDUP-RECENT-PLAN` a guests (hoy gateado en `_deep_search_user_id`, `:3116-3176`). Evita doble gasto DeepSeek en reload.
+- **Guest 409 + dedup (GAP 4):** aplicar el guard de pipeline activo + `P1-DEDUP-RECENT-PLAN` a guests (hoy gateado en `_deep_search_user_id`, `:3116-3176`). Evita doble gasto GLM en reload.
 - **CB fail-CLOSED (GAP 5):** `LLMCircuitBreaker.can_proceed` con cooldown local corto cuando Redis **y** DB caen (`:2038,:2249`), para sheddear carga en outage correlacionado en vez de martillar al provider.
 - **Semáforo de concurrencia (GAP 2 mitigación):** límite global de arranques de pipeline + shed por degradación de provider (Python no puede matar los threads de timeout fugados → acotar la cantidad).
 

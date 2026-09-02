@@ -8,7 +8,7 @@
 # El comentario `# vN` de cada linea es a que tag apuntaba ese SHA el dia que se
 # fijo. Para actualizarlas: Dependabot abre el PR con el SHA nuevo.
 # [P1-LANDING-BENCH-1 · 2026-08-07] Corrida on-demand del benchmark del landing con la
-# corrida FORZADA a OpenAI (gpt-5.6, cero DeepSeek) — `scripts/landing_benchmark.py live
+# corrida FORZADA a OpenAI (gpt-5.6, cero GLM) — `scripts/landing_benchmark.py live
 # --provider openai`. Los perfiles de la matriz corren como user_id=guest (cuenta de
 # invitado); el runner de Actions aporta el egress que un sandbox de desarrollo no tiene.
 #
@@ -21,7 +21,7 @@
 #   NEON_DATABASE_URL         ✅ (sin DB el catálogo sale vacío y "mides el vacío" — lección
 #   NEON_DATABASE_URL_POOLED  ✅  P0-CLINICAL-VALIDATION: PoolClosed ⇒ todo fallback)
 #   COHERE_API_KEY            opcional (embeddings; degrada keyword sin ella)
-#   DEEPSEEK_API_KEY          opcional (periferia no-forzada; el pipeline va 100% gpt-5.6)
+#   ZAI_API_KEY          opcional (periferia no-forzada; el pipeline va 100% gpt-5.6)
 #
 # Trigger doble: workflow_dispatch (corrida manual con inputs) + push del PROPIO archivo en la
 # rama del P-fix (primera corrida automática al aterrizar el workflow, con el mismo guard).
@@ -56,7 +56,7 @@ jobs:
     timeout-minutes: 180
     env:
       OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY }}
-      DEEPSEEK_API_KEY: ${{ secrets.DEEPSEEK_API_KEY }}
+      ZAI_API_KEY: ${{ secrets.ZAI_API_KEY }}
       COHERE_API_KEY: ${{ secrets.COHERE_API_KEY }}
       NEON_DATABASE_URL: ${{ secrets.NEON_DATABASE_URL }}
       NEON_DATABASE_URL_POOLED: ${{ secrets.NEON_DATABASE_URL_POOLED }}
@@ -79,7 +79,7 @@ jobs:
               echo "Faltan secrets del repo:**$missing**"
               echo ""
               echo "**Activación (owner):** Settings → Secrets and variables → Actions → New repository secret."
-              echo "La corrida es \`live --provider openai\` (gpt-5.6, cero DeepSeek) con perfiles guest;"
+              echo "La corrida es \`live --provider openai\` (gpt-5.6, cero GLM) con perfiles guest;"
               echo "sin \`OPENAI_API_KEY\` no es lo que dice ser y sin Neon el catálogo sale vacío"
               echo "(medirías el fallback matemático, no el motor). SOP: \`docs/landing_benchmarks.md\`."
             } >> "$GITHUB_STEP_SUMMARY"

@@ -216,10 +216,10 @@ def test_proactive_callsites_use_helper(proactive_src: str):
     """Ambas callsites (`classify_nudge_sentiment` y
     `_compose_proactive_message`) deben invocar el helper, no hardcodear
     el model ID."""
-    # Buscar al menos 2 invocaciones del helper en ChatDeepSeek
-    # ([P0-DEEPSEEK-MIGRATION · 2026-06-12] constructor renombrado).
+    # Buscar al menos 2 invocaciones del helper en ChatGLM
+    # ([P0-LLM-PROVIDER-MIGRATION · 2026-06-12] constructor renombrado).
     invocations = re.findall(
-        r"ChatDeepSeek\(\s*\n?\s*model\s*=\s*_proactive_model_name\(\)",
+        r"ChatGLM\(\s*\n?\s*model\s*=\s*_proactive_model_name\(\)",
         proactive_src,
         re.MULTILINE,
     )

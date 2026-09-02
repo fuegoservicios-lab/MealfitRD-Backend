@@ -117,7 +117,7 @@ def test_p1_orch_2_global_handler_consults_latch():
 # P2-ORCH-4 — predicado tenacity excluye spend-cap (3 decoradores)
 # ===========================================================================
 def test_p2_orch_4_retry_predicate():
-    # [P0-DEEPSEEK-MIGRATION] aserción position-independent: el import de
+    # [P0-LLM-PROVIDER-MIGRATION] aserción position-independent: el import de
     # tenacity puede moverse de línea con cambios de imports upstream.
     _tenacity_import = next(
         (ln for ln in _G.split("\n") if ln.startswith("from tenacity import")), ""
@@ -156,9 +156,9 @@ def test_p2_orch_1_stagger_default_and_clamp():
 # P1-COST-THINKING-CAP — cap del thinking budget en day-gen + correctores
 # ===========================================================================
 def test_p1_cost_thinking_cap():
-    """[P0-DEEPSEEK-MIGRATION · 2026-06-12] Este test ancla ahora la
+    """[P0-LLM-PROVIDER-MIGRATION · 2026-06-12] Este test ancla ahora la
     REMOCIÓN del mecanismo P1-COST-THINKING-CAP: era exclusivo del SDK de
-    Gemini (reasoning facturaba como output ~$9/M). DeepSeek-V4 gestiona el
+    Gemini (reasoning facturaba como output ~$9/M). GLM-5.3 gestiona el
     thinking nativamente y su output cuesta 10-30× menos. Si alguien
     reintroduce el kwarg sin un provider que lo soporte, la construcción
     del LLM rompería en runtime — este test lo bloquea en CI."""
@@ -167,7 +167,7 @@ def test_p1_cost_thinking_cap():
     assert "**_thinking_budget_kwargs(" not in _code
     assert '"thinking_budget":' not in _code
     # La nota de remoción queda como ancla textual del porqué.
-    assert "P0-DEEPSEEK-MIGRATION" in _G
+    assert "P0-LLM-PROVIDER-MIGRATION" in _G
 
 
 # ===========================================================================
@@ -214,11 +214,11 @@ def test_p2_orch_6_cross_day_detector():
 # ===========================================================================
 def test_p2_orch_7_risk_tier():
     assert "def _profile_has_medical_risk(form_data) -> bool:" in _G
-    # [P0-DEEPSEEK-MIGRATION] risk-tier con constante SSOT de llm_provider
+    # [P0-LLM-PROVIDER-MIGRATION] risk-tier con constante SSOT de llm_provider
     # para TODOS los tiers — la seguridad clínica no se degrada por plan de
     # pago. [P1-FLASH-PRIMARY · 2026-07-31] risk-tier = FLASH (el owner midió
     # flash > pro; mantener pro habría degradado el gate clínico a propósito).
-    assert "_REVIEWER_RISK_TIER_DEFAULT = DEEPSEEK_FLASH" in _G
+    assert "_REVIEWER_RISK_TIER_DEFAULT = GLM_FLASH" in _G
     assert "def _reviewer_model_name(form_data=None) -> str:" in _G
     assert "def _fact_checker_model_name(form_data=None) -> str:" in _G
     assert "_reviewer_model = _reviewer_model_name(form_data)" in _G
@@ -311,10 +311,10 @@ def test_z2_z3_schema_fields_optional():
 
 def test_l1_bind_nutrition_tool_knob():
     # [L1-UNBIND-NUTRITION-TOOL] bind_tools gateado por knob (default True).
-    # [P1-DEEPSEEK-JSON-MODE] el gate ahora también excluye JSON mode (tool-calling incompatible con
+    # [P1-GLM-JSON-MODE] el gate ahora también excluye JSON mode (tool-calling incompatible con
     # streaming JSON) → `if DAYGEN_BIND_NUTRITION_TOOL and not DAYGEN_JSON_MODE:`. El knob sigue gateando.
     # [2026-07-05] anchors actualizados: el bind vive ahora en el helper `_build_day_llm`
-    # (P1-DEEPSEEK-FLASH-FIRST) — `return _llm.bind_tools(...)` / `return _llm` (rama unbound).
+    # (P1-FLASH-FIRST) — `return _llm.bind_tools(...)` / `return _llm` (rama unbound).
     # La invariante (knob + exclusión JSON-mode gatean el bind) sigue intacta.
     assert 'DAYGEN_BIND_NUTRITION_TOOL  = _env_bool ("MEALFIT_DAYGEN_BIND_NUTRITION_TOOL",   True)' in _G
     assert "if DAYGEN_BIND_NUTRITION_TOOL and not DAYGEN_JSON_MODE:" in _G
@@ -438,16 +438,16 @@ def test_func_p2_orch_2_stats_snapshot_shape():
 
 @_needs_module
 def test_func_p1_cost_thinking_cap_gating():
-    """[P0-DEEPSEEK-MIGRATION · 2026-06-12] Mecanismo removido: el módulo
+    """[P0-LLM-PROVIDER-MIGRATION · 2026-06-12] Mecanismo removido: el módulo
     NO debe exponer `_thinking_budget_kwargs` ni `DAYGEN_THINKING_BUDGET`,
-    y el wrapper ChatDeepSeek SWALLOWEA el kwarg legacy sin romper si un
+    y el wrapper ChatGLM SWALLOWEA el kwarg legacy sin romper si un
     callsite zombie lo pasara."""
     assert not hasattr(_GO, "_thinking_budget_kwargs")
     assert not hasattr(_GO, "DAYGEN_THINKING_BUDGET")
     # Defensa del wrapper: kwarg legacy ignorado en silencio.
-    from llm_provider import ChatDeepSeek, DEEPSEEK_FLASH
-    llm = ChatDeepSeek(model=DEEPSEEK_FLASH, thinking_budget=2048)
-    assert llm.model_name == DEEPSEEK_FLASH
+    from llm_provider import ChatGLM, GLM_FLASH
+    llm = ChatGLM(model=GLM_FLASH, thinking_budget=2048)
+    assert llm.model_name == GLM_FLASH
 
 
 @_needs_module

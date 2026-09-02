@@ -6,8 +6,8 @@ import unicodedata
 import time
 from typing import Optional
 from langchain_core.tools import tool
-# [P0-DEEPSEEK-MIGRATION · 2026-06-12] Gemini → DeepSeek con router por tier.
-from llm_provider import ChatDeepSeek, DEEPSEEK_FLASH, resolve_model_for_user
+# [P0-LLM-PROVIDER-MIGRATION · 2026-06-12] Gemini → GLM con router por tier.
+from llm_provider import ChatGLM, GLM_FLASH, resolve_model_for_user
 from pydantic import BaseModel, Field
 from tenacity import retry, stop_after_attempt, wait_exponential
 from constants import normalize_ingredient_for_tracking, strip_accents, validate_ingredients_against_pantry, canonical_slot_key, slot_violations_for_meal_name, build_meal_timing_rules, canonicalize_diet_type
@@ -47,13 +47,13 @@ from knobs import _env_str, _env_float, _env_bool, _env_int
 
 
 def _tools_pref_agent_model_name() -> str:
-    # [P0-DEEPSEEK-MIGRATION · 2026-06-12] Default DeepSeek V4 Flash. El
+    # [P0-LLM-PROVIDER-MIGRATION · 2026-06-12] Default GLM-5.3 Flash. El
     # preference analyzer hace clasificación simple (rechazos/gustos) —
     # tarea aux barata, mismo modelo para todos los tiers. Override:
-    # `MEALFIT_TOOLS_PREF_AGENT_MODEL=deepseek-v4-pro` si la calidad degrada.
+    # `MEALFIT_TOOLS_PREF_AGENT_MODEL=glm-5.3` si la calidad degrada.
     return _env_str(
         "MEALFIT_TOOLS_PREF_AGENT_MODEL",
-        DEEPSEEK_FLASH,
+        GLM_FLASH,
     )
 
 
@@ -66,9 +66,9 @@ def _tools_pref_agent_llm_timeout_s() -> float:
 
 
 def _tools_modify_meal_model_name(user_id: Optional[str] = None) -> str:
-    # [P0-DEEPSEEK-MIGRATION · 2026-06-12] TIER-ROUTED: modificar una comida
+    # [P0-LLM-PROVIDER-MIGRATION · 2026-06-12] TIER-ROUTED: modificar una comida
     # del plan es surface user-facing de calidad — paid (basic/plus/ultra) →
-    # deepseek-v4-pro, gratis/guest → deepseek-v4-flash. El override del knob
+    # glm-5.3, gratis/guest → glm-5.3-flash. El override del knob
     # SIEMPRE gana (rollback sin redeploy).
     override = _env_str("MEALFIT_TOOLS_MODIFY_MEAL_MODEL", "")
     if override:
@@ -162,7 +162,7 @@ def analyze_preferences_agent(likes: list, history: list, active_rejections: Opt
     #   (c) sin CB gate → avalancha bajo provider degradado.
     # Tooltip-anchor: P1-TOOLS-LLM-HARDENING.
     _pref_model = _tools_pref_agent_model_name()
-    pref_llm = ChatDeepSeek(
+    pref_llm = ChatGLM(
         model=_pref_model,
         temperature=0.3, # Baja temperatura para ser analítico
         timeout=_tools_pref_agent_llm_timeout_s(),
@@ -1514,10 +1514,10 @@ def execute_modify_single_meal(user_id: str, day_number: int, meal_type: str, ch
     # En 429 NO se cuenta como CB failure; en otros errores sí. Token
     # telemetry post-success rellena el blind-spot que tenía este callsite
     # en `llm_usage_events`. Tooltip-anchor: P1-TOOLS-LLM-HARDENING.
-    # [P0-DEEPSEEK-MIGRATION] `user_id` viene FORZADO al valor autenticado por
+    # [P0-LLM-PROVIDER-MIGRATION] `user_id` viene FORZADO al valor autenticado por
     # el override de execute_tools (P0-AGENT-1) — seguro para tier-routing.
     _modify_model = _tools_modify_meal_model_name(user_id)
-    modify_llm = ChatDeepSeek(
+    modify_llm = ChatGLM(
         model=_modify_model,
         temperature=0.1,
         timeout=_tools_modify_meal_llm_timeout_s(),
@@ -1526,7 +1526,7 @@ def execute_modify_single_meal(user_id: str, day_number: int, meal_type: str, ch
     # objeto con `.model_name` (sin `.with_structured_output(...)`) es el que
     # `_emit_llm_usage_event_best_effort` puede leer para resolver el
     # model_name. Si fallara, el helper retorna sin emit (best-effort).
-    _modify_llm_for_usage = ChatDeepSeek(
+    _modify_llm_for_usage = ChatGLM(
         model=_modify_model,
         temperature=0.1,
         timeout=_tools_modify_meal_llm_timeout_s(),
@@ -1923,7 +1923,7 @@ def execute_modify_single_meal(user_id: str, day_number: int, meal_type: str, ch
             # → ValueError) significa que el PROVEEDOR respondió pero el output no pasó NUESTRA validación
             # — NO es señal de salud del proveedor. El breaker `_modify_cb` es per-modelo COMPARTIDO
             # cross-worker; contar un guardrail como fallo lo abre por un plato "difícil" y deja
-            # execute_modify_single_meal en fail-fast ~30s para TODO el tier con DeepSeek sano (mismo modo
+            # execute_modify_single_meal en fail-fast ~30s para TODO el tier con GLM sano (mismo modo
             # de fallo que cerró el fix hermano el 2026-06-24, pero por la superficie del chat). Solo
             # timeout/5xx/conexión (no-ValueError) cuentan como CB failure. Knob
             # MEALFIT_MODIFY_CB_COUNT_GUARDRAIL=true revierte. tooltip-anchor: P2-CB-GUARDRAIL-NOT-FAILURE

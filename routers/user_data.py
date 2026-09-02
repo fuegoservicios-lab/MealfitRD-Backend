@@ -1170,7 +1170,7 @@ _SUPERPERS_MAX_ITEM_LEN = 60
 _SUPERPERS_MAX_FREETEXT = 1500
 
 # [P1-SUPERPERSONALIZATION-1 · Fase 3 · 2026-06-19] Kill-switch del enriquecimiento
-# del RAG: al guardar con un freeText NUEVO, se extraen facts (DeepSeek-flash) →
+# del RAG: al guardar con un freeText NUEVO, se extraen facts (GLM-flash) →
 # user_facts (Cohere embed) en background, para que el RAG los recupere en
 # plan-gen Y chat automáticamente. Default ON; flip a "false" en el .env del VPS
 # para apagar sin redeploy (cuesta ~1 call LLM + 1 embedding por guardado con

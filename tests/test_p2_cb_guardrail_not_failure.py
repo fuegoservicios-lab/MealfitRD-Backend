@@ -5,7 +5,7 @@ Incidente que lo motivó (corr=ca92cac0, plan 4ba66a06, 2026-06-24): un regenera
 escribía 'dorado' en la receta sin listarlo → el guard de coherencia receta↔lista rechazó los 3
 intentos → swap_meal levantó SWAP_LLM_RETRIES_EXHAUSTED → el except contaba `record_failure()` → el
 breaker per-modelo (COMPARTIDO entre usuarios) se abrió → merienda/cena del día ni se intentaron, y el
-usuario vio "IA no disponible" aunque DeepSeek estaba sano. El breaker debe tripear por caídas del
+usuario vio "IA no disponible" aunque GLM estaba sano. El breaker debe tripear por caídas del
 PROVEEDOR (timeout/5xx/conexión), no porque NUESTRO validador rechazó un output bien-formado.
 
 Fix: en el except de swap_meal, si `isinstance(e, ValueError)` (todos los validadores levantan

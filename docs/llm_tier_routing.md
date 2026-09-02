@@ -1,15 +1,45 @@
-# Router de modelos LLM por tier (P0-DEEPSEEK-MIGRATION · 2026-06-12 · P1-FLASH-PRIMARY · 2026-07-31)
+# Router de modelos LLM por tier (P0-LLM-PROVIDER-MIGRATION · 2026-06-12 · P1-FLASH-PRIMARY · 2026-07-31)
 
-Provider único: **DeepSeek V4** (API OpenAI-compatible, base
-`https://api.deepseek.com`, key env `DEEPSEEK_API_KEY`). SSOT del router:
+## [P0-GLM-MIGRATION · 2026-09-02] Provider: Z.ai GLM-5.3 (sustituye al anterior)
+
+Decisión del owner: **Z.ai GLM-5.3** es el provider OpenAI-compatible del stack; el anterior
+no sobrevive ni como nombre (`test_p1_flash_first.py::test_previous_provider_fully_removed`).
+Los roles se conservan: **flash** = `glm-5.3-flash` (aux/cheap, tier gratis, red del day-gen),
+**pro** = `glm-5.3` (red post-fallo cuando no hay `OPENAI_API_KEY`). OpenAI gpt-5.6
+(Luna/Terra/Sol) sigue en day-gen por tier, swap, vision y reviewer clínico — sin cambios.
+
+Hechos verificados EN VIVO 2026-09-02 (clave de pago, `api.z.ai/api/paas/v4`):
+
+| Hecho | Medición | Consecuencia en el código |
+|---|---|---|
+| Thinking NO se puede apagar (`thinking.type=disabled` → 400/1210) | effort=max: 6,3 s / 173 tok en un prompt trivial; effort=low: 1,1 s / 14 tok | `ChatGLM` fija `thinking.enabled` + `reasoning_effort` default **low** (`MEALFIT_GLM_REASONING_EFFORT`); traduce `thinking.effort` y `thinking.disabled` heredados |
+| Vocabulario de effort: `low`/`high`/`max` | — | `_glm_reasoning_effort`: medium→high, xhigh→max, none→low |
+| `json_schema` y `json_mode` IGNORAN el esquema | devuelve `{"respuesta": …}` / markdown → `OutputParserException` | `with_structured_output` fuerza `function_calling`; `json_mode` explícito se reencamina |
+| `function_calling` con `tool_choice` forzado funciona CON thinking | veredicto de 3 campos en 13 s (low) | las ramas reviewer/corrector/juez que pedían `json_mode` siguen válidas |
+| Concurrencia (cuenta de pago) | 8 llamadas paralelas flash-low ~900 tok: 15–29 s cada una, cero 429; glm-5.3-low ×4: 8–10 s | el fallback cross-provider (Luna) y el breaker por modelo siguen siendo la red |
+| Reasoning tokens facturan como OUTPUT y cuentan en `max_tokens` | flash-high con `max_tokens=1200` → `finish=length` | no subir el effort sin subir `max_output_tokens` |
+| Precio de lista (USD/1M) | flash $0.15 in / $0.03 cached / $0.50 out · glm-5.3 $1.4 / $0.26 / $4.4 (promo -50% flash hasta 2026-09-09 NO se costea) | `db_profiles._DEFAULT_LLM_PRICING_MICROS_PER_M` |
+| Multimodal nativo (imagen/vídeo/archivo) en flash | no medido | candidato a sustituir a Luna en vision (fuera de alcance hoy) |
+
+Knobs: `ZAI_API_KEY` (env), `MEALFIT_ZAI_BASE_URL` (default `https://api.z.ai/api/paas/v4`),
+`MEALFIT_GLM_REASONING_EFFORT` (`low`|`high`|`max`, default `low`). Entidad legal (legales del
+frontend): JINGSHENG HENGXING TECHNOLOGY PTE. LTD., Singapur; su política declara que no
+almacena el contenido enviado por la API.
+
+> Las secciones siguientes son anteriores a la migración y se renombraron en bloque:
+> donde citan mediciones fechadas antes de 2026-09-02 con "GLM", léase el proveedor anterior.
+
+
+Provider único: **GLM-5.3** (API OpenAI-compatible, base
+`https://api.z.ai/api/paas/v4`, key env `ZAI_API_KEY`). SSOT del router:
 [`backend/llm_provider.py`](../llm_provider.py). Decisión de producto
 2026-06-12: salir a producción con modelos chinos por costo; Gemini eliminado
 por completo (deps, embeddings, vision, safety_settings).
 
 ## [P1-FLASH-PRIMARY · 2026-07-31] Flash primario en TODAS las superficies
 
-Decisión del owner: **`deepseek-v4-flash` es actualmente MEJOR que
-`deepseek-v4-pro`** (los providers actualizan los modelos bajo el mismo ID —
+Decisión del owner: **`glm-5.3-flash` es actualmente MEJOR que
+`glm-5.3`** (los providers actualizan los modelos bajo el mismo ID —
 la premisa "pro > flash" de 2026-06-12 caducó). Consecuencias:
 
 - TODOS los tiers (gratis Y pagados) resuelven **flash** por default.
@@ -23,16 +53,16 @@ la premisa "pro > flash" de 2026-06-12 caducó). Consecuencias:
   del day-gen, fallback del planner con breaker abierto, escalada del
   corrector quirúrgico y por skeleton-fidelity. Razón: flash y pro son el
   MISMO proveedor; el incidente que motivó la red (breaker abierto 172×, gym
-  baseline) fue DeepSeek rate-limiteando — pro caía JUNTO con flash y la red
+  baseline) fue GLM rate-limiteando — pro caía JUNTO con flash y la red
   no atrapaba nada. Luna = infra/key/límites propios (diversidad real).
-  Fail-safe: sin `OPENAI_API_KEY` la red vuelve sola a `deepseek-v4-pro`
+  Fail-safe: sin `OPENAI_API_KEY` la red vuelve sola a `glm-5.3`
   (nunca sin red). Colapsar la red a flash sigue prohibido (fallbacks no-op
-  contra el mismo breaker roto). Simetría: pipeline DeepSeek→cae a OpenAI;
-  reviewer OpenAI→cae a DeepSeek. Los 8 consumidores de modelo variable
+  contra el mismo breaker roto). Simetría: pipeline GLM→cae a OpenAI;
+  reviewer OpenAI→cae a GLM. Los 8 consumidores de modelo variable
   construyen con dispatch por proveedor (`ChatOpenAIInstrumented` para gpt-*).
   Test ancla: [`test_p1_net_luna.py`](../tests/test_p1_net_luna.py).
-- Rollback sin redeploy: `MEALFIT_MODEL_PAID_TIER=deepseek-v4-pro` (tiers),
-  `MEALFIT_PRO_MODEL=deepseek-v4-pro` (red), `MEALFIT_REVIEWER_RISK_TIER_MODEL`
+- Rollback sin redeploy: `MEALFIT_MODEL_PAID_TIER=glm-5.3` (tiers),
+  `MEALFIT_PRO_MODEL=glm-5.3` (red), `MEALFIT_REVIEWER_RISK_TIER_MODEL`
   / `MEALFIT_FACT_CHECKER_RISK_TIER_MODEL` (gate clínico),
   `MEALFIT_BARIATRIC_DAYGEN_MODEL` (day-gen bariátrico).
 
@@ -59,7 +89,7 @@ activas. Fail-safe de detección → no-difícil (terra). Knob
 ⚠️ La escalera de calidad luna<terra<sol es hipótesis de PRECIO, no medición —
 `llm_usage_events` por modelo+nodo dará los datos para el A/B.
 
-- Con el recorte, **luna quedó MÁS BARATO que deepseek-v4-pro** (~0.75×) — por
+- Con el recorte, **luna quedó MÁS BARATO que glm-5.3** (~0.75×) — por
   eso es viable hasta en el tier gratis.
 - Knobs: `MEALFIT_REVIEWER_RISK_MODEL_FREE` (default luna) /
   `MEALFIT_REVIEWER_RISK_MODEL_PAID` (default terra);
@@ -70,10 +100,10 @@ activas. Fail-safe de detección → no-difícil (terra). Knob
   nunca se queda sin modelo.
 - Construcción con dispatch por proveedor (`ChatOpenAIInstrumented` para
   gpt-* — backpressure + costo en `llm_usage_events` intactos). El thinking
-  DeepSeek (`MEALFIT_REVIEWER_THINKING`) se salta para OpenAI (gpt-5.6 razona
+  GLM (`MEALFIT_REVIEWER_THINKING`) se salta para OpenAI (gpt-5.6 razona
   nativo); aplica solo si el reviewer cae al fallback flash.
 - El **fact-checker NO cambió** de provider (tool-calling loop medido en
-  DeepSeek risk-tier flash). Candidato a Luna cuando haya datos del reviewer.
+  GLM risk-tier flash). Candidato a Luna cuando haya datos del reviewer.
 
 Test ancla: [`test_p1_reviewer_tier_models.py`](../tests/test_p1_reviewer_tier_models.py).
 
@@ -81,8 +111,8 @@ Test ancla: [`test_p1_reviewer_tier_models.py`](../tests/test_p1_reviewer_tier_m
 
 | `user_profiles.plan_tier` | Modelo | Pricing (USD/1M tok, in miss/hit · out) |
 |---|---|---|
-| `gratis` / guest / NULL / desconocido / fallo de lookup | `deepseek-v4-flash` | $0.14 / $0.0028 · $0.28 |
-| `basic` · `plus` · `ultra` | `deepseek-v4-flash` (P1-FLASH-PRIMARY; era `deepseek-v4-pro`) | $0.14 / $0.0028 · $0.28 |
+| `gratis` / guest / NULL / desconocido / fallo de lookup | `glm-5.3-flash` | $0.14 / $0.0028 · $0.28 |
+| `basic` · `plus` · `ultra` | `glm-5.3-flash` (P1-FLASH-PRIMARY; era `glm-5.3`) | $0.14 / $0.0028 · $0.28 |
 
 (Pricing de la red pro, usada solo post-fallo: $0.435 / $0.003625 · $0.87.)
 
@@ -94,22 +124,22 @@ Lookup con cache TTL in-process (`MEALFIT_TIER_CACHE_TTL_S`, default 300s);
 ## [P1-DAYGEN-TIER-MODEL · 2026-07-31] Generador de DÍAS por tier (Luna primario)
 
 Decisión del owner tras el A/B medido con el índice de calidad (2026-07-31):
-*"deepseek medium dura mucho, el ganador es gpt 5.6 luna medium; medium en plus
-nadamás por ahora, low o sin pensamiento en gratis; deja a deepseek donde no
+*"glm medium dura mucho, el ganador es gpt 5.6 luna medium; medium en plus
+nadamás por ahora, low o sin pensamiento en gratis; deja a glm donde no
 sea necesario luna"*. El day-gen es la ÚNICA superficie de generación que sale
-de DeepSeek; el resto de nodos (planner, critique, correctores, compressor,
+de GLM; el resto de nodos (planner, critique, correctores, compressor,
 fact-checker) sigue flash [P1-FLASH-PRIMARY].
 
 | Tier | Day-gen primario | Effort | Cadena completa | Evidencia A/B (índice 0-100) |
 |---|---|---|---|---|
 | plus / ultra | `gpt-5.6-luna` | `medium` (`reasoning_effort`) | [luna, flash] | luna-medium **95,4** (coherencia 90) vs flash 82-92 (coherencia 57-83); ~$0,040/plan, 34,5 s/día |
 | gratis / basic / guest / desconocido | `gpt-5.6-luna` | `low` | [luna, flash] | fail-cheap simétrico al reviewer; low no medido aún — floor barato ($1,20/M out con poco razonamiento) |
-| (cualquiera) sin `OPENAI_API_KEY` | `deepseek-v4-flash` | — | [flash, red P1-NET-LUNA→pro] | fail-safe: jamás un modelo incobrable delante |
+| (cualquiera) sin `OPENAI_API_KEY` | `glm-5.3-flash` | — | [flash, red P1-NET-LUNA→pro] | fail-safe: jamás un modelo incobrable delante |
 
 Descalificados por el mismo A/B: **luna-high** (90,8 — peor que medium en TODO,
 3× latencia, 1,5× costo) y **flash+thinking-medium** (76,9 — 36k tokens de
 razonamiento, 266 s/día, día muerto contra el techo → plan degradado. La
-"ganga" del reasoning barato de DeepSeek era latencia, no dinero).
+"ganga" del reasoning barato de GLM era latencia, no dinero).
 
 Reglas de diseño ancladas por [`test_p1_daygen_tier_model.py`](../tests/test_p1_daygen_tier_model.py):
 el effort del tier aplica **SOLO al modelo primario** (la red flash jamás
@@ -128,7 +158,7 @@ inválido cae al default del tier, nunca a uno más caro. Knobs:
 | Chat swap (`swap_meal`) — y por herencia `/regenerate-day`, que es un bucle de swaps | **`gpt-5.6-luna` fijo** (P1-SWAP-LUNA · 2026-08-05), con `reasoning_effort` **por superficie**: plato individual → `medium`, día completo → `low`. Fail-safe sin `OPENAI_API_KEY` → router por tier. Knobs: `MEALFIT_CHAT_AGENT_SWAP_MODEL`, `MEALFIT_SWAP_EFFORT_INDIVIDUAL`, `MEALFIT_SWAP_EFFORT_DAY` | `form_data.user_id` (validado vs JWT en `api_swap_meal`) |
 | Tool `modify_single_meal` | **Tier** | `user_id` forzado por P0-AGENT-1 |
 | Reviewer médico con perfil de riesgo | **Por TIER** (P1-REVIEWER-TIER-MODELS · 2026-07-31): free/guest → `gpt-5.6-luna`; basic/plus/ultra → `gpt-5.6-terra` | `_reviewer_risk_model_for_tier()`; fail-safe sin `OPENAI_API_KEY` → flash + alerta; el guard de desvío alerta ante cualquier modelo ≠ esperado del tier |
-| Fact-checker clínico con perfil de riesgo | **risk-tier FLASH fijo** (P1-FLASH-PRIMARY) | `_REVIEWER_RISK_TIER_DEFAULT` — sin cambio de provider (tool-calling loop medido en DeepSeek) |
+| Fact-checker clínico con perfil de riesgo | **risk-tier FLASH fijo** (P1-FLASH-PRIMARY) | `_REVIEWER_RISK_TIER_DEFAULT` — sin cambio de provider (tool-calling loop medido en GLM) |
 | Aux baratos: títulos, recipe-expand, sentiment, router RAG, fact-extractor, memoria, nudges, judge, compressor, meta-learning, planner default, médico Q&A, probe CB | **FLASH fijo** | — |
 
 Los per-feature knobs `MEALFIT_<FEATURE>_MODEL` se preservan y **siempre
@@ -138,8 +168,8 @@ P3-PREVIEW-MODEL-KNOB).
 ## Thinking mode (razonamiento nativo V4) por superficie
 
 [P1-REVIEWER-THINKING · 2026-07-05 · P2-THINKING-EFFORT · 2026-07-06 · P1-FACTCHECKER-THINKING · 2026-07-08]
-DeepSeek-V4 trae razonamiento nativo ON de fábrica; el repo lo apaga globalmente
-(`P1-DEEPSEEK-THINKING-OFF` — en day-gen midió >170s → fallback matemático). Se
+GLM-5.3 trae razonamiento nativo ON de fábrica; el repo lo apaga globalmente
+(`P1-PROVIDER-THINKING-DEFAULT` — en day-gen midió >170s → fallback matemático). Se
 re-activa SELECTIVAMENTE solo en superficies de **juicio clínico** de bajo volumen.
 
 **Regla empírica (A/B sesión 2026-07-08):** el thinking rinde en superficies de
@@ -153,7 +183,7 @@ sin tool_choice forzado sí lo soporta nativo.
 | Reviewer médico (risk-tier) | chico (veredicto) | `MEALFIT_REVIEWER_THINKING` (+`_EFFORT`, +`_TIMEOUT_S`=90) | **ON** | `medium` | Sweep OFF/low/medium/high/max (caso látex): `low` atrapó lo MISMO que `max` (4 cross-react + gradación tomate) a igual velocidad → **max = overkill** (el reviewer solo escanea+juzga contra el reporte del fact-checker, no razona desde cero). `medium` = hedge para planes reales de 7 días; `low` es el piso probado suficiente |
 | Fact-checker clínico (FASE 1) | chico (reporte) | `MEALFIT_FACT_CHECKER_THINKING` (+`_EFFORT`, +`_TIMEOUT_S`=60) | **ON** | `high` | A/B warfarina+mariscos: HIGH atrapó interacción fibra↔absorción + CYP450 + cross-react sistemática que OFF omitió. `max` (72s) no superó a `high` (53s) → high = sweet spot. Usa `bind_tools` → thinking nativo (sin json_mode) |
 | Corrector quirúrgico (escalada Pro) | **grande (día completo)** | `MEALFIT_SURGICAL_PRO_THINKING` (+`_EFFORT`) | **OFF** | — | A/B caso pollo-duplicado: OFF=17s `pro_success` con fix correcto; HIGH y MAX = **timeout (120s)** → `None`. Generación grande + reasoning revienta el cap Y compite con el budget del pipeline |
-| Day-gen / planner | grande | `MEALFIT_DAYGEN_EFFORT` (global A/B) · `MEALFIT_DAYGEN_EFFORT_{PLUS,FREE}` (tier) | **OFF en DeepSeek** · ON en Luna [P1-DAYGEN-TIER-MODEL] | plus `medium` / free `low` (solo el primario Luna; la red flash sin thinking) | `P1-DEEPSEEK-THINKING-OFF` sigue vigente para DeepSeek: flash+thinking-medium midió 36k tok de razonamiento, 266 s/día y plan degradado 76,9 (A/B 2026-07-31). El razonamiento de LUNA sí paga: medium 95,4 vs base 82-92 |
+| Day-gen / planner | grande | `MEALFIT_DAYGEN_EFFORT` (global A/B) · `MEALFIT_DAYGEN_EFFORT_{PLUS,FREE}` (tier) | **OFF en GLM** · ON en Luna [P1-DAYGEN-TIER-MODEL] | plus `medium` / free `low` (solo el primario Luna; la red flash sin thinking) | `P1-PROVIDER-THINKING-DEFAULT` sigue vigente para GLM: flash+thinking-medium midió 36k tok de razonamiento, 266 s/día y plan degradado 76,9 (A/B 2026-07-31). El razonamiento de LUNA sí paga: medium 95,4 vs base 82-92 |
 
 Todos los knobs de thinking **nacen OFF** (convención medir→actuar) y hacen **fail-open
 al path estándar** (nunca a aprobar/omitir el gate clínico). Test ancla del reviewer/surgical:
@@ -164,9 +194,9 @@ al path estándar** (nunca a aprobar/omitir el gate clínico). Test ancla del re
 
 | Knob | Default | Efecto |
 |---|---|---|
-| `MEALFIT_DEEPSEEK_BASE_URL` | `https://api.deepseek.com` | endpoint OpenAI-compatible |
-| `MEALFIT_MODEL_FREE_TIER` | `deepseek-v4-flash` | modelo tier gratis/aux |
-| `MEALFIT_MODEL_PAID_TIER` | `deepseek-v4-flash` (P1-FLASH-PRIMARY; era pro) | modelo tiers pagados |
+| `MEALFIT_ZAI_BASE_URL` | `https://api.z.ai/api/paas/v4` | endpoint OpenAI-compatible |
+| `MEALFIT_MODEL_FREE_TIER` | `glm-5.3-flash` | modelo tier gratis/aux |
+| `MEALFIT_MODEL_PAID_TIER` | `glm-5.3-flash` (P1-FLASH-PRIMARY; era pro) | modelo tiers pagados |
 | `MEALFIT_BARIATRIC_DAYGEN_MODEL` | `_FLASH_MODEL_NAME` (P1-FLASH-PRIMARY) | day-gen bariátrico (era PRO hardcoded) |
 | `MEALFIT_TIER_CACHE_TTL_S` | `300` (clamp [10, 3600]) | TTL del cache de tier |
 | `MEALFIT_LLM_PRICING_JSON` | — | override del pricing de telemetría (antes `MEALFIT_GEMINI_PRICING_JSON`) |
@@ -180,7 +210,7 @@ al path estándar** (nunca a aprobar/omitir el gate clínico). Test ancla del re
 
 ## Particularidades del API verificadas EN VIVO (2026-06-12)
 
-Dos 400s reales que el wrapper `ChatDeepSeek` resuelve centralizadamente
+Dos 400s reales que el wrapper `ChatGLM` resuelve centralizadamente
 (NO tocar los ~15 callsites de `.with_structured_output(...)`):
 
 1. `response_format: json_schema` (default de langchain-openai ≥1.3) →
@@ -203,12 +233,12 @@ reporta `output_token_details.reasoning` y `input_token_details.cache_read`
   constructores, `safety_settings` (HarmCategory — el filtro configurable era
   Gemini-only; decisión P3-CHAT-SAFETY-OFF queda satisfecha por defecto).
 - Caps de thinking-budget (`MEALFIT_*_THINKING_BUDGET`): el reasoning de
-  DeepSeek es nativo y su output cuesta 10-30× menos que el de Gemini — el
+  GLM es nativo y su output cuesta 10-30× menos que el de Gemini — el
   runaway de costo que motivaba los caps no existe.
 - Knobs `MEALFIT_GEMINI_EMBEDDING_TEXT_MODEL` / `_MULTIMODAL_MODEL`.
-- `deepseek-chat`/`deepseek-reasoner` NO se usan (aliases legacy, deprecan
+- `glm-5.3-flash`/`glm-5.3` NO se usan (aliases legacy, deprecan
   2026-07-24); el pricing dict los cubre por si un knob transitorio los nombra.
 
-Test ancla: [`tests/test_p0_deepseek_migration.py`](../tests/test_p0_deepseek_migration.py)
+Test ancla: [`tests/test_p0_glm_migration.py`](../tests/test_p0_glm_migration.py)
 (blanket no-Gemini, matriz del router, fail-cheap, wrapper, no-key-hardcodeada,
 knobs registrados, consistencia CB, pricing, soft-fail de providers pendientes).

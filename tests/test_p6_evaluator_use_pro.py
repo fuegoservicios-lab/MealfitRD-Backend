@@ -123,14 +123,14 @@ def test_knob_registered_via_env_bool(reload_with_env):
 # 6. Constantes del módulo siguen presentes (no breaking change)
 # ===========================================================================
 def test_pro_and_flash_model_names_unchanged(reload_with_env):
-    """[P0-DEEPSEEK-MIGRATION · 2026-06-12] Flash = `deepseek-v4-flash`.
+    """[P0-LLM-PROVIDER-MIGRATION · 2026-06-12] Flash = `glm-5.3-flash`.
     [P1-NET-LUNA · 2026-07-31] `_PRO_MODEL_NAME` es la RED post-fallo:
-    `gpt-5.6-luna` (cross-provider) con OPENAI_API_KEY, `deepseek-v4-pro`
+    `gpt-5.6-luna` (cross-provider) con OPENAI_API_KEY, `glm-5.3`
     como fail-safe sin ella. Invariante estable: red ≠ flash."""
     go = reload_with_env(None)
-    assert go._PRO_MODEL_NAME in ("gpt-5.6-luna", "deepseek-v4-pro")
+    assert go._PRO_MODEL_NAME in ("gpt-5.6-luna", "glm-5.3")
     assert go._PRO_MODEL_NAME != go._FLASH_MODEL_NAME
-    assert go._FLASH_MODEL_NAME == "deepseek-v4-flash"
+    assert go._FLASH_MODEL_NAME == "glm-5.3-flash"
 
 
 # ===========================================================================

@@ -9,12 +9,12 @@ La telemetría no dijo "falta el modelo nuevo". Dijo que el day-gen **no existi�
 
 ## La causa
 
-`graph_orchestrator` define su PROPIA `ChatDeepSeek` que subclasea la de `llm_provider` para
+`graph_orchestrator` define su PROPIA `ChatGLM` que subclasea la de `llm_provider` para
 añadir dos cosas: backpressure (rate limit per-user + slot global) y la captura de
 `usage_metadata` que llena `llm_usage_events`. `P1-DAYGEN-LUNA-CANARY` cambió `_build_day_llm`
 para construir el cliente vía `llm_provider.build_chat_llm`, que devuelve las clases **base**.
 
-El agujero no era sólo del camino OpenAI: con la fábrica, un día que cayera al fallback DeepSeek
+El agujero no era sólo del camino OpenAI: con la fábrica, un día que cayera al fallback GLM
 también perdía instrumentación **y** rate limit.
 
 ## El arreglo
@@ -39,12 +39,12 @@ _METODOS = ("invoke", "stream", "generate", "ainvoke", "astream", "agenerate")
 
 # ───────────── 1. los dos clientes comparten el mixin ─────────────
 
-@pytest.mark.parametrize("cliente", ["ChatDeepSeek", "ChatOpenAIInstrumented"])
+@pytest.mark.parametrize("cliente", ["ChatGLM", "ChatOpenAIInstrumented"])
 def test_hereda_del_mixin(cliente):
     assert issubclass(getattr(go, cliente), go._LLMBackpressureCostMixin)
 
 
-@pytest.mark.parametrize("cliente", ["ChatDeepSeek", "ChatOpenAIInstrumented"])
+@pytest.mark.parametrize("cliente", ["ChatGLM", "ChatOpenAIInstrumented"])
 @pytest.mark.parametrize("metodo", _METODOS)
 def test_los_seis_caminos_pasan_por_el_mixin(cliente, metodo):
     """`.ainvoke()` directo, `.astream()` (el que usa el day-gen), structured-output y
@@ -113,7 +113,7 @@ def test_el_daygen_construye_las_clases_locales():
     # El AST no conserva comentarios, así que todo `Name` que aparezca aquí es código de verdad.
     nombres = {n.id for n in ast.walk(ast.parse(textwrap.dedent(cuerpo)))
                if isinstance(n, ast.Name)}
-    assert {"ChatOpenAIInstrumented", "ChatDeepSeek"} <= nombres, nombres
+    assert {"ChatOpenAIInstrumented", "ChatGLM"} <= nombres, nombres
     assert "is_openai_model" in nombres, "el proveedor debe elegirse por prefijo del modelo"
     assert "build_chat_llm" not in nombres, \
         "la fábrica devuelve las clases BASE: sin costo ni backpressure"
@@ -136,7 +136,7 @@ def test_todo_cliente_chat_de_produccion_esta_instrumentado():
     for nombre, obj in vars(go).items():
         if not inspect.isclass(obj) or not issubclass(obj, lp.ChatOpenAI):
             continue
-        if obj is lp.ChatOpenAI or obj is lp.ChatDeepSeek:
+        if obj is lp.ChatOpenAI or obj is lp.ChatGLM:
             continue          # las BASES de llm_provider, no clientes de este módulo
         if not issubclass(obj, go._LLMBackpressureCostMixin):
             faltan.append(nombre)

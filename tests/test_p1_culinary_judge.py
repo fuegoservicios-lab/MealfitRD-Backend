@@ -51,7 +51,7 @@ def test_culinary_judge_guard_sanea_valor_invalido_a_off():
 
 def test_rubrica_existe_no_vacia_y_estable():
     """La rúbrica se construye UNA vez a nivel de módulo (`_CULINARY_JUDGE_RUBRIC`) para que
-    el prefix del prompt sea byte-a-byte idéntico entre invocaciones (cache hits de DeepSeek).
+    el prefix del prompt sea byte-a-byte idéntico entre invocaciones (cache hits de GLM).
     Dos accesos al atributo del módulo deben devolver el mismo valor — si un refactor futuro lo
     convirtiera en una función que reconstruye el string en cada llamada (p.ej. leyendo el JSON
     de disco de nuevo, o barajando ejemplos), este test lo detectaría."""

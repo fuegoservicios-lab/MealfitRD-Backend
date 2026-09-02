@@ -19,13 +19,13 @@ os.environ.setdefault("MEALFIT_DB_BACKEND", "neon")
 os.environ.setdefault("NEON_DATABASE_URL", "postgresql://stub:stub@localhost:5432/stub")
 os.environ.setdefault("NEON_DATABASE_URL_UNPOOLED", "postgresql://stub:stub@localhost:5432/stub")
 
-# El venv-test rompe `ChatDeepSeek.__init__` (drift langchain/pydantic) y agent.py lo
+# El venv-test rompe `ChatGLM.__init__` (drift langchain/pydantic) y agent.py lo
 # INSTANCIA al importar; además, en la suite completa otros tests dejan un `agent` FALSO
 # cacheado en sys.modules (18ª clase: pasa solo, falla en suite). La 1ª versión de este
 # arreglo purgaba sys.modules a nivel MÓDULO sin restaurar → re-ejecutó agent con el stub
 # para TODA la suite posterior (contaminación reload(): ~600 tests cambiaron de veredicto,
 # tree9=113 vs ~717). El contrato correcto: stub + import fresco en setup_module, y
-# RESTAURACIÓN COMPLETA del mundo (llm_provider.ChatDeepSeek + sys.modules['agent'] previo,
+# RESTAURACIÓN COMPLETA del mundo (llm_provider.ChatGLM + sys.modules['agent'] previo,
 # fuera FALSO o ausente) en teardown_module — los tests siguientes ven exactamente lo que
 # habrían visto sin este archivo.
 import importlib  # noqa: E402
@@ -51,8 +51,8 @@ _saved = {}
 def setup_module(module):
     global ag
     _saved["agent"] = sys.modules.get("agent")
-    _saved["llm"] = getattr(_lp, "ChatDeepSeek", None)
-    _lp.ChatDeepSeek = _StubLLM
+    _saved["llm"] = getattr(_lp, "ChatGLM", None)
+    _lp.ChatGLM = _StubLLM
     sys.modules.pop("agent", None)
     ag = importlib.import_module("agent")
     module.ag = ag
@@ -62,7 +62,7 @@ def setup_module(module):
 
 def teardown_module(module):
     if _saved.get("llm") is not None:
-        _lp.ChatDeepSeek = _saved["llm"]
+        _lp.ChatGLM = _saved["llm"]
     if _saved.get("agent") is not None:
         sys.modules["agent"] = _saved["agent"]
     else:

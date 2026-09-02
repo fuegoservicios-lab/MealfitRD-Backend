@@ -1219,11 +1219,11 @@ def _setup_smart_cursor(mock_cursor, prior_plan):
 @patch('shopping_calculator.get_semantic_cache', return_value=None)
 @patch('cron_tasks._filter_days_by_fresh_pantry', side_effect=_filter_passthrough)
 @patch('cron_tasks._check_chunk_learning_ready', side_effect=_ready_passing)
-@patch('llm_provider.ChatDeepSeek')  # [P1-SUITE-UNBLIND · 2026-07-26] Target CORRECTO, y no es obvio:
+@patch('llm_provider.ChatGLM')  # [P1-SUITE-UNBLIND · 2026-07-26] Target CORRECTO, y no es obvio:
 # el PROBE de auto-recovery (cron_tasks.py:27531, "[GAP 6]") hace `from llm_provider import
-# ChatDeepSeek` DENTRO de la función, así que este patch sí lo alcanza y su `side_effect` mantiene
+# ChatGLM` DENTRO de la función, así que este patch sí lo alcanza y su `side_effect` mantiene
 # el chunk en `is_degraded` → Smart Shuffle, que es lo que estos tests validan.
-# ⚠️ NO lo muevas a `graph_orchestrator.ChatDeepSeek` (la subclase instrumentada que usa el
+# ⚠️ NO lo muevas a `graph_orchestrator.ChatGLM` (la subclase instrumentada que usa el
 # generador de días): medido 2026-07-26, deja el probe SIN mockear → el probe tiene éxito →
 # `is_degraded = False` (cron_tasks.py:27574) → el Smart Shuffle nunca corre. Rompe 3 tests verdes
 # y no arregla ninguno. Son dos clases distintas (`is` → False) para dos usos distintos.
@@ -1237,15 +1237,15 @@ def _setup_smart_cursor(mock_cursor, prior_plan):
 @patch('db_facts.get_consumed_meals_since')
 @patch('db_facts.get_all_user_facts')
 def test_chunk_degraded_fallback(mock_facts, mock_consumed, mock_rejections, mock_likes, mock_inventory, mock_write, mock_query, mock_shop, mock_pool, mock_llm, _mock_ready, _mock_filter, _mock_sem):
-    # [P0-DEEPSEEK-MIGRATION · 2026-06-12] Gemini eliminado: el probe de recuperación
-    # y la generación de chunks usan llm_provider.ChatDeepSeek. Patcheamos esa clase
+    # [P0-LLM-PROVIDER-MIGRATION · 2026-06-12] Gemini eliminado: el probe de recuperación
+    # y la generación de chunks usan llm_provider.ChatGLM. Patcheamos esa clase
     # (antes langchain_google_genai.ChatGoogleGenerativeAI, ya inexistente) y forzamos
     # que invoke falle → el probe LLM falla → el chunk se queda en modo degraded (Smart
     # Shuffle), que es lo que este test valida.
     #
     # [P1-SUITE-UNBLIND · 2026-07-26] Matiz: este `side_effect` alcanza al PROBE (que importa
     # de `llm_provider` dentro de la función), NO al generador de días — ese usa
-    # `graph_orchestrator.ChatDeepSeek`, otra clase (`is` → False). Para estos tests basta:
+    # `graph_orchestrator.ChatGLM`, otra clase (`is` → False). Para estos tests basta:
     # con el probe caído el chunk se queda en degraded y entra el Smart Shuffle.
     mock_llm.return_value.invoke.side_effect = Exception("Simulated LLM Outage")
     mock_likes.return_value = []
@@ -1321,7 +1321,7 @@ def test_chunk_degraded_fallback(mock_facts, mock_consumed, mock_rejections, moc
 @patch('shopping_calculator.get_semantic_cache', return_value=None)
 @patch('cron_tasks._filter_days_by_fresh_pantry', side_effect=_filter_passthrough)
 @patch('cron_tasks._check_chunk_learning_ready', side_effect=_ready_passing)
-@patch('llm_provider.ChatDeepSeek')
+@patch('llm_provider.ChatGLM')
 @patch('db_core.connection_pool')
 @patch('shopping_calculator.get_shopping_list_delta')
 @patch('cron_tasks.execute_sql_query')
@@ -2050,7 +2050,7 @@ def test_chunk_uses_snapshot_pantry_when_live_inventory_refresh_fails(
 @patch('shopping_calculator.get_semantic_cache', return_value=None)
 @patch('cron_tasks._filter_days_by_fresh_pantry', side_effect=_filter_passthrough)
 @patch('cron_tasks._check_chunk_learning_ready', side_effect=_ready_passing)
-@patch('llm_provider.ChatDeepSeek')
+@patch('llm_provider.ChatGLM')
 @patch('db_core.connection_pool')
 @patch('shopping_calculator.get_shopping_list_delta')
 @patch('cron_tasks.execute_sql_query')
@@ -2471,7 +2471,7 @@ def test_pantry_hybrid_tolerance_quantity():
 # prior_plan. Mockear el filtro como passthrough invalida la prueba.
 @patch('shopping_calculator.get_semantic_cache', return_value=None)
 @patch('cron_tasks._check_chunk_learning_ready', side_effect=_ready_passing)
-@patch('llm_provider.ChatDeepSeek')
+@patch('llm_provider.ChatGLM')
 @patch('db_core.connection_pool')
 @patch('shopping_calculator.get_shopping_list_delta')
 @patch('cron_tasks.execute_sql_query')
@@ -2572,8 +2572,8 @@ def test_chunk_degraded_fallback_pauses_when_no_pantry_coverage(
         "(que sí pasa) parchea AMBAS formas.\n\n"
         "Además su assert final es inalcanzable tal como está: lee "
         "`mock_llm.return_value.invoke.call_args` esperando el prompt de GENERACIÓN, pero "
-        "`llm_provider.ChatDeepSeek` es el PROBE (invoca 'ping'); el generador usa "
-        "`graph_orchestrator.ChatDeepSeek`, otra clase.\n\n"
+        "`llm_provider.ChatGLM` es el PROBE (invoca 'ping'); el generador usa "
+        "`graph_orchestrator.ChatGLM`, otra clase.\n\n"
         "Para revivirlo: parchear también `mock_executor.return_value.submit`, acotar el "
         "reintento, y mover el assert a la costura del generador. Antes de eso, verificar si el "
         "bucle sin tope es alcanzable en producción — ahí el resultado no es un MagicMock, pero "
@@ -2583,7 +2583,7 @@ def test_chunk_degraded_fallback_pauses_when_no_pantry_coverage(
 @patch('shopping_calculator.get_semantic_cache', return_value=None)
 @patch('cron_tasks._filter_days_by_fresh_pantry', side_effect=_filter_passthrough)
 @patch('cron_tasks._check_chunk_learning_ready', side_effect=_ready_passing)
-@patch('llm_provider.ChatDeepSeek')
+@patch('llm_provider.ChatGLM')
 @patch('db_core.connection_pool')
 @patch('shopping_calculator.get_shopping_list_delta')
 @patch('cron_tasks.execute_sql_query')
@@ -2759,7 +2759,7 @@ def test_partial_reservation_marks_chunk_and_defers_next():
 @patch('shopping_calculator.get_semantic_cache', return_value=None)
 @patch('cron_tasks._filter_days_by_fresh_pantry', side_effect=_filter_passthrough)
 @patch('cron_tasks._check_chunk_learning_ready', side_effect=_ready_passing)
-@patch('llm_provider.ChatDeepSeek')
+@patch('llm_provider.ChatGLM')
 @patch('db_core.connection_pool')
 @patch('shopping_calculator.get_shopping_list_delta')
 @patch('cron_tasks.execute_sql_query')

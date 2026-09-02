@@ -589,7 +589,7 @@ def test_build_consent_message_empty_list_fail_safe():
 #
 # Este test corre el pipeline REAL de `swap_meal()` (no mockea `agent.swap_meal`
 # como el resto de este archivo) para probar el mecanismo end-to-end, mismo patrón
-# que `test_p1_sodium_aware_placement.py::_sodium_swap_env` (fake ChatDeepSeek +
+# que `test_p1_sodium_aware_placement.py::_sodium_swap_env` (fake ChatGLM +
 # fake circuit breaker + fake IngredientNutritionDB + guards hermanos desactivados
 # vía knob — con `clean_ingredients` vacío, la mayoría de los guards hermanos
 # skip-en-silencio por su propio `not (strict_pantry and not clean_ingredients)`).
@@ -616,7 +616,7 @@ class _FakeSwapLLMOnce:
         return self._envelope
 
 
-class _FakeChatDeepSeekOnce:
+class _FakeChatGLMOnce:
     def __init__(self, envelope):
         self._envelope = envelope
         self.swap_llm = None
@@ -683,18 +683,18 @@ def test_empty_real_pantry_bypasses_strict_mode_free_generation(_empty_pantry_sw
     }
     holder = {}
 
-    def _fake_chat_deepseek(*a, **kw):
-        inst = _FakeChatDeepSeekOnce(envelope)
+    def _fake_chat_glm(*a, **kw):
+        inst = _FakeChatGLMOnce(envelope)
         holder["inst"] = inst
         return inst
 
     # [P1-SWAP-LUNA · 2026-08-05] El punto de intercepcion se movio: `swap_meal` ya no
-    # instancia `ChatDeepSeek` directamente, sino que pide el cliente a la fabrica por
+    # instancia `ChatGLM` directamente, sino que pide el cliente a la fabrica por
     # proveedor (`build_chat_llm`), porque el modelo del swap paso a ser de OpenAI.
-    # Parchear `agent.ChatDeepSeek` aqui dejaria de interceptar EN SILENCIO y este test
+    # Parchear `agent.ChatGLM` aqui dejaria de interceptar EN SILENCIO y este test
     # llamaria al proveedor DE VERDAD (medido: la suite tardo 149s haciendo llamadas
     # reales antes de corregir esto).
-    monkeypatch.setattr(agent, "build_chat_llm", _fake_chat_deepseek)
+    monkeypatch.setattr(agent, "build_chat_llm", _fake_chat_glm)
 
     result = agent.swap_meal_with_consent({
         "user_id": "user-empty-nevera", "rejected_meal": "Ensalada vieja",

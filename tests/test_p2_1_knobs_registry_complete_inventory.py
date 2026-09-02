@@ -56,7 +56,7 @@ _P2_1_MIGRATED_KNOBS = {
     "MEALFIT_POOL_FALLBACK_ALERT_COOLDOWN_HOURS": "int",
     "MEALFIT_LESSON_BUFFER_BACKLOG_THRESHOLD": "int",
     "MEALFIT_CHILDREN_MULTIPLIER": "float",
-    # [P0-DEEPSEEK-MIGRATION · 2026-06-12] `MEALFIT_GEMINI_EMBEDDING_TEXT_MODEL`
+    # [P0-LLM-PROVIDER-MIGRATION · 2026-06-12] `MEALFIT_GEMINI_EMBEDDING_TEXT_MODEL`
     # eliminado (Gemini retirado); su reemplazo vive en embeddings_provider:
     "MEALFIT_EMBEDDINGS_PROVIDER": "str",
     "MEALFIT_EMBEDDINGS_MODEL": "str",
@@ -96,7 +96,7 @@ def _trigger_p2_1_lazy_registrations() -> None:
     import error_utils  # función lazy
     import db_inventory  # función lazy
     import shopping_calculator  # registra SEMANTIC_INIT, EMBED_INIT, STAPLE_SHELF a module-init
-    # [P0-DEEPSEEK-MIGRATION] knobs de la capa pluggable de embeddings (lazy).
+    # [P0-LLM-PROVIDER-MIGRATION] knobs de la capa pluggable de embeddings (lazy).
     import embeddings_provider
     embeddings_provider._embeddings_provider()  # MEALFIT_EMBEDDINGS_PROVIDER
     embeddings_provider._embeddings_model()  # MEALFIT_EMBEDDINGS_MODEL

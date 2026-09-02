@@ -89,7 +89,7 @@ def test_timer_pauses_when_status_ready():
 
 def test_adaptive_copy_four_phases():
     """El copy debe tener 4 fases según `elapsedSec`. Calibrado a la duración
-    REAL de prod en la era DeepSeek V4 (medido 2026-06-17): ~3-5 min pipeline
+    REAL de prod en la era GLM-5.3 (medido 2026-06-17): ~3-5 min pipeline
     completo (skeleton ~22s + day_gen paralelo ~30s + self-critique ~2min +
     reviewer + assembly). Rango honesto = 4-5 min.
 
@@ -124,7 +124,7 @@ def test_adaptive_copy_four_phases():
 def test_estimate_calibrated_to_realistic_duration():
     """Regression guard (invertido 2026-06-17): el estimate NO debe regresar al
     rango STALE de la era Gemini ("10 y 15 minutos" / "10-15 minutos"). Con
-    DeepSeek V4 el pipeline tarda ~3-5 min (medido en prod 2026-06-17, logs de
+    GLM-5.3 el pipeline tarda ~3-5 min (medido en prod 2026-06-17, logs de
     generaciones reales). Mostrar 10-15 min hacía esperar 2-3x lo real → el
     usuario asumía que se colgó o cancelaba innecesariamente."""
     src = _PLAN_JSX.read_text(encoding="utf-8")
@@ -136,7 +136,7 @@ def test_estimate_calibrated_to_realistic_duration():
     for phrase in forbidden_phrases:
         assert phrase not in src, (
             f"Calibración stale (era Gemini) detectada: `{phrase!r}` en Plan.jsx. "
-            f"La duración real con DeepSeek es ~4-5 min. No revertir al rango 10-15."
+            f"La duración real con GLM es ~4-5 min. No revertir al rango 10-15."
         )
 
 

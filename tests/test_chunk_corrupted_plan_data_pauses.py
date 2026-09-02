@@ -117,7 +117,7 @@ def _enqueue_and_force(user_id, plan_id, week_number, days_offset, total_days):
     # [P1-E2E-NO-BACKDATE · 2026-07-28] Sin backdate: los chunks conservan su fecha
     # FUTURA natural — invisibles para el worker de PRODUCCION del VPS (misma DB;
     # su claim sin target exige execute_after<=NOW y se ROBABA los chunks de test,
-    # generando con DeepSeek real). La rama target del claim no exige execute_after.
+    # generando con GLM real). La rama target del claim no exige execute_after.
 
 
 def _read_chunk_status(plan_id, week_number):

@@ -55,32 +55,32 @@ def test_anchor_present_in_fact_extractor():
 
 def test_primary_model_knob_registered():
     src = _read(_FACT_EX)
-    # [P0-DEEPSEEK-MIGRATION · 2026-06-12] Default = constante DEEPSEEK_FLASH
+    # [P0-LLM-PROVIDER-MIGRATION · 2026-06-12] Default = constante GLM_FLASH
     # de llm_provider (extracción es tarea aux barata, mismo modelo para
     # todos los tiers). Override sigue disponible via env var.
     pat = re.compile(
-        r'_env_str\(\s*[\"\']MEALFIT_FACT_EXTRACTOR_PRIMARY_MODEL[\"\']\s*,\s*DEEPSEEK_FLASH',
+        r'_env_str\(\s*[\"\']MEALFIT_FACT_EXTRACTOR_PRIMARY_MODEL[\"\']\s*,\s*GLM_FLASH',
         re.DOTALL,
     )
     assert pat.search(src), (
         "Knob `MEALFIT_FACT_EXTRACTOR_PRIMARY_MODEL` debe resolverse via "
-        "`_env_str(\"MEALFIT_FACT_EXTRACTOR_PRIMARY_MODEL\", DEEPSEEK_FLASH)` "
-        "(P0-DEEPSEEK-MIGRATION · 2026-06-12); override permite swap sin "
+        "`_env_str(\"MEALFIT_FACT_EXTRACTOR_PRIMARY_MODEL\", GLM_FLASH)` "
+        "(P0-LLM-PROVIDER-MIGRATION · 2026-06-12); override permite swap sin "
         "redeploy si se requiere otro modelo."
     )
 
 
 def test_router_model_knob_registered():
     src = _read(_FACT_EX)
-    # [P0-DEEPSEEK-MIGRATION · 2026-06-12] Default = DEEPSEEK_FLASH (gate
+    # [P0-LLM-PROVIDER-MIGRATION · 2026-06-12] Default = GLM_FLASH (gate
     # cheap-first del router).
     pat = re.compile(
-        r'_env_str\(\s*[\"\']MEALFIT_FACT_EXTRACTOR_ROUTER_MODEL[\"\']\s*,\s*DEEPSEEK_FLASH',
+        r'_env_str\(\s*[\"\']MEALFIT_FACT_EXTRACTOR_ROUTER_MODEL[\"\']\s*,\s*GLM_FLASH',
         re.DOTALL,
     )
     assert pat.search(src), (
         "Knob `MEALFIT_FACT_EXTRACTOR_ROUTER_MODEL` debe resolverse via "
-        "`_env_str(\"MEALFIT_FACT_EXTRACTOR_ROUTER_MODEL\", DEEPSEEK_FLASH)`."
+        "`_env_str(\"MEALFIT_FACT_EXTRACTOR_ROUTER_MODEL\", GLM_FLASH)`."
     )
 
 

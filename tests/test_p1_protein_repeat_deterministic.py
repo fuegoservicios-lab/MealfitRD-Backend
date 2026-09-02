@@ -1,5 +1,5 @@
 """[P1-PROTEIN-REPEAT-DETERMINISTIC · 2026-07-07] El critique LLM juzgaba "misma
-proteína el mismo día" por su cuenta → falsos positivos → retry loop (quema DeepSeek).
+proteína el mismo día" por su cuenta → falsos positivos → retry loop (quema GLM).
 
 Forense (planes 5f80f797/21af5c1b/4339544f entregados): `variety_report.
 same_day_protein_repeats == 0` en TODOS — el detector DETERMINISTA (word-boundary +

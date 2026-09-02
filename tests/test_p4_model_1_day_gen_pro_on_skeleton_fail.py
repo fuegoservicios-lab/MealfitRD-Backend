@@ -178,9 +178,9 @@ class TestRouteModelForDayGenerator:
     def test_paid_tier_attempt_1_uses_flash(self, monkeypatch):
         """[P1-FLASH-PRIMARY · 2026-07-31] El tier pagado TAMBIÉN resuelve
         flash por default (el owner midió flash > pro; era pro desde
-        P0-DEEPSEEK-MIGRATION). La rama pagada de `_route_model` ahora resuelve
+        P0-LLM-PROVIDER-MIGRATION). La rama pagada de `_route_model` ahora resuelve
         vía `resolve_model_for_tier` (SSOT llm_provider), rollback
-        `MEALFIT_MODEL_PAID_TIER=deepseek-v4-pro`.
+        `MEALFIT_MODEL_PAID_TIER=glm-5.3`.
 
         NOTA reload-safety: se parchean los `__globals__` de la función
         importada (no `sys.modules["graph_orchestrator"]`) — otros tests
@@ -199,7 +199,7 @@ class TestRouteModelForDayGenerator:
         result = _route_model_for_day_generator(
             form, attempt=1, prev_rejection_reasons=[],
         )
-        assert result == "deepseek-v4-flash"
+        assert result == "glm-5.3-flash"
 
 
 # ---------------------------------------------------------------------------
@@ -273,13 +273,13 @@ def test_model_constants_match_production():
     """Las constantes de nombre de modelo deben coincidir con los IDs
     reales que el resto del codebase usa (CB tracking, logs).
 
-    [P0-DEEPSEEK-MIGRATION · 2026-06-12] Flash = `deepseek-v4-flash`.
+    [P0-LLM-PROVIDER-MIGRATION · 2026-06-12] Flash = `glm-5.3-flash`.
     [P1-FLASH-PRIMARY · 2026-07-31] `_PRO_MODEL_NAME` ya NO es "el modelo de
     tiers pagados": es el modelo de RED post-fallo.
     [P1-NET-LUNA · 2026-07-31] La red es `gpt-5.6-luna` (cross-provider) con
-    OPENAI_API_KEY presente, o `deepseek-v4-pro` como fail-safe sin ella —
+    OPENAI_API_KEY presente, o `glm-5.3` como fail-safe sin ella —
     la invariante estable es red ≠ flash.
     """
-    assert _FLASH_MODEL_NAME == "deepseek-v4-flash"
-    assert _PRO_MODEL_NAME in ("gpt-5.6-luna", "deepseek-v4-pro")
+    assert _FLASH_MODEL_NAME == "glm-5.3-flash"
+    assert _PRO_MODEL_NAME in ("gpt-5.6-luna", "glm-5.3")
     assert _PRO_MODEL_NAME != _FLASH_MODEL_NAME

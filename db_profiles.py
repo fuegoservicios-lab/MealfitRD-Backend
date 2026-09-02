@@ -320,7 +320,7 @@ def get_user_profile(user_id: str):
 
 
 def get_user_plan_tier(user_id: str) -> Optional[str]:
-    """[P0-DEEPSEEK-MIGRATION · 2026-06-12] Lookup liviano de `plan_tier`
+    """[P0-LLM-PROVIDER-MIGRATION · 2026-06-12] Lookup liviano de `plan_tier`
     para el router de modelos LLM (`llm_provider.resolve_model_for_user`).
 
     Deliberadamente NO reusa `get_user_profile`: ese helper trae el perfil
@@ -699,8 +699,8 @@ def log_api_usage(user_id: str, endpoint: str = "llm"):
 # ============================================================
 
 # Pricing default (USD por 1M tokens, expresado en MICROS para evitar
-# floats). [P0-DEEPSEEK-MIGRATION · 2026-06-12] Basado en pricing oficial
-# DeepSeek V4 (api-docs.deepseek.com, consultado 2026-06-12).
+# floats). [P0-LLM-PROVIDER-MIGRATION · 2026-06-12] Basado en pricing oficial
+# GLM-5.3 (docs.z.ai, consultado 2026-06-12).
 # Override sin redeploy via knob `MEALFIT_LLM_PRICING_JSON` (JSON string
 # `{"<model_prefix>": {"input": <micros_per_M>, "output": <micros_per_M>,
 # "cached": <micros_per_M>}}`).
@@ -710,17 +710,18 @@ def log_api_usage(user_id: str, endpoint: str = "llm"):
 # persiste sin costo (operador puede backfillar luego ejecutando SQL con
 # tokens × pricing nuevo).
 _DEFAULT_LLM_PRICING_MICROS_PER_M: Dict[str, Dict[str, int]] = {
-    # DeepSeek V4 (USD/1M tokens):
-    #   flash: input $0.14 (cache miss) / $0.0028 (cache hit), output $0.28
-    #   pro:   input $0.435 (cache miss) / $0.003625 (cache hit), output $0.87
-    # "cached" = rate por token con cache HIT (DeepSeek context caching es
-    # automático server-side; el usage del API reporta hit/miss).
-    "deepseek-v4-flash": {"input": 140_000, "output": 280_000, "cached": 2_800},
-    "deepseek-v4-pro":   {"input": 435_000, "output": 870_000, "cached": 3_625},
-    # Aliases legacy del API (deprecan 2026-07-24) — mismo pricing que su
-    # equivalente V4. Presentes por si un knob los referencia en transición.
-    "deepseek-chat":     {"input": 140_000, "output": 280_000, "cached": 2_800},
-    "deepseek-reasoner": {"input": 435_000, "output": 870_000, "cached": 3_625},
+    # [P0-GLM-MIGRATION · 2026-09-02] Z.ai GLM-5.3 (USD/1M tokens, tarifa de LISTA
+    # de docs.z.ai/guides/overview/pricing — NO la promo -50% de flash que vence el
+    # 2026-09-09; costear con la promo dejaría el A/B con un modelo artificialmente
+    # barato durante una semana):
+    #   glm-5.3-flash: input $0.15 / cached $0.03 / output $0.50
+    #   glm-5.3:       input $1.40 / cached $0.26 / output $4.40
+    # "cached" = rate por token con cache HIT (context caching automático server-side;
+    # el usage reporta `prompt_tokens_details.cached_tokens`). Los reasoning tokens
+    # facturan como OUTPUT: por eso el wrapper defaultea effort=low.
+    # Longest-prefix: "glm-5.3-flash" gana a "glm-5.3" para el flash.
+    "glm-5.3-flash": {"input": 150_000,   "output": 500_000,   "cached": 30_000},
+    "glm-5.3":       {"input": 1_400_000, "output": 4_400_000, "cached": 260_000},
     # [P1-LUNA-PRICING · 2026-07-26] Familia gpt-5.6 (pricing oficial OpenAI, tier STANDARD).
     # Los tres se registran aunque no todos estén en uso: sin fila de precio,
     # `compute_llm_cost_micros` devuelve None y el evento se persiste con tokens pero

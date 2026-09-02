@@ -7,7 +7,7 @@ Convierte cada mejora del motor en un número comparable ANTES de tocar prod, y 
 la "serie de datos" que los flips de knobs esperan (SODIUM_EXCESS / RECIPE_CONTRACT /
 MICRO_CLOSER_PERDAY) en horas en vez de semanas.
 
-Uso (desde backend/, con .env cargable y DEEPSEEK_API_KEY):
+Uso (desde backend/, con .env cargable y ZAI_API_KEY):
     python scripts/plan_gym.py            # los 20 perfiles
     python scripts/plan_gym.py 3          # solo los primeros 3 (smoke)
     python scripts/plan_gym.py 3 --conc 2 # concurrencia (default 2)

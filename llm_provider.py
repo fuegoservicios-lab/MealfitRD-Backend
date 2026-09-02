@@ -1,16 +1,16 @@
-"""[P0-DEEPSEEK-MIGRATION · 2026-06-12] SSOT del provider LLM (DeepSeek) +
+"""[P0-LLM-PROVIDER-MIGRATION · 2026-06-12] SSOT del provider LLM (GLM) +
 router de modelos por tier de suscripción.
 
 Este módulo reemplaza TODA la dependencia previa de `langchain_google_genai`
-(Gemini). Decisión de producto 2026-06-12: migrar a DeepSeek-V4 (API
-OpenAI-compatible, base `https://api.deepseek.com`) para reducir costo de
+(Gemini). Decisión de producto 2026-06-12: migrar a GLM-5.3 (API
+OpenAI-compatible, base `https://api.z.ai/api/paas/v4`) para reducir costo de
 producción, con enrutamiento por plan de pago:
 
-    - Tier `gratis` (free) / guests / desconocido → `deepseek-v4-flash`
-    - Tiers `basic` / `plus` / `ultra` (pagados)   → `deepseek-v4-flash`
+    - Tier `gratis` (free) / guests / desconocido → `glm-5.3-flash`
+    - Tiers `basic` / `plus` / `ultra` (pagados)   → `glm-5.3-flash`
 
-[P1-FLASH-PRIMARY · 2026-07-31] Decisión del owner: `deepseek-v4-flash` es
-actualmente MEJOR que `deepseek-v4-pro` (los providers actualizan modelos bajo
+[P1-FLASH-PRIMARY · 2026-07-31] Decisión del owner: `glm-5.3-flash` es
+actualmente MEJOR que `glm-5.3` (los providers actualizan modelos bajo
 el mismo ID — la premisa "pro > flash" de 2026-06-12 caducó). Flash pasa a ser
 el modelo PRIMARIO de TODAS las superficies, incluidos tiers pagados y el
 reviewer clínico risk-tier (`graph_orchestrator._REVIEWER_RISK_TIER_DEFAULT`).
@@ -18,7 +18,7 @@ Pro NO desaparece: queda exclusivamente como RED post-fallo (2º en cadena del
 day-gen, fallback del planner con breaker independiente, escalada del corrector
 quirúrgico — `MEALFIT_PRO_MODEL`), donde su valor es ser un modelo DISTINTO
 con circuit breaker propio, no ser "mejor". Rollback sin redeploy:
-`MEALFIT_MODEL_PAID_TIER=deepseek-v4-pro`.
+`MEALFIT_MODEL_PAID_TIER=glm-5.3`.
 
 Precios oficiales 2026-06 (por 1M tokens): flash $0.14 in / $0.28 out;
 pro $0.435 in / $0.87 out. Ambos: 1M contexto, 384K max output, JSON mode,
@@ -26,12 +26,12 @@ function calling, thinking nativo (gestionado por el provider — el antiguo
 `thinking_budget` de Gemini NO aplica y se swallow-ea en el wrapper).
 
 Contratos:
-  - `ChatDeepSeek` — drop-in del antiguo `ChatGoogleGenerativeAI`: acepta y
+  - `ChatGLM` — drop-in del antiguo `ChatGoogleGenerativeAI`: acepta y
     descarta kwargs legacy (`google_api_key`, `safety_settings`,
     `thinking_budget`) y traduce `max_output_tokens` → `max_tokens`, para que
     los ~37 callsites migren sin cirugía de kwargs. API key SIEMPRE desde env
-    `DEEPSEEK_API_KEY` (NUNCA hardcodeada — test blanket
-    `test_p0_deepseek_migration.py` lo enforza).
+    `ZAI_API_KEY` (NUNCA hardcodeada — test blanket
+    `test_p0_glm_migration.py` lo enforza).
   - `resolve_model_for_tier(tier)` / `resolve_model_for_user(user_id)` — el
     router. Fail-cheap: cualquier duda (guest, DB blip, tier desconocido)
     resuelve al modelo FREE. Un fallo de lookup jamás puede COSTAR dinero
@@ -40,17 +40,17 @@ Contratos:
     default 300s) para no añadir un roundtrip DB por cada LLM call.
 
 Knobs (auto-registrados en `_KNOBS_REGISTRY` vía `_env_*`):
-  - `MEALFIT_DEEPSEEK_BASE_URL`  (default `https://api.deepseek.com`)
-  - `MEALFIT_MODEL_FREE_TIER`    (default `deepseek-v4-flash`)
-  - `MEALFIT_MODEL_PAID_TIER`    (default `deepseek-v4-flash`, P1-FLASH-PRIMARY)
+  - `MEALFIT_ZAI_BASE_URL`  (default `https://api.z.ai/api/paas/v4`)
+  - `MEALFIT_MODEL_FREE_TIER`    (default `glm-5.3-flash`)
+  - `MEALFIT_MODEL_PAID_TIER`    (default `glm-5.3-flash`, P1-FLASH-PRIMARY)
   - `MEALFIT_TIER_CACHE_TTL_S`   (default 300, clamp [10, 3600])
 
 Rollback operacional sin redeploy: ambos modelos son swappeables vía knob
-(convención P3-PREVIEW-MODEL-KNOB). Si DeepSeek deprecia los IDs V4
-(`deepseek-chat`/`deepseek-reasoner` legacy mueren 2026-07-24), basta con
+(convención P3-PREVIEW-MODEL-KNOB). Si GLM deprecia los IDs V4
+(`glm-5.3-flash`/`glm-5.3` legacy mueren 2026-07-24), basta con
 setear los knobs al ID nuevo y reiniciar el worker.
 
-Tooltip-anchor: P0-DEEPSEEK-MIGRATION.
+Tooltip-anchor: P0-LLM-PROVIDER-MIGRATION.
 """
 from __future__ import annotations
 
@@ -66,11 +66,13 @@ from knobs import _env_int, _env_str, _env_bool
 
 logger = logging.getLogger(__name__)
 
-# IDs oficiales del API DeepSeek (verificados contra api-docs.deepseek.com
-# 2026-06-12). Los aliases legacy `deepseek-chat`/`deepseek-reasoner` se
-# depredan el 2026-07-24 — NO usarlos como default.
-DEEPSEEK_FLASH = "deepseek-v4-flash"
-DEEPSEEK_PRO = "deepseek-v4-pro"
+# [P0-GLM-MIGRATION · 2026-09-02] IDs oficiales del API Z.ai (docs.z.ai, verificados
+# EN VIVO 2026-09-02): `glm-5.3-flash` (320B MoE/18B activos, multimodal, 1M ctx,
+# $0.15/$0.50 por 1M in/out) y `glm-5.3` (flagship, $1.4/$4.4). Los dos piensan
+# SIEMPRE: `thinking.type=disabled` responde 400 (código 1210); la latencia se
+# gobierna con `reasoning_effort` ∈ {low, high, max} (ver `_glm_reasoning_effort`).
+GLM_FLASH = "glm-5.3-flash"
+GLM_PRO = "glm-5.3"
 
 # [P1-NET-LUNA · P1-REVIEWER-TIER-MODELS · P1-REVIEWER-SOL-HARD · 2026-07-31]
 # IDs OpenAI gpt-5.6 en uso: luna = red cross-provider del pipeline + reviewer
@@ -81,67 +83,83 @@ GPT56_LUNA = "gpt-5.6-luna"
 GPT56_TERRA = "gpt-5.6-terra"
 GPT56_SOL = "gpt-5.6-sol"
 
-# [P1-DEEPSEEK-THINKING-OFF · 2026-06-13] DeepSeek-V4 trae "thinking mode"
-# (chain-of-thought) NATIVO ENCENDIDO por default. Para la generación de planes
-# (tool-calling con `consultar_nutricion` + relleno de macros) el reasoning NO
-# aporta calidad y multiplica la latencia: en el test E2E 2026-06-13 el skeleton
-# (structured-output, thinking ya OFF) tardó 9.5s pero cada día (tool-calling,
-# thinking ON) excedió el techo de 170s → TimeoutError → fallback matemático.
-# Por eso lo desactivamos por DEFAULT en TODOS los calls (no solo structured
-# output). Knob de rollback sin redeploy: `MEALFIT_DEEPSEEK_THINKING=on`
-# re-activa el reasoning (p.ej. si el reviewer clínico lo necesita). Cualquier
-# `extra_body.thinking` explícito del callsite SIEMPRE gana sobre este default.
-_DEEPSEEK_THINKING_DISABLED = not _env_bool("MEALFIT_DEEPSEEK_THINKING", False)
+# [P0-GLM-MIGRATION · 2026-09-02] GLM-5.3 razona SIEMPRE (no existe "thinking off":
+# el API responde 400/1210). Lo que sí se gobierna es el ESFUERZO, y el esfuerzo es
+# latencia y tokens de salida facturados (medido 2026-09-02 con un prompt trivial:
+# effort=max → 6,3 s / 173 tokens; effort=low → 1,1 s / 14 tokens). El default del
+# wrapper es `low` para TODOS los runnables (títulos, extractores, memoria, router,
+# structured-output): son relleno de esquema, no deliberación. Las superficies que
+# quieren razonar de verdad (day-gen por tier, reviewer con riesgo, corrector Pro,
+# juez culinario) pasan su effort explícito y SIEMPRE gana sobre este default.
+# Knob de rollback sin redeploy: `MEALFIT_GLM_REASONING_EFFORT=high|max`.
+_GLM_EFFORT_VALID = frozenset({"low", "high", "max"})
+_GLM_DEFAULT_REASONING_EFFORT = _env_str("MEALFIT_GLM_REASONING_EFFORT", "low", choices=set(_GLM_EFFORT_VALID))
+
+
+def _glm_reasoning_effort(value) -> str:
+    """Traduce cualquier vocabulario de effort del pipeline al de Z.ai (low|high|max).
+
+    `medium` (OpenAI) → `high`; `xhigh` (OpenAI) → `max`; `none`/`off`/vacío → `low`
+    (GLM no puede apagar el razonamiento: `low` es lo más barato que existe).
+    """
+    v = str(value or "").strip().lower()
+    if v in _GLM_EFFORT_VALID:
+        return v
+    if v in ("medium",):
+        return "high"
+    if v in ("xhigh", "very_high", "ultra"):
+        return "max"
+    return "low"
 
 # Tiers de pago canónicos (columna `user_profiles.plan_tier`, ver
 # routers/billing.py P0-BILLING-1). Todo lo demás («gratis», NULL, guests,
 # strings corruptos) enruta a FREE — fail-cheap.
 PAID_TIERS = frozenset({"basic", "plus", "ultra"})
 
-_MISSING_KEY_PLACEHOLDER = "MISSING_DEEPSEEK_API_KEY"
+_MISSING_KEY_PLACEHOLDER = "MISSING_ZAI_API_KEY"
 _warned_missing_key = False
 
 
-def _deepseek_base_url() -> str:
-    """Base URL OpenAI-compatible de DeepSeek. Knob para entornos proxy/test."""
-    return _env_str("MEALFIT_DEEPSEEK_BASE_URL", "https://api.deepseek.com")
+def _zai_base_url() -> str:
+    """Base URL OpenAI-compatible de GLM. Knob para entornos proxy/test."""
+    return _env_str("MEALFIT_ZAI_BASE_URL", "https://api.z.ai/api/paas/v4")
 
 
-def _is_deepseek_provider(base_url: Optional[str] = None) -> bool:
-    """True si el `base_url` efectivo apunta a DeepSeek.
+def _is_glm_provider(base_url: Optional[str] = None) -> bool:
+    """True si el `base_url` efectivo apunta a GLM.
 
-    [P1-DEEPSEEK-ONLY-RESTORE · 2026-07-04] El `extra_body={"thinking": ...}`
-    que este wrapper inyecta es un parámetro ESPECÍFICO del API DeepSeek: otros
+    [P1-SINGLE-PROVIDER-RESTORE · 2026-07-04] El `extra_body={"thinking": ...}`
+    que este wrapper inyecta es un parámetro ESPECÍFICO del API GLM: otros
     back-ends OpenAI-compatibles rechazan campos desconocidos con HTTP 400.
     Este guard evita inyectarlo si un entorno de test apunta el knob
-    `MEALFIT_DEEPSEEK_BASE_URL` a un proxy/back-end distinto. DeepSeek es el
+    `MEALFIT_ZAI_BASE_URL` a un proxy/back-end distinto. GLM es el
     ÚNICO provider soportado en producción — el plumbing multi-provider
     (override global de modelo + detección Ollama) fue eliminado a pedido del
     owner 2026-07-04; si se re-introduce un provider alterno, debe nacer con
     knob + test ancla propios.
 
-    [P1-DEEPSEEK-PROVIDER-INSTANCE · 2026-07-28] La asunción anterior ("los
+    [P1-PROVIDER-INSTANCE-GUARD · 2026-07-28] La asunción anterior ("los
     callsites productivos NUNCA pasan un `base_url` propio") YA NO es cierta:
-    `ChatDeepSeek` (subclase de `ChatOpenAI`) se construye cada vez más contra
-    back-ends OpenAI-compatibles DISTINTOS de DeepSeek (p.ej. el meal-photo
+    `ChatGLM` (subclase de `ChatOpenAI`) se construye cada vez más contra
+    back-ends OpenAI-compatibles DISTINTOS de GLM (p.ej. el meal-photo
     scanner apuntado a OpenAI). Llamar esta función sin argumento SIEMPRE
-    inspecciona el knob global `MEALFIT_DEEPSEEK_BASE_URL` — que SIEMPRE
-    contiene "deepseek" — y retorna `True` sin importar a dónde apunte la
+    inspecciona el knob global `MEALFIT_ZAI_BASE_URL` — que SIEMPRE
+    contiene "z.ai" — y retorna `True` sin importar a dónde apunte la
     instancia real. Todo callsite que resuelva el provider de una instancia YA
-    construida (p.ej. `ChatDeepSeek.with_structured_output`) DEBE pasar el
+    construida (p.ej. `ChatGLM.with_structured_output`) DEBE pasar el
     `base_url` efectivo de ESA instancia (`self.openai_api_base` en
     `ChatOpenAI` — `base_url` NO es atributo de instancia, solo kwarg del
     constructor), nunca confiar en el default implícito. El fallback al knob
     global sigue vigente para: (a) el path del constructor (`base_url` aún no
     resuelto, puede venir `None`) y (b) cualquier caller sin forma de leer el
-    atributo de instancia — preserva el comportamiento DeepSeek-only de hoy.
+    atributo de instancia — preserva el comportamiento GLM-only de hoy.
     """
-    resolved = (base_url or _deepseek_base_url() or "").lower()
-    return "deepseek" in resolved
+    resolved = (base_url or _zai_base_url() or "").lower()
+    return ("z.ai" in resolved) or ("bigmodel" in resolved)
 
 
-def _deepseek_api_key() -> str:
-    """API key desde env `DEEPSEEK_API_KEY`.
+def _zai_api_key() -> str:
+    """API key desde env `ZAI_API_KEY`.
 
     Si falta, retorna un placeholder NO-vacío: la construcción del cliente
     nunca debe tirar el boot (hay LLMs construidos a module-import, e.g.
@@ -150,12 +168,12 @@ def _deepseek_api_key() -> str:
     semántica que tenía el constructor legacy con la key ausente (None).
     """
     global _warned_missing_key
-    key = (os.environ.get("DEEPSEEK_API_KEY") or "").strip()
+    key = (os.environ.get("ZAI_API_KEY") or "").strip()
     if key:
         return key
     if not _warned_missing_key:
         logger.error(
-            "❌ [LLM-PROVIDER] DEEPSEEK_API_KEY no configurada en el entorno. "
+            "❌ [LLM-PROVIDER] ZAI_API_KEY no configurada en el entorno. "
             "Toda invocación LLM fallará con 401 hasta setearla "
             "(.env local / env vars del VPS) y reiniciar el worker."
         )
@@ -165,15 +183,15 @@ def _deepseek_api_key() -> str:
 
 def model_free_tier() -> str:
     """Modelo para tier `gratis`, guests y fallback. Default V4 Flash."""
-    return _env_str("MEALFIT_MODEL_FREE_TIER", DEEPSEEK_FLASH) or DEEPSEEK_FLASH
+    return _env_str("MEALFIT_MODEL_FREE_TIER", GLM_FLASH) or GLM_FLASH
 
 
 def model_paid_tier() -> str:
     """Modelo para tiers `basic`/`plus`/`ultra`. Default V4 Flash
     ([P1-FLASH-PRIMARY · 2026-07-31]: el owner midió que flash es actualmente
-    mejor que pro; era `DEEPSEEK_PRO` desde P0-DEEPSEEK-MIGRATION). Rollback:
-    `MEALFIT_MODEL_PAID_TIER=deepseek-v4-pro`."""
-    return _env_str("MEALFIT_MODEL_PAID_TIER", DEEPSEEK_FLASH) or DEEPSEEK_FLASH
+    mejor que pro; era `GLM_PRO` desde P0-LLM-PROVIDER-MIGRATION). Rollback:
+    `MEALFIT_MODEL_PAID_TIER=glm-5.3`."""
+    return _env_str("MEALFIT_MODEL_PAID_TIER", GLM_FLASH) or GLM_FLASH
 
 
 def resolve_model_for_tier(tier: Optional[str]) -> str:
@@ -272,11 +290,11 @@ def resolve_model_for_user(user_id: Optional[str] = None) -> str:
 
 # Kwargs del constructor legacy de Gemini que el wrapper acepta y DESCARTA
 # en silencio, para que la migración de callsites sea rename-only:
-#   - google_api_key: la key ahora viene de DEEPSEEK_API_KEY (env).
+#   - google_api_key: la key ahora viene de ZAI_API_KEY (env).
 #   - safety_settings: HarmCategory/HarmBlockThreshold eran Gemini-only.
-#     (La decisión P3-CHAT-SAFETY-OFF queda obsoleta: DeepSeek no aplica
+#     (La decisión P3-CHAT-SAFETY-OFF queda obsoleta: GLM no aplica
 #     content-filters configurables client-side.)
-#   - thinking_budget: el thinking de DeepSeek-V4 es nativo del modelo y no
+#   - thinking_budget: el thinking de GLM-5.3 es nativo del modelo y no
 #     expone budget por request en el API OpenAI-compatible. El costo que
 #     motivaba el cap (reasoning a $9/M en Gemini) no existe: output V4
 #     cuesta $0.28–0.87/M, 10-30× menos.
@@ -288,16 +306,16 @@ _LEGACY_SWALLOWED_KWARGS = (
 )
 
 
-class ChatDeepSeek(ChatOpenAI):
-    """Cliente chat DeepSeek (OpenAI-compatible) — reemplazo 1:1 del antiguo
+class ChatGLM(ChatOpenAI):
+    """Cliente chat GLM (OpenAI-compatible) — reemplazo 1:1 del antiguo
     `ChatGoogleGenerativeAI`.
 
     Diferencias gestionadas internamente:
-      - `model`: ID DeepSeek (`deepseek-v4-flash` / `deepseek-v4-pro`).
+      - `model`: ID GLM (`glm-5.3-flash` / `glm-5.3`).
       - `api_key`/`base_url`: defaults desde env/knob; los callsites NO los
         pasan (y NUNCA hardcodean la key — test blanket).
       - `max_output_tokens` → `max_tokens` (naming OpenAI).
-      - `stream_usage=True` por default: DeepSeek soporta `include_usage` en
+      - `stream_usage=True` por default: GLM soporta `include_usage` en
         streaming y el wrapper de instrumentación (`graph_orchestrator.py`)
         depende de `usage_metadata` en el último chunk para llenar
         `llm_usage_events` (P1-COST-INSTRUMENTATION-FIX).
@@ -319,7 +337,7 @@ class ChatDeepSeek(ChatOpenAI):
     ):
         for _legacy in _LEGACY_SWALLOWED_KWARGS:
             kwargs.pop(_legacy, None)
-        # [P1-DEEPSEEK-ONLY-RESTORE · 2026-07-04] El override global de modelo
+        # [P1-SINGLE-PROVIDER-RESTORE · 2026-07-04] El override global de modelo
         # (`MEALFIT_LLM_MODEL_OVERRIDE`, [MULTI-PROVIDER · 2026-07-01]) fue
         # ELIMINADO: permitía colapsar TODOS los modelos —incluido el reviewer
         # médico risk-tier— a un provider de test (Gemini), degradando el gate
@@ -328,71 +346,65 @@ class ChatDeepSeek(ChatOpenAI):
         if max_output_tokens is not None and "max_tokens" not in kwargs:
             kwargs["max_tokens"] = max_output_tokens
         kwargs.setdefault("stream_usage", True)
-        # [P1-DEEPSEEK-THINKING-OFF · 2026-06-13] Desactiva thinking mode por
-        # default en TODOS los runnables (no solo structured-output). Merge
-        # no-destructivo: si el callsite ya pasó `extra_body.thinking`, gana.
-        if _DEEPSEEK_THINKING_DISABLED and _is_deepseek_provider(base_url):
+        # [P0-GLM-MIGRATION · 2026-09-02] GLM razona siempre: aquí se fija el ESFUERZO.
+        # Contrato con los callsites heredados: `extra_body.thinking.effort` (vocabulario
+        # del proveedor anterior) y `thinking.type=disabled` se TRADUCEN — el primero a
+        # `reasoning_effort`, el segundo a `low` — porque Z.ai rechaza ambos tal cual.
+        # `reasoning_effort` explícito del callsite gana; si no hay ninguno, default del knob.
+        if _is_glm_provider(base_url):
             _extra = dict(kwargs.get("extra_body") or {})
-            _extra.setdefault("thinking", {"type": "disabled"})
+            _think = _extra.get("thinking")
+            _legacy_eff = None
+            if isinstance(_think, dict):
+                if _think.get("type") == "disabled":
+                    _legacy_eff = "low"
+                elif _think.get("effort"):
+                    _legacy_eff = _think.get("effort")
+            _extra["thinking"] = {"type": "enabled"}
+            if "reasoning_effort" not in kwargs:
+                kwargs["reasoning_effort"] = _glm_reasoning_effort(
+                    _legacy_eff if _legacy_eff is not None else _GLM_DEFAULT_REASONING_EFFORT
+                )
+            else:
+                kwargs["reasoning_effort"] = _glm_reasoning_effort(kwargs["reasoning_effort"])
             kwargs["extra_body"] = _extra
         super().__init__(
             model=model,
-            api_key=api_key or _deepseek_api_key(),
-            base_url=base_url or _deepseek_base_url(),
+            api_key=api_key or _zai_api_key(),
+            base_url=base_url or _zai_base_url(),
             **kwargs,
         )
 
     def with_structured_output(self, schema=None, **kwargs):
-        """Override del default de langchain-openai, calibrado EN VIVO contra
-        el API DeepSeek (2026-06-12):
-
-        1. `method="json_schema"` (default de langchain-openai 1.3) emite
-           `response_format={"type": "json_schema", ...}` → DeepSeek responde
-           `400 This response_format type is unavailable`. Se usa
-           `method="function_calling"` (tools API, soportado).
-        2. El thinking mode (default-ON en V4) NO soporta el `tool_choice`
-           forzado que function_calling necesita → `400 Thinking mode does
-           not support this tool_choice`. Para estos runnables se desactiva
-           el thinking via `extra_body={"thinking": {"type": "disabled"}}` —
-           structured output es relleno de schema, no requiere reasoning, y
-           de paso se ahorran los reasoning-tokens (facturan como output).
-
-        Cubre los ~15 callsites `.with_structured_output(...)` del pipeline
-        sin tocarlos. Un caller puede pasar `method=` explícito si lo necesita.
-
-        [P1-DEEPSEEK-PROVIDER-INSTANCE · 2026-07-28] El guard resuelve el
-        provider de ESTA instancia (`self.openai_api_base`), NO del knob
-        global: `_is_deepseek_provider()` sin argumento inspecciona
-        `MEALFIT_DEEPSEEK_BASE_URL` (que SIEMPRE contiene "deepseek") y
-        retornaba `True` para TODA instancia sin importar a dónde apuntara de
-        verdad — inyectando `thinking` (parámetro DeepSeek-only) contra
-        back-ends que lo rechazan con `400 Unknown parameter: 'thinking'`
-        (medido en vivo: el meal-photo scanner con `ChatDeepSeek` contra
-        OpenAI). `openai_api_base` es el atributo real que `ChatOpenAI`
-        persiste desde el kwarg `base_url` del constructor (verificado
-        empíricamente — `base_url` NO es atributo de instancia). Si un futuro
-        langchain-openai renombra el atributo, `getattr(..., None)` cae a
-        `None` y `_is_deepseek_provider(None)` reproduce el comportamiento de
-        HOY (inspecciona el knob global) — el path DeepSeek-only de
-        producción (~15 callsites) no puede regresar por este cambio.
+        """Override del default de langchain-openai, calibrado EN VIVO contra Z.ai
+        (2026-09-02, glm-5.3-flash con thinking activo):
+        1. `method="json_schema"` (default de langchain-openai 1.3) y `json_mode`:
+           GLM devuelve JSON pero IGNORA el esquema (contesta `{"respuesta": ...}` o
+           markdown) → `OutputParserException`. Se fuerza `method="function_calling"`
+           (tools API + `tool_choice` forzado), que SÍ respeta el esquema y funciona
+           CON razonamiento activo (13 s a effort=low para un veredicto de 3 campos).
+        2. Un caller que pida `json_mode` explícito contra GLM recibe igualmente
+           `function_calling`: en el proveedor anterior `json_mode` era el rodeo para
+           "thinking rechaza tool_choice"; en Z.ai es al revés — el rodeo es lo que rompe.
+        Cubre los ~15 callsites `.with_structured_output(...)` del pipeline sin tocarlos.
+        [P1-PROVIDER-INSTANCE-GUARD · 2026-07-28] El guard resuelve el provider de ESTA
+        instancia (`self.openai_api_base`), no del knob global: una instancia apuntada
+        a OpenAI conserva el `method` que pidió el caller.
         """
         kwargs.setdefault("method", "function_calling")
-        base = self
         _instance_base_url = getattr(self, "openai_api_base", None)
-        if kwargs["method"] == "function_calling" and _is_deepseek_provider(_instance_base_url):
-            merged_extra = dict(self.extra_body or {})
-            merged_extra.setdefault("thinking", {"type": "disabled"})
-            base = self.model_copy(update={"extra_body": merged_extra})
-        return ChatOpenAI.with_structured_output(base, schema, **kwargs)
+        if kwargs["method"] == "json_mode" and _is_glm_provider(_instance_base_url):
+            kwargs["method"] = "function_calling"
+        return ChatOpenAI.with_structured_output(self, schema, **kwargs)
 
 
 # ============================================================
 # [P1-DAYGEN-LUNA-CANARY · 2026-07-26] Fábrica de LLM por PROVEEDOR.
 # ============================================================
-# `_build_day_llm` (graph_orchestrator) construía siempre `ChatDeepSeek`, aunque su propio
+# `_build_day_llm` (graph_orchestrator) construía siempre `ChatGLM`, aunque su propio
 # comentario decía "provider correcto por prefijo" — la intención estaba escrita y no
 # implementada. Con un modelo OpenAI en el chain, ese hardcode lo mandaría al base_url de
-# DeepSeek con la key equivocada.
+# GLM con la key equivocada.
 #
 # Verificado contra el API (2026-07-26) antes de escribir esto:
 #   · `gpt-5.6-luna` responde en `/v1/chat/completions` y soporta `response_format=json_object`
@@ -409,7 +421,7 @@ _OPENAI_MODEL_PREFIXES = ("gpt-", "o1", "o3", "o4", "chatgpt")
 
 
 def is_openai_model(model: str) -> bool:
-    """¿El ID pertenece al API de OpenAI (y no a DeepSeek)?"""
+    """¿El ID pertenece al API de OpenAI (y no a GLM)?"""
     m = str(model or "").strip().lower()
     return any(m.startswith(p) for p in _OPENAI_MODEL_PREFIXES)
 
@@ -417,7 +429,7 @@ def is_openai_model(model: str) -> bool:
 def _openai_api_key() -> str:
     """Key de OpenAI desde el entorno. Fail-loud: mejor una excepción que un call silencioso al
     proveedor equivocado. NUNCA argumento del callsite — mismo contrato que enforza
-    `test_p0_deepseek_migration.py`."""
+    `test_p0_glm_migration.py`."""
     _k = os.environ.get("OPENAI_API_KEY")
     if not _k:
         raise RuntimeError("modelo OpenAI pedido sin OPENAI_API_KEY en el entorno")
@@ -427,15 +439,15 @@ def _openai_api_key() -> str:
 def build_chat_llm(model: str, **kwargs):
     """Devuelve el cliente chat del proveedor que corresponde al `model`.
 
-    OpenAI → `ChatOpenAI` con `OPENAI_API_KEY` y base por defecto. Resto → `ChatDeepSeek`
+    OpenAI → `ChatOpenAI` con `OPENAI_API_KEY` y base por defecto. Resto → `ChatGLM`
     (que ya inyecta su propia key/base).
 
     ⚠️ [P1-LUNA-USAGE-BLIND · 2026-07-26] Devuelve las clases BASE: sin backpressure y **sin
     contabilidad de costo**. Dentro del pipeline de generación NO se usa esta fábrica — allí van
-    `graph_orchestrator.ChatDeepSeek` / `ChatOpenAIInstrumented`, que añaden el mixin. Construir
+    `graph_orchestrator.ChatGLM` / `ChatOpenAIInstrumented`, que añaden el mixin. Construir
     el day-gen con esta fábrica dejó `llm_usage_events` sin una sola fila de `day_generator`
     (el nodo más caro) durante la primera corrida del canario Luna.
     """
     if is_openai_model(model):
         return ChatOpenAI(model=model, api_key=_openai_api_key(), **kwargs)
-    return ChatDeepSeek(model=model, **kwargs)
+    return ChatGLM(model=model, **kwargs)

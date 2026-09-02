@@ -1,9 +1,9 @@
 """[P1-FLASH-PRIMARY · 2026-07-31] Flash es el modelo PRIMARIO de todas las
 superficies; pro queda SOLO como red post-fallo.
 
-Contexto: el owner midió que `deepseek-v4-flash` es actualmente MEJOR que
-`deepseek-v4-pro` (los providers actualizan modelos bajo el mismo ID — la
-premisa "pro > flash" de P0-DEEPSEEK-MIGRATION 2026-06-12 caducó). Antes de
+Contexto: el owner midió que `glm-5.3-flash` es actualmente MEJOR que
+`glm-5.3` (los providers actualizan modelos bajo el mismo ID — la
+premisa "pro > flash" de P0-LLM-PROVIDER-MIGRATION 2026-06-12 caducó). Antes de
 este fix el .env local YA forzaba flash en ambos tiers (decisión owner
 2026-07-04) pero prod corría el default de código: pro para tiers pagados y
 para el reviewer clínico risk-tier.
@@ -19,7 +19,7 @@ Contratos que ancla:
   D. Cadena del day-gen: flash-PRIMERO en attempt 1, retries y bariátrico;
      pro presente como RED (2º) — nunca primero, nunca ausente.
   E. La red pro NO se colapsa: `_plan_pro_model_name` default sigue siendo
-     `DEEPSEEK_PRO` (su valor es ser un modelo DISTINTO con breaker
+     `GLM_PRO` (su valor es ser un modelo DISTINTO con breaker
      independiente — colapsarlo a flash haría no-op los fallbacks de
      P1-DAYGEN-RETRY-FLASH-NET y P1-PLANNER-PRO-FALLBACK).
   F. Marker bumpeado en app.py.
@@ -53,19 +53,19 @@ def _sin_tier_routing(monkeypatch):
 
 def test_a_paid_tier_default_is_flash(monkeypatch):
     import db  # noqa: F401 — fuerza load_dotenv ANTES del delenv (patrón test_b2)
-    from llm_provider import DEEPSEEK_FLASH, DEEPSEEK_PRO, model_paid_tier, resolve_model_for_tier
+    from llm_provider import GLM_FLASH, GLM_PRO, model_paid_tier, resolve_model_for_tier
 
     monkeypatch.delenv("MEALFIT_MODEL_PAID_TIER", raising=False)
     monkeypatch.delenv("MEALFIT_MODEL_FREE_TIER", raising=False)
 
-    assert model_paid_tier() == DEEPSEEK_FLASH
+    assert model_paid_tier() == GLM_FLASH
     for tier in ("basic", "plus", "ultra", "gratis", None, "desconocido"):
-        assert resolve_model_for_tier(tier) == DEEPSEEK_FLASH
+        assert resolve_model_for_tier(tier) == GLM_FLASH
 
     # Rollback vivo: el knob sigue pudiendo divergir pagado→pro sin redeploy.
-    monkeypatch.setenv("MEALFIT_MODEL_PAID_TIER", DEEPSEEK_PRO)
-    assert resolve_model_for_tier("ultra") == DEEPSEEK_PRO
-    assert resolve_model_for_tier("gratis") == DEEPSEEK_FLASH
+    monkeypatch.setenv("MEALFIT_MODEL_PAID_TIER", GLM_PRO)
+    assert resolve_model_for_tier("ultra") == GLM_PRO
+    assert resolve_model_for_tier("gratis") == GLM_FLASH
 
 
 # ------------------------------------------------------------------
@@ -73,11 +73,11 @@ def test_a_paid_tier_default_is_flash(monkeypatch):
 # ------------------------------------------------------------------
 
 def test_b_reviewer_risk_tier_default_is_flash():
-    assert "_REVIEWER_RISK_TIER_DEFAULT = DEEPSEEK_FLASH" in _GO_SRC, (
+    assert "_REVIEWER_RISK_TIER_DEFAULT = GLM_FLASH" in _GO_SRC, (
         "P1-FLASH-PRIMARY: el risk-tier clínico debe defaultear a flash "
         "(el owner midió flash > pro; pro aquí sería degradar el gate a propósito)"
     )
-    assert "_REVIEWER_RISK_TIER_DEFAULT = DEEPSEEK_PRO" not in _GO_SRC
+    assert "_REVIEWER_RISK_TIER_DEFAULT = GLM_PRO" not in _GO_SRC
 
 
 # ------------------------------------------------------------------
@@ -104,16 +104,16 @@ def test_c_route_model_paid_branch_uses_ssot():
 def test_d_day_chain_flash_first(monkeypatch):
     import graph_orchestrator as g
 
-    monkeypatch.setattr(g, "_FLASH_MODEL_NAME", "deepseek-v4-flash")
-    monkeypatch.setattr(g, "_PRO_MODEL_NAME", "deepseek-v4-pro")
+    monkeypatch.setattr(g, "_FLASH_MODEL_NAME", "glm-5.3-flash")
+    monkeypatch.setattr(g, "_PRO_MODEL_NAME", "glm-5.3")
 
     _non = {"medicalConditions": ["Ninguna"]}
     _bar = {"medicalConditions": ["Cirugía bariátrica"]}
 
-    assert g._day_model_chain(_non, 1) == ["deepseek-v4-flash", "deepseek-v4-pro"]
-    assert g._day_model_chain(_non, 2) == ["deepseek-v4-flash", "deepseek-v4-pro"]
+    assert g._day_model_chain(_non, 1) == ["glm-5.3-flash", "glm-5.3"]
+    assert g._day_model_chain(_non, 2) == ["glm-5.3-flash", "glm-5.3"]
     if g.BARIATRIC_DAYGEN_PRO:
-        assert g._day_model_chain(_bar, 1) == ["deepseek-v4-flash", "deepseek-v4-pro"]
+        assert g._day_model_chain(_bar, 1) == ["glm-5.3-flash", "glm-5.3"]
 
     # El literal invertido (pro primero) no debe reaparecer en el source.
     assert "[_PRO_MODEL_NAME, _FLASH_MODEL_NAME]" not in _GO_SRC
@@ -131,10 +131,10 @@ def test_d2_bariatric_model_knob_exists():
 def test_e_pro_net_not_collapsed():
     # [P1-NET-LUNA · 2026-07-31] La invariante REAL de este test: la red es un
     # modelo DISTINTO de flash — jamás colapsada a flash (los fallbacks serían
-    # no-op contra el mismo breaker roto). El default pasó de DEEPSEEK_PRO a
+    # no-op contra el mismo breaker roto). El default pasó de GLM_PRO a
     # GPT56_LUNA (proveedor DISTINTO = diversidad real; un rate-limit de
-    # DeepSeek tumbaba flash Y la red pro juntos), con fail-safe a
-    # DEEPSEEK_PRO si falta OPENAI_API_KEY.
+    # GLM tumbaba flash Y la red pro juntos), con fail-safe a
+    # GLM_PRO si falta OPENAI_API_KEY.
     m = re.search(
         r"def _plan_pro_model_name\(\).*?_env_str\(\"MEALFIT_PRO_MODEL\", (\w+)\)",
         _GO_SRC,
@@ -143,12 +143,12 @@ def test_e_pro_net_not_collapsed():
     assert m, "no encontré _plan_pro_model_name"
     assert m.group(1) == "GPT56_LUNA", (
         "la RED post-fallo debe ser cross-provider (GPT56_LUNA) — "
-        "ver P1-NET-LUNA; rollback vía MEALFIT_PRO_MODEL=deepseek-v4-pro"
+        "ver P1-NET-LUNA; rollback vía MEALFIT_PRO_MODEL=glm-5.3"
     )
     # Fail-safe intra-provider presente: sin OPENAI_API_KEY la red vuelve a pro.
     _fn = re.search(r"def _plan_pro_model_name\(\).*?return _configured", _GO_SRC, re.DOTALL)
-    assert _fn and "return DEEPSEEK_PRO" in _fn.group(0), (
-        "el fail-safe sin OPENAI_API_KEY debe devolver DEEPSEEK_PRO"
+    assert _fn and "return GLM_PRO" in _fn.group(0), (
+        "el fail-safe sin OPENAI_API_KEY debe devolver GLM_PRO"
     )
     # Ambos extremos de la cadena presentes: flash primario + red distinta.
     assert "[_FLASH_MODEL_NAME, _PRO_MODEL_NAME]" in _GO_SRC

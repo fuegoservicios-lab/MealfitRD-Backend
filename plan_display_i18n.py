@@ -105,7 +105,7 @@ from typing import Optional
 from knobs import _env_bool, _env_str, _env_float, _env_int
 from constants import strip_accents
 from prompts.chat_agent import _COACH_LANGUAGE_NAMES
-from llm_provider import build_chat_llm, DEEPSEEK_FLASH
+from llm_provider import build_chat_llm, GLM_FLASH
 from langchain_core.messages import SystemMessage
 from db import update_plan_data_atomic, log_llm_usage_event, execute_sql_query, execute_sql_write
 
@@ -140,7 +140,7 @@ _INFLIGHT_SEMAPHORE = threading.BoundedSemaphore(_plan_display_i18n_max_inflight
 
 
 def _plan_display_i18n_model_name() -> str:
-    return _env_str("MEALFIT_PLAN_DISPLAY_I18N_MODEL", DEEPSEEK_FLASH)
+    return _env_str("MEALFIT_PLAN_DISPLAY_I18N_MODEL", GLM_FLASH)
 
 
 def _plan_display_i18n_timeout_s() -> float:

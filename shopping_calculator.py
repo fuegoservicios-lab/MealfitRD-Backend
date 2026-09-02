@@ -174,7 +174,7 @@ from knobs import (
 _SEMANTIC_INIT_FAIL_COOLDOWN_S = max(0, _knob_env_int("MEALFIT_SEMANTIC_INIT_FAIL_COOLDOWN_S", 600))
 
 
-# [P2-LLM-TIMEOUT-SWEEP · 2026-05-30 · P0-DEEPSEEK-MIGRATION · 2026-06-12]
+# [P2-LLM-TIMEOUT-SWEEP · 2026-05-30 · P0-LLM-PROVIDER-MIGRATION · 2026-06-12]
 # El deadline del cliente de embeddings (init `embed_documents` + runtime
 # `embed_query` del semantic cache) ahora vive en `embeddings_provider`
 # (`_embeddings_timeout_s`, mismo knob `MEALFIT_EMBEDDING_LLM_TIMEOUT_S`) —
@@ -351,7 +351,7 @@ def _model_hash(model_name: str) -> str:
 
     [2026-05-06] Asegura que vectores cacheados con un modelo no se
     confundan con vectores de otro modelo (espacios vectoriales distintos).
-    [P0-DEEPSEEK-MIGRATION · 2026-06-12] El ID viene de
+    [P0-LLM-PROVIDER-MIGRATION · 2026-06-12] El ID viene de
     `embeddings_provider.get_embeddings_model_id()` (knob
     `MEALFIT_EMBEDDINGS_MODEL`); si cambias de provider/modelo, las entradas
     Redis viejas quedan ignoradas y se regeneran automáticamente.
@@ -519,7 +519,7 @@ def get_semantic_cache(deadline_s: float | None = None):
         # Cliente embeddings: barato instanciar (sin quota cost), necesario
         # tanto para Redis-hit (downstream `embed_query` runtime) como para
         # el fetch inicial (init de `embed_documents`).
-        # [P0-DEEPSEEK-MIGRATION · 2026-06-12] Via capa pluggable. Con
+        # [P0-LLM-PROVIDER-MIGRATION · 2026-06-12] Via capa pluggable. Con
         # provider `disabled` retorna None → fast-path Regex (path graceful
         # pre-existente, mismo comportamiento que un fallo de instanciación).
         from embeddings_provider import get_embeddings_client
@@ -7034,7 +7034,7 @@ def _has_severe_divergence(divergences: list) -> bool:
             # [P1-COHERENCE-SEVERE-NO-NOISE · 2026-07-07] (plan vivo 72c8b965 wk2: 67
             # divergencias `unknown` de SOBRE-oferta de envase — arroz/lechuga/ajo/calamar
             # comprados por paquete — escalaban el chunk T2 warn→block en FALSO, 3 retries +
-            # re-encolado, quemando DeepSeek). El docstring de arriba YA declara `unknown` y
+            # re-encolado, quemando GLM). El docstring de arriba YA declara `unknown` y
             # `pantry_overdeduct` NO-severas, pero este check de magnitud las capturaba igual
             # cuando |delta|>0.50. Semántica: `unknown` de magnitud es SIEMPRE sobre-oferta
             # (act>exp; el sub-suministro severo se clasifica `pantry_overdeduct`), y la

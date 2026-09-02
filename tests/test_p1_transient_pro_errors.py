@@ -1,4 +1,4 @@
-"""[P1-TRANSIENT-DEEPSEEK · 2026-07-27] Un hipo de red desactivaba PRO para todos.
+"""[P1-TRANSIENT-PRO-ERRORS · 2026-07-27] Un hipo de red desactivaba PRO para todos.
 
 ## La cadena, medida en los logs del VPS (6 horas)
 
@@ -7,7 +7,7 @@
      2 regeneraciones COMPLETAS de plan
 
 Los 6 `pro_cb_open` son consecuencia de los 6 primeros: los errores de conexión abrían el
-circuit breaker de `deepseek-v4-pro`, y a partir de ahí el breaker rechazaba las siguientes
+circuit breaker de `glm-5.3`, y a partir de ahí el breaker rechazaba las siguientes
 correcciones sin ni intentarlo.
 
 Y no se queda en "calidad un poco peor". El caso vivo `corr=308f99c2`:
@@ -24,8 +24,8 @@ una llamada de más.
 ## La causa
 
 `_is_transient_upstream_error` se escribió el 2026-05-21 para las firmas de **Google**
-(`ServiceUnavailable`, `BadGateway`, 502/503/504, cadenas gRPC). El proyecto migró a DeepSeek el
-2026-06-12 (P0-DEEPSEEK-MIGRATION) y el clasificador **nunca se actualizó** a la taxonomía del
+(`ServiceUnavailable`, `BadGateway`, 502/503/504, cadenas gRPC). El proyecto migró a GLM el
+2026-06-12 (P0-LLM-PROVIDER-MIGRATION) y el clasificador **nunca se actualizó** a la taxonomía del
 cliente OpenAI-compatible. `APIConnectionError` —un fallo de red puro— se contaba como mala
 salud del MODELO.
 
@@ -38,7 +38,7 @@ red deja sin PRO también al **revisor médico**, que va a PRO en TODOS los tier
 
 Coste del fix: cero llamadas LLM extra. Solo deja de castigar al modelo por la red.
 
-tooltip-anchor: P1-TRANSIENT-DEEPSEEK
+tooltip-anchor: P1-TRANSIENT-PRO-ERRORS
 """
 from __future__ import annotations
 
@@ -48,7 +48,7 @@ import graph_orchestrator as g
 
 
 class APIConnectionError(Exception):
-    """Mismo NOMBRE que la del cliente OpenAI/DeepSeek — el clasificador matchea por nombre
+    """Mismo NOMBRE que la del cliente OpenAI/GLM — el clasificador matchea por nombre
     de tipo porque LangChain envuelve estos errores de forma inconsistente entre versiones."""
 
 
@@ -137,9 +137,9 @@ def test_el_clasificador_nombra_al_cliente_actual():
     import inspect
     src = inspect.getsource(g._is_transient_upstream_error)
     assert "APIConnectionError" in src, (
-        "el clasificador perdió la taxonomía del cliente OpenAI-compatible (DeepSeek)"
+        "el clasificador perdió la taxonomía del cliente OpenAI-compatible (GLM)"
     )
-    assert "P1-TRANSIENT-DEEPSEEK" in src
+    assert "P1-TRANSIENT-PRO-ERRORS" in src
 
 
 def test_el_helper_del_cb_lo_consulta():

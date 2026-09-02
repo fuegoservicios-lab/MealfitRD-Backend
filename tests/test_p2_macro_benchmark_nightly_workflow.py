@@ -2,7 +2,7 @@
 precisión de macros (gap-audit G13) vivía SOLO en el workspace-root `.github/workflows/` — que NO es repo
 git → GitHub Actions del repo backend nunca lo ejecutaba. La "validación continua de precisión" era de facto
 inexistente en CI. Este test ancla su ubicación versionada (backend/.github/workflows/) para que un futuro
-move/delete falle CI. La ACTIVACIÓN (secrets DEEPSEEK/NEON/COHERE) sigue siendo acción explícita del owner;
+move/delete falle CI. La ACTIVACIÓN (secrets GLM/NEON/COHERE) sigue siendo acción explícita del owner;
 el job auto-salta sin ellos.
 """
 from __future__ import annotations

@@ -209,17 +209,17 @@ def test_telemetria_de_resize_se_loguea_a_info(monkeypatch, caplog):
 
 # ---------------------------------------------------------------------------
 # Bug real cazado en vivo contra la API de OpenAI (VPS, 2026-07-28):
-# `_dispatch_openai_compatible_vision` construía SIEMPRE `ChatDeepSeek`
+# `_dispatch_openai_compatible_vision` construía SIEMPRE `ChatGLM`
 # (subclase de `ChatOpenAI` que inyecta `extra_body={"thinking": ...}`,
-# parámetro PROPIO de DeepSeek) -- con `MEALFIT_VISION_MODEL=gpt-5.6-luna`
+# parámetro PROPIO de GLM) -- con `MEALFIT_VISION_MODEL=gpt-5.6-luna`
 # el API real de OpenAI rechazaba el request con
 # `400 Unknown parameter: 'thinking'`. Fix: el cliente se elige por MODELO
 # (`is_openai_model`, mismo criterio que `llm_provider.build_chat_llm`).
 # ---------------------------------------------------------------------------
 
-def test_dispatch_por_modelo_no_hardcodea_chatdeepseek(monkeypatch):
+def test_dispatch_por_modelo_no_hardcodea_chatglm(monkeypatch):
     """El path OpenAI-compatible debe elegir el cliente por MODELO, no
-    hardcodear uno. Si alguien revierte a `ChatDeepSeek` incondicional (el
+    hardcodear uno. Si alguien revierte a `ChatGLM` incondicional (el
     bug real que causó el HTTP 400 'Unknown parameter: thinking' contra la
     API de OpenAI), este test se pone rojo."""
     import vision_agent as va
@@ -246,32 +246,32 @@ def test_dispatch_por_modelo_no_hardcodea_chatdeepseek(monkeypatch):
         def with_structured_output(self, schema):
             return _FakeBoundLLM()
 
-    class _FakeChatDeepSeek:
+    class _FakeChatGLM:
         def __init__(self, **kwargs):
-            calls.append(("ChatDeepSeek", kwargs))
+            calls.append(("ChatGLM", kwargs))
 
         def with_structured_output(self, schema):
             return _FakeBoundLLM()
 
     monkeypatch.setattr(va, "ChatOpenAI", _FakeChatOpenAI)
-    monkeypatch.setattr(va, "ChatDeepSeek", _FakeChatDeepSeek)
+    monkeypatch.setattr(va, "ChatGLM", _FakeChatGLM)
     monkeypatch.setenv("VISION_API_KEY", "test-key-not-real")
     monkeypatch.setenv("MEALFIT_VISION_BASE_URL", "https://api.openai.com/v1")
 
-    # Modelo OpenAI real (Luna) -> DEBE usar ChatOpenAI, NUNCA ChatDeepSeek.
+    # Modelo OpenAI real (Luna) -> DEBE usar ChatOpenAI, NUNCA ChatGLM.
     monkeypatch.setenv("MEALFIT_VISION_MODEL", "gpt-5.6-luna")
     asyncio.run(va._dispatch_openai_compatible_vision(b"fake-jpeg-bytes"))
     assert [c[0] for c in calls] == ["ChatOpenAI"], (
-        f"gpt-5.6-luna debe despachar a ChatOpenAI, no a ChatDeepSeek: {calls}"
+        f"gpt-5.6-luna debe despachar a ChatOpenAI, no a ChatGLM: {calls}"
     )
 
     calls.clear()
-    # Modelo NO-OpenAI (DeepSeek u otro proveedor OpenAI-compatible) ->
-    # sigue siendo ChatDeepSeek (el wrapper correcto para esos providers).
-    monkeypatch.setenv("MEALFIT_VISION_MODEL", "deepseek-v4-flash")
+    # Modelo NO-OpenAI (GLM u otro proveedor OpenAI-compatible) ->
+    # sigue siendo ChatGLM (el wrapper correcto para esos providers).
+    monkeypatch.setenv("MEALFIT_VISION_MODEL", "glm-5.3-flash")
     asyncio.run(va._dispatch_openai_compatible_vision(b"fake-jpeg-bytes"))
-    assert [c[0] for c in calls] == ["ChatDeepSeek"], (
-        f"un modelo no-OpenAI debe seguir usando ChatDeepSeek: {calls}"
+    assert [c[0] for c in calls] == ["ChatGLM"], (
+        f"un modelo no-OpenAI debe seguir usando ChatGLM: {calls}"
     )
 
 

@@ -31,10 +31,10 @@ benchmarks/scripts que llaman LLM solo corren DIRIGIDOS). El controller de
 esta task decide cuándo correrlo y si promueve a `--commit`.
 
 Uso:
-    NEON_DATABASE_URL(_POOLED) + DEEPSEEK_API_KEY en .env
+    NEON_DATABASE_URL(_POOLED) + ZAI_API_KEY en .env
     python scripts/fill_catalog_name_en.py                 # dry-run (default)
     python scripts/fill_catalog_name_en.py --commit         # persiste
-    python scripts/fill_catalog_name_en.py --model deepseek-v4-pro
+    python scripts/fill_catalog_name_en.py --model glm-5.3
 """
 from __future__ import annotations
 
@@ -57,7 +57,7 @@ except Exception:
 import psycopg
 from langchain_core.messages import SystemMessage
 
-from llm_provider import build_chat_llm, DEEPSEEK_FLASH
+from llm_provider import build_chat_llm, GLM_FLASH
 from constants import strip_accents
 
 NEON = os.environ.get("NEON_DATABASE_URL_POOLED") or os.environ.get("NEON_DATABASE_URL")
@@ -183,8 +183,8 @@ def main():
              "la llamada LLM sobre el catálogo entero.",
     )
     parser.add_argument(
-        "--model", default=DEEPSEEK_FLASH,
-        help=f"Modelo LLM (default: {DEEPSEEK_FLASH}).",
+        "--model", default=GLM_FLASH,
+        help=f"Modelo LLM (default: {GLM_FLASH}).",
     )
     args = parser.parse_args()
     # [Ola final · FF-10] `--dry-run` era un flag INERTE: `commit = bool(args.commit)`

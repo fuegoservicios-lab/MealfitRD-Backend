@@ -11,7 +11,7 @@ Cinco modos (componibles con el mismo schema de salida — ver
               y URLs de Neon. --changes ejercita además swap individual y el bucle
               de día (las superficies de /swap-meal y /regenerate-day).
               --provider openai fuerza la corrida COMPLETA a la familia gpt-5.6
-              (cero DeepSeek) vía los knobs per-feature sancionados — requiere
+              (cero GLM) vía los knobs per-feature sancionados — requiere
               OPENAI_API_KEY.
   remote      La corrida "cuenta de invitado": genera contra un API DESPLEGADO
               (--api-base) como user_id=guest — CERO claves locales; el routing
@@ -65,9 +65,9 @@ from landing_benchmarks import (
 )
 
 
-# [P1-LANDING-BENCH-1-OPENAI] Forzado "todo OpenAI, cero DeepSeek" para el modo live.
+# [P1-LANDING-BENCH-1-OPENAI] Forzado "todo OpenAI, cero GLM" para el modo live.
 # SOLO knobs per-feature sancionados (P3-PREVIEW-MODEL-KNOB) — el override global de
-# modelo fue ELIMINADO adrede (P1-DEEPSEEK-ONLY-RESTORE: colapsaba también el reviewer
+# modelo fue ELIMINADO adrede (P1-SINGLE-PROVIDER-RESTORE: colapsaba también el reviewer
 # clínico risk-tier a un provider de test) y NO se reintroduce aquí. Estos 4 knobs
 # mueven el pipeline (flash nodes + router por tier + red post-fallo); el reviewer
 # (Luna/Terra/Sol), day-gen (Luna por tier) y swap (Luna fijo) YA son OpenAI por
@@ -83,12 +83,12 @@ _OPENAI_FORCE_KNOBS = {
 def _force_openai_provider():
     """Aplica el forzado ANTES de los imports lazy de graph_orchestrator (la red
     post-fallo se resuelve al boot del módulo). Fail-loud sin OPENAI_API_KEY: sin
-    key, graph_orchestrator degradaría la red a DeepSeek en silencio y la corrida
+    key, graph_orchestrator degradaría la red a GLM en silencio y la corrida
     dejaría de ser lo que dice ser."""
     if not os.environ.get("OPENAI_API_KEY"):
         raise SystemExit(
             "--provider openai requiere OPENAI_API_KEY en el entorno. Sin ella la "
-            "red post-fallo cae a DeepSeek (fail-safe P1-NET-LUNA) y la corrida no "
+            "red post-fallo cae a GLM (fail-safe P1-NET-LUNA) y la corrida no "
             "sería 'todo OpenAI'. Exporta la key y reintenta."
         )
     for k, v in _OPENAI_FORCE_KNOBS.items():
@@ -613,7 +613,7 @@ def main():
     ap.add_argument("--save-plans", action="store_true",
                     help="live/remote: guardar planes crudos para `score`")
     ap.add_argument("--provider", choices=("default", "openai"), default="default",
-                    help="live: openai fuerza toda la corrida a gpt-5.6 (cero DeepSeek)")
+                    help="live: openai fuerza toda la corrida a gpt-5.6 (cero GLM)")
     ap.add_argument("--api-base", help="remote: URL base del API desplegado (p.ej. https://app.bioboros.com)")
     ap.add_argument("--ids", help="remote: perfiles específicos por id, p.ej. '3,9,10,13,15' "
                                   "(los clínicos; gana sobre el N posicional)")

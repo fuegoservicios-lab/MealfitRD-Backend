@@ -4,14 +4,14 @@ import base64
 import asyncio
 from cache_manager import centralized_cache
 from knobs import _env_str, _env_float  # [P3-VISION-MODEL-KNOB · 2026-05-20] / [P2-LLM-TIMEOUT-SWEEP · 2026-05-30]
-# [P0-DEEPSEEK-MIGRATION · 2026-06-12] Gemini eliminado. ChatDeepSeek acepta
+# [P0-LLM-PROVIDER-MIGRATION · 2026-06-12] Gemini eliminado. ChatGLM acepta
 # base_url/api_key explícitos — el path vision lo reusa apuntando a CUALQUIER
 # provider OpenAI-compatible con soporte de imágenes.
 # [P1-VISION-LUNA · 2026-07-28] `is_openai_model`/`_openai_api_key`: mismo
 # criterio de despacho por MODELO que `llm_provider.build_chat_llm` — un
-# modelo `gpt-*` real necesita `ChatOpenAI` PLANO, no `ChatDeepSeek` (ver
+# modelo `gpt-*` real necesita `ChatOpenAI` PLANO, no `ChatGLM` (ver
 # comentario en `_dispatch_openai_compatible_vision`).
-from llm_provider import ChatDeepSeek, is_openai_model, _openai_api_key
+from llm_provider import ChatGLM, is_openai_model, _openai_api_key
 from langchain_openai import ChatOpenAI
 from embeddings_provider import get_text_embedding
 from langchain_core.messages import HumanMessage
@@ -27,8 +27,8 @@ import logging
 logger = logging.getLogger(__name__)  # [P2-LOGGER-MIGRATION · 2026-05-12]
 
 
-# [P0-DEEPSEEK-MIGRATION · 2026-06-12] Vision como provider PLUGGABLE.
-# DeepSeek-V4 NO acepta input de imágenes (verificado api-docs 2026-06-12),
+# [P0-LLM-PROVIDER-MIGRATION · 2026-06-12] Vision como provider PLUGGABLE.
+# GLM-5.3 NO acepta input de imágenes (verificado api-docs 2026-06-12),
 # así que el análisis visual queda detrás de un provider OpenAI-compatible
 # configurable (Qwen-VL, GLM-4V, moonshot, etc.) — mismo patrón que
 # embeddings_provider. Mientras `MEALFIT_VISION_PROVIDER=disabled` (default
@@ -107,7 +107,7 @@ def _vision_llm_timeout_s() -> float:
     )
 
 
-# [P0-DEEPSEEK-MIGRATION · 2026-06-12] El timeout de embeddings
+# [P0-LLM-PROVIDER-MIGRATION · 2026-06-12] El timeout de embeddings
 # (`MEALFIT_EMBEDDING_LLM_TIMEOUT_S`) ahora vive en `embeddings_provider`.
 
 
@@ -475,7 +475,7 @@ def _resolve_vision_client(schema):
     Mismo criterio de despacho por MODELO que `llm_provider.build_chat_llm`
     (ver docstring completo de `_dispatch_openai_compatible_vision` para el
     bug real — `400 Unknown parameter: 'thinking'` — que motivó elegir el
-    cliente por modelo en vez de hardcodear `ChatDeepSeek`)."""
+    cliente por modelo en vez de hardcodear `ChatGLM`)."""
     model = _vision_model_name()
     base_url = _vision_base_url()
     timeout = _vision_llm_timeout_s()  # [P2-LLM-TIMEOUT-SWEEP · 2026-05-30] no colgar el event loop
@@ -496,9 +496,9 @@ def _resolve_vision_client(schema):
             timeout=timeout,
         )
     else:
-        # [P0-DEEPSEEK-MIGRATION] Cliente OpenAI-compatible con
+        # [P0-LLM-PROVIDER-MIGRATION] Cliente OpenAI-compatible con
         # base_url/key del provider de visión configurado.
-        llm = ChatDeepSeek(
+        llm = ChatGLM(
             model=model,
             temperature=0.1,
             base_url=base_url,
@@ -552,7 +552,7 @@ async def analyze_image_structured(image_bytes: bytes, prompt: str, schema):
 
 
 async def _dispatch_openai_compatible_vision(image_bytes: bytes) -> dict:
-    """[P0-DEEPSEEK-MIGRATION · 2026-06-12 → extraído P1-VISION-LUNA ·
+    """[P0-LLM-PROVIDER-MIGRATION · 2026-06-12 → extraído P1-VISION-LUNA ·
     2026-07-28] Intento de análisis vía provider OpenAI-compatible
     (gpt-5.6-luna u otro configurado por knob) — el ÚNICO provider tras
     P1-VISION-NO-LOCAL. Nunca lanza: cualquier error degrada a un payload
@@ -560,13 +560,13 @@ async def _dispatch_openai_compatible_vision(image_bytes: bytes) -> dict:
 
     [P1-VISION-LUNA · 2026-07-28] BUG cazado en vivo contra la API real: con
     `MEALFIT_VISION_MODEL=gpt-5.6-luna` este dispatch construía SIEMPRE
-    `ChatDeepSeek` (subclase de `ChatOpenAI` que inyecta `extra_body=
-    {"thinking": ...}` — parámetro PROPIO del API de DeepSeek). El API de
+    `ChatGLM` (subclase de `ChatOpenAI` que inyecta `extra_body=
+    {"thinking": ...}` — parámetro PROPIO del API de GLM). El API de
     OpenAI real lo rechaza: `400 Unknown parameter: 'thinking'`. Fix: el
     cliente se elige por MODELO (`is_openai_model`, mismo criterio que
     `llm_provider.build_chat_llm`) — `gpt-*`/`o1`/`o3`/`o4`/`chatgpt` usan
-    `ChatOpenAI` PLANO (sin el mixin de DeepSeek); cualquier otro modelo
-    (DeepSeek, Qwen-VL, GLM-4V, moonshot, ...) sigue con `ChatDeepSeek`, que
+    `ChatOpenAI` PLANO (sin el mixin de GLM); cualquier otro modelo
+    (GLM, Qwen-VL, GLM-4V, moonshot, ...) sigue con `ChatGLM`, que
     sigue siendo el wrapper OpenAI-compatible correcto para esos providers.
 
     NO se reutiliza `llm_provider.build_chat_llm` directamente: su branch
@@ -589,7 +589,7 @@ async def _dispatch_openai_compatible_vision(image_bytes: bytes) -> dict:
     [P1-MEAL-SCAN-DR-DISHES-RESTORE · 2026-07-28] BUG cazado en vivo (owner,
     scan real del día del switch a Luna): el nombre del plato volvió a salir
     truncado/incompleto. Root cause: la migración a este dispatch cloud
-    (P0-DEEPSEEK-MIGRATION) trajo un prompt genérico inline + el schema
+    (P0-LLM-PROVIDER-MIGRATION) trajo un prompt genérico inline + el schema
     `ImageDescription` (cap "máx ~6 palabras" en `meal_name`) — EXACTAMENTE
     el bug que `_MEAL_VISION_PROMPT` (P1-MEAL-SCAN-DR-DISHES · 2026-07-12)
     ya había cerrado para el provider local, pero que nunca se recableó acá:
@@ -669,7 +669,7 @@ async def process_image_with_vision(image_bytes: bytes) -> dict:
         if not _warned_vision_disabled:
             logger.warning(
                 "⚠️ [VISION] Provider de visión DESACTIVADO "
-                "(MEALFIT_VISION_PROVIDER=disabled — DeepSeek no acepta "
+                "(MEALFIT_VISION_PROVIDER=disabled — GLM no acepta "
                 "imágenes; provider pendiente de configurar). El Diario "
                 "Visual y 'Escanear comida' responderán analysis_failed. "
                 "Este aviso se emite una vez por proceso."
@@ -691,7 +691,7 @@ async def process_image_with_vision(image_bytes: bytes) -> dict:
 
     return await _dispatch_openai_compatible_vision(image_bytes)
 
-# [P0-DEEPSEEK-MIGRATION · 2026-06-12 → P1-COHERE-EMBED-V4] El embedding
+# [P0-LLM-PROVIDER-MIGRATION · 2026-06-12 → P1-COHERE-EMBED-V4] El embedding
 # "multimodal" siempre vectorizó el TEXTO de la descripción (no la imagen),
 # así que delega al provider de `embeddings_provider` (hoy Cohere Embed v4,
 # que ADEMÁS soporta imágenes si en el futuro se quiere búsqueda

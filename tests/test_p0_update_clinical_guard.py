@@ -138,7 +138,7 @@ def test_router_soft_fails_on_clinical_violation():
 
 
 # `routers.plans` arrastra el grafo + clientes LLM; en entornos sin `langchain_openai` real
-# (algunos locales) su import revienta al construir un ChatDeepSeek con el stub. En CI la dep
+# (algunos locales) su import revienta al construir un ChatGLM con el stub. En CI la dep
 # está instalada y estos tests corren. Skip elegante en vez de falso-rojo.
 try:
     from routers.plans import _enrich_clinical_from_profile as _ENRICH

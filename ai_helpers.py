@@ -22,8 +22,8 @@ from prompts import (
 )
 
 # Langchain
-# [P0-DEEPSEEK-MIGRATION · 2026-06-12] Gemini → DeepSeek.
-from llm_provider import ChatDeepSeek, DEEPSEEK_FLASH, model_free_tier
+# [P0-LLM-PROVIDER-MIGRATION · 2026-06-12] Gemini → GLM.
+from llm_provider import ChatGLM, GLM_FLASH, model_free_tier
 from schemas import ExpandedRecipeModel
 
 from constants import (
@@ -86,20 +86,20 @@ LIGHT_PROTEIN_SEED = _env_bool("MEALFIT_LIGHT_PROTEIN_SEED", False)
 
 # [P3-FLASH-LITE-COST-CUT · 2026-05-21] Knob para overridear el modelo del
 # generador de títulos de plan sin redeploy (convención P3-PREVIEW-MODEL-KNOB).
-# [P0-DEEPSEEK-MIGRATION · 2026-06-12] Default = DeepSeek V4 Flash (tarea aux
+# [P0-LLM-PROVIDER-MIGRATION · 2026-06-12] Default = GLM-5.3 Flash (tarea aux
 # barata, mismo modelo para todos los tiers).
 # Tooltip-anchor: P3-FLASH-LITE-COST-CUT.
 def _plan_title_model_name() -> str:
-    return _env_str("MEALFIT_PLAN_TITLE_MODEL", DEEPSEEK_FLASH)
+    return _env_str("MEALFIT_PLAN_TITLE_MODEL", GLM_FLASH)
 
 
 # [P1-RECIPE-EXPAND-FAILSIGNAL · 2026-05-30] Knob para overridear el modelo del
 # "Chef AI" (`expand_recipe_agent`) sin redeploy — mismo patrón que
-# `_plan_title_model_name` (P3-FLASH-LITE-COST-CUT). [P0-DEEPSEEK-MIGRATION]
-# Default = DeepSeek V4 Flash (expansión de receta es relleno de schema).
+# `_plan_title_model_name` (P3-FLASH-LITE-COST-CUT). [P0-LLM-PROVIDER-MIGRATION]
+# Default = GLM-5.3 Flash (expansión de receta es relleno de schema).
 # Tooltip-anchor: P1-RECIPE-EXPAND-FAILSIGNAL-MODEL.
 def _recipe_expand_model_name() -> str:
-    return _env_str("MEALFIT_RECIPE_EXPAND_MODEL", DEEPSEEK_FLASH)
+    return _env_str("MEALFIT_RECIPE_EXPAND_MODEL", GLM_FLASH)
 
 
 def _build_expand_llm(modelo: str, **kw):
@@ -111,12 +111,12 @@ def _build_expand_llm(modelo: str, **kw):
       · es exactamente donde sale el badge `_dish_quality_degraded` — la receta que quedó pobre;
       · la llamada es diminuta (una receta), así que el premium se mide en céntimos.
 
-    ⚠️ Sin este dispatch, apuntar el knob a `gpt-5.6-luna` mandaba el modelo al base_url de DeepSeek
+    ⚠️ Sin este dispatch, apuntar el knob a `gpt-5.6-luna` mandaba el modelo al base_url de GLM
     con la key equivocada. Es el mismo fallo que P1-LUNA-USAGE-BLIND cerró en el day-gen; aquí el
-    `ChatDeepSeek` a secas lo tenía latente desde que el knob existe.
+    `ChatGLM` a secas lo tenía latente desde que el knob existe.
 
-    ⚠️ `with_structured_output` NO se aplica aquí a propósito: `ChatDeepSeek` lo override-a para las
-    rarezas de DeepSeek (`function_calling` en vez de `json_schema`) y OpenAI quiere el default de
+    ⚠️ `with_structured_output` NO se aplica aquí a propósito: `ChatGLM` lo override-a para las
+    rarezas de GLM (`function_calling` en vez de `json_schema`) y OpenAI quiere el default de
     langchain. Lo pone el caller sobre el cliente que reciba.
     """
     try:
@@ -127,8 +127,8 @@ def _build_expand_llm(modelo: str, **kw):
     except Exception as _e:
         # fail-cheap: ante cualquier duda, el proveedor barato de siempre
         logger.warning(f"[P1-RECIPE-EXPAND-MODEL-PROVIDER] dispatch falló ({type(_e).__name__}), "
-                       f"usando DeepSeek: {str(_e)[:120]}")
-    return ChatDeepSeek(model=modelo, **kw)
+                       f"usando GLM: {str(_e)[:120]}")
+    return ChatGLM(model=modelo, **kw)
 
 
 # [P2-LLM-TIMEOUT-SWEEP · 2026-05-30] Timeout per-invoke compartido por los 4
@@ -218,7 +218,7 @@ Contexto:
 Responde SOLO con el título, nada más."""
         
         # [P3-FLASH-LITE-COST-CUT · 2026-05-21] Model via knob (P3-PREVIEW-MODEL-KNOB).
-        title_llm = ChatDeepSeek(
+        title_llm = ChatGLM(
             model=_plan_title_model_name(),
             temperature=0.9,
             timeout=_ai_helpers_llm_timeout_s(),  # [P2-LLM-TIMEOUT-SWEEP · 2026-05-30]
@@ -2744,8 +2744,8 @@ def expand_recipe_agent(meal_data: dict) -> Optional[list[str]]:
 
     try:
         # [P1-RECIPE-EXPAND-MODEL-PROVIDER · 2026-07-26] Proveedor por prefijo del modelo: el knob
-        # `MEALFIT_RECIPE_EXPAND_MODEL` ya existía pero `ChatDeepSeek` a secas mandaba cualquier
-        # valor al base_url de DeepSeek. Ahora puede apuntar a `gpt-5.6-luna` y funcionar.
+        # `MEALFIT_RECIPE_EXPAND_MODEL` ya existía pero `ChatGLM` a secas mandaba cualquier
+        # valor al base_url de GLM. Ahora puede apuntar a `gpt-5.6-luna` y funcionar.
         llm = _build_expand_llm(
             _recipe_expand_model_name(),  # [P1-RECIPE-EXPAND-FAILSIGNAL] knob, era hardcoded
             temperature=0.7,
@@ -2813,8 +2813,8 @@ REGLAS DE SALIDA:
 - Usa un tono clínico pero directo.
 - NO ofrezcas consejos futuros, SOLO hechos observados (ej: "El usuario respondió excelente a desayunos salados, pero rechazó todos los batidos dulces").
 """
-        llm = ChatDeepSeek(
-            model=model_free_tier(),  # [P0-DEEPSEEK-MIGRATION] aux barato (knob MEALFIT_MODEL_FREE_TIER)
+        llm = ChatGLM(
+            model=model_free_tier(),  # [P0-LLM-PROVIDER-MIGRATION] aux barato (knob MEALFIT_MODEL_FREE_TIER)
             temperature=0.2,
             timeout=_ai_helpers_llm_timeout_s(),  # [P2-LLM-TIMEOUT-SWEEP · 2026-05-30]
         )
@@ -2850,8 +2850,8 @@ Platos: {', '.join(liked_names)}
 Ejemplos de características: "Prefiere desayunos salados con plátano", "Le gustan los guisos tradicionales dominicanos con salsa", "Disfruta de proteínas a la plancha"
 """
         
-        llm = ChatDeepSeek(
-            model=model_free_tier(),  # [P0-DEEPSEEK-MIGRATION] aux barato (knob MEALFIT_MODEL_FREE_TIER)
+        llm = ChatGLM(
+            model=model_free_tier(),  # [P0-LLM-PROVIDER-MIGRATION] aux barato (knob MEALFIT_MODEL_FREE_TIER)
             temperature=0.2,
             timeout=_ai_helpers_llm_timeout_s(),  # [P2-LLM-TIMEOUT-SWEEP · 2026-05-30]
         ).with_structured_output(FlavorProfiles)

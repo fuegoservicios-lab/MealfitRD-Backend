@@ -5,7 +5,7 @@
     LLMCircuitBreaker(model_id).can_proceed()
 
 pero el primer parámetro posicional de `LLMCircuitBreaker` es `failure_threshold`, no el
-modelo. Resultado: `self.threshold = "deepseek-v4-flash"` (str) y `model_name = None`.
+modelo. Resultado: `self.threshold = "glm-5.3-flash"` (str) y `model_name = None`.
 
 Dos consecuencias, ambas silenciosas:
 
@@ -45,28 +45,28 @@ def test_dreaming_usa_kwarg_en_los_tres_call_sites():
 
 def test_posicional_con_str_se_corrige_y_grita(caplog):
     with caplog.at_level("ERROR"):
-        cb = go.LLMCircuitBreaker("deepseek-v4-flash")
+        cb = go.LLMCircuitBreaker("glm-5.3-flash")
     assert cb.threshold == 3, "el threshold vuelve al default numérico"
-    assert cb.model_name == "deepseek-v4-flash", "el modelo se interpreta como lo que era"
+    assert cb.model_name == "glm-5.3-flash", "el modelo se interpreta como lo que era"
     assert "P1-DREAMING-CB-KWARG" in caplog.text, "silencioso = el peor resultado posible"
 
 
 def test_comparacion_de_umbral_ya_no_revienta():
     """El síntoma exacto: la comparación que decide si el breaker abre."""
-    cb = go.LLMCircuitBreaker("deepseek-v4-flash")
+    cb = go.LLMCircuitBreaker("glm-5.3-flash")
     assert (3 >= cb.threshold) is True   # antes: TypeError, tragado por `except Exception: pass`
 
 
 def test_keys_recuperan_el_sufijo_por_modelo():
     """Sin sufijo, el cron del dreaming escribía sobre el breaker global legacy."""
-    cb = go.LLMCircuitBreaker("deepseek-v4-flash")
-    assert cb._failures_key == "cb:llm:failures:deepseek-v4-flash"
-    assert cb._open_key == "cb:llm:open:deepseek-v4-flash"
+    cb = go.LLMCircuitBreaker("glm-5.3-flash")
+    assert cb._failures_key == "cb:llm:failures:glm-5.3-flash"
+    assert cb._open_key == "cb:llm:open:glm-5.3-flash"
 
 
 def test_el_kwarg_explicito_gana_sobre_el_posicional():
-    cb = go.LLMCircuitBreaker("deepseek-v4-flash", model_name="deepseek-v4-pro")
-    assert cb.model_name == "deepseek-v4-pro"
+    cb = go.LLMCircuitBreaker("glm-5.3-flash", model_name="glm-5.3")
+    assert cb.model_name == "glm-5.3"
 
 
 @pytest.mark.parametrize("thr", [1, 5, 10])

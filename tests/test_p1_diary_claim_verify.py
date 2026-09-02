@@ -15,7 +15,7 @@ El journal de ese turno completo son DOS líneas: `call_model` y `Finalizado con
 El modelo NARRÓ el registro. `build_tools_instructions_stream` ya se lo prohíbe
 literalmente ("NUNCA digas 'lo registro' o 'anotado' si no llamaste la
 herramienta en ese turno") — pero eso es una instrucción, no un control. El tier
-`free` enruta a `deepseek-v4-flash` (todo lo que no sea basic/plus/ultra cae al
+`free` enruta a `glm-5.3-flash` (todo lo que no sea basic/plus/ultra cae al
 barato, fail-cheap por diseño) y flash se salta la llamada con bastante más
 frecuencia que pro.
 

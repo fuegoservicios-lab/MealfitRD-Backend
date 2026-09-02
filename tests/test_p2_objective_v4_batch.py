@@ -237,7 +237,7 @@ def test_nightly_loud_skip_and_doc():
     assert "docs/nightly_benchmark_activation.md" in yml
     assert "if: failure()" in yml, "el fallo debe dejar resumen de REGRESIÓN"
     doc = _read("docs/nightly_benchmark_activation.md")
-    for secret in ("DEEPSEEK_API_KEY", "NEON_DATABASE_URL_POOLED", "NEON_DATABASE_URL"):
+    for secret in ("ZAI_API_KEY", "NEON_DATABASE_URL_POOLED", "NEON_DATABASE_URL"):
         assert secret in doc
 
 

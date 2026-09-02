@@ -8,7 +8,7 @@ tier Y sobre el override DAYGEN_LITE_FOR_EASY. Fail-safe: detección falla → r
 `MEALFIT_BARIATRIC_DAYGEN_MODEL` (default `_FLASH_MODEL_NAME`) — el owner midió que flash es actualmente MEJOR que
 pro, lo que invalida la premisa original ("PRO más capaz para el perfil denso"). La garantía VIGENTE del branch:
 bariátrico NUNCA degrada a flash-lite y NUNCA entra al canario. Rollback per-feature:
-`MEALFIT_BARIATRIC_DAYGEN_MODEL=deepseek-v4-pro`.
+`MEALFIT_BARIATRIC_DAYGEN_MODEL=glm-5.3`.
 
 FASE 2 — few-shot en el prompt bariátrico (condition_rules): un día modelo completo (show-don't-tell) que ancla la FORMA
 (proteína primero, porciones en gramos enteros, nombre↔ingredientes, cocido, sin azúcar).
@@ -40,8 +40,8 @@ def test_bariatric_routes_to_flash_primary_attempt1(monkeypatch):
 def test_bariatric_model_knob_rollback(monkeypatch):
     # Rollback per-feature sin redeploy: el knob puede devolver el branch a pro.
     _distinct_models(monkeypatch)
-    monkeypatch.setenv("MEALFIT_BARIATRIC_DAYGEN_MODEL", "deepseek-v4-pro")
-    assert g._route_model_for_day_generator(_BAR, 1) == "deepseek-v4-pro"
+    monkeypatch.setenv("MEALFIT_BARIATRIC_DAYGEN_MODEL", "glm-5.3")
+    assert g._route_model_for_day_generator(_BAR, 1) == "glm-5.3"
 
 
 def test_non_bariatric_stays_flash_free_tier(monkeypatch):

@@ -40,7 +40,7 @@ _SC = open(os.path.join(os.path.dirname(__file__), "..", "shopping_calculator.py
 _CT = open(os.path.join(os.path.dirname(__file__), "..", "cron_tasks.py"),
            encoding="utf-8").read()
 
-# `import cron_tasks` arrastra la cadena agent→ChatDeepSeek que el venv-test rompe. Mismo
+# `import cron_tasks` arrastra la cadena agent→ChatGLM que el venv-test rompe. Mismo
 # contrato contenido que test_p1_swap_macro_repair: stub + import fresco en setup_module,
 # RESTAURACIÓN del mundo exacto en teardown (lección tree9: purgar sin restaurar contaminó
 # ~600 veredictos de la suite).
@@ -68,8 +68,8 @@ def setup_module(module):
     global ct
     _saved["cron_tasks"] = sys.modules.get("cron_tasks")
     _saved["agent"] = sys.modules.get("agent")
-    _saved["llm"] = getattr(_lp, "ChatDeepSeek", None)
-    _lp.ChatDeepSeek = _StubLLM
+    _saved["llm"] = getattr(_lp, "ChatGLM", None)
+    _lp.ChatGLM = _StubLLM
     sys.modules.pop("cron_tasks", None)
     ct = importlib.import_module("cron_tasks")
     module.ct = ct
@@ -78,7 +78,7 @@ def setup_module(module):
 
 def teardown_module(module):
     if _saved.get("llm") is not None:
-        _lp.ChatDeepSeek = _saved["llm"]
+        _lp.ChatGLM = _saved["llm"]
     for _m in ("cron_tasks", "agent"):
         if _saved.get(_m) is not None:
             sys.modules[_m] = _saved[_m]

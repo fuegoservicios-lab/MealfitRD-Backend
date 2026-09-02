@@ -9,14 +9,14 @@ import time
 import json
 from typing import TypedDict, Optional, Callable, Any, Literal
 from langgraph.graph import StateGraph, END
-# [P0-DEEPSEEK-MIGRATION · 2026-06-12] Gemini → DeepSeek. El wrapper local
-# `ChatDeepSeek` (abajo) subclasea el cliente base para backpressure +
+# [P0-LLM-PROVIDER-MIGRATION · 2026-06-12] Gemini → GLM. El wrapper local
+# `ChatGLM` (abajo) subclasea el cliente base para backpressure +
 # instrumentación; el router por tier vive en llm_provider.
 from llm_provider import (
-    ChatDeepSeek as _ChatDeepSeekBase,
+    ChatGLM as _ChatGLMBase,
     ChatOpenAI as _ChatOpenAIBase,
-    DEEPSEEK_FLASH,
-    DEEPSEEK_PRO,
+    GLM_FLASH,
+    GLM_PRO,
     GPT56_LUNA,
     GPT56_SOL,
     GPT56_TERRA,
@@ -480,7 +480,7 @@ def _self_critique_canary_cohort(state) -> str:
 # (`_days_with_same_day_protein_repeat` espeja `build_variety_report.same_day_protein_repeats`:
 # labels `_SAME_DAY_PROTEIN_GATE_LABELS`, aliases `_MAIN_PROTEIN_ALIASES`, match word-boundary sobre
 # name+ingredients). Forense plan vivo 70f802ec (2026-07-08): el self_critique corrigió Día 2/3 con
-# deepseek-v4-pro (63s) pero el gate volvió a rechazar por la MISMA causa — la corrección se logueaba
+# glm-5.3 (63s) pero el gate volvió a rechazar por la MISMA causa — la corrección se logueaba
 # "corregido" con que el LLM devolviera algo no-nulo, sin re-verificar. Como el gate determinista hace
 # bypass del LLM reviewer (guest sin restricciones) no puebla `affected_days` → el retry regeneró el
 # PLAN COMPLETO. Al marcar los días residuales `_critique_unresolved` el retry se vuelve QUIRÚRGICO
@@ -1492,14 +1492,14 @@ class _LLMBackpressureCostMixin:
     """[P1-LUNA-USAGE-BLIND · 2026-07-26] Backpressure + contabilidad de costo, extraídos a un
     mixin para que NO dependan del proveedor.
 
-    Vivían pegados a `ChatDeepSeek` y eso fue una trampa en cuanto entró un segundo proveedor:
+    Vivían pegados a `ChatGLM` y eso fue una trampa en cuanto entró un segundo proveedor:
     `P1-DAYGEN-LUNA-CANARY` hizo que `_build_day_llm` construyera el cliente vía
     `llm_provider.build_chat_llm`, que devuelve las clases BASE — sin estos overrides. Resultado
     medido en la primera corrida con Luna: el plan salió bien y `llm_usage_events` registró
     planner, compressor y self_critique… y **cero filas de `day_generator`**, el nodo más caro del
     pipeline. La telemetría no dijo "falta un modelo": dijo que el day-gen no existió.
 
-    El mismo agujero se llevaba por delante el rate limit per-user/global en el camino DeepSeek,
+    El mismo agujero se llevaba por delante el rate limit per-user/global en el camino GLM,
     porque la clase base tampoco lo trae.
 
     Aplicar a TODO cliente nuevo. tooltip-anchor: P1-LLM-BACKPRESSURE-COST-MIXIN"""
@@ -1585,8 +1585,8 @@ class _LLMBackpressureCostMixin:
             return result
 
 
-class ChatDeepSeek(_LLMBackpressureCostMixin, _ChatDeepSeekBase):
-    """Cliente DeepSeek con backpressure + contabilidad de costo.
+class ChatGLM(_LLMBackpressureCostMixin, _ChatGLMBase):
+    """Cliente GLM con backpressure + contabilidad de costo.
 
     P1-NEW-1: usa el helper compuesto `acquire_user_and_global` / `aacquire_user_and_global` que
     aplica primero el rate limit per-user (vía `PER_USER_LLM_SEMAPHORE`) y después el slot global.
@@ -1942,8 +1942,8 @@ def _is_transient_upstream_error(exc: BaseException) -> bool:
     """
     try:
         _type_name = type(exc).__name__
-        # [P1-TRANSIENT-DEEPSEEK · 2026-07-27] Taxonomía del cliente OpenAI-compatible, que es
-        # el que usa DeepSeek desde P0-DEEPSEEK-MIGRATION (2026-06-12).
+        # [P1-TRANSIENT-PRO-ERRORS · 2026-07-27] Taxonomía del cliente OpenAI-compatible, que es
+        # el que usa GLM desde P0-LLM-PROVIDER-MIGRATION (2026-06-12).
         #
         # Esta función se escribió el 2026-05-21 para las firmas de GOOGLE y NUNCA se actualizó
         # al proveedor nuevo. Resultado: `APIConnectionError` —un fallo de RED puro, el error
@@ -2111,7 +2111,7 @@ class LLMCircuitBreaker:
     def __init__(self, failure_threshold=3, reset_timeout=30, local_health_ttl=1.0,
                  model_name: str | None = None):
         # [P1-DREAMING-CB-KWARG · 2026-07-24] Auto-corrección de un error de llamada que
-        # rompía el breaker EN SILENCIO. `LLMCircuitBreaker("deepseek-v4-flash")` (posicional)
+        # rompía el breaker EN SILENCIO. `LLMCircuitBreaker("glm-5.3-flash")` (posicional)
         # dejaba `threshold` con un str: `failures >= self.threshold` lanzaba TypeError, que
         # los `except Exception: pass` de los callers se tragaban → el breaker no abría NUNCA,
         # y además las keys quedaban sin sufijo de modelo (pisando el breaker global legacy).
@@ -5128,7 +5128,7 @@ DAY_GEN_CACHE_STAGGER_MS    = _env_int  ("MEALFIT_DAY_GEN_CACHE_STAGGER_MS",    
 # calidad A/B vía `llm_usage_events.output_tokens` antes/después; subir el knob si
 # la calidad baja. Solo aplica a modelos thinking-capable (gemini-3.5-flash);
 # flash-lite NO soporta thinking_config → se omite. Tooltip-anchor: P1-COST-THINKING-CAP.
-# [P0-DEEPSEEK-MIGRATION · 2026-06-12] `DAYGEN_THINKING_BUDGET` y
+# [P0-LLM-PROVIDER-MIGRATION · 2026-06-12] `DAYGEN_THINKING_BUDGET` y
 # `EVALUATOR_THINKING_BUDGET` eliminados junto con sus helpers — eran caps
 # del reasoning de Gemini (ver nota en el bloque de helpers más abajo).
 
@@ -5143,7 +5143,7 @@ DAY_GEN_CACHE_STAGGER_MS    = _env_int  ("MEALFIT_DAY_GEN_CACHE_STAGGER_MS",    
 # macros por-porción de las proteínas/carbos principales. Tooltip-anchor: L1-UNBIND-NUTRITION-TOOL.
 DAYGEN_BIND_NUTRITION_TOOL  = _env_bool ("MEALFIT_DAYGEN_BIND_NUTRITION_TOOL",   True)
 
-# [P1-DEEPSEEK-JSON-MODE · 2026-06-13] DeepSeek-V4 flash, ante el prompt complejo
+# [P1-GLM-JSON-MODE · 2026-06-13] GLM-5.3 flash, ante el prompt complejo
 # del day-generator (schema JSON + mucho contexto), IGNORA la instrucción "responde
 # solo JSON" y emite ~18K chars de razonamiento en prosa ("Let me analyze the
 # requirements...") → `json.loads` falla → se cuenta como fallo del CB → CB OPEN →
@@ -5158,11 +5158,11 @@ DAYGEN_BIND_NUTRITION_TOOL  = _env_bool ("MEALFIT_DAYGEN_BIND_NUTRITION_TOOL",  
 DAYGEN_JSON_MODE = _env_bool("MEALFIT_DAYGEN_JSON_MODE", True)
 
 
-# [P0-DEEPSEEK-MIGRATION · 2026-06-12] `_thinking_budget_kwargs` y
+# [P0-LLM-PROVIDER-MIGRATION · 2026-06-12] `_thinking_budget_kwargs` y
 # `_evaluator_thinking_budget_kwargs` ELIMINADOS (P1-COST-THINKING-CAP /
 # P1-EVALUATOR-THINKING-CAP). Eran caps del reasoning de Gemini, que
 # facturaba como output a ~$9/M y producía runaways patológicos (day-gen
-# llegó a 19,162 tok). DeepSeek-V4 gestiona el thinking nativamente sin
+# llegó a 19,162 tok). GLM-5.3 gestiona el thinking nativamente sin
 # budget por request, y su output cuesta $0.28–0.87/M (10-30× menos) — el
 # problema de costo que motivaba el cap ya no existe. Los knobs
 # `MEALFIT_DAYGEN_THINKING_BUDGET` / `MEALFIT_EVALUATOR_THINKING_BUDGET`
@@ -5653,10 +5653,10 @@ Si DOS O MÁS scores son < 6, o si ALGÚN score es < 4, marca needs_correction=T
 # crons/loops productivos leen model ID desde knob — modelos preview pueden
 # deprecarse sin aviso (audit 2026-05-11: `gemini-3.1-pro-preview` open=true
 # 4.4 días). Knob permite swap sin redeploy.
-# [P0-DEEPSEEK-MIGRATION · 2026-06-12] DeepSeek no tiene tier "lite"; el
+# [P0-LLM-PROVIDER-MIGRATION · 2026-06-12] GLM no tiene tier "lite"; el
 # modelo barato del stack es V4 Flash. El nombre de la constante se preserva
 # (los ~10 callsites/helpers la referencian como "el default barato").
-_FLASH_LITE_DEFAULT = DEEPSEEK_FLASH
+_FLASH_LITE_DEFAULT = GLM_FLASH
 
 
 def _judge_model_name() -> str:
@@ -5669,7 +5669,7 @@ def _judge_model_name() -> str:
 # [P2-ORCH-7 · 2026-05-28] Modelo "risk-tier" para el reviewer médico y el
 # fact-checker clínico cuando el perfil declara alergias/condiciones médicas.
 # El reviewer es el ÚNICO gate LLM de seguridad clínica.
-# [P1-FLASH-PRIMARY · 2026-07-31] Era `DEEPSEEK_PRO`; el owner midió que flash
+# [P1-FLASH-PRIMARY · 2026-07-31] Era `GLM_PRO`; el owner midió que flash
 # es actualmente MEJOR que pro. Hoy esta constante es: (a) el risk-tier del
 # FACT-CHECKER, (b) el FALLBACK fail-safe del reviewer cuando el modelo
 # OpenAI del tier no es utilizable (sin OPENAI_API_KEY).
@@ -5679,7 +5679,7 @@ def _judge_model_name() -> str:
 # [-20%; medido rentable en basic: worst-case $0.73/mes = 7.3% del revenue con
 # 2.371 tok in / 213 out promedio reales de 158 calls/30d]). Ver
 # `_reviewer_model_name`.
-_REVIEWER_RISK_TIER_DEFAULT = DEEPSEEK_FLASH
+_REVIEWER_RISK_TIER_DEFAULT = GLM_FLASH
 
 # [P1-REVIEWER-TIER-MODELS · 2026-07-31] Modelos del reviewer clínico por tier.
 # Knobs per-tier (convención P3-PREVIEW-MODEL-KNOB — override sin redeploy):
@@ -5736,18 +5736,18 @@ def _reviewer_risk_model_for_tier(form_data=None) -> str:
 
 def _openai_key_available() -> bool:
     """True si hay OPENAI_API_KEY utilizable en el entorno (los modelos
-    gpt-5.6-* la requieren; sin ella el reviewer cae al fallback DeepSeek)."""
+    gpt-5.6-* la requieren; sin ella el reviewer cae al fallback GLM)."""
     return bool((os.environ.get("OPENAI_API_KEY") or "").strip())
 
 
 # [P1-DAYGEN-TIER-MODEL · 2026-07-31] Generador de DÍAS por tier. Decisión del
-# owner tras el A/B medido con el índice de calidad (2026-07-31): "deepseek
+# owner tras el A/B medido con el índice de calidad (2026-07-31): "glm
 # medium dura mucho, el ganador es gpt 5.6 luna medium; medium en plus nadamás
-# por ahora, low o sin pensamiento en gratis; deja a deepseek donde no sea
+# por ahora, low o sin pensamiento en gratis; deja a glm donde no sea
 # necesario luna". Números del A/B: luna-medium 95,4 (coherencia 90) vs flash
 # 82-92 (coherencia 57-83); luna-high PEOR que medium en todo (90,8, 3×
 # latencia); flash+thinking DESCALIFICADO (36k tokens de razonamiento, 266 s
-# por día, timeout contra el techo → plan degradado 76,9). DeepSeek flash
+# por día, timeout contra el techo → plan degradado 76,9). GLM flash
 # conserva TODOS los demás nodos (planner, critique, correctores, compressor,
 # fact-checker) y es la RED del chain del day-gen (fallback rápido SIN
 # razonamiento: la red existe para rescatar, no para profundizar).
@@ -5805,7 +5805,7 @@ def _profile_has_medical_risk(form_data) -> bool:
     return False
 
 
-# [P1-DEEPSEEK-ONLY-RESTORE · 2026-07-04] Guard observacional del gate clínico.
+# [P1-SINGLE-PROVIDER-RESTORE · 2026-07-04] Guard observacional del gate clínico.
 # Lección medida (E2E 2026-07-04): con el reviewer médico corriendo en un modelo
 # débil (flash forzado / override Gemini flash-lite) un plan DM2 pasó con carbos
 # +99% sin rechazo — el reviewer risk-tier es el ÚNICO gate LLM de seguridad
@@ -5815,7 +5815,7 @@ def _profile_has_medical_risk(form_data) -> bool:
 # (nodo, modelo) + system_alert idempotente para que el operador SEPA que el
 # gate clínico corre por debajo del risk-tier. Si el downgrade es intencional
 # (A/B, economía), la alert se resuelve manual y no re-dispara hasta el
-# próximo restart del worker. Tooltip-anchor: P1-DEEPSEEK-ONLY-RESTORE.
+# próximo restart del worker. Tooltip-anchor: P1-SINGLE-PROVIDER-RESTORE.
 _CLINICAL_MODEL_GUARD_WARNED: set = set()
 
 
@@ -5840,7 +5840,7 @@ def _warn_if_clinical_model_downgraded(node: str, resolved_model: str,
         return
     _CLINICAL_MODEL_GUARD_WARNED.add(dedup)
     logger.warning(
-        f"⚠ [P1-DEEPSEEK-ONLY-RESTORE] Gate clínico DESVIADO del risk-tier: nodo '{node}' "
+        f"⚠ [P1-SINGLE-PROVIDER-RESTORE] Gate clínico DESVIADO del risk-tier: nodo '{node}' "
         f"resolvió '{resolved}' para perfil con riesgo médico (risk-tier "
         f"esperado '{_expected}'). Revisar knobs "
         f"MEALFIT_{node.upper()}_MODEL / MEALFIT_{node.upper()}_RISK_TIER_MODEL "
@@ -5887,7 +5887,7 @@ def _warn_if_clinical_model_downgraded(node: str, resolved_model: str,
         )
     except Exception as e:
         logger.debug(
-            f"[P1-DEEPSEEK-ONLY-RESTORE] alert emit falló (best-effort): {e}"
+            f"[P1-SINGLE-PROVIDER-RESTORE] alert emit falló (best-effort): {e}"
         )
 
 
@@ -5897,7 +5897,7 @@ def _fact_checker_model_name(form_data=None) -> str:
     alergias/condiciones → risk-tier (`MEALFIT_FACT_CHECKER_RISK_TIER_MODEL`,
     default `_REVIEWER_RISK_TIER_DEFAULT` = flash desde P1-FLASH-PRIMARY);
     de lo contrario Flash (default barato).
-    [P1-DEEPSEEK-ONLY-RESTORE] Perfil con riesgo + modelo != risk-tier →
+    [P1-SINGLE-PROVIDER-RESTORE] Perfil con riesgo + modelo != risk-tier →
     WARN + system_alert (observacional, el knob sigue ganando)."""
     _override = _env_str("MEALFIT_FACT_CHECKER_MODEL", "")
     _risk = _profile_has_medical_risk(form_data)
@@ -5929,7 +5929,7 @@ def _reviewer_model_name(form_data=None) -> str:
     Fail-safe: modelo OpenAI sin `OPENAI_API_KEY` → fallback
     `_REVIEWER_RISK_TIER_DEFAULT` (flash) + alerta de desvío — el gate
     clínico NUNCA se queda sin modelo utilizable.
-    [P1-DEEPSEEK-ONLY-RESTORE] Perfil con riesgo + modelo != esperado del
+    [P1-SINGLE-PROVIDER-RESTORE] Perfil con riesgo + modelo != esperado del
     tier → WARN + system_alert (observacional, el knob sigue ganando)."""
     _risk = _profile_has_medical_risk(form_data)
     # [P1-REVIEWER-SOL-HARD] form_data viaja al resolver: plus/ultra escalan a
@@ -6053,41 +6053,41 @@ def _sanitize_form_data_for_prompt(form_data: dict) -> dict:
 #
 # Defaults preservan comportamiento actual. Tooltip-anchor: P3-PLAN-MODEL-KNOBS.
 def _plan_pro_model_name() -> str:
-    # [P0-DEEPSEEK-MIGRATION · 2026-06-12] Nació como "modelo del TIER PAGADO".
+    # [P0-LLM-PROVIDER-MIGRATION · 2026-06-12] Nació como "modelo del TIER PAGADO".
     # [P1-FLASH-PRIMARY · 2026-07-31] Re-scoped: ya NO es el modelo de ningún
     # tier (todos van a flash). `_PRO_MODEL_NAME` es EXCLUSIVAMENTE la RED
     # post-fallo: 2º en la cadena del day-gen, fallback del planner con breaker
     # abierto, escalada del corrector quirúrgico, EVALUATOR_USE_PRO.
     # [P1-NET-LUNA · 2026-07-31] Default de la red → `gpt-5.6-luna` (OpenAI).
     # Razón (decisión owner): flash y pro son el MISMO proveedor — el incidente
-    # que motivó la red (breaker abierto 172× en el gym baseline) fue DeepSeek
+    # que motivó la red (breaker abierto 172× en el gym baseline) fue GLM
     # rate-limiteando bajo carga, y en ese modo de fallo pro cae JUNTO con
     # flash. Luna es proveedor DISTINTO (infra/key/límites propios): diversidad
-    # real. Simetría: el pipeline (DeepSeek) cae a OpenAI; el reviewer clínico
-    # (OpenAI) cae a DeepSeek (P1-REVIEWER-TIER-MODELS).
-    # Fail-safe: sin OPENAI_API_KEY utilizable, la red vuelve a DEEPSEEK_PRO —
+    # real. Simetría: el pipeline (GLM) cae a OpenAI; el reviewer clínico
+    # (OpenAI) cae a GLM (P1-REVIEWER-TIER-MODELS).
+    # Fail-safe: sin OPENAI_API_KEY utilizable, la red vuelve a GLM_PRO —
     # nunca te quedas sin red por una key. Se resuelve al boot (los constantes
     # module-level no se re-leen; cambiar key/knob ⇒ restart del worker).
     # Colapsar la red a flash sigue prohibido: cada fallback sería un no-op
     # contra el mismo breaker roto (P1-DAYGEN-RETRY-FLASH-NET,
     # P1-PLANNER-PRO-FALLBACK). Rollback sin redeploy:
-    # `MEALFIT_PRO_MODEL=deepseek-v4-pro`.
+    # `MEALFIT_PRO_MODEL=glm-5.3`.
     _configured = _env_str("MEALFIT_PRO_MODEL", GPT56_LUNA) or GPT56_LUNA
     if is_openai_model(_configured) and not _openai_key_available():
         logger.warning(
             f"⚠ [P1-NET-LUNA] La red post-fallo '{_configured}' requiere OPENAI_API_KEY "
-            f"y no está en el entorno → fail-safe a '{DEEPSEEK_PRO}' (red intra-provider)."
+            f"y no está en el entorno → fail-safe a '{GLM_PRO}' (red intra-provider)."
         )
-        return DEEPSEEK_PRO
+        return GLM_PRO
     return _configured
 
 
 def _plan_flash_model_name() -> str:
-    # [P0-DEEPSEEK-MIGRATION · 2026-06-12] El "modelo FLASH" del pipeline es
-    # el modelo del TIER GRATIS y de los paths force_fast/aux: DeepSeek V4
+    # [P0-LLM-PROVIDER-MIGRATION · 2026-06-12] El "modelo FLASH" del pipeline es
+    # el modelo del TIER GRATIS y de los paths force_fast/aux: GLM-5.3
     # Flash ($0.14/M in · $0.28/M out). Rollback/swap sin redeploy:
     # `MEALFIT_FLASH_MODEL=<model-id>`.
-    return _env_str("MEALFIT_FLASH_MODEL", DEEPSEEK_FLASH)
+    return _env_str("MEALFIT_FLASH_MODEL", GLM_FLASH)
 
 
 def _planner_model_name() -> str:
@@ -6103,9 +6103,9 @@ def _planner_model_name() -> str:
     legacy sin redeploy.
 
     Rollback sin redeploy: `MEALFIT_PLANNER_MODEL=""` (cadena vacía) restaura
-    el ruteo dinámico. O `MEALFIT_PLANNER_MODEL=deepseek-v4-pro` fuerza Pro.
+    el ruteo dinámico. O `MEALFIT_PLANNER_MODEL=glm-5.3` fuerza Pro.
     """
-    return _env_str("MEALFIT_PLANNER_MODEL", DEEPSEEK_FLASH)
+    return _env_str("MEALFIT_PLANNER_MODEL", GLM_FLASH)
 
 
 def _self_critique_model_name() -> str:
@@ -6156,9 +6156,9 @@ def _compressor_model_name() -> str:
     Costo 14d prod: $0.017/14d (1 evento) → $0.003/14d con lite. Centavos
     ahorro; el valor es estructural (limpia el hot-path de aux nodes).
 
-    Rollback sin redeploy: `MEALFIT_COMPRESSOR_MODEL=deepseek-v4-pro`.
+    Rollback sin redeploy: `MEALFIT_COMPRESSOR_MODEL=glm-5.3`.
     """
-    return _env_str("MEALFIT_COMPRESSOR_MODEL", DEEPSEEK_FLASH)
+    return _env_str("MEALFIT_COMPRESSOR_MODEL", GLM_FLASH)
 
 
 def _meta_learning_model_name() -> str:
@@ -6176,9 +6176,9 @@ def _meta_learning_model_name() -> str:
     Costo 14d prod: $0.019/14d (4 eventos) → $0.003/14d con lite. Ahorro
     marginal en absoluto pero ~84% relativo del node.
 
-    Rollback sin redeploy: `MEALFIT_META_LEARNING_MODEL=deepseek-v4-pro`.
+    Rollback sin redeploy: `MEALFIT_META_LEARNING_MODEL=glm-5.3`.
     """
-    return _env_str("MEALFIT_META_LEARNING_MODEL", DEEPSEEK_FLASH)
+    return _env_str("MEALFIT_META_LEARNING_MODEL", GLM_FLASH)
 
 
 # Module-level constants preserved para compatibilidad con los 34 callsites
@@ -6192,7 +6192,7 @@ _FLASH_MODEL_NAME = _plan_flash_model_name()
 # [P1-PLANNER-PRO-FALLBACK · 2026-06-26] El planificador (esqueleto) corría SOLO en flash sin red de
 # seguridad: si el breaker COMPARTIDO de flash se abría bajo carga concurrente (otros usuarios
 # generando) o flash timeouteaba 3×, el nodo moría → EXTREME GRACEFUL DEGRADATION → plan de emergencia
-# band-0.0 ("IA saturada") AUNQUE DeepSeek estuviera sano. El self-critique YA cae a pro cuando flash
+# band-0.0 ("IA saturada") AUNQUE GLM estuviera sano. El self-critique YA cae a pro cuando flash
 # falla; el planner no. Con esto ON, el planner reintenta UNA vez con pro (breaker independiente, menos
 # cargado) antes de degradar. Flip a False → comportamiento previo (flash-only, degrada a emergencia).
 PLANNER_PRO_FALLBACK_ENABLED = _env_bool("MEALFIT_PLANNER_PRO_FALLBACK_ENABLED", True)
@@ -6253,9 +6253,9 @@ async def _attempt_pro_critique_correction(
         # function_calling → json_mode (el prompt ya exige "misma estructura JSON" y adjunta el
         # día actual como plantilla). Si el parse falla → None, mismo contrato fail-safe de hoy.
         # [P1-NET-LUNA · 2026-07-31] Dispatch por proveedor: la red puede ser un modelo OpenAI
-        # (gpt-5.6-luna default) — construirlo con ChatDeepSeek lo mandaría al base_url de
-        # DeepSeek con la key equivocada (lección P1-DAYGEN-LUNA-CANARY, ahora en TODOS los
-        # consumidores de _PRO_MODEL_NAME). El thinking extra_body es DeepSeek-only → la rama
+        # (gpt-5.6-luna default) — construirlo con ChatGLM lo mandaría al base_url de
+        # GLM con la key equivocada (lección P1-DAYGEN-LUNA-CANARY, ahora en TODOS los
+        # consumidores de _PRO_MODEL_NAME). El thinking extra_body es GLM-only → la rama
         # se salta para OpenAI.
         _net_is_openai = is_openai_model(_PRO_MODEL_NAME)
         if SURGICAL_PRO_THINKING_ENABLED and not _net_is_openai:
@@ -6263,7 +6263,7 @@ async def _attempt_pro_critique_correction(
             _surg_think_body = {"type": "enabled"}
             if SURGICAL_PRO_THINKING_EFFORT:
                 _surg_think_body["effort"] = SURGICAL_PRO_THINKING_EFFORT
-            pro_corrector = ChatDeepSeek(
+            pro_corrector = ChatGLM(
                 model=_PRO_MODEL_NAME,
                 temperature=0.3,
                 max_retries=0,
@@ -6274,7 +6274,7 @@ async def _attempt_pro_critique_correction(
                 logger.info(f"🧠 {log_prefix} Corrector quirúrgico Pro con thinking "
                             f"(effort={SURGICAL_PRO_THINKING_EFFORT}).")
         else:
-            pro_corrector = (ChatOpenAIInstrumented if _net_is_openai else ChatDeepSeek)(
+            pro_corrector = (ChatOpenAIInstrumented if _net_is_openai else ChatGLM)(
                 model=_PRO_MODEL_NAME,
                 temperature=0.3,
                 max_retries=0,
@@ -6309,7 +6309,7 @@ async def _attempt_pro_critique_correction(
         # path del corrector. tooltip-anchor: P3-CORRECTOR-NONE-DIAGNOSTIC
         if CORRECTOR_NONE_DIAGNOSTIC_ENABLED:
             try:
-                _raw_llm = (ChatOpenAIInstrumented if _net_is_openai else ChatDeepSeek)(
+                _raw_llm = (ChatOpenAIInstrumented if _net_is_openai else ChatGLM)(
                     model=_PRO_MODEL_NAME, temperature=0.3, max_retries=0,
                     timeout=int(CRITIQUE_PRO_FALLBACK_TIMEOUT_S),
                 )  # SIN with_structured_output → devuelve el AIMessage crudo
@@ -6409,12 +6409,12 @@ DAYGEN_EASY_MODEL = _env_str("MEALFIT_DAYGEN_EASY_MODEL", _FLASH_LITE_DEFAULT) o
 # degradado es peor UX que un plan PRO bien generado).
 BARIATRIC_DAYGEN_PRO = _env_bool("MEALFIT_BARIATRIC_DAYGEN_PRO", True)
 
-# [P1-DEEPSEEK-FLASH-FIRST · 2026-06-28] Cascada de modelos del day generator (el grueso del gasto LLM) por COSTO, SOLO
-# DeepSeek (GLM eliminado — su tier gratis rate-limitea hasta ser inusable, 429 en 1 sola llamada). Intención del owner:
-# deepseek-v4-flash es SUFICIENTE por default; deepseek-v4-pro SOLO cuando flash no alcanza. Por eso:
-#   - attempt 1 → [deepseek-v4-flash, deepseek-v4-pro]: flash primario; pro SOLO si el call de flash FALLA (API/timeout/CB).
-#   - attempt > 1 (el plan de flash fue RECHAZADO por el revisor → flash no fue suficiente) → [deepseek-v4-pro].
-#   - bariátrico → [deepseek-v4-pro] directo (perfil clínico más difícil).
+# [P1-FLASH-FIRST · 2026-06-28] Cascada de modelos del day generator (el grueso del gasto LLM) por COSTO, SOLO
+# GLM (GLM eliminado — su tier gratis rate-limitea hasta ser inusable, 429 en 1 sola llamada). Intención del owner:
+# glm-5.3-flash es SUFICIENTE por default; glm-5.3 SOLO cuando flash no alcanza. Por eso:
+#   - attempt 1 → [glm-5.3-flash, glm-5.3]: flash primario; pro SOLO si el call de flash FALLA (API/timeout/CB).
+#   - attempt > 1 (el plan de flash fue RECHAZADO por el revisor → flash no fue suficiente) → [glm-5.3].
+#   - bariátrico → [glm-5.3] directo (perfil clínico más difícil).
 # Minimiza costo/llamadas: en el caso normal el día se genera con UNA llamada flash (pro solo en fallo/rechazo). El revisor
 # médico/fact-checker mantienen su routing risk-tier (pro para condiciones). Knob de escalada: MEALFIT_DAY_GEN_RETRY_USE_PRO.
 
@@ -6472,7 +6472,7 @@ CULINARY_JUDGE_GUARD = (_env_str("MEALFIT_CULINARY_JUDGE_GUARD", "off") or "off"
 if CULINARY_JUDGE_GUARD not in ("off", "warn", "block"):
     CULINARY_JUDGE_GUARD = "off"   # fail-safe: valor raro ⇒ el juez se queda apagado
 CULINARY_JUDGE_MODEL = _env_str("MEALFIT_CULINARY_JUDGE_MODEL", _FLASH_MODEL_NAME) or _FLASH_MODEL_NAME
-# [P1-REVIEWER-THINKING pattern] `extra_body.thinking` es DeepSeek-only — nace OFF (misma
+# [P1-REVIEWER-THINKING pattern] `extra_body.thinking` es GLM-only — nace OFF (misma
 # convención medir→actuar que MEALFIT_REVIEWER_THINKING). Cuando ON, `run_culinary_judge` solo
 # lo activa si el modelo resuelto NO es OpenAI (gpt-5.6 razona nativo sin este knob).
 CULINARY_JUDGE_THINKING = _env_bool("MEALFIT_CULINARY_JUDGE_THINKING", False)
@@ -6569,7 +6569,7 @@ def _build_culinary_judge_rubric() -> str:
     """[P1-CULINARY-JUDGE] Construye la rúbrica ESTABLE del juez culinario — llamada UNA sola
     vez a import-time, asignada abajo a `_CULINARY_JUDGE_RUBRIC`. El prefix del prompt (este
     string, vía SystemMessage) debe ser byte-a-byte idéntico entre invocaciones para que
-    DeepSeek dé cache hits sobre el bloque grande y estable; el payload variable (los platos
+    GLM dé cache hits sobre el bloque grande y estable; el payload variable (los platos
     del plan a juzgar) va aparte, en el HumanMessage de `run_culinary_judge`.
 
     Fuentes: hasta 10 nombres de ejemplo por slot desde `data/dish_templates.json` (slots en
@@ -6653,11 +6653,11 @@ def _build_culinary_judge_rubric() -> str:
 
 
 # Construida UNA vez a import-time (no por-llamada): estable byte-a-byte ⇒ cache hits de
-# DeepSeek sobre este prefix en cada invocación de `run_culinary_judge`.
+# GLM sobre este prefix en cada invocación de `run_culinary_judge`.
 _CULINARY_JUDGE_RUBRIC = _build_culinary_judge_rubric()
 
 # [P1-COUNTRY-SYSTEM-F1 · 2026-08-16] (T3) Variante por país del prefix del juez — DO usa el
-# MISMO objeto ya cacheado arriba (byte-identidad, cache DeepSeek intacto); beta sustituye SOLO
+# MISMO objeto ya cacheado arriba (byte-identidad, cache GLM intacto); beta sustituye SOLO
 # la frase de apertura ("Eres un juez culinario dominicano experto" → "...experto en la cocina
 # de {name_es} y cocina internacional"), reusando el resto de la rúbrica (ejemplos curados del
 # catálogo + reglas duras de horario) SIN releer dish_templates.json de nuevo — los ejemplos
@@ -6813,19 +6813,19 @@ async def run_culinary_judge(plan: dict, country: str = "DO"):
     try:
         _model = CULINARY_JUDGE_MODEL
         _is_openai = is_openai_model(_model)
-        # [P1-REVIEWER-THINKING pattern · 2026-07-05] thinking (extra_body) es DeepSeek-only —
+        # [P1-REVIEWER-THINKING pattern · 2026-07-05] thinking (extra_body) es GLM-only —
         # nunca se activa sobre un modelo OpenAI (gpt-5.6 razona nativo sin este knob). thinking
         # no soporta el tool_choice forzado de function_calling → json_mode en su lugar.
         _use_thinking = bool(CULINARY_JUDGE_THINKING and not _is_openai)
         if _use_thinking:
-            _llm = ChatDeepSeek(
+            _llm = ChatGLM(
                 model=_model, temperature=0.1, max_retries=0,
                 timeout=CULINARY_JUDGE_TIMEOUT_S,
                 extra_body={"thinking": {"type": "enabled"}},
             )
             _judge = _llm.with_structured_output(CulinaryJudgeReport, method="json_mode")
         else:
-            _llm = (ChatOpenAIInstrumented if _is_openai else ChatDeepSeek)(
+            _llm = (ChatOpenAIInstrumented if _is_openai else ChatGLM)(
                 model=_model, temperature=0.1, max_retries=0,
                 timeout=CULINARY_JUDGE_TIMEOUT_S,
             )
@@ -6855,21 +6855,21 @@ async def run_culinary_judge(plan: dict, country: str = "DO"):
 #
 # Cada proveedor tiene SU vocabulario y el knob habla los dos con alias
 # (verificado contra la doc oficial de luna que aportó el owner 2026-07-31, y
-# contra el contrato DeepSeek ya usado por el reviewer/fact-checker):
+# contra el contrato GLM ya usado por el reviewer/fact-checker):
 #   OpenAI gpt-5.6 (`reasoning_effort`): none · low · medium · high · xhigh
-#   DeepSeek (`extra_body.thinking.effort`): low · medium · high · max
-#   Alias: `max`→`xhigh` en OpenAI; `xhigh`→`max` en DeepSeek. Así "el tope"
+#   GLM (`extra_body.thinking.effort`): low · medium · high · max
+#   Alias: `max`→`xhigh` en OpenAI; `xhigh`→`max` en GLM. Así "el tope"
 #   se pide igual sin memorizar qué palabra usa cada API. La primera versión
 #   de este knob usaba el vocabulario clásico (minimal..high) y por eso "luna
 #   al máximo" era IMPEDIBLE de pedir.
 #
 # ⚠️ LO QUE ESTE REPO YA MIDIÓ sobre razonar en superficies de OUTPUT GRANDE:
-# el day-gen DeepSeek con thinking superó los 170 s en 2026-06-13 (motivo del
-# apagado global P1-DEEPSEEK-THINKING-OFF) y el corrector quirúrgico pasó de
+# el day-gen GLM con thinking superó los 170 s en 2026-06-13 (motivo del
+# apagado global P1-PROVIDER-THINKING-DEFAULT) y el corrector quirúrgico pasó de
 # 17 s a timeout de 120 s. El tope del day-gen es 90 s: probar efforts altos
 # exige subir MEALFIT_DAYGEN_EFFORT_TIMEOUT_S a la vez, o cada llamada morirá
 # en timeout y el A/B medirá la red, no el modelo. El razonamiento se factura
-# como OUTPUT (luna $1,20/M; DeepSeek $0,28/M — ahí el coste del thinking es
+# como OUTPUT (luna $1,20/M; GLM $0,28/M — ahí el coste del thinking es
 # casi gratis y el riesgo es solo la latencia).
 DAYGEN_EFFORT = (_env_str("MEALFIT_DAYGEN_EFFORT", "") or "").strip().lower()
 if DAYGEN_EFFORT not in ("", "none", "low", "medium", "high", "xhigh", "max"):
@@ -6902,7 +6902,7 @@ def _daygen_model_canary_cohort(form_data: dict) -> str:
 
 
 def _day_model_chain(form_data: dict, attempt: int, prev_rejection_reasons=None) -> list:
-    """[P1-DEEPSEEK-FLASH-FIRST · 2026-06-28] CADENA de modelos a intentar para generar UN día. El day-gen avanza al
+    """[P1-FLASH-FIRST · 2026-06-28] CADENA de modelos a intentar para generar UN día. El day-gen avanza al
     siguiente en cada fallo (reintentos de tenacity) o si el CB del modelo está abierto.
     [P1-FLASH-PRIMARY · 2026-07-31] Decisión del owner: flash es actualmente MEJOR que pro (la premisa "pro razona
     mejor" de 2026-06 caducó). TODA superficie va flash-PRIMERO; pro queda EXCLUSIVAMENTE de red de diversidad
@@ -6910,7 +6910,7 @@ def _day_model_chain(form_data: dict, attempt: int, prev_rejection_reasons=None)
     invertidos):
       - BARIÁTRICO → [flash, pro] (era [pro] a secas bajo la premisa vieja; sigue saltándose el canario Luna
         y el downgrade lite — esa garantía se conserva con el early-return). Reusa _is_bariatric_condition.
-      - attempt 1 Y retries → [deepseek-v4-flash, deepseek-v4-pro]: flash primario (en el retry lleva además la
+      - attempt 1 Y retries → [glm-5.3-flash, glm-5.3]: flash primario (en el retry lleva además la
         directiva correctiva); pro SOLO si el call de flash falla o su breaker está abierto.
     Dedup preservando orden (si MEALFIT_FLASH_MODEL==pro, queda [pro])."""
     # Bariátrico: flash primario + pro de red, sin canario ni lite (early-return deliberado).
@@ -6923,9 +6923,9 @@ def _day_model_chain(form_data: dict, attempt: int, prev_rejection_reasons=None)
     # Retry tras rechazo: flash no fue suficiente → PRO para el reintento.
     # [P1-DAYGEN-RETRY-FLASH-NET · 2026-07-03] (residuo del gym baseline: 2/20 planes cayeron a
     # fallback MATEMÁTICO total — uno maintenance SIN condiciones) El chain de retry era [pro]
-    # A SECAS: con el circuit breaker de deepseek-v4-pro abierto (rate-limit/fallos en ráfaga),
+    # A SECAS: con el circuit breaker de glm-5.3 abierto (rate-limit/fallos en ráfaga),
     # los intentos 2..N no tenían NINGÚN modelo utilizable → "Circuit Breaker OPEN para todo el
-    # chain ['deepseek-v4-pro']" → todos los workers muertos → plan de contingencia matemático.
+    # chain ['glm-5.3']" → todos los workers muertos → plan de contingencia matemático.
     # Flash queda como RED de última instancia del retry: un día real generado por flash (que
     # los gates de review validan igual) es estrictamente mejor que un día matemático. PRO
     # sigue PRIMERO (calidad del retry intacta con breaker sano); el cascade solo cae a flash
@@ -6954,7 +6954,7 @@ def _day_model_chain(form_data: dict, attempt: int, prev_rejection_reasons=None)
     # Medido: el modelo caro cuesta ~USD 0,102 por plan de 3 días contra ~0,010 de flash (11,6×
     # por token). En el intento 1 se paga en TODOS los planes, incluidos los ~2 de cada 3 que el
     # modelo barato ya resuelve bien — y los datos de hoy no muestran que lo valga: con el
-    # contrato de fruta arreglado, DeepSeek entregó banda 1.00 sin reintentos.
+    # contrato de fruta arreglado, GLM entregó banda 1.00 sin reintentos.
     #
     # En el reintento la aritmética se invierte: sólo llegan ahí los planes donde el barato YA
     # demostró que no pudo, así que el sobrecoste esperado cae a ~0,03/plan de media. Y el
@@ -7002,7 +7002,7 @@ def _route_model_for_day_generator(
     # [P1-FLASH-PRIMARY · 2026-07-31] Era `return _PRO_MODEL_NAME` con la nota medida "FLASH no retiene las reglas
     # bariátricas" (medición de la era pro>flash — los providers actualizan modelos bajo el mismo ID y el owner midió
     # que hoy flash es MEJOR). El valor vigente del branch: garantizar que bariátrico NUNCA degrada a lite. Rollback
-    # per-feature sin redeploy: `MEALFIT_BARIATRIC_DAYGEN_MODEL=deepseek-v4-pro` (convención P3-PREVIEW-MODEL-KNOB).
+    # per-feature sin redeploy: `MEALFIT_BARIATRIC_DAYGEN_MODEL=glm-5.3` (convención P3-PREVIEW-MODEL-KNOB).
     if BARIATRIC_DAYGEN_PRO:
         try:
             from condition_rules import detect_active_rules
@@ -7047,13 +7047,13 @@ def _route_model_for_day_generator(
 def _route_model(form_data: dict, attempt: int = 1, force_fast: bool = False) -> str:
     """Mejora 1: Ruteo Dinámico de Modelos (Cost/Latency Routing).
 
-    [P0-DEEPSEEK-MIGRATION · 2026-06-12] El ruteo ahora es POR TIER DE
+    [P0-LLM-PROVIDER-MIGRATION · 2026-06-12] El ruteo ahora es POR TIER DE
     SUSCRIPCIÓN (decisión de producto 2026-06-12):
       - `gratis` / guests / tier irresoluble → `_FLASH_MODEL_NAME` (V4 Flash)
       - `basic` / `plus` / `ultra` (pagados) → `resolve_model_for_tier(tier)`
         (SSOT llm_provider; [P1-FLASH-PRIMARY · 2026-07-31] default flash —
         el owner midió que flash es actualmente mejor que pro. Rollback:
-        `MEALFIT_MODEL_PAID_TIER=deepseek-v4-pro` sin redeploy. Antes esta
+        `MEALFIT_MODEL_PAID_TIER=glm-5.3` sin redeploy. Antes esta
         rama retornaba `_PRO_MODEL_NAME`, que queda re-scoped como modelo de
         RED post-fallo, ver `_plan_pro_model_name`).
 
@@ -7319,14 +7319,14 @@ async def context_compression_node(state: PlanState) -> dict:
     
     # P1-Q3: capturar el modelo para usar el CB per-modelo.
     # [P3-COST-CUT-AUX · 2026-05-22] Usar helper `_compressor_model_name()`
-    # (knob `MEALFIT_COMPRESSOR_MODEL`, default DeepSeek V4 Flash) en
+    # (knob `MEALFIT_COMPRESSOR_MODEL`, default GLM-5.3 Flash) en
     # lugar del ruteo dinámico — la compresión es síntesis textual literal,
-    # no requiere razonamiento Pro. Rollback: setear el knob a deepseek-v4-pro.
-    # [P0-DEEPSEEK-MIGRATION] Usa el wrapper module-level ChatDeepSeek
+    # no requiere razonamiento Pro. Rollback: setear el knob a glm-5.3.
+    # [P0-LLM-PROVIDER-MIGRATION] Usa el wrapper module-level ChatGLM
     # (backpressure + instrumentación), igual que el resto de nodos.
     _compressor_model = _compressor_model_name()
     _cb = _get_circuit_breaker(_compressor_model)
-    compressor_llm = ChatDeepSeek(
+    compressor_llm = ChatGLM(
         model=_compressor_model,
         temperature=0.0,
         max_retries=1
@@ -7605,9 +7605,9 @@ async def plan_skeleton_node(state: PlanState) -> dict:
         logger.info(f"🔀 [RETRY MUTATION] Modelo '{planner_model}' + temp={base_temp} para intento {attempt}")
 
     # [P1-NET-LUNA · 2026-07-31] Dispatch por proveedor: `MEALFIT_PLANNER_MODEL` puede apuntar
-    # a un modelo OpenAI — ChatDeepSeek lo mandaría al base_url equivocado (trampa latente
+    # a un modelo OpenAI — ChatGLM lo mandaría al base_url equivocado (trampa latente
     # hermana de la del corrector quirúrgico; misma clase P1-DAYGEN-LUNA-CANARY).
-    planner_llm = (ChatOpenAIInstrumented if is_openai_model(planner_model) else ChatDeepSeek)(
+    planner_llm = (ChatOpenAIInstrumented if is_openai_model(planner_model) else ChatGLM)(
         model=planner_model,
         temperature=base_temp,
         max_retries=0,
@@ -7673,7 +7673,7 @@ async def plan_skeleton_node(state: PlanState) -> dict:
     except Exception as _planner_flash_err:
         # [P1-PLANNER-PRO-FALLBACK · 2026-06-26] Sin esta red, si el breaker COMPARTIDO de flash se abre
         # bajo carga concurrente (otros usuarios), o flash timeoutea 3×, el planner muere → EXTREME
-        # GRACEFUL DEGRADATION → plan de emergencia band-0.0 ("IA saturada") con DeepSeek SANO (incidente
+        # GRACEFUL DEGRADATION → plan de emergencia band-0.0 ("IA saturada") con GLM SANO (incidente
         # user d4bc3af5, corr=0dcc4bf8, 2026-06-26 07:25: breaker flash abierto por un user vegano
         # concurrente). 1 intento con PRO (breaker independiente, menos cargado) antes de degradar. Si el
         # planner YA es pro (paid/forced) o pro también falla → degradación genuina. Anchor: P1-PLANNER-PRO-FALLBACK.
@@ -7684,9 +7684,9 @@ async def plan_skeleton_node(state: PlanState) -> dict:
                 f"reintentando esqueleto con '{_PRO_MODEL_NAME}'."
             )
             # [P1-NET-LUNA · 2026-07-31] La red default es gpt-5.6-luna (OpenAI, proveedor
-            # DISTINTO): justo en este path — DeepSeek saturado — es donde la diversidad de
-            # proveedor vale oro (con pro, un rate-limit de DeepSeek tumbaba flash Y la red).
-            _pro_planner_llm = (ChatOpenAIInstrumented if is_openai_model(_PRO_MODEL_NAME) else ChatDeepSeek)(
+            # DISTINTO): justo en este path — GLM saturado — es donde la diversidad de
+            # proveedor vale oro (con pro, un rate-limit de GLM tumbaba flash Y la red).
+            _pro_planner_llm = (ChatOpenAIInstrumented if is_openai_model(_PRO_MODEL_NAME) else ChatGLM)(
                 model=_PRO_MODEL_NAME, temperature=base_temp, max_retries=0, timeout=90,
             ).with_structured_output(PlanSkeletonModel)
             _pro_planner_cb = _get_circuit_breaker(_PRO_MODEL_NAME)
@@ -8603,8 +8603,8 @@ async def generate_days_parallel_node(state: PlanState) -> dict:
             _nc_country = country_for_form_data(form_data)
             prompt_text = dynamic_day_prompt + _bdgsp_nc((form_data or {}).get("dietType"), _nc_country)
 
-        # [P1-DEEPSEEK-FLASH-FIRST · 2026-06-28] CADENA de modelos por costo (solo DeepSeek): deepseek-v4-flash → deepseek-v4-pro
-        # (bariátrico → [deepseek-v4-pro]). El day-gen avanza al siguiente en CADA fallo (los 3 reintentos de tenacity) o si
+        # [P1-FLASH-FIRST · 2026-06-28] CADENA de modelos por costo (solo GLM): glm-5.3-flash → glm-5.3
+        # (bariátrico → [glm-5.3]). El day-gen avanza al siguiente en CADA fallo (los 3 reintentos de tenacity) o si
         # el CB del modelo actual está abierto. Reusa el escalado skeleton-fidelity de P4-MODEL-1 dentro de _day_model_chain.
         _day_chain = _day_model_chain(
             form_data,
@@ -8616,7 +8616,7 @@ async def generate_days_parallel_node(state: PlanState) -> dict:
         from tools_nutrition import NUTRITION_TOOLS, consultar_nutricion
 
         def _build_day_llm(_model: str):
-            """[P1-DEEPSEEK-FLASH-FIRST] Construye el LLM (+tools/json) para UN modelo del chain (deepseek-v4-flash/pro).
+            """[P1-FLASH-FIRST] Construye el LLM (+tools/json) para UN modelo del chain (glm-5.3-flash/pro).
             JSON mode incompatible con tool-calling → no bindea tools."""
             _kw = dict(
                 model=_model,
@@ -8625,12 +8625,12 @@ async def generate_days_parallel_node(state: PlanState) -> dict:
                 timeout=90,
             )
             if DAYGEN_JSON_MODE:
-                # [P1-DEEPSEEK-JSON-MODE · 2026-06-13] Fuerza salida JSON válida (GLM y DeepSeek lo soportan).
+                # [P1-GLM-JSON-MODE · 2026-06-13] Fuerza salida JSON válida (GLM y GLM lo soportan).
                 # [P1-DAYGEN-LUNA-CANARY · 2026-07-26] Verificado que gpt-5.6-luna también lo soporta.
                 _kw["model_kwargs"] = {"response_format": {"type": "json_object"}}
             # [P1-DAYGEN-LUNA-CANARY · 2026-07-26] Proveedor por prefijo del modelo — esto es lo
             # que el comentario de arriba prometía ("provider correcto por prefijo") y no hacía:
-            # con un modelo OpenAI en el chain, `ChatDeepSeek` lo mandaría al base_url de DeepSeek
+            # con un modelo OpenAI en el chain, `ChatGLM` lo mandaría al base_url de GLM
             # con la key equivocada.
             # [P1-LUNA-USAGE-BLIND · 2026-07-26] Se construyen las clases LOCALES, no la fábrica
             # `llm_provider.build_chat_llm`: la fábrica devuelve las bases, sin el mixin de
@@ -8655,15 +8655,12 @@ async def generate_days_parallel_node(state: PlanState) -> dict:
                 _kw["timeout"] = DAYGEN_EFFORT_TIMEOUT_S
                 if _es_openai:
                     _kw["reasoning_effort"] = "xhigh" if _eff == "max" else _eff
-                elif _eff != "none":
-                    # DeepSeek: extra_body explícito GANA sobre el disabled-default
-                    # del wrapper (merge por setdefault). "none" no inyecta nada:
-                    # el default del wrapper ya es thinking apagado.
-                    _kw["extra_body"] = {"thinking": {
-                        "type": "enabled",
-                        "effort": "max" if _eff == "xhigh" else _eff,
-                    }}
-            _llm = (ChatOpenAIInstrumented if _es_openai else ChatDeepSeek)(**_kw)
+                else:
+                    # [P0-GLM-MIGRATION · 2026-09-02] GLM razona siempre; el effort
+                    # del tier va como `reasoning_effort` y el wrapper lo traduce al
+                    # vocabulario de Z.ai (medium→high, xhigh→max, none→low).
+                    _kw["reasoning_effort"] = _eff
+            _llm = (ChatOpenAIInstrumented if _es_openai else ChatGLM)(**_kw)
             if DAYGEN_BIND_NUTRITION_TOOL and not DAYGEN_JSON_MODE:
                 return _llm.bind_tools(NUTRITION_TOOLS)
             # [L1-UNBIND-NUTRITION-TOOL] tool des-enlazada (la tabla viaja en el SystemMessage cacheado).
@@ -8705,7 +8702,7 @@ async def generate_days_parallel_node(state: PlanState) -> dict:
             before_sleep=lambda rs: logger.warning(f"⚠️  [DÍA {day_num}] Reintento #{rs.attempt_number}...")
         )
         async def invoke_day():
-            # [P1-DEEPSEEK-FLASH-FIRST] Selección de modelo del chain con cascada: usa el idx actual (avanza en cada fallo) y, si
+            # [P1-FLASH-FIRST] Selección de modelo del chain con cascada: usa el idx actual (avanza en cada fallo) y, si
             # el CB de ese modelo está abierto, salta al siguiente del chain DENTRO de esta misma llamada. Construye el
             # LLM (provider correcto por prefijo) para el modelo elegido.
             _idx = min(_chain_state["idx"], len(_day_chain) - 1)
@@ -8720,7 +8717,7 @@ async def generate_days_parallel_node(state: PlanState) -> dict:
                 raise LLMCircuitOpenError(f"Circuit Breaker OPEN para todo el chain {_day_chain} - LLM cascade failure prevented")
             day_llm_with_tools = _build_day_llm(day_model)
             if _idx > 0:
-                logger.info(f"🔻 [P1-DEEPSEEK-FLASH-FIRST] DÍA {day_num}: escalada a modelo #{_idx+1}/{len(_day_chain)} ({day_model}) "
+                logger.info(f"🔻 [P1-FLASH-FIRST] DÍA {day_num}: escalada a modelo #{_idx+1}/{len(_day_chain)} ({day_model}) "
                             f"tras fallo del anterior.")
             try:
                 # [P1-PROMPT-CACHE-SYSTEMMSG · 2026-05-15] SystemMessage al
@@ -8822,8 +8819,8 @@ async def generate_days_parallel_node(state: PlanState) -> dict:
                 # [P1-ORCH-1/2 · 2026-05-28] Helper centralizado: excluye 5xx
                 # transitorios + 429 spending-cap (y activa el latch del cap).
                 await _record_cb_failure_unless_transient(_day_cb, e)  # P1-Q3
-                # [P1-DEEPSEEK-FLASH-FIRST] Avanza al siguiente modelo del chain → el próximo reintento de tenacity usará
-                # deepseek-v4-flash y luego deepseek-v4-pro (cascada por costo: barato primero, pro como última instancia).
+                # [P1-FLASH-FIRST] Avanza al siguiente modelo del chain → el próximo reintento de tenacity usará
+                # glm-5.3-flash y luego glm-5.3 (cascada por costo: barato primero, pro como última instancia).
                 _chain_state["idx"] = _idx + 1
                 raise e
 
@@ -9783,7 +9780,7 @@ async def adversarial_judge_node(state: PlanState) -> dict:
     # si calidad regresiona en un perfil específico.
     _judge_model = _judge_model_name()
     _judge_cb = _get_circuit_breaker(_judge_model)
-    judge_llm = ChatDeepSeek(
+    judge_llm = ChatGLM(
         model=_judge_model,
         temperature=0.2,
         max_retries=1
@@ -10549,7 +10546,7 @@ def _detect_main_items(meal: dict, aliases: dict) -> set:
     substring hacía que el alias 'res' matcheara "Queso FRESco"/"FRESas"/"puRÉS" →
     `_detect_slot_incoherence` reportaba "res aparece en 4 comidas" en platos SIN res,
     inyectando correcciones FALSAS al self-critique → regens innecesarios (quema
-    DeepSeek, observado en el benchmark). `\bres` no matchea "fresco" (la 'f' precede)
+    GLM, observado en el benchmark). `\bres` no matchea "fresco" (la 'f' precede)
     pero sí tolera plurales ("huevos", "frijoles")."""
     blob = _norm_text(meal.get("name", ""))
     for ing in meal.get("ingredients", []) or []:
@@ -10840,7 +10837,7 @@ async def self_critique_node(state: PlanState) -> dict:
     )
     # [P1-NET-LUNA · 2026-07-31] Dispatch por proveedor: EVALUATOR_USE_PRO apunta a
     # _PRO_MODEL_NAME (red, default OpenAI) y MEALFIT_SELF_CRITIQUE_MODEL es knob libre.
-    evaluator_llm = (ChatOpenAIInstrumented if is_openai_model(_evaluator_model) else ChatDeepSeek)(
+    evaluator_llm = (ChatOpenAIInstrumented if is_openai_model(_evaluator_model) else ChatGLM)(
         model=_evaluator_model,
         temperature=0.1,
         max_retries=1,
@@ -11106,12 +11103,12 @@ PLAN A EVALUAR (días generados):
             _corrector_model = _route_model(form_data, force_fast=True)
             _corrector_cb = _get_circuit_breaker(_corrector_model)
             # [P1-NET-LUNA · 2026-07-31] Dispatch por proveedor (uniformidad: cualquier knob
-            # de modelo puede apuntar a OpenAI; ChatDeepSeek lo mandaría al base_url equivocado).
-            corrector_llm = (ChatOpenAIInstrumented if is_openai_model(_corrector_model) else ChatDeepSeek)(
+            # de modelo puede apuntar a OpenAI; ChatGLM lo mandaría al base_url equivocado).
+            corrector_llm = (ChatOpenAIInstrumented if is_openai_model(_corrector_model) else ChatGLM)(
                 model=_corrector_model,
                 temperature=0.3,
                 # [P1-SELFCRITIQUE-RETRY · 2026-06-17] 0→1: un error de CONEXIÓN
-                # transitorio con DeepSeek dejaba el día sin corregir (el PRO-fallback
+                # transitorio con GLM dejaba el día sin corregir (el PRO-fallback
                 # solo cubre TimeoutError, no ConnectionError → caía al except genérico
                 # "Error corrigiendo Día N. Manteniendo original"). Un reintento del
                 # cliente recupera el blip sin tocar el timeout (80s) ni el CB.
@@ -12060,7 +12057,7 @@ SURGICAL_REJECT_RETRY_ENABLED = _env_bool("MEALFIT_SURGICAL_REJECT_RETRY", True)
 # Presupuesto mínimo del pipeline para intentar la reparación (corrector ≤80s + assemble + re-review).
 SURGICAL_REJECT_MIN_BUDGET_S = _env_int("MEALFIT_SURGICAL_REJECT_MIN_BUDGET_S", 150, lambda v: 60 <= v <= 600)
 # [P1-REVIEWER-THINKING · 2026-07-05] Thinking mode (razonamiento nativo V4) SOLO en superficies de
-# JUICIO clínico de bajo volumen — JAMÁS en day-gen/planner (P1-DEEPSEEK-THINKING-OFF midió >170s/día
+# JUICIO clínico de bajo volumen — JAMÁS en day-gen/planner (P1-PROVIDER-THINKING-DEFAULT midió >170s/día
 # → fallback matemático). Restricción del API calibrada en vivo: thinking NO soporta el tool_choice
 # forzado de function_calling → structured output vía method="json_mode" (smoke 2026-07-05 en v4-pro:
 # 17.5s, ~2.6k reasoning-tokens ≈ $0.0025/llamada, veredicto ERC correcto con 4 hallazgos KDIGO).
@@ -12069,7 +12066,7 @@ SURGICAL_REJECT_MIN_BUDGET_S = _env_int("MEALFIT_SURGICAL_REJECT_MIN_BUDGET_S", 
 # Ambos nacen OFF (convención medir→actuar); flip por env sin redeploy. Fail-open al reviewer estándar.
 REVIEWER_THINKING_ENABLED = _env_bool("MEALFIT_REVIEWER_THINKING", False)
 REVIEWER_THINKING_TIMEOUT_S = _env_int("MEALFIT_REVIEWER_THINKING_TIMEOUT_S", 90, lambda v: 30 <= v <= 300)
-# [P2-THINKING-EFFORT · 2026-07-06] (sugerencia del owner) DeepSeek V4 permite GRADUAR el
+# [P2-THINKING-EFFORT · 2026-07-06] (sugerencia del owner) GLM-5.3 permite GRADUAR el
 # esfuerzo del thinking (low→max). Knob opcional: vacío = comportamiento actual (enabled sin
 # effort); "low"/"medium"/"high"/"max" añade `effort` al extra_body del reviewer thinking.
 # Fail-open: si el API rechaza el campo, el except del reviewer cae al estándar (sin thinking).
@@ -12506,7 +12503,7 @@ FRUIT_DEDUP_ENABLED = _env_bool("MEALFIT_FRUIT_DEDUP", True)
 # En el ÚLTIMO intento (attempt >= MAX_ATTEMPTS) la fruta-repetida / plato-base-repetido NO debe
 # RECHAZAR el plan: es un defecto cosmético y bloquearlo convierte un plan válido en un fallback de
 # emergencia (`_is_fallback=True`) → el usuario ve "La IA está temporalmente saturada" (mensaje
-# ENGAÑOSO: DeepSeek está sano) y se queda SIN plan. Incidente real user d4bc3af5 (corr=20394088,
+# ENGAÑOSO: GLM está sano) y se queda SIN plan. Incidente real user d4bc3af5 (corr=20394088,
 # 2026-06-26 06:19): los 3 intentos fueron rechazados SOLO por fruta repetida el mismo día → emergency
 # fallback → "saturada". En intentos 1..N-1 el gate SÍ rechaza (presiona al LLM a diversificar la
 # fruta); en el intento final entrega el plan con la repetición (advisory) en vez de cero-plan. Flip a
@@ -40198,7 +40195,7 @@ async def surgical_marker_regen_node(state: PlanState) -> dict:
     _corrector_model = _route_model(form_data, force_fast=True)
     _corrector_cb = _get_circuit_breaker(_corrector_model)
     # [P1-NET-LUNA · 2026-07-31] Dispatch por proveedor (paridad con el corrector del critique).
-    corrector_llm = (ChatOpenAIInstrumented if is_openai_model(_corrector_model) else ChatDeepSeek)(
+    corrector_llm = (ChatOpenAIInstrumented if is_openai_model(_corrector_model) else ChatGLM)(
         model=_corrector_model,
         temperature=0.3,
         max_retries=0,
@@ -41551,7 +41548,7 @@ async def review_plan_node(state: PlanState) -> dict:
                 _fc_think_body = {"type": "enabled"}
                 if FACT_CHECKER_THINKING_EFFORT:
                     _fc_think_body["effort"] = FACT_CHECKER_THINKING_EFFORT
-                fact_checker_llm = ChatDeepSeek(
+                fact_checker_llm = ChatGLM(
                     model=_fact_checker_model,
                     temperature=0.0,
                     extra_body={"thinking": _fc_think_body},
@@ -41560,7 +41557,7 @@ async def review_plan_node(state: PlanState) -> dict:
                             f"({_fact_checker_model}, iter_timeout={FACT_CHECKER_THINKING_TIMEOUT_S}s"
                             f"{', effort=' + FACT_CHECKER_THINKING_EFFORT if FACT_CHECKER_THINKING_EFFORT else ''}).")
             else:
-                fact_checker_llm = ChatDeepSeek(
+                fact_checker_llm = ChatGLM(
                     model=_fact_checker_model,
                     temperature=0.0,
                 ).bind_tools([consultar_base_datos_medica])
@@ -41790,7 +41787,7 @@ Responde ÚNICAMENTE con el JSON de revisión.
         _reviewer_model = _reviewer_model_name(form_data)  # P2-ORCH-7 risk-tier · P1-REVIEWER-TIER-MODELS
         _reviewer_cb = _get_circuit_breaker(_reviewer_model)
         # [P1-REVIEWER-TIER-MODELS · 2026-07-31] Dispatch por proveedor: Luna/Terra son OpenAI —
-        # construirlos con ChatDeepSeek los mandaría al base_url de DeepSeek con la key equivocada
+        # construirlos con ChatGLM los mandaría al base_url de GLM con la key equivocada
         # (el mismo fallo que P1-DAYGEN-LUNA-CANARY cerró en el day-gen). ChatOpenAIInstrumented
         # conserva backpressure + contabilidad en llm_usage_events (P1-LUNA-USAGE-BLIND).
         _rev_is_openai = is_openai_model(_reviewer_model)
@@ -41798,7 +41795,7 @@ Responde ÚNICAMENTE con el JSON de revisión.
         # razonamiento nativo antes del veredicto clínico. El API no soporta thinking +
         # tool_choice forzado → json_mode (el contrato JSON ya vive literal en
         # REVIEWER_SYSTEM_PROMPT; ReviewResult tiene defaults en todos los campos opcionales).
-        # [P1-REVIEWER-TIER-MODELS] `extra_body.thinking` es DeepSeek-only → la rama se salta
+        # [P1-REVIEWER-TIER-MODELS] `extra_body.thinking` es GLM-only → la rama se salta
         # para modelos OpenAI (la familia gpt-5.6 razona nativo sin knob nuestro).
         _rev_thinking = bool(REVIEWER_THINKING_ENABLED and _profile_has_medical_risk(form_data)
                              and not _rev_is_openai)
@@ -41807,7 +41804,7 @@ Responde ÚNICAMENTE con el JSON de revisión.
             _think_body = {"type": "enabled"}
             if REVIEWER_THINKING_EFFORT:
                 _think_body["effort"] = REVIEWER_THINKING_EFFORT
-            reviewer_llm = ChatDeepSeek(
+            reviewer_llm = ChatGLM(
                 model=_reviewer_model,
                 temperature=0.1,
                 max_retries=0,
@@ -41818,7 +41815,7 @@ Responde ÚNICAMENTE con el JSON de revisión.
                         f"({_reviewer_model}, timeout={REVIEWER_THINKING_TIMEOUT_S}s"
                         f"{', effort=' + REVIEWER_THINKING_EFFORT if REVIEWER_THINKING_EFFORT else ''}).")
         else:
-            reviewer_llm = (ChatOpenAIInstrumented if _rev_is_openai else ChatDeepSeek)(
+            reviewer_llm = (ChatOpenAIInstrumented if _rev_is_openai else ChatGLM)(
                 model=_reviewer_model,
                 temperature=0.1,  # Temperatura muy baja para ser preciso (gpt-5.6 la descarta — solo acepta default)
                 max_retries=0,
@@ -41869,7 +41866,7 @@ Responde ÚNICAMENTE con el JSON de revisión.
                     f"{str(_thk_e)[:120]}) → fallback al reviewer estándar sin thinking."
                 )
                 _rev_thinking = False
-                reviewer_llm = (ChatOpenAIInstrumented if _rev_is_openai else ChatDeepSeek)(
+                reviewer_llm = (ChatOpenAIInstrumented if _rev_is_openai else ChatGLM)(
                     model=_reviewer_model,
                     temperature=0.1,
                     max_retries=0,
@@ -43993,7 +43990,7 @@ async def reflection_node(state: PlanState) -> dict:
         # lite cubre. Rollback: setear el knob a flash full.
         _reflector_model = _meta_learning_model_name()
         _reflector_cb = _get_circuit_breaker(_reflector_model)
-        reflector_llm = ChatDeepSeek(
+        reflector_llm = ChatGLM(
             model=_reflector_model,
             temperature=0.2,
             max_retries=1

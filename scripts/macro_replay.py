@@ -1,7 +1,7 @@
 """[MACRO-REPLAY · 2026-06-19] Harness de GRABAR/REPRODUCIR para validar la precisión de macros del motor
 determinista SIN gastar tokens del LLM ni sufrir su ruido.
 
-IDEA: las respuestas del LLM son la ÚNICA fuente de costo (tokens DeepSeek) y de no-determinismo (varianza
+IDEA: las respuestas del LLM son la ÚNICA fuente de costo (tokens GLM) y de no-determinismo (varianza
 run-to-run que hizo N=8 inmedible). Las grabamos UNA vez (cassette) y las reproducimos: el resto del pipeline
 (skeleton det, solver, closer, reconcile, quantize, capa clínica, validadores deterministas) corre IDÉNTICO
 sobre las MISMAS respuestas → cualquier cambio determinista (knob/algoritmo) se mide como delta PURO, gratis y

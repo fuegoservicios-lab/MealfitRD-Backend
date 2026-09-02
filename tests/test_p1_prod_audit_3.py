@@ -112,7 +112,7 @@ def test_p1_lesson_flush_classifier_treats_fk_and_check_as_terminal():
 
 # ════════════════════════════════════════════════════════════════════ P2 timeouts
 def test_p2_shopping_calculator_embeddings_timeout():
-    # [P0-DEEPSEEK-MIGRATION · 2026-06-12] shopping_calculator ya no
+    # [P0-LLM-PROVIDER-MIGRATION · 2026-06-12] shopping_calculator ya no
     # construye su propio cliente de embeddings: delega a la capa pluggable
     # `embeddings_provider.get_embeddings_client()`, cuyo constructor acota
     # el deadline (`"timeout": _embeddings_timeout_s()`).

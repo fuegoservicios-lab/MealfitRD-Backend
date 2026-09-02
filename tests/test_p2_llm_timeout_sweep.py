@@ -68,7 +68,7 @@ _EXPECTED_MIN_CONSTRUCTORS = {
     "tools_medical.py": 1,
 }
 
-# [P0-DEEPSEEK-MIGRATION · 2026-06-12] Los 4 constructores de embeddings
+# [P0-LLM-PROVIDER-MIGRATION · 2026-06-12] Los 4 constructores de embeddings
 # per-módulo fueron consolidados en la capa pluggable `embeddings_provider.py`
 # (constants/fact_extractor/vision_agent/shopping_calculator delegan a
 # `get_text_embedding`/`get_embeddings_client`). El deadline vive en UN solo
@@ -106,18 +106,18 @@ def _balanced_blocks(src: str, symbol: str):
 
 
 def _constructor_blocks(src: str):
-    # [P0-DEEPSEEK-MIGRATION · 2026-06-12] constructor renombrado.
-    return _balanced_blocks(src, "ChatDeepSeek")
+    # [P0-LLM-PROVIDER-MIGRATION · 2026-06-12] constructor renombrado.
+    return _balanced_blocks(src, "ChatGLM")
 
 
 @pytest.mark.parametrize("module", _MODULES)
 def test_every_constructor_has_timeout(module):
     src = _read(module)
     blocks = _constructor_blocks(src)
-    assert blocks, f"No se encontró ningún ChatDeepSeek( en {module}."
+    assert blocks, f"No se encontró ningún ChatGLM( en {module}."
     expected = _EXPECTED_MIN_CONSTRUCTORS[module]
     assert len(blocks) >= expected, (
-        f"{module}: se esperaban >= {expected} constructores ChatDeepSeek, "
+        f"{module}: se esperaban >= {expected} constructores ChatGLM, "
         f"se hallaron {len(blocks)}. ¿Cambió el formato o se removió un callsite? "
         "Revisa antes de asumir que el scan sigue cubriendo todo."
     )
@@ -143,7 +143,7 @@ def test_every_constructor_has_timeout(module):
         and not (module == "ai_helpers.py" and _es_forward_kw(inner))
     ]
     assert not missing, (
-        f"{module}: constructores ChatDeepSeek SIN `timeout=` en líneas "
+        f"{module}: constructores ChatGLM SIN `timeout=` en líneas "
         f"{missing}. Un provider colgado bloquearía el thread/event-loop indefinidamente "
         "(P2-LLM-TIMEOUT-SWEEP). Añade `timeout=<helper>()` al constructor. "
         "Lee la memoria antes de remover un timeout existente."
@@ -159,7 +159,7 @@ def test_anchor_present_in_all_modules():
 
 
 def test_every_embeddings_constructor_has_client_args_timeout():
-    """[P2-LLM-TIMEOUT-SWEEP · P0-DEEPSEEK-MIGRATION] El constructor del
+    """[P2-LLM-TIMEOUT-SWEEP · P0-LLM-PROVIDER-MIGRATION] El constructor del
     cliente de embeddings (consolidado en `embeddings_provider._build_client`)
     DEBE pasar `timeout=` — sin deadline, un socket de embedding colgado
     bloquea el thread del bg-pool / fact-lock para siempre."""

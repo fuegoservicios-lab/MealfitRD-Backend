@@ -28738,8 +28738,8 @@ __PLAN_MODE_GATE__
                 if is_degraded:
                     # [GAP 6 FIX: Probe LLM para auto-recovery]
                     try:
-                        # [P0-DEEPSEEK-MIGRATION · 2026-06-12] Probe via DeepSeek.
-                        from llm_provider import ChatDeepSeek, model_free_tier
+                        # [P0-LLM-PROVIDER-MIGRATION · 2026-06-12] Probe via GLM.
+                        from llm_provider import ChatGLM, model_free_tier
                         import os
                         # [P0-1-RECOVERY/WORKER-FIX] No importar datetime/timezone aquí: el módulo
                         # ya los tiene globales (cron_tasks.py:3). Importarlos localmente
@@ -28765,7 +28765,7 @@ __PLAN_MODE_GATE__
 
                         if can_probe:
                             logger.info(f" [GAP 6] Iniciando Probe LLM para auto-recovery del chunk {week_number}...")
-                            probe_llm = ChatDeepSeek(
+                            probe_llm = ChatGLM(
                                 model=model_free_tier(),
                                 temperature=0.0,
                                 max_retries=0,

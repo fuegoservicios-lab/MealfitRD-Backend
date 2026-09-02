@@ -10,7 +10,7 @@ Logs en vivo (plan 72c8b965 semana 2):
 Los 67 `unknown` son sobre-oferta de envase de STAPLES (arroz/lechuga/ajo/calamar
 comprados por paquete) que `pkg-noise` no filtra (lo limitamos a condimentos para no
 tocar proteínas). `_has_severe_divergence` los marcaba severos vía |delta|>0.50 SIN
-importar la hipótesis → block T2 en falso → 3 retries + re-encolado (quema DeepSeek).
+importar la hipótesis → block T2 en falso → 3 retries + re-encolado (quema GLM).
 
 El docstring de `_has_severe_divergence` YA declaraba `unknown`/`pantry_overdeduct`
 NO-severas; el fix alinea el código: el check de magnitud las excluye. Solo

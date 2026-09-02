@@ -3,8 +3,8 @@ import os
 import math
 from functools import lru_cache
 from typing import List, Optional
-# [P0-DEEPSEEK-MIGRATION · 2026-06-12] Embeddings ahora via capa pluggable
-# (Gemini eliminado; DeepSeek no ofrece embeddings — provider pendiente).
+# [P0-LLM-PROVIDER-MIGRATION · 2026-06-12] Embeddings ahora via capa pluggable
+# (Gemini eliminado; GLM no ofrece embeddings — provider pendiente).
 from embeddings_provider import get_text_embedding
 
 # [P2-1 · 2026-05-08] Helpers compartidos del registry de knobs. Antes los 5
@@ -1598,7 +1598,7 @@ class _BoundedEmbeddingCache:
 _embedding_cache = _BoundedEmbeddingCache(_EMBEDDING_CACHE_MAXSIZE)
 _pantry_embeddings_cache = _BoundedEmbeddingCache(_EMBEDDING_CACHE_MAXSIZE)
 
-# [P0-DEEPSEEK-MIGRATION · 2026-06-12] El knob legacy
+# [P0-LLM-PROVIDER-MIGRATION · 2026-06-12] El knob legacy
 # `MEALFIT_GEMINI_EMBEDDING_TEXT_MODEL` y el singleton Gemini fueron
 # reemplazados por la capa pluggable `embeddings_provider.py`
 # (`MEALFIT_EMBEDDINGS_PROVIDER` / `MEALFIT_EMBEDDINGS_MODEL` /
@@ -4932,7 +4932,7 @@ def validate_ingredients_against_pantry(generated_ingredients: list, pantry_ingr
                     break
                     
             # 2. Si falló el match tradicional, intentamos Similitud Coseno (Mejora 4)
-            # [P0-DEEPSEEK-MIGRATION] `get_embedding` puede retornar None
+            # [P0-LLM-PROVIDER-MIGRATION] `get_embedding` puede retornar None
             # (provider disabled/fallo) — en ese caso se omite el matching
             # semántico sin warning por-item y se cae al flujo no-vector.
             if not matched_pantry_key and len(base) > 2:

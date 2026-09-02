@@ -35,9 +35,9 @@ Fix round 1 (review `task-1-review.md`, CHANGES_REQUESTED — 3 CRITICAL, 6 IMPO
       `test_all_meal_plans_queries_filter_user_id` (parser-based).
     - Finding 9 (IMPORTANT): import directo de `db_core` en vez de la fachada `db` —
       `test_source_imports_db_via_facade_not_db_core` (parser-based).
-    - Finding 10/11 (MINOR): circuit breaker + `build_chat_llm` en vez de `ChatDeepSeek`
+    - Finding 10/11 (MINOR): circuit breaker + `build_chat_llm` en vez de `ChatGLM`
       hardcodeado — `test_circuit_breaker_open_skips_early`,
-      `test_source_uses_build_chat_llm_not_hardcoded_chatdeepseek`.
+      `test_source_uses_build_chat_llm_not_hardcoded_chatglm`.
     - Finding 12 (MINOR): `enriched_meals` contaba validados, no escritos — ya cubierto
       implícitamente por `test_toctou_mismatch_skips_meal_and_reports_reason` (un meal
       validado pero NO escrito ya no cuenta).
@@ -1148,14 +1148,14 @@ def test_source_imports_db_via_facade_not_db_core(_module_src):
     )
 
 
-def test_source_uses_build_chat_llm_not_hardcoded_chatdeepseek(_module_src):
-    """[Finding 11 · fix round 1] `ChatDeepSeek(...)` hardcodeado enviaría un
-    modelo OpenAI (p.ej. gpt-5.6-luna) al base_url de DeepSeek con la key
+def test_source_uses_build_chat_llm_not_hardcoded_chatglm(_module_src):
+    """[Finding 11 · fix round 1] `ChatGLM(...)` hardcodeado enviaría un
+    modelo OpenAI (p.ej. gpt-5.6-luna) al base_url de GLM con la key
     equivocada (mismo bug que P1-DAYGEN-LUNA-CANARY). Debe construirse vía
     `llm_provider.build_chat_llm`, que rutea por prefijo del model id."""
     assert "build_chat_llm(" in _module_src, "el módulo debe usar la fábrica build_chat_llm"
-    assert "ChatDeepSeek(" not in _module_src, (
-        "hallado un ChatDeepSeek(...) hardcodeado — usar build_chat_llm(model, ...) en su lugar"
+    assert "ChatGLM(" not in _module_src, (
+        "hallado un ChatGLM(...) hardcodeado — usar build_chat_llm(model, ...) en su lugar"
     )
 
 
@@ -2117,7 +2117,7 @@ def test_mutator_recipeexpand_dispatch_gated_by_persisted_ok(_plans_src):
 # modify. Invoca `execute_modify_single_meal` de VERDAD (no hay forma de aislar el
 # callback anidado sin ejecutar la función completa), mockeando la cadena LLM +
 # los backstops que requieren DB/red: `get_latest_meal_plan_with_id`, el perfil
-# (`db.get_user_profile`), el circuit breaker, `ChatDeepSeek` (constructor +
+# (`db.get_user_profile`), el circuit breaker, `ChatGLM` (constructor +
 # `.with_structured_output(MealModel).invoke(...)`), y `update_plan_data_atomic`
 # (capturado igual que el `engine` fixture de Task 1 — aplica el callback real
 # sobre un `plan_data` local mutable y expone el resultado).
@@ -2143,9 +2143,9 @@ class _FakeStructuredLLM:
         return self._response
 
 
-class _FakeChatDeepSeek:
-    """Sustituye `llm_provider.ChatDeepSeek` tal como lo usa `tools.py`:
-    `ChatDeepSeek(model=..., temperature=..., timeout=...).with_structured_output(
+class _FakeChatGLM:
+    """Sustituye `llm_provider.ChatGLM` tal como lo usa `tools.py`:
+    `ChatGLM(model=..., temperature=..., timeout=...).with_structured_output(
     MealModel).invoke(prompt)`. `next_response` es de clase (no de instancia) porque
     `execute_modify_single_meal` construye DOS instancias (`modify_llm` +
     `_modify_llm_for_usage`, esta última sin `.with_structured_output`)."""
@@ -2156,7 +2156,7 @@ class _FakeChatDeepSeek:
         pass
 
     def with_structured_output(self, _model_cls):
-        return _FakeStructuredLLM(_FakeChatDeepSeek.next_response)
+        return _FakeStructuredLLM(_FakeChatGLM.next_response)
 
 
 @pytest.fixture
@@ -2180,7 +2180,7 @@ def _chatmod_engine(monkeypatch):
         lambda uid: {"health_profile": {}},
     )
     monkeypatch.setattr(tools_module, "_get_circuit_breaker", lambda model_name: _FakeCircuitBreaker())
-    monkeypatch.setattr(tools_module, "ChatDeepSeek", _FakeChatDeepSeek)
+    monkeypatch.setattr(tools_module, "ChatGLM", _FakeChatGLM)
     monkeypatch.setattr(tools_module, "SLOT_APPROPRIATENESS_GATE_ENABLED", False)
 
     def _fake_atomic(plan_id, mutator, user_id=None, **kwargs):
@@ -2270,7 +2270,7 @@ def _chatmod_new_meal_response() -> dict:
 def test_chatmod_functional_old_display_does_not_survive_modify(_chatmod_engine):
     state, tools_module = _chatmod_engine
     state["plan_data"] = {"days": [{"day": 1, "meals": [_chatmod_old_meal_with_display()]}]}
-    _FakeChatDeepSeek.next_response = _chatmod_new_meal_response()
+    _FakeChatGLM.next_response = _chatmod_new_meal_response()
 
     result_str = tools_module.execute_modify_single_meal(
         user_id="user-chatmod-1",
@@ -2859,7 +2859,7 @@ def test_fill_script_imports_cleanly(_fill_script_module):
     assert callable(mod.main)
     assert callable(mod.translate_batch)
     assert callable(mod.fetch_catalog_names)
-    assert mod.DEEPSEEK_FLASH  # reusa el mismo builder de cliente que plan_display_i18n
+    assert mod.GLM_FLASH  # reusa el mismo builder de cliente que plan_display_i18n
 
 
 def test_fill_script_has_dry_run_default_and_commit_flag_docs():

@@ -2,7 +2,7 @@
 tras el recorte de precios de OpenAI (luna -80% → $0.20/$1.20; terra -20% →
 $2.00/$12.00 por 1M tokens).
 
-Decisión del owner: "las cuentas gratis deben usar deepseek flash y Luna como
+Decisión del owner: "las cuentas gratis deben usar glm flash y Luna como
 revisor médico; Terra como revisor en plus, y mira si en basic es rentable".
 Rentabilidad medida con datos de producción (158 calls/30d, promedio 2.371 tok
 in / 213 out): Terra en basic worst-case absoluto (cap de 50 planes, todos con
@@ -16,9 +16,9 @@ Contratos que ancla:
      default; `MEALFIT_REVIEWER_RISK_TIER_MODEL` (global) gana sobre el map y
      dispara la alerta de desvío.
   C. Fail-safe: modelo OpenAI sin OPENAI_API_KEY → fallback flash + alerta
-     (test en test_p1_deepseek_only_restore.py, mismo marker).
+     (test en test_p1_glm_only_restore.py, mismo marker).
   D. Construcción con dispatch por proveedor (ChatOpenAIInstrumented para
-     gpt-*) y thinking DeepSeek-only excluido para OpenAI.
+     gpt-*) y thinking GLM-only excluido para OpenAI.
   E. Pricing table actualizada (luna/terra nuevos; el fact-checker NO cambia:
      sigue en `_REVIEWER_RISK_TIER_DEFAULT` = flash).
   F. Marker bumpeado.
@@ -94,7 +94,7 @@ def test_a4_no_risk_profile_stays_flash(_go, monkeypatch):
     _mute_alert_writes(monkeypatch)
     monkeypatch.setattr(_go, "get_user_tier", lambda uid: "plus")
     resolved = _go._reviewer_model_name({"allergies": [], "medicalConditions": []})
-    assert resolved == "deepseek-v4-flash"
+    assert resolved == "glm-5.3-flash"
 
 
 # ------------------------------------------------------------------
@@ -112,24 +112,24 @@ def test_b_per_tier_knobs_win_over_defaults(_go, monkeypatch):
 
 def test_b2_global_risk_knob_wins_and_alerts_desvio(_go, monkeypatch):
     writes = _mute_alert_writes(monkeypatch)
-    monkeypatch.setenv("MEALFIT_REVIEWER_RISK_TIER_MODEL", "deepseek-v4-pro")
+    monkeypatch.setenv("MEALFIT_REVIEWER_RISK_TIER_MODEL", "glm-5.3")
     monkeypatch.setattr(_go, "get_user_tier", lambda uid: "gratis")
     resolved = _go._reviewer_model_name(_RISK_FORM)
-    assert resolved == "deepseek-v4-pro", "el knob global sigue ganando (observacional)"
-    assert ("reviewer", "deepseek-v4-pro") in _go._CLINICAL_MODEL_GUARD_WARNED
+    assert resolved == "glm-5.3", "el knob global sigue ganando (observacional)"
+    assert ("reviewer", "glm-5.3") in _go._CLINICAL_MODEL_GUARD_WARNED
     assert len(writes) == 1
 
 
 # ------------------------------------------------------------------
-# D. Construcción: dispatch por proveedor + thinking DeepSeek-only
+# D. Construcción: dispatch por proveedor + thinking GLM-only
 # ------------------------------------------------------------------
 
 def test_d_reviewer_builds_with_provider_dispatch():
     assert _GO_SRC.count(
-        "(ChatOpenAIInstrumented if _rev_is_openai else ChatDeepSeek)("
+        "(ChatOpenAIInstrumented if _rev_is_openai else ChatGLM)("
     ) >= 2, (
         "el reviewer (rama estándar + fallback de thinking) debe despachar por "
-        "proveedor — ChatDeepSeek mandaría gpt-5.6-* al base_url de DeepSeek "
+        "proveedor — ChatGLM mandaría gpt-5.6-* al base_url de GLM "
         "con la key equivocada (lección P1-DAYGEN-LUNA-CANARY)"
     )
 
@@ -139,11 +139,11 @@ def test_d2_thinking_gate_excludes_openai():
         r"_rev_thinking = bool\(REVIEWER_THINKING_ENABLED and _profile_has_medical_risk\(form_data\)\s*\n\s*and not _rev_is_openai\)",
         _GO_SRC,
     )
-    assert m, "el gate de thinking debe excluir modelos OpenAI (extra_body es DeepSeek-only)"
+    assert m, "el gate de thinking debe excluir modelos OpenAI (extra_body es GLM-only)"
 
 
 def test_d3_fact_checker_unchanged():
-    # El fact-checker sigue anclado al risk-tier DeepSeek (no cambió de provider).
+    # El fact-checker sigue anclado al risk-tier GLM (no cambió de provider).
     assert '_env_str("MEALFIT_FACT_CHECKER_RISK_TIER_MODEL", _REVIEWER_RISK_TIER_DEFAULT)' in _GO_SRC
 
 

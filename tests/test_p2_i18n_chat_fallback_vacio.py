@@ -50,7 +50,7 @@ def test_los_cinco_textos_dicen_lo_mismo(fallback):
 # ── el nodo real ───────────────────────────────────────────────────────────────────────────
 
 class _LLMVacio:
-    """Un `ChatDeepSeek` que siempre devuelve content vacío y sin tool_calls."""
+    """Un `ChatGLM` que siempre devuelve content vacío y sin tool_calls."""
 
     def __init__(self, *a, **k):
         pass
@@ -78,7 +78,7 @@ def _correr_call_model(monkeypatch, *, perfil, user_id="11111111-1111-1111-1111-
     import agent
     from langchain_core.messages import HumanMessage
 
-    monkeypatch.setattr(agent, "ChatDeepSeek", _LLMVacio)
+    monkeypatch.setattr(agent, "ChatGLM", _LLMVacio)
     monkeypatch.setattr(agent, "_get_circuit_breaker", lambda *_a, **_k: _BreakerAbierto())
     vistos = []
 
@@ -126,7 +126,7 @@ def test_si_el_perfil_falla_no_rompe_el_chat(monkeypatch):
     def _revienta(_uid):
         raise RuntimeError("db caída")
 
-    monkeypatch.setattr(agent, "ChatDeepSeek", _LLMVacio)
+    monkeypatch.setattr(agent, "ChatGLM", _LLMVacio)
     monkeypatch.setattr(agent, "_get_circuit_breaker", lambda *_a, **_k: _BreakerAbierto())
     monkeypatch.setattr(agent, "get_user_profile", _revienta)
     import db_core

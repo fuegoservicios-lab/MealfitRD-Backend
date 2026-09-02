@@ -32,7 +32,7 @@ Todos auto-registrados en `_KNOBS_REGISTRY` (P3-NEW-D) vía `_env_*`.
 | `MEALFIT_DREAMING_ENABLED` | `False` | **Master kill-switch.** OFF → cron neutral, cero costo. |
 | `MEALFIT_DREAMING_RETRIEVAL_ENABLED` | `False` | Gate de LECTURA: inyecta el user_model al prompt (`_get_user_model_block`) + branch vectorial en `search_deep_memory`. |
 | `MEALFIT_DREAMING_INJECT_PLAN_ENABLED` | `False` | Gate de inyección del user_model al pipeline de generación de plan (fase F4). |
-| `MEALFIT_DREAMING_MODEL` | `deepseek-v4-flash` | Modelo del ciclo. NUNCA pro (offline, no médico-crítico). Override per-feature gana sobre el router por tier. |
+| `MEALFIT_DREAMING_MODEL` | `glm-5.3-flash` | Modelo del ciclo. NUNCA pro (offline, no médico-crítico). Override per-feature gana sobre el router por tier. |
 | `MEALFIT_DREAMING_CONSOLIDATION_INTERVAL_HOURS` | `24` | Intervalo del cron + cutoff de staleness para encolar. Clamp `[6, 168]`. |
 | `MEALFIT_DREAMING_MAX_USERS_PER_NIGHT` | `200` | Cap de usuarios procesados por corrida. `0` → solo reporta backlog. Clamp `[0, 5000]`. |
 | `MEALFIT_DREAMING_MAX_COST_USD_PER_NIGHT` | `2.0` | Budget global diario (cap de seguridad, NO billing exacto). Clamp `[0, 100]`. |

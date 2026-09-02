@@ -86,7 +86,7 @@ Timeboxed al mínimo que gatea A y B. **NO una plataforma de analytics.**
 - **Cohorte de canario:** copiar el patrón `P1-SELF-CRITIQUE-CANARY` (`graph_orchestrator.py:453-468`, `_self_critique_canary_cohort`, tag emit `:34440-34458`). Knob `MEALFIT_HARDEN_POOLS_CANARY_PCT` (0), bucketing sha256 con **salt independiente** `f"harden_pools|{_id}"` (evita confundir con la cohorte self_critique), tag `harden_pools_cohort` junto a `self_critique_cohort` en `:34446`. Compara por cohorte: **all-4-macro band** (`:34449-34451`), **degraded-ship rate** (`review_passed:34453` + alert `plan_quality_degraded:29935`), **retry-rate** (`:34443`).
   - **Requisito nuevo:** la tasa de violación same-day/cross-día **NO está hoy en la metadata** → el canario DEBE añadir `same_day_protein_repeats` (`build_variety_report:15966`), `cross_day_proteins` (`:15985`) y `cross_day_dishes` (`:16003`) al bloque `:34446`. Es la señal primaria "¿la restricción dura eliminó la clase?".
 
-> **Nota honesta (Fase 3 "sembrar RNG" de la propuesta externa):** sembrar reduce varianza pero NO la lleva a 0 — el `dish_library` ya muestrea por `day_num` (parcialmente sembrado), pero la elección de plato del LLM vía **API DeepSeek no es seed-reproducible**. Valor real pero acotado; se implementa donde el código Python controla el RNG, no se sobre-vende.
+> **Nota honesta (Fase 3 "sembrar RNG" de la propuesta externa):** sembrar reduce varianza pero NO la lleva a 0 — el `dish_library` ya muestrea por `day_num` (parcialmente sembrado), pero la elección de plato del LLM vía **API GLM no es seed-reproducible**. Valor real pero acotado; se implementa donde el código Python controla el RNG, no se sobre-vende.
 
 ---
 

@@ -1,7 +1,7 @@
 """[P1-SWAP-LUNA · 2026-08-05] El swap sube a gpt-5.6-luna, con el effort por superficie.
 
 POR QUÉ. El plan NACE con luna (`day_generator`) y cada plato que el usuario sustituía
-después lo escribía `deepseek-v4-flash`: cada actualización cambiaba un plato del modelo
+después lo escribía `glm-5.3-flash`: cada actualización cambiaba un plato del modelo
 bueno por uno del barato, dentro de un día ya cuadrado.
 
 MEDIDO contra la API real desde el VPS (mismo prompt de swap, 3 corridas):
@@ -15,8 +15,8 @@ es un bucle EN SERIE de 4-5 swaps, así que ahí `medium` lo llevaría de ~35 s 
 De ahí el effort por superficie.
 
 ⚠️ EL BUG QUE ESTO CIERRA NO ERA EL MODELO, ERA EL CLIENTE. `MEALFIT_CHAT_AGENT_SWAP_MODEL`
-ya existía y parecía bastar, pero el callsite construía `ChatDeepSeek` FIJO: poner el knob
-a un ID de OpenAI habría mandado cada swap al base_url de DeepSeek con la key equivocada.
+ya existía y parecía bastar, pero el callsite construía `ChatGLM` FIJO: poner el knob
+a un ID de OpenAI habría mandado cada swap al base_url de GLM con la key equivocada.
 Por eso el test que importa es `test_construye_el_cliente_del_proveedor_correcto`.
 
 tooltip-anchor: P1-SWAP-LUNA
@@ -70,8 +70,8 @@ def test_sin_openai_key_degrada_en_vez_de_reventar():
 
 def test_el_knob_de_modelo_sigue_ganando():
     """Rollback sin redeploy (convención P3-PREVIEW-MODEL-KNOB)."""
-    with mock.patch.dict(os.environ, {"MEALFIT_CHAT_AGENT_SWAP_MODEL": "deepseek-v4-flash"}):
-        assert agent._chat_agent_swap_model_name("u1") == "deepseek-v4-flash"
+    with mock.patch.dict(os.environ, {"MEALFIT_CHAT_AGENT_SWAP_MODEL": "glm-5.3-flash"}):
+        assert agent._chat_agent_swap_model_name("u1") == "glm-5.3-flash"
 
 
 # ---------------------------------------------------------------- effort
@@ -114,7 +114,7 @@ def test_una_superficie_desconocida_no_revienta():
 def test_construye_el_cliente_del_proveedor_correcto():
     """EL test de este P-fix.
 
-    El defecto no era el nombre del modelo: era que el callsite instanciaba `ChatDeepSeek`
+    El defecto no era el nombre del modelo: era que el callsite instanciaba `ChatGLM`
     fijo. Se verifica que `swap_meal` pide el cliente a la fábrica por proveedor y que le
     pasa el effort — no que el código esté escrito de cierta forma.
     """
@@ -123,9 +123,9 @@ def test_construye_el_cliente_del_proveedor_correcto():
     constructor = cuerpo[j:j + 200]
     assert "build_chat_llm(" in constructor, (
         "el swap volvió a instanciar un cliente concreto; con un modelo OpenAI eso lo manda "
-        "al base_url de DeepSeek con la key equivocada"
+        "al base_url de GLM con la key equivocada"
     )
-    assert "ChatDeepSeek(" not in constructor
+    assert "ChatGLM(" not in constructor
 
 
 def test_no_le_pasa_temperatura_a_los_modelos_openai():
@@ -138,14 +138,14 @@ def test_no_le_pasa_temperatura_a_los_modelos_openai():
     bloque = cuerpo[i:i + 400]
     m = re.search(r"\((.*?)if is_openai_model\([^)]*\)\s*else(.*?)\)", bloque, re.S)
     assert m, "se perdió la bifurcación por proveedor en los kwargs del swap"
-    rama_openai, rama_deepseek = m.group(1), m.group(2)
+    rama_openai, rama_glm = m.group(1), m.group(2)
     assert "reasoning_effort" in rama_openai
     assert "temperature" not in rama_openai, (
         "a un modelo OpenAI no se le pasa temperature: LangChain la descarta en silencio y "
         "el código quedaría afirmando una garantía que el runtime no cumple"
     )
-    assert "temperature" in rama_deepseek
-    assert "reasoning_effort" not in rama_deepseek
+    assert "temperature" in rama_glm
+    assert "reasoning_effort" not in rama_glm
 
     # Y el timeout sigue en el callsite, LITERAL: el tripwire P0-CHAT-LLM-TIMEOUT lo busca
     # ahí. Esconderlo dentro de un dict lo dejaba fuera de su vigilancia (pasó en la primera

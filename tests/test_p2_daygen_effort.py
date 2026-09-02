@@ -5,17 +5,17 @@ La primera versión sólo cubría OpenAI y con el vocabulario clásico
 (minimal..high): "luna al máximo" era imposible de pedir — el owner preguntó
 "¿no pudiste probar luna max?" y la respuesta era que el knob lo impedía. La
 doc oficial de luna (aportada por el owner) da: none/low/medium/high/XHIGH.
-DeepSeek usa low/medium/high/MAX vía `extra_body.thinking` (contrato ya usado
+GLM usa low/medium/high/MAX vía `extra_body.thinking` (contrato ya usado
 por reviewer y fact-checker).
 
 CONTRATO:
   · Nace vacío ⇒ default del proveedor ⇒ encenderlo es explícito.
-  · Alias cruzados: `max`→`xhigh` en OpenAI, `xhigh`→`max` en DeepSeek — "el
+  · Alias cruzados: `max`→`xhigh` en OpenAI, `xhigh`→`max` en GLM — "el
     tope" se pide igual sin memorizar qué palabra usa cada API.
   · "none": en OpenAI se pasa explícito (apaga el razonamiento de luna); en
-    DeepSeek no se inyecta nada (el wrapper ya lo desactiva por default).
+    GLM no se inyecta nada (el wrapper ya lo desactiva por default).
   · Con effort pedido, el timeout por llamada sale de
-    MEALFIT_DAYGEN_EFFORT_TIMEOUT_S: el day-gen DeepSeek con thinking superó
+    MEALFIT_DAYGEN_EFFORT_TIMEOUT_S: el day-gen GLM con thinking superó
     los 170 s medidos (2026-06-13) y el tope base es 90 s — sin subirlo a la
     par, el A/B mediría la red de fallback, no el modelo.
   · Valor inválido ⇒ vacío (fail-safe al default, nunca a un esfuerzo alto:
@@ -39,10 +39,10 @@ def test_knob_nace_apagado_y_acepta_ambos_vocabularios():
     for nivel in ("none", "low", "medium", "high", "xhigh", "max"):
         assert f'"{nivel}"' in win, (
             f"el nivel {nivel} debe aceptarse — sin 'xhigh' luna no puede ir al "
-            f"tope y sin 'max' DeepSeek tampoco (fue el gap de la v1)"
+            f"tope y sin 'max' GLM tampoco (fue el gap de la v1)"
         )
     assert '"minimal"' not in win, (
-        "'minimal' no existe en la doc de luna ni en el contrato DeepSeek — "
+        "'minimal' no existe en la doc de luna ni en el contrato GLM — "
         "era el vocabulario clásico que dejó el knob corto"
     )
     assert 'DAYGEN_EFFORT = ""' in win, "un valor raro debe caer al default"
@@ -58,27 +58,30 @@ def test_alias_cruzados():
     assert '"xhigh" if _eff == "max" else _eff' in win, (
         "OpenAI no conoce 'max': debe traducirse a 'xhigh'"
     )
-    assert '"max" if _eff == "xhigh" else _eff' in win, (
-        "DeepSeek no conoce 'xhigh': debe traducirse a 'max'"
-    )
+    # [P0-GLM-MIGRATION · 2026-09-02] La traducción al vocabulario de Z.ai vive en el
+    # wrapper (`_glm_reasoning_effort`), no en el fork: xhigh→max, medium→high, none→low.
+    from llm_provider import _glm_reasoning_effort
+    assert _glm_reasoning_effort("xhigh") == "max"
+    assert _glm_reasoning_effort("medium") == "high"
+    assert _glm_reasoning_effort("none") == "low"
+    assert _glm_reasoning_effort("max") == "max"
 
 
-def test_deepseek_recibe_extra_body_thinking():
+def test_glm_recibe_reasoning_effort():
     i = _GO.index("_es_openai = is_openai_model(_model)")
     win = _GO[i:i + 1400]
-    assert '"type": "enabled"' in win, (
-        "DeepSeek gobierna el razonamiento con extra_body.thinking — sin la "
-        "inyección explícita el wrapper lo deja DISABLED y el A/B de flash-high/"
-        "max mediría flash sin razonar creyendo que razona"
+    assert '_kw["reasoning_effort"] = _eff' in win, (
+        "GLM razona SIEMPRE: el effort del tier viaja como reasoning_effort y el "
+        "wrapper lo traduce; sin él, day-gen correría con el default low del wrapper"
     )
-    assert 'elif _eff != "none"' in win, (
-        "'none' en DeepSeek = no inyectar (el wrapper ya lo apaga)"
+    assert 'elif _eff != "none"' not in win, (
+        "'none' ya no es 'no inyectar': GLM no puede apagar el razonamiento"
     )
 
 
 def test_timeout_acompana_al_effort():
     assert '_env_int("MEALFIT_DAYGEN_EFFORT_TIMEOUT_S", 90' in _GO, (
-        "falta el knob del timeout: el day-gen DeepSeek con thinking midió "
+        "falta el knob del timeout: el day-gen GLM con thinking midió "
         ">170 s y el tope base es 90 s — sin poder subirlo, cada llamada del "
         "A/B muere en timeout y se mide la red, no el modelo"
     )

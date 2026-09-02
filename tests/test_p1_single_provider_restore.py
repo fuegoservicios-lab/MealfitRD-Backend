@@ -1,4 +1,4 @@
-"""[P1-DEEPSEEK-ONLY-RESTORE · 2026-07-04] Test ancla del cierre "DeepSeek único
+"""[P1-SINGLE-PROVIDER-RESTORE · 2026-07-04] Test ancla del cierre "GLM único
 provider + guard del gate clínico".
 
 Contexto (audit v7 · P1-1): el mecanismo multi-provider de llm_provider.py
@@ -7,13 +7,13 @@ inyección de `think:false`) permitía colapsar TODOS los modelos —incluido el
 reviewer médico risk-tier— a un provider de test (Gemini flash-lite / Gemma
 local). Caso medido 2026-07-04: con el reviewer en un modelo débil, un plan DM2
 pasó con carbos +99% sin rechazo. El owner pidió eliminar todo lo relacionado a
-Gemini/Gemma y volver a DeepSeek como único provider.
+Gemini/Gemma y volver a GLM como único provider.
 
 Qué ancla este test:
   A. llm_provider.py NO contiene el plumbing multi-provider (override global
      funcional, helper Ollama, inyección `think`).
-  B. El stack DeepSeek queda intacto (constantes, router por tier, inyección
-     `thinking` gated por `_is_deepseek_provider`).
+  B. El stack GLM queda intacto (constantes, router por tier, inyección
+     `thinking` gated por `_is_glm_provider`).
   C. El test ancla del fix Ollama eliminado ya no existe (borrado junto al fix).
   D. graph_orchestrator.py tiene el guard `_warn_if_clinical_model_downgraded`
      cableado en AMBOS resolvers clínicos (`_reviewer_model_name` y
@@ -50,7 +50,7 @@ def test_no_functional_model_override():
     en comentarios que documentan su eliminación)."""
     assert '_env_str("MEALFIT_LLM_MODEL_OVERRIDE"' not in _LLM_SRC, (
         "el override global MEALFIT_LLM_MODEL_OVERRIDE volvió a llm_provider.py — "
-        "permite colapsar el reviewer clínico a un provider de test (P1-DEEPSEEK-ONLY-RESTORE)"
+        "permite colapsar el reviewer clínico a un provider de test (P1-SINGLE-PROVIDER-RESTORE)"
     )
 
 
@@ -61,7 +61,7 @@ def test_no_ollama_helper():
 
 def test_no_ollama_think_injection():
     """La inyección del toggle `think` de Ollama (distinto del `thinking` de
-    DeepSeek) fue eliminada de __init__ y de with_structured_output."""
+    GLM) fue eliminada de __init__ y de with_structured_output."""
     assert 'setdefault("think",' not in _LLM_SRC
 
 
@@ -72,17 +72,19 @@ def test_old_multi_provider_ollama_test_deleted():
 
 
 # ---------------------------------------------------------------------------
-# B. Stack DeepSeek intacto
+# B. Stack GLM intacto
 # ---------------------------------------------------------------------------
 
-def test_deepseek_stack_intact():
-    assert 'DEEPSEEK_FLASH = "deepseek-v4-flash"' in _LLM_SRC
-    assert 'DEEPSEEK_PRO = "deepseek-v4-pro"' in _LLM_SRC
-    assert "def _is_deepseek_provider(" in _LLM_SRC
+def test_glm_stack_intact():
+    assert 'GLM_FLASH = "glm-5.3-flash"' in _LLM_SRC
+    assert 'GLM_PRO = "glm-5.3"' in _LLM_SRC
+    assert "def _is_glm_provider(" in _LLM_SRC
     assert "def resolve_model_for_tier(" in _LLM_SRC
-    # La inyección `thinking` (DeepSeek-specific) sigue gated por provider.
-    assert 'setdefault("thinking", {"type": "disabled"})' in _LLM_SRC
-    assert "_is_deepseek_provider(base_url)" in _LLM_SRC
+    # [P0-GLM-MIGRATION · 2026-09-02] La inyección `thinking` (GLM razona SIEMPRE) y la
+    # traducción del esfuerzo siguen gated por provider.
+    assert '_extra["thinking"] = {"type": "enabled"}' in _LLM_SRC
+    assert 'kwargs["reasoning_effort"] = _glm_reasoning_effort(' in _LLM_SRC
+    assert "_is_glm_provider(base_url)" in _LLM_SRC
 
 
 # ---------------------------------------------------------------------------
@@ -170,8 +172,8 @@ def test_missing_openai_key_falls_back_to_flash_and_alerts(_go, monkeypatch):
     monkeypatch.delenv("OPENAI_API_KEY", raising=False)
     monkeypatch.delenv("MEALFIT_REVIEWER_RISK_MODEL_FREE", raising=False)
     resolved = _go._reviewer_model_name(_RISK_FORM)
-    assert resolved == "deepseek-v4-flash"
-    assert ("reviewer", "deepseek-v4-flash") in _go._CLINICAL_MODEL_GUARD_WARNED
+    assert resolved == "glm-5.3-flash"
+    assert ("reviewer", "glm-5.3-flash") in _go._CLINICAL_MODEL_GUARD_WARNED
     assert len(writes) == 1
     assert writes[0][1][0] == "llm_clinical_reviewer_downgraded:reviewer"
 
@@ -183,11 +185,11 @@ def test_override_downgrade_emits_alert_once(_go, monkeypatch):
     (hoy flash): pre-fix el desvío de prueba era flash (cuando pro era el
     esperado); ahora el desvío de prueba es pro."""
     writes = _capture_writes(monkeypatch)
-    monkeypatch.setenv("MEALFIT_REVIEWER_MODEL", "deepseek-v4-pro")
+    monkeypatch.setenv("MEALFIT_REVIEWER_MODEL", "glm-5.3")
 
     resolved = _go._reviewer_model_name(_RISK_FORM)
-    assert resolved == "deepseek-v4-pro", "el knob sigue ganando (guard observacional)"
-    assert ("reviewer", "deepseek-v4-pro") in _go._CLINICAL_MODEL_GUARD_WARNED
+    assert resolved == "glm-5.3", "el knob sigue ganando (guard observacional)"
+    assert ("reviewer", "glm-5.3") in _go._CLINICAL_MODEL_GUARD_WARNED
     assert len(writes) == 1
     sql, params = writes[0]
     assert "system_alerts" in sql
@@ -203,10 +205,10 @@ def test_risk_tier_knob_downgrade_also_alerts(_go, monkeypatch):
     el guard (no solo el hard-override). [P1-FLASH-PRIMARY] desvío de prueba:
     pro (el esperado hoy es flash)."""
     writes = _capture_writes(monkeypatch)
-    monkeypatch.setenv("MEALFIT_FACT_CHECKER_RISK_TIER_MODEL", "deepseek-v4-pro")
+    monkeypatch.setenv("MEALFIT_FACT_CHECKER_RISK_TIER_MODEL", "glm-5.3")
     resolved = _go._fact_checker_model_name(_RISK_FORM)
-    assert resolved == "deepseek-v4-pro"
-    assert ("fact_checker", "deepseek-v4-pro") in _go._CLINICAL_MODEL_GUARD_WARNED
+    assert resolved == "glm-5.3"
+    assert ("fact_checker", "glm-5.3") in _go._CLINICAL_MODEL_GUARD_WARNED
     assert len(writes) == 1
     assert writes[0][1][0] == "llm_clinical_reviewer_downgraded:fact_checker"
 
@@ -214,9 +216,9 @@ def test_risk_tier_knob_downgrade_also_alerts(_go, monkeypatch):
 def test_no_risk_profile_never_warns(_go, monkeypatch):
     """Perfil SIN riesgo médico: flash es el default correcto — jamás alert."""
     writes = _capture_writes(monkeypatch)
-    monkeypatch.setenv("MEALFIT_REVIEWER_MODEL", "deepseek-v4-flash")
+    monkeypatch.setenv("MEALFIT_REVIEWER_MODEL", "glm-5.3-flash")
     resolved = _go._reviewer_model_name({"allergies": [], "medicalConditions": []})
-    assert resolved == "deepseek-v4-flash"
+    assert resolved == "glm-5.3-flash"
     assert not _go._CLINICAL_MODEL_GUARD_WARNED
     assert not writes
 
@@ -232,6 +234,6 @@ def test_alert_emit_failure_is_best_effort(_go, monkeypatch):
         raise RuntimeError("db caída")
 
     monkeypatch.setattr(db, "execute_sql_write", _boom)
-    monkeypatch.setenv("MEALFIT_REVIEWER_MODEL", "deepseek-v4-pro")
+    monkeypatch.setenv("MEALFIT_REVIEWER_MODEL", "glm-5.3")
     resolved = _go._reviewer_model_name(_RISK_FORM)
-    assert resolved == "deepseek-v4-pro"
+    assert resolved == "glm-5.3"

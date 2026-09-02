@@ -12,8 +12,8 @@ logger = logging.getLogger(__name__)
 # de huso lee el SSOT que P3-TZ-FALLBACK-SSOT unifico.
 from constants import DEFAULT_TZ_OFFSET_MIN as _DEFAULT_TZ_OFFSET_MIN
 from constants import strip_accents, CULINARY_KNOWLEDGE_BASE, coach_country_context, culinary_knowledge_base_for_country, validate_ingredients_against_pantry, _to_base_unit
-# [P0-DEEPSEEK-MIGRATION · 2026-06-12] Gemini → DeepSeek con router por tier.
-from llm_provider import (ChatDeepSeek, DEEPSEEK_FLASH, GPT56_LUNA,
+# [P0-LLM-PROVIDER-MIGRATION · 2026-06-12] Gemini → GLM con router por tier.
+from llm_provider import (ChatGLM, GLM_FLASH, GPT56_LUNA,
                           build_chat_llm, is_openai_model, resolve_model_for_user)
 from langchain_core.tools import tool
 from langchain_core.messages import SystemMessage, HumanMessage, AIMessage, ToolMessage
@@ -456,24 +456,24 @@ from tools import (
 )
 
 # Langchain Chat Model Initialization
-# [P0-DEEPSEEK-MIGRATION · 2026-06-12] El bloque `_safety_settings`
+# [P0-LLM-PROVIDER-MIGRATION · 2026-06-12] El bloque `_safety_settings`
 # (HarmCategory/HarmBlockThreshold) fue eliminado: era exclusivo del SDK de
-# Gemini. DeepSeek no expone content-filters configurables client-side, así
+# Gemini. GLM no expone content-filters configurables client-side, así
 # que la decisión P3-CHAT-SAFETY-OFF (evitar false-positives en charlas de
 # déficit/ayuno) queda satisfecha por defecto del provider.
 
 # [P2-AUDIT-1 · 2026-05-15] Knobs para overridear los modelos LLM usados
-# por las 5 callsites de `ChatDeepSeek(...)` en este módulo:
+# por las 5 callsites de `ChatGLM(...)` en este módulo:
 #   - `llm` (módulo-level, fallback default)             → MEALFIT_CHAT_AGENT_MODEL
 #   - `swap_llm` dentro de `swap_meal`                   → MEALFIT_CHAT_AGENT_SWAP_MODEL
 #   - `chat_llm` dentro de `call_model` (LangGraph node) → MEALFIT_CHAT_AGENT_MODEL (reusa)
 #   - `title_llm` dentro de `generate_session_title`     → MEALFIT_CHAT_TITLE_MODEL
 #   - `router_llm` dentro de `rag_query_router`          → MEALFIT_CHAT_ROUTER_MODEL
 #
-# [P0-DEEPSEEK-MIGRATION · 2026-06-12] chat y swap son TIER-ROUTED: sin
+# [P0-LLM-PROVIDER-MIGRATION · 2026-06-12] chat y swap son TIER-ROUTED: sin
 # override explícito del knob, el modelo se resuelve por plan de pago via
-# `llm_provider.resolve_model_for_user` (gratis/guest → deepseek-v4-flash,
-# basic/plus/ultra → deepseek-v4-pro). El override del knob SIEMPRE gana
+# `llm_provider.resolve_model_for_user` (gratis/guest → glm-5.3-flash,
+# basic/plus/ultra → glm-5.3). El override del knob SIEMPRE gana
 # (rollback / A-B test sin redeploy — convención P3-PREVIEW-MODEL-KNOB).
 # title/router son tareas aux baratas → V4 Flash fijo para todos los tiers.
 #
@@ -495,7 +495,7 @@ def _chat_agent_model_name(user_id: Optional[str] = None) -> str:
     return resolve_model_for_user(user_id)
 
 # [P1-SWAP-LUNA · 2026-08-05] El swap (y por herencia `regenerate-day`, que es un bucle
-# de swaps) pasa de `deepseek-v4-flash` a `gpt-5.6-luna` — el mismo modelo con el que ya
+# de swaps) pasa de `glm-5.3-flash` a `gpt-5.6-luna` — el mismo modelo con el que ya
 # NACE el plan en `day_generator`.
 #
 # La asimetría que cierra: el plan se generaba con luna y cada plato que el usuario
@@ -519,7 +519,7 @@ def _chat_agent_model_name(user_id: Optional[str] = None) -> str:
 # `OPENAI_API_KEY` en el entorno (contrato fail-loud de `_openai_api_key`). Un swap es
 # user-facing: preferimos degradar al router por tier (flash) que devolverle un 500 al
 # usuario porque falta una env var. Mismo criterio que la red post-fallo P1-NET-LUNA, que
-# degrada a `deepseek-v4-pro` cuando la key no está.
+# degrada a `glm-5.3` cuando la key no está.
 _SWAP_MODEL_DEFAULT = GPT56_LUNA
 
 
@@ -573,13 +573,13 @@ def _swap_reasoning_effort(surface: str = "individual") -> str:
 def _chat_title_model_name() -> str:
     return _env_str(
         "MEALFIT_CHAT_TITLE_MODEL",
-        DEEPSEEK_FLASH,
+        GLM_FLASH,
     )
 
 def _chat_router_model_name() -> str:
     return _env_str(
         "MEALFIT_CHAT_ROUTER_MODEL",
-        DEEPSEEK_FLASH,
+        GLM_FLASH,
     )
 
 def _chat_title_max_output_tokens() -> int:
@@ -771,10 +771,10 @@ def _chat_stream_inactivity_timeout_s() -> float:
         validator=lambda v: 0.0 < v <= 360.0,
     )
 
-# [P0-DEEPSEEK-MIGRATION] Singleton módulo-level: se construye a import-time
+# [P0-LLM-PROVIDER-MIGRATION] Singleton módulo-level: se construye a import-time
 # (sin user en contexto) → resuelve al modelo FREE. Los paths per-request
 # (call_model/swap_meal) construyen su LLM con tier del usuario real.
-llm = ChatDeepSeek(
+llm = ChatGLM(
     model=_chat_agent_model_name(),
     temperature=0.2,
     timeout=_chat_agent_llm_timeout_s(),  # [P0-CHAT-LLM-TIMEOUT · 2026-05-19]
@@ -1922,7 +1922,7 @@ def swap_meal(form_data: dict, surface: str = "individual"):
     )
     
     temp = 0.3
-    # [P0-DEEPSEEK-MIGRATION] Tier-routing: el endpoint /swap-meal valida
+    # [P0-LLM-PROVIDER-MIGRATION] Tier-routing: el endpoint /swap-meal valida
     # ownership de `user_id` contra el JWT ANTES de llegar acá (api_swap_meal).
     _swap_uid = form_data.get("user_id")
     # [P2-SWAP-COST-INSTRUMENTATION · 2026-07-10] `include_raw=True` → el invoke retorna
@@ -1933,12 +1933,12 @@ def swap_meal(form_data: dict, surface: str = "individual"):
     # (`_swap_base_llm`) porque el emit helper resuelve el modelo desde `.model`/`.model_name`.
     # Bonus: un fallo de PARSE ya no revienta como excepción de provider (contaba como CB
     # failure) — llega como parsed=None y se convierte en ValueError retryable (guardrail).
-    # [P1-SWAP-LUNA · 2026-08-05] `build_chat_llm` en vez de `ChatDeepSeek` fijo.
+    # [P1-SWAP-LUNA · 2026-08-05] `build_chat_llm` en vez de `ChatGLM` fijo.
     #
     # El hardcode era el bug latente: `MEALFIT_CHAT_AGENT_SWAP_MODEL` ya existía y parecía
     # bastar para mover el swap a otro modelo, pero solo cambiaba el NOMBRE — el cliente
-    # seguía siendo el de DeepSeek. Ponerle un ID de OpenAI habría mandado cada swap al
-    # base_url de DeepSeek con la key equivocada. Mismo defecto que P1-DAYGEN-LUNA-CANARY
+    # seguía siendo el de GLM. Ponerle un ID de OpenAI habría mandado cada swap al
+    # base_url de GLM con la key equivocada. Mismo defecto que P1-DAYGEN-LUNA-CANARY
     # ya había corregido en `_build_day_llm`, donde el comentario también decía "provider
     # correcto por prefijo" sin que estuviera implementado.
     #
@@ -1949,7 +1949,7 @@ def swap_meal(form_data: dict, surface: str = "individual"):
     # nuevo da más variedad que el viejo, no menos (flash devolvía salmón 3 de 3).
     # El modelo se resuelve UNA vez y se reusa: lo necesitan el detector de proveedor, el
     # constructor y el gate del circuit breaker de abajo. Antes cada uno llamaba al helper
-    # por su cuenta y existía un test (P0-DEEPSEEK-MIGRATION `test_f_...`) solo para vigilar
+    # por su cuenta y existía un test (P0-LLM-PROVIDER-MIGRATION `test_f_...`) solo para vigilar
     # que no divergieran en el `user_id`; con una variable única eso deja de ser posible.
     _swap_model_name = _chat_agent_swap_model_name(_swap_uid)
     _swap_effort_kwargs = (
@@ -3804,7 +3804,7 @@ def _emit_chat_rate_limited_metric_best_effort(user_id, session_id, model_name):
                 user_id if user_id and user_id != "guest" else None,
                 session_id,
                 "chat_llm_rate_limited",
-                _json_rl.dumps({"model": model_name, "provider": "deepseek"}, ensure_ascii=False),
+                _json_rl.dumps({"model": model_name, "provider": "zai"}, ensure_ascii=False),
             ),
         )
     except Exception as _e_rl:
@@ -4064,10 +4064,10 @@ def call_model(state: ChatState):
         if not isinstance(m, SystemMessage):
             llm_messages.append(m)
             
-    # [P0-DEEPSEEK-MIGRATION] Identidad para tier-routing (paid→pro). Guests
+    # [P0-LLM-PROVIDER-MIGRATION] Identidad para tier-routing (paid→pro). Guests
     # (session_id) resuelven a flash via fail-cheap del router.
     _model_uid = state.get("user_id") or state.get("session_id")
-    chat_llm = ChatDeepSeek(
+    chat_llm = ChatGLM(
         model=_chat_agent_model_name(_model_uid),
         temperature=0.7,
         timeout=_chat_agent_llm_timeout_s(),  # [P0-CHAT-LLM-TIMEOUT · 2026-05-19]
@@ -4084,7 +4084,7 @@ def call_model(state: ChatState):
     #
     # NOTA: `_chat_agent_model_name(_model_uid)` se llama 2x (callsite del
     # constructor arriba + aquí) con el MISMO uid — el modelo del gate CB debe
-    # coincidir con el del LLM construido (tier-routing P0-DEEPSEEK-MIGRATION).
+    # coincidir con el del LLM construido (tier-routing P0-LLM-PROVIDER-MIGRATION).
     # Costo trivial: tier lookup cacheado con TTL en llm_provider.
     _cb_model = _chat_agent_model_name(_model_uid)
     _cb = _get_circuit_breaker(_cb_model)
@@ -4201,7 +4201,7 @@ def call_model(state: ChatState):
                     state.get("user_id") if state.get("user_id") and state.get("user_id") != "guest" else None,
                     state.get("session_id"),
                     "chat_llm_empty_response",
-                    _json_empty.dumps({"model": _cb_model, "provider": "deepseek"}, ensure_ascii=False),
+                    _json_empty.dumps({"model": _cb_model, "provider": "zai"}, ensure_ascii=False),
                 ),
             )
         except Exception:
@@ -4634,7 +4634,7 @@ def execute_tools(state: ChatState):
 # `build_tools_instructions_stream` ya se lo prohíbe con todas las letras
 # ("NUNCA digas 'lo registro' o 'anotado' si no llamaste la herramienta en ese
 # turno"). Eso es una INSTRUCCIÓN, no un control: el tier `free` va a
-# `deepseek-v4-flash` (llm_provider: todo lo que no sea basic/plus/ultra cae al
+# `glm-5.3-flash` (llm_provider: todo lo que no sea basic/plus/ultra cae al
 # barato por diseño fail-cheap) y flash se salta la llamada con bastante más
 # frecuencia que pro. Un aviso en el prompt no es un guard.
 #
@@ -4859,7 +4859,7 @@ def generate_chat_title_background(user_id: str, session_id: str, first_message_
             )
             return
 
-        title_llm = ChatDeepSeek(model=_chat_title_model_name(), temperature=0.7, timeout=_chat_title_llm_timeout_s(), max_output_tokens=_chat_title_max_output_tokens())  # [P0-CHAT-LLM-TIMEOUT · 2026-05-19] / [P3-COST-TITLE-OUTPUT-CAP · 2026-06-01]
+        title_llm = ChatGLM(model=_chat_title_model_name(), temperature=0.7, timeout=_chat_title_llm_timeout_s(), max_output_tokens=_chat_title_max_output_tokens())  # [P0-CHAT-LLM-TIMEOUT · 2026-05-19] / [P3-COST-TITLE-OUTPUT-CAP · 2026-06-01]
         # [P1-CHAT-TITLE-LOCALE · 2026-08-19 · round 2] Directiva de idioma ESPECÍFICA del
         # título (`build_title_language_directive`): la conversacional del round 1 no vencía
         # a los ejemplos españoles del template — ver el bloque en prompts/chat_agent.py.
@@ -4993,7 +4993,7 @@ def rag_query_router(prompt: str) -> dict:
         return {"skip": False, "query": prompt}
 
     try:
-        router_llm = ChatDeepSeek(
+        router_llm = ChatGLM(
             model=_chat_router_model_name(),
             temperature=0.0,
             timeout=_chat_router_llm_timeout_s(),  # [P0-CHAT-LLM-TIMEOUT · 2026-05-19]
@@ -6767,9 +6767,9 @@ def chat_with_agent_stream(session_id: str, prompt: str, current_plan: Optional[
     # la herramienta primero (regla de cero texto antes de herramienta)». El
     # modelo CITA la regla que le prohíbe eso mientras la incumple.
     #
-    # No es un leak de reasoning tokens: DeepSeek los manda en
+    # No es un leak de reasoning tokens: GLM los manda en
     # `reasoning_content` (campo aparte que este loop no lee) y además el
-    # thinking está desactivado desde P1-DEEPSEEK-THINKING-OFF. Es el modelo
+    # thinking está desactivado desde P1-PROVIDER-THINKING-DEFAULT. Es el modelo
     # escribiendo su deliberación como `content` normal.
     #
     # El guard que debería taparlo ya existe cinco líneas más abajo

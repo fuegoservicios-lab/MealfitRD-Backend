@@ -13,7 +13,7 @@ operador.
 | `check_scaling.py` | Reemplazo del endpoint `/debug-scaling/{user_id}` eliminado en P1-AUDIT-NEW-1 (audit 2026-05-12). Read-only sobre `meal_plans` vía `execute_sql_query` (Neon). **Requiere `NEON_DATABASE_URL_POOLED` + filtrar por user_id explícito** — NO IDOR-fallback. |
 | `check_schema.py` | Snapshot del schema actual (información para post-mortems de drift). |
 | `publish_pfix_marker.py` | Helper para publicar `expected_last_known_pfix` en `app_kv_store` tras cierre de un P-fix (alternativa al MCP `execute_sql`). |
-|  `demo_medical_reviewer.py` | Smoke test manual del review LLM (NO automated; llama al proveedor REAL, así que gasta — P0-DEEPSEEK-MIGRATION dejó obsoleta la GEMINI_API_KEY que citaba esta fila). |
+|  `demo_medical_reviewer.py` | Smoke test manual del review LLM (NO automated; llama al proveedor REAL, así que gasta — P0-LLM-PROVIDER-MIGRATION dejó obsoleta la GEMINI_API_KEY que citaba esta fila). |
 |  `demo_semantic_cache.py` | Demostración manual del semantic cache. Invoca `run_plan_pipeline` ENTERO: gasta como una generación de plan. |
 | `run_coverage.sh` / `run_coverage.ps1` | [I6 / P3-COVERAGE-HEATMAP · 2026-05-20] Genera coverage heatmap de los ~770 tests pytest. Auto-instala `pytest-cov` si falta. Output: `htmlcov/index.html` (gitignored) + summary terminal. Default filtro: `-m "not e2e"`. Uso: `./scripts/run_coverage.sh` o `--term` para skip HTML. |
 

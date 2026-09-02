@@ -95,8 +95,8 @@ existía y sigue vivo).
 **API key del provider cloud — atención al nombre exacto**: el path
 `openai_compatible` lee `VISION_API_KEY` (ver `.env.example` y
 `vision_agent._dispatch_openai_compatible_vision`), **no** `OPENAI_API_KEY`.
-Si `VISION_API_KEY` no está seteada, `ChatDeepSeek.__init__` no cae a
-`OPENAI_API_KEY` — cae a `_deepseek_api_key()` (env `DEEPSEEK_API_KEY`), que
+Si `VISION_API_KEY` no está seteada, `ChatGLM.__init__` no cae a
+`OPENAI_API_KEY` — cae a `_zai_api_key()` (env `ZAI_API_KEY`), que
 es la key EQUIVOCADA para el endpoint de OpenAI y produce un 401 silencioso
 (el except de `_dispatch_openai_compatible_vision` lo captura y degrada a
 `analysis_failed=True`, así que en el modal solo se ve "Error analizando
@@ -228,7 +228,7 @@ macros contra ground truth — eso no existe hoy.
 
 - [`tests/test_p1_vision_luna.py`](../tests/test_p1_vision_luna.py) — ancla
   del resize (contrato, aspecto, fail-open, clamp del knob), el dispatch por
-  MODELO (`ChatOpenAI` vs `ChatDeepSeek`), la precedencia de API key, el
+  MODELO (`ChatOpenAI` vs `ChatGLM`), la precedencia de API key, el
   gate de cuota en `diary.py` (ya no llama `log_api_usage`, sí llama
   `log_llm_usage_event` con `node="vision_scan"`), anti-regresión de
   `get_monthly_api_usage`, y supersession del marker `_LAST_KNOWN_PFIX`.

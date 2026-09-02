@@ -6,7 +6,7 @@ lineas se quedaban en espanol.
     '½ pedazo de ñame (≈150 g)' -> canonico 'pedazo de ñame'   (deberia ser 'ñame')
     '⅓ taza de yogurt griego'   -> la fraccion no se consumia siquiera
 
-MEDIDO con una corrida DIRIGIDA contra el modelo real (deepseek-v4-flash) sobre dias reales
+MEDIDO con una corrida DIRIGIDA contra el modelo real (glm-5.3-flash) sobre dias reales
 de tres planes de produccion: fr-FR tenia 8 de 186 lineas de ingrediente caidas al espanol
 (4,3 %), y SEIS de esas ocho son de estas dos clases. Tres de las cuatro caidas del primer
 dia traian un gloss PERFECTAMENTE correcto -- «2 gousses d'ail hachees (Ajo picado)» para

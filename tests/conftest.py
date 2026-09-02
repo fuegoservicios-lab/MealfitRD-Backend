@@ -55,8 +55,8 @@ except Exception:
     sys.modules.setdefault("langgraph.checkpoint.memory", MagicMock())
     sys.modules.setdefault("langgraph.checkpoint.postgres", MagicMock())
 
-# [P0-5 · P0-DEEPSEEK-MIGRATION 2026-06-12] Same eager-import for
-# `langchain_openai` (base client of the DeepSeek provider, see
+# [P0-5 · P0-LLM-PROVIDER-MIGRATION 2026-06-12] Same eager-import for
+# `langchain_openai` (base client of the GLM provider, see
 # `llm_provider.py`). If a test file installs a partial stub first, a later
 # import of the real surface (e.g. via cron_tasks → ai_helpers →
 # llm_provider) raises ImportError. Importing the real package here primes
@@ -73,7 +73,7 @@ except Exception:
     from unittest.mock import MagicMock
     if "langchain_openai" not in sys.modules:
         _stub = MagicMock()
-        # ChatDeepSeek(ChatOpenAI) llama super().__init__(**kwargs); un stub
+        # ChatGLM(ChatOpenAI) llama super().__init__(**kwargs); un stub
         # `= object` peta (object.__init__ no acepta kwargs) y rompe la colección
         # en entornos sin langchain_openai. Un stub-class que traga **kwargs sí
         # permite instanciar las subclases.

@@ -46,8 +46,8 @@ except Exception:
     sys.modules.setdefault("langgraph.checkpoint.memory", MagicMock())
     sys.modules.setdefault("langgraph.checkpoint.postgres", MagicMock())
 
-# [P0-5 · hoisted P3-NEW-E · P0-DEEPSEEK-MIGRATION 2026-06-12] Mismo
-# eager-import para `langchain_openai` (cliente base del provider DeepSeek,
+# [P0-5 · hoisted P3-NEW-E · P0-LLM-PROVIDER-MIGRATION 2026-06-12] Mismo
+# eager-import para `langchain_openai` (cliente base del provider GLM,
 # ver `llm_provider.py`). Si un test file instala un stub parcial primero,
 # un import posterior del surface real (e.g. via cron_tasks → ai_helpers →
 # llm_provider) levanta `ImportError`. Importar el paquete real puebla
