@@ -15,12 +15,12 @@ logger = logging.getLogger(__name__)
 
 from db import (
     get_user_profile, update_user_health_profile, update_user_health_profile_atomic, delete_user_facts_by_metadata,
-    get_user_likes, get_active_rejections, get_latest_meal_plan_with_id,
+    get_user_likes, get_active_rejections, get_latest_usable_meal_plan_with_id,
     update_meal_plan_data, search_deep_memory as db_search_deep_memory,
     log_consumed_meal as db_log_consumed_meal,
     update_consumed_meal as db_update_consumed_meal,
     save_new_meal_plan_robust, increment_ingredient_frequencies,
-    get_latest_meal_plan, user_tz_offset_min
+    get_latest_usable_meal_plan, user_tz_offset_min
 )
 from schemas import MealModel
 from prompts import PREFERENCES_AGENT_PROMPT, MODIFY_MEAL_PROMPT_TEMPLATE
@@ -1074,7 +1074,7 @@ def execute_modify_single_meal(user_id: str, day_number: int, meal_type: str, ch
     # Configuración lo escriben ahí), SIN hidratador dedicado en esta superficie.
 
     # 1. Obtener el plan actual con su ID
-    plan_record = get_latest_meal_plan_with_id(user_id)
+    plan_record = get_latest_usable_meal_plan_with_id(user_id)
     if not plan_record:
         return "ERROR: No se encontró un plan activo. Genera un plan primero."
     
@@ -2483,7 +2483,7 @@ def execute_modify_single_meal(user_id: str, day_number: int, meal_type: str, ch
         # follow-up natural documentado en P1-RECALC-LOSTUPDATE (2026-05-14):
         #
         # Pre-fix flow:
-        #   t=0  `get_latest_meal_plan_with_id(user_id)` (línea ~352) lee
+        #   t=0  `get_latest_usable_meal_plan_with_id(user_id)` (línea ~352) lee
         #        plan_data sin lock.
         #   t=1  LLM genera new_meal_data (puede tomar 5-30s con retry hasta 3
         #        veces vía `invoke_with_retry`).
@@ -3107,7 +3107,7 @@ def check_shopping_list(user_id: str) -> str:
     """
     logger.info(f"🛒 [TOOL EXECUTION] Calculando lista de compras matemática para user {user_id}")
             
-    plan = get_latest_meal_plan(user_id)
+    plan = get_latest_usable_meal_plan(user_id)
     if not plan:
         return "El usuario no tiene un plan de comidas activo estructurado para calcular la lista de compras."
         
@@ -3634,7 +3634,7 @@ def mark_shopping_list_purchased(user_id: str, excluded_items: list[str] = None,
     #
     #   1. NUNCA confiar en `user_id` LLM-supplied sin validar contra el
     #      `verified_user_id` autenticado del request.
-    #   2. `get_latest_meal_plan(user_id)` filtra por user_id en su query
+    #   2. `get_latest_usable_meal_plan(user_id)` filtra por user_id en su query
     #      (db_plans.py). `restock_inventory(user_id, ...)` filtra al
     #      escribir `user_inventory`. Si refactorizas alguno, conservar
     #      el filtro `WHERE user_id = %s`.
@@ -3652,7 +3652,7 @@ def mark_shopping_list_purchased(user_id: str, excluded_items: list[str] = None,
         from shopping_calculator import get_shopping_list_delta, _parse_quantity
         from constants import strip_accents, normalize_ingredient_for_tracking
         
-        plan = get_latest_meal_plan(user_id)
+        plan = get_latest_usable_meal_plan(user_id)
         if not plan:
             return "El usuario no tiene un plan activo para extraer la lista de compras."
             
@@ -4269,7 +4269,7 @@ def consultar_dia_del_plan(user_id: str, fecha: str) -> str:
             return (f"No pude interpretar la fecha '{fecha}'. Necesito el formato "
                     f"ISO 'YYYY-MM-DD' (ejemplo: 2026-07-26).")
 
-        plan = get_latest_meal_plan(user_id)
+        plan = get_latest_usable_meal_plan(user_id)
         if not isinstance(plan, dict) or not plan:
             return "El usuario no tiene ningún plan activo del que pueda sacar ese día."
 

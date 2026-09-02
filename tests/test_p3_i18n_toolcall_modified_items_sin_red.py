@@ -28,7 +28,7 @@ def nevera(monkeypatch):
         return (True, [str(i) for i in items])
 
     monkeypatch.setattr(db_inventory, "restock_inventory", _restock)
-    monkeypatch.setattr(tools, "get_latest_meal_plan", lambda uid: {"id": "p1", "plan_data": {"days": []}})
+    monkeypatch.setattr(tools, "get_latest_usable_meal_plan", lambda uid: {"id": "p1", "plan_data": {"days": []}})
     monkeypatch.setattr(
         shopping_calculator, "get_shopping_list_delta",
         lambda uid, plan, structured=True: [

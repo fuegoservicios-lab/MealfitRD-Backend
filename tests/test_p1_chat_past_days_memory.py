@@ -539,12 +539,12 @@ def _plan_fixture_fechado(meals):
 
 def _llamar_tool(plan, fecha):
     import tools as _t
-    orig = _t.get_latest_meal_plan
+    orig = _t.get_latest_usable_meal_plan
     try:
-        _t.get_latest_meal_plan = lambda uid: plan
+        _t.get_latest_usable_meal_plan = lambda uid: plan
         return _t.consultar_dia_del_plan.func(user_id="u1", fecha=fecha)
     finally:
-        _t.get_latest_meal_plan = orig
+        _t.get_latest_usable_meal_plan = orig
 
 
 def test_tool_devuelve_cantidades_y_receta():

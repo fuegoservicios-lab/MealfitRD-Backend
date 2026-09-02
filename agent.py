@@ -44,7 +44,7 @@ from memory_manager import build_memory_context
 from fact_extractor import get_embedding
 from vision_agent import get_multimodal_embedding
 from langgraph.checkpoint.postgres import PostgresSaver
-from db import get_user_ingredient_frequencies, get_latest_meal_plan_with_id, get_session_messages, save_message, search_user_facts, search_visual_diary, connection_pool, chat_checkpoint_pool, get_consumed_meals_today
+from db import get_user_ingredient_frequencies, get_latest_usable_meal_plan_with_id, get_session_messages, save_message, search_user_facts, search_visual_diary, connection_pool, chat_checkpoint_pool, get_consumed_meals_today
 from dotenv import load_dotenv
 
 load_dotenv()
@@ -1413,8 +1413,8 @@ def swap_meal(form_data: dict, surface: str = "individual"):
     # Intento Primario: Extraer ingredientes directamente del plan activo en BD
     if user_id and user_id != "guest":
         try:
-            from db_plans import get_latest_meal_plan_with_id
-            plan_record = get_latest_meal_plan_with_id(user_id)
+            from db_plans import get_latest_usable_meal_plan_with_id
+            plan_record = get_latest_usable_meal_plan_with_id(user_id)
             if plan_record and "plan_data" in plan_record:
                 from db_facts import get_consumed_meals_since
                 from shopping_calculator import get_realtime_pantry, aggregate_shopping_list as _agg_pantry
@@ -1558,8 +1558,8 @@ def swap_meal(form_data: dict, surface: str = "individual"):
         ).lower() != "false"
     ):
         try:
-            from db_plans import get_latest_meal_plan_with_id
-            _fallback_plan_record = get_latest_meal_plan_with_id(user_id)
+            from db_plans import get_latest_usable_meal_plan_with_id
+            _fallback_plan_record = get_latest_usable_meal_plan_with_id(user_id)
             if _fallback_plan_record and isinstance(
                 _fallback_plan_record.get("plan_data"), dict
             ):
@@ -4448,13 +4448,13 @@ def execute_tools(state: ChatState):
                             # ahora retorna el `plan_data` ya mergeado (fresh-post-lock,
                             # la misma data que la re-lectura traería). Usarlo directo
                             # evita un SELECT serial redundante justo tras la escritura.
-                            # Fallback a `get_latest_meal_plan_with_id` solo si la key
+                            # Fallback a `get_latest_usable_meal_plan_with_id` solo si la key
                             # está ausente (back-compat / parser degradado).
                             _inband_plan = parsed_mod.get("plan_data")
                             if isinstance(_inband_plan, dict) and _inband_plan:
                                 new_plan = _inband_plan
                             else:
-                                updated_plan_record = get_latest_meal_plan_with_id(user_id if user_id and user_id != 'guest' else session_id)
+                                updated_plan_record = get_latest_usable_meal_plan_with_id(user_id if user_id and user_id != 'guest' else session_id)
                                 if updated_plan_record and "plan_data" in updated_plan_record:
                                     new_plan = updated_plan_record["plan_data"]
                             # [P2-AUDIT-NEW-1 · 2026-05-12] Extraer
@@ -5273,7 +5273,7 @@ def _build_past_days_context(user_id: str, current_plan, local_date_str: Optiona
     input de request body: se guarda la coerción a int, nunca se confía ciego.
 
     `plan_id`: [P2-CHUNK-OVERDUE-SIGNAL · 2026-08-04] id de `meal_plans` del
-    plan activo, cuando el callsite ya lo resolvió (`get_latest_meal_plan_with_id`
+    plan activo, cuando el callsite ya lo resolvió (`get_latest_usable_meal_plan_with_id`
     para el shopping-delta, unas líneas antes en ambos paths). Se reenvía tal
     cual a `_build_pending_days_lines_block` — ver esa función para por qué
     filtrar el COUNT por `meal_plan_id` en vez de `user_id` importa.
@@ -5938,7 +5938,7 @@ def chat_with_agent(session_id: str, prompt: str, current_plan: Optional[dict] =
     inventory_str = ""
     shopping_delta_str = ""
     # [P2-CHUNK-OVERDUE-SIGNAL · 2026-08-04] Definido ANTES del try de abajo
-    # (que ya resuelve `get_latest_meal_plan_with_id` para el shopping-delta)
+    # (que ya resuelve `get_latest_usable_meal_plan_with_id` para el shopping-delta)
     # para que `plan_record` esté siempre en scope más abajo, incluso si el
     # try revienta antes de la asignación o si `user_id` es guest.
     plan_record = None
@@ -5950,8 +5950,8 @@ def chat_with_agent(session_id: str, prompt: str, current_plan: Optional[dict] =
             if user_phys_inv:
                 inventory_str = ", ".join(user_phys_inv)
                 
-            from db_plans import get_latest_meal_plan_with_id
-            plan_record = get_latest_meal_plan_with_id(user_id)
+            from db_plans import get_latest_usable_meal_plan_with_id
+            plan_record = get_latest_usable_meal_plan_with_id(user_id)
             if plan_record and "plan_data" in plan_record:
                 from shopping_calculator import get_shopping_list_delta
                 delta_list = get_shopping_list_delta(user_id, plan_record["plan_data"], is_new_plan=False)
@@ -6451,7 +6451,7 @@ def chat_with_agent_stream(session_id: str, prompt: str, current_plan: Optional[
     inventory_str = ""
     shopping_delta_str = ""
     # [P2-CHUNK-OVERDUE-SIGNAL · 2026-08-04] Definido ANTES del try de abajo
-    # (que ya resuelve `get_latest_meal_plan_with_id` para el shopping-delta)
+    # (que ya resuelve `get_latest_usable_meal_plan_with_id` para el shopping-delta)
     # para que `plan_record` esté siempre en scope más abajo, incluso si el
     # try revienta antes de la asignación o si `user_id` es guest.
     plan_record = None
@@ -6463,8 +6463,8 @@ def chat_with_agent_stream(session_id: str, prompt: str, current_plan: Optional[
             if user_phys_inv:
                 inventory_str = ", ".join(user_phys_inv)
                 
-            from db_plans import get_latest_meal_plan_with_id
-            plan_record = get_latest_meal_plan_with_id(user_id)
+            from db_plans import get_latest_usable_meal_plan_with_id
+            plan_record = get_latest_usable_meal_plan_with_id(user_id)
             if plan_record and "plan_data" in plan_record:
                 from shopping_calculator import get_shopping_list_delta
                 delta_list = get_shopping_list_delta(user_id, plan_record["plan_data"], is_new_plan=False)

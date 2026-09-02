@@ -1970,6 +1970,40 @@ def get_latest_meal_plan_with_id(user_id: str):
         logger.error(f"Error obteniendo plan con ID: {e}")
         return None
 
+# ── [P1-ARQ25-F1-CLOSE · 2026-09-02] Lectores «usables»: saltan el placeholder de la cola ──
+# Desde la Fase 1 el plan nace en `meal_plans` ANTES de generarse (`generation_status =
+# 'generating'`, `days = []`, I1). `get_latest_meal_plan*` devuelve el más reciente por fecha,
+# así que durante los minutos de generación el coach y las tools del agente veían un plan
+# vacío y hablaban como si el usuario no tuviera menú. Estos dos lectores devuelven el plan
+# más reciente CON contenido (o no-placeholder). Los routers que resuelven «el plan al que
+# pertenece esta mutación» siguen usando los lectores de siempre a propósito: allí el
+# placeholder SÍ es el plan (adjuntar el run, dedup de creación reciente).
+USABLE_PLAN_SQL_FILTER = (
+    "NOT (coalesce(plan_data->>'generation_status', '') = 'generating' "
+    "AND jsonb_array_length(coalesce(plan_data->'days', '[]'::jsonb)) = 0)"
+)
+
+
+def get_latest_usable_meal_plan_with_id(user_id: str):
+    """Plan más reciente del usuario que NO sea un placeholder vacío de la cola (id + plan_data)."""
+    try:
+        res = execute_sql_query(
+            "SELECT id, plan_data, created_at FROM meal_plans WHERE user_id = %s AND "
+            + USABLE_PLAN_SQL_FILTER + " ORDER BY created_at DESC LIMIT 1",
+            (user_id,), fetch_one=True,
+        )
+        return res or None
+    except Exception as e:
+        logger.error(f"Error obteniendo plan usable con ID: {e}")
+        return None
+
+
+def get_latest_usable_meal_plan(user_id: str):
+    """Como `get_latest_meal_plan`, saltando el placeholder vacío de la cola. Devuelve plan_data."""
+    rec = get_latest_usable_meal_plan_with_id(user_id)
+    return rec.get("plan_data") if isinstance(rec, dict) else None
+
+
 def update_meal_plan_data(plan_id: str, new_plan_data: dict, user_id: Optional[str] = None):
     """[P1-NEW-3 · 2026-05-10] Actualiza el plan_data JSONB de un plan
     filtrando por `(id, user_id)` cuando se provee `user_id`.

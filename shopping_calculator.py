@@ -13180,9 +13180,9 @@ def fetch_inventory_and_consumed_for_plan(user_id: str, plan_result: dict, is_ne
                     physical_inventory.append(item)
 
         if not is_new_plan:
-            from db_plans import get_latest_meal_plan_with_id
+            from db_plans import get_latest_usable_meal_plan_with_id  # [P1-ARQ25-F1-CLOSE] salta el placeholder
             from db_facts import get_consumed_meals_since
-            plan_record = get_latest_meal_plan_with_id(user_id)
+            plan_record = get_latest_usable_meal_plan_with_id(user_id)
             if plan_record and plan_record.get("plan_data"):
                 plan_created_at = plan_record.get("created_at")
                 if plan_created_at:
