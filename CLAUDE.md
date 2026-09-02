@@ -95,7 +95,7 @@ Cinco regresiones históricas que este diseño protege (P1-G mode=block no-op, `
 
 ## Lifecycle único de generación (roadmap 2.5, Fase 1)
 
-[P1-ARQ25-F1-LIFECYCLE · 2026-09-02] Con `MEALFIT_INITIAL_VIA_QUEUE` el Bloque 1 es un chunk `initial` de `plan_chunk_queue` con placeholder en `meal_plans` (I1); `attempts` es el token de fencing (I10); `revision` sube por trigger (I12); estados derivados, no persistidos; drain en SIGTERM. Doc [`backend/docs/generation_lifecycle_2_5.md`](backend/docs/generation_lifecycle_2_5.md); test [`test_p1_arq25_f1_lifecycle.py`](backend/tests/test_p1_arq25_f1_lifecycle.py).
+[P1-ARQ25-F1-LIFECYCLE · 2026-09-02] Bloque 1 = chunk `initial` de `plan_chunk_queue` (placeholder en `meal_plans`, I1); `attempts` = token de fencing (I10); `revision` por trigger (I12). Doc [`generation_lifecycle_2_5.md`](backend/docs/generation_lifecycle_2_5.md); test [`test_p1_arq25_f1_lifecycle.py`](backend/tests/test_p1_arq25_f1_lifecycle.py).
 
 ---
 
