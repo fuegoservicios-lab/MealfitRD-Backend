@@ -589,8 +589,12 @@ def create_placeholder_plan_and_enqueue_initial(
 
     chunk_snapshot = {**snapshot, "_run_id": run_id, "_initial": True}
     _enqueue_plan_chunk(user_id, plan_id, 1, 0, int(days_count), chunk_snapshot, chunk_kind=INITIAL_CHUNK_KIND)
+    # `execute_after = NOW()`: `_enqueue_plan_chunk` programa los chunks con un margen
+    # (medido 2026-09-02: +60 s), pensado para los bloques 2..N. El chunk 0 es la
+    # generación que el usuario está MIRANDO: el wake del worker (`wake_chunk_worker`)
+    # no sirve de nada si el pickup lo descarta por `execute_after <= NOW()`.
     rows = execute_sql_write(
-        "UPDATE plan_chunk_queue SET run_id = %s, input_hash = %s "
+        "UPDATE plan_chunk_queue SET run_id = %s, input_hash = %s, execute_after = NOW() "
         "WHERE meal_plan_id = %s AND week_number = 1 AND chunk_kind = %s AND status = 'pending' "
         "RETURNING id",
         (run_id, request_fingerprint(chunk_snapshot.get("form_data") or {}), plan_id, INITIAL_CHUNK_KIND),

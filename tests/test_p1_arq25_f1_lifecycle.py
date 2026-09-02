@@ -352,3 +352,14 @@ def test_progress_publisher_throttles_and_flushes(monkeypatch):
     assert len(writes) == 1 and writes[0]["seq"] == 1  # las dos siguientes quedan pendientes
     p.flush({"event": "complete"})
     assert writes[-1]["event"]["event"] == "complete" and writes[-1]["seq"] == 4
+
+
+def test_initial_chunk_is_due_immediately():
+    """[P1-ARQ25-F1-LIFECYCLE · 2026-09-02, medido en el primer run real] `_enqueue_plan_chunk`
+    programa con margen (+60 s); el wake del worker llegaba y el pickup descartaba el chunk 0
+    por `execute_after <= NOW()`. El encolado del Bloque 1 lo pone a NOW() en el mismo UPDATE
+    que estampa `run_id`."""
+    gl = _src("generation_lifecycle.py")
+    i = gl.find("UPDATE plan_chunk_queue SET run_id = %s, input_hash = %s, execute_after = NOW()")
+    assert i > 0, "el chunk 0 debe quedar vencido al encolarse"
+    assert "chunk_kind = %s AND status = 'pending'" in gl[i:i + 300]
