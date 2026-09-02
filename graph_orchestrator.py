@@ -7397,7 +7397,6 @@ Devuelve ÚNICAMENTE el contexto comprimido en viñetas directas.
 # ============================================================
 # NODO 1: PLANIFICADOR (Fase Map — esqueleto liviano)
 # ============================================================
-@_node_label("planner")
 # ── [P1-SKELETON-SHORT-REASK · 2026-09-02] Esqueleto corto: re-pedir, y si no, reutilizar ──
 # Vivo (run fdbb56de, 2026-09-02): en el intento 2 el planificador (glm-5.3-flash, temp 0.95,
 # `_is_same_day_reroll=True`) devolvió 1/3 días — la instrucción de re-roll habla de «las
@@ -7498,6 +7497,7 @@ def _stamp_missing_day_dates(plan: dict, form_data: dict, *, now=None) -> list:
     return stamped
 
 
+@_node_label("planner")
 async def plan_skeleton_node(state: PlanState) -> dict:
     attempt = state.get("attempt", 1)
     form_data = state["form_data"]
@@ -49712,6 +49712,18 @@ def _apply_final_defense_guardrails(
 # ============================================================
 # FUNCIÓN PÚBLICA: Ejecutar el pipeline completo
 # ============================================================
+    # [P1-SKELETON-SHORT-REASK · 2026-09-02] Estampado universal: cualquier día que llegue
+    # aquí sin `date` (sintético del guardrail, re-corregido por el marker surgical —vivo:
+    # el Día 1 del plan 19e8b509 salió sin fecha—, snapshot restaurado) recibe fecha y
+    # nombre de día antes de persistir. Nunca pisa una fecha existente.
+    try:
+        _fp_final = final_state.get("plan_result") if isinstance(final_state, dict) else None
+        if isinstance(_fp_final, dict):
+            _st_final = _stamp_missing_day_dates(_fp_final, actual_form_data)
+            if _st_final:
+                logger.info(f"📅 [P1-SKELETON-SHORT-REASK] date/day_name estampados pre-persist en días: {_st_final}")
+    except Exception as _stamp_final_err:
+        logger.warning(f"[P1-SKELETON-SHORT-REASK] estampado universal falló: {_stamp_final_err}")
 async def arun_plan_pipeline(form_data: dict, history: list = None, taste_profile: str = "", memory_context: str = "", progress_callback=None, background_tasks=None) -> dict:
     """
     Ejecuta el pipeline completo de generación de planes (Map-Reduce):
