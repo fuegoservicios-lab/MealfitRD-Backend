@@ -739,6 +739,94 @@ def admin_worker_drain(
     }
 
 
+ARQ25_GATE_SOAK_DAYS = 7
+_ARQ25_LIFECYCLE_ALERT_HINTS = ("arq25", "lifecycle", "fencing", "zombie", "deploy_lag", "chunk", "pending_pipeline", "run_")
+
+
+def _arq25_days_since(ts) -> Optional[float]:
+    if ts is None:
+        return None
+    from datetime import datetime, timezone
+    if getattr(ts, "tzinfo", None) is None:
+        ts = ts.replace(tzinfo=timezone.utc)
+    return round((datetime.now(timezone.utc) - ts).total_seconds() / 86400.0, 2)
+
+
+def arq25_gate_status(execute_sql_query) -> dict:
+    """[P1-ARQ25-F1-CLOSE · 2026-09-02] Estado del gate de la Fase 1 (roadmap 2.5), medido en DB.
+
+    Gate escrito: 10 planes reales consecutivos por la cola con cero duplicados, cero commits
+    stale y cero `pending_pipeline`; ≥2 con kill del proceso a mitad de LLM recuperados; 7 días
+    sin alerta nueva; después el flip global. El «soak» de 7 días es OBSERVACIÓN, no código:
+    aquí se mide para que el flip sea una lectura y no una corazonada.
+    """
+    q = execute_sql_query
+    since_row = q("SELECT min(created_at) AS t FROM plan_generation_runs", fetch_one=True) or {}
+    since = since_row.get("t")
+    runs = (q("SELECT count(*) AS n, count(DISTINCT user_id) AS u FROM plan_generation_runs", fetch_one=True) or {})
+    plans = (q(
+        "SELECT count(*) AS n FROM plan_generation_runs r JOIN meal_plans mp ON mp.id = r.plan_id "
+        "WHERE jsonb_array_length(coalesce(mp.plan_data->'days', '[]'::jsonb)) > 0", fetch_one=True) or {})
+    dup_runs = (q(
+        "SELECT count(*) AS n FROM (SELECT plan_id FROM plan_generation_runs WHERE plan_id IS NOT NULL "
+        "GROUP BY plan_id HAVING count(*) > 1) d", fetch_one=True) or {})
+    dup_plans = (q(
+        "SELECT count(*) AS n FROM (SELECT user_id, request_fingerprint, count(DISTINCT plan_id) AS c "
+        "FROM plan_generation_runs WHERE request_fingerprint IS NOT NULL GROUP BY user_id, request_fingerprint "
+        "HAVING count(DISTINCT plan_id) > 1) d", fetch_one=True) or {})
+    fencing = (q(
+        "SELECT count(*) AS n FROM pipeline_metrics WHERE node = 'arq25_fencing_rejected'", fetch_one=True) or {})
+    pending_pipeline = (q(
+        "SELECT count(*) AS n FROM plan_chunk_queue WHERE status = 'pending_pipeline'", fetch_one=True) or {})
+    kills = (q(
+        "SELECT count(*) AS n FROM plan_chunk_queue WHERE chunk_kind = 'initial' AND status = 'completed' "
+        "AND coalesce(attempts, 0) >= 1", fetch_one=True) or {})
+    alerts = q(
+        "SELECT alert_key, severity, triggered_at FROM system_alerts WHERE triggered_at >= %s "
+        "ORDER BY triggered_at DESC LIMIT 50", (since,), fetch_all=True) if since else []
+    alerts = alerts or []
+    lifecycle_alerts = [a for a in alerts if any(h in str(a.get("alert_key") or "").lower() for h in _ARQ25_LIFECYCLE_ALERT_HINTS)]
+    last_any = alerts[0].get("triggered_at") if alerts else None
+    last_lc = lifecycle_alerts[0].get("triggered_at") if lifecycle_alerts else None
+    days_any = _arq25_days_since(last_any) if last_any else _arq25_days_since(since)
+    days_lc = _arq25_days_since(last_lc) if last_lc else _arq25_days_since(since)
+    n_runs = int(runs.get("n") or 0)
+    counts_ok = (
+        n_runs >= 10 and int(dup_runs.get("n") or 0) == 0 and int(dup_plans.get("n") or 0) == 0
+        and int(fencing.get("n") or 0) == 0 and int(pending_pipeline.get("n") or 0) == 0
+        and int(kills.get("n") or 0) >= 2
+    )
+    soak_ok = (days_lc or 0.0) >= ARQ25_GATE_SOAK_DAYS
+    return {
+        "canary_since": since.isoformat() if hasattr(since, "isoformat") else since,
+        "runs": n_runs,
+        "users": int(runs.get("u") or 0),
+        "plans_with_days": int(plans.get("n") or 0),
+        "duplicate_runs_same_plan": int(dup_runs.get("n") or 0),
+        "duplicate_plans_same_request": int(dup_plans.get("n") or 0),
+        "fencing_rejected": int(fencing.get("n") or 0),
+        "pending_pipeline_chunks": int(pending_pipeline.get("n") or 0),
+        "kills_recovered": int(kills.get("n") or 0),
+        "alerts_since_canary": [{"key": a.get("alert_key"), "severity": a.get("severity")} for a in alerts[:10]],
+        "alerts_since_canary_count": len(alerts),
+        "lifecycle_alerts_since_canary": len(lifecycle_alerts),
+        "days_since_last_alert_any": days_any,
+        "days_since_last_lifecycle_alert": days_lc,
+        "soak_days_required": ARQ25_GATE_SOAK_DAYS,
+        "counts_ok": counts_ok,
+        "soak_ok": soak_ok,
+        "ready_to_flip": bool(counts_ok and soak_ok),
+    }
+
+
+@router.get("/admin/arq25-gate")
+def admin_arq25_gate(request: Request):
+    """[P1-ARQ25-F1-CLOSE] Lectura del gate de la Fase 1. Auth: `Bearer <CRON_SECRET>`."""
+    _verify_admin_token(request.headers.get("authorization"))
+    from db import execute_sql_query
+    return arq25_gate_status(execute_sql_query)
+
+
 @router.post("/admin/deploy-lag/check")
 def admin_force_deploy_lag_check(
     request: Request,
