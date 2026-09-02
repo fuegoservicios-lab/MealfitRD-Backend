@@ -6196,6 +6196,12 @@ _FLASH_MODEL_NAME = _plan_flash_model_name()
 # falla; el planner no. Con esto ON, el planner reintenta UNA vez con pro (breaker independiente, menos
 # cargado) antes de degradar. Flip a False → comportamiento previo (flash-only, degrada a emergencia).
 PLANNER_PRO_FALLBACK_ENABLED = _env_bool("MEALFIT_PLANNER_PRO_FALLBACK_ENABLED", True)
+# [P1-SKELETON-SHORT-REASK · 2026-09-02] Timeout del planificador (era 45 s fijo): GLM flash con
+# razonamiento tardó 31 s en el intento 1 del run fdbb56de y murió a los 45 en el intento 2 — el
+# reintento automático respondió con 1/3 días. Y el re-pedido explícito cuando el esqueleto viene
+# corto (antes: el guardrail rellenaba los días faltantes con menú matemático sin preguntar).
+PLANNER_LLM_TIMEOUT_S = _env_int("MEALFIT_PLANNER_TIMEOUT_S", 90)
+SKELETON_SHORT_REASK_ENABLED = _env_bool("MEALFIT_SKELETON_SHORT_REASK", True)
 
 # [P6-EVALUATOR-USE-PRO] Knob para escalar EL EVALUATOR del self-critique a Pro,
 # manteniendo Flash en day_generators y corrector. El evaluator es UN solo call
@@ -7392,6 +7398,106 @@ Devuelve ÚNICAMENTE el contexto comprimido en viñetas directas.
 # NODO 1: PLANIFICADOR (Fase Map — esqueleto liviano)
 # ============================================================
 @_node_label("planner")
+# ── [P1-SKELETON-SHORT-REASK · 2026-09-02] Esqueleto corto: re-pedir, y si no, reutilizar ──
+# Vivo (run fdbb56de, 2026-09-02): en el intento 2 el planificador (glm-5.3-flash, temp 0.95,
+# `_is_same_day_reroll=True`) devolvió 1/3 días — la instrucción de re-roll habla de «las
+# opciones de HOY» y el modelo la tomó al pie de la letra. Sin nadie que preguntara otra vez,
+# el guardrail P0-2 rellenó los días 2 y 3 con menú matemático y el plan salió «parcial».
+# Hoy hubo 3 esqueletos cortos en 6 planes (2 en los 9 días anteriores). El orden es:
+#   1) re-pedir UNA vez con la orden explícita de N días (una llamada, ~30 s);
+#   2) si sigue corto y hay esqueleto del intento anterior, reutilizar SUS días faltantes
+#      (son pools de ingredientes: los workers generan comidas nuevas igual);
+#   3) si no hay nada, el guardrail de siempre.
+def _skeleton_short_reask_directive(got: int, expected: int) -> str:
+    return (
+        f"🚨 REQUISITO ESTRUCTURAL (PRIORIDAD MÁXIMA): tu respuesta anterior trajo {int(got)} de "
+        f"{int(expected)} días. DEBES devolver EXACTAMENTE {int(expected)} entradas en `days` "
+        f"(day 1..{int(expected)}), cada una con sus pools completos. Si alguna instrucción habla "
+        f"de «hoy» o de «las opciones de hoy», aplica ese cambio a TODOS los días de este bloque; "
+        f"NUNCA devuelvas menos de {int(expected)} días.\n\n"
+    )
+
+
+def _merge_short_skeleton_days(skeleton_days, previous_days, days_in_chunk: int):
+    """Completa un esqueleto corto con los días faltantes del esqueleto del intento anterior.
+
+    Devuelve `(merged_days, reused_day_numbers)`. Los días del LLM mandan; solo se rellenan
+    los números ausentes (1..N) que existan en `previous_days`. Sin previo ⇒ sin cambios.
+    """
+    n_total = max(1, int(days_in_chunk or 1))
+
+    def _index(days, *, normalize=False):
+        by_num = {}
+        for i, d in enumerate(days or []):
+            if not isinstance(d, dict):
+                continue
+            n = d.get("day")
+            if not (isinstance(n, int) and 1 <= n <= n_total):
+                n = i + 1
+                if normalize:
+                    d["day"] = n  # numeración 1-based confiable (el LLM a veces la omite)
+            by_num.setdefault(n, d)
+        return by_num
+
+    current = _index(skeleton_days, normalize=True)
+    previous = _index(previous_days)
+    reused = []
+    for n in range(1, n_total + 1):
+        if n in current or n not in previous:
+            continue
+        d = json.loads(json.dumps(previous[n], default=str))
+        d["day"] = n
+        d["_reused_from_previous_attempt"] = True
+        current[n] = d
+        reused.append(n)
+    merged = [current[n] for n in sorted(current) if n <= n_total]
+    return merged, reused
+
+
+def _stamp_missing_day_dates(plan: dict, form_data: dict, *, now=None) -> list:
+    """Estampa `date`/`day_name` en los días que no la traen (los sintéticos del guardrail).
+
+    Misma aritmética que el estampado principal (`_plan_start_date` + tzOffset + `_days_offset`)
+    para que un día rellenado matemáticamente sea recordable por fecha (P1-CHAT-PAST-DAYS).
+    Devuelve los números de día estampados. Nunca pisa una fecha existente.
+    """
+    days = (plan or {}).get("days") or []
+    if not isinstance(days, list):
+        return []
+    fd = form_data or {}
+    start_dt = None
+    raw = fd.get("_plan_start_date")
+    if raw:
+        try:
+            start_dt = datetime.fromisoformat(str(raw).replace("Z", "+00:00"))
+        except Exception:
+            start_dt = None
+    if start_dt is None:
+        start_dt = now or datetime.now(timezone.utc)
+    tz_minutes = fd.get("tzOffset") or fd.get("tz_offset_minutes") or 0
+    try:
+        if tz_minutes:
+            start_dt = start_dt - timedelta(minutes=int(tz_minutes))
+    except Exception:
+        pass
+    try:
+        days_offset = int(fd.get("_days_offset", 0) or 0)
+    except Exception:
+        days_offset = 0
+    dias_es = ["Lunes", "Martes", "Miércoles", "Jueves", "Viernes", "Sábado", "Domingo"]
+    stamped = []
+    for i, day in enumerate(days):
+        if not isinstance(day, dict) or day.get("date"):
+            continue
+        n = day.get("day") if isinstance(day.get("day"), int) and day.get("day") >= 1 else i + 1
+        target = start_dt + timedelta(days=days_offset + n - 1)
+        day["date"] = target.date().isoformat()
+        if not day.get("day_name"):
+            day["day_name"] = dias_es[target.weekday()]
+        stamped.append(n)
+    return stamped
+
+
 async def plan_skeleton_node(state: PlanState) -> dict:
     attempt = state.get("attempt", 1)
     form_data = state["form_data"]
@@ -7611,7 +7717,7 @@ async def plan_skeleton_node(state: PlanState) -> dict:
         model=planner_model,
         temperature=base_temp,
         max_retries=0,
-        timeout=45,
+        timeout=PLANNER_LLM_TIMEOUT_S,  # [P1-SKELETON-SHORT-REASK] era 45 fijo
     ).with_structured_output(PlanSkeletonModel)
 
     # P1-Q3: CB per-modelo. Si pro está saturado, perfiles complejos paran;
@@ -7642,7 +7748,7 @@ async def plan_skeleton_node(state: PlanState) -> dict:
                 ]
             else:
                 planner_payload = prompt_text
-            res = await _safe_ainvoke(_llm, planner_payload, timeout=50.0)
+            res = await _safe_ainvoke(_llm, planner_payload, timeout=float(PLANNER_LLM_TIMEOUT_S + 5))
             # [P1-PLANNER-NONE-GUARD · 2026-06-15] El parser de structured-output devuelve None cuando
             # el modelo NO emite tool-call (texto plano bajo carga). Tratarlo como fallo recuperable.
             if res is None:
@@ -7711,6 +7817,48 @@ async def plan_skeleton_node(state: PlanState) -> dict:
         skeleton = response
     else:
         skeleton = response.dict()
+
+    # [P1-SKELETON-SHORT-REASK · 2026-09-02] Esqueleto corto: re-pedir una vez con la orden
+    # explícita de N días; si sigue corto, reutilizar los días del intento anterior. Ver helpers.
+    _skel_days_now = skeleton.get("days") or []
+    if SKELETON_SHORT_REASK_ENABLED and len(_skel_days_now) < days_in_chunk:
+        logger.warning(
+            f"⚠️ [P1-SKELETON-SHORT-REASK] El planificador devolvió {len(_skel_days_now)}/{days_in_chunk} "
+            f"días (intento #{attempt}, is_re_roll={is_re_roll}) → re-pido UNA vez con la orden explícita."
+        )
+        try:
+            _reask_text = _skeleton_short_reask_directive(len(_skel_days_now), days_in_chunk) + prompt_text
+            if PROMPT_CACHE_SYSTEM_MESSAGE:
+                _reask_payload = [
+                    SystemMessage(content=build_planner_system_prompt(ctx['country'])),
+                    HumanMessage(content=_reask_text),
+                ]
+            else:
+                _reask_payload = _reask_text
+            _reask_res = await _safe_ainvoke(planner_llm, _reask_payload, timeout=float(PLANNER_LLM_TIMEOUT_S + 5))
+            _reask_skel = (
+                _reask_res.model_dump() if hasattr(_reask_res, "model_dump")
+                else (_reask_res if isinstance(_reask_res, dict) else None)
+            )
+            _reask_days = (_reask_skel or {}).get("days") or []
+            if len(_reask_days) > len(_skel_days_now):
+                skeleton = _reask_skel
+                _skel_days_now = _reask_days
+                logger.info(f"✅ [P1-SKELETON-SHORT-REASK] Re-pedido devolvió {len(_reask_days)}/{days_in_chunk} días.")
+            else:
+                logger.warning(f"⚠️ [P1-SKELETON-SHORT-REASK] Re-pedido sigue corto ({len(_reask_days)}/{days_in_chunk}).")
+        except Exception as _reask_err:
+            logger.warning(f"⚠️ [P1-SKELETON-SHORT-REASK] Re-pedido falló ({type(_reask_err).__name__}: {str(_reask_err)[:120]}).")
+    if SKELETON_SHORT_REASK_ENABLED and len(_skel_days_now) < days_in_chunk and attempt > 1:
+        _prev_skel_days = (state.get("plan_skeleton") or {}).get("days") or []
+        _merged_days, _reused_nums = _merge_short_skeleton_days(_skel_days_now, _prev_skel_days, days_in_chunk)
+        if _reused_nums:
+            skeleton["days"] = _merged_days
+            skeleton["_skeleton_reused_days"] = list(_reused_nums)
+            logger.warning(
+                f"♻️ [P1-SKELETON-SHORT-REASK] Días {_reused_nums} reutilizados del esqueleto del intento anterior "
+                f"({len(_merged_days)}/{days_in_chunk}); los workers generan comidas nuevas igual."
+            )
 
     # Guardar técnicas seleccionadas para persistencia
     skeleton["_selected_techniques"] = selected_techniques
@@ -49406,6 +49554,14 @@ def _apply_final_defense_guardrails(
         _repair_partial_plan(plan_final, nutrition=nutrition, requested_days=requested_days,
                              restricted_tokens=_fallback_restricted_tokens(actual_form_data),  # [P0-ORCH-1]
                              form_data=actual_form_data)  # [P1-FALLBACK-BARIATRIC-CURATED]
+        # [P1-SKELETON-SHORT-REASK · 2026-09-02] Los días sintéticos nacían sin `date`/`day_name`
+        # (el estampado corre ANTES de este guardrail) y el coach solo podía inferirlos.
+        try:
+            _stamped_days = _stamp_missing_day_dates(plan_final, actual_form_data)
+            if _stamped_days:
+                logger.info(f"📅 [P1-SKELETON-SHORT-REASK] date/day_name estampados en días rellenados: {_stamped_days}")
+        except Exception as _stamp_err:
+            logger.warning(f"[P1-SKELETON-SHORT-REASK] estampado de fecha falló: {_stamp_err}")
 
         # [P1-FALLBACK-CAUSE-SPLIT · 2026-07-29] Incidente corr=23c65543: el
         # planificador entregó 1/3 días (medicamente APROBADOS,
