@@ -363,3 +363,13 @@ def test_initial_chunk_is_due_immediately():
     i = gl.find("UPDATE plan_chunk_queue SET run_id = %s, input_hash = %s, execute_after = NOW()")
     assert i > 0, "el chunk 0 debe quedar vencido al encolarse"
     assert "chunk_kind = %s AND status = 'pending'" in gl[i:i + 300]
+
+
+def test_queue_seed_context_is_whitelisted():
+    """[P1-ARQ25-F1-LIFECYCLE · 2026-09-02, medido en el primer run real] `_postprocess_pipeline_result`
+    siembra el aprendizaje del chunk 1 con `context_label="seed_chunk1_<transport>"`; el persist
+    legacy sólo acepta contextos registrados en `P0_3_LEGACY_LEARNING_CONTEXTS`. Sin esta fila el
+    plan nacía sin `_last_chunk_learning` (2 intentos fallidos en el journal)."""
+    src = _src("cron_tasks.py")
+    i = src.index("P0_3_LEGACY_LEARNING_CONTEXTS = (")
+    assert '"seed_chunk1_queue"' in src[i:i + 600]

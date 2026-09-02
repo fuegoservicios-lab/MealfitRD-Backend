@@ -470,6 +470,7 @@ _P0_5_LESSON_KEY_ALLOWLIST = frozenset({
 P0_3_LEGACY_LEARNING_CONTEXTS = (
     "seed_chunk1_sync",        # routers/plans.py: seed inicial post-LLM (sync).
     "seed_chunk1_sse",         # routers/plans.py: seed inicial via SSE stream.
+    "seed_chunk1_queue",       # [P1-ARQ25-F1-LIFECYCLE] seed inicial del chunk 0 vía cola (mismo postprocess).
     "rebuild_from_queue",      # cron_tasks.py: P0-3 auto-recovery desde plan_chunk_queue.
     "synthesis_from_days",     # cron_tasks.py: P0-4 last-resort desde plan_data.days.
 )
