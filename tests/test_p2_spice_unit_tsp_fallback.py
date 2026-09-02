@@ -16,9 +16,9 @@ import db_inventory
 
 
 def test_spice_unit_is_a_teaspoon_from_cup_density():
-    assert db_inventory._resolve_unit_weight({"name": "Canela en polvo", "density_g_per_cup": 124}) == pytest.approx(2.583, abs=0.001)
-    assert db_inventory._resolve_unit_weight({"name": "Orégano dominicano", "density_g_per_cup": 24}) == pytest.approx(0.5)
-    assert db_inventory._resolve_unit_weight({"name": "Pimienta negra", "density_g_per_cup": 96}) == pytest.approx(2.0)
+    assert db_inventory._resolve_unit_weight({"name": "Canela en polvo", "density_g_per_cup": 124}, spice_tsp=True) == pytest.approx(2.583, abs=0.001)
+    assert db_inventory._resolve_unit_weight({"name": "Orégano dominicano", "density_g_per_cup": 24}, spice_tsp=True) == pytest.approx(0.5)
+    assert db_inventory._resolve_unit_weight({"name": "Pimienta negra", "density_g_per_cup": 96}, spice_tsp=True) == pytest.approx(2.0)
 
 
 def test_explicit_per_unit_density_still_wins():
@@ -26,22 +26,22 @@ def test_explicit_per_unit_density_still_wins():
 
 
 def test_non_spice_pantry_item_stays_strict():
-    assert db_inventory._resolve_unit_weight({"name": "Fideos", "density_g_per_cup": 150}) is None
-    assert db_inventory._resolve_unit_weight({"name": "Arroz integral", "density_g_per_cup": 190}) is None
+    assert db_inventory._resolve_unit_weight({"name": "Fideos", "density_g_per_cup": 150}, spice_tsp=True) is None
+    assert db_inventory._resolve_unit_weight({"name": "Arroz integral", "density_g_per_cup": 190}, spice_tsp=True) is None
 
 
 def test_spice_without_cup_density_stays_strict():
-    assert db_inventory._resolve_unit_weight({"name": "Comino", "density_g_per_cup": None}) is None
+    assert db_inventory._resolve_unit_weight({"name": "Comino", "density_g_per_cup": None}, spice_tsp=True) is None
 
 
 def test_knob_off_restores_previous_behaviour(monkeypatch):
     monkeypatch.setenv("MEALFIT_SPICE_UNIT_AS_TSP", "false")
-    assert db_inventory._resolve_unit_weight({"name": "Canela en polvo", "density_g_per_cup": 124}) is None
+    assert db_inventory._resolve_unit_weight({"name": "Canela en polvo", "density_g_per_cup": 124}, spice_tsp=True) is None
 
 
 def test_convert_amount_no_longer_warns_for_spices(caplog):
     item = {"name": "Orégano dominicano", "density_g_per_cup": 24}
     with caplog.at_level(logging.WARNING, logger="db_inventory"):
-        g = db_inventory.convert_amount(4.666666666666667, "unidad", "g", item)
+        g = db_inventory.convert_amount(4.666666666666667, "unidad", "g", item, spice_tsp=True)
     assert g == pytest.approx(2.333, abs=0.001)
     assert not [r for r in caplog.records if "convert_amount" in r.getMessage()]

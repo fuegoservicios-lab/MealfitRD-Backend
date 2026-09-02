@@ -682,8 +682,14 @@ def _resolve_cross_domain_density(master_item: dict) -> float | None:
     return None
 
 
-def _resolve_unit_weight(master_item: dict) -> float | None:
-    """[P1-1] Resuelve gramos por unidad (count→mass) con fallback a UNIT_WEIGHTS."""
+def _resolve_unit_weight(master_item: dict, *, spice_tsp: bool = False) -> float | None:
+    """[P1-1] Resuelve gramos por unidad (count→mass) con fallback a UNIT_WEIGHTS.
+
+    [P2-SPICE-TSP-DEDUCTION-ONLY · 2026-09-02] `spice_tsp` es OPT-IN: solo la deducción de la
+    Nevera lo pide. El guard de coherencia (shopping_calculator, P1-COHERENCE-GRAM-NORM) usa el
+    mismo convert_amount y con el fallback global «1 cucharadita de orégano» se volvía
+    comparable contra el sobre de 45 g de la lista ⇒ divergencia crítica ⇒ rechazo + reintento
+    (2 planes, 2026-09-02 17:18 y 17:22). Para el guard, lo inconvertible debe seguir siéndolo."""
     raw = master_item.get("density_g_per_unit")
     try:
         if raw is not None and float(raw) > 0:
@@ -706,7 +712,7 @@ def _resolve_unit_weight(master_item: dict) -> float | None:
             return float(g_per_u)
     except Exception as _e:
         logger.debug(f"[P1-1] Fallback UNIT_WEIGHTS falló para {name!r}: {_e}")
-    return _spice_unit_as_teaspoon(master_item, name)
+    return _spice_unit_as_teaspoon(master_item, name) if spice_tsp else None
 
 
 # [P2-SPICE-UNIT-TSP-FALLBACK · 2026-09-02] Las especias del catálogo traen `density_g_per_cup`
@@ -742,7 +748,7 @@ def _spice_unit_as_teaspoon(master_item: dict, name_lower: str) -> float | None:
         return None
 
 
-def convert_amount(qty: float, from_unit: str, to_unit: str, master_item: dict) -> Optional[float]:
+def convert_amount(qty: float, from_unit: str, to_unit: str, master_item: dict, *, spice_tsp: bool = False) -> Optional[float]:
     """Intenta convertir matemáticamente una cantidad de una unidad a otra usando factores y densidades.
 
     [P1-1 · 2026-05-08] Cuando se requiere conversión cruzada (masa↔volumen o
@@ -828,7 +834,7 @@ def convert_amount(qty: float, from_unit: str, to_unit: str, master_item: dict) 
 
     # 5. Count to Mass or Volume (Estimate). [P1-1] Resolución análoga para g/unidad.
     if from_unit_lower in count_units and to_unit_lower in mass_to_g:
-        g_per_u = _resolve_unit_weight(master_item or {})
+        g_per_u = _resolve_unit_weight(master_item or {}, spice_tsp=spice_tsp)
         if 'rebanada' in from_unit_lower:
             g_per_u = 25.0
         if g_per_u is None:
@@ -849,7 +855,7 @@ def convert_amount(qty: float, from_unit: str, to_unit: str, master_item: dict) 
         return g / mass_to_g[to_unit_lower]
 
     if from_unit_lower in mass_to_g and to_unit_lower in count_units:
-        g_per_u = _resolve_unit_weight(master_item or {})
+        g_per_u = _resolve_unit_weight(master_item or {}, spice_tsp=spice_tsp)
         if 'rebanada' in to_unit_lower:
             g_per_u = 25.0
         if g_per_u is None:
@@ -1479,7 +1485,7 @@ def add_or_update_inventory_item(user_id: str, ingredient_name: str, quantity: f
                 current_qty = float(row["quantity"])
                 current_unit = row["unit"]
 
-                converted_qty = convert_amount(quantity, unit, current_unit, master_item)
+                converted_qty = convert_amount(quantity, unit, current_unit, master_item, spice_tsp=True)  # [P2-SPICE-TSP-DEDUCTION-ONLY]
 
                 # [P2-INVENTORY-CONTAINER-MERGE · 2026-07-12] Fallback de envases
                 # discretos: fusiona '2 unidades' sobre la fila en 'lata' en vez
