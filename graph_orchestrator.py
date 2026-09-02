@@ -24134,7 +24134,24 @@ _REVIEW_ISSUE_HUMANIZE_MAP = (
      "Un mismo plato se repite en varios días — usa «Cambiar Plato» si quieres más variedad."),
     ("omitio multiples proteinas", "Algún plato no siguió al 100% la estructura planificada."),
     ("omitio proteinas", "Algún plato no siguió al 100% la estructura planificada."),
+    # [P2-REVIEW-ISSUES-CLARO · 2026-09-02] Medido: la única familia entregada en 30 días era
+    # «COMIDA FUERA DE HORARIO» y NO estaba en el mapa, así que el usuario recibía el párrafo
+    # técnico entero (captura del dueño). Copy corto, con el día y el horario delante.
+    ("comida fuera de horario", "el plato es más de otro momento del día. Si no te convence, cámbialo con «Cambiar Plato»."),
+    ("mismo plato repetido entre dias", "Un mismo plato se repite en varios días — usa «Cambiar Plato» si quieres más variedad."),
+    ("deficit de proteina", "Algún día queda por debajo de tu meta de proteína — puedes cambiar un plato por uno con más proteína."),
+    ("techo renal de proteina", "Un día supera el techo de proteína indicado para tu condición — cambia un plato por uno más ligero."),
+    ("sodio excesivo", "Algún día pasa el sodio recomendado — revisa embutidos, quesos curados y sal añadida."),
+    ("sobreuso de huevo", "El huevo se repite más de la cuenta — puedes cambiar uno de esos platos."),
+    ("precision de macros baja", "Las calorías de algún día se alejan un poco de tu meta."),
+    ("lista de compras vacia", "La lista de compras salió vacía — recalcúlala desde el Dashboard."),
+    ("schema invalido", "Un plato llegó incompleto — puedes regenerarlo."),
 )
+
+# [P2-REVIEW-ISSUES-CLARO] «Día 2, almuerzo: …» — el revisor lo escribe así en todas las familias
+# que hablan de un plato concreto; se conserva delante del copy corto para que el usuario sepa
+# QUÉ plato mirar. Accent-insensitive (el texto ya viene con acentos, la búsqueda no depende de ellos).
+_REVIEW_ISSUE_DAY_SLOT_RE = _re.compile(r"d[ií]a\s+(\d+)\s*,\s*(desayuno|almuerzo|merienda|cena)", _re.IGNORECASE)
 
 
 def _humanize_review_issue(issue) -> str:
@@ -24151,7 +24168,10 @@ def _humanize_review_issue(issue) -> str:
             low = s.lower()
         for _pat, _copy in _REVIEW_ISSUE_HUMANIZE_MAP:
             if _pat in low:
-                return _copy
+                _m = _REVIEW_ISSUE_DAY_SLOT_RE.search(s)
+                if _m:
+                    return f"Día {_m.group(1)}, {_m.group(2).lower()}: {_copy}"
+                return _copy if _copy[:1].isupper() else _copy[:1].upper() + _copy[1:]
         # desconocido: strip del fragmento interno "action=xxx." si viene al final
         return _re.sub(r"\s*action=\w+\.?\s*$", "", s).strip()
     except Exception:
