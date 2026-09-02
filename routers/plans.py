@@ -2272,7 +2272,7 @@ def _postprocess_pipeline_result(
     # que el plan es su único registro; para autenticados el run ya lleva la política (§6.4).
     try:
         from plan_policy import stamp_plan_policy as _stamp_policy, emit_policy_shadow_metric as _emit_policy_metric
-        _compiled_policy = _stamp_policy(result, data)
+        _compiled_policy = _stamp_policy(result, data, total_days_requested=total_days_requested)
         if _compiled_policy:
             _emit_policy_metric(actual_user_id, existing_plan_id, _compiled_policy, result.get("_plan_policy_shadow"))
     except Exception as _pol_err:

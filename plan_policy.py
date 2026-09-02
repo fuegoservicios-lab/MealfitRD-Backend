@@ -594,8 +594,11 @@ def _ingredient_names(meal: dict) -> list[str]:
     return out
 
 
-def measure_plan_against_policy(plan_data: dict, effective: dict) -> dict:
-    """Mide, sin influir, cuánto se aleja el plan producido por V1 de la política efectiva."""
+def measure_plan_against_policy(plan_data: dict, effective: dict, *, total_days_requested: Optional[int] = None) -> dict:
+    """Mide, sin influir, cuánto se aleja el plan producido por V1 de la política efectiva.
+
+    `total_days_requested`: el postprocess sella ANTES de que el campo viva en `plan_data`
+    (medido en prod 2026-09-02: `cycle_match=None` en el primer plan shadow); el caller lo pasa."""
     days = [d for d in ((plan_data or {}).get("days") or []) if isinstance(d, dict)]
     n_days = len(days)
     per_day = [set(n for m in (d.get("meals") or []) if isinstance(m, dict) for n in _ingredient_names(m)) for d in days]
@@ -613,13 +616,16 @@ def measure_plan_against_policy(plan_data: dict, effective: dict) -> dict:
     excl = list(((effective or {}).get("diet") or {}).get("exclusions") or []) + list(((effective or {}).get("diet") or {}).get("allergies") or [])
     violations = sorted({n for names in per_day for n in names for x in excl if _anchor_hits_allergy(n, [x]) or _matches(n, x)})
     cycle_req = int(((effective or {}).get("shopping") or {}).get("main_cycle_days") or 0)
-    cycle_plan = int((plan_data or {}).get("total_days_requested") or 0)
+    cycle_plan = int(total_days_requested or (plan_data or {}).get("total_days_requested") or 0)
     cycle_match = (cycle_req == cycle_plan) if (cycle_req and cycle_plan) else None
     br = (plan_data or {}).get("budget_reconciliation") or {}
     budget_over = None
     try:
         if br.get("reference_rd") and br.get("estimated_cycle_rd") is not None:
             budget_over = float(br["estimated_cycle_rd"]) > float(br["reference_rd"])
+        elif br.get("status"):
+            # forma real del reconcile (P1-BUDGET-RECONCILE): status excedido|dentro|ajustado
+            budget_over = str(br["status"]).lower() in ("excedido", "over", "exceeded")
     except (TypeError, ValueError):
         budget_over = None
     # el componente de exclusiones solo cuenta si había algo que excluir (None ≠ 0 falso)
@@ -634,7 +640,8 @@ def measure_plan_against_policy(plan_data: dict, effective: dict) -> dict:
     }
 
 
-def stamp_plan_policy(plan_data: dict, form_data: dict, *, country: Optional[str] = None) -> Optional[dict]:
+def stamp_plan_policy(plan_data: dict, form_data: dict, *, country: Optional[str] = None,
+                      total_days_requested: Optional[int] = None) -> Optional[dict]:
     """Sella `plan_data['_plan_policy']` (compilación) y `_plan_policy_shadow` (medición).
     Solo cuando el knob no está en `off`. Nunca lanza."""
     if not policy_active() or not isinstance(plan_data, dict):
@@ -643,7 +650,8 @@ def stamp_plan_policy(plan_data: dict, form_data: dict, *, country: Optional[str
         compiled = compile_from_form(form_data, country=country)
         plan_data["_plan_policy"] = compiled
         if compiled.get("effective"):
-            plan_data["_plan_policy_shadow"] = measure_plan_against_policy(plan_data, compiled["effective"])
+            plan_data["_plan_policy_shadow"] = measure_plan_against_policy(
+                plan_data, compiled["effective"], total_days_requested=total_days_requested)
         return compiled
     except Exception as e:
         logger.warning(f"[P1-ARQ25-F2-PLANPOLICY] stamp_plan_policy falló (fail-open): {e}")

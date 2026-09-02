@@ -232,7 +232,7 @@ def test_every_delivered_plan_is_stamped_before_persist_including_guests():
     rp = (BACKEND / "routers" / "plans.py").read_text(encoding="utf-8")
     i = rp.find("def _postprocess_pipeline_result(")
     body = rp[i:i + 20000]
-    k_stamp = body.find("_stamp_policy(result, data)")
+    k_stamp = body.find("_stamp_policy(result, data, total_days_requested=total_days_requested)")
     k_save = body.find("selected_techniques = result.pop(\"_selected_techniques\", None)")
     assert -1 not in (k_stamp, k_save) and k_stamp < k_save, "el sello va ANTES de cualquier persistencia"
     assert "emit_policy_shadow_metric" in body
@@ -241,3 +241,24 @@ def test_every_delivered_plan_is_stamped_before_persist_including_guests():
 def test_marker_bumped():
     app = (BACKEND / "app.py").read_text(encoding="utf-8")
     assert '_LAST_KNOWN_PFIX = "P1-ARQ25-F2-PLANPOLICY · 2026-09-02"' in app
+
+
+def test_shadow_cycle_and_budget_from_real_prod_shapes():
+    """[2026-09-02] Primer plan shadow en prod: `cycle_match=None` porque `total_days_requested`
+    aún no vivía en el resultado al sellar, y el reconcile real trae `status` (no `estimated_cycle_rd`)."""
+    from plan_policy import measure_plan_against_policy
+    effective = {"shopping": {"main_cycle_days": 30}, "food_anchors": [], "diet": {}}
+    plan = {"days": [{"meals": [{"ingredients": ["Huevo"]}]}],
+            "budget_reconciliation": {"status": "excedido", "ratio": 1.141, "delta_rd": 2868, "floor_rd": 16250}}
+    m = measure_plan_against_policy(plan, effective, total_days_requested=30)
+    assert m["cycle_match"] is True
+    assert m["budget_over"] is True
+    m2 = measure_plan_against_policy(dict(plan, budget_reconciliation={"status": "dentro"}), effective, total_days_requested=7)
+    assert m2["cycle_match"] is False and m2["budget_over"] is False
+    assert measure_plan_against_policy(plan, effective)["cycle_match"] is None
+
+
+def test_postprocess_passes_total_days_to_stamp():
+    src = (Path(__file__).parents[1] / "routers" / "plans.py").read_text(encoding="utf-8")
+    assert "_stamp_policy(result, data, total_days_requested=total_days_requested)" in src
+
