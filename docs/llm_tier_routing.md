@@ -111,10 +111,10 @@ Test ancla: [`test_p1_reviewer_tier_models.py`](../tests/test_p1_reviewer_tier_m
 
 | `user_profiles.plan_tier` | Modelo | Pricing (USD/1M tok, in miss/hit · out) |
 |---|---|---|
-| `gratis` / guest / NULL / desconocido / fallo de lookup | `glm-5.3-flash` | $0.14 / $0.0028 · $0.28 |
-| `basic` · `plus` · `ultra` | `glm-5.3-flash` (P1-FLASH-PRIMARY; era `glm-5.3`) | $0.14 / $0.0028 · $0.28 |
+| `gratis` / guest / NULL / desconocido / fallo de lookup | `glm-5.3-flash` | $0.15 / $0.03 · $0.50 |
+| `basic` · `plus` · `ultra` | `glm-5.3-flash` (P1-FLASH-PRIMARY; era `glm-5.3`) | $0.15 / $0.03 · $0.50 |
 
-(Pricing de la red pro, usada solo post-fallo: $0.435 / $0.003625 · $0.87.)
+(Pricing de la red pro, usada solo post-fallo: $1.40 / $0.26 · $4.40.)
 
 Invariante **fail-cheap**: cualquier duda (guest, DB blip, tier corrupto)
 resuelve al modelo FREE — un fallo de lookup jamás encarece la llamada.
