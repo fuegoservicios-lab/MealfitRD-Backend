@@ -173,6 +173,7 @@ def create_or_replay_run(
     locale: Optional[str],
     input_snapshot: dict,
     correlation_id: Optional[str] = None,
+    policy: Optional[dict] = None,
 ) -> tuple[dict, bool]:
     """Crea el run o devuelve el existente (misma clave + mismo cuerpo).
 
@@ -183,18 +184,27 @@ def create_or_replay_run(
     from db_core import execute_sql_query, execute_sql_write
     from psycopg.types.json import Jsonb
 
+    # [P1-ARQ25-F2-PLANPOLICY · 2026-09-02] requested/effective/relaxations/hash viajan en el
+    # mismo INSERT (§6.4): el run nace explicable. Sin política (knob off) quedan los defaults.
+    _pol = policy if isinstance(policy, dict) else {}
     rows = execute_sql_write(
         """
         INSERT INTO plan_generation_runs
             (user_id, idempotency_key, request_fingerprint, requested_days,
-             market_country, locale, input_snapshot, correlation_id)
-        VALUES (%s, %s, %s, %s, %s, %s, %s, %s)
+             market_country, locale, input_snapshot, correlation_id,
+             requested_policy, effective_policy, relaxations, policy_hash,
+             policy_schema_version, engine_versions)
+        VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
         ON CONFLICT (user_id, idempotency_key) DO NOTHING
         RETURNING id, user_id, plan_id, idempotency_key, request_fingerprint,
                   requested_days, cancel_requested_at, created_at, completed_at
         """,
         (user_id, idempotency_key, fingerprint, int(requested_days),
-         market_country, locale, Jsonb(input_snapshot or {}), correlation_id),
+         market_country, locale, Jsonb(input_snapshot or {}), correlation_id,
+         Jsonb(_pol.get("requested") or {}), Jsonb(_pol.get("effective") or {}),
+         Jsonb(_pol.get("relaxations") or []), _pol.get("policy_hash"),
+         int(_pol.get("schema_version") or 0),
+         Jsonb({"policy_compiler": _pol.get("compiler_version")} if _pol else {})),
         returning=True,
     )
     if rows:

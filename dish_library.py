@@ -82,6 +82,13 @@ def load_dish_templates(path: str = None) -> list:
             data = json.load(f)
         templates = data.get("templates") or []
         loaded = [t for t in templates if isinstance(t, dict) and t.get("name") and t.get("slots")]
+        # [P1-ARQ25-F2-PLANPOLICY · 2026-09-02] `template_id` acuñado al cargar (hash estable de
+        # biblioteca+base+nombre+técnica, alias para renombres): cero reescritura del JSON.
+        try:
+            from plan_policy import attach_template_ids, library_key_for_path
+            attach_template_ids(loaded, library_key_for_path(_path))
+        except Exception as _tid_err:
+            logger.warning(f"[P1-ARQ25-F2-PLANPOLICY] template_id no acuñado: {_tid_err}")
     except Exception as _e:
         logger.warning(f"[P1-NEXT-LEVEL-LIBRARY] no se cargaron plantillas: {type(_e).__name__}: {_e}")
         loaded = []

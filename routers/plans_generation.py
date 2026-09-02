@@ -92,6 +92,7 @@ async def api_create_generation_run(
             market_country=(str(data.get("country")) if data.get("country") else None),
             locale=(str(data.get("locale")) if data.get("locale") else None),
             input_snapshot={"keys": sorted(k for k in data.keys() if not str(k).startswith("_"))},
+            policy=_policy_for_run(data),
             correlation_id=get_correlation_id(),
         )
     except RunFingerprintConflict as e:
@@ -255,3 +256,17 @@ async def api_generation_run_events(
     return StreamingResponse(_gen(), media_type="text/event-stream", headers={
         "Cache-Control": "no-cache", "X-Accel-Buffering": "no",
     })
+
+
+def _policy_for_run(data: dict):
+    """[P1-ARQ25-F2-PLANPOLICY] Compila la política del formulario para persistirla en el run.
+    `off` ⇒ None (columnas con default). Nunca lanza: la creación del run no depende de esto."""
+    try:
+        from plan_policy import compile_from_form, policy_active
+        if not policy_active():
+            return None
+        return compile_from_form(data)
+    except Exception as e:  # noqa: BLE001
+        logger.warning(f"[P1-ARQ25-F2-PLANPOLICY] política no compilada para el run: {e}")
+        return None
+

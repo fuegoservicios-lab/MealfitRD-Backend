@@ -2267,6 +2267,16 @@ def _postprocess_pipeline_result(
     # son útiles para el pipeline interno (attribution tracker, embedding
     # storage) pero el frontend no debe verlos — riesgo de filtración de
     # internals + tamaño innecesario en el payload.
+    # [P1-ARQ25-F2-PLANPOLICY · 2026-09-02] Toda entrega (cola, SSE legado, invitados) sella la
+    # política compilada y la medición shadow en plan_data: los invitados no tienen run, así
+    # que el plan es su único registro; para autenticados el run ya lleva la política (§6.4).
+    try:
+        from plan_policy import stamp_plan_policy as _stamp_policy, emit_policy_shadow_metric as _emit_policy_metric
+        _compiled_policy = _stamp_policy(result, data)
+        if _compiled_policy:
+            _emit_policy_metric(actual_user_id, existing_plan_id, _compiled_policy, result.get("_plan_policy_shadow"))
+    except Exception as _pol_err:
+        logger.warning(f"[P1-ARQ25-F2-PLANPOLICY] sello de política omitido: {_pol_err}")
     selected_techniques = result.pop("_selected_techniques", None)
     result.pop("_profile_embedding", None)
     result.pop("_active_learning_signals", None)

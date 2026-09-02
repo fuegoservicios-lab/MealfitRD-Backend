@@ -93,9 +93,11 @@ Cinco regresiones históricas que este diseño protege (P1-G mode=block no-op, `
 
 ---
 
-## Lifecycle único de generación (roadmap 2.5, Fase 1)
+## Lifecycle único de generación + PlanPolicy (roadmap 2.5, Fases 1-2)
 
-[P1-ARQ25-F1-LIFECYCLE · 2026-09-02] Bloque 1 = chunk `initial` (I1); `attempts` = fencing (I10); `revision` por trigger (I12); [P1-ARQ25-F1-CLOSE]: H6 `_ingredient_demand` + suite §13.2. Doc `backend/docs/generation_lifecycle_2_5.md`; tests `test_p1_arq25_f1_*.py`.
+[P1-ARQ25-F1-LIFECYCLE · 2026-09-02] Bloque 1 = chunk `initial` (I1); `attempts` = fencing (I10); `revision` por trigger (I12). Doc `backend/docs/generation_lifecycle_2_5.md`; tests `test_p1_arq25_f1_*.py`.
+
+[P1-ARQ25-F2-PLANPOLICY · 2026-09-02] Fase 2, `shadow`: política pedida/aplicada + `relaxations[]` por run y en `plan_data._plan_policy`; presupuesto duro (decisión #4) ⇒ `waiting_user`, nunca silencioso. Knob `MEALFIT_PLAN_POLICY_MODE`. Doc `backend/docs/plan_policy_f2.md`; test `test_p1_arq25_f2_planpolicy.py`.
 
 ## RAG + Dreaming (consolidación de memoria offline)
 

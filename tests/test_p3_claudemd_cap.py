@@ -51,7 +51,8 @@ from pathlib import Path
 _REPO_ROOT = Path(__file__).resolve().parents[2]
 _CLAUDE_MD = _REPO_ROOT / "CLAUDE.md"
 
-_DEFAULT_CAP = 74600  # [P2-I18N-MIGRACIONES-SIN-LIBRO + P3-I18N-DOC-CLAUDEMD-6-DE-9 · 2026-08-23]
+_DEFAULT_CAP = 75400  # [P1-ARQ25-F2-PLANPOLICY · 2026-09-02] 74600→75400 (+1,07 %): entra la línea doc-first de la Fase 2
+# [P2-I18N-MIGRACIONES-SIN-LIBRO + P3-I18N-DOC-CLAUDEMD-6-DE-9 · 2026-08-23]
 # 73400→74600 (+1,63%, bajo el threshold 10%): entran DOS líneas doc-first del plan de i18n
 # (el libro de migraciones `schema_migrations` y la lista real de 9 ficheros del escáner de
 # alert_key) que dejaron el margen en 402 bytes (<800, el suelo de test_p3_claudemd_margin_
