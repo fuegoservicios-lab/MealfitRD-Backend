@@ -706,7 +706,40 @@ def _resolve_unit_weight(master_item: dict) -> float | None:
             return float(g_per_u)
     except Exception as _e:
         logger.debug(f"[P1-1] Fallback UNIT_WEIGHTS falló para {name!r}: {_e}")
-    return None
+    return _spice_unit_as_teaspoon(master_item, name)
+
+
+# [P2-SPICE-UNIT-TSP-FALLBACK · 2026-09-02] Las especias del catálogo traen `density_g_per_cup`
+# pero no `density_g_per_unit`, y las recetas las piden en «unidad» (4,67 unidad de orégano):
+# cada recálculo de la lista emitía 3-4 WARNING de convert_amount y la deducción se saltaba.
+# Para un condimento, «una unidad» es una cucharadita: taza / 48. Acotado a la lista canónica
+# de condimentos (culinary_coherence.CONDIMENT_EXEMPT, sin líquidos ni sal) — para Fideos o
+# Arroz «unidad» NO es una cucharadita y siguen cayendo al comportamiento estricto.
+_SPICE_TOKENS = ("canela", "pimienta", "oregano", "comino", "ajo en polvo", "sazon",
+                 "condimento", "especia", "curcuma", "paprika", "nuez moscada", "laurel")
+_TSP_PER_CUP = 48.0
+
+
+def _spice_unit_as_teaspoon(master_item: dict, name_lower: str) -> float | None:
+    try:
+        from graph_orchestrator import _env_bool
+        if not _env_bool("MEALFIT_SPICE_UNIT_AS_TSP", True):
+            return None
+    except Exception:
+        pass
+    try:
+        from constants import strip_accents
+        n = strip_accents((name_lower or "").lower())
+        if not any(tok in n for tok in _SPICE_TOKENS):
+            return None
+        cup = (master_item or {}).get("density_g_per_cup")
+        if cup is None or float(cup) <= 0:
+            return None
+        g = round(float(cup) / _TSP_PER_CUP, 3)
+        logger.debug(f"[P2-SPICE-UNIT-TSP-FALLBACK] {name_lower!r}: unidad = cucharadita = {g} g (taza {cup} g / 48)")
+        return g
+    except (TypeError, ValueError):
+        return None
 
 
 def convert_amount(qty: float, from_unit: str, to_unit: str, master_item: dict) -> Optional[float]:
