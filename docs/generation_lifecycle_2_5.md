@@ -57,6 +57,7 @@ salvo `MEALFIT_PREVIEW_READY_DAYS` (decisión #1 del roadmap).
 | Knob | Default | Efecto |
 |---|---|---|
 | `MEALFIT_INITIAL_VIA_QUEUE` | `False` | Interruptor de la fase. OFF ⇒ `POST /generation-runs` 404; SSE legacy intacto. Rollback para runs nuevos; los chunk 0 en vuelo se drenan. |
+| `MEALFIT_INITIAL_VIA_QUEUE_USERS` | vacío | Canary: uuids (coma) que entran por la cola aunque el global esté OFF. El resto recibe 404 y cae al SSE legacy. |
 | `MEALFIT_INITIAL_CHUNK_MAX_ATTEMPTS` | `2` | Reintentos del chunk 0 (pipeline/postprocess) antes de dead-letter + placeholder→`failed`. |
 | `MEALFIT_PREVIEW_READY_DAYS` | `PLAN_CHUNK_SIZE` | Umbral de `PREVIEW_READY`. |
 | `MEALFIT_RUN_PROGRESS_THROTTLE_S` | `1.0` | Mínimo entre escrituras de progreso al KV. |

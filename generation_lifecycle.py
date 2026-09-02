@@ -89,9 +89,22 @@ AVAIL_PLAN_READY = "PLAN_READY"
 PLACEHOLDER_GENERATION_STATUS = "generating"
 
 
-def initial_via_queue_enabled() -> bool:
-    """Interruptor de la Fase 1. Se lee en cada llamada (rollback sin redeploy)."""
-    return _env_bool("MEALFIT_INITIAL_VIA_QUEUE", False)
+def initial_via_queue_enabled(user_id: str | None = None) -> bool:
+    """Interruptor de la Fase 1. Se lee en cada llamada (rollback sin redeploy).
+
+    Dos capas, por el canary del roadmap (§14.1: «cuenta del dueño → usuarios de test → knob
+    global»): `MEALFIT_INITIAL_VIA_QUEUE=true` enciende para todos; si está apagado,
+    `MEALFIT_INITIAL_VIA_QUEUE_USERS` (uuids separados por coma) enciende SOLO para esos
+    usuarios. El frontend puede llevar su flag encendido para todos: a quien no esté en la
+    lista el endpoint le responde 404 y cae al SSE legacy en el mismo intento.
+    """
+    if _env_bool("MEALFIT_INITIAL_VIA_QUEUE", False):
+        return True
+    allow = os.environ.get("MEALFIT_INITIAL_VIA_QUEUE_USERS", "") or ""
+    if user_id and allow.strip():
+        allowed = {u.strip().lower() for u in allow.split(",") if u.strip()}
+        return str(user_id).strip().lower() in allowed
+    return False
 
 
 def initial_chunk_max_attempts() -> int:

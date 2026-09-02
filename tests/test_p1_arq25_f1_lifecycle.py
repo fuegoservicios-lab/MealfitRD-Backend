@@ -310,9 +310,18 @@ def test_router_paths_and_knob_default_off():
         "/api/plans/generation-runs/{run_id}/events",
     }
     from generation_lifecycle import initial_via_queue_enabled
-    with patch.dict(os.environ, {"MEALFIT_INITIAL_VIA_QUEUE": ""}):
+    with patch.dict(os.environ, {"MEALFIT_INITIAL_VIA_QUEUE": "", "MEALFIT_INITIAL_VIA_QUEUE_USERS": ""}):
         os.environ.pop("MEALFIT_INITIAL_VIA_QUEUE", None)
+        os.environ.pop("MEALFIT_INITIAL_VIA_QUEUE_USERS", None)
         assert initial_via_queue_enabled() is False
+        assert initial_via_queue_enabled("u-1") is False
+    # canary por allowlist: solo esos usuarios, sin encender el global
+    with patch.dict(os.environ, {"MEALFIT_INITIAL_VIA_QUEUE": "false", "MEALFIT_INITIAL_VIA_QUEUE_USERS": "U-1, u-2"}):
+        assert initial_via_queue_enabled("u-1") is True
+        assert initial_via_queue_enabled("u-3") is False
+        assert initial_via_queue_enabled() is False
+    with patch.dict(os.environ, {"MEALFIT_INITIAL_VIA_QUEUE": "true", "MEALFIT_INITIAL_VIA_QUEUE_USERS": ""}):
+        assert initial_via_queue_enabled("cualquiera") is True
 
 
 def test_app_mounts_generation_router_and_marker_bumped():

@@ -60,9 +60,6 @@ async def api_create_generation_run(
     )
     from generation_inputs import build_initial_pipeline_inputs, validate_generation_request
 
-    if not initial_via_queue_enabled():
-        raise HTTPException(status_code=404, detail={"code": "initial_via_queue_disabled"})
-
     user_id = data.get("user_id")
     if not user_id or user_id == "guest":
         raise HTTPException(status_code=400, detail={
@@ -71,6 +68,9 @@ async def api_create_generation_run(
         })
     if verified_user_id != user_id:
         raise HTTPException(status_code=401, detail={"code": "user_mismatch"})
+    # Knob global o allowlist por usuario (canary): 404 ⇒ el cliente cae al SSE legacy.
+    if not initial_via_queue_enabled(user_id):
+        raise HTTPException(status_code=404, detail={"code": "initial_via_queue_disabled"})
 
     idempotency_key = (request.headers.get("Idempotency-Key") or data.get("idempotency_key") or "").strip()
     if not idempotency_key or len(idempotency_key) > 128:
