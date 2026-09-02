@@ -633,6 +633,38 @@ def _run_background_tasks(bt) -> None:
             logger.warning(f"[ARQ25-F1] background task {getattr(t, 'func', None)} falló: {type(e).__name__}: {e}")
 
 
+def _placeholder_already_filled(plan_id: str, user_id: str) -> bool:
+    """[P1-ARQ25-F1-CLOSE] True si el plan ya salió del estado placeholder con días persistidos."""
+    try:
+        from db_core import execute_sql_query
+        row = execute_sql_query(
+            "SELECT plan_data->>'generation_status' AS st, "
+            "jsonb_array_length(coalesce(plan_data->'days', '[]'::jsonb)) AS n "
+            "FROM meal_plans WHERE id = %s AND user_id = %s",
+            (plan_id, user_id), fetch_one=True,
+        )
+    except Exception as e:  # sin DB ⇒ conducta previa (regenerar)
+        logger.warning(f"[ARQ25-F1] _placeholder_already_filled no-op: {e}")
+        return False
+    if not row:
+        return False
+    return str(row.get("st") or "") != PLACEHOLDER_GENERATION_STATUS and int(row.get("n") or 0) > 0
+
+
+def _emit_lifecycle_metric(name: str, user_id, meta: dict | None = None) -> None:
+    """[P1-ARQ25-F1-CLOSE] §13.2 métricas de durabilidad (`fencing_rejected`, …) en
+    `pipeline_metrics`, best-effort: nunca rompe el worker."""
+    try:
+        from db_core import execute_sql_write
+        execute_sql_write(
+            "INSERT INTO pipeline_metrics (user_id, session_id, node, duration_ms, retries, "
+            "tokens_estimated, confidence, metadata) VALUES (%s, %s, %s, %s, %s, %s, %s, %s::jsonb)",
+            (user_id, "__lifecycle__", f"arq25_{name}", 0, 0, 0, None, json.dumps(meta or {}, default=str)),
+        )
+    except Exception as e:
+        logger.debug(f"[ARQ25-F1] métrica {name} no persistida: {e}")
+
+
 def run_initial_chunk(*, task: dict, snap: dict, form_data: dict, pickup_attempts: int) -> None:
     """Cuerpo del Bloque 1 cuando lo ejecuta `_chunk_worker` (chunk_kind='initial').
 
@@ -675,6 +707,26 @@ def run_initial_chunk(*, task: dict, snap: dict, form_data: dict, pickup_attempt
     if publisher:
         publisher({"event": "status", "data": {"phase": "started", "attempt": int(pickup_attempts) + 1}})
 
+    # [P1-ARQ25-F1-CLOSE · 2026-09-02] §13.2 «crash después de commit y antes de encolar».
+    # Si el proceso murió tras `fill_placeholder_meal_plan_atomic` y antes del CAS `completed`,
+    # el zombie rescue devuelve el chunk a `pending` con attempts+1 y este worker lo reclama:
+    # el placeholder YA tiene días. Sin este guard volvíamos a correr el pipeline (gasto LLM
+    # duplicado) y el fill devolvía None (`status != generating`) ⇒ `persist_failed` en bucle
+    # hasta dead-letter. Con días persistidos, el trabajo está hecho: se cierra el CAS.
+    if _placeholder_already_filled(plan_id, user_id):
+        logger.warning(f"[ARQ25-F1] chunk 0 {str(task_id)[:8]} plan={plan_id[:8]}: placeholder ya rellenado "
+                       f"(crash post-commit); CAS completed sin regenerar.")
+        ok = _cas_update_chunk_status(task_id, int(pickup_attempts), "completed")
+        if ok and run_id:
+            clear_run_error(run_id)
+            if not snap.get("use_chunking", True):
+                mark_run_completed(run_id)
+        elif not ok:
+            _emit_lifecycle_metric("fencing_rejected", user_id, {"plan_id": plan_id, "site": "post_commit_replay"})
+        if publisher:
+            publisher.flush({"event": "complete", "data": {"plan_id": plan_id, "replayed": True}})
+        return
+
     def _fail(code: str, msg: str, *, terminal: bool) -> None:
         exhausted = terminal or (int(pickup_attempts) + 1 >= max_attempts)
         extra = {"attempts": "attempts + 1"}
@@ -688,6 +740,7 @@ def run_initial_chunk(*, task: dict, snap: dict, form_data: dict, pickup_attempt
         ok = _cas_update_chunk_status(task_id, int(pickup_attempts), new_status, extra_set_clauses=extra)
         if not ok:
             logger.warning(f"[ARQ25-F1] chunk 0 {str(task_id)[:8]} desplazado (CAS 0 filas) al fallar: {code}")
+            _emit_lifecycle_metric("fencing_rejected", user_id, {"plan_id": plan_id, "site": "fail", "code": code})
             return
         if run_id:
             mark_run_error(run_id, code, msg, completed=exhausted)
@@ -779,6 +832,7 @@ def run_initial_chunk(*, task: dict, snap: dict, form_data: dict, pickup_attempt
         extra_set_clauses={"output_hash": "'" + out_hash + "'", "learning_persisted_at": "NOW()"},
     )
     if not ok:
+        _emit_lifecycle_metric("fencing_rejected", user_id, {"plan_id": plan_id, "site": "commit"})
         logger.warning(f"[ARQ25-F1] chunk 0 {str(task_id)[:8]} completó pero el CAS devolvió 0 filas (desplazado). Plan ya persistido; el otro worker verá el placeholder relleno.")
         return
     if run_id:

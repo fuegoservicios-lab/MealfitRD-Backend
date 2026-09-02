@@ -6123,6 +6123,80 @@ def _should_skip_meal_for_aggregation(meal: dict) -> bool:
     return False
 
 
+# ── [P1-ARQ25-F1-CLOSE · 2026-09-02] H6 — `IngredientDemand` nombrada, no movida ──
+# Roadmap 2.5 §5.7/H6: «la lista agregada de hoy ES la IngredientDemand; la Fase 1 le pone
+# nombre y revisión, no la mueve». La fuente sigue siendo `shopping_source_days` (ciclo
+# completo, P0-SHOPPING-CYCLE-DAYS) y el constructor sigue siendo `get_shopping_list_delta`
+# (único builder: assemble, swap, recalc, crons y agente pasan por él). Lo nuevo es el sello
+# `plan_data["_ingredient_demand"]`: la huella de los días fuente + la revisión conocida.
+# La HUELLA es la clave de frescura (dos revisiones con los mismos días dan la misma huella);
+# la revisión es informativa hasta que la Fase 5 la lea de `meal_plans.revision` al reclamar.
+INGREDIENT_DEMAND_KEY = "_ingredient_demand"
+INGREDIENT_DEMAND_SCHEMA = 1
+
+
+def ingredient_demand_days(plan_data) -> list:
+    """Alias nombrado de la fuente de la demanda (H6). Idéntico a `shopping_source_days`."""
+    return shopping_source_days(plan_data)
+
+
+def ingredient_demand_signature(plan_data) -> str:
+    """Huella estable de los días fuente: (día, comida, ingredientes) en orden, sha256[:16]."""
+    import hashlib as _hl
+    import json as _json
+    rows = []
+    for d in ingredient_demand_days(plan_data):
+        if not isinstance(d, dict):
+            continue
+        for m in (d.get("meals") or []):
+            if not isinstance(m, dict):
+                continue
+            ings = m.get("ingredients") or []
+            rows.append([d.get("day"), m.get("name"), [str(i) if not isinstance(i, dict) else (i.get("name") or i.get("item")) for i in ings]])
+    blob = _json.dumps(rows, ensure_ascii=False, sort_keys=False, default=str)
+    return _hl.sha256(blob.encode("utf-8")).hexdigest()[:16]
+
+
+def stamp_ingredient_demand(plan_data, *, revision=None, surface: str = "") -> dict:
+    """Sella `plan_data["_ingredient_demand"]` con la huella de los días fuente (H6).
+
+    Mutación in-place, idempotente (misma huella ⇒ mismo sello salvo `computed_at`).
+    `revision` es la de `meal_plans.revision` cuando el caller la conoce; None si no.
+    """
+    if not isinstance(plan_data, dict):
+        return {}
+    from datetime import datetime as _dt, timezone as _tz
+    import logging as _lg
+    try:
+        days = ingredient_demand_days(plan_data)
+        stamp = {
+            "schema": INGREDIENT_DEMAND_SCHEMA,
+            "source_days": len(days),
+            "source_hash": ingredient_demand_signature(plan_data),
+            "revision": int(revision) if isinstance(revision, int) and not isinstance(revision, bool) else None,
+            "surface": str(surface or "")[:40],
+            "computed_at": _dt.now(_tz.utc).isoformat(),
+        }
+        plan_data[INGREDIENT_DEMAND_KEY] = stamp
+        return stamp
+    except Exception as _e:  # best-effort: jamás rompe la construcción de la lista
+        _lg.getLogger(__name__).warning(f"[P1-ARQ25-F1-CLOSE] stamp_ingredient_demand falló: {_e}")
+        return {}
+
+
+def ingredient_demand_is_fresh(plan_data):
+    """True/False si hay sello; None si el plan nunca fue sellado (legacy)."""
+    if not isinstance(plan_data, dict):
+        return None
+    stamp = plan_data.get(INGREDIENT_DEMAND_KEY)
+    if not isinstance(stamp, dict) or not stamp.get("source_hash"):
+        return None
+    try:
+        return stamp.get("source_hash") == ingredient_demand_signature(plan_data)
+    except Exception:
+        return None
+
+
 def shopping_source_days(plan_data) -> list:
     """[P0-SHOPPING-CYCLE-DAYS · 2026-08-22] SSOT de "desde qué días se agrega la lista".
 
@@ -13304,6 +13378,8 @@ def get_shopping_list_delta(
     # alimentos → 25 en el plan real 2245eb45, dejando al usuario sin proteína que
     # cocinar y matando el chunk siguiente contra el gate de despensa.
     days = shopping_source_days(plan_result)
+    # [P1-ARQ25-F1-CLOSE] H6: el builder sella la demanda que está a punto de construir.
+    stamp_ingredient_demand(plan_result, surface="get_shopping_list_delta")
     if not days and plan_result.get("meals"):
         days = [{"day": 1, "meals": plan_result.get("meals")}] 
     if not days and plan_result.get("perfectDay"):

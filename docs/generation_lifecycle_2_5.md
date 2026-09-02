@@ -79,6 +79,38 @@ está keyed por `user_id` UUID. Decisión #3 del roadmap, opción recomendada.
    duplicado ni CAS stale, ≥2 con kill del proceso mid-LLM recuperados por el zombie rescue,
    7 días sin alerta nueva.
 
+## Cierre de la fase (P1-ARQ25-F1-CLOSE · 2026-09-02)
+
+Lo que faltaba tras P1-ARQ25-F1-LIFECYCLE, medido contra la lista de entregables del roadmap:
+
+- **H6 — `IngredientDemand` nombrada, no movida.** `shopping_calculator.ingredient_demand_days`
+  es un alias de `shopping_source_days`; `stamp_ingredient_demand` sella
+  `plan_data["_ingredient_demand"]` (`schema`, `source_days`, `source_hash`, `revision`, `surface`,
+  `computed_at`) desde el ÚNICO builder (`get_shopping_list_delta`), por el que pasan assemble,
+  swap, recalc, crons y agente. La **huella** (`source_hash`, sha256 de día/comida/ingredientes)
+  es la clave de frescura: `ingredient_demand_is_fresh` la compara con los días actuales. La
+  `revision` viaja cuando el caller la conoce y es informativa hasta que la Fase 5 la lea de
+  `meal_plans.revision` al reclamar un `plan_job`.
+- **Decisión: `revision` sube por trigger de DB** (`meal_plans_bump_revision_trg`,
+  `IS DISTINCT FROM`), no en cada call site. El roadmap pedía incrementarla en
+  `update_plan_data_atomic` y en el commit del worker; el trigger cubre ESAS y todas las
+  demás escrituras de `plan_data` (crons, restore, jsonb_set quirúrgicos), así que el test
+  parser-based «ningún UPDATE sin revision + 1» no aplica: lo sustituye el test del trigger.
+- **§13.2 Suite de inyección de fallos** (`tests/test_p1_arq25_f1_close.py`, sin DB, stubs
+  sobre `run_initial_chunk`): crash durante el LLM (reintento con backoff / dead-letter al
+  agotar), resultado vacío, cancelación, worker desplazado al fallar y al hacer commit,
+  **crash después del commit y antes del CAS** (nuevo guard `_placeholder_already_filled`:
+  replay sin regenerar — antes volvía a gastar LLM y el fill devolvía None hasta dead-letter),
+  zombie rescue con `attempts + 1` (parser). Métrica `fencing_rejected` en `pipeline_metrics`
+  (`node = arq25_fencing_rejected`, `session_id = __lifecycle__`) en cada CAS de 0 filas.
+- **Frontend**: la lista blanca `CAMPOS_DERIVADOS_DEL_SERVIDOR` queda SOLO para planes sin
+  `revision`; con revisión igual el poll no toca nada, con revisión mayor adopta entero.
+
+**Gate de la fase (estado al cierre del código):** 7 de 10 planes reales consecutivos por la
+cola (una cuenta), 0 duplicados, 0 CAS stale, 0 `pending_pipeline`; los 2 planes con kill del
+proceso a mitad de LLM y los 7 días sin alerta nueva son operación, no código — se anotan en la
+memoria del proyecto cuando ocurran. Flip global (`MEALFIT_INITIAL_VIA_QUEUE=true`) después.
+
 ## Deuda declarada (Fase 9)
 
 - Los bloques de inyección server-side (`weight_history`/check-ins, «desde mi Nevera») están
