@@ -3955,7 +3955,9 @@ def test_f1a_plan_skeleton_node_wire_planner_con_ctx_country():
         l for l in src.splitlines() if not l.strip().startswith("#")
     )
     n = sin_comentarios.count("build_planner_system_prompt(ctx['country'])")
-    assert n == 2, f"esperaba 2 call sites (SystemMessage + rama sin-cache), hallado {n}"
+    # [P1-SKELETON-SHORT-REASK · 2026-09-02] tercer call site: el re-pedido del esqueleto corto
+    # vuelve a construir el payload y DEBE threadear el mismo país (no re-derivarlo).
+    assert n == 3, f"esperaba 3 call sites (SystemMessage + rama sin-cache + re-pedido), hallado {n}"
 
 
 def test_f1a_breakfast_cat_label_do_byte_equal():
