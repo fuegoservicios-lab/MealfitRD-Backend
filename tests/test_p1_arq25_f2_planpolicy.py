@@ -13,6 +13,7 @@ Ancla los entregables de la fase:
      lleva `_plan_policy` (invitados incluidos) — parser sobre los call sites; knob off ⇒ no-op.
 """
 from __future__ import annotations
+import re
 
 import json
 import os
@@ -239,8 +240,12 @@ def test_every_delivered_plan_is_stamped_before_persist_including_guests():
 
 
 def test_marker_bumped():
-    app = (BACKEND / "app.py").read_text(encoding="utf-8")
-    assert '_LAST_KNOWN_PFIX = "P1-ARQ25-F2-PLANPOLICY · 2026-09-02"' in app
+    """El marker se bumpeó al cerrar la fase; P-fixes posteriores lo mueven (por diseño), así que
+    se ancla el FORMATO y que la fecha no retroceda por debajo del cierre de F2 (2026-09-02)."""
+    src = (Path(__file__).parents[1] / "app.py").read_text(encoding="utf-8")
+    m = re.search(r'_LAST_KNOWN_PFIX = "(P[0-9]-[A-Z0-9-]+) · (\d{4}-\d{2}-\d{2})"', src)
+    assert m, "marker con formato Pn-SLUG · YYYY-MM-DD"
+    assert m.group(2) >= "2026-09-02"
 
 
 def test_shadow_cycle_and_budget_from_real_prod_shapes():

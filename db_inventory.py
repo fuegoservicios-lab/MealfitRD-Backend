@@ -11,6 +11,12 @@ from shopping_calculator import _parse_quantity, get_plural_unit, get_master_ing
 from constants import normalize_ingredient_for_tracking
 
 logger = logging.getLogger(__name__)
+
+# [P2-INVENTORY-LEGACY-PLAN-WARN-ONCE · 2026-09-02] Usuarios cuyo plan usable no trae
+# `calc_household_multiplier` (planes-esqueleto de cuentas e2e del 21-22 ago). El cron de
+# refill los recorre en cada tick y emitía 16 WARNING idénticos por vuelta: se avisa UNA vez
+# por usuario y proceso; las siguientes van a DEBUG. El fallback sigue siendo el mismo.
+_P2_4_NO_MULTIPLIER_WARNED: set = set()
 _RESERVATION_MEAL_TOKEN_RE = re.compile(r":meal:(.+)$")
 
 
@@ -112,10 +118,15 @@ def _compute_dynamic_consumption_rates(
         m_cached_raw = plan_data.get("calc_household_multiplier")
         if m_cached_raw is None:
             # Plan sin metadata: no podemos validar. Conservador → fallback hardcoded.
-            logger.warning(
+            _msg = (
                 "[P2-4] Plan activo sin `calc_household_multiplier`; no es posible "
-                "validar drift household. Cayendo al fallback hardcoded por categoría."
+                f"validar drift household. Cayendo al fallback hardcoded por categoría (user={str(user_id)[:8]})."
             )
+            if user_id in _P2_4_NO_MULTIPLIER_WARNED:
+                logger.debug(_msg)  # [P2-INVENTORY-LEGACY-PLAN-WARN-ONCE]
+            else:
+                _P2_4_NO_MULTIPLIER_WARNED.add(user_id)
+                logger.warning(_msg)
             return {}
         m_cached = max(1.0, float(m_cached_raw))
 
