@@ -84,8 +84,13 @@ def _compute_dynamic_consumption_rates(
     try:
         # [P1-B 2026-05-07] meal_plans no tiene columna `is_active`; el flag
         # vive en plan_data JSONB. Plan "activo" = el más reciente del user.
+        # [P1-INVENTORY-USABLE-PLAN · 2026-09-02] ...que NO sea el placeholder vacío de la
+        # cola (Fase 1): durante los ~7 min de generación el más reciente no tiene días ni
+        # `calc_household_multiplier`, y cada validación caía al fallback con 12 WARNING por
+        # tick del cron de refill. Misma clase que el coach/tools (P1-ARQ25-F1-CLOSE).
+        from db_plans import USABLE_PLAN_SQL_FILTER as _usable
         _plan_row = execute_sql_query(
-            "SELECT plan_data FROM meal_plans WHERE user_id = %s "
+            "SELECT plan_data FROM meal_plans WHERE user_id = %s AND " + _usable + " "
             "ORDER BY created_at DESC LIMIT 1",
             (user_id,),
             fetch_one=True,
