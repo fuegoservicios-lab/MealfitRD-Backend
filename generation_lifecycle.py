@@ -786,6 +786,16 @@ def run_initial_chunk(*, task: dict, snap: dict, form_data: dict, pickup_attempt
             mark_run_completed(run_id)
         else:
             clear_run_error(run_id)  # el run sigue vivo (chunks 2..N); limpia el error de intentos previos
+            # Los chunks 2..N los encoló `_enqueue_remaining_chunks` (postprocess legacy) sin
+            # run_id: se estampan aquí para que `plan_generation_runs` ↔ cola quede enlazado
+            # (medido en el primer run real: chunks 2..8 con run_id NULL).
+            try:
+                execute_sql_write(
+                    "UPDATE plan_chunk_queue SET run_id = %s WHERE meal_plan_id = %s AND user_id = %s AND run_id IS NULL",
+                    (run_id, plan_id, user_id),
+                )
+            except Exception as e:
+                logger.debug(f"[ARQ25-F1] run_id en chunks 2..N no-op: {type(e).__name__}: {e}")
     try:
         from db_plans import upsert_pending_pipeline
         upsert_pending_pipeline(user_id, status="complete", plan_id_final=plan_id)

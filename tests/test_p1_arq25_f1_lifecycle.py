@@ -373,3 +373,10 @@ def test_queue_seed_context_is_whitelisted():
     src = _src("cron_tasks.py")
     i = src.index("P0_3_LEGACY_LEARNING_CONTEXTS = (")
     assert '"seed_chunk1_queue"' in src[i:i + 600]
+
+
+def test_follow_up_chunks_get_run_id():
+    """[P1-ARQ25-F1-LIFECYCLE · 2026-09-02, medido] `_enqueue_remaining_chunks` no conoce el run;
+    el chunk 0 estampa `run_id` en los chunks 2..N del plan tras persistir."""
+    gl = _src("generation_lifecycle.py")
+    assert "UPDATE plan_chunk_queue SET run_id = %s WHERE meal_plan_id = %s AND user_id = %s AND run_id IS NULL" in gl
