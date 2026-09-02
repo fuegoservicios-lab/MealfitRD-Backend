@@ -3341,6 +3341,26 @@ def _parse_quantity(s, *, apply_yield_multiplier: bool = True, apply_legumbres_y
 
     return qty, unit_str, normalize_name(rest_str).strip()
     
+# [P1-PDF-LIST-POLISH · 2026-09-02] SSOT de plurales de envase/unidad. La tabla vivía
+# inline dentro de `get_plural_unit` y le faltaban envases REALES del catálogo (medido en
+# Neon 2026-09-02: 'funda' ×6 filas, 'malla', 'manojo', 'libra', 'litro') ⇒ el PDF
+# imprimía «3 funda (…)». Un envase nuevo en master_ingredients se añade AQUÍ y en el
+# glosario del PDF (`shoppingHelpers.js`, test_p2_i18n_pdf_categorias lo exige).
+UNIT_PLURALS = {
+    'lb': 'lbs', 'lbs': 'lbs', 'libra': 'libras', 'litro': 'litros',
+    'paquete': 'paquetes', 'pote': 'potes', 'unidad': 'unidades',
+    'lata': 'latas', 'cabeza': 'cabezas', 'diente': 'dientes',
+    'cartón': 'cartones', 'carton': 'cartones',
+    'sobre': 'sobres', 'sobrecito': 'sobrecitos',
+    'botella': 'botellas', 'frasco': 'frascos',
+    'funda': 'fundas', 'fundita': 'funditas', 'malla': 'mallas',
+    'mazo': 'mazos', 'manojo': 'manojos', 'envase': 'envases',
+    'tarro': 'tarros', 'barrita': 'barritas',  # [P3-PKG-DAIRY-VEG · 2026-06-22] mantequilla
+    'rebanada': 'rebanadas', 'hoja': 'hojas',
+    'cda': 'cdas', 'cdta': 'cdtas', 'taza': 'tazas',
+    'ud.': 'Uds.',
+}
+
 def get_plural_unit(num, u):
     if num <= 1 or not u: return u
     # [P1-EGG-CARTON-SIZES · 2026-06-22] Unidades con sufijo parentético, p.ej.
@@ -3353,20 +3373,7 @@ def get_plural_unit(num, u):
         u = _m_paren.group(1).strip()
         _paren_suffix = " " + _m_paren.group(2)
     u_lower = u.lower()
-    PLURALS = {
-        'lb': 'lbs', 'lbs': 'lbs',
-        'paquete': 'paquetes', 'pote': 'potes', 'unidad': 'unidades',
-        'lata': 'latas', 'cabeza': 'cabezas', 'diente': 'dientes',
-        'cartón': 'cartones', 'carton': 'cartones',
-        'sobre': 'sobres', 'sobrecito': 'sobrecitos',
-        'botella': 'botellas', 'frasco': 'frascos',
-        'fundita': 'funditas', 'mazo': 'mazos', 'envase': 'envases',
-        'tarro': 'tarros', 'barrita': 'barritas',  # [P3-PKG-DAIRY-VEG · 2026-06-22] mantequilla
-        'rebanada': 'rebanadas', 'hoja': 'hojas',
-        'cda': 'cdas', 'cdta': 'cdtas', 'taza': 'tazas',
-        'ud.': 'Uds.',
-    }
-    result = PLURALS.get(u_lower, u)
+    result = UNIT_PLURALS.get(u_lower, u)
     # Preservar capitalización del input: si "Pote" → "Potes", si "pote" → "potes"
     if len(result) > 0 and u[0].isupper() and result[0].islower():
         result = result[0].upper() + result[1:]

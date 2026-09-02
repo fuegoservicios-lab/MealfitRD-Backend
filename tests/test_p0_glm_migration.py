@@ -91,6 +91,10 @@ def test_d_provider_detector_is_host_based():
 
 def test_e_marker_bumped_and_no_old_name_in_provider_module():
     app_src = (_BACKEND / "app.py").read_text(encoding="utf-8")
-    assert '_LAST_KNOWN_PFIX = "P0-GLM-MIGRATION · 2026-09-02"' in app_src
+    # [P1-PDF-LIST-POLISH · 2026-09-02] No se pina el valor exacto: cada P-fix posterior
+    # lo bumpea (contrato de CLAUDE.md). Se exige que el marker sea POSTERIOR o igual.
+    import re as _re
+    _m = _re.search(r'_LAST_KNOWN_PFIX = "P\d-[A-Z0-9-]+ · (\d{4}-\d{2}-\d{2})"', app_src)
+    assert _m and _m.group(1) >= "2026-09-02", "marker anterior a la migración GLM"
     lp_src = (_BACKEND / "llm_provider.py").read_text(encoding="utf-8").lower()
     assert ("deep" + "seek") not in lp_src

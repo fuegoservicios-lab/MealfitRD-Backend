@@ -48,10 +48,15 @@ def test_cycle_formula_charges_future_weeks_full():
     i = _DASH.find("_deltaAware = (deltaItemsRemoved || 0) > 0")
     win = _DASH[i:i + 2600]
     assert re.search(
-        r"_stableCost \+ _perishableCost\s*\+ _fullPerishableRd \* Math\.max\(0, _cycleCostMultiplier - 1\)",
+        r"_fullPerishableRd \* Math\.max\(0, _cycleCostMultiplier - 1\)",
         win), (
         "ciclo delta-aware = delta hoy + perecederos FULL × (semanas−1): lo de la Nevera "
         "solo ahorra la semana 1, las siguientes recompran completo")
+    # [P1-PDF-LIST-POLISH · 2026-09-02] Las semanas 2..N salen del BACKEND
+    # (cycle_total_rd − trip_total_rd); la derivación local de arriba queda como
+    # fallback sin resumen. La suma sigue siendo delta de hoy + semanas siguientes.
+    assert ("_stableCost + _perishableCost + _futureFreshRdPdf" in win), (
+        "ciclo delta-aware = delta de hoy + semanas siguientes (del backend cuando existe)")
     assert "perishable_rd" in win, "el full de perecederos viene del resumen backend (fallback local)"
 
 
