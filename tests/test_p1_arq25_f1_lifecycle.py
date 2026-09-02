@@ -222,9 +222,14 @@ def test_run_initial_chunk_displaced_worker_does_not_complete_run(monkeypatch):
 def test_worker_has_initial_branch_before_legacy_guard():
     src = _src("cron_tasks.py")
     branch = src.find('if str(chunk_kind or "") == "initial":')
-    guard = src.find("# [GAP 3 FIX: GUARD validar plan activo y no-fallido]")
-    assert branch > 0 and guard > 0 and branch < guard, "la rama initial va ANTES del guard legacy"
-    assert "from generation_lifecycle import run_initial_chunk" in src[branch:guard]
+    # El comentario `[GAP 3 FIX` queda pegado al `try:` (ancla de otro test); lo que importa
+    # es que la rama va ANTES del SELECT del guard legacy y DENTRO del mismo try.
+    guard_comment = src.find("# [GAP 3 FIX: GUARD validar plan activo y no-fallido]")
+    guard_sql = src.find("active_plan = execute_sql_query(", guard_comment)
+    assert 0 < guard_comment < branch < guard_sql, "la rama initial va entre el `try:` y el guard legacy"
+    assert "from generation_lifecycle import run_initial_chunk" in src[branch:guard_sql]
+    main_try = src.rfind("\n        try:\n", 0, guard_comment)
+    assert main_try > 0 and src[main_try:guard_comment].strip() == "try:", "la rama vive dentro del try del lock release"
     # el pickup sigue gateado (H1): el chunk 0 pasa por el mismo UPDATE ... __PLAN_MODE_GATE__
     assert src.count("__PLAN_MODE_GATE__") >= 2
 
