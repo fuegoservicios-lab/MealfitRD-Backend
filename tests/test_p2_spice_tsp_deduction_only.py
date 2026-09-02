@@ -24,9 +24,18 @@ BACKEND = Path(__file__).resolve().parents[1]
 def test_convert_amount_is_strict_by_default_for_spices(caplog, monkeypatch):
     monkeypatch.setenv("MEALFIT_CROSS_UNIT_CONVERSION_STRICT", "true")
     item = {"name": "Orégano dominicano", "density_g_per_cup": 24}
-    with caplog.at_level(logging.WARNING, logger="db_inventory"):
+    with caplog.at_level(logging.DEBUG, logger="db_inventory"):
         assert db_inventory.convert_amount(1.0, "unidad", "g", item) is None
-    assert any("convert_amount" in r.getMessage() for r in caplog.records)
+    # [P2-SPICE-STRICT-QUIET] para un condimento el no-convertible es esperado: DEBUG, no WARNING
+    recs = [r for r in caplog.records if "convert_amount" in r.getMessage()]
+    assert recs and all(r.levelno == logging.DEBUG for r in recs)
+
+
+def test_non_spice_still_warns_when_strict(caplog, monkeypatch):
+    monkeypatch.setenv("MEALFIT_CROSS_UNIT_CONVERSION_STRICT", "true")
+    with caplog.at_level(logging.WARNING, logger="db_inventory"):
+        assert db_inventory.convert_amount(2.0, "unidad", "g", {"name": "Fideos"}) is None
+    assert any(r.levelno == logging.WARNING and "convert_amount" in r.getMessage() for r in caplog.records)
 
 
 def test_convert_amount_opt_in_converts_spices():

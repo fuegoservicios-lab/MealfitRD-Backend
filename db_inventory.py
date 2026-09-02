@@ -725,6 +725,15 @@ _SPICE_TOKENS = ("canela", "pimienta", "oregano", "comino", "ajo en polvo", "saz
                  "condimento", "especia", "curcuma", "paprika", "nuez moscada", "laurel")
 _TSP_PER_CUP = 48.0
 
+def _spice_log_level(name: str):
+    """[P2-SPICE-STRICT-QUIET] logger.debug si el nombre es un condimento; logger.warning si no."""
+    try:
+        from constants import strip_accents
+        n = strip_accents(str(name or "").lower())
+        return logger.debug if any(tok in n for tok in _SPICE_TOKENS) else logger.warning
+    except Exception:
+        return logger.warning
+
 
 def _spice_unit_as_teaspoon(master_item: dict, name_lower: str) -> float | None:
     try:
@@ -845,7 +854,10 @@ def convert_amount(qty: float, from_unit: str, to_unit: str, master_item: dict, 
                 strict = True
             _name = (master_item or {}).get("name") or (master_item or {}).get("slug") or "<unknown>"
             if strict:
-                logger.warning(
+                # [P2-SPICE-STRICT-QUIET · 2026-09-02] Para un condimento, «unidad» sin densidad es lo
+                # ESPERADO en el guard (el fallback de cucharadita es opt-in de la Nevera): va a DEBUG.
+                # Para cualquier otro alimento sigue siendo WARNING (dato del catálogo que falta).
+                (_spice_log_level(_name))(
                     f"[P1-1] convert_amount({qty} {from_unit}→{to_unit}, item={_name!r}) "
                     f"sin density_g_per_unit ni UNIT_WEIGHTS. Strict=True → None."
                 )
@@ -866,7 +878,10 @@ def convert_amount(qty: float, from_unit: str, to_unit: str, master_item: dict, 
                 strict = True
             _name = (master_item or {}).get("name") or (master_item or {}).get("slug") or "<unknown>"
             if strict:
-                logger.warning(
+                # [P2-SPICE-STRICT-QUIET · 2026-09-02] Para un condimento, «unidad» sin densidad es lo
+                # ESPERADO en el guard (el fallback de cucharadita es opt-in de la Nevera): va a DEBUG.
+                # Para cualquier otro alimento sigue siendo WARNING (dato del catálogo que falta).
+                (_spice_log_level(_name))(
                     f"[P1-1] convert_amount({qty} {from_unit}→{to_unit}, item={_name!r}) "
                     f"sin density_g_per_unit ni UNIT_WEIGHTS. Strict=True → None."
                 )
