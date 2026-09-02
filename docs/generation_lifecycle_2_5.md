@@ -111,6 +111,18 @@ cola (una cuenta), 0 duplicados, 0 CAS stale, 0 `pending_pipeline`; los 2 planes
 proceso a mitad de LLM y los 7 días sin alerta nueva son operación, no código — se anotan en la
 memoria del proyecto cuando ocurran. Flip global (`MEALFIT_INITIAL_VIA_QUEUE=true`) después.
 
+### Drain cooperativo para el deploy (§5.5, cierre 2026-09-02 tarde)
+
+El drain del shutdown (`request_worker_drain` en `lifespan`, `MEALFIT_SHUTDOWN_DRAIN_S`) **no
+protege un deploy**: systemd remata el proceso a los 10 s (`TimeoutStopSec=10`) y un pipeline
+dura minutos; alargar el stop dejaría la API caída durante el drain. Vivo: el deploy de las
+12:27 UTC reinició el backend con el chunk inicial del plan 197970fa a mitad del ensamblado
+(recuperado por el zombie rescue 15 min después, como un crash). La solución vive ANTES del
+restart: `POST /api/system/admin/worker-drain` (admin, `wait_s ≤ 25`, `cancel`) pide al worker
+que deje de reclamar y devuelve `ticks_in_flight`; `deploy-mealfit.ps1` lo consulta en tramos
+de 20 s hasta 12 min y sólo reinicia con 0 en vuelo (404 = binario viejo ⇒ sigue; timeout ⇒
+avisa y sigue). Test `test_p1_arq25_f1_close_deploy_drain.py`.
+
 ## Deuda declarada (Fase 9)
 
 - Los bloques de inyección server-side (`weight_history`/check-ins, «desde mi Nevera») están

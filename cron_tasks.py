@@ -25636,6 +25636,16 @@ def worker_ticks_in_flight() -> int:
         return _TICKS_IN_FLIGHT
 
 
+def worker_drain_requested() -> bool:
+    """[P1-ARQ25-F1-CLOSE] True si el worker ya no reclama ticks nuevos (drain pedido)."""
+    return _DRAIN_EVENT.is_set()
+
+
+def cancel_worker_drain() -> None:
+    """[P1-ARQ25-F1-CLOSE] Revierte un drain pedido por el deploy que al final no reinició."""
+    _DRAIN_EVENT.clear()
+
+
 def request_worker_drain(timeout_s: float = 90.0) -> bool:
     """Deja de reclamar y espera a los ticks en vuelo. True si quedó vacío a tiempo."""
     _DRAIN_EVENT.set()

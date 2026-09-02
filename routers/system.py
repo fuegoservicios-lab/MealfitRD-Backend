@@ -684,6 +684,61 @@ class _DeployLagCheckBody(BaseModel):
     expected_marker: Optional[str] = Field(default=None)
 
 
+class _WorkerDrainBody(BaseModel):
+    wait_s: int = Field(default=20, ge=0, le=25)
+    cancel: bool = False
+
+
+@router.post("/admin/worker-drain")
+def admin_worker_drain(
+    request: Request,
+    body: Optional[_WorkerDrainBody] = Body(default=None),
+):
+    """[P1-ARQ25-F1-CLOSE · 2026-09-02] Drain cooperativo PARA EL DEPLOY (§5.5 del roadmap).
+
+    Vivo: el deploy de las 12:27 reinició el backend con el chunk inicial del plan 197970fa
+    a mitad del ensamblado. El drain del shutdown no puede ayudar: systemd remata a los
+    10 s (`TimeoutStopSec=10`) y un pipeline dura minutos; alargar el stop dejaría la API
+    caída durante el drain. La solución es ANTES del restart: el script de deploy pide
+    aquí que el worker deje de reclamar y consulta (con esperas cortas y acotadas) hasta
+    que no quede ningún tick en vuelo; sólo entonces reinicia. Si el deploy se aborta,
+    `cancel=true` devuelve el worker a la normalidad.
+
+    Auth: `Authorization: Bearer <CRON_SECRET>` (mismo patrón que `/admin/*`).
+    Respuesta: `draining`, `ticks_in_flight` (de ESTE proceso), `drained`
+    (True si quedó vacío dentro de `wait_s`), `initial_chunks_processing` (DB, informativo).
+    """
+    _verify_admin_token(request.headers.get("authorization"))
+    b = body or _WorkerDrainBody()
+    try:
+        from cron_tasks import (
+            cancel_worker_drain, request_worker_drain,
+            worker_drain_requested, worker_ticks_in_flight,
+        )
+    except Exception as e:  # sin scheduler local (tests/CLI): nada que drenar
+        return {"draining": False, "ticks_in_flight": 0, "drained": True, "detail": f"worker no disponible: {type(e).__name__}"}
+    if b.cancel:
+        cancel_worker_drain()
+        return {"draining": False, "ticks_in_flight": worker_ticks_in_flight(), "drained": worker_ticks_in_flight() == 0}
+    drained = request_worker_drain(timeout_s=float(b.wait_s))
+    initial_processing = None
+    try:
+        from db import execute_sql_query
+        row = execute_sql_query(
+            "SELECT count(*) AS n FROM plan_chunk_queue WHERE status = 'processing' AND chunk_kind = 'initial'",
+            fetch_one=True,
+        )
+        initial_processing = int((row or {}).get("n") or 0)
+    except Exception:
+        pass
+    return {
+        "draining": worker_drain_requested(),
+        "ticks_in_flight": worker_ticks_in_flight(),
+        "drained": bool(drained),
+        "initial_chunks_processing": initial_processing,
+    }
+
+
 @router.post("/admin/deploy-lag/check")
 def admin_force_deploy_lag_check(
     request: Request,
