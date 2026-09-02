@@ -333,7 +333,9 @@ def test_app_mounts_generation_router_and_marker_bumped():
     app_src = _src("app.py")
     assert "from routers.plans_generation import router as plans_generation_router" in app_src
     assert "app.include_router(plans_generation_router)" in app_src
-    assert '_LAST_KNOWN_PFIX = "P1-ARQ25-F1-LIFECYCLE · 2026-09-02"' in app_src
+    # el marker avanza con cada P-fix; aquí basta con que no sea anterior a esta fase
+    m = re.search(r'_LAST_KNOWN_PFIX = "[^"]*· (\d{4}-\d{2}-\d{2})"', app_src)
+    assert m and m.group(1) >= "2026-09-02", "el marker no puede retroceder por detrás de la Fase 1"
     # drain antes de apagar el scheduler
     d = app_src.find("_req_drain")
     s = app_src.find("scheduler.shutdown(wait=False)")

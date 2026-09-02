@@ -174,12 +174,12 @@ def test_pricing_dict_includes_flash_lite():
     )
     # Pricing oficial GLM 2026-06 (micros/M): $0.14 / $0.28 / $0.0028
     m = re.search(
-        r'"glm-5.3-flash"\s*:\s*\{\s*"input"\s*:\s*140_000\s*,\s*"output"\s*:\s*280_000\s*,\s*"cached"\s*:\s*2_800\s*\}',
+        r'"glm-5.3-flash"\s*:\s*\{\s*"input"\s*:\s*150_000\s*,\s*"output"\s*:\s*500_000\s*,\s*"cached"\s*:\s*30_000\s*\}',
         text,
     )
     assert m, (
-        "Pricing de V4 Flash debe ser input=140_000 / output=280_000 / "
-        "cached=2_800 micros/M (= $0.14/$0.28/$0.0028 per M tokens) per "
+        "Pricing de glm-5.3-flash debe ser input=150_000 / output=500_000 / "
+        "cached=30_000 micros/M (= $0.15/$0.50/$0.03 per M tokens, lista Z.ai) per "
         "docs.z.ai 2026-06-12. Si GLM cambia el pricing, "
         "actualizar AMBOS el dict en db_profiles.py Y esta assertion."
     )
