@@ -69,15 +69,19 @@ def test_endpoint_behaviour_with_stubbed_worker(monkeypatch):
 
 
 def test_deploy_script_waits_for_the_worker_before_restart():
+    sh = BACKEND / "scripts" / "drain_before_restart.sh"
+    assert sh.exists(), "el drain vive como fichero (una cadena inline con comillas anidadas llegó rota al bash remoto)"
+    src = sh.read_text(encoding="utf-8")
+    assert "admin/worker-drain" in src and "ticks_in_flight" in src
+    assert 'MAX_ROUNDS="${DRAIN_MAX_ROUNDS:-36}"' in src and 'WAIT_S="${DRAIN_WAIT_S:-20}"' in src, "36 × 20 s = 12 min como tope"
+    assert 'if [ "$CODE" != "200" ]' in src, "404/servicio caído ⇒ seguir (binario viejo)"
+    assert "TIMEOUT" in src and src.rstrip().endswith("exit 0"), "siempre exit 0: el deploy sigue"
     script = ROOT / "deploy-mealfit.ps1"
     if not script.exists():
         pytest.skip("deploy-mealfit.ps1 no está en la raíz de este árbol")
-    src = script.read_text(encoding="utf-8", errors="replace")
-    drain = src.find("admin/worker-drain")
-    restart = src.find("deps + marker + reinicio en el VPS")
-    assert drain != -1 and restart != -1 and drain < restart, "el drain va ANTES del restart"
-    win = src[drain - 1200:drain + 1600]
-    assert "seq 1 36" in win and '\\"wait_s\\":20' in win, "36 × 20 s = 12 min como tope"
-    assert "ticks_in_flight" in win
-    assert re.search(r'if \[ "\$CODE" != "200" \]', win), "404/servicio caído ⇒ seguir (binario viejo)"
-    assert "TIMEOUT" in win, "timeout ⇒ avisar y seguir (zombie rescue)"
+    ps1 = script.read_text(encoding="utf-8", errors="replace")
+    call = ps1.find("bash /opt/mealfit/backend/scripts/drain_before_restart.sh")
+    restart = ps1.find("systemctl restart mealfit-backend")
+    tar = ps1.find("tar -xzf /tmp/backend.tar.gz -C /opt/mealfit")
+    assert -1 not in (call, restart, tar) and tar < call < restart, "drain DESPUÉS de extraer (el script viaja en el tarball) y ANTES del restart"
+    assert "admin/worker-drain" not in ps1, "la lógica no vuelve inline al ps1"
