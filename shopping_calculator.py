@@ -9367,6 +9367,33 @@ def _get_coherence_alias_map_cached() -> dict:
     return alias_map
 
 
+# [P2-WHITE-FISH-FAMILY-COHERENCE · 2026-09-02] Medido 3 veces el 02-sep: «Mero»/«Tilapia» de la
+# receta contra «Filete de pescado blanco» de la lista ⇒ divergencia crítica marginal en cada plan.
+# El catálogo tiene la fila genérica (aliases: pescado blanco, filete de pescado, tilapia, mero,
+# chillo, pescado) Y filas por especie, así que qué fila gana depende del orden de alias. Para el
+# guard de coherencia son la MISMA compra. Solo dentro del guard: `canonicalize_fish_seafood`
+# sigue devolviendo la especie (sus tests y el agregador la necesitan).
+_WHITE_FISH_FAMILY = frozenset({
+    "pescado", "pescado blanco", "filete de pescado", "filete de pescado blanco",
+    "mero", "tilapia", "chillo", "dorado", "corvina", "pargo", "merluza", "mojarra", "grouper",
+})
+
+
+def _white_fish_family_canonical(canonical):
+    try:
+        from graph_orchestrator import _env_bool as _eb
+        if not _eb("MEALFIT_COHERENCE_WHITE_FISH_FAMILY", True):
+            return canonical
+    except Exception:
+        pass
+    try:
+        from constants import strip_accents
+        n = strip_accents(str(canonical or "").strip().lower())
+    except Exception:
+        return canonical
+    return "Pescado" if n in _WHITE_FISH_FAMILY else canonical
+
+
 def _canonicalize_for_coherence(food_names) -> set:
     """[P1-shop-coh-1 · 2026-05-07] Canonicaliza un set de food names usando
     master_map + reglas inline simples del aggregator (huevo/ñame/miel/ajo).
@@ -9561,6 +9588,11 @@ def _canonicalize_for_coherence(food_names) -> set:
                         if stripped != canonical:
                             canonical = stripped
                         canonical = _singularize_food_es(canonical)
+        # [P2-WHITE-FISH-FAMILY-COHERENCE · 2026-09-02] Familia «pescado blanco»: la receta dice
+        # «filete de mero» y la lista compra «Filete de pescado blanco» (el catálogo tiene la fila
+        # genérica con mero/tilapia/chillo como alias Y filas por especie). Para el guard es la
+        # MISMA compra: ambos lados a 'Pescado'. Salmón/bacalao/atún/sardinas/mariscos siguen aparte.
+        canonical = _white_fish_family_canonical(canonical)
         out.add(canonical)
     return out
 
