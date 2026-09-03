@@ -183,6 +183,14 @@ PANTRY_RECOMMENDED_ITEMS = max(
 CHUNK_PANTRY_EMPTY_TTL_HOURS = max(1, int(os.environ.get("CHUNK_PANTRY_EMPTY_TTL_HOURS", "12")))
 CHUNK_PANTRY_EMPTY_REMINDER_HOURS = max(1, int(os.environ.get("CHUNK_PANTRY_EMPTY_REMINDER_HOURS", "4")))
 CHUNK_PANTRY_EMPTY_MAX_REMINDERS = max(0, int(os.environ.get("CHUNK_PANTRY_EMPTY_MAX_REMINDERS", "2")))
+# [P2-PANTRY-PAUSE-MAX-CYCLES · 2026-09-03] Tope de resurrecciones de un chunk pausado por nevera
+# vacía. Cada `CHUNK_PANTRY_EMPTY_TTL_HOURS` el recovery lo re-encolaba en modo flexible, el worker
+# lo pausaba otra vez (0 frescos) y vuelta a empezar: una cuenta de prueba sin actividad desde el
+# 5-ago llevaba 15 ciclos (34 pausas/re-encolados en una semana). Coste LLM cero, pero un plan que
+# «se está generando» desde hace un mes y ruido en cada tick. Al llegar al tope el chunk se queda en
+# `pending_user_action` esperando la compra: el recovery lo reanuda solo cuando la Nevera viva
+# supera el mínimo (mismo criterio P0-4). 0 = sin tope (comportamiento previo).
+CHUNK_PANTRY_EMPTY_MAX_CYCLES = max(0, min(100, _env_int("MEALFIT_PANTRY_PAUSE_MAX_CYCLES", 6)))
 # [P2-3] Frecuencia del cron dedicado de limpieza de chunks huérfanos. Antes
 # este cleanup vivía embebido en `process_plan_chunk_queue` (corre cada
 # CHUNK_SCHEDULER_INTERVAL_MINUTES, default 1 min) y se ejecutaba ANTES de

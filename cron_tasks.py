@@ -48,6 +48,7 @@ from constants import (
     CHUNK_TEMPORAL_GATE_PUSH_COOLDOWN_HOURS,
     CHUNK_PREV_CHUNK_PAUSE_TTL_HOURS,
     CHUNK_PANTRY_EMPTY_MAX_REMINDERS,
+    CHUNK_PANTRY_EMPTY_MAX_CYCLES,
     CHUNK_PANTRY_EMPTY_REMINDER_HOURS,
     CHUNK_PANTRY_EMPTY_TTL_HOURS,
     CHUNK_ANCHOR_RECOVERY_MAX_ATTEMPTS,
@@ -13963,6 +13964,17 @@ def _chunk_recovery_wall_floor_met(started_at_iso, max_attempts: int) -> bool:
     return elapsed_min >= floor_min
 
 
+def _pantry_pause_over_cap(attempts) -> bool:
+    """[P2-PANTRY-PAUSE-MAX-CYCLES] ¿El chunk ya agotó sus resurrecciones? 0 = sin tope."""
+    cap = int(CHUNK_PANTRY_EMPTY_MAX_CYCLES or 0)
+    if cap <= 0:
+        return False
+    try:
+        return int(attempts or 0) >= cap
+    except (TypeError, ValueError):
+        return False
+
+
 def _recover_pantry_paused_chunks() -> None:
     """Revisa chunks en pending_user_action, recuerda al usuario y evita bloqueo indefinido."""
     try:
@@ -13981,7 +13993,7 @@ def _recover_pantry_paused_chunks() -> None:
         # refrescan esa columna y el TTL de 12h no llegaba nunca a cumplirse.
         paused_rows = execute_sql_query(
             f"""
-            SELECT id, user_id, meal_plan_id, week_number, days_offset, pipeline_snapshot,
+            SELECT id, user_id, meal_plan_id, week_number, days_offset, attempts, pipeline_snapshot,
                    ({pause_age_seconds_sql()})::int AS paused_seconds
             FROM plan_chunk_queue
             WHERE status = 'pending_user_action'
@@ -14970,6 +14982,49 @@ def _recover_pantry_paused_chunks() -> None:
 
             # empty_pantry / otros: mantenemos el comportamiento original (12h TTL + push).
             if paused_seconds >= ttl_hours * 3600:
+                # [P2-PANTRY-PAUSE-MAX-CYCLES · 2026-09-03] Con el tope alcanzado el chunk NO se
+                # re-encola en flexible (con 0 frescos volvería a pausarse en el mismo tick): se
+                # queda esperando la compra y se reanuda solo cuando la Nevera viva supera el
+                # mínimo — la reanudación que hasta hoy sólo tenía `empty_pantry_proactive`.
+                if _pantry_pause_over_cap(row.get("attempts")):
+                    try:
+                        _cap_live = get_user_inventory_net(user_id_str)
+                    except Exception as _cap_live_err:
+                        _cap_live = None
+                        logger.debug(f"[P2-PANTRY-PAUSE-MAX-CYCLES] live fetch falló chunk {week_num}: {_cap_live_err}")
+                    if _cap_live is not None and _count_meaningful_pantry_items(_cap_live) >= CHUNK_MIN_FRESH_PANTRY_ITEMS:
+                        resumed_snapshot = copy.deepcopy(snap)
+                        _resolve_pantry_pause_markers(resumed_snapshot, "pantry_restocked")
+                        resumed_snapshot.pop("_pantry_pause_cycles_exhausted_at", None)
+                        if isinstance(resumed_snapshot.get("form_data"), dict):
+                            resumed_snapshot["form_data"]["current_pantry_ingredients"] = _cap_live
+                            resumed_snapshot["form_data"]["_pantry_captured_at"] = datetime.now(timezone.utc).isoformat()
+                        execute_sql_write(
+                            "UPDATE plan_chunk_queue SET status = 'pending', execute_after = NOW(), "
+                            "pipeline_snapshot = %s::jsonb, updated_at = NOW() WHERE id = %s",
+                            (json.dumps(resumed_snapshot, ensure_ascii=False), row_id),
+                        )
+                        logger.info(
+                            f"[P2-PANTRY-PAUSE-MAX-CYCLES] Chunk {week_num} plan {meal_plan_id_str} reanudado: "
+                            f"la Nevera volvió a tener {_count_meaningful_pantry_items(_cap_live)} ítems tras "
+                            f"{int(row.get('attempts') or 0)} ciclos de pausa."
+                        )
+                        continue
+                    if not snap.get("_pantry_pause_cycles_exhausted_at"):
+                        exhausted_snapshot = copy.deepcopy(snap)
+                        exhausted_snapshot["_pantry_pause_cycles_exhausted_at"] = datetime.now(timezone.utc).isoformat()
+                        exhausted_snapshot["_pantry_pause_cycles"] = int(row.get("attempts") or 0)
+                        execute_sql_write(
+                            "UPDATE plan_chunk_queue SET pipeline_snapshot = %s::jsonb WHERE id = %s",
+                            (json.dumps(exhausted_snapshot, ensure_ascii=False), row_id),
+                        )
+                        logger.warning(
+                            f"[P2-PANTRY-PAUSE-MAX-CYCLES] Chunk {week_num} plan {meal_plan_id_str}: "
+                            f"{int(row.get('attempts') or 0)} ciclos de pausa por nevera vacía "
+                            f"(tope {CHUNK_PANTRY_EMPTY_MAX_CYCLES}). Deja de re-encolarse en flexible; "
+                            f"se reanudará solo cuando el usuario marque la compra."
+                        )
+                    continue
                 # [P1-3] Activación canónica vía helper.
                 degraded_snapshot = _activate_flexible_mode(
                     copy.deepcopy(snap),
