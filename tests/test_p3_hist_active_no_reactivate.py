@@ -112,8 +112,11 @@ def test_footer_returns_null_when_hidden():
     (render del CTA). Solo el del FOOTER (el último, más cerca del final)
     debe tener el early-return null. Iteramos para localizarlo."""
     import re
+    # [P1-ARQ25-F1-LIFECYCLE · 2026-09-02] el footer añadió `|| _selectedIsPlaceholder` y con él un
+    # paréntesis: `(!!currentPlanId && …) || …`. Sin el `\(?` el ÚLTIMO match caía en el copy de
+    # missing-days (`_plan?.id`), que nunca tuvo el early-return, y el guard acusaba al footer.
     matches = list(re.finditer(
-        r"_hideRestore = !!currentPlanId &&",
+        r"_hideRestore = \(?!!currentPlanId &&",
         _HISTORY_JSX,
     ))
     assert len(matches) >= 2, (

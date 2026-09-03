@@ -110,7 +110,9 @@ def test_review_plan_node_variety_skip_untouched():
     # este skip existente, por eso jamás es un gate. Tooltip-anchor: renombrar
     # rompe el test antes de cambiar producción.
     src = open(os.path.join(_BACKEND, "graph_orchestrator.py"), encoding="utf-8").read()
-    assert 'is_variety_regen = form_data.get("update_reason") == "variety"' in src
+    # [P1-ARQ25-F3-HORIZON · 2026-09-02] la derivación usa el SSOT del motivo neutral
+    # (`renewal.v1` + alias `variety`); el skip sigue existiendo, que es lo que este test cuida.
+    assert 'is_variety_regen = _is_renewal_reason_f3(form_data.get("update_reason"))' in src
     assert "P1-VARIETY-IGNORE-PANTRY" in src
 
 

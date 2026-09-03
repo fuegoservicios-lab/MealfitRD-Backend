@@ -99,7 +99,8 @@ def test_volver_button_gates_on_body_metrics_changed():
     # discard nunca se mostraría» sobre un gate que sigue exactamente donde debe.
     # Se sigue la CADENA (botón → handler → gate), que es lo que protege al usuario y
     # además no depende de dónde esté declarado el handler.
-    m_onclick = re.search(r"className=\{styles\.exitSettingsBtn\}\s*onClick=\{(\w+)\}", src)
+    # [P2-ICON-CLOSE-UNIFORM · 2026-09-02] el botón lleva la clase de sistema: `${styles.exitSettingsBtn} ui-close`.
+    m_onclick = re.search(r"className=\{(?:`\$\{)?styles\.exitSettingsBtn(?:\} ui-close`)?\}\s*onClick=\{(\w+)\}", src)
     assert m_onclick, "el botón Volver perdió su onClick={handler}"
     handler = m_onclick.group(1)
 

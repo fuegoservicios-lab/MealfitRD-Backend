@@ -3626,9 +3626,11 @@ def test_canonicalize_shopping_food_name_sweep_346_filas_cero_altas_pais_trece_p
     # vez de a "Filete de pescado blanco", que es la mejora que se acepto al regenerar el
     # baseline C3. Se anaden EXPLICITAMENTE, como pide el mensaje de este assert.
     esperadas_preexistentes = {
-        "Cebolla en polvo", "Clara de huevo", "Guineo verde", "Lechuga romana", "Mero",
+        # [P2-WHITE-FISH-ALIAS-SPLIT · 2026-09-02] -Mero y -Tilapia: la migración les quitó el
+        # alias en la fila genérica "Filete de pescado blanco", así que ya no las sobreescribe el chain.
+        "Cebolla en polvo", "Clara de huevo", "Guineo verde", "Lechuga romana",
         "Nueces mixtas", "Orégano dominicano", "Plátano maduro", "Plátano verde",
-        "Queso cheddar", "Queso mozzarella", "Queso parmesano", "Tilapia", "Tofu firme",
+        "Queso cheddar", "Queso mozzarella", "Queso parmesano", "Tofu firme",
         "Yema de huevo",
     }
     assert overridden_preexisting == esperadas_preexistentes, (

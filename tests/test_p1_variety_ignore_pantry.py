@@ -107,16 +107,19 @@ def _read_orchestrator_source() -> str:
 
 
 def test_review_plan_node_defines_variety_flag():
-    """La fuente de prod DEBE derivar `is_variety_regen` desde
-    `update_reason == 'variety'` (anchor: un renombre rompe el test antes que
-    producción)."""
+    """La fuente de prod DEBE derivar `is_variety_regen` desde el motivo de renovación
+    (anchor: un renombre rompe el test antes que producción).
+
+    [P1-ARQ25-F3-HORIZON · 2026-09-02] La derivación pasó de `== 'variety'` al SSOT
+    `horizon.is_renewal_reason` (motivo neutral `renewal.v1` + alias legado `variety`); el
+    CONTRATO de este archivo (renovar ⇒ saltar la validación de la nevera) no cambia."""
     src = _read_orchestrator_source()
     assert re.search(
-        r'is_variety_regen\s*=\s*form_data\.get\(\s*["\']update_reason["\']\s*\)\s*==\s*["\']variety["\']',
+        r'is_variety_regen\s*=\s*_is_renewal_reason_f3\(\s*form_data\.get\(\s*["\']update_reason["\']\s*\)\s*\)',
         src,
     ), (
         "No se encontró la derivación `is_variety_regen = "
-        "form_data.get('update_reason') == 'variety'` en review_plan_node."
+        "_is_renewal_reason_f3(form_data.get('update_reason'))` en review_plan_node."
     )
 
 

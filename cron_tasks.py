@@ -17673,7 +17673,7 @@ def _inject_advanced_learning_signals(user_id: str, pipeline_data: dict, health_
                WHERE user_id = %s
                  AND created_at >= NOW() - INTERVAL '14 days'
                  AND NOT (
-                     reason IN ('swap:cravings', 'swap:weekend', 'swap:variety')
+                     reason IN ('swap:cravings', 'swap:weekend', 'swap:variety', 'swap:renewal.v1')
                      AND created_at < NOW() - INTERVAL '48 hours'
                  )""",
             (user_id,),
@@ -18404,7 +18404,7 @@ def inject_learning_signals_from_profile(user_id: str, pipeline_data: dict) -> d
                    WHERE user_id = %s 
                      AND created_at >= NOW() - INTERVAL '14 days'
                      AND NOT (
-                         reason IN ('swap:cravings', 'swap:weekend', 'swap:variety') 
+                         reason IN ('swap:cravings', 'swap:weekend', 'swap:variety', 'swap:renewal.v1') 
                          AND created_at < NOW() - INTERVAL '48 hours'
                      )""",
                 (user_id,), fetch_all=True
@@ -26908,6 +26908,15 @@ __PLAN_MODE_GATE__
                 logger.debug(f"[P1-REFILL-SIBLING-PAUSE-GATE] no-op: {_spg_e}")
 
         form_data = copy.deepcopy(snap.get("form_data", {}))
+        # [P1-ARQ25-F3-HORIZON · 2026-09-02] la rebanada viaja en el snapshot (inmutable); el
+        # flag `enforce` se RECALCULA al ejecutar (el canary por usuario puede cambiar entre
+        # encolar y correr, y el knob se lee en cada llamada).
+        if isinstance(form_data.get("_blueprint_slice"), dict):
+            try:
+                from horizon import policy_enforced as _policy_enforced_f3
+                form_data["_policy_enforced"] = _policy_enforced_f3(user_id)
+            except Exception:
+                form_data["_policy_enforced"] = False
         snapshot_form_data = snap.get("form_data", {}) or {}
         # País resuelto una sola vez para TODAS las capas del guard de Nevera
         # (LLM, shuffle, live-check y post-merge). El snapshot mantiene el país
@@ -29066,6 +29075,15 @@ __PLAN_MODE_GATE__
                         safe_pool,
                         form_data.get("current_pantry_ingredients", []),
                     )
+                    # [P1-ARQ25-F3-HORIZON · 2026-09-02] Smart Shuffle lee la política (§6.6): los
+                    # días candidatos se ordenan por cobertura de anclas (orden estable; sin
+                    # política o fuera de `enforce` la lista no cambia).
+                    if pantry_filtered_pool and form_data.get("_policy_enforced"):
+                        try:
+                            from horizon import rank_days_by_policy as _rank_days_f3
+                            pantry_filtered_pool = _rank_days_f3(pantry_filtered_pool, form_data.get("_plan_policy_effective"))
+                        except Exception:
+                            pass
                     if pantry_filtered_pool:
                         if len(pantry_filtered_pool) < len(safe_pool):
                             logger.info(
@@ -30167,6 +30185,13 @@ __PLAN_MODE_GATE__
                     _fatigue_consumed = chunk_consumed_records if (int(days_offset or 0) >= 14) else None
                     _fatigue_data = calculate_ingredient_fatigue(user_id, tuning_metrics=tuning_metrics, consumed=_fatigue_consumed)
                     _fatigued_ingredients = list(_fatigue_data.get('fatigued_ingredients', []) or [])
+                    # [P1-ARQ25-F3-HORIZON · 2026-09-02] un ancla de la política no se fatiga (§6.6).
+                    if form_data.get("_policy_enforced") and _fatigued_ingredients:
+                        try:
+                            from horizon import exclude_anchors_from_fatigue as _excl_anchors_f3
+                            _fatigued_ingredients = _excl_anchors_f3(_fatigued_ingredients, form_data.get("_plan_policy_effective"))
+                        except Exception:
+                            pass
                     _allergy_keywords = []
                     try:
                         for f in (alergias_facts or []):

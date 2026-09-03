@@ -81,7 +81,7 @@ def test_the_exit_button_goes_through_the_gate_instead_of_checking_by_itself():
     reglas: la del botón y la de las otras tres vías, que es como se separan."""
     src = _strip_comments(_SETTINGS.read_text(encoding="utf-8"))
     boton = re.search(
-        r"className=\{styles\.exitSettingsBtn\}(.*?)>", src, re.DOTALL
+        r"className=\{(?:`\$\{)?styles\.exitSettingsBtn(?:\} ui-close`)?\}(.*?)>", src, re.DOTALL  # [P2-ICON-CLOSE-UNIFORM] clase de sistema añadida
     )
     assert boton, "P1-SETTINGS-DIALOG: no se encuentra el botón de salida de Settings."
     assert "requestExit" in boton.group(1), (

@@ -13412,6 +13412,13 @@ def get_shopping_list_delta(
     days = shopping_source_days(plan_result)
     # [P1-ARQ25-F1-CLOSE] H6: el builder sella la demanda que está a punto de construir.
     stamp_ingredient_demand(plan_result, surface="get_shopping_list_delta")
+    # [P1-ARQ25-F3-HORIZON · 2026-09-02] ventanas de frescos/congelación de la política (si el
+    # plan ya la lleva sellada). Best-effort; sin política no toca nada.
+    try:
+        from horizon import stamp_demand_windows as _stamp_windows_f3
+        _stamp_windows_f3(plan_result)
+    except Exception as _sw_e:
+        logging.debug(f"[P1-ARQ25-F3-HORIZON] ventanas de la demanda no selladas: {_sw_e}")
     if not days and plan_result.get("meals"):
         days = [{"day": 1, "meals": plan_result.get("meals")}] 
     if not days and plan_result.get("perfectDay"):

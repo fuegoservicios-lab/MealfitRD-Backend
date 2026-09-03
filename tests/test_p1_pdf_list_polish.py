@@ -22,10 +22,17 @@ import pytest
 
 _ROOT = Path(__file__).resolve().parents[2]
 _DASH_PATH = _ROOT / "frontend" / "src" / "pages" / "Dashboard.jsx"
-_DASH = _DASH_PATH.read_text(encoding="utf-8") if _DASH_PATH.exists() else ""
+_DASH = ""
 _LOCALES = _ROOT / "frontend" / "src" / "i18n" / "locales"
 
-pytestmark = pytest.mark.skipif(not _DASH, reason="frontend ausente")
+
+@pytest.fixture(scope="module", autouse=True)
+def _load_frontend_sibling_sources(frontend_repo_path):
+    # [P2-CI-BACKEND-CERO-TESTS] la fixture compartida salta el módulo si falta el hermano;
+    # la lectura ya no ocurre al importar (el checkout del backend no trae ../frontend).
+    _ = frontend_repo_path
+    global _DASH
+    _DASH = _DASH_PATH.read_text(encoding="utf-8")
 
 
 def _win_after(anchor: str, span: int = 2600) -> str:

@@ -2339,6 +2339,24 @@ def get_deterministic_variety_prompt(history_text: str, form_data: dict = None, 
     # 2 por día reutilizándolas entre días.
     chosen_fruits = unique_fruits[:_dc + 1] if unique_fruits else []
 
+    # [P1-ARQ25-F3-HORIZON · 2026-09-02] La rebanada del blueprint manda sobre el reparto del
+    # seeder cuando la política está en `enforce`: proteína del día según la familia programada
+    # (buscada en el MISMO pool ya filtrado por alergias/dieta/dislikes) y anclas del día
+    # publicadas como DATO (`out_assignment`). shadow/off ⇒ byte-idéntico a V1.
+    _bp_slice = form_data.get("_blueprint_slice") if isinstance(form_data, dict) else None
+    _bp_enforced = bool(form_data.get("_policy_enforced")) if isinstance(form_data, dict) else False
+    _bp_eff = form_data.get("_plan_policy_effective") if isinstance(form_data, dict) else None
+    if _bp_enforced and isinstance(_bp_slice, dict):
+        try:
+            from horizon import apply_slice_to_seeder_pools as _apply_slice_f3
+            chosen_proteins = _apply_slice_f3(_bp_slice, chosen_proteins, unique_proteins, days=_dc)
+            if isinstance(out_assignment, dict):
+                out_assignment["blueprint_slice_hash"] = _bp_slice.get("slice_hash")
+                out_assignment["anchors_by_day"] = [list(d.get("anchors") or []) for d in (_bp_slice.get("days") or [])][:_dc]
+            logger.info(f"📐 [P1-ARQ25-F3-HORIZON] seeder obedece la rebanada {str(_bp_slice.get('slice_hash'))[:12]}: proteínas={chosen_proteins}")
+        except Exception as _bp_e:
+            logger.warning(f"[P1-ARQ25-F3-HORIZON] rebanada no aplicada al seeder (fail-open): {_bp_e}")
+
     # [P3-SEEDER-TEMPLATE-COVERAGE · 2026-08-04] TELEMETRÍA, no guard. Una base de la nevera sin
     # ninguna plantilla propia que además ocupa ≥2 de los días del chunk es el caso que el audit
     # describe: bajo `cycle_locked` el prompt prohíbe introducir bases nuevas, así que esos dos
@@ -2427,6 +2445,14 @@ def get_deterministic_variety_prompt(history_text: str, form_data: dict = None, 
             blocked_text += f"\n - {reason}"
             
     update_reason = form_data.get("update_reason") if form_data else None
+    # [P1-ARQ25-F3-HORIZON · 2026-09-02] `renewal.v1` (motivo neutral versionado) entra al chain
+    # por el alias legado; el TEXTO de la intención lo decide `_bp_enforced` más abajo.
+    try:
+        from horizon import is_renewal_reason as _is_renewal_reason_f3
+        if _is_renewal_reason_f3(update_reason):
+            update_reason = 'variety'
+    except Exception as _exc:
+        logger.debug("[P2-SILENT-DEGRADATION] P1-ARQ25-F3-HORIZON alias del motivo: %s: %s", type(_exc).__name__, str(_exc)[:160])
     
     # ======= [GAP 1] PERSISTENCIA DE SEÑALES DE APRENDIZAJE =======
     # Guardamos los "dislikes" y "skips" como patrones de rechazo permanentes
@@ -2488,7 +2514,11 @@ def get_deterministic_variety_prompt(history_text: str, form_data: dict = None, 
     # ==============================================================
 
     if update_reason == 'variety':
-        blocked_text += "\n\n💡 [INTENCIÓN DEL USUARIO]: El usuario solicitó explícitamente MAYOR VARIEDAD al actualizar el plan. Ofrece combinaciones creativas, diferentes técnicas de cocción y perfiles de sabor novedosos."
+        if _bp_enforced:
+            # [P1-ARQ25-F3-HORIZON] renovación bajo política: hereda la banda, no pide «más variedad».
+            blocked_text += "\n\n🔁 [INTENCIÓN DEL USUARIO]: El usuario RENUEVA su plan. NO es una petición de más variedad: respeta la banda de recurrencia y las anclas de su política (bloque 📐 más abajo) y cambia solo lo que la política permite cambiar."
+        else:
+            blocked_text += "\n\n💡 [INTENCIÓN DEL USUARIO]: El usuario solicitó explícitamente MAYOR VARIEDAD al actualizar el plan. Ofrece combinaciones creativas, diferentes técnicas de cocción y perfiles de sabor novedosos."
     elif update_reason == 'dislike':
         blocked_text += "\n\n🚨 [INTENCIÓN DEL USUARIO]: El usuario solicitó actualizar el plan porque NO LE GUSTARON las opciones generadas. EVITA los perfiles de sabor de los platos anteriores y cambia radicalmente la estrategia."
     elif update_reason == 'time':
@@ -2692,6 +2722,13 @@ def get_deterministic_variety_prompt(history_text: str, form_data: dict = None, 
     # `form_data` es el parámetro homónimo de esta función. Knob apagado ⇒ 'DO' siempre ⇒ camino
     # byte-idéntico. [P1-COUNTRY-SYSTEM-F2 · 2026-08-17 (Task 9, j)] reusa `_variety_country`
     # (derivado UNA vez arriba, closure) — ya no re-deriva con un 2º import+call local.
+    # [P1-ARQ25-F3-HORIZON · 2026-09-02] Bloque 📐 de la política (vacío salvo en `enforce`).
+    if _bp_enforced:
+        try:
+            from horizon import policy_prompt_block as _policy_prompt_block_f3
+            blocked_text += _policy_prompt_block_f3(_bp_eff, _bp_slice, surface="planner_seeder", enforced=True)
+        except Exception as _pb_e:
+            logger.warning(f"[P1-ARQ25-F3-HORIZON] bloque de política omitido en el seeder: {_pb_e}")
     prompt = build_deterministic_variety_prompt(_dc, _variety_country).format(
         light_protein_block=_light_block,
         blocked_text=blocked_text,

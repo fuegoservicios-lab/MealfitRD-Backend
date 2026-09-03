@@ -1302,7 +1302,25 @@ def swap_meal(form_data: dict, surface: str = "individual"):
         logger.debug(f"[P2-AUDIT-V6-BATCH] (P2-F) inspiración swap no-op: {_insp_e}")
 
     swap_reason = form_data.get("swap_reason", "dislike")
-    
+    # [P1-ARQ25-F3-HORIZON · 2026-09-02] El swap lee la política del plan vivo (§6.6): bloque 📐
+    # con la banda y las anclas de ESTA franja (vacío salvo `enforce`), y el motivo neutral
+    # `renewal.v1` NO pide variedad — hereda la política. Sin política, `renewal.v1` cae al
+    # alias legado y el chain de abajo queda byte-idéntico.
+    _pol_block_f3 = ""
+    try:
+        from horizon import policy_prompt_block as _ppb_f3, is_renewal_reason as _irr_f3
+        _pol_block_f3 = _ppb_f3(form_data.get("_plan_policy_effective"), surface="swap", slot=meal_type,
+                                enforced=bool(form_data.get("_policy_enforced")))
+        if _pol_block_f3:
+            context_extras += "\n" + _pol_block_f3
+        if _irr_f3(swap_reason):
+            if _pol_block_f3:
+                context_extras += "\n    - 🔁 INTENCIÓN: el usuario RENUEVA este plato. No es una petición de variedad: respeta la banda de recurrencia y las anclas de su política."
+            else:
+                swap_reason = 'variety'
+    except Exception as _pol_e:
+        logger.debug(f"[P1-ARQ25-F3-HORIZON] política del swap no-op: {_pol_e}")
+
     if swap_reason == 'variety':
         context_extras += "\n    - 💡 INTENCIÓN: El usuario NO rechaza este plato, solo quiere VARIEDAD. Sugiere combinaciones creativas, diferentes técnicas de cocción o perfiles de sabor novedosos pero accesibles."
     elif swap_reason == 'time':

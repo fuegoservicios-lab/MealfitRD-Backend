@@ -1881,7 +1881,9 @@ def build_pantry_context(form_data: dict) -> str:
     # (no 'OBLIGATORIO'), desde un campo SEPARADO (durable_pantry_ingredients) — por eso
     # se evalúa ANTES del guard de current_pantry. Sigue siendo variety → el reviewer NO
     # valida → el reuso jamás es gate → imposible reintroducir el band-0.0 (d4bc3af5).
-    if form_data.get("update_reason") == "variety":
+    # [P1-ARQ25-F3-HORIZON · 2026-09-02] motivo neutral versionado (`renewal.v1`) + alias `variety`.
+    from horizon import is_renewal_reason as _is_renewal_reason_f3
+    if _is_renewal_reason_f3(form_data.get("update_reason")):
         try:
             from constants import RENEWAL_PANTRY_AWARE_ENABLED as _RPA
         except Exception:

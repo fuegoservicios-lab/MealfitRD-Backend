@@ -4851,6 +4851,14 @@ def _build_shared_context(state: PlanState, force_rebuild: bool = False) -> dict
     successful_tone_strategies = form_data.get("_successful_tone_strategies", [])
     previous_plan_quality = form_data.get("_previous_plan_quality")
     fatigued_ingredients = form_data.get("fatigued_ingredients", [])
+    # [P1-ARQ25-F3-HORIZON · 2026-09-02] Un ancla de la política nunca entra como «fatigada»:
+    # el usuario pidió repetirla (§6.6 aprendizaje). No-op sin política.
+    if form_data.get("_policy_enforced") and fatigued_ingredients:
+        try:
+            from horizon import exclude_anchors_from_fatigue as _excl_anchors_f3
+            fatigued_ingredients = _excl_anchors_f3(fatigued_ingredients, form_data.get("_plan_policy_effective"))
+        except Exception:
+            pass
     quality_hint = form_data.get("_quality_hint", "")
     drastic_strategy = form_data.get("_drastic_change_strategy", None)
     weight_history = form_data.get("weight_history", [])
@@ -10987,6 +10995,16 @@ async def self_critique_node(state: PlanState) -> dict:
     from constants import country_for_form_data
     form_data = state.get("form_data") or {}
     _critique_country = country_for_form_data(form_data)
+    # [P1-ARQ25-F3-HORIZON · 2026-09-02] El evaluador lee la política del run: con recurrencia
+    # RUTINA no debe bajar `diversity_score` por repeticiones que el usuario pidió. Vacío
+    # (prompt byte-idéntico) salvo en `enforce`.
+    try:
+        from horizon import policy_prompt_block as _policy_prompt_block_sc
+        policy_block = _policy_prompt_block_sc(
+            form_data.get("_plan_policy_effective"), form_data.get("_blueprint_slice"),
+            surface="self_critique", enforced=bool(form_data.get("_policy_enforced")))
+    except Exception:
+        policy_block = ""
     _CRITIQUE_EVALUATOR_SYSTEM_INSTRUCTION, CritiqueEvaluation = (
         _critique_evaluator_artifacts_for_country(_critique_country)
     )
@@ -11183,7 +11201,7 @@ async def self_critique_node(state: PlanState) -> dict:
     human_content = f"""
 PLAN A EVALUAR (días generados):
 {days_summary_json}
-{staples_block}{spread_block}{slot_block}{crossday_block}{user_context}
+{policy_block}{staples_block}{spread_block}{slot_block}{crossday_block}{user_context}
 {pista_dia}
 """.strip()
 
@@ -42267,6 +42285,24 @@ Responde ÚNICAMENTE con el JSON de revisión.
                 # una fruta repetida es cosmética y bloquearla convierte un plan válido en "IA saturada"
                 # (cero-plan). En intentos 1..N-1 SÍ rechaza (presiona a diversificar). Anchor: P1-VARIETY-REPEAT-GRACEFUL.
                 _rep_issues = _variety_repeat_gate_issues(_vr)
+                # [P1-ARQ25-F3-HORIZON · 2026-09-02] Fidelidad a la política (§6.1): mide el
+                # chunk contra su rebanada del blueprint y sella `_fidelity_report` + métrica.
+                # En `enforce` retira los gates de REPETICIÓN de V1 que contradicen la banda
+                # pedida (rutina ⇒ todos; equilibrada ⇒ los que hablan de un ancla) y, con
+                # MEALFIT_FIDELITY_GATE=block, rechaza (nunca en el intento final: cero-plan
+                # prohibido, mismo criterio que P1-VARIETY-REPEAT-GRACEFUL). shadow ⇒ solo mide.
+                try:
+                    from horizon import review_fidelity_gate as _review_fidelity_gate
+                    _rep_issues, _fid_rejects = _review_fidelity_gate(
+                        plan, form_data, _rep_issues,
+                        attempt=int(state.get("attempt", 1)), max_attempts=MAX_ATTEMPTS)
+                    for _fid_issue in _fid_rejects:
+                        logger.warning(f"📐 [P1-ARQ25-F3-HORIZON] {_fid_issue[:72]}… → rechazo por fidelidad")
+                        approved = False
+                        issues.append(_fid_issue)
+                        severity = _severity_max(severity, "high")
+                except Exception as _fid_e:
+                    logger.warning(f"[P1-ARQ25-F3-HORIZON] gate de fidelidad falló (fail-open): {_fid_e}")
                 if _rep_issues:
                     _vg_attempt = int(state.get("attempt", 1))
                     _vg_is_final = _vg_attempt >= MAX_ATTEMPTS
@@ -43063,7 +43099,11 @@ Responde ÚNICAMENTE con el JSON de revisión.
         # diferentes (simétrico a la supresión del bloque Zero-Waste en
         # build_pantry_context). Si validáramos los platos nuevos contra la
         # despensa, fallarían por no estar en ella → retries → plan degradado.
-        is_variety_regen = form_data.get("update_reason") == "variety"
+        # [P1-ARQ25-F3-HORIZON · 2026-09-02] motivo neutral versionado (`renewal.v1`); `variety`
+        # sigue aceptado como alias legado. La variable conserva su nombre: la semántica del
+        # skip (plan NUEVO con alimentos distintos ⇒ no validar contra la nevera vieja) no cambia.
+        from horizon import is_renewal_reason as _is_renewal_reason_f3
+        is_variety_regen = _is_renewal_reason_f3(form_data.get("update_reason"))
         # [P1-PANTRY-GUARD-EMPTY-FRIDGE · 2026-07-11] Nevera consultada y VACÍA es señal
         # de verdad moderna: si el cliente mandó current_pantry_ingredients=[] EXPLÍCITO
         # (renovación con fridge vacío), el fallback legacy current_shopping_list NO debe
@@ -44751,6 +44791,13 @@ async def semantic_cache_check_node(state: PlanState) -> dict:
     if is_reroll:
         return {"semantic_cache_hit": False, "cached_plan_data": None}
 
+    # [P1-ARQ25-F3-HORIZON · 2026-09-02] Bajo `enforce` la caché semántica se salta: un plan
+    # cacheado por similitud de perfil no sabe nada de la banda de recurrencia ni de las
+    # anclas del run (§6.6 «caché semántica obedece la política»). shadow ⇒ intacta.
+    if actual_form_data.get("_policy_enforced"):
+        _inc_semantic_cache_stat("policy_bypass")
+        return {"semantic_cache_hit": False, "cached_plan_data": None}
+
     # [P1-25] Attempt-guard: si el form_data carga señales de que ESTA
     # invocación es un reintento posterior a un rechazo, bypasear el cache.
     # Sin esto, el wrapper externo `_validate_pantry_and_retry_pipeline`
@@ -45923,6 +45970,15 @@ _TRUSTED_INTERNAL_FORM_KEYS: frozenset = frozenset({
     # filtrar por `metadata.caller_context`.
     "_caller_target_plan_id",
     "_caller_context",
+
+    # [P1-ARQ25-F3-HORIZON · 2026-09-02] rebanada del blueprint + política efectiva + flag
+    # enforce + día objetivo (swap/regen). Las inyecta el servidor (generation_inputs,
+    # _enqueue_remaining_chunks, chunk worker, attach_policy_to_swap_form); un cliente que
+    # las mande por el router cae en el strip estricto (allow_set=None) antes de llegar aquí.
+    "_blueprint_slice",
+    "_plan_policy_effective",
+    "_policy_enforced",
+    "_policy_day_index",
 })
 
 

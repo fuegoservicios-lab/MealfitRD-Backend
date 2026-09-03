@@ -52,12 +52,13 @@ import pytest
 _TECHO_SIN_DENSIDAD_PCT = 55        # medido: 166/347 = 47,8%
 _TECHO_READY_TO_EAT_NULL = 80       # medido: 64
 
-#: Los cuatro alias que más de una fila reclama, con su veredicto medido.
+#: Los alias que más de una fila reclama, con su veredicto medido.
+#: [P2-WHITE-FISH-ALIAS-SPLIT · 2026-09-02] «mero» y «tilapia» salieron de esta lista: la migración
+#: les quitó el alias en la fila genérica «Filete de pescado blanco», así que ya tienen UNA dueña
+#: (el test parametrizado de abajo sigue exigiendo que resuelvan a su fila específica).
 _ALIAS_AMBIGUOS = {
     "mariscos": "categoría — tres moluscos la reclaman; cualquier elección es arbitraria",
-    "mero": "resuelve a la fila específica «Mero», no al filete genérico",
     "nueces": "resuelve a «Nueces mixtas», NO a las almendras",
-    "tilapia": "resuelve a la fila específica «Tilapia», no al filete genérico",
 }
 
 

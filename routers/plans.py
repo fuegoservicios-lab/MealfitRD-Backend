@@ -1952,6 +1952,18 @@ def _seed_chunk1_learning(
         )
 
 
+def _horizon_inject(pipeline_data: dict, data: dict, total_days_requested: int, actual_user_id) -> None:
+    """[P1-ARQ25-F3-HORIZON · 2026-09-02] Rebanada del blueprint para el chunk 0 del path legacy
+    (sync/SSE): la cola lo hace en `build_initial_pipeline_inputs`. Fail-open; off ⇒ no-op."""
+    try:
+        from horizon import inject_policy_into_pipeline_data
+        inject_policy_into_pipeline_data(
+            pipeline_data, form_data=data, total_days=int(total_days_requested or 1), days_offset=0,
+            days_count=pipeline_data.get("_days_to_generate") or total_days_requested, user_id=actual_user_id)
+    except Exception as _hz_e:
+        logger.warning(f"[P1-ARQ25-F3-HORIZON] rebanada no inyectada (legacy): {_hz_e}")
+
+
 def _enqueue_remaining_chunks(
     actual_user_id: str,
     plan_id,
@@ -2015,6 +2027,24 @@ def _enqueue_remaining_chunks(
             inherited = {"history": _hist, "summary": _summ}
 
     chunks = split_with_absorb(total_days_requested, PLAN_CHUNK_SIZE)
+    # [P1-ARQ25-F3-HORIZON · 2026-09-02] El blueprint del run (o reconstruido desde el
+    # formulario: misma política ⇒ mismo hash) se REBANA por chunk con las MISMAS fronteras
+    # que esta cola (H2). La rebanada viaja en `form_data` del snapshot (whitelist del
+    # orquestador) y su hash entra en `input_hash` del chunk. off ⇒ None ⇒ nada cambia.
+    _bp_f3, _eff_f3, _enforced_f3, _fp_f3 = None, None, False, ""
+    try:
+        from horizon import (blueprint_for_plan as _bp_for_plan, slice_for_chunk as _slice_f3,
+                             chunk_input_hash as _chunk_hash_f3, policy_enforced as _pol_enf_f3)
+        from generation_lifecycle import request_fingerprint as _req_fp_f3
+        _bp_f3 = _bp_for_plan(str(plan_id), data, total_days_requested)
+        if _bp_f3:
+            from plan_policy import compile_from_form as _cff_f3
+            _eff_f3 = (_cff_f3(data) or {}).get("effective") or {}
+            _enforced_f3 = _pol_enf_f3(actual_user_id)
+            _fp_f3 = _req_fp_f3(data)
+    except Exception as _bp_e:
+        logger.warning(f"[P1-ARQ25-F3-HORIZON] blueprint no disponible para los chunks 2..N: {_bp_e}")
+        _bp_f3 = None
     offset = chunks[0]
     for wk, count in enumerate(chunks[1:], start=2):
         if count > 0:
@@ -2022,10 +2052,24 @@ def _enqueue_remaining_chunks(
                 chunk_snapshot = dict(snapshot)
                 if inherited:
                     chunk_snapshot["_inherited_lifetime_lessons"] = inherited
+                _slice_wk = None
+                if _bp_f3:
+                    _slice_wk = _slice_f3(_bp_f3, offset, count)
+                    chunk_snapshot["form_data"] = {
+                        **snapshot["form_data"], "_blueprint_slice": _slice_wk,
+                        "_plan_policy_effective": _eff_f3, "_policy_enforced": _enforced_f3,
+                    }
                 _enqueue_plan_chunk(
                     actual_user_id, plan_id, wk, offset, count,
                     chunk_snapshot, chunk_kind="initial_plan",
                 )
+                if _slice_wk:
+                    from db_core import execute_sql_write as _esw_f3
+                    _esw_f3(
+                        "UPDATE plan_chunk_queue SET input_hash = %s WHERE meal_plan_id = %s "
+                        "AND week_number = %s AND status = 'pending'",
+                        (_chunk_hash_f3(_fp_f3, _slice_wk), plan_id, wk),
+                    )
             except Exception as chunk_err:
                 logger.warning(
                     f"⚠️ [CHUNK] Error encolando chunk semana {wk} "
@@ -2275,6 +2319,10 @@ def _postprocess_pipeline_result(
         _compiled_policy = _stamp_policy(result, data, total_days_requested=total_days_requested)
         if _compiled_policy:
             _emit_policy_metric(actual_user_id, existing_plan_id, _compiled_policy, result.get("_plan_policy_shadow"))
+            # [P1-ARQ25-F3-HORIZON · 2026-09-02] ventanas de frescos/congelación en la
+            # IngredientDemand (H6) — se persisten con el plan_data.
+            from horizon import stamp_demand_windows as _stamp_windows_f3
+            _stamp_windows_f3(result, (_compiled_policy or {}).get("effective"))
     except Exception as _pol_err:
         logger.warning(f"[P1-ARQ25-F2-PLANPOLICY] sello de política omitido: {_pol_err}")
     selected_techniques = result.pop("_selected_techniques", None)
@@ -2312,6 +2360,15 @@ def _postprocess_pipeline_result(
                 context_label=f"seed_chunk1_{transport_label}",
                 user_id=actual_user_id,  # [P0-9] ownership check
             )
+            # [P1-ARQ25-F3-HORIZON · 2026-09-02] lista 7/15/30 como PROYECCIÓN (outbox
+            # `plan_jobs`, la Fase 5 la consume). Solo bajo `enforce`; dedup por plan+política.
+            try:
+                from horizon import enqueue_shopping_projection_job as _enq_proj_f3
+                _enq_proj_f3(str(plan_id), actual_user_id, revision=None,
+                             effective=(result.get("_plan_policy") or {}).get("effective"),
+                             total_days=int(total_days_requested or 1))
+            except Exception as _proj_e:
+                logger.debug(f"[P1-ARQ25-F3-HORIZON] proyección no encolada: {_proj_e}")
             _enqueue_remaining_chunks(
                 actual_user_id, plan_id, result,
                 data=data, taste_profile=taste_profile,
@@ -3605,6 +3662,8 @@ def api_analyze(
             # Usuario sin perfil o guest solicitó plan largo → capear a 3 días
             pipeline_data["_days_to_generate"] = PLAN_CHUNK_SIZE
 
+        _horizon_inject(pipeline_data, data, total_days_requested, actual_user_id)
+
         # [P0-A2] Cap defensivo: si en algún branch futuro `pipeline_data["_days_to_generate"]`
         # se asignara con un valor distinto a `PLAN_CHUNK_SIZE`, este enforce
         # garantiza el límite. Hoy es no-op porque las dos asignaciones de arriba
@@ -4104,6 +4163,8 @@ async def api_analyze_stream(
         elif total_days_requested > PLAN_CHUNK_SIZE:
             # Usuario sin perfil o guest solicitó plan largo → capear a 3 días
             pipeline_data["_days_to_generate"] = PLAN_CHUNK_SIZE
+
+        _horizon_inject(pipeline_data, data, total_days_requested, actual_user_id)
 
         # [P0-A2] Cap defensivo de `_days_to_generate` (invariante explícito).
         _enforce_days_to_generate_cap(pipeline_data, log_prefix="ROUTER /analyze/stream")
@@ -6749,7 +6810,9 @@ def api_swap_meal(background_tasks: BackgroundTasks, data: dict = Body(...), ver
 
         rejected_meal = data.get("rejected_meal")
         meal_type = data.get("meal_type", "")
-        swap_reason = data.get("swap_reason", "variety")  # variety | time | dislike | similar | budget
+        # [P1-ARQ25-F3-HORIZON · 2026-09-02] sin motivo ⇒ `renewal.v1` bajo `enforce`, `variety` legado.
+        from horizon import default_swap_reason as _default_swap_reason_f3
+        swap_reason = data.get("swap_reason") or _default_swap_reason_f3(data.get("user_id"))  # variety | time | dislike | similar | budget
 
         # [P2-PANTRY-SUFFICIENCY · 2026-06-23] Gate de suficiencia de la Nevera ANTES de
         # consumir cuota o llamar al LLM. Requisito del owner: el plato nuevo debe ser
@@ -6861,6 +6924,12 @@ def api_swap_meal(background_tasks: BackgroundTasks, data: dict = Body(...), ver
         # [P1-SWAP-REGEN-RESUME · 2026-07-11] flag in-flight ANTES de la IA (el frontend lo
         # pollea si el usuario refresca); si swap_meal levanta, el except-clear lo retira
         # (el resume del cliente verá ausencia + plan sin cambios → apaga sin éxito).
+        # [P1-ARQ25-F3-HORIZON · 2026-09-02] el swap lee la política del plan vivo (server-side).
+        try:
+            from horizon import attach_policy_to_swap_form as _attach_policy_f3
+            _attach_policy_f3(data, user_id, plan_id=data.get("plan_id"))
+        except Exception as _ap_e:
+            logger.debug(f"[P1-ARQ25-F3-HORIZON] política no adjunta al swap: {_ap_e}")
         _mri_ctx = _swap_meal_regen_flag_set(data, verified_user_id) \
             if (user_id and user_id != "guest") else None
         try:
@@ -8950,6 +9019,12 @@ def api_regenerate_day(
                 # cambiar si era factible cocinarlo desde la Nevera.
                 try:
                     _form_v = dict(meal_form)
+                    # [P1-ARQ25-F3-HORIZON · 2026-09-02] la regen de día hereda la política del plan.
+                    try:
+                        from horizon import attach_policy_to_swap_form as _attach_policy_f3
+                        _attach_policy_f3(_form_v, user_id, plan_data=plan_data, day_index=data.get("day_index"))
+                    except Exception as _ap_e:
+                        logger.debug(f"[P1-ARQ25-F3-HORIZON] política no adjunta a la regen: {_ap_e}")
                     if _variety_on and day_avoid:
                         _form_v["disliked_meals"] = list(day_avoid)
                     nm = swap_meal(_form_v, surface="day")

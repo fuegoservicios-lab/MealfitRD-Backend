@@ -92,11 +92,11 @@ class TestAgentSwapMealFallback:
         """El fallback DEBE leer `aggregated_shopping_list` del plan_data
         del user (no del form_data — eso es el fallback anterior)."""
         # Verificamos que dentro del fallback se invoca
-        # `get_latest_meal_plan_with_id` Y se lee
+        # `get_latest_usable_meal_plan_with_id` Y se lee
         # `aggregated_shopping_list` del plan_data.
-        assert "get_latest_meal_plan_with_id" in swap_meal_body, (
+        assert "get_latest_usable_meal_plan_with_id" in swap_meal_body, (
             "P1-SWAP-EMPTY-PANTRY-FALLBACK regresión: el fallback no "
-            "carga el plan del user via `get_latest_meal_plan_with_id`. "
+            "carga el plan del user via `get_latest_usable_meal_plan_with_id`. "
             "Sin esto, no hay forma de leer `aggregated_shopping_list`."
         )
         assert "aggregated_shopping_list" in swap_meal_body, (
