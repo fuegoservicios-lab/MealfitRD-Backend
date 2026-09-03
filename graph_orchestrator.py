@@ -13184,6 +13184,10 @@ _GAINMUSCLE_GOAL_TOKENS = ("gain_muscle", "ganar_musculo", "ganancia", "bulk", "
 # aleja), acotado por techo calórico + re-cuantización inmediata (callsite assemble). Cierra la asimetría
 # proteína(3 closers)/carbos(0). Rollback sin redeploy: MEALFIT_CARB_FLOOR=false.
 CARB_FLOOR_ENABLED = _env_bool("MEALFIT_CARB_FLOOR", True)
+# [P2-FAT-FLOOR · 2026-09-03] Espejo del carb-floor para GRASAS bajo banda (ver `_close_fat_gap_for_day`).
+FAT_FLOOR_ENABLED = _env_bool("MEALFIT_FAT_FLOOR", True)
+FAT_FLOOR_TOL = _env_float("MEALFIT_FAT_FLOOR_TOL", 0.10, validator=lambda v: 0.0 < v < 0.5)
+FAT_FLOOR_MAX_SCALE = _env_float("MEALFIT_FAT_FLOOR_MAX_SCALE", 2.5, validator=lambda v: 1.0 < v <= 4.0)
 CARB_FLOOR_MAX_SCALE = max(1.8, min(4.0, _env_float("MEALFIT_CARB_FLOOR_MAX_SCALE", 2.5)))
 CARB_FLOOR_TOL = max(0.0, min(0.5, _env_float("MEALFIT_CARB_FLOOR_TOL", 0.10)))
 
@@ -21765,6 +21769,88 @@ def _relevel_fats_universal(days, target_fats, db) -> int:
     return n
 
 
+def _close_fat_gap_for_day(meals: list, target_fats: float, target_kcal: float, db, *,
+                           tol: float = 0.10, max_scale: float = 2.5, max_lines: int = 2) -> bool:
+    """[P2-FAT-FLOOR · 2026-09-03] Closer ADITIVO de GRASAS — espejo direccional de
+    `_close_carb_gap_for_day` y de `_relevel_fats_universal` (que solo RECORTA grasas sobre banda).
+    Hasta hoy la grasa era la única macro sin closer hacia arriba: el 2026-09-03 un «actualizar
+    día» del dueño entregó 58 g de grasa contra 69 de target (kcal 2370/2500), con protein/carbs
+    en banda; el relevel no tenía nada que recortar y el rebalance del día no levantó las
+    fuentes. Cuando el día entrega grasa MUY bajo la banda (< target×(1−tol)), ESCALA el/los
+    ingrediente(s) GRASA-dominantes existentes más ricos (aceite, aguacate, semillas, queso)
+    hacia el target, con clamp `max_scale`, acotado por el techo calórico (≤ 1.12×target_kcal),
+    hasta `max_lines` líneas distintas, y re-cuantiza. NO añade ingredientes nuevos (coherencia
+    receta↔lista intacta; `_sync_one_raw_line` mantiene `ingredients_raw`). Recompute HONESTO de
+    macros desde el string reescalado. Mutates meals. Retorna True si escaló. Gateado por
+    FAT_FLOOR_ENABLED (`MEALFIT_FAT_FLOOR`). Fail-safe. tooltip-anchor: P2-FAT-FLOOR"""
+    if not FAT_FLOOR_ENABLED or target_fats <= 0:
+        return False
+    try:
+        from nutrition_db import rescale_ingredient_string as _resc, quantize_ingredient_string as _quant
+        cur = sum(_meal_macro_num(m.get("fats")) for m in meals)
+        if cur >= target_fats * (1.0 - tol):
+            return False  # ya en/sobre el piso de banda → nada que cerrar
+        used: set = set()
+        scaled_any = False
+        for _round in range(max(1, int(max_lines))):
+            cur = sum(_meal_macro_num(m.get("fats")) for m in meals)
+            if cur >= target_fats * (1.0 - tol):
+                break
+            best = None  # (fats_contrib, meal, idx, ing_str)
+            for m in meals:
+                ings = m.get("ingredients")
+                if not isinstance(ings, list):
+                    continue
+                for idx, ing in enumerate(ings):
+                    if (id(m), idx) in used:
+                        continue
+                    if _ingredient_macro_group(str(ing), db) != "fats":
+                        continue
+                    _fv = (db.macros_from_ingredient_string(str(ing)) or {}).get("fats") or 0.0
+                    if _fv > 0 and (best is None or _fv > best[0]):
+                        best = (float(_fv), m, idx, str(ing))
+            if best is None:
+                if not scaled_any:
+                    logger.info(f"🥑 [P2-FAT-FLOOR] grasas {cur:.0f}g < piso ({target_fats:.0f}g) sin "
+                                f"ingrediente grasa-dominante que escalar → sin palanca (no se inventan compras).")
+                break
+            contrib, m, idx, orig = best
+            used.add((id(m), idx))
+            deficit = target_fats - cur
+            factor = min(max_scale, 1.0 + (deficit / contrib))
+            if target_kcal > 0:
+                cur_kcal = sum(_meal_macro_num(mm.get("cals")) for mm in meals)
+                _mo_k = (db.macros_from_ingredient_string(orig) or {}).get("kcal") or 0.0
+                if _mo_k > 0:
+                    kcal_room = (1.12 * target_kcal) - cur_kcal
+                    if kcal_room <= 0:
+                        break
+                    factor = min(factor, 1.0 + (kcal_room / _mo_k))
+            if factor <= 1.0 + 1e-3:
+                continue
+            quant, _f = _quant(_resc(orig, factor))
+            if quant == orig:
+                continue
+            _mo = db.macros_from_ingredient_string(orig) or {}
+            _mn = db.macros_from_ingredient_string(quant) or {}
+            ings = m.get("ingredients")
+            ings[idx] = quant
+            _sync_one_raw_line(m, idx, orig, factor * _f)
+            _np = max(0, round(_meal_macro_num(m.get("protein")) + ((_mn.get("protein") or 0) - (_mo.get("protein") or 0))))
+            _nc = max(0, round(_meal_macro_num(m.get("carbs")) + ((_mn.get("carbs") or 0) - (_mo.get("carbs") or 0))))
+            _nf = max(0, round(_meal_macro_num(m.get("fats")) + ((_mn.get("fats") or 0) - (_mo.get("fats") or 0))))
+            m["protein"], m["carbs"], m["fats"] = _np, _nc, _nf
+            m["cals"] = max(0, round(4 * _np + 4 * _nc + 9 * _nf))
+            m["macros"] = [f"P:{_np}g", f"C:{_nc}g", f"G:{_nf}g"]
+            scaled_any = True
+            logger.info(f"🥑 [P2-FAT-FLOOR] '{orig}' → '{quant}' (×{factor:.2f}) en "
+                        f"'{str(m.get('name') or '')[:40]}': grasas del día hacia {target_fats:.0f}g")
+        return scaled_any
+    except Exception as e:
+        logger.warning(f"[P2-FAT-FLOOR] fat-closer falló: {type(e).__name__}: {e}")
+        return False
+
+
 def _close_carb_gap_for_day(meals: list, target_carbs: float, target_kcal: float, db, *,
                             tol: float = 0.10, max_scale: float = 2.5) -> bool:
     """[P2-CARB-FLOOR · 2026-06-29] (re-audit objetivo · P2 MACRO-FG-CARBFAT-NOCLOSER) Closer ADITIVO de carbos —
@@ -25724,6 +25810,23 @@ def _apply_deterministic_clinical_layer(plan: dict, form_data: dict, nutrition: 
                                 f"(escala determinista, target {_tc_cf:.0f}g)")
         except Exception as _cf_e:
             logger.warning(f"[P2-CARB-FLOOR] carb-floor en assemble no-op: {type(_cf_e).__name__}: {_cf_e}")
+    # [P2-FAT-FLOOR · 2026-09-03] paridad con el carb-floor: la grasa bajo banda también se cierra
+    if FAT_FLOOR_ENABLED and _db is not None:
+        try:
+            _tf_ff = _meal_macro_num(active_macros.get("fats_str"))
+            if _tf_ff > 0:
+                _ff_days = 0
+                for _d in plan.get("days", []) or []:
+                    if _close_fat_gap_for_day(_d.get("meals", []) or [], _tf_ff, _daily_cals, _db,
+                                              tol=FAT_FLOOR_TOL, max_scale=FAT_FLOOR_MAX_SCALE):
+                        _ff_days += 1
+                if _ff_days and PORTION_QUANTIZE_ENABLED:
+                    _apply_portion_quantization(plan, _db)
+                if _ff_days:
+                    logger.info(f"🥑 [P2-FAT-FLOOR] cerró el piso de grasas en {_ff_days} día(s) "
+                                f"(escala determinista, target {_tf_ff:.0f}g)")
+        except Exception as _ff_e:
+            logger.warning(f"[P2-FAT-FLOOR] fat-floor en assemble no-op: {type(_ff_e).__name__}: {_ff_e}")
 
     # ── Guard 4d (FS6/ERC verificación FINAL) [P1-RENAL-RECHECK-POST-SUBS · 2026-06-18, review P1] ──
     # La cuantización (Guard 4) + carb-trim (4b) + post-quant reconcile (4c) recomputan macros desde porciones

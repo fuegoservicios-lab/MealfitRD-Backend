@@ -9365,6 +9365,27 @@ def api_regenerate_day(
                                 f"({_n_frl} día(s)) — paridad con el relevel de la generación.")
             except Exception as _frl_e:
                 logger.warning(f"[P2-REGEN-DAY-FATS-RELEVEL] no-op: {type(_frl_e).__name__}: {_frl_e}")
+        # [P2-REGEN-DAY-FAT-FLOOR · 2026-09-03] El relevel de arriba solo RECORTA grasa sobre banda; si
+        # el día regenerado quedó CORTO de grasa (58 g vs 69 g el 2026-09-03 → kcal fuera de banda y
+        # plan marcado degradado), el piso la sube escalando la fuente de grasa existente más rica
+        # (aceite, aguacate, semillas), acotado por kcal y sin inventar compras.
+        if (
+            regenerated > 0 and not _ai_unavailable
+            and os.environ.get("MEALFIT_REGEN_DAY_FAT_FLOOR", "true").strip().lower() in ("1", "true", "yes", "on")
+            and float(day_target.get("fats_g") or 0) > 0
+        ):
+            try:
+                from graph_orchestrator import (_close_fat_gap_for_day as _cfg_rd, FAT_FLOOR_TOL as _ff_tol,
+                                                FAT_FLOOR_MAX_SCALE as _ff_max)
+                _real_ff = [m for m in new_meals if isinstance(m, dict)]
+                _pre_ff = sum(float(m.get("fats") or 0) for m in _real_ff)
+                if _cfg_rd(_real_ff, float(day_target.get("fats_g") or 0), float(day_target.get("kcal") or 0), _db,
+                           tol=_ff_tol, max_scale=_ff_max):
+                    _post_ff = sum(float(m.get("fats") or 0) for m in _real_ff)
+                    logger.info(f"🥑 [P2-REGEN-DAY-FAT-FLOOR] grasas del día {_pre_ff:.0f}g → {_post_ff:.0f}g "
+                                f"(target {float(day_target.get('fats_g') or 0):.0f}g) escalando la fuente existente")
+            except Exception as _ff_e:
+                logger.warning(f"[P2-REGEN-DAY-FAT-FLOOR] no-op: {type(_ff_e).__name__}: {_ff_e}")
 
         # [P1-UPDATE-MACRO-PARITY · 2026-07-03] (audit v6 · P1-1) Refinador GLOBAL entero de 5g del día
         # regenerado (paridad con assemble: rebalance → refine): si tras el rebalance el día sigue fuera
