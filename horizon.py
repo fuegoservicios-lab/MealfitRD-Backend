@@ -726,6 +726,25 @@ _FAMILY_TOKENS = {
 }
 
 
+# [P2-F3-FAMILY-INJECT-EMPTY-PANTRY · 2026-09-03] Nombre CANÓNICO del catálogo que representa a cada
+# familia (no existen filas «Pollo»/«Pescado»/«Res» a secas). Se usa SOLO cuando el pool del seeder no
+# trae ningún miembro de la familia programada Y la Nevera está por debajo del umbral del guard
+# (`PANTRY_GUARD_MIN_ITEMS`, cuando el guard de despensa no aplica): con la Nevera vacía el sorteo
+# ponderado del seeder entregaba «Habas / Guisantes secos / Queso de hoja» como proteína del día a un
+# perfil de ganancia muscular (135 g), y el revisor rechazó 2 intentos seguidos por déficit de
+# proteína (plan 8f364c87, 11:13 y 11:17 UTC). Con Nevera real el pool sale de ella y no se inyecta.
+_FAMILY_REPRESENTATIVE = {
+    "pollo": "Pechuga de pollo", "pescado": "Filete de pescado blanco", "huevo": "Huevo", "res": "Carne de res",
+    "cerdo": "Cerdo", "atun": "Atún en agua", "pavo": "Pechuga de pavo", "lentejas": "Lentejas",
+    "habichuelas": "Habichuelas", "garbanzos": "Garbanzos", "tofu": "Tofu", "camarones": "Camarones",
+    "queso": "Queso blanco", "yogur": "Yogur natural", "guandules": "Guandules",
+}
+
+
+def family_representative(family: str) -> Optional[str]:
+    return _FAMILY_REPRESENTATIVE.get(_norm(family)) or _FAMILY_REPRESENTATIVE.get(_stem_word(_norm(family)))
+
+
 def family_matches(family: str, candidate: str) -> bool:
     """¿El nombre del pool pertenece a la familia programada? Por clase de alimento, no por raíz."""
     if _matches(family, candidate):
@@ -745,10 +764,12 @@ def _stem_word(t: str) -> str:
         return t
 
 
-def apply_slice_to_seeder_pools(sl: dict, chosen: list, pool: list, *, days: int) -> list:
+def apply_slice_to_seeder_pools(sl: dict, chosen: list, pool: list, *, days: int, inject_missing: bool = False) -> list:
     """Proteína por día según la rebanada: para cada día busca en el pool del seeder un nombre
-    que case con la familia programada; si no hay, conserva la elección del seeder. En modo
-    rutina la misma proteína puede repetirse entre días; en los demás se evita si es posible."""
+    que case con la familia programada; si no hay, conserva la elección del seeder — o, con
+    `inject_missing` (Nevera por debajo del umbral del guard), inyecta el representante canónico
+    de la familia. En modo rutina la misma proteína puede repetirse entre días; en los demás se
+    evita si es posible."""
     try:
         days = max(1, int(days or 1))
         chosen = list(chosen or [])
@@ -766,6 +787,10 @@ def apply_slice_to_seeder_pools(sl: dict, chosen: list, pool: list, *, days: int
                     if family_matches(fam, cand) and (routine or cand.lower() not in used):
                         pick = cand
                         break
+            if pick is None and fam and inject_missing:
+                rep_name = family_representative(fam)
+                if rep_name and (routine or rep_name.lower() not in used):
+                    pick = rep_name
             if pick is None:
                 for cand in chosen + pool:
                     if cand.lower() not in used:
@@ -1170,7 +1195,7 @@ __all__ = [
     "build_blueprint", "blueprint_hash", "slice_for_chunk", "slice_hash", "chunk_input_hash",
     "persist_run_blueprint", "compiled_policy_for_form", "blueprint_for_plan", "effective_policy_for_plan",
     "inject_policy_into_pipeline_data", "attach_policy_to_swap_form",
-    "policy_prompt_block", "apply_slice_to_seeder_pools", "family_matches",
+    "policy_prompt_block", "apply_slice_to_seeder_pools", "family_matches", "family_representative",
     "anchor_in_text", "fidelity_issues", "fidelity_report", "filter_variety_issues_for_policy", "exclude_anchors_from_fatigue",
     "rank_days_by_policy", "emit_fidelity_metric", "review_fidelity_gate",
     "shopping_projection_windows", "stamp_demand_windows", "enqueue_shopping_projection_job",

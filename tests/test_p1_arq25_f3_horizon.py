@@ -390,7 +390,7 @@ def test_all_surfaces_read_the_policy_through_horizon():
     assert "{policy_block}{staples_block}{spread_block}" in go            # self-critique
     assert "fatigued_ingredients = _excl_anchors_f3(fatigued_ingredients" in go  # aprendizaje (orquestador)
     ah = _src("ai_helpers.py")
-    assert "chosen_proteins = _apply_slice_f3(_bp_slice, chosen_proteins, unique_proteins, days=_dc)" in ah
+    assert "chosen_proteins = _apply_slice_f3(_bp_slice, chosen_proteins, unique_proteins, days=_dc, inject_missing=_bp_inject)" in ah
     assert 'surface="planner_seeder"' in ah                              # chunk 0..N + renovación (mismo seeder)
     ag = _src("agent.py")
     assert 'surface="swap", slot=meal_type' in ag                        # swap individual

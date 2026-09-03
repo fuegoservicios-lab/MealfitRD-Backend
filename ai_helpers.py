@@ -2349,11 +2349,15 @@ def get_deterministic_variety_prompt(history_text: str, form_data: dict = None, 
     if _bp_enforced and isinstance(_bp_slice, dict):
         try:
             from horizon import apply_slice_to_seeder_pools as _apply_slice_f3
-            chosen_proteins = _apply_slice_f3(_bp_slice, chosen_proteins, unique_proteins, days=_dc)
+            # [P2-F3-FAMILY-INJECT-EMPTY-PANTRY · 2026-09-03] sin Nevera que respetar (por debajo del
+            # umbral del guard), una familia ausente del pool se cubre con su representante canónico.
+            from constants import PANTRY_GUARD_MIN_ITEMS as _pgmi_f3
+            _bp_inject = len(form_data.get("current_pantry_ingredients") or []) < int(_pgmi_f3 or 0)
+            chosen_proteins = _apply_slice_f3(_bp_slice, chosen_proteins, unique_proteins, days=_dc, inject_missing=_bp_inject)
             if isinstance(out_assignment, dict):
                 out_assignment["blueprint_slice_hash"] = _bp_slice.get("slice_hash")
                 out_assignment["anchors_by_day"] = [list(d.get("anchors") or []) for d in (_bp_slice.get("days") or [])][:_dc]
-            logger.info(f"📐 [P1-ARQ25-F3-HORIZON] seeder obedece la rebanada {str(_bp_slice.get('slice_hash'))[:12]}: proteínas={chosen_proteins}")
+            logger.info(f"📐 [P1-ARQ25-F3-HORIZON] seeder obedece la rebanada {str(_bp_slice.get('slice_hash'))[:12]}: proteínas={chosen_proteins} inject={_bp_inject}")
         except Exception as _bp_e:
             logger.warning(f"[P1-ARQ25-F3-HORIZON] rebanada no aplicada al seeder (fail-open): {_bp_e}")
 
