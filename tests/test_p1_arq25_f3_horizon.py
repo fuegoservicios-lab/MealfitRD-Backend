@@ -164,12 +164,17 @@ def test_golden_slices_cover_horizon_and_plan_from_blueprint_is_faithful(key):
         sched = [(i, d) for i, d in enumerate(sl["days"]) if d.get("anchors")]
         if sched:
             i, d = sched[0]
+            anchor = d["anchors"][0]
             mutated = copy.deepcopy(days)
-            for m in mutated[i]["meals"]:
-                m["ingredients"] = [x for x in m["ingredients"] if not pp._matches(d["anchors"][0]["name"], x)]
-                m["name"] = m["name"] + " sin ancla"
+            # con franja ⇒ basta quitarla de SU día; sin franja la promesa es la cuota de la
+            # ventana (P1-PANTRY-KEY-VULGAR-FRACTIONS): se quita de TODOS los días del bloque
+            targets = [i] if anchor.get("slot") else range(len(mutated))
+            for t in targets:
+                for m in mutated[t]["meals"]:
+                    m["ingredients"] = [x for x in m["ingredients"] if not h.anchor_in_text(anchor["name"], x)]
+                    m["name"] = m["name"] + " sin ancla"
             codes = {x["code"] for x in h.fidelity_issues(mutated, sl, eff)}
-            assert "anchor_missing_day" in codes, (key, codes)
+            assert codes & {"anchor_missing_day", "anchor_under_scheduled"}, (key, codes)
     assert covered == list(range(total))
     assert len(hashes) == len(bp["chunks"])
 
@@ -459,3 +464,31 @@ def test_family_matches_by_food_class_not_word_root():
     sl = {"days": [{"protein": "Pescado"}, {"protein": "Huevo"}, {"protein": "Res"}], "recurrence": {"global_mode": "balanced"}}
     pool = ["Queso Mozzarella", "Sardinas en lata", "Hígado de res"]
     assert h.apply_slice_to_seeder_pools(sl, pool, pool, days=3) == ["Sardinas en lata", "Queso Mozzarella", "Hígado de res"]
+
+
+def test_anchor_detection_survives_vulgar_fractions_and_modifiers():
+    """[P1-PANTRY-KEY-VULGAR-FRACTIONS · 2026-09-03] Primer plan del canary: «¾ cucharada de
+    mantequilla de maní» dos veces en el día 2 y el validador marcó el ancla AUSENTE."""
+    assert h.anchor_in_text("Mantequilla de maní", "¾ cucharada de mantequilla de maní")
+    assert h.anchor_in_text("Kiwi", "½ kiwi en cubos") and h.anchor_in_text("Huevo", "2 huevos batidos")
+    assert not h.anchor_in_text("Mantequilla de maní", "¾ cucharada de miel")
+    assert not h.anchor_in_text("Pollo", "1 repollo")
+    eff = _eff(anchors=[("Mantequilla de maní", [], 2, 7)], cycle=7)
+    sl = h.slice_for_chunk(h.build_blueprint(eff, total_days=7, meals_per_day=4), 0, 3)
+    sched = [d["day_index"] for d in sl["days"] if d.get("anchors")]
+    days = [{"day": i + 1, "meals": [{"name": "Batido", "type": "Merienda", "ingredients": ["¾ taza de yogurt", "¾ cucharada de mantequilla de maní"]}]}
+            if i in sched else {"day": i + 1, "meals": [{"name": f"Avena {i}", "type": "Desayuno", "ingredients": ["40 g de avena"]}]} for i in range(3)]
+    assert h.fidelity_issues(days, sl, eff) == []
+    # sin franja: ponerla OTRO día del bloque no es infidelidad (cuota cumplida)
+    if len(sched) == 1 and sched[0] != 0:
+        moved = [{"day": 1, "meals": days[sched[0]]["meals"]}] + [{"day": i + 1, "meals": [{"name": f"Avena {i}", "type": "Desayuno", "ingredients": ["40 g de avena"]}]} for i in range(1, 3)]
+        assert h.fidelity_issues(moved, sl, eff) == []
+    # y si NO aparece las veces programadas ⇒ anchor_under_scheduled
+    none = [{"day": i + 1, "meals": [{"name": f"Avena {i}", "type": "Desayuno", "ingredients": ["40 g de avena"]}]} for i in range(3)]
+    if sched:
+        assert {x["code"] for x in h.fidelity_issues(none, sl, eff)} == {"anchor_under_scheduled"}
+    # con franja: sí se exige el día y la franja
+    eff_s = _eff(anchors=[("Huevo", ["breakfast"], 5, 7)], cycle=7, mode="routine")
+    sl_s = h.slice_for_chunk(h.build_blueprint(eff_s, total_days=7, meals_per_day=3), 0, 3)
+    bad = [{"day": i + 1, "meals": [{"name": "Avena", "type": "Desayuno", "ingredients": ["avena"]}]} for i in range(3)]
+    assert "anchor_missing_day" in {x["code"] for x in h.fidelity_issues(bad, sl_s, eff_s)}

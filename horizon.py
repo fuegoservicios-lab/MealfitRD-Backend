@@ -220,9 +220,32 @@ def _meal_texts(meal: dict) -> list[str]:
     return out
 
 
+def anchor_in_text(anchor: str, text: str) -> bool:
+    """¿El ancla está DENTRO del texto de un ingrediente («¾ cucharada de mantequilla de maní»,
+    «½ kiwi en cubos»)? Contención token a token sobre la clave canónica de la Nevera (misma
+    normalización de cantidad/acentos/plural que `pantry_names_match`), no igualdad: la fila de
+    la Nevera exige el mismo número de tokens, pero aquí la pregunta es «¿aparece el ancla?».
+    [P1-PANTRY-KEY-VULGAR-FRACTIONS · 2026-09-03]"""
+    if _matches(anchor, text):
+        return True
+    try:
+        from constants import canonical_pantry_key, _pantry_token_variants
+        ka, kt = canonical_pantry_key(anchor), canonical_pantry_key(text)
+        if not ka or not kt:
+            return False
+        stop = {"de", "del", "la", "el", "con", "en", "y", "al"}
+        need = [t for t in ka.split() if t not in stop]
+        have = set()
+        for t in kt.split():
+            have |= _pantry_token_variants(t)
+        return bool(need) and all(_pantry_token_variants(t) & have for t in need)
+    except Exception:
+        return False
+
+
 def _meal_has(meal: dict, name: str, iid: Optional[str] = None) -> bool:
     for t in _meal_texts(meal):
-        if _matches(name, t) or (iid and _ingredient_id(t) == iid):
+        if anchor_in_text(name, t) or (iid and _ingredient_id(t) == iid):
             return True
     return False
 
@@ -790,11 +813,19 @@ def fidelity_issues(days: list, sl: Optional[dict], effective: Optional[dict], *
             sched_by_day[int(d.get("day_index", -1))] = list(d.get("anchors") or [])
 
         # 1) anclas por día (rebanada) — día ausente / franja equivocada
+        # [P1-PANTRY-KEY-VULGAR-FRACTIONS · 2026-09-03] Solo las anclas CON franja se exigen en su
+        # día (rutina explícita). Las anclas sin franja prometen una CUOTA en la ventana: se
+        # validan en (2) como `anchor_under_scheduled` — «lo puso el día 3 en vez del 2» no es
+        # infidelidad, y en `block` habría quemado un reintento sobre un plan correcto.
         missing_for: dict[str, int] = {}
+        scheduled_in_window: dict[str, int] = {}
         for i, day in enumerate(days):
             abs_idx = off + i
             for a in sched_by_day.get(abs_idx, []):
                 name, iid, slot = str(a.get("name")), a.get("ingredient_id"), a.get("slot")
+                scheduled_in_window[iid or name] = scheduled_in_window.get(iid or name, 0) + 1
+                if not slot:
+                    continue
                 meals = [m for m in (day.get("meals") or []) if isinstance(m, dict)]
                 in_any = [m for m in meals if _meal_has(m, name, iid)]
                 if not in_any:
@@ -819,6 +850,15 @@ def fidelity_issues(days: list, sl: Optional[dict], effective: Optional[dict], *
             present = sum(1 for day in days if any(_meal_has(m, name, iid) for m in (day.get("meals") or []) if isinstance(m, dict)))
             hi = math.ceil(int(a.get("max_per_7d") if a.get("max_per_7d") is not None else 7) * n / 7.0)
             lo = math.floor(int(a.get("min_per_7d") or 0) * n / 7.0)
+            sched_n = scheduled_in_window.get(iid or name, 0)
+            if sched_n and present < sched_n and (iid or name) not in missing_for:
+                out.append({
+                    "code": "anchor_under_scheduled", "severity": "high", "anchor": name, "present": present, "scheduled": sched_n,
+                    "message": (f"ANCLA POR DEBAJO DE LO PROGRAMADO (fidelidad a la política del usuario): {name} debía "
+                                f"aparecer en {sched_n} día(s) de este bloque y aparece en {present}. Añádelo en "
+                                f"{sched_n - present} día(s) más sin cambiar el resto."),
+                })
+                missing_for[iid or name] = sched_n - present
             if present > hi:
                 out.append({
                     "code": "recurrence_above_band", "severity": "medium", "anchor": name, "present": present, "max": hi,
@@ -1131,7 +1171,7 @@ __all__ = [
     "persist_run_blueprint", "compiled_policy_for_form", "blueprint_for_plan", "effective_policy_for_plan",
     "inject_policy_into_pipeline_data", "attach_policy_to_swap_form",
     "policy_prompt_block", "apply_slice_to_seeder_pools", "family_matches",
-    "fidelity_issues", "fidelity_report", "filter_variety_issues_for_policy", "exclude_anchors_from_fatigue",
+    "anchor_in_text", "fidelity_issues", "fidelity_report", "filter_variety_issues_for_policy", "exclude_anchors_from_fatigue",
     "rank_days_by_policy", "emit_fidelity_metric", "review_fidelity_gate",
     "shopping_projection_windows", "stamp_demand_windows", "enqueue_shopping_projection_job",
 ]

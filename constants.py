@@ -2717,8 +2717,15 @@ def apply_synonyms(text: str) -> str:
 
 # Regex pre-compilado para stripear cantidades/unidades al inicio de un string de ingrediente.
 # Captura patrones como: "200g", "1/2", "3 cdas", "1 lb", "2 tazas de", "100 ml de", etc.
+# [P1-PANTRY-KEY-VULGAR-FRACTIONS · 2026-09-03] Las recetas escriben «⅓ taza de yogurt», «¾ cucharada
+# de mantequilla de maní», «1½ tazas» — fracciones UNICODE, no «1/3». La clase de cantidad sólo
+# conocía dígitos y «/», así que la clave canónica conservaba «¾ cucharada de mantequilla de
+# mani» y `pantry_names_match` decía que NO era mantequilla de maní (con «3/4» sí). Medido en el
+# primer plan del canary F3: un ancla marcada AUSENTE en un día que la tenía dos veces; la misma
+# clave decide la deducción de la Nevera, así que «me comí ⅓ taza de yogurt» tampoco encontraba
+# la fila. Un carácter en una clase de regex; la mitad del catálogo de recetas pasaba por él.
 _QUANTITY_PATTERN = re.compile(
-    r'^[\d\s/.,]+'                           # Números, fracciones, espacios iniciales
+    r'^[\d\s/.,¼½¾⅓⅔⅛⅜⅝⅞]+'                   # Números, fracciones (también unicode), espacios iniciales
     r'(?:'
         r'g\b|gr\b|kg\b|mg\b|ml\b|l\b|lb\b|lbs\b|oz\b'   # Unidades métricas/imperiales
         r'|cdas?\b|cdtas?\b|cucharadas?\b|cucharaditas?\b'  # Cucharadas
