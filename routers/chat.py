@@ -19,7 +19,7 @@ from db import (
     count_user_chat_sessions, CHAT_SESSIONS_PAGE_SIZE,
 )
 from memory_manager import build_memory_context, summarize_and_prune
-from agent import generate_chat_title_background, chat_with_agent, chat_with_agent_stream, LLMCircuitBreakerOpen, LLMRateLimitedError, strip_ui_action_tags_for_persist
+from agent import generate_chat_title_background, chat_with_agent, chat_with_agent_stream, LLMCircuitBreakerOpen, LLMRateLimitedError, strip_ui_action_tags_for_persist, is_turn_active
 from services import merge_form_data_with_profile
 from db_profiles import get_user_profile
 from db_plans import get_latest_meal_plan
@@ -403,7 +403,9 @@ def api_get_chat_history(session_id: str, verified_user_id: Optional[str] = Depe
         filtered_messages = _hydrate_chat_attachment_urls(
             [m for m in messages if not m.get("content", "").startswith("[SYSTEM_TITLE]")]
         )
-        return {"messages": filtered_messages}
+        # [P1-CHAT-ORPHAN-TURN-TRUTH · 2026-09-03] `turn_active`: el cliente que recarga con
+        # un mensaje sin respuesta solo debe seguir «recuperando» si el turno sigue vivo.
+        return {"messages": filtered_messages, "turn_active": is_turn_active(session_id)}
     except HTTPException:
         raise
     except Exception as e:

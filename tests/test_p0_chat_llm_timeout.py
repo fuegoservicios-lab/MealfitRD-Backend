@@ -268,7 +268,7 @@ def test_defaults_are_reasonable():
 
     # Defaults DOCUMENTADOS:
     expectations = [
-        ("_chat_agent_llm_timeout_s", 15.0),
+        ("_chat_agent_llm_timeout_s", 30.0),
         ("_chat_swap_llm_timeout_s", 30.0),
         ("_chat_title_llm_timeout_s", 10.0),
         # [P1-CHAT-EMPTY-RESPONSE · 2026-05-20] default router bumpeado 8.0 → 12.0

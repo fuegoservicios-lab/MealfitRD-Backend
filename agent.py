@@ -644,9 +644,14 @@ def _chat_prompt_static_prefix() -> bool:
 # Knobs auto-registrados via `_env_float` (P3-NEW-D). Validator clamp (0, 120]
 # para evitar timeouts patológicos por env var corrupta.
 def _chat_agent_llm_timeout_s() -> float:
+    # [P1-CHAT-ORPHAN-TURN-TRUTH · 2026-09-03] 15 s era el techo de la era Gemini. Con GLM
+    # y un turno con tool + reintento (claim-verify), la llamada supera los 15 s y el
+    # cliente de OpenAI agota sus 3 intentos en ~47 s con "Request timed out" — el turno
+    # muere y el usuario se queda sin respuesta. 30 s por intento; el presupuesto del
+    # stream (P1-CHAT-STREAM-BUDGET) sigue acotando el total.
     return _env_float(
         "MEALFIT_CHAT_AGENT_LLM_TIMEOUT_S",
-        15.0,
+        30.0,
         validator=lambda v: 0.0 < v <= 120.0,
     )
 
@@ -6316,6 +6321,30 @@ from typing import Generator
 from sentiment_classifier import classify_sentiment
 from prompts.sentiment import normalize_personality_instruction_for_country
 
+# [P1-CHAT-ORPHAN-TURN-TRUTH · 2026-09-03] Registro en memoria de los turnos de chat que
+# este proceso está sirviendo AHORA (session_id → epoch de inicio). Existe para que
+# `GET /history` pueda decir `turn_active`: cuando la página se recarga con el último
+# mensaje del usuario sin respuesta, el cliente sondeaba el historial hasta 30 veces
+# (~4 min) «Recuperando tu respuesta…» aunque el turno ya hubiera muerto en el servidor
+# (p. ej. timeout del modelo). Con esta verdad, el cliente abandona en el primer sondeo
+# y ofrece reintentar. Un proceso, un dict: si algún día hay varios workers, el flag es
+# «lo mejor que sabe este worker» y el tope de edad evita entradas zombis.
+# Tooltip-anchor: P1-CHAT-ORPHAN-TURN-TRUTH.
+_ACTIVE_TURNS: dict[str, float] = {}
+_ACTIVE_TURN_MAX_AGE_S = 300.0
+
+
+def is_turn_active(session_id: str) -> bool:
+    """True si este proceso está sirviendo ahora mismo un turno para la sesión."""
+    started = _ACTIVE_TURNS.get(session_id)
+    if started is None:
+        return False
+    if (time.time() - started) > _ACTIVE_TURN_MAX_AGE_S:
+        _ACTIVE_TURNS.pop(session_id, None)
+        return False
+    return True
+
+
 def chat_with_agent_stream(session_id: str, prompt: str, current_plan: Optional[dict] = None, user_id: Optional[str] = None, form_data: Optional[dict] = None, local_date: Optional[str] = None, tz_offset: Optional[int] = None, is_call_mode: bool = False, plan_tier: str = "gratis", vision: Optional[dict] = None) -> Generator[str, None, None]:
     """Generador síncrono de chat que emite eventos del modelo y herramientas mediante SSE (JSONlines).
     FastAPI ejecuta esto en un threadpool externo, liberando el Event Loop para concurrencia real."""
@@ -6325,6 +6354,7 @@ def chat_with_agent_stream(session_id: str, prompt: str, current_plan: Optional[
     #  donde solo depende de sus parametros: cada vez que un consumidor nuevo
     #  aparecia mas arriba habia que volver a moverlo, y una de esas veces se
     #  colo un NameError. Aqui ya no puede quedar por debajo de nadie.
+    _ACTIVE_TURNS[session_id] = time.time()  # [P1-CHAT-ORPHAN-TURN-TRUTH] se retira en el finally del stream
     plan_vigente = _plan_vigente_para_prompt(user_id, current_plan)
 
     # [P1-COACH-PERSONA-CURIOSIDAD-DO · 2026-08-23] País resuelto antes de
@@ -7004,6 +7034,7 @@ def chat_with_agent_stream(session_id: str, prompt: str, current_plan: Optional[
         yield f"data: {json.dumps({'type': 'error', 'message': str(e)})}\n\n"
         return
     finally:
+        _ACTIVE_TURNS.pop(session_id, None)  # [P1-CHAT-ORPHAN-TURN-TRUTH] el turno ya no está vivo
         # [P1-CHAT-STREAM-FINALLY-CLOSE · 2026-05-19] Cleanup defensivo
         # del iterator de LangGraph en TODOS los exits (normal, exception,
         # GeneratorExit). Garbage collection eventualmente lo cerraría
