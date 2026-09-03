@@ -130,26 +130,35 @@ def test_en_oscuro_el_relleno_no_es_la_tinta_cruda():
     )
 
 
+def _relleno_oscuro_resuelto(bloque: str) -> str:
+    """`--primary-fill` en oscuro como hex: acepta la receta `color-mix(in srgb,
+    var(--primary) N%, var(--bg-card))` de P1-CTA-FILL-DEPTH o un literal.
+    [P2-PRIMARY-FILL-INK · 2026-09-03] La mezcla con el panel desaturaba (índigo
+    grisáceo, «muy claro» para el dueño); ahora es índigo 700 literal. Lo que
+    este guard protege es el RESULTADO (contraste y salto), no la receta."""
+    valor = _valor(bloque, "--primary-fill") or ""
+    m = re.search(
+        r"color-mix\(in srgb,\s*var\(--primary\)\s*(\d+)%,\s*var\(--bg-card\)\s*\)", valor
+    )
+    if m:
+        primary = _valor(bloque, "--primary")
+        bg_card = _valor(bloque, "--bg-card")
+        assert primary and bg_card, "Faltan --primary/--bg-card en el bloque oscuro"
+        return _mezcla_srgb(primary, bg_card, int(m.group(1)) / 100)
+    m = re.fullmatch(r"#[0-9A-Fa-f]{6}", valor)
+    assert m, (
+        "[P1-PRIMARY-FILL-DEPTH] No se pudo leer `--primary-fill` en oscuro "
+        f"(valor: {valor!r}). Se espera un hex literal o "
+        "`color-mix(in srgb, var(--primary) N%, var(--bg-card))`. Si cambias de "
+        "mecanismo, actualiza este guard para que siga midiendo el CONTRASTE."
+    )
+    return valor.upper()
+
+
 def test_el_blanco_sobre_el_relleno_oscuro_pasa_AA():
     """La aserción que importa: el RESULTADO medido, no la receta."""
     bloque = _bloque('html[data-theme="dark"]')
-    valor = _valor(bloque, "--primary-fill")
-    m = re.search(
-        r"color-mix\(in srgb,\s*var\(--primary\)\s*(\d+)%,\s*var\(--bg-card\)\s*\)", valor or ""
-    )
-    assert m, (
-        "[P1-PRIMARY-FILL-DEPTH] No se pudo leer la mezcla de `--primary-fill` en "
-        f"oscuro (valor: {valor!r}). Se espera "
-        "`color-mix(in srgb, var(--primary) N%, var(--bg-card))` — la misma receta "
-        "que P1-CTA-FILL-DEPTH. Si cambias de mecanismo, actualiza este guard "
-        "para que siga midiendo el CONTRASTE resultante."
-    )
-    pct = int(m.group(1)) / 100
-    primary = _valor(bloque, "--primary")
-    bg_card = _valor(bloque, "--bg-card")
-    assert primary and bg_card, "Faltan --primary/--bg-card en el bloque oscuro"
-
-    relleno = _mezcla_srgb(primary, bg_card, pct)
+    relleno = _relleno_oscuro_resuelto(bloque)
     contraste = _contraste("#FFFFFF", relleno)
     assert contraste >= _AA_TEXTO_NORMAL, (
         f"[P1-PRIMARY-FILL-DEPTH] El relleno oscuro resultante ({relleno}) deja el "
@@ -162,10 +171,7 @@ def test_el_blanco_sobre_el_relleno_oscuro_pasa_AA():
 def test_el_relleno_oscuro_sigue_destacando_sobre_el_panel():
     """Rebajar no es apagar: un CTA tiene que seguir leyéndose como el principal."""
     bloque = _bloque('html[data-theme="dark"]')
-    valor = _valor(bloque, "--primary-fill") or ""
-    m = re.search(r"var\(--primary\)\s*(\d+)%", valor)
-    assert m, "No se pudo leer el porcentaje de mezcla"
-    relleno = _mezcla_srgb(_valor(bloque, "--primary"), _valor(bloque, "--bg-card"), int(m.group(1)) / 100)
+    relleno = _relleno_oscuro_resuelto(bloque)
 
     def lstar(h):
         y = _luminancia(h)
