@@ -35,10 +35,27 @@ import pytest
 
 _URL = os.environ.get("MEALFIT_E2E_DATABASE_URL")
 
-pytestmark = pytest.mark.skipif(
-    not _URL,
-    reason="requiere MEALFIT_E2E_DATABASE_URL apuntando a un Postgres desechable",
-)
+# `e2e` NO es decorativo y NO es solo un filtro de CI: es la LLAVE de la guarda
+# `db_core._guard_test_write_to_prod` (P0-TEST-DB-ISOLATION), que bloquea con
+# RuntimeError todo INSERT/UPDATE/DELETE hecho bajo pytest desde un test sin el
+# marker. Este archivo escribe en cada caso, asi que sin el marker los 12 mueren
+# en el primer INSERT.
+#
+# Que no enganie el hecho de que pase sin marker: la guarda tiene una segunda
+# puerta, `_db_target_is_nonprod`, que deja pasar la escritura si AMBAS URLs
+# contienen "test"/"staging"/"localhost"/"127.0.0.1". El ejemplo del docstring
+# usa `127.0.0.1`, o sea que pasaba por esa coincidencia de substring, no por
+# declarar su intencion. Apunta `MEALFIT_E2E_DATABASE_URL` a un Postgres
+# desechable cuyo host no lleve ninguna de esas palabras -- el servicio
+# `postgres:16` de un runner, un branch de Neon-- y los 12 vuelven a morir.
+# Medido: con host `pgbox` (alias de 127.0.0.1), 12 failed en 0,32 s.
+pytestmark = [
+    pytest.mark.e2e,
+    pytest.mark.skipif(
+        not _URL,
+        reason="requiere MEALFIT_E2E_DATABASE_URL apuntando a un Postgres desechable",
+    ),
+]
 
 # A nivel de MÓDULO, no dentro del fixture: `db_core` construye sus pools al
 # IMPORTARSE, y para cuando pytest llega al fixture el conftest ya lo importó —
