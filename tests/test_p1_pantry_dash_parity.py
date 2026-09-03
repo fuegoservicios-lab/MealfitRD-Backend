@@ -21,14 +21,23 @@ tooltip-anchor: P1-PANTRY-DASH-PARITY
 """
 from __future__ import annotations
 
+import pytest
+
+import re
 from pathlib import Path
 
 _BACKEND = Path(__file__).resolve().parents[1]
 _FRONT = _BACKEND.parent / "frontend" / "src"
 
-_SCAN_SRC = (_FRONT / "components" / "pantry" / "PantryScanButton.jsx").read_text(encoding="utf-8")
-_PANTRY_SRC = (_FRONT / "pages" / "Pantry.jsx").read_text(encoding="utf-8")
-_QPB_SRC = (_FRONT / "components" / "assessment" / "questions" / "QPantryBuilder.jsx").read_text(encoding="utf-8")
+@pytest.fixture(scope="module", autouse=True)
+def _load_frontend_sibling_sources(frontend_repo_path):
+    # La fixture compartida salta el módulo antes de cualquier I/O si falta el hermano.
+    _ = frontend_repo_path
+    global _PANTRY_SRC, _QPB_SRC, _SCAN_SRC
+    _SCAN_SRC = (_FRONT / "components" / "pantry" / "PantryScanButton.jsx").read_text(encoding="utf-8")
+    _PANTRY_SRC = (_FRONT / "pages" / "Pantry.jsx").read_text(encoding="utf-8")
+    _QPB_SRC = (_FRONT / "components" / "assessment" / "questions" / "QPantryBuilder.jsx").read_text(encoding="utf-8")
+
 _PLANS_SRC = (_BACKEND / "routers" / "plans.py").read_text(encoding="utf-8")
 
 
@@ -89,7 +98,10 @@ def test_pantry_brand_change_patches_item_and_preference():
 
 
 def test_pantry_brand_batch_prefetch():
-    assert "JSON.stringify({ names: _names })" in _PANTRY_SRC, (
+    # [RE-ANCLADO por P1-BETA-PRICE-LEAKS · 2026-08-21] Misma razón que en
+    # test_p1_pantry_row_edit: el body ganó `country` y lo que importa es la propiedad (un POST
+    # en lote con el array), no la grafía del objeto.
+    assert re.search(r"JSON\.stringify\(\{\s*names:\s*_names\s*[,}]", _PANTRY_SRC), (
         "las marcas de las filas se prefetchean en LOTE (un POST), no N requests"
     )
 

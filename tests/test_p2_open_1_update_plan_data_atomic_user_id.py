@@ -298,6 +298,24 @@ _KNOWN_CALLERS_BY_FILE: set[str] = {
     # produjo: la invariante I2 se cumple por fila y un plan jamás puede escribirse bajo el
     # user_id de otro. `test_backfill_veg_lines_v7_ownership_por_fila` (abajo) ancla esa cadena.
     "backend/scripts/backfill_veg_lines_v7.py",
+    # [P1-PLAN-DISPLAY-I18N · registrado 2026-08-19 tras el rojo del deploy-gate]
+    # plan_display_i18n.py 1 sitio documentado:
+    #   - _persist_display_enrichment → _mutator
+    # El drift detector saltó porque el fichero nació sin pasar por aquí, y la
+    # decisión que pedía es esta: la cadena de ownership SÍ se resuelve aguas
+    # arriba, verificada en los tres despachadores que existen.
+    #   · routers/user_data.py (PATCH /profile, el ÚNICO expuesto a la red):
+    #     `uid = _require_user(verified_user_id)` con
+    #     `Depends(get_verified_user_id)` — la capa de auth única (P0-AUDIT-1) —,
+    #     y el plan sale de `SELECT id, plan_data FROM meal_plans WHERE user_id = %s`.
+    #   · services.py: `user_id` del plan recién creado, en su propio flujo.
+    #   · cron_tasks.py: `user_id` de la fila del chunk ya claimeada, el patrón
+    #     consistent-by-construction que ya usan proactive_agent.py y el backfill.
+    # Y el módulo no se fía de eso solo: `_fetch_plan_data` relee con
+    # `WHERE id = %s AND user_id = %s` (lleva su tooltip-anchor de I2) y pasa
+    # `user_id=user_id` al helper, así que el `SELECT … FOR UPDATE` y el `UPDATE`
+    # llevan el filtro. Defensa en profundidad, no confianza en el llamante.
+    "backend/plan_display_i18n.py",
 }
 
 

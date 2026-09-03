@@ -116,7 +116,7 @@ class TestGetSemanticCacheRespectsKnob:
 
         fake_embeddings = MagicMock()
 
-        # [P0-DEEPSEEK-MIGRATION] el cliente viene de la capa pluggable
+        # [P0-LLM-PROVIDER-MIGRATION] el cliente viene de la capa pluggable
         # embeddings_provider (lazy-import dentro de get_semantic_cache).
         with patch.object(sc, "get_master_ingredients", return_value=master), \
              patch("cache_manager.redis_client", fake_redis), \

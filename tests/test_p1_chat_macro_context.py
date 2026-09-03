@@ -56,7 +56,17 @@ def test_superpers_panel_fail_closed():
     assert "loadFailed" in panel
     assert "if (!res.ok) throw" in panel, \
         "HTTP no-ok también es fallo de carga (antes era silencio + panel vacío)"
-    assert "loading || loadFailed" in panel, \
-        "guardar sin carga exitosa pisaría los datos reales con vacío"
+    # [reapuntado 2026-08-14] Se afirmaba el literal `loading || loadFailed` (la forma
+    # NEGATIVA: «deshabilitado si…»). El panel lo reescribió en positivo —
+    # `habilitado: !loading && !loadFailed`— que por De Morgan es la MISMA condición.
+    # El test acusaba de «guardar pisaría los datos con vacío» a un guard idéntico
+    # escrito al revés. Se acepta cualquiera de las dos formas: lo que se protege es
+    # que guardar dependa de las DOS señales, no la sintaxis elegida.
+    import re as _re
+    _gate = (
+        _re.search(r"loading\s*\|\|\s*loadFailed", panel)
+        or _re.search(r"!\s*loading\s*&&\s*!\s*loadFailed", panel)
+    )
+    assert _gate, "guardar sin carga exitosa pisaría los datos reales con vacío"
     assert "Reintentar" in panel, "el fallo ofrece retry, no formulario vacío editable"
     assert "load(attempt + 1)" in panel, "1 reintento automático antes de rendirse"

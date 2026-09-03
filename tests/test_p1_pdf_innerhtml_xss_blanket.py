@@ -1,4 +1,4 @@
-"""[P1-PDF-XSS-BLANKET · 2026-05-12] Defensa preventiva contra XSS via
+r"""[P1-PDF-XSS-BLANKET · 2026-05-12] Defensa preventiva contra XSS via
 `element.innerHTML = ...` en frontend bundle.
 
 Estado actual: el único `innerHTML =` activo es el del PDF builder de
@@ -66,7 +66,32 @@ def _iter_frontend_src_files():
 
 
 def _has_whitelist_marker_nearby(lines: list[str], idx: int, window: int = 5) -> bool:
-    start = max(0, idx - window)
+    """¿El `innerHTML =` de la línea `idx` está cubierto por un marcador de auditoría?
+
+    [P3-XSS-MARKER-WINDOW · 2026-08-22] Esto miraba las CINCO líneas previas y punto. La ventana
+    fija tiene un modo de fallo perverso: `P2-PDF-MARCADOR-FALSO` amplió el marcador del PDF a
+    veintiuna líneas para corregir una afirmación falsa sobre el mecanismo de defensa —un trabajo
+    exactamente correcto— y al hacerlo empujó la cabecera del marcador FUERA de la ventana. El
+    guard declaró violación sobre un callsite mejor documentado que antes.
+
+    O sea: mejorar la explicación desarmaba la defensa. Un guard que castiga documentar de más
+    empuja a documentar de menos, que es lo contrario de lo que existe para conseguir.
+
+    Ahora se recorre hacia atrás el BLOQUE DE COMENTARIO CONTIGUO —el mismo criterio que usan los
+    otros parsers de este repo— y se cae a la ventana fija sólo si no hay comentario justo encima.
+    El marcador sigue teniendo que preceder al callsite y sigue teniendo que ser un comentario: lo
+    único que se levanta es el techo arbitrario de su longitud.
+    """
+    i = idx - 1
+    while i >= 0:
+        s = lines[i].strip()
+        if s.startswith("//") or s.startswith("*") or s.startswith("/*") or s == "":
+            i -= 1
+            continue
+        break
+    start = min(i + 1, idx)
+    if start == idx:  # no hay comentario contiguo: la ventana fija de siempre
+        start = max(0, idx - window)
     context = "\n".join(lines[start:idx])
     return any(marker in context for marker in _WHITELIST_MARKERS)
 

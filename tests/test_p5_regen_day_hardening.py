@@ -79,7 +79,13 @@ def test_explicit_protein_target_still_respected(db):
 
 # --- #2 + #3: anchors parser-based en el source de prod -----------------------
 _PLANS = open(os.path.join(os.path.dirname(__file__), "..", "routers", "plans.py"), encoding="utf-8").read()
-_ASSESS = open(os.path.join(os.path.dirname(__file__), "..", "..", "frontend", "src", "context", "AssessmentContext.jsx"), encoding="utf-8").read()
+@pytest.fixture(scope="module", autouse=True)
+def _load_frontend_sibling_sources(frontend_repo_path):
+    # La fixture compartida salta el módulo antes de cualquier I/O si falta el hermano.
+    _ = frontend_repo_path
+    global _ASSESS
+    _ASSESS = open(os.path.join(os.path.dirname(__file__), "..", "..", "frontend", "src", "context", "AssessmentContext.jsx"), encoding="utf-8").read()
+
 
 
 def test_regen_day_catches_llm_unavailable():

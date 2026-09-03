@@ -21,6 +21,8 @@ catálogo de 204 alimentos debe ser el REAL). Hace lo que esa misma decisión pr
 
 Los tests EJECUTAN el detector con dobles; ninguno toca la base.
 """
+from pathlib import Path
+
 import conftest
 
 
@@ -50,7 +52,54 @@ def test_avisa_con_las_cifras_del_incidente(monkeypatch, capsys):
     # consecuencia se ignora. La consecuencia real es que mueve una métrica.
     assert "métrica" in err or "metrica" in err
     # Y debe traer la limpieza lista para copiar.
-    assert "DELETE FROM chunk_lesson_telemetry" in err
+    #
+    # [P1-TEARDOWN-SWEEP · 2026-08-12] Antes se afirmaba la cadena literal
+    # `DELETE FROM chunk_lesson_telemetry`, porque el detector solo vigilaba ESA tabla.
+    # Ahí estaba su problema: con 7.540 filas huérfanas repartidas en seis tablas, calló
+    # sobre cinco. Ahora recorre las que el catálogo dice que tienen `user_id`, así que
+    # la receta es una plantilla — el nombre concreto va en la línea del aviso, que este
+    # mismo caso ya afirma arriba.
+    #
+    # Lo que se protege sigue siendo lo mismo: que el aviso no se limite a decir que hay
+    # residuo, sino que traiga el DELETE para quitarlo.
+    assert "DELETE FROM" in err
+    assert "user_profiles" in err  # el predicado que distingue huérfana de legítima
+
+
+def test_el_barrido_y_el_detector_salen_del_CATALOGO_no_de_una_lista():
+    """[P1-TEARDOWN-SWEEP · 2026-08-12] La lección del incidente, en una aserción.
+
+    El teardown limpiaba tres tablas escritas a mano y el detector vigilaba UNA. Ninguno
+    de los dos estaba «mal»: estaban escritos cuando esas eran las tablas que había. Lo
+    que falló es que una lista a mano no se entera de que el esquema creció, y nadie lo
+    supo hasta que aparecieron 7.540 filas huérfanas de 600 dueños fantasma.
+
+    Por eso los dos preguntan ahora al catálogo. Si alguien vuelve a poner una lista fija
+    —aunque sea con los nueve nombres correctos de hoy— el problema vuelve el día que
+    alguien cree la décima tabla, y otra vez sin avisar.
+    """
+    fuente = (Path(conftest.__file__).read_text(encoding="utf-8"))
+
+    assert "def _tablas_con_user_id" in fuente, (
+        "desapareció el descubrimiento de tablas por catálogo: el teardown vuelve a "
+        "depender de una lista que envejece sola"
+    )
+    # La pregunta que no envejece.
+    assert "column_name = 'user_id'" in fuente
+    assert "information_schema.columns" in fuente
+
+    # Y ambos consumidores la usan: el teardown para limpiar y el detector para vigilar.
+    #
+    # Se restan las DEFINICIONES. Un primer intento contaba las apariciones a secas, y la
+    # línea `def _tablas_con_user_id()` cuenta como una: con el detector devuelto a una
+    # sola tabla el guard seguía en verde, porque la definición le hacía el número. Lo
+    # destapó la mutación — un guard que se cuenta a sí mismo mide su propia existencia,
+    # no la del código que vigila.
+    llamadas = fuente.count("_tablas_con_user_id()") - fuente.count("def _tablas_con_user_id()")
+    assert llamadas >= 2, (
+        "solo uno de los dos (barrido / detector) usa el catálogo — el otro se quedó "
+        "mirando la lista vieja, que es exactamente el estado que dejó pasar el incidente"
+    )
 
 
 def test_contra_un_branch_no_grita_produccion(monkeypatch, capsys):

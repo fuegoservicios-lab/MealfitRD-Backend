@@ -23,6 +23,8 @@ tooltip-anchor: P1-PANTRY-SCAN-V0
 """
 from __future__ import annotations
 
+import pytest
+
 import re
 from pathlib import Path
 
@@ -31,9 +33,15 @@ _FRONT = _BACKEND.parent / "frontend" / "src"
 
 _UD_SRC = (_BACKEND / "routers" / "user_data.py").read_text(encoding="utf-8")
 _PLANS_SRC = (_BACKEND / "routers" / "plans.py").read_text(encoding="utf-8")
-_QPB_SRC = (_FRONT / "components" / "assessment" / "questions" / "QPantryBuilder.jsx").read_text(encoding="utf-8")
+@pytest.fixture(scope="module", autouse=True)
+def _load_frontend_sibling_sources(frontend_repo_path):
+    # La fixture compartida salta el módulo antes de cualquier I/O si falta el hermano.
+    _ = frontend_repo_path
+    global _QPB_SRC, _SCAN_SRC
+    _QPB_SRC = (_FRONT / "components" / "assessment" / "questions" / "QPantryBuilder.jsx").read_text(encoding="utf-8")
+    _SCAN_SRC = (_FRONT / "components" / "pantry" / "PantryScanButton.jsx").read_text(encoding="utf-8")
+
 # [P1-PANTRY-DASH-PARITY - 2026-07-11] El flujo del scan vive en el componente COMPARTIDO.
-_SCAN_SRC = (_FRONT / "components" / "pantry" / "PantryScanButton.jsx").read_text(encoding="utf-8")
 
 
 # ---------------------------------------------------------------------------

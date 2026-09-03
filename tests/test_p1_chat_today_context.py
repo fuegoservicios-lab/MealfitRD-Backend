@@ -12,6 +12,7 @@ restantes, recordatorio suave a ≤3 días y aviso de ciclo VENCIDO.
 tooltip-anchor: P1-CHAT-TODAY-CONTEXT
 """
 import os
+import re
 
 _HERE = os.path.dirname(os.path.abspath(__file__))
 _BACKEND = os.path.dirname(_HERE)
@@ -66,6 +67,28 @@ def test_fail_open_empty():
 
 
 def test_injected_in_both_paths():
+    """El contexto de HOY se inyecta en los DOS paths del chat.
+
+    [P1-CHAT-PAUSED-PROMPT-BLOCKS · 2026-08-14] El argumento pasó de `current_plan`
+    a `plan_vigente`, y el cambio es deliberado: `plan_vigente` es `None` mientras
+    el usuario tenga el plan en pausa, así que las secciones PRESCRIPTIVAS del
+    prompt («HOY es el día N del menú, no le preguntes») se apagan solas por sus
+    guardas de shape. `current_plan` sigue existiendo para el bloque que SÍ debe
+    hablar del plan pausado (PAUSADO ≠ AMPUTADO).
+
+    Por eso este test ancla la INVARIANTE —que ambos paths inyecten el bloque— y no
+    el nombre de la variable. Un test pegado al nombre convierte un rediseño
+    correcto en un rojo, y la respuesta natural a un rojo injusto es relajar el
+    test, no mejorarlo.
+    """
     with open(os.path.join(_BACKEND, "agent.py"), encoding="utf-8") as f:
         src = f.read()
-    assert src.count("system_prompt += _build_plan_today_context(current_plan") >= 2
+    inyecciones = len(re.findall(
+        r"system_prompt \+= _build_plan_today_context\(\s*(?:current_plan|plan_vigente)\b",
+        src,
+    ))
+    assert inyecciones >= 2, (
+        f"Sólo {inyecciones} path(s) del chat inyectan `_build_plan_today_context`. "
+        "Los dos (welcome y turno normal) tienen que hacerlo: la divergencia entre "
+        "ambos ya ha causado bugs antes (P1-CHAT-PAST-DAYS)."
+    )

@@ -97,6 +97,63 @@ DOMINICAN_HOUSEHOLD_MEASURES = {
     "pechuga de pavo": {"weight": 20.0, "singular": "lonja de pechuga de pavo", "plural": "lonjas de pechuga de pavo"}
 }
 
+# [P1-COUNTRY-SYSTEM-F2 · Task 8 · 2026-08-17] Auditoría "medidas caseras por país": corrida de
+# `humanize_ingredient` contra las 140 altas de catálogo T5-T7 (ES+MX/CO+PR/US) reveló que 26/140
+# colisionaban con una clave de esta tabla vía SUBSTRING SIN word-boundary — misma CLASE de bug
+# que "Piñones"⊂"Champiñones" (`shopping_calculator.is_country_catalog_unpriced_item`, fix-round 1
+# T5): "Chorizo español" mostraba "4 rebanadas de PAN" ('pan' ⊂ 'esPANñol'), "Chile guajillo"
+# mostraba "1¼ ajíes" ('aji' ⊂ 'guAJIllo'), "Requesón" mostraba "lonjas de queso" ('queso' ⊂
+# 'reQUESOn'). Display-only (`ingredients_raw` intacto para compras/macros) pero confuso. Fix:
+# el scan por sufijo/prefijo pasa de `key in name_clean` (substring bare) a
+# `\b<key>\b` (patrón precompilado, mismo criterio que `_construir_indice_alias`/
+# `is_country_catalog_unpriced_item`). DO byte-idéntico: el fix solo NARROWS matches (nunca los
+# amplía) — ninguna de las 26 colisiones es un nombre RD real, así que ningún match legítimo
+# existente puede perderse (ancla: test de las ~200 etiquetas RD propias + `dish_templates.json`
+# byte-idénticas antes/después).
+_HOUSEHOLD_MEASURE_KEY_PATTERNS = [
+    (key, re.compile(r'\b' + re.escape(key) + r'\b'))
+    for key in sorted(DOMINICAN_HOUSEHOLD_MEASURES.keys(), key=len, reverse=True)
+]
+
+# [P1-COUNTRY-SYSTEM-F2 · Task 8 · 2026-08-17] Residual de la MISMA auditoría que el word-boundary
+# de arriba NO cierra: son casos donde la clave SÍ es una palabra completa dentro del nombre, pero
+# el nombre describe un PRODUCTO DISTINTO del alimento base (mismo patrón que
+# `shopping_calculator.resolve_preparation_distinct` cierra del lado de COMPRAS para "harina de
+# X"/"tortilla de maíz" — P1-PREP-COLLAPSE-GUARD). "Harina de yuca" (T7, PR) mostraba "¼ pedazo
+# mediano de yuca" (harina ≠ raíz fresca, ~3x el error de macros que ese guard ya previene del
+# lado de compras); "Bolitas de papa"/"Papas ralladas" (T7, US) y "Pan rallado" (T7, US) mostraban
+# conversiones a la unidad ENTERA ("¾ papa mediana", "4 rebanadas de pan") de un producto YA
+# PROCESADO (tots/hash-browns/breadcrumbs). Reuso de `resolve_preparation_distinct` (SSOT
+# compartido con el resolver de compras, "puro y determinista" por su propio contrato — import
+# lazy para evitar acoplar este módulo liviano a shopping_calculator a nivel de import) + una
+# whitelist ESTRECHA de las 3 frases-compuestas que ESE guard no cubre (no cubre "bolitas de
+# X"/"X rallado(a)(s)" en general — solo "harina de X"/"tortilla de maíz"/"crema de coco"/"caldo
+# de X"). Deliberadamente NO genérico ("\brallad[oa]s?\b" bare) para no arriesgar un nombre RD real
+# que sí use ese participio (ninguno hoy, verificado por grep contra `dish_templates.json`, pero
+# la whitelist estrecha es la defensa contra que aparezca uno mañana).
+_HOUSEHOLD_MEASURE_FORM_MISMATCH_RE = re.compile(
+    r'\bbolitas?\s+de\s+papas?\b|\bpapas?\s+rallad[ao]s?\b|\bpan\s+rallado\b',
+    re.IGNORECASE,
+)
+
+
+def _household_measure_form_mismatch(name: str) -> bool:
+    """True si `name` es una preparación cuyo nombre NO debe convertirse a medida casera (ni la
+    tabla RD ni el fallback genérico de aceite/granos) porque describe un producto DISTINTO del
+    alimento base que esas heurísticas asumen. Fail-safe (excepción -> False, conserva conducta
+    previa: mejor un match cuestionable que romper la humanización del resto del plan)."""
+    try:
+        from shopping_calculator import resolve_preparation_distinct as _rpd
+        if _rpd(name)[0]:
+            return True
+    except Exception:
+        pass
+    try:
+        return bool(_HOUSEHOLD_MEASURE_FORM_MISMATCH_RE.search(strip_accents(str(name or "").lower())))
+    except Exception:
+        return False
+
+
 # Regex pre-compilado para extraer cantidad, unidad y nombre
 # [P3-UNICODE-FRACTION-POLISH · 2026-07-31] La clase de caracteres NO incluía las fracciones unicode,
 # así que "¼ cda de ajonjolí" no matcheaba y `humanize_ingredient` retornaba ANTES de llegar a
@@ -412,18 +469,24 @@ def humanize_ingredient(raw_ingredient: str) -> str:
 
     # 3. Buscar correspondencia en diccionario de medidas
     name_clean = strip_accents(name.lower().strip())
-    
+
+    # [P1-COUNTRY-SYSTEM-F2 · Task 8 · 2026-08-17] preparaciones cuyo nombre no debe convertirse
+    # a medida casera RD (ver docstring de `_household_measure_form_mismatch`) — ni esta tabla ni
+    # el fallback genérico del paso 4 aplican; cae directo a gramos crudos (paso 5, honesto).
+    _form_mismatch = _household_measure_form_mismatch(name)
+
     best_match_key = None
-    # Prioridad: match exacto
-    if name_clean in DOMINICAN_HOUSEHOLD_MEASURES:
-        best_match_key = name_clean
-    else:
-        # Match por sufijo/prefijo
-        for key in sorted(DOMINICAN_HOUSEHOLD_MEASURES.keys(), key=len, reverse=True):
-            if key in name_clean:
-                best_match_key = key
-                break
-                
+    if not _form_mismatch:
+        # Prioridad: match exacto
+        if name_clean in DOMINICAN_HOUSEHOLD_MEASURES:
+            best_match_key = name_clean
+        else:
+            # Match por sufijo/prefijo — TOKEN completo (word-boundary), no substring bare.
+            for key, _pat in _HOUSEHOLD_MEASURE_KEY_PATTERNS:
+                if _pat.search(name_clean):
+                    best_match_key = key
+                    break
+
     if best_match_key:
         measure = DOMINICAN_HOUSEHOLD_MEASURES[best_match_key]
         weight_per_unit = measure["weight"]
@@ -446,19 +509,23 @@ def humanize_ingredient(raw_ingredient: str) -> str:
 
     # 4. Fallback a tazas y cucharadas para cosas genéricas si es líquido o granulado
     # Para arroz, avena, líquidos, grasas, especias
-    
-    # Aceites/Grasas líquidas (1 cda = 15g, 1 cdta = 5g)
-    if any(x in name_clean for x in ['aceite', 'mantequilla', 'vinagre', 'salsa de soya', 'miel']):
-        if base_qty <= 10:
-            return f"{number_to_fraction_str(base_qty / 5.0)} cdta de {name}"
-        elif base_qty <= 60:
-            return f"{number_to_fraction_str(base_qty / 15.0)} cda de {name}"
-            
-    # Granos crudos / cocidos (arroz, avena, lentejas, yogurt) (1 taza = ~200-240g)
-    if any(x in name_clean for x in ['arroz', 'avena', 'lentejas', 'habichuela', 'garbanzo', 'yogurt', 'pasta', 'quinoa', 'pure']):
-        if base_qty >= 50:
-            tazas = base_qty / 200.0 # Aproximación genérica
-            return f"{number_to_fraction_str(tazas)} taza de {name}"
+    # [P1-COUNTRY-SYSTEM-F2 · Task 8 · 2026-08-17] `_form_mismatch` también gatea este fallback
+    # genérico — una preparación-distinta no debe caer en "cdta de aceite"/"taza de arroz" por la
+    # misma razón que no debe caer en la tabla RD del paso 3 (ninguna colisión real hoy contra
+    # estas 9 palabras, pero el guard es la defensa contra que aparezca una mañana).
+    if not _form_mismatch:
+        # Aceites/Grasas líquidas (1 cda = 15g, 1 cdta = 5g)
+        if any(x in name_clean for x in ['aceite', 'mantequilla', 'vinagre', 'salsa de soya', 'miel']):
+            if base_qty <= 10:
+                return f"{number_to_fraction_str(base_qty / 5.0)} cdta de {name}"
+            elif base_qty <= 60:
+                return f"{number_to_fraction_str(base_qty / 15.0)} cda de {name}"
+
+        # Granos crudos / cocidos (arroz, avena, lentejas, yogurt) (1 taza = ~200-240g)
+        if any(x in name_clean for x in ['arroz', 'avena', 'lentejas', 'habichuela', 'garbanzo', 'yogurt', 'pasta', 'quinoa', 'pure']):
+            if base_qty >= 50:
+                tazas = base_qty / 200.0 # Aproximación genérica
+                return f"{number_to_fraction_str(tazas)} taza de {name}"
 
     # Si no hubo match, devolver el original
     return raw_ingredient

@@ -1,0 +1,31 @@
+{
+ "proposito": "Corpus sintetico de alimentos de paises BETA. El golden set (culinary_golden) son 5 planes DOMINICANOS y no contiene ni un alimento de las 141 filas que P1-COUNTRY-SYSTEM-F2 inserto el 2026-08-17: prueba no-regresion, no cobertura de lo nuevo. Este corpus cubre ese hueco.",
+ "limpios": {
+  "n": 23,
+  "exigencia": "0 violaciones. Son instrucciones REALES y seguras.",
+  "cubren": [
+   "quesos que se funden (el default de Lacteos no trae verbo de coccion)",
+   "curados (el default de Proteinas los daria crudos)",
+   "chiles secos que se tuestan e hidratan",
+   "fruta que no se come cruda (membrillo)",
+   "panes y tortillas que se doran en sarten seca",
+   "congelados que si requieren coccion"
+  ]
+ },
+ "absurdos": {
+  "n": 8,
+  "exigencia": "el check esperado dispara; 'esperado': null = NO debe disparar V2"
+ },
+ "medido_2026_08_19": {
+  "cobertura_antes": "24%",
+  "cobertura_despues": "100%",
+  "violaciones_limpios_despues": 0,
+  "absurdos_correctos": "8/8",
+  "alimentos_ejercitados": "todos los beta; 4 mudos son acompanantes DO"
+ },
+ "como_escribir_recetas_aqui": {
+  "el_alimento_debe_ser_objeto_inmediato_del_verbo": "V1 solo evalua el alimento que es objeto INMEDIATO del verbo. 'Agrega el queso provolone y hornea 5 minutos' NO evalua el queso (el objeto de 'hornea' es '5 minutos'). Hay que escribir 'Hornea el queso provolone'. Medido: 12 de 37 alimentos del corpus eran MUDOS por esto en la primera version.",
+  "una_clausula_con_dos_alimentos_puede_silenciar_al_que_pruebas": "Salvaguarda de _v1: si una clausula nombra >=2 alimentos del catalogo y al menos uno acepta el metodo, los demas se tratan como acompanantes inocentes y NO se acusan. Por eso 'Licua el requeson con leche' no evaluaba el requeson. El alimento bajo prueba debe ir SOLO en su clausula.",
+  "verificado_por": "test_cada_alimento_beta_del_corpus_se_ejercita_de_verdad"
+ }
+}

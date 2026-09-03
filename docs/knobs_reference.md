@@ -182,9 +182,10 @@ fabricaba la divergencia severa que el espejo existe para evitar.
 
 | Knob | Default | Cuándo cambiar |
 |---|---|---|
-| `MEALFIT_<FEATURE>_MODEL` | varios | Swap de modelo LLM sin redeploy. Patrón `MEALFIT_CHAT_AGENT_MODEL`, `MEALFIT_CRITIQUE_MODEL`, etc. El override per-feature gana sobre el router por tier (P0-DEEPSEEK-MIGRATION). |
-| `MEALFIT_MODEL_FREE_TIER` / `MEALFIT_MODEL_PAID_TIER` | `deepseek-v4-flash` / `deepseek-v4-pro` | Router por tier de suscripción — ver `backend/docs/llm_tier_routing.md` |
-| `MEALFIT_DEEPSEEK_BASE_URL` | `https://api.deepseek.com` | Proxy/endpoint alternativo OpenAI-compatible |
+| `MEALFIT_<FEATURE>_MODEL` | varios | Swap de modelo LLM sin redeploy. Patrón `MEALFIT_CHAT_AGENT_MODEL`, `MEALFIT_CRITIQUE_MODEL`, etc. El override per-feature gana sobre el router por tier (P0-LLM-PROVIDER-MIGRATION). |
+| `MEALFIT_MODEL_FREE_TIER` / `MEALFIT_MODEL_PAID_TIER` | `glm-5.3-flash` / `glm-5.3-flash` (P1-FLASH-PRIMARY) | Router por tier de suscripción — ver `backend/docs/llm_tier_routing.md` |
+| `MEALFIT_ZAI_BASE_URL` | `https://api.z.ai/api/paas/v4` | Proxy/endpoint alternativo OpenAI-compatible |
+| `MEALFIT_GLM_REASONING_EFFORT` | `low` | [P0-GLM-MIGRATION · 2026-09-02] Esfuerzo de razonamiento por default de TODO `ChatGLM` (`low`/`high`/`max`; GLM no puede apagar el thinking). Las superficies con effort propio (day-gen por tier, reviewer, corrector Pro, juez) lo pisan. Subirlo multiplica latencia y tokens de salida facturados |
 | `MEALFIT_TIER_CACHE_TTL_S` | `300` | TTL del cache de `plan_tier` por usuario (clamp [10, 3600]) |
 
 ### Pantry / chunk operacional

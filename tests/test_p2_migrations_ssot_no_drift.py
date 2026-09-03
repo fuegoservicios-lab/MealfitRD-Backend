@@ -136,10 +136,20 @@ def test_migration_file_contents_in_sync():
     backend_files = _list_sql_files(_BACKEND_MIGRATIONS)
     common = root_files & backend_files
 
+    # [2026-08-14] Se comparaba byte a byte y eso incluía los FINALES DE LÍNEA.
+    # Los dos directorios viven en repos distintos: en un checkout Windows uno
+    # quedó con CRLF y el otro con LF, y el test acusó «drift de 197B» en un
+    # archivo cuyas 197 líneas son idénticas — un CR no puede divergir un esquema.
+    # Se normaliza el salto de línea antes de comparar: cualquier cambio REAL de
+    # contenido sigue fallando, y el test deja de depender del sistema operativo
+    # en el que se hizo el clone.
+    def _normalizado(p) -> bytes:
+        return p.read_bytes().replace(b"\r\n", b"\n")
+
     drifted: list[tuple[str, int, int]] = []
     for name in sorted(common):
-        root_text = (_ROOT_MIGRATIONS / name).read_bytes()
-        backend_text = (_BACKEND_MIGRATIONS / name).read_bytes()
+        root_text = _normalizado(_ROOT_MIGRATIONS / name)
+        backend_text = _normalizado(_BACKEND_MIGRATIONS / name)
         if root_text != backend_text:
             drifted.append((name, len(root_text), len(backend_text)))
 

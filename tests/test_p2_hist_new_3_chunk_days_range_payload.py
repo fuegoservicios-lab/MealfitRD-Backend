@@ -127,7 +127,7 @@ def test_response_includes_both_fields_as_int():
     def _fake(query, params=None, **kwargs):
         if "FROM meal_plans" in query:
             return {"id": _PLAN_A}
-        if "LEFT JOIN plan_chunk_metrics" in query:
+        if "FROM plan_chunk_queue q" in query:
             return [fake_row]
         if "SELECT COUNT(*)" in query and "plan_chunk_queue" in query:
             return {"total_count": 1}
@@ -160,7 +160,7 @@ def test_response_handles_zero_offset_first_chunk():
     def _fake(query, params=None, **kwargs):
         if "FROM meal_plans" in query:
             return {"id": _PLAN_A}
-        if "LEFT JOIN plan_chunk_metrics" in query:
+        if "FROM plan_chunk_queue q" in query:
             return [fake_row]
         if "SELECT COUNT(*)" in query and "plan_chunk_queue" in query:
             return {"total_count": 1}
@@ -189,7 +189,7 @@ def test_response_single_day_chunk():
     def _fake(query, params=None, **kwargs):
         if "FROM meal_plans" in query:
             return {"id": _PLAN_A}
-        if "LEFT JOIN plan_chunk_metrics" in query:
+        if "FROM plan_chunk_queue q" in query:
             return [fake_row]
         if "SELECT COUNT(*)" in query and "plan_chunk_queue" in query:
             return {"total_count": 1}

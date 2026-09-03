@@ -28,16 +28,24 @@ condicional de los banners), este test falla con apuntador al marker.
 """
 from __future__ import annotations
 
+import pytest
+
 from pathlib import Path
 
 
 _BACKEND_ROOT = Path(__file__).resolve().parent.parent
-_HISTORY_JSX = (
-    _BACKEND_ROOT.parent / "frontend" / "src" / "pages" / "History.jsx"
-).read_text(encoding="utf-8")
-_HISTORY_CSS = (
-    _BACKEND_ROOT.parent / "frontend" / "src" / "pages" / "History.module.css"
-).read_text(encoding="utf-8")
+@pytest.fixture(scope="module", autouse=True)
+def _load_frontend_sibling_sources(frontend_repo_path):
+    # La fixture compartida salta el módulo antes de cualquier I/O si falta el hermano.
+    _ = frontend_repo_path
+    global _HISTORY_CSS, _HISTORY_JSX
+    _HISTORY_JSX = (
+        _BACKEND_ROOT.parent / "frontend" / "src" / "pages" / "History.jsx"
+    ).read_text(encoding="utf-8")
+    _HISTORY_CSS = (
+        _BACKEND_ROOT.parent / "frontend" / "src" / "pages" / "History.module.css"
+    ).read_text(encoding="utf-8")
+
 _APP_PY = (_BACKEND_ROOT / "app.py").read_text(encoding="utf-8")
 
 
@@ -229,14 +237,29 @@ def test_missing_days_reason_copy_branches_by_temporal_bucket():
     assert "_ctaRetryWithInfo" in _HISTORY_JSX, (
         "Helper `_ctaRetryWithInfo` ausente."
     )
-    # Las ramas deben USARLOS (interpolación con template literal).
-    assert "${_ctaText}" in _HISTORY_JSX, (
-        "La rama _puac > 0 no interpola `_ctaText` — sigue con "
-        "string literal hardcoded."
-    )
-    assert "${_ctaRetry}" in _HISTORY_JSX, (
-        "La rama _failedC > 0 no interpola `_ctaRetry`."
-    )
-    assert "${_ctaRetryWithInfo}" in _HISTORY_JSX, (
-        "La rama _exhaustedCount > 0 no interpola `_ctaRetryWithInfo`."
-    )
+    # Las ramas deben USARLOS. Lo que importa es que el CTA salga del helper —que sabe si
+    # el botón «Reactivar este Plan» está visible— y no de un literal escrito a mano.
+    #
+    # [P1-I18N-HIST-DIAS-FALTANTES · 2026-08-22] Se comprueba el USO, no la FORMA. Antes
+    # exigía la grafía `${_ctaText}`, o sea el template literal; y un template literal no
+    # se puede traducir, así que el guard estaba fijando la única forma que impide que esa
+    # frase salga en el idioma del usuario. La interpolación pasa ahora por el motor
+    # (`t('… {cta}', { cta: _ctaText })`), que es lo que permite que fr y pt muevan el
+    # orden de la frase — partirla en trozos no habría servido.
+    #
+    # La intención del guard queda intacta: si alguien vuelve a escribir «Pulsa "Reactivar
+    # este Plan" abajo…» a mano en una rama, el helper deja de usarse y esto se pone rojo.
+    import re as _re
+    for helper, rama in (("_ctaText", "_puac > 0"),
+                         ("_ctaRetry", "_failedC > 0"),
+                         ("_ctaRetryWithInfo", "_exhaustedCount > 0")):
+        usado = _re.search(
+            r"(?:\$\{\s*" + helper + r"\s*\}"            # template literal
+            r"|cta:\s*" + helper + r"\b"                  # interpolación del motor i18n
+            r"|,\s*\{\s*[^}]*\b" + helper + r"\b[^}]*\})",  # vars sueltas
+            _HISTORY_JSX,
+        )
+        assert usado, (
+            f"La rama {rama} no usa `{helper}`: el CTA vuelve a estar escrito a mano, así "
+            f"que apunta a un botón que puede no estar visible."
+        )

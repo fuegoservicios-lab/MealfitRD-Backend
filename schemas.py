@@ -1,4 +1,4 @@
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, ConfigDict
 from typing import List, Optional, Literal
 
 class MacrosModel(BaseModel):
@@ -138,10 +138,26 @@ class HealthProfileSchema(BaseModel):
     dietTypes: List[str] = Field(default_factory=list)
     country: Optional[str] = None
     inventoryMode: Optional[str] = 'indulgent'
-    tzOffset: Optional[int] = 0
+    # [P3-TZ-FALLBACK-SSOT · 2026-08-22] `tzOffset` pasa de `0` a `None`, y el campo `timezone`
+    # —que traía una zona IANA dominicana clavada como default— se BORRA. (El literal no se
+    # reproduce en este comentario a propósito: el guard lo busca, y citarlo aquí pondría en rojo
+    # al propio arreglo — comentario-vence-guard, once veces ya en esta ola.)
+    #
+    # Medido: ese campo tenía CERO lectores en todo el backend y CERO filas en la base. No era un
+    # default, era una invitación: quien escribiera `profile.timezone` creyendo leer el huso del
+    # usuario obtendría una zona caribeña para un noruego, y el código parecería correcto en RD,
+    # que es donde se prueba. Borrarlo es más seguro que corregirlo — con `extra = 'allow'`, si
+    # algún día una fila trae la clave, el validador sigue conservándola.
+    #
+    # `tzOffset` sí existe en datos reales (5 filas), así que se queda declarada; lo que se le
+    # quita es el default que fabricaba un huso plausible. `0` se confunde con UTC; `None` no se
+    # confunde con nada. La resolución de verdad vive en `_resolve_request_tz_offset` y
+    # `user_tz_offset_min`, sobre `constants.DEFAULT_TZ_OFFSET_MIN`.
+    tzOffset: Optional[int] = None
     householdSize: Optional[int] = 1
     groceryDuration: Optional[str] = 'weekly'
     totalDays: Optional[int] = 3
-    timezone: Optional[str] = 'America/Santo_Domingo'
-    class Config:
-        extra = 'allow'
+    # [2026-08-23] `class Config` esta deprecado desde Pydantic V2 y emite
+    # PydanticDeprecatedSince20 en cada arranque y en cada corrida del gate.
+    # `ConfigDict` es su reemplazo exacto; se retira en V3.
+    model_config = ConfigDict(extra='allow')

@@ -60,12 +60,16 @@ def test_p1_diary_upload_uuid_validation():
 def test_p1_diary_consumed_fail_loud():
     """/consumed debe capturar el return de log_consumed_meal y fallar loud (500)
     en None/falsy, y NO programar learning sobre data fantasma."""
+    # [P1-MANUAL-FOOD-LOG - 2026-08-11] El cuerpo se mudo a `_persist_consumed_meal`,
+    # el camino comun de la foto y el componedor: el fail-loud, el 500 y el orden
+    # check-antes-de-learning ahora protegen a LOS DOS endpoints desde un solo sitio.
+    # La propiedad no cambio de significado; cambio de direccion.
     src = _read("routers", "diary.py")
-    body = _fn_body(src, "def api_log_consumed_meal(", end_marker="@router.get")
+    body = _fn_body(src, "def _persist_consumed_meal(", end_marker="@router.post(\"/consumed\")")
     assert "_logged_ok = log_consumed_meal(" in body
     assert "if not _logged_ok:" in body
     assert "status_code=500" in body
-    # El add_task de learning ocurre DESPUÉS del check de éxito (no sobre fantasma).
+    # El add_task de learning ocurre DESPUES del check de exito (no sobre fantasma).
     assert body.index("if not _logged_ok:") < body.index("background_tasks.add_task(trigger_incremental_learning")
 
 
@@ -108,7 +112,7 @@ def test_p1_lesson_flush_classifier_treats_fk_and_check_as_terminal():
 
 # ════════════════════════════════════════════════════════════════════ P2 timeouts
 def test_p2_shopping_calculator_embeddings_timeout():
-    # [P0-DEEPSEEK-MIGRATION · 2026-06-12] shopping_calculator ya no
+    # [P0-LLM-PROVIDER-MIGRATION · 2026-06-12] shopping_calculator ya no
     # construye su propio cliente de embeddings: delega a la capa pluggable
     # `embeddings_provider.get_embeddings_client()`, cuyo constructor acota
     # el deadline (`"timeout": _embeddings_timeout_s()`).

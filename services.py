@@ -39,6 +39,19 @@ from ai_helpers import generate_plan_title
 logger = logging.getLogger(__name__)
 
 
+def _assert_supported_country_for_service(form_data: Optional[dict]) -> None:
+    """400 antes de cualquier lectura/merge/escritura de health_profile."""
+    if not isinstance(form_data, dict) or "country" not in form_data:
+        return
+    from constants import UnsupportedCountryError, assert_supported_country
+
+    try:
+        assert_supported_country(form_data.get("country"))
+    except UnsupportedCountryError as exc:
+        from fastapi import HTTPException
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+
 def compute_plan_hash(plan_data: dict) -> str:
     """Calcula un hash SHA-256 truncado del plan basado en ingredientes y suplementos.
     Fuente única de verdad para detectar si un plan cambió."""
@@ -68,6 +81,10 @@ def merge_form_data_with_profile(user_id: str, form_data: Optional[dict]) -> dic
     Extracted to avoid DRY violation between /api/chat/stream and /api/chat.
     Returns the merged form_data dict.
     """
+    # [P2-COUNTRY-WRITE-UNVALIDATED · 2026-08-23] Deliberadamente FUERA del
+    # try fail-open inferior: un valor inválido es error de request, no un blip
+    # de lectura que deba devolverse/guardarse como si nada.
+    _assert_supported_country_for_service(form_data)
     merged = form_data or {}
     if not user_id or user_id == "guest" or user_id == "":
         return merged
@@ -228,7 +245,7 @@ def _stamp_quality_index(plan_data: dict) -> dict:
         return plan_data
 
 
-def save_partial_plan_get_id(user_id: str, plan_data: dict, selected_techniques: Optional[list] = None, total_days_requested: int = 7) -> Optional[str]:
+def save_partial_plan_get_id(user_id: str, plan_data: dict, selected_techniques: Optional[list] = None, total_days_requested: int = 7, existing_plan_id: Optional[str] = None) -> Optional[str]:
     """Guarda la Semana 1 de un plan chunked de forma sincrónica y retorna el plan_id UUID.
     Usado exclusivamente por el flujo de Background Chunking para encolar las semanas restantes.
 
@@ -296,7 +313,13 @@ def save_partial_plan_get_id(user_id: str, plan_data: dict, selected_techniques:
         # Elimina la ventana TOCTOU entre guardar el plan y cancelar los chunks viejos.
         # return_id=True garantiza un UUID str (ver db_plans.save_new_meal_plan_atomic);
         # cast solo para descartar el Literal[True]/None inferido del helper sin anotación.
-        plan_id = cast("Optional[str]", save_new_meal_plan_atomic(user_id, insert_data, return_id=True))
+        # [P1-ARQ25-F1-LIFECYCLE · 2026-09-02] Bloque 1 vía cola: el placeholder ya existe
+        # (creado ANTES de generar, I1) → se rellena en vez de insertar otro plan.
+        if existing_plan_id:
+            from db_plans import fill_placeholder_meal_plan_atomic
+            plan_id = fill_placeholder_meal_plan_atomic(existing_plan_id, user_id, insert_data)
+        else:
+            plan_id = cast("Optional[str]", save_new_meal_plan_atomic(user_id, insert_data, return_id=True))
 
         # [P1-COST-ATTRIBUTION · 2026-07-31] Ruta CHUNKED (la de los planes de 7
         # días): mismo canje corr→plan_id que en `_save_plan_and_track_background`.
@@ -324,6 +347,31 @@ def save_partial_plan_get_id(user_id: str, plan_data: dict, selected_techniques:
             _defer_creative_plan_title(plan_id, user_id, plan_data, plan_name)
 
         logger.info(f"💾 [CHUNK] Plan parcial (semana 1) guardado para {user_id}, plan_id={plan_id}")
+
+        # [P1-PLAN-DISPLAY-I18N · 2026-08-19] tooltip-anchor:
+        # P1-PLAN-DISPLAY-I18N-TRIGGER-1A. Camino CHUNKED (planes largos): semana 1
+        # ya quedó persistida arriba — despachar el enriquecimiento de display para
+        # esos días si el idioma del usuario lo amerita (es-DO / sin locale es no-op
+        # dentro del motor, pero el `!= "es-DO"` de abajo evita levantar un thread por
+        # nada). Best-effort: el guardado del plan JAMÁS puede fallar por esto.
+        # Hermano: TRIGGER-1B en routers/plans.py cubre el camino NO-chunked (tier
+        # gratis), donde la persistencia vive en `_save_plan_and_track_background`.
+        if plan_id:
+            try:
+                _p1_i18n_locale = (get_user_profile(user_id) or {}).get("locale")
+                if _p1_i18n_locale and _p1_i18n_locale != "es-DO":
+                    from plan_display_i18n import schedule_plan_display_enrichment as _p1_i18n_schedule
+                    _p1_i18n_days = plan_data.get("days") or []
+                    _p1_i18n_schedule(
+                        str(plan_id), user_id, _p1_i18n_locale,
+                        day_indices=list(range(len(_p1_i18n_days))),
+                    )
+            except Exception as _p1_i18n_e:
+                logger.warning(
+                    f"[P1-PLAN-DISPLAY-I18N] dispatch persist inicial falló "
+                    f"plan={plan_id} user={user_id}: {_p1_i18n_e!r}"
+                )
+
         return plan_id
     except Exception as e:
         logger.error(f"❌ [CHUNK] Error guardando plan parcial para {user_id}: {e}")
@@ -513,7 +561,7 @@ def _track_ingredient_frequencies(user_id: str, raw_ingredients: list) -> None:
 
 
 def _save_plan_and_track_background(user_id: str, plan_data: dict, selected_techniques: Optional[list] = None,
-                                    return_id: bool = False):
+                                    return_id: bool = False, existing_plan_id: Optional[str] = None):
     """Background task para guardar plan y actualizar frecuencias de ingredientes.
 
     [P1-NONCHUNKED-PERSIST-SYNC · 2026-06-15] (gap-audit G2) `return_id`: cuando True, el INSERT corre
@@ -632,13 +680,18 @@ def _save_plan_and_track_background(user_id: str, plan_data: dict, selected_tech
             insert_data["techniques"] = selected_techniques
 
         # 🛡️ Dedup guard: evitar duplicados si otro código path ya guardó el plan
-        if check_recent_meal_plan_exists(user_id, max_seconds=30):
+        if not existing_plan_id and check_recent_meal_plan_exists(user_id, max_seconds=30):
             logger.info(f"🛡️ [DEDUP] Plan ya guardado recientemente para {user_id}. Omitiendo duplicado.")
             return None
 
         # [P0-2/ATOMIC + P2-PARTIAL-PLAN-1] Cancelar chunks + liberar reservas + INSERT en
         # una sola transacción (Neon-native).
-        plan_id = save_new_meal_plan_atomic(user_id, insert_data, return_id=return_id)
+        if existing_plan_id:
+            # [P1-ARQ25-F1-LIFECYCLE · 2026-09-02] rellenar el placeholder de la cola (ver save_partial_plan_get_id)
+            from db_plans import fill_placeholder_meal_plan_atomic
+            plan_id = fill_placeholder_meal_plan_atomic(existing_plan_id, user_id, insert_data)
+        else:
+            plan_id = save_new_meal_plan_atomic(user_id, insert_data, return_id=return_id)
         logger.debug(f"💾 [DB BACKGROUND] Plan guardado exitosamente en meal_plans para {user_id}")
         # [P1-COST-ATTRIBUTION · 2026-07-31] Recién AHORA existe el plan_id
         # (invariante I1), así que es el primer momento en que se puede etiquetar

@@ -32,81 +32,73 @@ import pytest
 P1_LIVE_2_ANCHOR = "P1-LIVE-2"
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
-WORKFLOW = REPO_ROOT / ".github" / "workflows" / "ci.yml"
+# [P2-CI-RAIZ-CERO-TESTS · G31 · 2026-08-23] El ci.yml de la RAÍZ ya no existe, a
+# propósito: el workspace-root excluye backend/ y frontend/ (repos hermanos con
+# remotes propios), así que ese workflow corrió 66/66 veces en ROJO sin ejecutar
+# UN test — un gate perpetuamente rojo entrena a ignorar el CI entero. El
+# contrato de P1-LIVE-2 (pytest+vitest+build automáticos en push/PR) NO murió:
+# vive repartido en los workflows de los repos hermanos, y estos tests ahora
+# anclan ESO — la razón de cada assert es la misma, cambió el fichero que la
+# satisface.
+WORKFLOW_RAIZ_RETIRADO = REPO_ROOT / ".github" / "workflows" / "ci.yml"
+WORKFLOW_BACKEND = REPO_ROOT / "backend" / ".github" / "workflows" / "ci.yml"
+WORKFLOW_FRONTEND = REPO_ROOT / "frontend" / ".github" / "workflows" / "ci.yml"
 PACKAGE_JSON = REPO_ROOT / "frontend" / "package.json"
 SCRIPT_PS1 = REPO_ROOT / "scripts" / "run_ci.ps1"
 SCRIPT_SH = REPO_ROOT / "scripts" / "run_ci.sh"
 
 
 def test_a_workflow_file_exists():
-    """`.github/workflows/ci.yml` debe existir con anchor P1-LIVE-2."""
-    assert WORKFLOW.exists(), (
-        "[P1-LIVE-2] `.github/workflows/ci.yml` no existe. Restaurar para "
-        "que CI corra pytest+vitest+build automáticamente en push/PR. Sin "
-        "este workflow, regresiones laterales se detectan solo en audits "
-        "manuales — el modo de fallo que P1-LIVE-2 cierra."
+    """G31: la raíz NO debe tener ci.yml (jamás pudo ejecutar un test) y los DOS
+    repos hermanos SÍ deben tener el suyo — ahí vive ahora el gate real."""
+    assert not WORKFLOW_RAIZ_RETIRADO.exists(), (
+        "[G31] Reapareció .github/workflows/ci.yml en la raíz. Ese workflow no "
+        "puede ver backend/ ni frontend/ (repos hermanos): corrió 66 veces en rojo "
+        "sin ejecutar un test. Si hace falta CI cross-repo, va en los hermanos."
     )
-    text = WORKFLOW.read_text(encoding="utf-8")
-    assert P1_LIVE_2_ANCHOR in text, (
-        "[P1-LIVE-2] Anchor `P1-LIVE-2` removido de ci.yml. Restaurar el "
-        "comentario para que un futuro audit pueda rastrear el contexto."
-    )
+    assert WORKFLOW_BACKEND.exists(), "[P1-LIVE-2] falta backend/.github/workflows/ci.yml"
+    assert WORKFLOW_FRONTEND.exists(), "[P1-LIVE-2] falta frontend/.github/workflows/ci.yml"
 
 
 def test_b_workflow_has_three_jobs():
-    """ci.yml debe definir los 3 jobs canónicos: backend-tests,
-    frontend-tests, frontend-build. Cualquiera faltante deja un gap en
-    la red de seguridad."""
-    text = WORKFLOW.read_text(encoding="utf-8")
-    for job in ("backend-tests", "frontend-tests", "frontend-build"):
-        assert re.search(rf"^\s*{re.escape(job)}\s*:", text, re.MULTILINE), (
-            f"[P1-LIVE-2] Job `{job}` no encontrado en ci.yml. Los 3 jobs "
-            f"(backend-tests, frontend-tests, frontend-build) son requeridos: "
-            f"backend-tests cubre el bundle parser-based, frontend-tests cubre "
-            f"Vitest, frontend-build valida tree-shaking + import resolution + "
-            f"bundle size en prod."
-        )
+    """Los 3 jobs canónicos de P1-LIVE-2 siguen existiendo, repartidos: pytest en
+    el workflow del backend; vitest y build en el del frontend."""
+    be = WORKFLOW_BACKEND.read_text(encoding="utf-8")
+    fe = WORKFLOW_FRONTEND.read_text(encoding="utf-8")
+    assert "pytest" in be, "[P1-LIVE-2] el workflow del backend perdió el job de pytest"
+    assert "npm test" in fe, "[P1-LIVE-2] el workflow del frontend perdió vitest (npm test)"
+    assert "npm run build" in fe, "[P1-LIVE-2] el workflow del frontend perdió el build"
 
 
 def test_c_workflow_triggers_on_push_and_pr():
-    """ci.yml debe disparar en `push` + `pull_request` (gate pre-merge)."""
-    text = WORKFLOW.read_text(encoding="utf-8")
-    assert re.search(r"^\s*push\s*:", text, re.MULTILINE), (
-        "[P1-LIVE-2] `on.push` trigger missing en ci.yml. Sin push trigger, "
-        "el CI no corre en branches feature → bugs solo se detectan en PR "
-        "(demasiado tarde si la feature toma 1 semana)."
-    )
-    assert re.search(r"^\s*pull_request\s*:", text, re.MULTILINE), (
-        "[P1-LIVE-2] `on.pull_request` trigger missing. Sin PR trigger, "
-        "main puede recibir merges sin verificación."
-    )
+    """Ambos workflows disparan en push + pull_request (gate pre-merge)."""
+    for etiqueta, ruta in (("backend", WORKFLOW_BACKEND), ("frontend", WORKFLOW_FRONTEND)):
+        text = ruta.read_text(encoding="utf-8")
+        assert re.search(r"^\s*push\s*:", text, re.MULTILINE), (
+            f"[P1-LIVE-2] `on.push` falta en el ci.yml de {etiqueta}"
+        )
+        assert re.search(r"^\s*pull_request\s*:", text, re.MULTILINE), (
+            f"[P1-LIVE-2] `on.pull_request` falta en el ci.yml de {etiqueta}"
+        )
 
 
 def test_d_workflow_runs_pytest_with_correct_marker():
-    """El job backend-tests debe ejecutar pytest con el filtro `not e2e`
-    (los tests E2E necesitan DB live, no corren en CI runners)."""
-    text = WORKFLOW.read_text(encoding="utf-8")
-    assert "pytest" in text, "[P1-LIVE-2] ci.yml no invoca pytest."
-    assert '"not e2e"' in text or "'not e2e'" in text or "not e2e" in text, (
-        "[P1-LIVE-2] El job backend-tests no filtra `-m \"not e2e\"`. Sin "
-        "el filtro, los tests E2E intentan conectarse a Supabase y fallan "
-        "en CI runners (sin DB). Mantener el filtro para que CI corra solo "
-        "los parser-based + funcionales sin DB."
+    """El pytest del CI backend filtra `-m "not e2e"` (los e2e piden DB viva)."""
+    text = WORKFLOW_BACKEND.read_text(encoding="utf-8")
+    assert "pytest" in text, "[P1-LIVE-2] el ci.yml del backend no invoca pytest."
+    assert "not e2e" in text, (
+        "[P1-LIVE-2] El pytest del CI backend perdió el filtro `-m \"not e2e\"`: "
+        "los e2e intentarían conectar a la DB desde el runner y fallarían siempre."
     )
 
 
 def test_e_workflow_runs_vitest_and_build():
-    """frontend-tests debe invocar `npm test` y frontend-build `npm run build`."""
-    text = WORKFLOW.read_text(encoding="utf-8")
-    assert "npm test" in text, (
-        "[P1-LIVE-2] ci.yml no invoca `npm test` en frontend-tests. Sin "
-        "Vitest en CI, regresiones en helpers frontend (renderCoherenceWarnings, "
-        "etc.) no se detectan."
-    )
+    """El workflow del frontend invoca `npm test` y `npm run build`."""
+    text = WORKFLOW_FRONTEND.read_text(encoding="utf-8")
+    assert "npm test" in text, "[P1-LIVE-2] el ci.yml del frontend no invoca `npm test`."
     assert "npm run build" in text, (
-        "[P1-LIVE-2] ci.yml no invoca `npm run build`. El build es el único "
-        "gate que cacha errores de tree-shaking + import resolution + bundle "
-        "size que Vitest no atrapa."
+        "[P1-LIVE-2] el ci.yml del frontend no invoca `npm run build` — el build es "
+        "el único gate de tree-shaking/imports/bundle-size que vitest no atrapa."
     )
 
 
@@ -145,18 +137,48 @@ def test_g_local_wrappers_exist():
         )
 
 
-def test_h_local_wrappers_run_three_steps():
-    """Wrappers locales deben cubrir los 3 mismos pasos del CI: backend
-    pytest, frontend vitest, frontend build."""
-    for f in (SCRIPT_PS1, SCRIPT_SH):
-        text = f.read_text(encoding="utf-8")
-        assert "pytest" in text, (
-            f"[P1-LIVE-2] {f.name} no invoca pytest — paridad con CI rota."
-        )
-        # `npm test` y `npm run build` deben aparecer ambos.
-        assert "npm test" in text, (
-            f"[P1-LIVE-2] {f.name} no invoca `npm test`."
-        )
-        assert "npm run build" in text, (
-            f"[P1-LIVE-2] {f.name} no invoca `npm run build`."
-        )
+def test_h_local_wrapper_vivo_corre_los_tres_pasos():
+    """El wrapper VIVO debe cubrir los 3 mismos pasos del CI: backend pytest,
+    frontend vitest, frontend build.
+
+    [P3-CI-WRAPPER-FOSIL-GUARD · 2026-08-22] Este caso exigía los tres pasos a
+    los DOS wrappers. `P3-I18N-RUN-CI-SH-FOSIL` (2026-08-21) convirtió
+    `run_ci.sh` en un muñón de deprecación que ya no corre nada y no reconvirtió
+    este guard, así que llevaba rojo desde entonces: el guard seguía exigiéndole
+    trabajo a un fichero cuyo trabajo es no hacer nada.
+
+    La paridad que este fichero defiende sigue viva — sólo que ahora la sostiene
+    un único wrapper. El muñón tiene su propio caso abajo, que es el que impide
+    que «deprecado» degenere en «silenciosamente inútil».
+    """
+    text = SCRIPT_PS1.read_text(encoding="utf-8")
+    assert "pytest" in text, (
+        f"[P1-LIVE-2] {SCRIPT_PS1.name} no invoca pytest — paridad con CI rota."
+    )
+    assert "npm test" in text, (
+        f"[P1-LIVE-2] {SCRIPT_PS1.name} no invoca `npm test`."
+    )
+    assert "npm run build" in text, (
+        f"[P1-LIVE-2] {SCRIPT_PS1.name} no invoca `npm run build`."
+    )
+
+
+def test_h2_el_wrapper_fosil_falla_ruidosamente():
+    """El muñón no puede salir con 0.
+
+    Un wrapper deprecado que no corre nada y devuelve éxito es la peor de las
+    dos opciones: quien lo invoque —una costumbre, un alias, un runbook viejo—
+    verá verde sin haber ejecutado ni un test. Es el mismo falso verde que este
+    repo ha pagado con un marcador deseleccionado y con un filtro que no casa
+    con nada. Deprecar obliga a fallar RUIDOSAMENTE y a decir cuál es el
+    reemplazo.
+    """
+    text = SCRIPT_SH.read_text(encoding="utf-8")
+    assert re.search(r"exit\s+[1-9]", text), (
+        f"[P3-CI-WRAPPER-FOSIL-GUARD] {SCRIPT_SH.name} está deprecado y sale "
+        f"con 0: quien lo invoque verá verde sin haber corrido nada."
+    )
+    assert "run_ci.ps1" in text, (
+        f"[P3-CI-WRAPPER-FOSIL-GUARD] {SCRIPT_SH.name} no dice cuál es su "
+        f"reemplazo. Un muñón que sólo dice «no» manda a leer el git log."
+    )

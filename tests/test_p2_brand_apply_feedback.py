@@ -11,12 +11,20 @@ Fix: (1) toast 'Aplicando tu marca a la lista…' INSTANTÁNEO al elegir
 (loading→success/error con id compartido 'brand-apply'); (2) retry 1× tras 2s
 si el recalc falla; (3) error honesto si aún falla (la pref queda guardada).
 """
+
+import pytest
 from pathlib import Path
 
 BACKEND = Path(__file__).resolve().parents[1]
-BRANDS_JSX = (BACKEND.parent / "frontend" / "src" / "components" / "dashboard"
-              / "SupermarketBrands.jsx").read_text(encoding="utf-8")
-DASH_JSX = (BACKEND.parent / "frontend" / "src" / "pages" / "Dashboard.jsx").read_text(encoding="utf-8")
+@pytest.fixture(scope="module", autouse=True)
+def _load_frontend_sibling_sources(frontend_repo_path):
+    # La fixture compartida salta el módulo antes de cualquier I/O si falta el hermano.
+    _ = frontend_repo_path
+    global BRANDS_JSX, DASH_JSX
+    BRANDS_JSX = (BACKEND.parent / "frontend" / "src" / "components" / "dashboard"
+                  / "SupermarketBrands.jsx").read_text(encoding="utf-8")
+    DASH_JSX = (BACKEND.parent / "frontend" / "src" / "pages" / "Dashboard.jsx").read_text(encoding="utf-8")
+
 
 
 def test_pending_signal_fires_before_debounce():

@@ -130,7 +130,7 @@ def test_no_user_data_surface():
 
 def test_prompt_grounded():
     src = _read(_PROMPT)
-    assert "fuego.servicios@gmail.com" in src, (
+    assert "bioboros.support@gmail.com" in src, (
         "El prompt debe escalar al correo de soporte canónico."
     )
     # [P1-REBRAND-BIOBOROS · 2026-07-30] Era "MealfitRD". El bot de ayuda se
@@ -143,16 +143,29 @@ def test_prompt_grounded():
         "El prompt debe incluir la regla anti-injection (ignorar re-roleos "
         "y peticiones de revelar el system prompt)."
     )
-    # Los precios del prompt deben coincidir con Upgrade.jsx (SSOT visual).
-    upgrade = _REPO_ROOT / "frontend" / "src" / "pages" / "Upgrade.jsx"
-    if upgrade.exists():
-        upgrade_src = upgrade.read_text(encoding="utf-8")
-        for price in ("9.99", "19.99", "49.99"):
-            assert price in src, f"Precio {price} ausente del prompt."
-            assert price in upgrade_src, (
-                f"Precio {price} ya no está en Upgrade.jsx — actualiza "
-                "HELP_BOT_SYSTEM_PROMPT en el mismo commit (el bot no lee la DB)."
-            )
+    # Los precios del prompt deben coincidir con el SSOT de planes.
+    #
+    # [P2-LANDING-COPY-TRUTH · 2026-08-14] Antes se comparaba contra `Upgrade.jsx`,
+    # que era donde vivía el objeto `PRICING`… y también donde vivía su COPIA
+    # byte a byte en `Pricing.jsx`. Al unificar las dos en `config/plans.js` este
+    # guard se quedó apuntando a un fichero que ya no contiene los importes y
+    # empezó a fallar contra código correcto.
+    #
+    # Es el mismo patrón que corrigió el guard del opt-out: estaba atado al DÓNDE,
+    # y el dónde se movió. Apuntarlo al SSOT lo deja además más fuerte — antes
+    # podía pasar mirando una de dos copias, ahora mira la única.
+    planes = _REPO_ROOT / "frontend" / "src" / "config" / "plans.js"
+    assert planes.exists(), (
+        "No existe `frontend/src/config/plans.js`, que es el SSOT de precios "
+        "contra el que se ancla el prompt del bot de ayuda."
+    )
+    planes_src = planes.read_text(encoding="utf-8")
+    for price in ("9.99", "19.99", "49.99"):
+        assert price in src, f"Precio {price} ausente del prompt."
+        assert price in planes_src, (
+            f"Precio {price} ya no está en `config/plans.js` — actualiza "
+            "HELP_BOT_SYSTEM_PROMPT en el mismo commit (el bot no lee la DB)."
+        )
 
 
 # ---------------------------------------------------------------------------

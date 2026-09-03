@@ -1,8 +1,8 @@
 """[P1-RECIPE-EXPAND-MODEL-PROVIDER · 2026-07-26] El segundo sitio donde un modelo mejor se paga.
 
 `MEALFIT_RECIPE_EXPAND_MODEL` existe desde P1-RECIPE-EXPAND-FAILSIGNAL, pero el cliente se
-construía con `ChatDeepSeek(model=<knob>)` **a secas**: apuntar el knob a un modelo OpenAI lo mandaba
-al `base_url` de DeepSeek con la key equivocada. Mismo fallo que P1-LUNA-USAGE-BLIND cerró en el
+construía con `ChatGLM(model=<knob>)` **a secas**: apuntar el knob a un modelo OpenAI lo mandaba
+al `base_url` de GLM con la key equivocada. Mismo fallo que P1-LUNA-USAGE-BLIND cerró en el
 day-gen, aquí latente desde que el knob existe.
 
 ## Por qué ESTE nodo y no otro
@@ -19,7 +19,7 @@ está mirando.
 
 ## Sigue apagado
 
-El default del knob es `deepseek-v4-flash`. Esto habilita el cambio, no lo hace.
+El default del knob es `glm-5.3-flash`. Esto habilita el cambio, no lo hace.
 """
 import os
 
@@ -34,12 +34,12 @@ def _key(monkeypatch):
 
 
 def test_el_default_sigue_siendo_el_barato():
-    assert ah._recipe_expand_model_name() == "deepseek-v4-flash"
+    assert ah._recipe_expand_model_name() == "glm-5.3-flash"
 
 
 @pytest.mark.parametrize("modelo,esperado", [
-    ("deepseek-v4-flash", "ChatDeepSeek"),
-    ("deepseek-v4-pro", "ChatDeepSeek"),
+    ("glm-5.3-flash", "ChatGLM"),
+    ("glm-5.3", "ChatGLM"),
     ("gpt-5.6-luna", "ChatOpenAIInstrumented"),
     ("gpt-5.6-terra", "ChatOpenAIInstrumented"),
 ])
@@ -58,9 +58,9 @@ def test_el_cliente_openai_esta_INSTRUMENTADO():
     assert c.stream_usage is True
 
 
-@pytest.mark.parametrize("modelo", ["deepseek-v4-flash", "gpt-5.6-luna"])
+@pytest.mark.parametrize("modelo", ["glm-5.3-flash", "gpt-5.6-luna"])
 def test_structured_output_funciona_en_los_dos(modelo):
-    """`ChatDeepSeek` override-a `with_structured_output` para las rarezas de DeepSeek
+    """`ChatGLM` override-a `with_structured_output` para las rarezas de GLM
     (`function_calling` en vez de `json_schema`); OpenAI quiere el default de langchain. Por eso el
     builder NO lo aplica y lo deja al caller."""
     from schemas import ExpandedRecipeModel
@@ -84,11 +84,11 @@ def test_fail_cheap_ante_cualquier_error(monkeypatch):
     monkeypatch.setattr(llm_provider, "is_openai_model",
                         lambda m: (_ for _ in ()).throw(RuntimeError("boom")))
     c = ah._build_expand_llm("gpt-5.6-luna", temperature=0.7, timeout=30)
-    assert type(c).__name__ == "ChatDeepSeek"
+    assert type(c).__name__ == "ChatGLM"
 
 
 def test_el_callsite_usa_el_builder():
     import inspect
     src = inspect.getsource(ah.expand_recipe_agent)
     assert "_build_expand_llm(" in src
-    assert "ChatDeepSeek(" not in src, "con ChatDeepSeek directo el knob no puede apuntar a OpenAI"
+    assert "ChatGLM(" not in src, "con ChatGLM directo el knob no puede apuntar a OpenAI"

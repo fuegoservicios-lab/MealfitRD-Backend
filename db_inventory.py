@@ -11,6 +11,12 @@ from shopping_calculator import _parse_quantity, get_plural_unit, get_master_ing
 from constants import normalize_ingredient_for_tracking
 
 logger = logging.getLogger(__name__)
+
+# [P2-INVENTORY-LEGACY-PLAN-WARN-ONCE · 2026-09-02] Usuarios cuyo plan usable no trae
+# `calc_household_multiplier` (planes-esqueleto de cuentas e2e del 21-22 ago). El cron de
+# refill los recorre en cada tick y emitía 16 WARNING idénticos por vuelta: se avisa UNA vez
+# por usuario y proceso; las siguientes van a DEBUG. El fallback sigue siendo el mismo.
+_P2_4_NO_MULTIPLIER_WARNED: set = set()
 _RESERVATION_MEAL_TOKEN_RE = re.compile(r":meal:(.+)$")
 
 
@@ -84,8 +90,13 @@ def _compute_dynamic_consumption_rates(
     try:
         # [P1-B 2026-05-07] meal_plans no tiene columna `is_active`; el flag
         # vive en plan_data JSONB. Plan "activo" = el más reciente del user.
+        # [P1-INVENTORY-USABLE-PLAN · 2026-09-02] ...que NO sea el placeholder vacío de la
+        # cola (Fase 1): durante los ~7 min de generación el más reciente no tiene días ni
+        # `calc_household_multiplier`, y cada validación caía al fallback con 12 WARNING por
+        # tick del cron de refill. Misma clase que el coach/tools (P1-ARQ25-F1-CLOSE).
+        from db_plans import USABLE_PLAN_SQL_FILTER as _usable
         _plan_row = execute_sql_query(
-            "SELECT plan_data FROM meal_plans WHERE user_id = %s "
+            "SELECT plan_data FROM meal_plans WHERE user_id = %s AND " + _usable + " "
             "ORDER BY created_at DESC LIMIT 1",
             (user_id,),
             fetch_one=True,
@@ -107,10 +118,15 @@ def _compute_dynamic_consumption_rates(
         m_cached_raw = plan_data.get("calc_household_multiplier")
         if m_cached_raw is None:
             # Plan sin metadata: no podemos validar. Conservador → fallback hardcoded.
-            logger.warning(
+            _msg = (
                 "[P2-4] Plan activo sin `calc_household_multiplier`; no es posible "
-                "validar drift household. Cayendo al fallback hardcoded por categoría."
+                f"validar drift household. Cayendo al fallback hardcoded por categoría (user={str(user_id)[:8]})."
             )
+            if user_id in _P2_4_NO_MULTIPLIER_WARNED:
+                logger.debug(_msg)  # [P2-INVENTORY-LEGACY-PLAN-WARN-ONCE]
+            else:
+                _P2_4_NO_MULTIPLIER_WARNED.add(user_id)
+                logger.warning(_msg)
             return {}
         m_cached = max(1.0, float(m_cached_raw))
 
@@ -666,8 +682,14 @@ def _resolve_cross_domain_density(master_item: dict) -> float | None:
     return None
 
 
-def _resolve_unit_weight(master_item: dict) -> float | None:
-    """[P1-1] Resuelve gramos por unidad (count→mass) con fallback a UNIT_WEIGHTS."""
+def _resolve_unit_weight(master_item: dict, *, spice_tsp: bool = False) -> float | None:
+    """[P1-1] Resuelve gramos por unidad (count→mass) con fallback a UNIT_WEIGHTS.
+
+    [P2-SPICE-TSP-DEDUCTION-ONLY · 2026-09-02] `spice_tsp` es OPT-IN: solo la deducción de la
+    Nevera lo pide. El guard de coherencia (shopping_calculator, P1-COHERENCE-GRAM-NORM) usa el
+    mismo convert_amount y con el fallback global «1 cucharadita de orégano» se volvía
+    comparable contra el sobre de 45 g de la lista ⇒ divergencia crítica ⇒ rechazo + reintento
+    (2 planes, 2026-09-02 17:18 y 17:22). Para el guard, lo inconvertible debe seguir siéndolo."""
     raw = master_item.get("density_g_per_unit")
     try:
         if raw is not None and float(raw) > 0:
@@ -690,10 +712,52 @@ def _resolve_unit_weight(master_item: dict) -> float | None:
             return float(g_per_u)
     except Exception as _e:
         logger.debug(f"[P1-1] Fallback UNIT_WEIGHTS falló para {name!r}: {_e}")
-    return None
+    return _spice_unit_as_teaspoon(master_item, name) if spice_tsp else None
 
 
-def convert_amount(qty: float, from_unit: str, to_unit: str, master_item: dict) -> Optional[float]:
+# [P2-SPICE-UNIT-TSP-FALLBACK · 2026-09-02] Las especias del catálogo traen `density_g_per_cup`
+# pero no `density_g_per_unit`, y las recetas las piden en «unidad» (4,67 unidad de orégano):
+# cada recálculo de la lista emitía 3-4 WARNING de convert_amount y la deducción se saltaba.
+# Para un condimento, «una unidad» es una cucharadita: taza / 48. Acotado a la lista canónica
+# de condimentos (culinary_coherence.CONDIMENT_EXEMPT, sin líquidos ni sal) — para Fideos o
+# Arroz «unidad» NO es una cucharadita y siguen cayendo al comportamiento estricto.
+_SPICE_TOKENS = ("canela", "pimienta", "oregano", "comino", "ajo en polvo", "sazon",
+                 "condimento", "especia", "curcuma", "paprika", "nuez moscada", "laurel")
+_TSP_PER_CUP = 48.0
+
+def _spice_log_level(name: str):
+    """[P2-SPICE-STRICT-QUIET] logger.debug si el nombre es un condimento; logger.warning si no."""
+    try:
+        from constants import strip_accents
+        n = strip_accents(str(name or "").lower())
+        return logger.debug if any(tok in n for tok in _SPICE_TOKENS) else logger.warning
+    except Exception:
+        return logger.warning
+
+
+def _spice_unit_as_teaspoon(master_item: dict, name_lower: str) -> float | None:
+    try:
+        from graph_orchestrator import _env_bool
+        if not _env_bool("MEALFIT_SPICE_UNIT_AS_TSP", True):
+            return None
+    except Exception:
+        pass
+    try:
+        from constants import strip_accents
+        n = strip_accents((name_lower or "").lower())
+        if not any(tok in n for tok in _SPICE_TOKENS):
+            return None
+        cup = (master_item or {}).get("density_g_per_cup")
+        if cup is None or float(cup) <= 0:
+            return None
+        g = round(float(cup) / _TSP_PER_CUP, 3)
+        logger.debug(f"[P2-SPICE-UNIT-TSP-FALLBACK] {name_lower!r}: unidad = cucharadita = {g} g (taza {cup} g / 48)")
+        return g
+    except (TypeError, ValueError):
+        return None
+
+
+def convert_amount(qty: float, from_unit: str, to_unit: str, master_item: dict, *, spice_tsp: bool = False) -> Optional[float]:
     """Intenta convertir matemáticamente una cantidad de una unidad a otra usando factores y densidades.
 
     [P1-1 · 2026-05-08] Cuando se requiere conversión cruzada (masa↔volumen o
@@ -779,7 +843,7 @@ def convert_amount(qty: float, from_unit: str, to_unit: str, master_item: dict) 
 
     # 5. Count to Mass or Volume (Estimate). [P1-1] Resolución análoga para g/unidad.
     if from_unit_lower in count_units and to_unit_lower in mass_to_g:
-        g_per_u = _resolve_unit_weight(master_item or {})
+        g_per_u = _resolve_unit_weight(master_item or {}, spice_tsp=spice_tsp)
         if 'rebanada' in from_unit_lower:
             g_per_u = 25.0
         if g_per_u is None:
@@ -790,7 +854,10 @@ def convert_amount(qty: float, from_unit: str, to_unit: str, master_item: dict) 
                 strict = True
             _name = (master_item or {}).get("name") or (master_item or {}).get("slug") or "<unknown>"
             if strict:
-                logger.warning(
+                # [P2-SPICE-STRICT-QUIET · 2026-09-02] Para un condimento, «unidad» sin densidad es lo
+                # ESPERADO en el guard (el fallback de cucharadita es opt-in de la Nevera): va a DEBUG.
+                # Para cualquier otro alimento sigue siendo WARNING (dato del catálogo que falta).
+                (_spice_log_level(_name))(
                     f"[P1-1] convert_amount({qty} {from_unit}→{to_unit}, item={_name!r}) "
                     f"sin density_g_per_unit ni UNIT_WEIGHTS. Strict=True → None."
                 )
@@ -800,7 +867,7 @@ def convert_amount(qty: float, from_unit: str, to_unit: str, master_item: dict) 
         return g / mass_to_g[to_unit_lower]
 
     if from_unit_lower in mass_to_g and to_unit_lower in count_units:
-        g_per_u = _resolve_unit_weight(master_item or {})
+        g_per_u = _resolve_unit_weight(master_item or {}, spice_tsp=spice_tsp)
         if 'rebanada' in to_unit_lower:
             g_per_u = 25.0
         if g_per_u is None:
@@ -811,7 +878,10 @@ def convert_amount(qty: float, from_unit: str, to_unit: str, master_item: dict) 
                 strict = True
             _name = (master_item or {}).get("name") or (master_item or {}).get("slug") or "<unknown>"
             if strict:
-                logger.warning(
+                # [P2-SPICE-STRICT-QUIET · 2026-09-02] Para un condimento, «unidad» sin densidad es lo
+                # ESPERADO en el guard (el fallback de cucharadita es opt-in de la Nevera): va a DEBUG.
+                # Para cualquier otro alimento sigue siendo WARNING (dato del catálogo que falta).
+                (_spice_log_level(_name))(
                     f"[P1-1] convert_amount({qty} {from_unit}→{to_unit}, item={_name!r}) "
                     f"sin density_g_per_unit ni UNIT_WEIGHTS. Strict=True → None."
                 )
@@ -1413,6 +1483,13 @@ def add_or_update_inventory_item(user_id: str, ingredient_name: str, quantity: f
         master_item = next((m for m in master_list if m["name"] == ingredient_name), {})
         master_id_raw = master_item.get("id", None) if master_item else None
         master_id = str(master_id_raw) if master_id_raw is not None else None
+        # [P1-URGENT-LIST-CANONICAL · 2026-08-09] La categoría viaja al INSERT: las 49 filas
+        # del restock del owner nacieron con category NULL → getZoneForCategory(null)='pantry'
+        # → TODAS caían en la pestaña Alacena mientras el header contaba 49 y la pestaña
+        # Nevera decía «vacía». Con la categoría del master (ya resuelto aquí mismo), cada
+        # ítem nace en su zona real (Frutas→gaveta, Lácteos→estante, Despensa→alacena).
+        master_category = (str(master_item.get("category")).strip()
+                           if master_item and master_item.get("category") else None)
 
         updated = False
 
@@ -1423,7 +1500,7 @@ def add_or_update_inventory_item(user_id: str, ingredient_name: str, quantity: f
                 current_qty = float(row["quantity"])
                 current_unit = row["unit"]
 
-                converted_qty = convert_amount(quantity, unit, current_unit, master_item)
+                converted_qty = convert_amount(quantity, unit, current_unit, master_item, spice_tsp=True)  # [P2-SPICE-TSP-DEDUCTION-ONLY]
 
                 # [P2-INVENTORY-CONTAINER-MERGE · 2026-07-12] Fallback de envases
                 # discretos: fusiona '2 unidades' sobre la fila en 'lata' en vez
@@ -1609,13 +1686,14 @@ def add_or_update_inventory_item(user_id: str, ingredient_name: str, quantity: f
                     """
                     INSERT INTO user_inventory
                         (user_id, ingredient_name, quantity, unit,
-                         master_ingredient_id, last_mutation_type, source, brand)
-                    VALUES (%s, %s, %s, %s, %s::uuid, %s, %s, %s)
+                         master_ingredient_id, last_mutation_type, source, brand, category)
+                    VALUES (%s, %s, %s, %s, %s::uuid, %s, %s, %s, %s)
                     ON CONFLICT (user_id, ingredient_name, unit) DO UPDATE
                         SET quantity = user_inventory.quantity + EXCLUDED.quantity,
                             master_ingredient_id = COALESCE(EXCLUDED.master_ingredient_id, user_inventory.master_ingredient_id),
                             last_mutation_type = EXCLUDED.last_mutation_type,
-                            brand = COALESCE(EXCLUDED.brand, user_inventory.brand)
+                            brand = COALESCE(EXCLUDED.brand, user_inventory.brand),
+                            category = COALESCE(EXCLUDED.category, user_inventory.category)
                     """,
                     (
                         user_id,
@@ -1626,6 +1704,7 @@ def add_or_update_inventory_item(user_id: str, ingredient_name: str, quantity: f
                         mutation_type,
                         source,
                         (str(brand).strip() or None) if brand else None,
+                        master_category,
                     ),
                 )
             elif quantity < 0 and existing_rows:

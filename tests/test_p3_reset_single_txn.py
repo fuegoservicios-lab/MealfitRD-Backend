@@ -42,7 +42,13 @@ import pytest
 _BACKEND_ROOT = Path(__file__).resolve().parent.parent
 _DB_PROFILES = (_BACKEND_ROOT / "db_profiles.py").read_text(encoding="utf-8")
 _FRONTEND_ROOT = _BACKEND_ROOT.parent / "frontend"
-_SETTINGS = (_FRONTEND_ROOT / "src" / "pages" / "Settings.jsx").read_text(encoding="utf-8")
+@pytest.fixture(scope="module", autouse=True)
+def _load_frontend_sibling_sources(frontend_repo_path):
+    # La fixture compartida salta el módulo antes de cualquier I/O si falta el hermano.
+    _ = frontend_repo_path
+    global _SETTINGS
+    _SETTINGS = (_FRONTEND_ROOT / "src" / "pages" / "Settings.jsx").read_text(encoding="utf-8")
+
 
 
 # ---------------------------------------------------------------------------
@@ -171,9 +177,17 @@ def _bloque_handler_cero():
 
 
 def test_button_uses_isResetting_for_visual_feedback():
-    """Feedback visual del reset: toast.loading inmediato + guard `isResetting` + busy del modal."""
+    """Feedback visual del reset: toast.loading inmediato + guard `isResetting` + busy del modal.
+
+    [P1-I18N-DASHBOARD · 2026-08-15] Se acepta `toast.loading(t('Borrando…'))`
+    ademas del literal. La propiedad vigilada NO cambio: sigue habiendo un
+    `toast.loading` con el copy «Borrando…» disparado ANTES del await (lo
+    verifica ademas `test_setIsResetting_true_at_start_of_handler`), y la clave
+    de `t()` ES el texto español — en es-DO devuelve exactamente el mismo copy
+    porque no hay catalogo español (fallback). Cambio la grafia, no el aviso.
+    """
     block = _bloque_handler_cero()
-    assert "toast.loading('Borrando" in block, (
+    assert re.search(r"toast\.loading\(\s*(?:t\(\s*)?['\"]Borrando", block), (
         "El handler ya no muestra `toast.loading('Borrando...')` — sin feedback inmediato el "
         "user clickea múltiples veces creyendo que falló."
     )

@@ -141,7 +141,35 @@ _INTERPOLATIONS_REQUIRING_ESCAPE = [
 ]
 
 
+def _interpolaciones_con(cuerpo: str, var_name: str) -> list:
+    """Contenido de cada `${...}` del cuerpo que menciona `var_name`.
+
+    Cuenta llaves para cerrar bien: una interpolacion puede llevar objetos o ternarios
+    dentro, y un `.index('}')` ingenuo cortaria por el primero y daria por escapado algo
+    que no lo esta.
+    """
+    fuera = []
+    i = 0
+    while True:
+        i = cuerpo.find("${", i)
+        if i == -1:
+            return fuera
+        j, prof = i + 2, 1
+        while j < len(cuerpo) and prof:
+            if cuerpo[j] == "{":
+                prof += 1
+            elif cuerpo[j] == "}":
+                prof -= 1
+            j += 1
+        dentro = cuerpo[i + 2:j - 1]
+        if var_name in dentro:
+            fuera.append(dentro)
+        i = j
+
+
 @pytest.mark.parametrize("var_name", _INTERPOLATIONS_REQUIRING_ESCAPE)
+
+
 def test_interpolation_uses_escape_html(fn_body: str, var_name: str):
     """Cada `${meal.xxx}` interpolación de variable proveniente del LLM debe
     estar envuelta en `escapeHtml(...)`."""
@@ -163,9 +191,51 @@ def test_interpolation_uses_escape_html(fn_body: str, var_name: str):
         f"`<script>` que ejecute en el iframe de html2canvas. Envolver: "
         f"`${{escapeHtml({var_name})}}`. Matches: {raw_matches}"
     )
-    assert escaped_re.search(fn_body), (
-        f"P2-AUDIT-2 regresión: `${{escapeHtml({var_name})}}` no encontrado "
-        f"en `generateRecipeHTML`. Aplicar escapeHtml a la interpolación."
+    # [P1-RECIPES-SLOT-I18N · 2026-08-20] La asercion positiva exigia `escapeHtml(<var>`
+    # LITERALMENTE pegado, y se rompio cuando el slot paso a traducirse:
+    # `${escapeHtml(mealSlotLabel(meal.meal, t))}`. El valor SIGUE escapado --escapeHtml
+    # es la llamada mas externa-- pero el patron no lo veia.
+    #
+    # Se re-expresa MAS ESTRICTO, no mas laxo. El par de antes (prohibir la forma cruda +
+    # exigir una aparicion literal) dejaba pasar `${foo(meal.meal)}`: `raw_re` no casaba
+    # por los parentesis y `escaped_re` se daba por satisfecho con OTRA aparicion en
+    # cualquier parte del cuerpo. Ahora se exige que TODA interpolacion que contenga la
+    # variable empiece por `escapeHtml(` -- que es la propiedad que de verdad protege:
+    # da igual cuantas transformaciones haya dentro mientras el escape sea la ultima.
+    interpolaciones = _interpolaciones_con(fn_body, var_name)
+    assert interpolaciones, (
+        f"P2-AUDIT-2 regresión: `{var_name}` ya no aparece interpolado en "
+        f"`generateRecipeHTML`. Si el campo dejo de pintarse, quita el caso del "
+        f"parametrize; si se renombro, actualizalo aqui."
+    )
+    # Se acepta la interpolacion si `escapeHtml` es la llamada MAS EXTERNA (el caso
+    # normal) o si el escape aparece dentro aplicado A ESTA variable (el caso del
+    # ternario: `${meal.desc ? `...${escapeHtml(meal.desc)}...` : '...'}`, donde la
+    # mencion de fuera es una PRUEBA DE VERDAD y no una salida).
+    #
+    # Distinguir «contiene la variable» de «emite la variable» es justo lo que le
+    # faltaba a la primera version de este guard, que marcaba ese ternario como agujero
+    # cuando el valor si estaba escapado. Un guard que grita en un caso correcto se acaba
+    # apagando -- y con el se iria la deteccion del caso que si importa.
+    # LIMITE CONOCIDO, dicho a proposito: esta segunda via tambien acepta
+    # `${otraFuncion(escapeHtml(var))}`, donde el escape va DENTRO y se emite la salida
+    # de otra funcion. Hoy es seguro en los call sites reales (el unico envoltorio es
+    # `mealSlotLabel`, que o devuelve su entrada o una cadena del catalogo), pero en
+    # general una funcion podria re-introducir HTML. Distinguirlo pide un parser de JS;
+    # sin el, la eleccion es entre este limite y marcar el ternario correcto de
+    # `meal.desc`. Se prefiere el limite: un guard que grita en un caso bueno se apaga,
+    # y con el se va la deteccion del caso que si importa (M1: escape ausente).
+    def _protegida(interp: str) -> bool:
+        if interp.lstrip().startswith("escapeHtml("):
+            return True
+        return f"escapeHtml({var_name}" in interp.replace(" ", "")
+
+    sin_escapar = [i for i in interpolaciones if not _protegida(i)]
+    assert not sin_escapar, (
+        f"P2-AUDIT-2 regresión: interpolación de `{var_name}` sin `escapeHtml(...)` como "
+        f"llamada MAS EXTERNA. La LLM controla esta variable; un prompt adversarial puede "
+        f"inyectar `<script>` que ejecute en el iframe de html2canvas. "
+        f"Casos: {sin_escapar}"
     )
 
 

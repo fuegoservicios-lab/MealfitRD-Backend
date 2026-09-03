@@ -1,9 +1,9 @@
 """[P1-DAYGEN-TIER-MODEL · 2026-07-31] Generador de días enrutado por TIER.
 
 Decisión del owner tras el A/B medido con el índice de calidad (2026-07-31):
-"deepseek medium dura mucho, el ganador es gpt 5.6 luna medium; agrega el 5.6
+"glm medium dura mucho, el ganador es gpt 5.6 luna medium; agrega el 5.6
 medium en las cuentas plus nadamás por ahora y agrega el low o sin pensamiento
-en las cuentas gratis; deja a deepseek en lugares donde no sea necesario luna".
+en las cuentas gratis; deja a glm en lugares donde no sea necesario luna".
 
 Números que sostienen la decisión (índice 0-100, cuenta real):
   · luna-medium 95,4 (coherencia 90)  vs  flash base 82-92 (coherencia 57-83)
@@ -81,9 +81,9 @@ def test_sin_contexto_cae_a_free(_clean, monkeypatch):
 # ---------------------------------------------------------------- B. knobs
 def test_knobs_per_tier_ganan(_clean, monkeypatch):
     _set_tier(monkeypatch, "plus")
-    monkeypatch.setenv("MEALFIT_DAYGEN_MODEL_PLUS", "deepseek-v4-flash")
+    monkeypatch.setenv("MEALFIT_DAYGEN_MODEL_PLUS", "glm-5.3-flash")
     monkeypatch.setenv("MEALFIT_DAYGEN_EFFORT_PLUS", "none")
-    assert go._daygen_tier_profile() == ("deepseek-v4-flash", "none")
+    assert go._daygen_tier_profile() == ("glm-5.3-flash", "none")
 
 
 def test_effort_invalido_cae_al_default_del_tier(_clean, monkeypatch):
@@ -108,7 +108,7 @@ def test_cadena_pone_tier_delante_y_flash_de_red(_clean, monkeypatch):
     monkeypatch.setattr(go, "DAYGEN_CANARY_PCT", 0)
     ch = go._day_model_chain(_NON, 1)
     assert ch[0] == "gpt-5.6-luna", "el primario del tier va DELANTE"
-    assert "deepseek-v4-flash" in ch[1:], "flash DEBE quedar de red"
+    assert "glm-5.3-flash" in ch[1:], "flash DEBE quedar de red"
 
 
 def test_cadena_sin_key_es_la_base(_clean, monkeypatch):
@@ -141,4 +141,18 @@ def test_effort_del_tier_solo_al_primario():
 
 # ---------------------------------------------------------------- F. marker
 def test_marker_bumpeado():
-    assert re.search(r'_LAST_KNOWN_PFIX = "P1-DAYGEN-TIER-MODEL', _APP_SRC)
+    """[reparado P1-OAUTH-CHALLENGE-COOKIE · 2026-08-10] Antes exigía que el
+    marker fuera LITERALMENTE `P1-DAYGEN-TIER-MODEL`, o sea que este P-fix fuera
+    el último del repo para siempre. Se rompía en el siguiente bump y llevaba
+    tiempo en rojo sin que dijera nada útil — un guard que solo puede estar
+    verde el día que se escribe no vigila, estorba.
+
+    Lo que quería comprobar es que el marker exista y no sea ANTERIOR a este
+    P-fix (2026-07-31). Eso sí sobrevive a los bumps posteriores."""
+    m = re.search(r'_LAST_KNOWN_PFIX\s*=\s*"([^"]+)"', _APP_SRC)
+    assert m, "falta _LAST_KNOWN_PFIX en app.py"
+    fecha = re.search(r"(\d{4}-\d{2}-\d{2})", m.group(1))
+    assert fecha, f"el marker no lleva fecha legible: {m.group(1)!r}"
+    assert fecha.group(1) >= "2026-07-31", (
+        f"marker anterior a este P-fix: {m.group(1)!r}"
+    )

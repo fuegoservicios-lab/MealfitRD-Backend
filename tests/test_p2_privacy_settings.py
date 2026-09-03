@@ -90,17 +90,41 @@ def test_export_payload_hygiene():
 
 
 def test_marker_bumped():
+    """[reparado P1-OAUTH-CHALLENGE-COOKIE · 2026-08-10] Antes exigía la subcadena
+    literal «2026-07» en el marker, así que caducó al llegar agosto y llevaba en
+    rojo desde entonces. Un mes es una subcadena, no una comparación: lo que
+    quería decir era «no anterior a este P-fix»."""
     src = _read(_APP)
     m = re.search(r'_LAST_KNOWN_PFIX\s*=\s*"([^"]+)"', src)
     assert m, "No se encontró _LAST_KNOWN_PFIX."
-    assert "2026-07" in m.group(1), f"Marker sospechosamente viejo: {m.group(1)!r}"
+    fecha = re.search(r"(\d{4}-\d{2}-\d{2})", m.group(1))
+    assert fecha, f"el marker no lleva fecha legible: {m.group(1)!r}"
+    assert fecha.group(1) >= "2026-07-04", f"Marker sospechosamente viejo: {m.group(1)!r}"
 
 
 def test_frontend_privacy_section_wired():
     src = _read(_SETTINGS)
     assert "'privacy'" in src, "Falta 'privacy' en SECTION_IDS / sectionsConfig."
-    assert re.search(r"label:\s*'Privacidad'", src), (
-        "Falta la entry 'Privacidad' en sectionsConfig (nav de Settings)."
+    # [P1-I18N-DASHBOARD · 2026-08-15] `label: 'Privacidad'` pasó a
+    # `label: t('Privacidad')`. La PROPIEDAD vigilada —«la fila de Privacidad
+    # existe en el nav de Settings, rotulada»— no cambió: en es-DO `t()` no
+    # tiene catálogo y devuelve el mismo español, así que la pantalla se lee
+    # igual que ayer. Cambió la GRAFÍA del valor, no el cableado.
+    #
+    # Se acepta el literal Y la forma envuelta, y de paso se APRIETA: antes
+    # bastaba con que la subcadena `label: 'Privacidad'` apareciera en
+    # CUALQUIER punto del fichero (un título suelto la habría satisfecho con la
+    # fila del nav borrada). Ahora el rótulo tiene que estar dentro del MISMO
+    # objeto que declara `id: 'privacy'`.
+    fila = re.search(r"\{[^{}]*id:\s*'privacy'[^{}]*\}", src)
+    assert fila, (
+        "Falta la entry con `id: 'privacy'` en sectionsConfig (nav de Settings)."
+    )
+    assert re.search(
+        r"label:\s*(?:'Privacidad'|t\(\s*'Privacidad'\s*\))", fila.group(0)
+    ), (
+        "La entry `id: 'privacy'` de sectionsConfig perdió su rótulo "
+        f"'Privacidad' (ni literal ni via t()): {fila.group(0)[:160]!r}"
     )
     assert "activeSection === 'privacy'" in src, (
         "Falta el render condicional de la sección Privacidad."
@@ -123,6 +147,25 @@ def test_frontend_analytics_opt_out_real():
         "toggle de Privacidad sería un ajuste falso."
     )
     settings = _read(_SETTINGS)
-    assert "ANALYTICS_OPT_OUT_KEY" in settings and "handleToggleAnalytics" in settings, (
+    # [P1-LANDING-OBS-PAPER · 2026-08-14] Esta aserción exigía ver
+    # `ANALYTICS_OPT_OUT_KEY` DENTRO de Settings.jsx, o sea que la pantalla
+    # escribiera la clave a pelo. Estaba atada al CÓMO, y el cómo era el bug:
+    # `localStorage` es por ORIGEN, así que el opt-out escrito aquí (app.*) era
+    # invisible para el landing (apex) y el usuario seguía siendo rastreado
+    # después de apagarlo. Ahora se escribe por `persistAnalyticsOptOut`, que
+    # deja coherentes los dos soportes (localStorage + cookie de dominio).
+    #
+    # Reescrita al QUÉ —«el toggle persiste el opt-out de verdad»— y además
+    # endurecida: prohíbe explícitamente volver a la escritura cruda, que es la
+    # regresión concreta a evitar.
+    assert "handleToggleAnalytics" in settings, (
         "Falta el toggle de analytics en la sección Privacidad."
+    )
+    assert "persistAnalyticsOptOut" in settings, (
+        "El toggle debe persistir por `persistAnalyticsOptOut` (SSOT). Escribir "
+        "sólo `localStorage` deja el opt-out invisible para el apex, que es otro "
+        "origen — el usuario lo apaga y el landing lo sigue rastreando."
+    )
+    assert not re.search(r"safeLocalStorageSet\(\s*ANALYTICS_OPT_OUT_KEY", settings), (
+        "Volvió la escritura cruda de la clave del opt-out en Settings.jsx."
     )

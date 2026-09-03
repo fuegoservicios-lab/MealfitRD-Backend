@@ -4,14 +4,16 @@ Endpoints de la base de datos `supermarket_products` (Neon): el "supermercado
 dominicano" de Bioboros. Cada fila es UNA presentación comprable de un alimento
 verificado (alimento + marca opcional + presentación + porción + duración +
 precio RD$). Se navega públicamente desde el landing (/supermercado) y se edita
-desde la misma página con el gate admin (Bearer CRON_SECRET).
+desde la misma página con un gate admin PROPIO (Bearer SUPERMARKET_ADMIN_TOKEN;
+ver `_verify_supermarket_token` y P2-SUPERMARKET-TOKEN-SPLIT — antes era el
+CRON_SECRET, el mismo secreto que abre `purge-data` sobre 33 tablas).
 
 Contrato:
 - GET  /api/supermarket/products      → público, read-only, RateLimiter per-IP
   (60/60s). Solo filas `active` salvo `include_inactive=1` con token admin.
   NO usa `verify_api_quota` (cero costo LLM, página pública de marketing —
   misma razón que la historial-quota-exemption de CLAUDE.md).
-- POST /api/supermarket/products      → admin (`_verify_admin_token`).
+- POST /api/supermarket/products      → admin (`_verify_supermarket_token`).
 - PATCH /api/supermarket/products/{id}  → admin.
 - DELETE /api/supermarket/products/{id} → admin (hard delete; para "ocultar"
   preferir PATCH active=false).
@@ -23,6 +25,7 @@ Tipos para JSON: uuid→::text, numeric→::float8, timestamptz→to_jsonb(...)#
 """
 
 import asyncio
+import hmac
 import logging
 import os
 import threading
@@ -30,12 +33,13 @@ import time
 from typing import Any, Dict, List, Optional
 
 from fastapi import APIRouter, Depends, HTTPException, Request
+from fastapi.responses import JSONResponse
 from pydantic import BaseModel, Field
 
 from auth import get_verified_user_id
 from db import execute_sql_query, execute_sql_write
 from rate_limiter import RateLimiter
-from routers.plans import _check_admin_rate_limit, _verify_admin_token
+from routers.plans import _check_admin_rate_limit
 
 logger = logging.getLogger(__name__)
 
@@ -79,8 +83,77 @@ def _catalog_cache_ttl_s() -> int:
     return max(0, min(3600, v))
 
 
-_CATALOG_CACHE: Dict[str, Any] = {"at": 0.0, "rows": None, "master": None}
+# [P2-BACKEND-SUPERMARKET-CACHE · 2026-08-14] `gen` es un contador de generacion.
+#
+# EL DEFECTO QUE CIERRA. Los tres handlers admin invalidan la cache ANTES de
+# ejecutar la escritura:  `_invalidate_catalog_cache()` … `await
+# asyncio.to_thread(_insert)`. Ese `await` es un punto de cesion GARANTIZADO, asi
+# que `/match` puede correr entera en medio: encuentra la cache vacia, relee las
+# filas PRE-escritura y las repuebla con `at = time.time()` fresco. Resultado:
+# hasta 5 minutos (el TTL) de precios obsoletos alimentando el costeo de marca
+# del Dashboard y de la Nevera, justo despues de que un admin los corrigiera.
+#
+# ⚠️ Mover la invalidacion a DESPUES de la escritura NO cierra la carrera: deja
+# exactamente la misma ventana, solo que desplazada. Lo que la cierra es que el
+# rellenador compruebe si la generacion cambio mientras el leia; si cambio, tira
+# lo que trajo en vez de publicarlo.
+_CATALOG_CACHE: Dict[str, Any] = {
+    "at": 0.0, "rows": None, "master": None, "gen": 0,
+    # [P2-SUPERMARKET-LIST-CACHE] Ranura del LISTADO: otro juego de columnas.
+    "list_rows": None, "list_at": 0.0,
+}
 _CATALOG_LOCK = threading.Lock()
+
+
+def _verify_supermarket_token(authorization: Optional[str]) -> None:
+    """[P2-SUPERMARKET-TOKEN-SPLIT · 2026-08-14] Gate PROPIO del catálogo.
+
+    POR QUÉ NO SE REUTILIZA `_verify_admin_token`. `/supermercado` es una página
+    PÚBLICA del apex con un editor dentro: el admin teclea un token en un
+    formulario y edita precios. Ese token era `CRON_SECRET`, el mismo que abre
+    TODOS los `/admin/*` — incluido `POST /api/system/admin/account/purge-data`,
+    que borra las 33 tablas de un `user_id` arbitrario del body.
+
+    No había vector explotable (cero sinks XSS en la superficie pública,
+    comparación constant-time, 60 intentos/min), así que esto no cierra un agujero
+    abierto: acota el RADIO DE DAÑO y desacopla la ROTACIÓN. Antes, rotar el
+    secreto del catálogo obligaba a rotar el de los crons y viceversa.
+
+    ⚠️ EL PRECIO, aceptado a sabiendas: ahora son DOS secretos que rotar. Está
+    escrito también en la fila de CLAUDE.md.
+
+    COMPATIBILIDAD DURANTE EL ROLLOUT, que no es opcional: mientras
+    `SUPERMARKET_ADMIN_TOKEN` no esté configurada se sigue aceptando
+    `CRON_SECRET`. Si no, el backend nuevo rompería el editor para los navegadores
+    que ya tienen el token viejo en sessionStorage, justo en mitad del despliegue.
+    En cuanto la env var existe, el maestro deja de valer aquí — que es el estado
+    final que se busca.
+    """
+    propio = os.environ.get("SUPERMARKET_ADMIN_TOKEN")
+    maestro = os.environ.get("CRON_SECRET")
+
+    # Fail-secure: sin ningún secreto configurado no se abre, se apaga.
+    aceptados = [s for s in ([propio] if propio else [propio, maestro]) if s]
+    if not aceptados:
+        raise HTTPException(
+            status_code=503,
+            detail="Supermarket admin disabled: SUPERMARKET_ADMIN_TOKEN not configured",
+        )
+    if not authorization or not authorization.startswith("Bearer "):
+        raise HTTPException(status_code=401, detail="Missing or invalid Authorization header")
+    token = authorization.replace("Bearer ", "").strip()
+    # Constant-time, mismo patrón que P1-ADMIN-TOKEN-CONSTTIME: un `!=` plano corta
+    # en el primer byte distinto y filtra el secreto byte a byte por timing.
+    # `any(...)` sobre una lista de 1-2 elementos no reintroduce el canal: el
+    # número de comparaciones no depende del token recibido.
+    if not any(hmac.compare_digest(token, s) for s in aceptados):
+        raise HTTPException(status_code=403, detail="Invalid supermarket admin token")
+
+
+def _catalog_generation() -> int:
+    """La generacion vigente. Se captura ANTES de leer la DB."""
+    with _CATALOG_LOCK:
+        return int(_CATALOG_CACHE.get("gen") or 0)
 
 
 def _invalidate_catalog_cache() -> None:
@@ -90,6 +163,28 @@ def _invalidate_catalog_cache() -> None:
         _CATALOG_CACHE["rows"] = None
         _CATALOG_CACHE["master"] = None
         _CATALOG_CACHE["at"] = 0.0
+        # [P2-SUPERMARKET-LIST-CACHE 2026-08-14] La ranura del listado se limpia
+        # aqui tambien. Olvidarla dejaria al admin editando un precio y viendo el
+        # viejo en la grilla hasta el TTL -- justo el bug que la invalidacion
+        # explicita existe para evitar, reintroducido por una ranura nueva.
+        _CATALOG_CACHE["list_rows"] = None
+        _CATALOG_CACHE["list_at"] = 0.0
+        _CATALOG_CACHE["gen"] = int(_CATALOG_CACHE.get("gen") or 0) + 1
+
+
+def _publish_catalog_cache(rows, master_rows, gen_al_empezar: int) -> bool:
+    """Publica el relleno SOLO si nadie invalido mientras se leia la DB.
+
+    Devuelve False cuando descarta: quien lea eso sabra que su lectura era de
+    antes de una escritura y que la siguiente peticion volvera a la DB.
+    """
+    with _CATALOG_LOCK:
+        if int(_CATALOG_CACHE.get("gen") or 0) != gen_al_empezar:
+            return False
+        _CATALOG_CACHE["rows"] = rows
+        _CATALOG_CACHE["master"] = master_rows
+        _CATALOG_CACHE["at"] = time.time()
+        return True
 
 
 _MAX_LIMIT = 1000
@@ -161,12 +256,148 @@ class SupermarketProductPatch(BaseModel):
     active: Optional[bool] = None
 
 
+# [P2-SUPERMARKET-LIST-CACHE · 2026-08-14] Columnas del LISTADO.
+#
+# Igual que `_SELECT_COLS` menos `created_at`/`updated_at`, que no tiene un solo
+# consumidor: verificado con grep sobre `SupermarketPage.jsx` y `SupermarketBrands.jsx`.
+#
+# ⚠️ NO se recortan `notes` ni `description` aunque no se pinten en la grilla: el
+# formulario de EDICION los lee de la misma fila, asi que quitarlos dejaria al
+# admin editando campos vacios sin un solo error. (El plan de auditoria proponia
+# recortarlos; el grep lo desmintio.) `category`, `brand` e `image_url` tampoco:
+# la pagina deriva de ellos las facetas del filtro.
+_LIST_COLS = """
+    id::text AS id,
+    food_name,
+    brand,
+    presentation,
+    portion_label,
+    duration_label,
+    price_rd::float8 AS price_rd,
+    size_grams::float8 AS size_grams,
+    notes,
+    category,
+    master_food_name,
+    image_url,
+    description,
+    is_verified,
+    active
+"""
+
+
+def _cached_active_rows() -> Optional[List[Dict[str, Any]]]:
+    """Las filas ACTIVAS del catalogo para el LISTADO, o `None` si esta fria.
+
+    POR QUE EXISTE. `_CATALOG_CACHE` la introdujo P1-SUPERMARKET-CATALOG-CACHE y
+    sólo la consultaba `/match`. El listado -- la unica API de datos del landing, y
+    la que dispara un visitante anonimo al abrir /supermercado -- nunca la miró.
+    Medido contra produccion el 2026-08-14: 1.739 filas, 905 KB crudos en dos
+    peticiones serializadas por visita, con TRES consultas cada una (SELECT +
+    count + GROUP BY) = seis por visita, de las cuales el count y el group-by
+    devuelven siempre lo mismo.
+
+    ⚠️ RANURA PROPIA (`list_rows`), NO la de `/match`. Es el detalle que casi se
+    me escapa: `/match` cachea un SELECT MAS ESTRECHO (sin `notes`,
+    `master_food_name`, `image_url`, `description`, `active`, `portion_label` ni
+    `duration_label`). Servir esas filas al listado habria dejado la pagina sin la
+    mitad de los campos SIN UN SOLO ERROR -- las tarjetas a medio pintar y el
+    formulario de edicion con campos vacios. Dos consumidores con dos formas
+    distintas necesitan dos ranuras, aunque el dato de origen sea el mismo.
+
+    Comparte `gen` con la otra, asi que una mutacion admin las invalida a las dos.
+    """
+    ttl = _catalog_cache_ttl_s()
+    if ttl <= 0:
+        return None
+    with _CATALOG_LOCK:
+        rows = _CATALOG_CACHE.get("list_rows")
+        fresca = (
+            rows is not None
+            and (time.time() - float(_CATALOG_CACHE.get("list_at") or 0)) < ttl
+        )
+        return list(rows) if fresca else None
+
+
+def _publish_list_rows(rows, gen_al_empezar: int) -> bool:
+    """Publica el listado cacheado si nadie invalido mientras se leia la DB.
+
+    Mismo contrato que `_publish_catalog_cache`: el contador de generacion es lo
+    unico que cierra la ventana entre `_invalidate_catalog_cache()` y el `await`
+    de la escritura que la motiva.
+    """
+    with _CATALOG_LOCK:
+        if int(_CATALOG_CACHE.get("gen") or 0) != gen_al_empezar:
+            return False
+        _CATALOG_CACHE["list_rows"] = rows
+        _CATALOG_CACHE["list_at"] = time.time()
+        return True
+
+
 def _clean(value: Optional[str]) -> Optional[str]:
     """Trimea y colapsa strings vacíos a NULL (evita '' vs NULL en el unique index)."""
     if value is None:
         return None
     value = value.strip()
     return value or None
+
+
+def _fetch_todas_activas() -> List[Dict[str, Any]]:
+    """Todas las filas ACTIVAS, sin paginar. La fuente de la cache del listado.
+
+    Una sola consulta: el total es `len(rows)` y las categorias se derivan de las
+    mismas filas, asi que sustituye a las TRES que hacia `_fetch` (SELECT +
+    count(*) + GROUP BY). Sin `LIMIT` a proposito -- cachear una pagina y llamarla
+    catalogo es exactamente el bug que este helper existe para no repetir.
+    """
+    return execute_sql_query(
+        f"""
+        SELECT {_LIST_COLS}
+        FROM public.supermarket_products
+        WHERE active
+        ORDER BY category NULLS LAST, lower(food_name), lower(coalesce(brand,'')), lower(coalesce(presentation,''))
+        """,
+        (),
+        fetch_all=True,
+    ) or []
+
+
+def _paginar(rows: List[Dict[str, Any]], limit: int, offset: int) -> List[Dict[str, Any]]:
+    return rows[offset: offset + limit]
+
+
+def _categorias_de(rows: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
+    """Las facetas del filtro, derivadas de las filas ya en memoria.
+
+    Sustituye al `GROUP BY category` -- una de las tres consultas por peticion --
+    cuando el listado se sirve de cache. El orden replica el `ORDER BY category`
+    del SQL para que la barra de filtros no baile entre una respuesta cacheada y
+    una fresca.
+    """
+    conteo: Dict[str, int] = {}
+    for r in rows:
+        c = r.get("category")
+        if c:
+            conteo[c] = conteo.get(c, 0) + 1
+    return [{"category": c, "n": float(n)} for c, n in sorted(conteo.items())]
+
+
+def _respuesta_listado(products, total, categories, *, publico: bool) -> JSONResponse:
+    """[P2-SUPERMARKET-LIST-CACHE · 2026-08-14] La respuesta, con su Cache-Control.
+
+    El catalogo cambia cuando un admin lo edita, o sea casi nunca: 5 minutos en el
+    navegador ahorran re-descargar ~900 KB a quien navega dentro de /supermercado.
+
+    ⚠️ Y `no-store` en modo edicion, que no es simetria decorativa: cachear la
+    vista del admin en SU navegador le escondería su propia escritura -- el mismo
+    bug que la invalidacion del servidor existe para evitar, un piso más arriba.
+    """
+    cabeceras = {
+        "Cache-Control": "public, max-age=300" if publico else "no-store",
+    }
+    return JSONResponse(
+        content={"products": products, "total": total, "categories": categories},
+        headers=cabeceras,
+    )
 
 
 @router.get("/products")
@@ -182,7 +413,7 @@ async def api_supermarket_list(
     """Listado público del supermercado. `include_inactive=1` requiere token admin
     (los productos ocultos solo son visibles en modo edición)."""
     if include_inactive:
-        _verify_admin_token(request.headers.get("authorization"))
+        _verify_supermarket_token(request.headers.get("authorization"))
 
     limit = max(1, min(int(limit), _MAX_LIMIT))
     offset = max(0, int(offset))
@@ -204,7 +435,7 @@ async def api_supermarket_list(
     def _fetch() -> Dict[str, Any]:
         rows = execute_sql_query(
             f"""
-            SELECT {_SELECT_COLS}
+            SELECT {_LIST_COLS}
             FROM public.supermarket_products
             {where_sql}
             ORDER BY category NULLS LAST, lower(food_name), lower(coalesce(brand,'')), lower(coalesce(presentation,''))
@@ -234,11 +465,59 @@ async def api_supermarket_list(
             "categories": cats or [],
         }
 
+    # [P2-SUPERMARKET-LIST-CACHE · 2026-08-14] El caso COMUN se sirve de memoria.
+    #
+    # "Comun" es: sin busqueda, sin filtro de categoria y sin modo edicion. Es lo
+    # que pide un visitante anonimo al abrir /supermercado, o sea la inmensa
+    # mayoria del trafico de este endpoint. Filtrar y paginar 1.739 filas en Python
+    # cuesta microsegundos; las tres consultas que evita costaban 236-382 ms de DB.
+    #
+    # Los otros casos van a la DB a proposito: cachear cada combinacion de busqueda
+    # seria cachear ruido, y el modo edicion DEBE ver lo que el admin acaba de
+    # escribir (es la razon por la que las mutaciones invalidan explicitamente).
+    es_caso_comun = not include_inactive and not _clean(q) and not _clean(category)
+
+    if es_caso_comun:
+        cacheadas = _cached_active_rows()
+        if cacheadas is None:
+            # Cache fria: se trae el catalogo ENTERO de una vez y se cachea.
+            #
+            # ⚠️ NO se reutiliza el `_fetch` paginado, y esta es la leccion cara de
+            # este P-fix: la primera version cacheaba el resultado de `_fetch`
+            # cuando `limit >= _MAX_LIMIT`. Parecia razonable -- "pidio el maximo,
+            # luego lo tiene todo" -- y es FALSO: `_MAX_LIMIT` son 1000 y el
+            # catalogo tiene 1.739 filas. La cache quedo con 1.000 y sirviendo
+            # `total: 1000`, o sea un supermercado TRUNCADO, y encima con pinta de
+            # funcionar. Se detecto midiendo el payload en produccion.
+            #
+            # La condicion honesta no es "pidio mucho" sino "esto es todo": una
+            # consulta SIN limite. De paso ahorra las otras dos (el `count(*)` es
+            # `len(rows)` y las categorias salen de las mismas filas).
+            try:
+                todas = await asyncio.to_thread(_fetch_todas_activas)
+            except Exception as exc:
+                logger.error(f"❌ [P2-SUPERMARKET-LIST-CACHE] carga completa falló: {exc}")
+                raise HTTPException(status_code=500, detail="No se pudo cargar el supermercado.")
+            _publish_list_rows(todas, _catalog_generation())
+            cacheadas = todas
+        return _respuesta_listado(
+            _paginar(cacheadas, limit, offset), len(cacheadas),
+            _categorias_de(cacheadas), publico=True,
+        )
+
+    # La generacion se captura ANTES de tocar la DB: si un admin escribe mientras
+    # leemos, el relleno se descarta en vez de publicar filas pre-escritura.
+    gen_al_empezar = _catalog_generation()
+
     try:
-        return await asyncio.to_thread(_fetch)
+        datos = await asyncio.to_thread(_fetch)
     except Exception as exc:
         logger.error(f"❌ [P1-SUPERMARKET-DB] list falló: {exc}")
         raise HTTPException(status_code=500, detail="No se pudo cargar el supermercado.")
+
+    return _respuesta_listado(
+        datos["products"], datos["total"], datos["categories"], publico=not include_inactive,
+    )
 
 
 # ── [P1-SUPERMARKET-MATCH · 2026-07-02] lista de compras → variantes del súper ──
@@ -256,6 +535,56 @@ _MATCH_MAX_FOODS_PER_NAME = 4
 
 class SupermarketMatchIn(BaseModel):
     names: List[str] = Field(min_length=1, max_length=_MATCH_MAX_NAMES)
+    # [P1-BETA-PRICE-LEAKS · 2026-08-21] País del usuario, para decidir si los precios en RD$
+    # deben viajar. Este endpoint NO tiene auth (lo consumen la Nevera, el paso «Prepara tu
+    # Nevera» y el selector de marca, también para invitados), así que el país llega en el body.
+    #
+    # POR QUÉ AQUÍ SÍ ES ACEPTABLE UN DATO DEL CLIENTE, cuando el repo insiste en derivar
+    # server-side: esto NO es una frontera de seguridad ni de dinero. Es una decisión de
+    # PRESENTACIÓN — enseñar o no un importe que el usuario no puede usar. Un cliente que mienta
+    # sólo consigue ver u ocultarse precios a sí mismo; no accede a nada ajeno ni cambia su tier
+    # (que es donde P0-BILLING-1 y P0-AGENT-1 exigen server-side). Añadir auth + round-trip de
+    # perfil a un endpoint de 30 llamadas/min sería pagar latencia por una garantía que este dato
+    # no necesita.
+    country: Optional[str] = None
+
+
+def _strip_prices_for_beta_match(payload: Dict[str, Any], country: Optional[str]) -> Dict[str, Any]:
+    """[P1-BETA-PRICE-LEAKS · 2026-08-21] Anula IN-PLACE el precio en RD$ de cada variante cuando
+    el país del usuario no tiene precios nativos. Devuelve `payload` para encadenar.
+
+    EL DEFECTO QUE CIERRA: tres pantallas pintan lo que devuelve este endpoint con «RD$» sin
+    condición alguna —`BrandSelect`, `Pantry` y el paso «Prepara tu Nevera»— y `grep _pricing_mode
+    frontend/src` da exactamente 3 consumidores, los 3 en Dashboard: ninguna de esas tres lo lee.
+    Un usuario español añadía «Pollo» a su Nevera y leía «Pollo Rey · RD$185» en la MISMA sesión
+    en que su PDF le decía «España está en beta — pronto añadiremos los precios nativos de tu
+    súper». Y no es teórico: 21 de 25 y 42 de 48 ítems de los dos planes beta vivos hacen match
+    con SKUs dominicanos.
+
+    Se arregla aquí y no en las tres pantallas por el mismo argumento de CHOKE POINT que justificó
+    `_strip_prices_for_beta_pricing_mode` en el agregador: cubre las tres y las que vengan.
+
+    Se suprime el PRECIO, no la MARCA: elegir marca sigue teniendo sentido si el alimento existe.
+    Decide con el literal SSOT (`pricing_mode_for_country`) — un 2º chequeo `has_native_prices` a
+    mano aquí sería la segunda tabla que P1-DIET-CANON-SSOT ya pagó una vez.
+
+    tooltip-anchor: _strip_prices_for_beta_match (test_p1_beta_price_leaks.py)"""
+    try:
+        from constants import canonicalize_country, pricing_mode_for_country
+        if pricing_mode_for_country(canonicalize_country(country)) is None:
+            return payload
+    except Exception:
+        return payload
+    _matches = (payload or {}).get("matches")
+    if not isinstance(_matches, dict):
+        return payload
+    for _variantes in _matches.values():
+        for _v in (_variantes or []):
+            if isinstance(_v, dict):
+                for _k in ("price", "price_rd"):
+                    if _k in _v:
+                        _v[_k] = None
+    return payload
 
 
 def _norm_food(value: Optional[str]) -> str:
@@ -295,6 +624,11 @@ async def api_supermarket_match(body: SupermarketMatchIn, _rl: Any = Depends(_MA
             else:
                 rows = None
                 master_rows_cached = None
+
+        # [P2-BACKEND-SUPERMARKET-CACHE · 2026-08-14] La generacion se captura AQUI,
+        # antes de tocar la DB. Si una mutacion admin la bumpea mientras leemos, el
+        # relleno se descarta al final en vez de publicar filas pre-escritura.
+        _gen_al_empezar = _catalog_generation()
 
         if rows is None:
             rows = execute_sql_query(
@@ -361,10 +695,16 @@ async def api_supermarket_match(body: SupermarketMatchIn, _rl: Any = Depends(_MA
                 fetch_all=True,
             ) or []
             if _catalog_cache_ttl_s() > 0:
-                with _CATALOG_LOCK:
-                    _CATALOG_CACHE["rows"] = rows
-                    _CATALOG_CACHE["master"] = master_rows
-                    _CATALOG_CACHE["at"] = time.time()
+                # [P2-BACKEND-SUPERMARKET-CACHE · 2026-08-14] Publica SOLO si nadie
+                # invalido mientras leiamos. Si un admin escribio en medio, estas
+                # filas son de antes de su cambio: cachearlas las dejaria vivas
+                # hasta el TTL, que es justo el bug. Descartar cuesta una consulta
+                # mas en la siguiente peticion.
+                if not _publish_catalog_cache(rows, master_rows, _gen_al_empezar):
+                    logger.info(
+                        "[P2-BACKEND-SUPERMARKET-CACHE] relleno descartado: hubo una "
+                        "mutacion admin mientras se leia el catalogo"
+                    )
         for r in master_rows:
             mk, fk = _norm_food(r["master_food_name"]), _norm_food(r["food_name"])
             if mk and mk not in foods and fk in foods:
@@ -413,7 +753,12 @@ async def api_supermarket_match(body: SupermarketMatchIn, _rl: Any = Depends(_MA
             found = _resolve(raw)
             if found:
                 matches[raw] = found
-        return {"matches": matches, "catalog_size": len(rows)}
+        # [P1-BETA-PRICE-LEAKS · 2026-08-21] Último paso antes de devolver: los importes en RD$
+        # no salen hacia un país sin precios nativos. El país se canonicaliza dentro del helper
+        # (`canonicalize_country`), así que un valor basura del cliente cae a 'DO' — el mismo
+        # fail-safe que el resto del sistema.
+        return _strip_prices_for_beta_match(
+            {"matches": matches, "catalog_size": len(rows)}, body.country)
 
     try:
         return await asyncio.to_thread(_match)
@@ -574,7 +919,7 @@ async def api_put_brand_preference(
 @router.post("/products")
 async def api_supermarket_create(request: Request, body: SupermarketProductIn):
     """Crea un producto/variante. Admin only (Bearer CRON_SECRET)."""
-    _verify_admin_token(request.headers.get("authorization"))
+    _verify_supermarket_token(request.headers.get("authorization"))
     _check_admin_rate_limit(request)
 
     # [P1-SUPERMARKET-CATALOG-CACHE · 2026-08-05] El editor vive en la MISMA pagina
@@ -620,7 +965,7 @@ async def api_supermarket_create(request: Request, body: SupermarketProductIn):
 @router.patch("/products/{product_id}")
 async def api_supermarket_update(request: Request, product_id: str, body: SupermarketProductPatch):
     """Actualiza campos de un producto (parcial). Admin only."""
-    _verify_admin_token(request.headers.get("authorization"))
+    _verify_supermarket_token(request.headers.get("authorization"))
     _check_admin_rate_limit(request)
 
     # Solo campos presentes en el payload (exclude_unset) y whitelisted.
@@ -676,7 +1021,7 @@ async def api_supermarket_update(request: Request, product_id: str, body: Superm
 async def api_supermarket_delete(request: Request, product_id: str):
     """Elimina un producto (hard delete). Admin only. Para ocultar sin borrar,
     usar PATCH active=false."""
-    _verify_admin_token(request.headers.get("authorization"))
+    _verify_supermarket_token(request.headers.get("authorization"))
     _check_admin_rate_limit(request)
 
     # [P1-SUPERMARKET-CATALOG-CACHE · 2026-08-05] El editor vive en la MISMA pagina

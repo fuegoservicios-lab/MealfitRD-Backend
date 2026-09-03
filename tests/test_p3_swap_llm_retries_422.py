@@ -29,6 +29,8 @@ Fix estructural (opción B, recomendada al owner):
 Cross-link con ``test_p2_hist_audit_14_marker_test_link``: slug
 ``p3_swap_llm_retries_422`` ↔ filename ``test_p3_swap_llm_retries_422.py``.
 """
+
+import pytest
 import pathlib
 import re
 
@@ -38,7 +40,13 @@ FRONTEND_ROOT = BACKEND_ROOT.parent / "frontend"
 AGENT_PY = (BACKEND_ROOT / "agent.py").read_text(encoding="utf-8")
 PLANS_PY = (BACKEND_ROOT / "routers" / "plans.py").read_text(encoding="utf-8")
 APP_PY = (BACKEND_ROOT / "app.py").read_text(encoding="utf-8")
-CONTEXT_JSX = (FRONTEND_ROOT / "src" / "context" / "AssessmentContext.jsx").read_text(encoding="utf-8")
+@pytest.fixture(scope="module", autouse=True)
+def _load_frontend_sibling_sources(frontend_repo_path):
+    # La fixture compartida salta el módulo antes de cualquier I/O si falta el hermano.
+    _ = frontend_repo_path
+    global CONTEXT_JSX
+    CONTEXT_JSX = (FRONTEND_ROOT / "src" / "context" / "AssessmentContext.jsx").read_text(encoding="utf-8")
+
 
 
 # ---------------------------------------------------------------------------

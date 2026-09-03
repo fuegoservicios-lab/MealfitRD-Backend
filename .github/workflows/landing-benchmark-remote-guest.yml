@@ -1,0 +1,145 @@
+# [P2-SUPPLY-CHAIN 2026-08-18] Acciones fijadas por SHA, no por tag.
+#
+# Un tag como `@v4` es un puntero MUTABLE: quien controle el repo de la accion
+# puede moverlo, y tu workflow —que corre con acceso al repo y a los secrets—
+# ejecutaria codigo distinto sin que cambie una linea aqui. Ha pasado de verdad
+# en el ecosistema (tj-actions/changed-files, marzo 2025). Un SHA no se mueve.
+#
+# El comentario `# vN` de cada linea es a que tag apuntaba ese SHA el dia que se
+# fijo. Para actualizarlas: Dependabot abre el PR con el SHA nuevo.
+# [P1-LANDING-BENCH-1 · 2026-08-07] Corrida del benchmark del landing en modo REMOTE
+# (cuenta de invitado) — CERO secrets: el runner llama al API de PRODUCCIÓN como
+# user_id=guest y el servidor genera con sus propias claves (routing por tier: para un
+# guest, day-gen/swap/reviewer corren en gpt-5.6 Luna = OpenAI — P1-DAYGEN-TIER-MODEL /
+# P1-SWAP-LUNA / P1-REVIEWER-TIER-MODELS). El scoring (seguridad clínica + gym 7 ejes)
+# es local al runner con los scorers puros de landing_benchmarks.py.
+#
+# Por qué Actions: un sandbox de desarrollo con egress restringido no alcanza el deploy;
+# el runner sí. Paths ROOT-relative (convención macro-benchmark-nightly.yml).
+#
+# Trigger doble: push del PROPIO archivo en la rama del P-fix (SMOKE automático n=3) +
+# workflow_dispatch manual (default n=20, la matriz completa). Concurrencia 1 y con
+# backoff 429 en el cliente: el /analyze de prod tiene RateLimiter 3/60s per IP.
+name: landing-benchmark-remote-guest
+
+# Permisos MINIMOS. Sin este bloque, el `GITHUB_TOKEN` hereda los del repo, que
+# suelen incluir escritura: un workflow que solo necesita leer codigo podria
+# empujar commits o publicar releases si algo que ejecuta se tuerce.
+permissions:
+  contents: read
+
+on:
+  workflow_dispatch:
+    inputs:
+      n:
+        description: "límite de perfiles (0 = los 20 de la matriz)"
+        default: "20"
+      ids:
+        description: "perfiles específicos, p.ej. '3,4,12,15' (gana sobre n; vacío = usar n)"
+        default: ""
+      changes:
+        description: "ejercitar swap individual vía API (true/false)"
+        default: "true"
+      api_base:
+        description: "URL base del deploy (vacío = auto-descubrir)"
+        default: ""
+  push:
+    branches: [claude/landing-benchmarks-plan-generation-5ujyio]
+    paths:
+      - ".github/workflows/landing-benchmark-remote-guest.yml"
+      - "scripts/landing_benchmark.py"
+
+# [P1-LANDING-BENCH-2] Parámetros del trigger PUSH (editables en este archivo — el
+# dispatch por API no está disponible para la integración de la sesión, 403). El push
+# corre un smoke BARATO por default; para una corrida dirigida (p.ej. solo los perfiles
+# clínicos tras un deploy) editar PUSH_RUN_IDS y pushear.
+env:
+  PUSH_RUN_N: "2"
+  # [2026-08-07] Verificación post-deploy analizada (issue #9): DM2 pasó a entrega LIMPIA
+  # con banda 100, la sal fabricada desapareció de los diagnósticos HTA, cero violaciones
+  # de dieta reportadas — pero 5/8 cayeron por disconnect del endpoint síncrono (el retry
+  # informado alarga el pipeline sobre el proxy_read_timeout). Siguiente: transporte SSE
+  # en el runner. De vuelta a smoke barato.
+  PUSH_RUN_IDS: "4,9,17,19,20"
+  PUSH_RUN_CHANGES: "false"
+
+concurrency:
+  group: landing-benchmark-remote-guest
+  cancel-in-progress: false
+
+jobs:
+  landing-benchmark-remote-guest:
+    runs-on: ubuntu-latest
+    timeout-minutes: 170
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262  # v4
+      - name: Descubrir API base del deploy
+        id: discover
+        run: |
+          BASE="${{ github.event.inputs.api_base }}"
+          if [ -z "$BASE" ]; then
+            for host in https://app.bioboros.com https://mealfitrd.com https://www.mealfitrd.com https://bioboros.com; do
+              code=$(curl -s -o /dev/null -w "%{http_code}" -m 10 "$host/health" || true)
+              echo "  $host/health -> $code"
+              if [ "$code" = "200" ]; then BASE="$host"; break; fi
+            done
+          fi
+          if [ -z "$BASE" ]; then
+            echo "::error::Ningún candidato respondió 200 en /health — no hay deploy alcanzable."
+            {
+              echo "## 🛑 Benchmark remote-guest ABORTADO"
+              echo ""
+              echo "Ningún dominio candidato respondió \`200\` en \`/health\`. Re-lanzar con el"
+              echo "input \`api_base\` apuntando al deploy correcto."
+            } >> "$GITHUB_STEP_SUMMARY"
+            exit 1
+          fi
+          echo "base=$BASE" >> "$GITHUB_OUTPUT"
+          echo "API base: $BASE"
+          # Estado del deploy ANTES de bench: /ready expone si el plan graph compila
+          # (P3-READY-REASON) y /health/version el P-fix vivo — si prod está caído,
+          # el benchmark mediría el outage, no el motor.
+          echo "== /ready ==";          curl -s -m 10 "$BASE/ready" || true; echo ""
+          echo "== /health/version =="; curl -s -m 10 "$BASE/health/version" || true; echo ""
+      - uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065  # v5
+        with:
+          python-version: "3.12"
+      - name: Install backend deps (scorers locales)
+        run: pip install -q -r requirements.txt
+      - name: Benchmark remote (guest) contra el deploy
+        run: |
+          # dispatch → inputs; push → env PUSH_RUN_* (editables arriba).
+          N="${{ github.event.inputs.n || '' }}"; [ -z "$N" ] && N="$PUSH_RUN_N"
+          IDS="${{ github.event.inputs.ids || '' }}"; [ -z "$IDS" ] && IDS="$PUSH_RUN_IDS"
+          CHANGES="${{ github.event.inputs.changes || '' }}"; [ -z "$CHANGES" ] && CHANGES="$PUSH_RUN_CHANGES"
+          EXTRA=""
+          [ "$CHANGES" = "true" ] && EXTRA="--changes"
+          [ -n "$IDS" ] && EXTRA="$EXTRA --ids $IDS"
+          PYTHONPATH=. python scripts/landing_benchmark.py remote "$N" \
+            --api-base "${{ steps.discover.outputs.base }}" \
+            --conc 1 $EXTRA --save-plans \
+            --out landing_benchmark_remote.json | tee run_stdout.txt
+      - name: Resumen al step summary
+        if: always()
+        run: |
+          {
+            echo "## Landing benchmark remote-guest — resumen"
+            echo '```'
+            tail -30 run_stdout.txt 2>/dev/null || echo "(sin stdout — revisar log del paso anterior)"
+            echo '```'
+          } >> "$GITHUB_STEP_SUMMARY"
+          # El JSON al LOG (no solo al artifact): el sandbox que orquesta esto no
+          # alcanza el blob storage de artifacts — el log del job sí es legible vía API.
+          echo "== JSON (primeros 6000 bytes) =="
+          head -c 6000 landing_benchmark_remote.json 2>/dev/null || true
+          echo ""
+      - name: Publicar reporte como artifact
+        if: always()
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02  # v4
+        with:
+          name: landing-benchmark-remote-guest
+          path: |
+            landing_benchmark_remote.json
+            landing_plans_*.json
+          if-no-files-found: warn
+          retention-days: 30

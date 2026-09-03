@@ -267,7 +267,10 @@ def test_deduct_records_one_event_per_outcome():
 
 
 @pytest.mark.parametrize("path,fuente", [
-    ("routers/diary.py", "photo"),
+    # [P1-MANUAL-FOOD-LOG - 2026-08-11] `photo` salio de esta lista: /consumed ya no
+    # llama a deduct directamente. El camino comun `_persist_consumed_meal` (que
+    # comparten la foto y el componedor manual) es quien ata el evento, y lo cubre
+    # `test_shared_persist_ties_and_parametrizes_source` abajo con photo Y manual.
     ("routers/diary.py", "plan_meal"),
     ("tools.py", "chat"),
     ("db_inventory.py", "chunk_reconcile"),
@@ -283,6 +286,24 @@ def test_every_producer_ties_the_event_to_its_meal(path, fuente):
     assert "consumed_meal_id=" in m.group(0), (
         f"el productor `{fuente}` no ata el evento a su fila de consumed_meals"
     )
+
+
+def test_shared_persist_ties_and_parametrizes_source():
+    """[P1-MANUAL-FOOD-LOG - 2026-08-11] El tie al ledger vive UNA vez, en
+    `_persist_consumed_meal`, con `source` parametrizado — y cada caller declara el
+    suyo. Si alguien des-extrae el camino comun o le quita el consumed_meal_id, el
+    revert de "Deshacer registro" vuelve a quedarse sin encontrar el evento."""
+    src = (_BACKEND / "routers/diary.py").read_text(encoding="utf-8")
+    m = re.search(
+        r"deduct_consumed_meal_from_inventory\([\s\S]{0,600}?source=source", src)
+    assert m, "el camino comun no parametriza `source` en la deduccion"
+    assert "consumed_meal_id=" in m.group(0), (
+        "el camino comun no ata el evento a su fila de consumed_meals"
+    )
+    foto = src[src.index("def api_log_consumed_meal("):src.index("def api_log_manual_meal(")]
+    assert 'source="photo"' in foto, "/consumed dejo de declarar su source"
+    manual = src[src.index("def api_log_manual_meal("):src.index("def api_frequent_foods(")]
+    assert 'source="manual"' in manual, "el componedor dejo de declarar su source"
 
 
 # ---------------------------------------------------------------------------

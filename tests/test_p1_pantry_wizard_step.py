@@ -23,6 +23,8 @@ tooltip-anchor: P1-PANTRY-WIZARD-STEP
 """
 from __future__ import annotations
 
+import pytest
+
 import re
 from pathlib import Path
 
@@ -33,9 +35,15 @@ _FLOW = _FRONT / "components" / "assessment" / "InteractiveAssessmentFlow.jsx"
 _QPB = _FRONT / "components" / "assessment" / "questions" / "QPantryBuilder.jsx"
 _QSUP = _FRONT / "components" / "assessment" / "questions" / "QSupplements.jsx"
 
-_FLOW_SRC = _FLOW.read_text(encoding="utf-8")
-_QPB_SRC = _QPB.read_text(encoding="utf-8")
-_QSUP_SRC = _QSUP.read_text(encoding="utf-8")
+@pytest.fixture(scope="module", autouse=True)
+def _load_frontend_sibling_sources(frontend_repo_path):
+    # La fixture compartida salta el módulo antes de cualquier I/O si falta el hermano.
+    _ = frontend_repo_path
+    global _FLOW_SRC, _QPB_SRC, _QSUP_SRC
+    _FLOW_SRC = _FLOW.read_text(encoding="utf-8")
+    _QPB_SRC = _QPB.read_text(encoding="utf-8")
+    _QSUP_SRC = _QSUP.read_text(encoding="utf-8")
+
 
 
 # ---------------------------------------------------------------------------
@@ -58,8 +66,29 @@ def test_supplements_advances_in_pantry_mode():
     assert re.search(r"onFinish=\{isPantryMode \? \(\) => nextStep\(\) : submitAndGenerate\}", _FLOW_SRC), (
         "QSupplements en modo pantry debe avanzar al paso Nevera, no generar"
     )
-    assert "finishLabel={isPantryMode ? 'Siguiente' : undefined}" in _FLOW_SRC
-    assert "finishLabel" in _QSUP_SRC and '(finishLabel || "Finalizar y Generar")' in _QSUP_SRC
+    # [P1-I18N-DASHBOARD · 2026-08-15] Se acepta el literal Y la forma traducida.
+    # Lo que hay que vigilar aquí son DOS propiedades: (1) que el rótulo del CTA
+    # dependa de `isPantryMode` —en modo Nevera el paso AVANZA, así que decir
+    # «Finalizar y Generar» mentiría— y (2) que `QSupplements` conserve su
+    # fallback cuando nadie le pasa `finishLabel`. Ninguna de las dos cambia al
+    # envolver el texto en `t()`; exigir la comilla convertía la traducción del
+    # CTA principal del último paso en un fallo, y no hay forma de traducirlo
+    # conservando esas subcadenas.
+    assert re.search(
+        r"finishLabel=\{isPantryMode \? (?:'Siguiente'|t\('Siguiente'\)) : undefined\}",
+        _FLOW_SRC,
+    ), (
+        "el rótulo del CTA debe seguir dependiendo de `isPantryMode`: en modo "
+        "Nevera ese botón AVANZA de paso, y anunciarlo como «Finalizar y "
+        "Generar» le promete al usuario algo que no va a pasar"
+    )
+    assert "finishLabel" in _QSUP_SRC and re.search(
+        r'\(finishLabel \|\| (?:"Finalizar y Generar"|t\(\'Finalizar y Generar\'\))\)',
+        _QSUP_SRC,
+    ), (
+        "QSupplements perdió el fallback de `finishLabel`: sin él, el flujo "
+        "normal (que no pasa la prop) se queda sin rótulo en el botón final"
+    )
 
 
 def test_single_submit_used_by_both_paths():

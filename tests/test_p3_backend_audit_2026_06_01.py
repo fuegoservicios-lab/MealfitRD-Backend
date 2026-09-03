@@ -86,8 +86,15 @@ def test_telemetry_inserts_no_longer_use_bare_values():
 # 2. P3-HEALTH-LEAK-STRIP
 # ---------------------------------------------------------------------------
 def _plan_graph_health_body(src: str) -> str:
+    # [P2-HEALTH-LIMITER · 2026-08-15] Los paréntesis ya no están vacíos: el
+    # handler recibió `_rl: object = Depends(_HEALTH_LIMITER)`. `.*?` y no `[^)]*`
+    # porque la firma contiene un `)` propio —el de `Depends(...)`— y una clase
+    # negada se corta ahí sin llegar al `):`.
+    #
+    # Lo que este test vigila (que la rama `except` no filtre `type(e)` al cliente)
+    # no cambia; sólo cambió la firma por la que se llega a ella.
     m = re.search(
-        r"def get_plan_graph_health\(\):([\s\S]+?)(?=\n\nclass |\n@router\.)",
+        r"def get_plan_graph_health\(.*?\):([\s\S]+?)(?=\n\nclass |\n@router\.)",
         src,
     )
     assert m is not None, "no se pudo aislar get_plan_graph_health()"

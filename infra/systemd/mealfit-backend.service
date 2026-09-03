@@ -1,0 +1,20 @@
+[Unit]
+Description=MealfitRD FastAPI backend (uvicorn)
+After=network-online.target redis-server.service
+Wants=network-online.target redis-server.service
+
+[Service]
+Type=simple
+User=ubuntu
+Group=ubuntu
+WorkingDirectory=/opt/mealfit/backend
+ExecStart=/home/ubuntu/miniforge3/envs/mealfit/bin/uvicorn app:app --host 127.0.0.1 --port 3001 --workers 1
+Restart=always
+RestartSec=5
+TimeoutStartSec=180
+StandardOutput=journal
+StandardError=journal
+SyslogIdentifier=mealfit-backend
+
+[Install]
+WantedBy=multi-user.target

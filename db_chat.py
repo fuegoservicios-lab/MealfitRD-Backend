@@ -5,8 +5,11 @@ import unicodedata as _uc
 from typing import Optional, List, Dict, Any, Tuple, Union, cast
 import os
 import logging
+import hashlib
+import hmac
+import time
 logger = logging.getLogger(__name__)
-from db_core import _storage_client, connection_pool, execute_sql_query, execute_sql_write
+from db_core import _storage_client, connection_pool, execute_sql_query, execute_sql_write, execute_sql_transaction
 # [P2-CHAT-SAVE-MSG-RETRY · 2026-05-19] Tenacity para retry exponencial
 # en `save_message`. Ya es dep declarada (requirements.txt:11 — tenacity==9.1.4)
 # y usada en todo el repo para retries de DB y LLM transients.
@@ -15,6 +18,7 @@ from tenacity import (
     stop_after_attempt,
     wait_exponential,
     retry_if_exception_type,
+    retry_if_not_exception_type,
     before_sleep_log,
 )
 
@@ -26,8 +30,221 @@ from tenacity import (
 # sobre `created_at` y usan ids como keys de dicts/sets.
 _AGENT_MESSAGE_COLS_SQL = (
     "id::text AS id, session_id::text AS session_id, role, content, "
-    "created_at::text AS created_at, feedback, user_id::text AS user_id"
+    "created_at::text AS created_at, feedback, user_id::text AS user_id, "
+    "attachments, client_message_id::text AS client_message_id"
 )
+
+_last_chat_attachment_cleanup = 0.0
+
+
+def _cleanup_orphan_chat_attachments() -> None:
+    """Best-effort, acotado a 100 blobs y como máximo una vez por hora/proceso."""
+    global _last_chat_attachment_cleanup
+    now = time.monotonic()
+    if now - _last_chat_attachment_cleanup < 3600:
+        return
+    _last_chat_attachment_cleanup = now
+    try:
+        execute_sql_write(
+            """
+            WITH stale AS (
+                SELECT id FROM public.chat_attachments
+                WHERE message_id IS NULL
+                  AND created_at < now() - interval '24 hours'
+                ORDER BY created_at
+                LIMIT 100
+            )
+            DELETE FROM public.chat_attachments attachment
+            USING stale WHERE attachment.id = stale.id
+            """,
+            (),
+        )
+    except Exception as exc:
+        logger.warning("No se pudieron limpiar adjuntos huérfanos del chat: %s", exc)
+
+
+def _chat_attachment_signing_secret() -> Optional[bytes]:
+    value = os.environ.get("MEALFIT_CHAT_ATTACHMENT_SIGNING_SECRET") or os.environ.get("MEALFIT_SESSION_SECRET")
+    if not value or len(value) < 32:
+        return None
+    return value.encode("utf-8")
+
+
+def build_chat_attachment_url(attachment_id: str, ttl_seconds: int = 7 * 24 * 3600) -> str:
+    """URL HMAC temporal. Sin secreto, el endpoint aún acepta la sesión propietaria."""
+    secret = _chat_attachment_signing_secret()
+    base = f"/api/chat/attachments/{attachment_id}"
+    if not secret:
+        return base
+    expires = int(time.time()) + max(60, min(int(ttl_seconds), 30 * 24 * 3600))
+    payload = f"{attachment_id}:{expires}".encode("utf-8")
+    signature = hmac.new(secret, payload, hashlib.sha256).hexdigest()
+    return f"{base}?expires={expires}&sig={signature}"
+
+
+def verify_chat_attachment_signature(attachment_id: str, expires: int, signature: str) -> bool:
+    secret = _chat_attachment_signing_secret()
+    if not secret or not signature or int(expires or 0) < int(time.time()):
+        return False
+    payload = f"{attachment_id}:{int(expires)}".encode("utf-8")
+    expected = hmac.new(secret, payload, hashlib.sha256).hexdigest()
+    return hmac.compare_digest(expected, str(signature))
+
+
+def create_chat_attachment(
+    session_id: str,
+    user_id: str,
+    content: bytes,
+    content_type: str,
+    original_name: Optional[str] = None,
+    width: Optional[int] = None,
+    height: Optional[int] = None,
+) -> Optional[str]:
+    """Persiste media privada del chat. Nunca devuelve el contenido en listados."""
+    if not connection_pool or not session_id or not user_id or not content:
+        return None
+    _cleanup_orphan_chat_attachments()
+    rows = execute_sql_write(
+        """
+        INSERT INTO public.chat_attachments
+            (session_id, user_id, content, content_type, byte_size, original_name, width, height)
+        SELECT %s, %s, %s, %s, %s, %s, %s, %s
+        WHERE EXISTS (
+            SELECT 1 FROM public.agent_sessions
+            WHERE id = %s AND user_id = %s
+        )
+        RETURNING id::text AS id
+        """,
+        (
+            session_id, user_id, content, content_type, len(content),
+            (original_name or "")[:255] or None, width, height,
+            session_id, user_id,
+        ),
+        returning=True,
+    )
+    return str(rows[0]["id"]) if rows else None
+
+
+def get_chat_attachment(attachment_id: str) -> Optional[Dict[str, Any]]:
+    """Obtiene una imagen por id para el endpoint privado; lookup sin SELECT *."""
+    if not connection_pool:
+        return None
+    row = execute_sql_query(
+        """
+        SELECT id::text AS id, session_id::text AS session_id,
+               user_id::text AS user_id, content, content_type, byte_size,
+               original_name, width, height, created_at::text AS created_at
+        FROM public.chat_attachments WHERE id = %s
+        """,
+        (attachment_id,),
+        fetch_one=True,
+    )
+    return cast(Optional[Dict[str, Any]], row)
+
+
+def _owned_attachment_metadata(
+    attachment_ids: List[str], session_id: str, user_id: str,
+    client_message_id: Optional[str] = None,
+) -> List[Dict[str, Any]]:
+    if not attachment_ids:
+        return []
+    rows = execute_sql_query(
+        """
+        SELECT id::text AS attachment_id, original_name AS name, content_type,
+               byte_size, width, height
+        FROM public.chat_attachments
+        WHERE id = ANY(%s::uuid[]) AND session_id = %s AND user_id = %s
+          AND (
+              message_id IS NULL OR message_id = (
+                  SELECT id FROM public.agent_messages
+                  WHERE session_id = %s AND client_message_id = %s
+              )
+          )
+        """,
+        (attachment_ids, session_id, user_id, session_id, client_message_id),
+        fetch_all=True,
+    ) or []
+    by_id = {str(row["attachment_id"]): row for row in rows}
+    return [by_id[attachment_id] for attachment_id in attachment_ids if attachment_id in by_id]
+
+
+@retry(
+    stop=stop_after_attempt(3),
+    wait=wait_exponential(multiplier=0.5, min=0.5, max=4.0),
+    retry=retry_if_not_exception_type(ValueError),
+    before_sleep=before_sleep_log(logger, logging.WARNING),
+    reraise=True,
+)
+def save_message_with_attachments(
+    session_id: str,
+    content: str,
+    user_id: str,
+    attachment_ids: List[str],
+    client_message_id: Optional[str] = None,
+    vision_items: Optional[List[Dict[str, Any]]] = None,
+) -> str:
+    """INSERT idempotente del turno + claim de hasta 4 adjuntos propios."""
+    if not connection_pool:
+        return ""
+    ordered_ids = list(dict.fromkeys(str(value) for value in attachment_ids if value))[:4]
+    metadata = _owned_attachment_metadata(ordered_ids, session_id, user_id, client_message_id)
+    if len(metadata) != len(ordered_ids):
+        raise ValueError("Uno o más adjuntos no pertenecen a esta sesión")
+    contexts = vision_items if isinstance(vision_items, list) else []
+    allowed_kinds = {"plato", "items", "otro", "unavailable"}
+    for index, item in enumerate(metadata):
+        context = contexts[index] if index < len(contexts) and isinstance(contexts[index], dict) else {}
+        kind = str(context.get("kind") or "")
+        if kind in allowed_kinds:
+            item["kind"] = kind
+        description = str(context.get("description") or "").strip()[:1500]
+        if description:
+            item["description"] = description
+        reason = str(context.get("reason") or "")
+        if reason in {"busy", "down"}:
+            item["reason"] = reason
+
+    message_id = str(uuid.uuid4())
+    metadata_json = json.dumps(metadata, ensure_ascii=False)
+    insert_sql = """
+        INSERT INTO public.agent_messages
+            (id, session_id, role, content, user_id, attachments, client_message_id)
+        VALUES (%s, %s, 'user', %s, %s, %s::jsonb, %s)
+        ON CONFLICT (session_id, client_message_id)
+            WHERE client_message_id IS NOT NULL
+        DO NOTHING
+    """
+    claim_sql = """
+        UPDATE public.chat_attachments
+        SET message_id = COALESCE(
+                (SELECT id FROM public.agent_messages
+                 WHERE session_id = %s AND client_message_id = %s),
+                %s::uuid
+            ),
+            claimed_at = COALESCE(claimed_at, now())
+        WHERE id = ANY(%s::uuid[]) AND session_id = %s AND user_id = %s
+          AND message_id IS NULL
+    """
+    execute_sql_transaction([
+        (insert_sql, (message_id, session_id, content, user_id, metadata_json, client_message_id)),
+        (claim_sql, (session_id, client_message_id, message_id, ordered_ids, session_id, user_id)),
+    ])
+
+    try:
+        from proactive_agent import handle_nudge_response
+        handle_nudge_response(user_id, content)
+    except Exception as exc:
+        logger.error(f"Error procesando respuesta al nudge en save_message_with_attachments: {exc}")
+
+    if client_message_id:
+        existing = execute_sql_query(
+            "SELECT id::text AS id FROM public.agent_messages WHERE session_id = %s AND client_message_id = %s",
+            (session_id, client_message_id),
+            fetch_one=True,
+        )
+        if existing:
+            return str(existing["id"])
+    return message_id
 
 def delete_user_agent_sessions(user_id: str) -> bool:
     """Elimina todas las sesiones de agente para un usuario."""
@@ -265,8 +482,23 @@ def _process_and_sort_sessions(sessions: list):
                 title_msgs = [m for m in s_msgs if str(m.get("content", "")).startswith("[SYSTEM_TITLE] ")]
                 user_msgs = [m for m in s_msgs if m.get("role") == "user"]
                 
+                # [P1-I18N-CHAT-TITULOS-SERVIDOR · 2026-08-22] El backend deja de decidir el
+                # TEXTO de los rótulos genéricos y devuelve un DISCRIMINADOR (`title_key`).
+                #
+                # Antes componía «Nuevo Chat» / «Interacción con imagen o sistema» en español
+                # y el cliente los pintaba crudos: con la app en inglés, la barra lateral del
+                # Agente listaba «Nuevo Chat», «Nuevo Chat»… bajo un encabezado de grupo que
+                # SÍ decía «Today». Medido en producción: 171 de 186 sesiones vivas.
+                #
+                # `title` se conserva SÓLO cuando es contenido real —el `[SYSTEM_TITLE]`, que
+                # ya nace en el idioma del usuario vía `build_title_language_directive`, o el
+                # texto que el usuario escribió—. Un rótulo genérico no es contenido: es
+                # interfaz, y la interfaz la traduce el cliente, que es quien sabe el idioma
+                # activo en ese instante (el perfil puede haber cambiado desde el último
+                # mensaje). `title: None` + `title_key` deja esa decisión donde corresponde.
                 if title_msgs:
                     s["title"] = str(title_msgs[0].get("content", "")).replace("[SYSTEM_TITLE] ", "")
+                    s["title_key"] = None
                     s["is_fallback"] = False
                 elif user_msgs:
                     content_str = str(user_msgs[0].get("content", ""))
@@ -283,22 +515,28 @@ def _process_and_sort_sessions(sessions: list):
                         clean_str = re.sub(r'\[El usuario subió una imagen\..+?\]', '', clean_str, flags=re.DOTALL)
                             
                     clean_str = clean_str.strip()
-                    if not clean_str:
-                        clean_str = "Interacción con imagen o sistema"
                         
                     if clean_str:
+                        # Contenido REAL del usuario: viaja tal cual — lo que el usuario
+                        # escribió no se traduce.
                         s["title"] = clean_str[:45] + ("..." if len(clean_str) > 45 else "")
+                        s["title_key"] = None
                     else:
-                        s["title"] = "Nuevo chat"
+                        # Lo que queda tras limpiar los prefijos de sistema no es texto del
+                        # usuario: es «aquí no hubo nada legible», o sea interfaz.
+                        s["title"] = None
+                        s["title_key"] = "image_or_system"
                     # Como no hay SYSTEM_TITLE, es fallback
                     s["is_fallback"] = True
                 else:
-                    s["title"] = "Nuevo Chat"
+                    s["title"] = None
+                    s["title_key"] = "empty"
                     
                 s["last_activity"] = s_msgs[-1].get("created_at", s.get("created_at", ""))
                 valid_sessions.append(s)
             else:
-                s["title"] = "Nuevo Chat"
+                s["title"] = None
+                s["title_key"] = "empty"
                 s["last_activity"] = s.get("created_at", "")
                 valid_sessions.append(s)
                 
@@ -514,6 +752,58 @@ def save_message(
     # pero el caller decide cómo manejar el log. NO usamos `pass` silente:
     # 3 fallos consecutivos a la DB es un incidente real, no transient.
     _save_message_insert_with_retry(session_id, role, content, user_id)
+
+
+def get_model_response_id_for_regeneration(
+    session_id: str,
+    *,
+    message_id: Optional[str] = None,
+    content: Optional[str] = None,
+) -> Optional[str]:
+    """Resuelve exactamente la respuesta del modelo que será regenerada.
+
+    El ``session_id`` ya pasó el control de ownership del router. Se exige
+    además role=model y pertenencia a esa sesión; el fallback por contenido
+    permite regenerar una respuesta recién emitida cuyo id todavía no conoce
+    el cliente. No modifica la fila: la respuesta previa se conserva si falla
+    la generación nueva.
+    """
+    if not connection_pool:
+        return None
+    if message_id:
+        row = execute_sql_query(
+            "SELECT id::text AS id FROM public.agent_messages "
+            "WHERE id = %s AND session_id = %s AND role = 'model'",
+            (message_id, session_id),
+            fetch_one=True,
+        )
+        if row:
+            return str(row["id"])
+    if not content:
+        return None
+    row = execute_sql_query(
+        "SELECT id::text AS id FROM public.agent_messages "
+        "WHERE session_id = %s AND role = 'model' AND content = %s "
+        "ORDER BY created_at DESC, id DESC LIMIT 1",
+        (session_id, content),
+        fetch_one=True,
+    )
+    return str(row["id"]) if row else None
+
+
+def replace_model_response_for_regeneration(
+    session_id: str,
+    message_id: str,
+    content: str,
+) -> bool:
+    """Sustituye la respuesta solo después de generar la nueva con éxito."""
+    rows = execute_sql_write(
+        "UPDATE public.agent_messages SET content = %s, feedback = NULL "
+        "WHERE id = %s AND session_id = %s AND role = 'model' RETURNING id",
+        (content, message_id, session_id),
+        returning=True,
+    )
+    return bool(rows)
 
 def save_message_feedback(session_id: str, content: str, feedback: Optional[str]):
     """Guarda o remueve la retroalimentación (up/down/null) para un mensaje del modelo."""

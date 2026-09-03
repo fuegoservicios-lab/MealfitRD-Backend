@@ -41,7 +41,11 @@ def test_biometrics_live_in_meal_form_block():
     idx_skip = _PLANS.find('"_skip_slot_target_override": True')
     assert idx_bio != -1 and idx_goal != -1 and idx_skip != -1
     # debe estar cerca del bloque del meal_form (goal + skip-flag del mismo dict).
-    assert abs(idx_bio - idx_goal) < 1200 and abs(idx_bio - idx_skip) < 1500
+    # [stale-window fix · P1-COUNTRY-SYSTEM-F1 FINAL-FIX F2b · 2026-08-16] 1500 → 1800: la key
+    # `"country": data.get("country")` (+ su comentario) se insertó entre `_skip_slot_target_
+    # override` y `goal`, en el MISMO dict — corre la distancia skip↔weight sin mover ninguna de
+    # las 3 keys fuera del bloque real (siguen las 3 en el mismo literal `meal_form = {...}`).
+    assert abs(idx_bio - idx_goal) < 1200 and abs(idx_bio - idx_skip) < 1800
 
 
 def test_enrich_helper_still_hydrates_data():

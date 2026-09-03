@@ -26,7 +26,7 @@ _ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 
 def _import_plans_or_skip():
     """routers.plans arrastra llm_provider, que en algunos venvs de test rompe al instanciar el
-    cliente DeepSeek (TypeError: object.__init__). Saltar limpio en ese entorno — la cobertura
+    cliente GLM (TypeError: object.__init__). Saltar limpio en ese entorno — la cobertura
     estructural (parser-based abajo) ancla el contrato igual."""
     try:
         from routers import plans as plans_mod

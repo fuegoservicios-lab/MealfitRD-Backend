@@ -27,7 +27,6 @@ from pathlib import Path
 
 
 _REPO_ROOT = Path(__file__).resolve().parents[2]
-_CHAT_WIDGET = _REPO_ROOT / "frontend" / "src" / "components" / "dashboard" / "ChatWidget.jsx"
 _AGENT_PAGE = _REPO_ROOT / "frontend" / "src" / "pages" / "AgentPage.jsx"
 _HELPER = _REPO_ROOT / "frontend" / "src" / "utils" / "safeLocalStorage.js"
 
@@ -47,12 +46,6 @@ def test_helper_still_exists():
     )
 
 
-def test_anchor_present_in_chat_widget():
-    src = _read(_CHAT_WIDGET)
-    assert "P2-NEW-LOCALSTORAGE-MIGRATION-DEBT" in src, (
-        "Falta anchor `P2-NEW-LOCALSTORAGE-MIGRATION-DEBT` en ChatWidget.jsx."
-    )
-
 
 def test_anchor_present_in_agent_page():
     src = _read(_AGENT_PAGE)
@@ -60,17 +53,6 @@ def test_anchor_present_in_agent_page():
         "Falta anchor `P2-NEW-LOCALSTORAGE-MIGRATION-DEBT` en AgentPage.jsx."
     )
 
-
-def test_chat_widget_imports_helper():
-    src = _read(_CHAT_WIDGET)
-    pat = re.compile(
-        r"import\s*\{\s*[^}]*\bsafeLocalStorageSet\b[^}]*\}\s*from\s*['\"][^'\"]*safeLocalStorage['\"]",
-        re.DOTALL,
-    )
-    assert pat.search(src), (
-        "ChatWidget.jsx debe importar `safeLocalStorageSet` desde "
-        "`../../utils/safeLocalStorage`."
-    )
 
 
 def test_agent_page_imports_helper():
@@ -84,15 +66,6 @@ def test_agent_page_imports_helper():
         "`../utils/safeLocalStorage`."
     )
 
-
-def test_zero_raw_setitem_in_chat_widget():
-    src = _read(_CHAT_WIDGET)
-    bad = re.findall(r"\blocalStorage\.setItem\s*\(", src)
-    assert not bad, (
-        f"ChatWidget.jsx tiene {len(bad)} callsites raw `localStorage.setItem(`. "
-        f"Reemplazar por `safeLocalStorageSet(` (mismo argumento, devuelve "
-        f"boolean en lugar de throw)."
-    )
 
 
 def test_zero_raw_setitem_in_agent_page():
@@ -108,3 +81,10 @@ def test_anchor_present_in_test_file():
     """Cross-link guard P2-HIST-AUDIT-14."""
     src = _read(Path(__file__))
     assert "P2-NEW-LOCALSTORAGE-MIGRATION-DEBT" in src
+
+# [P2-CODIGO-MUERTO · 2026-08-18] Las comprobaciones sobre `ChatWidget.jsx` se
+# retiraron con el componente. Estaba INALCANZABLE desde produccion: cero
+# imports fuera de tests, y su cadena exclusiva no aparecia en `dist/` (lo unico
+# que casaba en el bundle era `HelpChatWidget`, que es otro componente vivo).
+# Los tests que quedan siguen cubriendo el RESTO de ficheros de su lista: se
+# quito un sujeto muerto, no una garantia.

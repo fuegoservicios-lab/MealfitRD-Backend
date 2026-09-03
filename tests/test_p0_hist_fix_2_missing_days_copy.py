@@ -42,6 +42,35 @@ from __future__ import annotations
 import inspect
 from pathlib import Path
 
+# [P1-I18N-HISTORY-FORENSE · 2026-08-21] El chip pasó por `t()`, así que la grafía
+# `{_generatedTotal} de {_displayTotal} listos` ya no existe literalmente: ahora es
+# `t('{hechos} de {total} listos', { hechos: _generatedTotal, total: _displayTotal })`.
+#
+# La conducta NO cambió —mismos números, mismo orden, mismo encuadre de progreso— así que
+# estos guards se reanclan a la PROPIEDAD en vez de a la grafía. Es la misma lección que
+# el chip de caducidad de la Nevera, el mismo día y reportada por otra sesión: si el
+# guard se puede expresar por la propiedad, que no dependa de cómo se escriba.
+#
+# `_EXPR_CHIP` acota la ventana a la expresión del chip, para que «las dos variables
+# aparecen en el fichero» no cuente como «aparecen juntas en el chip».
+import re as _re
+
+_EXPR_CHIP = _re.compile(
+    r"t\(\s*'\{\w+\} de \{\w+\} listos'[^)]*\)", _re.S
+)
+
+
+def _expresion_del_chip(texto: str) -> str:
+    m = _EXPR_CHIP.search(texto)
+    assert m is not None, (
+        "No encontré la expresión del chip de progreso. Tiene que seguir siendo UNA "
+        "sola llamada `t('{…} de {…} listos', {…})`: partirla en «etiqueta» + valor "
+        "fijaría el orden español, y hay idiomas donde el número va delante. "
+        "[P1-I18N-HISTORY-FORENSE]"
+    )
+    return m.group(0)
+
+
 
 _REPO_ROOT = Path(__file__).resolve().parent.parent.parent
 _HISTORY_JSX = _REPO_ROOT / "frontend" / "src" / "pages" / "History.jsx"
@@ -92,8 +121,9 @@ def test_chip_uses_progress_framing_not_raw_fraction():
         "al bug de ambigüedad. Usa el progreso explícito "
         "`{_generatedTotal} de {_displayTotal} listos`."
     )
-    # Nuevo formato debe estar.
-    assert "{_generatedTotal} de {_displayTotal} listos" in text, (
+    # Nuevo formato debe estar — por PROPIEDAD, no por grafía (ver la nota de arriba).
+    _expr = _expresion_del_chip(text)
+    assert "_generatedTotal" in _expr and "_displayTotal" in _expr, (
         "El chip debe usar `{_generatedTotal} de {_displayTotal} "
         "listos` como progreso explícito."
     )

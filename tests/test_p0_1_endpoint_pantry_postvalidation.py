@@ -294,7 +294,7 @@ def _result_clean():
 
 
 def _vip_factory(invalid: set):
-    def _mock(generated, pantry, strict_quantities=True, tolerance=1.30):
+    def _mock(generated, pantry, strict_quantities=True, tolerance=1.30, country="DO"):
         bad = [g for g in generated if g in invalid]
         if not bad:
             return True

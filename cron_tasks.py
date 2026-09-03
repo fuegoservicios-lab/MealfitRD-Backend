@@ -470,6 +470,7 @@ _P0_5_LESSON_KEY_ALLOWLIST = frozenset({
 P0_3_LEGACY_LEARNING_CONTEXTS = (
     "seed_chunk1_sync",        # routers/plans.py: seed inicial post-LLM (sync).
     "seed_chunk1_sse",         # routers/plans.py: seed inicial via SSE stream.
+    "seed_chunk1_queue",       # [P1-ARQ25-F1-LIFECYCLE] seed inicial del chunk 0 vía cola (mismo postprocess).
     "rebuild_from_queue",      # cron_tasks.py: P0-3 auto-recovery desde plan_chunk_queue.
     "synthesis_from_days",     # cron_tasks.py: P0-4 last-resort desde plan_data.days.
 )
@@ -5304,7 +5305,7 @@ def _emit_hot_table_bloat_tick() -> None:
             WHERE t.schemaname = 'public'
               AND t.relname = ANY(%s::text[])
             """,
-            (list(_P1B_TABLES),),
+            (list(_P1B_TABLES),), fetch_all=True
         ) or []
     except Exception as q_err:
         logger.warning(
@@ -5652,7 +5653,7 @@ def _drain_pending_facts_queue() -> None:
             "SELECT DISTINCT user_id FROM pending_facts_queue "
             "WHERE user_id IS NOT NULL "
             "LIMIT %s",
-            (int(batch_limit),),
+            (int(batch_limit),), fetch_all=True
         ) or []
     except Exception as q_err:
         logger.warning(
@@ -5793,7 +5794,7 @@ def _clinical_band_drift_alert_job():
                AND COALESCE(metadata->>'delivered_was_fallback', 'false') = 'false'
                AND confidence IS NOT NULL
             """,
-            (str(lookback_h),),
+            (str(lookback_h),), fetch_all=True
         ) or []
         vals = []
         for r in rows:
@@ -5893,7 +5894,7 @@ def _plan_fallback_rate_alert_job():
              WHERE node = 'clinical_band'
                AND created_at > NOW() - (%s || ' hours')::interval
             """,
-            (str(lookback_h),),
+            (str(lookback_h),), fetch_all=True
         ) or []
         if rows:
             try:
@@ -5985,7 +5986,7 @@ def _resolution_coverage_drift_alert_job():
                AND created_at > NOW() - (%s || ' hours')::interval
                AND confidence IS NOT NULL
             """,
-            (str(lookback_h),),
+            (str(lookback_h),), fetch_all=True
         ) or []
         vals = []
         for r in rows:
@@ -6083,7 +6084,7 @@ def _review_failed_delivered_rate_alert_job():
                AND created_at > NOW() - (%s || ' hours')::interval
                AND COALESCE(metadata->>'delivered_was_fallback', 'false') = 'false'
             """,
-            (str(lookback_h),),
+            (str(lookback_h),), fetch_all=True
         ) or []
         if rows:
             try:
@@ -6326,6 +6327,64 @@ def _chunk_overdue_alert_job():
 
     Tooltip-anchor: P2-CHUNK-OVERDUE-SIGNAL.
     """
+
+    # [P1-PLAN-MODE · 2026-08-11] plan_paused_with_live_queue:<plan_id> — modelo Auto
+    # (implicit). Dispara si hay chunks VIVOS (>1 h) de un usuario en modo seguimiento:
+    # significa que algo encoló DETRÁS del apagado y estamos apoyados en una sola capa
+    # (el gate del pickup). Cero filas es el estado sano. Vive aquí y no en un cron
+    # propio porque este job ya es el barrido horario de salud de la cola.
+    try:
+        import json as _pm_json
+        _paused_rows = execute_sql_query(
+            """
+            SELECT q.meal_plan_id::text AS plan_id, q.user_id::text AS uid, count(*)::int AS vivos
+            FROM plan_chunk_queue q
+            JOIN user_profiles up ON up.id = q.user_id
+            WHERE up.plan_mode = 'tracking'
+              AND q.status IN ('pending', 'processing', 'stale', 'pending_user_action')
+              AND q.dead_lettered_at IS NULL
+              AND q.updated_at < NOW() - INTERVAL '1 hour'
+            GROUP BY q.meal_plan_id, q.user_id
+            """,
+            fetch_all=True,
+        ) or []
+        for _pr in _paused_rows:
+            # El nombre de variable ES contrato: test_p2_audit_4 escanea asignaciones
+            # `alert_key = f"..."` para casar productores con la tabla de docs.
+            # Sin comillas anidadas en el f-string: el parser de test_p2_audit_4
+            # extrae la key con una regex que corta en la primera comilla interior.
+            _pid = _pr['plan_id']
+            alert_key = f"plan_paused_with_live_queue:{_pid}"
+            execute_sql_write(
+                """
+                INSERT INTO system_alerts
+                    (alert_key, alert_type, severity, title, message, metadata)
+                VALUES (%s, 'plan_paused_with_live_queue', 'warning', %s, %s, %s::jsonb)
+                ON CONFLICT (alert_key) DO UPDATE
+                SET triggered_at = NOW(), metadata = EXCLUDED.metadata, resolved_at = NULL
+                """,
+                (
+                    alert_key,
+                    "Cola viva detrás de un apagado",
+                    (
+                        f"{_pr['vivos']} chunk(s) vivos >1h del plan {_pr['plan_id']} con su "
+                        "usuario en modo seguimiento: algo encoló detrás del apagado. El gate "
+                        "del pickup los bloquea (no gastan), pero la pausa debió cancelarlos."
+                    ),
+                    _pm_json.dumps({"plan_id": _pr["plan_id"], "user_hash": _pr["uid"][:8], "vivos": _pr["vivos"]}),
+                ),
+            )
+        # Auto-resolve implícito: si la condición desapareció, la alerta se cierra.
+        _abiertas = [f"plan_paused_with_live_queue:{r['plan_id']}" for r in _paused_rows]
+        execute_sql_write(
+            "UPDATE system_alerts SET resolved_at = NOW() "
+            "WHERE alert_type = 'plan_paused_with_live_queue' AND resolved_at IS NULL "
+            "AND NOT (alert_key = ANY(%s::text[]))",
+            (_abiertas,),
+        )
+    except Exception as _pm_alert_err:
+        logger.warning(f"[P1-PLAN-MODE] chequeo de cola-viva-en-pausa falló (best-effort): {_pm_alert_err}")
+
     from chat_history_context import compute_chunk_overdue, upcoming_days_signal_enabled
 
     # [Ronda 4 · B4] Mismo knob que el payload de `/chunk-status` y que el
@@ -6443,10 +6502,42 @@ def _chunk_overdue_alert_job():
         logger.warning(f"[P2-CHUNK-OVERDUE-SIGNAL] barrido de resolución falló: {_sweep_e}")
 
 
+#: [P1-ARQ25-F1-LIFECYCLE · 2026-09-02] Referencia al scheduler del proceso líder para
+#: `wake_chunk_worker`. Sin líder local (proceso no-leader) queda None y el tick del minuto
+#: recoge el chunk igual: despertar es una optimización de latencia, no una autoridad.
+_SCHEDULER_REF = None
+
+
+def wake_chunk_worker(reason: str = "") -> bool:
+    """Adelanta el próximo tick de `process_plan_chunk_queue` a AHORA.
+
+    El chunk 0 (Bloque 1 vía cola) no puede esperar hasta 60 s a que el intervalo lo
+    recoja. `max_instances=1` + `coalesce=True` del job garantizan que un tick en curso
+    no se duplica. Devuelve True si pudo adelantar; False si no hay scheduler local o
+    el job no está registrado (no-leader, tests, arranque).
+    """
+    sched = _SCHEDULER_REF
+    if sched is None:
+        return False
+    try:
+        job = sched.get_job("process_plan_chunk_queue")
+        if job is None:
+            return False
+        from datetime import datetime as _dt, timezone as _tz
+        job.modify(next_run_time=_dt.now(_tz.utc))
+        logger.info(f"⏩ [ARQ25-F1] worker despertado ({reason or 'sin motivo'})")
+        return True
+    except Exception as e:
+        logger.debug(f"[ARQ25-F1] wake_chunk_worker no-op: {type(e).__name__}: {e}")
+        return False
+
+
 def register_plan_chunk_scheduler(scheduler) -> None:
     """Registra el polling del worker de chunks una sola vez en el scheduler global."""
     if not scheduler:
         return
+    global _SCHEDULER_REF
+    _SCHEDULER_REF = scheduler
 
     if not scheduler.get_job("process_plan_chunk_queue"):
         _add_job_jittered(scheduler,
@@ -8344,7 +8435,7 @@ def _proactive_refresh_pending_pantry_snapshots(now_utc: datetime | None = None)
                 now_utc + timedelta(hours=horizon_hours),
                 now_utc - timedelta(hours=refresh_threshold_hours),
                 max_users * 8,
-            ),
+            ), fetch_all=True
         ) or []
     except Exception as e:
         logger.warning(f"[P0-C/PROACTIVE] Error consultando candidatos: {e}")
@@ -8575,10 +8666,15 @@ def _sync_chunk_queue_tz_offsets(target_user_id: str | None = None) -> int:
 
     base_query = """
         SELECT q.id, q.user_id, q.execute_after,
+               -- [P1-PAUSE-GC-SURVIVAL · 2026-08-12] SIN brazo `0`: un snapshot sin
+               -- form_data/tz (el GC GAP 7 los vacía a '{}' al minuto) debe salir
+               -- NULL y caer en la rama defensiva de abajo. El `, 0` fabricaba
+               -- "tz 0" de la ausencia ⇒ drift=240 ⇒ +4h/tick en bucle infinito
+               -- desde DOS crons (medido: exec de agosto empujado a septiembre,
+               -- dead-letter execute_after_beyond_plan_window en 5/5 chunks).
                COALESCE(
                  (q.pipeline_snapshot->'form_data'->>'tz_offset_minutes')::int,
-                 (q.pipeline_snapshot->'form_data'->>'tzOffset')::int,
-                 0
+                 (q.pipeline_snapshot->'form_data'->>'tzOffset')::int
                ) AS snapshot_tz,
                COALESCE(
                  (p.health_profile->>'tz_offset_minutes')::int,
@@ -8621,18 +8717,21 @@ def _sync_chunk_queue_tz_offsets(target_user_id: str | None = None) -> int:
         if snapshot_tz is None:
             try:
                 live_tz_int = int(live_tz)
+                # [P1-PAUSE-GC-SURVIVAL] jsonb_set con path hijo '{form_data,...}'
+                # NO crea el padre: sobre un snapshot '{}' era un no-op SILENCIOSO
+                # y esta rama re-warneaba cada tick para siempre. Se escribe
+                # '{form_data}' entero: COALESCE del padre || los dos tz keys.
                 execute_sql_write(
                     """
                     UPDATE plan_chunk_queue
                     SET pipeline_snapshot = jsonb_set(
-                            jsonb_set(
-                                pipeline_snapshot,
-                                '{form_data,tzOffset}',
-                                to_jsonb(%s::int),
-                                true
-                            ),
-                            '{form_data,tz_offset_minutes}',
-                            to_jsonb(%s::int),
+                            pipeline_snapshot,
+                            '{form_data}',
+                            COALESCE(pipeline_snapshot->'form_data', '{}'::jsonb)
+                                || jsonb_build_object(
+                                    'tzOffset', %s::int,
+                                    'tz_offset_minutes', %s::int
+                                ),
                             true
                         ),
                         updated_at = NOW()
@@ -8689,18 +8788,18 @@ def _sync_chunk_queue_tz_offsets(target_user_id: str | None = None) -> int:
         try:
             if force_now:
                 # Disparar inmediatamente: el chunk debió ejecutarse antes del resync.
+                # [P1-PAUSE-GC-SURVIVAL] '{form_data}' entero — ver rama defensiva.
                 execute_sql_write(
                     """
                     UPDATE plan_chunk_queue
                     SET pipeline_snapshot = jsonb_set(
-                            jsonb_set(
-                                pipeline_snapshot,
-                                '{form_data,tzOffset}',
-                                to_jsonb(%s::int),
-                                true
-                            ),
-                            '{form_data,tz_offset_minutes}',
-                            to_jsonb(%s::int),
+                            pipeline_snapshot,
+                            '{form_data}',
+                            COALESCE(pipeline_snapshot->'form_data', '{}'::jsonb)
+                                || jsonb_build_object(
+                                    'tzOffset', %s::int,
+                                    'tz_offset_minutes', %s::int
+                                ),
                             true
                         ),
                         execute_after = NOW(),
@@ -8717,18 +8816,18 @@ def _sync_chunk_queue_tz_offsets(target_user_id: str | None = None) -> int:
                     f"forzando execute_after=NOW() para disparar ya."
                 )
             else:
+                # [P1-PAUSE-GC-SURVIVAL] '{form_data}' entero — ver rama defensiva.
                 execute_sql_write(
                     """
                     UPDATE plan_chunk_queue
                     SET pipeline_snapshot = jsonb_set(
-                            jsonb_set(
-                                pipeline_snapshot,
-                                '{form_data,tzOffset}',
-                                to_jsonb(%s::int),
-                                true
-                            ),
-                            '{form_data,tz_offset_minutes}',
-                            to_jsonb(%s::int),
+                            pipeline_snapshot,
+                            '{form_data}',
+                            COALESCE(pipeline_snapshot->'form_data', '{}'::jsonb)
+                                || jsonb_build_object(
+                                    'tzOffset', %s::int,
+                                    'tz_offset_minutes', %s::int
+                                ),
                             true
                         ),
                         execute_after = execute_after + make_interval(mins => %s),
@@ -9751,6 +9850,26 @@ def _resolve_pantry_pause_markers(snapshot: dict, resolution: str) -> dict:
     """
     snapshot["_pantry_pause_resolution"] = resolution
     snapshot["_pantry_pause_resolved_at"] = datetime.now(timezone.utc).isoformat()
+
+    # [P1-POSTMERGE-WAIVER-SSOT · 2026-08-22] `_p0_4_violations` era una escritura MUERTA:
+    # un grep sobre todo backend/ devolvía UNA aparición — la escritura. El detalle de por
+    # qué murió el chunk se guardaba y se tiraba, así que al reanudar el modelo recibía el
+    # MISMO prompt que ya había fallado. Aquí, que es el único punto por el que pasan las 7
+    # rutas de reanudación, lo promovemos al canal que el pipeline sí lee
+    # (`build_pantry_correction_context`). NO pisa una corrección ya presente: la del
+    # worker es más fresca que la del snapshot.
+    try:
+        _viol = snapshot.get("_p0_4_violations")
+        _fd = snapshot.get("form_data")
+        if isinstance(_viol, list) and _viol and isinstance(_fd, dict) and not _fd.get("_pantry_correction"):
+            _txt = " | ".join(
+                str(v.get("error", "")) for v in _viol if isinstance(v, dict) and v.get("error")
+            )[:1000]
+            if _txt:
+                _fd["_pantry_correction"] = _txt
+    except Exception as _pc_e:  # fail-safe: reanudar sin feedback es peor, pero no fatal
+        logger.debug(f"[P1-POSTMERGE-WAIVER-SSOT] promoción de violaciones no-op: {_pc_e}")
+
     for _k in _PANTRY_PAUSE_LIVE_KEYS:
         snapshot.pop(_k, None)
     return snapshot
@@ -10008,7 +10127,7 @@ def _rebuild_recent_chunk_lessons_from_queue(
               AND learning_metrics IS NOT NULL
             ORDER BY week_number ASC
             """,
-            (str(meal_plan_id), int(up_to_week_exclusive)),
+            (str(meal_plan_id), int(up_to_week_exclusive)), fetch_all=True
         ) or []
     except Exception as e:
         logger.warning(f"[P1-1/REBUILD] Fallo SELECT learning_metrics para plan {meal_plan_id}: {e}")
@@ -11423,6 +11542,7 @@ def _validate_merged_days_against_pantry(
     merged_days: list,
     pantry_ingredients: list,
     new_chunk_day_range: tuple | None = None,
+    country: str = "DO",
 ) -> tuple:
     """[P0-4] Hard validation post-merge sobre cada día.
 
@@ -11483,7 +11603,10 @@ def _validate_merged_days_against_pantry(
         if not ingredients:
             continue
 
-        result = _vip(ingredients, pantry_ingredients, strict_quantities=True, tolerance=1.0)
+        result = _vip(
+            ingredients, pantry_ingredients, strict_quantities=True,
+            tolerance=1.0, country=country,
+        )
         if result is not True:
             violations.append({"day": day_num, "error": str(result)[:500]})
 
@@ -11658,7 +11781,9 @@ def compute_pantry_degraded_summary(plan_data: dict) -> dict:
     return summary
 
 
-def _mark_meals_violating_pantry(result: dict, pantry_ingredients: list) -> int:
+def _mark_meals_violating_pantry(
+    result: dict, pantry_ingredients: list, country: str = "DO"
+) -> int:
     """[P0-5] Marca per-comida `_pantry_violated=True` + `_pantry_violated_reason`
     en `result['days'][i]['meals'][j]` para cada comida cuyos ingredientes NO
     estén en pantry.
@@ -11709,13 +11834,54 @@ def _mark_meals_violating_pantry(result: dict, pantry_ingredients: list) -> int:
             ]
             if not ings:
                 continue
-            check = _vip(ings, pantry_ingredients, strict_quantities=False)
+            check = _vip(
+                ings, pantry_ingredients, strict_quantities=False, country=country
+            )
             if check is True:
                 continue
             m["_pantry_violated"] = True
             m["_pantry_violated_reason"] = str(check)[:300]
             marked += 1
     return marked
+
+
+def _meal_scoped_missing(meal: dict, missing_list: list) -> list:
+    """[P1-URGENT-LIST-CANONICAL · 2026-08-09] Filtra la unión de faltantes del CHUNK a las
+    líneas que pertenecen a ESTA comida. Estampar la unión entera en cada meal pintaba una
+    pared roja de 27 ítems en CADA plato del Dashboard (hígado/sardinas/mejillones «faltando»
+    en un bowl de avena — plan f380821a del owner, 2026-08-09). Matching en dos niveles,
+    normalizado (lower + sin acentos + espacios colapsados):
+      1) línea EXACTA presente en los ingredientes del meal;
+      2) fallback: la parte de ALIMENTO (línea sin el prefijo de cantidad) contenida en el
+         blob de ingredientes — cubre drift de formato («35g de X» vs «35 g de X»).
+    Puro, fail-safe → [] (sin faltantes propios, sin caja roja). tooltip-anchor:
+    P1-URGENT-LIST-CANONICAL"""
+    try:
+        from constants import strip_accents as _sa
+        import re as _re
+
+        def _norm(s):
+            return _re.sub(r"\s+", " ", _sa(str(s).strip().lower()))
+
+        _ings = [_norm(i) for i in (meal.get("ingredients") or []) if str(i).strip()]
+        if not _ings:
+            return []
+        _blob = " | ".join(_ings)
+        out = []
+        for x in (missing_list or []):
+            nx = _norm(x)
+            if not nx:
+                continue
+            if nx in _ings:
+                out.append(x)
+                continue
+            _food = _re.sub(r"^[\d\s\./½¼¾⅓⅔]+(?:g|gr|ml|kg|l|cdta|cda|cdas|cdtas|taza|tazas|"
+                            r"unidad(?:es)?|ud|uds)?\s*(?:de\s+)?", "", nx).strip()
+            if len(_food) >= 4 and _food in _blob:
+                out.append(x)
+        return out
+    except Exception:
+        return []
 
 
 def _extract_missing_ingredients_from_violation(violation_str) -> list:
@@ -11771,7 +11937,11 @@ def _compute_cost_summary_jsonb_extras(plan_data, aggr_7, aggr_15, aggr_30, groc
     try:
         from shopping_calculator import compute_shopping_cost_summary as _ccs_extras
         from nutrition_calculator import refresh_budget_reconciliation as _rbr_extras
-        _sum = _ccs_extras(aggr_7, aggr_15, aggr_30, grocery_duration)
+        # [P1-COUNTRY-SYSTEM-F1 · 2026-08-16 (T7)] plan_data ya trae la clave desde el
+        # INSERT del chunk 1 (jsonb_set quirúrgico nunca la toca) — beta ⇒ summary=None ⇒
+        # keys/params quedan vacíos, ninguna de las 2 keys se re-escribe (ver docstring).
+        _sum = _ccs_extras(aggr_7, aggr_15, aggr_30, grocery_duration,
+                            pricing_mode=plan_data.get("_pricing_mode"))
         if _sum:
             plan_data["shopping_cost_summary"] = _sum
             keys.append("shopping_cost_summary")
@@ -12203,7 +12373,11 @@ def _validate_and_retry_initial_chunk_against_pantry(
         audit["validated_ok"] = True
         return initial_result, audit
 
-    from constants import validate_ingredients_against_pantry as _vip
+    from constants import (
+        country_for_form_data as _country_for_initial_pantry,
+        validate_ingredients_against_pantry as _vip,
+    )
+    _pantry_country = _country_for_initial_pantry(pipeline_data)
 
     qty_mode = audit["mode"]
     if qty_mode == "strict":
@@ -12242,7 +12416,10 @@ def _validate_and_retry_initial_chunk_against_pantry(
             pipeline_data.pop("_pantry_correction", None)
             return current_result, audit
 
-        existence = _vip(gen_ings, pantry_ingredients, strict_quantities=False)
+        existence = _vip(
+            gen_ings, pantry_ingredients, strict_quantities=False,
+            country=_pantry_country,
+        )
         if existence is not True:
             last_violation = str(existence)[:1000]
             audit["last_violation"] = last_violation
@@ -12261,7 +12438,7 @@ def _validate_and_retry_initial_chunk_against_pantry(
                 # [P0-5] Marcar per-meal qué platos son incocibles para que el frontend
                 # pueda renderizar warning específico en cada uno (no solo plan-level).
                 audit["meals_marked_violated"] = _mark_meals_violating_pantry(
-                    current_result, pantry_ingredients
+                    current_result, pantry_ingredients, country=_pantry_country
                 )
                 return current_result, audit
 
@@ -12289,7 +12466,7 @@ def _validate_and_retry_initial_chunk_against_pantry(
                     # [P0-5] current_result quedó con violaciones de existencia (la
                     # asignación arriba nunca se completó por el except). Marcar.
                     audit["meals_marked_violated"] = _mark_meals_violating_pantry(
-                        current_result, pantry_ingredients
+                        current_result, pantry_ingredients, country=_pantry_country
                     )
                     return current_result, audit
                 continue
@@ -12302,7 +12479,7 @@ def _validate_and_retry_initial_chunk_against_pantry(
             # [P0-5] Retries agotados con existencia violada: marcar comidas
             # ofensoras para granularidad UX (alineación con chunks 2+ que pausan).
             audit["meals_marked_violated"] = _mark_meals_violating_pantry(
-                current_result, pantry_ingredients
+                current_result, pantry_ingredients, country=_pantry_country
             )
             return current_result, audit
 
@@ -12315,7 +12492,8 @@ def _validate_and_retry_initial_chunk_against_pantry(
 
         # hybrid / strict: validar cantidades.
         qty_check = _vip(
-            gen_ings, pantry_ingredients, strict_quantities=True, tolerance=tolerance
+            gen_ings, pantry_ingredients, strict_quantities=True,
+            tolerance=tolerance, country=_pantry_country,
         )
         if qty_check is True:
             audit["validated_ok"] = True
@@ -12962,6 +13140,21 @@ def _get_user_tz_minutes_optional(user_id: str):
         return None
 
 
+def _local_midnight_for_fallback(tz_min: int) -> datetime:
+    """[P1-ANCHOR-SSOT-VS-PLACEHOLDER · 2026-08-23] Ancla real para fuentes 2/3.
+
+    ``profile_today`` y ``last_plan`` fabricaban ``00:00Z`` como MARCADOR de fecha y
+    devolvían al caller el offset por separado. Pero los consumidores tratan ``start_dt``
+    como un INSTANTE de medianoche local; aplicarles el SSOT a aquel marcador movía un día
+    hacia atrás a los cinco países al oeste. Esta función devuelve la misma semántica que la
+    fuente snapshot: instante UTC de la medianoche de HOY en la zona del usuario.
+    """
+    from constants import chunk_anchor_local_midnight_utc
+
+    _now_utc = datetime.now(timezone.utc)
+    return chunk_anchor_local_midnight_utc(_now_utc, tz_min)
+
+
 def _resolve_chunk_start_anchor(
     user_id: str,
     snapshot: dict,
@@ -12975,10 +13168,10 @@ def _resolve_chunk_start_anchor(
     del día (e.g., 3am local), rompiendo el contrato de "ejecución matutina".
 
     1. **snapshot**: usa `snapshot.form_data._plan_start_date` (path normal).
-    2. **profile_today**: lee TZ de `user_profiles.health_profile` y usa `today` UTC
-       como start_dt. El offset se aplica al combinar para llegar a midnight local.
+    2. **profile_today**: lee TZ de `user_profiles.health_profile` y devuelve el
+       instante UTC de la medianoche de hoy LOCAL.
     3. **last_plan**: si el perfil no tiene TZ, busca el último plan del usuario y
-       toma su TZ + today.
+       toma su TZ para construir el mismo tipo de instante local.
     4. **forced_8am_utc**: si nada existe, devuelve `(None, 0, "forced_8am_utc")`.
        El caller usará 8am UTC del día N como execute_after — peor que la TZ local,
        pero infinitamente mejor que NOW()+delay (que dispara a las 3am).
@@ -13020,10 +13213,7 @@ def _resolve_chunk_start_anchor(
     # === Source 2: user_profile TZ + today() ===
     profile_tz = _get_user_tz_minutes_optional(user_id)
     if profile_tz is not None:
-        today_utc = datetime.now(timezone.utc)
-        start_dt = datetime.combine(
-            today_utc.date(), datetime.min.time()
-        ).replace(tzinfo=timezone.utc)
+        start_dt = _local_midnight_for_fallback(int(profile_tz))
         _record_tz_fallback(
             user_id=user_id, meal_plan_id=meal_plan_id,
             week_number=week_number, reason="anchor_via_profile_today",
@@ -13053,10 +13243,7 @@ def _resolve_chunk_start_anchor(
                 except (TypeError, ValueError):
                     prior_tz = None
                 if prior_tz is not None:
-                    today_utc = datetime.now(timezone.utc)
-                    start_dt = datetime.combine(
-                        today_utc.date(), datetime.min.time()
-                    ).replace(tzinfo=timezone.utc)
+                    start_dt = _local_midnight_for_fallback(prior_tz)
                     _record_tz_fallback(
                         user_id=user_id, meal_plan_id=meal_plan_id,
                         week_number=week_number,
@@ -13530,11 +13717,106 @@ def _handle_reservation_reconciliation_exhausted(
             )
 
 
+def _first_purchase_plan_facts(meal_plan_id) -> dict | None:
+    """[P1-FIRST-PURCHASE-PAUSE · 2026-08-16] Los hechos del PLAN que el waiver de
+    autonomía necesita para decidir si cede una vez.
+
+    `None` ante cualquier fallo (fila ausente, DB blip, JSON raro) — y None
+    significa "sin hechos, la autonomía queda EXACTAMENTE como estaba". El mismo
+    principio conservador del guard proactivo P0-4: pausar con información
+    parcial es peor UX que aceptar un retraso.
+    """
+    try:
+        row = execute_sql_query(
+            "SELECT user_id::text AS user_id, "
+            "       (jsonb_array_length(COALESCE(plan_data->'aggregated_shopping_list', '[]'::jsonb)) > 0) "
+            "           AS shopping_list_delivered, "
+            "       plan_data->>'_first_purchase_pause_at' AS first_purchase_pause_at, "
+            "       lower(COALESCE(plan_data->>'is_restocked', '')) AS is_restocked_raw "
+            "FROM meal_plans WHERE id = %s",
+            (meal_plan_id,),
+            fetch_one=True,
+        )
+        if not row:
+            return None
+        return {
+            "user_id": row.get("user_id"),
+            "shopping_list_delivered": bool(row.get("shopping_list_delivered")),
+            "first_purchase_pause_at": row.get("first_purchase_pause_at"),
+            "is_restocked": row.get("is_restocked_raw") in ("true", "1"),
+        }
+    except Exception as _fp_err:
+        logger.debug(f"[P1-FIRST-PURCHASE-PAUSE] facts no disponibles para plan {meal_plan_id}: {_fp_err}")
+        return None
+
+
+def _first_purchase_pause_applies(plan_facts: dict | None) -> bool:
+    """[P1-FIRST-PURCHASE-PAUSE · 2026-08-16] ¿La autonomía de `initial_plan` debe
+    ceder UNA vez para pedir la primera compra?
+
+    Decisión del dueño (2026-08-16): el bloque 2+ de un plan cuya lista de compras
+    ya fue entregada NO debe generarse en silencio si el usuario JAMÁS ha marcado
+    una compra — se pausa una vez con CTA, y si no actúa, el recovery existente lo
+    genera solo a las 12h en modo flexible (TTL `CHUNK_PANTRY_EMPTY_TTL_HOURS`).
+    Refina P1-CHUNK-AUTONOMY, no lo revierte: la autonomía sigue siendo la regla y
+    esto es su única excepción, acotada por diseño.
+
+    Las cuatro condiciones, y POR QUÉ cada una es un no-pausar:
+      - sin hechos (`None`) → NO: fail-safe, conducta previa intacta.
+      - sin lista entregada → NO: es el cold start; pedir que compre una lista
+        que no existe es el interbloqueo que P2-CHUNK-AUTONOMY evita (la lista
+        NACE del plan). Esta condición es la diferencia entre "refinar el waiver"
+        y "resucitar el incidente del dry-run 2026-07-10".
+      - ya pausamos una vez (`_first_purchase_pause_at`) → NO: una pregunta por
+        plan. Repetirla en cada bloque convierte el CTA en spam y el plan en un
+        goteo de pausas de 12h.
+      - `is_restocked` → NO: el usuario YA usa la Nevera; si está vacía a mitad
+        de plan, eso es la autonomía normal (consumió lo que compró).
+    """
+    if not isinstance(plan_facts, dict):
+        return False
+    if not _env_bool("MEALFIT_FIRST_PURCHASE_PAUSE", True):
+        return False
+    if not plan_facts.get("shopping_list_delivered"):
+        return False
+    if plan_facts.get("first_purchase_pause_at"):
+        return False
+    if plan_facts.get("is_restocked"):
+        return False
+    return True
+
+
+def _mark_first_purchase_pause(meal_plan_id, user_id) -> None:
+    """[P1-FIRST-PURCHASE-PAUSE] Estampa el marker una-vez-por-plan.
+
+    `jsonb_set` quirúrgico (I7-exento) + `AND user_id` (I2) + sello
+    `_plan_modified_at` anidado (P0-B: un UPDATE intermedio sin sello deja al CAS
+    del chunk worker ciego — un proceso concurrente que leyó el timestamp previo
+    declararía «sin cambios externos» sobre un plan_data que SÍ cambió).
+    Best-effort: si el UPDATE falla, el peor caso es una segunda pausa suave 12h
+    después — acotado y preferible a abortar la pausa ya decidida.
+    """
+    try:
+        execute_sql_write(
+            "UPDATE meal_plans SET plan_data = jsonb_set(jsonb_set(plan_data, "
+            "'{_first_purchase_pause_at}', to_jsonb(NOW()::text)), "
+            "'{_plan_modified_at}', to_jsonb(NOW()::text)) "
+            "WHERE id = %s AND user_id = %s",
+            (meal_plan_id, user_id),
+        )
+    except Exception as _fp_mark_err:
+        logger.warning(
+            f"[P1-FIRST-PURCHASE-PAUSE] No se pudo estampar el marker en plan "
+            f"{meal_plan_id}: {_fp_mark_err} (acotado: reintentará a lo sumo una pausa más)."
+        )
+
+
 def _pantry_gate_waiver_reason(
     chunk_kind: str | None = None,
     snapshot: dict | None = None,
     form_data: dict | None = None,
     fresh_inventory_source: str | None = None,
+    plan_facts: dict | None = None,
 ) -> str | None:
     """[P1-PANTRY-GATE-SSOT · 2026-07-26] Motivo por el que la nevera NO puede bloquear
     este chunk, o `None` si sí puede.
@@ -13573,6 +13855,14 @@ def _pantry_gate_waiver_reason(
     if fresh_inventory_source == "guest":
         return "guest"
     if chunk_kind == "initial_plan" and _env_bool("MEALFIT_INITIAL_CHUNK_PANTRY_AUTONOMY", True):
+        # [P1-FIRST-PURCHASE-PAUSE · 2026-08-16] La autonomía cede UNA VEZ por plan
+        # cuando la lista ya fue entregada y el usuario jamás marcó compra: el
+        # incidente reportado fue un bloque generándose a las 00:06 con la Nevera
+        # a cero y sin que nada se lo dijera al usuario. `plan_facts=None` (caller
+        # sin hechos o query fallida) deja la autonomía intacta — el orden de las
+        # exenciones de arriba (flexible/advisory/guest) NO cambia.
+        if _first_purchase_pause_applies(plan_facts):
+            return None
         return "initial_plan_autonomy"
     return None
 
@@ -13657,23 +13947,43 @@ def _recover_pantry_paused_chunks() -> None:
         # no podemos rehidratar plan_data (`anchor_recovery`, `flexible_mode`
         # persistence, mode_history), así que el row sería un consumidor de
         # ciclos LLM sin output útil. Saltamos en el origen.
+        # [P1-PAUSE-AGE-TRUE-CLOCK · 2026-08-07] `paused_seconds` sale del
+        # fragmento SSOT, no de `updated_at`: los recordatorios y las re-pausas
+        # refrescan esa columna y el TTL de 12h no llegaba nunca a cumplirse.
         paused_rows = execute_sql_query(
-            """
+            f"""
             SELECT id, user_id, meal_plan_id, week_number, days_offset, pipeline_snapshot,
-                   EXTRACT(EPOCH FROM (NOW() - updated_at))::int AS paused_seconds
+                   ({pause_age_seconds_sql()})::int AS paused_seconds
             FROM plan_chunk_queue
             WHERE status = 'pending_user_action'
               AND meal_plan_id IS NOT NULL
+              -- [P1-FREEZE-OWNS-ITS-CHUNKS · 2026-08-14] Los chunks de un plan
+              -- CONGELADO (P1-PLAN-FREEZE) son propiedad del freeze: los pausó
+              -- él y los reanuda él (restock hook + sweep horario). Este cron
+              -- es un dueño MÁS VIEJO del mismo estado y no sabía del flag: a
+              -- las 12-24h los «rescataba» en modo flexible con exec=NOW(), en
+              -- cadena — medido: 7 semanas (vencimientos hasta septiembre)
+              -- generadas por LLM en UNA hora, para un plan cuyos días «no
+              -- corren» (cb361844, 13-ago 21:08→22:06). Es la trampa que
+              -- P1-PLAN-MODE esquivó eligiendo `cancelled` para su pausa. El
+              -- filtro va AQUÍ, en el único SELECT, porque cubre de una vez
+              -- las ~6 ramas de abajo que escriben execute_after=NOW().
+              AND NOT EXISTS (
+                  SELECT 1 FROM meal_plans mpf
+                  WHERE mpf.id = plan_chunk_queue.meal_plan_id
+                    AND mpf.plan_data ? '_frozen_at'
+              )
             ORDER BY updated_at ASC
             LIMIT 50
-            """,
+            """, fetch_all=True
         ) or []
         # [G-B2 · P2-CRON-OPT-4 · 2026-05-31] `days_offset` añadido al batch SELECT para
         # eliminar dos re-queries por-fila al MISMO row (tz_unresolved + prev_chunk branches)
-        # en este cron de ~1 min. La columna es inmutable para una fila en 'pending_user_action':
-        # su único writer es el UPSERT `days_offset = EXCLUDED.days_offset`, que solo aplica a
-        # filas status='failed' (índice parcial ux_plan_chunk_queue_live_week NO cubre
-        # pending_user_action). Misma clase que el meal_plan_id re-query ya eliminado (S08-1 GAP-2).
+        # en este cron de ~1 min. [P1-CHUNK-REBASE-PAUSED · 2026-08-08] La columna YA NO es
+        # inmutable para 'pending_user_action': `_rebase_pending_chunk_offsets_sql` la reancla
+        # también en filas pausadas (antes solo el UPSERT sobre status='failed'). El valor del
+        # batch puede quedar ≤1 tick (~1 min) desfasado si un shift corre en medio — tolerable:
+        # aquí solo alimenta re-evals de gates, y el próximo tick re-lee fresco.
 
         for row in paused_rows:
             snap = copy.deepcopy(row.get("pipeline_snapshot") or {})
@@ -14042,11 +14352,15 @@ def _recover_pantry_paused_chunks() -> None:
                     # [G-B2 · P2-CRON-OPT-4] days_offset ya viene del batch SELECT (inmutable
                     # para esta fila) — antes era un re-query por fila al MISMO row.
                     _do = int(row.get("days_offset") or 0)
-                    start_midnight = datetime.combine(
-                        anchor_start_dt.date(), datetime.min.time()
-                    ).replace(tzinfo=timezone.utc)
+                    # [P1-CHUNK-ANCHOR-LOCAL-DATE · 2026-08-21] Mismo SSOT que el encolado: sin
+                    # él, el recovery RE-INTRODUCÍA el adelanto de 23,5 h de España en cada chunk
+                    # que resucitaba, deshaciendo el arreglo del otro sitio.
+                    from constants import chunk_anchor_local_midnight_utc as _calmu_rec
+                    start_midnight = (_calmu_rec(anchor_start_dt, anchor_tz_min)
+                                      or datetime.combine(anchor_start_dt.date(), datetime.min.time())
+                                      .replace(tzinfo=timezone.utc) + timedelta(minutes=anchor_tz_min))
                     fresh_target = start_midnight + timedelta(
-                        days=_do, minutes=anchor_tz_min + 30
+                        days=_do, minutes=30
                     )
                     fresh_target = max(
                         fresh_target,
@@ -14735,7 +15049,7 @@ def _escalate_failed_window_expired_chunks() -> int:
             ORDER BY q.updated_at ASC
             LIMIT %s
             """,
-            (CHUNK_RECOVERY_MIN_AGE_MINUTES, CHUNK_RECOVERY_BATCH_LIMIT),
+            (CHUNK_RECOVERY_MIN_AGE_MINUTES, CHUNK_RECOVERY_BATCH_LIMIT), fetch_all=True
         ) or []
 
         for row in expired_failed:
@@ -15874,7 +16188,7 @@ def _finalize_zombie_partial_plans() -> int:
             ORDER BY mp.created_at ASC
             LIMIT %s
             """,
-            (CHUNK_ZOMBIE_PARTIAL_MIN_AGE_HOURS, CHUNK_ZOMBIE_PARTIAL_BATCH_LIMIT),
+            (CHUNK_ZOMBIE_PARTIAL_MIN_AGE_HOURS, CHUNK_ZOMBIE_PARTIAL_BATCH_LIMIT), fetch_all=True
         ) or []
     except Exception as e:
         logger.error(f"[P0-A/ZOMBIE-PARTIAL] SELECT de candidatos falló: {e}")
@@ -15972,7 +16286,7 @@ def _recover_orphan_chunk_reservations() -> int:
               AND reservation_details::text <> '{}'
             LIMIT %s
             """,
-            (CHUNK_ORPHAN_RESERVATION_BATCH_LIMIT,),
+            (CHUNK_ORPHAN_RESERVATION_BATCH_LIMIT,), fetch_all=True
         ) or []
     except Exception as e:
         logger.error(f"[P1-A/CLEANUP] SELECT inicial falló: {e}")
@@ -16033,7 +16347,7 @@ def _recover_orphan_chunk_reservations() -> int:
             FROM plan_chunk_queue
             WHERE id = ANY(%s::uuid[])
             """,
-            (CHUNK_ORPHAN_RESERVATION_MIN_TERMINAL_AGE_HOURS, _uuid_chunk_ids),
+            (CHUNK_ORPHAN_RESERVATION_MIN_TERMINAL_AGE_HOURS, _uuid_chunk_ids), fetch_all=True
         ) or []
     except Exception as e:
         logger.error(f"[P1-A/CLEANUP] SELECT plan_chunk_queue falló: {e}")
@@ -16128,7 +16442,7 @@ def _nudge_chronic_zero_log_users() -> int:
                 CHUNK_ZERO_LOG_NUDGE_DETECTION_DAYS,
                 CHUNK_ZERO_LOG_NUDGE_COOLDOWN_HOURS,
                 CHUNK_ZERO_LOG_NUDGE_MAX_USERS,
-            ),
+            ), fetch_all=True
         ) or []
     except Exception as e:
         logger.warning(f"[P1-2/ZERO-LOG-NUDGE] SELECT falló: {e}")
@@ -16593,12 +16907,42 @@ def calculate_plan_quality_score(user_id: str, plan_data: dict, consumed_records
     return max(0.0, min(1.0, quality))
 
 
+def _coldstart_country_filter(health_profile) -> "str | None":
+    """[P2-COUNTRY-HOUSEKEEPING · 2026-08-21] País por el que segmentar el pool del cold-start, o
+    `None` para no segmentar.
+
+    QUÉ CAMBIA Y POR QUÉ NO ES «ENCENDER EL KNOB». `get_similar_user_patterns` mete los platos más
+    registrados por OTROS usuarios en el prompt del generador con etiqueta «PRIORIDAD 4», y su
+    condición de disparo (menos de 3 registros de comida) es EXACTAMENTE la de todo usuario beta
+    nuevo. El pool real hoy es 100 % dominicano: el primer plan de un español —el que decide si se
+    queda— recibía sugerencias explícitas de generar los platos de los dominicanos.
+
+    El gate de Fase 0 existía apagado con dos razones escritas, y las dos siguen siendo CIERTAS:
+    (a) con un usuario de un país nuevo su pool queda vacío; (b) el `=` no casa con clave ausente,
+    así que segmentar a un dominicano CON campo lo enfrentaría a un pool que excluye a los legacy
+    SIN campo. Lo que no se seguía de (a) es que la conducta correcta fuera servirle lo dominicano
+    — se seguía que es **no sugerir nada**, que es lo que un pool vacío produce de forma natural.
+
+    Por eso cambia la SEMÁNTICA y no el default: país beta ⇒ segmenta SIEMPRE (y si sale vacío,
+    vacío); DO y país ausente ⇒ `None`, conducta byte a byte anterior, que es donde vivía el
+    problema (b). El knob `MEALFIT_COUNTRY_COLDSTART_SEGMENT` deja de gobernar esto y queda para
+    quien quiera segmentar TAMBIÉN a los dominicanos el día que haya datos.
+
+    tooltip-anchor: _coldstart_country_filter (test_p2_country_housekeeping.py)"""
+    try:
+        from constants import country_for_form_data
+        canon = country_for_form_data(health_profile if isinstance(health_profile, dict) else {})
+    except Exception:
+        return None
+    return canon if canon != "DO" else None
+
+
 def get_similar_user_patterns(user_id: str, health_profile: dict):
     """Para usuarios sin historial, busca que funciono para perfiles similares (Mejora 4)."""
     goal = health_profile.get('mainGoal')
     activity = health_profile.get('activityLevel')
     diet_types = health_profile.get('dietTypes', [])
-    country = health_profile.get('country')
+    country = _coldstart_country_filter(health_profile)
     
     if not goal or not activity:
         return []
@@ -18485,12 +18829,19 @@ def _enqueue_plan_chunk(
     retry_execute_dt: datetime | None = None
 
     if anchor_start_dt is not None:
-        start_dt_midnight_utc = datetime.combine(
-            anchor_start_dt.date(), datetime.min.time()
-        ).replace(tzinfo=timezone.utc)
+        # [P1-CHUNK-ANCHOR-LOCAL-DATE · 2026-08-21] `anchor_start_dt.date()` es la fecha UTC, no
+        # la local: para un usuario al ESTE de UTC la medianoche local cae en el día UTC anterior
+        # y el `+ anchor_tz_min` (negativo) volvía a restarlo. Medido: −23,5 h para España, el
+        # único país beta al este de UTC. La aritmética vive ahora en el SSOT.
+        from constants import chunk_anchor_local_midnight_utc as _calmu_enq
+        start_dt_midnight_utc = (_calmu_enq(anchor_start_dt, anchor_tz_min)
+                                 or datetime.combine(anchor_start_dt.date(), datetime.min.time())
+                                 .replace(tzinfo=timezone.utc) + timedelta(minutes=anchor_tz_min))
         fresh_target = start_dt_midnight_utc + timedelta(
-            days=fresh_delay_days, minutes=anchor_tz_min + 30
+            days=fresh_delay_days, minutes=30
         )
+        # [P1-ANCHOR-SSOT-VS-PLACEHOLDER] Ya es semánticamente estable: las tres
+        # fuentes resolubles entregan un instante de medianoche local real.
         retry_target = anchor_start_dt + timedelta(days=retry_delay_days, hours=-3)
 
         execute_dt_min = datetime.now(timezone.utc) + timedelta(minutes=1)
@@ -20034,14 +20385,26 @@ def _detect_chronic_deferrals() -> None:
                    week_number,
                    COUNT(*)::int AS deferral_count,
                    MAX(created_at) AS last_at
-            FROM chunk_deferrals
+            FROM chunk_deferrals cd
             WHERE created_at > NOW() - make_interval(hours => %s)
               AND reason = 'temporal_gate'
               AND meal_plan_id IS NOT NULL
+              -- [P2-PUSH-RESPECTS-PAUSE · 2026-08-15] Quien apagó la generación no
+              -- recibe avisos de que su plan «parece atrasado». Sus filas siguen
+              -- dentro de la ventana horas después de pausar, y esos reintentos son
+              -- el RESULTADO de la pausa, no una avería: el push le decía que
+              -- revisara su zona horaria por un plan que él mismo apagó.
+              -- Mismo `NOT EXISTS` que el nudge de zero-log y el freeze sweep; el
+              -- filtro va en SQL para no construir destinatarios que luego haya que
+              -- acordarse de podar en Python.
+              AND NOT EXISTS (
+                  SELECT 1 FROM user_profiles up
+                  WHERE up.id = cd.user_id AND up.plan_mode = 'tracking'
+              )
             GROUP BY user_id, meal_plan_id, week_number
             HAVING COUNT(*) >= %s
             """,
-            (int(CHUNK_CHRONIC_DEFERRAL_WINDOW_HOURS), int(CHUNK_CHRONIC_DEFERRAL_MIN_COUNT)),
+            (int(CHUNK_CHRONIC_DEFERRAL_WINDOW_HOURS), int(CHUNK_CHRONIC_DEFERRAL_MIN_COUNT)), fetch_all=True
         ) or []
     except Exception as e:
         logger.warning(f"[P1-2/CHRONIC] No se pudo consultar chunk_deferrals: {e}")
@@ -20114,7 +20477,7 @@ def _detect_chronic_deferrals() -> None:
             (
                 candidate_alert_keys,
                 int(CHUNK_CHRONIC_DEFERRAL_NOTIFY_COOLDOWN_HOURS),
-            ),
+            ), fetch_all=True
         ) or []
         deduped_keys = {
             r.get("alert_key") for r in deduped_rows if r.get("alert_key")
@@ -20874,7 +21237,7 @@ def _alert_new_dead_lettered_chunks() -> None:
             GROUP BY COALESCE(dead_letter_reason, 'unknown')
             ORDER BY cnt DESC
             """,
-            (window_hours,),
+            (window_hours,), fetch_all=True
         ) or []
         by_reason = {str(r.get("reason") or "unknown"): int(r.get("cnt") or 0) for r in reason_rows}
     except Exception as _reason_err:
@@ -20896,7 +21259,7 @@ def _alert_new_dead_lettered_chunks() -> None:
             GROUP BY COALESCE(chunk_kind, 'unknown')
             ORDER BY cnt DESC
             """,
-            (window_hours,),
+            (window_hours,), fetch_all=True
         ) or []
         by_chunk_kind = {str(r.get("chunk_kind") or "unknown"): int(r.get("cnt") or 0) for r in kind_rows}
     except Exception as _kind_err:
@@ -20942,7 +21305,7 @@ def _alert_new_dead_lettered_chunks() -> None:
               AND user_id IS NOT NULL
             LIMIT 200
             """,
-            (window_hours,),
+            (window_hours,), fetch_all=True
         ) or []
         affected_user_ids = [r["user_id"] for r in uid_rows if r.get("user_id")]
     except Exception:
@@ -21052,7 +21415,7 @@ def _gc_dead_lettered_chunks() -> None:
             GROUP BY COALESCE(dead_letter_reason, 'unknown'),
                      COALESCE(chunk_kind, 'unknown')
             """,
-            (ttl_days,),
+            (ttl_days,), fetch_all=True
         ) or []
         for r in rows:
             reason = str(r.get("reason") or "unknown")
@@ -21081,7 +21444,7 @@ def _gc_dead_lettered_chunks() -> None:
             WHERE id IN (SELECT id FROM victims)
             RETURNING id
             """,
-            (ttl_days, batch),
+            (ttl_days, batch), fetch_all=True
         ) or []
         purged_count = len(result)
         if purged_count > 0:
@@ -21161,7 +21524,7 @@ def _nudge_users_with_unresolved_tz() -> None:
             ORDER BY oldest_pause ASC
             LIMIT %s
             """,
-            (int(CHUNK_TZ_NUDGE_THRESHOLD_HOURS), int(CHUNK_TZ_NUDGE_MAX_USERS)),
+            (int(CHUNK_TZ_NUDGE_THRESHOLD_HOURS), int(CHUNK_TZ_NUDGE_MAX_USERS)), fetch_all=True
         ) or []
     except Exception as e:
         logger.warning(f"[P1-β/TZ-NUDGE] No se pudo consultar plan_chunk_queue: {e}")
@@ -21234,7 +21597,7 @@ def _alert_chunks_stuck_in_tz_unresolved() -> None:
             ORDER BY q.updated_at ASC
             LIMIT %s
             """,
-            (int(CHUNK_TZ_UNRESOLVED_ALERT_HOURS), int(CHUNK_TZ_UNRESOLVED_ALERT_BATCH_LIMIT)),
+            (int(CHUNK_TZ_UNRESOLVED_ALERT_HOURS), int(CHUNK_TZ_UNRESOLVED_ALERT_BATCH_LIMIT)), fetch_all=True
         ) or []
     except Exception as e:
         logger.warning(f"[P0-α/TZ-STUCK-ALERT] No se pudo consultar plan_chunk_queue: {e}")
@@ -21381,7 +21744,7 @@ def _alert_stuck_chunks() -> None:
             ORDER BY MIN(q.execute_after) ASC
             LIMIT %s
             """,
-            (int(_overdue_h), int(_overdue_h), int(_batch_limit)),
+            (int(_overdue_h), int(_overdue_h), int(_batch_limit)), fetch_all=True
         ) or []
     except Exception as e:
         logger.warning(f"[P2-STUCK-CHUNKS] No se pudo consultar plan_chunk_queue: {e}")
@@ -21502,7 +21865,7 @@ def _alert_chunks_stuck_processing() -> None:
             ORDER BY q.updated_at ASC
             LIMIT %s
             """,
-            (int(_hours), int(_limit)),
+            (int(_hours), int(_limit)), fetch_all=True
         ) or []
     except Exception as e:
         logger.warning(f"[P2-CHUNK-9/STUCK-PROCESSING] consulta plan_chunk_queue falló: {e}")
@@ -21644,7 +22007,7 @@ def _alert_stranded_partial_plans() -> None:
             ORDER BY mp.created_at ASC
             LIMIT %s
             """,
-            (int(_age_h), int(_batch_limit)),
+            (int(_age_h), int(_batch_limit)), fetch_all=True
         ) or []
     except Exception as e:
         logger.warning(f"[P2-STRANDED-PARTIAL] No se pudo consultar meal_plans: {e}")
@@ -21843,7 +22206,7 @@ def _alert_stranded_partial_plans() -> None:
             ORDER BY mp.created_at ASC
             LIMIT %s
             """,
-            (int(_abandoned_age_h), int(_abandoned_batch_limit)),
+            (int(_abandoned_age_h), int(_abandoned_batch_limit)), fetch_all=True
         ) or []
     except Exception as e:
         logger.warning(f"[P1-ROLLING-ABANDONED] No se pudo consultar meal_plans: {e}")
@@ -22239,7 +22602,7 @@ def _alert_chunk_lag_excessive() -> None:
             ORDER BY q.effective_lag_seconds_at_pickup DESC
             LIMIT 100
             """,
-            (int(CHUNK_LAG_ALERT_THRESHOLD_SECONDS), int(CHUNK_LAG_ALERT_WINDOW_HOURS)),
+            (int(CHUNK_LAG_ALERT_THRESHOLD_SECONDS), int(CHUNK_LAG_ALERT_WINDOW_HOURS)), fetch_all=True
         ) or []
     except Exception as e:
         logger.warning(f"[P0-γ/LAG-ALERT] No se pudo consultar plan_chunk_queue: {e}")
@@ -22374,7 +22737,7 @@ def _alert_chunk_dual_processing() -> None:
             ORDER BY dup_count DESC, oldest_update ASC
             LIMIT 50
             """,
-            (int(CHUNK_DUAL_PROCESSING_GRACE_SECONDS),),
+            (int(CHUNK_DUAL_PROCESSING_GRACE_SECONDS),), fetch_all=True
         ) or []
     except Exception as e:
         logger.warning(f"[P0-γ/DUAL-PROC-ALERT] No se pudo consultar plan_chunk_queue: {e}")
@@ -22600,7 +22963,7 @@ def _alert_chunks_paused_indefinitely() -> None:
             ORDER BY q.updated_at ASC
             LIMIT %s
             """,
-            (alert_age_hours, batch_limit),
+            (alert_age_hours, batch_limit), fetch_all=True
         ) or []
         # [P1-AUDIT-HIST-5 · 2026-05-09] Defensa contra chunks
         # huérfanos. plan_chunk_queue.meal_plan_id es ON DELETE
@@ -22971,7 +23334,7 @@ def _persist_quality_degradation_alert(is_refill: bool, ratio: float, degraded: 
               AND user_id IS NOT NULL
               AND meal_plan_id IS NOT NULL
             """,
-            (is_refill,),
+            (is_refill,), fetch_all=True
         ) or []
         affected_user_ids = [str(row.get("user_id")) for row in degraded_rows if row.get("user_id")]
 
@@ -23989,7 +24352,27 @@ def _check_chunk_learning_ready(user_id: str, meal_plan_id: str, week_number: in
     # del plan original terminó el día antes del primer día del refill). Para chunks
     # subsiguientes del refill (cuyo prev SÍ es del refill), el cálculo legacy es
     # correcto porque el chunk previo se ancla al new_plan_start_iso.
-    _prev_end_date = (plan_start_dt + timedelta(days=prev_end_day - 1 + _shift_days_accumulated)).date()
+    # [P1-CHUNK-GATE-PREVEND-LOCAL · 2026-08-23] `plan_start_dt` es el instante UTC
+    # de la medianoche LOCAL. Su `.date()` abre el gate un día antes en España porque
+    # allí ese instante cae en el día UTC anterior. Recuperar primero la medianoche
+    # local con el mismo SSOT de encolado/recovery mantiene el último día idéntico en
+    # los siete offsets. Si el helper no opina, preservamos literalmente la fórmula
+    # anterior (incluido su TypeError ante `plan_start_dt=None`): no ensanchamos el
+    # fail-open de este worker.
+    from constants import chunk_anchor_local_midnight_utc as _calmu_gate
+    _anchor_local = _calmu_gate(plan_start_dt, _tz_offset_min)
+    _prev_end_date = (
+        (
+            _anchor_local
+            + timedelta(days=prev_end_day - 1 + _shift_days_accumulated)
+            - timedelta(minutes=_tz_offset_min)
+        ).date()
+        if _anchor_local is not None
+        else (
+            plan_start_dt
+            + timedelta(days=prev_end_day - 1 + _shift_days_accumulated)
+        ).date()
+    )
 
     _is_continuation = bool(form_data.get("_is_continuation"))
     _anchor_iso = form_data.get("_continuation_anchor_iso")
@@ -24774,6 +25157,7 @@ def _build_filtered_edge_recipe_day(
     dislikes: list | tuple | None,
     diet: str = "",
     pantry_items: list | None = None,
+    country: str = "DO",
 ) -> dict | None:
     """Construye un Edge Recipe usando solo ingredientes permitidos para el usuario.
 
@@ -24786,6 +25170,11 @@ def _build_filtered_edge_recipe_day(
     con el backstop determinista y el día ensamblado se re-verifica antes de devolverlo. Devolver
     `None` es seguro — los dos callsites lo tratan como "no se pudo construir" (omiten la expansión
     del pool o caen al siguiente recurso), que es exactamente el fail-secure que queremos.
+
+    [P1-COUNTRY-SYSTEM-F2 · T5 · 2026-08-17] `country` (default 'DO', preserva callers que no lo
+    pasan) selecciona el pool de catálogo BASE vía `_get_fast_filtered_catalogs(..., country=)` —
+    país beta con `COUNTRY_POOLS` propio (hoy: ES) usa ESE pool; DO o un país sin pool dedicado
+    cae al pool RD, byte-idéntico a antes de esta task.
     """
     from constants import _get_fast_filtered_catalogs, normalize_ingredient_for_tracking
 
@@ -24795,6 +25184,7 @@ def _build_filtered_edge_recipe_day(
         allergies,
         dislikes,
         (diet or "").strip().lower(),
+        country=country,
     )
 
     # [P0-DEGRADED-SAFETY-SCAN · 2026-07-31] Segunda malla sobre el pool de candidatos. Va ANTES del
@@ -25049,7 +25439,7 @@ def _detect_and_escalate_stuck_chunks():
               AND (escalated_at IS NULL OR escalated_at < NOW() - INTERVAL '30 minutes')
             ORDER BY execute_after ASC
             LIMIT 50
-            """,
+            """, fetch_all=True
         ) or []
 
         if stuck_rows:
@@ -25114,7 +25504,7 @@ def _detect_and_escalate_stuck_chunks():
               AND escalated_at < NOW() - INTERVAL '72 hours'
               AND COALESCE(attempts, 0) >= 3
             LIMIT 50
-            """,
+            """, fetch_all=True
         ) or []
 
         if terminal:
@@ -25224,6 +25614,75 @@ def _emit_worker_run_metric(duration_s: float, pending_before: int, pending_afte
             f"duration_s={duration_s:.2f} interval_s={interval_s} "
             f"pending_before={pending_before} pending_after={pending_after} delta={delta}"
         )
+
+
+#: [P1-ARQ25-F1-LIFECYCLE · 2026-09-02] Drain cooperativo (roadmap 2.5 §5.5). En SIGTERM
+#: `request_worker_drain` levanta el evento: los ticks nuevos NO reclaman nada, y se espera
+#: hasta `MEALFIT_SHUTDOWN_DRAIN_S` a que el tick en curso (con sus `_chunk_worker` dentro
+#: del `ThreadPoolExecutor`) termine. Antes el shutdown era `scheduler.shutdown(wait=False)`
+#: a secas: un deploy mataba la generación en pleno LLM y el zombie rescue la reintentaba
+#: desde cero (tokens perdidos). Lo que no termine en la ventana lo recupera el rescue igual.
+import threading as _drain_threading
+import time as _drain_time
+
+_DRAIN_EVENT = _drain_threading.Event()
+_TICKS_IN_FLIGHT = 0
+_TICKS_LOCK = _drain_threading.Lock()
+_TICKS_IDLE = _drain_threading.Condition(_TICKS_LOCK)
+
+
+def worker_ticks_in_flight() -> int:
+    with _TICKS_LOCK:
+        return _TICKS_IN_FLIGHT
+
+
+def worker_drain_requested() -> bool:
+    """[P1-ARQ25-F1-CLOSE] True si el worker ya no reclama ticks nuevos (drain pedido)."""
+    return _DRAIN_EVENT.is_set()
+
+
+def cancel_worker_drain() -> None:
+    """[P1-ARQ25-F1-CLOSE] Revierte un drain pedido por el deploy que al final no reinició."""
+    _DRAIN_EVENT.clear()
+
+
+def request_worker_drain(timeout_s: float = 90.0) -> bool:
+    """Deja de reclamar y espera a los ticks en vuelo. True si quedó vacío a tiempo."""
+    _DRAIN_EVENT.set()
+    deadline = _drain_time.monotonic() + max(0.0, float(timeout_s))
+    with _TICKS_IDLE:
+        while _TICKS_IN_FLIGHT > 0:
+            remaining = deadline - _drain_time.monotonic()
+            if remaining <= 0:
+                logger.warning(
+                    f"[ARQ25-F1/DRAIN] timeout ({timeout_s}s) con {_TICKS_IN_FLIGHT} tick(s) aún en vuelo; "
+                    "el zombie rescue recuperará lo que quede."
+                )
+                return False
+            _TICKS_IDLE.wait(timeout=min(remaining, 1.0))
+    logger.info("[ARQ25-F1/DRAIN] worker drenado.")
+    return True
+
+
+def _drain_aware(fn):
+    """Decorador: no arranca un tick si hay drain pedido; cuenta los ticks en vuelo."""
+    def wrapper(target_plan_id=None):
+        global _TICKS_IN_FLIGHT
+        if _DRAIN_EVENT.is_set():
+            logger.info("[ARQ25-F1/DRAIN] tick omitido: shutdown en curso.")
+            return None
+        with _TICKS_LOCK:
+            _TICKS_IN_FLIGHT += 1
+        try:
+            return fn(target_plan_id)
+        finally:
+            with _TICKS_IDLE:
+                _TICKS_IN_FLIGHT -= 1
+                _TICKS_IDLE.notify_all()
+    wrapper.__wrapped__ = getattr(fn, "__wrapped__", fn)  # tests siguen llegando al impl
+    wrapper.__doc__ = fn.__doc__
+    wrapper.__name__ = fn.__name__
+    return wrapper
 
 
 def _with_worker_metrics(fn):
@@ -25890,6 +26349,48 @@ def _sweep_synthetic_test_plans() -> int:
             )
 
 
+# [P1-FREEZE-OWNS-ITS-CHUNKS · 2026-08-14] Gate del pickup para planes
+# CONGELADOS (P1-PLAN-FREEZE): un plan cuyos días no corren no quema LLM,
+# encole quien encole detrás. Fragmento CONSTANTE (cero entrada de usuario en
+# el SQL), inyectado junto al de plan_mode en el token __PLAN_MODE_GATE__ de
+# las DOS CTEs del pickup. Es la 2ª capa; la 1ª es el filtro del rescate de
+# nevera (_recover_pantry_paused_chunks), que fue el mecanismo que convirtió
+# el congelado del plan cb361844 en un burst de 7 generaciones LLM en 1 hora.
+_FREEZE_GATE_SQL = """
+                AND NOT EXISTS (
+                    SELECT 1 FROM meal_plans mpf
+                    WHERE mpf.id = q1.meal_plan_id
+                      AND mpf.plan_data ? '_frozen_at'
+                )
+"""
+
+
+def _merge_chunk_live_profile(form_data: dict, health_profile: dict) -> dict:
+    """[P1-COUNTRY-PLAN-VS-PERFIL-EN-BLOQUES · 2026-08-23]
+    Refresca señales editables del perfil sin cambiar la identidad del plan.
+
+    ``country`` pertenece al snapshot de generación igual que la fecha de inicio:
+    cambiar el perfil gobierna el próximo plan, no los bloques pendientes de éste.
+    Muta y devuelve ``form_data`` para conservar el contrato del worker.
+    """
+    if not isinstance(form_data, dict) or not isinstance(health_profile, dict):
+        return form_data
+    _protected_keys = {
+        "_plan_start_date",
+        "plan_start_date",
+        "generation_mode",
+        "session_id",
+        "user_id",
+        "total_days_requested",
+        "country",
+    }
+    for key, value in health_profile.items():
+        if not key.startswith("_") and key not in _protected_keys:
+            form_data[key] = value
+    return form_data
+
+
+@_drain_aware
 @_with_worker_metrics
 def process_plan_chunk_queue(target_plan_id=None):
     """Worker que genera las semanas 2-N de planes de largo plazo. Corre cada minuto vía APScheduler.
@@ -26052,12 +26553,24 @@ def process_plan_chunk_queue(target_plan_id=None):
         logger.warning(f" [CHUNK] Error limpiando snapshots pesados: {e}")
 
     # [GAP 11 FIX: Purga definitiva de chunks cancelados > 48h]
+    # [P1-PAUSE-GC-SURVIVAL · 2026-08-12] EXCEPTO las filas firmadas por la pausa
+    # (dead_letter_reason = PAUSE_CANCEL_REASON sin dead_lettered_at): la
+    # reanudación las revive hasta MEALFIT_PLAN_PAUSE_MAX_RESUME_DAYS (30d) —
+    # purgarlas a las 48h dejaba cualquier resume>2d sin cola que revivir y el
+    # plan partial PARA SIEMPRE. Vencida la ventana, se purgan igual (el brazo
+    # make_interval): una pausa abandonada no acumula filas eternas.
     try:
+        from plan_mode import PAUSE_CANCEL_REASON as _PAUSE_SIG, _resume_max_days
         execute_sql_write("""
             DELETE FROM plan_chunk_queue
             WHERE status = 'cancelled'
             AND updated_at < NOW() - INTERVAL '48 hours'
-        """)
+            AND NOT (
+                dead_letter_reason = %s
+                AND dead_lettered_at IS NULL
+                AND updated_at > NOW() - make_interval(days => %s)
+            )
+        """, (_PAUSE_SIG, int(_resume_max_days())))
     except Exception as e:
         logger.warning(f" [CHUNK] Error purgando chunks cancelados: {e}")
 
@@ -26213,6 +26726,7 @@ def process_plan_chunk_queue(target_plan_id=None):
                     SELECT 1 FROM plan_chunk_queue q3
                     WHERE q3.meal_plan_id = q1.meal_plan_id AND q3.status = 'processing'
                 )
+__PLAN_MODE_GATE__
                 ORDER BY q1.created_at ASC
                 FOR UPDATE SKIP LOCKED
                 LIMIT 1
@@ -26271,6 +26785,7 @@ def process_plan_chunk_queue(target_plan_id=None):
                     SELECT 1 FROM plan_chunk_queue q3
                     WHERE q3.meal_plan_id = q1.meal_plan_id AND q3.status = 'processing'
                 )
+__PLAN_MODE_GATE__
                 ORDER BY q1.created_at ASC
                 FOR UPDATE SKIP LOCKED
                 LIMIT 3
@@ -26280,6 +26795,26 @@ def process_plan_chunk_queue(target_plan_id=None):
                       expected_preemption_seconds, escalated_at, attempts;
         """
         params = ()
+
+    # [P1-PLAN-MODE-PICKUP-GATE · 2026-08-11] El freno del modo seguimiento, inyectado
+    # en LAS DOS ramas via token. Fragmento CONSTANTE de plan_mode.PICKUP_GATE_SQL
+    # (cero entrada de usuario en el SQL); el knob MEALFIT_PLAN_MODE_SWITCH lo apaga
+    # entero. Si reescribes una de las CTE y se te lleva el token por delante, el
+    # apagado deja de apagar EN ESA RAMA y nadie lo nota: test_p1_plan_mode.py ancla
+    # que el token aparece dos veces.
+    from plan_mode import PICKUP_GATE_SQL as _pm_gate_sql, PLAN_MODE_SWITCH_ENABLED as _pm_on
+    # [P1-FREEZE-OWNS-ITS-CHUNKS · 2026-08-14] Segunda capa del congelado, la que
+    # detiene el GASTO (misma receta de dos capas que plan_mode: la capa 1 —el
+    # filtro del rescate de nevera— evita que los revivan; esta evita que el
+    # worker los ejecute si CUALQUIER otro mecanismo los flipea a pending). Un
+    # plan con días congelados no debe quemar LLM: sus semanas se generan cuando
+    # el usuario repone y el plan vuelve a correr. `_resume_frozen_plan` limpia
+    # `_frozen_at` ANTES de devolver los chunks a pending, así que lo reanudado
+    # pasa el gate en el mismo tick. Condicionado al knob del propio freeze: sin
+    # feature no hay flag legítimo que leer.
+    _freeze_on = _env_bool("MEALFIT_PLAN_FREEZE_ENABLED", True)
+    _gates_sql = (_pm_gate_sql.rstrip() if _pm_on else "") + (_FREEZE_GATE_SQL.rstrip() if _freeze_on else "")
+    query = query.replace("__PLAN_MODE_GATE__", _gates_sql)
 
     try:
         tasks = execute_sql_write(query, params, returning=True)
@@ -26374,6 +26909,11 @@ def process_plan_chunk_queue(target_plan_id=None):
 
         form_data = copy.deepcopy(snap.get("form_data", {}))
         snapshot_form_data = snap.get("form_data", {}) or {}
+        # País resuelto una sola vez para TODAS las capas del guard de Nevera
+        # (LLM, shuffle, live-check y post-merge). El snapshot mantiene el país
+        # del plan aunque el perfil cambie durante un chunk en curso.
+        from constants import country_for_form_data as _country_for_pantry_guard
+        _pantry_guard_country = _country_for_pantry_guard(form_data)
 
         # [P0-5] Default-init names that are only conditionally bound deeper in the
         # function. Python's lexical scoping treats any later assignment as creating a
@@ -26698,6 +27238,18 @@ def process_plan_chunk_queue(target_plan_id=None):
 
         try:
             # [GAP 3 FIX: GUARD validar plan activo y no-fallido]
+            # [P1-ARQ25-F1-LIFECYCLE · 2026-09-02] Bloque 1 = chunk 0 — va DENTRO de este
+            # `try:` (su `finally` libera lock + heartbeat) y ANTES del guard legacy de plan
+            # activo (el placeholder está en 'generating', no 'failed'). El worker es la ÚNICA
+            # autoridad de generación (I19): el chunk `initial` entra por el mismo pickup
+            # (gates H1/H2 incluidos). El cuerpo vive en `generation_lifecycle.run_initial_chunk`
+            # y NUNCA lanza hacia el handler genérico: cada rama termina en su propio CAS.
+            # (El comentario `[GAP 3 FIX` queda pegado al `try:` a propósito: es el ancla de
+            # test_p1_new_3_chunk_user_locks_release_contract.)
+            if str(chunk_kind or "") == "initial":
+                from generation_lifecycle import run_initial_chunk
+                run_initial_chunk(task=task, snap=snap, form_data=form_data, pickup_attempts=_pickup_attempts)
+                return
             active_plan = execute_sql_query(
                 "SELECT id, plan_data->>'generation_status' as status FROM meal_plans WHERE id = %s",
                 (meal_plan_id,), fetch_one=True
@@ -28134,13 +28686,19 @@ def process_plan_chunk_queue(target_plan_id=None):
                 # día 30 (dry-run 2026-07-10: prod 7d con reservas 0/N + neveras vacías →
                 # pending_user_action). rolling_refill/catchup CONSERVAN la pausa: a mitad de
                 # plan sí prometemos cocinar con lo que hay.
+                # [P1-FIRST-PURCHASE-PAUSE · 2026-08-16] Única excepción a la autonomía,
+                # decidida DENTRO del waiver SSOT: lista entregada + usuario que jamás marcó
+                # compra + primera vez ⇒ pausa suave una vez (reason propio, TTL 12h del
+                # recovery). `_first_purchase_plan_facts` es fail-safe: sin hechos, autonomía.
                 _meaningful = _count_meaningful_pantry_items(fresh_inventory)
+                _fp_facts = _first_purchase_plan_facts(meal_plan_id)
                 # [P1-PANTRY-GATE-SSOT · 2026-07-26] mismo predicado que el gate de reservas.
                 # Llegados aquí `_should_pause_for_empty_pantry` ya descartó flexible/advisory/
                 # guest, así que en la práctica solo puede devolver "initial_plan_autonomy" —
                 # pero se consulta la SSOT para que el knob tenga UN solo lector en el archivo.
                 _pause_waiver = _pantry_gate_waiver_reason(
-                    chunk_kind=chunk_kind, snapshot=snap, form_data=form_data
+                    chunk_kind=chunk_kind, snapshot=snap, form_data=form_data,
+                    plan_facts=_fp_facts,
                 )
                 if _pause_waiver:
                     logger.info(
@@ -28150,6 +28708,21 @@ def process_plan_chunk_queue(target_plan_id=None):
                         f"del plan define qué comprar)."
                     )
                 else:
+                    # [P1-FIRST-PURCHASE-PAUSE] El reason se deriva del MISMO helper que usó el
+                    # waiver (no una segunda decisión): si la denegación vino de la primera
+                    # compra, el copy del banner habla de la compra, no de una nevera rota.
+                    if chunk_kind == "initial_plan" and _first_purchase_pause_applies(_fp_facts):
+                        _mark_first_purchase_pause(meal_plan_id, user_id)
+                        logger.warning(
+                            f"[P1-FIRST-PURCHASE-PAUSE] Chunk {week_number} plan {meal_plan_id} "
+                            f"pausado UNA vez: lista entregada y ninguna compra marcada jamás "
+                            f"(items_meaningful={_meaningful}, source={fresh_inventory_source!r})."
+                        )
+                        _pause_chunk_for_pantry_refresh(
+                            task_id, user_id, week_number, fresh_inventory,
+                            reason="awaiting_first_purchase",
+                        )
+                        return
                     # [P1-1] Source distinto a "live" se pausaba antes silenciosamente. Logueamos
                     # explícitamente la fuente para detectar si la mayoría de pausas vienen de
                     # snapshots vacíos (síntoma de un frontend que no envía despensa al crear plan).
@@ -28176,8 +28749,8 @@ def process_plan_chunk_queue(target_plan_id=None):
                 if is_degraded:
                     # [GAP 6 FIX: Probe LLM para auto-recovery]
                     try:
-                        # [P0-DEEPSEEK-MIGRATION · 2026-06-12] Probe via DeepSeek.
-                        from llm_provider import ChatDeepSeek, model_free_tier
+                        # [P0-LLM-PROVIDER-MIGRATION · 2026-06-12] Probe via GLM.
+                        from llm_provider import ChatGLM, model_free_tier
                         import os
                         # [P0-1-RECOVERY/WORKER-FIX] No importar datetime/timezone aquí: el módulo
                         # ya los tiene globales (cron_tasks.py:3). Importarlos localmente
@@ -28203,7 +28776,7 @@ def process_plan_chunk_queue(target_plan_id=None):
 
                         if can_probe:
                             logger.info(f" [GAP 6] Iniciando Probe LLM para auto-recovery del chunk {week_number}...")
-                            probe_llm = ChatDeepSeek(
+                            probe_llm = ChatGLM(
                                 model=model_free_tier(),
                                 temperature=0.0,
                                 max_retries=0,
@@ -28276,6 +28849,12 @@ def process_plan_chunk_queue(target_plan_id=None):
 
                     blocklist = current_allergies + current_dislikes
 
+                    # [P1-COUNTRY-SYSTEM-F2 · T5 · 2026-08-17] País del pool de catálogo del camino
+                    # degradado — derivado UNA vez (mismo patrón que T2, `_day_system_instruction_for_diet`)
+                    # y reusado en los 4 call sites de `_build_filtered_edge_recipe_day` de este bloque.
+                    # Knob apagado ⇒ `country_for_form_data` siempre 'DO' (byte-idéntico).
+                    _edge_recipe_country = _pantry_guard_country
+
                     # [P1-6 FIX] Construir edge recipes con catálogos ya filtrados por alergias/dislikes/dieta.
                     # [P0-C FIX] Pasar pantry para que solo elija ingredientes disponibles en la nevera.
                     from constants import PLAN_CHUNK_SIZE as _PCS
@@ -28287,6 +28866,7 @@ def process_plan_chunk_queue(target_plan_id=None):
                                 current_dislikes,
                                 current_diet,
                                 pantry_items=_fresh_pantry_for_edge,
+                                country=_edge_recipe_country,
                             )
                             if not edge_day:
                                 logger.warning(
@@ -28553,6 +29133,7 @@ def process_plan_chunk_queue(target_plan_id=None):
                                     current_dislikes,
                                     current_diet,
                                     pantry_items=_fresh_pantry_for_edge,  # [P0-C FIX]
+                                    country=_edge_recipe_country,  # [P1-COUNTRY-SYSTEM-F2 · T5]
                                 )
                                 # Validar que no estemos repitiendo el hash por accidente
                                 if edge_day and str([m.get('name') for m in edge_day.get('meals', [])]) != last_chosen_hash:
@@ -28609,6 +29190,7 @@ def process_plan_chunk_queue(target_plan_id=None):
                                 _pantry_snap,
                                 strict_quantities=True,
                                 tolerance=_p1d_tolerance,
+                                country=_edge_recipe_country,
                             )
                             if _qty_check is True:
                                 _qty_validated = True
@@ -28655,6 +29237,7 @@ def process_plan_chunk_queue(target_plan_id=None):
                                     current_dislikes,
                                     current_diet,
                                     pantry_items=_pantry_snap,
+                                    country=_edge_recipe_country,  # [P1-COUNTRY-SYSTEM-F2 · T5]
                                 )
                                 if edge_day:
                                     _edge_ing = [
@@ -28663,7 +29246,8 @@ def process_plan_chunk_queue(target_plan_id=None):
                                     ]
                                     # [P1-D] Reusar tolerance per-usuario resuelto arriba.
                                     _edge_qty_check = validate_ingredients_against_pantry(
-                                        _edge_ing, _pantry_snap, strict_quantities=True, tolerance=_p1d_tolerance
+                                        _edge_ing, _pantry_snap, strict_quantities=True,
+                                        tolerance=_p1d_tolerance, country=_edge_recipe_country,
                                     )
                                     if _edge_qty_check is True:
                                         shuffled_day = edge_day
@@ -28790,6 +29374,7 @@ def process_plan_chunk_queue(target_plan_id=None):
                                     current_dislikes,
                                     current_diet,
                                     pantry_items=None,  # sin restricción → catálogo completo
+                                    country=_edge_recipe_country,  # [P1-COUNTRY-SYSTEM-F2 · T5]
                                 )
                             except Exception as _p15_edge_err:
                                 logger.error(
@@ -28896,11 +29481,13 @@ def process_plan_chunk_queue(target_plan_id=None):
                         _val_res = validate_ingredients_against_pantry(
                             _day_ingredients, form_data.get("current_pantry_ingredients", []),
                             strict_quantities=True, tolerance=1.0,
+                            country=_edge_recipe_country,
                         )
                         if _val_res is True:
                             _val_res = validate_ingredients_against_pantry(
                                 _day_ingredients, _pantry_snap,
                                 strict_quantities=True, tolerance=1.0,
+                                country=_edge_recipe_country,
                             )
                         if _val_res is not True:
                             # [G-C3 · P2-CRON-OPT-4 · 2026-05-31] Eliminado el dead-write per-día
@@ -29556,15 +30143,9 @@ def process_plan_chunk_queue(target_plan_id=None):
                     # Inyectar perfil en vivo para que los chunks asincronicos usen el objetivo (goal), peso, alergias y budget actualizados.
                     # Se protegen variables internas de generacion como _days_offset.
                     if chunk_health_profile:
-                        # [GAP 5] Blindar ambas variantes de plan_start_date para que el merge
-                        # de health_profile NO pise la fecha canonica guardada en form_data.
-                        _protected_keys = {
-                            '_plan_start_date', 'plan_start_date',
-                            'generation_mode', 'session_id', 'user_id', 'total_days_requested',
-                        }
-                        for k, v in chunk_health_profile.items():
-                            if not k.startswith('_') and k not in _protected_keys:
-                                form_data[k] = v
+                        # P1-COUNTRY-PLAN-VS-PERFIL-EN-BLOQUES: el perfil vivo actualiza
+                        # objetivos/señales, pero no la identidad del plan ya encolado.
+                        form_data = _merge_chunk_live_profile(form_data, chunk_health_profile)
 
                     form_data = _refresh_chunk_pantry(user_id, form_data, snapshot_form_data, task_id=task_id, week_number=week_number)
                     if form_data.get("_pantry_paused"):
@@ -29723,7 +30304,10 @@ def process_plan_chunk_queue(target_plan_id=None):
                         
                         from constants import validate_ingredients_against_pantry as _vip
                         _all_gen_ing = [ing for d in new_days for m in d.get("meals", []) for ing in m.get("ingredients", []) if isinstance(ing, str)]
-                        _live_check = _vip(_all_gen_ing, fresh_live_inv, strict_quantities=True, tolerance=1.0)
+                        _live_check = _vip(
+                            _all_gen_ing, fresh_live_inv, strict_quantities=True,
+                            tolerance=1.0, country=_pantry_guard_country,
+                        )
                         
                         logger.info(f"[P0-2/LIVE-VALIDATION] plan={meal_plan_id} chunk={week_number} drift={drift_pct*100:.1f}% live_check_failed={not _live_check}")
                         
@@ -29861,7 +30445,39 @@ def process_plan_chunk_queue(target_plan_id=None):
 
                         # [P0-3] Validación post-generación: todos los ingredientes deben estar en la nevera.
                         # strict_quantities=False: solo validamos existencia, no cantidades exactas.
+                        #
+                        # [P1-PANTRY-EXIST-WAIVER · 2026-08-08] Esta era la TERCERA guarda de
+                        # nevera del worker y la única fuera de P1-PANTRY-GATE-SSOT: decidía
+                        # sola con `if _pantry_snapshot:` — ciega a flexible/advisory/guest/
+                        # initial-autonomy (no leía flag alguno, por eso el blanket del SSOT
+                        # nunca la vio). Un chunk resucitado en modo flexible generaba CON
+                        # permiso de salirse de la nevera y esta guarda lo pausaba por usar
+                        # ese permiso: el lazo del plan 69f9e03d por la tercera puerta.
+                        # Medido en f380821a w2 (2026-08-08): resume flexible 07:39 → ~21 min
+                        # de LLM → re-pausa 08:00 con la MISMA reason
+                        # `pantry_violation_after_retries` y `_pantry_flexible_mode=true`.
+                        # Mismos args que `_res_waiver` (gate de reservas). Salida espejo del
+                        # path advisory (`_pantry_ok=True; break`): también salta el drift
+                        # check `_finalize_live_pantry_validation`, que pausa por otra puerta
+                        # (`persistent_drift`) y es igual de ciego al waiver. rolling_refill/
+                        # catchup SIN modo flexible conservan la validación estricta ÍNTEGRA.
+                        # tooltip-anchor: P1-PANTRY-EXIST-WAIVER
                         _pantry_snapshot = form_data.get("current_pantry_ingredients", [])
+                        _exist_waiver = _pantry_gate_waiver_reason(
+                            chunk_kind=chunk_kind,
+                            snapshot=snap,
+                            form_data=form_data,
+                            fresh_inventory_source=form_data.get("_fresh_pantry_source"),
+                        )
+                        if _pantry_snapshot and _exist_waiver:
+                            logger.info(
+                                f"[P1-PANTRY-EXIST-WAIVER] Chunk {week_number} plan {meal_plan_id}: "
+                                f"validación de nevera post-generación OMITIDA (waiver={_exist_waiver!r}) — "
+                                f"la lista de compras del plan define qué comprar."
+                            )
+                            _pantry_ok = True
+                            form_data.pop("_pantry_correction", None)
+                            break
                         if _pantry_snapshot:
                             _all_gen_ing = [
                                 ing for d in new_days
@@ -29870,7 +30486,10 @@ def process_plan_chunk_queue(target_plan_id=None):
                                 if isinstance(ing, str) and ing.strip()
                             ]
                             from constants import validate_ingredients_against_pantry as _vip
-                            _val_result = _vip(_all_gen_ing, _pantry_snapshot, strict_quantities=False)
+                            _val_result = _vip(
+                                _all_gen_ing, _pantry_snapshot,
+                                strict_quantities=False, country=_pantry_guard_country,
+                            )
                             if _val_result is True:
                                 # [P0-B] Existencia OK. Validamos cantidades según el modo configurado.
                                 #   off      → aceptar tal cual.
@@ -29919,7 +30538,11 @@ def process_plan_chunk_queue(target_plan_id=None):
                                     form_data.pop("_pantry_correction", None)
                                     break
 
-                                _qty_result = _vip(_all_gen_ing, _pantry_snapshot, strict_quantities=True, tolerance=_tolerance)
+                                _qty_result = _vip(
+                                    _all_gen_ing, _pantry_snapshot,
+                                    strict_quantities=True, tolerance=_tolerance,
+                                    country=_pantry_guard_country,
+                                )
                                 if _qty_result is True:
                                     _final_validation = _finalize_live_pantry_validation(
                                         "Inventario actualizado durante generación. Por favor, ajusta el plan."
@@ -30098,7 +30721,10 @@ def process_plan_chunk_queue(target_plan_id=None):
                                     if isinstance(ing, str) and ing.strip()
                                 ]
                                 from constants import validate_ingredients_against_pantry as _vip
-                                _safe = _vip(_all_gen_ing, live_inv, strict_quantities=True)
+                                _safe = _vip(
+                                    _all_gen_ing, live_inv, strict_quantities=True,
+                                    country=_pantry_guard_country,
+                                )
                                 if _safe is not True:
                                     logger.warning(f"[P0-2] Chunk {week_number} generado con flexible_mode falló validación vs live inventory. Pausando chunk.")
 
@@ -30133,7 +30759,14 @@ def process_plan_chunk_queue(target_plan_id=None):
                                             user_id=user_id,
                                             title="Tu plan tiene compras urgentes",
                                             body=f"Generamos los días {days_offset+1}-{days_offset+days_count} pero te faltan ingredientes. Revisa tu lista de compras.",
-                                            url="/shopping-list"
+                                            # [P2-PUSH-RESPECTS-PAUSE · 2026-08-15] Era
+                                            # "/shopping-list", que NO existe en App.jsx:
+                                            # tocar el push abría un 404 justo después de
+                                            # prometerle al usuario su lista. Era el único
+                                            # de los 18 deeplinks del fichero que no
+                                            # apuntaba a /dashboard — un valor huérfano se
+                                            # detecta comparándolo con sus hermanos.
+                                            url="/dashboard/shopping"
                                         )
 
                                     for d in new_days:
@@ -30143,17 +30776,47 @@ def process_plan_chunk_queue(target_plan_id=None):
                                                 if isinstance(m, dict):
                                                     m['_pantry_unsafe_after_flexible'] = True
                                                     if missing_list:
-                                                        m['_missing_ingredients'] = missing_list
+                                                        # [P1-URGENT-LIST-CANONICAL · 2026-08-09]
+                                                        # missing_list es la unión del CHUNK;
+                                                        # estamparla entera en cada comida pintaba
+                                                        # una pared roja de 27 ítems en CADA plato
+                                                        # del Dashboard (hígado y mejillones «faltando»
+                                                        # en un bowl de avena — plan f380821a del
+                                                        # owner). Cada comida recibe SOLO las líneas
+                                                        # que le pertenecen (matching normalizado
+                                                        # contra sus propios ingredientes).
+                                                        _own_missing = _meal_scoped_missing(
+                                                            m, missing_list)
+                                                        if _own_missing:
+                                                            m['_missing_ingredients'] = _own_missing
 
-                                    # [P0-C] Pasar missing_list al pause helper para que el recovery
-                                    # cron pueda detectar cuándo el usuario las añadió a la nevera y
-                                    # reanudar el chunk sin esperar el TTL escalation a flexible_mode.
-                                    _pause_chunk_for_final_inventory_validation(
-                                        task_id, user_id, week_number,
-                                        reason="flexible_live_unreachable",
-                                        missing_ingredients=missing_list or None,
-                                    )
-                                    return False
+                                    # [P1-FLEX-DELIVER · 2026-08-08] Si el chunk llegó aquí por el
+                                    # TTL-escalation a flexible (el usuario NO repuso a tiempo), la
+                                    # pausa re-creaba el ciclo infinito pausa→TTL→flexible→generar→
+                                    # pausa (medido en f380821a: una generación de 4 días quemada
+                                    # cada ~2h). El flexible existe PORQUE la nevera no cubre; el
+                                    # waiver pre-gen del mismo día ya fijó la semántica («la lista
+                                    # de compras define qué comprar») — completar la decisión en
+                                    # este seam: ENTREGAR con la Compra Urgente persistida + push +
+                                    # días marcados (todo ya hecho arriba), sin re-pausar. La rama
+                                    # stale_snapshot conserva la pausa: ahí el faltante puede ser
+                                    # espejismo del snapshot viejo, no decisión de producto.
+                                    if form_data.get("_pantry_flexible_mode"):
+                                        logger.warning(
+                                            f"🛒 [P1-FLEX-DELIVER] Chunk {week_number} plan {meal_plan_id}: "
+                                            f"{len(missing_list or [])} faltante(s) en modo flexible TTL-escalado "
+                                            f"→ ENTREGA con 🚨 Compra Urgente (re-pausar recreaba el ciclo "
+                                            f"infinito que quemaba una generación por TTL).")
+                                    else:
+                                        # [P0-C] Pasar missing_list al pause helper para que el recovery
+                                        # cron pueda detectar cuándo el usuario las añadió a la nevera y
+                                        # reanudar el chunk sin esperar el TTL escalation a flexible_mode.
+                                        _pause_chunk_for_final_inventory_validation(
+                                            task_id, user_id, week_number,
+                                            reason="flexible_live_unreachable",
+                                            missing_ingredients=missing_list or None,
+                                        )
+                                        return False
                                 else:
                                     # [P0-A] Validación flexible exitosa: el live inventory
                                     # cubre lo que este chunk necesita. Si chunks previos
@@ -30746,7 +31409,47 @@ def process_plan_chunk_queue(target_plan_id=None):
                         # a chunk pause instead of an annotation. The advisory annotation is the
                         # contract; the post-merge guard should only catch UNEXPECTED new violations.
                         _p04_advisory_skip = bool(form_data.get("_pantry_quantity_violations"))
-                        if _p04_pantry and not _p04_advisory_skip:
+                        # [P1-FLEX-DELIVER · 2026-08-08] TERCERA guarda de la misma condición:
+                        # pre-gen (waiver) y post-gen (entrega flexible) ya toleran faltantes en
+                        # modo flexible TTL-escalado, pero este guard duro post-merge re-imponía
+                        # strict → _PantryViolationPostMerge → ROLLBACK del merge → re-pausa con
+                        # OTRA reason (pantry_violation_post_merge) → el ciclo seguía vivo con
+                        # otra cabeza (medido en f380821a tras el fix post-gen: la lista creció
+                        # 85→191 appendeando Compra Urgente en cada vuelta). Tres guardas sobre
+                        # la misma condición OSCILAN. En flexible la entrega marcada es el contrato.
+                        # [P1-POSTMERGE-WAIVER-SSOT · 2026-08-22] CUARTA guarda de la misma
+                        # condición. Leía `_pantry_flexible_mode` a pelo, o sea que honraba 1 de
+                        # los 4 waivers: un chunk `initial_plan` al que las guardas 1 (pre-pipeline)
+                        # y 3 (existencial, P1-PANTRY-EXIST-WAIVER) ya habían perdonado por
+                        # `initial_plan_autonomy` moría AQUÍ. Medido en el plan 2245eb45 chunk 2:
+                        # `attempts=0` (el waiver hizo `break` en la iteración 0, así que al LLM
+                        # nunca se le dijo nada), y el `raise` dentro de `conn.transaction()` tiró
+                        # el merge entero → `pending_user_action` → Dashboard vacío. Se pagó el
+                        # LLM completo, no se le dio una sola oportunidad de corregir, y el
+                        # resultado se descartó por una condición ya perdonada tres veces.
+                        # Mismos args que `_exist_waiver` (guarda 3) y que `_res_waiver`.
+                        # tooltip-anchor: P1-POSTMERGE-WAIVER-SSOT
+                        _p04_waiver = _pantry_gate_waiver_reason(
+                            chunk_kind=chunk_kind,
+                            snapshot=snap,
+                            form_data=form_data,
+                            fresh_inventory_source=form_data.get("_fresh_pantry_source"),
+                        )
+                        if _p04_waiver and _p04_pantry:
+                            # Entregar marcando es el contrato (P0-5 en el camino síncrono,
+                            # P1-FLEX-DELIVER en el flexible): un menú con lo que falta señalado
+                            # es estrictamente mejor que ningún menú. `_mark_meals_violating_pantry`
+                            # estampa `_pantry_violated` per-comida para que el Dashboard pinte
+                            # el aviso en ESE plato.
+                            _p04_marked = _mark_meals_violating_pantry(
+                                {"days": merged_days}, _p04_pantry,
+                                country=_pantry_guard_country,
+                            )
+                            logger.warning(
+                                f"🛒 [P1-POSTMERGE-WAIVER-SSOT] Plan {meal_plan_id} chunk {week_number}: "
+                                f"guard duro post-merge OMITIDO (waiver={_p04_waiver!r}) — entrega "
+                                f"marcada con 🚨 Compra Urgente. {_p04_marked} comida(s) señalada(s).")
+                        if _p04_pantry and not _p04_advisory_skip and not _p04_waiver:
                             # [P2-CHUNK-5] El rango de días NUEVOS se deriva de prior_count
                             # (días pre-existentes post-dedup), NO de days_offset. El merge
                             # re-renumera todo a 1..N desde prior_count+1 (líneas ~26803),
@@ -30759,6 +31462,7 @@ def process_plan_chunk_queue(target_plan_id=None):
                                 merged_days,
                                 _p04_pantry,
                                 new_chunk_day_range=(_p04_new_start, _p04_new_end),
+                                country=_pantry_guard_country,
                             )
                             if not _p04_ok:
                                 _sample = _p04_violations[0] if _p04_violations else {}
@@ -30828,6 +31532,12 @@ def process_plan_chunk_queue(target_plan_id=None):
                         # los días ya están en plan_data. Re-mergearlos duplicaría silenciosamente.
                         merged_chunk_ids = plan_data.get('_merged_chunk_ids', [])
                         chunk_already_merged = str(task_id) in [str(x) for x in merged_chunk_ids]
+
+                        # [P1-PLAN-DISPLAY-I18N · 2026-08-19] tooltip-anchor:
+                        # P1-PLAN-DISPLAY-I18N-TRIGGER-2. Default None: solo la rama
+                        # "Merge normal" (días NUEVOS realmente persistidos, no el replay
+                        # idempotente de `chunk_already_merged`) la puebla, abajo.
+                        _p1_i18n_new_day_indices = None
 
                         if chunk_already_merged:
                             # Los días ya están en el plan — solo necesitamos reintentar la shopping list
@@ -31090,6 +31800,13 @@ def process_plan_chunk_queue(target_plan_id=None):
                             plan_data['days'] = merged_days
                             new_total = len(merged_days)
                             plan_data['total_days_generated'] = new_total
+
+                            # [P1-PLAN-DISPLAY-I18N · 2026-08-19] Índices (0-based) de los
+                            # días NUEVOS de este chunk dentro de `merged_days` (ya recortado
+                            # por el guard [GAP 3] de arriba, así que el rango queda acotado
+                            # incluso si el chunk fue trimeado). El dispatch real ocurre más
+                            # abajo, fuera del FOR UPDATE, con T1 ya commiteado.
+                            _p1_i18n_new_day_indices = list(range(prior_count, len(merged_days)))
 
                             # [P1-COHERENCE-FINALIZE · 2026-06-28] Escudo defensivo del chunk worker: el T1 persiste los
                             # days de semanas 2+ vía UPDATE crudo (~30433), bypaseando ambos chokepoints de db_plans.
@@ -31892,6 +32609,46 @@ def process_plan_chunk_queue(target_plan_id=None):
             new_status = update_result[0].get("new_status", "partial")
             full_plan_data = update_result[0].get("full_plan_data", {})
 
+            # [P1-PLAN-DISPLAY-I18N · 2026-08-19 · fix-round 1 F2/F7] tooltip-anchor:
+            # P1-PLAN-DISPLAY-I18N-TRIGGER-2. T1 (el UPDATE que mergeó `days` en
+            # meal_plans) ya commiteó: esta línea vive a indent 12, el MISMO nivel
+            # que el `with connection_pool.connection() as conn:` que abre T1 más
+            # arriba — fuera de los tres `with` anidados de esa transacción (review
+            # V1: "el dispatch está en indent 12 → fuera de los tres `with` →
+            # transacción commiteada"). NO anclar este razonamiento a
+            # `_t1_persist_view` ni a ningún nombre DENTRO del `FOR UPDATE`: esos
+            # existen mientras la transacción sigue abierta, y un dispatch ahí
+            # correría contra la misma fila que el worker tiene bloqueada
+            # (`update_plan_data_atomic` colisionaría hasta el statement_timeout).
+            # Despachar el enriquecimiento de los días NUEVOS de este bloque.
+            # Best-effort: el worker de chunks jamás puede fallar por esto.
+            if _p1_i18n_new_day_indices:
+                try:
+                    from db import execute_sql_query as _p1_i18n_query
+                    from plan_display_i18n import schedule_plan_display_enrichment as _p1_i18n_schedule
+                    # [F7 fix-round 1] SELECT dirigido de UNA columna por PK en vez de
+                    # `get_user_profile` (SELECT * + posible UPDATE lateral de downgrade
+                    # de tier, ver `db_profiles.py::get_user_profile` middleware de
+                    # graceful degradation) — este es el primer call site de perfil
+                    # dentro de `_chunk_worker`; I2 aquí es el `WHERE id = %s` (lectura
+                    # por PK, sin necesidad de un filtro user_id adicional).
+                    _p1_i18n_row = _p1_i18n_query(
+                        "SELECT locale FROM user_profiles WHERE id = %s",
+                        (user_id,),
+                        fetch_one=True,
+                    )
+                    _p1_i18n_locale = (_p1_i18n_row or {}).get("locale")
+                    if _p1_i18n_locale and _p1_i18n_locale != "es-DO":
+                        _p1_i18n_schedule(
+                            meal_plan_id, user_id, _p1_i18n_locale,
+                            day_indices=_p1_i18n_new_day_indices,
+                        )
+                except Exception as _p1_i18n_e:
+                    logger.warning(
+                        f"[P1-PLAN-DISPLAY-I18N] dispatch chunk worker falló "
+                        f"plan={meal_plan_id} chunk={week_number}: {_p1_i18n_e!r}"
+                    )
+
             # [GAP 2 FIX]: Recalcular lista de compras CON RETRY + ROLLBACK del merge si falla
             # Antes: solo logger.warning si fallaba -> plan quedaba con dias nuevos + shopping list vieja.
             # Ahora: retry 3x con backoff. Si falla -> marca chunk con flag para reintentar solo shopping.
@@ -32050,7 +32807,12 @@ def process_plan_chunk_queue(target_plan_id=None):
                     try:
                         from shopping_calculator import compute_shopping_cost_summary as _ccs_t2
                         from nutrition_calculator import refresh_budget_reconciliation as _rbr_t2
-                        _sum_t2 = _ccs_t2(aggr_7, aggr_15_hybrid, aggr_30_hybrid, grocery_duration)
+                        # [P1-COUNTRY-SYSTEM-F1 · 2026-08-16 (T7)] full_plan_data ya trae la clave
+                        # desde el INSERT del chunk 1 — beta ⇒ None, el "excedido" de abajo queda
+                        # inalcanzable (budget_reconciliation nunca se setea) y la 2ª pasada
+                        # (_sum_t2b, más abajo) no corre.
+                        _sum_t2 = _ccs_t2(aggr_7, aggr_15_hybrid, aggr_30_hybrid, grocery_duration,
+                                           pricing_mode=full_plan_data.get("_pricing_mode"))
                         if _sum_t2:
                             full_plan_data["shopping_cost_summary"] = _sum_t2
                             _rbr_t2(full_plan_data)
@@ -32106,7 +32868,16 @@ def process_plan_chunk_queue(target_plan_id=None):
                                         full_plan_data['aggregated_shopping_list'] = (
                                             aggr_15_hybrid if grocery_duration == "biweekly"
                                             else aggr_30_hybrid if grocery_duration == "monthly" else aggr_7)
-                                        _sum_t2b = _ccs_t2(aggr_7, aggr_15_hybrid, aggr_30_hybrid, grocery_duration)
+                                        # [P1-COUNTRY-SYSTEM-F1 · 2026-08-16 (T7 fix-round · review
+                                        # Critical)] full_plan_data trae la clave desde el INSERT —
+                                        # gate explícito: este pase corre bajo "excedido" leído de
+                                        # DATOS PERSISTIDOS (full_plan_data.get('budget_reconciliation')),
+                                        # no de un cómputo fresco de ESTE chunk — una reconciliación
+                                        # STALE sembrada por un leak aguas arriba (ej. sitios sin este
+                                        # mismo gate) podría disparar este pase y auto-perpetuarse vía
+                                        # refresh_budget_reconciliation. No se asume inalcanzable.
+                                        _sum_t2b = _ccs_t2(aggr_7, aggr_15_hybrid, aggr_30_hybrid, grocery_duration,
+                                                            pricing_mode=full_plan_data.get("_pricing_mode"))
                                         if _sum_t2b:
                                             full_plan_data["shopping_cost_summary"] = _sum_t2b
                                             _rbr_t2(full_plan_data)
@@ -33162,20 +33933,24 @@ def trigger_incremental_learning(user_id: str):
     import logging
     logger = logging.getLogger(__name__)
     try:
-        from db_core import execute_sql_query
+        from db import get_latest_usable_meal_plan
         from db_profiles import get_user_profile
         from db_facts import get_consumed_meals_since
         from datetime import datetime, timezone, timedelta
         
         # 1. Obtener el plan activo
-        plan_res = execute_sql_query(
-            "SELECT plan_data FROM meal_plans WHERE user_id = %s AND status = 'active' ORDER BY created_at DESC LIMIT 1",
-            (user_id,)
-        )
-        if not plan_res:
+        # [P1-INCREMENTAL-LEARNING-ACTIVE-PLAN · 2026-09-02] Desde 2026-04-22 la query pedía
+        # `meal_plans.status = 'active'`, columna que la tabla NO tiene: cada comida registrada
+        # disparaba este hook y moría en el except con un logger.error, así que el aprendizaje
+        # intradía nunca corrió (el nocturno sí). «Plan activo» = el usable más reciente (el
+        # placeholder vacío de la cola no cuenta), el mismo SSOT que coach, tools e inventario.
+        plan_data = get_latest_usable_meal_plan(user_id) or {}
+        if isinstance(plan_data, str):
+            import json as _json
+            plan_data = _json.loads(plan_data)
+        if not plan_data:
             return
             
-        plan_data = plan_res[0].get('plan_data', {})
         days = plan_data.get('days', [])
         if not days:
             return
@@ -33208,6 +33983,163 @@ def trigger_incremental_learning(user_id: str):
 
 
 # ─── P0-2: ROLLING REFILL EN BACKGROUND (usuarios que no abren la app) ───────
+
+# [P1-PAUSE-AGE-TRUE-CLOCK · 2026-08-07] La edad de una pausa NO es
+# `NOW() - updated_at`.
+#
+# Cada recordatorio (cada 4h) y cada re-pausa escriben `updated_at = NOW()`, así
+# que un chunk que entra en bucle —pausa → TTL → escala a flexible → vuelve a
+# violar la nevera → se re-pausa— reinicia su propio reloj en cada vuelta y
+# NUNCA alcanza los umbrales de 12h/24h. El vigilante mide justo el reloj que el
+# fallo que persigue mantiene fresco.
+#
+# Medido en producción 2026-08-07:
+#     chunk          updated_at    edad REAL
+#     76a6836d wk2      6,9h        18,9h
+#     9cf5e313 wk2      5,2h        17,2h
+# y `chunk_paused_indefinitely` llevaba UNA sola emisión en toda la historia,
+# con chunks dando vueltas durante días (`_mode_history` muestra la misma
+# escalada repetida el 05, el 06 y el 07).
+#
+# `_pantry_pause_started_at` sí sobrevive a las vueltas (se escribe con
+# `setdefault`). El regex evita que un valor corrupto reviente el cast y con él
+# el cron entero: sin match, degrada al comportamiento viejo.
+_PAUSE_AGE_SECONDS_SQL = """
+    EXTRACT(EPOCH FROM (NOW() - CASE
+        WHEN {alias}pipeline_snapshot->>'_pantry_pause_started_at' ~ '^\\d{{4}}-\\d{{2}}-\\d{{2}}T'
+        THEN ({alias}pipeline_snapshot->>'_pantry_pause_started_at')::timestamptz
+        ELSE {alias}updated_at
+    END))
+"""
+
+
+def pause_age_seconds_sql(alias: str = "") -> str:
+    """Fragmento SQL SSOT de la edad real de una pausa. `alias` con punto
+    incluido (p.ej. `"q."`) o vacío."""
+    return _PAUSE_AGE_SECONDS_SQL.format(alias=alias)
+
+
+def _rebase_pending_chunk_offsets_sql(cursor, plan_id, live_days_count) -> int:
+    """[P1-CHUNK-OFFSET-REBASE · 2026-08-07] Re-ancla la cola de chunks contra la
+    ventana viva. Ejecutor compartido por las DOS ramas del shift.
+
+    Por qué existe: `execute_after` se calcula `ancla + days_offset`, y el shift
+    reescribe el ancla a HOY al archivar los días vividos. Dejar los offsets
+    quietos descuadra el par por exactamente los días archivados, y el relleno
+    llega tarde esa misma cantidad (plan f380821a, 2026-08-07: ancla 08-05→08-07,
+    offset 3 intacto ⇒ el chunk saltó del 08-08 al 08-10, con UN día vivo).
+
+    `execute_after` se mueve por el MISMO delta que el offset en vez de
+    recalcularse desde cero: así preserva la hora del día (medianoche local +30m)
+    y cualquier adelanto que `safety_margin` ya le hubiera aplicado. El clamp a
+    `NOW()` deja que el scheduler recoja de inmediato lo que ya debía haber
+    corrido, en vez de programarlo al pasado.
+
+    [P1-CHUNK-EXECUTE-CEILING · 2026-08-16] Ese movimiento relativo tiene un
+    precio que no se había cobrado hasta ahora: preserva TAMBIÉN el error previo,
+    porque nadie compara nunca el par (offset, execute_after) contra el ancla.
+    Medido sobre los 3 planes vivos con cola: los 2 reanclados alguna vez estaban
+    en `ancla + offset + 1` — el bloque se ejecutaba el día DESPUÉS de empezar el
+    tramo que cubre, dejando al usuario sin menú ese día, y otra vez al siguiente
+    bloque. El tercero, nunca reanclado, estaba exacto. `chunk_execute_after_ceiling`
+    acota el movimiento por arriba con la medianoche local del primer día que el
+    chunk cubre; un adelanto legítimo sigue ganando (el techo solo acota tarde) y
+    el suelo de NOW() sigue mandando sobre el techo.
+
+    [P1-CHUNK-REBASE-PAUSED · 2026-08-08] La cadena incluye TAMBIÉN los chunks
+    `pending_user_action`: un pausado NO está muerto — el recovery cron lo
+    resucita (TTL → flexible_mode) con `execute_after=NOW()` y SIN recalcular
+    offsets, así que su tramo tiene que seguir reservado y su offset anclado.
+    Dejarlos fuera repartía su tramo al siguiente pendiente (medido en vivo
+    2026-08-08, plan f380821a: w2 pausada offset 0 y w4 reanclada encima) y las
+    dos generaciones escribían los MISMOS días. Para los pausados el UPDATE de
+    `execute_after` es inerte (el worker no los toma y el recovery lo pisa con
+    NOW() al resucitar): lo que importa es el `days_offset`.
+
+    Devuelve cuántas filas movió (0 = ya estaba cuadrada, o knob apagado).
+    """
+    if not _env_bool("MEALFIT_CHUNK_OFFSET_REBASE", True):
+        return 0
+    from constants import (  # noqa: F401
+        chunk_execute_after_ceiling,
+        plan_chunk_offset_moves,
+        rebase_pending_chunk_offsets,
+    )
+    try:
+        # Los chunks EN VUELO ya están fabricando días que el plan todavía no
+        # tiene. Si no se cuentan, el siguiente pendiente ocupa su sitio (offset
+        # 0) y salen los dos a la vez a generar el MISMO tramo — observado en
+        # vivo el 2026-08-07 con el plan 76a6836d: la semana 3 en `processing` y
+        # la 4 reanclada encima de ella. La ventana real es "días vivos + días
+        # que ya vienen en camino".
+        cursor.execute(
+            "SELECT COALESCE(SUM(days_count), 0) AS en_vuelo FROM plan_chunk_queue "
+            "WHERE meal_plan_id = %s AND status = 'processing'",
+            (plan_id,),
+        )
+        en_vuelo = int((cursor.fetchone() or {}).get("en_vuelo") or 0)
+
+        cursor.execute(
+            "SELECT id, days_offset, days_count, pipeline_snapshot "
+            "FROM plan_chunk_queue "
+            "WHERE meal_plan_id = %s AND status IN ('pending', 'stale', 'pending_user_action') "
+            "ORDER BY week_number ASC, days_offset ASC",
+            (plan_id,),
+        )
+        filas = cursor.fetchall() or []
+        if not filas:
+            return 0
+        live_days_count = max(0, int(live_days_count or 0)) + en_vuelo
+        # `plan_chunk_offset_moves` compone la rebase (SSOT) con el delta ya
+        # listo para el UPDATE. Vive en constants y no aquí porque este módulo
+        # no se puede importar sin el stack LLM entero — la aritmética tiene que
+        # ser testeable en cualquier entorno, incluido el del dueño.
+        movimientos = plan_chunk_offset_moves(
+            live_days_count,
+            [(f["id"], f.get("days_offset"), f.get("days_count")) for f in filas],
+        )
+        snapshots = {f["id"]: f.get("pipeline_snapshot") for f in filas}
+        movidas = 0
+        for chunk_id, nuevo_offset, delta, dias_hasta_su_turno in movimientos:
+            # [P1-CHUNK-EXECUTE-CEILING · 2026-08-16] El techo del ancla acota el
+            # movimiento RELATIVO. Sin él, un `execute_after` que ya venía tarde
+            # se mueve tarde para siempre: el par (offset, execute_after) no lo
+            # compara nadie contra el ancla. `LEAST` va DENTRO del `GREATEST`
+            # porque el suelo de NOW() manda sobre el techo — un chunk vencido se
+            # programa cuanto antes, jamás al pasado.
+            techo = chunk_execute_after_ceiling(snapshots.get(chunk_id), nuevo_offset)
+            # El suelo NO es `NOW()`: es `NOW() + los días que faltan para el
+            # turno de ESTE chunk`. Con `NOW()` a secas, todos los chunks
+            # vencidos de un plan salen a la vez y dos generaciones concurrentes
+            # escriben el mismo `plan_data`.
+            cursor.execute(
+                "UPDATE plan_chunk_queue "
+                "SET days_offset = %s, "
+                "    execute_after = GREATEST("
+                "        LEAST("
+                "            execute_after - make_interval(days => %s), "
+                "            COALESCE(%s::timestamptz, 'infinity'::timestamptz)"
+                "        ), "
+                "        NOW() + make_interval(days => %s)"
+                "    ), "
+                "    updated_at = NOW() "
+                "WHERE id = %s AND status IN ('pending', 'stale', 'pending_user_action')",
+                (nuevo_offset, delta, techo, dias_hasta_su_turno, chunk_id),
+            )
+            movidas += 1
+        if movidas:
+            logger.info(
+                f"[P1-CHUNK-OFFSET-REBASE] plan={plan_id} vivos={live_days_count} "
+                f"chunks_reanclados={movidas}/{len(filas)}."
+            )
+        return movidas
+    except Exception as e:
+        # Degradar, NUNCA abortar: esto corre dentro de la transacción que
+        # sostiene el advisory lock del shift. Reventar aquí dejaría al usuario
+        # sin renovación, que es peor que un relleno tarde.
+        logger.warning(f"[P1-CHUNK-OFFSET-REBASE] no se pudo reanclar plan={plan_id}: {e}")
+        return 0
+
 
 def _background_shift_plan_for_user(user_id: str, tz_offset: int = 240) -> bool:
     """
@@ -33318,6 +34250,16 @@ def _background_shift_plan_for_user(user_id: str, tz_offset: int = 240) -> bool:
 
                     plan_data = plan_record.get("plan_data", {})
                     days = plan_data.get("days", [])
+
+                    # [P1-CHUNK-OFFSET-REBASE · 2026-08-07] Antes del `if not
+                    # days: return False` de abajo, y no es un detalle: el plan
+                    # que MÁS necesita esto es justo el que tiene CERO días
+                    # vivos. Con la cura debajo del guard, el usuario sin plan
+                    # se quedaba esperando su relleno una semana (plan
+                    # 76a6836d: 0 días, relleno al 08-12). Con `len(days)=0` los
+                    # offsets caen a 0 y el chunk sale ya.
+                    _rebase_pending_chunk_offsets_sql(cursor, plan_id, len(days))
+
                     if not days:
                         return False
 
@@ -33459,6 +34401,16 @@ def _background_shift_plan_for_user(user_id: str, tz_offset: int = 240) -> bool:
                         day_obj["date"] = target_date.date().isoformat()
 
                     modified = needs_shift
+
+                    # [P1-CHUNK-OFFSET-REBASE · 2026-08-07] El ancla acaba de
+                    # moverse a hoy; los `days_offset` de la cola tienen que
+                    # moverse con ella o el relleno llega tarde por los días
+                    # archivados. Va SIEMPRE (no solo si `needs_shift`): también
+                    # cura las colas que ya quedaron descuadradas por shifts
+                    # anteriores, que es el estado en el que las encontré.
+                    # `rebase_pending_chunk_offsets` es el SSOT de la aritmética.
+                    _rebase_pending_chunk_offsets_sql(cursor, plan_id, len(shifted_days))
+
                     needs_fill_after_shift = (
                         len(shifted_days) < window_needed
                         and days_remaining_in_plan > 0
@@ -33863,10 +34815,18 @@ def trigger_background_rolling_refill() -> None:
         # `ORDER BY` de abajo ya colapsan a la fila más reciente por usuario, sin el
         # index-scan por fila que duplicaba esa lógica. El consumer sólo usa `mp.user_id`
         # (re-resuelve el plan él mismo), así que el set de user_ids es idéntico.
+        # [P1-PLAN-MODE · 2026-08-11] Este cron es EL PEOR para el modo seguimiento:
+        # selecciona por inactividad ≥3 días SIN ningún filtro de plan, así que iba a
+        # buscar cada 4 h exactamente al usuario que apagó y se fue. LEFT JOIN y no
+        # JOIN interno a propósito: un usuario sin fila de perfil desaparecería del
+        # cron con un join interno, y este cron es la red que garantiza la promesa
+        # temporal del plan — COALESCE trata «sin perfil» como 'plan', no como fuera.
         query = """
             SELECT DISTINCT ON (mp.user_id) mp.user_id
             FROM meal_plans mp
-            WHERE mp.user_id NOT IN (
+            LEFT JOIN user_profiles up ON up.id = mp.user_id
+            WHERE COALESCE(up.plan_mode, 'plan') <> 'tracking'
+              AND mp.user_id NOT IN (
                 SELECT DISTINCT user_id
                 FROM agent_sessions
                 WHERE user_id IS NOT NULL
@@ -34151,11 +35111,37 @@ def try_unfreeze_plan_for_user(user_id: str) -> bool:
         if not _env_bool("MEALFIT_PLAN_FREEZE_ENABLED", True) or not user_id:
             return False
         row = execute_sql_query(
-            "SELECT id::text AS plan_id, plan_data->>'_frozen_at' AS frozen_at "
+            "SELECT id::text AS plan_id, plan_data->>'_frozen_at' AS frozen_at, "
+            "plan_data->>'generation_status' AS gstatus "
             "FROM meal_plans WHERE user_id = %s ORDER BY created_at DESC LIMIT 1",
             (user_id,), fetch_one=True,
         )
         if not row or not row.get("frozen_at"):
+            return False
+        # [P1-UNFREEZE-RESPECTS-PAUSE · 2026-08-14] MISMO criterio que el sweep
+        # (`_plan_freeze_sweep`, más abajo): si el plan no está en un estado
+        # "vivo", este hook no lo toca. `paused_by_user` no está en la tupla.
+        #
+        # POR QUÉ HACÍA FALTA. La pausa del modo contador NO limpia `_frozen_at`
+        # —`plan_mode.py` ni lo menciona; su propio comentario CITA ese flag como
+        # precedente de "una bandera que el pickup no lee"—, así que un plan
+        # pausado seguía pareciendo aquí "solo congelado". Pulsar «Ya compré la
+        # lista» le corría las CUATRO anclas del plan (justo el dato del que
+        # depende «retoma exactamente donde quedó»), revivía la cola por detrás
+        # de la pausa —la condición exacta de la alerta
+        # `plan_paused_with_live_queue`— y mandaba un push «¡Tu plan está de
+        # vuelta!» de un plan que el usuario había apagado.
+        #
+        # La defensa ya existía en el sweep y faltaba en este camino. Se comparte
+        # la tupla en vez de escribir aquí un `!= 'paused_by_user'`: dos listas
+        # de estados driftean (`canonicalize_diet_type` llegó a tener tres, y la
+        # del filtro olvidó 'vegetariana').
+        if str(row.get("gstatus") or "") not in _PLAN_FREEZE_ACTIVE_STATUSES:
+            logger.debug(
+                f"[P1-UNFREEZE-RESPECTS-PAUSE] deshielo omitido para user "
+                f"{user_id[:8]}: generation_status={row.get('gstatus')!r} no es un "
+                "estado activo (p.ej. el usuario tiene el plan en pausa)."
+            )
             return False
         inv = execute_sql_query(
             "SELECT ingredient_name FROM user_inventory WHERE user_id = %s AND quantity > 0",

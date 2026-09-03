@@ -169,7 +169,7 @@ if not hasattr(cron_tasks, "get_user_inventory_net"):
 # Helpers compartidos
 # ---------------------------------------------------------------------------
 
-def _make_tasks(week_number=2, days_offset=3, days_count=3, plan_id="plan_learning", extra_snapshot=None):
+def _make_tasks(week_number=2, days_offset=3, days_count=3, plan_id="plan_learning", extra_snapshot=None, chunk_kind=None):
     snapshot = {"form_data": {"_plan_start_date": "2026-04-21T00:00:00+00:00"}}
     if extra_snapshot:
         snapshot.update(extra_snapshot)
@@ -181,6 +181,13 @@ def _make_tasks(week_number=2, days_offset=3, days_count=3, plan_id="plan_learni
         "days_offset": days_offset,
         "days_count": days_count,
         "pipeline_snapshot": snapshot,
+        # [2026-08-14] OPCIONAL a proposito: sin valor, la fila cae al default
+        # `initial_plan` que la mayoria de estos tests asume. Los que ejercitan la
+        # validacion de nevera POST-generacion deben pedir "rolling_refill": el plan
+        # inicial esta exento de ella por P1-INITIAL-CHUNK-PANTRY-AUTONOMY (la lista
+        # de compras define que comprar el dia 0), asi que con el default el bucle
+        # que miden no llega a correr.
+        **({"chunk_kind": chunk_kind} if chunk_kind else {}),
     }]
 
 
@@ -1296,12 +1303,12 @@ def test_smart_shuffle_excludes_high_fatigue_days_using_learned_bases():
     }
 
     # El probe LLM debe fallar para que is_degraded se mantenga True.
-    # [P0-DEEPSEEK-MIGRATION · 2026-06-12] El probe GAP-6 ahora construye
-    # `ChatDeepSeek` (cron_tasks.py:26553, `from llm_provider import ChatDeepSeek`),
+    # [P0-LLM-PROVIDER-MIGRATION · 2026-06-12] El probe GAP-6 ahora construye
+    # `ChatGLM` (cron_tasks.py:26553, `from llm_provider import ChatGLM`),
     # NO `langchain_google_genai.ChatGoogleGenerativeAI` (Gemini eliminado).
-    # Patchear la clase vieja era un no-op → el probe DeepSeek corría sin mockear,
+    # Patchear la clase vieja era un no-op → el probe GLM corría sin mockear,
     # tenía éxito, restauraba modo AI y `run_plan_pipeline` se invocaba.
-    extra = {"mock_llm": "llm_provider.ChatDeepSeek"}
+    extra = {"mock_llm": "llm_provider.ChatGLM"}
     # [P0-5] Inventario debe cubrir los días sin pollo (res, pescado) — si no, el
     # filtro `_filter_days_by_fresh_pantry` (cron_tasks.py:13697) descarta esos
     # candidatos por baja cobertura, dejando sólo los días de pollo o cayendo a
@@ -1340,13 +1347,21 @@ def test_smart_shuffle_excludes_high_fatigue_days_using_learned_bases():
 # Test 7 (P1-1): hybrid quantity mode — reintentar y anotar, nunca fallar
 # ---------------------------------------------------------------------------
 
-def test_hybrid_mode_retries_on_quantity_violation_then_annotates():
+# [2026-08-14] Pide `_coherencia_t2_warn_only`: la lista mockeada de este archivo
+# es `{"categories": []}` y con las recetas del fixture el guard severo la lee como
+# 3 ausencias, escala T2 warn->block y RE-ENCOLA el chunk — el pipeline se queda en 1
+# llamada y el test decia "debe llamar 3 veces" sobre un flujo que nunca llego ahi.
+# La fixture ya existia para esto exacto; a estos dos les faltaba pedirla.
+def test_hybrid_mode_retries_on_quantity_violation_then_annotates(_coherencia_t2_warn_only):
     """
     Hybrid: LLM solicita 250g pollo con solo 100g en despensa (>130% límite).
     Debe reintentar _PANTRY_MAX_RETRIES veces (pipeline llamado 3x) y luego
     anotar la violación en _pantry_quantity_violations en lugar de fallar el chunk.
     """
-    tasks = _make_tasks(week_number=2, days_offset=3, days_count=3)
+    # `rolling_refill`: el default `initial_plan` esta EXENTO de la validacion de
+    # nevera post-generacion (P1-INITIAL-CHUNK-PANTRY-AUTONOMY), que es justo el
+    # bucle de reintentos por cantidad que este test mide.
+    tasks = _make_tasks(week_number=2, days_offset=3, days_count=3, chunk_kind="rolling_refill")
     prior_plan = {
         "total_days_requested": 7,
         "days": [
@@ -1366,7 +1381,10 @@ def test_hybrid_mode_retries_on_quantity_violation_then_annotates():
     # pass — only quantity exceeds the cap (250g pollo vs 100g available, > 1.30x).
     # Otherwise the existence-failure path retries too (cron_tasks.py:15015) and the
     # call counts no longer isolate quantity behavior.
-    pantry = ["100g pollo", "200g arroz", "ajo", "cebolla"]
+    # [2026-08-14] Cinco items: la compuerta PREVIA al LLM exige
+    # `items_meaningful >= 5` para un rolling_refill; con 4 pausaba antes de generar
+    # y el pipeline se quedaba en 0/1 llamadas.
+    pantry = ["100g pollo", "200g arroz", "ajo", "cebolla", "huevos", "tomate", "avena"]
     pipeline_return = {
         "days": [
             {"day": 4, "meals": [{"name": "Pollo al horno",  "ingredients": ["250g pollo", "ajo"]}]},
@@ -1381,7 +1399,9 @@ def test_hybrid_mode_retries_on_quantity_violation_then_annotates():
     # advisory/hybrid annotation path, force the existence check (strict_quantities=False)
     # to pass and the quantity check (strict_quantities=True) to return the canonical
     # over-limit error string.
-    def _vip_with_qty_violation(gen_ing, inv, strict_quantities=False, tolerance=1.0):
+    def _vip_with_qty_violation(
+        gen_ing, inv, strict_quantities=False, tolerance=1.0, country="DO"
+    ):
         if not strict_quantities:
             return True
         return (
@@ -1407,12 +1427,20 @@ def test_hybrid_mode_retries_on_quantity_violation_then_annotates():
     assert len(merged.get("days", [])) == 6, "El plan debe continuar con los 6 días generados"
 
 
-def test_advisory_mode_does_not_retry_on_quantity_violation():
+# [2026-08-14] Pide `_coherencia_t2_warn_only`: la lista mockeada de este archivo
+# es `{"categories": []}` y con las recetas del fixture el guard severo la lee como
+# 3 ausencias, escala T2 warn->block y RE-ENCOLA el chunk — el pipeline se queda en 1
+# llamada y el test decia "debe llamar 3 veces" sobre un flujo que nunca llego ahi.
+# La fixture ya existia para esto exacto; a estos dos les faltaba pedirla.
+def test_advisory_mode_does_not_retry_on_quantity_violation(_coherencia_t2_warn_only):
     """
     Advisory: misma violación de cantidades que en hybrid, pero el pipeline se llama
     una sola vez — anota inmediatamente sin reintentar.
     """
-    tasks = _make_tasks(week_number=2, days_offset=3, days_count=3)
+    # `rolling_refill`: el default `initial_plan` esta EXENTO de la validacion de
+    # nevera post-generacion (P1-INITIAL-CHUNK-PANTRY-AUTONOMY), que es justo el
+    # bucle de reintentos por cantidad que este test mide.
+    tasks = _make_tasks(week_number=2, days_offset=3, days_count=3, chunk_kind="rolling_refill")
     prior_plan = {
         "total_days_requested": 7,
         "days": [
@@ -1427,7 +1455,10 @@ def test_advisory_mode_does_not_retry_on_quantity_violation():
     # pass — only quantity exceeds the cap (250g pollo vs 100g available, > 1.30x).
     # Otherwise the existence-failure path retries too (cron_tasks.py:15015) and the
     # call counts no longer isolate quantity behavior.
-    pantry = ["100g pollo", "200g arroz", "ajo", "cebolla"]
+    # [2026-08-14] Cinco items: la compuerta PREVIA al LLM exige
+    # `items_meaningful >= 5` para un rolling_refill; con 4 pausaba antes de generar
+    # y el pipeline se quedaba en 0/1 llamadas.
+    pantry = ["100g pollo", "200g arroz", "ajo", "cebolla", "huevos", "tomate", "avena"]
     pipeline_return = {
         "days": [
             {"day": 4, "meals": [{"name": "Pollo al horno",  "ingredients": ["250g pollo", "ajo"]}]},
@@ -1438,7 +1469,9 @@ def test_advisory_mode_does_not_retry_on_quantity_violation():
 
     # [P0-5] Same VIP override as the hybrid test — the stubbed `_parse_quantity`
     # cannot extract numbers, so we force the validator response directly.
-    def _vip_with_qty_violation(gen_ing, inv, strict_quantities=False, tolerance=1.0):
+    def _vip_with_qty_violation(
+        gen_ing, inv, strict_quantities=False, tolerance=1.0, country="DO"
+    ):
         if not strict_quantities:
             return True
         return (

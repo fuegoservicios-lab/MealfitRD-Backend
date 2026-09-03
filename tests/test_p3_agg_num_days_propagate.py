@@ -177,17 +177,28 @@ class TestNumDaysMultiplierPreventUndercap:
         fixed_item = _find_item(fixed, "aceite")
         assert buggy_item is not None and fixed_item is not None
 
-        # Ancla del bug: techo default = max(1, round(1.0/4)) = 1 botella = 946g.
-        assert buggy_item["capped_post"] == pytest.approx(946.0), (
-            f"baseline buggy inesperado: {buggy_item}"
-        )
+        # [reapuntado 2026-08-14] El baseline exigía `capped_post == 946` en la llamada
+        # SIN num_days/multiplier. Hoy esa llamada ni siquiera CAPA —3 botellas a
+        # multiplicador 1 no alcanzan ningún techo— así que la clave `capped_post` no
+        # existe y el test moría con KeyError sobre un lado que ya no es el interesante.
+        # Además el SKU del catálogo pasó a 250 ml (230 g), o sea que el 946 era un
+        # número de otra época. Lo que este test protege sigue intacto y es el OTRO
+        # lado: con `num_days`/`multiplier` reales, el aceite escala a su techo de
+        # person-weeks en vez de quedarse en la cantidad de un ciclo corto.
+        _entregado_buggy = float(buggy_item.get("capped_post") or buggy_item.get("base_qty") or 0)
         expected_person_weeks = household * duration_factor
         expected_cap_botellas = max(1, round(expected_person_weeks / 4.0))
         assert expected_cap_botellas > 1, "fixture debe ejercitar un techo real >1"
+        assert fixed_item.get("capped_by") == "P6-OIL-CAP", (
+            f"el aceite debe llegar a su techo con los valores reales: {fixed_item}"
+        )
         assert fixed_item["capped_post"] == pytest.approx(expected_cap_botellas * 946.0), (
             f"el techo real debe ser {expected_cap_botellas} botellas: {fixed_item}"
         )
-        assert fixed_item["capped_post"] > buggy_item["capped_post"]
+        assert fixed_item["capped_post"] > _entregado_buggy, (
+            "una lista mensual de 4 personas NO puede entregar lo mismo que un ciclo "
+            f"sin escalar (fixed={fixed_item['capped_post']}, buggy={_entregado_buggy})"
+        )
 
 
 # ===========================================================================

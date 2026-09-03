@@ -1,8 +1,8 @@
 """[P1-PLANNER-PRO-FALLBACK · 2026-06-26] El planificador (esqueleto) cae a pro si flash falla.
 
 INCIDENTE RAÍZ (user d4bc3af5, corr=0dcc4bf8, 2026-06-26 07:25): una renovación falló con "IA
-saturada" pese a que DeepSeek estaba SANO (probe directo HTTP 200). Causa: el circuit breaker
-COMPARTIDO de `deepseek-v4-flash` (global a todos los usuarios) se abrió bajo carga concurrente (otro
+saturada" pese a que GLM estaba SANO (probe directo HTTP 200). Causa: el circuit breaker
+COMPARTIDO de `glm-5.3-flash` (global a todos los usuarios) se abrió bajo carga concurrente (otro
 usuario con dieta vegana generando), y el nodo planificador —que corre SOLO en flash y NO tenía
 fallback a pro como el self-critique— murió → EXTREME GRACEFUL DEGRADATION → plan de emergencia
 band-0.0.

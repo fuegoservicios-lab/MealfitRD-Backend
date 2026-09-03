@@ -36,9 +36,9 @@ def _sentiment_llm_timeout_s() -> float:
 
 
 def _sentiment_model_name() -> str:
-    # [P0-DEEPSEEK-MIGRATION · 2026-06-12] Default DeepSeek V4 Flash (aux barato).
-    from llm_provider import DEEPSEEK_FLASH
-    return _env_str("MEALFIT_SENTIMENT_MODEL", DEEPSEEK_FLASH)
+    # [P0-LLM-PROVIDER-MIGRATION · 2026-06-12] Default GLM-5.3 Flash (aux barato).
+    from llm_provider import GLM_FLASH
+    return _env_str("MEALFIT_SENTIMENT_MODEL", GLM_FLASH)
 
 
 @lru_cache(maxsize=1)
@@ -48,8 +48,8 @@ def _get_classifier_model():
     Nota: el `@lru_cache(maxsize=1)` fija el `timeout=`/`model=` al primer build;
     cambiar el knob requiere reinicio del worker (aceptable — son knobs de
     operación, no intra-request)."""
-    from llm_provider import ChatDeepSeek  # [P0-DEEPSEEK-MIGRATION]
-    return ChatDeepSeek(
+    from llm_provider import ChatGLM  # [P0-LLM-PROVIDER-MIGRATION]
+    return ChatGLM(
         model=_sentiment_model_name(),
         temperature=0.0,
         max_output_tokens=10,

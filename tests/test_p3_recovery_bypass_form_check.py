@@ -32,14 +32,22 @@ una redirección).
 """
 from __future__ import annotations
 
+import pytest
+
 import re
 from pathlib import Path
 
 
 _BACKEND_ROOT = Path(__file__).resolve().parent.parent
-_PLAN = (
-    _BACKEND_ROOT.parent / "frontend" / "src" / "pages" / "Plan.jsx"
-).read_text(encoding="utf-8")
+@pytest.fixture(scope="module", autouse=True)
+def _load_frontend_sibling_sources(frontend_repo_path):
+    # La fixture compartida salta el módulo antes de cualquier I/O si falta el hermano.
+    _ = frontend_repo_path
+    global _PLAN
+    _PLAN = (
+        _BACKEND_ROOT.parent / "frontend" / "src" / "pages" / "Plan.jsx"
+    ).read_text(encoding="utf-8")
+
 
 
 def test_marker_present():
@@ -77,6 +85,36 @@ def test_processPlan_bypasses_form_check_when_flag_set():
     )
 
 
+# [P1-I18N-DASHBOARD · 2026-08-15] El toast del useEffect («Falta completar: …»)
+# pasa ahora por el traductor, así que `t` entró en el array de dependencias y el
+# ancla textual `}, [loadingSensitive, formData, navigate])` dejó de existir.
+# Lo vigilado aquí es LÓGICA, no copy, y está intacto: el bypass por
+# `mealfit_plan_in_progress` sigue siendo un early return antes del navigate.
+# Se reancla el CIERRE del effect por CONTENIDO del array de deps (las tres deps
+# originales siguen exigidas, en cualquier orden; deps añadidas se toleran) en vez
+# de por su grafía exacta — así el slice sigue apuntando a ESE useEffect y no a
+# otro, que es lo que el ancla textual garantizaba.
+_DEPS_CLOSE_RE = re.compile(r"\}\s*,\s*\[(?P<deps>[^\]]*)\]\s*\)\s*;")
+
+
+def _navigate_effect_block() -> str:
+    """Slice del useEffect `navigate-to-assessment`, desde su anchor único
+    (`const missing = findFirstIncompleteField(formData)`) hasta el cierre
+    `}, [...]);` cuyo array de deps contiene loadingSensitive/formData/navigate."""
+    anchor = "const missing = findFirstIncompleteField(formData)"
+    idx = _PLAN.find(anchor)
+    assert idx > 0, f"Anchor `{anchor}` no encontrado."
+    m = _DEPS_CLOSE_RE.search(_PLAN, idx)
+    assert m, "Cierre del useEffect (`}, [...]);`) no encontrado tras el anchor."
+    deps = m.group("deps")
+    for dep in ("loadingSensitive", "formData", "navigate"):
+        assert re.search(rf"\b{dep}\b", deps), (
+            f"El cierre hallado no es el del useEffect navigate-to-assessment: "
+            f"falta `{dep}` en sus deps ({deps!r}). El slice apuntaría a otro bloque."
+        )
+    return _PLAN[idx:m.end()]
+
+
 def test_navigate_useeffect_bypasses_when_flag_set():
     """El useEffect que navega a /assessment cuando form incompleto DEBE
     también bypass cuando `mealfit_plan_in_progress` está set. Sin esto,
@@ -85,14 +123,7 @@ def test_navigate_useeffect_bypasses_when_flag_set():
     Anchor único de ese useEffect específico: `const missing = findFirstIncompleteField(formData);`
     seguido de `if (!missing) return;` — eso es solo del useEffect del navigate.
     """
-    # Anchor único del useEffect en cuestión:
-    anchor = "const missing = findFirstIncompleteField(formData)"
-    idx = _PLAN.find(anchor)
-    assert idx > 0, f"Anchor `{anchor}` no encontrado."
-    # Tomar el bloque del useEffect (hasta el cierre `}, [...])`)
-    end = _PLAN.find("}, [loadingSensitive, formData, navigate])", idx)
-    assert end > 0, "Cierre del useEffect no encontrado."
-    block = _PLAN[idx:end + 50]
+    block = _navigate_effect_block()
 
     assert "mealfit_plan_in_progress" in block, (
         "El useEffect del navigate-to-assessment no lee "
@@ -108,17 +139,22 @@ def test_navigate_useeffect_bypasses_when_flag_set():
 def test_return_pattern_before_navigate():
     """El bypass debe ser un EARLY RETURN, no solo un toast skip. Sin
     return, el navigate se dispara igualmente."""
-    anchor = "const missing = findFirstIncompleteField(formData)"
-    idx = _PLAN.find(anchor)
-    assert idx > 0
-    end = _PLAN.find("}, [loadingSensitive, formData, navigate])", idx)
-    block = _PLAN[idx:end + 50]
+    block = _navigate_effect_block()
 
     # Patrón: dentro del bloque hay un `if (...mealfit_plan_in_progress...)) return;`
-    assert re.search(
-        r"if\s*\(\s*localStorage\.getItem\(['\"]mealfit_plan_in_progress['\"]\)\s*\)\s*return",
+    guard = re.search(
+        r"if\s*\(\s*(?:localStorage\.getItem|safeLocalStorageGet)\(['\"]mealfit_plan_in_progress['\"][^)]*\)\s*\)\s*return",  # [re-anclado 2026-08-18: wrapper seguro]
         block,
-    ), (
+    )
+    assert guard, (
         "Falta `if (localStorage.getItem('mealfit_plan_in_progress')) return;` "
         "antes del navigate. Sin el `return`, el bypass es no-op."
+    )
+    # [P1-I18N-DASHBOARD · 2026-08-15] El early return sólo sirve si llega ANTES
+    # del navigate: colocado después es sintácticamente válido y semánticamente
+    # inerte (el usuario ya salió de la pantalla de carga).
+    nav = block.find("navigate('/assessment'")
+    assert nav > 0, "El `navigate('/assessment', ...)` del useEffect desapareció."
+    assert guard.start() < nav, (
+        "El bypass está DESPUÉS del navigate — llega tarde, es no-op."
     )

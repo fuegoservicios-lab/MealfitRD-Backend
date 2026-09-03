@@ -1,7 +1,7 @@
 """[P1-CRITIQUE-SAMEDAY-PROTEIN-PARITY · 2026-07-08] Verificación post-corrección del self_critique.
 
 Forense del plan vivo 70f802ec (guest, gain_muscle, 2026-07-08 23:22-23:27): el self_critique detectó
-proteína repetida almuerzo↔cena (Día 2 pescado, Día 3 cerdo) y corrigió los días con deepseek-v4-pro
+proteína repetida almuerzo↔cena (Día 2 pescado, Día 3 cerdo) y corrigió los días con glm-5.3
 (3 llamadas, 63s), pero el gate DETERMINISTA del revisor (`build_variety_report.same_day_protein_repeats`
 → P1-VARIETY-SAME-DAY-PROTEIN) VOLVIÓ a rechazar por la MISMA causa. La corrección se logueaba "corregido"
 con que el LLM devolviera algo no-nulo — NUNCA se re-verificaba con el detector del gate. Como el gate

@@ -85,3 +85,122 @@ REGLAS DE ORO DEL CHEF:
 
 DEVUELVE SOLO el JSON solicitado, con los 3 pasos magistrales en el array `recipe`.
 """
+
+# [P1-COUNTRY-SYSTEM-F1 · 2026-08-16 (FINAL-FIX F1c)] T2 pattern aplicado a los 2 templates de
+# UPDATE (swap/modify) — 4 fragmentos criollos citados por la review final: SWAP regla 2.5
+# (staple→plato CRIOLLO, ejemplos mofongo/mangú/tostones) + regla 3 ("gastronomía/ingredientes
+# locales dominicanos"); MODIFY regla 4 ("Usa ingredientes dominicanos") + regla 6.5 (mismo
+# staple→plato criollo). DO/None (o país desconocido, fail-safe canonicalize_country) ⇒ el MISMO
+# objeto de plantilla (ancla `is`, `.format()` intacto). Beta ⇒ render cacheado por (template,
+# país) con las 2 reglas de cada template neutralizadas. Los ejemplos de transformación
+# reusan VERBATIM el vocabulario neutral que T2 ya acuñó en prompts/day_generator.py
+# (_RULE25_TRANSFORM_BETA) — cero wording nuevo, mismo principio en las 3 superficies
+# (form-gen/swap/modify).
+
+_SWAP_RULE25_DO = (
+    '2.5. TRANSFORMA EL STAPLE EN UN PLATO CRIOLLO APETECIBLE [P1-CREATIVITY-TRANSFORM-UPDATE · '
+    '2026-06-29]: NO sirvas el staple "crudo/simple" por defecto (ni "proteína a la plancha + '
+    'arroz blanco"). Conviértelo en una preparación criolla apetecible, manteniendo CADA '
+    'componente desglosado en `ingredients` (para que la lista de compras lo costee). Ejemplos '
+    'por staple: harina → panqueques / bollos / arepas / tortillas / empanadas al horno; avena → '
+    'panqueques de avena / overnight oats / avena cremosa; yuca → bollos de yuca / arepitas / '
+    'casabe / yuca al mojo; plátano → mofongo / mangú / tostones; maíz → arepitas / chacá; huevo '
+    '→ tortilla / revoltillo. Aplica ESPECIALMENTE a MERIENDA y CENA. La creatividad es en la '
+    'PREPARACIÓN, NUNCA en inventar alimentos fuera del catálogo verificado.'
+)
+_SWAP_RULE25_BETA = (
+    '2.5. TRANSFORMA EL STAPLE EN UNA PREPARACIÓN APETECIBLE [P1-CREATIVITY-TRANSFORM-UPDATE · '
+    '2026-06-29]: NO sirvas el staple "crudo/simple" por defecto (ni "proteína a la plancha + '
+    'arroz blanco"). Conviértelo en una preparación apetecible del contexto local e internacional '
+    'del usuario, manteniendo CADA componente desglosado en `ingredients` (para que la lista de '
+    'compras lo costee). Ejemplos por staple: harina → panqueques / tortillas / panecillos al '
+    'horno; avena → panqueques de avena / overnight oats / avena cremosa; tubérculos (yuca, papa, '
+    'batata) → puré / gratín / tortitas al horno; plátano o banana → puré / tortitas / horneado; '
+    'maíz → tortitas / arepas; huevo → tortilla / revoltillo. Aplica ESPECIALMENTE a MERIENDA y '
+    'CENA. La creatividad es en la PREPARACIÓN, NUNCA en inventar alimentos fuera del catálogo '
+    'verificado.'
+)
+_SWAP_RULE3_DO = (
+    "3. Asegura que la comida siga una dieta tipo '{diet_type}' y utilice gastronomía/ingredientes "
+    "locales dominicanos.{context_extras}"
+)
+_SWAP_RULE3_BETA = (
+    "3. Asegura que la comida siga una dieta tipo '{diet_type}' y utilice ingredientes accesibles "
+    "y cotidianos del contexto del usuario.{context_extras}"
+)
+
+_MODIFY_RULE4_DO = "4. Usa ingredientes dominicanos"
+_MODIFY_RULE4_BETA = "4. Usa ingredientes accesibles y cotidianos del contexto del usuario"
+
+_MODIFY_RULE65_DO = (
+    '6.5. TRANSFORMA EL STAPLE EN UN PLATO CRIOLLO APETECIBLE [P1-CREATIVITY-TRANSFORM-UPDATE · '
+    '2026-06-29]: honra PRIMERO el cambio que pidió el usuario (punto 1); dentro de ese cambio, NO '
+    'sirvas el staple "crudo/simple" (ni "proteína a la plancha + arroz blanco"). Conviértelo en '
+    'una preparación criolla apetecible, manteniendo CADA componente desglosado en `ingredients`. '
+    'Ejemplos por staple: harina → panqueques / bollos / arepas / tortillas; avena → panqueques de '
+    'avena / overnight oats; yuca → bollos de yuca / arepitas / casabe; plátano → mofongo / mangú '
+    '/ tostones; maíz → arepitas / chacá; huevo → tortilla / revoltillo. La creatividad es en la '
+    'PREPARACIÓN, NUNCA en inventar alimentos fuera del catálogo verificado.'
+)
+_MODIFY_RULE65_BETA = (
+    '6.5. TRANSFORMA EL STAPLE EN UNA PREPARACIÓN APETECIBLE [P1-CREATIVITY-TRANSFORM-UPDATE · '
+    '2026-06-29]: honra PRIMERO el cambio que pidió el usuario (punto 1); dentro de ese cambio, NO '
+    'sirvas el staple "crudo/simple" (ni "proteína a la plancha + arroz blanco"). Conviértelo en '
+    'una preparación apetecible del contexto local e internacional del usuario, manteniendo CADA '
+    'componente desglosado en `ingredients`. Ejemplos por staple: harina → panqueques / tortillas '
+    '/ panecillos al horno; avena → panqueques de avena / overnight oats; tubérculos (yuca, papa, '
+    'batata) → puré / gratín / tortitas al horno; plátano o banana → puré / tortitas / horneado; '
+    'maíz → tortitas / arepas; huevo → tortilla / revoltillo. La creatividad es en la '
+    'PREPARACIÓN, NUNCA en inventar alimentos fuera del catálogo verificado.'
+)
+
+# [P2-SWAP-MODIFY-COUNTRY-UNNAMED · 2026-08-23] Los dos renders beta estaban NEUTRALIZADOS pero
+# no nombraban el país: medido antes de tocar, `build_swap_meal_prompt_template` daba 3904 chars
+# byte-idénticos para ES, MX y US (ES==MX y ES==US ambos True), sin la cadena 'España' en ninguno,
+# y lo mismo el de modify (3674). Al modelo se le pedía «una preparación apetecible del contexto
+# local e internacional del usuario» sin decirle CUÁL es ese contexto. La cabecera es el SSOT
+# `constants.beta_prompt_country_header` (el mismo que ya usan planner.py y preferences.py), no una
+# segunda tabla de gentilicios. Va DENTRO del builder y antes del cacheo: `_MEAL_OPS_COUNTRY_CACHE`
+# ya está keyed por (superficie, país), así que aquí la clave ya estaba bien. DO corta arriba y
+# devuelve la constante intacta (ancla `is`), así que su render sigue byte-idéntico.
+_MEAL_OPS_COUNTRY_CACHE: dict = {}
+
+
+def build_swap_meal_prompt_template(country=None) -> str:
+    """T2 pattern. País DO/None (fail-safe `canonicalize_country`) ⇒ `SWAP_MEAL_PROMPT_TEMPLATE`
+    intacto (ancla `is`). Beta ⇒ render cacheado por país con las reglas 2.5/3 neutralizadas.
+
+    tooltip-anchor: build_swap_meal_prompt_template (test_p1_country_system_f1.py)
+    """
+    from constants import beta_prompt_country_header, canonicalize_country
+    canon = canonicalize_country(country)
+    if canon == "DO":
+        return SWAP_MEAL_PROMPT_TEMPLATE
+    cached = _MEAL_OPS_COUNTRY_CACHE.get(("swap", canon))
+    if cached is not None:
+        return cached
+    rendered = SWAP_MEAL_PROMPT_TEMPLATE.replace(_SWAP_RULE25_DO, _SWAP_RULE25_BETA)
+    rendered = rendered.replace(_SWAP_RULE3_DO, _SWAP_RULE3_BETA)
+    rendered = beta_prompt_country_header(canon) + rendered
+    _MEAL_OPS_COUNTRY_CACHE[("swap", canon)] = rendered
+    return rendered
+
+
+def build_modify_meal_prompt_template(country=None) -> str:
+    """T2 pattern. País DO/None (fail-safe `canonicalize_country`) ⇒ `MODIFY_MEAL_PROMPT_TEMPLATE`
+    intacto (ancla `is`). Beta ⇒ render cacheado por país con las reglas 4/6.5 neutralizadas.
+
+    tooltip-anchor: build_modify_meal_prompt_template (test_p1_country_system_f1.py)
+    """
+    from constants import beta_prompt_country_header, canonicalize_country
+    canon = canonicalize_country(country)
+    if canon == "DO":
+        return MODIFY_MEAL_PROMPT_TEMPLATE
+    cached = _MEAL_OPS_COUNTRY_CACHE.get(("modify", canon))
+    if cached is not None:
+        return cached
+    rendered = MODIFY_MEAL_PROMPT_TEMPLATE.replace(_MODIFY_RULE4_DO, _MODIFY_RULE4_BETA)
+    rendered = rendered.replace(_MODIFY_RULE65_DO, _MODIFY_RULE65_BETA)
+    rendered = beta_prompt_country_header(canon) + rendered
+    _MEAL_OPS_COUNTRY_CACHE[("modify", canon)] = rendered
+    return rendered

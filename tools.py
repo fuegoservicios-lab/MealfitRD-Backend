@@ -6,30 +6,37 @@ import unicodedata
 import time
 from typing import Optional
 from langchain_core.tools import tool
-# [P0-DEEPSEEK-MIGRATION · 2026-06-12] Gemini → DeepSeek con router por tier.
-from llm_provider import ChatDeepSeek, DEEPSEEK_FLASH, resolve_model_for_user
+# [P0-LLM-PROVIDER-MIGRATION · 2026-06-12] Gemini → GLM con router por tier.
+from llm_provider import ChatGLM, GLM_FLASH, resolve_model_for_user
 from pydantic import BaseModel, Field
 from tenacity import retry, stop_after_attempt, wait_exponential
-from constants import normalize_ingredient_for_tracking, strip_accents, validate_ingredients_against_pantry, canonical_slot_key, slot_violations_for_meal_name, build_meal_timing_rules
+from constants import normalize_ingredient_for_tracking, strip_accents, validate_ingredients_against_pantry, canonical_slot_key, slot_violations_for_meal_name, build_meal_timing_rules, canonicalize_diet_type
 logger = logging.getLogger(__name__)
 
 from db import (
     get_user_profile, update_user_health_profile, update_user_health_profile_atomic, delete_user_facts_by_metadata,
-    get_user_likes, get_active_rejections, get_latest_meal_plan_with_id,
+    get_user_likes, get_active_rejections, get_latest_usable_meal_plan_with_id,
     update_meal_plan_data, search_deep_memory as db_search_deep_memory,
     log_consumed_meal as db_log_consumed_meal,
     update_consumed_meal as db_update_consumed_meal,
     save_new_meal_plan_robust, increment_ingredient_frequencies,
-    get_latest_meal_plan
+    get_latest_usable_meal_plan, user_tz_offset_min
 )
 from schemas import MealModel
 from prompts import PREFERENCES_AGENT_PROMPT, MODIFY_MEAL_PROMPT_TEMPLATE
+# [P1-COUNTRY-SYSTEM-F1 · 2026-08-16 (FINAL-FIX F1c)] variante país-aware de
+# MODIFY_MEAL_PROMPT_TEMPLATE (T2 pattern) — execute_modify_single_meal() la usa en vez del
+# template crudo.
+from prompts import build_modify_meal_prompt_template
 from datetime import datetime
 import threading
 # [P1-TOOLS-LLM-HARDENING · 2026-05-20] Reuso del CB per-modelo del
 # graph_orchestrator. Espejo del patrón de `agent.py` (P1-CHAT-CB-EXTEND).
 # `run_plan_pipeline` ya se importa desde el mismo módulo — no añade ciclo.
 from graph_orchestrator import run_plan_pipeline, _get_circuit_breaker, clinical_backstop_for_meal, UPDATE_CLINICAL_GUARD, renal_protein_trim_for_update, food_safety_backstop_for_meal, condition_substitution_backstop_for_meal, appetibility_fix_for_update, SLOT_APPROPRIATENESS_GATE_ENABLED
+# [P0-CHAT-ALLERGY-SSOT · 2026-08-11] Los mismos matchers que el pipeline de planes.
+# No se reescriben aqui: reescribirlos fue el defecto.
+from graph_orchestrator import _allergen_pool_item_banned, _diet_pool_item_banned
 # [P1-TOOLS-LLM-HARDENING · 2026-05-20] Knobs auto-registrados para los 2
 # callsites Gemini de este módulo (analyze_preferences_agent / execute_modify_single_meal).
 # Pre-fix: ambos hardcodean `gemini-3.1-pro-preview` (viola P3-PREVIEW-MODEL-KNOB)
@@ -40,13 +47,13 @@ from knobs import _env_str, _env_float, _env_bool, _env_int
 
 
 def _tools_pref_agent_model_name() -> str:
-    # [P0-DEEPSEEK-MIGRATION · 2026-06-12] Default DeepSeek V4 Flash. El
+    # [P0-LLM-PROVIDER-MIGRATION · 2026-06-12] Default GLM-5.3 Flash. El
     # preference analyzer hace clasificación simple (rechazos/gustos) —
     # tarea aux barata, mismo modelo para todos los tiers. Override:
-    # `MEALFIT_TOOLS_PREF_AGENT_MODEL=deepseek-v4-pro` si la calidad degrada.
+    # `MEALFIT_TOOLS_PREF_AGENT_MODEL=glm-5.3` si la calidad degrada.
     return _env_str(
         "MEALFIT_TOOLS_PREF_AGENT_MODEL",
-        DEEPSEEK_FLASH,
+        GLM_FLASH,
     )
 
 
@@ -59,9 +66,9 @@ def _tools_pref_agent_llm_timeout_s() -> float:
 
 
 def _tools_modify_meal_model_name(user_id: Optional[str] = None) -> str:
-    # [P0-DEEPSEEK-MIGRATION · 2026-06-12] TIER-ROUTED: modificar una comida
+    # [P0-LLM-PROVIDER-MIGRATION · 2026-06-12] TIER-ROUTED: modificar una comida
     # del plan es surface user-facing de calidad — paid (basic/plus/ultra) →
-    # deepseek-v4-pro, gratis/guest → deepseek-v4-flash. El override del knob
+    # glm-5.3, gratis/guest → glm-5.3-flash. El override del knob
     # SIEMPRE gana (rollback sin redeploy).
     override = _env_str("MEALFIT_TOOLS_MODIFY_MEAL_MODEL", "")
     if override:
@@ -155,7 +162,7 @@ def analyze_preferences_agent(likes: list, history: list, active_rejections: Opt
     #   (c) sin CB gate → avalancha bajo provider degradado.
     # Tooltip-anchor: P1-TOOLS-LLM-HARDENING.
     _pref_model = _tools_pref_agent_model_name()
-    pref_llm = ChatDeepSeek(
+    pref_llm = ChatGLM(
         model=_pref_model,
         temperature=0.3, # Baja temperatura para ser analítico
         timeout=_tools_pref_agent_llm_timeout_s(),
@@ -211,6 +218,72 @@ def analyze_preferences_agent(likes: list, history: list, active_rejections: Opt
 # ============================================================
 # TOOL: Actualizar Health Profile del usuario
 # ============================================================
+
+# [P2-COUNTRY-HOUSEKEEPING · 2026-08-21] Campos que el CHAT puede escribir en `health_profile`.
+#
+# EL DEFECTO QUE CIERRA: `update_form_field` hacía `_hp[field] = valor` sin whitelist alguna, y el
+# system prompt del coach le ordena llamarla «OBLIGATORIO y SIN EXCEPCIÓN cada vez que el usuario
+# mencione un nuevo dato sobre sí mismo». O sea: la LLM elegía el NOMBRE de la clave del perfil.
+# Un «me mudé a España» escribía `country='España'`, que no es un código ISO-3166 y que
+# `canonicalize_country` convierte en 'DO' — el usuario cree que lo cambió y el sistema lo devuelve
+# a dominicano en silencio. Es el TERCER setter del país sin jerarquía, después de los dos que
+# P1-COUNTRY-RENEWAL-PROFILE-WINS tuvo que ordenar; nadie lo había contado.
+#
+# La lista es exactamente la de la docstring de la tool, que es el contrato que la LLM lee. Si
+# añades un campo ahí, añádelo aquí — y si no está aquí, la tool lo rechaza con un mensaje que la
+# LLM puede repetirle al usuario, en vez de escribir algo que se descarta después.
+_CAMPOS_EDITABLES_POR_CHAT = frozenset({
+    "weight", "height", "age", "gender", "dietType", "mainGoal", "activityLevel",
+    "budget", "cookingTime", "allergies", "medicalConditions", "dislikes", "struggles",
+    "country",
+})
+
+
+def _valor_de_campo_para_perfil(field: str, new_value):
+    """[P2-COUNTRY-HOUSEKEEPING · 2026-08-21] `(ok, valor_a_escribir)` para un campo que el chat
+    quiere actualizar. `ok=False` ⇒ la tool NO escribe y le dice a la LLM por qué.
+
+    El país es el único campo con canonicalización propia aquí, y a propósito: es el que la LLM
+    tiende a emitir en prosa («España», «Republica Dominicana») porque así se lo dice el usuario.
+    Se acepta el nombre y se traduce al código ISO usando el ÚNICO SSOT
+    (`constants.canonicalize_country` sobre `COUNTRY_PROFILES`); lo que NO canoniza se RECHAZA en
+    vez de caer a 'DO', porque un fallback silencioso aquí es indistinguible de haber obedecido.
+
+    tooltip-anchor: _valor_de_campo_para_perfil (test_p2_country_housekeeping.py)"""
+    if field not in _CAMPOS_EDITABLES_POR_CHAT:
+        return False, None
+    if field != "country":
+        return True, new_value
+    try:
+        from constants import (
+            COUNTRY_PROFILES,
+            UnsupportedCountryError,
+            assert_supported_country,
+            canonicalize_country,
+            strip_accents,
+        )
+    except Exception:
+        return False, None
+    _raw = str(new_value or "").strip()
+    if not _raw:
+        return False, None
+    _canon = canonicalize_country(_raw)
+    if _canon != "DO" or _raw.upper() == "DO":
+        try:
+            return True, assert_supported_country(_canon)
+        except UnsupportedCountryError:
+            return False, None
+    # No era un código: ¿es el NOMBRE de alguno de los países del SSOT?
+    _obj = strip_accents(_raw.lower())
+    for _cc, _perfil in COUNTRY_PROFILES.items():
+        if strip_accents(str(_perfil.get("name_es") or "").lower()) == _obj:
+            try:
+                return True, assert_supported_country(_cc)
+            except UnsupportedCountryError:
+                return False, None
+    return False, None
+
+
 
 @tool
 def update_form_field(user_id: str, field: str, new_value: str) -> str:
@@ -279,13 +352,69 @@ def update_form_field(user_id: str, field: str, new_value: str) -> str:
         # otro y se perdía silenciosamente la edición de un field. El
         # mutator solo escribe el field que estamos cambiando; los demás
         # quedan intactos bajo FOR UPDATE.
+        # [P2-COUNTRY-HOUSEKEEPING · 2026-08-21] La puerta: sin whitelist, la LLM elegía el
+        # NOMBRE de la clave del perfil que se escribía. Rechazar aquí —y decir por qué— es mejor
+        # que escribir algo que un canonicalizador descarta después en silencio.
+        _ok_campo, _valor_validado = _valor_de_campo_para_perfil(field, new_value)
+        if not _ok_campo:
+            logger.warning(
+                "[P2-COUNTRY-HOUSEKEEPING] update_form_field rechazado: field=%r value=%r "
+                "(fuera de la whitelist o valor no canonicalizable)", field, new_value,
+            )
+            return (f"No pude actualizar '{field}': no es un campo que yo pueda editar, o el "
+                    f"valor '{new_value}' no es válido para ese campo. Dile al usuario que lo "
+                    f"cambie desde Configuración.")
+
         if field in ['allergies', 'medicalConditions', 'dislikes', 'struggles']:
             _new_field_value = [item.strip() for item in str(new_value).split(",") if item.strip()]
         else:
-            _new_field_value = new_value
+            _new_field_value = _valor_validado
+
+        # [P0-CHAT-ALLERGY-MERGE · 2026-08-11] Las alergias y las condiciones médicas se
+        # FUNDEN; no se reemplazan.
+        #
+        # Antes esto era `_hp[field] = _new_field_value`, y el system prompt ordena al
+        # modelo llamar esta tool «OBLIGATORIO y SIN EXCEPCIÓN cada vez que el usuario
+        # mencione un dato nuevo», con «soy intolerante a la lactosa» de ejemplo literal.
+        # Secuencia real: perfil con ["Mariscos","Frutos Secos"] → el usuario menciona la
+        # lactosa → el modelo obedece → queda ["Lacteos"]. Los otros dos desaparecen. Y
+        # justo después se borran los `user_facts` de categoría alergia, que eran el
+        # respaldo. `health_profile` no guarda historial: no hay de dónde recuperarlos.
+        #
+        # La asimetría es deliberada. Añadir una alergia de más cuesta que el usuario
+        # coma menos variado y lo diga; perder una cuesta una reacción alérgica. Ante la
+        # duda, se acumula.
+        #
+        # RETIRAR una alergia sigue siendo posible, pero no por este camino: el usuario
+        # la desmarca en Configuración, que es una acción suya, deliberada y visible. Una
+        # frase de pasada en un chat no es una retirada de consentimiento clínico.
+        #
+        # Los gustos y los obstáculos SÍ se reemplazan: son preferencias, cambian, y
+        # acumularlos para siempre convertiría «no me gusta el tomate» de un martes en
+        # una restricción permanente que nadie puede quitar.
+        _CLINICOS_ACUMULATIVOS = ('allergies', 'medicalConditions')
 
         def _field_mutator(_hp):
-            _hp[field] = _new_field_value
+            if field in _CLINICOS_ACUMULATIVOS and isinstance(_new_field_value, list):
+                _previos = _hp.get(field) or []
+                if not isinstance(_previos, list):
+                    _previos = [_previos]
+                _vistos, _union = set(), []
+                for _v in [*_previos, *_new_field_value]:
+                    _t = str(_v).strip()
+                    _k = strip_accents(_t.lower())
+                    if _t and _k not in _vistos:
+                        _vistos.add(_k)
+                        _union.append(_t)
+                if len(_union) > len(_new_field_value):
+                    logger.info(
+                        f"🛡 [P0-CHAT-ALLERGY-MERGE] {field}: se conservan "
+                        f"{len(_union) - len(_new_field_value)} valor(es) previos que el "
+                        f"modelo no repitió ({_previos} + {_new_field_value} → {_union})"
+                    )
+                _hp[field] = _union
+            else:
+                _hp[field] = _new_field_value
             return None
 
         update_user_health_profile_atomic(user_id, _field_mutator)
@@ -524,13 +653,22 @@ def _rescue_dinner_slot(user_id: str, meal_type: str, calories: int, days_ago: i
         if int(calories or 0) < _DINNER_RESCUE_MIN_KCAL:
             return meal_type
         from db import execute_sql_query as _esq_ds
+        # [P1-COUNTRY-SYSTEM-F1 · 2026-08-16 (T5)] Offset por usuario en vez del hardcode
+        # 'America/Santo_Domingo'. `consumed_at`/`now()` son timestamptz: `(col AT TIME ZONE
+        # 'zona')::date` == `(col - make_interval(mins => offset_oeste))::date` — álgebra exacta
+        # (offset=240 reproduce el hardcode previo byte a byte, verificado contra Neon
+        # 2026-08-16), a diferencia de `db_facts.get_avg_meal_hour` (que preserva un signo '+'
+        # heredado de un bug pre-existente — ver su comentario; ESTE sitio siempre fue el hop
+        # simple/correcto). América/Santo_Domingo no tiene DST (fijo UTC-4): 240 vale los 365
+        # días del año.
+        _tz_off_ds = user_tz_offset_min(user_id)
         _rows = _esq_ds(
             "SELECT meal_type, MAX(consumed_at) AS ultima FROM consumed_meals "
             "WHERE user_id = %s AND meal_type = ANY(%s) "
-            "AND (consumed_at AT TIME ZONE 'America/Santo_Domingo')::date "
-            "  = (now() AT TIME ZONE 'America/Santo_Domingo')::date "
+            "AND (consumed_at - make_interval(mins => %s))::date "
+            "  = (now() - make_interval(mins => %s))::date "
             "GROUP BY meal_type",
-            (user_id, list(_CONSUMED_MAIN_MEAL_TYPES)),
+            (user_id, list(_CONSUMED_MAIN_MEAL_TYPES), _tz_off_ds, _tz_off_ds),
             fetch_all=True,
         ) or []
         _por_slot = {str(r.get("meal_type")): r.get("ultima") for r in _rows if isinstance(r, dict)}
@@ -610,13 +748,19 @@ def log_consumed_meal(user_id: str, meal_name: str, calories: int, protein: int,
     if _meal_type in _CONSUMED_MAIN_MEAL_TYPES and not force:
         try:
             from db import execute_sql_query as _esq_cm
+            # [P1-COUNTRY-SYSTEM-F1 · 2026-08-16 (T5)] offset por usuario — ver nota gemela en
+            # `_rescue_dinner_slot` (misma equivalencia algebraica; offset=240 byte-idéntico al
+            # hardcode previo). Ambos lados de la comparación (la fila existente Y el evento
+            # nuevo `_consumed_at`) usan el MISMO offset resuelto — comparar "mismo día local"
+            # exige la misma vara de medir en los dos lados.
+            _tz_off_cm = user_tz_offset_min(user_id)
             _dup = _esq_cm(
                 "SELECT meal_name, calories, consumed_at FROM consumed_meals "
                 "WHERE user_id = %s AND meal_type = %s "
-                "AND (consumed_at AT TIME ZONE 'America/Santo_Domingo')::date = "
-                "((%s::timestamptz) AT TIME ZONE 'America/Santo_Domingo')::date "
+                "AND (consumed_at - make_interval(mins => %s))::date = "
+                "((%s::timestamptz) - make_interval(mins => %s))::date "
                 "ORDER BY consumed_at DESC LIMIT 1",
-                (user_id, _meal_type, _consumed_at),
+                (user_id, _meal_type, _tz_off_cm, _consumed_at, _tz_off_cm),
                 fetch_one=True,
             )
             if _dup:
@@ -913,9 +1057,24 @@ def _detect_same_day_protein_repeat(meal_name: str, other_names: list) -> str | 
 def execute_modify_single_meal(user_id: str, day_number: int, meal_type: str, changes: str, form_data: dict = None, allow_pantry_expansion: bool = False) -> str:
     """Ejecuta la modificación de una comida individual en el plan activo del usuario."""
     logger.debug(f"\n🔧 [TOOL] modify_single_meal: Día {day_number}, {meal_type}, cambios: '{changes}'")
-    
+
+    # [P1-COUNTRY-SYSTEM-F1 · 2026-08-16 (T4)] País derivado una vez y consumido
+    # por los dos call sites de build_meal_timing_rules de abajo.
+    # [P1-COUNTRY-SYSTEM-F1 · 2026-08-16 (FINAL-FIX F2c)] Trazado el flujo completo (el ruling
+    # T4 de arriba quedó desactualizado): `form_data` llega aquí desde `state['form_data']`
+    # (agent.py, nodo `execute_tools`, rama `tool_name == "modify_single_meal"`), que
+    # `chat_with_agent`/`chat_with_agent_stream` estampan DIRECTO del parámetro homónimo — y ESE
+    # parámetro es el retorno de `services.merge_form_data_with_profile(user_id, ...)`, llamado
+    # por los DOS endpoints de chat (`routers/chat.py`: `/api/chat/stream` y `/api/chat`). A
+    # diferencia de `_enrich_clinical_from_profile` (F2a, `routers/plans.py` — hidratación
+    # SELECTIVA campo-a-campo, que SÍ necesitó un fix explícito para `country`), ese merge
+    # SUSTITUYE `merged` por el `health_profile` COMPLETO cuando el perfil existe
+    # (`merged = existing_hp`, con el body del cliente solo pisando encima) — así que `country`
+    # ya viaja en cuanto vive en `health_profile` (Fase 0: QCountry del wizard + selector de
+    # Configuración lo escriben ahí), SIN hidratador dedicado en esta superficie.
+
     # 1. Obtener el plan actual con su ID
-    plan_record = get_latest_meal_plan_with_id(user_id)
+    plan_record = get_latest_usable_meal_plan_with_id(user_id)
     if not plan_record:
         return "ERROR: No se encontró un plan activo. Genera un plan primero."
     
@@ -924,18 +1083,26 @@ def execute_modify_single_meal(user_id: str, day_number: int, meal_type: str, ch
     
     if not plan_data or not isinstance(plan_data, dict):
         return "ERROR: El plan guardado está corrupto o vacío."
+
+    # [P1-COUNTRY-PLAN-VS-PERFIL-EN-BLOQUES · 2026-08-23] Éste es un mutador
+    # de un artefacto existente: el sello del plan manda y el perfil fusionado
+    # sólo sirve de fallback para planes legacy.
+    from constants import country_for_plan, slot_rules_for_country
+    _modify_country = country_for_plan(plan_data, form_data)
+    # Tabla resuelta una vez, reusada por el backstop P1-CHAT-SLOT-BACKSTOP.
+    _modify_rules_table = slot_rules_for_country(_modify_country)
     
     # 2. Localizar la comida específica
     days = plan_data.get("days", [])
     target_day = None
     target_meal = None
     target_meal_index = None
-    
+
     for day in days:
         if day.get("day") == day_number:
             target_day = day
             break
-    
+
     if not target_day:
         return f"ERROR: No se encontró el día {day_number} en el plan."
     
@@ -1007,20 +1174,28 @@ def execute_modify_single_meal(user_id: str, day_number: int, meal_type: str, ch
     elif allow_pantry_expansion:
         context_extras = f"\n💡 PERMISO DE EXPANSIÓN DE DESPENSA: El usuario ha autorizado explícitamente agregar ingredientes nuevos que no están en su despensa para este cambio (¡Va de compras!). Siéntete libre de proponer CUALQUIER ingrediente ideal para lograr la mejor comida."
         
-    try:
-        from shopping_calculator import get_master_ingredients
-        master_list = get_master_ingredients()
-        prices_context = "\n--- 💰 INTELIGENCIA DE PRECIOS (BUDGET-AWARE) ---\n"
-        prices_context += "Costo promedio de los ingredientes (en RD$). Utilízalo si el usuario pide sustituciones más baratas u opciones económicas:\n"
-        for m in master_list:
-            price_lb = m.get("price_per_lb", 0)
-            price_u = m.get("price_per_unit", 0)
-            if price_lb: prices_context += f"- {m['name']}: RD${price_lb}/lb\n"
-            elif price_u: prices_context += f"- {m['name']}: RD${price_u}/unidad\n"
-        prices_context += "----------------------------------------------------------\n"
-        context_extras += prices_context
-    except Exception as e:
-        logger.error(f"Error cargando precios en modify_meal: {e}")
+    # [P1-COUNTRY-SYSTEM-F1 · 2026-08-16 (T7)] `plan_data` (ya fetcheado arriba, línea ~997)
+    # es la fuente MÁS confiable de "¿este plan tiene precios nativos?" en esta tool — a
+    # diferencia de `_modify_country`/`form_data` (T4, arriba), que el propio comentario de
+    # T4 documenta como no poblado todavía por el chat-agent (form_data no trae country en
+    # la práctica). `plan_data['_pricing_mode']` en cambio SÍ viene estampado desde el
+    # INSERT del plan (T7, assemble_plan_node) — funciona HOY, no cuando una task futura
+    # conecte el país a la superficie de chat.
+    if plan_data.get("_pricing_mode") != "beta_no_prices":
+        try:
+            from shopping_calculator import get_master_ingredients
+            master_list = get_master_ingredients()
+            prices_context = "\n--- 💰 INTELIGENCIA DE PRECIOS (BUDGET-AWARE) ---\n"
+            prices_context += "Costo promedio de los ingredientes (en RD$). Utilízalo si el usuario pide sustituciones más baratas u opciones económicas:\n"
+            for m in master_list:
+                price_lb = m.get("price_per_lb", 0)
+                price_u = m.get("price_per_unit", 0)
+                if price_lb: prices_context += f"- {m['name']}: RD${price_lb}/lb\n"
+                elif price_u: prices_context += f"- {m['name']}: RD${price_u}/unidad\n"
+            prices_context += "----------------------------------------------------------\n"
+            context_extras += prices_context
+        except Exception as e:
+            logger.error(f"Error cargando precios en modify_meal: {e}")
     
     # [P0-UPDATE-CLINICAL-GUARD · 2026-06-23] Cargar alergias + dieta SERVER-SIDE desde el
     # health_profile del user_id (que ya viene FORZADO al valor autenticado por el override de
@@ -1032,9 +1207,16 @@ def execute_modify_single_meal(user_id: str, day_number: int, meal_type: str, ch
     _clin_allergies = []
     _clin_diet = None
     _hp = {}
+    # [P1-PLAN-DISPLAY-I18N-MUTATOR-chatmod] [Fix round 1 · F6] `locale` hidratado del MISMO
+    # round-trip que `_hp` (`_get_profile(user_id)` ya trae `locale` como columna top-level de
+    # `user_profiles`, espejo de `_swap_locale` en `/swap-meal/persist`) — evita un SELECT
+    # dedicado en el despacho de abajo, que antes corría en CADA request (incl. es-DO mayoritario).
+    _p1i18n_locale_cm = None
     try:
         from db import get_user_profile as _get_profile
-        _hp = (_get_profile(user_id) or {}).get("health_profile") or {}
+        _full_profile_cm = _get_profile(user_id) or {}
+        _hp = _full_profile_cm.get("health_profile") or {}
+        _p1i18n_locale_cm = _full_profile_cm.get("locale")
     except Exception as _hp_load_e:
         logger.warning(f"⚠️ [P0-UPDATE-CLINICAL-GUARD] no se cargó perfil (no bloquea): {_hp_load_e}")
 
@@ -1170,7 +1352,7 @@ def execute_modify_single_meal(user_id: str, day_number: int, meal_type: str, ch
     # SSOT constants.build_meal_timing_rules. Paridad de PROMPT con swap S3 / day_generator S1.
     try:
         from constants import build_meal_timing_rules as _bmtr
-        _timing_block = _bmtr(meal_type)
+        _timing_block = _bmtr(meal_type, _modify_country)
         if _timing_block:
             context_extras = _timing_block + "\n" + context_extras
     except Exception as _tr_e:
@@ -1292,14 +1474,26 @@ def execute_modify_single_meal(user_id: str, day_number: int, meal_type: str, ch
     # — el plato modificado recupera la creatividad por recombinación de las 87 plantillas.
     try:
         from dish_library import build_swap_inspiration_context as _bsi_cm
+        # [P1-CHATMODIFY-DISH-COUNTRY · 2026-08-23] `P1-DISH-LIBRARY-COUNTRY` se declaró cerrado
+        # con «3 superficies (day-gen, swap, chat-modify)» y esta llamada era la que faltaba:
+        # medido, `build_swap_inspiration_context('Almuerzo', seed=3)` SIN country devolvía
+        # «Pastelón de yuca con pollo desmenuzado; La bandera…» mientras con country='ES' devuelve
+        # «Empanada gallega de sardinas; Tortilla española con patata y cebolla». Es el tramo más
+        # concreto del prompt, y P1-DIET-BLIND-DIRECTIVES ya midió que entre una directiva general
+        # y un ejemplo concreto el modelo obedece al ejemplo. Reusa `_modify_country`, derivado UNA
+        # vez al inicio de `execute_modify_single_meal` por la ÚNICA puerta — no una 2ª derivación.
         _insp_cm = _bsi_cm(str(meal_type or ""), seed=int(day_number or 1),
-                           avoid_names=[str(target_meal.get("name") or "")])
+                           avoid_names=[str(target_meal.get("name") or "")],
+                           country=_modify_country)
         if _insp_cm:
             context_extras += _insp_cm
     except Exception as _insp_cm_e:
         logger.debug(f"[P2-AUDIT-V6-BATCH] (P2-F) inspiración chat-modify no-op: {_insp_cm_e}")
 
-    modify_prompt = MODIFY_MEAL_PROMPT_TEMPLATE.format(
+    # [P1-COUNTRY-SYSTEM-F1 · 2026-08-16 (FINAL-FIX F1c)] reusa `_modify_country` (derivado UNA
+    # vez al inicio de execute_modify_single_meal, T4) — DO ⇒ MODIFY_MEAL_PROMPT_TEMPLATE
+    # byte-idéntico.
+    modify_prompt = build_modify_meal_prompt_template(_modify_country).format(
         name=target_meal.get('name'),
         desc=target_meal.get('desc'),
         meal=target_meal.get('meal'),
@@ -1320,10 +1514,10 @@ def execute_modify_single_meal(user_id: str, day_number: int, meal_type: str, ch
     # En 429 NO se cuenta como CB failure; en otros errores sí. Token
     # telemetry post-success rellena el blind-spot que tenía este callsite
     # en `llm_usage_events`. Tooltip-anchor: P1-TOOLS-LLM-HARDENING.
-    # [P0-DEEPSEEK-MIGRATION] `user_id` viene FORZADO al valor autenticado por
+    # [P0-LLM-PROVIDER-MIGRATION] `user_id` viene FORZADO al valor autenticado por
     # el override de execute_tools (P0-AGENT-1) — seguro para tier-routing.
     _modify_model = _tools_modify_meal_model_name(user_id)
-    modify_llm = ChatDeepSeek(
+    modify_llm = ChatGLM(
         model=_modify_model,
         temperature=0.1,
         timeout=_tools_modify_meal_llm_timeout_s(),
@@ -1332,7 +1526,7 @@ def execute_modify_single_meal(user_id: str, day_number: int, meal_type: str, ch
     # objeto con `.model_name` (sin `.with_structured_output(...)`) es el que
     # `_emit_llm_usage_event_best_effort` puede leer para resolver el
     # model_name. Si fallara, el helper retorna sin emit (best-effort).
-    _modify_llm_for_usage = ChatDeepSeek(
+    _modify_llm_for_usage = ChatGLM(
         model=_modify_model,
         temperature=0.1,
         timeout=_tools_modify_meal_llm_timeout_s(),
@@ -1421,7 +1615,9 @@ def execute_modify_single_meal(user_id: str, day_number: int, meal_type: str, ch
             ingreds = []
 
         if clean_ingredients and not allow_pantry_expansion:
-            val_result = validate_ingredients_against_pantry(ingreds, clean_ingredients)
+            val_result = validate_ingredients_against_pantry(
+                ingreds, clean_ingredients, country=_modify_country
+            )
             if val_result is not True:
                 logger.warning(val_result)
                 # Inyectar el feedback específico matematico al LLM para el próximo intento de @retry
@@ -1520,10 +1716,39 @@ def execute_modify_single_meal(user_id: str, day_number: int, meal_type: str, ch
                         f"⚠️ [P1-SWAP-MACROS] Drift en modify_meal | "
                         f"meal_type={meal_type} | drifts={drifts}"
                     )
-                    current_prompt[0] = modify_prompt + (
-                        f"\n\n🛑 ATENCIÓN AL INTENTO FALLIDO ANTERIOR:\n{summary}"
-                    )
-                    raise ValueError(summary)
+                    # [P1-SWAP-MACRO-REPAIR · 2026-08-09] Mismo repair determinista que
+                    # `agent.py::swap_meal` (misma espiral, mismo validador): re-porcionar
+                    # el candidato con el motor ANTES de quemar un retry LLM. La identidad
+                    # del plato (pedido del usuario) no se toca — solo porciones.
+                    from agent import (_repair_swap_candidate_macros as _mr_repair,
+                                       _swap_macro_repair_enabled as _mr_enabled)
+                    if _mr_enabled():
+                        if _tu_db_holder[0] is None:
+                            from nutrition_db import IngredientNutritionDB as _MRDB
+                            _tu_db_holder[0] = _MRDB()
+                        _mr_passed, _mr_drifts, _mr_summary = _mr_repair(
+                            meal_dump,
+                            {"cals": original_cals, "protein": original_protein,
+                             "carbs": original_carbs, "fats": original_fats},
+                            _tu_db_holder[0])
+                        if _mr_passed:
+                            for _fk in ("ingredients", "ingredients_raw", "recipe",
+                                        "protein", "carbs", "fats", "cals", "macros"):
+                                if _fk in meal_dump and meal_dump[_fk] is not None:
+                                    if isinstance(res, dict):
+                                        res[_fk] = meal_dump[_fk]
+                                    elif hasattr(res, _fk):
+                                        setattr(res, _fk, meal_dump[_fk])
+                            passed = True
+                            logger.info(
+                                f"🔧 [P1-SWAP-MACRO-REPAIR] chat-modify re-porcionado "
+                                f"deterministamente a banda (drift original={drifts}) — "
+                                f"retry LLM evitado | meal_type={meal_type}")
+                    if not passed:
+                        current_prompt[0] = modify_prompt + (
+                            f"\n\n🛑 ATENCIÓN AL INTENTO FALLIDO ANTERIOR:\n{summary}"
+                        )
+                        raise ValueError(summary)
             except ValueError:
                 raise
             except Exception as _macros_exc:
@@ -1549,11 +1774,23 @@ def execute_modify_single_meal(user_id: str, day_number: int, meal_type: str, ch
                     _meal_dump_s = res.model_dump() if hasattr(res, "model_dump") else (
                         res if isinstance(res, dict) else {}
                     )
-                    _meal_viols = slot_violations_for_meal_name(_meal_dump_s.get("name", ""), _slot_key)
+                    # [P1-COUNTRY-SYSTEM-F1 · 2026-08-16 (T4 fix-round 1)] `_modify_rules_table`
+                    # ya resuelto arriba. DO incluye TODA violación sin filtrar por `hard` (algunas
+                    # reglas, ej. "arroz de noche" en cena, ya eran nativamente soft y SIEMPRE
+                    # dispararon este backstop — filtrar incondicionalmente por hard rompería ESE
+                    # comportamiento existente). País != DO incluye SOLO violaciones `hard` — hoy
+                    # equivale a "nunca" (slot_rules_for_country ablanda TODO para beta), pero la
+                    # condición sigue correcta si Fase 2 introduce reglas beta nativamente hard.
+                    _meal_viols_all = slot_violations_for_meal_name(
+                        _meal_dump_s.get("name", ""), _slot_key, _modify_rules_table
+                    )
+                    _meal_viols = [v for v in _meal_viols_all if _modify_country == "DO" or v.get("hard")]
                     if _meal_viols:
                         # Etiquetas que el usuario pidió EXPLÍCITAMENTE en `changes` (mismo SSOT
                         # name-based aplicado al texto del pedido) → su deseo gana, no se reintenta.
-                        _requested = {v["label"] for v in slot_violations_for_meal_name(changes or "", _slot_key)}
+                        _requested = {
+                            v["label"] for v in slot_violations_for_meal_name(changes or "", _slot_key, _modify_rules_table)
+                        }
                         _unrequested = [v for v in _meal_viols if v["label"] not in _requested]
                         if _unrequested and _slot_attempt[0] < 3:
                             _slot_labels = "; ".join(v["label"] for v in _unrequested)
@@ -1566,7 +1803,7 @@ def execute_modify_single_meal(user_id: str, day_number: int, meal_type: str, ch
                                 f"\n\n🛑 ATENCIÓN AL INTENTO FALLIDO ANTERIOR:\n"
                                 f"El plato que devolviste NO corresponde al {_slot_key} dominicano "
                                 f"({_slot_labels}). El usuario NO pidió ese alimento; cámbialo por un "
-                                f"plato propio del {_slot_key}." + (build_meal_timing_rules(meal_type) or "")
+                                f"plato propio del {_slot_key}." + (build_meal_timing_rules(meal_type, _modify_country) or "")
                             )
                             raise ValueError(f"plato fuera de horario ({_slot_key}): {_slot_labels}")
             except ValueError:
@@ -1686,7 +1923,7 @@ def execute_modify_single_meal(user_id: str, day_number: int, meal_type: str, ch
             # → ValueError) significa que el PROVEEDOR respondió pero el output no pasó NUESTRA validación
             # — NO es señal de salud del proveedor. El breaker `_modify_cb` es per-modelo COMPARTIDO
             # cross-worker; contar un guardrail como fallo lo abre por un plato "difícil" y deja
-            # execute_modify_single_meal en fail-fast ~30s para TODO el tier con DeepSeek sano (mismo modo
+            # execute_modify_single_meal en fail-fast ~30s para TODO el tier con GLM sano (mismo modo
             # de fallo que cerró el fix hermano el 2026-06-24, pero por la superficie del chat). Solo
             # timeout/5xx/conexión (no-ValueError) cuentan como CB failure. Knob
             # MEALFIT_MODIFY_CB_COUNT_GUARDRAIL=true revierte. tooltip-anchor: P2-CB-GUARDRAIL-NOT-FAILURE
@@ -1928,10 +2165,16 @@ def execute_modify_single_meal(user_id: str, day_number: int, meal_type: str, ch
         # [P1-CHAT-SLOT-BACKSTOP · 2026-06-29] Si tras los retries el plato AÚN queda fuera de horario
         # (deseo explícito del usuario o degradación en el intento final), marcamos advisory para
         # telemetría/frontend — espejo de `_slot_appropriateness_advisory_final` de S1. No bloquea.
+        # [P1-COUNTRY-SYSTEM-F1 · 2026-08-16 (T8 slot-callers sweep)] `_modify_rules_table` (ya
+        # derivado al inicio de execute_modify_single_meal) reusado — mismo caller que el backstop
+        # de arriba (:1670). Es un chequeo booleano (¿hay violación?), y `slot_rules_for_country`
+        # hoy solo ablanda `hardness` sin tocar tokens/labels, así que el resultado no cambiaba —
+        # wireado igual para no dejar un 2º sitio leyendo SLOT_INAPPROPRIATE_FOODS por fuera del
+        # helper si Fase 2 diverge tokens por país.
         if SLOT_APPROPRIATENESS_GATE_ENABLED:
             try:
                 _slot_key_final = canonical_slot_key(meal_type)
-                if _slot_key_final and slot_violations_for_meal_name(new_meal_data.get("name", ""), _slot_key_final):
+                if _slot_key_final and slot_violations_for_meal_name(new_meal_data.get("name", ""), _slot_key_final, _modify_rules_table):
                     new_meal_data["_slot_advisory"] = True
                     logger.info(f"🕒 [P1-CHAT-SLOT-BACKSTOP] plato de modify entregado fuera de horario (advisory) | day={day_number} meal={meal_type}")
             except Exception as _slf_e:
@@ -1964,11 +2207,14 @@ def execute_modify_single_meal(user_id: str, day_number: int, meal_type: str, ch
             # [P2-CHAT-EXPLICIT-SLOT-WISH · 2026-07-01] si el usuario PIDIÓ la violación de horario en su
             # texto ("ponme arroz en la cena"), el finalizer NO pisa su deseo con el night-rice autofix
             # (mismo SSOT name-based del backstop P1-CHAT-SLOT-BACKSTOP aplicado al pedido).
+            # [P1-COUNTRY-SYSTEM-F1 · 2026-08-16 (T8 slot-callers sweep)] `_modify_rules_table`
+            # reusado (mismo razonamiento que la advisory de arriba): chequeo booleano, resultado
+            # hoy idéntico DO/beta, wireado por consistencia futura.
             _wish_slot = False
             try:
                 _sk_fin = canonical_slot_key(meal_type)
                 if _sk_fin:
-                    _wish_slot = bool(slot_violations_for_meal_name(changes or "", _sk_fin))
+                    _wish_slot = bool(slot_violations_for_meal_name(changes or "", _sk_fin, _modify_rules_table))
             except Exception:
                 _wish_slot = False
             # [P1-UPDATE-PROTAGONIST-FLOOR · 2026-07-29] day-target 4-4-9 del plan. NOTA: este
@@ -1978,9 +2224,12 @@ def execute_modify_single_meal(user_id: str, day_number: int, meal_type: str, ch
             # deja el callsite listo; encender `db` en la ruta de chat enciende de paso
             # quantize/sanity-autofix, que es un cambio de alcance distinto y sin medir.
             from graph_orchestrator import _day_kcal_from_target_macros as _dkt_m
+            # [P1-COUNTRY-SYSTEM-F1 · 2026-08-16 (T4 fix-round 1)] reusa `_modify_country`
+            # (derivado UNA vez al inicio de execute_modify_single_meal) — DO ⇒ camino byte-idéntico.
             _nfix_m = _fin_rc_m(new_meal_data, pantry_strict=_ps_fin, allergies=_clin_allergies,
                                 skip_night_rice=_wish_slot,
-                                day_kcal_target=_dkt_m((plan_data or {}).get("macros")))
+                                day_kcal_target=_dkt_m((plan_data or {}).get("macros")),
+                                country=_modify_country)
             if _nfix_m:
                 logger.info(f"🍳 [P1-UPDATE-RECIPE-FINALIZE] {_nfix_m} fix(es) de coherencia de receta en plato de modify | day={day_number} meal={meal_type}")
         except Exception as _fin_me:
@@ -2234,7 +2483,7 @@ def execute_modify_single_meal(user_id: str, day_number: int, meal_type: str, ch
         # follow-up natural documentado en P1-RECALC-LOSTUPDATE (2026-05-14):
         #
         # Pre-fix flow:
-        #   t=0  `get_latest_meal_plan_with_id(user_id)` (línea ~352) lee
+        #   t=0  `get_latest_usable_meal_plan_with_id(user_id)` (línea ~352) lee
         #        plan_data sin lock.
         #   t=1  LLM genera new_meal_data (puede tomar 5-30s con retry hasta 3
         #        veces vía `invoke_with_retry`).
@@ -2273,6 +2522,25 @@ def execute_modify_single_meal(user_id: str, day_number: int, meal_type: str, ch
         # — el agente ya entregó respuesta al usuario; bloquear+retry es caro
         # en tokens.
         _agent_divergences: list = []
+        # [P1-PLAN-DISPLAY-I18N-MUTATOR-chatmod] [Fix round 1 · F7] Holder de 1 elemento
+        # (mismo patrón que `_taste_old_name[0]`) para el índice de `target_day_fresh`
+        # dentro del ARRAY `days` — capturado DENTRO del callback, sobre la copia
+        # re-SELECTada bajo el lock (no en un loop pre-lock): las posiciones pueden
+        # quedar stale entre la lectura y el lock (el propio callback ya re-localiza
+        # `target_day`/`target_idx_fresh` por esa razón). Consumido por el despacho de
+        # re-enriquecimiento post-persist (day_indices espera índices de array, NO
+        # `day_number`, que es el número lógico del plato — pueden divergir).
+        _dispatch_day_index: list = [None]
+        # [P1-PLAN-DISPLAY-I18N-MUTATOR-macroengine · Fix round 2] `apply_update_macro_engine`
+        # es PLAN-WIDE — puede re-cuantizar ingredients/recipe de días DISTINTOS al que este
+        # modify tocó (rereview task-3-rereview.md, Parte 2). El motor ya popea `_display` de
+        # esos días colaterales (defensa-en-profundidad, cero I/O), pero sin reportarlos aquí
+        # el despacho post-persist solo re-enriquecería el día del modify — el colateral se
+        # queda en español hasta el próximo enrich no relacionado. `touched_day_indices=` (lista
+        # mutable compartida por referencia) recoge esos índices desde DENTRO del callback (la
+        # pasada FRESH bajo el lock — la única que persiste; la pasada pre-lock opera sobre una
+        # copia que se descarta).
+        _macroengine_touched_days: list = []
 
         def _apply_meal_modification(plan_data_fresh: dict):
             """Aplica la mutación del meal y las aggregated_shopping_list*
@@ -2288,9 +2556,10 @@ def execute_modify_single_meal(user_id: str, day_number: int, meal_type: str, ch
                 return False
 
             target_day_fresh = None
-            for d in days_fresh:
+            for _di_p1i18n, d in enumerate(days_fresh):
                 if isinstance(d, dict) and d.get("day") == day_number:
                     target_day_fresh = d
+                    _dispatch_day_index[0] = _di_p1i18n
                     break
             if not target_day_fresh:
                 logger.warning(
@@ -2393,7 +2662,11 @@ def execute_modify_single_meal(user_id: str, day_number: int, meal_type: str, ch
                     try:
                         from graph_orchestrator import apply_update_macro_engine as _ume_cm
                         # [P1-UPDATE-CLINICAL-RECAP · 2026-07-29] espejo del re-cap de la pasada pre-listas.
+                        # [P1-PLAN-DISPLAY-I18N-MUTATOR-macroengine · Fix round 2] `touched_day_indices=`
+                        # recoge los días colaterales que este motor re-cuantizó (fuera del meal/día que
+                        # el modify tocó) para que el despacho post-persist los incluya.
                         _ume_cm(plan_data_fresh, surface="chat_modify", pantry_strict=_ps_cm,
+                                touched_day_indices=_macroengine_touched_days,
                                 form_data=_micro_form_cm)
                     except Exception as _ume_cm_e:
                         logger.debug(f"[P1-UPDATE-MACRO-PARITY] (chat fresh) no-op: {_ume_cm_e}")
@@ -2454,9 +2727,12 @@ def execute_modify_single_meal(user_id: str, day_number: int, meal_type: str, ch
                 try:
                     from shopping_calculator import compute_shopping_cost_summary as _p1b_ccs_cm
                     from nutrition_calculator import refresh_budget_reconciliation as _p1b_rbr_cm
+                    # [P1-COUNTRY-SYSTEM-F1 · 2026-08-16 (T7)] plan_data_fresh trae la clave desde
+                    # el INSERT del plan — beta ⇒ None, la reconciliación no se refresca.
                     _p1b_sum_cm = _p1b_ccs_cm(
                         aggr_7, aggr_15_hybrid, aggr_30_hybrid,
                         plan_data_fresh.get("calc_grocery_duration") or "weekly",
+                        pricing_mode=plan_data_fresh.get("_pricing_mode"),
                     )
                     if _p1b_sum_cm:
                         plan_data_fresh["shopping_cost_summary"] = _p1b_sum_cm
@@ -2497,6 +2773,16 @@ def execute_modify_single_meal(user_id: str, day_number: int, meal_type: str, ch
                 except Exception as _dqc_e:
                     logger.debug(f"[P2-DISHQUAL-SURFACE-UPDATES] recompute dish-quality (chat-modify) falló: {_dqc_e}")
 
+            # [P1-PLAN-DISPLAY-I18N-MUTATOR-chatmod] DELETE-on-write (spec "Invalidación"): el
+            # meal persistido pierde CUALQUIER `_display` heredado — stale display imposible por
+            # construcción. Pop AL FINAL del callback (no justo tras `meals_fresh[target_idx_fresh]
+            # = new_meal_data` arriba): si algún paso intermedio (closer/motor/reconcile, todos
+            # entre esa asignación y aquí) reescribiera el meal o copiara `_display` de vuelta, un
+            # pop temprano no lo protegería. `new_meal_data` normalmente NO trae `_display` (el LLM
+            # no lo genera hoy) — este pop es el contrato LEGIBLE explícito de la spec.
+            if isinstance(meals_fresh[target_idx_fresh], dict):
+                meals_fresh[target_idx_fresh].pop("_display", None)
+
             return plan_data_fresh
 
         # [P0-AGENT-1] user_id ya force-overrideado upstream por
@@ -2508,8 +2794,37 @@ def execute_modify_single_meal(user_id: str, day_number: int, meal_type: str, ch
         merged_plan_data = update_plan_data_atomic(
             plan_id, _apply_meal_modification, user_id=user_id
         )
+        # [Fix round 1 · F8] `if merged_plan_data:` NO distingue "el callback aplicó la
+        # mutación" de "el callback abortó" (`_apply_meal_modification` retorna `False` si
+        # `target_day_fresh`/`target_idx_fresh` no se re-localizan bajo el lock): cuando el
+        # callback retorna `False`, `update_plan_data_atomic` persiste el `plan_data` SIN tocar
+        # (`current`, dict truthy — `db_plans.py`) y esta rama corre igual. Preexistente y
+        # benigno para el log/despacho de abajo (peor caso: una retraducción de más sobre un
+        # día que en realidad no cambió) — documentado para que un futuro lector no asuma que
+        # esta rama es "post-persist confirmado" sin más.
         if merged_plan_data:
             logger.info(f"[TOOL] Comida modificada exitosamente: '{new_meal_data.get('name')}'")
+            # [P1-PLAN-DISPLAY-I18N-MUTATOR-chatmod] Despacho best-effort post-persist (FUERA
+            # del lock): el DELETE-on-write del callback dejó el meal modificado sin `_display`
+            # — re-enriquecer el día tocado si el locale del usuario aplica. `_p1i18n_locale_cm`
+            # ya se hidrató arriba junto con `_hp` (Fix round 1 · F6 — mismo round-trip, cero SELECT
+            # extra) y `_dispatch_day_index[0]` es el índice de array capturado DENTRO del callback
+            # bajo el lock (Fix round 1 · F7 — no el de un loop pre-lock potencialmente stale).
+            # [Fix round 2] `_macroengine_touched_days` UNE los días colaterales que
+            # `apply_update_macro_engine` (PLAN-WIDE) re-cuantizó — sin esto se quedarían sin
+            # despacho aunque el motor ya los popeó.
+            try:
+                from plan_display_i18n import should_enrich_locale as _p1i18n_should_enrich_cm
+                _p1i18n_days_cm = set(_macroengine_touched_days)
+                if _dispatch_day_index[0] is not None:
+                    _p1i18n_days_cm.add(_dispatch_day_index[0])
+                if _p1i18n_days_cm and _p1i18n_should_enrich_cm(_p1i18n_locale_cm):
+                    from plan_display_i18n import schedule_plan_display_enrichment
+                    schedule_plan_display_enrichment(
+                        plan_id, user_id, _p1i18n_locale_cm, day_indices=sorted(_p1i18n_days_cm)
+                    )
+            except Exception as _p1i18n_cm_e:
+                logger.debug(f"[P1-PLAN-DISPLAY-I18N-MUTATOR-chatmod] dispatch no-op: {_p1i18n_cm_e}")
             # [P1-NEXT-LEVEL-BATCH · 2026-07-02] (TASTE) Señal de gusto aprendido del reemplazo
             # confirmado vía chat: fuerte si `changes` contiene negación explícita del token
             # ("no me gusta el pollo"), débil si solo cambió la proteína. Fail-open.
@@ -2792,7 +3107,7 @@ def check_shopping_list(user_id: str) -> str:
     """
     logger.info(f"🛒 [TOOL EXECUTION] Calculando lista de compras matemática para user {user_id}")
             
-    plan = get_latest_meal_plan(user_id)
+    plan = get_latest_usable_meal_plan(user_id)
     if not plan:
         return "El usuario no tiene un plan de comidas activo estructurado para calcular la lista de compras."
         
@@ -3106,17 +3421,47 @@ def modify_pantry_inventory(user_id: str, items_to_add: list[str] = None, items_
 # IDOR cross-user (mismo vector que las otras 9 tools).
 # ============================================================
 
-def _local_date_str_for_user() -> str:
-    """Fecha LOCAL del servidor en formato YYYY-MM-DD. NOTA: el chat agent
-    corre server-side; idealmente el cliente pasaria su fecha local, pero
-    para v1 usamos la fecha del servidor (el VPS Oracle, UTC-4 o
-    similar). Si en el futuro el agente necesita la fecha exacta del
-    cliente, parametrizar via state."""
+# [P3-TZ-FALLBACK-SSOT . 2026-08-22] Era un 240 propio. El valor no cambia -- lo que cambia es
+# que deja de ser la segunda de tres respuestas a "que huso asumimos cuando no lo sabemos" y pasa
+# a leerlo del SSOT, junto con `_resolve_request_tz_offset` (que respondia 0).
+from constants import DEFAULT_TZ_OFFSET_MIN as _DEFAULT_TZ_OFFSET_MIN  # noqa: E402
+
+_LOCAL_DATE_FALLBACK_OFFSET_MIN = _DEFAULT_TZ_OFFSET_MIN  # RD (UTC-4) por defecto.
+
+
+def _local_date_str_for_user(user_id: str | None = None) -> str:
+    """Fecha LOCAL del usuario en formato YYYY-MM-DD.
+
+    [P2-LOCAL-DATE-STR-UTC4 . 2026-08-21] El nombre prometia «del usuario» y el cuerpo hacia
+    `now(utc) - 4h`: la fecha dominicana, para todo el mundo. Fase 1 (T5) conecto
+    `user_tz_offset_min` en tres sitios de este mismo modulo y dejo este, que es el que deciden
+    las tools de hidratacion y el contexto temporal del `/api/chat` no-stream.
+
+    Se rompia en los DOS sentidos:
+      · Espana (offset -60/-120): a las 00:30 del dia 22 en Madrid son las 18:30 del 21 en UTC-4.
+        El vaso recien registrado caia en el cubo de AYER.
+      · Mexico (offset 360): a las 22:30 del 21 en CDMX son las 00:30 del 22 en UTC-4. El registro
+        se iba al cubo de MANANA y el contador de hoy leia 0 — el agente podia reganar a alguien
+        que si bebio.
+
+    EL SIGNO: convencion `Date.getTimezoneOffset()`, POSITIVO = OESTE de UTC (RD=240, Espana en
+    invierno=-60). La hora local es `utc - offset`. Invertirlo duplica el error y ademas parece
+    correcto en RD, que es donde se prueba — el modo de fallo exacto de P1-AVG-MEAL-HOUR-SIGN.
+
+    Fail-safe hacia la conducta de hoy: sin `user_id`, sin perfil o con un huso ilegible se usa
+    240. Un usuario sin huso registrado no puede quedarse sin fecha.
+    tooltip-anchor: P2-LOCAL-DATE-STR-UTC4"""
     from datetime import datetime, timezone, timedelta
-    # DO es UTC-4. Para no depender del TZ del servidor, calculamos
-    # explicitamente la fecha en UTC-4 (Atlantic Standard Time).
-    do_now = datetime.now(timezone.utc) - timedelta(hours=4)
-    return do_now.date().isoformat()
+    _off = _LOCAL_DATE_FALLBACK_OFFSET_MIN
+    if user_id and str(user_id) != "guest":
+        try:
+            _o = user_tz_offset_min(user_id)
+            if isinstance(_o, bool) or not isinstance(_o, (int, float)) or _o != _o:
+                raise TypeError("huso no numerico")
+            _off = int(_o)
+        except Exception:
+            _off = _LOCAL_DATE_FALLBACK_OFFSET_MIN
+    return (datetime.now(timezone.utc) - timedelta(minutes=_off)).date().isoformat()
 
 
 @tool
@@ -3138,7 +3483,7 @@ def check_hydration_today(user_id: str) -> str:
         if not connection_pool:
             return "No puedo consultar la hidratacion ahora mismo, la base de datos no esta disponible."
 
-        log_date = _local_date_str_for_user()
+        log_date = _local_date_str_for_user(user_id)
 
         # Lee el conteo del dia.
         _row = execute_sql_query(
@@ -3214,7 +3559,7 @@ def log_water_glass(user_id: str, count_delta: float = 1) -> str:
         if not connection_pool:
             return "No puedo modificar la hidratacion ahora mismo, la base de datos no esta disponible."
 
-        log_date = _local_date_str_for_user()
+        log_date = _local_date_str_for_user(user_id)
 
         # [P3-WATER-ATOMIC-DELTA · 2026-05-30] Incremento ATÓMICO en UNA sola
         # sentencia. Pre-fix era read-modify-write (SELECT glasses → upsert
@@ -3289,7 +3634,7 @@ def mark_shopping_list_purchased(user_id: str, excluded_items: list[str] = None,
     #
     #   1. NUNCA confiar en `user_id` LLM-supplied sin validar contra el
     #      `verified_user_id` autenticado del request.
-    #   2. `get_latest_meal_plan(user_id)` filtra por user_id en su query
+    #   2. `get_latest_usable_meal_plan(user_id)` filtra por user_id en su query
     #      (db_plans.py). `restock_inventory(user_id, ...)` filtra al
     #      escribir `user_inventory`. Si refactorizas alguno, conservar
     #      el filtro `WHERE user_id = %s`.
@@ -3307,7 +3652,7 @@ def mark_shopping_list_purchased(user_id: str, excluded_items: list[str] = None,
         from shopping_calculator import get_shopping_list_delta, _parse_quantity
         from constants import strip_accents, normalize_ingredient_for_tracking
         
-        plan = get_latest_meal_plan(user_id)
+        plan = get_latest_usable_meal_plan(user_id)
         if not plan:
             return "El usuario no tiene un plan activo para extraer la lista de compras."
             
@@ -3316,22 +3661,42 @@ def mark_shopping_list_purchased(user_id: str, excluded_items: list[str] = None,
             return "La lista de compras Delta (ingredientes faltantes) está vacía, no hay nada nuevo que añadir a la despensa."
             
         # Normalizar bases a excluir
+        #
+        # [P2-I18N-TOOLCALL-NOMBRE-SIN-CANONICALIZAR · 2026-08-22] Se recuerda QUÉ pidió
+        # excluir el usuario, no sólo la base normalizada.
+        #
+        # Esta resolución es español-canónico y punto: si el usuario chatea en otro idioma,
+        # el coach emite el nombre en ESE idioma, la base no casa con ninguna, y la
+        # herramienta devolvía éxito habiendo excluido cero. El usuario dice «no compré el
+        # aguacate», la app dice «hecho», y el aguacate sigue marcado como comprado.
+        #
+        # No hay diccionario multilingüe de alimentos que consultar —el catálogo sólo tiene
+        # `name_en`, un gloss inglés— así que lo que se arregla no es la resolución: es el
+        # silencio. Un no-op indistinguible del éxito es peor que un fallo declarado.
         excluded_bases = set()
+        _excl_pedidos = {}
         if excluded_items:
             for item in excluded_items:
                 _, _, name = _parse_quantity(item)
                 base = normalize_ingredient_for_tracking(name) or strip_accents(name.lower().strip())
-                if base: excluded_bases.add(base)
+                if base:
+                    excluded_bases.add(base)
+                    _excl_pedidos[base] = name
                 
         # Normalizar bases a modificar
         modified_bases = set()
+        _mod_pedidos = {}
         if modified_items:
             for item in modified_items:
                 _, _, name = _parse_quantity(item)
                 base = normalize_ingredient_for_tracking(name) or strip_accents(name.lower().strip())
-                if base: modified_bases.add(base)
+                if base:
+                    modified_bases.add(base)
+                    _mod_pedidos[base] = item
                 
         # Filtrar shop_list original (excluyendo o si fue modificado con otra cantidad)
+        _excl_casadas = set()
+        _mod_casadas = set()
         final_shop_list = []
         for item in shop_list:
             val = item.get("display_string", str(item)) if isinstance(item, dict) else str(item)
@@ -3339,6 +3704,16 @@ def mark_shopping_list_purchased(user_id: str, excluded_items: list[str] = None,
             base = normalize_ingredient_for_tracking(name) or strip_accents(name.lower().strip())
             
             if base in excluded_bases or base in modified_bases:
+                # [P2-I18N-TOOLCALL-NOMBRE-SIN-CANONICALIZAR · 2026-08-22] Anotar la base
+                # que SÍ casó. Sin esto no hay forma de distinguir «excluí tres» de
+                # «no encontré ninguno de los tres».
+                if base in excluded_bases:
+                    _excl_casadas.add(base)
+                # [P3-I18N-TOOLCALL-MODIFIED-ITEMS-SIN-RED · 2026-08-23] y la que casó
+                # como MODIFICADA: sin esto no se distingue «cambié la cantidad de tres»
+                # de «añadí tres extras con nombres que no están en la lista».
+                if base in modified_bases:
+                    _mod_casadas.add(base)
                 continue # Fue excluido o lo agregaremos con la nueva cantidad de modified_items
                 
             final_shop_list.append(val)
@@ -3354,11 +3729,50 @@ def mark_shopping_list_purchased(user_id: str, excluded_items: list[str] = None,
         if success:
             msg = f"¡Felicidades! Se han agregado los {len(final_shop_list)} ingredientes a tu Nevera Virtual."
             if excluded_items:
-                msg += f" (Se excluyeron {len(excluded_items)} ítems que indicaste)."
-                msg += f"\n\n[ALERTA INTERNA PARA LA IA]: El usuario no pudo comprar: {', '.join(excluded_items)}. "
-                msg += "Debes disparar INMEDIATAMENTE una recomendación proactiva en el chat preguntando si quiere que sustituyas los platos de esta semana que requerían esos ingredientes faltantes."
+                # [P2-I18N-TOOLCALL-NOMBRE-SIN-CANONICALIZAR · 2026-08-22] Se cuenta lo
+                # EXCLUIDO, no lo pedido. Antes decía «se excluyeron 3» aunque no hubiera
+                # casado ninguno — que es justo lo que pasa cuando el usuario chatea en
+                # otro idioma y el coach emite «Avocado» contra un catálogo en español.
+                _no_casaron = sorted(
+                    _excl_pedidos[b] for b in excluded_bases if b not in _excl_casadas
+                )
+                msg += f" (Se excluyeron {len(_excl_casadas)} ítems que indicaste)."
+                if _excl_casadas:
+                    msg += f"\n\n[ALERTA INTERNA PARA LA IA]: El usuario no pudo comprar: {', '.join(excluded_items)}. "
+                    msg += "Debes disparar INMEDIATAMENTE una recomendación proactiva en el chat preguntando si quiere que sustituyas los platos de esta semana que requerían esos ingredientes faltantes."
+                if _no_casaron:
+                    # Fail-loud hacia el propio agente: es la única capa que puede
+                    # preguntar «¿cuál de estos?» en el idioma del usuario. Callarlo deja
+                    # al usuario creyendo que excluyó algo que sigue en la lista.
+                    msg += (
+                        f"\n\n[ALERTA INTERNA PARA LA IA]: NO encontré en la lista de "
+                        f"compras estos ítems que el usuario dijo no haber comprado: "
+                        f"{', '.join(_no_casaron)}. La lista está en español canónico y "
+                        f"puede que el usuario los nombrara en otro idioma. NO afirmes que "
+                        f"se excluyeron: pregúntale a cuál de los ítems de la lista se "
+                        f"refería."
+                    )
             if modified_items:
-                msg += f" (Se modificaron/añadieron {len(modified_items)} ítems)."
+                # [P3-I18N-TOOLCALL-MODIFIED-ITEMS-SIN-RED · 2026-08-23] La red que
+                # `excluded_items` ya tenía y ésta no. Un ítem modificado que no casa con la
+                # lista no se pierde: entra a la Nevera como EXTRA, tal cual lo escribió el
+                # usuario — y si chatea en inglés, eso es una fila «3 lbs of chicken» que
+                # `pantry_names_match` no resolverá nunca contra las recetas en español.
+                # Callarlo deja al usuario creyendo que cambió la cantidad del pollo.
+                _mod_no_casaron = sorted(
+                    _mod_pedidos[b] for b in modified_bases if b not in _mod_casadas
+                )
+                msg += f" (Se modificaron {len(_mod_casadas)} ítems de la lista"
+                msg += f" y se añadieron {len(_mod_no_casaron)} extras)." if _mod_no_casaron else ")."
+                if _mod_no_casaron:
+                    msg += (
+                        f"\n\n[ALERTA INTERNA PARA LA IA]: Estos ítems modificados NO casaron "
+                        f"con ningún ítem de la lista de compras y se añadieron a la Nevera "
+                        f"como EXTRA con el nombre tal cual: {', '.join(_mod_no_casaron)}. La "
+                        f"lista está en español canónico y puede que el usuario los nombrara "
+                        f"en otro idioma: si se refería a un ítem de la lista, pregúntale a "
+                        f"cuál y NO afirmes que cambiaste su cantidad."
+                    )
             return msg
         else:
             return "Hubo un error al intentar agregar los ingredientes a la despensa."
@@ -3402,16 +3816,21 @@ _MICRO_NUTRIENT_COLUMNS = {
     "cholesterol": ("cholesterol_mg_per_100g", "colesterol", "mg", True),
 }
 
-# Tokens para filtrar el catálogo por tipo de dieta (best-effort; la LLM hace el
-# filtro final con las restricciones completas del perfil en el system prompt).
-_VEGETARIAN_EXCLUDE = [
-    "carne", "pollo", "pavo", "pescado", "cerdo", "chuleta", "bacalao", "salami",
-    "jamon", "tocino", "longaniza", "salchich", "atun", "sardina", "marisco",
-    "camaron", "higado", "chicharron", "res ", "bistec", "costilla",
-]
-_VEGAN_EXCLUDE = _VEGETARIAN_EXCLUDE + [
-    "huevo", "leche", "queso", "yogur", "mantequilla", "crema", "lacteo", "miel",
-]
+# [P0-CHAT-ALLERGY-SSOT · 2026-08-11] AQUÍ VIVÍAN `_VEGETARIAN_EXCLUDE` y
+# `_VEGAN_EXCLUDE`: una CUARTA tabla de dieta escrita a mano, que es exactamente lo que
+# `P1-DIET-CANON-SSOT` prohíbe por escrito («No escribas una 4ª»). Se borran.
+#
+# El filtro de dieta y el de alérgenos usan ahora los mismos matchers que el pipeline
+# de planes —`_diet_pool_item_banned` y `_allergen_pool_item_banned`, respaldados por
+# los `_DIET_*_TERMS` y por `_ALLERGEN_SYNONYMS`—, con coincidencia por palabra
+# completa, plurales y la excusa plant-adjacent («leche de coco» no es lácteo).
+#
+# Por qué importaba: el filtro viejo comparaba la ETIQUETA DEL CHIP contra el NOMBRE
+# del alimento como subcadena. El formulario guarda «Lacteos» (QAllergies.jsx:48) y
+# ningún alimento se llama «lácteo», así que no bloqueaba nada. Medido contra las 206
+# filas reales: Lácteos 0 de 24, Gluten 0 de 15, Mariscos 0 de 4, Frutos Secos 0 de 6.
+# «Huevo» y «Maní» sí acertaban —porque la etiqueta coincide con el nombre— y por eso
+# parecía que funcionaba.
 
 # [P3-MICRO-FOOD-SUGGEST] Condimentos/especias/hierbas secas: densísimos por 100g
 # pero se consumen en pizcas → no son "fuentes" prácticas de un micronutriente.
@@ -3470,6 +3889,7 @@ def suggest_foods_for_nutrient(user_id: str, nutrient: str, top_n: int = 6) -> s
         # Restricciones del usuario (best-effort). Las listas pueden venir como
         # list o como string "Lacteos, Gluten".
         allergies, dislikes, diet_type = [], [], "balanced"
+        _clin_form = {}
         try:
             profile = get_user_profile(user_id) or {}
             hp = profile.get("health_profile") or {}
@@ -3481,20 +3901,64 @@ def suggest_foods_for_nutrient(user_id: str, nutrient: str, top_n: int = 6) -> s
                     return [x.strip() for x in v.split(",") if x.strip()]
                 return []
 
-            allergies = [strip_accents(str(a).lower()) for a in _as_list(hp.get("allergies"))]
+            # [P0-CHAT-ALLERGY-SSOT] Las alergias viajan CRUDAS al matcher: él hace su
+            # propia normalización y resuelve la etiqueta del chip («Lacteos») a sus ~30
+            # sinónimos. Normalizarlas aquí a mano fue justo el origen del defecto.
+            allergies = [str(a) for a in _as_list(hp.get("allergies")) if str(a).strip()]
             dislikes = [strip_accents(str(d).lower()) for d in _as_list(hp.get("dislikes"))]
-            diet_type = (hp.get("dietType") or "balanced").strip().lower()
+            diet_type = canonicalize_diet_type(hp.get("dietType"))
+            _clin_form = {
+                "medicalConditions": _as_list(hp.get("medicalConditions")),
+                "medications": _as_list(hp.get("medications")),
+            }
         except Exception as _pe:
             logger.warning(f"⚠ [TOOL] suggest_foods_for_nutrient: perfil no disponible ({_pe})")
 
-        exclude_tokens = [t for t in (allergies + dislikes) if t]
-        if diet_type == "vegetarian":
-            exclude_tokens += _VEGETARIAN_EXCLUDE
-        elif diet_type == "vegan":
-            exclude_tokens += _VEGAN_EXCLUDE
+        # Los gustos siguen siendo subcadena: son una PREFERENCIA, y colarse de más
+        # ahí no hace daño. Las alergias no son una preferencia.
+        exclude_tokens = [t for t in dislikes if t]
 
         from shopping_calculator import get_master_ingredients
         rows = get_master_ingredients() or []
+
+        # [P2-SUGGEST-FOODS-COUNTRY · 2026-08-21] Esta tool rankeaba sobre el catálogo ENTERO —
+        # las 347 filas, con las de los seis países mezcladas— filtrando por alergias, rechazos y
+        # dieta, nunca por país. Medido para un usuario español: para el potasio le salían Chile
+        # mulato, Chile guajillo, Chile ancho, Chile pasilla y Achiote; para el calcio, Queso de
+        # papa y Flor de Jamaica. Consejo correcto en lo nutricional e INCOMPRABLE en lo práctico,
+        # que para una tool cuyo único trabajo es decir «cómete esto» equivale a no funcionar.
+        #
+        # Se reusa el MISMO predicado que el catálogo verificado del generador (precio RD — que
+        # incluye los básicos universales: arroz, pollo, huevo— más el keep sin precio DE SU PAÍS).
+        # Un segundo criterio aquí sería el espejo que driftea, la forma exacta del defecto que
+        # costó la costura (a) del guard de coherencia y las tres tablas de dieta de
+        # P1-DIET-CANON-SSOT.
+        #
+        # Fail-open en todo: sin país, sin knob o ante cualquier error, el catálogo entero — que es
+        # la conducta de siempre. Un usuario no puede quedarse sin consejo por esto.
+        # tooltip-anchor: P2-SUGGEST-FOODS-COUNTRY
+        try:
+            from constants import country_for_form_data as _cffd_sug
+            _sug_country = _cffd_sug(hp or {})
+            if _sug_country != "DO":
+                from shopping_calculator import is_country_catalog_unpriced_item as _iccui_sug
+
+                def _sug_comprable(_r) -> bool:
+                    if (_r.get("price_per_lb") or 0) > 0 or (_r.get("price_per_unit") or 0) > 0:
+                        return True
+                    return _iccui_sug(str(_r.get("name") or ""), country=_sug_country)
+
+                _filtradas = [_r for _r in rows if _sug_comprable(_r)]
+                # Nunca dejar la tool sin nada que decir: si el filtro vacía el catálogo, se
+                # conserva el completo. Un consejo con comida de otro país es peor que ninguno,
+                # pero "ningún alimento existe para tu déficit de hierro" es peor que los dos.
+                if _filtradas:
+                    rows = _filtradas
+        except Exception as _sug_exc:
+            logger.warning(
+                "[P2-SUGGEST-FOODS-COUNTRY] filtro por país no-op (fail-open): %s: %s",
+                type(_sug_exc).__name__, _sug_exc,
+            )
 
         candidates = []
         for r in rows:
@@ -3512,6 +3976,14 @@ def suggest_foods_for_nutrient(user_id: str, nutrient: str, top_n: int = 6) -> s
                 continue
             name_norm = strip_accents(str(name).lower())
             if any(tok in name_norm for tok in exclude_tokens):
+                continue
+            # [P0-CHAT-ALLERGY-SSOT · 2026-08-11] El mismo matcher que usa el pipeline
+            # de planes, no uno propio. Fail-OPEN por diseño en los helpers (devuelven
+            # False si algo revienta), así que este bloque nunca deja al coach mudo —
+            # pero sí deja de recomendar queso a un alérgico a lácteos.
+            if allergies and _allergen_pool_item_banned(name, allergies):
+                continue
+            if diet_type and _diet_pool_item_banned(name, diet_type):
                 continue
             # Condimentos/especias: densos por 100g pero no son fuentes prácticas.
             if any(tok in name_norm for tok in _CONDIMENT_EXCLUDE):
@@ -3532,10 +4004,59 @@ def suggest_foods_for_nutrient(user_id: str, nutrient: str, top_n: int = 6) -> s
 
         verb = "más bajos en" if is_ceiling else "más ricos en"
         body = "\n".join(f"- {name}: {round(val, 1)}{unit} por cada 100g" for name, val in top)
+
+        # [P0-CHAT-ALLERGY-SSOT · 2026-08-11] Aquí la guía le prometía al modelo que la
+        # lista venía depurada de antemano, y era FALSO: no bloqueaba ni un lácteo.
+        # (La frase literal no se reproduce aquí a propósito: el guard que impide que
+        # vuelva escanea este archivo, y citarla lo haría fallar contra su propia
+        # explicación.)
+        # Peor que el filtro roto era la frase, porque el modelo no tiene otra fuente con
+        # la que contradecirla — se le quitaba el único motivo para dudar.
+        #
+        # Ahora el filtro sí funciona, y aun así la frase NO vuelve. Se le dice al modelo
+        # QUÉ se aplicó y qué NO, que es lo que le permite seguir vigilando: la lista pasa
+        # por alergias y dieta, pero el cruce medicamento↔nutriente (potasio con IECA,
+        # vitamina K con warfarina) vive hoy solo en el pipeline de planes, así que aquí
+        # se declara como contexto para que el modelo lo tenga en cuenta él.
+        # Se nombran las DIMENSIONES aplicadas, no los valores. Repetir aquí la lista de
+        # alergias no le añade nada al modelo —ya la tiene en su contexto clínico— y sí
+        # mete los nombres de los alérgenos dentro del texto de la respuesta, que es
+        # justo donde un lector automático (o un test) los busca para comprobar que NO
+        # se están recomendando.
+        _avisos = []
+        if allergies:
+            _avisos.append("sus alergias declaradas")
+        if diet_type and diet_type != "balanced":
+            _avisos.append("su tipo de dieta")
+        _filtrado = (
+            f"La lista YA excluye lo incompatible con {' y '.join(_avisos)}."
+            if _avisos else
+            "El perfil no declara alergias ni dieta restrictiva, así que la lista va sin filtrar."
+        )
+
+        _clinico = ""
+        try:
+            from condition_rules import detect_active_rules as _dar
+            _reglas = _dar(_clin_form) if _clin_form else []
+            _meds = [str(m) for m in (_clin_form.get("medications") or []) if str(m).strip()]
+            _ctx = []
+            if _reglas:
+                _ctx.append("condiciones activas: " + ", ".join(r.label for r in _reglas))
+            if _meds:
+                _ctx.append("medicamentos: " + ", ".join(_meds))
+            if _ctx:
+                _clinico = (
+                    f" OJO — este filtro NO contempla {' ni '.join(_ctx)}; "
+                    "revísalo tú antes de recomendar (p. ej. potasio con IECA/ARA-II, "
+                    "vitamina K con warfarina, calcio/hierro con levotiroxina)."
+                )
+        except Exception:
+            pass
+
         guidance = (
-            f"Estos son alimentos del catálogo {verb} {label}, ya filtrados por las "
-            "restricciones del usuario. Recomiéndale 2-3 opciones prácticas con cantidades "
-            "realistas para integrarlas a su plan; NO listes todos crudos ni inventes valores."
+            f"Estos son alimentos del catálogo {verb} {label}. {_filtrado}{_clinico} "
+            "Recomiéndale 2-3 opciones prácticas con cantidades realistas para integrarlas "
+            "a su plan; NO listes todos crudos ni inventes valores."
         )
         return f"ALIMENTOS {verb.upper()} {label.upper()} (catálogo, por 100g):\n{body}\n\n{guidance}"
 
@@ -3748,11 +4269,18 @@ def consultar_dia_del_plan(user_id: str, fecha: str) -> str:
             return (f"No pude interpretar la fecha '{fecha}'. Necesito el formato "
                     f"ISO 'YYYY-MM-DD' (ejemplo: 2026-07-26).")
 
-        plan = get_latest_meal_plan(user_id)
+        plan = get_latest_usable_meal_plan(user_id)
         if not isinstance(plan, dict) or not plan:
             return "El usuario no tiene ningún plan activo del que pueda sacar ese día."
 
-        row = find_plan_day_for_date(plan, target, rd_today())
+        # [P3-CONSULTAR-DIA-USER-TODAY · 2026-08-22] «Hoy» es el del USUARIO, no el de RD. Esto
+        # pasaba `rd_today()` —`now(utc) − 4h`— teniendo `user_id` delante, que el override de
+        # P0-AGENT-1 garantiza en el tope de `execute_tools`. A las 22:30 en Ciudad de México ya
+        # son las 00:30 del día siguiente en RD, así que el coach describía el menú de MAÑANA a
+        # quien preguntaba a la hora de cenar; en Madrid, el de AYER. Mismo mecanismo que
+        # P2-LOCAL-DATE-STR-UTC4 cerró para el diario, en la superficie que aquella pasada dejó.
+        _hoy_usuario = _dt.strptime(_local_date_str_for_user(user_id), "%Y-%m-%d").date()
+        row = find_plan_day_for_date(plan, target, _hoy_usuario)
         if not row:
             return (f"No tengo el día {target.isoformat()} en el plan de este usuario. "
                     f"Puede que sea anterior al plan actual, o que ese día ya se haya "

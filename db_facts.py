@@ -165,6 +165,136 @@ def check_fact_ownership(fact_id: str, user_id: str) -> bool:
         logger.error(f"Error en check_fact_ownership: {e}")
     return False
 
+def _fallback_tz_offset_min() -> int:
+    """[P2-TZ-FALLBACK-KNOB-INERTE · 2026-08-23]
+
+    EL NOMBRE NO ES LIBRE. `test_p1_country_system_f2.py` (F9) escanea TODO el backend por
+    subcadena cruda -- sin frontera de palabra y sin excluir comentarios -- para vigilar que
+    nadie lea la clave POR PAIS de `COUNTRY_PROFILES` que fija el huso (SIN LECTOR por diseno:
+    T5-F1 hizo la fecha local country-independiente a proposito). Ese nombre en minusculas es
+    prefijo del que este helper habria llevado, y son cosas distintas: aquel es por pais, este
+    es el knob global. El guard ajeno no puede distinguirlas, asi que se aparta este nombre --
+    y por eso esta nota tampoco puede escribir aquel literal.
+ Fallback de huso de este modulo, leido del
+    SSOT `constants.DEFAULT_TZ_OFFSET_MIN` (knob `MEALFIT_DEFAULT_TZ_OFFSET_MIN`).
+
+    `P3-TZ-FALLBACK-SSOT` creo el knob "por si la poblacion deja de ser dominicana" y conecto
+    tres consumidores. El cuarto -- este modulo, del que cuelgan el agente proactivo,
+    `get_daily_nudge_count`, `get_avg_meal_hour`, `_local_date_str_for_user` y
+    `consultar_dia_del_plan` -- se quedo con el literal `240` cableado en seis sitios. Hoy el
+    valor por defecto del knob COINCIDE con ese literal, asi que no habia error de conducta:
+    lo que estaba roto era la PALANCA. Un operador que moviera el knob veia cambiar tres
+    caminos y no el cuarto.
+
+    Import DIFERIDO a proposito. `db_facts` no importa `constants` a nivel de modulo (medido:
+    cero imports; el unico `constants` del fichero era prosa dentro de un docstring), y el
+    orden de import de este backend no esta garantizado. Diferirlo dentro de la funcion cierra
+    la pregunta del ciclo sin tener que responderla, y ademas mantiene el knob VIVO para los
+    tests que hacen monkeypatch de `constants.DEFAULT_TZ_OFFSET_MIN` (cachearlo aqui lo
+    congelaria en el primer uso).
+
+    Fail-safe: cualquier fallo del import o del cast degrada a 240 (RD) -- identico al literal
+    que este helper reemplaza, asi que el peor caso es la conducta previa.
+
+    tooltip-anchor: _fallback_tz_offset_min (test_p2_tz_fallback_knob_inerte.py)
+    """
+    try:
+        from constants import DEFAULT_TZ_OFFSET_MIN
+        return int(DEFAULT_TZ_OFFSET_MIN)
+    except Exception:
+        return 240
+
+
+def _tz_candidate_int(raw) -> Optional[int]:
+    """Parsea un candidato crudo de offset (texto de un `->>'clave'`) a int, o `None` si está
+    ausente o no es numérico (incluye overflow). Nunca lanza — usado por `user_tz_offset_min`
+    para poder ENCADENAR candidatos (intentar el siguiente si este falla) sin que una excepción
+    de parseo se confunda con una excepción de DB en el `try` del caller."""
+    if raw is None:
+        return None
+    try:
+        return int(float(raw))
+    except (TypeError, ValueError, OverflowError):
+        return None
+
+
+def user_tz_offset_min(user_id: str) -> int:
+    """Resuelve el offset de huso horario PERSISTIDO del usuario, en minutos, convención
+    `Date.getTimezoneOffset()` (positivo = oeste de UTC; RD=240, España en invierno=-60).
+
+    [P1-COUNTRY-SYSTEM-F1 · 2026-08-16 (T5, fix-round 1)] Lee `health_profile->>'tzOffset'`
+    primero; si esa clave está ausente o no es numérica, cae a
+    `health_profile->>'tz_offset_minutes'`. Mismo espíritu que el COALESCE de
+    `cron_tasks._get_user_tz_live` (que vive en una capa que este módulo no puede importar sin
+    ciclo: `cron_tasks` importa `db`/`db_facts`, nunca al revés) — con la prioridad INVERTIDA a
+    propósito: allá `tz_offset_minutes` gana primero; aquí `tzOffset` gana primero, porque es la
+    clave que el diseño original de este helper vincula. El orden solo importa cuando un perfil
+    tiene AMBAS claves con valores distintos (no debería pasar salvo drift, ver escritor #1
+    abajo); cuando solo una está poblada, cualquier orden llega al mismo resultado.
+
+    **Por qué el fallback existe — dos escritores conocidos, uno los sincroniza y el otro no**:
+
+      1. `routers/plans.py::_tz_mutator` (usado por `POST /api/plans/{plan_id}/shift-plan`) —
+         escribe `tz_offset_minutes` Y `tzOffset` JUNTOS, siempre, cuando el request trae
+         `tzOffset` explícito. Sincronizado por diseño.
+      2. `routers/plans.py::_postprocess_pipeline_result` (~línea 2107-2137; el escritor de
+         `health_profile` en CADA generación de plan vía `POST /api/plans/analyze` y
+         `/analyze/stream`) — construye `hp_data` como copia del payload crudo del form
+         (`{k: v for k, v in data.items() if k not in ('session_id', 'user_id', 'appMode')}`) y
+         SIEMPRE fija `hp_data["tz_offset_minutes"] = tz_offset_mins` (el valor YA RESUELTO por
+         `_resolve_request_tz_offset`, que puede venir del payload O de un fallback de perfil
+         previo). Si el payload crudo del cliente no traía una clave `tzOffset` — cliente legacy,
+         o el resolver cayó a su propio fallback — `hp_data` nunca hereda `tzOffset` del spread:
+         este escritor deja `tz_offset_minutes` poblado y `tzOffset` intacto (con frecuencia
+         nunca-seteado). Sin el fallback de este helper, cualquier perfil que solo pasó por ESTE
+         escritor degradaría a 240 PARA SIEMPRE — aunque `tz_offset_minutes` tuviera el offset
+         real correcto. (Hallado en review — la versión original de este docstring afirmaba que
+         `_tz_mutator` era "el único write path conocido"; era falso, y el gap era real.)
+
+    Country-INDEPENDENT a propósito: el offset es el reloj PERSONAL del usuario (lo que su
+    navegador/dispositivo reportó), no un default derivado de `constants.COUNTRY_PROFILES` — un
+    dominicano viajando a España corta su día en hora española igual que un usuario español.
+
+    Fail-safe: perfil ausente, AMBAS claves ausentes/null/no-numéricas, o cualquier excepción de
+    DB degradan a `_fallback_tz_offset_min()` — el SSOT `constants.DEFAULT_TZ_OFFSET_MIN`, cuyo
+    default (240, RD) es IDÉNTICO al hardcode de zona horaria previo que este P-fix reemplaza
+    en los 4 call sites. Clamp defensivo [-900, 900] (±15h, cubre holgado el rango real de husos
+    UTC-12..+14) contra un valor corrupto que reviente la aritmética SQL corriente abajo.
+
+    Sin caché a propósito (per-call): estos call sites son lecturas de diario/coach, no un hot
+    loop — correctness sobre micro-perf. Si un futuro caller lo invoca dentro de un loop
+    por-fila, cachear se vuelve obligatorio; hoy los 4 sitios lo llaman a lo sumo 1x por
+    invocación.
+
+    tooltip-anchor: user_tz_offset_min (test_p1_country_system_f1.py)
+    """
+    if not user_id or not connection_pool:
+        return _fallback_tz_offset_min()
+    try:
+        row = execute_sql_query(
+            "SELECT health_profile->>'tzOffset' AS tz, "
+            "health_profile->>'tz_offset_minutes' AS tz_legacy "
+            "FROM user_profiles WHERE id = %s",
+            (user_id,),
+            fetch_one=True,
+        )
+        if not row:
+            return _fallback_tz_offset_min()
+        val = _tz_candidate_int(row.get("tz"))
+        if val is None:
+            val = _tz_candidate_int(row.get("tz_legacy"))
+        if val is None:
+            return _fallback_tz_offset_min()
+    except Exception as e:
+        logger.debug(f"[P1-COUNTRY-SYSTEM-F1] user_tz_offset_min fallback {_fallback_tz_offset_min()} para {str(user_id)[:8]}: {e}")
+        return _fallback_tz_offset_min()
+    if val > 900:
+        return 900
+    if val < -900:
+        return -900
+    return val
+
+
 def get_avg_meal_hour(user_id: str, meal_type: str, days_back: int = 14) -> Optional[float]:
     """Calcula la hora promedio en la que el usuario registra un tipo de comida (ej: 10.5 para 10:30 AM)."""
     if not connection_pool: return None
@@ -172,19 +302,88 @@ def get_avg_meal_hour(user_id: str, meal_type: str, days_back: int = 14) -> Opti
         from datetime import datetime, timezone, timedelta
         cutoff = (datetime.now(timezone.utc) - timedelta(days=days_back)).isoformat()
         
-        # Ajustamos a AST (-4) sumando/restando horas o simplemente extrayendo la hora local
+        # [P1-COUNTRY-SYSTEM-F1 · 2026-08-16 (T5)] Offset resuelto por usuario en vez del
+        # hardcode 'America/Santo_Domingo'. `user_tz_offset_min` degrada a 240 (RD) sin
+        # perfil/error — comportamiento IDÉNTICO al hardcode previo para todo usuario sin
+        # `tzOffset` persistido. América/Santo_Domingo no tiene DST (fijo UTC-4), así que 240
+        # es válido los 365 días del año (no hace falta lógica de calendario).
+        #
+        # [P1-AVG-MEAL-HOUR-SIGN · 2026-08-21] EL P-FIX DEDICADO QUE T5 PEDÍA. Aquí vivía un
+        # preserva-bug deliberado: el signo era '+' y no '-' como en los otros 3 sitios de T5,
+        # para garantizar byte-identidad con offset=240 mientras T5 sólo parametrizaba el huso.
+        #
+        # El comentario original lo llamaba «+8h», y esa etiqueta escondía lo importante: NO es
+        # una constante, es `2 × offset`. El doble `AT TIME ZONE` sobre una columna `timestamptz`
+        # SUMA el offset en vez de restarlo, así que mientras el fallback era 240 para todo el
+        # mundo parecía un sesgo fijo — y en cuanto `MEALFIT_COUNTRY_SYSTEM` dio offsets reales
+        # por usuario pasó a ser una función del país, que para España CAMBIA DE SIGNO:
+        #     offset  240 (RD)   14:00Z → buggy 18.0 · correcta 10.0   (+8 h)
+        #     offset -120 (ES)   14:00Z → buggy 12.0 · correcta 16.0   (−4 h)
+        #     offset  360 (MX)   14:00Z → buggy 20.0 · correcta  8.0   (+12 h)
+        # Consumidor único (verificado por grep): el agente proactivo, que decide a qué hora te
+        # llega el nudge. Un dominicano que desayuna a las 8:00 lo recibía a las 17:30.
+        #
+        # ⚠️ ESTE CAMBIO **NO ES BYTE-IDÉNTICO** PARA DO, y es deliberado. Casi todo el sistema de
+        # países se construyó bajo la regla «RD no puede notar nada»; aquí se rompe a propósito
+        # porque la conducta dominicana previa era el BUG: con offset 240 la función devolvía 18.0
+        # para una comida de las 10:00 locales. Preservarla habría sido preservar un nudge
+        # desplazado +8 h para todos los dominicanos. Lo que cambia es la hora a la que llega un
+        # nudge, no un dato del plan — reversible y sin efecto retroactivo sobre nada persistido.
+        # (Anotado en respuesta al guard de otra sesión, que pedía declararlo en el código: tenía
+        # razón, el mecanismo estaba explicado y la ruptura de byte-identidad no.)
+        _tz_off = user_tz_offset_min(user_id)
         query = """
-            SELECT EXTRACT(HOUR FROM (consumed_at AT TIME ZONE 'UTC' AT TIME ZONE 'America/Santo_Domingo')) as hr,
-                   EXTRACT(MINUTE FROM (consumed_at AT TIME ZONE 'UTC' AT TIME ZONE 'America/Santo_Domingo')) as mn
+            SELECT EXTRACT(HOUR FROM (consumed_at - make_interval(mins => %s))) as hr,
+                   EXTRACT(MINUTE FROM (consumed_at - make_interval(mins => %s))) as mn
             FROM consumed_meals
             WHERE user_id = %s AND meal_type ILIKE %s AND consumed_at >= %s
         """
-        res = execute_sql_query(query, (user_id, f"%{meal_type}%", cutoff), fetch_all=True)
+        res = execute_sql_query(query, (_tz_off, _tz_off, user_id, f"%{meal_type}%", cutoff), fetch_all=True)
         if not res:
             return None
-            
-        total_hours = sum([float(r['hr']) + float(r['mn'])/60.0 for r in res])
-        return round(total_hours / len(res), 2)
+
+        # [P3-AVG-MEAL-HOUR-CIRCULAR · 2026-08-23] MEDIA CIRCULAR, no aritmética.
+        #
+        # Una hora de reloj es un ÁNGULO, no un escalar: 23:00 y 01:00 distan 2 h, no 22.
+        # La media aritmética de `[18, 20, 21, 0, 14]` es 14,6 — una hora que el usuario no
+        # come nunca, y que ni siquiera está entre las que come. Peor: cada cruce de
+        # medianoche arrastra la media hacia el MEDIODIÁ, porque el 0 entra como "cero" y
+        # no como "medianoche". El único consumidor es el agente proactivo, que con esa
+        # media decide a qué hora te llega el recordatorio.
+        #
+        # VÍNCULO CON EL PAÍS (indirecto pero real): las cenas españolas (21:00-23:00, con
+        # picoteo después) cruzan la medianoche mucho más a menudo que las dominicanas
+        # (~19:00). El sesgo hacia el mediodía castiga justo a la población beta.
+        #
+        # Método: cada hora -> vector unitario en el círculo de 24 h; se promedian los
+        # vectores y se vuelve a ángulo con `atan2`. Para datos que NO cruzan medianoche
+        # coincide con la media aritmética salvo redondeo — el dominicano no nota nada.
+        #
+        # RESULTANTE NULA: si los vectores se cancelan (comidas antipodales, p. ej. 00:00 y
+        # 12:00), la media circular NO EXISTE. Devolver un número ahí sería inventarlo, y el
+        # `atan2(0, 0)` de Python devuelve 0.0 — medianoche, la peor hora posible para un
+        # nudge. Se devuelve `None`, que es el contrato que el consumidor ya sabe leer
+        # (cae a su horario por defecto para esa comida).
+        # tooltip-anchor: P3-AVG-MEAL-HOUR-CIRCULAR
+        import math as _math_circ
+
+        horas = [float(r['hr']) + float(r['mn']) / 60.0 for r in res]
+        _rad = 2.0 * _math_circ.pi / 24.0
+        _sin = sum(_math_circ.sin(h * _rad) for h in horas)
+        _cos = sum(_math_circ.cos(h * _rad) for h in horas)
+        # Longitud media del resultante en [0, 1]: 0 = dirección indefinida.
+        if _math_circ.hypot(_sin, _cos) / len(horas) < 1e-9:
+            logger.debug(
+                f"[P3-AVG-MEAL-HOUR-CIRCULAR] resultante nula para {meal_type} "
+                f"({len(horas)} registros): sin hora media definida."
+            )
+            return None
+        _media = _math_circ.atan2(_sin, _cos) / _rad
+        if _media < 0:
+            _media += 24.0
+        # `round` puede empujar 23,999… a 24,0; el reloj no tiene esa hora.
+        _media = round(_media, 2)
+        return 0.0 if _media >= 24.0 else _media
     except Exception as e:
         logger.error(f"Error calculando avg_meal_hour para {meal_type}: {e}")
         return None
@@ -808,10 +1007,16 @@ def get_consumed_meals_today(user_id: str, date_str: Optional[str] = None, tz_of
             # del huso es por `is not None`, nunca por truthiness — `0` es UTC,
             # un offset legítimo y falsy.
             # tooltip-anchor: P1-DIARY-TZ-DEFAULT-RD
+            # [P2-TZ-FALLBACK-KNOB-INERTE · 2026-08-23] Los dos defaults salen del
+            # MISMO sitio (`_fallback_tz_offset_min` -> `constants.DEFAULT_TZ_OFFSET_MIN`).
+            # Antes eran `timedelta(hours=4)` y `240`: dos escrituras del mismo hecho, y
+            # ninguna de las dos se movia con el knob. `_fb_tz_min` se resuelve UNA vez
+            # para que la fecha y el huso no puedan discrepar dentro de la misma llamada.
+            _fb_tz_min = _fallback_tz_offset_min()
             if not date_str:
-                date_str = (datetime.now(timezone.utc) - timedelta(hours=4)).date().isoformat()
+                date_str = (datetime.now(timezone.utc) - timedelta(minutes=_fb_tz_min)).date().isoformat()
             if tz_offset_mins is None:
-                tz_offset_mins = 240
+                tz_offset_mins = _fb_tz_min
 
             # El frontend envía tz_offset en minutos (JS: getTimezoneOffset() - diferencia a UTC)
             # Parsear el inicio del día local
@@ -829,10 +1034,16 @@ def get_consumed_meals_today(user_id: str, date_str: Optional[str] = None, tz_of
                 # `date_str` basura del caller. El fallback también es RD: caer
                 # a UTC aquí reintroduciría el mismo desfase por la puerta de
                 # atrás, y encima solo para el usuario que mandó datos malos.
-                logger.error(f"⚠️ Error procesando la zona horaria, usando fallback a fecha local RD: {e}")
-                _rd_today = (datetime.now(timezone.utc) - timedelta(hours=4)).date()
-                start_str = f"{_rd_today.isoformat()}T04:00:00Z"
-                end_str = f"{(_rd_today + timedelta(days=1)).isoformat()}T03:59:59Z"
+                logger.error(f"⚠️ Error procesando la zona horaria, usando fallback a fecha local (offset {_fb_tz_min}): {e}")
+                # [P2-TZ-FALLBACK-KNOB-INERTE · 2026-08-23] El dia local del fallback y sus
+                # bordes se derivan del MISMO offset. Antes el dia se calculaba con
+                # `hours=4` y los bordes eran los literales `T04:00:00Z`/`T03:59:59Z`:
+                # tres escrituras del mismo hecho que solo cuadraban en RD.
+                _fb_today = (datetime.now(timezone.utc) - timedelta(minutes=_fb_tz_min)).date()
+                _fb_start = datetime.strptime(f"{_fb_today.isoformat()} 00:00:00", "%Y-%m-%d %H:%M:%S") + timedelta(minutes=_fb_tz_min)
+                _fb_end = datetime.strptime(f"{_fb_today.isoformat()} 23:59:59", "%Y-%m-%d %H:%M:%S") + timedelta(minutes=_fb_tz_min)
+                start_str = _fb_start.strftime("%Y-%m-%dT%H:%M:%SZ")
+                end_str = _fb_end.strftime("%Y-%m-%dT%H:%M:%SZ")
 
 
             # [P2-SELECT-STAR-CONSUMED-MEALS · 2026-05-15] Columnas explícitas

@@ -22,8 +22,14 @@ import shopping_calculator as sc
 BACKEND = Path(__file__).resolve().parents[1]
 SRC = (BACKEND / "shopping_calculator.py").read_text(encoding="utf-8")
 SUP = (BACKEND / "routers" / "supermarket.py").read_text(encoding="utf-8")
-BRANDS_JSX = (BACKEND.parent / "frontend" / "src" / "components" / "dashboard"
-              / "SupermarketBrands.jsx").read_text(encoding="utf-8")
+@pytest.fixture(scope="module", autouse=True)
+def _load_frontend_sibling_sources(frontend_repo_path):
+    # La fixture compartida salta el módulo antes de cualquier I/O si falta el hermano.
+    _ = frontend_repo_path
+    global BRANDS_JSX
+    BRANDS_JSX = (BACKEND.parent / "frontend" / "src" / "components" / "dashboard"
+                  / "SupermarketBrands.jsx").read_text(encoding="utf-8")
+
 
 
 # [P1-BRAND-DEFAULT-GUARDS] master hermético: el default SOLO aplica a ítems que

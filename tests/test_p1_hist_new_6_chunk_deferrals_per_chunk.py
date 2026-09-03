@@ -183,7 +183,7 @@ def test_response_includes_deferrals_count_and_reasons():
         # SELECT principal (con LEFT JOIN m) — devuelve filas. La
         # query del LATERAL tiene `SELECT COUNT(*)` también pero está
         # embebida — discriminamos por la presencia del JOIN.
-        if "LEFT JOIN plan_chunk_metrics" in query:
+        if "FROM plan_chunk_queue q" in query:
             return [fake_row]
         # COUNT total separado (P1-HIST-NEW-4) — query corta sin JOIN.
         if "SELECT COUNT(*)" in query and "plan_chunk_queue" in query:
@@ -221,7 +221,7 @@ def test_response_count_zero_when_no_deferrals():
         # SELECT principal (con LEFT JOIN m) — devuelve filas. La
         # query del LATERAL tiene `SELECT COUNT(*)` también pero está
         # embebida — discriminamos por la presencia del JOIN.
-        if "LEFT JOIN plan_chunk_metrics" in query:
+        if "FROM plan_chunk_queue q" in query:
             return [fake_row]
         # COUNT total separado (P1-HIST-NEW-4) — query corta sin JOIN.
         if "SELECT COUNT(*)" in query and "plan_chunk_queue" in query:
@@ -257,7 +257,7 @@ def test_response_handles_count_none_from_sql():
         # SELECT principal (con LEFT JOIN m) — devuelve filas. La
         # query del LATERAL tiene `SELECT COUNT(*)` también pero está
         # embebida — discriminamos por la presencia del JOIN.
-        if "LEFT JOIN plan_chunk_metrics" in query:
+        if "FROM plan_chunk_queue q" in query:
             return [fake_row]
         # COUNT total separado (P1-HIST-NEW-4) — query corta sin JOIN.
         if "SELECT COUNT(*)" in query and "plan_chunk_queue" in query:
@@ -293,7 +293,7 @@ def test_response_sanitizes_empty_reasons_list_to_none():
         # SELECT principal (con LEFT JOIN m) — devuelve filas. La
         # query del LATERAL tiene `SELECT COUNT(*)` también pero está
         # embebida — discriminamos por la presencia del JOIN.
-        if "LEFT JOIN plan_chunk_metrics" in query:
+        if "FROM plan_chunk_queue q" in query:
             return [fake_row]
         # COUNT total separado (P1-HIST-NEW-4) — query corta sin JOIN.
         if "SELECT COUNT(*)" in query and "plan_chunk_queue" in query:

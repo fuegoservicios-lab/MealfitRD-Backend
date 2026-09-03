@@ -26,6 +26,25 @@ _REPO_ROOT = Path(__file__).resolve().parent.parent.parent
 _SETTINGS_JSX = _REPO_ROOT / "frontend" / "src" / "pages" / "Settings.jsx"
 
 
+def _cuerpo_js(src: str, decl: str) -> str:
+    """Cuerpo de una función JS emparejando llaves desde su declaración.
+
+    [2026-08-14] Sustituye a la ventana de N caracteres alrededor del botón: cuando el
+    handler se extrae a otra parte del archivo, la ventana deja de verlo y el guard
+    acusa a producción de haber borrado una defensa que sigue viva."""
+    i = src.index(decl)
+    a = src.index("{", i)
+    prof = 0
+    for k in range(a, len(src)):
+        if src[k] == "{":
+            prof += 1
+        elif src[k] == "}":
+            prof -= 1
+            if prof == 0:
+                return src[i:k + 1]
+    raise AssertionError(f"no se cerró el cuerpo de {decl!r}")
+
+
 def _read(path: Path) -> str:
     return path.read_text(encoding="utf-8")
 
@@ -73,16 +92,26 @@ def test_volver_button_gates_on_body_metrics_changed():
     # Buscar el bloque del botón Volver (className exitSettingsBtn).
     btn_idx = src.find("exitSettingsBtn")
     assert btn_idx != -1, "Botón Volver (className exitSettingsBtn) no encontrado."
-    # Tomar ventana de ~4000 chars después.
-    btn_window = src[btn_idx:btn_idx + 4000]
+
+    # [reapuntado 2026-08-14] Antes se leían los 4.000 caracteres SIGUIENTES al botón,
+    # dando por hecho que el gate vivía inline en su onClick. El handler se extrajo a
+    # `requestExit`, declarado ~39.000 caracteres ANTES: el test dijo «el modal de
+    # discard nunca se mostraría» sobre un gate que sigue exactamente donde debe.
+    # Se sigue la CADENA (botón → handler → gate), que es lo que protege al usuario y
+    # además no depende de dónde esté declarado el handler.
+    m_onclick = re.search(r"className=\{styles\.exitSettingsBtn\}\s*onClick=\{(\w+)\}", src)
+    assert m_onclick, "el botón Volver perdió su onClick={handler}"
+    handler = m_onclick.group(1)
+
+    cuerpo = _cuerpo_js(src, f"const {handler}")
     assert re.search(
         r"bodyMetricsChanged\s*&&\s*activeSection\s*===\s*['\"]profile['\"]",
-        btn_window,
+        cuerpo,
     ), (
-        "Gate `bodyMetricsChanged && activeSection === 'profile'` ausente "
-        "del onClick de Volver. El modal de discard nunca se mostraría."
+        f"Gate `bodyMetricsChanged && activeSection === 'profile'` ausente de "
+        f"`{handler}` (el onClick del Volver). El modal de discard nunca se mostraría."
     )
-    assert "setShowDiscardConfirm(true)" in btn_window, (
+    assert "setShowDiscardConfirm(true)" in cuerpo, (
         "El onClick del Volver no invoca `setShowDiscardConfirm(true)` "
         "cuando hay drafts pendientes — el gate detecta pero no actúa."
     )

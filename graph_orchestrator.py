@@ -9,14 +9,14 @@ import time
 import json
 from typing import TypedDict, Optional, Callable, Any, Literal
 from langgraph.graph import StateGraph, END
-# [P0-DEEPSEEK-MIGRATION · 2026-06-12] Gemini → DeepSeek. El wrapper local
-# `ChatDeepSeek` (abajo) subclasea el cliente base para backpressure +
+# [P0-LLM-PROVIDER-MIGRATION · 2026-06-12] Gemini → GLM. El wrapper local
+# `ChatGLM` (abajo) subclasea el cliente base para backpressure +
 # instrumentación; el router por tier vive en llm_provider.
 from llm_provider import (
-    ChatDeepSeek as _ChatDeepSeekBase,
+    ChatGLM as _ChatGLMBase,
     ChatOpenAI as _ChatOpenAIBase,
-    DEEPSEEK_FLASH,
-    DEEPSEEK_PRO,
+    GLM_FLASH,
+    GLM_PRO,
     GPT56_LUNA,
     GPT56_SOL,
     GPT56_TERRA,
@@ -24,7 +24,7 @@ from llm_provider import (
     get_user_tier,
     is_openai_model,
 )
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, create_model
 from tenacity import retry, stop_after_attempt, wait_exponential, before_sleep_log, retry_if_exception
 import logging
 import threading
@@ -480,7 +480,7 @@ def _self_critique_canary_cohort(state) -> str:
 # (`_days_with_same_day_protein_repeat` espeja `build_variety_report.same_day_protein_repeats`:
 # labels `_SAME_DAY_PROTEIN_GATE_LABELS`, aliases `_MAIN_PROTEIN_ALIASES`, match word-boundary sobre
 # name+ingredients). Forense plan vivo 70f802ec (2026-07-08): el self_critique corrigió Día 2/3 con
-# deepseek-v4-pro (63s) pero el gate volvió a rechazar por la MISMA causa — la corrección se logueaba
+# glm-5.3 (63s) pero el gate volvió a rechazar por la MISMA causa — la corrección se logueaba
 # "corregido" con que el LLM devolviera algo no-nulo, sin re-verificar. Como el gate determinista hace
 # bypass del LLM reviewer (guest sin restricciones) no puebla `affected_days` → el retry regeneró el
 # PLAN COMPLETO. Al marcar los días residuales `_critique_unresolved` el retry se vuelve QUIRÚRGICO
@@ -535,6 +535,29 @@ HARDEN_CONDITION_CATALOG = _env_bool("MEALFIT_HARDEN_CONDITION_CATALOG", False) 
 HARDEN_SALTCURED_MAIN    = _env_bool("MEALFIT_HARDEN_SALTCURED_MAIN", False)      # clase 5
 HARDEN_SAMEDAY_PROTEIN   = _env_bool("MEALFIT_HARDEN_SAMEDAY_PROTEIN", False)     # clase 1
 HARDEN_CROSSDAY_QUOTA    = _env_bool("MEALFIT_HARDEN_CROSSDAY_QUOTA", False)      # clase 2
+
+# [P1-DAYGEN-DIET-CONVERGE · 2026-08-07] Convergencia clínica en GENERACIÓN. Origen: benchmark del
+# landing (issue #9) — 13/20 perfiles con restricciones rechazados por el guard crítico; el diagnóstico
+# (header X-Bioboros-Review-Diag) mostró planes vegan/vegetarian NACIENDO con camarones/atún/lácteos y
+# perfiles HTA con "Sal al gusto" fabricada en cada comida. Los guards funcionan; el generador
+# desobedecía. Cuatro capas, cada una con rollback sin redeploy:
+#   1. Scrub de DIETA sobre los pools del skeleton — el pool se vuelve la lista de AUTORIZADOS del
+#      day-gen (build_day_assignment_context invierte a "PROHIBIDO ABSOLUTO" lo que NO está): un pool
+#      sin filtrar AUTORIZA la violación. Reusa _scan_diet_violations (mismo matcher, cero 4ª tabla).
+#   2. Bloque de directiva de DIETA con la prioridad tipográfica del bloque de alergias, en skeleton y
+#      day-gen — la dieta viajaba como campo JSON enterrado mientras las alergias gritan.
+#   3. Gate clínico del splitter de sal (P3-SALT-SEPARATE-LINE): con HTA/renal activa, solo pimienta.
+#   4. Un rechazo crítico de DIETA/ALÉRGENO obtiene UN retry INFORMADO (ver should_retry) en vez del
+#      abort a cero-retries; si reincide, el fallback terminal es idéntico al de hoy.
+SKELETON_DIET_SCRUB_ENABLED = _env_bool("MEALFIT_SKELETON_DIET_SCRUB", True)
+# [P1-REVIEWER-VERIFICATION-ADVISORY · 2026-08-08] Scrub de ALÉRGENOS en pools (era diet-only) +
+# downgrade determinista de demandas de verificación del reviewer (certificación/vigilancia →
+# advisory, no crítico guest). Kill switches independientes.
+SKELETON_ALLERGEN_SCRUB_ENABLED = _env_bool("MEALFIT_SKELETON_ALLERGEN_SCRUB", True)
+REVIEWER_VERIFICATION_ADVISORY_ENABLED = _env_bool("MEALFIT_REVIEWER_VERIFICATION_ADVISORY", True)
+DIET_DIRECTIVE_BLOCK_ENABLED = _env_bool("MEALFIT_DIET_DIRECTIVE_BLOCK", True)
+SALT_LINE_CONDITION_GATE = _env_bool("MEALFIT_SALT_LINE_CONDITION_GATE", True)
+DIET_CRITICAL_REGEN_ENABLED = _env_bool("MEALFIT_DIET_CRITICAL_REGEN", True)
 # [P0-2-POOL-MAIN-ARITY · 2026-07-10] clase 6. Forensic corr=d57ffe04: 49% de los rechazos del
 # reviewer en 72h (39/80) = "misma proteína repetida el mismo día" — causa estructural: el pool traía
 # menos proteínas gate-label distintas que comidas principales del día. Target=3 (desayuno/almuerzo/
@@ -1469,14 +1492,14 @@ class _LLMBackpressureCostMixin:
     """[P1-LUNA-USAGE-BLIND · 2026-07-26] Backpressure + contabilidad de costo, extraídos a un
     mixin para que NO dependan del proveedor.
 
-    Vivían pegados a `ChatDeepSeek` y eso fue una trampa en cuanto entró un segundo proveedor:
+    Vivían pegados a `ChatGLM` y eso fue una trampa en cuanto entró un segundo proveedor:
     `P1-DAYGEN-LUNA-CANARY` hizo que `_build_day_llm` construyera el cliente vía
     `llm_provider.build_chat_llm`, que devuelve las clases BASE — sin estos overrides. Resultado
     medido en la primera corrida con Luna: el plan salió bien y `llm_usage_events` registró
     planner, compressor y self_critique… y **cero filas de `day_generator`**, el nodo más caro del
     pipeline. La telemetría no dijo "falta un modelo": dijo que el day-gen no existió.
 
-    El mismo agujero se llevaba por delante el rate limit per-user/global en el camino DeepSeek,
+    El mismo agujero se llevaba por delante el rate limit per-user/global en el camino GLM,
     porque la clase base tampoco lo trae.
 
     Aplicar a TODO cliente nuevo. tooltip-anchor: P1-LLM-BACKPRESSURE-COST-MIXIN"""
@@ -1562,8 +1585,8 @@ class _LLMBackpressureCostMixin:
             return result
 
 
-class ChatDeepSeek(_LLMBackpressureCostMixin, _ChatDeepSeekBase):
-    """Cliente DeepSeek con backpressure + contabilidad de costo.
+class ChatGLM(_LLMBackpressureCostMixin, _ChatGLMBase):
+    """Cliente GLM con backpressure + contabilidad de costo.
 
     P1-NEW-1: usa el helper compuesto `acquire_user_and_global` / `aacquire_user_and_global` que
     aplica primero el rate limit per-user (vía `PER_USER_LLM_SEMAPHORE`) y después el slot global.
@@ -1668,6 +1691,12 @@ print = custom_print
 # (app → agent → tools → graph_orchestrator → agent). Se usa lazy import donde se necesite.
 from cpu_tasks import _validar_repeticiones_cpu_bound, _normalize_meal_name
 from constants import (
+    # [P1-PROTEIN-CLOSER-COUNTRY · 2026-08-21] `country_for_form_data` sube al import de
+    # MÓDULO: vivía sólo como import local dentro de `_build_shared_context`, así que los
+    # call sites del closer del piso de proteína (dentro de `self_critique_node`) habrían
+    # lanzado NameError en runtime. Los tests unitarios no lo vieron porque no ejercitan esa
+    # rama — lo cazó una comprobación explícita del ámbito, no la suite.
+    country_for_form_data,
     normalize_ingredient_for_tracking, strip_accents,
     TECHNIQUE_FAMILIES, ALL_TECHNIQUES, TECH_TO_FAMILY, SUPPLEMENT_NAMES,
     # P1-10: subidos para evitar reimport en hot paths
@@ -1913,8 +1942,8 @@ def _is_transient_upstream_error(exc: BaseException) -> bool:
     """
     try:
         _type_name = type(exc).__name__
-        # [P1-TRANSIENT-DEEPSEEK · 2026-07-27] Taxonomía del cliente OpenAI-compatible, que es
-        # el que usa DeepSeek desde P0-DEEPSEEK-MIGRATION (2026-06-12).
+        # [P1-TRANSIENT-PRO-ERRORS · 2026-07-27] Taxonomía del cliente OpenAI-compatible, que es
+        # el que usa GLM desde P0-LLM-PROVIDER-MIGRATION (2026-06-12).
         #
         # Esta función se escribió el 2026-05-21 para las firmas de GOOGLE y NUNCA se actualizó
         # al proveedor nuevo. Resultado: `APIConnectionError` —un fallo de RED puro, el error
@@ -2082,7 +2111,7 @@ class LLMCircuitBreaker:
     def __init__(self, failure_threshold=3, reset_timeout=30, local_health_ttl=1.0,
                  model_name: str | None = None):
         # [P1-DREAMING-CB-KWARG · 2026-07-24] Auto-corrección de un error de llamada que
-        # rompía el breaker EN SILENCIO. `LLMCircuitBreaker("deepseek-v4-flash")` (posicional)
+        # rompía el breaker EN SILENCIO. `LLMCircuitBreaker("glm-5.3-flash")` (posicional)
         # dejaba `threshold` con un str: `failures >= self.threshold` lanzaba TypeError, que
         # los `except Exception: pass` de los callers se tragaban → el breaker no abría NUNCA,
         # y además las keys quedaban sin sufijo de modelo (pisando el breaker global legacy).
@@ -3817,6 +3846,20 @@ class PlanState(TypedDict):
     #                                           se EXTIENDE entre semanas, no se
     #                                           sobrescribe).
     #
+    # [P1-COUNTRY-SYSTEM-F1 · 2026-08-16 (Task 7)] PRICING (modo beta sin precios nativos):
+    #   - `_pricing_mode`                     ('beta_no_prices' | ausente — NUNCA `None`
+    #                                           explícito. Escrita en `assemble_plan_node`
+    #                                           ANTES del bloque de agregación, vía
+    #                                           `constants.pricing_mode_for_form_data`;
+    #                                           leída por `get_shopping_list_delta`
+    #                                           (suprime `estimated_cost_rd`) y por los 8
+    #                                           call sites de `compute_shopping_cost_summary`
+    #                                           (reapuntado 5→8 · T8, ancla:
+    #                                           test_..._ocho_call_sites_exactos) en
+    #                                           graph_orchestrator.py/cron_tasks.py/tools.py/
+    #                                           routers/plans.py. DO/knob-off ⇒ la clave
+    #                                           nunca se escribe — byte-identidad).
+    #
     # Si una migración futura (ej. mover coherence handling a un nodo dedicado
     # `coherence_arbiter_node`) requiere visibilidad state-level, declarar el
     # campo en este TypedDict ANTES de tocar el call site — el bug equivalente
@@ -3961,7 +4004,13 @@ from prompts.plan_generator import (
     clinical_profile_active_flags,
 )
 from prompts.medical_reviewer import REVIEWER_SYSTEM_PROMPT
-from prompts.planner import PLANNER_SYSTEM_PROMPT
+# [P1-COUNTRY-SYSTEM-F2 · 2026-08-17 (Task 9, h)] `PLANNER_SYSTEM_PROMPT` (el símbolo crudo)
+# quedó IMPORTADO-PERO-MUERTO tras F1-T3/FINAL-FIX-F1a: los ~3 call sites que antes lo usaban
+# directo migraron a `build_planner_system_prompt(ctx['country'])`, que para DO/None devuelve el
+# MISMO objeto por identidad (`is PLANNER_SYSTEM_PROMPT`, anclado en
+# test_f1a_planner_do_o_none_es_byte_identico_is) — el import crudo ya no tiene consumidor en
+# este módulo. `prompts.planner` sigue exportando la constante para su propio uso interno.
+from prompts.planner import build_planner_system_prompt
 from prompts.day_generator import DAY_GENERATOR_SYSTEM_PROMPT, build_day_assignment_context
 
 
@@ -4673,6 +4722,29 @@ def _select_techniques(user_id: str | None, successful_techniques: list = None, 
     return selected_techniques
 
 
+# [P1-COUNTRY-SYSTEM-F1 · 2026-08-16] (T3) Bloque de país del contexto DINÁMICO compartido —
+# el fan-in único que alimenta planner Y day-gen (ctx['country_context'], cableado UNA vez
+# dentro de `_build_shared_context` abajo; ver ese docstring). `'DO'`/desconocido ⇒ "" (byte-
+# identidad del tramo dinámico — los ~265 tests anclados a RD siguen siendo oráculos válidos).
+# País BETA (ES/US/MX/PR/CO) ⇒ bloque breve con `name_es`. Sin cache propia: a diferencia del
+# render del day-gen (T2, ~9K chars con scan-and-replace sobre 15 fragmentos), este bloque es
+# un f-string trivial — memoizarlo no paga su complejidad.
+def _country_context_block(country: str) -> str:
+    """País del usuario, formateado para el tramo DINÁMICO de los prompts (planner + day-gen).
+
+    tooltip-anchor: _country_context_block (test_p1_country_system_f1.py)
+    """
+    from constants import canonicalize_country, COUNTRY_PROFILES
+    canon = canonicalize_country(country)
+    if canon == "DO":
+        return ""
+    name_es = COUNTRY_PROFILES.get(canon, {}).get("name_es", canon)
+    return (
+        f"\n**PAÍS DEL USUARIO: {name_es}.** Prioriza su cocina local e internacional; "
+        "los platos dominicanos NO son requisito.\n"
+    )
+
+
 def _build_shared_context(state: PlanState, force_rebuild: bool = False) -> dict:
     """Construye todos los bloques de contexto compartidos entre nodos."""
     if not force_rebuild and state.get("_cached_context"):
@@ -4832,9 +4904,18 @@ def _build_shared_context(state: PlanState, force_rebuild: bool = False) -> dict
                 sex=form_data.get("gender", "female"), age=form_data.get("age"),
                 conditions=_condition_strings(form_data), daily_kcal=_mn_kcal,
                 pregnant=_mn_preg, k_elevating_med=_mn_kelev,
-                goal=form_data.get("mainGoal"))  # [P1-MICRONUTRIENT-STEER-PROTEIN-AWARE] gain_muscle → proteína manda
+                goal=form_data.get("mainGoal"),  # [P1-MICRONUTRIENT-STEER-PROTEIN-AWARE] gain_muscle → proteína manda
+                diet=form_data.get("dietType"))  # [P1-DIET-BLIND-DIRECTIVES] PRIORIDAD sin "fuente animal" en veg*
         except Exception:
             micronutrient_targets_context = ""
+
+    # [P1-COUNTRY-SYSTEM-F1 · 2026-08-16] (T3, +T7 reusa la misma derivación) país del
+    # usuario, derivado UNA vez para el fan-in de abajo (ctx['country_context']) —
+    # country_for_form_data es la ÚNICA puerta (T1). T7 reusa `_shared_ctx_country` para
+    # gatear `prices_context` (país beta sin precios nativos ⇒ el LLM no recibe la tabla
+    # RD$) en vez de derivar el país una 2ª vez.
+    from constants import country_for_form_data, COUNTRY_PROFILES, pricing_mode_for_country
+    _shared_ctx_country = country_for_form_data(form_data)
 
     return {
         "user_id": _uid,
@@ -4881,7 +4962,11 @@ def _build_shared_context(state: PlanState, force_rebuild: bool = False) -> dict
         # `_compute_pantry_diff_warning` lo computa en cron_tasks y lo deja en form_data;
         # pre-fix ningún builder lo consumía (dead-write → feature P1-D muerta).
         "pantry_drift_context": build_pantry_drift_context(form_data.get("_pantry_drift_warning")),
-        "time_context": build_time_context(),
+        # [P1-TIME-CONTEXT-COUNTRY · 2026-08-21] `_shared_ctx_country` ya está derivado 60 líneas
+        # más arriba por la única puerta: el bloque temporal era el único de este dict que no lo
+        # usaba, y le contaba el clima del Caribe a los 5 países beta en el ÚNICO bloque del
+        # prompt marcado «(OBLIGATORIO)».
+        "time_context": build_time_context(country=_shared_ctx_country),
         "variety_prompt": variety_prompt,
         # [P2-VEGGIE-CHANNEL-DAYGEN · 2026-07-30] reparto del seeder como DATO (veggie_pairs).
         "seeder_assignment": _seeder_assignment,
@@ -4890,6 +4975,20 @@ def _build_shared_context(state: PlanState, force_rebuild: bool = False) -> dict
         # reales). "" si el perfil no tiene condición/medicamento cubierto. tooltip-anchor:
         # P1-MED-CONTEXT-DAYGEN
         "clinical_directives_context": clinical_directives,
+        # [P1-DAYGEN-DIET-CONVERGE · 2026-08-07] Directiva de DIETA con la prioridad tipográfica del
+        # bloque de alergias — antes la dieta era solo un campo del JSON de form_data y un modelo
+        # effort-low la ignoraba (benchmark issue #9). "" para balanced (cache preservado).
+        "diet_directive_context": _build_diet_directive_context(form_data),
+        # [P1-COUNTRY-SYSTEM-F1 · 2026-08-16] (T3) Bloque de país — fan-in ÚNICO hacia planner+
+        # day-gen (mismo patrón que diet_directive_context arriba). DO/knob-off ⇒ "" (byte-
+        # identidad del tramo dinámico). country_for_form_data es la ÚNICA puerta (T1) — jamás
+        # una lectura cruda de la clave "country" en form_data.
+        "country_context": _country_context_block(_shared_ctx_country),
+        # [P1-COUNTRY-SYSTEM-F1 · 2026-08-16 (FINAL-FIX F1a)] País CRUDO (no el bloque
+        # renderizado de arriba) — el fan-out para consumidores que necesitan el código en sí
+        # (ej. `build_planner_system_prompt(ctx['country'])` en `plan_skeleton_node`) en vez de
+        # re-derivar `country_for_form_data(form_data)` una 2ª vez dentro del nodo.
+        "country": _shared_ctx_country,
         # [P1-MICRONUTRIENT-STEER · 2026-06-24] Pisos numéricos de micros alcanzables (magnesio/calcio/
         # hierro/fibra/potasio) como guía cuantitativa de densidad nutricional. "" si knob OFF/no aplica.
         "micronutrient_targets_context": micronutrient_targets_context,
@@ -4907,7 +5006,16 @@ def _build_shared_context(state: PlanState, force_rebuild: bool = False) -> dict
         # — el LLM no necesita el catálogo de precios para diseñar un plan sano,
         # y el bloque crecería sin techo con la tabla master_ingredients.
         # tooltip-anchor: P3-GENCHUNK-SPEED-PRICES-GATE
-        "prices_context": build_prices_context() if (str(form_data.get("budget") or "").strip()) else "",
+        #
+        # [P1-COUNTRY-SYSTEM-F1 · 2026-08-16 (T7)] Gate EXTERIOR adicional: un país beta
+        # (`has_native_prices=False`) nunca debe recibir la tabla RD$/lb del catálogo — el
+        # LLM no puede razonar sobre precios que el usuario no va a ver en su lista. DO/
+        # knob-off ⇒ COUNTRY_PROFILES[_shared_ctx_country] es DO (has_native_prices=True)
+        # ⇒ este `if` externo es SIEMPRE True ⇒ el predicado de budget de siempre decide
+        # solo, byte-idéntico a antes de T7.
+        "prices_context": (
+            build_prices_context() if (str(form_data.get("budget") or "").strip()) else ""
+        ) if pricing_mode_for_country(_shared_ctx_country) != "beta_no_prices" else "",
         "taste_profile": taste_profile,
         "history_context": history_context,
         # [P1-RECENT-DISHES-FEEDFORWARD · 2026-07-10] Blocklist LITERAL de platos recientes en bloque
@@ -5020,7 +5128,7 @@ DAY_GEN_CACHE_STAGGER_MS    = _env_int  ("MEALFIT_DAY_GEN_CACHE_STAGGER_MS",    
 # calidad A/B vía `llm_usage_events.output_tokens` antes/después; subir el knob si
 # la calidad baja. Solo aplica a modelos thinking-capable (gemini-3.5-flash);
 # flash-lite NO soporta thinking_config → se omite. Tooltip-anchor: P1-COST-THINKING-CAP.
-# [P0-DEEPSEEK-MIGRATION · 2026-06-12] `DAYGEN_THINKING_BUDGET` y
+# [P0-LLM-PROVIDER-MIGRATION · 2026-06-12] `DAYGEN_THINKING_BUDGET` y
 # `EVALUATOR_THINKING_BUDGET` eliminados junto con sus helpers — eran caps
 # del reasoning de Gemini (ver nota en el bloque de helpers más abajo).
 
@@ -5035,7 +5143,7 @@ DAY_GEN_CACHE_STAGGER_MS    = _env_int  ("MEALFIT_DAY_GEN_CACHE_STAGGER_MS",    
 # macros por-porción de las proteínas/carbos principales. Tooltip-anchor: L1-UNBIND-NUTRITION-TOOL.
 DAYGEN_BIND_NUTRITION_TOOL  = _env_bool ("MEALFIT_DAYGEN_BIND_NUTRITION_TOOL",   True)
 
-# [P1-DEEPSEEK-JSON-MODE · 2026-06-13] DeepSeek-V4 flash, ante el prompt complejo
+# [P1-GLM-JSON-MODE · 2026-06-13] GLM-5.3 flash, ante el prompt complejo
 # del day-generator (schema JSON + mucho contexto), IGNORA la instrucción "responde
 # solo JSON" y emite ~18K chars de razonamiento en prosa ("Let me analyze the
 # requirements...") → `json.loads` falla → se cuenta como fallo del CB → CB OPEN →
@@ -5050,11 +5158,11 @@ DAYGEN_BIND_NUTRITION_TOOL  = _env_bool ("MEALFIT_DAYGEN_BIND_NUTRITION_TOOL",  
 DAYGEN_JSON_MODE = _env_bool("MEALFIT_DAYGEN_JSON_MODE", True)
 
 
-# [P0-DEEPSEEK-MIGRATION · 2026-06-12] `_thinking_budget_kwargs` y
+# [P0-LLM-PROVIDER-MIGRATION · 2026-06-12] `_thinking_budget_kwargs` y
 # `_evaluator_thinking_budget_kwargs` ELIMINADOS (P1-COST-THINKING-CAP /
 # P1-EVALUATOR-THINKING-CAP). Eran caps del reasoning de Gemini, que
 # facturaba como output a ~$9/M y producía runaways patológicos (day-gen
-# llegó a 19,162 tok). DeepSeek-V4 gestiona el thinking nativamente sin
+# llegó a 19,162 tok). GLM-5.3 gestiona el thinking nativamente sin
 # budget por request, y su output cuesta $0.28–0.87/M (10-30× menos) — el
 # problema de costo que motivaba el cap ya no existe. Los knobs
 # `MEALFIT_DAYGEN_THINKING_BUDGET` / `MEALFIT_EVALUATOR_THINKING_BUDGET`
@@ -5153,6 +5261,43 @@ _DAY_SYSTEM_INSTRUCTION_CACHED = (
     + _NUTRITION_LOOKUP_INSTRUCTION
 )
 
+# [P1-DIET-BLIND-DIRECTIVES · 2026-08-08] System instruction del day-gen POR DIETA. El render
+# balanced es la constante de arriba (byte-idéntica → prompt-cache intacto para la mayoría);
+# veg* usa `build_day_generator_system_prompt` (los fragmentos que ordenaban proteína animal se
+# reemplazan por fuentes aptas — issue #9: la directiva PRIORIDAD-1 perdía contra esas órdenes).
+# Cache por variante, patrón P2-VERIFIED-CATALOG-NOT-FILTERED. tooltip-anchor: P1-DIET-BLIND-DIRECTIVES
+_DAY_SYSTEM_INSTRUCTION_BY_DIET_CACHE = {}
+
+
+def _strip_offered_prohibited_examples_for(prompt_text: str, form_data) -> str:
+    """Poda de la regla 5 los ejemplos de «prohibido» que el catálogo de ESTE usuario ofrece.
+
+    Fail-open a propósito: cualquier fallo devuelve el prompt intacto. Quedarse con una
+    advertencia de más es un guiso desabrido; quedarse sin prompt es no generar el plan.
+    """
+    try:
+        from prompts.day_generator import strip_offered_prohibited_examples as _sope
+        return _sope(prompt_text, _verified_catalog_names(form_data))
+    except Exception as _sope_e:
+        logger.debug("[P2-CATALOG-ACHIOTE-MX-PR] poda de ejemplos no-op: %s: %s",
+                     type(_sope_e).__name__, str(_sope_e)[:160])
+        return prompt_text
+
+
+def _day_system_instruction_for_diet(form_data) -> str:
+    from constants import canonicalize_diet_type as _cdt, country_for_form_data
+    from prompts.day_generator import build_day_generator_system_prompt as _bdgsp
+    canon = _cdt((form_data or {}).get("dietType") or (form_data or {}).get("diet"))
+    country = country_for_form_data(form_data)
+    if canon not in ("vegan", "vegetarian") and country == "DO":
+        return _DAY_SYSTEM_INSTRUCTION_CACHED
+    cache_key = (canon, country)
+    cached = _DAY_SYSTEM_INSTRUCTION_BY_DIET_CACHE.get(cache_key)
+    if cached is None:
+        cached = _bdgsp(canon, country) + _DAY_SCHEMA_INSTRUCTION + _NUTRITION_LOOKUP_INSTRUCTION
+        _DAY_SYSTEM_INSTRUCTION_BY_DIET_CACHE[cache_key] = cached
+    return cached
+
 
 # [P3-VERIFIED-INGREDIENTS-ONLY · 2026-06-20] Catálogo verificado inyectado al
 # SystemMessage del day-gen para que el LLM NO invente alimentos: solo puede usar los
@@ -5166,6 +5311,66 @@ _DAY_SYSTEM_INSTRUCTION_CACHED = (
 # la regla de exclusión del mismo prompt → subía rechazo→retry). El caso base (sin restricción) usa la
 # key frozenset() → byte-equivalente al bloque previo = prompt-cache preservado para la mayoría.
 _VERIFIED_CATALOG_INSTRUCTION_CACHE = {}
+# [P2-CATALOG-ACHIOTE-MX-PR · 2026-08-23] Los NOMBRES que el bloque de arriba le ofrece a este
+# usuario, con la MISMA clave. No es un segundo predicado: es el mismo cómputo, guardado, para
+# que la regla 5 del day-gen pueda podar sus ejemplos de «prohibido» con lo que el catálogo
+# realmente ofrece. Recalcularlos aparte sería el espejo que drifta.
+_VERIFIED_CATALOG_NAMES_CACHE = {}
+
+# [P1-BETA-CATALOG-DO-EXCLUSIVE · 2026-08-23] Preparaciones y gentilicios
+# inequívocamente dominicanos que no deben viajar al catálogo cerrado de los
+# cinco países beta. Esta lista es deliberadamente curada: NO deriva del léxico
+# (borraría alimentos universales) ni del registro de filas beta sin precio
+# (lo consumen las listas de compras sin país). Los nombres canónicos no cambian.
+_BETA_CATALOG_DO_EXCLUSIVE_NAMES = frozenset({
+    "Casabe",
+    "Casabe albahaca",
+    "Longaniza dominicana",
+    "Orégano dominicano",
+    "Queso de hoja",
+    "Salami",
+    "Harina de Negrito",
+    "Cundeamor",
+    "Mapuey",
+})
+
+# [P1-COUNTRY-CATALOG-FILAS-GEMELAS · 2026-08-23] Fase 2 añadió
+# regionalismos como filas nuevas aunque el alimento ya tenía una fila canónica
+# comprable. Las dos identidades deben sobrevivir para planes/neveras históricas,
+# pero un catálogo CERRADO no puede ofrecer ambas y provocar compra doble.
+# Se oculta sólo la alta redundante en el país que la introdujo; el agregador
+# global sigue reconociéndola si un plan vivo ya la nombra.
+_COUNTRY_CATALOG_SHADOWED_TWINS = {
+    "ES": frozenset({"Judías pintas", "Judías blancas", "Requesón", "Gambas"}),
+}
+
+
+def _verified_catalog_name_allowed_for_country(name: str, country: str) -> bool:
+    """Filtro display-only del catálogo cerrado; jamás renombra ni borra filas."""
+    clean_name = str(name or "").strip()
+    if country == "DO":
+        return True
+    if clean_name in _BETA_CATALOG_DO_EXCLUSIVE_NAMES:
+        return False
+    return clean_name not in _COUNTRY_CATALOG_SHADOWED_TWINS.get(country, frozenset())
+
+
+def _patron_termino_alergeno(termino: str) -> str:
+    """Regex con frontera y plural español para un término clínico normalizado.
+
+    [P0-ALLERGEN-EU14-CLASES-I18N · 2026-08-23] El plural regular histórico
+    ``(?:s|es)?`` no puede convertir ``-z`` en ``-ces``. Esta construcción es
+    compartida por el backstop y el catálogo cerrado para que una alergia libre
+    (también fuera de las clases conocidas) no tenga una capa más débil que otra.
+    """
+    t = str(termino or "")
+    if not t:
+        return r"(?!)"
+    if t.endswith("z"):
+        cuerpo = _re.escape(t[:-1]) + r"(?:z|ces)"
+    else:
+        cuerpo = _re.escape(t) + r"(?:s|es)?"
+    return r"\b" + cuerpo + r"\b"
 
 
 def _verified_catalog_excluded_tokens(form_data) -> frozenset:
@@ -5182,24 +5387,10 @@ def _verified_catalog_excluded_tokens(form_data) -> frozenset:
         def strip_accents(s):
             import unicodedata
             return "".join(c for c in unicodedata.normalize("NFKD", str(s)) if not unicodedata.combining(c))
-    excluded = set()
-    # Alérgenos (+ sinónimos) — misma lógica que `_scan_allergen_violations`.
-    allergies = form_data.get("allergies")
-    if isinstance(allergies, str):
-        allergies = [allergies]
-    for a in (allergies or []):
-        a_low = strip_accents(str(a).strip().lower())
-        if not a_low or a_low in _MEDICAL_NONE_SENTINELS:
-            continue
-        matched = False
-        for cat, syns in _ALLERGEN_SYNONYMS.items():
-            cat_n = strip_accents(cat)
-            if a_low == cat_n or cat_n in a_low or a_low in cat_n or \
-               any(a_low in strip_accents(s) or strip_accents(s) in a_low for s in syns):
-                excluded.update(strip_accents(s) for s in syns)
-                matched = True
-        if not matched:
-            excluded.add(a_low)  # alergia free-text → match literal
+    # [P0-ALLERGEN-VOCAB-I18N · 2026-08-21] «MISMA expansión que `_scan_allergen_violations`» era
+    # una promesa sostenida por una COPIA del bucle. Ahora es una llamada: las dos superficies
+    # comparten `_expand_allergy_declarations`, así que arreglar una arregla la otra.
+    excluded = set(_expand_allergy_declarations(form_data.get("allergies")))
     # Dieta (productos animales prohibidos) — misma partición que `_scan_diet_violations`.
     canon = _canonicalize_diet_type(form_data.get("dietType"))
     if canon == "vegan":
@@ -5215,6 +5406,36 @@ def _verified_catalog_excluded_tokens(form_data) -> frozenset:
     return frozenset(excluded)
 
 
+def _verified_catalog_cache_key(form_data=None):
+    """Clave del catálogo verificado: (tokens excluidos por alergia/dieta, país canónico).
+
+    [P2-CATALOG-ACHIOTE-MX-PR · 2026-08-23] Extraída de `_get_verified_catalog_instruction`
+    para que el bloque y sus nombres se guarden bajo la MISMA clave sin escribir la derivación
+    dos veces — una segunda copia de esta clave es una manera de que las dos cachés se separen
+    en silencio. La derivación del país sigue siendo la ÚNICA puerta (`country_for_form_data`).
+    """
+    try:
+        from constants import country_for_form_data as _cffd_vc
+        _vc_country = _cffd_vc(form_data)
+    except Exception:
+        _vc_country = "DO"
+    return (_verified_catalog_excluded_tokens(form_data), _vc_country)
+
+
+def _verified_catalog_names(form_data=None) -> tuple:
+    """Los nombres del catálogo verificado que ESTE usuario tiene ofrecidos en su prompt.
+
+    Se puebla como efecto del builder del bloque (mismo cómputo, misma clave). Si la caché del
+    bloque fue vaciada —los tests de alérgenos lo hacen— se reconstruye: devolver nombres de una
+    corrida anterior mientras el bloque se recalcula es justo la clase de desfase que este
+    filtro existe para evitar. `()` cuando el knob está off o el catálogo no resuelve.
+    """
+    _key = _verified_catalog_cache_key(form_data)
+    if _key not in _VERIFIED_CATALOG_NAMES_CACHE or _key not in _VERIFIED_CATALOG_INSTRUCTION_CACHE:
+        _get_verified_catalog_instruction(form_data)
+    return _VERIFIED_CATALOG_NAMES_CACHE.get(_key, ())
+
+
 def _get_verified_catalog_instruction(form_data=None) -> str:
     try:
         from shopping_calculator import _verified_ingredients_only_enabled, get_master_ingredients
@@ -5223,7 +5444,15 @@ def _get_verified_catalog_instruction(form_data=None) -> str:
     except Exception:
         return ""
     excluded = _verified_catalog_excluded_tokens(form_data)
-    _cached = _VERIFIED_CATALOG_INSTRUCTION_CACHE.get(excluded)
+    # [P1-VERIFIED-CATALOG-COUNTRY · 2026-08-21] El país entra en la CLAVE de la caché, no sólo en
+    # el predicado. Sin esto el fix nace inerte: la caché es de módulo y está keyed por los tokens
+    # excluidos por alergia/dieta, así que el primer país que llegue al proceso fija el bloque
+    # para todos los demás — en producción, el primer usuario decidiría lo que ven los otros.
+    # Derivación por la ÚNICA puerta (`country_for_form_data`, espina T1): un segundo
+    # canonicalizador aquí sería la tabla que P1-DIET-CANON-SSOT ya pagó una vez.
+    _cache_key = _verified_catalog_cache_key(form_data)
+    _vc_country = _cache_key[1]
+    _cached = _VERIFIED_CATALOG_INSTRUCTION_CACHE.get(_cache_key)
     if _cached is not None:
         return _cached
     try:
@@ -5235,20 +5464,83 @@ def _get_verified_catalog_instruction(form_data=None) -> str:
     import re as _re_vc
     try:
         rows = get_master_ingredients() or []
-        names = sorted({
-            str(r.get("name") or "").strip()
-            for r in rows
-            if (r.get("price_per_lb") or 0) > 0 or (r.get("price_per_unit") or 0) > 0
-        })
+        # [P1-VERIFIED-CATALOG-COUNTRY · 2026-08-21] «Verificado» y «tiene precio RD» eran la
+        # MISMA condición, y esa ecuación es falsa desde Fase 2: las 141 filas de los 5 países
+        # beta nacieron sin precio A PROPÓSITO (su país no tiene precios nativos, `beta_no_prices`)
+        # — así que el bloque que le dice al modelo «USA EXCLUSIVAMENTE ESTOS ALIMENTOS» le
+        # ESCONDÍA la comida de su país y le ORDENABA la dominicana. Medido: el render para ES era
+        # byte-idéntico al de DO, y 44 de 48 ítems de la lista del plan español vivo eran filas RD.
+        #
+        # El predicado beta reusa `is_country_catalog_unpriced_item`, que es EXACTAMENTE el que el
+        # agregador de la lista de compras ya usa para decidir qué es comprable-sin-precio. Usar
+        # aquí un predicado distinto (p.ej. `COUNTRY_POOLS[cc]`) crearía un segundo espejo que
+        # driftaría — la forma precisa del defecto que la costura (a) del coherence guard costó.
+        # Medido antes de elegir: el pool de ES cubre sólo 22 de sus filas sin precio y 55 filas
+        # (Azafrán, Alioli, Nata…) no las reclama NINGÚN pool.
+        #
+        # [P1-COUNTRY-CATALOG-BY-COUNTRY · 2026-08-21] Aquí decía que sobre-incluir era el precio
+        # aceptado porque «acotar por país es tarea de DATOS: no existe membresía por país en
+        # `master_ingredients`». La tabla no la tiene, cierto — pero la membresía SÍ existía, en
+        # los comentarios de bloque de la propia tupla de tokens (T5=ES, T6=MX/CO, T7=PR/US), o
+        # sea inerte. Promovida a `_COUNTRY_CATALOG_UNPRICED_BY_COUNTRY`, este call site ya puede
+        # preguntar POR PAÍS. Sin ello los renders de ES, MX y US eran el MISMO string de 5777
+        # chars: el catálogo había pasado de «sólo dominicano» a «no-dominicano», que es la queja
+        # de P1-BETA-FRAGMENT-DEPTH trasladada a los datos.
+        # DO conserva el predicado de siempre (byte-identidad).
+        _vc_beta = _vc_country != "DO"
+        if _vc_beta:
+            try:
+                from shopping_calculator import is_country_catalog_unpriced_item as _iccui
+            except Exception:
+                _iccui = None
+        else:
+            _iccui = None
+
+        def _vc_comprable(r) -> bool:
+            if not _verified_catalog_name_allowed_for_country(
+                    str(r.get("name") or ""), _vc_country):
+                return False
+            if (r.get("price_per_lb") or 0) > 0 or (r.get("price_per_unit") or 0) > 0:
+                return True
+            return bool(_iccui and _iccui(str(r.get("name") or ""), country=_vc_country))
+
+        names = sorted({str(r.get("name") or "").strip() for r in rows if _vc_comprable(r)})
         if excluded:
             # Filtra los alimentos prohibidos por alergia/dieta (word-boundary + plural ES, igual que los
             # guards) — no tiene sentido listarlos como "USA EXCLUSIVAMENTE" si el mismo prompt los prohíbe.
             def _is_excluded(_nm: str) -> bool:
                 _nl = strip_accents(_nm.lower())
-                return any(_t and _re_vc.search(r"\b" + _re_vc.escape(_t) + r"(?:s|es)?\b", _nl) for _t in excluded)
+                for _t in excluded:
+                    if not _t:
+                        continue
+                    _m_vc = _re_vc.search(_patron_termino_alergeno(_t), _nl)
+                    if not _m_vc:
+                        continue
+                    # [P3-SEMOLA-MAIZ-GLUTEN-FP · 2026-08-23] MISMA excusa que el scanner
+                    # (`_allergen_term_base_excused`), no una segunda tabla: sin ella el celíaco
+                    # perdía «Sémola de maíz» del bloque «USA EXCLUSIVAMENTE» aunque el backstop
+                    # ya no la marcara — medido, la fila desaparecía del catálogo de un perfil US
+                    # con alergia a gluten y reaparecía sin la alergia.
+                    if _allergen_term_base_excused(_t, _nl[_m_vc.end(): _m_vc.end() + 18]):
+                        continue
+                    return True
+                return False
             names = [n for n in names if not _is_excluded(n)]
         if not names:
             return ""
+        # [P2-CATALOG-ACHIOTE-MX-PR · 2026-08-23] Los ejemplos de «prohibido» dejan de
+        # escribirse a mano y se DERIVAN de esta misma lista. Medido antes de tocar: para MX y
+        # PR el bloque decía «OMÍTELO (ej. achiote…)» mientras el render de abajo ofrecía
+        # 'Achiote', 'Aceite de achiote' y 'Sazón con culantro y achiote'; y para los SEIS
+        # países prohibía la salsa de soya y la mostaza, que son filas vivas del catálogo. La
+        # tupla de ejemplos es la MISMA que la regla 5 del day-gen (SSOT en prompts/day_generator).
+        try:
+            from prompts.day_generator import (PROHIBITED_EXAMPLE_FOODS as _pef_vc,
+                                               prohibited_examples_not_offered as _peno_vc)
+            _vc_kept = _peno_vc(_pef_vc, names)
+        except Exception:
+            _vc_kept = []
+        _vc_ej = (" (ej. " + ", ".join(_vc_kept) + ")") if _vc_kept else ""
         block = (
             "\n\n=== CATÁLOGO VERIFICADO — USA EXCLUSIVAMENTE ESTOS ALIMENTOS ===\n"
             "El usuario SOLO puede comprar alimentos con precio verificado en el supermercado. "
@@ -5259,10 +5551,18 @@ def _get_verified_catalog_instruction(form_data=None) -> str:
             # el lote 2 del catálogo (2026-06-26) verificó (comino/cúrcuma/laurel/tomillo/curry): la instrucción
             # era auto-contradictoria (aparecían en la lista "USA EXCLUSIVAMENTE" Y como ejemplo de prohibido) →
             # el LLM omitía sazones legítimas y los guisos salían desabridos. tooltip-anchor: P1-SPICES-CATALOG-SYNC
-            "Si una receta tradicional pide algo que no está aquí (ej. achiote, sazón en polvo, clavo "
-            "dulce, pimienta de olor, salsa de soya), OMÍTELO por completo — usa solo los sazonadores "
+            f"Si una receta tradicional pide algo que no está aquí{_vc_ej}, OMÍTELO por "
+            "completo — usa solo los sazonadores "
             "verificados de la lista (sal, ajo, cebolla, orégano, cilantro, perejil, y si aparecen abajo: "
-            "comino, cúrcuma, laurel, tomillo, curry, cebolla en polvo — úsalos para dar sabor criollo real). "
+            # [P1-VERIFIED-CATALOG-COUNTRY · 2026-08-21] «para dar sabor criollo real» viajaba al
+            # ÚLTIMO bloque del prompt de un usuario de Madrid, mientras el resto del stack beta le
+            # pedía cocina española. La posición importa: es la instrucción más cercana a la
+            # generación (misma lección que P1-COACH-LANGUAGE-RECENCY). DO conserva su frase.
+            + ("comino, cúrcuma, laurel, tomillo, curry, cebolla en polvo — úsalos para dar sabor "
+               "criollo real). " if not _vc_beta else
+               "comino, cúrcuma, laurel, tomillo, curry, cebolla en polvo — úsalos para dar sabor "
+               "real a los platos de tu cocina local). ")
+            +
             # [P1-BAKING-STAPLES · 2026-07-01] (audit v3 creatividad GAP-3) EXCEPCIÓN de despensa básica:
             # sin esto el "OMÍTELO" aplanaba los transforms insignia (panqueques sin leudante = crepa
             # triste) o el LLM los emitía igual y VERIFIED-ONLY los amputaba de la lista en silencio.
@@ -5276,7 +5576,8 @@ def _get_verified_catalog_instruction(form_data=None) -> str:
             "uno de estos):\n"
             + ", ".join(names)
         )
-        _VERIFIED_CATALOG_INSTRUCTION_CACHE[excluded] = block
+        _VERIFIED_CATALOG_NAMES_CACHE[_cache_key] = tuple(names)
+        _VERIFIED_CATALOG_INSTRUCTION_CACHE[_cache_key] = block
         return block
     except Exception as e:
         logger.warning(f"[VERIFIED-ONLY] No se pudo construir el catálogo verificado del prompt: {e}")
@@ -5352,10 +5653,10 @@ Si DOS O MÁS scores son < 6, o si ALGÚN score es < 4, marca needs_correction=T
 # crons/loops productivos leen model ID desde knob — modelos preview pueden
 # deprecarse sin aviso (audit 2026-05-11: `gemini-3.1-pro-preview` open=true
 # 4.4 días). Knob permite swap sin redeploy.
-# [P0-DEEPSEEK-MIGRATION · 2026-06-12] DeepSeek no tiene tier "lite"; el
+# [P0-LLM-PROVIDER-MIGRATION · 2026-06-12] GLM no tiene tier "lite"; el
 # modelo barato del stack es V4 Flash. El nombre de la constante se preserva
 # (los ~10 callsites/helpers la referencian como "el default barato").
-_FLASH_LITE_DEFAULT = DEEPSEEK_FLASH
+_FLASH_LITE_DEFAULT = GLM_FLASH
 
 
 def _judge_model_name() -> str:
@@ -5368,7 +5669,7 @@ def _judge_model_name() -> str:
 # [P2-ORCH-7 · 2026-05-28] Modelo "risk-tier" para el reviewer médico y el
 # fact-checker clínico cuando el perfil declara alergias/condiciones médicas.
 # El reviewer es el ÚNICO gate LLM de seguridad clínica.
-# [P1-FLASH-PRIMARY · 2026-07-31] Era `DEEPSEEK_PRO`; el owner midió que flash
+# [P1-FLASH-PRIMARY · 2026-07-31] Era `GLM_PRO`; el owner midió que flash
 # es actualmente MEJOR que pro. Hoy esta constante es: (a) el risk-tier del
 # FACT-CHECKER, (b) el FALLBACK fail-safe del reviewer cuando el modelo
 # OpenAI del tier no es utilizable (sin OPENAI_API_KEY).
@@ -5378,7 +5679,7 @@ def _judge_model_name() -> str:
 # [-20%; medido rentable en basic: worst-case $0.73/mes = 7.3% del revenue con
 # 2.371 tok in / 213 out promedio reales de 158 calls/30d]). Ver
 # `_reviewer_model_name`.
-_REVIEWER_RISK_TIER_DEFAULT = DEEPSEEK_FLASH
+_REVIEWER_RISK_TIER_DEFAULT = GLM_FLASH
 
 # [P1-REVIEWER-TIER-MODELS · 2026-07-31] Modelos del reviewer clínico por tier.
 # Knobs per-tier (convención P3-PREVIEW-MODEL-KNOB — override sin redeploy):
@@ -5435,18 +5736,18 @@ def _reviewer_risk_model_for_tier(form_data=None) -> str:
 
 def _openai_key_available() -> bool:
     """True si hay OPENAI_API_KEY utilizable en el entorno (los modelos
-    gpt-5.6-* la requieren; sin ella el reviewer cae al fallback DeepSeek)."""
+    gpt-5.6-* la requieren; sin ella el reviewer cae al fallback GLM)."""
     return bool((os.environ.get("OPENAI_API_KEY") or "").strip())
 
 
 # [P1-DAYGEN-TIER-MODEL · 2026-07-31] Generador de DÍAS por tier. Decisión del
-# owner tras el A/B medido con el índice de calidad (2026-07-31): "deepseek
+# owner tras el A/B medido con el índice de calidad (2026-07-31): "glm
 # medium dura mucho, el ganador es gpt 5.6 luna medium; medium en plus nadamás
-# por ahora, low o sin pensamiento en gratis; deja a deepseek donde no sea
+# por ahora, low o sin pensamiento en gratis; deja a glm donde no sea
 # necesario luna". Números del A/B: luna-medium 95,4 (coherencia 90) vs flash
 # 82-92 (coherencia 57-83); luna-high PEOR que medium en todo (90,8, 3×
 # latencia); flash+thinking DESCALIFICADO (36k tokens de razonamiento, 266 s
-# por día, timeout contra el techo → plan degradado 76,9). DeepSeek flash
+# por día, timeout contra el techo → plan degradado 76,9). GLM flash
 # conserva TODOS los demás nodos (planner, critique, correctores, compressor,
 # fact-checker) y es la RED del chain del day-gen (fallback rápido SIN
 # razonamiento: la red existe para rescatar, no para profundizar).
@@ -5504,7 +5805,7 @@ def _profile_has_medical_risk(form_data) -> bool:
     return False
 
 
-# [P1-DEEPSEEK-ONLY-RESTORE · 2026-07-04] Guard observacional del gate clínico.
+# [P1-SINGLE-PROVIDER-RESTORE · 2026-07-04] Guard observacional del gate clínico.
 # Lección medida (E2E 2026-07-04): con el reviewer médico corriendo en un modelo
 # débil (flash forzado / override Gemini flash-lite) un plan DM2 pasó con carbos
 # +99% sin rechazo — el reviewer risk-tier es el ÚNICO gate LLM de seguridad
@@ -5514,7 +5815,7 @@ def _profile_has_medical_risk(form_data) -> bool:
 # (nodo, modelo) + system_alert idempotente para que el operador SEPA que el
 # gate clínico corre por debajo del risk-tier. Si el downgrade es intencional
 # (A/B, economía), la alert se resuelve manual y no re-dispara hasta el
-# próximo restart del worker. Tooltip-anchor: P1-DEEPSEEK-ONLY-RESTORE.
+# próximo restart del worker. Tooltip-anchor: P1-SINGLE-PROVIDER-RESTORE.
 _CLINICAL_MODEL_GUARD_WARNED: set = set()
 
 
@@ -5539,7 +5840,7 @@ def _warn_if_clinical_model_downgraded(node: str, resolved_model: str,
         return
     _CLINICAL_MODEL_GUARD_WARNED.add(dedup)
     logger.warning(
-        f"⚠ [P1-DEEPSEEK-ONLY-RESTORE] Gate clínico DESVIADO del risk-tier: nodo '{node}' "
+        f"⚠ [P1-SINGLE-PROVIDER-RESTORE] Gate clínico DESVIADO del risk-tier: nodo '{node}' "
         f"resolvió '{resolved}' para perfil con riesgo médico (risk-tier "
         f"esperado '{_expected}'). Revisar knobs "
         f"MEALFIT_{node.upper()}_MODEL / MEALFIT_{node.upper()}_RISK_TIER_MODEL "
@@ -5586,7 +5887,7 @@ def _warn_if_clinical_model_downgraded(node: str, resolved_model: str,
         )
     except Exception as e:
         logger.debug(
-            f"[P1-DEEPSEEK-ONLY-RESTORE] alert emit falló (best-effort): {e}"
+            f"[P1-SINGLE-PROVIDER-RESTORE] alert emit falló (best-effort): {e}"
         )
 
 
@@ -5596,7 +5897,7 @@ def _fact_checker_model_name(form_data=None) -> str:
     alergias/condiciones → risk-tier (`MEALFIT_FACT_CHECKER_RISK_TIER_MODEL`,
     default `_REVIEWER_RISK_TIER_DEFAULT` = flash desde P1-FLASH-PRIMARY);
     de lo contrario Flash (default barato).
-    [P1-DEEPSEEK-ONLY-RESTORE] Perfil con riesgo + modelo != risk-tier →
+    [P1-SINGLE-PROVIDER-RESTORE] Perfil con riesgo + modelo != risk-tier →
     WARN + system_alert (observacional, el knob sigue ganando)."""
     _override = _env_str("MEALFIT_FACT_CHECKER_MODEL", "")
     _risk = _profile_has_medical_risk(form_data)
@@ -5628,7 +5929,7 @@ def _reviewer_model_name(form_data=None) -> str:
     Fail-safe: modelo OpenAI sin `OPENAI_API_KEY` → fallback
     `_REVIEWER_RISK_TIER_DEFAULT` (flash) + alerta de desvío — el gate
     clínico NUNCA se queda sin modelo utilizable.
-    [P1-DEEPSEEK-ONLY-RESTORE] Perfil con riesgo + modelo != esperado del
+    [P1-SINGLE-PROVIDER-RESTORE] Perfil con riesgo + modelo != esperado del
     tier → WARN + system_alert (observacional, el knob sigue ganando)."""
     _risk = _profile_has_medical_risk(form_data)
     # [P1-REVIEWER-SOL-HARD] form_data viaja al resolver: plus/ultra escalan a
@@ -5694,17 +5995,36 @@ def _sanitize_form_data_for_prompt(form_data: dict) -> dict:
     """[P1-PROMPT-TRIM-FORM-DATA · 2026-05-15] Retorna una copia de
     `form_data` SIN las claves pipeline-internal con prefijo `_`.
 
-    Si `PROMPT_TRIM_FORM_DATA=False` (kill switch), retorna `form_data`
-    sin cambios (legacy behavior).
+    Si `PROMPT_TRIM_FORM_DATA=False` (kill switch), retorna `form_data` sin
+    tocar las demás claves (legacy behavior) salvo `country`
+    [P1-COUNTRY-SYSTEM-F1 · 2026-08-16]: esa exclusión es incondicional en
+    AMBAS ramas, kill switch incluido — ver comentario inline.
 
     No muta el original. El código backend que consume `form_data["_xxx"]`
     debe seguir leyendo del state, NO del retorno de este helper.
+
+    [P1-COUNTRY-SYSTEM-F2 · 2026-08-17 (Task 9, h)] tooltip-anchor: P1-PROMPT-TRIM-FORM-DATA —
+    4 tests en 3 archivos (test_p1_country_system_f0.py, test_p1_country_system_f1.py,
+    test_p1_prompt_trim_form_data.py) localizan este cuerpo por NOMBRE/firma con
+    regex/`.index()`; un rename silencioso rompía esos tests con un error de "substring no
+    encontrado" en vez de señalar el marker correcto — con el anchor, el mensaje de fallo apunta
+    directo al P-fix que hay que releer antes de tocar esta función.
     """
     if not isinstance(form_data, dict):
         return form_data
+    # [P1-COUNTRY-SYSTEM-F1 · 2026-08-16] el país llega a prompts SOLO vía el
+    # sistema de variantes (F1-T2/T3), jamás como key de form_data —
+    # incondicional desde F1-T1 (descarga el ruling parked de F0). F0 solo
+    # excluía 'country' en la rama de trim; el passthrough del kill-switch
+    # de abajo (`MEALFIT_PROMPT_TRIM_FORM_DATA=False`) devolvía el dict
+    # completo y colaba el campo por ese segundo canal sin gate.
     if not PROMPT_TRIM_FORM_DATA:
-        return form_data
-    return {k: v for k, v in form_data.items() if not (isinstance(k, str) and k.startswith("_"))}
+        return {k: v for k, v in form_data.items() if k != "country"}
+    return {
+        k: v
+        for k, v in form_data.items()
+        if not (isinstance(k, str) and k.startswith("_")) and k != "country"
+    }
 # [P3-PLAN-MODEL-KNOBS · 2026-05-20] Modelos del plan-gen pipeline ahora
 # via knobs (no hardcoded). Cierre del gap C4 del audit
 # `docs/gaps-audit-2026-05.md`: pre-fix estos eran string literals
@@ -5733,41 +6053,41 @@ def _sanitize_form_data_for_prompt(form_data: dict) -> dict:
 #
 # Defaults preservan comportamiento actual. Tooltip-anchor: P3-PLAN-MODEL-KNOBS.
 def _plan_pro_model_name() -> str:
-    # [P0-DEEPSEEK-MIGRATION · 2026-06-12] Nació como "modelo del TIER PAGADO".
+    # [P0-LLM-PROVIDER-MIGRATION · 2026-06-12] Nació como "modelo del TIER PAGADO".
     # [P1-FLASH-PRIMARY · 2026-07-31] Re-scoped: ya NO es el modelo de ningún
     # tier (todos van a flash). `_PRO_MODEL_NAME` es EXCLUSIVAMENTE la RED
     # post-fallo: 2º en la cadena del day-gen, fallback del planner con breaker
     # abierto, escalada del corrector quirúrgico, EVALUATOR_USE_PRO.
     # [P1-NET-LUNA · 2026-07-31] Default de la red → `gpt-5.6-luna` (OpenAI).
     # Razón (decisión owner): flash y pro son el MISMO proveedor — el incidente
-    # que motivó la red (breaker abierto 172× en el gym baseline) fue DeepSeek
+    # que motivó la red (breaker abierto 172× en el gym baseline) fue GLM
     # rate-limiteando bajo carga, y en ese modo de fallo pro cae JUNTO con
     # flash. Luna es proveedor DISTINTO (infra/key/límites propios): diversidad
-    # real. Simetría: el pipeline (DeepSeek) cae a OpenAI; el reviewer clínico
-    # (OpenAI) cae a DeepSeek (P1-REVIEWER-TIER-MODELS).
-    # Fail-safe: sin OPENAI_API_KEY utilizable, la red vuelve a DEEPSEEK_PRO —
+    # real. Simetría: el pipeline (GLM) cae a OpenAI; el reviewer clínico
+    # (OpenAI) cae a GLM (P1-REVIEWER-TIER-MODELS).
+    # Fail-safe: sin OPENAI_API_KEY utilizable, la red vuelve a GLM_PRO —
     # nunca te quedas sin red por una key. Se resuelve al boot (los constantes
     # module-level no se re-leen; cambiar key/knob ⇒ restart del worker).
     # Colapsar la red a flash sigue prohibido: cada fallback sería un no-op
     # contra el mismo breaker roto (P1-DAYGEN-RETRY-FLASH-NET,
     # P1-PLANNER-PRO-FALLBACK). Rollback sin redeploy:
-    # `MEALFIT_PRO_MODEL=deepseek-v4-pro`.
+    # `MEALFIT_PRO_MODEL=glm-5.3`.
     _configured = _env_str("MEALFIT_PRO_MODEL", GPT56_LUNA) or GPT56_LUNA
     if is_openai_model(_configured) and not _openai_key_available():
         logger.warning(
             f"⚠ [P1-NET-LUNA] La red post-fallo '{_configured}' requiere OPENAI_API_KEY "
-            f"y no está en el entorno → fail-safe a '{DEEPSEEK_PRO}' (red intra-provider)."
+            f"y no está en el entorno → fail-safe a '{GLM_PRO}' (red intra-provider)."
         )
-        return DEEPSEEK_PRO
+        return GLM_PRO
     return _configured
 
 
 def _plan_flash_model_name() -> str:
-    # [P0-DEEPSEEK-MIGRATION · 2026-06-12] El "modelo FLASH" del pipeline es
-    # el modelo del TIER GRATIS y de los paths force_fast/aux: DeepSeek V4
+    # [P0-LLM-PROVIDER-MIGRATION · 2026-06-12] El "modelo FLASH" del pipeline es
+    # el modelo del TIER GRATIS y de los paths force_fast/aux: GLM-5.3
     # Flash ($0.14/M in · $0.28/M out). Rollback/swap sin redeploy:
     # `MEALFIT_FLASH_MODEL=<model-id>`.
-    return _env_str("MEALFIT_FLASH_MODEL", DEEPSEEK_FLASH)
+    return _env_str("MEALFIT_FLASH_MODEL", GLM_FLASH)
 
 
 def _planner_model_name() -> str:
@@ -5783,9 +6103,9 @@ def _planner_model_name() -> str:
     legacy sin redeploy.
 
     Rollback sin redeploy: `MEALFIT_PLANNER_MODEL=""` (cadena vacía) restaura
-    el ruteo dinámico. O `MEALFIT_PLANNER_MODEL=deepseek-v4-pro` fuerza Pro.
+    el ruteo dinámico. O `MEALFIT_PLANNER_MODEL=glm-5.3` fuerza Pro.
     """
-    return _env_str("MEALFIT_PLANNER_MODEL", DEEPSEEK_FLASH)
+    return _env_str("MEALFIT_PLANNER_MODEL", GLM_FLASH)
 
 
 def _self_critique_model_name() -> str:
@@ -5836,9 +6156,9 @@ def _compressor_model_name() -> str:
     Costo 14d prod: $0.017/14d (1 evento) → $0.003/14d con lite. Centavos
     ahorro; el valor es estructural (limpia el hot-path de aux nodes).
 
-    Rollback sin redeploy: `MEALFIT_COMPRESSOR_MODEL=deepseek-v4-pro`.
+    Rollback sin redeploy: `MEALFIT_COMPRESSOR_MODEL=glm-5.3`.
     """
-    return _env_str("MEALFIT_COMPRESSOR_MODEL", DEEPSEEK_FLASH)
+    return _env_str("MEALFIT_COMPRESSOR_MODEL", GLM_FLASH)
 
 
 def _meta_learning_model_name() -> str:
@@ -5856,9 +6176,9 @@ def _meta_learning_model_name() -> str:
     Costo 14d prod: $0.019/14d (4 eventos) → $0.003/14d con lite. Ahorro
     marginal en absoluto pero ~84% relativo del node.
 
-    Rollback sin redeploy: `MEALFIT_META_LEARNING_MODEL=deepseek-v4-pro`.
+    Rollback sin redeploy: `MEALFIT_META_LEARNING_MODEL=glm-5.3`.
     """
-    return _env_str("MEALFIT_META_LEARNING_MODEL", DEEPSEEK_FLASH)
+    return _env_str("MEALFIT_META_LEARNING_MODEL", GLM_FLASH)
 
 
 # Module-level constants preserved para compatibilidad con los 34 callsites
@@ -5872,10 +6192,16 @@ _FLASH_MODEL_NAME = _plan_flash_model_name()
 # [P1-PLANNER-PRO-FALLBACK · 2026-06-26] El planificador (esqueleto) corría SOLO en flash sin red de
 # seguridad: si el breaker COMPARTIDO de flash se abría bajo carga concurrente (otros usuarios
 # generando) o flash timeouteaba 3×, el nodo moría → EXTREME GRACEFUL DEGRADATION → plan de emergencia
-# band-0.0 ("IA saturada") AUNQUE DeepSeek estuviera sano. El self-critique YA cae a pro cuando flash
+# band-0.0 ("IA saturada") AUNQUE GLM estuviera sano. El self-critique YA cae a pro cuando flash
 # falla; el planner no. Con esto ON, el planner reintenta UNA vez con pro (breaker independiente, menos
 # cargado) antes de degradar. Flip a False → comportamiento previo (flash-only, degrada a emergencia).
 PLANNER_PRO_FALLBACK_ENABLED = _env_bool("MEALFIT_PLANNER_PRO_FALLBACK_ENABLED", True)
+# [P1-SKELETON-SHORT-REASK · 2026-09-02] Timeout del planificador (era 45 s fijo): GLM flash con
+# razonamiento tardó 31 s en el intento 1 del run fdbb56de y murió a los 45 en el intento 2 — el
+# reintento automático respondió con 1/3 días. Y el re-pedido explícito cuando el esqueleto viene
+# corto (antes: el guardrail rellenaba los días faltantes con menú matemático sin preguntar).
+PLANNER_LLM_TIMEOUT_S = _env_int("MEALFIT_PLANNER_TIMEOUT_S", 90)
+SKELETON_SHORT_REASK_ENABLED = _env_bool("MEALFIT_SKELETON_SHORT_REASK", True)
 
 # [P6-EVALUATOR-USE-PRO] Knob para escalar EL EVALUATOR del self-critique a Pro,
 # manteniendo Flash en day_generators y corrector. El evaluator es UN solo call
@@ -5933,9 +6259,9 @@ async def _attempt_pro_critique_correction(
         # function_calling → json_mode (el prompt ya exige "misma estructura JSON" y adjunta el
         # día actual como plantilla). Si el parse falla → None, mismo contrato fail-safe de hoy.
         # [P1-NET-LUNA · 2026-07-31] Dispatch por proveedor: la red puede ser un modelo OpenAI
-        # (gpt-5.6-luna default) — construirlo con ChatDeepSeek lo mandaría al base_url de
-        # DeepSeek con la key equivocada (lección P1-DAYGEN-LUNA-CANARY, ahora en TODOS los
-        # consumidores de _PRO_MODEL_NAME). El thinking extra_body es DeepSeek-only → la rama
+        # (gpt-5.6-luna default) — construirlo con ChatGLM lo mandaría al base_url de
+        # GLM con la key equivocada (lección P1-DAYGEN-LUNA-CANARY, ahora en TODOS los
+        # consumidores de _PRO_MODEL_NAME). El thinking extra_body es GLM-only → la rama
         # se salta para OpenAI.
         _net_is_openai = is_openai_model(_PRO_MODEL_NAME)
         if SURGICAL_PRO_THINKING_ENABLED and not _net_is_openai:
@@ -5943,7 +6269,7 @@ async def _attempt_pro_critique_correction(
             _surg_think_body = {"type": "enabled"}
             if SURGICAL_PRO_THINKING_EFFORT:
                 _surg_think_body["effort"] = SURGICAL_PRO_THINKING_EFFORT
-            pro_corrector = ChatDeepSeek(
+            pro_corrector = ChatGLM(
                 model=_PRO_MODEL_NAME,
                 temperature=0.3,
                 max_retries=0,
@@ -5954,7 +6280,7 @@ async def _attempt_pro_critique_correction(
                 logger.info(f"🧠 {log_prefix} Corrector quirúrgico Pro con thinking "
                             f"(effort={SURGICAL_PRO_THINKING_EFFORT}).")
         else:
-            pro_corrector = (ChatOpenAIInstrumented if _net_is_openai else ChatDeepSeek)(
+            pro_corrector = (ChatOpenAIInstrumented if _net_is_openai else ChatGLM)(
                 model=_PRO_MODEL_NAME,
                 temperature=0.3,
                 max_retries=0,
@@ -5989,7 +6315,7 @@ async def _attempt_pro_critique_correction(
         # path del corrector. tooltip-anchor: P3-CORRECTOR-NONE-DIAGNOSTIC
         if CORRECTOR_NONE_DIAGNOSTIC_ENABLED:
             try:
-                _raw_llm = (ChatOpenAIInstrumented if _net_is_openai else ChatDeepSeek)(
+                _raw_llm = (ChatOpenAIInstrumented if _net_is_openai else ChatGLM)(
                     model=_PRO_MODEL_NAME, temperature=0.3, max_retries=0,
                     timeout=int(CRITIQUE_PRO_FALLBACK_TIMEOUT_S),
                 )  # SIN with_structured_output → devuelve el AIMessage crudo
@@ -6089,12 +6415,12 @@ DAYGEN_EASY_MODEL = _env_str("MEALFIT_DAYGEN_EASY_MODEL", _FLASH_LITE_DEFAULT) o
 # degradado es peor UX que un plan PRO bien generado).
 BARIATRIC_DAYGEN_PRO = _env_bool("MEALFIT_BARIATRIC_DAYGEN_PRO", True)
 
-# [P1-DEEPSEEK-FLASH-FIRST · 2026-06-28] Cascada de modelos del day generator (el grueso del gasto LLM) por COSTO, SOLO
-# DeepSeek (GLM eliminado — su tier gratis rate-limitea hasta ser inusable, 429 en 1 sola llamada). Intención del owner:
-# deepseek-v4-flash es SUFICIENTE por default; deepseek-v4-pro SOLO cuando flash no alcanza. Por eso:
-#   - attempt 1 → [deepseek-v4-flash, deepseek-v4-pro]: flash primario; pro SOLO si el call de flash FALLA (API/timeout/CB).
-#   - attempt > 1 (el plan de flash fue RECHAZADO por el revisor → flash no fue suficiente) → [deepseek-v4-pro].
-#   - bariátrico → [deepseek-v4-pro] directo (perfil clínico más difícil).
+# [P1-FLASH-FIRST · 2026-06-28] Cascada de modelos del day generator (el grueso del gasto LLM) por COSTO, SOLO
+# GLM (GLM eliminado — su tier gratis rate-limitea hasta ser inusable, 429 en 1 sola llamada). Intención del owner:
+# glm-5.3-flash es SUFICIENTE por default; glm-5.3 SOLO cuando flash no alcanza. Por eso:
+#   - attempt 1 → [glm-5.3-flash, glm-5.3]: flash primario; pro SOLO si el call de flash FALLA (API/timeout/CB).
+#   - attempt > 1 (el plan de flash fue RECHAZADO por el revisor → flash no fue suficiente) → [glm-5.3].
+#   - bariátrico → [glm-5.3] directo (perfil clínico más difícil).
 # Minimiza costo/llamadas: en el caso normal el día se genera con UNA llamada flash (pro solo en fallo/rechazo). El revisor
 # médico/fact-checker mantienen su routing risk-tier (pro para condiciones). Knob de escalada: MEALFIT_DAY_GEN_RETRY_USE_PRO.
 
@@ -6152,12 +6478,18 @@ CULINARY_JUDGE_GUARD = (_env_str("MEALFIT_CULINARY_JUDGE_GUARD", "off") or "off"
 if CULINARY_JUDGE_GUARD not in ("off", "warn", "block"):
     CULINARY_JUDGE_GUARD = "off"   # fail-safe: valor raro ⇒ el juez se queda apagado
 CULINARY_JUDGE_MODEL = _env_str("MEALFIT_CULINARY_JUDGE_MODEL", _FLASH_MODEL_NAME) or _FLASH_MODEL_NAME
-# [P1-REVIEWER-THINKING pattern] `extra_body.thinking` es DeepSeek-only — nace OFF (misma
+# [P1-REVIEWER-THINKING pattern] `extra_body.thinking` es GLM-only — nace OFF (misma
 # convención medir→actuar que MEALFIT_REVIEWER_THINKING). Cuando ON, `run_culinary_judge` solo
 # lo activa si el modelo resuelto NO es OpenAI (gpt-5.6 razona nativo sin este knob).
 CULINARY_JUDGE_THINKING = _env_bool("MEALFIT_CULINARY_JUDGE_THINKING", False)
 CULINARY_JUDGE_TIMEOUT_S = _env_int("MEALFIT_CULINARY_JUDGE_TIMEOUT_S", 45,
                                      validator=lambda v: 10 <= v <= 120)
+# [P1-CULINARY-JUDGE-RETRY · 2026-09-02] El juez era la ÚNICA llamada con max_retries=0: de los 6
+# errores de proveedor del 02-sep, 4 cayeron en él (fail-open) mientras los otros nodos se
+# recuperaron con el reintento del cliente. 1 reintento (conexión/timeout/429/5xx) y el timeout
+# exterior escala con él, o el wait_for mataría el reintento. Clamp [0, 3].
+CULINARY_JUDGE_MAX_RETRIES = max(0, min(3, _env_int("MEALFIT_CULINARY_JUDGE_MAX_RETRIES", 1,
+    "Reintentos del cliente para el juez culinario (0 = conducta previa: cualquier hipo del proveedor es fail-open)")))
 
 
 class CulinaryViolation(BaseModel):
@@ -6185,26 +6517,18 @@ _CULINARY_JUDGE_SLOT_LABELS = {"desayuno": "Desayuno", "almuerzo": "Almuerzo",
                                "cena": "Cena", "merienda": "Merienda"}
 
 
-def _build_culinary_judge_rubric() -> str:
-    """[P1-CULINARY-JUDGE] Construye la rúbrica ESTABLE del juez culinario — llamada UNA sola
-    vez a import-time, asignada abajo a `_CULINARY_JUDGE_RUBRIC`. El prefix del prompt (este
-    string, vía SystemMessage) debe ser byte-a-byte idéntico entre invocaciones para que
-    DeepSeek dé cache hits sobre el bloque grande y estable; el payload variable (los platos
-    del plan a juzgar) va aparte, en el HumanMessage de `run_culinary_judge`.
+_DO_DISH_TEMPLATES_PATH = os.path.join(os.path.dirname(os.path.abspath(__file__)), "data", "dish_templates.json")
 
-    Fuentes: hasta 10 nombres de ejemplo por slot desde `data/dish_templates.json` (slots en
-    minúscula del archivo, mapeados aquí a los 4 canónicos) + la regla dura documentada en el
-    `_note` de ese archivo (arroz/locrio/pasta/sopón NUNCA en desayuno ni cena; sopones solo
-    almuerzo) + `constants.SLOT_POSITIVE_HINT`. Cierra con las definiciones de los 5 tipos
-    canónicos de violación y la instrucción de precisión ("solo violaciones CLARAS" — la
-    creatividad dominicana legítima no es una violación).
 
-    Fail-open: JSON ausente/corrupto ⇒ rúbrica mínima hardcoded (el juez sigue siendo usable,
-    solo pierde los ejemplos curados). tooltip-anchor: P1-CULINARY-JUDGE-RUBRIC
-    """
+def _dish_examples_block_from_file(path: str) -> str:
+    """[P1-COUNTRY-SYSTEM-F2 · T5 · 2026-08-17] Construye el bloque "EJEMPLOS DE PLATOS..." a
+    partir de CUALQUIER archivo `dish_templates*.json` con el mismo schema (name/slots) —
+    extraído de `_build_culinary_judge_rubric` (antes inline, solo leía la ruta RD) para poder
+    reusar EXACTAMENTE la misma lógica con `data/dish_templates_es.json` sin duplicarla.
+    Byte-idéntica para la ruta RD (ningún cambio de lógica, solo de forma). Fail-open: JSON
+    ausente/corrupto ⇒ frase genérica (el juez sigue siendo usable, solo pierde los ejemplos)."""
     try:
-        _path = os.path.join(os.path.dirname(os.path.abspath(__file__)), "data", "dish_templates.json")
-        with open(_path, encoding="utf-8") as _f:
+        with open(path, encoding="utf-8") as _f:
             _data = json.load(_f)
         _templates = _data.get("templates") or []
         _by_slot: dict = {k: [] for k in _CULINARY_JUDGE_SLOT_LABELS}
@@ -6220,7 +6544,7 @@ def _build_culinary_judge_rubric() -> str:
                     _by_slot[_sk].append(_name)
         _ex_lines = [f"- {_label}: " + "; ".join(_by_slot[_sk])
                      for _sk, _label in _CULINARY_JUDGE_SLOT_LABELS.items() if _by_slot.get(_sk)]
-        _examples_block = (
+        return (
             "EJEMPLOS DE PLATOS DOMINICANOS COHERENTES POR HORARIO (biblioteca curada, no "
             "exhaustiva — la creatividad puede ir MÁS ALLÁ de esta lista):\n" + "\n".join(_ex_lines)
         ) if _ex_lines else (
@@ -6228,20 +6552,50 @@ def _build_culinary_judge_rubric() -> str:
             "juzga con criterio culinario dominicano general."
         )
     except Exception:
-        _examples_block = (
+        return (
             "EJEMPLOS DE PLATOS DOMINICANOS COHERENTES POR HORARIO: catálogo no disponible — "
             "juzga con criterio culinario dominicano general."
         )
+
+
+def _culinary_judge_hints_block(hint_table) -> str:
+    """El bloque «GUÍA POSITIVA POR HORARIO» a partir de una tabla de hints por slot.
+
+    [P2-JUDGE-POSITIVE-HINT-DEAD-PAIR · 2026-08-23] Extraído del cuerpo de la rúbrica (byte a
+    byte, mismo orden de slots) para poder RECONSTRUIR el bloque desde el espejo neutro en la
+    rama beta en vez de parchearlo con `.replace()`, que es lo que se había podrido.
+    """
     _hint_lines = []
     try:
         for _sk, _label in _CULINARY_JUDGE_SLOT_LABELS.items():
-            _hint = SLOT_POSITIVE_HINT.get(_sk)
+            _hint = (hint_table or {}).get(_sk)
             if _hint:
                 _hint_lines.append(f"- {_label}: {_hint}")
     except Exception:
         pass
-    _hints_block = ("GUÍA POSITIVA POR HORARIO (orientativa, NO una regla dura — ver aclaración "
-                     "abajo):\n" + "\n".join(_hint_lines) + "\n\n") if _hint_lines else ""
+    return ("GUÍA POSITIVA POR HORARIO (orientativa, NO una regla dura — ver aclaración "
+            "abajo):\n" + "\n".join(_hint_lines) + "\n\n") if _hint_lines else ""
+
+
+def _build_culinary_judge_rubric() -> str:
+    """[P1-CULINARY-JUDGE] Construye la rúbrica ESTABLE del juez culinario — llamada UNA sola
+    vez a import-time, asignada abajo a `_CULINARY_JUDGE_RUBRIC`. El prefix del prompt (este
+    string, vía SystemMessage) debe ser byte-a-byte idéntico entre invocaciones para que
+    GLM dé cache hits sobre el bloque grande y estable; el payload variable (los platos
+    del plan a juzgar) va aparte, en el HumanMessage de `run_culinary_judge`.
+
+    Fuentes: hasta 10 nombres de ejemplo por slot desde `data/dish_templates.json` (slots en
+    minúscula del archivo, mapeados aquí a los 4 canónicos) + la regla dura documentada en el
+    `_note` de ese archivo (arroz/locrio/pasta/sopón NUNCA en desayuno ni cena; sopones solo
+    almuerzo) + `constants.SLOT_POSITIVE_HINT`. Cierra con las definiciones de los 5 tipos
+    canónicos de violación y la instrucción de precisión ("solo violaciones CLARAS" — la
+    creatividad dominicana legítima no es una violación).
+
+    Fail-open: JSON ausente/corrupto ⇒ rúbrica mínima hardcoded (el juez sigue siendo usable,
+    solo pierde los ejemplos curados). tooltip-anchor: P1-CULINARY-JUDGE-RUBRIC
+    """
+    _examples_block = _dish_examples_block_from_file(_DO_DISH_TEMPLATES_PATH)
+    _hints_block = _culinary_judge_hints_block(SLOT_POSITIVE_HINT)
     return (
         "Eres un juez culinario dominicano experto evaluando un plan de alimentación generado "
         "por IA. Tu trabajo es señalar SOLO violaciones CLARAS e inequívocas de coherencia "
@@ -6311,11 +6665,145 @@ def _build_culinary_judge_rubric() -> str:
 
 
 # Construida UNA vez a import-time (no por-llamada): estable byte-a-byte ⇒ cache hits de
-# DeepSeek sobre este prefix en cada invocación de `run_culinary_judge`.
+# GLM sobre este prefix en cada invocación de `run_culinary_judge`.
 _CULINARY_JUDGE_RUBRIC = _build_culinary_judge_rubric()
 
+# [P1-COUNTRY-SYSTEM-F1 · 2026-08-16] (T3) Variante por país del prefix del juez — DO usa el
+# MISMO objeto ya cacheado arriba (byte-identidad, cache GLM intacto); beta sustituye SOLO
+# la frase de apertura ("Eres un juez culinario dominicano experto" → "...experto en la cocina
+# de {name_es} y cocina internacional"), reusando el resto de la rúbrica (ejemplos curados del
+# catálogo + reglas duras de horario) SIN releer dish_templates.json de nuevo — los ejemplos
+# siguen siendo dominicanos en Fase 1 (el catálogo por país es Fase 2), solo se re-ancla quién
+# es "el juez". Memoizado por país.
+_CULINARY_JUDGE_RUBRIC_CACHE: dict = {"DO": _CULINARY_JUDGE_RUBRIC}
 
-async def run_culinary_judge(plan: dict):
+
+def _dish_templates_path_for_country(canon: str) -> str:
+    """[P1-COUNTRY-SYSTEM-F2 · T5 · 2026-08-17] Ruta del `dish_templates*.json` a usar para un
+    país YA canonicalizado. DO (o cualquier país sin archivo dedicado) ⇒ la ruta RD — fallback
+    explícito, NO excepción: un país beta sin catálogo propio conserva los ejemplos dominicanos
+    en vez de perder la sección entera (mismo espíritu fail-open de `_dish_examples_block_from_file`).
+    [P1-COUNTRY-SYSTEM-F2 · T6 · 2026-08-17] MX y CO ganan archivo propio en esta task; PR/US
+    siguen cayendo al fallback RD hasta que una task futura les dé el suyo — comportamiento
+    IDÉNTICO al que tenían antes de esta task para esos dos.
+    [P1-COUNTRY-SYSTEM-F2 · T7 · 2026-08-17] PR y US ganan archivo propio en esta task —
+    ningún país queda ya en el fallback RD (los 6 países del sistema tienen su propio
+    `dish_templates_<cc>.json`)."""
+    if canon == "ES":
+        _es_path = os.path.join(os.path.dirname(os.path.abspath(__file__)), "data", "dish_templates_es.json")
+        if os.path.exists(_es_path):
+            return _es_path
+    if canon == "MX":
+        _mx_path = os.path.join(os.path.dirname(os.path.abspath(__file__)), "data", "dish_templates_mx.json")
+        if os.path.exists(_mx_path):
+            return _mx_path
+    if canon == "CO":
+        _co_path = os.path.join(os.path.dirname(os.path.abspath(__file__)), "data", "dish_templates_co.json")
+        if os.path.exists(_co_path):
+            return _co_path
+    if canon == "PR":
+        _pr_path = os.path.join(os.path.dirname(os.path.abspath(__file__)), "data", "dish_templates_pr.json")
+        if os.path.exists(_pr_path):
+            return _pr_path
+    if canon == "US":
+        _us_path = os.path.join(os.path.dirname(os.path.abspath(__file__)), "data", "dish_templates_us.json")
+        if os.path.exists(_us_path):
+            return _us_path
+    return _DO_DISH_TEMPLATES_PATH
+
+
+def _culinary_judge_rubric_for_country(country: str) -> str:
+    """tooltip-anchor: _culinary_judge_rubric_for_country (test_p1_country_system_f1.py)"""
+    from constants import canonicalize_country, COUNTRY_PROFILES
+    canon = canonicalize_country(country)
+    # [P1-JUDGE-SEVERITY-COUNTRY · 2026-08-21] Return TEMPRANO para DO, explícito.
+    #
+    # Hasta aquí la byte-identidad dominicana dependía ENTERAMENTE de que el dict naciera
+    # pre-sembrado (`_CULINARY_JUDGE_RUBRIC_CACHE = {"DO": _CULINARY_JUDGE_RUBRIC}`): si algo
+    # vaciaba la caché —un test, un reload, un refactor futuro— 'DO' caía por la rama beta y
+    # recibía la rúbrica re-anclada, en silencio. Lo destapó un test de este P-fix que limpia la
+    # caché entre casos, y es la clase de fragilidad que este repo ya ha pagado varias veces: una
+    # garantía que descansa en un estado mutable en vez de en una condición.
+    if canon == "DO":
+        return _CULINARY_JUDGE_RUBRIC
+    cached = _CULINARY_JUDGE_RUBRIC_CACHE.get(canon)
+    if cached is not None:
+        return cached
+    name_es = COUNTRY_PROFILES.get(canon, {}).get("name_es", canon)
+    rendered = _CULINARY_JUDGE_RUBRIC.replace(
+        "Eres un juez culinario dominicano experto",
+        f"Eres un juez culinario experto en la cocina de {name_es} y cocina internacional",
+    )
+    # [P1-COUNTRY-SYSTEM-F2 · T5 · 2026-08-17] Fase 1 (T3) solo re-anclaba QUIÉN es el juez; el
+    # catálogo de ejemplos ("EJEMPLOS DE PLATOS DOMINICANOS...") seguía siendo dominicano SIEMPRE
+    # (comentario de `_CULINARY_JUDGE_RUBRIC_CACHE`: "el catálogo por país es Fase 2"). Esta es
+    # esa Fase 2: si el país tiene su propio `dish_templates_<cc>.json`, sustituye TAMBIÉN el
+    # bloque de ejemplos — nunca en DO (ese branch ni siquiera llega aquí, corta arriba en el
+    # cache hit de 'DO') y nunca si el país no tiene archivo dedicado (mismo bloque RD, no-op).
+    _do_block = _dish_examples_block_from_file(_DO_DISH_TEMPLATES_PATH)
+    _country_path = _dish_templates_path_for_country(canon)
+    if _country_path != _DO_DISH_TEMPLATES_PATH:
+        _country_block = _dish_examples_block_from_file(_country_path)
+        if _country_block and _country_block != _do_block:
+            # El encabezado literal dice "PLATOS DOMINICANOS" (`_dish_examples_block_from_file`
+            # es compartida con la ruta RD, byte-idéntica a propósito) — se re-ancla SOLO en el
+            # bloque ya sustituido, nunca en el helper compartido, para no tocar la salida DO.
+            _country_block = _country_block.replace("PLATOS DOMINICANOS", f"PLATOS DE {name_es.upper()}")
+            rendered = rendered.replace(_do_block, _country_block)
+    # [P1-JUDGE-SEVERITY-COUNTRY · 2026-08-21] Faltaba la tercera capa. F1-T3 re-ancló QUIÉN es el
+    # juez y F2-T5 QUÉ platos cita; lo que quedaba era la prosa que decide CUÁNDO algo está mal:
+    #
+    #   «'high' si un DOMINICANO lo vería como un error claro»
+    #
+    # Esa frase no describe, CALIBRA — y `high` es lo que escala a retry, que se paga en tokens.
+    # Una paella o unos boquerones en vinagre pueden parecerle raros a ojos dominicanos y normales
+    # a ojos españoles: el plan correcto se rechaza, se regenera con dinero y vuelve a rechazarse.
+    # Además los `issues` se le muestran al usuario VERBATIM, así que un español leía que su cena
+    # «no es una cena dominicana legítima».
+    #
+    # Sin tabla de gentilicios: decir «un español / un mexicano» exigiría una 2ª tabla (la que
+    # P1-DIET-CANON-SSOT prohíbe). Se reformula con `name_es`, que ya está aquí — menos elegante
+    # y sin nada que mantener.
+    # [P2-JUDGE-POSITIVE-HINT-DEAD-PAIR · 2026-08-23] La guía positiva se RECONSTRUYE desde el
+    # espejo neutro que ya existía (`constants._SLOT_POSITIVE_HINT_NEUTRAL`), no se parchea.
+    #
+    # El par que la parcheaba estaba MUERTO: anclaba «El desayuno dominicano va: mangú/tubérculos»
+    # y el literal SSOT dice «mangú/víveres». Su autor lo escribió contra el texto YA neutralizado,
+    # pero este bucle corre ANTES de `neutralize_do_lexicon`. Resultado medido: disparaba el par
+    # genérico, el neutralizador convertía víveres→tubérculos y el juez español leía «El desayuno
+    # de España va: mangú/tubérculos». Los otros tres slots ni siquiera tenían par: al juez de
+    # España se le decía que el almuerzo es «arroz+habichuela, locrio, moro, asopao, pasta criolla».
+    #
+    # Sustituir el bloque ENTERO cierra los cuatro slots de una vez y no puede volver a quedarse
+    # desincronizado con el literal: los dos lados salen del mismo constructor.
+    from constants import _SLOT_POSITIVE_HINT_NEUTRAL as _spht_neutral
+    _do_hints = _culinary_judge_hints_block(SLOT_POSITIVE_HINT)
+    _neutral_hints = _culinary_judge_hints_block(_spht_neutral)
+    if _do_hints and _neutral_hints:
+        rendered = rendered.replace(_do_hints, _neutral_hints)
+    for _frase_do, _frase_beta in (
+        ("si un dominicano lo vería", f"si alguien de {name_es} lo vería"),
+        ("cenas dominicanas legítimas", "cenas locales legítimas"),
+        ("la creatividad dominicana legítima", "la creatividad culinaria local legítima"),
+        ("(dominicano o internacional)", "(local o internacional)"),
+        # [P2-JUDGE-POSITIVE-HINT-DEAD-PAIR · 2026-08-23] Aquí vivían otros DOS pares muertos,
+        # «paladar dominicano» y «cocina dominicana»: ninguna de las dos frases existe en la
+        # rúbrica cruda sobre la que corre este bucle (medido con el blanket del test de este
+        # P-fix, que fue quien los encontró — nadie los había echado en falta porque un par
+        # muerto no cambia el render, sólo deja de arreglar lo que dice que arregla). Se van:
+        # código que afirma traducir y no traduce es peor que su ausencia.
+        ("desayuno dominicano", f"desayuno de {name_es}"),
+    ):
+        rendered = rendered.replace(_frase_do, _frase_beta)
+    # Los ejemplos de comida sueltos ('casabe', 'sancocho') salen del SSOT compartido con el
+    # planner, el prompt de variedad y los ejemplos clínicos — no de una 4ª tabla local.
+    from constants import neutralize_do_lexicon as _ndl_judge
+    rendered = _ndl_judge(rendered)
+    _CULINARY_JUDGE_RUBRIC_CACHE[canon] = rendered
+    return rendered
+
+
+async def run_culinary_judge(plan: dict, country: str = "DO"):
     """[P1-CULINARY-JUDGE] Juicio culinario LLM del plan COMPLETO (1 llamada batched, no por
     día — evita N llamadas y preserva el prefix estable de `_CULINARY_JUDGE_RUBRIC` para cache
     hits). Devuelve `CulinaryJudgeReport` o `None` (fail-open: knob OFF, timeout, o cualquier
@@ -6327,6 +6815,9 @@ async def run_culinary_judge(plan: dict):
     (P1-REVIEWER-THINKING) nunca la ve, solo nombre+ingredientes; este es el único ojo LLM del
     pipeline que juzga los PASOS de preparación.
 
+    [P1-COUNTRY-SYSTEM-F1 · 2026-08-16] (T3) `country` (default 'DO', preserva callers
+    preexistentes) selecciona la rúbrica vía `_culinary_judge_rubric_for_country`.
+
     tooltip-anchor: P1-CULINARY-JUDGE"""
     if CULINARY_JUDGE_GUARD == "off":
         return None
@@ -6334,20 +6825,20 @@ async def run_culinary_judge(plan: dict):
     try:
         _model = CULINARY_JUDGE_MODEL
         _is_openai = is_openai_model(_model)
-        # [P1-REVIEWER-THINKING pattern · 2026-07-05] thinking (extra_body) es DeepSeek-only —
+        # [P1-REVIEWER-THINKING pattern · 2026-07-05] thinking (extra_body) es GLM-only —
         # nunca se activa sobre un modelo OpenAI (gpt-5.6 razona nativo sin este knob). thinking
         # no soporta el tool_choice forzado de function_calling → json_mode en su lugar.
         _use_thinking = bool(CULINARY_JUDGE_THINKING and not _is_openai)
         if _use_thinking:
-            _llm = ChatDeepSeek(
-                model=_model, temperature=0.1, max_retries=0,
+            _llm = ChatGLM(
+                model=_model, temperature=0.1, max_retries=CULINARY_JUDGE_MAX_RETRIES,
                 timeout=CULINARY_JUDGE_TIMEOUT_S,
                 extra_body={"thinking": {"type": "enabled"}},
             )
             _judge = _llm.with_structured_output(CulinaryJudgeReport, method="json_mode")
         else:
-            _llm = (ChatOpenAIInstrumented if _is_openai else ChatDeepSeek)(
-                model=_model, temperature=0.1, max_retries=0,
+            _llm = (ChatOpenAIInstrumented if _is_openai else ChatGLM)(
+                model=_model, temperature=0.1, max_retries=CULINARY_JUDGE_MAX_RETRIES,
                 timeout=CULINARY_JUDGE_TIMEOUT_S,
             )
             _judge = _llm.with_structured_output(CulinaryJudgeReport)
@@ -6357,10 +6848,11 @@ async def run_culinary_judge(plan: dict):
             for d in (plan.get("days") or []) for m in (d.get("meals") or [])
         ]
         _msg = [
-            SystemMessage(content=_CULINARY_JUDGE_RUBRIC),
+            SystemMessage(content=_culinary_judge_rubric_for_country(country)),
             HumanMessage(content=json.dumps({"meals": _meals}, ensure_ascii=False)),
         ]
-        return await asyncio.wait_for(_judge.ainvoke(_msg), timeout=CULINARY_JUDGE_TIMEOUT_S + 5)
+        # [P1-CULINARY-JUDGE-RETRY] el exterior debe caber (1 + reintentos) intentos, o mata el reintento
+        return await asyncio.wait_for(_judge.ainvoke(_msg), timeout=CULINARY_JUDGE_TIMEOUT_S * (1 + CULINARY_JUDGE_MAX_RETRIES) + 5)
     except Exception as _cj_e:
         logger.warning(
             f"⚖️ [P1-CULINARY-JUDGE] fail-open ({type(_cj_e).__name__}): el plan sigue su "
@@ -6376,21 +6868,21 @@ async def run_culinary_judge(plan: dict):
 #
 # Cada proveedor tiene SU vocabulario y el knob habla los dos con alias
 # (verificado contra la doc oficial de luna que aportó el owner 2026-07-31, y
-# contra el contrato DeepSeek ya usado por el reviewer/fact-checker):
+# contra el contrato GLM ya usado por el reviewer/fact-checker):
 #   OpenAI gpt-5.6 (`reasoning_effort`): none · low · medium · high · xhigh
-#   DeepSeek (`extra_body.thinking.effort`): low · medium · high · max
-#   Alias: `max`→`xhigh` en OpenAI; `xhigh`→`max` en DeepSeek. Así "el tope"
+#   GLM (`extra_body.thinking.effort`): low · medium · high · max
+#   Alias: `max`→`xhigh` en OpenAI; `xhigh`→`max` en GLM. Así "el tope"
 #   se pide igual sin memorizar qué palabra usa cada API. La primera versión
 #   de este knob usaba el vocabulario clásico (minimal..high) y por eso "luna
 #   al máximo" era IMPEDIBLE de pedir.
 #
 # ⚠️ LO QUE ESTE REPO YA MIDIÓ sobre razonar en superficies de OUTPUT GRANDE:
-# el day-gen DeepSeek con thinking superó los 170 s en 2026-06-13 (motivo del
-# apagado global P1-DEEPSEEK-THINKING-OFF) y el corrector quirúrgico pasó de
+# el day-gen GLM con thinking superó los 170 s en 2026-06-13 (motivo del
+# apagado global P1-PROVIDER-THINKING-DEFAULT) y el corrector quirúrgico pasó de
 # 17 s a timeout de 120 s. El tope del day-gen es 90 s: probar efforts altos
 # exige subir MEALFIT_DAYGEN_EFFORT_TIMEOUT_S a la vez, o cada llamada morirá
 # en timeout y el A/B medirá la red, no el modelo. El razonamiento se factura
-# como OUTPUT (luna $1,20/M; DeepSeek $0,28/M — ahí el coste del thinking es
+# como OUTPUT (luna $1,20/M; GLM $0,28/M — ahí el coste del thinking es
 # casi gratis y el riesgo es solo la latencia).
 DAYGEN_EFFORT = (_env_str("MEALFIT_DAYGEN_EFFORT", "") or "").strip().lower()
 if DAYGEN_EFFORT not in ("", "none", "low", "medium", "high", "xhigh", "max"):
@@ -6423,7 +6915,7 @@ def _daygen_model_canary_cohort(form_data: dict) -> str:
 
 
 def _day_model_chain(form_data: dict, attempt: int, prev_rejection_reasons=None) -> list:
-    """[P1-DEEPSEEK-FLASH-FIRST · 2026-06-28] CADENA de modelos a intentar para generar UN día. El day-gen avanza al
+    """[P1-FLASH-FIRST · 2026-06-28] CADENA de modelos a intentar para generar UN día. El day-gen avanza al
     siguiente en cada fallo (reintentos de tenacity) o si el CB del modelo está abierto.
     [P1-FLASH-PRIMARY · 2026-07-31] Decisión del owner: flash es actualmente MEJOR que pro (la premisa "pro razona
     mejor" de 2026-06 caducó). TODA superficie va flash-PRIMERO; pro queda EXCLUSIVAMENTE de red de diversidad
@@ -6431,7 +6923,7 @@ def _day_model_chain(form_data: dict, attempt: int, prev_rejection_reasons=None)
     invertidos):
       - BARIÁTRICO → [flash, pro] (era [pro] a secas bajo la premisa vieja; sigue saltándose el canario Luna
         y el downgrade lite — esa garantía se conserva con el early-return). Reusa _is_bariatric_condition.
-      - attempt 1 Y retries → [deepseek-v4-flash, deepseek-v4-pro]: flash primario (en el retry lleva además la
+      - attempt 1 Y retries → [glm-5.3-flash, glm-5.3]: flash primario (en el retry lleva además la
         directiva correctiva); pro SOLO si el call de flash falla o su breaker está abierto.
     Dedup preservando orden (si MEALFIT_FLASH_MODEL==pro, queda [pro])."""
     # Bariátrico: flash primario + pro de red, sin canario ni lite (early-return deliberado).
@@ -6444,9 +6936,9 @@ def _day_model_chain(form_data: dict, attempt: int, prev_rejection_reasons=None)
     # Retry tras rechazo: flash no fue suficiente → PRO para el reintento.
     # [P1-DAYGEN-RETRY-FLASH-NET · 2026-07-03] (residuo del gym baseline: 2/20 planes cayeron a
     # fallback MATEMÁTICO total — uno maintenance SIN condiciones) El chain de retry era [pro]
-    # A SECAS: con el circuit breaker de deepseek-v4-pro abierto (rate-limit/fallos en ráfaga),
+    # A SECAS: con el circuit breaker de glm-5.3 abierto (rate-limit/fallos en ráfaga),
     # los intentos 2..N no tenían NINGÚN modelo utilizable → "Circuit Breaker OPEN para todo el
-    # chain ['deepseek-v4-pro']" → todos los workers muertos → plan de contingencia matemático.
+    # chain ['glm-5.3']" → todos los workers muertos → plan de contingencia matemático.
     # Flash queda como RED de última instancia del retry: un día real generado por flash (que
     # los gates de review validan igual) es estrictamente mejor que un día matemático. PRO
     # sigue PRIMERO (calidad del retry intacta con breaker sano); el cascade solo cae a flash
@@ -6475,7 +6967,7 @@ def _day_model_chain(form_data: dict, attempt: int, prev_rejection_reasons=None)
     # Medido: el modelo caro cuesta ~USD 0,102 por plan de 3 días contra ~0,010 de flash (11,6×
     # por token). En el intento 1 se paga en TODOS los planes, incluidos los ~2 de cada 3 que el
     # modelo barato ya resuelve bien — y los datos de hoy no muestran que lo valga: con el
-    # contrato de fruta arreglado, DeepSeek entregó banda 1.00 sin reintentos.
+    # contrato de fruta arreglado, GLM entregó banda 1.00 sin reintentos.
     #
     # En el reintento la aritmética se invierte: sólo llegan ahí los planes donde el barato YA
     # demostró que no pudo, así que el sobrecoste esperado cae a ~0,03/plan de media. Y el
@@ -6523,7 +7015,7 @@ def _route_model_for_day_generator(
     # [P1-FLASH-PRIMARY · 2026-07-31] Era `return _PRO_MODEL_NAME` con la nota medida "FLASH no retiene las reglas
     # bariátricas" (medición de la era pro>flash — los providers actualizan modelos bajo el mismo ID y el owner midió
     # que hoy flash es MEJOR). El valor vigente del branch: garantizar que bariátrico NUNCA degrada a lite. Rollback
-    # per-feature sin redeploy: `MEALFIT_BARIATRIC_DAYGEN_MODEL=deepseek-v4-pro` (convención P3-PREVIEW-MODEL-KNOB).
+    # per-feature sin redeploy: `MEALFIT_BARIATRIC_DAYGEN_MODEL=glm-5.3` (convención P3-PREVIEW-MODEL-KNOB).
     if BARIATRIC_DAYGEN_PRO:
         try:
             from condition_rules import detect_active_rules
@@ -6568,13 +7060,13 @@ def _route_model_for_day_generator(
 def _route_model(form_data: dict, attempt: int = 1, force_fast: bool = False) -> str:
     """Mejora 1: Ruteo Dinámico de Modelos (Cost/Latency Routing).
 
-    [P0-DEEPSEEK-MIGRATION · 2026-06-12] El ruteo ahora es POR TIER DE
+    [P0-LLM-PROVIDER-MIGRATION · 2026-06-12] El ruteo ahora es POR TIER DE
     SUSCRIPCIÓN (decisión de producto 2026-06-12):
       - `gratis` / guests / tier irresoluble → `_FLASH_MODEL_NAME` (V4 Flash)
       - `basic` / `plus` / `ultra` (pagados) → `resolve_model_for_tier(tier)`
         (SSOT llm_provider; [P1-FLASH-PRIMARY · 2026-07-31] default flash —
         el owner midió que flash es actualmente mejor que pro. Rollback:
-        `MEALFIT_MODEL_PAID_TIER=deepseek-v4-pro` sin redeploy. Antes esta
+        `MEALFIT_MODEL_PAID_TIER=glm-5.3` sin redeploy. Antes esta
         rama retornaba `_PRO_MODEL_NAME`, que queda re-scoped como modelo de
         RED post-fallo, ver `_plan_pro_model_name`).
 
@@ -6840,14 +7332,14 @@ async def context_compression_node(state: PlanState) -> dict:
     
     # P1-Q3: capturar el modelo para usar el CB per-modelo.
     # [P3-COST-CUT-AUX · 2026-05-22] Usar helper `_compressor_model_name()`
-    # (knob `MEALFIT_COMPRESSOR_MODEL`, default DeepSeek V4 Flash) en
+    # (knob `MEALFIT_COMPRESSOR_MODEL`, default GLM-5.3 Flash) en
     # lugar del ruteo dinámico — la compresión es síntesis textual literal,
-    # no requiere razonamiento Pro. Rollback: setear el knob a deepseek-v4-pro.
-    # [P0-DEEPSEEK-MIGRATION] Usa el wrapper module-level ChatDeepSeek
+    # no requiere razonamiento Pro. Rollback: setear el knob a glm-5.3.
+    # [P0-LLM-PROVIDER-MIGRATION] Usa el wrapper module-level ChatGLM
     # (backpressure + instrumentación), igual que el resto de nodos.
     _compressor_model = _compressor_model_name()
     _cb = _get_circuit_breaker(_compressor_model)
-    compressor_llm = ChatDeepSeek(
+    compressor_llm = ChatGLM(
         model=_compressor_model,
         temperature=0.0,
         max_retries=1
@@ -6912,6 +7404,106 @@ Devuelve ÚNICAMENTE el contexto comprimido en viñetas directas.
 # ============================================================
 # NODO 1: PLANIFICADOR (Fase Map — esqueleto liviano)
 # ============================================================
+# ── [P1-SKELETON-SHORT-REASK · 2026-09-02] Esqueleto corto: re-pedir, y si no, reutilizar ──
+# Vivo (run fdbb56de, 2026-09-02): en el intento 2 el planificador (glm-5.3-flash, temp 0.95,
+# `_is_same_day_reroll=True`) devolvió 1/3 días — la instrucción de re-roll habla de «las
+# opciones de HOY» y el modelo la tomó al pie de la letra. Sin nadie que preguntara otra vez,
+# el guardrail P0-2 rellenó los días 2 y 3 con menú matemático y el plan salió «parcial».
+# Hoy hubo 3 esqueletos cortos en 6 planes (2 en los 9 días anteriores). El orden es:
+#   1) re-pedir UNA vez con la orden explícita de N días (una llamada, ~30 s);
+#   2) si sigue corto y hay esqueleto del intento anterior, reutilizar SUS días faltantes
+#      (son pools de ingredientes: los workers generan comidas nuevas igual);
+#   3) si no hay nada, el guardrail de siempre.
+def _skeleton_short_reask_directive(got: int, expected: int) -> str:
+    return (
+        f"🚨 REQUISITO ESTRUCTURAL (PRIORIDAD MÁXIMA): tu respuesta anterior trajo {int(got)} de "
+        f"{int(expected)} días. DEBES devolver EXACTAMENTE {int(expected)} entradas en `days` "
+        f"(day 1..{int(expected)}), cada una con sus pools completos. Si alguna instrucción habla "
+        f"de «hoy» o de «las opciones de hoy», aplica ese cambio a TODOS los días de este bloque; "
+        f"NUNCA devuelvas menos de {int(expected)} días.\n\n"
+    )
+
+
+def _merge_short_skeleton_days(skeleton_days, previous_days, days_in_chunk: int):
+    """Completa un esqueleto corto con los días faltantes del esqueleto del intento anterior.
+
+    Devuelve `(merged_days, reused_day_numbers)`. Los días del LLM mandan; solo se rellenan
+    los números ausentes (1..N) que existan en `previous_days`. Sin previo ⇒ sin cambios.
+    """
+    n_total = max(1, int(days_in_chunk or 1))
+
+    def _index(days, *, normalize=False):
+        by_num = {}
+        for i, d in enumerate(days or []):
+            if not isinstance(d, dict):
+                continue
+            n = d.get("day")
+            if not (isinstance(n, int) and 1 <= n <= n_total):
+                n = i + 1
+                if normalize:
+                    d["day"] = n  # numeración 1-based confiable (el LLM a veces la omite)
+            by_num.setdefault(n, d)
+        return by_num
+
+    current = _index(skeleton_days, normalize=True)
+    previous = _index(previous_days)
+    reused = []
+    for n in range(1, n_total + 1):
+        if n in current or n not in previous:
+            continue
+        d = json.loads(json.dumps(previous[n], default=str))
+        d["day"] = n
+        d["_reused_from_previous_attempt"] = True
+        current[n] = d
+        reused.append(n)
+    merged = [current[n] for n in sorted(current) if n <= n_total]
+    return merged, reused
+
+
+def _stamp_missing_day_dates(plan: dict, form_data: dict, *, now=None) -> list:
+    """Estampa `date`/`day_name` en los días que no la traen (los sintéticos del guardrail).
+
+    Misma aritmética que el estampado principal (`_plan_start_date` + tzOffset + `_days_offset`)
+    para que un día rellenado matemáticamente sea recordable por fecha (P1-CHAT-PAST-DAYS).
+    Devuelve los números de día estampados. Nunca pisa una fecha existente.
+    """
+    days = (plan or {}).get("days") or []
+    if not isinstance(days, list):
+        return []
+    fd = form_data or {}
+    start_dt = None
+    raw = fd.get("_plan_start_date")
+    if raw:
+        try:
+            start_dt = datetime.fromisoformat(str(raw).replace("Z", "+00:00"))
+        except Exception:
+            start_dt = None
+    if start_dt is None:
+        start_dt = now or datetime.now(timezone.utc)
+    tz_minutes = fd.get("tzOffset") or fd.get("tz_offset_minutes") or 0
+    try:
+        if tz_minutes:
+            start_dt = start_dt - timedelta(minutes=int(tz_minutes))
+    except Exception:
+        pass
+    try:
+        days_offset = int(fd.get("_days_offset", 0) or 0)
+    except Exception:
+        days_offset = 0
+    dias_es = ["Lunes", "Martes", "Miércoles", "Jueves", "Viernes", "Sábado", "Domingo"]
+    stamped = []
+    for i, day in enumerate(days):
+        if not isinstance(day, dict) or day.get("date"):
+            continue
+        n = day.get("day") if isinstance(day.get("day"), int) and day.get("day") >= 1 else i + 1
+        target = start_dt + timedelta(days=days_offset + n - 1)
+        day["date"] = target.date().isoformat()
+        if not day.get("day_name"):
+            day["day_name"] = dias_es[target.weekday()]
+        stamped.append(n)
+    return stamped
+
+
 @_node_label("planner")
 async def plan_skeleton_node(state: PlanState) -> dict:
     attempt = state.get("attempt", 1)
@@ -7029,6 +7621,12 @@ async def plan_skeleton_node(state: PlanState) -> dict:
         f"{ctx['unified_behavioral_profile']}\n{ctx['correction_context']}\n{ctx['pantry_correction_context']}\n{ctx['history_context']}\n"
         # [P1-RECENT-DISHES-FEEDFORWARD] blocklist literal FUERA del history_context comprimible
         f"{ctx['recent_dishes_blocklist_context']}\n"
+        # [P1-DAYGEN-DIET-CONVERGE · 2026-08-07] Directiva de DIETA ANTES de los pools: el prompt
+        # del planner sugiere proteínas animales ("pollo, pescado fresco, huevo") con una sola
+        # cláusula suave de dieta — así aterrizaba atún en pools vegetarianos. "" para balanced.
+        f"{ctx['diet_directive_context']}\n"
+        # [P1-COUNTRY-SYSTEM-F1 · 2026-08-16] (T3) Bloque de país — "" para DO/knob-off.
+        f"{ctx['country_context']}\n"
         f"{ctx['variety_prompt']}\n{ctx['pantry_context']}\n{ctx['pantry_drift_context']}\n{ctx['prices_context']}\n"
         f"{ctx['adherence_context']}\n{ctx['success_patterns_context']}\n"
         f"{ctx['temporal_adherence_context']}\n"
@@ -7042,7 +7640,11 @@ async def plan_skeleton_node(state: PlanState) -> dict:
     if PROMPT_CACHE_SYSTEM_MESSAGE:
         prompt_text = dynamic_prompt_text
     else:
-        prompt_text = dynamic_prompt_text + PLANNER_SYSTEM_PROMPT
+        # [P1-COUNTRY-SYSTEM-F1 · 2026-08-16 (FINAL-FIX F1a)] país vía `ctx['country']` (T3's
+        # shared-context derivation, reusada — no re-deriva `country_for_form_data(form_data)`
+        # dentro del nodo). DO/knob-off ⇒ build_planner_system_prompt retorna PLANNER_SYSTEM_
+        # PROMPT intacto (byte-idéntico).
+        prompt_text = dynamic_prompt_text + build_planner_system_prompt(ctx['country'])
 
     if state.get("reflection_directive"):
         prompt_text = f"🧠 DIRECTIVA META-LEARNING (PRIORIDAD MÁXIMA):\n{state['reflection_directive']}\n\n" + prompt_text
@@ -7116,13 +7718,13 @@ async def plan_skeleton_node(state: PlanState) -> dict:
         logger.info(f"🔀 [RETRY MUTATION] Modelo '{planner_model}' + temp={base_temp} para intento {attempt}")
 
     # [P1-NET-LUNA · 2026-07-31] Dispatch por proveedor: `MEALFIT_PLANNER_MODEL` puede apuntar
-    # a un modelo OpenAI — ChatDeepSeek lo mandaría al base_url equivocado (trampa latente
+    # a un modelo OpenAI — ChatGLM lo mandaría al base_url equivocado (trampa latente
     # hermana de la del corrector quirúrgico; misma clase P1-DAYGEN-LUNA-CANARY).
-    planner_llm = (ChatOpenAIInstrumented if is_openai_model(planner_model) else ChatDeepSeek)(
+    planner_llm = (ChatOpenAIInstrumented if is_openai_model(planner_model) else ChatGLM)(
         model=planner_model,
         temperature=base_temp,
         max_retries=0,
-        timeout=45,
+        timeout=PLANNER_LLM_TIMEOUT_S,  # [P1-SKELETON-SHORT-REASK] era 45 fijo
     ).with_structured_output(PlanSkeletonModel)
 
     # P1-Q3: CB per-modelo. Si pro está saturado, perfiles complejos paran;
@@ -7143,13 +7745,17 @@ async def plan_skeleton_node(state: PlanState) -> dict:
             # [P1-PROMPT-CACHE-SYSTEMMSG · 2026-05-15] Cuando el knob está
             # habilitado, enviar SystemMessage + HumanMessage como system_instruction separado.
             if PROMPT_CACHE_SYSTEM_MESSAGE:
+                # [P1-COUNTRY-SYSTEM-F1 · 2026-08-16 (FINAL-FIX F1a)] país vía `ctx['country']`
+                # (T3's shared-context derivation, reusada — no re-deriva
+                # `country_for_form_data(form_data)` dentro del nodo). DO/knob-off ⇒
+                # build_planner_system_prompt retorna PLANNER_SYSTEM_PROMPT intacto (byte-idéntico).
                 planner_payload = [
-                    SystemMessage(content=PLANNER_SYSTEM_PROMPT),
+                    SystemMessage(content=build_planner_system_prompt(ctx['country'])),
                     HumanMessage(content=prompt_text),
                 ]
             else:
                 planner_payload = prompt_text
-            res = await _safe_ainvoke(_llm, planner_payload, timeout=50.0)
+            res = await _safe_ainvoke(_llm, planner_payload, timeout=float(PLANNER_LLM_TIMEOUT_S + 5))
             # [P1-PLANNER-NONE-GUARD · 2026-06-15] El parser de structured-output devuelve None cuando
             # el modelo NO emite tool-call (texto plano bajo carga). Tratarlo como fallo recuperable.
             if res is None:
@@ -7180,7 +7786,7 @@ async def plan_skeleton_node(state: PlanState) -> dict:
     except Exception as _planner_flash_err:
         # [P1-PLANNER-PRO-FALLBACK · 2026-06-26] Sin esta red, si el breaker COMPARTIDO de flash se abre
         # bajo carga concurrente (otros usuarios), o flash timeoutea 3×, el planner muere → EXTREME
-        # GRACEFUL DEGRADATION → plan de emergencia band-0.0 ("IA saturada") con DeepSeek SANO (incidente
+        # GRACEFUL DEGRADATION → plan de emergencia band-0.0 ("IA saturada") con GLM SANO (incidente
         # user d4bc3af5, corr=0dcc4bf8, 2026-06-26 07:25: breaker flash abierto por un user vegano
         # concurrente). 1 intento con PRO (breaker independiente, menos cargado) antes de degradar. Si el
         # planner YA es pro (paid/forced) o pro también falla → degradación genuina. Anchor: P1-PLANNER-PRO-FALLBACK.
@@ -7191,9 +7797,9 @@ async def plan_skeleton_node(state: PlanState) -> dict:
                 f"reintentando esqueleto con '{_PRO_MODEL_NAME}'."
             )
             # [P1-NET-LUNA · 2026-07-31] La red default es gpt-5.6-luna (OpenAI, proveedor
-            # DISTINTO): justo en este path — DeepSeek saturado — es donde la diversidad de
-            # proveedor vale oro (con pro, un rate-limit de DeepSeek tumbaba flash Y la red).
-            _pro_planner_llm = (ChatOpenAIInstrumented if is_openai_model(_PRO_MODEL_NAME) else ChatDeepSeek)(
+            # DISTINTO): justo en este path — GLM saturado — es donde la diversidad de
+            # proveedor vale oro (con pro, un rate-limit de GLM tumbaba flash Y la red).
+            _pro_planner_llm = (ChatOpenAIInstrumented if is_openai_model(_PRO_MODEL_NAME) else ChatGLM)(
                 model=_PRO_MODEL_NAME, temperature=base_temp, max_retries=0, timeout=90,
             ).with_structured_output(PlanSkeletonModel)
             _pro_planner_cb = _get_circuit_breaker(_PRO_MODEL_NAME)
@@ -7219,14 +7825,63 @@ async def plan_skeleton_node(state: PlanState) -> dict:
     else:
         skeleton = response.dict()
 
+    # [P1-SKELETON-SHORT-REASK · 2026-09-02] Esqueleto corto: re-pedir una vez con la orden
+    # explícita de N días; si sigue corto, reutilizar los días del intento anterior. Ver helpers.
+    _skel_days_now = skeleton.get("days") or []
+    if SKELETON_SHORT_REASK_ENABLED and len(_skel_days_now) < days_in_chunk:
+        logger.warning(
+            f"⚠️ [P1-SKELETON-SHORT-REASK] El planificador devolvió {len(_skel_days_now)}/{days_in_chunk} "
+            f"días (intento #{attempt}, is_re_roll={is_re_roll}) → re-pido UNA vez con la orden explícita."
+        )
+        try:
+            _reask_text = _skeleton_short_reask_directive(len(_skel_days_now), days_in_chunk) + prompt_text
+            if PROMPT_CACHE_SYSTEM_MESSAGE:
+                _reask_payload = [
+                    SystemMessage(content=build_planner_system_prompt(ctx['country'])),
+                    HumanMessage(content=_reask_text),
+                ]
+            else:
+                _reask_payload = _reask_text
+            _reask_res = await _safe_ainvoke(planner_llm, _reask_payload, timeout=float(PLANNER_LLM_TIMEOUT_S + 5))
+            _reask_skel = (
+                _reask_res.model_dump() if hasattr(_reask_res, "model_dump")
+                else (_reask_res if isinstance(_reask_res, dict) else None)
+            )
+            _reask_days = (_reask_skel or {}).get("days") or []
+            if len(_reask_days) > len(_skel_days_now):
+                skeleton = _reask_skel
+                _skel_days_now = _reask_days
+                logger.info(f"✅ [P1-SKELETON-SHORT-REASK] Re-pedido devolvió {len(_reask_days)}/{days_in_chunk} días.")
+            else:
+                logger.warning(f"⚠️ [P1-SKELETON-SHORT-REASK] Re-pedido sigue corto ({len(_reask_days)}/{days_in_chunk}).")
+        except Exception as _reask_err:
+            logger.warning(f"⚠️ [P1-SKELETON-SHORT-REASK] Re-pedido falló ({type(_reask_err).__name__}: {str(_reask_err)[:120]}).")
+    if SKELETON_SHORT_REASK_ENABLED and len(_skel_days_now) < days_in_chunk and attempt > 1:
+        _prev_skel_days = (state.get("plan_skeleton") or {}).get("days") or []
+        _merged_days, _reused_nums = _merge_short_skeleton_days(_skel_days_now, _prev_skel_days, days_in_chunk)
+        if _reused_nums:
+            skeleton["days"] = _merged_days
+            skeleton["_skeleton_reused_days"] = list(_reused_nums)
+            logger.warning(
+                f"♻️ [P1-SKELETON-SHORT-REASK] Días {_reused_nums} reutilizados del esqueleto del intento anterior "
+                f"({len(_merged_days)}/{days_in_chunk}); los workers generan comidas nuevas igual."
+            )
+
     # Guardar técnicas seleccionadas para persistencia
     skeleton["_selected_techniques"] = selected_techniques
 
     # ── Scrub determinista del skeleton: enforce caps de proteínas restringidas ──
     # El planner LLM a veces ignora el cap del prompt e incluye atún/embutidos en múltiples
     # días. Aquí lo enforzamos a nivel estructural antes de que los workers reciban el pool.
-    _SKELETON_RESTRICTED = ['atún', 'atun', 'salami', 'longaniza', 'chorizo']
-    _EMBUTIDO_KEYS = ['salami', 'longaniza', 'chorizo']
+    # [P1-SEEDER-CURED-MEAT-BETA · 2026-08-23] El scrub consume el mismo SSOT
+    # que pondera el seeder; la copia DO de cinco términos dejaba pasar Morcilla,
+    # Cecina, Chistorra, Sobrasada, Butifarra y Lomo embuchado en los pools beta.
+    # Import lazy: ai_helpers tiene imports lazy de este módulo y uno top-level
+    # crearía un ciclo durante el arranque.
+    from ai_helpers import (_CURED_OR_PROCESSED_TOKENS as _CURADOS_RESTRICTED,
+                            _token_matches_wb as _curado_matches_wb)
+    _SKELETON_RESTRICTED = ('atún', 'atun', *_CURADOS_RESTRICTED)
+    _EMBUTIDO_KEYS = _CURADOS_RESTRICTED
 
     # [P1-FORM-AUDIT-BATCH · 2026-07-03] (C1) Escalera de fallback de proteína consciente de
     # alergias + dieta. Cada candidato lista sus tokens gatillo (si algún token aparece en las
@@ -7270,13 +7925,13 @@ async def plan_skeleton_node(state: PlanState) -> dict:
     for restricted in _SKELETON_RESTRICTED:
         days_with_it = [
             i for i, d in enumerate(skel_days)
-            if any(restricted in (p or '').lower() for p in d.get('protein_pool', []))
+            if any(_curado_matches_wb(p, (restricted,)) for p in d.get('protein_pool', []))
         ]
         if len(days_with_it) > 1:
             keep_idx = days_with_it[0]
             for idx in days_with_it[1:]:
                 original = skel_days[idx].get('protein_pool', [])
-                filtered = [p for p in original if restricted not in (p or '').lower()]
+                filtered = [p for p in original if not _curado_matches_wb(p, (restricted,))]
                 removed = [p for p in original if p not in filtered]
                 if removed:
                     skel_days[idx]['protein_pool'] = filtered
@@ -7286,13 +7941,84 @@ async def plan_skeleton_node(state: PlanState) -> dict:
     # 2. No combinar atún + embutido en el mismo día — remover embutidos si coexisten con atún
     for d in skel_days:
         pool = d.get('protein_pool', [])
-        pool_lower = ' '.join((p or '').lower() for p in pool)
-        has_atun = 'atún' in pool_lower or 'atun' in pool_lower
-        embutidos_in_pool = [p for p in pool if any(emb in (p or '').lower() for emb in _EMBUTIDO_KEYS)]
+        has_atun = any(_curado_matches_wb(p, ('atún', 'atun')) for p in pool)
+        embutidos_in_pool = [p for p in pool if _curado_matches_wb(p, _EMBUTIDO_KEYS)]
         if has_atun and embutidos_in_pool:
             d['protein_pool'] = [p for p in pool if p not in embutidos_in_pool]
             logger.info(f"🧹 [SKELETON SCRUB] Día {d.get('day')}: eliminados embutidos "
                   f"{embutidos_in_pool} (conflicto con atún presente)")
+
+    # 2.5 [P1-DAYGEN-DIET-CONVERGE · 2026-08-07] Scrub de DIETA sobre los pools del skeleton.
+    # El planner LLM escribía proteína animal en pools de veganos (benchmark 2026-08-07, issue #9:
+    # camarones/atún/lácteos en planes vegan/vegetarian → rechazo crítico) — y el pool se convierte
+    # aguas abajo en la lista de AUTORIZADOS del day-gen (`build_day_assignment_context` invierte a
+    # "PROHIBIDO ABSOLUTO" lo que NO está): un pool sin filtrar AUTORIZA la violación. Matching =
+    # `_scan_diet_violations` reusado ítem a ítem (cero 4ª tabla). Pools vaciados caen al fallback
+    # del paso 3, que ya es diet+allergy-aware. Rollback: MEALFIT_SKELETON_DIET_SCRUB=false.
+    # tooltip-anchor: P1-DAYGEN-DIET-CONVERGE
+    if SKELETON_DIET_SCRUB_ENABLED:
+        _diet_scrub_type = form_data.get("dietType") or form_data.get("diet")
+        if _canonicalize_diet_type(_diet_scrub_type) != "balanced":
+            for _dsd in skel_days:
+                for _pool_key in ("protein_pool", "carb_pool", "fruit_pool"):
+                    _pool = _dsd.get(_pool_key) or []
+                    _kept = [p for p in _pool if not _diet_pool_item_banned(p, _diet_scrub_type)]
+                    if len(_kept) != len(_pool):
+                        _removed = [p for p in _pool if p not in _kept]
+                        _dsd[_pool_key] = _kept
+                        logger.warning(
+                            f"🥦 [SKELETON DIET SCRUB] Día {_dsd.get('day')}: {_pool_key} pierde "
+                            f"{_removed} — el planner los asignó pese a la dieta declarada "
+                            f"('{_diet_scrub_type}'); sin este scrub el day-gen los tenía AUTORIZADOS")
+
+    # [P1-REVIEWER-VERIFICATION-ADVISORY · 2026-08-08] Scrub de ALÉRGENOS sobre los pools —
+    # el scrub de arriba es diet-only y declaró «limpio» un pool con Huevos+Queso para un
+    # alérgico a huevo/lácteos (run 31232856541): el pool es la lista de AUTORIZADOS del
+    # day-gen, así que un alérgeno asignado es un alérgeno AUTORIZADO. Mismo patrón mini-plan.
+    if SKELETON_ALLERGEN_SCRUB_ENABLED:
+        _scrub_allergies = form_data.get("allergies")
+        if _has_real_medical_flags(_scrub_allergies):
+            for _dsd in skel_days:
+                for _pool_key in ("protein_pool", "carb_pool", "fruit_pool"):
+                    _pool = _dsd.get(_pool_key) or []
+                    _kept = [p for p in _pool if not _allergen_pool_item_banned(p, _scrub_allergies)]
+                    if len(_kept) != len(_pool):
+                        _removed = [p for p in _pool if p not in _kept]
+                        _dsd[_pool_key] = _kept
+                        logger.warning(
+                            f"🛡 [SKELETON ALLERGEN SCRUB] Día {_dsd.get('day')}: {_pool_key} pierde "
+                            f"{_removed} — el planner asignó alérgeno(s) declarados; sin este scrub "
+                            f"el day-gen los tenía AUTORIZADOS")
+
+    # [P1-CONDITION-SAFETY-NOTES · 2026-08-09] Scrub de contraindicados de EMBARAZO sobre los
+    # pools: si guanábana/cundeamor nunca entran a la lista de AUTORIZADOS del day-gen, no hay
+    # nada que el reviewer rechace después (el sub determinista de la capa clínica queda como
+    # red para lo que el LLM improvise fuera del pool). Perseguir el rechazo fruta-por-fruta es
+    # whack-a-mole; excluir en la FUENTE lo cierra. Tokens = triggers de las subs SSOT
+    # (condition_rules), sin lista paralela que driftee.
+    if SKELETON_ALLERGEN_SCRUB_ENABLED:
+        try:
+            from nutrition_calculator import _is_pregnancy_or_lactation as _sps_ipl
+            if _sps_ipl(form_data):
+                from condition_rules import (_PREGNANCY_UTEROTONIC_SUBS as _sps_ut,
+                                             _PREGNANCY_AVOID_FRUIT_SUBS as _sps_af)
+                from constants import strip_accents as _sps_sa
+                _preg_avoid = tuple(_sps_sa(str(t).lower())
+                                    for row in (_sps_ut + _sps_af) for t in row[0])
+                for _dsd in skel_days:
+                    for _pool_key in ("protein_pool", "carb_pool", "fruit_pool"):
+                        _pool = _dsd.get(_pool_key) or []
+                        _kept = [p for p in _pool
+                                 if not any(_name_has_token(_t, _sps_sa(str(p).lower()))
+                                            for _t in _preg_avoid)]
+                        if len(_kept) != len(_pool):
+                            _dsd[_pool_key] = _kept
+                            logger.warning(
+                                f"🤰 [SKELETON PREGNANCY SCRUB] Día {_dsd.get('day')}: {_pool_key} "
+                                f"pierde {[p for p in _pool if p not in _kept]} — contraindicado "
+                                f"en embarazo (guanábana/cundeamor), excluido en la FUENTE")
+        except Exception as _sps_e:
+            logger.warning(f"[SKELETON PREGNANCY SCRUB] no-op: {type(_sps_e).__name__}: {_sps_e}")
 
     # 3. Fallback: si algún pool quedó vacío tras scrub, inyectar una proteína SEGURA.
     # [P1-FORM-AUDIT-BATCH · 2026-07-03] (audit form · contradicción C1) El fallback era
@@ -7518,17 +8244,16 @@ def harden_day_pools(skeleton: dict, form_data: dict, conditions=None, *, cohort
     # excluimos DURAMENTE del protein_pool (slot principal), universal (goal-independiente). Sigue
     # permitida como saborizante/acompañante (que el day-gen añade fuera del pool). Nunca vacía el pool.
     if HARDEN_SALTCURED_MAIN:
-        from constants import strip_accents as _sa5
-        # espeja ai_helpers._SALT_CURED_PROTEIN_TOKENS (P1-SODIUM-BOMB-POOL). tooltip-anchor: A1-SALTCURED-NEVER-MAIN
-        _SALT_CURED_NEVER_MAIN = ("bacalao", "arenque", "salami", "salchichon", "pepperoni",
-                                  "mortadela", "tocino", "panceta", "longaniza", "chorizo",
-                                  "salchicha", "embutido", "jamon")
+        # [P1-SEEDER-CURED-MEAT-BETA · 2026-08-23] Sin copia local: clase 5
+        # comparte el vocabulario beta y el matcher word-boundary del seeder.
+        from ai_helpers import (_CURED_OR_PROCESSED_TOKENS as _SALT_CURED_NEVER_MAIN,
+                                _token_matches_wb as _saltcured_matches_wb)
         for _d in days:
             _orig = _d.get("protein_pool") or []
             if not _orig:
                 continue
             _kept = [p for p in _orig
-                     if not any(t in _sa5(str(p).lower()) for t in _SALT_CURED_NEVER_MAIN)]
+                     if not _saltcured_matches_wb(p, _SALT_CURED_NEVER_MAIN)]
             if len(_kept) < len(_orig) and _kept:
                 counts["saltcured_removed"] += (len(_orig) - len(_kept))
                 _d["protein_pool"] = _kept
@@ -7966,11 +8691,17 @@ async def generate_days_parallel_node(state: PlanState) -> dict:
                 _dg_targets = None
         except Exception:
             _dg_targets = None
+        # [P1-COUNTRY-SYSTEM-F1 · 2026-08-16 (T4)] país vía la ÚNICA puerta (T1) — knob apagado ⇒
+        # 'DO' siempre ⇒ assignment_context toma el camino DO byte-idéntico.
+        from constants import country_for_form_data
         assignment_context = build_day_assignment_context(
             skeleton_day, day_num, day_name=day_name, daily_targets=_dg_targets,
             # [P1-STAPLE-FOODS · 2026-08-02] básicos del usuario + modo universo-chico.
             user_staples=_raw_staple_foods(form_data),
             small_universe=_small_universe_active(form_data),
+            # [P1-DIET-BLIND-DIRECTIVES · 2026-08-08] bloque de diversidad de proteína por dieta.
+            diet_type=(form_data or {}).get("dietType"),
+            country=country_for_form_data(form_data),
         )
 
         random_seed = random.randint(10000, 99999)
@@ -8000,6 +8731,11 @@ async def generate_days_parallel_node(state: PlanState) -> dict:
             # reales. Antes solo llegaban al esqueleto; ahora también al day-gen (incluido Flash en
             # tier gratis). "" si el perfil no aplica. tooltip-anchor: P1-MED-CONTEXT-DAYGEN
             f"{ctx['clinical_directives_context']}\n"
+            # [P1-DAYGEN-DIET-CONVERGE · 2026-08-07] Directiva de DIETA al nodo que elige los
+            # ingredientes — la dieta solo viajaba enterrada en el JSON de form_data. "" balanced.
+            f"{ctx['diet_directive_context']}\n"
+            # [P1-COUNTRY-SYSTEM-F1 · 2026-08-16] (T3) Bloque de país — "" para DO/knob-off.
+            f"{ctx['country_context']}\n"
             # [P1-MICRONUTRIENT-STEER · 2026-06-24] Pisos numéricos de micros alcanzables al day-gen
             # (densidad nutricional cuantitativa, no solo cantidad). "" cuando knob OFF/no aplica.
             f"{ctx['micronutrient_targets_context']}\n"
@@ -8014,10 +8750,16 @@ async def generate_days_parallel_node(state: PlanState) -> dict:
         if PROMPT_CACHE_SYSTEM_MESSAGE:
             prompt_text = dynamic_day_prompt
         else:
-            prompt_text = dynamic_day_prompt + DAY_GENERATOR_SYSTEM_PROMPT
+            # [P1-DIET-BLIND-DIRECTIVES · 2026-08-08] Render por dieta también en el path sin cache.
+            # [P1-COUNTRY-SYSTEM-F1 · 2026-08-16] + país (T2): country_for_form_data es la ÚNICA
+            # puerta (T1) — knob apagado ⇒ 'DO' siempre ⇒ camino actual exacto.
+            from prompts.day_generator import build_day_generator_system_prompt as _bdgsp_nc
+            from constants import country_for_form_data
+            _nc_country = country_for_form_data(form_data)
+            prompt_text = dynamic_day_prompt + _bdgsp_nc((form_data or {}).get("dietType"), _nc_country)
 
-        # [P1-DEEPSEEK-FLASH-FIRST · 2026-06-28] CADENA de modelos por costo (solo DeepSeek): deepseek-v4-flash → deepseek-v4-pro
-        # (bariátrico → [deepseek-v4-pro]). El day-gen avanza al siguiente en CADA fallo (los 3 reintentos de tenacity) o si
+        # [P1-FLASH-FIRST · 2026-06-28] CADENA de modelos por costo (solo GLM): glm-5.3-flash → glm-5.3
+        # (bariátrico → [glm-5.3]). El day-gen avanza al siguiente en CADA fallo (los 3 reintentos de tenacity) o si
         # el CB del modelo actual está abierto. Reusa el escalado skeleton-fidelity de P4-MODEL-1 dentro de _day_model_chain.
         _day_chain = _day_model_chain(
             form_data,
@@ -8029,7 +8771,7 @@ async def generate_days_parallel_node(state: PlanState) -> dict:
         from tools_nutrition import NUTRITION_TOOLS, consultar_nutricion
 
         def _build_day_llm(_model: str):
-            """[P1-DEEPSEEK-FLASH-FIRST] Construye el LLM (+tools/json) para UN modelo del chain (deepseek-v4-flash/pro).
+            """[P1-FLASH-FIRST] Construye el LLM (+tools/json) para UN modelo del chain (glm-5.3-flash/pro).
             JSON mode incompatible con tool-calling → no bindea tools."""
             _kw = dict(
                 model=_model,
@@ -8038,12 +8780,12 @@ async def generate_days_parallel_node(state: PlanState) -> dict:
                 timeout=90,
             )
             if DAYGEN_JSON_MODE:
-                # [P1-DEEPSEEK-JSON-MODE · 2026-06-13] Fuerza salida JSON válida (GLM y DeepSeek lo soportan).
+                # [P1-GLM-JSON-MODE · 2026-06-13] Fuerza salida JSON válida (GLM y GLM lo soportan).
                 # [P1-DAYGEN-LUNA-CANARY · 2026-07-26] Verificado que gpt-5.6-luna también lo soporta.
                 _kw["model_kwargs"] = {"response_format": {"type": "json_object"}}
             # [P1-DAYGEN-LUNA-CANARY · 2026-07-26] Proveedor por prefijo del modelo — esto es lo
             # que el comentario de arriba prometía ("provider correcto por prefijo") y no hacía:
-            # con un modelo OpenAI en el chain, `ChatDeepSeek` lo mandaría al base_url de DeepSeek
+            # con un modelo OpenAI en el chain, `ChatGLM` lo mandaría al base_url de GLM
             # con la key equivocada.
             # [P1-LUNA-USAGE-BLIND · 2026-07-26] Se construyen las clases LOCALES, no la fábrica
             # `llm_provider.build_chat_llm`: la fábrica devuelve las bases, sin el mixin de
@@ -8068,15 +8810,12 @@ async def generate_days_parallel_node(state: PlanState) -> dict:
                 _kw["timeout"] = DAYGEN_EFFORT_TIMEOUT_S
                 if _es_openai:
                     _kw["reasoning_effort"] = "xhigh" if _eff == "max" else _eff
-                elif _eff != "none":
-                    # DeepSeek: extra_body explícito GANA sobre el disabled-default
-                    # del wrapper (merge por setdefault). "none" no inyecta nada:
-                    # el default del wrapper ya es thinking apagado.
-                    _kw["extra_body"] = {"thinking": {
-                        "type": "enabled",
-                        "effort": "max" if _eff == "xhigh" else _eff,
-                    }}
-            _llm = (ChatOpenAIInstrumented if _es_openai else ChatDeepSeek)(**_kw)
+                else:
+                    # [P0-GLM-MIGRATION · 2026-09-02] GLM razona siempre; el effort
+                    # del tier va como `reasoning_effort` y el wrapper lo traduce al
+                    # vocabulario de Z.ai (medium→high, xhigh→max, none→low).
+                    _kw["reasoning_effort"] = _eff
+            _llm = (ChatOpenAIInstrumented if _es_openai else ChatGLM)(**_kw)
             if DAYGEN_BIND_NUTRITION_TOOL and not DAYGEN_JSON_MODE:
                 return _llm.bind_tools(NUTRITION_TOOLS)
             # [L1-UNBIND-NUTRITION-TOOL] tool des-enlazada (la tabla viaja en el SystemMessage cacheado).
@@ -8096,9 +8835,16 @@ async def generate_days_parallel_node(state: PlanState) -> dict:
             # Restringe al LLM a los alimentos con precio La Sirena; "" si el knob está off.
             # [P2-VERIFIED-CATALOG-NOT-FILTERED · 2026-06-22] Se pasa form_data → el catálogo excluye
             # alérgenos/dieta del usuario (cache keyed por set excluido; base sin restricción = idéntico).
-            day_system_instruction = _DAY_SYSTEM_INSTRUCTION_CACHED + _get_verified_catalog_instruction(form_data)
+            # [P1-DIET-BLIND-DIRECTIVES · 2026-08-08] Render por dieta (balanced = byte-idéntico).
+            # [P2-CATALOG-ACHIOTE-MX-PR · 2026-08-23] La regla 5 y el bloque de catálogo son las
+            # DOS superficies del mismo defecto, y sólo aquí conviven: el strip se aplica sobre
+            # el texto ya ensamblado, con los nombres que el propio bloque acaba de ofrecer.
+            # Determinista por (alergias/dieta, país) ⇒ el prompt-cache sigue dando hits.
+            day_system_instruction = _day_system_instruction_for_diet(form_data) + _get_verified_catalog_instruction(form_data)
+            day_system_instruction = _strip_offered_prohibited_examples_for(day_system_instruction, form_data)
         else:
             streaming_prompt = prompt_text + _DAY_SCHEMA_INSTRUCTION + _get_verified_catalog_instruction(form_data)
+            streaming_prompt = _strip_offered_prohibited_examples_for(streaming_prompt, form_data)
             day_system_instruction = None
 
         # P1-10: HumanMessage/AIMessage/ToolMessage están a nivel módulo
@@ -8111,7 +8857,7 @@ async def generate_days_parallel_node(state: PlanState) -> dict:
             before_sleep=lambda rs: logger.warning(f"⚠️  [DÍA {day_num}] Reintento #{rs.attempt_number}...")
         )
         async def invoke_day():
-            # [P1-DEEPSEEK-FLASH-FIRST] Selección de modelo del chain con cascada: usa el idx actual (avanza en cada fallo) y, si
+            # [P1-FLASH-FIRST] Selección de modelo del chain con cascada: usa el idx actual (avanza en cada fallo) y, si
             # el CB de ese modelo está abierto, salta al siguiente del chain DENTRO de esta misma llamada. Construye el
             # LLM (provider correcto por prefijo) para el modelo elegido.
             _idx = min(_chain_state["idx"], len(_day_chain) - 1)
@@ -8126,7 +8872,7 @@ async def generate_days_parallel_node(state: PlanState) -> dict:
                 raise LLMCircuitOpenError(f"Circuit Breaker OPEN para todo el chain {_day_chain} - LLM cascade failure prevented")
             day_llm_with_tools = _build_day_llm(day_model)
             if _idx > 0:
-                logger.info(f"🔻 [P1-DEEPSEEK-FLASH-FIRST] DÍA {day_num}: escalada a modelo #{_idx+1}/{len(_day_chain)} ({day_model}) "
+                logger.info(f"🔻 [P1-FLASH-FIRST] DÍA {day_num}: escalada a modelo #{_idx+1}/{len(_day_chain)} ({day_model}) "
                             f"tras fallo del anterior.")
             try:
                 # [P1-PROMPT-CACHE-SYSTEMMSG · 2026-05-15] SystemMessage al
@@ -8228,8 +8974,8 @@ async def generate_days_parallel_node(state: PlanState) -> dict:
                 # [P1-ORCH-1/2 · 2026-05-28] Helper centralizado: excluye 5xx
                 # transitorios + 429 spending-cap (y activa el latch del cap).
                 await _record_cb_failure_unless_transient(_day_cb, e)  # P1-Q3
-                # [P1-DEEPSEEK-FLASH-FIRST] Avanza al siguiente modelo del chain → el próximo reintento de tenacity usará
-                # deepseek-v4-flash y luego deepseek-v4-pro (cascada por costo: barato primero, pro como última instancia).
+                # [P1-FLASH-FIRST] Avanza al siguiente modelo del chain → el próximo reintento de tenacity usará
+                # glm-5.3-flash y luego glm-5.3 (cascada por costo: barato primero, pro como última instancia).
                 _chain_state["idx"] = _idx + 1
                 raise e
 
@@ -8358,6 +9104,17 @@ async def generate_days_parallel_node(state: PlanState) -> dict:
                 # El prompt (regla 8) ya pide emitirlos separados; esto lo GARANTIZA. tooltip-anchor: P3-SALT-SEPARATE-LINE
                 _sl = _scrubbed.lower()
                 if _re.search(r'\bsal\b', _sl) and _re.search(r'\bpimienta\b', _sl):
+                    # [P1-DAYGEN-DIET-CONVERGE · 2026-08-07] Gate clínico del splitter: para HTA/ERC
+                    # este backstop FABRICABA un renglón "Sal al gusto" por comida — la razón #1 de
+                    # rechazo del reviewer en perfiles HTA (benchmark issue #9: "¼ cdta de sal en
+                    # desayuno, almuerzo y cena ≈ 1.725 mg de sodio solo de sal añadida"). Con sodio
+                    # restringido: solo pimienta — la sal ni a la receta ni a la lista de compras.
+                    # Rollback: MEALFIT_SALT_LINE_CONDITION_GATE=false.
+                    if SALT_LINE_CONDITION_GATE and _salt_restricted_profile(form_data):
+                        _new_ings.append("Pimienta negra al gusto")
+                        logger.info(f"🧂 [DÍA {day_num}/P1-DAYGEN-DIET-CONVERGE] '{_ing}' → solo "
+                                    f"'Pimienta negra al gusto' (sodio restringido: HTA/renal activa)")
+                        continue
                     _new_ings.append("Sal al gusto")
                     _new_ings.append("Pimienta negra al gusto")
                     logger.info(f"🧂 [DÍA {day_num}/P3-SALT-SEPARATE-LINE] Separado '{_ing}' → "
@@ -9178,7 +9935,7 @@ async def adversarial_judge_node(state: PlanState) -> dict:
     # si calidad regresiona en un perfil específico.
     _judge_model = _judge_model_name()
     _judge_cb = _get_circuit_breaker(_judge_model)
-    judge_llm = ChatDeepSeek(
+    judge_llm = ChatGLM(
         model=_judge_model,
         temperature=0.2,
         max_retries=1
@@ -9393,6 +10150,44 @@ class CritiqueEvaluation(BaseModel):
     slot_coherence_score: int = Field(description="Coherencia comida↔horario (1-10): ¿Las meriendas son snacks ligeros y no platos fuertes? ¿La cena evita repetir proteína/carbo del almuerzo?")
     needs_correction: bool = Field(description="True si >=2 scores son < 6, o si algún score es < 4")
     suggestions: str = Field(description="Si needs_correction es True, especifica exactamente qué cambiar.")
+
+
+# [P1-COUNTRY-SYSTEM-F1 · 2026-08-16] (T3) `cultural_score` por país — dos artefactos ligados:
+# el texto del criterio #3 dentro de `_CRITIQUE_EVALUATOR_SYSTEM_INSTRUCTION` (SystemMessage,
+# estático a import-time) Y el `Field(description=...)` de `CritiqueEvaluation.cultural_score`
+# (va al LLM como parte del schema de with_structured_output — el modelo LEE esa descripción).
+# DO/desconocido ⇒ literalmente los objetos globales (mismo `is`, cache/schema intactos). Beta
+# ⇒ variante memoizada: `create_model(__base__=CritiqueEvaluation, ...)` hereda TODO el resto
+# del schema sin reescribirlo (verificado: no muta la clase base, ver test suite) y solo
+# sobreescribe la descripción de `cultural_score`.
+_CRITIQUE_COUNTRY_ARTIFACT_CACHE: dict = {}
+
+
+def _critique_evaluator_artifacts_for_country(country: str):
+    """Devuelve `(system_instruction, CritiqueEvaluation_variant)` para el evaluador del
+    self-critique. tooltip-anchor: _critique_evaluator_artifacts_for_country
+    (test_p1_country_system_f1.py)"""
+    from constants import canonicalize_country, COUNTRY_PROFILES
+    canon = canonicalize_country(country)
+    if canon == "DO":
+        return _CRITIQUE_EVALUATOR_SYSTEM_INSTRUCTION, CritiqueEvaluation
+    cached = _CRITIQUE_COUNTRY_ARTIFACT_CACHE.get(canon)
+    if cached is not None:
+        return cached
+    name_es = COUNTRY_PROFILES.get(canon, {}).get("name_es", canon)
+    instruction = _CRITIQUE_EVALUATOR_SYSTEM_INSTRUCTION.replace(
+        "3. Coherencia cultural Dominicana (cultural_score): ¿El desayuno tiene sentido? ¿La cena es coherente?",
+        f"3. Coherencia con la cocina de {name_es} (cultural_score): ¿El desayuno tiene sentido? ¿La cena es coherente?",
+    )
+    model_cls = create_model(
+        f"CritiqueEvaluationBeta_{canon}",
+        __base__=CritiqueEvaluation,
+        cultural_score=(int, Field(description=f"Coherencia con la cocina de {name_es} (1-10)")),
+    )
+    result = (instruction, model_cls)
+    _CRITIQUE_COUNTRY_ARTIFACT_CACHE[canon] = result
+    return result
+
 
 class CorrectedDays(BaseModel):
     days: list[SingleDayPlanModel] = Field(description="Lista de los 3 días con las correcciones aplicadas.")
@@ -9906,7 +10701,7 @@ def _detect_main_items(meal: dict, aliases: dict) -> set:
     substring hacía que el alias 'res' matcheara "Queso FRESco"/"FRESas"/"puRÉS" →
     `_detect_slot_incoherence` reportaba "res aparece en 4 comidas" en platos SIN res,
     inyectando correcciones FALSAS al self-critique → regens innecesarios (quema
-    DeepSeek, observado en el benchmark). `\bres` no matchea "fresco" (la 'f' precede)
+    GLM, observado en el benchmark). `\bres` no matchea "fresco" (la 'f' precede)
     pero sí tolera plurales ("huevos", "frijoles")."""
     blob = _norm_text(meal.get("name", ""))
     for ing in meal.get("ingredients", []) or []:
@@ -10001,7 +10796,7 @@ def _detect_slot_incoherence(days: list) -> list:
     return issues
 
 
-def _detect_slot_appropriateness(days: list) -> list:
+def _detect_slot_appropriateness(days: list, form_data: dict = None) -> list:
     """[P1-SLOT-APPROPRIATENESS · 2026-06-27] (audit G4) Detector DETERMINISTA de platos cuyo TIPO
     no encaja con su horario para un dominicano: arroz/locrio/pasta en DESAYUNO; "arroz de noche" /
     comida de desayuno (cereal/panqueque) en la CENA. Reusa el SSOT
@@ -10009,7 +10804,25 @@ def _detect_slot_appropriateness(days: list) -> list:
     NO flagea "Panqueques de harina de arroz" por el modificador, protegiendo la creatividad G5).
     Devuelve una lista de dicts {day, slot, name, label, hard, text}. Es el PRODUCTOR del gate de retry
     en `review_plan_node` (S1). El prompt del day_generator (§9/§15) ya pedía esto advisory; este gate lo
-    vuelve enforced. tooltip-anchor: P1-SLOT-APPROPRIATENESS"""
+    vuelve enforced. tooltip-anchor: P1-SLOT-APPROPRIATENESS
+    [P1-DIET-BLIND-DIRECTIVES · 2026-08-08] `form_data` opcional: el hint correctivo del mensaje
+    respeta la dieta (`constants.slot_positive_hint`) — el hint base sugería "pescado/pollo a la
+    plancha" dentro del rechazo de un plan vegano.
+    [P1-COUNTRY-SYSTEM-F1 · 2026-08-16 (T4)] El país se deriva UNA vez por evaluación vía
+    `country_for_form_data` (la ÚNICA puerta T1) y resuelve la tabla de reglas vía
+    `constants.slot_rules_for_country` — DO ⇒ SLOT_INAPPROPRIATE_FOODS intacta (issues duros como
+    hoy); beta ⇒ tabla soft memoizada (MISMOS tokens — siguen midiendo como telemetría).
+    [P1-COUNTRY-SYSTEM-F1 · 2026-08-16 (T4 fix-round 1)] El pase INGREDIENT-LEVEL (arroz oculto en
+    el desayuno, `slot_ingredient_violations`) NO consume `_rules_table` — la función compartida
+    sigue devolviendo hard=True incondicional — pero el flag `hard` del issue SE OVERRIDEA a False
+    para país != DO en el sitio de consumo (abajo), contenido a esta función; ningún otro
+    consumidor de `slot_ingredient_violations` hereda el override."""
+    from constants import slot_positive_hint as _sph
+    from constants import country_for_form_data, slot_rules_for_country
+    from constants import _SLOT_POSITIVE_HINT_NEUTRAL as _dsa_hint_neutral
+    _country = country_for_form_data(form_data)
+    _rules_table = slot_rules_for_country(_country)
+    _diet_for_hint = (form_data or {}).get("dietType") if isinstance(form_data, dict) else None
     issues: list = []
     for day in days or []:
         if not isinstance(day, dict):
@@ -10022,27 +10835,50 @@ def _detect_slot_appropriateness(days: list) -> list:
             if not slot_key:
                 continue
             name = m.get("name", "")
-            for v in slot_violations_for_meal_name(name, slot_key):
-                _fix = SLOT_POSITIVE_HINT.get(slot_key, "")
-                issues.append({
-                    "day": day_num, "slot": slot_key, "name": name,
-                    "label": v["label"], "hard": v["hard"],
-                    "text": (
+            for v in slot_violations_for_meal_name(name, slot_key, _rules_table):
+                # [P1-COUNTRY-SYSTEM-F1 · 2026-08-16 (FINAL-FIX F4)] `_country` ya derivado
+                # arriba (T4) — reusado, no re-derivado. DO ⇒ texto+hint EXACTOS de siempre
+                # (`_sph`, diet-aware, DO-flavored). Beta ⇒ texto neutro (sin "rechazo de
+                # coherencia cultural es-DO" ni "dominicano") + `_SLOT_POSITIVE_HINT_NEUTRAL`
+                # (T4 la construyó para build_meal_timing_rules; se wirea aquí también en vez de
+                # `_sph`, que solo varía por dieta, nunca por país).
+                if _country == "DO":
+                    _fix = _sph(slot_key, _diet_for_hint)
+                    _text = (
                         f"COMIDA FUERA DE HORARIO (rechazo de coherencia cultural es-DO): Día {day_num}, "
                         f"{slot_key}: «{name}» es {v['label']}, que no corresponde al {slot_key} dominicano. "
                         f"Cámbialo por un plato propio del horario. {_fix}"
-                    ),
+                    )
+                else:
+                    _fix = _dsa_hint_neutral.get(slot_key, "")
+                    _text = (
+                        f"COMIDA FUERA DE HORARIO: Día {day_num}, "
+                        f"{slot_key}: «{name}» es {v['label']}, que no corresponde al horario {slot_key}. "
+                        f"Cámbialo por un plato propio del horario. {_fix}"
+                    )
+                issues.append({
+                    "day": day_num, "slot": slot_key, "name": name,
+                    "label": v["label"], "hard": v["hard"],
+                    "text": _text,
                 })
             # [P2-SLOT-INGREDIENT-RICE · 2026-07-01] (audit v2 slots GAP-1, batch P2-AUDIT-V2-BATCH) El
             # detector de arriba es name-only → un desayuno con nombre inocuo ("Bowl energético criollo")
             # y "150g arroz blanco" en ingredients evadía la regla MÁS DURA del owner (desayuno-arroz =
             # hard, sin degradación). Pase ingredient-level SSOT, scope estrecho (solo desayuno + arroz
             # con excludes) — la cena ya tiene su pase ingredient-driven con autofix (_night_rice_autofix).
+            # [P1-COUNTRY-SYSTEM-F1 EXENTO: slot_ingredient_violations(ingredients, slot_key) no lleva
+            # parámetro de país en su firma — el override de "hard" ocurre en el dict del issue más
+            # abajo (país-aware, ver docstring de esta función), no en este call. Exento de wiring
+            # por argumento, no de país-consciencia.]
             try:
                 from constants import slot_ingredient_violations as _siv
-                _name_flagged = any(True for _ in slot_violations_for_meal_name(name, slot_key))
+                _name_flagged = any(True for _ in slot_violations_for_meal_name(name, slot_key, _rules_table))
                 for v in _siv(m.get("ingredients") or [], slot_key):
-                    _fix = SLOT_POSITIVE_HINT.get(slot_key, "")
+                    # La pista positiva también: `_sph` es la dominicana («mangú y fruta»), y
+                    # dejarla dejaba «dominican» dentro del texto aunque el resto se neutralizara.
+                    # Mismo par que usa la rama por NOMBRE doce líneas más arriba.
+                    _fix = (_sph(slot_key, _diet_for_hint) if _country == "DO"
+                            else _dsa_hint_neutral.get(slot_key, ""))
                     # [P2-SLOT-EVASION-TELEMETRY · 2026-07-02] (audit v4 slots) Evasión por nombre novel:
                     # el pase ingredient-level cazó lo que el name-level NO vio. Serie greppable para
                     # calibrar la cobertura semántica de tokens (¿faltan tokens de nombre? ¿qué evade?).
@@ -10053,12 +10889,35 @@ def _detect_slot_appropriateness(days: list) -> list:
                         )
                     issues.append({
                         "day": day_num, "slot": slot_key, "name": name,
-                        "label": v["label"], "hard": v["hard"],
+                        # [P1-COUNTRY-SYSTEM-F1 · 2026-08-16 (T4 fix-round 1)] `slot_ingredient_
+                        # violations` sigue devolviendo hard=True incondicional (SSOT compartida,
+                        # no tocada — ver docstring) pero el flag SE OVERRIDEA a False aquí, en el
+                        # sitio de consumo, para país != DO. Contenido: ningún otro consumidor de
+                        # `slot_ingredient_violations` (slot_coherence_backstop_for_meal en este
+                        # mismo archivo, tools.py) hereda este override.
+                        "hard": v["hard"] and _country == "DO",
                         "name_evaded": not _name_flagged,  # [P2-SLOT-EVASION-TELEMETRY]
+                        # [P2-SLOT-INGREDIENT-COUNTRY · 2026-08-21] El flag `hard` ya era
+                        # país-aware (línea de arriba, T4 fix-round 1) pero el TEXTO no, y el texto
+                        # es lo que VIAJA: entra en los `issues` del reviewer, que se le muestran al
+                        # usuario verbatim. Un español leía que su desayuno se rechaza «por
+                        # coherencia cultural es-DO» y que «no corresponde al desayuno dominicano»,
+                        # con una cita a «locrio» de propina. Es el mismo camino que obligó a
+                        # re-anclar la prosa del juez en P1-JUDGE-SEVERITY-COUNTRY.
+                        #
+                        # La REGLA no se toca: arroz para desayunar tampoco es español ni mexicano,
+                        # así que el detector sigue midiendo lo mismo en los seis países. Cambia
+                        # cómo se cuenta, no qué se cuenta. La rama por NOMBRE ya tenía su texto
+                        # neutro desde FINAL-FIX F4; ésta se le empareja.
                         "text": (
                             f"COMIDA FUERA DE HORARIO (rechazo de coherencia cultural es-DO): Día {day_num}, "
                             f"{slot_key}: «{name}» lleva {v.get('ingredient', 'arroz')} en los ingredientes — "
                             f"arroz/locrio no corresponde al desayuno dominicano aunque el nombre no lo diga. "
+                            f"Cámbialo por un plato propio del horario. {_fix}"
+                        ) if _country == "DO" else (
+                            f"COMIDA FUERA DE HORARIO: Día {day_num}, "
+                            f"{slot_key}: «{name}» lleva {v.get('ingredient', 'arroz')} en los ingredientes — "
+                            f"el arroz no corresponde al desayuno aunque el nombre no lo diga. "
                             f"Cámbialo por un plato propio del horario. {_fix}"
                         ),
                     })
@@ -10118,9 +10977,22 @@ async def self_critique_node(state: PlanState) -> dict:
     else:
         _evaluator_model = _self_critique_model_name()
     _evaluator_cb = _get_circuit_breaker(_evaluator_model)
+    # [P1-COUNTRY-SYSTEM-F1 · 2026-08-16] (T3) `cultural_score` por país: rebind LOCAL
+    # deliberado de `_CRITIQUE_EVALUATOR_SYSTEM_INSTRUCTION`/`CritiqueEvaluation` (shadow del
+    # global homónimo, SOLO dentro de este nodo) — preserva byte-a-byte el resto del cuerpo
+    # (SystemMessage/HumanMessage/legacy-path/anotación de tipo de `critique`, anclados por
+    # test_p3_cost_cut_v2.py) sin reescribirlo línea por línea. DO/knob-off ⇒ AMBOS resuelven
+    # al MISMO objeto global (mismo `is`, cache/schema intactos); beta ⇒ variante con
+    # cultural_score re-anclado a `name_es` (memoizada en _CRITIQUE_COUNTRY_ARTIFACT_CACHE).
+    from constants import country_for_form_data
+    form_data = state.get("form_data") or {}
+    _critique_country = country_for_form_data(form_data)
+    _CRITIQUE_EVALUATOR_SYSTEM_INSTRUCTION, CritiqueEvaluation = (
+        _critique_evaluator_artifacts_for_country(_critique_country)
+    )
     # [P1-NET-LUNA · 2026-07-31] Dispatch por proveedor: EVALUATOR_USE_PRO apunta a
     # _PRO_MODEL_NAME (red, default OpenAI) y MEALFIT_SELF_CRITIQUE_MODEL es knob libre.
-    evaluator_llm = (ChatOpenAIInstrumented if is_openai_model(_evaluator_model) else ChatDeepSeek)(
+    evaluator_llm = (ChatOpenAIInstrumented if is_openai_model(_evaluator_model) else ChatGLM)(
         model=_evaluator_model,
         temperature=0.1,
         max_retries=1,
@@ -10213,7 +11085,7 @@ async def self_critique_node(state: PlanState) -> dict:
     # texto ya trae día/slot/plato + hint positivo → directiva exacta para el corrector.
     if CRITIQUE_SLOT_PARITY_ENABLED:
         try:
-            for _sa_issue in _detect_slot_appropriateness(days):
+            for _sa_issue in _detect_slot_appropriateness(days, state.get("form_data")):
                 _t = _sa_issue.get("text") if isinstance(_sa_issue, dict) else None
                 if _t:
                     slot_issues.append(_t)
@@ -10386,12 +11258,12 @@ PLAN A EVALUAR (días generados):
             _corrector_model = _route_model(form_data, force_fast=True)
             _corrector_cb = _get_circuit_breaker(_corrector_model)
             # [P1-NET-LUNA · 2026-07-31] Dispatch por proveedor (uniformidad: cualquier knob
-            # de modelo puede apuntar a OpenAI; ChatDeepSeek lo mandaría al base_url equivocado).
-            corrector_llm = (ChatOpenAIInstrumented if is_openai_model(_corrector_model) else ChatDeepSeek)(
+            # de modelo puede apuntar a OpenAI; ChatGLM lo mandaría al base_url equivocado).
+            corrector_llm = (ChatOpenAIInstrumented if is_openai_model(_corrector_model) else ChatGLM)(
                 model=_corrector_model,
                 temperature=0.3,
                 # [P1-SELFCRITIQUE-RETRY · 2026-06-17] 0→1: un error de CONEXIÓN
-                # transitorio con DeepSeek dejaba el día sin corregir (el PRO-fallback
+                # transitorio con GLM dejaba el día sin corregir (el PRO-fallback
                 # solo cubre TimeoutError, no ConnectionError → caía al except genérico
                 # "Error corrigiendo Día N. Manteniendo original"). Un reintento del
                 # cliente recupera el blip sin tocar el timeout (80s) ni el CB.
@@ -10452,7 +11324,9 @@ PLAN A EVALUAR (días generados):
                         # también en el corrector (no solo en el day-gen inicial).
                         skeleton_block = (
                             f"\n⚠️ ASIGNACIÓN OBLIGATORIA DEL PLANIFICADOR (no la ignores):\n"
-                            f"{build_day_assignment_context(skeleton_day, day_num, user_staples=_raw_staple_foods(form_data), small_universe=_small_universe_active(form_data))}"
+                            # [P1-COUNTRY-SYSTEM-F1 · 2026-08-16 (T4)] reusa `_critique_country`
+                            # (T3's shadow work) — DO ⇒ camino byte-idéntico.
+                            f"{build_day_assignment_context(skeleton_day, day_num, user_staples=_raw_staple_foods(form_data), small_universe=_small_universe_active(form_data), diet_type=(form_data or {}).get('dietType'), country=_critique_country)}"
                         )
 
                     # [P5-PROMPT-D] Usa `nutrition_context_minimal` en vez del
@@ -10495,6 +11369,19 @@ PLAN A EVALUAR (días generados):
                     except Exception:
                         _other_days_block = ""
 
+                    # [P1-DIET-BLIND-DIRECTIVES · 2026-08-08] La rotación anti-huevo del contrato
+                    # de variedad ordenaba "pollo, pescado, res..." también a planes veg*.
+                    from constants import diet_protein_suggestions as _dps_cf
+                    _critique_rotation_sources = (_dps_cf((state.get("form_data") or {}).get("dietType"))
+                                                  or "pollo, pescado, res, yogurt, queso o habichuelas")
+                    # [P1-COUNTRY-SYSTEM-F1 · 2026-08-16 (T4)] `_critique_country` YA derivado arriba
+                    # (T3's shadow work, consumido acá vía closure) — DO ⇒ literal EXACTO (mismo
+                    # ejemplo criollo de siempre); beta ⇒ hint neutro sin mandato de tubérculo local.
+                    _carb_hint_line = (
+                        "  • Cambia el CARBOHIDRATO de la cena (yuca→batata, arroz→ñame, papas→casabe)."
+                        if _critique_country == "DO" else
+                        "  • Cambia el CARBOHIDRATO de la cena por otro del catálogo."
+                    )
                     correction_prompt = f"""Eres un nutricionista chef. Corrige SOLO el Día {day_num} del plan alimenticio.
 
 PROBLEMA DETECTADO: {critique.suggestions}
@@ -10505,14 +11392,14 @@ RESTRICCIONES NUTRICIONALES (respétalas siempre):
 REGLA DE PRECEDENCIA INVIOLABLE (si hay conflicto, gana esta):
 - La ASIGNACIÓN DEL PLANIFICADOR es HARD CONSTRAINT — NUNCA la violes aunque el critique pida cambiar una proteína/carbohidrato asignado.
 - Si el critique sugiere cambiar la proteína de almuerzo o cena (slot coherence violation), pero esa proteína FUE ASIGNADA por el planificador para este día, MANTÉN la proteína y resuelve la coherencia de slot por OTRO medio:
-  • Cambia el CARBOHIDRATO de la cena (yuca→batata, arroz→ñame, papas→casabe).
+{_carb_hint_line}
   • Cambia la TÉCNICA de cocción (a la plancha→guisada→al horno→al vapor).
   • Cambia el VEGETAL/acompañamiento (ensalada→sopa, fresca→cocida).
   • Cambia la PRESENTACIÓN (bowl→wrap, plato→pita).
 - Solo si NINGUNA proteína está duplicada en el skeleton (ej. skeleton dice "pavo" Y "queso") puedes alternarlas entre slots.
 
 CONTRATO DE VARIEDAD (los validadores RECHAZAN el plan COMPLETO si tu corrección lo viola):
-- HUEVO: máximo 3 comidas con huevo en TODO el plan y JAMÁS huevo en 2+ comidas del MISMO día (salvo la excepción de básicos de abajo). NO resuelvas una repetición metiendo huevo/revoltillo — usa pollo, pescado, res, yogurt, queso o habichuelas.
+- HUEVO: máximo 3 comidas con huevo en TODO el plan y JAMÁS huevo en 2+ comidas del MISMO día (salvo la excepción de básicos de abajo). NO resuelvas una repetición metiendo huevo/revoltillo — usa {_critique_rotation_sources}.
 - La MISMA proteína principal NO puede aparecer en 2+ comidas del MISMO día. ⚠️ EXCEPCIÓN [P1-STAPLE-FOODS]: si la ASIGNACIÓN DEL PLANIFICADOR de arriba lista "BÁSICOS DEL USUARIO", ese alimento puede repetirse el mismo día SOLO si cada aparición usa una TÉCNICA distinta (hervido vs revuelto, guisado vs a la plancha) — técnicas SINÓNIMAS ("revoltillo"/"huevo revuelto", "horneado"/"al horno") NO cuentan como distintas. Sin esa sección, la regla es absoluta.
 - El MISMO plato-base (revoltillo, batido, ensalada, wrap, panqueques, arepitas...) NO puede repetirse en 3+ días del plan — revisa los platos de los otros días abajo antes de elegir.
 - La MISMA fruta dulce NO puede aparecer en 2+ comidas del mismo día.
@@ -10786,7 +11673,7 @@ Devuelve el Día {day_num} corregido con EXACTAMENTE la misma estructura JSON y 
             # QUIRÚRGICO en vez de descubrirlo en el reject del reviewer (espejo del SAMEDAY).
             if CRITIQUE_SLOT_PARITY_ENABLED:
                 try:
-                    _residual_slot = _detect_slot_appropriateness(days)
+                    _residual_slot = _detect_slot_appropriateness(days, state.get("form_data"))
                     for _rs in _residual_slot:
                         _dn_rs = _rs.get("day")
                         _td_rs = next((d for d in days if d.get("day") == _dn_rs), None)
@@ -11325,7 +12212,7 @@ SURGICAL_REJECT_RETRY_ENABLED = _env_bool("MEALFIT_SURGICAL_REJECT_RETRY", True)
 # Presupuesto mínimo del pipeline para intentar la reparación (corrector ≤80s + assemble + re-review).
 SURGICAL_REJECT_MIN_BUDGET_S = _env_int("MEALFIT_SURGICAL_REJECT_MIN_BUDGET_S", 150, lambda v: 60 <= v <= 600)
 # [P1-REVIEWER-THINKING · 2026-07-05] Thinking mode (razonamiento nativo V4) SOLO en superficies de
-# JUICIO clínico de bajo volumen — JAMÁS en day-gen/planner (P1-DEEPSEEK-THINKING-OFF midió >170s/día
+# JUICIO clínico de bajo volumen — JAMÁS en day-gen/planner (P1-PROVIDER-THINKING-DEFAULT midió >170s/día
 # → fallback matemático). Restricción del API calibrada en vivo: thinking NO soporta el tool_choice
 # forzado de function_calling → structured output vía method="json_mode" (smoke 2026-07-05 en v4-pro:
 # 17.5s, ~2.6k reasoning-tokens ≈ $0.0025/llamada, veredicto ERC correcto con 4 hallazgos KDIGO).
@@ -11334,7 +12221,7 @@ SURGICAL_REJECT_MIN_BUDGET_S = _env_int("MEALFIT_SURGICAL_REJECT_MIN_BUDGET_S", 
 # Ambos nacen OFF (convención medir→actuar); flip por env sin redeploy. Fail-open al reviewer estándar.
 REVIEWER_THINKING_ENABLED = _env_bool("MEALFIT_REVIEWER_THINKING", False)
 REVIEWER_THINKING_TIMEOUT_S = _env_int("MEALFIT_REVIEWER_THINKING_TIMEOUT_S", 90, lambda v: 30 <= v <= 300)
-# [P2-THINKING-EFFORT · 2026-07-06] (sugerencia del owner) DeepSeek V4 permite GRADUAR el
+# [P2-THINKING-EFFORT · 2026-07-06] (sugerencia del owner) GLM-5.3 permite GRADUAR el
 # esfuerzo del thinking (low→max). Knob opcional: vacío = comportamiento actual (enabled sin
 # effort); "low"/"medium"/"high"/"max" añade `effort` al extra_body del reviewer thinking.
 # Fail-open: si el API rechaza el campo, el except del reviewer cae al estándar (sin thinking).
@@ -11567,6 +12454,23 @@ RAW_SEAFOOD_SAFETY_ENABLED = _env_bool("MEALFIT_RAW_SEAFOOD_SAFETY", True)
 # absuelve el caso COCIDO, que en es-DO es la inmensa mayoría → falsos-positivos mínimos. Macro-preservante (solo nota, como
 # el seafood). Default True (seguridad); flip a False revierte. Anchor: P1-RAW-VIVER-SAFETY.
 RAW_VIVER_SAFETY_ENABLED = _env_bool("MEALFIT_RAW_VIVER_SAFETY", True)
+# [P1-PREGNANCY-SAFETY-NOTES · 2026-08-09] Anotaciones deterministas de seguridad alimentaria para
+# perfiles de embarazo/lactancia: el reviewer (Sol en perfiles difíciles) rechaza recetas SEGURAS
+# que no DICEN las palabras de seguridad (corr=86482b8c: 5 rechazos en una review — huevo sin
+# «yema y clara firmes», deli sin «74 °C», hojas sin «lavado», lechosa sin «madura», champiñones
+# sin «cocción completa»). Note-only (macro-preservante, shopping-safe), recompute por corrida
+# (absolution-aware). Default True; flip a False revierte sin redeploy.
+PREGNANCY_SAFETY_NOTES_ENABLED = _env_bool("MEALFIT_PREGNANCY_SAFETY_NOTES", True)
+# [P1-CONDITION-SAFETY-NOTES · 2026-08-09] Generalización del patrón a las demás condiciones
+# (HTA/dislipidemia/gastritis/SOP/hipotiroidismo) — los 10 fallos de la corrida 31304538636 eran
+# la misma clase «no lo especifica» fuera de embarazo. Ver _CONDITION_SAFETY_CLAUSES.
+CONDITION_SAFETY_NOTES_ENABLED = _env_bool("MEALFIT_CONDITION_SAFETY_NOTES", True)
+# [P1-MEDICAL-CRITICAL-RETRY · 2026-08-09] Un critical MÉDICO del reviewer (no dieta/alérgeno, que
+# ya tienen el suyo) obtiene UN retry informado en attempt 1 — hoy va directo al fallback
+# matemático, y la clase medida («no especifica descremado/bajo en sodio») es corregible con la
+# directiva. NO debilita el guard: severity sigue critical, el reviewer re-gatea, reincidencia →
+# fallback terminal idéntico. Mismo patrón/presupuesto que P1-DAYGEN-DIET-CONVERGE.
+MEDICAL_CRITICAL_REGEN_ENABLED = _env_bool("MEALFIT_MEDICAL_CRITICAL_REGEN", True)
 # [P2-UNDERCOOK-TIME-NOTE · 2026-07-01] (audit v2 recetas GAP-4, batch P2-AUDIT-V2-BATCH) Lint de
 # plausibilidad de tiempos de cocción para pollo/cerdo — nota de seguridad si el tiempo del paso es
 # implausiblemente corto (< MEALFIT_MIN_COOK_MINUTES_POULTRY_PORK, default 5). Ver _apply_food_safety_fixes.
@@ -11754,7 +12658,7 @@ FRUIT_DEDUP_ENABLED = _env_bool("MEALFIT_FRUIT_DEDUP", True)
 # En el ÚLTIMO intento (attempt >= MAX_ATTEMPTS) la fruta-repetida / plato-base-repetido NO debe
 # RECHAZAR el plan: es un defecto cosmético y bloquearlo convierte un plan válido en un fallback de
 # emergencia (`_is_fallback=True`) → el usuario ve "La IA está temporalmente saturada" (mensaje
-# ENGAÑOSO: DeepSeek está sano) y se queda SIN plan. Incidente real user d4bc3af5 (corr=20394088,
+# ENGAÑOSO: GLM está sano) y se queda SIN plan. Incidente real user d4bc3af5 (corr=20394088,
 # 2026-06-26 06:19): los 3 intentos fueron rechazados SOLO por fruta repetida el mismo día → emergency
 # fallback → "saturada". En intentos 1..N-1 el gate SÍ rechaza (presiona al LLM a diversificar la
 # fruta); en el intento final entrega el plan con la repetición (advisory) en vez de cero-plan. Flip a
@@ -11926,6 +12830,11 @@ SHOPPING_EMPTY_LIST_REJECT = _env_bool("MEALFIT_SHOPPING_EMPTY_LIST_REJECT", Tru
 SHOPPING_MIN_DISTINCT_BASE = _env_int("MEALFIT_SHOPPING_MIN_DISTINCT_BASE", 6)
 SHOPPING_MIN_DISTINCT_PER_WEEK = _env_int("MEALFIT_SHOPPING_MIN_DISTINCT_PER_WEEK", 2)
 SHOPPING_MIN_DISTINCT_CAP = _env_int("MEALFIT_SHOPPING_MIN_DISTINCT_CAP", 16)
+# [P2-SHOPPING-PROTEIN-FLOOR · 2026-08-22] Piso de COMPOSICIÓN, no de conteo. La lista del
+# plan 2245eb45 tenía 25 nombres (≥ el mínimo de 12) y UNA sola fila de categoría
+# «Proteínas»: pasaba limpia y dejaba al usuario sin nada que cocinar. Mide y avisa; NO
+# bloquea la generación (un rechazo rompería dietas legítimamente poco variadas).
+SHOPPING_MIN_PROTEINS = _env_int("MEALFIT_SHOPPING_MIN_PROTEINS", 2)
 # [P3-CARB-TO-PROTEIN-SWAP · 2026-06-19] Palanca de precisión MEDIDA con el harness offline determinista
 # (scripts/macro_sizing_replay.py): en días con déficit de proteína (<floor_pct×target) Y exceso de carbos
 # (>(1+tol)×target), convierte el exceso de carbos en proteína magra a kcal CONSTANTE. Cierra el déficit que
@@ -12316,7 +13225,7 @@ CLINICAL_MEAL_COUNT_ENABLED = _env_bool("MEALFIT_CLINICAL_MEAL_COUNT", True)
 # directiva del prompt). Recupera las calorías escalando los ingredientes NO-almidón del plato → mantiene las
 # kcal en banda (los carbos bajan, que es el objetivo DM2). Default ON. Rollback: =false. Anchor: P1-DM2-GLYCEMIC-PORTION-CAP
 DM2_GLYCEMIC_PORTION_CAP_ENABLED = _env_bool("MEALFIT_DM2_GLYCEMIC_PORTION_CAP", True)
-DM2_HIGH_GI_CAP_G = _env_int("MEALFIT_DM2_HIGH_GI_CAP_G", 150, validator=lambda v: 60 <= v <= 400)
+DM2_HIGH_GI_CAP_G = _env_int("MEALFIT_DM2_HIGH_GI_CAP_G", 100, validator=lambda v: 60 <= v <= 400)  # [P1-DM2-MAIZ-CAP] 150→100: alineado al criterio del reviewer (~100g/comida)
 
 # [P1-BARIATRIC-CLINICAL-RULES · 2026-06-27] Para pacientes post-cirugía bariátrica, cap DURO de la porción de
 # QUESO y LÁCTEOS por comida — el revisor médico rechazó un plan bariátrico por "5¼ lonjas de queso en una
@@ -13093,7 +14002,10 @@ def _shopping_list_completeness(plan, form_data):
     _days_map = {"weekly": 7, "biweekly": 15, "monthly": 30}
     days = _days_map.get(str((form_data or {}).get("groceryDuration") or "weekly").lower(), 7)
     agg = (plan.get("aggregated_shopping_list") if isinstance(plan, dict) else None) or []
+    if not isinstance(agg, list):
+        agg = []
     names = set()
+    proteins = set()
     for _it in agg:
         if not isinstance(_it, dict):
             continue
@@ -13103,6 +14015,11 @@ def _shopping_list_completeness(plan, form_data):
         _nm = str(_it.get("name") or _it.get("display_name") or "").strip().lower()
         if _nm:
             names.add(_nm)
+            # [P2-SHOPPING-PROTEIN-FLOOR · 2026-08-22] Los LÁCTEOS quedan fuera a
+            # propósito: la lista del incidente tenía 4 (queso ×2, yogurt, leche) y si
+            # contaran, el caso que este piso existe para cazar habría pasado igual.
+            if strip_accents(_cat).startswith("proteina"):
+                proteins.add(_nm)
     distinct = len(names)
     _has_ingredients = False
     if isinstance(plan, dict):
@@ -13124,6 +14041,13 @@ def _shopping_list_completeness(plan, form_data):
         "expected_min": expected_min,
         "is_empty": bool(_has_ingredients and distinct == 0),
         "is_sparse": bool(_has_ingredients and 0 < distinct < expected_min),
+        # [P2-SHOPPING-PROTEIN-FLOOR · 2026-08-22] Composición, no conteo. `distinct > 0`
+        # en el predicado: con la lista vacía manda `is_empty` — marcar las dos cosas
+        # confunde el diagnóstico ("¿no hay lista, o hay lista mala?").
+        "distinct_proteins": len(proteins),
+        "is_protein_starved": bool(
+            _has_ingredients and distinct > 0 and len(proteins) < SHOPPING_MIN_PROTEINS
+        ),
     }
 
 
@@ -13816,30 +14740,164 @@ def _apply_allergen_substitutions(plan: dict, form_data: dict) -> int:
 # antes solo dependía del revisor LLM (falible). Es DETECCIÓN (backstop _scan_allergen_violations
 # + filtro de candidatos del closer), no sustitución → no requiere filas de catálogo nuevas y
 # preserva el sesgo de sobre-detección intencional. Anchor: P1-ALLERGEN-DERIVATIVES.
+# [P1-COUNTRY-SYSTEM-F2 · ola final · 2026-08-18 · M5] Las categorías de abajo son TODAS las que
+# existen — no hay clase "legumbres" (garbanzo/lenteja como alergia declarada, distinto del swap
+# dietético de `_DIET_*_TERMS`): 'garbanzo' no aparece en NINGUNA lista, así que quien lo declare
+# cae al fallback de match literal (`_expand_allergy_declarations`), que solo atrapa la palabra
+# EXACTA tecleada, no sus derivados. Candidato de clase futura si aparece evidencia real (medido,
+# no especulativo — mismo criterio que `_GLUTEN_FORWARD_FILLER_WHITELIST`).
+# [P0-ALLERGEN-VOCAB-I18N · 2026-08-21] La otra mitad de aquella nota —«tampoco hay clase
+# ajonjolí/sésamo»— YA NO APLICA: la clase `sesamo` existe (al final del dict) porque la
+# evidencia que M5 pedía llegó, medida contra el catálogo vivo. La forma de aquel razonamiento
+# se conserva arriba para 'legumbres', que sigue sin evidencia.
+# [P0-ALLERGEN-VOCAB-I18N] El dict de abajo es la mitad «cómo se LLAMA el alimento». La mitad
+# «cómo lo DECLARA el usuario» vive en `_ALLERGEN_DECLARATION_ALIASES`, justo después.
 _ALLERGEN_SYNONYMS = {
     "mani": ["mani", "cacahuate", "peanut", "mantequilla de mani", "crema de mani",
-             "salsa de mani"],
+             "salsa de mani",
+             # [P0-ALLERGEN-VOCAB-I18N · 2026-08-21] 'cacahuete' es LA palabra peninsular
+             # ('cacahuate' es mexicanismo) y no es subcadena de ninguna de arriba — divergen en
+             # la 6ª letra, así que el match bidireccional por substring no las une. Medido: un
+             # español que declaraba «cacahuete» obtenía 0 violaciones sobre un plato con
+             # 'Mantequilla de maní'. Es el caso más grave del P-fix: el wizard no tiene chip de
+             # maní, así que el texto libre es la ÚNICA vía y el desenlace es anafilaxia.
+             "cacahuete", "cacahuetes", "crema de cacahuete", "mantequilla de cacahuete"],
     "frutos secos": ["almendra", "almendras", "nuez", "nueces", "maranon", "pistacho",
                      "avellana", "merey", "maranon", "anacardo", "marzipan", "mazapan",
-                     "nutella", "praline", "turron", "pesto", "crema de avellana"],
+                     "nutella", "praline", "turron", "pesto", "crema de avellana",
+                     # [P1-COUNTRY-SYSTEM-F2 · T5 · 2026-08-17] alta de catálogo ES (piñones,
+                     # DROP en T1): ningún término de arriba matchea 'pinon'/'pinones' por
+                     # substring (distinto de 'almendra'/'nuez'/etc). 'almendra marcona' (otra
+                     # alta del mismo lote) SÍ ya matchea vía 'almendra', sin cambios ahí.
+                     "pinon", "pinones"],
     "mariscos": ["camaron", "camarones", "langosta", "cangrejo", "langostino", "gambas",
-                 "marisco", "mariscos", "pulpo", "calamar", "almeja", "ostra", "lambi",
-                 "surimi"],
+                 "gamba", "marisco", "mariscos", "pulpo", "calamar", "almeja", "ostra", "lambi",
+                 "surimi",
+                 # [P1-COUNTRY-SYSTEM-F2 · T4 · 2026-08-17] drift RD cerrado: 'mejillon'/
+                 # 'mejillones'/'vieira' ya vivían en `_DIET_SEAFOOD_TERMS` (P1-VARIETY-CATALOG-
+                 # POOLS) y 'Mejillones' es fila real de `master_ingredients` — el backstop
+                 # determinista no lo reconocía. 'gamba' (singular): `condition_rules.
+                 # _ALLERGEN_SHELLFISH_SUBS` ya lo trata como objetivo de sustitución.
+                 "mejillon", "mejillones", "vieira",
+                 # [P1-COUNTRY-SYSTEM-F2 · T5 · 2026-08-17] alta de catálogo ES (percebes, DROP en
+                 # T1 country_catalog_gap.py --country ES): goose barnacle, crustáceo — sin esto un
+                 # plan ES con 'Percebes' pasaba el backstop limpio para una alergia a mariscos.
+                 "percebe", "percebes",
+                 # [P0-COUNTRY-ALLERGEN-FOOD-VOCAB · 2026-08-23] Nombre de alimento
+                 # peninsular ausente del vocabulario RD; frontera de palabra compartida
+                 # por G56 evita casar fragmentos dentro de otros nombres.
+                 "sepia"],
     "pescado": ["pescado", "bacalao", "atun", "salmon", "tilapia", "mero", "chillo",
                 "dorado", "sardina", "merluza", "carite", "anchoa", "anchoas",
-                "salsa de pescado", "surimi", "caviar", "salsa inglesa", "worcestershire"],
+                "salsa de pescado", "surimi", "caviar", "salsa inglesa", "worcestershire",
+                # [P1-COUNTRY-SYSTEM-F2 · T4 · 2026-08-17] 'arenque' ya vivía en
+                # `_DIET_SEAFOOD_TERMS` y en `condition_rules._ALLERGEN_FISH_SUBS`; es fila real
+                # de `master_ingredients` (confirmado en vivo) — el backstop no lo reconocía.
+                "arenque",
+                # [P1-COUNTRY-SYSTEM-F2 · T5 · 2026-08-17] alta de catálogo ES (boquerones, DROP en
+                # T1): anchoa fresca/marinada — 'anchoa'/'anchoas' arriba NO matchea 'boqueron'
+                # (raíz de palabra distinta), así que sin esto un alérgico a pescado no quedaba
+                # cubierto para este nombre concreto.
+                "boqueron", "boquerones",
+                # [P1-COUNTRY-SYSTEM-F2 · T6 · 2026-08-17] alta de catálogo CO (Trucha, DROP en
+                # T1 country_catalog_gap.py --country CO): pez de río/truchicultura andina —
+                # ningún término de arriba lo matchea por substring.
+                "trucha", "truchas",
+                # [P1-COUNTRY-SYSTEM-F2 · T7 · 2026-08-17] alta de catálogo PR (Bacalaítos, DROP
+                # en T1): frituras de bacalao en masa — 'bacalao' arriba NO matchea 'bacalaitos'
+                # (palabra DISTINTA, diverge tras 'bacala-': bacalaítos vs bacalao, ni siquiera
+                # comparten sufijo plural) — sin esto, un alérgico a pescado no quedaba cubierto
+                # para este nombre concreto.
+                "bacalaitos"],
     "lacteos": ["leche", "queso", "yogurt", "mantequilla", "crema", "lacteo", "ricotta",
                 "mozzarella", "parmesano", "cottage", "whey", "suero de leche", "caseina",
                 "caseinato", "proteina de suero", "proteina de leche", "helado", "mantecado",
                 "dulce de leche", "queso crema", "requeson", "kefir", "natilla", "flan",
-                "leche condensada", "leche evaporada", "nata", "ghee"],
+                "leche condensada", "leche evaporada", "nata", "ghee",
+                # [P1-COUNTRY-SYSTEM-F2 · T6 · 2026-08-17] altas de catálogo MX/CO (Arequipe,
+                # Suero costeño — DROP en T1): 'dulce de leche' arriba YA cubre Arequipe por
+                # SINÓNIMO conceptual pero NO por substring literal (el nombre de fila es
+                # "Arequipe", no contiene "dulce de leche"); 'suero de leche' (genérico, arriba)
+                # NO matchea 'suero costeño' (segunda palabra distinta) — ambos productos lácteos
+                # reales sin ningún término existente que los reconozca por su propio nombre.
+                "arequipe", "suero costeno",
+                # [P1-COUNTRY-SYSTEM-F2 · T4 · 2026-08-17] 'yogur' (sin 't', grafía estándar
+                # es-ES/es-DO) ya vivía en `_DIET_DAIRY_TERMS` y en el catch-all de
+                # `constants._get_fast_filtered_catalogs` — solo 'yogurt' (con 't') estaba aquí.
+                "yogur",
+                # [P1-COUNTRY-SYSTEM-F2 · T5 · 2026-08-17] alta de catálogo ES (cuajada, DROP en
+                # T1): cuajo de leche fresco — lácteo real, sin esto un alérgico quedaba
+                # desprotegido para este nombre concreto (ningún término de arriba lo matchea).
+                "cuajada"],
     "lactosa": ["leche", "queso", "yogurt", "mantequilla", "crema", "ricotta", "mozzarella",
                 "whey", "suero de leche", "helado", "mantecado", "dulce de leche", "queso crema",
-                "requeson", "kefir", "natilla", "flan", "leche condensada", "leche evaporada"],
+                "requeson", "kefir", "natilla", "flan", "leche condensada", "leche evaporada",
+                # [P1-COUNTRY-SYSTEM-F2 · T4 · 2026-08-17] mismo top-up de grafía que 'lacteos'
+                # arriba — NO se amplía el resto de la categoría (lactosa es intencionalmente más
+                # estrecha que lacteos: 'ghee'/'caseina'/'caseinato' quedan fuera a propósito,
+                # ver test_lactosa_es_mas_estrecha_que_lacteos_a_proposito).
+                "yogur",
+                # [P1-COUNTRY-SYSTEM-F2 · T5 · 2026-08-17] 'cuajada' SÍ lleva lactosa (leche
+                # cuajada entera, sin proceso que la remueva — a diferencia de 'ghee') — entra en
+                # AMBAS categorías, paridad con 'lacteos' arriba.
+                "cuajada",
+                # [P1-COUNTRY-SYSTEM-F2 · T5 · 2026-08-17 · e2e G5, alta-hook] 'nata' (crema
+                # espesa) SÍ lleva lactosa — ya vivía en 'lacteos' (arriba) pero faltaba aquí; el
+                # alta-hook (`test_backstop_conoce_cada_alimento_peligroso_del_catalogo_vivo`) lo
+                # encontró en vivo tras la alta de la fila 'Nata' del catálogo ES (T5): antes de
+                # esa fila el término flotaba sin ningún alimento real que lo disparara.
+                "nata",
+                # [P1-COUNTRY-SYSTEM-F2 · T6 · 2026-08-17] paridad con 'lacteos' arriba (Arequipe/
+                # Suero costeño SÍ llevan lactosa — leche real, sin proceso que la remueva).
+                "arequipe", "suero costeno"],
     "gluten": ["trigo", "pan", "pasta", "harina de trigo", "galleta", "galletas", "cebada",
                "centeno", "gluten", "tortilla integral", "pan integral", "cuscus", "couscous",
                "seitan", "bulgur", "malta", "cerveza", "semola", "espagueti", "macarrones",
-               "lasana", "lasagna", "empanada", "bizcocho", "wheat"],
+               "lasana", "lasagna", "empanada", "bizcocho", "wheat",
+               # [P1-COUNTRY-SYSTEM-F2 · T4 · 2026-08-17] `condition_rules._ALLERGEN_GLUTEN_SUBS`
+               # ya trata estos 9 términos (pastas/panes) como objetivo de sustitución proactiva
+               # (P0-ALLERGEN-SUBS) — el backstop determinista no los reconocía si la sustitución
+               # fallaba. Ninguno está en el catálogo HOY, pero SÍ son objetivo de sustitución
+               # vivo en producción (T5-T8 los dará de alta).
+               # [fix-round 1 · fuera-de-stone accepted over-detection] 'tostada' bare también
+               # matchea 'almendras tostadas' (frutos secos, sin gluten) — mismo token que ya usa
+               # `condition_rules._ALLERGEN_GLUTEN_SUBS` (swap 'pan tostado'→Casabe); costo
+               # documentado en test_tostada_sobre_detecta_almendras_tostadas_aceptado, NO se quita.
+               "tostada", "macarron", "coditos", "fideo", "tallarin", "penne",
+               "ravioli", "noqui", "tortilla de harina",
+               # [fix-round 1 · P1-COUNTRY-SYSTEM-F2 T4 review · 2026-08-17] 'avena' REINCORPORADA
+               # (T4 la había excluido — ver historial en test_p1_country_system_f2.py G1). Medido
+               # por ejecución directa contra 4 superficies vivas (swap individual, regenerate-day,
+               # chat-modify, tamiz degradado sin LLM) que dependen EXCLUSIVAMENTE de
+               # `clinical_backstop_for_meal` (ninguna pasa por `_apply_deterministic_clinical_layer`,
+               # solo generación inicial): 'avena' bare no tenía NINGÚN backstop determinista ahí.
+               # La colisión que causó el revert de T4 (`_ALLERGEN_NEGATION_PREFIX_RX` es solo-
+               # PREFIJO, y en "avena certificada sin gluten" la negación SIGUE a 'avena') se cierra
+               # con `_GLUTEN_FORWARD_EXCUSE_RX` (abajo) — mira ADELANTE del match, scoped a esta
+               # categoría únicamente vía `_ALLERGEN_GLUTEN_TERM_SET`. Ver
+               # test_avena_bare_flageada_como_gluten_fix_round_1 (RED→GREEN) +
+               # test_avena_certificada_sin_gluten_sigue_excusada_tras_incluir_avena (sigue verde).
+               "avena",
+               # [P1-COUNTRY-SYSTEM-F2 · T7 · 2026-08-17] altas de catálogo US (DROP en T1):
+               # productos de trigo cuyo nombre en español NO contiene ningún token de arriba
+               # ('pan'/'galleta'/etc no matchean por word-boundary dentro de una palabra
+               # compuesta como "Panecillos"/"Panqueques" — 'pan' NO es substring con boundary
+               # de 'panecillos', diverge tras la 'n'). 'bagel'/'pretzel'/'wafle' son préstamos
+               # sin ningún término existente. 'salsa de salchicha'/'masa para pie' son frases
+               # completas -- ningún token suelto de la lista los cubre (la gravy lleva harina en
+               # el roux; la masa de pie es harina de trigo) y un token suelto sería demasiado
+               # amplio (ej. 'salsa' solo mancharía cualquier salsa).
+               "bagel", "bagels", "pretzel", "pretzels", "panecillo", "panecillos",
+               "panqueque", "panqueques", "wafle", "wafles", "salsa de salchicha",
+               "masa para pie",
+               # alta de catálogo PR (Bacalaítos, DROP en T1): fritura en masa de HARINA DE
+               # TRIGO -- mismo motivo que 'empanada'/'bizcocho' arriba (masa horneada/frita).
+               "bacalaitos",
+               # [P0-COUNTRY-ALLERGEN-FOOD-VOCAB · 2026-08-23] Panes, masas y
+               # platos de trigo de ES/MX/PR/US. Son nombres de ALIMENTO y por eso viven
+               # en este SSOT, no en los alias de declaración multilingüe.
+               "bocadillo", "baguette", "coca", "mollete", "torrija", "fideua",
+               "migas", "bolillo", "telera", "concha", "birote", "empanizado"],
     "huevo": ["huevo", "huevos", "clara", "claras", "yema", "yemas", "mayonesa", "merengue",
               "aioli", "alioli", "holandesa", "ponche", "mousse"],
     "huevos": ["huevo", "huevos", "clara", "claras", "yema", "yemas", "mayonesa", "merengue",
@@ -13847,7 +14905,488 @@ _ALLERGEN_SYNONYMS = {
     "soya": ["soya", "soja", "tofu", "salsa de soya", "edamame", "miso", "tempeh",
              "salsa teriyaki", "teriyaki", "natto", "lecitina de soya", "proteina de soya",
              "proteina vegetal texturizada", "tvp"],
+    # [P0-ALLERGEN-EU14-CLASES-I18N · 2026-08-23] Clases 9, 10, 12 y 13 del
+    # Reglamento UE 1169/2011. Son nombres de ALIMENTO/vehículo en español
+    # canónico; las formas declarativas de los cinco idiomas viven en el dict
+    # separado de abajo.
+    "apio": ["apio", "apionabo", "sal de apio"],
+    "mostaza": ["mostaza", "dijon", "mostaza en grano"],
+    # Decisión explícita para sulfitos: sí se modela el aditivo y sólo sus cuatro
+    # vehículos concretos auditados. No se añaden categorías amplias como
+    # «fruta seca» o «condimentos», que borrarían alimentos sin evidencia.
+    "sulfitos": ["sulfito", "sulfitos", "dioxido de azufre", "metabisulfito",
+                 "vino", "vinagre de vino", "orejon", "orejones", "pasa", "pasas"],
+    "altramuces": ["altramuz", "altramuces", "lupino", "chocho"],
+    # [P0-ALLERGEN-VOCAB-I18N · 2026-08-21] Clase NUEVA. El comentario M5 de la ola final de F2
+    # (arriba) la declaró «candidato de clase futura si aparece evidencia real (medido, no
+    # especulativo)». Esta es la evidencia: el catálogo vivo tiene CUATRO filas con sésamo
+    # (Ajonjolí, Tahini, Hummus, Aceite de sésamo — las tres últimas altas de F2) y el sésamo es
+    # el nº 11 de los 14 alérgenos de declaración obligatoria del Reglamento UE 1169/2011, que
+    # aplica a España desde el flip. Antes de esta clase la única protección era teclear
+    # exactamente «ajonjolí» y caer al fallback de match literal, que atrapa la palabra EXACTA y
+    # ningún derivado: «sésamo» no alcanzaba «Ajonjolí» y «ajonjolí» no alcanzaba «Aceite de
+    # sésamo». NO participa de `test_paridad_dieta_alergeno_bidireccional` (sus
+    # `_CORRESPONDING_CLASSES` son sólo seafood/dairy/egg): el sésamo no es producto animal, así
+    # que no tiene contraparte en `_DIET_*_TERMS` con la que cruzarse — misma asimetría de
+    # CATEGORÍA ya documentada para maní/frutos secos/gluten/soya.
+    "sesamo": ["sesamo", "ajonjoli", "tahini", "tahina", "hummus", "aceite de sesamo",
+               "semillas de sesamo", "gomasio", "halva"],
 }
+
+
+# [P0-ALLERGEN-VOCAB-I18N · 2026-08-21] La MITAD DECLARATIVA del vocabulario de alergias.
+#
+# `_ALLERGEN_SYNONYMS` (arriba) responde «¿cómo se LLAMA el alimento?» — sus términos viajan al
+# set `forbidden` y se escanean contra los ingredientes del plato. Este dict responde la otra
+# pregunta, que estaba mezclada con la primera: «¿cómo lo DECLARA el usuario?». Sus términos SÓLO
+# se consultan para resolver a qué clase pertenece una declaración; JAMÁS entran en `forbidden`.
+#
+# Por qué separarlos y no engordar `_ALLERGEN_SYNONYMS`: meter 'dairy' en la clase 'lacteos'
+# obligaría a espejarlo en `_DIET_DAIRY_TERMS` para no romper
+# `test_paridad_dieta_alergeno_bidireccional` — y `_DIET_DAIRY_TERMS` es una lista de NOMBRES DE
+# ALIMENTO que se escanea sobre recetas escritas en español canónico (frontera dura declarada en
+# P1-I18N-DASHBOARD: los nombres de comida no se traducen JAMÁS). Ninguna receta dirá «dairy». El
+# guard seguiría verde y significaría menos.
+#
+# Las dos poblaciones que esto cubre existen HOY en producción: el dashboard está en 5 idiomas
+# desde P1-I18N-DASHBOARD (hay un usuario real con `locale='en-US'`) y el selector de 6 países
+# está vivo desde el flip de F2 — un formulario en inglés que sólo entiende alergias en español
+# es una trampa silenciosa, y las palabras de CATEGORÍA del Reglamento UE ('moluscos',
+# 'crustáceos') son estándar de etiquetado en España, donde mucha gente es alérgica a uno y no al
+# otro. tooltip-anchor: _ALLERGEN_DECLARATION_ALIASES (test_p0_allergen_vocab_i18n.py)
+#
+# [P0-I18N-ALERGENOS-FR-IT-PT · 2026-08-22] Y las TRES lenguas que faltaban.
+#
+# El cierre de arriba (2026-08-21) resolvió español e inglés porque ese era el alcance del
+# sistema de PAÍSES. El sistema de IDIOMAS añadió después fr-FR, it-IT y pt-BR, y este
+# vocabulario nunca los aprendió: no es una regresión, son dos proyectos cuyos alcances no
+# llegaron a tocarse. MEDIDO ejecutando `clinical_backstop_for_meal` sobre platos que SÍ
+# contienen el alérgeno, antes de este bloque:
+#
+#     declara 'Cacahuete' (es-ES) -> 1 violación      declara 'Arachide'  (fr) -> 0
+#     declara 'Peanut'    (en)    -> 1 violación      declara 'Arachidi'  (it) -> 0
+#                                                     declara 'Amendoim'  (pt) -> 0
+#     'Gluten'/'Glúten' -> 1                          'Glutine'   (it) -> 0
+#
+# 10 de 21 combinaciones no bloqueaban. El italiano «Glutine» fallaba mientras «Gluten» y
+# «Glúten» pasaban — por coincidencia ortográfica con el español, no por diseño, que es la
+# peor forma de estar cubierto: parece que funciona hasta que cambias de palabra.
+#
+# POR DÓNDE ENTRA, que acota el daño y también el arreglo: los CHIPS están bien. QAllergies
+# manda `val` canónico español («Mani», «Mariscos», «Pescado») y traduce sólo el `label`. La
+# exposición es el campo libre «Otra…» y `update_form_field(field='allergies')` desde el
+# coach. O sea la vía que P2-ALLERGEN-CHIPS-REACH-ENGINE describió como «media seguridad de
+# un chip es que el usuario no tenga que acordarse», invertida: aquí, si te acuerdas y lo
+# escribes en tu idioma, tampoco funciona. Y falla EN SILENCIO — ni violación, ni aviso, ni
+# fila de telemetría.
+#
+# LO QUE NO SE TOCA, a propósito: la resolución por subcadena de `_expand_allergy_declarations`.
+# Parece la trampa registrada («sal» ⊂ «salsa») y NO lo es aquí — la sobre-detección es el
+# sesgo declarado del módulo ('nuts' ⊂ 'peanuts' es consejo clínico habitual) y ponerle
+# frontera de palabra la desactivaría. La dirección peligrosa es servir el alérgeno, y esa
+# no se abre. Por eso este arreglo es DATO y nada más.
+#
+# Se evitan a propósito los tokens ultracortos aunque sean correctos (fr «blé», it «grano»):
+# con matching por subcadena, un token de 3 letras casa dentro de palabras que no tienen nada
+# que ver, y la lección de «sal» ⊂ «salsa» aplica igual aquí aunque el sesgo sea seguro.
+_ALLERGEN_DECLARATION_ALIASES = {
+    "mani": ["peanuts", "peanut allergy", "groundnut", "groundnuts",
+             # fr / it / pt
+             "arachide", "arachides", "arachidi", "amendoim", "amendoins"],
+    "frutos secos": ["nuts", "tree nuts", "tree-nuts", "treenuts", "nut allergy",
+                     # fr / it / pt
+                     "fruits a coque", "fruits secs", "noix",
+                     "frutta a guscio", "frutta secca", "noci",
+                     "oleaginosas", "nozes", "castanhas"],
+    "mariscos": ["shellfish", "shellfish allergy", "crustacean", "crustaceans", "mollusc",
+                 "molluscs", "mollusk", "mollusks",
+                 # Categorías del Reglamento UE 1169/2011 (nº 2 crustáceos, nº 14 moluscos):
+                 # ningún ingrediente se llama así, pero es como se declara en España.
+                 "moluscos", "molusco", "crustaceos", "crustaceo",
+                 # fr / it / pt — las mismas dos categorías del Reglamento en cada lengua
+                 "fruits de mer", "crustaces", "mollusques",
+                 "frutti di mare", "crostacei", "molluschi",
+                 "frutos do mar", "crustaceos do mar"],
+    "pescado": ["fish", "fish allergy", "seafood",
+                # fr / it / pt
+                "poisson", "poissons", "pesce", "peixe", "peixes"],
+    "lacteos": ["dairy", "milk", "cows milk", "cow milk", "dairy allergy", "casein",
+                # fr / it / pt
+                "produits laitiers", "produit laitier", "laitier", "laitiers", "lait",
+                "latticini", "latte",
+                "laticinios", "leite", "caseina"],
+    "lactosa": ["lactose", "lactose intolerance", "lactose intolerant",
+                "intolerancia a la lactosa", "intolerante a la lactosa",
+                # fr / it / pt
+                "intolerance au lactose", "lattosio", "intolleranza al lattosio",
+                "intolerancia a lactose"],
+    "huevo": ["egg", "eggs", "egg allergy",
+              # fr / it / pt
+              "oeuf", "oeufs", "uovo", "uova", "ovo", "ovos"],
+    "gluten": ["celiac", "coeliac", "celiaco", "celiaca", "celiaquia", "gluten allergy",
+               "gluten intolerance", "enfermedad celiaca",
+               # fr / it / pt — «glúten» pierde la tilde al normalizar y ya casaba;
+               # «glutine» NO, que es lo que dejaba al italiano sin defensa.
+               "glutine", "celiachia", "maladie coeliaque", "coeliaque",
+               "doenca celiaca", "frumento"],
+    "soya": ["soy", "soybean", "soybeans", "soya bean",
+             # it (fr/pt «soja» ya casa con el sinónimo español del mismo nombre)
+             "soia"],
+    "apio": ["celery", "celeri", "sedano", "aipo"],
+    "mostaza": ["mustard", "moutarde", "senape", "mostarda"],
+    "sulfitos": ["sulfite", "sulfites", "sulphite", "sulphites", "solfiti"],
+    "altramuces": ["lupin", "lupins", "lupini", "tremoco", "tremocos"],
+    "sesamo": ["sesame", "sesame seeds", "sesame allergy", "ajonjoli",
+               # fr / it / pt
+               "sesamo", "graines de sesame", "semi di sesamo", "gergelim"],
+}
+
+# [P0-I18N-ALERGIA-TEXTO-LIBRE-SOLO-ES · 2026-08-23] La mitad que faltaba: el ALIMENTO.
+#
+# `_ALLERGEN_DECLARATION_ALIASES` cubría el nombre de la CLASE en los cinco idiomas —
+# «fruits de mer», «crostacei», «latticini»— y eso está bien: medido, 24 de 24 términos de
+# categoría bloquean. Pero en un campo libre la gente no escribe la clase, escribe lo que
+# come: «crevettes», «gamberetti», «camarão», «shrimp».
+#
+# MEDIDO antes de este alta, con `clinical_backstop_for_meal` sobre platos que SÍ contienen
+# el alérgeno: **46 de 62 combinaciones no bloqueaban**, y NUEVE eran en INGLÉS. Eso último
+# es lo que revela que no es un hueco de i18n sino estructural: en español funciona porque
+# `_ALLERGEN_SYNONYMS` —la tabla del ingrediente, la que se busca DENTRO del plato— está en
+# español, así que un hispanohablante que escribe «camarones» casa con ella de rebote. Cada
+# idioma nuevo heredó la mitad declarativa y ninguna de la mitad alimentaria.
+#
+# Va en una tabla APARTE y no fusionada con la de arriba a propósito: aquélla son formas de
+# DECLARAR una alergia («shellfish allergy», «maladie coeliaque») y ésta son nombres de
+# COMIDA en otro idioma. Se consumen igual, pero mezclarlas haría que la próxima persona no
+# pueda saber cuál de las dos está ampliando ni con qué criterio.
+#
+# ⚠️ SIGUEN SIN ENTRAR en `forbidden` ni espejarse en `_DIET_*_TERMS`: son declarativos. Lo
+# que se busca dentro del plato son SIEMPRE los sinónimos españoles de `_ALLERGEN_SYNONYMS`.
+#
+# tooltip-anchor: _ALLERGEN_FOOD_ALIASES (test_p0_i18n_alergia_texto_libre_solo_es.py)
+_ALLERGEN_FOOD_ALIASES = {
+    "mariscos": [
+        # fr
+        "crevette", "crevettes", "homard", "langoustine", "moule", "moules", "huitre",
+        "huitres", "coquillage", "coquillages", "crabe", "calmar", "poulpe", "palourde",
+        # it
+        "gambero", "gamberi", "gamberetto", "gamberetti", "scampi", "aragosta", "cozza",
+        "cozze", "vongola", "vongole", "ostrica", "ostriche", "granchio", "calamaro",
+        "calamari", "polpo", "capesante",
+        # pt
+        "camarao", "camaroes", "lagosta", "lagostim", "mexilhao", "mexilhoes", "ostra",
+        "ostras", "caranguejo", "lula", "polvo", "vieira",
+        # en
+        "shrimp", "shrimps", "prawn", "prawns", "lobster", "crab", "crabs", "mussel",
+        "mussels", "oyster", "oysters", "clam", "clams", "squid", "octopus", "scallop",
+        "scallops", "crayfish",
+    ],
+    "pescado": [
+        "saumon", "thon", "cabillaud", "morue", "sardine", "sardines", "anchois", "truite",
+        "maquereau", "merlu",
+        "salmone", "tonno", "merluzzo", "baccala", "sardina", "acciughe", "trota", "sgombro",
+        "nasello",
+        "salmao", "atum", "bacalhau", "sardinha", "sardinhas", "anchova", "truta", "cavala",
+        "pescada",
+        "tuna", "cod", "anchovy", "anchovies", "trout", "mackerel", "haddock", "tilapia",
+    ],
+    "frutos secos": [
+        "amande", "amandes", "noisette", "noisettes", "cajou", "pistache", "pistaches",
+        "pecan", "macadamia",
+        "mandorla", "mandorle", "nocciola", "nocciole", "anacardi", "pistacchio",
+        "pistacchi", "pinoli",
+        "amendoa", "amendoas", "avela", "avelas", "castanha", "castanhas", "pinhao",
+        "almond", "almonds", "hazelnut", "hazelnuts", "cashew", "cashews", "pistachio",
+        "pistachios", "pecans", "walnut",
+    ],
+    "lacteos": [
+        "fromage", "beurre", "creme", "yaourt",
+        "formaggio", "burro", "panna", "yogurt", "mozzarella", "parmigiano", "ricotta",
+        "queijo", "manteiga", "iogurte", "requeijao",
+        "cheese", "butter", "cream", "yoghurt", "whey", "buttermilk",
+    ],
+    "huevo": ["omelette", "frittata", "omelete"],
+    "gluten": [
+        "ble", "froment", "seigle", "orge", "epeautre", "farine de ble",
+        "grano", "farro", "orzo", "segale", "semola",
+        "trigo", "centeio", "cevada", "farinha de trigo",
+        "wheat", "barley", "rye", "spelt", "semolina",
+    ],
+}
+
+
+# [P0-I18N-ALERGIA-TEXTO-LIBRE-SOLO-ES · 2026-08-23] `strip_accents` usa NFKD, y NFKD NO
+# descompone las ligaduras: `œ` sigue siendo `œ`. MEDIDO contra producción:
+#
+#     strip_accents('œufs') -> 'œufs'
+#     declara 'oeufs' -> 1 violación   bloquea
+#     declara 'œufs'  -> 0 violaciones *** NO BLOQUEA ***
+#
+# O sea que la grafía CORRECTA del francés —la que produce un teclado francés— era justo la
+# que no protegía, y la que funcionaba era la que se teclea con dos letras. Se traduce ANTES
+# de quitar acentos porque después ya no hay nada que traducir.
+#
+# Va aquí y no dentro de `constants.strip_accents` a propósito: aquélla la llaman decenas de
+# sitios (nombres de alimento, categorías, claves de agrupación) y cambiar cómo normaliza es
+# mover el suelo de comparaciones que hoy cuadran. Aquí el radio es una función.
+_LIGADURAS = str.maketrans({"œ": "oe", "Œ": "OE", "æ": "ae", "Æ": "AE"})
+
+
+def _norm_declaracion(s) -> str:
+    """Normaliza una declaración de alergia del usuario: ligaduras → dígrafo, sin acentos,
+    minúsculas. tooltip-anchor: _norm_declaracion (test_p0_i18n_alergia_texto_libre_solo_es.py)"""
+    return strip_accents(str(s).translate(_LIGADURAS).strip().lower())
+
+
+def _declaracion_casa(a_low: str, termino: str) -> bool:
+    """¿La declaración del usuario `a_low` invoca el alias declarativo `termino`?
+
+    [P0-I18N-ALERGIA-TEXTO-LIBRE-SOLO-ES · 2026-08-23] Subcadena bidireccional para los
+    términos largos —la conducta de siempre, y la que hace que «allergie aux arachides» case
+    con «arachide»— y FRONTERA DE PALABRA para los cortos.
+
+    El corte no es estético. Sin él, añadir «ble» (fr, trigo) o «cod» (en, bacalao) al
+    vocabulario dispara con «roble», «problema» o «codorniz», y una alerta clínica que grita
+    de más es una alerta que se deja de leer. Con él, medido: 0 falsos positivos nuevos.
+
+    Y NO se aplica a `_ALLERGEN_SYNONYMS`: ahí la subcadena es load-bearing, porque es lo que
+    hace que «camaron» case con «camarones» dentro del texto del plato. Cambiarla también
+    ahí rompería la mitad que hoy funciona — que es justo el error de bulto que este fix
+    tenía a mano.
+    """
+    t = _norm_declaracion(termino)
+    if not t:
+        return False
+    if len(t) >= 6:
+        return t in a_low or a_low in t
+    return _re.search(_patron_termino_alergeno(t), a_low) is not None
+
+
+def _sinonimo_alimento_casa(a_low: str, termino: str) -> bool:
+    """Compara declaración y nombre de alimento sin casar dentro de otra palabra.
+
+    [P1-ALLERGEN-DECL-SUBSTR-LAIT · 2026-08-23] Esta frontera pertenece sólo a
+    ``_ALLERGEN_SYNONYMS``. Los alias declarativos conservan su matcher separado y su
+    sobre-detección intencional. La comparación sigue siendo bidireccional y tolera los
+    plurales que ya soporta el escáner (``camarón`` ↔ ``camarones``), pero ``lait`` ya no
+    puede casar dentro de ``bacalaitos``.
+    """
+    t = _norm_declaracion(termino)
+    if not t or not a_low:
+        return False
+
+    def _termino_completo(needle: str, haystack: str) -> bool:
+        return _re.search(_patron_termino_alergeno(needle), haystack) is not None
+
+    return _termino_completo(t, a_low) or _termino_completo(a_low, t)
+
+
+def _expand_allergy_declarations(allergies) -> set:
+    """[P0-ALLERGEN-VOCAB-I18N · 2026-08-21] SSOT de la expansión declaración → términos a buscar
+    en el plato.
+
+    Estaba DUPLICADA palabra por palabra en `_scan_allergen_violations` y en
+    `_verified_catalog_excluded_tokens` — el docstring del segundo decía «MISMA expansión que
+    `_scan_allergen_violations`», que es exactamente la promesa que dos copias no pueden sostener
+    (la lección que P1-DIET-CANON-SSOT pagó con tres tablas de dieta driftadas, una de las cuales
+    servía Pollo a vegetarianas). Ahora hay una y las dos la llaman.
+
+    Resuelve la clase mirando AMBAS mitades del vocabulario (`_ALLERGEN_SYNONYMS`, nombres de
+    alimento, y `_ALLERGEN_DECLARATION_ALIASES`, formas de declararlo) pero devuelve SÓLO los
+    términos de la primera: los alias declarativos no son nombres de comida y buscarlos dentro de
+    un ingrediente en español no encontraría nada. Sin clase que case, la declaración se devuelve
+    literal — contrato preservado para quien declara algo que el sistema no modela (fresa, kiwi).
+
+    Sesgo intencional a SOBRE-detectar (seguridad > comodidad), heredado de C2-ALLERGEN-GUARD:
+    quien declara «peanuts» recibe también los frutos secos ('nuts' ⊂ 'peanuts'), que además es
+    consejo clínico habitual. La dirección peligrosa —servir el alérgeno— nunca se abre.
+
+    tooltip-anchor: _expand_allergy_declarations (test_p0_allergen_vocab_i18n.py)"""
+    try:
+        from constants import strip_accents
+    except Exception:
+        def strip_accents(s):
+            import unicodedata
+            return "".join(c for c in unicodedata.normalize("NFKD", str(s)) if not unicodedata.combining(c))
+    if isinstance(allergies, str):
+        allergies = [allergies]
+    out = set()
+    for a in (allergies or []):
+        a_low = _norm_declaracion(a)
+        if not a_low or a_low in _MEDICAL_NONE_SENTINELS:
+            continue
+        matched = False
+        for cat, syns in _ALLERGEN_SYNONYMS.items():
+            cat_n = strip_accents(cat)
+            # [P0-I18N-ALERGIA-TEXTO-LIBRE-SOLO-ES · 2026-08-23] Las dos mitades del
+            # vocabulario declarativo: cómo se llama la CLASE y cómo se llama el ALIMENTO.
+            _decl = list(_ALLERGEN_DECLARATION_ALIASES.get(cat, ())) \
+                + list(_ALLERGEN_FOOD_ALIASES.get(cat, ()))
+            if a_low == cat_n or cat_n in a_low or a_low in cat_n or \
+               any(_sinonimo_alimento_casa(a_low, s) for s in syns) or \
+               any(_declaracion_casa(a_low, s) for s in _decl):
+                out.update(strip_accents(s) for s in syns)
+                matched = True
+        if not matched:
+            out.add(a_low)  # alergia free-text → match literal
+    return out
+
+
+# [P1-REVIEWER-VERIFICATION-ADVISORY · 2026-08-08] Excusa plant-adjacent COMPARTIDA por los dos
+# scanners (dieta ya la tenía; el de alérgenos no — FPs medidos: «mantequilla»⊂«mantequilla de
+# maní», «leche»⊂«leche de coco», 16ª subcadena). Dirección segura intacta: el maní-alérgico
+# matchea «mantequilla de maní» vía el término «maní» directo.
+import re as _re_mod
+_PLANT_ADJ_EXCUSE_RX = _re_mod.compile(
+    r"^\s*(?:de\s+|estilo\s+|tipo\s+|a\s+la\s+)?"
+    # [P0-ALLERGEN-VOCAB-I18N · 2026-08-21] 'cacahuete' faltaba junto a 'cacahuate': en un plan
+    # ESPAÑOL la línea «mantequilla de cacahuete» marcaba una violación de LÁCTEOS por la palabra
+    # «mantequilla». El mismo defecto de grafía, esta vez en el guard que existe justo para
+    # evitar ese falso positivo.
+    r"(?:soya|soja|coco|almendra|almendras|avena|arroz|nuez|nueces|avellana|mani|cacahuate|cacahuete|"
+    r"maranon|anacardo|cajuil|guisante|arveja|seitan|tempeh|vegan[oa]?|vegetal(?:es)?|plant)\b"
+)
+# [P3-SEMOLA-MAIZ-GLUTEN-FP · 2026-08-23] Excusa acotada AL TÉRMINO (la plant-adj de arriba es
+# universal: excusa cualquier término de cualquier categoría seguido de una base vegetal).
+#
+# Medido, barrido de las 347 filas del catálogo contra `clinical_backstop_for_meal(allergies=
+# ['Gluten'])`: 30 filas marcadas, y entre ellas «Sémola de maíz» (grits/polenta), que no lleva
+# gluten. Las vecinas se comportan bien («Tortilla de maíz» → 0), o sea que es un caso aislado y
+# no un fallo del criterio. Al celíaco estadounidense se le quitaba además del bloque «USA
+# EXCLUSIVAMENTE» (verificado: la fila desaparecía del catálogo verificado de un perfil US con
+# alergia a gluten y reaparecía sin ella).
+#
+# «Sémola de arroz» YA quedaba absuelta —'arroz' está en la plant-adj—, lo que confirma que la
+# forma del arreglo es la correcta y que sólo faltaban las bases que ese regex no lista.
+#
+# POR QUÉ NO SE AÑADE 'maiz' A LA PLANT-ADJ: esa excusa es universal, así que «Pan de maíz»
+# —que SÍ lleva trigo— dejaría de marcarse. Aquí la clave es el TÉRMINO que casó ('semola'), de
+# modo que la absolución no puede alcanzar a 'pan', 'harina' ni a ningún otro. La dirección
+# peligrosa (servir el alérgeno) no se abre: la sémola de trigo sigue marcada, y también la
+# desnuda («Sémola» sola), que es la que puede ser de trigo.
+# tooltip-anchor: P3-SEMOLA-MAIZ-GLUTEN-FP
+_ALLERGEN_TERM_BASE_EXCUSES = {
+    "semola": ("maiz", "yuca", "arroz"),
+}
+_ALLERGEN_TERM_BASE_EXCUSE_RX = {
+    _t: _re_mod.compile(r"^\s*de\s+(?:" + "|".join(_re_mod.escape(_b) for _b in _bases) + r")\b")
+    for _t, _bases in _ALLERGEN_TERM_BASE_EXCUSES.items()
+}
+
+
+def _allergen_term_base_excused(term, tail) -> bool:
+    """¿El término de alérgeno que acaba de casar va seguido de una base que lo hace inocuo?
+
+    `tail` es el texto INMEDIATAMENTE posterior al match (ya en minúsculas y sin acentos, igual
+    que la plant-adj). Devuelve False para cualquier término sin entrada — no hay excusa genérica.
+
+    tooltip-anchor: _ALLERGEN_TERM_BASE_EXCUSES (test_p3_semola_maiz_gluten_fp.py)"""
+    _rx = _ALLERGEN_TERM_BASE_EXCUSE_RX.get(str(term or "").strip().lower())
+    return bool(_rx and _rx.match(str(tail or "")))
+
+
+# [P1-ALLERGEN-NEGATION-EXCUSE · 2026-08-09] Excusa de PREFIJO (la plant-adj mira el sufijo): un
+# token de alérgeno inmediatamente precedido por negación («sin gluten», «libre de gluten», «cero
+# gluten», «no contiene gluten») declara AUSENCIA — el generador estaba CUMPLIENDO («avena
+# certificada sin gluten» para el alérgico, 7+ FPs en las corridas N=20, vivo corr=abb71a1d) y el
+# scanner castigaba el cumplimiento; el mismo matcher alimenta el SKELETON ALLERGEN SCRUB, que le
+# quitaba al day-gen la avena sin gluten que el planner asignó bien. Solo se absuelve el token
+# NEGADO: «leche sin lactosa» sigue violando 'lácteos' (proteína láctea presente) — el sesgo a
+# sobre-detectar queda intacto fuera de gluten. [fix-round 1 · 2026-08-17] «pan sin gluten» YA NO
+# se queda flagged vía 'pan': `_GLUTEN_FORWARD_EXCUSE_RX` (abajo) excusa por delante dentro de la
+# categoría gluten — ver ese bloque para el porqué del delta.
+#
+# [P1-COUNTRY-SYSTEM-F2 · 2026-08-17 (Task 9, i · T4-parked, fix-round 2 backward mirror)] El
+# relleno original («Máx 1 palabra de relleno («sin trazas gluten»)», ver historial git) usaba
+# `(?:\w+\s+)?` — CUALQUIER palabra, sin restricción — el MISMO leak de clase que fix-round 1 del
+# forward tuvo (`_GLUTEN_FORWARD_EXCUSE_RX`, arriba) antes de su propio fix-round 2: en «Sin
+# gluten trigo» (dos términos de gluten distintos, sin conjunción siquiera), al escanear 'trigo'
+# el filler tragaba 'gluten' como relleno genérico y excusaba 'trigo' — que NO tiene claim propio
+# (fail-open, la dirección prohibida). Reproducido en vivo antes de este fix:
+# `_scan_allergen_violations` sobre "Sin gluten trigo"/"No contiene gluten trigo" ⇒ `[]` (debía
+# violar por 'trigo').
+#
+# A diferencia del forward (donde 'certificada' SÍ tenía evidencia real — 8 tests + catálogo), la
+# búsqueda de evidencia para relleno BACKWARD fue NEGATIVA: los 8 tests de
+# test_p1_allergen_negation_excuse.py son todos 0-relleno («sin gluten» directo) o usan la excusa
+# FORWARD («certificada» sigue al término, no lo precede); barrido en vivo de
+# `master_ingredients`/`supermarket_products` (`name/food_name ILIKE '%sin %'` etc.) no encontró
+# NINGUNA fila con un alérgeno de gluten tras un relleno de 1 palabra — el único hit relevante fue
+# «Leche sin lactosa» (0-relleno, categoría láctea, ya cubierto por
+# test_leche_sin_lactosa_sigue_violando_lacteos). 'trazas' (el ejemplo del comentario original)
+# NUNCA apareció en ningún test ni fila real — era una ilustración especulativa, no evidencia.
+# Dirección fail-safe (mismo ruling que cerró el hueco simétrico del forward): ELIMINADO en vez
+# de blanqueado — sin evidencia de un relleno real, no hay nada que whitelist-ear. Si aparece
+# evidencia real de un relleno backward legítimo, añadirlo a una whitelist explícita CON un test
+# que la ancle primero (nunca al revés, mismo principio que `_GLUTEN_FORWARD_FILLER_WHITELIST`).
+_ALLERGEN_NEGATION_PREFIX_RX = _re_mod.compile(
+    r"(?:\bsin|\blibres?\s+de|\bcero|\bno\s+contienen?)\s+$"
+)
+# [P1-COUNTRY-SYSTEM-F2 · T4 fix-round 1 · 2026-08-17] Excusa FORWARD (la negation-prefix de
+# arriba es solo hacia-atrás): cierra el hueco medido en el review de T4 — 'avena' bare no tenía
+# NINGÚN backstop determinista en 4 superficies vivas (swap/regenerate-day/chat-modify/tamiz
+# degradado, todas dependen SOLO de `clinical_backstop_for_meal`) porque sumarla desnuda al
+# vocabulario reintroducía el FP que P1-ALLERGEN-NEGATION-EXCUSE cerró: en «avena certificada sin
+# gluten» la negación SIGUE al término, nunca lo precede. Un término de GLUTEN queda excusado
+# cuando lo sigue (hasta 2 palabras de relleno — cubre «avena CERTIFICADA sin gluten») una
+# negación («sin»/«libre de»/«cero»/«no contiene») + la palabra literal 'gluten'. Mismo mecanismo
+# estructural que `_PLANT_ADJ_EXCUSE_RX` (suffix-scan), aplicado a negación en vez de adyacencia
+# vegetal. SCOPED a gluten ÚNICAMENTE vía `_ALLERGEN_GLUTEN_TERM_SET` en el callsite — NUNCA
+# generalizar entre categorías: 'leche sin lactosa' debe seguir violando lácteos (alergia a la
+# PROTEÍNA, no al azúcar; ver test_leche_sin_lactosa_sigue_violando_lacteos +
+# test_leche_sin_lactosa_no_se_excusa_por_la_excusa_forward_de_gluten). Delta medido en este
+# fix-round: 'pan sin gluten' (pan real GF) pasa de violar a excusado — mejora de precisión
+# consciente, misma confianza en el claim "sin gluten" que 'avena'/'quinoa' certificadas ya
+# tenían (ver test_p1_allergen_negation_excuse.py y reporte T4 §Fix round 1).
+#
+# [fix-round 2 · re-review · 2026-08-17] El relleno `{0,2}` de fix-round 1 usaba `\S+` — CUALQUIER
+# token, no solo adjetivos de claim GF. Leak medido: en un ingrediente con DOS términos de gluten
+# separados por una conjunción («Trigo y avena sin gluten»), "y avena" se tragaba como relleno
+# genérico y la excusa se filtraba HACIA ATRÁS sobre 'trigo' (glutinoso incondicional, SIN claim
+# propio) — fail-open, la dirección que este vocabulario prohíbe. Ruling del controller: WHITELIST
+# de tokens evidenciados, NO blacklist de conjunciones/términos (una blacklist deja
+# unknown-unknowns sin cubrir — mismo error de diseño, signo opuesto). Whitelist derivada de una
+# revisión real (no especulativa) de los 8 tests de negation-excuse + los de este archivo +
+# `master_ingredients`/`supermarket_products` en vivo: el ÚNICO adjetivo que aparece en cualquier
+# claim GF evidenciado es 'certificada' («avena/quinoa certificada sin gluten»).
+# 'certificado'/'certificadas'/'organica'/'organico' NO aparecen en ningún test ni fila de
+# catálogo — omitidos a propósito. Si aparece evidencia real, añadir aquí CON un test que la
+# ancle primero (nunca al revés). Cada token de relleno consumido debe estar EN la whitelist —
+# no basta con que UNO de los 0-2 lo esté, así que "certificada avena" (adjetivo real + término
+# ajeno) tampoco cuela: 'avena' no está en la whitelist, así que el 2º slot falla y el intento se
+# repliega a probar menos relleno, nunca a aceptar el token no-whitelisted.
+#
+# Mismo criterio aplicado al hueco de relleno DESPUÉS de la negación (`(?:\S+\s+)?gluten` en
+# fix-round 1, p.ej. para «sin <algo> gluten»): NINGÚN test ni catálogo evidencia una sola palabra
+# ahí (todos los claims reales son «sin gluten» directo, 0 palabras) y el mismo slot con `\S+`
+# libre habría sido la MISMA clase de fuga en la posición simétrica (p.ej. «Trigo sin avena
+# gluten» tragándose 'avena' como relleno). Eliminado en vez de blanqueado: sin evidencia de
+# ningún uso real, no hay nada que whitelist-ear — 'gluten' debe seguir a la negación directamente
+# (solo espacio en medio).
+_GLUTEN_FORWARD_FILLER_WHITELIST = ("certificada",)
+_GLUTEN_FORWARD_EXCUSE_RX = _re_mod.compile(
+    r"^(?:\s+(?:" + "|".join(_re_mod.escape(_w) for _w in _GLUTEN_FORWARD_FILLER_WHITELIST) + r")){0,2}"
+    r"\s+(?:sin|libres?\s+de|cero|no\s+contienen?)\s+gluten\b"
+)
+_ALLERGEN_GLUTEN_TERM_SET = frozenset(
+    strip_accents(_s).lower() for _s in _ALLERGEN_SYNONYMS["gluten"]
+)
+# [P1-COUNTRY-SYSTEM-F2 · ola final (review de fase) · 2026-08-18 · C2] La excusa FORWARD de
+# arriba absolvía CUALQUIER término de `_ALLERGEN_GLUTEN_TERM_SET` seguido de «sin gluten» — sin
+# distinguir «avena sin gluten» (cumplimiento real: existe avena certificada libre de gluten) de
+# «harina de trigo sin gluten» (claim IMPOSIBLE: harina de trigo ES gluten por definición). El
+# review de fase lo midió en vivo: `_scan_allergen_violations` sobre "Harina de trigo sin gluten"
+# para un alérgico a Gluten ⇒ `[]` (pre-fase bloqueaba). Estos 12 términos de
+# `_ALLERGEN_SYNONYMS['gluten']` NO tienen ninguna versión sin gluten posible — a diferencia de
+# avena/pan/pasta/tostada/galleta/etc (que SÍ la tienen y permanecen excusables), decorarlos con
+# «sin gluten»/«libre de gluten» no es cumplimiento, es una contradicción. Verificado contra la
+# lista completa de `_ALLERGEN_SYNONYMS['gluten']` — criterio: «no existe versión sin gluten de
+# este alimento». Si aparece evidencia real de un 13er término imposible, añadirlo aquí CON un
+# test que lo ancle primero (mismo principio que `_GLUTEN_FORWARD_FILLER_WHITELIST`).
+_GLUTEN_NO_GF_VARIANT_TERMS = frozenset({
+    "trigo", "harina de trigo", "cebada", "centeno", "seitan", "wheat",
+    "semola", "bulgur", "malta", "gluten", "cuscus", "couscous",
+})
 
 
 def _scan_allergen_violations(plan: dict, allergies) -> list:
@@ -13864,22 +15403,9 @@ def _scan_allergen_violations(plan: dict, allergies) -> list:
             import unicodedata
             return "".join(c for c in unicodedata.normalize("NFKD", str(s)) if not unicodedata.combining(c))
     import re as _re
-    if isinstance(allergies, str):
-        allergies = [allergies]
-    forbidden = set()
-    for a in (allergies or []):
-        a_low = strip_accents(str(a).strip().lower())
-        if not a_low or a_low in _MEDICAL_NONE_SENTINELS:
-            continue
-        matched = False
-        for cat, syns in _ALLERGEN_SYNONYMS.items():
-            cat_n = strip_accents(cat)
-            if a_low == cat_n or cat_n in a_low or a_low in cat_n or \
-               any(a_low in strip_accents(s) or strip_accents(s) in a_low for s in syns):
-                forbidden.update(strip_accents(s) for s in syns)
-                matched = True
-        if not matched:
-            forbidden.add(a_low)  # alergia free-text → match literal
+    # [P0-ALLERGEN-VOCAB-I18N · 2026-08-21] La expansión vive en `_expand_allergy_declarations`
+    # (SSOT) — antes estaba copiada aquí y en `_verified_catalog_excluded_tokens`.
+    forbidden = _expand_allergy_declarations(allergies)
     if not forbidden:
         return []
     violations = []
@@ -13888,9 +15414,54 @@ def _scan_allergen_violations(plan: dict, allergies) -> list:
             for ing in meal.get("ingredients", []):
                 ing_low = strip_accents(str(ing).lower())
                 for f in forbidden:
-                    # `(?:s|es)?` captura el plural español (fresa→fresas, pan→panes,
-                    # camaron→camarones) SIN falsos positivos de prefijo (leche≠lechosa).
-                    if f and _re.search(r"\b" + _re.escape(f) + r"(?:s|es)?\b", ing_low):
+                    # El patrón SSOT captura plural regular (fresa→fresas, pan→panes,
+                    # camaron→camarones) y -z→-ces, sin prefijos (leche≠lechosa).
+                    _m_al = _re.search(_patron_termino_alergeno(f), ing_low) if f else None
+                    if _m_al:
+                        # [P1-REVIEWER-VERIFICATION-ADVISORY · 2026-08-08] misma excusa plant-adj
+                        # del scan de dieta: «leche de coco»/«mantequilla de maní»/«yogur de soya»
+                        # no violan la alergia a LÁCTEOS (el alérgico a maní/coco matchea vía su
+                        # propio término directo).
+                        if _PLANT_ADJ_EXCUSE_RX.match(ing_low[_m_al.end(): _m_al.end() + 18]):
+                            continue
+                        # [P3-SEMOLA-MAIZ-GLUTEN-FP · 2026-08-23] excusa acotada AL TÉRMINO que
+                        # casó: «sémola de maíz/yuca/arroz» no lleva gluten. 'pan' y 'harina' no
+                        # tienen entrada, así que «Pan de maíz» sigue marcado.
+                        if _allergen_term_base_excused(
+                                f, ing_low[_m_al.end(): _m_al.end() + 18]):
+                            continue
+                        # [P1-ALLERGEN-NEGATION-EXCUSE · 2026-08-09] «sin/libre de/cero/no
+                        # contiene <token>» = ausencia declarada del token — no violación.
+                        # [P1-COUNTRY-SYSTEM-F2 · ola final · 2026-08-18 · C2] Esta excusa BACKWARD
+                        # NO comparte el gate `f in _ALLERGEN_GLUTEN_TERM_SET` de la FORWARD de
+                        # abajo — es universal a TODAS las categorías (`leche sin lactosa` la
+                        # prueba: 'leche' nunca la alcanza porque la negación no la PRECEDE). Por
+                        # eso `_GLUTEN_NO_GF_VARIANT_TERMS` NO se aplica aquí: 'gluten' es uno de
+                        # los 12 términos imposibles, pero es precisamente ESTE mecanismo el que
+                        # excusa la palabra literal 'gluten' en el caso base «avena certificada SIN
+                        # GLUTEN» (la negación PRECEDE inmediatamente a 'gluten' mismo) — excluirlo
+                        # aquí re-rompería los 8 tests de negation-excuse. La contradicción real
+                        # («harina de trigo sin gluten») vive en la FORWARD (trigo→...→gluten, no
+                        # gluten→…→gluten) — scope correcto, verificado con la suite completa.
+                        if _ALLERGEN_NEGATION_PREFIX_RX.search(
+                                ing_low[max(0, _m_al.start() - 24): _m_al.start()]):
+                            continue
+                        # [P1-COUNTRY-SYSTEM-F2 · T4 fix-round 1 · 2026-08-17] excusa FORWARD,
+                        # SCOPED a gluten únicamente (`f` debe ser un término de esa categoría) —
+                        # «avena certificada sin gluten» / «pan sin gluten»: la negación SIGUE al
+                        # término, la prefix-excuse de arriba no la alcanza.
+                        # [P1-COUNTRY-SYSTEM-F2 · ola final (review de fase) · 2026-08-18 · C2]
+                        # `f not in _GLUTEN_NO_GF_VARIANT_TERMS` cierra el fail-open medido en el
+                        # review: sin este guard, «Harina de trigo sin gluten» pasaba para un
+                        # CELÍACO (pre-fase bloqueaba) — el forward excusaba 'trigo'/'harina de
+                        # trigo' igual que excusa 'avena'/'pan', pero para estos 12 términos NO
+                        # existe versión sin gluten posible (ver el frozenset arriba): la claim es
+                        # imposible/contradictoria, no cumplimiento.
+                        if (f in _ALLERGEN_GLUTEN_TERM_SET
+                                and f not in _GLUTEN_NO_GF_VARIANT_TERMS
+                                and _GLUTEN_FORWARD_EXCUSE_RX.match(
+                                    ing_low[_m_al.end(): _m_al.end() + 40])):
+                            continue
                         violations.append((meal.get("name", "?"), str(ing), f))
                         break
     return violations
@@ -13906,12 +15477,52 @@ _DIET_FLESH_TERMS = (  # carne de tierra + aves
     "bistec", "churrasco", "cerdo", "puerco", "chuleta", "chicharron", "tocino", "tocineta", "jamon",
     "salami", "longaniza", "chorizo", "salchicha", "salchichon", "embutido", "costilla", "mondongo",
     "chivo", "cabro", "conejo", "higado", "pernil",
+    # [P1-COUNTRY-SYSTEM-F2 · T5 · 2026-08-17] altas de catálogo ES (charcutería/carnes, DROP en
+    # T1 country_catalog_gap.py --country ES). 'jamon'/'chorizo' arriba ya cubren "Jamón
+    # serrano/ibérico" y "Chorizo español" por substring — estos 7 son productos animales SIN
+    # ningún término existente que los matchee: sin esto, un plan ES con "Morcilla"/"Sobrasada"/
+    # etc. pasaba el scan de dieta vegana/vegetariana limpio (no es alérgeno IgE en este sistema
+    # — carne es EXCLUSIVAMENTE vocabulario #2, sin contraparte en `_ALLERGEN_SYNONYMS`, ver G2).
+    "morcilla", "panceta", "embuchado", "sobrasada", "butifarra", "chistorra", "cordero",
+    # [P1-COUNTRY-SYSTEM-F2 · T6 · 2026-08-17] alta de catálogo MX (Cecina, DROP en T1): res
+    # curada/salada en láminas — 'chicharron'/'gallina'/'chorizo' arriba YA cubrían Chicharrón(CO)/
+    # Gallina criolla(CO)/Chorizo mexicano-verde-santarrosano(MX/CO) por substring; 'cecina' es el
+    # único de este lote SIN ningún término existente que lo matchee.
+    "cecina",
+    # [P1-COUNTRY-SYSTEM-F2 · T7 · 2026-08-17] altas de catálogo PR/US (DROP en T1). 'pavo'
+    # arriba NO matchea 'Pavochón' (palabra compuesta sin espacio: \bpavo\b no cruza el límite
+    # word-boundary dentro de "pavochon" -- mismo tipo de gap que "pan" no matchea "panecillos").
+    # 'pepperoni' es un embutido de cerdo/res sin ningún término existente que lo cubra (no
+    # comparte raíz con 'salami'/'chorizo'/'longaniza'). 'frijoles horneados' lleva cerdo en su
+    # receta comercial real (fdc USDA citado: "Beans, baked, canned, WITH PORK and tomato
+    # sauce") sin que el nombre del catálogo lo revele -- mismo patrón que 'salsa inglesa'/
+    # 'worcestershire' en `_DIET_SEAFOOD_TERMS` (lleva anchoas, no evidente por el nombre).
+    "pavochon", "pepperoni", "frijoles horneados",
 )
 _DIET_SEAFOOD_TERMS = (  # pescado + mariscos
     "pescado", "atun", "salmon", "tilapia", "bacalao", "sardina", "mero", "chillo", "dorado",
     "carite", "arenque", "merluza", "camaron", "langosta", "cangrejo", "langostino", "marisco",
     "calamar", "pulpo", "lambi", "surimi", "anchoa", "caviar",
     "mejillones", "mejillon", "almeja", "ostra", "vieira",  # [P1-VARIETY-CATALOG-POOLS] mariscos del catálogo
+    # [P1-COUNTRY-SYSTEM-F2 · T4 · 2026-08-17] paridad con `_ALLERGEN_SYNONYMS['mariscos'/'pescado']`
+    # (guard `test_paridad_dieta_alergeno_bidireccional`): 'gambas'/'gamba' y 'salsa inglesa'/
+    # 'worcestershire' (derivado de pescado, Worcestershire lleva anchoas) ya vivían del lado
+    # alérgeno, ausentes aquí.
+    "gambas", "gamba", "salsa inglesa", "worcestershire",
+    # [P1-COUNTRY-SYSTEM-F2 · T5 · 2026-08-17] paridad con las altas de T5 en
+    # `_ALLERGEN_SYNONYMS['mariscos'/'pescado']` (percebe/percebes, boqueron/boquerones) — mismo
+    # guard `test_paridad_dieta_alergeno_bidireccional`.
+    "percebe", "percebes", "boqueron", "boquerones",
+    # [P1-COUNTRY-SYSTEM-F2 · T6 · 2026-08-17] paridad con la alta de T6 en
+    # `_ALLERGEN_SYNONYMS['pescado']` (Trucha, CO) — mismo guard `test_paridad_dieta_alergeno_bidireccional`.
+    "trucha", "truchas",
+    # [P1-COUNTRY-SYSTEM-F2 · T7 · 2026-08-17] paridad con la alta de T7 en
+    # `_ALLERGEN_SYNONYMS['pescado']` (Bacalaítos, PR) — mismo guard
+    # `test_paridad_dieta_alergeno_bidireccional`.
+    "bacalaitos",
+    # [P0-COUNTRY-ALLERGEN-FOOD-VOCAB · 2026-08-23] Sepia es marisco tanto
+    # para la alergia como para la restricción vegetariana/vegana.
+    "sepia",
 )
 _DIET_EGG_TERMS = (
     "huevo", "huevos", "clara", "claras", "yema", "yemas",
@@ -13919,6 +15530,9 @@ _DIET_EGG_TERMS = (
     # cubría. Over-detect bias consistente: una versión vegana ("mayonesa vegana", "merengue de aquafaba")
     # la excusa `_plant_adj` por adyacencia o cae al fallback (vegano-seguro). Nunca se sirve huevo a un vegano.
     "mayonesa", "merengue", "mousse", "alioli", "aioli",
+    # [P1-COUNTRY-SYSTEM-F2 · T4 · 2026-08-17] paridad con `_ALLERGEN_SYNONYMS['huevo']`: 'holandesa'
+    # (salsa holandesa) y 'ponche' (ponche crema) ya vivían del lado alérgeno, ausentes aquí.
+    "holandesa", "ponche",
 )
 _DIET_DAIRY_TERMS = (
     "leche", "queso", "yogur", "yogurt", "mantequilla", "crema", "lacteo", "ricotta", "mozzarella",
@@ -13926,6 +15540,17 @@ _DIET_DAIRY_TERMS = (
     "dulce de leche", "leche condensada", "leche evaporada", "nata", "ghee",
     # [post-review 2026-06-15] productos animales procesados que el sibling allergen guard ya cubría
     "helado", "mantecado", "flan",
+    # [P1-COUNTRY-SYSTEM-F2 · T4 · 2026-08-17] paridad con `_ALLERGEN_SYNONYMS['lacteos']`: 'caseinato'
+    # y 'proteina de suero' ya vivían del lado alérgeno (proteínas lácteas, no cubiertas por la raíz
+    # 'caseina'/'suero de leche' vía substring — orden de palabras distinto), ausentes aquí.
+    "caseinato", "proteina de suero",
+    # [P1-COUNTRY-SYSTEM-F2 · T5 · 2026-08-17] paridad con la alta de T5 en
+    # `_ALLERGEN_SYNONYMS['lacteos'/'lactosa']` ('cuajada') — mismo guard
+    # `test_paridad_dieta_alergeno_bidireccional`.
+    "cuajada",
+    # [P1-COUNTRY-SYSTEM-F2 · T6 · 2026-08-17] paridad con las altas de T6 en
+    # `_ALLERGEN_SYNONYMS['lacteos'/'lactosa']` (Arequipe, Suero costeño) — mismo guard.
+    "arequipe", "suero costeno",
 )
 
 
@@ -14012,6 +15637,143 @@ def _scan_diet_violations(plan: dict, diet_type) -> list:
                     violations.append((meal.get("name", "?"), str(ing), label))
                     break
     return violations
+
+
+_VERIFICATION_DEMAND_RX = _re_mod.compile(
+    r"(certificaci[oó]n|certificad[oa]s?|contaminaci[oó]n cruzada|debe(?:n)? verificarse|"
+    r"requiere[n]? verificaci[oó]n|verificar (?:la |las )?etiquetas?|sin indicar certificaci[oó]n|"
+    r"requiere[n]? confirmaci[oó]n|debe[n]? confirmarse|requiere[n]? vigilancia|"
+    r"vigilancia de (?:la )?funci[oó]n|requiere[n]? supervisi[oó]n)",
+    _re_mod.IGNORECASE,
+)
+
+
+def _downgrade_reviewer_verification_demands(approved, issues, severity):
+    """[P1-REVIEWER-VERIFICATION-ADVISORY · 2026-08-08] Demandas de VERIFICACIÓN del reviewer LLM
+    («requiere certificación sin gluten», «contaminación cruzada», «vigilancia tiroidea») →
+    advisory, NO rechazo crítico guest: son irrefutables por construcción (no existe dato de
+    marca que el generador pueda emitir) y ENVENENAN el retry (viajan en la directiva — corridas
+    31232856541/31241353361, perfiles 17/20). «pasteurizado» (food-safety embarazo) queda FUERA
+    del patrón a propósito. Los guards DETERMINISTAS (alérgeno/dieta/piso) corren después y
+    conservan la última palabra. Devuelve (approved, issues_reales, severity, advisories)."""
+    if not REVIEWER_VERIFICATION_ADVISORY_ENABLED or approved or not issues:
+        return approved, list(issues or []), severity, []
+    real, advisories = [], []
+    for it in issues:
+        (advisories if _VERIFICATION_DEMAND_RX.search(str(it)) else real).append(it)
+    if not advisories:
+        return approved, real, severity, []
+    if real:
+        logger.info(f"📋 [P1-REVIEWER-VERIFICATION-ADVISORY] {len(advisories)} demanda(s) de "
+                    f"verificación degradadas a advisory; {len(real)} issue(s) reales se quedan.")
+        return approved, real, severity, advisories
+    logger.warning(f"📋 [P1-REVIEWER-VERIFICATION-ADVISORY] TODAS las {len(advisories)} issues del "
+                   f"reviewer eran demandas de verificación → plan aprobado por el LLM (los guards "
+                   f"deterministas validan aparte).")
+    return True, [], "low", advisories
+
+
+def _allergen_pool_item_banned(item, allergies) -> bool:
+    """[P1-REVIEWER-VERIFICATION-ADVISORY · 2026-08-08] ¿Este ítem de pool del skeleton viola
+    una ALERGIA declarada? Sibling exacto de `_diet_pool_item_banned` — el scrub era diet-only
+    y asignó Huevos+Queso a un alérgico a huevo/lácteos declarando «limpio» (run 31232856541).
+    Reusa `_scan_allergen_violations` (mini-plan, sinónimos C2, excusa plant-adj). Fail-open."""
+    try:
+        return bool(_scan_allergen_violations(
+            {"days": [{"meals": [{"name": "_pool", "ingredients": [str(item)]}]}]}, allergies))
+    except Exception:
+        return False
+
+
+def _diet_pool_item_banned(item, diet_type) -> bool:
+    """[P1-DAYGEN-DIET-CONVERGE · 2026-08-07] ¿Este ítem de pool del skeleton viola la dieta?
+
+    REUSA `_scan_diet_violations` tal cual (mini-plan de un solo ingrediente): mismo matcher
+    word-boundary + plurales + excusa plant-adjacent ('carne de soya', 'leche de coco'), mismas
+    tuplas SSOT `_DIET_*_TERMS`. NO es una 4ª tabla (P1-DIET-CANON-SSOT) — es el mismo contrato
+    del guard aplicado ANTES de generar en vez de después. 'Fresas' no matchea 'res' (boundary).
+    Fail-open: los guards duros downstream validan igual. tooltip-anchor: P1-DAYGEN-DIET-CONVERGE"""
+    try:
+        return bool(_scan_diet_violations(
+            {"days": [{"meals": [{"name": "_pool", "ingredients": [str(item)]}]}]}, diet_type))
+    except Exception:
+        return False
+
+
+def _salt_restricted_profile(form_data) -> bool:
+    """[P1-DAYGEN-DIET-CONVERGE · 2026-08-07] ¿El perfil restringe sodio (HTA o renal activa)?
+    Detección vía el registry SSOT (`condition_rules.detect_active_rules`) — cero tabla nueva de
+    términos. Fail-open (False): sin señal, el splitter de sal conserva su comportamiento histórico."""
+    try:
+        from condition_rules import detect_active_rules
+        return any(r.id in ("hta", "renal") for r in detect_active_rules(form_data or {}))
+    except Exception:
+        return False
+
+
+def _build_diet_directive_context(form_data) -> str:
+    """[P1-DAYGEN-DIET-CONVERGE · 2026-08-07] Bloque de directiva de DIETA para skeleton + day-gen.
+
+    La dieta viajaba como un campo JSON enterrado en form_data mientras las alergias tienen un
+    bloque PRIORIDAD-1 a gritos (prompts/plan_generator.py) — asimetría que un modelo effort-low
+    ignora (benchmark 2026-08-07: camarones/atún/lácteos en planes vegan/vegetarian). Devuelve ""
+    para balanced → prompt byte-equivalente (cache preservado) para la mayoría. Canonicaliza SOLO
+    vía `constants.canonicalize_diet_type` (P1-DIET-CANON-SSOT). Sin tofu en sugerencias
+    (P3-TOFU-REMOVE: no se vende). tooltip-anchor: P1-DAYGEN-DIET-CONVERGE"""
+    if not DIET_DIRECTIVE_BLOCK_ENABLED:
+        return ""
+    canon = _canonicalize_diet_type((form_data or {}).get("dietType") or (form_data or {}).get("diet"))
+    if canon == "vegan":
+        return ("🛑 DIETA VEGANA (PRIORIDAD 1 — RESTRICCIÓN ABSOLUTA): CERO productos animales en "
+                "TODOS los pools, platos e ingredientes. PROHIBIDO: toda carne (pollo, res, cerdo, "
+                "pavo, embutidos), todo pescado y marisco (atún, camarones, salmón, sardinas), "
+                "huevos, y TODO lácteo (leche, queso, yogur, mantequilla, crema). Proteínas válidas: "
+                "leguminosas (habichuelas, lentejas, garbanzos), quinoa, avena, frutos secos. "
+                "UN SOLO ingrediente animal invalida el plan COMPLETO.\n")
+    if canon == "vegetarian":
+        return ("🛑 DIETA VEGETARIANA (PRIORIDAD 1 — RESTRICCIÓN ABSOLUTA): CERO carne y CERO "
+                "pescado/marisco en TODOS los pools, platos e ingredientes (ni pollo, ni res, ni "
+                "cerdo, ni atún, ni camarones, ni embutidos). Huevos y lácteos SÍ están permitidos. "
+                "UN SOLO ingrediente de carne o pescado invalida el plan COMPLETO.\n")
+    if canon == "pescatarian":
+        return ("🛑 DIETA PESCETARIANA (PRIORIDAD 1 — RESTRICCIÓN ABSOLUTA): CERO carne de tierra "
+                "(pollo, res, cerdo, pavo, embutidos) en pools, platos e ingredientes. Pescado, "
+                "mariscos, huevos y lácteos SÍ permitidos.\n")
+    return ""
+
+
+def _protein_floor_directive_text(sd_str: str, eff_pct: float, tgt_p: float, diet, motivo: str) -> str:
+    """[P1-DIET-BLIND-DIRECTIVES · 2026-08-08] Texto del rechazo del piso de proteína, POR DIETA.
+
+    La versión única ordenaba "fuente animal de alta densidad (pollo, pescado, cerdo, res...)"
+    también a planes veg* — y como este texto viaja INYECTADO en la directiva del retry informado
+    (P1-DAYGEN-DIET-CONVERGE), el único retry recibía a la vez "reemplaza por vegetales" y "DEBE
+    incluir fuente animal": el modelo obedeció la contradicción (pechuga de pollo en el intento 2
+    del perfil vegana_dm2 — journal 2026-08-08 02:00 UTC, issue #9). Es el mismo defecto que ya
+    obligó a la exención renal de este piso ("su directiva ordena justo lo CONTRARIO de lo
+    clínicamente correcto"). balanced conserva el texto EXACTO (byte-anchor en el test).
+    Fuentes veg* desde el SSOT `constants.diet_protein_suggestions` (cero 4ª tabla)."""
+    from constants import diet_protein_suggestions as _dps, canonicalize_diet_type as _cdt
+    _sources = _dps(diet)
+    if _sources:
+        _lbl = "vegana" if _cdt(diet) == "vegan" else "vegetariana"
+        return (
+            f"DÉFICIT DE PROTEÍNA (rechazo clínico — {motivo}): el plan no "
+            f"alcanza el piso de proteína en {sd_str}. Cada comida PRINCIPAL (almuerzo y "
+            f"cena) DEBE incluir una fuente proteica DENSA apta para la dieta {_lbl} "
+            f"({_sources}) dimensionada en gramos para que cada día sume al menos "
+            f"{int(eff_pct * 100)}% del target ({int(tgt_p)}g). PROHIBIDO resolver el "
+            f"déficit con alimentos que la dieta excluye: sube los GRAMOS de las fuentes "
+            f"aptas y repártelas entre las comidas principales."
+        )
+    return (
+        f"DÉFICIT DE PROTEÍNA (rechazo clínico — {motivo}): el plan no "
+        f"alcanza el piso de proteína en {sd_str}. Cada comida PRINCIPAL (almuerzo y "
+        f"cena) DEBE incluir una fuente animal de alta densidad (pollo, pescado, cerdo, "
+        f"res, huevos, queso) dimensionada en gramos para que cada día sume al menos "
+        f"{int(eff_pct * 100)}% del target ({int(tgt_p)}g). NO dependas solo "
+        f"de leguminosas/almidón en las comidas principales."
+    )
 
 
 # [P0-UPDATE-CLINICAL-GUARD · 2026-06-23] Knob del backstop clínico determinista para las
@@ -14167,29 +15929,71 @@ def clinical_backstop_for_meal(meal: dict, *, allergies=None, diet_type=None, fo
     return out
 
 
-def slot_coherence_backstop_for_meal(meal: dict, meal_type: str) -> list:
+def slot_coherence_backstop_for_meal(meal: dict, meal_type: str, country: str = "DO") -> list:
     """[P1-SLOT-APPROPRIATENESS · 2026-06-27] (audit G4) Backstop DETERMINISTA per-comida de coherencia
     de HORARIO, reusable por las superficies de UPDATE (swap S3 / regenerate-day S2). Espejo de
     `clinical_backstop_for_meal` pero CALIDAD, no seguridad: reusa el SSOT
     `constants.slot_violations_for_meal_name` (match word-boundary sobre el NOMBRE). Devuelve lista de
     strings de violación (vacía = ok). Gateado por SLOT_APPROPRIATENESS_GATE_ENABLED. FAIL-OPEN: un error
     del detector NUNCA bloquea el update (a diferencia del backstop clínico, abortivo) — la coherencia de
-    horario es cosmética; degradarla es preferible a un cero-plato. tooltip-anchor: P1-SLOT-APPROPRIATENESS"""
+    horario es cosmética; degradarla es preferible a un cero-plato.
+
+    [P1-COUNTRY-SYSTEM-F1 · 2026-08-16 (T4 fix-round 1)] `country` (default 'DO' — preserva los
+    callers preexistentes, incluidos los de test) resuelve `slot_rules_for_country(country)`. DO
+    incluye TODA violación del pase NAME-LEVEL sin filtrar por `hard` — byte-idéntico al
+    comportamiento pre-fix (algunas reglas, ej. "arroz de noche" en cena, ya eran nativamente soft
+    en `SLOT_INAPPROPRIATE_FOODS` y SIEMPRE dispararon este backstop; filtrar por `hard`
+    incondicionalmente habría roto ESE comportamiento existente, no solo el de beta — verificado
+    contra `test_backstop_for_update_surfaces`, que exige exactamente ese caso). País != DO incluye
+    SOLO violaciones `hard` — hoy `slot_rules_for_country(beta)` marca TODO soft, así que el pase
+    name-level nunca dispara este backstop para beta (equivalente semántico: "DO conserva su
+    comportamiento íntegro; beta pierde SOLO lo que ya no es hard"), pero la condición sigue
+    correcta si Fase 2 introduce una tabla beta con alguna regla nativamente hard. Sin esto, el
+    backstop llamaba `slot_violations_for_meal_name` sin tabla → SIEMPRE la tabla dura → `swap_meal`
+    (agent.py) levantaba `SLOT_INCOHERENCE` y forzaba hasta 3 retries LLM por una regla que
+    `_detect_slot_appropriateness`/T4 ya trata como soft/telemetría para países beta.
+
+    [P1-COUNTRY-SYSTEM-F2 · 2026-08-17 (Task 9, g)] El pase INGREDIENT-LEVEL
+    (`slot_ingredient_violations`, abajo) CIERRA el residual disclosed en T4 fix-round 1 (docs/
+    country_system_f1.md, fila "slot_coherence_backstop_for_meal's pase ingredient-level"): ahora
+    se filtra con el MISMO criterio `_is_do or v.get("hard")` que el pase name-level un poco más
+    arriba — DO conserva TODA violación (byte-idéntico), beta pierde SOLO lo que no es `hard` (hoy:
+    todo, porque `slot_ingredient_violations` en sí sigue devolviendo `hard=True` incondicional —
+    la SSOT compartida no se toca, igual que en `_detect_slot_appropriateness`, que filtra en el
+    sitio de consumo, no en la función). tooltip-anchor: P1-SLOT-APPROPRIATENESS"""
     if not SLOT_APPROPRIATENESS_GATE_ENABLED or not isinstance(meal, dict):
         return []
     try:
         slot_key = canonical_slot_key(meal_type) or _SLOT_KEY_MAP.get(_norm_text(meal_type))
         if not slot_key:
             return []
+        from constants import canonicalize_country as _cc_scbfm, slot_rules_for_country
+        _is_do = _cc_scbfm(country) == "DO"
+        _rules_table = slot_rules_for_country(country)
         out = []
-        for v in slot_violations_for_meal_name(meal.get("name", ""), slot_key):
-            out.append(f"{v['label']} no corresponde al {slot_key} (coherencia de horario es-DO)")
+        for v in slot_violations_for_meal_name(meal.get("name", ""), slot_key, _rules_table):
+            if _is_do or v.get("hard"):
+                out.append(f"{v['label']} no corresponde al {slot_key} (coherencia de horario es-DO)")
         # [P2-SLOT-INGREDIENT-RICE · 2026-07-01] (audit v2 slots GAP-1) paridad updates: el mismo pase
         # ingredient-level del productor S1 (arroz oculto en ingredients de un DESAYUNO con nombre inocuo).
+        # [P1-COUNTRY-SYSTEM-F2 · 2026-08-17 (Task 9, g)] CERRADO el gap de país (antes: T4
+        # fix-round 1 dejaba este pase siempre-hard sin importar país). OJO — a diferencia del pase
+        # name-level de arriba (cuyo `_rules_table` YA es país-derivado, así que `_is_do or
+        # v.get("hard")` es el filtro correcto ahí), `slot_ingredient_violations` es ESTRUCTURAL:
+        # no consulta ninguna tabla país-aware y devuelve `hard=True` INCONDICIONAL para TODO lo
+        # que encuentra — `_is_do or v.get("hard")` aquí sería un NO-OP (v.get("hard") siempre
+        # True ⇒ el OR siempre True ⇒ beta seguiría viendo el 100%, verificado en vivo durante el
+        # desarrollo de este fix). El override correcto mirror-ea `_detect_slot_appropriateness`
+        # (línea `"hard": v["hard"] and _country == "DO"`): efectivo-hard = v["hard"] AND país==DO.
+        # [P1-COUNTRY-SYSTEM-F1 EXENTO: slot_ingredient_violations(ingredients, slot_key) no lleva
+        # parámetro de país en su firma (función STRUCTURAL, ver _SCS_SPECS del test) — el
+        # override de "hard" ocurre en el `if` de consumo justo abajo, país-aware, no en este
+        # call. Exento de wiring por ARGUMENTO, no de país-consciencia (que sí está cerrada).]
         try:
             from constants import slot_ingredient_violations as _siv_b
             for v in _siv_b(meal.get("ingredients") or [], slot_key):
-                out.append(f"{v['label']} (coherencia de horario es-DO)")
+                if v.get("hard") and _is_do:
+                    out.append(f"{v['label']} (coherencia de horario es-DO)")
         except Exception:
             pass
         return out
@@ -17148,6 +18952,368 @@ def _apply_food_safety_fixes(plan: dict) -> int:
     return fixed
 
 
+# [P1-PREGNANCY-SAFETY-NOTES · 2026-08-09] Cláusulas de la nota combinada de embarazo/lactancia.
+# Cada fila: (key, tokens gatillo (word-boundary sobre nombre+ingredientes, sin acentos),
+# substrings que ABSUELVEN la cláusula si la receta ya los dice, texto de la cláusula).
+# Los tokens espejan los rechazos MEDIDOS del reviewer (corr=86482b8c/d395f5c8/140dfe19) — no
+# es una lista aspiracional. 'atun' EXCLUIDO del bloque mariscos a propósito: el enlatado ya
+# está cocido (mismo criterio que _PREGNANCY_MERCURY_SUBS, que también lo excluye).
+_PREGNANCY_NOTE_PREFIX = "🤰 Seguridad alimentaria (embarazo/lactancia): "
+_PREGNANCY_SAFETY_CLAUSES = (
+    ("huevo", ("huevo", "huevos", "clara", "claras", "yema", "yemas"),
+     ("yema y clara firmes",),
+     "cocina el huevo POR COMPLETO (yema y clara firmes, sin puntos líquidos)"),
+    ("deli", ("jamon", "salami", "mortadela", "fiambre", "embutido", "deli",
+              "salchicha", "salchichon", "pepperoni", "tocineta", "tocino",
+              # [P0-PREG-CURED-BETA · 2026-08-23] Curados/embutidos de los cinco
+              # catálogos beta. El catálogo dinámico de abajo amplía por fila exacta;
+              # estos tokens son el fallback fail-safe si la lectura no está disponible.
+              "chorizo", "sobrasada", "cecina", "embuchado", "morcilla", "butifarra",
+              "chistorra", "panceta", "longaniza", "chuleta ahumada"),
+     ("74 °c", "74°c", "hasta que humee"),
+     "calienta los embutidos/carnes tipo deli hasta que humeen (74 °C) y sírvelos al momento — "
+     "fríos hay riesgo de listeria"),
+    # [P1-REVIEWER-SEES-SAFETY-NOTES · 2026-08-09] Generalizada tras el residual medido
+    # (corr=9909fb32: «lavado… no explicitadas para TODOS los platos» — la versión hojas-only
+    # dejaba frutas/hierbas fuera y el reviewer generalizaba el rechazo). El lavado es guía
+    # válida aunque el producto se cocine después.
+    ("hojas", ("espinaca", "espinacas", "rucula", "arugula", "lechuga", "repollo",
+               "berro", "berros", "acelga", "acelgas", "kale", "col rizada", "bok choy",
+               "cilantro", "perejil", "albahaca", "tomate", "pepino", "zanahoria", "apio",
+               "remolacha", "mango", "lechosa", "papaya", "pina", "fresa", "fresas",
+               "guineo", "banana", "melon", "sandia", "uva", "uvas", "manzana", "pera",
+               "chinola", "maracuya", "limon", "naranja", "toronja", "aguacate", "kiwi",
+               "granada", "guayaba"),
+     ("desinfecta",),
+     "lava y desinfecta las frutas, verduras y hierbas frescas antes de usarlas (aunque "
+     "se vayan a cocinar)"),
+    # [P1-REVIEWER-SEES-SAFETY-NOTES · 2026-08-09] Canela: residual medido corr=9909fb32
+    # («1 cucharadita de canela… debe reducirse a una pizca o sustituirse por canela de
+    # Ceilán» — cumarina de la Cassia). La absolución «ceilan» aplica también si el
+    # ingrediente ya la nombra (covered escanea receta + nombre + ingredientes).
+    ("canela", ("canela",),
+     ("ceilan",),
+     "usa canela de Ceilán (no Cassia) y limítala a una pizca durante el embarazo"),
+    ("papaya", ("lechosa", "papaya"),
+     ("completamente madura",),
+     "usa la lechosa/papaya COMPLETAMENTE madura (verde o pintona está contraindicada)"),
+    ("hongos", ("champinon", "champinones", "hongo", "hongos", "setas", "portobello"),
+     ("champinones por completo", "hongos por completo"),
+     "cocina los champiñones/hongos por completo (nunca crudos)"),
+    ("mariscos", ("pescado", "mejillon", "mejillones", "camaron", "camarones", "pulpo",
+                  "calamar", "cangrejo", "langosta", "tilapia", "salmon", "mero",
+                  "arenque", "bacalao", "sardina", "sardinas"),
+     ("mariscos por completo",),
+     "cocina el pescado y los mariscos POR COMPLETO (opacos y firmes; nada crudo ni a "
+     "medio cocer)"),
+)
+# Lácteos: cláusula aparte porque el match es POR LÍNEA de ingrediente (la excusa vegetal
+# «leche de coco/almendras» debe absolver SU línea sin absolver el queso fresco del mismo plato).
+_PREGNANCY_DAIRY_TOKENS = (
+    "leche", "yogur", "yogurt", "queso",
+    # [P0-PREG-CURED-BETA · 2026-08-23] Fallback estático de lácteos beta;
+    # la metadata ready_to_eat completa el resto sin depender de su grafía.
+    "cuajada", "suero costeno", "requeson", "nata",
+)
+_PREGNANCY_PLANT_DAIRY_RX = _re.compile(
+    r"\b(?:leche|yogur[t]?|queso)\s+(?:de\s+|vegana?\s+de\s+)?(?:coco|almendras?|soya|soja|"
+    r"avena|arroz|anacardo|mani|marañon|maranon|ajonjoli)", _re.IGNORECASE)
+_PREGNANCY_DAIRY_CLAUSE = "usa solo lácteos PASTEURIZADOS (leche, queso, yogur)"
+# [P1-REVIEWER-SEES-SAFETY-NOTES · 2026-08-09] Leguminosa SECA en la línea del ingrediente
+# (forma de compra que P1-LEGUME-DRY-WORDING escribe a propósito) → el reviewer exige el proceso
+# de cocción explícito (fitohemaglutinina; medido run 31299769707: «se indican secas y el plan
+# no especifica el proceso de cocción»). Por LÍNEA, como los lácteos.
+_PREGNANCY_LEGUME_TOKENS = ("habichuela", "habichuelas", "frijol", "frijoles", "lenteja",
+                            "lentejas", "garbanzo", "garbanzos", "haba", "habas",
+                            "gandul", "gandules")
+_PREGNANCY_DRY_RX = _re.compile(r"\bsec[oa]s?\b", _re.IGNORECASE)
+_PREGNANCY_LEGUME_CLAUSE = ("remoja y hierve las leguminosas secas hasta que estén "
+                            "completamente tiernas (nunca a medio cocer)")
+# El atún enlatado ya está cocido: si la ÚNICA fuente marina del plato es enlatada, la cláusula
+# de cocción de mariscos sería ruido. Contexto de lata sobre la línea del ingrediente.
+_PREGNANCY_CANNED_RX = _re.compile(r"en agua|en lata|enlatad|en aceite", _re.IGNORECASE)
+
+
+def _pregnancy_catalog_risk_tokens(catalog_rows=None) -> tuple[tuple[str, ...], tuple[str, ...], tuple[str, ...]]:
+    """Deriva triggers exactos de metadata culinaria, sin convertir dieta en clínica.
+
+    [P0-PREG-CURED-BETA · 2026-08-23] ``ready_to_eat=True`` identifica la
+    población que puede llegar al plato sin cocción. En Proteínas, los nombres
+    marinos se enrutan a la cláusula de cocción y los de huevo a su cláusula ya
+    existente; el resto son carnes deli/curadas. En Lácteos, se excluyen las
+    bebidas vegetales mediante la misma regex que usa la anotación por línea.
+
+    El catálogo es cacheado por ``get_master_ingredients``; aquí no se crea una
+    segunda caché ni una segunda taxonomía de nombres. Cualquier fallo conserva
+    el vocabulario estático fail-safe de arriba.
+    """
+    try:
+        if catalog_rows is None:
+            from shopping_calculator import get_master_ingredients
+
+            catalog_rows = get_master_ingredients() or []
+        from constants import strip_accents as _sa_catalog_risk
+
+        deli, dairy, marine = set(), set(), set()
+        for row in catalog_rows or []:
+            if not isinstance(row, dict) or row.get("ready_to_eat") is not True:
+                continue
+            name = _sa_catalog_risk(str(row.get("name") or "").strip().lower())
+            category = _sa_catalog_risk(str(row.get("category") or "").strip().lower())
+            if not name:
+                continue
+            if category == "lacteos":
+                if not _PREGNANCY_PLANT_DAIRY_RX.search(name):
+                    dairy.add(name)
+                continue
+            if category != "proteinas":
+                continue
+            if any(_name_has_token(t, name) for t in _DIET_EGG_TERMS):
+                continue  # la cláusula de huevo ya cubre la fila
+            if any(_name_has_token(t, name) for t in _DIET_SEAFOOD_TERMS):
+                marine.add(name)
+            else:
+                deli.add(name)
+        return tuple(sorted(deli)), tuple(sorted(dairy)), tuple(sorted(marine))
+    except Exception as exc:
+        logger.debug(
+            f"[P0-PREG-CURED-BETA] metadata culinaria no disponible; "
+            f"fallback estático: {type(exc).__name__}: {exc}"
+        )
+        return (), (), ()
+
+
+def _apply_pregnancy_food_safety_annotations(plan: dict, form_data: dict) -> int:
+    """[P1-PREGNANCY-SAFETY-NOTES · 2026-08-09] Nota combinada de seguridad alimentaria por comida
+    para perfiles de embarazo/lactancia. El reviewer de perfiles difíciles exige que la receta DIGA
+    la instrucción de seguridad aunque el plato sea seguro (5 rechazos en una sola review,
+    corr=86482b8c); P1-REVIEWER-VERIFICATION-ADVISORY dejó esta clase fuera A PROPÓSITO porque —
+    a diferencia de «verificar la etiqueta» — la receta sí puede decirla: el fix es upstream.
+    Note-only (macro-preservante, no muta tokens → shopping-safe). La nota se RECOMPUTA por
+    corrida: cláusulas nuevas entran, las de ingredientes que salieron se van (absolution-aware,
+    clase P1-RAW-COOKED-ABSOLUTION), y una cláusula que la receta ya dice con sus palabras se
+    omite. Superficie: capa clínica (generación + fallbacks); el swap individual queda fuera
+    (surface aparte, sin form_data completo). Retorna comidas anotadas.
+    tooltip-anchor: P1-PREGNANCY-SAFETY-NOTES"""
+    if not PREGNANCY_SAFETY_NOTES_ENABLED or not isinstance(plan, dict):
+        return 0
+    try:
+        from nutrition_calculator import _is_pregnancy_or_lactation as _psn_ipl
+        if not _psn_ipl(form_data or {}):
+            return 0
+        from constants import strip_accents as _sa_psn
+    except Exception:
+        return 0
+    _catalog_deli, _catalog_dairy, _catalog_marine = _pregnancy_catalog_risk_tokens()
+    annotated = 0
+    try:
+        for day in plan.get("days") or []:
+            for meal in (day.get("meals") or []) if isinstance(day, dict) else []:
+                if not isinstance(meal, dict):
+                    continue
+                ings = [str(i) for i in (meal.get("ingredients") or [])]
+                blob = _sa_psn((str(meal.get("name", "")) + " " + " ".join(ings)).lower())
+                rec = meal.get("recipe")
+                rec = ([] if rec is None else [str(s) for s in rec]) if not isinstance(rec, list) \
+                    else [str(s) for s in rec]
+                base_rec = [s for s in rec if _PREGNANCY_NOTE_PREFIX not in s]
+                rec_blob = _sa_psn(" ".join(base_rec).lower())
+                clauses = []
+                for _key, _toks, _covered, _text in _PREGNANCY_SAFETY_CLAUSES:
+                    _effective_toks = _toks
+                    if _key == "deli":
+                        _effective_toks = _toks + _catalog_deli
+                    elif _key == "mariscos":
+                        _effective_toks = _toks + _catalog_marine
+                    if not any(_name_has_token(_t, blob) for _t in _effective_toks):
+                        continue
+                    # covered escanea receta + nombre + ingredientes: «canela de Ceilán» o
+                    # «leche pasteurizada» EN la línea del ingrediente también absuelven.
+                    if any(_sa_psn(c) in rec_blob or _sa_psn(c) in blob for c in _covered):
+                        continue  # el LLM ya escribió la instrucción con sus palabras
+                    if _key == "mariscos":
+                        # solo lata ("atún en agua" ni siquiera matchea; "sardinas en lata" sí):
+                        # si TODA línea marina es enlatada, ya está cocida → cláusula fuera.
+                        _marine_lines = [
+                            _l for _l in ings
+                            if any(_name_has_token(_t, _sa_psn(_l.lower()))
+                                   for _t in _effective_toks)]
+                        if _marine_lines and all(
+                                _PREGNANCY_CANNED_RX.search(_l) for _l in _marine_lines):
+                            continue
+                    clauses.append(_text)
+                # lácteos por LÍNEA (la leche vegetal absuelve su línea, no el plato entero;
+                # «leche pasteurizada» en cualquier línea absuelve el plato)
+                if "pasteuriz" not in rec_blob and "pasteuriz" not in blob:
+                    for _l in ings:
+                        _ll = _sa_psn(_l.lower())
+                        if (any(_name_has_token(_t, _ll)
+                                for _t in _PREGNANCY_DAIRY_TOKENS + _catalog_dairy)
+                                and not _PREGNANCY_PLANT_DAIRY_RX.search(_sa_psn(_l))):
+                            clauses.append(_PREGNANCY_DAIRY_CLAUSE)
+                            break
+                # [P1-REVIEWER-SEES-SAFETY-NOTES] leguminosa SECA por LÍNEA → proceso de
+                # cocción explícito (la forma «guisada/cocida» no lleva 'seca' → no dispara).
+                if "tiernas" not in rec_blob and "remoja" not in rec_blob:
+                    for _l in ings:
+                        _ll = _sa_psn(_l.lower())
+                        if (_PREGNANCY_DRY_RX.search(_ll)
+                                and any(_name_has_token(_t, _ll)
+                                        for _t in _PREGNANCY_LEGUME_TOKENS)):
+                            clauses.append(_PREGNANCY_LEGUME_CLAUSE)
+                            break
+                new_note = (_PREGNANCY_NOTE_PREFIX + "; ".join(clauses) + ".") if clauses else None
+                had_note = len(base_rec) != len(rec)
+                if new_note:
+                    meal["recipe"] = base_rec + [new_note]
+                    if not had_note or rec[-1] != new_note:
+                        annotated += 1
+                elif had_note:
+                    meal["recipe"] = base_rec  # absolución: el riesgo salió del plato
+        if annotated:
+            logger.info(f"🤰 [P1-PREGNANCY-SAFETY-NOTES] {annotated} comida(s) anotada(s) con "
+                        f"seguridad alimentaria de embarazo/lactancia (note-only, pre-reviewer).")
+    except Exception as _psn_e:
+        logger.warning(f"[P1-PREGNANCY-SAFETY-NOTES] no-op: {type(_psn_e).__name__}: {_psn_e}")
+        return annotated
+    return annotated
+
+
+# [P1-CONDITION-SAFETY-NOTES · 2026-08-09] Registro de cláusulas por CONDICIÓN — generalización
+# del patrón que convirtió embarazo/lactancia de 0% a entregable (anotar determinista + hacer
+# visible al reviewer). Los 10 fallos de la corrida 31304538636 son la MISMA clase en otras
+# condiciones, con las cláusulas dictadas por el propio reviewer: HTA «versiones bajas en sodio»
+# (perfil 4), dislipidemia «descremados»/yemas (5), gastritis «irritantes» (6), SOP porciones de
+# fruta alto-IG (7), hipotiroidismo interacciones levotiroxina (8). Keys = ConditionRule.id
+# (SSOT detect_active_rules). Tokens ESTRECHOS y word-boundary (lección 'pan'⊂'pana': _name_has_token
+# no tiene frontera FINAL — nada de raíces desnudas ambiguas). covered escanea receta+nombre+
+# ingredientes (misma semántica que las cláusulas de embarazo). Note-only, macro-preservante.
+_CONDITION_SAFETY_CLAUSES = {
+    "dyslipidemia": (
+        ("lacteo_magro", ("yogur", "yogurt", "queso", "leche"),
+         ("descremad", "desnatad", "0%", "bajo en grasa", "light"),
+         "usa los lácteos DESCREMADOS o 0-2% de grasa (yogur/queso/leche)"),
+        ("yemas", ("huevo", "huevos", "yema", "yemas"),
+         ("claras", "solo clara"),
+         "limita las yemas a 3-4 por semana; las claras puedes usarlas libremente"),
+    ),
+    "hta": (
+        ("sodio", ("queso", "jamon", "salami", "embutido", "tocineta", "enlatado",
+                   "pan integral", "pan de agua", "tortilla integral", "atun en agua"),
+         ("bajo en sodio", "baja en sodio", "sin sal"),
+         "elige las versiones BAJAS EN SODIO (queso/pan/enlatados) y no añadas sal en la mesa"),
+    ),
+    "hypothyroid": (
+        # [P1-SWAP-MACRO-REPAIR-BATCH · 2026-08-09] +toronja (rechazo medido run 31311796944:
+        # «la toronja puede reducir la absorción de levotiroxina»). covered pasa de
+        # («levotiroxina») a («4 horas»): mencionar el fármaco SIN la práctica correcta no
+        # absuelve — el mismo run mostró al reviewer leyendo una separación de «1-12 minutos»
+        # (el DESAYUNO con lácteos minutos después de la dosis en ayunas); la separación
+        # horaria del slot es clase aparte (composición del desayuno), documentada en #14.
+        ("levotiroxina", ("leche", "yogur", "yogurt", "queso", "soya", "soja", "tofu",
+                          "linaza", "espinaca", "espinacas", "cafe", "toronja", "pomelo"),
+         ("4 horas",),
+         "toma la levotiroxina en ayunas y separa estos alimentos (lácteos/soya/linaza/"
+         "espinacas/café/toronja) al menos 4 horas de la dosis — interfieren su absorción"),
+    ),
+    "pcos": (
+        ("fruta_ig", ("mango", "lechosa", "papaya", "pina", "guineo", "banana", "uva",
+                      "uvas", "sandia", "melon", "batido"),
+         ("porcion pequena", "media taza", "acompanada de proteina"),
+         "sirve la fruta dulce en porción PEQUEÑA (~½ taza) y acompáñala de proteína o "
+         "grasa (yogur, queso, maní) para suavizar el pico glucémico"),
+    ),
+    "gastritis": (
+        ("irritantes", ("limon", "naranja", "toronja", "pina", "vinagre", "picante",
+                        "aji picante", "cafe", "salsa de tomate"),
+         ("version suave", "sin picante"),
+         "prepara la versión SUAVE: poco cítrico/vinagre, nada de picante, y prefiere "
+         "cocción hervida, guisada u horneada sobre frituras"),
+    ),
+}
+
+
+def _apply_condition_safety_annotations(plan: dict, form_data: dict) -> int:
+    """[P1-CONDITION-SAFETY-NOTES · 2026-08-09] Nota clínica combinada por comida para las
+    condiciones NO-embarazo (registro `_CONDITION_SAFETY_CLAUSES`, keys = ConditionRule.id vía
+    detect_active_rules — SSOT). Hermana de `_apply_pregnancy_food_safety_annotations` con su
+    misma mecánica: note-only (macro-preservante, shopping-safe), recompute por corrida
+    (absolution-aware), cláusula ya escrita por el LLM (covered en receta+nombre+ingredientes)
+    se omite. El reviewer VE estas notas vía `_meal_safety_notes_for_summary`.
+    Knob `MEALFIT_CONDITION_SAFETY_NOTES`. tooltip-anchor: P1-CONDITION-SAFETY-NOTES"""
+    if not CONDITION_SAFETY_NOTES_ENABLED or not isinstance(plan, dict):
+        return 0
+    try:
+        from condition_rules import detect_active_rules
+        from constants import strip_accents as _sa_csn
+        _active = [r.id for r in detect_active_rules(form_data or {})]
+    except Exception:
+        return 0
+    _clause_sets = [(_cid, _CONDITION_SAFETY_CLAUSES[_cid]) for _cid in _active
+                    if _cid in _CONDITION_SAFETY_CLAUSES]
+    _prefix = "⚕️ Nota clínica: "
+    annotated = 0
+    try:
+        for day in plan.get("days") or []:
+            for meal in (day.get("meals") or []) if isinstance(day, dict) else []:
+                if not isinstance(meal, dict):
+                    continue
+                ings = [str(i) for i in (meal.get("ingredients") or [])]
+                blob = _sa_csn((str(meal.get("name", "")) + " " + " ".join(ings)).lower())
+                rec = meal.get("recipe")
+                rec = ([] if rec is None else [str(s) for s in rec]) if not isinstance(rec, list) \
+                    else [str(s) for s in rec]
+                base_rec = [s for s in rec if _prefix not in s]
+                rec_blob = _sa_csn(" ".join(base_rec).lower())
+                clauses = []
+                for _cid, _cls in _clause_sets:
+                    for _key, _toks, _covered, _text in _cls:
+                        if not any(_name_has_token(_sa_csn(_t), blob) for _t in _toks):
+                            continue
+                        if any(_sa_csn(c) in rec_blob or _sa_csn(c) in blob for c in _covered):
+                            continue
+                        if _text not in clauses:
+                            clauses.append(_text)
+                new_note = (_prefix + "; ".join(clauses) + ".") if clauses else None
+                had_note = len(base_rec) != len(rec)
+                if new_note:
+                    meal["recipe"] = base_rec + [new_note]
+                    if not had_note or rec[-1] != new_note:
+                        annotated += 1
+                elif had_note:
+                    meal["recipe"] = base_rec
+        if annotated:
+            logger.info(f"⚕️ [P1-CONDITION-SAFETY-NOTES] {annotated} comida(s) anotada(s) por "
+                        f"condición ({', '.join(c for c, _ in _clause_sets)}) — visibles al reviewer.")
+    except Exception as _csn_e:
+        logger.warning(f"[P1-CONDITION-SAFETY-NOTES] no-op: {type(_csn_e).__name__}: {_csn_e}")
+        return annotated
+    return annotated
+
+
+def _meal_safety_notes_for_summary(meal: dict) -> str:
+    """[P1-REVIEWER-SEES-SAFETY-NOTES · 2026-08-09] Notas de seguridad alimentaria del plato
+    (🤰 embarazo + P3-FOOD-SAFETY huevo/seafood/víver) en formato compacto para el RESUMEN que
+    el reviewer LLM recibe. Medido (corr=0b4ca77c, run 31299769707): la pasada anotó 9 comidas
+    y el reviewer rechazó CRITICAL con «el plan no lo especifica» — porque `all_meals_summary`
+    serializa solo nombre+ingredientes y las notas viven en `recipe`, que el reviewer NUNCA ve.
+    Una nota invisible para quien juzga no previene nada. Solo comidas anotadas pagan tokens.
+    Vacío si no hay notas. tooltip-anchor: P1-REVIEWER-SEES-SAFETY-NOTES"""
+    try:
+        rec = meal.get("recipe")
+        if not isinstance(rec, list):
+            return ""
+        # [P1-CONDITION-SAFETY-NOTES] también las notas clínicas por condición viajan al reviewer.
+        notes = [str(s).strip() for s in rec
+                 if isinstance(s, str)
+                 and ("Seguridad alimentaria" in s or "Nota clínica" in s)]
+        if not notes:
+            return ""
+        return " [" + " | ".join(n[:300] for n in notes[:2]) + "]"
+    except Exception:
+        return ""
+
+
 def _recover_meal_macros(meal: dict, ratio_p: float, ratio_c: float, ratio_f: float) -> None:
     """[P0-MEAL-MACRO-RECOVERY · 2026-06-13] Garantiza que un meal tenga breakdown
     de macros. Si protein/carbs/fats vienen todos en 0/ausentes (gap del day-gen o
@@ -18166,37 +20332,92 @@ def _is_sweet_meal(meal: dict, strip_accents_fn) -> bool:
         return False
 
 
-def _safe_high_density_proteins(allergies, db, min_protein: float = 18.0) -> list:
+def _country_protein_pool(country=None) -> list:
+    """[P1-PROTEIN-CLOSER-COUNTRY · 2026-08-21] Pool de candidatos del closer del piso de proteína.
+
+    DO (o knob apagado) ⇒ `DOMINICAN_PROTEINS` tal cual, byte-idéntico. País beta ⇒ las proteínas
+    de SU pool primero (`COUNTRY_POOLS[cc]['proteins']`, curado en Fase 2 y hasta hoy leído sólo
+    por el camino degradado) seguidas de las dominicanas.
+
+    Es UNIÓN, no sustitución, y la razón es medible: de los 49 nombres de `DOMINICAN_PROTEINS` la
+    inmensa mayoría son universales —Pollo, Cerdo, Res, Pescado, Atún, Huevos, lentejas, garbanzos,
+    quesos—, así que reemplazar el pool dejaría a un español sin pollo, que es peor que el problema
+    que arregla. Lo único que NO viaja son los nombres con gentilicio dominicano ('Salami
+    Dominicano', 'Longaniza'): son los que un español no puede comprar bajo ese nombre. El filtro
+    mira el NOMBRE, no una tabla de exclusiones — la 4ª tabla que P1-DIET-CANON-SSOT prohibió.
+
+    tooltip-anchor: _country_protein_pool (test_p1_protein_closer_country.py)"""
+    from constants import DOMINICAN_PROTEINS
+    try:
+        from constants import country_for_form_data, COUNTRY_POOLS, strip_accents
+        canon = country_for_form_data({"country": country}) if country else "DO"
+    except Exception:
+        return list(DOMINICAN_PROTEINS)
+    if canon == "DO":
+        return list(DOMINICAN_PROTEINS)
+    _propias = list((COUNTRY_POOLS.get(canon) or {}).get("proteins") or [])
+    _do_neutras = [p for p in DOMINICAN_PROTEINS
+                   if "dominican" not in strip_accents(str(p)).lower()]
+    _vistos, _out = set(), []
+    for _n in _propias + _do_neutras:
+        _k = strip_accents(str(_n)).lower()
+        if _k in _vistos:
+            continue
+        _vistos.add(_k)
+        _out.append(_n)
+    return _out
+
+
+def _safe_high_density_proteins(allergies, db, min_protein: float = 18.0, diet=None,
+                                country=None) -> list:
     """[P3-PROTEIN-FLOOR] Proteínas de ALTA densidad (≥min_protein g/100g) del catálogo
     dominicano que son allergen-SAFE para el usuario y resuelven en el catálogo nutricional.
     Ordenadas por magrez (proteína/kcal) desc → el closer prefiere la de menor costo calórico.
-    Retorna [(leanness, name, info), …]. Cero alérgeno (reusa el mapa de sinónimos C2)."""
+    Retorna [(leanness, name, info), …]. Cero alérgeno (reusa el mapa de sinónimos C2).
+
+    [P1-DIET-BLIND-DIRECTIVES · 2026-08-08] `diet`: los candidatos que violan la dieta canónica
+    declarada se EXCLUYEN (matcher SSOT `_scan_diet_violations` por ítem — cero 4ª tabla). La
+    verificación post-deploy del issue #9 midió al closer del piso de proteína atornillando
+    '230g de atún'/'225g de camarones'/'2 tazas de Yogurt' a planes veg* que el LLM YA generaba
+    limpios (conceptos «Yogur de Soya»/«Tofu»): este builder filtraba por ALERGIAS pero no por
+    DIETA, y el guard aguas abajo rechazaba el plan entero. balanced/None → sin filtro
+    (byte-idéntico). Vegan puede quedar VACÍO si el catálogo denso no tiene fuente vegetal ≥
+    min_protein — correcto: mejor un déficit honesto (retry informado con fuentes aptas) que
+    una violación fabricada."""
     try:
-        from constants import DOMINICAN_PROTEINS, strip_accents
+        from constants import strip_accents
+        # [P1-PROTEIN-CLOSER-COUNTRY · 2026-08-21] el pool sale del helper, que ya aplica el knob
+        _pool_prot = _country_protein_pool(country)
     except Exception:
         return []
     import re as _re
-    forbidden = set()
-    if _has_real_medical_flags(allergies):
-        al = allergies if isinstance(allergies, list) else [allergies]
-        for a in al:
-            a_low = strip_accents(str(a).strip().lower())
-            if not a_low or a_low in _MEDICAL_NONE_SENTINELS:
-                continue
-            matched = False
-            for cat, syns in _ALLERGEN_SYNONYMS.items():
-                cat_n = strip_accents(cat)
-                if a_low == cat_n or cat_n in a_low or a_low in cat_n or \
-                   any(a_low in strip_accents(s) or strip_accents(s) in a_low for s in syns):
-                    forbidden.update(strip_accents(s) for s in syns)
-                    matched = True
-            if not matched:
-                forbidden.add(a_low)
+    _diet_canon_hd = None
+    if diet is not None:
+        try:
+            from constants import canonicalize_diet_type as _cdt_hd
+            _c_hd = _cdt_hd(diet)
+            _diet_canon_hd = _c_hd if _c_hd != "balanced" else None
+        except Exception:
+            _diet_canon_hd = None
+    # [P0-ALLERGEN-VOCAB-I18N · 2026-08-21] TERCERA copia de la misma expansión, que la auditoría
+    # no había nombrado y que el guard `test_la_expansion_esta_en_un_solo_sitio` destapó. Importa
+    # más que las otras dos: este filtro decide qué proteínas puede SEMBRAR el closer en un plato
+    # — con la copia vieja, a un español que declaraba «cacahuete» se le ofrecían candidatos con
+    # maní. Ahora comparte `_expand_allergy_declarations` con el escáner y el catálogo verificado.
+    forbidden = (_expand_allergy_declarations(allergies)
+                 if _has_real_medical_flags(allergies) else set())
     out = []
-    for name in DOMINICAN_PROTEINS:
+    for name in _pool_prot:
         nlow = strip_accents(str(name).lower())
         if forbidden and any(f and (f in nlow or nlow in f) for f in forbidden):
             continue  # alérgeno → excluir (fail-secure)
+        if _diet_canon_hd:
+            try:
+                _mini_hd = {"days": [{"meals": [{"name": str(name), "ingredients": [str(name)]}]}]}
+                if _scan_diet_violations(_mini_hd, _diet_canon_hd):
+                    continue  # no apto para la dieta declarada (el guard rechazaría el plan entero)
+            except Exception:
+                continue  # fail-secure: si no puedo verificar el candidato, no lo ofrezco
         info = db.lookup(name)
         if info and info.protein >= min_protein and info.kcal > 0:
             out.append((info.protein / info.kcal, name, info))
@@ -18483,7 +20704,8 @@ def build_update_micronutrient_directive(form_data: dict) -> str:
             sex=form_data.get("gender", "female"), age=form_data.get("age"),
             conditions=_condition_strings(form_data), daily_kcal=_kcal,
             pregnant=_preg, k_elevating_med=_kelev,
-            goal=form_data.get("mainGoal") or form_data.get("goal"))
+            goal=form_data.get("mainGoal") or form_data.get("goal"),
+            diet=form_data.get("dietType"))  # [P1-DIET-BLIND-DIRECTIVES]
     except Exception as _ms_e:
         logger.debug(f"[P2-UPDATE-MICRO-STEER] directiva falló (no bloquea): {type(_ms_e).__name__}: {_ms_e}")
         return ""
@@ -18647,7 +20869,7 @@ def _is_savory_cheese_name(nlow: str) -> bool:
 def _close_protein_gap_for_meal(meal: dict, slot_protein_target: float, db, candidates,
                                 *, allergies=None, fill_pct: float = 0.92, max_add_g: int = 300,
                                 slot_cal_target: float = 0.0, enforce_min_threshold: bool = True,
-                                day_used_proteins=None) -> int:
+                                day_used_proteins=None, diet=None, country=None) -> int:
     """[P3-PROTEIN-FLOOR · 2026-06-13] Rellena el meal hasta ~fill_pct del target de proteína
     del slot con una proteína de ALTA DENSIDAD allergen-safe (de `candidates`), integrada como
     INGREDIENTE real en gramos (no como nota). Cierra el déficit que el escalado no puede (no
@@ -18710,8 +20932,10 @@ def _close_protein_gap_for_meal(meal: dict, slot_protein_target: float, db, cand
             if CLOSER_SWEET_DAIRY_ENABLED and allergies is not None:
                 _sweet_dairy = []
                 _seen_sd = set()
+                # [P1-DIET-BLIND-DIRECTIVES · 2026-08-08] diet= filtra lácteos para vegan.
                 for (_ln_sd, _nm_sd, _info_sd) in _safe_high_density_proteins(
-                        allergies, db, min_protein=CLOSER_SWEET_DAIRY_MIN_PROTEIN):
+                        allergies, db, min_protein=CLOSER_SWEET_DAIRY_MIN_PROTEIN, diet=diet,
+                        country=country):
                     _ndlow = _sa(str(_info_sd.name).lower())
                     if _ndlow in _seen_sd or not any(t in _ndlow for t in _SWEET_DAIRY_TOKENS):
                         continue
@@ -19340,6 +21564,13 @@ def _trim_day_carbs_to_target(meals: list, target_carbs: float, db, *, tol: floa
             m["cals"] = max(0, round(4 * _np + 4 * _nc + 9 * _nf))
             m["macros"] = [f"P:{_np}g", f"C:{_nc}g", f"G:{_nf}g"]
             ings[idx] = quant
+            # [P1-PLAN-DISPLAY-I18N-MUTATOR-carbtrim · Ola final FF-1] DELETE-on-write: el trim
+            # acaba de bajar los gramos de esta línea de `ingredients` — el array que
+            # `_display[locale]` espeja por índice. El trim corre por DÍA sobre los meals que el
+            # caller le pasa (incluidos días colaterales en los barridos plan-wide de
+            # swap-persist / chat-modify), así que el pop vive aquí, en la mutación real.
+            # Pop puro, cero I/O (P2-MUTATOR-PURITY).
+            m.pop("_display", None)
             # [P2-CARB-TRIM-RAW-LOCKSTEP · 2026-06-18] (audit fresco P2) El factor TOTAL de `ings[idx]`
             # (orig→quant) es `factor × _f` (el escalado al target + el re-snap a cocinable). `raw` debe
             # escalarse por el MISMO factor efectivo, no solo por `factor` — si no, la lista de compras
@@ -19437,6 +21668,14 @@ def _trim_day_fats_to_target(meals: list, target_fats: float, db, *, tol: float 
             m["cals"] = max(0, round(4 * _np + 4 * _nc + 9 * _nf))
             m["macros"] = [f"P:{_np}g", f"C:{_nc}g", f"G:{_nf}g"]
             ings[idx] = quant
+            # [P1-PLAN-DISPLAY-I18N-MUTATOR-fatstrim · Ola final FF-1 · addendum] DELETE-on-write:
+            # gemelo EXACTO del carb-trim de arriba — acaba de bajar los gramos de esta línea de
+            # `ingredients`, el array que `_display[locale]` espeja por índice. Corre por DÍA sobre
+            # los meals que el caller le pasa (incluidos días colaterales vía
+            # `_relevel_fats_universal`, que barre TODOS los días con grasas sobre banda), así que
+            # el pop vive aquí, en la mutación real, no en los callers. Pop puro, cero I/O
+            # (P2-MUTATOR-PURITY). Dejarlo fuera contradecía el fix de sus 5 hermanos.
+            m.pop("_display", None)
             # mismo lockstep raw del carb-trim: factor efectivo = escala × re-snap.
             # [P1-UPDATE-RAW-BY-FOOD · 2026-07-30] (audit solver+seeder v5) by-food, no por índice
             # ciego (ver el gemelo en `_trim_day_carbs_to_target`).
@@ -21895,7 +24134,24 @@ _REVIEW_ISSUE_HUMANIZE_MAP = (
      "Un mismo plato se repite en varios días — usa «Cambiar Plato» si quieres más variedad."),
     ("omitio multiples proteinas", "Algún plato no siguió al 100% la estructura planificada."),
     ("omitio proteinas", "Algún plato no siguió al 100% la estructura planificada."),
+    # [P2-REVIEW-ISSUES-CLARO · 2026-09-02] Medido: la única familia entregada en 30 días era
+    # «COMIDA FUERA DE HORARIO» y NO estaba en el mapa, así que el usuario recibía el párrafo
+    # técnico entero (captura del dueño). Copy corto, con el día y el horario delante.
+    ("comida fuera de horario", "el plato es más de otro momento del día. Si no te convence, cámbialo con «Cambiar Plato»."),
+    ("mismo plato repetido entre dias", "Un mismo plato se repite en varios días — usa «Cambiar Plato» si quieres más variedad."),
+    ("deficit de proteina", "Algún día queda por debajo de tu meta de proteína — puedes cambiar un plato por uno con más proteína."),
+    ("techo renal de proteina", "Un día supera el techo de proteína indicado para tu condición — cambia un plato por uno más ligero."),
+    ("sodio excesivo", "Algún día pasa el sodio recomendado — revisa embutidos, quesos curados y sal añadida."),
+    ("sobreuso de huevo", "El huevo se repite más de la cuenta — puedes cambiar uno de esos platos."),
+    ("precision de macros baja", "Las calorías de algún día se alejan un poco de tu meta."),
+    ("lista de compras vacia", "La lista de compras salió vacía — recalcúlala desde el Dashboard."),
+    ("schema invalido", "Un plato llegó incompleto — puedes regenerarlo."),
 )
+
+# [P2-REVIEW-ISSUES-CLARO] «Día 2, almuerzo: …» — el revisor lo escribe así en todas las familias
+# que hablan de un plato concreto; se conserva delante del copy corto para que el usuario sepa
+# QUÉ plato mirar. Accent-insensitive (el texto ya viene con acentos, la búsqueda no depende de ellos).
+_REVIEW_ISSUE_DAY_SLOT_RE = _re.compile(r"d[ií]a\s+(\d+)\s*,\s*(desayuno|almuerzo|merienda|cena)", _re.IGNORECASE)
 
 
 def _humanize_review_issue(issue) -> str:
@@ -21912,7 +24168,10 @@ def _humanize_review_issue(issue) -> str:
             low = s.lower()
         for _pat, _copy in _REVIEW_ISSUE_HUMANIZE_MAP:
             if _pat in low:
-                return _copy
+                _m = _REVIEW_ISSUE_DAY_SLOT_RE.search(s)
+                if _m:
+                    return f"Día {_m.group(1)}, {_m.group(2).lower()}: {_copy}"
+                return _copy if _copy[:1].isupper() else _copy[:1].upper() + _copy[1:]
         # desconocido: strip del fragmento interno "action=xxx." si viene al final
         return _re.sub(r"\s*action=\w+\.?\s*$", "", s).strip()
     except Exception:
@@ -22387,6 +24646,28 @@ def _variety_repeat_gate_issues(variety_report: dict) -> list:
     return out
 
 
+def _refresh_variety_report_for_gates(plan: dict, form_data: dict) -> None:
+    """[P1-VARIETY-REPORT-FRESH · 2026-08-09] Recompute de `plan["variety_report"]` en el punto de
+    DECISIÓN (review), sobre los días actuales. El reporte nace en la capa clínica (dentro de
+    `_apply_macro_engine`), pero el tail de assemble sigue mutando los días DESPUÉS (P0-BAND-PRE-REVIEW,
+    P1-SAMEDAY-BURN-FIX, P1-FRUIT-SAVORY-BURN-FIX, phantom-dairy, grain-dry, dup-merge…) → el gate
+    juzgaba con un reporte RANCIO. Medido en los N=20 del 2026-08-08/09: 10 correlaciones con
+    "re-autofix … → después: limpio" seguido del rechazo 🍓 por la repetición YA corregida
+    (e67afefd y 66512b91 quemaron sus DOS intentos así, y la directiva de retry le acusaba al LLM
+    un defecto que el plan ya no tenía). Corta en las dos direcciones: también VE la repetición
+    que un pase tardío introdujo (el reporte viejo la absolvía). Mismo `user_staples` que el
+    productor (paridad de la exención staple+técnica). Fail-safe: si el recompute falla, el
+    reporte previo se conserva (rancio > ausente). tooltip-anchor: P1-VARIETY-REPORT-FRESH"""
+    if not isinstance(plan, dict) or not plan.get("days"):
+        return
+    try:
+        plan["variety_report"] = build_variety_report(
+            plan, user_staples=_user_staple_labels(form_data))
+    except Exception as _vrf_e:
+        logger.warning(f"[P1-VARIETY-REPORT-FRESH] recompute no-op (se conserva el reporte "
+                       f"previo): {type(_vrf_e).__name__}: {_vrf_e}")
+
+
 # [P3-SLOT-DISTRIBUTION · 2026-06-13] Mapa nombre-de-slot (es-DO) → key del split canónico.
 _SLOT_KEY_MAP = {
     "desayuno": "desayuno", "breakfast": "desayuno",
@@ -22499,6 +24780,12 @@ def _apply_portion_quantization(plan: dict, db) -> int:
                 continue
             _orig_ings = [str(x) for x in ings]
             meal["ingredients"] = new_ings
+            # [P1-PLAN-DISPLAY-I18N-MUTATOR-quantize · Ola final FF-1] DELETE-on-write: la
+            # cuantización acaba de reescribir TODOS los strings de `ingredients` de este meal
+            # ("0.66 huevos" → "1 huevo"), el array que `_display[locale]` espeja por índice. El
+            # helper es plan-wide (todos los días) y corre en swap-persist / chat-modify / regen,
+            # donde el caller solo popea SU día. Pop puro, cero I/O (P2-MUTATOR-PURITY).
+            meal.pop("_display", None)
             raw = meal.get("ingredients_raw")
             if isinstance(raw, list) and len(raw) == len(factors):
                 # [P1-UPDATE-RAW-BY-FOOD · 2026-07-30] (audit solver+seeder v5) el zip por índice
@@ -23194,12 +25481,16 @@ def _apply_deterministic_clinical_layer(plan: dict, form_data: dict, nutrition: 
     # mejor); los pools fallback no contienen compuestos. Rollback: NIGHT_RICE_AUTOFIX_ENABLED (mismo knob
     # del autofix — la función retorna 0 con el knob off). tooltip-anchor: P0-FALLBACK-CENA-ARROZ
     try:
-        _nr_layer = _night_rice_autofix(plan.get("days") or [], _db)
+        # [P1-COUNTRY-SYSTEM-F1 · 2026-08-16 (T4)] país vía la ÚNICA puerta (T1) — knob apagado ⇒
+        # 'DO' siempre ⇒ los dos autofixes de abajo corren exactamente como antes.
+        from constants import country_for_form_data
+        _dcl_country = country_for_form_data(form_data)
+        _nr_layer = _night_rice_autofix(plan.get("days") or [], _db, country=_dcl_country)
         if _nr_layer:
             logger.warning(f"🌙 [P0-FALLBACK-CENA-ARROZ] capa clínica reescribió arroz nocturno en "
                            f"{_nr_layer} cena(s) (path sin assemble)")
         # [P2-DESAYUNO-ARROZ-AUTOFIX · 2026-07-02] espejo matutino en la misma capa (paths sin assemble).
-        _br_layer = _breakfast_rice_autofix(plan.get("days") or [], _db)
+        _br_layer = _breakfast_rice_autofix(plan.get("days") or [], _db, country=_dcl_country)
         if _br_layer:
             logger.warning(f"🌅 [P2-DESAYUNO-ARROZ-AUTOFIX] capa clínica reescribió arroz de desayuno en "
                            f"{_br_layer} comida(s) (path sin assemble)")
@@ -23269,6 +25560,29 @@ def _apply_deterministic_clinical_layer(plan: dict, form_data: dict, nutrition: 
                                f"(azúcar/sodio/satfat) en {_sg_n} comida(s)")
         except Exception as _sg_e:
             logger.warning(f"[P3-CONDITION-ENGINE] error: {type(_sg_e).__name__}: {_sg_e}")
+
+    # ── Guard 3.5 (FS-embarazo): anotaciones de seguridad alimentaria embarazo/lactancia ──
+    # [P1-PREGNANCY-SAFETY-NOTES · 2026-08-09] DESPUÉS de las sustituciones (Guard 2.5/3): la nota
+    # describe la composición FINAL del plato (anotar un ingrediente que el sub acaba de sacar
+    # sería una nota fantasma). Note-only → no interfiere con quantize/micros aguas abajo.
+    try:
+        _psn_n = _apply_pregnancy_food_safety_annotations(plan, form_data)
+        if _psn_n:
+            logger.warning(f"🤰 [P1-PREGNANCY-SAFETY-NOTES] {_psn_n} comida(s) con nota de "
+                           f"seguridad de embarazo/lactancia (rechazos del reviewer prevenidos)")
+    except Exception as _psn_le:
+        logger.warning(f"[P1-PREGNANCY-SAFETY-NOTES] guard no-op: {type(_psn_le).__name__}: {_psn_le}")
+
+    # ── Guard 3.6: notas clínicas por condición (HTA/dislipidemia/gastritis/SOP/hipotiroidismo) ──
+    # [P1-CONDITION-SAFETY-NOTES · 2026-08-09] Mismo patrón que Guard 3.5, registro por
+    # ConditionRule.id. Post-subs por la misma razón (anota la composición FINAL).
+    try:
+        _csn_n = _apply_condition_safety_annotations(plan, form_data)
+        if _csn_n:
+            logger.warning(f"⚕️ [P1-CONDITION-SAFETY-NOTES] {_csn_n} comida(s) con nota clínica "
+                           f"por condición (rechazos del reviewer prevenidos)")
+    except Exception as _csn_le:
+        logger.warning(f"[P1-CONDITION-SAFETY-NOTES] guard no-op: {type(_csn_le).__name__}: {_csn_le}")
 
     # [P2-HTA-SALT-NORMALIZE · 2026-07-02] (test clínico gemini) Nota determinista de bajo-sodio para
     # enlatados/quesos en HTA/ERC — la 2ª razón del rechazo del revisor ("atún en agua/habichuelas/queso
@@ -23527,9 +25841,12 @@ def _apply_deterministic_clinical_layer(plan: dict, form_data: dict, nutrition: 
     if VARIETY_REPORT_ENABLED:
         try:
             # [P1-STAPLE-FOODS · 2026-08-02] user_staples alimenta la exención staple+técnica-
-            # distinta del gate same-day-protein — esta es la ÚNICA llamada que produce el
-            # variety_report que `should_retry`/`_variety_repeat_gate_issues` consumen para
-            # decidir el rechazo (ver plan.get("variety_report") en ambos).
+            # distinta del gate same-day-protein. [P1-VARIETY-REPORT-FRESH · 2026-08-09] Este
+            # reporte YA NO es el que los gates del review juzgan: el tail de assemble sigue
+            # mutando los días después de aquí, así que `review_plan_node` lo REFRESCA con
+            # `_refresh_variety_report_for_gates` justo antes de consumirlo. Esta llamada queda
+            # como productor para los consumidores de mitad de assemble y los paths que no
+            # pasan por review (fallbacks).
             plan["variety_report"] = build_variety_report(plan, user_staples=_user_staple_labels(form_data))
         except Exception as _vr_e:
             logger.warning(f"[P3-VARIETY] error: {type(_vr_e).__name__}: {_vr_e}")
@@ -24147,7 +26464,12 @@ def _enforce_meal_count(days: list, target_meal_types: list) -> int:
 # [P1-DM2-GLYCEMIC-PORTION-CAP · 2026-06-27] Víveres/almidones de ALTO índice glucémico (tokens normalizados,
 # word-boundary). NO incluye arroz/pan blancos (los swapea condition_rules a integral antes) ni plátano VERDE
 # (bajo IG, recomendado en DM2). 'papa' lleva exclusión de 'papaya' (colisión de prefijo).
-_DM2_HIGH_GI_STARCH_TOKENS = ("batata", "yuca", "yautia", "name", "platano maduro", "mangu", "casabe", "papa")
+# [P1-DM2-MAIZ-CAP · 2026-08-08] +"maiz dulce": escapaba al cap y el reviewer rechazaba planes
+# DM2 guest con 150-180g/comida (criterio ~100g; benchmark issue #9, perfil vegana_dm2 —
+# palanca 1 del 65%). Multi-palabra a propósito: "maiz" pelado colapsaría harina/tortillas
+# (la exclusión "harina de" cubre una sola). El default del cap baja 150→100 alineado al
+# criterio clínico del reviewer; rollback sin redeploy vía MEALFIT_DM2_HIGH_GI_CAP_G.
+_DM2_HIGH_GI_STARCH_TOKENS = ("batata", "yuca", "yautia", "name", "platano maduro", "mangu", "casabe", "papa", "maiz dulce")
 _DM2_HIGH_GI_CAP_EXCLUDE = ("papaya", "harina de", "leche de", "vinagre de", "agua de")
 
 
@@ -24235,6 +26557,15 @@ def cap_dm2_high_gi_portions(days: list, form_data: dict, db=None, *, cap_g: int
                     logger.info(f"🩸 [P1-DM2-GLYCEMIC-PORTION-CAP] '{str(ing)[:40]}' {round(float(grams))}g→{cap}g (DM2)")
                 if not capped_idx:
                     continue
+                # [P1-PLAN-DISPLAY-I18N-MUTATOR-capdm2 · Ola final FF-1] DELETE-on-write: este meal
+                # acaba de ver reescritos sus strings de `ingredients` (el cap de arriba + el
+                # re-escalado band-safe de abajo) — el `_display[locale]` heredado espeja ESE array
+                # por índice y quedaría mintiendo gramos en el idioma del usuario. Es PLAN-WIDE
+                # (`reapply_clinical_portion_caps` corre sobre TODOS los días en CADA swap-persist),
+                # así que el caller no puede popearlo: solo toca su propio día. Pop puro, cero I/O
+                # (respeta P2-MUTATOR-PURITY). El día cae a español hasta el próximo enriquecimiento
+                # — degradación aceptada por la spec (§69); la mentira, no.
+                m.pop("_display", None)
                 # Recuperar las kcal removidas escalando los OTROS ingredientes (band-safe). En renal,
                 # excluir los de grupo proteína (no subir proteína por encima del cap KDIGO).
                 if removed_kcal > 1.0:
@@ -24387,6 +26718,12 @@ def cap_bariatric_portions(days: list, form_data: dict, db=None) -> int:
                     logger.info(f"🔻 [P1-BARIATRIC-PORTION-CAP] '{str(ing)[:40]}' {round(float(grams))}g→{cap}g (bariátrica)")
                 if not capped_idx:
                     continue
+                # [P1-PLAN-DISPLAY-I18N-MUTATOR-capbariatric · Ola final FF-1] DELETE-on-write:
+                # mismo contrato que el cap DM2 de arriba — los strings de `ingredients` de este
+                # meal acaban de cambiar de gramaje, así que cualquier `_display` heredado miente.
+                # Pop puro (cero I/O, P2-MUTATOR-PURITY) en el punto de la mutación, no en los
+                # callers (este helper es plan-wide y ellos solo conocen SU día).
+                m.pop("_display", None)
                 # Recuperar las kcal removidas escalando los OTROS ingredientes (band-safe). NO se excluye
                 # proteína: para bariátrica conviene recuperar vía otra proteína del plato si existe (preserva
                 # el piso proteico mientras baja el volumen del lácteo ofensor).
@@ -25187,6 +27524,13 @@ def _sync_recipe_step_quantities(meal: dict) -> int:
             pass
         if fixed:
             meal["recipe"] = new_steps
+            # [P1-PLAN-DISPLAY-I18N-MUTATOR-qtysync · Ola final FF-1] DELETE-on-write: los PASOS
+            # de la receta acaban de cambiar de cantidad ("60 g de avena" → "85 g de avena") y
+            # `_display[locale].recipe` los espeja por índice. Este es el punto SSOT: cubre los
+            # 5+ call sites del qty-sync (swap-persist, chat-modify ×2, recipe-expand, el barrido
+            # interno del motor de macros) sin wiring por-caller. Pop puro, cero I/O
+            # (P2-MUTATOR-PURITY).
+            meal.pop("_display", None)
         return fixed
     except Exception as _sq_e:
         logger.warning(f"[P1-RECIPE-QTY-SYNC] sync de cantidades en pasos no-op: {type(_sq_e).__name__}: {_sq_e}")
@@ -26038,7 +28382,7 @@ def finalize_plan_data_coherence(days: list, db=None, allergies=None, target_fat
 
 def finalize_single_meal_recipe_coherence(meal: dict, db=None, pantry_strict: bool = False, allergies=None,
                                           skip_night_rice: bool = False, portion_floors: bool = True,
-                                          day_kcal_target: float | None = None) -> int:
+                                          day_kcal_target: float | None = None, country: str = "DO") -> int:
     """[P1-UPDATE-RECIPE-FINALIZE · 2026-06-29] (audit objetivo · paridad updates ↔ form-gen) Aplica los
     finalizadores deterministas de COHERENCIA DE RECETA de la generación a UN solo plato producido por una
     superficie de UPDATE (swap S3 / chat-modify S4; regenerate-day los hereda porque es un loop de swap_meal).
@@ -26056,7 +28400,15 @@ def finalize_single_meal_recipe_coherence(meal: dict, db=None, pantry_strict: bo
     dirección forward (receta menciona proteína/carb/veg ausente) YA la cubre `validate_meal_recipe_ingredients_coherence`
     como retry-gate en swap/chat-modify. Idempotente (re-correr donde assemble ya aplicó = no-op), fail-open (un
     error NUNCA bloquea el update — espejo de los otros backstops de update). Muta `meal` in-place. Devuelve nº de
-    fixes aplicados. Gateado por UPDATE_RECIPE_FINALIZE_ENABLED. tooltip-anchor: P1-UPDATE-RECIPE-FINALIZE"""
+    fixes aplicados. Gateado por UPDATE_RECIPE_FINALIZE_ENABLED.
+
+    [P1-COUNTRY-SYSTEM-F1 · 2026-08-16 (T4 fix-round 1)] `country` (default 'DO' — preserva TODOS
+    los callers preexistentes que no lo pasan) se reenvía SOLO al autofix de `_night_rice_autofix`
+    (abajo) — país != DO ⇒ ese autofix específico es no-op (el plato queda intacto POR ESE
+    autofix; el resto del finalizer — veg-guard/slice-grams/leaf-cap/qty-guard/etc — corre
+    exactamente igual, sin distinción de país). Callers reales verificados: `agent.py::swap_meal`
+    (pasa `_swap_country`) y `tools.py::execute_modify_single_meal` (pasa `_modify_country`).
+    tooltip-anchor: P1-UPDATE-RECIPE-FINALIZE"""
     if not UPDATE_RECIPE_FINALIZE_ENABLED or not isinstance(meal, dict):
         return 0
     try:
@@ -26150,7 +28502,7 @@ def finalize_single_meal_recipe_coherence(meal: dict, db=None, pantry_strict: bo
         # lo contrario de lo que pidió. Su deseo explícito gana también aquí.
         try:
             if not skip_night_rice:
-                total += _night_rice_autofix(_wrap, db)
+                total += _night_rice_autofix(_wrap, db, country=country)
         except Exception as _enr:
             logger.warning(f"[P2-SLOT-CORRECTOR] night-rice en finalizador de update no-op: {type(_enr).__name__}: {_enr}")
         # [P2-RECIPE-NONEMPTY-BACKSTOP · 2026-06-29] Garantiza pasos cocinables si el LLM del update degradó.
@@ -26594,7 +28946,7 @@ def _add_missing_recipe_step_vegetables(days, *, max_kcal=60.0, max_per_meal=3, 
     return added_total
 
 
-def _night_rice_autofix(days: list, db=None, *, compound: bool = False) -> int:
+def _night_rice_autofix(days: list, db=None, *, compound: bool = False, country: str = "DO") -> int:
     """[P1-NIGHT-RICE-AUTOFIX · 2026-06-27] (audit G4) Autofix DETERMINISTA del "arroz de noche": reescribe el
     ARROZ simple de la CENA por un tubérculo nocturno (batata/yuca/casabe, rotado por día) — ingrediente Y NOMBRE
     — corre ANTES del macro engine para que el motor dimensione el tubérculo y el reviewer (gate
@@ -26612,8 +28964,19 @@ def _night_rice_autofix(days: list, db=None, *, compound: bool = False) -> int:
     convierte moro/locrio/morito/chofán/chaufa de la cena a su versión guisada con tubérculo — «Moro de gandules
     con pollo» → «Guiso de gandules con pollo» + arroz→tubérculo en ingredientes/pasos — en vez de entregar el
     disparate de horario. En el flujo normal (compound=False) los compuestos se dejan al gate (retry da al LLM
-    la oportunidad de un plato mejor)."""
+    la oportunidad de un plato mejor).
+
+    [P1-COUNTRY-SYSTEM-F1 · 2026-08-16 (T4)] `country` (default 'DO' — preserva TODOS los callers
+    preexistentes, ninguno lo pasa) gatea la reescritura ANTES de tocar el plato: solo corre para
+    'DO'. Beta ⇒ no-op (el plato queda intacto, retorna 0) — el sustituto arroz→tubérculo
+    (batata/yuca/casabe) es una preparación DOMINICANA; imponerla a un país beta reintroduciría
+    exactamente el sesgo que Fase 1 retira. La detección de 'arroz de noche' sigue viva vía
+    `_detect_slot_appropriateness` (ahora soft para beta, telemetría); solo la REESCRITURA
+    automática se apaga."""
     if not NIGHT_RICE_AUTOFIX_ENABLED:
+        return 0
+    from constants import canonicalize_country as _cc_nra
+    if _cc_nra(country) != "DO":
         return 0
     try:
         from constants import canonical_slot_key, _SLOT_RICE_EXCLUDE, strip_accents as _sa
@@ -28219,7 +30582,7 @@ def _egg_cap_autofix(days: list, form_data=None, db=None) -> int:
         return 0
 
 
-def _breakfast_rice_autofix(days: list, db=None) -> int:
+def _breakfast_rice_autofix(days: list, db=None, *, country: str = "DO") -> int:
     """[P2-DESAYUNO-ARROZ-AUTOFIX · 2026-07-02] (audit v3 slots GAP-G) Autofix DETERMINISTA del arroz en el
     DESAYUNO — espejo de `_night_rice_autofix` acotado al slot desayuno. La regla es HARD en el gate (jamás
     degrada a advisory), pero sin corrector un LLM emperrado la entregaba degradada tras agotar retries,
@@ -28227,8 +30590,17 @@ def _breakfast_rice_autofix(days: list, db=None) -> int:
     pasos) por una base matutina criolla (puré de plátano/yuca/batata, rotada por día), carb-matched
     (~×{factor}). NO toca compuestos (moro/locrio al desayuno → al gate hard). Respeta exclusiones de
     modificadores (harina/leche/vinagre de arroz). Idempotente, fail-safe.
-    Rollback: MEALFIT_BREAKFAST_RICE_AUTOFIX. tooltip-anchor: P2-DESAYUNO-ARROZ-AUTOFIX"""
+    Rollback: MEALFIT_BREAKFAST_RICE_AUTOFIX.
+
+    [P1-COUNTRY-SYSTEM-F1 · 2026-08-16 (T4)] `country` (default 'DO' — preserva TODOS los callers
+    preexistentes) gatea la reescritura ANTES de tocar el plato: solo corre para 'DO'. Beta ⇒
+    no-op (plato intacto, retorna 0) — mismo razonamiento que `_night_rice_autofix`: la base
+    matutina criolla (puré de plátano/yuca/batata) es una sustitución dominicana. tooltip-anchor:
+    P2-DESAYUNO-ARROZ-AUTOFIX"""
     if not BREAKFAST_RICE_AUTOFIX_ENABLED:
+        return 0
+    from constants import canonicalize_country as _cc_bra
+    if _cc_bra(country) != "DO":
         return 0
     try:
         from constants import canonical_slot_key, _SLOT_RICE_EXCLUDE, strip_accents as _sa
@@ -29184,10 +31556,11 @@ def _normalize_cooked_grain_lines(days: list) -> list:
                             continue
                         food = m.group(4).strip()
                         flat = _sa_ck(food.lower())
-                        ref = next((r for toks, r in _COOKED_GRAIN_REF_KCAL
-                                    if any(_re.search(r"\b" + t + r"\b", flat) for t in toks)), None)
-                        if ref is None:
+                        _row_ck = next(((toks, r) for toks, r in _COOKED_GRAIN_REF_KCAL
+                                        if any(_re.search(r"\b" + t + r"\b", flat) for t in toks)), None)
+                        if _row_ck is None:
                             continue
+                        _toks_ck, ref = _row_ck
                         dry_kcal = kcal_idx.get(flat) or kcal_idx.get(flat.split()[0])
                         if not dry_kcal or dry_kcal / ref < 1.5:
                             # La fila ya está en cocido (o no resuelve): nada que convertir.
@@ -29198,9 +31571,16 @@ def _normalize_cooked_grain_lines(days: list) -> list:
                             continue
                         # Concordancia: "cocidas"→"crudas", "cocido"→"crudo". El usuario lee
                         # esta línea en la app y en el PDF; "habichuelas rojas crudo" canta.
+                        # [P1-LEGUME-DRY-WORDING · 2026-08-08] LEGUMINOSAS → "secas", no "crudas":
+                        # el reviewer rechazaba el plan entero por fitohemaglutinina al leer
+                        # "15 g de habichuelas crudas" (última costura de vegana_dm2, issue #14).
+                        # Misma conversión a secos; la palabra culinaria correcta no implica
+                        # consumo crudo. Granos conservan "crudo" (inocuo y ya anclado en tests).
                         _st = m.group(5).lower()
                         _end = _st[-2:] if _st[-2:] in ("os", "as") else _st[-1]
-                        new_line = f"{m.group(1)}{int(round(dry_g))} g de {food} crud{_end}"
+                        _is_legume_ck = "habichuela" in _toks_ck
+                        _word_ck = "sec" if _is_legume_ck else "crud"
+                        new_line = f"{m.group(1)}{int(round(dry_g))} g de {food} {_word_ck}{_end}"
                         ings[i] = new_line
                         out.append({"day": day.get("day"), "meal": str(meal.get("name") or "?"),
                                     "list": _key, "before": str(line), "after": new_line})
@@ -31823,6 +34203,27 @@ def _apply_budget_cheapen_pass(days, form_data, force: bool = False, *,
     fecha: recibe ya la lista que puede reescribir)."""
     if not BUDGET_CHEAPEN_PASS_ENABLED or BUDGET_CHEAPEN_MAX_SUBS <= 0 or not days:
         return 0
+    # [P1-BUDGET-CHEAPEN-COUNTRY-GATE · 2026-08-18] País beta ⇒ skip TOTAL (force incluido).
+    # Detectado en la primera renovación ES real post-flip: esta pasada corría país-ciega y
+    # sustituyó 'habas → Habichuelas rojas' y 'almendras → Maní' comparando RD$/lb — precios
+    # del catálogo DO que para un plan beta no significan nada — y re-criollizando nombres que
+    # el motor acababa de elegir en español. Las DOS piernas son DO-céntricas: el price map
+    # (`_budget_build_master_price_map`) solo tiene precios RD y `_BUDGET_CHEAP_EQUIVALENTS`
+    # apunta a filas criollas. Cubre los 3 call sites (assemble + convergencia T2 + ventana
+    # rolling) por vivir en la cabecera. `pricing_mode_for_country` es el literal SSOT de T7
+    # (no un 2º chequeo `has_native_prices` a mano). Fail-open a conducta previa si algo falla.
+    # tooltip-anchor: P1-BUDGET-CHEAPEN-COUNTRY-GATE
+    try:
+        from constants import country_for_form_data as _bcg_cffd, pricing_mode_for_country as _bcg_pmfc
+        _bcg_country = _bcg_cffd(form_data or {})
+        if _bcg_pmfc(_bcg_country) == "beta_no_prices":
+            logger.info(
+                f"💰 [P1-BUDGET-CHEAPEN-COUNTRY-GATE] skip cheapen-pass: país '{_bcg_country}' sin "
+                f"precios nativos — la tabla de equivalencias y los RD$/lb son del catálogo DO."
+            )
+            return 0
+    except Exception:
+        pass
     if not force:
         try:
             from nutrition_calculator import budget_prefers_economy
@@ -34638,7 +37039,9 @@ def _repair_protein_floor_post_caps(days: list, nutrition: dict, form_data: dict
         # (densidad media; cap bariátrico 120g, el add ≤90g es seguro) ADEMÁS de la carne densa. Excluimos QUESOS/leche
         # (cap 30g → 90g los excedería; los caps NO re-corren tras FASE A). En platos SALADOS el closer prefiere la
         # carne densa por categoría; el yogur queda para los dulces vía el no_cook/dairy-egg + sweet-guard.
-        _cands = _safe_high_density_proteins(form_data.get("allergies"), db, min_protein=10.0)
+        _cands = _safe_high_density_proteins(form_data.get("allergies"), db, min_protein=10.0,
+                                             diet=form_data.get("dietType"),  # [P1-DIET-BLIND-DIRECTIVES]
+                                             country=country_for_form_data(form_data))  # [P1-PROTEIN-CLOSER-COUNTRY]
         _DAIRY_EXCLUDE = ("queso", "ricotta", "cottage", "requeson", "leche")  # quesos (cap 30g) + leche; yogur SÍ entra
         _cands = [c for c in _cands if not any(_t in _sa(str(c[1]).lower()) for _t in _DAIRY_EXCLUDE)]
         if not _cands:
@@ -34693,7 +37096,9 @@ def _repair_protein_floor_post_caps(days: list, nutrition: dict, form_data: dict
                                                  allergies=form_data.get("allergies"),
                                                  fill_pct=PROTEIN_FLOOR_FILL_PCT, max_add_g=_max_add,
                                                  slot_cal_target=_slot_cal, enforce_min_threshold=False,
-                                                 day_used_proteins=_used_others)
+                                                 day_used_proteins=_used_others,
+                                                 diet=form_data.get("dietType"),
+                                                 country=country_for_form_data(form_data))
                 if _g > 0:
                     added += _g
                     _m["_final_protein_close"] = True
@@ -34746,7 +37151,9 @@ def _apply_macro_engine(result, days, skeleton, _daily_cals, _pg, _cg, _fg, form
             # (cierra el déficit que el escalado no puede). Se computan una vez por plan.
             # min_protein=9 incluye yogur (blend-friendly para batidos) + el dish-fit del
             # closer prefiere carne (≥18) para principales y lácteo/yogur para licuados/ligeras.
-            _hd_candidates = (_safe_high_density_proteins(form_data.get("allergies"), _nut_db, min_protein=9.0)
+            _hd_candidates = (_safe_high_density_proteins(form_data.get("allergies"), _nut_db, min_protein=9.0,
+                                                          diet=form_data.get("dietType"),  # [P1-DIET-BLIND-DIRECTIVES]
+                                                          country=country_for_form_data(form_data))  # [P1-PROTEIN-CLOSER-COUNTRY]
                               if PROTEIN_FLOOR_ENABLED else [])
             # [P3-CLOSER-EGG-BUDGET · 2026-06-14] Presupuesto de huevo del closer: una vez que el huevo
             # aparece en > cap comidas (mismo cap que VARIETY_HARD_GATE), pasa candidatos SIN huevo →
@@ -34812,7 +37219,9 @@ def _apply_macro_engine(result, days, skeleton, _daily_cals, _pg, _cg, _fg, form
                             _m, _slot_target["protein"], _nut_db, _egg_cands,
                             allergies=form_data.get("allergies"),
                             fill_pct=PROTEIN_FLOOR_FILL_PCT,
-                            day_used_proteins=_used_mi)
+                            day_used_proteins=_used_mi,
+                            diet=form_data.get("dietType"),
+                            country=country_for_form_data(form_data))
                         if _g_mi > 0:
                             # el add recién hecho debe ser visible para las siguientes comidas del día
                             _day_meal_labels[_mi] = _protein_gate_labels_in_meal(_m)
@@ -34917,7 +37326,9 @@ def _apply_macro_engine(result, days, skeleton, _daily_cals, _pg, _cg, _fg, form
             if not _renal_capped:
                 from nutrition_db import IngredientNutritionDB as _SwapNDB
                 _swap_db = _SwapNDB()
-                _swap_cands = _safe_high_density_proteins(form_data.get("allergies"), _swap_db, min_protein=18.0)
+                _swap_cands = _safe_high_density_proteins(form_data.get("allergies"), _swap_db, min_protein=18.0,
+                                                          diet=form_data.get("dietType"),  # [P1-DIET-BLIND-DIRECTIVES]
+                                                          country=country_for_form_data(form_data))  # [P1-PROTEIN-CLOSER-COUNTRY]
                 _swapped_days = 0
                 for _d in (days or []):
                     if _swap_excess_carbs_to_protein_for_day(
@@ -35166,6 +37577,44 @@ async def assemble_plan_node(state: PlanState) -> dict:
                 f"💊 [SUPPLEMENTS] Eliminados {_stripped_supps} en campo supplements + "
                 f"{_stripped_ings} colados en ingredients (includeSupplements=false)."
             )
+    else:
+        # [P1-SUPPLEMENT-CLINICAL-GATE · 2026-08-12] Suplementos ACTIVADOS: barrer
+        # los CONTRAINDICADOS para este perfil de las secciones `supplements`.
+        # El prompt ya los prohíbe (build_supplements_context) pero eso es
+        # prompt-trustable, no enforced — esta es la capa determinista, simétrica
+        # a la barredora de includeSupplements=False de arriba. Match por
+        # keywords canónicas (SSOT constants.SUPPLEMENT_MATCH_KEYWORDS) contra el
+        # nombre LIBRE que el LLM escribió; mismo idioma substring-lowercase que
+        # la barredora histórica, tokens ≥4 chars.
+        try:
+            from condition_rules import contraindicated_supplements as _cs
+            from constants import SUPPLEMENT_MATCH_KEYWORDS as _smk
+            _gate_vetados = _cs(form_data)
+        except Exception as _gate_err:
+            # Fail-safe explícito: sin veto calculable no barremos (el prompt y el
+            # Revisor siguen siendo capas), pero lo dejamos gritado en el log.
+            logger.warning(f"⚠️ [P1-SUPPLEMENT-CLINICAL-GATE] veto no calculable, barredora inactiva: {_gate_err}")
+            _gate_vetados = {}
+        if _gate_vetados:
+            _gate_kws = [kw for k in _gate_vetados for kw in _smk.get(k, ())]
+            _gate_removed = 0
+            for _d in result.get("days") or []:
+                _supps = _d.get("supplements") or []
+                if not _supps:
+                    continue
+                _kept = []
+                for _s in _supps:
+                    _sname = str(_s.get("name", "") if isinstance(_s, dict) else _s).lower()
+                    if any(kw in _sname for kw in _gate_kws):
+                        _gate_removed += 1
+                        continue
+                    _kept.append(_s)
+                _d["supplements"] = _kept
+            if _gate_removed:
+                logger.warning(
+                    f"🛡 [P1-SUPPLEMENT-CLINICAL-GATE] {_gate_removed} suplemento(s) "
+                    f"contraindicados barridos del plan (vetados: {sorted(_gate_vetados)})."
+                )
 
     # [EGG-WHITE-CAP] Cap programático de claras de huevo por meal y por día.
     # El planner las usa como proteína fácil sin límite (visto 2026-05-06: 16
@@ -35891,12 +38340,16 @@ async def assemble_plan_node(state: PlanState) -> dict:
     # backstop. Determinista, idempotente, fail-safe.
     if NIGHT_RICE_AUTOFIX_ENABLED:
         try:
-            _nr_fixed = _night_rice_autofix(days)
+            # [P1-COUNTRY-SYSTEM-F1 · 2026-08-16 (T4)] país vía la ÚNICA puerta (T1) — knob apagado
+            # ⇒ 'DO' siempre ⇒ los dos autofixes de abajo corren exactamente como antes.
+            from constants import country_for_form_data
+            _apn_country = country_for_form_data(form_data)
+            _nr_fixed = _night_rice_autofix(days, country=_apn_country)
             if _nr_fixed:
                 logger.info(f"🕒 [P1-NIGHT-RICE-AUTOFIX] {_nr_fixed} cena(s) con 'arroz de noche' reescrita(s) "
                             f"a tubérculo nocturno (batata/yuca/casabe) pre-reviewer.")
             # [P2-DESAYUNO-ARROZ-AUTOFIX · 2026-07-02] espejo matutino, mismo punto (pre-macro-engine).
-            _br_fixed = _breakfast_rice_autofix(days)
+            _br_fixed = _breakfast_rice_autofix(days, country=_apn_country)
             if _br_fixed:
                 logger.info(f"🌅 [P2-DESAYUNO-ARROZ-AUTOFIX] {_br_fixed} desayuno(s) con arroz reescrito(s) "
                             f"a base matutina criolla pre-reviewer.")
@@ -36749,6 +39202,38 @@ async def assemble_plan_node(state: PlanState) -> dict:
     _uid = form_data.get("user_id")
     if not _uid or _uid == "guest": _uid = None
 
+    # [P1-COUNTRY-SYSTEM-F1 · 2026-08-16 (T7)] Flag "modo beta sin precios nativos",
+    # estampado ANTES del bloque de agregación de abajo: `get_shopping_list_delta` lee
+    # `plan_result.get('_pricing_mode')` (aquí `result`, el MISMO dict que reciben esas
+    # llamadas) para suprimir `estimated_cost_rd` en la MISMA pasada — no hay una 2ª pasada
+    # de "limpieza" post-agregación. DO / knob apagado ⇒ `pricing_mode_for_form_data`
+    # devuelve `None` ⇒ la clave NUNCA se escribe en `result` (byte-identidad: ni siquiera
+    # aparece como `None` explícito en el jsonb persistido).
+    #
+    # Cada chunk (T1 inicial y T2+ de continuación) invoca este `assemble_plan_node` con SU
+    # PROPIO `form_data` (`pipeline_snapshot.form_data`, congelado desde la generación) y
+    # re-deriva el flag de forma independiente — el país no cambia entre chunks del mismo
+    # plan, así que el valor sale idéntico cada vez. El flag persiste en DB desde el INSERT
+    # del chunk 1 porque los merges de T2+ son `jsonb_set` QUIRÚRGICOS sobre otras rutas
+    # (`{days}`, `{aggregated_shopping_list}`, ...) — nunca tocan esta clave de nivel
+    # superior (invariante I7 del lifecycle de plan_id). El re-cómputo en chunks 2+ es
+    # redundante para la PERSISTENCIA pero necesario para que ESE chunk propio también
+    # suprima precios en su propia pasada de agregación (T2 re-agrega contra `full_plan_data`
+    # ya fresco de DB, que YA trae la clave del INSERT — ver `get_shopping_list_delta`).
+    from constants import pricing_mode_for_form_data
+    _pricing_mode = pricing_mode_for_form_data(form_data)
+    if _pricing_mode:
+        result["_pricing_mode"] = _pricing_mode
+    # [P1-PLAN-STAMPS-COUNTRY · 2026-08-21] El país DEL PLAN, junto al régimen de precios y por
+    # la misma razón: los dos describen el mismo artefacto. Hasta aquí sólo se sellaba el
+    # régimen, así que toda superficie post-generación re-derivaba el país del PERFIL ACTUAL —
+    # y el perfil del dueño de los 2 planes beta vivos dice 'DO'. A diferencia de `_pricing_mode`
+    # este sello es INCONDICIONAL (también 'DO'): si sólo se escribiera en beta, la ausencia de
+    # la clave significaría a la vez «dominicano» y «plan pre-P-fix», que es la ambigüedad que
+    # deja irreparables los planes que ya existen.
+    from constants import stamp_plan_country
+    stamp_plan_country(result, form_data, emit_observability=True)
+
     from shopping_calculator import get_shopping_list_delta, fetch_inventory_and_consumed_for_plan, cycle_qty_multiplier, cycle_days_for_duration, active_trip_window_days
     from constants import compute_household_multiplier
     try:
@@ -36865,7 +39350,8 @@ async def assemble_plan_node(state: PlanState) -> dict:
         try:
             from shopping_calculator import compute_shopping_cost_summary as _p1b_ccs
             _p1b_summary = _p1b_ccs(
-                aggr_list_7, aggr_list_15_hybrid, aggr_list_30_hybrid, grocery_duration
+                aggr_list_7, aggr_list_15_hybrid, aggr_list_30_hybrid, grocery_duration,
+                pricing_mode=result.get("_pricing_mode"),
             )
             if _p1b_summary:
                 result["shopping_cost_summary"] = _p1b_summary
@@ -37025,7 +39511,12 @@ async def assemble_plan_node(state: PlanState) -> dict:
                         else _bc30h if grocery_duration == "monthly" else _bc7
                     )
                     from shopping_calculator import compute_shopping_cost_summary as _bc_ccs
-                    _bc_sum = _bc_ccs(_bc7, _bc15h, _bc30h, grocery_duration)
+                    # [P1-COUNTRY-SYSTEM-F1 · 2026-08-16 (T7 fix-round · review Critical)]
+                    # `result` ya trae la clave (estampada al inicio de assemble_plan_node).
+                    # En la práctica este pase ya es inalcanzable para beta (status "excedido"
+                    # nunca se alcanza sin un shopping_cost_summary previo no-None) — gate
+                    # explícito de defensa-en-profundidad, mismo patrón que build_budget_reference.
+                    _bc_sum = _bc_ccs(_bc7, _bc15h, _bc30h, grocery_duration, pricing_mode=result.get("_pricing_mode"))
                     if _bc_sum:
                         result["shopping_cost_summary"] = _bc_sum
                         from nutrition_calculator import compute_budget_reconciliation as _bc_cbr
@@ -37759,7 +40250,7 @@ def _surgical_reject_targets(state) -> dict | None:
         except Exception:
             pass
         try:
-            for _v in _detect_slot_appropriateness(days) or []:
+            for _v in _detect_slot_appropriateness(days, state.get("form_data")) or []:
                 _dnum = _v.get("day")
                 if isinstance(_dnum, int):
                     issues_by_day.setdefault(_dnum, []).append(
@@ -37879,7 +40370,7 @@ async def surgical_marker_regen_node(state: PlanState) -> dict:
     _corrector_model = _route_model(form_data, force_fast=True)
     _corrector_cb = _get_circuit_breaker(_corrector_model)
     # [P1-NET-LUNA · 2026-07-31] Dispatch por proveedor (paridad con el corrector del critique).
-    corrector_llm = (ChatOpenAIInstrumented if is_openai_model(_corrector_model) else ChatDeepSeek)(
+    corrector_llm = (ChatOpenAIInstrumented if is_openai_model(_corrector_model) else ChatGLM)(
         model=_corrector_model,
         temperature=0.3,
         max_retries=0,
@@ -37887,6 +40378,12 @@ async def surgical_marker_regen_node(state: PlanState) -> dict:
     ).with_structured_output(SingleDayPlanModel)
 
     ctx = _build_shared_context(state)
+    # [P1-COUNTRY-SYSTEM-F1 · 2026-08-16 (T4)] país vía la ÚNICA puerta (T1), derivado UNA vez
+    # (mismo `form_data` que ya alimenta `_build_shared_context` arriba) — knob apagado ⇒ 'DO'
+    # siempre ⇒ los dos consumidores de abajo (texto del regen + build_day_assignment_context)
+    # toman el camino DO byte-idéntico.
+    from constants import country_for_form_data
+    _surgical_country = country_for_form_data(form_data)
 
     async def _re_correct_one(day_num: int):
         target_day = next((d for d in days if d.get("day") == day_num), None)
@@ -37912,10 +40409,16 @@ async def surgical_marker_regen_node(state: PlanState) -> dict:
         # [P2-AUDIT-V5-BATCH · 2026-07-02] (GAP-03) Día de plantilla matemática sin issue del
         # critique: sintetizar el problema para que el corrector regenere un día real.
         if not original_issue and target_day.get("_day_fallback"):
+            # [P1-COUNTRY-SYSTEM-F1 · 2026-08-16 (T4)] `_surgical_country` derivado arriba (una
+            # sola vez) — DO ⇒ literal EXACTO; beta ⇒ sin mandato de plato dominicano.
+            _fallback_dish_clause = (
+                "platos dominicanos reales" if _surgical_country == "DO" else
+                "platos reales de la cocina del usuario"
+            )
             original_issue = (
                 "Este día fue generado por una plantilla matemática de emergencia (el generador LLM "
-                "falló): los platos son genéricos y repetitivos. Re-genera el día COMPLETO con platos "
-                "dominicanos reales, creativos y cocinables, respetando la asignación del planificador."
+                f"falló): los platos son genéricos y repetitivos. Re-genera el día COMPLETO con {_fallback_dish_clause}, "
+                "creativos y cocinables, respetando la asignación del planificador."
             )
 
         if not await _corrector_cb.acan_proceed():
@@ -37934,7 +40437,9 @@ async def surgical_marker_regen_node(state: PlanState) -> dict:
                 f"\n⚠️ ASIGNACIÓN OBLIGATORIA DEL PLANIFICADOR (no la ignores):\n"
                 # [P1-STAPLE-FOODS · 2026-08-02] básicos del usuario + modo universo-chico
                 # también en el regen quirúrgico (no solo en el day-gen inicial).
-                f"{build_day_assignment_context(skeleton_day, day_num, user_staples=_raw_staple_foods(form_data), small_universe=_small_universe_active(form_data))}"
+                # [P1-COUNTRY-SYSTEM-F1 · 2026-08-16 (T4)] reusa `_surgical_country` (derivado
+                # arriba, una sola vez) — DO ⇒ camino byte-idéntico.
+                f"{build_day_assignment_context(skeleton_day, day_num, user_staples=_raw_staple_foods(form_data), small_universe=_small_universe_active(form_data), diet_type=(form_data or {}).get('dietType'), country=_surgical_country)}"
             )
 
         # [P5-PROMPT-D] Mismo prompt mínimo que self_critique correction.
@@ -38430,6 +40935,70 @@ def _coherence_block_history_cap() -> int:
     return cap
 
 
+# [P1-COH-HISTORY-SIGNAL · 2026-08-14] Hipótesis que el propio guard ya declara NO
+# accionables: la receta no cuantificó el condimento («sal al gusto»), la lista compra
+# por envase, o la unidad difiere (dientes vs cabezas). No son incoherencias: son la
+# forma normal en que un menú se escribe.
+#
+# Medido en producción (journal del VPS, 7 días): **395 `COH-GUARD/block` y 302 de ellos
+# con hipótesis EXCLUSIVAMENTE `recipe_unquantified`** — sal, pimienta, comino. Y el
+# efecto colateral que motiva este fix: **234 `COH-HISTORY-TRUNCATED` en la misma
+# ventana**. El historial tiene cap 20 y era FIFO puro, así que ese chorro de ruido
+# EXPULSABA las entradas que sí importan (un `cap_swallowed_modifier` es «la receta pide
+# pollo y la lista no lo trae»). El registro que existe para diagnosticar acababa
+# guardando 20 veces «sal al gusto».
+#
+# NO se toca la severidad ni lo que se reporta: `recipe_unquantified` sigue entrando al
+# historial y a las métricas. Lo único que cambia es A QUIÉN se desaloja cuando el cap
+# aprieta — primero el ruido, y solo si no hay bastante ruido se cae al FIFO de siempre.
+_HIPOTESIS_DE_RUIDO = frozenset({
+    "recipe_unquantified",
+    "unit_mismatch",
+    "unknown",
+    "magnitude_mild_short",
+})
+
+
+def _entrada_de_historial_es_ruido(entry) -> bool:
+    """True si TODAS las hipótesis de la entrada son no accionables.
+
+    Conservador por diseño: una entrada sin `hypotheses` legibles, o con una sola
+    hipótesis desconocida para esta lista, cuenta como SEÑAL. Ante la duda se conserva
+    — perder una entrada accionable es el fallo caro; conservar una benigna, no.
+    """
+    if not isinstance(entry, dict):
+        return False
+    hyp = entry.get("hypotheses")
+    if not isinstance(hyp, dict) or not hyp:
+        return False
+    return all(str(k) in _HIPOTESIS_DE_RUIDO for k in hyp)
+
+
+def _desalojar_priorizando_ruido(historial: list, cap: int) -> list:
+    """Recorta `historial` a `cap` tirando primero las entradas de RUIDO más antiguas.
+
+    La entrada nueva (la última) nunca se desaloja: es el evento que se acaba de
+    registrar. Si no hay suficiente ruido que tirar, se completa por antigüedad, que
+    es el comportamiento FIFO anterior.
+    """
+    sobran = len(historial) - cap
+    if sobran <= 0:
+        return list(historial)
+    candidatas = range(len(historial) - 1)  # todas menos la recién añadida
+    a_tirar = set()
+    for i in candidatas:
+        if len(a_tirar) >= sobran:
+            break
+        if _entrada_de_historial_es_ruido(historial[i]):
+            a_tirar.add(i)
+    if len(a_tirar) < sobran:
+        for i in candidatas:
+            if len(a_tirar) >= sobran:
+                break
+            a_tirar.add(i)
+    return [e for i, e in enumerate(historial) if i not in a_tirar]
+
+
 def _apply_coherence_history_cap(
     prior_history,
     new_entry,
@@ -38457,7 +41026,7 @@ def _apply_coherence_history_cap(
     cap = _coherence_block_history_cap()
     if len(new_history) > cap:
         truncated_count = len(new_history) - cap
-        new_history = new_history[-cap:]
+        new_history = _desalojar_priorizando_ruido(new_history, cap)
         try:
             logger.warning(
                 "[P2-HIST-AUDIT-4/COH-HISTORY-TRUNCATED] plan=%s "
@@ -38928,11 +41497,133 @@ async def _recompute_aggregates_after_swap(final_state: dict) -> None:
         )
 
 
+def _slot_appropriateness_advisory_decision(issues: list, attempt: int, max_attempts: int, country: str) -> tuple:
+    """[P1-COUNTRY-SYSTEM-F2 · 2026-08-17 (Task 9, f · LA MÁS RIESGOSA)] Decide si el gate de
+    slot-appropriateness (dentro de `review_plan_node`) entrega el plan como ADVISORY o fuerza
+    rechazo/retry. Extraída como función PURA (sin state, sin I/O, sin LLM/DB) para poder
+    unit-testear la decisión SIN montar `review_plan_node` completo — verificado que NINGÚN
+    test del repo invoca `review_plan_node` directamente (es demasiado pesado: jueces LLM,
+    self-critique, DB); `should_retry` sí se testea así, directo (mismo patrón que
+    `_classify_high_severity`, que este helper imita a propósito).
+
+    Cierra el ruling PARKED de T4 fix-round 1 (docs/country_system_f1.md, "Nuance del
+    retry-gate"): "Soft solo degrada a advisory en el intento FINAL — en attempts 1..N-1
+    CUALQUIER issue (hard o soft) fuerza retry igual. Para la regla del arroz, beta puede pagar
+    MÁS retries que DO." Para país BETA cuyos issues son TODOS soft (hoy: SIEMPRE, porque
+    `_detect_slot_appropriateness` ya overridea `hard→False` vía `slot_rules_for_country` para
+    cualquier país != 'DO' — ver su propio docstring), el plan se entrega ADVISORY desde el
+    intento 1: no tiene sentido quemar N-1 regeneraciones COMPLETAS (~90-210s c/u: reflexión +
+    planner + N días paralelos + review) para terminar en la MISMA advisory que el intento
+    final habría dado de todos modos.
+
+    DO es BYTE-IDÉNTICO: `country` es 'DO' para un usuario DO sin importar el knob (país
+    propio — `country_for_form_data` ya resuelve así) y 'DO' SIEMPRE con el knob
+    `MEALFIT_COUNTRY_SYSTEM` apagado (fail-safe de esa única puerta, T1) — en AMBOS casos
+    `beta_soft_only` es False y `advisory` colapsa EXACTAMENTE a `is_final` (el comportamiento
+    pre-Task-9, sin excepciones). Mezcla hard+soft SIGUE forzando retry en CUALQUIER attempt,
+    DO o beta — el override de país solo neutraliza `hard`, nunca lo inventa.
+
+    Args:
+        issues: lista de dicts `{label, slot, day, hard, text, ...}` — el output de
+            `_detect_slot_appropriateness`.
+        attempt: nº de intento actual del pipeline (1-indexed).
+        max_attempts: `MAX_ATTEMPTS` del pipeline.
+        country: código ISO-3166 alpha-2 YA RESUELTO vía `country_for_form_data` (la ÚNICA
+            puerta, T1) — este helper NO deriva país por su cuenta, solo lo consume.
+
+    Returns:
+        (advisory, has_hard, is_final, beta_soft_only) — 4-tupla de bools. `advisory=True` ⇒
+        el caller debe ENTREGAR el plan (marcar telemetría, NO rechazar); `advisory=False` ⇒
+        el caller debe RECHAZAR (`approved=False`, fuerza retry vía `should_retry`).
+    """
+    has_hard = any(i.get("hard") for i in issues)
+    is_final = int(attempt) >= int(max_attempts)
+    beta_soft_only = country != "DO" and bool(issues) and not has_hard
+    advisory = (is_final or beta_soft_only) and not has_hard
+    return advisory, has_hard, is_final, beta_soft_only
+
+
+def _review_country_feedback(country: str, kind: str, **values) -> str:
+    """[P1-REVIEW-RETRY-FEEDBACK-DO · 2026-08-23]
+    Renderiza los cuatro rechazos culturales del reviewer.
+
+    DO conserva los literales históricos; beta conserva el requisito medible
+    (variedad, transformación o contrato) sin convertir la cocina dominicana en
+    una regla universal. Función pura para que retry y memoria persistan el mismo texto.
+    """
+    from constants import canonicalize_country
+
+    is_do = canonicalize_country(country) == "DO"
+    if kind == "egg_overuse":
+        egg = int(values["egg"])
+        total = int(values["total"])
+        cap = int(values["cap"])
+        if is_do:
+            alternatives = (
+                "otras proteínas dominicanas (pollo guisado, pescado, atún, sardina, "
+                "res molida magra, queso de freír, yogur griego, habichuelas)"
+            )
+        else:
+            alternatives = (
+                "otras proteínas variadas compatibles con el perfil (aves, pescado, "
+                "legumbres y lácteos permitidos)"
+            )
+        return (
+            f"SOBREUSO DE HUEVO (rechazo de variedad): el huevo aparece en {egg} de {total} "
+            f"comidas (máximo {cap}). Reemplaza el huevo en al menos {egg - cap} comida(s) "
+            f"por {alternatives} — NO uses huevo como relleno por defecto. Mantén el huevo "
+            "solo en desayunos/platos donde es el protagonista."
+        )
+    if kind == "raw_staples":
+        count = values.get("count")
+        sample = str(values["sample"])
+        if is_do:
+            preparations = (
+                "PREPARACIONES dominicanas reales: guisos, locrios (almuerzo), "
+                "panqueques/arepitas con las harinas, bollitos de yuca, revoltillos, "
+                "ensaladas compuestas"
+            )
+        else:
+            preparations = (
+                "PREPARACIONES culinarias reales: guisos, salteados, panqueques/tortitas "
+                "con las harinas, croquetas u horneados, revoltillos, ensaladas compuestas"
+            )
+        return (
+            f"{count} plato(s) son ingredientes crudos/hervidos sin transformación culinaria "
+            f"({sample}). Convierte los platos en {preparations} — manteniendo los mismos macros."
+        )
+    if kind == "transform_minimum":
+        examples = (
+            "panqueques de avena, arepitas, bollitos de yuca, revoltillo, guiso, "
+            "locrio de almuerzo"
+            if is_do
+            else "panqueques de avena, tortitas, croquetas, revoltillo, guiso o salteado"
+        )
+        return (
+            "El plan no incluye NINGUNA preparación transformada: incluye al menos una "
+            f"preparación real con los mismos macros ({examples}) en vez de solo staples servidos."
+        )
+    if kind == "recipe_contract":
+        ratio_pct = int(values["ratio_pct"])
+        language = "español dominicano" if is_do else "español claro y natural"
+        return (
+            f"{ratio_pct}% de las recetas violan el contrato de pasos. Reescribe CADA receta "
+            "con los 3 pilares EN ORDEN — 'Mise en place:', 'El Toque de Fuego:' (con tiempo "
+            f"Y/O temperatura concreta) y 'Montaje:' — en {language}."
+        )
+    raise ValueError(f"review feedback kind desconocido: {kind}")
+
+
 @_node_label("reviewer")
 async def review_plan_node(state: PlanState) -> dict:
     """Revisa el plan generado para verificar seguridad médica."""
     plan = state["plan_result"]
     form_data = state["form_data"]
+    # [P1-REVIEW-RETRY-FEEDBACK-DO · 2026-08-23] Hoisted antes de TODOS
+    # los gates: el de huevo precedía la derivación histórica dentro del gate
+    # de horario. Una sola lectura SSOT gobierna los cuatro feedbacks y slots.
+    from constants import country_for_form_data
+    _rpn_country = country_for_form_data(form_data)
     taste_profile = state.get("taste_profile", "")
     attempt = state.get("attempt", 1)
     
@@ -38965,7 +41656,13 @@ async def review_plan_node(state: PlanState) -> dict:
             meal_name = meal.get("name", "Sin nombre")
             ingredients = meal.get("ingredients", [])
             all_ingredients.extend(ingredients)
-            all_meals_summary.append(f"- Día {day_num} | {meal.get('meal', '?')}: {meal_name} → Ingredientes: {', '.join(ingredients)}")
+            # [P1-REVIEWER-SEES-SAFETY-NOTES · 2026-08-09] Las notas de seguridad del plato
+            # viajan EN el resumen: el reviewer solo ve esto (no las recetas), y sin ellas
+            # «no lo especifica» es rechazo garantizado en embarazo (corr=0b4ca77c: 9 comidas
+            # anotadas → rechazo critical igual).
+            all_meals_summary.append(
+                f"- Día {day_num} | {meal.get('meal', '?')}: {meal_name} → Ingredientes: "
+                f"{', '.join(ingredients)}{_meal_safety_notes_for_summary(meal)}")
 
     start_time = time.time()
     
@@ -39026,7 +41723,7 @@ async def review_plan_node(state: PlanState) -> dict:
                 _fc_think_body = {"type": "enabled"}
                 if FACT_CHECKER_THINKING_EFFORT:
                     _fc_think_body["effort"] = FACT_CHECKER_THINKING_EFFORT
-                fact_checker_llm = ChatDeepSeek(
+                fact_checker_llm = ChatGLM(
                     model=_fact_checker_model,
                     temperature=0.0,
                     extra_body={"thinking": _fc_think_body},
@@ -39035,7 +41732,7 @@ async def review_plan_node(state: PlanState) -> dict:
                             f"({_fact_checker_model}, iter_timeout={FACT_CHECKER_THINKING_TIMEOUT_S}s"
                             f"{', effort=' + FACT_CHECKER_THINKING_EFFORT if FACT_CHECKER_THINKING_EFFORT else ''}).")
             else:
-                fact_checker_llm = ChatDeepSeek(
+                fact_checker_llm = ChatGLM(
                     model=_fact_checker_model,
                     temperature=0.0,
                 ).bind_tools([consultar_base_datos_medica])
@@ -39265,7 +41962,7 @@ Responde ÚNICAMENTE con el JSON de revisión.
         _reviewer_model = _reviewer_model_name(form_data)  # P2-ORCH-7 risk-tier · P1-REVIEWER-TIER-MODELS
         _reviewer_cb = _get_circuit_breaker(_reviewer_model)
         # [P1-REVIEWER-TIER-MODELS · 2026-07-31] Dispatch por proveedor: Luna/Terra son OpenAI —
-        # construirlos con ChatDeepSeek los mandaría al base_url de DeepSeek con la key equivocada
+        # construirlos con ChatGLM los mandaría al base_url de GLM con la key equivocada
         # (el mismo fallo que P1-DAYGEN-LUNA-CANARY cerró en el day-gen). ChatOpenAIInstrumented
         # conserva backpressure + contabilidad en llm_usage_events (P1-LUNA-USAGE-BLIND).
         _rev_is_openai = is_openai_model(_reviewer_model)
@@ -39273,7 +41970,7 @@ Responde ÚNICAMENTE con el JSON de revisión.
         # razonamiento nativo antes del veredicto clínico. El API no soporta thinking +
         # tool_choice forzado → json_mode (el contrato JSON ya vive literal en
         # REVIEWER_SYSTEM_PROMPT; ReviewResult tiene defaults en todos los campos opcionales).
-        # [P1-REVIEWER-TIER-MODELS] `extra_body.thinking` es DeepSeek-only → la rama se salta
+        # [P1-REVIEWER-TIER-MODELS] `extra_body.thinking` es GLM-only → la rama se salta
         # para modelos OpenAI (la familia gpt-5.6 razona nativo sin knob nuestro).
         _rev_thinking = bool(REVIEWER_THINKING_ENABLED and _profile_has_medical_risk(form_data)
                              and not _rev_is_openai)
@@ -39282,7 +41979,7 @@ Responde ÚNICAMENTE con el JSON de revisión.
             _think_body = {"type": "enabled"}
             if REVIEWER_THINKING_EFFORT:
                 _think_body["effort"] = REVIEWER_THINKING_EFFORT
-            reviewer_llm = ChatDeepSeek(
+            reviewer_llm = ChatGLM(
                 model=_reviewer_model,
                 temperature=0.1,
                 max_retries=0,
@@ -39293,7 +41990,7 @@ Responde ÚNICAMENTE con el JSON de revisión.
                         f"({_reviewer_model}, timeout={REVIEWER_THINKING_TIMEOUT_S}s"
                         f"{', effort=' + REVIEWER_THINKING_EFFORT if REVIEWER_THINKING_EFFORT else ''}).")
         else:
-            reviewer_llm = (ChatOpenAIInstrumented if _rev_is_openai else ChatDeepSeek)(
+            reviewer_llm = (ChatOpenAIInstrumented if _rev_is_openai else ChatGLM)(
                 model=_reviewer_model,
                 temperature=0.1,  # Temperatura muy baja para ser preciso (gpt-5.6 la descarta — solo acepta default)
                 max_retries=0,
@@ -39344,7 +42041,7 @@ Responde ÚNICAMENTE con el JSON de revisión.
                     f"{str(_thk_e)[:120]}) → fallback al reviewer estándar sin thinking."
                 )
                 _rev_thinking = False
-                reviewer_llm = (ChatOpenAIInstrumented if _rev_is_openai else ChatDeepSeek)(
+                reviewer_llm = (ChatOpenAIInstrumented if _rev_is_openai else ChatGLM)(
                     model=_reviewer_model,
                     temperature=0.1,
                     max_retries=0,
@@ -39355,6 +42052,12 @@ Responde ÚNICAMENTE con el JSON de revisión.
             issues = result.issues
             severity = result.severity
             llm_affected_days = result.affected_days
+            # [P1-REVIEWER-VERIFICATION-ADVISORY · 2026-08-08] demandas de verificación → advisory
+            # ANTES de los guards deterministas y de que envenenen el retry.
+            approved, issues, severity, _verif_advisories = \
+                _downgrade_reviewer_verification_demands(approved, issues, severity)
+            if _verif_advisories and isinstance(plan, dict):
+                plan["_reviewer_advisories"] = _verif_advisories
         except Exception as e:
             approved = False
             llm_affected_days = []
@@ -39485,14 +42188,10 @@ Responde ÚNICAMENTE con el JSON de revisión.
         logger.warning(f"🛡 [P3-PROTEIN-FLOOR] {len(_short_days)} día(s) bajo el piso de "
                        f"proteína ({int(_eff_pct*100)}% de {int(_tgt_p)}g): {_sd_str}")
         approved = False
-        issues.append(
-            f"DÉFICIT DE PROTEÍNA (rechazo clínico — {_motivo}): el plan no "
-            f"alcanza el piso de proteína en {_sd_str}. Cada comida PRINCIPAL (almuerzo y "
-            f"cena) DEBE incluir una fuente animal de alta densidad (pollo, pescado, cerdo, "
-            f"res, huevos, queso) dimensionada en gramos para que cada día sume al menos "
-            f"{int(_eff_pct*100)}% del target ({int(_tgt_p)}g). NO dependas solo "
-            f"de leguminosas/almidón en las comidas principales."
-        )
+        # [P1-DIET-BLIND-DIRECTIVES · 2026-08-08] Texto por dieta: la versión única ordenaba
+        # "fuente animal" también a veg* y viajaba inyectada al retry informado (ver helper).
+        issues.append(_protein_floor_directive_text(
+            _sd_str, _eff_pct, _tgt_p, (form_data or {}).get("dietType"), _motivo))
         severity = _severity_max(severity, "high")
 
     # [P1-RENAL-CAP-FAILHARD-GATE · 2026-06-15] (gap-audit G3) Techo renal de proteína como GATE, no
@@ -39530,6 +42229,13 @@ Responde ÚNICAMENTE con el JSON de revisión.
             )
             severity = _severity_max(severity, "critical")
 
+    # [P1-VARIETY-REPORT-FRESH · 2026-08-09] El reporte que los gates de abajo consumen se computó
+    # a MITAD de assemble; el tail siguió mutando los días (autofixes tardíos, phantom-dairy, merges).
+    # Refrescarlo AQUÍ garantiza que el gate juzga los días que realmente va a entregar — sin esto,
+    # el review rechazaba repeticiones YA corregidas (10 correlaciones medidas en los N=20 del
+    # 2026-08-08/09) y era ciego a las introducidas después del reporte.
+    _refresh_variety_report_for_gates(plan, form_data)
+
     # [P3-VARIETY-HARD-GATE · 2026-06-13] Cap de huevo como restricción DURA (era advisory FS5).
     # Si el huevo aparece en > cap + slack comidas, rechaza → retry con directiva. ACOTADO por
     # `should_retry` (entrega en el attempt final, no loop infinito). El lever upstream es el
@@ -39546,11 +42252,13 @@ Responde ÚNICAMENTE con el JSON de revisión.
                                    f"(cap {_cap}+{VARIETY_HARD_GATE_EGG_SLACK}) → rechazo para diversificar")
                     approved = False
                     issues.append(
-                        f"SOBREUSO DE HUEVO (rechazo de variedad): el huevo aparece en {_egg} de {_tot} "
-                        f"comidas (máximo {_cap}). Reemplaza el huevo en al menos {_egg - _cap} comida(s) "
-                        f"por otras proteínas dominicanas (pollo guisado, pescado, atún, sardina, res molida "
-                        f"magra, queso de freír, yogur griego, habichuelas) — NO uses huevo como relleno "
-                        f"por defecto. Mantén el huevo solo en desayunos/platos donde es el protagonista."
+                        _review_country_feedback(
+                            _rpn_country,
+                            "egg_overuse",
+                            egg=_egg,
+                            total=_tot,
+                            cap=_cap,
+                        )
                     )
                     severity = _severity_max(severity, "high")
                 # [P2-VARIETY-GATE-REPEAT] Fruta dulce repetida / plato-base repetido el mismo día →
@@ -39588,10 +42296,15 @@ Responde ÚNICAMENTE con el JSON de revisión.
     # gate lo vuelve enforced (espejo de _variety_repeat_gate_issues). Anchor: P1-SLOT-APPROPRIATENESS.
     if SLOT_APPROPRIATENESS_GATE_ENABLED:
         try:
-            _slot_app_issues = _detect_slot_appropriateness(plan.get("days", []) if isinstance(plan, dict) else [])
+            _slot_app_issues = _detect_slot_appropriateness(plan.get("days", []) if isinstance(plan, dict) else [], form_data)
             if _slot_app_issues:
                 _sa_attempt = int(state.get("attempt", 1))
                 _sa_is_final = _sa_attempt >= MAX_ATTEMPTS
+                # [P1-COUNTRY-SYSTEM-F1 · 2026-08-16 (T4)] país vía la ÚNICA puerta (T1) — knob
+                # apagado ⇒ 'DO' siempre ⇒ `_rpn_country` es 'DO' y el bloque de abajo (F2 · Task
+                # 9 · f) nunca activa la rama beta-soft-only. Derivado UNA vez aquí y reusado por
+                # closure en el autofix compuesto (abajo) y en el gate de retry (más abajo) —
+                # antes el autofix lo re-derivaba localmente.
                 # [P1-NIGHT-RICE-COMPOUND-FINAL · 2026-07-01] (audit slots GAP-2) Antes de degradar a
                 # advisory Y ENTREGAR un moro/locrio/chofán en la cena, intento de autofix compuesto de
                 # último recurso (nombre→guiso + arroz→tubérculo + pasos, determinista y coherente).
@@ -39604,9 +42317,9 @@ Responde ÚNICAMENTE con el JSON de revisión.
                 # limpiable se limpia antes de entregar, pase lo que pase con el veredicto.
                 if _sa_is_final and NIGHT_RICE_COMPOUND_FINAL and isinstance(plan, dict):
                     try:
-                        _nrc_fixed = _night_rice_autofix(plan.get("days", []), compound=True)
+                        _nrc_fixed = _night_rice_autofix(plan.get("days", []), compound=True, country=_rpn_country)
                         if _nrc_fixed:
-                            _slot_app_issues = _detect_slot_appropriateness(plan.get("days", []))
+                            _slot_app_issues = _detect_slot_appropriateness(plan.get("days", []), form_data)
                             logger.info(
                                 f"🕒 [P1-NIGHT-RICE-COMPOUND-FINAL] {_nrc_fixed} plato(s) compuesto(s) "
                                 f"de cena convertidos a guiso+tubérculo en intento final; "
@@ -39615,21 +42328,39 @@ Responde ÚNICAMENTE con el JSON de revisión.
                     except Exception as _nrc_e:
                         logger.warning(f"[P1-NIGHT-RICE-COMPOUND-FINAL] autofix compuesto falló (no bloquea): "
                                        f"{type(_nrc_e).__name__}: {_nrc_e}")
-                _sa_has_hard = any(i.get("hard") for i in _slot_app_issues)
-                # Degrada a advisory en el intento FINAL solo si NO hay violación dura (desayuno con
-                # arroz/locrio = siempre duro por decisión de producto). Mezcla hard+soft en intento
-                # final → rechaza igual (el plan se entrega como best-attempt con banner degraded,
-                # pero YA sin el arroz nocturno limpiable — P2-D arriba).
-                if _sa_is_final and not _sa_has_hard:
+                # [P1-COUNTRY-SYSTEM-F2 · 2026-08-17 (Task 9, f · LA MÁS RIESGOSA)] Decisión
+                # delegada al helper PURO `_slot_appropriateness_advisory_decision` (arriba de
+                # `review_plan_node`, unit-testado directo) — cierra el ruling PARKED de T4
+                # fix-round 1 ("Nuance del retry-gate"): país BETA con issues TODOS soft entrega
+                # ADVISORY desde el intento 1, no solo en el final. DO/knob-off: `_rpn_country`
+                # es 'DO' ⇒ `beta_soft_only` SIEMPRE False ⇒ `advisory` colapsa EXACTAMENTE a
+                # `is_final` (byte-idéntico al comportamiento pre-Task-9).
+                _sa_advisory, _sa_has_hard, _sa_is_final, _sa_beta_soft_only = (
+                    _slot_appropriateness_advisory_decision(
+                        _slot_app_issues, _sa_attempt, MAX_ATTEMPTS, _rpn_country
+                    )
+                )
+                if _sa_advisory:
                     if _slot_app_issues:
-                        logger.warning(
-                            f"🕒 [P1-SLOT-APPROPRIATENESS] {len(_slot_app_issues)} incoherencia(s) de horario "
-                            f"en intento final ({_sa_attempt}/{MAX_ATTEMPTS}) sin violación dura → ADVISORY "
-                            f"(entrego el plan). Primera: {_slot_app_issues[0]['label']} en "
-                            f"{_slot_app_issues[0]['slot']} (Día {_slot_app_issues[0]['day']})."
-                        )
+                        if _sa_is_final:
+                            logger.warning(
+                                f"🕒 [P1-SLOT-APPROPRIATENESS] {len(_slot_app_issues)} incoherencia(s) de horario "
+                                f"en intento final ({_sa_attempt}/{MAX_ATTEMPTS}) sin violación dura → ADVISORY "
+                                f"(entrego el plan). Primera: {_slot_app_issues[0]['label']} en "
+                                f"{_slot_app_issues[0]['slot']} (Día {_slot_app_issues[0]['day']})."
+                            )
+                        else:
+                            logger.info(
+                                f"🌎 [P1-COUNTRY-SYSTEM-F2] {len(_slot_app_issues)} incoherencia(s) de horario "
+                                f"SOLO-soft para país beta ({_rpn_country}) en intento {_sa_attempt}/{MAX_ATTEMPTS} "
+                                f"→ ADVISORY desde el intento 1 (no fuerza retry). Primera: "
+                                f"{_slot_app_issues[0]['label']} en {_slot_app_issues[0]['slot']} "
+                                f"(Día {_slot_app_issues[0]['day']})."
+                            )
                         if isinstance(plan, dict):
                             plan["_slot_appropriateness_advisory_final"] = True
+                            if _sa_beta_soft_only and not _sa_is_final:
+                                plan["_slot_appropriateness_advisory_beta_early"] = True
                 else:
                     for _sa in _slot_app_issues:
                         logger.warning(
@@ -39749,11 +42480,12 @@ Responde ÚNICAMENTE con el JSON de revisión.
                     )
                     approved = False
                     issues.append(
-                        f"{_rsg.get('raw_staple_meals')} plato(s) son ingredientes crudos/hervidos sin "
-                        "transformación culinaria (proteína plancha + carbo blanco + vegetal suelto). "
-                        "Convierte los platos en PREPARACIONES dominicanas reales: guisos, locrios (almuerzo), "
-                        "panqueques/arepitas con las harinas, bollitos de yuca, revoltillos, ensaladas compuestas — "
-                        "manteniendo los mismos macros."
+                        _review_country_feedback(
+                            _rpn_country,
+                            "raw_staples",
+                            count=_rsg.get("raw_staple_meals"),
+                            sample="proteína plancha + carbo blanco + vegetal suelto",
+                        )
                     )
                     severity = _severity_max(severity, "high")
         except Exception as _rsg_e:
@@ -39783,10 +42515,10 @@ Responde ÚNICAMENTE con el JSON de revisión.
                     )
                     approved = False
                     issues.append(
-                        "El plan no incluye NINGUNA preparación transformada: incluye al menos una "
-                        "preparación real con los mismos macros (panqueques de avena, arepitas, "
-                        "bollitos de yuca, revoltillo, guiso, locrio de almuerzo) en vez de solo "
-                        "staples servidos."
+                        _review_country_feedback(
+                            _rpn_country,
+                            "transform_minimum",
+                        )
                     )
                     severity = _severity_max(severity, "high")
         except Exception as _tfg_e:
@@ -39858,10 +42590,11 @@ Responde ÚNICAMENTE con el JSON de revisión.
                     )
                     approved = False
                     issues.append(
-                        f"{int(round(_rcg_ratio * 100))}% de las recetas violan el contrato de pasos. "
-                        "Reescribe CADA receta con los 3 pilares EN ORDEN — 'Mise en place:', "
-                        "'El Toque de Fuego:' (con tiempo Y/O temperatura concreta) y 'Montaje:' — "
-                        "en español dominicano."
+                        _review_country_feedback(
+                            _rpn_country,
+                            "recipe_contract",
+                            ratio_pct=int(round(_rcg_ratio * 100)),
+                        )
                     )
                     severity = _severity_max(severity, "high")
         except Exception as _rcg_e:
@@ -39898,7 +42631,8 @@ Responde ÚNICAMENTE con el JSON de revisión.
             # [P1-SLOT-DRIFT-OBSERVABLE · 2026-08-05] `slot_drift` se calculaba y se
             # TIRABA: nadie leía esa clave. El porqué y la medición que lo destapó,
             # en el docstring de `_emit_slot_drift_metric_best_effort`.
-            _emit_slot_drift_metric_best_effort(_bsr.get("slot_drift"), plan)
+            _emit_slot_drift_metric_best_effort(_bsr.get("slot_drift"), plan,
+                                                state.get("form_data"))
             # [P1-BAND-GATE-ALL4 · 2026-07-01] el umbral acompaña al score elegido: macros-only usa el umbral
             # RE-TUNEADO (0.45; combined 0.5 ≈ macros-only 0.33 por la celda kcal≈1.0 — reusar 0.5 a ciegas
             # sería mass-retry). Rollback MEALFIT_BAND_GATE_USE_MACROS_ONLY=false → score+umbral combinados.
@@ -40219,7 +42953,10 @@ Responde ÚNICAMENTE con el JSON de revisión.
     # no habría nada con qué hacer gather.
     # tooltip-anchor: P1-CULINARY-JUDGE
     if CULINARY_JUDGE_GUARD != "off":
-        _cj = await run_culinary_judge(plan)
+        # [P1-COUNTRY-SYSTEM-F1 · 2026-08-16] (T3) país del usuario para el juez culinario.
+        from constants import country_for_form_data
+        _cj_country = country_for_form_data(form_data)
+        _cj = await run_culinary_judge(plan, _cj_country)
         _cj_viol = [v.model_dump() for v in (_cj.violations if _cj else [])]
         _cj_hist = plan.setdefault("_culinary_judge_history", [])
         _cj_hist.append({
@@ -40369,7 +43106,10 @@ Responde ÚNICAMENTE con el JSON de revisión.
                             f"ej={clean_pantry[:3]!r} update_reason={form_data.get('update_reason')!r} "
                             f"rotation={is_rotation} strict={is_strict_required}")
 
-                val_result = validate_ingredients_against_pantry(all_ingredients, clean_pantry, strict_quantities=False)
+                val_result = validate_ingredients_against_pantry(
+                    all_ingredients, clean_pantry, strict_quantities=False,
+                    country=country_for_form_data(form_data),
+                )
                 if val_result is not True:
                     approved = False
                     issues.append(val_result)  # val_result es el string de error generado por constants.py
@@ -41183,6 +43923,47 @@ def should_retry(state: PlanState) -> str:
     # 'critical' = peligro médico (alergia/condición). Abortar y delegar a P0-1 guardrail
     # para entregar fallback matemático con disclaimer.
     if severity == "critical":
+        # [P1-DAYGEN-DIET-CONVERGE · 2026-08-07] Un crítico de DIETA/ALÉRGENO obtiene UN retry
+        # INFORMADO antes del abort. "No tiene sentido reintentar con el mismo contexto" era falso
+        # para esta clase: el retry SÍ recibe las razones (review_feedback → correction_context del
+        # day-gen) y las capas de este P-fix (pools diet-scrubbed + directiva de dieta) cambian el
+        # contexto de generación. NO debilita el guard — la severidad SIGUE siendo critical (a
+        # diferencia del downgrade DM2/bariátrico): el reviewer re-gatea el retry con los MISMOS
+        # escáneres deterministas y, si reincide (attempt>1), este branch aborta al fallback
+        # terminal idéntico al de hoy. Gate attempt==1 (sin flag de state: los conditional edges no
+        # persisten mutaciones) + budget. Rollback: MEALFIT_DIET_CRITICAL_REGEN=false.
+        # tooltip-anchor: P1-DAYGEN-DIET-CONVERGE
+        _dcr_reasons = state.get("rejection_reasons") or []
+        _diet_allergen_critical = any(
+            ("DIETA INCOMPATIBLE" in str(r)) or ("DIETA NO VERIFICABLE" in str(r))
+            or ("ALÉRGENO DETECTADO" in str(r)) or ("ALERGENO DETECTADO" in str(r))
+            for r in _dcr_reasons)
+        # [P1-MEDICAL-CRITICAL-RETRY · 2026-08-09] El resto de criticals MÉDICOS del reviewer
+        # obtiene el MISMO único retry informado: la clase medida en la corrida 31304538636
+        # («no especifica descremado/bajo en sodio/porción», 10/20 perfiles al fallback SIN
+        # intento de corrección) es corregible con la directiva + las notas deterministas
+        # (P1-CONDITION-SAFETY-NOTES) que el retry ya encuentra puestas. NO debilita el guard:
+        # severity sigue critical, el reviewer re-gatea con los mismos escáneres y la
+        # reincidencia aborta al fallback terminal idéntico al de hoy. Rollback:
+        # MEALFIT_MEDICAL_CRITICAL_REGEN=false. tooltip-anchor: P1-MEDICAL-CRITICAL-RETRY
+        _critical_retry_ok = (
+            (DIET_CRITICAL_REGEN_ENABLED and _diet_allergen_critical)
+            or (MEDICAL_CRITICAL_REGEN_ENABLED and not _diet_allergen_critical))
+        if _critical_retry_ok and int(state.get("attempt", 1)) == 1:
+            _dcr_start = state.get("pipeline_start")
+            _dcr_remaining = (
+                (GLOBAL_TIMEOUT - (time.time() - _dcr_start))
+                if isinstance(_dcr_start, (int, float)) and _dcr_start > 0 else -1.0)
+            if _dcr_remaining >= MIN_RETRY_BUDGET_S:
+                _dcr_tag = ("P1-DAYGEN-DIET-CONVERGE" if _diet_allergen_critical
+                            else "P1-MEDICAL-CRITICAL-RETRY")
+                logger.warning(
+                    f"🔁 [{_dcr_tag}] Crítico "
+                    f"{'de dieta/alérgeno' if _diet_allergen_critical else 'médico del reviewer'} "
+                    f"en attempt 1 → UN retry informado (budget restante {_dcr_remaining:.0f}s ≥ "
+                    f"{MIN_RETRY_BUDGET_S}s). Si reincide, fallback terminal. "
+                    f"Razones: {_dcr_reasons[:2]}")
+                return "retry"
         logger.error("🚨 [ORQUESTADOR] Rechazo CRÍTICO → No tiene sentido reintentar con el mismo contexto. Abortando temprano.")
         _emit_plan_quality_degraded_alert(state, exit_reason="critical", severity=severity)
         return "end"
@@ -41384,7 +44165,7 @@ async def reflection_node(state: PlanState) -> dict:
         # lite cubre. Rollback: setear el knob a flash full.
         _reflector_model = _meta_learning_model_name()
         _reflector_cb = _get_circuit_breaker(_reflector_model)
-        reflector_llm = ChatDeepSeek(
+        reflector_llm = ChatGLM(
             model=_reflector_model,
             temperature=0.2,
             max_retries=1
@@ -44472,7 +47253,7 @@ def _plan_goal_is_gainmuscle(plan: dict, explicit_goal=None) -> bool:
         return False
 
 
-def _emit_slot_drift_metric_best_effort(slot_drift, plan) -> None:
+def _emit_slot_drift_metric_best_effort(slot_drift, plan, form_data=None) -> None:
     """[P1-SLOT-DRIFT-OBSERVABLE · 2026-08-05] Persiste `slot_drift` a `pipeline_metrics`.
 
     El cómputo existía desde `P2-SLOT-DRIFT-TELEMETRY` (2026-07-29) pero su resultado no
@@ -44483,6 +47264,17 @@ def _emit_slot_drift_metric_best_effort(slot_drift, plan) -> None:
 
     Best-effort y sin efectos: cualquier fallo se traga: es telemetría, no puede tumbar una
     generación. `node='slot_drift'` para poder agrupar sin parsear texto.
+
+    [P2-COUNTRY-TELEMETRY · 2026-08-21] `country` en la metadata. Sin él, «¿los planes de España
+    salen peor que los dominicanos?» sólo se contesta abriendo plan por plan — que es literalmente
+    como se ha medido cada gap de esta ola. Sale de `country_for_form_data`, la ÚNICA puerta; con
+    el knob apagado devuelve 'DO' para todos, así que la fila no cambia de forma para nadie hasta
+    el flip.
+
+    El `user_id` SIGUE EN `None`, y no es un olvido: `PlanState` no lleva la identidad — este nodo
+    recibe `form_data`, no el usuario. Meterlo exige cambiar el estado del grafo, que es bastante
+    más que la «S» de este gap, y correlacionar por usuario es una pregunta distinta de la que aquí
+    se contesta.
     """
     if not isinstance(slot_drift, dict) or not slot_drift:
         return
@@ -44490,6 +47282,18 @@ def _emit_slot_drift_metric_best_effort(slot_drift, plan) -> None:
         from db_core import execute_sql_write
         import json as _json_sd
         _days = len((plan.get("days") or [])) if isinstance(plan, dict) else 0
+        try:
+            from constants import country_for_form_data as _cffd_sd
+            _country_sd = _cffd_sd(form_data if isinstance(form_data, dict) else {})
+        except Exception:
+            _country_sd = "DO"
+        try:
+            from knobs import _env_bool as _env_bool_country_sd
+            _country_system_enabled_sd = _env_bool_country_sd(
+                "MEALFIT_COUNTRY_SYSTEM", False
+            )
+        except Exception:
+            _country_system_enabled_sd = False
         execute_sql_write(
             """
             INSERT INTO pipeline_metrics
@@ -44501,7 +47305,10 @@ def _emit_slot_drift_metric_best_effort(slot_drift, plan) -> None:
                 None,
                 None,
                 "slot_drift",
-                _json_sd.dumps({"slot_drift": slot_drift, "days": _days}, ensure_ascii=False),
+                _json_sd.dumps({"slot_drift": slot_drift, "days": _days,
+                                "country": _country_sd,
+                                "MEALFIT_COUNTRY_SYSTEM": _country_system_enabled_sd},
+                               ensure_ascii=False),
             ),
         )
     except Exception as _e_sd:
@@ -44779,7 +47586,8 @@ def _engine_day_view(plan_data: dict, day: dict) -> dict:
 
 
 def apply_update_macro_engine(plan_data: dict, *, surface: str, db=None,
-                              pantry_strict: bool = False, form_data: dict = None) -> int:
+                              pantry_strict: bool = False, form_data: dict = None,
+                              touched_day_indices: list = None) -> int:
     """[P1-UPDATE-MACRO-PARITY · 2026-07-03] (audit v6 · P1-1) Paridad del MOTOR de macros de S1 en las
     superficies de update. `_apply_macro_engine` + el refinador global entero corrían SOLO en form-gen:
     un swap/chat-modify que dejaba el día fuera de banda se entregaba con banner (band-parity) pero sin
@@ -44808,7 +47616,24 @@ def apply_update_macro_engine(plan_data: dict, *, surface: str, db=None,
     pantry never-worse (deepcopy+revert) que este helper no tiene. Banda/step/knobs son SSOT
     compartido — si cambias la secuencia aquí, actualiza el inline de regen-day (y viceversa);
     test de sincronía en test_p2_audit_v7_batch.py.
-    Rollback: MEALFIT_UPDATE_MACRO_ENGINE=false. tooltip-anchor: P1-UPDATE-MACRO-PARITY"""
+    Rollback: MEALFIT_UPDATE_MACRO_ENGINE=false. tooltip-anchor: P1-UPDATE-MACRO-PARITY
+
+    [P1-PLAN-DISPLAY-I18N-MUTATOR-macroengine · Fix round 2] Este helper es PLAN-WIDE — itera
+    TODOS los días de `plan_data`, no solo el día que el caller acaba de tocar (swap-persist,
+    recipe-expand y chat-modify le pasan el plan ENTERO, `routers/plans.py`/`tools.py`). Un día
+    que YA venía fuera de banda de la generación entra igual, y `_hit` re-cuantiza los strings de
+    `ingredients` (rebalance/refine/relevel) Y `recipe` (`_sync_recipe_step_quantities`) de TODOS
+    los meals de ese día — exactamente los dos arrays que `meal["_display"][locale]` espeja por
+    índice (spec `docs/superpowers/specs/2026-08-19-plan-display-i18n-design.md`, §Invalidación).
+    Sin el pop de abajo, un día colateral (no el que el mutador llamante tocó) quedaría con
+    `_display` mintiendo gramos de forma PERMANENTE — ni se popea en el caller (que solo toca su
+    propio meal/día) ni se despacha (el caller solo re-enriquece SU día). El pop vive AQUÍ, no en
+    cada caller, porque es el único punto que sabe qué días re-cuantizó de verdad — cubre los 5
+    call sites actuales (swap, expand, chat-modify ×2, form-gen/budget-convergence) y los
+    futuros sin wiring por-caller (la lección de `P1-COUNTRY-SYSTEM-F1`: gatear call sites uno a
+    uno es el agujero, no el cierre). `touched_day_indices` (opcional, `None` = comportamiento
+    legacy intacto) permite al caller AMPLIAR su despacho de re-enriquecimiento a los días que
+    este motor re-cuantizó, sin retraducir el plan entero."""
     if not (UPDATE_MACRO_ENGINE_ENABLED and isinstance(plan_data, dict)) or pantry_strict:
         return 0
     try:
@@ -44842,7 +47667,7 @@ def apply_update_macro_engine(plan_data: dict, *, surface: str, db=None,
         # el motor re-dimensionó SIN poder re-aplicar los caps clínicos por falta de `form_data`.
         # Se reporta AGREGADO al final (un warning por llamada, no por día).
         _recap_skipped_days = 0
-        for _day in plan_data.get("days") or []:
+        for _day_idx_ume, _day in enumerate(plan_data.get("days") or []):
             if not isinstance(_day, dict):
                 continue
             _meals = [m for m in (_day.get("meals") or []) if isinstance(m, dict)]
@@ -44905,7 +47730,16 @@ def apply_update_macro_engine(plan_data: dict, *, surface: str, db=None,
                 _recap_skipped_days += 1
             if _hit:
                 touched += 1
+                if touched_day_indices is not None:
+                    touched_day_indices.append(_day_idx_ume)
                 for _m in _meals:
+                    # [P1-PLAN-DISPLAY-I18N-MUTATOR-macroengine] DELETE-on-write (spec
+                    # "Invalidación"): este día acaba de ser re-cuantizado (rebalance/refine/
+                    # relevel de arriba + el qty-sync de abajo) — CUALQUIER `_display` heredado
+                    # miente los gramos de `ingredients`/`recipe`. Pop puro (cero I/O, respeta
+                    # P2-MUTATOR-PURITY) en el ÚNICO punto que sabe qué meals se tocaron de
+                    # verdad, para los 5 call sites actuales y los futuros sin wiring por-caller.
+                    _m.pop("_display", None)
                     try:
                         _sync_recipe_step_quantities(_m)
                     except Exception:
@@ -46747,6 +49581,14 @@ def _apply_final_defense_guardrails(
         _repair_partial_plan(plan_final, nutrition=nutrition, requested_days=requested_days,
                              restricted_tokens=_fallback_restricted_tokens(actual_form_data),  # [P0-ORCH-1]
                              form_data=actual_form_data)  # [P1-FALLBACK-BARIATRIC-CURATED]
+        # [P1-SKELETON-SHORT-REASK · 2026-09-02] Los días sintéticos nacían sin `date`/`day_name`
+        # (el estampado corre ANTES de este guardrail) y el coach solo podía inferirlos.
+        try:
+            _stamped_days = _stamp_missing_day_dates(plan_final, actual_form_data)
+            if _stamped_days:
+                logger.info(f"📅 [P1-SKELETON-SHORT-REASK] date/day_name estampados en días rellenados: {_stamped_days}")
+        except Exception as _stamp_err:
+            logger.warning(f"[P1-SKELETON-SHORT-REASK] estampado de fecha falló: {_stamp_err}")
 
         # [P1-FALLBACK-CAUSE-SPLIT · 2026-07-29] Incidente corr=23c65543: el
         # planificador entregó 1/3 días (medicamente APROBADOS,
@@ -46897,6 +49739,18 @@ def _apply_final_defense_guardrails(
 # ============================================================
 # FUNCIÓN PÚBLICA: Ejecutar el pipeline completo
 # ============================================================
+    # [P1-SKELETON-SHORT-REASK · 2026-09-02] Estampado universal: cualquier día que llegue
+    # aquí sin `date` (sintético del guardrail, re-corregido por el marker surgical —vivo:
+    # el Día 1 del plan 19e8b509 salió sin fecha—, snapshot restaurado) recibe fecha y
+    # nombre de día antes de persistir. Nunca pisa una fecha existente.
+    try:
+        _fp_final = final_state.get("plan_result") if isinstance(final_state, dict) else None
+        if isinstance(_fp_final, dict):
+            _st_final = _stamp_missing_day_dates(_fp_final, actual_form_data)
+            if _st_final:
+                logger.info(f"📅 [P1-SKELETON-SHORT-REASK] date/day_name estampados pre-persist en días: {_st_final}")
+    except Exception as _stamp_final_err:
+        logger.warning(f"[P1-SKELETON-SHORT-REASK] estampado universal falló: {_stamp_final_err}")
 async def arun_plan_pipeline(form_data: dict, history: list = None, taste_profile: str = "", memory_context: str = "", progress_callback=None, background_tasks=None) -> dict:
     """
     Ejecuta el pipeline completo de generación de planes (Map-Reduce):

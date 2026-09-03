@@ -37,7 +37,20 @@ def test_daygen_prohibited_examples_exclude_verified_spices():
 
 
 def test_graph_catalog_block_examples_exclude_verified_spices():
-    segs = _prohibited_example_segments(_GRAPH)
+    # [P2-CATALOG-ACHIOTE-MX-PR · 2026-08-23] El bloque de catálogo ya no ESCRIBE sus ejemplos
+    # de «prohibido»: los DERIVA de `prompts.day_generator.PROHIBITED_EXAMPLE_FOODS` filtrando
+    # los que el catálogo de ese usuario SÍ ofrece (medido: para MX y PR el bloque prohibía el
+    # achiote y en la misma pantalla lo ofrecía; para los seis, la salsa de soya y la mostaza).
+    # La propiedad que este test protege no cambia — cambia DÓNDE está escrita la lista, así
+    # que el guard se mueve con su superficie en vez de quedarse mirando un literal que ya no
+    # existe. Si algún día vuelve a escribirse a mano en el fuente, el regex la vuelve a ver.
+    from prompts.day_generator import PROHIBITED_EXAMPLE_FOODS
+
+    assert "PROHIBITED_EXAMPLE_FOODS" in _GRAPH, (
+        "el bloque de catálogo ya no deriva sus ejemplos del SSOT: o los reescribió a mano "
+        "(y este test debe volver a leer el fuente) o dejó de advertir del todo."
+    )
+    segs = _prohibited_example_segments(_GRAPH) or [", ".join(PROHIBITED_EXAMPLE_FOODS)]
     assert segs, "no se encontró el segmento de ejemplos prohibidos en el bloque catálogo de g_o"
     for seg in segs:
         for sp in _VERIFIED_SPICES:

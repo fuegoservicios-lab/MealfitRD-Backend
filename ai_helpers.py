@@ -22,8 +22,8 @@ from prompts import (
 )
 
 # Langchain
-# [P0-DEEPSEEK-MIGRATION · 2026-06-12] Gemini → DeepSeek.
-from llm_provider import ChatDeepSeek, DEEPSEEK_FLASH, model_free_tier
+# [P0-LLM-PROVIDER-MIGRATION · 2026-06-12] Gemini → GLM.
+from llm_provider import ChatGLM, GLM_FLASH, model_free_tier
 from schemas import ExpandedRecipeModel
 
 from constants import (
@@ -37,6 +37,11 @@ from constants import (
     # [P2-SEEDER-DAYS-COUNT · 2026-08-03] techo del reparto = el mismo cap que el orquestador
     # aplica a `_days_to_generate` (2×PLAN_CHUNK_SIZE).
     PLAN_CHUNK_SIZE,
+    # [P1-COUNTRY-SYSTEM-F2 · 2026-08-17 (Task 9, j · T5-parked)] la ÚNICA puerta (T1) — antes
+    # solo se importaba LOCAL dentro de get_deterministic_variety_prompt para el texto del
+    # prompt (FINAL-FIX F1b); ahora también deriva el país del pool de catálogo (ver el call
+    # site de _get_fast_filtered_catalogs más abajo, que hasta este fix corría SIEMPRE DO-blind).
+    country_for_form_data,
 )
 from db import (get_user_profile, update_user_health_profile, update_user_health_profile_atomic,
                 get_user_ingredient_frequencies,
@@ -81,20 +86,20 @@ LIGHT_PROTEIN_SEED = _env_bool("MEALFIT_LIGHT_PROTEIN_SEED", False)
 
 # [P3-FLASH-LITE-COST-CUT · 2026-05-21] Knob para overridear el modelo del
 # generador de títulos de plan sin redeploy (convención P3-PREVIEW-MODEL-KNOB).
-# [P0-DEEPSEEK-MIGRATION · 2026-06-12] Default = DeepSeek V4 Flash (tarea aux
+# [P0-LLM-PROVIDER-MIGRATION · 2026-06-12] Default = GLM-5.3 Flash (tarea aux
 # barata, mismo modelo para todos los tiers).
 # Tooltip-anchor: P3-FLASH-LITE-COST-CUT.
 def _plan_title_model_name() -> str:
-    return _env_str("MEALFIT_PLAN_TITLE_MODEL", DEEPSEEK_FLASH)
+    return _env_str("MEALFIT_PLAN_TITLE_MODEL", GLM_FLASH)
 
 
 # [P1-RECIPE-EXPAND-FAILSIGNAL · 2026-05-30] Knob para overridear el modelo del
 # "Chef AI" (`expand_recipe_agent`) sin redeploy — mismo patrón que
-# `_plan_title_model_name` (P3-FLASH-LITE-COST-CUT). [P0-DEEPSEEK-MIGRATION]
-# Default = DeepSeek V4 Flash (expansión de receta es relleno de schema).
+# `_plan_title_model_name` (P3-FLASH-LITE-COST-CUT). [P0-LLM-PROVIDER-MIGRATION]
+# Default = GLM-5.3 Flash (expansión de receta es relleno de schema).
 # Tooltip-anchor: P1-RECIPE-EXPAND-FAILSIGNAL-MODEL.
 def _recipe_expand_model_name() -> str:
-    return _env_str("MEALFIT_RECIPE_EXPAND_MODEL", DEEPSEEK_FLASH)
+    return _env_str("MEALFIT_RECIPE_EXPAND_MODEL", GLM_FLASH)
 
 
 def _build_expand_llm(modelo: str, **kw):
@@ -106,12 +111,12 @@ def _build_expand_llm(modelo: str, **kw):
       · es exactamente donde sale el badge `_dish_quality_degraded` — la receta que quedó pobre;
       · la llamada es diminuta (una receta), así que el premium se mide en céntimos.
 
-    ⚠️ Sin este dispatch, apuntar el knob a `gpt-5.6-luna` mandaba el modelo al base_url de DeepSeek
+    ⚠️ Sin este dispatch, apuntar el knob a `gpt-5.6-luna` mandaba el modelo al base_url de GLM
     con la key equivocada. Es el mismo fallo que P1-LUNA-USAGE-BLIND cerró en el day-gen; aquí el
-    `ChatDeepSeek` a secas lo tenía latente desde que el knob existe.
+    `ChatGLM` a secas lo tenía latente desde que el knob existe.
 
-    ⚠️ `with_structured_output` NO se aplica aquí a propósito: `ChatDeepSeek` lo override-a para las
-    rarezas de DeepSeek (`function_calling` en vez de `json_schema`) y OpenAI quiere el default de
+    ⚠️ `with_structured_output` NO se aplica aquí a propósito: `ChatGLM` lo override-a para las
+    rarezas de GLM (`function_calling` en vez de `json_schema`) y OpenAI quiere el default de
     langchain. Lo pone el caller sobre el cliente que reciba.
     """
     try:
@@ -122,8 +127,8 @@ def _build_expand_llm(modelo: str, **kw):
     except Exception as _e:
         # fail-cheap: ante cualquier duda, el proveedor barato de siempre
         logger.warning(f"[P1-RECIPE-EXPAND-MODEL-PROVIDER] dispatch falló ({type(_e).__name__}), "
-                       f"usando DeepSeek: {str(_e)[:120]}")
-    return ChatDeepSeek(model=modelo, **kw)
+                       f"usando GLM: {str(_e)[:120]}")
+    return ChatGLM(model=modelo, **kw)
 
 
 # [P2-LLM-TIMEOUT-SWEEP · 2026-05-30] Timeout per-invoke compartido por los 4
@@ -171,6 +176,30 @@ def generate_plan_title(plan_data: dict) -> str:
             "health": "salud general"
         }
         goal_text = goal_map.get(goal, "nutrición personalizada")
+
+        # [P1-PLAN-TITLE-DO-CIEGO · 2026-08-23] El título pertenece al
+        # artefacto ya estampado. DO conserva estas dos líneas byte a byte;
+        # los países beta reciben su contexto sin ejemplos dominicanos.
+        from constants import COUNTRY_PROFILES, country_for_plan
+        _title_country = country_for_plan(plan_data, None)
+        if _title_country == "DO":
+            _title_country_rule = "- Puede ser metafórico o usar referencias dominicanas sutiles"
+            _title_country_examples = (
+                '- Ejemplos de buenos títulos: "Energía Tropical al Máximo", '
+                '"Sabor Sin Culpa", "Fuerza y Balance Criollo", '
+                '"Combustible Para Tu Meta", "Ruta Fit Dominicana", '
+                '"Poder Verde y Proteína"'
+            )
+        else:
+            _title_country_name = COUNTRY_PROFILES[_title_country]["name_es"]
+            _title_country_rule = (
+                "- Puede ser metafórico o usar referencias culturales sutiles de "
+                f"{_title_country_name}"
+            )
+            _title_country_examples = (
+                '- Ejemplos de buenos títulos: "Sabor Sin Culpa", '
+                '"Combustible Para Tu Meta", "Poder Verde y Proteína"'
+            )
         
         prompt = f"""Genera UN título corto y creativo en español para un plan de comidas. 
 REGLAS ESTRICTAS:
@@ -178,8 +207,8 @@ REGLAS ESTRICTAS:
 - Debe sonar motivador, atractivo y premium
 - NO incluir calorías, números ni emojis
 - NO usar la palabra "Plan" sola
-- Puede ser metafórico o usar referencias dominicanas sutiles
-- Ejemplos de buenos títulos: "Energía Tropical al Máximo", "Sabor Sin Culpa", "Fuerza y Balance Criollo", "Combustible Para Tu Meta", "Ruta Fit Dominicana", "Poder Verde y Proteína"
+{_title_country_rule}
+{_title_country_examples}
 
 Contexto:
 - Objetivo: {goal_text}
@@ -189,7 +218,7 @@ Contexto:
 Responde SOLO con el título, nada más."""
         
         # [P3-FLASH-LITE-COST-CUT · 2026-05-21] Model via knob (P3-PREVIEW-MODEL-KNOB).
-        title_llm = ChatDeepSeek(
+        title_llm = ChatGLM(
             model=_plan_title_model_name(),
             temperature=0.9,
             timeout=_ai_helpers_llm_timeout_s(),  # [P2-LLM-TIMEOUT-SWEEP · 2026-05-30]
@@ -296,6 +325,10 @@ _PROCESSED_MEAT_KEYWORDS = (
     "salami", "longaniza", "jamón", "jamon", "chorizo",
     "tocineta", "tocino", "salchichón", "salchichon", "salchicha",
     "mortadela", "embutido",
+    # [P1-SEEDER-CURED-MEAT-BETA · 2026-08-23] Términos medidos en los pools
+    # beta. No incluir `pernil`/`chicharrón`: pueden ser carne fresca y sus filas
+    # no sostienen clasificarlos universalmente como curados.
+    "morcilla", "embuchado", "chistorra", "sobrasada", "butifarra", "cecina",
 )
 # `_GOALS_PENALIZE_PROCESSED` NO sube aquí a propósito: sigue viviendo dentro de
 # `get_deterministic_variety_prompt`, junto al penalty del sorteo que decide con él y junto a
@@ -308,7 +341,8 @@ _PROCESSED_MEAT_KEYWORDS = (
 # call site) y, desde P1-PANTRY-FLOOR-CLINICAL-FILTER, criterio del filtro de la nevera.
 _SALT_CURED_PROTEIN_TOKENS = ("bacalao", "arenque", "salami", "salchichon", "pepperoni",
                               "mortadela", "tocino", "panceta", "longaniza", "chorizo",
-                              "salchicha", "embutido", "jamon")
+                              "salchicha", "embutido", "jamon", "morcilla", "embuchado",
+                              "chistorra", "sobrasada", "butifarra", "cecina")
 # [P1-BARIATRIC-PROTEIN-DENSITY · 2026-06-27] Frutas de ALTO índice glucémico: el revisor médico
 # rechazaba mango (clash) y guineo en porción grande por dumping (corr=5ffd78cf).
 _HIGH_GI_FRUITS = ("guineo", "banana", "mango", "uva", "pina", "platano", "melon", "sandia",
@@ -362,7 +396,7 @@ def _is_low_density_main(name, _is_bariatric: bool) -> bool:
         return True
     if _is_bariatric and _pl in _BARIATRIC_LOW_DENSITY_AS_MAIN:  # [P1-BARIATRIC-DENSE-ANCHOR] quesos-relleno
         return True
-    if _is_bariatric and _token_matches_wb(_pl, _PROCESSED_MEAT_KEYWORDS):
+    if _is_bariatric and _token_matches_wb(_pl, _CURED_OR_PROCESSED_TOKENS):
         return True
     return False
 
@@ -411,7 +445,7 @@ def _pantry_clinical_main_filter(extracted_p, extracted_f, *, penaliza_procesado
     #     por el camino en vez de cerrar el bypass.
     if _p and (penaliza_procesados or exige_densidad):
         _kept = [x for x in _p
-                 if not (penaliza_procesados and _token_matches_wb(x, _PROCESSED_MEAT_KEYWORDS))
+                 if not (penaliza_procesados and _token_matches_wb(x, _CURED_OR_PROCESSED_TOKENS))
                  and not (exige_densidad and _is_low_density_main(x, is_bariatric))]
         if len(_kept) < len(_p):
             logger.info(
@@ -1032,6 +1066,29 @@ def _rotate_pairs(items, days: int = 3):
     return [(base[i % n], base[(i + 1) % n]) for i in range(days)]
 
 
+def _country_safe_reviewer_memory(value, country: str) -> str:
+    """[P1-REVIEW-RETRY-FEEDBACK-DO · 2026-08-23]
+    Neutraliza sólo la familia legacy de horario ``es-DO`` al leerla en beta.
+
+    Las filas quedan intactas en producción. No se hace reemplazo global de
+    gentilicios porque ``rejection_patterns`` también guarda nombres de platos:
+    «Longaniza dominicana» es un identificador de alimento, no prosa del reviewer.
+    """
+    text = str(value or "")
+    from constants import canonicalize_country
+
+    if canonicalize_country(country) == "DO":
+        return text
+    if "rechazo de coherencia cultural es-do" not in text.lower():
+        return text
+    day_match = re.search(r"(?i)D[íi]a\s+(\d+)", text)
+    day_text = f" Día {day_match.group(1)}." if day_match else ""
+    return (
+        "COMIDA FUERA DE HORARIO (memoria histórica neutralizada):"
+        f"{day_text} Cambia el plato por una opción propia de ese horario."
+    )
+
+
 def get_deterministic_variety_prompt(history_text: str, form_data: dict = None, user_id: str = None,
                                      rejection_reasons: list = None,
                                      out_assignment: dict = None,
@@ -1087,7 +1144,14 @@ def get_deterministic_variety_prompt(history_text: str, form_data: dict = None, 
     history_lower = history_text.lower() if history_text else ""
     history_normalized = strip_accents(history_lower)
     force_variety = bool(form_data.get("_force_variety")) if form_data else False
-    
+    # [P1-COUNTRY-SYSTEM-F2 · 2026-08-17 (Task 9, j · T5-parked)] Derivado UNA sola vez (SSOT T1,
+    # fail-safe a 'DO' si form_data es None/no-dict — mismo contrato que el resto del motor) y
+    # reusado por CLOSURE en los 2 call sites de esta función que lo necesitan: el pool de
+    # catálogo (`_get_fast_filtered_catalogs`, abajo) y el texto del prompt
+    # (`build_deterministic_variety_prompt`, más abajo — antes re-derivaba con su propio import
+    # local; ahora reusa esta misma variable, sin doble llamada).
+    _variety_country = country_for_form_data(form_data)
+
     # --- FILTRO DE RESTRICCIONES MÉDICAS Y DIETÉTICAS ---
     if form_data:
         allergies = tuple([a.lower() for a in form_data.get("allergies", [])])
@@ -1130,7 +1194,7 @@ def get_deterministic_variety_prompt(history_text: str, form_data: dict = None, 
         # tooltip-anchor: P2-SEEDER-DIET-NONE
         diet = str(form_data.get("diet") or form_data.get("dietType") or "").lower()
         
-        filtered_proteins, filtered_carbs, filtered_veggies, filtered_fruits = _get_fast_filtered_catalogs(allergies, dislikes, diet)
+        filtered_proteins, filtered_carbs, filtered_veggies, filtered_fruits = _get_fast_filtered_catalogs(allergies, dislikes, diet, country=_variety_country)
     else:
         # Guest sin form_data: usar catálogos completos sin filtrar
         filtered_proteins = DOMINICAN_PROTEINS
@@ -1564,8 +1628,7 @@ def get_deterministic_variety_prompt(history_text: str, form_data: dict = None, 
         # el pool eligió 'Longaniza' → rechazo crítico.
         _penalized_count = 0
         for i, p in enumerate(available_proteins):
-            p_norm = strip_accents(p.lower())
-            if any(kw in p_norm for kw in _PROCESSED_MEAT_KEYWORDS):
+            if _token_matches_wb(p, _CURED_OR_PROCESSED_TOKENS):
                 protein_weights[i] *= 0.1
                 _penalized_count += 1
         if _penalized_count:
@@ -1605,8 +1668,7 @@ def get_deterministic_variety_prompt(history_text: str, form_data: dict = None, 
         # compartida con el filtro de la nevera).
         _salt_penalized = 0
         for i, p in enumerate(available_proteins):
-            p_norm = strip_accents(p.lower())
-            if any(kw in p_norm for kw in _SALT_CURED_PROTEIN_TOKENS):
+            if _token_matches_wb(p, _CURED_OR_PROCESSED_TOKENS):
                 protein_weights[i] *= _sb_penalty
                 _salt_penalized += 1
         if _salt_penalized:
@@ -2342,7 +2404,7 @@ def get_deterministic_variety_prompt(history_text: str, form_data: dict = None, 
                 if persisted_rejections:
                     blocked_text += "\n\n🧠 [MEMORIA DEL REVISOR MÉDICO - EVITA ESTOS ERRORES HISTÓRICOS]:"
                     for r in persisted_rejections[-5:]: # Solo los últimos 5 para no sobrecargar el prompt
-                        blocked_text += f"\n - {r}"
+                        blocked_text += f"\n - {_country_safe_reviewer_memory(r, _variety_country)}"
         except Exception as _rej_exc:
             # [P2-SILENT-DEGRADATION · 2026-05-13] DB blip / pool exhaustion:
             # el agente pierde memoria histórica de rechazos del Revisor Médico
@@ -2626,7 +2688,11 @@ def get_deterministic_variety_prompt(history_text: str, form_data: dict = None, 
     # [P2-SEEDER-DAYS-COUNT · 2026-08-03] La plantilla se CONSTRUYE con el nº de días del chunk
     # (`build_deterministic_variety_prompt`) en vez de ser el literal de 3 opciones. Con `_dc=3`
     # devuelve byte a byte el prompt histórico.
-    prompt = build_deterministic_variety_prompt(_dc).format(
+    # [P1-COUNTRY-SYSTEM-F1 · 2026-08-16 (FINAL-FIX F1b)] país vía la ÚNICA puerta (T1) —
+    # `form_data` es el parámetro homónimo de esta función. Knob apagado ⇒ 'DO' siempre ⇒ camino
+    # byte-idéntico. [P1-COUNTRY-SYSTEM-F2 · 2026-08-17 (Task 9, j)] reusa `_variety_country`
+    # (derivado UNA vez arriba, closure) — ya no re-deriva con un 2º import+call local.
+    prompt = build_deterministic_variety_prompt(_dc, _variety_country).format(
         light_protein_block=_light_block,
         blocked_text=blocked_text,
         **{f"protein_{_i}": chosen_proteins[_i % len(chosen_proteins)] for _i in range(_dc)},
@@ -2678,8 +2744,8 @@ def expand_recipe_agent(meal_data: dict) -> Optional[list[str]]:
 
     try:
         # [P1-RECIPE-EXPAND-MODEL-PROVIDER · 2026-07-26] Proveedor por prefijo del modelo: el knob
-        # `MEALFIT_RECIPE_EXPAND_MODEL` ya existía pero `ChatDeepSeek` a secas mandaba cualquier
-        # valor al base_url de DeepSeek. Ahora puede apuntar a `gpt-5.6-luna` y funcionar.
+        # `MEALFIT_RECIPE_EXPAND_MODEL` ya existía pero `ChatGLM` a secas mandaba cualquier
+        # valor al base_url de GLM. Ahora puede apuntar a `gpt-5.6-luna` y funcionar.
         llm = _build_expand_llm(
             _recipe_expand_model_name(),  # [P1-RECIPE-EXPAND-FAILSIGNAL] knob, era hardcoded
             temperature=0.7,
@@ -2747,8 +2813,8 @@ REGLAS DE SALIDA:
 - Usa un tono clínico pero directo.
 - NO ofrezcas consejos futuros, SOLO hechos observados (ej: "El usuario respondió excelente a desayunos salados, pero rechazó todos los batidos dulces").
 """
-        llm = ChatDeepSeek(
-            model=model_free_tier(),  # [P0-DEEPSEEK-MIGRATION] aux barato (knob MEALFIT_MODEL_FREE_TIER)
+        llm = ChatGLM(
+            model=model_free_tier(),  # [P0-LLM-PROVIDER-MIGRATION] aux barato (knob MEALFIT_MODEL_FREE_TIER)
             temperature=0.2,
             timeout=_ai_helpers_llm_timeout_s(),  # [P2-LLM-TIMEOUT-SWEEP · 2026-05-30]
         )
@@ -2784,8 +2850,8 @@ Platos: {', '.join(liked_names)}
 Ejemplos de características: "Prefiere desayunos salados con plátano", "Le gustan los guisos tradicionales dominicanos con salsa", "Disfruta de proteínas a la plancha"
 """
         
-        llm = ChatDeepSeek(
-            model=model_free_tier(),  # [P0-DEEPSEEK-MIGRATION] aux barato (knob MEALFIT_MODEL_FREE_TIER)
+        llm = ChatGLM(
+            model=model_free_tier(),  # [P0-LLM-PROVIDER-MIGRATION] aux barato (knob MEALFIT_MODEL_FREE_TIER)
             temperature=0.2,
             timeout=_ai_helpers_llm_timeout_s(),  # [P2-LLM-TIMEOUT-SWEEP · 2026-05-30]
         ).with_structured_output(FlavorProfiles)

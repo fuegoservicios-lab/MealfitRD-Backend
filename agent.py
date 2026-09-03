@@ -8,9 +8,12 @@ import re
 import unicodedata
 logger = logging.getLogger(__name__)
 
-from constants import strip_accents, CULINARY_KNOWLEDGE_BASE, validate_ingredients_against_pantry, _to_base_unit
-# [P0-DEEPSEEK-MIGRATION · 2026-06-12] Gemini → DeepSeek con router por tier.
-from llm_provider import (ChatDeepSeek, DEEPSEEK_FLASH, GPT56_LUNA,
+# [P3-CONSULTAR-DIA-USER-TODAY . 2026-08-22] Cuarta copia del 240 a mano: el fallback
+# de huso lee el SSOT que P3-TZ-FALLBACK-SSOT unifico.
+from constants import DEFAULT_TZ_OFFSET_MIN as _DEFAULT_TZ_OFFSET_MIN
+from constants import strip_accents, CULINARY_KNOWLEDGE_BASE, coach_country_context, culinary_knowledge_base_for_country, validate_ingredients_against_pantry, _to_base_unit
+# [P0-LLM-PROVIDER-MIGRATION · 2026-06-12] Gemini → GLM con router por tier.
+from llm_provider import (ChatGLM, GLM_FLASH, GPT56_LUNA,
                           build_chat_llm, is_openai_model, resolve_model_for_user)
 from langchain_core.tools import tool
 from langchain_core.messages import SystemMessage, HumanMessage, AIMessage, ToolMessage
@@ -41,7 +44,7 @@ from memory_manager import build_memory_context
 from fact_extractor import get_embedding
 from vision_agent import get_multimodal_embedding
 from langgraph.checkpoint.postgres import PostgresSaver
-from db import get_user_ingredient_frequencies, get_latest_meal_plan_with_id, get_session_messages, save_message, search_user_facts, search_visual_diary, connection_pool, chat_checkpoint_pool, get_consumed_meals_today
+from db import get_user_ingredient_frequencies, get_latest_usable_meal_plan_with_id, get_session_messages, save_message, search_user_facts, search_visual_diary, connection_pool, chat_checkpoint_pool, get_consumed_meals_today
 from dotenv import load_dotenv
 
 load_dotenv()
@@ -173,6 +176,17 @@ _CHAT_PLAN_PRUNE_KEYS = (
     "data_provenance",
     "resolution_coverage",
     "_transform_gate_advisory_final",
+    # [P2-DISPLAY-CHAT-PRUNE · 2026-08-21] La copia de NIVEL PLAN de la traducción
+    # (`plan_data._display`: nombre del plan + insights, una entrada por cada idioma
+    # que el usuario haya visitado). La poda por comida de más abajo cubre
+    # `days[*].meals[*]._display` y esta se le escapaba, así que se serializaba al
+    # system prompt en CADA turno.
+    #
+    # Es el mismo motivo por el que están aquí `_culinary_contract_*` y los reportes de
+    # QA. Y no le quita nada al agente: el coach razona sobre el plan en español
+    # canónico —el idioma en el que resuelve los nombres de alimento— y su PROSA la
+    # gobierna `build_language_directive`, no este campo.
+    "_display",
 )
 
 # [P2-SWAP-NUM-MEALS · 2026-07-29] (audit solver+seeder v4) El slot-target del swap se derivaba
@@ -250,25 +264,166 @@ def _resolve_swap_slot_key(meal_type, slots: dict) -> "str | None":
     return None
 
 
+def _plan_mode_for_chat(user_id):
+    """El modo del usuario (`'plan'` | `'tracking'`), para el encuadre del chat.
+
+    [P1-AGENT-WELCOME-TRACKING · 2026-08-14] Wrapper fino sobre
+    `plan_mode.get_plan_mode` que existe por dos razones: (a) los tests lo
+    monkeypatchean sin tocar la DB, y (b) el fail-open vive AQUÍ y no en cada
+    caller — si la lectura falla, se asume 'plan', que es el comportamiento
+    histórico y el de la inmensa mayoría de usuarios. Degradar el chat de todos
+    por un fallo puntual de DB sería peor que el bug que esto arregla.
+    """
+    from plan_mode import get_plan_mode
+    return str((get_plan_mode(user_id) or {}).get("plan_mode") or "plan")
+
+
+def _plan_context_for_chat(user_id, current_plan):
+    """[P1-AGENT-WELCOME-TRACKING · 2026-08-14] El bloque del plan para el system
+    prompt, con el ENCUADRE que corresponde al modo del usuario.
+
+    EL BUG QUE CIERRA. Los dos paths del chat (stream y no-stream) inyectaban el
+    plan con el literal «tiene este plan de comidas activo» / «Plan activo» —
+    incondicional. La pausa del modo contador conserva `plan_data` a propósito
+    (es lo que permite «Reanudar»), así que el modelo recibía un plan PAUSADO
+    jurado como vigente y contestaba «¿qué me toca hoy?» con él. La mitad visible
+    (el saludo del frontend recitando la cena) la reportó el dueño con captura;
+    esta es la misma mentira un piso más abajo.
+
+    PAUSADO ≠ AMPUTADO: el plan viaja igual en ambos modos. El usuario puede
+    preguntar qué tenía su plan, y el agente debe poder responder y ofrecer
+    reanudar — la puerta de vuelta que P1-PLAN-MODE dejó abierta. Lo que cambia
+    es el encuadre: en pausa, el modelo tiene PROHIBIDO presentarlo como lo que
+    toca hoy.
+
+    Es un helper y no dos f-strings inline por la lección de P1-CHAT-PAST-DAYS:
+    «la divergencia entre ambos [paths] ya ha causado bugs antes».
+    """
+    plan_json = json.dumps(_prune_plan_for_chat(current_plan))
+    try:
+        en_pausa = _plan_mode_for_chat(user_id) == "tracking"
+    except Exception as e:
+        logger.warning(f"[P1-AGENT-WELCOME-TRACKING] plan_mode ilegible, asumo 'plan': {e}")
+        en_pausa = False
+
+    if en_pausa:
+        return (
+            "\n\nCONTEXTO CRÍTICO: El usuario puso su plan de comidas EN PAUSA — "
+            "eligió usar la app solo como contador de macros y diario (modo "
+            "seguimiento). El plan se conserva para cuando quiera reanudarlo:\n"
+            f"{plan_json}\n\n"
+            "NO presentes las comidas de este plan como lo que le toca comer hoy, "
+            "ni lo recites al saludar, ni sugieras cambios sobre él como si "
+            "estuviera vigente: hoy el usuario decide libremente qué come y tu "
+            "papel es ayudarle a registrarlo y a cuadrar sus macros. Si ÉL "
+            "pregunta por su plan pausado, respóndele con estos datos y "
+            "recuérdale que puede reanudarlo desde su Historial (es gratis y "
+            "retoma donde quedó)."
+        )
+    return (
+        "\n\nCONTEXTO CRÍTICO: El usuario actualmente tiene este plan de comidas "
+        f"activo:\n{plan_json}\n\n"
+        "Usa esta información para responder con exactitud preguntas sobre lo que "
+        "le toca comer hoy o sugerir cambios basados en lo que ya tiene asignado "
+        "(como desayuno, almuerzo o cena)."
+    )
+
+
+def _plan_vigente_para_prompt(user_id, current_plan):
+    """[P1-CHAT-PAUSED-PROMPT-BLOCKS · 2026-08-14] El plan que GOBIERNA el día, o
+    `None` si el usuario lo tiene en pausa.
+
+    POR QUÉ EXISTE ESTE DATO Y NO OTRO GATE POR CALL SITE. Esta misma mañana
+    `_plan_context_for_chat` aprendió la pausa y la auditoría encontró que otros
+    cuatro bloques del MISMO prompt la contradecían unas líneas más abajo:
+    «HOY es el día N del menú», «DÍAS QUE FALTAN POR GENERARSE… ATRASADO», «hoy
+    te quedan N comidas del plan», y el presupuesto de kcal del plan congelado.
+    Gatear call sites es exactamente lo que produjo ese agujero: se arregla el
+    que se ve y quedan los demás.
+
+    Aquí el modo se resuelve UNA vez por turno y se deriva un DATO. Las secciones
+    prescriptivas reciben `plan_vigente`; sus guardas de shape (que ya existían,
+    `isinstance(current_plan, dict)`) las apagan solas. Los builders no aprenden
+    nada de modos, y uno futuro que reciba este dato queda gateado sin que nadie
+    se acuerde de gatearlo.
+
+    Ojo con la distinción, que es todo el diseño:
+      `current_plan`  el plan real. Lo sigue recibiendo `_plan_context_for_chat`,
+                      que en pausa lo entrega con su encuadre (PAUSADO ≠
+                      AMPUTADO: si el usuario pregunta por su plan hay que poder
+                      responderle y ofrecerle reanudar).
+      `plan_vigente`  el plan que manda HOY. `None` mientras esté en pausa.
+
+    Fail-open al comportamiento histórico: si el modo no se puede leer, se asume
+    'plan'. Degradar el chat de todos por un fallo de DB sería peor que el bug.
+    """
+    # [P2-CHAT-PLAN-TOOLS-PAUSE · 2026-08-15] Sin plan que gatear no hay nada que
+    # preguntar: el resultado sería `None` en los dos modos. Este helper subió al
+    # tope de ambas funciones de chat, así que corre en TODOS los turnos —
+    # incluidos los de invitados y los de usuarios sin plan; sin este corte serían
+    # otros tantos roundtrips a `user_profiles` que no cambian nada.
+    if not current_plan or not user_id or user_id == "guest":
+        return current_plan
+    try:
+        if _plan_mode_for_chat(user_id) == "tracking":
+            return None
+    except Exception as e:
+        logger.warning(f"[P1-CHAT-PAUSED-PROMPT-BLOCKS] plan_mode ilegible, asumo 'plan': {e}")
+    return current_plan
+
+
 def _prune_plan_for_chat(plan):
     """[P2-GENCHUNK-SPEED · 2026-06-01] Devuelve una copia shallow de `plan`
     sin las claves derivadas/pesadas de `_CHAT_PLAN_PRUNE_KEYS`, para reducir
     los input-tokens del system prompt del chat sin perder contenido semántico
     que el agente razone. Defensivo: si `plan` no es dict, lo devuelve intacto.
     Proyección shallow (no deep-copy): solo excluimos claves top-level; los
-    `days[]` y demás estructuras se referencian sin clonar (no se mutan)."""
+    `days[]` y demás estructuras se referencian sin clonar (no se mutan).
+
+    [P1-PLAN-DISPLAY-I18N · Ola final FF-5] `_display` vive en `days[*].meals[*]`, así
+    que una denylist TOP-LEVEL es incapaz de podarlo: para un usuario no-es-DO el JSON
+    del plan en el system prompt llevaba el plan español MÁS su traducción íntegra
+    (name+description+recipe+ingredients de cada meal) EN CADA TURNO — grosso modo el
+    doble de input-tokens, la misma clase de coste que ya motivó dos entradas de
+    `_CHAT_PLAN_PRUNE_KEYS` (`_culinary_contract_*`, `_review_issues_raw`). El agente
+    razona SIEMPRE sobre el español canónico (las tools resuelven por `day_number` +
+    `meal_type`, nunca por el nombre del plato), así que la traducción no le aporta nada.
+    Se poda con proyecciones shallow nuevas por día/meal — el plan original JAMÁS se
+    muta (side-effect-free: este helper recibe el plan VIVO del state del chat)."""
     if not isinstance(plan, dict):
         return plan
-    return {k: v for k, v in plan.items() if k not in _CHAT_PLAN_PRUNE_KEYS}
+    out = {k: v for k, v in plan.items() if k not in _CHAT_PLAN_PRUNE_KEYS}
+    _days = out.get("days")
+    if isinstance(_days, list):
+        out["days"] = [
+            (
+                {
+                    **_d,
+                    "meals": [
+                        ({k: v for k, v in _m.items() if k != "_display"}
+                         if isinstance(_m, dict) and "_display" in _m else _m)
+                        for _m in _d["meals"]
+                    ],
+                }
+                if isinstance(_d, dict) and isinstance(_d.get("meals"), list)
+                else _d
+            )
+            for _d in _days
+        ]
+    return out
 
 
 from schemas import MacrosModel, MealModel, DailyPlanModel, PlanModel
 from prompts import (
-    DETERMINISTIC_VARIETY_PROMPT, SWAP_MEAL_PROMPT_TEMPLATE, 
+    DETERMINISTIC_VARIETY_PROMPT, SWAP_MEAL_PROMPT_TEMPLATE,
     CHAT_SYSTEM_PROMPT_BASE, CHAT_STREAM_SYSTEM_PROMPT_BASE,
-    TITLE_GENERATION_PROMPT, RAG_ROUTER_PROMPT
+    TITLE_GENERATION_PROMPT, RAG_ROUTER_PROMPT,
+    # [P1-COUNTRY-SYSTEM-F1 · 2026-08-16 (FINAL-FIX F1c)] variante país-aware de
+    # SWAP_MEAL_PROMPT_TEMPLATE (T2 pattern) — swap_meal() la usa en vez del template crudo.
+    build_swap_meal_prompt_template
 )
 from prompts.chat_agent import (
+    build_vision_context,
     CHAT_AGENT_INLINE_PROMPT,
     CHAT_VOICE_MODE_PROMPT,
     CHAT_STREAM_INLINE_PROMPT,
@@ -279,6 +434,8 @@ from prompts.chat_agent import (
     build_tools_instructions_stream,
     build_inventory_context,
     build_user_identity_context,
+    build_clinical_guard_context,
+    build_language_directive,
 )
 # [P1-CHAT-PAST-DAYS · 2026-07-27] Memoria de días pasados — doc:
 # backend/docs/chat_past_days_memory.md
@@ -299,24 +456,24 @@ from tools import (
 )
 
 # Langchain Chat Model Initialization
-# [P0-DEEPSEEK-MIGRATION · 2026-06-12] El bloque `_safety_settings`
+# [P0-LLM-PROVIDER-MIGRATION · 2026-06-12] El bloque `_safety_settings`
 # (HarmCategory/HarmBlockThreshold) fue eliminado: era exclusivo del SDK de
-# Gemini. DeepSeek no expone content-filters configurables client-side, así
+# Gemini. GLM no expone content-filters configurables client-side, así
 # que la decisión P3-CHAT-SAFETY-OFF (evitar false-positives en charlas de
 # déficit/ayuno) queda satisfecha por defecto del provider.
 
 # [P2-AUDIT-1 · 2026-05-15] Knobs para overridear los modelos LLM usados
-# por las 5 callsites de `ChatDeepSeek(...)` en este módulo:
+# por las 5 callsites de `ChatGLM(...)` en este módulo:
 #   - `llm` (módulo-level, fallback default)             → MEALFIT_CHAT_AGENT_MODEL
 #   - `swap_llm` dentro de `swap_meal`                   → MEALFIT_CHAT_AGENT_SWAP_MODEL
 #   - `chat_llm` dentro de `call_model` (LangGraph node) → MEALFIT_CHAT_AGENT_MODEL (reusa)
 #   - `title_llm` dentro de `generate_session_title`     → MEALFIT_CHAT_TITLE_MODEL
 #   - `router_llm` dentro de `rag_query_router`          → MEALFIT_CHAT_ROUTER_MODEL
 #
-# [P0-DEEPSEEK-MIGRATION · 2026-06-12] chat y swap son TIER-ROUTED: sin
+# [P0-LLM-PROVIDER-MIGRATION · 2026-06-12] chat y swap son TIER-ROUTED: sin
 # override explícito del knob, el modelo se resuelve por plan de pago via
-# `llm_provider.resolve_model_for_user` (gratis/guest → deepseek-v4-flash,
-# basic/plus/ultra → deepseek-v4-pro). El override del knob SIEMPRE gana
+# `llm_provider.resolve_model_for_user` (gratis/guest → glm-5.3-flash,
+# basic/plus/ultra → glm-5.3). El override del knob SIEMPRE gana
 # (rollback / A-B test sin redeploy — convención P3-PREVIEW-MODEL-KNOB).
 # title/router son tareas aux baratas → V4 Flash fijo para todos los tiers.
 #
@@ -338,7 +495,7 @@ def _chat_agent_model_name(user_id: Optional[str] = None) -> str:
     return resolve_model_for_user(user_id)
 
 # [P1-SWAP-LUNA · 2026-08-05] El swap (y por herencia `regenerate-day`, que es un bucle
-# de swaps) pasa de `deepseek-v4-flash` a `gpt-5.6-luna` — el mismo modelo con el que ya
+# de swaps) pasa de `glm-5.3-flash` a `gpt-5.6-luna` — el mismo modelo con el que ya
 # NACE el plan en `day_generator`.
 #
 # La asimetría que cierra: el plan se generaba con luna y cada plato que el usuario
@@ -362,7 +519,7 @@ def _chat_agent_model_name(user_id: Optional[str] = None) -> str:
 # `OPENAI_API_KEY` en el entorno (contrato fail-loud de `_openai_api_key`). Un swap es
 # user-facing: preferimos degradar al router por tier (flash) que devolverle un 500 al
 # usuario porque falta una env var. Mismo criterio que la red post-fallo P1-NET-LUNA, que
-# degrada a `deepseek-v4-pro` cuando la key no está.
+# degrada a `glm-5.3` cuando la key no está.
 _SWAP_MODEL_DEFAULT = GPT56_LUNA
 
 
@@ -416,13 +573,13 @@ def _swap_reasoning_effort(surface: str = "individual") -> str:
 def _chat_title_model_name() -> str:
     return _env_str(
         "MEALFIT_CHAT_TITLE_MODEL",
-        DEEPSEEK_FLASH,
+        GLM_FLASH,
     )
 
 def _chat_router_model_name() -> str:
     return _env_str(
         "MEALFIT_CHAT_ROUTER_MODEL",
-        DEEPSEEK_FLASH,
+        GLM_FLASH,
     )
 
 def _chat_title_max_output_tokens() -> int:
@@ -614,10 +771,10 @@ def _chat_stream_inactivity_timeout_s() -> float:
         validator=lambda v: 0.0 < v <= 360.0,
     )
 
-# [P0-DEEPSEEK-MIGRATION] Singleton módulo-level: se construye a import-time
+# [P0-LLM-PROVIDER-MIGRATION] Singleton módulo-level: se construye a import-time
 # (sin user en contexto) → resuelve al modelo FREE. Los paths per-request
 # (call_model/swap_meal) construyen su LLM con tier del usuario real.
-llm = ChatDeepSeek(
+llm = ChatGLM(
     model=_chat_agent_model_name(),
     temperature=0.2,
     timeout=_chat_agent_llm_timeout_s(),  # [P0-CHAT-LLM-TIMEOUT · 2026-05-19]
@@ -829,6 +986,113 @@ def pantry_contains_food(blob: str, name: str) -> bool:
     return all(t in disponibles for t in toks)
 
 
+def _swap_macro_repair_enabled() -> bool:
+    """[P1-SWAP-MACRO-REPAIR · 2026-08-09] Kill switch del repair determinista de porciones."""
+    return os.environ.get("MEALFIT_SWAP_MACRO_REPAIR", "true").strip().lower() in (
+        "1", "true", "yes", "on")
+
+
+def _repair_swap_candidate_macros(meal_dump: dict, targets: dict, db):
+    """[P1-SWAP-MACRO-REPAIR · 2026-08-09] Re-porciona DETERMINISTAMENTE el candidato del swap a
+    los targets del slot antes de quemar un retry LLM. Medido (corr=78a438e0, run 31311796944):
+    el swap le pedía al LLM aritmética de porciones multi-restricción y el LLM espiraleaba
+    (carbs 110→151→269→332→344→422g contra target 146g) hasta SWAP_LLM_RETRIES_EXHAUSTED —
+    8/14 swaps muertos en 73-117s. La generación NUNCA le pide esto al LLM: el motor re-porciona.
+    Aquí igual: `_rebalance_day_macros_to_target` sobre [meal] (la MISMA maquinaria de prod,
+    escala líneas macro-dominantes, re-cuantiza, deltas honestos, raw lockstep) + truth-up +
+    step-sync, y re-valida. La IDENTIDAD del plato (ingredientes) no se toca — solo porciones.
+    Muta `meal_dump`. Retorna (passed, drifts, summary) post-repair, o (False, None, None) si
+    no hubo palanca (sin líneas dominantes movibles). Fail-safe: excepción → (False, None, None).
+    tooltip-anchor: P1-SWAP-MACRO-REPAIR"""
+    try:
+        if not isinstance(meal_dump, dict) or not isinstance(meal_dump.get("ingredients"), list) \
+                or not meal_dump.get("ingredients"):
+            return (False, None, None)
+        from graph_orchestrator import (
+            _rebalance_day_macros_to_target as _mr_reb,
+            _truth_up_meal_macros_from_strings as _mr_truthup,
+            _sync_recipe_step_quantities as _mr_stepsync,
+        )
+        from nutrition_calculator import validate_meal_macros_against_targets as _mr_validate
+        applied = _mr_reb(
+            [meal_dump],
+            float(targets.get("carbs") or 0),
+            float(targets.get("fats") or 0),
+            db,
+            target_protein=float(targets.get("protein") or 0),
+            tol=0.05,
+        )
+        if not applied:
+            return (False, None, None)
+        try:
+            _mr_truthup(meal_dump, db)
+        except Exception as _exc:
+            logger.debug("[P1-SWAP-MACRO-REPAIR] truth-up post-repair no aplicado: %s: %s",
+                         type(_exc).__name__, str(_exc)[:160])
+        try:
+            _mr_stepsync(meal_dump)
+        except Exception as _exc:
+            logger.debug("[P1-SWAP-MACRO-REPAIR] step-sync post-repair no aplicado: %s: %s",
+                         type(_exc).__name__, str(_exc)[:160])
+        return _mr_validate(meal_dump, targets)
+    except Exception as _mr_exc:
+        logger.warning(f"[P1-SWAP-MACRO-REPAIR] no-op: {type(_mr_exc).__name__}: {_mr_exc}")
+        return (False, None, None)
+
+
+# [P1-COUNTRY-SYSTEM-F1 · 2026-08-16] (T3) Feedback de retry del swap por país. Extraídos a
+# funciones PURAS (país, ...) -> str — testeables sin invocar el pipeline LLM completo, y
+# reusadas por las DOS ramas de `swap_meal` (guard de slot-horario, guard de raw-staple) desde
+# la MISMA `_swap_country` derivada una sola vez.
+def _swap_slot_feedback_suffix(country: str, meal_type: str, viol: list) -> str:
+    """Sufijo de retry del backstop P1-SLOT-APPROPRIATENESS (swap fuera de horario). DO/país
+    desconocido ⇒ texto actual EXACTO — ancla «para un dominicano» (byte-identidad). País BETA
+    ⇒ el mismo texto con la nacionalidad reenmarcada a `name_es`; la REGLA en sí (arroz/locrio/
+    pasta en almuerzo/cena, 'arroz de noche') queda intacta — es el espejo prompt de
+    `SLOT_INAPPROPRIATE_FOODS`, territorio de F1-T4 (gates culturales por país), no de esta task.
+
+    tooltip-anchor: _swap_slot_feedback_suffix (test_p1_country_system_f1.py)
+    """
+    from constants import canonicalize_country, COUNTRY_PROFILES
+    canon = canonicalize_country(country)
+    quien = (
+        "para un dominicano" if canon == "DO"
+        else f"en {COUNTRY_PROFILES.get(canon, {}).get('name_es', canon)}"
+    )
+    return (
+        f"\n\n🕒 COHERENCIA DE HORARIO (OBLIGATORIO): el plato anterior no encaja con el horario "
+        f"«{meal_type}»: {'; '.join(viol)}. Propón un plato que SÍ corresponda a ese momento "
+        f"del día {quien} — el arroz/locrio/pasta van en almuerzo/cena (NUNCA desayuno); "
+        f"la cena es ligera (evita 'arroz de noche' y comidas de desayuno). Mantén los macros objetivo."
+    )
+
+
+def _swap_raw_staple_feedback_suffix(country: str, marker: str, reason) -> str:
+    """Sufijo de retry del backstop P2-AUDIT-V5-BATCH-RAW-STAPLE-SWAP (staple sin transformar).
+    DO/país desconocido ⇒ texto actual EXACTO — ancla «una preparación dominicana REAL» (byte-
+    identidad). País BETA ⇒ se preserva el REQUISITO (transformar el staple), solo se re-ancla
+    la nacionalidad y las técnicas de ejemplo pasan a vocabulario genérico — mismo tratamiento
+    que F1-T2 le dio a la regla 19 del day-gen (regla íntegra, ejemplos internacionales).
+
+    tooltip-anchor: _swap_raw_staple_feedback_suffix (test_p1_country_system_f1.py)
+    """
+    from constants import canonicalize_country, COUNTRY_PROFILES
+    canon = canonicalize_country(country)
+    if canon == "DO":
+        prep = "una preparación dominicana REAL"
+        tecnicas = "guiso, locrio, revoltillo, arepitas, bollitos, al horno con majado"
+    else:
+        name_es = COUNTRY_PROFILES.get(canon, {}).get("name_es", canon)
+        prep = f"una preparación real de la cocina de {name_es} o internacional"
+        tecnicas = "guiso, salteado, revoltillo, panqueque/tortita, croqueta, al horno"
+    return (
+        f"\n\n{marker} (OBLIGATORIO): el plato anterior es un staple sin transformar "
+        f"({str(reason)[:80]}). Conviértelo en {prep} — "
+        f"{tecnicas} — manteniendo los "
+        "macros objetivo y los mismos ingredientes base."
+    )
+
+
 def swap_meal(form_data: dict, surface: str = "individual"):
     """Sustituye una comida por otra que cumpla los targets del slot.
 
@@ -844,6 +1108,11 @@ def swap_meal(form_data: dict, surface: str = "individual"):
     meal_type = form_data.get("meal_type", "Comida")
     target_calories = form_data.get("target_calories", 0)
     diet_type = form_data.get("diet_type", "balanced")
+    # [P1-COUNTRY-SYSTEM-F1 · 2026-08-16] (T3) País del usuario — ÚNICA derivación por swap;
+    # ambos guards de retry (slot-horario, raw-staple) la reutilizan vía closure de
+    # `invoke_with_retry`. country_for_form_data es la ÚNICA puerta (T1); knob apagado ⇒ 'DO'.
+    from constants import country_for_form_data
+    _swap_country = country_for_form_data(form_data)
 
     # [P1-SWAP-MACROS · 2026-05-22] Targets per-meal: si el cliente envía
     # target_protein/carbs/fats explícitos (pre-rejected meal's macros) los
@@ -1021,6 +1290,11 @@ def swap_meal(form_data: dict, surface: str = "individual"):
             # rechazaba y el swap quemaba reintentos. Los datos ya estaban en scope.
             diet_type=form_data.get("dietType") or form_data.get("diet"),
             allergies=form_data.get("allergies") or [],
+            # [P1-DISH-LIBRARY-COUNTRY · 2026-08-21] Sin esto, el swap de un plato español
+            # devolvía inspiración dominicana: arreglar sólo el day-gen habría dejado la mitad
+            # post-generación con el defecto — la misma asimetría de callers que Fase 1 tuvo que
+            # barrer dos veces. `_swap_country` ya está resuelto arriba, por la única puerta.
+            country=_swap_country,
         )
         if _insp_swap:
             context_extras += _insp_swap
@@ -1139,8 +1413,8 @@ def swap_meal(form_data: dict, surface: str = "individual"):
     # Intento Primario: Extraer ingredientes directamente del plan activo en BD
     if user_id and user_id != "guest":
         try:
-            from db_plans import get_latest_meal_plan_with_id
-            plan_record = get_latest_meal_plan_with_id(user_id)
+            from db_plans import get_latest_usable_meal_plan_with_id
+            plan_record = get_latest_usable_meal_plan_with_id(user_id)
             if plan_record and "plan_data" in plan_record:
                 from db_facts import get_consumed_meals_since
                 from shopping_calculator import get_realtime_pantry, aggregate_shopping_list as _agg_pantry
@@ -1284,8 +1558,8 @@ def swap_meal(form_data: dict, surface: str = "individual"):
         ).lower() != "false"
     ):
         try:
-            from db_plans import get_latest_meal_plan_with_id
-            _fallback_plan_record = get_latest_meal_plan_with_id(user_id)
+            from db_plans import get_latest_usable_meal_plan_with_id
+            _fallback_plan_record = get_latest_usable_meal_plan_with_id(user_id)
             if _fallback_plan_record and isinstance(
                 _fallback_plan_record.get("plan_data"), dict
             ):
@@ -1398,7 +1672,13 @@ def swap_meal(form_data: dict, surface: str = "individual"):
         swap_dislikes = tuple([d.lower() for d in dislikes]) if dislikes else ()
         swap_diet = diet_type.lower() if diet_type else ""
         
-        filtered_p, filtered_c, filtered_v, _ = _get_fast_filtered_catalogs(swap_allergies, swap_dislikes, swap_diet)
+        # [P1-COUNTRY-SYSTEM-F2 · 2026-08-17 (Task 9, j · T5-parked)] `_swap_country` ya derivado
+        # arriba (T3, línea ~1071) por closure — reusado, no re-derivado. Antes este call site
+        # SIEMPRE usaba el pool RD (default None de _get_fast_filtered_catalogs) sin importar el
+        # país real del usuario beta.
+        filtered_p, filtered_c, filtered_v, _ = _get_fast_filtered_catalogs(
+            swap_allergies, swap_dislikes, swap_diet, country=_swap_country
+        )
         
         # Excluir ingredientes del plato rechazado
         rejected_lower = rejected_meal.lower()
@@ -1532,7 +1812,9 @@ def swap_meal(form_data: dict, surface: str = "individual"):
     if SLOT_APPROPRIATENESS_GATE_ENABLED:
         try:
             from constants import build_meal_timing_rules as _bmtr
-            _timing_block = _bmtr(meal_type)
+            # [P1-COUNTRY-SYSTEM-F1 · 2026-08-16 (T4)] reusa `_swap_country` (derivado UNA vez al
+            # inicio de swap_meal, T3) — DO ⇒ camino byte-idéntico.
+            _timing_block = _bmtr(meal_type, _swap_country)
             if _timing_block:
                 context_extras += _timing_block
         except Exception as _tr_e:
@@ -1626,7 +1908,9 @@ def swap_meal(form_data: dict, surface: str = "individual"):
         logger.debug(f"[P1-STAPLE-FOODS] directiva de swap no aplicada (no bloquea): "
                      f"{type(_stp_ctx_e).__name__}: {_stp_ctx_e}")
 
-    prompt_text = SWAP_MEAL_PROMPT_TEMPLATE.format(
+    # [P1-COUNTRY-SYSTEM-F1 · 2026-08-16 (FINAL-FIX F1c)] reusa `_swap_country` (derivado UNA vez
+    # al inicio de swap_meal, T3) — DO ⇒ SWAP_MEAL_PROMPT_TEMPLATE byte-idéntico.
+    prompt_text = build_swap_meal_prompt_template(_swap_country).format(
         rejected_meal=rejected_meal,
         meal_type=meal_type,
         target_calories=target_calories,
@@ -1638,7 +1922,7 @@ def swap_meal(form_data: dict, surface: str = "individual"):
     )
     
     temp = 0.3
-    # [P0-DEEPSEEK-MIGRATION] Tier-routing: el endpoint /swap-meal valida
+    # [P0-LLM-PROVIDER-MIGRATION] Tier-routing: el endpoint /swap-meal valida
     # ownership de `user_id` contra el JWT ANTES de llegar acá (api_swap_meal).
     _swap_uid = form_data.get("user_id")
     # [P2-SWAP-COST-INSTRUMENTATION · 2026-07-10] `include_raw=True` → el invoke retorna
@@ -1649,12 +1933,12 @@ def swap_meal(form_data: dict, surface: str = "individual"):
     # (`_swap_base_llm`) porque el emit helper resuelve el modelo desde `.model`/`.model_name`.
     # Bonus: un fallo de PARSE ya no revienta como excepción de provider (contaba como CB
     # failure) — llega como parsed=None y se convierte en ValueError retryable (guardrail).
-    # [P1-SWAP-LUNA · 2026-08-05] `build_chat_llm` en vez de `ChatDeepSeek` fijo.
+    # [P1-SWAP-LUNA · 2026-08-05] `build_chat_llm` en vez de `ChatGLM` fijo.
     #
     # El hardcode era el bug latente: `MEALFIT_CHAT_AGENT_SWAP_MODEL` ya existía y parecía
     # bastar para mover el swap a otro modelo, pero solo cambiaba el NOMBRE — el cliente
-    # seguía siendo el de DeepSeek. Ponerle un ID de OpenAI habría mandado cada swap al
-    # base_url de DeepSeek con la key equivocada. Mismo defecto que P1-DAYGEN-LUNA-CANARY
+    # seguía siendo el de GLM. Ponerle un ID de OpenAI habría mandado cada swap al
+    # base_url de GLM con la key equivocada. Mismo defecto que P1-DAYGEN-LUNA-CANARY
     # ya había corregido en `_build_day_llm`, donde el comentario también decía "provider
     # correcto por prefijo" sin que estuviera implementado.
     #
@@ -1665,7 +1949,7 @@ def swap_meal(form_data: dict, surface: str = "individual"):
     # nuevo da más variedad que el viejo, no menos (flash devolvía salmón 3 de 3).
     # El modelo se resuelve UNA vez y se reusa: lo necesitan el detector de proveedor, el
     # constructor y el gate del circuit breaker de abajo. Antes cada uno llamaba al helper
-    # por su cuenta y existía un test (P0-DEEPSEEK-MIGRATION `test_f_...`) solo para vigilar
+    # por su cuenta y existía un test (P0-LLM-PROVIDER-MIGRATION `test_f_...`) solo para vigilar
     # que no divergieran en el `user_id`; con una variable única eso deja de ser posible.
     _swap_model_name = _chat_agent_swap_model_name(_swap_uid)
     _swap_effort_kwargs = (
@@ -1746,6 +2030,27 @@ def swap_meal(form_data: dict, surface: str = "individual"):
     _pantry_discovery_mode = bool(form_data.get("_pantry_discovery_mode")) and _pantry_strict_updates_enabled()
     if _pantry_discovery_mode:
         strict_pantry = False
+
+    # [P1-SWAP-EMPTY-PANTRY-WAIVER · 2026-08-09 · reubicado P0-SWAP-WAIVER-UNBOUND] Espejo de la
+    # exención de GENERACIÓN («nevera vacía desactiva el modo estricto», decisión intencional
+    # anclada): con universo VACÍO (guest, o Nevera real sin ítems) strict_pantry garantizaba el
+    # fallo — el LLM recibía un universo imposible, agotaba retries y moría en
+    # SWAP_STRICT_PANTRY_NO_INVENTORY. Con el waiver se genera del catálogo verificado con TODAS
+    # las guardas clínicas activas. El raise honesto sigue vivo para strict con nevera NO vacía.
+    # [P0-SWAP-WAIVER-UNBOUND · 2026-08-09] Este bloque vivió ~400 líneas ANTES de que
+    # `strict_pantry` naciera (asignación de arriba): la asignación del waiver convirtió el nombre
+    # en local para TODA la función → UnboundLocalError → **500 en el 100% de los swaps** desde el
+    # deploy (medido: swap ok_pct=0.0, latency p50=0.2s en la corrida 31304538636). DEBE vivir
+    # DESPUÉS de la asignación de strict_pantry y del override de discovery, ANTES del primer
+    # read (prompt) y del raise honesto. Rollback sin redeploy: MEALFIT_SWAP_EMPTY_PANTRY_WAIVER=false.
+    _swap_empty_waiver_on = os.environ.get(
+        "MEALFIT_SWAP_EMPTY_PANTRY_WAIVER", "true").strip().lower() in ("1", "true", "yes", "on")
+    if strict_pantry and not clean_ingredients and _swap_empty_waiver_on:
+        strict_pantry = False
+        logger.warning(
+            "🧊 [P1-SWAP-EMPTY-PANTRY-WAIVER] Universo de nevera VACÍO (guest o Nevera sin "
+            "ítems) → modo estricto desactivado para este swap; se genera del catálogo "
+            "verificado con las guardas clínicas activas.")
 
     # [P2-SWAP-CONSISTENCY · 2026-05-22] Tolerancia de ingredientes externos
     # cuando el user pidió un antojo / plato festivo: hard-pantry colisionaba
@@ -2045,6 +2350,7 @@ def swap_meal(form_data: dict, surface: str = "individual"):
                 ingreds,
                 clean_ingredients,
                 allow_external_count=_external_tolerance,
+                country=_swap_country,
             )
             if val_result is not True:
                 logger.warning(val_result)
@@ -2358,13 +2664,17 @@ def swap_meal(form_data: dict, surface: str = "individual"):
                     _pc_used = set()
                     for _pb in (form_data.get("same_day_other_meal_blobs") or []):
                         _pc_used |= _pc_labels(str(_pb))
+                    # [P2-AGENT-PROTEIN-CLOSER-COUNTRY · 2026-08-23] `country=` en AMBAS (36 vs 43
+                    # candidatos medidos, ES): el closer reconstruye candidatos por dentro en la
+                    # rama lácteo-dulce, así que pasarlo sólo al pool deja media fuga abierta.
                     _g_pc = _pc_closer(
                         _pc_meal, _pc_target, _tu_db_holder[0],
-                        _pc_pool(_pc_allergies, _tu_db_holder[0]),
+                        _pc_pool(_pc_allergies, _tu_db_holder[0], country=_swap_country),
                         allergies=_pc_allergies, fill_pct=1.0,
                         slot_cal_target=float(target_calories or 0),
                         enforce_min_threshold=False,
                         day_used_proteins=_pc_used,
+                        country=_swap_country,
                     )
                     if _g_pc > 0:
                         try:
@@ -2481,10 +2791,39 @@ def swap_meal(form_data: dict, surface: str = "individual"):
                         f"⚠️ [P1-SWAP-MACROS] Drift detectado attempt-pending | "
                         f"meal_type={meal_type} | drifts={drifts}"
                     )
-                    _current_prompt[0] = prompt_text + (
-                        f"\n\n🛑 ATENCIÓN AL INTENTO FALLIDO ANTERIOR:\n{summary}"
-                    )
-                    raise ValueError(summary)
+                    # [P1-SWAP-MACRO-REPAIR · 2026-08-09] ANTES de quemar un retry LLM:
+                    # re-porcionado determinista del candidato (la identidad del plato la
+                    # puso el LLM; las porciones las pone el motor — como en generación).
+                    if _swap_macro_repair_enabled():
+                        _mr_targets = {
+                            "cals": target_calories,
+                            "protein": target_protein,
+                            "carbs": target_carbs,
+                            "fats": target_fats,
+                        }
+                        if _tu_db_holder[0] is None:
+                            from nutrition_db import IngredientNutritionDB as _MRDB
+                            _tu_db_holder[0] = _MRDB()
+                        _mr_passed, _mr_drifts, _mr_summary = _repair_swap_candidate_macros(
+                            meal_dump, _mr_targets, _tu_db_holder[0])
+                        if _mr_passed:
+                            for _fk in ("ingredients", "ingredients_raw", "recipe",
+                                        "protein", "carbs", "fats", "cals", "macros"):
+                                if _fk in meal_dump and meal_dump[_fk] is not None:
+                                    if isinstance(res, dict):
+                                        res[_fk] = meal_dump[_fk]
+                                    elif hasattr(res, _fk):
+                                        setattr(res, _fk, meal_dump[_fk])
+                            passed = True
+                            logger.info(
+                                f"🔧 [P1-SWAP-MACRO-REPAIR] candidato re-porcionado "
+                                f"deterministamente a banda (drift original={drifts}) — "
+                                f"retry LLM evitado | meal_type={meal_type}")
+                    if not passed:
+                        _current_prompt[0] = prompt_text + (
+                            f"\n\n🛑 ATENCIÓN AL INTENTO FALLIDO ANTERIOR:\n{summary}"
+                        )
+                        raise ValueError(summary)
             except ValueError:
                 raise
             except Exception as _macros_exc:
@@ -2536,19 +2875,16 @@ def swap_meal(form_data: dict, surface: str = "individual"):
         if SLOT_APPROPRIATENESS_GATE_ENABLED and not (strict_pantry and not clean_ingredients):
             try:
                 _slot_dump = res.model_dump() if hasattr(res, "model_dump") else (res if isinstance(res, dict) else {})
-                _slot_viol = slot_coherence_backstop_for_meal(_slot_dump, meal_type)
+                # [P1-COUNTRY-SYSTEM-F1 · 2026-08-16 (T4 fix-round 1)] reusa `_swap_country`
+                # (derivado UNA vez al inicio de swap_meal, T3) — DO ⇒ camino byte-idéntico.
+                _slot_viol = slot_coherence_backstop_for_meal(_slot_dump, meal_type, _swap_country)
             except Exception:
                 _slot_viol = []
             if _slot_viol:
                 logger.warning(
                     f"🕒 [P1-SLOT-APPROPRIATENESS] swap fuera de horario | meal_type={meal_type} | viol={_slot_viol}"
                 )
-                _current_prompt[0] = prompt_text + (
-                    f"\n\n🕒 COHERENCIA DE HORARIO (OBLIGATORIO): el plato anterior no encaja con el horario "
-                    f"«{meal_type}»: {'; '.join(_slot_viol)}. Propón un plato que SÍ corresponda a ese momento "
-                    f"del día para un dominicano — el arroz/locrio/pasta van en almuerzo/cena (NUNCA desayuno); "
-                    f"la cena es ligera (evita 'arroz de noche' y comidas de desayuno). Mantén los macros objetivo."
-                )
+                _current_prompt[0] = prompt_text + _swap_slot_feedback_suffix(_swap_country, meal_type, _slot_viol)
                 raise ValueError("SLOT_INCOHERENCE: " + "; ".join(_slot_viol))
 
         # [P1-UPDATE-APPETIBILITY · 2026-06-27] (audit Fase 0) Pareo chocante fruta+salado en swap
@@ -2625,12 +2961,7 @@ def swap_meal(form_data: dict, surface: str = "individual"):
             if _rs_raw:
                 _RS_MARKER = "🍳 RETRY PLATO TRANSFORMADO"
                 if _RS_MARKER not in str(_current_prompt[0]):
-                    _current_prompt[0] = prompt_text + (
-                        f"\n\n{_RS_MARKER} (OBLIGATORIO): el plato anterior es un staple sin transformar "
-                        f"({str(_rs_reason)[:80]}). Conviértelo en una preparación dominicana REAL — guiso, "
-                        "locrio, revoltillo, arepitas, bollitos, al horno con majado — manteniendo los "
-                        "macros objetivo y los mismos ingredientes base."
-                    )
+                    _current_prompt[0] = prompt_text + _swap_raw_staple_feedback_suffix(_swap_country, _RS_MARKER, _rs_reason)
                     raise ValueError("RAW_STAPLE: " + str(_rs_reason)[:100])
                 logger.info(f"🍳 [P2-AUDIT-V5-BATCH] (GAP-13) swap sigue raw-staple tras el retry — "
                             f"entregado con advisory | meal_type={meal_type}")
@@ -2991,7 +3322,8 @@ def swap_meal(form_data: dict, surface: str = "individual"):
             if _changed and clean_ingredients:
                 # Pantry-strict: el rebalance pudo escalar una porción por encima de la Nevera → re-validar.
                 _reval = validate_ingredients_against_pantry(
-                    _out.get("ingredients") or [], clean_ingredients, allow_external_count=_external_tolerance
+                    _out.get("ingredients") or [], clean_ingredients,
+                    allow_external_count=_external_tolerance, country=_swap_country,
                 )
                 if _reval is not True:
                     logger.info(f"🎚 [P1-UPDATE-MACRO-REBALANCE] rebalance rompió pantry → revertido | {_reval}")
@@ -3029,11 +3361,16 @@ def swap_meal(form_data: dict, surface: str = "individual"):
             if float(_out.get("protein") or 0) < float(target_protein):
                 _cl_db = IngredientNutritionDB()
                 _snap_cl = _copy_cl.deepcopy(_out)
-                _cands = _safe_high_density_proteins(allergies, _cl_db)
-                _added = _close_protein_gap_for_meal(_out, float(target_protein), _cl_db, _cands)
+                # [P2-AGENT-PROTEIN-CLOSER-COUNTRY · 2026-08-23] ver el bloque de arriba: sin
+                # `country=` el candidato se elige del pool dominicano (36 filas) aunque el
+                # usuario compre en España (43). `_swap_country` ya está derivado en esta función.
+                _cands = _safe_high_density_proteins(allergies, _cl_db, country=_swap_country)
+                _added = _close_protein_gap_for_meal(_out, float(target_protein), _cl_db, _cands,
+                                                     country=_swap_country)
                 if _added and clean_ingredients:
                     _reval_cl = validate_ingredients_against_pantry(
-                        _out.get("ingredients") or [], clean_ingredients, allow_external_count=_external_tolerance
+                        _out.get("ingredients") or [], clean_ingredients,
+                        allow_external_count=_external_tolerance, country=_swap_country,
                     )
                     if _reval_cl is not True:
                         logger.info(f"🎚 [P2-SWAP-PROTEIN-CLOSER] closer rompió pantry → revertido | {_reval_cl}")
@@ -3136,11 +3473,14 @@ def swap_meal(form_data: dict, surface: str = "individual"):
                 _cur_p = float(_out.get("protein") or 0)
                 if _cur_p < 0.90 * float(target_protein):
                     _out["_protein_closed"] = False
-                    _cands_pc = [c for c in _safe_pc(allergies, _cap_db, min_protein=18.0)
+                    # [P2-AGENT-PROTEIN-CLOSER-COUNTRY · 2026-08-23] tercer par del mismo defecto.
+                    _cands_pc = [c for c in _safe_pc(allergies, _cap_db, min_protein=18.0,
+                                                     country=_swap_country)
                                  if not any(_t in str(c[1]).lower()
                                             for _t in ("queso", "yogur", "leche", "ricotta", "cottage", "requeson"))]
                     if _cands_pc:
-                        _close_pc(_out, float(target_protein), _cap_db, _cands_pc, max_add_g=90)
+                        _close_pc(_out, float(target_protein), _cap_db, _cands_pc, max_add_g=90,
+                                  country=_swap_country)
             if _nd or _nb:
                 logger.info(f"🔒 [P1-SWAP-PORTION-CAP] plato de swap recortado: cap_dm2={_nd} "
                             f"cap_baria={_nb} | meal_type={meal_type}")
@@ -3172,7 +3512,9 @@ def swap_meal(form_data: dict, surface: str = "individual"):
             # (clean_ingredients no vacío) → el finalizer NO añade veg de catálogo (no se puede comprar más).
             # [P0-VEG-GUARD-ALLERGEN · 2026-07-01] allergies (enriquecidas server-side) → el veg-guard del
             # finalizer NO inyecta un alérgeno post-backstop (este bloque corre DESPUÉS del scan clínico).
-            _nfix = _fin_rc(_out, pantry_strict=bool(clean_ingredients), allergies=allergies)
+            # [P1-COUNTRY-SYSTEM-F1 · 2026-08-16 (T4 fix-round 1)] reusa `_swap_country` (derivado
+            # UNA vez al inicio de swap_meal, T3) — DO ⇒ camino byte-idéntico.
+            _nfix = _fin_rc(_out, pantry_strict=bool(clean_ingredients), allergies=allergies, country=_swap_country)
             if _nfix:
                 logger.info(f"🍳 [P1-UPDATE-RECIPE-FINALIZE] {_nfix} fix(es) de coherencia de receta en plato de swap | meal_type={meal_type}")
         except Exception as _fin_e:
@@ -3278,6 +3620,10 @@ def swap_meal_with_consent(form_data: dict) -> dict:
         Si el discovery TAMBIÉN falla o no revela nada accionable, se propaga el ValueError
         original (mismo soft-fail de siempre, cero regresión).
     """
+    # El mismo país debe gobernar tanto el intento normal como el probe de
+    # descubrimiento; importado antes del primer uso (el pricing del final lo
+    # reutiliza).
+    from constants import country_for_form_data
     if not _pantry_strict_updates_enabled():
         return swap_meal(form_data)
     try:
@@ -3305,6 +3651,7 @@ def swap_meal_with_consent(form_data: dict) -> dict:
                 _candidate.get("ingredients") or [], _universe,
                 strict_quantities=True, tolerance=1.30, allow_external_count=0,
                 return_unauthorized=True,
+                country=country_for_form_data(form_data),
             )
         except Exception as _val_e:
             logger.debug(f"[P1-PANTRY-STRICT-CONSENT] discovery diff no-op: {type(_val_e).__name__}: {_val_e}")
@@ -3317,6 +3664,23 @@ def swap_meal_with_consent(form_data: dict) -> dict:
         missing = _price_missing_ingredients(_unauthorized)
         if not missing:
             raise ve
+        # [P1-COUNTRY-SYSTEM-F1 · 2026-08-16 (T7)] País beta sin precios nativos ⇒ anular
+        # `est_price_rd` ANTES de que llegue a `_build_consent_message` (que ya omite el
+        # "(~RD$...)" cuando el precio es None/falsy — cero cambio ahí) Y antes de que salga
+        # en `missing_ingredients` del payload JSON (el mismo campo, no solo la prosa — la
+        # lección del review final de F0: la prosa compuesta no es el único sitio donde
+        # esconde un monto). `form_data` es el mismo SSOT que ya deriva `_swap_country`
+        # arriba en `swap_meal` — country_for_form_data es la ÚNICA puerta (T1).
+        # [P3-PRICING-MODE-SSOT-BLANKET . 2026-08-22] Por la PUERTA, no por el flag. Esto
+        # miraba `has_native_prices` a mano -- literalmente el "2o chequeo" que el
+        # comentario de `pricing_mode_for_country` prohibe por escrito, citando las tres
+        # tablas de dieta de P1-DIET-CANON-SSOT. Era equivalente HOY; las segundas tablas
+        # no nacen divergiendo, divergen despues y en silencio.
+        from constants import country_for_form_data, pricing_mode_for_country
+        _consent_cc = country_for_form_data(form_data)
+        if pricing_mode_for_country(_consent_cc) == "beta_no_prices":
+            for _m in missing:
+                _m["est_price_rd"] = None
         logger.info(
             f"🧊 [P1-PANTRY-STRICT-CONSENT] needs_new_ingredients user={_user_id!r}: "
             f"{[m['name'] for m in missing]}"
@@ -3440,7 +3804,7 @@ def _emit_chat_rate_limited_metric_best_effort(user_id, session_id, model_name):
                 user_id if user_id and user_id != "guest" else None,
                 session_id,
                 "chat_llm_rate_limited",
-                _json_rl.dumps({"model": model_name, "provider": "deepseek"}, ensure_ascii=False),
+                _json_rl.dumps({"model": model_name, "provider": "zai"}, ensure_ascii=False),
             ),
         )
     except Exception as _e_rl:
@@ -3511,7 +3875,7 @@ def _try_claim_title_lock_cross_worker(session_id: str) -> bool:
                   < %s::float
             RETURNING key
             """,
-            (_kv_key, _now_ts, _now_ts, _now_ts - _TITLE_LOCK_TTL_S),
+            (_kv_key, _now_ts, _now_ts, _now_ts - _TITLE_LOCK_TTL_S), fetch_all=True
         )
         return bool(result)
     except Exception as _e_claim:
@@ -3700,10 +4064,10 @@ def call_model(state: ChatState):
         if not isinstance(m, SystemMessage):
             llm_messages.append(m)
             
-    # [P0-DEEPSEEK-MIGRATION] Identidad para tier-routing (paid→pro). Guests
+    # [P0-LLM-PROVIDER-MIGRATION] Identidad para tier-routing (paid→pro). Guests
     # (session_id) resuelven a flash via fail-cheap del router.
     _model_uid = state.get("user_id") or state.get("session_id")
-    chat_llm = ChatDeepSeek(
+    chat_llm = ChatGLM(
         model=_chat_agent_model_name(_model_uid),
         temperature=0.7,
         timeout=_chat_agent_llm_timeout_s(),  # [P0-CHAT-LLM-TIMEOUT · 2026-05-19]
@@ -3720,7 +4084,7 @@ def call_model(state: ChatState):
     #
     # NOTA: `_chat_agent_model_name(_model_uid)` se llama 2x (callsite del
     # constructor arriba + aquí) con el MISMO uid — el modelo del gate CB debe
-    # coincidir con el del LLM construido (tier-routing P0-DEEPSEEK-MIGRATION).
+    # coincidir con el del LLM construido (tier-routing P0-LLM-PROVIDER-MIGRATION).
     # Costo trivial: tier lookup cacheado con TTL en llm_provider.
     _cb_model = _chat_agent_model_name(_model_uid)
     _cb = _get_circuit_breaker(_cb_model)
@@ -3837,18 +4201,26 @@ def call_model(state: ChatState):
                     state.get("user_id") if state.get("user_id") and state.get("user_id") != "guest" else None,
                     state.get("session_id"),
                     "chat_llm_empty_response",
-                    _json_empty.dumps({"model": _cb_model, "provider": "deepseek"}, ensure_ascii=False),
+                    _json_empty.dumps({"model": _cb_model, "provider": "zai"}, ensure_ascii=False),
                 ),
             )
         except Exception:
             pass
-        _fallback_copy = (
-            "No pude procesar esa solicitud por restricciones del modelo. "
-            "¿Puedes reformularla con otras palabras? Si lo que querías era "
-            "registrar una comida, intenta algo como: \"comí X gramos de Y "
-            "para el almuerzo\"."
-        )
-        response = AIMessage(content=_fallback_copy)
+        # [P2-I18N-CHAT-FALLBACK-VACIO-SIGUE-EN-ESPANOL · 2026-08-23] En el idioma del
+        # usuario: este mensaje se PERSISTE en la conversación, así que un francés lo leía
+        # en español y lo volvía a ver en cada apertura de la sesión. El locale se lee del
+        # perfil SÓLO en esta rama (respuesta vacía: rara) — `call_model` no lo recibe en el
+        # state y añadirlo a ChatState por un caso raro es más superficie. Guest/sin perfil
+        # ⇒ español, igual que el coach entero (Addendum §2).
+        _fallback_locale = None
+        try:
+            _fb_uid = state.get("user_id")
+            if _fb_uid and _fb_uid != "guest" and _fb_uid != state.get("session_id"):
+                _fallback_locale = (get_user_profile(_fb_uid) or {}).get("locale")
+        except Exception:
+            _fallback_locale = None
+        from prompts.chat_agent import empty_response_fallback as _empty_response_fallback
+        response = AIMessage(content=_empty_response_fallback(_fallback_locale))
 
     # [P2-CHAT-TOKEN-TELEMETRY · 2026-05-19] Best-effort post-invoke.
     # Importa lazy para evitar acoplamiento module-init con graph_orchestrator
@@ -4076,13 +4448,13 @@ def execute_tools(state: ChatState):
                             # ahora retorna el `plan_data` ya mergeado (fresh-post-lock,
                             # la misma data que la re-lectura traería). Usarlo directo
                             # evita un SELECT serial redundante justo tras la escritura.
-                            # Fallback a `get_latest_meal_plan_with_id` solo si la key
+                            # Fallback a `get_latest_usable_meal_plan_with_id` solo si la key
                             # está ausente (back-compat / parser degradado).
                             _inband_plan = parsed_mod.get("plan_data")
                             if isinstance(_inband_plan, dict) and _inband_plan:
                                 new_plan = _inband_plan
                             else:
-                                updated_plan_record = get_latest_meal_plan_with_id(user_id if user_id and user_id != 'guest' else session_id)
+                                updated_plan_record = get_latest_usable_meal_plan_with_id(user_id if user_id and user_id != 'guest' else session_id)
                                 if updated_plan_record and "plan_data" in updated_plan_record:
                                     new_plan = updated_plan_record["plan_data"]
                             # [P2-AUDIT-NEW-1 · 2026-05-12] Extraer
@@ -4262,7 +4634,7 @@ def execute_tools(state: ChatState):
 # `build_tools_instructions_stream` ya se lo prohíbe con todas las letras
 # ("NUNCA digas 'lo registro' o 'anotado' si no llamaste la herramienta en ese
 # turno"). Eso es una INSTRUCCIÓN, no un control: el tier `free` va a
-# `deepseek-v4-flash` (llm_provider: todo lo que no sea basic/plus/ultra cae al
+# `glm-5.3-flash` (llm_provider: todo lo que no sea basic/plus/ultra cae al
 # barato por diseño fail-cheap) y flash se salta la llamada con bastante más
 # frecuencia que pro. Un aviso en el prompt no es un guard.
 #
@@ -4386,6 +4758,14 @@ def generate_chat_title_background(user_id: str, session_id: str, first_message_
     Se ejecuta en un thread separado. Llama a Gemini para generar el título
     y luego lo guarda en agent_messages con role='SYSTEM_TITLE'.
     """
+    # [P1-COUNTRY-SYSTEM-F2 · T3 · 2026-08-17] Decisión de alcance original: este título NO
+    # ganaba `build_language_directive` («follow-up propio si el dueño lo pide»).
+    # [P1-CHAT-TITLE-LOCALE · 2026-08-19] El dueño lo pidió — con el chat ya en inglés, el
+    # título era lo único del sidebar que seguía saliendo español. Se lee el perfil UNA vez
+    # (el título se genera una vez por sesión — costo nulo) y se apendea la MISMA directiva
+    # SSOT nativa del coach: prosa del título en el idioma del usuario, nombres de platos en
+    # español (un título «Guiso de Habichuelas» debe seguir matcheando el plan). Guests/es-DO
+    # ⇒ directiva vacía, byte-idéntico.
     # [P2-CHAT-CLEANUP · 2026-05-20] Migrado `dlog()` (escribía a
     # `title_debug.log` en disco append-mode sin rotación) a `logger.debug`.
     # Pre-fix: cada thread background abría el file en cada log line — disk
@@ -4479,8 +4859,21 @@ def generate_chat_title_background(user_id: str, session_id: str, first_message_
             )
             return
 
-        title_llm = ChatDeepSeek(model=_chat_title_model_name(), temperature=0.7, timeout=_chat_title_llm_timeout_s(), max_output_tokens=_chat_title_max_output_tokens())  # [P0-CHAT-LLM-TIMEOUT · 2026-05-19] / [P3-COST-TITLE-OUTPUT-CAP · 2026-06-01]
-        prompt = TITLE_GENERATION_PROMPT.format(first_message=first_message, used_titles=used_titles_str)
+        title_llm = ChatGLM(model=_chat_title_model_name(), temperature=0.7, timeout=_chat_title_llm_timeout_s(), max_output_tokens=_chat_title_max_output_tokens())  # [P0-CHAT-LLM-TIMEOUT · 2026-05-19] / [P3-COST-TITLE-OUTPUT-CAP · 2026-06-01]
+        # [P1-CHAT-TITLE-LOCALE · 2026-08-19 · round 2] Directiva de idioma ESPECÍFICA del
+        # título (`build_title_language_directive`): la conversacional del round 1 no vencía
+        # a los ejemplos españoles del template — ver el bloque en prompts/chat_agent.py.
+        # Best-effort: cualquier fallo ⇒ directiva vacía ⇒ conducta previa (título español).
+        _title_lang_directive = ""
+        try:
+            if user_id and user_id != "guest" and user_id != session_id:
+                from db import get_user_profile as _gup_title
+                from prompts.chat_agent import build_title_language_directive as _btld
+                _title_prof = _gup_title(user_id) or {}
+                _title_lang_directive = _btld(_title_prof.get("locale"))
+        except Exception:
+            _title_lang_directive = ""
+        prompt = TITLE_GENERATION_PROMPT.format(first_message=first_message, used_titles=used_titles_str) + _title_lang_directive
         logger.debug(f"[chat_title bg] session={session_id} - Calling LLM API")
         try:
             response = title_llm.invoke(prompt)
@@ -4600,7 +4993,7 @@ def rag_query_router(prompt: str) -> dict:
         return {"skip": False, "query": prompt}
 
     try:
-        router_llm = ChatDeepSeek(
+        router_llm = ChatGLM(
             model=_chat_router_model_name(),
             temperature=0.0,
             timeout=_chat_router_llm_timeout_s(),  # [P0-CHAT-LLM-TIMEOUT · 2026-05-19]
@@ -4663,7 +5056,11 @@ _WEEKDAYS_ES = ("lunes", "martes", "miércoles", "jueves", "viernes", "sábado",
 _CYCLE_DURATION_DAYS = {"weekly": 7, "semanal": 7, "biweekly": 15, "quincenal": 15, "monthly": 30, "mensual": 30}
 
 
-def _build_plan_today_context(current_plan, local_date_str: Optional[str] = None) -> str:
+def _build_plan_today_context(
+    current_plan,
+    local_date_str: Optional[str] = None,
+    tz_offset: Optional[int] = None,
+) -> str:
     """[P1-CHAT-TODAY-CONTEXT · 2026-07-12] Ancla HOY al día del menú y al ciclo.
     Vivo: "actualiza el desayuno" → el agente preguntó "¿Opción A (Domingo) u
     Opción B (Lunes)?" siendo domingo — tenía la hora (build_temporal_context)
@@ -4676,11 +5073,20 @@ def _build_plan_today_context(current_plan, local_date_str: Optional[str] = None
         if not days:
             return ""
         from datetime import datetime, timezone, timedelta
+        # [P1-COACH-CYCLE-DAY-RD · 2026-08-23] La fecha local que manda el cliente
+        # y el instante UTC de inicio sólo son comparables usando el MISMO offset.
+        # Clamp compartido; ausencia/valor basura cae al SSOT global (RD por default),
+        # no a otro literal `4 h` inventado en este helper.
+        tz_offset_mins = _clamp_tz_offset_mins(
+            tz_offset,
+            default_mins=_DEFAULT_TZ_OFFSET_MIN,
+        )
         if local_date_str:
             today = datetime.strptime(str(local_date_str)[:10], "%Y-%m-%d").date()
         else:
-            # Convención del repo: fecha local RD = UTC-4 explícito.
-            today = (datetime.now(timezone.utc) - timedelta(hours=4)).date()
+            today = (
+                datetime.now(timezone.utc) - timedelta(minutes=tz_offset_mins)
+            ).date()
         wd = _WEEKDAYS_ES[today.weekday()]
 
         line = f"\n\n📅 HOY es {wd} {today.isoformat()}."
@@ -4705,7 +5111,11 @@ def _build_plan_today_context(current_plan, local_date_str: Optional[str] = None
         if start_raw and dur_days:
             try:
                 start_dt = datetime.fromisoformat(str(start_raw).replace("Z", "+00:00"))
-                start_local = (start_dt - timedelta(hours=4)).date() if start_dt.tzinfo else start_dt.date()
+                start_local = (
+                    (start_dt - timedelta(minutes=tz_offset_mins)).date()
+                    if start_dt.tzinfo
+                    else start_dt.date()
+                )
                 day_k = (today - start_local).days + 1
                 if day_k >= 1:
                     # `rem` INCLUYE hoy — mismo cálculo que el chip del Dashboard
@@ -4787,6 +5197,19 @@ def _build_pending_days_lines_block(user_id: Optional[str], current_plan, today:
     try:
         if not isinstance(current_plan, dict) or not user_id or user_id == "guest":
             return ""
+        # [P1-CHAT-PAUSED-PROMPT-BLOCKS · 2026-08-14] Un plan PAUSADO no tiene días
+        # en camino: la pausa CANCELA la cola. Anunciar días «que se generan por
+        # etapas», o declararlos «ATRASADOS», es hablarle al modelo de un trabajo
+        # que nadie va a hacer — y «atrasado» invita a ofrecer soluciones a un
+        # problema inexistente.
+        #
+        # Se pregunta al DATO (el propio plan) y no al modo de sesión: este bloque
+        # llega anidado dentro de `_build_past_days_context`, y hacerle llegar el
+        # modo exigiría enhebrar un parámetro por dos funciones y dos paths, que es
+        # el hilo que se rompe en el próximo refactor. Preguntarle al plan cuesta
+        # cero y sigue siendo correcto si mañana lo invoca un camino nuevo.
+        if str(current_plan.get("generation_status") or "") == "paused_by_user":
+            return ""
         # [Ronda 4 · B4] Mismo knob que `/chunk-status` y el cron horario: sin
         # esto el `COUNT` por turno del coach seguía vivo con la señal apagada.
         from chat_history_context import plan_cycle_pending_days, upcoming_days_signal_enabled
@@ -4850,7 +5273,7 @@ def _build_past_days_context(user_id: str, current_plan, local_date_str: Optiona
     input de request body: se guarda la coerción a int, nunca se confía ciego.
 
     `plan_id`: [P2-CHUNK-OVERDUE-SIGNAL · 2026-08-04] id de `meal_plans` del
-    plan activo, cuando el callsite ya lo resolvió (`get_latest_meal_plan_with_id`
+    plan activo, cuando el callsite ya lo resolvió (`get_latest_usable_meal_plan_with_id`
     para el shopping-delta, unas líneas antes en ambos paths). Se reenvía tal
     cual a `_build_pending_days_lines_block` — ver esa función para por qué
     filtrar el COUNT por `meal_plan_id` en vez de `user_id` importa.
@@ -4871,7 +5294,8 @@ def _build_past_days_context(user_id: str, current_plan, local_date_str: Optiona
         # `tz_offset is not None` (jamás truthiness: `0` es UTC, legítimo y falsy).
         # El clamp al rango de husos vive en `_clamp_tz_offset_mins` — SSOT
         # compartida con el callsite de `get_consumed_meals_today` del stream.
-        tz_offset_mins = _clamp_tz_offset_mins(tz_offset) if tz_offset is not None else 240
+        tz_offset_mins = (_clamp_tz_offset_mins(tz_offset) if tz_offset is not None
+                          else _DEFAULT_TZ_OFFSET_MIN)
 
         out = build_past_plan_days_block(current_plan, today, days_back=days_back)
         # [P2-CHUNK-OVERDUE-SIGNAL · 2026-08-04] MISMO bloque, MISMA llamada (no
@@ -5140,7 +5564,7 @@ def _build_hydration_context(user_id: Optional[str], local_date_str: Optional[st
         # bug UTC-vs-AST que P1-PROACTIVE-TZ.
         if not local_date_str:
             from tools import _local_date_str_for_user
-            local_date_str = _local_date_str_for_user()
+            local_date_str = _local_date_str_for_user(user_id)
 
         glasses = get_water_intake_glasses_today(user_id, local_date_str)
 
@@ -5378,7 +5802,7 @@ def _build_final_content_from_messages(messages: list) -> str:
     return out
 
 
-def chat_with_agent(session_id: str, prompt: str, current_plan: Optional[dict] = None, user_id: Optional[str] = None, form_data: Optional[dict] = None):
+def chat_with_agent(session_id: str, prompt: str, current_plan: Optional[dict] = None, user_id: Optional[str] = None, form_data: Optional[dict] = None, local_date: Optional[str] = None, tz_offset: Optional[int] = None):
     # [P1-TOOLS-LLM-HARDENING · 2026-05-20] Wall-clock total para el path
     # non-stream del chat. Pre-fix: solo el stream emitía
     # `chat_stream_total_duration` (P1-CHAT-STREAM-DURATION), el
@@ -5391,8 +5815,18 @@ def chat_with_agent(session_id: str, prompt: str, current_plan: Optional[dict] =
     _chat_total_started_at = _time_chat_total.monotonic()
     _chat_total_outcome = "ok"
 
+    # [P1-CHAT-PAUSED-PROMPT-BLOCKS · 2026-08-14 · subido P2-CHAT-PLAN-TOOLS-PAUSE
+    #  2026-08-15] El modo se resuelve UNA vez por turno y se deriva el DATO que
+    #  apaga las secciones PRESCRIPTIVAS del prompt. Vive al TOPE de la funcion,
+    #  donde solo depende de sus parametros: cada vez que un consumidor nuevo
+    #  aparecia mas arriba habia que volver a moverlo, y una de esas veces se
+    #  colo un NameError. Aqui ya no puede quedar por debajo de nadie.
+    plan_vigente = _plan_vigente_para_prompt(user_id, current_plan)
+
+
     # Obtener contexto de memoria inteligente (resúmenes + mensajes recientes)
     memory = build_memory_context(session_id, user_id)  # [P1-DREAMING-1] user_id → modelo del usuario
+
     
     # === RAG INJECTION (con Query Routing inteligente) ===
     user_facts_text = ""
@@ -5463,6 +5897,16 @@ def chat_with_agent(session_id: str, prompt: str, current_plan: Optional[dict] =
         rag_context += "---------------------------------------------\n"
 
     schedule_type = form_data.get("scheduleType", "standard") if form_data else "standard"
+    # [P2-COACH-COUNTRY · 2026-08-21] La `<biblioteca_culinaria_local>` son SEIS platos
+    # dominicanos con sus tiempos de digestión, y el prompt no los ofrece: ORDENA citarlos.
+    # A un español eso le llega como una reprimenda por una yaroa que no comió. El país sale
+    # de la ÚNICA puerta (`country_for_form_data`); un segundo canonicalizador aquí sería la
+    # tabla que P1-DIET-CANON-SSOT ya pagó una vez.
+    try:
+        from constants import country_for_form_data as _cffd_coach
+        _coach_country = _cffd_coach(form_data or {})
+    except Exception:
+        _coach_country = "DO"
     # Determinar si es un usuario autenticado o invitado
     is_authenticated = user_id and user_id != session_id and user_id != "guest"
 
@@ -5471,28 +5915,30 @@ def chat_with_agent(session_id: str, prompt: str, current_plan: Optional[dict] =
     # `_chat_prompt_static_prefix`. Puro reorden; rama else = orden legacy.
     if _chat_prompt_static_prefix():
         system_prompt = CHAT_AGENT_INLINE_PROMPT
-        system_prompt += f"\n{CULINARY_KNOWLEDGE_BASE}"
-        system_prompt += build_tools_instructions(user_id)
+        system_prompt += coach_country_context(_coach_country)
+        system_prompt += f"\n{culinary_knowledge_base_for_country(_coach_country)}"
+        system_prompt += build_tools_instructions(user_id, plan_en_pausa=bool(current_plan) and plan_vigente is None)
         # --- bloques dinámicos (volátiles) al final ---
-        system_prompt += build_temporal_context()
+        system_prompt += build_temporal_context(local_date=local_date, tz_offset=tz_offset)
         system_prompt += build_circadian_context(schedule_type)
         system_prompt += build_temporal_proactive_context()
         if rag_context:
             system_prompt += f"\n{rag_context}"
     else:
         system_prompt = CHAT_AGENT_INLINE_PROMPT
-        system_prompt += build_temporal_context()
+        system_prompt += build_temporal_context(local_date=local_date, tz_offset=tz_offset)
         system_prompt += build_circadian_context(schedule_type)
         system_prompt += build_temporal_proactive_context()
-        system_prompt += f"\n{CULINARY_KNOWLEDGE_BASE}"
+        system_prompt += coach_country_context(_coach_country)
+        system_prompt += f"\n{culinary_knowledge_base_for_country(_coach_country)}"
         if rag_context:
             system_prompt += f"\n{rag_context}"
-        system_prompt += build_tools_instructions(user_id)
+        system_prompt += build_tools_instructions(user_id, plan_en_pausa=bool(current_plan) and plan_vigente is None)
 
     inventory_str = ""
     shopping_delta_str = ""
     # [P2-CHUNK-OVERDUE-SIGNAL · 2026-08-04] Definido ANTES del try de abajo
-    # (que ya resuelve `get_latest_meal_plan_with_id` para el shopping-delta)
+    # (que ya resuelve `get_latest_usable_meal_plan_with_id` para el shopping-delta)
     # para que `plan_record` esté siempre en scope más abajo, incluso si el
     # try revienta antes de la asignación o si `user_id` es guest.
     plan_record = None
@@ -5504,8 +5950,8 @@ def chat_with_agent(session_id: str, prompt: str, current_plan: Optional[dict] =
             if user_phys_inv:
                 inventory_str = ", ".join(user_phys_inv)
                 
-            from db_plans import get_latest_meal_plan_with_id
-            plan_record = get_latest_meal_plan_with_id(user_id)
+            from db_plans import get_latest_usable_meal_plan_with_id
+            plan_record = get_latest_usable_meal_plan_with_id(user_id)
             if plan_record and "plan_data" in plan_record:
                 from shopping_calculator import get_shopping_list_delta
                 delta_list = get_shopping_list_delta(user_id, plan_record["plan_data"], is_new_plan=False)
@@ -5541,7 +5987,13 @@ def chat_with_agent(session_id: str, prompt: str, current_plan: Optional[dict] =
             )
             shopping_delta_str = ", ".join(cleaned_shop)
 
-    system_prompt += build_inventory_context(inventory_str, shopping_delta_str)
+    # [P1-CHAT-PAUSED-PROMPT-BLOCKS · 2026-08-14] En pausa la lista de compras del
+    # plan deja de ser una obligacion pendiente. El inventario NO cambia: la Nevera
+    # funciona igual en modo contador.
+    system_prompt += build_inventory_context(
+        inventory_str, shopping_delta_str,
+        plan_en_pausa=bool(current_plan) and plan_vigente is None,
+    )
 
     # [P1-SUPERPERSONALIZATION-1 · 2026-06-19] Inyecta el bloque de súper
     # personalización (gustos/cultura/equipo/sabor/nivel/texto libre) también al
@@ -5563,16 +6015,40 @@ def chat_with_agent(session_id: str, prompt: str, current_plan: Optional[dict] =
     # Best-effort: el nombre solo se carga para usuarios autenticados.
     try:
         _id_name = ""
+        # [P1-COUNTRY-SYSTEM-F2 · Task 3 · 2026-08-17] `locale` sale del MISMO perfil que ya
+        # se lee para `full_name` — cero round-trips extra (mismo criterio de reuso que
+        # `country_for_form_data`, pero locale vive en `user_profiles`, NO en `form_data`, así
+        # que no hay un funnel existente que reusar salvo esta lectura). Guest/user_id==
+        # session_id nunca entra al `if` ⇒ `_coach_locale` se queda en el default 'es-DO'
+        # (Addendum §2: "Guests ⇒ es-DO always").
+        _coach_locale = "es-DO"
         if user_id and user_id != session_id and user_id != "guest":
-            _id_name = (get_user_profile(user_id) or {}).get("full_name") or ""
+            _profile_for_prompt = get_user_profile(user_id) or {}
+            _id_name = _profile_for_prompt.get("full_name") or ""
+            _coach_locale = _profile_for_prompt.get("locale") or "es-DO"
         system_prompt += build_user_identity_context(form_data or {}, _id_name)
+        # [P0-CHAT-CLINICAL-BLOCK · 2026-08-11] Va JUSTO DESPUÉS de la identidad y en
+        # LOS DOS call sites. El de arriba declara en su docstring que es «NO clínico»
+        # porque las alergias «viven en sus bloques estrictos» — cierto para el
+        # generador de planes, falso para el chat, que no tenía ninguno. Hasta hoy el
+        # coach solo se enteraba de una alergia por la inyección RAG (probabilística) o
+        # yendo a buscarla él. Ver `build_clinical_guard_context`.
+        system_prompt += build_clinical_guard_context(form_data or {})
+        # [P1-COUNTRY-SYSTEM-F2 · Task 3 · 2026-08-17] Addendum §2: `locale` mueve la PROSA
+        # del coach; comida/tool calls SIGUEN en español (frontera dura, ver
+        # `build_language_directive`). es-DO/None/garbage ⇒ "" (byte-idéntico a hoy).
+        system_prompt += build_language_directive(_coach_locale)
     except Exception as _id_err:
         logger.warning(f"[P3-CHAT-IDENTITY] No se pudo inyectar identidad al chat: {_id_err}")
 
     if current_plan:
         # [P2-GENCHUNK-SPEED · 2026-06-01] Podar claves derivadas/pesadas antes
         # de serializar (shopping agregados, coherence telemetry, archived days).
-        system_prompt += f"\n\nCONTEXTO CRÍTICO: El usuario actualmente tiene este plan de comidas activo:\n{json.dumps(_prune_plan_for_chat(current_plan))}\n\nUsa esta información para responder con exactitud preguntas sobre lo que le toca comer hoy o sugerir cambios basados en lo que ya tiene asignado (como desayuno, almuerzo o cena)."
+        # [P1-AGENT-WELCOME-TRACKING · 2026-08-14] Encuadre por modo (helper
+        # compartido con el stream): en pausa, el plan viaja pero NO como lo de hoy.
+        # Este bloque recibe `current_plan` A PROPÓSITO — es el único que debe ver
+        # el plan real en pausa (PAUSADO ≠ AMPUTADO).
+        system_prompt += _plan_context_for_chat(user_id, current_plan)
         
         if form_data and form_data.get("includeSupplements"):
             selected_supps = form_data.get("selectedSupplements", [])
@@ -5589,14 +6065,36 @@ def chat_with_agent(session_id: str, prompt: str, current_plan: Optional[dict] =
     # Inyectar contexto del diario del día (paridad con stream)
     if user_id and user_id != "guest":
         try:
-            consumed_today = get_consumed_meals_today(user_id)
+            # [P3-CHAT-NOSTREAM-CONTEXTO-TEMPORAL-RD · 2026-08-23] Paridad EXACTA con el
+            # stream (`chat_with_agent_stream`), incluido el clamp y el `None` preservado:
+            # `get_consumed_meals_today` exige `date_str` Y `tz_offset_mins` no nulos para
+            # usar el día local, así que inventar un offset aquí cambiaría la ventana de los
+            # clientes que no mandan ninguno. Sin esto la ventana era la del huso por
+            # defecto: para un usuario en Madrid a las 00:30, la cena de anoche entraba como
+            # "registrado HOY" — el mismo defecto que `P1-DIARY-TZ-DEFAULT-RD` cerró en el
+            # stream y que este path nunca heredó.
+            _tz_diario = _clamp_tz_offset_mins(tz_offset) if tz_offset is not None else None
+            consumed_today = get_consumed_meals_today(user_id, date_str=local_date, tz_offset_mins=_tz_diario)
             if consumed_today:
                 total_consumed = sum(m.get('calories', 0) for m in consumed_today)
                 meals_text = ", ".join([f"{m.get('meal_name')} ({m.get('calories')} kcal)" for m in consumed_today])
                 
                 target_calories = form_data.get("target_calories") if form_data else None
-                if not target_calories and current_plan:
-                    target_calories = current_plan.get("calories")
+                # [P1-CHAT-PAUSED-PROMPT-BLOCKS · 2026-08-14] El respaldo sale del plan
+                # VIGENTE, no del pausado: en modo contador esas eran las kcal de un plan
+                # congelado presentadas como la meta de HOY, mientras el dashboard del
+                # contador pintaba otras. El coach y su propia pantalla decian cifras
+                # distintas. Sin plan vigente se usan las metas del modo seguimiento --
+                # `get_nutrition_targets`, la MISMA funcion pura que sirve
+                # /api/nutrition/targets, sin roundtrip HTTP.
+                if not target_calories and plan_vigente:
+                    target_calories = plan_vigente.get("calories")
+                if not target_calories and form_data:
+                    try:
+                        from nutrition_calculator import get_nutrition_targets
+                        target_calories = (get_nutrition_targets(form_data) or {}).get("target_calories")
+                    except Exception as _tgt_e:
+                        logger.warning(f"[P1-CHAT-PAUSED-PROMPT-BLOCKS] metas del contador ilegibles: {_tgt_e}")
                 
                 system_prompt += f"\n\nDIARIO DE HOY: El usuario ya ha registrado consumir hoy las siguientes comidas: {meals_text}."
                 # [P1-CHAT-MACRO-CONTEXT · 2026-07-12] Macros desglosadas del
@@ -5610,9 +6108,12 @@ def chat_with_agent(session_id: str, prompt: str, current_plan: Optional[dict] =
                         # [P1-TODAY-REMAINING · 2026-07-28] Tier factual/alertas +
                         # comidas del plan restantes hoy — SSOT compartida con el
                         # path stream (`_build_today_remaining_context`).
+                        # [P3-CHAT-NOSTREAM-CONTEXTO-TEMPORAL-RD · 2026-08-23] El `None` hacía
+                        # que "las comidas que te quedan HOY" se resolvieran contra el día del
+                        # servidor: en Madrid a las 00:30 el coach listaba las del día anterior.
                         system_prompt += _build_today_remaining_context(
-                            current_plan, consumed_today, target_cal_int, total_consumed,
-                            local_date_str=None,
+                            plan_vigente, consumed_today, target_cal_int, total_consumed,
+                            local_date_str=local_date,
                         )
                     except ValueError:
                         pass
@@ -5622,21 +6123,51 @@ def chat_with_agent(session_id: str, prompt: str, current_plan: Optional[dict] =
             logger.error(f"⚠️ Error inyectando contexto de diario (non-stream): {e}")
 
         # [P3-AGENT-HYDRATION-CONTEXT · 2026-05-27] Inyectar hidratación
-        # viva si el toggle está activo. Non-stream path no recibe
-        # `local_date`, así que cae al UTC server-side dentro del helper.
-        system_prompt += _build_hydration_context(user_id, local_date_str=None)
+        # viva si el toggle está activo.
+        # [P3-CHAT-NOSTREAM-CONTEXTO-TEMPORAL-RD · 2026-08-23] Este bloque NO estaba roto
+        # (con `None` resuelve el día server-side desde `user_id` vía `_local_date_str_for_user`,
+        # que sí conoce el huso del usuario). Se le pasa `local_date` por PARIDAD con el stream:
+        # cuando el cliente ya mandó su fecha, usarla ahorra el round-trip y elimina la última
+        # forma en que los bloques de este prompt podían discrepar entre sí sobre qué día es hoy.
+        system_prompt += _build_hydration_context(user_id, local_date_str=local_date)
         # [P1-CHAT-PANTRY-AWARE · 2026-07-12] Snapshot real de la Nevera.
         system_prompt += _build_pantry_context(user_id)
         # [P1-CHAT-TODAY-CONTEXT · 2026-07-12] HOY → día del menú + ciclo.
-        system_prompt += _build_plan_today_context(current_plan, local_date_str=None)
+        system_prompt += _build_plan_today_context(plan_vigente, local_date_str=local_date, tz_offset=tz_offset)
         # [P1-CHAT-PAST-DAYS · 2026-07-27] Paridad con el path stream. Este
-        # path no recibe `tz_offset` del cliente: el helper cae a 240 (RD).
+        # path ya recibe el `tz_offset` del cliente igual que el stream.
         # [P2-CHUNK-OVERDUE-SIGNAL · 2026-08-04] `plan_record` ya se resolvió
         # arriba para el shopping-delta — reenviar su `id` evita un 2º roundtrip
         # y permite filtrar el COUNT de la cola por `meal_plan_id`.
+        # [P3-CHAT-NONSTREAM-RD-DATE · 2026-08-23] … y la paridad que el comentario de
+        # arriba DECLARABA no existía: el stream pasa `local_date_str`/`tz_offset` y este
+        # path los omitía, así que "los días pasados" se contaban desde el día del
+        # servidor. Para un usuario en Madrid a las 00:30 eso desplaza la ventana entera
+        # un día: le resume el menú de anteayer como si fuera el de ayer.
         system_prompt += _build_past_days_context(
-            user_id, current_plan, plan_id=(plan_record or {}).get("id"),
+            user_id, current_plan, local_date_str=local_date, tz_offset=tz_offset,
+            plan_id=(plan_record or {}).get("id"),
         )
+
+    # [P1-COACH-LANGUAGE-RECENCY · 2026-08-18] REFUERZO de la directiva de idioma como
+    # ÚLTIMO bloque del system prompt. La directiva de T3 (arriba, junto a la identidad)
+    # quedaba enterrada bajo ~40 bloques españoles (plan JSON, culinary KB, tools, RAG...)
+    # y el modelo la desobedecía: primer usuario real con locale='en-US' (2026-08-18
+    # 23:14 UTC, session b9f147ca) recibió la respuesta en español con la directiva YA
+    # en el prompt — la señal dominante (todo el prompt + «hola» del usuario en español)
+    # ganó a una instrucción a mitad de contexto. Recency manda en adherencia: la misma
+    # directiva, repetida al FINAL, es lo último que el modelo lee antes de responder.
+    # es-DO/guest ⇒ "" (byte-idéntico). Best-effort: jamás rompe el chat.
+    try:
+        system_prompt += build_language_directive(_coach_locale)
+    except Exception as _exc:
+        # [P2-SILENT-DEGRADATION] El `pass` a secas dejaba al coach respondiendo en
+        # el idioma equivocado SIN rastro: es justo el sintoma que este refuerzo
+        # existe para corregir, asi que tragarse su fallo lo vuelve indepurable.
+        # Sigue siendo best-effort —jamas rompe el chat—, pero ahora se entera.
+        logger.debug(
+            "[P2-SILENT-DEGRADATION] refuerzo de idioma del coach: %s: %s",
+            type(_exc).__name__, str(_exc)[:160])
 
     config = {"configurable": {"thread_id": session_id}}
 
@@ -5765,10 +6296,28 @@ def chat_with_agent(session_id: str, prompt: str, current_plan: Optional[dict] =
 
 from typing import Generator
 from sentiment_classifier import classify_sentiment
+from prompts.sentiment import normalize_personality_instruction_for_country
 
-def chat_with_agent_stream(session_id: str, prompt: str, current_plan: Optional[dict] = None, user_id: Optional[str] = None, form_data: Optional[dict] = None, local_date: Optional[str] = None, tz_offset: Optional[int] = None, is_call_mode: bool = False, plan_tier: str = "gratis") -> Generator[str, None, None]:
+def chat_with_agent_stream(session_id: str, prompt: str, current_plan: Optional[dict] = None, user_id: Optional[str] = None, form_data: Optional[dict] = None, local_date: Optional[str] = None, tz_offset: Optional[int] = None, is_call_mode: bool = False, plan_tier: str = "gratis", vision: Optional[dict] = None) -> Generator[str, None, None]:
     """Generador síncrono de chat que emite eventos del modelo y herramientas mediante SSE (JSONlines).
     FastAPI ejecuta esto en un threadpool externo, liberando el Event Loop para concurrencia real."""
+    # [P1-CHAT-PAUSED-PROMPT-BLOCKS · 2026-08-14 · subido P2-CHAT-PLAN-TOOLS-PAUSE
+    #  2026-08-15] El modo se resuelve UNA vez por turno y se deriva el DATO que
+    #  apaga las secciones PRESCRIPTIVAS del prompt. Vive al TOPE de la funcion,
+    #  donde solo depende de sus parametros: cada vez que un consumidor nuevo
+    #  aparecia mas arriba habia que volver a moverlo, y una de esas veces se
+    #  colo un NameError. Aqui ya no puede quedar por debajo de nadie.
+    plan_vigente = _plan_vigente_para_prompt(user_id, current_plan)
+
+    # [P1-COACH-PERSONA-CURIOSIDAD-DO · 2026-08-23] País resuelto antes de
+    # cosechar sentimiento: la instrucción se normaliza una sola vez aguas
+    # arriba de las ramas static-prefix y legacy. Fail-safe conserva DO.
+    try:
+        from constants import country_for_form_data as _cffd_coach
+        _coach_country = _cffd_coach(form_data or {})
+    except Exception:
+        _coach_country = "DO"
+
     memory = build_memory_context(session_id, user_id)  # [P1-DREAMING-1] user_id → modelo del usuario
     
     # 🎭 ANÁLISIS DE SENTIMIENTO ADAPTATIVO (Solo Plus o superior)
@@ -5800,6 +6349,10 @@ def chat_with_agent_stream(session_id: str, prompt: str, current_plan: Optional[
             if _f_sent is not None:
                 try:
                     sentiment_result = _f_sent.result() or {}
+                    if sentiment_result.get("instruction"):
+                        sentiment_result["instruction"] = normalize_personality_instruction_for_country(
+                            sentiment_result["instruction"], _coach_country
+                        )
                 except Exception as _se:
                     logger.warning(f"⚠️ [CHAT SENTIMENT] fallo (neutral fallback): {_se}")
                     sentiment_result = {}
@@ -5866,10 +6419,13 @@ def chat_with_agent_stream(session_id: str, prompt: str, current_plan: Optional[
     # (nota en chat_with_agent). Puro reorden; rama else = orden legacy.
     if _chat_prompt_static_prefix():
         system_prompt = _base_inline
-        system_prompt += f"\n{CULINARY_KNOWLEDGE_BASE}"
-        system_prompt += build_tools_instructions_stream(user_id)
+        system_prompt += coach_country_context(_coach_country)
+        system_prompt += f"\n{culinary_knowledge_base_for_country(_coach_country)}"
+        system_prompt += build_tools_instructions_stream(user_id, plan_en_pausa=bool(current_plan) and plan_vigente is None)
         # --- bloques dinámicos (volátiles) al final ---
         system_prompt += build_temporal_context(local_date=local_date, tz_offset=tz_offset)
+        # [P3-I18N-PROMPT-VISION-CLIENTE-ESPANOL] la foto es contexto de SISTEMA, no turno del usuario.
+        system_prompt += build_vision_context(vision)
         system_prompt += build_circadian_context(schedule_type)
         system_prompt += build_temporal_proactive_context()
         # 🎭 Personalidad adaptativa basada en el sentimiento detectado (per-turn)
@@ -5880,19 +6436,22 @@ def chat_with_agent_stream(session_id: str, prompt: str, current_plan: Optional[
     else:
         system_prompt = _base_inline
         system_prompt += build_temporal_context(local_date=local_date, tz_offset=tz_offset)
+        # [P3-I18N-PROMPT-VISION-CLIENTE-ESPANOL] la foto es contexto de SISTEMA, no turno del usuario.
+        system_prompt += build_vision_context(vision)
         system_prompt += build_circadian_context(schedule_type)
         system_prompt += build_temporal_proactive_context()
         # 🎭 Inyectar personalidad adaptativa basada en el sentimiento detectado
         if sentiment_result.get("instruction"):
             system_prompt += f"\n\n{sentiment_result['instruction']}"
-        system_prompt += f"\n{CULINARY_KNOWLEDGE_BASE}"
+        system_prompt += coach_country_context(_coach_country)
+        system_prompt += f"\n{culinary_knowledge_base_for_country(_coach_country)}"
         if rag_context: system_prompt += f"\n{rag_context}"
-        system_prompt += build_tools_instructions_stream(user_id)
+        system_prompt += build_tools_instructions_stream(user_id, plan_en_pausa=bool(current_plan) and plan_vigente is None)
 
     inventory_str = ""
     shopping_delta_str = ""
     # [P2-CHUNK-OVERDUE-SIGNAL · 2026-08-04] Definido ANTES del try de abajo
-    # (que ya resuelve `get_latest_meal_plan_with_id` para el shopping-delta)
+    # (que ya resuelve `get_latest_usable_meal_plan_with_id` para el shopping-delta)
     # para que `plan_record` esté siempre en scope más abajo, incluso si el
     # try revienta antes de la asignación o si `user_id` es guest.
     plan_record = None
@@ -5904,8 +6463,8 @@ def chat_with_agent_stream(session_id: str, prompt: str, current_plan: Optional[
             if user_phys_inv:
                 inventory_str = ", ".join(user_phys_inv)
                 
-            from db_plans import get_latest_meal_plan_with_id
-            plan_record = get_latest_meal_plan_with_id(user_id)
+            from db_plans import get_latest_usable_meal_plan_with_id
+            plan_record = get_latest_usable_meal_plan_with_id(user_id)
             if plan_record and "plan_data" in plan_record:
                 from shopping_calculator import get_shopping_list_delta
                 delta_list = get_shopping_list_delta(user_id, plan_record["plan_data"], is_new_plan=False)
@@ -5941,7 +6500,13 @@ def chat_with_agent_stream(session_id: str, prompt: str, current_plan: Optional[
             )
             shopping_delta_str = ", ".join(cleaned_shop)
 
-    system_prompt += build_inventory_context(inventory_str, shopping_delta_str)
+    # [P1-CHAT-PAUSED-PROMPT-BLOCKS · 2026-08-14] En pausa la lista de compras del
+    # plan deja de ser una obligacion pendiente. El inventario NO cambia: la Nevera
+    # funciona igual en modo contador.
+    system_prompt += build_inventory_context(
+        inventory_str, shopping_delta_str,
+        plan_en_pausa=bool(current_plan) and plan_vigente is None,
+    )
 
     # [P1-SUPERPERSONALIZATION-1 · 2026-06-19] Inyecta el bloque de súper
     # personalización (gustos/cultura/equipo/sabor/nivel/texto libre) también al
@@ -5961,16 +6526,38 @@ def chat_with_agent_stream(session_id: str, prompt: str, current_plan: Optional[
     # personaliza. Aditivo, no clínico. Nombre solo para autenticados (best-effort).
     try:
         _id_name = ""
+        # [P1-COUNTRY-SYSTEM-F2 · Task 3 · 2026-08-17] `locale` sale del MISMO perfil que ya
+        # se lee para `full_name` — cero round-trips extra (mismo criterio de reuso que
+        # `country_for_form_data`, pero locale vive en `user_profiles`, NO en `form_data`, así
+        # que no hay un funnel existente que reusar salvo esta lectura). Guest/user_id==
+        # session_id nunca entra al `if` ⇒ `_coach_locale` se queda en el default 'es-DO'
+        # (Addendum §2: "Guests ⇒ es-DO always").
+        _coach_locale = "es-DO"
         if user_id and user_id != session_id and user_id != "guest":
-            _id_name = (get_user_profile(user_id) or {}).get("full_name") or ""
+            _profile_for_prompt = get_user_profile(user_id) or {}
+            _id_name = _profile_for_prompt.get("full_name") or ""
+            _coach_locale = _profile_for_prompt.get("locale") or "es-DO"
         system_prompt += build_user_identity_context(form_data or {}, _id_name)
+        # [P0-CHAT-CLINICAL-BLOCK · 2026-08-11] Va JUSTO DESPUÉS de la identidad y en
+        # LOS DOS call sites. El de arriba declara en su docstring que es «NO clínico»
+        # porque las alergias «viven en sus bloques estrictos» — cierto para el
+        # generador de planes, falso para el chat, que no tenía ninguno. Hasta hoy el
+        # coach solo se enteraba de una alergia por la inyección RAG (probabilística) o
+        # yendo a buscarla él. Ver `build_clinical_guard_context`.
+        system_prompt += build_clinical_guard_context(form_data or {})
+        # [P1-COUNTRY-SYSTEM-F2 · Task 3 · 2026-08-17] Addendum §2: `locale` mueve la PROSA
+        # del coach; comida/tool calls SIGUEN en español (frontera dura, ver
+        # `build_language_directive`). es-DO/None/garbage ⇒ "" (byte-idéntico a hoy).
+        system_prompt += build_language_directive(_coach_locale)
     except Exception as _id_err:
         logger.warning(f"[P3-CHAT-IDENTITY] No se pudo inyectar identidad al chat: {_id_err}")
 
     if current_plan:
         # [P2-GENCHUNK-SPEED · 2026-06-01] Podar claves derivadas/pesadas (ver
         # _prune_plan_for_chat) antes de serializar — paridad con el path no-stream.
-        system_prompt += f"\nCONTEXTO CRÍTICO: Plan activo:\n{json.dumps(_prune_plan_for_chat(current_plan))}\n"
+        # [P1-AGENT-WELCOME-TRACKING · 2026-08-14] Mismo helper que el path
+        # no-stream — la divergencia entre ambos ya costó bugs (P1-CHAT-PAST-DAYS).
+        system_prompt += _plan_context_for_chat(user_id, current_plan)
         
         if form_data and form_data.get("includeSupplements"):
             selected_supps = form_data.get("selectedSupplements", [])
@@ -5999,8 +6586,21 @@ def chat_with_agent_stream(session_id: str, prompt: str, current_plan: Optional[
                 meals_text = ", ".join([f"{m.get('meal_name')} ({m.get('calories')} kcal)" for m in consumed_today])
                 
                 target_calories = form_data.get("target_calories") if form_data else None
-                if not target_calories and current_plan:
-                    target_calories = current_plan.get("calories")
+                # [P1-CHAT-PAUSED-PROMPT-BLOCKS · 2026-08-14] El respaldo sale del plan
+                # VIGENTE, no del pausado: en modo contador esas eran las kcal de un plan
+                # congelado presentadas como la meta de HOY, mientras el dashboard del
+                # contador pintaba otras. El coach y su propia pantalla decian cifras
+                # distintas. Sin plan vigente se usan las metas del modo seguimiento --
+                # `get_nutrition_targets`, la MISMA funcion pura que sirve
+                # /api/nutrition/targets, sin roundtrip HTTP.
+                if not target_calories and plan_vigente:
+                    target_calories = plan_vigente.get("calories")
+                if not target_calories and form_data:
+                    try:
+                        from nutrition_calculator import get_nutrition_targets
+                        target_calories = (get_nutrition_targets(form_data) or {}).get("target_calories")
+                    except Exception as _tgt_e:
+                        logger.warning(f"[P1-CHAT-PAUSED-PROMPT-BLOCKS] metas del contador ilegibles: {_tgt_e}")
                 
                 system_prompt += f"\n\nDIARIO DE HOY: El usuario ya ha registrado consumir hoy las siguientes comidas: {meals_text}. [P1-CHAT-ACT-DONT-ASK] Úsalo para NO DUPLICAR, no para pedir permiso: si una foto o mensaje nuevo coincide con algo que ya está aquí, felicítalo o coméntalo sin volver a registrarlo de nuevo; si ya tiene una cena registrada y llega otra foto de noche, asume que es un snack nocturno (o pregúntale por qué repite) en vez de tratarla como si fuera la cena otra vez. Fuera de ese caso de duplicado, sigue la regla general: comida nueva en pasado = regístrala YA, sin preguntar."
                 # [P1-CHAT-MACRO-CONTEXT · 2026-07-12] Macros desglosadas del
@@ -6015,7 +6615,7 @@ def chat_with_agent_stream(session_id: str, prompt: str, current_plan: Optional[
                         # comidas del plan restantes hoy — SSOT compartida con el
                         # path non-stream (`_build_today_remaining_context`).
                         system_prompt += _build_today_remaining_context(
-                            current_plan, consumed_today, target_cal_int, total_consumed,
+                            plan_vigente, consumed_today, target_cal_int, total_consumed,
                             local_date_str=local_date,
                         )
                     except ValueError:
@@ -6033,7 +6633,7 @@ def chat_with_agent_stream(session_id: str, prompt: str, current_plan: Optional[
         # [P1-CHAT-PANTRY-AWARE · 2026-07-12] Snapshot real de la Nevera.
         system_prompt += _build_pantry_context(user_id)
         # [P1-CHAT-TODAY-CONTEXT · 2026-07-12] HOY → día del menú + ciclo.
-        system_prompt += _build_plan_today_context(current_plan, local_date_str=local_date)
+        system_prompt += _build_plan_today_context(plan_vigente, local_date_str=local_date, tz_offset=tz_offset)
         # [P1-CHAT-PAST-DAYS · 2026-07-27] Días que ya pasaron: plan prescrito
         # (índice barato) + diario real. Va DESPUÉS del DIARIO DE HOY y del
         # prefijo estático — ver docs/chat_past_days_memory.md §3 Pieza 2.
@@ -6044,6 +6644,22 @@ def chat_with_agent_stream(session_id: str, prompt: str, current_plan: Optional[
             user_id, current_plan, local_date_str=local_date, tz_offset=tz_offset,
             plan_id=(plan_record or {}).get("id"),
         )
+
+    # [P1-COACH-LANGUAGE-RECENCY · 2026-08-18] Mismo refuerzo final que el path
+    # no-stream (la divergencia entre ambos ya costó bugs — P1-CHAT-PAST-DAYS,
+    # P1-CHAT-PAUSED-PROMPT-BLOCKS): la directiva de idioma repetida como ÚLTIMO
+    # bloque, porque a mitad de prompt el modelo la desobedeció con el primer
+    # usuario real en-US. Ver el comentario gemelo en chat_with_agent.
+    try:
+        system_prompt += build_language_directive(_coach_locale)
+    except Exception as _exc:
+        # [P2-SILENT-DEGRADATION] El `pass` a secas dejaba al coach respondiendo en
+        # el idioma equivocado SIN rastro: es justo el sintoma que este refuerzo
+        # existe para corregir, asi que tragarse su fallo lo vuelve indepurable.
+        # Sigue siendo best-effort —jamas rompe el chat—, pero ahora se entera.
+        logger.debug(
+            "[P2-SILENT-DEGRADATION] refuerzo de idioma del coach: %s: %s",
+            type(_exc).__name__, str(_exc)[:160])
 
     config = {"configurable": {"thread_id": session_id}}
 
@@ -6151,9 +6767,9 @@ def chat_with_agent_stream(session_id: str, prompt: str, current_plan: Optional[
     # la herramienta primero (regla de cero texto antes de herramienta)». El
     # modelo CITA la regla que le prohíbe eso mientras la incumple.
     #
-    # No es un leak de reasoning tokens: DeepSeek los manda en
+    # No es un leak de reasoning tokens: GLM los manda en
     # `reasoning_content` (campo aparte que este loop no lee) y además el
-    # thinking está desactivado desde P1-DEEPSEEK-THINKING-OFF. Es el modelo
+    # thinking está desactivado desde P1-PROVIDER-THINKING-DEFAULT. Es el modelo
     # escribiendo su deliberación como `content` normal.
     #
     # El guard que debería taparlo ya existe cinco líneas más abajo

@@ -37,6 +37,35 @@ import inspect
 import re
 from pathlib import Path
 
+# [P1-I18N-HISTORY-FORENSE · 2026-08-21] El chip pasó por `t()`, así que la grafía
+# `{_generatedTotal} de {_displayTotal} listos` ya no existe literalmente: ahora es
+# `t('{hechos} de {total} listos', { hechos: _generatedTotal, total: _displayTotal })`.
+#
+# La conducta NO cambió —mismos números, mismo orden, mismo encuadre de progreso— así que
+# estos guards se reanclan a la PROPIEDAD en vez de a la grafía. Es la misma lección que
+# el chip de caducidad de la Nevera, el mismo día y reportada por otra sesión: si el
+# guard se puede expresar por la propiedad, que no dependa de cómo se escriba.
+#
+# `_EXPR_CHIP` acota la ventana a la expresión del chip, para que «las dos variables
+# aparecen en el fichero» no cuente como «aparecen juntas en el chip».
+import re as _re
+
+_EXPR_CHIP = _re.compile(
+    r"t\(\s*'\{\w+\} de \{\w+\} listos'[^)]*\)", _re.S
+)
+
+
+def _expresion_del_chip(texto: str) -> str:
+    m = _EXPR_CHIP.search(texto)
+    assert m is not None, (
+        "No encontré la expresión del chip de progreso. Tiene que seguir siendo UNA "
+        "sola llamada `t('{…} de {…} listos', {…})`: partirla en «etiqueta» + valor "
+        "fijaría el orden español, y hay idiomas donde el número va delante. "
+        "[P1-I18N-HISTORY-FORENSE]"
+    )
+    return m.group(0)
+
+
 
 _REPO_ROOT = Path(__file__).resolve().parent.parent.parent
 _HISTORY_JSX = _REPO_ROOT / "frontend" / "src" / "pages" / "History.jsx"
@@ -118,13 +147,20 @@ def test_chip_uses_display_total_not_active_total():
     text = _HISTORY_JSX.read_text(encoding="utf-8")
     # Buscar el chip render: `{<numerador>} de {X} listos`. El numerador
     # puede ser `_planDaysLen` (legacy) o `_generatedTotal` (post-FIX-4).
-    m = re.search(
-        r"\{(?:_planDaysLen|_generatedTotal)\}\s*de\s*\{(\w+)\}\s*listos",
-        text,
+    _expr = _expresion_del_chip(text)
+    assert "_generatedTotal" in _expr or "_planDaysLen" in _expr, (
+        "El numerador del chip ya no sale de `_generatedTotal`/`_planDaysLen`."
     )
-    assert m is not None, (
-        "Chip render `{_generatedTotal} de {X} listos` no encontrado."
-    )
+
+    class _M:
+        """El resto del test consulta `m.group(1)` esperando el DENOMINADOR."""
+
+        @staticmethod
+        def group(_n):
+            mm = re.search(r"total:\s*(\w+)", _expr)
+            return mm.group(1) if mm else ""
+
+    m = _M
     var_used = m.group(1)
     assert var_used == "_displayTotal", (
         f"Chip usa `{{{var_used}}}` pero debe usar `_displayTotal` "

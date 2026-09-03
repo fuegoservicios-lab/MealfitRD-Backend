@@ -49,14 +49,14 @@ def test_caps_high_gi_viver_and_preserves_calories():
     n = g.cap_dm2_high_gi_portions(days, {"medicalConditions": ["Diabetes T2"]}, db=db)
     assert n == 1
     ings = days[0]["meals"][0]["ingredients"]
-    # batata recortada a 150g
+    # batata recortada a 100g ([P1-DM2-MAIZ-CAP] default 150→100, criterio del reviewer)
     batata = next(i for i in ings if "batata" in i.lower())
-    assert "150" in batata
+    assert "100" in batata
     # kcal del plato preservadas (±5%) → band-safe
     kcal_after = _meal_kcal(days[0]["meals"][0], db)
     assert abs(kcal_after - kcal_before) / kcal_before < 0.05, (kcal_before, kcal_after)
     # carbos bajaron (objetivo DM2): la batata aportaba el grueso
-    assert (db.macros_from_ingredient_string(batata) or {})["carbs"] <= 150 * 0.20 + 0.1
+    assert (db.macros_from_ingredient_string(batata) or {})["carbs"] <= 100 * 0.20 + 0.1
 
 
 def test_excludes_papaya_and_low_gi():
@@ -81,8 +81,21 @@ def test_noop_when_not_dm2():
 
 def test_under_cap_not_touched():
     db = _FakeDB()
-    days = [{"meals": [_meal(["120g de Batata", "150g de Pollo"])]}]
+    # 90g < cap de 100 ([P1-DM2-MAIZ-CAP]): bajo el cap NO se toca.
+    days = [{"meals": [_meal(["90g de Batata", "150g de Pollo"])]}]
     assert g.cap_dm2_high_gi_portions(days, {"medicalConditions": ["Diabetes T2"]}, db=db) == 0
+
+
+def test_maiz_dulce_se_capea():
+    # [P1-DM2-MAIZ-CAP] El perfil vegana_dm2 del benchmark caía por 150-180g de maíz dulce
+    # (el token no estaba). La harina de maíz sigue EXCLUIDA (exclusión "harina de").
+    db = _FakeDB()
+    days = [{"meals": [_meal(["180g de Maíz dulce en granos", "150g de Pollo"]),
+                       _meal(["105g de harina de maíz", "100g de Pollo"])]}]
+    n = g.cap_dm2_high_gi_portions(days, {"medicalConditions": ["Diabetes T2"]}, db=db)
+    assert n == 1, "el maíz dulce debe capearse; la harina de maíz no"
+    assert "100" in days[0]["meals"][0]["ingredients"][0]
+    assert days[0]["meals"][1]["ingredients"][0] == "105g de harina de maíz"
 
 
 def test_freetext_dm2_triggers_cap():
@@ -94,4 +107,5 @@ def test_freetext_dm2_triggers_cap():
 
 def test_knob_default_on():
     assert g.DM2_GLYCEMIC_PORTION_CAP_ENABLED is True
-    assert g.DM2_HIGH_GI_CAP_G == 150
+    assert g.DM2_HIGH_GI_CAP_G == 100  # [P1-DM2-MAIZ-CAP] 150->100 alineado al criterio del reviewer
+

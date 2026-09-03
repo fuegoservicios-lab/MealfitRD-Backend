@@ -85,9 +85,21 @@ def test_timezone_alignment_asia(mock_query, mock_write):
 
     assert mock_query.called
     args, kwargs = mock_query.call_args  # último call == el UPSERT del chunk
-    # start_dt_midnight_utc = 2024-05-01 00:00:00 UTC
-    # execute_dt_target = 2024-05-01 00:00:00 UTC + 3 days (2024-05-04) - 450 mins (-7h30m) = 2024-05-03 16:30:00 UTC
-    # 16:30 UTC is 00:30 Manila time.
+    #
+    # [reconvertido · P1-CHUNK-ANCHOR-LOCAL-DATE · 2026-08-21] Este test esperaba
+    # `2024-05-03T16:30`, y para llegar ahí partía de «start_dt_midnight_utc = 2024-05-01 00:00
+    # UTC»: la fecha del ancla leída EN UTC. Pero el propio comentario del snapshot dice que
+    # `2024-05-01T16:00Z` es «midnight local time Manila (day before)» — o sea que el plan empieza
+    # el **2 de mayo** en Manila, no el 1. Tomar la fecha UTC de un instante que ya es del día
+    # siguiente en local es el off-by-one que este P-fix cerró, aquí en su versión ESPEJO: al este
+    # de UTC el bloque se programaba un día ANTES del tramo que cubre; al oeste (República
+    # Dominicana, offset 240) un día DESPUÉS — medido en la cola viva, con el día 11 programado
+    # para el 22 en vez del 21.
+    #
+    # Aritmética correcta: ancla local = 2024-05-02 (Manila) → +3 días = 2024-05-05 local →
+    # 00:30 Manila del 5 = 2024-05-04 16:30 UTC.
     params = args[1]
     # [test-drift fix] prod serializa con `.isoformat()` (separador 'T').
-    assert "2024-05-03T16:30:00+00:00" in str(params)
+    assert "2024-05-04T16:30:00+00:00" in str(params), (
+        "el ancla volvió a leerse en UTC en vez de en la hora local del usuario"
+    )

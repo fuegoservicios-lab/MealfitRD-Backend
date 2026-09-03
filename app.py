@@ -31,7 +31,13 @@ _PROCESS_START_ISO = datetime.now(timezone.utc).isoformat()
 #     y fechas anteriores al floor (último audit cerrado).
 #   - Si subes el floor del test, sube también el valor aquí — el commit
 #     que sube uno sin el otro debería fallar el test en CI.
-_LAST_KNOWN_PFIX = "P1-PANTRY-RECONCILIATION · 2026-08-07"
+#
+# Huellas durables (supersession-safe): P-fixes cuyo test exige su ancla en app.py
+# aunque el marker de arriba ya viva más adelante. El marker es MÓVIL; esta lista no.
+#   P1-COACH-COUNTRY-UNNAMED · 2026-08-23 — el coach nombra el país en sus 4 ramas.
+#   P1-COUNTRY-CONDIMENT-PARITY-BETA · 2026-08-23 — exención de condimentos por país.
+#   P1-COUNTRY-GLOSS-SOLO-INGLES · 2026-08-23 — gloss panhispánico display-only.
+_LAST_KNOWN_PFIX = "P2-ICON-CLOSE-UNIFORM · 2026-09-02"
 
 # [P1-SENTRY-SAMPLE-COST · 2026-05-12] Sentry sampling driven from env vars
 # con default seguro 0.1 (10%). Pre-fix tenía `traces_sample_rate=1.0` y
@@ -1536,6 +1542,17 @@ async def lifespan(app: FastAPI):
                 f"[P0-LIVE-1] Cancelación de hard-floor task lanzó: {_cancel_err}"
             )
 
+    # [P1-ARQ25-F1-LIFECYCLE · 2026-09-02] Drain cooperativo ANTES de apagar el scheduler:
+    # los ticks nuevos dejan de reclamar y se espera (acotado por MEALFIT_SHUTDOWN_DRAIN_S)
+    # a que el chunk en vuelo haga su commit. `to_thread` para no bloquear el loop durante
+    # la espera (las respuestas HTTP en curso siguen saliendo). Sin scheduler local es no-op.
+    try:
+        from cron_tasks import request_worker_drain as _req_drain
+        from generation_lifecycle import shutdown_drain_seconds as _drain_s
+        await asyncio.to_thread(_req_drain, _drain_s())
+    except Exception as _drain_err:
+        logger.warning(f"[ARQ25-F1/DRAIN] drain no-op: {type(_drain_err).__name__}: {_drain_err}")
+
     if HAS_SCHEDULER and scheduler:
         # [P2-OPS-SHUTDOWN · 2026-05-27] `wait=False`: deja de despachar jobs
         # inmediatamente sin BLOQUEAR el teardown esperando a que terminen los
@@ -1617,6 +1634,9 @@ app.include_router(discount_router)
 app.include_router(notifications_router)
 from routers.plans import router as plans_router
 app.include_router(plans_router)
+# [P1-ARQ25-F1-LIFECYCLE · 2026-09-02] Runs de generación durables (roadmap 2.5, Fase 1).
+from routers.plans_generation import router as plans_generation_router  # noqa: E402
+app.include_router(plans_generation_router)
 from routers.chat import router as chat_router
 app.include_router(chat_router)
 from routers.diary import router as diary_router
@@ -1800,6 +1820,8 @@ def health_version():
          `is_guest` siguen lloviendo).
       - `has_p1_perf_1_cache`: bool — `_SCHEDULER_JOBS_WITH_OPEN_ALERTS` en
          globals de app.py. Si False → binary PRE-P1-PERF-1 (PATCH spam).
+      - `MEALFIT_COUNTRY_SYSTEM`: bool — valor vivo del knob maestro de país,
+         leído en cada request (no el snapshot de import de `constants.py`).
 
     SOP UptimeRobot:
       - URL: `https://<base>/health/version`
@@ -1946,6 +1968,19 @@ def health_version():
         "_SCHEDULER_JOBS_WITH_OPEN_ALERTS" in globals()
     )
 
+    # [P2-FLIP-BACKEND-INVERIFICABLE · 2026-08-23] El flip de país vive en
+    # el .env del proceso y su default de código es False. Exponer el nombre
+    # exacto permite a un monitor blackbox distinguir «usuario DO» de «toda
+    # la flota colapsó a DO porque el knob se perdió». Lectura por request:
+    # no usar COUNTRY_SYSTEM_ENABLED, que es un snapshot tomado al importar.
+    try:
+        from knobs import _env_bool as _env_bool_country_health
+        country_system_enabled = _env_bool_country_health(
+            "MEALFIT_COUNTRY_SYSTEM", False
+        )
+    except Exception:
+        country_system_enabled = False
+
     # [P2-EMBED-TELEMETRY · 2026-05-24] Gauge del tamaño actual de los
     # embedding caches bounded (cierre del par natural de P1-EMBEDDING-CACHE-
     # BOUNDED 2026-05-24). Sin estas keys, un operador no puede detectar
@@ -1996,6 +2031,7 @@ def health_version():
         "last_pipeline_metrics_tick_at": last_pipeline_metrics_tick_at,
         "has_p0_prod_1_gate": has_p0_prod_1_gate,
         "has_p1_perf_1_cache": has_p1_perf_1_cache,
+        "MEALFIT_COUNTRY_SYSTEM": country_system_enabled,
         # [P2-EMBED-TELEMETRY · 2026-05-24] gauges de los embedding caches.
         "embedding_cache_size": embedding_cache_size,
         "pantry_embeddings_cache_size": pantry_embeddings_cache_size,
@@ -2128,28 +2164,21 @@ def admin_cron_health():
         return {"error": f"{type(e).__name__}: {e}"}
 
 
-@app.get("/api/admin/test-proactive")
-def api_test_proactive(background_tasks: BackgroundTasks):
-    # [P2-1 2026-05-08] Antes existían dos handlers `@app.get("/api/admin/test-proactive")`
-    # consecutivos: uno síncrono y este async-via-background. FastAPI registra el
-    # último decorador, así que la versión síncrona quedaba sobrescrita y nunca se
-    # ejecutaba. Eliminada para que el lector no asuma que existen dos modos.
-    import traceback
-    def run_push():
-        with open("push_log.txt", "w", encoding="utf-8") as f:
-            try:
-                from test_push import trigger_manual_notification
-                import sys, io
-                old_stdout = sys.stdout
-                sys.stdout = io.StringIO()
-                trigger_manual_notification("Almuerzo", "1:30 PM")
-                f.write(sys.stdout.getvalue())
-                sys.stdout = old_stdout
-            except Exception as e:
-                f.write(traceback.format_exc())
-
-    background_tasks.add_task(run_push)
-    return {"status": "started", "message": "Task queued"}
+# [P2-BACKEND-DEAD-ADMIN-ENDPOINT · 2026-08-14] Aquí vivía
+# `GET /api/admin/test-proactive`: sin `Depends`, sin limitador, y alcanzable
+# desde internet — nginx SÍ proxya `/api/admin/*` (a diferencia de `/admin/*`,
+# que devuelve el shell del SPA). Además llevaba muerto quién sabe cuánto: su
+# primera sentencia dentro del `try` era `from test_push import
+# trigger_manual_notification`, y ese módulo no existe en el repo, así que toda
+# invocación caía directa al `except` y escribía un traceback a `push_log.txt`.
+#
+# Cero llamantes en `frontend/src` y cero tests que lo tocaran: el barrido de
+# `test_p2_admin_rate_limit.py` sólo mira plans/system/notifications, así que
+# `app.py` le quedaba fuera. Se borra en vez de arreglarse — no compraba nada y
+# era superficie de ataque gratis.
+#
+# Si algún día hace falta un disparador manual de notificaciones, su sitio es un
+# router con `_verify_admin_token` + `_check_admin_rate_limit`, no `app.py` suelto.
 
 from auth import get_verified_user_id, verify_api_quota, clear_session_cookie
 from rate_limiter import RateLimiter
@@ -2220,8 +2249,14 @@ app.add_middleware(
         # se sirva desde otro host.
         "https://bioboros.com",
         "https://www.bioboros.com",
-        "https://app.bioboros.com"
-    ], # Dominios de producción (servidos por nginx en el VPS Oracle)
+        "https://app.bioboros.com",
+        # [P1-IOS-CORS-NATIVE-ORIGIN · 2026-08-22] La app nativa (Capacitor,
+        # App Store) vive en este origen y llama a app.bioboros.com: es la
+        # PRIMERA vez que esta lista deja de ser inerte. Sin la entrada, toda
+        # fetch de la app muere en el preflight (medido con TestClient:
+        # «Disallowed CORS origin»). Android sería https://localhost.
+        "capacitor://localhost",
+    ], # Dominios de producción (servidos por nginx en el VPS Oracle) + app nativa
     allow_credentials=True,
     allow_methods=["GET", "POST", "PUT", "PATCH", "DELETE", "OPTIONS"],
     allow_headers=[
@@ -2234,6 +2269,14 @@ app.add_middleware(
         # podría inyectarlo en futuro) o desde scripts SRE/curl manuales.
         # Si el header llega → reusado server-side; si no → generamos uno.
         "X-Correlation-ID",
+        # [P1-IOS-CORS-NATIVE-ORIGIN · 2026-08-22] Token de sesión first-party
+        # en header (P1-FIRST-PARTY-SESSION): la cookie `__Host-mf_session` es
+        # same-site y NO viaja desde capacitor://, así que en la app nativa
+        # este header es el ÚNICO mecanismo de sesión. El comentario de arriba
+        # pedía extender la lista al añadir un `X-*`; el header se añadió y la
+        # lista no — inerte en la web (mismo origen, sin preflight), muro en
+        # nativo.
+        "X-MF-Session",
     ],
     # [H2 / P3-CORRELATION-ID · 2026-05-20] expose_headers permite que el
     # browser JS lea `X-Correlation-ID` de la response — útil para que el

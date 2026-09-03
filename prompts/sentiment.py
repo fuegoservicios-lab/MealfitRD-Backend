@@ -76,6 +76,30 @@ REGLAS DE TONO:
     }
 }
 
+
+_CURIOSITY_DO_RULE = (
+    "4. CONTEXTO DOMINICANO: Relaciona los datos con alimentos locales que el usuario conoce."
+)
+_CURIOSITY_NEUTRAL_RULE = (
+    "4. CONTEXTO COTIDIANO: Relaciona los datos con alimentos cotidianos que el usuario reconozca."
+)
+
+
+def normalize_personality_instruction_for_country(instruction: str, country: str) -> str:
+    """Neutraliza únicamente la regla dominicana de curiosidad fuera de DO.
+
+    [P1-COACH-PERSONA-CURIOSIDAD-DO · 2026-08-23] El reemplazo exacto evita
+    inventar ejemplos locales y deja byte-idénticas las otras cinco personas.
+    ``country`` ya llega de ``country_for_form_data``; canonicalizar aquí solo
+    mantiene segura la función pura para sus consumidores directos.
+    """
+    from constants import canonicalize_country
+
+    text = str(instruction or "")
+    if canonicalize_country(country) == "DO":
+        return text
+    return text.replace(_CURIOSITY_DO_RULE, _CURIOSITY_NEUTRAL_RULE)
+
 SENTIMENT_PROMPT = """Clasifica el TONO EMOCIONAL del siguiente mensaje de un usuario de una app de nutrición.
 
 Responde SOLO con una de estas categorías exactas (sin explicación):

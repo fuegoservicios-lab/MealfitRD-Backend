@@ -38,6 +38,9 @@ import pytest
 
 _FRONT = Path(__file__).resolve().parent.parent.parent / "frontend" / "src"
 _WORDMARK = _FRONT / "components" / "common" / "Wordmark.jsx"
+# [P3-I18N-WORDMARK-SIN-COMPONENTE · 2026-08-22] Ver la nota gemela en
+# `test_p2_pdf_wordmark_en_cadena.py`: el componente se quedó, la constante se mudó.
+_BRAND = _FRONT / "config" / "brand.js"
 _INDEX_HTML = _FRONT.parent / "index.html"
 
 
@@ -85,7 +88,24 @@ def test_wordmark_es_monocromo():
         "P2-WORDMARK-BIOBOROS regresión: `Wordmark.jsx` fija un color hex. Debe heredar "
         "la tinta del contexto (`--text-main`) para funcionar igual en claro y oscuro."
     )
-    assert "Bioboros" in cuerpo, "el wordmark dejó de renderizar la marca"
+    # [P2-PDF-WORDMARK-EN-CADENA · 2026-08-22] El componente ya no teclea la marca:
+    # la lee de `WORDMARK_TEXT`, el SSOT que este mismo fichero exporta también para
+    # los documentos que se construyen como CADENA (un PDF no puede instanciar JSX).
+    # La propiedad sigue siendo la misma —el wordmark renderiza la marca— y ahora hay
+    # que comprobarla en dos pasos: que la use, y que la constante sea la correcta.
+    assert "WORDMARK_TEXT" in cuerpo, "el wordmark dejó de renderizar la marca"
+    # La constante vive ahora en `config/brand.js`. Se comprueba ADEMÁS que el componente
+    # no se la haya vuelto a traer: reexportarla desde aquí devolvería el warning de
+    # `react-refresh` que motivó la mudanza, y el gate corre con el tope justo.
+    assert re.search(r"WORDMARK_TEXT = 'Bioboros'", _BRAND.read_text(encoding="utf-8")), (
+        "el SSOT de la marca dejó de ser «Bioboros». Si el rebrand es intencional, este "
+        "test es el sitio donde consta la marca vigente."
+    )
+    assert "export const WORDMARK_TEXT" not in src, (
+        "`Wordmark.jsx` vuelve a exportar la constante junto al componente. Eso rompe el "
+        "Fast Refresh de Vite y sube eslint por encima del tope del gate, que aborta el "
+        "job entero — incluido el gate de i18n [P3-I18N-WORDMARK-SIN-COMPONENTE]."
+    )
 
 
 def test_la_pantalla_de_carga_del_plan_usa_el_componente():

@@ -55,8 +55,8 @@ except Exception:
     sys.modules.setdefault("langgraph.checkpoint.memory", MagicMock())
     sys.modules.setdefault("langgraph.checkpoint.postgres", MagicMock())
 
-# [P0-5 · P0-DEEPSEEK-MIGRATION 2026-06-12] Same eager-import for
-# `langchain_openai` (base client of the DeepSeek provider, see
+# [P0-5 · P0-LLM-PROVIDER-MIGRATION 2026-06-12] Same eager-import for
+# `langchain_openai` (base client of the GLM provider, see
 # `llm_provider.py`). If a test file installs a partial stub first, a later
 # import of the real surface (e.g. via cron_tasks → ai_helpers →
 # llm_provider) raises ImportError. Importing the real package here primes
@@ -73,7 +73,7 @@ except Exception:
     from unittest.mock import MagicMock
     if "langchain_openai" not in sys.modules:
         _stub = MagicMock()
-        # ChatDeepSeek(ChatOpenAI) llama super().__init__(**kwargs); un stub
+        # ChatGLM(ChatOpenAI) llama super().__init__(**kwargs); un stub
         # `= object` peta (object.__init__ no acepta kwargs) y rompe la colección
         # en entornos sin langchain_openai. Un stub-class que traga **kwargs sí
         # permite instanciar las subclases.
@@ -111,11 +111,13 @@ except Exception as _e_go_eager:  # pragma: no cover - depende del entorno
     print(f"[P1-CONFTEST-EAGER-GO] no se pudo pre-importar graph_orchestrator: "
           f"{type(_e_go_eager).__name__}: {_e_go_eager}", file=_sys_go.stderr)
 
+import ast
 import sys
 import uuid
 import json
 import pytest
 from datetime import datetime, timezone
+from pathlib import Path
 
 import db_core
 from db_core import execute_sql_write, execute_sql_query, connection_pool
@@ -133,6 +135,167 @@ if connection_pool and not getattr(connection_pool, '_opened', False):
 # ---------------------------------------------------------------------------
 def pytest_configure(config):
     config.addinivalue_line("markers", "e2e: End-to-end tests requiring a live database")
+    config.addinivalue_line(
+        "markers",
+        "frontend_cross_repo: tests whose subject includes the sibling frontend repo",
+    )
+
+
+# [P2-DEPLOY-FRONTEND-SALTA-LA-PARIDAD · 2026-08-23] Clasificación por
+# propiedad: cada TEST que construya o consuma una ruta al repo frontend recibe
+# el marker. Una lista manual de 246 tests quedaría obsoleta el primer día que
+# nazca una paridad nueva; marcar el fichero entero ejecutaría miles de vecinos
+# backend-only de los grandes batch files.
+_FRONTEND_CROSS_REPO_CACHE: dict[Path, frozenset[str]] = {}
+
+
+def _frontend_literal_or_alias(node: ast.AST, known_names: set[str]) -> bool:
+    for child in ast.walk(node):
+        if isinstance(child, ast.Name):
+            identifier = child.id.lower()
+            if child.id in known_names or identifier == "frontend" or identifier.startswith(
+                ("frontend_", "_frontend", "_front")
+            ):
+                return True
+        if isinstance(child, ast.Constant) and isinstance(child.value, str):
+            literal = child.value.lower().replace("\\", "/").strip()
+            normalized_path = "/" + literal.strip("/") + "/"
+            if (
+                literal == "frontend"
+                or literal.startswith("../frontend")
+                or "/frontend/" in normalized_path
+                or "frontend/src" in literal
+            ):
+                return True
+    return False
+
+
+def _assigned_names(node: ast.AST) -> set[str]:
+    targets = []
+    if isinstance(node, ast.Assign):
+        targets.extend(node.targets)
+    elif isinstance(node, ast.AnnAssign):
+        targets.append(node.target)
+    return {
+        child.id
+        for target in targets
+        for child in ast.walk(target)
+        if isinstance(child, ast.Name)
+    }
+
+
+def _frontend_cross_repo_test_names(path: Path) -> frozenset[str]:
+    path = Path(path)
+    if path in _FRONTEND_CROSS_REPO_CACHE:
+        return _FRONTEND_CROSS_REPO_CACHE[path]
+    try:
+        source = path.read_text(encoding="utf-8", errors="replace")
+        tree = ast.parse(source, filename=str(path))
+    except (OSError, SyntaxError):
+        result = frozenset()
+        _FRONTEND_CROSS_REPO_CACHE[path] = result
+        return result
+
+    frontend_values = {"frontend_repo_path"}
+    changed = True
+    while changed:
+        changed = False
+        for statement in tree.body:
+            if not isinstance(statement, (ast.Assign, ast.AnnAssign)):
+                continue
+            value = statement.value
+            if value is None or not _frontend_literal_or_alias(value, frontend_values):
+                continue
+            before = len(frontend_values)
+            frontend_values.update(_assigned_names(statement))
+            changed = changed or len(frontend_values) != before
+
+    functions = [
+        node
+        for node in ast.walk(tree)
+        if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef))
+    ]
+    dependent_functions: set[str] = set()
+    changed = True
+    while changed:
+        changed = False
+        for function in functions:
+            body = function.body
+            if (
+                body
+                and isinstance(body[0], ast.Expr)
+                and isinstance(body[0].value, ast.Constant)
+                and isinstance(body[0].value.value, str)
+            ):
+                body = body[1:]
+            arguments = {
+                arg.arg
+                for arg in (
+                    *function.args.posonlyargs,
+                    *function.args.args,
+                    *function.args.kwonlyargs,
+                )
+            }
+            called_functions = {
+                node.func.id
+                for statement in body
+                for node in ast.walk(statement)
+                if isinstance(node, ast.Call) and isinstance(node.func, ast.Name)
+            }
+            depends = (
+                bool(arguments.intersection(dependent_functions))
+                or bool(called_functions.intersection(dependent_functions))
+                or any(
+                    _frontend_literal_or_alias(statement, frontend_values)
+                    for statement in body
+                )
+            )
+            if not depends:
+                continue
+            if function.name not in dependent_functions:
+                dependent_functions.add(function.name)
+                changed = True
+            for global_node in (
+                node for node in ast.walk(function) if isinstance(node, ast.Global)
+            ):
+                before = len(frontend_values)
+                frontend_values.update(global_node.names)
+                changed = changed or len(frontend_values) != before
+
+    result = frozenset(name for name in dependent_functions if name.startswith("test_"))
+    _FRONTEND_CROSS_REPO_CACHE[path] = result
+    return result
+
+
+def _is_frontend_cross_repo_test_file(path: Path) -> bool:
+    return bool(_frontend_cross_repo_test_names(path))
+
+
+def pytest_collection_modifyitems(config, items):
+    marker = pytest.mark.frontend_cross_repo
+    for item in items:
+        item_path = Path(str(getattr(item, "path", item.fspath)))
+        item_name = getattr(item, "originalname", None) or item.name.split("[", 1)[0]
+        if item_name in _frontend_cross_repo_test_names(item_path):
+            item.add_marker(marker)
+
+
+# ---------------------------------------------------------------------------
+# [P2-CI-BACKEND-CERO-TESTS · 2026-08-23] Repos hermanos opcionales
+# ---------------------------------------------------------------------------
+@pytest.fixture(scope="session")
+def frontend_repo_path() -> Path:
+    """Resuelve ``../frontend`` tarde y salta solo tests cross-repo si no está.
+
+    El workflow del repo backend hace checkout exclusivamente de backend. Las
+    pruebas de paridad pueden usar el frontend cuando existe en el workspace de
+    desarrollo, pero su ausencia nunca debe abortar la colección completa.
+    """
+
+    sibling = Path(__file__).resolve().parents[2] / "frontend"
+    if not (sibling / "src").is_dir():
+        pytest.skip(f"repo hermano ausente: {sibling}")
+    return sibling
 
 
 # ---------------------------------------------------------------------------
@@ -236,10 +399,24 @@ def _restaurar_identidad_de_modulos():
 # Punto ÚNICO a propósito: hay ~25 ficheros que parchean `db_core.connection_pool`, y cualquiera
 # puede volver a envenenar el catálogo. Se mantiene la disciplina de la fixture de arriba (limitar
 # a lo medido): estos 4 caches son los que el bisect atravesó, no una lista preventiva.
+#
+# [P1-COUNTRY-SYSTEM-F2 · Task 10 · 2026-08-18] 5º cache, MISMA enfermedad, cadena causal
+# DISTINTA (no requiere `db_core.connection_pool` mockeado): `_VERIFIED_SHOPPING_NAMES`
+# (`shopping_calculator.py`) deriva de `get_master_ingredients()` con su propio TTL de 300s.
+# ~65 ficheros monkeypatchean `get_master_ingredients` directamente; si alguno dispara una
+# derivación real (`_is_verified_for_shopping`/`_get_verified_shopping_name_set`) mientras el
+# mock está activo, `monkeypatch` restaura la FUNCIÓN al salir pero NO el set derivado — sobrevive
+# envenenado hasta 300s para el siguiente test que lo lea, sea cual sea su fichero. Encontrado por
+# el reviewer de Task 9 corriendo la suite completa (orden-dependiente: verde en aislamiento,
+# rojo en suite — `test_mereyes_es_verificado_para_compras_tras_el_alias` /
+# `test_ciruela_ya_existe_en_catalogo_con_precio_cero_cambio_de_catalogo`,
+# `test_p1_country_system_f2.py`); reproducido con el mismo mecanismo antes de curarlo (evidencia
+# RED/GREEN completa en `.superpowers/sdd/2026-08-17-paises-fase-2/task-10-report.md`).
 _CACHES_CONTAMINABLES = (
     ("shopping_calculator", "_master_cache", None),
     ("graph_orchestrator", "_PHANTOM_CATALOG_INDEX_CACHE", None),
     ("graph_orchestrator", "_CATALOG_DENSITY_INDEX_CACHE", None),
+    ("shopping_calculator", "_VERIFIED_SHOPPING_NAMES", None),
 )
 
 
@@ -262,6 +439,56 @@ def _limpiar_caches_de_catalogo():
 # ---------------------------------------------------------------------------
 # Core fixture: synthetic user + plan_id, with full teardown
 # ---------------------------------------------------------------------------
+_TABLAS_USER_ID_CACHE: list | None = None
+
+# Las que ya limpian los DELETE explícitos del teardown, en su orden de claves foráneas.
+# Se excluyen del barrido para no repetir trabajo — no por corrección: repetir un DELETE
+# ya hecho es inofensivo.
+_TABLAS_YA_EXPLICITAS = frozenset({"plan_chunk_queue", "meal_plans", "user_inventory", "user_profiles"})
+
+
+def _tablas_con_user_id() -> list:
+    """[P1-TEARDOWN-SWEEP · 2026-08-12] Tablas de `public` con columna `user_id`.
+
+    Se pregunta al CATÁLOGO en vez de mantener una lista: una lista escrita el día que
+    había tres tablas se queda corta en cuanto alguien añade la cuarta, y nadie se entera
+    hasta que aparecen miles de filas huérfanas. Esta pregunta no envejece.
+
+    Se consulta UNA vez por sesión (el esquema no cambia a mitad de corrida) y se cachea:
+    el teardown corre por cada test.
+
+    Fail-soft a la lista conocida: si el catálogo no se puede leer, es preferible limpiar
+    lo de siempre que reventar el teardown entero y dejarlo TODO sucio.
+    """
+    global _TABLAS_USER_ID_CACHE
+    if _TABLAS_USER_ID_CACHE is not None:
+        return _TABLAS_USER_ID_CACHE
+
+    try:
+        filas = execute_sql_query(
+            """
+            SELECT c.table_name
+              FROM information_schema.columns c
+              JOIN information_schema.tables t
+                ON t.table_schema = c.table_schema AND t.table_name = c.table_name
+             WHERE c.table_schema = 'public'
+               AND c.column_name = 'user_id'
+               AND t.table_type = 'BASE TABLE'
+             ORDER BY c.table_name
+            """,
+            fetch_all=True,
+        ) or []
+        nombres = [
+            r["table_name"] if isinstance(r, dict) else r[0]
+            for r in filas
+        ]
+        _TABLAS_USER_ID_CACHE = [n for n in nombres if n not in _TABLAS_YA_EXPLICITAS]
+    except Exception:
+        _TABLAS_USER_ID_CACHE = []
+
+    return _TABLAS_USER_ID_CACHE
+
+
 def _safe_write(query: str, params: tuple, label: str) -> None:
     """[P0-TEST-DB-ISOLATION · 2026-07-29] DELETE de teardown aislado: un fallo en
     UNA sentencia (lock, blip de red) ya no aborta las siguientes — cada tabla se
@@ -323,7 +550,14 @@ def seeded_user_profile():
             "allergies": [],
             "budget": "medium",
             "householdSize": 1,
-            "tz_offset_minutes": -240,
+            # [P3-FIXTURE-TZ-SIGN · 2026-08-22] +240, no -240. Convención `getTimezoneOffset()`:
+            # POSITIVO al OESTE, así que República Dominicana es +240. Con el signo invertido este
+            # fixture situaba a cada usuario de e2e en UTC+4 —Bakú, ocho horas de diferencia—
+            # mientras decía modelar RD, y un caso de frontera de día montado así es
+            # autoconsistente: pasa igual contra el código correcto que contra el del signo al
+            # revés, porque el error se cancela consigo mismo.
+            # Verificado contra las cinco cuentas reales de producción, que llevan +240 todas.
+            "tz_offset_minutes": 240,
         }
         execute_sql_write(
             "INSERT INTO user_profiles (id, email, health_profile) VALUES (%s, %s, %s::jsonb) "
@@ -332,8 +566,34 @@ def seeded_user_profile():
         )
 
         # 3. user_inventory  (enough staples so pantry checks pass)
+        #
+        # [P2-E2E-PANTRY-STOCK · 2026-08-15] El pollo se dimensiona por lo que COMEN
+        # los mocks, no "a ojo". `test_chunked_30days_e2e` encola 9 chunks × 3 días y
+        # su mock pide "100g pollo" TODOS los días: 2.700 g. Con 1.000 g las reservas
+        # —que se acumulan tras cada merge y NO se liberan al completar (los
+        # `release_chunk_reservations` son todos rutas de error)— agotaban la fila en
+        # el chunk 5, y en el 6 la fila DESAPARECÍA de la nevera viva
+        # (`db_inventory.py`: `available = max(qty - reserved, 0)` y luego
+        # `if qty <= 0: continue`). El guard duro post-merge lo reportaba como
+        # "Ingredientes COMPLETAMENTE INEXISTENTES: 100g pollo" — un mensaje que
+        # acusa de ausencia lo que en realidad estaba RESERVADO por los chunks
+        # anteriores del mismo plan.
+        #
+        # POR QUÉ APARECIÓ AHORA y no antes: hasta `P1-PANTRY-NAME-RESOLUTION`
+        # (2026-08-07) la reserva era un no-op silencioso — buscaba por igualdad
+        # exacta y 'Pechuga de pollo' ≠ 'Pechuga de Pollo', así que la nevera del
+        # fixture nunca se vaciaba. Aquel P-fix arregló el descuento y destapó que
+        # este fixture estaba 2,7× corto. El test no se rompió: se volvió honesto.
+        #
+        # ⚠️ NO se arregla stubeando `reserve_plan_ingredients` como hacen los tests
+        # hermanos. Este es el E2E: la reserva real ES cobertura, y precisamente del
+        # camino que cambió hace ocho días. Se arregla dándole de comer.
+        #
+        # 5.000 g = 2.700 g necesarios + margen. El margen no es adorno: si algún día
+        # `pantry_names_match` resuelve "150g res" contra la fila `Res` (hoy NO lo
+        # hace, por tokens distintos), ese ingrediente empezará a reservar también.
         pantry_items = [
-            ("Pechuga de Pollo", 1000, "g"),
+            ("Pechuga de Pollo", 5000, "g"),
             ("Arroz", 2000, "g"),
             ("Habichuelas", 500, "g"),
             ("Res", 800, "g"),
@@ -367,6 +627,30 @@ def seeded_user_profile():
         _safe_write("DELETE FROM plan_chunk_queue WHERE user_id = %s", (user_id,), "plan_chunk_queue(user_id)")
         _safe_write("DELETE FROM meal_plans WHERE user_id = %s", (user_id,), "meal_plans(user_id)")
         _safe_write("DELETE FROM user_inventory WHERE user_id = %s", (user_id,), "user_inventory")
+
+        # [P1-TEARDOWN-SWEEP · 2026-08-12] Barrido de TODA tabla con `user_id`, antes de
+        # borrar el perfil.
+        #
+        # POR QUÉ EXISTE. Este teardown limpiaba tres tablas a mano. Las suites escriben
+        # en muchas más —telemetría, coste, métricas de chunk, frecuencias de
+        # ingrediente—, así que cada corrida dejaba filas cuyo dueño desaparecía un
+        # instante después. Medido en producción el 2026-08-12: **7.540 filas huérfanas
+        # de 600 dueños fantasma**, ninguno con un solo plan, comida o mensaje. Y el
+        # 42% del libro de coste por usuario era de ellos, o sea que cualquier análisis
+        # de gasto por persona estaba contaminado.
+        #
+        # POR QUÉ SE DERIVA DEL ESQUEMA Y NO ES UNA LISTA. Añadir los seis nombres que
+        # faltaban hoy repetiría el error: la lista se escribió cuando había tres tablas,
+        # y se quedó corta sin que nadie la tocara. Lo que no envejece es la pregunta
+        # «¿qué tablas tienen un `user_id`?», y esa la contesta el catálogo. Una tabla
+        # nueva queda cubierta el día que se crea.
+        #
+        # Va DESPUÉS de los DELETE explícitos de arriba (que son los que respetan el
+        # orden de claves foráneas entre plan y cola) y ANTES de `user_profiles`, que es
+        # la raíz. Cada uno aislado: una tabla que falle no puede dejar las demás sucias.
+        for _tabla in _tablas_con_user_id():
+            _safe_write(f"DELETE FROM {_tabla} WHERE user_id::text = %s", (user_id,), f"sweep {_tabla}")
+
         _safe_write("DELETE FROM user_profiles WHERE id = %s", (user_id,), "user_profiles")
 
 
@@ -473,16 +757,30 @@ def _reportar_telemetria_fantasma():
     `pytest_sessionfinish_algo` no lo ejecutaría nadie y sería un detector inerte —
     verde para siempre, vigilando nada.
     """
+    # [P1-TEARDOWN-SWEEP · 2026-08-12] Antes miraba UNA tabla: `chunk_lesson_telemetry`.
+    # Por eso no vio nada cuando había 7.540 filas huérfanas repartidas en SEIS tablas
+    # (llm_usage_events 2.576, pipeline_metrics 1.868, plan_chunk_metrics 1.225,
+    # chunk_deferrals 886, ingredient_frequencies 690 y, sí, 295 en la que sí miraba).
+    #
+    # Un detector que vigila una tabla de seis no es que avise poco: es que su silencio
+    # se lee como «todo limpio». Ahora pregunta al catálogo igual que el barrido del
+    # teardown, así que una tabla nueva entra en la vigilancia el día que se crea y no el
+    # día que alguien se acuerda.
+    _tablas = ["meal_plans", "user_inventory", "plan_chunk_queue"] + list(_tablas_con_user_id())
+    if not _tablas:
+        return
+    _union = "\n UNION ALL\n".join(
+        f"""SELECT '{t}' AS tabla, count(*)::int AS n,
+                   count(DISTINCT x.user_id::text)::int AS usuarios
+              FROM {t} x
+             WHERE x.user_id IS NOT NULL
+               AND NOT EXISTS (SELECT 1 FROM user_profiles p
+                                WHERE p.id::text = x.user_id::text)
+            HAVING count(*) > 0"""
+        for t in _tablas
+    )
     try:
-        filas = execute_sql_query(
-            """
-            SELECT 'chunk_lesson_telemetry' AS tabla, count(*)::int AS n,
-                   count(DISTINCT t.user_id)::int AS usuarios
-            FROM chunk_lesson_telemetry t
-            WHERE NOT EXISTS (SELECT 1 FROM user_profiles p WHERE p.id = t.user_id)
-            HAVING count(*) > 0
-            """
-        ) or []
+        filas = execute_sql_query(_union) or []
     except Exception:  # sin DB / red caída: el detector nunca estorba
         return
     if not filas:
@@ -498,10 +796,12 @@ def _reportar_telemetria_fantasma():
         )
     if _gravedad == "AVISO":
         print(
-            "    Por qué importa: los crons de ratio de síntesis agregan ESTA tabla sin "
-            "filtrar, así que estas filas mueven una métrica de producto.\n"
-            "    Limpieza: DELETE FROM chunk_lesson_telemetry t WHERE NOT EXISTS "
-            "(SELECT 1 FROM user_profiles p WHERE p.id = t.user_id);",
+            "    Por qué importa: varios crons agregan estas tablas SIN filtrar por "
+            "usuario, así que estas filas mueven métricas de producto — y el libro de "
+            "coste por usuario deja de poder responder cuánto gasta la gente de verdad.\n"
+            "    Limpieza (por cada tabla de arriba):\n"
+            "      DELETE FROM <tabla> x WHERE x.user_id IS NOT NULL AND NOT EXISTS\n"
+            "        (SELECT 1 FROM user_profiles p WHERE p.id::text = x.user_id::text);",
             file=_sys_tel.stderr,
         )
     else:

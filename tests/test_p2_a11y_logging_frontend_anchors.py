@@ -55,7 +55,6 @@ _FRONTEND_SRC = _REPO_ROOT / "frontend" / "src"
 
 _IOS_PROMPT = _FRONTEND_SRC / "components" / "IOSInstallPrompt.jsx"
 _HEADER = _FRONTEND_SRC / "components" / "layout" / "Header.jsx"
-_CHAT_WIDGET = _FRONTEND_SRC / "components" / "dashboard" / "ChatWidget.jsx"
 _PRICING = _FRONTEND_SRC / "components" / "home" / "Pricing.jsx"
 
 # (archivo, min_anchors, min_aria_attrs)
@@ -63,7 +62,6 @@ _PRICING = _FRONTEND_SRC / "components" / "home" / "Pricing.jsx"
 _PATCHED: tuple[tuple[Path, int, int], ...] = (
     (_IOS_PROMPT, 1, 1),    # 1 dismiss button
     (_HEADER, 1, 2),        # mobile toggle: aria-label + aria-expanded
-    (_CHAT_WIDGET, 3, 5),   # 3 comment blocks (back+history/plus+FAB), 5 aria attrs (4 aria-label + 1 aria-expanded)
     (_PRICING, 1, 3),       # 2 aria-pressed + 1 aria-label en role="group"
 )
 
@@ -170,17 +168,6 @@ def test_d_header_mobile_toggle_has_aria_label_and_expanded():
     )
 
 
-def test_e_chatwidget_fab_has_aria_label_and_expanded():
-    src = _read(_CHAT_WIDGET)
-    # El FAB tiene comment `Fab Button` justo antes.
-    block = _find_button_block_by_marker(src, "Fab Button", window_lines=18)
-    assert "aria-label=" in block, (
-        "P2-A11Y-LOGGING: el FAB en ChatWidget.jsx perdió `aria-label`."
-    )
-    assert "aria-expanded=" in block, (
-        "P2-A11Y-LOGGING: el FAB en ChatWidget.jsx perdió `aria-expanded`."
-    )
-
 
 def test_f_pricing_billing_toggle_uses_aria_pressed():
     src = _read(_PRICING)
@@ -206,3 +193,10 @@ def test_f_pricing_billing_toggle_uses_aria_pressed():
         "el estado activo (visible vía className) es invisible a "
         "lectores de pantalla."
     )
+
+# [P2-CODIGO-MUERTO · 2026-08-18] Las comprobaciones sobre `ChatWidget.jsx` se
+# retiraron con el componente. Estaba INALCANZABLE desde produccion: cero
+# imports fuera de tests, y su cadena exclusiva no aparecia en `dist/` (lo unico
+# que casaba en el bundle era `HelpChatWidget`, que es otro componente vivo).
+# Los tests que quedan siguen cubriendo el RESTO de ficheros de su lista: se
+# quito un sujeto muerto, no una garantia.

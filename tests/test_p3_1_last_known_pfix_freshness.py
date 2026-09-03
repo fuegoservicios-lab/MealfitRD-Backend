@@ -41,7 +41,22 @@ _APP_PY_PATH = _BACKEND_ROOT / "app.py"
 #
 # Si has cerrado un P-fix posterior y olvidaste subir este floor, el test
 # fallará intencionalmente — es la red de seguridad que cierra P3-1.
-_PFIX_DATE_FLOOR = date(2026, 8, 7)  # [P1-PANTRY-NAME-RESOLUTION · 2026-08-07] la Nevera
+_PFIX_DATE_FLOOR = date(2026, 8, 19)  # [P1-CULINARY-METADATA-BETA · 2026-08-19] backfill
+# ronda 3 de metadata culinaria (141 filas beta en NULL desde el 2026-08-17, cobertura del
+# catálogo de vuelta a 59%) + CHECK que lo ancla en DB + de-proxyficación BEDCA del cluster
+# español + la fila Yogurt que cargaba el perfil del griego. Histórico — floor previo  # [P1-COUNTRY-SYSTEM-F2 · 2026-08-18] Fase 2 del sistema
+# de países: catálogo por país (347 filas, 6 países) + los cierres de "100%" (retry-gate
+# advisory, MUTATOR-PURITY, backstops de excusa alérgena). QA final con LLM vivo (5 países beta
+# + gemelo DO) verde; harness `country_catalog_gap.py` 0 silenciosas/0 drops en los 5. Doc
+# canónica: backend/docs/country_system_f1.md §F2. Test ancla: test_p1_country_system_f2.py.
+# Histórico — floor previo [P1-COUNTRY-SYSTEM-F1 · 2026-08-16] Fase 1 del sistema
+# de países: con el knob encendido, un usuario de país beta deja de recibir imposición criolla
+# (prompts por variante, gates culturales suaves, fecha local, presupuesto en su moneda, lista
+# de compras sin precios con aviso honesto). 8 tasks SDD; con el knob apagado (default) el motor
+# es byte-idéntico a antes de la fase. Doc canónica (spine, surfaces wired, barrido de callers
+# de las 6 funciones derivadas de SLOT_INAPPROPRIATE_FOODS, parqueado Fase 2, runbook del flip):
+# backend/docs/country_system_f1.md. Test ancla: test_p1_country_system_f1.py.
+# Histórico — floor previo [P1-PANTRY-NAME-RESOLUTION · 2026-08-07] la Nevera
 # descontaba fantasmas: los 4 sitios que resolvían fila de `user_inventory` usaban igualdad
 # EXACTA de string, así que "2 huevos" contra la fila "Huevo" devolvía éxito sin descontar,
 # sin fila en `failed_inventory_deductions` y sin alerta. Escalera SSOT

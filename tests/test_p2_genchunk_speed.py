@@ -120,14 +120,50 @@ def test_a_chat_plan_prune_keys_and_helper():
 
 
 def test_a_both_chat_paths_use_prune():
+    """El plan que viaja al system prompt va PODADO en los dos paths del chat.
+
+    [P3-PRUNE-SSOT-ANCHOR · 2026-08-14] Este test contaba
+    `json.dumps(_prune_plan_for_chat(current_plan))` >= 2, y era correcto cuando el
+    bloque estaba escrito DOS VECES inline, una por path. `db03f33` lo consolidó en
+    el helper `_plan_context_for_chat`, que ambos paths llaman — citando en su
+    docstring la lección de P1-CHAT-PAST-DAYS: «la divergencia entre ambos paths ya
+    ha causado bugs antes».
+
+    O sea que el test se puso rojo por la deduplicación que debería premiar. Un
+    contador de ocurrencias literales mide COPIAS, no cobertura; cuando el código
+    mejora hacia un SSOT, el contador baja y acusa a la mejora.
+
+    La invariante real tiene dos mitades, y las dos se comprueban abajo:
+      1. Ningún `json.dumps` del plan llega al prompt SIN podar.
+      2. Los dos paths reciben el bloque del plan (hoy vía el helper; mañana da
+         igual cómo, mientras los dos lo reciban).
+    """
     src = _read(_AGENT_PY)
-    # Ambos callsites deben serializar el plan PODADO, no el crudo.
-    assert src.count("json.dumps(_prune_plan_for_chat(current_plan))") >= 2, (
-        "A: ambos paths del chat deben usar json.dumps(_prune_plan_for_chat(current_plan))."
+
+    # (1) Todo json.dumps del plan pasa por el podador. Se buscan las formas crudas
+    # que de verdad harían daño: serializar `current_plan` o `plan_vigente` enteros.
+    crudos = re.findall(r"json\.dumps\(\s*(?:current_plan|plan_vigente)\s*\)", src)
+    assert not crudos, (
+        f"A: {len(crudos)} `json.dumps` del plan SIN podar en agent.py. El plan crudo "
+        "arrastra las listas de compra agregadas y el historial de coherencia: son "
+        "miles de tokens por turno de chat que el modelo no usa."
     )
-    # Y NO debe quedar un json.dumps(current_plan) crudo.
-    assert "json.dumps(current_plan)}" not in src, (
-        "A: quedó un json.dumps(current_plan) crudo sin podar en el system prompt del chat."
+
+    # (2) El bloque del plan llega a los dos paths. Se acepta el helper (forma
+    # actual, SSOT) o dos serializaciones podadas inline (forma histórica): lo que
+    # se ancla es la COBERTURA de ambos paths, no cuál de las dos formas se use.
+    via_helper = len(re.findall(r"system_prompt \+= _plan_context_for_chat\(", src))
+    via_inline = src.count("json.dumps(_prune_plan_for_chat(current_plan))")
+    assert via_helper >= 2 or via_inline >= 2, (
+        f"A: sólo {via_helper} path(s) llaman `_plan_context_for_chat` y {via_inline} "
+        "serializan el plan podado inline. Los dos paths del chat (welcome y turno "
+        "normal) tienen que recibir el bloque del plan."
+    )
+
+    # El helper es hoy el único sitio que serializa: si alguien lo vacía, (1) no lo
+    # detecta (no hay crudos) y (2) tampoco (sigue llamándose). Esto sí.
+    assert "_prune_plan_for_chat(" in src and "def _prune_plan_for_chat(" in src, (
+        "A: desapareció el podador `_prune_plan_for_chat`."
     )
 
 

@@ -57,8 +57,18 @@ def test_goal_meta_mapping_es_do_labels():
         ("maintenance", "Mantenimiento"),
         ("performance", "Rendimiento"),
     ]
+    # [P1-I18N-DASHBOARD · 2026-08-15] Se acepta `label: t('Ganar músculo')`
+    # ademas de `label: 'Ganar músculo'`. La propiedad vigilada NO cambio: la
+    # CLAVE de `t()` ES el texto español (es-DO no lleva catalogo, cae al
+    # fallback), asi que el literal es-DO sigue estando aqui, con los mismos 4
+    # enums y los mismos prefijos. Lo unico que se movio es la grafia. Se
+    # aprieta de paso el `['\"]?` original a comilla OBLIGATORIA: todas las
+    # entradas son strings citados y el opcional dejaba pasar identificadores.
     for enum_key, es_label_prefix in expected_pairs:
-        pattern = rf"{enum_key}\s*:\s*\{{[^}}]*label\s*:\s*['\"]?{es_label_prefix}"
+        pattern = (
+            rf"{enum_key}\s*:\s*\{{[^}}]*label\s*:\s*"
+            rf"(?:t\(\s*)?['\"]{es_label_prefix}"
+        )
         assert re.search(pattern, src, re.IGNORECASE), (
             f"Mapping para `{enum_key}` no tiene label es-DO empezando "
             f"con `{es_label_prefix}`. Producto es 100% es-DO (CLAUDE.md)."
@@ -165,8 +175,18 @@ def test_prefers_reduced_motion_respected():
 
 
 def test_kcal_formatted_for_es_do_locale():
-    """[P3-PROFILE-PLAN-CARD-REDESIGN] kcal renderiza con `toLocaleString('es-DO')`
-    para separador de miles consistente con el producto (no '2100' raw)."""
+    """[P3-PROFILE-PLAN-CARD-REDESIGN] kcal NO se pinta raw: pasa por un
+    formateador de numeros con locale (separador de miles).
+
+    [P1-I18N-DASHBOARD · 2026-08-15] El call site paso de
+    `_goalKcal.toLocaleString('es-DO')` a `formatNumber(_goalKcal)`. La
+    propiedad vigilada NO cambio — el numero SIGUE formateandose por locale con
+    separador de miles; lo que cambio es CUAL locale: `formatNumber` envuelve
+    `Intl.NumberFormat(_locale)` y sigue al idioma activo, mientras el 'es-DO'
+    clavado pintaba «2.000» en una pantalla en ingles (donde ese punto se lee
+    como decimal). Se aceptan AMBAS grafias, pero ancladas al valor concreto
+    (`_goalKcal`): un `{_goalKcal}` a pelo sigue fallando aqui.
+    """
     src = _read(_SETTINGS_JSX)
     section_match = re.search(
         r"activeSection\s*===\s*['\"]plan['\"][\s\S]*?(?=activeSection\s*===\s*['\"]subscription['\"])",
@@ -174,7 +194,25 @@ def test_kcal_formatted_for_es_do_locale():
     )
     assert section_match
     section_src = section_match.group(0)
-    assert "toLocaleString('es-DO')" in section_src, (
-        "kcal del card no se formatea con `toLocaleString('es-DO')`. "
+    # `formatNumber(_goalKcal)` | `_goalKcal.toLocaleString('es-DO')`
+    formatted = re.search(
+        r"formatNumber\(\s*_goalKcal\s*[,)]"
+        r"|_goalKcal\s*\.\s*toLocaleString\(\s*['\"]es-DO['\"]\s*\)",
+        section_src,
+    )
+    assert formatted, (
+        "kcal del card no pasa por un formateador con locale "
+        "(`formatNumber(_goalKcal)` o `_goalKcal.toLocaleString('es-DO')`). "
         "Para valores >= 1000, el separador de miles mejora legibilidad."
     )
+    # Si usa `formatNumber`, debe ser EL del motor i18n (Intl.NumberFormat con
+    # el locale activo) — no un helper local que devuelva el numero pelado.
+    if "formatNumber" in formatted.group(0):
+        assert re.search(
+            r"import\s*\{[^}]*\bformatNumber\b[^}]*\}\s*from\s*['\"][^'\"]*i18n['\"]",
+            src,
+        ), (
+            "`formatNumber` no se importa del motor i18n — sin "
+            "`Intl.NumberFormat(_locale)` detras, el separador de miles se "
+            "pierde y el card vuelve a pintar '2100' raw."
+        )

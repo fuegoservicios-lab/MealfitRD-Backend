@@ -38,64 +38,43 @@ from pathlib import Path
 P2_LIVE_1_ANCHOR = "P2-LIVE-1"
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
-WORKFLOW = REPO_ROOT / ".github" / "workflows" / "ci.yml"
+# [G31 · 2026-08-23] El ci.yml de la raíz fue retirado (jamás ejecutó un test:
+# el workspace-root no ve los repos hermanos). El lint de CI vive ahora en el
+# workflow del REPO FRONTEND, dentro del job `quality`, y ya no es no-bloqueante:
+# la baseline de 245 errores se limpió y el gate es el tope `--max-warnings`.
+WORKFLOW = REPO_ROOT / "frontend" / ".github" / "workflows" / "ci.yml"
 PACKAGE_JSON = REPO_ROOT / "frontend" / "package.json"
 
 
 def test_a_workflow_has_frontend_lint_job():
-    """El workflow debe definir el job `frontend-lint`."""
+    """El workflow del frontend corre eslint en CI (dentro del job quality)."""
     text = WORKFLOW.read_text(encoding="utf-8")
-    assert re.search(r"^\s*frontend-lint\s*:", text, re.MULTILINE), (
-        "[P2-LIVE-1] Job `frontend-lint` no encontrado en .github/workflows/"
-        "ci.yml. Sin este job, eslint nunca corre en CI y los 245 errores "
-        "pre-existentes pueden crecer sin freno en cada PR."
+    assert "eslint" in text, (
+        "[P2-LIVE-1] El workflow del frontend dejó de correr eslint: los avisos "
+        "pueden crecer sin freno en cada PR."
     )
 
 
 def test_b_lint_job_runs_npm_lint():
-    """El job `frontend-lint` debe invocar `npm run lint`."""
+    """El gate de lint es el tope de avisos: `eslint . --max-warnings <N>`."""
     text = WORKFLOW.read_text(encoding="utf-8")
-    # Localizar el bloque del job hasta el próximo job o EOF.
-    # Aislamiento robusto: matchear desde `frontend-lint:` (indent 2 = top
-    # level dentro de jobs) hasta el próximo job al mismo indent o EOF. Los
-    # sub-keys dentro del job (steps, name, runs-on) tienen indent ≥4, así
-    # que `^  \S` solo matchea otro job o EOF.
-    m = re.search(
-        r"^  frontend-lint\s*:.*?(?=^  \S|\Z)",
-        text,
-        re.MULTILINE | re.DOTALL,
-    )
-    assert m, "[P2-LIVE-1] No pude aislar el bloque del job frontend-lint."
-    body = m.group(0)
-    assert "npm run lint" in body, (
-        "[P2-LIVE-1] El job frontend-lint no invoca `npm run lint`. El "
-        "comando es el contrato con package.json scripts.lint — sin él el "
-        "job no ejecuta eslint."
+    assert re.search(r"eslint \. --max-warnings \d+", text), (
+        "[P2-LIVE-1] El paso de eslint perdió el tope `--max-warnings`: sin cap, "
+        "eslint con 66 avisos históricos sale 0 y el lint deja de ser un gate."
     )
 
 
 def test_c_lint_job_is_non_blocking_initially():
-    """El job debe tener `continue-on-error: true` mientras la baseline
-    de 245 errores no se haya limpiado. Sin esta flag, todos los merges
-    se bloquean. Tras cleanup (count=0), flippear a false."""
+    """INVERTIDO a propósito (la deuda se pagó): el paso de eslint ya NO puede
+    llevar `continue-on-error` — la baseline de 245 errores se limpió y volver
+    a hacerlo no-bloqueante resucitaría el modo de fallo original en silencio."""
     text = WORKFLOW.read_text(encoding="utf-8")
-    # Aislamiento robusto: matchear desde `frontend-lint:` (indent 2 = top
-    # level dentro de jobs) hasta el próximo job al mismo indent o EOF. Los
-    # sub-keys dentro del job (steps, name, runs-on) tienen indent ≥4, así
-    # que `^  \S` solo matchea otro job o EOF.
-    m = re.search(
-        r"^  frontend-lint\s*:.*?(?=^  \S|\Z)",
-        text,
-        re.MULTILINE | re.DOTALL,
-    )
-    assert m, "[P2-LIVE-1] No pude aislar el bloque del job frontend-lint."
-    body = m.group(0)
-    assert re.search(r"continue-on-error\s*:\s*true", body), (
-        "[P2-LIVE-1] El job frontend-lint debe tener `continue-on-error: "
-        "true` hasta que la baseline de 245 errores eslint se haya limpiado. "
-        "Sin esta flag, todos los merges quedarían bloqueados sobre la "
-        "deuda técnica pre-existente. Tras cleanup, flippear a `false` y "
-        "actualizar este test para que enforce `continue-on-error: false`."
+    i = text.find("eslint . --max-warnings")
+    assert i > 0, "no encontré el paso de eslint para inspeccionar su bloque"
+    ventana = text[max(0, i - 400):i]
+    assert "continue-on-error" not in ventana, (
+        "[P2-LIVE-1] El paso de eslint volvió a ser no-bloqueante "
+        "(continue-on-error): el gate del tope de avisos queda decorativo."
     )
 
 

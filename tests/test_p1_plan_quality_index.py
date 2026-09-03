@@ -1,7 +1,7 @@
 """[P1-PLAN-QUALITY-INDEX + P1-COST-ATTRIBUTION · 2026-07-31] El medidor de
 variedad y coherencia, y la atribución de costo que lo hace comparable.
 
-POR QUÉ: el owner preguntó si cambiar el generador (deepseek-flash →
+POR QUÉ: el owner preguntó si cambiar el generador (glm-flash →
 gpt-5.6-luna) subiría la calidad. No se podía responder — las señales existían
 sueltas y sin persistir juntas, y el libro de costo no se podía cruzar con
 nada: medido el 2026-07-31, `user_id` era NULL en 6.061 de 6.063 filas y

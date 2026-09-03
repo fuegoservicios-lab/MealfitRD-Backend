@@ -1,4 +1,4 @@
-"""[P3-PANTRY-GUARD-UNICODE-FRACTIONS · 2026-05-23] Tercer cleanup en
+r"""[P3-PANTRY-GUARD-UNICODE-FRACTIONS · 2026-05-23] Tercer cleanup en
 cascada del bucle de retries del swap-meal.
 
 Tras P3-AGG-CLEAN-LEADING-PUNCT (limpio el `/`) y

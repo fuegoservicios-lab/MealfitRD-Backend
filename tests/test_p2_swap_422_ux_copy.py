@@ -17,11 +17,19 @@ copy específico + preserva el plato actual (NO degrada a fallback).
 Cross-link con ``test_p2_hist_audit_14_marker_test_link``: el slug del
 marker ``P2-SWAP-422-UX-COPY`` ↔ filename ``test_p2_swap_422_ux_copy.py``.
 """
+
+import pytest
 import pathlib
 import re
 
 FRONTEND_ROOT = pathlib.Path(__file__).parent.parent.parent / "frontend"
-CONTEXT_JSX = (FRONTEND_ROOT / "src" / "context" / "AssessmentContext.jsx").read_text(encoding="utf-8")
+@pytest.fixture(scope="module", autouse=True)
+def _load_frontend_sibling_sources(frontend_repo_path):
+    # La fixture compartida salta el módulo antes de cualquier I/O si falta el hermano.
+    _ = frontend_repo_path
+    global CONTEXT_JSX
+    CONTEXT_JSX = (FRONTEND_ROOT / "src" / "context" / "AssessmentContext.jsx").read_text(encoding="utf-8")
+
 APP_PY = (pathlib.Path(__file__).parent.parent / "app.py").read_text(encoding="utf-8")
 
 

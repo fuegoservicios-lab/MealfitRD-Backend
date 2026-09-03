@@ -17,7 +17,7 @@ final (ver "Divergencias del spec" al final de cada sección).
 | Capa | Qué hace | Estado |
 |---|---|---|
 | **Capa 1 — scan determinista** | Metadata `prep_methods`/`ready_to_eat` en `master_ingredients` + `culinary_contract_scan()` (V1 verbo↔alimento, V2 estado imposible, V3 huérfanos, V4 cantidad inconsistente ingredientes↔pasos) en 3 superficies (V4 solo en superficies 1-2, ver tabla de checks abajo). | **`warn`** (F1, esta doc). Escalada a `block` es F2 (`P1-CULINARY-CONTRACT-BLOCK`), no implementada. |
-| **Capa 2 — juez LLM** | `run_culinary_judge()` (DeepSeek flash) ve recetas completas (el reviewer médico no las ve) y detecta clases abiertas (combos raros, técnica impropia, nombre no corresponde) vía `CulinaryJudgeReport`, integrado en `review_plan_node` con history propio (`_culinary_judge_history`). | **Implementada, nace `off`** (`P1-CULINARY-JUDGE`, Tasks 11-12). Calibrada 2026-08-01 (ver sección abajo) — la corrida re-medida con la rúbrica generalizada quedó **por debajo del floor de recall** (78% < 80%); **NO autoriza aún** la escalada OFF→`warn`. **Re-calibrada 2026-08-01 post-backfill** (3 corridas + mediana) — mediana 78%, **mismo veredicto**. **Iterada 2026-08-01 v3** (ver ["Iteración de rúbrica v3 (combo_absurdo) 2026-08-01"](#iteración-de-rúbrica-v3-combo_absurdo-2026-08-01)) — `combo_absurdo` de 75/50/100 a **100% en las 3 corridas**, mediana juez sube a **89%** (flash AUTORIZA). Permanece `off` en prod — pendiente re-medir `gpt-5.6-luna` (VPS) con la rúbrica v3 antes de flippear el knob (único, no por-modelo). |
+| **Capa 2 — juez LLM** | `run_culinary_judge()` (GLM flash) ve recetas completas (el reviewer médico no las ve) y detecta clases abiertas (combos raros, técnica impropia, nombre no corresponde) vía `CulinaryJudgeReport`, integrado en `review_plan_node` con history propio (`_culinary_judge_history`). | **Implementada, nace `off`** (`P1-CULINARY-JUDGE`, Tasks 11-12). Calibrada 2026-08-01 (ver sección abajo) — la corrida re-medida con la rúbrica generalizada quedó **por debajo del floor de recall** (78% < 80%); **NO autoriza aún** la escalada OFF→`warn`. **Re-calibrada 2026-08-01 post-backfill** (3 corridas + mediana) — mediana 78%, **mismo veredicto**. **Iterada 2026-08-01 v3** (ver ["Iteración de rúbrica v3 (combo_absurdo) 2026-08-01"](#iteración-de-rúbrica-v3-combo_absurdo-2026-08-01)) — `combo_absurdo` de 75/50/100 a **100% en las 3 corridas**, mediana juez sube a **89%** (flash AUTORIZA). Permanece `off` en prod — pendiente re-medir `gpt-5.6-luna` (VPS) con la rúbrica v3 antes de flippear el knob (único, no por-modelo). |
 | **Capa 3 — calibración medida** | Script `scripts/calibrate_culinary_judge.py`: recall/FP por clase y por capa contra el golden set (con desglose de FP por tipo) + 1 probe held-out generado en runtime (gatea el veredicto), con llamadas LLM reales (no CI). **[P2-VEG-VOLUME-TOKENS-2 · 2026-08-01]** +2 probes informativos runtime (pescado "en anillos" / doble-grano bulgur+arroz, casos reales de las capturas del owner) — sin ground-truth etiquetado en el golden set, NO gatean el veredicto, solo dejan evidencia cruda en stdout para la próxima calibración (T14). | **Hecha** (Task 13, 2026-08-01, corregida tras review; **re-calibrada 2026-08-01 post-backfill con protocolo de 3 corridas + mediana**; **rúbrica iterada a v3 2026-08-01** tras diagnóstico estructural cruzado flash+luna sobre `combo_absurdo`). Resultado post-v3 (flash): capa1 recall 100% + 0 FP en las 3 corridas; juez recall mediana 89% (89%, 100%, 89%) + FP 0%; `combo_absurdo` 100% en las 3; probe held-out out-of-sample **cazado en las 3 corridas**. |
 
 Rollout completo (spec §7): F0 golden set (hecho) → **F1 capa 1 en warn (hecho)** → F2 capa 1 en block (pendiente) → **F3 juez calibrado con rúbrica v3, flash AUTORIZA (89% mediana), luna pendiente de re-medición en VPS** (esta doc, 2026-08-01 — ver sección v3; el knob permanece `off` hasta confirmar luna) → F4 juez warn→block medido (pendiente; requiere primero cruzar F3 con ambos modelos, luego ≥1 semana de warn limpio en prod, Task 14).
@@ -67,8 +67,8 @@ Registro de lo que la ola de fixes post-review-final (whole-branch, 19 commits) 
 |---|---|---|
 | `MEALFIT_CULINARY_CONTRACT_GUARD` | `warn` | `off`/`warn`/`block`. Clamp a `warn` si el valor no es uno de los 3. Registrado vía `_env_str` → `_KNOBS_REGISTRY` ([`graph_orchestrator.py:6112`](../graph_orchestrator.py)). Escalada a `block` es F2 (`P1-CULINARY-CONTRACT-BLOCK`), pendiente. |
 | `MEALFIT_CULINARY_JUDGE_GUARD` | **`off`** | `off`/`warn`/`block`. Clamp fail-safe a `off` (no a `warn`) si el valor no es uno de los 3 — a diferencia del contract-guard, esta es una llamada LLM completa por plan, así que el único default seguro ante un valor raro es apagado. Calibrado 2026-08-01: recall re-medido (78%, tras generalizar la rúbrica) queda bajo el floor de 0.80 — **permanece `off`**. Re-calibrado 2026-08-01 post-backfill (3 corridas + mediana): mediana 78%, mismo resultado — **sigue `off`**. **Rúbrica iterada a v3 2026-08-01** (`combo_absurdo`, ver sección dedicada): flash re-medido AUTORIZA (mediana 89% ≥ 0.80 en las 3 corridas) — **sigue `off` en prod** hasta que el controller re-mida `gpt-5.6-luna` con la rúbrica v3 en el VPS (el knob es único, no distingue modelo). |
-| `MEALFIT_CULINARY_JUDGE_MODEL` | `_FLASH_MODEL_NAME` (DeepSeek flash) | Directiva del owner (P1-FLASH-PRIMARY) — nunca pro sin medición. Override para A/B de modelo/costo. |
-| `MEALFIT_CULINARY_JUDGE_THINKING` | `False` | Activa `extra_body.thinking` (DeepSeek-only, ignorado en modelos OpenAI). No probado en la calibración 2026-08-01 (baseline es sin thinking). |
+| `MEALFIT_CULINARY_JUDGE_MODEL` | `_FLASH_MODEL_NAME` (GLM flash) | Directiva del owner (P1-FLASH-PRIMARY) — nunca pro sin medición. Override para A/B de modelo/costo. |
+| `MEALFIT_CULINARY_JUDGE_THINKING` | `False` | Activa `extra_body.thinking` (GLM-only, ignorado en modelos OpenAI). No probado en la calibración 2026-08-01 (baseline es sin thinking). |
 | `MEALFIT_CULINARY_JUDGE_TIMEOUT_S` | `45` | Clamp `[10, 120]`. Timeout de la llamada al juez; `asyncio.wait_for` externo da `+5s` de margen. |
 
 Los 4 knobs de la Capa 2 se leen a **import-time** de `graph_orchestrator.py` (constantes módulo-level, no releídas por llamada) — un script que necesite forzar `warn` para calibrar debe escribir `os.environ` ANTES del primer `import graph_orchestrator` (ver docstring de `scripts/calibrate_culinary_judge.py`, "TRAMPA Nº1").
@@ -88,6 +88,37 @@ Mapeo verbo-de-receta → método (`VERB_TO_METHOD` en [`culinary_coherence.py`]
 - **`sofr[ií]\w*`/`dora\w*` → `saltear`** (NO `freir`/`tostar`). Sofreír cebolla/ají es la base de casi toda receta dominicana y la metadata de Vegetales lleva `saltear` pero no `freir`; "dora" (sellar carne/pollo en sartén, primer paso de casi todo guiso) NO es tostar pan/casabe — `tostar` no está en `prep_methods` de proteínas frescas. Ambas fusionadas en la MISMA clave que `saltea\w*` (no en claves separadas) porque dos claves resolviendo al mismo método duplicaban la violación V1 vía `dict.fromkeys` — sin el dedup, "Sofríe y saltea el X" producía 2 violaciones idénticas.
 
 **Política NULL = fail-open, por check**: si un alimento no tiene `prep_methods`/`ready_to_eat` (columna `NULL`, DEFAULT de la migración), el scan se salta ESE check para ESE alimento — nunca inventa, nunca asume `false`. `scan_coverage()` mide la fracción de alimentos del plan con metadata (telemetría del rollout warn→block).
+
+**[P1-CULINARY-METADATA-BETA · 2026-08-19] Ronda 3 — el hueco que reabrió el catálogo beta.**
+Las 141 filas de países beta que `P1-COUNTRY-SYSTEM-F2` insertó el 2026-08-17 nacieron con
+`prep_methods`/`ready_to_eat` en NULL al 100%, devolviendo la cobertura del catálogo de 100% a
+**206/347 = 59%**. Sobre un corpus de recetas beta la cobertura medida era **24%**: un plan
+dominicano no notaba nada (usa filas DO), un plan español se quedaba sin capa 1 entera. El
+backfill (76 filas por default de categoría + 65 de Despensa una a una) la devuelve a 100%, y el
+CHECK `master_ingredients_prep_methods_not_null` impide que el próximo lote de altas lo repita —
+la invariante vive ahora donde vive el dato, no en un test parser-based. Corpus:
+`tests/fixtures/culinary_beta/`. Test: `test_p1_culinary_metadata_beta.py`.
+
+**[P1-CULINARY-HASTA-DORAR · 2026-08-19] «hasta dorar» ya no es una orden de saltear.**
+`dora(?!d[oa]s?)\w*` excluía los participios («dorado/dorada») pero **no el
+infinitivo**, así que «Hornea las papas hasta dorar» acusaba de salteado a todo alimento
+del paso sin `saltear` en `prep_methods`. Medido sobre 33 planes REALES de producción:
+**12 de 63 violaciones V1 eran esto — 19% de ruido**, y contra quien menos toca el fuego
+(Aceite de oliva, Miel, Vainilla, Mango, Linaza, Plátano maduro), porque V1 acusa a
+cualquier alimento nombrado en un paso largo multi-cláusula.
+
+Importaba más de lo que parecía: en `warn` era ruido de telemetría, pero la escalada a
+`block` que persigue `P1-CULINARY-CONTRACT-BLOCK` convertiría ese 19% en rechazos de
+planes buenos.
+
+El fix es `(?<!hasta )dora…`, el mismo mecanismo que el `(?<!para )horno` de la ronda
+anterior y por la misma razón: una palabra que describe el envase o el PUNTO de cocción
+no es una instrucción. Dos alternativas se descartaron **por medición, no por intuición**:
+excluir solo el infinitivo desnudo (`|r`) caza 6 de 12 y deja pasar «hasta dorarlas»;
+añadir `(?<!a )` encima no cambia ni una violación sobre datos reales. El imperativo
+sigue intacto («Dora la cebolla», «Dóralo por ambos lados»): romperlo reviviría la
+regresión que la Task-5 del P-fix original ya pagó. Test:
+[`test_p1_culinary_hasta_dorar.py`](../tests/test_p1_culinary_hasta_dorar.py).
 
 **Cobertura actual** (migración base, antes del backfill `leche%hervir`): `prep_methods` 148/204 filas de `master_ingredients` (~72.5%), `ready_to_eat` 99/204 (~48.5%, menor porque Vegetales/Víveres solo setean `prep_methods` por diseño del backfill de categoría). El backfill `leche%hervir` solo AÑADE un método a filas ya no-NULL (no cambia el conteo de cobertura). El resto queda `NULL` — fail-open, no un gap de esta task; un audit de huecos fuera del golden set queda pendiente para una task futura.
 
@@ -138,9 +169,9 @@ Cerrada. Los 9 FPs (re-evaluados con catálogo sintético que reproduce el caso 
 
 ## Juez LLM (Capa 2, F3): rúbrica y calibración
 
-`run_culinary_judge(plan)` ([`graph_orchestrator.py`](../graph_orchestrator.py)) hace UNA llamada batched (no por día) a `CULINARY_JUDGE_MODEL` con `with_structured_output(CulinaryJudgeReport)`. Fail-open total: knob `off`, timeout, o cualquier excepción del LLM/parseo → `None`, nunca bloquea el plan por su cuenta. Ve la receta completa por plato (`recipe`, pasos) — el único ojo LLM del pipeline que la ve; el reviewer médico solo recibe nombre+ingredientes.
+`run_culinary_judge(plan, country="DO")` ([`graph_orchestrator.py`](../graph_orchestrator.py)) hace UNA llamada batched (no por día) a `CULINARY_JUDGE_MODEL` con `with_structured_output(CulinaryJudgeReport)`. Fail-open total: knob `off`, timeout, o cualquier excepción del LLM/parseo → `None`, nunca bloquea el plan por su cuenta. Ve la receta completa por plato (`recipe`, pasos) — el único ojo LLM del pipeline que la ve; el reviewer médico solo recibe nombre+ingredientes. `country` ([P1-COUNTRY-SYSTEM-F1 · 2026-08-16, Task 3](country_system_f1.md)) selecciona la rúbrica vía `_culinary_judge_rubric_for_country`: `'DO'`/default deja `_CULINARY_JUDGE_RUBRIC` byte-idéntico (cacheado por país); país beta sustituye "Eres un juez culinario dominicano experto" por una variante que nombra la cocina de `COUNTRY_PROFILES[cc]['name_es']` + cocina internacional.
 
-`CulinaryViolation.tipo` acepta exactamente 5 valores canónicos: `combo_absurdo`, `tecnica_impropia`, `paso_incoherente`, `slot_inapropiado`, `nombre_no_corresponde`. La rúbrica (`_CULINARY_JUDGE_RUBRIC`, construida UNA vez a import-time para cache hits de DeepSeek sobre el prefix estable) combina: hasta 10 nombres de ejemplo por slot desde `data/dish_templates.json`, la REGLA DURA de horario (arroz/locrio/moro/pasta nunca en desayuno/cena; sopones solo en almuerzo; postre como plato principal), la GUÍA POSITIVA por horario de `constants.SLOT_POSITIVE_HINT`, y las definiciones de los 5 tipos con ejemplos.
+`CulinaryViolation.tipo` acepta exactamente 5 valores canónicos: `combo_absurdo`, `tecnica_impropia`, `paso_incoherente`, `slot_inapropiado`, `nombre_no_corresponde`. La rúbrica (`_CULINARY_JUDGE_RUBRIC`, construida UNA vez a import-time para cache hits de GLM sobre el prefix estable) combina: hasta 10 nombres de ejemplo por slot desde `data/dish_templates.json`, la REGLA DURA de horario (arroz/locrio/moro/pasta nunca en desayuno/cena; sopones solo en almuerzo; postre como plato principal), la GUÍA POSITIVA por horario de `constants.SLOT_POSITIVE_HINT`, y las definiciones de los 5 tipos con ejemplos.
 
 **Iteración de rúbrica (2026-08-01, ronda 1 — spec §6):** la corrida baseline inicial con la rúbrica original de Task 11 dio juez recall 78% + FP 16.7% (**FALLA** ambos criterios). Causa raíz de los 6 FPs: la GUÍA POSITIVA de `cena` dice "evita... los guisos pesados" — el juez la trataba como regla dura y marcaba `slot_inapropiado` sobre guisos de proteína legítimos como cena (pollo/carne/pescado guisado), que SÍ son cena dominicana real y ninguno de los 5 `golden_XX_bueno` los etiqueta como defecto. Causa raíz de los 2 misses de recall: (a) el swap `golden_02_mutado` renombra "Moro de habichuelas negras" → "Moro de guandules" **sin cambiar la categoría del plato** (sigue siendo arroz+legumbre, solo cambia la legumbre) — más sutil que los otros 3 swaps de `nombre_no_corresponde` del golden set, que sí cambian de categoría de plato; (b) el defecto de `tecnica_impropia` en `golden_03_mutado` (yogurt sobre la plancha) lo detectaba pero lo etiquetaba `paso_incoherente` — ambigüedad de frontera entre "técnica mal aplicada en un paso" y "dos pasos que se contradicen".
 
@@ -154,10 +185,10 @@ El fix de la ronda 1 (punto 2 arriba) restringe `slot_inapropiado` del juez a vi
 
 ### Calibración 2026-08-01 (corrida final, tras la corrección post-review)
 
-Comando: `python scripts/calibrate_culinary_judge.py` (modelo `deepseek-v4-flash`, sin `--thinking`, `MEALFIT_CULINARY_JUDGE_GUARD=warn` forzado por el script). El script ahora también desglosa FP por `tipo` de violación y corre 1 probe held-out generado en runtime (11 llamadas LLM reales: 5 buenos + 5 mutados + 1 probe):
+Comando: `python scripts/calibrate_culinary_judge.py` (modelo `glm-5.3-flash`, sin `--thinking`, `MEALFIT_CULINARY_JUDGE_GUARD=warn` forzado por el script). El script ahora también desglosa FP por `tipo` de violación y corre 1 probe held-out generado en runtime (11 llamadas LLM reales: 5 buenos + 5 mutados + 1 probe):
 
 ```
-Modelo juez: deepseek-v4-flash  thinking=False  guard=warn  timeout=45s
+Modelo juez: glm-5.3-flash  thinking=False  guard=warn  timeout=45s
 
 FP capa1 sobre buenos: 0 (criterio: 0)
 FP juez  sobre buenos: 0 de 36 meals = 0.0% (criterio: <5%)
@@ -186,14 +217,14 @@ Veredicto: capa1=OK  juez=FALLA  probe=OK
 
 Caveats:
 - **N pequeño**: el total juez es 9 defectos sobre 5 planes — cada miss/hit individual mueve el recall agregado ±11 puntos. Con un floor de 0.80 y N=9, el resultado puede oscilar entre corridas por pura varianza de muestreo (78% en esta corrida, 89% en la corrida previa con la rúbrica que sobreajustaba). Antes de decidir la escalada, T14 debería promediar varias corridas o ampliar el golden set — un solo run cerca del floor no es suficiente evidencia en ningún sentido.
-- **Costo real acumulado de toda la sesión de calibración** (ronda 1 + corrección + verificaciones ad-hoc + corrida final + probe): **63 llamadas**, **$0.0119** vía `llm_usage_events` (`node='culinary_judge'`, `model='deepseek-v4-flash'`: 221 667 input tokens, 173 184 cache hit — ~78% del prefix de la rúbrica cacheado por DeepSeek — + 16 783 output tokens). Muy por debajo del estimado "centavos" del brief. Una corrida real de 11 llamadas (el tamaño del script con el probe incluido) cuesta una fracción de centavo.
+- **Costo real acumulado de toda la sesión de calibración** (ronda 1 + corrección + verificaciones ad-hoc + corrida final + probe): **63 llamadas**, **$0.0119** vía `llm_usage_events` (`node='culinary_judge'`, `model='glm-5.3-flash'`: 221 667 input tokens, 173 184 cache hit — ~78% del prefix de la rúbrica cacheado por GLM — + 16 783 output tokens). Muy por debajo del estimado "centavos" del brief. Una corrida real de 11 llamadas (el tamaño del script con el probe incluido) cuesta una fracción de centavo.
 - **`--thinking` no se probó** en esta calibración — la baseline es sin razonamiento extendido (consistente con la decisión general del owner P1-DAYGEN-TIER-MODEL de no usar thinking en nodos de red/apoyo salvo medición explícita).
 
 ### Re-calibración 2026-08-01 (post-backfill)
 
 **Contexto:** el backfill ronda 2 de metadata culinaria (`P2-CULINARY-METADATA-ROUND2`) cerró la cobertura de `master_ingredients` a 100% (antes ~72.5%/48.5% `prep_methods`/`ready_to_eat`, ver "Vocabulario `prep_methods` (SSOT)" arriba). Ese backfill solo puede mover capa1 (el scan determinista lee esa metadata) — el juez (capa2) nunca la lee, así que a priori no debía mover su recall. El script también ganó 2 probes informativos nuevos desde la corrida anterior (`(a)` pescado "en anillos", `(b)` doble-grano bulgur+arroz, `P2-VEG-VOLUME-TOKENS-2`).
 
-Dado el N pequeño ya documentado (9 defectos-juez, cada hit/miss mueve el recall agregado ±11pp), esta re-calibración corre el script **3 veces bajo las mismas condiciones** (`deepseek-v4-flash`, sin `--thinking`, `MEALFIT_CULINARY_JUDGE_GUARD=warn` forzado por el script) y usa la **mediana** de las 3 como criterio de decisión — nunca una corrida aislada.
+Dado el N pequeño ya documentado (9 defectos-juez, cada hit/miss mueve el recall agregado ±11pp), esta re-calibración corre el script **3 veces bajo las mismas condiciones** (`glm-5.3-flash`, sin `--thinking`, `MEALFIT_CULINARY_JUDGE_GUARD=warn` forzado por el script) y usa la **mediana** de las 3 como criterio de decisión — nunca una corrida aislada.
 
 ⚠️ **Nota operacional (Windows, no es un bug de la rúbrica):** la primera invocación crasheó con `UnicodeEncodeError` al imprimir el separador `→` bajo la consola cp1252 por defecto de PowerShell/Git Bash en Windows — el juez ya había respondido (10-11 llamadas ya facturadas) pero el script murió antes de imprimir el probe held-out y los 2 probes informativos. Se resuelve con `PYTHONIOENCODING=utf-8` antes de invocar el script (no se tocó el script — es un gotcha de terminal, no de lógica). Esa corrida parcial se **descarta** de las 3 mediciones oficiales (nunca completó los probes) pero sus llamadas sí se facturaron y están incluidas en el costo total de abajo.
 
@@ -223,7 +254,7 @@ Comando (×3, mismas condiciones): `PYTHONIOENCODING=utf-8 python scripts/calibr
 
 Ninguna clase individual falla en las 3 corridas — el déficit de recall agregado es varianza de muestreo distribuida entre `combo_absurdo` y `nombre_no_corresponde` (el mismo patrón que la corrida original: "78% en esta corrida, 89% en la corrida previa... por pura varianza de muestreo"), no un sesgo sistemático de una clase. Condición de re-iteración no cumplida → rúbrica sin cambios (`graph_orchestrator.py` intacto en esta ronda).
 
-**Costo:** **50 llamadas LLM reales, $0.003894 total** (`llm_usage_events`, `node='culinary_judge'`, `model='deepseek-v4-flash'`: 183 723 input tokens, 180 992 cache hit — ~98% del prefix de la rúbrica cacheado por DeepSeek — + 10 831 output tokens), de las cuales 11 llamadas (~$0.0008) pertenecen a la corrida descartada por el crash de encoding (5 buenos + 5 mutados + 1 probe held-out, antes de morir en el print) y 39 llamadas (13×3: 5 buenos + 5 mutados + 1 probe held-out + 2 probes informativos por corrida, ~$0.0031) pertenecen a las 3 corridas oficiales de la tabla. Muy por debajo del estimado "centavos" del brief.
+**Costo:** **50 llamadas LLM reales, $0.003894 total** (`llm_usage_events`, `node='culinary_judge'`, `model='glm-5.3-flash'`: 183 723 input tokens, 180 992 cache hit — ~98% del prefix de la rúbrica cacheado por GLM — + 10 831 output tokens), de las cuales 11 llamadas (~$0.0008) pertenecen a la corrida descartada por el crash de encoding (5 buenos + 5 mutados + 1 probe held-out, antes de morir en el print) y 39 llamadas (13×3: 5 buenos + 5 mutados + 1 probe held-out + 2 probes informativos por corrida, ~$0.0031) pertenecen a las 3 corridas oficiales de la tabla. Muy por debajo del estimado "centavos" del brief.
 
 **Veredicto: NO AUTORIZA la escalada OFF→`warn` del knob `MEALFIT_CULINARY_JUDGE_GUARD`.** La mediana de 3 corridas post-backfill (78%, 78%, 89% → mediana 78%) reproduce EXACTAMENTE el resultado de la corrida original (78%) — el backfill de metadata (que solo afecta capa1) no movió el recall del juez (capa2, que nunca leyó `prep_methods`/`ready_to_eat`), y la rúbrica no se tocó porque ninguna clase falló consistentemente en las 3 corridas (condición de re-iteración no cumplida). El knob permanece `off`. Frente a la pregunta que motivó este protocolo de 3 corridas ("una corrida puede caer 78 u 89 por un solo punto"): la mediana confirma que 78% no es el resultado desafortunado de una sola corrida — es el centro de la distribución (2 de 3 corridas independientes cayeron ahí). capa1 sigue en 100%/0FP (contrato F1 re-confirmado, sin regresión post-backfill). El probe held-out gating sigue cazado en las 3 corridas (la regla generalizada de `nombre_no_corresponde` sigue sin sobreajuste). Los 2 probes informativos nuevos quedan como evidencia para T14: `(a)` técnica de corte incorrecta no cubierta hoy por la rúbrica, `(b)` doble-grano cazado consistentemente pero bajo `paso_incoherente` en vez de `combo_absurdo`.
 
@@ -243,7 +274,7 @@ Próximo paso sugerido para T14 (no ejecutado en esta re-calibración — fuera 
 
 ### Las 3 corridas (flash, post-v3)
 
-Mismo protocolo que la re-calibración post-backfill (`PYTHONIOENCODING=utf-8 python scripts/calibrate_culinary_judge.py`, `deepseek-v4-flash`, sin `--thinking`, guard forzado a `warn` por el script):
+Mismo protocolo que la re-calibración post-backfill (`PYTHONIOENCODING=utf-8 python scripts/calibrate_culinary_judge.py`, `glm-5.3-flash`, sin `--thinking`, guard forzado a `warn` por el script):
 
 | Corrida | capa1 recall | capa1 FP | juez recall | juez FP | `combo_absurdo` | `nombre_no_corresponde` | `tecnica_impropia` | probe held-out (gating) | probe (a) anillos | probe (b) doble-grano | veredicto script |
 |---|---|---|---|---|---|---|---|---|---|---|---|

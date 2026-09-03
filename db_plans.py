@@ -544,6 +544,90 @@ def set_meal_plan_for_update_timeouts(cursor) -> None:
         )
 
 
+# ============================================================
+# `_display` invalidado por el ACTO de reescribir (P2-DISPLAY-POP-VECINO · 2026-08-21)
+# ============================================================
+#
+# La invariante es simple: si los gramos de un meal cambian, su `_display[locale]` —que
+# espeja `ingredients` y `recipe` POR ÍNDICE— pasa a mentir, y hay que tirarlo.
+#
+# Once `pop("_display")` repartidos por `graph_orchestrator.py`, `routers/plans.py` y
+# `tools.py` la implementaban a mano, cada uno colgando de una función con nombre. MEDIDO:
+# SEIS re-escritores plan-wide reescriben en sitio sin pop. Y el séptimo que alguien
+# escriba mañana nace mintiendo por omisión, porque la invariante no vive en ningún sitio
+# que él vaya a tocar — vive en los nombres de sus vecinos.
+#
+# Esto la ata al ACTO. `update_plan_data_atomic` es el cuello de botella por el que pasa
+# toda escritura de `plan_data` bajo lock (invariante I7 de CLAUDE.md), así que un
+# re-escritor nuevo queda cubierto sin wiring. Es la lección de `P1-COUNTRY-SYSTEM-F1`:
+# gatear call sites uno a uno es el agujero, no el cierre.
+#
+# NO SUSTITUYE a los once pops: siguen siendo correctos, más baratos —popean sin recorrer
+# el plan— y algunos corren fuera de este persist. Esto es la red de debajo.
+#
+# Un pop de más es gratis (se re-traduce ese meal); un pop de menos deja la pantalla
+# mintiendo gramos de forma permanente, porque nadie lo reintenta.
+#
+# `P2-MUTATOR-PURITY`: CPU puro sobre el dict. Corre dentro del `SELECT … FOR UPDATE`
+# reteniendo el row-lock y una conexión del pool, así que aquí no entra ni una llamada a
+# DB ni nada que espere.
+
+
+def _huellas_de_meals(plan_data) -> dict:
+    """`(dia, comida) -> huella` de los tres campos que `_display` espeja.
+
+    Los arrays se guardan como TUPLA y no por longitud: un re-cuantizador que cambia
+    «180 g» por «90 g» conserva el número de líneas, que es justo el caso que motiva
+    esto.
+    """
+    fuera = {}
+    if not isinstance(plan_data, dict):
+        return fuera
+    dias = plan_data.get("days")
+    if not isinstance(dias, list):
+        return fuera
+    for i, dia in enumerate(dias):
+        if not isinstance(dia, dict):
+            continue
+        meals = dia.get("meals")
+        if not isinstance(meals, list):
+            continue
+        for j, m in enumerate(meals):
+            if not isinstance(m, dict):
+                continue
+            fuera[(i, j)] = (
+                m.get("name"),
+                tuple(m.get("ingredients")) if isinstance(m.get("ingredients"), list) else None,
+                tuple(m.get("recipe")) if isinstance(m.get("recipe"), list) else None,
+            )
+    return fuera
+
+
+def _popear_display_de_lo_que_cambio(antes: dict, plan_data) -> int:
+    """Tira el `_display` de los meals cuya huella cambió. Devuelve cuántos.
+
+    Un meal que aparece DESPUÉS y no antes (un día nuevo, un swap que reordena) también
+    se popea: su `_display` heredado, si lo trae, no se corresponde con nada verificado.
+    """
+    despues = _huellas_de_meals(plan_data)
+    popeados = 0
+    if not despues:
+        return 0
+    dias = plan_data.get("days") if isinstance(plan_data, dict) else None
+    if not isinstance(dias, list):
+        return 0
+    for (i, j), huella in despues.items():
+        if antes.get((i, j)) == huella:
+            continue
+        try:
+            meal = dias[i]["meals"][j]
+        except (IndexError, KeyError, TypeError):
+            continue
+        if isinstance(meal, dict) and meal.pop("_display", None) is not None:
+            popeados += 1
+    return popeados
+
+
 def update_plan_data_atomic(
     plan_id: str,
     mutator,
@@ -687,11 +771,28 @@ def update_plan_data_atomic(
                 if not isinstance(current, dict):
                     current = {}
 
+                # [P2-DISPLAY-POP-VECINO · 2026-08-21] La huella ANTES del mutator: es
+                # el único momento en que se tiene el estado previo con el lock puesto.
+                _huellas_previas = _huellas_de_meals(current)
+
                 result = mutator(current)
                 if result is False:
                     return current
 
                 new_data = result if isinstance(result, dict) else current
+
+                # …y el barrido DESPUÉS. Cubre a cualquier re-escritor, tenga o no su
+                # propio pop, y por eso el séptimo que alguien escriba no nace mintiendo.
+                # Nunca puede tumbar el persist: corre dentro del FOR UPDATE.
+                try:
+                    _n_pop = _popear_display_de_lo_que_cambio(_huellas_previas, new_data)
+                    if _n_pop:
+                        logger.debug(
+                            f"[P2-DISPLAY-POP-VECINO] plan={plan_id}: {_n_pop} meal(s) "
+                            f"perdieron su `_display` porque cambiaron sus gramos."
+                        )
+                except Exception as _e_pop:
+                    logger.warning(f"[P2-DISPLAY-POP-VECINO] barrido falló: {_e_pop!r}")
                 # [P2-OPEN-1] UPDATE con `AND user_id = %s` defense-in-depth.
                 # Aunque ya verificamos ownership en el SELECT bajo FOR UPDATE
                 # (mismo lock que cubre el UPDATE), el filtro repetido ancla
@@ -1578,6 +1679,90 @@ def save_new_meal_plan_atomic(user_id: str, insert_data: dict, return_id: bool =
     return plan_id if return_id else True
 
 
+def fill_placeholder_meal_plan_atomic(plan_id: str, user_id: str, insert_data: dict) -> Optional[str]:
+    """[P1-ARQ25-F1-LIFECYCLE · 2026-09-02] Rellena el PLACEHOLDER que creó la cola
+    (`generation_lifecycle.create_placeholder_plan_and_enqueue_initial`) con el plan ya
+    generado. Es el gemelo de `save_new_meal_plan_atomic` para el Bloque 1 vía cola: mismo
+    `insert_data`, pero UPDATE en vez de INSERT, y sin cancelar chunks (el chunk 0 que nos
+    está ejecutando es de este mismo plan).
+
+    Contrato:
+      · Sólo rellena filas con `generation_status='generating'` — si alguien ya la rellenó
+        (worker desplazado) devuelve None sin tocar nada.
+      · I2 (`AND user_id = %s`), I7 (advisory lock + `FOR UPDATE`), I11 (el finalize
+        CPU-bound corre ANTES de abrir la transacción, como en el atomic).
+      · Conserva del placeholder `_run_id` y las lecciones heredadas si el resultado no las trae.
+    Devuelve `plan_id` si actualizó exactamente 1 fila; None en cualquier otro caso.
+    """
+    if not connection_pool:
+        raise RuntimeError("db connection_pool is not available.")
+    import copy
+    import json
+    from psycopg.rows import dict_row
+    from psycopg.types.json import Jsonb
+
+    safe = copy.deepcopy(insert_data)
+    safe.pop("user_id", None)
+    _finalize_plan_data_for_insert(safe)
+    pd_new = safe.get("plan_data") if isinstance(safe.get("plan_data"), dict) else None
+    if pd_new is None:
+        return None
+    _PRESERVE = ("_run_id", "_lifetime_lessons_history", "_lifetime_lessons_summary",
+                 "_lifetime_lessons_inherited_from", "_placeholder_created_at")
+
+    with connection_pool.connection() as conn:
+        with conn.transaction():
+            with conn.cursor(row_factory=dict_row) as cursor:
+                set_meal_plan_for_update_timeouts(cursor)
+                acquire_meal_plan_advisory_lock(cursor, plan_id, purpose="general")
+                cursor.execute(
+                    "SELECT plan_data FROM meal_plans WHERE id = %s AND user_id = %s FOR UPDATE",
+                    (plan_id, user_id),
+                )
+                row = cursor.fetchone()
+                if not row:
+                    logger.warning(f"[ARQ25-F1/FILL] placeholder {str(plan_id)[:8]} no existe o no es de {str(user_id)[:8]}")
+                    return None
+                prev = row.get("plan_data")
+                if isinstance(prev, str):
+                    try:
+                        prev = json.loads(prev)
+                    except Exception:
+                        prev = {}
+                prev = prev if isinstance(prev, dict) else {}
+                if str(prev.get("generation_status") or "") != "generating":
+                    logger.warning(
+                        f"[ARQ25-F1/FILL] plan {str(plan_id)[:8]} ya no es placeholder "
+                        f"(status={prev.get('generation_status')!r}); no se sobrescribe."
+                    )
+                    return None
+                for k in _PRESERVE:
+                    if k in prev and not pd_new.get(k):
+                        pd_new[k] = prev[k]
+                _apply_inherited_lifetime_lessons(user_id, {"plan_data": pd_new}, cursor=cursor)
+
+                sets, vals = [], []
+                for col, v in safe.items():
+                    sets.append(f"{col} = %s")
+                    if col in _MEAL_PLAN_ARRAY_COLS:
+                        vals.append(v)
+                    elif col == "profile_embedding" and isinstance(v, list):
+                        vals.append(str(v))
+                    elif isinstance(v, (dict, list)):
+                        vals.append(Jsonb(v))
+                    else:
+                        vals.append(v)
+                vals.extend([plan_id, user_id])
+                cursor.execute(  # pyright: ignore[reportArgumentType]  # sql dinámico (mismo patrón que el INSERT builder)
+                    f"UPDATE meal_plans SET {', '.join(sets)} WHERE id = %s AND user_id = %s",
+                    vals,
+                )
+                if cursor.rowcount != 1:
+                    return None
+    logger.info(f"✅ [ARQ25-F1/FILL] placeholder {str(plan_id)[:8]} rellenado ({len(pd_new.get('days') or [])} días)")
+    return str(plan_id)
+
+
 def save_new_meal_plan_robust(insert_data: dict, additional_queries: Optional[List[Tuple[str, tuple]]] = None, return_id: bool = False):
     """Guarda un nuevo plan nutricional con fallback por si faltan columnas optimizadas.
 
@@ -1784,6 +1969,40 @@ def get_latest_meal_plan_with_id(user_id: str):
     except Exception as e:
         logger.error(f"Error obteniendo plan con ID: {e}")
         return None
+
+# ── [P1-ARQ25-F1-CLOSE · 2026-09-02] Lectores «usables»: saltan el placeholder de la cola ──
+# Desde la Fase 1 el plan nace en `meal_plans` ANTES de generarse (`generation_status =
+# 'generating'`, `days = []`, I1). `get_latest_meal_plan*` devuelve el más reciente por fecha,
+# así que durante los minutos de generación el coach y las tools del agente veían un plan
+# vacío y hablaban como si el usuario no tuviera menú. Estos dos lectores devuelven el plan
+# más reciente CON contenido (o no-placeholder). Los routers que resuelven «el plan al que
+# pertenece esta mutación» siguen usando los lectores de siempre a propósito: allí el
+# placeholder SÍ es el plan (adjuntar el run, dedup de creación reciente).
+USABLE_PLAN_SQL_FILTER = (
+    "NOT (coalesce(plan_data->>'generation_status', '') = 'generating' "
+    "AND jsonb_array_length(coalesce(plan_data->'days', '[]'::jsonb)) = 0)"
+)
+
+
+def get_latest_usable_meal_plan_with_id(user_id: str):
+    """Plan más reciente del usuario que NO sea un placeholder vacío de la cola (id + plan_data)."""
+    try:
+        res = execute_sql_query(
+            "SELECT id, plan_data, created_at FROM meal_plans WHERE user_id = %s AND "
+            + USABLE_PLAN_SQL_FILTER + " ORDER BY created_at DESC LIMIT 1",
+            (user_id,), fetch_one=True,
+        )
+        return res or None
+    except Exception as e:
+        logger.error(f"Error obteniendo plan usable con ID: {e}")
+        return None
+
+
+def get_latest_usable_meal_plan(user_id: str):
+    """Como `get_latest_meal_plan`, saltando el placeholder vacío de la cola. Devuelve plan_data."""
+    rec = get_latest_usable_meal_plan_with_id(user_id)
+    return rec.get("plan_data") if isinstance(rec, dict) else None
+
 
 def update_meal_plan_data(plan_id: str, new_plan_data: dict, user_id: Optional[str] = None):
     """[P1-NEW-3 · 2026-05-10] Actualiza el plan_data JSONB de un plan

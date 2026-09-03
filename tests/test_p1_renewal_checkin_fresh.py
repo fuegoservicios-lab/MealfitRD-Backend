@@ -14,11 +14,19 @@ tooltip-anchor: P1-RENEWAL-CHECKIN-FRESH
 """
 from __future__ import annotations
 
+import pytest
+
 from pathlib import Path
 
 _ROOT = Path(__file__).resolve().parents[2]
-_PLAN = (_ROOT / "frontend" / "src" / "pages" / "Plan.jsx").read_text(encoding="utf-8")
-_HOOK = (_ROOT / "frontend" / "src" / "hooks" / "useRegeneratePlan.js").read_text(encoding="utf-8")
+@pytest.fixture(scope="module", autouse=True)
+def _load_frontend_sibling_sources(frontend_repo_path):
+    # La fixture compartida salta el módulo antes de cualquier I/O si falta el hermano.
+    _ = frontend_repo_path
+    global _HOOK, _PLAN
+    _PLAN = (_ROOT / "frontend" / "src" / "pages" / "Plan.jsx").read_text(encoding="utf-8")
+    _HOOK = (_ROOT / "frontend" / "src" / "hooks" / "useRegeneratePlan.js").read_text(encoding="utf-8")
+
 
 
 def test_hook_passes_plan_created_at():

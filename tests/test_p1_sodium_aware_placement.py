@@ -76,7 +76,12 @@ def test_directive_injected_before_prompt_format_when_ceiling_exists():
     `prompt_text` (para que el primer intento YA la incluya, no solo los reintentos)."""
     src = _swap_meal_block()
     i_budget = src.find("PRESUPUESTO DE SODIO")
-    i_format = src.find("prompt_text = SWAP_MEAL_PROMPT_TEMPLATE.format(")
+    # [stale-parser fix · P1-COUNTRY-SYSTEM-F1 FINAL-FIX F1c · 2026-08-16] `prompt_text` dejó de
+    # formatear la constante `SWAP_MEAL_PROMPT_TEMPLATE` directa: ahora formatea
+    # `build_swap_meal_prompt_template(_swap_country)` (T2 pattern país-aware — DO/knob-off sigue
+    # devolviendo el MISMO objeto, byte-idéntico). El CONTRATO de este test (la directiva de sodio
+    # se inyecta ANTES de construir prompt_text) sigue intacto; solo el literal buscado cambió.
+    i_format = src.find("prompt_text = build_swap_meal_prompt_template(_swap_country).format(")
     assert i_budget > 0, "directiva de presupuesto de sodio ausente"
     assert i_format > 0, "construcción de prompt_text ausente"
     assert i_budget < i_format, "la directiva debe inyectarse ANTES de formatear prompt_text"
@@ -335,11 +340,18 @@ def _fake_invoke_result(meal_kwargs: dict) -> dict:
 
 
 def _meal_kwargs(name, ingredients):
+    # [2026-08-14] Los pasos eran «prepara los ingredientes / cocina / sirve». El gate
+    # de calidad (`receta no sustantiva`) descuenta los prefijos rituales y exige ≥2
+    # pasos de ≥12 caracteres que no estén en la lista de genéricos: con los de antes
+    # contaba UNO y el swap moría con DISH_QUALITY antes de llegar a la lógica de
+    # sodio que este archivo mide. La fixture no puede ser más pobre que el mínimo que
+    # producción exige, o el test mide el guard equivocado.
     return dict(
         meal="Cena", name=name, desc="Descripción de prueba", prep_time="15 min",
         cals=350, protein=20, carbs=30, fats=10, ingredients=ingredients,
-        recipe=["Mise en place: prepara los ingredientes.",
-                "El Toque de Fuego: cocina.", "Montaje: sirve."],
+        recipe=["Mise en place: pica la cebolla y el ajo en brunoise fina.",
+                "El Toque de Fuego: sella la proteína 4 minutos por lado a fuego medio-alto.",
+                "Montaje: sirve con los vegetales al lado y termina con cilantro fresco."],
     )
 
 
@@ -354,7 +366,7 @@ class _FakeSwapLLM:
         return env
 
 
-class _FakeChatDeepSeekInstance:
+class _FakeChatGLMInstance:
     def __init__(self, envelopes):
         self._envelopes = envelopes
         self.swap_llm = None
@@ -410,24 +422,31 @@ def test_e2e_exceeds_then_fresh_candidate_accepted(_sodium_swap_env, monkeypatch
             ["300 g de camarones", "50 g de queso curado", "2 berenjenas medianas"],
         )),
         _fake_invoke_result(_meal_kwargs(
-            "Pollo a la Plancha con Arroz",
-            ["200 g de pechuga de pollo fresca", "1 taza de arroz integral"],
+            # [2026-08-14] Era «Pollo a la Plancha con Arroz». El slot de esta fixture
+            # es CENA y el backstop de coherencia horaria es-DO rechaza arroz/locrio/
+            # moro de noche — un guard posterior a este test. El swap agotaba sus
+            # reintentos por el arroz y nunca llegaba a evaluar el sodio, que es lo que
+            # este archivo mide. La berenjena ya está en la tabla de sodio de la
+            # fixture (3 mg), así que el candidato sigue siendo FRESCO y bajo en sodio:
+            # cambia el acompañante, no la aritmética.
+            "Pollo a la Plancha con Berenjenas",
+            ["200 g de pechuga de pollo fresca", "2 berenjenas medianas asadas"],
         )),
     ]
     fake_instance_holder = {}
 
-    def _fake_chat_deepseek(*a, **kw):
-        inst = _FakeChatDeepSeekInstance(envelopes)
+    def _fake_chat_glm(*a, **kw):
+        inst = _FakeChatGLMInstance(envelopes)
         fake_instance_holder["inst"] = inst
         return inst
 
     # [P1-SWAP-LUNA · 2026-08-05] El punto de intercepcion se movio: `swap_meal` ya no
-    # instancia `ChatDeepSeek` directamente, sino que pide el cliente a la fabrica por
+    # instancia `ChatGLM` directamente, sino que pide el cliente a la fabrica por
     # proveedor (`build_chat_llm`), porque el modelo del swap paso a ser de OpenAI.
-    # Parchear `agent.ChatDeepSeek` aqui dejaria de interceptar EN SILENCIO y este test
+    # Parchear `agent.ChatGLM` aqui dejaria de interceptar EN SILENCIO y este test
     # llamaria al proveedor DE VERDAD (medido: la suite tardo 149s haciendo llamadas
     # reales antes de corregir esto).
-    monkeypatch.setattr(agent, "build_chat_llm", _fake_chat_deepseek)
+    monkeypatch.setattr(agent, "build_chat_llm", _fake_chat_glm)
 
     result = agent.swap_meal(_base_form_data())
 
@@ -454,12 +473,12 @@ def test_e2e_still_exceeds_after_retry_is_accepted_not_failed(_sodium_swap_env, 
     ]
     fake_instance_holder = {}
 
-    def _fake_chat_deepseek(*a, **kw):
-        inst = _FakeChatDeepSeekInstance(envelopes)
+    def _fake_chat_glm(*a, **kw):
+        inst = _FakeChatGLMInstance(envelopes)
         fake_instance_holder["inst"] = inst
         return inst
 
-    monkeypatch.setattr(agent, "build_chat_llm", _fake_chat_deepseek)
+    monkeypatch.setattr(agent, "build_chat_llm", _fake_chat_glm)
 
     # No debe lanzar excepción — se acepta el 2º candidato pese a seguir sobre el techo.
     result = agent.swap_meal(_base_form_data())
@@ -484,12 +503,12 @@ def test_e2e_knob_off_zero_flow_change(_sodium_swap_env, monkeypatch):
     ]
     fake_instance_holder = {}
 
-    def _fake_chat_deepseek(*a, **kw):
-        inst = _FakeChatDeepSeekInstance(envelopes)
+    def _fake_chat_glm(*a, **kw):
+        inst = _FakeChatGLMInstance(envelopes)
         fake_instance_holder["inst"] = inst
         return inst
 
-    monkeypatch.setattr(agent, "build_chat_llm", _fake_chat_deepseek)
+    monkeypatch.setattr(agent, "build_chat_llm", _fake_chat_glm)
 
     result = agent.swap_meal(_base_form_data())
 
@@ -510,10 +529,10 @@ def test_e2e_knob_off_zero_flow_change(_sodium_swap_env, monkeypatch):
 def _fail_once_then_pass_pantry():
     """Fake de `validate_ingredients_against_pantry`: rechaza la 1ª llamada
     (simula pantry fallando en el intento 1, patrón real de logs de prod), pasa
-    el resto. Firma real: (ingreds, clean_ingredients, allow_external_count=0)."""
+    el resto. La firma conserva también el país del plan."""
     state = {"n": 0}
 
-    def _fake(ingreds, clean, allow_external_count=0):
+    def _fake(ingreds, clean, allow_external_count=0, country="DO"):
         state["n"] += 1
         if state["n"] == 1:
             return "PANTRY_VIOLATION: 'camarones' no está en tu nevera."
@@ -603,12 +622,12 @@ def test_e2e_composite_pantry_then_macros_then_sodium_final_attempt_never_fails(
     envelopes = [_fake_invoke_result(shrimp_meal) for _ in range(3)]
     fake_instance_holder = {}
 
-    def _fake_chat_deepseek(*a, **kw):
-        inst = _FakeChatDeepSeekInstance(envelopes)
+    def _fake_chat_glm(*a, **kw):
+        inst = _FakeChatGLMInstance(envelopes)
         fake_instance_holder["inst"] = inst
         return inst
 
-    monkeypatch.setattr(agent, "build_chat_llm", _fake_chat_deepseek)
+    monkeypatch.setattr(agent, "build_chat_llm", _fake_chat_glm)
 
     form_data = _base_form_data(
         # Puebla `clean_ingredients` (vía el fallback "current_pantry_ingredients" + el
@@ -650,10 +669,10 @@ def test_e2e_composite_final_attempt_accept_does_not_raise_swap_llm_retries_exha
     )
     envelopes = [_fake_invoke_result(shrimp_meal) for _ in range(3)]
 
-    def _fake_chat_deepseek(*a, **kw):
-        return _FakeChatDeepSeekInstance(envelopes)
+    def _fake_chat_glm(*a, **kw):
+        return _FakeChatGLMInstance(envelopes)
 
-    monkeypatch.setattr(agent, "build_chat_llm", _fake_chat_deepseek)
+    monkeypatch.setattr(agent, "build_chat_llm", _fake_chat_glm)
 
     form_data = _base_form_data(
         current_pantry_ingredients=["200 g de pollo", "1 taza de arroz", "1 aguacate"],
@@ -695,12 +714,12 @@ def test_impossible_budget_skips_postcheck_without_consuming_retry(monkeypatch):
     ))]
     fake_instance_holder = {}
 
-    def _fake_chat_deepseek(*a, **kw):
-        inst = _FakeChatDeepSeekInstance(envelopes)
+    def _fake_chat_glm(*a, **kw):
+        inst = _FakeChatGLMInstance(envelopes)
         fake_instance_holder["inst"] = inst
         return inst
 
-    monkeypatch.setattr(agent, "build_chat_llm", _fake_chat_deepseek)
+    monkeypatch.setattr(agent, "build_chat_llm", _fake_chat_glm)
 
     # Resto YA excede el techo (2200 > 2000) antes de sumar ningún candidato.
     result = agent.swap_meal(_base_form_data(sodium_resto_override_mg=2200.0))

@@ -6,9 +6,9 @@ import threading
 import time as _time_module
 from typing import Any, Callable
 from cache_manager import centralized_cache
-# [P0-DEEPSEEK-MIGRATION · 2026-06-12] Gemini → DeepSeek (router por tier en
+# [P0-LLM-PROVIDER-MIGRATION · 2026-06-12] Gemini → GLM (router por tier en
 # llm_provider). Embeddings via capa pluggable embeddings_provider.
-from llm_provider import ChatDeepSeek, DEEPSEEK_FLASH
+from llm_provider import ChatGLM, GLM_FLASH
 from embeddings_provider import get_text_embedding
 from pydantic import BaseModel, Field
 from typing import List, Optional, Literal
@@ -48,7 +48,7 @@ from db import (
 #
 # Knobs:
 #   - MEALFIT_FACT_EXTRACTOR_SHADOW_MODEL (str, default '' = off)
-#       Setear a un model ID alternativo (e.g. 'deepseek-v4-pro' para medir
+#       Setear a un model ID alternativo (e.g. 'glm-5.3' para medir
 #       si PRO extrae mejor que el default flash) para activar el A/B.
 #   - MEALFIT_FACT_EXTRACTOR_SHADOW_SAMPLE_RATE (float, default 0.1)
 #       Fracción de users que ejecutan el shadow (estable por hash(user_id)).
@@ -71,18 +71,18 @@ _FACT_SHADOW_SAMPLE_RATE = _env_float(
 # estos knobs, una deprecation de Google tira la extracción de hechos
 # hasta redeploy (45min de cold start del VPS Oracle). Tooltip-anchor:
 # P2-NEW-FACTEX-PRIMARY-MODEL-KNOB.
-# [P0-DEEPSEEK-MIGRATION · 2026-06-12] Defaults DeepSeek V4 Flash: la
+# [P0-LLM-PROVIDER-MIGRATION · 2026-06-12] Defaults GLM-5.3 Flash: la
 # extracción de hechos es tarea de background (structured extraction a
 # schema) — corre en el modelo barato para TODOS los tiers. Override sin
-# redeploy via knob (e.g. `deepseek-v4-pro` si la calidad de extracción
+# redeploy via knob (e.g. `glm-5.3` si la calidad de extracción
 # clínica degrada visiblemente).
 _FACT_EXTRACTOR_PRIMARY_MODEL = _env_str(
     "MEALFIT_FACT_EXTRACTOR_PRIMARY_MODEL",
-    DEEPSEEK_FLASH,
+    GLM_FLASH,
 )
 _FACT_EXTRACTOR_ROUTER_MODEL = _env_str(
     "MEALFIT_FACT_EXTRACTOR_ROUTER_MODEL",
-    DEEPSEEK_FLASH,
+    GLM_FLASH,
 )
 
 
@@ -119,7 +119,7 @@ def _fact_extractor_llm_timeout_s() -> float:
     )
 
 
-# [P0-DEEPSEEK-MIGRATION · 2026-06-12] El timeout de embeddings
+# [P0-LLM-PROVIDER-MIGRATION · 2026-06-12] El timeout de embeddings
 # (`MEALFIT_EMBEDDING_LLM_TIMEOUT_S`, lección P2-LLM-TIMEOUT-SWEEP) ahora se
 # aplica DENTRO de `embeddings_provider._embeddings_timeout_s` — un solo
 # punto para todos los surfaces de embeddings.
@@ -255,7 +255,7 @@ def _invoke_with_shadow(
     + skip. Cero impacto sobre la respuesta del endpoint.
     """
     pro_t0 = _time_module.monotonic()
-    pro_llm = ChatDeepSeek(
+    pro_llm = ChatGLM(
         model=pro_model,
         temperature=pro_temperature,
         timeout=_fact_extractor_llm_timeout_s(),  # [P2-LLM-TIMEOUT-SWEEP · 2026-05-30]
@@ -271,7 +271,7 @@ def _invoke_with_shadow(
     def _shadow_worker(pro_res=pro_result, pro_ms=pro_duration_ms):
         try:
             flash_t0 = _time_module.monotonic()
-            flash_llm = ChatDeepSeek(
+            flash_llm = ChatGLM(
                 model=_FACT_SHADOW_MODEL,
                 temperature=pro_temperature,
                 timeout=_fact_extractor_llm_timeout_s(),  # [P2-LLM-TIMEOUT-SWEEP · 2026-05-30]
@@ -361,7 +361,7 @@ def should_extract_facts(user_message: str) -> bool:
     Mensaje: "{user_message}"
     """
     
-    llm = ChatDeepSeek(
+    llm = ChatGLM(
         model=_fact_extractor_router_model_name(),
         temperature=0.0,
         timeout=_fact_extractor_router_llm_timeout_s(),  # [P2-LLM-TIMEOUT-SWEEP · 2026-05-30]

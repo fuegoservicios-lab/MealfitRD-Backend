@@ -257,12 +257,32 @@ def test_main_invokes_listener_register(main_src: str):
 
 
 def test_main_imports_listener_register(main_src: str):
-    assert re.search(
+    """El listener se REGISTRA. Por qué vía es otra cosa.
+
+    [P2-LANDING-ENTRY-APP-CODE · 2026-08-14] Este guard exigía un import ESTÁTICO
+    con nombre. Ese era el mecanismo, no el contrato: lo que P3-AUDIT-4 protege es
+    que las credenciales push rotadas no dejen suscripciones zombie en la BD, y
+    para eso basta con que alguien llame a la función.
+
+    El import pasó a dinámico y gateado por host porque el módulo viajaba en el
+    chunk de entrada que descarga también el visitante anónimo del landing — un
+    origen donde nunca puede haber una suscripción que rotar. Se acepta cualquiera
+    de las dos formas y se exige, eso sí, que la LLAMADA exista: sin ella el
+    import (estático o no) sería decorativo, que es el fallo real a evitar.
+    """
+    importado = re.search(
         r"import\s*\{[^}]*\bregisterPushSubscriptionChangeListener\b[^}]*\}\s*from",
         main_src,
-    ), (
-        "P3-AUDIT-4 regresión: import de `registerPushSubscriptionChangeListener` "
-        "perdido en main.jsx."
+    ) or re.search(r"import\(\s*['\"][^'\"]*pushNotifications['\"]\s*\)", main_src)
+    assert importado, (
+        "P3-AUDIT-4 regresión: `pushNotifications` ya no se carga en main.jsx "
+        "(ni estático ni dinámico)."
+    )
+    assert "registerPushSubscriptionChangeListener()" in main_src, (
+        "P3-AUDIT-4 regresión: el módulo se carga pero NADIE llama a "
+        "`registerPushSubscriptionChangeListener()`. Sin la llamada, una rotación "
+        "de credenciales FCM deja la suscripción zombie en la BD y las "
+        "notificaciones dejan de llegar en silencio."
     )
 
 

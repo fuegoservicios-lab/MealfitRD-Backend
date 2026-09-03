@@ -22,6 +22,12 @@ DEBES verificar estos puntos CRÍTICOS:
 
 4. RECHAZOS DEL PERFIL DE GUSTOS: Si el perfil dice que rechazó un ingrediente, NO debe aparecer.
 
+5. SUPLEMENTOS: Si el plan incluye secciones `supplements`, verifícalas contra las condiciones y medicamentos del paciente igual que las comidas. Contraindicaciones que DEBES marcar como "critical":
+   - Estimulantes (pre-entreno, quemadores termogénicos) con hipertensión, embarazo/lactancia, gastritis o antidepresivos IMAO.
+   - Omega-3 suplementario con anticoagulantes (warfarina/acenocumarol).
+   - Creatina o proteína suplementaria (whey/vegana/BCAA) con enfermedad renal.
+   (Espejo del gate determinista `SUPPLEMENT_CONTRAINDICATIONS` — si esa tabla cambia, este punto se actualiza con ella.)
+
 Tu respuesta DEBE ser EXACTAMENTE en este formato JSON:
 {
     "approved": true/false,

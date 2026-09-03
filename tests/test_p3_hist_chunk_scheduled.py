@@ -34,15 +34,42 @@ Fix:
 """
 from __future__ import annotations
 
+import pytest
+
 import re
 from pathlib import Path
 
 
 _BACKEND_ROOT = Path(__file__).resolve().parent.parent
-_HISTORY_JSX = (
-    _BACKEND_ROOT.parent / "frontend" / "src" / "pages" / "History.jsx"
-).read_text(encoding="utf-8")
-_PLANS_ROUTER = (_BACKEND_ROOT / "routers" / "plans.py").read_text(encoding="utf-8")
+@pytest.fixture(scope="module", autouse=True)
+def _load_frontend_sibling_sources(frontend_repo_path):
+    # La fixture compartida salta el módulo antes de cualquier I/O si falta el hermano.
+    _ = frontend_repo_path
+    global _HISTORY_JSX
+    _HISTORY_JSX = (
+        _BACKEND_ROOT.parent / "frontend" / "src" / "pages" / "History.jsx"
+    ).read_text(encoding="utf-8")
+
+_PLANS_ROUTER_COMPLETO = (_BACKEND_ROOT / "routers" / "plans.py").read_text(encoding="utf-8")
+
+
+def _cuerpo_de_history_list() -> str:
+    """[P1-DASH-GENERATING-HONESTY · 2026-08-16] Acota los asserts al handler de
+    ESTE endpoint.
+
+    Hasta hoy buscaban sobre `plans.py` ENTERO, y eso funcionó mientras el split
+    existía en un solo sitio. Al replicarlo en `api_chunk_status` (el Dashboard
+    tenía la misma mentira que este endpoint cerró en mayo) el fichero pasó a
+    contener DOS juegos de `scheduled_count`/`running_now_count`: cualquiera de
+    los dos satisfacía estos asserts, así que borrar el de aquí habría dejado el
+    guard en verde. Un guard que otra copia puede satisfacer no vigila nada.
+    """
+    ini = _PLANS_ROUTER_COMPLETO.index("def api_plans_history_list(")
+    fin = _PLANS_ROUTER_COMPLETO.find("\ndef ", ini + 10)
+    return _PLANS_ROUTER_COMPLETO[ini: fin if fin != -1 else len(_PLANS_ROUTER_COMPLETO)]
+
+
+_PLANS_ROUTER = _cuerpo_de_history_list()
 
 
 def test_marker_present_in_source():
@@ -188,7 +215,15 @@ def test_frontend_legacy_inflight_fallback_does_not_lie():
     assert idx > 0
     block = _HISTORY_JSX[idx:idx + 800]
     # Extraer solo la línea del `_reason = '...';` (no comentarios).
-    reason_match = re.search(r"_reason\s*=\s*['\"`]([^'\"`]+)['\"`]\s*;", block)
+    #
+    # [P1-I18N-HIST-DIAS-FALTANTES · 2026-08-22] El `t(` es OPCIONAL en el patrón. Lo que
+    # este guard protege es el CONTENIDO del copy —que el fallback legacy no afirme
+    # «generando ahora»—, y eso no cambia porque la cadena pase por el motor de idiomas.
+    # Exigir la asignación desnuda ataba el guard a que esa frase NO se pudiera traducir,
+    # que es justo lo contrario de lo que hace falta: la frase la lee el usuario.
+    reason_match = re.search(
+        r"_reason\s*=\s*(?:t\(\s*)?['\"`]([^'\"`]+)['\"`]", block
+    )
     assert reason_match, (
         "No encontré la asignación `_reason = '...'` en el fallback. "
         "Si reformateaste, anclalo aquí."

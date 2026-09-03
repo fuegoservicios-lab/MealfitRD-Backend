@@ -17,14 +17,22 @@ Reset del counter cuando una poll succeed (backend volvió).
 """
 from __future__ import annotations
 
+import pytest
+
 import re
 from pathlib import Path
 
 
 _BACKEND_ROOT = Path(__file__).resolve().parent.parent
-_RECOVERY = (
-    _BACKEND_ROOT.parent / "frontend" / "src" / "components" / "PendingPipelineRecovery.jsx"
-).read_text(encoding="utf-8")
+@pytest.fixture(scope="module", autouse=True)
+def _load_frontend_sibling_sources(frontend_repo_path):
+    # La fixture compartida salta el módulo antes de cualquier I/O si falta el hermano.
+    _ = frontend_repo_path
+    global _RECOVERY
+    _RECOVERY = (
+        _BACKEND_ROOT.parent / "frontend" / "src" / "components" / "PendingPipelineRecovery.jsx"
+    ).read_text(encoding="utf-8")
+
 
 
 def test_marker_present():

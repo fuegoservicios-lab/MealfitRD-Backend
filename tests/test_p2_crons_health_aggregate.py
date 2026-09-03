@@ -200,27 +200,52 @@ def test_p2_endpoint_window_caps_pipeline_metrics_query():
 # Functional: mockear execute_sql_query + scheduler + verificar enrichment
 # ---------------------------------------------------------------------------
 
-def _stub_apscheduler():
-    if "apscheduler" not in sys.modules:
-        for mod_name in (
-            "apscheduler",
-            "apscheduler.schedulers",
-            "apscheduler.schedulers.background",
-            "apscheduler.executors",
-            "apscheduler.executors.pool",
-            "apscheduler.events",
-        ):
-            sys.modules.setdefault(mod_name, types.ModuleType(mod_name))
-        sys.modules["apscheduler.events"].EVENT_JOB_MISSED = 1
-        sys.modules["apscheduler.events"].EVENT_JOB_ERROR = 2
-        sys.modules["apscheduler.events"].EVENT_JOB_EXECUTED = 4
+def _stub_apscheduler(monkeypatch):
+    """[P2-SYSMODULES-STUB-LEAK · 2026-08-22] Preferir el paquete REAL: un stub
+    parcial sombrea `apscheduler.triggers` y el siguiente `import app` del worker
+    muere con «'apscheduler' is not a package» (medido: el mismo helper tenía dos
+    caras, ésta y la de sentry_sdk, según qué hubiera importado antes el worker).
+    Si no hay paquete real, stubs REVERSIBLES vía monkeypatch."""
+    try:
+        import apscheduler  # noqa: F401
+        import apscheduler.events  # noqa: F401
+        import apscheduler.schedulers.background  # noqa: F401
+        import apscheduler.executors.pool  # noqa: F401
+        return
+    except Exception:
+        pass
+    for mod_name in (
+        "apscheduler",
+        "apscheduler.schedulers",
+        "apscheduler.schedulers.background",
+        "apscheduler.executors",
+        "apscheduler.executors.pool",
+        "apscheduler.events",
+    ):
+        if mod_name not in sys.modules:
+            monkeypatch.setitem(sys.modules, mod_name, types.ModuleType(mod_name))
+    ev = sys.modules["apscheduler.events"]
+    for attr, val in (("EVENT_JOB_MISSED", 1), ("EVENT_JOB_ERROR", 2), ("EVENT_JOB_EXECUTED", 4)):
+        monkeypatch.setattr(ev, attr, val, raising=False)
 
 
-def _try_import_system_router():
+def _try_import_system_router(monkeypatch):
     """Importa routers.system con stubs de deps pesadas. Returns None si
-    no es posible (entorno standalone sin Supabase)."""
-    _stub_apscheduler()
-    sys.modules.setdefault("sentry_sdk", types.ModuleType("sentry_sdk"))
+    no es posible (entorno standalone sin Supabase).
+
+    [P2-SYSMODULES-STUB-LEAK · 2026-08-22] El stub de sentry_sdk era un
+    `setdefault` directo: si en este worker nadie había importado el real, el
+    módulo VACÍO quedaba en sys.modules para todo el proceso y el siguiente
+    test que importara `app` moría en `sentry_sdk.init` — cambiando de víctima
+    con el reparto de xdist. Tumbó un deploy. Ahora: real si es importable;
+    si no, stub con `init` no-op y REVERSIBLE vía monkeypatch."""
+    _stub_apscheduler(monkeypatch)
+    try:
+        import sentry_sdk  # noqa: F401
+    except Exception:
+        _stub = types.ModuleType("sentry_sdk")
+        _stub.init = lambda *a, **k: None
+        monkeypatch.setitem(sys.modules, "sentry_sdk", _stub)
     try:
         from routers import system as system_mod
         return system_mod
@@ -228,11 +253,11 @@ def _try_import_system_router():
         return None
 
 
-def test_p2_endpoint_enriches_jobs_from_kv_and_pipeline_metrics():
+def test_p2_endpoint_enriches_jobs_from_kv_and_pipeline_metrics(monkeypatch):
     """Functional: con execute_sql_query mockeado retornando filas falsas
     de KV failures + pipeline_metrics ticks, verificar que cada job en
     la respuesta gana los 3 campos correctamente."""
-    system_mod = _try_import_system_router()
+    system_mod = _try_import_system_router(monkeypatch)
     if system_mod is None:
         pytest.skip("routers.system no importable en entorno test standalone")
 
@@ -350,10 +375,10 @@ def test_p2_endpoint_enriches_jobs_from_kv_and_pipeline_metrics():
     assert j_c["last_tick_at"] is None
 
 
-def test_p2_endpoint_sorts_worst_cron_first():
+def test_p2_endpoint_sorts_worst_cron_first(monkeypatch):
     """Functional: con jobs mixtos (algunos con failures>0, algunos sin
     tracking, algunos sanos), el sort debe poner los peores primero."""
-    system_mod = _try_import_system_router()
+    system_mod = _try_import_system_router(monkeypatch)
     if system_mod is None:
         pytest.skip("routers.system no importable en entorno test standalone")
 
@@ -423,11 +448,11 @@ def test_p2_endpoint_sorts_worst_cron_first():
     )
 
 
-def test_p2_endpoint_resilient_to_kv_query_failure():
+def test_p2_endpoint_resilient_to_kv_query_failure(monkeypatch):
     """Functional: si la query KV falla (DB blip), el endpoint debe
     retornar jobs con campos None pero el response sigue OK (200).
     Back-compat con clientes pre-P2."""
-    system_mod = _try_import_system_router()
+    system_mod = _try_import_system_router(monkeypatch)
     if system_mod is None:
         pytest.skip("routers.system no importable en entorno test standalone")
 

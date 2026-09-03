@@ -31,6 +31,7 @@ from rate_limiter import RateLimiter
 from knobs import _env_bool, _env_int, _env_float, _env_str
 from prompts.help_bot import (
     HELP_BOT_SYSTEM_PROMPT,
+    help_bot_system_prompt,
     HelpChatValidationError,
     sanitize_help_messages,
 )
@@ -66,7 +67,7 @@ _HELP_CHAT_LLM_TIMEOUT_S = _env_float(
 
 _HELP_CHAT_UNAVAILABLE_MSG = (
     "El asistente no está disponible en este momento. "
-    "Escríbenos a fuego.servicios@gmail.com y te ayudamos por correo."
+    "Escríbenos a bioboros.support@gmail.com y te ayudamos por correo."
 )
 
 
@@ -104,10 +105,16 @@ async def api_help_chat(
         raise HTTPException(status_code=400, detail=str(exc))
 
     # Lazy: ver docstring del módulo.
-    from llm_provider import ChatDeepSeek
+    from llm_provider import ChatGLM
     from langchain_core.messages import AIMessage, HumanMessage, SystemMessage
 
-    lc_messages = [SystemMessage(content=HELP_BOT_SYSTEM_PROMPT)]
+    # [P1-HELP-BOT-I18N - 2026-08-20] El idioma sale del cliente y solo SELECCIONA de
+    # un mapa fijo en `prompts.help_bot`: un valor desconocido cae a es-DO, asi que no
+    # hay interpolacion ni superficie de inyeccion. Sin este dato el bot contestaba
+    # siempre en espanol -- la regla 5 del prompt se lo ordenaba.
+    # [P1-HELP-BOT-NATIVE-NO-COMMERCE] flag del cliente nativo: sin precios ni planes.
+    hide_commerce = bool((data or {}).get("hide_commerce"))
+    lc_messages = [SystemMessage(content=help_bot_system_prompt((data or {}).get('locale'), hide_commerce=hide_commerce))]
     for msg in messages:
         if msg["role"] == "user":
             lc_messages.append(HumanMessage(content=msg["content"]))
@@ -115,7 +122,7 @@ async def api_help_chat(
             lc_messages.append(AIMessage(content=msg["content"]))
 
     try:
-        llm = ChatDeepSeek(
+        llm = ChatGLM(
             model=_help_chat_model_name(),
             temperature=0.3,
             max_output_tokens=_HELP_CHAT_MAX_OUTPUT_TOKENS,

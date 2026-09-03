@@ -145,12 +145,64 @@ _DYSLIPIDEMIA_SATFAT_SUBS = (
 # durante el embarazo → un swap ciego de un staple barato sería over-restrictivo (degradaría calidad/costo);
 # el prompt_block ya advierte sobre 'atún grande'. preserve_qty=True (misma porción de pescado blanco).
 # 'Filete de pescado blanco' resuelve al catálogo (lo usa también _HTA_SODIUM_SUBS).
+# [P1-PREG-MERCURY-COUNTRY · 2026-08-23] La lista era la de la FDA traducida al español
+# dominicano: nombraba la ESPECIE y no el nombre con el que se VENDE. Medido con
+# `clinical_backstop_for_meal(country='ES', Embarazo)`: «Pez espada a la plancha» → 1 violación,
+# «Emperador a la plancha» → 0; «Tiburón guisado» → 2, «Cazón en adobo» → 0. «Emperador» es EL
+# nombre comercial del pez espada en toda pescadería española y el cazón en adobo es un plato
+# andaluz clásico. Swap, regenerate-day y chat-modify NO pasan por el grafo: su única defensa
+# determinista es este backstop.
+#
+# Las altas son NOMBRES de especies que ya estaban vetadas, no especies nuevas: AESAN nombra
+# literalmente «pez espada/emperador, atún rojo, tiburón (cazón, marrajo, mielgas, pintarroja y
+# tintorera) y lucio»; carite/sierra son los nombres caribeños del king mackerel, que ya vivía en
+# la tupla como «caballa gigante»/«macarela rey». La exclusión del 'atún' enlatado SIGUE EN PIE:
+# 'atun rojo' es un token de dos palabras y no toca al atún light (FDA Best/Good Choice).
+#
+# Colisión por subcadena VERIFICADA antes de añadir (el matcher es `token in texto`, no
+# word-boundary): barrido de los 20 candidatos contra 7.458 cadenas vivas —347 filas de
+# `master_ingredients` con sus alias y su `name_en`, los 12 JSON de `data/` (plantillas y
+# bibliotecas de platos de los 6 países) y los 24 pools— ⇒ CERO coincidencias, así que ninguna
+# salida dominicana cambia por estas altas.
+#
+# 'peto' (wahoo) se QUEDA FUERA a sabiendas: «espeto» —«espeto de sardinas», plato andaluz— lo
+# contiene como subcadena, y las sardinas son pescado RECOMENDADO en embarazo. Es la colisión
+# «sal ⊂ salsa» otra vez, y wahoo no está en la lista de evitar de la FDA. Los tokens van SIN
+# tilde a propósito: el motor de sustitución compara el token crudo contra un texto ya
+# accent-stripped (`_apply_substitutions_core._match`), así que un token acentuado es peso
+# muerto — 'tiburón'/'pez-espada' se conservan sólo por no tocar lo que ya estaba.
 _PREGNANCY_MERCURY_SUBS = (
     (("tiburon", "tiburón", "pez espada", "pez-espada", "marlin", "blanquillo",
-      "caballa gigante", "macarela rey", "king mackerel"),
+      "caballa gigante", "macarela rey", "king mackerel",
+      # nombres comerciales ES (AESAN): emperador = pez espada; los cinco escualos
+      "emperador", "cazon", "marrajo", "tintorera", "pintarroja", "mielga", "lucio",
+      # el atún que SÍ se evita (bluefin/bigeye); 'atun' desnudo sigue permitido
+      "atun rojo", "patudo",
+      # inglés (etiquetas y recetas importadas)
+      "swordfish", "shark", "tilefish",
+      # nombres caribeños del king mackerel ya vetado
+      "carite", "sierra"),
      "Filete de pescado blanco", "pescado alto en mercurio", True),
 )
 _PREGNANCY_MERCURY_NEGATIVES = ("bajo en mercurio", "blanco", "tilapia")
+# [P1-PREGNANCY-SAFETY-NOTES · 2026-08-09] Cundeamor (melón amargo, Momordica charantia) =
+# uterotónico/abortivo — el reviewer lo rechazó CRITICAL en un plan de embarazo real
+# (corr=d395f5c8, 2026-08-08). Sale por el MISMO mecanismo SSOT que el mercurio, en su PROPIA
+# tupla: `_scan_mercury_pregnancy_violations` (graph_orchestrator) indexa
+# `_PREGNANCY_MERCURY_SUBS[0][0]` y mutar esa tupla lo rompería en silencio. Tayota = sub
+# culinario natural (vegetal de guiso verificado en catálogo), misma porción.
+_PREGNANCY_UTEROTONIC_SUBS = (
+    (("cundeamor", "melon amargo", "melón amargo", "bitter melon", "momordica"),
+     "Tayota", "uterotónico contraindicado en embarazo", True),
+)
+# [P1-CONDITION-SAFETY-NOTES · 2026-08-09] Guanábana (annonacina — neurotóxica en consumo
+# sostenido; sin evidencia de seguridad en embarazo): el reviewer la rechazó CRITICAL en un plan
+# de embarazo REAL (corrida 31304538636, corr=9909fb32 attempt final). Mango = fruta segura del
+# catálogo, misma porción. Tupla propia (mismo criterio index-sensitive que el uterotónico).
+_PREGNANCY_AVOID_FRUIT_SUBS = (
+    (("guanabana", "guanábana", "graviola", "soursop"),
+     "Mango", "fruta sin evidencia de seguridad en embarazo (annonacina)", True),
+)
 
 _DYSLIPIDEMIA_NEGATIVES = ("descremad", "baja en grasa", "bajo en grasa", "light", "desnatad",
                            "sin grasa", "0% grasa", "0 grasa",
@@ -273,7 +325,10 @@ CONDITION_RULES: tuple = (
         precedence=15, classification=CLINICAL_REFERRAL,
         # [P2-PREGNANCY-MERCURY-GUARD · 2026-06-22] Swap determinista de pescado alto en mercurio (ver
         # `_PREGNANCY_MERCURY_SUBS`). Antes embarazo era advisory-puro (solo prompt + FS9).
-        substitutions=_PREGNANCY_MERCURY_SUBS, sub_negatives=_PREGNANCY_MERCURY_NEGATIVES,
+        # [P1-PREGNANCY-SAFETY-NOTES · 2026-08-09] + cundeamor uterotónico (tupla propia, ver arriba).
+        # [P1-CONDITION-SAFETY-NOTES · 2026-08-09] + guanábana (annonacina, rechazo CRITICAL medido).
+        substitutions=_PREGNANCY_MERCURY_SUBS + _PREGNANCY_UTEROTONIC_SUBS + _PREGNANCY_AVOID_FRUIT_SUBS,
+        sub_negatives=_PREGNANCY_MERCURY_NEGATIVES,
         prompt_block=(
             "🤰 REGLA CLÍNICA — EMBARAZO / LACTANCIA (SEGURIDAD — REQUIERE OBSTETRA/NUTRICIONISTA):\n"
             "   • NUNCA un déficit calórico: usa AL MENOS mantenimiento (el requerimiento sube en 2º/3º "
@@ -487,8 +542,31 @@ def detect_active_rules(form_data) -> list:
     return sorted(active, key=lambda r: r.precedence)
 
 
+# [P1-CONDITION-RULES-COUNTRY · 2026-08-21] Nombres es-DO que aparecen en los EJEMPLOS clínicos
+# del prompt, con su equivalente neutro. Es una sustitución de PRESENTACIÓN sobre el texto ya
+# renderizado, no un cambio de las reglas: lo clínico (proteína primero, porción pequeña, sin
+# azúcar) no depende del alimento, y el fragmento de país ya se encarga de elegir los locales.
+# Orden largo→corto para que «pan de casabe» no quede a medias si algún día existe.
+_BETA_CLINICAL_FOOD_SWAPS = (
+    ("Revoltillo de Huevo con Casabe", "Revoltillo de Huevo con Tostada integral"),
+    ("Atún con Casabe", "Atún con Tostada integral"),
+    ("Pescado al Horno con Auyama", "Pescado al Horno con Calabaza"),
+    ("casabe", "pan tostado integral"),
+    ("Casabe", "Pan tostado integral"),
+    ("auyama", "calabaza"),
+    ("Auyama", "Calabaza"),
+    ("vainitas", "judías verdes"),
+    ("Tayota", "Calabacín"),
+    ("tayota", "calabacín"),
+)
+
+
 def build_condition_prompt(form_data) -> str:
-    """Bloque de reglas nutricionales por condición (registry-driven) + nota de comorbilidad."""
+    """Bloque de reglas nutricionales por condición (registry-driven) + nota de comorbilidad.
+
+    [P1-CONDITION-RULES-COUNTRY · 2026-08-21] Para país beta, los NOMBRES es-DO de los ejemplos
+    clínicos se neutralizan al final (ver `_BETA_CLINICAL_FOOD_SWAPS`). DO y knob apagado salen
+    byte-idénticos."""
     active = detect_active_rules(form_data)
     if not active:
         return ""
@@ -545,9 +623,22 @@ def build_condition_prompt(form_data) -> str:
                 "su condición — sin sermonear, una sola mención.\n"
                 "   • Considera las calorías líquidas del hábito declarado al ajustar los snacks (no las "
                 "'compenses' recortando comida real).")
-    return ("\n--- REGLAS NUTRICIONALES POR CONDICIÓN MÉDICA (DETERMINISTAS, CITABLES) ---\n"
-            + "\n\n".join(blocks)
-            + "\n----------------------------------------\n")
+    _rendered = ("\n--- REGLAS NUTRICIONALES POR CONDICIÓN MÉDICA (DETERMINISTAS, CITABLES) ---\n"
+                 + "\n\n".join(blocks)
+                 + "\n----------------------------------------\n")
+    # [P1-CONDITION-RULES-COUNTRY · 2026-08-21] Los `prompt_block` son literales de la tabla de
+    # reglas (datos a nivel de módulo), así que el país no puede entrar AHÍ dentro: se aplica a
+    # la salida, que es el único punto donde `form_data` existe. El caso que lo justifica es el
+    # bloque bariátrico, que no SUGIERE sino que DIRIGE —«📋 EJEMPLO DE UN DÍA BARIÁTRICO
+    # CORRECTO … GENERA ASÍ»— escrito entero en Casabe y Auyama: a un bariátrico español le
+    # dictaba un día dominicano, y es el bloque de mayor autoridad del prompt clínico.
+    # Se cambian los NOMBRES de los alimentos, no la FORMA (proteína primero, un solo almidón
+    # pequeño, gramos enteros, sin azúcar, sin bebida junto al sólido), que es clínica y
+    # universal — vaciarlo habría sido el otro error.
+    if _country_is_beta(form_data):
+        for _do_name, _neutro in _BETA_CLINICAL_FOOD_SWAPS:
+            _rendered = _rendered.replace(_do_name, _neutro)
+    return _rendered
 
 
 # [P2-13 · 2026-06-16] (gap-audit P2-13) Las subs por condición/alérgeno reemplazaban a proteína ANIMAL
@@ -610,11 +701,17 @@ def collect_substitutions(form_data, diet_type=None) -> list:
     en un solo pase. Tolera filas legacy de 3 elementos (preserve_qty → False por defecto).
     [P2-13] `diet_type` (opcional) redirige reemplazos animales a proteína vegetal/pescado para veg*."""
     _dc = _canon_diet(diet_type) if diet_type else "balanced"
+    _cr_beta = _country_is_beta(form_data)  # [P2-COND-SUBS-COUNTRY-HALF · 2026-08-23]
     out = []
     for r in detect_active_rules(form_data):
         for sub in (r.substitutions or ()):
             tokens, repl, label = sub[0], sub[1], sub[2]
             preserve_qty = bool(sub[3]) if len(sub) > 3 else False
+            # [P2-COND-SUBS-COUNTRY-HALF · 2026-08-23] País ANTES que dieta: si algún día un
+            # equivalente neutro fuera proteína animal, el redirect veg* de abajo todavía lo
+            # alcanza. Al revés quedaría fuera de su alcance.
+            if _cr_beta and _is_do_only_target(repl):
+                repl = _neutralize_do_only_target(repl)
             repl = _redirect_replacement_for_diet(repl, _dc)  # [P2-13] diet-aware redirect
             out.append({"tokens": tokens, "replacement": repl, "label": label,
                         "negatives": r.sub_negatives or (), "condition": r.id,
@@ -624,6 +721,30 @@ def collect_substitutions(form_data, diet_type=None) -> list:
 
 def active_condition_labels(form_data) -> list:
     return [r.label for r in detect_active_rules(form_data)]
+
+
+def contraindicated_supplements(form_data) -> dict:
+    """[P1-SUPPLEMENT-CLINICAL-GATE · 2026-08-12] `{supp_key: razón}` de los
+    suplementos vetados para ESTE perfil. Determinista y registry-driven: las
+    condiciones salen de `detect_active_rules` (chips + texto libre, mismos
+    términos que el resto del motor clínico) y los medicamentos de
+    `medication_rules.detect_active_medications` (con su veto de ambigüedad).
+    La tabla es SSOT en `constants.SUPPLEMENT_CONTRAINDICATIONS`.
+
+    Consumidores: `prompts.plan_generator.build_supplements_context` (filtra la
+    selección y emite prohibición), la barredora post-gen de graph_orchestrator
+    (strip por keywords), y — como espejo UI no-enforzante — los chips
+    deshabilitados del wizard."""
+    from constants import SUPPLEMENT_CONTRAINDICATIONS
+    import medication_rules as _mr
+
+    cond_ids = {r.id for r in detect_active_rules(form_data)}
+    med_ids = {r.id for r in _mr.detect_active_medications(form_data)}
+    vetados = {}
+    for supp, spec in SUPPLEMENT_CONTRAINDICATIONS.items():
+        if cond_ids.intersection(spec["conditions"]) or med_ids.intersection(spec["medications"]):
+            vetados[supp] = spec["reason"]
+    return vetados
 
 
 # ════════════════════════════════════════════════════════════════════════════════════════════════
@@ -715,6 +836,84 @@ _ALLERGEN_NEGATIVES_BY_CAT = {
 }
 
 
+# [P1-CONDITION-RULES-COUNTRY · 2026-08-21] Los targets de sustitución que sólo existen en el
+# mercado dominicano. Es una lista corta y CERRADA a propósito: se enumera lo que hay que omitir,
+# no lo que hay que permitir — una whitelist obligaría a revisarla cada vez que el catálogo crece
+# y su fallo sería silencioso (un target criollo nuevo colándose a beta). El fallo de ESTA lista
+# es ruidoso: si alguien añade un target es-DO y lo olvida aquí, el guard por país lo caza.
+_DO_ONLY_SUB_TARGETS = frozenset({
+    "casabe", "auyama", "tayota", "yautia", "guineo", "lechosa", "chinola",
+    "queso de freir", "queso de hoja", "salami dominicano", "longaniza dominicana",
+    "molondrones", "name", "ajies cubanela", "aji cubanela",
+})
+
+
+# [P2-COND-SUBS-COUNTRY-HALF · 2026-08-23] La OTRA puerta de sustitución clínica.
+#
+# `P1-CONDITION-RULES-COUNTRY` cerró `collect_allergen_substitutions` omitiendo el target es-DO
+# (`continue`), y ahí está bien: para un ALÉRGENO omitir es seguro porque el plan cae al path
+# crítico→fallback, que RECHAZA el plato. `collect_substitutions` —la puerta de las condiciones
+# (embarazo, HTA, dislipidemia…)— no tiene ese path: omitir su sustitución no deja al usuario sin
+# plato, lo deja con el ingrediente CONTRAINDICADO dentro. Medido antes de tocar nada: de las 12
+# reglas, exactamente UNA emite un target es-DO — `pregnancy`, «Tayota» como reemplazo del
+# cundeamor (uterotónico/abortivo). Copiar el `continue` de la hermana habría convertido un P2 de
+# reconocibilidad en exposición clínica.
+#
+# Por eso aquí se REMAPEA en vez de omitir, y el mapa es CERRADO: sin entrada, se conserva el
+# target dominicano (peor nombre, misma seguridad) en vez de perder la sustitución. El destino
+# tiene que ser una fila VIVA de `master_ingredients` — «Calabacín» lo es, y sus alias
+# (`zucchini`, `calabacita`, `zapallito`, `courgette`) cubren las cinco plazas beta; inventar un
+# «chayote español» que el catálogo no garantiza sería afirmar una disponibilidad que nadie midió
+# (la lección de P2-SUBS-RESOLVE: un target que no resuelve es un fantasma en la lista).
+#
+# NO se aplica a `collect_allergen_substitutions` a propósito: su «Casabe» no tiene equivalente
+# panhispánico que resuelva hoy, y ahí omitir SÍ es seguro. Si algún día lo tiene, el sitio es
+# este mapa, no una segunda tabla.
+_DO_ONLY_TARGET_NEUTRAL_EQUIVALENTS = {
+    "tayota": "Calabacín",
+}
+
+
+def _neutralize_do_only_target(replacement):
+    """Target es-DO → equivalente panhispánico registrado; si no hay, el MISMO target.
+
+    Nunca devuelve vacío: la ausencia de equivalente jamás puede traducirse en «no sustituyas».
+
+    tooltip-anchor: _DO_ONLY_TARGET_NEUTRAL_EQUIVALENTS (test_p2_cond_subs_country_half.py)"""
+    try:
+        from constants import strip_accents as _sa_n
+        clave = _sa_n(str(replacement or "").strip().lower())
+    except Exception:
+        return replacement
+    return _DO_ONLY_TARGET_NEUTRAL_EQUIVALENTS.get(clave, replacement)
+
+
+def _is_do_only_target(replacement) -> bool:
+    """[P1-CONDITION-RULES-COUNTRY · 2026-08-21] ¿Este target de sustitución sólo se compra en RD?
+
+    tooltip-anchor: _DO_ONLY_SUB_TARGETS (test_p1_condition_rules_country.py)"""
+    try:
+        from constants import strip_accents as _sa_t
+    except Exception:
+        return False
+    try:
+        return _sa_t(str(replacement or "").strip().lower()) in _DO_ONLY_SUB_TARGETS
+    except Exception:
+        return False
+
+
+def _country_is_beta(form_data) -> bool:
+    """[P1-CONDITION-RULES-COUNTRY · 2026-08-21] País por la ÚNICA puerta (`country_for_form_data`,
+    que además aplica el knob maestro). Las dos puertas de este módulo ya reciben `form_data`, así
+    que el país sale de dentro: cero cambios de firma y cero cambios en sus tres call sites.
+    Fail-safe a False (conducta dominicana) ante cualquier problema."""
+    try:
+        from constants import country_for_form_data as _cffd_cr
+        return _cffd_cr(form_data) != "DO"
+    except Exception:
+        return False
+
+
 def collect_allergen_substitutions(form_data, diet_type=None) -> list:
     """[P0-ALLERGEN-SUBS · 2026-06-14] Sustituciones deterministas para los alérgenos IgE DECLARADOS
     (`form_data['allergies']`) que tienen un reemplazo seguro que RESUELVE al catálogo es-DO
@@ -726,6 +925,11 @@ def collect_allergen_substitutions(form_data, diet_type=None) -> list:
     if not isinstance(form_data, dict):
         return []
     _dc = _canon_diet(diet_type) if diet_type else "balanced"  # [P2-13] diet-aware redirect
+    # [P1-CONDITION-RULES-COUNTRY · 2026-08-21] Este módulo no contenía la palabra `country`
+    # (grep -c = 0) y sus targets son es-DO: a un celíaco español le reescribía «pan integral»
+    # y «galletas de soda» a **Casabe**, un cracker de yuca dominicano que no se vende en
+    # España. La sustitución existe justamente para que su desayuno SEA comprable.
+    _cr_beta = _country_is_beta(form_data)
     try:
         from constants import strip_accents as _sa
     except Exception:
@@ -754,6 +958,17 @@ def collect_allergen_substitutions(form_data, diet_type=None) -> list:
             tokens, repl, label = sub[0], sub[1], sub[2]
             preserve_qty = bool(sub[3]) if len(sub) > 3 else False
             repl = _redirect_replacement_for_diet(repl, _dc, allergen_cat=cat)  # [P2-13] diet+allergen-aware
+            # [P1-CONDITION-RULES-COUNTRY · 2026-08-21] Corte por ALIMENTO, no por regla: los
+            # targets panhispánicos (Arroz blanco, Harina de maíz precocida, Pechuga de pollo,
+            # Quinoa) siguen sustituyendo en beta — quitarlos dejaría al celíaco español SIN
+            # ninguna sustitución, peor que el problema. Los es-DO se OMITEN en vez de mapearse
+            # a un supuesto equivalente local: no existe un «casabe español» que el catálogo
+            # garantice, y inventarlo sería afirmar una disponibilidad que nadie midió. El plan
+            # cae entonces al path crítico→fallback, que ya existe y es la conducta correcta —
+            # el mismo criterio de «hueco honesto» que este módulo ya aplica a lácteos, huevo y
+            # maní por no tener target que resuelva.
+            if _cr_beta and _is_do_only_target(repl):
+                continue
             out.append({"tokens": tokens, "replacement": repl, "label": label,
                         "negatives": negs, "condition": f"allergen:{cat}",
                         "preserve_qty": preserve_qty})

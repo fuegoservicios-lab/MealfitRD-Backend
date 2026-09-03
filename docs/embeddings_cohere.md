@@ -1,6 +1,6 @@
 # P1-COHERE-EMBED-V4 · 2026-06-12 — Embeddings con Cohere Embed v4
 
-Stack de DOS providers: DeepSeek (LLM) + Cohere (embeddings). SSOT:
+Stack de DOS providers: GLM (LLM) + Cohere (embeddings). SSOT:
 [`embeddings_provider.py`](../embeddings_provider.py).
 
 ## Contrato
@@ -32,7 +32,7 @@ Stack de DOS providers: DeepSeek (LLM) + Cohere (embeddings). SSOT:
 ## Vision
 
 Sigue `disabled` (`MEALFIT_VISION_PROVIDER`): el chat-agent/scanner de
-imágenes requiere un VLM que DeepSeek no ofrece. Embed v4 SÍ soporta
+imágenes requiere un VLM que GLM no ofrece. Embed v4 SÍ soporta
 embeddings de imagen — candidato para búsqueda visual futura del diary,
 decisión parqueada por el owner (2026-06-12: "lo de imágenes por ahora vacío").
 

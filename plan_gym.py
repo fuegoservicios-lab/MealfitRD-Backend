@@ -115,6 +115,11 @@ def _score_micros(plan: dict) -> dict | None:
 
 
 def _score_slots(plan: dict) -> dict | None:
+    # [P1-COUNTRY-SYSTEM-F1 EXENTO: gym/benchmark OFFLINE (scripts/plan_gym.py,
+    # scripts/landing_benchmark.py) — nunca corre en el request path de un usuario. Puntúa
+    # deliberadamente contra la tabla nativa DO (SLOT_INAPPROPRIATE_FOODS) como vara de calidad
+    # fija, no contra el país del perfil evaluado — score_plan(plan, form_data) recibe form_data
+    # pero _score_slots no lo toma como parámetro.]
     try:
         from constants import canonical_slot_key, slot_violations_for_meal_name
     except Exception:
@@ -129,6 +134,7 @@ def _score_slots(plan: dict) -> dict | None:
                 continue
             evaluated += 1
             try:
+                # [P1-COUNTRY-SYSTEM-F1 EXENTO: ver docstring de _score_slots arriba.]
                 for v in slot_violations_for_meal_name(m.get("name", ""), slot) or []:
                     if isinstance(v, dict) and v.get("hard"):
                         hard += 1

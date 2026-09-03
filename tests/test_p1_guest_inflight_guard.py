@@ -1,7 +1,7 @@
 """[P1-GUEST-INFLIGHT-GUARD · 2026-07-09] Los guests (sin actual_user_id) NO pasaban
 por el guard de "pipeline activo" (gateado en `_deep_search_user_id`, que es None para
 guests). Un guest que recargaba la pestaña mid-generación disparaba un 2º pipeline
-completo = doble gasto DeepSeek. Fix: espejo del guard autenticado, keyed en el
+completo = doble gasto GLM. Fix: espejo del guard autenticado, keyed en el
 session_id del guest (misma KV `pending_pipeline:<sid>`), ANTES de registrar/arrancar
 el pipeline → 409 `pipeline_already_running`.
 

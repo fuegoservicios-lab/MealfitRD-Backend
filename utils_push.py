@@ -44,6 +44,51 @@ def send_push_notification(user_id: str, title: str, body: str, url: str = "/das
             logger.debug(f"ℹ️ [PUSH] Usuario {user_id} no tiene suscripciones Push activas.")
             return False
 
+        # [P1-I18N-PUSH-CRON-ESPANOL · 2026-08-22] El idioma se resuelve AQUÍ, que es el
+        # cuello de botella por el que pasa TODO push sin excepción
+        # (`_dispatch_push_notification` es un envoltorio de esta función).
+        #
+        # Atarlo al ACTO y no a los 35 call sites es la decisión que importa: un push nuevo
+        # queda cubierto sin wiring. Es la lección que este repo ya pagó dos veces —el pop
+        # de `_display` colgando de siete funciones con nombre (P2-DISPLAY-POP-VECINO) y
+        # «gatear call sites uno a uno es el agujero, no el cierre» (P1-COUNTRY-SYSTEM-F1).
+        #
+        # `P2-I18N-PUSH-SIN-LOCALE` no se ve afectado: su título ya llega resuelto, aquí no
+        # encuentra clave y pasa tal cual.
+        #
+        # Best-effort de punta a punta: si la consulta del perfil falla, sale en español.
+        # Una notificación en español es una degradación; una que no sale es un fallo.
+        # [P1-I18N-PUSH-LOCALE-SIEMPRE-NULO · 2026-08-23] `fetch_one=True`, no
+        # `fetch_all=False`. NO son lo mismo: `fetch_all=False` cae en la rama por defecto
+        # del helper, que hace `fetchall()` y devuelve una LISTA de dicts. Una lista no tiene
+        # `.get`, así que el `hasattr` de abajo salía False y `_locale` era None para TODOS
+        # los usuarios, siempre — con lo que el catálogo de push (43 mensajes × 4 idiomas)
+        # nunca pintó una sola traducción. Medido contra Neon: `[{'locale': 'es-DO'}]`.
+        #
+        # Se conserva el `hasattr` como red: si el helper vuelve a cambiar de forma, esto
+        # degrada al español en vez de reventar. Pero la red ya no es el camino normal, que
+        # es lo que la hacía invisible.
+        _locale = None
+        try:
+            _perfil = execute_sql_query(
+                "SELECT locale FROM user_profiles WHERE id = %s",
+                (user_id,),
+                fetch_one=True,
+            )
+            if isinstance(_perfil, (list, tuple)):
+                _perfil = _perfil[0] if _perfil else None
+            if _perfil:
+                _locale = _perfil.get("locale") if hasattr(_perfil, "get") else None
+        except Exception as _loc_err:  # noqa: BLE001
+            logger.debug(f"[P1-I18N-PUSH-CRON-ESPANOL] sin locale ({_loc_err!r}); se envía en español")
+
+        try:
+            from push_i18n import translate_push_text
+            title = translate_push_text(title, _locale)
+            body = translate_push_text(body, _locale)
+        except Exception as _tr_err:  # noqa: BLE001
+            logger.debug(f"[P1-I18N-PUSH-CRON-ESPANOL] traducción no aplicada ({_tr_err!r})")
+
         push_payload = json.dumps({
             "title": title,
             "body": body,

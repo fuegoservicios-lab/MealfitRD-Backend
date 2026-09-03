@@ -1,8 +1,8 @@
 import os
 import logging
 from langchain_core.tools import tool
-# [P0-DEEPSEEK-MIGRATION · 2026-06-12] Gemini → DeepSeek.
-from llm_provider import ChatDeepSeek, DEEPSEEK_FLASH
+# [P0-LLM-PROVIDER-MIGRATION · 2026-06-12] Gemini → GLM.
+from llm_provider import ChatGLM, GLM_FLASH
 from langchain_core.messages import SystemMessage, HumanMessage
 from knobs import _env_float
 
@@ -28,17 +28,17 @@ def _medical_tool_llm_timeout_s() -> float:
 
 
 def _medical_tool_model_name() -> str:
-    """[P0-DEEPSEEK-MIGRATION · 2026-06-12] Modelo de la herramienta médica
-    via knob. Default DeepSeek V4 Flash: la tool es Q&A clínico
+    """[P0-LLM-PROVIDER-MIGRATION · 2026-06-12] Modelo de la herramienta médica
+    via knob. Default GLM-5.3 Flash: la tool es Q&A clínico
     determinístico (temp=0.0), fact-lookup-style sobre interacciones
     medicamentos↔alimentos / alergias cruzadas / contraindicaciones — NO
     requiere razonamiento creativo ni multimodal. El system prompt fuerza
     brevedad clínica y el fallback explícito a "Sin contraindicaciones
     médicas conocidas" cubre casos de baja confianza.
 
-    Rollback / escalado sin redeploy: `MEALFIT_MEDICAL_TOOL_MODEL=deepseek-v4-pro`.
+    Rollback / escalado sin redeploy: `MEALFIT_MEDICAL_TOOL_MODEL=glm-5.3`.
     """
-    return os.environ.get("MEALFIT_MEDICAL_TOOL_MODEL", DEEPSEEK_FLASH)
+    return os.environ.get("MEALFIT_MEDICAL_TOOL_MODEL", GLM_FLASH)
 
 
 @tool
@@ -61,7 +61,7 @@ def consultar_base_datos_medica(query: str) -> str:
 
     # Utilizamos un LLM ligero pero capaz de razonar como base de datos clínica
     try:
-        clinical_llm = ChatDeepSeek(
+        clinical_llm = ChatGLM(
             model=_medical_tool_model_name(),
             temperature=0.0, # Determinista para evitar alucinaciones
             max_retries=1,

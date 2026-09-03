@@ -39,10 +39,16 @@ import pytest
 
 
 _FRONTEND_ROOT = Path(__file__).resolve().parent.parent.parent / "frontend"
-_PLAN = (_FRONTEND_ROOT / "src" / "pages" / "Plan.jsx").read_text(encoding="utf-8")
-_RECOVERY = (
-    _FRONTEND_ROOT / "src" / "components" / "PendingPipelineRecovery.jsx"
-).read_text(encoding="utf-8")
+@pytest.fixture(scope="module", autouse=True)
+def _load_frontend_sibling_sources(frontend_repo_path):
+    # La fixture compartida salta el módulo antes de cualquier I/O si falta el hermano.
+    _ = frontend_repo_path
+    global _PLAN, _RECOVERY
+    _PLAN = (_FRONTEND_ROOT / "src" / "pages" / "Plan.jsx").read_text(encoding="utf-8")
+    _RECOVERY = (
+        _FRONTEND_ROOT / "src" / "components" / "PendingPipelineRecovery.jsx"
+    ).read_text(encoding="utf-8")
+
 
 
 # ---------------------------------------------------------------------------

@@ -118,8 +118,12 @@ def test_upload_does_not_persist_consumed_meal(diary_src: str):
     # confirmación + INSERT es responsabilidad del usuario (modal → /consumed).
     # Aislamos el cuerpo de api_diary_upload para no chocar con el endpoint
     # /consumed que sí vive en el mismo archivo.
+    # [P1-MANUAL-FOOD-LOG · 2026-08-11] La frontera era «el próximo @router.», y la
+    # extracción de `_persist_consumed_meal` (un def SUELTO entre dos endpoints) hizo
+    # que el body capturado se tragara 25 KB ajenos — incluido el log_consumed_meal
+    # legítimo del camino común. Un `def` de nivel superior también cierra un cuerpo.
     m = re.search(
-        r"async def api_diary_upload\((?P<body>[\s\S]+?)\n@router\.",
+        r"async def api_diary_upload\((?P<body>[\s\S]+?)\n(?:@router\.|def )",
         diary_src,
     )
     assert m, "No se encontró el handler api_diary_upload."

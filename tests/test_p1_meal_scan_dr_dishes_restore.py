@@ -1,7 +1,7 @@
 """[P1-MEAL-SCAN-DR-DISHES-RESTORE · 2026-07-28] Restaura el prompt/schema
 afinados (P1-MEAL-SCAN-DR-DISHES · 2026-07-12) al dispatch CLOUD real.
 
-Regresion: la migracion del meal-scan al provider cloud (P0-DEEPSEEK-MIGRATION
+Regresion: la migracion del meal-scan al provider cloud (P0-LLM-PROVIDER-MIGRATION
 -> P1-VISION-LUNA -> P1-VISION-NO-LOCAL) dejo `_dispatch_openai_compatible_vision`
 con un prompt GENERICO inline + el schema `ImageDescription` (cap "max ~6
 palabras" en `meal_name` — EXACTAMENTE el bug que `_MEAL_VISION_PROMPT`

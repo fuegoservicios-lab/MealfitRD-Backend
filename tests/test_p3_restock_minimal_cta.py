@@ -199,13 +199,36 @@ def test_button_respects_reduced_motion(src: str) -> None:
 # Modal de confirmación — icon outline + slate CTA + arrow microinteracción
 # ===========================================================================
 
+# [P1-I18N-DASHBOARD · 2026-08-15] El titulo paso de texto suelto a
+# `{t('Confirmar compra')}`. La propiedad vigilada NO cambio: la CLAVE de `t()`
+# ES el texto español y es-DO no lleva catalogo (fallback), asi que el modal
+# sigue diciendo exactamente «Confirmar compra». Lo que se reancla es COMO se
+# comprueba: la version vieja casaba un literal con 44 espacios de indentacion
+# incrustados — reindentar el JSX la rompia sin tocar el copy. Ahora se ancla al
+# `id="restock-modal-title"` y se compara el CONTENIDO del <h2>, que es la
+# propiedad real. `[^>]*>` se cierra solo en la etiqueta de apertura (el objeto
+# `style` no contiene `>`), asi que no hay ventana de N bytes que caduque.
+_MODAL_TITLE_RE = re.compile(
+    r'id="restock-modal-title"[^>]*>\s*'
+    r"(?:\{\s*t\(\s*'(?P<i18n>[^']*)'[^)]*\)\s*\}|(?P<literal>[^<{}]*?))"
+    r"\s*</h2>",
+    re.DOTALL,
+)
+
+
 def test_modal_title_without_question_marks(src: str) -> None:
     """[P3-RESTOCK-MINIMAL-CTA] el título es "Confirmar compra" (limpio),
     NO "¿Confirmar Compra?" (legacy con signos interrogativos)."""
-    assert ">\n                                            Confirmar compra\n" in src, (
+    m = _MODAL_TITLE_RE.search(src)
+    assert m, (
+        "[P3-RESTOCK-MINIMAL-CTA] no se localizo el <h2 id=\"restock-modal-title\"> "
+        "del modal de restock. Si el titulo se movio de elemento, re-anclar."
+    )
+    titulo = (m.group("i18n") or m.group("literal") or "").strip()
+    assert titulo == "Confirmar compra", (
         "[P3-RESTOCK-MINIMAL-CTA] el título del modal debe ser exactamente "
-        "'Confirmar compra' (sin signos interrogativos, sin capitalización "
-        "'Compra'). Estilo más minimal."
+        f"'Confirmar compra' (sin signos interrogativos, sin capitalización "
+        f"'Compra'). Encontrado: {titulo!r}."
     )
     assert "¿Confirmar Compra?" not in src, (
         "[P3-RESTOCK-MINIMAL-CTA] el título legacy '¿Confirmar Compra?' "

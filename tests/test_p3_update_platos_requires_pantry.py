@@ -30,19 +30,27 @@ Fix:
 """
 from __future__ import annotations
 
+import pytest
+
 from pathlib import Path
 
 
 _BACKEND_ROOT = Path(__file__).resolve().parent.parent
 _FRONT_SRC = _BACKEND_ROOT.parent / "frontend" / "src"
-_DASHBOARD = (_FRONT_SRC / "pages" / "Dashboard.jsx").read_text(encoding="utf-8")
+@pytest.fixture(scope="module", autouse=True)
+def _load_frontend_sibling_sources(frontend_repo_path):
+    # La fixture compartida salta el módulo antes de cualquier I/O si falta el hermano.
+    _ = frontend_repo_path
+    global _DASHBOARD, _PANTRY_GATE
+    _DASHBOARD = (_FRONT_SRC / "pages" / "Dashboard.jsx").read_text(encoding="utf-8")
+    _PANTRY_GATE = (_FRONT_SRC / "utils" / "pantryGate.js").read_text(encoding="utf-8")
+
 # [P3-AUDIT-V5-TESTDEBT · 2026-07-30] `P1-SWAP-PANTRY-GATE` extrajo el umbral y el gate a
 # `utils/pantryGate.js` (lógica PURA, testeable de verdad). Estos anchors seguían apuntando al
 # Dashboard, donde ya no vive ninguna de las dos cosas — rojo por un refactor CORRECTO, no por
 # una regresión. Se re-anclan al nuevo hogar; lo que protegen (umbral en rango + fail-open) es
 # idéntico y de hecho más fuerte, porque el helper resuelve por `typeof !== 'number'` y así
 # cubre también `undefined` y `NaN`, no solo `null`.
-_PANTRY_GATE = (_FRONT_SRC / "utils" / "pantryGate.js").read_text(encoding="utf-8")
 
 
 def test_marker_present():

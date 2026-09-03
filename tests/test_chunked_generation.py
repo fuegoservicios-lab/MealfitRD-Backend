@@ -715,11 +715,38 @@ def test_shift_plan_blocks_rolling_refill_for_active_7_day_plan(mock_pool, mock_
     # deadlocks. Eso son DOS fetchone antes de usar plan_data (el stub legacy daba uno
     # solo). Tercera fetchone = COUNT de chunks vivos del plan de 7d (línea ~1931): con
     # cnt>=1 hay chunks en vuelo → disable_rolling_refill_for_active_7d → enqueue NO se llama.
-    mock_cursor.fetchone.side_effect = [
-        {"id": "plan_7d"},
-        {"plan_data": plan_data},
-        {"cnt": 1},
-    ]
+    # [mock reescrito a DESPACHADOR · 2026-08-14] Era una lista POSICIONAL de 3 filas y
+    # el endpoint hoy hace SEIS lecturas: el gate de modo (P1-PLAN-MODE, un
+    # `execute_sql_query(fetch_one=True)` que con el pool mockeado sale por este MISMO
+    # cursor) y dos sumas de `days_count` añadidas después. Cada consulta nueva corría la
+    # lista un puesto: primero `KeyError: 'id'` (el SELECT id recibía la fila del plan) y
+    # luego `StopIteration`. Una lista posicional convierte «se añadió una consulta» en
+    # «el endpoint devuelve 500», que es un diagnóstico falso.
+    #
+    # Despachar por el SQL sobrevive a que se añadan lecturas: cada consulta recibe SU
+    # fila, y una consulta no prevista falla con un mensaje que la nombra en vez de
+    # corromper la siguiente.
+    _ultimo_sql = {"q": ""}
+
+    def _exec(sql, *a, **k):
+        _ultimo_sql["q"] = " ".join(str(sql).split())
+
+    def _fetchone():
+        q = _ultimo_sql["q"]
+        if "plan_mode" in q:
+            return {"plan_mode": "plan", "plan_mode_changed_at": None}
+        if "SELECT id FROM meal_plans" in q:
+            return {"id": "plan_7d"}
+        if "plan_data" in q:
+            return {"plan_data": plan_data}
+        if "en_vuelo" in q:
+            return {"en_vuelo": 0}
+        if "COUNT(*) AS cnt" in q:
+            return {"cnt": 1}  # ≥1 ⇒ hay chunks vivos ⇒ NO se re-encola
+        raise AssertionError(f"consulta no prevista por el mock: {q[:120]}")
+
+    mock_cursor.execute.side_effect = _exec
+    mock_cursor.fetchone.side_effect = _fetchone
 
     response = api_shift_plan(Response(), {"user_id": "user_123", "tzOffset": 0}, verified_user_id="user_123")
 
@@ -747,12 +774,15 @@ def test_shift_plan_skips_refill_when_target_week_chunk_already_exists(mock_pool
     mock_conn.transaction.return_value.__enter__.return_value = MagicMock()
     mock_cursor = MagicMock()
     mock_conn.cursor.return_value.__enter__.return_value = mock_cursor
-    # [P2-LOCK-2 · 2026-05-10] fetchone #1 = SELECT id (resolución sin lock); #2 = SELECT
+    # [P1-PLAN-MODE · 2026-08-11] fetchone #1 = get_plan_mode (el guard de pausa
+    # lee user_profiles ANTES de tocar el plan; en 'plan' el shift sigue igual).
+    # [P2-LOCK-2 · 2026-05-10] #2 = SELECT id (resolución sin lock); #3 = SELECT
     # plan_data FOR UPDATE. El plan de 15d vencido por shift cae en el catch-up
-    # (not is_partial and needs_fill): #3 health_profile, #4 MAX(week_number) no-cancelado,
-    # #5 chunk conflictivo para la semana objetivo → como existe, enqueue NO se llama.
+    # (not is_partial and needs_fill): #4 health_profile, #5 MAX(week_number) no-cancelado,
+    # #6 chunk conflictivo para la semana objetivo → como existe, enqueue NO se llama.
     # (El stub legacy traía un {"cnt": 0} espurio de una estructura de query anterior.)
     mock_cursor.fetchone.side_effect = [
+        {"plan_mode": "plan", "plan_mode_changed_at": None},
         {"id": "plan_15d"},
         {"plan_data": plan_data},
         {"health_profile": {"budget": "mid"}},
@@ -788,20 +818,59 @@ def test_shift_plan_uses_max_non_cancelled_week_when_failed_chunk_exists(mock_po
     # plan_data FOR UPDATE. El plan de 30d vencido por shift cae en el catch-up:
     # #3 health_profile, #4 MAX(week_number) no-cancelado=4 → next_week=5, #5 chunk
     # conflictivo=None → se encola con week_number=5.
-    mock_cursor.fetchone.side_effect = [
-        {"id": "plan_30d"},
-        {"plan_data": plan_data},
-        {"health_profile": {"budget": "mid"}},
-        {"max_week": 4},
-        None,
-    ]
+    # [mock reescrito a DESPACHADOR · 2026-08-14] La lista posicional de 5 filas se
+    # desplazó con las consultas que el endpoint añadió después (gate de modo, sumas
+    # de days_count) y el test moría con KeyError/StopIteration.
+    #
+    # Y al destaparlo salió algo peor: la lista se AGOTABA en la 2ª vuelta del bucle
+    # de catch-up, el `StopIteration` subía, y el `except` de producción («Error
+    # encolando chunk IA») se lo tragaba cortando el bucle. O sea que el
+    # `assert_called_once()` original no describía a producción: describía el momento
+    # en que al mock se le acababan las filas. *Un test verde porque el andamiaje
+    # revienta es un test que no está mirando nada.*
+    #
+    # Lo que este test dice proteger —y lo que se afirma ahora— es la NUMERACIÓN:
+    # con un chunk fallido, `next_week` sale del MAX no-cancelado (4) ⇒ 5. Cuántos
+    # chunks se encolan lo decide [P0-5] («enqueue ALL missing days»): un plan de 30
+    # días con 2 materializados encola el hueco entero, y eso es el diseño.
+    _ultimo_sql = {"q": ""}
+
+    def _exec(sql, *a, **k):
+        _ultimo_sql["q"] = " ".join(str(sql).split())
+
+    def _fetchone():
+        q = _ultimo_sql["q"]
+        if "plan_mode" in q:
+            return {"plan_mode": "plan", "plan_mode_changed_at": None}
+        if "SELECT id FROM meal_plans" in q:
+            return {"id": "plan_30d"}
+        if "plan_data" in q:
+            return {"plan_data": plan_data}
+        if "health_profile" in q:
+            return {"health_profile": {"budget": "mid"}}
+        if "MAX(week_number)" in q:
+            return {"max_week": 4}      # ← el chunk fallido NO cuenta ⇒ next_week = 5
+        if "en_vuelo" in q:
+            return {"en_vuelo": 0}
+        if "COUNT(*) AS cnt" in q:
+            return {"cnt": 0}
+        return None                     # no hay chunk conflictivo para esa semana
+
+    mock_cursor.execute.side_effect = _exec
+    mock_cursor.fetchone.side_effect = _fetchone
 
     response = api_shift_plan(Response(), {"user_id": "user_123", "tzOffset": 0}, verified_user_id="user_123")
 
     assert response["success"] is True
-    mock_enqueue.assert_called_once()
-    enqueue_args = mock_enqueue.call_args[0]
-    assert enqueue_args[2] == 5
+    assert mock_enqueue.call_count >= 1, "el catch-up no encoló nada"
+    # La numeración es lo que este test protege: el chunk FALLIDO no debe contar
+    # para el MAX, así que la primera semana encolada es la 5 (no la del fallido).
+    primera = mock_enqueue.call_args_list[0][0]
+    assert primera[2] == 5, f"primera semana encolada = {primera[2]}, esperada 5"
+    # Y las siguientes continúan la secuencia sin repetir semana (el bug que
+    # P1-5/P1-2 cierran: dos catch-ups duplicando la misma week_number).
+    semanas = [c[0][2] for c in mock_enqueue.call_args_list]
+    assert semanas == list(range(5, 5 + len(semanas))), f"semanas no consecutivas: {semanas}"
 
 
 def test_learning_metrics_tracks_ingredient_base_repeats_even_when_names_change():
@@ -1150,11 +1219,11 @@ def _setup_smart_cursor(mock_cursor, prior_plan):
 @patch('shopping_calculator.get_semantic_cache', return_value=None)
 @patch('cron_tasks._filter_days_by_fresh_pantry', side_effect=_filter_passthrough)
 @patch('cron_tasks._check_chunk_learning_ready', side_effect=_ready_passing)
-@patch('llm_provider.ChatDeepSeek')  # [P1-SUITE-UNBLIND · 2026-07-26] Target CORRECTO, y no es obvio:
+@patch('llm_provider.ChatGLM')  # [P1-SUITE-UNBLIND · 2026-07-26] Target CORRECTO, y no es obvio:
 # el PROBE de auto-recovery (cron_tasks.py:27531, "[GAP 6]") hace `from llm_provider import
-# ChatDeepSeek` DENTRO de la función, así que este patch sí lo alcanza y su `side_effect` mantiene
+# ChatGLM` DENTRO de la función, así que este patch sí lo alcanza y su `side_effect` mantiene
 # el chunk en `is_degraded` → Smart Shuffle, que es lo que estos tests validan.
-# ⚠️ NO lo muevas a `graph_orchestrator.ChatDeepSeek` (la subclase instrumentada que usa el
+# ⚠️ NO lo muevas a `graph_orchestrator.ChatGLM` (la subclase instrumentada que usa el
 # generador de días): medido 2026-07-26, deja el probe SIN mockear → el probe tiene éxito →
 # `is_degraded = False` (cron_tasks.py:27574) → el Smart Shuffle nunca corre. Rompe 3 tests verdes
 # y no arregla ninguno. Son dos clases distintas (`is` → False) para dos usos distintos.
@@ -1168,15 +1237,15 @@ def _setup_smart_cursor(mock_cursor, prior_plan):
 @patch('db_facts.get_consumed_meals_since')
 @patch('db_facts.get_all_user_facts')
 def test_chunk_degraded_fallback(mock_facts, mock_consumed, mock_rejections, mock_likes, mock_inventory, mock_write, mock_query, mock_shop, mock_pool, mock_llm, _mock_ready, _mock_filter, _mock_sem):
-    # [P0-DEEPSEEK-MIGRATION · 2026-06-12] Gemini eliminado: el probe de recuperación
-    # y la generación de chunks usan llm_provider.ChatDeepSeek. Patcheamos esa clase
+    # [P0-LLM-PROVIDER-MIGRATION · 2026-06-12] Gemini eliminado: el probe de recuperación
+    # y la generación de chunks usan llm_provider.ChatGLM. Patcheamos esa clase
     # (antes langchain_google_genai.ChatGoogleGenerativeAI, ya inexistente) y forzamos
     # que invoke falle → el probe LLM falla → el chunk se queda en modo degraded (Smart
     # Shuffle), que es lo que este test valida.
     #
     # [P1-SUITE-UNBLIND · 2026-07-26] Matiz: este `side_effect` alcanza al PROBE (que importa
     # de `llm_provider` dentro de la función), NO al generador de días — ese usa
-    # `graph_orchestrator.ChatDeepSeek`, otra clase (`is` → False). Para estos tests basta:
+    # `graph_orchestrator.ChatGLM`, otra clase (`is` → False). Para estos tests basta:
     # con el probe caído el chunk se queda en degraded y entra el Smart Shuffle.
     mock_llm.return_value.invoke.side_effect = Exception("Simulated LLM Outage")
     mock_likes.return_value = []
@@ -1252,7 +1321,7 @@ def test_chunk_degraded_fallback(mock_facts, mock_consumed, mock_rejections, moc
 @patch('shopping_calculator.get_semantic_cache', return_value=None)
 @patch('cron_tasks._filter_days_by_fresh_pantry', side_effect=_filter_passthrough)
 @patch('cron_tasks._check_chunk_learning_ready', side_effect=_ready_passing)
-@patch('llm_provider.ChatDeepSeek')
+@patch('llm_provider.ChatGLM')
 @patch('db_core.connection_pool')
 @patch('shopping_calculator.get_shopping_list_delta')
 @patch('cron_tasks.execute_sql_query')
@@ -1728,7 +1797,25 @@ def test_chunk_pauses_when_live_inventory_drifts_during_generation(
     mock_db_consumed, mock_cron_consumed, mock_db_facts, mock_cron_facts, mock_build_facts,
     mock_analyze, mock_db_rejections, mock_cron_rejections, mock_db_likes,
     mock_cron_likes, mock_build_memory_context, mock_pipeline, mock_shop, mock_pool
+,
+    monkeypatch
 ):
+    # [2026-08-14] La lista mockeada (`{"categories": []}`) es incoherente con las
+    # recetas POR DISENO. Desde P2-COHERENCE-1 el guard severo lee 3 ausencias,
+    # escala T2 warn->block, la shopping list falla sus 3 intentos y el chunk se
+    # RE-ENCOLA: el flujo nunca llega a la validacion de inventario vivo que este
+    # test mide. El sintoma («el pipeline corrio 1 vez, esperaba 3») acusaba a un
+    # detector de drift que esta intacto. Mismo knob de rollback que produccion
+    # expone y que el archivo hermano ya usa como fixture opt-in.
+    monkeypatch.setenv("MEALFIT_COHERENCE_T2_BLOCK_SEVERE_ONLY", "false")
+    # [P1-PANTRY-VIABILITY-FLOOR + P1-PANTRY-EXIST-WAIVER] La nevera de esta fixture
+    # tiene 4 items (<12), asi que el piso conmuta el chunk a modo FLEXIBLE — y en
+    # flexible el waiver de existencia OMITE la validacion post-generacion ENTERA,
+    # incluido el drift check que este test mide (el comentario del propio waiver lo
+    # dice: «tambien salta el drift check»). Por eso el pipeline corria 1 vez: no es
+    # que el detector fallara, es que nadie lo llamaba.
+    import cron_tasks as _ct_floor
+    monkeypatch.setattr(_ct_floor, "CHUNK_PANTRY_STRICT_MIN_ITEMS", 0)
     tasks = [{
         "id": 1,
         "user_id": "user_123",
@@ -1736,6 +1823,13 @@ def test_chunk_pauses_when_live_inventory_drifts_during_generation(
         "week_number": 2,
         "days_offset": 3,
         "days_count": 3,
+        # [2026-08-14] `chunk_kind` explicito. Sin el, la fila cae a `initial_plan` y
+        # P1-INITIAL-CHUNK-PANTRY-AUTONOMY exime al plan INICIAL de la validacion de
+        # nevera post-generacion ENTERA — incluido el drift check que este test mide
+        # (es la decision de producto de la semana 1: la lista de compras define que
+        # comprar, asi que la nevera vacia del dia 0 no puede frenarla). Un chunk de
+        # semana 2 es un relleno rodante, no el plan inicial.
+        "chunk_kind": "rolling_refill",
         "pipeline_snapshot": {
             "form_data": {
                 "_plan_start_date": "2026-04-21T00:00:00+00:00",
@@ -1775,7 +1869,12 @@ def test_chunk_pauses_when_live_inventory_drifts_during_generation(
     # este test, así que una lista posicional dejaba que el generador consumiera ya la
     # nevera derivada y el detector comparaba derivada-contra-derivada → drift=0.0%.
     # (La versión original repetía el mismo valor 3 veces justo por eso, y aun así medía 0.)
-    _INV_INICIAL = ["pollo", "arroz", "huevos", "avena"]
+    # [2026-08-14] Cinco items, no cuatro: la compuerta PREVIA al LLM exige
+    # `items_meaningful >= 5` para un rolling_refill y con 4 pausaba el chunk ANTES
+    # de generar (`[P1-1/PANTRY-EMPTY] items_meaningful=4 < min=5`), dejando el
+    # pipeline en 0 llamadas. La fixture debe superar el minimo de viabilidad para
+    # poder ejercitar lo que mide, que es el DRIFT durante la generacion.
+    _INV_INICIAL = ["pollo", "arroz", "huevos", "avena", "cebolla"]
     _EXTRAS = ["yogurt", "queso", "leche", "mantequilla", "cebolla", "ajo", "tomate"]
     _lecturas = {"n": 0}
 
@@ -1951,7 +2050,7 @@ def test_chunk_uses_snapshot_pantry_when_live_inventory_refresh_fails(
 @patch('shopping_calculator.get_semantic_cache', return_value=None)
 @patch('cron_tasks._filter_days_by_fresh_pantry', side_effect=_filter_passthrough)
 @patch('cron_tasks._check_chunk_learning_ready', side_effect=_ready_passing)
-@patch('llm_provider.ChatDeepSeek')
+@patch('llm_provider.ChatGLM')
 @patch('db_core.connection_pool')
 @patch('shopping_calculator.get_shopping_list_delta')
 @patch('cron_tasks.execute_sql_query')
@@ -2372,7 +2471,7 @@ def test_pantry_hybrid_tolerance_quantity():
 # prior_plan. Mockear el filtro como passthrough invalida la prueba.
 @patch('shopping_calculator.get_semantic_cache', return_value=None)
 @patch('cron_tasks._check_chunk_learning_ready', side_effect=_ready_passing)
-@patch('llm_provider.ChatDeepSeek')
+@patch('llm_provider.ChatGLM')
 @patch('db_core.connection_pool')
 @patch('shopping_calculator.get_shopping_list_delta')
 @patch('cron_tasks.execute_sql_query')
@@ -2473,8 +2572,8 @@ def test_chunk_degraded_fallback_pauses_when_no_pantry_coverage(
         "(que sí pasa) parchea AMBAS formas.\n\n"
         "Además su assert final es inalcanzable tal como está: lee "
         "`mock_llm.return_value.invoke.call_args` esperando el prompt de GENERACIÓN, pero "
-        "`llm_provider.ChatDeepSeek` es el PROBE (invoca 'ping'); el generador usa "
-        "`graph_orchestrator.ChatDeepSeek`, otra clase.\n\n"
+        "`llm_provider.ChatGLM` es el PROBE (invoca 'ping'); el generador usa "
+        "`graph_orchestrator.ChatGLM`, otra clase.\n\n"
         "Para revivirlo: parchear también `mock_executor.return_value.submit`, acotar el "
         "reintento, y mover el assert a la costura del generador. Antes de eso, verificar si el "
         "bucle sin tope es alcanzable en producción — ahí el resultado no es un MagicMock, pero "
@@ -2484,7 +2583,7 @@ def test_chunk_degraded_fallback_pauses_when_no_pantry_coverage(
 @patch('shopping_calculator.get_semantic_cache', return_value=None)
 @patch('cron_tasks._filter_days_by_fresh_pantry', side_effect=_filter_passthrough)
 @patch('cron_tasks._check_chunk_learning_ready', side_effect=_ready_passing)
-@patch('llm_provider.ChatDeepSeek')
+@patch('llm_provider.ChatGLM')
 @patch('db_core.connection_pool')
 @patch('shopping_calculator.get_shopping_list_delta')
 @patch('cron_tasks.execute_sql_query')
@@ -2660,7 +2759,7 @@ def test_partial_reservation_marks_chunk_and_defers_next():
 @patch('shopping_calculator.get_semantic_cache', return_value=None)
 @patch('cron_tasks._filter_days_by_fresh_pantry', side_effect=_filter_passthrough)
 @patch('cron_tasks._check_chunk_learning_ready', side_effect=_ready_passing)
-@patch('llm_provider.ChatDeepSeek')
+@patch('llm_provider.ChatGLM')
 @patch('db_core.connection_pool')
 @patch('shopping_calculator.get_shopping_list_delta')
 @patch('cron_tasks.execute_sql_query')

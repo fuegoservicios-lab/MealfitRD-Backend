@@ -15,9 +15,9 @@ prompt no es un control.
 
 ## Lo que NO era (descartado midiendo)
 
-- No es un leak de reasoning tokens: DeepSeek los manda en `reasoning_content`,
+- No es un leak de reasoning tokens: GLM los manda en `reasoning_content`,
   un campo aparte que el loop del stream no lee.
-- El thinking además está desactivado desde `P1-DEEPSEEK-THINKING-OFF`
+- El thinking además está desactivado desde `P1-PROVIDER-THINKING-DEFAULT`
   (verificado en el cliente de producción: `extra_body={'thinking':
   {'type': 'disabled'}}`).
 - Tampoco es que falte el guard: `if not msg_chunk.tool_calls` está escrito. Lo

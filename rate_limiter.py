@@ -53,12 +53,27 @@ class RateLimiter:
                 # obtener el hit más viejo (smallest score) dentro de la
                 # ventana. Permite calcular un `Retry-After` exacto en lugar
                 # de obligar al cliente a defaultear a 60s.
+                # [P1-RATELIMIT-NO-SELF-POISON · 2026-08-15] El `zadd` NO va en
+                # este pipeline. Iba, y sellaba la ventana ANTES de comprobar el
+                # cupo — o sea que una petición RECHAZADA con 429 también contaba.
+                #
+                # Consecuencia medida en producción: un cliente en bucle (el panel
+                # «Marcas del súper», P0-BRANDS-RETRY-STORM, ~12 req/s) se
+                # auto-prorrogaba el castigo indefinidamente. La ventana deslizante
+                # nunca drenaba porque cada rechazo metía un timestamp nuevo:
+                # 16.105 respuestas 429 seguidas contra 12 doscientos. El límite
+                # dejaba de ser «30 por minuto» y pasaba a ser «bloqueado para
+                # siempre mientras sigas intentando».
+                #
+                # La rama en memoria (más abajo) NUNCA tuvo el fallo: lanza ANTES
+                # del `append`, así que ahí un cliente ruidoso se recupera en ≤60 s.
+                # Esto cierra la asimetría — el comportamiento del limitador no
+                # debería depender de si Redis está configurado.
                 pipe = redis_client.pipeline()
                 pipe.zremrangebyscore(key, 0, window_start) # 0: Eliminar timestamps viejos
                 pipe.zcard(key)                             # 1: Contar peticiones en la ventana
                 pipe.zrange(key, 0, 0, withscores=True)     # 2: [P1-FORM-5] hit más viejo
-                pipe.zadd(key, {str(now): now})             # 3: Añadir petición actual
-                pipe.expire(key, self.period)               # 4: Expirar key para no consumir RAM eterna
+                pipe.expire(key, self.period)               # 3: Expirar key para no consumir RAM eterna
                 results = pipe.execute()
 
                 count = results[1]
@@ -83,6 +98,17 @@ class RateLimiter:
                         detail=f"Demasiadas solicitudes. Máximo {self.max_calls} por {self.period}s. Reintenta en {retry_after}s.",
                         headers={"Retry-After": str(retry_after)},
                     )
+                # [P1-RATELIMIT-NO-SELF-POISON] Se sella la ventana SOLO si la
+                # petición se acepta — simétrico con la rama en memoria. Va aquí,
+                # después del `raise`, para que un rechazo no alargue el castigo.
+                try:
+                    redis_client.zadd(key, {str(now): now})
+                except Exception:  # noqa: BLE001 — el conteo es best-effort
+                    # Si el zadd falla, la petición YA está autorizada: no se la
+                    # negamos por no poder contarla. Peor caso, un hueco en la
+                    # ventana; el `except` general de abajo cubre caídas reales
+                    # de Redis cayendo a memoria.
+                    pass
                 return verified_user_id
             except HTTPException:
                 raise

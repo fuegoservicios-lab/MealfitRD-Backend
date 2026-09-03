@@ -79,8 +79,25 @@ def _extract_endpoint_body(src: str, route: str) -> str:
 
 def test_5_endpoints_remain_public():
     """Los 5 endpoints flagged en la decisión NO deben llamar al admin
-    gate ni al rate limiter. Si alguien gatea uno, esto fuerza
-    reactualización explícita de la decisión."""
+    gate ni al rate limiter ADMIN. Si alguien gatea uno, esto fuerza
+    reactualización explícita de la decisión.
+
+    [P2-HEALTH-LIMITER · 2026-08-15] Precisión que este test necesitaba, porque su
+    docstring decía «ni el rate limiter» a secas mientras la aserción sólo miraba
+    `_check_admin_rate_limit`. La diferencia importa y ahora está escrita:
+
+      · PROHIBIDO: `_verify_admin_token` y `_check_admin_rate_limit`. Los dos
+        pertenecen al gate admin; aplicarlos aquí revierte la decisión de
+        divulgación, que sigue siendo correcta (un poller externo tiene que poder
+        leerlos sin credenciales).
+      · PERMITIDO: un `RateLimiter` per-IP genérico. No cambia QUIÉN puede leer —
+        cambia CUÁNTAS veces. Lo contrario de público es autenticado, no ilimitado.
+
+    Los cinco son `def` (no `async def`), así que corren en el threadpool de anyio
+    —40 tokens para todo el proceso— y `chunk-queue-health` ejecuta tres queries.
+    Sin freno, una inundación no los tumba a ellos: degrada la latencia de todos
+    los handlers síncronos de la app.
+    """
     src = _read()
     violators = []
     for route in _DEFERRED_PUBLIC_ENDPOINTS:

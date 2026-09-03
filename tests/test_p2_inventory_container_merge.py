@@ -54,7 +54,8 @@ def test_fallback_wired_into_add_or_update():
     j = src.find("def add_or_update_inventory_item(")
     assert j != -1
     body = src[j:j + 6000]
-    i = body.find("converted_qty = convert_amount(quantity, unit, current_unit, master_item)")
+    # [P2-SPICE-TSP-DEDUCTION-ONLY · 2026-09-02] esta llamada (y SOLO esta) pide spice_tsp=True
+    i = body.find("converted_qty = convert_amount(quantity, unit, current_unit, master_item, spice_tsp=True)")
     assert i != -1
     win = body[i:i + 800]
     assert "_container_count_equivalence(quantity, unit, current_unit, master_item)" in win, \

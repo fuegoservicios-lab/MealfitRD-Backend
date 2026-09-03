@@ -1,9 +1,18 @@
+# [P2-SUPPLY-CHAIN 2026-08-18] Acciones fijadas por SHA, no por tag.
+#
+# Un tag como `@v4` es un puntero MUTABLE: quien controle el repo de la accion
+# puede moverlo, y tu workflow —que corre con acceso al repo y a los secrets—
+# ejecutaria codigo distinto sin que cambie una linea aqui. Ha pasado de verdad
+# en el ecosistema (tj-actions/changed-files, marzo 2025). Un SHA no se mueve.
+#
+# El comentario `# vN` de cada linea es a que tag apuntaba ese SHA el dia que se
+# fijo. Para actualizarlas: Dependabot abre el PR con el SHA nuevo.
 # [gap-audit G13 · 2026-06-15 · relocado P2-NIGHTLY-WORKFLOW-RELOCATE 2026-06-18] Job NIGHTLY de
 # no-regresión de precisión de macros.
 #
 # Cierra el gap "una regresión de precisión (cambio de modelo/solver/reconcile/catálogo/condition_rules)
 # es invisible hasta un audit manual". El mínimo fixture-based (test_p4_scoreboard.py) YA corre en el CI
-# estándar (sin LLM); ESTE job es el gate E2E que NO puede correr en el CI normal (necesita DEEPSEEK_API_KEY
+# estándar (sin LLM); ESTE job es el gate E2E que NO puede correr en el CI normal (necesita ZAI_API_KEY
 # + Neon). Corre el benchmark contra el set held-out y FALLA si la precisión regresa más allá de la tolerancia
 # vs el baseline commiteado (backend/tests/fixtures/macro_baseline.json).
 #
@@ -12,10 +21,16 @@
 # nunca lo ejecutaba. Copiado a `backend/.github/workflows/` (mismo dir + convención de paths `backend/...`
 # que `ci.yml`) para que sea alcanzable por Actions. Anclado por test_p2_macro_benchmark_nightly_workflow.py.
 #
-# ACTIVACIÓN (pendiente del owner): configurar los secrets DEEPSEEK_API_KEY / NEON_DATABASE_URL_POOLED /
+# ACTIVACIÓN (pendiente del owner): configurar los secrets ZAI_API_KEY / NEON_DATABASE_URL_POOLED /
 # NEON_DATABASE_URL / COHERE_API_KEY en el repo. Sin ellos el job se auto-salta (no falla). Tras estabilizar
 # G4/G6, refrescar macro_baseline.json con una corrida N=20 y bajar las tolerancias.
 name: macro-benchmark-nightly
+
+# Permisos MINIMOS. Sin este bloque, el `GITHUB_TOKEN` hereda los del repo, que
+# suelen incluir escritura: un workflow que solo necesita leer codigo podria
+# empujar commits o publicar releases si algo que ejecuta se tuerce.
+permissions:
+  contents: read
 
 on:
   schedule:
@@ -26,7 +41,7 @@ jobs:
   macro-precision-no-regression:
     runs-on: ubuntu-latest
     env:
-      DEEPSEEK_API_KEY: ${{ secrets.DEEPSEEK_API_KEY }}
+      ZAI_API_KEY: ${{ secrets.ZAI_API_KEY }}
       COHERE_API_KEY: ${{ secrets.COHERE_API_KEY }}
       NEON_DATABASE_URL: ${{ secrets.NEON_DATABASE_URL }}
       NEON_DATABASE_URL_POOLED: ${{ secrets.NEON_DATABASE_URL_POOLED }}
@@ -35,7 +50,7 @@ jobs:
       MEALFIT_MACRO_AWARE_RECONCILE: "true"
       MEALFIT_MACRO_POSTQUANT_RECONCILE: "true"
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262  # v4
       - name: Guard — skip si no hay secrets configurados
         id: guard
         # [P2-NIGHTLY-BENCH-ACTIVATE · 2026-07-02] Skip RUIDOSO: antes el auto-skip era un ::notice
@@ -43,23 +58,23 @@ jobs:
         # notara ("verde" que en realidad era skip). Ahora el skip se escribe al STEP SUMMARY (visible
         # en la lista de runs) con el puntero al SOP de activación (docs/nightly_benchmark_activation.md).
         run: |
-          if [ -z "$DEEPSEEK_API_KEY" ] || [ -z "$NEON_DATABASE_URL_POOLED" ]; then
+          if [ -z "$ZAI_API_KEY" ] || [ -z "$NEON_DATABASE_URL_POOLED" ]; then
             echo "skip=true" >> "$GITHUB_OUTPUT"
-            echo "::warning::Job AUTO-SALTADO — secrets ausentes (DEEPSEEK_API_KEY / NEON_DATABASE_URL_POOLED). El gate de no-regresión de macros NO está corriendo."
+            echo "::warning::Job AUTO-SALTADO — secrets ausentes (ZAI_API_KEY / NEON_DATABASE_URL_POOLED). El gate de no-regresión de macros NO está corriendo."
             {
               echo "## ⚠️ Benchmark nightly SALTADO (no corrió)"
               echo ""
               echo "Faltan secrets del repo — el gate de no-regresión de precisión de macros **no está activo**."
               echo ""
               echo "**Activación (owner):** Settings → Secrets and variables → Actions → New repository secret:"
-              echo "- \`DEEPSEEK_API_KEY\` · \`NEON_DATABASE_URL_POOLED\` · \`NEON_DATABASE_URL\` · \`COHERE_API_KEY\` (opcional)"
+              echo "- \`ZAI_API_KEY\` · \`NEON_DATABASE_URL_POOLED\` · \`NEON_DATABASE_URL\` · \`COHERE_API_KEY\` (opcional)"
               echo ""
               echo "SOP completo: \`docs/nightly_benchmark_activation.md\`."
             } >> "$GITHUB_STEP_SUMMARY"
           else
             echo "skip=false" >> "$GITHUB_OUTPUT"
           fi
-      - uses: actions/setup-python@v5
+      - uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065  # v5
         if: steps.guard.outputs.skip == 'false'
         with:
           python-version: "3.12"

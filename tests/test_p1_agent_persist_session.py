@@ -52,12 +52,27 @@ def test_agent_page_reads_session_from_local_storage_at_mount():
         "refactor inesperado."
     )
     body = match.group(1)
+
+    # [reapuntado 2026-08-14] P1-AGENT-SESSION-DAY movió la regla a
+    # `utils/chatSessionDay::resolverSesionDelDia` (la persistencia dejó de ser
+    # absoluta: sobrevive al refresco pero caduca al cambiar el DÍA local). El
+    # initializer es ahora una línea que delega, así que buscar el
+    # `safeLocalStorageGet` DENTRO de su cuerpo daba «cada re-mount sobrescribe la
+    # sesión» sobre un código que sigue leyendo primero. Se comprueba la CADENA: el
+    # initializer delega, y el helper lee ANTES de generar.
+    if "resolverSesionDelDia" in body:
+        helper_src = (_REPO_ROOT / "frontend" / "src" / "utils" / "chatSessionDay.js").read_text(
+            encoding="utf-8"
+        )
+        i_fn = helper_src.index("export const resolverSesionDelDia")
+        body = helper_src[i_fn:]
+
     # Anchor: debe haber un read de localStorage (via safeLocalStorageGet
     # o cualquier otro method) ANTES de cualquier crypto.randomUUID().
     storage_read_idx = -1
     uuid_gen_idx = -1
     storage_match = re.search(
-        r"safeLocalStorageGet\s*\(\s*['\"]mealfit_current_session",
+        r"safeLocalStorageGet\s*\(\s*(?:['\"]mealfit_current_session|SESSION_KEY\b)",
         body,
     )
     if storage_match:
@@ -67,9 +82,9 @@ def test_agent_page_reads_session_from_local_storage_at_mount():
         uuid_gen_idx = uuid_match.start()
 
     assert storage_read_idx >= 0, (
-        "El initializer NO lee `mealfit_current_session` de localStorage. "
-        "Cada re-mount sobrescribe la sesión activa con un UUID nuevo. Ver "
-        "P1-AGENT-PERSIST-SESSION · 2026-05-20."
+        "El initializer NO lee `mealfit_current_session` de localStorage (ni directo "
+        "ni vía `resolverSesionDelDia`). Cada re-mount sobrescribe la sesión activa "
+        "con un UUID nuevo. Ver P1-AGENT-PERSIST-SESSION · 2026-05-20."
     )
     if uuid_gen_idx >= 0:
         assert storage_read_idx < uuid_gen_idx, (

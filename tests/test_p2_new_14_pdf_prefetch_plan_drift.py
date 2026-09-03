@@ -157,7 +157,8 @@ def test_syncs_localStorage_and_state(src: str):
     # catch ~+5804) más allá de la ventana original de 3500 chars. Ampliamos
     # a 6500 para abarcar el bloque completo del drift sin tocar el frontend.
     block = body[p2_idx:p2_idx + 6500]
-    assert "localStorage.setItem('mealfit_plan'" in block, (
+    # [re-anclado 2026-08-18] wrapper seguro = misma PROPIEDAD (persistir a localStorage).
+    assert ("localStorage.setItem('mealfit_plan'" in block) or ("safeLocalStorageSet('mealfit_plan'" in block), (
         "P2-NEW-14 regresión: el sync ya no actualiza `localStorage`. "
         "Sin él, próximo refresh vuelve a leer stale."
     )

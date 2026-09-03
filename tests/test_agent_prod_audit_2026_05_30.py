@@ -39,14 +39,20 @@ def _code_only(src: str) -> str:
 # P1-PROACTIVE-TZ + P2-PROACTIVE-NUDGE-BUDGET-TZ
 # ---------------------------------------------------------------------------
 def test_proactive_passes_tz_offset_to_consumed():
+    """[RE-ANCLADO por P1-NUDGE-TZ-PER-USER · 2026-08-21] La invariante que este test protege —
+    que `get_consumed_meals_today` reciba un offset y no caiga a su rama UTC, que era el
+    falso-positivo nocturno de P1-PROACTIVE-TZ— sigue viva. Lo que cambió es de DÓNDE sale el
+    offset: era el knob GLOBAL (`_proactive_tz_offset_min()`, hora dominicana para todo el
+    mundo) y ahora es el del usuario. Para un español, el knob global evaluaba una ventana que
+    era mayoritariamente su día ANTERIOR: el mismo defecto que P1-PROACTIVE-TZ cerró para RD,
+    reabierto para todo el que no viva en RD. Se re-ancla a la PROPIEDAD, no a la grafía."""
     src = _read("proactive_agent.py")
     assert "P1-PROACTIVE-TZ" in src
-    assert "_proactive_tz_offset_min" in src, "Falta el helper del knob de offset"
-    # La llamada a get_consumed_meals_today debe pasar tz_offset_mins.
+    assert "_proactive_tz_offset_min" in src, "Falta el helper del knob de offset (fallback)"
     assert re.search(
-        r'get_consumed_meals_today\(\s*\n?\s*user_id\s*,\s*\n?\s*date_str=now_ast\.strftime\("%Y-%m-%d"\)\s*,\s*\n?\s*tz_offset_mins=_proactive_tz_offset_min\(\)\s*,?\s*\n?\s*\)',
+        r'get_consumed_meals_today\(\s*\n?\s*user_id\s*,\s*\n?\s*date_str=now_ast\.strftime\("%Y-%m-%d"\)\s*,\s*\n?\s*tz_offset_mins=_user_tz_off\s*,?\s*\n?\s*\)',
         src,
-    ), "get_consumed_meals_today debe recibir tz_offset_mins=_proactive_tz_offset_min()"
+    ), "get_consumed_meals_today debe recibir el offset DEL USUARIO (tz_offset_mins=_user_tz_off)"
 
 
 def test_nudge_budget_counts_ast_day_not_utc():
@@ -58,8 +64,16 @@ def test_nudge_budget_counts_ast_day_not_utc():
         "El conteo de nudges UTC (DATE(sent_at)=CURRENT_DATE) debe haberse "
         "reemplazado por la conversión a día AST"
     )
-    assert "America/Santo_Domingo" in src, (
-        "El conteo de nudges debe convertir a la zona AST 'America/Santo_Domingo'"
+    # [P1-COUNTRY-SYSTEM-F1 · 2026-08-16 (T5)] El hardcode de zona pasó a offset resuelto por
+    # usuario (`user_tz_offset_min`, fail-safe 240=RD — idéntico al hardcode previo sin perfil).
+    # Ancla la PROPIEDAD (día LOCAL del usuario, no UTC), no la grafía: un check sobre el string
+    # crudo pasaría por casualidad mientras el comentario explicativo lo siga citando, aunque el
+    # mecanismo real cambiara — exactamente la lección de "ancla la propiedad, no la grafía".
+    assert "user_tz_offset_min(user_id)" in _code_only(src), (
+        "El conteo de nudges debe resolver el día vía el offset del usuario, no quedar fijo a UTC"
+    )
+    assert "make_interval(mins => %s)" in _code_only(src), (
+        "El corte de día debe seguir parametrizado por aritmética, no volver a un hardcode de zona"
     )
 
 

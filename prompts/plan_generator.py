@@ -794,8 +794,29 @@ def build_medication_context(form_data: dict) -> str:
         return ""
 
 
-def build_time_context() -> str:
-    """Genera el bloque de contexto temporal dinámico (fecha, día, clima caribeño y cultura)."""
+def build_time_context(country=None) -> str:
+    """Genera el bloque de contexto temporal dinámico (fecha, día, clima y cultura).
+
+    [P1-TIME-CONTEXT-COUNTRY · 2026-08-21] Era el ÚNICO bloque del prompt marcado «(OBLIGATORIO)»
+    y le contaba el clima del Caribe a un usuario de Madrid: «Contexto en República Dominicana /
+    Temporada Caribeña / Hace MUCHO calor en el Caribe». Se inyecta en el contexto COMPARTIDO, así
+    que lo leían el planner y el day-generator a la vez — explica el «Bowl Caribeño de Avena,
+    Melón y Huevo» que el plan español 6a4321f5 sirvió de desayuno en producción.
+
+    El corte no es «dominicano sí / no», es **RD-específico vs universal**: se va la temporada
+    caribeña, el hint de calor del Caribe y el del sancocho de la época de lluvias antillana; se
+    quedan la fecha, el día laboral vs fin de semana y los hints de Navidad y enero, que valen
+    igual en los 6 países. La Cuaresma se queda pero pierde los peces antillanos — en España está
+    MÁS marcada que en RD y el bacalao es su plato de vigilia, así que borrarla habría tirado una
+    señal cultural real. País por la única puerta (`country_for_form_data`), que además aplica el
+    knob maestro: DO y knob-off son byte-idénticos al bloque de siempre.
+
+    tooltip-anchor: build_time_context (test_p1_time_context_country.py)"""
+    try:
+        from constants import country_for_form_data as _cffd_tc
+        _tc_beta = _cffd_tc({"country": country}) != "DO"
+    except Exception:
+        _tc_beta = False
     now_local = datetime.now()
     dias = ["Lunes", "Martes", "Miércoles", "Jueves", "Viernes", "Sábado", "Domingo"]
     meses_es = ["Enero", "Febrero", "Marzo", "Abril", "Mayo", "Junio", "Julio", "Agosto", "Septiembre", "Octubre", "Noviembre", "Diciembre"]
@@ -808,7 +829,12 @@ def build_time_context() -> str:
         temporada = "De Lluvia/Huracanes"
         
     clima_hint = ""
-    if now_local.month in [6, 7, 8, 9]:
+    # [P1-TIME-CONTEXT-COUNTRY · 2026-08-21] Los dos hints describen el clima ANTILLANO (calor
+    # caribeño, época de lluvias y huracanes) y el segundo receta el plato nacional dominicano.
+    # Para un país beta no son «sutilmente adaptados al entorno del usuario» — son falsos.
+    if _tc_beta:
+        clima_hint = ""
+    elif now_local.month in [6, 7, 8, 9]:
         clima_hint = "- Clima: Hace MUCHO calor en el Caribe. Prioriza comidas más frescas, bowls, ensaladas y opciones hidratantes."
     elif temporada == "De Lluvia/Huracanes" and now_local.month in [10, 11]:
         clima_hint = "- Clima: Época de lluvias frecuentes. Integrar algún caldo o sopa (ej. sancocho ligero) puede ser muy reconfortante."
@@ -820,7 +846,15 @@ def build_time_context() -> str:
     elif now_local.month == 1:
         cultura_hint = "- Cultura: Inicio de año post-Navidad. Incluye opciones limpias, altas en fibra y ligeras para ayudar al 'reset' metabólico."
     elif now_local.month in [3, 4]:
-        cultura_hint = "- Cultura: Cuaresma/Semana Santa. Sugiere inteligentemente proteínas como bacalao, tilapia, chillo, atún o berenjenas, limitando un poco la carne roja."
+        # [P1-TIME-CONTEXT-COUNTRY · 2026-08-21] La Cuaresma SE QUEDA en beta (en España es más
+        # marcada que en RD y el bacalao es su plato de vigilia); lo que se va es la lista de
+        # peces antillanos — 'chillo' es pargo del Caribe.
+        cultura_hint = (
+            "- Cultura: Cuaresma/Semana Santa. Sugiere inteligentemente pescados y proteínas de "
+            "vigilia (bacalao, atún, berenjenas), limitando un poco la carne roja."
+            if _tc_beta else
+            "- Cultura: Cuaresma/Semana Santa. Sugiere inteligentemente proteínas como bacalao, tilapia, chillo, atún o berenjenas, limitando un poco la carne roja."
+        )
 
     hints = ""
     if clima_hint: hints += f"{clima_hint}\n"
@@ -833,10 +867,17 @@ def build_time_context() -> str:
     else:
         hints += "- 🗓️ Es DÍA LABORAL. Prioriza comidas rápidas (<15 min) o batch-cooking de la noche anterior.\n"
 
+    # [P1-TIME-CONTEXT-COUNTRY · 2026-08-21] La línea de país y la temporada caribeña son las dos
+    # afirmaciones geográficas del bloque. En beta se omiten y la fecha queda sola — que es lo
+    # único que el sistema sabe de verdad sobre el entorno de ese usuario.
+    _ctx_geo = (
+        ""
+        if _tc_beta else
+        f" Contexto en República Dominicana:\n- Temporada Caribeña: {temporada}."
+    )
     return (
         f"\n--- 📅 CONTEXTO ESTACIONAL Y CULTURAL (OBLIGATORIO) ---\n"
-        f"Hoy es {dia_str}, {now_local.day} de {mes_str} de {now_local.year}. Contexto en República Dominicana:\n"
-        f"- Temporada Caribeña: {temporada}.\n"
+        f"Hoy es {dia_str}, {now_local.day} de {mes_str} de {now_local.year}.{_ctx_geo}\n"
         f"{hints}"
         f"INSTRUCCIÓN: Adapta sutilmente la propuesta a este contexto para que se sienta hiper-personalizado al entorno del usuario.\n"
         f"----------------------------------------------------------\n"
@@ -884,12 +925,22 @@ def build_budget_context(form_data: dict) -> str:
     if not budget:
         return ""
 
+    # [P1-BUDGET-PROMPT-CURRENCY · 2026-08-21] País por la única puerta: gobierna DOS cosas de
+    # este bloque — si la cifra en RD$ puede afirmarse, y si la guía cualitativa puede nombrar
+    # productos criollos. `prompts/*.py` quedó fuera del barrido de país de Fase 1.
+    from constants import country_for_form_data as _cffd_bc
+    _bc_beta = _cffd_bc(form_data) != "DO"
+
     _LEVEL_GUIDANCE = {
         "low": (
             "El usuario tiene un presupuesto AJUSTADO. Prioriza ingredientes "
             "económicos y de alto rendimiento: pollo de muslo/contramuslo (antes "
             "que pechuga premium), huevos, lentejas, habichuelas, arroz, avena, "
-            "guineo, batata, y vegetales/frutas de temporada locales. Evita cortes "
+            # [P1-BUDGET-PROMPT-CURRENCY] 'guineo'/'batata' son dos palabras que un español no
+            # usa. Lo que la guía quiere decir —fruta barata y tubérculo barato— se dice sin
+            # nombrar el producto local, que es justo lo que el fragmento de país ya elige.
+            + ("frutas y tubérculos económicos de temporada, " if _bc_beta else "guineo, batata, ")
+            + "y vegetales/frutas de temporada locales. Evita cortes "
             "premium, mariscos caros, frutas importadas y quesos finos."
         ),
         "medium": (
@@ -920,13 +971,37 @@ def build_budget_context(form_data: dict) -> str:
         # sanitiza a {DOP, USD}; el símbolo + nombre vienen de un mapping FIJO
         # (no del valor crudo del cliente) → seguro contra prompt-injection.
         currency = (str(form_data.get("budgetCurrency") or "DOP")).strip().upper()
-        if currency not in ("DOP", "USD"):
-            currency = "DOP"
-        _sym = "US$" if currency == "USD" else "RD$"
-        _cur_name = (
-            "dólares estadounidenses" if currency == "USD"
-            else "pesos dominicanos"
+        # [P1-COUNTRY-SYSTEM-F1 · 2026-08-16 (FINAL-FIX F3)] Antes de este gate, CUALQUIER moneda
+        # fuera de {DOP, USD} —incluida la EUR/MXN/COP que T6 ya sabe presupuestar
+        # (nutrition_calculator.py: budget_floor_in_currency/validate_budget_sufficient corren
+        # ANTES de generar)— se clampeaba a DOP aquí abajo y el bloque que el LLM SÍ LEE le
+        # mentía con «RD$» sobre un monto declarado en otra moneda. Mismo gate que T6 (symbol/
+        # code validado contra COUNTRY_PROFILES, knob MEALFIT_COUNTRY_SYSTEM por-llamada vía
+        # knobs._env_bool — la misma SSOT que country_for_form_data usa internamente) — DOP/USD
+        # quedan EXCLUIDOS a propósito (conservan su camino histórico, símbolo $ prefijo).
+        from knobs import _env_bool as _bc_env_bool
+        from constants import COUNTRY_PROFILES as _BC_COUNTRY_PROFILES
+        _bc_valid_currencies = {p["currency"] for p in _BC_COUNTRY_PROFILES.values()}
+        _budget_new_currency = (
+            currency in _bc_valid_currencies
+            and currency not in ("DOP", "USD")
+            and _bc_env_bool("MEALFIT_COUNTRY_SYSTEM", False)
         )
+        if not _budget_new_currency and currency not in ("DOP", "USD"):
+            currency = "DOP"
+        # [P1-BUDGET-PROMPT-CURRENCY · 2026-08-21] El caso que de HECHO ocurre y que F3 no cubre:
+        # país beta con `budgetCurrency='DOP'`. Medido en Neon, las 8 filas de `user_profiles`
+        # tienen DOP o NULL — CERO usuarios con moneda beta, incluida la cuenta de los 2 planes
+        # beta. El número lo tecleó en un campo rotulado «RD$» (así estaba el wizard antes de
+        # P1-QCOUNTRY-BEFORE-BUDGET) viviendo en España, así que NO SABEMOS qué moneda quiso
+        # decir — y ninguna de las dos lecturas es defendible: reetiquetarlo como euros inventa
+        # un dato, y dejarlo como pesos le pide al modelo que planifique una compra española con
+        # un presupuesto dominicano. Lo honesto es no afirmar ninguna moneda: se omite la CIFRA
+        # y se conserva la guía cualitativa, que es señal real y no depende de la unidad.
+        # USD queda fuera: es la moneda beta legítima de US y PR.
+        _bc_moneda_no_fiable = _bc_beta and currency == "DOP"
+        if _bc_moneda_no_fiable:
+            amount = None
         if amount and amount > 0:
             duration = (str(form_data.get("groceryDuration") or "weekly")).strip().lower()
             _dur_es = {
@@ -934,10 +1009,21 @@ def build_budget_context(form_data: dict) -> str:
                 "biweekly": "quincenal (15 días)",
                 "monthly": "mensual (30 días)",
             }.get(duration, "por ciclo")
+            if _budget_new_currency:
+                # Símbolo/code: el código de moneda EN SÍ (validado arriba contra
+                # COUNTRY_PROFILES), como SUFIJO del monto — «245 EUR», nunca «RD$245».
+                _monto_declarado = f"El usuario definió un presupuesto TOTAL de {amount:,.0f} {currency} "
+            else:
+                _sym = "US$" if currency == "USD" else "RD$"
+                _cur_name = (
+                    "dólares estadounidenses" if currency == "USD"
+                    else "pesos dominicanos"
+                )
+                _monto_declarado = f"El usuario definió un presupuesto TOTAL de {_sym}{amount:,.0f} ({_cur_name}) "
             return (
                 "\n--- 💰 PRESUPUESTO DE COMPRAS (OBLIGATORIO — AJUSTA INGREDIENTES) ---\n"
-                f"El usuario definió un presupuesto TOTAL de {_sym}{amount:,.0f} "
-                f"({_cur_name}) para su ciclo de compras {_dur_es}.\n"
+                f"{_monto_declarado}"
+                f"para su ciclo de compras {_dur_es}.\n"
                 "OBJETIVO: que la lista de compras del plan se MANTENGA CERCA de ese monto.\n"
                 "  - Prioriza ingredientes económicos y de alto rendimiento (pollo de "
                 "muslo, huevos, lentejas, habichuelas, arroz, avena, vegetales y frutas "
@@ -988,6 +1074,27 @@ def build_supplements_context(form_data: dict) -> str:
     from constants import SUPPLEMENT_NAMES
     import logging as _logging
 
+    # [P1-SUPPLEMENT-CLINICAL-GATE · 2026-08-12] Veto clínico ANTES de armar el
+    # prompt: los suplementos eran la única pieza sin gate (el backstop mira
+    # comidas, el Revisor no los mencionaba) y la rama de selección ORDENA
+    # incluirlos «ni más, ni menos» — sin este filtro, un hipertenso que marcó
+    # Pre-Entreno lo recibía por orden directa. Registry-driven (condition_rules
+    # + medication_rules), tabla SSOT en constants.
+    from condition_rules import contraindicated_supplements
+    _vetados = contraindicated_supplements(form_data)
+
+    def _bloque_prohibidos() -> str:
+        if not _vetados:
+            return ""
+        _lineas = "\n".join(
+            f"  - {SUPPLEMENT_NAMES.get(k, k)}: {razon}" for k, razon in sorted(_vetados.items())
+        )
+        return (
+            "\n⛔ PROHIBIDOS POR SEGURIDAD CLÍNICA para ESTE perfil (NUNCA los incluyas,\n"
+            "ni aunque el usuario los haya pedido, ni como sugerencia libre):\n"
+            f"{_lineas}\n"
+        )
+
     raw_selected = form_data.get("selectedSupplements", []) or []
     # [P1-FORM-11] Filtro defensivo: descarta strings que no estén en
     # `SUPPLEMENT_NAMES`. El validador en `routers/plans.py` ya rechaza con 422
@@ -1004,6 +1111,18 @@ def build_supplements_context(form_data: dict) -> str:
             f"{' ...(truncado)' if len(_dropped) > 10 else ''}. "
             f"Caller no pasó por `_validate_form_data_ranges` o hay drift de schema."
         )
+    # [P1-SUPPLEMENT-CLINICAL-GATE] El veto clínico filtra DESPUÉS del enum:
+    # si el usuario seleccionó un contraindicado (chip viejo, estado stale, o
+    # condición añadida después), sale de la lista DEBES y entra al bloque
+    # prohibido. Si el veto vacía la selección, cae a la rama libre — que
+    # también lleva el bloque.
+    _vetados_seleccionados = [s for s in selected_supps if s in _vetados]
+    if _vetados_seleccionados:
+        _logging.getLogger(__name__).warning(
+            f"[P1-SUPPLEMENT-CLINICAL-GATE] {len(_vetados_seleccionados)} suplemento(s) "
+            f"seleccionados vetados por perfil clínico: {_vetados_seleccionados!r}."
+        )
+        selected_supps = [s for s in selected_supps if s not in _vetados]
     if selected_supps:
         supp_names = [SUPPLEMENT_NAMES[s] for s in selected_supps]
         all_supps = set(SUPPLEMENT_NAMES.keys())
@@ -1021,8 +1140,9 @@ def build_supplements_context(form_data: dict) -> str:
         ctx += (
             "\nPara CADA día del plan, agrega una sección 'supplements' con SOLO los suplementos listados arriba.\n"
             "Cada suplemento: 'name' (nombre exacto), 'dose' (dosis), 'timing' (momento del día), 'reason' (justificación).\n"
-            "---------------------------------------------------\n"
         )
+        ctx += _bloque_prohibidos()
+        ctx += "---------------------------------------------------\n"
         return ctx
     else:
         return (
@@ -1032,7 +1152,8 @@ def build_supplements_context(form_data: dict) -> str:
             "Cada suplemento debe tener: 'name' (nombre), 'dose' (dosis), 'timing' (momento del día), 'reason' (justificación breve).\n"
             "Adapta las recomendaciones al objetivo del usuario, su nivel de actividad y condiciones médicas.\n"
             "Ejemplos: Proteína Whey, Creatina Monohidrato, Omega-3, Vitamina D3, Multivitamínico, Magnesio, etc.\n"
-            "---------------------------------------------------\n"
+            + _bloque_prohibidos()
+            + "---------------------------------------------------\n"
         )
 
 

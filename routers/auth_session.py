@@ -203,8 +203,9 @@ _OAUTH_ADOPT_LIMITER = RateLimiter(max_calls=10, period_seconds=60)
 @router.post("/oauth/adopt")
 async def oauth_adopt(
     response: Response,
-    data: dict = Body(...),
+    data: dict = Body(default=None),
     _rl: object = Depends(_OAUTH_ADOPT_LIMITER),
+    uid_bearer: Optional[str] = Depends(get_neon_bearer_user_id),
 ):
     """[P1-OAUTH-FIRST-PARTY · 2026-07-03] Canjea el `neon_auth_session_verifier` (query param
     con el que Neon Auth regresa del OAuth de Google) por la sesión first-party, SERVER-SIDE.
@@ -217,54 +218,59 @@ async def oauth_adopt(
     (server-a-server, timeout generoso, sin third-party cookies) y emitiendo `__Host-mf_session`,
     el primer click SIEMPRE termina logueado — mismo patrón de P1-OTP-FIRST-PARTY.
 
-    Fail-secure: verifier ausente/basura, Neon non-200 o sin user.id → 401 sin cookie.
-    tooltip-anchor: P1-OAUTH-FIRST-PARTY"""
-    from neon_auth import NEON_AUTH_BASE_URL
+    [P1-OAUTH-CHALLENGE-COOKIE · 2026-08-10] ESTE ENDPOINT YA NO CANJEA EL VERIFIER.
+    Lo intentó desde el 2026-07-03 y los logs de producción son inapelables: 24
+    intentos, 0 éxitos, todos HTTP 400. Medido contra Neon, la respuesta era
+    siempre `{"code":"SESSION_CHALLENGE_COOKIE_NOT_FOUND"}`.
 
-    verifier = str((data or {}).get("verifier") or "").strip()
-    if not verifier or len(verifier) > 512:
+    La razón es estructural, no de red ni de plazo: el verifier NO es
+    autosuficiente. Va emparejado a una cookie `__Secure-neon-auth.session_challange`
+    que Neon deja EN EL NAVEGADOR y en SU dominio. Este proceso nunca la tendrá.
+    Comprobado con la misma petición y el mismo verifier de prueba: sin la cookie
+    responde SESSION_CHALLENGE_COOKIE_NOT_FOUND; con ella, VERIFICATION_NOT_FOUND
+    — es decir, ya superó ese control.
+
+    Así que el canje volvió al navegador (utils/firstPartySession.js), que es
+    donde vive la cookie, y este endpoint conserva lo que sí era correcto del
+    diseño: QUE DECIDA EL SERVIDOR. Recibe el Bearer EdDSA que salió del canje,
+    lo valida contra el JWKS de Neon y solo entonces emite `__Host-mf_session`.
+    No se confía en nada que diga el cliente salvo un JWT que podamos verificar.
+
+    Se mantiene el endpoint (en vez de mover esto a `/session`) para no perder el
+    contador POR FLUJO: es el único sitio donde se ve si el retorno de Google
+    termina en sesión. Ese contador es el que estuvo en 0/24 sin que nadie se
+    enterara durante un mes.
+
+    Fail-secure: sin Bearer válido → 401 sin cookie.
+    tooltip-anchor: P1-OAUTH-FIRST-PARTY"""
+    # Un cliente con bundle viejo aún manda `verifier`. Se responde 401 (su código
+    # ya trata el fallo como "sigue por el camino de siempre") pero se registra
+    # distinto: si esto aparece en los logs, hay caché vieja circulando.
+    if not uid_bearer and (data or {}).get("verifier"):
+        logger.info(
+            "[P1-OAUTH-CHALLENGE-COOKIE] Llegó un `verifier` (bundle viejo). Ese canje es "
+            "imposible server-side: la cookie de challenge vive en el navegador."
+        )
         return Response(status_code=401)
-    if not NEON_AUTH_BASE_URL:
-        logger.error("[P1-OAUTH-FIRST-PARTY] NEON_AUTH_BASE_URL ausente — no se puede canjear el verifier.")
-        return Response(status_code=503)
-    try:
-        async with httpx.AsyncClient(timeout=12.0) as client:
-            r = await client.get(
-                f"{NEON_AUTH_BASE_URL}/get-session",
-                params={"neon_auth_session_verifier": verifier},
-            )
-    except Exception as e:
-        logger.warning(f"[P1-OAUTH-FIRST-PARTY] Neon Auth inalcanzable canjeando verifier: {type(e).__name__}: {e}")
-        return Response(status_code=502)
-    if r.status_code != 200:
-        logger.info(f"[P1-OAUTH-FIRST-PARTY] canje rechazado por Neon (HTTP {r.status_code}).")
-        return Response(status_code=401)
-    try:
-        payload = r.json() or {}
-    except Exception:
-        payload = {}
-    user = payload.get("user") or {}
-    uid = str(user.get("id") or "").strip()
-    if not uid:
-        logger.warning("[P1-OAUTH-FIRST-PARTY] Neon respondió 200 sin user.id — fail-secure 401.")
+    if not uid_bearer:
         return Response(status_code=401)
     if not session_cookies_enabled():
         logger.error("[P1-OAUTH-FIRST-PARTY] session_cookies deshabilitadas — el adopt requiere la feature.")
         return Response(status_code=503)
-    # [P1-OAUTH-FIRST-PARTY] fila espejo de user_profiles (paridad con el path Bearer;
-    # el primer login por Google puede resolverse SOLO vía este adopt). Best-effort.
+    uid = uid_bearer
+    # [P1-OAUTH-FIRST-PARTY] fila espejo de user_profiles (paridad con el path OTP;
+    # el primer login por Google puede resolverse SOLO por aquí). Best-effort.
     try:
-        await asyncio.to_thread(ensure_user_profile_exists, uid, user.get("email"), user.get("name"))
+        await asyncio.to_thread(ensure_user_profile_exists, uid, None, None)
     except Exception as _ens_e:
         logger.warning(f"[P1-OAUTH-FIRST-PARTY] ensure_user_profile_exists lanzó {type(_ens_e).__name__} (auth continúa)")
     token = set_session_cookie(response, uid)
     if not token:
         return Response(status_code=503)
-    logger.info(f"🔐 [P1-OAUTH-FIRST-PARTY] verifier canjeado server-side → sesión first-party (uid={uid[:8]}…).")
+    logger.info(f"🔐 [P1-OAUTH-FIRST-PARTY] retorno de Google adoptado → sesión first-party (uid={uid[:8]}…).")
     return {
         "ok": True,
         "user_id": uid,
-        "email": user.get("email") or None,
         "token": token,
         "form_key": derive_form_key(uid),
         "session_cookie": True,

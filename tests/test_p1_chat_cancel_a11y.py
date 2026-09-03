@@ -215,76 +215,178 @@ def test_anchor_present_frontend(agent_page_src: str):
     )
 
 
+# -----------------------------------------------------------------------------
+# [P1-I18N-DASHBOARD · 2026-08-15] Reanclaje del bloque a11y: la GRAFÍA cambió,
+# la CONDUCTA no — y al mutar salió a la luz un hueco PREEXISTENTE.
+#
+# Grafía: el dashboard pasó a multiidioma y el atributo se escribe ahora
+# `aria-label={t('Historial de conversación con el asistente')}`. En este motor
+# **la clave ES el texto español** (es-DO no lleva catálogo: es el fallback), así
+# que la cadena es literalmente la que lee un lector de pantalla en es-DO. Se
+# aceptan las dos formas (literal y envuelta) para que un revert tampoco ciegue
+# el guard.
+#
+# El hueco: estos cuatro tests anclaban por PROXIMIDAD AL COMENTARIO
+# (`P1-CHAT-A11Y-LIVE[\s\S]{0,3000}?aria-label=…`). Al verificar por mutación
+# —borrar el `aria-label` de los DOS contenedores— el test siguió VERDE: lo
+# satisfacía el `aria-label` de un spinner `<Loader2>` 18 líneas más abajo, que
+# cae dentro de la misma ventana. Un guard que un elemento vecino puede
+# satisfacer no vigila al contenedor.
+#
+# Ahora se ancla al ELEMENTO: se localiza cada etiqueta de apertura que declara
+# `role="log"` y se exige el juego completo de atributos EN ESA etiqueta. Aplica
+# a TODAS (hay dos caminos de render, virtualizado y simple: ambos son el
+# contenedor de mensajes y ambos deben anunciarse igual).
+# -----------------------------------------------------------------------------
+
+_ROLE_LOG_RE = re.compile(r"role\s*=\s*[\"']log[\"']")
+
+# Valor de atributo JSX: literal "…" | envuelto {t('…')}.
+_ATTR_VALUE = r"(?:[\"']([^\"']+)[\"']|\{\s*t\(\s*['\"]([^'\"]+)['\"])"
+
+
+def _enclosing_jsx_open_tag(src: str, idx: int) -> str | None:
+    """Etiqueta de apertura JSX que CONTIENE la posición `idx`.
+
+    Escanea hacia atrás hasta el `<` y hacia delante hasta el `>` de cierre a
+    profundidad 0 de llaves (así `style={{…}}` o `onX={(a) => b}` no lo cortan).
+    Devuelve None si la etiqueta cierra ANTES de `idx` — que es como se
+    descartan las apariciones dentro de comentarios (este archivo documenta
+    `role="log"` en el comentario del marker, y esa no es una etiqueta real).
+    """
+    start = src.rfind("<", 0, idx)
+    if start == -1:
+        return None
+    depth = 0
+    for i in range(start, len(src)):
+        ch = src[i]
+        if ch == "{":
+            depth += 1
+        elif ch == "}":
+            depth -= 1
+        elif ch == ">" and depth == 0:
+            return src[start : i + 1] if i >= idx else None
+    return None
+
+
+def _log_container_tags(src: str) -> list[str]:
+    """Todas las etiquetas de apertura que declaran `role="log"`."""
+    tags = []
+    for m in _ROLE_LOG_RE.finditer(src):
+        tag = _enclosing_jsx_open_tag(src, m.start())
+        if tag is not None:
+            tags.append(tag)
+    return tags
+
+
 def test_messages_container_has_role_log(agent_page_src: str):
     """El contenedor de mensajes debe tener `role="log"` — la role estándar
-    ARIA para chat conversations / activity logs."""
-    # Localiza el bloque del marker P1-CHAT-A11Y-LIVE y los 60 chars
-    # siguientes deben contener role="log" y aria-live="polite"
-    pattern = re.compile(
-        r"P1-CHAT-A11Y-LIVE[\s\S]{0,3000}?role\s*=\s*[\"']log[\"']"
-    )
-    assert pattern.search(agent_page_src), (
+    ARIA para chat conversations / activity logs.
+
+    Se exige además que el marker `P1-CHAT-A11Y-LIVE` documente el bloque
+    (proximidad al primer contenedor), que es lo que ata este guard a ESTE
+    contenedor y no a un `role="log"` cualquiera de otra pantalla.
+    """
+    tags = _log_container_tags(agent_page_src)
+    assert tags, (
         "P1-CHAT-CANCEL-A11Y regresión: el contenedor de mensajes ya no "
         "tiene `role=\"log\"`. Sin él, screen readers no identifican el "
         "área como un log de conversación."
+    )
+    documented = re.search(
+        r"P1-CHAT-A11Y-LIVE[\s\S]{0,3000}?role\s*=\s*[\"']log[\"']",
+        agent_page_src,
+    )
+    assert documented, (
+        "P1-CHAT-CANCEL-A11Y regresión: hay `role=\"log\"` pero ya no bajo el "
+        "marker `P1-CHAT-A11Y-LIVE`. El marker es el tooltip-anchor que hace "
+        "que un renombre falle el test antes de cambiar producción."
     )
 
 
 def test_messages_container_has_aria_live_polite(agent_page_src: str):
     """`aria-live="polite"` anuncia nuevos mensajes en pausa (NO interrumpe
     al usuario). NO usar `assertive` — sería invasivo en cada chunk."""
-    pattern = re.compile(
-        r"P1-CHAT-A11Y-LIVE[\s\S]{0,3000}?aria-live\s*=\s*[\"']polite[\"']"
-    )
-    assert pattern.search(agent_page_src), (
-        "P1-CHAT-CANCEL-A11Y regresión: `aria-live=\"polite\"` ya no está "
-        "en el contenedor. Sin él, screen readers no anuncian mensajes "
-        "nuevos del asistente."
-    )
+    tags = _log_container_tags(agent_page_src)
+    assert tags, "P1-CHAT-CANCEL-A11Y: ningún contenedor con role=\"log\"."
+    for tag in tags:
+        assert re.search(r"aria-live\s*=\s*[\"']polite[\"']", tag), (
+            "P1-CHAT-CANCEL-A11Y regresión: `aria-live=\"polite\"` ya no está "
+            "en el contenedor `role=\"log\"`. Sin él, screen readers no "
+            f"anuncian mensajes nuevos del asistente. Tag: {tag[:200]!r}"
+        )
+        assert not re.search(r"aria-live\s*=\s*[\"']assertive[\"']", tag), (
+            "P1-CHAT-CANCEL-A11Y regresión: `aria-live=\"assertive\"` "
+            "interrumpiría al usuario en CADA chunk del stream. Usar "
+            f"`polite`. Tag: {tag[:200]!r}"
+        )
 
 
 def test_messages_container_has_aria_label_es_do(agent_page_src: str):
     """`aria-label` da contexto al log — debe estar en español dominicano
-    (es-DO, P3-I18N-DEFERRED)."""
-    # Match el atributo y validar que el value NO es vacío y NO es inglés trivial
-    pattern = re.compile(
-        r"P1-CHAT-A11Y-LIVE[\s\S]{0,3000}?aria-label\s*=\s*[\"']([^\"']+)[\"']"
-    )
-    m = pattern.search(agent_page_src)
-    assert m, (
-        "P1-CHAT-CANCEL-A11Y regresión: `aria-label` ya no está en el "
-        "contenedor. Sin él, el log queda sin nombre accesible."
-    )
-    label = m.group(1).strip()
-    assert len(label) >= 10, (
-        f"P1-CHAT-CANCEL-A11Y: aria-label muy corto ({label!r}); usar "
-        f"frase descriptiva es-DO."
-    )
-    # Detectar copy obviamente inglés/placeholder
-    forbidden_en = {"chat log", "conversation log", "messages", "TODO", "log"}
-    assert label.lower() not in forbidden_en, (
-        f"P1-CHAT-CANCEL-A11Y: aria-label parece placeholder/inglés "
-        f"({label!r}). El producto es es-DO (P3-I18N-DEFERRED)."
-    )
+    (es-DO), suelto o envuelto en `t()`.
+
+    [P1-I18N-DASHBOARD · 2026-08-15] Reanclaje: la GRAFÍA cambió, la CONDUCTA
+    no. El dashboard pasó a multiidioma y el atributo se escribe ahora
+    `aria-label={t('Historial de conversación con el asistente')}`. En este
+    motor **la clave ES el texto español** (es-DO no lleva catálogo: es el
+    fallback), así que la cadena capturada sigue siendo LITERALMENTE la que
+    lee un lector de pantalla en es-DO — el mismo valor que este test validaba
+    antes. Se aceptan las dos formas para que un revert del i18n tampoco deje
+    el guard ciego, y se conservan intactas las dos comprobaciones de fondo:
+    que el label exista con contenido y que no sea un placeholder en inglés.
+
+    Nota sobre `P3-I18N-DEFERRED`: quedó SUPERSEDED por `P1-I18N-DASHBOARD`.
+    Lo que se traduce es la INTERFAZ; el requisito de que este label nazca en
+    es-DO no se relaja, porque el español es la clave de la que cuelgan las
+    otras 4 traducciones.
+    """
+    tags = _log_container_tags(agent_page_src)
+    assert tags, "P1-CHAT-CANCEL-A11Y: ningún contenedor con role=\"log\"."
+    for tag in tags:
+        # El atributo debe vivir EN la etiqueta del contenedor — no en un
+        # vecino: un `<Loader2 aria-label={t('Cargando mensajes')} />` cercano
+        # satisfacía la versión anterior de este guard con los DOS contenedores
+        # ya sin nombre accesible.
+        m = re.search(r"aria-label\s*=\s*" + _ATTR_VALUE, tag)
+        assert m, (
+            "P1-CHAT-CANCEL-A11Y regresión: `aria-label` ya no está en el "
+            "contenedor `role=\"log\"`. Sin él, el log queda sin nombre "
+            "accesible. Se aceptan `aria-label=\"…\"` y `aria-label={t('…')}` "
+            f"(P1-I18N-DASHBOARD). Tag: {tag[:200]!r}"
+        )
+        label = (m.group(1) or m.group(2)).strip()
+        assert len(label) >= 10, (
+            f"P1-CHAT-CANCEL-A11Y: aria-label muy corto ({label!r}); usar "
+            f"frase descriptiva es-DO."
+        )
+        # Detectar copy obviamente inglés/placeholder
+        forbidden_en = {"chat log", "conversation log", "messages", "TODO", "log"}
+        assert label.lower() not in forbidden_en, (
+            f"P1-CHAT-CANCEL-A11Y: aria-label parece placeholder/inglés "
+            f"({label!r}). La clave del i18n es el texto es-DO "
+            f"(P1-I18N-DASHBOARD, supersede P3-I18N-DEFERRED)."
+        )
 
 
 def test_messages_container_has_aria_relevant(agent_page_src: str):
     """`aria-relevant` controla qué cambios anuncia el live region. Debe
     incluir `additions` (bubbles nuevos) y `text` (streaming chunks)."""
-    pattern = re.compile(
-        r"P1-CHAT-A11Y-LIVE[\s\S]{0,3000}?aria-relevant\s*=\s*[\"']([^\"']+)[\"']"
-    )
-    m = pattern.search(agent_page_src)
-    assert m, (
-        "P1-CHAT-CANCEL-A11Y regresión: `aria-relevant` no encontrado. "
-        "Default del browser (`additions text`) puede variar; declararlo "
-        "explícito hace el comportamiento predictible."
-    )
-    relevant = m.group(1)
-    assert "additions" in relevant, (
-        f"P1-CHAT-CANCEL-A11Y: aria-relevant={relevant!r} no incluye "
-        f"`additions` — bubbles nuevos no se anunciarían."
-    )
+    tags = _log_container_tags(agent_page_src)
+    assert tags, "P1-CHAT-CANCEL-A11Y: ningún contenedor con role=\"log\"."
+    for tag in tags:
+        m = re.search(r"aria-relevant\s*=\s*" + _ATTR_VALUE, tag)
+        assert m, (
+            "P1-CHAT-CANCEL-A11Y regresión: `aria-relevant` no encontrado en "
+            "el contenedor `role=\"log\"`. Default del browser (`additions "
+            "text`) puede variar; declararlo explícito hace el comportamiento "
+            f"predictible. Tag: {tag[:200]!r}"
+        )
+        relevant = m.group(1) or m.group(2)
+        assert "additions" in relevant, (
+            f"P1-CHAT-CANCEL-A11Y: aria-relevant={relevant!r} no incluye "
+            f"`additions` — bubbles nuevos no se anunciarían."
+        )
 
 
 # -- MessageBubble aria-busy on streaming --

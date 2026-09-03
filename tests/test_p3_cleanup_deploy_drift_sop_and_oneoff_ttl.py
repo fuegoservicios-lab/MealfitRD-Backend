@@ -125,7 +125,7 @@ def sop_body(claude_md_src: str) -> str:
 
 
 def test_sop_section_header_present(claude_md_src: str):
-    """La sub-sección `### SOP: resolver \`deploy_lag_drift_vs_expected\``
+    r"""La sub-sección `### SOP: resolver \`deploy_lag_drift_vs_expected\``
     debe existir tras el SOP de `plan_data_corrupted` y antes de
     "Cómo añadir un nuevo alert_key"."""
     pattern = re.compile(

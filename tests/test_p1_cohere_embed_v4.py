@@ -1,8 +1,8 @@
 """[P1-COHERE-EMBED-V4 · 2026-06-12] Test ancla de la migración de embeddings
 a Cohere Embed v4 (`embed-v4.0`).
 
-Decisión del owner: stack de DOS providers — DeepSeek (LLM, ver
-P0-DEEPSEEK-MIGRATION) + Cohere (embeddings). Motivación: precisión
+Decisión del owner: stack de DOS providers — GLM (LLM, ver
+P0-LLM-PROVIDER-MIGRATION) + Cohere (embeddings). Motivación: precisión
 multilingüe (es-DO) en el RAG del formulario de planes y la auditoría de
 adherencia de los chunks de aprendizaje.
 

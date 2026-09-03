@@ -66,14 +66,36 @@ _EXPECTED_MARKETING = ["/", "/precios", "/como-funciona", "/funciones", "/precis
 
 
 def _routes_from_array(text: str, const_name: str) -> list[str]:
-    """Extrae los literales de un `export const NAME = ['/a', '/b'];`."""
-    m = re.search(
-        const_name + r"\s*=\s*\[(?P<body>[^\]]*)\]",
-        text,
-        re.DOTALL,
-    )
-    assert m is not None, f"No se encontró el array `{const_name}`."
-    return re.findall(r"['\"]([^'\"]+)['\"]", m.group("body"))
+    """Extrae los literales del PRIMER `export const NAME = ['/a', '/b'];`.
+
+    Para un fichero con una sola copia. Si puede haber varias, usa
+    `_all_routes_from_arrays`: ver P1-I18N-PAPER-GUARD-SEGUNDA-COPIA.
+    """
+    todas = _all_routes_from_arrays(text, const_name)
+    assert todas, f"No se encontró el array `{const_name}`."
+    return todas[0]
+
+
+def _all_routes_from_arrays(text: str, const_name: str) -> list[list[str]]:
+    """TODAS las copias del array, en orden de aparición.
+
+    [P1-I18N-PAPER-GUARD-SEGUNDA-COPIA · 2026-08-21] Esto era un `re.search`, o
+    sea la PRIMERA coincidencia. Cuando `P1-AUTO-LOCALE` añadió un segundo
+    `var PAPER` a `index.html` —el que decide si autodetectar idioma— pasó a ser
+    el primero, y la copia original, la del tema `data-theme="paper"` que este
+    guard se escribió para vigilar, se quedó SIN ancla.
+
+    Medido con mutación: quitar `'/refunds'` de la copia del tema dejaba el
+    fichero de tests en 11 passed. El guard seguía verde vigilando otra cosa.
+    """
+    return [
+        re.findall(r"['\"]([^'\"]+)['\"]", m.group("body"))
+        for m in re.finditer(
+            const_name + r"\s*=\s*\[(?P<body>[^\]]*)\]",
+            text,
+            re.DOTALL,
+        )
+    ]
 
 
 def test_paper_surface_module_lists_every_paper_route():
@@ -103,12 +125,31 @@ def test_paper_surface_module_lists_the_dynamic_prefixes():
 
 def test_boot_script_copy_matches_the_ssot():
     """El boot script de index.html no puede importar el módulo, así que
-    lleva una copia literal. Si divergen, la carga en frío parpadea."""
+    lleva una copia literal. Si divergen, la carga en frío parpadea.
+
+    [P1-I18N-PAPER-GUARD-SEGUNDA-COPIA · 2026-08-21] TODAS las copias, no la
+    primera. `index.html` tiene hoy DOS `var PAPER`: la del bloque de idioma
+    (P1-AUTO-LOCALE, decide si autodetectar) y la del tema (decide
+    `data-theme="paper"`). Con `re.search` sólo se comprobaba la primera y la
+    segunda llevaba desde el 20-ago sin vigilancia — medido con mutación: quitarle
+    una ruta dejaba este fichero en 11 passed.
+    """
     html = _INDEX_HTML.read_text(encoding="utf-8")
-    assert _routes_from_array(html, r"var\s+PAPER") == _EXPECTED_PAPER, (
-        "P1-PAPER-SURFACE-SSOT: la copia del boot script en index.html "
-        "divergió de paperSurface.js. Las dos tienen que viajar juntas."
+    copias = _all_routes_from_arrays(html, r"var\s+PAPER\b")
+    assert copias, "No se encontró ningún `var PAPER` en index.html."
+    # El recuento se ancla para que una TERCERA copia sea una decisión visible y
+    # no un silencio: cada copia nueva es una superficie más que puede driftar.
+    assert len(copias) == 2, (
+        f"index.html tiene {len(copias)} copias literales de la superficie papel, "
+        "y este guard espera 2 (la del bloque de idioma y la del tema). Si añadiste "
+        "una tercera, decide antes si de verdad hace falta: cada copia es un sitio "
+        "más donde la lista puede driftar. Si hace falta, actualiza este número."
     )
+    for i, copia in enumerate(copias, start=1):
+        assert copia == _EXPECTED_PAPER, (
+            f"P1-PAPER-SURFACE-SSOT: la copia #{i} de `var PAPER` en index.html "
+            "divergió de paperSurface.js. Las dos tienen que viajar juntas."
+        )
     assert _routes_from_array(html, r"var\s+PAPER_PFX") == _EXPECTED_PAPER_PREFIXES, (
         "P1-PAPER-SURFACE-SSOT: la copia de PREFIJOS del boot script divergió. "
         "Una carga directa de /novedades/<slug> parpadearía a oscuro."

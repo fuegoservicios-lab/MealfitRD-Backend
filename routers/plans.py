@@ -18,7 +18,11 @@ from auth import get_verified_user_id, verify_api_quota
 from db import (
     get_user_likes, get_active_rejections, get_or_create_session,
     save_message, update_user_health_profile, update_user_health_profile_atomic, log_api_usage, get_latest_meal_plan,
-    get_latest_meal_plan_with_id, update_meal_plan_data, insert_like
+    get_latest_meal_plan_with_id, update_meal_plan_data, insert_like,
+    # [P1-PLAN-DISPLAY-I18N · 2026-08-19] TRIGGER-1B lee el locale del usuario
+    # tras la persistencia no-chunked (mismo patrón ya usado en otros ~6 call
+    # sites de este archivo, ver L3223/6164/etc).
+    get_user_profile,
 )
 from memory_manager import build_memory_context, summarize_and_prune
 from agent import analyze_preferences_agent, swap_meal, swap_meal_with_consent, LLMRateLimitedError, LLMCircuitBreakerOpen
@@ -355,7 +359,18 @@ def _resolve_request_tz_offset(payload_value, user_id: Optional[str]) -> int:
       2. Si es None y hay `user_id`: leer `health_profile.tz_offset_minutes`
          vivo vía `cron_tasks._get_user_tz_live` (helper que ya usan los
          flujos sensibles a TZ del worker).
-      3. Si tampoco hay perfil o falla la lectura: 0 (UTC).
+      3. Si tampoco hay perfil o falla la lectura: `constants.DEFAULT_TZ_OFFSET_MIN`.
+
+    [P3-TZ-FALLBACK-SSOT · 2026-08-22] Ese paso 3 devolvía **0 (UTC)**, y le pasaba 0 a
+    `_get_user_tz_live` como fallback. Eran dos de las TRES respuestas que el backend tenía a la
+    misma pregunta —el helper de fechas del chat contestaba 240— así que el mismo usuario sin huso
+    registrado era dominicano para una superficie y estaba en UTC para la otra: cuatro horas
+    decidiendo a qué DÍA pertenece lo que acaba de registrar.
+
+    Medido antes de elegir: de los cinco perfiles reales de producción, **los cinco** tienen
+    `tz_offset_minutes = 240`. Cero usuarios en UTC. Un fallback a 0 no era «el neutral» — era una
+    elección, y la equivocada para el 100% de la población medida. Ahora las tres leen el SSOT,
+    que es un knob (`MEALFIT_DEFAULT_TZ_OFFSET_MIN`) por si la población deja de ser dominicana.
 
     Args:
         payload_value: valor crudo de `data.get("tzOffset")` — puede ser int,
@@ -371,13 +386,14 @@ def _resolve_request_tz_offset(payload_value, user_id: Optional[str]) -> int:
             return int(payload_value)
         except (TypeError, ValueError):
             pass  # cae a fallback de perfil
+    from constants import DEFAULT_TZ_OFFSET_MIN
     if user_id and user_id != "guest":
         try:
             from cron_tasks import _get_user_tz_live
-            return _get_user_tz_live(user_id, fallback_minutes=0)
+            return _get_user_tz_live(user_id, fallback_minutes=DEFAULT_TZ_OFFSET_MIN)
         except Exception as _tz_err:
             logger.debug(f"[P1-1] Fallback de TZ desde perfil falló para {user_id}: {_tz_err}")
-    return 0
+    return DEFAULT_TZ_OFFSET_MIN
 
 
 def _resolve_live_pantry(actual_user_id: Optional[str], data: dict) -> list:
@@ -843,6 +859,47 @@ def _is_pregnancy_or_lactation_condition_item(value: str) -> bool:
         return False
     normalized = strip_accents(value).strip().lower()
     return normalized in _PREGNANCY_CHIP_LABELS_CANONICAL
+
+
+# ============================================================
+# [P1-MEDICAL-SCOPE-GATE · 2026-08-09] FUERA DEL ALCANCE CLÍNICO → NO SE GENERA.
+# ------------------------------------------------------------
+# El motor aplica reglas de un registry ACOTADO: `condition_rules.CONDITION_RULES`
+# (12) y `medication_rules.MEDICATION_RULES` (13). Lo que cae fuera no producía ni
+# regla ni aviso — se generaba un plan como si el usuario no hubiera declarado nada.
+# Estos dos literales son la señal explícita que el wizard emite para «tengo algo
+# que no está en tu lista», y aquí se rechaza.
+#
+# SON LITERALES EXACTOS, NO PALABRAS SUELTAS QUE BUSCAR EN PROSA. `detect_active_rules`
+# matchea por SUBCADENA y este repo lleva 16 incidentes de esa clase; un blocklist
+# sobre texto libre sería el 17º, y aquí las dos direcciones del error son graves
+# (falso positivo = denegar servicio; falso negativo = entregar plan inseguro).
+# Por eso la comparación es de igualdad sobre el valor canónico.
+#
+# Espejo de `OUT_OF_SCOPE_CONDITION`/`OUT_OF_SCOPE_MEDICATION` en
+# `frontend/src/components/assessment/questions/QMedical.jsx`. Si drifean, el gate
+# deja de reconocer lo que el formulario emite y el bloqueo se evapora EN SILENCIO
+# — por eso `test_p1_medical_scope_gate.py` ancla que los 4 literales coincidan.
+_OUT_OF_SCOPE_CONDITION = "Otra condición (no listada)"
+_OUT_OF_SCOPE_MEDICATION = "Otro medicamento (no listado)"
+
+
+def _has_out_of_scope_clinical_declaration(data: dict) -> bool:
+    """¿El usuario declaró una condición o fármaco fuera del registry clínico?
+
+    Igualdad sobre el valor canónico (normalizado a minúsculas + strip), nunca
+    contención: el punto de este gate es no depender de interpretar prosa.
+    """
+    def _declared(field: str, sentinel: str) -> bool:
+        raw = data.get(field)
+        items = raw if isinstance(raw, (list, tuple, set)) else ([raw] if raw else [])
+        target = sentinel.strip().lower()
+        return any(str(x).strip().lower() == target for x in items)
+
+    return (
+        _declared("medicalConditions", _OUT_OF_SCOPE_CONDITION)
+        or _declared("medications", _OUT_OF_SCOPE_MEDICATION)
+    )
 
 
 def _validate_medical_conditions_cap(data: dict) -> tuple[bool, int, int]:
@@ -1991,6 +2048,71 @@ def _enqueue_remaining_chunks(
 _BG_SSE_FALLBACK_TASKS: set = set()
 
 
+def _assert_supported_country_for_request(raw):
+    """Traduce el helper de dominio al 400 común de las puertas HTTP."""
+    from constants import UnsupportedCountryError, assert_supported_country
+
+    try:
+        return assert_supported_country(raw)
+    except UnsupportedCountryError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+
+def _emit_country_profile_constraint_alert_best_effort(
+    user_id: Optional[str], raw_country, error: Exception
+) -> None:
+    """Alerta una divergencia entre validación de aplicación y CHECK de DB."""
+    _key_user_id = user_id or "unknown"
+    alert_key = f"country_profile_constraint_violation:{_key_user_id}"
+    try:
+        from db_core import execute_sql_write as _country_constraint_write
+
+        _country_constraint_write(
+            """
+            INSERT INTO system_alerts
+                (alert_key, alert_type, severity, title, message, metadata,
+                 triggered_at, resolved_at)
+            VALUES (%s, 'country_system', 'critical', %s, %s, %s::jsonb, NOW(), NULL)
+            ON CONFLICT (alert_key) DO UPDATE SET
+                severity = EXCLUDED.severity,
+                title = EXCLUDED.title,
+                message = EXCLUDED.message,
+                metadata = EXCLUDED.metadata,
+                triggered_at = NOW(),
+                resolved_at = NULL
+            """,
+            (
+                alert_key,
+                "La DB rechazó health_profile.country tras la validación HTTP",
+                "Revisar writers fuera de assert_supported_country y deriva del CHECK.",
+                _json.dumps(
+                    {
+                        "user_id": str(user_id) if user_id else None,
+                        "country": raw_country,
+                        "error_type": type(error).__name__,
+                        "error": str(error)[:500],
+                    },
+                    ensure_ascii=False,
+                ),
+            ),
+        )
+    except Exception as alert_error:
+        logger.warning(
+            "[P2-ANALYZE-COUNTRY-SIN-VALIDAR] no se pudo emitir %s: %r",
+            alert_key,
+            alert_error,
+        )
+
+
+def _is_country_profile_constraint_violation(error: Exception) -> bool:
+    diag = getattr(error, "diag", None)
+    constraint_name = getattr(diag, "constraint_name", None)
+    return (
+        constraint_name == "user_profiles_country_supported"
+        or "user_profiles_country_supported" in str(error)
+    )
+
+
 def _postprocess_pipeline_result(
     *,
     result: dict,
@@ -2006,6 +2128,7 @@ def _postprocess_pipeline_result(
     plan_start_date: str,
     tz_offset_mins: int,
     transport_label: str = "sync",
+    existing_plan_id: Optional[str] = None,
 ) -> dict:
     """[P1-1] Post-procesa el resultado del pipeline tras la validación pantry:
     persiste perfil/mensajes/audit, expurga campos internos del payload,
@@ -2043,6 +2166,20 @@ def _postprocess_pipeline_result(
     inter-chunk diseñada por P0-α/P0-3. Default `"sync"` por compat
     histórica; los call sites deben pasar el label explícito de su transporte.
     """
+
+    # [P1-PLAN-MODE · 2026-08-11] GENERAR UN PLAN ES EL CONSENTIMIENTO DE GENERAR.
+    # Punto unico por el que pasan /analyze y /analyze/stream. Sin esto, un usuario en
+    # modo seguimiento que pulsa «Generar plan» paga su credito, recibe la semana 1
+    # por SSE, y las semanas 2..N quedan bloqueadas por nuestro propio gate del
+    # pickup — en silencio, sin error, con chunk_overdue alertando cada hora sobre un
+    # plan pagado que no puede completarse.
+    if actual_user_id and actual_user_id != "guest":
+        try:
+            from plan_mode import ensure_plan_generation_enabled
+            ensure_plan_generation_enabled(actual_user_id)
+        except Exception as _pm_err:
+            logger.warning(f"[P1-PLAN-MODE] re-encendido automatico fallo (best-effort): {_pm_err}")
+
     # 1. Health profile (DB write auxiliar — fallar no rompe la respuesta).
     # [P1-12] `tz_offset_mins` se persiste como `tz_offset_minutes` en
     # health_profile para que `_resolve_request_tz_offset` (linea ~53) pueda
@@ -2050,9 +2187,19 @@ def _postprocess_pipeline_result(
     # requests. Inyectado explícitamente — antes venía vía `data["tz_offset_minutes"]`
     # (mutación que P1-12 elimina).
     if actual_user_id:
-        hp_data = {k: v for k, v in data.items() if k not in ('session_id', 'user_id')}
+        # [P1-APPMODE-REQUIRED · 2026-08-12] `appMode` fuera del health_profile:
+        # es ruteo del wizard (¿plan o contador?), no dato de salud. El modo real
+        # vive en la COLUMNA user_profiles.plan_mode (endpoint plan-mode); dejarlo
+        # colarse al jsonb creaba una segunda verdad que la rama tracking declara
+        # explícitamente querer evitar.
+        hp_data = {k: v for k, v in data.items() if k not in ('session_id', 'user_id', 'appMode')}
         hp_data["tz_offset_minutes"] = tz_offset_mins
         if hp_data:
+            # [P2-ANALYZE-COUNTRY-SIN-VALIDAR · 2026-08-23] Defensa en
+            # profundidad en el punto exacto de escritura. Va FUERA del try
+            # fail-open de DB: un 400 no puede convertirse en warning y seguir.
+            if "country" in hp_data:
+                _assert_supported_country_for_request(hp_data.get("country"))
             try:
                 # [P1-2] Atomic write con mutator que MERGEA `hp_data` ON TOP
                 # del estado actual bajo FOR UPDATE. Antes era un full-overwrite
@@ -2074,6 +2221,14 @@ def _postprocess_pipeline_result(
                 update_user_health_profile_atomic(actual_user_id, _post_pipeline_mutator)
                 logger.info(f"💾 health_profile guardado para user {actual_user_id}")
             except Exception as _hp_err:
+                if _is_country_profile_constraint_violation(_hp_err):
+                    _emit_country_profile_constraint_alert_best_effort(
+                        actual_user_id, hp_data.get("country"), _hp_err
+                    )
+                    raise HTTPException(
+                        status_code=500,
+                        detail="La base rechazó el país del perfil; el incidente fue reportado.",
+                    ) from _hp_err
                 logger.warning(f"⚠️ Error guardando health_profile: {_hp_err}")
 
     # 2. Chat messages + summarize background (consistente con sync — antes el
@@ -2083,11 +2238,20 @@ def _postprocess_pipeline_result(
     if session_id:
         goal = data.get('mainGoal', 'Desconocido')
         try:
-            save_message(session_id, "user", f"Generar plan para mi objetivo: {goal}")
-            save_message(
-                session_id, "model",
-                "¡Aquí tienes tu estrategia nutricional personalizada generada analíticamente!",
-            )
+            # [P2-I18N-CHAT-SESIONES-TITULADAS-POR-MENSAJE-SEMBRADO · 2026-08-23] En el
+            # idioma del usuario y con el objetivo GLOSADO (era el código `lose_fat` pegado).
+            # 90 de 106 sesiones se titulan con este mensaje. Locale best-effort del perfil,
+            # guest ⇒ español. SSOT: `prompts.chat_agent.plan_seed_messages`.
+            _seed_locale = None
+            try:
+                if actual_user_id and actual_user_id != "guest":
+                    _seed_locale = (get_user_profile(actual_user_id) or {}).get("locale")
+            except Exception:
+                _seed_locale = None
+            from prompts.chat_agent import plan_seed_messages as _plan_seed_messages
+            _seed_user_text, _seed_model_text = _plan_seed_messages(_seed_locale, goal)
+            save_message(session_id, "user", _seed_user_text)
+            save_message(session_id, "model", _seed_model_text)
             background_tasks.add_task(summarize_and_prune, session_id)
         except Exception as _msg_err:
             logger.warning(f"⚠️ Error registrando mensajes de chat: {_msg_err}")
@@ -2103,6 +2267,16 @@ def _postprocess_pipeline_result(
     # son útiles para el pipeline interno (attribution tracker, embedding
     # storage) pero el frontend no debe verlos — riesgo de filtración de
     # internals + tamaño innecesario en el payload.
+    # [P1-ARQ25-F2-PLANPOLICY · 2026-09-02] Toda entrega (cola, SSE legado, invitados) sella la
+    # política compilada y la medición shadow en plan_data: los invitados no tienen run, así
+    # que el plan es su único registro; para autenticados el run ya lleva la política (§6.4).
+    try:
+        from plan_policy import stamp_plan_policy as _stamp_policy, emit_policy_shadow_metric as _emit_policy_metric
+        _compiled_policy = _stamp_policy(result, data, total_days_requested=total_days_requested)
+        if _compiled_policy:
+            _emit_policy_metric(actual_user_id, existing_plan_id, _compiled_policy, result.get("_plan_policy_shadow"))
+    except Exception as _pol_err:
+        logger.warning(f"[P1-ARQ25-F2-PLANPOLICY] sello de política omitido: {_pol_err}")
     selected_techniques = result.pop("_selected_techniques", None)
     result.pop("_profile_embedding", None)
     result.pop("_active_learning_signals", None)
@@ -2114,6 +2288,7 @@ def _postprocess_pipeline_result(
         assert actual_user_id is not None
         plan_id = save_partial_plan_get_id(
             actual_user_id, result, selected_techniques, total_days_requested,
+            existing_plan_id=existing_plan_id,  # [P1-ARQ25-F1-LIFECYCLE] cola: rellena el placeholder
         )
         if plan_id:
             # [P2-FREQ-TRACKING-CHUNKED · 2026-07-29] (audit solver+seeder v4) El tracking de
@@ -2185,9 +2360,27 @@ def _postprocess_pipeline_result(
         try:
             _pid = _save_plan_and_track_background(
                 actual_user_id, result, selected_techniques, return_id=True,
+                existing_plan_id=existing_plan_id,  # [P1-ARQ25-F1-LIFECYCLE] cola: rellena el placeholder
             )
             if _pid:
                 result["id"] = _pid
+
+                # [P1-PLAN-DISPLAY-I18N · 2026-08-19] tooltip-anchor:
+                # P1-PLAN-DISPLAY-I18N-TRIGGER-1B. Camino NO-chunked (tier gratis): el
+                # plan nace COMPLETO en este INSERT (a diferencia del chunked, que solo
+                # persiste la semana 1 aquí) — `day_indices=None` enriquece todos los
+                # días de una sola vez. Best-effort: la persistencia YA ocurrió, esto
+                # nunca puede tumbar la entrega del plan al usuario.
+                try:
+                    _p1_i18n_locale = (get_user_profile(actual_user_id) or {}).get("locale")
+                    if _p1_i18n_locale and _p1_i18n_locale != "es-DO":
+                        from plan_display_i18n import schedule_plan_display_enrichment as _p1_i18n_schedule
+                        _p1_i18n_schedule(str(_pid), actual_user_id, _p1_i18n_locale)
+                except Exception as _p1_i18n_e:
+                    logger.warning(
+                        f"[P1-PLAN-DISPLAY-I18N] dispatch persist inicial (no-chunked) "
+                        f"falló plan={_pid} user={actual_user_id}: {_p1_i18n_e!r}"
+                    )
         except Exception as _persist_e:
             result["_persist_failed"] = True
             logger.error(
@@ -2348,6 +2541,26 @@ def api_shift_plan(response: Response, data: dict = Body(...), verified_user_id:
         if not verified_user_id or verified_user_id != user_id:
             raise HTTPException(status_code=401, detail="No autorizado.")
 
+        # [P1-PLAN-MODE · 2026-08-11] El Dashboard llama este endpoint AL MONTAR, y en
+        # modo seguimiento el usuario entra al dashboard todos los días (es su
+        # contador): sin este guard, él mismo re-encolaría su plan cada mañana.
+        # Soft-fail 200 (P3-SWAP-SOFT-FAIL-200): que el shift no corra porque el
+        # usuario pausó es business-as-usual; un 4xx pintaría rojo en su consola
+        # a diario sin que nada esté roto.
+        try:
+            from plan_mode import get_plan_mode, PLAN_MODE_SWITCH_ENABLED as _pm_on
+            if _pm_on and get_plan_mode(user_id).get("plan_mode") == "tracking":
+                return {
+                    "success": True,
+                    "operation_skipped": True,
+                    "reason_code": "plan_generation_paused",
+                    "message": "Planes en pausa: el shift no corre en modo seguimiento.",
+                }
+        except Exception as _pm_err:
+            # Fail-open a proposito: si el modulo no carga, el shift se comporta como
+            # siempre — la capa que de verdad frena el gasto es el gate del pickup.
+            logger.warning(f"[P1-PLAN-MODE] no se pudo leer plan_mode en shift: {_pm_err}")
+
         # P0-2 FIX: Get latest plan using FOR UPDATE to prevent race conditions with chunk workers doing blind overwrites
         from db_core import connection_pool
         from psycopg.rows import dict_row
@@ -2407,6 +2620,18 @@ def api_shift_plan(response: Response, data: dict = Body(...), verified_user_id:
                     days = plan_data.get("days", [])
                     total_planned_days = max(3, int(plan_data.get("total_days_requested", len(days))))
                     
+                    # [P1-CHUNK-OFFSET-REBASE · 2026-08-07] Gemela EXACTA de la
+                    # rama del cron, y en la MISMA posición: por encima del
+                    # guard de "plan vacío". El plan que más necesita el
+                    # reanclaje es justo el que tiene CERO días vivos; ponerla
+                    # debajo la deja inerte para él (medido con el plan
+                    # 76a6836d: 0 días y el relleno programado una semana
+                    # después). Con `len(days)=0` los offsets caen a 0 y el
+                    # chunk sale ya. La aritmética es SSOT en
+                    # `constants.rebase_pending_chunk_offsets`.
+                    from cron_tasks import _rebase_pending_chunk_offsets_sql as _p1cor_pre
+                    _p1cor_pre(cursor, plan_id, len(days))
+
                     if len(days) == 0:
                         return {"success": False, "message": "El plan está vacío."}
 
@@ -2590,6 +2815,17 @@ def api_shift_plan(response: Response, data: dict = Body(...), verified_user_id:
                     # 3. Rolling window: si el plan no ha expirado y la ventana actual tiene menos de window_size días,
                     #    y no hay ya un chunk de IA en camino, encolar generación IA real (aprendizaje continuo).
                     modified = needs_shift
+
+                    # [P1-CHUNK-OFFSET-REBASE · 2026-08-07] Gemela EXACTA de la
+                    # rama del cron (`_background_shift_plan_for_user`): el ancla
+                    # se acaba de mover a hoy y los `days_offset` de la cola
+                    # tienen que moverse con ella, o el relleno llega tarde por
+                    # los días archivados. La aritmética vive en
+                    # `constants.rebase_pending_chunk_offsets` (SSOT) y el
+                    # ejecutor SQL en cron_tasks, compartido por las dos ramas —
+                    # arreglar una sola reproduce el bug en la otra.
+                    from cron_tasks import _rebase_pending_chunk_offsets_sql
+                    _rebase_pending_chunk_offsets_sql(cursor, plan_id, len(shifted_days))
                     is_partial = plan_data.get('generation_status') in ('partial', 'generating_next')
                     needs_fill = len(shifted_days) < window_needed and days_remaining_in_plan > 0
 
@@ -3085,6 +3321,56 @@ def api_shift_plan(response: Response, data: dict = Body(...), verified_user_id:
         logger.error(f"❌ [API SHIFT ERROR] {e}")
         raise HTTPException(status_code=500, detail=safe_error_detail(e))
 
+
+def _hydrate_country_from_profile_for_submit(data: dict, user_id: Optional[str]) -> None:
+    """[P1-COUNTRY-RENEWAL-PROFILE-WINS · 2026-08-18] El país del PERFIL manda en las
+    renovaciones. Muta `data` IN-PLACE en los DOS entry points de generación
+    (/analyze y /analyze/stream), ANTES del pipeline y del merge a health_profile.
+
+    Incidente (2026-08-18, primer día del flip): el dueño eligió España en
+    Configuración (PATCH → health_profile.country='ES'), pulsó «Renovar», y el plan
+    salió dominicano (RD$, crítica criolla) Y Configuración volvió a mostrar DO.
+    Cadena: la renovación reenvía el formData del DISPOSITIVO, cuyo `country` es el
+    'DO' sembrado por `initialFormData` (el usuario jamás lo eligió) → la generación
+    leyó ese país stale → y el merge post-pipeline (`hp_data.update`) lo escribió de
+    vuelta al perfil, pisando el 'ES' de Configuración. Dos setters del mismo dato
+    sin jerarquía = last-writer-wins silencioso.
+
+    Regla (jerarquía explícita):
+      - `update_reason` presente ⇒ regen explícita (Renovar/Actualizar): el payload
+        NO trae una elección nueva de país, trae una copia vieja ⇒ el perfil GANA.
+      - Sin `update_reason` (wizard completo): el payload puede traer una elección
+        RECIÉN hecha en QCountry ⇒ el payload gana (y el merge la persistirá).
+      - En ambos casos, si el payload no trae país y el perfil sí ⇒ rellenar
+        (espejo del fill-si-falta de `_enrich_clinical_from_profile`, F2a).
+
+    Como la mutación ocurre antes del persist compartido, `hp_data` re-escribe el
+    MISMO valor del perfil (no-op) y el clobber muere en la misma jugada. Se copia
+    sin canonicalizar, pero se exige un código ISO exacto mediante
+    `assert_supported_country`: los lectores históricos conservan su fail-safe,
+    los escritores nuevos no pueden sembrar basura. Guests / sin perfil / error
+    de lectura ⇒ no-op fail-open; valor presente inválido ⇒ 400.
+    tooltip-anchor: P1-COUNTRY-RENEWAL-PROFILE-WINS
+    """
+    if not user_id or user_id == "guest" or not isinstance(data, dict):
+        return
+    prof_country = None
+    try:
+        from db import get_user_profile
+        hp = (get_user_profile(user_id) or {}).get("health_profile") or {}
+        prof_country = hp.get("country")
+    except Exception as _cty_err:
+        logger.warning(f"⚠️ [P1-COUNTRY-RENEWAL-PROFILE-WINS] hidratación de país falló (fail-open): {_cty_err}")
+        return
+    if prof_country is None:
+        return
+    # [P2-ANALYZE-COUNTRY-SIN-VALIDAR · 2026-08-23] Fuera del try de
+    # hidratación: el HTTPException 400 debe propagarse, nunca caer en fail-open.
+    _assert_supported_country_for_request(prof_country)
+    if data.get("update_reason") or not data.get("country"):
+        data["country"] = prof_country
+
+
 @router.post("/analyze")
 def api_analyze(
     background_tasks: BackgroundTasks,
@@ -3112,6 +3398,13 @@ def api_analyze(
         # ver docstring de `_close_medical_freetext_scope`.
         _close_medical_freetext_scope(data)
 
+        # [P1-COUNTRY-RENEWAL-PROFILE-WINS · 2026-08-18] El país del perfil manda
+        # en renovaciones (update_reason set) y rellena si falta — ANTES del
+        # pipeline y del merge a health_profile. Ver docstring del helper.
+        _hydrate_country_from_profile_for_submit(data, verified_user_id)
+        if "country" in data:
+            _assert_supported_country_for_request(data.get("country"))
+
         # [P1-5] Validación temprana de campos mínimos. Antes payloads incompletos
         # llegaban al pipeline y producían un plan basado en defaults genéricos
         # tras 30–90s de compute LLM. Ahora cortamos en <1ms con un 422 accionable.
@@ -3125,6 +3418,24 @@ def api_analyze(
                     "message": (
                         f"Faltan campos críticos para generar tu plan: {', '.join(_missing)}. "
                         f"Completa el formulario antes de continuar."
+                    ),
+                },
+            )
+
+        # [P1-MEDICAL-SCOPE-GATE · 2026-08-09] SEGUNDA CAPA del gate de alcance
+        # clínico (la primera es el botón deshabilitado de QMedical.jsx). Va ANTES
+        # del cap: si el perfil está fuera de alcance, cuántas condiciones marcó es
+        # irrelevante. Fail-secure y explícito — nunca degradar a "genero igual".
+        if _has_out_of_scope_clinical_declaration(data):
+            raise HTTPException(
+                status_code=422,
+                detail={
+                    "code": "clinical_scope_exceeded",
+                    "message": (
+                        "Todavía no podemos calcular un plan seguro para una condición o "
+                        "medicamento fuera de nuestra lista clínica verificada. Preferimos "
+                        "decírtelo antes que entregarte un plan que parezca calculado y no "
+                        "lo esté."
                     ),
                 },
             )
@@ -3347,7 +3658,24 @@ def api_analyze(
                 logger.warning(
                     f"🛑 [FALLBACK-GUARD] Rechazo crítico (restricción declarada). Devolviendo 422 sin "
                     f"persistir. user={actual_user_id or 'guest'}")
-                raise HTTPException(status_code=422, detail=_crit_msg)
+                # [P1-LANDING-BENCH-2 · 2026-08-07] Diagnóstico del rechazo en un HEADER, no en el
+                # detail: el frontend identifica critical_restriction por `typeof detail === 'string'`
+                # (P2-CRITICAL-REJECTION-CODE) — cambiar la forma del detail lo rompería. Las razones
+                # (`_review_issues`) se logueaban server-side y se DESCARTABAN del response; la corrida
+                # n=20 del benchmark (2026-08-07, 13/20 rechazos críticos, issue #9) quedó ciega por
+                # eso. Son datos del PROPIO plan del solicitante (sin UUIDs ni cross-user); ASCII-safe
+                # (headers son latin-1) y truncado. tooltip-anchor: P1-LANDING-BENCH-2
+                _diag_headers = None
+                try:
+                    import json as _diag_json
+                    _issues = [str(i)[:160] for i in (result.get("_review_issues") or [])[:5]]
+                    _diag = _diag_json.dumps(
+                        {"fallback_reason": result.get("_fallback_reason"), "review_issues": _issues},
+                        ensure_ascii=True)[:3000]
+                    _diag_headers = {"X-Bioboros-Review-Diag": _diag}
+                except Exception:
+                    pass
+                raise HTTPException(status_code=422, detail=_crit_msg, headers=_diag_headers)
             # [P1-SPEND-CAP-ALERT · 2026-05-28] Distinguir spending-cap (persistente)
             # de saturación transitoria: el mensaje "intenta en 1-2 min" es FALSO
             # cuando el cap mensual de Gemini está agotado (reintentar no ayuda).
@@ -3510,6 +3838,13 @@ async def api_analyze_stream(
         # que el endpoint sync — ver docstring de `_close_medical_freetext_scope`.
         _close_medical_freetext_scope(data)
 
+        # [P1-COUNTRY-RENEWAL-PROFILE-WINS · 2026-08-18] Mismo hidratado que el
+        # endpoint sync: el país del perfil manda en renovaciones y rellena si
+        # falta — ver docstring del helper.
+        _hydrate_country_from_profile_for_submit(data, verified_user_id)
+        if "country" in data:
+            _assert_supported_country_for_request(data.get("country"))
+
         # [P1-5] Misma validación temprana que el endpoint sync. Lanzar 422 ANTES
         # de abrir el StreamingResponse: si el payload es inválido, el cliente
         # recibe un JSON estándar (no un stream SSE con un único evento de error
@@ -3524,6 +3859,24 @@ async def api_analyze_stream(
                     "message": (
                         f"Faltan campos críticos para generar tu plan: {', '.join(_missing)}. "
                         f"Completa el formulario antes de continuar."
+                    ),
+                },
+            )
+
+        # [P1-MEDICAL-SCOPE-GATE · 2026-08-09] Mismo gate de alcance que el endpoint
+        # sync, y por el mismo motivo por el que el cap de abajo se duplica aquí:
+        # son DOS puertas de generación y una guarda en una sola es un agujero.
+        # También antes de abrir el StreamingResponse (JSON estándar > evento SSE).
+        if _has_out_of_scope_clinical_declaration(data):
+            raise HTTPException(
+                status_code=422,
+                detail={
+                    "code": "clinical_scope_exceeded",
+                    "message": (
+                        "Todavía no podemos calcular un plan seguro para una condición o "
+                        "medicamento fuera de nuestra lista clínica verificada. Preferimos "
+                        "decírtelo antes que entregarte un plan que parezca calculado y no "
+                        "lo esté."
                     ),
                 },
             )
@@ -3865,7 +4218,7 @@ async def api_analyze_stream(
             try:
                 # [P1-GUEST-INFLIGHT-GUARD · 2026-07-09] Espejo del guard autenticado (~línea 3116)
                 # para guests: si el guest ya tiene un pipeline activo < 15 min (recargó la pestaña
-                # mid-generación) rechazar el 2º pipeline → evita duplicar el gasto DeepSeek. Keyed en
+                # mid-generación) rechazar el 2º pipeline → evita duplicar el gasto GLM. Keyed en
                 # el session_id (misma KV pending_pipeline:<sid> que registra abajo). El dedup
                 # POST-completion (get_latest_meal_plan_with_id) NO aplica a guests: no persisten en
                 # meal_plans (FK a user_profiles) — su recovery vive en KV guest_plan:<sid>.
@@ -4533,7 +4886,13 @@ async def api_analyze_stream(
                                         f"No se persiste. user={actual_user_id or 'guest'}")
                                     # [P1-ANALYZE-NO-CHARGE-ON-FALLBACK · 2026-06-26] Rechazo crítico (restricción declarada no satisfecha) → no cobrar.
                                     _plan_delivery_failed = True
-                                    yield f"data: {_json.dumps({'event': 'error', 'data': {'code': 'critical_restriction', 'message': _crit_msg}})}\n\n"
+                                    # [P1-LANDING-BENCH-2 · 2026-08-07] Diagnóstico también por SSE: el header
+                                    # X-Bioboros-Review-Diag del endpoint síncrono no puede viajar en un stream
+                                    # ya abierto → las razones van DENTRO del payload del error (mismo truncado;
+                                    # datos del propio plan del solicitante). El frontend lee solo code+message
+                                    # (claves extra ignoradas); el benchmark las consume para el issue #9.
+                                    _crit_issues = [str(i)[:160] for i in (result.get("_review_issues") or [])[:5]]
+                                    yield f"data: {_json.dumps({'event': 'error', 'data': {'code': 'critical_restriction', 'message': _crit_msg, 'fallback_reason': result.get('_fallback_reason'), 'review_issues': _crit_issues}}, ensure_ascii=False, default=str)}\n\n"
                                     break
                                 # [P1-SPEND-CAP-ALERT · 2026-05-28] Mensaje honesto
                                 # cuando el fallback fue por spending-cap de Gemini:
@@ -4988,29 +5347,41 @@ async def api_budget_floor(
     Pure-calc sobre los campos provistos (NO lee DB, NO datos de usuario) → seguro sin auth,
     rate-limited por user/IP (anti-spam). Cero costo LLM (NO `verify_api_quota`). Fail-open:
     ante cualquier error devuelve `{ok: False}` y el frontend cae al mínimo estático.
-    Response: {ok, min_budget, min_budget_dop, currency, days, household, target_calories}."""
+    Response: {ok, min_budget, min_budget_dop, currency, days, household, target_calories}.
+
+    [P1-COUNTRY-SYSTEM-F1 · 2026-08-16 (T7, fold de T6)] `currency` fuera de {DOP,USD} caía
+    SIEMPRE a 'DOP' — con el knob ON y país beta el hint mentía RD$ mientras el gate real
+    comparaba en EUR/MXN/COP. `budget_floor_in_currency` (nutrition_calculator, SSOT del
+    gate) resuelve la MISMA moneda que usaría el 422. Knob OFF ⇒ byte-idéntico."""
     form = payload if isinstance(payload, dict) else {}
     try:
-        from nutrition_calculator import min_budget_for_goals, _budget_usd_to_dop
+        from nutrition_calculator import (
+            min_budget_for_goals, _budget_usd_to_dop, budget_floor_in_currency,
+            _BUDGET_CYCLE_FLOOR_DEFAULTS_BY_CURRENCY,
+        )
         info = await asyncio.to_thread(min_budget_for_goals, form)
-        currency = str(form.get("budgetCurrency") or "DOP").upper()
-        if currency not in ("DOP", "USD"):
-            currency = "DOP"
+        currency_in = str(form.get("budgetCurrency") or "DOP").upper()
         usd_dop = _budget_usd_to_dop()
         min_dop = float(info["min_budget_dop"])
-        min_in_currency = round(min_dop / usd_dop) if currency == "USD" else round(min_dop)
-        # [P2-AUDIT-V6-BATCH · 2026-07-03] (P2-I) Transparencia de la referencia por tier: el banner
-        # dentro/excedido compara contra piso×banda {low/medium/high} — un RD$Y que el usuario nunca
-        # declaró. Exponerlo AQUÍ permite al formulario mostrar "≈ RD$X por ciclo" bajo cada tier al
-        # elegirlo (misma fórmula exacta de build_budget_reference → cero drift form↔banner).
+        min_in_currency_raw, currency = await asyncio.to_thread(
+            budget_floor_in_currency, int(info["days"]), currency_in, min_dop
+        )
+        min_in_currency = round(min_in_currency_raw)
+        _is_beta_currency = currency in _BUDGET_CYCLE_FLOOR_DEFAULTS_BY_CURRENCY
+        # [P2-AUDIT-V6-BATCH · 2026-07-03] (P2-I) referencia estimada por tier (piso×banda).
         tier_refs = {}
         try:
             from nutrition_calculator import _budget_tier_band_factor
             for _tier in ("low", "medium", "high"):
                 _f = _budget_tier_band_factor(_tier)
                 if _f:
-                    _ref_dop = min_dop * float(_f)
-                    tier_refs[_tier] = int(round(_ref_dop / usd_dop) if currency == "USD" else round(_ref_dop))
+                    # [P1-COUNTRY-SYSTEM-F1 · T7] beta: min_in_currency YA absorbió calorías×
+                    # hogar×piso-propio-de-la-moneda — aplicar el factor de banda encima.
+                    if _is_beta_currency:
+                        tier_refs[_tier] = int(round(min_in_currency * float(_f)))
+                    else:
+                        _ref_dop = min_dop * float(_f)
+                        tier_refs[_tier] = int(round(_ref_dop / usd_dop) if currency == "USD" else round(_ref_dop))
         except Exception:
             tier_refs = {}
         return {
@@ -5028,7 +5399,6 @@ async def api_budget_floor(
         return {"ok": False}
 
 
-@router.post("/pending-status/ack")
 def _emit_change_outcome_metric(kind: str, outcome: str, **campos) -> None:
     """[P1-CHANGE-OUTCOME-TELEMETRY · 2026-08-05] Una fila por CAMBIO que el usuario
     pide: cambiar un plato (`swap`) o regenerar el día (`regen_day`).
@@ -5074,6 +5444,23 @@ def _emit_change_outcome_metric(kind: str, outcome: str, **campos) -> None:
             pass
 
 
+# [P0-ACK-ROUTE-REBOUND · 2026-08-10] Este decorador estaba 45 líneas más arriba,
+# pegado a `_emit_change_outcome_metric` — un helper de telemetría que alguien insertó
+# ENTRE el decorador y su handler (P1-CHANGE-OUTCOME-TELEMETRY, 2026-08-05). Un
+# decorador no busca "la función que le corresponde": decora la SIGUIENTE. Así que la
+# ruta quedó apuntando al helper, y este handler sin decorar: código muerto.
+#
+# CONSECUENCIA MEDIDA EN PRODUCCIÓN: `POST /pending-status/ack` devolvía **422 en el
+# 100% de las llamadas** (el helper exige `kind` y `outcome`), o sea que el acuse NUNCA
+# limpiaba el KV. Cada carga de página volvía a leer 'complete' y a lanzar el aviso
+# «Tu plan está listo» de un plan entregado hacía días. El dueño lo reportó como «cada
+# vez que refresco me sigue apareciendo».
+#
+# No lo vio nadie porque el frontend hacía `catch { /* best-effort */ }` sin mirar el
+# status: un 422 constante era indistinguible del éxito. Ese silencio se cierra aparte.
+#
+# Y de rebote el helper de telemetría quedó EXPUESTO como endpoint HTTP público.
+@router.post("/pending-status/ack")
 async def api_pending_pipeline_ack(
     verified_user_id: str = Depends(get_verified_user_id),
     session_id: Optional[str] = Query(None),
@@ -5515,6 +5902,12 @@ def api_expand_recipe(data: dict = Body(...), verified_user_id: Optional[str] = 
         # plan. Ahora el cobro se difiere a DESPUÉS del persist (flag del callback); abort → sin cobro +
         # soft-fail `stale_target` (el cliente refetch-ea). tooltip-anchor: P2-EXPAND-QUOTA-ABORT
         _expand_persisted = {"ok": False}
+        # [P1-PLAN-DISPLAY-I18N-MUTATOR-recipeexpand] Meals/días efectivamente reescritos por
+        # `_set_expanded_recipe_preserving_notes` (Camino 1: uno; Camino 2: puede propagar a
+        # VARIAS ocurrencias del mismo nombre+receta en días distintos, sin `break`). Consumidos
+        # al final del callback (pop de `_display`) y por el despacho post-persist (día_indices).
+        _expand_touched_days: set = set()
+        _expand_touched_meals: list = []
 
         if user_id and user_id != "guest":
             # [P1-HIST-RECIPE-1] Resolver el plan target. Si el cliente
@@ -5690,6 +6083,9 @@ def api_expand_recipe(data: dict = Body(...), verified_user_id: Optional[str] = 
                                 _set_expanded_recipe_preserving_notes(target_meal_fresh)
                                 _append_expand_veg(target_meal_fresh)
                                 updated_in_callback = True
+                                # [P1-PLAN-DISPLAY-I18N-MUTATOR-recipeexpand]
+                                _expand_touched_days.add(req_day_index)
+                                _expand_touched_meals.append(target_meal_fresh)
 
                     # Camino 2: si no targeteamos por índices, propagar a TODAS
                     # las ocurrencias de `name` cuya receta original sea bit-
@@ -5699,7 +6095,7 @@ def api_expand_recipe(data: dict = Body(...), verified_user_id: Optional[str] = 
                     # corrector swapea ingredientes). Sin esta propagación,
                     # cada ocurrencia repetida vuelve a quemar cuota LLM.
                     if not updated_in_callback:
-                        for day in days_fresh:
+                        for _day_idx_exp, day in enumerate(days_fresh):
                             if not isinstance(day, dict):
                                 continue
                             for m in day.get("meals", []):
@@ -5710,6 +6106,9 @@ def api_expand_recipe(data: dict = Body(...), verified_user_id: Optional[str] = 
                                     _append_expand_veg(m)
                                     updated_in_callback = True
                                     # NO break: propagamos a todas las ocurrencias.
+                                    # [P1-PLAN-DISPLAY-I18N-MUTATOR-recipeexpand]
+                                    _expand_touched_days.add(_day_idx_exp)
+                                    _expand_touched_meals.append(m)
 
                     if not updated_in_callback:
                         # Nada que persistir — abortar UPDATE (P0-2 contract:
@@ -5730,7 +6129,14 @@ def api_expand_recipe(data: dict = Body(...), verified_user_id: Optional[str] = 
                             # (`_enrich_clinical_from_profile`) y ya viaja al recompute de micros 11
                             # líneas más abajo — sin pasarlo aquí, el motor re-dimensionaba sin poder
                             # re-aplicar los caps clínicos de porción.
-                            _ume_exp(plan_data_fresh, surface="recipe_expand", form_data=_expand_clin)
+                            # [P1-PLAN-DISPLAY-I18N-MUTATOR-macroengine · Fix round 2] el motor es
+                            # PLAN-WIDE — puede re-cuantizar días DISTINTOS a los que expand tocó.
+                            # `touched_day_indices` es una `list` (contrato del motor); se une al
+                            # `set` `_expand_touched_days` que ya alimenta el pop/despacho.
+                            _expand_macroengine_touched_days: list = []
+                            _ume_exp(plan_data_fresh, surface="recipe_expand", form_data=_expand_clin,
+                                     touched_day_indices=_expand_macroengine_touched_days)
+                            _expand_touched_days.update(_expand_macroengine_touched_days)
                         except Exception as _ume_exp_e:
                             logger.debug(f"[P2-AUDIT-V7-BATCH] (P2-4) motor en expand no-op: {_ume_exp_e}")
                     # [P2-EXPAND-MICRO-RECOMPUTE · 2026-07-02] (audit v3 micros GAP-2) el veg añadido ya entró
@@ -5783,6 +6189,20 @@ def api_expand_recipe(data: dict = Body(...), verified_user_id: Optional[str] = 
                             )
                         except Exception as _rbl_exp_e:
                             logger.debug(f"[P2-AUDIT-V5-BATCH] (GAP-C3) rebuild inline no-op: {_rbl_exp_e}")
+
+                    # [P1-PLAN-DISPLAY-I18N-MUTATOR-recipeexpand] DELETE-on-write (spec
+                    # "Invalidación"): `_meal["recipe"] = list(expanded_steps) + _kept` reemplaza
+                    # el array de receta ENTERO — `_display[locale].recipe`/`.ingredients` son
+                    # arrays alineados por ÍNDICE con los originales (spec §Contrato de datos), así
+                    # que tras la expansión quedan desalineados/mintiendo pasos VIEJOS traducidos
+                    # sobre la receta española YA expandida. Pop AL FINAL del callback (tras
+                    # finalize/motor/micros/band-parity/rebuild de listas, mismo criterio que
+                    # swap/regen-day/chat-modify) sobre los meals REALMENTE tocados (`_expand_touched_meals`
+                    # — Camino 1: uno; Camino 2: puede ser varios en días distintos).
+                    for _em_disp in _expand_touched_meals:
+                        if isinstance(_em_disp, dict):
+                            _em_disp.pop("_display", None)
+
                     # [P2-EXPAND-QUOTA-ABORT] señal para el caller: hubo escritura real → cobrar.
                     _expand_persisted["ok"] = True
                     return plan_data_fresh
@@ -5796,6 +6216,30 @@ def api_expand_recipe(data: dict = Body(...), verified_user_id: Optional[str] = 
                 update_plan_data_atomic(
                     target_plan_id, _apply_recipe_expansion, user_id=user_id
                 )
+                # [P1-PLAN-DISPLAY-I18N-MUTATOR-recipeexpand] Despacho best-effort post-persist
+                # (FUERA del lock): el DELETE-on-write de arriba dejó los meals tocados sin
+                # `_display` — re-enriquecer los días tocados (puede ser >1, Camino 2 propaga)
+                # si el locale del usuario aplica. SELECT dirigido de 1 columna (facade
+                # `from db import ...`) — call site NUEVO, sin perfil ya hidratado que reusar
+                # (`_enrich_clinical_from_profile` no expone `locale` al caller).
+                if _expand_persisted["ok"] and _expand_touched_days:
+                    try:
+                        from db import execute_sql_query as _p1i18n_esq_ex
+                        _p1i18n_row_ex = _p1i18n_esq_ex(
+                            "SELECT locale FROM user_profiles WHERE id = %s",
+                            (user_id,),
+                            fetch_one=True,
+                        )
+                        _p1i18n_locale_ex = (_p1i18n_row_ex or {}).get("locale")
+                        from plan_display_i18n import should_enrich_locale as _p1i18n_should_enrich_ex
+                        if _p1i18n_should_enrich_ex(_p1i18n_locale_ex):
+                            from plan_display_i18n import schedule_plan_display_enrichment
+                            schedule_plan_display_enrichment(
+                                target_plan_id, user_id, _p1i18n_locale_ex,
+                                day_indices=sorted(_expand_touched_days),
+                            )
+                    except Exception as _p1i18n_ex_e:
+                        logger.debug(f"[P1-PLAN-DISPLAY-I18N-MUTATOR-recipeexpand] dispatch no-op: {_p1i18n_ex_e}")
                 # [P2-EXPAND-QUOTA-ABORT · 2026-07-02] callback abortó (target raced por swap/modify
                 # concurrente) → SIN cobro + soft-fail para que el cliente refetch-ee el plan fresco.
                 if not _expand_persisted["ok"]:
@@ -5903,7 +6347,7 @@ def _pantry_sufficiency_gate_on() -> bool:
     return os.environ.get("MEALFIT_PANTRY_SUFFICIENCY_GATE", "false").strip().lower() in ("1", "true", "yes", "on")
 
 
-def _enrich_clinical_from_profile(data: dict, user_id: str) -> None:
+def _enrich_clinical_from_profile(data: dict, user_id: str) -> dict:
     """[P0-UPDATE-CLINICAL-GUARD · 2026-06-23] Enriquece `data` IN-PLACE con los campos clínicos
     leídos SERVER-SIDE desde health_profile (allergies UNIONADAS body+perfil + dietType), para que
     `swap_meal` (y por herencia `regenerate-day`, que hace loop de swaps) corra su backstop
@@ -5916,7 +6360,7 @@ def _enrich_clinical_from_profile(data: dict, user_id: str) -> None:
     backstop determinista de swap_meal sigue corriendo con lo que haya).
     tooltip-anchor: P0-UPDATE-CLINICAL-GUARD"""
     if not user_id or user_id == "guest" or not isinstance(data, dict):
-        return
+        return {}
     try:
         from db import get_user_profile
         hp = (get_user_profile(user_id) or {}).get("health_profile") or {}
@@ -5926,6 +6370,19 @@ def _enrich_clinical_from_profile(data: dict, user_id: str) -> None:
             *[str(a).strip() for a in body_allergies if str(a).strip()],
             *[str(a).strip() for a in prof_allergies if str(a).strip()],
         })
+        # [P1-COUNTRY-SYSTEM-F1 · 2026-08-16 (FINAL-FIX F2a)] Hidratar `country` SERVER-SIDE
+        # desde el perfil — mismo sitio/forma que la hidratación de allergies de arriba: lee
+        # `hp.get('country')` (persistido en `user_profiles.health_profile->>'country'` por
+        # QCountry del wizard / el selector de Configuración, Fase 0) y solo rellena si el body
+        # no lo trae ya (mismo patrón "fill si falta" que medicalConditions/super_personalization
+        # más abajo — country es un escalar, no una lista que unionar). Se guarda CRUDO, SIN
+        # canonicalize_country aquí: la canonicalización ocurre en los LECTORES vía la ÚNICA
+        # puerta T1 (`country_for_form_data`) — escribir un 2º canonicalizador aquí sería la
+        # 2ª tabla que P1-DIET-CANON-SSOT ya pagó una vez. Sin esto, `swap_meal`/`regenerate-day`
+        # (T3/T4 ya wired para RECIBIR país) nunca veían uno real — la wiring quedaba mecánica
+        # pero inerte en runtime.
+        if not data.get("country") and hp.get("country"):
+            data["country"] = hp.get("country")
         # [P2-UPDATE-HYDRATE-DISLIKES · 2026-06-24] (re-audit P2-4) Hidratar dislikes server-side (UNION
         # body+perfil), espejo de allergies. El frontend los manda desde storage cifrado → en la ventana
         # stale post-login / cambio de dispositivo llegan vacíos y un swap reintroduce un alimento que el
@@ -5995,8 +6452,47 @@ def _enrich_clinical_from_profile(data: dict, user_id: str) -> None:
                         "weightUnit", "goal", "mainGoal", "bodyFat"):
                 if data.get(_bk) in (None, "", 0) and hp.get(_bk) not in (None, ""):
                     data[_bk] = hp.get(_bk)
+        return hp
     except Exception as _enrich_e:
         logger.warning(f"⚠️ [P0-UPDATE-CLINICAL-GUARD] enrich perfil falló (no bloquea): {_enrich_e}")
+        return {}
+
+
+def _load_swap_plan_country_stub(user_id: str, plan_id: Optional[str] = None) -> dict:
+    """[P1-COUNTRY-PLAN-VS-PERFIL-EN-BLOQUES · 2026-08-23]
+    Lee sólo el sello de país del plan que va a mutarse.
+
+    La ruta con ``plan_id`` siempre filtra también por propietario. Clientes legacy
+    sin id usan el plan más reciente, igual que las señales same-day del swap.
+    Fail-open a ``{}``: ``country_for_plan`` hará fallback al perfil en planes legacy.
+    """
+    if not user_id or user_id == "guest":
+        return {}
+    try:
+        from db_core import execute_sql_query as _exq_swap_country
+
+        if plan_id and isinstance(plan_id, str):
+            row = _exq_swap_country(
+                "SELECT plan_data->>'_country' AS plan_country "
+                "FROM meal_plans WHERE id = %s AND user_id = %s",
+                (plan_id, user_id),
+                fetch_one=True,
+            )
+        else:
+            row = _exq_swap_country(
+                "SELECT plan_data->>'_country' AS plan_country "
+                "FROM meal_plans WHERE user_id = %s ORDER BY created_at DESC LIMIT 1",
+                (user_id,),
+                fetch_one=True,
+            )
+        raw = row.get("plan_country") if isinstance(row, dict) else None
+        return {"_country": raw} if raw else {}
+    except Exception as _country_e:
+        logger.debug(
+            "[P1-COUNTRY-PLAN-VS-PERFIL-EN-BLOQUES] no se leyó sello del swap: "
+            f"{type(_country_e).__name__}: {_country_e}"
+        )
+        return {}
 
 
 def _same_day_other_meals_for_swap(user_id, rejected_meal):
@@ -6236,7 +6732,20 @@ def api_swap_meal(background_tasks: BackgroundTasks, data: dict = Body(...), ver
         # [P0-UPDATE-CLINICAL-GUARD · 2026-06-23] Enriquecer allergies/diet SERVER-SIDE desde el
         # perfil ANTES del gate de suficiencia y del swap → el backstop clínico de swap_meal corre
         # contra la verdad del perfil, no contra el body (cierra la ventana stale post-login).
-        _enrich_clinical_from_profile(data, user_id)
+        _swap_health_profile = _enrich_clinical_from_profile(data, user_id)
+        if user_id and user_id != "guest":
+            # [P1-COUNTRY-PLAN-VS-PERFIL-EN-BLOQUES · 2026-08-23] El plato se
+            # genera para el país DEL PLAN. El perfil vivo sólo manda si el plan
+            # es legacy y aún no trae sello.
+            from constants import country_for_plan as _cfp_swap_generate
+            _swap_plan_stub = _load_swap_plan_country_stub(
+                user_id,
+                data.get("plan_id"),
+            )
+            data["country"] = _cfp_swap_generate(
+                _swap_plan_stub,
+                _swap_health_profile,
+            )
 
         rejected_meal = data.get("rejected_meal")
         meal_type = data.get("meal_type", "")
@@ -6392,7 +6901,7 @@ def api_swap_meal(background_tasks: BackgroundTasks, data: dict = Body(...), ver
             _emit_change_outcome_metric(
                 "swap", "ok",
                 user_id=verified_user_id,
-                meal_type=(body.mealType if hasattr(body, "mealType") else None),
+                meal_type=data.get("mealType"),  # [P1-SWAP-TELEMETRY-NAMEERROR] era `body.*`: NameError tragado por el best-effort → 0 filas change_swap DESDE SIEMPRE
                 band_low=bool(isinstance(result, dict) and result.get("_macro_band_low")),
             )
         except Exception:
@@ -6443,7 +6952,7 @@ def api_swap_meal(background_tasks: BackgroundTasks, data: dict = Body(...), ver
                     "swap", "failed",
                     user_id=verified_user_id,
                     error_code=_payload.get("error_code"),
-                    meal_type=(body.mealType if hasattr(body, "mealType") else None),
+                    meal_type=data.get("mealType"),  # [P1-SWAP-TELEMETRY-NAMEERROR] era `body.*`: NameError tragado por el best-effort → 0 filas change_swap DESDE SIEMPRE
                 )
             except Exception:
                 pass
@@ -6473,7 +6982,7 @@ def api_swap_meal(background_tasks: BackgroundTasks, data: dict = Body(...), ver
                     "swap", "failed",
                     user_id=verified_user_id,
                     error_code=_payload.get("error_code"),
-                    meal_type=(body.mealType if hasattr(body, "mealType") else None),
+                    meal_type=data.get("mealType"),  # [P1-SWAP-TELEMETRY-NAMEERROR] era `body.*`: NameError tragado por el best-effort → 0 filas change_swap DESDE SIEMPRE
                 )
             except Exception:
                 pass
@@ -6505,7 +7014,7 @@ def api_swap_meal(background_tasks: BackgroundTasks, data: dict = Body(...), ver
                     "swap", "failed",
                     user_id=verified_user_id,
                     error_code=_payload.get("error_code"),
-                    meal_type=(body.mealType if hasattr(body, "mealType") else None),
+                    meal_type=data.get("mealType"),  # [P1-SWAP-TELEMETRY-NAMEERROR] era `body.*`: NameError tragado por el best-effort → 0 filas change_swap DESDE SIEMPRE
                 )
             except Exception:
                 pass
@@ -6624,7 +7133,13 @@ def _rebuild_plan_shopping_lists_inline(
             logger.warning(f"[P1-UPDATE-LIST-INLINE-RECALC] guard no-op ({surface}): {_coh_il_e}")
         try:
             from nutrition_calculator import refresh_budget_reconciliation as _rbr_il
-            _sum_il = _ccs_il(s7, s15h, s30h, duration)
+            # [P1-COUNTRY-SYSTEM-F1 · 2026-08-16 (T7 fix-round · review Critical)] plan_data
+            # ya trae la clave desde el INSERT del plan — beta ⇒ None, cero recalculo de
+            # costo/reconciliación. Este call site es DEFAULT-ON (MEALFIT_UPDATE_INLINE_LIST_
+            # RECALC="true") y corre en swap-persist/regen-day/recipe-expand — sin este gate,
+            # un plan beta con ítems `estimated_cost_rd=None` producía un dict de CEROS
+            # técnicamente no-None que SÍ se persistía como shopping_cost_summary.
+            _sum_il = _ccs_il(s7, s15h, s30h, duration, pricing_mode=plan_data.get("_pricing_mode"))
             if _sum_il:
                 plan_data["shopping_cost_summary"] = _sum_il
                 # [P2-AUDIT-V6-BATCH · 2026-07-03] (P2-H) user_id → sugerencias brand-aware.
@@ -6740,7 +7255,8 @@ def api_swap_meal_persist(
     from db_plans import update_plan_data_atomic
     try:
         owner = execute_sql_query(
-            "SELECT id FROM meal_plans WHERE id = %s AND user_id = %s",
+            "SELECT id, plan_data->>'_country' AS plan_country "
+            "FROM meal_plans WHERE id = %s AND user_id = %s",
             (plan_id, verified_user_id),
             fetch_one=True,
         )
@@ -6757,9 +7273,18 @@ def api_swap_meal_persist(
         _micro_form = {}
         _persist_allergies: list = []
         _persist_diet = None
+        _swap_country = "DO"
+        _hp_micro = {}
+        # [P1-PLAN-DISPLAY-I18N-MUTATOR-swap] locale del usuario para el despacho de
+        # re-enriquecimiento post-persist (abajo, fuera del lock). Se hidrata del MISMO
+        # round-trip que `_micro_form` (`_gup_micro(verified_user_id)` ya trae `locale`
+        # como columna top-level de `user_profiles` — cero I/O extra).
+        _swap_locale = None
         try:
             from db import get_user_profile as _gup_micro
-            _hp_micro = (_gup_micro(verified_user_id) or {}).get("health_profile") or {}
+            _full_profile_micro = _gup_micro(verified_user_id) or {}
+            _hp_micro = _full_profile_micro.get("health_profile") or {}
+            _swap_locale = _full_profile_micro.get("locale")
             # [P1-MICRO-CLINICAL-FREETEXT · 2026-07-01] merge estilo P1-FORM-6: el free-text clínico
             # (otherConditions) se pliega en medicalConditions → el renal-skip del closer y el techo
             # K≤3000 del panel ven un "ERC" declarado a mano; otherMedications alimenta el detector
@@ -6785,6 +7310,13 @@ def api_swap_meal_persist(
                 "allergies": [str(a).strip() for a in (_hp_micro.get("allergies") or []) if str(a).strip()],
                 "dietType": _hp_micro.get("dietType") or _hp_micro.get("diet_type"),
                 "dislikes": _hp_micro.get("dislikes") or [],
+                # [P1-COUNTRY-SYSTEM-F2 · 2026-08-17 (Task 9, g · MUTATOR-PURITY)] Mismo campo
+                # crudo que `_enrich_clinical_from_profile` (F2a) hidrata para swap_meal —
+                # `hp.get('country')` viaja SIN canonicalizar (`country_for_form_data` es la
+                # ÚNICA puerta de canonicalización, T1). Se lee AQUÍ, antes del lock, porque
+                # `_swap_mutator` corre DENTRO del `SELECT...FOR UPDATE` de
+                # `update_plan_data_atomic` y P2-MUTATOR-PURITY prohíbe reentrar al pool ahí.
+                "country": _hp_micro.get("country"),
             }
             # [P0-SWAP-PERSIST-CLINICAL · 2026-07-01] Alergias + dieta del PERFIL (server-side) para el
             # backstop clínico de abajo — nunca del body del cliente (espejo de I2 / P0-UPDATE-CLINICAL-GUARD).
@@ -6792,6 +7324,16 @@ def api_swap_meal_persist(
             _persist_diet = _hp_micro.get("dietType") or _hp_micro.get("diet_type")
         except Exception as _micro_form_e:
             logger.debug(f"[P2-SWAP-MICROS-STALE] no se pudo hidratar _micro_form: {_micro_form_e}")
+
+        # [P1-COUNTRY-PLAN-VS-PERFIL-EN-BLOQUES · 2026-08-23] Resuelto una
+        # vez ANTES del lock: el sello del plan gana al país vivo del perfil.
+        # Si el plan es legacy, country_for_plan conserva el fallback histórico.
+        from constants import country_for_plan as _cfp_swap_persist
+        _swap_country = _cfp_swap_persist(
+            {"_country": owner.get("plan_country")},
+            _hp_micro,
+        )
+        _micro_form["country"] = _swap_country
 
         # [P0-SWAP-PERSIST-CLINICAL · 2026-07-01] (audit P0-3) `/swap-meal/persist` era la ÚNICA superficie de
         # update con round-trip CLIENTE entre la generación validada y la persistencia: el body `new_meal` se
@@ -6858,6 +7400,13 @@ def api_swap_meal_persist(
         # [P1-NEXT-LEVEL-BATCH · 2026-07-02] (TASTE) buffer del nombre del plato reemplazado
         # (lo llena el mutator bajo el lock) → señal de gusto aprendido post-persist.
         _taste_old_name = [""]
+        # [P1-PLAN-DISPLAY-I18N-MUTATOR-macroengine · Fix round 2] `apply_update_macro_engine`
+        # (invocado abajo dentro de `_swap_mutator`) es PLAN-WIDE — puede re-cuantizar días
+        # DISTINTOS al swapeado (rereview task-3-rereview.md, Parte 2). El motor ya popea
+        # `_display` de esos días colaterales; esta lista (rellenada bajo el lock vía
+        # `touched_day_indices=`) permite al despacho post-persist (fuera del lock) ampliar
+        # `day_indices` a esos días también.
+        _swap_macroengine_touched_days: list = []
 
         def _swap_mutator(plan_data: dict) -> dict:
             # Sanity: el plan real DEBE tener `days[day_index].meals[meal_index]`.
@@ -6927,10 +7476,17 @@ def api_swap_meal_persist(
                     # protagonista deja de declinar aquí. Sin él llevaba inerte desde
                     # P1-PROTAGONIST-CONTEXT-GATE en el ÚNICO round-trip que persiste el swap.
                     _fin_sp(new_meal, db=_fdb_sp, pantry_strict=_ps_sp, allergies=_persist_allergies,
-                            day_kcal_target=_dkt_sp(plan_data.get("macros")))
+                            day_kcal_target=_dkt_sp(plan_data.get("macros")), country=_swap_country)
                     _tu_sp(new_meal, _fdb_sp)
                     try:
-                        _slot_viols_sp = _slot_sp(new_meal, str(new_meal.get("meal") or ""))
+                        # [P1-COUNTRY-SYSTEM-F2 · 2026-08-17 (Task 9, g)] CERRADO — `_swap_country`
+                        # se resolvió ANTES del lock (closure, ver hidratación de `_micro_form`
+                        # arriba) y viaja aquí aunque este call site corra DENTRO del
+                        # SELECT...FOR UPDATE de `update_plan_data_atomic`. Antes: T4 fix-round 1
+                        # dejaba este site EXENTO (país default 'DO' incondicional) porque
+                        # P2-MUTATOR-PURITY prohíbe reentrar al pool DENTRO del lock — la lectura
+                        # de perfil sigue prohibida ahí, pero el VALOR ya resuelto no lo está.
+                        _slot_viols_sp = _slot_sp(new_meal, str(new_meal.get("meal") or ""), country=_swap_country)
                         if _slot_viols_sp:
                             new_meal["_slot_advisory"] = True
                     except Exception:
@@ -7111,7 +7667,10 @@ def api_swap_meal_persist(
                         # (`_micro_form`, con el free-text clínico ya plegado) para que el motor
                         # re-aplique los caps DM2/bariátrico sobre lo que acaba de re-dimensionar.
                         # Sin esto el rebalance re-inflaba la batata capada de un diabético.
+                        # [P1-PLAN-DISPLAY-I18N-MUTATOR-macroengine · Fix round 2] `touched_day_indices=`
+                        # recoge los días colaterales re-cuantizados fuera del día swapeado.
                         _ume_sw(plan_data, surface="swap_persist", pantry_strict=_ps_swap,
+                                touched_day_indices=_swap_macroengine_touched_days,
                                 form_data=_micro_form)
                     except Exception as _ume_sw_e:
                         logger.debug(f"[P1-UPDATE-MACRO-PARITY] (swap) no-op: {_ume_sw_e}")
@@ -7189,6 +7748,22 @@ def api_swap_meal_persist(
                 plan_data, verified_user_id, surface="swap_persist", plan_id_hint=plan_id
             )
 
+            # [P1-PLAN-DISPLAY-I18N-MUTATOR-swap] DELETE-on-write (spec "Invalidación"): el
+            # meal persistido pierde CUALQUIER `_display` heredado — stale display imposible
+            # por construcción. Pop AL FINAL del mutator (no justo tras `meals[meal_index] =
+            # new_meal` arriba): si algún paso intermedio (finalize/closer/reconcile, todos
+            # entre esa asignación y aquí) reescribiera `meals[meal_index]` o copiara `_display`
+            # de vuelta, un pop temprano no lo protegería. [Fix round 1 · F12] `new_meal` sale
+            # directo del BODY de la request (`new_meal = body.get("new_meal")`, arriba) y se
+            # persiste verbatim salvo los campos que este mutator toca explícitamente — un
+            # cliente PUEDE colar un `_display` arbitrario en el JSON del body (spoofing
+            # display-only: no es clínico, pero permitiría al frontend mostrar texto que el
+            # motor de enriquecimiento nunca validó/generó). Este pop es lo ÚNICO que lo
+            # impide — NO es decorativo/solo-contrato-legible, no lo borres pensando que
+            # "el cliente nunca manda esa key hoy".
+            if isinstance(meals[meal_index], dict):
+                meals[meal_index].pop("_display", None)
+
             return plan_data
 
         # [P2-VEG-VOLUME-TOKENS-2 · 2026-08-01] warm-up fuera del FOR UPDATE (P2-MUTATOR-PURITY):
@@ -7217,6 +7792,27 @@ def api_swap_meal_persist(
             raise HTTPException(
                 status_code=404, detail="Plan no encontrado"
             )
+        # [P1-PLAN-DISPLAY-I18N-MUTATOR-swap] Despacho best-effort post-persist (FUERA del
+        # lock): el DELETE-on-write de arriba dejó el meal swapeado sin `_display` — si el
+        # usuario lee el dashboard en otro idioma, re-enriquecer el día tocado
+        # (`day_index`). `schedule_plan_display_enrichment` ya no-opea sola
+        # para es-DO/locale inválido/knob off — el guard `should_enrich_locale` de aquí
+        # es solo para evitar el import+thread cuando es obviamente innecesario. [Fix round
+        # 1 · F10] gate importado del motor SSOT (no un literal a mano comparando contra el
+        # locale base, como hacía la versión previa). [Fix round 2] `_swap_macroengine_touched_days`
+        # UNE los días colaterales que `apply_update_macro_engine` (PLAN-WIDE) re-cuantizó —
+        # sin esto se quedarían sin despacho aunque el motor ya los popeó.
+        try:
+            from plan_display_i18n import should_enrich_locale as _p1i18n_should_enrich_sw
+            _p1i18n_days_sw = set(_swap_macroengine_touched_days)
+            _p1i18n_days_sw.add(day_index)
+            if _p1i18n_should_enrich_sw(_swap_locale):
+                from plan_display_i18n import schedule_plan_display_enrichment
+                schedule_plan_display_enrichment(
+                    plan_id, verified_user_id, _swap_locale, day_indices=sorted(_p1i18n_days_sw)
+                )
+        except Exception as _p1i18n_sw_e:
+            logger.debug(f"[P1-PLAN-DISPLAY-I18N-MUTATOR-swap] dispatch no-op: {_p1i18n_sw_e}")
         # [P1-NEXT-LEVEL-BATCH · 2026-07-02] (TASTE) Señal de gusto aprendido: el usuario
         # CONFIRMÓ el reemplazo (persistió). Solo registra si cambió la proteína principal
         # (anti-ruido — si la mantuvo, el swap no era sobre ella). Fail-open, best-effort.
@@ -7956,6 +8552,14 @@ def api_regenerate_day(
         # (a) NO empujar la proteína hacia la meta en el retarget (sería iatrogénico) y (b) trimar el día
         # regenerado al techo de proteína en el persist.
         _renal_capped = bool((plan_data.get("renal_protein_cap") or {}).get("applied"))
+        # [P1-PLAN-DISPLAY-I18N-MUTATOR-regenday] [Fix round 1 · F6] Holder de 1 elemento para
+        # el `locale` del usuario, consumido por el despacho de re-enriquecimiento post-persist
+        # (abajo). El handler YA hace ≥1 `get_user_profile(user_id)` condicional más abajo
+        # (retarget ~8380, clinical-parity ~9080) — ambos lo rellenan si corren (holan la MISMA
+        # respuesta, cero I/O extra), evitando el SELECT dedicado en el caso común (los 2 knobs
+        # default ON). El dispatch cae a un SELECT dirigido de 1 columna SOLO si ninguno de los
+        # dos corrió (ambos knobs OFF, o `_ai_unavailable` saltó el bloque clínico).
+        _p1i18n_locale_rd_holder: list = [None]
         days = plan_data.get("days") or []
         if day_index >= len(days):
             raise HTTPException(status_code=400, detail=f"day_index fuera de rango (plan tiene {len(days)} días)")
@@ -8022,7 +8626,12 @@ def api_regenerate_day(
             try:
                 from db import get_user_profile as _gup
                 from nutrition_calculator import get_nutrition_targets as _gnt
-                _hp_bio = (_gup(user_id) or {}).get("health_profile") or {}
+                _full_profile_rd = _gup(user_id) or {}
+                _hp_bio = _full_profile_rd.get("health_profile") or {}
+                # [P1-PLAN-DISPLAY-I18N-MUTATOR-regenday] [Fix round 1 · F6] reusa este MISMO
+                # round-trip para el holder de locale del despacho post-persist.
+                if _p1i18n_locale_rd_holder[0] is None:
+                    _p1i18n_locale_rd_holder[0] = _full_profile_rd.get("locale")
                 _bio = {}
                 for _k in ("weight", "height", "age", "gender", "weightUnit", "bodyFat"):
                     _v = data.get(_k)
@@ -8272,6 +8881,12 @@ def api_regenerate_day(
                 # cada slot → día fuera de banda. Aquí el retarget manda. tooltip-anchor: P2-REGEN-DAY-SLOT-OVERRIDE-SKIP
                 "_skip_slot_target_override": True,
                 "diet_type": data.get("diet_type") or data.get("dietType") or "balanced",
+                # [P1-COUNTRY-SYSTEM-F1 · 2026-08-16 (FINAL-FIX F2b)] Propaga `country` (hidratado
+                # server-side por `_enrich_clinical_from_profile`, F2a) al meal_form — mismo motivo
+                # que diet_type/allergies arriba: `meal_form` es un dict de keys EXPLÍCITAS (NO
+                # hace spread de `data`), así que sin esto `swap_meal(surface="day")` seguía
+                # cayendo a 'DO' aunque `data['country']` ya viniera hidratado.
+                "country": data.get("country"),
                 "goal": data.get("goal") or data.get("mainGoal"),
                 # [P2-REGEN-DAY-BIOMETRICS-PROPAGATE · 2026-06-29] (cierre follow-up testing en vivo) Propaga los
                 # biométricos —ya hidratados en `data` por _enrich_clinical_from_profile (block P2-UPDATE-HYDRATE-
@@ -8713,7 +9328,12 @@ def api_regenerate_day(
                 import copy as _copy_cp
                 try:
                     from db import get_user_profile as _gup_clin
-                    _hp_clin = (_gup_clin(user_id) or {}).get("health_profile") or {}
+                    _full_profile_clin_rd = _gup_clin(user_id) or {}
+                    _hp_clin = _full_profile_clin_rd.get("health_profile") or {}
+                    # [P1-PLAN-DISPLAY-I18N-MUTATOR-regenday] [Fix round 1 · F6] reusa este
+                    # MISMO round-trip para el holder de locale del despacho post-persist.
+                    if _p1i18n_locale_rd_holder[0] is None:
+                        _p1i18n_locale_rd_holder[0] = _full_profile_clin_rd.get("locale")
                 except Exception:
                     _hp_clin = {}
                 _clin_form = {
@@ -8948,11 +9568,60 @@ def api_regenerate_day(
             _rebuild_plan_shopping_lists_inline(
                 pd, verified_user_id, surface="regen_day", plan_id_hint=plan_id
             )
+
+            # [P1-PLAN-DISPLAY-I18N-MUTATOR-regenday] DELETE-on-write (spec "Invalidación"): pop
+            # de TODOS los meals de `new_meals`, no solo los regenerados. [Fix round 1 · F1] Una
+            # primera versión popeaba SOLO los slots regenerados (`_p1_i18n_regenerated_flags`),
+            # razonando que un slot CONSERVADO no fue "mutado" y su `_display` seguía siendo
+            # válido — falso en este endpoint: los pasos de DÍA COMPLETO que corren arriba
+            # (`_rebalance_day_macros_to_target` — docstring "Mutates meals", opera sobre TODOS
+            # los `new_meals` — su line-clamp/partial-rebalance, el relevel/trim de grasas, el
+            # truth-up renal `_rtu(new_meals, ...)`, el autofix de sodio) re-cuantizan los GRAMOS
+            # de ingredientes de un slot conservado igual que de uno regenerado. Un slot
+            # "conservado" que pasa de "60 g de avena" a "85 g de avena" dejaba su
+            # `_display["en-US"].ingredients[i]` diciendo "60 g" — la cantidad equivocada en el
+            # idioma del usuario mientras el español está bien, exactamente el modo de fallo que
+            # la regla de invalidación existe para hacer IMPOSIBLE. No hay optimización real que
+            # perder: `enrich_plan_display` retraduce el día ENTERO vía `day_indices=[day_index]`
+            # sin importar si algún meal ya tenía `_display[locale]` (`_collect_targets` no filtra
+            # por eso), así que preservar `_display` de los conservados no evitaba trabajo, solo
+            # dejaba una ventana de datos incorrectos. Pop AL FINAL del mutator (tras
+            # rebalance/refine/reconcile/rebuild de listas) — un pop justo tras `swap_meal()`/el
+            # loop no cubriría las re-cuantizaciones de DÍA COMPLETO que corren después.
+            for _nm_disp in new_meals:
+                if isinstance(_nm_disp, dict):
+                    _nm_disp.pop("_display", None)
+
             return pd
 
         result = update_plan_data_atomic(plan_id, _day_mutator, user_id=verified_user_id)
         if not result:
             raise HTTPException(status_code=404, detail="Plan no encontrado")
+
+        # [P1-PLAN-DISPLAY-I18N-MUTATOR-regenday] Despacho best-effort post-persist (FUERA del
+        # lock): re-enriquecer `_display` del día regenerado si el locale del usuario aplica.
+        # [Fix round 1 · F6] `_p1i18n_locale_rd_holder[0]` reusa el round-trip del retarget o
+        # del clinical-parity si alguno corrió (caso común, ambos knobs default ON) — SELECT
+        # dirigido de 1 columna (facade `from db import ...`, P3-DB-IMPORTS-FACADE) SOLO como
+        # fallback si ninguno de los dos corrió.
+        try:
+            _p1i18n_locale_rd = _p1i18n_locale_rd_holder[0]
+            if _p1i18n_locale_rd is None:
+                from db import execute_sql_query as _p1i18n_esq_rd
+                _p1i18n_row_rd = _p1i18n_esq_rd(
+                    "SELECT locale FROM user_profiles WHERE id = %s",
+                    (verified_user_id,),
+                    fetch_one=True,
+                )
+                _p1i18n_locale_rd = (_p1i18n_row_rd or {}).get("locale")
+            from plan_display_i18n import should_enrich_locale as _p1i18n_should_enrich_rd
+            if _p1i18n_should_enrich_rd(_p1i18n_locale_rd):
+                from plan_display_i18n import schedule_plan_display_enrichment
+                schedule_plan_display_enrichment(
+                    plan_id, verified_user_id, _p1i18n_locale_rd, day_indices=[day_index]
+                )
+        except Exception as _p1i18n_rd_e:
+            logger.debug(f"[P1-PLAN-DISPLAY-I18N-MUTATOR-regenday] dispatch no-op: {_p1i18n_rd_e}")
 
         # Cuota: 1 crédito por día completo (post-éxito, D3).
         # [P1-REGEN-DAY-PARTIAL-AI-DEGRADE · 2026-06-24] NO cobramos si la IA cayó a mitad del loop:
@@ -9916,7 +10585,7 @@ def api_restock(data: dict = Body(...), verified_user_id: Optional[str] = Depend
                 _bp_rows = execute_sql_query(
                     "SELECT id::text AS id, brand FROM public.supermarket_products "
                     "WHERE id = ANY(%s::uuid[])",
-                    (list(_bp_ids),),
+                    (list(_bp_ids),), fetch_all=True
                     ) or []
                 _bp_map = {r["id"]: (str(r.get("brand") or "").strip() or "Genérico") for r in _bp_rows}
                 for it in filtered_ingredients:
@@ -10798,10 +11467,34 @@ def api_recalculate_shopping_list(data: dict = Body(...), verified_user_id: Opti
             # veg-guard del finalizer NO inyecte un alérgeno (el /recalculate corre sin backstop posterior).
             # Best-effort fail-open a [] (sin alergias conocidas el filtro es no-op, como pre-fix).
             _rc_allergies = []
+            _recalc_country = "DO"
+            _recalc_country_source = "profile"
+            _recalc_health_profile = {}
+            # Sentinel separado del valor: sólo autoriza el helper bajo lock si el perfil se
+            # preleyó bien. En error, el costeo conserva el régimen persistido (fail-open).
+            _recalc_regime_ready = False
             try:
                 from db import get_user_profile as _gup_rc
                 _hp_rc = (_gup_rc(user_id) or {}).get("health_profile") or {}
+                _recalc_health_profile = _hp_rc
                 _rc_allergies = [str(a).strip() for a in (_hp_rc.get("allergies") or []) if str(a).strip()]
+                # [P1-COUNTRY-SYSTEM-F2 · 2026-08-17 (Task 9, g · MUTATOR-PURITY)] Mismo pre-fetch
+                # ANTES de cualquier lock (patrón `_micro_form` de /swap-meal/persist, ya aplicado
+                # arriba en este mismo pre-fetch de perfil) — cierra el 2º call site país-blind
+                # que docs/country_system_f1.md ("Parqueado para Fase 2") dejó disclosed.
+                # [P1-PLAN-STAMPS-COUNTRY · 2026-08-21] El país DEL PLAN gana al del perfil: un
+                # plan es un artefacto con fecha, y re-interpretar platos españoles bajo reglas
+                # dominicanas produce el híbrido que hoy existe (perfil 'DO', planes ES/US).
+                # Sin sello (todo plan pre-P-fix) cae al perfil, que es la conducta de hasta hoy.
+                from constants import country_for_plan as _cfp_rc
+                _recalc_country, _recalc_country_source = _cfp_rc(
+                    plan_data,
+                    _hp_rc,
+                    return_source=True,
+                )
+                # El régimen se decide sobre el dict FRESH bajo lock: sólo un sello real puede
+                # sanearse; un fallback legacy conserva la evidencia previa (G14).
+                _recalc_regime_ready = True
             except Exception as _rc_al_e:
                 logger.debug(f"[P0-VEG-GUARD-ALLERGEN] no se pudo hidratar alergias en /recalculate: {_rc_al_e}")
             _rc_fixed = 0
@@ -10812,7 +11505,8 @@ def api_recalculate_shopping_list(data: dict = Body(...), verified_user_id: Opti
             for _d in (plan_data.get("days") or []):
                 for _m in ((_d.get("meals") or []) if isinstance(_d, dict) else []):
                     if isinstance(_m, dict):
-                        _rc_fixed += _fin_rc_rc(_m, allergies=_rc_allergies, portion_floors=False)
+                        _rc_fixed += _fin_rc_rc(_m, allergies=_rc_allergies, portion_floors=False,
+                                                 country=_recalc_country)
             if _rc_fixed:
                 logger.info(f"🍳 [P1-UPDATE-RECIPE-FINALIZE] {_rc_fixed} fix(es) de coherencia de receta en /recalculate (lista canónica)")
         except Exception as _rc_fin_e:
@@ -11000,6 +11694,26 @@ def api_recalculate_shopping_list(data: dict = Body(...), verified_user_id: Opti
             plan_data_fresh["aggregated_shopping_list_biweekly"] = scaled_15_hybrid
             plan_data_fresh["aggregated_shopping_list_monthly"] = scaled_30_hybrid
 
+            # [P2-SHOPPING-PROTEIN-FLOOR · 2026-08-22] Re-medir la completitud con la lista
+            # que ACABAMOS de escribir. Antes se calculaba SOLO en `assemble_plan_node` y
+            # nadie la refrescaba (`grep _shopping_completeness routers/plans.py` → 0
+            # matches), así que el plan 2245eb45 quedó persistido afirmando `distinct: 49`
+            # mientras publicaba 25. Un veredicto que describe una lista que ya no existe es
+            # peor que ninguno: un operador lo cree. Fail-open — nunca bloquea el recalc.
+            try:
+                from graph_orchestrator import _shopping_list_completeness as _slc_recalc
+                _sc_recalc = _slc_recalc(plan_data_fresh, (plan_data_fresh.get("form_data") or {}))
+                plan_data_fresh["_shopping_completeness"] = _sc_recalc
+                if _sc_recalc.get("is_protein_starved"):
+                    logger.warning(
+                        f"🥩 [P2-SHOPPING-PROTEIN-FLOOR] Plan {plan_id}: lista "
+                        f"publicada con {_sc_recalc.get('distinct_proteins')} proteína(s) "
+                        f"distinta(s) sobre {_sc_recalc.get('distinct')} alimentos — el "
+                        f"usuario no tiene con qué cocinar los próximos bloques."
+                    )
+            except Exception as _slc_e:
+                logger.debug(f"[P2-SHOPPING-PROTEIN-FLOOR] re-medición no-op: {type(_slc_e).__name__}: {_slc_e}")
+
             # [P1-NEXT-2 · 2026-05-11] Coherence guard sobre la lista recién
             # escalada. Antes, /recalculate-shopping-list persistía
             # aggregated_shopping_list* sin invocar run_shopping_coherence_guard —
@@ -11130,7 +11844,26 @@ def api_recalculate_shopping_list(data: dict = Body(...), verified_user_id: Opti
             try:
                 from shopping_calculator import compute_shopping_cost_summary as _p1b_ccs
                 from nutrition_calculator import refresh_budget_reconciliation as _p1b_rbr
-                _p1b_summary = _p1b_ccs(scaled_7, scaled_15_hybrid, scaled_30_hybrid, grocery_duration)
+                # [P1-COUNTRY-SYSTEM-F1 · 2026-08-16 (T7)] plan_data_fresh trae la clave desde
+                # el INSERT del plan — beta ⇒ None, cero recalculo de costo/reconciliación.
+                # Si el pre-fetch falló se conserva el régimen persistido. Si funcionó, el helper
+                # distingue el sello real del fallback antes de sanear o preservar (G14).
+                _p1b_mode = plan_data_fresh.get("_pricing_mode")
+                if _recalc_regime_ready:
+                    # [P1-COUNTRY-STAMP-NO-FALLBACK-WRITE · 2026-08-23] Re-resuelve sobre
+                    # el dict FRESH bajo lock. Sólo un sello del plan es un hecho escribible;
+                    # el fallback del perfil sirve para leer, pero un plan legacy conserva la
+                    # ausencia de `_country` y su `_pricing_mode` tal cual. El helper también
+                    # deja evento si un plan realmente sellado pierde el régimen.
+                    from constants import apply_recalc_plan_regime as _apply_recalc_regime
+                    _fresh_country, _p1b_mode, _fresh_country_source = _apply_recalc_regime(
+                        plan_data_fresh,
+                        _recalc_health_profile,
+                        plan_id=plan_id,
+                        emit_observability=True,
+                    )
+                _p1b_summary = _p1b_ccs(scaled_7, scaled_15_hybrid, scaled_30_hybrid, grocery_duration,
+                                         pricing_mode=_p1b_mode)
                 if _p1b_summary:
                     plan_data_fresh["shopping_cost_summary"] = _p1b_summary
                     # [P1-BUDGET-REF-RESCALE · 2026-07-02] hogar nuevo → re-escala tier-basis.
@@ -11414,7 +12147,7 @@ def api_chunk_status(plan_id: str, response: Response, verified_user_id: Optiona
         if status in ['failed', 'complete_partial']:
             chunks_res = execute_sql_query(
                 "SELECT id, week_number, status, attempts FROM plan_chunk_queue WHERE meal_plan_id = %s AND status = 'failed' ORDER BY week_number ASC",
-                (plan_id,)
+                (plan_id,), fetch_all=True
             )
             if chunks_res:
                 failed_chunks = chunks_res
@@ -11479,16 +12212,40 @@ def api_chunk_status(plan_id: str, response: Response, verified_user_id: Optiona
               AND status = 'pending_user_action'
             ORDER BY week_number ASC NULLS LAST, days_offset ASC NULLS LAST
             """,
-            (plan_id,),
+            (plan_id,), fetch_all=True
         ) or []
 
+        # [P1-DASH-GENERATING-HONESTY · 2026-08-16] `scheduled_count` /
+        # `running_now_count` parten `in_flight_count` por el reloj, replicando
+        # las MISMAS condiciones que `api_plans_history_list` (su subquery
+        # `qstats`) para que las dos pantallas no discrepen sobre el mismo plan.
+        #
+        # NO se copia el `WHERE user_id = %s` de allá: aquí el ownership ya se
+        # resolvió arriba (P0-HIST-IDOR-2) y añadirlo obligaría a un segundo
+        # parámetro en la tupla `(plan_id,)` — un error de binding en CADA tick
+        # del polling del Dashboard.
+        #
+        # ⚠️ NO son una partición de `in_flight_count`: un chunk `processing` con
+        # `execute_after` futuro (alcanzable por la rama `target_plan_id` del
+        # pickup, que ignora `execute_after`) cae FUERA de los dos. Por eso el
+        # payload sigue exponiendo `in_flight_count` y el frontend lo conserva
+        # como respaldo — sustituirlo por la suma haría desaparecer ese día.
         counters_row = execute_sql_query(
             """
             SELECT
                 COUNT(*) FILTER (WHERE status IN ('pending','processing','stale'))::int AS in_flight_count,
                 COUNT(*) FILTER (WHERE status = 'pending_user_action')::int AS pending_user_action_count,
                 COUNT(*) FILTER (WHERE status = 'failed')::int AS failed_count,
-                COUNT(*) FILTER (WHERE status = 'completed')::int AS completed_count
+                COUNT(*) FILTER (WHERE status = 'completed')::int AS completed_count,
+                COUNT(*) FILTER (
+                    WHERE status IN ('pending', 'stale')
+                      AND execute_after IS NOT NULL
+                      AND execute_after > NOW()
+                )::int AS scheduled_count,
+                COUNT(*) FILTER (
+                    WHERE status IN ('pending', 'processing', 'stale')
+                      AND (execute_after IS NULL OR execute_after <= NOW())
+                )::int AS running_now_count
             FROM plan_chunk_queue
             WHERE meal_plan_id = %s
             """,
@@ -11569,7 +12326,7 @@ def api_chunk_status(plan_id: str, response: Response, verified_user_id: Optiona
             FROM plan_chunk_queue
             WHERE meal_plan_id = %s AND status = 'completed' AND quality_tier IS NOT NULL
             GROUP BY quality_tier
-        """, (plan_id,)) or []
+        """, (plan_id,), fetch_all=True) or []
         tier_summary = {r['quality_tier']: int(r['cnt']) for r in tier_breakdown}
 
         # [P0-2] Resumen de pantry-degraded para el polling de chunk-status. El frontend
@@ -11712,6 +12469,17 @@ def api_chunk_status(plan_id: str, response: Response, verified_user_id: Optiona
             "pending_user_action_count": int(counters_row.get("pending_user_action_count") or 0),
             "failed_count": int(counters_row.get("failed_count") or 0),
             "completed_count": int(counters_row.get("completed_count") or 0),
+            # [P1-DASH-GENERATING-HONESTY · 2026-08-16] Sin prefijo `chunk_`, al
+            # contrario que en `/history-list`: aquí la convención del payload es
+            # el nombre desnudo (`in_flight_count`), y de paso los asserts de
+            # `test_p3_hist_chunk_scheduled.py` sobre `"chunk_scheduled_count":`
+            # siguen hablando SOLO de su endpoint.
+            #
+            # Van en el dict INCONDICIONAL, nunca dentro de `**_upcoming_payload`:
+            # ese está gateado por `MEALFIT_UPCOMING_DAYS_UI` y apagarlo se
+            # llevaría por delante unos contadores que ese knob no gobierna.
+            "scheduled_count": int(counters_row.get("scheduled_count") or 0),
+            "running_now_count": int(counters_row.get("running_now_count") or 0),
             "paused_chunks": paused_chunks,
             # [P2-CHUNK-OVERDUE-SIGNAL · 2026-08-04] `upcoming_chunks`/`overdue`/
             # `overdue_since` — presentes SOLO con el knob ON (dict vacío = no-op).
@@ -11869,7 +12637,7 @@ def api_blocked_reasons(
             WHERE meal_plan_id = %s AND ({_status_filter})
             ORDER BY week_number ASC
             """,
-            (plan_id, *(_params[1:])),
+            (plan_id, *(_params[1:])), fetch_all=True
         ) or []
 
         # [P1-4] Lectura de logging_preference para enriquecer el motivo learning_zero_logs:
@@ -11924,6 +12692,16 @@ def api_blocked_reasons(
                 "title": "Tu nevera está vacía",
                 "body": "Añade ingredientes a 'Mi Nevera' para que generemos el siguiente bloque del plan.",
                 "cta": "Actualizar nevera",
+                "url": "/inventory",
+            },
+            # [P1-FIRST-PURCHASE-PAUSE · 2026-08-16] La pausa una-vez-por-plan
+            # cuando la lista fue entregada y el usuario jamás marcó compra. El
+            # copy habla de la COMPRA (el paso que falta), no de una nevera rota,
+            # y promete la reanudación sola — el recovery la ejecuta a las 12h.
+            "awaiting_first_purchase": {
+                "title": "Tu primera compra está pendiente",
+                "body": "Te dimos la lista de compras y aún no marcaste nada como comprado. Márcalo en la Nevera — o espera, y seguiremos solos con la mejor información disponible.",
+                "cta": "Ir a la Nevera",
                 "url": "/inventory",
             },
             # [P2-HIST-AUDIT-9 · 2026-05-09] Reasons faltantes
@@ -12221,6 +12999,56 @@ def api_retry_chunk(plan_id: str, chunk_id: str, verified_user_id: Optional[str]
         raise HTTPException(status_code=500, detail=safe_error_detail(e))
 
 
+def _adopt_guest_form_into_profile(health_profile: dict, form_data) -> bool:
+    """[P1-GUEST-COUNTRY-ADOPT · 2026-08-21] Rellena en `health_profile` los huecos que el
+    formulario del INVITADO ya contestó. Devuelve True si escribió algo.
+
+    EL DEFECTO QUE CIERRA. `api_adopt_guest_plan` guardaba el PLAN y descartaba el FORMULARIO
+    entero: un español que elegía España como invitado, recibía su plan beta correcto y se
+    registraba, acababa con `health_profile.country` AUSENTE ⇒ 'DO'. Desde ese segundo el primer
+    swap le devuelve comida dominicana, la renovación sale dominicana, y el plan que conserva
+    sigue marcado `beta_no_prices` — sin precios para siempre mientras el motor lo cree
+    dominicano. Es el estado que P1-COUNTRY-RENEWAL-PROFILE-WINS reparó a mano en agosto, pero
+    producido SOLO por el flujo que el landing más promociona.
+
+    ALLOWLIST, NO VOLCADO. La tentación es persistir el `formData` completo. Sería el CUARTO
+    setter del perfil sin jerarquía —tras el PATCH de Configuración, el merge del submit y la
+    tool del chat— y esa acumulación es la que produjo el incidente que esto imita. Sólo viajan
+    las claves del formulario, y sólo a huecos: si la cuenta YA declaró país, el invitado no lo
+    pisa (un `country` de invitado puede ser el 'DO' sembrado por `initialFormData`, que es
+    indistinguible de una elección — la lección exacta de aquel P-fix).
+
+    El país se CANONIZA antes de escribir y lo que no canoniza se descarta: el body de un
+    invitado no está autenticado por definición.
+
+    tooltip-anchor: _adopt_guest_form_into_profile (test_p1_guest_country_adopt.py)"""
+    if not isinstance(health_profile, dict) or not isinstance(form_data, dict) or not form_data:
+        return False
+    # Misma allowlist que la rama corta del wizard (`QTrackingFinish.jsx`): un solo sitio donde
+    # decidir qué del formulario merece vivir en el perfil.
+    _ALLOW = ("country", "allergies", "dietType", "medicalConditions", "medications",
+              "otherAllergies", "otherConditions", "otherMedications",
+              "budgetCurrency", "tzOffset", "householdSize")
+    escribio = False
+    for k in _ALLOW:
+        v = form_data.get(k)
+        if v is None or v == "" or (isinstance(v, (list, dict)) and not v):
+            continue
+        if health_profile.get(k) not in (None, "", [], {}):
+            continue  # la cuenta ya lo declaró: el invitado rellena huecos, no sobrescribe
+        if k == "country":
+            try:
+                from constants import COUNTRY_PROFILES
+                if not (isinstance(v, str) and v.strip().upper() in COUNTRY_PROFILES):
+                    continue  # no canoniza → se descarta en vez de caer a 'DO' en silencio
+                v = v.strip().upper()
+            except Exception:
+                continue
+        health_profile[k] = v
+        escribio = True
+    return escribio
+
+
 @router.post("/adopt-guest-plan")
 def api_adopt_guest_plan(
     data: dict = Body(...),
@@ -12268,6 +13096,32 @@ def api_adopt_guest_plan(
         return {"success": True, "adopted": False, "reason": "dedup"}
 
     logger.info(f"✅ [P1-GUEST-ADOPT-1] Plan de invitado adoptado → user={verified_user_id} plan_id={plan_id}")
+
+    # [P1-GUEST-COUNTRY-ADOPT · 2026-08-21] Y el FORMULARIO, que hasta hoy se descartaba entero.
+    # Aislado en su propio try: el plan es lo que el usuario vino a salvar, así que un fallo
+    # escribiendo una preferencia no puede tumbar la adopción. `form_data` es OPCIONAL — el
+    # frontend desplegado hoy manda sólo `plan_data`, y exigirlo dejaría a esos usuarios sin
+    # poder adoptar su plan.
+    try:
+        _guest_form = (data or {}).get("form_data")
+        if isinstance(_guest_form, dict) and _guest_form:
+            from db import update_user_health_profile_atomic as _uhpa_guest
+
+            def _mut_guest(_hp):
+                _hp = _hp if isinstance(_hp, dict) else {}
+                _adopt_guest_form_into_profile(_hp, _guest_form)
+                return _hp
+
+            _uhpa_guest(verified_user_id, _mut_guest)
+            logger.info(
+                "🌍 [P1-GUEST-COUNTRY-ADOPT] formulario de invitado adoptado al perfil "
+                f"(user={verified_user_id}, país={_guest_form.get('country')})"
+            )
+    except Exception as _gf_e:
+        logger.warning(
+            f"⚠️ [P1-GUEST-COUNTRY-ADOPT] no se pudo adoptar el formulario del invitado "
+            f"(el plan SÍ se guardó): {type(_gf_e).__name__}: {_gf_e}"
+        )
     return {"success": True, "adopted": True, "plan_id": plan_id}
 
 
@@ -13979,7 +14833,21 @@ def api_plan_chunk_metrics(
                 COALESCE(deferrals.deferrals_count, 0) AS deferrals_count,
                 deferrals.deferral_reasons AS deferral_reasons
             FROM plan_chunk_queue q
-            LEFT JOIN plan_chunk_metrics m ON m.chunk_id = q.id
+            -- [P1-HIST-METRICS-DEDUP · 2026-08-13] plan_chunk_metrics guarda
+            -- UNA FILA POR INTENTO (el worker inserta al completar cada
+            -- ejecución, incluidas las degradadas que luego se reintentan).
+            -- El JOIN directo `ON m.chunk_id = q.id` multiplicaba: un chunk
+            -- con 3 intentos salía 3 veces en el tab Métricas del modal
+            -- («Semana 2 · Días 1-4» repetido con duraciones distintas,
+            -- contradiciendo el contador de la cabecera). LATERAL al ÚLTIMO
+            -- intento: una fila por chunk, la del desenlace real.
+            LEFT JOIN LATERAL (
+                SELECT pm.*
+                FROM plan_chunk_metrics pm
+                WHERE pm.chunk_id = q.id
+                ORDER BY pm.created_at DESC
+                LIMIT 1
+            ) m ON TRUE
             -- [P2-HIST-AUDIT-F · 2026-05-09] Lock activo del usuario.
             -- chunk_user_locks tiene PK user_id (1:1) — el LEFT JOIN
             -- es 1:0..1.
@@ -14352,6 +15220,17 @@ def api_rename_plan(
                         logger.warning(
                             f"⚠️ [P2-HIST-RENAME-NO-PROMOTE] check de latest falló — "
                             f"fail-open al sellado legacy: {_np_e}")
+                    # [P1-PLAN-DISPLAY-I18N-MUTATOR-planrename · tooltip-anchor:
+                    # P1-PLAN-DISPLAY-I18N-MUTATOR-planrename] DELETE-on-write a nivel
+                    # PLAN (hermano del pop por-meal de swap/regenday/recipeexpand/
+                    # chatmod): `plan_data["_display"]` lleva `{locale: {"name": ...}}`
+                    # con el nombre traducido del PLAN (backend/plan_display_i18n.py).
+                    # Si el usuario renombra a mano, esa traducción queda apuntando al
+                    # nombre VIEJO — mentira permanente hasta el próximo disparador. El
+                    # operador jsonb `- '_display'` remueve la key top-level en el mismo
+                    # UPDATE atómico (no-op si la key no existe). Los `_display` POR MEAL
+                    # (dentro de `plan_data.days[i].meals[j]`) NO se tocan aquí — el rename
+                    # no cambia ningún plato, solo el nombre del plan.
                     if _renaming_active:
                         cur.execute(
                             """
@@ -14362,7 +15241,7 @@ def api_rename_plan(
                                         plan_data, '{name}', to_jsonb(%s::text), true
                                     ),
                                     '{_plan_modified_at}', to_jsonb(%s::text), true
-                                )
+                                ) - '_display'
                             WHERE id = %s AND user_id = %s
                             RETURNING id
                             """,
@@ -14375,7 +15254,7 @@ def api_rename_plan(
                             SET name = %s,
                                 plan_data = jsonb_set(
                                     plan_data, '{name}', to_jsonb(%s::text), true
-                                )
+                                ) - '_display'
                             WHERE id = %s AND user_id = %s
                             RETURNING id
                             """,
@@ -14462,7 +15341,11 @@ def api_plans_history_list(
               "cycle_start_date": "<iso|null>",
               "coherence_adjusts_count": <int>,
               "coherence_last_hypotheses": [<str>, ...] (max 5),
-              "preview_meals": [{"name", "meal"}, ...] (max _HISTORY_PREVIEW_MEALS_CAP = 6),
+              "preview_meals": [{"name", "meal", "display_names"?: {<locale>: <str>}}, ...]
+                  (max _HISTORY_PREVIEW_MEALS_CAP = 6; "display_names" OMITIDO si el
+                  meal no tiene `_display` — P1-PLAN-DISPLAY-I18N fase 1c),
+              "plan_display_names": {<locale>: <str>} | null (nombre del PLAN
+                  traducido, nivel plan — P1-PLAN-DISPLAY-I18N fase 1c),
               "goal": "<str|null>",
               "diet_preference": "<str|null>",
               "allergies": [<str>, ...],
@@ -14601,6 +15484,13 @@ def api_plans_history_list(
                 mp.plan_data->>'grocery_start_date' AS grocery_start_date,
                 mp.plan_data->>'cycle_start_date' AS cycle_start_date,
                 mp.plan_data->'days'->0->'meals' AS preview_meals_raw,
+                -- [P1-PLAN-DISPLAY-I18N · fase 1c] `_display` de NIVEL PLAN (hermano
+                -- del `_display` por-meal): `{locale: {"name": "<traducido>"}}`,
+                -- escrito por `plan_display_i18n.py` en la MISMA llamada que enriquece
+                -- los meals (ver docstring de `enrich_plan_display`). Clave LIGERA —
+                -- solo el nombre, nunca `recipe`/`ingredients` (esos viven per-meal,
+                -- no a nivel plan). NULL en planes es-DO o sin enriquecer aún.
+                mp.plan_data->'_display' AS plan_display_raw,
                 mp.plan_data->>'goal' AS goal_root,
                 mp.plan_data->'assessment'->>'mainGoal' AS goal_assessment,
                 mp.plan_data->>'diet_preference' AS diet_root,
@@ -14882,10 +15772,27 @@ def api_plans_history_list(
                 # legacy o response cacheado pueden traer skipped).
                 if m.get("isSkipped"):
                     continue
-                preview_meals.append({
+                _preview_item = {
                     "name": m.get("name"),
                     "meal": m.get("meal") or "",
-                })
+                }
+                # [P1-PLAN-DISPLAY-I18N · fase 1c] `display_names`: SOLO los nombres
+                # traducidos extraídos de `meal["_display"]` (`{locale: name}`) — jamás
+                # `recipe`/`ingredients` (el peso importa: este endpoint es polling del
+                # Historial, cap 6 meals/plan, no el bandwidth de una tarjeta de receta).
+                # Key OMITIDA por completo si el meal no trae `_display` (es-DO, meal
+                # sin enriquecer aún) — el frontend cae a `name` con `?? name`.
+                _m_display = m.get("_display")
+                if isinstance(_m_display, dict):
+                    _names_by_locale = {
+                        _loc: _entry.get("name")
+                        for _loc, _entry in _m_display.items()
+                        if isinstance(_entry, dict) and isinstance(_entry.get("name"), str)
+                        and _entry.get("name").strip()
+                    }
+                    if _names_by_locale:
+                        _preview_item["display_names"] = _names_by_locale
+                preview_meals.append(_preview_item)
                 # [P1-CLINICAL-MEAL-COUNT · 2026-06-27] Cap a 6 (no 4) — la razón vive en la
                 # constante `_HISTORY_PREVIEW_MEALS_CAP`. El frontend igual solo pinta 3-4 chips + "+N".
                 if len(preview_meals) >= _HISTORY_PREVIEW_MEALS_CAP:
@@ -14905,6 +15812,22 @@ def api_plans_history_list(
         # objeto u otra cosa, tratamos como vacío.
         allergies_raw = row.get("allergies")
         allergies = allergies_raw if isinstance(allergies_raw, list) else []
+
+        # [P1-PLAN-DISPLAY-I18N · fase 1c] Nombre del PLAN traducido, nivel plan
+        # (hermano de `display_names` por-meal arriba). `plan_display_raw` es
+        # `{locale: {"name": ...}}` o None (es-DO / no enriquecido). Clave ligera:
+        # solo names, omitida cuando no hay ninguna traducción válida.
+        plan_display_raw = row.get("plan_display_raw")
+        plan_display_names = None
+        if isinstance(plan_display_raw, dict):
+            _plan_names_by_locale = {
+                _loc: _entry.get("name")
+                for _loc, _entry in plan_display_raw.items()
+                if isinstance(_entry, dict) and isinstance(_entry.get("name"), str)
+                and _entry.get("name").strip()
+            }
+            if _plan_names_by_locale:
+                plan_display_names = _plan_names_by_locale
 
         # `created_at` es datetime → isoformat. `plan_modified_at`
         # ya es text (extraído via ->>).
@@ -14967,6 +15890,12 @@ def api_plans_history_list(
             # / unit_mismatch / yield_uncovered / pantry_overdeduct / unknown).
             "coherence_last_hypotheses": coherence_last_hypotheses,
             "preview_meals": preview_meals,
+            # [P1-PLAN-DISPLAY-I18N · fase 1c] Nombre del plan traducido por locale
+            # (`{locale: name}`) o `None` si el plan no tiene `_display` de nivel plan
+            # (es-DO, no enriquecido aún, o el usuario lo renombró a mano — el rename
+            # popea esta key, ver `api_rename_plan`). Card Y modal del Historial caen a
+            # `name` cuando falta.
+            "plan_display_names": plan_display_names,
             "goal": goal,
             "diet_preference": diet,
             "allergies": allergies,
@@ -15175,7 +16104,7 @@ def api_admin_chunks_stuck(
             ORDER BY q.execute_after ASC
             LIMIT %s
             """,
-            (int(min_lag_hours), int(limit)),
+            (int(min_lag_hours), int(limit)), fetch_all=True
         ) or []
 
         # Resumen agregado
@@ -15254,7 +16183,7 @@ def api_admin_chunks_dead_lettered(
         sql += " ORDER BY q.dead_lettered_at DESC LIMIT %s"
         params.append(int(limit))
 
-        rows = execute_sql_query(sql, tuple(params)) or []
+        rows = execute_sql_query(sql, tuple(params), fetch_all=True) or []
 
         # Resumen agregado por reason (mismo shape que la alerta de cron).
         by_reason: dict = {}
@@ -15315,7 +16244,7 @@ def api_admin_chunk_deferrals(
             ORDER BY created_at DESC
             LIMIT %s
             """,
-            (user_id, int(window_hours), int(limit)),
+            (user_id, int(window_hours), int(limit)), fetch_all=True
         ) or []
 
         # Agregado por (meal_plan_id, week_number, reason) para detectar patrones.
@@ -15589,7 +16518,7 @@ def api_regen_degraded_chunks(plan_id: str, verified_user_id: Optional[str] = De
               AND quality_tier IN ('shuffle', 'edge', 'emergency')
               AND pipeline_snapshot::text != '{}'
             ORDER BY week_number ASC
-        """, (plan_id,)) or []
+        """, (plan_id,), fetch_all=True) or []
 
         if not degraded_chunks:
             return {
@@ -15744,7 +16673,7 @@ def api_admin_metrics(
             ORDER BY cnt DESC
             LIMIT 10
             """,
-            (interval_str,),
+            (interval_str,), fetch_all=True
         ) or []
 
         # [P1-6] Learning loss: agrega events `learning_rebuild_failed` desde
@@ -15780,7 +16709,7 @@ def api_admin_metrics(
                 GROUP BY COALESCE(metadata->>'reason', 'unknown')
                 ORDER BY cnt DESC
                 """,
-                (interval_str,),
+                (interval_str,), fetch_all=True
             ) or []
             # [P1-7] Ratio de aprendizaje basado en proxy/synthesis vs user_logs en
             # el lifetime acumulado de planes ACTIVOS. Si crece, indica que muchos

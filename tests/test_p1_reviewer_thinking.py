@@ -1,7 +1,7 @@
 """[P1-REVIEWER-THINKING · 2026-07-05] Thinking mode V4 en las 2 superficies de juicio clínico.
 
-Contexto: DeepSeek-V4 trae razonamiento nativo ON de fábrica; el repo lo apaga globalmente
-(P1-DEEPSEEK-THINKING-OFF — en day-gen multiplicaba latencia >170s → fallback matemático).
+Contexto: GLM-5.3 trae razonamiento nativo ON de fábrica; el repo lo apaga globalmente
+(P1-PROVIDER-THINKING-DEFAULT — en day-gen multiplicaba latencia >170s → fallback matemático).
 Pedido del owner 2026-07-05: usarlo donde aporte veracidad. Decisión: SOLO juicio clínico de
 bajo volumen — (1) reviewer médico para perfiles risk-tier, (2) escalada a Pro del corrector
 quirúrgico (path post-fallo). JAMÁS day-gen/planner (numérica = motor determinista).
@@ -51,12 +51,12 @@ def test_knobs_born_off():
 
 def test_reviewer_thinking_gated_to_medical_risk():
     # [P1-REVIEWER-TIER-MODELS · 2026-07-31] El gate añade `and not _rev_is_openai`:
-    # `extra_body.thinking` es DeepSeek-only — con Luna/Terra (reviewer por tier) la rama
+    # `extra_body.thinking` es GLM-only — con Luna/Terra (reviewer por tier) la rama
     # se salta y el modelo OpenAI razona nativo. El anchor sigue la línea que DECIDE.
     i = _GO.index("_rev_thinking = bool(REVIEWER_THINKING_ENABLED and _profile_has_medical_risk(form_data)")
     win = _GO[i:i + 1100]
     assert "and not _rev_is_openai)" in _GO[i:i + 220], \
-        "el gate de thinking debe excluir modelos OpenAI (extra_body DeepSeek-only)"
+        "el gate de thinking debe excluir modelos OpenAI (extra_body GLM-only)"
     # [P2-THINKING-EFFORT] el body de thinking se construye en `_think_body` para
     # poder inyectar `effort` opcional; extra_body lo referencia por variable.
     assert '_think_body = {"type": "enabled"}' in win
@@ -94,7 +94,7 @@ def test_reviewer_prompt_contract_exists():
 
 def test_surgical_pro_thinking_branch():
     # [P1-NET-LUNA · 2026-07-31] El gate añade `and not _net_is_openai`: la red
-    # default es gpt-5.6-luna (OpenAI) y `extra_body.thinking` es DeepSeek-only.
+    # default es gpt-5.6-luna (OpenAI) y `extra_body.thinking` es GLM-only.
     i = _GO.index("if SURGICAL_PRO_THINKING_ENABLED and not _net_is_openai:")
     win = _GO[i:i + 1400]
     # [P2-THINKING-EFFORT] body en `_surg_think_body` para inyectar effort opcional.
@@ -114,28 +114,30 @@ def test_surgical_pro_thinking_branch():
 # ---------------------------------------------------------------------------
 
 def test_wrapper_callsite_override_wins(monkeypatch):
-    """El default global thinking-OFF usa setdefault: un extra_body explícito del
-    callsite (enabled) DEBE sobrevivir — es el mecanismo de toda la feature."""
-    monkeypatch.setenv("DEEPSEEK_API_KEY", "test-key-not-real")
-    from llm_provider import ChatDeepSeek
-    llm = ChatDeepSeek(model="deepseek-v4-pro",
-                       extra_body={"thinking": {"type": "enabled"}})
+    """[P0-GLM-MIGRATION · 2026-09-02] GLM razona SIEMPRE; lo que el callsite gobierna es el
+    ESFUERZO. El `extra_body.thinking.effort` heredado se traduce a `reasoning_effort` y
+    gana sobre el default del wrapper (low), que protege day-gen/aux."""
+    monkeypatch.setenv("ZAI_API_KEY", "test-key-not-real")
+    monkeypatch.delenv("MEALFIT_GLM_REASONING_EFFORT", raising=False)
+    from llm_provider import ChatGLM
+    llm = ChatGLM(model="glm-5.3",
+                  extra_body={"thinking": {"type": "enabled", "effort": "high"}})
     assert (llm.extra_body or {}).get("thinking", {}).get("type") == "enabled"
-    # y el default sin override sigue siendo disabled (protege day-gen).
-    llm_def = ChatDeepSeek(model="deepseek-v4-flash")
-    assert (llm_def.extra_body or {}).get("thinking", {}).get("type") == "disabled"
+    assert llm.reasoning_effort == "high"
+    llm_def = ChatGLM(model="glm-5.3-flash")
+    assert (llm_def.extra_body or {}).get("thinking", {}).get("type") == "enabled"
+    assert llm_def.reasoning_effort == "low"
 
 
-def test_wrapper_json_mode_does_not_force_disable():
-    """El override de with_structured_output solo fuerza thinking-disabled para
-    function_calling; json_mode debe respetar el extra_body del callsite."""
-    i = _LP.index('if kwargs["method"] == "function_calling"')
-    assert "json_mode" not in _LP[i:i + 300], \
-        "el force-disable del wrapper está acotado a function_calling"
+def test_wrapper_json_mode_becomes_function_calling():
+    """En Z.ai `json_mode`/`json_schema` IGNORAN el esquema (medido 2026-09-02); el wrapper
+    reencamina `json_mode` a `function_calling`, que sí lo respeta con razonamiento activo."""
+    i = _LP.index('if kwargs["method"] == "json_mode" and _is_glm_provider(')
+    assert 'kwargs["method"] = "function_calling"' in _LP[i:i + 200]
 
 
 def test_daygen_planner_not_touched():
-    """La feature JAMÁS activa thinking en day-gen/planner (lección P1-DEEPSEEK-THINKING-OFF)."""
+    """La feature JAMÁS activa thinking en day-gen/planner (lección P1-PROVIDER-THINKING-DEFAULT)."""
     i = _GO.index("def _build_day_llm")
     win = _GO[i:i + 1200]
     assert '"type": "enabled"' not in win

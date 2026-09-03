@@ -25,7 +25,7 @@ flowchart TB
     subgraph EXT["Servicios externos"]
         NEON[("Neon Postgres<br/>+ pgvector")]
         NAUTH["Neon Auth · Better Auth<br/>JWT EdDSA / JWKS"]
-        DS["DeepSeek V4<br/>API OpenAI-compatible"]
+        DS["GLM-5.3<br/>API OpenAI-compatible"]
         CO["Cohere embed-v4.0<br/>1536 dims"]
         PP["PayPal<br/>suscripciones + webhook"]
     end
@@ -128,12 +128,12 @@ flowchart TB
     A["Llamada LLM"] --> B{"¿knob per-feature<br/>MEALFIT_&lt;FEATURE&gt;_MODEL?"}
     B -->|"sí · siempre gana"| Z["Modelo del knob<br/>rollback / A-B sin redeploy"]
     B -->|"no"| C{"¿superficie clínica?"}
-    C -->|"revisor médico risk-tier"| PRO1["deepseek-v4-pro FIJO<br/>thinking ON · effort medium"]
+    C -->|"revisor médico risk-tier"| PRO1["glm-5.3 FIJO<br/>thinking ON · effort medium"]
     C -->|"fact-checker clínico"| PRO2["thinking ON · effort high<br/>bind_tools nativo"]
-    C -->|"aux barato<br/>títulos · RAG · nudges · resúmenes"| FL1["deepseek-v4-flash FIJO"]
+    C -->|"aux barato<br/>títulos · RAG · nudges · resúmenes"| FL1["glm-5.3-flash FIJO"]
     C -->|"pipeline de plan / chat"| D{"plan_tier del usuario"}
-    D -->|"gratis · guest · NULL · fallo de lookup"| FL2["deepseek-v4-flash<br/>$0.14 in · $0.28 out /1M"]
-    D -->|"basic · plus · ultra"| PRO3["deepseek-v4-pro<br/>$0.435 in · $0.87 out /1M"]
+    D -->|"gratis · guest · NULL · fallo de lookup"| FL2["glm-5.3-flash<br/>$0.14 in · $0.28 out /1M"]
+    D -->|"basic · plus · ultra"| PRO3["glm-5.3<br/>$0.435 in · $0.87 out /1M"]
 
     classDef pro fill:#1e3a5f,stroke:#3b82f6,color:#dbeafe
     classDef fl fill:#14532d,stroke:#22c55e,color:#dcfce7
@@ -245,13 +245,37 @@ con su productor y su modelo de resolución está en
 
 ---
 
+## 8. Idioma: qué se traduce, dónde, y qué no se toca
+
+[P3-I18N-DOC-OVERVIEW-SIN-IDIOMA · 2026-08-23] Este documento no mencionaba el idioma ni una
+vez, y desde el 2026-08-15 la app se lee en cinco (es-DO base, en-US, pt-BR, fr-FR, it-IT).
+La regla que cruza todos los diagramas de arriba: **se traduce lo que el usuario LEE; no se
+toca lo que el motor usa como IDENTIFICADOR** (nombres de alimentos, `cat`, `unit`, claves
+de slot). Traducir «Pollo» rompería `pantry_names_match`, el guard de coherencia y el backstop
+de alergias — dos de los tres en silencio.
+
+```
+  usuario (locale en user_profiles, espejo en localStorage)
+     │
+     ├─ interfaz ──── catálogos fr/it/pt/en (la clave ES el texto español; es-DO sin catálogo)
+     ├─ plan ───────── capa _display[locale] (LLM, asíncrona, best-effort; el dato sigue en español)
+     ├─ coach ──────── build_language_directive en el system prompt; copy de servidor por tabla
+     ├─ push / PDF ─── push_i18n.py · gloss al PINTAR (cantidades, envases, anotaciones)
+     └─ lo que NO ──── nombres de alimentos, legales, landing
+```
+
+Dónde se decide cada cosa: [`i18n_dashboard.md`](i18n_dashboard.md) (motor, frontera, los 18
+espejos de la lista de idiomas, knobs) y [`plan_display_i18n.md`](plan_display_i18n.md) (la
+capa `_display`). El gate: `npm run i18n:check:strict` en el frontend (huérfanas, faltantes,
+español sin envolver, claves que no pueden vivir en un catálogo).
+
 ## Cómo re-verificar este documento
 
 | Diagrama | Fuente de verdad |
 |---|---|
 | 2 · grafo | `grep -n "add_node\|add_edge\|add_conditional_edges" backend/graph_orchestrator.py` |
 | 3 · chunking | `PLAN_CHUNK_SIZE` en [`constants.py`](../constants.py) + `_chunk_worker` en [`cron_tasks.py`](../cron_tasks.py) |
-| 4 · modelos | [`llm_provider.py`](../llm_provider.py) (`DEEPSEEK_FLASH` / `DEEPSEEK_PRO`) + [`llm_tier_routing.md`](llm_tier_routing.md) |
+| 4 · modelos | [`llm_provider.py`](../llm_provider.py) (`GLM_FLASH` / `GLM_PRO`) + [`llm_tier_routing.md`](llm_tier_routing.md) |
 | 5 · endpoints | `grep -n "@router.post\|@router.get" backend/routers/plans.py` |
 | 6 · chat | `chat_builder` al final de [`agent.py`](../agent.py) |
 | 7 · crons | `grep -on "id=[\"'][a-z0-9_]*[\"']" backend/cron_tasks.py` |

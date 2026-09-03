@@ -104,6 +104,11 @@ def test_night_rice_rewrites_ingredient_name_and_recipe_steps(monkeypatch):
 
 
 def test_night_rice_wired_in_update_finalizer():
-    """El corrector se cablea en finalize_single_meal_recipe_coherence (updates)."""
-    assert "_night_rice_autofix(_wrap, db)" in _GRAPH
+    """El corrector se cablea en finalize_single_meal_recipe_coherence (updates).
+
+    [P1-COUNTRY-SYSTEM-F1 · 2026-08-16 (T4 fix-round 1)] El callsite ganó `country=country` —
+    el ancla se ensancha a `"_night_rice_autofix(_wrap, db,"` (con coma, sin paréntesis de
+    cierre) para tolerar el argumento extra sin perder la aserción de que `_wrap`/`db` siguen
+    siendo los 2 primeros argumentos posicionales."""
+    assert "_night_rice_autofix(_wrap, db," in _GRAPH
     assert "P2-SLOT-CORRECTOR" in _GRAPH

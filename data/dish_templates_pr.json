@@ -1,0 +1,640 @@
+{
+  "_note": "[P1-COUNTRY-SYSTEM-F2 · T7 · 2026-08-17] Biblioteca curada de plantillas de platos puertorriqueños para el juez culinario (espejo de `dish_templates.json` RD y `dish_templates_es.json`/`dish_templates_mx.json`/`dish_templates_co.json`) -- consumida por `_culinary_judge_rubric_for_country('PR')` (graph_orchestrator.py) SOLO cuando `MEALFIT_COUNTRY_SYSTEM` está encendido Y `country='PR'`. Regla dura: arroz/pasta como BASE nunca en desayuno ni cena (solo 'Arroz con dulce', un postre, y las variantes de arroz de almuerzo respetan esto). `constituents[].name` son nombres EXACTOS de `master_ingredients` (nunca un alias/sinónimo -- ej. 'Salmón' no 'Filete de salmón', 'Auyama' no 'Calabaza'), gramos CRUDOS (regla del yield).",
+  "templates": [
+    {
+      "name": "Puré de plátano verde con huevo frito",
+      "slots": ["desayuno"],
+      "protein": "huevo",
+      "base": "platano",
+      "technique": "hervido",
+      "transform": true,
+      "constituents": [
+        {"name": "Plátano verde", "grams": 200},
+        {"name": "Huevo", "grams": 100},
+        {"name": "Cebolla", "grams": 20}
+      ]
+    },
+    {
+      "name": "Avena con guineo y canela",
+      "slots": ["desayuno"],
+      "protein": "ninguna",
+      "base": "avena",
+      "technique": "hervido",
+      "transform": false,
+      "constituents": [
+        {"name": "Avena", "grams": 60},
+        {"name": "Guineo", "grams": 100},
+        {"name": "Leche de coco", "grams": 100}
+      ]
+    },
+    {
+      "name": "Huevos revueltos con jamón de cocinar",
+      "slots": ["desayuno"],
+      "protein": "huevo",
+      "base": "ninguno",
+      "technique": "salteado",
+      "transform": false,
+      "constituents": [
+        {"name": "Huevo", "grams": 150},
+        {"name": "Jamón de cocinar", "grams": 60},
+        {"name": "Cebolla", "grams": 20}
+      ]
+    },
+    {
+      "name": "Tostadas con queso de papa",
+      "slots": ["desayuno"],
+      "protein": "lacteo",
+      "base": "pan",
+      "technique": "horneado",
+      "transform": false,
+      "constituents": [
+        {"name": "Pan de agua", "grams": 80},
+        {"name": "Queso de papa", "grams": 40}
+      ]
+    },
+    {
+      "name": "Sofrito de huevo con tomate",
+      "slots": ["desayuno"],
+      "protein": "huevo",
+      "base": "ninguno",
+      "technique": "salteado",
+      "transform": false,
+      "constituents": [
+        {"name": "Huevo", "grams": 150},
+        {"name": "Sofrito", "grams": 30},
+        {"name": "Tomate", "grams": 50}
+      ]
+    },
+    {
+      "name": "Pan con mantequilla y jugo de chinola",
+      "slots": ["desayuno"],
+      "protein": "ninguna",
+      "base": "pan",
+      "technique": "ninguna",
+      "transform": false,
+      "constituents": [
+        {"name": "Pan de agua", "grams": 70},
+        {"name": "Mantequilla", "grams": 15},
+        {"name": "Chinola", "grams": 100}
+      ]
+    },
+    {
+      "name": "Bacalaítos con limón",
+      "slots": ["desayuno", "merienda"],
+      "protein": "pescado",
+      "base": "ninguno",
+      "technique": "frito",
+      "transform": true,
+      "constituents": [
+        {"name": "Bacalaítos", "grams": 120},
+        {"name": "Limón", "grams": 10}
+      ]
+    },
+    {
+      "name": "Pan con jamón de cocinar y queso de papa",
+      "slots": ["desayuno"],
+      "protein": "cerdo",
+      "base": "pan",
+      "technique": "ninguna",
+      "transform": false,
+      "constituents": [
+        {"name": "Pan de agua", "grams": 70},
+        {"name": "Jamón de cocinar", "grams": 50},
+        {"name": "Queso de papa", "grams": 30}
+      ]
+    },
+    {
+      "name": "Avena con especias de arroz con dulce",
+      "slots": ["desayuno"],
+      "protein": "ninguna",
+      "base": "avena",
+      "technique": "hervido",
+      "transform": false,
+      "constituents": [
+        {"name": "Avena", "grams": 60},
+        {"name": "Leche de coco", "grams": 100},
+        {"name": "Especias para arroz con dulce", "grams": 3}
+      ]
+    },
+    {
+      "name": "Huevos con longaniza puertorriqueña",
+      "slots": ["desayuno"],
+      "protein": "huevo",
+      "base": "ninguno",
+      "technique": "salteado",
+      "transform": false,
+      "constituents": [
+        {"name": "Huevo", "grams": 100},
+        {"name": "Longaniza puertorriqueña", "grams": 60}
+      ]
+    },
+    {
+      "name": "Arroz con gandules y pernil",
+      "slots": ["almuerzo"],
+      "protein": "cerdo",
+      "base": "arroz",
+      "technique": "horneado",
+      "transform": true,
+      "constituents": [
+        {"name": "Arroz blanco", "grams": 150},
+        {"name": "Gandules", "grams": 100},
+        {"name": "Pernil", "grams": 120},
+        {"name": "Sofrito", "grams": 30}
+      ]
+    },
+    {
+      "name": "Pollo guisado con arroz blanco",
+      "slots": ["almuerzo"],
+      "protein": "pollo",
+      "base": "arroz",
+      "technique": "guisado",
+      "transform": true,
+      "constituents": [
+        {"name": "Muslo de pollo", "grams": 150},
+        {"name": "Arroz blanco", "grams": 150},
+        {"name": "Sofrito", "grams": 30},
+        {"name": "Habichuelas rojas", "grams": 80}
+      ]
+    },
+    {
+      "name": "Mofongo con chicharrón",
+      "slots": ["almuerzo"],
+      "protein": "cerdo",
+      "base": "platano",
+      "technique": "frito",
+      "transform": true,
+      "constituents": [
+        {"name": "Plátano verde", "grams": 250},
+        {"name": "Chicharrón", "grams": 100},
+        {"name": "Ajo", "grams": 10},
+        {"name": "Aceite de achiote", "grams": 15}
+      ]
+    },
+    {
+      "name": "Pernil al horno con habichuelas rojas",
+      "slots": ["almuerzo"],
+      "protein": "cerdo",
+      "base": "arroz",
+      "technique": "horneado",
+      "transform": false,
+      "constituents": [
+        {"name": "Pernil", "grams": 180},
+        {"name": "Habichuelas rojas", "grams": 100},
+        {"name": "Arroz blanco", "grams": 120}
+      ]
+    },
+    {
+      "name": "Bacalao guisado con viandas",
+      "slots": ["almuerzo"],
+      "protein": "pescado",
+      "base": "viveres",
+      "technique": "guisado",
+      "transform": true,
+      "constituents": [
+        {"name": "Bacalao", "grams": 150},
+        {"name": "Yuca", "grams": 150},
+        {"name": "Ñame", "grams": 100},
+        {"name": "Sofrito", "grams": 30}
+      ]
+    },
+    {
+      "name": "Carne guisada con arroz y habichuelas negras",
+      "slots": ["almuerzo"],
+      "protein": "res",
+      "base": "arroz",
+      "technique": "guisado",
+      "transform": true,
+      "constituents": [
+        {"name": "Carne de res", "grams": 150},
+        {"name": "Arroz blanco", "grams": 150},
+        {"name": "Habichuelas negras", "grams": 100},
+        {"name": "Sofrito", "grams": 30}
+      ]
+    },
+    {
+      "name": "Chuletas ahumadas con arroz blanco",
+      "slots": ["almuerzo"],
+      "protein": "cerdo",
+      "base": "arroz",
+      "technique": "salteado",
+      "transform": false,
+      "constituents": [
+        {"name": "Chuleta ahumada", "grams": 150},
+        {"name": "Arroz blanco", "grams": 150},
+        {"name": "Repollo", "grams": 80}
+      ]
+    },
+    {
+      "name": "Camarones al ajillo con tostones",
+      "slots": ["almuerzo"],
+      "protein": "mariscos",
+      "base": "platano",
+      "technique": "salteado",
+      "transform": true,
+      "constituents": [
+        {"name": "Camarones", "grams": 150},
+        {"name": "Plátano verde", "grams": 200},
+        {"name": "Ajo", "grams": 15},
+        {"name": "Aceite de achiote", "grams": 15}
+      ]
+    },
+    {
+      "name": "Ensalada de bacalao con aguacate",
+      "slots": ["almuerzo"],
+      "protein": "pescado",
+      "base": "ninguno",
+      "technique": "ninguna",
+      "transform": false,
+      "constituents": [
+        {"name": "Bacalao", "grams": 150},
+        {"name": "Aguacate", "grams": 100},
+        {"name": "Tomate", "grams": 80},
+        {"name": "Cebolla", "grams": 30},
+        {"name": "Aceitunas rellenas", "grams": 20}
+      ]
+    },
+    {
+      "name": "Sancocho puertorriqueño",
+      "slots": ["almuerzo"],
+      "protein": "mixto",
+      "base": "viveres",
+      "technique": "hervido",
+      "transform": true,
+      "constituents": [
+        {"name": "Muslo de pollo", "grams": 100},
+        {"name": "Carne de res", "grams": 100},
+        {"name": "Yuca", "grams": 100},
+        {"name": "Ñame", "grams": 100},
+        {"name": "Auyama", "grams": 80},
+        {"name": "Sofrito", "grams": 30}
+      ]
+    },
+    {
+      "name": "Pavochón con puré de auyama",
+      "slots": ["almuerzo"],
+      "protein": "pavo",
+      "base": "viveres",
+      "technique": "horneado",
+      "transform": false,
+      "constituents": [
+        {"name": "Pavochón", "grams": 150},
+        {"name": "Auyama", "grams": 150},
+        {"name": "Leche de coco", "grams": 50}
+      ]
+    },
+    {
+      "name": "Longaniza puertorriqueña con arroz y habichuelas",
+      "slots": ["almuerzo"],
+      "protein": "cerdo",
+      "base": "arroz",
+      "technique": "salteado",
+      "transform": false,
+      "constituents": [
+        {"name": "Longaniza puertorriqueña", "grams": 120},
+        {"name": "Arroz blanco", "grams": 150},
+        {"name": "Habichuelas rojas", "grams": 100}
+      ]
+    },
+    {
+      "name": "Chicharrón de cerdo con tostones y pique",
+      "slots": ["almuerzo"],
+      "protein": "cerdo",
+      "base": "platano",
+      "technique": "frito",
+      "transform": true,
+      "constituents": [
+        {"name": "Chicharrón", "grams": 120},
+        {"name": "Plátano verde", "grams": 200},
+        {"name": "Pique", "grams": 10}
+      ]
+    },
+    {
+      "name": "Pastelón de plátano maduro con carne",
+      "slots": ["almuerzo"],
+      "protein": "res",
+      "base": "platano",
+      "technique": "horneado",
+      "transform": true,
+      "constituents": [
+        {"name": "Plátano maduro", "grams": 200},
+        {"name": "Carne de res", "grams": 120},
+        {"name": "Queso de papa", "grams": 40},
+        {"name": "Huevo", "grams": 50}
+      ]
+    },
+    {
+      "name": "Arroz con pollo y aceitunas rellenas",
+      "slots": ["almuerzo"],
+      "protein": "pollo",
+      "base": "arroz",
+      "technique": "guisado",
+      "transform": true,
+      "constituents": [
+        {"name": "Pechuga de pollo", "grams": 150},
+        {"name": "Arroz blanco", "grams": 150},
+        {"name": "Aceitunas rellenas", "grams": 30},
+        {"name": "Sofrito", "grams": 30}
+      ]
+    },
+    {
+      "name": "Mofongo relleno de camarones",
+      "slots": ["almuerzo"],
+      "protein": "mariscos",
+      "base": "platano",
+      "technique": "frito",
+      "transform": true,
+      "constituents": [
+        {"name": "Plátano verde", "grams": 220},
+        {"name": "Camarones", "grams": 130},
+        {"name": "Ajo", "grams": 10},
+        {"name": "Aceite de achiote", "grams": 15}
+      ]
+    },
+    {
+      "name": "Habichuelas guisadas con calabaza y arroz",
+      "slots": ["almuerzo"],
+      "protein": "legumbre",
+      "base": "arroz",
+      "technique": "guisado",
+      "transform": false,
+      "constituents": [
+        {"name": "Habichuelas rojas", "grams": 150},
+        {"name": "Auyama", "grams": 100},
+        {"name": "Arroz blanco", "grams": 150},
+        {"name": "Sofrito", "grams": 20}
+      ]
+    },
+    {
+      "name": "Bistec encebollado con tostones",
+      "slots": ["almuerzo"],
+      "protein": "res",
+      "base": "platano",
+      "technique": "salteado",
+      "transform": false,
+      "constituents": [
+        {"name": "Carne de res", "grams": 150},
+        {"name": "Cebolla", "grams": 60},
+        {"name": "Plátano verde", "grams": 200}
+      ]
+    },
+    {
+      "name": "Alcapurrias horneadas de camarón",
+      "slots": ["almuerzo", "merienda"],
+      "protein": "mariscos",
+      "base": "viveres",
+      "technique": "horneado",
+      "transform": true,
+      "constituents": [
+        {"name": "Yuca", "grams": 100},
+        {"name": "Guineo verde", "grams": 80},
+        {"name": "Camarones", "grams": 100},
+        {"name": "Aceite de achiote", "grams": 10}
+      ]
+    },
+    {
+      "name": "Ensalada de pollo con aceitunas y papas",
+      "slots": ["almuerzo"],
+      "protein": "pollo",
+      "base": "ninguno",
+      "technique": "ninguna",
+      "transform": false,
+      "constituents": [
+        {"name": "Pechuga de pollo", "grams": 150},
+        {"name": "Papa", "grams": 100},
+        {"name": "Aceitunas rellenas", "grams": 25},
+        {"name": "Cebolla", "grams": 20}
+      ]
+    },
+    {
+      "name": "Chuletas ahumadas a la plancha con vegetales",
+      "slots": ["cena"],
+      "protein": "cerdo",
+      "base": "ninguno",
+      "technique": "a la plancha",
+      "transform": false,
+      "constituents": [
+        {"name": "Chuleta ahumada", "grams": 150},
+        {"name": "Repollo", "grams": 100},
+        {"name": "Zanahoria", "grams": 60}
+      ]
+    },
+    {
+      "name": "Bacalaítos con ensalada verde",
+      "slots": ["cena"],
+      "protein": "pescado",
+      "base": "ninguno",
+      "technique": "frito",
+      "transform": true,
+      "constituents": [
+        {"name": "Bacalaítos", "grams": 100},
+        {"name": "Repollo", "grams": 80},
+        {"name": "Tomate", "grams": 60}
+      ]
+    },
+    {
+      "name": "Pechuga de pollo con puré de batata",
+      "slots": ["cena"],
+      "protein": "pollo",
+      "base": "viveres",
+      "technique": "a la plancha",
+      "transform": false,
+      "constituents": [
+        {"name": "Pechuga de pollo", "grams": 150},
+        {"name": "Batata", "grams": 150},
+        {"name": "Mantequilla", "grams": 10}
+      ]
+    },
+    {
+      "name": "Camarones salteados con vegetales",
+      "slots": ["cena"],
+      "protein": "mariscos",
+      "base": "ninguno",
+      "technique": "salteado",
+      "transform": false,
+      "constituents": [
+        {"name": "Camarones", "grams": 150},
+        {"name": "Repollo", "grams": 80},
+        {"name": "Zanahoria", "grams": 60},
+        {"name": "Ajo", "grams": 10}
+      ]
+    },
+    {
+      "name": "Tortilla de huevo con queso de papa",
+      "slots": ["cena"],
+      "protein": "huevo",
+      "base": "ninguno",
+      "technique": "salteado",
+      "transform": false,
+      "constituents": [
+        {"name": "Huevo", "grams": 150},
+        {"name": "Queso de papa", "grams": 40},
+        {"name": "Cebolla", "grams": 20}
+      ]
+    },
+    {
+      "name": "Pescado al horno con limón y sofrito",
+      "slots": ["cena"],
+      "protein": "pescado",
+      "base": "ninguno",
+      "technique": "horneado",
+      "transform": false,
+      "constituents": [
+        {"name": "Bacalao", "grams": 150},
+        {"name": "Sofrito", "grams": 20},
+        {"name": "Limón", "grams": 10}
+      ]
+    },
+    {
+      "name": "Ensalada de aguacate con queso blanco",
+      "slots": ["cena"],
+      "protein": "lacteo",
+      "base": "ninguno",
+      "technique": "ninguna",
+      "transform": false,
+      "constituents": [
+        {"name": "Aguacate", "grams": 100},
+        {"name": "Queso blanco", "grams": 60},
+        {"name": "Tomate", "grams": 80}
+      ]
+    },
+    {
+      "name": "Sopa de pollo con viandas",
+      "slots": ["cena"],
+      "protein": "pollo",
+      "base": "viveres",
+      "technique": "hervido",
+      "transform": true,
+      "constituents": [
+        {"name": "Muslo de pollo", "grams": 120},
+        {"name": "Yuca", "grams": 100},
+        {"name": "Auyama", "grams": 80},
+        {"name": "Sofrito", "grams": 20}
+      ]
+    },
+    {
+      "name": "Jamón de cocinar con puré de ñame",
+      "slots": ["cena"],
+      "protein": "cerdo",
+      "base": "viveres",
+      "technique": "hervido",
+      "transform": false,
+      "constituents": [
+        {"name": "Jamón de cocinar", "grams": 150},
+        {"name": "Ñame", "grams": 150}
+      ]
+    },
+    {
+      "name": "Morcilla a la plancha con tostones",
+      "slots": ["cena"],
+      "protein": "cerdo",
+      "base": "platano",
+      "technique": "a la plancha",
+      "transform": true,
+      "constituents": [
+        {"name": "Morcilla", "grams": 100},
+        {"name": "Plátano verde", "grams": 180}
+      ]
+    },
+    {
+      "name": "Arroz con dulce",
+      "slots": ["merienda"],
+      "protein": "ninguna",
+      "base": "arroz",
+      "technique": "hervido",
+      "transform": true,
+      "constituents": [
+        {"name": "Arroz blanco", "grams": 60},
+        {"name": "Leche de coco", "grams": 100},
+        {"name": "Especias para arroz con dulce", "grams": 3},
+        {"name": "Coco", "grams": 20}
+      ]
+    },
+    {
+      "name": "Bacalaítos fritos",
+      "slots": ["merienda"],
+      "protein": "pescado",
+      "base": "ninguno",
+      "technique": "frito",
+      "transform": true,
+      "constituents": [
+        {"name": "Bacalaítos", "grams": 100},
+        {"name": "Limón", "grams": 5}
+      ]
+    },
+    {
+      "name": "Guineítos en escabeche",
+      "slots": ["merienda"],
+      "protein": "ninguna",
+      "base": "viveres",
+      "technique": "hervido",
+      "transform": true,
+      "constituents": [
+        {"name": "Guineo verde", "grams": 150},
+        {"name": "Cebolla", "grams": 30},
+        {"name": "Aceite de achiote", "grams": 10}
+      ]
+    },
+    {
+      "name": "Batata al horno con especias",
+      "slots": ["merienda"],
+      "protein": "ninguna",
+      "base": "viveres",
+      "technique": "horneado",
+      "transform": false,
+      "constituents": [
+        {"name": "Batata", "grams": 150},
+        {"name": "Especias para arroz con dulce", "grams": 2}
+      ]
+    },
+    {
+      "name": "Tostones con pique",
+      "slots": ["merienda"],
+      "protein": "ninguna",
+      "base": "platano",
+      "technique": "frito",
+      "transform": true,
+      "constituents": [
+        {"name": "Plátano verde", "grams": 180},
+        {"name": "Pique", "grams": 10}
+      ]
+    },
+    {
+      "name": "Ensalada de frutas tropicales",
+      "slots": ["merienda"],
+      "protein": "ninguna",
+      "base": "ninguno",
+      "technique": "ninguna",
+      "transform": false,
+      "constituents": [
+        {"name": "Guayaba", "grams": 80},
+        {"name": "Piña", "grams": 80},
+        {"name": "Mango", "grams": 80},
+        {"name": "Chinola", "grams": 50}
+      ]
+    },
+    {
+      "name": "Queso de papa con guayaba",
+      "slots": ["merienda"],
+      "protein": "lacteo",
+      "base": "ninguno",
+      "technique": "ninguna",
+      "transform": false,
+      "constituents": [
+        {"name": "Queso de papa", "grams": 50},
+        {"name": "Guayaba", "grams": 100}
+      ]
+    },
+    {
+      "name": "Piña con coco rallado",
+      "slots": ["merienda"],
+      "protein": "ninguna",
+      "base": "ninguno",
+      "technique": "ninguna",
+      "transform": false,
+      "constituents": [
+        {"name": "Piña", "grams": 100},
+        {"name": "Coco", "grams": 30}
+      ]
+    }
+  ]
+}

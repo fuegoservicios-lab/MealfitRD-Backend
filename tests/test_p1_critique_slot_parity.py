@@ -31,7 +31,8 @@ def test_reviewer_ssot_feeds_critique_slot_issues():
     assert i > 0, "la paridad de horario desapareció del critique"
     blk = _GO[i - 400: i + 1200]
     assert "slot_issues = _detect_slot_incoherence(days)" in blk, "vive junto al detector legacy"
-    assert "_detect_slot_appropriateness(days)" in blk
+    # [P1-DIET-BLIND-DIRECTIVES · 2026-08-08] el detector ahora recibe form_data (hint por dieta)
+    assert '_detect_slot_appropriateness(days, state.get("form_data"))' in blk
     assert "CRITIQUE_SLOT_PARITY_ENABLED" in blk
     assert 'slot_issues.append(_t)' in blk, "las violaciones entran al MISMO canal (slot_block + skip-gate)"
 
@@ -56,7 +57,8 @@ def test_residual_slot_marks_critique_unresolved():
     i = _GO.find("residual de HORARIO tras corrección")
     assert i > 0, "el residual de horario desapareció"
     blk = _GO[i: i + 1800]
-    assert "_detect_slot_appropriateness(days)" in blk
+    # [P1-DIET-BLIND-DIRECTIVES · 2026-08-08] el detector ahora recibe form_data (hint por dieta)
+    assert '_detect_slot_appropriateness(days, state.get("form_data"))' in blk
     assert '"slot_appropriateness_unresolved"' in blk
     assert "_mark_critique_unresolved(" in blk
     # corre en el mismo seam que el SAMEDAY (post-corrección)

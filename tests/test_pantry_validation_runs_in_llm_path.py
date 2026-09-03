@@ -102,7 +102,7 @@ def _make_vip_mock(reject_keywords=None):
     """
     reject_keywords = [k.lower() for k in (reject_keywords or [])]
 
-    def _vip(gen_ing, inv, strict_quantities=False, tolerance=1.0):
+    def _vip(gen_ing, inv, strict_quantities=False, tolerance=1.0, country="DO"):
         if not strict_quantities and reject_keywords:
             for ing in gen_ing:
                 for kw in reject_keywords:
@@ -126,11 +126,32 @@ def _make_3day_pipeline_return(ingredients_per_day):
 
 # -------------------------------------------------------------------------
 
-def test_phantom_ingredient_triggers_retry():
+# [2026-08-14] `monkeypatch` para apagar la escalada T2 del guard de coherencia:
+# la lista de compras mockeada de este archivo es incoherente con las recetas POR
+# DISENO, y desde P2-COHERENCE-1 esa incoherencia escala warn->block, hace fallar
+# los 3 intentos de shopping list y RE-ENCOLA el chunk — el pipeline se queda en 1
+# llamada y el test decia "deberia haber reintentado por ingrediente fantasma"
+# sobre un flujo que nunca llego al validador. Es el mismo knob de rollback que
+# produccion expone, y el mismo remedio que test_chunked_learning_propagation ya
+# tenia como fixture opt-in.
+def test_phantom_ingredient_triggers_retry(monkeypatch):
+    monkeypatch.setenv("MEALFIT_COHERENCE_T2_BLOCK_SEVERE_ONLY", "false")
+    # [P1-PANTRY-VIABILITY-FLOOR · 2026-07-28] Con una nevera de 3 items (<12) el
+    # floor conmuta a modo FLEXIBLE, que ENTREGA el plato con «Compra Urgente» en
+    # vez de reintentar — o sea, el fantasma deja de disparar el reintento que este
+    # test mide. La fixture de test_chunked_learning_propagation ya fija el piso a 0
+    # por la misma razon; este archivo se quedo sin ella.
+    monkeypatch.setattr(cron_tasks, "CHUNK_PANTRY_STRICT_MIN_ITEMS", 0)
     """Ingredientes fantasma deben hacer que el LLM se reinvoque > 1 vez."""
+    # [2026-08-14] `rolling_refill` + nevera de 5 alimentos: con el default
+    # `initial_plan` la validacion post-generacion esta EXENTA
+    # (P1-INITIAL-CHUNK-PANTRY-AUTONOMY) y con menos de 5 items significativos la
+    # compuerta previa pausa antes del LLM. Las dos cosas dejaban el pipeline en 1
+    # llamada y el test culpaba al detector de fantasmas.
     tasks = _make_tasks(
         week_number=2, days_offset=3, days_count=3,
-        extra_snapshot={"current_pantry_ingredients": ["pollo", "arroz", "tomate"]},
+        extra_snapshot={"current_pantry_ingredients": ["pollo", "arroz", "tomate", "huevos", "avena"]},
+        chunk_kind="rolling_refill",
     )
     prior_plan = {"total_days_requested": 7, "days": []}
 
@@ -142,11 +163,11 @@ def test_phantom_ingredient_triggers_retry():
     vip_mock = MagicMock(side_effect=_make_vip_mock(reject_keywords=["fantasma"]))
     with patch.object(constants, "validate_ingredients_against_pantry", vip_mock):
         with patch("cron_tasks.get_raw_user_inventory", return_value=[{"item": "pollo", "quantity": 1000}]):
-            with patch("cron_tasks.get_user_inventory_net", return_value=["pollo", "arroz", "tomate"]):
+            with patch("cron_tasks.get_user_inventory_net", return_value=["pollo", "arroz", "tomate", "huevos", "avena"]):
                 _, mocks = _run_process(
                     tasks, prior_plan,
                     mock_pipeline_return=pipeline_return,
-                    inventory=["pollo", "arroz", "tomate"],
+                    inventory=["pollo", "arroz", "tomate", "huevos", "avena"],
                     user_profile={"_pantry_quantity_mode": "strict"},
                 )
 

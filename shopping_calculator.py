@@ -174,7 +174,7 @@ from knobs import (
 _SEMANTIC_INIT_FAIL_COOLDOWN_S = max(0, _knob_env_int("MEALFIT_SEMANTIC_INIT_FAIL_COOLDOWN_S", 600))
 
 
-# [P2-LLM-TIMEOUT-SWEEP · 2026-05-30 · P0-DEEPSEEK-MIGRATION · 2026-06-12]
+# [P2-LLM-TIMEOUT-SWEEP · 2026-05-30 · P0-LLM-PROVIDER-MIGRATION · 2026-06-12]
 # El deadline del cliente de embeddings (init `embed_documents` + runtime
 # `embed_query` del semantic cache) ahora vive en `embeddings_provider`
 # (`_embeddings_timeout_s`, mismo knob `MEALFIT_EMBEDDING_LLM_TIMEOUT_S`) —
@@ -351,7 +351,7 @@ def _model_hash(model_name: str) -> str:
 
     [2026-05-06] Asegura que vectores cacheados con un modelo no se
     confundan con vectores de otro modelo (espacios vectoriales distintos).
-    [P0-DEEPSEEK-MIGRATION · 2026-06-12] El ID viene de
+    [P0-LLM-PROVIDER-MIGRATION · 2026-06-12] El ID viene de
     `embeddings_provider.get_embeddings_model_id()` (knob
     `MEALFIT_EMBEDDINGS_MODEL`); si cambias de provider/modelo, las entradas
     Redis viejas quedan ignoradas y se regeneran automáticamente.
@@ -519,7 +519,7 @@ def get_semantic_cache(deadline_s: float | None = None):
         # Cliente embeddings: barato instanciar (sin quota cost), necesario
         # tanto para Redis-hit (downstream `embed_query` runtime) como para
         # el fetch inicial (init de `embed_documents`).
-        # [P0-DEEPSEEK-MIGRATION · 2026-06-12] Via capa pluggable. Con
+        # [P0-LLM-PROVIDER-MIGRATION · 2026-06-12] Via capa pluggable. Con
         # provider `disabled` retorna None → fast-path Regex (path graceful
         # pre-existente, mismo comportamiento que un fallo de instanciación).
         from embeddings_provider import get_embeddings_client
@@ -608,7 +608,18 @@ def get_master_ingredients():
     if _master_cache is None or (now - _master_cache_ts) > _MASTER_CACHE_TTL:
         if connection_pool:
             try:
-                res = execute_sql_query("SELECT * FROM master_ingredients", fetch_all=True)
+                # [P1-CATALOG-ORDER-DETERMINISTIC · 2026-08-19] ORDER BY name: sin él, el
+                # ganador de CADA colisión del índice de resolución (alias/contains/keys
+                # normalizadas duplicadas) era el orden FÍSICO del heap — comportamiento
+                # indefinido que un UPDATE masivo re-baraja. Medido: el fill del gloss del
+                # catálogo (347 UPDATEs, 2026-08-19) flipeó 4 resoluciones REALES del corpus DO («Pollo horneado
+                # al limón...» pasó de Pechuga de pollo a Arroz blanco). El orden alfabético
+                # DESC no es capricho: el índice es first-wins y DESC restaura los 7
+                # ganadores del baseline C3 committeado (verificado delta a delta:
+                # Filete>Batata, Pechuga>Arroz, Repollo morado>Repollo, Pulpo>Calamar,
+                # Tofu firme>Salsa de soya, Yuca>Atún) — el contrato revisado en F2 se
+                # conserva Y queda estable para siempre.
+                res = execute_sql_query("SELECT * FROM master_ingredients ORDER BY name DESC", fetch_all=True)
                 # [P1-CATALOG-INDEX-NO-STICKY · 2026-07-29] `res or []` aceptaba como catálogo
                 # CUALQUIER objeto truthy y le sellaba `_master_cache_ts` → 5 minutos sirviendo
                 # basura como si fuera la tabla verificada. Cómo se destapó: un test parchea
@@ -745,6 +756,243 @@ def _seasoning_catalog_keep_enabled() -> bool:
 _SEASONING_DEFAULT_G = 40.0
 
 
+# [P1-SHOPLIST-SANITY-CAP · 2026-08-21] Umbral de envase por debajo del cual una fila de Despensa
+# es una PRESENTACIÓN DE CONDIMENTO. No existe categoría «especias» en `master_ingredients` —
+# orégano, arroz y maíz en lata comparten 'Despensa'—, pero el envase las separa limpiamente:
+# especias 14-100 g, comida de despensa 425 g (lata de maíz) y 907 g (paquete de arroz). 120 g
+# deja margen sobre el frasco más grande medido (Laurel, 100 g) sin acercarse a la lata.
+_CONDIMENT_MAX_CONTAINER_G = 120.0
+
+
+# ============================================================
+# [P1-UNIT-SYSTEM-BY-COUNTRY · 2026-08-21] La lista del español venía en libras.
+#
+# Medido sobre los 2 planes beta vivos: 14/25 y 26/48 ítems en unidades imperiales. En ES/MX/CO la
+# carne se vende por kilos y la báscula da gramos; ¼ lb = 113 g no es un número que nadie pida. La
+# misma decisión ACIERTA para DO/US/PR, donde la libra es la unidad real de compra.
+#
+# DOS MEDICIONES ACOTARON EL ARREGLO, y las dos lo hicieron más pequeño:
+#   1. Las recetas YA son métricas (0 de 96 líneas del plan español usan libras): el problema no
+#      está en la generación, vive entero en este agregador determinista.
+#   2. La mitad de los «lb» visibles NO son una instrucción de pesar sino el RÓTULO de un envase
+#      real ("1 funda (Selecto 1 Lb · Wala)"). Convertir eso sería falsificar una etiqueta y el
+#      usuario no encontraría el producto. Sólo se convierte cuando la unidad de mercado ES el peso.
+#
+# DISPLAY-ONLY, SIN EXCEPCIÓN. Se reescriben `display_qty` y `display_string`; jamás `market_unit`,
+# `market_qty_numeric`, `base_qty` ni `base_unit`. Razón concreta: `/restock` («ya compré la lista»)
+# construye las filas de `user_inventory` con `market_qty_numeric` + `market_unit`, así que
+# convertir el DATO metería gramos donde la deducción espera libras — la Nevera descontaría mal y
+# en silencio. Es la misma trampa por la que se descartó el arreglo propuesto para P1-5.
+#
+# Y hay UN camino por el que el display sí toca el dato: `Dashboard.jsx:4398` cae a
+# `parseMarketQty(display_qty)` cuando `resolveShopQty(ing)` devuelve 0. Por eso la conversión se
+# niega a actuar sobre un ítem sin cantidad numérica — es exactamente el caso donde ese fallback
+# dispara. La guarda no es genérica: cubre el único hueco medido.
+# tooltip-anchor: P1-UNIT-SYSTEM-BY-COUNTRY
+# ============================================================
+_G_POR_LB = 453.592
+_G_POR_OZ = 28.3495
+# Unidades de mercado que son una ORDEN DE PESAR (no el rótulo de un envase).
+_UNIDADES_DE_PESO_IMPERIAL = ("lb", "lbs", "libra", "libras", "oz", "onza", "onzas")
+# La cantidad va SIEMPRE al principio de la línea; anclarlo protege los rótulos entre paréntesis.
+_RX_QTY_IMPERIAL = re.compile(
+    r"^\s*[\d.,/¼½¾\s]+(lbs?|libras?|oz|onzas?)\b", re.I)
+
+
+def _unit_system_by_country_enabled() -> bool:
+    """Camino caliente de la lista ⇒ knob propio, según la convención del repo."""
+    return _knob_env_bool("MEALFIT_UNIT_SYSTEM_BY_COUNTRY", True)
+
+
+def _etiqueta_metrica(gramos: float) -> str:
+    """454 g · 1,4 kg. Coma decimal: la lista se lee en español."""
+    if gramos >= 1000:
+        kg = round(gramos / 1000.0, 1)
+        txt = f"{kg:.1f}".replace(".", ",")
+        if txt.endswith(",0"):
+            txt = txt[:-2]
+        return f"{txt} kg"
+    return f"{int(round(gramos))} g"
+
+
+def unit_system_for_country_safe(country) -> str:
+    """Espejo local del SSOT (`constants.unit_system_for_country`) con import tolerante.
+
+    NO es una segunda tabla: delega. Existe sólo para que el camino caliente de la lista no
+    reviente si el import falla, y para que el fallback ('imperial' = la conducta de hoy) esté
+    escrito una vez.
+    """
+    try:
+        from constants import unit_system_for_country as _usfc
+        return _usfc(country)
+    except Exception:
+        return "imperial"
+
+
+def _project_units_over_result(res, country) -> int:
+    """Recorre el resultado del agregador (lista plana o dict por categoría) y proyecta el display
+    de cada ítem. Devuelve cuántos convirtió. Espejo estructural de
+    `_strip_prices_for_beta_pricing_mode`, que ya hace este mismo recorrido en el mismo sitio."""
+    n = 0
+    try:
+        grupos = res.values() if isinstance(res, dict) else [res]
+        for grupo in grupos:
+            if not isinstance(grupo, list):
+                continue
+            for item in grupo:
+                if _project_display_units_for_country(item, country):
+                    n += 1
+    except Exception:
+        return n
+    return n
+
+
+def _project_display_units_for_country(market_obj, country) -> bool:
+    """Reescribe SÓLO el display de un ítem a unidades métricas. True si convirtió."""
+    try:
+        if not isinstance(market_obj, dict) or not _unit_system_by_country_enabled():
+            return False
+        from constants import unit_system_for_country
+        if unit_system_for_country(country) != "metric":
+            return False
+        unidad = str(market_obj.get("market_unit") or "").strip().lower().rstrip(".")
+        if unidad not in _UNIDADES_DE_PESO_IMPERIAL:
+            return False
+        try:
+            qty = float(market_obj.get("market_qty_numeric") or 0)
+        except (TypeError, ValueError):
+            return False
+        if qty <= 0:
+            # Ver el bloque de arriba: sin numérico, la Nevera parsea el display.
+            return False
+        gramos = qty * (_G_POR_OZ if unidad.startswith(("oz", "onza")) else _G_POR_LB)
+        etiqueta = _etiqueta_metrica(gramos)
+        tocado = False
+        for campo in ("display_qty", "display_string"):
+            actual = market_obj.get(campo)
+            if not isinstance(actual, str) or not actual:
+                continue
+            nuevo, n = _RX_QTY_IMPERIAL.subn(etiqueta, actual, count=1)
+            if n:
+                market_obj[campo] = nuevo
+                tocado = True
+        return tocado
+    except Exception:
+        # Corre por cada ítem: una excepción aquí rompe la lista entera.
+        return False
+
+
+def _shoplist_sanity_cap_enabled() -> bool:
+    """[P1-SHOPLIST-SANITY-CAP · 2026-08-21] Kill switch del tope de envases de condimento.
+
+    tooltip-anchor: MEALFIT_SHOPLIST_SANITY_CAP (test_p1_shoplist_sanity_cap.py)"""
+    return _knob_env_bool("MEALFIT_SHOPLIST_SANITY_CAP", True)
+
+
+def _is_condiment_presentation(display_category, container_weight_g) -> bool:
+    """[P1-SHOPLIST-SANITY-CAP · 2026-08-21] ¿Esta fila se vende como condimento?
+
+    Estrecho por DOS lados a propósito: categoría de despensa Y envase pequeño. Capar comida de
+    verdad sería el error opuesto y peor —el usuario compraría de menos y se quedaría sin cenar—,
+    así que la alcachofa (Vegetales) y el maíz en lata (Despensa, 425 g) quedan fuera.
+
+    Sin `container_weight_g` no sabemos qué es: fail-open, no capar. La asimetría es clara — el
+    coste de no capar es un ítem feo; el de capar a ciegas, una compra corta.
+
+    Predicado sobre el DATO, no lista de nombres: una lista habría que mantenerla cada vez que el
+    catálogo crece y su fallo sería silencioso.
+
+    tooltip-anchor: _is_condiment_presentation (test_p1_shoplist_sanity_cap.py)"""
+    try:
+        _g = float(container_weight_g or 0)
+    except (TypeError, ValueError):
+        return False
+    if _g <= 0 or _g > _CONDIMENT_MAX_CONTAINER_G:
+        return False
+    try:
+        from constants import strip_accents as _sa_c
+        _cat = _sa_c(str(display_category or "").strip().lower())
+    except Exception:
+        _cat = str(display_category or "").strip().lower()
+    return _cat.startswith("despensa")
+
+
+def _apply_condiment_sanity_cap(market_obj, master_item, display_category, cycle_days) -> bool:
+    """[P1-SHOPLIST-SANITY-CAP · 2026-08-21] Acota los envases de un CONDIMENTO y arrastra el
+    costo. Muta `market_obj` in-place; devuelve True si recortó.
+
+    POR QUÉ CAPAR AQUÍ SÍ ES HONESTO, y en P1-COUNTRY-KEEP-RESPECT-QTY no lo era: allí el default
+    fijo IGNORABA una demanda real (653 g de almejas) y el usuario compraba de menos. Aquí la
+    demanda ESTIMADA es la que está mal — un frasco de orégano de 90 g dura meses, y «1 orégano»
+    repetido 30 días no son 30 frascos. El consumo real de un condimento no escala con el número
+    de recetas que lo mencionan.
+
+    EL COSTO SE RECORTA CON LA CANTIDAD. Si sólo se capara la cantidad, `shopping_cost_summary`
+    seguiría contando los RD$810 de orégano y el banner de presupuesto marcaría «excedido» por un
+    especiero — o sea que el defecto que más duele sobreviviría al arreglo.
+
+    NO emite la nota de cobertura de P1-CAPPED-STAPLE-HONESTY, y es deliberado: esa nota existe
+    para los caps que SÍ dejan corto (4 latas de atún que cubren 5,5 días de 30). Aquí el frasco
+    cubre el ciclo de sobra, así que avisar sería crying wolf — y una nota que grita siempre se
+    deja de leer, que es justo lo que hace inservible a un detector.
+
+    tooltip-anchor: _apply_condiment_sanity_cap (test_p1_shoplist_sanity_cap.py)"""
+    if not _shoplist_sanity_cap_enabled() or not isinstance(market_obj, dict):
+        return False
+    _envase = (master_item or {}).get("container_weight_g") if isinstance(master_item, dict) else None
+    if not _is_condiment_presentation(display_category, _envase):
+        return False
+    try:
+        _qty = float(market_obj.get("market_qty_numeric") or 0)
+    except (TypeError, ValueError):
+        return False
+    _tope = _condiment_package_cap(cycle_days)
+    if _qty <= _tope:
+        return False
+    _factor = _tope / _qty if _qty else 1.0
+    market_obj["market_qty_numeric"] = float(_tope)
+    market_obj["market_qty"] = str(_tope)
+    _unidad = str(market_obj.get("market_unit") or "").strip()
+    if _unidad:
+        market_obj["display_qty"] = f"{_tope} {_unidad}{'s' if _tope > 1 and not _unidad.endswith('s') else ''}"
+    for _k in ("estimated_cost_rd", "estimated_cost"):
+        try:
+            _c = market_obj.get(_k)
+            if _c:
+                market_obj[_k] = round(float(_c) * _factor, 2)
+        except (TypeError, ValueError):
+            pass
+    logging.info(
+        "🧂 [P1-SHOPLIST-SANITY-CAP] '%s': %.0f → %d %s (envase %.0f g, ciclo %s d). "
+        "El consumo de un condimento no escala con el nº de recetas que lo mencionan.",
+        market_obj.get("name"), _qty, _tope, _unidad or "envases",
+        float(_envase or 0), cycle_days,
+    )
+    return True
+
+
+def _condiment_package_cap(cycle_days) -> int:
+    """[P1-SHOPLIST-SANITY-CAP · 2026-08-21] Máximo de envases de condimento para un ciclo.
+
+    Una pizca son ~0,3 g y un sobre 14 g: tres comidas al día durante un mes son ~27 g, o sea DOS
+    sobres. El tope da tres — generoso frente al consumo real y a años luz de los quince que la
+    lista viva pedía.
+
+    Nunca 0: eso borraría el condimento de la lista, que es el defecto CONTRARIO (lista incompleta
+    sin aviso, el miedo explícito del dueño). Nunca revienta: corre en el camino caliente del
+    agregador y una excepción aquí rompe la lista entera.
+
+    tooltip-anchor: _condiment_package_cap (test_p1_shoplist_sanity_cap.py)"""
+    import math as _math_cap
+    try:
+        _d = int(cycle_days or 0)
+    except (TypeError, ValueError):
+        _d = 0
+    if _d <= 0:
+        return 1
+    return max(1, min(4, int(_math_cap.ceil(_d / 10.0))))
+
+
 # [P1-BAKING-STAPLES · 2026-07-01] (audit v3 creatividad GAP-3) "Despensa básica" de horneado: agentes
 # leudantes/aroma que los transforms insignia del owner (panqueques de avena/harina, bollos de yuca,
 # arepitas) NECESITAN y que no están en el catálogo verificado con precio. VERIFIED-ONLY los amputaba en
@@ -774,6 +1022,433 @@ def is_baking_pantry_staple(name) -> bool:
         from constants import strip_accents as _sa
         low = _sa(str(name or "").lower())
         return any(tok in low for tok in _BAKING_PANTRY_STAPLE_TOKENS)
+    except Exception:
+        return False
+
+
+# [P1-COUNTRY-SYSTEM-F2 · T5 · 2026-08-17] Generalización de P1-BAKING-STAPLES: MISMO problema,
+# ámbito distinto. Los 32 alimentos que Task 5 dio de alta en `master_ingredients` para España
+# (`country_gaps/es.json`, T1 — Jamón serrano, Gambas, Cordero, etc.) llevan SIN precio RD a
+# propósito: España es país beta (`COUNTRY_PROFILES['ES']['is_beta']`, P1-COUNTRY-SYSTEM-F1) y su
+# lista de compras corre en `pricing_mode='beta_no_prices'` (T7, `_strip_prices_for_beta_pricing_mode`
+# borra el precio de TODO el aggregate igual) — no hay mercado RD que cotizar. Sin este keep,
+# `_is_verified_for_shopping` (que exige precio>0) trataría estos nombres como si el LLM se los
+# hubiera inventado y los dropearía en SILENCIO de la lista — el MISMO modo de fallo que motivó
+# P1-BAKING-STAPLES (receta los usa, compra no los trae), ahora para un país entero en vez de 4
+# staples de horneado. Mismo mecanismo (keep unpriced, ~1 paquete estimado, categoría propia),
+# SEGUNDO registro de tokens con SU PROPIO knob de rollback — nunca toca
+# `_BAKING_PANTRY_STAPLE_TOKENS`/`is_baking_pantry_staple` (byte-identidad DO/knob-off intacta:
+# estos nombres NUNCA aparecen en un plan DO — `dish_templates.json` no los referencia). Si el
+# owner sube alguno con precio real, `_is_verified_for_shopping` gana primero y este keep queda
+# no-op (mismo contrato que P1-BAKING-STAPLES).
+# [P1-COUNTRY-SYSTEM-F2 · ola final · 2026-08-18 · M3] CORRECCIÓN de una claim previa de este
+# comentario ("el coherence guard NO necesita tocarse"): eso es CIERTO solo para el BLOQUEO (el
+# carve-out `delta_pct != inf` en `run_shopping_coherence_guard` sí excusa el fantasma de delta
+# infinito y nunca fuerza retry por esto) pero FALSO para el WARN — el MIRROR de ese guard (el
+# filtro `expected_raw` que replica el drop del aggregator) solo llama `_is_verified_for_shopping`,
+# NUNCA `is_country_catalog_unpriced_item` (ni su hermano `is_baking_pantry_staple`, el mismo
+# blind spot desde P1-BAKING-STAPLES · 2026-07-01, 6 semanas antes de que Fase 2 existiera).
+# Confirmado en vivo dos veces (Task 10 §5, QA con LLM real): "Tortilla de maíz"/MX y "Recao"/PR
+# producen el WARN GUARD-BLIND de verified-only + `[COH-GUARD/warn] ... [aggregated_only]` — WARN
+# (marker citado SIN corchetes a propósito: test_guard_blind_whitelists_water ancla con .index()
+# al PRIMER literal del marker y debe seguir cayendo en el código real, no en este comentario.)
+# espurio ("ausente de la lista de compras sin aviso" cuando SÍ está, solo sin precio), no un
+# block. Pre-existente, de severidad baja, NO cerrado por esta ola (comparte función con 89+24+18
+# tests en 3 archivos — cerrarlo bien necesita su propia ronda TDD, ver reporte de Task 10 §5).
+# Rollback: MEALFIT_COUNTRY_CATALOG_UNPRICED_KEEP=false → drop histórico (mismo comportamiento pre-T5).
+# tooltip-anchor: P1-COUNTRY-CATALOG-UNPRICED
+_COUNTRY_CATALOG_UNPRICED_BY_COUNTRY: "dict[str, tuple[str, ...]]" = {
+    # [P1-COUNTRY-CATALOG-BY-COUNTRY · 2026-08-21] La agrupación por país YA ESTABA escrita
+    # aquí — en los comentarios de bloque de abajo (T5=ES, T6=MX/CO, T7=PR/US, Task 8=RD).
+    # Estructura real, hecha a mano, que ningún programa podía leer: el `_vc_comprable` del
+    # catálogo verificado preguntaba a la tupla PLANA, así que le ofrecía huitlacoche a un
+    # español y percebes a un mexicano (medido: los renders de ES, MX y US eran el MISMO
+    # string de 5777 chars — el catálogo había pasado de «sólo dominicano» a «no-dominicano»).
+    # Esto NO reasigna ningún token: promueve a dato la partición que los bloques ya
+    # declaraban. La tupla plana se DERIVA de aquí, así que las dos vistas no pueden
+    # driftear. tooltip-anchor: P1-COUNTRY-CATALOG-BY-COUNTRY
+    "ES": (
+        "jamon serrano", "jamon iberico", "chorizo espanol", "morcilla", "lomo embuchado",
+        "panceta iberica", "gambas", "almejas", "boquerones", "anchoas", "cordero", "requeson",
+        "cuajada", "nata", "judias blancas", "judias pintas", "acelgas", "fideos", "membrillo",
+        "higo", "azafran", "alioli", "turron", "mazapan", "sobrasada", "butifarra", "percebes",
+        "vieira", "chistorra", "pinones", "almendra marcona", "membrillo dulce",
+    ),
+    # [P1-COUNTRY-SYSTEM-F2 · T6 · 2026-08-17] Mismas 46 altas de catálogo MX/CO de este task —
+    # también SIN precio RD a propósito (mismo motivo que ES: países beta,
+    # `pricing_mode='beta_no_prices'`). Tokens elegidos por 2 palabras cuando la palabra sola es
+    # demasiado genérica o colisiona con una fila PRICED existente ('serrano' solo ⊂ 'Jamón
+    # serrano'; 'ancho'/'crema'/'frijoles'/'gallina' solos son términos comunes) — verificado con
+    # el MISMO sweep e2e de fix-round 1 de T5
+    # (`test_is_country_catalog_unpriced_item_no_colisiona_con_ningun_nombre_del_catalogo_vivo_ni_pools`,
+    # extendido para cubrir estas 46 también) contra el catálogo vivo (284 filas) + los 6 pools
+    # (`DOMINICAN_*` + `COUNTRY_POOLS['ES'/'MX'/'CO']`): cero falsos positivos.
+    "MX": (
+        "tortilla de maiz", "jalapeno", "chile serrano", "poblano", "chipotle", "guajillo",
+        "chile ancho", "habanero", "chile de arbol", "pasilla", "mulato", "nopal", "jicama",
+        "epazote", "chorizo mexicano", "chorizo verde", "cecina", "frijoles refritos",
+        "crema mexicana", "tuna de nopal", "flor de jamaica", "xoconostle", "achiote",
+        "hoja santa", "chocolate de mesa", "panela", "huitlacoche", "chicharron",
+    ),
+    "CO": (
+        "chorizo santarrosano", "trucha", "chontaduro", "frijol cargamanto", "suero costeno",
+        "guascas", "arracacha", "lulo", "curuba", "uchuva", "arequipe", "natilla", "champus",
+        "gallina criolla", "borojo", "feijoa", "granadilla", "mora",
+    ),
+    # [P1-COUNTRY-SYSTEM-F2 · T7 · 2026-08-17] 62 altas de catálogo PR/US de este task — también
+    # SIN precio RD a propósito (países beta, `pricing_mode='beta_no_prices'`). A diferencia de
+    # T5/T6, aquí se usa el NOMBRE CANÓNICO COMPLETO de cada fila como token (nunca una palabra
+    # suelta) — la superficie de riesgo de esta task es más alta que T5/T6: 'queso'/'pan'/'carne'/
+    # 'papa'/'mantequilla'/'chile'/'salsa'/'galletas'/'frijoles'/'aceitunas' son todas palabras
+    # que YA aparecen bare o casi-bare en aliases de filas PRICED existentes (Queso blanco lleva
+    # 'queso' bare; 'Mantequilla'/'Pan blanco familiar'/'Carne de res'/'Papa' son sus propios
+    # nombres bare; 'Chile X' son 9 filas de T6; 'Galletas de soda' ya existe). El nombre COMPLETO
+    # es, por construcción, único (dos filas no pueden compartir `name`) — mismo principio que
+    # 'jamon serrano'/'chile serrano' de T5/T6, aplicado sin excepción a las 62. Verificado con el
+    # MISMO sweep e2e extendido (`test_is_country_catalog_unpriced_item_no_colisiona_...`) contra
+    # el catálogo vivo (346 filas) + los 7 pools (`DOMINICAN_*` + `COUNTRY_POOLS['ES'/'MX'/'CO'/
+    # 'PR'/'US']`): cero falsos positivos.
+    "PR": (
+        "panapen", "pernil", "jamon de cocinar", "sofrito", "recao", "adobo", "alcaparrado",
+        "harina de yuca", "pique", "pavochon", "bacalaitos", "ron de cocina",
+        "longaniza puertorriquena", "chuleta ahumada", "sazon con culantro y achiote",
+        "aceite de achiote", "queso de papa", "especias para arroz con dulce",
+        "aceitunas rellenas",
+    ),
+    "US": (
+        "tocineta", "jamon de sandwich", "salchichas", "crema agria", "crema mitad y mitad",
+        "bagels", "panecillos ingleses", "pretzels", "frijoles horneados", "jarabe de arce",
+        "aderezo ranch", "salsa barbacoa", "ketchup", "salsa inglesa", "malvaviscos", "coditos",
+        "masa para pie", "galletas graham", "salsa de salchicha", "ensalada de macarrones",
+        "chile en polvo", "sazonador para tacos", "pepperoni", "salchicha italiana",
+        "mezcla para panqueques", "wafles", "azucar morena", "suero de mantequilla",
+        "pan de maiz", "semola de maiz", "arandanos rojos", "duraznos", "pan rallado",
+        "panecillos de mantequilla", "huevos rellenos", "nuez de castilla", "nueces pecanas",
+        "queso en hebras", "queso provolone", "carne molida mixta", "bolitas de papa",
+        "papas ralladas", "chili con carne",
+    ),
+    # [P1-COUNTRY-SYSTEM-F2 · Task 8 (RD top-up) · 2026-08-17] "Hummus" — drop real RD medido
+    # (6/30d en rd_drops.json), genuinamente ausente del catálogo (USDA SÍ lo tiene: "Hummus,
+    # commercial", fdc 174289). A diferencia de las altas T5-T7 (países BETA sin mercado RD que
+    # cotizar), esta es una alta para RD MISMO — el mecanismo se reusa a propósito (mismo motivo
+    # de fondo: SIN precio La Sirena verificado hoy) más que porque el país sea beta. Ruling
+    # explícito del contrato de la task: listar como CATÁLOGO SIN PRECIO en vez de dropear, para
+    # que el supermercado artificial (`supermarket_products`) pueda precificarlo después en vez
+    # de perder el alimento en silencio de la lista.
+    "DO": (
+        "hummus",
+    ),
+}
+
+# Vista plana derivada (orden estable, dedupe conservando el primero). La usan los 4 call
+# sites del agregador, que NO preguntan por país a propósito: si un alimento español acaba en
+# la lista de la compra hay que conservarlo venga de donde venga — ahí el fallo caro es perder
+# comida en silencio, no ofrecer de más.
+_COUNTRY_CATALOG_UNPRICED_TOKENS = tuple(dict.fromkeys(
+    _t for _ts in _COUNTRY_CATALOG_UNPRICED_BY_COUNTRY.values() for _t in _ts))
+_COUNTRY_CATALOG_UNPRICED_DEFAULT_G = 150.0
+
+# [P1-COUNTRY-KEEP-RESPECT-QTY · 2026-08-21] Unidades que el agregador sabe convertir a peso más
+# abajo (`if 'g' in units: ...`). Si la receta emitió CUALQUIERA de ellas, hay demanda real y el
+# default de arriba no debe pisarla. Es la MISMA lista que consume el bloque de conversión — si
+# alguien añade una unidad allí y la olvida aquí, ese alimento vuelve a salir a 150 g fijos.
+_CONVERTIBLE_QTY_UNITS = ("g", "kg", "oz", "lb", "ml", "l")
+# [P1-COUNTRY-KEEP-COUNT-UNITS · 2026-08-23] Conteos que no tienen una masa
+# universal y deben sobrevivir hasta `apply_smart_market_units`. Son las formas
+# canónicas del SSOT `canonical_units.CANONICAL_UNIT_MAP`; no incluye envases ni
+# cantidades nominales (`pizca`/`al gusto`).
+_COUNTABLE_QTY_UNITS = frozenset((
+    "unidad", "cabeza", "diente", "hoja", "rebanada", "mazo",
+))
+
+
+def _country_keep_has_recipe_qty(units) -> bool:
+    """¿La fila beta sin precio conserva una demanda física comprable?
+
+    Peso/volumen continúan por el path existente. Los conteos permanecen como
+    conteos: convertirlos al default de 150 g inventaría masa y rompería el
+    escalamiento con el número de días.
+    """
+    if not _country_keep_respect_recipe_qty_enabled():
+        return False
+    for raw_unit, raw_qty in (units or {}).items():
+        try:
+            if float(raw_qty) <= 0.0001:
+                continue
+        except (TypeError, ValueError):
+            continue
+        unit = canonicalize_unit(raw_unit) or str(raw_unit or "").strip().lower()
+        if unit in _CONVERTIBLE_QTY_UNITS or unit in _COUNTABLE_QTY_UNITS:
+            return True
+    return False
+
+
+def _survives_shopping_list(name) -> bool:
+    """[P1-COHERENCE-MIRROR-KEEP · 2026-08-21] «¿Este nombre sobrevive a la lista de compras?» —
+    UNA pregunta, UNA respuesta, las dos orillas del coherence guard la hacen.
+
+    EL DEFECTO QUE CIERRA. El lado AGREGADO (el agregador) tiene tres ramas: fila con precio,
+    staple de horneado (P1-BAKING-STAPLES) y catálogo-país sin precio (P1-COUNTRY-SYSTEM-F2 T5).
+    El lado ESPERADO (el filtro de `expected_raw` en `run_shopping_coherence_guard`) sólo replicaba
+    la PRIMERA: llamaba a `_is_verified_for_shopping`, que exige precio > 0. Resultado: toda fila
+    conservada-sin-precio quedaba, por construcción, «en la lista y ausente de las recetas» —
+    `unknown` / `aggregated_only`, para siempre y en cada recálculo.
+
+    Los conteos casan 1:1 en producción: el plan ES tiene 4 ítems sin precio y 4 fantasmas; el
+    plan US tiene 3 y `_shopping_coherence_block_history` registra `{'unknown': 3}` en 13 entradas
+    consecutivas del 2026-08-20. La doc lo atribuía a «vocabulario DO-tuned» y mandaba a ampliar
+    un léxico: el mecanismo no tiene nada que ver con vocabulario.
+
+    Orden de las ramas idéntico al `if/elif/else` del agregador a propósito — es lo que hace que
+    esto sea un espejo y no una segunda opinión. `test_el_ssot_replica_las_mismas_tres_ramas_del_agregador`
+    lo ancla: una cuarta rama de keep allí que se olvide aquí vuelve a romper el espejo.
+
+    tooltip-anchor: _survives_shopping_list (test_p1_coherence_mirror_keep.py)"""
+    if _is_verified_for_shopping(name):
+        return True
+    if _baking_staples_keep_enabled() and is_baking_pantry_staple(name):
+        return True
+    if _country_catalog_unpriced_keep_enabled() and is_country_catalog_unpriced_item(name):
+        return True
+    return False
+
+
+def _filter_expected_to_shopping_survivors(expected_raw, emit_blind_warning: bool = False) -> dict:
+    """[P1-COHERENCE-MIRROR-KEEP · 2026-08-21] Filtra el lado ESPERADO del guard con el mismo
+    criterio que decide qué sobrevive a la lista, y —opcionalmente— emite el WARN
+    VERIFIED-ONLY-GUARD-BLIND sobre lo que de verdad desapareció.
+
+    (El tag va SIN corchetes en esta prosa a propósito: `test_guard_blind_whitelists_water`
+    localiza la PRIMERA aparición de la forma con corchetes y exige la whitelist de agua en las
+    1500 posiciones anteriores. Citarlo entre corchetes aquí secuestraba el ancla y ponía el guard
+    rojo contra código correcto — la 8ª vez que un comentario derrota a un guard en este repo, y
+    el mismo remedio que aplicó el commit 7b2a2ec.)
+
+    Ese WARN es la ÚNICA señal que existe para «la lista de compras salió incompleta sin aviso»
+    (el miedo explícito del dueño, P1-VERIFIED-ONLY-OBSERVABILITY). En país beta era 100% falsos
+    positivos: acusaba al LLM de desobedecer con alimentos que estaban perfectamente en la lista.
+    Un detector que grita siempre se apaga en una semana, y entonces la amputación real pasa
+    desapercibida — así que arreglar el espejo le devuelve el significado sin trabajo extra."""
+    if not isinstance(expected_raw, dict):
+        return expected_raw
+    _antes = set(expected_raw.keys())
+    _filtrado = {k: v for k, v in expected_raw.items() if _survives_shopping_list(k)}
+    if emit_blind_warning:
+        _caidos = _antes - set(_filtrado.keys())
+        # [P3-GUARD-BLIND-WATER-WHITELIST · 2026-07-05] "Agua"/"hielo"/"caldo..." NO son comprables
+        # (agua de grifo): su drop del catálogo verificado es comportamiento correcto, no
+        # desobediencia del LLM. Ruido medido en vivo (plan e49d44c3: WARN ×2 solo por 'Agua').
+        # Match EXACTO para agua/hielo ('aguacate' no matchea); prefijo para caldos.
+        # [P3-GUARD-BLIND-WATER-WHITELIST v2 · 2026-07-06] variantes de agua ("Agua fría/tibia/
+        # para hervir" — vivas en el WARN) también son no-comprables; startswith("agua ") no
+        # matchea 'aguacate' (exige el espacio).
+        # [P1-COHERENCE-MIRROR-KEEP · 2026-08-21] Los DOS markers de arriba se conservan literales
+        # al mover el bloque a este helper: `test_water_variants_whitelisted` localiza el v2 por
+        # texto y `test_guard_blind_whitelists_water` exige el v1 en las 1500 posiciones ANTERIORES
+        # al tag del WARN. Condensarlos en una sola línea rompió los dos — la suite completa lo
+        # cazó, no el despliegue.
+        _caidos = {
+            x for x in _caidos
+            if str(x).strip().lower() not in ("agua", "hielo")
+            and not str(x).strip().lower().startswith("agua ")
+            and not str(x).strip().lower().startswith("caldo")
+        }
+        if _caidos:
+            logging.warning(
+                "[VERIFIED-ONLY-GUARD-BLIND] %d ingrediente(s) de RECETAS fuera del catálogo "
+                "verificado → ausentes de la lista de compras sin aviso (LLM desobedeció el "
+                "prompt upstream): %s",
+                len(_caidos), sorted(_caidos)[:25],
+            )
+    return _filtrado
+
+
+def _country_keep_respect_recipe_qty_enabled() -> bool:
+    """[P1-COUNTRY-KEEP-RESPECT-QTY · 2026-08-21] Kill switch del respeto a la cantidad de la
+    receta en la rama de catálogo-país. `false` ⇒ vuelve el 150 g fijo (conducta T5). Toca el
+    camino caliente del agregador (categoría/peso/SKU/costo), así que lleva knob propio en vez de
+    hardcode, según la convención del repo.
+
+    tooltip-anchor: MEALFIT_COUNTRY_KEEP_RESPECT_RECIPE_QTY (test_p1_country_keep_respect_qty.py)"""
+    return _knob_env_bool("MEALFIT_COUNTRY_KEEP_RESPECT_RECIPE_QTY", True)
+
+
+def _country_catalog_unpriced_keep_enabled() -> bool:
+    return _knob_env_bool("MEALFIT_COUNTRY_CATALOG_UNPRICED_KEEP", True)
+
+
+# ============================================================
+# [P1-PLAN-DISPLAY-I18N · Task 5 · 2026-08-19] Glosses display-only
+# de un ingrediente ("Black beans (Habichuelas negras)" / "Lechosa (papaya)") — fase 1b de
+# docs/superpowers/specs/2026-08-19-plan-display-i18n-design.md, regla de
+# oro: la lista de compras es SIEMPRE bilingüe, jamás inglés puro. El
+# docstring de la función siguiente trae la RESTRICCIÓN DURA completa.
+# ============================================================
+
+
+def _display_name_en_for_item(master_item: dict) -> "str | None":
+    """Gloss en inglés de la fila del master, si existe y no está vacío.
+
+    RESTRICCIÓN DURA: esta función es el ÚNICO lugar de este archivo donde
+    `name_en` puede aparecer. NUNCA lo uses en `normalize_name`, ningún
+    alias, ningún matcher ni en `_is_verified_for_shopping` — la identidad
+    de un ingrediente sigue resolviendo EXCLUSIVAMENTE por `name` (español
+    canónico). Un campo de display que se cuela a un matcher es exactamente
+    la clase de bug que P1-PANTRY-NAME-RESOLUTION cerró con escopeta; el
+    test grep-proof en test_p1_plan_display_i18n.py (sección "catálogo")
+    vigila que esta zona sea la única.
+
+    Display-only: el caller lo adjunta a `market_obj["display_name_en"]`,
+    nunca a `name`/`display_category`/ninguna clave que participe en
+    matching. `None` cuando el master no trae el campo (catálogo aún sin
+    poblar por `scripts/fill_catalog_name_en.py`) — el frontend cae en
+    silencio al nombre español (mismo contrato que `_display[locale]`).
+
+    [Ola final · FF-6] Gateado por el MISMO knob que el motor de enriquecimiento
+    (`MEALFIT_PLAN_DISPLAY_I18N`, default True): la feature se documenta con UN kill
+    switch y antes ese switch cubría media feature — con el knob en `false` un usuario
+    en-US volvía a ver Plan y Recetas en español PERO su PDF de la lista seguía saliendo
+    «Black beans (Habichuelas negras)». Estado mixto que nadie diseñó ni probó, y que
+    aparece justo cuando alguien revierte por un incidente. Se lee el env aquí (helper
+    local `_knob_env_bool`, mismo registro `_KNOBS_REGISTRY`) en vez de importar
+    `plan_display_i18n`: acoplar el aggregator al motor no compra nada y sí arrastra
+    un import pesado a un camino caliente.
+
+    tooltip-anchor: P1-PLAN-DISPLAY-I18N
+    """
+    if not _knob_env_bool("MEALFIT_PLAN_DISPLAY_I18N", True):
+        return None
+    try:
+        gloss = master_item.get("name_en") if isinstance(master_item, dict) else None
+    except Exception:
+        return None
+    if not isinstance(gloss, str):
+        return None
+    gloss = gloss.strip()
+    return gloss or None
+
+
+def _display_gloss_es_for_item(master_item: dict) -> "str | None":
+    """[P1-COUNTRY-GLOSS-SOLO-INGLES · 2026-08-23] Gloss panhispánico.
+
+    Display-only, igual que el gloss inglés hermano: solo lee ``gloss_es`` y
+    nunca cambia ``name``, aliases, categoría ni ninguna clave de matching.
+    ``None`` mantiene byte-idéntico el item si la migración aún no existe o si
+    el nombre canónico no es un regionalismo.
+    """
+    try:
+        gloss = master_item.get("gloss_es") if isinstance(master_item, dict) else None
+    except Exception:
+        return None
+    if not isinstance(gloss, str):
+        return None
+    gloss = gloss.strip()
+    return gloss or None
+
+
+def _master_category_for_unpriced_item(name) -> "str | None":
+    """[P2-SHOPLIST-BETA-POLISH · 2026-08-18] Categoría REAL del master para un ítem
+    unpriced-keep, para que 'Acelgas' caiga en VEGETALES y 'Membrillo' en FRUTAS en vez
+    del pseudo-pasillo 'CATÁLOGO SIN PRECIO' (label interno que se filtraba al PDF del
+    usuario — un comprador agrupa por pasillo del súper, no por estado de precios del
+    catálogo; el estado beta lo cuenta el banner de la lista, una sola vez). Equality
+    accent/case-insensitive contra `get_master_ingredients()` (cacheado, TTL) con puente
+    de plural s/es — NO usa el mapa global de alias del chat (colapsa identidades a
+    propósito, P1-PANTRY-NAME-RESOLUTION; y dos guards de F2 prohíben que su nombre
+    aparezca siquiera en este archivo) ni re-implementa `normalize_name`. Solo corre
+    para los pocos ítems del branch unpriced-keep, nunca en el camino con precio.
+    `None` si no resuelve ⇒ el caller conserva el label histórico (fail-open display).
+    tooltip-anchor: P2-SHOPLIST-BETA-POLISH"""
+    try:
+        from constants import strip_accents
+        target = strip_accents(str(name or "").strip().lower())
+        if not target:
+            return None
+        variants = {target, target + "s", target + "es"}
+        if target.endswith("es"):
+            variants.add(target[:-2])
+        if target.endswith("s"):
+            variants.add(target[:-1])
+        for row in (get_master_ingredients() or []):
+            rn = strip_accents(str(row.get("name") or "").strip().lower())
+            if rn and rn in variants:
+                cat = str(row.get("category") or "").strip()
+                # [P2-COUNTRY-HOUSEKEEPING · 2026-08-21] El label de DISPLAY, no la categoría
+                # cruda del master. La rama con precio devuelve 'VEGETALES' (del mapa) y ésta
+                # devolvía 'Vegetales' (de la DB); el Dashboard agrupa por la cadena literal, así
+                # que el usuario veía DOS secciones para el mismo pasillo del súper — una con doce
+                # ítems y otra con Acelgas sola. Igual con PROTEÍNAS/Proteínas (Almejas) y
+                # FRUTAS/Frutas (Membrillo).
+                return _get_display_category(cat, str(name or "")) if cat else None
+    except Exception:
+        return None
+    return None
+
+
+def is_country_catalog_unpriced_item(name, country=None) -> bool:
+    """True si `name` es uno de los alimentos de catálogo-país sin precio RD.
+
+    [P1-COUNTRY-CATALOG-BY-COUNTRY · 2026-08-21] `country` es OPCIONAL y aditivo. Sin él la
+    conducta es la histórica: se pregunta a la unión de los 6 países. Con él, sólo a los tokens de
+    ese país. La asimetría es deliberada — los 4 call sites del agregador NO pasan país porque ahí
+    conservar de más es correcto (si un alimento español acaba en la lista, hay que conservarlo:
+    el fallo caro es perder comida en silencio); el único que pregunta por país es el catálogo
+    verificado del generador, que es una decisión de QUÉ OFRECER. Un país no canónico cae a la
+    unión: este predicado corre en el camino caliente del agregador y un país que no reconozco no
+    puede estrechar el filtro.
+
+    [fix-round 1 · review IMPORTANT · 2026-08-17] Match por TOKEN completo (word-boundary,
+    accent-insensitive, tolerante a plural — mismo patrón que `_scan_allergen_violations`/
+    `pantry_names_match`: `\\b<token>(?:s|es)?\\b`), NUNCA `tok in low` (substring bare). El bare
+    `in` original dejaba pasar `'pinones' in 'champinones'` (Piñones ⊂ Champiñones,
+    accent-stripped) — `Champiñones` es una fila RD PRICED real de `DOMINICAN_VEGGIES_FATS`, así
+    que el bug marcaba un alimento de precio real como si fuera una alta sin precio de T5. 17ª
+    colisión de substring documentada en el proyecto (sal⊂salsa, pollo⊂repollo, res⊂fresco...).
+    Usado por el keep del aggregator (generalización de P1-BAKING-STAPLES, T5).
+
+    [fix-round 1 T6 · review Critical #2 · 2026-08-17] `"tortilla de maiz"` es el ÚNICO de los
+    78 tokens (32 T5 + 46 T6) con un camino de FALSO POSITIVO independiente de si la fila
+    realmente resolvió: `resolve_preparation_distinct` intercepta CUALQUIER "tortilla(s) de
+    maiz" ANTES de los tiers normales, y con el knob `MEALFIT_COUNTRY_SYSTEM` apagado devuelve
+    `(True, None)` (pass-through histórico — ver ese docstring) — el pass-through ECOA el texto
+    original ("Tortilla de maíz" tal cual lo escribió el usuario/la receta), que ESTE matcher
+    reconocería igual sin que hubiera resuelto de verdad a la fila. Verificado en vivo contra el
+    agregador real: con el gate del resolver YA puesto pero SIN este segundo gate,
+    `aggregate_and_deduct_shopping_list(['80 g de Tortilla de maíz'])` con el knob apagado SEGUÍA
+    sobreviviendo como CATÁLOGO SIN PRECIO — la fila no existía para efectos de DO antes de esta
+    task (`db_inventory.py` PANTRY_UNIT_HINTS ya anticipaba el string en flujos de Nevera DO), así
+    que debía dropearse, byte-idéntico. Ningún otro de los 78 tokens comparte este riesgo (ningún
+    otro nombre calza los 3 regex pre-existentes de `resolve_preparation_distinct` —
+    harina-de-X/caldo-de-X/crema-de-coco — que son los únicos que devuelven `(True, None)`
+    incondicionalmente antes de esta task)."""
+    try:
+        from constants import strip_accents as _sa
+        low = _sa(str(name or "").lower())
+        tokens = _COUNTRY_CATALOG_UNPRICED_TOKENS
+        if country is not None:
+            # `canonicalize_country` es el ÚNICO SSOT de países (lección P1-DIET-CANON-SSOT): aquí
+            # no nace una segunda tabla. Si no reconoce el valor, se queda la unión (fail-open).
+            try:
+                from constants import canonicalize_country as _cc_iccui
+                _cc = _cc_iccui(country)
+                # `canonicalize_country` cae a 'DO' ante CUALQUIER basura, así que su resultado no
+                # distingue «el usuario es dominicano» de «no entendí el valor». Sin este
+                # round-trip, un país mal tecleado estrecharía el filtro al único token de DO y
+                # borraría comida de la lista en silencio — el fallo caro exacto que este
+                # predicado existe para evitar. Con él, lo no reconocido se queda en la unión.
+                if str(country).strip().upper() != _cc:
+                    _cc = None
+            except Exception:
+                _cc = None
+            _propios = _COUNTRY_CATALOG_UNPRICED_BY_COUNTRY.get(_cc) if _cc else None
+            if _propios:
+                tokens = _propios
+        if not _knob_env_bool("MEALFIT_COUNTRY_SYSTEM", False):
+            tokens = tuple(t for t in tokens if t != "tortilla de maiz")
+        return any(
+            re.search(r"\b" + re.escape(tok) + r"(?:s|es)?\b", low)
+            for tok in tokens
+        )
     except Exception:
         return False
 
@@ -1635,7 +2310,24 @@ def parse_fraction(val: str) -> float:
 # ordenada por longitud DESC para que las frases multi-palabra ('bajo en grasa', 'hecha puré')
 # matcheen antes que sus sub-tokens. Semántica equivalente al loop secuencial (sub global de cada
 # stop; validado por las suites de coherencia/shopping). tooltip-anchor: P2-GUARD-PERF-REGEXCACHE
-_NORMALIZE_STOPS = ['cortado', 'cortada', 'cortados', 'cortadas', 'picado', 'picada', 'picados', 'picadas', 'picadito', 'picadita', 'picaditos', 'picaditas', 'pelado', 'pelada', 'pelados', 'peladas', 'hervido', 'hervida', 'hervidos', 'hervidas', 'cocido', 'cocida', 'cocidos', 'cocidas', 'asado', 'asada', 'asados', 'asadas', 'crudo', 'cruda', 'crudos', 'crudas', 'horneado', 'horneada', 'horneados', 'horneadas', 'desmenuzado', 'desmenuzada', 'desmenuzados', 'desmenuzadas', 'rallado', 'rallada', 'rallados', 'ralladas', 'guisado', 'guisada', 'guisados', 'guisadas', 'frito', 'frita', 'fritos', 'fritas', 'majado', 'majada', 'majados', 'majadas', 'triturado', 'triturada', 'triturados', 'trituradas', 'hecha puré', 'hecho puré', 'puré', 'en julianas', 'en tiras', 'en cubos', 'en hojuelas', 'en dados', 'en aros', 'en trozos', 'en rodajas', 'en porciones', 'en lonjas', 'en lonja', 'finamente', 'muy', 'pequeño', 'pequeña', 'pequeños', 'pequeñas', 'grande', 'grandes', 'mediano', 'mediana', 'medianos', 'medianas', 'maduro', 'madura', 'maduros', 'maduras', 'fresco', 'fresca', 'frescos', 'frescas', 'firme', 'firmes', 'entero', 'entera', 'enteros', 'enteras', 'fina', 'finas', 'gruesa', 'gruesas', 'magro', 'magra', 'magros', 'magras', 'natural', 'naturales', 'bajo en grasa', 'bajas en grasa', 'bajos en grasa', 'bajo en sodio', 'bajas en sodio', 'bajos en sodio', 'descremado', 'descremada', 'descremados', 'descremadas', 'sin sal', 'con sal', 'sin piel', 'sin hueso', 'para rebozar', 'al gusto', 'pizca de', 'rodajas de', 'de la despensa', 'ralladura y jugo de 1/2', 'la', 'el', 'los', 'las']
+# [P1-COUNTRY-SYSTEM-F2 · Task 8 · 2026-08-17] 'en láminas'/'en lámina' faltaban del hermano
+# de corte ('en rodajas'/'en trozos'/'en lonjas' ya cubrían la misma familia de preparación).
+# Drop real medido: "rábanos en láminas" (4/30d en rd_drops.json) — "rábano" YA existe en el
+# catálogo con precio, pero "rabanos en laminas" no matchea NINGÚN tier léxico/CONTAINS (el
+# sufijo de plural rompe el boundary de la palabra "rabano") y la FUZZY del INTENTO 5 mide
+# contra el string COMPLETO (ratio 0.50 << 0.87). Con este stop, `clean_n` colapsa a "rabanos"
+# (bare, plural) — que SÍ resuelve vía FUZZY (ratio 0.923) contra "rabano", cerrando el drop sin
+# tocar el catálogo. AMBAS formas (con tilde 'en láminas' Y sin tilde 'en laminas'): `n` en este
+# punto de `normalize_name` está lowercased pero NO accent-stripped (mismo motivo por el que
+# 'pequeño'/'puré' arriba llevan sus tildes) — con SOLO la forma acentuada, un input SIN tilde
+# ("rabanos en laminas", plausible si el LLM/usuario omite diacríticos) no la habría matcheado y
+# el drop seguiría vivo para esa variante (medido en vivo durante la verificación de esta task:
+# con solo 'en láminas', "rabanos en laminas" quedaba sin resolver mientras "rábanos en láminas"
+# sí). El alias explícito 'rabanos' (síncrono, ver synonyms_rd_topup_2026_08_17.json) YA cierra
+# esta variante de forma robusta independientemente de este stop — este stop de todos modos gana
+# la forma sin tilde para CUALQUIER OTRO alimento sin alias dedicado (ver
+# test_en_laminas_es_stop_generico_no_especifico_de_rabano, "Remolacha en láminas").
+_NORMALIZE_STOPS = ['cortado', 'cortada', 'cortados', 'cortadas', 'picado', 'picada', 'picados', 'picadas', 'picadito', 'picadita', 'picaditos', 'picaditas', 'pelado', 'pelada', 'pelados', 'peladas', 'hervido', 'hervida', 'hervidos', 'hervidas', 'cocido', 'cocida', 'cocidos', 'cocidas', 'asado', 'asada', 'asados', 'asadas', 'crudo', 'cruda', 'crudos', 'crudas', 'horneado', 'horneada', 'horneados', 'horneadas', 'desmenuzado', 'desmenuzada', 'desmenuzados', 'desmenuzadas', 'rallado', 'rallada', 'rallados', 'ralladas', 'guisado', 'guisada', 'guisados', 'guisadas', 'frito', 'frita', 'fritos', 'fritas', 'majado', 'majada', 'majados', 'majadas', 'triturado', 'triturada', 'triturados', 'trituradas', 'hecha puré', 'hecho puré', 'puré', 'en julianas', 'en tiras', 'en cubos', 'en hojuelas', 'en dados', 'en aros', 'en trozos', 'en rodajas', 'en porciones', 'en lonjas', 'en lonja', 'en láminas', 'en lámina', 'en laminas', 'en lamina', 'finamente', 'muy', 'pequeño', 'pequeña', 'pequeños', 'pequeñas', 'grande', 'grandes', 'mediano', 'mediana', 'medianos', 'medianas', 'maduro', 'madura', 'maduros', 'maduras', 'fresco', 'fresca', 'frescos', 'frescas', 'firme', 'firmes', 'entero', 'entera', 'enteros', 'enteras', 'fina', 'finas', 'gruesa', 'gruesas', 'magro', 'magra', 'magros', 'magras', 'natural', 'naturales', 'bajo en grasa', 'bajas en grasa', 'bajos en grasa', 'bajo en sodio', 'bajas en sodio', 'bajos en sodio', 'descremado', 'descremada', 'descremados', 'descremadas', 'sin sal', 'con sal', 'sin piel', 'sin hueso', 'para rebozar', 'al gusto', 'pizca de', 'rodajas de', 'de la despensa', 'ralladura y jugo de 1/2', 'la', 'el', 'los', 'las']
 _NORMALIZE_STOPS_RE = re.compile(
     r'\b(?:' + '|'.join(re.escape(s) for s in sorted(_NORMALIZE_STOPS, key=len, reverse=True)) + r')\b',
     re.IGNORECASE,
@@ -1665,6 +2357,121 @@ _MODIFIER_ONLY_ALIASES = frozenset({
     "seco", "seca", "secos", "secas", "integral", "integrales",
     "grande", "mediano", "pequeno", "magro", "magra",
 })
+
+
+# [P1-COHERENCE-ALIAS-INDEX · 2026-08-14] El índice de alias, construido UNA vez
+# por catálogo en lugar de una vez por llamada.
+#
+# El coherence guard rebasó su umbral de 5s 17 veces en 7 días (hasta 11,5s), una
+# de ellas dentro de un `/recalculate-shopping-list` SÍNCRONO. Perfilado contra el
+# plan real cb361844 (26 días, 104 comidas): 17,4s de los 19,4s del guard vivían en
+# `expected_sum_from_recipes`, y de esos 14,8s eran **compilar regex** — 481.240
+# llamadas a `re._compile`.
+#
+# La causa: los INTENTOS 2 y 4 recorrían los ~700 alias del catálogo construyendo
+# `r'\b' + re.escape(alias) + r'\b'` en caliente. La caché interna de `re` guarda
+# 512 patrones; con más alias que huecos se vacía sola y cada llamada recompila casi
+# todo. Y encima `all_aliases` se reconstruía y se REORDENABA (700 elementos) en cada
+# una de las 973 llamadas. Nada de ese trabajo depende del texto a normalizar: depende
+# solo del catálogo.
+#
+# Invalidación por IDENTIDAD (`is`), no por TTL. `get_master_ingredients()` devuelve
+# el mismo objeto mientras su caché viva, así que la identidad detecta la recarga sin
+# ventana ciega — y un test que parchea el catálogo no hereda el índice del test
+# anterior, que es justo la fuga que un TTL habría creado aquí.
+_NORMALIZE_ALIAS_INDEX: dict | None = None
+
+# Umbral del tier fuzzy (INTENTO 5 de `normalize_name`). Vive en UNA constante
+# porque la poda por longitud lo lee también: si la aceptación bajara a 0.80 y la
+# poda se quedara en 0.87, la poda empezaría a descartar matches VÁLIDOS sin que
+# nadie lo note. Un umbral duplicado es un umbral que ya drifteó.
+_FUZZY_MATCH_THRESHOLD = 0.87
+
+# [P2-CHICHARO-CHICHARRON · 2026-08-21] Pares (consulta, destino) que el fuzzy JAMÁS puede unir
+# porque son alimentos distintos, no variantes del mismo. Una entrada, y la brevedad está MEDIDA:
+# de 57 términos regionales barridos, 43 resolvieron, 9 cayeron en Proteínas y sólo éste era falso.
+# Añadir aquí exige la misma evidencia — un par que el barrido de `test_p2_chicharo_chicharron.py`
+# demuestre; si no, el arreglo correcto casi siempre es dar de alta la fila que falta.
+_FUZZY_COLISIONES_PROHIBIDAS = (
+    (r"\bchicharos?\b", r"chicharr"),   # guisante (MX) ≠ corteza de cerdo
+)
+
+
+def _construir_indice_alias(master_list: list) -> tuple[list, list]:
+    """`(all_aliases, contains_compilados)` para un catálogo dado.
+
+    `all_aliases` conserva el orden descendente por longitud del código original:
+    es load-bearing, no cosmético — con orden arbitrario 'maduro' (6) le gana a
+    'mango' (5) y un desayuno de mango mete PLÁTANO en la lista (P1-MODIFIER-ONLY-ALIAS).
+    """
+    from constants import strip_accents
+
+    all_aliases = []
+    for master in master_list:
+        master_name = master["name"]
+        all_aliases.append((strip_accents(master_name.strip().lower()), master_name))
+        for alias in (master.get("aliases") or []):
+            all_aliases.append((strip_accents(alias.strip().lower()), master_name))
+    # [P1-CATALOG-ORDER-DETERMINISTIC · 2026-08-19] Desempate ALFABÉTICO tras la longitud:
+    # el sort estable heredaba el orden de FILAS en los empates de longitud ('arroz'=5 vs
+    # 'pollo'=5) — comportamiento indefinido que el fill masivo del gloss del catálogo re-barajó,
+    # flipeando resoluciones reales del corpus DO. Con (len desc, alias asc) el índice es
+    # idéntico sea cual sea el orden físico del SELECT.
+    all_aliases.sort(key=lambda x: (-len(x[0]), x[0]))
+
+    contains = [
+        (re.compile(r'\b' + re.escape(alias_stripped) + r'\b', re.IGNORECASE), master_name, alias_stripped)
+        for (alias_stripped, master_name) in all_aliases
+        if alias_stripped and alias_stripped not in _MODIFIER_ONLY_ALIASES
+    ]
+    return all_aliases, contains
+
+
+def _get_normalize_alias_index(master_list: list) -> tuple[list, list]:
+    """Índice cacheado; se reconstruye solo si el catálogo es otro objeto (o cambió
+    de tamaño, por si alguien lo muta en sitio)."""
+    global _NORMALIZE_ALIAS_INDEX
+    cache = _NORMALIZE_ALIAS_INDEX
+    if (
+        cache is not None
+        and cache["src"] is master_list
+        and cache["len"] == len(master_list)
+    ):
+        return cache["all_aliases"], cache["contains"]
+    all_aliases, contains = _construir_indice_alias(master_list)
+    # Se guarda la referencia al catálogo, no solo su id(): mantenerlo vivo es lo
+    # que impide que un id reciclado por el GC valide un índice ajeno.
+    _NORMALIZE_ALIAS_INDEX = {
+        "src": master_list,
+        "len": len(master_list),
+        "all_aliases": all_aliases,
+        "contains": contains,
+    }
+    return all_aliases, contains
+
+
+def _best_contains_match(text: str, patterns) -> "str | None":
+    """[P1-CATALOG-ORDER-DETERMINISTIC · 2026-08-19] Mejor match CONTAINS por
+    (posición del match en el string, longitud del alias desc, alias asc). Ver el
+    comentario del INTENTO 2 en normalize_name para el porqué semántico.
+    tooltip-anchor: P1-CATALOG-ORDER-DETERMINISTIC"""
+    # Orden del desempate: LONGITUD primero (la semántica histórica del índice — 'pernil'
+    # le gana a 'cerdo' en «cerdo para pernil», retarget F2 documentado), POSICIÓN en el
+    # string después (en empates de longitud la identidad del plato encabeza: 'pollo' a
+    # posición 0 le gana a 'arroz' en «Pollo horneado ... con arroz»), alfabético al final
+    # (determinismo total: el heap ya no decide nada).
+    best_key = None
+    best_name = None
+    for _pat, master_name, alias_stripped in patterns:
+        m = _pat.search(text)
+        if not m:
+            continue
+        key = (-len(alias_stripped), m.start(), alias_stripped, master_name)
+        if best_key is None or key < best_key:
+            best_key = key
+            best_name = master_name
+    return best_name
+
 
 def normalize_name(orig_name: str) -> str:
     n = str(orig_name).lower().strip()
@@ -1742,6 +2549,28 @@ def normalize_name(orig_name: str) -> str:
     if re.search(r'\byogur(t)?\b', _opl):
         return 'Yogurt'
 
+    # [P1-COUNTRY-SYSTEM-F2 · ola final (review de fase) · 2026-08-18 · C3.1] "Chicharrón" (fila CO,
+    # Task 6) hace que CUALQUIER frase con la palabra "chicharrón" resuelva a esa fila vía CONTAINS
+    # (INTENTO 2/4) — no por el alias explícito 'chicharron' (removido en esta ola), sino porque el
+    # NOMBRE CANÓNICO de toda fila se añade a `all_aliases` incondicionalmente (`_construir_indice_alias`
+    # arriba). Verificado en vivo: quitar el alias NO cambia nada para "Chicharrón de pollo" — sigue
+    # resolviendo a 'Chicharrón' (cerdo) mientras la fila exista con ese nombre. Pre-fase (fila
+    # inexistente) 'chicharrón de cerdo' resolvía 'Cerdo' genérico y 'chicharrón de pollo' resolvía
+    # 'Pechuga de pollo' (ambos por substring). El review de T6 mejoró 'de cerdo' A PROPÓSITO (chicharrón
+    # real: kcal 544/fat 31,3g vs Cerdo genérico kcal 169,6/fat 9,47g, >200% de diferencia — ver
+    # `_provenance` en new_foods_mx_co_2026_08_17.json) pero NUNCA evaluó 'de pollo' — que colisionaba en
+    # silencio con la nutrición del CERDO (chicharrón de pollo real es ~muslo/pechuga frita, macro
+    # totalmente distinto). Este guard restaura el pre-fase SOLO para 'de pollo', preservando intacta la
+    # mejora aceptada de 'de cerdo'/bare (que sigue cayendo a los tiers de abajo → 'Chicharrón').
+    # [micro-fix ola final · 2026-08-18] `(?:es)?` — el plural "Chicharrones de pollo" se escapaba: el
+    # alias 'chicharrones' (plural) SOBREVIVE en la fila tras remover el bare 'chicharron' (solo el
+    # singular se quitó), así que el CONTAINS de abajo lo seguía matcheando y el guard, con `\b...n\b`
+    # sin sufijo, nunca disparaba para la forma plural. Mismo patrón `(?:s|es)?` que
+    # `_scan_allergen_violations` ya usa para el plural español (fresa→fresas, pan→panes) y que
+    # `_COUNTRY_CATALOG_UNPRICED_TOKENS`/fix-round 1 de esta misma ola asumía en otros tokens.
+    if re.search(r'\bchicharr[oó]n(?:es)?\b', _opl) and re.search(r'\bpollo\b', _opl):
+        return 'Pechuga de pollo'
+
     # [P1-PREP-COLLAPSE-GUARD · 2026-07-01] Preparaciones "harina de X"/"tortilla de maíz"/"crema de coco"
     # son PRODUCTOS DISTINTOS del alimento base (lección P1-NUT-BUTTER-DISTINCT generalizada). Sin este guard
     # temprano, el alias 'harina' (Harina de trigo) ganaba en el Tier-2 → "harina de avena" resolvía a TRIGO
@@ -1763,15 +2592,9 @@ def normalize_name(orig_name: str) -> str:
     # Recolectar todos los aliases + nombres canónicos para búsqueda,
     # ordenados por longitud (más largos primero) para evitar que 
     # 'platano' se trague 'platano maduro' o 'queso' se trague 'queso cottage'
-    all_aliases = []
-    for master in master_list:
-        # El nombre canónico también cuenta como alias para búsqueda exacta
-        master_name = master["name"]
-        all_aliases.append((strip_accents(master_name.strip().lower()), master_name))
-        for alias in (master.get("aliases") or []):
-            all_aliases.append((strip_accents(alias.strip().lower()), master_name))
-
-    all_aliases.sort(key=lambda x: len(x[0]), reverse=True)
+    # [P1-COHERENCE-ALIAS-INDEX · 2026-08-14] Construido una vez por catálogo (ver
+    # el helper): antes se rearmaba y reordenaba en CADA llamada, 973 veces por guard.
+    all_aliases, _aliases_for_contains = _get_normalize_alias_index(master_list)
 
     # [P1-MODIFIER-ONLY-ALIAS · 2026-07-26] Un alias que es SOLO un modificador no puede
     # resolver un alimento por su cuenta dentro de un texto más grande.
@@ -1794,8 +2617,8 @@ def normalize_name(orig_name: str) -> str:
     # Los tiers de match EXACTO (1 y 3) los conservan: si alguien escribe literalmente
     # "maduro" a secas, resolver a plátano maduro es defendible. Lo que se prohíbe es que un
     # modificador secuestre un texto que ya nombra otro alimento.
-    _aliases_for_contains = [(a, m) for (a, m) in all_aliases
-                             if a not in _MODIFIER_ONLY_ALIASES]
+    # El filtro vive dentro del índice cacheado (P1-COHERENCE-ALIAS-INDEX), que además
+    # trae ya compilado el patrón de cada alias superviviente.
 
     # ── INTENTO 1: Match Exacto sobre el texto RAW (sin mutilar por stops) ──
     # Esto es CRÍTICO porque los stops eliminan palabras como 'natural', 'descremado',
@@ -1807,9 +2630,15 @@ def normalize_name(orig_name: str) -> str:
     # ── INTENTO 2: Regex sobre el texto RAW (sin mutilar) ──
     # Buscar "queso mozzarella bajo en grasa" dentro de "queso mozzarella bajo en grasa rallado"
     # [P1-MODIFIER-ONLY-ALIAS] lista filtrada: un modificador suelto no secuestra el texto.
-    for alias_stripped, master_name in _aliases_for_contains:
-        if re.search(r'\b' + re.escape(alias_stripped) + r'\b', n_stripped, flags=re.IGNORECASE):
-            return master_name
+    # [P1-CATALOG-ORDER-DETERMINISTIC · 2026-08-19] Best-match por POSICIÓN en el string
+    # (luego longitud desc, luego alfabético) en vez de first-hit por orden del índice: en
+    # un plato multi-alimento la identidad ENCABEZA («Pollo horneado al limón con arroz» es
+    # pollo, no arroz; «Chillo al horno con... batata» es el pescado). El first-hit hacía
+    # ganar al alias más largo y, en empates de longitud, al azar del heap. Los ~1400
+    # patrones están precompilados (P1-COHERENCE-ALIAS-INDEX): el full-scan es sub-ms.
+    _best = _best_contains_match(n_stripped, _aliases_for_contains)
+    if _best is not None:
+        return _best
 
     # ── INTENTO 3: Match Exacto sobre clean_n (texto limpio, fallback) ──
     for alias_stripped, master_name in all_aliases:
@@ -1818,9 +2647,9 @@ def normalize_name(orig_name: str) -> str:
 
     # ── INTENTO 4: Regex sobre clean_n (último recurso antes de fuzzy/semántica) ──
     # [P1-MODIFIER-ONLY-ALIAS] misma lista filtrada que el INTENTO 2.
-    for alias_stripped, master_name in _aliases_for_contains:
-        if re.search(r'\b' + re.escape(alias_stripped) + r'\b', clean_n_stripped, flags=re.IGNORECASE):
-            return master_name
+    _best = _best_contains_match(clean_n_stripped, _aliases_for_contains)
+    if _best is not None:
+        return _best
 
     # ── INTENTO 5 [P4-UNIFIED-RESOLVER · 2026-06-14]: Fuzzy (difflib) ANTES de gastar un embedding.
     # Atrapa typos y variantes menores ("platanno"→"plátano", "yogur griego"→"yogurt griego") que los
@@ -1855,12 +2684,62 @@ def normalize_name(orig_name: str) -> str:
         for alias_stripped, master_name in all_aliases:
             if not alias_stripped:
                 continue
-            _r = max(difflib.SequenceMatcher(None, f, alias_stripped).ratio() for f in _fuzz_forms)
+            # [P1-COHERENCE-ALIAS-INDEX · 2026-08-14] Poda por longitud ANTES de
+            # gastar un difflib. No es una heurística: es una cota. Como
+            # `ratio = 2·M/(la+lf)` y los caracteres casados `M` no pueden superar
+            # `min(la, lf)`, el ratio nunca pasa de `2·min/(la+lf)`. Si esa cota ya
+            # queda bajo el umbral, ese par NO puede ser un match — comparar es
+            # trabajo tirado. Los pares que sí alcanzan el umbral tienen cota ≥ su
+            # propio ratio, así que jamás se podan: el veredicto es idéntico, no
+            # aproximado (test `test_la_poda_es_equivalente_no_aproximada`).
+            # Medido: era el 45% del guard tras quitar la tormenta de regex.
+            _la = len(alias_stripped)
+            _r = 0.0
+            for f in _fuzz_forms:
+                _lf = len(f)
+                if (2.0 * min(_la, _lf)) / (_la + _lf) < _FUZZY_MATCH_THRESHOLD:
+                    continue
+                _rr = difflib.SequenceMatcher(None, f, alias_stripped).ratio()
+                if _rr > _r:
+                    _r = _rr
             if _r > _fuzz_best:
                 _fuzz_best, _fuzz_name = _r, master_name
-        if _fuzz_best >= 0.87 and _fuzz_name:
-            logging.info(f"🔤 [Fuzzy Match] '{orig_name}' -> '{_fuzz_name}' (ratio {_fuzz_best:.3f})")
-            return _fuzz_name
+        if _fuzz_best >= _FUZZY_MATCH_THRESHOLD and _fuzz_name:
+            # [P2-CHICHARO-CHICHARRON · 2026-08-21] Un fuzzy alto puede cruzar de alimento.
+            #
+            # `chicharo` vs el alias `chicharron` da ratio 0,889 sobre un umbral de 0,87: pasa. Y
+            # como el destino ES una fila real del catálogo, SOBREVIVE al filtro de verified-only —
+            # no se cae de la lista, se COMPRA. Un mexicano que pide chícharos recibe corteza de
+            # cerdo, y si además es vegetariano, musulmán o judío el plato es inaceptable por
+            # razones que la nutrición no cubre. 18ª colisión de subcadena/fuzzy del proyecto.
+            #
+            # POR QUÉ UNA LISTA DE PARES Y NO UNA REGLA GENERAL: se barrieron 57 términos
+            # regionales de ES/MX/CO/PR. 43 resolvieron, 9 cayeron en Proteínas y OCHO eran
+            # correctos (gamba→Gambas, atún→Atún en agua, res→Carne de res…). El único falso
+            # positivo era éste. Una regla de «cruce de categoría» habría exigido un clasificador
+            # de «esto es carne» que no existe como SSOT — sería la cuarta tabla a mano, la lección
+            # de P1-DIET-CANON-SSOT, para atrapar un caso. La defensa de CLASE es el barrido de
+            # `test_p2_chicharo_chicharron.py`, que corre sobre el catálogo vivo y falla si un alta
+            # futura crea otra colisión de esta forma.
+            #
+            # No cierra que el catálogo NO tenga fila de guisante fresco (la única de la familia es
+            # `Guisantes secos`, 341 kcal, otro alimento). Tras el guard «chícharo» no resuelve a
+            # nada: peor que lo ideal, mejor que cerdo. El alta con procedencia verificable es
+            # curación de datos. tooltip-anchor: P2-CHICHARO-CHICHARRON
+            _fz_q = strip_accents(str(orig_name).lower())
+            _fz_r = strip_accents(str(_fuzz_name).lower())
+            _colision = any(
+                re.search(_q_rx, _fz_q) and re.search(_r_rx, _fz_r)
+                for _q_rx, _r_rx in _FUZZY_COLISIONES_PROHIBIDAS
+            )
+            if _colision:
+                logging.warning(
+                    f"🛡 [P2-CHICHARO-CHICHARRON] fuzzy rechazado: '{orig_name}' -> "
+                    f"'{_fuzz_name}' (ratio {_fuzz_best:.3f}) son alimentos DISTINTOS"
+                )
+            else:
+                logging.info(f"🔤 [Fuzzy Match] '{orig_name}' -> '{_fuzz_name}' (ratio {_fuzz_best:.3f})")
+                return _fuzz_name
 
     # Intento 6: Búsqueda de Similitud Semántica Vectorial (Cohere v4, Fallback Local)
     # Solo vale la pena gastar un request si la palabra no fue encontrada en absoluto y tiene suficiente longitud
@@ -1927,6 +2806,37 @@ def _preprocess_nlp_quantities(s: str) -> str:
     if _mx:
         _out = f"{_mx.group(1)} {fraction_map[_mx.group(2)]}{s_lower[_mx.end():]}"
         return re.sub(r'\s{2,}', ' ', _out).strip()
+
+    # [P1-COUNTRY-SYSTEM-F2 · Task 8 · 2026-08-17] Rango numérico LÍDER ("2–3 ciruelas",
+    # "2-3 ciruelas"): la regex principal de `_parse_quantity` (línea ~2589) solo captura un
+    # `\d+` simple al inicio — sin este colapso, el match falla POR COMPLETO (no hay forma de
+    # consumir "–3 ciruelas" tras el primer dígito) y el fallback `if not match: return 0.0,
+    # 'cantidad necesaria', normalize_name(s).strip()` pasa el string CONTAMINADO entero
+    # ("2–3 ciruelas") a `normalize_name`, que no lo resuelve (ni exacto/CONTAINS ni fuzzy:
+    # ratio 0.737 << 0.87 contra "ciruela") — drop real medido: 16/30d en rd_drops.json, el 2º
+    # alimento más dropeado tras mereyes. Colapsa al valor MAYOR del rango (mismo criterio que
+    # `humanize_ingredients._grammar_lead_value` ya usa para el DISPLAY: "el valor que concuerda
+    # es el MAYOR" — y la misma filosofía "pecarse de comprar de más" de P1-CITRUS-JUICE-YIELD),
+    # dejando "3 ciruelas" para que el resto del pipeline (regex principal + FUZZY plural de
+    # `normalize_name`, ratio 0.933) resuelva -> Ciruela. `[-–]` (guion ASCII + en-dash, mismo
+    # char-class que `_GRAMMAR_LEAD_RE` de humanize_ingredients.py) — nunca em-dash, sin
+    # evidencia de ese caso en el corpus real.
+    _rng = re.match(r'^(\d+)\s*[-–]\s*(\d+)\b', s_lower)
+    if _rng:
+        # [P1-COUNTRY-SYSTEM-F2 · 2026-08-17 (Task 9, l · fix-round T8-review)] El `\2` fijo de
+        # abajo sustituía SIEMPRE por el segundo número — "colapsa al MAYOR" solo por COINCIDENCIA
+        # cuando el rango viene ASCENDENTE ("2-3" → 3, sí es el mayor). Un rango DESCENDENTE
+        # ("3-2 ciruelas", typo/orden invertido del LLM) tomaba el 2 — el MENOR, contradiciendo el
+        # propio comentario de diseño de arriba. `re.sub` con función-repl computa max() real,
+        # sin importar el orden de los 2 números. Byte-idéntico para el caso ascendente (el único
+        # medido en producción — rd_drops.json).
+        s_lower = re.sub(
+            r'^(\d+)\s*[-–]\s*(\d+)\b',
+            lambda _m: str(max(int(_m.group(1)), int(_m.group(2)))),
+            s_lower,
+            count=1,
+        )
+        return re.sub(r'\s{2,}', ' ', s_lower).strip()
 
     replacements = [
         # [JUICE-PREFIX-FIX 2026-05-06] Strip de prefijos descriptivos que no
@@ -2431,6 +3341,26 @@ def _parse_quantity(s, *, apply_yield_multiplier: bool = True, apply_legumbres_y
 
     return qty, unit_str, normalize_name(rest_str).strip()
     
+# [P1-PDF-LIST-POLISH · 2026-09-02] SSOT de plurales de envase/unidad. La tabla vivía
+# inline dentro de `get_plural_unit` y le faltaban envases REALES del catálogo (medido en
+# Neon 2026-09-02: 'funda' ×6 filas, 'malla', 'manojo', 'libra', 'litro') ⇒ el PDF
+# imprimía «3 funda (…)». Un envase nuevo en master_ingredients se añade AQUÍ y en el
+# glosario del PDF (`shoppingHelpers.js`, test_p2_i18n_pdf_categorias lo exige).
+UNIT_PLURALS = {
+    'lb': 'lbs', 'lbs': 'lbs', 'libra': 'libras', 'litro': 'litros',
+    'paquete': 'paquetes', 'pote': 'potes', 'unidad': 'unidades',
+    'lata': 'latas', 'cabeza': 'cabezas', 'diente': 'dientes',
+    'cartón': 'cartones', 'carton': 'cartones',
+    'sobre': 'sobres', 'sobrecito': 'sobrecitos',
+    'botella': 'botellas', 'frasco': 'frascos',
+    'funda': 'fundas', 'fundita': 'funditas', 'malla': 'mallas',
+    'mazo': 'mazos', 'manojo': 'manojos', 'envase': 'envases',
+    'tarro': 'tarros', 'barrita': 'barritas',  # [P3-PKG-DAIRY-VEG · 2026-06-22] mantequilla
+    'rebanada': 'rebanadas', 'hoja': 'hojas',
+    'cda': 'cdas', 'cdta': 'cdtas', 'taza': 'tazas',
+    'ud.': 'Uds.',
+}
+
 def get_plural_unit(num, u):
     if num <= 1 or not u: return u
     # [P1-EGG-CARTON-SIZES · 2026-06-22] Unidades con sufijo parentético, p.ej.
@@ -2443,20 +3373,7 @@ def get_plural_unit(num, u):
         u = _m_paren.group(1).strip()
         _paren_suffix = " " + _m_paren.group(2)
     u_lower = u.lower()
-    PLURALS = {
-        'lb': 'lbs', 'lbs': 'lbs',
-        'paquete': 'paquetes', 'pote': 'potes', 'unidad': 'unidades',
-        'lata': 'latas', 'cabeza': 'cabezas', 'diente': 'dientes',
-        'cartón': 'cartones', 'carton': 'cartones',
-        'sobre': 'sobres', 'sobrecito': 'sobrecitos',
-        'botella': 'botellas', 'frasco': 'frascos',
-        'fundita': 'funditas', 'mazo': 'mazos', 'envase': 'envases',
-        'tarro': 'tarros', 'barrita': 'barritas',  # [P3-PKG-DAIRY-VEG · 2026-06-22] mantequilla
-        'rebanada': 'rebanadas', 'hoja': 'hojas',
-        'cda': 'cdas', 'cdta': 'cdtas', 'taza': 'tazas',
-        'ud.': 'Uds.',
-    }
-    result = PLURALS.get(u_lower, u)
+    result = UNIT_PLURALS.get(u_lower, u)
     # Preservar capitalización del input: si "Pote" → "Potes", si "pote" → "potes"
     if len(result) > 0 and u[0].isupper() and result[0].islower():
         result = result[0].upper() + result[1:]
@@ -3866,11 +4783,30 @@ def compute_shopping_cost_summary(
     biweekly_hybrid_list,
     monthly_hybrid_list,
     active_duration: str = "weekly",
+    *,
+    pricing_mode: "str | None" = None,
 ) -> dict | None:
     """SSOT del costo de la lista para las 3 duraciones. `cycle_total_rd` =
     estables 1× + perecederos × semanas del ciclo (las listas 15/30 ya son
     híbridas: estables al periodo, perecederos semanales). `trip_total_rd` =
-    lo que cuesta ESTA ida al súper (suma cruda de la lista)."""
+    lo que cuesta ESTA ida al súper (suma cruda de la lista).
+
+    [P1-COUNTRY-SYSTEM-F1 · 2026-08-16 (T7)] `pricing_mode='beta_no_prices'` ⇒ `None` SIN
+    computar nada — un plan beta no tiene `estimated_cost_rd` en sus ítems (ver
+    `get_shopping_list_delta`/`_strip_prices_for_beta_pricing_mode`), así que sumarlos daría
+    un dict de CEROS técnicamente correcto pero engañoso (parece "sin costo" en vez de "sin
+    dato de costo"). `None`/ausente es el contrato honesto que ya usan el resto de los
+    fail-opens de esta función — `shopping_cost_summary` sale AUSENTE del plan, y todo lo que
+    depende de él (`budget_reconciliation`, `build_budget_suggestions`) queda río abajo
+    inalcanzable (los call sites productivos son todos `if summary: ...`). Keyword-only,
+    default `None` (comportamiento previo byte-idéntico para callers que no lo pasen).
+    Cada call site productivo pasa `pricing_mode=<plan_data>.get('_pricing_mode')` — el MISMO
+    dict del que ya leen `weekly_list`/etc., nunca un 2º chequeo de país.
+
+    tooltip-anchor: compute_shopping_cost_summary pricing_mode (test_p1_country_system_f1.py)
+    """
+    if pricing_mode == "beta_no_prices":
+        return None
     if not _cost_summary_enabled():
         return None
     try:
@@ -5187,6 +6123,147 @@ def _should_skip_meal_for_aggregation(meal: dict) -> bool:
     return False
 
 
+# ── [P1-ARQ25-F1-CLOSE · 2026-09-02] H6 — `IngredientDemand` nombrada, no movida ──
+# Roadmap 2.5 §5.7/H6: «la lista agregada de hoy ES la IngredientDemand; la Fase 1 le pone
+# nombre y revisión, no la mueve». La fuente sigue siendo `shopping_source_days` (ciclo
+# completo, P0-SHOPPING-CYCLE-DAYS) y el constructor sigue siendo `get_shopping_list_delta`
+# (único builder: assemble, swap, recalc, crons y agente pasan por él). Lo nuevo es el sello
+# `plan_data["_ingredient_demand"]`: la huella de los días fuente + la revisión conocida.
+# La HUELLA es la clave de frescura (dos revisiones con los mismos días dan la misma huella);
+# la revisión es informativa hasta que la Fase 5 la lea de `meal_plans.revision` al reclamar.
+INGREDIENT_DEMAND_KEY = "_ingredient_demand"
+INGREDIENT_DEMAND_SCHEMA = 1
+
+
+def ingredient_demand_days(plan_data) -> list:
+    """Alias nombrado de la fuente de la demanda (H6). Idéntico a `shopping_source_days`."""
+    return shopping_source_days(plan_data)
+
+
+def ingredient_demand_signature(plan_data) -> str:
+    """Huella estable de los días fuente: (día, comida, ingredientes) en orden, sha256[:16]."""
+    import hashlib as _hl
+    import json as _json
+    rows = []
+    for d in ingredient_demand_days(plan_data):
+        if not isinstance(d, dict):
+            continue
+        for m in (d.get("meals") or []):
+            if not isinstance(m, dict):
+                continue
+            ings = m.get("ingredients") or []
+            rows.append([d.get("day"), m.get("name"), [str(i) if not isinstance(i, dict) else (i.get("name") or i.get("item")) for i in ings]])
+    blob = _json.dumps(rows, ensure_ascii=False, sort_keys=False, default=str)
+    return _hl.sha256(blob.encode("utf-8")).hexdigest()[:16]
+
+
+def stamp_ingredient_demand(plan_data, *, revision=None, surface: str = "") -> dict:
+    """Sella `plan_data["_ingredient_demand"]` con la huella de los días fuente (H6).
+
+    Mutación in-place, idempotente (misma huella ⇒ mismo sello salvo `computed_at`).
+    `revision` es la de `meal_plans.revision` cuando el caller la conoce; None si no.
+    """
+    if not isinstance(plan_data, dict):
+        return {}
+    from datetime import datetime as _dt, timezone as _tz
+    import logging as _lg
+    try:
+        days = ingredient_demand_days(plan_data)
+        stamp = {
+            "schema": INGREDIENT_DEMAND_SCHEMA,
+            "source_days": len(days),
+            "source_hash": ingredient_demand_signature(plan_data),
+            "revision": int(revision) if isinstance(revision, int) and not isinstance(revision, bool) else None,
+            "surface": str(surface or "")[:40],
+            "computed_at": _dt.now(_tz.utc).isoformat(),
+        }
+        plan_data[INGREDIENT_DEMAND_KEY] = stamp
+        return stamp
+    except Exception as _e:  # best-effort: jamás rompe la construcción de la lista
+        _lg.getLogger(__name__).warning(f"[P1-ARQ25-F1-CLOSE] stamp_ingredient_demand falló: {_e}")
+        return {}
+
+
+def ingredient_demand_is_fresh(plan_data):
+    """True/False si hay sello; None si el plan nunca fue sellado (legacy)."""
+    if not isinstance(plan_data, dict):
+        return None
+    stamp = plan_data.get(INGREDIENT_DEMAND_KEY)
+    if not isinstance(stamp, dict) or not stamp.get("source_hash"):
+        return None
+    try:
+        return stamp.get("source_hash") == ingredient_demand_signature(plan_data)
+    except Exception:
+        return None
+
+
+def shopping_source_days(plan_data) -> list:
+    """[P0-SHOPPING-CYCLE-DAYS · 2026-08-22] SSOT de "desde qué días se agrega la lista".
+
+    Une `_archived_days` (lo que el shift rodante ya podó) con `days` (la ventana viva).
+    ANTES, builder y guard leían `plan_data["days"]` a pelo, y esa ventana ENCOGE con
+    cada shift: en el plan real 2245eb45 los 3 días generados dan 48 alimentos y el
+    último día superviviente da 25 — y esos 25 son EXACTAMENTE lo que quedó publicado
+    tras el siguiente recálculo. El usuario marcó "ya compré la lista", su nevera nació
+    como espejo de esa lista mutilada (una sola proteína: Huevo; sin cebolla; sin
+    almidón básico) y el chunk siguiente murió contra el gate de despensa.
+
+    Lo usan LOS DOS lados a propósito (`get_shopping_list_delta` y
+    `expected_sum_from_recipes`): mientras el lado ESPERADO del coherence guard leyera
+    el mismo `days` encogido que el lado COMPRADO, ambos se recortaban a la vez y la
+    divergencia se cancelaba — medido: la telemetría del plan bajó de 31 divergencias a
+    6 justo DESPUÉS de la amputación, o sea que mutilar la lista MEJORABA la métrica.
+
+    Agregar más días NO infla la compra: el total es
+    `Σ(ingredientes) × (7/num_days) × cycle_qty_multiplier` = `promedio_por_día ×
+    días_del_ciclo`, invariante en `num_days`. Con más días el promedio es mejor
+    estimador, no mayor.
+
+    Acota la unión al ciclo VIVO porque `_archived_days` no se vacía ni al renovar
+    (ver `chat_history_context.py:204`): sin el filtro, un plan renovado arrastraría a
+    la lista los alimentos de la temporada anterior. Los días sin `date` se conservan
+    (fail-open: perder menú es peor que arrastrarlo).
+
+    Rollback sin redeploy: `MEALFIT_SHOPPING_SOURCE_INCLUDES_ARCHIVED=false` restaura
+    la conducta previa (sólo `days`). Tooltip-anchor: P0-SHOPPING-CYCLE-DAYS.
+    """
+    if not isinstance(plan_data, dict):
+        return []
+    vivos = plan_data.get("days")
+    vivos = [d for d in vivos if isinstance(d, dict)] if isinstance(vivos, list) else []
+
+    if not _knob_env_bool("MEALFIT_SHOPPING_SOURCE_INCLUDES_ARCHIVED", True):
+        return vivos
+
+    archivados = plan_data.get("_archived_days")
+    archivados = [d for d in archivados if isinstance(d, dict)] if isinstance(archivados, list) else []
+    if not archivados:
+        return vivos
+
+    # Filtro de ciclo: fuera los días anteriores al arranque del plan vivo.
+    _cycle = plan_data.get("cycle_start_date") or plan_data.get("grocery_start_date")
+    if isinstance(_cycle, str) and len(_cycle) >= 10:
+        _corte = _cycle[:10]
+        archivados = [
+            d for d in archivados
+            if not (isinstance(d.get("date"), str) and len(d["date"]) >= 10 and d["date"][:10] < _corte)
+        ]
+
+    union = archivados + vivos
+
+    # Techo por si el plan lleva meses acumulando archivados: nos quedamos con los MÁS
+    # RECIENTES, que son los que describen el ciclo de compra actual.
+    try:
+        _tope = int(plan_data.get("total_days_requested") or 0)
+    except (TypeError, ValueError):
+        _tope = 0
+    if _tope <= 0:
+        _tope = 30
+    if len(union) > _tope:
+        union = union[-_tope:]
+    return union
+
+
 def expected_sum_from_recipes(plan_data: dict, *, apply_yield: bool = False, multiplier: float = 1.0,
                                apply_protein_yield: bool = False) -> dict:
     """[P1-shop-coh-1 · 2026-05-07] Suma esperada de ingredientes desde el plan.
@@ -5228,8 +6305,12 @@ def expected_sum_from_recipes(plan_data: dict, *, apply_yield: bool = False, mul
     """
     if not isinstance(plan_data, dict):
         return {}
-    days = plan_data.get("days")
-    if not days or not isinstance(days, list):
+    # [P0-SHOPPING-CYCLE-DAYS · 2026-08-22] Mismo SSOT que el lado COMPRADO. Leer
+    # `plan_data["days"]` a pelo dejaba este lado en `{}` tras el shift, y con el
+    # esperado vacío NINGUNA ausencia podía producir divergencia `expected_only`:
+    # el guard no podía ver que faltaba el pollo ni aunque faltara.
+    days = shopping_source_days(plan_data)
+    if not days:
         return {}
 
     try:
@@ -6034,7 +7115,7 @@ def _has_severe_divergence(divergences: list) -> bool:
             # [P1-COHERENCE-SEVERE-NO-NOISE · 2026-07-07] (plan vivo 72c8b965 wk2: 67
             # divergencias `unknown` de SOBRE-oferta de envase — arroz/lechuga/ajo/calamar
             # comprados por paquete — escalaban el chunk T2 warn→block en FALSO, 3 retries +
-            # re-encolado, quemando DeepSeek). El docstring de arriba YA declara `unknown` y
+            # re-encolado, quemando GLM). El docstring de arriba YA declara `unknown` y
             # `pantry_overdeduct` NO-severas, pero este check de magnitud las capturaba igual
             # cuando |delta|>0.50. Semántica: `unknown` de magnitud es SIEMPRE sobre-oferta
             # (act>exp; el sub-suministro severo se clasifica `pantry_overdeduct`), y la
@@ -7041,7 +8122,21 @@ def resolve_preparation_distinct(name) -> tuple:
             return (True, None)
         return (False, None)  # "harina de negrito" etc. → resuelven por su propia fila en los tiers
     if _PREP_TORTILLA_MAIZ_RE.search(low):
-        return (True, None)  # el catálogo solo tiene tortillas de TRIGO — no colapsar a Maíz dulce
+        # [P1-COUNTRY-SYSTEM-F2 · T6 · 2026-08-17] Antes de esta task el catálogo solo tenía
+        # tortillas de TRIGO — el guard forzaba pass-through (True, None) para NO colapsar
+        # "tortilla de maíz" a "Maíz dulce en granos" (kernel de maíz, macro ~4x distinto de una
+        # tortilla horneada). Con la alta real "Tortilla de maíz" (USDA, T6) el guard PODRÍA
+        # canonizar a su fila propia — pero "tortilla de maíz" es un string que YA vive en rutas
+        # DO pre-existentes sin relación con esta task (`db_inventory.py` PANTRY_UNIT_HINTS línea
+        # ~1907, `P6-CARBS-CAP`) y este resolver no recibe country: canonizar sin gate cambiaría
+        # el comportamiento DO con el knob apagado (rompe byte-identidad — fix-round 1, review
+        # Critical #2). Gateado por el MISMO knob maestro que `country_for_form_data`, leído
+        # POR LLAMADA (no cacheado a nivel de módulo) — knob apagado ⇒ pass-through histórico
+        # SIEMPRE, para cualquier país; knob encendido ⇒ canoniza (sigue sin colapsar al maíz
+        # crudo en ningún caso).
+        if _knob_env_bool("MEALFIT_COUNTRY_SYSTEM", False):
+            return (True, "Tortilla de maíz")
+        return (True, None)
     if _PREP_CREMA_COCO_RE.search(low):
         return (True, None)  # crema de coco ≠ coco fresco (SKU distinto)
     # [P1-BROTH-NOT-MEAT · 2026-07-28] "caldo de pollo" resolvía a PECHUGA DE POLLO y "caldo de
@@ -7724,6 +8819,30 @@ def canonicalize_shopping_food_name(name: str, master_map: dict) -> str:
     m_item = master_map.get(name) or master_map.get(name.lower()) or master_map.get(name.title())
     canonical_name = m_item["name"] if m_item else name
 
+    # [P1-COUNTRY-SYSTEM-F2 · T7 fix-round 1 · 2026-08-17] La identidad EXACTA de una fila de
+    # catálogo-país (altas T5/T6/T7, `is_country_catalog_unpriced_item`) es AUTORITATIVA — salta
+    # la cadena de canonicalizers genéricos de abajo, que fue diseñada para PREPARACIONES/variantes
+    # de un mismo alimento RD (viveres, musáceas, quesos blancos...), no para decidir la identidad
+    # de un alimento de otro país que ya resolvió exacto. Sin este salto, 8 filas país (6 T7 + 2 T5
+    # encontradas por el mismo sweep) quedaban sobreescritas DESPUÉS de resolver correctamente —
+    # 'Nueces pecanas' incluso se perdía por completo (→ 'Pecanas', string sin fila real,
+    # DROPEADO en silencio por el gate verified-only aguas abajo).
+    #
+    # Sweep de las 346 filas vivas (`task-7-report.md` §Fix round 1) confirmó que la alternativa
+    # — saltar la cadena para CUALQUIER match exacto — NO es segura: 13 filas PRE-EXISTENTES (no
+    # de catálogo-país) dependen de esta cadena a propósito para colapsar variantes/preparación a
+    # un display de compra más simple (ej. 'Plátano verde'/'Plátano maduro' → 'Plátano' vía
+    # `canonicalize_musaceae`, 'Queso cheddar' → 'Cheddar', 'Clara de huevo'/'Yema de huevo' →
+    # 'Huevo' vía `_consolidate_inline_canon`) — saltar la cadena para esas 13 rompería ese
+    # comportamiento DO ya establecido. El scope a `is_country_catalog_unpriced_item` dejа esas 13
+    # intactas (ninguna es un token de catálogo-país) y solo activa el atajo para los 140 tokens
+    # de ES/MX/CO/PR/US, indiferente al estado del knob salvo 'tortilla de maiz' (mismo criterio
+    # que la propia función ya aplica) — un ingrediente DO nunca matchea ninguno de esos 140
+    # tokens (ya verificado por el sweep de colisión T7: 140/140 exactos, 0 falsos positivos
+    # contra el catálogo+pools completo), así que esta rama es un no-op byte-idéntico para DO.
+    if m_item and is_country_catalog_unpriced_item(canonical_name):
+        return canonical_name
+
     _inline_canon = _consolidate_inline_canon(canonical_name)
     if _inline_canon is not None:
         canonical_name = _inline_canon
@@ -8248,6 +9367,33 @@ def _get_coherence_alias_map_cached() -> dict:
     return alias_map
 
 
+# [P2-WHITE-FISH-FAMILY-COHERENCE · 2026-09-02] Medido 3 veces el 02-sep: «Mero»/«Tilapia» de la
+# receta contra «Filete de pescado blanco» de la lista ⇒ divergencia crítica marginal en cada plan.
+# El catálogo tiene la fila genérica (aliases: pescado blanco, filete de pescado, tilapia, mero,
+# chillo, pescado) Y filas por especie, así que qué fila gana depende del orden de alias. Para el
+# guard de coherencia son la MISMA compra. Solo dentro del guard: `canonicalize_fish_seafood`
+# sigue devolviendo la especie (sus tests y el agregador la necesitan).
+_WHITE_FISH_FAMILY = frozenset({
+    "pescado", "pescado blanco", "filete de pescado", "filete de pescado blanco",
+    "mero", "tilapia", "chillo", "dorado", "corvina", "pargo", "merluza", "mojarra", "grouper",
+})
+
+
+def _white_fish_family_canonical(canonical):
+    try:
+        from graph_orchestrator import _env_bool as _eb
+        if not _eb("MEALFIT_COHERENCE_WHITE_FISH_FAMILY", True):
+            return canonical
+    except Exception:
+        pass
+    try:
+        from constants import strip_accents
+        n = strip_accents(str(canonical or "").strip().lower())
+    except Exception:
+        return canonical
+    return "Pescado" if n in _WHITE_FISH_FAMILY else canonical
+
+
 def _canonicalize_for_coherence(food_names) -> set:
     """[P1-shop-coh-1 · 2026-05-07] Canonicaliza un set de food names usando
     master_map + reglas inline simples del aggregator (huevo/ñame/miel/ajo).
@@ -8442,6 +9588,11 @@ def _canonicalize_for_coherence(food_names) -> set:
                         if stripped != canonical:
                             canonical = stripped
                         canonical = _singularize_food_es(canonical)
+        # [P2-WHITE-FISH-FAMILY-COHERENCE · 2026-09-02] Familia «pescado blanco»: la receta dice
+        # «filete de mero» y la lista compra «Filete de pescado blanco» (el catálogo tiene la fila
+        # genérica con mero/tilapia/chillo como alias Y filas por especie). Para el guard es la
+        # MISMA compra: ambos lados a 'Pescado'. Salmón/bacalao/atún/sardinas/mariscos siguen aparte.
+        canonical = _white_fish_family_canonical(canonical)
         out.add(canonical)
     return out
 
@@ -8602,7 +9753,11 @@ def run_shopping_coherence_guard(plan_result: dict, *, mode_override: str = None
     _day_basis_applied = False
     if _get_coherence_day_basis_norm_knob() and (plan_result.get("aggregated_shopping_list_weekly")):
         try:
-            _n_days_basis = len(plan_result.get("days") or [])
+            # [P1-COH-BASIS-SSOT · 2026-08-22] MISMA fuente que el agregador (SSOT
+            # `shopping_source_days`). Leer `plan_result["days"]` aquí inflaba el esperado
+            # ×7/3 en planes con días archivados: 46 alimentos del plan 2245eb45 con ratio
+            # 0.424-0.431. Detalle: docs/shopping_list_cycle_days.md § el espejo a medias.
+            _n_days_basis = len(shopping_source_days(plan_result))
         except Exception:
             _n_days_basis = 0
         if _n_days_basis > 0:
@@ -8716,29 +9871,12 @@ def run_shopping_coherence_guard(plan_result: dict, *, mode_override: str = None
         # capturamos lo filtrado ANTES de descartarlo y emitimos un WARNING grep-able para
         # medir la tasa real de desobediencia (si es alta, hay que ampliar catálogo o
         # forzar retry; si es ~0, el sistema cumple). Tooltip-anchor: P1-VERIFIED-ONLY-OBSERVABILITY.
-        _expected_before_filter = set(expected_raw.keys())
-        expected_raw = {k: v for k, v in expected_raw.items() if _is_verified_for_shopping(k)}
-        _dropped_recipe_ingredients = _expected_before_filter - set(expected_raw.keys())
-        # [P3-GUARD-BLIND-WATER-WHITELIST · 2026-07-05] "Agua"/"hielo"/"caldo..." NO son comprables
-        # (agua de grifo): su drop del catálogo verificado es comportamiento correcto, no
-        # desobediencia del LLM. Ruido medido en vivo (plan e49d44c3: WARN ×2 solo por 'Agua').
-        # Match EXACTO para agua/hielo ('aguacate' no matchea); prefijo para caldos.
-        # [P3-GUARD-BLIND-WATER-WHITELIST v2 · 2026-07-06] variantes de agua ("Agua fría/tibia/
-        # para hervir" — vivas en el WARN) también son no-comprables; startswith("agua ") no
-        # matchea 'aguacate' (exige el espacio).
-        _dropped_recipe_ingredients = {
-            x for x in _dropped_recipe_ingredients
-            if str(x).strip().lower() not in ("agua", "hielo")
-            and not str(x).strip().lower().startswith("agua ")
-            and not str(x).strip().lower().startswith("caldo")
-        }
-        if _dropped_recipe_ingredients:
-            logging.warning(
-                "[VERIFIED-ONLY-GUARD-BLIND] %d ingrediente(s) de RECETAS fuera del catálogo "
-                "verificado → ausentes de la lista de compras sin aviso (LLM desobedeció el "
-                "prompt upstream): %s",
-                len(_dropped_recipe_ingredients), sorted(_dropped_recipe_ingredients)[:25],
-            )
+        # [P1-COHERENCE-MIRROR-KEEP · 2026-08-21] El filtro y su WARN viven ahora en
+        # `_filter_expected_to_shopping_survivors`, que pregunta por `_survives_shopping_list` —
+        # las TRES ramas del agregador, no sólo la del precio. Aquí estaba el mecanismo real de
+        # la costura (a): las filas conservadas-sin-precio salían del lado esperado y quedaban
+        # como fantasmas `unknown` en el lado agregado, 1:1 con los ítems sin precio del plan.
+        expected_raw = _filter_expected_to_shopping_survivors(expected_raw, emit_blind_warning=True)
 
     # [P2-COH-WEEKLY-BASIS · 2026-07-04] Base CANÓNICA del guard = lista SEMANAL.
     # `expected_sum_from_recipes` suma los días del plan (~1 semana de recetas) ×
@@ -10935,6 +12073,9 @@ def aggregate_and_deduct_shopping_list(plan_ingredients: list[str], consumed_ing
     _LEGUMES_DRY_SUBSTRINGS_FOR_CAP = (
         'habichuela',   # habichuelas rojas/blancas/negras/pintas
         'frijol',       # frijoles rojos/negros/blancos
+        # [P1-COUNTRY-CAPS-DO-LEXICON · 2026-08-23] Misma familia, nombre ES.
+        # Se queda en la tabla ÚNICA de legumbres: no nace una variante por país.
+        'judia',        # judías blancas/pintas
         'gandules',
         'lentejas',
         'garbanzos',
@@ -11378,6 +12519,22 @@ def aggregate_and_deduct_shopping_list(plan_ingredients: list[str], consumed_ing
         # forma, está bien. Lácteos son perishable post-apertura, así que
         # cap por volumen total tiene sentido.
         'leche': 1.75,
+        # [P1-COUNTRY-CAPS-DO-LEXICON · 2026-08-23] Vocabulario beta de la
+        # MISMA familia. Los valores reutilizan las clases de arriba: queso
+        # fresco/cremoso, queso semiblando y lácteo líquido. No dependen del
+        # país y por eso un gemelo recibe el mismo tope que su fila canónica.
+        'requeson': 1.0,            # gemelo nutricional de ricotta
+        'cuajada': 0.75,
+        'queso de papa': 0.75,
+        'queso en hebras': 0.5,
+        'queso provolone': 0.5,
+        'crema agria': 1.0,
+        'crema mexicana': 1.0,
+        'crema mitad y mitad': 1.75,
+        'natilla': 1.0,             # antes de `nata`: match por substring
+        'nata': 1.0,
+        'suero costeno': 1.0,
+        'suero de mantequilla': 1.75,
     }
 
     for _name, _units in list(aggregated.items()):
@@ -11606,6 +12763,37 @@ def aggregate_and_deduct_shopping_list(plan_ingredients: list[str], consumed_ing
                     f"horneado → listado como ~1 empaque (~{_BAKING_STAPLE_DEFAULT_G:.0f}g, sin precio) "
                     f"en DESPENSA BÁSICA en vez de dropearlo."
                 )
+            elif _country_catalog_unpriced_keep_enabled() and is_country_catalog_unpriced_item(name):
+                # [P1-COUNTRY-SYSTEM-F2 · T5 · 2026-08-17] generalización de P1-BAKING-STAPLES —
+                # ver docstring de `is_country_catalog_unpriced_item`.
+                # [P1-COUNTRY-KEEP-RESPECT-QTY · 2026-08-21] El `units = {}` de esta rama tiraba al
+                # suelo la demanda REAL de las recetas: los 7 ítems de catálogo-país de los 2
+                # planes beta vivos salían a 150,0 g exactos («¼ lb») para recetas que pedían 653 g
+                # de almejas, 504 g de acelgas o 443 g de membrillo — y en 4 de los 7 sin siquiera
+                # la nota de cobertura, porque el déficit en tazas/cucharadas no se puede calcular
+                # en gramos: sub-compra MUDA. El default se diseñó para el caso «al gusto / sin
+                # cantidad» y acabó ganando siempre; aquí se invierte la precedencia y queda como
+                # último recurso. La rama de horneado de arriba NO cambia: 100 g de polvo de
+                # hornear ES la respuesta correcta a «1 cdta» porque ahí se compra el ENVASE.
+                _ccu_has_qty = _country_keep_has_recipe_qty(units)
+                if not _ccu_has_qty:
+                    weight_in_lbs = _COUNTRY_CATALOG_UNPRICED_DEFAULT_G / 453.592
+                    has_weight = True
+                    units = {}
+                # [P2-SHOPLIST-BETA-POLISH · 2026-08-18] pasillo REAL del súper (Vegetales/
+                # Frutas/...) en vez del label interno 'CATÁLOGO SIN PRECIO' que se filtraba
+                # al PDF — ver docstring de `_master_category_for_unpriced_item`. Fallback al
+                # label histórico si el master no resuelve.
+                display_cat = _master_category_for_unpriced_item(name) or "CATÁLOGO SIN PRECIO"
+                # [P3-COUNTRY-KEEP-LOG-VOLUME · 2026-08-21] a DEBUG: eran 3 líneas por ítem por
+                # cada recálculo de lista, en bucle sobre las 141 filas.
+                logging.debug(
+                    "🌍 [P1-COUNTRY-CATALOG-UNPRICED] '%s' fuera del catálogo con precio pero es "
+                    "alimento de catálogo-país (sin precio RD a propósito, país beta) → listado en "
+                    "'%s' en vez de dropearlo (cantidad: %s).",
+                    name, display_cat,
+                    "de la receta" if _ccu_has_qty else f"~{_COUNTRY_CATALOG_UNPRICED_DEFAULT_G:.0f}g por defecto",
+                )
             else:
                 # [P1-VERIFIED-ONLY-OBSERVABILITY · 2026-06-21] WARNING (no info) para que el
                 # drop sea grep-able en prod: este es el punto exacto donde un ingrediente de
@@ -11802,6 +12990,16 @@ def aggregate_and_deduct_shopping_list(plan_ingredients: list[str], consumed_ing
                 total_estimated_cost += item_cost
                 market_obj["category"] = cat
                 market_obj["display_category"] = display_cat
+                # [P1-PLAN-DISPLAY-I18N · Task 5] Gloss bilingüe display-only para
+                # la lista de compras — ver _display_name_en_for_item arriba.
+                _name_en = _display_name_en_for_item(master_item)
+                if _name_en:
+                    market_obj["display_name_en"] = _name_en
+                # [P1-COUNTRY-GLOSS-SOLO-INGLES · 2026-08-23] Gloss panhispánico
+                # display-only, hermano del inglés: «Lechosa (papaya)».
+                _gloss_es = _display_gloss_es_for_item(master_item)
+                if _gloss_es:
+                    market_obj["display_gloss_es"] = _gloss_es
                 market_obj["is_staple"] = False
                 # [P1-PDF-2] Cierra el drift de la heurística substring que vivía
                 # SOLO en frontend. Backend es ahora SSOT para perishable
@@ -11821,6 +13019,9 @@ def aggregate_and_deduct_shopping_list(plan_ingredients: list[str], consumed_ing
                 # [P3-PRICE-MARKET-COVERAGE · 2026-06-20] El costo ya viene de _cost_from_market
                 # (sobre el display redondeado real); reemplaza al fallback P3-PRICE-UNIT-COVERAGE solo-si-0.
                 market_obj["estimated_cost_rd"] = round(item_cost, 2) if item_cost > 0 else None
+                # [P1-SHOPLIST-SANITY-CAP · 2026-08-21] La lista viva pedía 15 sobres de pimienta
+                # y 10 frascos de orégano (RD$810, que contaminaban el banner de presupuesto).
+                _apply_condiment_sanity_cap(market_obj, master_item, display_cat, cycle_days)
                 item_val = market_obj if structured else market_obj["display_string"]
                 results.append(item_val)
                 categorized_results[display_cat].append(item_val)
@@ -11844,6 +13045,16 @@ def aggregate_and_deduct_shopping_list(plan_ingredients: list[str], consumed_ing
                 total_estimated_cost += item_cost
                 market_obj["category"] = cat
                 market_obj["display_category"] = display_cat
+                # [P1-PLAN-DISPLAY-I18N · Task 5] Mismo gloss bilingüe que el path
+                # por peso arriba — ver _display_name_en_for_item.
+                _name_en = _display_name_en_for_item(master_item)
+                if _name_en:
+                    market_obj["display_name_en"] = _name_en
+                # [P1-COUNTRY-GLOSS-SOLO-INGLES · 2026-08-23] Gloss panhispánico
+                # display-only, hermano del inglés: «Lechosa (papaya)».
+                _gloss_es = _display_gloss_es_for_item(master_item)
+                if _gloss_es:
+                    market_obj["display_gloss_es"] = _gloss_es
                 market_obj["is_staple"] = False
                 # [P1-PDF-2] Mismo flag que arriba — todo item entrando a
                 # `aggregated_shopping_list` debe tener `is_perishable` para que
@@ -11863,6 +13074,9 @@ def aggregate_and_deduct_shopping_list(plan_ingredients: list[str], consumed_ing
                 # [P3-PRICE-MARKET-COVERAGE · 2026-06-20] El costo ya viene de _cost_from_market
                 # (sobre el display redondeado real); reemplaza al fallback P3-PRICE-UNIT-COVERAGE solo-si-0.
                 market_obj["estimated_cost_rd"] = round(item_cost, 2) if item_cost > 0 else None
+                # [P1-SHOPLIST-SANITY-CAP · 2026-08-21] La lista viva pedía 15 sobres de pimienta
+                # y 10 frascos de orégano (RD$810, que contaminaban el banner de presupuesto).
+                _apply_condiment_sanity_cap(market_obj, master_item, display_cat, cycle_days)
                 item_val = market_obj if structured else market_obj["display_string"]
                 results.append(item_val)
                 categorized_results[display_cat].append(item_val)
@@ -11998,9 +13212,9 @@ def fetch_inventory_and_consumed_for_plan(user_id: str, plan_result: dict, is_ne
                     physical_inventory.append(item)
 
         if not is_new_plan:
-            from db_plans import get_latest_meal_plan_with_id
+            from db_plans import get_latest_usable_meal_plan_with_id  # [P1-ARQ25-F1-CLOSE] salta el placeholder
             from db_facts import get_consumed_meals_since
-            plan_record = get_latest_meal_plan_with_id(user_id)
+            plan_record = get_latest_usable_meal_plan_with_id(user_id)
             if plan_record and plan_record.get("plan_data"):
                 plan_created_at = plan_record.get("created_at")
                 if plan_created_at:
@@ -12013,6 +13227,115 @@ def fetch_inventory_and_consumed_for_plan(user_id: str, plan_result: dict, is_ne
         logging.error(f"[P1-5] Error en fetch_inventory_and_consumed_for_plan: {e}")
 
     return physical_inventory, consumed_ingredients
+
+
+# [P1-COUNTRY-SYSTEM-F1 · 2026-08-16 (T7)] Único punto donde el aggregator deja de emitir
+# montos en RD$ para un plan en modo beta (`plan_data['_pricing_mode'] == 'beta_no_prices'`).
+#
+# `aggregate_and_deduct_shopping_list` (arriba en este archivo) es la función de ~2000
+# líneas que CALCULA `estimated_cost_rd` por ítem — pero solo la invocan `structured=True`
+# los 3 call sites DENTRO de `get_shopping_list_delta` (pase principal, ventana de viaje,
+# canonicalización de urgentes); sus otros 2 call sites (`aggregate_shopping_list`,
+# `get_realtime_pantry`, "nevera virtual" del swap/chat) NUNCA piden `structured=True` — sus
+# ítems son texto plano sin campos de costo. Verificado por grep cross-archivo antes de
+# escribir este comentario: no hay una 4ª vía por la que un dict con `estimated_cost_rd`
+# salga de este módulo sin pasar por aquí.
+#
+# Por eso NO se tocó el agregador de ~2000 líneas (ni sus 15+ call sites indirectos vía
+# `get_shopping_list_delta`, documentados en su propio docstring): TODO caller de este
+# archivo pasa `plan_result` como el `plan_data` PERSISTIDO (o, para la generación inicial,
+# el `result` en construcción de `assemble_plan_node`, que ya lleva el flag estampado ANTES
+# de estas llamadas — ver ese nodo) — nunca un dict ad-hoc sin la clave. Confirmado
+# leyendo los ~15 call sites reales: agent.py (swap/chat), cron_tasks.py (T1/T2/GAP-F),
+# routers/plans.py (/recalculate-shopping-list), tools.py (chat-modify) — todos pasan
+# `plan_data`/`full_plan_data`/`plan_record["plan_data"]`, jamás un dict recortado.
+def _strip_prices_for_beta_pricing_mode(res):
+    """Muta `res` IN-PLACE anulando `estimated_cost_rd`/`estimated_cost` (si están presentes)
+    en cada ítem — `list[dict]` (`structured=True, categorize=False`) o
+    `dict[categoria, list[dict]]` (`structured=True, categorize=True`). En texto plano no hay
+    campos de costo, pero sí puede viajar el label de marca dentro de `display_string`, por lo
+    que también se sanea cada `str`. Retorna `res` para poder encadenarse inline en el `return`
+    del caller.
+
+    tooltip-anchor: _strip_prices_for_beta_pricing_mode (test_p1_country_system_f1.py)
+    """
+    # [P1-BETA-PRICE-LEAKS · 2026-08-21] Un precio no viaja sólo como número: viaja también como
+    # el SKU del que salió. `display_qty` lleva «1 cartón (1 Lt · Wala)» — Wala, Zerca, Sosua,
+    # Jazma y Rica son marcas de casa de supermercados DOMINICANOS que no existen en España, y
+    # «funda» es el dominicanismo de bolsa. Medido en producción: 30 de 48 ítems del plan ES y 15
+    # de 25 del US llevaban marca, y el usuario se lleva ese PDF al súper. No las eligió (son los
+    # defaults más baratos del catálogo RD) y no puede quitarlas, porque el panel que las
+    # gestionaría está oculto justamente por ser beta.
+    #
+    # Se quita la MARCA, no la presentación: «1 cartón (1 Lt)» sigue diciéndole qué comprar. El
+    # separador ' · ' es el que `_pkg_from_product_row` usa para pegar tamaño y marca.
+    _BRAND_SEP = " · "
+
+    # [P1-COACH-SHOPLIST-BRAND-LEAK · 2026-08-23] `display_qty` era el único campo saneado,
+    # pero ninguna de las dos rutas del coach lo narra: tools.py usa `display_string` de la
+    # salida estructurada y agent.py inserta la salida plana (que ES ese display_string) en el
+    # prompt. Además, el `rfind("(")` + truncado previo se comía TODO lo posterior al paréntesis:
+    # limpiar «1 cartón (1 Lt · marca) de Leche» devolvía «1 cartón (1 Lt)» y perdía el alimento.
+    # Se transforma únicamente el segmento parentético que contiene el separador SSOT, preservando
+    # el resto byte por byte y el sufijo `c/u`. `sku_size_label` es la única forma legítimamente
+    # desnuda (`tamaño · marca`), así que sólo ese campo habilita el fallback sin paréntesis.
+    _BRANDED_PARENS_RX = re.compile(r"\([^()]*\)")
+    _EACH_SUFFIX_RX = re.compile(r"(?:^|\s)c/u\s*$", re.IGNORECASE)
+
+    def _strip_brand(value, *, allow_bare=False):
+        if not isinstance(value, str) or _BRAND_SEP not in value:
+            return value
+
+        _changed = False
+
+        def _clean_parens(match):
+            nonlocal _changed
+            _segment = match.group(0)
+            if _BRAND_SEP not in _segment:
+                return _segment
+            _size, _brand_and_suffix = _segment.split(_BRAND_SEP, 1)
+            _brand = _brand_and_suffix[:-1].strip()  # quitar el `)` para inspeccionar `c/u`
+            _suffix = " c/u" if _EACH_SUFFIX_RX.search(_brand) else ""
+            _changed = True
+            return f"{_size.rstrip()}{_suffix})"
+
+        _cleaned = _BRANDED_PARENS_RX.sub(_clean_parens, value)
+        if _changed:
+            return _cleaned
+        if allow_bare and "(" not in value and ")" not in value:
+            _size, _brand = value.rsplit(_BRAND_SEP, 1)
+            _suffix = " c/u" if _EACH_SUFFIX_RX.search(_brand) else ""
+            return f"{_size.rstrip()}{_suffix}"
+        return value
+
+    def _strip_item(it):
+        if isinstance(it, dict):
+            if "estimated_cost_rd" in it:
+                it["estimated_cost_rd"] = None
+            if "estimated_cost" in it:
+                it["estimated_cost"] = None
+            if "display_qty" in it:
+                it["display_qty"] = _strip_brand(it.get("display_qty"))
+            if "display_string" in it:
+                it["display_string"] = _strip_brand(it.get("display_string"))
+            if "sku_size_label" in it:
+                it["sku_size_label"] = _strip_brand(
+                    it.get("sku_size_label"), allow_bare=True)
+
+    def _strip_items(items):
+        for idx, it in enumerate(items):
+            if isinstance(it, str):
+                items[idx] = _strip_brand(it)
+            else:
+                _strip_item(it)
+
+    if isinstance(res, dict):
+        for items in res.values():
+            if isinstance(items, list):
+                _strip_items(items)
+    elif isinstance(res, list):
+        _strip_items(res)
+    return res
 
 
 def get_shopping_list_delta(
@@ -12081,7 +13404,14 @@ def get_shopping_list_delta(
             brand_defaults = None
 
     all_ingredients = []
-    days = plan_result.get("days", [])
+    # [P0-SHOPPING-CYCLE-DAYS · 2026-08-22] SSOT de la fuente de días (incluye los que el
+    # shift archivó). Con `plan_result["days"]` a pelo, cada recálculo posterior a un
+    # shift reconstruía la lista desde una ventana más corta y la SOBRESCRIBÍA: 48
+    # alimentos → 25 en el plan real 2245eb45, dejando al usuario sin proteína que
+    # cocinar y matando el chunk siguiente contra el gate de despensa.
+    days = shopping_source_days(plan_result)
+    # [P1-ARQ25-F1-CLOSE] H6: el builder sella la demanda que está a punto de construir.
+    stamp_ingredient_demand(plan_result, surface="get_shopping_list_delta")
     if not days and plan_result.get("meals"):
         days = [{"day": 1, "meals": plan_result.get("meals")}] 
     if not days and plan_result.get("perfectDay"):
@@ -12348,49 +13678,104 @@ def get_shopping_list_delta(
 
 
     # [P0-3] Inyectar items de compra urgente si el plan superó validación de despensa en flexible_mode
+    # [P1-URGENT-LIST-CANONICAL · 2026-08-09] Los urgentes son LÍNEAS DE RECETA por-comida
+    # («95 g de mango en cubos», «1 cdta de pimentón») — inyectarlas VERBATIM infló la lista del
+    # owner a 104 ítems (33 pseudo-productos), el contador «Marcas del súper» los contaba y el
+    # PDF mostraba absurdos («20 g de avena en hojuelas · 0.87 ud»). Ahora pasan por el MISMO
+    # agregador que reduce las líneas del plan a productos canónicos (funde duplicados: 3 líneas
+    # de mango → 1 Mango con su cantidad real). Fail-open: si el agregador falla o devuelve
+    # vacío con urgentes presentes, cae a la inyección cruda de siempre (mejor crudo que ausente
+    # — son compras de seguridad del modo flexible). tooltip-anchor: P1-URGENT-LIST-CANONICAL
     urgent_items = plan_result.get("_pantry_supplement_required", [])
     if urgent_items:
+        def _tag_urgent(entry):
+            if isinstance(entry, dict):
+                entry = dict(entry)
+                entry["category"] = "🚨 Compra Urgente"
+                entry["display_category"] = "🚨 Compra Urgente"
+                entry["is_staple"] = False
+                # [P1-PDF-2] urgentes = perecederos ("comprar pronto"), explícito.
+                entry["is_perishable"] = True
+                # [P0-2] contrato: espejo numérico SIEMPRE presente (el frontend no parsea
+                # "1 1/2"). Si la entrada del agregador no lo trae, se deriva o cae a 1.0.
+                if not isinstance(entry.get("market_qty_numeric"), (int, float)):
+                    try:
+                        entry["market_qty_numeric"] = float(entry.get("market_qty"))
+                    except (TypeError, ValueError):
+                        entry["market_qty_numeric"] = 1.0
+                _ds = str(entry.get("display_string") or entry.get("name") or "")
+                if not _ds.startswith("⚠️"):
+                    entry["display_string"] = f"⚠️ {_ds}"
+                return entry
+            return f"⚠️ {entry}"
+
+        def _raw_urgent(item):
+            return {
+                "name": item,
+                "market_qty": 1,
+                # [P0-2] Espejo numérico siempre presente (el frontend no parsea "1 1/2").
+                "market_qty_numeric": 1.0,
+                "market_unit": "ud",
+                "display_qty": item,
+                "display_string": f"⚠️ {item}",
+                "category": "🚨 Compra Urgente",
+                "display_category": "🚨 Compra Urgente",
+                "is_staple": False,
+                "is_perishable": True,
+            } if structured else f"⚠️ {item}"
+
+        _urgent_entries = None
+        try:
+            _canon = aggregate_and_deduct_shopping_list(
+                [str(i) for i in urgent_items], [],
+                categorize=False, structured=structured, multiplier=1.0)
+            if isinstance(_canon, list) and _canon:
+                _urgent_entries = [_tag_urgent(e) for e in _canon]
+                logging.info(
+                    f"🧺 [P1-URGENT-LIST-CANONICAL] {len(urgent_items)} línea(s) urgente(s) "
+                    f"→ {len(_urgent_entries)} producto(s) canónicos en la lista")
+        except Exception as _uc_exc:
+            logging.warning(
+                f"[P1-URGENT-LIST-CANONICAL] canonicalización falló, inyección cruda "
+                f"(fail-open): {type(_uc_exc).__name__}: {_uc_exc}")
+        if _urgent_entries is None:
+            _urgent_entries = [_raw_urgent(item) for item in urgent_items]
+
         if categorize:
             if isinstance(res, dict):
-                res["🚨 Compra Urgente"] = []
-                for item in urgent_items:
-                    res["🚨 Compra Urgente"].append({
-                        "name": item,
-                        "market_qty": 1,
-                        # [P0-2] Espejo numérico siempre presente para que el
-                        # frontend nunca tenga que parsear `market_qty` (que
-                        # en otros items puede venir como "1 1/2"/"1/2").
-                        "market_qty_numeric": 1.0,
-                        "market_unit": "ud",
-                        "display_qty": item,
-                        "display_string": f"⚠️ {item}",
-                        "category": "🚨 Compra Urgente",
-                        "display_category": "🚨 Compra Urgente",
-                        "is_staple": False,
-                        # [P1-PDF-2] Items urgentes son siempre perecederos
-                        # ("comprar pronto"). El helper también lo deriva por
-                        # substring "urgente" pero lo marcamos explícito para
-                        # robustez (independiente de cualquier renombre futuro).
-                        "is_perishable": True,
-                    } if structured else f"⚠️ {item}")
+                res["🚨 Compra Urgente"] = list(_urgent_entries)
         else:
             if isinstance(res, list):
-                for item in urgent_items:
-                    res.append({
-                        "name": item,
-                        "market_qty": 1,
-                        # [P0-2] Espejo numérico — ver comentario equivalente arriba.
-                        "market_qty_numeric": 1.0,
-                        "market_unit": "ud",
-                        "display_qty": item,
-                        "display_string": f"⚠️ {item}",
-                        "category": "🚨 Compra Urgente",
-                        "display_category": "🚨 Compra Urgente",
-                        "is_staple": False,
-                        # [P1-PDF-2] Ver comentario equivalente arriba.
-                        "is_perishable": True,
-                    } if structured else f"⚠️ {item}")
-    
+                res.extend(_urgent_entries)
+
+    # [P1-COUNTRY-SYSTEM-F1 · 2026-08-16 (T7)] `plan_result` es el `plan_data` persistido (o
+    # el `result` en construcción de assemble_plan_node, que ya lleva la clave estampada
+    # ANTES de llamar aquí) — ver el comentario de `_strip_prices_for_beta_pricing_mode`.
+    if isinstance(plan_result, dict) and plan_result.get("_pricing_mode") == "beta_no_prices":
+        _strip_prices_for_beta_pricing_mode(res)
+
+    # [P1-UNIT-SYSTEM-BY-COUNTRY · 2026-08-21] Proyección métrica del DISPLAY, en el último paso.
+    #
+    # Aquí y no dentro del agregador por una razón medida: `_cost_from_market` calcula el costo
+    # PARSEANDO el display redondeado («costo desde el DISPLAY, no desde weight_in_lbs crudo» —
+    # P3-PRICE-MARKET-COVERAGE). Convertir antes le daría gramos a un parser que espera libras y
+    # el costo saldría mal. Este es el único punto de salida de la función, así que también es el
+    # único sitio donde está garantizado que todo el cálculo ya terminó.
+    #
+    # El país sale del SELLO del plan (`country_for_plan`, P1-PLAN-STAMPS-COUNTRY), que ya viaja
+    # en `plan_result`: así los 26 call sites de esta función no cambian — 26 sitios donde
+    # olvidarse de pasar un `country=` nuevo. Un plan sin sello (todos los anteriores al sello)
+    # cae a 'DO' y conserva exactamente la conducta de hoy.
+    try:
+        from constants import country_for_plan as _cfp_units
+        _pais_lista = _cfp_units(plan_result if isinstance(plan_result, dict) else {}, None)
+        if unit_system_for_country_safe(_pais_lista) == "metric":
+            _project_units_over_result(res, _pais_lista)
+    except Exception as _us_exc:
+        logging.warning(
+            f"[P1-UNIT-SYSTEM-BY-COUNTRY] proyección métrica no-op (fail-open): "
+            f"{type(_us_exc).__name__}: {_us_exc}")
+
     return res
 
 

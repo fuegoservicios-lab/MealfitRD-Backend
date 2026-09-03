@@ -539,12 +539,12 @@ def _plan_fixture_fechado(meals):
 
 def _llamar_tool(plan, fecha):
     import tools as _t
-    orig = _t.get_latest_meal_plan
+    orig = _t.get_latest_usable_meal_plan
     try:
-        _t.get_latest_meal_plan = lambda uid: plan
+        _t.get_latest_usable_meal_plan = lambda uid: plan
         return _t.consultar_dia_del_plan.func(user_id="u1", fecha=fecha)
     finally:
-        _t.get_latest_meal_plan = orig
+        _t.get_latest_usable_meal_plan = orig
 
 
 def test_tool_devuelve_cantidades_y_receta():
@@ -586,16 +586,21 @@ def test_tool_avisa_cuando_la_fecha_es_inferida_no_estampada():
     """Si la fecha se reconstruyó en vez de venir estampada, la tool tiene que
     decirlo — o el coach afirmaría como exacta una fecha que el sistema no
     garantiza."""
-    import chat_history_context as _chc
+    # [P3-CONSULTAR-DIA-USER-TODAY · 2026-08-22] La costura se movió CON la conducta. Esto
+    # parcheaba `chat_history_context.rd_today`, que era de donde la tool sacaba «hoy» — la fecha
+    # de RD para todo el mundo, teniendo `user_id` delante. Ahora la deriva del huso del usuario
+    # (`tools._local_date_str_for_user`), así que ése es el punto a fijar. La propiedad que este
+    # caso defiende —avisar cuando la fecha se INFIRIÓ en vez de venir estampada— no cambia.
+    import tools as _tools
     meals = [{"meal": "Cena", "name": "Pescado", "cals": 400,
               "ingredients": ["255g de pescado"], "recipe": ["Sofríe"]}]
     plan = {"days": [_day("Lunes", 1)], "_archived_days": [_day("Domingo", 1, meals)]}
-    orig = _chc.rd_today
+    orig = _tools._local_date_str_for_user
     try:
-        _chc.rd_today = lambda: date(2026, 7, 27)  # lunes fijo, no el reloj real
+        _tools._local_date_str_for_user = lambda uid=None: "2026-07-27"  # lunes fijo, no el reloj
         out = _llamar_tool(plan, "2026-07-26")
     finally:
-        _chc.rd_today = orig
+        _tools._local_date_str_for_user = orig
     assert "estimada" in out.lower(), "falta el aviso de fecha inferida"
 
 

@@ -1,4 +1,4 @@
-"""[P2-A11Y-LOGGING · 2026-05-13] Anchors para silent-degradation logging
+r"""[P2-A11Y-LOGGING · 2026-05-13] Anchors para silent-degradation logging
 (parte del bundle P2 junto con a11y frontend gaps).
 
 Contexto:

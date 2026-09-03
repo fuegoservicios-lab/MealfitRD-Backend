@@ -128,20 +128,28 @@ def test_hydration_context_fallback_date_is_do_local_not_utc():
 
 
 def test_local_date_helper_is_do_offset():
-    """Sanity del SSOT que reusamos: `_local_date_str_for_user` en tools.py
-    debe calcular la fecha en UTC-4 (Atlantic Standard Time, RD)."""
-    src = _TOOLS_PY.read_text(encoding="utf-8")
-    m = re.search(
-        r"def _local_date_str_for_user\(.*?(?=\n(?:async\s+)?def\s|\n@tool)",
-        src,
-        re.DOTALL,
-    )
-    assert m, "No se encontró `_local_date_str_for_user` en tools.py."
-    helper = m.group(0)
-    assert "timedelta(hours=4)" in helper, (
-        "`_local_date_str_for_user` debe restar 4 horas (UTC-4 = RD). Si el "
-        "offset cambia, revisar la consistencia con el resto del sistema."
-    )
+    """Sanity del SSOT que reusamos: `_local_date_str_for_user` sigue dando la fecha DOMINICANA
+    cuando no hay usuario — y la del usuario cuando lo hay.
+
+    [reconvertido · P2-LOCAL-DATE-STR-UTC4 · 2026-08-21] Antes exigía el literal
+    `timedelta(hours=4)` en el fuente, o sea que anclaba el DEFECTO: el helper calculaba la fecha
+    de RD para todo el mundo pese a llamarse «for_user». Para un español a las 00:30 el vaso recién
+    registrado caía en el cubo de ayer; para un mexicano a las 22:30, en el de mañana.
+
+    La propiedad que este test protege de verdad es la CONSISTENCIA del reloj con el resto del
+    sistema, no la grafía de una constante — y medirla sobre la conducta la protege mejor, porque
+    un renombre de la constante ya no la esquiva. El contrato completo del huso vive en
+    `test_p2_local_date_str_utc4.py`."""
+    from datetime import datetime, timedelta, timezone
+
+    import tools as _tools
+
+    def _esperada(offset_min):
+        return (datetime.now(timezone.utc) - timedelta(minutes=offset_min)).date().isoformat()
+
+    assert _tools._local_date_str_for_user() == _esperada(240)
+    assert _tools._local_date_str_for_user(None) == _esperada(240)
+    assert _tools._LOCAL_DATE_FALLBACK_OFFSET_MIN == 240
 
 
 # ---------------------------------------------------------------------------

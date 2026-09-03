@@ -23,7 +23,7 @@ def _wire(monkeypatch, capture=None):
     # (labels same-day de las demás comidas del día); el stub debe aceptarlo o el caller real
     # revienta con TypeError silencioso (fail-safe) y estos tests medirían orquestación muerta.
     def fake_closer(m, target, db, cands, allergies=None, fill_pct=0.92, max_add_g=300,
-                    slot_cal_target=0.0, enforce_min_threshold=True, day_used_proteins=None):
+                    slot_cal_target=0.0, enforce_min_threshold=True, day_used_proteins=None, **kw):
         if capture is not None:
             capture["cands"] = cands
             capture["max_add_g"] = max_add_g
@@ -36,9 +36,10 @@ def _wire(monkeypatch, capture=None):
     monkeypatch.setattr(g, "_close_protein_gap_for_meal", fake_closer)
     monkeypatch.setattr(g, "_macro_aware_day_reconcile",
                         lambda ms, c, f, db: (capture and capture.__setitem__("reconcile", capture.get("reconcile", 0) + 1)) or True)
+    # [P1-DIET-BLIND-CLOSERS · 2026-08-08] **kw absorbe kwargs nuevos (diet=...) sin romper el fake.
     monkeypatch.setattr(g, "_safe_high_density_proteins",
-                        lambda al, db, min_protein=18.0: [(0.30, "Queso ricotta", None), (0.28, "Yogurt griego", None),
-                                                          (0.25, "Pechuga de pollo", None), (0.22, "Filete de pescado blanco", None)])
+                        lambda al, db, min_protein=18.0, **kw: [(0.30, "Queso ricotta", None), (0.28, "Yogurt griego", None),
+                                                                (0.25, "Pechuga de pollo", None), (0.22, "Filete de pescado blanco", None)])
     return g
 
 

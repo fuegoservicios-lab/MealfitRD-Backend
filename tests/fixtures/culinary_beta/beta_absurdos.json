@@ -1,0 +1,178 @@
+[
+ {
+  "esperado": "V1",
+  "plan": {
+   "days": [
+    {
+     "day": 1,
+     "meals": [
+      {
+       "meal": "Cena",
+       "name": "Jamon serrano licuado",
+       "ingredients": [
+        "40 g Jamon serrano"
+       ],
+       "recipe": [
+        "Licua el jamon serrano hasta obtener una crema."
+       ]
+      }
+     ]
+    }
+   ]
+  }
+ },
+ {
+  "esperado": "V1",
+  "plan": {
+   "days": [
+    {
+     "day": 1,
+     "meals": [
+      {
+       "meal": "Merienda",
+       "name": "Pinones hervidos",
+       "ingredients": [
+        "30 g Pinones"
+       ],
+       "recipe": [
+        "Hierve los pinones 20 minutos."
+       ]
+      }
+     ]
+    }
+   ]
+  }
+ },
+ {
+  "esperado": "V1",
+  "plan": {
+   "days": [
+    {
+     "day": 1,
+     "meals": [
+      {
+       "meal": "Almuerzo",
+       "name": "Aderezo frito",
+       "ingredients": [
+        "20 g Aderezo ranch"
+       ],
+       "recipe": [
+        "Frie el aderezo ranch en la sarten."
+       ]
+      }
+     ]
+    }
+   ]
+  }
+ },
+ {
+  "esperado": "V1",
+  "plan": {
+   "days": [
+    {
+     "day": 1,
+     "meals": [
+      {
+       "meal": "Merienda",
+       "name": "Mazapan hervido",
+       "ingredients": [
+        "40 g Mazapan"
+       ],
+       "recipe": [
+        "Hierve el mazapan 10 minutos."
+       ]
+      }
+     ]
+    }
+   ]
+  }
+ },
+ {
+  "esperado": "V1",
+  "plan": {
+   "days": [
+    {
+     "day": 1,
+     "meals": [
+      {
+       "meal": "Merienda",
+       "name": "Pretzels dorados",
+       "ingredients": [
+        "40 g Pretzels"
+       ],
+       "recipe": [
+        "Dora los pretzels en la plancha."
+       ]
+      }
+     ]
+    }
+   ]
+  }
+ },
+ {
+  "esperado": null,
+  "plan": {
+   "days": [
+    {
+     "day": 1,
+     "meals": [
+      {
+       "meal": "Cena",
+       "name": "Sobrasada lista",
+       "ingredients": [
+        "20 g Sobrasada"
+       ],
+       "recipe": [
+        "Sirve la sobrasada (ya viene cocido)."
+       ]
+      }
+     ]
+    }
+   ]
+  }
+ },
+ {
+  "esperado": "V2",
+  "plan": {
+   "days": [
+    {
+     "day": 1,
+     "meals": [
+      {
+       "meal": "Merienda",
+       "name": "Pie express",
+       "ingredients": [
+        "60 g Masa para pie"
+       ],
+       "recipe": [
+        "Usa la masa para pie (ya viene cocido) y rellena."
+       ]
+      }
+     ]
+    }
+   ]
+  }
+ },
+ {
+  "esperado": "V2",
+  "plan": {
+   "days": [
+    {
+     "day": 1,
+     "meals": [
+      {
+       "meal": "Almuerzo",
+       "name": "Judias express",
+       "ingredients": [
+        "80 g Judias blancas"
+       ],
+       "recipe": [
+        "Sirve las judias blancas (ya esta cocido)."
+       ]
+      }
+     ]
+    }
+   ]
+  }
+ }
+]

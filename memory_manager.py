@@ -9,8 +9,8 @@ import os
 import time
 import json
 import logging
-# [P0-DEEPSEEK-MIGRATION · 2026-06-12] Gemini → DeepSeek.
-from llm_provider import ChatDeepSeek, DEEPSEEK_FLASH
+# [P0-LLM-PROVIDER-MIGRATION · 2026-06-12] Gemini → GLM.
+from llm_provider import ChatGLM, GLM_FLASH
 from langchain_core.messages import RemoveMessage
 
 logger = logging.getLogger(__name__)
@@ -40,9 +40,9 @@ MAX_CHAR_THRESHOLD = 4000   # A partir de cuántos caracteres en total se dispar
 KEEP_RECENT = 10         # Cuántos mensajes recientes conservar sin resumir
 MAX_SUMMARIES = 5        # Umbral para condensar resúmenes en un Master Summary
 
-# [P1-18 + P0-DEEPSEEK-MIGRATION · 2026-06-12] Modelo LLM usado por
+# [P1-18 + P0-LLM-PROVIDER-MIGRATION · 2026-06-12] Modelo LLM usado por
 # `summarize_and_prune` para generar resúmenes y master summaries.
-# Default DeepSeek V4 Flash (tarea aux barata de síntesis). El knob
+# Default GLM-5.3 Flash (tarea aux barata de síntesis). El knob
 # `MEMORY_SUMMARY_MODEL` permite swap inmediato sin redeploy — alineado
 # con el patrón `[P3-PREVIEW-MODEL-KNOB]` del repo.
 #
@@ -52,9 +52,9 @@ MAX_SUMMARIES = 5        # Umbral para condensar resúmenes en un Master Summary
 # [P3-PROD-AUDIT-3 · 2026-05-30] Resuelto vía `_env_str` (no `os.environ.get` crudo)
 # para AUTO-REGISTRARSE en `_KNOBS_REGISTRY` → visible en /health/version y
 # get_knobs_registry_snapshot(). `_env_str` normaliza lower+strip (inocuo:
-# los model IDs DeepSeek ya son lowercase).
+# los model IDs GLM ya son lowercase).
 from knobs import _env_str as _knob_env_str_mm
-MEMORY_SUMMARY_MODEL = _knob_env_str_mm("MEMORY_SUMMARY_MODEL", DEEPSEEK_FLASH)
+MEMORY_SUMMARY_MODEL = _knob_env_str_mm("MEMORY_SUMMARY_MODEL", GLM_FLASH)
 
 
 # [P2-LLM-TIMEOUT-SWEEP · 2026-05-30] Timeout per-invoke de los 2 constructores
@@ -479,7 +479,7 @@ def summarize_and_prune(session_id: str):
         # stack; rollback a `gemini-2.5-flash` stable sin redeploy
         # disponible via env var). Ver narrativa completa en el comment
         # block de la constante a nivel módulo.
-        summary_llm = ChatDeepSeek(
+        summary_llm = ChatGLM(
             model=MEMORY_SUMMARY_MODEL,
             temperature=0.1,
             timeout=_memory_summary_llm_timeout_s(),  # [P2-LLM-TIMEOUT-SWEEP · 2026-05-30]
@@ -575,7 +575,7 @@ def summarize_and_prune(session_id: str):
             
             # Usar .with_structured_output() para garantizar JSON perfecto (0% fallos de parseo).
             # [P1-18] Mismo modelo configurable que el summary_llm de arriba.
-            structured_summary_llm = ChatDeepSeek(
+            structured_summary_llm = ChatGLM(
                 model=MEMORY_SUMMARY_MODEL,
                 temperature=0.1,
                 timeout=_memory_summary_llm_timeout_s(),  # [P2-LLM-TIMEOUT-SWEEP · 2026-05-30]

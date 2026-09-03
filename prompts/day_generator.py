@@ -237,6 +237,9 @@ REGLAS ESTRICTAS:
 # tooltip-anchor: P2-SLOT-SSOT-PROMPT
 try:
     from constants import build_meal_timing_rules as _bmtr_ssot
+    # [P1-COUNTRY-SYSTEM-F1 EXENTO: SIEMPRE DO a propósito — este bloque alimenta
+    # DAY_GENERATOR_SYSTEM_PROMPT, la constante estática que debe seguir siendo el prompt
+    # de RD byte-idéntico (ver comentario arriba). La variante beta vive aparte, abajo.]
     _SLOT_SSOT_RULES_BLOCK = "\n".join(
         _b for _b in (_bmtr_ssot(_s) for _s in ("Desayuno", "Almuerzo", "Cena", "Merienda")) if _b
     ).strip()
@@ -247,6 +250,21 @@ if _SLOT_SSOT_RULES_BLOCK:
         "\n16. CONTRATO EXACTO DEL VALIDADOR DE HORARIO (derivado del SSOT — el gate rechaza "
         "exactamente esto, sin excepciones):\n    " + _SLOT_SSOT_RULES_BLOCK + "\n"
     )
+
+# [P1-COUNTRY-SYSTEM-F1 · 2026-08-16 (Task 4)] Variante BETA del mismo bloque §16 — NO se splicea
+# a DAY_GENERATOR_SYSTEM_PROMPT arriba (ese splice es SIEMPRE DO, por diseño: la CONSTANTE del
+# módulo debe seguir siendo el prompt de RD, byte-idéntico). Esta variante alimenta la fila §16
+# de `_BETA_FRAGMENT_TABLE` (abajo) — el swap en RENDER-TIME que `build_day_generator_system_
+# prompt(diet, country=<beta>)` aplica sobre el render de dieta. 'ES' es un país beta arbitrario:
+# `constants.slot_rules_for_country` no varía POR país beta específico (mismo contenido soft para
+# TODOS), así que `build_meal_timing_rules(..., country=<cualquier beta>)` produce el MISMO
+# string sin importar cuál se use aquí.
+try:
+    _SLOT_SSOT_RULES_BLOCK_BETA = "\n".join(
+        _b for _b in (_bmtr_ssot(_s, country="ES") for _s in ("Desayuno", "Almuerzo", "Cena", "Merienda")) if _b
+    ).strip()
+except Exception:
+    _SLOT_SSOT_RULES_BLOCK_BETA = ""
 
 # [P1-PRECISION-LEVERS · 2026-07-04] (lever 1) Presupuesto CUANTITATIVO de sodio en el system
 # prompt. Evidencia en vivo 2026-07-04: un intento salió con 4,261 mg/día (el gate de sodio lo
@@ -311,6 +329,648 @@ DAY_GENERATOR_SYSTEM_PROMPT = DAY_GENERATOR_SYSTEM_PROMPT + (
     "    - Transformar es la TÉCNICA (cómo se cocina y se presenta), NO cambia los macros: mantén las mismas\n"
     "      cantidades de proteína/carbohidrato/grasa del plato.\n"
 )
+
+
+# [P1-DIET-BLIND-DIRECTIVES · 2026-08-08] El prompt estático de arriba ordena proteína ANIMAL en
+# ≥6 fragmentos (rotación de huevo, "proteína fresca", patrones de almuerzo/cena) sin mirar la
+# dieta — el benchmark del issue #9 midió que la directiva de dieta PRIORIDAD-1 PIERDE contra esas
+# órdenes específicas (atún en el desayuno vegetariano con pools limpios, journal 2026-08-08
+# 01:53-01:55 UTC). Este builder emite el render por dieta REEMPLAZANDO los fragmentos por sus
+# variantes aptas; balanced/pescatarian devuelven la constante intacta (byte-idéntica →
+# prompt-cache preservado; patrón P2-VERIFIED-CATALOG-NOT-FILTERED). Cada fragmento balanced debe
+# existir VERBATIM en la constante — el test ancla `test_p1_diet_blind_directives.py` falla si un
+# edit del prompt los deriva. tooltip-anchor: P1-DIET-BLIND-DIRECTIVES
+_DIET_FRAGMENT_TABLE = [
+    # (balanced_verbatim, vegetarian_repl, vegan_repl)
+    (
+        "para proteína fresca usa pollo, pescado, res, cerdo, huevos o queso — NUNCA agregues pavo por tu cuenta.",
+        "para proteína usa huevos, queso o leguminosas del catálogo — NUNCA agregues pavo ni ningún embutido.",
+        "para proteína usa leguminosas, edamame, maní o semillas del catálogo — NUNCA agregues pavo ni ningún embutido.",
+    ),
+    (
+        "(pollo, pescado blanco, res molida magra, cerdo, atún, camarones, queso fresco/de freír, yogur griego, habichuelas/lentejas/garbanzos)",
+        "(queso fresco/de freír, yogur griego, habichuelas/lentejas/garbanzos, edamame, frutos secos)",
+        "(habichuelas/lentejas/garbanzos, edamame, maní, semillas de girasol/chía, frutos secos)",
+    ),
+    (
+        "en las demás comidas sube la proteína con carne/pescado/lácteos/leguminosas, NO con más huevo",
+        "en las demás comidas sube la proteína con lácteos/leguminosas, NO con más huevo",
+        "en las demás comidas sube la proteína con leguminosas/semillas, NO con más huevo",
+    ),
+    (
+        """       • Bandera: arroz blanco + habichuela guisada + proteína (carne/pollo/pescado) + ensalada/vegetal
+       • Locrio (pollo, cerdo, gandules, arenque, bacalao)
+       • Asopao / sancocho / sopa sustanciosa
+       • Moro de habichuelas/gandules/lentejas + proteína + ensalada
+       • Pasta criolla con proteína (espaguetis con pollo, lasagna, pastelón)
+       • Mofongo/Mangú de almuerzo + proteína guisada
+       • Pescado/pollo/cerdo a la plancha/horno + tubérculo + ensalada/vegetal""",
+        """       • Bandera vegetariana: arroz blanco + habichuela guisada + huevo o queso + ensalada/vegetal
+       • Locrio de gandules (sin embutido) + ensalada
+       • Asopao / sopa sustanciosa de leguminosas y vegetales
+       • Moro de habichuelas/gandules/lentejas + huevo o queso + ensalada
+       • Pasta criolla con vegetales y queso (pastelón de berenjena con queso)
+       • Mofongo/Mangú de almuerzo + revoltillo o queso guisado
+       • Revoltillo/tortilla al horno + tubérculo + ensalada/vegetal""",
+        """       • Bandera vegana: arroz blanco + habichuela guisada + ensalada/vegetal (la leguminosa ES la proteína)
+       • Locrio de gandules (sin embutido) + ensalada
+       • Asopao / sopa sustanciosa de leguminosas y vegetales
+       • Moro de habichuelas/gandules/lentejas + ensalada
+       • Guiso de garbanzos o lentejas + tubérculo + vegetal
+       • Mofongo/Mangú de almuerzo + guiso de leguminosas
+       • Berenjena guisada con garbanzos + tubérculo + ensalada/vegetal""",
+    ),
+    (
+        "las demás comidas del día usan OTRA proteína (pollo, res, cerdo, pescado, atún, queso, yogur, legumbres)",
+        "las demás comidas del día usan OTRA proteína (queso, yogur, habichuelas, lentejas, garbanzos)",
+        "las demás comidas del día usan OTRA proteína (habichuelas, lentejas, garbanzos, edamame, maní, semillas)",
+    ),
+    (
+        """       • Pescado/pollo a la plancha + ensalada + tubérculo distinto al del almuerzo
+       • Tortilla/revoltillo de cena con vegetales + casabe o pan integral
+       • Sopa ligera de pollo/vegetales con proteína magra
+       • Wrap/pita con proteína + vegetales
+       • Bowl de proteína magra + vegetales asados + 1 carbo""",
+        """       • Tortilla/revoltillo de cena con vegetales + casabe o pan integral
+       • Sopa ligera de vegetales con queso o huevo
+       • Wrap/pita de huevo/queso/leguminosas + vegetales
+       • Bowl de queso fresco o leguminosas + vegetales asados + 1 carbo""",
+        """       • Sopa ligera de vegetales con leguminosas
+       • Wrap/pita de leguminosas + vegetales
+       • Bowl de leguminosas + vegetales asados + 1 carbo
+       • Guiso ligero de lentejas o garbanzos + casabe o pan integral""",
+    ),
+    (
+        """         • Pinchitos sencillos (pollo/queso) + fruta
+         • Huevo duro + fruta + nueces""",
+        """         • Pinchitos sencillos de queso + fruta
+         • Huevo duro + fruta + nueces""",
+        """         • Fruta + mantequilla de maní extra o frutos secos
+         • Chia pudding con fruta""",
+    ),
+]
+
+_DIET_PROMPT_RENDER_CACHE = {}
+
+
+def _render_day_generator_prompt_for_diet(canon: str) -> str:
+    """Cuerpo EXACTO pre-T2 de `build_day_generator_system_prompt` (país nativo/None). Extraído
+    SIN CAMBIOS para que el camino país=DO/None sea BYTE-IDÉNTICO al de antes de F1-T2 — mismo
+    objeto (ancla `is`), mismo cache `_DIET_PROMPT_RENDER_CACHE`. balanced/pescatarian → la
+    constante intacta; vegetarian/vegan cachean por variante (3 entradas máx)."""
+    if canon not in ("vegetarian", "vegan"):
+        return DAY_GENERATOR_SYSTEM_PROMPT
+    cached = _DIET_PROMPT_RENDER_CACHE.get(canon)
+    if cached is not None:
+        return cached
+    idx = 1 if canon == "vegetarian" else 2
+    rendered = DAY_GENERATOR_SYSTEM_PROMPT
+    for row in _DIET_FRAGMENT_TABLE:
+        rendered = rendered.replace(row[0], row[idx])
+    _DIET_PROMPT_RENDER_CACHE[canon] = rendered
+    return rendered
+
+
+# [P1-COUNTRY-SYSTEM-F1 · 2026-08-16 (Task 2)] Render por PAÍS, apilado SOBRE el de dieta de
+# arriba. Contrato del plan (§Fase 1): "el fragmento §15 criollo se sustituye por el del país;
+# para DO el retorno es BYTE-IDÉNTICO al actual" — los tests anclados a RD siguen siendo
+# oráculos válidos. `_BETA_FRAGMENT_TABLE` sustituye texto TAL COMO QUEDÓ tras el render de
+# dieta (nunca el verbatim balanced a secas) — la sutileza de composición: para vegetarian/
+# vegan el target es la columna correspondiente de `_DIET_FRAGMENT_TABLE`, no la balanced. Si
+# fuera al revés, un vegetariano español conservaría los patrones de almuerzo/cena BALANCED
+# (con carne): el .replace() de país nunca encontraría ese texto (la dieta ya lo reemplazó) ni
+# el texto vegetariano (nunca fue el target). tooltip-anchor: P1-COUNTRY-SYSTEM-F1
+_COUNTRY_DIRECTIVE_TOKEN = "§PAIS_DIRECTIVE§"  # reemplazado post-loop; ver fila ALMUERZO abajo
+
+# Fila ALMUERZO (fila 4, 1-indexed — mismo índice que en _DIET_FRAGMENT_TABLE[3]): target = la
+# columna correspondiente de _DIET_FRAGMENT_TABLE[3] (Bandera/Locrio/Asopao/Moro/Mofongo tal
+# como quedó tras el render de dieta). El repl beta lleva el sentinel de la directiva de país
+# AL FINAL del bloque — P1-DIET-BLIND-DIRECTIVES midió que una directiva de cabecera SOLA
+# pierde contra órdenes específicas; por eso además de reemplazar la orden, se repite la
+# directiva pegada a ella (no solo arriba del prompt).
+_BETA_LUNCH_TARGET = {
+    "balanced": _DIET_FRAGMENT_TABLE[3][0],
+    "vegetarian": _DIET_FRAGMENT_TABLE[3][1],
+    "vegan": _DIET_FRAGMENT_TABLE[3][2],
+}
+_BETA_LUNCH_REPL = {
+    "balanced": (
+        "       • Plato fuerte: proteína (pollo/pescado/res/cerdo) + cereal o tubérculo + ensalada/vegetal\n"
+        "       • Guiso de leguminosas (lentejas, garbanzos, habichuelas) + proteína + vegetal\n"
+        "       • Pasta con proteína y vegetales (al horno, salteada o con salsa)\n"
+        "       • Salteado estilo asiático: proteína + vegetales + arroz o fideos\n"
+        "       • Bowl mediterráneo: proteína + cereal integral + vegetales + aderezo\n"
+        "       • Proteína a la plancha/horno + tubérculo o cereal + ensalada/vegetal\n"
+        "       • Sopa o guiso sustancioso con proteína, vegetales y cereal/tubérculo\n"
+        f"       {_COUNTRY_DIRECTIVE_TOKEN}"
+    ),
+    "vegetarian": (
+        "       • Plato fuerte vegetariano: huevo o queso + cereal o tubérculo + ensalada/vegetal\n"
+        "       • Guiso de leguminosas (lentejas, garbanzos, habichuelas) + huevo o queso + vegetal\n"
+        "       • Pasta con vegetales y queso (al horno, salteada o con salsa)\n"
+        "       • Salteado estilo asiático: huevo o edamame + vegetales + arroz o fideos\n"
+        "       • Bowl mediterráneo: queso o huevo + cereal integral + vegetales + aderezo\n"
+        "       • Revoltillo o tortilla de vegetales + tubérculo o cereal + ensalada\n"
+        "       • Sopa o guiso sustancioso de leguminosas y vegetales con cereal/tubérculo\n"
+        f"       {_COUNTRY_DIRECTIVE_TOKEN}"
+    ),
+    "vegan": (
+        "       • Plato fuerte vegano: leguminosas (la proteína) + cereal o tubérculo + ensalada/vegetal\n"
+        "       • Guiso de garbanzos o lentejas + tubérculo + vegetal\n"
+        "       • Pasta con leguminosas y vegetales (al horno, salteada o con salsa)\n"
+        "       • Salteado estilo asiático: edamame o leguminosas + vegetales + arroz o fideos\n"
+        "       • Bowl mediterráneo: garbanzos o lentejas + cereal integral + vegetales + aderezo\n"
+        "       • Vegetales guisados con garbanzos + tubérculo + ensalada\n"
+        "       • Sopa o guiso sustancioso de leguminosas y vegetales con cereal/tubérculo\n"
+        f"       {_COUNTRY_DIRECTIVE_TOKEN}"
+    ),
+}
+
+# Fila CENA (fila 6, 1-indexed — _DIET_FRAGMENT_TABLE[5]): variante sin casabe/criollismos. El
+# resto del patrón ya era razonablemente neutro (proteína+ensalada+tubérculo, wrap, bowl, sopa)
+# — el único término local era "casabe", sustituido por "pan integral o tubérculo".
+_BETA_DINNER_TARGET = {
+    "balanced": _DIET_FRAGMENT_TABLE[5][0],
+    "vegetarian": _DIET_FRAGMENT_TABLE[5][1],
+    "vegan": _DIET_FRAGMENT_TABLE[5][2],
+}
+_BETA_DINNER_REPL = {
+    "balanced": (
+        "       • Proteína magra (pescado/pollo/res) a la plancha + ensalada + cereal/tubérculo distinto al del almuerzo\n"
+        "       • Tortilla/revoltillo de cena con vegetales + pan integral o tubérculo\n"
+        "       • Sopa ligera de proteína magra y vegetales\n"
+        "       • Wrap/pita con proteína + vegetales\n"
+        "       • Bowl de proteína magra + vegetales asados + 1 cereal/tubérculo"
+    ),
+    "vegetarian": (
+        "       • Tortilla/revoltillo de cena con vegetales + pan integral o tubérculo\n"
+        "       • Sopa ligera de vegetales con queso o huevo\n"
+        "       • Wrap/pita de huevo/queso/leguminosas + vegetales\n"
+        "       • Bowl de queso fresco o leguminosas + vegetales asados + 1 cereal/tubérculo"
+    ),
+    "vegan": (
+        "       • Sopa ligera de vegetales con leguminosas\n"
+        "       • Wrap/pita de leguminosas + vegetales\n"
+        "       • Bowl de leguminosas + vegetales asados + 1 cereal/tubérculo\n"
+        "       • Guiso ligero de lentejas o garbanzos + pan integral o tubérculo"
+    ),
+}
+
+# Bloque §15 taxonomía criolla — cabecera + a) DESAYUNO (nombra "Mangú" y encuadra TODO el
+# slot-coherence como "cultura dominicana"/"para un dominicano promedio") y e) INGREDIENTES-
+# SNACK PROHIBIDOS (casabe/tostones/totopos de yuca como taxonomía de sustitutos aceptados).
+# Ambos son diet-INVARIANTES (_DIET_FRAGMENT_TABLE no los toca) — la misma sustitución aplica a
+# las 3 columnas de dieta. Alcance documentado (no exhaustivo de todo el §15 — ver reporte de
+# Task 2): b)/d) ya quedan cubiertos arriba (filas ALMUERZO/CENA); c) MERIENDA (salvo su línea
+# de ejemplos prohibidos, abajo), d-bis) y f)/g) NO se tocaron — no colisionan con los tokens
+# duros del test ('Bandera:'/'Locrio'/'Mofongo').
+_S15_HEADER_DESAYUNO_DO = (
+    "15. COHERENCIA POR SLOT (cultura dominicana — el self-critique rechaza si la incumples):\n"
+    "    Cada comida DEBE encajar con su horario. No basta con cuadrar macros: el plato tiene "
+    "que TENER SENTIDO en ese momento del día para un dominicano promedio.\n"
+    "\n"
+    "    a) DESAYUNO: ya cubierto por las 5 categorías asignadas (Mangú, Avena, Pan, Batido, Revoltillo).\n"
+    "       PROHIBIDO: arroz, locrio, asopao, sancocho, pasta, sopas, platos de almuerzo disfrazados."
+)
+_S15_HEADER_DESAYUNO_BETA = (
+    "15. COHERENCIA POR SLOT (contexto internacional — el self-critique rechaza si la incumples):\n"
+    "    Cada comida DEBE encajar con su horario. No basta con cuadrar macros: el plato tiene "
+    "que TENER SENTIDO en ese momento del día para el usuario.\n"
+    "\n"
+    "    a) DESAYUNO: ya cubierto por las 5 categorías asignadas (base de cereal/tubérculo, Avena, Pan, Batido, Revoltillo).\n"
+    "       PROHIBIDO: arroz, guisos de almuerzo, sopas sustanciosas, pasta, platos de almuerzo disfrazados."
+)
+_S15_SNACK_TAXONOMY_DO = (
+    "    e) INGREDIENTES-SNACK PROHIBIDOS COMO COMPONENTE PRINCIPAL (P2-SNACK-AS-MAIN-BLACKLIST · 2026-05-16):\n"
+    "       Estos NUNCA pueden ser la base por peso de un desayuno/almuerzo/cena.\n"
+    "       Solo se permiten como acompañamiento (≤30g por meal) o como snack\n"
+    "       ocasional en merienda (rango ≤80g, una sola vez por semana).\n"
+    "         • Galletas de soda / galletas saladas / galletas tipo Ritz\n"
+    "         • Plátano chips / yuca chips / mariquitas / tostones empacados industriales\n"
+    "         • Palitos de pan, pretzels, palomitas industriales\n"
+    "         • Cereales tipo Corn Flakes/Frosted Flakes (basados en azúcar refinado)\n"
+    "       Si necesitas crujiente o carbohidrato seco en una cena/almuerzo, usa:\n"
+    "         • Casabe (componente principal aceptado en cenas dominicanas)\n"
+    "         • Pan integral tostado (≤2 rebanadas como acompañamiento)\n"
+    "         • Tostones caseros (plátano verde fresco) — distintos de chips industriales\n"
+    "         • Totopos de yuca asada / casabe troceado"
+)
+_S15_SNACK_TAXONOMY_BETA = (
+    "    e) INGREDIENTES-SNACK PROHIBIDOS COMO COMPONENTE PRINCIPAL (P2-SNACK-AS-MAIN-BLACKLIST · 2026-05-16):\n"
+    "       Estos NUNCA pueden ser la base por peso de un desayuno/almuerzo/cena.\n"
+    "       Solo se permiten como acompañamiento (≤30g por meal) o como snack\n"
+    "       ocasional en merienda (rango ≤80g, una sola vez por semana).\n"
+    "         • Galletas saladas / crackers / galletas tipo Ritz\n"
+    "         • Chips de papa/plátano/yuca, mariquitas o snacks fritos empacados industriales\n"
+    "         • Palitos de pan, pretzels, palomitas industriales\n"
+    "         • Cereales tipo Corn Flakes/Frosted Flakes (basados en azúcar refinado)\n"
+    "       Si necesitas crujiente o carbohidrato seco en una cena/almuerzo, usa:\n"
+    "         • Pan plano/wrap integral tostado (componente principal aceptado en cenas ligeras)\n"
+    "         • Pan integral tostado (≤2 rebanadas como acompañamiento)\n"
+    "         • Vegetales asados o al horno — distintos de chips industriales\n"
+    "         • Crackers integrales troceadas o tortitas de arroz"
+)
+
+# Línea de cierre de c) MERIENDA ("Ejemplos PROHIBIDOS"): único sobreviviente de "Locrio" fuera
+# de la fila ALMUERZO — el RED de la primera corrida de la suite lo encontró (mención en un
+# ejemplo negativo, no en un patrón válido). Diet-invariante, self-contained, no colisiona con
+# ninguna fila de _DIET_FRAGMENT_TABLE.
+_S15_MERIENDA_EJEMPLOS_DO = (
+    '       Ejemplos PROHIBIDOS: "Salteado de lentejas", "Locrio de…", "Pechuga al grill con '
+    'puré", "Croquetas horneadas con guarnición", cualquier cosa que parezca un mini-almuerzo.'
+)
+_S15_MERIENDA_EJEMPLOS_BETA = (
+    '       Ejemplos PROHIBIDOS: "Salteado de lentejas", "Guiso de carne con arroz", "Pechuga '
+    'al grill con puré", "Croquetas horneadas con guarnición", cualquier cosa que parezca un '
+    'mini-almuerzo.'
+)
+
+def _diet_invariant(fragment: str) -> dict:
+    """Fila diet-invariante: mismo fragmento en las 3 columnas de dieta (región NO tocada por
+    `_DIET_FRAGMENT_TABLE`). Azúcar sintáctico para no repetir el dict 3 veces por fila —
+    usado SOLO por las filas del fix-round 1 (abajo); las filas originales de Task 2 se
+    dejaron con el dict explícito para no aumentar el diff sobre código ya revisado."""
+    return {"balanced": fragment, "vegetarian": fragment, "vegan": fragment}
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# [P1-COUNTRY-SYSTEM-F1 · 2026-08-16 (Task 2, fix-round 1)] La review encontró las órdenes
+# dominicanas MÁS IMPERATIVAS del prompt viviendo FUERA de §15 — reglas 2/2.5/19 son "REGLA
+# ESTRICTA"/"el validador RECHAZA", exactamente la forma del fallo que P1-DIET-BLIND-DIRECTIVES
+# ya había medido una vez (una directiva de alto nivel pierde contra órdenes específicas) — la
+# cabecera de país (Task 2) no alcanza si la regla 2, dos líneas después, ordena "usa alimentos
+# típicos de República Dominicana" sin condición. Todas diet-invariantes (verificado: ninguna
+# colisiona con un target de `_DIET_FRAGMENT_TABLE`).
+# ─────────────────────────────────────────────────────────────────────────────
+
+# Finding 1 (CRITICAL): regla 2, la declaración MÁS visible del prompt (línea 2 de las REGLAS
+# ESTRICTAS numeradas) — "REGLA ESTRICTA" sin condicionar al país es la contradicción directa
+# de la cabecera. Texto de reemplazo tal cual lo especificó la review.
+_RULE2_INGREDIENTES_DO = (
+    "2. INGREDIENTES DOMINICANOS: El menú usa alimentos típicos, accesibles y económicos de "
+    "República Dominicana."
+)
+_RULE2_INGREDIENTES_BETA = (
+    "2. INGREDIENTES LOCALES: El menú usa alimentos típicos, accesibles y económicos del país "
+    "del usuario (ver PAÍS DEL USUARIO arriba)."
+)
+
+# Finding 2 (CRITICAL): regla 2.5, la tabla staple→plato-criollo (mofongo/mangú/casabe/chacá) +
+# el ancla "paladar dominicano". Se conserva el PRINCIPIO (transformar staples, no servirlos
+# crudos) y TODO lo demás (zero-waste de catálogo, coherencia dulce/salado, no duplicar
+# proteína) — se retira SOLO la tabla de platos criollos y el ancla de paladar nacional.
+_RULE25_TRANSFORM_DO = (
+    '2.5. TRANSFORMA LOS STAPLES EN PLATOS CRIOLLOS APETECIBLES [P2-CREATIVITY-TRANSFORM · 2026-06-29]: NO sirvas el\n'
+    '   staple "crudo/simple" por defecto (ni "proteína a la plancha + arroz blanco" en cada comida). Conviértelo en una\n'
+    '   preparación criolla apetecible, manteniendo CADA componente desglosado en `ingredients` (para que la lista de\n'
+    '   compras lo costee). Ejemplos por staple: harina → panqueques / bollos / arepas / tortillas / empanadas al horno;\n'
+    '   avena → panqueques de avena / overnight oats / avena cremosa; yuca → bollos de yuca / arepitas / casabe / yuca al\n'
+    '   mojo; plátano → mofongo / mangú / tostones; maíz → arepitas / chacá; huevo → tortilla / revoltillo. Aplica\n'
+    '   ESPECIALMENTE a MERIENDA y CENA (no solo al desayuno). La creatividad es en la PREPARACIÓN, NUNCA en inventar\n'
+    '   alimentos fuera del catálogo verificado (regla 5 manda). Mantén la coherencia receta↔ingredientes (regla 8).\n'
+    '   APETECIBILIDAD [P1-DISH-PALATABILITY · 2026-06-30]: la combinación debe ser apetecible para el paladar dominicano,\n'
+    '   NO un disparate. La avena/staples dulces van en preparación DULCE (panqueques/overnight/cremosa), NUNCA en un\n'
+    '   "salteado salado" raro (avena con guisantes y soya = disparate). NO pegues una proteína que no encaje con el plato\n'
+    '   (sardinas/atún en lata dentro de un revoltillo de huevo; marisco en un plato dulce). Si la comida es ligera y ya\n'
+    '   tiene proteína coherente (huevo, queso), NO le añadas una 2ª proteína incongruente solo para subir gramos.'
+)
+_RULE25_TRANSFORM_BETA = (
+    '2.5. TRANSFORMA LOS STAPLES EN PREPARACIONES APETECIBLES [P2-CREATIVITY-TRANSFORM · 2026-06-29]: NO sirvas el\n'
+    '   staple "crudo/simple" por defecto (ni "proteína a la plancha + arroz blanco" en cada comida). Conviértelo en una\n'
+    '   preparación apetecible del contexto local e internacional del usuario, manteniendo CADA componente desglosado en\n'
+    '   `ingredients` (para que la lista de compras lo costee). Ejemplos de transformación: harina → panqueques / tortillas\n'
+    '   / panecillos al horno; avena → panqueques de avena / overnight oats / avena cremosa; tubérculos (yuca, papa,\n'
+    '   batata) → puré / gratín / tortitas al horno; plátano o banana → puré / tortitas / horneado; maíz → tortitas /\n'
+    '   arepas; huevo → tortilla / revoltillo. Aplica ESPECIALMENTE a MERIENDA y CENA (no solo al desayuno). La\n'
+    '   creatividad es en la PREPARACIÓN, NUNCA en inventar alimentos fuera del catálogo verificado (regla 5 manda).\n'
+    '   Mantén la coherencia receta↔ingredientes (regla 8).\n'
+    '   APETECIBILIDAD [P1-DISH-PALATABILITY · 2026-06-30]: la combinación debe ser apetecible para el usuario,\n'
+    '   NO un disparate. La avena/staples dulces van en preparación DULCE (panqueques/overnight/cremosa), NUNCA en un\n'
+    '   "salteado salado" raro (avena con guisantes y soya = disparate). NO pegues una proteína que no encaje con el plato\n'
+    '   (sardinas/atún en lata dentro de un revoltillo de huevo; marisco en un plato dulce). Si la comida es ligera y ya\n'
+    '   tiene proteína coherente (huevo, queso), NO le añadas una 2ª proteína incongruente solo para subir gramos.'
+)
+
+# Finding 3 (CRITICAL): regla 19 — requisito CITADO POR EL VALIDADOR ("el validador RECHAZA"),
+# no prosa decorativa. Se conserva el REQUISITO EXACTO (≥1 preparación transformada/día) —
+# solo se ancla la definición a la cocina local/internacional del usuario en vez de "una
+# preparación dominicana real", y se sustituyen los ejemplos criollos (locrios, mangú, yuca)
+# por técnicas genéricas.
+_RULE19_TRANSFORMADAS_DO = (
+    "19. PREPARACIONES TRANSFORMADAS (el validador RECHAZA un plan de puros staples servidos):\n"
+    "    - Un plato 'transformado' es una PREPARACIÓN dominicana real donde los ingredientes se integran:\n"
+    "      guisos, locrios (almuerzo), panqueques/arepitas con las harinas, bollitos/buñuelos de yuca o\n"
+    "      víveres, revoltillos, tortitas/croquetas al horno, mangú, ensaladas COMPUESTAS. NO cuenta:\n"
+    "      proteína a la plancha + carbo hervido + vegetal crudo suelto servidos por separado (eso es un\n"
+    "      'staple servido' y el validador lo rechaza si el día NO trae ninguna preparación transformada).\n"
+    "    - Incluye AL MENOS una preparación transformada por día — idealmente que la comida principal lo sea.\n"
+    "      Un día entero de puros staples servidos se rechaza y se regenera (pierde tiempo y calidad).\n"
+    "    - Transformar es la TÉCNICA (cómo se cocina y se presenta), NO cambia los macros: mantén las mismas\n"
+    "      cantidades de proteína/carbohidrato/grasa del plato."
+)
+_RULE19_TRANSFORMADAS_BETA = (
+    "19. PREPARACIONES TRANSFORMADAS (el validador RECHAZA un plan de puros staples servidos):\n"
+    "    - Un plato 'transformado' es una PREPARACIÓN real (de la cocina local o internacional del usuario) donde los\n"
+    "      ingredientes se integran: guisos, salteados, panqueques/tortitas con las harinas, bolitas/croquetas al\n"
+    "      horno, revoltillos, gratines, ensaladas COMPUESTAS. NO cuenta:\n"
+    "      proteína a la plancha + carbo hervido + vegetal crudo suelto servidos por separado (eso es un\n"
+    "      'staple servido' y el validador lo rechaza si el día NO trae ninguna preparación transformada).\n"
+    "    - Incluye AL MENOS una preparación transformada por día — idealmente que la comida principal lo sea.\n"
+    "      Un día entero de puros staples servidos se rechaza y se regenera (pierde tiempo y calidad).\n"
+    "    - Transformar es la TÉCNICA (cómo se cocina y se presenta), NO cambia los macros: mantén las mismas\n"
+    "      cantidades de proteína/carbohidrato/grasa del plato."
+)
+
+# Finding 4 (IMPORTANT): 5 frases dispersas que enmarcan reglas GENÉRICAS (sabor, medidas,
+# categorías de merienda, apetecibilidad) como si fueran EXCLUSIVAS de República Dominicana. En
+# los 5 casos la REGLA sigue siendo válida en cualquier país — solo se retira el marco nacional.
+_RULE5_SABOR_DO = "úsalos activamente para dar sabor criollo real a guisos, locrios y habichuelas cuando aparezcan en el catálogo listado."
+_RULE5_SABOR_BETA = "úsalos activamente para dar sabor real a guisos, salteados y leguminosas cuando aparezcan en el catálogo listado."
+
+_RULE8_MEDIDAS_DO = (
+    '8. ESTRUCTURA DE INGREDIENTES Y MEDIDAS CASERAS DOMINICANAS:\n'
+    '   - PREFIERE usar medidas caseras dominicanas siempre que sea posible (ej: "½ plátano verde", "1 taza de arroz", "2 lonjas de queso", "1 pechuga de pollo", "1 cda de aceite").'
+)
+_RULE8_MEDIDAS_BETA = (
+    '8. ESTRUCTURA DE INGREDIENTES Y MEDIDAS CASERAS CLARAS:\n'
+    '   - PREFIERE usar medidas caseras claras o gramos siempre que sea posible (ej: "½ plátano verde", "1 taza de arroz", "2 lonjas de queso", "1 pechuga de pollo", "1 cda de aceite").'
+)
+
+_S15C_MERIENDA_HEADER_DO = "Categorías VÁLIDAS de merienda dominicana:"
+_S15C_MERIENDA_HEADER_BETA = "Categorías VÁLIDAS de merienda:"
+
+# La regla en sí (un vegetal crudo nunca es vehículo de una crema/dip) queda intacta — solo se
+# retira el marco "americana, no dominicana" que la justificaba por nacionalidad.
+_S15C_CRUDITES_DO = (
+    "NO generalices esto a VEGETALES: apio relleno\n"
+    "           de mantequilla de maní, bastones de zanahoria con crema, brócoli al vapor con dip de\n"
+    "           yogurt y demás crudités son merienda de dieta AMERICANA, no dominicana. Aquí un vegetal\n"
+    "           crudo NUNCA es el vehículo de una crema o un dip. El gate determinista los rechaza."
+)
+_S15C_CRUDITES_BETA = (
+    "NO generalices esto a VEGETALES: apio relleno\n"
+    "           de mantequilla de maní, bastones de zanahoria con crema, brócoli al vapor con dip de\n"
+    "           yogurt y demás crudités NO cuentan en esta categoría de merienda. Aquí un vegetal\n"
+    "           crudo NUNCA es el vehículo de una crema o un dip. El gate determinista los rechaza."
+)
+
+_S15F_APETECIBLE_DO = "El plato debe sonar APETECIBLE: piensa si un dominicano se lo comería con gusto."
+_S15F_APETECIBLE_BETA = "El plato debe sonar APETECIBLE: piensa si tu usuario se lo comería con gusto."
+
+# Finding 4f (auto-hallado durante el barrido amplio de la sección "Explícitamente NO tocado":
+# mismo patrón que 4a-4e — una regla UNIVERSAL, sección 12 "HUEVOS: ENTEROS PRIMERO", envuelta
+# en un marco nacional innecesario. No desperdiciar yemas separando huevos es válido en
+# cualquier cocina, no solo la dominicana.
+_RULE12_HUEVOS_DESPERDICIO_DO = "desperdicio real en cocina dominicana"
+_RULE12_HUEVOS_DESPERDICIO_BETA = "desperdicio real en la cocina"
+
+# [P1-DAYGEN-PROMPT-NO-NEUTRALIZE · 2026-08-23] Guías POSITIVAS que no pertenecen al
+# neutralizador léxico global: aquí no se renombra ningún alimento canónico ni se inventa un
+# alias. El render beta deja de ordenar alimentos DO concretos y vuelve a la fuente que sí conoce
+# la oferta válida del usuario: los pools + el catálogo verificado. Las reglas negativas/técnicas
+# que sólo usan un alimento como ejemplo se preservan y pasan por el SSOT más abajo.
+_RULE2_AJI_CUBANELA_DO = (
+    "   - AJÍ MORRÓN ≠ AJÍ CUBANELA (son ingredientes DISTINTOS — no los confundas ni los intercambies):\n"
+    '     • "Ají morrón" = pimiento dulce / campana (rojo, verde o amarillo), grueso y carnoso. Úsalo cuando el plato lleva el pimiento dulce como PROTAGONISTA o como recipiente: "pimientos rellenos" / "morrones rellenos", fajitas, ensaladas, salteados con pimiento dulce, brochetas, pollo a la jardinera.\n'
+    '     • "Ají cubanela" = ají verde alargado y delgado de cocina. Úsalo SOLO como base de sazón/sofrito en guisos, habichuelas, carnes guisadas. NUNCA para rellenar.\n'
+    '     • REGLA DURA: para CUALQUIER plato de "rellenos" donde el pimiento es el que se rellena, el ingrediente DEBE ser "Ají morrón" (jamás "ají cubanela"). Si nombras un plato "Pimientos Rellenos", el ingrediente es "Ají morrón".'
+)
+_RULE2_AJI_CUBANELA_BETA = (
+    "   - PIMIENTO MORRÓN PARA RELLENOS (no confundas ingredientes parecidos del catálogo):\n"
+    "     • Para platos rellenos usa el pimiento morrón verificado del catálogo, que es grueso y carnoso.\n"
+    '     • REGLA DURA: si nombras un plato "Pimientos Rellenos", el ingrediente que actúa como recipiente DEBE ser "Ají morrón".'
+)
+
+_S15C_BATIDO_FRUTAS_DO = "         • Batido proteico con frutas (mamey, lechosa, guineo, fresas)"
+_S15C_BATIDO_FRUTAS_BETA = "         • Batido proteico con una fruta del pool asignado"
+
+_S15C_FRUTA_MANI_DO = (
+    "         • Fruta + mantequilla de maní/almendras (manzana con pb, guineo con pb) — SOLO FRUTA."
+)
+_S15C_FRUTA_MANI_BETA = (
+    "         • Fruta del pool asignado + mantequilla de maní/almendras — SOLO FRUTA."
+)
+
+_S15F_ROTACION_FRUTA_DO = (
+    "la merienda usa OTRA fruta (lechosa, guineo, fresa, piña, manzana…)"
+)
+_S15F_ROTACION_FRUTA_BETA = "la merienda usa OTRA fruta DEL POOL ASIGNADO"
+
+_S15G_FORMATOS_DO = "horneada (arepitas, panqueques, tortitas)"
+_S15G_FORMATOS_BETA = "horneada (tortitas, panqueques, preparaciones al horno)"
+
+# [P1-COUNTRY-SYSTEM-F2 · 2026-08-17 (Task 9, F5)] Los 2 sobrevivientes que el barrido con el
+# token-set AMPLIADO (casabe/moro/arepitas añadidos a `_DOMINICAN_TOKEN_RX` en el test) midió
+# como BUGS reales (no residuo incidental documentado): ambos PRESENTAN casabe como opción
+# VÁLIDA/RECOMENDADA para el usuario beta, a diferencia de las menciones incidentales que quedan
+# documentadas en el test (nota de técnica de cocción P1-CASABE-NO-BOIL, enumeraciones de
+# carbohidrato ya presente, ejemplos ilustrativos de formato) — esas SÍ generalizan a cualquier
+# país (el nombre del alimento es incidental a la regla), estas dos ORDENAN casabe como el
+# carbo/merienda a elegir.
+
+# Finding F5a: c) MERIENDA — bullet de "Categorías VÁLIDAS de merienda dominicana" que ofrece
+# casabe como opción. El header de esta lista ya lo cubre `_S15C_MERIENDA_HEADER_*` (finding 4c)
+# pero NO el cuerpo de bullets — este es el bullet específico, diet-invariante.
+_S15C_MERIENDA_CASABE_BULLET_DO = "         • Casabe / galletas integrales + queso bajo en sodio O aguacate"
+_S15C_MERIENDA_CASABE_BULLET_BETA = "         • Tostada integral / galletas integrales + queso bajo en sodio O aguacate"
+
+# Finding F5b: d) CENA — la frase de ROTACIÓN de carbohidrato de cena recomienda casabe como
+# alternativa al arroz. El párrafo "ARROZ DE NOCHE" (locrio/moro/asopao/paella/risotto
+# PROHIBIDOS en cena) que la PRECEDE queda intacto y SOLO para DO — es la prohibición ya
+# documentada como sobreviviente clase B en el test (universal, el nombre del plato prohibido es
+# incidental; la spec la nombra explícitamente en Fase 1 vía `_detect_slot_appropriateness`).
+# Solo se retira "casabe" de la lista de alternativas — batata/yuca/ñame se preservan
+# (ya tratados como neutros por el resto de _BETA_FRAGMENT_TABLE, ver comentario de fila CENA).
+_S15D_CARB_ROTATION_DO = (
+    "Rota a otro carbo de cena: batata, yuca, ñame, casabe o pan integral (NUNCA arroz)."
+)
+_S15D_CARB_ROTATION_BETA = (
+    "Rota a otro carbohidrato del pool asignado distinto del arroz (NUNCA arroz)."
+)
+
+# (target_por_dieta, beta_repl_por_dieta) — mismo shape de fila que _DIET_FRAGMENT_TABLE, pero
+# cada valor es un dict {"balanced"|"vegetarian"|"vegan": fragmento}. `build_day_generator_
+# system_prompt` aplica CADA fila con la columna de dieta activa (`beta_key`, colapsa
+# pescatarian → "balanced", igual que el render de dieta ya hace).
+_BETA_FRAGMENT_TABLE = [
+    (_BETA_LUNCH_TARGET, _BETA_LUNCH_REPL),
+    (_BETA_DINNER_TARGET, _BETA_DINNER_REPL),
+    (
+        {"balanced": _S15_HEADER_DESAYUNO_DO, "vegetarian": _S15_HEADER_DESAYUNO_DO, "vegan": _S15_HEADER_DESAYUNO_DO},
+        {"balanced": _S15_HEADER_DESAYUNO_BETA, "vegetarian": _S15_HEADER_DESAYUNO_BETA, "vegan": _S15_HEADER_DESAYUNO_BETA},
+    ),
+    (
+        {"balanced": _S15_SNACK_TAXONOMY_DO, "vegetarian": _S15_SNACK_TAXONOMY_DO, "vegan": _S15_SNACK_TAXONOMY_DO},
+        {"balanced": _S15_SNACK_TAXONOMY_BETA, "vegetarian": _S15_SNACK_TAXONOMY_BETA, "vegan": _S15_SNACK_TAXONOMY_BETA},
+    ),
+    (
+        {"balanced": _S15_MERIENDA_EJEMPLOS_DO, "vegetarian": _S15_MERIENDA_EJEMPLOS_DO, "vegan": _S15_MERIENDA_EJEMPLOS_DO},
+        {"balanced": _S15_MERIENDA_EJEMPLOS_BETA, "vegetarian": _S15_MERIENDA_EJEMPLOS_BETA, "vegan": _S15_MERIENDA_EJEMPLOS_BETA},
+    ),
+    # ── fix-round 1 (findings 1-4) ──────────────────────────────────────────
+    (_diet_invariant(_RULE2_INGREDIENTES_DO), _diet_invariant(_RULE2_INGREDIENTES_BETA)),         # finding 1
+    (_diet_invariant(_RULE25_TRANSFORM_DO), _diet_invariant(_RULE25_TRANSFORM_BETA)),             # finding 2
+    (_diet_invariant(_RULE19_TRANSFORMADAS_DO), _diet_invariant(_RULE19_TRANSFORMADAS_BETA)),     # finding 3
+    (_diet_invariant(_RULE5_SABOR_DO), _diet_invariant(_RULE5_SABOR_BETA)),                       # finding 4a
+    (_diet_invariant(_RULE8_MEDIDAS_DO), _diet_invariant(_RULE8_MEDIDAS_BETA)),                   # finding 4b
+    (_diet_invariant(_S15C_MERIENDA_HEADER_DO), _diet_invariant(_S15C_MERIENDA_HEADER_BETA)),     # finding 4c
+    (_diet_invariant(_S15C_CRUDITES_DO), _diet_invariant(_S15C_CRUDITES_BETA)),                   # finding 4d
+    (_diet_invariant(_S15F_APETECIBLE_DO), _diet_invariant(_S15F_APETECIBLE_BETA)),               # finding 4e
+    (_diet_invariant(_RULE12_HUEVOS_DESPERDICIO_DO), _diet_invariant(_RULE12_HUEVOS_DESPERDICIO_BETA)),  # finding 4f
+    # ── G05: guías positivas fuera del SSOT vuelven a pools+catálogo ─────────────────────────
+    (_diet_invariant(_RULE2_AJI_CUBANELA_DO), _diet_invariant(_RULE2_AJI_CUBANELA_BETA)),
+    (_diet_invariant(_S15C_BATIDO_FRUTAS_DO), _diet_invariant(_S15C_BATIDO_FRUTAS_BETA)),
+    (_diet_invariant(_S15C_FRUTA_MANI_DO), _diet_invariant(_S15C_FRUTA_MANI_BETA)),
+    (_diet_invariant(_S15F_ROTACION_FRUTA_DO), _diet_invariant(_S15F_ROTACION_FRUTA_BETA)),
+    (_diet_invariant(_S15G_FORMATOS_DO), _diet_invariant(_S15G_FORMATOS_BETA)),
+    # ── Fase 2, Task 9 (F5): sobrevivientes casabe medidos con el token-set ampliado ─────────
+    (_diet_invariant(_S15C_MERIENDA_CASABE_BULLET_DO), _diet_invariant(_S15C_MERIENDA_CASABE_BULLET_BETA)),  # F5a
+    (_diet_invariant(_S15D_CARB_ROTATION_DO), _diet_invariant(_S15D_CARB_ROTATION_BETA)),                    # F5b
+    # ── Task 4 (F1-T4): §16 CONTRATO EXACTO DEL VALIDADOR DE HORARIO ────────
+    # Target = _SLOT_SSOT_RULES_BLOCK, el MISMO bloque que el splice de import-time (arriba)
+    # appendea a DAY_GENERATOR_SYSTEM_PROMPT — diet-invariante (SLOT_INAPPROPRIATE_FOODS/
+    # SLOT_POSITIVE_HINT no varían por dieta, así que _DIET_FRAGMENT_TABLE nunca lo toca; verbatim
+    # en las 3 columnas de dieta). Replacement = _SLOT_SSOT_RULES_BLOCK_BETA (build_meal_timing_
+    # rules país-aware, T4). Guard `if target:` en build_day_generator_system_prompt (abajo)
+    # protege el caso _SLOT_SSOT_RULES_BLOCK == "" (fail-safe del try/except de arriba) — un
+    # target vacío nunca llega a .replace() (evita el landmine de "".replace("", X)).
+    (_diet_invariant(_SLOT_SSOT_RULES_BLOCK), _diet_invariant(_SLOT_SSOT_RULES_BLOCK_BETA)),      # Task 4 · §16
+]
+
+# Única whitelist de la neutralización final: Casabe es un identificador vivo que G04 retira de
+# la OFERTA beta, pero esta frase no lo ofrece. Documenta el incidente de cocción y generaliza la
+# defensa a toda la clase de panes/tortas ya cocidos. Enmascararla evita el absurdo semántico
+# «pan tostado integral es una torta seca de yuca». Todo otro término del SSOT debe desaparecer.
+_BETA_NEUTRALIZATION_SURVIVORS = (
+    'TÉCNICA CORRECTA POR ALIMENTO [P1-CASABE-NO-BOIL · 2026-07-30]: el CASABE es una torta seca de yuca YA COCIDA — se sirve tal cual, se tuesta o se calienta en sartén/horno 1-2 min; JAMÁS se hierve, se cocina en agua ni "se deja reposar tapado" como si fuera arroz (un plan real instruyó "Cocina Casabe en 1½ tazas de agua con sal, tapa y hierve 15 minutos" — eso arruina el plato). Lo mismo aplica a pan, tostadas, galletas y tortillas ya horneadas: NUNCA les apliques la plantilla de cocción de granos (proporción agua:grano, hervir, reposar). Esa plantilla es SOLO para arroz, bulgur, quinoa, avena y granos crudos.',
+)
+
+_COUNTRY_PROMPT_RENDER_CACHE = {}
+
+
+# [P2-CATALOG-ACHIOTE-MX-PR · 2026-08-23] SSOT de los ejemplos de «prohibido» de la regla 5.
+#
+# Medido cruzando el render del catálogo verificado contra su propia prosa: el bloque le decía al
+# mexicano y al puertorriqueño que OMITIERA el achiote y en la misma pantalla le ofrecía 'Achiote',
+# 'Aceite de achiote' y 'Sazón con culantro y achiote'; y a los SEIS países les prohibía la salsa de
+# soya y la mostaza, ambas filas vivas del catálogo (DO incluido). Es exactamente la
+# auto-contradicción que `P1-SPICES-CATALOG-SYNC` arregló a mano el 2026-07-01 para las especias del
+# lote 2, con su modo de fallo ya medido: «el LLM omitía sazones legítimas y los guisos salían
+# desabridos». El achiote es la base del pernil y del sofrito puertorriqueño.
+#
+# Escribir la lista a mano es lo que la hace envejecer: se arregló una vez y volvió a driftar en
+# cuanto Fase 2 dio de alta 141 filas. Por eso los ejemplos ya no se afirman, se DERIVAN: se filtra
+# de este literal todo el que el catálogo verificado ofrezca para ESE usuario. Una sola tupla para
+# las dos superficies (regla 5 aquí, prosa del bloque de catálogo en `graph_orchestrator`) — dos
+# listas serían dos tablas, y este repo ya sabe cómo terminan.
+PROHIBITED_EXAMPLE_FOODS = (
+    "achiote", "sazón en polvo", "clavo dulce", "pimienta de olor", "SALSA DE SOYA",
+    "salsa inglesa/Worcestershire", "salsa de pescado", "teriyaki", "BBQ", "mostaza",
+    "miel si no está listada",
+)
+
+# El literal TAL COMO vive dentro de la regla 5 (incluido el espacio de delante: si no queda ningún
+# ejemplo, se va también el espacio y la frase no se queda coja).
+RULE5_PROHIBITED_EXAMPLES_LITERAL = " (ej. " + ", ".join(PROHIBITED_EXAMPLE_FOODS) + ")"
+
+
+def prohibited_examples_not_offered(examples, offered_names) -> list:
+    """Los ejemplos de «prohibido» que el catálogo verificado NO le ofrece a este usuario.
+
+    Comparación por subcadena sin acentos y en minúsculas contra los NOMBRES del catálogo, no al
+    revés: la fila se llama 'Aceite de achiote' y el ejemplo es 'achiote'. Sin catálogo (lista
+    vacía) devuelve los ejemplos intactos — quedarse sin la advertencia es peor que repetirla.
+    """
+    if not offered_names:
+        return list(examples)
+    try:
+        from constants import strip_accents
+    except Exception:
+        def strip_accents(_s):
+            import unicodedata
+            return "".join(c for c in unicodedata.normalize("NFKD", str(_s))
+                           if not unicodedata.combining(c))
+    _offered = [strip_accents(str(n).lower()) for n in offered_names]
+    return [ex for ex in examples
+            if not any(strip_accents(str(ex).lower()) in _n for _n in _offered)]
+
+
+def strip_offered_prohibited_examples(prompt_text: str, offered_names) -> str:
+    """Reescribe los ejemplos de la regla 5 dejando fuera lo que el catálogo SÍ ofrece.
+
+    Idempotente y fail-open: si el literal no está (prompt distinto, regla reescrita) devuelve el
+    texto tal cual. La regla en sí —«PROHIBIDO inventar o usar cualquier alimento fuera del
+    catálogo»— no se toca nunca: lo que se poda son los EJEMPLOS que la contradecían.
+    """
+    if not isinstance(prompt_text, str) or RULE5_PROHIBITED_EXAMPLES_LITERAL not in prompt_text:
+        return prompt_text
+    kept = prohibited_examples_not_offered(PROHIBITED_EXAMPLE_FOODS, offered_names)
+    if len(kept) == len(PROHIBITED_EXAMPLE_FOODS):
+        return prompt_text
+    repl = (" (ej. " + ", ".join(kept) + ")") if kept else ""
+    return prompt_text.replace(RULE5_PROHIBITED_EXAMPLES_LITERAL, repl)
+
+
+def build_day_generator_system_prompt(diet=None, country=None) -> str:
+    """Render del system prompt del day-gen por dieta canónica Y país (F1-T2), apilado SOBRE
+    el render de dieta. `country` None/'DO' (o desconocido — `canonicalize_country` fail-safe)
+    ⇒ camino EXACTO pre-T2 (`_render_day_generator_prompt_for_diet`, mismo objeto para
+    balanced/pescatarian). País BETA (ES/US/MX/PR/CO) ⇒ arranca del render de dieta, aplica
+    `_BETA_FRAGMENT_TABLE` (almuerzo/cena/§15) y antepone la cabecera de país. Cacheado por
+    (dieta_beta, país) en `_COUNTRY_PROMPT_RENDER_CACHE` — ≤3×5 entradas (pescatarian colapsa
+    a la entrada 'balanced')."""
+    from constants import (
+        canonicalize_diet_type,
+        canonicalize_country,
+        COUNTRY_PROFILES,
+        neutralize_do_lexicon,
+    )
+    canon = canonicalize_diet_type(diet)
+    canon_country = canonicalize_country(country)
+    if canon_country == "DO":
+        return _render_day_generator_prompt_for_diet(canon)
+
+    beta_key = canon if canon in ("vegetarian", "vegan") else "balanced"
+    cache_key = (beta_key, canon_country)
+    cached = _COUNTRY_PROMPT_RENDER_CACHE.get(cache_key)
+    if cached is not None:
+        return cached
+
+    rendered = _render_day_generator_prompt_for_diet(canon)
+    for target_por_dieta, beta_repl_por_dieta in _BETA_FRAGMENT_TABLE:
+        target = target_por_dieta.get(beta_key)
+        repl = beta_repl_por_dieta.get(beta_key)
+        if target and repl:
+            rendered = rendered.replace(target, repl)
+
+    name_es = COUNTRY_PROFILES.get(canon_country, {}).get("name_es", canon_country)
+    one_liner = (
+        f"[PAÍS: {name_es} — cocina para su contexto local e internacional; "
+        "los platos dominicanos NO son requisito ni default.]"
+    )
+    rendered = rendered.replace(_COUNTRY_DIRECTIVE_TOKEN, one_liner)
+    header = (
+        f"\nPAÍS DEL USUARIO: {name_es}. Cocina para su contexto local e internacional; "
+        "los platos dominicanos NO son requisito ni default.\n"
+    )
+    rendered = header + rendered
+
+    # G05: la tabla de fragmentos puede introducir léxico nuevo, por eso el SSOT corre al FINAL.
+    # Los sentinels sólo protegen reglas técnicas explícitamente auditadas; se restauran antes de
+    # cachear para que todos los consumidores reciban el texto final, nunca una forma intermedia.
+    preserved = []
+    for index, survivor in enumerate(_BETA_NEUTRALIZATION_SURVIVORS):
+        if survivor in rendered:
+            sentinel = f"§DAYGEN-DO-LEXICON-SURVIVOR-{index}§"
+            rendered = rendered.replace(survivor, sentinel)
+            preserved.append((sentinel, survivor))
+
+    rendered = neutralize_do_lexicon(rendered)
+    for sentinel, survivor in preserved:
+        rendered = rendered.replace(sentinel, survivor)
+
+    _COUNTRY_PROMPT_RENDER_CACHE[cache_key] = rendered
+    return rendered
 
 
 # Proteínas restringidas que SOLO pueden usarse si el planner las asignó explícitamente.
@@ -512,7 +1172,7 @@ def build_slot_targets_block(daily_targets: dict, meal_types: list) -> str:
 
 def build_day_assignment_context(skeleton_day: dict, day_num: int, day_name: str = None,
                                  daily_targets: dict = None, user_staples: list = None,
-                                 small_universe: bool = False) -> str:
+                                 small_universe: bool = False, diet_type=None, country=None) -> str:
     """Genera el bloque de contexto con la asignación del planificador para un día.
 
     [P1-STAPLE-FOODS · 2026-08-02] `user_staples` (lista de nombres del catálogo, máx 8 — ver
@@ -521,7 +1181,14 @@ def build_day_assignment_context(skeleton_day: dict, day_num: int, day_name: str
     MEALFIT_SMALL_UNIVERSE_THRESHOLD alimentos distintos — ver `graph_orchestrator.
     _small_universe_active`) inyecta la directiva de variar por TÉCNICA/FORMATO en vez de por
     ingrediente. Ambos default a "sin básicos"/"universo normal" → prompt byte-idéntico al
-    pre-staples para callers que no los pasan (self_critique/surgical-regen callsites)."""
+    pre-staples para callers que no los pasan (self_critique/surgical-regen callsites).
+
+    [P1-COUNTRY-SYSTEM-F1 · 2026-08-16 (T4)] `country` (default None, fail-safe de
+    canonicalize_country ⇒ 'DO') selecciona la frase de "adapta el estilo" del bloque de día de
+    la semana: DO ⇒ literal EXACTO ("según la cultura dominicana"); beta ⇒ "según la cultura
+    local del usuario". Los 3 callers conocidos (generate_days_parallel_node, self_critique_node,
+    surgical_marker_regen_node) YA derivan y pasan el país (T4); un caller futuro que no lo pase
+    sigue tomando el camino DO por defecto — byte-idéntico."""
     import re as _re
     pool_str = ', '.join(skeleton_day.get('protein_pool', []))
     pool_lower = pool_str.lower()
@@ -586,10 +1253,30 @@ def build_day_assignment_context(skeleton_day: dict, day_num: int, day_name: str
             f"yogurt, frutos secos, mantequilla de maní (estas son OK siempre, no cuentan como 'otra carne')."
         )
 
-    day_name_block = f"\n• Día de la Semana: {day_name}\n  (💡 INSTRUCCIÓN: Adapta el estilo y practicidad de las recetas a este día según la cultura dominicana. Ej: Fines de semana permiten platos más tradicionales o relajados; días de semana requieren mayor practicidad)." if day_name else ""
+    from constants import canonicalize_country as _cc_bdac
+    _cultura_txt = ("según la cultura dominicana" if _cc_bdac(country) == "DO"
+                    else "según la cultura local del usuario")
+    day_name_block = f"\n• Día de la Semana: {day_name}\n  (💡 INSTRUCCIÓN: Adapta el estilo y practicidad de las recetas a este día {_cultura_txt}. Ej: Fines de semana permiten platos más tradicionales o relajados; días de semana requieren mayor practicidad)." if day_name else ""
 
     breakfast_cat = skeleton_day.get('breakfast_category', '')
-    breakfast_block = f"\n• 🍳 CATEGORÍA DE DESAYUNO ASIGNADA: {breakfast_cat}\n  (⚠️ OBLIGATORIO: El desayuno de este día DEBE ser de esta categoría. NO uses mangú/tubérculos si la categoría asignada es otra)." if breakfast_cat else ""
+    # [P1-COUNTRY-SYSTEM-F1 · 2026-08-16 (FINAL-FIX F1a)] La categoría A del schema
+    # (`breakfast_category`, schemas.py) es un ENUM VALUE interno ('Mangú/Tubérculos') — NO se
+    # toca (otros consumidores, ej. graph_orchestrator.py:8870, leen ese mismo valor exacto para
+    # el brief anti-repetición cross-day). Lo que se traduce es SOLO la LABEL mostrada al LLM en
+    # este bloque, reusando el `country` que la función YA recibe (T4) — nunca una 2ª derivación.
+    # DO ⇒ byte-idéntico (label + advertencia intactas).
+    _bdac_beta = _cc_bdac(country) != "DO"
+    _breakfast_cat_label = (
+        "Tubérculos/plátano (preparación local)"
+        if _bdac_beta and breakfast_cat == "Mangú/Tubérculos"
+        else breakfast_cat
+    )
+    _breakfast_cat_warn = "tubérculo/plátano" if _bdac_beta else "mangú/tubérculos"
+    breakfast_block = (
+        f"\n• 🍳 CATEGORÍA DE DESAYUNO ASIGNADA: {_breakfast_cat_label}\n"
+        f"  (⚠️ OBLIGATORIO: El desayuno de este día DEBE ser de esta categoría. "
+        f"NO uses {_breakfast_cat_warn} si la categoría asignada es otra)."
+    ) if breakfast_cat else ""
 
     # [P1-PRECISION-LEVERS · 2026-07-04] (lever 2) Anti-repetición ENTRE DÍAS: los días se generan
     # en PARALELO (asyncio.gather) y no se ven entre sí — el "salteado ×3" / "revoltillo ×3" solo lo
@@ -624,7 +1311,11 @@ def build_day_assignment_context(skeleton_day: dict, day_num: int, day_name: str
     dish_library_block = ""
     try:
         from dish_library import build_dish_library_context
-        dish_library_block = build_dish_library_context(skeleton_day, day_num) or ""
+        # [P1-DISH-LIBRARY-COUNTRY · 2026-08-21] `country` YA llegaba a esta función desde
+        # `graph_orchestrator`; el bloque de inspiración era el único de su cuerpo que no lo
+        # pasaba, así que un mexicano recibía ocho platos dominicanos por día en el tramo más
+        # concreto del prompt mientras sus 49 plantillas dormían en disco.
+        dish_library_block = build_dish_library_context(skeleton_day, day_num, country=country) or ""
     except Exception:
         dish_library_block = ""
 
@@ -682,8 +1373,33 @@ def build_day_assignment_context(skeleton_day: dict, day_num: int, day_name: str
             f"cena. Si el desayuno o la merienda ya llevan una de las dos, tanto mejor variar."
         )
 
+    # [P1-DIET-BLIND-DIRECTIVES · 2026-08-08] La versión balanced de este bloque ordenaba
+    # "prioriza proteína animal magra (pollo, pescado, res...)" también a dietas veg* — una de las
+    # órdenes que le ganaban a la directiva de dieta PRIORIDAD-1 (issue #9). El render veg* rota
+    # entre fuentes aptas del SSOT; vegan además omite el ancla de queso (sugerir "máximo 1 comida
+    # con queso" a un vegano implica que el queso es usable). Sin diet_type → byte-idéntico.
+    _diet_canon_ctx = None
+    try:
+        from constants import canonicalize_diet_type as _cdt, diet_protein_suggestions as _dps
+        _diet_canon_ctx = _cdt(diet_type) if diet_type else None
+    except Exception:
+        _diet_canon_ctx = None
     protein_diversity_block = ""
-    if _protein_diversity_on:
+    if _protein_diversity_on and _diet_canon_ctx == "vegan":
+        protein_diversity_block = (
+            "\n• ⚠️ DIVERSIDAD DE PROTEÍNA (dieta vegana): varía la fuente proteica entre las "
+            f"comidas del día ({_dps('vegan')}). Evita que 2+ comidas del mismo día dependan de la "
+            "MISMA fuente (ej. maní en desayuno Y merienda): rota leguminosa ↔ semillas ↔ edamame."
+        )
+    elif _protein_diversity_on and _diet_canon_ctx == "vegetarian":
+        protein_diversity_block = (
+            "\n• ⚠️ DIVERSIDAD DE PROTEÍNA (dieta vegetariana): el queso (de freír, cottage, crema, "
+            "blanco) es ALTO EN SODIO — úsalo como proteína PRINCIPAL en máximo 1 comida del día, NO "
+            f"en varias. Para el resto de las comidas rota entre las fuentes aptas ({_dps('vegetarian')}). "
+            "Evita que 2+ comidas del mismo día dependan del queso para su proteína: aporta menos "
+            "variedad y dispara el sodio del día."
+        )
+    elif _protein_diversity_on:
         protein_diversity_block = (
             "\n• ⚠️ DIVERSIDAD DE PROTEÍNA: el queso (de freír, cottage, crema, blanco) es ALTO EN SODIO — "
             "úsalo como proteína PRINCIPAL en máximo 1 comida del día, NO en varias. Para el resto de las "

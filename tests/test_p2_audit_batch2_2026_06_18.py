@@ -10,6 +10,8 @@ Determinista (funcional para los helpers puros + parser-anchors para crons/wirin
 """
 from __future__ import annotations
 
+import pytest
+
 import os
 import sys
 from pathlib import Path
@@ -18,7 +20,13 @@ _BE = Path(__file__).resolve().parent.parent
 _CRON = (_BE / "cron_tasks.py").read_text(encoding="utf-8")
 _GO = (_BE / "graph_orchestrator.py").read_text(encoding="utf-8")
 _PLANS = (_BE / "routers" / "plans.py").read_text(encoding="utf-8")
-_PLAN_JSX = (_BE.parent / "frontend" / "src" / "pages" / "Plan.jsx").read_text(encoding="utf-8")
+@pytest.fixture(scope="module", autouse=True)
+def _load_frontend_sibling_sources(frontend_repo_path):
+    # La fixture compartida salta el módulo antes de cualquier I/O si falta el hermano.
+    _ = frontend_repo_path
+    global _PLAN_JSX
+    _PLAN_JSX = (_BE.parent / "frontend" / "src" / "pages" / "Plan.jsx").read_text(encoding="utf-8")
+
 
 
 # --------------------------------------------------------------------------- #8 validation helpers (funcional)

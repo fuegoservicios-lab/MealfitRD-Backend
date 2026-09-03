@@ -39,6 +39,13 @@ from fastapi import APIRouter, BackgroundTasks, Body, Depends, HTTPException
 from pydantic import BaseModel, Field
 
 from auth import get_verified_user_id
+# [P1-GUEST-CATALOG · 2026-08-11] El catálogo responde también sin sesión; el limitador
+# es su contrapeso. Mismo singleton de módulo que usan los de `routers/plans.py`, que
+# ya sabe agrupar por `ip:<host>` cuando no hay usuario (extensión P1-6).
+from rate_limiter import RateLimiter
+# [P1-SCAN-CATALOG-MATCH · 2026-08-10] La resolución «texto libre → alimento del
+# catálogo» es SSOT en constants, junto a `pantry_names_match`.
+from constants import pantry_names_match, resolve_scanned_food
 
 logger = logging.getLogger(__name__)
 
@@ -422,7 +429,20 @@ _VISION_PROMPT = (
     # banana dulce = 'guineo' en RD, no 'platano' (alimento distinto).
     "OJO en RD: el GUINEO es la banana dulce (delgada, curva, cascara fina, se "
     "come cruda) - NO lo llames platano; el PLATANO es mas grande y grueso y se "
-    "cocina. Responde SOLO el JSON."
+    "cocina. "
+    # [P1-SCAN-BREAD-GENERIC · 2026-08-10] El dueño fotografio pan de agua y salio
+    # «pan de hot dog». El modelo no tiene por que acertar el tipo de pan desde una
+    # foto en una funda, y aqui equivocarse SI cuesta: el catalogo no tiene ni «pan
+    # de agua» ni «pan de hot dog», asi que un tipo inventado se queda sin match y
+    # el usuario no puede agregar su pan — mientras que «pan» a secas es alias de
+    # «Pan blanco familiar» y entra. Preferir el generico no es rendirse: es que el
+    # nombre generico SI existe en el catalogo y el especifico inventado no.
+    "OJO tambien con el PAN: en RD el pan de agua y el pan sobao son panes de mesa "
+    "(sueltos, redondos u ovalados, NO vienen rebanados en funda) y no son pan de "
+    "hot dog ni de hamburguesa (esos vienen ya partidos para rellenar). Si ves pan "
+    "y no distingues el tipo con CERTEZA, escribe simplemente 'pan' - vale mas el "
+    "nombre generico que acertar el tipo por suerte. "
+    "Responde SOLO el JSON."
 )
 
 
@@ -472,29 +492,33 @@ def vision_scan_provider() -> str:
     return (os.environ.get("MEALFIT_VISION_PROVIDER") or "off").strip().lower()
 
 
-def _norm_food_name(s: str) -> str:
-    import unicodedata
-    s = unicodedata.normalize("NFD", str(s or "").lower())
-    return "".join(c for c in s if not unicodedata.combining(c)).strip()
-
-
 def _match_catalog(detected_name: str, catalog: list) -> Optional[Dict[str, Any]]:
-    """Match laxo contra master_ingredients: exacto/contención normalizada,
-    luego overlap de tokens (≥1). Devuelve row del catálogo o None."""
-    d = _norm_food_name(detected_name)
-    if not d:
+    """Row de `master_ingredients` al que corresponde lo que leyó la visión, o None.
+
+    [P1-SCAN-CATALOG-MATCH · 2026-08-10] La regla vive en
+    `constants.resolve_scanned_food` (SSOT, junto a `pantry_names_match`) — aquí
+    solo se traduce nombre → row.
+
+    LO QUE HABÍA ANTES: contención de substring en ambas direcciones y, si eso
+    fallaba, UN token en común bastaba. Como "de" es un token y 36 de los 204
+    alimentos lo llevan, cualquier detección con esa palabra caía en el primer
+    alimento del catálogo que la tuviera — «pan de hamburguesa» → «Polvo de
+    hornear», que es lo que reportó el dueño. Y el substring en la dirección
+    catálogo⊆detectado producía la familia clásica de este repo: «salami» → «Sal».
+
+    Medido con 34 detecciones etiquetadas contra el catálogo real: 19 aciertos y
+    15 mapeos al alimento equivocado antes; 34 aciertos y cero después."""
+    match_name = resolve_scanned_food(
+        detected_name,
+        [row["name"] for row in catalog],
+        {row["name"]: (row.get("aliases") or []) for row in catalog},
+    )
+    if not match_name:
         return None
     for row in catalog:
-        n = row["_norm"]
-        if d == n or d in n or n in d:
+        if row["name"] == match_name:
             return row
-    d_tokens = set(d.split())
-    best, best_overlap = None, 0
-    for row in catalog:
-        overlap = len(d_tokens & set(row["_norm"].split()))
-        if overlap > best_overlap:
-            best_overlap, best = overlap, row
-    return best if best_overlap >= 1 else None
+    return None
 
 
 async def _cloud_vision_scan(image_bytes: bytes) -> list:
@@ -560,12 +584,13 @@ async def api_inventory_photo_scan(
 
     def _match_against_catalog():
         from db import execute_sql_query
+        # [P1-SCAN-ALIASES · 2026-08-10] `aliases` entra al SELECT: son los 816
+        # sinónimos curados del catálogo y esta consulta ni los pedía, así que el
+        # escáner resolvía nombres a ciegas teniendo la respuesta al lado.
         catalog = execute_sql_query(
-            "SELECT id::text AS id, name, market_container, default_unit FROM master_ingredients",
+            "SELECT id::text AS id, name, aliases, market_container, default_unit FROM master_ingredients",
             fetch_all=True,
         ) or []
-        for row in catalog:
-            row["_norm"] = _norm_food_name(row["name"])
         out = []
         for it in items[:40]:
             match = _match_catalog(it.get("name"), catalog)
@@ -575,6 +600,18 @@ async def api_inventory_photo_scan(
             # siempre" es SOLO elección manual del usuario (un OCR equivocado no
             # debe contaminar sus marcas preferidas globales).
             _brand = (str(it.get("brand") or "").strip() or None)
+            # [P1-SCAN-CATALOG-MATCH · 2026-08-10] ¿El mapeo RENOMBRA lo que leyó
+            # la visión? La lista de confirmación mostraba `catalog_name` a secas,
+            # así que un mapeo equivocado borraba de la pantalla lo que el modelo
+            # había dicho: el dueño vio «Polvo de hornear» sobre la foto de un pan
+            # y concluyó, razonablemente, que el modelo había confundido las dos
+            # cosas — cuando el modelo había leído bien y falló el mapeo. Con este
+            # flag el cliente puede enseñar ambas y el error deja de ser invisible.
+            # Solo se marca cuando el nombre cambia DE VERDAD (no por plural ni
+            # acento), para no ensuciar «huevos» → «Huevo».
+            _renamed = bool(match) and not pantry_names_match(
+                str(it.get("name") or ""), match["name"]
+            )
             out.append({
                 "detected_name": str(it.get("name") or "")[:80],
                 "detected_brand": _brand[:40] if _brand else None,
@@ -583,6 +620,7 @@ async def api_inventory_photo_scan(
                 "confidence": max(0.0, min(1.0, float(it.get("confidence") or 0))),
                 "master_ingredient_id": match["id"] if match else None,
                 "catalog_name": match["name"] if match else None,
+                "catalog_renamed": _renamed,
                 "catalog_unit": (match.get("market_container") or match.get("default_unit")) if match else None,
             })
         return out
@@ -593,33 +631,279 @@ async def api_inventory_photo_scan(
     return {"items": results, "provider": provider}
 
 
+# [P1-GUEST-CATALOG · 2026-08-11] Campos que un SELECTOR de alimentos necesita, y ni uno
+# más. El resto de columnas del catálogo —precios por libra y por unidad, densidades,
+# envase de mercado, tamaños disponibles— no las usa ningún buscador: las usa la Nevera
+# para calcular costos y conversiones, y son el trabajo curado de este producto. Un
+# invitado no las necesita para escribir «arroz».
+_CATALOG_CAMPOS_INVITADO = ("id", "slug", "name", "category", "aliases", "default_unit", "staple_gate_label")
+
+# Anti-abuso del camino sin sesión: el catálogo es ~20KB y el cliente lo cachea 24h, así
+# que un uso legítimo pide esto UNA vez por wizard. El límite no molesta a nadie real y
+# evita que un endpoint sin auth se convierta en un grifo de scraping barato.
+_CATALOG_LIMITER = RateLimiter(max_calls=12, period_seconds=60)
+
+# [P1-PLAN-MODE · 2026-08-11] El interruptor y la puerta de metas. Quota-exempt por
+# la doctrina de /restock: aplicar el paywall al botón de APAGAR el gasto es
+# exactamente al revés — un usuario topado en 402 que no puede apagar deja al chunk
+# worker gastándole dinero al negocio, porque los crons no cobran.
+_PLAN_MODE_LIMITER = RateLimiter(max_calls=15, period_seconds=60)
+_TARGETS_LIMITER = RateLimiter(max_calls=30, period_seconds=60)
+
+# [P2-I18N-LOCALE-DISPARA-LLM · 2026-08-21] `PATCH /profile` dejó de ser un UPDATE
+# escalar el 2026-08-19: desde P1-PLAN-DISPLAY-I18N, un `locale` distinto de 'es-DO'
+# despacha `schedule_plan_display_enrichment` — la traducción LLM del plan entero, por
+# lotes. Era el write más caro del router y el único sin limitador.
+#
+# 10/60s y no menos: el uso legítimo es tocar un ajuste, no diez por minuto, pero el
+# wizard guarda el perfil por pasos y una ráfaga corta es normal. El paywall NO es la
+# herramienta aquí (doctrina de /restock: al llegar al cap el usuario quedaría atrapado
+# en su idioma y cada cambio le quemaría crédito de PLANES, porque
+# `get_monthly_api_usage` cuenta toda fila de `api_usage` sin filtrar endpoint).
+_PROFILE_PATCH_LIMITER = RateLimiter(max_calls=10, period_seconds=60)
+
+
 @router.get("/catalog")
 async def api_get_catalog(
-    verified_user_id: str = Depends(get_verified_user_id),
+    verified_user_id: Optional[str] = Depends(get_verified_user_id),
+    _rl: None = Depends(_CATALOG_LIMITER),
 ):
     """Catálogo master_ingredients (cuasi-inmutable, ~20KB). El frontend
-    mantiene su cache singleton de 24h — este endpoint solo cambia el
-    transporte. Auth requerida (paridad con el acceso RLS previo)."""
-    _require_user(verified_user_id)
+    mantiene su cache singleton de 24h — este endpoint solo cambia el transporte.
+
+    [P1-GUEST-CATALOG · 2026-08-11] SIN SESIÓN TAMBIÉN RESPONDE, con una proyección
+    reducida. Antes exigía auth «(paridad con el acceso RLS previo)» — o sea, la
+    restricción venía del TRANSPORTE anterior, no de una necesidad de privacidad:
+    `master_ingredients` es una tabla global de referencia, no datos de nadie.
+
+    La consecuencia era un paso del formulario que un invitado no podía completar. El
+    wizard es público (`/assessment` sin login) y su paso 15 —«Tus básicos de siempre»—
+    busca contra este catálogo: sin sesión la lista llegaba vacía, así que el buscador
+    no autocompletaba nada y no se podía añadir ningún alimento. No fallaba de forma
+    visible; simplemente no encontraba nada, que es peor, porque parece que el alimento
+    no existe.
+
+    Lo que NO se abre: precios, densidades y datos de envase. Un buscador necesita
+    nombres; el resto es el trabajo curado del producto y sigue detrás de la sesión.
+
+    [P2-I18N-CATALOGO-BUSCADOR-SIN-PUENTE · 2026-08-22] Se envía también `name_en`.
+
+    Está poblado al **347/347** y en **329** filas difiere del nombre español (medido contra
+    Neon, no supuesto), y el endpoint no lo mandaba: un usuario en inglés que escribía
+    «chicken» o «rice» en el buscador de básicos obtenía CERO resultados. No fallaba de
+    forma visible; simplemente no encontraba nada, que es peor, porque parece que el
+    alimento no existe — el mismo modo de fallo que `P1-GUEST-CATALOG` cerró para el
+    invitado.
+
+    ⚠️ **Esto cubre UN idioma de los cuatro.** `name_en` es un gloss inglés, no un catálogo
+    multilingüe: para fr/it/pt no hay columna que enviar y el buscador sigue exigiendo el
+    nombre español. Decirlo importa — un puente a medias presentado como puente completo es
+    peor que ninguno, porque nadie vuelve a mirarlo.
+
+    Y `name_en` es un NOMBRE, así que va en la proyección abierta al invitado por el mismo
+    argumento que `name`: lo que sigue detrás de la sesión son los precios y el trabajo
+    curado, no cómo se llama un alimento.
+    """
 
     def _catalog():
         from db import execute_sql_query
         return execute_sql_query(
             """
-            SELECT id::text AS id, slug, name, category, aliases,
+            SELECT id::text AS id, slug, name, name_en,
+                   to_jsonb(mi)->>'gloss_es' AS gloss_es, category, aliases,
                    density_g_per_cup::float8 AS density_g_per_cup,
                    density_g_per_unit::float8 AS density_g_per_unit,
                    shelf_life_days,
                    price_per_lb::float8 AS price_per_lb,
                    price_per_unit::float8 AS price_per_unit,
                    market_container, container_weight_g::float8 AS container_weight_g,
-                   available_sizes_g, default_unit
-            FROM master_ingredients ORDER BY name ASC
+                   available_sizes_g, default_unit,
+                   kcal_per_100g::float8 AS kcal_per_100g,
+                   protein_g_per_100g::float8 AS protein_g_per_100g,
+                   carbs_g_per_100g::float8 AS carbs_g_per_100g,
+                   fats_g_per_100g::float8 AS fats_g_per_100g,
+                   fiber_g_per_100g::float8 AS fiber_g_per_100g,
+                   sodium_mg_per_100g::float8 AS sodium_mg_per_100g
+            FROM master_ingredients AS mi ORDER BY name ASC
             """,
             fetch_all=True,
         ) or []
 
-    return {"items": await asyncio.to_thread(_catalog)}
+    items = await asyncio.to_thread(_catalog)
+
+    # [P1-STAPLE-SEARCH-RANK · 2026-08-09] Rótulo del gate same-day-protein por
+    # alimento, calculado AQUÍ desde el SSOT (`_MAIN_PROTEIN_ALIASES` +
+    # `_SAME_DAY_PROTEIN_GATE_LABELS`) y servido al cliente.
+    #
+    # El motivo de servirlo en vez de que el frontend lo deduzca: dos alimentos
+    # distintos del catálogo pueden colapsar al MISMO rótulo (clara de huevo y
+    # huevo → "huevo"), así que declarar ambos como básicos gasta dos de los
+    # ocho cupos para un solo efecto. Para avisarlo, el cliente necesita conocer
+    # el rótulo — y la única forma de que no se desincronice con el motor es que
+    # NO tenga su propia copia de la tabla de alias. Este repo ya pagó ese
+    # precio: la canonicalización de dieta vivía en tres tablas a mano, driftaron,
+    # y la del filtro servía pollo a vegetarianas.
+    #
+    # `None` cuando el alimento no participa del gate (legumbres, vegetales,
+    # cereales): esos ya pueden repetirse libremente, así que no hay nada que
+    # avisar. Fail-safe: cualquier error deja el campo ausente y el cliente
+    # degrada a no mostrar el aviso.
+    try:
+        from graph_orchestrator import _protein_gate_labels_in_text
+        for _it in items:
+            _labels = _protein_gate_labels_in_text(str(_it.get("name") or ""))
+            _it["staple_gate_label"] = "+".join(sorted(_labels)) if _labels else None
+    except Exception:
+        logger.warning("[P1-STAPLE-SEARCH-RANK] no se pudo anotar el catálogo con el rótulo del gate", exc_info=True)
+
+    # [P1-MANUAL-FOOD-LOG · 2026-08-11] Porciones PRECOMPUTADAS server-side. El
+    # componedor del diario las multiplica (`qty × grams_per_qty`) y eso es aritmética;
+    # decidir cuántos gramos tiene «1 taza de arroz» es del catálogo y de nadie más. Si
+    # el cliente llevara su propia tabla de conversión, sería otra copia del motor
+    # esperando a driftar — el precio que este repo ya pagó con la dieta.
+    # La resolución REAL al enviar vuelve a correr server-side (`food_search`); esto
+    # existe solo para que la vista previa del cliente enseñe los mismos números.
+    for _it in items:
+        _p = [{"unit": "g", "grams_per_qty": 1.0, "label": "g"}]
+        if _it.get("density_g_per_cup"):
+            _p.append({"unit": "taza", "grams_per_qty": float(_it["density_g_per_cup"]), "label": "taza"})
+        if _it.get("density_g_per_unit"):
+            _p.append({"unit": "unidad", "grams_per_qty": float(_it["density_g_per_unit"]), "label": "unidad"})
+        _du = str(_it.get("default_unit") or "").strip().lower()
+        _def = "unidad" if (_du in ("unidad", "unit") and len(_p) > 2) else ("taza" if any(x["unit"] == "taza" for x in _p) and _du not in ("lb", "unidad") else _p[-1]["unit"])
+        for _x in _p:
+            _x["default"] = (_x["unit"] == _def)
+        _it["portions"] = _p
+
+    # [P1-GUEST-CATALOG · 2026-08-11] La poda va DESPUÉS de anotar el rótulo del gate: ese
+    # campo lo calcula el backend a propósito (ver la nota de P1-STAPLE-SEARCH-RANK justo
+    # arriba) y el buscador de básicos lo necesita para avisar de que dos alimentos gastan
+    # un solo cupo. Podar antes lo dejaría fuera y el invitado perdería ese aviso.
+    if not verified_user_id:
+        items = [
+            {k: it.get(k) for k in _CATALOG_CAMPOS_INVITADO}
+            for it in items
+        ]
+
+    return {"items": items}
+
+
+@router.get("/catalog/dishes")
+async def api_get_catalog_dishes(
+    verified_user_id: str = Depends(get_verified_user_id),
+):
+    """[P1-MANUAL-FOOD-LOG · 2026-08-11] Los 60 platos criollos curados
+    (`data/dominican_dishes.json`), en su vista pública: label + ración
+    (`finished_g`) + `per_100g`. SIN `constituents` — la expansión a Nevera es
+    server-side y el cliente no necesita saber de qué está hecho el moro.
+
+    Cuasi-inmutable como el catálogo (~4 KB gzip): el frontend lo cachea 24 h en
+    `pantryCache` junto al resto. Auth por paridad con `/catalog`."""
+    _require_user(verified_user_id)
+    import food_search
+    return {"items": await asyncio.to_thread(food_search.dishes_for_client)}
+
+
+@router.get("/profile/plan-mode")
+async def api_get_plan_mode(
+    verified_user_id: str = Depends(get_verified_user_id),
+):
+    """[P1-PLAN-MODE · 2026-08-11] La postura del usuario sobre la generación."""
+    _require_user(verified_user_id)
+    from plan_mode import get_plan_mode
+    return await asyncio.to_thread(get_plan_mode, verified_user_id)
+
+
+class PlanModeBody(BaseModel):
+    plan_mode: str = Field(..., pattern="^(plan|tracking)$")
+
+
+@router.put("/profile/plan-mode")
+async def api_put_plan_mode(
+    body: PlanModeBody,
+    verified_user_id: Optional[str] = Depends(_PLAN_MODE_LIMITER),
+):
+    """[P1-PLAN-MODE · 2026-08-11] Apagar/encender la generación de planes.
+
+    NO pasa por PATCH /api/profile ni por `_PROFILE_SCALAR_WHITELIST` a propósito:
+    cambiar el modo no es editar un escalar — es una transacción (cancelar cola,
+    liberar locks, estampar el plan) y una regla que vive en dos puertas se cumple
+    en una. La respuesta dice LO QUE PASÓ (chunks cancelados, estado restaurado,
+    si el plan venció) para que la UI no adivine ni refetchee el perfil entero.
+
+    Apagar es GRATIS y no es negociable: cobrar por el freno es cobrar por dejar
+    de cobrar. Reanudar dentro de la ventana también (los chunks ya se pagaron);
+    tras vencer, el camino es un /analyze nuevo, que ya se cobra solo."""
+    if not verified_user_id:
+        raise HTTPException(status_code=401, detail="Inicia sesión.")
+    from plan_mode import pause_plan_generation, resume_plan_generation
+    if body.plan_mode == "tracking":
+        out = await asyncio.to_thread(pause_plan_generation, verified_user_id)
+    else:
+        out = await asyncio.to_thread(resume_plan_generation, verified_user_id)
+    # Espejo client-side para el arranque en frío del dashboard (ver el wrapper de
+    # Dashboard.jsx): si el perfil llega lento, «no sé» no puede leerse como «plan».
+    return {"success": True, **out}
+
+
+@router.get("/nutrition/targets")
+async def api_nutrition_targets(
+    verified_user_id: Optional[str] = Depends(_TARGETS_LIMITER),
+):
+    """[P1-PLAN-MODE · 2026-08-11] Las metas del contador SIN plan.
+
+    `get_nutrition_targets` es pura (sin DB, sin LLM) y hoy solo corre dentro del
+    pipeline: sin esta puerta, la tarjeta de progreso pinta 2000/150/200/60 — los
+    cuatro `||` de TrackingProgress son un plan genérico disfrazado de meta
+    personal, y una barra que miente es peor que una barra ausente.
+
+    Contrato: la FORMA es idéntica a plan_data (`calories` numérico +
+    `macros.{protein,carbs,fats}` strings con 'g') para que la tarjeta consuma una
+    sola forma venga de donde venga. `missing_fields` es lo que la hace honesta:
+    fail-CLOSED — sin `ok:true` el cliente no pinta barras."""
+    if not verified_user_id:
+        return {"ok": False, "missing_fields": ["session"], "reason": "guest"}
+
+    # [P1-TARGETS-NAMEERROR · 2026-08-12] TODO el camino con DB va dentro del try:
+    # este endpoint es fail-closed POR CONTRATO ({ok:false} honesto, jamás 500 crudo
+    # al cliente) y la primera versión lo violó del modo más tonto — el fetch del
+    # perfil vivía FUERA del try y usaba `get_user_profile` sin importarlo (el
+    # idioma del archivo es import lazy por-endpoint). NameError es runtime-only:
+    # el import-check del módulo pasa, y el test estructural también pasaba. El
+    # test nuevo llama el happy path DE VERDAD.
+    try:
+        from db import get_user_profile
+        profile = await asyncio.to_thread(get_user_profile, verified_user_id)
+        hp = (profile or {}).get("health_profile") or {}
+
+        # [P1-TRACKING-FINISH-SENSITIVE-GUARD · 2026-08-12] medicalConditions es
+        # requerida TAMBIÉN aquí: el gate de embarazo/lactancia del calculador lee
+        # esa lista, y sin exigirla un perfil con condiciones vacías (hidratación
+        # rota, PATCH viejo destructivo) devolvía metas CON DÉFICIT y ok:true —
+        # fail-open silencioso del gate. `[]` es falsy ⇒ cuenta como faltante.
+        # En la rama plan el contrato equivalente vive en _REQUIRED_FORM_FIELDS.
+        _requeridos = ("gender", "age", "height", "weight", "weightUnit", "activityLevel", "mainGoal", "medicalConditions")
+        faltan = [c for c in _requeridos if not hp.get(c)]
+        if faltan:
+            return {"ok": False, "missing_fields": faltan}
+
+        from nutrition_calculator import get_nutrition_targets
+        t = await asyncio.to_thread(get_nutrition_targets, hp)
+        m = t.get("macros") or {}
+        return {
+            "ok": True,
+            "calories": int(t.get("target_calories") or 0),
+            "macros": {
+                "protein": m.get("protein_str") or f"{m.get('protein_g', 0)}g",
+                "carbs": m.get("carbs_str") or f"{m.get('carbs_g', 0)}g",
+                "fats": m.get("fats_str") or f"{m.get('fats_g', 0)}g",
+            },
+            "goal_label": t.get("goal_label"),
+            "kinematics": t.get("kinematics"),
+        }
+    except Exception as e:
+        logger.error(f"[P1-PLAN-MODE] /nutrition/targets falló: {e}")
+        return {"ok": False, "missing_fields": [], "reason": "calc_error"}
 
 
 # ---------------------------------------------------------------------------
@@ -632,7 +916,29 @@ async def api_get_catalog(
 # server-derived desde PayPal (I-Billing-1, P0-BILLING-1); aceptar
 # plan_tier del cliente reabriría el upgrade gratis via DevTools.
 # Tooltip-anchor: P1-NEON-PROFILE-SCALAR-WHITELIST.
-_PROFILE_SCALAR_WHITELIST = frozenset({"full_name"})
+#
+# [P1-I18N-DASHBOARD · 2026-08-15] `locale` entra aquí y NO en un endpoint
+# propio. La razón está escrita al revés en el docstring de PUT
+# /profile/plan-mode: aquel quedó FUERA del whitelist porque cambiar el modo es
+# una TRANSACCIÓN (cancela la cola, libera locks, estampa el plan). Elegir
+# idioma es literalmente escribir un escalar y no tiene efectos laterales, así
+# que un endpoint propio solo añadiría un limitador más, una fila más en la
+# tabla de exención de cuota y una segunda puerta al mismo UPDATE.
+_PROFILE_SCALAR_WHITELIST = frozenset({"full_name", "locale"})
+
+# [P1-I18N-DASHBOARD · 2026-08-15] Valores admitidos de `locale`.
+#
+# El whitelist de arriba valida CLAVES, no VALORES — nunca necesitó mirarlos
+# porque `full_name` es texto libre. `locale` sí: es un enum, y la columna lleva
+# un CHECK en la DB (migración p1_i18n_dashboard_locale_2026_08_15.sql). Sin
+# esta validación el CHECK haría el trabajo, pero devolviendo un 500 crudo de
+# psycopg en vez de un 400 que explica qué pasó. Fail-closed y legible.
+#
+# SSOT de la lista: `frontend/src/i18n/locales.js`. Este frozenset, el CHECK de
+# la migración y el boot de `index.html` son espejos suyos —
+# `test_p1_i18n_dashboard.py` falla si divergen.
+# Tooltip-anchor: P1-I18N-DASHBOARD-LOCALE-VALUES.
+_LOCALE_VALUES = frozenset({"es-DO", "en-US", "pt-BR", "fr-FR", "it-IT"})
 
 
 class ProfilePatchBody(BaseModel):
@@ -659,6 +965,7 @@ async def api_get_profile(
 async def api_patch_profile(
     body: ProfilePatchBody = Body(...),
     verified_user_id: str = Depends(get_verified_user_id),
+    _rl: None = Depends(_PROFILE_PATCH_LIMITER),
 ):
     """Reemplaza la RPC `update_health_profile_merge` (merge jsonb ||) y el
     UPDATE escalar de updateUserProfile. El merge ocurre server-side en un
@@ -676,6 +983,41 @@ async def api_patch_profile(
                 "entitlement son server-derived (I-Billing-1)."
             ),
         )
+    # [P1-I18N-DASHBOARD · 2026-08-15] Validación de VALOR para los escalares
+    # que son enum. El whitelist de arriba solo mira claves; sin esto, el 400
+    # honesto lo daría el CHECK de la DB como un 500 de psycopg.
+    if "locale" in fields and fields["locale"] not in _LOCALE_VALUES:
+        raise HTTPException(
+            status_code=400,
+            detail=(
+                f"Idioma no soportado: {fields['locale']!r}. "
+                f"Permitidos: {sorted(_LOCALE_VALUES)}."
+            ),
+        )
+
+    # [P3-COUNTRY-DB-CHECK · 2026-08-22] La simétrica de arriba para la ÚNICA clave enum que vive
+    # dentro del JSONB. `health_profile` es texto libre por diseño (super_personalization, perfil
+    # clínico, alergias) y sigue siéndolo: esto valida UNA clave, no convierte el merge en un
+    # whitelist — ensancharlo rompería tres superficies que no tienen que ver con el país.
+    #
+    # Rechaza, NO canoniza. `canonicalize_country` cae a 'DO' ante cualquier valor no canónico, así
+    # que coercer aquí dejaría al usuario recibiendo planes dominicanos sin nada en pantalla que se
+    # lo dijera — el «default sembrado» que este repo ya pagó. Un 400 le dice qué pasó.
+    #
+    # SSOT de la lista: `constants.COUNTRY_PROFILES`. El CHECK de
+    # `p3_country_db_check_2026_08_22.sql` es la red de abajo, no el sustituto: sin este 400, el
+    # CHECK haría el trabajo devolviendo un 500 crudo de psycopg.
+    # Tooltip-anchor: P3-COUNTRY-DB-CHECK-VALUE.
+    if body.health_profile and body.health_profile.get("country") is not None:
+        from constants import UnsupportedCountryError, assert_supported_country
+        try:
+            assert_supported_country(body.health_profile["country"])
+        except UnsupportedCountryError as exc:
+            raise HTTPException(
+                status_code=400,
+                detail=str(exc),
+            ) from exc
+
     if not body.health_profile and not fields:
         raise HTTPException(status_code=400, detail="Nada que actualizar.")
 
@@ -708,6 +1050,41 @@ async def api_patch_profile(
     updated = await asyncio.to_thread(_patch)
     if not updated:
         raise HTTPException(status_code=404, detail="Perfil no encontrado.")
+
+    # [P1-PLAN-DISPLAY-I18N · 2026-08-19 · fix-round 1 F3/F4/F5] tooltip-anchor:
+    # P1-PLAN-DISPLAY-I18N-TRIGGER-4 (spec: 3 = mutadores/Task 3, 4 = cambio de
+    # idioma — este PATCH). El UPDATE de arriba (locale != es-DO) completó —
+    # despachar enrich del plan ACTIVO (el más reciente) SOLO si le falta
+    # `_display[locale]` en el PRIMER o el ÚLTIMO día. Mirar ambos extremos
+    # (no solo el primero) cierra el freeze de un enriquecimiento parcial: el
+    # motor trocea por lotes y permite recuperación parcial (un lote que falla
+    # no tumba a los demás) — si solo mirásemos el primer día, un plan cuyo
+    # último lote nunca corrió quedaría "ya enriquecido" para siempre, sin
+    # ningún disparador que lo complete (el 5º disparador de la spec es "no
+    # hay backfill masivo"). Proyección jsonb O(1): NO se baja `plan_data`
+    # completo (puede ser cientos de KB-MB con 30 días de recetas expandidas)
+    # solo para mirar dos claves. `->-1` en el índice de array jsonb cuenta
+    # desde el final (soportado por Postgres/Neon) — con 1 solo día, primer y
+    # último son el mismo elemento (redundante pero inofensivo). Best-effort:
+    # el PATCH de perfil JAMÁS puede fallar por esto.
+    _p1_i18n_new_locale = fields.get("locale")
+    if _p1_i18n_new_locale and _p1_i18n_new_locale != "es-DO":
+        try:
+            # [P3-I18N-DISPLAY-BLANKET-CIEGO-AL-SQL · 2026-08-23] La consulta que miraba
+            # `_display` en los dos extremos vive ahora en el SSOT (`plan_display_i18n`):
+            # este router solo despacha. Era una lectura de `_display` para decidir, por
+            # SQL, en un fichero sin permiso — invisible para el blanket.
+            from plan_display_i18n import schedule_plan_display_enrichment as _p1_i18n_schedule
+            from plan_display_i18n import active_plan_missing_locale as _p1_i18n_missing
+            _p1_i18n_plan_id = await asyncio.to_thread(_p1_i18n_missing, uid, _p1_i18n_new_locale)
+            if _p1_i18n_plan_id:
+                _p1_i18n_schedule(_p1_i18n_plan_id, uid, _p1_i18n_new_locale)
+        except Exception as _p1_i18n_e:
+            logger.warning(
+                f"[P1-PLAN-DISPLAY-I18N] dispatch PATCH /profile locale falló "
+                f"user={uid} locale={_p1_i18n_new_locale!r}: {_p1_i18n_e!r}"
+            )
+
     return {"success": True}
 
 
@@ -728,8 +1105,10 @@ async def api_get_latest_plan(
 
     def _latest():
         from db import execute_sql_query
+        # [P1-ARQ25-F1-LIFECYCLE · 2026-09-02] `revision` (I12): el frontend adopta el plan
+        # entero cuando la del servidor es mayor que la local (hydrateLatestPlan).
         cols = "id::text AS id, to_jsonb(created_at)#>>'{}' AS created_at, " \
-               "to_jsonb(updated_at)#>>'{}' AS updated_at"
+               "to_jsonb(updated_at)#>>'{}' AS updated_at, revision"
         if include_plan_data:
             cols += ", plan_data"
         return execute_sql_query(
@@ -756,7 +1135,7 @@ async def api_get_plan_data(
     def _by_id():
         from db import execute_sql_query
         return execute_sql_query(
-            "SELECT id::text AS id, plan_data, "
+            "SELECT id::text AS id, plan_data, revision, "
             "to_jsonb(updated_at)#>>'{}' AS updated_at "
             "FROM meal_plans WHERE id = %s AND user_id = %s",
             (plan_id, uid),
@@ -791,7 +1170,7 @@ _SUPERPERS_MAX_ITEM_LEN = 60
 _SUPERPERS_MAX_FREETEXT = 1500
 
 # [P1-SUPERPERSONALIZATION-1 · Fase 3 · 2026-06-19] Kill-switch del enriquecimiento
-# del RAG: al guardar con un freeText NUEVO, se extraen facts (DeepSeek-flash) →
+# del RAG: al guardar con un freeText NUEVO, se extraen facts (GLM-flash) →
 # user_facts (Cohere embed) en background, para que el RAG los recupere en
 # plan-gen Y chat automáticamente. Default ON; flip a "false" en el .env del VPS
 # para apagar sin redeploy (cuesta ~1 call LLM + 1 embedding por guardado con

@@ -63,9 +63,13 @@ def test_inventory_cache_persists_to_localstorage():
     # Anchor: setItem de la cache key esperada dentro de setCachedInventory.
     body = _extract_export(src, "setCachedInventory")
     assert body, "setCachedInventory no encontrada"
-    assert "localStorage.setItem" in body, (
-        "`setCachedInventory` NO escribe a localStorage. Sin esto, el cache "
-        "no sobrevive page reload. Ver P1-PANTRY-CACHE-LOCALSTORAGE · 2026-05-20."
+    # [re-anclado 2026-08-18] La PROPIEDAD es «persiste a localStorage», no el grafema:
+    # el refactor de seguridad movió la escritura al wrapper `safeLocalStorageSet`
+    # (mismo destino, con try/catch de quota). Cualquiera de las dos formas cumple.
+    assert ("localStorage.setItem" in body) or ("safeLocalStorageSet" in body), (
+        "`setCachedInventory` NO escribe a localStorage (ni directo ni vía "
+        "safeLocalStorageSet). Sin esto, el cache no sobrevive page reload. "
+        "Ver P1-PANTRY-CACHE-LOCALSTORAGE · 2026-05-20."
     )
     assert "_INVENTORY_LS_KEY" in body or "mealfit_pantry_inventory_cache" in body, (
         "setCachedInventory no usa la cache key esperada."
@@ -79,10 +83,12 @@ def test_inventory_cache_reads_localstorage_fallback():
     src = _read(_PANTRY_CACHE_JS)
     body = _extract_export(src, "getCachedInventory")
     assert body, "getCachedInventory no encontrada"
-    assert "localStorage.getItem" in body, (
-        "`getCachedInventory` NO lee de localStorage como fallback. Sin "
-        "esto, el cache localStorage queda inútil. Ver "
-        "P1-PANTRY-CACHE-LOCALSTORAGE · 2026-05-20."
+    # [re-anclado 2026-08-18] Misma clase que el test de arriba: la lectura pasó al
+    # wrapper seguro (`safeLocalStorageGet`). La PROPIEDAD es «lee de localStorage».
+    assert ("localStorage.getItem" in body) or ("safeLocalStorageGet" in body), (
+        "`getCachedInventory` NO lee de localStorage como fallback (ni directo ni "
+        "vía safeLocalStorageGet). Sin esto, el cache localStorage queda inútil. "
+        "Ver P1-PANTRY-CACHE-LOCALSTORAGE · 2026-05-20."
     )
     # Sanity: hidrata _inventoryEntry desde localStorage para siguientes
     # llamadas (fast path).

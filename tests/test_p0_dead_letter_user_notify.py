@@ -266,7 +266,7 @@ def test_anchor_marker_present_in_chunk_worker():
 # Functional: mock _escalate_unrecoverable_chunk and verify call
 # -----------------------------------------------------------------------------
 
-def test_escalate_unrecoverable_chunk_accepts_recovery_exhausted_reason():
+def test_escalate_unrecoverable_chunk_accepts_recovery_exhausted_reason(monkeypatch):
     """Sanity check: `_escalate_unrecoverable_chunk` no rechaza nuestro
     reason canonical. El helper valida contra `ESCALATION_REASONS` y aborta
     si el reason no esta listado (P2-NEW-3); confirmamos que
@@ -276,9 +276,13 @@ def test_escalate_unrecoverable_chunk_accepts_recovery_exhausted_reason():
     que el reason esta en el whitelist canonical via import.
     """
     import sys
-    # Stub apscheduler (no instalado en CI standalone) — mismo patron que
-    # otros tests del bundle P1-CRON-BUNDLE.
-    if "apscheduler" not in sys.modules:
+    # Stub apscheduler SOLO si el real no es importable, y REVERSIBLE
+    # (P2-SYSMODULES-STUB-LEAK): un setdefault directo dejaba un stub parcial
+    # en el worker y el siguiente `import app` moria en `apscheduler.triggers`.
+    try:
+        import apscheduler.schedulers.background  # noqa: F401
+        import apscheduler.events  # noqa: F401
+    except Exception:
         import types
         for mod_name in (
             "apscheduler",
@@ -288,11 +292,12 @@ def test_escalate_unrecoverable_chunk_accepts_recovery_exhausted_reason():
             "apscheduler.executors.pool",
             "apscheduler.events",
         ):
-            sys.modules.setdefault(mod_name, types.ModuleType(mod_name))
+            if mod_name not in sys.modules:
+                monkeypatch.setitem(sys.modules, mod_name, types.ModuleType(mod_name))
         # Constants que el listener referencia.
-        sys.modules["apscheduler.events"].EVENT_JOB_MISSED = 1
-        sys.modules["apscheduler.events"].EVENT_JOB_ERROR = 2
-        sys.modules["apscheduler.events"].EVENT_JOB_EXECUTED = 4
+        ev = sys.modules["apscheduler.events"]
+        for attr, val in (("EVENT_JOB_MISSED", 1), ("EVENT_JOB_ERROR", 2), ("EVENT_JOB_EXECUTED", 4)):
+            monkeypatch.setattr(ev, attr, val, raising=False)
 
     from constants import ESCALATION_REASONS
     assert "recovery_exhausted" in ESCALATION_REASONS, (

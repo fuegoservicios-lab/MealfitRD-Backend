@@ -808,7 +808,8 @@ def build_micronutrient_targets_directive(sex: str | None = "female", age: int |
                                           conditions=None, daily_kcal: float | None = None,
                                           pregnant: bool = False,
                                           k_elevating_med: bool = False,
-                                          goal: str | None = None) -> str:
+                                          goal: str | None = None,
+                                          diet: str | None = None) -> str:
     """[P1-MICRONUTRIENT-STEER · 2026-06-24] Directiva CUANTITATIVA de micronutrientes para el
     prompt del day-generator. Convierte la guía HEURÍSTICA histórica ("usa legumbres para fibra/
     hierro") en PISOS NUMÉRICOS accionables para los micros ALCANZABLES con alimentos enteros
@@ -846,12 +847,29 @@ def build_micronutrient_targets_directive(sex: str | None = "female", age: int |
                 k_floor = max(k_floor, 4700.0)
         lines = ["--- OBJETIVOS DE MICRONUTRIENTES (densidad nutricional del día) ---"]
         if is_muscle:
-            lines.append(
-                "PRIORIDAD: el piso de proteína y una fuente animal de ALTA densidad (pollo, pescado, "
-                "cerdo, res, huevos, queso) en CADA comida principal (almuerzo y cena) MANDAN. Logra los "
-                "micros de abajo con GUARNICIONES, vegetales, semillas y nueces como COMPLEMENTO — NUNCA "
-                "reemplaces la proteína principal por leguminosas o almidón para subir un micronutriente."
-            )
+            # [P1-DIET-BLIND-DIRECTIVES · 2026-08-08] La línea PRIORIDAD ordenaba "fuente animal"
+            # también con dieta veg* declarada (misma clase que el piso de proteína del reviewer —
+            # issue #9). Fuentes aptas desde el SSOT constants.diet_protein_suggestions; balanced
+            # conserva el texto exacto.
+            try:
+                from constants import diet_protein_suggestions as _dps
+                _veg_sources = _dps(diet)
+            except Exception:
+                _veg_sources = None
+            if _veg_sources:
+                lines.append(
+                    "PRIORIDAD: el piso de proteína y una fuente proteica DENSA apta para la dieta "
+                    f"({_veg_sources}) en CADA comida principal (almuerzo y cena) MANDAN. Logra los "
+                    "micros de abajo con GUARNICIONES, vegetales, semillas y nueces como COMPLEMENTO — "
+                    "sin sacar la fuente proteica principal del plato para subir un micronutriente."
+                )
+            else:
+                lines.append(
+                    "PRIORIDAD: el piso de proteína y una fuente animal de ALTA densidad (pollo, pescado, "
+                    "cerdo, res, huevos, queso) en CADA comida principal (almuerzo y cena) MANDAN. Logra los "
+                    "micros de abajo con GUARNICIONES, vegetales, semillas y nueces como COMPLEMENTO — NUNCA "
+                    "reemplaces la proteína principal por leguminosas o almidón para subir un micronutriente."
+                )
         lines.append(
             "Además de las calorías y los macros, busca que el día APUNTE de forma NATURAL a estos "
             "pisos diarios. NO fuerces un solo alimento ni distorsiones las porciones: intégralos en "

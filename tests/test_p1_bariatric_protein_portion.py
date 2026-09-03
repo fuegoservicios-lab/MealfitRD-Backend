@@ -22,7 +22,7 @@ def _wire(monkeypatch, cap=None):
     # [P1-CLOSER-DAY-AWARE-PROTEIN · 2026-07-10] day_used_proteins añadido al contrato del closer;
     # sin él en el stub, el caller real revienta con TypeError silencioso (fail-safe) → added=0.
     def fake_closer(m, target, db, cands, allergies=None, fill_pct=0.92, max_add_g=300,
-                    slot_cal_target=0.0, enforce_min_threshold=True, day_used_proteins=None):
+                    slot_cal_target=0.0, enforce_min_threshold=True, day_used_proteins=None, **kw):
         if cap is not None:
             cap["max_add_g"] = max_add_g
         cur = g._meal_macro_num(m.get("protein"))
@@ -33,8 +33,9 @@ def _wire(monkeypatch, cap=None):
 
     monkeypatch.setattr(g, "_close_protein_gap_for_meal", fake_closer)
     monkeypatch.setattr(g, "_macro_aware_day_reconcile", lambda ms, c, f, db: True)
+    # [P1-DIET-BLIND-CLOSERS · 2026-08-08] **kw absorbe kwargs nuevos (diet=...) sin romper el fake.
     monkeypatch.setattr(g, "_safe_high_density_proteins",
-                        lambda al, db, min_protein=18.0: [(0.25, "Pechuga de pollo", None), (0.22, "Camarones", None)])
+                        lambda al, db, min_protein=18.0, **kw: [(0.25, "Pechuga de pollo", None), (0.22, "Camarones", None)])
     return g
 
 

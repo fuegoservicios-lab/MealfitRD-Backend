@@ -54,9 +54,15 @@ import pytest
 
 _BACKEND_ROOT = Path(__file__).resolve().parent.parent
 _PLANS = (_BACKEND_ROOT / "routers" / "plans.py").read_text(encoding="utf-8")
-_DASHBOARD = (
-    _BACKEND_ROOT.parent / "frontend" / "src" / "pages" / "Dashboard.jsx"
-).read_text(encoding="utf-8")
+@pytest.fixture(scope="module", autouse=True)
+def _load_frontend_sibling_sources(frontend_repo_path):
+    # La fixture compartida salta el módulo antes de cualquier I/O si falta el hermano.
+    _ = frontend_repo_path
+    global _DASHBOARD
+    _DASHBOARD = (
+        _BACKEND_ROOT.parent / "frontend" / "src" / "pages" / "Dashboard.jsx"
+    ).read_text(encoding="utf-8")
+
 
 
 # ---------------------------------------------------------------------------

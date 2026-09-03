@@ -7,7 +7,7 @@
 
 En el **intento 1** se paga en TODOS los planes, incluidos los ~2 de cada 3 que el modelo barato
 resuelve bien. Y los datos de hoy no muestran que lo valga: con el contrato de fruta arreglado
-(`P1-FRUIT-SEEDER-GATE-CONTRACT`), DeepSeek entregó banda 1.00 sin reintentos.
+(`P1-FRUIT-SEEDER-GATE-CONTRACT`), GLM entregó banda 1.00 sin reintentos.
 
 En el **reintento** sólo llegan los planes donde el barato YA demostró que no pudo, así que el
 sobrecoste esperado cae de 0,09 en cada plan a ~0,03 de media. Y hay un argumento de calidad además
@@ -51,7 +51,7 @@ def test_intento_1_NO_paga_el_modelo_caro(canario_on):
     """El 100% de los planes pasa por aquí; ~2 de cada 3 no necesitan más."""
     ch = go._day_model_chain({"user_id": "u"}, 1)
     assert "gpt-5.6-luna" not in ch
-    assert ch[0].startswith("deepseek")
+    assert ch[0].startswith("glm")
 
 
 @pytest.mark.parametrize("intento", [2, 3, 4])
@@ -63,7 +63,7 @@ def test_el_reintento_SI_lo_usa(canario_on, intento):
 def test_el_reintento_conserva_la_red(canario_on):
     """Anteponer, no sustituir: si Luna falla o su CB abre, el plan se genera igual."""
     ch = go._day_model_chain({"user_id": "u"}, 2)
-    assert len(ch) >= 2 and any("deepseek" in m for m in ch[1:])
+    assert len(ch) >= 2 and any("glm" in m for m in ch[1:])
 
 
 def test_scope_all_restaura_el_comportamiento_anterior(canario_on, monkeypatch):

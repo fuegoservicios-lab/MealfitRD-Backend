@@ -1,7 +1,7 @@
 """[P1-VARIETY-REPEAT-GRACEFUL · 2026-06-26] Degradación con gracia del gate de variedad-repetida.
 
 INCIDENTE RAÍZ (user d4bc3af5, corr=20394088, 2026-06-26 06:19): una renovación falló con
-"La IA está temporalmente saturada y no pudimos generar tu plan" pese a que DeepSeek estaba sano
+"La IA está temporalmente saturada y no pudimos generar tu plan" pese a que GLM estaba sano
 (días 1 y 2 se corrigieron con el modelo Pro). Causa: el gate `P2-VARIETY-GATE-REPEAT` (fruta dulce
 repetida el mismo día) rechazó los 3 intentos con severity='high' → review nunca pasó → ruta de
 agotamiento → `_repair_partial_plan` marcó `_is_fallback=True` → el FALLBACK-GUARD/SSE rehúsa

@@ -24,6 +24,30 @@ que el supermercado pueda contener productos aún sin mapear).
 | Página landing | `frontend/src/pages/SupermarketPage.jsx` (+ `Supermarket.module.css`) | Ruta `/supermercado` (App.jsx), link en Footer ("Empresas" → "Supermercado RD"), título/description en RouteTitle. Fase 2: catálogo estilo supermercado online — tarjeta por SKU (imagen o placeholder-emoji por categoría) → modal de detalle con specs + otras variantes del mismo alimento; filtros por categoría/marca, orden por precio, paginación "Mostrar más" (48). |
 | Test ancla | `backend/tests/test_p1_supermarket_db.py` | Import+prefix, migraciones dual-dir idénticas/idempotentes (base + media), gate admin por handler, GET sin paywall, frontend backend-only, seed gateado. |
 
+## El gate admin y por qué es un token PROPIO
+
+[P2-SUPERMARKET-TOKEN-SPLIT · 2026-08-14 · movido aquí doc-first P3-CLAUDEMD-MARGIN 2026-08-22]
+Las mutaciones del supermercado se autorizan con `_verify_supermarket_token` (Bearer
+`SUPERMARKET_ADMIN_TOKEN`), y sólo pasan por [`backend/routers/supermarket.py`](../routers/supermarket.py)
+— simétrica a la invariante I6.
+
+**Antes era el `CRON_SECRET`**, y ése es el punto que conviene no perder: el mismo secreto que
+abre `purge-data` sobre 33 tablas se tecleaba en un formulario de una página **pública**. No había
+vector explotable —cero sinks XSS, `compare_digest` en la comparación, límite de 60/min— así que
+esto no fue un incidente: lo que se cerró es **radio de daño y rotación**. Si el secreto maestro se
+filtra por cualquier otra vía, el editor del supermercado deja de ser una puerta más.
+
+⚠️ **El precio, aceptado a sabiendas: son DOS secretos que rotar.** Quien venga a «simplificar»
+unificándolos otra vez estará reabriendo exactamente lo que este split cerró, y le parecerá
+limpieza.
+
+**Compatibilidad de rollout**: sin `SUPERMARKET_ADMIN_TOKEN` configurada se acepta el maestro, para
+que un deploy sin la variable no deje el editor muerto. En cuanto la variable existe, el maestro
+deja de valer aquí — o sea que el fallback se cierra solo al configurarla, sin un segundo paso que
+alguien pueda olvidar.
+
+Test: [`test_p2_supermarket_token_split.py`](../tests/test_p2_supermarket_token_split.py).
+
 ## Contrato de endpoints
 
 | Endpoint | Auth | Notas |

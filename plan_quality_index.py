@@ -1,7 +1,7 @@
 """[P1-PLAN-QUALITY-INDEX · 2026-07-31] Medidor de VARIEDAD y COHERENCIA por plan.
 
 POR QUÉ EXISTE
-El owner preguntó si cambiar el generador (deepseek-flash → gpt-5.6-luna) subiría
+El owner preguntó si cambiar el generador (glm-flash → gpt-5.6-luna) subiría
 la calidad. La respuesta honesta era "no se puede saber": el sistema producía
 muchas señales sueltas —reporte de variedad, guard de coherencia recetas↔lista,
 panel de micros, banda de macros— pero **ninguna se guardaba junta ni comparable**,
@@ -57,6 +57,19 @@ _PEN_VARIEDAD = {
     "sweet_fish_pairings": 8,         # pareo fruta+pescado
     "light_name_heavy_meals": 5,      # nombre "ligero" con plato pesado
 }
+
+# [P2-QUALITY-INDEX-COHERENCE · 2026-08-21] Hipótesis del guard de coherencia que NO son un
+# defecto DEL PLAN: la receta no cuantificó el alimento, el modelo de yield no lo cubre, la unidad
+# de la receta y la de la lista no son la misma, o la nevera dedujo. Todas apuntan a una carencia
+# sistémica del instrumento o del modelo — cobrárselas al plan mide otra cosa.
+#
+# `unknown`, `cap_swallowed_modifier` y `magnitude_undersupply` NO están aquí a propósito: los dos
+# últimos son defectos reales del motor, y el primero es como se ve un defecto real antes de tener
+# nombre. Ampliar esta lista sin evidencia convierte el índice en un medidor complaciente.
+# tooltip-anchor: P2-QUALITY-INDEX-COHERENCE
+_COHERENCIA_NO_ATRIBUIBLE = frozenset({
+    "recipe_unquantified", "unit_mismatch", "yield_uncovered", "pantry_overdeduct",
+})
 
 _PEN_COHERENCIA = {
     "recipe_coherence": 7,     # ingrediente listado que la receta no menciona
@@ -120,6 +133,48 @@ def _sub_coherencia(plan: Dict[str, Any]) -> Dict[str, Any]:
         ultimo = hist[-1] if isinstance(hist[-1], dict) else {}
         pres = int(ultimo.get("presence_count") or 0)
         magn = int(ultimo.get("magnitude_count") or 0)
+        # [P2-QUALITY-INDEX-COHERENCE · 2026-08-21] Descontar lo que el guard ya atribuyó a una
+        # causa que NO es este plan.
+        #
+        # Al lado de estos dos contadores viaja `hypotheses`, donde `_classify_divergence_hypothesis`
+        # clasificó CADA divergencia por su causa — y ese bucketing existe precisamente para separar
+        # señal de artefacto: su propio comentario dice que separar `recipe_unquantified` es «el
+        # prerequisito para que los umbrales del cron midan señal en vez de RUIDO CONOCIDO». El cron
+        # ya lo usa; este índice lo ignoraba y cobraba 15 puntos por cada una.
+        #
+        # Medido sobre los planes vivos: `d2f2dbc6` perdía 15 puntos con
+        # `{'recipe_unquantified': 3}` — o sea por cómo estaban REDACTADAS sus propias recetas — y
+        # los dos planes beta eran los peores de 27 por −21,0 puntos exactos de artefacto.
+        #
+        # EL PRINCIPIO: este índice mide EL PLAN. Una divergencia atribuida a una causa SISTÉMICA
+        # (la receta no cuantificó, el modelo de yield no cubre ese alimento, la nevera dedujo) no
+        # es un defecto de ese plan concreto. Una atribuida al motor (el cap se comió un
+        # modificador, se compró menos de la mitad) sí lo es.
+        #
+        # `unknown` SIGUE COBRANDO, y es la mitad importante de la decisión: «no sé por qué diverge»
+        # es exactamente como se ve un defecto real antes de tener nombre. Perdonarlo dejaría al
+        # índice viendo sólo lo que ya sabemos buscar — el medidor inerte contra el que avisa el
+        # docstring de esta misma función.
+        #
+        # Sin `hypotheses` (entradas viejas del historial) no hay nada que discriminar y se cobra
+        # como siempre: inventar una atribución que el guard no hizo sería peor que cobrar de más.
+        _no_atribuible = 0
+        _hyp = ultimo.get("hypotheses")
+        if isinstance(_hyp, dict):
+            for _k, _v in _hyp.items():
+                if str(_k) in _COHERENCIA_NO_ATRIBUIBLE:
+                    try:
+                        _no_atribuible += max(0, int(_v))
+                    except (TypeError, ValueError):
+                        continue
+        if _no_atribuible:
+            # Se descuenta primero de magnitud y luego de presencia: la clasificación no dice a
+            # cuál de los dos contadores pertenece cada hipótesis, y magnitud es el bucket barato
+            # (5 vs 15), así que este orden es el CONSERVADOR — perdona menos puntos.
+            _quita = min(_no_atribuible, magn)
+            magn -= _quita
+            pres = max(0, pres - (_no_atribuible - _quita))
+            detalle["coherence_no_atribuible"] = _no_atribuible
         if pres:
             puntos -= _PEN_COHERENCIA["shopping_presence"] * pres
             detalle["shopping_presence"] = pres

@@ -1,5 +1,5 @@
 from fastapi import APIRouter, Body, Depends, HTTPException, BackgroundTasks
-from fastapi.responses import StreamingResponse
+from fastapi.responses import StreamingResponse, Response
 from error_utils import safe_error_detail
 from typing import Optional
 import hashlib
@@ -7,13 +7,15 @@ import logging
 import traceback
 import json
 
-from auth import get_verified_user_id, verify_api_quota
+from auth import get_verified_user_id, verify_api_quota, verify_coach_quota, coach_quota_snapshot
 from path_validators import assert_valid_uuid
 from rate_limiter import RateLimiter
 from db import (
     get_user_chat_sessions, get_guest_chat_sessions, get_session_owner, delete_user_agent_sessions,
     delete_single_agent_session, update_session_title, get_session_messages, get_or_create_session,
-    save_message, save_message_feedback, log_api_usage
+    save_message, save_message_with_attachments, save_message_feedback, log_api_usage,
+    get_model_response_id_for_regeneration, replace_model_response_for_regeneration,
+    get_chat_attachment, build_chat_attachment_url, verify_chat_attachment_signature,
 )
 from memory_manager import build_memory_context, summarize_and_prune
 from agent import generate_chat_title_background, chat_with_agent, chat_with_agent_stream, LLMCircuitBreakerOpen, LLMRateLimitedError, strip_ui_action_tags_for_persist
@@ -184,10 +186,124 @@ def _resolve_user_id_for_db(
         return None
     return user_id_input
 
+
+def _resolve_chat_local_time(local_date, tz_offset, verified_user_id):
+    """[P3-CHAT-NOSTREAM-CONTEXTO-TEMPORAL-RD · 2026-08-23] Resuelve el "hoy" del usuario
+    SERVER-SIDE cuando el cliente no lo manda.
+
+    El contexto temporal del coach (`build_temporal_context`, `DIARIO DE HOY`, los días
+    pasados, las comidas que te quedan hoy) se arma con `local_date`/`tz_offset`. Los dos
+    endpoints de chat los leen del BODY y, si el cliente no colabora, aguas abajo caen a un
+    huso por defecto: para un usuario en Madrid a las 00:30, el coach cree que es el día
+    anterior a las 18:30.
+
+    **Por qué server-side y no "que lo mande el cliente"**: estos endpoints tienen delante un
+    `verified_user_id` y un perfil con el huso que el propio navegador del usuario ya persistió
+    (`health_profile.tzOffset`). Depender de que cada cliente lo reenvíe en cada turno es
+    depender de la colaboración de un caller que puede no existir — y el path no-stream no
+    tiene NINGÚN caller en el frontend hoy, aunque está registrado, autenticado y tarifado.
+
+    Contrato:
+      - Si el cliente mandó AMBOS, no se toca nada (ni un round-trip a la DB).
+      - Si mandó sólo `tz_offset`, la fecha se deriva de ESE offset — el del cliente gana al
+        del perfil, que puede ser viejo (el usuario viaja).
+      - Invitado sin identidad verificada, o lectura de perfil que falla: se devuelve lo que
+        llegó, así que la conducta es EXACTAMENTE la previa. Este helper no puede empeorar
+        ningún caso; sólo puede rellenar huecos.
+      - `0` es un offset legítimo (UTC, y Canarias en invierno): la resolución es por
+        `is not None`, JAMÁS por truthiness.
+
+    tooltip-anchor: _resolve_chat_local_time (test_p3_chat_nostream_contexto_temporal_rd.py)
+    """
+    if local_date is not None and tz_offset is not None:
+        return local_date, tz_offset
+
+    resolved_tz = tz_offset
+    if resolved_tz is None and verified_user_id:
+        try:
+            from db import user_tz_offset_min
+            resolved_tz = user_tz_offset_min(verified_user_id)
+        except Exception as e:
+            logger.warning(
+                f"[P3-CHAT-NOSTREAM-CONTEXTO-TEMPORAL-RD] no se pudo resolver el huso de "
+                f"{_hash_user_id_for_log(verified_user_id)}: {e}. Se deja el contexto temporal como llegó."
+            )
+            return local_date, tz_offset
+
+    if resolved_tz is None:
+        # Ni cliente ni perfil: no hay nada que aportar. Conducta previa, intacta.
+        return local_date, tz_offset
+
+    resolved_date = local_date
+    if resolved_date is None:
+        from datetime import datetime, timedelta, timezone
+        try:
+            resolved_date = (
+                datetime.now(timezone.utc) - timedelta(minutes=int(resolved_tz))
+            ).date().isoformat()
+        except (TypeError, ValueError, OverflowError):
+            return local_date, tz_offset
+
+    return resolved_date, resolved_tz
+
 router = APIRouter(
     prefix="/api/chat",
     tags=["chat"],
 )
+
+
+def _hydrate_chat_attachment_urls(messages: list) -> list:
+    """Renueva URLs firmadas al leer historial sin exponer el bytea."""
+    hydrated = []
+    for message in messages or []:
+        copy = dict(message)
+        raw = copy.get("attachments")
+        if isinstance(raw, str):
+            try:
+                raw = json.loads(raw)
+            except Exception:
+                raw = []
+        attachments = []
+        for item in raw if isinstance(raw, list) else []:
+            if not isinstance(item, dict):
+                continue
+            attachment_id = item.get("attachment_id") or item.get("id")
+            if not attachment_id:
+                continue
+            attachments.append({
+                **item,
+                "attachment_id": str(attachment_id),
+                "url": build_chat_attachment_url(str(attachment_id)),
+            })
+        copy["attachments"] = attachments
+        hydrated.append(copy)
+    return hydrated
+
+
+@router.get("/attachments/{attachment_id}")
+def api_get_chat_attachment(
+    attachment_id: str,
+    expires: int = 0,
+    sig: str = "",
+    verified_user_id: Optional[str] = Depends(get_verified_user_id),
+):
+    assert_valid_uuid(attachment_id)
+    attachment = get_chat_attachment(attachment_id)
+    if not attachment:
+        raise HTTPException(status_code=404, detail="Imagen no encontrada.")
+    signed = verify_chat_attachment_signature(attachment_id, expires, sig)
+    owned = bool(verified_user_id and verified_user_id == attachment.get("user_id"))
+    if not signed and not owned:
+        raise HTTPException(status_code=403, detail="Prohibido.")
+    return Response(
+        content=attachment.get("content") or b"",
+        media_type=attachment.get("content_type") or "application/octet-stream",
+        headers={
+            "Cache-Control": "private, max-age=3600",
+            "X-Content-Type-Options": "nosniff",
+            "Content-Disposition": "inline",
+        },
+    )
 
 @router.get("/sessions/{user_id}")
 def api_get_chat_sessions(user_id: str, session_ids: Optional[str] = None, verified_user_id: Optional[str] = Depends(get_verified_user_id)):
@@ -271,7 +387,9 @@ def api_get_chat_history(session_id: str, verified_user_id: Optional[str] = Depe
 
         messages = get_session_messages(session_id)
         # Ocultar mensajes de sistema como el system_title
-        filtered_messages = [m for m in messages if not m.get("content", "").startswith("[SYSTEM_TITLE]")]
+        filtered_messages = _hydrate_chat_attachment_urls(
+            [m for m in messages if not m.get("content", "").startswith("[SYSTEM_TITLE]")]
+        )
         return {"messages": filtered_messages}
     except HTTPException:
         raise
@@ -421,6 +539,20 @@ def _chat_stream_limiter_per_min() -> int:
     if raw > _CHAT_STREAM_LIMITER_PER_MIN_CLAMP_MAX:
         return _CHAT_STREAM_LIMITER_PER_MIN_CLAMP_MAX
     return raw
+
+
+# [P1-COACH-QUOTA-METER · 2026-09-02] Lectura de la cuota del coach para el medidor del chat.
+# Exenta del paywall (read-only, cero LLM): al llegar al tope el usuario necesita VER cuánto
+# le queda y cuándo se renueva, no otro 402. Anti-spam por RateLimiter, no por cuota.
+_COACH_QUOTA_LIMITER = RateLimiter(max_calls=30, period_seconds=60)
+
+
+@router.get("/quota")
+def api_chat_quota(verified_user_id: str = Depends(get_verified_user_id), _rl: None = Depends(_COACH_QUOTA_LIMITER)):
+    """[P1-COACH-QUOTA-METER] `{used, limit, remaining, tier, period, resets_at}` del mes en curso."""
+    if not verified_user_id:
+        raise HTTPException(status_code=401, detail="Authentication required")
+    return coach_quota_snapshot(verified_user_id)
 
 
 _CHAT_STREAM_LIMITER = RateLimiter(
@@ -630,7 +762,7 @@ async def api_chat_feedback(data: dict = Body(...), verified_user_id: Optional[s
 
 
 @router.post("/stream", dependencies=[Depends(_CHAT_STREAM_LIMITER)])
-def api_chat_stream(background_tasks: BackgroundTasks, data: dict = Body(...), verified_user_id: str = Depends(verify_api_quota)):
+def api_chat_stream(background_tasks: BackgroundTasks, data: dict = Body(...), verified_user_id: str = Depends(verify_coach_quota)):
     try:
         session_id = data.get("session_id", "default_session")
         prompt = data.get("prompt", "")
@@ -639,7 +771,28 @@ def api_chat_stream(background_tasks: BackgroundTasks, data: dict = Body(...), v
         form_data = data.get("form_data", None)
         local_date = data.get("local_date", None)
         tz_offset = data.get("tz_offset", None)
+        # [P3-CHAT-NOSTREAM-CONTEXTO-TEMPORAL-RD · 2026-08-23] Relleno server-side de los
+        # huecos. Este endpoint SÍ tiene caller y siempre los manda, así que aquí es una
+        # red de seguridad; en `POST /api/chat` (abajo) es la única defensa que hay.
+        local_date, tz_offset = _resolve_chat_local_time(local_date, tz_offset, verified_user_id)
         is_call_mode = data.get("is_call_mode", False)
+        # [P3-I18N-PROMPT-VISION-CLIENTE-ESPANOL · 2026-08-23] El contexto de la foto viene
+        # ESTRUCTURADO; el servidor compone el bloque y lo pone en el system prompt.
+        vision = data.get("vision") if isinstance(data.get("vision"), dict) else None
+        raw_attachments = data.get("attachments") if isinstance(data.get("attachments"), list) else []
+        attachment_ids = []
+        for item in raw_attachments[:4]:
+            attachment_id = item.get("attachment_id") if isinstance(item, dict) else None
+            if attachment_id:
+                assert_valid_uuid(str(attachment_id))
+                attachment_ids.append(str(attachment_id))
+        client_message_id = data.get("client_message_id")
+        if client_message_id:
+            assert_valid_uuid(str(client_message_id))
+        regenerate_message_id = data.get("regenerate_message_id")
+        if regenerate_message_id:
+            assert_valid_uuid(str(regenerate_message_id))
+        regenerate_response_content = data.get("regenerate_response_content")
         
         # Validación de seguridad IDOR
         if user_id and user_id != "guest" and user_id != session_id:
@@ -669,7 +822,35 @@ def api_chat_stream(background_tasks: BackgroundTasks, data: dict = Body(...), v
         get_or_create_session(session_id, user_id=user_id if user_id != "guest" else None)
         # [P1-CHAT-DB-USER-ID-RLS · 2026-05-19] Pasar user_id explícito.
         _db_user_id = _resolve_user_id_for_db(user_id, session_id)
-        save_message(session_id, "user", prompt, user_id=_db_user_id)
+        is_regeneration = bool(regenerate_message_id or regenerate_response_content)
+        _regenerate_target_id = None
+        if is_regeneration:
+            _regenerate_target_id = get_model_response_id_for_regeneration(
+                session_id,
+                message_id=str(regenerate_message_id) if regenerate_message_id else None,
+                content=str(regenerate_response_content) if regenerate_response_content else None,
+            )
+            if not _regenerate_target_id:
+                raise HTTPException(status_code=409, detail="La respuesta que intentas regenerar ya cambió. Recarga el chat.")
+        if attachment_ids and not _db_user_id:
+            raise HTTPException(status_code=401, detail="Se requiere sesión para adjuntar imágenes.")
+        if is_regeneration:
+            # El turno de usuario original ya existe. Persistirlo otra vez
+            # produce pares user/model duplicados al recargar el historial.
+            pass
+        elif _db_user_id and client_message_id:
+            vision_items = (
+                vision.get("items", [])
+                if isinstance(vision, dict) and vision.get("kind") == "multi"
+                else ([vision] if isinstance(vision, dict) else [])
+            )
+            save_message_with_attachments(
+                session_id, prompt, _db_user_id, attachment_ids,
+                client_message_id=str(client_message_id),
+                vision_items=vision_items,
+            )
+        else:
+            save_message(session_id, "user", prompt, user_id=_db_user_id)
         
         # Handle form_data: merge frontend data with DB health_profile (DRY — shared in services.py)
         form_data = merge_form_data_with_profile(
@@ -733,7 +914,8 @@ def api_chat_stream(background_tasks: BackgroundTasks, data: dict = Body(...), v
                     local_date=local_date,
                     tz_offset=tz_offset,
                     is_call_mode=is_call_mode,
-                    plan_tier=plan_tier
+                    plan_tier=plan_tier,
+                    vision=vision,
                 ):
                     yield chunk
 
@@ -767,10 +949,19 @@ def api_chat_stream(background_tasks: BackgroundTasks, data: dict = Body(...), v
                                     # closure scope. Persiste el ownership
                                     # de la respuesta del modelo al user
                                     # que envió el prompt.
-                                    save_message(
-                                        session_id, "model", response_text,
-                                        user_id=_db_user_id,
-                                    )
+                                    if _regenerate_target_id:
+                                        replaced = replace_model_response_for_regeneration(
+                                            session_id,
+                                            _regenerate_target_id,
+                                            response_text,
+                                        )
+                                        if not replaced:
+                                            raise RuntimeError("No se pudo sustituir la respuesta regenerada")
+                                    else:
+                                        save_message(
+                                            session_id, "model", response_text,
+                                            user_id=_db_user_id,
+                                        )
                                     # `done` con response no-vacío también garantiza
                                     # consumo de tokens incluso si por alguna razón
                                     # los chunks intermedios no se observaron.
@@ -889,13 +1080,21 @@ def api_chat_stream(background_tasks: BackgroundTasks, data: dict = Body(...), v
 
 
 @router.post("", dependencies=[Depends(_CHAT_STREAM_LIMITER)])
-def api_chat(background_tasks: BackgroundTasks, data: dict = Body(...), verified_user_id: str = Depends(verify_api_quota)):
+def api_chat(background_tasks: BackgroundTasks, data: dict = Body(...), verified_user_id: str = Depends(verify_coach_quota)):
     try:
         session_id = data.get("session_id", "default_session")
         prompt = data.get("prompt", "")
         user_id = data.get("user_id", session_id)
         current_plan = data.get("current_plan", None)
         form_data = data.get("form_data", None)
+        local_date = data.get("local_date", None)
+        tz_offset = data.get("tz_offset", None)
+        # [P3-CHAT-NOSTREAM-CONTEXTO-TEMPORAL-RD + P3-CHAT-NONSTREAM-RD-DATE · 2026-08-23]
+        # TODO el contexto temporal de este endpoint (hora, día de la semana, `DIARIO DE HOY`,
+        # días pasados, comidas que quedan hoy) se armaba en hora dominicana cuando el cliente
+        # no mandaba estos dos campos. Se resuelve desde el `verified_user_id`, que ya está
+        # delante: es la opción que no depende de que el caller colabore.
+        local_date, tz_offset = _resolve_chat_local_time(local_date, tz_offset, verified_user_id)
 
         # Validación de seguridad IDOR
         if user_id and user_id != "guest" and user_id != session_id:
@@ -942,7 +1141,15 @@ def api_chat(background_tasks: BackgroundTasks, data: dict = Body(...), verified
         if not current_plan and user_id and user_id != "guest":
             current_plan = get_latest_meal_plan(user_id)
 
-        response_text, updated_fields, new_plan = chat_with_agent(session_id, prompt, current_plan=current_plan, user_id=user_id, form_data=form_data)
+        response_text, updated_fields, new_plan = chat_with_agent(
+            session_id,
+            prompt,
+            current_plan=current_plan,
+            user_id=user_id,
+            form_data=form_data,
+            local_date=local_date,
+            tz_offset=tz_offset,
+        )
 
         # [P1-CHAT-UI-ACTION-INVENTORY · 2026-05-20] Mismo strip que el
         # endpoint /stream — cierra el ciclo del tag visible al refetch.

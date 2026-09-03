@@ -1,7 +1,7 @@
-"""[P0-DEEPSEEK-MIGRATION · 2026-06-12 → P1-COHERE-EMBED-V4 · 2026-06-12]
+"""[P0-LLM-PROVIDER-MIGRATION · 2026-06-12 → P1-COHERE-EMBED-V4 · 2026-06-12]
 Capa pluggable de embeddings. Provider de producción: **Cohere Embed v4**.
 
-Decisión del owner (2026-06-12): el stack queda en DOS providers — DeepSeek
+Decisión del owner (2026-06-12): el stack queda en DOS providers — GLM
 para LLM (ver `llm_provider.py`) y Cohere para embeddings. Embed v4
 (`embed-v4.0`) por su precisión multilingüe (español dominicano) en el RAG
 del formulario de planes y la auditoría de adherencia de los chunks de
@@ -56,7 +56,7 @@ Activación (gating por presencia de key):
   - `openai_compatible` queda disponible para cualquier endpoint /embeddings
     estilo OpenAI (rollback / provider alternativo sin tocar código).
 
-Tooltip-anchor: P0-DEEPSEEK-MIGRATION-EMBEDDINGS · P1-COHERE-EMBED-V4.
+Tooltip-anchor: P0-LLM-PROVIDER-MIGRATION-EMBEDDINGS · P1-COHERE-EMBED-V4.
 """
 from __future__ import annotations
 
@@ -129,7 +129,7 @@ def _embeddings_timeout_s() -> float:
 def _embeddings_api_key() -> str:
     """Key del provider de embeddings. `COHERE_API_KEY` (estándar del SDK)
     con fallback al genérico `EMBEDDINGS_API_KEY` (contrato documentado en
-    P0-DEEPSEEK-MIGRATION para providers openai_compatible)."""
+    P0-LLM-PROVIDER-MIGRATION para providers openai_compatible)."""
     return (
         os.environ.get("COHERE_API_KEY") or os.environ.get("EMBEDDINGS_API_KEY") or ""
     ).strip()

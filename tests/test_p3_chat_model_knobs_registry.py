@@ -56,7 +56,7 @@ _EXPECTED_HELPERS = [
 
 def _extract_helper_body(src: str, helper_name: str) -> str:
     """Extrae el cuerpo de `def _chat_*_model_name(...) -> str: ...` hasta la
-    siguiente función o asignación módulo-level. [P0-DEEPSEEK-MIGRATION]
+    siguiente función o asignación módulo-level. [P0-LLM-PROVIDER-MIGRATION]
     chat/swap aceptan `user_id` opcional (tier-routing) — el regex admite
     parámetros en la firma."""
     def_re = re.compile(

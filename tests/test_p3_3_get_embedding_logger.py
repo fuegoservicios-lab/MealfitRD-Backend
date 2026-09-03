@@ -93,7 +93,7 @@ def test_get_embedding_no_print_for_errors():
 
 def test_get_embedding_uses_logger_error_with_context():
     """El log de error debe incluir contexto diagnóstico.
-    [P0-DEEPSEEK-MIGRATION · 2026-06-12] La generación vive ahora en
+    [P0-LLM-PROVIDER-MIGRATION · 2026-06-12] La generación vive ahora en
     `embeddings_provider.get_text_embedding` (que loguea provider+modelo en
     SU except — un solo punto para todos los surfaces); la capa cacheada de
     fact_extractor (`_cached_text_embedding`, P1-COHERE-EMBED-V4) conserva
@@ -131,7 +131,7 @@ def test_docstring_documents_fail_fast_decision():
 
 
 def test_model_name_bound_before_import():
-    """[P0-DEEPSEEK-MIGRATION · 2026-06-12 → P1-COHERE-EMBED-V4] El
+    """[P0-LLM-PROVIDER-MIGRATION · 2026-06-12 → P1-COHERE-EMBED-V4] El
     defense-in-depth original (`_model_name = \"<unknown>\"` pre-import)
     quedó obsoleto. Contrato vigente: la cadena de delegación es
     `get_embedding` → `_cached_text_embedding` (cache key versionada por

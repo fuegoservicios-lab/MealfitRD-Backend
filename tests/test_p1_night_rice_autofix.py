@@ -100,10 +100,16 @@ def test_knob_off_disables(monkeypatch):
 
 
 def test_callsite_runs_before_macro_engine():
-    """El autofix DEBE correr ANTES de _apply_macro_engine (para que el motor dimensione el tubérculo)."""
+    """El autofix DEBE correr ANTES de _apply_macro_engine (para que el motor dimensione el tubérculo).
+
+    [P1-COUNTRY-SYSTEM-F1 · 2026-08-16 (T4)] El callsite ganó un kwarg (`country=`) — el ancla
+    se ensancha a `"_night_rice_autofix(days,"` (con coma, sin paréntesis de cierre) para tolerar
+    CUALQUIER argumento extra sin perder la aserción real: que `days` sigue siendo el 1er arg
+    posicional y el orden respecto a `_apply_macro_engine` no cambió. Mismo patrón que T3 usó
+    para `run_culinary_judge(plan, `."""
     src = (_BACKEND / "graph_orchestrator.py").read_text(encoding="utf-8")
     body = src[src.index("async def assemble_plan_node"):]
     body = body[:body.index("\nasync def ", 5) if "\nasync def " in body[5:] else len(body)]
-    i_fix = body.index("_night_rice_autofix(days)")
+    i_fix = body.index("_night_rice_autofix(days,")
     i_engine = body.index("_apply_macro_engine(result, days")
     assert i_fix < i_engine

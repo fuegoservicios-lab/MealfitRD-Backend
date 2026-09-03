@@ -3,7 +3,7 @@
 Causa #1 RESTANTE de retries medida en vivo (4 firings en las 2 renovaciones del 2026-07-04):
 la MISMA proteína principal en 2+ comidas del MISMO día (gate P1-VARIETY-SAME-DAY-PROTEIN).
 Los días se generan en paralelo y a ciegas entre sí → el LLM reincide incluso con la directiva
-del retry. Cada retry = un intento completo de generación (costo API DeepSeek).
+del retry. Cada retry = un intento completo de generación (costo API GLM).
 
 Diseño: detector ESPEJO del gate (mismos labels/aliases/word-boundary/relax de meal-count);
 conserva la comida donde la proteína es identidad (en el NOMBRE) y reescribe las otras a una

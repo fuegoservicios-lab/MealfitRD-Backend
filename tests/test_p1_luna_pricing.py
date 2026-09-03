@@ -73,20 +73,23 @@ def test_luna_es_el_mas_barato_de_la_familia():
             < TABLA["gpt-5.6-sol"]["input"])
 
 
-def test_deepseek_sigue_intacto():
+def test_glm_sigue_intacto():
     """El canario no debe haber tocado el pricing del provider que corre en producción."""
-    assert TABLA["deepseek-v4-flash"] == {"input": 140_000, "output": 280_000, "cached": 2_800}
-    assert TABLA["deepseek-v4-pro"] == {"input": 435_000, "output": 870_000, "cached": 3_625}
+    # [P0-GLM-MIGRATION · 2026-09-02] tarifa de LISTA de Z.ai (no la promo -50% de flash).
+    assert TABLA["glm-5.3-flash"] == {"input": 150_000, "output": 500_000, "cached": 30_000}
+    assert TABLA["glm-5.3"] == {"input": 1_400_000, "output": 4_400_000, "cached": 260_000}
 
 
-def test_relacion_de_costo_contra_deepseek():
+def test_relacion_de_costo_contra_glm():
     """El número que decide: mismos tokens, cuánto más caro es Luna.
     [P1-REVIEWER-TIER-MODELS · 2026-07-31] Con el -80%, la relación se DESPLOMÓ:
     de 11.6× flash / 3.7× pro (2026-07-26) a ~2.3× flash y ~0.75× pro — Luna es
-    ahora MÁS BARATO que deepseek-v4-pro, lo que hace viable usarlo de reviewer
+    ahora MÁS BARATO que glm-5.3, lo que hace viable usarlo de reviewer
     clínico hasta en el tier gratis."""
     llamadas = [(25346, 2670, 10658), (25347, 2977, 10658), (25340, 3405, 10658)]
     def _t(m):
         return sum(compute_llm_cost_micros(m, i, o, c) for i, o, c in llamadas)
-    assert 2.1 < _t("gpt-5.6-luna") / _t("deepseek-v4-flash") < 2.5
-    assert 0.65 < _t("gpt-5.6-luna") / _t("deepseek-v4-pro") < 0.85
+    # [P0-GLM-MIGRATION · 2026-09-02] Con Z.ai: Luna ≈1,65× glm-5.3-flash y ≈0,18× glm-5.3
+    # (glm-5.3 cuesta $4.40/M de salida: la red Pro es 5,5× más cara que Luna).
+    assert 1.5 < _t("gpt-5.6-luna") / _t("glm-5.3-flash") < 1.8
+    assert 0.15 < _t("gpt-5.6-luna") / _t("glm-5.3") < 0.22

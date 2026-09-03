@@ -1,6 +1,6 @@
 """[P1-DAYGEN-LUNA-CANARY · 2026-07-26] Canario de MODELO en el day generator.
 
-Andamiaje para medir si un modelo distinto (`gpt-5.6-luna`) genera mejores días que DeepSeek.
+Andamiaje para medir si un modelo distinto (`gpt-5.6-luna`) genera mejores días que GLM.
 Arranca APAGADO: sin `MEALFIT_DAYGEN_CANARY_MODEL` el chain es byte-idéntico al de hoy.
 
 ## Por qué este nodo (medido sobre 24 h de `llm_usage_events`)
@@ -77,13 +77,13 @@ def test_se_antepone_y_conserva_la_cascada(canario_on, monkeypatch):
     ch = go._day_model_chain({"user_id": "u"}, 1)
     assert ch[0] == "gpt-5.6-luna"
     assert len(ch) >= 2, "sin red detrás, un fallo del canario mataría la generación"
-    assert any("deepseek" in m for m in ch[1:])
+    assert any("glm" in m for m in ch[1:])
 
 
 def test_tambien_en_el_retry(canario_on):
     ch = go._day_model_chain({"user_id": "u"}, 2)
     assert ch[0] == "gpt-5.6-luna"
-    assert any("deepseek" in m for m in ch[1:])
+    assert any("glm" in m for m in ch[1:])
 
 
 def test_sin_duplicados():
@@ -141,7 +141,7 @@ def test_fail_safe_apaga(monkeypatch):
 @pytest.mark.parametrize("modelo,es_openai", [
     ("gpt-5.6-luna", True), ("gpt-5.6-sol", True), ("gpt-4o", True),
     ("o3", True), ("o4-mini", True),
-    ("deepseek-v4-flash", False), ("deepseek-v4-pro", False), ("", False),
+    ("glm-5.3-flash", False), ("glm-5.3", False), ("", False),
 ])
 def test_deteccion_de_proveedor(modelo, es_openai):
     assert is_openai_model(modelo) is es_openai
@@ -155,13 +155,13 @@ def test_openai_sin_key_falla_ruidoso(monkeypatch):
         build_chat_llm("gpt-5.6-luna")
 
 
-def test_el_daygen_usa_la_fabrica_no_ChatDeepSeek_a_pelo():
+def test_el_daygen_usa_la_fabrica_no_ChatGLM_a_pelo():
     from pathlib import Path
     src = (Path(go.__file__).resolve().parent / "graph_orchestrator.py").read_text(encoding="utf-8")
     i = src.index("def _build_day_llm(")
     cuerpo = src[i:i + 1800]
     assert "build_chat_llm" in cuerpo, \
-        "con un modelo OpenAI en el chain, ChatDeepSeek lo mandaría al base_url equivocado"
+        "con un modelo OpenAI en el chain, ChatGLM lo mandaría al base_url equivocado"
 
 
 # ───────────── 5. la cohorte llega a la telemetría ─────────────
@@ -208,7 +208,7 @@ def test_se_emiten_las_razones_del_reintento():
 
 def test_el_lector_del_ab_existe_y_agrupa_costo_por_modelo_real():
     """El costo NO se puede agrupar por el tag: un plan asignado a 'on' con el circuit breaker
-    abierto corre DeepSeek igual. El tag dice a quién se asignó; el modelo, qué pasó."""
+    abierto corre GLM igual. El tag dice a quién se asignó; el modelo, qué pasó."""
     from pathlib import Path
     p = Path(go.__file__).resolve().parent / "scripts" / "daygen_canary_ab.py"
     assert p.exists(), "un canario sin lectura no informa nada"

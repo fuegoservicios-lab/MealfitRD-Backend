@@ -147,7 +147,7 @@ def test_toast_passes_onDismiss_callback():
     # _writeDismissAt debe invocar localStorage.setItem con la key
     # canónica.
     write_pat = re.compile(
-        r"localStorage\.setItem\s*\(\s*_DISMISS_STORAGE_KEY\s*,",
+        r"(?:localStorage\.setItem|safeLocalStorageSet)\s*\(\s*_DISMISS_STORAGE_KEY\s*,",  # [re-anclado 2026-08-18: wrapper seguro, misma PROPIEDAD]
     )
     assert write_pat.search(src), (
         "P3-HISTORICAL-TOAST-DISMISS regresión: `_writeDismissAt` no "
@@ -163,7 +163,7 @@ def test_read_uses_canonical_key():
     src = _read_src()
     # `localStorage.getItem(_DISMISS_STORAGE_KEY)` debe aparecer.
     pattern = re.compile(
-        r"localStorage\.getItem\s*\(\s*_DISMISS_STORAGE_KEY\s*\)",
+        r"(?:localStorage\.getItem|safeLocalStorageGet)\s*\(\s*_DISMISS_STORAGE_KEY\s*[,)]",  # [re-anclado 2026-08-18: wrapper seguro, misma PROPIEDAD]
     )
     assert pattern.search(src), (
         "P3-HISTORICAL-TOAST-DISMISS regresión: `_readDismissAt` no "

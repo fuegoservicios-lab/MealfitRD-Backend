@@ -18,6 +18,8 @@ Cadena completa anclada por estos tests:
 """
 from __future__ import annotations
 
+import pytest
+
 import re
 from pathlib import Path
 
@@ -27,9 +29,21 @@ _REPO_ROOT = _BACKEND_ROOT.parent
 _PLANS_PY = (_BACKEND_ROOT / "routers" / "plans.py").read_text(encoding="utf-8")
 _PLANGEN_PY = (_BACKEND_ROOT / "prompts" / "plan_generator.py").read_text(encoding="utf-8")
 _ORCH_PY = (_BACKEND_ROOT / "graph_orchestrator.py").read_text(encoding="utf-8")
-_IQ_JSX = (_REPO_ROOT / "frontend" / "src" / "components" / "assessment" / "questions" / "QBudget.jsx").read_text(encoding="utf-8")
-_FLOW_JSX = (_REPO_ROOT / "frontend" / "src" / "components" / "assessment" / "InteractiveAssessmentFlow.jsx").read_text(encoding="utf-8")
-_CTX_JSX = (_REPO_ROOT / "frontend" / "src" / "context" / "AssessmentContext.jsx").read_text(encoding="utf-8")
+@pytest.fixture(scope="module", autouse=True)
+def _load_frontend_sibling_sources(frontend_repo_path):
+    # La fixture compartida salta el módulo antes de cualquier I/O si falta el hermano.
+    _ = frontend_repo_path
+    global _CTX_JSX, _FLOW_JSX, _FORMVAL_JS, _IQ_JSX
+    _IQ_JSX = (_REPO_ROOT / "frontend" / "src" / "components" / "assessment" / "questions" / "QBudget.jsx").read_text(encoding="utf-8")
+    _FLOW_JSX = (_REPO_ROOT / "frontend" / "src" / "components" / "assessment" / "InteractiveAssessmentFlow.jsx").read_text(encoding="utf-8")
+    _CTX_JSX = (_REPO_ROOT / "frontend" / "src" / "context" / "AssessmentContext.jsx").read_text(encoding="utf-8")
+    _FORMVAL_JS = (_REPO_ROOT / "frontend" / "src" / "config" / "formValidation.js").read_text(encoding="utf-8")
+
+# [P1-COUNTRY-SYSTEM-F1 · fix-round 1 · review] `currencyOptionsForCountry` (por lo
+# tanto los literales `value:'DOP'/label:'RD$'` y `value:'USD'/label:'US$'`) y
+# `effectiveBudgetCurrency` viven en formValidation.js desde el fix-round 1 de Task 6
+# — QBudget/InteractiveAssessmentFlow/useBudgetFloor los IMPORTAN, ya no los definen
+# inline. Ver test_p1_country_system_f1.py sección T6 para el detalle completo.
 
 
 # ---------------------------------------------------------------------------
@@ -126,20 +140,50 @@ def test_initial_form_data_has_budget_amount():
 # 6. [BUDGET-CURRENCY · 2026-05-31] Toggle de moneda RD$/US$ (default DOP/peso)
 # ---------------------------------------------------------------------------
 def test_budget_currency_toggle_defaults_to_dop():
-    # initialFormData: default 'DOP' (peso dominicano) — pedido del usuario.
-    assert re.search(r"budgetCurrency:\s*'DOP'", _CTX_JSX), (
-        "initialFormData no declara `budgetCurrency: 'DOP'` (default peso dominicano)."
+    # [reapuntado 2026-08-23, P1-COUNTRY-BUDGET-CURRENCY-DEFAULT] El literal
+    # `budgetCurrency: 'DOP'` salió de initialFormData: con 6 países, la moneda
+    # default se DERIVA del país (config/countries.js) y el campo nace vacío.
+    # La capacidad que este test afirma no cambia: el default efectivo para DO
+    # sigue siendo el peso — hoy lo garantiza el fallback `|| 'DOP'` de la tabla
+    # de países (y countryBudgetCurrencyDefault.p1.test.jsx cubre la derivación).
+    assert re.search(r"budgetCurrency:\s*''", _CTX_JSX), (
+        "initialFormData debe declarar `budgetCurrency: ''` (la moneda se deriva del país)."
+    )
+    _COUNTRIES_JS = (_REPO_ROOT / "frontend" / "src" / "config" / "countries.js").read_text(encoding="utf-8")
+    assert re.search(r"\|\|\s*'DOP'", _COUNTRIES_JS), (
+        "la tabla de países perdió el fallback a 'DOP': sin él, un país desconocido "
+        "deja al formulario sin moneda y el piso del presupuesto pierde su referencia."
     )
     # Frontend QBudget: toggle RD$/US$ que setea budgetCurrency.
-    assert "updateData('budgetCurrency', 'DOP')" in _IQ_JSX, (
-        "Falta el botón RD$ (setea budgetCurrency='DOP')."
+    # [reapuntado 2026-08-14] Eran dos botones con la moneda escrita en el literal
+    # (`updateData('budgetCurrency', 'DOP')`). Hoy es el `UnitToggle` compartido —el
+    # mismo patrón que LB/KG— y el valor viaja por el `onChange`, así que el literal
+    # desapareció mientras la capacidad seguía intacta. Se afirma la CAPACIDAD: que el
+    # control escriba en `budgetCurrency` y ofrezca las dos monedas con su rótulo.
+    assert re.search(r"onChange=\{\(\w+\)\s*=>\s*updateData\('budgetCurrency',\s*\w+\)\}", _IQ_JSX), (
+        "El control de moneda ya no escribe en `budgetCurrency`."
     )
-    assert "updateData('budgetCurrency', 'USD')" in _IQ_JSX, (
-        "Falta el botón US$ (setea budgetCurrency='USD')."
+    # [reapuntado 2026-08-16, P1-COUNTRY-SYSTEM-F1 fix-round 1] Los literales
+    # value:'DOP'/'USD' vivían inline en QBudget.jsx; ahora `currencyOptionsForCountry`
+    # (formValidation.js) los arma — QBudget solo IMPORTA y llama al helper (compartido
+    # con InteractiveAssessmentFlow/useBudgetFloor, que necesitan la misma tabla). Misma
+    # capacidad afirmada (las DOS opciones existen con su rótulo), archivo distinto.
+    assert re.search(r"value:\s*'DOP'\s*,\s*label:\s*'RD\$'", _FORMVAL_JS), (
+        "Falta la opción RD$ (budgetCurrency='DOP') en formValidation.js."
+    )
+    assert re.search(r"value:\s*'USD'\s*,\s*label:\s*'US\$'", _FORMVAL_JS), (
+        "Falta la opción US$ (budgetCurrency='USD') en formValidation.js."
+    )
+    assert "currencyOptionsForCountry(" in _IQ_JSX, (
+        "QBudget ya no llama al helper compartido currencyOptionsForCountry — "
+        "podría haber vuelto a un array de opciones hardcodeado por su cuenta."
     )
     # El default visible es RD$ (peso) cuando el campo no se ha tocado.
-    assert "formData.budgetCurrency || 'DOP'" in _IQ_JSX, (
-        "El default de la moneda debe ser 'DOP' (peso dominicano)."
+    # [reapuntado 2026-08-23] El literal `|| 'DOP'` de QBudget pasó a
+    # `defaultCurrencyForCountry(formData.country)` — la MISMA garantía, vía la
+    # tabla de países (cuyo fallback 'DOP' ancla el assert de arriba).
+    assert "formData.budgetCurrency || defaultCurrencyForCountry(formData.country)" in _IQ_JSX, (
+        "QBudget perdió la derivación del default de moneda por país."
     )
 
 
@@ -164,15 +208,31 @@ def test_build_budget_context_uses_currency():
 # 7. [BUDGET-MIN · 2026-05-31] Mínimo viable escalado por duración + moneda
 # ---------------------------------------------------------------------------
 def test_budget_minimum_enforced_and_shared_ssot():
-    _FORMVAL = (_REPO_ROOT / "frontend" / "src" / "config" / "formValidation.js").read_text(encoding="utf-8")
     # SSOT del mínimo en formValidation.
     # [BUDGET-MIN-NONLINEAR · 2026-06-23] La tabla per-ciclo reemplazó BUDGET_MIN_PER_DAY.
-    assert "export const minBudgetFor" in _FORMVAL and "BUDGET_MIN_TOTAL" in _FORMVAL, (
+    assert "export const minBudgetFor" in _FORMVAL_JS and "BUDGET_MIN_TOTAL" in _FORMVAL_JS, (
         "Falta el helper SSOT `minBudgetFor` / `BUDGET_MIN_TOTAL` en formValidation.js."
     )
     # El flow gatea "Siguiente Paso" con el MÍNIMO (no solo > 0).
-    assert "minBudgetFor(fd.budgetCurrency" in _FLOW_JSX, (
-        "El validateExtra del flow no exige el mínimo (minBudgetFor) — solo > 0."
+    # [reapuntado 2026-08-16, P1-COUNTRY-SYSTEM-F1 fix-round 1] `fd.budgetCurrency`
+    # crudo habría re-abierto el bug de rollback que el review encontró (una moneda
+    # beta STALE aceptando un monto que el backend, con el knob apagado, rechazaría) —
+    # ahora pasa por `effectiveBudgetCurrency` antes de `minBudgetFor`.
+    # [reapuntado 2026-08-23, P1-COUNTRY-BUDGET-FLOOR-FX] La llamada dejó de estar
+    # anidada: la moneda se extrae a una variable porque ahora TAMBIÉN decide si el piso
+    # bloquea o sólo orienta (`pisoSinProcedencia`). La propiedad que este test protege es
+    # la misma —el mínimo se resuelve con la moneda EFECTIVA, no con `fd.budgetCurrency`
+    # crudo, que reabriría el bug de la moneda beta stale— y se ancla en eso, no en la
+    # forma sintáctica.
+    _i = _FLOW_JSX.find("const isCustomBudgetValid")
+    assert _i > 0, "desapareció isCustomBudgetValid del flow"
+    _gate = _FLOW_JSX[_i:_FLOW_JSX.index("\n};", _i)]
+    assert "effectiveBudgetCurrency(fd?.country, fd?.budgetCurrency)" in _gate, (
+        "El gate resuelve la moneda sin effectiveBudgetCurrency: una moneda beta STALE "
+        "aceptaría un monto que el backend rechaza."
+    )
+    assert "minBudgetFor(moneda," in _gate, (
+        "El validateExtra del flow no exige el mínimo vía minBudgetFor con la moneda efectiva."
     )
     # QBudget usa el mismo helper (SSOT) para el hint + el input min + la advertencia.
     # [P1-BUDGET-FLOOR-PERSONALIZADO · 2026-07-09] QBudget ya no llama minBudgetFor

@@ -110,12 +110,46 @@ def test_esta_sin_acentos():
 
 def test_los_tiers_de_contains_usan_la_lista_filtrada():
     """Ancla de la CLASE: si un tier vuelve a recorrer `all_aliases` buscando DENTRO del texto,
-    el modificador vuelve a secuestrar el match."""
+    el modificador vuelve a secuestrar el match.
+
+    [reescrito al RESULTADO · P1-COHERENCE-ALIAS-INDEX · 2026-08-14] Afirmaba el
+    MECANISMO: buscaba el literal `_aliases_for_contains = [` en el source, o sea
+    exigía que el filtro fuera una list-comprehension inline en ese punto exacto.
+    Cuando el filtro se movió al índice cacheado (mismo filtro, construido una vez
+    por catálogo en vez de una por llamada), el test falló sin que la invariante se
+    hubiera movido un milímetro — los 17 tests de comportamiento de este archivo
+    siguieron verdes. *Un guard atado al cómo bloquea el arreglo del qué.*
+
+    Ahora afirma lo único que importa: que la colección que recorren los tiers de
+    búsqueda-dentro-del-texto NO contenga modificadores, y que la de match exacto
+    sí los conserve. Vive donde viva el filtro."""
     from pathlib import Path
+
+    # 1) El RESULTADO: el índice separa las dos colecciones como manda la invariante.
+    catalogo = [
+        {"name": "Plátano maduro", "aliases": ["maduro", "platano maduro"]},
+        {"name": "Mango", "aliases": ["mangos"]},
+    ]
+    todos, contains = sc._get_normalize_alias_index(catalogo)
+    alias_todos = {a for a, _ in todos}
+    alias_contains = {p.pattern.replace(r"\b", "").replace("\\", "") for p, *_ in contains}
+    assert "maduro" in alias_todos, \
+        "los tiers de match EXACTO deben seguir viendo el alias modificador"
+    assert "maduro" not in alias_contains, \
+        "un modificador-solo entró a la colección de búsqueda-dentro-del-texto"
+    assert "mangos" in alias_contains, "el filtro se llevó por delante un alias legítimo"
+
+    # 2) La ESTRUCTURA, sin fijar dónde nace el filtro: los dos tiers de contains
+    #    iteran la colección filtrada; los de exacto, la completa.
     src = Path(sc.__file__).resolve().read_text(encoding="utf-8")
-    i = src.index("_aliases_for_contains = [")
+    i = src.index("def normalize_name(")
     bloque = src[i:src.index("# ── INTENTO 5", i)]
-    assert bloque.count("for alias_stripped, master_name in _aliases_for_contains:") == 2, \
+    # [re-anclado 2026-08-19 · P1-CATALOG-ORDER-DETERMINISTIC] los tiers pasaron de
+    # loops inline a `_best_contains_match(texto, _aliases_for_contains)` (best-match
+    # determinista por longitud/posición). La PROPIEDAD es la misma: dos tiers de
+    # búsqueda-dentro-del-texto consumiendo la colección FILTRADA.
+    assert bloque.count("_best_contains_match(") == 2 and \
+        bloque.count("_aliases_for_contains)") >= 2, \
         "los dos tiers de búsqueda-dentro-del-texto deben usar la lista filtrada"
     assert "for alias_stripped, master_name in all_aliases:" in bloque, \
         "los tiers de match EXACTO deben seguir viendo la lista completa"

@@ -60,6 +60,7 @@ import pytest
 
 _REPO_ROOT = Path(__file__).resolve().parent.parent.parent
 _PANTRY_JSX = _REPO_ROOT / "frontend" / "src" / "pages" / "Pantry.jsx"
+_UNIT_SYSTEM_JS = _REPO_ROOT / "frontend" / "src" / "config" / "unitSystem.js"
 # [P1-NEON-DB-MIGRATION · 2026-06-12] El transporte del inventario migró de
 # PostgREST `.select('*, master_ingredients(...)')` (frontend) a los endpoints
 # backend GET /api/inventory + GET /api/catalog, cuyo SELECT vive en
@@ -137,14 +138,17 @@ def test_user_inventory_select_includes_market_container():
 
 
 def test_render_item_card_uses_market_container_as_display():
-    """El render del item DEBE computar `displayUnit` priorizando
+    """[P2-I18N-UNIDADES-DE-ENVASE-CRUDAS-EN-NEVERA-Y-DIARIO · 2026-08-23] La prioridad
+    `market_container || item.unit` sigue; ahora envuelta en `glossUnitWord(..., t)` para pintar
+    el envase en el idioma del usuario (el DATO no cambia).
+    El render del item DEBE computar `displayUnit` priorizando
     `master_ingredients?.market_container` sobre `item.unit`.
     """
     src = _read_pantry()
     assert re.search(
-        r"const\s+displayUnit\s*=\s*item\.master_ingredients\?\.market_container\s*\|\|\s*item\.unit",
+        r"projectMeasureForCountry\(\s*item\.quantity\s*,\s*item\.master_ingredients\?\.market_container\s*\|\|\s*item\.unit\s*,\s*formData\?\.country\s*\)",
         src,
-    ), (
+    ) and "const displayUnit = glossUnitWord(_medida.unit, t);" in src, (
         "El cálculo `const displayUnit = item.master_ingredients?.market_container "
         "|| item.unit` no se encuentra en el render del item. Sin él, el item "
         "muestra `item.unit` (que para items viejos es `paquete` aunque el "
@@ -172,11 +176,10 @@ def test_common_purchase_units_includes_carton():
     pero no 'cartón' — leche dominicana viene en cartón.
     """
     src = _read_pantry()
-    match = re.search(
-        r"const\s+COMMON_PURCHASE_UNITS\s*=\s*\[([^\]]+)\]",
-        src,
-    )
-    assert match, "Constante `COMMON_PURCHASE_UNITS` no encontrada"
+    assert "unitOptionsForCountry" in src
+    unit_src = _UNIT_SYSTEM_JS.read_text(encoding="utf-8")
+    match = re.search(r"const\s+ENVASES\s*=\s*\[([^\]]+)\]", unit_src)
+    assert match, "SSOT `ENVASES` no encontrado en unitSystem.js"
     block = match.group(1)
     assert "'cartón'" in block, (
         "`COMMON_PURCHASE_UNITS` no incluye `'cartón'`. Sin él, el picker "

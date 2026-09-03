@@ -1,0 +1,244 @@
+#!/usr/bin/env python
+"""[P1-COUNTRY-SYSTEM-F2 · 2026-08-17] Task 5 — Catálogo España. Inserta al catálogo
+(`master_ingredients`, Neon) los 32 alimentos que `scripts/country_catalog_gap.py --country ES`
+clasificó DROP contra la lista curada de 80 alimentos/platos españoles (T1): 0
+SUSTITUCION-SILENCIOSA, 32 DROP, 48 RESUELVE-BIEN. Estos 32 son exactamente los que la lista
+curada nombra y el catálogo vivo NO resuelve por ningún tier (exacto/alias/fuzzy/semántico).
+
+    Jamón serrano      Jamón ibérico      Chorizo español    Morcilla
+    Lomo embuchado     Panceta ibérica    Gambas             Almejas
+    Boquerones         Anchoas            Cordero            Requesón
+    Cuajada            Nata               Judías blancas     Judías pintas
+    Acelgas            Fideos             Membrillo          Higo
+    Azafrán            Alioli             Turrón             Mazapán
+    Sobrasada          Butifarra          Percebes           Vieira
+    Chistorra          Piñones            Almendra marcona   Membrillo dulce
+
+NUTRICIÓN: 100% USDA FoodData Central (SR Legacy). Vive en
+`scripts/data/new_foods_es_2026_08_17.json` (SSOT del dato, `fdc_id` + `_usda_description` por
+fila para auditabilidad). Convención del catálogo respetada: leguminosas en estado SECO,
+carnes/mariscos/vegetales/frutas CRUDOS (o su estado de venta real: curado/enlatado donde
+corresponde — jamón/chorizo/anchoas se CONSUMEN curados, no en canal).
+
+⚠️ FUENTE DEL DATO: sin `USDA_API_KEY` en este entorno (ni local ni vía DEMO_KEY, que devolvió
+`X-Ratelimit-Limit: 10` y no repuso en 65s — insuficiente para 32 altas) se usó el volcado bulk
+oficial y gratuito de FoodData Central (`fdc.nal.usda.gov/download-datasets`, SR Legacy
+2018-04 + Foundation Foods 2026-04-30, sin límite de tasa, MISMA fuente/schema que consume la
+API en vivo) en vez de la API HTTP — mismo dato, mismo `fdc_id`, cero valores inventados. Igual
+que en los lotes previos (`fetch_usda_foods_2026_07_26.py`), NUNCA se sustituye un `fdc_id` por
+un número inventado con cara de fuente.
+
+SUSTITUCIONES DOCUMENTADAS (USDA no distingue el producto español específico — mismo patrón que
+"Queso de oveja"→feta del lote de variedad 2026-07-26, NO inventado, categoría más cercana real):
+    Jamón serrano/ibérico → fdc=168282 "Pork, cured, ham, center slice, country-style,
+        separable lean only, raw" (AMBAS filas, mismo fdc — [fix-round 1 · 2026-08-17] Jamón
+        serrano usaba originalmente fdc=168295, sodium_mg=1280, un corte húmedo-curado/listo-
+        para-calentar; el review señaló que el jamón serrano real es SECO-curado
+        (~2000-2500 mg sodio/100g estimado). Ninguna entrada "dry-cured"/"prosciutto"/"parma"/
+        "serrano"/"iberico" existe en SR Legacy NI Foundation Foods — confirmado contra el bulk
+        dump completo. fdc=168282 (Na=2700 mg) es la entrada de MAYOR sodio de TODO el dataset
+        para cualquier "ham" — "country-style" es el término USDA más cercano a un jamón
+        seco-curado real, y YA era el fdc de Jamón ibérico. Ambas filas quedan con macros
+        IDÉNTICAS — tradeoff disclosed, no un valor inventado con cara de fuente. El sodio real
+        de jamón serrano probablemente sigue MÁS ALTO que 2700 en la práctica — sigue siendo
+        una subestimación conservadora, documentada en `_fix_round_1_provenance` del JSON).
+    Lomo embuchado        → "Canadian bacon" (lomo de cerdo curado, mismo corte/preparación).
+    Cuajada                → "Cheese, cottage, creamed" (cuajo de leche fresco, análogo más
+        cercano; requesón usa ricotta, que SÍ es un match directo).
+    Alioli                 → "Salad dressing, mayonnaise, regular" (ajoaceite ≈ perfil graso de
+        mayonesa; USDA no tiene "aioli").
+    Sobrasada/Chistorra    → mismo fdc que Chorizo español (embutido de cerdo con pimentón,
+        USDA no los distingue). Butifarra usa "Sausage, Italian, pork, mild" (blanca, sin
+        pimentón — perfil más cercano a un embutido fresco sin adobo rojo).
+    Percebes               → "Crustaceans, crab, blue, raw" (USDA no tiene percebe/goose
+        barnacle; crustáceo más cercano disponible).
+    Almendra marcona        → "Nuts, almonds" (USDA no distingue la variedad Marcona).
+    Membrillo dulce         → "Jams and preserves" genérico (USDA no tiene pasta/dulce de
+        membrillo; la categoría "confitura de fruta cocida con azúcar" es la más cercana).
+
+Atwater >12% (marcado, NO es error — mismo patrón que "Tomate enlatado" +20,6% del lote de
+variedad): Acelgas (+26,1%, 19 kcal — a esa escala la fibra no aportada a Atwater es la mayoría
+de la diferencia absoluta, pocas kcal); Azafrán (+16,1%, especia deshidratada rica en fibra que
+nadie come en porciones de 100 g).
+
+[fix-wave deploy-gate · 2026-08-17] 6 filas de este lote tenían micros individuales en NULL
+(`test_catalog_micros_fully_populated`, deploy-gate blanket sobre las 18 columnas de
+`_MICRO_COLS`) — nunca se copiaron del fdc citado al JSON en el commit original. Boquerones/
+Butifarra: `vit_d_mcg=0` (fdc 174182/171631 no reportan vitamina D — mismo criterio del resto del
+catálogo). Cordero/Percebes: `sugars_g=0` matemáticamente forzado (`carbs_g` ya es 0/0.04 en esas
+filas) + `vit_d_mcg=0` (no reportado). Membrillo: `vit_d_mcg=0` (no reportado) + `sugars_g=10.34`
+sin cifra USDA para fdc 168163 — escalado del ratio sugars/carbs de Tomate (2.63/3.89=67,6%,
+fruta ya real del catálogo, único analog disponible en este micro-round) aplicado al `carbs_g`
+propio (15.3*0,676). Azafrán: `sugars_g=3.27` sin cifra USDA para fdc 170934 — estimado bajo
+(~5% de carbs_g=65.4) consistente con el perfil de especias secas molidas ya reales del catálogo
+(Cúrcuma 4,8%, Comino 5,1%).
+
+PRECIOS: NINGUNO de estos 32 lleva precio RD — a propósito (contrato de la Task 5: "fila
+master_ingredients SIN precio RD"). España es país BETA (`COUNTRY_PROFILES['ES']['is_beta']`,
+P1-COUNTRY-SYSTEM-F1): su lista de compras corre en `pricing_mode='beta_no_prices'`
+(`_strip_prices_for_beta_pricing_mode`, T7) — no hay mercado RD que cotizar. A diferencia de
+`add_foods_batch1_2026_06_26.py`/`add_foods_variety_2026_07_26.py` (que EXIGEN precio, gate
+anti-precio-0, para no contaminar el costeo del plan RD) este script hace lo OPUESTO a propósito:
+inserta con `price_per_lb=0, price_per_unit=0` SIEMPRE. El keep sin-precio en la lista de compras
+lo cubre la generalización de P1-BAKING-STAPLES (`shopping_calculator._COUNTRY_CATALOG_UNPRICED_TOKENS`,
+mismo mecanismo/knob propio `MEALFIT_COUNTRY_CATALOG_UNPRICED_KEEP`) — NO el gate
+`_is_verified_for_shopping` (ese sigue exigiendo precio>0, intacto, `MEALFIT_VERIFIED_INGREDIENTS_ONLY`
+sin tocar).
+
+IDEMPOTENTE: salta por `name` ya existente CON `fdc_id` Y TODAS las columnas nutricionales de
+`_COLMAP` iguales (mismo patrón que los 3 lotes previos, generalizado) — re-correr no duplica.
+[fix-round 1 · 2026-08-17] si `fdc_id` difiere (re-sourceo — p.ej. Jamón serrano, ver §2 del
+reporte de la task: sodio 1280→2700mg, substrato húmedo→seco-curado), UPDATE en vez de skip.
+[fix-wave deploy-gate · 2026-08-17] generalizado: cualquier micro individual que difiera
+(backfill de NULLs — Boquerones/Butifarra/Cordero/Membrillo/Percebes/Azafrán) TAMBIÉN dispara
+UPDATE. Salvaguarda: el UPDATE solo escribe una columna nutricional cuando el JSON trae un valor
+no-nulo — un dict de macros parcial nunca sobreescribe con NULL un dato real ya persistido.
+
+USO:
+    cd backend
+    python scripts/add_foods_es_2026_08_17.py              # DRY-RUN
+    python scripts/add_foods_es_2026_08_17.py --commit      # inserta/actualiza de verdad
+
+[P2-LOGGER-EXEMPT: script CLI one-shot, la salida a stdout ES el producto]
+"""
+import datetime
+import json
+import os
+import sys
+
+try:
+    from dotenv import load_dotenv
+    for _p in (os.path.join(os.path.dirname(__file__), "..", ".env"),
+               os.path.join(os.getcwd(), ".env"), "/opt/mealfit/backend/.env"):
+        if os.path.exists(_p):
+            load_dotenv(_p)
+            break
+except Exception:
+    pass
+
+import psycopg
+
+_AQUI = os.path.dirname(os.path.abspath(__file__))
+_NEON = os.environ.get("NEON_DATABASE_URL_POOLED") or os.environ.get("NEON_DATABASE_URL")
+COMMIT = "--commit" in sys.argv
+
+# record-key → columna DB (mismo mapeo que add_foods_batch1_2026_06_26.py / add_foods_variety_2026_07_26.py)
+_COLMAP = {
+    "kcal": "kcal_per_100g", "protein_g": "protein_g_per_100g", "carbs_g": "carbs_g_per_100g",
+    "fats_g": "fats_g_per_100g", "fiber_g": "fiber_g_per_100g", "sugars_g": "sugars_g_per_100g",
+    "satfat_g": "saturated_fat_g_per_100g", "sodium_mg": "sodium_mg_per_100g",
+    "cholesterol_mg": "cholesterol_mg_per_100g", "calcium_mg": "calcium_mg_per_100g",
+    "iron_mg": "iron_mg_per_100g", "potassium_mg": "potassium_mg_per_100g",
+    "magnesium_mg": "magnesium_mg_per_100g", "phosphorus_mg": "phosphorus_mg_per_100g",
+    "zinc_mg": "zinc_mg_per_100g", "vit_d_mcg": "vitamin_d_mcg_per_100g",
+    "b12_mcg": "vitamin_b12_mcg_per_100g", "folate_mcg_dfe": "folate_mcg_dfe_per_100g",
+    "vit_a_mcg_rae": "vitamin_a_mcg_rae_per_100g", "vit_c_mg": "vitamin_c_mg_per_100g",
+    "vit_e_mg": "vitamin_e_mg_per_100g", "vit_k_mcg": "vitamin_k_mcg_per_100g",
+    "selenium_mcg": "selenium_mcg_per_100g", "omega3_ala_g": "omega3_ala_g_per_100g",
+}
+
+
+def _registros():
+    for p in (os.path.join(_AQUI, "data", "new_foods_es_2026_08_17.json"),
+              os.path.join(os.getcwd(), "scripts", "data", "new_foods_es_2026_08_17.json"),
+              "/tmp/new_foods_es_2026_08_17.json"):
+        if os.path.exists(p):
+            with open(p, encoding="utf-8") as f:
+                return json.load(f)
+    print("FATAL: no se encontró new_foods_es_2026_08_17.json", file=sys.stderr)
+    sys.exit(1)
+
+
+def main():
+    recs = _registros()
+    if not _NEON:
+        print("FATAL: NEON url ausente", file=sys.stderr)
+        return 1
+
+    hoy = datetime.date.today()
+    puestos = ya = actualizados = 0
+    # [P1-COUNTRY-SYSTEM-F2 · fix-wave deploy-gate · 2026-08-17] Generalizado más allá de solo
+    # `fdc_id` (mismo patrón aplicado a `add_foods_mx_co_2026_08_17.py` en micro-round 2 + este
+    # mismo fix-wave): ahora compara TODAS las columnas nutricionales de `_COLMAP` -- un UPDATE que
+    # solo rellena micros NULL (vitD/sugars/...) sin re-sourcear `fdc_id` dispara igual. Salvaguarda:
+    # el UPDATE solo escribe una columna nutricional cuando el JSON trae un valor no-nulo para ella
+    # -- un dict de macros parcial nunca sobreescribe con NULL un dato real ya persistido.
+    _nutri_cols = list(_COLMAP.values())
+    _cmp_cols = ["fdc_id"] + _nutri_cols
+
+    def _val_eq(a, b):
+        if a is None and b is None:
+            return True
+        if a is None or b is None:
+            return False
+        try:
+            return abs(float(a) - float(b)) <= 0.05
+        except (TypeError, ValueError):
+            return a == b
+
+    with psycopg.connect(_NEON) as conn:
+        existen = {
+            row[0]: dict(zip(_cmp_cols, row[1:]))
+            for row in conn.execute(
+                f"SELECT name, {', '.join(_cmp_cols)} FROM public.master_ingredients").fetchall()
+        }
+        for r in recs:
+            nm = r["name"]
+            cols = {
+                "slug": r["slug"], "name": nm, "category": r["category"],
+                "aliases": r.get("aliases") or [], "default_unit": r["default_unit"],
+                "is_dominican_cultivar": bool(r.get("is_dominican_cultivar")),
+                "density_g_per_cup": r.get("density_g_per_cup"),
+                "density_g_per_unit": r.get("density_g_per_unit"),
+                "nutrition_source": "usda", "nutrition_source_date": hoy,
+                "fdc_id": r.get("fdc_id"),
+                # [T5 · SIN precio RD, a propósito — ver docstring del módulo]
+                "price_per_lb": 0, "price_per_unit": 0,
+            }
+            for k, dbcol in _COLMAP.items():
+                cols[dbcol] = r.get(k)
+
+            if nm in existen:
+                db_row = existen[nm]
+                diffs = [c for c in _cmp_cols if not _val_eq(db_row.get(c), cols.get(c))]
+                if not diffs:
+                    print(f"  ~ EXISTE (sin diffs), salto: {nm}")
+                    ya += 1
+                    continue
+                # [fix-round 1 · 2026-08-17] fdc_id difiere del que ya vive en la fila (re-sourceo)
+                # O [fix-wave deploy-gate · 2026-08-17] algún micro individual difiere (backfill de
+                # NULLs) -- ambos casos disparan UPDATE. Salvaguarda (ver comentario arriba):
+                # columnas nutricionales solo entran al SET si el JSON trae un valor no-nulo.
+                nombres_upd = [c for c in cols if c not in ("slug", "name")
+                               and (c not in _nutri_cols or cols[c] is not None)]
+                set_clause = ", ".join(f"{c} = %s" for c in nombres_upd)
+                if COMMIT:
+                    conn.execute(
+                        f"UPDATE public.master_ingredients SET {set_clause} WHERE name = %s",
+                        [cols[c] for c in nombres_upd] + [nm])
+                print(f"  {'~ ACTUALIZADO' if COMMIT else '~ (dry) actualizaria'}: {nm} [{r['category']}] "
+                      f"diffs={diffs} fuente={r.get('_usda_description', '?')!r}")
+                actualizados += 1
+                continue
+
+            nombres = list(cols.keys())
+            if COMMIT:
+                conn.execute(
+                    f"INSERT INTO public.master_ingredients ({', '.join(nombres)}) "
+                    f"VALUES ({', '.join(['%s'] * len(nombres))})",
+                    [cols[c] for c in nombres])
+            print(f"  {'+ INSERTADO' if COMMIT else '+ (dry) insertaría'}: {nm} [{r['category']}] "
+                  f"{r['kcal']}kcal/{r['protein_g']}P/{r.get('sodium_mg','?')}mgNa "
+                  f"fdc={r.get('fdc_id')} SIN-PRECIO fuente={r.get('_usda_description', '?')!r}")
+            puestos += 1
+        if COMMIT:
+            conn.commit()
+            print(f"\nCOMMITTED. insertados={puestos}, actualizados={actualizados}, ya-existen={ya}")
+        else:
+            print(f"\nDRY-RUN. insertaría={puestos}, actualizaría={actualizados}, ya-existen={ya}. "
+                  f"Re-corre con --commit.")
+    return 0
+
+
+if __name__ == "__main__":
+    raise SystemExit(main())

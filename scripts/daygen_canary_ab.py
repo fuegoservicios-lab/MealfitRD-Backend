@@ -12,7 +12,7 @@ preguntas que deciden si el modelo caro se queda:
     `metadata->>'daygen_model_cohort'` y la columna `retries`.
   · **costo** sale de `llm_usage_events` filtrando `node='day_generator'` y agrupando por
     `model`. NO usa el tag: agrupa por el modelo que REALMENTE corrió. Un plan puede quedar en
-    la cohorte 'on' y aun así generarse con DeepSeek — si el circuit breaker del canario está
+    la cohorte 'on' y aun así generarse con GLM — si el circuit breaker del canario está
     abierto, `_build_day_llm` cae al siguiente del chain. El tag dice a quién se le asignó; el
     modelo dice qué pasó. Cuando difieren, manda el modelo.
 

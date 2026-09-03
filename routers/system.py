@@ -1,4 +1,4 @@
-from fastapi import APIRouter, Body, HTTPException, Request
+from fastapi import APIRouter, Body, Depends, HTTPException, Request
 from error_utils import safe_error_detail
 import hashlib
 import logging
@@ -53,6 +53,26 @@ def _hash_uuid_for_public(value: Optional[str]) -> Optional[str]:
 # sola implementación de auth admin (CRON_SECRET). Importar desde el sibling
 # router no genera ciclo: plans.py no importa system.py.
 from routers.plans import _verify_admin_token, _check_admin_rate_limit  # noqa: E402
+from rate_limiter import RateLimiter  # noqa: E402
+
+# [P2-HEALTH-LIMITER - 2026-08-15] Freno per-IP para los health PUBLICOS.
+#
+# Los cinco (`/atomic-pool-health`, `/chunk-queue-health`,
+# `/pantry-tolerance-health`, `/tz-fallback-health`, `/health/plan-graph`) son
+# publicos A PROPOSITO: P3-HEALTH-AGGREGATES-DISCLOSURE-DEFERRED decidio que un
+# poller externo (Grafana, UptimeRobot) pueda leerlos sin credenciales. Eso NO se
+# toca aqui, y por eso NO se usa `_check_admin_rate_limit`: ese helper es del gate
+# admin y su test de divulgacion lo prohibe explicitamente en estos endpoints.
+#
+# Lo que faltaba era otra cosa: eran `def` (no `async def`), asi que corren en el
+# threadpool de anyio -- 40 tokens para TODO el proceso. `chunk-queue-health`
+# ademas ejecuta tres `execute_sql_query`. Una inundacion no los tumba a ellos:
+# degrada la latencia de todos los handlers sincronos de la app.
+#
+# 60/60s deja a un poller legitimo (1/min) dos ordenes de magnitud por debajo.
+# Publico y con freno no son opuestos: lo contrario de publico es autenticado, no
+# ilimitado.
+_HEALTH_LIMITER = RateLimiter(max_calls=60, period_seconds=60)
 
 @router.get("/health")
 def get_system_health(request: Request):
@@ -239,7 +259,7 @@ def get_system_health(request: Request):
 
 
 @router.get("/atomic-pool-health")
-def get_atomic_pool_health():
+def get_atomic_pool_health(_rl: object = Depends(_HEALTH_LIMITER)):
     """[P1-4] Salud del `connection_pool` que sustenta
     `update_user_health_profile_atomic`.
 
@@ -284,7 +304,7 @@ def get_atomic_pool_health():
 
 
 @router.get("/chunk-queue-health")
-def get_chunk_queue_health():
+def get_chunk_queue_health(_rl: object = Depends(_HEALTH_LIMITER)):
     """[P1-5] Visibilidad del worker de chunks: backlog, antigüedad, último run y
     tasa de fallos en las últimas 24h.
 
@@ -374,7 +394,7 @@ def get_chunk_queue_health():
 
 
 @router.get("/pantry-tolerance-health")
-def get_pantry_tolerance_health():
+def get_pantry_tolerance_health(_rl: object = Depends(_HEALTH_LIMITER)):
     """[P1-4] Visibilidad de fallbacks de `_get_pantry_tolerance_for_user`.
 
     Cada vez que el helper cae al default por una razón inesperada (DB blip,
@@ -437,7 +457,7 @@ def get_pantry_tolerance_health():
 
 
 @router.get("/tz-fallback-health")
-def get_tz_fallback_health():
+def get_tz_fallback_health(_rl: object = Depends(_HEALTH_LIMITER)):
     """[P2-1] Visibilidad agregada de fallbacks TZ en `_enqueue_plan_chunk`.
 
     Antes cada chunk que caía al fallback TZ emitía una línea WARNING; un plan
@@ -524,7 +544,7 @@ def get_tz_fallback_health():
 
 
 @router.get("/health/plan-graph")
-def get_plan_graph_health():
+def get_plan_graph_health(_rl: object = Depends(_HEALTH_LIMITER)):
     """[P1-9] Health detallado del grafo LangGraph del orquestador.
 
     Antes la única señal era el endpoint global `/ready` en `app.py`, que es
@@ -662,6 +682,149 @@ class _DeployLagCheckBody(BaseModel):
     """
     auto_bump: bool = Field(default=False)
     expected_marker: Optional[str] = Field(default=None)
+
+
+class _WorkerDrainBody(BaseModel):
+    wait_s: int = Field(default=20, ge=0, le=25)
+    cancel: bool = False
+
+
+@router.post("/admin/worker-drain")
+def admin_worker_drain(
+    request: Request,
+    body: Optional[_WorkerDrainBody] = Body(default=None),
+):
+    """[P1-ARQ25-F1-CLOSE · 2026-09-02] Drain cooperativo PARA EL DEPLOY (§5.5 del roadmap).
+
+    Vivo: el deploy de las 12:27 reinició el backend con el chunk inicial del plan 197970fa
+    a mitad del ensamblado. El drain del shutdown no puede ayudar: systemd remata a los
+    10 s (`TimeoutStopSec=10`) y un pipeline dura minutos; alargar el stop dejaría la API
+    caída durante el drain. La solución es ANTES del restart: el script de deploy pide
+    aquí que el worker deje de reclamar y consulta (con esperas cortas y acotadas) hasta
+    que no quede ningún tick en vuelo; sólo entonces reinicia. Si el deploy se aborta,
+    `cancel=true` devuelve el worker a la normalidad.
+
+    Auth: `Authorization: Bearer <CRON_SECRET>` (mismo patrón que `/admin/*`).
+    Respuesta: `draining`, `ticks_in_flight` (de ESTE proceso), `drained`
+    (True si quedó vacío dentro de `wait_s`), `initial_chunks_processing` (DB, informativo).
+    """
+    _verify_admin_token(request.headers.get("authorization"))
+    b = body or _WorkerDrainBody()
+    try:
+        from cron_tasks import (
+            cancel_worker_drain, request_worker_drain,
+            worker_drain_requested, worker_ticks_in_flight,
+        )
+    except Exception as e:  # sin scheduler local (tests/CLI): nada que drenar
+        return {"draining": False, "ticks_in_flight": 0, "drained": True, "detail": f"worker no disponible: {type(e).__name__}"}
+    if b.cancel:
+        cancel_worker_drain()
+        return {"draining": False, "ticks_in_flight": worker_ticks_in_flight(), "drained": worker_ticks_in_flight() == 0}
+    drained = request_worker_drain(timeout_s=float(b.wait_s))
+    initial_processing = None
+    try:
+        from db import execute_sql_query
+        row = execute_sql_query(
+            "SELECT count(*) AS n FROM plan_chunk_queue WHERE status = 'processing' AND chunk_kind = 'initial'",
+            fetch_one=True,
+        )
+        initial_processing = int((row or {}).get("n") or 0)
+    except Exception:
+        pass
+    return {
+        "draining": worker_drain_requested(),
+        "ticks_in_flight": worker_ticks_in_flight(),
+        "drained": bool(drained),
+        "initial_chunks_processing": initial_processing,
+    }
+
+
+ARQ25_GATE_SOAK_DAYS = 7
+_ARQ25_LIFECYCLE_ALERT_HINTS = ("arq25", "lifecycle", "fencing", "zombie", "deploy_lag", "chunk", "pending_pipeline", "run_")
+
+
+def _arq25_days_since(ts) -> Optional[float]:
+    if ts is None:
+        return None
+    from datetime import datetime, timezone
+    if getattr(ts, "tzinfo", None) is None:
+        ts = ts.replace(tzinfo=timezone.utc)
+    return round((datetime.now(timezone.utc) - ts).total_seconds() / 86400.0, 2)
+
+
+def arq25_gate_status(execute_sql_query) -> dict:
+    """[P1-ARQ25-F1-CLOSE · 2026-09-02] Estado del gate de la Fase 1 (roadmap 2.5), medido en DB.
+
+    Gate escrito: 10 planes reales consecutivos por la cola con cero duplicados, cero commits
+    stale y cero `pending_pipeline`; ≥2 con kill del proceso a mitad de LLM recuperados; 7 días
+    sin alerta nueva; después el flip global. El «soak» de 7 días es OBSERVACIÓN, no código:
+    aquí se mide para que el flip sea una lectura y no una corazonada.
+    """
+    q = execute_sql_query
+    since_row = q("SELECT min(created_at) AS t FROM plan_generation_runs", fetch_one=True) or {}
+    since = since_row.get("t")
+    runs = (q("SELECT count(*) AS n, count(DISTINCT user_id) AS u FROM plan_generation_runs", fetch_one=True) or {})
+    plans = (q(
+        "SELECT count(*) AS n FROM plan_generation_runs r JOIN meal_plans mp ON mp.id = r.plan_id "
+        "WHERE jsonb_array_length(coalesce(mp.plan_data->'days', '[]'::jsonb)) > 0", fetch_one=True) or {})
+    dup_runs = (q(
+        "SELECT count(*) AS n FROM (SELECT plan_id FROM plan_generation_runs WHERE plan_id IS NOT NULL "
+        "GROUP BY plan_id HAVING count(*) > 1) d", fetch_one=True) or {})
+    dup_plans = (q(
+        "SELECT count(*) AS n FROM (SELECT user_id, request_fingerprint, count(DISTINCT plan_id) AS c "
+        "FROM plan_generation_runs WHERE request_fingerprint IS NOT NULL GROUP BY user_id, request_fingerprint "
+        "HAVING count(DISTINCT plan_id) > 1) d", fetch_one=True) or {})
+    fencing = (q(
+        "SELECT count(*) AS n FROM pipeline_metrics WHERE node = 'arq25_fencing_rejected'", fetch_one=True) or {})
+    pending_pipeline = (q(
+        "SELECT count(*) AS n FROM plan_chunk_queue WHERE status = 'pending_pipeline'", fetch_one=True) or {})
+    kills = (q(
+        "SELECT count(*) AS n FROM plan_chunk_queue WHERE chunk_kind = 'initial' AND status = 'completed' "
+        "AND coalesce(attempts, 0) >= 1", fetch_one=True) or {})
+    alerts = q(
+        "SELECT alert_key, severity, triggered_at FROM system_alerts WHERE triggered_at >= %s "
+        "ORDER BY triggered_at DESC LIMIT 50", (since,), fetch_all=True) if since else []
+    alerts = alerts or []
+    lifecycle_alerts = [a for a in alerts if any(h in str(a.get("alert_key") or "").lower() for h in _ARQ25_LIFECYCLE_ALERT_HINTS)]
+    last_any = alerts[0].get("triggered_at") if alerts else None
+    last_lc = lifecycle_alerts[0].get("triggered_at") if lifecycle_alerts else None
+    days_any = _arq25_days_since(last_any) if last_any else _arq25_days_since(since)
+    days_lc = _arq25_days_since(last_lc) if last_lc else _arq25_days_since(since)
+    n_runs = int(runs.get("n") or 0)
+    counts_ok = (
+        n_runs >= 10 and int(dup_runs.get("n") or 0) == 0 and int(dup_plans.get("n") or 0) == 0
+        and int(fencing.get("n") or 0) == 0 and int(pending_pipeline.get("n") or 0) == 0
+        and int(kills.get("n") or 0) >= 2
+    )
+    soak_ok = (days_lc or 0.0) >= ARQ25_GATE_SOAK_DAYS
+    return {
+        "canary_since": since.isoformat() if hasattr(since, "isoformat") else since,
+        "runs": n_runs,
+        "users": int(runs.get("u") or 0),
+        "plans_with_days": int(plans.get("n") or 0),
+        "duplicate_runs_same_plan": int(dup_runs.get("n") or 0),
+        "duplicate_plans_same_request": int(dup_plans.get("n") or 0),
+        "fencing_rejected": int(fencing.get("n") or 0),
+        "pending_pipeline_chunks": int(pending_pipeline.get("n") or 0),
+        "kills_recovered": int(kills.get("n") or 0),
+        "alerts_since_canary": [{"key": a.get("alert_key"), "severity": a.get("severity")} for a in alerts[:10]],
+        "alerts_since_canary_count": len(alerts),
+        "lifecycle_alerts_since_canary": len(lifecycle_alerts),
+        "days_since_last_alert_any": days_any,
+        "days_since_last_lifecycle_alert": days_lc,
+        "soak_days_required": ARQ25_GATE_SOAK_DAYS,
+        "counts_ok": counts_ok,
+        "soak_ok": soak_ok,
+        "ready_to_flip": bool(counts_ok and soak_ok),
+    }
+
+
+@router.get("/admin/arq25-gate")
+def admin_arq25_gate(request: Request):
+    """[P1-ARQ25-F1-CLOSE] Lectura del gate de la Fase 1. Auth: `Bearer <CRON_SECRET>`."""
+    _verify_admin_token(request.headers.get("authorization"))
+    from db import execute_sql_query
+    return arq25_gate_status(execute_sql_query)
 
 
 @router.post("/admin/deploy-lag/check")
@@ -1412,7 +1575,7 @@ def admin_cost_by_node(request: Request, hours: int = 24):
             GROUP BY node, model
             ORDER BY cost_micros_sum DESC
             """,
-            (window_h,),
+            (window_h,), fetch_all=True
         )
     except Exception as e:
         logger.warning(f"[P1-COST-BY-NODE-ENDPOINT] query falló: {e}")
@@ -1487,15 +1650,15 @@ def admin_plan_quality(request: Request, days: int = 14, limit: int = 40):
       - `limit` (default 40, clamp [1, 200]): planes a listar.
 
     Retorna:
-      - `planes`: lista por plan → `{id, fecha, score, componentes, defectos,
+      - `planes`: lista por plan → `{id, fecha, pais, score, componentes, defectos,
         dias, degradado, usd, llm_calls, modelos}`. `usd`/`modelos` salen de
         `llm_usage_events` atribuidos (P1-COST-ATTRIBUTION); un plan anterior a
         esa atribución llega con `usd=None` — es ausencia de dato, NO coste 0.
-      - `resumen`: medias del periodo + `sin_indice` (planes guardados antes de
-        que el índice existiera; sirven de recordatorio de que la serie
-        histórica empieza el 2026-07-31, no antes).
+      - `resumen`: medias del periodo + bloque `por_pais`; `sin_indice` cuenta
+        sólo deuda anterior al 2026-07-31 y `sin_indice_reciente` revela planes
+        nuevos que deberían haber nacido con índice.
 
-    Anchor: P1-PLAN-QUALITY-INDEX.
+    Anchors: P1-PLAN-QUALITY-INDEX, P2-PANEL-CALIDAD-SIN-PAIS.
     """
     _verify_admin_token(request.headers.get("authorization"))
     _check_admin_rate_limit(request)
@@ -1509,10 +1672,16 @@ def admin_plan_quality(request: Request, days: int = 14, limit: int = 40):
             SELECT m.id::text                                   AS id,
                    m.created_at                                 AS fecha,
                    m.plan_data->'_quality_index'                AS idx,
+                   COALESCE(NULLIF(m.plan_data->>'_country', ''),
+                            NULLIF(up.health_profile->>'country', ''),
+                            '(pre-sistema)')                    AS pais,
+                   m.created_at < TIMESTAMPTZ '2026-07-31 00:00:00+00'
+                                                                AS es_pre_indice,
                    COALESCE(c.usd, 0)                           AS usd,
                    COALESCE(c.calls, 0)                         AS calls,
                    c.modelos                                    AS modelos
               FROM meal_plans m
+              LEFT JOIN user_profiles up ON up.id = m.user_id
               LEFT JOIN (
                     SELECT plan_id,
                            SUM(COALESCE(cost_usd_micros,0))/1e6::numeric AS usd,
@@ -1526,22 +1695,49 @@ def admin_plan_quality(request: Request, days: int = 14, limit: int = 40):
              ORDER BY m.created_at DESC
              LIMIT %s
             """,
-            (str(win_d), lim),
+            (str(win_d), lim), fetch_all=True
         ) or []
     except Exception as e:
         logger.error(f"[P1-PLAN-QUALITY-INDEX] query falló: {e!r}")
         raise HTTPException(status_code=500, detail="No se pudo leer el índice de calidad.")
 
-    planes, scores, sin_indice = [], [], 0
+    planes, scores = [], []
+    sin_indice, sin_indice_reciente = 0, 0
+    por_pais_raw = {}
     for r in rows:
+        pais = str(r.get("pais") or "(pre-sistema)")
+        pais_stats = por_pais_raw.setdefault(
+            pais,
+            {
+                "con_indice": 0,
+                "sin_indice": 0,
+                "sin_indice_reciente": 0,
+                "scores": [],
+                "usd": [],
+            },
+        )
+        # Mantener la distinción «sin dato» vs coste cero antes incluso de
+        # filtrar planes sin índice; es un contrato histórico del panel.
+        usd = round(float(r["usd"]), 5) if r.get("calls") else None
         idx = r.get("idx") or {}
         if not isinstance(idx, dict) or idx.get("score") is None:
-            sin_indice += 1
+            contador = "sin_indice" if r.get("es_pre_indice") else "sin_indice_reciente"
+            pais_stats[contador] += 1
+            if contador == "sin_indice":
+                sin_indice += 1
+            else:
+                sin_indice_reciente += 1
             continue
-        scores.append(float(idx["score"]))
+        score = float(idx["score"])
+        scores.append(score)
+        pais_stats["con_indice"] += 1
+        pais_stats["scores"].append(score)
+        if usd is not None:
+            pais_stats["usd"].append(usd)
         planes.append({
             "id": r.get("id"),
             "fecha": str(r.get("fecha")),
+            "pais": pais,
             "score": idx.get("score"),
             "componentes": idx.get("componentes"),
             "defectos": idx.get("defectos") or {},
@@ -1550,7 +1746,7 @@ def admin_plan_quality(request: Request, days: int = 14, limit: int = 40):
             # `None` (no 0) cuando el plan no tiene costo atribuido: distinguir
             # "no lo sabemos" de "fue gratis" es la diferencia entre una media
             # honesta y una que miente hacia abajo.
-            "usd": round(float(r["usd"]), 5) if r.get("calls") else None,
+            "usd": usd,
             "llm_calls": int(r.get("calls") or 0) or None,
             "modelos": r.get("modelos"),
         })
@@ -1565,6 +1761,22 @@ def admin_plan_quality(request: Request, days: int = 14, limit: int = 40):
                 if isinstance(p.get("componentes"), dict) and p["componentes"].get(k) is not None]
         comp_medias[k] = round(sum(vals) / len(vals), 1) if vals else None
 
+    por_pais = {}
+    for pais, stats in sorted(por_pais_raw.items()):
+        country_scores = stats.pop("scores")
+        country_usd = stats.pop("usd")
+        por_pais[pais] = {
+            **stats,
+            "score_medio": (
+                round(sum(country_scores) / len(country_scores), 1)
+                if country_scores else None
+            ),
+            "usd_medio_por_plan": (
+                round(sum(country_usd) / len(country_usd), 4)
+                if country_usd else None
+            ),
+        }
+
     return {
         "success": True,
         "ventana_dias": win_d,
@@ -1572,9 +1784,11 @@ def admin_plan_quality(request: Request, days: int = 14, limit: int = 40):
         "resumen": {
             "con_indice": len(planes),
             "sin_indice": sin_indice,
+            "sin_indice_reciente": sin_indice_reciente,
             "score_medio": round(sum(scores) / len(scores), 1) if scores else None,
             "componentes_medios": comp_medias,
             "usd_medio_por_plan": _media("usd"),
             "planes_con_costo_atribuido": sum(1 for p in planes if p.get("usd") is not None),
+            "por_pais": por_pais,
         },
     }

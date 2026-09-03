@@ -12,14 +12,22 @@ estado local (no pierde la burbuja huérfana), (3) al agotar, burbuja retryable
 que reenvía el prompt. Mismo espíritu que P1-SWAP-REGEN-RESUME.
 tooltip-anchor: P1-CHAT-REFRESH-RECOVER
 """
+
+import pytest
 import os
 
 _HERE = os.path.dirname(os.path.abspath(__file__))
 _ROOT = os.path.dirname(os.path.dirname(_HERE))
 
-with open(os.path.join(_ROOT, "frontend", "src", "pages", "AgentPage.jsx"),
-          encoding="utf-8") as f:
-    _AP = f.read()
+@pytest.fixture(scope="module", autouse=True)
+def _load_frontend_sibling_sources(frontend_repo_path):
+    # La fixture compartida salta el módulo antes de cualquier I/O si falta el hermano.
+    _ = frontend_repo_path
+    global _AP, f
+    with open(os.path.join(_ROOT, "frontend", "src", "pages", "AgentPage.jsx"),
+              encoding="utf-8") as f:
+        _AP = f.read()
+
 
 
 def _block():

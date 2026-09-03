@@ -26,7 +26,13 @@ _AG = (_BACKEND / "agent.py").read_text(encoding="utf-8")
 _MI = (_BACKEND / "micronutrients.py").read_text(encoding="utf-8")
 _NC = (_BACKEND / "nutrition_calculator.py").read_text(encoding="utf-8")
 _PL = (_BACKEND / "routers" / "plans.py").read_text(encoding="utf-8")
-_DASH = (_BACKEND.parent / "frontend" / "src" / "pages" / "Dashboard.jsx").read_text(encoding="utf-8")
+@pytest.fixture(scope="module", autouse=True)
+def _load_frontend_sibling_sources(frontend_repo_path):
+    # La fixture compartida salta el módulo antes de cualquier I/O si falta el hermano.
+    _ = frontend_repo_path
+    global _DASH
+    _DASH = (_BACKEND.parent / "frontend" / "src" / "pages" / "Dashboard.jsx").read_text(encoding="utf-8")
+
 
 
 @pytest.fixture(scope="module")
@@ -176,7 +182,12 @@ def test_gap07_chatmodify_budget_wired():
 # ── GAP-08: cheapen-pass reescribe pasos ─────────────────────────────────────
 def test_gap08_cheapen_rewrites_recipe_steps_anchor():
     cp = _GO.index("def _apply_budget_cheapen_pass")
-    body = _GO[cp:cp + 9000]
+    # [P1-BUDGET-CHEAPEN-COUNTRY-GATE · 2026-08-18] la ventana fija de 9000 chars
+    # se quedó corta cuando el country-gate (comentario incluido) creció la cabecera
+    # de la función — cortar en el próximo `def` top-level es function-scoped y no
+    # vuelve a romperse con el siguiente insert.
+    _nxt = _GO.find("\ndef ", cp + 1)
+    body = _GO[cp:_nxt if _nxt != -1 else cp + 20000]
     assert "_rewrite_recipe_steps_after_subs" in body, \
         "el cheapen-pass debe reescribir los pasos tras sustituir (GAP-08)"
     assert "SUBST_RECIPE_REWRITE_ENABLED" in body

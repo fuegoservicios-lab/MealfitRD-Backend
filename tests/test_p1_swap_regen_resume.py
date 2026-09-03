@@ -22,13 +22,21 @@ tooltip-anchor: P1-SWAP-REGEN-RESUME
 """
 from __future__ import annotations
 
+import pytest
+
 from pathlib import Path
 
 _BACKEND = Path(__file__).resolve().parents[1]
 _ROOT = _BACKEND.parent
 _PLANS = (_BACKEND / "routers" / "plans.py").read_text(encoding="utf-8")
-_CTX = (_ROOT / "frontend" / "src" / "context" / "AssessmentContext.jsx").read_text(encoding="utf-8")
-_DASH = (_ROOT / "frontend" / "src" / "pages" / "Dashboard.jsx").read_text(encoding="utf-8")
+@pytest.fixture(scope="module", autouse=True)
+def _load_frontend_sibling_sources(frontend_repo_path):
+    # La fixture compartida salta el módulo antes de cualquier I/O si falta el hermano.
+    _ = frontend_repo_path
+    global _CTX, _DASH
+    _CTX = (_ROOT / "frontend" / "src" / "context" / "AssessmentContext.jsx").read_text(encoding="utf-8")
+    _DASH = (_ROOT / "frontend" / "src" / "pages" / "Dashboard.jsx").read_text(encoding="utf-8")
+
 
 
 def test_b1_flag_set_and_clear_filter_user_id():

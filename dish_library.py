@@ -37,25 +37,63 @@ DISH_LIBRARY_PER_SLOT = _env_int("MEALFIT_DISH_LIBRARY_PER_SLOT", 2, validator=l
 DISH_LIBRARY_TRANSFORM_MIN = _env_int("MEALFIT_DISH_LIBRARY_TRANSFORM_MIN", 1, validator=lambda v: 0 <= v <= 3)
 
 _TEMPLATES_PATH = os.path.join(os.path.dirname(os.path.abspath(__file__)), "data", "dish_templates.json")
-_CACHE: list | None = None
+# [P1-DISH-LIBRARY-COUNTRY · 2026-08-21] Caché POR RUTA. Era un único global: con rutas por país,
+# el primer archivo cargado en el proceso se le habría servido a todos los países que vinieran
+# después — la misma trampa que `_VERIFIED_CATALOG_INSTRUCTION_CACHE` tenía antes de que el país
+# entrara en su clave.
+_CACHE_BY_PATH: dict = {}
 
 _SLOT_LABELS = {"desayuno": "Desayuno", "almuerzo": "Almuerzo", "cena": "Cena", "merienda": "Merienda"}
 
 
-def load_dish_templates() -> list:
-    """Carga (una vez) las plantillas. Fail-open → []."""
-    global _CACHE
-    if _CACHE is not None:
-        return _CACHE
+def _templates_path_for_country(country=None) -> str:
+    """[P1-DISH-LIBRARY-COUNTRY · 2026-08-21] Ruta del `dish_templates*.json` del usuario.
+
+    Dos SSOT ajenos, ninguno reescrito aquí: `country_for_form_data` (la ÚNICA puerta de lectura
+    de país del motor, que además aplica el knob maestro) y `_dish_templates_path_for_country`
+    (Fase 2 T5-T7, que ya sabe qué archivo tiene cada país y hace fallback a RD). Escribir aquí
+    una segunda tabla de rutas sería la 4ª tabla que P1-DIET-CANON-SSOT prohibió.
+
+    Fail-open a la ruta dominicana ante cualquier problema: perder la sección de inspiración
+    entera es peor que darla en el idioma equivocado.
+
+    tooltip-anchor: _templates_path_for_country (test_p1_dish_library_country.py)"""
+    if not country:
+        return _TEMPLATES_PATH
     try:
-        with open(_TEMPLATES_PATH, encoding="utf-8") as f:
+        from constants import country_for_form_data
+        canon = country_for_form_data({"country": country})
+        if canon == "DO":
+            return _TEMPLATES_PATH
+        from graph_orchestrator import _dish_templates_path_for_country
+        return _dish_templates_path_for_country(canon) or _TEMPLATES_PATH
+    except Exception:
+        return _TEMPLATES_PATH
+
+
+def load_dish_templates(path: str = None) -> list:
+    """Carga (una vez por ruta) las plantillas. Fail-open → []."""
+    _path = path or _TEMPLATES_PATH
+    _hit = _CACHE_BY_PATH.get(_path)
+    if _hit is not None:
+        return _hit
+    try:
+        with open(_path, encoding="utf-8") as f:
             data = json.load(f)
         templates = data.get("templates") or []
-        _CACHE = [t for t in templates if isinstance(t, dict) and t.get("name") and t.get("slots")]
+        loaded = [t for t in templates if isinstance(t, dict) and t.get("name") and t.get("slots")]
+        # [P1-ARQ25-F2-PLANPOLICY · 2026-09-02] `template_id` acuñado al cargar (hash estable de
+        # biblioteca+base+nombre+técnica, alias para renombres): cero reescritura del JSON.
+        try:
+            from plan_policy import attach_template_ids, library_key_for_path
+            attach_template_ids(loaded, library_key_for_path(_path))
+        except Exception as _tid_err:
+            logger.warning(f"[P1-ARQ25-F2-PLANPOLICY] template_id no acuñado: {_tid_err}")
     except Exception as _e:
         logger.warning(f"[P1-NEXT-LEVEL-LIBRARY] no se cargaron plantillas: {type(_e).__name__}: {_e}")
-        _CACHE = []
-    return _CACHE
+        loaded = []
+    _CACHE_BY_PATH[_path] = loaded
+    return loaded
 
 
 def _protein_matches_pool(template_protein: str, pool_ascii: str) -> bool:
@@ -69,11 +107,13 @@ def _protein_matches_pool(template_protein: str, pool_ascii: str) -> bool:
 
 
 def sample_templates_for_slot(slot_key: str, pool_ascii: str, k: int, seed: int,
-                              avoid_tokens: tuple = ()) -> list:
+                              avoid_tokens: tuple = (), country=None) -> list:
     """Muestra DETERMINISTA (seed) de hasta k plantillas del slot compatibles con el pool.
-    Prioriza transformadas (transform=True) — son la creatividad que los staples no dan."""
+    Prioriza transformadas (transform=True) — son la creatividad que los staples no dan.
+    [P1-DISH-LIBRARY-COUNTRY · 2026-08-21] `country=None` ⇒ biblioteca dominicana, idéntico a
+    antes; país beta ⇒ la suya."""
     cands = []
-    for t in load_dish_templates():
+    for t in load_dish_templates(_templates_path_for_country(country)):
         if slot_key not in (t.get("slots") or []):
             continue
         if not _protein_matches_pool(t.get("protein"), pool_ascii):
@@ -94,9 +134,45 @@ def sample_templates_for_slot(slot_key: str, pool_ascii: str, k: int, seed: int,
     return picked
 
 
-def build_dish_library_context(skeleton_day: dict, day_num: int) -> str:
+def _canon_country_or_do(country=None) -> str:
+    """País canonicalizado por la ÚNICA puerta (`country_for_form_data`), 'DO' si falla.
+
+    Extraído de `_inspiration_heading` para que las dos decisiones de país de este módulo
+    (el encabezado y el trailer de transformados) salgan de la MISMA derivación: dos copias
+    de la misma pregunta es como nacen los espejos que driftan."""
+    try:
+        from constants import country_for_form_data
+        return country_for_form_data({"country": country}) if country else "DO"
+    except Exception:
+        return "DO"
+
+
+def _inspiration_heading(country=None) -> str:
+    """[P1-DISH-LIBRARY-COUNTRY · 2026-08-21] Encabezado del bloque. DO conserva el literal
+    histórico byte a byte; un país beta lee su propio nombre, tomado de
+    `COUNTRY_PROFILES[cc]['name_es']` — el MISMO SSOT que usa el juez culinario para su variante,
+    no una segunda tabla de gentilicios."""
+    try:
+        from constants import COUNTRY_PROFILES
+        canon = _canon_country_or_do(country)
+        if canon != "DO":
+            _nm = (COUNTRY_PROFILES.get(canon) or {}).get("name_es")
+            if _nm:
+                return f"INSPIRACIÓN DE {_nm.upper()}"
+    except Exception:
+        pass
+    return "INSPIRACIÓN DOMINICANA"
+
+
+def build_dish_library_context(skeleton_day: dict, day_num: int, country=None) -> str:
     """Bloque de inspiración por día para el prompt del day-generator. '' si knob OFF /
-    sin plantillas compatibles. Determinista por (día, pool) → prompt-cache friendly."""
+    sin plantillas compatibles. Determinista por (día, pool) → prompt-cache friendly.
+
+    [P1-DISH-LIBRARY-COUNTRY · 2026-08-21] `country` es el tramo DINÁMICO del prompt: el más
+    concreto y el más cercano a la generación. Sin él, la cabecera beta de Fase 1 («los platos
+    dominicanos NO son requisito») perdía contra ocho platos dominicanos concretos veinte mil
+    caracteres después — el modo de fallo que P1-DIET-BLIND-DIRECTIVES midió: entre una
+    declaración general y un ejemplo concreto, el modelo obedece al ejemplo."""
     if not DISH_LIBRARY_ENABLED or not isinstance(skeleton_day, dict):
         return ""
     try:
@@ -125,7 +201,8 @@ def build_dish_library_context(skeleton_day: dict, day_num: int) -> str:
             if slot in _seen_slots:
                 continue   # 3 meriendas → una sola línea de inspiración (evita repetir el bloque)
             _seen_slots.add(slot)
-            picks = sample_templates_for_slot(slot, pool_ascii, int(DISH_LIBRARY_PER_SLOT), int(day_num or 1))
+            picks = sample_templates_for_slot(slot, pool_ascii, int(DISH_LIBRARY_PER_SLOT),
+                                              int(day_num or 1), country=country)
             if not picks:
                 continue
             entries = "; ".join(
@@ -137,13 +214,24 @@ def build_dish_library_context(skeleton_day: dict, day_num: int) -> str:
         # [P2-AUDIT-V6-BATCH · 2026-07-03] (P2-E) pedido explícito de mínimo transformado por día
         # (soft): "elige y adapta" era inspiración pura y el LLM podía ignorarla sin costo.
         _tf_min = int(DISH_LIBRARY_TRANSFORM_MIN)
+        # [P3-DISHLIB-TRANSFORM-DO-EXAMPLES · 2026-08-23] Este trailer es la ÚLTIMA frase del
+        # bloque más concreto del prompt. Medido antes de tocar: los renders de ES/MX/US/PR/CO
+        # terminaban TODOS con «panqueques/arepitas/bollitos», y 'arepitas' y 'bollitos' son
+        # entradas de `_DO_LEXICON_NEUTRAL` — o sea, léxico DO que el resto del stack beta ya
+        # neutraliza, colado en el último renglón que el modelo lee. La variante beta describe la
+        # FORMA (masas, tortitas, croquetas, horneados) en vez de recetas concretas: una categoría
+        # no pierde nada y no arrastra el nombre de un plato dominicano. NO se neutraliza el bloque
+        # entero con `neutralize_do_lexicon`: ese mapa manda `casabe → pan tostado integral` y
+        # `Casabe` es una fila VIVA del catálogo. DO conserva su literal byte a byte.
+        _tf_examples = ("panqueques/arepitas/bollitos/guiso u horneado con nombre propio"
+                        if _canon_country_or_do(country) == "DO"
+                        else "masas, tortitas, croquetas, guisos u horneados con nombre propio")
         _tf_line = (
-            f"\n   🎯 Incluye HOY al menos {_tf_min} plato(s) TRANSFORMADO(s) (panqueques/arepitas/"
-            "bollitos/guiso u horneado con nombre propio) siempre que encaje con los macros, el "
-            "horario y las reglas clínicas del día.\n"
+            f"\n   🎯 Incluye HOY al menos {_tf_min} plato(s) TRANSFORMADO(s) ({_tf_examples}) "
+            "siempre que encaje con los macros, el horario y las reglas clínicas del día.\n"
         ) if _tf_min > 0 else "\n"
         return (
-            "\n🍽️ INSPIRACIÓN DOMINICANA (biblioteca curada — ELIGE Y ADAPTA una, o crea un plato "
+            f"\n🍽️ {_inspiration_heading(country)} (biblioteca curada — ELIGE Y ADAPTA una, o crea un plato "
             "equivalente en espíritu; ajusta porciones a los macros del día):\n"
             + "\n".join(lines)
             + "\n   💡 Prioriza preparaciones TRANSFORMADAS (masas, guisos, rellenos, horneados) "
@@ -189,7 +277,7 @@ def _diet_safe_pool_ascii(diet_type=None, allergies=None) -> str:
 
 
 def build_swap_inspiration_context(meal_type: str, seed: int = 1, avoid_names=None,
-                                   *, diet_type=None, allergies=None) -> str:
+                                   *, diet_type=None, allergies=None, country=None) -> str:
     """[P2-AUDIT-V6-BATCH · 2026-07-03] (P2-F) Inspiración compacta de la biblioteca para las
     superficies de UPDATE (swap / chat-modify) — antes solo el day-gen de form-gen la recibía,
     así que un plato actualizado perdía la creatividad por recombinación de las 87 plantillas.
@@ -210,7 +298,7 @@ def build_swap_inspiration_context(meal_type: str, seed: int = 1, avoid_names=No
         avoid = tuple(strip_accents(str(n).lower())[:30] for n in (avoid_names or [])[:10] if str(n).strip())
         picks = sample_templates_for_slot(slot, _diet_safe_pool_ascii(diet_type, allergies),
                                           int(DISH_LIBRARY_PER_SLOT),
-                                          int(seed or 1), avoid_tokens=avoid)
+                                          int(seed or 1), avoid_tokens=avoid, country=country)
         if not picks:
             return ""
         entries = "; ".join(f"{t['name']} ({t.get('technique', 'libre')})" for t in picks)

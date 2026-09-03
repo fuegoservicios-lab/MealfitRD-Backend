@@ -100,11 +100,11 @@ def test_expand_agent_uses_model_knob(ai_src: str):
         "P1-RECIPE-EXPAND-FAILSIGNAL regresión: falta el helper "
         "_recipe_expand_model_name (knob del modelo)."
     )
-    # [P0-DEEPSEEK-MIGRATION · 2026-06-12] default = constante DEEPSEEK_FLASH.
+    # [P0-LLM-PROVIDER-MIGRATION · 2026-06-12] default = constante GLM_FLASH.
     assert re.search(
-        r'_env_str\(\s*"MEALFIT_RECIPE_EXPAND_MODEL"\s*,\s*DEEPSEEK_FLASH',
+        r'_env_str\(\s*"MEALFIT_RECIPE_EXPAND_MODEL"\s*,\s*GLM_FLASH',
         ai_src,
-    ), "El knob debe leer MEALFIT_RECIPE_EXPAND_MODEL con default DEEPSEEK_FLASH."
+    ), "El knob debe leer MEALFIT_RECIPE_EXPAND_MODEL con default GLM_FLASH."
     body = _fn_body(ai_src, "expand_recipe_agent")
     # [reapuntado 2026-07-27] Exigía el literal `model=_recipe_expand_model_name()` y el callsite
     # pasó el modelo POSICIONAL (mismo knob, misma semántica). La invariante es que la función

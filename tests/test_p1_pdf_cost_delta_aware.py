@@ -13,15 +13,23 @@ Fix (frontend, handleDownloadShoppingList): cuando `deltaItemsRemoved > 0`:
 Sin exclusiones (delta=0) el SSOT del backend sigue mandando (paridad con la
 reconciliación de presupuesto). tooltip-anchor: P1-PDF-COST-DELTA-AWARE
 """
+
+import pytest
 import os
 import re
 
 _HERE = os.path.dirname(os.path.abspath(__file__))
 _ROOT = os.path.dirname(os.path.dirname(_HERE))
 
-with open(os.path.join(_ROOT, "frontend", "src", "pages", "Dashboard.jsx"),
-          encoding="utf-8") as f:
-    _DASH = f.read()
+@pytest.fixture(scope="module", autouse=True)
+def _load_frontend_sibling_sources(frontend_repo_path):
+    # La fixture compartida salta el módulo antes de cualquier I/O si falta el hermano.
+    _ = frontend_repo_path
+    global _DASH, f
+    with open(os.path.join(_ROOT, "frontend", "src", "pages", "Dashboard.jsx"),
+              encoding="utf-8") as f:
+        _DASH = f.read()
+
 
 
 def test_delta_aware_gate_present():
@@ -40,10 +48,15 @@ def test_cycle_formula_charges_future_weeks_full():
     i = _DASH.find("_deltaAware = (deltaItemsRemoved || 0) > 0")
     win = _DASH[i:i + 2600]
     assert re.search(
-        r"_stableCost \+ _perishableCost\s*\+ _fullPerishableRd \* Math\.max\(0, _cycleCostMultiplier - 1\)",
+        r"_fullPerishableRd \* Math\.max\(0, _cycleCostMultiplier - 1\)",
         win), (
         "ciclo delta-aware = delta hoy + perecederos FULL × (semanas−1): lo de la Nevera "
         "solo ahorra la semana 1, las siguientes recompran completo")
+    # [P1-PDF-LIST-POLISH · 2026-09-02] Las semanas 2..N salen del BACKEND
+    # (cycle_total_rd − trip_total_rd); la derivación local de arriba queda como
+    # fallback sin resumen. La suma sigue siendo delta de hoy + semanas siguientes.
+    assert ("_stableCost + _perishableCost + _futureFreshRdPdf" in win), (
+        "ciclo delta-aware = delta de hoy + semanas siguientes (del backend cuando existe)")
     assert "perishable_rd" in win, "el full de perecederos viene del resumen backend (fallback local)"
 
 

@@ -292,6 +292,26 @@ except Exception:  # pragma: no cover - knobs siempre disponible en prod
     _PROTEIN_CEILING_RAW = 2.2
 
 
+# [P1-VEGAN-PROTEIN-CEILING · 2026-08-08] Techo proteico VEGAN-aware (palanca 2 del 65%,
+# issue #9/#14, decisión del owner). El perfil vegana_dm2 recibía target 188g (techo estándar
+# 2.2 g/kg): inalcanzable con fuentes vegetales del catálogo es-DO — entregaba 126-169g y el
+# piso rechazaba SIEMPRE (el closer diet-aware ya no fabrica violaciones; el déficit era
+# estructural del TARGET, no de la generación). 1.8 g/kg es el rango alto realista de ingesta
+# proteica en dieta 100% vegetal; las kcal liberadas van a carbos por la redistribución C1
+# existente. Clamp [1.0, 2.2] (nunca sobre el techo estándar). Rollback sin redeploy.
+try:
+    _PROTEIN_CEILING_VEGAN_RAW = _nc_env_float("MEALFIT_PROTEIN_CEILING_G_PER_KG_VEGAN", 1.8)
+except Exception:
+    _PROTEIN_CEILING_VEGAN_RAW = 1.8
+
+
+def _protein_ceiling_vegan_g_per_kg() -> float:
+    try:
+        return max(1.0, min(2.2, float(_PROTEIN_CEILING_VEGAN_RAW)))
+    except (TypeError, ValueError):
+        return 1.8
+
+
 def _protein_ceiling_g_per_kg() -> float:
     """[C1-PROTEIN-CEILING · 2026-06-13] Techo clínico de proteína por kg de peso corporal.
     Knob `MEALFIT_PROTEIN_CEILING_G_PER_KG` (default 2.2, clamp [1.6, 3.0]). Posición ISSN:
@@ -305,7 +325,7 @@ def _protein_ceiling_g_per_kg() -> float:
 
 
 def calculate_macros(target_calories: int, goal: str, weight_kg: float = None,
-                     body_fat_pct: float = None) -> dict:
+                     body_fat_pct: float = None, diet=None) -> dict:
     """
     Calcula los gramos exactos de cada macronutriente basándose en:
     - Proteína: 4 cal/g
@@ -335,7 +355,18 @@ def calculate_macros(target_calories: int, goal: str, weight_kg: float = None,
         if body_fat_pct and body_fat_pct > 30:
             _lbm = float(weight_kg) * (1 - (float(body_fat_pct) / 100.0))
             _ceiling_wkg = _lbm + 0.25 * (float(weight_kg) - _lbm)  # peso ajustado (obesidad)
-        ceiling_g = _protein_ceiling_g_per_kg() * _ceiling_wkg
+        _ceiling_gkg = _protein_ceiling_g_per_kg()
+        # [P1-VEGAN-PROTEIN-CEILING · 2026-08-08] dieta vegana → techo 1.8 g/kg (canonicaliza
+        # vía SSOT; balanced/vegetarian/pescatarian conservan el estándar — huevo/lácteo/pescado
+        # sí alcanzan densidad). Nunca SUBE el techo (min con el estándar).
+        if diet is not None:
+            try:
+                from constants import canonicalize_diet_type as _cdt_nc
+                if _cdt_nc(diet) == "vegan":
+                    _ceiling_gkg = min(_ceiling_gkg, _protein_ceiling_vegan_g_per_kg())
+            except Exception:
+                pass
+        ceiling_g = _ceiling_gkg * _ceiling_wkg
         if protein_g > ceiling_g:
             freed_cals = (protein_g - ceiling_g) * 4.0
             protein_g = ceiling_g
@@ -343,7 +374,7 @@ def calculate_macros(target_calories: int, goal: str, weight_kg: float = None,
             carbs_cals += freed_cals  # redistribuir a carbos (macro flexible)
             _wlabel = "ajustado" if abs(_ceiling_wkg - float(weight_kg)) > 0.05 else "total"
             logger.info(
-                f"🩺 [C1-PROTEIN-CEILING] Proteína capeada a {_protein_ceiling_g_per_kg()} g/kg "
+                f"🩺 [C1-PROTEIN-CEILING] Proteína capeada a {_ceiling_gkg} g/kg "
                 f"× {round(_ceiling_wkg, 1)}kg ({_wlabel}) = {round(protein_g)}g "
                 f"(era {round(target_calories * split['protein_pct'] / 4)}g); {round(freed_cals)} kcal → carbos."
             )
@@ -1637,10 +1668,12 @@ def get_nutrition_targets(form_data: dict) -> dict:
     original_target_calories = target_calories
     # [C1-PROTEIN-CEILING] `weight` (kg) → techo clínico de proteína por peso corporal.
     # [P2-PROTEIN-CEILING-ADJ-WEIGHT] `body_fat` → peso ajustado para el techo en obesidad (>30% grasa).
-    original_macros = calculate_macros(original_target_calories, goal, weight_kg=weight, body_fat_pct=body_fat)
+    # [P1-VEGAN-PROTEIN-CEILING] diet → techo vegano 1.8 g/kg en la derivación del target.
+    _diet_nc = form_data.get("dietType") or form_data.get("diet")
+    original_macros = calculate_macros(original_target_calories, goal, weight_kg=weight, body_fat_pct=body_fat, diet=_diet_nc)
 
     # 4. Macronutrientes exactos distribuidos en base al objetivo y calorías REVISADAS para la IA
-    macros = calculate_macros(target_calories, goal, weight_kg=weight, body_fat_pct=body_fat)
+    macros = calculate_macros(target_calories, goal, weight_kg=weight, body_fat_pct=body_fat, diet=_diet_nc)
 
     # [P1-BARIATRIC-PROTEIN-TARGET · 2026-06-27] El pouch post-bariátrico no tolera el volumen de proteína
     # de un target estándar por peso (visto en vivo corr=5b30b71f: target 100g → la comida pequeña no lo
@@ -1811,12 +1844,155 @@ def _budget_cycle_floor_dop(days: int) -> float:
         f"MEALFIT_BUDGET_FLOOR_TOTAL_{int(days)}D_DOP", float(default), lambda v: v >= 0.0)
 
 
+# [P1-COUNTRY-SYSTEM-F1 · 2026-08-16] Pisos TOTALES por ciclo en EUR/MXN/COP,
+# PROVISIONALES: derivados del piso USD (BUDGET_MIN_TOTAL.USD del frontend —
+# 80/140/260) por un factor fijo documentado (ruling R2-F1 del plan) — EUR×0.95,
+# MXN×18, COP×4200 — redondeado a una cifra amable. Fase 3 los sustituye por
+# precios reales de mercado del país (`has_native_prices=False`, ver
+# COUNTRY_PROFILES). Espejo EXACTO del frontend
+# (frontend/src/config/formValidation.js BUDGET_MIN_TOTAL); test de paridad
+# cross-file en test_p1_country_system_f1.py (sección T6).
+#
+# Aritmética (crudo → redondeado a cifra amable):
+#   EUR: 80×0.95=76→75   140×0.95=133→135   260×0.95=247→245
+#   MXN: 80×18=1440→1400 140×18=2520→2500   260×18=4680→4700
+#   COP: 80×4200=336000→350000 140×4200=588000→600000 260×4200=1092000→1100000
+_BUDGET_CYCLE_FLOOR_DEFAULTS_EUR = {7: "75", 15: "135", 30: "245"}
+_BUDGET_CYCLE_FLOOR_DEFAULTS_MXN = {7: "1400", 15: "2500", 30: "4700"}
+_BUDGET_CYCLE_FLOOR_DEFAULTS_COP = {7: "350000", 15: "600000", 30: "1100000"}
+
+# [P1-BUDGET-FLOOR-USD · 2026-08-21] USD es la moneda de DOS de los cinco países beta (US y PR) y
+# era la única sin piso propio: caía al `else` histórico, que multiplica lo declarado por
+# `_budget_usd_to_dop()` y lo compara contra la cesta DOMINICANA. Medido, el desacuerdo con lo que
+# el producto ya declara era del 17%:
+#
+#     ciclo 7d:  4000 DOP ÷ 60 = US$ 66,67   vs   US$ 80 declarados
+#     ciclo 15d: 7000 DOP ÷ 60 = US$ 116,67  vs   US$ 140
+#     ciclo 30d: 13000 DOP ÷ 60 = US$ 216,67 vs   US$ 260
+#
+# NO es un número nuevo: es 80/140/260, el `BUDGET_MIN_TOTAL.USD` del frontend — el MISMO del que
+# Fase 1 derivó EUR (×0,95), MXN (×18) y COP (×4200). La paridad cross-file ya estaba exigida por
+# escrito («DEBE quedar consistente con BUDGET_MIN_TOTAL del frontend») y ya tenía test… para esas
+# tres monedas, porque aquí no había entrada USD que comparar: la única moneda que incumplía la
+# regla era justo la que nadie miraba.
+#
+# Desaparece además un acoplamiento invisible: mientras el piso de USD salía de dividir pesos
+# dominicanos, una devaluación movía el mínimo de un usuario de Florida sin que nadie tocara nada.
+#
+# El umbral SUBE (66,67 → 80), o sea que se vuelve más estricto: nadie que hoy pase el formulario
+# queda fuera (el frontend ya bloquea en 80); se cierra la ventana de quien entra por la API.
+# Lo que esto NO cierra es la otra mitad de P1-19: los pisos de EUR/MXN/COP siguen siendo
+# conversiones de tipo de cambio y no cestas medidas en cada país. Eso es curación de datos y
+# decisión del dueño — inventar aquí la compra semanal de España sería la clase de afirmación sin
+# respaldo que la auditoría de procedencia del catálogo ya costó.
+# tooltip-anchor: P1-BUDGET-FLOOR-USD
+_BUDGET_CYCLE_FLOOR_DEFAULTS_USD = {7: "80", 15: "140", 30: "260"}
+
+_BUDGET_CYCLE_FLOOR_DEFAULTS_BY_CURRENCY = {
+    "EUR": _BUDGET_CYCLE_FLOOR_DEFAULTS_EUR,
+    "MXN": _BUDGET_CYCLE_FLOOR_DEFAULTS_MXN,
+    "COP": _BUDGET_CYCLE_FLOOR_DEFAULTS_COP,
+    "USD": _BUDGET_CYCLE_FLOOR_DEFAULTS_USD,
+}
+
+
+def _budget_cycle_floor_for_currency(days: int, currency: str) -> float:
+    """[P1-COUNTRY-SYSTEM-F1] Piso TOTAL del ciclo en EUR/MXN/COP, PROVISIONAL
+    (ver comentario de `_BUDGET_CYCLE_FLOOR_DEFAULTS_BY_CURRENCY` arriba).
+    `currency` fuera de {EUR,MXN,COP} (incluido 'DOP'/'USD') delega en
+    `_budget_cycle_floor_dop` SIN tocarlo — mismo fallback conservador que ese
+    piso ya usa para ciclos no estándar. Knob por ciclo×moneda:
+    MEALFIT_BUDGET_FLOOR_TOTAL_{days}D_{moneda} (mismo patrón de nombre que el
+    knob DOP, con la moneda interpolada — deliberadamente NO literal, para no
+    aparecer en el escaneo de `test_grep_del_archivo_no_encuentra_mas_knobs_
+    budget_que_los_documentados`, que enumera solo los knobs `MEALFIT_BUDGET_*`
+    documentados de ANTES de Fase 1).
+    tooltip-anchor: _budget_cycle_floor_for_currency (test_p1_country_system_f1.py)"""
+    defaults = _BUDGET_CYCLE_FLOOR_DEFAULTS_BY_CURRENCY.get(currency)
+    if defaults is None:
+        return _budget_cycle_floor_dop(days)
+    default = defaults.get(int(days))
+    if default is None:
+        per_day_7 = float(defaults[7]) / 7.0
+        return max(0.0, per_day_7 * max(1, int(days)))
+    return _nc_env_float_budget(
+        f"MEALFIT_BUDGET_FLOOR_TOTAL_{int(days)}D_{currency}", float(default), lambda v: v >= 0.0)
+
+
+def budget_floor_in_currency(days: int, currency: str, min_budget_dop: float) -> tuple[float, str]:
+    """[P1-COUNTRY-SYSTEM-F1 · 2026-08-16 (T7)] Convierte un piso ya PERSONALIZADO
+    (`min_budget_dop`, de `min_budget_for_goals` — ya incluye el escalado por calorías×hogar)
+    a la moneda declarada, para el endpoint hint `/api/plans/budget-floor`
+    (`routers/plans.py::api_budget_floor`).
+
+    Mismo gate/mecanismo EXACTO que `validate_budget_sufficient` usa para el 422 (T6): el
+    piso PROPIO de la moneda (`_budget_cycle_floor_for_currency`) escalado por el mismo
+    factor `min_budget_dop / _budget_cycle_floor_dop(days)` que ya absorbió calorías×hogar —
+    comparación DIRECTA en la moneda declarada, JAMÁS una conversión FX. `currency` fuera de
+    {EUR,MXN,COP} o knob `MEALFIT_COUNTRY_SYSTEM` apagado ⇒ cae al camino DOP/USD histórico
+    (`_budget_usd_to_dop`), byte-idéntico al `api_budget_floor` pre-T7.
+
+    Devuelve `(monto, moneda_efectiva)` — `moneda_efectiva` es el código que el caller debe
+    exponer en `currency` (nunca 'DOP' disfrazando un monto EUR, ni al revés): el "outcome
+    que importa" del brief — la respuesta del hint NUNCA mal-etiqueta un monto beta como DOP.
+
+    tooltip-anchor: budget_floor_in_currency (test_p1_country_system_f1.py)"""
+    new_currency = currency in _BUDGET_CYCLE_FLOOR_DEFAULTS_BY_CURRENCY and _nc_env_bool_budget(
+        "MEALFIT_COUNTRY_SYSTEM", False)
+    if new_currency:
+        dop_cycle_base = _budget_cycle_floor_dop(days)
+        scale = (min_budget_dop / dop_cycle_base) if dop_cycle_base > 0 else 1.0
+        return _budget_cycle_floor_for_currency(days, currency) * scale, currency
+    if currency == "USD":
+        return min_budget_dop / _budget_usd_to_dop(), "USD"
+    return min_budget_dop, "DOP"
+
+
 def _budget_floor_kcal_ref() -> float:
     return _nc_env_float_budget("MEALFIT_BUDGET_FLOOR_KCAL_REF", 2000.0, lambda v: v >= 800.0)
 
 
+# [P1-BUDGET-FX-STALENESS · 2026-08-09] El tipo de cambio es un número que
+# ENVEJECE, y hasta ahora envejecía EN SILENCIO: si el peso se mueve y nadie
+# toca el knob, el presupuesto declarado en USD se convierte mal, la referencia
+# sale mal, y NADA falla. Silencio incorrecto — el peor modo.
+#
+# La moneda USD se queda (caso de uso real del owner: visitantes de EE.UU. en
+# RD). Lo que se añade es que el número diga CUÁNDO se revisó por última vez y
+# avise cuando lleve demasiado sin revisarse. No bloquea ni corrige: convierte
+# un dato que caduca callado en uno que pide revisión.
+_BUDGET_FX_REVIEWED_DEFAULT = "2026-08-09"
+
+
+def _budget_fx_max_age_days() -> int:
+    return int(_nc_env_float_budget("MEALFIT_BUDGET_FX_MAX_AGE_DAYS", 120.0, lambda v: 1.0 <= v <= 3650.0))
+
+
 def _budget_usd_to_dop() -> float:
-    return _nc_env_float_budget("MEALFIT_BUDGET_USD_TO_DOP", 60.0, lambda v: v >= 1.0)
+    rate = _nc_env_float_budget("MEALFIT_BUDGET_USD_TO_DOP", 60.0, lambda v: v >= 1.0)
+    try:
+        from datetime import date as _date
+        # [P1-HIST-METRICS-DEDUP · 2026-08-13, drift de fa6a99d] vía knobs
+        # (_env_str auto-registra en _KNOBS_REGISTRY) — la lectura os.environ
+        # cruda violaba el contrato de test_p3_budget_knobs_registry y dejaba
+        # el knob invisible en /health/version. Una fecha ISO sobrevive el
+        # lower+strip del helper sin cambios.
+        from knobs import _env_str as _fx_env_str
+        reviewed = _fx_env_str(
+            "MEALFIT_BUDGET_USD_TO_DOP_REVIEWED", _BUDGET_FX_REVIEWED_DEFAULT
+        ).strip()
+        age = (_date.today() - _date.fromisoformat(reviewed)).days
+        max_age = _budget_fx_max_age_days()
+        if age > max_age:
+            logger.warning(
+                f"[P1-BUDGET-FX-STALENESS] USD→DOP={rate} sin revisar hace {age} días "
+                f"(tope {max_age}). Los presupuestos declarados en USD se están "
+                f"convirtiendo con una tasa vieja. Actualiza MEALFIT_BUDGET_USD_TO_DOP "
+                f"y MEALFIT_BUDGET_USD_TO_DOP_REVIEWED."
+            )
+    except Exception as e:  # fecha mal escrita, etc. — nunca romper el costeo por el aviso
+        logger.warning(f"[P1-BUDGET-FX-STALENESS] no pude evaluar la edad del FX ({type(e).__name__}); sigo con {rate}")
+    return rate
 
 
 def _budget_floor_tolerance_pct() -> float:
@@ -1859,11 +2035,69 @@ def min_budget_for_goals(form_data: dict) -> dict:
     }
 
 
+def _piso_sin_procedencia(currency: str) -> bool:
+    """[P1-COUNTRY-BUDGET-FLOOR-FX · 2026-08-23] ¿El piso de esta moneda es un número SIN
+    procedencia, o sea una conversión FX de la cesta dominicana en vez de una cesta real?
+
+    EL DEFECTO QUE CIERRA (medido contra el endpoint público de producción): un colombiano
+    que declara 200.000 COP/semana —cifra realista— recibía 422 y no podía generar plan. Para
+    2500 kcal el piso sube a 437.500 COP/semana ≈ 1,88 M COP/mes para UNA persona: por encima
+    del salario mínimo mensual de su país. El número no salía de ninguna cesta colombiana; el
+    comentario de la derivación lo dice: EUR=USD×0,95 · MXN=USD×18 · COP=USD×4200.
+
+    Y pasado el gate ese número era estructuralmente inútil: al ser país beta la lista sale
+    sin precios, `compute_shopping_cost_summary` devuelve None y el pase de abaratamiento
+    queda inalcanzable. O sea que bloqueaba con una cifra que después no usaba nadie.
+
+    *Un número sin procedencia puede orientar; no puede impedir una compra.* Mientras el país
+    no tenga precios propios, el piso pasa de BLOQUEO a AVISO: el hint se sigue mostrando como
+    orientación y el usuario puede generar su plan.
+
+    LA PREGUNTA YA TENÍA DUEÑO. Delega en `constants.pricing_mode_for_country`, la ÚNICA
+    puerta que decide si un país tiene precios propios. Consultar el campo del perfil aquí a
+    mano habría sido la segunda tabla que P1-DIET-CANON-SSOT ya pagó una vez, y que
+    P3-PRICING-MODE-SSOT-BLANKET vigila en CI: ese guard cazó exactamente este código en el
+    gate del deploy, antes de que llegara a producción. Las segundas tablas no nacen
+    divergiendo: divergen después, y en silencio.
+
+    ⚠️ USD queda FUERA a propósito, y conviene decirlo en vez de que parezca un olvido: su
+    piso arrastra el MISMO defecto (4000/50=80, 7000/50=140, 13000/50=260 son la cesta
+    dominicana entre 50), pero es la moneda del camino histórico —el que lleva meses en
+    producción— y ensancharle la puerta es una decisión de producto separada, no un efecto
+    lateral de arreglar el de Colombia. Curar cestas reales por país con fuente citada (la
+    salida (a) del gap) sigue abierta para las cinco.
+    """
+    cur = str(currency or "").upper()
+    if cur in ("DOP", "USD"):
+        return False
+    try:
+        from constants import COUNTRY_PROFILES, pricing_mode_for_country
+    except Exception:
+        return False  # sin SSOT no se degrada nada: fail-closed respecto al cambio
+    # Basta que UN país con esa moneda tenga precios propios para que el piso deje de ser un
+    # número inventado: ahí hay una cesta real detrás.
+    paises = [cc for cc, p in COUNTRY_PROFILES.items()
+              if str(p.get("currency", "")).upper() == cur]
+    if not paises:
+        return False
+    return all(pricing_mode_for_country(cc) == "beta_no_prices" for cc in paises)
+
+
 def validate_budget_sufficient(form_data: dict) -> tuple:
     """Bloqueo pre-generación: si el presupuesto 'custom' declarado es insuficiente para las
     metas, retorna (False, detail) con los números para el mensaje accionable. Solo aplica a
     budget='custom' con monto explícito (las opciones categóricas son cualitativas). Fail-open:
-    ante cualquier error, NO bloquea (mejor generar que romper el flujo)."""
+    ante cualquier error, NO bloquea (mejor generar que romper el flujo).
+
+    [P1-COUNTRY-SYSTEM-F1 · 2026-08-16] Con MEALFIT_COUNTRY_SYSTEM encendido,
+    `budgetCurrency` en {EUR,MXN,COP} compara EN SU PROPIA moneda contra su propio piso
+    (`_budget_cycle_floor_for_currency`, escalado por el mismo multiplicador
+    calorías×hogar que ya aplica el piso DOP) — misma semántica que el camino DOP
+    histórico: comparación DIRECTA, sin conversión FX. El símbolo del mensaje sale del
+    propio código de moneda, validado contra COUNTRY_PROFILES (SSOT del sistema de
+    países) — nunca «RD$» hardcodeado en esta rama nueva. Knob apagado (default) ⇒
+    estas 3 monedas caen en el `else` de siempre (tratadas como DOP, conducta
+    PRE-Fase-1 EXACTA) — byte-identidad garantizada aunque un cliente las declare."""
     try:
         if not _budget_floor_enabled():
             return True, None
@@ -1877,14 +2111,50 @@ def validate_budget_sufficient(form_data: dict) -> tuple:
             # custom sin monto válido: build_budget_context cae a 'medium', no es nuestro bloqueo.
             return True, None
         currency = str(form_data.get("budgetCurrency") or "DOP").upper()
-        usd_dop = _budget_usd_to_dop()
-        declared_dop = declared * usd_dop if currency == "USD" else declared
-        info = min_budget_for_goals(form_data)
-        threshold = info["min_budget_dop"] * (1.0 - _budget_floor_tolerance_pct())
-        if declared_dop >= threshold:
+
+        # [P1-COUNTRY-SYSTEM-F1] Gate INLINE por-llamada (mismo patrón que
+        # constants.country_for_form_data): el flip solo exige restart. Con el
+        # knob apagado esta condición es SIEMPRE False — EUR/MXN/COP caen en
+        # el `else` de abajo, byte-idéntico a antes de Fase 1.
+        new_currency = currency in _BUDGET_CYCLE_FLOOR_DEFAULTS_BY_CURRENCY and _nc_env_bool_budget(
+            "MEALFIT_COUNTRY_SYSTEM", False)
+
+        if new_currency:
+            info = min_budget_for_goals(form_data)
+            # Piso PROPIO de la moneda declarada, escalado por el MISMO
+            # multiplicador (calorías×hogar) que min_budget_for_goals ya
+            # aplicó al piso DOP — recuperado por cociente en vez de duplicar
+            # esa fórmula. "Misma semántica que DOP": comparación DIRECTA, sin
+            # FX (declared_compare = declared, sin convertir).
+            dop_cycle_base = _budget_cycle_floor_dop(info["days"])
+            scale = (info["min_budget_dop"] / dop_cycle_base) if dop_cycle_base > 0 else 1.0
+            declared_compare = declared
+            threshold = _budget_cycle_floor_for_currency(info["days"], currency) * scale * (
+                1.0 - _budget_floor_tolerance_pct())
+        else:
+            # DOP/USD (o moneda no reconocida ⇒ tratada como DOP): mecanismo
+            # ORIGINAL, sin cambios — byte-identidad.
+            usd_dop = _budget_usd_to_dop()
+            declared_compare = declared * usd_dop if currency == "USD" else declared
+            info = min_budget_for_goals(form_data)
+            threshold = info["min_budget_dop"] * (1.0 - _budget_floor_tolerance_pct())
+
+        if declared_compare >= threshold:
             return True, None
-        min_in_currency = (info["min_budget_dop"] / usd_dop) if currency == "USD" else info["min_budget_dop"]
-        sym = "US$" if currency == "USD" else "RD$"
+
+        if new_currency:
+            min_in_currency = _budget_cycle_floor_for_currency(info["days"], currency) * scale
+            # Símbolo: el código de moneda, validado contra COUNTRY_PROFILES
+            # (SSOT del sistema de países) — jamás «RD$» hardcodeado aquí.
+            # Import local (mismo patrón que el resto de este archivo con
+            # `constants`) para no acoplar el módulo entero a ese import.
+            from constants import COUNTRY_PROFILES
+            valid_currencies = {p["currency"] for p in COUNTRY_PROFILES.values()}
+            sym = f"{currency} " if currency in valid_currencies else "RD$"
+        else:
+            min_in_currency = (info["min_budget_dop"] / usd_dop) if currency == "USD" else info["min_budget_dop"]
+            sym = "US$" if currency == "USD" else "RD$"
+
         msg = (
             f"Tu presupuesto de {sym}{round(declared):,} es insuficiente para tus metas "
             f"({info['target_calories']} kcal/día × {info['days']} días"
@@ -1894,6 +2164,26 @@ def validate_budget_sufficient(form_data: dict) -> tuple:
             "calórica menor). No bajamos la calidad nutricional para encajar en un presupuesto "
             "demasiado bajo."
         )
+        # [P1-COUNTRY-BUDGET-FLOOR-FX · 2026-08-23] Aqui se decidia el 422. Si el piso de
+        # esta moneda es una conversion FX de la cesta dominicana (ver
+        # `_piso_sin_procedencia`), NO puede impedir una compra: se degrada a AVISO. El
+        # mensaje —el mismo, con sus cifras— sigue viajando para que el frontend lo muestre
+        # como orientacion; lo que cambia es que el plan se genera.
+        if new_currency and _piso_sin_procedencia(currency):
+            logger.info(
+                "[P1-COUNTRY-BUDGET-FLOOR-FX] aviso (no bloqueo) currency=%s declared=%s piso=%s",
+                currency, round(declared), round(min_in_currency),
+            )
+            return True, {
+                "warning_code": "budget_below_goal_floor_advisory",
+                "min_budget": round(min_in_currency),
+                "declared": round(declared),
+                "currency": currency,
+                "days": info["days"],
+                "household": info["household"],
+                "target_calories": info["target_calories"],
+                "message": msg,
+            }
         return False, {
             "error_code": "budget_below_goal_floor",
             "min_budget": round(min_in_currency),
@@ -1928,7 +2218,34 @@ def validate_budget_sufficient(form_data: dict) -> tuple:
 # Tooltip-anchor: P1-BUDGET-RECONCILE. Test: test_p1_budget_intelligence.py.
 # ============================================================
 
-_BUDGET_TIER_BAND_DEFAULTS = {"low": "1.15", "medium": "1.6", "high": "2.5"}
+# [P1-BUDGET-BANDS-RECALIBRATE · 2026-08-09] 1.15/1.6/2.5 → 1.05/1.25/1.9.
+#
+# MEDIDO contra el costo real de los planes vivos (21 planes: 30 días, precios
+# completos, ≥20 ítems; se excluyeron 2 con `items_priced=1/1` — planes rotos,
+# no baratos, que contaminaban la mediana hacia abajo):
+#
+#     piso de metas ....... RD$ 13.650 / 30 días
+#     costo real típico ... RD$ 15.747   → 1,15 × piso
+#     referencia `medium` . RD$ 21.840   → sobreestimaba un 39 %
+#
+# El hallazgo que ordena todo: el factor real medido (1,15) era EXACTAMENTE el
+# factor que tenía `low`. Es decir, cuando el usuario elegía Moderado su plan
+# costaba lo que la banda Económico predecía — la escalera estaba corrida un
+# escalón entera.
+#
+# CONSECUENCIA QUE NO ERA COSMÉTICA: con la referencia 39 % por encima del costo
+# típico, `reconcile_budget_with_cost` decía «dentro» casi siempre (22 de 26 en
+# los datos) — un veredicto que no puede fallar no informa. Bajar la referencia
+# devuelve significado al estado, aunque produzca más «excedido»: un «excedido»
+# cierto vale más que un «dentro» garantizado.
+#
+# ⚠ LÍMITE DE LA EVIDENCIA, explícito: los 21 planes son TODOS de tier `medium`
+# (3 usuarios, muestra de pruebas). Solo el centro de la escalera está medido.
+# `low` y `high` se mueven para conservar una escalera monótona y coherente
+# alrededor del punto medido — son JUICIO, no medición, y hay que remedirlos
+# cuando existan planes reales en esos tiers. Rollback sin redeploy:
+# MEALFIT_BUDGET_BAND_{LOW,MEDIUM,HIGH}.
+_BUDGET_TIER_BAND_DEFAULTS = {"low": "1.05", "medium": "1.25", "high": "1.9"}
 _BUDGET_VALID_TIERS = ("low", "medium", "high", "unlimited", "custom")
 
 
@@ -1961,8 +2278,24 @@ def _budget_tier_band_factor(tier: str) -> float | None:
 
 def build_budget_reference(form_data: dict) -> dict | None:
     """Referencia persistible contra la que se compara el costo real del ciclo.
-    Devuelve None si el formulario no declaró presupuesto (fail-open)."""
+    Devuelve None si el formulario no declaró presupuesto (fail-open).
+
+    [P1-COUNTRY-SYSTEM-F1 · 2026-08-16 (T7)] País beta sin precios nativos
+    (`constants.pricing_mode_for_form_data(form_data) == 'beta_no_prices'`) ⇒ `None`
+    incondicional, ANTES de mirar `currency`. Cierra el mismo clamp que T6 dejó en
+    `budgetCurrency not in (DOP, USD) → DOP`: sin este guard, un `reference_rd` calculado
+    en el ESPACIO DOP quedaría etiquetado `currency: 'DOP'` para un plan cuyo usuario declaró
+    EUR/MXN/COP — un monto DOP mal etiquetado es peor que ausente. En la práctica esta
+    función ya es inalcanzable para beta (su único caller, `compute_budget_reconciliation`,
+    solo corre tras un `shopping_cost_summary` no-None — T7 lo apaga primero, ver
+    `compute_shopping_cost_summary`); este guard es defensa-en-profundidad explícita para
+    cualquier caller directo presente o futuro. DO/knob-off ⇒ `pricing_mode_for_form_data`
+    devuelve `None` ⇒ este `if` nunca dispara ⇒ byte-identidad total.
+    tooltip-anchor: build_budget_reference beta (test_p1_country_system_f1.py)"""
     try:
+        from constants import pricing_mode_for_form_data
+        if pricing_mode_for_form_data(form_data) == "beta_no_prices":
+            return None
         tier = str(form_data.get("budget") or "").strip().lower()
         if tier not in _BUDGET_VALID_TIERS:
             return None

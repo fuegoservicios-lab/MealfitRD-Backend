@@ -3,8 +3,8 @@ import os
 import math
 from functools import lru_cache
 from typing import List, Optional
-# [P0-DEEPSEEK-MIGRATION · 2026-06-12] Embeddings ahora via capa pluggable
-# (Gemini eliminado; DeepSeek no ofrece embeddings — provider pendiente).
+# [P0-LLM-PROVIDER-MIGRATION · 2026-06-12] Embeddings ahora via capa pluggable
+# (Gemini eliminado; GLM no ofrece embeddings — provider pendiente).
 from embeddings_provider import get_text_embedding
 
 # [P2-1 · 2026-05-08] Helpers compartidos del registry de knobs. Antes los 5
@@ -925,6 +925,29 @@ CHUNK_GC_DEAD_LETTER_BATCH = max(10, min(10000, int(os.environ.get("CHUNK_GC_DEA
 # Knob ajustable sin redeploy. Si quieres desactivar el guard entero para flujos
 # iniciales, sube a 100. Si quieres preservar comportamiento legacy estricto,
 # bájalo a 1.
+# [P3-TZ-FALLBACK-SSOT . 2026-08-22] SSOT de "que huso asumimos cuando NO lo sabemos".
+#
+# Habia TRES respuestas distintas a la misma pregunta y ninguna sabia de las otras:
+# `_resolve_request_tz_offset` devolvia 0 (UTC), `tools._LOCAL_DATE_FALLBACK_OFFSET_MIN`
+# devolvia 240 (RD) y `schemas.HealthProfileSchema.tzOffset` declaraba 0. El mismo usuario
+# sin huso registrado era dominicano para el helper de fechas del chat y estaba en UTC para
+# el resolutor de /analyze -- cuatro horas decidiendo a que DIA pertenece lo que registro.
+# Es la forma exacta de P1-DIET-CANON-SSOT: N tablas a mano para una pregunta, drift, y la
+# que decide en el sitio equivocado hace dano.
+#
+# POR QUE 240 Y NO 0. Medido en produccion (2026-08-22): de los cinco perfiles reales, LOS
+# CINCO tienen tz_offset_minutes=240. Cero usuarios en UTC. Un fallback a 0 no es "el
+# neutral": es una eleccion, y es la equivocada para el 100% de la poblacion medida. 240
+# gana porque describe a los usuarios que hay.
+#
+# SIGNO: convencion `Date.getTimezoneOffset()`, POSITIVO = OESTE de UTC (RD=240, Espana en
+# verano=-120). La hora local es `utc - offset`. Invertirlo parece correcto en RD, que es
+# donde se prueba -- el modo de fallo de P1-AVG-MEAL-HOUR-SIGN.
+#
+# Knob porque cambia conducta en un camino de peticion: si la poblacion deja de ser
+# dominicana, se mueve sin redeploy. Clamp a un huso real: [-840, 720].
+DEFAULT_TZ_OFFSET_MIN = max(-840, min(720, _env_int("MEALFIT_DEFAULT_TZ_OFFSET_MIN", 240)))
+
 PANTRY_GUARD_MIN_ITEMS = max(0, min(500, _env_int("MEALFIT_PANTRY_GUARD_MIN_ITEMS", 10)))  # [P2-1-KNOBS-HYGIENE · 2026-06-15] vía helper, no os.environ raw
 
 # [P1-RENEWAL-PANTRY-IGNORE · 2026-06-26] Variety-first en la generación de plan COMPLETO
@@ -1258,6 +1281,239 @@ def split_with_absorb(total_days: int, base: int = 3) -> list[int]:
     # Distribuir el resto (+1) entre los últimos `rem` chunks
     n_base = n_full - rem
     return [base] * n_base + [base + 1] * rem
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# [P1-CHUNK-OFFSET-REBASE · 2026-08-07] La cola de chunks se re-ancla al shift.
+#
+# `execute_after` de un chunk se calcula `ancla + days_offset` (modo `strict`,
+# CHUNK_PROACTIVE_MARGIN_DAYS=0). El shift rolling reescribe el ancla a HOY
+# (`grocery_start_date`, propagada al snapshot como `_plan_start_date`) al
+# archivar los días ya vividos — pero dejaba los `days_offset` quietos. El par
+# (ancla, offset) quedaba descuadrado por exactamente los días archivados, y el
+# relleno llegaba tarde esa misma cantidad.
+#
+# Medido en producción 2026-08-07 (plan f380821a): ancla 08-05 → 08-07, offsets
+# 3/7/11/… intactos ⇒ el chunk que debía disparar el 08-08 (justo cuando se
+# acababa la ventana viva) pasó al 08-10. 3 de 3 planes con chunks pendientes
+# estaban tarde. Efecto colateral que lo hizo visible: la lista de compras se
+# calcula sobre los días VIVOS, así que encogía con la ventana (34 → 25 ítems) y
+# con ella la Nevera, que es su espejo.
+#
+# La regla no es nueva: las DOS ramas del shift ya encolan sus chunks nuevos con
+# `days_offset = len(shifted_days)`. Esto la aplica también a los que ya existen.
+# ─────────────────────────────────────────────────────────────────────────────
+
+def _entero_no_negativo(valor, default: int = 0) -> int:
+    """Coacción defensiva: el shift corre dentro de una transacción con advisory
+    lock, así que una excepción aquí abortaría la renovación entera."""
+    try:
+        return max(0, int(valor))
+    except (TypeError, ValueError):
+        return default
+
+
+def rebase_pending_chunk_offsets(live_days_count, chunks):
+    """Re-ancla los `days_offset` de la cola contra la ventana viva actual.
+
+    Args:
+        live_days_count: días que le quedan al plan tras el shift (`len(days)`).
+        chunks: secuencia `(id, days_count)` en el orden en que se ejecutarán
+            (week_number ascendente). `days_count` es heterogéneo — lo produce
+            `split_with_absorb`, que mezcla 3 y 4 — así que la cadena suma el
+            tamaño real de cada chunk, NO un paso fijo.
+
+    Returns:
+        `[(id, nuevo_offset)]`. El primero vale `live_days_count`: cubre el día
+        siguiente al último día vivo, que es la definición de "llegar a tiempo".
+
+    Idempotente: aplicarla sobre su propia salida no mueve nada.
+    """
+    offset = _entero_no_negativo(live_days_count)
+    salida = []
+    for chunk_id, days_count in (chunks or []):
+        salida.append((chunk_id, offset))
+        # Un `days_count` corrupto (0/None/basura) no debe colapsar la cadena y
+        # dejar dos chunks compitiendo por el mismo día: avanza al menos 1.
+        offset += max(1, _entero_no_negativo(days_count, 1))
+    return salida
+
+
+def plan_chunk_offset_moves(live_days_count, chunks):
+    """Traduce la rebase a movimientos concretos, ya listos para el UPDATE.
+
+    Args:
+        chunks: `(id, days_offset_actual, days_count)` en orden de ejecución.
+
+    Returns:
+        `[(id, nuevo_offset, delta_dias, dias_hasta_su_turno)]` SOLO de los que
+        se mueven.
+
+        `delta` es `viejo - nuevo`: positivo = el chunk se ADELANTA esos días
+        (el caso del bug), negativo = se retrasa. El caller resta `delta` a
+        `execute_after`, así que el signo importa — invertirlo empujaría el
+        relleno al futuro en vez de traerlo, que es el fallo que esto arregla.
+
+        `dias_hasta_su_turno` (= `nuevo_offset - vivos`, piso 0) es el SUELO del
+        adelanto: el caller no debe programar un chunk antes de `NOW() + eso`.
+        Sin ese suelo, todos los chunks vencidos de un plan colapsan a `NOW()` y
+        salen a la vez — dos generaciones concurrentes escribiendo el MISMO
+        `plan_data`. Medido en el ensayo contra producción (plan 9cf5e313): las
+        semanas 4 y 5 caían ambas a la misma hora.
+
+    Los que ya están en su sitio se omiten: un UPDATE que no cambia nada aún
+    escribe `updated_at` y ensucia la señal de "quién tocó este chunk".
+    """
+    vivos = _entero_no_negativo(live_days_count)
+    actuales = {}
+    for chunk_id, offset_actual, _ in (chunks or []):
+        actuales[chunk_id] = _entero_no_negativo(offset_actual)
+    movimientos = []
+    for chunk_id, nuevo in rebase_pending_chunk_offsets(
+        live_days_count, [(c[0], c[2]) for c in (chunks or [])]
+    ):
+        delta = actuales.get(chunk_id, 0) - nuevo
+        if delta:
+            movimientos.append((chunk_id, nuevo, delta, max(0, nuevo - vivos)))
+    return movimientos
+
+
+def chunk_refill_arrives_in_time(live_days_count, next_offset):
+    """¿El próximo chunk pendiente llega antes de que el usuario se quede sin plan?
+
+    `None` cuando no hay chunk pendiente — "no opina" NO es "está bien": un plan
+    sin cola viva y sin días es otro modo de fallo (`compute_chunk_overdue` en
+    `chat_history_context` es quien lo cubre).
+
+    Adelantado (`offset < vivos`) cuenta como a tiempo: el modo `safety_margin`
+    adelanta chunks a propósito.
+    """
+    if next_offset is None:
+        return None
+    return _entero_no_negativo(next_offset) <= _entero_no_negativo(live_days_count)
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# [P1-CHUNK-EXECUTE-CEILING · 2026-08-16] El techo de `execute_after`.
+#
+# `_rebase_pending_chunk_offsets_sql` mueve `execute_after` por el MISMO delta
+# que el offset — un movimiento RELATIVO. Eso preserva la hora local y cualquier
+# adelanto de `safety_margin`, que es lo que se quería, pero también preserva
+# cualquier error previo PARA SIEMPRE: nadie compara jamás el par contra el
+# ancla. Medido el 2026-08-16 sobre los 3 planes vivos con cola: los 2 que
+# habían pasado por el rebase estaban en `ancla + offset + 1` (el plan e2094da6
+# iba a dejar al usuario sin menú el día 20, y otra vez el 24, y el 28); el
+# tercero, cuyas filas nunca se reanclaron, estaba exacto en sus 3 chunks.
+#
+# La diferencia entre estar bien y estar mal era una sola columna: `updated_at`.
+#
+# Por qué un TECHO y no un recálculo: recalcular desde cero borraría los
+# adelantos legítimos (`safety_margin`) y la hora del día que el movimiento
+# relativo preserva a propósito. `LEAST` solo acota por arriba — un chunk que ya
+# llega antes de tiempo no lo toca. La regla que impone es la única que le
+# importa al usuario: **ningún bloque puede ejecutarse después de que haya
+# empezado el primer día que cubre**.
+# ─────────────────────────────────────────────────────────────────────────────
+
+def chunk_anchor_local_midnight_utc(ancla, tz_min):
+    """[P1-CHUNK-ANCHOR-LOCAL-DATE · 2026-08-21] Instante UTC de la medianoche LOCAL del día del
+    ancla. SSOT de la aritmética que estaba copiada en tres sitios.
+
+    EL DEFECTO QUE CIERRA. `/analyze` persiste `_plan_start_date` como el INSTANTE UTC de la
+    medianoche local del usuario. Para alguien al ESTE de UTC ese instante cae en el día UTC
+    ANTERIOR:
+
+        España (verano, tzOffset=-120)   medianoche local del 21-ago = 2026-08-20T22:00Z
+        RD     (tzOffset=+240)           medianoche local del 21-ago = 2026-08-21T04:00Z
+
+    Los tres sitios que programan `execute_after` hacían `datetime.combine(ancla.date(), ...)`,
+    que toma la fecha **UTC**, y luego sumaban `tz_min` (negativo para España) — restando el día
+    otra vez. Medido: −23,5 h para España, +0,5 h para los otros cinco países beta. España es el
+    único al este de UTC, y por eso el defecto sobrevivió a dos P-fixes de esta familia.
+
+    Peor aún, el techo de P1-CHUNK-EXECUTE-CEILING calculaba el MISMO valor equivocado, así que
+    el `LEAST` lo fijaba y el rebase lo conservaba para siempre: el modo de fallo exacto que ese
+    P-fix documenta —nadie compara el par contra el ancla.
+
+    Convención de `tz_min`: la de `getTimezoneOffset()` de JS, minutos a SUMAR a la hora local
+    para llegar a UTC (RD = +240, España verano = −120). Por eso la fecha local se obtiene
+    RESTÁNDOLO y la medianoche se reconstruye SUMÁNDOLO.
+
+    Fail-safe: `None` ante entrada inválida — este helper corre dentro de la transacción que
+    sostiene el advisory lock del shift, así que una excepción aquí retiene el lock. `None`
+    significa «no opino» y el caller conserva su conducta previa.
+
+    tooltip-anchor: chunk_anchor_local_midnight_utc (test_p1_chunk_anchor_local_date.py)"""
+    if not isinstance(ancla, datetime):
+        return None
+    try:
+        _tz = int(tz_min)
+    except (TypeError, ValueError):
+        _tz = 0
+    if ancla.tzinfo is None:
+        ancla = ancla.replace(tzinfo=timezone.utc)
+    fecha_local = (ancla - timedelta(minutes=_tz)).date()
+    return datetime.combine(fecha_local, datetime.min.time()).replace(
+        tzinfo=timezone.utc) + timedelta(minutes=_tz)
+
+
+def chunk_execute_after_ceiling(snapshot, nuevo_offset):
+    """Instante límite para ejecutar un chunk: medianoche local de su primer día.
+
+    Args:
+        snapshot: `pipeline_snapshot` del chunk. Se usa SOLO su `form_data`
+            (`_plan_start_date` + `tzOffset`) — la fuente 1 de
+            `_resolve_chunk_start_anchor`, la única que no hace IO. Esto corre
+            dentro de la transacción que sostiene el advisory lock del shift:
+            abrir consultas ahí para adivinar una TZ es cambiar un relleno tarde
+            por un lock retenido de más.
+        nuevo_offset: offset YA reanclado del chunk (día 0 = el ancla).
+
+    Returns:
+        `datetime` aware en UTC, o `None` si el snapshot no permite anclar. None
+        significa "no opino": el caller debe conservar su comportamiento previo,
+        NUNCA tratarlo como techo cero (eso mandaría todo a NOW() a la vez, que
+        es el fallo de concurrencia que `dias_hasta_su_turno` ya existe para
+        evitar).
+
+    El `+30` minutos replica la fórmula del encolado (medianoche local + 30m).
+    Repetirla aquí sería una segunda tabla de aritmética; se repite el OFFSET,
+    no la política: si el encolado cambia de hora, este techo sigue siendo
+    correcto porque el techo es "cuándo empieza el día", no "cuándo se quiso
+    ejecutar".
+    """
+    form_data = snapshot.get("form_data") if isinstance(snapshot, dict) else None
+    if not isinstance(form_data, dict):
+        return None
+    inicio = form_data.get("_plan_start_date")
+    if not inicio:
+        return None
+    try:
+        ancla = safe_fromisoformat(inicio)
+    except Exception:
+        return None
+    if ancla is None:
+        return None
+    if ancla.tzinfo is None:
+        ancla = ancla.replace(tzinfo=timezone.utc)
+    try:
+        tz_min = int(
+            form_data.get("tzOffset")
+            or form_data.get("tz_offset_minutes")
+            or 0
+        )
+    except (TypeError, ValueError):
+        tz_min = 0
+    # [P1-CHUNK-ANCHOR-LOCAL-DATE · 2026-08-21] La medianoche sale del SSOT, que usa la fecha
+    # LOCAL del ancla. Antes se tomaba `ancla.date()` (fecha UTC) y se sumaba `tz_min` encima:
+    # para España el día se descontaba dos veces y el techo quedaba 23,5 h adelantado — y como el
+    # `LEAST` lo fija y el rebase lo conserva, para siempre.
+    medianoche = chunk_anchor_local_midnight_utc(ancla, tz_min)
+    if medianoche is None:
+        return None
+    return medianoche + timedelta(
+        days=_entero_no_negativo(nuevo_offset), minutes=30
+    )
 # --- VECTOR SEARCH CACHE ---
 
 # [P1-EMBEDDING-CACHE-BOUNDED · 2026-05-24] Caches de embeddings con bound LRU.
@@ -1342,7 +1598,7 @@ class _BoundedEmbeddingCache:
 _embedding_cache = _BoundedEmbeddingCache(_EMBEDDING_CACHE_MAXSIZE)
 _pantry_embeddings_cache = _BoundedEmbeddingCache(_EMBEDDING_CACHE_MAXSIZE)
 
-# [P0-DEEPSEEK-MIGRATION · 2026-06-12] El knob legacy
+# [P0-LLM-PROVIDER-MIGRATION · 2026-06-12] El knob legacy
 # `MEALFIT_GEMINI_EMBEDDING_TEXT_MODEL` y el singleton Gemini fueron
 # reemplazados por la capa pluggable `embeddings_provider.py`
 # (`MEALFIT_EMBEDDINGS_PROVIDER` / `MEALFIT_EMBEDDINGS_MODEL` /
@@ -1599,6 +1855,21 @@ VEGGIE_FAT_SYNONYMS = {
     "espinaca": ["espinaca", "espinacas", "baby spinach"],
     "pepino": ["pepino", "pepinos"],
     "lechuga": ["lechuga", "lechugas", "lechuga romana", "lechuga iceberg"],
+    # [P1-COUNTRY-SYSTEM-F2 · 2026-08-17 (Task 9, k · T7-parked, decidido con evidencia)] 'recao'
+    # (Eryngium foetidum, "culantro puertorriqueño") clasifica a la MISMA familia que 'cilantro' —
+    # tensión real desde T7 (F2): el catálogo ganó una fila "Recao" PROPIA, con precio/macros
+    # independientes. Trazado el/los consumidor(es) de este dict (vía GLOBAL_REVERSE_MAP):
+    # SOLO alimenta `normalize_ingredient_for_tracking` (fatiga/variedad, services.py) y
+    # `track_meal_friction` (memoria de rechazo, db_plans.py) — heurísticas de PREFERENCIA, no
+    # de precio/seguridad. `shopping_calculator.normalize_name`/pricing NUNCA importa
+    # GLOBAL_REVERSE_MAP (verificado: 0 hits) — "Recao" resuelve a SU PROPIA fila de catálogo,
+    # con SU PROPIO precio, intacto (verificado en vivo contra Neon: normalize_name('Recao') ==
+    # 'Recao', != 'Cilantro'). Efecto real de este alias: comer Recao cuenta como "cilantro" para
+    # variedad/fatiga y como rechazo de "cilantro" en la memoria conductual — culinariamente
+    # correcto (recao ES el sustituto local del cilantro en cocina boricua, mismo perfil de
+    # sabor), no un bug. Si algún día un consumidor de GLOBAL_REVERSE_MAP toca precio/pantry/
+    # alérgenos, esta nota deja de aplicar — re-evaluar entonces (los alérgenos ya usan un
+    # vocabulario SEPARADO, `_ALLERGEN_SYNONYMS`, no éste).
     "cilantro": ["cilantro", "culantro", "verdura", "recao"],
     "repollo": ["repollo"],
     "zanahoria": ["zanahoria", "zanahorias"],
@@ -1664,6 +1935,151 @@ DOMINICAN_FRUITS = [
     # no un olvido — revertirla es borrar esa aserción, y eso se decide a la vista, no de paso.
     "Granada",
 ]
+
+# [P1-COUNTRY-SYSTEM-F2 · T5 · 2026-08-17] Pools de catálogo por país beta para el camino
+# DEGRADADO (Smart Shuffle/Edge Recipes, `cron_tasks._build_filtered_edge_recipe_day` →
+# `_get_fast_filtered_catalogs`) — el ÚNICO lugar de ese camino que hoy arma un día desde un
+# catálogo estático en vez de reciclar días previos del usuario. Mismo shape que
+# DOMINICAN_PROTEINS/CARBS/VEGGIES_FATS/FRUITS (listas planas de nombres).
+#
+# COBERTURA HOY: los CINCO países beta tienen pool propio — ES, MX, CO, PR y US.
+# [P3-COUNTRY-DOC-TRUTH · 2026-08-22] Esta línea declaraba a España como el único país con pool
+# propio (cierto en T5, falso desde que entraron los otros cuatro). El código estaba mejor
+# que su comentario, que es la dirección menos peligrosa pero no inocua: quien leyera esto creería
+# que MX/CO/PR/US caen al pool dominicano en el camino degradado, y se pondría a «arreglar» algo
+# que ya funciona. `test_p3_country_doc_truth.py` ancla la PARIDAD (cada clave del dict tiene que
+# aparecer aquí por token completo), no el literal — así un sexto pool sin documentar falla igual.
+# Un país beta SIN entrada aquí cae al pool RD (`_get_fast_filtered_catalogs`
+# con `country=None` o sin match: fallback explícito, no excepción, mismo comportamiento byte-
+# idéntico que tenía antes de esta task). Nombres tomados de las 32 altas de catálogo T5
+# (`country_gaps/es.json`, USDA-sourced) + los RESUELVE-BIEN de T1 más representativos de la
+# cocina española — mismo criterio "ingrediente clave de plato típico" que curó la lista del
+# harness (country_catalog_gap.py), no una traducción del pool RD.
+COUNTRY_POOLS: dict[str, dict[str, list]] = {
+    "ES": {
+        "proteins": [
+            "Jamón serrano", "Jamón ibérico", "Chorizo español", "Morcilla", "Lomo embuchado",
+            "Panceta ibérica", "Gambas", "Almejas", "Boquerones", "Anchoas", "Cordero",
+            "Bacalao", "Pulpo", "Mejillones", "Calamar", "Vieira", "Percebes", "Chistorra",
+            "Sobrasada", "Butifarra", "Conejo", "Cerdo", "Pechuga de pollo",
+        ],
+        "carbs": [
+            "Arroz blanco", "Papa", "Pan blanco familiar", "Fideos", "Harina de trigo",
+            "Garbanzos", "Lentejas", "Judías blancas", "Judías pintas", "Habas",
+        ],
+        "veggies_fats": [
+            "Cebolla", "Ajo", "Tomate", "Ají morrón", "Alcachofa", "Espárragos", "Calabacín",
+            "Berenjena", "Acelgas", "Espinacas", "Puerro", "Coliflor", "Vainitas",
+            "Champiñones", "Aceitunas", "Aceite de oliva",
+        ],
+        "fruits": [
+            "Naranja", "Mandarina", "Membrillo", "Higo", "Uva", "Melón", "Limón",
+        ],
+    },
+    # [P1-COUNTRY-SYSTEM-F2 · T6 · 2026-08-17] Mismo criterio que 'ES' (T5): altas de catálogo de
+    # este task (`country_gaps/mx.json`/`co.json`) + los RESUELVE-BIEN de T1 más representativos
+    # de cada cocina, NO una traducción de DOMINICAN_*.
+    "MX": {
+        "proteins": [
+            "Chorizo mexicano", "Chorizo verde", "Cecina", "Camarones", "Filete de pescado blanco",
+            "Cerdo", "Pechuga de pollo", "Muslo de pollo", "Huevo", "Carne de res",
+            # [P2-COUNTRY-POOL-DO-RESIDUE · 2026-08-23] Era "Longaniza dominicana": el gentilicio
+            # de OTRO país dentro del pool de México. No es copy — ese string es el IDENTIFICADOR
+            # con el que resuelven la lista de compras, la nevera y el backstop, así que el
+            # seeder le asignaba al mexicano la fila dominicana de verdad. "Chicharrón" es fila
+            # viva de `master_ingredients` Y la reclama el bloque de catálogo de MX
+            # (`_COUNTRY_CATALOG_UNPRICED_BY_COUNTRY['MX']`), o sea que el destino EXISTE: sin
+            # eso el pool apuntaría a nada, que es peor que el residuo.
+            "Carne de res molida", "Chicharrón", "Chivo", "Costilla de cerdo", "Salmón",
+            "Tilapia", "Bacalao", "Atún en agua", "Pavo molido", "Pechuga de pavo",
+        ],
+        "carbs": [
+            "Tortilla de maíz", "Arroz blanco", "Frijoles pintos", "Frijoles refritos",
+            "Habichuelas negras", "Papa", "Harina de trigo", "Harina de maíz precocida",
+            "Quinoa", "Avena",
+        ],
+        "veggies_fats": [
+            "Chile jalapeño", "Chile serrano", "Chile poblano", "Chile habanero", "Nopal",
+            "Jícama", "Epazote", "Cebolla", "Tomate", "Cilantro", "Aguacate", "Calabacín",
+            "Ajo", "Rábano", "Pepino",
+        ],
+        "fruits": [
+            "Tuna de nopal", "Xoconostle", "Mango", "Guayaba", "Tamarindo", "Piña", "Limón",
+        ],
+    },
+    "CO": {
+        "proteins": [
+            "Chicharrón", "Chorizo santarrosano", "Trucha", "Gallina criolla", "Carne de res",
+            "Carne de res molida", "Pechuga de pollo", "Costilla de cerdo", "Cerdo", "Huevo",
+            # [P2-COUNTRY-POOL-DO-RESIDUE · 2026-08-23] Mismo residuo que en MX. Aquí el
+            # reemplazo NO es una fila propia de Colombia: medido, el pool 'CO' ya reclama TODAS
+            # las filas de proteína que el catálogo le atribuye a Colombia, así que el destino
+            # honesto es un nombre panhispánico que resuelve a fila viva ("Muslo de pollo", ya en
+            # los pools de MX y PR) en vez de inventar disponibilidad local que nadie midió.
+            "Camarones", "Filete de pescado blanco", "Morcilla", "Muslo de pollo", "Bacalao",
+            "Tilapia", "Salmón", "Atún en agua", "Pavo molido", "Chivo",
+        ],
+        "carbs": [
+            "Harina de maíz precocida", "Plátano verde", "Plátano maduro", "Yuca", "Papa",
+            "Frijol cargamanto", "Garbanzos", "Lentejas", "Arracacha", "Maíz dulce en granos",
+        ],
+        "veggies_fats": [
+            "Auyama", "Guascas", "Cilantro", "Ají cubanela", "Cebolla", "Tomate", "Aguacate",
+            "Palmito", "Achiote", "Ajo", "Apio", "Zanahoria", "Repollo", "Suero costeño",
+        ],
+        "fruits": [
+            "Lulo", "Curuba", "Uchuva", "Feijoa", "Granadilla", "Mora", "Guanábana", "Borojó",
+        ],
+    },
+    # [P1-COUNTRY-SYSTEM-F2 · T7 · 2026-08-17] Mismo criterio que ES/MX/CO: altas de catálogo de
+    # este task (`country_gaps/pr.json`/`us.json`) + los RESUELVE-BIEN de T1 más representativos
+    # de cada cocina, NO una traducción de DOMINICAN_*. PR comparte mucho con RD (viveres/arroz/
+    # habichuelas/sofrito) -- el pool refleja eso reusando filas RD reales donde el alimento es
+    # genuinamente el mismo, y solo las 19 altas propias donde PR tiene un producto distinto.
+    "PR": {
+        "proteins": [
+            "Pernil", "Jamón de cocinar", "Longaniza puertorriqueña", "Chuleta ahumada",
+            "Pavochón", "Bacalaítos", "Bacalao", "Pechuga de pollo", "Muslo de pollo", "Cerdo",
+            "Carne de res", "Camarones", "Morcilla", "Chicharrón", "Huevo", "Salami", "Tilapia",
+            "Salmón", "Atún en agua", "Pavo molido",
+        ],
+        "carbs": [
+            "Arroz blanco", "Habichuelas rojas", "Habichuelas blancas", "Habichuelas negras",
+            "Gandules", "Yuca", "Batata", "Ñame", "Yautía", "Harina de yuca",
+        ],
+        "veggies_fats": [
+            "Auyama", "Repollo", "Apio", "Zanahoria", "Tomate", "Cebolla", "Ajo", "Recao",
+            "Sofrito", "Achiote", "Aceite de achiote", "Aguacate", "Adobo",
+            "Sazón con culantro y achiote", "Pique", "Alcaparrado",
+        ],
+        "fruits": [
+            "Guineo", "Plátano maduro", "Guayaba", "Piña", "Mango", "Chinola", "Tamarindo",
+        ],
+    },
+    # US = básicos internacionales del harness (T1) -- catálogo de supermercado americano.
+    "US": {
+        "proteins": [
+            "Tocineta", "Jamón de sándwich", "Salchichas", "Pepperoni", "Salchicha italiana",
+            "Carne molida mixta", "Huevos rellenos", "Pechuga de pollo", "Pechuga de pavo",
+            "Cerdo", "Carne de res", "Carne de res molida", "Salmón", "Camarones", "Almejas",
+            "Queso en hebras", "Queso provolone", "Queso cheddar", "Queso cottage", "Huevo",
+        ],
+        "carbs": [
+            "Pan blanco familiar", "Pan integral familiar", "Bagels", "Coditos", "Papa",
+            "Maíz dulce en granos", "Habichuelas negras", "Frijoles pintos", "Habichuelas rojas",
+            "Frijoles horneados",
+        ],
+        "veggies_fats": [
+            "Ají morrón", "Lechuga", "Apio", "Auyama", "Cebolla", "Ajo", "Tomate", "Zanahoria",
+            "Chile en polvo", "Sazonador para tacos", "Aderezo ranch", "Salsa barbacoa",
+            "Kétchup", "Mostaza", "Salsa inglesa",
+        ],
+        "fruits": [
+            "Manzana", "Arándanos", "Arándanos rojos", "Duraznos", "Toronja", "Pera", "Uva",
+        ],
+    },
+}
+
 
 FRUIT_SYNONYMS = {
     "guineo": ["guineo", "guineo maduro", "banana", "banano", "cambur"],
@@ -1878,6 +2294,47 @@ SLOT_INAPPROPRIATE_FOODS = {
     ],
 }
 
+# [P1-COUNTRY-SYSTEM-F1 · 2026-08-16 (Task 4)] Gate cultural de slot POR PAÍS. 'DO' (default,
+# knob apagado — ver `country_for_form_data`) devuelve el MISMO objeto `SLOT_INAPPROPRIATE_FOODS`
+# (identidad `is`, NO copia: el motor queda byte-idéntico). Beta ⇒ tabla derivada MEMOIZADA con
+# la MISMA estructura/tokens/excludes (las tuplas se comparten por referencia, no se copian) pero
+# CADA regla con hardness='soft': las reglas siguen disparando — telemetría para diseñar las
+# tablas nativas de Fase 2. Consumido por `_detect_slot_appropriateness` (graph_orchestrator.py,
+# T4) — `slot_violations_for_meal_name` (abajo) sigue leyendo `SLOT_INAPPROPRIATE_FOODS` directo
+# salvo que un caller le inyecte esta tabla vía su nuevo parámetro `rules_table`.
+#
+# [HONESTIDAD · 2026-08-16 (T4 fix-round 1)] "hardness='soft'" NO significa "deja de forzar
+# retry" en `review_plan_node` (S1) — verificado contra su gate real (graph_orchestrator.py
+# ~40674-40732): en los intentos 1..N-1, CUALQUIER issue (hard O soft) pone `approved=False` y
+# fuerza retry por igual; `hard` solo decide qué pasa en el ÚLTIMO intento (`_sa_is_final`) — sin
+# violación dura, degrada a advisory y ACEPTA el plan; con violación dura, sigue rechazando. Para
+# la regla del arroz específicamente, ablandar el gate NO reduce la presión de retry en los
+# intentos tempranos — lo que sí cambia es que el AUTOFIX (`_night_rice_autofix`) ahora se salta
+# para país != DO (mismo fix-round), así que beta puede pagar MÁS retries que DO en la práctica
+# para esta regla puntual: DO nunca llega a ver la violación (el autofix la corrige en silencio
+# antes de `review_plan_node`); beta sí la ve, intento tras intento, hasta degradar en el último.
+# Cambiar el GATE de S1 para que soft deje de forzar retry en intentos no-finales es una decisión
+# de producto aparte — PARKED por ruling del controller, no incluida en esta task (tocar
+# review_plan_node es su propia task). tooltip-anchor: slot_rules_for_country
+# (test_p1_country_system_f1.py)
+_SLOT_RULES_COUNTRY_CACHE: dict = {}
+
+
+def slot_rules_for_country(country) -> dict:
+    canon = canonicalize_country(country)
+    if canon == "DO":
+        return SLOT_INAPPROPRIATE_FOODS
+    cached = _SLOT_RULES_COUNTRY_CACHE.get(canon)
+    if cached is not None:
+        return cached
+    softened = {
+        slot: [dict(rule, hardness="soft") for rule in rules]
+        for slot, rules in SLOT_INAPPROPRIATE_FOODS.items()
+    }
+    _SLOT_RULES_COUNTRY_CACHE[canon] = softened
+    return softened
+
+
 # Guía POSITIVA por slot (es-DO) inyectada a los prompts de UPDATE (swap/chat-modify) y usada
 # en los mensajes de rechazo del gate S1 — describe qué SÍ va en cada horario.
 SLOT_POSITIVE_HINT = {
@@ -1889,6 +2346,22 @@ SLOT_POSITIVE_HINT = {
              "cena, sopa ligera, wrap o bowl de proteína + vegetales + un tubérculo (batata/yuca/casabe). "
              "Evita el \"arroz de noche\" y los guisos pesados."),
     "merienda": ("La merienda es un snack ligero (150-300 kcal): yogur+fruta, batido, casabe/galleta "
+                 "integral con queso, fruta con maní, o huevo duro con fruta."),
+}
+
+# [P1-COUNTRY-SYSTEM-F1 · 2026-08-16 (Task 4)] Espejo NEUTRAL de SLOT_POSITIVE_HINT — mismo shape
+# (una entrada por slot), sin mandatos de plato dominicano (mangú/locrio/moro/casabe). Consumido
+# SOLO por `build_meal_timing_rules` cuando `country` != 'DO'. NO reemplaza SLOT_POSITIVE_HINT,
+# que sigue siendo el SSOT es-DO para el resto de consumidores (`slot_positive_hint()`, etc.).
+_SLOT_POSITIVE_HINT_NEUTRAL = {
+    "desayuno": ("El desayuno va: opciones ligeras (cereales/avena, pan/tostadas, batido/bowl, "
+                 "huevo o revoltillo) — con proteína y fruta."),
+    "almuerzo": ("El almuerzo es el plato fuerte: proteína + cereal/tubérculo + ensalada/vegetal, "
+                 "un guiso de leguminosas, pasta, o proteína a la plancha con acompañante."),
+    "cena": ("La cena es más ligera que el almuerzo: proteína a la plancha, tortilla/revoltillo, "
+             "sopa ligera, wrap o bowl de proteína + vegetales + un carbohidrato. Evita cenas "
+             "pesadas basadas en arroz."),
+    "merienda": ("La merienda es un snack ligero (150-300 kcal): yogur+fruta, batido, galleta "
                  "integral con queso, fruta con maní, o huevo duro con fruta."),
 }
 
@@ -1910,13 +2383,22 @@ def canonical_slot_key(meal_type: str):
     return _SLOT_CANON_MAP.get(strip_accents(str(meal_type or "").lower()).strip())
 
 
-def slot_violations_for_meal_name(name: str, slot_key: str) -> list:
+def slot_violations_for_meal_name(name: str, slot_key: str, rules_table: dict = None) -> list:
     """[P1-SLOT-APPROPRIATENESS] SSOT del detector de apropiación horaria. Devuelve
     [{label, hard}] de categorías de alimento que NO corresponden al `slot_key`
     (ya canonicalizado: desayuno/almuerzo/cena/merienda). Match WORD-BOUNDARY sobre el
     NOMBRE (anti-falso-positivo: no mira ingredientes; respeta exclusiones de modificadores
-    como 'harina de arroz'). Pura → unit-testable. tooltip-anchor: P1-SLOT-APPROPRIATENESS"""
-    rules = SLOT_INAPPROPRIATE_FOODS.get(slot_key)
+    como 'harina de arroz'). Pura → unit-testable.
+    [P1-COUNTRY-SYSTEM-F1 · 2026-08-16 (T4)] `rules_table` opcional (default None ⇒
+    SLOT_INAPPROPRIATE_FOODS, byte-idéntico a pre-T4) permite a un caller país-aware inyectar
+    `slot_rules_for_country(country)` sin tocar la firma de los demás callers.
+    [P1-COUNTRY-SYSTEM-F1 · 2026-08-16 (T8 slot-callers sweep)] estado real tras T4 fix-round 1 +
+    T8: TODOS los callers de producción en graph_orchestrator.py/tools.py pasan `rules_table` hoy
+    (tabla canónica completa: backend/docs/country_system_f1.md). La única excepción viva es
+    `plan_gym.py` (gym de scoring OFFLINE, marcado EXENTO ahí — nunca corre en el request path de
+    un usuario). tooltip-anchor: P1-SLOT-APPROPRIATENESS"""
+    table = rules_table if rules_table is not None else SLOT_INAPPROPRIATE_FOODS
+    rules = table.get(slot_key)
     if not rules:
         return []
     nlow = strip_accents(str(name or "").lower())
@@ -1969,22 +2451,37 @@ def slot_ingredient_violations(ingredients, slot_key) -> list:
         return []
 
 
-def build_meal_timing_rules(meal_type: str) -> str:
+def build_meal_timing_rules(meal_type: str, country: str = "DO") -> str:
     """[P1-SLOT-APPROPRIATENESS] SSOT del directivo compacto de coherencia de HORARIO para los
     prompts de UPDATE (swap S3 / chat-modify): qué NO va en este slot + guía positiva es-DO.
-    Devuelve '' si el slot no se reconoce. tooltip-anchor: P1-SLOT-APPROPRIATENESS"""
+    Devuelve '' si el slot no se reconoce.
+    [P1-COUNTRY-SYSTEM-F1 · 2026-08-16 (T4)] `country` (default 'DO', fail-safe de
+    canonicalize_country) selecciona la variante: DO ⇒ idéntico byte a byte al string pre-T4
+    (SLOT_INAPPROPRIATE_FOODS + SLOT_POSITIVE_HINT directo, SIN pasar por slot_rules_for_country
+    — mismo código exacto que antes de T4). Beta ⇒ bloque NEUTRAL: la enumeración "NO uses..."
+    se OMITE por completo — sus labels son intencionalmente dominicanos (slot_rules_for_country
+    los preserva intactos para que `_detect_slot_appropriateness` siga midiendo por telemetría
+    vía el MISMO token), pero ya no son un requisito duro, y listarlos en un contrato que debe
+    leer neutral reintroduciría 'locrio'/'sancocho'/'yaroa' — exactamente lo que este bloque debe
+    evitar. Sobrevive SOLO la guía positiva, reescrita sin mandatos de plato dominicano
+    (`_SLOT_POSITIVE_HINT_NEUTRAL`). tooltip-anchor: build_meal_timing_rules
+    (test_p1_country_system_f1.py)"""
     slot = canonical_slot_key(meal_type)
     if not slot:
         return ""
+    canon_country = canonicalize_country(country)
     parts = []
-    rules = SLOT_INAPPROPRIATE_FOODS.get(slot)
-    if rules:
-        prohibited = "; ".join(r["label"] for r in rules)
-        parts.append(
-            f"- 🕒 COHERENCIA DE HORARIO ({meal_type}): este plato es para el {slot}. "
-            f"NO uses en este horario: {prohibited}."
-        )
-    hint = SLOT_POSITIVE_HINT.get(slot)
+    if canon_country == "DO":
+        rules = SLOT_INAPPROPRIATE_FOODS.get(slot)
+        if rules:
+            prohibited = "; ".join(r["label"] for r in rules)
+            parts.append(
+                f"- 🕒 COHERENCIA DE HORARIO ({meal_type}): este plato es para el {slot}. "
+                f"NO uses en este horario: {prohibited}."
+            )
+        hint = SLOT_POSITIVE_HINT.get(slot)
+    else:
+        hint = _SLOT_POSITIVE_HINT_NEUTRAL.get(slot)
     if hint:
         parts.append(f"- 🍽️ {hint}")
     return ("\n    " + "\n    ".join(parts)) if parts else ""
@@ -2375,7 +2872,7 @@ def _pantry_token_variants(token: str) -> set:
     return variants
 
 
-def pantry_names_match(a: str, b: str) -> bool:
+def pantry_names_match(a: str, b: str, *, use_catalog_aliases: bool = True) -> bool:
     """¿`a` y `b` nombran la MISMA fila física de la Nevera?
 
     Compara token a token sobre la clave canónica, aceptando equivalencia
@@ -2390,12 +2887,353 @@ def pantry_names_match(a: str, b: str) -> bool:
     if key_a == key_b:
         return True
     toks_a, toks_b = key_a.split(), key_b.split()
-    if len(toks_a) != len(toks_b) or not toks_a:
-        return False
-    return all(
+    if len(toks_a) == len(toks_b) and toks_a and all(
         _pantry_token_variants(ta) & _pantry_token_variants(tb)
         for ta, tb in zip(toks_a, toks_b)
+    ):
+        return True
+    # [P2-PANTRY-REGIONAL-SYNONYMS · 2026-08-21] Peldaño 4: el mismo alimento con OTRO NOMBRE.
+    #
+    # Los tres peldaños de arriba son léxicos (mayúsculas, acentos, cantidad, plural, token a
+    # token) y por eso reconocían 0 de 22 sinónimos regionales que el propio catálogo declara:
+    # `pimiento`↔`Ají morrón`, `palta`↔`Aguacate`, `ejotes`↔`Vainitas`, `patata`↔`Papa`. Un español
+    # marcaba la compra, la Nevera guardaba «Ají morrón», y al comerse el plato que pide «pimiento»
+    # la deducción NO encontraba la fila: sin descuento, sin fila en `failed_inventory_deductions`
+    # y sin alerta. Es la mitad de PALABRA que le faltaba a P1-PANTRY-NAME-RESOLUTION, que cerró la
+    # de FORMA.
+    #
+    # La fuente es la columna `aliases` del catálogo, NO `GLOBAL_REVERSE_MAP` ni los
+    # `*_SYNONYMS` de este módulo: ésos colapsan `pechuga`→`pollo` a propósito, así que comerte una
+    # pechuga descontaría del muslo — CLAUDE.md lo prohíbe por escrito para esta pregunta.
+    #
+    # Y sólo alias INEQUÍVOCOS. Barrido del catálogo vivo: 5 claves de 1487 las reclama más de una
+    # fila y son genuinamente ambiguas (`nueces` la reclaman Almendras fileteadas Y Nueces mixtas;
+    # `mariscos`, tres filas). Emparejar por ellas descontaría del alimento equivocado, que es el
+    # error caro del lado contrario. La exclusión se CALCULA del dato: no hay lista que mantener
+    # cuando el catálogo crezca.
+    if use_catalog_aliases and _pantry_alias_match_enabled():
+        _idx = _pantry_alias_canon_index()
+        if _idx:
+            def _canon_de(_k):
+                for _v in _pantry_key_variants(_k):
+                    _hit = _idx.get(_v)
+                    if _hit:
+                        return _hit
+                return None
+            _ca, _cb = _canon_de(key_a), _canon_de(key_b)
+            if _ca and _cb and _ca == _cb:
+                return True
+    return False
+
+
+# tooltip-anchor: P2-PANTRY-REGIONAL-SYNONYMS
+_PANTRY_ALIAS_INDEX_CACHE = None
+_PANTRY_ALIAS_INDEX_AT = 0.0
+_PANTRY_ALIAS_INDEX_TTL_S = 300.0
+
+
+def _pantry_alias_match_enabled() -> bool:
+    """Cambia lo que el usuario ve descontarse de su Nevera ⇒ knob propio."""
+    return str(os.getenv("MEALFIT_PANTRY_ALIAS_MATCH", "true")).strip().lower() not in (
+        "0", "false", "no", "off")
+
+
+def _pantry_key_variants(key: str) -> set:
+    """Formas singular/plural de una clave completa. «pimientos» ↔ «pimiento».
+
+    Se expanden LOS DOS lados (índice y consulta) a propósito: el plural puede estar en el
+    catálogo (`Molondrones`) o en lo que teclea el usuario («2 pimientos»), y una expansión de un
+    solo lado acierta en un caso y falla en el otro. Tope de 12 combinaciones para que una clave
+    larga no convierta el índice en un producto cartesiano."""
+    toks = (key or "").split()
+    if not toks or len(toks) > 3:
+        return {key} if key else set()
+    salida = {""}
+    for t in toks:
+        vs = _pantry_token_variants(t) or {t}
+        salida = {(s + " " + v).strip() for s in salida for v in vs}
+        if len(salida) > 12:
+            return {key}
+    return salida or {key}
+
+
+def _reset_pantry_alias_index_cache() -> None:
+    """Para los tests y para cualquier recarga de catálogo."""
+    global _PANTRY_ALIAS_INDEX_CACHE, _PANTRY_ALIAS_INDEX_AT
+    _PANTRY_ALIAS_INDEX_CACHE, _PANTRY_ALIAS_INDEX_AT = None, 0.0
+
+
+def _pantry_alias_canon_index() -> dict:
+    """{clave de Nevera → nombre canónico}, SÓLO para claves que reclama UNA fila.
+
+    Import perezoso de `shopping_calculator` a propósito: este módulo es el más bajo de la
+    jerarquía y todos importan de él. Fail-open a `{}` — si el catálogo no está disponible la
+    Nevera sigue funcionando con lo léxico, que es la conducta de siempre."""
+    global _PANTRY_ALIAS_INDEX_CACHE, _PANTRY_ALIAS_INDEX_AT
+    import time as _t_pa
+    _ahora = _t_pa.monotonic()
+    if _PANTRY_ALIAS_INDEX_CACHE is not None and (_ahora - _PANTRY_ALIAS_INDEX_AT) < _PANTRY_ALIAS_INDEX_TTL_S:
+        return _PANTRY_ALIAS_INDEX_CACHE
+    _idx: dict = {}
+    try:
+        from shopping_calculator import get_master_ingredients as _gmi_pa
+        # EL ORDEN ES LOAD-BEARING: la ambigüedad se cuenta sobre TODOS los reclamantes, ANTES de
+        # aplicar el filtro de contención. Contarla después la destruye — `nueces` la reclaman
+        # `Nueces mixtas` (que el filtro descarta por contención) y `Almendras fileteadas` (que
+        # sobrevive), así que la clave quedaba «inequívoca» apuntando a las almendras y comerse
+        # unas nueces mixtas habría descontado de ellas. Lo destapó la mutación: el primer test de
+        # ambigüedad comparaba dos nombres CANÓNICOS, que nunca chocan entre sí.
+        _duenos: dict = {}
+        _reclamantes: dict = {}
+        for _row in (_gmi_pa() or []):
+            _canon = str(_row.get("name") or "").strip()
+            if not _canon:
+                continue
+            _canon_toks = set(canonical_pantry_key(_canon).split())
+            _claves = [_canon] + [str(_a) for _a in (_row.get("aliases") or []) if _a]
+            for _k in _claves:
+                _kk = canonical_pantry_key(_k)
+                if len(_kk) < 3:
+                    continue
+                for _kv0 in _pantry_key_variants(_kk):
+                    _reclamantes.setdefault(_kv0, set()).add(_canon)
+                # Si los tokens del alias CONTIENEN o ESTÁN CONTENIDOS en los del nombre canónico,
+                # no es un sinónimo: es el mismo alimento con un calificativo puesto o quitado.
+                #
+                # Un sinónimo REBAUTIZA (`pimiento`↔`Ají morrón`, `palta`↔`Aguacate`); un
+                # calificativo GENERALIZA o ESPECIFICA, y ese salto es justo el que rompe la regla
+                # original de este matcher —el MISMO número de tokens, para que «arroz integral» no
+                # matchee «arroz»— y lo que CLAUDE.md prohíbe aquí por escrito.
+                #
+                # Los dos sentidos hacen falta, y el segundo lo destapó un test vecino:
+                #   · hacia abajo: `pollo` es alias de `Pechuga de pollo` (y `platano` de `Plátano
+                #     verde`, que además para un español es el GUINEO — el país al que sirve esto).
+                #   · hacia arriba: `lomo de cerdo` es alias de `Cerdo`, así que sin esta mitad un
+                #     corte concreto colapsaba con el genérico.
+                # La distinción sale del dato, no de una lista que mantener.
+                _k_toks = set(_kk.split())
+                if _k_toks and _canon_toks and (
+                        _k_toks < _canon_toks or _k_toks > _canon_toks):
+                    continue
+                for _kv in _pantry_key_variants(_kk):
+                    _duenos.setdefault(_kv, set()).add(_canon)
+        _idx = {_k: next(iter(_v)) for _k, _v in _duenos.items()
+                if len(_v) == 1 and len(_reclamantes.get(_k) or ()) == 1}
+    except Exception:
+        _idx = {}
+    _PANTRY_ALIAS_INDEX_CACHE, _PANTRY_ALIAS_INDEX_AT = _idx, _ahora
+    return _idx
+
+
+# ------------------------------------------------------------------
+# [P1-SCAN-CATALOG-MATCH · 2026-08-10] Texto libre → alimento del catálogo
+# ------------------------------------------------------------------
+# `pantry_names_match` responde "¿son la misma fila de la Nevera?". Esta sección
+# responde la pregunta VECINA que hace el escáner de fotos: "el modelo de visión
+# leyó este texto libre — ¿a qué alimento de `master_ingredients` corresponde?".
+# Vive aquí, junto al otro resolutor de nombres, para que ambas preguntas
+# compartan normalización y disciplina en vez de driftar (este repo ya pagó ese
+# precio: la canonicalización de dieta vivía en tres tablas a mano).
+#
+# EL DEFECTO QUE CIERRA (reportado por el dueño con una foto de un pan):
+# el matcher del escáner aceptaba UN token en común como prueba de identidad, y
+# "de" es un token. 36 de los 204 alimentos del catálogo lo llevan en el nombre,
+# y el primero en orden de lectura es «Polvo de hornear» — así que CUALQUIER
+# detección con la palabra "de" que no matcheara por otra vía aterrizaba ahí.
+# «pan de hamburguesa» → «Polvo de hornear». El modelo había leído bien; lo que
+# falló fue esto.
+#
+# Medido contra el catálogo real con 34 detecciones realistas etiquetadas a mano:
+# el matcher viejo acertaba 19 y mapeaba 15 al alimento EQUIVOCADO — «salami»→Sal,
+# «ajo»→Ajo en polvo, «leche de coco»→Coco, «guineo»→Guineo verde (justo la
+# distinción que el prompt de visión se esfuerza en explicar). Con estas reglas:
+# 34/34 y cero mapeos equivocados.
+#
+# LAS TRES REGLAS, en orden:
+#   1. Identidad canónica (`pantry_names_match`): mismo número de tokens, token a
+#      token, tolerando singular/plural. «huevos» → «Huevo».
+#   2. Especificación: uno de los dos nombres dice MÁS que el otro y lo cubre
+#      entero — pero solo cuenta si comparten NÚCLEO (primer token significativo).
+#      Sin el núcleo, «azúcar» se colaba en «Yogurt griego sin azúcar» y «jugo de
+#      naranja» en «Naranja»: cubrir no es ser.
+#   3. Si la regla 2 deja VARIOS candidatos, no se elige ninguno. «pan» tiene tres
+#      panes en el catálogo; quedarse con el primero es adivinar, y adivinar aquí
+#      mete un alimento que el usuario no tiene en su Nevera.
+#
+# La disciplina es la misma que ya declara `canonical_pantry_key` un poco más
+# arriba: un no-match degrada a "no lo encontré" (visible, el usuario lo ve
+# marcado como sin match), y un match de más corrompe la Nevera en silencio y de
+# ahí pasa al plan y a la lista de compras. Ante la duda, NO matchear.
+#
+# Tooltip-anchor: P1-SCAN-CATALOG-MATCH
+
+# Conectores gramaticales: no son evidencia de identidad entre dos alimentos.
+# Deliberadamente CORTO y solo gramatical — nada de "polvo", "salsa" o "fresco",
+# que sí distinguen alimentos («Ajo» vs «Ajo en polvo» son compras distintas).
+# NO es `RECIPE_INGREDIENT_STOPWORDS`: esa lista sirve para extraer el sustantivo
+# principal de un ingrediente de RECETA y es mucho más agresiva a propósito.
+FOOD_CONNECTOR_TOKENS = frozenset({
+    "de", "del", "la", "el", "los", "las", "un", "una", "unos", "unas",
+    "y", "e", "o", "u", "en", "con", "sin", "al", "a", "para",
+})
+
+
+@lru_cache(maxsize=2048)
+def _significant_food_tokens(name: str) -> tuple:
+    """Tokens del nombre que sí distinguen un alimento de otro."""
+    return tuple(t for t in canonical_pantry_key(name).split() if t not in FOOD_CONNECTOR_TOKENS)
+
+
+def _food_tokens_covered(needle: tuple, haystack: tuple) -> bool:
+    """¿Cada token de `needle` tiene equivalente (singular/plural) en `haystack`?"""
+    return all(
+        any(_pantry_token_variants(a) & _pantry_token_variants(b) for b in haystack)
+        for a in needle
     )
+
+
+def resolve_scanned_food(detected_name: str, catalog_names, aliases_by_name=None) -> Optional[str]:
+    """Nombre del catálogo al que corresponde `detected_name`, o None.
+
+    `None` NO es un fallo del resolutor: es su respuesta correcta cuando el
+    alimento no está en el catálogo o cuando hay varios candidatos igual de
+    válidos. El caller debe mostrarlo como "sin match" y NO agregarlo solo.
+
+    [P1-SCAN-ALIASES · 2026-08-10] `aliases_by_name` es la columna `aliases` de
+    `master_ingredients`: 816 sinónimos escritos a mano («pollo»→Pechuga de pollo,
+    «baking powder»→Polvo de hornear, «harina pan»→Harina de maíz precocida). Es
+    la respuesta CURADA a esta misma pregunta y el escáner no la leía — ni
+    siquiera la pedía en su SELECT. 484 de los 816 no llevaban a su alimento.
+    Ningún heurístico de tokens compite con un sinónimo que alguien escribió a
+    mano: por eso va antes que la regla 3.
+    """
+    detected = str(detected_name or "").strip()
+    if not detected:
+        return None
+
+    # 1. Identidad canónica contra el NOMBRE. Va primero para que un alias no le
+    #    robe la identidad a un alimento propio: «repollo morado» es alias de
+    #    «Repollo» Y nombre de «Repollo morado» — gana el nombre.
+    for name in catalog_names:
+        # [P2-PANTRY-REGIONAL-SYNONYMS · 2026-08-21] `use_catalog_aliases=False`: este resolvedor
+        # recibe su universo de alias por parámetro (`aliases_by_name`) y lo aplica en su propia
+        # regla 3. Dejarle consultar además el índice global rompería su contrato — pasó de ser
+        # función pura de sus argumentos a depender del catálogo vivo, y un caso que construye a
+        # propósito un catálogo SIN alias quedaba pisado por el de producción. Es la clase «el
+        # guard mide el entorno, no el contrato» que esta ola ya vio tres veces.
+        if pantry_names_match(detected, name, use_catalog_aliases=False):
+            return name
+
+    # 2. Identidad canónica contra los ALIASES. Único, o nada: 4 aliases del
+    #    catálogo apuntan a varios alimentos a la vez («nueces» → Almendras
+    #    fileteadas y Nueces mixtas; «mariscos» → Pulpo, Calamar y Mejillones), y
+    #    ahí elegir sería adivinar igual que en la regla 3.
+    if aliases_by_name:
+        por_alias = [
+            name for name in catalog_names
+            if any(pantry_names_match(detected, a, use_catalog_aliases=False)
+                   for a in (aliases_by_name.get(name) or ()))
+        ]
+        if len(por_alias) == 1:
+            return por_alias[0]
+        if len(por_alias) > 1:
+            return None
+
+    d_sig = _significant_food_tokens(detected)
+    if not d_sig:
+        return None
+
+    # 2. Especificación con núcleo común, en cualquier dirección.
+    candidatos = []
+    for name in catalog_names:
+        c_sig = _significant_food_tokens(name)
+        if not c_sig:
+            continue
+        if not (_pantry_token_variants(d_sig[0]) & _pantry_token_variants(c_sig[0])):
+            continue
+        if _food_tokens_covered(d_sig, c_sig) or _food_tokens_covered(c_sig, d_sig):
+            candidatos.append(name)
+
+    # 3. Ambigüedad: elegir sería adivinar.
+    return candidatos[0] if len(candidatos) == 1 else None
+
+
+# ------------------------------------------------------------------
+# [P1-MEAL-NAME-BACKED · 2026-08-10] El nombre corto del plato no puede
+# contradecir su propio inventario
+# ------------------------------------------------------------------
+# EL DEFECTO: el dueño escaneó un plato y la tarjeta dijo «Arroz blanco con
+# lazaña». En los logs, el modelo había descrito bien lo que veía — «Arroz blanco
+# y carne molida guisada con vegetales y salsa» — y aun así llenó `meal_name` con
+# una lasaña que no estaba. Las macros (560/25/65/8) correspondían al inventario
+# correcto; solo el rótulo mentía.
+#
+# Por qué se puede comprobar: el prompt YA obliga a que `description` sea un
+# inventario completo de componentes (P1-MEAL-SCAN-DR-DISHES v3, escrito tras dos
+# fallos del mismo campo). O sea que hay un dato fiable contra el que contrastar el
+# rótulo, y no se estaba usando. Van tres versiones del prompt para este campo: un
+# aviso no es un guard.
+#
+# LA REGLA: cada token significativo del nombre debe aparecer en la descripción.
+# Excepción necesaria — los platos criollos con NOMBRE PROPIO («la bandera» es
+# arroz + habichuelas + carne; «los tres golpes» es mangú + huevo + salami +
+# queso): ahí el nombre legítimamente no comparte palabras con sus componentes, y
+# el prompt los pide a propósito. Por eso van en una lista explícita y corta.
+#
+# Un nombre no respaldado NO se descarta a ciegas: se sustituye por uno derivado
+# de la propia descripción, que es el dato que sí se verificó. El usuario puede
+# editarlo antes de registrar, así que el peor caso es un nombre más largo y
+# literal — nunca un plato que no comió.
+#
+# Tooltip-anchor: P1-MEAL-NAME-BACKED
+
+# Clásicos dominicanos cuyo nombre propio NO describe sus componentes. Corta a
+# propósito: cada entrada es un permiso para que el rótulo no cuadre con el
+# inventario, y ese permiso es justo lo que falló aquí.
+DR_DISH_PROPER_NAMES = frozenset({
+    "bandera", "golpes", "mangu", "mofongo", "sancocho", "locrio", "asopao",
+    "chicharron", "chimichurri", "chimi", "yaroa", "quipe", "pastelon",
+    "moro", "bollito", "catibia", "chacas", "chenchen", "mondongo",
+})
+
+
+def meal_name_backed_by_description(meal_name: str, description: str) -> bool:
+    """¿Todo lo que nombra el rótulo aparece en el inventario del plato?"""
+    nombre_tokens = _significant_food_tokens(meal_name)
+    if not nombre_tokens:
+        return True          # sin rótulo no hay nada que contradecir
+    desc_tokens = set(_significant_food_tokens(description))
+    if not desc_tokens:
+        return True          # sin inventario no hay con qué comparar: no se castiga
+    # La exención mira el nombre ENTERO, no token a token: «los tres golpes»
+    # empieza por «tres», que no es nombre de plato, y comprobarlo dentro del
+    # bucle lo descartaba antes de llegar a «golpes».
+    if any(t in DR_DISH_PROPER_NAMES for t in nombre_tokens):
+        return True
+    for t in nombre_tokens:
+        variantes = _pantry_token_variants(t)
+        if not any(variantes & _pantry_token_variants(d) for d in desc_tokens):
+            return False
+    return True
+
+
+def derive_meal_name_from_description(description: str, max_words: int = 8) -> str:
+    """Rótulo construido desde el inventario verificado, recortado a `max_words`.
+
+    Se corta en la primera frase para no arrastrar la estimación de macros que el
+    modelo concatena al final del texto.
+    """
+    texto = str(description or "").strip()
+    if not texto:
+        return ""
+    for corte in (".", "(", ";"):
+        if corte in texto:
+            texto = texto.split(corte, 1)[0].strip()
+    palabras = texto.split()
+    if not palabras:
+        return ""
+    corto = " ".join(palabras[:max_words]).rstrip(",;:").strip()
+    return corto[:1].upper() + corto[1:] if corto else ""
 
 
 # ============================================================
@@ -2548,6 +3386,85 @@ SUPPLEMENT_NAMES = {
     "electrolytes":  "Electrolitos (Sodio + Potasio + Magnesio)",
 }
 
+# [P1-SUPPLEMENT-CLINICAL-GATE · 2026-08-12] Contraindicaciones deterministas de
+# suplementos. Los suplementos eran la ÚNICA pieza del plan sin gate clínico
+# (el backstop opera sobre comidas y el Revisor Médico no los mencionaba), y el
+# prompt con selección explícita ORDENA incluirlos «ni más, ni menos» — un
+# hipertenso que marcaba Pre-Entreno lo recibía por orden directa.
+#
+# CONTRATO: keys ⊆ SUPPLEMENT_NAMES; `conditions` son IDs de
+# `condition_rules.CONDITION_RULES` y `medications` IDs de
+# `medication_rules.MEDICATION_RULES` — NO strings del wizard: los detectores
+# existentes ya resuelven chips + texto libre con veto de ambigüedad
+# (P1-MED-AMBIGUOUS-TERM-VETO). No reimplementes matching aquí.
+# El detector vive en `condition_rules.contraindicated_supplements`; espejo UI
+# (chips deshabilitados) en `frontend/src/config/formValidation.js::SUPPLEMENT_BLOCKERS`.
+# Tabla CONSERVADORA a propósito: solo pares clínicamente indefendibles de
+# omitir. Ampliarla = editar aquí + espejo frontend + test de paridad.
+SUPPLEMENT_CONTRAINDICATIONS = {
+    "pre_workout": {
+        "conditions": ("hta", "pregnancy", "gastritis"),
+        "medications": ("maoi",),
+        "reason": (
+            "Estimulantes concentrados (cafeína + beta-alanina): elevan presión "
+            "arterial, irritan mucosa gástrica, sin datos de seguridad en "
+            "embarazo/lactancia, e interaccionan con IMAO."
+        ),
+    },
+    "fat_burner": {
+        "conditions": ("hta", "pregnancy", "gastritis", "hypothyroid"),
+        "medications": ("maoi",),
+        "reason": (
+            "Termogénicos con estimulantes: presión arterial, mucosa gástrica, "
+            "embarazo/lactancia, interfieren con la función tiroidea e "
+            "interaccionan con IMAO."
+        ),
+    },
+    "creatine": {
+        "conditions": ("renal",),
+        "medications": (),
+        "reason": "Carga renal adicional medible: contraindicada con enfermedad renal.",
+    },
+    "whey_protein": {
+        "conditions": ("renal",),
+        "medications": (),
+        "reason": "Proteína suplementaria concentrada: el perfil renal ya lleva cap proteico estricto en la comida.",
+    },
+    "vegan_protein": {
+        "conditions": ("renal",),
+        "medications": (),
+        "reason": "Proteína suplementaria concentrada: el perfil renal ya lleva cap proteico estricto en la comida.",
+    },
+    "bcaa": {
+        "conditions": ("renal",),
+        "medications": (),
+        "reason": "Aminoácidos suplementarios suman carga proteica al perfil renal capado.",
+    },
+    "omega3": {
+        "conditions": (),
+        "medications": ("anticoagulant",),
+        "reason": (
+            "Dosis suplementarias de omega-3 potencian el efecto anticoagulante "
+            "(riesgo de sangrado con warfarina/acenocumarol)."
+        ),
+    },
+}
+
+# [P1-SUPPLEMENT-CLINICAL-GATE] Keywords por suplemento para reconocer el nombre
+# LIBRE que el LLM escribe en las secciones `supplements` del plan generado
+# (la barredora post-gen de graph_orchestrator). Mismo idioma substring-lowercase
+# que la `_supp_keywords` histórica de includeSupplements=False; tokens ≥4 chars
+# para no repetir la clase «sal ⊆ salami».
+SUPPLEMENT_MATCH_KEYWORDS = {
+    "pre_workout": ("pre-entreno", "preentreno", "pre entreno", "pre workout", "beta-alanina", "beta alanina"),
+    "fat_burner": ("quemador", "termogénico", "termogenico", "fat burner"),
+    "creatine": ("creatina", "creatine"),
+    "whey_protein": ("whey", "suero de leche"),
+    "vegan_protein": ("proteína vegana", "proteina vegana", "vegan protein", "guisante"),
+    "bcaa": ("bcaa", "aminoácidos ramificados", "aminoacidos ramificados"),
+    "omega3": ("omega-3", "omega 3", "aceite de pescado", "fish oil"),
+}
+
 # [P2-CATALOG-FILTER-SSOT · 2026-07-31] (audit solver+seeder v6 · F15) Índice
 # nombre-del-catálogo → blob con todos sus sinónimos, para que un dislike/alergia escrito con
 # OTRO nombre del mismo alimento ('Hongos' por 'Champiñones', 'setas', 'palta' por 'Aguacate')
@@ -2606,12 +3523,598 @@ def canonicalize_diet_type(diet) -> str:
     return _DIET_CANON_LOOKUP.get(strip_accents(diet.strip().lower()), "balanced")
 
 
-def _get_fast_filtered_catalogs(allergies: tuple, dislikes: tuple, diet: str):
-    """Filtra el catálogo dominicano basado en restricciones del usuario O(N) sin Cache Thrashing volátil."""
-    filtered_proteins = DOMINICAN_PROTEINS.copy()
-    filtered_carbs = DOMINICAN_CARBS.copy()
-    filtered_veggies = DOMINICAN_VEGGIES_FATS.copy()
-    filtered_fruits = DOMINICAN_FRUITS.copy()
+# ─────────────────────────────────────────────────────────────────────────────
+# [P1-COUNTRY-SYSTEM-F0 · 2026-08-16] El país del usuario, canónico.
+#
+# ISO-3166 alpha-2 y UNA sola tabla — la lección de P1-DIET-CANON-SSOT (tres
+# tablas de dieta a mano driftaron y una sirvió Pollo a vegetarianas). El `val`
+# de los chips del wizard ES este código; texto humano jamás llega aquí como
+# dato válido: desconocido/ausente ⇒ 'DO', que deja a TODA la base instalada
+# byte-idéntica a hoy sin backfill.
+#
+# `default_tz_offset_min` usa la convención de getTimezoneOffset() (positivo al
+# oeste de UTC): DO/PR 240, US 300 (Eastern como default del país), MX 360,
+# CO 300, ES -60 (invierno). Es el default POR PAÍS para superficies sin
+# tzOffset del usuario; el del usuario siempre gana.
+#
+# [P1-COUNTRY-SYSTEM-F2 · 2026-08-17 (Task 9, F9)] SIN LECTOR, POR DISEÑO — verificado
+# (`grep -rn default_tz_offset_min backend/` fuera de constants.py/tests: 0 hits). T5-F1
+# (docs/country_system_f1.md, surface #11) hizo la fecha local del usuario COUNTRY-INDEPENDIENTE:
+# `user_tz_offset_min(user_id)` resuelve el offset desde `user_profiles`/`health_profile` del
+# usuario mismo (con fallback 240 hardcoded, NO desde este dict), porque un dominicano en Madrid
+# y un español en Santo Domingo necesitan SU offset real, no el de su país declarado — el país
+# es identidad/preferencia culinaria, no proxy de dónde vive. Esta key es un valor SEMBRADO para
+# un futuro consumidor (p.ej. un fallback de onboarding sin tzOffset capturado aún) — no la
+# cablees a `user_tz_offset_min` ni a ninguna superficie de fecha/hora: eso reintroduciría la
+# distinción país≠ubicación que T5-F1 cerró a propósito. Si algún día hace falta un default por
+# país, la pregunta de diseño previa es "¿por qué el offset real del usuario no bastó aquí?".
+# ─────────────────────────────────────────────────────────────────────────────
+
+import logging as _logging
+
+COUNTRY_SYSTEM_ENABLED = _env_bool("MEALFIT_COUNTRY_SYSTEM", False)
+
+COUNTRY_PROFILES = {
+    # [P1-UNIT-SYSTEM-BY-COUNTRY · 2026-08-21] `unit_system` gobierna cómo se LEE la lista de la
+    # compra, no cómo se calcula. DO/US/PR en 'imperial' no es un olvido: en los tres la libra es
+    # la unidad real con la que se compra carne, así que convertirla sería el mismo defecto al
+    # revés. ES/MX/CO compran por kilos y su báscula da gramos.
+    "DO": {"name_es": "República Dominicana", "currency": "DOP", "is_beta": False,
+           "has_native_prices": True,  "default_tz_offset_min": 240,
+           "unit_system": "imperial"},
+    "ES": {"name_es": "España",               "currency": "EUR", "is_beta": True,
+           "has_native_prices": False, "default_tz_offset_min": -60,
+           "unit_system": "metric"},
+    "US": {"name_es": "Estados Unidos",       "currency": "USD", "is_beta": True,
+           "has_native_prices": False, "default_tz_offset_min": 300,
+           "unit_system": "imperial"},
+    "MX": {"name_es": "México",               "currency": "MXN", "is_beta": True,
+           "has_native_prices": False, "default_tz_offset_min": 360,
+           "unit_system": "metric"},
+    "PR": {"name_es": "Puerto Rico",          "currency": "USD", "is_beta": True,
+           "has_native_prices": False, "default_tz_offset_min": 240,
+           "unit_system": "imperial"},
+    "CO": {"name_es": "Colombia",             "currency": "COP", "is_beta": True,
+           "has_native_prices": False, "default_tz_offset_min": 300,
+           "unit_system": "metric"},
+}
+
+
+class UnsupportedCountryError(ValueError):
+    """Valor presente que no cumple el contrato ISO del perfil de país."""
+
+
+def assert_supported_country(raw):
+    """Valida un valor que VA A ESCRIBIRSE en ``health_profile.country``.
+
+    Es deliberadamente distinto de :func:`canonicalize_country`: los lectores
+    históricos degradan desconocidos a DO para mantener compatibilidad, pero un
+    escritor nunca puede convertir silenciosamente «España», ``" ES "`` o un
+    tipo no-string a DO. ``None`` representa ausencia y sigue siendo válida.
+    Devuelve el mismo valor para que los callers puedan encadenarlo sin crear un
+    segundo canonicalizador.
+    """
+    if raw is None:
+        return None
+    if not isinstance(raw, str) or raw not in COUNTRY_PROFILES:
+        raise UnsupportedCountryError(
+            f"country no soportado: {raw!r}. Permitidos: {sorted(COUNTRY_PROFILES)}."
+        )
+    return raw
+
+
+def unit_system_for_country(raw) -> str:
+    """'imperial' | 'metric'. Lo desconocido cae a 'imperial' — la conducta de hoy.
+
+    Accesor SSOT: el campo vive DENTRO de `COUNTRY_PROFILES`, nunca en un dict aparte. Un
+    `{'ES': 'metric', ...}` suelto sería la cuarta tabla de países a mano, que es la lección que
+    `P1-DIET-CANON-SSOT` ya pagó (tres tablas de dieta drifteadas, una servía Pollo a
+    vegetarianas).
+
+    tooltip-anchor: unit_system_for_country (test_p1_unit_system_by_country.py)
+    """
+    try:
+        return COUNTRY_PROFILES[canonicalize_country(raw)].get("unit_system", "imperial")
+    except Exception:
+        return "imperial"
+
+
+def canonicalize_country(raw) -> str:
+    """País canónico ISO-3166 alpha-2. Desconocido/ausente ⇒ 'DO' (fail-safe).
+
+    [P2-COUNTRY-HOUSEKEEPING · 2026-08-21] El fail-safe era MUDO para los dos casos, y no son el
+    mismo: «ausente» es legítimo y silencioso (7 de los 8 perfiles vivos no tienen país, y gritar
+    por ellos convertiría el log en ruido hasta apagar el guard), pero un string NO VACÍO que no
+    canoniza es una CORRUPCIÓN — alguien escribió «España» o «Marte» donde iba un código ISO, y
+    sin rastro ese usuario puede pasar semanas recibiendo planes dominicanos sin que el operador
+    tenga forma de enterarse. El log distingue los dos casos y no entra en ningún bucle caliente:
+    esta función se llama una vez por derivación, no por ítem.
+
+    tooltip-anchor: canonicalize_country (test_p1_country_system_f0.py)
+    """
+    if isinstance(raw, str):
+        code = raw.strip().upper()
+        if code in COUNTRY_PROFILES:
+            return code
+        if code:
+            _logger_cc = _logging.getLogger(__name__)
+            _logger_cc.warning(
+                "[P2-COUNTRY-HOUSEKEEPING] valor de país no canónico descartado: %r → DO. "
+                "Un código ISO-3166 alpha-2 de %s se esperaba aquí.",
+                raw, "/".join(sorted(COUNTRY_PROFILES)),
+            )
+    return "DO"
+
+
+# [P1-COUNTRY-SYSTEM-F1 · 2026-08-16] ÚNICA puerta de lectura de país del
+# motor; un lector que no pase por aquí es el drift que P1-DIET-CANON-SSOT
+# pagó (tres tablas de dieta a mano, driftaron, una sirvió Pollo a
+# vegetarianas — no escribas una 2ª aquí).
+def country_for_form_data(form_data) -> str:
+    """País canónico para un `form_data` de sesión de generación de plan.
+
+    Lee el knob maestro POR LLAMADA (`_env_bool("MEALFIT_COUNTRY_SYSTEM",
+    False)`, NO el `COUNTRY_SYSTEM_ENABLED` module-level) — mismo patrón que
+    el gate cold-start de `cron_tasks.get_similar_user_patterns`: el flip
+    solo exige restart del proceso, no redeploy de código.
+
+    Knob apagado (default) ⇒ 'DO' SIEMPRE, sin mirar `form_data` — el motor
+    queda byte-idéntico al de antes de Fase 1. Knob encendido ⇒
+    `canonicalize_country(form_data.get('country'))`. `form_data` no-dict ⇒
+    'DO' bajo cualquier estado del knob (defensa: algunos call sites pasan
+    `form_data or {}` pero no todos garantizan dict antes de esta puerta).
+
+    tooltip-anchor: country_for_form_data (test_p1_country_system_f1.py)
+    """
+    if not _env_bool("MEALFIT_COUNTRY_SYSTEM", False):
+        return "DO"
+    if not isinstance(form_data, dict):
+        return "DO"
+    return canonicalize_country(form_data.get("country"))
+
+
+# [P1-COUNTRY-SYSTEM-F1 · 2026-08-16 (T7)] Literal SSOT del flag "modo beta sin precios
+# nativos". `'beta_no_prices'` vive ÚNICAMENTE aquí — el aggregator, el resumen de costo, la
+# reconciliación de presupuesto, las sugerencias de ahorro, el mensaje de consentimiento del
+# chat y las 2 inyecciones de precios al LLM (prompt de generación + chat-modify) leen esta
+# MISMA función para decidir si suprimen montos en RD$. Un 2º chequeo `has_native_prices` a
+# mano en cualquiera de esos sitios sería la 2ª tabla que P1-DIET-CANON-SSOT ya pagó una vez
+# (3 tablas de dieta a mano, driftaron, una sirvió Pollo a vegetarianas).
+def pricing_mode_for_country(country: str) -> "str | None":
+    """`'beta_no_prices'` si `country` (ya canónico) NO tiene precios nativos
+    (`COUNTRY_PROFILES[country]['has_native_prices'] is False`); `None` si los tiene (DO) o si
+    el país no está registrado en `COUNTRY_PROFILES` (fail-safe: nunca inventa un modo para un
+    código desconocido). `None` es el valor que le dice al caller "no escribas la clave
+    `_pricing_mode`" — nunca se persiste `None` explícito en `plan_data`.
+
+    tooltip-anchor: pricing_mode_for_country (test_p1_country_system_f1.py)
+    """
+    profile = COUNTRY_PROFILES.get(country)
+    if profile is None:
+        return None
+    return None if profile.get("has_native_prices", True) else "beta_no_prices"
+
+
+# [P1-PROMPTS-RESIDUAL-DO · 2026-08-21] SSOT del léxico dominicano que aparece como EJEMPLO en
+# los prompts, con su equivalente neutro. Vive aquí y no en cada módulo de prompt porque ya son
+# TRES los consumidores (planner, prompt de variedad y los ejemplos clínicos de
+# `condition_rules`): tres tablas a mano es exactamente lo que P1-DIET-CANON-SSOT costó una vez.
+#
+# Es sustitución de PRESENTACIÓN sobre texto ya renderizado, no un cambio de reglas: lo
+# nutricional (techo de embutidos, piso de proteína, no repetir base) no depende del alimento.
+# Orden largo→corto para que las frases ganen a las palabras sueltas.
+#
+# NO convierte un prompt dominicano en uno español: quita la contradicción, no añade cultura.
+# Eso es P1-BETA-FRAGMENT-DEPTH, una tarea de contenido.
+_DO_LEXICON_NEUTRAL = (
+    ("salami dominicano", "embutido curado"),
+    ("Salami Dominicano", "Embutido curado"),
+    ("longaniza dominicana", "embutido fresco"),
+    ("orégano dominicano", "orégano"),
+    ("Orégano dominicano", "Orégano"),
+    ("queso de hoja", "queso fresco curado"),
+    ("queso de freír", "queso para freír"),
+    ("casabe", "pan tostado integral"),
+    ("Casabe", "Pan tostado integral"),
+    ("arepitas", "tortitas"),
+    ("Arepitas", "Tortitas"),
+    # 'guisado dominicano' va ANTES que 'sancocho' y que el resto: es una FRASE, y el orden
+    # largo→corto es lo que impide que quede a medias. La encontró el guard de gentilicios, no
+    # la lista de tokens que yo había medido — por eso el guard busca el patrón «dominican\w*»
+    # entero y no los cinco nombres concretos.
+    ("guisado dominicano", "guiso de la casa"),
+    ("Guisado dominicano", "Guiso de la casa"),
+    ("revoltillo dominicano", "huevos revueltos"),
+    ("sancocho", "guiso de olla"),
+    ("Sancocho", "Guiso de olla"),
+    # 'Mangú' NO entra: F1 lo conserva a propósito dentro de «Ejemplo INCORRECTO: Día 1=Mangú de
+    # plátano (A)», donde lo que se enseña es el patrón de REPETICIÓN de base, no el plato — y su
+    # lado positivo ya lo neutraliza `_CATEGORIA_A_BETA`. Meterlo aquí pisaba una decisión
+    # deliberada de otro P-fix (con su test anclándola) y además producía peor español: «puré de
+    # tubérculo de plátano» es redundante. Lo cazó ese test, no el mío.
+    ("yaniqueques", "tortas fritas"),
+    ("bollitos", "bolitas al horno"),
+    ("auyama", "calabaza"),
+    ("Auyama", "Calabaza"),
+    ("tayota", "calabacín"),
+    ("Tayota", "Calabacín"),
+    ("yautía", "raíz feculenta"),
+    ("molondrones", "okra"),
+    ("vainitas", "judías verdes"),
+    ("chinola", "maracuyá"),
+    ("Chinola", "Maracuyá"),
+    ("lechosa", "papaya"),
+    ("Lechosa", "Papaya"),
+    ("víveres", "tubérculos"),
+    # Plural ANTES del singular: `str.replace("cubito", ...)` sobre "cubitos" producía
+    # «caldo concentrados» al incorporar el SSOT al day-generator (G05).
+    ("cubitos", "caldos concentrados"),
+    ("Cubitos", "Caldos concentrados"),
+    ("cubito", "caldo concentrado"),
+)
+
+
+def neutralize_do_lexicon(text) -> str:
+    """[P1-PROMPTS-RESIDUAL-DO · 2026-08-21] Sustituye el léxico es-DO de un prompt ya renderizado
+    por equivalentes neutros. Para país beta ÚNICAMENTE — el caller decide.
+
+    tooltip-anchor: neutralize_do_lexicon (test_p1_prompts_residual_do.py)"""
+    if not isinstance(text, str) or not text:
+        return text
+    for _do, _neutro in _DO_LEXICON_NEUTRAL:
+        text = text.replace(_do, _neutro)
+    return text
+
+
+def beta_prompt_country_header(country) -> str:
+    """[P1-PROMPTS-RESIDUAL-DO · 2026-08-21] Cabecera que le dice al modelo PARA QUIÉN cocina.
+
+    Antes, los prompts beta sólo tenían instrucciones en NEGATIVO («los platos dominicanos no son
+    requisito») y jamás nombraban el país: los renders de ES y MX salían byte-idénticos. Nombrarlo
+    es el mínimo — y explícitamente NO es suficiente: P1-DIET-BLIND-DIRECTIVES midió que «una
+    directiva de cabecera SOLA pierde contra órdenes específicas», y por eso este P-fix trae
+    además la neutralización de los ejemplos concretos que la contradecían.
+
+    El nombre sale de `COUNTRY_PROFILES[cc]['name_es']` — el mismo SSOT que el juez culinario y la
+    biblioteca de platos. `''` para DO (byte-identidad)."""
+    canon = canonicalize_country(country)
+    if canon == "DO":
+        return ""
+    _nm = (COUNTRY_PROFILES.get(canon) or {}).get("name_es")
+    if not _nm:
+        return ""
+    return (
+        f"\n🌍 CONTEXTO DE PAÍS: el usuario compra y cocina en {_nm}. Usa ingredientes, cortes y "
+        f"preparaciones que se consigan ALLÍ y que su gente reconozca por su nombre local. Los "
+        f"ejemplos de este prompt son ilustrativos del FORMATO, no del país: adáptalos a la "
+        f"cocina de {_nm}.\n"
+    )
+
+
+def _emit_country_beta_first_plan_best_effort(country: str) -> None:
+    """Emite una sola fila cuando nace el primer plan de un país beta.
+
+    ``ON CONFLICT DO NOTHING`` es parte del contrato: este helper corre en cada
+    assemble (también en chunks de continuación), pero el evento representa el
+    primer plan del país, no un contador de planes. Telemetría best-effort: un
+    fallo de observabilidad nunca invalida un plan ya generado.
+    """
+    if country == "DO" or country not in COUNTRY_PROFILES:
+        return
+    alert_key = f"country_beta_first_plan:{country}"
+    try:
+        import json as _json_country_alert
+        from db_core import execute_sql_write as _write_country_alert
+
+        _write_country_alert(
+            """
+            INSERT INTO system_alerts
+                (alert_key, alert_type, severity, title, message, metadata,
+                 triggered_at, resolved_at)
+            VALUES (%s, 'country_system', 'info', %s, %s, %s::jsonb, NOW(), NULL)
+            ON CONFLICT (alert_key) DO NOTHING
+            """,
+            (
+                alert_key,
+                f"Primer plan beta generado para {country}",
+                "Validar contenido culinario, lista de compras y régimen de precios del primer plan.",
+                _json_country_alert.dumps({"country": country}, ensure_ascii=False),
+            ),
+        )
+    except Exception as _country_alert_error:
+        try:
+            import logging as _logging_country_alert
+            _logging_country_alert.getLogger(__name__).debug(
+                "[P2-COUNTRY-OBSERVABILIDAD-CERO] no se pudo emitir %s: %r",
+                alert_key,
+                _country_alert_error,
+            )
+        except Exception:
+            pass
+
+
+def emit_country_plan_regime_changed_best_effort(
+    plan_id,
+    *,
+    previous_country=None,
+    country=None,
+    previous_pricing_mode=None,
+    pricing_mode=None,
+    pricing_mode_removed: bool = False,
+) -> None:
+    """Deja rastro cuando cambia la interpretación país/precios de un plan.
+
+    El alert es per-plan y se reabre si el mismo artefacto vuelve a cambiar. Los
+    valores previos/nuevos son metadata diagnóstica; el caller decide si hubo
+    cambio para que la ausencia legítima de ``_pricing_mode`` en DO no alerte.
+    """
+    if not plan_id:
+        return
+    alert_key = f"country_plan_regime_changed:{plan_id}"
+    try:
+        import json as _json_country_alert
+        from db_core import execute_sql_write as _write_country_alert
+
+        metadata = {
+            "plan_id": str(plan_id),
+            "previous_country": previous_country,
+            "country": country,
+            "previous_pricing_mode": previous_pricing_mode,
+            "pricing_mode": pricing_mode,
+            "pricing_mode_removed": bool(pricing_mode_removed),
+        }
+        _write_country_alert(
+            """
+            INSERT INTO system_alerts
+                (alert_key, alert_type, severity, title, message, metadata,
+                 triggered_at, resolved_at)
+            VALUES (%s, 'country_system', 'warning', %s, %s, %s::jsonb, NOW(), NULL)
+            ON CONFLICT (alert_key) DO UPDATE SET
+                severity = EXCLUDED.severity,
+                title = EXCLUDED.title,
+                message = EXCLUDED.message,
+                metadata = EXCLUDED.metadata,
+                triggered_at = NOW(),
+                resolved_at = NULL
+            """,
+            (
+                alert_key,
+                f"Cambió el régimen de país/precios del plan {plan_id}",
+                "Revisar si el cambio fue explícito o si un fallback reescribió evidencia del plan.",
+                _json_country_alert.dumps(metadata, ensure_ascii=False),
+            ),
+        )
+    except Exception as _country_alert_error:
+        try:
+            import logging as _logging_country_alert
+            _logging_country_alert.getLogger(__name__).debug(
+                "[P2-COUNTRY-OBSERVABILIDAD-CERO] no se pudo emitir %s: %r",
+                alert_key,
+                _country_alert_error,
+            )
+        except Exception:
+            pass
+
+
+def stamp_plan_country(plan_data, form_data, *, emit_observability: bool = False) -> str:
+    """[P1-PLAN-STAMPS-COUNTRY · 2026-08-21] Sella el país DEL PLAN en `plan_data['_country']`.
+
+    EL DEFECTO QUE CIERRA. `plan_data` guardaba `_pricing_mode` y NO el país, así que toda
+    superficie post-generación —recalcular la lista, el swap, el backstop— lo re-derivaba del
+    PERFIL ACTUAL. Medido: los 2 planes beta vivos (ES y US) no tienen país en `plan_data` y el
+    perfil de su dueño dice 'DO', así que recalcular la lista del plan español aplica reglas
+    dominicanas a platos españoles. El sistema YA está en ese estado.
+
+    EL SELLO ES INCONDICIONAL, TAMBIÉN PARA 'DO'. Si sólo se escribiera en beta, la AUSENCIA de
+    la clave significaría dos cosas distintas —«plan dominicano» y «plan anterior a este P-fix»—
+    y esa ambigüedad es justo la que hace irreparables los planes que ya existen. Con el sello
+    siempre presente, ausente = pre-sistema, que es una respuesta útil.
+
+    Aditivo: no toca ninguna otra clave de `plan_data` (invariante I7). Por defecto sigue siendo
+    puro y sólo prepara el dict que el caller ya va a escribir. El ensamblador de producción pasa
+    ``emit_observability=True``; tests y transformaciones locales no abren I/O accidentalmente.
+
+    tooltip-anchor: stamp_plan_country (test_p1_plan_stamps_country.py)"""
+    _cc = country_for_form_data(form_data)
+    if isinstance(plan_data, dict):
+        _had_country = "_country" in plan_data
+        _previous_country = plan_data.get("_country")
+        plan_data["_country"] = _cc
+        if emit_observability:
+            _emit_country_beta_first_plan_best_effort(_cc)
+        if emit_observability and _had_country and _previous_country != _cc:
+            _plan_id = (
+                (form_data or {}).get("plan_id")
+                if isinstance(form_data, dict)
+                else None
+            ) or plan_data.get("id") or plan_data.get("plan_id")
+            emit_country_plan_regime_changed_best_effort(
+                _plan_id,
+                previous_country=_previous_country,
+                country=_cc,
+                previous_pricing_mode=plan_data.get("_pricing_mode"),
+                pricing_mode=plan_data.get("_pricing_mode"),
+            )
+    return _cc
+
+
+def country_for_plan(plan_data, health_profile, *, return_source: bool = False):
+    """[P1-PLAN-STAMPS-COUNTRY · 2026-08-21] País de un plan YA GENERADO, para las superficies
+    post-generación (recalc, swap, backstop, telemetría).
+
+    LA POLÍTICA, EXPLÍCITA porque no había respuesta obvia: **el plan manda para lo que YA se
+    generó; el perfil manda para lo que se genera de nuevo**. Un plan es un artefacto con fecha:
+    sus platos, sus recetas y su lista se construyeron bajo un país concreto, y re-interpretarlos
+    bajo otro produce el híbrido que hoy existe (plan español recalculado con reglas dominicanas).
+
+    Fallback al perfil cuando el plan no trae sello: es el caso de TODO plan anterior a este
+    P-fix, que debe seguir comportándose exactamente como hasta hoy. Sin ese fallback el fix
+    rompería el histórico entero. ``return_source=True`` devuelve además ``'plan'`` o
+    ``'profile'``: leer un fallback no lo convierte en un hecho que un mutador pueda sellar.
+
+    Fail-safe: un sello que no canoniza (jsonb tocado a mano) se ignora y manda el perfil — un
+    dato corrupto no puede secuestrar el motor.
+
+    tooltip-anchor: country_for_plan (test_p1_plan_stamps_country.py)"""
+    if isinstance(plan_data, dict):
+        _raw = plan_data.get("_country")
+        if isinstance(_raw, str) and _raw.strip().upper() in COUNTRY_PROFILES:
+            _country = country_for_form_data({"country": _raw})
+            return (_country, "plan") if return_source else _country
+    _hp = health_profile if isinstance(health_profile, dict) else {}
+    _country = country_for_form_data({"country": _hp.get("country")})
+    return (_country, "profile") if return_source else _country
+
+
+def apply_recalc_plan_regime(
+    plan_data,
+    health_profile,
+    *,
+    plan_id=None,
+    emit_observability: bool = False,
+):
+    """[P1-COUNTRY-STAMP-NO-FALLBACK-WRITE · 2026-08-23] Aplica sellos en un recálculo.
+
+    Un sello válido es un HECHO del artefacto y puede sanearse idempotentemente. Un país leído
+    del perfil es sólo el FALLBACK para esta operación: en un plan legacy no se puede saber si
+    la ausencia de ``_pricing_mode`` significa DO ni si su presencia significa beta. Por eso,
+    en fuente ``profile`` no se escribe ``_country`` y se conserva el régimen byte por byte.
+
+    Devuelve ``(country, effective_pricing_mode, source)`` para que el resumen de costo consuma
+    exactamente el régimen que quedó persistido. La generación nueva sigue usando
+    :func:`stamp_plan_country`, donde sí existe ``form_data`` y por tanto se escribe el hecho.
+
+    tooltip-anchor: apply_recalc_plan_regime (test_p1_country_stamp_no_fallback_write.py)
+    """
+    _country, _source = country_for_plan(
+        plan_data,
+        health_profile,
+        return_source=True,
+    )
+    if not isinstance(plan_data, dict):
+        return _country, None, _source
+
+    if _source != "plan":
+        return _country, plan_data.get("_pricing_mode"), _source
+
+    _previous_country = plan_data.get("_country")
+    _had_pricing_mode = "_pricing_mode" in plan_data
+    _previous_pricing_mode = plan_data.get("_pricing_mode")
+    _pricing_mode = pricing_mode_for_country(_country)
+
+    if _pricing_mode:
+        plan_data["_pricing_mode"] = _pricing_mode
+    else:
+        plan_data.pop("_pricing_mode", None)
+    plan_data["_country"] = _country
+
+    _country_changed = _previous_country != _country
+    _pricing_mode_removed = _had_pricing_mode and not _pricing_mode
+    if emit_observability and (_country_changed or _pricing_mode_removed):
+        emit_country_plan_regime_changed_best_effort(
+            plan_id,
+            previous_country=_previous_country,
+            country=_country,
+            previous_pricing_mode=_previous_pricing_mode,
+            pricing_mode=_pricing_mode,
+            pricing_mode_removed=_pricing_mode_removed,
+        )
+    return _country, _pricing_mode, _source
+
+
+def pricing_mode_for_form_data(form_data) -> "str | None":
+    """Composición de `country_for_form_data` (T1, la ÚNICA puerta de lectura de país de
+    `form_data`) + `pricing_mode_for_country` — el helper que TODO call site de generación o
+    mutación de plan debe usar para decidir si un plan nace/sigue en modo beta sin precios.
+    Knob apagado (default) o `form_data` no-dict ⇒ `country_for_form_data` ya cae a 'DO' ⇒
+    este helper devuelve `None` siempre — byte-identidad garantizada aguas abajo.
+
+    tooltip-anchor: pricing_mode_for_form_data (test_p1_country_system_f1.py)
+    """
+    return pricing_mode_for_country(country_for_form_data(form_data))
+
+
+# [P1-DIET-BLIND-DIRECTIVES · 2026-08-08] SSOT de las FUENTES DE PROTEÍNA sugeribles por dieta.
+# Razón (benchmark issue #9, journal 2026-08-08 01:53-02:00 UTC): el stack de prompts ordenaba
+# "fuente animal de alta densidad (pollo, pescado, cerdo, res...)" sin mirar la dieta — el retry
+# informado de un plan VEGANO llevaba esa orden inyectada, y el modelo obedecía (pechuga de pollo
+# en el intento 2). Toda directiva/sugerencia de proteína que viaje a un prompt debe derivar de
+# aquí; `None` para balanced/pescatarian ⇒ el caller conserva su literal actual (byte-identidad,
+# prompt-cache intacto para la mayoría). Canonicaliza vía `canonicalize_diet_type` (cero 4ª tabla).
+# Sin tofu (P3-TOFU-REMOVE: no se vende). tooltip-anchor: P1-DIET-BLIND-DIRECTIVES
+def diet_protein_suggestions(diet) -> "str | None":
+    canon = canonicalize_diet_type(diet)
+    if canon == "vegan":
+        return ("habichuelas/lentejas/garbanzos, edamame, maní o mantequilla de maní, "
+                "semillas (girasol, chía, ajonjolí) y frutos secos")
+    if canon == "vegetarian":
+        return ("huevos, queso fresco/ricotta, yogur griego, habichuelas/lentejas/garbanzos, "
+                "edamame y frutos secos")
+    return None
+
+
+# [P1-DIET-BLIND-DIRECTIVES · 2026-08-08] Variantes por dieta de SLOT_POSITIVE_HINT. El hint base
+# sugería "pescado/pollo a la plancha" hasta dentro del RECHAZO de un plan vegano (gate S1) — la
+# corrección pedía exactamente lo prohibido. pescatarian usa los base (pescado permitido);
+# vegetarian solo redefine almuerzo/cena (huevo/lácteo permitidos en desayuno/merienda base).
+_SLOT_POSITIVE_HINT_BY_DIET = {
+    "vegetarian": {
+        "almuerzo": ("El almuerzo es el plato fuerte: arroz+habichuela+proteína vegetariana "
+                     "(huevo/queso/leguminosas)+ensalada, moro de habichuelas/gandules/lentejas "
+                     "con queso, pasta criolla con vegetales y queso, o revoltillo/tortilla con "
+                     "tubérculo y vegetal."),
+        "cena": ("La cena es más ligera que el almuerzo: tortilla/revoltillo de cena, sopa ligera "
+                 "de vegetales con queso, wrap o bowl de huevo/queso/leguminosas + vegetales + un "
+                 "tubérculo (batata/yuca/casabe). Evita el \"arroz de noche\" y los guisos pesados."),
+    },
+    "vegan": {
+        "desayuno": ("El desayuno dominicano va: mangú/víveres, avena/cereales calientes, "
+                     "pan/tostadas o batido/bowl — con proteína vegetal (maní, semillas, "
+                     "leguminosas) y fruta."),
+        "almuerzo": ("El almuerzo es el plato fuerte: arroz+habichuela+ensalada, moro de "
+                     "habichuelas/gandules/lentejas, o guiso de leguminosas (lentejas, garbanzos, "
+                     "edamame) con tubérculo y vegetal."),
+        "cena": ("La cena es más ligera que el almuerzo: sopa ligera de vegetales con leguminosas, "
+                 "wrap o bowl de leguminosas + vegetales + un tubérculo (batata/yuca/casabe). "
+                 "Evita el \"arroz de noche\" y los guisos pesados."),
+        "merienda": ("La merienda es un snack ligero (150-300 kcal): fruta con maní, casabe con "
+                     "mantequilla de maní, batido de fruta con avena, o frutos secos con fruta."),
+    },
+}
+
+
+def slot_positive_hint(slot_key: str, diet=None) -> str:
+    """[P1-DIET-BLIND-DIRECTIVES · 2026-08-08] Hint positivo por slot RESPETANDO la dieta.
+    Reemplaza el acceso directo a SLOT_POSITIVE_HINT en mensajes de gate/prompts de update.
+    balanced/pescatarian/desconocido → hint base (byte-idéntico)."""
+    canon = canonicalize_diet_type(diet)
+    variant = _SLOT_POSITIVE_HINT_BY_DIET.get(canon, {}).get(slot_key)
+    if variant:
+        return variant
+    return SLOT_POSITIVE_HINT.get(slot_key, "")
+
+
+def _get_fast_filtered_catalogs(allergies: tuple, dislikes: tuple, diet: str, country: str = None):
+    """Filtra el catálogo [dominicano|del país beta] basado en restricciones del usuario O(N)
+    sin Cache Thrashing volátil.
+
+    [P1-COUNTRY-SYSTEM-F2 · T5 · 2026-08-17] `country` (default `None`, kwarg — TODOS los call
+    sites preexistentes de `ai_helpers.py`/`agent.py`/`cron_tasks.py`/tests siguen llamando con
+    solo 3 posicionales, así que caen aquí sin tocarse) selecciona el pool BASE antes de aplicar
+    el MISMO filtrado de alergias/dislikes/dieta de abajo: un país beta con entrada en
+    `COUNTRY_POOLS` usa su propio pool; `None`/`'DO'`/un país sin pool dedicado cae a
+    DOMINICAN_* — fallback explícito, no excepción (byte-idéntico al comportamiento pre-T5)."""
+    _country_pool = COUNTRY_POOLS.get(str(country or "").strip().upper()) if country else None
+    if _country_pool:
+        filtered_proteins = list(_country_pool["proteins"])
+        filtered_carbs = list(_country_pool["carbs"])
+        filtered_veggies = list(_country_pool["veggies_fats"])
+        filtered_fruits = list(_country_pool["fruits"])
+    else:
+        filtered_proteins = DOMINICAN_PROTEINS.copy()
+        filtered_carbs = DOMINICAN_CARBS.copy()
+        filtered_veggies = DOMINICAN_VEGGIES_FATS.copy()
+        filtered_fruits = DOMINICAN_FRUITS.copy()
 
     restrictions = list(allergies) + list(dislikes)
 
@@ -2705,7 +4208,27 @@ def _get_fast_filtered_catalogs(allergies: tuple, dislikes: tuple, diet: str):
                                         "tortilla integral", "pan integral", "cuscus", "couscous",
                                         "seitan", "bulgur", "malta", "cerveza", "semola",
                                         "espagueti", "macarrones", "lasana", "lasagna",
-                                        "empanada", "bizcocho"])
+                                        "empanada", "bizcocho",
+                                        # [P1-COUNTRY-SYSTEM-F2 · fix-wave deploy-gate · 2026-08-17]
+                                        # `_ALLERGEN_SYNONYMS['gluten']` (graph_orchestrator.py) creció a
+                                        # 35 términos entre T4 (avena/pastas-panes de sustitución/
+                                        # tostada/macarron/coditos/fideo/tallarin/penne/ravioli/noqui/
+                                        # tortilla de harina/wheat) y este catch-all quedó en los 24
+                                        # originales de P2-CATALOG-FILTER-SSOT — la MISMA clase de drift
+                                        # que ese fix cerró, reabierta por un vocabulario que creció sin
+                                        # tocar su copia. `test_paridad_filtro_vs_escaner_canonico[Gluten]`
+                                        # lo atrapó: 'Avena' (fila real del catálogo) sobrevivía al chip
+                                        # de un celíaco. Sincronizado 1:1 con el canónico — los 11
+                                        # términos que faltaban, ninguno reinterpretado.
+                                        "wheat", "tostada", "macarron", "coditos", "fideo", "tallarin",
+                                        "penne", "ravioli", "noqui", "tortilla de harina", "avena",
+                                        # [P1-COUNTRY-SYSTEM-F2 · T7 · 2026-08-17] sincronizado 1:1 con
+                                        # `_ALLERGEN_SYNONYMS['gluten']` en el MISMO commit que los añadió
+                                        # (no reabrir el drift que el fix-wave anterior cerró) — 13
+                                        # términos nuevos de las altas PR/US de esta task.
+                                        "bagel", "bagels", "pretzel", "pretzels", "panecillo",
+                                        "panecillos", "panqueque", "panqueques", "wafle", "wafles",
+                                        "salsa de salchicha", "masa para pie", "bacalaitos"])
     if any(r in ["soya", "soja", "soy"] for r in normalized_restrictions):
         normalized_restrictions.extend(["soya", "soja", "tofu", "salsa de soya", "edamame", "miso",
                                         "tempeh", "salsa teriyaki", "teriyaki", "natto",
@@ -2761,6 +4284,70 @@ Pica Pollo / Chimi: 5+ horas. Exceso de aceites hidrogenados e irritantes gástr
 Sancocho: 4-5 horas. Extrema condensación de viandas pesadas y caldos grasos.
 </biblioteca_culinaria_local>
 """
+
+# [P2-COACH-COUNTRY · 2026-08-21] El coach le hablaba de mangu a un espanol.
+#
+# La biblioteca de arriba son SEIS platos dominicanos con sus tiempos de digestion, y el prompt del
+# coach no los ofrece como contexto: le da una ORDEN («TIENES LA ORDEN de citar explicitamente sus
+# horas estimadas de digestion») al ver uno de ellos. Para un usuario de Espana, Mexico o Colombia
+# eso es a la vez inutil y falso — nunca se va a comer una yaroa, y mientras tanto el coach afirma
+# conocer a fondo una cultura que no es la suya. El mecanismo del producto que regana CON
+# FUNDAMENTO queda inerte para 5 de los 6 paises.
+#
+# LO QUE NO SE HACE, Y ES LA LINEA IMPORTANTE: no se inventan tiempos de digestion para la paella,
+# el pozole ni la bandeja paisa. Un tiempo de digestion es una AFIRMACION CLINICA; fabricarla de
+# memoria es exactamente lo que costo la auditoria de procedencia del catalogo. Curarlas con fuente
+# es trabajo de contenido, hermano de P1-BETA-FRAGMENT-DEPTH.
+#
+# Asi que en beta el coach conserva el PRINCIPIO y pierde el catalogo ajeno: menos capacidad de la
+# ideal, y honesta. Vaciar la biblioteca del todo seria peor — el prompt referencia la etiqueta
+# `<biblioteca_culinaria_local>` por su nombre y se quedaria hablando de un bloque que no existe.
+# tooltip-anchor: P2-COACH-COUNTRY
+_CULINARY_KNOWLEDGE_BASE_BETA = """
+<biblioteca_culinaria_local>
+[PRINCIPIOS DE CARGA DIGESTIVA — sin catálogo local todavía]
+No dispones de una base de platos locales medidos para este país. NO inventes horas de digestión
+concretas para un plato: si no tienes el dato, razona con estos principios y dilo en general.
+Fritura profunda + almidón denso: carga digestiva alta, riesgo de reflujo nocturno y pico
+insulínico si se consume cerca de dormir.
+Grasa saturada abundante junto a carbohidrato puro: digestión lenta y sueño de peor calidad.
+Guisos muy condensados de tubérculos y caldos grasos: digestión lenta.
+</biblioteca_culinaria_local>
+"""
+
+
+def coach_country_context(country=None) -> str:
+    """Nombra el país al coach sin reutilizar la cabecera del planner.
+
+    [P1-COACH-COUNTRY-UNNAMED · 2026-08-23] La biblioteca beta habla de
+    «este país» y necesita un referente explícito. DO retorna ``""`` para
+    conservar el prompt histórico byte a byte. No inventa platos ni exige
+    nombres locales: orienta recomendaciones y términos devueltos por tools.
+    """
+    canon = canonicalize_country(country)
+    if canon == "DO":
+        return ""
+    name_es = (COUNTRY_PROFILES.get(canon) or {}).get("name_es")
+    if not name_es:
+        return ""
+    return (
+        f"\n🌍 PAÍS DEL USUARIO: {name_es}. Adapta tus recomendaciones a ingredientes, "
+        f"cortes y preparaciones cotidianos y disponibles en {name_es}. Si una herramienta "
+        "devuelve un término regional que pueda no reconocerse allí, explícalo antes de "
+        "recomendarlo.\n"
+    )
+
+
+def culinary_knowledge_base_for_country(country=None) -> str:
+    """Biblioteca culinaria del coach segun el pais. DO devuelve el objeto de siempre."""
+    try:
+        if not _env_bool("MEALFIT_COUNTRY_SYSTEM", False):
+            return CULINARY_KNOWLEDGE_BASE
+        return (CULINARY_KNOWLEDGE_BASE if canonicalize_country(country) == "DO"
+                else _CULINARY_KNOWLEDGE_BASE_BETA)
+    except Exception:
+        return CULINARY_KNOWLEDGE_BASE
+
 
 def _to_base_unit(qty: float, unit: str):
     unit = unit.lower() if unit else 'unidad'
@@ -3017,9 +4604,27 @@ def _get_converted_quantity(req_qty: float, req_unit: str, dispo_unit: str, base
 # continua (sal|ami no tiene borde entre 'l' y 'a'), así que exige la palabra COMPLETA;
 # `(?:e?s)?` opcional para plural ("sales", "ajos"). Construido a import-time (tupla
 # estable). Tooltip-anchor: P1-PANTRY-STRICT-CONSENT.
+# [P1-PANTRY-CONDIMENT-PARITY · 2026-08-22] La tupla debe cubrir lo que los prompts
+# AUTORIZAN POR SU NOMBRE, o el sistema castiga al modelo por obedecerle:
+#   - `build_pantry_correction_context` (prompts/plan_generator.py): «Condimentos básicos
+#     (sal, pimienta, aceite, ajo, CEBOLLA, cilantro) están siempre permitidos».
+#   - `graph_orchestrator` P1-SPICES-CATALOG-SYNC: «comino, cúrcuma, laurel, tomillo,
+#     curry, cebolla en polvo — úsalos activamente».
+#   - `graph_orchestrator` P1-BAKING-STAPLES: «SÍ puedes usar polvo de hornear, levadura,
+#     bicarbonato y vainilla … aunque no estén en la lista».
+# Medido en el plan 2245eb45: un bloque de 4 días ya pagado al LLM murió con
+# «INEXISTENTES: ¼ cdta de polvo de hornear, ½ cdta de comino, 1 cebolla, ½ hoja de
+# laurel» — las cuatro autorizadas por escrito arriba. La paridad la ancla
+# `test_p1_pantry_condiment_parity.py`: si añades un condimento a un prompt y no aquí,
+# falla. Sin acentos (el validador normaliza) y en singular (`(?:e?s)?` cubre el plural).
+# ⚠️ NO la fusiones con `culinary_coherence.CONDIMENT_EXEMPT`: se parecen pero responden
+# preguntas distintas — ésta «¿debe existir en la nevera?», aquélla «¿necesita cocción?».
 _ALLOWED_CONDIMENTS = (
     "sal", "pimienta", "agua", "ajo", "oregano", "cilantro",
     "limon", "aceite", "soya", "canela", "vinagre",
+    # autorizados por los prompts (P1-PANTRY-CONDIMENT-PARITY)
+    "cebolla", "perejil", "comino", "curcuma", "laurel", "tomillo", "curry",
+    "polvo de hornear", "levadura", "bicarbonato", "vainilla",
 )
 _ALLOWED_CONDIMENTS_RES = [
     re.compile(r"\b" + re.escape(c) + r"(?:e?s)?\b")
@@ -3027,7 +4632,102 @@ _ALLOWED_CONDIMENTS_RES = [
 ]
 
 
-def validate_ingredients_against_pantry(generated_ingredients: list, pantry_ingredients: list, strict_quantities: bool = True, tolerance: float = 1.30, allow_external_count: int = 0, return_unauthorized: bool = False):
+# [P1-COUNTRY-CONDIMENT-PARITY-BETA · 2026-08-23] El catálogo cerrado de cada
+# país beta ofrece sazonadores locales que la lista DO de arriba no puede (ni
+# debe) convertir en globales. La membresía de país sigue viniendo del MISMO
+# registro que usa el catálogo verificado; el rol de condimento se deriva de la
+# fila viva (`category` + `name_en`) para no exentar el pool completo, que mezcla
+# jamones, carnes, pasta, legumbres y frutas.
+#
+# Varias altas botánicas reales (Epazote, Recao, Guascas y chiles frescos) están
+# categorizadas como `Vegetales`, no `Especias`. Ese dato imperfecto se conserva:
+# el fallback botánico exige además un rol inglés inequívoco (herb/pepper/chile/
+# culantro/leaf), por lo que un vegetal normal no se vuelve condimento. En
+# `Despensa` también se exige rol: la categoría sola incluiría Fideos/Judías.
+#
+# La caché está indexada POR PAÍS. Omitir el país aquí haría que el primer beta
+# atendido por el proceso prestara sus alias a todos los demás. DO retorna antes
+# de consultar catálogo y preserva su comportamiento histórico.
+# tooltip-anchor: P1-COUNTRY-CONDIMENT-PARITY-BETA
+_COUNTRY_CATALOG_CONDIMENT_CACHE: "dict[str, tuple]" = {}
+_COUNTRY_CONDIMENT_PANTRY_ROLE_HINTS = (
+    "seasoning", "spice", "saffron", "aioli", "achiote", "sauce",
+    "dressing", "ketchup", "chili powder",
+)
+_COUNTRY_CONDIMENT_BOTANICAL_ROLE_HINTS = (
+    "herb", "pepper", "chile", "culantro", "leaf",
+)
+
+
+def _country_catalog_condiment_patterns(country) -> tuple:
+    """Regex de nombres/alias de condimento ofrecidos al país canónico.
+
+    Fail-closed: si el catálogo no está disponible, no se inventa una exención.
+    No cacheamos el fallo/resultado vacío para que un pool que aún no abrió
+    pueda recuperarse en la siguiente validación.
+    """
+    cc = canonicalize_country(country)
+    if cc == "DO":
+        return ()
+    cached = _COUNTRY_CATALOG_CONDIMENT_CACHE.get(cc)
+    if cached is not None:
+        return cached
+    try:
+        from shopping_calculator import (
+            get_master_ingredients,
+            is_country_catalog_unpriced_item,
+        )
+        rows = get_master_ingredients() or []
+    except Exception:
+        return ()
+    if not rows:
+        return ()
+
+    def _role_has(role: str, hints) -> bool:
+        return any(
+            re.search(r"\b" + re.escape(h) + r"(?:s|es)?\b", role)
+            for h in hints
+        )
+
+    terms = []
+    for row in rows:
+        if not isinstance(row, dict):
+            continue
+        name = str(row.get("name") or "").strip()
+        if not name or not is_country_catalog_unpriced_item(name, country=cc):
+            continue
+        category = strip_accents(str(row.get("category") or "").strip().lower())
+        role = strip_accents(str(row.get("name_en") or "").strip().lower())
+        is_spice_category = category.startswith("especia")
+        is_pantry_condiment = (
+            category.startswith("despensa")
+            and _role_has(
+                role,
+                _COUNTRY_CONDIMENT_PANTRY_ROLE_HINTS
+                + _COUNTRY_CONDIMENT_BOTANICAL_ROLE_HINTS
+            )
+        )
+        is_botanical_condiment = (
+            category.startswith("vegetal")
+            and _role_has(role, _COUNTRY_CONDIMENT_BOTANICAL_ROLE_HINTS)
+        )
+        if not (is_spice_category or is_pantry_condiment or is_botanical_condiment):
+            continue
+        for raw_term in (name, *(row.get("aliases") or [])):
+            term = strip_accents(str(raw_term or "").strip().lower())
+            if term:
+                terms.append(term)
+
+    patterns = tuple(
+        re.compile(r"\b" + re.escape(term) + r"(?:e?s)?\b")
+        for term in dict.fromkeys(terms)
+    )
+    if patterns:
+        _COUNTRY_CATALOG_CONDIMENT_CACHE[cc] = patterns
+    return patterns
+
+
+def validate_ingredients_against_pantry(generated_ingredients: list, pantry_ingredients: list, strict_quantities: bool = True, tolerance: float = 1.30, allow_external_count: int = 0, return_unauthorized: bool = False, country: str = "DO"):
     """
     Función guardrail estricta y matemática. Comprueba:
     1. Que todos los ingredientes generados estén en la despensa.
@@ -3193,6 +4893,11 @@ def validate_ingredients_against_pantry(generated_ingredients: list, pantry_ingr
     if not pantry_bases:
         return (True, []) if return_unauthorized else True
 
+    # Resolver una vez por llamada, no por ingrediente. `country` ya llega por
+    # `country_for_form_data` desde los call sites productivos; el default DO
+    # mantiene compatibilidad para consumidores legacy/tests.
+    country_condiment_patterns = _country_catalog_condiment_patterns(country)
+
     unauthorized = []
     over_limit = []
     
@@ -3206,7 +4911,9 @@ def validate_ingredients_against_pantry(generated_ingredients: list, pantry_ingr
         
         item_lower = strip_accents(item.lower())
 
-        if base in _ALLOWED_CONDIMENTS or any(rx.search(item_lower) for rx in _ALLOWED_CONDIMENTS_RES):
+        if (base in _ALLOWED_CONDIMENTS
+                or any(rx.search(item_lower) for rx in _ALLOWED_CONDIMENTS_RES)
+                or any(rx.search(item_lower) for rx in country_condiment_patterns)):
             continue
             
         matched_pantry_key = None
@@ -3225,7 +4932,7 @@ def validate_ingredients_against_pantry(generated_ingredients: list, pantry_ingr
                     break
                     
             # 2. Si falló el match tradicional, intentamos Similitud Coseno (Mejora 4)
-            # [P0-DEEPSEEK-MIGRATION] `get_embedding` puede retornar None
+            # [P0-LLM-PROVIDER-MIGRATION] `get_embedding` puede retornar None
             # (provider disabled/fallo) — en ese caso se omite el matching
             # semántico sin warning por-item y se cae al flujo no-vector.
             if not matched_pantry_key and len(base) > 2:

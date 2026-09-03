@@ -32,9 +32,20 @@ _FRONTEND_ROOT = _BACKEND_ROOT.parent / "frontend"
 
 _PLANS = (_BACKEND_ROOT / "routers" / "plans.py").read_text(encoding="utf-8")
 _DB_FACTS = (_BACKEND_ROOT / "db_facts.py").read_text(encoding="utf-8")
-_DASHBOARD = (_FRONTEND_ROOT / "src" / "pages" / "Dashboard.jsx").read_text(encoding="utf-8")
-_ASSESSMENT = (_FRONTEND_ROOT / "src" / "context" / "AssessmentContext.jsx").read_text(encoding="utf-8")
-_PANTRY = (_FRONTEND_ROOT / "src" / "pages" / "Pantry.jsx").read_text(encoding="utf-8")
+@pytest.fixture(scope="module", autouse=True)
+def _load_frontend_sibling_sources(frontend_repo_path):
+    # La fixture compartida salta el módulo antes de cualquier I/O si falta el hermano.
+    _ = frontend_repo_path
+    global _ASSESSMENT, _DASHBOARD, _FRONTEND_SOURCES, _PANTRY
+    _DASHBOARD = (_FRONTEND_ROOT / "src" / "pages" / "Dashboard.jsx").read_text(encoding="utf-8")
+    _ASSESSMENT = (_FRONTEND_ROOT / "src" / "context" / "AssessmentContext.jsx").read_text(encoding="utf-8")
+    _PANTRY = (_FRONTEND_ROOT / "src" / "pages" / "Pantry.jsx").read_text(encoding="utf-8")
+    _FRONTEND_SOURCES = {
+        "Dashboard.jsx": _DASHBOARD,
+        "AssessmentContext.jsx": _ASSESSMENT,
+        "Pantry.jsx": _PANTRY,
+    }
+
 
 
 # ---------------------------------------------------------------------------
@@ -116,11 +127,6 @@ def test_recalc_endpoint_returns_500_when_not_transient():
 # ---------------------------------------------------------------------------
 
 
-_FRONTEND_SOURCES = {
-    "Dashboard.jsx": _DASHBOARD,
-    "AssessmentContext.jsx": _ASSESSMENT,
-    "Pantry.jsx": _PANTRY,
-}
 
 
 # [reapuntado 2026-07-28] El contrato de retry es de los callsites INTERACTIVOS (click del

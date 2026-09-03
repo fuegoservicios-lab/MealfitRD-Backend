@@ -82,4 +82,10 @@ def test_disclaimer_preserves_original_smart_engine_text():
     assert "<strong>Smart Engine:</strong>" in src
     assert "cantidades exactas" in src
     assert "empaques del mercado local" in src
-    assert "Ud.</strong> = unidad" in src
+    # [P2-I18N-PDF-LEYENDA-UD · 2026-08-22] La abreviatura dejó de estar escrita a mano en la
+    # leyenda: se INTERPOLA desde `t('Ud.')`, la misma llamada que traduce las líneas de la
+    # lista. Escritas por separado divergen --pt-BR prometía «Un.» y fr-FR «U.» para algo que
+    # el documento imprimía «Ud.» en los cuatro idiomas. El concepto que este test protege
+    # (la leyenda explica la abreviatura de unidad) sigue vivo, y ahora en LOS DOS lados.
+    assert "{ud}</strong> = unidad" in src
+    assert "const _leyendaUd = t('Ud.');" in src

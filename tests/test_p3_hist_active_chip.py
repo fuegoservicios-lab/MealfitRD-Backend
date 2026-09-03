@@ -29,19 +29,27 @@ al marker original.
 """
 from __future__ import annotations
 
+import pytest
+
 import re
 from pathlib import Path
 
 
 _BACKEND_ROOT = Path(__file__).resolve().parent.parent
-_HISTORY_JSX = (
-    _BACKEND_ROOT.parent / "frontend" / "src" / "pages" / "History.jsx"
-).read_text(encoding="utf-8")
-_HISTORY_CSS = (
-    _BACKEND_ROOT.parent / "frontend" / "src" / "pages" / "History.module.css"
-).read_text(encoding="utf-8")
-_DESKTOP_PANEL = (_BACKEND_ROOT.parent / "frontend" / "src" / "components" / "history" / "HistoryDesktopPanel.jsx").read_text(encoding="utf-8")
-_MOBILE_PANEL = (_BACKEND_ROOT.parent / "frontend" / "src" / "components" / "history" / "HistoryMobilePanel.jsx").read_text(encoding="utf-8")
+@pytest.fixture(scope="module", autouse=True)
+def _load_frontend_sibling_sources(frontend_repo_path):
+    # La fixture compartida salta el módulo antes de cualquier I/O si falta el hermano.
+    _ = frontend_repo_path
+    global _DESKTOP_PANEL, _HISTORY_CSS, _HISTORY_JSX, _MOBILE_PANEL
+    _HISTORY_JSX = (
+        _BACKEND_ROOT.parent / "frontend" / "src" / "pages" / "History.jsx"
+    ).read_text(encoding="utf-8")
+    _HISTORY_CSS = (
+        _BACKEND_ROOT.parent / "frontend" / "src" / "pages" / "History.module.css"
+    ).read_text(encoding="utf-8")
+    _DESKTOP_PANEL = (_BACKEND_ROOT.parent / "frontend" / "src" / "components" / "history" / "HistoryDesktopPanel.jsx").read_text(encoding="utf-8")
+    _MOBILE_PANEL = (_BACKEND_ROOT.parent / "frontend" / "src" / "components" / "history" / "HistoryMobilePanel.jsx").read_text(encoding="utf-8")
+
 _PLANS_ROUTER = (_BACKEND_ROOT / "routers" / "plans.py").read_text(encoding="utf-8")
 _APP_PY = (_BACKEND_ROOT / "app.py").read_text(encoding="utf-8")
 
@@ -161,10 +169,47 @@ def test_active_chip_rendered_first_in_card_actions():
     con píldora + punto pulsante — MÁS prominente que el chip-primero del diseño viejo. La
     pregunta que protegía ("¿cuál plan estoy comiendo ahora?") se responde igual o mejor: ambos
     paneles reciben activePlanId y pintan el indicador con el token de acento."""
+    # [P1-HIST-PAUSED-BADGE · 2026-08-14] La insignia dejó de ser un literal y pasó a
+    # ternario: con el plan en pausa dice «Plan en pausa» en ámbar (sin glow, porque
+    # el brillo verde ES la señal de «vivo»), y ACTIVO sigue siendo `var(--secondary)`.
+    #
+    # La aserción anterior buscaba la cadena exacta `background: "var(--secondary)"` y
+    # se puso roja por un cambio correcto — el token no desapareció, se movió dentro de
+    # una condición. Es el mismo modo de fallo de siempre: un test pegado a la GRAFÍA
+    # convierte una mejora en un rojo, y a un rojo injusto se le responde relajando el
+    # test. Aquí se ancla la propiedad: el estado activo sigue pintándose con el token
+    # de acento, aparezca solo o como rama de un ternario.
+    # Se ancla la RAMA ACTIVA del ternario (`paused ? <pausa> : <activo>`), no la
+    # presencia suelta del token: el primer intento buscaba `background: … var(--
+    # secondary)` en cualquier parte y una mutación de verificación —cambiar el punto
+    # a `#22C55E`— PASÓ, porque el panel de Desktop tiene un
+    # `background: "linear-gradient(var(--secondary)…"` decorativo que hacía de
+    # señuelo. Un guard que casa con un vecino no vigila a su objetivo.
+    rama_activa = re.compile(r'paused\s*\?\s*(?:[^:?]|\([^()]*\))+:\s*"([^"]*)"')
     for nombre, src in (("Desktop", _DESKTOP_PANEL), ("Mobile", _MOBILE_PANEL)):
         assert "activePlanId" in src, f"{nombre}: el panel perdió la noción de plan activo"
-        assert 'background: "var(--secondary)"' in src, (
-            f"{nombre}: el indicador del plan activo perdió el punto con el token de acento"
+
+        ramas = rama_activa.findall(src)
+        assert ramas, (
+            f"{nombre}: no encuentro el ternario `paused ? … : …` de la insignia. Si "
+            "cambió de forma, reapuntá este test — lo que se protege es que el estado "
+            "ACTIVO se pinte con el token de acento."
+        )
+        assert any("var(--secondary)" in r for r in ramas), (
+            f"{nombre}: ninguna rama ACTIVA de la insignia usa `var(--secondary)`; "
+            f"encontradas: {ramas}."
+        )
+        # Y NINGUNA rama activa puede llevar un color a mano. Esta es la mitad que
+        # de verdad muerde: con sólo pedir «que alguna use el token», mutar el punto
+        # a `#22C55E` seguía pasando porque el `color:` de la píldora conservaba el
+        # suyo. Un guard satisfecho por un vecino no vigila a su objetivo.
+        # (La rama de PAUSA sí lleva `#FBBF24` a mano y queda fuera a propósito: es
+        # el ámbar de espera, sin token propio en el sistema.)
+        a_mano = [r for r in ramas if re.fullmatch(r"#[0-9A-Fa-f]{3,8}", r.strip())]
+        assert not a_mano, (
+            f"{nombre}: rama(s) ACTIVA(s) de la insignia con color a mano: {a_mano}. "
+            "Usá un token `var(--…)`: el Historial se renderiza en los cuatro temas y "
+            "un hex fijo sólo acierta en uno."
         )
 
 def test_card_active_class_applied_conditionally():

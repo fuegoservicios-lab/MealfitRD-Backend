@@ -19,7 +19,7 @@ GATE DE CALIDAD (solo entran planes "de calidad"):
 
 NOTA (estado 2026-07-04): bajo el override GEMINI-TEMP el revisor puede no
 aprobar (flash-lite es débil como reviewer) → el gate descarta. Correr el batch
-con DeepSeek (saldo) para obtener review_passed reales.
+con GLM (saldo) para obtener review_passed reales.
 
 Perfiles: reusa el set FIJO y diverso del benchmark (M2-MACRO-BENCHMARK,
 scripts/benchmark_macro_compliance.py) — 20 perfiles held-out no cherry-picked
@@ -31,7 +31,7 @@ Uso (desde backend/, con el venv mealfit):
     python scripts/generate_synthetic_corpus.py --export-jsonl corpus.jsonl   # dump del corpus a JSONL
 
 Costo: cada perfil corre el pipeline LLM completo (~decenas de calls). Correr
-cuando el provider tenga capacidad (DeepSeek con saldo / Gemini con cuota).
+cuando el provider tenga capacidad (GLM con saldo / Gemini con cuota).
 
 # [P2-LOGGER-EXEMPT: script CLI one-shot — salida humana a stdout]
 """

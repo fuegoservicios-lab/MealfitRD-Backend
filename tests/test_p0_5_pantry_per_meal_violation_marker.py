@@ -41,7 +41,7 @@ def _vip_mock_factory(invalid_ingredients: set):
 
     Replica el contrato real: True si todo OK, string con violaciones si no.
     """
-    def _mock(generated, pantry, strict_quantities=True, tolerance=1.30):
+    def _mock(generated, pantry, strict_quantities=True, tolerance=1.30, country="DO"):
         bad = [g for g in generated if g in invalid_ingredients]
         if not bad:
             return True

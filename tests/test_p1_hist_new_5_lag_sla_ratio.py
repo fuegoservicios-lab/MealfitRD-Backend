@@ -137,7 +137,7 @@ def test_response_includes_expected_preemption_and_lag():
         # `SELECT COUNT(*)` embebido en el LATERAL chunk_deferrals.
         # Discriminamos por el JOIN con plan_chunk_metrics que solo
         # tiene la query principal.
-        if "LEFT JOIN plan_chunk_metrics" in query:
+        if "FROM plan_chunk_queue q" in query:
             return [fake_row]
         if "SELECT COUNT(*)" in query and "plan_chunk_queue" in query:
             return {"total_count": 1}
@@ -179,7 +179,7 @@ def test_response_handles_zero_sla_without_breaking():
         # `SELECT COUNT(*)` embebido en el LATERAL chunk_deferrals.
         # Discriminamos por el JOIN con plan_chunk_metrics que solo
         # tiene la query principal.
-        if "LEFT JOIN plan_chunk_metrics" in query:
+        if "FROM plan_chunk_queue q" in query:
             return [fake_row]
         if "SELECT COUNT(*)" in query and "plan_chunk_queue" in query:
             return {"total_count": 1}
@@ -214,7 +214,7 @@ def test_response_handles_null_sla():
         # `SELECT COUNT(*)` embebido en el LATERAL chunk_deferrals.
         # Discriminamos por el JOIN con plan_chunk_metrics que solo
         # tiene la query principal.
-        if "LEFT JOIN plan_chunk_metrics" in query:
+        if "FROM plan_chunk_queue q" in query:
             return [fake_row]
         if "SELECT COUNT(*)" in query and "plan_chunk_queue" in query:
             return {"total_count": 1}

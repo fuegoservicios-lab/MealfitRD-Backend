@@ -1,18 +1,22 @@
 import os
 import logging
 from datetime import datetime, timezone, timedelta
-# [P0-DEEPSEEK-MIGRATION · 2026-06-12] Gemini → DeepSeek.
-from llm_provider import ChatDeepSeek, DEEPSEEK_FLASH
+# [P0-LLM-PROVIDER-MIGRATION · 2026-06-12] Gemini → GLM.
+from llm_provider import ChatGLM, GLM_FLASH
 
 from db_core import connection_pool, execute_sql_query, execute_sql_write
 from db_chat import save_message, get_recent_messages
-from db import get_consumed_meals_today, get_user_profile
+from db import get_consumed_meals_today, get_user_profile, user_tz_offset_min
 from fact_extractor import get_embedding
 from knobs import _env_int, _env_float
 
 logger = logging.getLogger(__name__)
 
 from prompts.proactive import PROACTIVE_PROMPT
+# [P1-COUNTRY-SYSTEM-F2 · Task 3 · 2026-08-17] Addendum del dueño §2: el nudge proactivo es
+# la MISMA voz que el coach del chat — mismo directive, mismo builder SSOT (no reimplementa
+# el texto). Ver `run_proactive_checks` para los 2 call sites.
+from prompts.chat_agent import build_language_directive
 
 
 # [P3-PREVIEW-MODEL-KNOB · 2026-05-12] Knob para overridear el modelo LLM
@@ -20,14 +24,14 @@ from prompts.proactive import PROACTIVE_PROMPT
 #   - `classify_nudge_sentiment` (analiza respuestas del usuario al nudge).
 #   - `_compose_proactive_message` (genera el texto del nudge).
 #
-# [P0-DEEPSEEK-MIGRATION · 2026-06-12] Default DeepSeek V4 Flash: nudges y
+# [P0-LLM-PROVIDER-MIGRATION · 2026-06-12] Default GLM-5.3 Flash: nudges y
 # clasificación de sentiment son tareas aux baratas — mismo modelo para
 # todos los tiers. Swap sin redeploy:
-# `MEALFIT_PROACTIVE_SENTIMENT_MODEL=deepseek-v4-pro` + restart del worker.
+# `MEALFIT_PROACTIVE_SENTIMENT_MODEL=glm-5.3` + restart del worker.
 def _proactive_model_name() -> str:
     return os.environ.get(
         "MEALFIT_PROACTIVE_SENTIMENT_MODEL",
-        DEEPSEEK_FLASH,
+        GLM_FLASH,
     )
 
 
@@ -60,11 +64,57 @@ def _proactive_llm_timeout_s() -> float:
 # que `get_consumed_meals_today` suma a la fecha local para ir a UTC).
 # Tooltip-anchor: P1-PROACTIVE-TZ.
 def _proactive_tz_offset_min() -> int:
+    # [P1-NUDGE-TZ-PER-USER · 2026-08-21] El clamp era `0 <= v <= 720`, que RECHAZA
+    # estructuralmente cualquier offset negativo: Europa era inexpresable incluso como override
+    # manual. Un knob que no puede representar el caso que debería mitigar no es una mitigación.
+    # Ahora ±840 min (±14 h), el rango real de husos IANA. Sigue siendo sólo el FALLBACK: el
+    # disparo por usuario lo decide `user_tz_offset_min`.
     return _env_int(
         "MEALFIT_PROACTIVE_TZ_OFFSET_MIN",
         240,
-        validator=lambda v: 0 <= v <= 720,
+        validator=lambda v: -840 <= v <= 840,
     )
+
+
+def _local_hour_float_for_offset(now_utc, tz_offset_min) -> float:
+    """[P1-NUDGE-TZ-PER-USER · 2026-08-21] Hora local del usuario como float (13.5 = 13:30).
+
+    `tz_offset_min` sigue la convención de `getTimezoneOffset()` de JS que usa todo el sistema:
+    minutos que hay que SUMAR a la hora local para llegar a UTC (RD = +240, España verano = −120).
+    Por eso se RESTA aquí.
+
+    Existe para que el reloj del cron viva DENTRO del bucle por usuario. Antes
+    `run_proactive_checks` calculaba `now_ast = datetime.now(timezone(timedelta(hours=-4)))` una
+    sola vez, fuera del bucle, y con eso decidía el disparo de TODAS las sesiones activas: a un
+    español el «Resumen del día» —que manda una notificación push real— le llegaba a las 05:00.
+
+    tooltip-anchor: _local_hour_float_for_offset (test_p1_nudge_tz_per_user.py)"""
+    from datetime import timedelta
+    try:
+        _off = int(tz_offset_min)
+    except Exception:
+        _off = 240
+    local = now_utc - timedelta(minutes=_off)
+    return local.hour + local.minute / 60.0
+
+def _usuario_en_modo_contador(user_id) -> bool:
+    """[P2-CHAT-PLAN-TOOLS-PAUSE · 2026-08-15] ¿Este usuario apagó la generación?
+
+    El coach proactivo era el único camino que no pasa por `_plan_context_for_chat`,
+    así que necesita su propia lectura del modo. Reusa `plan_mode.get_plan_mode`
+    —la MISMA fuente que el chat— en vez de consultar `user_profiles` por su cuenta:
+    dos lecturas del mismo campo drift ean en cuanto una de las dos aprende algo.
+
+    Fail-open a False (asumir 'plan'): un fallo de DB no puede cambiar el mensaje
+    que reciben todos los usuarios normales, que son la inmensa mayoría.
+    """
+    try:
+        from plan_mode import get_plan_mode
+        return str((get_plan_mode(user_id) or {}).get("plan_mode") or "plan") == "tracking"
+    except Exception as e:
+        logger.warning(f"[P2-CHAT-PLAN-TOOLS-PAUSE] plan_mode ilegible para {user_id}: {e}")
+        return False
+
 
 def get_active_users_for_proactive() -> list:
     """Busca session_ids que pertenezcan a usuarios registrados con actividad reciente."""
@@ -157,15 +207,24 @@ def get_daily_nudge_count(user_id: str) -> int:
         # AST que cruza el límite UTC a las 20:00, hasta 2 nudges diurnos (día
         # UTC D) + 2 vespertinos/Resumen 20:00-23:00 AST (día UTC D+1) = 4 en un
         # mismo día AST, el DOBLE del cap anti-fatiga (>=2). Convertir a AST
-        # alinea el conteo con el reloj de agendado. Reusa la conversión
-        # 'America/Santo_Domingo' ya usada en get_avg_meal_hour (db_facts.py).
+        # alinea el conteo con el reloj de agendado.
         # Tooltip-anchor: P2-PROACTIVE-NUDGE-BUDGET-TZ.
+        #
+        # [P1-COUNTRY-SYSTEM-F1 · 2026-08-16 (T5)] El hardcode 'America/Santo_Domingo' pasa a
+        # offset por usuario (`db_facts.user_tz_offset_min`, fail-safe 240=RD). `sent_at`/`NOW()`
+        # son timestamptz: `(col AT TIME ZONE 'zona')::date` == `(col - make_interval(mins =>
+        # offset_oeste))::date` — equivalencia algebraica exacta, offset=240 reproduce el
+        # hardcode previo byte a byte (verificado contra Neon 2026-08-16). Este sitio SIEMPRE fue
+        # el hop simple/correcto (a diferencia de `db_facts.get_avg_meal_hour`, que preserva un
+        # signo '+' heredado de un bug pre-existente — ver su comentario). Sin DST en
+        # America/Santo_Domingo: 240 vale los 365 días.
+        _tz_off = user_tz_offset_min(user_id)
         res = execute_sql_query(
             "SELECT COUNT(*) as total FROM nudge_outcomes "
             "WHERE user_id = %s "
-            "AND (sent_at AT TIME ZONE 'America/Santo_Domingo')::date "
-            "= (NOW() AT TIME ZONE 'America/Santo_Domingo')::date",
-            (user_id,), fetch_one=True,
+            "AND (sent_at - make_interval(mins => %s))::date "
+            "= (NOW() - make_interval(mins => %s))::date",
+            (user_id, _tz_off, _tz_off), fetch_one=True,
         )
         return res.get("total", 0) if res else 0
     except Exception as e:
@@ -187,7 +246,7 @@ Respuesta del usuario: "{user_reply}"
 Devuelve ÚNICAMENTE un JSON válido con las claves "sentiment", "meal_logged" y "causal_reason". No uses bloques markdown."""
 
     try:
-        chat_llm = ChatDeepSeek(
+        chat_llm = ChatGLM(
             model=_proactive_model_name(),
             temperature=0.1,
             timeout=_proactive_llm_timeout_s(),  # [P2-LLM-TIMEOUT-SWEEP · 2026-05-30]
@@ -255,10 +314,15 @@ def run_proactive_checks():
     # check_and_trigger_jit_rolling_windows() # Desactivado: El paso a Micro-Batching usa triggers interactivos vía UI ("Actualizar Platos")
 
     
-    # 1. Obtenemos la hora actual (AST / -04:00)
-    now_ast = datetime.now(timezone(timedelta(hours=-4)))
-    current_hour_float = now_ast.hour + now_ast.minute / 60.0
-    
+    # 1. El instante UTC del tick. La hora LOCAL se calcula por usuario dentro del bucle.
+    # [P1-NUDGE-TZ-PER-USER · 2026-08-21] Aquí vivía `now_ast = datetime.now(timezone(
+    # timedelta(hours=-4)))`: un reloj dominicano literal con el que se decidía el disparo de
+    # TODAS las sesiones activas. Fase 1 T5 parametrizó `get_daily_nudge_count` por usuario y
+    # dejó el reloj. Traducido a hora local con los horarios por defecto, un español recibía
+    # «¿desayunaste?» a las 15:00, «¿cenaste?» a la 01:30 y el Resumen del día —que dispara una
+    # notificación push REAL— a las 05:00.
+    _now_utc = datetime.now(timezone.utc)
+
     sessions = get_active_users_for_proactive()
     logger.info(f"🔍 [CRON] Encontradas {len(sessions)} sesiones activas para verificar (Proactividad Inteligente).")
 
@@ -300,6 +364,15 @@ def run_proactive_checks():
             break
         session_id = str(s.get("id"))
         user_id = str(s.get("user_id"))
+        # [P1-NUDGE-TZ-PER-USER · 2026-08-21] El reloj, DENTRO del bucle. `user_tz_offset_min` ya
+        # estaba importado en este mismo archivo y se usaba 100 líneas más arriba: la maquinaria
+        # existía y este call site no la llamaba. El knob global queda sólo de fallback.
+        try:
+            _user_tz_off = user_tz_offset_min(user_id)
+        except Exception:
+            _user_tz_off = _proactive_tz_offset_min()
+        now_ast = _now_utc - timedelta(minutes=_user_tz_off)
+        current_hour_float = _local_hour_float_for_offset(_now_utc, _user_tz_off)
         # GAP 3: Nudge Budget (max 2 nudges per day to avoid fatigue)
         daily_nudges = get_daily_nudge_count(user_id)
         if daily_nudges >= 2:
@@ -356,9 +429,28 @@ def run_proactive_checks():
                     elif meal_rate < 0.30:
                         delay_hours = 2.5 # Evitar presión, retrasamos el nudge
                         
-                # Nudge dinámico ajustado según historial de adherencia específica
-                nudge_hour = avg_hr + delay_hours
-                
+                # Nudge dinámico ajustado según historial de adherencia específica.
+                #
+                # [P3-AVG-MEAL-HOUR-CIRCULAR · 2026-08-23] El `% 24` es LOAD-BEARING y va
+                # ANTES que el arreglo de la media, no después. `avg_hr` es una hora de
+                # reloj (0..23,99) y `delay_hours` llega hasta 2,5: la suma se sale del
+                # reloj en cuanto la comida es tardía. `current_hour_float` sólo vale
+                # 0..23, así que un `nudge_hour` de 24,0 NUNCA iguala a nada y el nudge
+                # de esa comida no se envía JAMÁS — silenciosamente, sin log ni error.
+                #
+                # Es un defecto con sesgo de país: una cena dominicana (~19:00) + 1,5 h
+                # cae en 20,5 y no se nota; una cena española (21:00-23:00, con picoteo)
+                # cae en 22,5-25,5 y se cae del reloj. Y ES PRERREQUISITO de la media
+                # circular: la media circular de [21,22,23,0] es ~22,5 (correcta), pero
+                # sumarle el delay sin `% 24` la empuja fuera del reloj más a menudo que
+                # la media aritmética rota, que tendía al centro del día. Arreglar la
+                # media sin arreglar esto EMPEORA el caso español.
+                #
+                # El nudge cruza la medianoche a propósito: si comes a las 23:30, el
+                # recordatorio de esa comida es a la 1:00 del día siguiente, no "nunca".
+                # tooltip-anchor: P3-AVG-MEAL-HOUR-CIRCULAR
+                nudge_hour = (avg_hr + delay_hours) % 24
+
                 # Comparamos si el cron actual (hora entera) coincide con la hora entera del nudge
                 if math.floor(current_hour_float) == math.floor(nudge_hour):
                     meal_to_check = meal
@@ -412,6 +504,11 @@ def run_proactive_checks():
                 continue
             
             health = profile.get("health_profile", {})
+            # [P1-COUNTRY-SYSTEM-F2 · Task 3 · 2026-08-17] `locale` del MISMO `profile` ya
+            # leído arriba (get_user_profile) — cero round-trips extra. Ausente/falsy ⇒
+            # fallback explícito 'es-DO'; `build_language_directive` colapsa cualquier valor
+            # no reconocido a "" (byte-idéntico a hoy).
+            _nudge_locale = profile.get("locale") or "es-DO"
             schedule = health.get("scheduleType", "standard")
             if schedule == "night_shift" or schedule == "variable":
                 logger.info(f"🚫 [CRON] Usuario {user_id}: turno {schedule}. Saltando.")
@@ -430,10 +527,14 @@ def run_proactive_checks():
             # ¿descuento todo de tu nevera?" — falso-positivo NOCTURNO para cada
             # usuario standard. Con el offset, la rama AST-aware usa el día AST
             # correcto. Tooltip-anchor: P1-PROACTIVE-TZ.
+            # [P1-NUDGE-TZ-PER-USER · 2026-08-21] El filtro de consumo usa el huso DEL USUARIO,
+            # no el knob global. Sin esto el Resumen del día de un español evaluaba una ventana
+            # que era mayoritariamente su día ANTERIOR — el mismo falso-positivo nocturno que
+            # P1-PROACTIVE-TZ cerró para RD, reabierto para todo el que no viva en RD.
             consumed = get_consumed_meals_today(
                 user_id,
                 date_str=now_ast.strftime("%Y-%m-%d"),
-                tz_offset_mins=_proactive_tz_offset_min(),
+                tz_offset_mins=_user_tz_off,
             )
             
             if meal_to_check == "Resumen del día":
@@ -443,13 +544,30 @@ def run_proactive_checks():
                 else:
                     # Enviar mensaje especial: No comió nada
                     logger.info(f"⚠️ [CRON] Usuario {user_id} ({session_id}) no registró NADA. Generando nudge indulgente...")
+                    # [P2-CHAT-PLAN-TOOLS-PAUSE · 2026-08-15] Este era el UNICO camino del
+                    # coach que no pasa por `_plan_context_for_chat`, y su oferta —«restamos
+                    # lo de hoy de tu nevera como si lo hubieras cocinado»— presupone un plan
+                    # que prescribio algo. En modo contador no existe «lo de hoy»: restar de
+                    # la Nevera «como si lo hubieras cocinado» no tiene referente.
+                    #
+                    # El nudge NO se apaga: recordar que registres es exactamente para lo que
+                    # sirve el contador. Lo que cae es la oferta anclada al plan.
+                    _en_pausa = _usuario_en_modo_contador(user_id)
+                    _cierre = ("\"Veo que no registraste nada hoy, ¿se te paso anotar o comiste fuera?\""
+                               if _en_pausa else
+                               "\"Veo que no registraste nada hoy, ¿restamos lo de hoy de tu nevera "
+                               "como si lo hubieras cocinado o comiste fuera?\"")
                     prompt = f"""
 Eres tu nutricionista IA. Son las {trigger_time_str} de la noche.
 He notado que el paciente no ha registrado NINGUNA comida en todo el día en su diario de Bioboros.
 Escríbele un mensaje corto (máximo 2 líneas) muy amistoso e indulgente al estilo WhatsApp preguntándole:
-"Veo que no registraste nada hoy, ¿restamos lo de hoy de tu nevera como si lo hubieras cocinado o comiste fuera?"
+{_cierre}
 No uses demasiados emojis. Sé directo, breve y empático.
 """
+                    # [P1-COUNTRY-SYSTEM-F2 · Task 3 · 2026-08-17] Addendum §2: este nudge es
+                    # prosa LLM user-facing (chat + body de la Web Push) — misma frontera que
+                    # el coach: solo mueve el IDIOMA de la prosa, comida/nombres siguen español.
+                    prompt += build_language_directive(_nudge_locale)
             else:
                 # Checar si la comida objetivo o algo con ese nombre ya se consumió
                 already_ate = False
@@ -511,8 +629,11 @@ No uses demasiados emojis. Sé directo, breve y empático.
                     tone_instruction=final_tone,
                     style_instruction=style_instruction
                 )
+                # [P1-COUNTRY-SYSTEM-F2 · Task 3 · 2026-08-17] Mismo directive que el bloque
+                # "Resumen del día" arriba — ver esa nota para el contrato completo.
+                prompt += build_language_directive(_nudge_locale)
                 
-            chat_llm = ChatDeepSeek(
+            chat_llm = ChatGLM(
                 model=_proactive_model_name(),
                 temperature=0.8,
                 timeout=_proactive_llm_timeout_s(),  # [P2-LLM-TIMEOUT-SWEEP · 2026-05-30]
@@ -541,9 +662,16 @@ No uses demasiados emojis. Sé directo, breve y empático.
                     # NUEVO: Enviar Web Push Notification a todos los dispositivos del paciente
                     # ---------------------------------------------
                     from utils_push import send_push_notification
+                    from prompts.chat_agent import push_nudge_title
+                    # [P2-I18N-PUSH-SIN-LOCALE · 2026-08-21] El cuerpo YA seguia el idioma
+                    # del usuario (`build_language_directive(_nudge_locale)`, arriba); el
+                    # titulo era un literal espanol pegado aqui. La notificacion llegaba
+                    # BILINGUE, y en la pantalla de bloqueo el titulo es lo unico que se
+                    # lee de un vistazo — o sea, la mitad que no se traducia era la que
+                    # decide si el usuario abre.
                     send_push_notification(
                         user_id=user_id,
-                        title="Aviso de tu Nutricionista IA \U0001f9d1\u200d\u2615",
+                        title=push_nudge_title(_nudge_locale),
                         body=content,
                         url=f"/dashboard/agent?session_id={session_id}"
                     )

@@ -67,8 +67,14 @@ def test_dup_guard_scoped_to_main_meals_local_date():
     assert i != -1
     assert '("desayuno", "almuerzo", "cena")' in src[i:i + 120], \
         "solo comidas PRINCIPALES: merienda/snack se repiten legítimamente"
-    assert "AT TIME ZONE 'America/Santo_Domingo'" in src, \
-        "el 'mismo día' es el día LOCAL RD (UTC-4), no el día UTC del server"
+    # [P1-COUNTRY-SYSTEM-F1 · 2026-08-16 (T5)] El hardcode 'America/Santo_Domingo' pasó a
+    # offset resuelto por usuario (`db_facts.user_tz_offset_min`, fail-safe 240=RD — IDÉNTICO
+    # al hardcode previo cuando no hay perfil/tzOffset). El contrato de este test ("mismo día"
+    # es LOCAL, nunca el día UTC del server) no cambió — solo CÓMO se resuelve cuál es "local".
+    assert "user_tz_offset_min(user_id)" in src, \
+        "el 'mismo día' debe resolverse vía el offset del usuario, no quedar fijo a UTC"
+    assert "make_interval(mins => %s)" in src, \
+        "el corte de día debe seguir parametrizado por aritmética, no volver a un hardcode de zona"
     assert "repite esta herramienta con force=true" in src, \
         "el guard devuelve instrucción de confirmación, no un error mudo"
 
@@ -80,8 +86,21 @@ def test_prompts_teach_backdate_to_agent():
         "ambos builders (inline y stream) deben enseñar days_ago/meal_type/force"
     assert "days_ago" in prompts and "force=true" in prompts
 
+    # [reapuntado 2026-08-23, P3-I18N-PROMPT-VISION-CLIENTE-ESPANOL] La instrucción
+    # de la foto salió del cliente: AgentPage manda `vision:` estructurado y el
+    # COMPOSITOR del servidor (este mismo chat_agent.py) enseña days_ago. La
+    # propiedad es la misma — quien compone el turno de la foto enseña el registro
+    # en otro día — y ahora vive en un solo lado.
+    # (El literal vive partido en dos strings adyacentes — `"...days_ago "` +
+    # `"(1=ayer)..."` — así que se ancla la PROPIEDAD sobre el compositor entero:
+    # que `build_vision_context` exista y que su bloque enseñe days_ago y 1=ayer.)
+    assert "def build_vision_context(" in prompts, \
+        "el compositor server-side de la foto desapareció de chat_agent.py"
+    _vision_zone = prompts[prompts.index("def build_vision_context("):]
+    assert "days_ago" in _vision_zone and "(1=ayer)" in _vision_zone, \
+        "el compositor de la foto (server-side) dejó de enseñar el registro en otro día"
     with open(os.path.join(_ROOT, "frontend", "src", "pages", "AgentPage.jsx"),
               encoding="utf-8") as f:
         ap = f.read()
-    assert "days_ago (1=ayer)" in ap, \
-        "la instrucción de foto del chat menciona el registro en otro día"
+    assert "vision: visionPayload" in ap, \
+        "AgentPage ya no manda el contexto de la foto estructurado (vision:) al servidor"

@@ -109,8 +109,13 @@ def _extract_lm_display_groups_keys() -> set[str]:
     todas las keys (1er elemento de cada tuple anidada en `keys`)."""
     block = _lm_display_groups_block()
     # Tuple shape: ['key', 'label', 'type'] — capturamos el primer string.
+    # [P2-I18N-HIST-FORENSE-ROTULOS · 2026-08-22] El RÓTULO (2º elemento) va ahora
+    # envuelto en `t(...)`. Lo que esta paridad protege es la CLAVE y el TIPO — el
+    # rótulo nunca se comparó con nada — así que el patrón acepta las dos formas. Sin
+    # esto el parser devolvía un set VACÍO y el test acusaba al backend de tener claves
+    # sin categorizar: el mensaje señalaba al sitio equivocado.
     pattern = re.compile(
-        r"\[\s*['\"]([a-z_]+)['\"]\s*,\s*['\"][^'\"]+['\"]\s*,\s*['\"][a-z_]+['\"]\s*\]"
+        r"\[\s*['\"]([a-z_]+)['\"]\s*,\s*(?:t\()?['\"][^'\"]+['\"]\)?\s*,\s*['\"][a-z_]+['\"]\s*\]"
     )
     return set(pattern.findall(block))
 
@@ -233,8 +238,13 @@ def test_declared_types_are_valid():
     whitelist => regresión silenciosa (el helper devolvería null
     como default y el chip nunca renderizaría)."""
     block = _lm_display_groups_block()
+    # [P2-I18N-HIST-FORENSE-ROTULOS · 2026-08-22] El RÓTULO (2º elemento) va ahora
+    # envuelto en `t(...)`. Lo que esta paridad protege es la CLAVE y el TIPO — el
+    # rótulo nunca se comparó con nada — así que el patrón acepta las dos formas. Sin
+    # esto el parser devolvía un set VACÍO y el test acusaba al backend de tener claves
+    # sin categorizar: el mensaje señalaba al sitio equivocado.
     pattern = re.compile(
-        r"\[\s*['\"][a-z_]+['\"]\s*,\s*['\"][^'\"]+['\"]\s*,\s*['\"]([a-z_]+)['\"]\s*\]"
+        r"\[\s*['\"][a-z_]+['\"]\s*,\s*(?:t\()?['\"][^'\"]+['\"]\)?\s*,\s*['\"]([a-z_]+)['\"]\s*\]"
     )
     declared_types = set(pattern.findall(block))
     assert declared_types, (
