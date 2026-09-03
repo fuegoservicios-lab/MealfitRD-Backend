@@ -45979,6 +45979,16 @@ _TRUSTED_INTERNAL_FORM_KEYS: frozenset = frozenset({
     "_plan_policy_effective",
     "_policy_enforced",
     "_policy_day_index",
+
+    # [P3-STRIP-PANTRY-KEYS-NOISE · 2026-09-03] Metadatos de la despensa que `_enqueue_plan_chunk`
+    # sella en `pipeline_snapshot["form_data"]` (los lee el WORKER desde el snapshot, no el
+    # grafo). No estaban aquí y cada chunk arrancaba con un WARNING «stripped 4 clave(s)»: 31
+    # en 24 h, el aviso más frecuente del journal, sin ningún efecto (el grafo no los usa).
+    # Un aviso que dispara en cada ejecución normal no avisa de nada.
+    "_pantry_captured_at",
+    "_chunk_anchor_source",
+    "_pantry_quantity_mode",
+    "_pantry_quantity_hybrid_tolerance",
 })
 
 

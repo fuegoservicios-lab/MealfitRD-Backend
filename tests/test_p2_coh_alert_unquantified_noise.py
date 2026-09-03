@@ -55,5 +55,5 @@ def test_cron_threshold_uses_plans_with_signal_and_keeps_raw_count():
     assert SRC.index("plans_with_div = 0") < SRC.index("plans_with_signal = 0") < SRC.index("if divs:")
 
 
-def test_marker_bumped():
-    assert "P2-COH-ALERT-UNQUANTIFIED-NOISE" in (BACKEND / "app.py").read_text(encoding="utf-8")
+def test_marker_present_in_source():
+    assert "P2-COH-ALERT-UNQUANTIFIED-NOISE" in SRC   # el marker de app.py avanza con cada P-fix
