@@ -309,6 +309,18 @@ _BARIATRIC_LOW_DENSITY_AS_MAIN = {
     "queso de hoja", "queso parmesano", "queso cheddar", "queso gouda",
 }
 
+# [P2-SEEDER-DRAW-GAINMUSCLE-DENSITY · 2026-09-03] Leguminosas por TOKEN (word-boundary), para el
+# perfil de ganancia muscular. `_LOW_DENSITY_AS_MAIN` es exact-match sobre nombres DO y se quedó
+# corto cuando el catálogo de países (F2, 347 filas) trajo «Habas», «Guisantes secos», «Frijoles
+# pintos», «Alubias»: el sorteo del seeder las entregaba como proteína PRINCIPAL del día a un
+# perfil de 135 g de proteína, y el revisor rechazó 2 intentos seguidos por déficit (día 3: 91 g).
+# Siguen disponibles como acompañante; sólo dejan de ser la base del día.
+_GAINMUSCLE_LEGUME_TOKENS = (
+    "habichuela", "habichuelas", "frijol", "frijoles", "lenteja", "lentejas", "garbanzo", "garbanzos",
+    "gandul", "gandules", "guandul", "guandules", "haba", "habas", "guisante", "guisantes",
+    "alubia", "alubias", "judia", "judias", "poroto", "porotos", "caraota", "caraotas", "arveja", "arvejas",
+)
+
 # ─────────── vocabularios clínicos del seeder (nivel módulo = SSOT único) ───────────
 # [P1-PANTRY-FLOOR-CLINICAL-FILTER · 2026-08-02] (audit solver+seeder v7) Estos cuatro
 # vocabularios vivían DENTRO de `get_deterministic_variety_prompt`, y dos de ellos dentro de un
@@ -377,7 +389,7 @@ def _token_matches_wb(name, tokens) -> bool:
     return False
 
 
-def _is_low_density_main(name, _is_bariatric: bool) -> bool:
+def _is_low_density_main(name, _is_bariatric: bool, *, gain_muscle: bool = False) -> bool:
     """¿`name` es una proteína que NO debe ocupar el slot de proteína PRINCIPAL?
 
     [P1-PANTRY-FLOOR-CLINICAL-FILTER · 2026-08-02] Cuerpo subido desde el closure
@@ -398,11 +410,20 @@ def _is_low_density_main(name, _is_bariatric: bool) -> bool:
         return True
     if _is_bariatric and _token_matches_wb(_pl, _CURED_OR_PROCESSED_TOKENS):
         return True
+    # [P2-SEEDER-DRAW-GAINMUSCLE-DENSITY · 2026-09-03] ganancia muscular: ni leguminosa ni queso
+    # como base del día (el prompt del revisor exige «fuente animal de alta densidad» en cada
+    # comida principal; darle «Habas» como main era pedirle al LLM que se contradijera).
+    if gain_muscle and _env_bool("MEALFIT_GAINMUSCLE_MAIN_DENSITY_STRICT", True):
+        if _pl in _BARIATRIC_LOW_DENSITY_AS_MAIN or _pl.startswith("queso "):
+            return True
+        if _token_matches_wb(_pl, _GAINMUSCLE_LEGUME_TOKENS):
+            return True
     return False
 
 
 def _pantry_clinical_main_filter(extracted_p, extracted_f, *, penaliza_procesados: bool = False,
-                                 exige_densidad: bool = False, is_bariatric: bool = False):
+                                 exige_densidad: bool = False, is_bariatric: bool = False,
+                                 gain_muscle: bool = False):
     """[P1-PANTRY-FLOOR-CLINICAL-FILTER · 2026-08-02] (audit solver+seeder v7)
 
     Devuelve `(proteinas, frutas)` de la nevera que SÍ pueden ser BASE del día.
@@ -446,7 +467,7 @@ def _pantry_clinical_main_filter(extracted_p, extracted_f, *, penaliza_procesado
     if _p and (penaliza_procesados or exige_densidad):
         _kept = [x for x in _p
                  if not (penaliza_procesados and _token_matches_wb(x, _CURED_OR_PROCESSED_TOKENS))
-                 and not (exige_densidad and _is_low_density_main(x, is_bariatric))]
+                 and not (exige_densidad and _is_low_density_main(x, is_bariatric, gain_muscle=gain_muscle))]
         if len(_kept) < len(_p):
             logger.info(
                 f"🩺 [P1-PANTRY-FLOOR-CLINICAL-FILTER] {len(_p) - len(_kept)} proteína(s) de la "
@@ -1829,7 +1850,7 @@ def get_deterministic_variety_prompt(history_text: str, form_data: dict = None, 
         # aplique EXACTAMENTE el mismo criterio: eran las dos mitades de una sola regla y solo
         # esta corría, así que lo extraído de la nevera la esquivaba entera.
         def _should_replace_main(_p):
-            return _is_low_density_main(_p, _is_bariatric)
+            return _is_low_density_main(_p, _is_bariatric, gain_muscle=(_main_goal == "gain_muscle"))
         _low_mains = [p for p in unique_proteins if _should_replace_main(p)]
         if _low_mains:
             _hd_pool = [(p, w) for p, w in zip(available_proteins, protein_weights)
@@ -2107,7 +2128,8 @@ def get_deterministic_variety_prompt(history_text: str, form_data: dict = None, 
                 penaliza_procesados=(_main_goal in _GOALS_PENALIZE_PROCESSED or _is_bariatric),
                 exige_densidad=((_main_goal == "gain_muscle" or _is_bariatric)
                                 and _env_bool("MEALFIT_GAINMUSCLE_HIGH_DENSITY_PROTEIN", True)),
-                is_bariatric=_is_bariatric)
+                is_bariatric=_is_bariatric,
+                gain_muscle=(_main_goal == "gain_muscle"))
 
         # [P3-SEEDER-TEMPLATE-COVERAGE · 2026-08-04] Snapshot POST-filtro clínico: lo que el filtro
         # de arriba descartó ya no puede ocupar días, así que tampoco debe generar telemetría.
