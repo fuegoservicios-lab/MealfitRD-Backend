@@ -108,6 +108,8 @@ _HISTORY_PREVIEW_MEALS_CAP = 6
 
 _RECALC_LIMITER = RateLimiter(max_calls=20, period_seconds=60)
 _PDF_TELEMETRY_LIMITER = RateLimiter(max_calls=30, period_seconds=60)
+# [P2-LOADING-ETA-HONEST · 2026-09-03] lectura del p50/p90 real de la generación (pantalla de carga)
+_ETA_LIMITER = RateLimiter(max_calls=30, period_seconds=60)
 
 # [P2-GUEST-LLM-RATELIMIT · 2026-05-30] `/swap-meal` y `/recipe/expand` invocan
 # Gemini pero solo tenían `Depends(verify_api_quota)`. Para un GUEST (no
@@ -5338,6 +5340,73 @@ async def api_pending_pipeline_status(
     except Exception as e:
         logger.warning(f"[P1-DEEP-SEARCH-PIPELINE] /pending-status error: {e!r}")
         return {"status": "none"}
+
+
+# ── [P2-LOADING-ETA-HONEST · 2026-09-03] ETA real de la generación para la pantalla de carga ──
+# La pantalla decía «estimado 3-6 minutos» fijo. Medido sobre los 34 bloques 1 completados por la
+# cola desde el flip (2026-09-02): mediana 583 s (~10 min), p90 925 s (~15 min), mín 255 s, máx
+# 1856 s. El copy fijo mentía en casi todos los planes. La cifra ya la tiene la base: el tiempo de
+# pared del bloque 1 es `updated_at - created_at` de la fila `week_number=1` completada (la cola
+# lo ejecuta con `execute_after = NOW()`, así que la espera en cola es despreciable). Se sirve
+# p50/p90 de los últimos 14 días, cacheado 10 min en proceso; con menos de 5 muestras se devuelven
+# nulls y el frontend cae a un rango prudente. Cero LLM ⇒ `get_verified_user_id` + limitador, no
+# `verify_api_quota` (ver tabla «Historial-quota-exemption» en CLAUDE.md).
+_GENERATION_ETA_WINDOW_DAYS = 14
+_GENERATION_ETA_MIN_SAMPLES = 5
+_GENERATION_ETA_TTL_S = 600
+_GENERATION_ETA_CACHE: dict = {"at": 0.0, "value": None}
+
+
+def _generation_eta_from_row(row) -> dict:
+    """Forma pública del ETA a partir de la fila agregada (n, p50, p90). Pura, unit-testable."""
+    n = int((row or {}).get("n") or 0)
+    if n < _GENERATION_ETA_MIN_SAMPLES:
+        return {"p50_s": None, "p90_s": None, "n": n, "window_days": _GENERATION_ETA_WINDOW_DAYS}
+    p50 = int(float((row or {}).get("p50") or 0))
+    p90 = int(float((row or {}).get("p90") or 0))
+    if p50 <= 0 or p90 <= 0:
+        return {"p50_s": None, "p90_s": None, "n": n, "window_days": _GENERATION_ETA_WINDOW_DAYS}
+    return {"p50_s": p50, "p90_s": max(p90, p50), "n": n, "window_days": _GENERATION_ETA_WINDOW_DAYS}
+
+
+def _generation_eta_snapshot() -> dict:
+    """p50/p90 del tiempo de pared del bloque 1 (cola) en la ventana, con cache en proceso."""
+    import time as _time
+    now = _time.time()
+    cached = _GENERATION_ETA_CACHE.get("value")
+    if cached is not None and now - float(_GENERATION_ETA_CACHE.get("at") or 0) < _GENERATION_ETA_TTL_S:
+        return cached
+    row = execute_sql_query(
+        """
+        SELECT COUNT(*) AS n,
+               percentile_cont(0.5) WITHIN GROUP (ORDER BY EXTRACT(EPOCH FROM (updated_at - created_at))) AS p50,
+               percentile_cont(0.9) WITHIN GROUP (ORDER BY EXTRACT(EPOCH FROM (updated_at - created_at))) AS p90
+        FROM plan_chunk_queue
+        WHERE week_number = 1
+          AND status = 'completed'
+          AND created_at > NOW() - make_interval(days => %s)
+          AND EXTRACT(EPOCH FROM (updated_at - created_at)) BETWEEN 60 AND 7200
+        """,
+        (int(_GENERATION_ETA_WINDOW_DAYS),), fetch_one=True,
+    ) or {}
+    value = _generation_eta_from_row(row)
+    _GENERATION_ETA_CACHE["at"] = now
+    _GENERATION_ETA_CACHE["value"] = value
+    return value
+
+
+@router.get("/generation-eta")
+async def api_generation_eta(
+    verified_user_id: str = Depends(get_verified_user_id),
+    _rl: None = Depends(_ETA_LIMITER),
+):
+    """[P2-LOADING-ETA-HONEST · 2026-09-03] `{p50_s, p90_s, n, window_days}` del bloque 1 real.
+    Global (no depende del usuario), cero LLM, cache 10 min. Falla abierto a nulls."""
+    try:
+        return await asyncio.to_thread(_generation_eta_snapshot)
+    except Exception as e:
+        logger.warning(f"[P2-LOADING-ETA-HONEST] /generation-eta falló (fail-open): {e!r}")
+        return {"p50_s": None, "p90_s": None, "n": 0, "window_days": _GENERATION_ETA_WINDOW_DAYS}
 
 
 @router.get("/guest-plan")
