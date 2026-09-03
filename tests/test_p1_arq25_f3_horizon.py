@@ -435,7 +435,7 @@ def test_migration_exists_idempotent_and_ssot_identical():
 
 
 def test_marker_bumped_and_persist_uses_run_row():
-    assert 'P1-ARQ25-F3-HORIZON' in _src("app.py")
+    assert 'P1-ARQ25-F3-HORIZON' in _src("horizon.py")   # el marker de app.py sigue avanzando con cada P-fix
     hz = _src("horizon.py")
     assert "UPDATE plan_generation_runs SET blueprint = %s, blueprint_hash = %s, allocator_version = %s WHERE id = %s" in hz
     assert "INSERT INTO plan_jobs (job_type, plan_id, user_id, plan_revision, dedup_key, payload)" in hz
@@ -447,3 +447,15 @@ def test_meal_slot_and_chunk_boundaries_helpers():
     assert [c["days_count"] for c in h.chunk_boundaries(3)] == [3]
     assert [c["days_count"] for c in h.chunk_boundaries(30)] == [3, 4, 4, 4, 4, 4, 4, 3]
     assert h.slots_for_day(3) == ["breakfast", "lunch", "dinner"] and len(h.slots_for_day(6)) == 6
+
+
+def test_family_matches_by_food_class_not_word_root():
+    """[canary 2026-09-03] Nevera estricta: el pool era sardinas/mozzarella/hígado y las 3 familias
+    programadas (Pescado/Huevo/Res) cayeron al fallback porque `_matches` compara raíces de palabra."""
+    assert h.family_matches("Pescado", "Sardinas en lata") and h.family_matches("Pescado", "Filete de pescado blanco")
+    assert h.family_matches("Res", "Hígado de res") and h.family_matches("Queso", "Queso Mozzarella")
+    assert h.family_matches("Cerdo", "Chuleta de cerdo") and not h.family_matches("Res", "Chuleta de cerdo")
+    assert not h.family_matches("Pescado", "Queso Mozzarella")
+    sl = {"days": [{"protein": "Pescado"}, {"protein": "Huevo"}, {"protein": "Res"}], "recurrence": {"global_mode": "balanced"}}
+    pool = ["Queso Mozzarella", "Sardinas en lata", "Hígado de res"]
+    assert h.apply_slice_to_seeder_pools(sl, pool, pool, days=3) == ["Sardinas en lata", "Queso Mozzarella", "Hígado de res"]

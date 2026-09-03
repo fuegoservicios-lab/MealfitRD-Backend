@@ -933,6 +933,29 @@ def _validate_chunk_pre_llm(task_id, meal_plan_id, user_id):
 # única de verdad.
 
 
+# [P2-COH-ALERT-UNQUANTIFIED-NOISE · 2026-09-03] Hipótesis que NO cuentan como señal para el umbral
+# `MEALFIT_COH_ALERT_PLAN_FRACTION`. Medido en la alerta del 03-sep: 31/32 planes «con divergencias»
+# (96,9 %) y 101 de 113 divergencias eran `recipe_unquantified` — sal/pimienta/comino «al gusto», sin
+# gramos en la receta (Pimienta negra en 29 planes, Sal en 27). P1-COHERENCE-UNQUANTIFIED-LABEL ya
+# había separado la etiqueta y dejó escrito que era «el prerequisito para que los umbrales del cron
+# midan señal en vez de ruido»; este es ese paso. Una alerta ERROR que dispara TODOS los días no es
+# una alerta. El conteo bruto (`plans_with_div`) se conserva en el resumen y en las flags del tick.
+_COH_ALERT_IGNORE_HYPOTHESES_DEFAULT = "recipe_unquantified"
+
+
+def _coh_alert_ignored_hypotheses() -> frozenset:
+    raw = _env_str("MEALFIT_COH_ALERT_IGNORE_HYPOTHESES", _COH_ALERT_IGNORE_HYPOTHESES_DEFAULT) or ""
+    return frozenset(h.strip() for h in raw.split(",") if h.strip())
+
+
+def _coh_plan_has_signal(divs, ignored: frozenset) -> bool:
+    """True si al menos UNA divergencia del plan tiene una hipótesis que no es ruido conocido."""
+    for d in divs or []:
+        if str((d or {}).get("hypothesis") or "unknown") not in ignored:
+            return True
+    return False
+
+
 def _shopping_coherence_alert_job():
     """[P1-shop-coh-1 · 2026-05-07] Re-evalúa coherencia recetas↔lista en
     planes recientes y emite alerta si las hipótesis críticas superan umbral.
@@ -1075,6 +1098,8 @@ def _shopping_coherence_alert_job():
             return
 
         plans_with_div = 0
+        plans_with_signal = 0   # [P2-COH-ALERT-UNQUANTIFIED-NOISE] excluye hipótesis de ruido conocido
+        _ignored_hyp = _coh_alert_ignored_hypotheses()
         by_hypothesis = Counter()
         by_food = Counter()
         eval_errors = 0
@@ -1108,6 +1133,8 @@ def _shopping_coherence_alert_job():
                 continue
             if divs:
                 plans_with_div += 1
+                if _coh_plan_has_signal(divs, _ignored_hyp):
+                    plans_with_signal += 1
                 for d in divs:
                     by_hypothesis[d.get("hypothesis", "unknown")] += 1
                     by_food[d.get("food", "")] += 1
@@ -1141,7 +1168,8 @@ def _shopping_coherence_alert_job():
                         )
 
         n = len(plans)
-        plan_fraction = plans_with_div / n if n else 0.0
+        # [P2-COH-ALERT-UNQUANTIFIED-NOISE] el umbral mide planes con SEÑAL (no solo condimentos sin cantidad)
+        plan_fraction = plans_with_signal / n if n else 0.0
         cap_count = by_hypothesis.get("cap_swallowed_modifier", 0)
         cap_ratio = cap_count / n if n else 0.0
         # [P3-UNDERSUPPLY-VISIBILITY · 2026-08-04] mismo cómputo que `cap_count`, para la
@@ -1159,7 +1187,8 @@ def _shopping_coherence_alert_job():
 
         summary = (
             f"[COH-ALERT 24h] {n} planes evaluados ({eval_errors} errores parsing). "
-            f"{plans_with_div} con divergencias ({plan_fraction * 100:.1f}%). "
+            f"{plans_with_div} con divergencias, {plans_with_signal} con señal ({plan_fraction * 100:.1f}%; "
+            f"ignoradas={sorted(_ignored_hyp)}). "
             f"Hipótesis: {dict(by_hypothesis)}. "
             f"Top foods: {dict(by_food.most_common(5))}. "
             f"Persisted history: {persisted_count} (errors: {persist_errors}, "

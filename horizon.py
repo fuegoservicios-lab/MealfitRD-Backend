@@ -684,6 +684,44 @@ def policy_prompt_block(effective: Optional[dict], sl: Optional[dict] = None, *,
         return ""
 
 
+# [P1-ARQ25-F3-HORIZON · canary 2026-09-03] Una familia («Pescado») debe casar con el NOMBRE real del
+# pool («Sardinas en lata», «Filete de pescado blanco»): `_matches` compara raíces de palabra y no
+# sabe que una sardina es pescado. Medido en el primer plan del canary (nevera estricta): las 3
+# familias programadas cayeron al fallback porque el pool era sardinas/mozzarella/hígado.
+_FAMILY_TOKENS = {
+    "pescado": ("pescado", "atun", "salmon", "bacalao", "sardina", "camaron", "camarones", "mariscos", "pulpo",
+                "calamar", "cangrejo", "langosta", "tilapia", "merluza", "dorado", "chillo", "mero", "filete de pescado"),
+    "pollo": ("pollo", "pechuga", "muslo", "gallina"),
+    "res": ("res", "carne", "bistec", "higado", "molida", "falda", "chuleta de res"),
+    "cerdo": ("cerdo", "puerco", "chuleta", "tocino", "jamon", "costilla"),
+    "huevo": ("huevo", "huevos", "clara", "claras"),
+    "queso": ("queso", "mozzarella", "cheddar", "ricotta", "requeson"),
+    "atun": ("atun",), "pavo": ("pavo",), "yogur": ("yogur", "yogurt"),
+    "lentejas": ("lenteja", "lentejas"), "garbanzos": ("garbanzo", "garbanzos"),
+    "habichuelas": ("habichuela", "habichuelas", "frijol", "frijoles"), "tofu": ("tofu",),
+    "camarones": ("camaron", "camarones"), "guandules": ("guandul", "guandules"),
+}
+
+
+def family_matches(family: str, candidate: str) -> bool:
+    """¿El nombre del pool pertenece a la familia programada? Por clase de alimento, no por raíz."""
+    if _matches(family, candidate):
+        return True
+    fam = _norm(family)
+    cand = _norm(candidate)
+    toks = _FAMILY_TOKENS.get(fam) or _FAMILY_TOKENS.get(_stem_word(fam)) or ()
+    words = {_stem_word(w) for w in cand.split()}
+    return any((" " in t and t in cand) or _stem_word(t) in words for t in toks)
+
+
+def _stem_word(t: str) -> str:
+    try:
+        from plan_policy import _stem
+        return _stem(t)
+    except Exception:
+        return t
+
+
 def apply_slice_to_seeder_pools(sl: dict, chosen: list, pool: list, *, days: int) -> list:
     """Proteína por día según la rebanada: para cada día busca en el pool del seeder un nombre
     que case con la familia programada; si no hay, conserva la elección del seeder. En modo
@@ -702,7 +740,7 @@ def apply_slice_to_seeder_pools(sl: dict, chosen: list, pool: list, *, days: int
             pick = None
             if fam:
                 for cand in pool:
-                    if _matches(fam, cand) and (routine or cand.lower() not in used):
+                    if family_matches(fam, cand) and (routine or cand.lower() not in used):
                         pick = cand
                         break
             if pick is None:
@@ -1092,7 +1130,7 @@ __all__ = [
     "build_blueprint", "blueprint_hash", "slice_for_chunk", "slice_hash", "chunk_input_hash",
     "persist_run_blueprint", "compiled_policy_for_form", "blueprint_for_plan", "effective_policy_for_plan",
     "inject_policy_into_pipeline_data", "attach_policy_to_swap_form",
-    "policy_prompt_block", "apply_slice_to_seeder_pools",
+    "policy_prompt_block", "apply_slice_to_seeder_pools", "family_matches",
     "fidelity_issues", "fidelity_report", "filter_variety_issues_for_policy", "exclude_anchors_from_fatigue",
     "rank_days_by_policy", "emit_fidelity_metric", "review_fidelity_gate",
     "shopping_projection_windows", "stamp_demand_windows", "enqueue_shopping_projection_job",
