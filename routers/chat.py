@@ -16,6 +16,7 @@ from db import (
     save_message, save_message_with_attachments, save_message_feedback, log_api_usage,
     get_model_response_id_for_regeneration, replace_model_response_for_regeneration,
     get_chat_attachment, build_chat_attachment_url, verify_chat_attachment_signature,
+    count_user_chat_sessions, CHAT_SESSIONS_PAGE_SIZE,
 )
 from memory_manager import build_memory_context, summarize_and_prune
 from agent import generate_chat_title_background, chat_with_agent, chat_with_agent_stream, LLMCircuitBreakerOpen, LLMRateLimitedError, strip_ui_action_tags_for_persist
@@ -306,7 +307,15 @@ def api_get_chat_attachment(
     )
 
 @router.get("/sessions/{user_id}")
-def api_get_chat_sessions(user_id: str, session_ids: Optional[str] = None, verified_user_id: Optional[str] = Depends(get_verified_user_id)):
+def api_get_chat_sessions(
+    user_id: str,
+    session_ids: Optional[str] = None,
+    offset: int = 0,
+    verified_user_id: Optional[str] = Depends(get_verified_user_id),
+):
+    # [P2-CHAT-SESSIONS-PAGING · 2026-09-03] `offset` pagina Recientes de 60 en 60 y
+    # `has_more` le dice al cliente si mostrar «Ver más». El invitado no pagina: lista
+    # sus ids (`session_ids`) y ya. Tooltip-anchor: P2-CHAT-SESSIONS-PAGING.
     try:
         # [P1-AUDIT-3 · 2026-05-12] Rechaza UUIDs malformados con 400 antes de SQL.
         assert_valid_uuid(user_id, allow_guest=True)
@@ -315,7 +324,11 @@ def api_get_chat_sessions(user_id: str, session_ids: Optional[str] = None, verif
             if not verified_user_id or verified_user_id != user_id:
                 raise HTTPException(status_code=403, detail="Prohibido.")
                 
-        sessions: list = get_user_chat_sessions(user_id) or []
+        _offset = max(0, min(int(offset or 0), 10_000))
+        sessions: list = get_user_chat_sessions(user_id, limit=CHAT_SESSIONS_PAGE_SIZE, offset=_offset) or []
+        has_more = False
+        if user_id and user_id != "guest":
+            has_more = count_user_chat_sessions(user_id) > _offset + CHAT_SESSIONS_PAGE_SIZE
         
         # Siempre leer los session_ids del frontend (localStorage) como capa de seguridad. 
         # Si la BD no tiene la columna user_id, los sessions de arriba regresan vacíos, pero aquí los recuperamos.
@@ -331,7 +344,7 @@ def api_get_chat_sessions(user_id: str, session_ids: Optional[str] = None, verif
         # Sort again by last_activity descending after merge
         sessions.sort(key=lambda x: x.get("last_activity") or x.get("created_at") or "1970-01-01T00:00:00", reverse=True)
             
-        return {"sessions": sessions}
+        return {"sessions": sessions, "has_more": has_more}
     except Exception as e:
         logger.error(f"❌ [ERROR] Error en /api/chat/sessions GET: {str(e)}")
         raise HTTPException(status_code=500, detail=safe_error_detail(e))
