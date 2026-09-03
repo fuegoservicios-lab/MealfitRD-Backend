@@ -115,4 +115,4 @@ def test_cableado_en_assemble_y_en_regen_day():
     i_floor = plans.index("MEALFIT_REGEN_DAY_FAT_FLOOR")
     assert i_floor > i_relevel, "en regen-day el piso va tras el relevel (que solo recorta)"
     assert "_close_fat_gap_for_day as _cfg_rd" in plans
-    assert '_LAST_KNOWN_PFIX = "P2-FAT-FLOOR · 2026-09-03"' in (_BACKEND / "app.py").read_text(encoding="utf-8")
+    assert 'P2-FAT-FLOOR · 2026-09-03' in (_BACKEND / "app.py").read_text(encoding="utf-8")

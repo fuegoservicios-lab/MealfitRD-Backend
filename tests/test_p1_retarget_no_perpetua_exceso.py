@@ -21,6 +21,12 @@ fuera de banda es incoherente.
 era impedir que un día degradado perpetuara su DÉFICIT, y eso sigue igual.
 
 tooltip-anchor: P1-RETARGET-NO-PERPETUA-EXCESO
+
+[P2-REGEN-DAY-RETARGET-TO-META · 2026-09-03] Secuela: el techo acotaba el OBJETIVO pero no el
+RESULTADO, y dentro de la banda el `max` seguía fijando el exceso: 8 actualizaciones seguidas
+subieron un día de 2390 a 2688 kcal (meta 2500). Ahora el objetivo ES la meta en ambas
+direcciones; el `max` + techo sobreviven solo bajo `MEALFIT_REGEN_DAY_RETARGET_TO_META=0`.
+Los asserts de abajo que hablaban del techo se ejecutan en ese modo legacy.
 """
 import os
 from unittest import mock
@@ -55,7 +61,9 @@ def test_un_dia_excedido_no_fija_su_exceso_como_objetivo():
         "el objetivo sigue siendo el exceso del día previo: el motor volverá a "
         "reproducirlo y el aviso volverá a culpar a la Nevera"
     )
-    assert obj == pytest.approx(META_PROT * 1.12, rel=1e-6)
+    assert obj == pytest.approx(META_PROT)  # [P2-REGEN-DAY-RETARGET-TO-META] la meta, ya no el techo
+    with mock.patch.dict(os.environ, {"MEALFIT_REGEN_DAY_RETARGET_TO_META": "0"}):
+        assert _objetivo(DIA_PREVIO_PROT, META_PROT) == pytest.approx(META_PROT * 1.12, rel=1e-6)  # legacy
 
 
 def test_el_dia_que_el_owner_vio_ya_no_dispara_el_aviso():
@@ -80,10 +88,15 @@ def test_un_dia_deficitario_sigue_subiendo_a_la_meta():
     assert _objetivo(0.0, META_PROT) == pytest.approx(META_PROT)
 
 
-def test_un_dia_ya_en_banda_no_se_toca():
-    """Dentro de la banda, el comportamiento es idéntico al de antes."""
+def test_un_dia_ya_en_banda_apunta_a_la_meta():
+    """[P2-REGEN-DAY-RETARGET-TO-META] Dentro de la banda TAMBIÉN se apunta a la meta:
+    perpetuar un exceso «pequeño» era exactamente la deriva (cada actualización adoptaba
+    el exceso de la anterior hasta el techo). En legacy, idéntico al de antes."""
     for suma in (123.0, 130.0, 137.0):
-        assert _objetivo(suma, META_PROT) == pytest.approx(max(suma, META_PROT))
+        assert _objetivo(suma, META_PROT) == pytest.approx(META_PROT)
+    with mock.patch.dict(os.environ, {"MEALFIT_REGEN_DAY_RETARGET_TO_META": "0"}):
+        for suma in (123.0, 130.0, 137.0):
+            assert _objetivo(suma, META_PROT) == pytest.approx(max(suma, META_PROT))
 
 
 # ------------------------------------------------- el knob
@@ -96,7 +109,8 @@ def test_el_default_es_la_banda_del_sistema():
 
 
 def test_rollback_a_cero_restaura_el_max_puro():
-    with mock.patch.dict(os.environ, {"MEALFIT_REGEN_DAY_RETARGET_BAND_CEILING": "0"}):
+    with mock.patch.dict(os.environ, {"MEALFIT_REGEN_DAY_RETARGET_BAND_CEILING": "0",
+                                      "MEALFIT_REGEN_DAY_RETARGET_TO_META": "0"}):
         assert rp._retarget_band_ceiling() == 0.0
         assert _objetivo(DIA_PREVIO_PROT, META_PROT) == pytest.approx(DIA_PREVIO_PROT)
 
@@ -139,4 +153,6 @@ def test_el_bucle_del_retarget_usa_el_helper():
 def test_el_helper_conserva_el_suelo_Y_el_techo():
     """Ambos lados, ejecutados. El suelo es la razón por la que el retarget existe."""
     assert _objetivo(50.0, META_PROT) == pytest.approx(META_PROT)          # suelo
-    assert _objetivo(999.0, META_PROT) == pytest.approx(META_PROT * 1.12)  # techo
+    assert _objetivo(999.0, META_PROT) == pytest.approx(META_PROT)         # [TO-META] la meta
+    with mock.patch.dict(os.environ, {"MEALFIT_REGEN_DAY_RETARGET_TO_META": "0"}):
+        assert _objetivo(999.0, META_PROT) == pytest.approx(META_PROT * 1.12)  # techo (legacy)

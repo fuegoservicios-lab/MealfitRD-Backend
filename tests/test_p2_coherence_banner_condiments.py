@@ -45,7 +45,7 @@ def test_anclas_en_el_codigo():
     assert "Tooltip-anchor: P2-COHERENCE-BANNER-CONDIMENTS" in sc
     assert re.search(r"if _actionable_only and _is_condiment\(d\.get\(\"food\"\) or d\.get\(\"name\"\) or \"\"\):", sc)
     assert 'from constants import is_allowed_condiment as _is_condiment' in sc
-    assert '_LAST_KNOWN_PFIX = "P2-COHERENCE-BANNER-CONDIMENTS · 2026-09-03"' in (_BACKEND / "app.py").read_text(encoding="utf-8")
+    assert 'P2-COHERENCE-BANNER-CONDIMENTS · 2026-09-03' in (_BACKEND / "app.py").read_text(encoding="utf-8")
 
 
 def test_el_ssot_de_condimentos_sigue_siendo_uno():

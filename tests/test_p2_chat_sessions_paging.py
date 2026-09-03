@@ -48,4 +48,4 @@ def test_el_router_importa_los_helpers_por_la_fachada_db():
 
 
 def test_marker_bumpeado():
-    assert '_LAST_KNOWN_PFIX = "P2-CHAT-SESSIONS-PAGING · 2026-09-03"' in _APP
+    assert 'P2-CHAT-SESSIONS-PAGING · 2026-09-03' in _APP

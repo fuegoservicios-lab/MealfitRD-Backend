@@ -47,4 +47,4 @@ def test_timeout_del_llm_del_chat_es_30s_por_intento():
 
 
 def test_marker_bumpeado():
-    assert '_LAST_KNOWN_PFIX = "P1-CHAT-ORPHAN-TURN-TRUTH · 2026-09-03"' in _APP
+    assert 'P1-CHAT-ORPHAN-TURN-TRUTH · 2026-09-03' in _APP

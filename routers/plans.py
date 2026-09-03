@@ -6453,9 +6453,26 @@ def _retarget_band_ceiling() -> float:
     return min(max(_v, 1.0), 3.0)
 
 
+def _retarget_to_meta_on() -> bool:
+    """[P2-REGEN-DAY-RETARGET-TO-META · 2026-09-03] Knob del retarget simétrico: con él
+    encendido (default) el objetivo de cada macro al regenerar un día ES la meta del perfil,
+    en ambas direcciones. `MEALFIT_REGEN_DAY_RETARGET_TO_META=0` restaura el `max(suma, meta)`
+    + techo de P1-RETARGET-NO-PERPETUA-EXCESO sin redeploy. tooltip-anchor: P2-REGEN-DAY-RETARGET-TO-META"""
+    return os.environ.get("MEALFIT_REGEN_DAY_RETARGET_TO_META", "true").strip().lower() in ("1", "true", "yes", "on")
+
+
 def _retarget_macro_target(suma_actual: float, meta: float) -> float:
-    """Objetivo de UN macro al regenerar un día: nunca por debajo de la meta, nunca por
-    encima de la banda aceptable.
+    """Objetivo de UN macro al regenerar un día: la meta del perfil.
+
+    [P2-REGEN-DAY-RETARGET-TO-META · 2026-09-03] La meta manda en AMBAS direcciones. El
+    `max(suma_actual, meta)` protegía el DÉFICIT, pero un día por ENCIMA de la meta se fijaba
+    a sí mismo como objetivo y cada actualización adoptaba el pequeño exceso de la anterior:
+    8 actualizaciones seguidas del dueño (2026-09-03) llevaron el día 1 de 2390 a 2688 kcal y
+    los carbos de 321 a 387 g contra una meta de 2500 kcal / 334 g. El techo de 1.12 acota
+    el OBJETIVO, no el resultado, y el band score se mide contra ese objetivo desplazado, así
+    que reportó 1.0 durante toda la deriva. Ahora el objetivo ES la meta; el suelo de
+    P1-REGEN-DAY-RETARGET se conserva (un día deficitario también sube a la meta). Sin meta
+    real (0/None) se queda con la suma actual, como antes del retarget.
 
     SSOT de la aritmética del retarget. Vive fuera del endpoint a propósito: dentro de
     `api_regenerate_day` (cientos de líneas, requiere plan + usuario + LLM) esta regla solo
@@ -6463,10 +6480,16 @@ def _retarget_macro_target(suma_actual: float, meta: float) -> float:
     algo está ESCRITO, no que se DECIDA así. Aquí se puede ejecutar con los números del
     caso real.
     """
-    _t = max(float(suma_actual or 0.0), float(meta or 0.0))
+    _cur = float(suma_actual or 0.0)
+    _meta = float(meta or 0.0)
+    if _meta <= 0:
+        return _cur  # fail-open: sin meta real, la suma actual (comportamiento previo al retarget)
+    if _retarget_to_meta_on():
+        return _meta
+    _t = max(_cur, _meta)
     _ceil = _retarget_band_ceiling()
-    if _ceil > 0 and meta and meta > 0:
-        _t = min(_t, float(meta) * _ceil)
+    if _ceil > 0:
+        _t = min(_t, _meta * _ceil)
     return _t
 
 
