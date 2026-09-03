@@ -4647,6 +4647,23 @@ _ALLOWED_CONDIMENTS_RES = [
 ]
 
 
+def is_allowed_condiment(name) -> bool:
+    """[P2-COHERENCE-BANNER-CONDIMENTS · 2026-09-03] ¿Es `name` un condimento del SSOT
+    (`_ALLOWED_CONDIMENTS`)? Minúsculas y sin acentos («Limón» → «limon», «Orégano» →
+    «oregano») para que la membresía no dependa de cómo lo escribió el modelo. Único
+    punto de verdad para «esto es un condimento» fuera de la despensa: NO copies la
+    tupla a otro sitio (lección P1-DIET-CANON-SSOT)."""
+    if not name:
+        return False
+    try:
+        import unicodedata
+        base = unicodedata.normalize("NFKD", str(name))
+        plain = "".join(ch for ch in base if not unicodedata.combining(ch)).lower()
+    except Exception:
+        plain = str(name).lower()
+    return any(rx.search(plain) for rx in _ALLOWED_CONDIMENTS_RES)
+
+
 # [P1-COUNTRY-CONDIMENT-PARITY-BETA · 2026-08-23] El catálogo cerrado de cada
 # país beta ofrece sazonadores locales que la lista DO de arriba no puede (ni
 # debe) convertir en globales. La membresía de país sigue viniendo del MISMO

@@ -7195,10 +7195,22 @@ def summarize_divergences_for_ui(divergences: list, max_items: int = 5) -> list:
     divergencias para post-mortem; este filtro es solo para el banner UI.
     Knob `MEALFIT_COHERENCE_BANNER_ACTIONABLE_ONLY` (default True) revierte sin
     redeploy. Tooltip-anchor: P1-COHERENCE-BANNER-NOISE.
+
+    [P2-COHERENCE-BANNER-CONDIMENTS · 2026-09-03] También se OMITEN del banner los
+    CONDIMENTOS (`constants.is_allowed_condiment`: ajo, sal, cilantro, orégano, limón…),
+    aunque su hipótesis sea «accionable». Su compra está acotada a propósito
+    (P1-SHOPLIST-SANITY-CAP / topes de hierbas) y se compra por envase (cabezas, mazos),
+    así que «Ajo: compra menor que la receta, 76 %» (el dueño, 2026-09-03) no es una
+    compra que el usuario deba ajustar a mano. Mismo knob para revertir; la telemetría
+    conserva todas las divergencias. Tooltip-anchor: P2-COHERENCE-BANNER-CONDIMENTS.
     """
     if not divergences:
         return []
     _actionable_only = _knob_env_bool("MEALFIT_COHERENCE_BANNER_ACTIONABLE_ONLY", True)
+    try:
+        from constants import is_allowed_condiment as _is_condiment
+    except Exception:  # pragma: no cover — sin SSOT no se filtra nada (fail-open al aviso)
+        _is_condiment = lambda _n: False
     _ACTIONABLE_HYPOTHESES = {
         "cap_swallowed_modifier", "pantry_overdeduct",
         "magnitude_undersupply",  # [P2-GUARD-UNDERSUPPLY-CANONICAL]
@@ -7207,6 +7219,8 @@ def summarize_divergences_for_ui(divergences: list, max_items: int = 5) -> list:
     for d in divergences:
         if not isinstance(d, dict):
             continue
+        if _actionable_only and _is_condiment(d.get("food") or d.get("name") or ""):
+            continue  # [P2-COHERENCE-BANNER-CONDIMENTS] compra acotada a propósito: no es accionable
         if _actionable_only and (d.get("hypothesis") or "unknown") not in _ACTIONABLE_HYPOTHESES:
             # Benigno/no-accionable (magnitud por unidad/yield/cap): fuera del banner.
             continue
