@@ -53,3 +53,19 @@ def test_claude_md_documents_the_exemption():
 
 def test_marker_present():
     assert "P2-LOADING-ETA-HONEST" in SRC
+
+def test_snapshot_runs_end_to_end_with_a_fake_db(monkeypatch):
+    """Funcional: el primer despliegue devolvia nulls por un NameError (execute_sql_query sin importar)
+    que el fail-open convirtio en «rango prudente» en la pantalla. Este test EJECUTA el snapshot."""
+    import db_core
+    rp = _rp()
+    monkeypatch.setattr(db_core, "execute_sql_query", lambda *a, **k: {"n": 35, "p50": 585.0, "p90": 913.0})
+    rp._GENERATION_ETA_CACHE["at"] = 0.0
+    rp._GENERATION_ETA_CACHE["value"] = None
+    out = rp._generation_eta_snapshot()
+    assert out == {"p50_s": 585, "p90_s": 913, "n": 35, "window_days": rp._GENERATION_ETA_WINDOW_DAYS}
+    # y la cache sirve la segunda lectura sin volver a la base
+    monkeypatch.setattr(db_core, "execute_sql_query", lambda *a, **k: (_ for _ in ()).throw(RuntimeError("no debe consultarse")))
+    assert rp._generation_eta_snapshot() == out
+    rp._GENERATION_ETA_CACHE["at"] = 0.0
+    rp._GENERATION_ETA_CACHE["value"] = None

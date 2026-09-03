@@ -5372,6 +5372,7 @@ def _generation_eta_from_row(row) -> dict:
 def _generation_eta_snapshot() -> dict:
     """p50/p90 del tiempo de pared del bloque 1 (cola) en la ventana, con cache en proceso."""
     import time as _time
+    from db_core import execute_sql_query  # import local (patrón del módulo); el fail-open ocultó el NameError en prod
     now = _time.time()
     cached = _GENERATION_ETA_CACHE.get("value")
     if cached is not None and now - float(_GENERATION_ETA_CACHE.get("at") or 0) < _GENERATION_ETA_TTL_S:
