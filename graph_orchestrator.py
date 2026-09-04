@@ -28,6 +28,20 @@ from pydantic import BaseModel, Field, create_model
 from tenacity import retry, stop_after_attempt, wait_exponential, before_sleep_log, retry_if_exception
 import logging
 import threading
+# [P2-LOGGER-MIGRATION · 2026-05-12] Logger SSOT del módulo. Tras audit
+# 2026-05-12 los 250 `print()` directos se convirtieron a `logger.<level>(...)`
+# (info/warning/error según emoji prefix ⚠/❌/🚨). Pre-fix los prints
+# escapaban del LogRecord pipeline: no respetaban `LOG_LEVEL`, mezclados con
+# trazas del scheduler, sin timestamp consistente del logging framework.
+# Production-grade backend NO usa print(). Anchor: P2-LOGGER-MIGRATION.
+logger = logging.getLogger(__name__)
+# [P0-ORCH-LOGGER-BOOT · 2026-09-04] Definido JUNTO al import, no 1.700 líneas más abajo:
+# el aviso de import de P2-ORCH-8 (`LLM_MAX_PER_USER < PLAN_CHUNK_SIZE`) llamaba a
+# `logger.warning` ANTES de que existiera el nombre. Con esa combinación de knobs el
+# módulo moría con NameError al importarse y `/ready` quedaba en 503 para siempre —
+# un cambio de configuración legítimo tumbaba el arranque entero. Lo cazó ruff (F821),
+# no la suite: ningún test ejercita esa rama de knobs.
+
 from db_plans import search_similar_plan
 
 # Mejora 1: Semaphore Distribuido Global para backpressure
@@ -1732,14 +1746,6 @@ from nutrition_calculator import get_nutrition_targets
 
 # P1-10: `threading` ya importado al inicio del módulo (línea ~16); no reimportar.
 #
-# [P2-LOGGER-MIGRATION · 2026-05-12] Logger SSOT del módulo. Tras audit
-# 2026-05-12 los 250 `print()` directos se convirtieron a `logger.<level>(...)`
-# (info/warning/error según emoji prefix ⚠/❌/🚨). Pre-fix los prints
-# escapaban del LogRecord pipeline: no respetaban `LOG_LEVEL`, mezclados con
-# trazas del scheduler, sin timestamp consistente del logging framework.
-# Production-grade backend NO usa print(). Anchor: P2-LOGGER-MIGRATION.
-logger = logging.getLogger(__name__)
-
 from cache_manager import redis_client, redis_async_client, get_redis_async
 from db_core import execute_sql_query, execute_sql_write, aexecute_sql_query, aexecute_sql_write
 

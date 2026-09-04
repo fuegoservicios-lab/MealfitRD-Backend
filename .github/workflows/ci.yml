@@ -108,6 +108,20 @@ jobs:
           token: ${{ secrets.SIBLING_REPO_TOKEN }}
           path: frontend
 
+      # [P0-CI-VERDICT · 2026-09-04] Emular la RAÍZ del workspace para lo que el backend SÍ
+      # versiona. Medido en el run 1451: 177 tests buscaban `migrations/` y 74 `CLAUDE.md` en
+      # `parents[2]` (la raíz del workspace de desarrollo, donde viven como copia SSOT de los
+      # ficheros del backend — P3-MIGRATIONS-SSOT) y morían con FileNotFoundError. Un enlace
+      # a la copia versionada hace que esos tests EJECUTEN contra el contenido real en vez de
+      # reventar por la disposición del runner. Lo que ningún repo versiona
+      # (`deploy-mealfit.ps1`, runbooks de memoria, `scratch/README.md`) NO se emula: el
+      # conftest lo salta con la razón visible.
+      - name: Emular la raíz del workspace (CLAUDE.md, migrations/)
+        run: |
+          ln -s backend/CLAUDE.md CLAUDE.md
+          ln -s backend/migrations migrations
+          echo "raíz emulada: CLAUDE.md -> backend/CLAUDE.md · migrations -> backend/migrations" >> "$GITHUB_STEP_SUMMARY"
+
       - name: Declarar si el frontend está o no (la degradación, visible)
         run: |
           if [ -d frontend/src ]; then
@@ -152,7 +166,10 @@ jobs:
           # verdad — los 400, incluido el P0 clínico de alérgenos. Las dos piezas se
           # complementan: el fixture es la degradación legible cuando falta el secret; el
           # checkout es lo único que hace que lleguen a ejecutarse en Actions alguna vez.
-          pytest tests/ -v --tb=short -m "not e2e"
+          # [P0-CI-VERDICT] `-rs`: los skips por artefacto ausente / catálogo vivo se listan
+          # agrupados por razón al final. Un verde con 1.000 skips se lee; sin esto se confunde
+          # con cobertura.
+          pytest tests/ -v --tb=short -m "not e2e" -rs
 
       # [P2-E2E-CATALOGO-PAIS-SIN-NINGUN-GATE · 2026-08-23] Sólo el fichero
       # read-only que contrasta el catálogo vivo. Nunca `-m e2e` sobre toda la
