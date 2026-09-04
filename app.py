@@ -46,7 +46,8 @@ _PROCESS_START_ISO = datetime.now(timezone.utc).isoformat()
 #   P2-CRITIQUE-RESPECTS-ROUTINE · 2026-09-04 — la autocrítica respeta la política de recurrencia.
 #   P1-CHUNK-T1-IDLE-TXN-180S · 2026-09-04 — tolerancia de inactividad del T1 a 180 s.
 #   P2-INGREDIENT-TRAILING-QTY · 2026-09-04 — «Nombre: 50 g» → «50 g de Nombre» en el validador.
-_LAST_KNOWN_PFIX = "P2-CRITIQUE-FIX-DESC-BACKFILL · 2026-09-04"
+#   P2-CRITIQUE-FIX-DESC-BACKFILL · 2026-09-04 — el corrector tolera `desc` ausente y la rellena.
+_LAST_KNOWN_PFIX = "P1-EAT-PLAN-MEAL-TRUTH · 2026-09-04"
 
 # [P1-SENTRY-SAMPLE-COST · 2026-05-12] Sentry sampling driven from env vars
 # con default seguro 0.1 (10%). Pre-fix tenía `traces_sample_rate=1.0` y

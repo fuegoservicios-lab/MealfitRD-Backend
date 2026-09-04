@@ -181,6 +181,16 @@ class ConsumedFromPlanRequest(BaseModel):
     model_config = {"extra": "ignore"}
 
 
+class PlanMealDeviationRequest(BaseModel):
+    """[P1-EAT-PLAN-MEAL-TRUTH · 2026-09-04] Coordenadas + motivo. Mismo contrato que
+    ConsumedFromPlanRequest: el cliente NUNCA manda contenido."""
+    plan_id: str = Field(..., min_length=1, max_length=64)
+    day_index: int = Field(..., ge=0, le=365)
+    meal_index: int = Field(..., ge=0, le=50)
+    reason: str = Field(..., pattern=r"^(ate_other|not_yet)$")
+    local_hour: Optional[int] = Field(default=None, ge=0, le=23)
+
+
 class ProgressRequest(BaseModel):
     """Payload para `POST /api/diary/progress` (weight tracking)."""
     user_id: Optional[str] = None
@@ -246,6 +256,11 @@ _DELETE_CONSUMED_LIMITER = RateLimiter(max_calls=20, period_seconds=60)
 # clase (mutación barata, anti-spam sin restringir uso legítimo: 5-6 comidas
 # al día están holgadamente dentro).
 _PLAN_MEAL_LIMITER = RateLimiter(max_calls=20, period_seconds=60)
+# [P1-EAT-PLAN-MEAL-TRUTH · 2026-09-04] vista previa de cobertura (SELECT + resolución de nombres,
+# cero escritura) y desvío declarado («comí otra cosa» / «todavía no»). Exentos de cuota como su
+# hermano: al cap el usuario no podría ni ANOTAR lo que come.
+_PLAN_MEAL_PREVIEW_LIMITER = RateLimiter(max_calls=30, period_seconds=60)
+_PLAN_MEAL_DEVIATION_LIMITER = RateLimiter(max_calls=20, period_seconds=60)
 
 # [P1-MANUAL-FOOD-LOG · 2026-08-11] Los cuatro writes/reads del registro manual son
 # cero costo LLM ⇒ quota-exempt con RateLimiter, la misma doctrina que las filas de
@@ -1156,6 +1171,128 @@ def api_log_consumed_meal_from_plan(
         raise
     except Exception as e:
         logger.error(f"❌ [ERROR] Error en /api/diary/consumed-from-plan: {str(e)}")
+        raise HTTPException(status_code=500, detail=safe_error_detail(e))
+
+
+@router.post("/consumed-from-plan/preview")
+def api_preview_consumed_meal_from_plan(
+    payload: ConsumedFromPlanRequest,
+    verified_user_id: Optional[str] = Depends(_PLAN_MEAL_PREVIEW_LIMITER),
+):
+    """[P1-EAT-PLAN-MEAL-TRUTH · 2026-09-04] ¿La Nevera explica este plato? Misma lectura
+    server-side del plato (coordenadas + `AND user_id = %s`, I2) y la MISMA resolución de
+    nombres que la resta real (`deduct_consumed_meal_from_inventory(dry_run=True)`), sin
+    escribir nada. El cliente decide con esto si pregunta «¿qué pasó?» antes de registrar.
+    Tooltip-anchor: P1-EAT-PLAN-MEAL-TRUTH-PREVIEW
+    """
+    try:
+        assert_valid_uuid(payload.plan_id)
+        if not verified_user_id:
+            raise HTTPException(status_code=403, detail="Prohibido.")
+        row = execute_sql_query(
+            "SELECT plan_data FROM meal_plans WHERE id = %s AND user_id = %s",
+            (payload.plan_id, verified_user_id),
+            fetch_one=True,
+        )
+        if not row:
+            raise HTTPException(status_code=404, detail="Plan no encontrado.")
+        plan_data = row.get("plan_data") or {}
+        if isinstance(plan_data, str):
+            try:
+                plan_data = json.loads(plan_data)
+            except Exception:
+                raise HTTPException(status_code=422, detail="El plan está corrupto.")
+        days = plan_data.get("days") or []
+        if not isinstance(days, list) or payload.day_index >= len(days):
+            raise HTTPException(status_code=404, detail="Ese día no existe en tu plan.")
+        meals = (days[payload.day_index] or {}).get("meals") or []
+        if not isinstance(meals, list) or payload.meal_index >= len(meals):
+            raise HTTPException(status_code=404, detail="Ese plato no existe en tu plan.")
+        meal = meals[payload.meal_index] or {}
+        ingredients = [
+            str(i) for i in (meal.get("ingredients") or [])
+            if i and len(str(i).strip()) >= 3
+        ]
+        summary = {}
+        if ingredients:
+            import db_inventory
+            summary = db_inventory.deduct_consumed_meal_from_inventory(
+                verified_user_id, ingredients, source="plan_meal_preview", dry_run=True,
+            ) or {}
+        present = list(summary.get("succeeded") or []) + list(summary.get("inferred") or [])
+        missing = list(summary.get("not_in_pantry") or [])
+        total = len(ingredients)
+        return {
+            "success": True,
+            "meal_name": str(meal.get("name") or "").strip(),
+            "meal_type": str(meal.get("meal") or "snack").strip().lower() or "snack",
+            "total": total,
+            "present": present,
+            "missing": missing,
+            "coverage": (len(present) / total) if total else 1.0,
+        }
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"❌ [ERROR] Error en /api/diary/consumed-from-plan/preview: {str(e)}")
+        raise HTTPException(status_code=500, detail=safe_error_detail(e))
+
+
+@router.post("/plan-meal-deviation")
+def api_plan_meal_deviation(
+    payload: PlanMealDeviationRequest,
+    verified_user_id: Optional[str] = Depends(_PLAN_MEAL_DEVIATION_LIMITER),
+):
+    """[P1-EAT-PLAN-MEAL-TRUTH · 2026-09-04] El usuario declara que NO comió el plato del plan
+    («comí otra cosa» / «todavía no»). Antes esa información se perdía: el registro entraba igual
+    y los descuentos fallidos se anotaban por dentro. Queda en `pipeline_metrics`
+    (node='plan_meal_deviation') como señal de adherencia real para el coach y el bloque
+    siguiente. Coordenadas + `AND user_id = %s`; el contenido (nombre, slot) sale del plan.
+    Tooltip-anchor: P1-EAT-PLAN-MEAL-TRUTH-DEVIATION
+    """
+    try:
+        assert_valid_uuid(payload.plan_id)
+        if not verified_user_id:
+            raise HTTPException(status_code=403, detail="Prohibido.")
+        row = execute_sql_query(
+            "SELECT plan_data FROM meal_plans WHERE id = %s AND user_id = %s",
+            (payload.plan_id, verified_user_id),
+            fetch_one=True,
+        )
+        if not row:
+            raise HTTPException(status_code=404, detail="Plan no encontrado.")
+        plan_data = row.get("plan_data") or {}
+        if isinstance(plan_data, str):
+            try:
+                plan_data = json.loads(plan_data)
+            except Exception:
+                plan_data = {}
+        days = plan_data.get("days") or []
+        meal = {}
+        if isinstance(days, list) and payload.day_index < len(days):
+            meals = (days[payload.day_index] or {}).get("meals") or []
+            if isinstance(meals, list) and payload.meal_index < len(meals):
+                meal = meals[payload.meal_index] or {}
+        meta = {
+            "plan_id": payload.plan_id,
+            "day_index": payload.day_index,
+            "meal_index": payload.meal_index,
+            "meal_name": str(meal.get("name") or "")[:120],
+            "meal_type": str(meal.get("meal") or "")[:32].lower(),
+            "reason": payload.reason,
+            "local_hour": payload.local_hour,
+        }
+        from db_core import execute_sql_write as _write
+        _write(
+            "INSERT INTO pipeline_metrics (user_id, session_id, node, duration_ms, retries, tokens_estimated, confidence, metadata) "
+            "VALUES (%s, %s, 'plan_meal_deviation', 0, 0, 0, 0, %s::jsonb)",
+            (verified_user_id, None, json.dumps(meta, ensure_ascii=False)),
+        )
+        return {"success": True, "reason": payload.reason, "meal_name": meta["meal_name"]}
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"❌ [ERROR] Error en /api/diary/plan-meal-deviation: {str(e)}")
         raise HTTPException(status_code=500, detail=safe_error_detail(e))
 
 

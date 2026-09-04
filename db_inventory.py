@@ -2380,6 +2380,7 @@ def deduct_consumed_meal_from_inventory(
     *,
     consumed_meal_id: Optional[str] = None,
     source: str = "unknown",
+    dry_run: bool = False,
 ):
     """
     Resta matemáticamente una lista de ingredientes crudos (los de una comida consumida)
@@ -2411,6 +2412,12 @@ def deduct_consumed_meal_from_inventory(
     `[P1-PANTRY-INFER]` con el item original y la porción inferida — útil
     para auditar qué items necesitan entry explícita en
     `_TYPICAL_PORTION_BY_NAME`.
+    [P1-EAT-PLAN-MEAL-TRUTH · 2026-09-04] `dry_run=True`: MISMA resolución de
+    nombres (SSOT `find_pantry_rows_for_name`) pero sin escribir nada — ni
+    restas, ni reservas, ni `failed_inventory_deductions`, ni ledger. Es la
+    vista previa de «Me lo comí»: `succeeded` = lo que la Nevera SÍ tiene,
+    `not_in_pantry` = lo que no. Con ella el cliente pregunta «¿qué pasó?»
+    antes de registrar un plato que la Nevera no explica.
     """
     if not _db_available() or not ingredients_list: return
 
@@ -2515,6 +2522,10 @@ def deduct_consumed_meal_from_inventory(
                 })
                 continue
 
+            if dry_run:  # [P1-EAT-PLAN-MEAL-TRUTH] vista previa: presente, sin tocar la Nevera
+                (inferred_strs if used_inference else succeeded_strs).append(str(item))
+                continue
+
             _consume_reserved_inventory(user_id, name, qty, unit)
             # Actualizar restando
             ok = add_or_update_inventory_item(user_id, name, -qty, unit, mutation_type="consumption")
@@ -2555,14 +2566,16 @@ def deduct_consumed_meal_from_inventory(
     # (la columna `ingredients` es jsonb array, mantenemos correlación entre
     # los items del mismo log_consumed_meal). Si la lista está vacía, no
     # hacemos round-trip a DB.
-    _persist_failed_inventory_deductions(user_id, failed_items)
+    if not dry_run:  # [P1-EAT-PLAN-MEAL-TRUTH] la vista previa no deja rastro
+        _persist_failed_inventory_deductions(user_id, failed_items)
 
     # [P1-CONSUMPTION-LEDGER · 2026-08-07] Rastro reversible. Best-effort a
     # propósito: si el ledger falla, el descuento YA ocurrió y negarlo sería
     # peor — el usuario perdería el registro calórico por un fallo de
     # auditoría. Lo que se pierde es la capacidad de deshacer ESE registro, y
     # eso se declara en el log en vez de tragárselo.
-    _persist_consumption_events(user_id, consumed_meal_id, source, ledger_events)
+    if not dry_run:  # [P1-EAT-PLAN-MEAL-TRUTH] la vista previa no deja rastro
+        _persist_consumption_events(user_id, consumed_meal_id, source, ledger_events)
 
     # [P1-AGENT-HINT · 2026-05-22] Retornar resumen para que el caller (típicamente
     # `tools.log_consumed_meal`) pueda enriquecer el ToolMessage con un hint a la
