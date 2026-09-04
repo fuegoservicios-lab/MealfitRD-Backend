@@ -45,7 +45,8 @@ def test_convert_amount_opt_in_converts_spices():
 
 def test_only_deduction_callers_opt_in():
     src = (BACKEND / "db_inventory.py").read_text(encoding="utf-8")
-    optin = re.findall(r"convert_amount\(quantity, unit, current_unit, master_item, spice_tsp=True\)", src)
+    # [P1-PANTRY-PACKAGE-GRAMS · 2026-09-04] la deducción pasa por el wrapper con envases; el opt-in sigue siendo UNO
+    optin = re.findall(r"convert_amount(?:_container)?\(quantity, unit, current_unit, master_item, spice_tsp=True\)", src)
     assert len(optin) == 1, "solo add_or_update_inventory_item (la deducción real) pide el fallback; las 2 reservas de chunks conservan skip-on-incompatible"
     j = src.find("def add_or_update_inventory_item(")
     assert src.find("spice_tsp=True)", j) != -1 and src.find("spice_tsp=True)", j) < j + 6000
