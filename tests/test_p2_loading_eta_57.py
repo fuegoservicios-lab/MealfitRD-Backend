@@ -53,13 +53,16 @@ def _load_frontend_sibling_sources(frontend_repo_path):
 
 # El rango que la pantalla promete HOY. Es lo único que hay que editar cuando el
 # owner vuelva a moverlo; todo lo demás de este fichero se deriva de aquí.
-_ETA_MIN, _ETA_MAX = 3, 6
+# [P2-LOADING-ETA-HONEST · 2026-09-03] El rango FIJO desapareció: la pantalla lee el p50/p90
+# real del bloque 1 y solo conserva UN literal, el fallback prudente cuando el ETA no llega
+# («Suele tardar entre 5 y 15 minutos»). Es el único rango que la copia promete a mano.
+_ETA_MIN, _ETA_MAX = 5, 15
 
 # Rangos que la pantalla prometió antes. Ninguno puede seguir vivo: dos copias
 # distintas del mismo dato en la misma pantalla es la forma en que el usuario lee
 # una y el contador le enseña otra.
 _RANGOS_RETIRADOS = ("4 y 5 minutos", "4-5 minutos", "5 y 7 minutos", "5-7 minutos",
-                     "9 y 10 minutos", "9-10 minutos")
+                     "9 y 10 minutos", "9-10 minutos", "3 y 6 minutos", "3-6 minutos")
 
 
 def test_el_rango_vivo_es_el_que_el_owner_decidio():
@@ -68,9 +71,14 @@ def test_el_rango_vivo_es_el_que_el_owner_decidio():
         "movió el rango, actualiza `_ETA_MIN`/`_ETA_MAX` arriba y añade el rango "
         "anterior a `_RANGOS_RETIRADOS`."
     )
-    assert f"estimado {_ETA_MIN}-{_ETA_MAX} minutos" in _PLAN, (
-        "El contador y la copia inicial anuncian rangos distintos. Es el mismo dato "
-        "en dos frases: el usuario lee una y luego ve la otra."
+    # [P2-LOADING-ETA-HONEST] el contador ya NO repite un rango a mano: cuando llega el ETA
+    # real, las frases interpolan `{p50}`/`{p90}` — un solo dato, cero copias.
+    assert "estimado " not in _PLAN.split("const timeMessage")[1][:1200], (
+        "El contador volvió a anunciar un rango escrito a mano junto a la copia inicial. "
+        "Es el mismo dato en dos frases: el usuario lee una y luego ve la otra."
+    )
+    assert "{p50}" in _PLAN and "{p90}" in _PLAN, (
+        "Las frases con ETA real deben interpolar p50/p90 del backend, no cifras fijas."
     )
     for viejo in _RANGOS_RETIRADOS:
         assert viejo not in _PLAN, (
@@ -88,20 +96,24 @@ def test_los_umbrales_no_contradicen_al_estimado():
     aquí había un `10 * 60` literal que sobrevivió a dos cambios de rango.
     """
     i = _PLAN.index("const timeMessage")
-    win = _PLAN[i:i + 800]
+    win = _PLAN[i:i + 1200]
 
-    umbrales = [int(m) for m in re.findall(r"elapsedSec < (\d+) \* 60", win)]
-    assert len(umbrales) >= 2, (
-        f"Esperaba al menos dos umbrales `elapsedSec < N * 60` en `timeMessage`; "
-        f"encontré {umbrales}. Si cambió la forma, enséñasela a este test."
+    # [P2-LOADING-ETA-HONEST · 2026-09-03] Los umbrales ya no son literales: se DERIVAN del
+    # mismo ETA que la copia enseña (p50 y p90 del bloque 1), así que no pueden contradecirla
+    # por construcción. Lo que se ancla ahora es exactamente eso: ninguna cifra a mano en las
+    # bandas, y las dos marcas presentes (primero el p50, después el p90 vía `pastP90`).
+    literales = [int(m) for m in re.findall(r"elapsedSec < (\d+) \* 60", win)]
+    assert literales == [], (
+        f"Volvió un umbral escrito a mano ({literales}) en `timeMessage`. Las bandas se "
+        "derivan de `etaMin.p50`/`etaMin.p90`; una cifra fija se desincroniza del ETA real."
     )
-    assert umbrales == sorted(umbrales), (
-        f"Los umbrales no son crecientes ({umbrales}): las bandas se pisan y el "
-        "mensaje de la banda alta no se muestra nunca."
+    assert "elapsedSec < etaMin.p50 * 60" in win, (
+        "Esperaba la banda derivada del p50 (`elapsedSec < etaMin.p50 * 60`) en `timeMessage`. "
+        "Si cambió la forma, enséñasela a este test."
     )
-    assert umbrales[0] >= _ETA_MAX, (
-        f"«Ya casi terminamos» arranca a los {umbrales[0]} min, DENTRO del estimado de "
-        f"{_ETA_MIN}-{_ETA_MAX}. La pantalla se contradice a sí misma."
+    assert "elapsedSec >= etaMin.p90 * 60" in _PLAN and "pastP90" in win, (
+        "La banda del p90 (`pastP90 = elapsedSec >= etaMin.p90 * 60`) debe existir y usarse "
+        "en `timeMessage` después de la del p50."
     )
 
 

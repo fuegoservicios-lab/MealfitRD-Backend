@@ -32,6 +32,8 @@ import json
 import re
 from pathlib import Path
 
+import pytest
+
 _BACKEND = Path(__file__).resolve().parent.parent
 _ROOT = _BACKEND.parent
 _GATE = _ROOT / "scripts" / "run_ci.ps1"

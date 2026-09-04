@@ -58,8 +58,12 @@ _LABEL_CANCELAR = r"(?:Cancelar|\{\s*t\(\s*['\"]Cancelar['\"]\s*\)\s*\})"
 
 def test_marker_stamped_in_loading_screen():
     text = _read_plan()
-    assert "P3-LOADING-PREMIUM-REDESIGN" in text, (
-        "Falta el marker `P3-LOADING-PREMIUM-REDESIGN` en Plan.jsx. "
+    # [P2-LOADING-ONE-STROKE · 2026-09-03] El rediseño «un solo trazo» SUPERSEDE al premium
+    # minimalista de mayo (halo/cometa/insignias fuera; un círculo fino con el progreso real
+    # y las 3 marcas de día en el propio arco). El marker vivo es el del rediseño; este
+    # test anclaba el literal anterior y llevaba en rojo desde ese commit.
+    assert "P2-LOADING-ONE-STROKE" in text, (
+        "Falta el marker `P2-LOADING-ONE-STROKE` en Plan.jsx. "
         "Si alguien refactoriza el LoadingScreen y no preserva el marker, "
         "perdemos trazabilidad."
     )
@@ -88,7 +92,10 @@ def test_new_minimalist_surfaces_present():
     new_surfaces = [
         ("Diseñando tu plan", "título nuevo minimalista"),
         ("mf-pulse", "animación del dot central"),
-        ("mf-spin", "animación del ring delgado"),
+        # [P2-LOADING-ONE-STROKE] `mf-spin` (ring giratorio) salió con el rediseño: el anillo es
+        # ahora un trazo de progreso REAL (`mf-arc`) sobre una pista fina (`mf-track`).
+        ("mf-arc", "trazo del progreso real (un solo trazo)"),
+        ("mf-track", "pista fina del anillo"),
         # [P3-LOADING-PALETTE-ALIGN · 2026-05-16] el radial pasó de #14141a a
         # slate #1E293B; [LOADING-DARK-BG · 2026-05-31] el fondo se movió del
         # inline a la clase .mf-loading-bg en el bloque <style> (ver test

@@ -36,11 +36,15 @@ def test_progress_bar_removed():
 
 
 def test_percentage_display_removed():
-    """El texto `{Math.round(displayProgress)}%` debe estar removido."""
+    """[SUPERSEDED · P2-LOADING-ONE-STROKE · 2026-09-03] El porcentaje VOLVIÓ a propósito: el
+    dueño rechazó el anillo de capas («tosco, genérico») y el rediseño hace del número el
+    protagonista tipográfico (`.mf-num`), con el progreso real dibujado como un solo trazo.
+    Lo que este guard protege ahora es que el número viva en el héroe (no en una barra) y
+    que la hairline bar siga fuera (test de arriba)."""
     text = _read()
-    assert "Math.round(displayProgress)" not in text, (
-        "P3-PLAN-FLOW-MINIMALIST: el porcentaje numérico (`{Math.round(displayProgress)}%`) "
-        "debe estar removido. El usuario no debe ver progreso numérico."
+    assert re.search(r'className="mf-num">\{Math\.round\(displayProgress\)\}', text), (
+        "P2-LOADING-ONE-STROKE: el porcentaje debe renderizarse como número del héroe "
+        "(`<span className=\"mf-num\">{Math.round(displayProgress)}</span>`)."
     )
 
 
