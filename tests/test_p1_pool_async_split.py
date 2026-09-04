@@ -85,9 +85,15 @@ def test_async_pool_timeout_knob_exists():
     )
     assert m, "Falta `MEALFIT_DB_ASYNC_POOL_TIMEOUT_S` definido con `_float_env`."
     default = float(m.group(1))
-    assert default >= 15.0, (
-        f"Default TIMEOUT={default}s < 15s: queries async (cache + CB resets) "
-        f"bajo carga pueden necesitar más colchón."
+    # [P1-POOL-DEFAULTS-SSOT · 2026-09-04] El default de CÓDIGO pasa a ser el valor VIVO
+    # afinado: 12 s (P1-BESTEFFORT-DB-CB, 05-21 — el fail-fast lo hace el BestEffortDBCB tras
+    # 3 timeouts, no un timeout largo; con 20 s cada best-effort bloqueado gastaba wall-clock
+    # del plan). El «≥15 s de colchón» de P1-POOL-ASYNC-SPLIT (05-16) quedó superseded por esa
+    # decisión posterior; el suelo que sigue teniendo sentido es no volver a los 8 s de
+    # P0-POOL-FREETIER-RETUNE, que rompían best-effort writes legítimos.
+    assert default >= 12.0, (
+        f"Default TIMEOUT={default}s < 12s: queries async (cache + CB resets) "
+        f"bajo carga pueden necesitar más colchón (P1-BESTEFFORT-DB-CB fijó 12 s)."
     )
 
 

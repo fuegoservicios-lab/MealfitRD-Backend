@@ -4377,7 +4377,9 @@ def test_f8_pool_init_no_fija_timezone_explicito():
     en el default del servidor" para ser una decisión explícita, y merece su propia revisión)."""
     src = (_BACKEND / "db_core.py").read_text(encoding="utf-8")
     ini = src.index("def get_client_kwargs")
-    fin = src.index("\n        def configure_sync_conn", ini)
+    # [P1-DBCORE-CONFIGURE-HOIST] los configuradores ya viven a nivel de módulo; el cuerpo de
+    # `get_client_kwargs` termina donde empieza la construcción del pool.
+    fin = src.index("\n        connection_pool = ConnectionPool(", ini)
     cuerpo = src[ini:fin]
     assert "TimeZone" not in cuerpo and "TIME ZONE" not in cuerpo, (
         "get_client_kwargs ahora fija TimeZone explícitamente — actualiza el comentario del test "
