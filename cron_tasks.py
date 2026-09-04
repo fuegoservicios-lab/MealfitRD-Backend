@@ -447,6 +447,12 @@ _P0_5_LESSON_KEY_ALLOWLIST = frozenset({
     '_learning_window_starved',         # form_data flag
     # Inyección transitoria al prompt LLM (form_data/snapshot, no plan_data atómico):
     '_chunk_lessons',
+    # [P3-LESSON-KEY-INHERITED-FROM · 2026-09-04] Provenance de la herencia: `db_plans` estampa
+    # `plan_data._lifetime_lessons_inherited_from = <plan_id previo>` al crear el plan (línea
+    # ~1051). No es una lección ni cambia con los chunks: solo dice DE DÓNDE vinieron. Sin
+    # declararla, el invariante P0-5 logueaba ERROR en cada bloque ≥2 de todo plan heredero
+    # (visto en el bloque 2 del plan e45e649c del dueño).
+    '_lifetime_lessons_inherited_from',
     # Lecciones heredadas de plan previo: viaja en `snap` (snapshot transport) y se
     # copia a `plan_data._lifetime_lessons_*` (que SÍ están en deferred). El campo
     # `_inherited_lifetime_lessons` mismo no se persiste, sólo se consume.
