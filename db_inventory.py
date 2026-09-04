@@ -768,24 +768,62 @@ def _spice_unit_as_teaspoon(master_item: dict, name_lower: str) -> float | None:
 _CONTAINER_UNITS = frozenset({"paquete", "bolsa", "botella", "caja", "lata", "pote", "sobre", "tetra", "jarra", "mazo"})
 
 
-def _container_grams(master_item: dict, unit: str) -> Optional[float]:
-    """Gramos de UN envase `unit` según el maestro. Orden: entrada de `market_packages` con esa
-    unidad → única entrada con gramos → la más pequeña (conservador: descuenta más envases, nunca
-    menos) → `density_g_per_unit` si el envase es la `default_unit` del alimento. None si no hay dato."""
-    if not master_item or not unit:
+_SIZE_LABEL_RE = re.compile(r"(\d+(?:[.,]\d+)?)\s*(kg|kilo|kilos|g|gr|gramos|lb|lbs|libra|libras|oz|onzas|ml|l|litro|litros)\b", re.I)
+_UNITS_IN_CONTAINER_RE = re.compile(r"\(\s*(\d+)\s*(?:uds?\.?|unid(?:ades)?\.?|u\.?)\s*\)", re.I)
+# Solo piezas ENTERAS cuentan contra el «(N uds.)» del envase: un diente o una rebanada son
+# sub-piezas (1 diente ≠ 1/4 de un paquete de 4 cabezas) y van por gramos o no van.
+_COUNT_UNITS_FOR_CONTAINERS = frozenset({"unidad", "unidades", "cabeza", "cabezas"})
+
+
+def _grams_from_label(label) -> Optional[float]:
+    """«1 Lb» → 453.6, «450 g» → 450, «1.96 kg» → 1960, «250 ml»/«1L» → ml≈g. None si no hay tamaño."""
+    m = _SIZE_LABEL_RE.search(str(label or ""))
+    if not m:
         return None
     try:
+        v = float(m.group(1).replace(",", "."))
+    except ValueError:
+        return None
+    u = m.group(2).lower()
+    if u in ("kg", "kilo", "kilos"):
+        return v * 1000.0
+    if u in ("lb", "lbs", "libra", "libras"):
+        return v * 453.592
+    if u in ("oz", "onzas"):
+        return v * 28.3495
+    if u in ("l", "litro", "litros"):
+        return v * 1000.0
+    return v
+
+
+def _split_container_unit(unit) -> tuple:
+    """«paquete (4 uds.)» → ('paquete', 4); «cartón (30 uds.)» → ('paquete', 30); «pote» → ('pote', None).
+    El restock guarda a veces el conteo del envase DENTRO de la unidad; aquí se separa."""
+    raw = str(unit or "").strip()
+    n = None
+    m = _UNITS_IN_CONTAINER_RE.search(raw)
+    if m:
+        try:
+            n = int(m.group(1))
+        except ValueError:
+            n = None
+        raw = raw[:m.start()].strip()
+    try:
         from canonical_units import canonicalize_unit
-        u = canonicalize_unit(unit) or str(unit).strip().lower()
+        base = canonicalize_unit(raw) or raw.lower()
     except Exception:
-        u = str(unit).strip().lower()
-    pkgs = master_item.get("market_packages")
+        base = raw.lower()
+    return base, n
+
+
+def _package_entries(master_item: dict) -> list:
+    pkgs = (master_item or {}).get("market_packages")
     if isinstance(pkgs, str):
         try:
             pkgs = json.loads(pkgs)
         except Exception:
             pkgs = None
-    entries = []
+    out = []
     for e in (pkgs or []):
         if not isinstance(e, dict):
             continue
@@ -793,50 +831,104 @@ def _container_grams(master_item: dict, unit: str) -> Optional[float]:
             g = float(e.get("grams") or 0)
         except (TypeError, ValueError):
             g = 0.0
-        if g > 0:
-            entries.append((str(e.get("unit") or "").strip().lower(), g))
-    same = [g for eu, g in entries if eu and (eu == u or (canonicalize_unit(eu) if 'canonicalize_unit' in dir() else eu) == u)]
+        if g <= 0:
+            g = _grams_from_label(e.get("label")) or 0.0
+        try:
+            n = int(e.get("units") or 0)
+        except (TypeError, ValueError):
+            n = 0
+        eu = str(e.get("unit") or "").strip().lower()
+        try:
+            from canonical_units import canonicalize_unit
+            eu = canonicalize_unit(eu) or eu
+        except Exception:
+            pass
+        out.append((eu, g, n))
+    return out
+
+
+def _container_units(master_item: dict, unit: str) -> Optional[int]:
+    """Cuántas piezas trae UN envase `unit` según el maestro (`units` de market_packages)."""
+    entries = [(eu, n) for eu, _g, n in _package_entries(master_item) if n > 0]
+    if not entries:
+        return None
+    same = [n for eu, n in entries if eu and eu == unit]
     if same:
         return min(same)
-    if len(entries) == 1:
-        return entries[0][1]
-    if entries:
-        return min(g for _eu, g in entries)
-    if str(master_item.get("default_unit") or "").strip().lower() == u:
-        try:
-            g = float(master_item.get("density_g_per_unit") or 0)
-        except (TypeError, ValueError):
-            g = 0.0
+    return min(n for _eu, n in entries)
+
+
+def _container_grams(master_item: dict, unit: str) -> Optional[float]:
+    """Gramos de UN envase `unit` según el maestro. Orden: entrada de `market_packages` con esa
+    unidad → única entrada → la más pequeña (conservador: descuenta más envases, nunca menos);
+    los tamaños salen de `grams`, de la etiqueta («1 Lb», «450 g») o de `units` × peso unitario;
+    luego `density_g_per_unit` si el envase es la `default_unit` del alimento (Cilantro: 1 mazo =
+    50 g); y por último, si el envase no tiene dato pero el alimento se compra por defecto en
+    masa/volumen (lb, kg, litro), UN envase = una unidad de eso (la lista escribe «1 paquete
+    (1 lb) de Pechuga», «1 cartón (1L) de Leche»). None si no hay nada que sostenga un número."""
+    if not master_item or not unit:
+        return None
+    base, _n = _split_container_unit(unit)
+    try:
+        ug = float(master_item.get("density_g_per_unit") or 0)
+    except (TypeError, ValueError):
+        ug = 0.0
+    sized = []
+    for eu, g, n in _package_entries(master_item):
+        if g <= 0 and n > 0 and ug > 0:
+            g = n * ug
         if g > 0:
-            return g
+            sized.append((eu, g))
+    same = [g for eu, g in sized if eu and eu == base]
+    if same:
+        return min(same)
+    if len(sized) == 1:
+        return sized[0][1]
+    if sized:
+        return min(g for _eu, g in sized)
+    default = str(master_item.get("default_unit") or "").strip().lower()
+    try:
+        from canonical_units import canonicalize_unit
+        default = canonicalize_unit(default) or default
+    except Exception:
+        pass
+    if default == base and ug > 0:
+        return ug
+    _one_default = {"lb": 453.592, "kg": 1000.0, "l": 1000.0, "litro": 1000.0}
+    if default in _one_default and base in _CONTAINER_UNITS:
+        return _one_default[default]
     return None
 
 
 def convert_amount_container(qty: float, from_unit: str, to_unit: str, master_item: dict, *, spice_tsp: bool = False) -> Optional[float]:
-    """`convert_amount` + envases: si una de las dos unidades es un envase con gramos conocidos, pasa
-    por gramos. Devuelve None cuando ni el conversor ni el maestro saben el tamaño."""
+    """`convert_amount` + envases: si una de las dos unidades es un envase, pasa por piezas (cuando
+    la receta cuenta unidades y el envase trae «(N uds.)» o `units`) o por gramos. Devuelve None
+    cuando ni el conversor ni el maestro saben el tamaño."""
     direct = convert_amount(qty, from_unit, to_unit, master_item, spice_tsp=spice_tsp)
     if direct is not None:
         return direct
-    f = str(from_unit or "").strip().lower()
-    t = str(to_unit or "").strip().lower()
-    try:
-        from canonical_units import canonicalize_unit
-        f = canonicalize_unit(f) or f
-        t = canonicalize_unit(t) or t
-    except Exception:
-        pass
-    if t in _CONTAINER_UNITS and f not in _CONTAINER_UNITS:
-        pkg_g = _container_grams(master_item, t)
+    f_base, f_n = _split_container_unit(from_unit)
+    t_base, t_n = _split_container_unit(to_unit)
+    f_is_c, t_is_c = f_base in _CONTAINER_UNITS, t_base in _CONTAINER_UNITS
+    if t_is_c and not f_is_c:
+        if f_base in _COUNT_UNITS_FOR_CONTAINERS:
+            n = t_n or _container_units(master_item, t_base)
+            if n:
+                return qty / n
+        pkg_g = _container_grams(master_item, to_unit)
         grams = convert_amount(qty, from_unit, "g", master_item, spice_tsp=spice_tsp)
         if pkg_g and grams is not None:
             return grams / pkg_g
-    elif f in _CONTAINER_UNITS and t not in _CONTAINER_UNITS:
-        pkg_g = _container_grams(master_item, f)
+    elif f_is_c and not t_is_c:
+        if t_base in _COUNT_UNITS_FOR_CONTAINERS:
+            n = f_n or _container_units(master_item, f_base)
+            if n:
+                return qty * n
+        pkg_g = _container_grams(master_item, from_unit)
         if pkg_g:
             return convert_amount(qty * pkg_g, "g", to_unit, master_item, spice_tsp=spice_tsp)
-    elif f in _CONTAINER_UNITS and t in _CONTAINER_UNITS:
-        pf, pt = _container_grams(master_item, f), _container_grams(master_item, t)
+    elif f_is_c and t_is_c:
+        pf, pt = _container_grams(master_item, from_unit), _container_grams(master_item, to_unit)
         if pf and pt:
             return qty * pf / pt
     return None

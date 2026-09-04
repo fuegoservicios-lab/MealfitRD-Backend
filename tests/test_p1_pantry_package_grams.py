@@ -49,6 +49,34 @@ def test_recipe_units_deduct_from_container_rows():
     assert inv.convert_amount_container(1, "lb", "g", CALAMAR) == 453.592
 
 
+HUEVO = {"name": "Huevo", "default_unit": "cartón", "density_g_per_unit": 50, "density_g_per_cup": 243,
+         "market_packages": [{"label": "cartón 20 uds", "units": 20}, {"label": "cartón 30 uds", "units": 30}]}
+PECHUGA = {"name": "Pechuga de pollo", "default_unit": "lb", "density_g_per_unit": 170, "market_packages": None}
+LECHE = {"name": "Leche descremada", "default_unit": "litro", "density_g_per_cup": 244, "market_packages": None}
+ARROZ = {"name": "Arroz blanco", "default_unit": "lb", "market_packages": [{"label": "Selecto 1 Lb", "price": 45}]}
+
+
+def test_second_pass_counts_labels_and_default_unit_fallbacks():
+    # «cartón (30 uds.)» guardado por el restock + receta «2 huevos» → 2/30 cartones
+    assert round(inv.convert_amount_container(2, "unidad", "cartón (30 uds.)", HUEVO), 4) == round(2 / 30, 4)
+    # sin conteo en la unidad: units de market_packages (el menor, 20)
+    assert round(inv.convert_amount_container(2, "unidad", "paquete", HUEVO), 4) == round(2 / 20, 4)
+    # etiqueta con tamaño y sin grams: «Selecto 1 Lb» → 453.6 g
+    assert round(inv.convert_amount_container(60, "g", "paquete", ARROZ), 4) == round(60 / 453.592, 4)
+    # sin datos de envase pero el alimento se compra por defecto en lb / litro: 1 envase = 1 lb / 1 L
+    assert round(inv.convert_amount_container(150, "g", "paquete", PECHUGA), 4) == round(150 / 453.592, 4)
+    assert round(inv.convert_amount_container(1, "taza", "paquete", LECHE), 4) == round(240 / 1000, 4)
+    # un diente es una sub-pieza: NO cuenta contra «(4 uds.)» (sería 1/4 del paquete por diente) y sin
+    # gramos por envase no se inventa → None
+    AJO = {"name": "Ajo", "default_unit": "cabeza", "density_g_per_unit": 5, "market_packages": [{"label": "4 cabezas", "units": 4}]}
+    assert inv.convert_amount_container(1, "diente", "paquete (4 uds.)", AJO) is None
+    assert inv.convert_amount_container(1, "cabeza", "paquete (4 uds.)", AJO) == 0.25
+    assert inv._grams_from_label("1.96 kg") == 1960.0 and inv._grams_from_label("250 ml") == 250.0 and inv._grams_from_label("Wala") is None
+    assert inv._split_container_unit("paquete (4 uds.)") == ("paquete", 4)
+    assert inv._split_container_unit("cartón (30 uds.)") == ("paquete", 30)
+    assert inv._split_container_unit("pote") == ("pote", None)
+
+
 def test_both_deduction_sites_use_the_container_aware_converter():
     src = (_BACKEND / "db_inventory.py").read_text(encoding="utf-8")
     # reserva, liberación de reserva y consumo: los tres sitios donde una receta se resta de una fila
