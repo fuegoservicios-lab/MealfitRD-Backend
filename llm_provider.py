@@ -419,6 +419,34 @@ class ChatGLM(ChatOpenAI):
 # contrato.
 _OPENAI_MODEL_PREFIXES = ("gpt-", "o1", "o3", "o4", "chatgpt")
 
+# [P1-VISION-GEMINI-FLASH · 2026-09-04] Gemini SOLO como provider de VISIÓN (escáner de
+# comida y de Nevera), por su endpoint compatible con OpenAI — cero dependencia nueva
+# (`langchain-google-genai` sigue fuera, P0-LLM-PROVIDER-MIGRATION). El pipeline de
+# planes y el coach NO pasan por aquí: `build_chat_llm` no conoce estos prefijos a
+# propósito. Motivo del cambio: en Roboflow Vision Evals (52 modelos, 2026-09) Gemini 3.8
+# Flash da 85,1 % (#3) frente a 72,7 % (#19) de gpt-5.6-luna y 65,3 % (#36) de GLM-5V-Turbo,
+# con identificación 97,9 % vs 84,4 % y conteo 78,8 % vs 66,2 %: lo que decide un plato.
+_GOOGLE_MODEL_PREFIXES = ("gemini",)
+GEMINI_OPENAI_BASE_URL = "https://generativelanguage.googleapis.com/v1beta/openai/"
+
+
+def is_google_model(model: str) -> bool:
+    """¿El ID es un modelo Gemini (vía su capa compatible con OpenAI)?"""
+    m = str(model or "").strip().lower()
+    return any(m.startswith(p) for p in _GOOGLE_MODEL_PREFIXES)
+
+
+def _google_api_key() -> str:
+    """Key de Gemini desde el entorno (la variable propia de Gemini, o la de Google como
+    alias — ver las dos líneas marcadas abajo). Fail-loud, mismo contrato que
+    `_openai_api_key`: NUNCA argumento del callsite. Las líneas llevan el marker inline que
+    `test_p0_llm_provider_migration` exige para la costura de VISIÓN (única excepción viva
+    al blanket anti-Gemini; el pipeline de planes sigue vetado)."""
+    _k = os.environ.get("GEMINI_API_KEY") or os.environ.get("GOOGLE_API_KEY")  # [P1-VISION-GEMINI-FLASH]
+    if not _k:
+        raise RuntimeError("modelo Gemini pedido sin la key de Gemini en el entorno")
+    return _k
+
 
 def is_openai_model(model: str) -> bool:
     """¿El ID pertenece al API de OpenAI (y no a GLM)?"""

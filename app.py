@@ -49,7 +49,7 @@ _PROCESS_START_ISO = datetime.now(timezone.utc).isoformat()
 #   P2-CRITIQUE-FIX-DESC-BACKFILL · 2026-09-04 — el corrector tolera `desc` ausente y la rellena.
 #   P1-EAT-PLAN-MEAL-TRUTH · 2026-09-04 — «Me lo comí» contrasta hora y Nevera; preview + desvío.
 #   P1-PANTRY-PACKAGE-GRAMS · 2026-09-04 — la Nevera en envases se descuenta con recetas en gramos.
-_LAST_KNOWN_PFIX = "P1-DIARY-FREETEXT-ESTIMATE · 2026-09-04"
+_LAST_KNOWN_PFIX = "P1-VISION-GEMINI-FLASH · 2026-09-04"
 
 # [P1-SENTRY-SAMPLE-COST · 2026-05-12] Sentry sampling driven from env vars
 # con default seguro 0.1 (10%). Pre-fix tenía `traces_sample_rate=1.0` y

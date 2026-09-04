@@ -84,16 +84,29 @@ _BANNED_CODE_PATTERNS = (
     "'gemini-",
 )
 
+# [P1-VISION-GEMINI-FLASH · 2026-09-04] Gemini 3.8 Flash vuelve SOLO como provider del
+# escáner de fotos, por la capa compatible con OpenAI (cero SDK de Google). La única
+# exención del blanket: una línea que lleve el marker inline `[P1-VISION-GEMINI-FLASH]`
+# puede nombrar la key de Gemini o un id `gemini-…`. Los imports del SDK y los
+# constructores `ChatGoogleGenerativeAI(...)` siguen vetados en TODAS partes, con o sin
+# marker — el pipeline de planes y el coach no vuelven a Gemini.
+_VISION_SEAM_EXEMPTABLE = {"GEMINI_API_KEY", '"gemini-', "'gemini-"}
+_VISION_SEAM_MARKER = "[P1-VISION-GEMINI-FLASH]"
+
 
 def test_a_blanket_no_gemini_in_prod_code():
     """A. Ninguna construcción Gemini viva en código productivo."""
     violations = []
     for p in _prod_py_files():
-        src = _strip_comments(p.read_text(encoding="utf-8"))
+        raw = p.read_text(encoding="utf-8")
+        raw_lines = raw.splitlines()
+        src = _strip_comments(raw)
         for pat in _BANNED_CODE_PATTERNS:
             for m in re.finditer(re.escape(pat), src):
                 line_no = src.count("\n", 0, m.start()) + 1
                 line = src.splitlines()[line_no - 1].strip()
+                if pat in _VISION_SEAM_EXEMPTABLE and _VISION_SEAM_MARKER in raw_lines[line_no - 1]:
+                    continue  # costura de visión marcada (P1-VISION-GEMINI-FLASH)
                 violations.append(f"{p.name}:{line_no}: [{pat}] {line[:120]}")
     assert not violations, (
         "P0-LLM-PROVIDER-MIGRATION violado — referencias Gemini vivas en código "

@@ -11,7 +11,7 @@ from knobs import _env_str, _env_float  # [P3-VISION-MODEL-KNOB · 2026-05-20] /
 # criterio de despacho por MODELO que `llm_provider.build_chat_llm` — un
 # modelo `gpt-*` real necesita `ChatOpenAI` PLANO, no `ChatGLM` (ver
 # comentario en `_dispatch_openai_compatible_vision`).
-from llm_provider import ChatGLM, is_openai_model, _openai_api_key
+from llm_provider import ChatGLM, is_openai_model, _openai_api_key, is_google_model, _google_api_key, GEMINI_OPENAI_BASE_URL
 from langchain_openai import ChatOpenAI
 from embeddings_provider import get_text_embedding
 from langchain_core.messages import HumanMessage
@@ -80,10 +80,12 @@ def _vision_base_url() -> str:
 def is_vision_enabled() -> bool:
     """True si hay provider de visión activo con config mínima completa."""
     provider = _vision_provider()
+    # [P1-VISION-GEMINI-FLASH] un modelo Gemini trae su base URL por defecto (la capa
+    # compatible con OpenAI de Google): no exigir el knob para encender el escáner.
     return (
         provider == _VISION_PROVIDER_OPENAI_COMPATIBLE
         and bool(_vision_model_name())
-        and bool(_vision_base_url())
+        and (bool(_vision_base_url()) or is_google_model(_vision_model_name()))
     )
 
 
@@ -493,6 +495,18 @@ def _resolve_vision_client(schema):
             temperature=0.1,
             base_url=base_url,
             api_key=explicit_key or _openai_api_key(),
+            timeout=timeout,
+        )
+    elif is_google_model(model):
+        # [P1-VISION-GEMINI-FLASH · 2026-09-04] Gemini por su endpoint compatible con OpenAI:
+        # cliente ChatOpenAI PLANO (sin `thinking` ni defaults de Z.ai), base URL por defecto
+        # si el knob viene vacío, key `VISION_API_KEY` > la de Gemini del entorno.
+        # `temperature=0.1` sí se respeta aquí (no es familia gpt-5).
+        llm = ChatOpenAI(
+            model=model,
+            temperature=0.1,
+            base_url=base_url or GEMINI_OPENAI_BASE_URL,
+            api_key=explicit_key or _google_api_key(),
             timeout=timeout,
         )
     else:

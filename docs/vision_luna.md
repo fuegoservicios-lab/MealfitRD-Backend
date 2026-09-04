@@ -240,3 +240,43 @@ macros contra ground truth — eso no existe hoy.
   parser que falla si algún módulo de producción sigue referenciando
   `ollama`/`gemma`/`_ollama_`, y anti-regresión de la doctrina de cuota
   (costo a `llm_usage_events`, nunca a `api_usage`).
+
+
+## Gemini 3.8 Flash como provider de visión (P1-VISION-GEMINI-FLASH · 2026-09-04)
+
+**Por qué.** Roboflow Vision Evals (52 modelos, 2026-09): Gemini 3.8 Flash 85,1 % (#3),
+gpt-5.6-luna 72,7 % (#19), GLM-5V-Turbo 65,3 % (#36). En lo que decide un plato —
+identificación 97,9 % vs 84,4 % y conteo de porciones 78,8 % vs 66,2 % — Luna queda 13
+puntos por debajo. Costo ~$0,003 por foto (3× Luna), latencia ~12 s vs ~7 s. Un estudio
+de 40 VLMs sobre Nutrition5k (Sci. Reports 2026) concluye que la elección del modelo y la
+calidad de la foto explican casi toda la precisión; ni multi-ángulo ni prompt tuning ayudan.
+
+**Cómo.** Mismo resolver `_resolve_vision_client`: un modelo cuyo id empieza por `gemini`
+va por `ChatOpenAI` PLANO contra la capa compatible con OpenAI de Google
+(`GEMINI_OPENAI_BASE_URL`, default si `MEALFIT_VISION_BASE_URL` viene vacío). Key:
+`VISION_API_KEY` > la variable de Gemini > la de Google como alias (fail-loud sin ninguna).
+Cero dependencia nueva. Solo visión: `build_chat_llm` NO conoce el prefijo a propósito, y el
+blanket `test_p0_llm_provider_migration` solo exime líneas con el marker inline
+`[P1-VISION-GEMINI-FLASH]` (nunca imports del SDK ni constructores de chat).
+
+```bash
+# En /opt/mealfit/backend/.env del VPS (la key la escribe el operador, nunca el asistente):
+MEALFIT_VISION_MODEL=gemini-3.8-flash
+MEALFIT_VISION_BASE_URL=https://generativelanguage.googleapis.com/v1beta/openai/
+GEMINI_API_KEY=<key>
+# reiniciar: sudo systemctl restart mealfit-backend
+```
+
+**Verificar** (lee la key del entorno, imprime el resultado estructurado de una foto real):
+`python scripts/check_vision_model.py --image foto.jpg`. Debe salir `photo_kind=plato`
+con ítems y macros; si Google rechaza `response_format`/tools, el script lo dice con el
+HTTP real (siguiente intento: `method="function_calling"` en el `with_structured_output`).
+Costo: fila `gemini-3.8-flash` en `_DEFAULT_LLM_PRICING_MICROS_PER_M` (node `vision_scan`
+en `llm_usage_events`).
+
+**Rollback sin redeploy:** `MEALFIT_VISION_MODEL=gpt-5.6-luna` + `MEALFIT_VISION_BASE_URL`
+de OpenAI y reiniciar. Test ancla: `test_p1_vision_gemini_flash.py`.
+
+**Lo que NO cambia (pendiente, más impacto medido que el modelo):** calcular las macros
+desde el catálogo cuando el ítem se resuelve (DietAI24: 47,7 kcal MAE vs 168–277 de las
+apps) y pasar contexto (slot, país, plato del plan del momento).
