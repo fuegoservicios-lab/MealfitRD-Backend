@@ -1007,6 +1007,36 @@ def filter_variety_issues_for_policy(issues: list, effective: Optional[dict], *,
     return kept
 
 
+def _anchor_tokens_for_policy(effective: Optional[dict]) -> set:
+    tokens = set()
+    for a in ((effective or {}).get("food_anchors") or []):
+        for t in _norm((a or {}).get("name") or (a or {}).get("ingredient_id") or "").split():
+            if len(t) >= 3:
+                tokens.add(t[:-1] if t.endswith("s") else t)
+    return tokens
+
+
+def filter_repetition_counts_for_policy(counts: Optional[dict], effective: Optional[dict], *, enforced: bool) -> dict:
+    """[P2-CRITIQUE-RESPECTS-ROUTINE · 2026-09-04] Contadores determinísticos de REPETICIÓN que la
+    autocrítica inyecta al evaluador como «no opinable» (staples cross-día, ingrediente concentrado,
+    plato-base repetido, monotonía de proteína pesada) y que luego reescriben días. Con la política en
+    `enforce` manda la banda pedida, igual que `filter_variety_issues_for_policy` en el revisor:
+    rutina ⇒ se vacían todos (repetir ES lo pedido: un plan del dueño gastó 2,5 min reescribiendo
+    3 días por «avena en 2 días, yogur en 3» con rutina elegida, y el día 3 quedó sin resolver);
+    equilibrada ⇒ se retiran los que hablan de un ancla; explorar ⇒ intactos. Sin enforce o sin
+    política ⇒ intactos (shadow sigue midiendo la conducta previa)."""
+    counts = dict(counts or {})
+    if not enforced or not isinstance(effective, dict) or not effective or not counts:
+        return counts
+    mode = str(((effective.get("recurrence") or {}).get("global_mode")) or "balanced").lower()
+    if mode == "explore":
+        return counts
+    if mode == "routine":
+        return {}
+    anchor_tokens = _anchor_tokens_for_policy(effective)
+    return {k: v for k, v in counts.items() if not any(tok in _norm(str(k)) for tok in anchor_tokens)}
+
+
 def exclude_anchors_from_fatigue(fatigued: Iterable, effective: Optional[dict]) -> list:
     """Aprendizaje: un ancla nunca se «fatiga» — el usuario pidió repetirla (§6.6)."""
     items = list(fatigued or [])
