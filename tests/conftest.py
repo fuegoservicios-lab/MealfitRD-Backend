@@ -284,7 +284,10 @@ _BACKEND_DIR = Path(__file__).resolve().parents[1]
 
 
 def _db_available() -> bool:
-    return bool(os.environ.get("NEON_DATABASE_URL")) or (_BACKEND_DIR / ".env").exists()
+    # El checkout del dueño tiene `backend/.env` (con la URL de Neon); el CI no. Se decide por el
+    # .env o por una señal EXPLÍCITA, no por `NEON_DATABASE_URL` suelta: el entorno del job resultó
+    # tenerla definida y los módulos `needs_local_data` corrieron (y fallaron) sin base real.
+    return (_BACKEND_DIR / ".env").exists() or os.environ.get("MEALFIT_TESTS_HAVE_DB") == "1"
 
 
 # (regex sobre el FUENTE del módulo de test, requisito presente?, motivo del skip). Se evalúa
@@ -332,6 +335,9 @@ def pytest_collection_modifyitems(config, items):
         reason = _local_only_reason(item_path)
         if reason:
             item.add_marker(pytest.mark.skip(reason=reason))
+        elif item.get_closest_marker("needs_local_data") and not _db_available():
+            item.add_marker(pytest.mark.skip(
+                reason="sin base de datos ni backend/.env: este módulo se declara needs_local_data"))
         elif item.get_closest_marker("needs_local_data") and not _db_available():
             item.add_marker(pytest.mark.skip(
                 reason="sin base de datos ni backend/.env: este módulo se declara needs_local_data"))

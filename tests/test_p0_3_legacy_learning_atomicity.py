@@ -95,10 +95,6 @@ apscheduler_triggers_pkg.cron = apscheduler_cron_pkg
 import cron_tasks  # noqa: E402
 import pytest
 
-# [P2-CI-BACKEND-SIBLINGS · 2026-09-04] Este módulo necesita el catálogo/la base de datos o el
-# .env local (pasa en el checkout del dueño; en el CI sin NEON_DATABASE_URL se salta con motivo).
-pytestmark = pytest.mark.needs_local_data
-
 
 # ---------------------------------------------------------------------------
 # 1. La constante de contextos canónicos cubre exactamente los 4 paths legacy.
@@ -107,6 +103,7 @@ def test_legacy_contexts_cover_exactly_four_paths():
     expected = {
         "seed_chunk1_sync",
         "seed_chunk1_sse",
+        "seed_chunk1_queue",   # [P1-ARQ25-F1-LIFECYCLE · 2026-09-02] el chunk 0 vía cola (mismo postprocess)
         "rebuild_from_queue",
         "synthesis_from_days",
     }
