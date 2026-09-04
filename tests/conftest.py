@@ -277,35 +277,59 @@ def _is_frontend_cross_repo_test_file(path: Path) -> bool:
 # (`_REPO_ROOT / "CLAUDE.md"`). Antes reventaban por construcción; ahora se SALTAN con motivo, y
 # el conteo de `skipped` de pytest deja visible cuánto no se verificó. El frontend (público) y
 # `migrations/` (enlace a la copia SSOT) sí están, así que sus tests corren.
-_WORKSPACE_CLAUDE_MD = Path(__file__).resolve().parents[2] / "CLAUDE.md"
-_CLAUDE_MD_LITERAL = re.compile(r"""["']CLAUDE\.md["']""")
-_reads_claude_md_cache: dict = {}
+_WORKSPACE = Path(__file__).resolve().parents[2]
+_BACKEND_DIR = Path(__file__).resolve().parents[1]
 
 
-def _module_reads_claude_md(path: Path) -> bool:
+def _db_available() -> bool:
+    return bool(os.environ.get("NEON_DATABASE_URL")) or (_BACKEND_DIR / ".env").exists()
+
+
+# (regex sobre el FUENTE del módulo de test, requisito presente?, motivo del skip). Se evalúa
+# una vez por archivo. En el checkout completo del dueño todo está y nada se salta; en el CI del
+# backend cada familia se salta con su motivo y el conteo de `skipped` lo deja visible.
+_LOCAL_ONLY = (
+    (re.compile(r"""["']CLAUDE\.md["']"""), lambda: (_WORKSPACE / "CLAUDE.md").exists(),
+     "workspace raíz ausente (repo privado): este test lee CLAUDE.md"),
+    (re.compile(r"run_ci\.ps1|deploy-mealfit\.ps1|scripts/README|docs/superpowers"),
+     lambda: (_WORKSPACE / "scripts" / "run_ci.ps1").exists() or (_WORKSPACE / "deploy-mealfit.ps1").exists(),
+     "workspace raíz ausente (repo privado): este test lee scripts/ o docs/ del workspace"),
+    (re.compile(r"\.claude[/\\\\]projects|runbook_"), lambda: (Path.home() / ".claude" / "projects").exists(),
+     "memoria local del dueño ausente (~/.claude/projects): este test lee un runbook"),
+    (re.compile(r"""["']\.env["']"""), lambda: (_BACKEND_DIR / ".env").exists(),
+     "backend/.env ausente (secretos locales): este test lee el .env"),
+    (re.compile(r"psycopg\.connect\(|connection_pool\.open\(|load_dotenv\("), _db_available,
+     "sin base de datos (NEON_DATABASE_URL ni backend/.env): este test la necesita"),
+)
+_local_only_cache: dict = {}
+
+
+def _local_only_reason(path: Path) -> str | None:
     key = str(path)
-    if key not in _reads_claude_md_cache:
+    if key not in _local_only_cache:
+        reason = None
         try:
-            _reads_claude_md_cache[key] = bool(_CLAUDE_MD_LITERAL.search(path.read_text(encoding="utf-8")))
+            src = path.read_text(encoding="utf-8", errors="replace")
         except OSError:
-            _reads_claude_md_cache[key] = False
-    return _reads_claude_md_cache[key]
+            src = ""
+        for rx, present, why in _LOCAL_ONLY:
+            if rx.search(src) and not present():
+                reason = why
+                break
+        _local_only_cache[key] = reason
+    return _local_only_cache[key]
 
 
 def pytest_collection_modifyitems(config, items):
     marker = pytest.mark.frontend_cross_repo
-    claude_md_missing = not _WORKSPACE_CLAUDE_MD.exists()
-    skip_claude = pytest.mark.skip(
-        reason="workspace raíz ausente (CLAUDE.md es de un repo privado): este test lee CLAUDE.md y solo "
-               "se verifica en un checkout completo o con SIBLING_REPO_TOKEN"
-    )
     for item in items:
         item_path = Path(str(getattr(item, "path", item.fspath)))
         item_name = getattr(item, "originalname", None) or item.name.split("[", 1)[0]
         if item_name in _frontend_cross_repo_test_names(item_path):
             item.add_marker(marker)
-        if claude_md_missing and _module_reads_claude_md(item_path):
-            item.add_marker(skip_claude)
+        reason = _local_only_reason(item_path)
+        if reason:
+            item.add_marker(pytest.mark.skip(reason=reason))
 
 
 # ---------------------------------------------------------------------------

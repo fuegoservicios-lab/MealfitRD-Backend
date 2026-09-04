@@ -112,6 +112,16 @@ jobs:
       # (P3-MIGRATIONS-SSOT): los tests que leen `parents[2] / "migrations"` resuelven por el enlace.
       - name: migrations/ raíz = backend/migrations (SSOT)
         run: ln -s backend/migrations migrations && ls migrations | wc -l
+      # Varios tests del backend SONDEAN los scripts de node del frontend (i18n-check, gates de
+      # copy): necesitan `frontend/node_modules`. Sin scripts de instalación: solo dependencias.
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020  # v4
+        with:
+          node-version: 22
+          cache: npm
+          cache-dependency-path: frontend/package-lock.json
+      - name: Deps del frontend (para los tests que ejecutan sus scripts de node)
+        working-directory: frontend
+        run: npm ci --ignore-scripts --no-audit --no-fund
       # El workspace raíz (CLAUDE.md, docs/) es PRIVADO: solo con `SIBLING_REPO_TOKEN`. Sin él, los
       # tests que leen CLAUDE.md se saltan (conftest, con conteo visible), no fallan.
       - name: Checkout workspace raíz (CLAUDE.md, docs/) si hay token
