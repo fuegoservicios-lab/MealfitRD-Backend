@@ -657,10 +657,17 @@ def build_plan_deviations_block(deviation_rows: Any, today: date, days_back: int
     lines = []
     for d in sorted(by_date.keys(), reverse=True):
         parts = []
+        seen: set = set()
+        # el mismo plato puede tener varios desvíos el mismo día (la hoja se abre más de una vez):
+        # una sola línea por (slot, plato); las filas vienen DESC, así que gana el más reciente
         for r in by_date[d]:
             slot = str(r.get("meal_type") or "").strip()
             nm = str(r.get("meal_name") or "").strip() or "(plato del plan)"
             reason = str(r.get("reason") or "")
+            key = (slot.lower(), nm.lower())
+            if key in seen:
+                continue
+            seen.add(key)
             que = "comió OTRA COSA" if reason == "ate_other" else "todavía no lo había comido"
             seg = f"{slot}: «{nm}» → {que}" if slot else f"«{nm}» → {que}"
             hh = r.get("local_hour")
