@@ -188,7 +188,7 @@ def test_g_b1_api_inject_consumed_superset():
 # ---------------------------------------------------------------------------
 def test_g_b2_recover_pantry_batch_days_offset():
     body = _slice_fn(_src(), "def _recover_pantry_paused_chunks(")
-    assert "SELECT id, user_id, meal_plan_id, week_number, days_offset, pipeline_snapshot" in body, (
+    assert "SELECT id, user_id, meal_plan_id, week_number, days_offset, attempts, pipeline_snapshot" in body, (
         "G-B2: el batch SELECT debe incluir days_offset."
     )
     assert "SELECT days_offset FROM plan_chunk_queue WHERE id = %s" not in body, (

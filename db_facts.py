@@ -1092,6 +1092,7 @@ def get_plan_meal_deviations_since(user_id: str, since_iso_date: str, limit: int
             "WHERE user_id = %s AND node = 'plan_meal_deviation' AND created_at >= %s "
             "ORDER BY created_at DESC LIMIT %s",
             (user_id, since_iso_date, int(max(1, min(500, limit)))),
+            fetch_all=True,
         ) or []
     except Exception as e:
         logger.warning(f"[P1-DIARY-FREETEXT-ESTIMATE] no se pudieron leer los desvíos: {e}")

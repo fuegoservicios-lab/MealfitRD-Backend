@@ -97,7 +97,9 @@ def test_over_signaling_other_layers_preserved(jsx_src: str):
     captura un revert accidental del signaling completo (escenario:
     alguien interpretó 'no quiero el badge' como 'no quiero nada')."""
     # 1. Gradient rojo
-    assert "#DC2626" in jsx_src and "#FCA5A5" in jsx_src, (
+    # [2026-09-04] decisión del dueño: relleno rojo SÓLIDO (#DC2626) con contorno; el gradiente
+    # claro→oscuro (#FCA5A5) se retiró a propósito.
+    assert "#DC2626" in jsx_src, (
         "Paleta rojo `#DC2626 / #FCA5A5` ausente — el signaling principal "
         "del over (bar fill rojo) se perdió. P3-TRACKING-OVER-LIMIT está "
         "siendo revertido entero por error."
