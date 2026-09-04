@@ -14,7 +14,8 @@ _FRONT = Path(__file__).resolve().parents[2] / "frontend" / "src"
 def test_send_anchors_top_and_focus_does_not_scroll_on_desktop():
     src = (_FRONT / "pages" / "AgentPage.jsx").read_text(encoding="utf-8")
     assert "sentAnchorRef.current = { clientMessageId, scrolled: false };" in src
-    assert "if (layoutSentAnchor()) return;" in src
+    assert "if (!anchor.scrolled && !r.pending) scrollToSentAnchor();" in src
+    assert "last?.isStreaming && !userScrolledUpRef.current) scrollToBottom();" in src
     assert 'className="anchor-spacer"' in src
     assert "onFocus={() => { if (isMobile) setTimeout(scrollToBottom, 300); }}" in src
 
