@@ -187,8 +187,9 @@ def test_p2_2_handle_messages_scroll_threshold(agent_page_src: str) -> None:
         "(px desde el bottom). Cubre overshoot por scroll momentum mobile."
     )
     # Actualiza el ref, NO un setState.
-    assert "const scrolledUp = distanceFromBottom > 120;" in agent_page_src
-    assert "userScrolledUpRef.current = scrolledUp;" in agent_page_src
+    # [P2-CHAT-SCROLL-MODES · 2026-09-04] el umbral vive en la máquina de modos
+    assert "if (distanceFromBottom > 120) _setMode('free');" in agent_page_src
+    assert "userScrolledUpRef.current = mode === 'free';" in agent_page_src
 
 
 def test_p2_2_container_has_ref_and_onscroll(agent_page_src: str) -> None:
