@@ -41,18 +41,22 @@ El backend se clona en `backend/` para reproducir la disposición del workspace 
 (`<raíz>/backend`, `<raíz>/frontend`): ~400 tests construyen rutas al frontend por
 `Path(__file__).parents[2]`.
 
-1. **Hermano frontend**: se clona sólo si existe el secret `SIBLING_REPO_TOKEN` (PAT con
-   `contents:read` sobre el repo privado). Sin él, los tests cross-repo se **SALTAN** con razón
-   (`[P0-CI-VERDICT] repo hermano frontend ausente`) en vez de reventar — el resumen del job lo
-   declara. Con el secret, corren de verdad (incluido el P0 clínico de alérgenos).
-2. **Raíz del workspace emulada**: `CLAUDE.md` y `migrations/` viven en la raíz como copia
-   SSOT de los ficheros del backend (`P3-MIGRATIONS-SSOT`); el job los enlaza
-   (`ln -s backend/CLAUDE.md`, `ln -s backend/migrations`) y esos ~250 tests ejecutan contra
-   el contenido real.
-3. **Artefactos que ningún repo versiona** (`deploy-mealfit.ps1`, runbooks de
-   `~/.claude/…/memory`, `scratch/README.md`, el `.env` local) y el **catálogo vivo** de
-   `master_ingredients` (sin DB en el runner): `tests/conftest.py` convierte ese único motivo
-   de fallo en un SKIP con razón. `-rs` los lista agrupados al final del log.
+1. **Hermano frontend**: el repo es público y se descarga SIEMPRE (`P2-CI-BACKEND-SIBLINGS`);
+   sus dependencias se instalan (`npm ci --ignore-scripts`) porque varios tests sondean scripts
+   de node del frontend. Si faltara (checkout parcial en local), los tests cross-repo se
+   **SALTAN** con razón (`[P0-CI-VERDICT] repo hermano frontend ausente`) en vez de reventar.
+2. **Raíz del workspace**: `migrations/` se enlaza a `backend/migrations` (copia SSOT,
+   `P3-MIGRATIONS-SSOT`). `CLAUDE.md` y `docs/` viven en el workspace PRIVADO: con el secret
+   `SIBLING_REPO_TOKEN` se descargan; sin él, `CLAUDE.md` se enlaza a la copia versionada del
+   backend (`ln -s backend/CLAUDE.md`) y los ~120 tests que lo leen ejecutan contra contenido
+   real. El resumen del job dice de dónde salió cada pieza.
+3. **Lo que ningún checkout de CI tiene** (scripts y `deploy-mealfit.ps1` del workspace,
+   runbooks de `~/.claude/…/memory`, el `.env` local, la base y el **catálogo vivo** de
+   `master_ingredients`): la tabla por regex de `tests/conftest.py` (`_LOCAL_ONLY`,
+   `needs_local_data`) salta en colección los módulos que lo piden, y los hooks de
+   `P0-CI-VERDICT` convierten en SKIP con razón el residuo (errores de colección, rutas
+   absolutas fuera del repo, la línea de log del catálogo ausente). `-rs` los lista agrupados
+   al final del log.
 4. **`-m "not e2e"`** es load-bearing: los tests `@pytest.mark.e2e` necesitan Neon y además
    ese marker es la llave que autoriza escrituras (`P0-TEST-DB-ISOLATION`). El paso
    «Report unverified e2e count» dice cuántos NO corrieron para que un verde no se lea como
@@ -94,8 +98,9 @@ deprecado que falla ruidosamente y apunta al `.ps1` (`P3-I18N-RUN-CI-SH-FOSIL`).
 - Sincroniza con `main`: `git pull origin main --rebase`.
 - Backend: `rm -rf __pycache__ .pytest_cache`; frontend: `rm -rf node_modules && npm ci`.
 - Compara `python --version` / `node --version` con el workflow (Python 3.12 + Node 22).
-- Mira el resumen del job: si dice «Sin frontend hermano», el rojo NO puede venir de un test
-  cross-repo (están saltados); si un test cross-repo te falla en local, ese es el veredicto real.
+- Mira el resumen del job («Hermanos en este checkout»): lo que aparece como AUSENTE está
+  saltado, así que el rojo no puede venir de ahí; si un test cross-repo te falla en local con
+  el hermano presente, ese es el veredicto real.
 
 ### Quiero re-correr un job / ver el log completo
 

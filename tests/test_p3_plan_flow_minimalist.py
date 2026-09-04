@@ -36,16 +36,14 @@ def test_progress_bar_removed():
 
 
 def test_percentage_display_removed():
-    """[SUPERSEDED · P2-LOADING-ONE-STROKE · 2026-09-03] El porcentaje VOLVIÓ a propósito: el
-    dueño rechazó el anillo de capas («tosco, genérico») y el rediseño hace del número el
-    protagonista tipográfico (`.mf-num`), con el progreso real dibujado como un solo trazo.
-    Lo que este guard protege ahora es que el número viva en el héroe (no en una barra) y
-    que la hairline bar siga fuera (test de arriba)."""
+    """[P2-LOADING-ETA-HONEST · 2026-09-03] SUPERSEDED en su letra, no en su espíritu: el anillo
+    vuelve a mostrar el número (rediseño aprobado por el dueño el 2026-09-03), pero el número es
+    HONESTO — techo 98 mientras el backend no confirma el final (P2-LOADING-NO-FREEZE-99) y 100
+    solo con `status === 'ready'`. Lo que este test protege ahora es esa honestidad."""
     text = _read()
-    assert re.search(r'className="mf-num">\{Math\.round\(displayProgress\)\}', text), (
-        "P2-LOADING-ONE-STROKE: el porcentaje debe renderizarse como número del héroe "
-        "(`<span className=\"mf-num\">{Math.round(displayProgress)}</span>`)."
-    )
+    assert "const PROGRESS_CEIL = 98;" in text
+    assert "const displayProgress = status === 'ready' ? 100 : progress;" in text
+    assert "return Math.min(old + diff, PROGRESS_CEIL);" in text
 
 
 def test_deep_search_message_present():

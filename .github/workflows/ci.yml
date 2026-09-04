@@ -100,40 +100,59 @@ jobs:
       # resumen del job en vez de fingir cobertura — la degradación tiene que verse.
       # `secrets.*` NO se puede leer en un `if` de step (GitHub lo deja vacío ahí): se pasa
       # por `env` del job y la condición mira la variable. Es la forma documentada.
+      # [P2-CI-BACKEND-SIBLINGS · 2026-09-04] El repo del frontend es PÚBLICO: el checkout no
+      # necesita token, así que los ~400 tests de paridad que leen `../frontend/src` corren SIEMPRE
+      # (antes solo con `SIBLING_REPO_TOKEN`, que nunca se definió: 1.412 tests rojos por construcción).
       - name: Checkout frontend (hermano, en frontend/)
-        if: ${{ env.HAS_SIBLING_TOKEN == 'true' }}
         uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262  # v4
         with:
           repository: fuegoservicios-lab/MealfitRD
-          token: ${{ secrets.SIBLING_REPO_TOKEN }}
           path: frontend
-
-      # [P0-CI-VERDICT · 2026-09-04] Emular la RAÍZ del workspace para lo que el backend SÍ
-      # versiona. Medido en el run 1451: 177 tests buscaban `migrations/` y 74 `CLAUDE.md` en
-      # `parents[2]` (la raíz del workspace de desarrollo, donde viven como copia SSOT de los
-      # ficheros del backend — P3-MIGRATIONS-SSOT) y morían con FileNotFoundError. Un enlace
-      # a la copia versionada hace que esos tests EJECUTEN contra el contenido real en vez de
-      # reventar por la disposición del runner. Lo que ningún repo versiona
-      # (`deploy-mealfit.ps1`, runbooks de memoria, `scratch/README.md`) NO se emula: el
-      # conftest lo salta con la razón visible.
-      - name: Emular la raíz del workspace (CLAUDE.md, migrations/)
+      # `migrations/` del workspace raíz es una copia SSOT idéntica a `backend/migrations/`
+      # (P3-MIGRATIONS-SSOT): los tests que leen `parents[2] / "migrations"` resuelven por el enlace.
+      - name: migrations/ raíz = backend/migrations (SSOT)
+        run: ln -s backend/migrations migrations && ls migrations | wc -l
+      # Varios tests del backend SONDEAN los scripts de node del frontend (i18n-check, gates de
+      # copy): necesitan `frontend/node_modules`. Sin scripts de instalación: solo dependencias.
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020  # v4
+        with:
+          node-version: 22
+          cache: npm
+          cache-dependency-path: frontend/package-lock.json
+      - name: Deps del frontend (para los tests que ejecutan sus scripts de node)
+        working-directory: frontend
+        run: npm ci --ignore-scripts --no-audit --no-fund
+      # El workspace raíz (CLAUDE.md, docs/) es PRIVADO: solo con `SIBLING_REPO_TOKEN`. Sin él, los
+      # tests que leen CLAUDE.md se saltan (conftest, con conteo visible), no fallan.
+      - name: Checkout workspace raíz (CLAUDE.md, docs/) si hay token
+        if: ${{ env.HAS_SIBLING_TOKEN == 'true' }}
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262  # v4
+        with:
+          repository: fuegoservicios-lab/MealfitRD-Workspace
+          token: ${{ secrets.SIBLING_REPO_TOKEN }}
+          path: workspace
+      - name: Traer CLAUDE.md y docs/ del workspace si se descargó
+        if: ${{ env.HAS_SIBLING_TOKEN == 'true' }}
         run: |
-          ln -s backend/CLAUDE.md CLAUDE.md
-          ln -s backend/migrations migrations
-          echo "raíz emulada: CLAUDE.md -> backend/CLAUDE.md · migrations -> backend/migrations" >> "$GITHUB_STEP_SUMMARY"
-
-      - name: Declarar si el frontend está o no (la degradación, visible)
+          cp workspace/CLAUDE.md CLAUDE.md
+          [ -d workspace/docs ] && cp -r workspace/docs docs || true
+      # [P0-CI-VERDICT · 2026-09-04] Sin token, CLAUDE.md se emula con la copia que el backend SÍ
+      # versiona (`backend/CLAUDE.md`, espejo del workspace — misma disciplina que `migrations/`):
+      # los ~120 tests que lo leen EJECUTAN contra contenido real en vez de saltarse. Con token,
+      # la copia del workspace manda (el paso anterior ya la dejó y este no la pisa).
+      - name: CLAUDE.md = backend/CLAUDE.md si el workspace no se descargó
         run: |
-          if [ -d frontend/src ]; then
-            echo "frontend hermano presente: corren los 1.932 tests, incluidos los 400 que leen frontend/src." >> "$GITHUB_STEP_SUMMARY"
-          else
-            {
-              echo "## ⚠️ Sin frontend hermano"
-              echo "El secret \`SIBLING_REPO_TOKEN\` no está definido, así que los ~400 tests que leen \`frontend/src\` "
-              echo "(55 de ellos guards de idiomas, incluido el P0 clínico de alérgenos) se SALTAN vía el fixture "
-              echo "\`frontend_repo_path\` en vez de reventar en colección. Este veredicto cubre solo los tests autónomos."
-            } >> "$GITHUB_STEP_SUMMARY"
-          fi
+          [ -e CLAUDE.md ] || ln -s backend/CLAUDE.md CLAUDE.md
+          echo "CLAUDE.md -> $(readlink CLAUDE.md || echo 'copia del workspace')" >> "$GITHUB_STEP_SUMMARY"
+
+      - name: Declarar qué hermanos están (la degradación, visible)
+        run: |
+          {
+            echo "## Hermanos en este checkout"
+            [ -d frontend/src ] && echo "- frontend: presente (repo público) — corren los tests de paridad que leen \`frontend/src\`." || echo "- ⚠️ frontend: AUSENTE — los ~400 tests que leen \`frontend/src\` se SALTAN vía el fixture \`frontend_repo_path\` (conftest) y el marker P0-CI-VERDICT, no se ejecutan."
+            [ -d migrations ] && echo "- migrations/: enlace a backend/migrations (copia SSOT)." || echo "- ⚠️ migrations/: ausente."
+            if [ -f CLAUDE.md ]; then echo "- CLAUDE.md: presente ($( [ -L CLAUDE.md ] && echo "copia versionada del backend" || echo "workspace vía SIBLING_REPO_TOKEN" ))."; else echo "- ⚠️ workspace (CLAUDE.md, docs/): AUSENTE — el repo es privado y no hay \`SIBLING_REPO_TOKEN\`; los tests que leen CLAUDE.md se SALTAN (ver conteo de pytest), no se ejecutan."; fi
+          } >> "$GITHUB_STEP_SUMMARY"
 
       - name: Set up Python
         uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065  # v5

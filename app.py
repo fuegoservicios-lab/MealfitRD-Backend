@@ -40,7 +40,8 @@ _PROCESS_START_ISO = datetime.now(timezone.utc).isoformat()
 #   P2-COHERENCE-BANNER-CONDIMENTS · 2026-09-03 — el banner omite condimentos acotados.
 #   P2-FAT-FLOOR · 2026-09-03 — piso de grasa (espejo del carb-floor) en assemble y regen-day.
 #   P2-CHECKIN-NO-FABRICATED-ANSWERS · 2026-09-03 — el check-in acepta señales ausentes; no inventa respuestas.
-#   P2-REGEN-DAY-RETARGET-TO-META · 2026-09-03 — actualizar día apunta a la meta del perfil en ambas direcciones.
+#   P2-REGEN-DAY-RETARGET-TO-META · 2026-09-03 — el objetivo del día es la meta, no el exceso previo.
+#   P1-ARQ25-F4-FORM · 2026-09-03 — adapter del formulario progresivo, sello de modo y sink del embudo (Fase 4).
 _LAST_KNOWN_PFIX = "P0-CI-VERDICT · 2026-09-04"
 
 # [P1-SENTRY-SAMPLE-COST · 2026-05-12] Sentry sampling driven from env vars

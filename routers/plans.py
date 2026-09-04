@@ -12183,6 +12183,59 @@ def api_recalculate_shopping_list(data: dict = Body(...), verified_user_id: Opti
         raise HTTPException(status_code=500, detail=safe_error_detail(e))
 
 
+# [P1-ARQ25-F4-FORM · 2026-09-03] Sink del EMBUDO del wizard. El gate de la Fase 4 exige «sin
+# caída de conversión frente a la línea base, medida con pipeline_metrics» y no existía ninguna
+# métrica del formulario. Invitados incluidos (el wizard corre antes del registro): el limitador
+# cae a IP y el `sid` del cliente se hashea — nunca se persiste crudo. Best-effort: jamás bloquea
+# al wizard (fallo de DB ⇒ `accepted` parcial, 200). NO `verify_api_quota` (telemetría).
+_WIZARD_TELEMETRY_LIMITER = RateLimiter(max_calls=60, period_seconds=60)
+_WIZARD_EVENTS = frozenset({
+    "wizard_start", "step_view", "step_done", "step_skip", "wizard_submit", "wizard_abandon", "wizard_restore",
+})
+_WIZARD_META_KEYS = ("step_id", "field", "index", "total", "app_mode", "plan_source", "form_version", "policy_form", "locale")
+
+
+@router.post("/telemetry/wizard")
+def api_wizard_funnel_telemetry(
+    data: dict = Body(...),
+    verified_user_id: Optional[str] = Depends(_WIZARD_TELEMETRY_LIMITER),
+):
+    """[P1-ARQ25-F4-FORM] `{sid, events:[{event, step_id, field, index, total, …}]}` → filas
+    `pipeline_metrics.node='wizard_funnel'` (metadata con lista blanca de claves, valores acotados).
+    Conversión = wizard_submit / wizard_start por `session_id` (sid hasheado)."""
+    import hashlib as _hashlib
+    from db_core import execute_sql_write as _write
+    events = data.get("events") if isinstance(data, dict) else None
+    if not isinstance(events, list):
+        return {"accepted": 0}
+    sid_raw = str(data.get("sid") or "")[:128]
+    session_hash = _hashlib.sha256(sid_raw.encode("utf-8")).hexdigest()[:16] if sid_raw else None
+    accepted = 0
+    for ev in events[:20]:
+        if not isinstance(ev, dict):
+            continue
+        name = str(ev.get("event") or "")[:32]
+        if name not in _WIZARD_EVENTS:
+            continue
+        meta: dict = {"event": name}
+        for k in _WIZARD_META_KEYS:
+            v = ev.get(k)
+            if v is None:
+                continue
+            meta[k] = int(v) if isinstance(v, (int, float)) and not isinstance(v, bool) else str(v)[:64]
+        try:
+            _write(
+                "INSERT INTO pipeline_metrics (user_id, session_id, node, duration_ms, retries, tokens_estimated, confidence, metadata) "
+                "VALUES (%s, %s, 'wizard_funnel', 0, 0, 0, 0, %s::jsonb)",
+                (verified_user_id, session_hash, _json.dumps(meta, ensure_ascii=False)),
+            )
+            accepted += 1
+        except Exception as e:
+            logger.debug(f"[P1-ARQ25-F4-FORM] wizard_funnel no persistido: {type(e).__name__}: {e}")
+            break
+    return {"accepted": accepted}
+
+
 @router.post("/telemetry/pdf-stale-fallback")
 def api_pdf_stale_fallback_telemetry(
     data: dict = Body(...),

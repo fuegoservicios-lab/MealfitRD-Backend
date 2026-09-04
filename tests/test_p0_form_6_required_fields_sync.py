@@ -231,7 +231,11 @@ _QUOTED_STRING = re.compile(r"'([^']+)'")
 # contador?) también obligatorio por el owner. Puro ruteo del wizard: el
 # backend JAMÁS lee appMode del payload — el modo se conmuta por el endpoint
 # /api/profile/plan-mode, no por el formulario.
-_FRONTEND_ONLY_BY_DESIGN = frozenset({"dietType", "planSource", "appMode"})
+# [P1-ARQ25-F4-FORM · 2026-09-03] mealOrganization: el perfil global de recurrencia (rutina /
+# equilibrio / exploración) es obligatorio en el wizard (roadmap §6.7: «solo el perfil global y el
+# ciclo principal son obligatorios»), pero el backend lo defaultea a `balanced` en
+# `plan_policy.policy_from_form`: un cliente viejo (app nativa sin actualizar) sigue generando.
+_FRONTEND_ONLY_BY_DESIGN = frozenset({"dietType", "planSource", "appMode", "mealOrganization"})
 
 
 def _read_form_validation_js() -> str:
@@ -365,7 +369,7 @@ def test_exclusiones_intencionales_son_exactamente_las_documentadas():
         el modo se conmuta vía /api/profile/plan-mode. Exigirlo backend-side
         sería exigir un campo que ningún caller no-wizard puede conocer.
     """
-    assert _FRONTEND_ONLY_BY_DESIGN == frozenset({"dietType", "planSource", "appMode"}), (
+    assert _FRONTEND_ONLY_BY_DESIGN == frozenset({"dietType", "planSource", "appMode", "mealOrganization"}), (
         f"Conjunto de exclusiones cambió: {sorted(_FRONTEND_ONLY_BY_DESIGN)}.\n"
         f"Cada exclusión bypasses la red de safety cross-language. Documenta "
         f"la razón en el comentario de `_FRONTEND_ONLY_BY_DESIGN` Y en el "

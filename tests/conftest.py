@@ -11,6 +11,7 @@ and user_inventory so that E2E chunk tests never skip due to missing DB data.
 # planes con alimentos sintéticos off-catálogo a propósito) → lo fijamos explícito aquí. Los tests
 # del knob (test_p3_verified_ingredients_only / test_p1_objective_v4_batch) lo activan con
 # monkeypatch cuando prueban el path ON. setdefault: una env var real del operador SIEMPRE gana.
+import os
 import os as _os_conftest
 _os_conftest.environ.setdefault("MEALFIT_VERIFIED_INGREDIENTS_ONLY", "false")
 # [P2-AUDIT-V5-BATCH · 2026-07-02] (GAP-14) Mismo patrón para strict-all-reasons: el default de
@@ -131,6 +132,7 @@ import sys
 import uuid
 import json
 import pytest
+import re
 from datetime import datetime, timezone
 from pathlib import Path
 
@@ -150,6 +152,7 @@ if connection_pool and not getattr(connection_pool, '_opened', False):
 # ---------------------------------------------------------------------------
 def pytest_configure(config):
     config.addinivalue_line("markers", "e2e: End-to-end tests requiring a live database")
+    config.addinivalue_line("markers", "needs_local_data: needs the live catalog/database or backend/.env (skipped in CI)")
     config.addinivalue_line(
         "markers",
         "frontend_cross_repo: tests whose subject includes the sibling frontend repo",
@@ -346,6 +349,56 @@ def _ci_module_mentions_frontend(path: Path) -> bool:
     _CI_MODULE_MENTIONS_FRONTEND_CACHE[path] = result
     return result
 
+# [P2-CI-BACKEND-SIBLINGS · 2026-09-04] CLAUDE.md vive en el workspace raíz (repo PRIVADO): en el
+# CI del backend sin `SIBLING_REPO_TOKEN` no existe, y 121 tests lo leen como literal de ruta
+# (`_REPO_ROOT / "CLAUDE.md"`). Antes reventaban por construcción; ahora se SALTAN con motivo, y
+# el conteo de `skipped` de pytest deja visible cuánto no se verificó. El frontend (público) y
+# `migrations/` (enlace a la copia SSOT) sí están, así que sus tests corren.
+_WORKSPACE = Path(__file__).resolve().parents[2]
+_BACKEND_DIR = Path(__file__).resolve().parents[1]
+
+
+def _db_available() -> bool:
+    # El checkout del dueño tiene `backend/.env` (con la URL de Neon); el CI no. Se decide por el
+    # .env o por una señal EXPLÍCITA, no por `NEON_DATABASE_URL` suelta: el entorno del job resultó
+    # tenerla definida y los módulos `needs_local_data` corrieron (y fallaron) sin base real.
+    return (_BACKEND_DIR / ".env").exists() or os.environ.get("MEALFIT_TESTS_HAVE_DB") == "1"
+
+
+# (regex sobre el FUENTE del módulo de test, requisito presente?, motivo del skip). Se evalúa
+# una vez por archivo. En el checkout completo del dueño todo está y nada se salta; en el CI del
+# backend cada familia se salta con su motivo y el conteo de `skipped` lo deja visible.
+_LOCAL_ONLY = (
+    (re.compile(r"""["']CLAUDE\.md["']"""), lambda: (_WORKSPACE / "CLAUDE.md").exists(),
+     "workspace raíz ausente (repo privado): este test lee CLAUDE.md"),
+    (re.compile(r"run_ci\.ps1|deploy-mealfit\.ps1|scripts/README|docs/superpowers"),
+     lambda: (_WORKSPACE / "scripts" / "run_ci.ps1").exists() or (_WORKSPACE / "deploy-mealfit.ps1").exists(),
+     "workspace raíz ausente (repo privado): este test lee scripts/ o docs/ del workspace"),
+    (re.compile(r"\.claude[/\\\\]projects|runbook_"), lambda: (Path.home() / ".claude" / "projects").exists(),
+     "memoria local del dueño ausente (~/.claude/projects): este test lee un runbook"),
+    (re.compile(r"""["']\.env["']"""), lambda: (_BACKEND_DIR / ".env").exists(),
+     "backend/.env ausente (secretos locales): este test lee el .env"),
+    (re.compile(r"psycopg\.connect\(|connection_pool\.open\(|load_dotenv\("), _db_available,
+     "sin base de datos (NEON_DATABASE_URL ni backend/.env): este test la necesita"),
+)
+_local_only_cache: dict = {}
+
+
+def _local_only_reason(path: Path) -> str | None:
+    key = str(path)
+    if key not in _local_only_cache:
+        reason = None
+        try:
+            src = path.read_text(encoding="utf-8", errors="replace")
+        except OSError:
+            src = ""
+        for rx, present, why in _LOCAL_ONLY:
+            if rx.search(src) and not present():
+                reason = why
+                break
+        _local_only_cache[key] = reason
+    return _local_only_cache[key]
+
 
 def pytest_collection_modifyitems(config, items):
     marker = pytest.mark.frontend_cross_repo
@@ -360,6 +413,12 @@ def pytest_collection_modifyitems(config, items):
             item.add_marker(marker)
         if not _CI_FRONTEND_PRESENT and (surgical or _ci_module_mentions_frontend(item_path)):
             item.add_marker(skip_frontend)
+        reason = _local_only_reason(item_path)
+        if reason:
+            item.add_marker(pytest.mark.skip(reason=reason))
+        elif item.get_closest_marker("needs_local_data") and not _db_available():
+            item.add_marker(pytest.mark.skip(
+                reason="sin base de datos ni backend/.env: este módulo se declara needs_local_data"))
 
 
 def _ci_under(path: Path, root: Path) -> bool:

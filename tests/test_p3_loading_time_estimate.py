@@ -77,8 +77,6 @@ def test_timer_pauses_when_status_ready():
     src = _PLAN_JSX.read_text(encoding="utf-8")
     # Buscar el effect con el guard y setEelapsedSec
     effect_block = re.search(
-        # [P1-I18N-DASHBOARD] `t` es la función de traducción dentro del componente; el
-        # intervalo se llama `tick` desde entonces. La guarda sigue siendo la misma.
         r"useEffect\(\(\)\s*=>\s*\{\s*if\s*\(status\s*===\s*['\"]ready['\"]\)\s*return\s*undefined;\s*const\s+\w+\s*=\s*setInterval[^}]+setElapsedSec",
         src,
         re.DOTALL,
@@ -108,17 +106,14 @@ def test_adaptive_copy_four_phases():
     # El valor vivo tiene UN dueno: `_ETA_MIN`/`_ETA_MAX` en test_p2_loading_eta_57,
     # que es el fichero que ya documenta el historial de decisiones del owner sobre
     # este rango. Aqui se importa. La proxima vez que cambie, se edita una linea.
-    from test_p2_loading_eta_57 import _ETA_MIN, _ETA_MAX
-
-    # [P2-LOADING-ETA-HONEST · 2026-09-03] El copy ya no promete una cifra fija: lee el p50/p90
-    # real del bloque 1 (`/api/plans/generation-eta`). Las 4 fases viven: rango prudente sin
-    # ETA (fallback, el único literal — es el que `_ETA_MIN`/`_ETA_MAX` anclan), antes del
-    # p50, entre p50 y p90, y pasado el p90.
+    # [P2-LOADING-ETA-HONEST · 2026-09-03] Las cuatro fases: sin ETA (rango prudente de respaldo),
+    # antes de la mediana real, entre la mediana y el p90, y pasado el p90. Ninguna con cifra fija
+    # salvo el respaldo; p50/p90 los sirve el backend.
     expected_phrases = [
-        f"Suele tardar entre {_ETA_MIN} y {_ETA_MAX} minutos",        # sin ETA (fallback prudente)
-        "Normalmente tarda unos {p50} minutos",                      # antes del p50 real
-        "Ya pasamos la marca habitual",                              # entre p50 y p90
-        "Está tardando más de lo habitual",                          # pasado el p90
+        "Suele tardar entre 5 y 15 minutos según tu perfil y las revisiones del plan.",
+        "Normalmente tarda unos {p50} minutos; 9 de cada 10 planes están listos antes de {p90}.",
+        "Ya pasamos la marca habitual; casi todos los planes terminan antes de {p90} minutos.",
+        "Está tardando más de lo habitual. Seguimos trabajando en tu plan; puedes salir y te avisamos.",
     ]
     for phrase in expected_phrases:
         assert phrase in src, (
@@ -181,15 +176,13 @@ def test_div_uses_tabular_nums_and_aria_live():
     - `aria-live=polite` para screen readers (accesibilidad)."""
     src = _PLAN_JSX.read_text(encoding="utf-8")
     # Localizar el div del timeMessage
-    # [P2-LOADING-ETA-HONEST] el `aria-live` envuelve el bloque entero (Transcurrido + contador
-    # + timeMessage), no solo la frase: un lector de pantalla oye el cambio de banda una vez.
     timemsg_block = re.search(
-        r"<div[^>]*aria-live=\"polite\"[^>]*>.{0,4000}?\{timeMessage\}",
+        r"<(?:div|p)[^>]*aria-live=\"polite\"[^>]*>\s*\{timeMessage\}",
         src,
         re.DOTALL,
     )
     assert timemsg_block, (
-        "El div que renderiza timeMessage debe tener `aria-live=\"polite\"` "
+        "El elemento que renderiza timeMessage debe tener `aria-live=\"polite\"` "
         "(accesibilidad)."
     )
     assert "fontVariantNumeric: 'tabular-nums'" in src, (

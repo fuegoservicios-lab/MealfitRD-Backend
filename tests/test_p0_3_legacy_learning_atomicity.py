@@ -93,20 +93,17 @@ apscheduler_pkg.triggers = apscheduler_triggers_pkg
 apscheduler_triggers_pkg.cron = apscheduler_cron_pkg
 
 import cron_tasks  # noqa: E402
+import pytest
 
 
 # ---------------------------------------------------------------------------
-# 1. La constante de contextos canónicos cubre exactamente los paths legacy.
-#    [P1-ARQ25-F1-LIFECYCLE · 2026-09-02] Nació el 5º: `seed_chunk1_queue` (el chunk 0
-#    vía cola, mismo postprocess que el seed sync/SSE). Este test anclaba «exactamente
-#    cuatro» y llevaba en rojo desde ese commit — el drift que el propio mensaje pide
-#    registrar aquí. [P0-CI-VERDICT · 2026-09-04]
+# 1. La constante de contextos canónicos cubre exactamente los 4 paths legacy.
 # ---------------------------------------------------------------------------
 def test_legacy_contexts_cover_exactly_four_paths():
     expected = {
         "seed_chunk1_sync",
         "seed_chunk1_sse",
-        "seed_chunk1_queue",
+        "seed_chunk1_queue",   # [P1-ARQ25-F1-LIFECYCLE · 2026-09-02] el chunk 0 vía cola (mismo postprocess)
         "rebuild_from_queue",
         "synthesis_from_days",
     }

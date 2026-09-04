@@ -10,6 +10,11 @@ Validado en plan real 4339544f d2: "1 lechosa" → "1 lechosa (200g)", macros de
 from pathlib import Path
 import graph_orchestrator as go
 from constants import strip_accents as _sa
+import pytest
+
+# [P2-CI-BACKEND-SIBLINGS · 2026-09-04] Este módulo necesita el catálogo/la base de datos o el
+# .env local (pasa en el checkout del dueño; en el CI sin NEON_DATABASE_URL se salta con motivo).
+pytestmark = pytest.mark.needs_local_data
 
 _GO = (Path(go.__file__).resolve().parent / "graph_orchestrator.py").read_text(encoding="utf-8")
 
