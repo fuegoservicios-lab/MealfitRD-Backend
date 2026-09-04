@@ -116,6 +116,7 @@ import sys
 import uuid
 import json
 import pytest
+import re
 from datetime import datetime, timezone
 from pathlib import Path
 
@@ -271,13 +272,40 @@ def _is_frontend_cross_repo_test_file(path: Path) -> bool:
     return bool(_frontend_cross_repo_test_names(path))
 
 
+# [P2-CI-BACKEND-SIBLINGS · 2026-09-04] CLAUDE.md vive en el workspace raíz (repo PRIVADO): en el
+# CI del backend sin `SIBLING_REPO_TOKEN` no existe, y 121 tests lo leen como literal de ruta
+# (`_REPO_ROOT / "CLAUDE.md"`). Antes reventaban por construcción; ahora se SALTAN con motivo, y
+# el conteo de `skipped` de pytest deja visible cuánto no se verificó. El frontend (público) y
+# `migrations/` (enlace a la copia SSOT) sí están, así que sus tests corren.
+_WORKSPACE_CLAUDE_MD = Path(__file__).resolve().parents[2] / "CLAUDE.md"
+_CLAUDE_MD_LITERAL = re.compile(r"""["']CLAUDE\.md["']""")
+_reads_claude_md_cache: dict = {}
+
+
+def _module_reads_claude_md(path: Path) -> bool:
+    key = str(path)
+    if key not in _reads_claude_md_cache:
+        try:
+            _reads_claude_md_cache[key] = bool(_CLAUDE_MD_LITERAL.search(path.read_text(encoding="utf-8")))
+        except OSError:
+            _reads_claude_md_cache[key] = False
+    return _reads_claude_md_cache[key]
+
+
 def pytest_collection_modifyitems(config, items):
     marker = pytest.mark.frontend_cross_repo
+    claude_md_missing = not _WORKSPACE_CLAUDE_MD.exists()
+    skip_claude = pytest.mark.skip(
+        reason="workspace raíz ausente (CLAUDE.md es de un repo privado): este test lee CLAUDE.md y solo "
+               "se verifica en un checkout completo o con SIBLING_REPO_TOKEN"
+    )
     for item in items:
         item_path = Path(str(getattr(item, "path", item.fspath)))
         item_name = getattr(item, "originalname", None) or item.name.split("[", 1)[0]
         if item_name in _frontend_cross_repo_test_names(item_path):
             item.add_marker(marker)
+        if claude_md_missing and _module_reads_claude_md(item_path):
+            item.add_marker(skip_claude)
 
 
 # ---------------------------------------------------------------------------
