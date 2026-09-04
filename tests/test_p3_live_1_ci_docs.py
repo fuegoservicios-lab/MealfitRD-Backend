@@ -31,9 +31,13 @@ from pathlib import Path
 
 P3_LIVE_1_ANCHOR = "P3-LIVE-1"
 
+# [P0-CI-VERDICT · 2026-09-04] Se leen las copias VERSIONADAS del backend (antes: la raíz del
+# workspace, que ningún repo versiona → el guard no corría en CI y su README describía un
+# workflow monorepo que murió el 2026-08-22).
 REPO_ROOT = Path(__file__).resolve().parents[2]
-SCRIPTS_README = REPO_ROOT / "scripts" / "README.md"
-GITHUB_README = REPO_ROOT / ".github" / "README.md"
+BACKEND = Path(__file__).resolve().parents[1]
+SCRIPTS_README = BACKEND / "scripts" / "README.md"
+GITHUB_README = BACKEND / ".github" / "README.md"
 
 
 def test_a_scripts_readme_exists_with_anchor():
@@ -105,24 +109,25 @@ def test_d_github_readme_exists_with_anchor():
     )
 
 
-def test_e_github_readme_documents_continue_on_error_invariant():
-    """**Critical**: el README DEBE explicar por qué `frontend-lint` tiene
-    `continue-on-error: true`. Sin esta nota, un futuro reader puede
-    "arreglar" la flag removiéndola, bloqueando todos los merges sobre
-    la baseline 245 eslint errores."""
+def test_e_github_readme_documents_lint_gate_history():
+    """**Critical, invertido en P0-CI-VERDICT**: el README DEBE explicar que el lint del
+    frontend es BLOQUEANTE (techo global + techo por regla, P2-LINT-RATCHET-POR-REGLA) y que
+    el `continue-on-error: true` de P2-LIVE-1 está SUPERSEDED. Sin la historia escrita, un
+    futuro reader "restaura" la flag creyendo que falta — y desarma el gate."""
     text = GITHUB_README.read_text(encoding="utf-8")
-    assert "continue-on-error" in text, (
-        "[P3-LIVE-1] .github/README.md no menciona `continue-on-error`. "
-        "Esta flag es invariante load-bearing del cierre P2-LIVE-1. Si no "
-        "está documentada, alguien puede removerla 'arreglando' el CI y "
-        "bloquear todos los merges sobre la baseline 245 eslint errores."
+    assert "continue-on-error" in text and "P2-LIVE-1" in text, (
+        "[P3-LIVE-1] .github/README.md debe contar la historia del lint no-bloqueante "
+        "(P2-LIVE-1, `continue-on-error: true`) para que nadie la resucite."
     )
-    # Y debe mencionar P2-LIVE-1 como contexto del invariante.
-    assert "P2-LIVE-1" in text, (
-        "[P3-LIVE-1] .github/README.md no referencia P2-LIVE-1 como origen "
-        "del invariante `continue-on-error: true`. Referencia necesaria "
-        "para que un futuro reader encuentre el contexto en memoria."
+    assert "P2-LINT-RATCHET-POR-REGLA" in text and "lint-count.mjs" in text, (
+        "[P3-LIVE-1] .github/README.md no documenta el gate vivo (techo por regla en "
+        "scripts/lint-count.mjs, P2-LINT-RATCHET-POR-REGLA)."
     )
+    for wf in (BACKEND / ".github" / "workflows").glob("*.yml"):
+        assert "continue-on-error" not in wf.read_text(encoding="utf-8"), (
+            f"[P0-CI-VERDICT] {wf.name} volvió a llevar `continue-on-error`: un job que no "
+            "bloquea es telemetría, no gate."
+        )
 
 
 def test_f_github_readme_documents_branch_protection_setup():
@@ -134,8 +139,8 @@ def test_f_github_readme_documents_branch_protection_setup():
         "Sin esta config en GitHub UI, el workflow corre pero NO bloquea "
         "merges → gate no funcional."
     )
-    # Y debe nombrar explícitamente los 3 status checks bloqueantes.
-    for job_label in ("Backend pytest", "Frontend Vitest", "Frontend build"):
+    # Y debe nombrar explícitamente los status checks bloqueantes REALES de los dos repos.
+    for job_label in ("Backend pytest", "quality", "audit", "suministro", "e2e (webkit)"):
         assert job_label in text, (
             f"[P3-LIVE-1] .github/README.md no menciona el status check "
             f"`{job_label}` en la sección de branch protection setup."

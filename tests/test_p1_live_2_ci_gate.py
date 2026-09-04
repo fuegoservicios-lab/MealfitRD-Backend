@@ -44,8 +44,10 @@ WORKFLOW_RAIZ_RETIRADO = REPO_ROOT / ".github" / "workflows" / "ci.yml"
 WORKFLOW_BACKEND = REPO_ROOT / "backend" / ".github" / "workflows" / "ci.yml"
 WORKFLOW_FRONTEND = REPO_ROOT / "frontend" / ".github" / "workflows" / "ci.yml"
 PACKAGE_JSON = REPO_ROOT / "frontend" / "package.json"
-SCRIPT_PS1 = REPO_ROOT / "scripts" / "run_ci.ps1"
-SCRIPT_SH = REPO_ROOT / "scripts" / "run_ci.sh"
+# [P0-CI-VERDICT · 2026-09-04] Los wrappers se leen del backend (versionados); la copia de la
+# raíz del workspace no está en ningún repo y este guard no corría en CI.
+SCRIPT_PS1 = REPO_ROOT / "backend" / "scripts" / "run_ci.ps1"
+SCRIPT_SH = REPO_ROOT / "backend" / "scripts" / "run_ci.sh"
 
 
 def test_a_workflow_file_exists():
