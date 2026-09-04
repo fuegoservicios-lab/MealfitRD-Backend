@@ -14,7 +14,7 @@ _FRONT = Path(__file__).resolve().parents[2] / "frontend" / "src"
 def test_error_bubble_is_minimal_and_turn_marks_inflight():
     mb = (_FRONT / "components" / "agent" / "MessageBubble.jsx").read_text(encoding="utf-8")
     assert "isErrorBubble ? 'var(--danger-bg)'" not in mb
-    assert "textDecoration: 'underline'," in mb
+    assert "borderRadius: 999," in mb  # v3: píldora fantasma, sin subrayado ni triángulo
     ap = (_FRONT / "pages" / "AgentPage.jsx").read_text(encoding="utf-8")
     assert "t('No llegó la respuesta del coach.')" in ap
     assert "safeLocalStorageSet('mealfit_chat_turn_inflight', { startedAt: Date.now() })" in ap
