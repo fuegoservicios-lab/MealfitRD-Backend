@@ -58,7 +58,8 @@ _PROCESS_START_ISO = datetime.now(timezone.utc).isoformat()
 #   P2-SW-APPLY-RESPECTS-INFLIGHT · 2026-09-04 — la auto-actualización del SW respeta swap/día en vuelo.
 #   P2-VISION-USAGE-TOKENS · 2026-09-04 — el escáner anota tokens reales en el libro de costo.
 #   P2-CHAT-JUMP-TO-LATEST-DESKTOP · 2026-09-04 — «ir al último mensaje» anclado al cuadro de escribir.
-_LAST_KNOWN_PFIX = "P2-CHAT-ANCHOR-SENT-TOP · 2026-09-04"
+#   P2-CHAT-ANCHOR-SENT-TOP · 2026-09-04 — al enviar, el mensaje queda arriba y la respuesta crece debajo.
+_LAST_KNOWN_PFIX = "P2-CHAT-ERROR-MINIMAL · 2026-09-04"
 
 # [P1-SENTRY-SAMPLE-COST · 2026-05-12] Sentry sampling driven from env vars
 # con default seguro 0.1 (10%). Pre-fix tenía `traces_sample_rate=1.0` y

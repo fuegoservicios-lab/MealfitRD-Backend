@@ -19,6 +19,9 @@ def test_safe_to_apply_checks_swap_and_day_markers():
     body = src[i:src.index("const _applyIfSafe", i)]
     assert "['mealfit_meal_regen_inflight', 6 * 60 * 1000]" in body
     assert "['mealfit_day_regen_inflight', 9 * 60 * 1000]" in body
+    assert "['mealfit_chat_turn_inflight', 3 * 60 * 1000]" in body  # v2: turno del coach
+    agent = (_FRONT / "pages" / "AgentPage.jsx").read_text(encoding="utf-8")
+    assert "safeLocalStorageSet('mealfit_chat_turn_inflight', { startedAt: Date.now() })" in agent
     assert "P2-SW-APPLY-RESPECTS-INFLIGHT" in body
 
 
