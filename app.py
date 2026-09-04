@@ -41,8 +41,10 @@ _PROCESS_START_ISO = datetime.now(timezone.utc).isoformat()
 #   P2-FAT-FLOOR · 2026-09-03 — piso de grasa (espejo del carb-floor) en assemble y regen-day.
 #   P2-CHECKIN-NO-FABRICATED-ANSWERS · 2026-09-03 — el check-in acepta señales ausentes; no inventa respuestas.
 #   P2-REGEN-DAY-RETARGET-TO-META · 2026-09-03 — el objetivo del día es la meta, no el exceso previo.
-#   P1-ARQ25-F4-FORM · 2026-09-03 — adapter del formulario progresivo, sello de modo y sink del embudo (Fase 4).
-_LAST_KNOWN_PFIX = "P0-CI-VERDICT · 2026-09-04"
+#   P1-ARQ25-F4-FORM · 2026-09-03 — Fase 4: formulario progresivo + panel de política.
+#   P0-CI-VERDICT · 2026-09-04 — el CI del backend da veredicto: skips con razón, raíz emulada, colección tolerante.
+#   P2-CRITIQUE-RESPECTS-ROUTINE · 2026-09-04 — la autocrítica respeta la política de recurrencia.
+_LAST_KNOWN_PFIX = "P1-CHUNK-T1-IDLE-TXN-180S · 2026-09-04"
 
 # [P1-SENTRY-SAMPLE-COST · 2026-05-12] Sentry sampling driven from env vars
 # con default seguro 0.1 (10%). Pre-fix tenía `traces_sample_rate=1.0` y

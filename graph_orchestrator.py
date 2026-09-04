@@ -10995,10 +10995,33 @@ async def self_critique_node(state: PlanState) -> dict:
     # Conteo determinístico de staples repetidos (pre-LLM hard signal).
     # Cubre el blind spot del compresor: el LLM no ve los ingredientes, así que
     # le damos esta tabla calculada por código para que penalice con certeza.
-    staple_repetitions = _count_staple_repetitions(days)
+    # [P2-CRITIQUE-RESPECTS-ROUTINE · 2026-09-04] Los cuatro contadores de REPETICIÓN (staples,
+    # proteína pesada, ingrediente concentrado, plato-base) entran al evaluador como «no opinable»
+    # y fuerzan needs_correction: con la política en `enforce` y rutina elegida, la autocrítica
+    # reescribía los 3 días por «avena en 2 días, yogur en 3» (2,5 min; el día 3 quedó sin
+    # resolver) contradiciendo lo pedido y lo que el revisor ya respeta
+    # (`filter_variety_issues_for_policy`). Misma regla aquí: rutina ⇒ sin señales de
+    # repetición; equilibrada ⇒ sin las de un ancla; explorar ⇒ todas; shadow ⇒ todas.
+    from horizon import filter_repetition_counts_for_policy as _filter_rep_counts
+    _sc_policy_eff = form_data.get("_plan_policy_effective")
+    _sc_policy_enforced = bool(form_data.get("_policy_enforced"))
+
+    def _sc_policy_filter(counts, what):
+        kept = _filter_rep_counts(counts, _sc_policy_eff, enforced=_sc_policy_enforced)
+        dropped = len(counts or {}) - len(kept)
+        if dropped > 0:
+            _mode = str(((_sc_policy_eff or {}).get("recurrence") or {}).get("global_mode") or "balanced")
+            logger.info(
+                f"📐 [P2-CRITIQUE-RESPECTS-ROUTINE] {what}: {dropped} señal(es) de repetición "
+                f"retirada(s) por política (modo={_mode}, enforce)."
+            )
+        return kept
+
+    staple_repetitions = _sc_policy_filter(_count_staple_repetitions(days), "staples cross-día")
     # [P2-ORCH-6] Monotonía cross-day de proteína pesada (incluye pescado, que
     # el mapa de staples OMITE). Alimenta el gate de skip-when-clean abajo.
-    heavy_protein_monotony = _count_cross_day_heavy_protein_repetition(days)
+    heavy_protein_monotony = _sc_policy_filter(
+        _count_cross_day_heavy_protein_repetition(days), "monotonía de proteína pesada")
     suggested_day_hint = ""
     if staple_repetitions:
         items_str = ", ".join([f"'{k}' en {v} días" for k, v in staple_repetitions.items()])
@@ -11020,7 +11043,9 @@ async def self_critique_node(state: PlanState) -> dict:
     # INGREDIENT_SPREAD_GATE_ENABLED (MEALFIT_INGREDIENT_SPREAD_GATE_ENABLED) — off ⇒ no-op total,
     # rollback sin redeploy si el volumen de disparos resulta problemático.
     try:
-        ingredient_spread = _count_ingredient_meal_frequency(days) if INGREDIENT_SPREAD_GATE_ENABLED else {}
+        ingredient_spread = _sc_policy_filter(
+            _count_ingredient_meal_frequency(days) if INGREDIENT_SPREAD_GATE_ENABLED else {},
+            "ingrediente concentrado")
     except Exception as _ing_spread_e:
         logger.debug(f"[P1-INGREDIENT-SPREAD] detector no-op: {_ing_spread_e}")
         ingredient_spread = {}
@@ -11084,7 +11109,8 @@ async def self_critique_node(state: PlanState) -> dict:
     cross_day_dish_repeats = {}
     if CRITIQUE_CROSSDAY_DISH_PARITY_ENABLED:
         try:
-            cross_day_dish_repeats = build_variety_report({"days": days}).get("cross_day_dishes") or {}
+            cross_day_dish_repeats = _sc_policy_filter(
+                build_variety_report({"days": days}).get("cross_day_dishes") or {}, "plato-base repetido")
         except Exception:
             cross_day_dish_repeats = {}
     if cross_day_dish_repeats:

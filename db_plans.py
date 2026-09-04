@@ -500,7 +500,7 @@ def set_meal_plan_for_update_timeouts(cursor) -> None:
             (LLM/HTTP) DENTRO del bloque transaccional — síntoma a
             investigar (follow-up pendiente: auditar que `/shift-plan` y
             workers no hagan llamadas externas mientras sostienen el lock).
-        MEALFIT_PLAN_FOR_UPDATE_IDLE_TXN_TIMEOUT_MS  (default 60000)
+        MEALFIT_PLAN_FOR_UPDATE_IDLE_TXN_TIMEOUT_MS  (default 180000; era 60000 hasta 2026-09-04)
             [P0-PERSIST-TXN-IDLE · 2026-07-10] Override per-tx del
             idle_in_transaction_session_timeout de sesión (15s,
             P1-DB-STMT-TIMEOUT en db_core). Los mutators bajo FOR UPDATE
@@ -524,7 +524,14 @@ def set_meal_plan_for_update_timeouts(cursor) -> None:
 
     lock_to_ms = _env_int("MEALFIT_PLAN_FOR_UPDATE_LOCK_TIMEOUT_MS", 5000)
     stmt_to_ms = _env_int("MEALFIT_PLAN_FOR_UPDATE_STMT_TIMEOUT_MS", 30000)
-    idle_txn_ms = _env_int("MEALFIT_PLAN_FOR_UPDATE_IDLE_TXN_TIMEOUT_MS", 60000)
+    # [P1-CHUNK-T1-IDLE-TXN-180S · 2026-09-04] 60 s ya no cubría el T1 del chunk worker: entre
+    # el último statement del cursor (lecciones, ~línea 31887 de cron_tasks) y el UPDATE final
+    # corre CPU-only (coherence-finalize + quantize + consolidación + json.dumps de 4 días), y
+    # con perfil gain_muscle midió >60 s dos veces seguidas (plan 05fb9d22, chunk 2, 11:31 y
+    # 11:43 UTC): `IdleInTransactionSessionTimeout`, chunk a reintento, mismo final. Los
+    # `execute_sql_write` intermedios NO cuentan: van por OTRA conexión. 180 s cubre el tramo
+    # con margen; el fondo (mover el CPU fuera del lock) queda como follow-up de perf.
+    idle_txn_ms = _env_int("MEALFIT_PLAN_FOR_UPDATE_IDLE_TXN_TIMEOUT_MS", 180000)
     try:
         cursor.execute(f"SET LOCAL lock_timeout = '{int(lock_to_ms)}ms'")
         cursor.execute(f"SET LOCAL statement_timeout = '{int(stmt_to_ms)}ms'")
@@ -734,7 +741,7 @@ def update_plan_data_atomic(
                     # patrón que set_meal_plan_for_update_timeouts) + WARNING: un guard de
                     # resiliencia que falla en silencio es un guard que no existe.
                     from knobs import _env_int as _env_int_atomic
-                    _idle_ms_atomic = _env_int_atomic("MEALFIT_PLAN_FOR_UPDATE_IDLE_TXN_TIMEOUT_MS", 60000)
+                    _idle_ms_atomic = _env_int_atomic("MEALFIT_PLAN_FOR_UPDATE_IDLE_TXN_TIMEOUT_MS", 180000)  # [P1-CHUNK-T1-IDLE-TXN-180S]
                     if _idle_ms_atomic > 0:
                         cursor.execute(f"SET LOCAL idle_in_transaction_session_timeout = '{int(_idle_ms_atomic)}ms'")  # pyright: ignore[reportArgumentType, reportCallIssue]  # psycopg LiteralString FP
                 except Exception as set_err:
