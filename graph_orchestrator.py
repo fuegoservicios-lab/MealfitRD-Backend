@@ -3925,7 +3925,7 @@ def _ensure_plan_result_contract(plan_result, *, source: str = "unknown") -> Non
 # ============================================================
 # SCHEMAS (importados del módulo canónico schemas.py)
 # ============================================================
-from schemas import PlanModel, PlanSkeletonModel, SingleDayPlanModel
+from schemas import PlanModel, PlanSkeletonModel, SingleDayPlanModel, SingleDayCorrectionModel
 
 
 # ============================================================
@@ -6240,7 +6240,7 @@ async def _attempt_pro_critique_correction(
                 max_retries=0,
                 timeout=int(CRITIQUE_PRO_FALLBACK_TIMEOUT_S),
                 extra_body={"thinking": _surg_think_body},
-            ).with_structured_output(SingleDayPlanModel, method="json_mode")
+            ).with_structured_output(SingleDayCorrectionModel, method="json_mode")
             if SURGICAL_PRO_THINKING_EFFORT:
                 logger.info(f"🧠 {log_prefix} Corrector quirúrgico Pro con thinking "
                             f"(effort={SURGICAL_PRO_THINKING_EFFORT}).")
@@ -6250,7 +6250,7 @@ async def _attempt_pro_critique_correction(
                 temperature=0.3,
                 max_retries=0,
                 timeout=int(CRITIQUE_PRO_FALLBACK_TIMEOUT_S),
-            ).with_structured_output(SingleDayPlanModel)
+            ).with_structured_output(SingleDayCorrectionModel)
         result = await _safe_ainvoke(
             pro_corrector,
             correction_prompt,
@@ -6260,6 +6260,7 @@ async def _attempt_pro_critique_correction(
             await pro_cb.arecord_success()
             corrected = result.model_dump()
             corrected["day"] = day_num
+            _backfill_corrected_day_desc(corrected, {})  # [P2-CRITIQUE-FIX-DESC-BACKFILL] sin original a mano: desc mínima desde nombre
             # [P-PRO-FALLBACK-ON-NONE · 2026-06-19] Paridad con el path Flash exitoso
             # (`corrected_day["_critique_applied"] = True`): el día corregido por Pro
             # también deviene legítimamente del skeleton (swap de proteína para resolver
@@ -10888,6 +10889,31 @@ def _detect_slot_appropriateness(days: list, form_data: dict = None) -> list:
 
 
 @_node_label("self_critique")
+def _backfill_corrected_day_desc(corrected_day: dict, target_day: dict) -> int:
+    """[P2-CRITIQUE-FIX-DESC-BACKFILL · 2026-09-04] El corrector (SingleDayCorrectionModel) puede devolver
+    comidas sin `desc`. Rellena: mismo nombre que el plato original del slot ⇒ copia su descripción;
+    plato nuevo ⇒ descripción mínima honesta desde el nombre y los 3 primeros ingredientes. Devuelve
+    cuántas rellenó. Antes, 4 comidas sin `desc` = 4 errores de validación = corrección entera perdida."""
+    from constants import strip_accents as _sa
+    n = 0
+    orig = [m for m in ((target_day or {}).get("meals") or []) if isinstance(m, dict)]
+    for i, m in enumerate((corrected_day or {}).get("meals") or []):
+        if not isinstance(m, dict) or str(m.get("desc") or "").strip():
+            continue
+        slot = _sa(str(m.get("meal") or "").strip().lower())
+        src = next((o for o in orig if _sa(str(o.get("meal") or "").strip().lower()) == slot), None)
+        if src is None and i < len(orig):
+            src = orig[i]
+        same_name = bool(src) and _sa(str(src.get("name") or "").strip().lower()) == _sa(str(m.get("name") or "").strip().lower())
+        if same_name and str(src.get("desc") or "").strip():
+            m["desc"] = src["desc"]
+        else:
+            ings = [str(x) for x in (m.get("ingredients") or []) if str(x).strip()][:3]
+            m["desc"] = f"{m.get('name') or 'Plato'}" + (f", con {', '.join(ings)}." if ings else ".")
+        n += 1
+    return n
+
+
 async def self_critique_node(state: PlanState) -> dict:
     """Evalúa los días generados y aplica correcciones in-place si hay deficiencias."""
     # [P1-SELF-CRITIQUE-MASTER-KNOB · 2026-07-09] Kill-switch del nodo entero (A/B + Fase 2). Default
@@ -11266,7 +11292,7 @@ PLAN A EVALUAR (días generados):
                 # cliente recupera el blip sin tocar el timeout (80s) ni el CB.
                 max_retries=1,
                 timeout=80,
-            ).with_structured_output(SingleDayPlanModel)
+            ).with_structured_output(SingleDayCorrectionModel)
 
             ctx = _build_shared_context(state)
 
@@ -11439,6 +11465,9 @@ Devuelve el Día {day_num} corregido con EXACTAMENTE la misma estructura JSON y 
                     if corrected_result:
                         corrected_day = corrected_result.model_dump()
                         corrected_day["day"] = day_num
+                        _bf = _backfill_corrected_day_desc(corrected_day, target_day)  # [P2-CRITIQUE-FIX-DESC-BACKFILL]
+                        if _bf:
+                            logger.info(f"📝 [P2-CRITIQUE-FIX-DESC-BACKFILL] Día {day_num}: {_bf} desc rellenada(s) tras la corrección.")
                         # [P3-SKELETON-FIDELITY-CRITIQUE-AWARE · 2026-05-16]
                         # Marca el día como modificado por self_critique. El
                         # check de SKELETON FIDELITY en `_run_assembly_validations`
@@ -40470,7 +40499,7 @@ async def surgical_marker_regen_node(state: PlanState) -> dict:
         temperature=0.3,
         max_retries=0,
         timeout=80,
-    ).with_structured_output(SingleDayPlanModel)
+    ).with_structured_output(SingleDayCorrectionModel)
 
     ctx = _build_shared_context(state)
     # [P1-COUNTRY-SYSTEM-F1 · 2026-08-16 (T4)] país vía la ÚNICA puerta (T1), derivado UNA vez
@@ -40596,6 +40625,9 @@ Devuelve el Día {day_num} corregido con EXACTAMENTE la misma estructura JSON y 
             if corrected_result:
                 corrected_day = corrected_result.model_dump()
                 corrected_day["day"] = day_num
+                _bf = _backfill_corrected_day_desc(corrected_day, target_day)  # [P2-CRITIQUE-FIX-DESC-BACKFILL]
+                if _bf:
+                    logger.info(f"📝 [P2-CRITIQUE-FIX-DESC-BACKFILL] Día {day_num} (regen): {_bf} desc rellenada(s).")
                 # IMPORTANTE: NO copiar `_critique_unresolved` — la corrección
                 # es el evento que limpia el marker.
                 # [P1-SURGICAL-CRITIQUE-FLAG · 2026-07-05] Paridad con el pro-fallback (línea
