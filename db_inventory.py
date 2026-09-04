@@ -757,6 +757,91 @@ def _spice_unit_as_teaspoon(master_item: dict, name_lower: str) -> float | None:
         return None
 
 
+# [P1-PANTRY-PACKAGE-GRAMS · 2026-09-04] La Nevera guarda ENVASES («2 paquete de Calamar», «1 pote de
+# Yogurt», «1 sobre de Pimienta») porque el restock copia la presentación comercial de la lista; las
+# recetas consumen en gramos, cucharadas y dientes. `convert_amount` no conocía los envases, así que
+# 10 de 14 descuentos del dueño (04-09) fueron `[P2-DEDUCT-NOOP] unidad incompatible` y el aviso
+# decía «descontamos 3». Dos cierres: (a) el restock guarda GRAMOS cuando la lista trae
+# `package_grams` (exacto: el envase que se compró); (b) para filas ya guardadas en envases, el
+# tamaño sale del maestro (`market_packages`, SSOT de precios) o de `density_g_per_unit` cuando el
+# envase es la unidad por defecto del alimento (Cilantro: 1 mazo = 50 g).
+_CONTAINER_UNITS = frozenset({"paquete", "bolsa", "botella", "caja", "lata", "pote", "sobre", "tetra", "jarra", "mazo"})
+
+
+def _container_grams(master_item: dict, unit: str) -> Optional[float]:
+    """Gramos de UN envase `unit` según el maestro. Orden: entrada de `market_packages` con esa
+    unidad → única entrada con gramos → la más pequeña (conservador: descuenta más envases, nunca
+    menos) → `density_g_per_unit` si el envase es la `default_unit` del alimento. None si no hay dato."""
+    if not master_item or not unit:
+        return None
+    try:
+        from canonical_units import canonicalize_unit
+        u = canonicalize_unit(unit) or str(unit).strip().lower()
+    except Exception:
+        u = str(unit).strip().lower()
+    pkgs = master_item.get("market_packages")
+    if isinstance(pkgs, str):
+        try:
+            pkgs = json.loads(pkgs)
+        except Exception:
+            pkgs = None
+    entries = []
+    for e in (pkgs or []):
+        if not isinstance(e, dict):
+            continue
+        try:
+            g = float(e.get("grams") or 0)
+        except (TypeError, ValueError):
+            g = 0.0
+        if g > 0:
+            entries.append((str(e.get("unit") or "").strip().lower(), g))
+    same = [g for eu, g in entries if eu and (eu == u or (canonicalize_unit(eu) if 'canonicalize_unit' in dir() else eu) == u)]
+    if same:
+        return min(same)
+    if len(entries) == 1:
+        return entries[0][1]
+    if entries:
+        return min(g for _eu, g in entries)
+    if str(master_item.get("default_unit") or "").strip().lower() == u:
+        try:
+            g = float(master_item.get("density_g_per_unit") or 0)
+        except (TypeError, ValueError):
+            g = 0.0
+        if g > 0:
+            return g
+    return None
+
+
+def convert_amount_container(qty: float, from_unit: str, to_unit: str, master_item: dict, *, spice_tsp: bool = False) -> Optional[float]:
+    """`convert_amount` + envases: si una de las dos unidades es un envase con gramos conocidos, pasa
+    por gramos. Devuelve None cuando ni el conversor ni el maestro saben el tamaño."""
+    direct = convert_amount(qty, from_unit, to_unit, master_item, spice_tsp=spice_tsp)
+    if direct is not None:
+        return direct
+    f = str(from_unit or "").strip().lower()
+    t = str(to_unit or "").strip().lower()
+    try:
+        from canonical_units import canonicalize_unit
+        f = canonicalize_unit(f) or f
+        t = canonicalize_unit(t) or t
+    except Exception:
+        pass
+    if t in _CONTAINER_UNITS and f not in _CONTAINER_UNITS:
+        pkg_g = _container_grams(master_item, t)
+        grams = convert_amount(qty, from_unit, "g", master_item, spice_tsp=spice_tsp)
+        if pkg_g and grams is not None:
+            return grams / pkg_g
+    elif f in _CONTAINER_UNITS and t not in _CONTAINER_UNITS:
+        pkg_g = _container_grams(master_item, f)
+        if pkg_g:
+            return convert_amount(qty * pkg_g, "g", to_unit, master_item, spice_tsp=spice_tsp)
+    elif f in _CONTAINER_UNITS and t in _CONTAINER_UNITS:
+        pf, pt = _container_grams(master_item, f), _container_grams(master_item, t)
+        if pf and pt:
+            return qty * pf / pt
+    return None
+
+
 def convert_amount(qty: float, from_unit: str, to_unit: str, master_item: dict, *, spice_tsp: bool = False) -> Optional[float]:
     """Intenta convertir matemáticamente una cantidad de una unidad a otra usando factores y densidades.
 
@@ -979,7 +1064,7 @@ def _apply_reservation_delta(
         any_compatible = False
         for row in rows:
             current_unit = row.get("unit") or unit or "unidad"
-            converted_qty = convert_amount(quantity, unit, current_unit, master_item)
+            converted_qty = convert_amount_container(quantity, unit, current_unit, master_item)  # [P1-PANTRY-PACKAGE-GRAMS]
             if converted_qty is None:
                 continue
             any_compatible = True
@@ -1377,7 +1462,7 @@ def _consume_reserved_inventory(user_id: str, ingredient_name: str, quantity: fl
 
     for row in existing_rows or []:
         current_unit = row.get("unit") or unit or "unidad"
-        converted_qty = convert_amount(quantity, unit, current_unit, master_item)
+        converted_qty = convert_amount_container(quantity, unit, current_unit, master_item)  # [P1-PANTRY-PACKAGE-GRAMS]
         if converted_qty is None:
             continue
 
@@ -1500,7 +1585,7 @@ def add_or_update_inventory_item(user_id: str, ingredient_name: str, quantity: f
                 current_qty = float(row["quantity"])
                 current_unit = row["unit"]
 
-                converted_qty = convert_amount(quantity, unit, current_unit, master_item, spice_tsp=True)  # [P2-SPICE-TSP-DEDUCTION-ONLY]
+                converted_qty = convert_amount_container(quantity, unit, current_unit, master_item, spice_tsp=True)  # [P2-SPICE-TSP-DEDUCTION-ONLY] + [P1-PANTRY-PACKAGE-GRAMS]
 
                 # [P2-INVENTORY-CONTAINER-MERGE · 2026-07-12] Fallback de envases
                 # discretos: fusiona '2 unidades' sobre la fila en 'lata' en vez
@@ -2440,6 +2525,8 @@ def deduct_consumed_meal_from_inventory(
     # parseó bien pero NO existe fila en la nevera del usuario. Ni éxito
     # (no bajó nada) ni fallo (no hay nada que reintentar).
     not_in_pantry_strs: List[str] = []
+    unquantified_strs: List[str] = []  # [P1-PANTRY-PACKAGE-GRAMS] «al gusto»/«pizca»: sin gramos, sin inferir
+    _UNQUANTIFIED_HINTS = ("al gusto", "a gusto", "pizca", "opcional", "para servir", "para decorar", "cantidad necesaria", "c/n")
     # [P1-CONSUMPTION-LEDGER · 2026-08-07] Eventos a persistir al final, en
     # UN solo INSERT. Se acumulan en vez de escribir por item para no meter
     # N roundtrips en el path caliente del descuento.
@@ -2475,6 +2562,12 @@ def deduct_consumed_meal_from_inventory(
     for item in ingredients_list:
         if not item or len(item) < 3: continue
         try:
+            _item_low = str(item).lower()
+            if any(h in _item_low for h in _UNQUANTIFIED_HINTS):
+                # «Pimienta negra al gusto» inferida a 50 g era una resta absurda si la unidad
+                # casaba, y un «failed» si no. Un condimento al gusto no mueve la Nevera.
+                unquantified_strs.append(str(item))
+                continue
             qty, unit, name = _parse_quantity(item)
             used_inference = False
             if not (name and qty > 0):
@@ -2589,6 +2682,7 @@ def deduct_consumed_meal_from_inventory(
         # que hacen `.get("succeeded")` siguen intactos; los que quieran
         # distinguir "no lo tenías" de "lo descontamos" leen esta.
         "not_in_pantry": not_in_pantry_strs,
+        "unquantified": unquantified_strs,  # [P1-PANTRY-PACKAGE-GRAMS]
     }
 
 def restock_inventory(user_id: str, ingredients_list: list):
@@ -2671,6 +2765,16 @@ def restock_inventory(user_id: str, ingredients_list: list):
                 unit_lower = unit.lower().rstrip('.')
                 UNIT_NORMALIZE = _CANONICAL_UNIT_MAP
                 unit = UNIT_NORMALIZE.get(unit_lower, unit_lower if unit_lower else 'unidad')
+                # [P1-PANTRY-PACKAGE-GRAMS] la lista sabe cuánto pesa el envase que eligió
+                # (`package_grams`); guardarlo en gramos deja la fila descontable por cualquier
+                # receta (g directo, cucharadas por densidad, unidades por peso unitario).
+                try:
+                    _pkg_g = float(item.get("package_grams") or item.get("size_grams") or 0)
+                except (TypeError, ValueError):
+                    _pkg_g = 0.0
+                if qty > 0 and _pkg_g > 0 and unit in _CONTAINER_UNITS:
+                    logger.info(f"📦 [P1-PANTRY-PACKAGE-GRAMS] {name!r}: {qty:g} {unit} × {_pkg_g:g} g → {qty * _pkg_g:.0f} g")
+                    qty, unit = round(qty * _pkg_g, 2), "g"
                 if qty > 0:
                     # [P0.2] source='shopping_list' marca la fila para que la lógica
                     # de "MERGE inteligente" pueda distinguirla de items manuales.
