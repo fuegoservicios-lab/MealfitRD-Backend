@@ -52,7 +52,8 @@ _PROCESS_START_ISO = datetime.now(timezone.utc).isoformat()
 #   P2-CHECKIN-NO-FABRICATED-ANSWERS · 2026-09-03 — el check-in guarda solo lo respondido.
 #   P1-DIARY-FREETEXT-ESTIMATE · 2026-09-04 — texto libre → macros estimadas; desvíos leídos.
 #   P1-VISION-GEMINI-FLASH · 2026-09-04 — el escáner pasa a Gemini 3.8 Flash (solo visión).
-_LAST_KNOWN_PFIX = "P2-CONFIRM-DIALOG-PLACEMENT · 2026-09-04"
+#   P2-CONFIRM-DIALOG-PLACEMENT · 2026-09-04 — confirmaciones en diálogo (PC centrado, móvil hoja).
+_LAST_KNOWN_PFIX = "P1-SWAP-CLIENT-TIMEOUT · 2026-09-04"
 
 # [P1-SENTRY-SAMPLE-COST · 2026-05-12] Sentry sampling driven from env vars
 # con default seguro 0.1 (10%). Pre-fix tenía `traces_sample_rate=1.0` y
