@@ -654,7 +654,7 @@ No uses demasiados emojis. Sé directo, breve y empático.
                 # Intentar pasar embedding si se generó, para GAP 3 y style para GAP 4
                 try:
                     log_nudge_outcome(user_id, meal_to_check, context_embedding=locals().get("context_embedding"), context_summary=locals().get("context_summary"), nudge_content=content, nudge_style=locals().get("nudge_style"))
-                except Exception as log_err:
+                except Exception:
                     log_nudge_outcome(user_id, meal_to_check, nudge_style=locals().get("nudge_style"))
                 
                 if send_push:

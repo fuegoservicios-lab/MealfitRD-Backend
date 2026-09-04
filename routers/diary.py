@@ -459,7 +459,7 @@ async def api_diary_upload(
         # 1. Intentar subir al object storage de visual_diary
         if _storage_client and purpose == "diary":
             try:
-                res = await asyncio.to_thread(
+                await asyncio.to_thread(
                     _storage_client.storage.from_("visual_diary_images").upload,
                     path=unique_filename,
                     file=file_bytes,

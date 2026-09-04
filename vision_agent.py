@@ -1,7 +1,5 @@
 import os
-import io
 import base64
-import asyncio
 from cache_manager import centralized_cache
 from knobs import _env_str, _env_float  # [P3-VISION-MODEL-KNOB · 2026-05-20] / [P2-LLM-TIMEOUT-SWEEP · 2026-05-30]
 # [P0-LLM-PROVIDER-MIGRATION · 2026-06-12] Gemini eliminado. ChatGLM acepta
@@ -766,7 +764,7 @@ async def async_process_and_save_visual_entry(user_id: str, file_bytes: bytes, i
         return
         
     # Paso 3: Base de Datos Visual Diary
-    logger.info(f"📦 Guardando entrada visual en la DB (Vector 768d)...")
+    logger.info("📦 Guardando entrada visual en la DB (Vector 768d)...")
     save_visual_entry(
         user_id=user_id,
         image_url=image_url,

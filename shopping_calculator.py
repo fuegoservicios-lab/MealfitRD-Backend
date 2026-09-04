@@ -4,8 +4,7 @@ import os
 import random
 from collections import defaultdict
 import logging
-from fractions import Fraction
-from db_core import _storage_client, connection_pool, execute_sql_query
+from db_core import connection_pool, execute_sql_query
 from canonical_units import canonicalize_unit, to_base_amount as _to_base_amount  # [P1-shop-coh-1] SSOT de unidades; [P1-NEW-10] conversor base
 
 import time as _time
@@ -5146,7 +5145,7 @@ def apply_smart_market_units(name: str, weight_in_lbs: float, unit_str: str, raw
     if master_item is None:
         master_item = {}
         
-    cat = (master_item.get("category") or "").lower()
+    (master_item.get("category") or "").lower()
     density_per_u = master_item.get("density_g_per_unit")
     if density_per_u is not None:
         density_per_u = float(density_per_u)
@@ -5210,7 +5209,7 @@ def apply_smart_market_units(name: str, weight_in_lbs: float, unit_str: str, raw
 
     # Nuevas clasificaciones Nivel de Producción (Actualizado con plurales y más alimentos)
     is_native_countable = bool(re.search(r'\b(pl[aá]tanos?|guineos?|lim[oó]n|limones|huevos?|manzanas?|naranjas?|peras?|chinolas?|mandarinas?|kiwis?|duraznos?)\b', n_lower))
-    is_mega_fruit = bool(re.search(r'\b(aguacates?|pi[ñn]as?|sand[ií]as?|mel[oó]n|melones|lechosas?|papayas?)\b', n_lower))
+    bool(re.search(r'\b(aguacates?|pi[ñn]as?|sand[ií]as?|mel[oó]n|melones|lechosas?|papayas?)\b', n_lower))
     is_native_weighable = bool(re.search(r'\b(zanahorias?|tomates?|aj[ií]es?|cebollas?|papas?|yucas?|batatas?|berenjenas?|tayotas?|remolachas?|calabac[ií]nes?|calabac[ií]n|auyamas?|vegetales|[ñn]ames?|yaut[ií]as?|pimientos?|chiles?)\b', n_lower))
     is_native_cabeza = bool(re.search(r'\b(br[oó]colis?|coliflor|repollos?|lechugas?)\b', n_lower))
     # [P1-CEBOLLIN-HERB-GARNISH · 2026-07-07] cebollín (chives) es hierba aromática de
@@ -11080,11 +11079,6 @@ def aggregate_and_deduct_shopping_list(plan_ingredients: list[str], consumed_ing
     categorized_results = defaultdict(list)
     total_estimated_cost = 0.0
     
-    PANTRY_STAPLES = {
-        'Sal y ajo en polvo', 'Aceite de oliva', 'Aceite de coco', 
-        'Aceite de sésamo o maní', 'Salsa de soya', 'Orégano', 
-        'Canela', 'Pimienta', 'Sal', 'Vinagre', 'Ajo en polvo'
-    }
     # [P2-PDF-2] Items que NO van a la lista de compras: agua del grifo,
     # hielo. Pre-fix era match LITERAL contra el set ('agua', 'hielo',
     # 'agua potable', 'cubos de hielo'): variantes como "agua fría",
@@ -13165,9 +13159,6 @@ def aggregate_shopping_list(
     `get_shopping_list_delta`/`routers/plans.py::scaled_30`: `num_days` = días REALMENTE
     generados, `multiplier` = `household × cycle_qty_multiplier(duración) × 7/num_days`)."""
     return aggregate_and_deduct_shopping_list(ingredients_list, [], num_days=num_days, multiplier=multiplier)
-
-def get_aggregated_shopping_list_for_plan(plan_result: dict) -> list[str]:
-    return get_realtime_pantry(plan_result, [])
 
 def fetch_inventory_and_consumed_for_plan(user_id: str, plan_result: dict, is_new_plan: bool = False) -> tuple:
     """[P1-5] Fetch one-shot del inventario físico + consumidos para un plan.

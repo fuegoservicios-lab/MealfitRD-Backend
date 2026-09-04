@@ -91,10 +91,6 @@ def _validar_repeticiones_cpu_bound(recent_meal_names, days_plan):
     
     repeated_meals = []
     
-    # Manejar fallbacks a la forma del diccionario si plan = { "meals": [...] } en generacion
-    if not days_plan and isinstance(days_plan, list) == False:
-        pass # Not applicable here directly, days_plan should be a list of days
-        
     for day_obj in days_plan:
         for meal in day_obj.get("meals", []):
             meal_type = meal.get("meal", "").lower()

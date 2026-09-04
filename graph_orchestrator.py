@@ -7,7 +7,7 @@ Planificador → Generadores Paralelos (×3 días) → Ensamblador → Revisor M
 import os
 import time
 import json
-from typing import TypedDict, Optional, Callable, Any, Literal
+from typing import TypedDict, Optional, Any, Literal
 from langgraph.graph import StateGraph, END
 # [P0-LLM-PROVIDER-MIGRATION · 2026-06-12] Gemini → GLM. El wrapper local
 # `ChatGLM` (abajo) subclasea el cliente base para backpressure +
@@ -25,7 +25,7 @@ from llm_provider import (
     is_openai_model,
 )
 from pydantic import BaseModel, Field, create_model
-from tenacity import retry, stop_after_attempt, wait_exponential, before_sleep_log, retry_if_exception
+from tenacity import retry, stop_after_attempt, wait_exponential, retry_if_exception
 import logging
 import threading
 # [P2-LOGGER-MIGRATION · 2026-05-12] Logger SSOT del módulo. Tras audit
@@ -153,13 +153,12 @@ def _node_label(name: str):
 # preservan los call sites históricos `from graph_orchestrator import _env_int`.
 # ============================================================
 from knobs import (  # noqa: E402  (re-export bloque doc-arriba)
+    get_knobs_registry_snapshot,  # noqa: F401  # [P2-RUFF-CLEAN] re-export/patch-target: consumido por app.py, routers/system.py vía `from graph_orchestrator import`
     _KNOBS_REGISTRY,
-    _register_knob,
     _env_int,
     _env_float,
     _env_bool,
     _env_str,
-    get_knobs_registry_snapshot,
 )
 
 
@@ -1633,11 +1632,10 @@ from datetime import datetime, timezone, timedelta
 import random
 import re as _re
 import contextvars
-import builtins
 import copy
 import hashlib
 import unicodedata
-from langchain_core.messages import HumanMessage, AIMessage, ToolMessage, SystemMessage
+from langchain_core.messages import HumanMessage, ToolMessage, SystemMessage
 
 # Mejora 8: ContextVar para Distributed Tracing
 request_id_var = contextvars.ContextVar("request_id", default="SYS")
@@ -1703,7 +1701,7 @@ def custom_print(*args, **kwargs):
 print = custom_print
 # NOTA: NO importar 'from agent import ...' a nivel de módulo → causa import circular
 # (app → agent → tools → graph_orchestrator → agent). Se usa lazy import donde se necesite.
-from cpu_tasks import _validar_repeticiones_cpu_bound, _normalize_meal_name
+from cpu_tasks import _validar_repeticiones_cpu_bound
 from constants import (
     # [P1-PROTEIN-CLOSER-COUNTRY · 2026-08-21] `country_for_form_data` sube al import de
     # MÓDULO: vivía sólo como import local dentro de `_build_shared_context`, así que los
@@ -1712,17 +1710,14 @@ from constants import (
     # rama — lo cazó una comprobación explícita del ámbito, no la suite.
     country_for_form_data,
     normalize_ingredient_for_tracking, strip_accents,
-    TECHNIQUE_FAMILIES, ALL_TECHNIQUES, TECH_TO_FAMILY, SUPPLEMENT_NAMES,
-    # P1-10: subidos para evitar reimport en hot paths
-    PLAN_CHUNK_SIZE, validate_ingredients_against_pantry, safe_fromisoformat,
+    ALL_TECHNIQUES, TECH_TO_FAMILY, PLAN_CHUNK_SIZE, validate_ingredients_against_pantry, safe_fromisoformat,
     # P1-11: vocabularios canónicos centralizados (técnicas + stopwords).
     # Ambos se usan en assemble_plan_node y _calculate_complexity_score; antes
     # `RECIPE_INGREDIENT_STOPWORDS` vivía hardcodeado en el orquestador con
     # riesgo de divergir de COMPLEX_TECHNIQUE_KEYWORDS al añadir vocabulario.
     COMPLEX_TECHNIQUE_KEYWORDS, RECIPE_INGREDIENT_STOPWORDS,
     # [P1-SLOT-APPROPRIATENESS · 2026-06-27] (audit G4) SSOT de coherencia comida↔horario.
-    slot_violations_for_meal_name, canonical_slot_key, build_meal_timing_rules,
-    SLOT_POSITIVE_HINT,
+    slot_violations_for_meal_name, canonical_slot_key, SLOT_POSITIVE_HINT,
 )
 
 # [P2-ORCH-8 · 2026-05-28] Reconciliación per-user vs PLAN_CHUNK_SIZE. Si el
@@ -1746,7 +1741,8 @@ from nutrition_calculator import get_nutrition_targets
 
 # P1-10: `threading` ya importado al inicio del módulo (línea ~16); no reimportar.
 #
-from cache_manager import redis_client, redis_async_client, get_redis_async
+from cache_manager import redis_client, get_redis_async
+from cache_manager import redis_async_client  # noqa: F401  # [P2-RUFF-CLEAN] re-export/patch-target: consumido por tests (monkeypatch graph_orchestrator.redis_async_client)
 from db_core import execute_sql_query, execute_sql_write, aexecute_sql_query, aexecute_sql_write
 
 
@@ -2666,36 +2662,6 @@ def _get_circuit_breaker(model: str | None = None) -> LLMCircuitBreaker:
             f"(keys Redis: {cb._failures_key}, {cb._open_key})."
         )
         return cb
-
-
-def get_circuit_breaker_snapshot() -> dict:
-    """P1-Q3: snapshot read-only del estado de todos los CBs activos.
-
-    Útil para periodic scraping (Prometheus exporter), shutdown logging,
-    o tests de regresión. Devuelve un dict {model_name|"_global": health_info}.
-    No reads Redis/DB: solo el flag local `_local_healthy` que ya se
-    refresca con cada `acan_proceed`/`record_*`.
-    """
-    snapshot = {
-        "_global": {
-            "healthy": _circuit_breaker._local_healthy,
-            "last_failure_age_s": (
-                round(time.time() - _circuit_breaker._failure_propagated_at, 1)
-                if _circuit_breaker._failure_propagated_at > 0 else None
-            ),
-        }
-    }
-    with _CIRCUIT_BREAKERS_LOCK:
-        items = list(_CIRCUIT_BREAKERS_BY_MODEL.items())
-    for model, cb in items:
-        snapshot[model] = {
-            "healthy": cb._local_healthy,
-            "last_failure_age_s": (
-                round(time.time() - cb._failure_propagated_at, 1)
-                if cb._failure_propagated_at > 0 else None
-            ),
-        }
-    return snapshot
 
 
 # P0-5: Estructura fuerte de tasks de callback de progreso (fire-and-forget).
@@ -3959,20 +3925,17 @@ def _ensure_plan_result_contract(plan_result, *, source: str = "unknown") -> Non
 # ============================================================
 # SCHEMAS (importados del módulo canónico schemas.py)
 # ============================================================
-from schemas import MacrosModel, MealModel, DailyPlanModel, PlanModel, PlanSkeletonModel, SingleDayPlanModel
+from schemas import PlanModel, PlanSkeletonModel, SingleDayPlanModel
 
 
 # ============================================================
 # PROMPTS (importados del paquete prompts/)
 # ============================================================
 from prompts.plan_generator import (
-    GENERATOR_SYSTEM_PROMPT,
     build_nutrition_context,
     build_minimal_correction_context,
     build_correction_context,
     build_unified_behavioral_profile,
-    build_rag_context,
-    # [P0-FORM-3] Inyecta motivación personal del usuario al planner + day generator.
     build_motivation_context,
     # [P2-AUDIT-5 · 2026-05-10] Hints fisiológicos/emocionales (sleepHours/stressLevel).
     # Antes ambos campos vivían en _REQUIRED_FORM_FIELDS sin consumer downstream —
@@ -3987,7 +3950,6 @@ from prompts.plan_generator import (
     # [P1-MEDICATION-RULES · 2026-06-18] Directivas de interacción fármaco-alimento al generador.
     build_medication_context,
     build_time_context,
-    build_technique_injection,
     build_supplements_context,
     # [BUDGET-CUSTOM · 2026-05-31] Presupuesto categórico + monto custom RD$ → LLM.
     build_budget_context,
@@ -4606,17 +4568,6 @@ def _inc_cb_stat(kind: str, n: int = 1) -> None:
             ppl[kind] = ppl.get(kind, 0) + n
 
 
-def get_progress_cb_stats_snapshot() -> dict:
-    """P1-NEW-4: snapshot read-only de los counters cumulativos.
-
-    Útil para periodic scraping (Prometheus exporter), shutdown logging,
-    o tests de regresión. Devuelve una copia para que el caller no pueda
-    mutar el estado interno.
-    """
-    with _PROGRESS_CB_STATS_LOCK:
-        return dict(_PROGRESS_CB_STATS)
-
-
 async def _run_async_cb_safe(cb, payload):
     """P0-5 + P1-A: Wrapper que silencia excepciones del callback async
     (fire-and-forget) y aplica timeout duro.
@@ -4928,7 +4879,7 @@ def _build_shared_context(state: PlanState, force_rebuild: bool = False) -> dict
     # country_for_form_data es la ÚNICA puerta (T1). T7 reusa `_shared_ctx_country` para
     # gatear `prices_context` (país beta sin precios nativos ⇒ el LLM no recibe la tabla
     # RD$) en vez de derivar el país una 2ª vez.
-    from constants import country_for_form_data, COUNTRY_PROFILES, pricing_mode_for_country
+    from constants import country_for_form_data, pricing_mode_for_country
     _shared_ctx_country = country_for_form_data(form_data)
 
     return {
@@ -8583,7 +8534,7 @@ async def generate_days_parallel_node(state: PlanState) -> dict:
     nutrition = state["nutrition"]
 
     logger.info(f"\n{'='*60}")
-    logger.info(f"🚀 [GENERADORES PARALELOS] Lanzando 3 workers para generar las opciones...\n")
+    logger.info("🚀 [GENERADORES PARALELOS] Lanzando 3 workers para generar las opciones...\n")
     logger.info(f"{'='*60}")
 
     _emit_progress(state, "phase", {"phase": "parallel_generation", "message": "Generando las 3 opciones en paralelo..."})
@@ -9299,7 +9250,6 @@ async def generate_days_parallel_node(state: PlanState) -> dict:
 
     # Lanzar generaciones en paralelo (con hedging per-day)
     parallel_start = time.time()
-    generated_days = []
 
     async def _safe_gen(skel_day, day_num, temp_override=None):
         try:
@@ -9935,7 +9885,7 @@ async def adversarial_judge_node(state: PlanState) -> dict:
         }
 
     logger.info(f"\n{'='*60}")
-    logger.info(f"⚖️ [ADVERSARIAL JUDGE] Evaluando Candidato A vs Candidato B...")
+    logger.info("⚖️ [ADVERSARIAL JUDGE] Evaluando Candidato A vs Candidato B...")
     logger.info(f"{'='*60}")
 
     _emit_progress(state, "phase", {"phase": "adversarial_judging", "message": "Seleccionando el mejor plan candidato..."})
@@ -10202,9 +10152,6 @@ def _critique_evaluator_artifacts_for_country(country: str):
     _CRITIQUE_COUNTRY_ARTIFACT_CACHE[canon] = result
     return result
 
-
-class CorrectedDays(BaseModel):
-    days: list[SingleDayPlanModel] = Field(description="Lista de los 3 días con las correcciones aplicadas.")
 
 # Número máximo de días que el self-critique corregirá en un solo run.
 # P1-1: Antes era constante a 2 — para chunks de 7-15 días dejaba 5+ días con
@@ -10967,7 +10914,7 @@ async def self_critique_node(state: PlanState) -> dict:
         return {}
 
     logger.info(f"\n{'='*60}")
-    logger.info(f"🧐 [SELF-CRITIQUE] Evaluando calidad post-generación...")
+    logger.info("🧐 [SELF-CRITIQUE] Evaluando calidad post-generación...")
     logger.info(f"{'='*60}")
     
     _emit_progress(state, "phase", {"phase": "critique", "message": "Evaluando atractivo y coherencia del plan..."})
@@ -11777,10 +11724,6 @@ class ParsedIngredient(BaseModel):
     qty: float = Field(description="Cantidad numérica. Convertir fracciones a decimales. Si dice 'un puñado' = 1.0, 'medio' = 0.5. Si no hay, usar 1.0", default=1.0)
     unit: str = Field(description="Unidad de medida (g, ml, lb, taza, cda, unidad, etc.). Dejar vacío si no aplica.", default="")
     base_name: str = Field(description="Nombre base limpio del ingrediente (ej. 'pollo', 'cebolla'). Sin adjetivos de preparación si es posible.")
-
-class BatchParsedIngredients(BaseModel):
-    parsed_ingredients: list[ParsedIngredient] = Field(description="Lista de ingredientes parseados")
-
 
 # [P0-6] Helper compartido para las validaciones críticas post-assembly que
 # DEBEN ejecutarse SIEMPRE, independiente de si el plan vino del cache
@@ -20418,7 +20361,6 @@ def _safe_high_density_proteins(allergies, db, min_protein: float = 18.0, diet=N
         _pool_prot = _country_protein_pool(country)
     except Exception:
         return []
-    import re as _re
     _diet_canon_hd = None
     if diet is not None:
         try:
@@ -37550,7 +37492,7 @@ async def assemble_plan_node(state: PlanState) -> dict:
     form_data = state["form_data"]
 
     logger.info(f"\n{'='*60}")
-    logger.info(f"🔧 [ENSAMBLADOR] Combinando plan final...")
+    logger.info("🔧 [ENSAMBLADOR] Combinando plan final...")
     logger.info(f"{'='*60}")
 
     _emit_progress(state, "phase", {"phase": "assembly", "message": "Ensamblando tu plan final..."})
@@ -38317,7 +38259,7 @@ async def assemble_plan_node(state: PlanState) -> dict:
     parsed_dict = {}
     if all_raw_ingredients:
         logger.info(f"📦 [CONSOLIDATION] Parseando {len(all_raw_ingredients)} ingredientes únicos (Regex Fast-Path)...")
-        parse_start = time.time()
+        time.time()
         
         import re
         # [P6-FRACTION-MIXED-FIX] Fracción mixta pegada al entero ("6¼") debe
@@ -39719,7 +39661,7 @@ async def assemble_plan_node(state: PlanState) -> dict:
     # Guardar técnicas seleccionadas para persistencia en DB
     result["_selected_techniques"] = skeleton.get("_selected_techniques", [])
 
-    logger.info(f"✅ [ENSAMBLADOR] Plan final ensamblado")
+    logger.info("✅ [ENSAMBLADOR] Plan final ensamblado")
 
     # [P0-6] Validaciones críticas post-assembly extraídas a un helper compartido.
     # Antes estas tres validaciones (Skeleton Fidelity, Recipe Coherence, Schema
@@ -41997,8 +41939,8 @@ async def review_plan_node(state: PlanState) -> dict:
                 # P1-7: El loop terminó sin break — el fact-checker no convergió en
                 # 4 iteraciones (siguió pidiendo tool calls). Mantenemos el reporte
                 # inicial pero lo logueamos para detectar bucles patológicos.
-                logger.warning(f"⚠️ [FACT-CHECK] No convergió en 4 iteraciones (loop de tool calls). "
-                      f"Usando reporte conservador inicial.")
+                logger.warning("⚠️ [FACT-CHECK] No convergió en 4 iteraciones (loop de tool calls). "
+                      "Usando reporte conservador inicial.")
 
         # ============================================================
         # FASE 2: REVISIÓN DETERMINISTA FINAL
@@ -42936,12 +42878,6 @@ Responde ÚNICAMENTE con el JSON de revisión.
             # plan completo → degrada a warn (entrega + telemetría; el cron diario vigila la salud agregada).
             # SÍ rechaza si es SEVERA: ≥MIN_COUNT divergencias (sistemático) o magnitud ≥SEVERE_DELTA (egregio).
             # Knobs kill-switch → revierte al reject-siempre sin redeploy. tooltip-anchor: P1-REVIEW-COHERENCE-SEVERE-ONLY
-            def _coh_finite_delta_rv(_dv):
-                try:
-                    _v = float(_dv.get("delta_pct") or 0.0)
-                except (TypeError, ValueError):
-                    return 0.0
-                return _v if _v == _v and abs(_v) != float("inf") else 0.0
             _rv_severe_only = _env_bool("MEALFIT_REVIEW_COHERENCE_BLOCK_SEVERE_ONLY", True)
             _rv_min_count = _env_int("MEALFIT_REVIEW_COHERENCE_SEVERE_MIN_COUNT", 2,
                                      validator=lambda v: 1 <= v <= 20)
@@ -43246,7 +43182,7 @@ Responde ÚNICAMENTE con el JSON de revisión.
                 # Auto-marcar la intención para downstream (logging, métricas, decisiones
                 # de severity en should_retry). No mutamos form_data original; solo state.
                 if not is_rotation and not is_strict_required:
-                    logger.info(f"🔄 [PANTRY GUARD] Rotación implícita detectada (pantry + previous_meals). Validando estricto.")
+                    logger.info("🔄 [PANTRY GUARD] Rotación implícita detectada (pantry + previous_meals). Validando estricto.")
                 # [P1-PANTRY-GUARD-EMPTY-FRIDGE] Fuente observable: en el caso vivo la
                 # lista validada no era rastreable desde los logs (¿de dónde salió?).
                 _pg_src = ("current_pantry_ingredients" if form_data.get("current_pantry_ingredients")
@@ -43264,9 +43200,9 @@ Responde ÚNICAMENTE con el JSON de revisión.
                     issues.append(val_result)  # val_result es el string de error generado por constants.py
                     # P1-6: max — preservar critical si ya estaba marcado
                     severity = _severity_max(severity, "high")
-                    logger.error(f"🚨 [PANTRY GUARD] Validación fallida en Revisor Médico.")
+                    logger.error("🚨 [PANTRY GUARD] Validación fallida en Revisor Médico.")
                 else:
-                    logger.info(f"✅ [PANTRY GUARD] Todos los ingredientes cumplen con la despensa.")
+                    logger.info("✅ [PANTRY GUARD] Todos los ingredientes cumplen con la despensa.")
 
     # 2. Validación Anti-Repetición
     if approved:
@@ -43357,7 +43293,7 @@ Responde ÚNICAMENTE con el JSON de revisión.
                     )
                     # P1-6: max — preservar critical/high si ya estaba marcado
                     severity = _severity_max(severity, "minor")
-                    logger.error(f"🚨 [COMPLEXITY GUARD] Plan rechazado por ser muy complejo para el nivel actual del usuario.")
+                    logger.error("🚨 [COMPLEXITY GUARD] Plan rechazado por ser muy complejo para el nivel actual del usuario.")
                 else:
                     logger.info(f"✅ [COMPLEXITY GUARD] Plan validado. Score: {complexity_score}/10 (Adecuado para baja adherencia).")
         except Exception as e:
@@ -43394,7 +43330,7 @@ Responde ÚNICAMENTE con el JSON de revisión.
     else:
         feedback = "\n".join([f"• {issue}" for issue in issues])
         logger.error(f"❌ [REVISOR MÉDICO] Plan RECHAZADO en {duration}s (Severidad: {severity})")
-        logger.info(f"   Problemas encontrados:")
+        logger.info("   Problemas encontrados:")
         for issue in issues:
             logger.error(f"   ❌ {issue}")
             
@@ -43422,7 +43358,7 @@ Responde ÚNICAMENTE con el JSON de revisión.
 
                 new_hp = await _adb(update_user_health_profile_atomic, user_id, _rejection_mutator)
                 if new_hp is not None:
-                    logger.info(f"💾 [META-LEARNING] Patrones de rechazo persistidos en DB.")
+                    logger.info("💾 [META-LEARNING] Patrones de rechazo persistidos en DB.")
             except Exception as e:
                 logger.warning(f"⚠️ [META-LEARNING] Error persistiendo patrones de rechazo: {e}")
                 
@@ -44789,7 +44725,6 @@ def _normalize_pantry_set(form_data: dict) -> frozenset:
     pantry = form_data.get("current_pantry_ingredients") or form_data.get("current_shopping_list") or []
     if not isinstance(pantry, list):
         return frozenset()
-    from constants import normalize_ingredient_for_tracking
     out = set()
     for raw in pantry:
         if not isinstance(raw, str) or not raw.strip():
@@ -45174,8 +45109,8 @@ async def semantic_cache_check_node(state: PlanState) -> dict:
                 # el plan en lugar de aceptarlo a ciegas.
                 cached_form = cand_data.get("form_data") or cand_data.get("metadata", {}).get("form_data")
                 if not isinstance(cached_form, dict) or not cached_form:
-                    logger.info(f"🗑️ [SEMANTIC CACHE] Plan descartado por form_data ausente o inválido "
-                          f"(no se puede verificar compatibilidad médica — fail-safe P1-4).")
+                    logger.info("🗑️ [SEMANTIC CACHE] Plan descartado por form_data ausente o inválido "
+                          "(no se puede verificar compatibilidad médica — fail-safe P1-4).")
                     continue
 
                 def _normalize(val):
@@ -45222,16 +45157,16 @@ async def semantic_cache_check_node(state: PlanState) -> dict:
                 cache_budget = _normalize(cached_form.get("budget"))
 
                 if curr_allergies != cache_allergies:
-                    logger.info(f"🗑️ [SEMANTIC CACHE] Plan descartado por cambio de alergias post-hoc.")
+                    logger.info("🗑️ [SEMANTIC CACHE] Plan descartado por cambio de alergias post-hoc.")
                     continue
                 if curr_medical != cache_medical:
-                    logger.info(f"🗑️ [SEMANTIC CACHE] Plan descartado por cambio de condiciones médicas post-hoc.")
+                    logger.info("🗑️ [SEMANTIC CACHE] Plan descartado por cambio de condiciones médicas post-hoc.")
                     continue
                 if curr_diet != cache_diet:
-                    logger.info(f"🗑️ [SEMANTIC CACHE] Plan descartado por cambio de tipo de dieta.")
+                    logger.info("🗑️ [SEMANTIC CACHE] Plan descartado por cambio de tipo de dieta.")
                     continue
                 if curr_dislikes != cache_dislikes:
-                    logger.info(f"🗑️ [SEMANTIC CACHE] Plan descartado por cambio de rechazos/dislikes.")
+                    logger.info("🗑️ [SEMANTIC CACHE] Plan descartado por cambio de rechazos/dislikes.")
                     continue
                 if curr_cooking != cache_cooking:
                     logger.info(f"🗑️ [SEMANTIC CACHE] P1-ORQ-7: Plan descartado por "
@@ -50553,7 +50488,6 @@ async def arun_plan_pipeline(form_data: dict, history: list = None, taste_profil
     # más abajo. El check de `locals()` enmascaraba degradaciones silenciosas
     # del cache semántico (profile_embedding=None sin alerta).
     user_facts_text = ""
-    visual_facts_text = ""
     facts_data_sorted = []
     visual_list = []
     query_emb = None
@@ -50654,7 +50588,7 @@ async def arun_plan_pipeline(form_data: dict, history: list = None, taste_profil
             rag_cache_key = f"rag_{user_id}_{dynamic_query}"
             cached_rag = await _LLM_CACHE.aget(rag_cache_key)
             if cached_rag is not None:
-                logger.info(f"⚡ [CACHE HIT] Reutilizando contexto RAG para la misma query dinámica.")
+                logger.info("⚡ [CACHE HIT] Reutilizando contexto RAG para la misma query dinámica.")
                 if len(cached_rag) == 3:
                     facts_data_sorted, visual_list, query_emb = cached_rag
                 else:

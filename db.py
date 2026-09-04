@@ -6,9 +6,6 @@
 # explícitos es invasivo (100+ exports). En su lugar, el test parser-based
 # `tests/test_p3_new_star_imports_audit.py` parsea con AST y falla si
 # detecta conflict — defense-in-depth sin tocar prod.
-import os
-import logging
-
 from db_core import *
 from db_profiles import *
 from db_chat import *

@@ -1,17 +1,15 @@
-from fastapi import FastAPI, Request, Response, HTTPException, BackgroundTasks, UploadFile, File, Form, Body, Header, Depends
+from fastapi import FastAPI, Request, Response, HTTPException, Body, Header, Depends
 from error_utils import safe_error_detail
 import logging
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.staticfiles import StaticFiles
 import uvicorn
 import os
-import uuid
 import asyncio
 from contextlib import asynccontextmanager
 from datetime import datetime, timezone
 from typing import Optional
 import json
-import traceback
 import threading
 import time
 import sentry_sdk
@@ -42,7 +40,8 @@ _PROCESS_START_ISO = datetime.now(timezone.utc).isoformat()
 #   P2-COHERENCE-BANNER-CONDIMENTS · 2026-09-03 — el banner omite condimentos acotados.
 #   P2-FAT-FLOOR · 2026-09-03 — piso de grasa (espejo del carb-floor) en assemble y regen-day.
 #   P2-CHECKIN-NO-FABRICATED-ANSWERS · 2026-09-03 — el check-in acepta señales ausentes; no inventa respuestas.
-_LAST_KNOWN_PFIX = "P2-REGEN-DAY-RETARGET-TO-META · 2026-09-03"
+#   P2-REGEN-DAY-RETARGET-TO-META · 2026-09-03 — actualizar día apunta a la meta del perfil en ambas direcciones.
+_LAST_KNOWN_PFIX = "P0-CI-VERDICT · 2026-09-04"
 
 # [P1-SENTRY-SAMPLE-COST · 2026-05-12] Sentry sampling driven from env vars
 # con default seguro 0.1 (10%). Pre-fix tenía `traces_sample_rate=1.0` y
@@ -218,30 +217,17 @@ logging.getLogger("httpcore").setLevel(logging.WARNING)
 from db import (
     connection_pool, async_connection_pool, chat_checkpoint_pool,
     execute_sql_query, execute_sql_write,
-    get_or_create_session, save_message, save_message_feedback, insert_like, get_user_likes,
-    insert_rejection, get_active_rejections, get_latest_meal_plan, get_user_profile,
-    update_user_health_profile, update_user_health_profile_atomic, get_all_user_facts, delete_user_fact,
+    get_latest_meal_plan, get_user_profile,
+    update_user_health_profile_atomic, get_all_user_facts, delete_user_fact,
     save_new_meal_plan_robust,
-    log_consumed_meal, get_consumed_meals_today, save_visual_entry, get_session_messages,
-    get_user_chat_sessions, get_guest_chat_sessions, get_session_owner, delete_user_agent_sessions,
-    delete_single_agent_session, update_session_title,
-    check_fact_ownership, upsert_user_profile, migrate_guest_data, log_api_usage, get_monthly_api_usage
+    check_fact_ownership, upsert_user_profile, migrate_guest_data, get_monthly_api_usage
 )
-from agent import (
-    swap_meal, chat_with_agent, analyze_preferences_agent,
-    generate_chat_title_background, chat_with_agent_stream
-)
-from ai_helpers import generate_plan_title, expand_recipe_agent
 from graph_orchestrator import (
-    run_plan_pipeline, warm_plan_graph, is_plan_graph_ready,
-    is_plan_graph_ready_with_reason,
+    warm_plan_graph, is_plan_graph_ready_with_reason,
     verify_pipeline_metrics_guest_insert,
 )
-from memory_manager import summarize_and_prune, build_memory_context
-from fact_extractor import async_extract_and_save_facts, process_pending_queue_sync
+from fact_extractor import process_pending_queue_sync
 from langgraph.checkpoint.postgres import PostgresSaver
-from services import compute_plan_hash, merge_form_data_with_profile
-from vision_agent import process_image_with_vision, get_multimodal_embedding
 # [P2-1 · 2026-05-08] Helpers compartidos del registry de knobs (extraídos de
 # graph_orchestrator). Los 3 knobs `MEALFIT_SCHEDULER_*` de abajo eran raw
 # `os.environ.get` y no aparecían en `/health/version` ni en
@@ -2185,9 +2171,8 @@ def admin_cron_health():
 # Si algún día hace falta un disparador manual de notificaciones, su sitio es un
 # router con `_verify_admin_token` + `_check_admin_rate_limit`, no `app.py` suelto.
 
-from auth import get_verified_user_id, verify_api_quota, clear_session_cookie
+from auth import get_verified_user_id, clear_session_cookie
 from rate_limiter import RateLimiter
-from services import _save_plan_and_track_background, _process_swap_rejection_background
 
 # [P2-RATELIMIT-COVERAGE · 2026-05-12] Rate limiters defensivos para endpoints
 # que NO van por el paywall (`verify_api_quota`) y NO son admin-only:
@@ -2440,7 +2425,7 @@ def api_delete_user_fact(fact_id: str, verified_user_id: Optional[str] = Depends
         if not check_fact_ownership(fact_id, verified_user_id):
             raise HTTPException(status_code=403, detail="No tienes permiso para borrar este hecho.")
         
-        result = delete_user_fact(fact_id)
+        delete_user_fact(fact_id)
         return {"success": True, "message": "Hecho eliminado de la IA."}
     except HTTPException:
         raise
@@ -2749,7 +2734,7 @@ def api_migrate_guest(
         # 1. Transformar data guest a registrada
         success = migrate_guest_data(session_ids, new_user_id)
         if not success:
-            logger.warning(f"⚠️ Aviso: La función de migración base devolvió False, pero continuamos con profile y planes.")
+            logger.warning("⚠️ Aviso: La función de migración base devolvió False, pero continuamos con profile y planes.")
         
         # 2. Upsert health_profile si el frontend lo provee
         if health_profile:

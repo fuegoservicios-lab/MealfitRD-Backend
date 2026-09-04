@@ -1,15 +1,13 @@
-from functools import lru_cache as _lru_cache
 import json
 import uuid
-import unicodedata as _uc
-from typing import Optional, List, Dict, Any, Tuple, Union, cast
+from typing import Optional, List, Dict, Any, Tuple, cast
 import os
 import logging
 import hashlib
 import hmac
 import time
 logger = logging.getLogger(__name__)
-from db_core import _storage_client, connection_pool, execute_sql_query, execute_sql_write, execute_sql_transaction
+from db_core import connection_pool, execute_sql_query, execute_sql_write, execute_sql_transaction
 # [P2-CHAT-SAVE-MSG-RETRY · 2026-05-19] Tenacity para retry exponencial
 # en `save_message`. Ya es dep declarada (requirements.txt:11 — tenacity==9.1.4)
 # y usada en todo el repo para retries de DB y LLM transients.

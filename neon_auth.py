@@ -72,13 +72,6 @@ if os.environ.get("ENVIRONMENT", "").lower() == "production" and (
     )
 
 
-def is_neon_auth_configured() -> bool:
-    """True si `NEON_AUTH_BASE_URL` está seteado Y su origin es parseable
-    (auth verificable). Antes solo chequeaba la URL; un valor sin scheme dejaba
-    `_ORIGIN=None` y rompía la verificación silenciosamente."""
-    return bool(NEON_AUTH_BASE_URL) and bool(_ORIGIN)
-
-
 def _fetch_jwks(force: bool = False) -> list:
     now = time.monotonic()
     with _jwks_lock:

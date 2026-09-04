@@ -1,21 +1,14 @@
-import os
 import json
 import random
 import logging
-import hashlib
-from typing import Optional, List, Dict, Any
+from typing import Optional
 from tenacity import retry, wait_exponential, stop_after_attempt
 import re
 from datetime import datetime, timezone
-import unicodedata
 import concurrent.futures
 
 # Prompts
 from prompts import (
-    TITLE_GENERATION_PROMPT,
-    # [P2-SEEDER-DAYS-COUNT · 2026-08-03] plantilla parametrizada por días del chunk. Sustituye
-    # al import de `DETERMINISTIC_VARIETY_PROMPT`, que se quedó sin consumo aquí (sigue exportado
-    # por `prompts/__init__` como la instancia de 3 días).
     build_deterministic_variety_prompt,
     option_letter as _prompt_option_letter,
     RECIPE_EXPANSION_PROMPT
@@ -43,7 +36,7 @@ from constants import (
     # site de _get_fast_filtered_catalogs más abajo, que hasta este fix corría SIEMPRE DO-blind).
     country_for_form_data,
 )
-from db import (get_user_profile, update_user_health_profile, update_user_health_profile_atomic,
+from db import (get_user_profile, update_user_health_profile_atomic,
                 get_user_ingredient_frequencies,
                 # [P1-CYCLE-BASE-AFFINITY · 2026-08-02] la compra persistida del ciclo vigente.
                 get_latest_meal_plan_with_id)
@@ -1316,7 +1309,7 @@ def get_deterministic_variety_prompt(history_text: str, form_data: dict = None, 
         # ======= FALLBACK: Regex en Runtime (O(n×m)) para Invitados =======
         # Truncar historial a los últimos ~5000 chars (~1250 tokens) para proteger de O(N×M) si la sesión guest es larga.
         history_normalized = history_normalized[-5000:] if len(history_normalized) > 5000 else history_normalized
-        logger.warning(f"⚠️ [ANTI MODE-COLLAPSE] Fallback Regex en runtime usado para guest o sin historial.")
+        logger.warning("⚠️ [ANTI MODE-COLLAPSE] Fallback Regex en runtime usado para guest o sin historial.")
         
         
         with concurrent.futures.ThreadPoolExecutor(max_workers=2) as executor:
@@ -2050,7 +2043,7 @@ def get_deterministic_variety_prompt(history_text: str, form_data: dict = None, 
     _tpl_pantry_p, _tpl_pantry_c = [], []
     current_pantry_ingredients = (form_data.get("current_pantry_ingredients") or form_data.get("current_shopping_list", [])) if form_data else []
     if current_pantry_ingredients:
-        logger.info(f"🔄 [ROTATION MODE] Extrayendo ingredientes base de la lista actual.")
+        logger.info("🔄 [ROTATION MODE] Extrayendo ingredientes base de la lista actual.")
         extracted_p, extracted_c, extracted_v, extracted_f = [], [], [], []
         csl_lower = [strip_accents(i.lower()) for i in current_pantry_ingredients]
         

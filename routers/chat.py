@@ -1,24 +1,23 @@
 from fastapi import APIRouter, Body, Depends, HTTPException, BackgroundTasks
-from fastapi.responses import StreamingResponse, Response
+from fastapi.responses import StreamingResponse
 from error_utils import safe_error_detail
 from typing import Optional
 import hashlib
 import logging
-import traceback
 import json
 
-from auth import get_verified_user_id, verify_api_quota, verify_coach_quota, coach_quota_snapshot
+from auth import get_verified_user_id, verify_coach_quota, coach_quota_snapshot
 from path_validators import assert_valid_uuid
 from rate_limiter import RateLimiter
 from db import (
     get_user_chat_sessions, get_guest_chat_sessions, get_session_owner, delete_user_agent_sessions,
-    delete_single_agent_session, update_session_title, get_session_messages, get_or_create_session,
+    update_session_title, get_session_messages, get_or_create_session,
     save_message, save_message_with_attachments, save_message_feedback, log_api_usage,
     get_model_response_id_for_regeneration, replace_model_response_for_regeneration,
     get_chat_attachment, build_chat_attachment_url, verify_chat_attachment_signature,
     count_user_chat_sessions, CHAT_SESSIONS_PAGE_SIZE,
 )
-from memory_manager import build_memory_context, summarize_and_prune
+from memory_manager import summarize_and_prune
 from agent import generate_chat_title_background, chat_with_agent, chat_with_agent_stream, LLMCircuitBreakerOpen, LLMRateLimitedError, strip_ui_action_tags_for_persist, is_turn_active
 from services import merge_form_data_with_profile
 from db_profiles import get_user_profile

@@ -32,7 +32,7 @@ def send_push_notification(user_id: str, title: str, body: str, url: str = "/das
     vapid_claim = os.environ.get("VAPID_CLAIM_EMAIL")
 
     if not vapid_private or not vapid_claim:
-        logger.warning(f"⚠️ [PUSH] Faltan llaves VAPID en el entorno. No se enviará notificación.")
+        logger.warning("⚠️ [PUSH] Faltan llaves VAPID en el entorno. No se enviará notificación.")
         return False
 
     try:

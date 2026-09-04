@@ -414,7 +414,7 @@ async def api_validate_discount(
         # Verificar tier aplicable
         applicable = discount.get("applicable_tiers", [])
         if applicable and tier and tier not in applicable:
-            return {"valid": False, "message": f"Este código no aplica al plan seleccionado."}
+            return {"valid": False, "message": "Este código no aplica al plan seleccionado."}
 
         logger.info(f"✅ Código de descuento '{code}' validado: {discount['discount_percent']}% off")
 

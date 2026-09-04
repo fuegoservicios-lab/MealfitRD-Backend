@@ -30,7 +30,6 @@ from fastapi import APIRouter, Body, Depends, HTTPException
 from rate_limiter import RateLimiter
 from knobs import _env_bool, _env_int, _env_float, _env_str
 from prompts.help_bot import (
-    HELP_BOT_SYSTEM_PROMPT,
     help_bot_system_prompt,
     HelpChatValidationError,
     sanitize_help_messages,

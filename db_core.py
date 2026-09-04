@@ -1,8 +1,3 @@
-from functools import lru_cache as _lru_cache
-import json
-import uuid
-import unicodedata as _uc
-from datetime import datetime, timedelta, timezone
 import os
 import re
 import logging
@@ -411,11 +406,6 @@ def close_connection_pool():
         chat_checkpoint_pool.close()
         logger.info("chat_checkpoint_pool cerrado.")
 
-async def aclose_connection_pool():
-    if 'async_connection_pool' in globals() and async_connection_pool:
-        await async_connection_pool.close()
-        logger.info("Async Connection pool cerrado.")
-
 # [P-TYPING-1] Overloads para resolución de tipos por flag: `fetch_one=True`
 # devuelve `dict | None`; `fetch_all=True` (o sin flag, default seguro) devuelve
 # `list[dict]`. Sin esto, callsites que hacen `res.get(...)` / `res[0]` veían una
@@ -449,7 +439,6 @@ def execute_sql_query(query: str, params: Optional[tuple] = None, fetch_one: boo
         # Fallback de seguridad si el pool no estuviera disponible (aunque no debería)
         raise RuntimeError("db connection_pool is not available.")
 
-    import psycopg
     from psycopg.rows import dict_row
 
     with connection_pool.connection() as conn:

@@ -1463,10 +1463,10 @@ def get_nutrition_targets(form_data: dict) -> dict:
                         metabolism_notes = f"⚠️ [METABOLISMO EVOLUTIVO]: El peso del usuario se ha estancado o subido en los últimos {days_diff} días. He aplicado un déficit extra dinámico del {abs(int(dynamic_deficit_bonus*100))}% para reactivar la pérdida de grasa."
                     elif velocity_data and velocity_data['is_losing_decelerating']:
                         dynamic_deficit_bonus = -0.07
-                        metabolism_notes = f"⚠️ [METABOLISMO EVOLUTIVO]: Detecté una DESACELERACIÓN en la pérdida de peso (pre-plateau). He aplicado un déficit dinámico extra del 7% proactivamente."
+                        metabolism_notes = "⚠️ [METABOLISMO EVOLUTIVO]: Detecté una DESACELERACIÓN en la pérdida de peso (pre-plateau). He aplicado un déficit dinámico extra del 7% proactivamente."
                     elif pct_change < -1.5 * (days_diff / 7) or (velocity_data and velocity_data['is_losing_accelerating']):
                         dynamic_deficit_bonus = +0.05
-                        metabolism_notes = f"⚠️ [METABOLISMO EVOLUTIVO]: La pérdida de peso está acelerando muy rápido. He reducido el déficit un 5% para proteger la masa muscular (Anti-Rebound)."
+                        metabolism_notes = "⚠️ [METABOLISMO EVOLUTIVO]: La pérdida de peso está acelerando muy rápido. He reducido el déficit un 5% para proteger la masa muscular (Anti-Rebound)."
                 elif goal == "gain_muscle":
                     if pct_change <= 0.5:
                         weeks_stalled = days_diff / 7
@@ -1479,10 +1479,10 @@ def get_nutrition_targets(form_data: dict) -> dict:
                         metabolism_notes = f"⚠️ [METABOLISMO EVOLUTIVO]: El usuario busca ganar masa pero su peso está estancado. He añadido un superávit dinámico extra del {int(dynamic_deficit_bonus*100)}% para impulsar el anabolismo."
                     elif velocity_data and velocity_data['is_gaining_decelerating']:
                         dynamic_deficit_bonus = +0.07
-                        metabolism_notes = f"⚠️ [METABOLISMO EVOLUTIVO]: Detecté una DESACELERACIÓN en la ganancia de masa (pre-plateau). He aplicado un superávit dinámico extra del 7% proactivamente."
+                        metabolism_notes = "⚠️ [METABOLISMO EVOLUTIVO]: Detecté una DESACELERACIÓN en la ganancia de masa (pre-plateau). He aplicado un superávit dinámico extra del 7% proactivamente."
                     elif pct_change > 1.0 * (days_diff / 7) or (velocity_data and velocity_data['is_gaining_accelerating']):
                         dynamic_deficit_bonus = -0.05
-                        metabolism_notes = f"⚠️ [METABOLISMO EVOLUTIVO]: El peso está subiendo demasiado rápido (riesgo de grasa excesiva). He reducido el superávit un 5% (Anti-Rebound)."
+                        metabolism_notes = "⚠️ [METABOLISMO EVOLUTIVO]: El peso está subiendo demasiado rápido (riesgo de grasa excesiva). He reducido el superávit un 5% (Anti-Rebound)."
                 
                 # [P1-CHECKIN-SIGNALS-GATE · 2026-07-26] Las señales del check-in de renovación
                 # (adherencia, hambre, energía) sólo pueden ABLANDAR el ajuste, jamás endurecerlo.
@@ -1749,7 +1749,7 @@ def get_nutrition_targets(form_data: dict) -> dict:
     if _bariatric_kcal_ceiling_applied:
         result["bariatric_kcal_ceiling_applied"] = _bariatric_kcal_ceiling_applied  # [P1-BARIATRIC-KCAL-CEILING]
 
-    logger.info(f"\n🔢 [CALCULADORA NUTRICIONAL] Resultados exactos:")
+    logger.info("\n🔢 [CALCULADORA NUTRICIONAL] Resultados exactos:")
     logger.info(f"   📊 BMR: {bmr} kcal (Peso: {weight_display}, Altura: {height}cm, Edad: {age}, Género: {gender})")
     logger.info(f"   🏃 TDEE: {tdee} kcal (Actividad: {activity_level})")
     logger.info(f"   🎯 Calorías Objetivo: {target_calories} kcal ({goal_labels.get(goal, goal)})")

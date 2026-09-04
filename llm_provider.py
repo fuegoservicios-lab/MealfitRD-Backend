@@ -62,7 +62,7 @@ from typing import Optional
 
 from langchain_openai import ChatOpenAI
 
-from knobs import _env_int, _env_str, _env_bool
+from knobs import _env_int, _env_str
 
 logger = logging.getLogger(__name__)
 

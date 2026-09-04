@@ -1,4 +1,3 @@
-import os
 import json
 import logging
 import hashlib
@@ -13,13 +12,13 @@ from embeddings_provider import get_text_embedding
 from pydantic import BaseModel, Field
 from typing import List, Optional, Literal
 
-from knobs import _env_str, _env_float, _env_int
+from knobs import _env_str, _env_float
 
 logger = logging.getLogger(__name__)
 
 from db import (
-    save_user_fact, search_user_facts, delete_user_fact, search_user_facts_hybrid,
-    get_user_facts_by_metadata, acquire_fact_lock, release_fact_lock,
+    save_user_fact, delete_user_fact, search_user_facts_hybrid,
+    acquire_fact_lock, release_fact_lock,
     enqueue_pending_fact, dequeue_pending_facts, delete_pending_facts
 )
 
@@ -796,7 +795,7 @@ def async_extract_and_save_facts(user_id: str, message: str, recent_history: str
         if not lock_acquired:
             # ====== COLA PERSISTENTE: Nunca perder datos clínicos ======
             enqueue_pending_fact(user_id, message, recent_history)
-            logger.info(f"📋 [FACT EXTRACTOR] Mensaje encolado en la DB para procesamiento posterior.")
+            logger.info("📋 [FACT EXTRACTOR] Mensaje encolado en la DB para procesamiento posterior.")
             return
             
         fact_items = extract_facts(message, recent_history, user_id=user_id)
@@ -819,7 +818,7 @@ def async_extract_and_save_facts(user_id: str, message: str, recent_history: str
         # El hilo asíncrono daemonizado (Fire-and-Forget local) fue removido debido a inestabilidad
         # en entornos serverless/PaaS donde el proceso muere tras devolver la respuesta HTTP.
         # Un TRIGGER AFTER INSERT en la DB llama de forma robusta a nuestro endpoint especial.
-        logger.info(f"✅ Extracción en línea terminada. Webhook externo procesará la cola si quedaron pendientes.")
+        logger.info("✅ Extracción en línea terminada. Webhook externo procesará la cola si quedaron pendientes.")
 
 
 def process_pending_queue_sync(user_id: str):
@@ -848,7 +847,7 @@ def process_pending_queue_sync(user_id: str):
         
         if processed_ids:
             delete_pending_facts(processed_ids)
-        logger.info(f"✅ [FACT EXTRACTOR] Cola pendiente finalizada en Hilo Secundario.")
+        logger.info("✅ [FACT EXTRACTOR] Cola pendiente finalizada en Hilo Secundario.")
     except Exception as qe:
         logger.warning(f"⚠️ Error general en hilo secundario de cola: {qe}")
     finally:

@@ -29,7 +29,6 @@ from __future__ import annotations
 import logging
 import os
 import re as _re_ps
-from typing import Optional
 
 
 _log = logging.getLogger(__name__)

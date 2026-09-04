@@ -368,11 +368,11 @@ def build_inventory_context(inventory_str: str, shopping_delta_str: str,
     if not inventory_str and not shopping_delta_str:
         return ""
 
-    ctx = f"\n\n🛒 ESTADO DE LA DESPENSA Y COMPRAS (INFORMACIÓN EN TIEMPO REAL):"
+    ctx = "\n\n🛒 ESTADO DE LA DESPENSA Y COMPRAS (INFORMACIÓN EN TIEMPO REAL):"
     if inventory_str:
         ctx += f"\n- 📦 [INVENTARIO FÍSICO ACTUAL]: {inventory_str}. ¡Estas son las provisiones que el usuario tiene FÍSICAMENTE en su cocina ahora mismo! PRIORIZA SIEMPRE recomendar cocinar con esto antes de sugerir comprar cosas nuevas."
     else:
-        ctx += f"\n- 📦 [INVENTARIO FÍSICO ACTUAL]: Vacío. El usuario no ha registrado tener ingredientes en casa."
+        ctx += "\n- 📦 [INVENTARIO FÍSICO ACTUAL]: Vacío. El usuario no ha registrado tener ingredientes en casa."
 
     if shopping_delta_str:
         if plan_en_pausa:
@@ -383,7 +383,7 @@ def build_inventory_context(inventory_str: str, shopping_delta_str: str,
         else:
             ctx += f"\n- 📝 [LISTA DE COMPRAS PENDIENTE]: {shopping_delta_str}. Esto es lo que el usuario AÚN DEBE COMPRAR en el supermercado para completar su plan alimenticio."
     elif not plan_en_pausa:
-        ctx += f"\n- 📝 [LISTA DE COMPRAS PENDIENTE]: ¡Vacía! El usuario ya tiene todos los ingredientes necesarios en su inventario físico para su plan actual.\n"
+        ctx += "\n- 📝 [LISTA DE COMPRAS PENDIENTE]: ¡Vacía! El usuario ya tiene todos los ingredientes necesarios en su inventario físico para su plan actual.\n"
 
     return ctx
 

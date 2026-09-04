@@ -1,5 +1,4 @@
 import re
-import math
 
 try:
     from knobs import _env_bool

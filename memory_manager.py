@@ -5,13 +5,11 @@ Proceso asíncrono que resume conversaciones antiguas para mantener
 el contexto del usuario vivo sin saturar la ventana de tokens de Gemini.
 """
 
-import os
 import time
 import json
 import logging
 # [P0-LLM-PROVIDER-MIGRATION · 2026-06-12] Gemini → GLM.
 from llm_provider import ChatGLM, GLM_FLASH
-from langchain_core.messages import RemoveMessage
 
 logger = logging.getLogger(__name__)
 from pydantic import BaseModel, Field
