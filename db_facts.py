@@ -1079,6 +1079,47 @@ def get_consumed_meals_today(user_id: str, date_str: Optional[str] = None, tz_of
             logger.error(f"Error obteniendo comidas consumidas de hoy: {e}")
             return []
 
+def get_plan_meal_deviations_since(user_id: str, since_iso_date: str, limit: int = 60) -> list:
+    """[P1-DIARY-FREETEXT-ESTIMATE · 2026-09-04] Desvíos declarados en «Me lo comí»
+    («comí otra cosa» / «todavía no», P1-EAT-PLAN-MEAL-TRUTH) desde `pipeline_metrics`
+    (node='plan_meal_deviation'). Los escribía el Dashboard y NADIE los leía: el coach
+    afirmaba que comiste el almuerzo del plan y el siguiente bloque tomaba el día como
+    «sin registro». Filas propias (I2: `AND user_id = %s`); fail-open a [].
+    """
+    try:
+        rows = execute_sql_query(
+            "SELECT created_at, metadata FROM pipeline_metrics "
+            "WHERE user_id = %s AND node = 'plan_meal_deviation' AND created_at >= %s "
+            "ORDER BY created_at DESC LIMIT %s",
+            (user_id, since_iso_date, int(max(1, min(500, limit)))),
+        ) or []
+    except Exception as e:
+        logger.warning(f"[P1-DIARY-FREETEXT-ESTIMATE] no se pudieron leer los desvíos: {e}")
+        return []
+    out = []
+    for r in rows:
+        if not isinstance(r, dict):
+            continue
+        meta = r.get("metadata") or {}
+        if isinstance(meta, str):
+            try:
+                meta = json.loads(meta)
+            except Exception:
+                meta = {}
+        if not isinstance(meta, dict):
+            meta = {}
+        out.append({
+            "created_at": r.get("created_at"),
+            "reason": str(meta.get("reason") or ""),
+            "meal_type": str(meta.get("meal_type") or ""),
+            "meal_name": str(meta.get("meal_name") or ""),
+            "local_hour": meta.get("local_hour"),
+            "day_index": meta.get("day_index"),
+            "plan_id": meta.get("plan_id"),
+        })
+    return out
+
+
 def get_consumed_meals_since(user_id: str, since_iso_date: str, include_ingredients: bool = False):
     """Obtiene todas las comidas consumidas por el usuario desde una fecha específica.
 

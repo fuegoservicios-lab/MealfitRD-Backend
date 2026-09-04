@@ -5333,6 +5333,14 @@ def _build_past_days_context(user_id: str, current_plan, local_date_str: Optiona
             logger.warning(f"[P1-CHAT-PAST-DAYS] no se pudo leer el diario multi-día: {e}")
             rows = []
         out += build_past_diary_block(rows, today, days_back=days_back, tz_offset_mins=tz_offset_mins)
+        # [P1-DIARY-FREETEXT-ESTIMATE · 2026-09-04] tercera vía: lo que el usuario NEGÓ haber comido
+        try:
+            from db_facts import get_plan_meal_deviations_since
+            from chat_history_context import build_plan_deviations_block
+            devs = get_plan_meal_deviations_since(user_id, since) or []
+            out += build_plan_deviations_block(devs, today, days_back=days_back, tz_offset_mins=tz_offset_mins)
+        except Exception as e:
+            logger.warning(f"[P1-DIARY-FREETEXT-ESTIMATE] desvíos del plan fail-open: {e}")
         return out
     except Exception as e:
         logger.warning(f"[P1-CHAT-PAST-DAYS] contexto de días pasados fail-open: {e}")

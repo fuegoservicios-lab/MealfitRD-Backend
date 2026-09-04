@@ -87,6 +87,38 @@ class ManualMealRequest(BaseModel):
     deduct_pantry: bool = False
 
 
+class EstimateMacrosRequest(BaseModel):
+    """[P1-DIARY-FREETEXT-ESTIMATE] Texto libre → macros estimadas. El resultado NO se
+    persiste aquí: vuelve al componedor como borrador editable y se registra por la vía
+    `custom` de `/consumed/manual` (misma clamp, misma fila, sin resta de Nevera)."""
+    text: str = Field(..., min_length=3, max_length=200)
+    meal_type: Optional[str] = Field(default=None, max_length=32)
+
+
+class MacroEstimateModel(BaseModel):
+    """Salida estructurada del estimador (flash)."""
+    name: str = Field(..., max_length=120)
+    calories: float = Field(..., ge=0.0, le=5000.0)
+    protein: float = Field(..., ge=0.0, le=500.0)
+    carbs: float = Field(..., ge=0.0, le=800.0)
+    healthy_fats: float = Field(..., ge=0.0, le=400.0)
+    portion_note: str = Field(default="", max_length=160)
+
+
+_ESTIMATE_SYSTEM_PROMPT = (
+    "Eres un nutricionista dominicano. El usuario describe en texto libre algo que comió. "
+    "Estima las macros de UNA porción normal de adulto de ESO (si el texto trae cantidad, úsala). "
+    "Usa referencias de comida dominicana y latina (mangú, moro, locrio, sancocho, tostones, "
+    "yaniqueque, chimi, pica pollo) y estándar internacional para el resto. "
+    "Devuelve SOLO un JSON con estas claves exactas: "
+    '{"name": "nombre corto del plato (≤60 caracteres, en el idioma del usuario)", '
+    '"calories": kcal (número), "protein": gramos (número), "carbs": gramos (número), '
+    '"healthy_fats": gramos (número), '
+    '"portion_note": "porción asumida en una frase corta, p. ej. \"1 plato hondo (~350 g)\""}. '
+    "Sin texto fuera del JSON."
+)
+
+
 class RepeatMealRequest(BaseModel):
     """Repetir toma COORDENADAS (el id de una fila propia), no contenido — el
     cliente no puede inventar macros por esta vía tampoco."""
@@ -272,6 +304,13 @@ _CONSUMED_WRITE_LIMITER = RateLimiter(max_calls=20, period_seconds=60)
 _MANUAL_MEAL_LIMITER = RateLimiter(max_calls=20, period_seconds=60)
 _FOOD_FREQUENT_LIMITER = RateLimiter(max_calls=30, period_seconds=60)
 _REPEAT_MEAL_LIMITER = RateLimiter(max_calls=20, period_seconds=60)
+# [P1-DIARY-FREETEXT-ESTIMATE · 2026-09-04] Estimar macros de un texto libre («mangú con
+# huevo frito») con el modelo flash. Es la ÚNICA llamada LLM del diario y NO es un plan:
+# el gasto vive en `llm_usage_events` (node=diary_freetext_estimate, lo anota el mixin de
+# ChatGLM en `ainvoke`), jamás en `api_usage` — un almuerzo escrito a mano no quema crédito
+# de planes. Limitador propio (10/60s): el LLM cuesta, pero la persona escribe un plato,
+# no diez por minuto.
+_ESTIMATE_MACROS_LIMITER = RateLimiter(max_calls=10, period_seconds=60)
 
 
 # [P3-VISION-UPLOAD-VALIDATION · 2026-05-20] Whitelist de content_types
@@ -874,6 +913,75 @@ def api_log_consumed_meal(
     except Exception as e:
         logger.error(f"❌ [ERROR] Error en /api/diary/consumed POST: {str(e)}")
         raise HTTPException(status_code=500, detail=safe_error_detail(e))
+
+
+@router.post("/consumed/estimate-macros")
+async def api_estimate_macros(
+    payload: EstimateMacrosRequest,
+    verified_user_id: Optional[str] = Depends(_ESTIMATE_MACROS_LIMITER),
+):
+    """[P1-DIARY-FREETEXT-ESTIMATE · 2026-09-04] «Escríbelo y estimamos las macros».
+
+    El componedor ya aceptaba lo que el catálogo no conoce, pero SOLO si la persona tecleaba
+    las cuatro macros: nadie sabe cuánta proteína tiene «un mangú con huevo frito». Esto la
+    estima con el modelo flash y la devuelve como BORRADOR (editable, marcado como estimado);
+    el registro real sigue yendo por `/consumed/manual` con `ref="custom"`, así que no hay
+    segunda vía de escritura ni resta de Nevera (el catálogo no conoce el plato).
+
+    Soft-fail (HTTP 200 + operation_failed): que el modelo no conteste es business-as-usual
+    (P3-SWAP-SOFT-FAIL-200) — el componedor deja las macros a mano como siempre.
+    """
+    if not verified_user_id:
+        raise HTTPException(status_code=401, detail="Autenticación requerida")
+    text = " ".join(str(payload.text or "").split())[:200]
+    if len(text) < 3:
+        raise HTTPException(status_code=422, detail="Describe el plato con al menos 3 caracteres")
+    try:
+        from graph_orchestrator import ChatGLM, _plan_flash_model_name, _current_node_var, user_id_var
+        from langchain_core.messages import SystemMessage, HumanMessage
+        from food_search import _clamp_macros
+    except Exception as e:
+        logger.error(f"[P1-DIARY-FREETEXT-ESTIMATE] motor no disponible: {e}")
+        raise HTTPException(status_code=503, detail="Estimador no disponible")
+    model = _plan_flash_model_name()
+    slot = str(payload.meal_type or "").strip().lower()[:32]
+    human = f"Comida: {text}" + (f"\nMomento del día: {slot}" if slot else "")
+    llm = ChatGLM(model=model, temperature=0.1, max_retries=1, timeout=25).with_structured_output(
+        MacroEstimateModel, method="json_mode"
+    )
+    tok_node = _current_node_var.set("diary_freetext_estimate")
+    tok_user = user_id_var.set(verified_user_id)
+    try:
+        est = await asyncio.wait_for(
+            llm.ainvoke([SystemMessage(content=_ESTIMATE_SYSTEM_PROMPT), HumanMessage(content=human)]),
+            timeout=30,
+        )
+    except Exception as e:
+        logger.warning(f"[P1-DIARY-FREETEXT-ESTIMATE] estimación falló user={verified_user_id[:8]} model={model}: {e}")
+        return {
+            "operation_failed": True,
+            "error_code": "estimate_unavailable",
+            "error_message": "No pudimos estimar las macros ahora; escríbelas tú o inténtalo de nuevo.",
+        }
+    finally:
+        try:
+            _current_node_var.reset(tok_node)
+            user_id_var.reset(tok_user)
+        except Exception:
+            pass
+    if not isinstance(est, MacroEstimateModel):
+        return {"operation_failed": True, "error_code": "estimate_unparseable",
+                "error_message": "No pudimos estimar las macros ahora; escríbelas tú o inténtalo de nuevo."}
+    macros = _clamp_macros({"kcal": est.calories, "protein": est.protein, "carbs": est.carbs, "fats": est.healthy_fats})
+    name = " ".join(str(est.name or "").split())[:120] or text[:120]
+    logger.info(f"[P1-DIARY-FREETEXT-ESTIMATE] user={verified_user_id[:8]} «{text[:60]}» → {int(macros['kcal'])} kcal ({model})")
+    return {
+        "name": name,
+        "macros": macros,
+        "portion_note": " ".join(str(est.portion_note or "").split())[:160],
+        "estimated": True,
+        "model": model,
+    }
 
 
 @router.post("/consumed/manual")

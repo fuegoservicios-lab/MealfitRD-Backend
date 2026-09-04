@@ -23563,7 +23563,7 @@ def _normalize_meal_name(text: str) -> str:
     return strip_accents(str(text).lower()).strip()
 
 
-def _calculate_chunk_consumption_ratio(previous_chunk_days: list, consumed_records: list, consumption_mutations_count: int = 0) -> dict:
+def _calculate_chunk_consumption_ratio(previous_chunk_days: list, consumed_records: list, consumption_mutations_count: int = 0, deviation_count: int = 0) -> dict:
     """Calcula cuánto del chunk previo fue realmente consumido usando nombres de platos.
 
     [P0-3] Proxy implícito extendido a logging esparso:
@@ -23594,7 +23594,11 @@ def _calculate_chunk_consumption_ratio(previous_chunk_days: list, consumed_recor
             consumed_list.append(meal_name)
 
     planned_total = sum(planned_pool.values())
-    explicit_logged = len(consumed_list)
+    # [P1-DIARY-FREETEXT-ESTIMATE · 2026-09-04] un desvío declarado («comí otra cosa» /
+    # «todavía no») es una señal EXPLÍCITA del usuario: cuenta como registro para no caer en
+    # el proxy «0 logs ⇒ 100 % consumido», pero NO casa con ningún plato (no lo comió).
+    _declared_deviations = max(0, int(deviation_count or 0))
+    explicit_logged = len(consumed_list) + _declared_deviations
     
     match_stats = {"exact": 0, "substring": 0, "embedding": 0, "unmatched": 0}
     explicit_matched = 0
@@ -23697,6 +23701,7 @@ def _calculate_chunk_consumption_ratio(previous_chunk_days: list, consumed_recor
         "planned_meals": planned_total,
         "explicit_matched_meals": explicit_matched,
         "explicit_logged_meals": explicit_logged,
+        "declared_deviations": _declared_deviations,
         "used_implicit_proxy": use_implicit_proxy,
         "sparse_logging_proxy": sparse_logging,
         "zero_log_proxy": zero_log_proxy,
@@ -24819,7 +24824,13 @@ def _check_chunk_learning_ready(user_id: str, meal_plan_id: str, week_number: in
     consumption_mutations_count = int(activity.get("consumption_mutations_count") or 0)
     inventory_mutations = int(activity.get("mutations_count") or 0)
 
-    ratio_info = _calculate_chunk_consumption_ratio(previous_chunk_days, consumed_records, consumption_mutations_count)
+    _deviation_count = 0
+    try:
+        from db_facts import get_plan_meal_deviations_since
+        _deviation_count = len(get_plan_meal_deviations_since(user_id, prev_start_iso) or [])
+    except Exception as e:
+        logger.debug(f"[P1-DIARY-FREETEXT-ESTIMATE] no se pudieron contar los desvíos para {user_id}: {e}")
+    ratio_info = _calculate_chunk_consumption_ratio(previous_chunk_days, consumed_records, consumption_mutations_count, deviation_count=_deviation_count)
     ratio = ratio_info["ratio"]
 
     # [P0-1] zero_log_proxy=True significa que NO hubo logs reales del chunk previo.
