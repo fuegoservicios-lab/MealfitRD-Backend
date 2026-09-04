@@ -634,6 +634,55 @@ def build_past_plan_days_block(plan_data: Any, today: date,
     return _assemble(header, lines, footer, max_chars, "plan_days")
 
 
+def build_plan_deviations_block(deviation_rows: Any, today: date, days_back: int = 3,
+                                tz_offset_mins: int = 240, max_chars: int = 700) -> str:
+    """[P1-DIARY-FREETEXT-ESTIMATE · 2026-09-04] Desvíos declarados en «Me lo comí»: la
+    persona dijo que NO comió el plato del plan (comió otra cosa / todavía no). Incluye HOY
+    (a diferencia del diario multi-día): «¿qué comí hoy?» tiene que saber que el almuerzo
+    del plan no fue. Es la tercera vía de memoria y no se confunde con las otras dos: no es
+    lo prescrito ni lo registrado — es lo NEGADO."""
+    if not deviation_rows:
+        return ""
+    floor = today - timedelta(days=max(0, int(days_back)))
+    by_date: dict = {}
+    for row in deviation_rows:
+        if not isinstance(row, dict):
+            continue
+        d = _to_local_date(row.get("created_at"), tz_offset_mins)
+        if d is None or not (floor <= d <= today):
+            continue
+        by_date.setdefault(d, []).append(row)
+    if not by_date:
+        return ""
+    lines = []
+    for d in sorted(by_date.keys(), reverse=True):
+        parts = []
+        seen: set = set()
+        # el mismo plato puede tener varios desvíos el mismo día (la hoja se abre más de una vez):
+        # una sola línea por (slot, plato); las filas vienen DESC, así que gana el más reciente
+        for r in by_date[d]:
+            slot = str(r.get("meal_type") or "").strip()
+            nm = str(r.get("meal_name") or "").strip() or "(plato del plan)"
+            reason = str(r.get("reason") or "")
+            key = (slot.lower(), nm.lower())
+            if key in seen:
+                continue
+            seen.add(key)
+            que = "comió OTRA COSA" if reason == "ate_other" else "todavía no lo había comido"
+            seg = f"{slot}: «{nm}» → {que}" if slot else f"«{nm}» → {que}"
+            hh = r.get("local_hour")
+            if isinstance(hh, (int, float)) and reason != "ate_other":
+                seg += f" (a las {int(hh):02d}h)"
+            parts.append(seg)
+        etiqueta = "HOY" if d == today else _fmt_date_es(d)
+        lines.append(f"- {etiqueta}: " + " · ".join(parts))
+    header = ("\n\n🚫 PLATOS DEL PLAN QUE EL USUARIO DECLARÓ NO HABER COMIDO (botón «Me lo comí» → "
+              "«comí otra cosa» / «todavía no»). NO afirmes que los comió; si comió otra cosa y no "
+              "está en el diario, pregúntale qué fue:\n")
+    footer = ""
+    return _assemble(header, lines, footer, max_chars, "deviations")
+
+
 def build_past_diary_block(consumed_rows: Any, today: date,
                            days_back: Optional[int] = None,
                            max_chars: Optional[int] = None,

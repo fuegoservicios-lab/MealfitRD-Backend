@@ -87,6 +87,38 @@ class ManualMealRequest(BaseModel):
     deduct_pantry: bool = False
 
 
+class EstimateMacrosRequest(BaseModel):
+    """[P1-DIARY-FREETEXT-ESTIMATE] Texto libre → macros estimadas. El resultado NO se
+    persiste aquí: vuelve al componedor como borrador editable y se registra por la vía
+    `custom` de `/consumed/manual` (misma clamp, misma fila, sin resta de Nevera)."""
+    text: str = Field(..., min_length=3, max_length=200)
+    meal_type: Optional[str] = Field(default=None, max_length=32)
+
+
+class MacroEstimateModel(BaseModel):
+    """Salida estructurada del estimador (flash)."""
+    name: str = Field(..., max_length=120)
+    calories: float = Field(..., ge=0.0, le=5000.0)
+    protein: float = Field(..., ge=0.0, le=500.0)
+    carbs: float = Field(..., ge=0.0, le=800.0)
+    healthy_fats: float = Field(..., ge=0.0, le=400.0)
+    portion_note: str = Field(default="", max_length=160)
+
+
+_ESTIMATE_SYSTEM_PROMPT = (
+    "Eres un nutricionista dominicano. El usuario describe en texto libre algo que comió. "
+    "Estima las macros de UNA porción normal de adulto de ESO (si el texto trae cantidad, úsala). "
+    "Usa referencias de comida dominicana y latina (mangú, moro, locrio, sancocho, tostones, "
+    "yaniqueque, chimi, pica pollo) y estándar internacional para el resto. "
+    "Devuelve SOLO un JSON con estas claves exactas: "
+    '{"name": "nombre corto del plato (≤60 caracteres, en el idioma del usuario)", '
+    '"calories": kcal (número), "protein": gramos (número), "carbs": gramos (número), '
+    '"healthy_fats": gramos (número), '
+    '"portion_note": "porción asumida en una frase corta, p. ej. \"1 plato hondo (~350 g)\""}. '
+    "Sin texto fuera del JSON."
+)
+
+
 class RepeatMealRequest(BaseModel):
     """Repetir toma COORDENADAS (el id de una fila propia), no contenido — el
     cliente no puede inventar macros por esta vía tampoco."""
@@ -181,6 +213,16 @@ class ConsumedFromPlanRequest(BaseModel):
     model_config = {"extra": "ignore"}
 
 
+class PlanMealDeviationRequest(BaseModel):
+    """[P1-EAT-PLAN-MEAL-TRUTH · 2026-09-04] Coordenadas + motivo. Mismo contrato que
+    ConsumedFromPlanRequest: el cliente NUNCA manda contenido."""
+    plan_id: str = Field(..., min_length=1, max_length=64)
+    day_index: int = Field(..., ge=0, le=365)
+    meal_index: int = Field(..., ge=0, le=50)
+    reason: str = Field(..., pattern=r"^(ate_other|not_yet)$")
+    local_hour: Optional[int] = Field(default=None, ge=0, le=23)
+
+
 class ProgressRequest(BaseModel):
     """Payload para `POST /api/diary/progress` (weight tracking)."""
     user_id: Optional[str] = None
@@ -246,6 +288,11 @@ _DELETE_CONSUMED_LIMITER = RateLimiter(max_calls=20, period_seconds=60)
 # clase (mutación barata, anti-spam sin restringir uso legítimo: 5-6 comidas
 # al día están holgadamente dentro).
 _PLAN_MEAL_LIMITER = RateLimiter(max_calls=20, period_seconds=60)
+# [P1-EAT-PLAN-MEAL-TRUTH · 2026-09-04] vista previa de cobertura (SELECT + resolución de nombres,
+# cero escritura) y desvío declarado («comí otra cosa» / «todavía no»). Exentos de cuota como su
+# hermano: al cap el usuario no podría ni ANOTAR lo que come.
+_PLAN_MEAL_PREVIEW_LIMITER = RateLimiter(max_calls=30, period_seconds=60)
+_PLAN_MEAL_DEVIATION_LIMITER = RateLimiter(max_calls=20, period_seconds=60)
 
 # [P1-MANUAL-FOOD-LOG · 2026-08-11] Los cuatro writes/reads del registro manual son
 # cero costo LLM ⇒ quota-exempt con RateLimiter, la misma doctrina que las filas de
@@ -257,6 +304,13 @@ _CONSUMED_WRITE_LIMITER = RateLimiter(max_calls=20, period_seconds=60)
 _MANUAL_MEAL_LIMITER = RateLimiter(max_calls=20, period_seconds=60)
 _FOOD_FREQUENT_LIMITER = RateLimiter(max_calls=30, period_seconds=60)
 _REPEAT_MEAL_LIMITER = RateLimiter(max_calls=20, period_seconds=60)
+# [P1-DIARY-FREETEXT-ESTIMATE · 2026-09-04] Estimar macros de un texto libre («mangú con
+# huevo frito») con el modelo flash. Es la ÚNICA llamada LLM del diario y NO es un plan:
+# el gasto vive en `llm_usage_events` (node=diary_freetext_estimate, lo anota el mixin de
+# ChatGLM en `ainvoke`), jamás en `api_usage` — un almuerzo escrito a mano no quema crédito
+# de planes. Limitador propio (10/60s): el LLM cuesta, pero la persona escribe un plato,
+# no diez por minuto.
+_ESTIMATE_MACROS_LIMITER = RateLimiter(max_calls=10, period_seconds=60)
 
 
 # [P3-VISION-UPLOAD-VALIDATION · 2026-05-20] Whitelist de content_types
@@ -861,6 +915,75 @@ def api_log_consumed_meal(
         raise HTTPException(status_code=500, detail=safe_error_detail(e))
 
 
+@router.post("/consumed/estimate-macros")
+async def api_estimate_macros(
+    payload: EstimateMacrosRequest,
+    verified_user_id: Optional[str] = Depends(_ESTIMATE_MACROS_LIMITER),
+):
+    """[P1-DIARY-FREETEXT-ESTIMATE · 2026-09-04] «Escríbelo y estimamos las macros».
+
+    El componedor ya aceptaba lo que el catálogo no conoce, pero SOLO si la persona tecleaba
+    las cuatro macros: nadie sabe cuánta proteína tiene «un mangú con huevo frito». Esto la
+    estima con el modelo flash y la devuelve como BORRADOR (editable, marcado como estimado);
+    el registro real sigue yendo por `/consumed/manual` con `ref="custom"`, así que no hay
+    segunda vía de escritura ni resta de Nevera (el catálogo no conoce el plato).
+
+    Soft-fail (HTTP 200 + operation_failed): que el modelo no conteste es business-as-usual
+    (P3-SWAP-SOFT-FAIL-200) — el componedor deja las macros a mano como siempre.
+    """
+    if not verified_user_id:
+        raise HTTPException(status_code=401, detail="Autenticación requerida")
+    text = " ".join(str(payload.text or "").split())[:200]
+    if len(text) < 3:
+        raise HTTPException(status_code=422, detail="Describe el plato con al menos 3 caracteres")
+    try:
+        from graph_orchestrator import ChatGLM, _plan_flash_model_name, _current_node_var, user_id_var
+        from langchain_core.messages import SystemMessage, HumanMessage
+        from food_search import _clamp_macros
+    except Exception as e:
+        logger.error(f"[P1-DIARY-FREETEXT-ESTIMATE] motor no disponible: {e}")
+        raise HTTPException(status_code=503, detail="Estimador no disponible")
+    model = _plan_flash_model_name()
+    slot = str(payload.meal_type or "").strip().lower()[:32]
+    human = f"Comida: {text}" + (f"\nMomento del día: {slot}" if slot else "")
+    llm = ChatGLM(model=model, temperature=0.1, max_retries=1, timeout=25).with_structured_output(
+        MacroEstimateModel, method="json_mode"
+    )
+    tok_node = _current_node_var.set("diary_freetext_estimate")
+    tok_user = user_id_var.set(verified_user_id)
+    try:
+        est = await asyncio.wait_for(
+            llm.ainvoke([SystemMessage(content=_ESTIMATE_SYSTEM_PROMPT), HumanMessage(content=human)]),
+            timeout=30,
+        )
+    except Exception as e:
+        logger.warning(f"[P1-DIARY-FREETEXT-ESTIMATE] estimación falló user={verified_user_id[:8]} model={model}: {e}")
+        return {
+            "operation_failed": True,
+            "error_code": "estimate_unavailable",
+            "error_message": "No pudimos estimar las macros ahora; escríbelas tú o inténtalo de nuevo.",
+        }
+    finally:
+        try:
+            _current_node_var.reset(tok_node)
+            user_id_var.reset(tok_user)
+        except Exception:
+            pass
+    if not isinstance(est, MacroEstimateModel):
+        return {"operation_failed": True, "error_code": "estimate_unparseable",
+                "error_message": "No pudimos estimar las macros ahora; escríbelas tú o inténtalo de nuevo."}
+    macros = _clamp_macros({"kcal": est.calories, "protein": est.protein, "carbs": est.carbs, "fats": est.healthy_fats})
+    name = " ".join(str(est.name or "").split())[:120] or text[:120]
+    logger.info(f"[P1-DIARY-FREETEXT-ESTIMATE] user={verified_user_id[:8]} «{text[:60]}» → {int(macros['kcal'])} kcal ({model})")
+    return {
+        "name": name,
+        "macros": macros,
+        "portion_note": " ".join(str(est.portion_note or "").split())[:160],
+        "estimated": True,
+        "model": model,
+    }
+
+
 @router.post("/consumed/manual")
 def api_log_manual_meal(
     payload: ManualMealRequest,
@@ -1156,6 +1279,141 @@ def api_log_consumed_meal_from_plan(
         raise
     except Exception as e:
         logger.error(f"❌ [ERROR] Error en /api/diary/consumed-from-plan: {str(e)}")
+        raise HTTPException(status_code=500, detail=safe_error_detail(e))
+
+
+@router.post("/consumed-from-plan/preview")
+def api_preview_consumed_meal_from_plan(
+    payload: ConsumedFromPlanRequest,
+    verified_user_id: Optional[str] = Depends(_PLAN_MEAL_PREVIEW_LIMITER),
+):
+    """[P1-EAT-PLAN-MEAL-TRUTH · 2026-09-04] ¿La Nevera explica este plato? Misma lectura
+    server-side del plato (coordenadas + `AND user_id = %s`, I2) y la MISMA resolución de
+    nombres que la resta real (`deduct_consumed_meal_from_inventory(dry_run=True)`), sin
+    escribir nada. El cliente decide con esto si pregunta «¿qué pasó?» antes de registrar.
+    Tooltip-anchor: P1-EAT-PLAN-MEAL-TRUTH-PREVIEW
+    """
+    try:
+        assert_valid_uuid(payload.plan_id)
+        if not verified_user_id:
+            raise HTTPException(status_code=403, detail="Prohibido.")
+        row = execute_sql_query(
+            "SELECT plan_data FROM meal_plans WHERE id = %s AND user_id = %s",
+            (payload.plan_id, verified_user_id),
+            fetch_one=True,
+        )
+        if not row:
+            raise HTTPException(status_code=404, detail="Plan no encontrado.")
+        plan_data = row.get("plan_data") or {}
+        if isinstance(plan_data, str):
+            try:
+                plan_data = json.loads(plan_data)
+            except Exception:
+                raise HTTPException(status_code=422, detail="El plan está corrupto.")
+        days = plan_data.get("days") or []
+        if not isinstance(days, list) or payload.day_index >= len(days):
+            raise HTTPException(status_code=404, detail="Ese día no existe en tu plan.")
+        meals = (days[payload.day_index] or {}).get("meals") or []
+        if not isinstance(meals, list) or payload.meal_index >= len(meals):
+            raise HTTPException(status_code=404, detail="Ese plato no existe en tu plan.")
+        meal = meals[payload.meal_index] or {}
+        ingredients = [
+            str(i) for i in (meal.get("ingredients") or [])
+            if i and len(str(i).strip()) >= 3
+        ]
+        summary = {}
+        if ingredients:
+            import db_inventory
+            summary = db_inventory.deduct_consumed_meal_from_inventory(
+                verified_user_id, ingredients, source="plan_meal_preview", dry_run=True,
+            ) or {}
+        present = list(summary.get("succeeded") or []) + list(summary.get("inferred") or [])
+        missing = list(summary.get("not_in_pantry") or [])
+        # [P1-EAT-PLAN-MEAL-TRUTH · v2] la cobertura por conteo engaña: 7 de 11 líneas presentes
+        # pueden ser sal, ajo y aceite mientras falta el calamar. El ingrediente PRINCIPAL es la
+        # primera línea que no es condimento/adorno; si falta, la Nevera no explica el plato.
+        _quiet = ("al gusto", "a gusto", "pizca", "opcional", "para servir", "para decorar", "ramita", "hojita", "c/n", "cantidad necesaria")
+        _seasoning = ("sal", "pimienta", "orégano", "oregano", "ajo", "aceite", "vinagre", "comino", "canela", "tomillo", "laurel", "cilantro", "perejil", "limón", "limon", "azúcar", "azucar", "vainilla")
+        main_line = next(
+            (i for i in ingredients
+             if not any(h in i.lower() for h in _quiet) and not any(sn in i.lower() for sn in _seasoning)),
+            ingredients[0] if ingredients else None,
+        )
+        main_missing = bool(main_line) and main_line in missing
+        total = len(ingredients)
+        return {
+            "success": True,
+            "meal_name": str(meal.get("name") or "").strip(),
+            "meal_type": str(meal.get("meal") or "snack").strip().lower() or "snack",
+            "total": total,
+            "present": present,
+            "missing": missing,
+            "coverage": (len(present) / total) if total else 1.0,
+            "main_ingredient": main_line,
+            "main_missing": main_missing,
+        }
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"❌ [ERROR] Error en /api/diary/consumed-from-plan/preview: {str(e)}")
+        raise HTTPException(status_code=500, detail=safe_error_detail(e))
+
+
+@router.post("/plan-meal-deviation")
+def api_plan_meal_deviation(
+    payload: PlanMealDeviationRequest,
+    verified_user_id: Optional[str] = Depends(_PLAN_MEAL_DEVIATION_LIMITER),
+):
+    """[P1-EAT-PLAN-MEAL-TRUTH · 2026-09-04] El usuario declara que NO comió el plato del plan
+    («comí otra cosa» / «todavía no»). Antes esa información se perdía: el registro entraba igual
+    y los descuentos fallidos se anotaban por dentro. Queda en `pipeline_metrics`
+    (node='plan_meal_deviation') como señal de adherencia real para el coach y el bloque
+    siguiente. Coordenadas + `AND user_id = %s`; el contenido (nombre, slot) sale del plan.
+    Tooltip-anchor: P1-EAT-PLAN-MEAL-TRUTH-DEVIATION
+    """
+    try:
+        assert_valid_uuid(payload.plan_id)
+        if not verified_user_id:
+            raise HTTPException(status_code=403, detail="Prohibido.")
+        row = execute_sql_query(
+            "SELECT plan_data FROM meal_plans WHERE id = %s AND user_id = %s",
+            (payload.plan_id, verified_user_id),
+            fetch_one=True,
+        )
+        if not row:
+            raise HTTPException(status_code=404, detail="Plan no encontrado.")
+        plan_data = row.get("plan_data") or {}
+        if isinstance(plan_data, str):
+            try:
+                plan_data = json.loads(plan_data)
+            except Exception:
+                plan_data = {}
+        days = plan_data.get("days") or []
+        meal = {}
+        if isinstance(days, list) and payload.day_index < len(days):
+            meals = (days[payload.day_index] or {}).get("meals") or []
+            if isinstance(meals, list) and payload.meal_index < len(meals):
+                meal = meals[payload.meal_index] or {}
+        meta = {
+            "plan_id": payload.plan_id,
+            "day_index": payload.day_index,
+            "meal_index": payload.meal_index,
+            "meal_name": str(meal.get("name") or "")[:120],
+            "meal_type": str(meal.get("meal") or "")[:32].lower(),
+            "reason": payload.reason,
+            "local_hour": payload.local_hour,
+        }
+        from db_core import execute_sql_write as _write
+        _write(
+            "INSERT INTO pipeline_metrics (user_id, session_id, node, duration_ms, retries, tokens_estimated, confidence, metadata) "
+            "VALUES (%s, %s, 'plan_meal_deviation', 0, 0, 0, 0, %s::jsonb)",
+            (verified_user_id, None, json.dumps(meta, ensure_ascii=False)),
+        )
+        return {"success": True, "reason": payload.reason, "meal_name": meta["meal_name"]}
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"❌ [ERROR] Error en /api/diary/plan-meal-deviation: {str(e)}")
         raise HTTPException(status_code=500, detail=safe_error_detail(e))
 
 

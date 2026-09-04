@@ -72,15 +72,17 @@ def test_fill_perc_span_rendered_inside_track():
     # Buscar el primer `</div>` que NO esté precedido por otro tag abierto
     # sin cerrar — heurística simple: tomar el slice de 2500 chars y
     # verificar que `styles.fillPerc` aparece dentro.
-    track_slice = jsx[track_idx:track_idx + 2500]
+    track_slice = jsx[track_idx:track_idx + 6000]  # el track creció (contorno rojo del exceso, 09-04)
     assert "styles.fillPerc" in track_slice, (
         "`styles.fillPerc` no esta dentro del bloque `.track`. Post-fix narrow "
         "debe vivir aquí (no en `.fill`) para poder salir del fill cuando "
         "el % es bajo."
     )
     # El `.fill` debe ser self-closing (no contener body).
+    # [2026-09-04] el `style` del fill lleva comentarios `//` (decisión del rojo sólido): el
+    # cierre se busca ANTES de cualquier `</div>`, sin prohibir barras dentro del bloque.
     fill_self_closing = re.search(
-        r"className=\{styles\.fill\}[^/]*?/>",
+        r"className=\{styles\.fill\}(?:(?!</div>)[\s\S])*?/>",
         track_slice,
     )
     assert fill_self_closing, (

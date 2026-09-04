@@ -254,8 +254,11 @@ renovó (limitación asumida y anclada en test).
 [P1-CHAT-PAST-DAYS · 2026-07-28] `MEALFIT_CHAT_HISTORY_MAX_CHARS` es **por
 bloque, no combinado**: `_assemble` se invoca una vez por bloque con el mismo
 valor (su propio docstring ya decía "por bloque"). El techo efectivo de los dos
-bloques juntos es **2× el knob** — 6000 chars con el default. Si necesitas un
-techo combinado real, hay que repartir el presupuesto entre las dos llamadas,
+bloques juntos es **2× el knob** — 6000 chars con el default. [P1-DIARY-FREETEXT-ESTIMATE ·
+2026-09-04] Hay un TERCER bloque, los desvíos declarados (`build_plan_deviations_block`,
+«comí otra cosa» / «todavía no» del botón «Me lo comí»), con techo FIJO de 700 chars (no lee
+el knob: son una línea por día). Peor caso total: **2× el knob + 700**. Si necesitas un
+techo combinado real, hay que repartir el presupuesto entre las llamadas,
 no bajar el knob a la mitad (eso recorta cada bloque por separado y el bloque
 del plan, que es el caro, se lleva el recorte igual que el del diario).
 
@@ -279,7 +282,7 @@ Todos se auto-registran en `_KNOBS_REGISTRY` vía `_env_int`/`_env_bool`
 | Índice de días pasados (7 días) | ~1.4 KB | ~400 |
 | Diario multi-día (7 días con registro real) | ~0.7–1.7 KB | ~200–470 |
 | **Total añadido por turno** | **~2–3 KB** | **~600–900** |
-| Techo duro (cap por bloque × 2 bloques, default 3000) | **6 KB** | **~1.7k** |
+| Techo duro (cap por bloque × 2 bloques, default 3000, + 700 fijos del bloque de desvíos) | **6,7 KB** | **~1.9k** |
 
 ≈ +$0.0004/turno en `glm-5.3`. Frente a los 9–69k tokens que el plan
 JSON ya mete en cada turno, es ruido. La tool solo cuesta cuando se invoca.

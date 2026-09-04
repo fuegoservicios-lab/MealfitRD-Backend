@@ -5322,6 +5322,14 @@ def _build_past_days_context(user_id: str, current_plan, local_date_str: Optiona
             logger.warning(f"[P1-CHAT-PAST-DAYS] no se pudo leer el diario multi-día: {e}")
             rows = []
         out += build_past_diary_block(rows, today, days_back=days_back, tz_offset_mins=tz_offset_mins)
+        # [P1-DIARY-FREETEXT-ESTIMATE · 2026-09-04] tercera vía: lo que el usuario NEGÓ haber comido
+        try:
+            from db_facts import get_plan_meal_deviations_since
+            from chat_history_context import build_plan_deviations_block
+            devs = get_plan_meal_deviations_since(user_id, since) or []
+            out += build_plan_deviations_block(devs, today, days_back=days_back, tz_offset_mins=tz_offset_mins)
+        except Exception as e:
+            logger.warning(f"[P1-DIARY-FREETEXT-ESTIMATE] desvíos del plan fail-open: {e}")
         return out
     except Exception as e:
         logger.warning(f"[P1-CHAT-PAST-DAYS] contexto de días pasados fail-open: {e}")
@@ -6088,7 +6096,10 @@ def chat_with_agent(session_id: str, prompt: str, current_plan: Optional[dict] =
             consumed_today = get_consumed_meals_today(user_id, date_str=local_date, tz_offset_mins=_tz_diario)
             if consumed_today:
                 total_consumed = sum(m.get('calories', 0) for m in consumed_today)
-                meals_text = ", ".join([f"{m.get('meal_name')} ({m.get('calories')} kcal)" for m in consumed_today])
+                meals_text = ", ".join([  # [P1-DIARY-FREETEXT-ESTIMATE v2] slot delante del plato
+                    f"{(str(m.get('meal_type') or '').strip() + ': ') if m.get('meal_type') else ''}{m.get('meal_name')} ({m.get('calories')} kcal)"
+                    for m in consumed_today
+                ])
                 
                 target_calories = form_data.get("target_calories") if form_data else None
                 # [P1-CHAT-PAUSED-PROMPT-BLOCKS · 2026-08-14] El respaldo sale del plan
@@ -6108,6 +6119,13 @@ def chat_with_agent(session_id: str, prompt: str, current_plan: Optional[dict] =
                         logger.warning(f"[P1-CHAT-PAUSED-PROMPT-BLOCKS] metas del contador ilegibles: {_tgt_e}")
                 
                 system_prompt += f"\n\nDIARIO DE HOY: El usuario ya ha registrado consumir hoy las siguientes comidas: {meals_text}."
+                # [P1-DIARY-FREETEXT-ESTIMATE v2 · 2026-09-04] un plato repetido con las mismas kcal es casi siempre un
+                # registro doble: avisar Y dar el total sin él (el coach solo EDITA filas; borrar es «Deshacer registro»).
+                system_prompt += (
+                    " Si dos registros de hoy llevan el MISMO plato con las MISMAS kcal, trátalos como un registro "
+                    "DUPLICADO: dilo con los dos slots, y da los totales del día SIN el duplicado (además del bruto). "
+                    "Tú no puedes borrar filas: el usuario lo quita con «Deshacer registro» en el diario."
+                )
                 # [P1-CHAT-MACRO-CONTEXT · 2026-07-12] Macros desglosadas del
                 # día — las MISMAS que la card 'Progreso en Tiempo Real'.
                 system_prompt += _macro_totals_line(consumed_today, current_plan)
@@ -6619,7 +6637,10 @@ def chat_with_agent_stream(session_id: str, prompt: str, current_plan: Optional[
             consumed_today = get_consumed_meals_today(user_id, date_str=local_date, tz_offset_mins=_tz_diario)
             if consumed_today:
                 total_consumed = sum(m.get('calories', 0) for m in consumed_today)
-                meals_text = ", ".join([f"{m.get('meal_name')} ({m.get('calories')} kcal)" for m in consumed_today])
+                meals_text = ", ".join([  # [P1-DIARY-FREETEXT-ESTIMATE v2] slot delante del plato
+                    f"{(str(m.get('meal_type') or '').strip() + ': ') if m.get('meal_type') else ''}{m.get('meal_name')} ({m.get('calories')} kcal)"
+                    for m in consumed_today
+                ])
                 
                 target_calories = form_data.get("target_calories") if form_data else None
                 # [P1-CHAT-PAUSED-PROMPT-BLOCKS · 2026-08-14] El respaldo sale del plan
@@ -6639,6 +6660,13 @@ def chat_with_agent_stream(session_id: str, prompt: str, current_plan: Optional[
                         logger.warning(f"[P1-CHAT-PAUSED-PROMPT-BLOCKS] metas del contador ilegibles: {_tgt_e}")
                 
                 system_prompt += f"\n\nDIARIO DE HOY: El usuario ya ha registrado consumir hoy las siguientes comidas: {meals_text}. [P1-CHAT-ACT-DONT-ASK] Úsalo para NO DUPLICAR, no para pedir permiso: si una foto o mensaje nuevo coincide con algo que ya está aquí, felicítalo o coméntalo sin volver a registrarlo de nuevo; si ya tiene una cena registrada y llega otra foto de noche, asume que es un snack nocturno (o pregúntale por qué repite) en vez de tratarla como si fuera la cena otra vez. Fuera de ese caso de duplicado, sigue la regla general: comida nueva en pasado = regístrala YA, sin preguntar."
+                # [P1-DIARY-FREETEXT-ESTIMATE v2 · 2026-09-04] un plato repetido con las mismas kcal es casi siempre un
+                # registro doble: avisar Y dar el total sin él (el coach solo EDITA filas; borrar es «Deshacer registro»).
+                system_prompt += (
+                    " Si dos registros de hoy llevan el MISMO plato con las MISMAS kcal, trátalos como un registro "
+                    "DUPLICADO: dilo con los dos slots, y da los totales del día SIN el duplicado (además del bruto). "
+                    "Tú no puedes borrar filas: el usuario lo quita con «Deshacer registro» en el diario."
+                )
                 # [P1-CHAT-MACRO-CONTEXT · 2026-07-12] Macros desglosadas del
                 # día — las MISMAS que la card 'Progreso en Tiempo Real'.
                 system_prompt += _macro_totals_line(consumed_today, current_plan)

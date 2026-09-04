@@ -100,13 +100,9 @@ def test_surgical_pro_thinking_branch():
     # [P2-THINKING-EFFORT] body en `_surg_think_body` para inyectar effort opcional.
     assert '_surg_think_body = {"type": "enabled"}' in win
     assert 'extra_body={"thinking": _surg_think_body}' in win
-    # [P2-CRITIQUE-FIX-DESC-BACKFILL · 2026-09-04] El corrector quirúrgico valida con el modelo
-    # de CORRECCIÓN (`desc` opcional, rellenada después por `_backfill_corrected_day_desc`), no
-    # con el de generación: 4 comidas sin `desc` eran 4 errores de validación y la corrección
-    # entera se perdía. Las dos ramas (thinking / por defecto) apuntan al mismo modelo.
     assert 'with_structured_output(SingleDayCorrectionModel, method="json_mode")' in win
     # rama por defecto intacta (function_calling implícito).
-    assert ".with_structured_output(SingleDayCorrectionModel)\n" in win
+    assert ".with_structured_output(SingleDayCorrectionModel)\n" in win  # [P2-CRITIQUE-FIX-DESC-BACKFILL]
 
 
 # NOTA: la 3ra superficie (fact-checker clínico, P1-FACTCHECKER-THINKING) tiene su

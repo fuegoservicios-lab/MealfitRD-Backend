@@ -10737,8 +10737,24 @@ def api_restock(data: dict = Body(...), verified_user_id: Optional[str] = Depend
             except Exception:
                 return False
 
+        # [P2-RESTOCK-DEDUP-RESPECTS-INVENTORY · 2026-09-04] El dedup por ciclo existe para no SUMAR dos
+        # veces una compra que sigue en la Nevera. Si el ítem YA NO está (lo borró el usuario, o se
+        # consumió a cero), volver a comprarlo es legítimo: el dueño borró calamar/espárragos/yogur,
+        # pulsó «Ya compré lo que faltaba (5)» y el servidor saltó los 5 en silencio (200 OK, «todos
+        # ya estaban registrados»). Se salta solo lo que sigue presente.
+        _present_keys = set()
+        try:
+            _inv_rows = execute_sql_query(
+                "SELECT ingredient_name FROM user_inventory WHERE user_id = %s AND quantity > 0",
+                (user_id,), fetch_all=True,
+            ) or []
+            _present_keys = {strip_accents(str(r.get("ingredient_name") or "").strip().lower()) for r in _inv_rows}
+        except Exception as _inv_e:
+            logger.warning(f"[P2-RESTOCK-DEDUP-RESPECTS-INVENTORY] lectura de inventario falló: {_inv_e}; dedup solo por ciclo.")
+            _present_keys = None
         filtered_ingredients = []
         skipped_dupes = []
+        rebought = []
         for raw_item in ingredients:
             name = _name_of(raw_item)
             if not name:
@@ -10746,15 +10762,19 @@ def api_restock(data: dict = Body(...), verified_user_id: Optional[str] = Depend
             key = strip_accents(name.lower())
             prev_ts = _existing_restocked.get(key)
             if isinstance(prev_ts, str) and _in_cycle(prev_ts):
-                skipped_dupes.append(name)
-                continue
+                if _present_keys is None or key in _present_keys:
+                    skipped_dupes.append(name)
+                    continue
+                rebought.append(name)
             filtered_ingredients.append(raw_item)
+        if rebought:
+            logger.info(f"🛒 [P2-RESTOCK-DEDUP-RESPECTS-INVENTORY] {len(rebought)} item(s) re-comprado(s) dentro del ciclo porque ya no estaban en la Nevera: {rebought[:5]}")
 
         if skipped_dupes:
             logger.info(f"🔁 [RESTOCK] {len(skipped_dupes)} item(s) ya registrado(s) en ciclo ({_cycle_days}d), saltando duplicados: {skipped_dupes[:5]}")
 
         if not filtered_ingredients:
-            return {"success": True, "message": "Todos los items ya estaban registrados en este ciclo."}
+            return {"success": True, "added": 0, "skipped": skipped_dupes, "message": "Todos los items ya estaban registrados en este ciclo."}
 
         # [P2-NEVERA-BRANDS · 2026-07-06] Resolver la MARCA comprada: los items
         # estructurados traen `brand_product_id` (el producto que la lista usó —
@@ -10924,6 +10944,8 @@ def api_restock(data: dict = Body(...), verified_user_id: Optional[str] = Depend
                 "success": True,
                 "message": "¡Despensa actualizada exitosamente!",
                 "persisted_count": len(persisted_names),
+                "added": len(persisted_names),  # [P2-RESTOCK-DEDUP-RESPECTS-INVENTORY] el cliente distingue «sumado» de «ya lo tenías»
+                "skipped": skipped_dupes,
                 "requested_count": len(filtered_ingredients),
                 "plan_unfrozen": _unfrozen_now,
             }

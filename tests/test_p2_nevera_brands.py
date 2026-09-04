@@ -57,7 +57,7 @@ def test_rpc_merge_path_refreshes_brand():
 
 def test_restock_structured_path_passes_brand():
     i = _DBI.index("def restock_inventory(")
-    win = _DBI[i:i + 5200]
+    win = _DBI[i:i + 9000]  # [P1-PANTRY-PACKAGE-GRAMS] el bloque de envases alargó la función
     assert 'item.get("brand")' in win and "brand=_item_brand" in win
 
 

@@ -60,9 +60,7 @@ def test_endpoint_behaviour_with_stubbed_worker(monkeypatch):
 
     class _Req:
         headers = {"authorization": "Bearer x"}
-        # [P2-ADMIN-RATE-LIMIT] el endpoint pasa por `_check_admin_rate_limit`, que cae al
-        # bucket "anon" cuando `request.client` es None (socket UNIX, clientes raros).
-        client = None
+        client = None  # el limitador admin lee request.client (None ⇒ bucket "anon")
 
     out = sysmod.admin_worker_drain(_Req(), sysmod._WorkerDrainBody(wait_s=5))
     assert out["drained"] is True and out["ticks_in_flight"] == 0 and out["initial_chunks_processing"] == 1

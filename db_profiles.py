@@ -743,6 +743,11 @@ _DEFAULT_LLM_PRICING_MICROS_PER_M: Dict[str, Dict[str, int]] = {
     "gpt-5.6-luna":  {"input": 200_000,   "output": 1_200_000,  "cached": 20_000},
     "gpt-5.6-terra": {"input": 2_000_000, "output": 12_000_000, "cached": 200_000},
     "gpt-5.6-sol":   {"input": 5_000_000, "output": 30_000_000, "cached": 500_000},
+    # [P1-VISION-GEMINI-FLASH · 2026-09-04] Gemini 3.8 Flash SOLO como provider de visión
+    # (escáner): $0.75/M in, $3.75/M out (llm-stats 2026-09-02); cached ~10 % del input.
+    # Fila EXACTA por modelo, no un prefijo: `test_p0_llm_provider_migration` exige que un
+    # gemini desconocido siga costando None (no adivinar precios).
+    "gemini-3.8-flash": {"input": 750_000, "output": 3_750_000, "cached": 75_000},  # [P1-VISION-GEMINI-FLASH]
 }
 
 

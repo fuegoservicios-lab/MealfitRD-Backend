@@ -97,10 +97,10 @@ def test_red_gradient_constant_present(jsx_src: str):
         "red-600) ausente. Es el ancla de la paleta del estado over. "
         "Si cambias a otro rojo, actualiza el test."
     )
-    assert "#FCA5A5" in jsx_src, (
-        "P3-TRACKING-OVER-LIMIT regresión: color rojo claro `#FCA5A5` "
-        "(Tailwind red-300) ausente. Es el inicio del gradient red→darker "
-        "del fill cuando over."
+    # [2026-09-04] decisión del dueño: relleno rojo SÓLIDO con contorno definido; el gradiente
+    # claro→oscuro (#FCA5A5) se retiró a propósito. El ancla es la constante única.
+    assert "OVER_COLOR = '#DC2626'" in jsx_src, (
+        "el rojo del exceso debe vivir en UNA constante `OVER_COLOR` (relleno, glow y número)."
     )
 
 
@@ -128,14 +128,14 @@ def test_consumed_text_color_switches_when_over(jsx_src: str):
 def test_effective_gradient_uses_over_gradient(jsx_src: str):
     """`effectiveGradient` debe switchear entre `OVER_GRADIENT` y el
     gradient original según `isOver`. Esta es la mutación más visible."""
+    # [2026-09-04] el relleno pasa a rojo sólido: `background: isOver ? OVER_COLOR : gradient`
     assert re.search(
-        r"effectiveGradient\s*=\s*isOver\s*\?\s*OVER_GRADIENT",
+        r"background:\s*isOver\s*\?\s*OVER_COLOR\s*:\s*gradient",
         jsx_src,
     ), (
-        "P3-TRACKING-OVER-LIMIT regresión: `effectiveGradient = isOver ? "
-        "OVER_GRADIENT : gradient` ausente. Sin esto la barra mantiene el "
-        "gradient amber/blue/green/pink aunque haya exceso → el signaling "
-        "rojo principal se pierde."
+        "P3-TRACKING-OVER-LIMIT regresión: `background: isOver ? OVER_COLOR : gradient` "
+        "ausente. Sin esto la barra mantiene el gradient amber/blue/green/pink aunque haya "
+        "exceso → el signaling rojo principal se pierde."
     )
 
 

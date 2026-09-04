@@ -98,9 +98,14 @@ def test_el_ci_del_backend_no_tiene_jobs_de_frontend():
     """Ese código vive en otro repo, con su propio CI. Duplicarlo aquí apuntando a un
     directorio inexistente no es redundancia: es un rojo garantizado."""
     codigo = _codigo_py(_leer(_BACKEND / ".github" / "workflows" / "ci.yml"))
-    assert "frontend/package-lock.json" not in codigo, (
-        f"volvió un job de frontend al CI del repo backend [{_MARKER}]"
-    )
+    # [P2-CI-BACKEND-SIBLINGS · 2026-09-04] El frontend (repo público) SÍ se descarga en
+    # `frontend/` y se instalan sus deps (`npm ci --ignore-scripts`) porque ~400 tests del
+    # backend leen `../frontend/src` y sondean sus scripts de node. Eso no es un "job de
+    # frontend": lo vetado sigue siendo construir/testear/lintar el frontend desde aquí.
+    for paso in ("npm run build", "npm test", "vitest", "npm run lint", "playwright", "npm run test:e2e"):
+        assert paso not in codigo, (
+            f"volvió un job de frontend ({paso!r}) al CI del repo backend [{_MARKER}]"
+        )
 
 
 def test_el_ci_del_backend_no_para_en_el_primer_fallo():

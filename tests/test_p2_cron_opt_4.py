@@ -188,8 +188,6 @@ def test_g_b1_api_inject_consumed_superset():
 # ---------------------------------------------------------------------------
 def test_g_b2_recover_pantry_batch_days_offset():
     body = _slice_fn(_src(), "def _recover_pantry_paused_chunks(")
-    # [P1-ARQ25-F1-LIFECYCLE] el SELECT ganó `attempts` (fencing) entre days_offset y
-    # pipeline_snapshot; lo que G-B2 ancla es que days_offset viaje en el batch.
     assert "SELECT id, user_id, meal_plan_id, week_number, days_offset, attempts, pipeline_snapshot" in body, (
         "G-B2: el batch SELECT debe incluir days_offset."
     )

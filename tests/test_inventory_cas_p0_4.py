@@ -300,7 +300,9 @@ def test_p0_4_cas_returns_false_when_no_compatible_unit_row_exists():
     # Si no hay fila compatible, no tiene sentido reintentar: backoff nunca debe correr.
     assert mock_sleep.call_count == 0
     # convert_amount se llama una vez (un row, una vez).
-    assert mock_convert.call_count == 1
+    # [P1-PANTRY-PACKAGE-GRAMS · 2026-09-04] la conversión intenta un segundo salto por gramos
+    # (envase↔gramos) cuando la directa falla: 1 o 2 llamadas, jamás un reintento del CAS.
+    assert 1 <= mock_convert.call_count <= 2
     # Y jamás se emite un UPDATE.
     assert store.write_calls == []
 
