@@ -493,22 +493,29 @@ async def api_supermarket_list(
             # La condicion honesta no es "pidio mucho" sino "esto es todo": una
             # consulta SIN limite. De paso ahorra las otras dos (el `count(*)` es
             # `len(rows)` y las categorias salen de las mismas filas).
+            # [P1-SUPERMARKET-CACHE-GEN · 2026-09-04] La generación se captura ANTES de leer la
+            # DB. Aquí se capturaba DESPUÉS (`_publish_list_rows(todas, _catalog_generation())`):
+            # el contador que debía descartar el relleno si un admin escribía durante la lectura
+            # se comparaba consigo mismo microsegundos después y NUNCA descartaba nada — la
+            # carrera que P2-BACKEND-SUPERMARKET-CACHE describe seguía abierta en el caso común,
+            # que es el 99 % del tráfico. El otro relleno (`_publish_catalog_cache`, más abajo)
+            # sí lo hacía bien; este era el hermano olvidado. Lo cazó ruff (F841: la variable
+            # `gen_al_empezar` del camino NO cacheado se capturaba y no se usaba en ninguna parte).
+            gen_al_empezar = _catalog_generation()
             try:
                 todas = await asyncio.to_thread(_fetch_todas_activas)
             except Exception as exc:
                 logger.error(f"❌ [P2-SUPERMARKET-LIST-CACHE] carga completa falló: {exc}")
                 raise HTTPException(status_code=500, detail="No se pudo cargar el supermercado.")
-            _publish_list_rows(todas, _catalog_generation())
+            _publish_list_rows(todas, gen_al_empezar)
             cacheadas = todas
         return _respuesta_listado(
             _paginar(cacheadas, limit, offset), len(cacheadas),
             _categorias_de(cacheadas), publico=True,
         )
 
-    # La generacion se captura ANTES de tocar la DB: si un admin escribe mientras
-    # leemos, el relleno se descarta en vez de publicar filas pre-escritura.
-    gen_al_empezar = _catalog_generation()
-
+    # Este camino (búsqueda / categoría / modo edición) NO cachea: va a la DB a propósito y
+    # devuelve lo que lee, así que no hay generación que capturar (P1-SUPERMARKET-CACHE-GEN).
     try:
         datos = await asyncio.to_thread(_fetch)
     except Exception as exc:
