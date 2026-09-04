@@ -690,6 +690,14 @@ async def api_diary_upload(
             # Ollama. Con un ÚNICO provider (cloud), esta rama SIEMPRE emite
             # la fila cuando hay usuario autenticado; no hay condición de
             # provider que verificar.
+            # [P2-VISION-USAGE-TOKENS · 2026-09-04] tokens reales del proveedor (antes NULL): sin ellos
+            # `compute_llm_cost_micros` no puede poner precio a la foto. Se lee ANTES del gate para no
+            # engordar la ventana de 900 chars que ancla `test_p1_vision_luna`.
+            try:
+                from vision_agent import get_last_vision_usage as _glvu
+                _vision_usage = _glvu() or {}
+            except Exception:
+                _vision_usage = {}
             if actual_user_id and actual_user_id != session_id:
                 # [P2-DIARY-ASYNC-SYNC-DB · 2026-05-30] offload sync DB del event loop.
                 # `_vision_model_name()` es el modelo del ÚNICO provider de
@@ -701,6 +709,8 @@ async def api_diary_upload(
                     user_id=actual_user_id,
                     model=_vision_model_name(),
                     node="vision_scan",
+                    input_tokens=_vision_usage.get("input_tokens"),
+                    output_tokens=_vision_usage.get("output_tokens"),
                 )
 
             # 4. Guardar en DB en segundo plano (embedding + insert).

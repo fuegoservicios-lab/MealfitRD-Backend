@@ -55,7 +55,8 @@ _PROCESS_START_ISO = datetime.now(timezone.utc).isoformat()
 #   P2-CONFIRM-DIALOG-PLACEMENT · 2026-09-04 — confirmaciones en diálogo (PC centrado, móvil hoja).
 #   P1-SWAP-CLIENT-TIMEOUT · 2026-09-04 — «cambiar plato» con tope de 3 min y sin plato inventado.
 #   P1-INGREDIENT-MATCH-PRECOMPILED · 2026-09-04 — el matcher de ingredientes no recompila regex por lookup.
-_LAST_KNOWN_PFIX = "P2-SW-APPLY-RESPECTS-INFLIGHT · 2026-09-04"
+#   P2-SW-APPLY-RESPECTS-INFLIGHT · 2026-09-04 — la auto-actualización del SW respeta swap/día en vuelo.
+_LAST_KNOWN_PFIX = "P2-VISION-USAGE-TOKENS · 2026-09-04"
 
 # [P1-SENTRY-SAMPLE-COST · 2026-05-12] Sentry sampling driven from env vars
 # con default seguro 0.1 (10%). Pre-fix tenía `traces_sample_rate=1.0` y
