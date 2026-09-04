@@ -21,6 +21,10 @@ from pathlib import Path
 
 import pytest
 
+# [P2-CI-BACKEND-SIBLINGS · 2026-09-04] Este módulo necesita el catálogo/la base de datos o el
+# .env local (pasa en el checkout del dueño; en el CI sin NEON_DATABASE_URL se salta con motivo).
+pytestmark = pytest.mark.needs_local_data
+
 _BACKEND = Path(__file__).resolve().parents[1]
 _SC = (_BACKEND / "shopping_calculator.py").read_text(encoding="utf-8")
 _DG = (_BACKEND / "prompts" / "day_generator.py").read_text(encoding="utf-8")

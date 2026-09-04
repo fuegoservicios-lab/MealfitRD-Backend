@@ -51,57 +51,39 @@ def _load_frontend_sibling_sources(frontend_repo_path):
     _REC = _read(_FRONTEND, "src", "components", "PendingPipelineRecovery.jsx")
 
 
-# El rango que la pantalla promete HOY. Es lo único que hay que editar cuando el
-# owner vuelva a moverlo; todo lo demás de este fichero se deriva de aquí.
-_ETA_MIN, _ETA_MAX = 3, 6
-
-# Rangos que la pantalla prometió antes. Ninguno puede seguir vivo: dos copias
-# distintas del mismo dato en la misma pantalla es la forma en que el usuario lee
-# una y el contador le enseña otra.
+# [P2-LOADING-ETA-HONEST · 2026-09-03] El rango ya NO es una cifra fija: lo sirve el backend
+# (`GET /api/plans/generation-eta`, p50/p90 reales de 14 días) y el copy es adaptativo. Todo rango
+# fijo que la pantalla prometió alguna vez (incluido el «3 y 6» que esta versión anclaba) queda
+# retirado: dos copias del mismo dato en la misma pantalla es la forma en que el usuario lee una
+# y el contador le enseña otra.
 _RANGOS_RETIRADOS = ("4 y 5 minutos", "4-5 minutos", "5 y 7 minutos", "5-7 minutos",
-                     "9 y 10 minutos", "9-10 minutos")
+                     "9 y 10 minutos", "9-10 minutos", "3 y 6 minutos", "3-6 minutos")
+_COPY_P50 = "Normalmente tarda unos {p50} minutos; 9 de cada 10 planes están listos antes de {p90}."
+_COPY_P90 = "Ya pasamos la marca habitual; casi todos los planes terminan antes de {p90} minutos."
 
 
-def test_el_rango_vivo_es_el_que_el_owner_decidio():
-    assert f"entre {_ETA_MIN} y {_ETA_MAX} minutos" in _PLAN, (
-        f"La copia inicial ya no dice «entre {_ETA_MIN} y {_ETA_MAX} minutos». Si el owner "
-        "movió el rango, actualiza `_ETA_MIN`/`_ETA_MAX` arriba y añade el rango "
-        "anterior a `_RANGOS_RETIRADOS`."
-    )
-    assert f"estimado {_ETA_MIN}-{_ETA_MAX} minutos" in _PLAN, (
-        "El contador y la copia inicial anuncian rangos distintos. Es el mismo dato "
-        "en dos frases: el usuario lee una y luego ve la otra."
-    )
+def test_el_rango_vivo_viene_del_backend_no_de_una_cifra_fija():
+    assert "/api/plans/generation-eta" in _PLAN, "el ETA lo sirve el backend (p50/p90 reales)"
+    assert _COPY_P50 in _PLAN and _COPY_P90 in _PLAN, "el copy es adaptativo (p50 / p90)"
+    # Solo CÓDIGO: los comentarios de Plan.jsx cuentan la historia de los rangos retirados.
+    codigo = re.sub(r"//[^\n]*", "", _PLAN)
     for viejo in _RANGOS_RETIRADOS:
-        assert viejo not in _PLAN, (
-            f"El rango retirado `{viejo}` sigue en Plan.jsx. Un rango viejo superviviente "
-            "es una promesa que la pantalla ya no cumple."
+        assert viejo not in codigo, (
+            f"El rango fijo `{viejo}` volvió a Plan.jsx. Una cifra fija envejece en semanas "
+            "(P2-LOADING-ETA-HONEST): el tiempo lo pone el backend."
         )
 
 
 def test_los_umbrales_no_contradicen_al_estimado():
-    """«Ya casi terminamos» tiene que empezar DESPUÉS del estimado, no dentro.
-
-    Este es el invariante de verdad, y por eso se comprueba CONTRA el rango en vez
-    de contra un número escrito a mano: decir «ya casi» a los 6 minutos mientras la
-    pantalla promete «3 a 9» es contradecirse a sí misma en la misma vista. Antes
-    aquí había un `10 * 60` literal que sobrevivió a dos cambios de rango.
-    """
+    """«Ya pasamos la marca habitual» arranca en el p90 REAL, no en un literal en minutos.
+    Antes aquí había umbrales `elapsedSec < N * 60` que sobrevivieron a dos cambios de rango."""
     i = _PLAN.index("const timeMessage")
-    win = _PLAN[i:i + 800]
-
-    umbrales = [int(m) for m in re.findall(r"elapsedSec < (\d+) \* 60", win)]
-    assert len(umbrales) >= 2, (
-        f"Esperaba al menos dos umbrales `elapsedSec < N * 60` en `timeMessage`; "
-        f"encontré {umbrales}. Si cambió la forma, enséñasela a este test."
-    )
-    assert umbrales == sorted(umbrales), (
-        f"Los umbrales no son crecientes ({umbrales}): las bandas se pisan y el "
-        "mensaje de la banda alta no se muestra nunca."
-    )
-    assert umbrales[0] >= _ETA_MAX, (
-        f"«Ya casi terminamos» arranca a los {umbrales[0]} min, DENTRO del estimado de "
-        f"{_ETA_MIN}-{_ETA_MAX}. La pantalla se contradice a sí misma."
+    win = _PLAN[max(0, i - 600):i + 1200]
+    assert "const pastP90 = !!etaMin && elapsedSec >= etaMin.p90 * 60;" in win
+    assert "elapsedSec < etaMin.p50 * 60" in win
+    assert re.search(r"elapsedSec [<>]=? \d+ \* 60", win) is None, (
+        "umbral literal en minutos dentro de timeMessage: el estimado y el aviso volverían a "
+        "poder contradecirse"
     )
 
 

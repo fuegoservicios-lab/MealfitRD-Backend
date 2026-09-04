@@ -48,6 +48,10 @@ import pytest
 
 import shopping_calculator as sc
 
+# [P2-CI-BACKEND-SIBLINGS · 2026-09-04] Este módulo necesita el catálogo/la base de datos o el
+# .env local (pasa en el checkout del dueño; en el CI sin NEON_DATABASE_URL se salta con motivo).
+pytestmark = pytest.mark.needs_local_data
+
 
 # ───────────── 1. el efecto: la etiqueta canónica encuentra su densidad ─────────────
 

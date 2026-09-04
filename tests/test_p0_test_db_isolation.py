@@ -434,6 +434,10 @@ Este módulo documenta un incidente causado por
 `SELECT id FROM user_profiles LIMIT 1` sin ORDER BY.
 """
 import os
+
+# [P2-CI-BACKEND-SIBLINGS · 2026-09-04] Este módulo necesita el catálogo/la base de datos o el
+# .env local (pasa en el checkout del dueño; en el CI sin NEON_DATABASE_URL se salta con motivo).
+pytestmark = pytest.mark.needs_local_data
 '''
         assert not _find_unordered_victim_selections(source)
 

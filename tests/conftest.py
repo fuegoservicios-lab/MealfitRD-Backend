@@ -137,6 +137,7 @@ if connection_pool and not getattr(connection_pool, '_opened', False):
 # ---------------------------------------------------------------------------
 def pytest_configure(config):
     config.addinivalue_line("markers", "e2e: End-to-end tests requiring a live database")
+    config.addinivalue_line("markers", "needs_local_data: needs the live catalog/database or backend/.env (skipped in CI)")
     config.addinivalue_line(
         "markers",
         "frontend_cross_repo: tests whose subject includes the sibling frontend repo",
@@ -331,6 +332,9 @@ def pytest_collection_modifyitems(config, items):
         reason = _local_only_reason(item_path)
         if reason:
             item.add_marker(pytest.mark.skip(reason=reason))
+        elif item.get_closest_marker("needs_local_data") and not _db_available():
+            item.add_marker(pytest.mark.skip(
+                reason="sin base de datos ni backend/.env: este módulo se declara needs_local_data"))
 
 
 # ---------------------------------------------------------------------------
