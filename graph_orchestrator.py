@@ -10888,7 +10888,6 @@ def _detect_slot_appropriateness(days: list, form_data: dict = None) -> list:
     return issues
 
 
-@_node_label("self_critique")
 def _backfill_corrected_day_desc(corrected_day: dict, target_day: dict) -> int:
     """[P2-CRITIQUE-FIX-DESC-BACKFILL · 2026-09-04] El corrector (SingleDayCorrectionModel) puede devolver
     comidas sin `desc`. Rellena: mismo nombre que el plato original del slot ⇒ copia su descripción;
@@ -10914,6 +10913,7 @@ def _backfill_corrected_day_desc(corrected_day: dict, target_day: dict) -> int:
     return n
 
 
+@_node_label("self_critique")
 async def self_critique_node(state: PlanState) -> dict:
     """Evalúa los días generados y aplica correcciones in-place si hay deficiencias."""
     # [P1-SELF-CRITIQUE-MASTER-KNOB · 2026-07-09] Kill-switch del nodo entero (A/B + Fase 2). Default
