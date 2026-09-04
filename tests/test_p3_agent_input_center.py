@@ -59,7 +59,10 @@ def test_bottom_desktop_lifted_above_card_border(agent_page_src: str):
     Sin el lift desktop, el input toca el border-radius inferior del card
     y produce el síntoma reportado por el usuario."""
     pattern = re.compile(
-        r"bottom\s*:\s*isCentered\s*\?\s*0\s*:\s*\(\s*isMobile\s*\?\s*0\s*:\s*['\"]1\.25rem['\"]\s*\)",
+        # [P2-CHAT-SCROLLBAR-CLASSIC v4 · 2026-09-04] el aire de escritorio (1.25rem) pasa de `bottom`
+        # (sticky, que subía el wrapper 20 px sobre el scroller y tapaba el botón de bajar de la
+        # barra clásica) a `marginBottom`; el wrapper es `relative` en PC y sigue sticky a 0 en móvil.
+        r"marginBottom\s*:\s*\(\s*!isCentered\s*&&\s*!isMobile\s*\)\s*\?\s*['\"]1\.25rem['\"]\s*:\s*0",
     )
     assert pattern.search(agent_page_src), (
         "P3-AGENT-INPUT-CENTER regresión: el `bottom` del input-wrapper ya no "
@@ -121,7 +124,8 @@ def test_mobile_sticky_bottom_zero_preserved(agent_page_src: str):
     el cooperative con el visualViewport handler que levanta el wrapper
     con el teclado virtual iOS. El expression debe contener `isMobile ? 0`."""
     # `isMobile ? 0 : '1.25rem'` — verifica que la rama mobile retorna 0
-    pattern = re.compile(r"isMobile\s*\?\s*0\s*:\s*['\"]1\.25rem['\"]")
+    # [P2-CHAT-SCROLLBAR-CLASSIC v4] en PC el bottom es 'auto' (el aire va en marginBottom); móvil sigue 0
+    pattern = re.compile(r"isMobile\s*\?\s*0\s*:\s*['\"]auto['\"]")
     assert pattern.search(agent_page_src), (
         "P3-AGENT-INPUT-CENTER regresión: la rama mobile del `bottom` ya "
         "no retorna 0. Romperías el cooperative con visualViewport handler "
