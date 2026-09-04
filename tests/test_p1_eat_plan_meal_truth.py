@@ -47,6 +47,8 @@ def test_preview_uses_the_same_resolution_as_the_real_deduction_in_dry_run():
     assert 'source="plan_meal_preview", dry_run=True' in body
     assert "_PLAN_MEAL_PREVIEW_LIMITER" in body
     assert re.search(r'"coverage": \(len\(present\) / total\) if total else 1\.0', body)
+    # [v2] la cobertura por conteo engaña: el ingrediente PRINCIPAL ausente también dispara la pregunta
+    assert '"main_missing": main_missing' in body and "main_line = next(" in body
 
 
 def test_dry_run_never_writes(monkeypatch):

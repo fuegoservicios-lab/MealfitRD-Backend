@@ -1221,6 +1221,17 @@ def api_preview_consumed_meal_from_plan(
             ) or {}
         present = list(summary.get("succeeded") or []) + list(summary.get("inferred") or [])
         missing = list(summary.get("not_in_pantry") or [])
+        # [P1-EAT-PLAN-MEAL-TRUTH · v2] la cobertura por conteo engaña: 7 de 11 líneas presentes
+        # pueden ser sal, ajo y aceite mientras falta el calamar. El ingrediente PRINCIPAL es la
+        # primera línea que no es condimento/adorno; si falta, la Nevera no explica el plato.
+        _quiet = ("al gusto", "a gusto", "pizca", "opcional", "para servir", "para decorar", "ramita", "hojita", "c/n", "cantidad necesaria")
+        _seasoning = ("sal", "pimienta", "orégano", "oregano", "ajo", "aceite", "vinagre", "comino", "canela", "tomillo", "laurel", "cilantro", "perejil", "limón", "limon", "azúcar", "azucar", "vainilla")
+        main_line = next(
+            (i for i in ingredients
+             if not any(h in i.lower() for h in _quiet) and not any(sn in i.lower() for sn in _seasoning)),
+            ingredients[0] if ingredients else None,
+        )
+        main_missing = bool(main_line) and main_line in missing
         total = len(ingredients)
         return {
             "success": True,
@@ -1230,6 +1241,8 @@ def api_preview_consumed_meal_from_plan(
             "present": present,
             "missing": missing,
             "coverage": (len(present) / total) if total else 1.0,
+            "main_ingredient": main_line,
+            "main_missing": main_missing,
         }
     except HTTPException:
         raise
