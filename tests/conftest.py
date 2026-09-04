@@ -421,6 +421,30 @@ def _ci_fuera_de_repo_skip_reason(excinfo, report):
 
 
 @pytest.hookimpl(hookwrapper=True)
+def pytest_make_collect_report(collector):
+    """Mismo contrato en COLECCIÓN: un módulo que lee `frontend/…` o un artefacto del workspace
+    a nivel de import muere antes de tener items (pytest lo reporta como «ERROR collecting» y
+    ningún hook por-test lo alcanza). Si el único motivo es un artefacto fuera del repo, el
+    módulo entero se salta con la razón en vez de tumbar la sesión."""
+    outcome = yield
+    report = outcome.get_result()
+    if not report.failed or report.longrepr is None:
+        return
+    text = str(report.longrepr)
+    reason = None
+    for raw in _CI_ABS_PATH_RE.findall(text):
+        reason = _ci_path_outside_backend(raw.rstrip(".'\"`"))
+        if reason:
+            break
+    if reason is None and not _CI_FRONTEND_PRESENT and "FileNotFoundError" in text and "frontend" in text:
+        reason = f"repo hermano frontend ausente: {_CI_FRONTEND_ROOT}"
+    if reason is None:
+        return
+    report.outcome = "skipped"
+    report.longrepr = (str(getattr(collector, "path", collector.fspath)), 0, f"[P0-CI-VERDICT] {reason}")
+
+
+@pytest.hookimpl(hookwrapper=True)
 def pytest_runtest_makereport(item, call):
     outcome = yield
     report = outcome.get_result()

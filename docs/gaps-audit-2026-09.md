@@ -82,8 +82,27 @@ guards. NO recomienda refactors masivos (partir `graph_orchestrator.py` de 51 k 
 
 ## Verificación
 
-- Backend: suite completa en checkout limpio (`pytest tests/ -m "not e2e" -rs`) tras la tanda —
-  ver el último commit; los skips se listan por razón.
-- Frontend: `i18n:check:strict`, `eslint --max-warnings 60`, `lint:count --gate`, `typecheck`,
-  `huerfanos.mjs --gate`, `vitest` (360 ficheros / 3.388 tests), `build`, `check:bundle-size`,
-  `check:presupuestos` — todos en verde en local.
+- Backend, suite completa en checkout limpio (`pytest tests/ -m "not e2e" -rs`, sin frontend
+  hermano emulado ni DB): **0 failed · 21.998 passed · 384 skipped con razón** (53 «catálogo
+  vivo requerido», 43 «catálogo no disponible» de guards previos, 17 «artefacto fuera del repo»,
+  18+11 de tests que ya se declaraban obsoletos, 8 del apex hermano, el resto e2e/DB). Simulado
+  además el runner de CI (sin `frontend/`): colección sin errores y los módulos cross-repo se
+  saltan con `[P0-CI-VERDICT] repo hermano frontend ausente`.
+- Frontend: `i18n:check:strict`, `eslint --max-warnings 60`, `lint:count --gate` (20/24/16),
+  `typecheck`, `huerfanos.mjs --gate` (258/258), `vitest` (360 ficheros / 3.388 tests),
+  `build`, `check:bundle-size`, `check:presupuestos` (146,2/150) — todos en verde en local.
+- `ruff check --select F401,F811,F821,F841,F541,E712` sobre el código productivo: 0.
+- Import smoke de todos los módulos productivos tras la limpieza: OK.
+
+## Lo que el dueño tiene que decidir o hacer
+
+1. **Secret `SIBLING_REPO_TOKEN`** en el repo backend (PAT `contents:read` sobre el frontend):
+   con él, los ~1.100 tests cross-repo corren en Actions en vez de saltarse.
+2. **`NEON_DATABASE_URL` read-only para CI** (ya está previsto en `ci.yml` para el paso del
+   catálogo de países): con él, los ~70 tests dependientes del catálogo corren en Actions.
+3. **Presupuesto de arranque** (P2-4): aceptar el re-baseline a 150 o dejar el gate rojo hasta
+   recortar el contexto. El hunk es uno solo en `scripts/presupuestos.mjs`.
+4. **`.env` de producción vs `.env.example`**: `test_p1_env_template_ssot` avisará en la
+   máquina del dueño si algún knob guardado difiere (p.ej. `MEALFIT_GLOBAL_PIPELINE_TIMEOUT_S`
+   se fijó en 1000 dentro del rango [900, 1200] que exigen los guards, y `MEALFIT_CRITIQUE_FIX_
+   TIMEOUT_S` en 240 dentro de [200, 600]); la corrección es alinear el template al valor real.

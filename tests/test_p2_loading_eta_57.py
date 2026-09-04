@@ -80,8 +80,12 @@ def test_el_rango_vivo_es_el_que_el_owner_decidio():
     assert "{p50}" in _PLAN and "{p90}" in _PLAN, (
         "Las frases con ETA real deben interpolar p50/p90 del backend, no cifras fijas."
     )
+    # [P0-CI-VERDICT] se mira el CÓDIGO: el comentario de P2-LOADING-ETA-HONEST cita «estimado 3-6
+    # minutos» precisamente para contar por qué se retiró, y eso no es una promesa en pantalla.
+    _codigo = re.sub(r"/\*.*?\*/", "", _PLAN, flags=re.S)
+    _codigo = "\n".join(l for l in _codigo.splitlines() if not l.lstrip().startswith("//"))
     for viejo in _RANGOS_RETIRADOS:
-        assert viejo not in _PLAN, (
+        assert viejo not in _codigo, (
             f"El rango retirado `{viejo}` sigue en Plan.jsx. Un rango viejo superviviente "
             "es una promesa que la pantalla ya no cumple."
         )
