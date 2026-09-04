@@ -1,4 +1,4 @@
-from pydantic import BaseModel, Field, ConfigDict
+from pydantic import BaseModel, Field, ConfigDict, field_validator
 from typing import List, Optional, Literal
 
 class MacrosModel(BaseModel):
@@ -26,6 +26,18 @@ class MealModel(BaseModel):
     macros: Optional[List[str]] = Field(default=None, description="Lista rápida de macros (opcional, tags informativos)")
     ingredients: List[str] = Field(description="Lista de ingredientes consolidados sin clonar y con unidades comerciales exactas (texto simple), Ej:['1 plátano verde maduro', '2 huevos', '1/2 aguacate']")
     recipe: List[str] = Field(description="Pasos de preparación. DEBES usar los prefijos: 'Mise en place: ...', 'El Toque de Fuego: ...' y 'Montaje: ...'")
+
+    # [P2-INGREDIENT-TRAILING-QTY · 2026-09-04] «Cebada: 50 g» → «50 g de Cebada». El LLM a veces pone
+    # la cantidad DETRÁS del nombre y ningún lector lo entendía (solver 0/5, guarda de presencia
+    # anteponiendo «90 g de»). Aquí es el embudo de generación, swap y autocrítica. Best-effort.
+    @field_validator("ingredients", mode="after")
+    @classmethod
+    def _canonicalize_trailing_qty(cls, v):
+        try:
+            from nutrition_db import canonicalize_trailing_qty_line
+            return [canonicalize_trailing_qty_line(x) for x in v]
+        except Exception:
+            return v
 
 class SupplementModel(BaseModel):
     name: str = Field(description="Nombre del suplemento, Ej: 'Creatina Monohidrato'")

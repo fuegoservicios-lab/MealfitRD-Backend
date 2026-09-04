@@ -44,7 +44,8 @@ _PROCESS_START_ISO = datetime.now(timezone.utc).isoformat()
 #   P2-REGEN-DAY-RETARGET-TO-META · 2026-09-03 — el objetivo del día es la meta, no el exceso previo.
 #   P1-ARQ25-F4-FORM · 2026-09-03 — Fase 4: formulario progresivo + panel de política.
 #   P2-CRITIQUE-RESPECTS-ROUTINE · 2026-09-04 — la autocrítica respeta la política de recurrencia.
-_LAST_KNOWN_PFIX = "P1-CHUNK-T1-IDLE-TXN-180S · 2026-09-04"
+#   P1-CHUNK-T1-IDLE-TXN-180S · 2026-09-04 — tolerancia de inactividad del T1 a 180 s.
+_LAST_KNOWN_PFIX = "P2-INGREDIENT-TRAILING-QTY · 2026-09-04"
 
 # [P1-SENTRY-SAMPLE-COST · 2026-05-12] Sentry sampling driven from env vars
 # con default seguro 0.1 (10%). Pre-fix tenía `traces_sample_rate=1.0` y
