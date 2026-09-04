@@ -843,13 +843,13 @@ def _package_entries(master_item: dict) -> list:
             eu = canonicalize_unit(eu) or eu
         except Exception:
             pass
-        out.append((eu, g, n))
+        out.append((eu, g, n, str(e.get("label") or "")))
     return out
 
 
 def _container_units(master_item: dict, unit: str) -> Optional[int]:
     """Cuántas piezas trae UN envase `unit` según el maestro (`units` de market_packages)."""
-    entries = [(eu, n) for eu, _g, n in _package_entries(master_item) if n > 0]
+    entries = [(eu, n) for eu, _g, n, _label in _package_entries(master_item) if n > 0]
     if not entries:
         return None
     same = [n for eu, n in entries if eu and eu == unit]
@@ -874,8 +874,11 @@ def _container_grams(master_item: dict, unit: str) -> Optional[float]:
     except (TypeError, ValueError):
         ug = 0.0
     sized = []
-    for eu, g, n in _package_entries(master_item):
-        if g <= 0 and n > 0 and ug > 0:
+    for eu, g, n, label in _package_entries(master_item):
+        # `units` × peso unitario SOLO si el envase cuenta «uds.» genéricas (cartón 30 uds. de
+        # Huevo = 30 × 50 g). «4 cabezas» de Ajo NO: density_g_per_unit es por diente, no por
+        # cabeza, y 4 × 5 g = 20 g haría que un diente se llevara 1/4 del paquete.
+        if g <= 0 and n > 0 and ug > 0 and re.search(r"u(?:ds?|nid)", label, flags=re.I):
             g = n * ug
         if g > 0:
             sized.append((eu, g))

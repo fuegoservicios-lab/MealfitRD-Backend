@@ -65,7 +65,7 @@ def test_second_pass_counts_labels_and_default_unit_fallbacks():
     assert round(inv.convert_amount_container(60, "g", "paquete", ARROZ), 4) == round(60 / 453.592, 4)
     # sin datos de envase pero el alimento se compra por defecto en lb / litro: 1 envase = 1 lb / 1 L
     assert round(inv.convert_amount_container(150, "g", "paquete", PECHUGA), 4) == round(150 / 453.592, 4)
-    assert round(inv.convert_amount_container(1, "taza", "paquete", LECHE), 4) == round(240 / 1000, 4)
+    assert round(inv.convert_amount_container(1, "taza", "paquete", LECHE), 4) == round(244 / 1000, 4)  # taza → g por densidad (244 g), 1 paquete = 1 L
     # un diente es una sub-pieza: NO cuenta contra «(4 uds.)» (sería 1/4 del paquete por diente) y sin
     # gramos por envase no se inventa → None
     AJO = {"name": "Ajo", "default_unit": "cabeza", "density_g_per_unit": 5, "market_packages": [{"label": "4 cabezas", "units": 4}]}
