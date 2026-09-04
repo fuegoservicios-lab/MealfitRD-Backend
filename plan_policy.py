@@ -46,6 +46,11 @@ SLOTS = ("breakfast", "lunch", "dinner", "snack")
 FREEZER_MODES = ("none", "limited", "full")
 BATCH_MODES = ("never", "sometimes", "often")
 MAX_ANCHORS = 8
+# [P1-ARQ25-F4-FORM · 2026-09-03] Lo que el formulario progresivo (Fase 4) escribe además del
+# V1. Su presencia marca `source.form_version = "v2"`; su ausencia cae a los defaults V1, así que
+# un cliente viejo sigue produciendo la misma política que ayer.
+FORM_V2_FIELDS = ("mealOrganization", "freezerMode", "freshTopup", "batchCooking", "stapleAnchors")
+PREPARATION_MODES = ("vary_preparation", "same_preparation")
 
 _SLOT_ALIASES = {
     "desayuno": "breakfast", "breakfast": "breakfast",
@@ -213,6 +218,13 @@ def _clean_list(v: Any) -> list[str]:
     return out
 
 
+def _int_or(v: Any, default: int) -> int:
+    try:
+        return int(float(v))
+    except (TypeError, ValueError):
+        return int(default)
+
+
 def _cycle_days(form: dict) -> int:
     key = str(form.get("groceryDuration") or "weekly").strip().lower()
     try:
@@ -259,15 +271,41 @@ def policy_from_form(form_data: dict, *, country: Optional[str] = None) -> dict:
     gm = str(form.get("mealOrganization") or "balanced").strip().lower()
     if gm not in RECURRENCE_MODES:
         gm = "balanced"
+    # [P1-ARQ25-F4-FORM] «Mis básicos» como editor de anclas: `stapleAnchors` trae, por básico,
+    # franja(s), frecuencia semanal (min/max por 7 días) y misma/variada preparación. Los nombres
+    # siguen en `stapleFoods` (SSOT del motor y de la Nevera); aquí solo se enriquecen.
+    detail_by_id: dict = {}
+    raw_anchors = form.get("stapleAnchors")
+    if isinstance(raw_anchors, list):
+        for item in raw_anchors:
+            if isinstance(item, dict) and item.get("name"):
+                detail_by_id[ingredient_id_for(item["name"])] = item
+    names = list(staples)
+    for item in detail_by_id.values():
+        if str(item.get("name")) not in names:
+            names.append(str(item.get("name")))
     anchors, seen = [], set()
-    for s in staples:
+    for s in names:
         iid = ingredient_id_for(s)
         if iid in seen:
             continue
         seen.add(iid)
+        d = detail_by_id.get(iid) or {}
+        slots: list = []
+        for sl in (d.get("slots") or []):
+            canon = _SLOT_ALIASES.get(_norm(sl))
+            if canon and canon not in slots:
+                slots.append(canon)
+        lo, hi = _int_or(d.get("min_per_7d"), 2), _int_or(d.get("max_per_7d"), 7)
+        lo, hi = max(0, min(7, lo)), max(0, min(7, hi))
+        if lo > hi:
+            lo, hi = hi, lo
+        prep = str(d.get("preparation_mode") or "vary_preparation")
+        if prep not in PREPARATION_MODES:
+            prep = "vary_preparation"
         anchors.append({
-            "ingredient_id": iid, "name": s, "slots": [],
-            "min_per_7d": 2, "max_per_7d": 7, "preparation_mode": "vary_preparation",
+            "ingredient_id": iid, "name": s, "slots": slots,
+            "min_per_7d": lo, "max_per_7d": hi, "preparation_mode": prep,
         })
     cycle = _cycle_days(form)
     freezer = str(form.get("freezerMode") or "limited").strip().lower()
@@ -303,7 +341,10 @@ def policy_from_form(form_data: dict, *, country: Optional[str] = None) -> dict:
         "budget": {"tier": tier, "amount": amount, "currency": currency, "period_days": cycle, "mode": "hard"},
         "household_size": household,
         "culture_weights": [{"profile_id": _PROFILE_BY_COUNTRY.get(cc, "dominican_criolla"), "weight": 1.0}],
-        "source": {"form_version": "v1", "adapter": COMPILER_VERSION},
+        "source": {
+            "form_version": "v2" if any(form.get(k) not in (None, "", [], {}) for k in FORM_V2_FIELDS) else "v1",
+            "adapter": COMPILER_VERSION,
+        },
     }
 
 

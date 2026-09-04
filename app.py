@@ -41,7 +41,8 @@ _PROCESS_START_ISO = datetime.now(timezone.utc).isoformat()
 #   P2-CHAT-SESSIONS-PAGING · 2026-09-03 — Recientes con offset/has_more.
 #   P2-COHERENCE-BANNER-CONDIMENTS · 2026-09-03 — el banner omite condimentos acotados.
 #   P2-FAT-FLOOR · 2026-09-03 — piso de grasa (espejo del carb-floor) en assemble y regen-day.
-_LAST_KNOWN_PFIX = "P2-REGEN-DAY-RETARGET-TO-META · 2026-09-03"
+#   P2-REGEN-DAY-RETARGET-TO-META · 2026-09-03 — el objetivo del día es la meta, no el exceso previo.
+_LAST_KNOWN_PFIX = "P1-ARQ25-F4-FORM · 2026-09-03"
 
 # [P1-SENTRY-SAMPLE-COST · 2026-05-12] Sentry sampling driven from env vars
 # con default seguro 0.1 (10%). Pre-fix tenía `traces_sample_rate=1.0` y

@@ -1073,12 +1073,13 @@ def review_fidelity_gate(plan: dict, form_data: dict, variety_issues: list, *, a
         rejects: list = []
         if enforced and gate == "block" and int(attempt) < int(max_attempts):
             rejects = [i["message"] for i in report["issues"] if i.get("severity") in ("high", "medium")]
+        mode = "enforce" if enforced else "shadow"
         report["enforced"] = enforced
+        report["mode"] = mode  # [P1-ARQ25-F4-FORM] la pantalla «solicitaste / aplicamos» lee si el motor obedeció
         report["gate"] = gate
         report["rejected"] = bool(rejects)
         if isinstance(plan, dict):
             plan[FIDELITY_REPORT_KEY] = report
-        mode = "enforce" if enforced else "shadow"
         emit_fidelity_metric(form_data.get("user_id"), form_data.get("_caller_target_plan_id"), report,
                              mode=mode, gate=gate, rejected=bool(rejects))
         filtered = filter_variety_issues_for_policy(variety_issues, eff, enforced=enforced)
