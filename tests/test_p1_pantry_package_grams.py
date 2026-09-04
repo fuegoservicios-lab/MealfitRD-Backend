@@ -77,6 +77,22 @@ def test_second_pass_counts_labels_and_default_unit_fallbacks():
     assert inv._split_container_unit("pote") == ("pote", None)
 
 
+LECHUGA = {"name": "Lechuga", "default_unit": "cabeza", "density_g_per_unit": 400, "density_g_per_cup": 36, "market_packages": None}
+
+
+def test_volume_to_piece_goes_through_grams_and_garnish_is_unquantified(monkeypatch):
+    # cena del dueño: «1½ tazas de lechuga» contra «1 cabeza» → 1.5 × 36 / 400
+    assert round(inv.convert_amount_container(1.5, "taza", "cabeza", LECHUGA), 4) == round(1.5 * 36 / 400, 4)
+    # «1 ramita de cilantro» es adorno: no infiere, no falla, no mueve el mazo
+    monkeypatch.setattr(inv, "_db_available", lambda: True)
+    monkeypatch.setattr(inv, "execute_sql_query", lambda *a, **k: [])
+    monkeypatch.setattr(inv, "find_pantry_rows_for_name", lambda user_id, name, prefetched_rows=None: ([], None))
+    monkeypatch.setattr(inv, "_persist_failed_inventory_deductions", lambda *a, **k: None)
+    monkeypatch.setattr(inv, "_persist_consumption_events", lambda *a, **k: None)
+    out = inv.deduct_consumed_meal_from_inventory("u", ["1 ramita de cilantro 1 cucharada"], source="plan_meal")
+    assert out["unquantified"] == ["1 ramita de cilantro 1 cucharada"] and out["failed_to_deduct"] == []
+
+
 def test_both_deduction_sites_use_the_container_aware_converter():
     src = (_BACKEND / "db_inventory.py").read_text(encoding="utf-8")
     # reserva, liberación de reserva y consumo: los tres sitios donde una receta se resta de una fila

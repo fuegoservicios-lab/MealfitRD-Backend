@@ -913,6 +913,13 @@ def convert_amount_container(qty: float, from_unit: str, to_unit: str, master_it
     f_base, f_n = _split_container_unit(from_unit)
     t_base, t_n = _split_container_unit(to_unit)
     f_is_c, t_is_c = f_base in _CONTAINER_UNITS, t_base in _CONTAINER_UNITS
+    if not f_is_c and not t_is_c:
+        # dos saltos por gramos: «1½ tazas de lechuga» (36 g/taza) contra «1 cabeza» (400 g) —
+        # convert_amount sabe volumen↔masa y masa↔pieza, pero no volumen↔pieza de una vez.
+        grams = convert_amount(qty, from_unit, "g", master_item, spice_tsp=spice_tsp)
+        if grams is not None:
+            return convert_amount(grams, "g", to_unit, master_item, spice_tsp=spice_tsp)
+        return None
     if t_is_c and not f_is_c:
         if f_base in _COUNT_UNITS_FOR_CONTAINERS:
             n = t_n or _container_units(master_item, t_base)
@@ -961,7 +968,7 @@ def convert_amount(qty: float, from_unit: str, to_unit: str, master_item: dict, 
 
     mass_to_g = {'g': 1.0, 'gr': 1.0, 'gramos': 1.0, 'gramo': 1.0, 'kg': 1000.0, 'kilo': 1000.0, 'kilos': 1000.0, 'lb': 453.592, 'lbs': 453.592, 'libra': 453.592, 'libras': 453.592, 'oz': 28.3495, 'onza': 28.3495, 'onzas': 28.3495}
     vol_to_ml = {'ml': 1.0, 'l': 1000.0, 'taza': 240.0, 'tazas': 240.0, 'cda': 15.0, 'cdas': 15.0, 'cucharada': 15.0, 'cucharadas': 15.0, 'cdta': 5.0, 'cdtas': 5.0, 'cdita': 5.0, 'cucharadita': 5.0, 'cucharaditas': 5.0}
-    count_units = {'unidad', 'unidades', 'rebanada', 'rebanadas', 'diente', 'dientes'}
+    count_units = {'unidad', 'unidades', 'rebanada', 'rebanadas', 'diente', 'dientes', 'cabeza', 'cabezas', 'hoja', 'hojas'}  # [P1-PANTRY-PACKAGE-GRAMS] cabeza/hoja son piezas con peso unitario
 
     # 1. Mass to Mass
     if from_unit_lower in mass_to_g and to_unit_lower in mass_to_g:
@@ -2621,7 +2628,7 @@ def deduct_consumed_meal_from_inventory(
     # (no bajó nada) ni fallo (no hay nada que reintentar).
     not_in_pantry_strs: List[str] = []
     unquantified_strs: List[str] = []  # [P1-PANTRY-PACKAGE-GRAMS] «al gusto»/«pizca»: sin gramos, sin inferir
-    _UNQUANTIFIED_HINTS = ("al gusto", "a gusto", "pizca", "opcional", "para servir", "para decorar", "cantidad necesaria", "c/n")
+    _UNQUANTIFIED_HINTS = ("al gusto", "a gusto", "pizca", "opcional", "para servir", "para decorar", "cantidad necesaria", "c/n", "ramita", "ramitas", "hojita")  # ramita de cilantro: adorno, no mueve un mazo
     # [P1-CONSUMPTION-LEDGER · 2026-08-07] Eventos a persistir al final, en
     # UN solo INSERT. Se acumulan en vez de escribir por item para no meter
     # N roundtrips en el path caliente del descuento.
