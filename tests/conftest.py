@@ -11,6 +11,7 @@ and user_inventory so that E2E chunk tests never skip due to missing DB data.
 # planes con alimentos sintéticos off-catálogo a propósito) → lo fijamos explícito aquí. Los tests
 # del knob (test_p3_verified_ingredients_only / test_p1_objective_v4_batch) lo activan con
 # monkeypatch cuando prueban el path ON. setdefault: una env var real del operador SIEMPRE gana.
+import os
 import os as _os_conftest
 _os_conftest.environ.setdefault("MEALFIT_VERIFIED_INGREDIENTS_ONLY", "false")
 # [P2-AUDIT-V5-BATCH · 2026-07-02] (GAP-14) Mismo patrón para strict-all-reasons: el default de
