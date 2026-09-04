@@ -41,7 +41,7 @@ def test_atomic_sets_local_idle_txn_timeout():
     # [P0-ATOMIC-IDLE-GUARD · 2026-07-12] el uso lleva alias _env_int_atomic (con import
     # local en scope — el original usaba _env_int SIN import: NameError silencioso y el
     # guard jamás aplicó). El contrato del knob compartido se preserva.
-    assert '_env_int_atomic("MEALFIT_PLAN_FOR_UPDATE_IDLE_TXN_TIMEOUT_MS", 60000)' in body, (
+    assert '_env_int_atomic("MEALFIT_PLAN_FOR_UPDATE_IDLE_TXN_TIMEOUT_MS", 180000)' in body, (
         "el presupuesto debe compartir el knob del T1 del chunk (un solo dial operacional)"
     )
     # la red se instala ANTES de ejecutar el mutator (que es donde vive el riesgo)
