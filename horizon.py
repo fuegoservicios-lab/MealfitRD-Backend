@@ -88,6 +88,24 @@ _INGREDIENT_DAYS_EXEMPT = frozenset({
     "oregano", "orégano", "vinagre", "cilantro", "perejil", "laurel", "comino", "sazon", "sazón",
     "mantequilla", "aji", "ají", "pimiento", "tomate", "azucar", "azúcar", "miel", "canela",
 })
+# [P1-EGG-DAY-CAP · 2026-09-05] La exención era por IGUALDAD exacta: «Sal al gusto» y «Pimienta negra al gusto» contaban
+# como ingrediente en 3 de 3 días y bajaban la fidelidad a 0,67 en modo explorar (plan vivo c350dec0). Un condimento se
+# reconoce por su PRIMERA palabra o por «al gusto». «mantequilla» sigue siendo exacta: «mantequilla de maní» es ancla.
+_INGREDIENT_DAYS_EXEMPT_LEAD = frozenset({
+    "sal", "pimienta", "aceite", "ajo", "cebolla", "limon", "limón", "oregano", "orégano", "vinagre", "cilantro", "perejil",
+    "laurel", "comino", "sazon", "sazón", "aji", "ají", "canela", "azucar", "azúcar", "miel", "agua", "tomillo", "vainilla",
+    "curcuma", "cúrcuma", "pimenton", "pimentón", "paprika", "nuez moscada", "polvo de hornear", "bicarbonato", "adobo",
+    "sofrito", "achiote", "bija", "clavo", "jengibre", "especias", "hierbas",
+})
+
+
+def _ingredient_days_is_exempt(nn: str) -> bool:
+    """Condimento/aromático: fuera del conteo de días (P1-EGG-DAY-CAP)."""
+    if nn in _INGREDIENT_DAYS_EXEMPT or "al gusto" in nn:
+        return True
+    words = nn.split()
+    return bool(words) and (words[0] in _INGREDIENT_DAYS_EXEMPT_LEAD or " ".join(words[:2]) in _INGREDIENT_DAYS_EXEMPT_LEAD
+                            or " ".join(words[:3]) in _INGREDIENT_DAYS_EXEMPT_LEAD)
 
 
 # ═══════════════════════════════════════════════════════════════════ knobs
@@ -1182,7 +1200,7 @@ def fidelity_issues(days: list, sl: Optional[dict], effective: Optional[dict], *
                         if not nm:
                             continue
                         nn = _norm(nm)
-                        if len(nn) < 4 or nn in _INGREDIENT_DAYS_EXEMPT:
+                        if len(nn) < 4 or _ingredient_days_is_exempt(nn):
                             continue
                         iid = _ingredient_id(nm)
                         if iid in anchor_ids:

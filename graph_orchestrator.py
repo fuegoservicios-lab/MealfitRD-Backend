@@ -12341,6 +12341,12 @@ MICRO_DEGRADED_STALE_CLEAR_ENABLED = _env_bool("MEALFIT_MICRO_DEGRADED_STALE_CLE
 # vive ahí, decide el gate (retry). Marca `_protein_autofix_applied="huevo->X"` → el
 # fidelity-discount lo reconoce como mutación legítima.
 EGG_CAP_AUTOFIX_ENABLED = _env_bool("MEALFIT_EGG_CAP_AUTOFIX", True)
+# [P1-EGG-DAY-CAP · 2026-09-05] Tope DETERMINISTA de huevos ENTEROS por día. El prompt dice «máximo 3 enteros, en UNA
+# comida» y el revisor lo dejó pasar: plan vivo c350dec0, día 1 = 3 huevos en el desayuno + 3 en el almuerzo (6 enteros).
+# El exceso pasa a CLARAS (misma proteína, sin colesterol, lo que el propio prompt aconseja) y solo la comida con más huevo
+# conserva enteros. Corre en los caps pre-INSERT (todas las pasadas). Rollback: MEALFIT_EGG_DAY_MAX_WHOLE alto.
+EGG_DAY_MAX_WHOLE = _env_int("MEALFIT_EGG_DAY_MAX_WHOLE", 3, validator=lambda v: 1 <= v <= 12)
+_WHOLE_EGG_LINE_RE = _re.compile(r"^\s*(\d+)\s*huevos?\b(?![^,;(]*\bclaras?\b)", _re.IGNORECASE)
 # [P1-EGG-POOL-DIVERSIFIER · 2026-07-05] RAÍZ del sobreuso de huevo (corrida 1b2d7696: huevo en
 # 6/12 comidas + 'revoltillo' ×3 días + repeticiones same-day = 3 gates distintos y 2 intentos
 # quemados en UNA renovación): el PLANNER asigna 'Huevos/Claras' al pool de TODOS los días → el
@@ -33093,6 +33099,62 @@ def _strip_phantom_sugar_from_steps(days) -> int:
         return n
     except Exception as _e:
         logger.warning(f"[P1-STEP-SUGAR-GHOST] no-op: {type(_e).__name__}: {_e}")
+        return 0
+
+
+def _cap_daily_whole_eggs(days, db=None, *, max_whole: int = None) -> int:
+    """[P1-EGG-DAY-CAP · 2026-09-05] Máximo `max_whole` huevos ENTEROS por día (default EGG_DAY_MAX_WHOLE). La comida con
+    más huevo conserva hasta el tope; su exceso y los enteros de las DEMÁS comidas pasan a claras («3 huevos» →
+    «3 claras de huevo»). Truth-up de macros desde los strings; lockstep `ingredients_raw`. Marca `_egg_day_capped`.
+    Idempotente, fail-safe, muta in-place. Devuelve nº de líneas reescritas. tooltip-anchor: P1-EGG-DAY-CAP"""
+    cap = int(EGG_DAY_MAX_WHOLE if max_whole is None else max_whole)
+    if not days or cap <= 0:
+        return 0
+    try:
+        if db is None:
+            from nutrition_db import IngredientNutritionDB
+            db = IngredientNutritionDB()
+        changed = 0
+        for _d in days:
+            meals = [m for m in ((_d.get("meals") or []) if isinstance(_d, dict) else []) if isinstance(m, dict)]
+            found = []  # (meal, idx, count)
+            for m in meals:
+                for idx, ing in enumerate(m.get("ingredients") or []):
+                    mm = _WHOLE_EGG_LINE_RE.match(str(ing))
+                    if mm:
+                        found.append((m, idx, int(mm.group(1))))
+            total = sum(c for _, _, c in found)
+            if total <= cap:
+                continue
+            found.sort(key=lambda t: -t[2])
+            keeper = found[0][0]
+            for m, idx, count in found:
+                ings = m["ingredients"]
+                if m is keeper:
+                    if count <= cap:
+                        continue
+                    new_lines = [f"{cap} huevos" if cap > 1 else "1 huevo", f"{count - cap} claras de huevo"]
+                else:
+                    new_lines = [f"{count} claras de huevo"]
+                old = str(ings[idx])
+                ings[idx] = new_lines[0]
+                raw = m.get("ingredients_raw")
+                if isinstance(raw, list) and idx < len(raw):
+                    raw[idx] = new_lines[0]
+                for extra in new_lines[1:]:
+                    ings.append(extra)
+                    if isinstance(raw, list):
+                        raw.append(extra)
+                m["_egg_day_capped"] = True
+                changed += 1
+                try:
+                    _truth_up_meal_macros_from_strings(m, db)
+                except Exception:
+                    pass
+                logger.info(f"🥚 [P1-EGG-DAY-CAP] {old!r} → {new_lines} | meal={str(m.get('name'))[:40]} (día con {total} enteros, tope {cap})")
+        return changed
+    except Exception as _e:
+        logger.warning(f"[P1-EGG-DAY-CAP] no-op (fail-safe): {type(_e).__name__}: {_e}")
         return 0
 
 

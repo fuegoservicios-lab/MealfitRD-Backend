@@ -1278,7 +1278,8 @@ def _finalize_plan_data_for_insert(data: dict, *, surface: str = "pre-INSERT",
                 try:
                     from graph_orchestrator import (CAPS_AFTER_BAND_CLOSER as _cabc,
                                                     _cap_unrealistic_portions as _cup,
-                                                    _cap_cheese_dumps_final as _ccdf)
+                                                    _cap_cheese_dumps_final as _ccdf,
+                                                    _cap_daily_whole_eggs as _cdwe)  # [P1-EGG-DAY-CAP]
                     if _cabc:
                         _cap_n = 0
                         # Itera HASTA PUNTO FIJO (tope 3). Una sola pasada no basta: los topes
@@ -1291,6 +1292,7 @@ def _finalize_plan_data_for_insert(data: dict, *, surface: str = "pre-INSERT",
                         for _ in range(3):
                             _pass_n = _cup(_pd.get("days") or [], db=_db_ins)
                             _pass_n += _ccdf(_pd.get("days") or [], db=_db_ins)
+                            _pass_n += _cdwe(_pd.get("days") or [], db=_db_ins)  # [P1-EGG-DAY-CAP]
                             _cap_n += _pass_n
                             if not _pass_n:
                                 break
