@@ -33145,8 +33145,12 @@ _FRESH_SUBSTITUTES = (
     (("fresa", "frambuesa", "mora", "arandano", "uva", "lechosa", "papaya", "mango", "pina", "melon", "sandia", "guineo", "banana", "durazno", "melocoton", "pera", "kiwi", "cereza", "mamey", "nispero", "aguacate"), "manzana"),
     (("pescado", "tilapia", "salmon", "mero", "chillo", "dorado", "bacalao fresco", "merluza", "camaron", "camarones", "mariscos", "calamar", "pulpo", "cangrejo", "langosta", "lambi"), "atun en agua"),
     (("pechuga de pollo", "pollo", "muslo", "pavo", "carne de res", "res molida", "res", "bistec", "cerdo", "chuleta", "lomo", "chivo", "conejo", "higado"), "atun en agua"),
-    (("queso fresco", "queso blanco", "queso de freir", "ricotta", "requeson", "cottage", "yogur", "yogurt", "leche"), "queso parmesano"),
+    # lácteos: solo la leche tiene sustituto duradero honesto (UHT, misma unidad de volumen); yogurt, cottage y queso
+    # fresco se dejan al prompt (bloque 5 vivo: «305 ml de queso parmesano», «¾ taza de queso parmesano»)
+    (("leche descremada", "leche entera", "leche"), "leche UHT"),
 )
+# [P1-STEP14-CHUNK-PARITY] tokens que NO se sustituyen aunque no aguanten: sin equivalente duradero coherente
+_FRESH_SUB_SKIP = ("yogur", "yogurt", "cottage", "ricotta", "requeson", "queso fresco", "queso blanco", "queso de freir", "leche de coco", "leche de almendra")
 _FRESH_SUB_VEG_PROTEIN = "garbanzos cocidos"
 
 
@@ -33187,10 +33191,15 @@ def _single_trip_fresh_substitute(days, db=None, *, effective=None, diet=None, d
                     code = ingredient_issue_beyond_horizon(text, i, bool(req.get("allow_frozen")))
                     if not code:
                         continue
-                    sub = None
+                    if any(t in low for t in _FRESH_SUB_SKIP):
+                        continue
+                    sub, hit_tok = None, None
                     for toks, rep_name in _FRESH_SUBSTITUTES:
-                        if any(_re.search(r"\b" + _re.escape(t) + r"s?\b", low) for t in toks):
-                            sub = rep_name
+                        for t in toks:
+                            if _re.search(r"\b" + _re.escape(t) + r"s?\b", low):
+                                sub, hit_tok = rep_name, t
+                                break
+                        if sub:
                             break
                     if not sub:
                         continue
@@ -33208,6 +33217,23 @@ def _single_trip_fresh_substitute(days, db=None, *, effective=None, diet=None, d
                         raw[idx] = new_line
                     m["_fresh_substituted"] = (m.get("_fresh_substituted") or []) + [f"{text[:40]} → {sub}"]
                     changed += 1
+                    # el NOMBRE y los PASOS dejan de nombrar el fresco sustituido («Lechosa en gajos» con manzana)
+                    try:
+                        _rx_tok = _re.compile(r"(?i)\b" + _re.escape(hit_tok) + r"s?\b")
+                        _cap = sub[:1].upper() + sub[1:]
+                        _nm0 = str(m.get("name") or "")
+                        if _rx_tok.search(_sa_fs(_nm0.lower())):
+                            _nm1 = _re.sub(r"(?i)\b" + _re.escape(hit_tok) + r"s?\b", lambda mo: _cap if mo.group(0)[:1].isupper() else sub,
+                                           _sa_fs(_nm0) if _rx_tok.search(_nm0) is None else _nm0)
+                            if _nm1 != _nm0:
+                                m["name"] = _nm1
+                        rec = m.get("recipe")
+                        if isinstance(rec, list):
+                            for _ri, _st in enumerate(rec):
+                                if isinstance(_st, str) and _rx_tok.search(_sa_fs(_st.lower())):
+                                    rec[_ri] = _re.sub(r"(?i)\b" + _re.escape(hit_tok) + r"s?\b", sub, _st)
+                    except Exception:
+                        pass
                     logger.info(f"🧳 [P1-STEP14-SHOPPING-COOKING] día {i + 1}: «{text[:40]}» no aguanta ({code}) → «{sub}» | meal={str(m.get('name'))[:40]}")
                 if m.get("_fresh_substituted"):
                     try:

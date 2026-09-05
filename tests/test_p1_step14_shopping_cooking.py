@@ -115,3 +115,26 @@ def test_substitution_uses_the_absolute_day_of_the_block(monkeypatch):
     src = (_BACKEND / "cron_tasks.py").read_text(encoding="utf-8")
     assert '"_plan_policy": plan_data.get("_plan_policy"),' in src and '"_days_offset": _first_new_idx_ck,' in src
     assert 'days_offset=int(_pd.get("_days_offset") or 0)' in (_BACKEND / "db_plans.py").read_text(encoding="utf-8")
+
+
+def test_dairy_is_left_to_the_prompt_and_milk_becomes_uht(monkeypatch):
+    """Bloque 5 vivo: «305 ml de queso parmesano» / «¾ taza de queso parmesano». Yogurt, cottage y queso fresco no
+    se sustituyen (sin equivalente duradero honesto); la leche pasa a UHT conservando el volumen."""
+    monkeypatch.setattr(go, "_truth_up_meal_macros_from_strings", lambda meal, db: None)
+    days = _days(9, ["¾ taza de yogurt griego entero", "25 g de queso cottage", "305 ml de leche descremada", "25 g de queso blanco fresco"])
+    go._single_trip_fresh_substitute(days, db=_NoopDB(), effective=SINGLE, diet="balanced")
+    ings = days[-1]["meals"][0]["ingredients"]
+    assert "¾ taza de yogurt griego entero" in ings and "25 g de queso cottage" in ings and "25 g de queso blanco fresco" in ings
+    assert "305 ml de leche UHT" in ings, ings
+    assert not any("parmesano" in x for x in ings)
+
+
+def test_substitution_renames_dish_and_steps(monkeypatch):
+    monkeypatch.setattr(go, "_truth_up_meal_macros_from_strings", lambda meal, db: None)
+    days = _days(9, ["235 g de lechosa en gajos", "1 cucharada de cilantro picado"])
+    m = days[-1]["meals"][0]
+    m["name"] = "Lechosa en gajos con cilantro"
+    m["recipe"] = ["Mise en place: corta la lechosa y pica el cilantro.", "Montaje: sirve la lechosa."]
+    go._single_trip_fresh_substitute(days, db=_NoopDB(), effective=SINGLE, diet="balanced")
+    assert m["name"] == "Manzana en gajos con oregano", m["name"]
+    assert "lechosa" not in " ".join(m["recipe"]).lower() and "manzana" in m["recipe"][0]
