@@ -3965,6 +3965,21 @@ def cultural_country_for_form_data(form_data, day_index=None) -> str:
         return country_for_form_data(form_data)
 
 
+def cultural_country_for_plan(plan_data, health_profile=None, *, day_index=None) -> str:
+    """[P1-ARQ25-F7-CULTURE · 2026-09-05] Puerta CULTURAL de un plan YA generado (swap, regenerar día, coach):
+    el sello `_plan_policy.effective.culture_weights` manda; sin sello, la elección viva del perfil; sin nada
+    (o knob apagado), el país de MERCADO del plan (`country_for_plan`): legado byte-idéntico. Espejo post-generación
+    de `cultural_country_for_form_data`."""
+    try:
+        from cultural_profiles import cultural_country_for_plan as _ccp
+        cc = _ccp(plan_data, health_profile, day_index=day_index)
+        if cc:
+            return cc
+    except Exception:
+        pass
+    return country_for_plan(plan_data, health_profile)
+
+
 def country_for_plan(plan_data, health_profile, *, return_source: bool = False):
     """[P1-PLAN-STAMPS-COUNTRY · 2026-08-21] País de un plan YA GENERADO, para las superficies
     post-generación (recalc, swap, backstop, telemetría).

@@ -6663,20 +6663,31 @@ def _load_swap_plan_country_stub(user_id: str, plan_id: Optional[str] = None) ->
 
         if plan_id and isinstance(plan_id, str):
             row = _exq_swap_country(
-                "SELECT plan_data->>'_country' AS plan_country "
+                "SELECT plan_data->>'_country' AS plan_country, plan_data->'_plan_policy'->'effective'->'culture_weights' AS plan_culture "
                 "FROM meal_plans WHERE id = %s AND user_id = %s",
                 (plan_id, user_id),
                 fetch_one=True,
             )
         else:
             row = _exq_swap_country(
-                "SELECT plan_data->>'_country' AS plan_country "
+                "SELECT plan_data->>'_country' AS plan_country, plan_data->'_plan_policy'->'effective'->'culture_weights' AS plan_culture "
                 "FROM meal_plans WHERE user_id = %s ORDER BY created_at DESC LIMIT 1",
                 (user_id,),
                 fetch_one=True,
             )
         raw = row.get("plan_country") if isinstance(row, dict) else None
-        return {"_country": raw} if raw else {}
+        out = {"_country": raw} if raw else {}
+        # [P1-ARQ25-F7-CULTURE] el sello de COCINA del plan viaja junto al de mercado (forma de plan_data)
+        cw = row.get("plan_culture") if isinstance(row, dict) else None
+        if isinstance(cw, str):
+            try:
+                import json as _json_cw
+                cw = _json_cw.loads(cw)
+            except Exception:
+                cw = None
+        if isinstance(cw, list) and cw:
+            out["_plan_policy"] = {"effective": {"culture_weights": cw}}
+        return out
     except Exception as _country_e:
         logger.debug(
             "[P1-COUNTRY-PLAN-VS-PERFIL-EN-BLOQUES] no se leyó sello del swap: "
@@ -6936,6 +6947,14 @@ def api_swap_meal(background_tasks: BackgroundTasks, data: dict = Body(...), ver
                 _swap_plan_stub,
                 _swap_health_profile,
             )
+            # [P1-ARQ25-F7-CULTURE] la cocina sellada en el plan viaja al motor del swap como pesos ya compilados
+            try:
+                from cultural_profiles import culture_weights_for_plan as _cwfp_swap
+                _cw_swap = _cwfp_swap(_swap_plan_stub)
+                if _cw_swap:
+                    data["_culture_weights"] = _cw_swap
+            except Exception:
+                pass
 
         rejected_meal = data.get("rejected_meal")
         meal_type = data.get("meal_type", "")
@@ -7453,7 +7472,7 @@ def api_swap_meal_persist(
     from db_plans import update_plan_data_atomic
     try:
         owner = execute_sql_query(
-            "SELECT id, plan_data->>'_country' AS plan_country "
+            "SELECT id, plan_data->>'_country' AS plan_country, plan_data->'_plan_policy'->'effective'->'culture_weights' AS plan_culture "
             "FROM meal_plans WHERE id = %s AND user_id = %s",
             (plan_id, verified_user_id),
             fetch_one=True,
@@ -7472,6 +7491,7 @@ def api_swap_meal_persist(
         _persist_allergies: list = []
         _persist_diet = None
         _swap_country = "DO"
+        _swap_culture = "DO"
         _hp_micro = {}
         # [P1-PLAN-DISPLAY-I18N-MUTATOR-swap] locale del usuario para el despacho de
         # re-enriquecimiento post-persist (abajo, fuera del lock). Se hidrata del MISMO
@@ -7532,6 +7552,12 @@ def api_swap_meal_persist(
             _hp_micro,
         )
         _micro_form["country"] = _swap_country
+        # [P1-ARQ25-F7-CULTURE] cocina del plan para el finalizador (arroz nocturno) y el backstop de franja
+        from constants import cultural_country_for_plan as _ccfp_swap_persist
+        _swap_culture = _ccfp_swap_persist(
+            {"_country": owner.get("plan_country"), "_plan_policy": {"effective": {"culture_weights": owner.get("plan_culture")}}},
+            _hp_micro,
+        )
 
         # [P0-SWAP-PERSIST-CLINICAL · 2026-07-01] (audit P0-3) `/swap-meal/persist` era la ÚNICA superficie de
         # update con round-trip CLIENTE entre la generación validada y la persistencia: el body `new_meal` se
@@ -7674,7 +7700,7 @@ def api_swap_meal_persist(
                     # protagonista deja de declinar aquí. Sin él llevaba inerte desde
                     # P1-PROTAGONIST-CONTEXT-GATE en el ÚNICO round-trip que persiste el swap.
                     _fin_sp(new_meal, db=_fdb_sp, pantry_strict=_ps_sp, allergies=_persist_allergies,
-                            day_kcal_target=_dkt_sp(plan_data.get("macros")), country=_swap_country)
+                            day_kcal_target=_dkt_sp(plan_data.get("macros")), country=_swap_culture)
                     _tu_sp(new_meal, _fdb_sp)
                     try:
                         # [P1-COUNTRY-SYSTEM-F2 · 2026-08-17 (Task 9, g)] CERRADO — `_swap_country`
@@ -7684,7 +7710,7 @@ def api_swap_meal_persist(
                         # dejaba este site EXENTO (país default 'DO' incondicional) porque
                         # P2-MUTATOR-PURITY prohíbe reentrar al pool DENTRO del lock — la lectura
                         # de perfil sigue prohibida ahí, pero el VALOR ya resuelto no lo está.
-                        _slot_viols_sp = _slot_sp(new_meal, str(new_meal.get("meal") or ""), country=_swap_country)
+                        _slot_viols_sp = _slot_sp(new_meal, str(new_meal.get("meal") or ""), country=_swap_culture)
                         if _slot_viols_sp:
                             new_meal["_slot_advisory"] = True
                     except Exception:
@@ -8752,6 +8778,14 @@ def api_regenerate_day(
         if isinstance(plan_data, str):
             import json as _json
             plan_data = _json.loads(plan_data)
+        # [P1-ARQ25-F7-CULTURE] la cocina sellada en el plan viaja a cada swap del día (meal_form la reenvía)
+        try:
+            from cultural_profiles import culture_weights_for_plan as _cwfp_rd
+            _cw_rd = _cwfp_rd(plan_data)
+            if _cw_rd:
+                data["_culture_weights"] = _cw_rd
+        except Exception:
+            pass
         # [P1-RENAL-UPDATE-ENFORCE · 2026-06-24] (re-audit P1-1) ¿El plan lleva cap renal KDIGO? Usado para
         # (a) NO empujar la proteína hacia la meta en el retarget (sería iatrogénico) y (b) trimar el día
         # regenerado al techo de proteína en el persist.
@@ -9091,6 +9125,7 @@ def api_regenerate_day(
                 # hace spread de `data`), así que sin esto `swap_meal(surface="day")` seguía
                 # cayendo a 'DO' aunque `data['country']` ya viniera hidratado.
                 "country": data.get("country"),
+                "_culture_weights": data.get("_culture_weights"),  # [P1-ARQ25-F7-CULTURE] cocina del plan
                 "goal": data.get("goal") or data.get("mainGoal"),
                 # [P2-REGEN-DAY-BIOMETRICS-PROPAGATE · 2026-06-29] (cierre follow-up testing en vivo) Propaga los
                 # biométricos —ya hidratados en `data` por _enrich_clinical_from_profile (block P2-UPDATE-HYDRATE-

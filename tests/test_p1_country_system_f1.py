@@ -33,6 +33,10 @@ _FRONTEND = _BACKEND.parent / "frontend"
 
 # ── constants.country_for_form_data ──────────────────────────────────────────
 
+# [P1-ARQ25-F7-CULTURE · 2026-09-05] Las anclas de las superficies CULTURALES (inspiración, plantilla del prompt,
+# reglas de franja, feedbacks de retry, arroz nocturno) apuntan a `_swap_culture`/`_modify_culture`; las de MERCADO
+# (catálogo, despensa, cierres de proteína) siguen en `_swap_country`/`_modify_country`.
+
 def test_knob_apagado_todo_es_do(monkeypatch):
     monkeypatch.delenv("MEALFIT_COUNTRY_SYSTEM", raising=False)
     for fd in ({"country": "ES"}, {"country": "xx"}, {}, None, "no-dict"):
@@ -1006,8 +1010,8 @@ def test_swap_meal_wire_los_dos_guards_con_el_pais_derivado():
     variable derivada (`_swap_country`), no recomputar country_for_form_data cada uno (eso
     haría fallar el test de arriba, que exige exactamente 1 derivación)."""
     src = (_BACKEND / "agent.py").read_text(encoding="utf-8")
-    assert "_swap_slot_feedback_suffix(_swap_country" in src
-    assert "_swap_raw_staple_feedback_suffix(_swap_country" in src
+    assert "_swap_slot_feedback_suffix(_swap_culture" in src
+    assert "_swap_raw_staple_feedback_suffix(_swap_culture" in src
 
 
 # ── T4: gates culturales suaves por país (SLOT_INAPPROPRIATE_FOODS por país) ────────────────
@@ -1540,7 +1544,7 @@ def test_swap_meal_wire_slot_coherence_backstop_con_pais():
     """agent.py's caller pasa `_swap_country` (ya derivado, T3) — sin esto el backstop cae al
     default 'DO' sin importar el país real del usuario."""
     src = (_BACKEND / "agent.py").read_text(encoding="utf-8")
-    assert "slot_coherence_backstop_for_meal(_slot_dump, meal_type, _swap_country)" in src
+    assert "slot_coherence_backstop_for_meal(_slot_dump, meal_type, _swap_culture)" in src
 
 
 def _tools_cuerpo_inline_backstop() -> str:
@@ -1556,7 +1560,7 @@ def _tools_cuerpo_inline_backstop() -> str:
 def test_chat_modify_backstop_thread_rules_table_y_filtro_pais():
     cuerpo = _tools_cuerpo_inline_backstop()
     assert "_modify_rules_table" in cuerpo
-    assert '_modify_country == "DO" or v.get("hard")' in cuerpo
+    assert '_modify_culture == "DO" or v.get("hard")' in cuerpo
 
 
 def _unrequested_labels_country_aware(meal_name: str, user_changes: str, slot_key: str, country: str) -> list:
@@ -1682,8 +1686,8 @@ def test_g_swap_persist_wire_finalize_y_backstop_con_pais():
     fix-round 1 dejó EXENTO (finalize_single_meal_recipe_coherence + slot_coherence_backstop_
     for_meal) ahora reciben `country=_swap_country`, resuelto ANTES del lock."""
     src = (_BACKEND / "routers" / "plans.py").read_text(encoding="utf-8")
-    assert "day_kcal_target=_dkt_sp(plan_data.get(\"macros\")), country=_swap_country)" in src
-    assert '_slot_sp(new_meal, str(new_meal.get("meal") or ""), country=_swap_country)' in src
+    assert "day_kcal_target=_dkt_sp(plan_data.get(\"macros\")), country=_swap_culture)" in src
+    assert '_slot_sp(new_meal, str(new_meal.get("meal") or ""), country=_swap_culture)' in src
     # el EXENTO viejo (T4 fix-round 1) ya no debe seguir citado como abierto en este call site:
     assert "P1-COUNTRY-SYSTEM-F1 EXENTO: T4 fix-round 1 finding, no cerrado" not in src
 
@@ -4116,12 +4120,12 @@ def test_f1c_modify_template_beta_neutraliza_reglas_4_y_65():
 
 def test_f1c_swap_meal_wire_template_con_swap_country():
     src = (_BACKEND / "agent.py").read_text(encoding="utf-8")
-    assert "build_swap_meal_prompt_template(_swap_country).format(" in src
+    assert "build_swap_meal_prompt_template(_swap_culture).format(" in src
 
 
 def test_f1c_execute_modify_single_meal_wire_template_con_modify_country():
     src = (_BACKEND / "tools.py").read_text(encoding="utf-8")
-    assert "build_modify_meal_prompt_template(_modify_country).format(" in src
+    assert "build_modify_meal_prompt_template(_modify_culture).format(" in src
 
 
 def test_f1c_meal_ops_cache_dimensionada():

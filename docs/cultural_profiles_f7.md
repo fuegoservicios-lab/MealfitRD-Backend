@@ -11,6 +11,7 @@ Un plan tiene DOS países, no uno:
 |---|---|---|---|
 | **Mercado** | `constants.country_for_form_data` | precios, catálogo, moneda, unidades, validación contra la despensa | `_get_fast_filtered_catalogs`, cierre de proteína, presupuesto, lista de compras |
 | **Cocina** | `constants.cultural_country_for_form_data(form_data, day_index=None)` | qué platos inspiran el plan | brief del día (`build_day_assignment_context`), prompt del sistema del day-gen, hábitos de franja (`slot_rules_for_country`), arroz nocturno, crítica, juez culinario, `dish_library` |
+| **Cocina (plan ya generado)** | `constants.cultural_country_for_plan(plan_data, health_profile, day_index=None)` | la cocina SELLADA en `_plan_policy.effective.culture_weights` (sin sello: la elección viva del perfil; sin nada: el mercado del plan) | `/swap-meal` y `/regenerate-day` (el endpoint hidrata `data["_culture_weights"]` desde el plan y `agent.swap_meal` deriva `_swap_culture` para inspiración, plantilla del prompt, reglas de franja y feedbacks de retry), `/swap-meal/persist` (finalizador y backstop de franja), coach `execute_modify_single_meal` (`_modify_culture`). Catálogo, despensa y cierres de proteína siguen con el mercado (`_swap_country` / `_modify_country`). |
 
 Gate del roadmap, cubierto por `test_f_gate_i16…`: `market_country=US` + `dominican_criolla` 0,7 ⇒ platos criollos con precios y catálogo de US.
 

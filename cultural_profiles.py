@@ -199,6 +199,14 @@ def culture_weights_for_form(form_data: Optional[dict]) -> list[dict]:
     market_profile = profile_for_market(_market)
     if not cultural_profiles_enabled():
         return [{"profile_id": market_profile, "weight": 1.0}]
+    # [post-generación] pesos YA compilados del plan (`_culture_weights`, hidratados por el endpoint desde
+    # `_plan_policy`): el sello del plan manda sobre la elección viva del perfil (swap, regenerar día).
+    stamped = form.get("_culture_weights")
+    if isinstance(stamped, list) and stamped:
+        try:
+            return normalize_weights(stamped, default_profile=market_profile)
+        except Exception:
+            pass
     chosen = weights_from_form_field(form.get("cultureProfiles"))
     return chosen or [{"profile_id": market_profile, "weight": 1.0}]
 
@@ -227,6 +235,35 @@ def profile_for_day(weights: Optional[Iterable[dict]], day_index: int) -> str:
         assigned[best] += 1
         choice = best
     return choice
+
+
+def culture_weights_for_plan(plan_data: Optional[dict]) -> Optional[list[dict]]:
+    """Pesos de cocina SELLADOS en un plan (`_plan_policy.effective.culture_weights`), normalizados; None si el
+    plan no los trae (anterior a F7)."""
+    try:
+        pp = plan_data.get("_plan_policy") if isinstance(plan_data, dict) else None
+        ws = ((pp or {}).get("effective") or {}).get("culture_weights") if isinstance(pp, dict) else None
+        if isinstance(ws, list) and ws and all(isinstance(w, dict) and w.get("profile_id") in PROFILES for w in ws):
+            return normalize_weights(ws)
+    except Exception:
+        return None
+    return None
+
+
+def cultural_country_for_plan(plan_data: Optional[dict], health_profile: Optional[dict] = None,
+                              day_index: Optional[int] = None) -> Optional[str]:
+    """País de la COCINA de un plan YA generado (swap, regenerar día, coach): el sello del plan manda; si el plan
+    no lo trae, la elección viva del perfil (`cultureProfiles`); si tampoco (o knob apagado), None y el caller cae
+    al país de mercado del plan."""
+    if not cultural_profiles_enabled():
+        return None
+    ws = culture_weights_for_plan(plan_data)
+    if ws is None and isinstance(health_profile, dict):
+        ws = weights_from_form_field(health_profile.get("cultureProfiles"))
+    if not ws:
+        return None
+    pid = profile_for_day(ws, day_index) if day_index is not None else ws[0]["profile_id"]
+    return country_for_profile(pid)
 
 
 def cultural_country_for_form_data(form_data: Optional[dict], day_index: Optional[int] = None) -> str:

@@ -117,3 +117,51 @@ def test_h_las_superficies_culturales_leen_la_puerta_cultural_y_las_de_mercado_n
     # mercado intacto: la validación contra la despensa y los precios siguen con country_for_form_data
     assert "country=country_for_form_data(form_data),\n                )\n                if val_result is not True:" in src
     assert src.count("country_for_form_data(form_data)") >= 8, "las superficies de mercado no se tocaron"
+
+
+def test_i_las_superficies_post_generacion_leen_la_cocina_sellada_en_el_plan(monkeypatch):
+    """Cierre: swap, regenerar día y el coach mutan un plan YA generado; su cocina sale del sello `_plan_policy`,
+    no del mercado. Sin sello (plan anterior a F7) caen al país de mercado del plan: legado byte-idéntico."""
+    monkeypatch.setenv("MEALFIT_COUNTRY_SYSTEM", "1")
+    from constants import cultural_country_for_plan, country_for_plan
+    sealed = {"_country": "US", "_plan_policy": {"effective": {"culture_weights": [
+        {"profile_id": "dominican_criolla", "weight": 0.7}, {"profile_id": "us_everyday", "weight": 0.3}]}}}
+    assert country_for_plan(sealed, {}) == "US" and cultural_country_for_plan(sealed, {}) == "DO"
+    assert cultural_country_for_plan(sealed, {}, day_index=1) == "US", "el reparto por día es el mismo del blueprint"
+    legacy = {"_country": "ES"}
+    assert cultural_country_for_plan(legacy, {}) == "ES" == country_for_plan(legacy, {})
+    # sin sello, la elección viva del perfil; con el knob apagado, el mercado
+    assert cultural_country_for_plan(legacy, {"cultureProfiles": {"main": "mexico_casera"}}) == "MX"
+    monkeypatch.setenv("MEALFIT_CULTURAL_PROFILES", "0")
+    assert cultural_country_for_plan(sealed, {}) == "US"
+    monkeypatch.delenv("MEALFIT_CULTURAL_PROFILES", raising=False)
+    # el motor del swap recibe los pesos ya compilados (`_culture_weights`) y los prefiere al perfil
+    assert cultural_country_for_form_data_via_stamp() == "DO"
+
+
+def cultural_country_for_form_data_via_stamp():
+    from constants import cultural_country_for_form_data
+    return cultural_country_for_form_data({"country": "US", "_culture_weights": [{"profile_id": "dominican_criolla", "weight": 1.0}],
+                                           "cultureProfiles": {"main": "us_everyday"}})
+
+
+def test_j_swap_regen_y_coach_cablean_la_puerta_cultural_y_dejan_el_mercado_en_su_sitio():
+    agent = (_BACKEND / "agent.py").read_text(encoding="utf-8")
+    assert "_swap_culture = _ccffd_swap(form_data)" in agent
+    for cultural in ("country=_swap_culture,", "_bmtr(meal_type, _swap_culture)", "build_swap_meal_prompt_template(_swap_culture)",
+                     "slot_coherence_backstop_for_meal(_slot_dump, meal_type, _swap_culture)", "_swap_slot_feedback_suffix(_swap_culture,",
+                     "_swap_raw_staple_feedback_suffix(_swap_culture,"):
+        assert cultural in agent, cultural
+    for market in ("swap_allergies, swap_dislikes, swap_diet, country=_swap_country", "_safe_high_density_proteins(allergies, _cl_db, country=_swap_country)"):
+        assert market in agent, market
+    tools = (_BACKEND / "tools.py").read_text(encoding="utf-8")
+    assert "_modify_culture = _ccfp_modify(plan_data, form_data)" in tools
+    for cultural in ("slot_rules_for_country(_modify_culture)", "build_modify_meal_prompt_template(_modify_culture)",
+                     "country=_modify_culture)", "build_meal_timing_rules(meal_type, _modify_culture)"):
+        assert cultural in tools, cultural
+    assert "ingreds, clean_ingredients, country=_modify_country" in tools, "la despensa sigue siendo de mercado"
+    plans = (_BACKEND / "routers" / "plans.py").read_text(encoding="utf-8")
+    assert plans.count("AS plan_culture") == 3, "los tres SELECT del sello leen también la cocina"
+    assert 'data["_culture_weights"] = _cw_swap' in plans and 'data["_culture_weights"] = _cw_rd' in plans
+    assert '"_culture_weights": data.get("_culture_weights")' in plans, "regenerar día reenvía el sello a cada swap"
+    assert 'country=_swap_culture)' in plans and '_micro_form["country"] = _swap_country' in plans
