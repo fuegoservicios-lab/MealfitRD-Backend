@@ -20549,6 +20549,12 @@ def _is_sweet_meal(meal: dict, strip_accents_fn) -> bool:
         nlow = strip_accents_fn(str(meal.get("name", "")).lower())
         if any(ov in nlow for ov in _SWEET_MEAL_SAVORY_OVERRIDE):
             return False  # ceviche / fruta verde / guiso → preparación salada, no postre
+        # [P1-YOGURT-MEAL-CAP · 2026-09-05] una ENSALADA de almuerzo/cena con fruta en el nombre («Ensalada tibia de
+        # queso blanco, piña y lechosa», plan vivo 0b0250ab) es un plato salado: marcarla dulce le quitaba las
+        # legumbres al cerrador y le metía 1½ tazas de yogurt. Solo «ensalada de frutas» sigue siendo dulce.
+        _slot_low = strip_accents_fn(str(meal.get("meal") or meal.get("slot") or "").lower())
+        if ("almuerzo" in _slot_low or "cena" in _slot_low) and "ensalada" in nlow                 and not any(t in nlow for t in ("ensalada de fruta", "ensalada frutal", "ensalada dulce")):
+            return False
         if _SWEET_MARKER_RE.search(nlow):  # [P1-SWEET-MARKER-WORDBOUNDARY] no falso-positivo "pina"⊂"espinaca"
             return True
         if SWEET_GUARD_CHECK_INGREDIENTS:
@@ -21273,8 +21279,11 @@ def _close_protein_gap_for_meal(meal: dict, slot_protein_target: float, db, cand
         # SALADO y COCINADO el lácteo dulce (yogur/cottage/ricotta/requesón) queda como
         # ÚLTIMO recurso: con cualquier otro candidato disponible, se filtra. Piso clínico
         # manda (pool quedaría vacío ⇒ se conserva) — misma asimetría que el sweet-guard.
+        # [P1-YOGURT-MEAL-CAP · 2026-09-05] también en comida FUERTE no caliente (ensalada tibia de almuerzo con
+        # 1½ tazas de yogurt, plan vivo 0b0250ab): en almuerzo/cena el lácteo dulce es último recurso.
         if (_pool and not no_cook and CLOSER_DISH_COHERENCE_ENABLED
-                and not _is_sweet_meal(meal, _sa) and _meal_is_hot_cooked(meal, _sa)):
+                and not _is_sweet_meal(meal, _sa)
+                and (_meal_is_hot_cooked(meal, _sa) or not _meal_slot_is_light(meal, _sa))):
             _pool_no_sd = [(info, nlow) for (info, nlow) in _pool
                            if not any(t in nlow for t in _SWEET_DAIRY_TOKENS)]
             if _pool_no_sd and len(_pool_no_sd) < len(_pool):
@@ -32618,7 +32627,15 @@ _REALISM_VOLUME_FRUIT_TOKENS = ("melon", "sandia", "patilla", "lechosa", "papaya
 # [P3-RECIPE-POLISH-4 · 2026-07-06] LÍQUIDOS lácteos: "2½ tazas de leche descremada (599 ml)"
 # en UNA batida (vivo, plan d4a001eb) — nadie sirve >2 tazas de leche en un plato/vaso.
 _REALISM_LIQUID_TOKENS = ("leche",)
-_REALISM_CUP_CAPS = ((_REALISM_HERB_TOKENS, 0.25), (_REALISM_AROMATIC_TOKENS, 1.0),
+# [P1-YOGURT-MEAL-CAP · 2026-09-05] Plan vivo 0b0250ab (vegetariano, gain_muscle): el cerrador rellenaba proteína con
+# yogurt griego en casi todo — 1½ tazas en un almuerzo, 2 tazas (≈500 g) en una merienda. El queso tenía tope por comida
+# (SNACK/MEAL_CHEESE_CAP_G); el yogurt no. Tope en tazas (va PRIMERO: «yogur» podría caer en los tokens líquidos, 2 tazas)
+# y en gramos. Rollback: MEALFIT_YOGURT_MEAL_CAP_G alto.
+_REALISM_YOGURT_TOKENS = ("yogur",)
+YOGURT_MEAL_CAP_G = _env_int("MEALFIT_YOGURT_MEAL_CAP_G", 250, lambda v: 100 <= v <= 400)   # 1 taza: porción generosa, no 2
+YOGURT_MEAL_CAP_CUPS = 1.0
+_REALISM_CUP_CAPS = ((_REALISM_YOGURT_TOKENS, YOGURT_MEAL_CAP_CUPS),
+                     (_REALISM_HERB_TOKENS, 0.25), (_REALISM_AROMATIC_TOKENS, 1.0),
                      (_REALISM_VOLUME_FRUIT_TOKENS, 2.0), (_REALISM_LIQUID_TOKENS, 2.0))
 REALISM_FRUIT_VOLUME_CAP_G = _env_int("MEALFIT_REALISM_FRUIT_VOLUME_CAP_G", 300,
                                       lambda v: 150 <= v <= 600)
@@ -33438,6 +33455,8 @@ def _cap_unrealistic_portions(days, db=None) -> int:
                         elif (cur_g > float(ORGAN_MEAT_CAP_G)
                               and any(_re.search(r"\b" + t, il) for t in _ORGAN_MEAT_TOKENS)):
                             factor = float(ORGAN_MEAT_CAP_G) / cur_g
+                        elif cur_g > float(YOGURT_MEAL_CAP_G) and _re.search(r"\byogur", il):
+                            factor = float(YOGURT_MEAL_CAP_G) / cur_g   # [P1-YOGURT-MEAL-CAP]
                         # [P1-RECIPE-POLISH-5 v3 · 2026-07-12] 1.9) pan en GRAMOS sobre el techo de
                         # 3 rebanadas (~45g c/u = 135g): el techo por CONTEO de rebanadas no ve las
                         # líneas gram-lead que el humanize convierte a "rebanadas" DESPUÉS de los
