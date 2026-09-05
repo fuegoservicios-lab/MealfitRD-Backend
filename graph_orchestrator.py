@@ -8729,6 +8729,8 @@ async def generate_days_parallel_node(state: PlanState) -> dict:
             # pesos para el encabezado de inspiración; el mercado (precios/catálogo) NO pasa por aquí.
             country=cultural_country_for_form_data(form_data, day_index=max(0, int(global_day) - 1)),
             culture_weights=_culture_weights_for_form_data(form_data),
+            # [P1-GAINMUSCLE-DINNER-PROTEIN] la cena de ganancia muscular pide proteína animal magra como plato
+            goal=(form_data or {}).get("mainGoal") or (form_data or {}).get("goal"),
         )
 
         random_seed = random.randint(10000, 99999)
@@ -10660,6 +10662,51 @@ _HEAVY_PROTEIN_LABELS = {"pollo", "pavo", "cerdo", "res", "pescado", "atun",
 _SAME_DAY_PROTEIN_GATE_LABELS = _HEAVY_PROTEIN_LABELS | {"huevo"}
 
 
+GAINMUSCLE_DINNER_PROTEIN_ENABLED = _env_bool("MEALFIT_GAINMUSCLE_DINNER_PROTEIN", True)
+
+
+def _detect_gainmuscle_dinner_issues(days: list, form_data: dict) -> list:
+    """[P1-GAINMUSCLE-DINNER-PROTEIN · 2026-09-05] Señal DETERMINISTA para la autocrítica (no opinable), solo
+    con objetivo de ganancia muscular: (1) una CENA sin ninguna proteína animal magra (labels pesados del gate:
+    pollo/pavo/pescado/res/atún/mariscos…) cuando el queso es el plato — plan vivo b4316db6: «Batata rellena de
+    queso fresco» (23 g) y «Batata horneada rellena de mozzarella» (28 g) con pollo y pescado en el pool;
+    (2) el mismo concepto «queso como plato» en 2+ cenas del chunk. Devuelve textos «Día N, cena: …» que la
+    autocrítica convierte en needs_correction del día. Puro; fail-safe ⇒ []. Knob MEALFIT_GAINMUSCLE_DINNER_PROTEIN.
+    tooltip-anchor: P1-GAINMUSCLE-DINNER-PROTEIN"""
+    try:
+        if not GAINMUSCLE_DINNER_PROTEIN_ENABLED:
+            return []
+        from constants import strip_accents as _sa_gd
+        _goal = _sa_gd(str((form_data or {}).get("mainGoal") or (form_data or {}).get("goal") or "").lower())
+        if not any(t in _goal for t in ("gain_muscle", "ganar_musculo", "ganancia", "bulk")):
+            return []
+        issues, cheese_dinner_days = [], []
+        for _i, _d in enumerate(days or []):
+            if not isinstance(_d, dict):
+                continue
+            for _m in (_d.get("meals") or []):
+                if not isinstance(_m, dict) or "cena" not in _sa_gd(str(_m.get("meal") or "").lower()):
+                    continue
+                _nm = str(_m.get("name") or "")
+                _lean = _protein_gate_labels_in_meal(_m) & _HEAVY_PROTEIN_LABELS
+                _cheese_dish = any(h in _sa_gd(_nm.lower()) for h in _CLOSER_CHEESE_HINT)
+                if _lean:
+                    continue
+                if _cheese_dish:
+                    cheese_dinner_days.append(_i + 1)
+                    issues.append(
+                        f"Día {_i + 1}, cena: «{_nm[:60]}» tiene el QUESO como plato y ninguna proteína animal magra "
+                        f"({_meal_macro_num(_m.get('protein')):.0f} g de proteína) — en ganancia muscular la cena es "
+                        f"comida fuerte: pollo/pavo/pescado/res/atún del pool como plato, el queso solo de extensor")
+        if len(cheese_dinner_days) >= 2:
+            issues.append(
+                f"Días {', '.join(str(x) for x in cheese_dinner_days)}: el MISMO concepto de cena (queso como plato) "
+                f"se repite; varía la proteína y la preparación entre noches")
+        return issues
+    except Exception:
+        return []
+
+
 def _count_cross_day_heavy_protein_repetition(days: list, min_days: int = 3) -> dict:
     """[P2-ORCH-6 · 2026-05-28] Cuenta en cuántos días DISTINTOS aparece cada
     proteína PESADA (pollo/pavo/cerdo/res/pescado/atún). Devuelve las que
@@ -11218,6 +11265,23 @@ async def self_critique_node(state: PlanState) -> dict:
     else:
         crossday_block = ""
 
+    # [P1-GAINMUSCLE-DINNER-PROTEIN · 2026-09-05] cena débil en ganancia muscular (determinista, no opinable)
+    gm_dinner_block = ""
+    _gm_dinner_issues = _detect_gainmuscle_dinner_issues(days, form_data)
+    if _gm_dinner_issues:
+        _gm_joined = "\n   - " + "\n   - ".join(_gm_dinner_issues)
+        logger.info(f"💪 [P1-GAINMUSCLE-DINNER-PROTEIN] cenas débiles detectadas:{_gm_joined}")
+        gm_dinner_block = (
+            f"\n⚠️ CENAS DÉBILES PARA GANANCIA MUSCULAR (conteo determinístico, no opinable):{_gm_joined}\n"
+            f"   Por CADA cena listada, BAJA diversity_score a 4 o menos, marca needs_correction=True y en "
+            f"suggestions especifica el día: la cena debe llevar una proteína ANIMAL MAGRA del pool del día "
+            f"(pollo, pavo, pescado, res magra, atún, camarones) como plato principal con porción de comida "
+            f"fuerte; el queso solo como extensor o topping.\n"
+        )
+        if not suggested_day_hint:
+            _mgd = _re.search(r'[Dd]ía\s*(\d+)', _gm_dinner_issues[0])
+            suggested_day_hint = f"Día {_mgd.group(1)}" if _mgd else "Día 1"
+
     # [P1-SELF-CRITIQUE-SKIP-CLEAN · 2026-05-28] Early-exit: si los detectores
     # determinísticos vinieron limpios (cero staples repetidos, cero incoherencias
     # de slot, cero monotonía cross-day de proteína pesada), saltamos el evaluador
@@ -11238,7 +11302,8 @@ async def self_critique_node(state: PlanState) -> dict:
     if (SELF_CRITIQUE_SKIP_WHEN_CLEAN and not staple_repetitions
             and not slot_issues and not heavy_protein_monotony
             and not cross_day_dish_repeats  # [P1-CRITIQUE-CROSSDAY-DISH-PARITY]
-            and not ingredient_spread):  # [P1-INGREDIENT-SPREAD]
+            and not ingredient_spread  # [P1-INGREDIENT-SPREAD]
+            and not _gm_dinner_issues):  # [P1-GAINMUSCLE-DINNER-PROTEIN]
         logger.info(
             "⏭️ [SELF-CRITIQUE] Detectores determinísticos limpios (0 staples "
             "repetidos, 0 incoherencias de slot, 0 monotonía de proteína pesada, "
@@ -11271,7 +11336,7 @@ async def self_critique_node(state: PlanState) -> dict:
     human_content = f"""
 PLAN A EVALUAR (días generados):
 {days_summary_json}
-{policy_block}{staples_block}{spread_block}{slot_block}{crossday_block}{user_context}
+{policy_block}{staples_block}{spread_block}{slot_block}{crossday_block}{gm_dinner_block}{user_context}
 {pista_dia}
 """.strip()
 
