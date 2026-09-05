@@ -9,6 +9,8 @@ sin `with_config` (fakes) sigue funcionando con usage=None.
 """
 from __future__ import annotations
 
+import asyncio
+
 from pathlib import Path
 from types import SimpleNamespace
 
@@ -31,8 +33,17 @@ def test_usage_capture_reads_usage_metadata_and_token_usage():
     cb2.on_chat_model_start(None, None)
 
 
-@pytest.mark.asyncio
-async def test_invoke_sets_last_usage_in_task_context(monkeypatch):
+# [P2-ASYNC-TESTS-SIN-PLUGIN · 2026-09-05] Estos tests eran `async def` con `@pytest.mark.asyncio`,
+# pero `pytest-asyncio` NO está instalado ni declarado en `requirements.txt` — ni aquí ni en el VPS ni
+# en el workflow de CI. pytest no los saltaba: los marcaba FAILED («async def functions are not
+# natively supported»), así que el guard llevaba vivo lo justo para ensuciar el resultado y nada más.
+# Se conducen con `asyncio.run` desde un test síncrono: cero dependencias nuevas (y añadir una de test
+# a `requirements.txt`, que es el fichero de PRODUCCIÓN, sería peor).
+def test_invoke_sets_last_usage_in_task_context(monkeypatch):
+    asyncio.run(_test_invoke_sets_last_usage_in_task_context(monkeypatch))
+
+
+async def _test_invoke_sets_last_usage_in_task_context(monkeypatch):
     import vision_agent as va
 
     class _Fake:

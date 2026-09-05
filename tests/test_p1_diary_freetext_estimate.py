@@ -13,6 +13,8 @@ Invariantes: la estimación NO persiste (vuelve como borrador; el registro sigue
 """
 from __future__ import annotations
 
+import asyncio
+
 import re
 from datetime import date, datetime, timezone
 from pathlib import Path
@@ -65,8 +67,17 @@ def test_estimate_request_bounds_and_output_model():
         MacroEstimateModel(name="x", calories=-1, protein=0, carbs=0, healthy_fats=0)
 
 
-@pytest.mark.asyncio
-async def test_estimate_returns_clamped_draft_marked_estimated(monkeypatch):
+# [P2-ASYNC-TESTS-SIN-PLUGIN · 2026-09-05] Estos tests eran `async def` con `@pytest.mark.asyncio`,
+# pero `pytest-asyncio` NO está instalado ni declarado en `requirements.txt` — ni aquí ni en el VPS ni
+# en el workflow de CI. pytest no los saltaba: los marcaba FAILED («async def functions are not
+# natively supported»), así que el guard llevaba vivo lo justo para ensuciar el resultado y nada más.
+# Se conducen con `asyncio.run` desde un test síncrono: cero dependencias nuevas (y añadir una de test
+# a `requirements.txt`, que es el fichero de PRODUCCIÓN, sería peor).
+def test_estimate_returns_clamped_draft_marked_estimated(monkeypatch):
+    asyncio.run(_test_estimate_returns_clamped_draft_marked_estimated(monkeypatch))
+
+
+async def _test_estimate_returns_clamped_draft_marked_estimated(monkeypatch):
     import routers.diary as diary
     import graph_orchestrator as go
 
@@ -91,8 +102,11 @@ async def test_estimate_returns_clamped_draft_marked_estimated(monkeypatch):
     assert go._current_node_var.get() is None  # contexto restaurado
 
 
-@pytest.mark.asyncio
-async def test_estimate_soft_fails_when_model_raises(monkeypatch):
+def test_estimate_soft_fails_when_model_raises(monkeypatch):
+    asyncio.run(_test_estimate_soft_fails_when_model_raises(monkeypatch))
+
+
+async def _test_estimate_soft_fails_when_model_raises(monkeypatch):
     import routers.diary as diary
     import graph_orchestrator as go
 

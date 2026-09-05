@@ -96,7 +96,11 @@ def test_el_sufijo_va_en_los_dos_strings_que_se_renderean():
     bloque = _bloque_del_item()
     assert 'result["display_qty"]' in bloque
     assert 'result["display_string"]' in bloque
-    assert bloque.count("de {cycle_days} días — recompra") == 2
+    # [P1-SINGLE-TRIP-BADGES · 2026-09-05] La cola dejó de ser el literal «recompra»: con una compra
+    # ÚNICA (ciclo > 7 sin reposición) invitar a recomprar es mentir, así que ahí dice «consúmelo en esos
+    # primeros días». Lo que este test protege sigue igual —que el sufijo esté en LOS DOS strings que se
+    # renderean, no en uno— así que se cuenta el denominador, que es la parte inmutable.
+    assert bloque.count("de {cycle_days} días — {_tail}") == 2
     assert "de 30 días — recompra" not in bloque, \
         "el denominador volvió a ser un literal: la nota miente en listas de 7 y 15 días"
 
