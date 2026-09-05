@@ -4822,6 +4822,13 @@ def _build_shared_context(state: PlanState, force_rebuild: bool = False) -> dict
             clinical_directives += build_medical_condition_context(form_data)
         except Exception:
             pass
+    # [P1-WIZARD-CONSUMERS-AUDIT · 2026-09-05] hábitos (agua/cafeína/tabaco/alcohol) y cintura del asistente
+    if HABITS_RULES_ENABLED:
+        try:
+            from prompts.plan_generator import build_habits_context as _bhc
+            clinical_directives += _bhc(form_data)
+        except Exception:
+            pass
     # [P1-MEDICATION-RULES · 2026-06-18] (audit fresco P1-A) Interacciones fármaco-alimento
     # (warfarina↔vit K, metformina↔B12, IECA/ARA-II↔potasio, levotiroxina↔Ca/Fe). No-op para perfiles
     # sin medicamento cubierto. Lever de prompt; el gate FS9 + el monitor de vit K (anticoagulante)
@@ -12341,6 +12348,8 @@ MICRO_DEGRADED_STALE_CLEAR_ENABLED = _env_bool("MEALFIT_MICRO_DEGRADED_STALE_CLE
 # vive ahí, decide el gate (retry). Marca `_protein_autofix_applied="huevo->X"` → el
 # fidelity-discount lo reconoce como mutación legítima.
 EGG_CAP_AUTOFIX_ENABLED = _env_bool("MEALFIT_EGG_CAP_AUTOFIX", True)
+# [P1-WIZARD-CONSUMERS-AUDIT] hábitos del asistente → directivas del generador (rollback: =false)
+HABITS_RULES_ENABLED = _env_bool("MEALFIT_HABITS_RULES", True)
 # [P1-EGG-DAY-CAP · 2026-09-05] Tope DETERMINISTA de huevos ENTEROS por día. El prompt dice «máximo 3 enteros, en UNA
 # comida» y el revisor lo dejó pasar: plan vivo c350dec0, día 1 = 3 huevos en el desayuno + 3 en el almuerzo (6 enteros).
 # El exceso pasa a CLARAS (misma proteína, sin colesterol, lo que el propio prompt aconseja) y solo la comida con más huevo

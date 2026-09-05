@@ -448,6 +448,27 @@ def build_user_identity_context(form_data: dict, full_name: str = "") -> str:
                 parts.append(f"- Peso: {wtxt} {wunit}")
     except (TypeError, ValueError):
         pass
+    # [P1-WIZARD-CONSUMERS-AUDIT · 2026-09-05] cintura y hábitos declarados: el coach los conocía por JSON pasivo o no los conocía
+    try:
+        _w = float(str(form_data.get("waistCm") or "").replace(",", "."))
+        if 40 <= _w <= 250:
+            parts.append(f"- Cintura: {int(_w) if _w == int(_w) else round(_w, 1)} cm")
+    except (TypeError, ValueError):
+        pass
+    try:
+        _hab = []
+        _hv = {"nunca": "nunca", "ocasional": "ocasional", "semanal": "cada semana", "diario": "a diario"}
+        for _k, _lbl in (("habitAlcohol", "alcohol"), ("habitCaffeine", "cafeína"), ("habitSmoking", "tabaco")):
+            _v = str(form_data.get(_k) or "").strip().lower()
+            if _v in _hv:
+                _hab.append(f"{_lbl} {_hv[_v]}")
+        _wv = str(form_data.get("habitWater") or "").strip()
+        if _wv:
+            _hab.append(f"agua {_wv[:12]}")
+        if _hab:
+            parts.append("- Hábitos declarados: " + ", ".join(_hab))
+    except Exception:
+        pass
 
     height = form_data.get("height")  # cm canonical
     try:
