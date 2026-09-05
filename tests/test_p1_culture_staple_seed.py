@@ -91,10 +91,10 @@ def test_seeder_call_site_runs_before_the_overuse_veto_and_without_it():
     """[P1-CULTURE-STAPLE-SEED-2] la siembra va ANTES del bloque EVITA (para que sus básicos queden exentos vía
     `chosen_carbs`/`chosen_set`) y se llama SIN el veto (`()`), y sus pares son los que publican carb_params."""
     src = (_BACKEND / "ai_helpers.py").read_text(encoding="utf-8")
-    i = src.index("_carb_slots_seeded = _culture_staple_seed(_rotate_pairs(chosen_carbs, days=_dc), form_data, filtered_carbs,")
+    i = src.index("_carb_slots_seeded = _culture_staple_seed(_rotate_pairs(_base_carbs_for_pairs(chosen_carbs), days=_dc), form_data, filtered_carbs,")  # [P1-SINGLE-TRIP-ROTATION] sin cereales de desayuno en las parejas
     assert "carb_freq, (), _dc, _variety_country)" in src[i:i + 300], "sin veto de sobreuso"
     j = src.index('blocked_text = ""\n    if used_proteins or used_carbs or used_veggies:')
-    k = src.index("_carb_slots = _carb_slots_seeded if _carb_slots_seeded else _rotate_pairs(chosen_carbs, days=_dc)")
+    k = src.index("_carb_slots = _carb_slots_seeded if _carb_slots_seeded else _rotate_pairs(_base_carbs_for_pairs(chosen_carbs), days=_dc)")
     m = src.index('carb_params = {f"carb_{i}": _carb_slots[i][0] for i in range(_dc)}')
     assert i < j < k < m
     assert "if _x not in chosen_carbs:\n                    chosen_carbs.append(_x)" in src[i:j], "los básicos entran en chosen_carbs (exentos del EVITA)"

@@ -836,6 +836,40 @@ def _intersect_cycle_base(persisted, allowed) -> "list | None":
         return None
 
 
+def _single_trip_durable_filter(items, form_data, days: int) -> list:
+    """[P1-SINGLE-TRIP-ROTATION · 2026-09-05] En un ciclo de UNA sola compra (ciclo > 7 días, sin reposición de
+    frescos), el sorteo solo puede completar los pools de un bloque con alimentos que AGUANTEN hasta el último día
+    del bloque (`pantry_durability`; con congelador, también lo congelable dentro de su ventana). Medido: bloque 3
+    de la prueba B (días 8-11, «solo la compra grande», sin congelador) mandó a comprar lechuga, fresas, manzana y
+    lechosa — el modo «variedad primero, sin candado» (decisión del dueño para renovaciones) completaba con frescos
+    nuevos; la promesa de compra única vivía en el prompt del día, no en el sembrador. Sin política de compra única
+    (semanal, con reposición, o bloque dentro de la semana de frescos) devuelve `items` intacto. Puro; fail-open."""
+    try:
+        from pantry_durability import single_trip_requirements, ingredient_issue_beyond_horizon
+        fd = form_data if isinstance(form_data, dict) else {}
+        last = int(fd.get("_days_offset") or 0) + max(1, int(days)) - 1
+        req = single_trip_requirements(fd.get("_plan_policy_effective"), last)
+        if not req:
+            return list(items)
+        return [x for x in items if ingredient_issue_beyond_horizon(x, last, bool(req.get("allow_frozen"))) is None]
+    except Exception:
+        return list(items)
+
+
+# [P1-SINGLE-TRIP-ROTATION] cereales de desayuno: jamás base de almuerzo/cena (3 rechazos hoy por arepitas/bowls de avena)
+_BREAKFAST_ONLY_BASES = ("avena", "granola", "cereal", "hojuelas", "corn flakes", "muesli")
+
+
+def _base_carbs_for_pairs(chosen_carbs) -> list:
+    """Bases candidatas a las PAREJAS del día (almuerzo/cena): sin cereales de desayuno, si queda alguna otra."""
+    try:
+        kept = [c for c in (chosen_carbs or [])
+                if not any(t in strip_accents(str(c)).lower() for t in _BREAKFAST_ONLY_BASES)]
+        return kept if kept else list(chosen_carbs or [])
+    except Exception:
+        return list(chosen_carbs or [])
+
+
 def _norm_food_key(name) -> str:
     """[P1-PANTRY-POOL-MATCH] clave de comparación: sin acentos, minúsculas, singular por palabra («Papas»→«papa»,
     «Habichuelas Rojas»→«habichuela roja»)."""
@@ -2249,6 +2283,16 @@ def get_deterministic_variety_prompt(history_text: str, form_data: dict = None, 
         # ahorro) y se completa con el sorteo ponderado hasta el mínimo; solo con suficientes bases
         # propias se activa el lock. tooltip-anchor: P2-PANTRY-ROTATION-FLOOR
         _min_p = PANTRY_ROTATION_MIN_PROTEINS
+        # [P1-SINGLE-TRIP-ROTATION] en compra única el sorteo solo completa con lo que aguanta hasta el fin del bloque
+        _st_before = (len(unique_proteins), len(unique_carbs), len(unique_veggies), len(unique_fruits))
+        unique_proteins = _single_trip_durable_filter(unique_proteins, form_data, _dc)
+        unique_carbs = _single_trip_durable_filter(unique_carbs, form_data, _dc)
+        unique_veggies = _single_trip_durable_filter(unique_veggies, form_data, _dc)
+        unique_fruits = _single_trip_durable_filter(unique_fruits, form_data, _dc)
+        _st_after = (len(unique_proteins), len(unique_carbs), len(unique_veggies), len(unique_fruits))
+        if _st_after != _st_before:
+            logger.info(f"🧳 [P1-SINGLE-TRIP-ROTATION] compra única: el sorteo solo completa con duraderos "
+                        f"(P/C/V/F {_st_before} → {_st_after}); la Nevera manda.")
         if extracted_p:
             if len(extracted_p) >= _min_p:
                 unique_proteins = extracted_p
@@ -2519,7 +2563,7 @@ def get_deterministic_variety_prompt(history_text: str, form_data: dict = None, 
     # arroz=64/yuca=57 en el contador quedó muda; el día dominicano recibió «Garbanzos + Avena» y el modelo hizo
     # arepitas de avena en la cena (rechazo del revisor). Los básicos inyectados entran en `chosen_carbs` para
     # que el EVITA de abajo los exima (`chosen_set`). La frecuencia sigue eligiendo el MENOS usado entre ellos.
-    _carb_slots_seeded = _culture_staple_seed(_rotate_pairs(chosen_carbs, days=_dc), form_data, filtered_carbs,
+    _carb_slots_seeded = _culture_staple_seed(_rotate_pairs(_base_carbs_for_pairs(chosen_carbs), days=_dc), form_data, filtered_carbs,
                                               carb_freq, (), _dc, _variety_country)
     if _carb_slots_seeded:
         for _pa, _pb in _carb_slots_seeded:
@@ -2732,7 +2776,7 @@ def get_deterministic_variety_prompt(history_text: str, form_data: dict = None, 
     # categoría fuera del contrato. tooltip-anchor: P2-SEEDER-PAIRS-GOALS
     # [P1-CULTURE-STAPLE-SEED · 2026-09-05] la cocina del día manda sobre la rotación anti-repetición
     # (sembrado arriba, ANTES del bloque EVITA — P1-CULTURE-STAPLE-SEED-2); sin siembra, la rotación de siempre.
-    _carb_slots = _carb_slots_seeded if _carb_slots_seeded else _rotate_pairs(chosen_carbs, days=_dc)
+    _carb_slots = _carb_slots_seeded if _carb_slots_seeded else _rotate_pairs(_base_carbs_for_pairs(chosen_carbs), days=_dc)
     if _carb_slots:
         carb_params = {f"carb_{i}": _carb_slots[i][0] for i in range(_dc)}
         carb_params.update({f"carb_{i}b": _carb_slots[i][1] for i in range(_dc)})
