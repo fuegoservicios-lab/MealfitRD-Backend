@@ -117,19 +117,19 @@ Cinco regresiones históricas que este diseño protege (P1-G mode=block no-op, `
 
 ## Benchmark del landing (matriz clínica del formulario)
 
-[P1-LANDING-BENCH-1 · 2026-08-07 · comprimido doc-first 2026-08-22] Benchmark cuyo output alimenta las cifras públicas del landing y guía la mejora del motor: matriz de 20 perfiles **FIEL a los chips del wizard** (los harnesses previos usaban texto libre que el wizard ya no emite) + scorers deterministas, en 5 modos. Los claims estructurales del frontend viven en `frontend/src/data/systemFacts.js`. Motor SSOT [`backend/landing_benchmarks.py`](backend/landing_benchmarks.py); runner `scripts/landing_benchmark.py`; doc canónica (matriz, 5 modos, 4 scorers, métrica→claim, métrica→palanca y los hallazgos — entre ellos que `renal` ya NO es expresable desde el formulario) [`backend/docs/landing_benchmarks.md`](backend/docs/landing_benchmarks.md). Test ancla [`test_p1_landing_bench_1_anchors.py`](backend/tests/test_p1_landing_bench_1_anchors.py).
+[P1-LANDING-BENCH-1 · 2026-08-07] Matriz de 20 perfiles FIEL a los chips del wizard + scorers deterministas en 5 modos; alimenta las cifras públicas del landing (`frontend/src/data/systemFacts.js`). Motor [`backend/landing_benchmarks.py`](backend/landing_benchmarks.py); doc [`backend/docs/landing_benchmarks.md`](backend/docs/landing_benchmarks.md); test [`test_p1_landing_bench_1_anchors.py`](backend/tests/test_p1_landing_bench_1_anchors.py).
 
 ---
 
 ## Supermercado RD artificial
 
-[P1-SUPERMARKET-DB · 2026-07-02 · token separado P2-SUPERMARKET-TOKEN-SPLIT 2026-08-14 · comprimido doc-first 2026-08-22] Tabla `supermarket_products` (Neon): presentaciones comprables, navegables y editables en `/supermercado` con gate admin **PROPIO** (`_verify_supermarket_token`; mutaciones SOLO vía [`backend/routers/supermarket.py`](backend/routers/supermarket.py) — simétrica a I6). **Era `CRON_SECRET`**, el que abre `purge-data`, tecleado en una página PÚBLICA. ⚠️ **Son DOS secretos que rotar, a sabiendas** — unificarlos otra vez parece limpieza y es reabrir el radio de daño. Doc canónica (schema/endpoints/seed/roadmap + el detalle del split): [`backend/docs/supermarket_db.md`](backend/docs/supermarket_db.md). Test ancla: [`test_p1_supermarket_db.py`](backend/tests/test_p1_supermarket_db.py).
+[P1-SUPERMARKET-DB · 2026-07-02 · token separado P2-SUPERMARKET-TOKEN-SPLIT 2026-08-14] Tabla `supermarket_products` (Neon) editable en `/supermercado` con gate admin PROPIO (`_verify_supermarket_token`; mutaciones SOLO vía [`backend/routers/supermarket.py`](backend/routers/supermarket.py)). ⚠️ **Son DOS secretos que rotar, a sabiendas** — unificarlos con `CRON_SECRET` reabre el radio de daño. Doc: [`backend/docs/supermarket_db.md`](backend/docs/supermarket_db.md); test [`test_p1_supermarket_db.py`](backend/tests/test_p1_supermarket_db.py).
 
 ---
 
 ## Memoria de días pasados en el chat
 
-[P1-CHAT-PAST-DAYS · 2026-07-27 · comprimido doc-first 2026-08-22] El coach recuerda los días pasados por **dos vías que NUNCA deben confundirse**: lo que el plan *prescribió* (índice barato, siempre inyectado) y lo que el usuario *registró* comer (diario multi-día, con los días sin registro declarados uno a uno). El detalle caro va bajo demanda por `consultar_dia_del_plan`. Prerequisito estructural: cada día nace con `date` ISO estampada; los planes viejos degradan a inferencia anclada por `grocery_start_date`. Motor SSOT [`backend/chat_history_context.py`](backend/chat_history_context.py); doc canónica (las 3 piezas, la cadena de fallback, knobs, costos medidos, lo que NO resuelve) [`backend/docs/chat_past_days_memory.md`](backend/docs/chat_past_days_memory.md). Test ancla [`test_p1_chat_past_days_memory.py`](backend/tests/test_p1_chat_past_days_memory.py).
+[P1-CHAT-PAST-DAYS · 2026-07-27] El coach recuerda los días pasados por **dos vías que NUNCA deben confundirse**: lo que el plan *prescribió* (índice barato, siempre inyectado) y lo que el usuario *registró* (diario multi-día); el detalle caro va bajo demanda por `consultar_dia_del_plan`. Motor [`backend/chat_history_context.py`](backend/chat_history_context.py); doc [`backend/docs/chat_past_days_memory.md`](backend/docs/chat_past_days_memory.md); test [`test_p1_chat_past_days_memory.py`](backend/tests/test_p1_chat_past_days_memory.py).
 
 ---
 

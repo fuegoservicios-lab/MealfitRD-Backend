@@ -8571,7 +8571,6 @@ def _apply_protein_pool_scrub(
 # ============================================================
 # NODO 2: GENERADORES PARALELOS (Fase Reduce — 3 días simultáneos)
 # ============================================================
-@_node_label("day_generator")
 def _culture_weights_for_form_data(form_data):
     """[P1-ARQ25-F7-CULTURE] Pesos de cocina del formulario (fail-open: None ⇒ encabezado legado)."""
     try:
@@ -8581,6 +8580,7 @@ def _culture_weights_for_form_data(form_data):
         return None
 
 
+@_node_label("day_generator")
 async def generate_days_parallel_node(state: PlanState) -> dict:
     """Genera los 7 días completos en PARALELO usando el esqueleto del planificador."""
     skeleton = state["plan_skeleton"]

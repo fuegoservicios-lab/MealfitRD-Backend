@@ -143,6 +143,14 @@ Ese precio **no se paga con disciplina, se paga con `npm run i18n:check`** (§5)
 ese script este diseño es una trampa; con él, una red. Si alguien lo borra del
 `package.json`, ha desarmado la única defensa del sistema.
 
+### Dos cambios de la capa `_display` (2026-09-04)
+
+- **`P1-I18N-GLM-USER-TURN`** — GLM (Z.ai) rechaza un `messages` con SOLO un system message (400/1214): la traducción del plan
+  llevaba dos días muerta en silencio desde la migración de proveedor y el primer usuario francés recibió su plan en español.
+  `_build_messages` manda system + un turno de usuario; un test blanket impide que vuelva la forma de un solo mensaje.
+- **`P1-ARQ25-F5-PLAN-JOBS`** — con la cola viva, la traducción (`_display`) ya no corre inline: es un job `display_i18n` del outbox
+  `plan_jobs` (Fase 5 del roadmap 2.5), con reintentos, dead letter y `stale` por revisión. Doc: `backend/docs/plan_jobs_f5.md`.
+
 ### API
 
 | Símbolo | Uso |

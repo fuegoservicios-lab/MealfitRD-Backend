@@ -936,13 +936,13 @@
       ]
     },
     {
-      "name": "Sopa de habichuelas negras con casabe",
+      "name": "Habichuelas negras guisadas con casabe",
       "slots": [
         "cena"
       ],
       "protein": "legumbre",
       "base": "legumbre",
-      "technique": "sopa espesa",
+      "technique": "guisado",
       "transform": true,
       "constituents": [
         {

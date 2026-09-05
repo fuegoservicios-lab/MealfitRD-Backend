@@ -7,7 +7,7 @@
     "fideos integrales": "Pre-fase: sin resolver (passthrough). 'Fideos' (alta ES T5) matchea via su alias bare 'fideos' (CONTAINS). Candidato alternativo 'Pasta integral' (fila pre-fase) NO tiene 'fideos integrales' como alias -- no hay retargeteo desde una fila establecida. Macro similar (kcal 371 vs 370.5, protein 13g vs 13.5g, carbs 74.7g vs 73.1g) salvo fibra (3.2g vs 10.1g) -- divergencia menor, no clínicamente peligrosa como el caso chicharrón."
   },
   "corpus_size": 1487,
-  "generated_at": "2026-09-05T10:14:35.218971+00:00",
+  "generated_at": "2026-09-05T10:32:09.424630+00:00",
   "mapping": {
     "Aceite de Oliva": "Aceite de oliva",
     "Aceite de coco": "Aceite de coco",
@@ -140,6 +140,7 @@
     "Habichuelas blancas": "Habichuelas blancas",
     "Habichuelas blancas guisadas con cerdo magro y arroz": "Habichuelas blancas",
     "Habichuelas negras": "Habichuelas negras",
+    "Habichuelas negras guisadas con casabe": "Habichuelas negras",
     "Habichuelas rojas": "Habichuelas rojas",
     "Habichuelas rojas guisadas con auyama, arroz y aguacate": "Habichuelas rojas",
     "Harina de Negrito": "Harina de Negrito",
@@ -298,7 +299,6 @@
     "Semillas de calabaza": "Semillas de calabaza",
     "Semillas de chía": "Semillas de chía",
     "Semillas de girasol": "Semillas de girasol",
-    "Sopa de habichuelas negras con casabe": "Habichuelas negras",
     "Sopa-crema de auyama con pollo desmenuzado": "Auyama",
     "Soya texturizada": "Soya texturizada",
     "Sándwich integral de huevo con aguacate": "Aguacate",

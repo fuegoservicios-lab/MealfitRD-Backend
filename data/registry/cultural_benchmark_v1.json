@@ -678,12 +678,13 @@
             "Nombre ↔ constituyentes verificado en las 516 plantillas: dos incoherencias corregidas (sancocho «de pollo» hecho con res; ensaladas «con atún» hechas con sardinas).",
             "«Tacos en hoja de lechuga con res mechada» → «Rollitos de lechuga con res mechada» (léxico mexicano en la biblioteca dominicana; el plato se conserva).",
             "Quipes, bollitos de yuca rellenos y croquetas de atún salen de merienda (500-600 kcal): quedan en almuerzo/cena.",
-            "Las 10 plantillas nuevas llevan constituyentes inline (ganan a la tabla curada); la tabla sigue siendo solo curación a mano (87)."
+            "Las 10 plantillas nuevas llevan constituyentes inline (ganan a la tabla curada); la tabla sigue siendo solo curación a mano (87).",
+            "«Sopa de habichuelas negras con casabe» → «Habichuelas negras guisadas con casabe» (el SSOT de franjas no admite «sopa» en cena)."
           ],
-          "snapshot_hash": "4a67c361c8b36e54bc7615d4fe146d1e772a6237d83337ac046a4cb2c797e9bf"
+          "snapshot_hash": "08a01de8ef79b2bdfc92f7fc926f0c8b94b7d775fdb64bfc7d9ace46b8854060"
         }
       },
-      "snapshot_hash": "4a67c361c8b36e54bc7615d4fe146d1e772a6237d83337ac046a4cb2c797e9bf"
+      "snapshot_hash": "08a01de8ef79b2bdfc92f7fc926f0c8b94b7d775fdb64bfc7d9ace46b8854060"
     },
     "mexico_casera": {
       "appropriateness": {
