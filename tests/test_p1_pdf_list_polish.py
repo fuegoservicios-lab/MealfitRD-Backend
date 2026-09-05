@@ -66,16 +66,16 @@ def test_pdf_cycle_guard_rejects_inconsistent_summary():
 
 
 # ---------------------------------------------------------------- 1b. frase puente
-_BRIDGE = "Incluye ≈{monto} para recomprar en las semanas siguientes los frescos que hoy ya tienes en la Nevera"
+_BRIDGE = "Incluye ≈{monto} de recompras de frescos"  # [P2-SHOPPING-COPY-QUIET] frase puente corta
 
 
 def test_bridge_line_only_when_delta_aware():
-    i = _DASH.find("Costo real del ciclo de {duracion}")
+    i = _DASH.find("Estimado del ciclo de {duracion}")
     assert i != -1
     win = _DASH[i:i + 900]
     assert f"_deltaAware ? t('{_BRIDGE}'" in win, "la frase puente explica el salto SOLO cuando la Nevera descontó"
     assert "Math.round(_futureFreshRdPdf)" in win, "el importe de la frase es el MISMO que se sumó al ciclo"
-    assert "Despensa 1× + perecederos de {duracion} (recompra cada 7 días)" in win, "sin descuento, el copy de siempre"
+    assert "Despensa 1× + frescos cada 7 días" in win, "sin descuento, el copy de siempre"
 
 
 @pytest.mark.parametrize("locale", ["en-US", "fr-FR", "it-IT", "pt-BR"])
@@ -147,7 +147,7 @@ def test_reference_copy_is_plain_spanish():
 # ---------------------------------------------------------------- 6. leyenda al pie
 def test_legend_is_a_footnote_after_the_totals():
     legend = _DASH.find("<!-- Disclaimer de Cantidades")
-    totals = _DASH.find("Costo real del ciclo de {duracion}")
+    totals = _DASH.find("Estimado del ciclo de {duracion}")
     footer = _DASH.find("<!-- Footer -->")
     assert -1 not in (legend, totals, footer)
     assert totals < legend < footer, "la leyenda va DESPUÉS de los totales y ANTES del pie"

@@ -439,6 +439,12 @@ class IngredientNutritionDB:
         self._rows = rows
         self._by_name: dict = {}
         self._aliases: list = []  # [(alias_stripped_lower, row)] orden desc por longitud
+        # [P1-INGREDIENT-MATCH-PRECOMPILED · 2026-09-04] patrones de alias (word-boundary) compilados UNA
+        # vez por índice (misma lista y mismo orden que `_aliases`) + memo de `_match_row` por instancia.
+        # Antes cada lookup recompilaba ~700 regex (el caché de `re` tiene 512 entradas: thrash):
+        # un swap persistido pagaba 751.727 compilaciones, unos 33 s bajo el FOR UPDATE.
+        self._alias_patterns: list = []  # [(alias_stripped_lower, compiled, row)]
+        self._match_memo: dict = {}
         if rows is not None:
             self._build_index(rows)
 
@@ -466,9 +472,28 @@ class IngredientNutritionDB:
         # más largos primero: evita que 'platano' se trague 'platano maduro'
         aliases.sort(key=lambda x: len(x[0]), reverse=True)
         self._aliases = aliases
+        # [P1-INGREDIENT-MATCH-PRECOMPILED] mismo orden que `_aliases` (largos primero)
+        _wb = chr(92) + "b"
+        self._alias_patterns = [
+            (a, re.compile(_wb + re.escape(a) + _wb), r) for a, r in aliases if a
+        ]
+        self._match_memo = {}
 
     # ---- matching nombre→row (tiers baratos + delegación unificada) -----
     def _match_row(self, raw_name: str) -> Optional[dict]:
+        self._ensure_loaded()
+        if not raw_name:
+            return None
+        # [P1-INGREDIENT-MATCH-PRECOMPILED] memo por instancia (una instancia = una petición/pasada);
+        # el mismo string del LLM se resuelve decenas de veces por pasada (macros, gramos, micros).
+        _memo_key = str(raw_name)
+        if _memo_key in self._match_memo:
+            return self._match_memo[_memo_key]
+        _row = self._match_row_uncached(raw_name)
+        self._match_memo[_memo_key] = _row
+        return _row
+
+    def _match_row_uncached(self, raw_name: str) -> Optional[dict]:
         self._ensure_loaded()
         if not raw_name:
             return None
@@ -500,8 +525,8 @@ class IngredientNutritionDB:
             if n_stripped == alias_stripped:
                 return row
         # Tier 2: alias como palabra dentro del texto (word-boundary)
-        for alias_stripped, row in self._aliases:
-            if alias_stripped and re.search(r"\b" + re.escape(alias_stripped) + r"\b", n_stripped):
+        for _alias_stripped, _pat, row in self._alias_patterns:  # [P1-INGREDIENT-MATCH-PRECOMPILED]
+            if _pat.search(n_stripped):
                 return row
         # Tier 3 [P4-UNIFIED-RESOLVER]: delega al resolver canónico (regex clean_n + fuzzy + Cohere
         # semántico) que resuelve lo que los tiers baratos no. Solo con catálogo real (NO en rows

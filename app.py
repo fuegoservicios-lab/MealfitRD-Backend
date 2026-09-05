@@ -51,7 +51,23 @@ _PROCESS_START_ISO = datetime.now(timezone.utc).isoformat()
 #   P1-PANTRY-PACKAGE-GRAMS · 2026-09-04 — la Nevera en envases se descuenta con recetas en gramos.
 #   P2-CHECKIN-NO-FABRICATED-ANSWERS · 2026-09-03 — el check-in guarda solo lo respondido.
 #   P1-DIARY-FREETEXT-ESTIMATE · 2026-09-04 — texto libre → macros estimadas; desvíos leídos.
-_LAST_KNOWN_PFIX = "P1-VISION-GEMINI-FLASH · 2026-09-04"
+#   P1-VISION-GEMINI-FLASH · 2026-09-04 — el escáner pasa a Gemini 3.8 Flash (solo visión).
+#   P2-CONFIRM-DIALOG-PLACEMENT · 2026-09-04 — confirmaciones en diálogo (PC centrado, móvil hoja).
+#   P1-SWAP-CLIENT-TIMEOUT · 2026-09-04 — «cambiar plato» con tope de 3 min y sin plato inventado.
+#   P1-INGREDIENT-MATCH-PRECOMPILED · 2026-09-04 — el matcher de ingredientes no recompila regex por lookup.
+#   P2-SW-APPLY-RESPECTS-INFLIGHT · 2026-09-04 — la auto-actualización del SW respeta swap/día en vuelo.
+#   P2-VISION-USAGE-TOKENS · 2026-09-04 — el escáner anota tokens reales en el libro de costo.
+#   P2-CHAT-JUMP-TO-LATEST-DESKTOP · 2026-09-04 — «ir al último mensaje» anclado al cuadro de escribir.
+#   P2-CHAT-ANCHOR-SENT-TOP · 2026-09-04 — al enviar, el mensaje queda arriba y la respuesta crece debajo.
+#   P2-CHAT-SCROLL-MODES · 2026-09-04 — el scroll del chat como máquina de 3 modos (bottom/anchored/free); asentar-y-revelar al refrescar.
+#   P1-I18N-GLM-USER-TURN · 2026-09-04 — GLM rechaza un messages con solo system (400/1214): la capa _display del plan llevaba 2 días muerta para todo usuario no hispanohablante.
+#   P2-PLAN-POLL-DORMANT-SLEEP · 2026-09-04 — el sondeo del plan dormido no se rinde: latido largo + despertar al volver a la pestaña; el banner «Dejamos de revisar» solo con pantalla muda.
+#   P1-ARQ25-F5-PLAN-JOBS · 2026-09-04 — Fase 5 rebanada 1: worker del outbox plan_jobs (claim SKIP LOCKED, attempts=fencing, backoff, dead letter, reclaim, stale por revisión) + consumidor display_i18n.
+#   P2-COHERENCE-HISTORY-DEDUPE · 2026-09-04 — la misma alerta de coherencia consecutiva se funde en una entrada (repeats); el aviso cuenta alertas distintas.
+#   P2-SHOPPING-COPY-QUIET · 2026-09-04 — el «costo del ciclo» del PDF solo con sustancia (>2 ítems, >15 %) y en una línea; el toast de coherencia dice qué pasa, no cuántas veces se detectó.
+#   P1-AJO-SINGLE-ROW · 2026-09-04 — el ajo en UNA fila (gramos + dientes + cabezas → paquete de 4) con la demanda en gramos como base: el guard dejaba de ver 92 g de los 98.
+#   P1-ARQ25-F5-SHOPPING-PROJECTION · 2026-09-04 — Fase 5 rebanada 2: consumidor shopping_projection (listas 7/15/30 por revisión en payload.result) + GET /{plan_id}/projections (estado none/pending/ready/failed/stale).
+_LAST_KNOWN_PFIX = "P1-ARQ25-F5-SHOPPING-PROJECTION · 2026-09-04"
 
 # [P1-SENTRY-SAMPLE-COST · 2026-05-12] Sentry sampling driven from env vars
 # con default seguro 0.1 (10%). Pre-fix tenía `traces_sample_rate=1.0` y
