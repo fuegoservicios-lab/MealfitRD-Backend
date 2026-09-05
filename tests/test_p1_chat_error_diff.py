@@ -349,16 +349,36 @@ def test_error_retry_button_component_defined(message_bubble_src: str):
 
 
 def test_error_retry_button_rendered_conditionally(message_bubble_src: str):
-    """El botón solo se renderiza si `isErrorBubble && msg.retryable && onErrorRetry`."""
-    # Match flexible — los tres flags presentes alrededor del render
-    pattern = re.compile(
-        r"isErrorBubble\s*&&\s*msg\.retryable[\s\S]*?<ErrorRetryButton",
+    """El botón solo se renderiza si `isErrorBubble && msg.retryable && onErrorRetry`.
+
+    [P2-CHAT-ERROR-MINIMAL v2 · 2026-09-04] El gate dejó de ser una sola expresión:
+    ahora son dos niveles anidados (`{isErrorBubble && (<div …> … {msg.retryable && … && (
+    <ErrorRetryButton`). Lo que se ancla es la INTENCIÓN — las dos condiciones siguen
+    gateando el render y el botón sigue DENTRO de ambas — no la forma sintáctica.
+    """
+    i_btn = message_bubble_src.find("<ErrorRetryButton")
+    assert i_btn > 0, (
+        "P1-CHAT-ERROR-DIFF regresión: <ErrorRetryButton> ya no se renderiza en "
+        "MessageBubble.jsx."
     )
-    assert pattern.search(message_bubble_src), (
-        "P1-CHAT-ERROR-DIFF regresión: el render de <ErrorRetryButton> no "
-        "está gated por `isErrorBubble && msg.retryable`. Sin el gate, el "
-        "botón podría aparecer en bubbles de éxito o en errores no-retryables "
-        "(402 quota, 401/403 auth)."
+    window = message_bubble_src[max(0, i_btn - 800):i_btn]
+    i_err = window.rfind("isErrorBubble")
+    assert i_err >= 0 and re.match(r"isErrorBubble\s*&&", window[i_err:]), (
+        "P1-CHAT-ERROR-DIFF regresión: el render de <ErrorRetryButton> no está "
+        "gated por `isErrorBubble &&`. Sin el gate, el botón podría aparecer en "
+        "bubbles de éxito."
+    )
+    tail = window[i_err:]
+    assert re.search(r"msg\.retryable\s*&&", tail), (
+        "P1-CHAT-ERROR-DIFF regresión: entre el gate `isErrorBubble` y el botón "
+        "falta el gate `msg.retryable &&`. Sin él, el botón aparecería en errores "
+        "no-retryables (402 quota, 401/403 auth)."
+    )
+    # Ningún bloque JSX condicional se cierra (`)}` al inicio de línea) entre el
+    # gate y el botón ⇒ el botón sigue dentro de ambas condiciones.
+    assert not re.search(r"^\s*\)\}", tail, re.MULTILINE), (
+        "P1-CHAT-ERROR-DIFF regresión: el gate `isErrorBubble` se cierra antes de "
+        "renderizar <ErrorRetryButton>; el botón quedó fuera de la condición."
     )
 
 

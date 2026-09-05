@@ -100,7 +100,10 @@ def test_stop_dismissal_survives_refresh_and_leaves_feedback():
     win = _AP[i:i + 4200]
     assert "safeLocalStorageSet(_orphanDismissKey(currentSessionId), _sig)" in win, \
         "el descarte debe sobrevivir al refresh"
-    assert "⏹ Detenido" in win, "feedback visible al detener (pedido del owner)"
+    # [P2-CHAT-ERROR-MINIMAL · 2026-09-04] copias cortas sin emojis: el feedback
+    # es el `content` de la burbuja de cierre («Detenido. …»), ya sin el «⏹».
+    assert re.search(r"content:\s*t\('Detenido", win), \
+        "feedback visible al detener (pedido del owner)"
     assert "_stoppedByUser: true" in win
     # El efecto respeta el descarte persistido:
     assert "safeLocalStorageGet(_orphanDismissKey(currentSessionId), null) === _sig" in _AP

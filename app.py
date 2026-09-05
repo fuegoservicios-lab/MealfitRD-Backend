@@ -59,6 +59,7 @@ _PROCESS_START_ISO = datetime.now(timezone.utc).isoformat()
 #   P2-VISION-USAGE-TOKENS · 2026-09-04 — el escáner anota tokens reales en el libro de costo.
 #   P2-CHAT-JUMP-TO-LATEST-DESKTOP · 2026-09-04 — «ir al último mensaje» anclado al cuadro de escribir.
 #   P2-CHAT-ANCHOR-SENT-TOP · 2026-09-04 — al enviar, el mensaje queda arriba y la respuesta crece debajo.
+#   P2-CHAT-ERROR-MINIMAL · 2026-09-04 — burbuja de error del coach minimalista (icono · texto apagado · «Reintentar» como enlace); el turno en curso marca mealfit_chat_turn_inflight.
 #   P2-CHAT-SCROLL-MODES · 2026-09-04 — el scroll del chat como máquina de 3 modos (bottom/anchored/free); asentar-y-revelar al refrescar.
 #   P1-I18N-GLM-USER-TURN · 2026-09-04 — GLM rechaza un messages con solo system (400/1214): la capa _display del plan llevaba 2 días muerta para todo usuario no hispanohablante.
 #   P2-PLAN-POLL-DORMANT-SLEEP · 2026-09-04 — el sondeo del plan dormido no se rinde: latido largo + despertar al volver a la pestaña; el banner «Dejamos de revisar» solo con pantalla muda.
