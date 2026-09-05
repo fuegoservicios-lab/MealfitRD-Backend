@@ -19912,6 +19912,16 @@ def _protein_topup_meal(meal: dict, slot_cal_target: float, db, approved_protein
         if slot_cal_target and slot_cal_target > cur_cal and info.kcal > 0:
             grams_cal_cap = int((slot_cal_target - cur_cal) / (info.kcal / 100.0))
             grams = min(grams, grams_cal_cap)
+        elif slot_cal_target and info.kcal > 0:
+            grams = 0   # sin headroom
+        # [P1-SNACK-MAKE-ROOM] rescate en franja ligera: hacer sitio encogiendo fruta/frutos secos
+        if grams < 15 and slot_cal_target and info.kcal > 0 and db is not None and _meal_slot_is_light(meal, _sa):
+            _need_k = (40.0 / 100.0) * float(info.kcal) - max(0.0, slot_cal_target - cur_cal) + 5.0
+            if _make_room_for_protein(meal, _need_k, db) > 0:
+                cur_cal = _meal_macro_num(meal.get("cals"))
+                cur_p = _meal_macro_num(meal.get("protein"))
+                gap = max(0.0, fill_to_g - cur_p)
+                grams = min(int(round(gap / (info.protein / 100.0))), int(max(0.0, slot_cal_target - cur_cal) / (info.kcal / 100.0)))
         grams = min(max_add_g, grams)
         if grams < 15:
             return 0
@@ -21437,6 +21447,15 @@ def _close_protein_gap_for_meal(meal: dict, slot_protein_target: float, db, cand
             _cur_cal = _meal_macro_num(meal.get("cals"))
             _head = slot_cal_target - _cur_cal
             grams = min(grams, int(_head / (chosen.kcal / 100.0))) if _head > 0 else 0
+            # [P1-SNACK-MAKE-ROOM] franja ligera sin sitio: encoger fruta/frutos secos antes de rendirse
+            if grams < CLOSER_COOKABLE_MIN_G and light and db is not None:
+                _need_k = (CLOSER_COOKABLE_MIN_G / 100.0) * float(chosen.kcal) - max(0.0, _head) + 5.0
+                if _make_room_for_protein(meal, _need_k, db) > 0:
+                    _cur_cal = _meal_macro_num(meal.get("cals"))
+                    _head = slot_cal_target - _cur_cal
+                    grams = min(int(round((target - _meal_macro_num(meal.get("protein"))) / (chosen.protein / 100.0))),
+                                int(_head / (chosen.kcal / 100.0))) if _head > 0 else 0
+                    grams = min(grams, max_add_g, int(CLOSER_BOLT_MAX_ADD_G))
             # [P1-CLOSER-COOKABLE-MIN · 2026-07-01] antes `< 10`: un headroom que solo permite 10-39g
             # produce un add no-cocinable ("10g de pechuga" + paso dedicado). Bajo el piso cocinable →
             # no añadir aquí (el residuo de proteína lo tolera la banda / se cubre en otra comida).
@@ -22164,6 +22183,67 @@ def _close_fat_gap_for_day(meals: list, target_fats: float, target_kcal: float, 
     except Exception as e:
         logger.warning(f"[P2-FAT-FLOOR] fat-closer falló: {type(e).__name__}: {e}")
         return False
+
+
+# [P1-SNACK-MAKE-ROOM · 2026-09-05] Meriendas de 3 y 11 g de proteína (planes vivos c350dec0 día 10, 606e9017 días 2-3):
+# «Vasito de higo, membrillo y almendras con Queso Cottage», ya en su tope de kcal con fruta y frutos secos ⇒ el cerrador
+# y el rescate calculaban headroom ≈ 0 y devolvían 0 g. En vez de rendirse, en franja LIGERA se encogen las líneas de
+# grasa/carbo sin proteína (frutos secos, mantequilla de maní, fruta), nunca por debajo de MIN_KEEP, hasta liberar las
+# kcal que necesita un añadido cocinable (CLOSER_COOKABLE_MIN_G). Rollback: MEALFIT_LIGHT_SNACK_MAKE_ROOM=false.
+LIGHT_SNACK_MAKE_ROOM = _env_bool("MEALFIT_LIGHT_SNACK_MAKE_ROOM", True)
+LIGHT_SNACK_MAKE_ROOM_MIN_KEEP = _env_float("MEALFIT_LIGHT_SNACK_MAKE_ROOM_MIN_KEEP", 0.5, validator=lambda v: 0.25 <= v <= 0.9)
+
+
+def _make_room_for_protein(meal: dict, needed_kcal: float, db, *, min_keep: float = None) -> float:
+    """Encoge líneas grasa/carbo-dominantes SIN proteína de una comida ligera hasta liberar `needed_kcal`. Devuelve las
+    kcal liberadas (0 si no hay palanca). Muta in-place (ingredients + raw lockstep) y hace truth-up de macros.
+    tooltip-anchor: P1-SNACK-MAKE-ROOM"""
+    try:
+        if not LIGHT_SNACK_MAKE_ROOM or needed_kcal <= 0 or db is None:
+            return 0.0
+        from nutrition_db import rescale_ingredient_string as _resc, quantize_ingredient_string as _quant
+        keep = float(LIGHT_SNACK_MAKE_ROOM_MIN_KEEP if min_keep is None else min_keep)
+        ings = meal.get("ingredients")
+        if not isinstance(ings, list):
+            return 0.0
+        levers = []
+        for idx, ing in enumerate(ings):
+            grp = _ingredient_macro_group(str(ing), db)
+            if grp not in ("fats", "carbs"):
+                continue
+            mc = db.macros_from_ingredient_string(str(ing)) or {}
+            kcal = float(mc.get("kcal") or 0.0)
+            if kcal >= 30:
+                levers.append((kcal, idx, str(ing)))
+        if not levers:
+            return 0.0
+        levers.sort(key=lambda t: -t[0])
+        freed = 0.0
+        for kcal, idx, orig in levers:
+            if freed >= needed_kcal:
+                break
+            remaining = needed_kcal - freed
+            factor = max(keep, 1.0 - remaining / kcal)
+            if factor >= 0.98:
+                continue
+            new_line, _f = _quant(_resc(orig, factor))
+            if new_line == orig:
+                continue
+            ings[idx] = new_line
+            _sync_one_raw_line(meal, idx, orig, factor * _f)
+            mc2 = db.macros_from_ingredient_string(new_line) or {}
+            freed += max(0.0, kcal - float(mc2.get("kcal") or 0.0))
+        if freed > 0:
+            try:
+                _truth_up_meal_macros_from_strings(meal, db)
+            except Exception:
+                pass
+            logger.info(f"🍽️ [P1-SNACK-MAKE-ROOM] {freed:.0f} kcal liberadas encogiendo fruta/frutos secos para meter "
+                        f"proteína | meal={str(meal.get('name'))[:40]}")
+        return freed
+    except Exception as _e:
+        logger.warning(f"[P1-SNACK-MAKE-ROOM] no-op (fail-safe): {type(_e).__name__}: {_e}")
+        return 0.0
 
 
 def _close_carb_gap_for_day(meals: list, target_carbs: float, target_kcal: float, db, *,
