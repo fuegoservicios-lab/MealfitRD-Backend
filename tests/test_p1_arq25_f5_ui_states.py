@@ -2,6 +2,7 @@
 ready/failed/stale) llegan al Dashboard en una línea discreta que lee `GET /api/plans/{plan_id}/projections`
 y sondea solo mientras está `pending`. Ancla parser-based del cableado frontend.
 """
+import re
 from pathlib import Path
 
 import pytest
@@ -20,7 +21,12 @@ def _frontend(*parts):
 def test_a_componente_lee_el_endpoint_y_sondea_solo_pending():
     src = _frontend("components", "dashboard", "ShoppingProjectionStatus.jsx")
     assert "fetchWithAuth(`/api/plans/${encodeURIComponent(planId)}/projections`)" in src
-    assert "if (j && j.status === 'pending' && pollsRef.current < POLL_MAX) {" in src
+    # [P2-PROJECTION-LINE-NO-FLICKER · 2026-09-05] El gate pasó de una sola condición
+    # (`if (j && j.status === 'pending' && …)`) a un bloque anidado bajo `j`: se ancla la INTENCIÓN
+    # (solo sondea mientras está `pending` y bajo el tope), no la forma.
+    assert re.search(r"j\.status === 'pending' && pollsRef\.current < POLL_MAX", src), (
+        "el componente dejó de sondear solo con `pending` y bajo POLL_MAX"
+    )
     assert "document.visibilityState === 'hidden'" in src, "oculta no sondea (P2-PLAN-POLL-HIDDEN-NO-CLOCK)"
     # la línea la decide un helper puro fuera del .jsx (react-refresh solo quiere componentes ahí)
     line = _frontend("utils", "projectionLine.js")
