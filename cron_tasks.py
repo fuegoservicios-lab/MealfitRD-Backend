@@ -6568,6 +6568,24 @@ def wake_chunk_worker(reason: str = "") -> bool:
         return False
 
 
+def _plan_jobs_worker_interval_s() -> int:
+    try:
+        from plan_jobs import worker_interval_s
+        return int(worker_interval_s())
+    except Exception:
+        return 60
+
+
+def _process_plan_jobs_job() -> None:
+    """[P1-ARQ25-F5-PLAN-JOBS · 2026-09-04] Tick del worker del outbox `plan_jobs` (proyecciones
+    asíncronas: hoy `display_i18n`). Motor SSOT `plan_jobs.process_plan_jobs`; nunca lanza."""
+    try:
+        from plan_jobs import process_plan_jobs
+        process_plan_jobs()
+    except Exception as e:
+        logger.warning(f"[ARQ25-F5] _process_plan_jobs_job falló: {e!r}")
+
+
 def register_plan_chunk_scheduler(scheduler) -> None:
     """Registra el polling del worker de chunks una sola vez en el scheduler global."""
     if not scheduler:
@@ -6588,6 +6606,22 @@ def register_plan_chunk_scheduler(scheduler) -> None:
         logger.info(
             f"⏰ [CHUNK SCHEDULER] Worker plan_chunk_queue registrado cada "
             f"{CHUNK_SCHEDULER_INTERVAL_MINUTES} min."
+        )
+
+    # [P1-ARQ25-F5-PLAN-JOBS · 2026-09-04] Worker del outbox `plan_jobs`. Siempre registrado; el tick
+    # no-opea con `MEALFIT_PLAN_JOBS_ENABLED=0`. `enqueue_plan_job` lo despierta (`wake_plan_jobs_worker`).
+    if not scheduler.get_job("process_plan_jobs"):
+        _add_job_jittered(scheduler,
+            _process_plan_jobs_job,
+            "interval",
+            seconds=_plan_jobs_worker_interval_s(),
+            id="process_plan_jobs",
+            max_instances=1,
+            coalesce=True,
+            replace_existing=True,
+        )
+        logger.info(
+            f"⏰ [ARQ25-F5] Worker plan_jobs registrado cada {_plan_jobs_worker_interval_s()} s."
         )
 
     # [P2-AUDIT-2 · 2026-05-12] Cron observable de bloat post-tuning P1-B.

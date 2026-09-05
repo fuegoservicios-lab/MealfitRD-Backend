@@ -2284,6 +2284,15 @@ def schedule_plan_display_enrichment(
     queda en warning. Los 5 disparadores de la spec llaman a este helper,
     nunca al motor directo, así el caller no bloquea su propio request.
     """
+    # [P1-ARQ25-F5-PLAN-JOBS · 2026-09-04] Con la cola viva, la traducción es un job de `plan_jobs`
+    # (dedup por plan+revisión+locale, reintentos con backoff, `stale` si el plan cambió antes de
+    # escribir). Los guests y el knob apagado siguen por el hilo legacy de abajo.
+    try:
+        from plan_jobs import maybe_enqueue_display_i18n as _f5_enqueue
+        if _f5_enqueue(plan_id, user_id, locale, day_indices):
+            return
+    except Exception as _f5_err:
+        logger.debug(f"[ARQ25-F5] encolado no disponible, hilo legacy: {_f5_err!r}")
     try:
         if not _plan_display_i18n_enabled():
             return
