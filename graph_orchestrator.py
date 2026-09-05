@@ -14959,9 +14959,10 @@ def _apply_substitutions_core(plan: dict, subs: list, note_builder, note_sentine
                 # [P1-SUBST-RECIPE-REWRITE · 2026-06-28] Reescribe las menciones del ingrediente VIEJO en los pasos de la
                 # receta ANTES de la nota (para que la nota siga siendo la última línea). Solo usa los tokens de la lista
                 # canónica `ingredients` (recipe_token_subs). Fail-safe: si falla, los pasos quedan intactos.
+                _steps_changed = False
                 if SUBST_RECIPE_REWRITE_ENABLED and recipe_token_subs:
                     try:
-                        _rewrite_recipe_steps_after_subs(meal, recipe_token_subs)
+                        _steps_changed = bool(_rewrite_recipe_steps_after_subs(meal, recipe_token_subs))
                     except Exception:
                         pass
                 uniq = sorted(set(labels))
@@ -14969,6 +14970,26 @@ def _apply_substitutions_core(plan: dict, subs: list, note_builder, note_sentine
                 rec = meal.get("recipe")
                 if not isinstance(rec, list):
                     rec = [] if rec is None else [str(rec)]
+                # [P1-SUBST-ORPHAN-STEP - 2026-09-05] El reescritor de pasos solo puede actuar si el alimento
+                # VIEJO se nombraba en la receta, y a veces el LLM no lo nombra: en la merienda del dia 3 del plan
+                # vivo 18326457 los pasos hablaban de ciruelas, queso y granola, y el ingrediente nuevo no aparecia
+                # en NINGUNA instruccion. Quedaba en la lista de la compra y en la lista de ingredientes del plato,
+                # sin que nadie dijera que hacer con el.
+                #
+                # Su retorno ya distinguia el caso (True si toco algun paso) y se estaba tirando. Cuando es False,
+                # la nota deja de ser solo procedencia y NOMBRA el ingrediente con su cantidad. No se inventa un
+                # paso nuevo: donde va exactamente depende de la receta, y afirmarlo seria adivinar.
+                if note and swaps and not _steps_changed:
+                    _nuevos = []
+                    for _o_sw, _n_sw in swaps:
+                        _d_sw = str(_n_sw).strip()
+                        if _d_sw and _d_sw not in _nuevos:
+                            _nuevos.append(_d_sw)
+                    if _nuevos:
+                        note = (note.rstrip()
+                                + " Los pasos de la receta no lo nombran: añade "
+                                + ", ".join(_nuevos[:3])
+                                + " junto con el resto de los ingredientes.")
                 if note and not any(note_sentinel in str(s) for s in rec):
                     meal["recipe"] = rec + [note]
                 if on_meal_fixed:
