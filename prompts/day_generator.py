@@ -1172,7 +1172,8 @@ def build_slot_targets_block(daily_targets: dict, meal_types: list) -> str:
 
 def build_day_assignment_context(skeleton_day: dict, day_num: int, day_name: str = None,
                                  daily_targets: dict = None, user_staples: list = None,
-                                 small_universe: bool = False, diet_type=None, country=None) -> str:
+                                 small_universe: bool = False, diet_type=None, country=None,
+                                 culture_weights=None) -> str:
     """Genera el bloque de contexto con la asignación del planificador para un día.
 
     [P1-STAPLE-FOODS · 2026-08-02] `user_staples` (lista de nombres del catálogo, máx 8 — ver
@@ -1315,7 +1316,7 @@ def build_day_assignment_context(skeleton_day: dict, day_num: int, day_name: str
         # `graph_orchestrator`; el bloque de inspiración era el único de su cuerpo que no lo
         # pasaba, así que un mexicano recibía ocho platos dominicanos por día en el tramo más
         # concreto del prompt mientras sus 49 plantillas dormían en disco.
-        dish_library_block = build_dish_library_context(skeleton_day, day_num, country=country) or ""
+        dish_library_block = build_dish_library_context(skeleton_day, day_num, country=country, culture_weights=culture_weights) or ""
     except Exception:
         dish_library_block = ""
 

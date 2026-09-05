@@ -1086,8 +1086,12 @@ def execute_modify_single_meal(user_id: str, day_number: int, meal_type: str, ch
     # sólo sirve de fallback para planes legacy.
     from constants import country_for_plan, slot_rules_for_country
     _modify_country = country_for_plan(plan_data, form_data)
+    # [P1-ARQ25-F7-CULTURE · 2026-09-05] cocina del plan (sello `_plan_policy`), separada del mercado: reglas de
+    # franja, inspiración, plantilla del prompt y arroz nocturno; la despensa sigue con `_modify_country`.
+    from constants import cultural_country_for_plan as _ccfp_modify
+    _modify_culture = _ccfp_modify(plan_data, form_data)
     # Tabla resuelta una vez, reusada por el backstop P1-CHAT-SLOT-BACKSTOP.
-    _modify_rules_table = slot_rules_for_country(_modify_country)
+    _modify_rules_table = slot_rules_for_country(_modify_culture)
     
     # 2. Localizar la comida específica
     days = plan_data.get("days", [])
@@ -1349,7 +1353,7 @@ def execute_modify_single_meal(user_id: str, day_number: int, meal_type: str, ch
     # SSOT constants.build_meal_timing_rules. Paridad de PROMPT con swap S3 / day_generator S1.
     try:
         from constants import build_meal_timing_rules as _bmtr
-        _timing_block = _bmtr(meal_type, _modify_country)
+        _timing_block = _bmtr(meal_type, _modify_culture)
         if _timing_block:
             context_extras = _timing_block + "\n" + context_extras
     except Exception as _tr_e:
@@ -1481,7 +1485,7 @@ def execute_modify_single_meal(user_id: str, day_number: int, meal_type: str, ch
         # vez al inicio de `execute_modify_single_meal` por la ÚNICA puerta — no una 2ª derivación.
         _insp_cm = _bsi_cm(str(meal_type or ""), seed=int(day_number or 1),
                            avoid_names=[str(target_meal.get("name") or "")],
-                           country=_modify_country)
+                           country=_modify_culture)
         if _insp_cm:
             context_extras += _insp_cm
     except Exception as _insp_cm_e:
@@ -1490,7 +1494,7 @@ def execute_modify_single_meal(user_id: str, day_number: int, meal_type: str, ch
     # [P1-COUNTRY-SYSTEM-F1 · 2026-08-16 (FINAL-FIX F1c)] reusa `_modify_country` (derivado UNA
     # vez al inicio de execute_modify_single_meal, T4) — DO ⇒ MODIFY_MEAL_PROMPT_TEMPLATE
     # byte-idéntico.
-    modify_prompt = build_modify_meal_prompt_template(_modify_country).format(
+    modify_prompt = build_modify_meal_prompt_template(_modify_culture).format(
         name=target_meal.get('name'),
         desc=target_meal.get('desc'),
         meal=target_meal.get('meal'),
@@ -1781,7 +1785,7 @@ def execute_modify_single_meal(user_id: str, day_number: int, meal_type: str, ch
                     _meal_viols_all = slot_violations_for_meal_name(
                         _meal_dump_s.get("name", ""), _slot_key, _modify_rules_table
                     )
-                    _meal_viols = [v for v in _meal_viols_all if _modify_country == "DO" or v.get("hard")]
+                    _meal_viols = [v for v in _meal_viols_all if _modify_culture == "DO" or v.get("hard")]
                     if _meal_viols:
                         # Etiquetas que el usuario pidió EXPLÍCITAMENTE en `changes` (mismo SSOT
                         # name-based aplicado al texto del pedido) → su deseo gana, no se reintenta.
@@ -1800,7 +1804,7 @@ def execute_modify_single_meal(user_id: str, day_number: int, meal_type: str, ch
                                 f"\n\n🛑 ATENCIÓN AL INTENTO FALLIDO ANTERIOR:\n"
                                 f"El plato que devolviste NO corresponde al {_slot_key} dominicano "
                                 f"({_slot_labels}). El usuario NO pidió ese alimento; cámbialo por un "
-                                f"plato propio del {_slot_key}." + (build_meal_timing_rules(meal_type, _modify_country) or "")
+                                f"plato propio del {_slot_key}." + (build_meal_timing_rules(meal_type, _modify_culture) or "")
                             )
                             raise ValueError(f"plato fuera de horario ({_slot_key}): {_slot_labels}")
             except ValueError:
@@ -2226,7 +2230,7 @@ def execute_modify_single_meal(user_id: str, day_number: int, meal_type: str, ch
             _nfix_m = _fin_rc_m(new_meal_data, pantry_strict=_ps_fin, allergies=_clin_allergies,
                                 skip_night_rice=_wish_slot,
                                 day_kcal_target=_dkt_m((plan_data or {}).get("macros")),
-                                country=_modify_country)
+                                country=_modify_culture)
             if _nfix_m:
                 logger.info(f"🍳 [P1-UPDATE-RECIPE-FINALIZE] {_nfix_m} fix(es) de coherencia de receta en plato de modify | day={day_number} meal={meal_type}")
         except Exception as _fin_me:

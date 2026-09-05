@@ -8,6 +8,7 @@
 
 | `alert_key` (pattern) | Productor | Resolver | Modelo |
 |---|---|---|---|
+| `plan_jobs_dead:<job_type>` | `plan_jobs._emit_dead_alert` cuando `finish_plan_job` convierte un `failed` en `dead` (intentos agotados) | Manual: reintentar con el runbook de `plan_jobs_f5.md` (`UPDATE plan_jobs SET status='failed', attempts=0, execute_after=NOW()`) y cerrar `resolved_at` | Manual |
 | `country_beta_first_plan:<country>` | `stamp_plan_country` (constants.py), sólo para país no-DO; `ON CONFLICT DO NOTHING` conserva el primer nacimiento | SRE valida el primer plan del país y cierra la fila tras revisar contenido, compras y precios | Manual |
 | `country_plan_regime_changed:<plan_id>` | `stamp_plan_country` al sobrescribir un `_country` distinto, o `/recalculate-shopping-list` al cambiar sello/borrar `_pricing_mode` existente | SRE confirma cambio explícito o corrige el fallback y cierra la fila; una reincidencia del mismo plan la reabre | Manual |
 | `country_profile_constraint_violation:<user_id>` | `_postprocess_pipeline_result` cuando `user_profiles_country_supported` rechaza el merge pese a la validación HTTP | SRE identifica el writer que omitió `assert_supported_country`, corrige dato/código y cierra; reincidencia reabre | Manual |

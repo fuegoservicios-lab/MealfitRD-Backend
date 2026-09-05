@@ -35,6 +35,7 @@ devuelve None y el disparador cae al camino legacy.
 """
 from __future__ import annotations
 
+import hashlib
 import json
 import logging
 import os
@@ -45,6 +46,15 @@ from datetime import datetime, timezone
 from typing import Any, Callable, Optional
 
 from knobs import _env_bool, _env_int
+# [P3-SHOPPING-PROJECTION-PKG · 2026-09-05] El read model de la proyección vive en `shopping/projection/`;
+# aquí queda el OUTBOX (protocolo + consumidores). Re-exports: routers, cron y tests importan desde aquí, y los
+# tests parchean `plan_jobs.build_shopping_projection` — el consumidor la resuelve por este nombre global.
+from shopping.projection.read_model import (  # noqa: F401
+    build_shopping_projection, _compact_row, _row_cost, _duration_for_days,
+    _PROJECTION_ROW_KEYS, _PROJECTION_COST_KEYS, _PROJECTION_MAX_ITEMS,
+)
+from shopping.projection.reprojection import shopping_list_fingerprint, enqueue_shopping_reprojection  # noqa: F401
+from shopping.projection.status import classify_projection_jobs  # noqa: F401
 
 logger = logging.getLogger(__name__)
 
@@ -354,10 +364,43 @@ def finish_plan_job(
             logger.warning(f"[ARQ25-F5] fencing_rejected job={job.get('id')} attempts={attempts} status→{status}")
         if status == "dead":
             logger.error(f"[ARQ25-F5] job DEAD type={job.get('job_type')} plan={job.get('plan_id')} attempts={attempts} error={error_code}")
+            if ok:
+                _emit_dead_alert(job, error_code)
         return ok
     except Exception as e:
         logger.warning(f"[ARQ25-F5] finish_plan_job falló job={job.get('id')}: {e!r}")
         return False
+
+
+def _emit_dead_alert(job: dict, error_code: Optional[str]) -> None:
+    """[P2-PLAN-JOBS-DEAD-ALERT · 2026-09-05] Un job agotó sus intentos: alerta `plan_jobs_dead:<job_type>`
+    (modelo Manual: el SRE reintenta con el runbook de `plan_jobs_f5.md` y cierra `resolved_at`). Sin esto,
+    un consumidor roto solo dejaba un `logger.error` que nadie mira."""
+    try:
+        from db import execute_sql_write
+        job_type = str(job.get("job_type") or "unknown")
+        alert_key = f"plan_jobs_dead:{job_type}"
+        execute_sql_write(
+            """
+            INSERT INTO system_alerts
+                (alert_key, alert_type, severity, title, message, metadata, affected_user_ids)
+            VALUES (%s, %s, 'warning', %s, %s, %s::jsonb, %s::jsonb)
+            ON CONFLICT (alert_key) DO UPDATE
+            SET triggered_at = NOW(),
+                metadata = EXCLUDED.metadata,
+                resolved_at = NULL
+            """,
+            (
+                alert_key, "plan_jobs_dead",
+                f"plan_jobs: un job {job_type} agotó sus intentos",
+                f"job={job.get('id')} plan={job.get('plan_id')} attempts={job.get('attempts')} error={error_code}",
+                json.dumps({"job_id": str(job.get("id")), "job_type": job_type, "plan_id": str(job.get("plan_id") or ""),
+                            "attempts": int(job.get("attempts") or 0), "error_code": error_code}, ensure_ascii=False),
+                json.dumps([str(job.get("user_id"))] if job.get("user_id") else []),
+            ),
+        )
+    except Exception as e:
+        logger.debug(f"[ARQ25-F5] alerta plan_jobs_dead no persistida: {e!r}")
 
 
 # ----------------------------------------------------------------------------- consumidores
@@ -401,34 +444,6 @@ def _consume_display_i18n(job: dict) -> tuple[str, Optional[str], dict]:
 # (paquetes, precios, Nevera descontada) por revisión, y guarda el read model en `payload.result`
 # del job (no en `plan_data`: escribir ahí bumpea `revision` y haría stale a la propia proyección).
 # La lista síncrona no cambia. Lo lee `GET /api/plans/{plan_id}/projections`.
-_PROJECTION_ROW_KEYS = ("name", "display_string", "display_name_en", "category", "display_category", "market_qty",
-                        "market_unit", "display_qty", "sku_size_label", "base_qty", "base_unit", "is_perishable",
-                        "is_staple", "package_grams", "shelf_life_days")
-_PROJECTION_COST_KEYS = ("estimated_cost_rd", "estimated_cost", "cost_rd")  # la fila del agregador usa la primera
-_PROJECTION_MAX_ITEMS = 150
-
-
-def _duration_for_days(days: int) -> str:
-    d = int(days or 0)
-    return "weekly" if d <= 7 else ("biweekly" if d <= 15 else "monthly")
-
-
-def _compact_row(row: dict) -> dict:
-    out = {k: row.get(k) for k in _PROJECTION_ROW_KEYS if row.get(k) is not None}
-    cost = _row_cost(row)
-    if cost is not None:
-        out["cost_rd"] = cost
-    return out
-
-
-def _row_cost(row: dict) -> Optional[float]:
-    for k in _PROJECTION_COST_KEYS:
-        v = row.get(k)
-        if isinstance(v, (int, float)) and not isinstance(v, bool) and float(v) > 0:
-            return round(float(v), 2)
-    return None
-
-
 def _load_plan_for_projection(plan_id: str, user_id: str) -> tuple:
     from db import execute_sql_query
     row = execute_sql_query("SELECT plan_data, revision FROM meal_plans WHERE id = %s AND user_id = %s",
@@ -443,54 +458,6 @@ def _load_plan_for_projection(plan_id: str, user_id: str) -> tuple:
             pd = None
     rev = int(row["revision"]) if row.get("revision") is not None else None
     return (pd if isinstance(pd, dict) else None), rev
-
-
-def build_shopping_projection(plan_data: dict, user_id: str, windows: list, *, revision: Optional[int],
-                              policy_hash: Optional[str] = None, max_items: int = _PROJECTION_MAX_ITEMS) -> dict:
-    """Read model: una lista por ventana. Principal = ciclo completo (multiplicador de ciclo, como el
-    recálculo); `fresh_only` = solo perecederos de ese top-up. Determinista, cero LLM."""
-    import shopping_calculator as sc
-    try:
-        hm = float(plan_data.get("calc_household_multiplier") or 1.0)
-    except (TypeError, ValueError):
-        hm = 1.0
-    hm = max(0.5, min(10.0, hm))
-    inv, cons = sc.fetch_inventory_and_consumed_for_plan(user_id, plan_data, is_new_plan=True)
-    try:
-        trip = sc.active_trip_window_days(plan_data)
-    except Exception:
-        trip = None
-    out_windows = []
-    for w in windows or []:
-        if not isinstance(w, dict):
-            continue
-        days = int(w.get("days") or 0)
-        if days <= 0:
-            continue
-        fresh_only = bool(w.get("fresh_only"))
-        mult = hm if fresh_only else hm * float(sc.cycle_qty_multiplier(_duration_for_days(days)) or 1.0)
-        rows = sc.get_shopping_list_delta(
-            user_id, plan_data, is_new_plan=True, structured=True, multiplier=mult,
-            inventory_override=inv, consumed_override=cons, cycle_days=days, window_days=trip,
-        ) or []
-        rows = [r for r in rows if isinstance(r, dict)]
-        if fresh_only:
-            rows = [r for r in rows if r.get("is_perishable")]
-        items = [_compact_row(r) for r in rows][:max_items]
-        costs = [c for c in (_row_cost(r) for r in rows) if c is not None]
-        out_windows.append({
-            "kind": str(w.get("kind") or ("fresh_topup" if fresh_only else "main")),
-            "start_day": int(w.get("start_day") or 0), "end_day": int(w.get("end_day") or days),
-            "days": days, "cycle_days": int(w.get("cycle_days") or days), "fresh_only": fresh_only,
-            "item_count": len(items), "priced_count": len(costs),
-            "cost_rd": round(sum(costs), 2) if costs else None,  # None = sin precios, no «gratis»
-            "items": items,
-        })
-    return {
-        "schema_version": 1, "revision": revision, "policy_hash": policy_hash,
-        "household_multiplier": hm, "computed_at": datetime.now(timezone.utc).isoformat(),
-        "windows": out_windows,
-    }
 
 
 def _consume_shopping_projection(job: dict) -> tuple[str, Optional[str], dict]:
@@ -521,46 +488,6 @@ def _consume_shopping_projection(job: dict) -> tuple[str, Optional[str], dict]:
     if not projection.get("windows"):
         return "failed", "empty_projection", {"windows_in": len(windows)}
     return "done", None, {"projection": projection}
-
-
-def classify_projection_jobs(current_revision: Optional[int], jobs: list) -> dict:
-    """Estado UI de la proyección a partir de los jobs del plan (más reciente primero). Puro."""
-    cur = int(current_revision or 0)
-
-    def _proj(j):
-        pl = j.get("payload") or {}
-        if isinstance(pl, str):
-            try:
-                pl = json.loads(pl)
-            except Exception:
-                pl = {}
-        return ((pl.get("result") or {}).get("projection")) if isinstance(pl, dict) else None
-
-    def _rev(j):
-        # los jobs de la Fase 3 nacieron con plan_revision NULL: vale la revisión que la proyección declara
-        if j.get("plan_revision") is not None:
-            return int(j.get("plan_revision"))
-        pr = _proj(j) or {}
-        return int(pr.get("revision")) if pr.get("revision") is not None else -1
-
-    for j in jobs:
-        if j.get("status") == "done" and _rev(j) == cur and _proj(j):
-            return {"status": "ready", "revision": cur, "job_id": str(j.get("id")), "projection": _proj(j)}
-    for j in jobs:
-        if j.get("status") in ("pending", "processing"):
-            return {"status": "pending", "revision": cur, "job_id": str(j.get("id")), "attempts": int(j.get("attempts") or 0)}
-    for j in jobs:
-        if j.get("status") == "failed":
-            return {"status": "failed", "revision": cur, "job_id": str(j.get("id")), "attempts": int(j.get("attempts") or 0),
-                    "error_code": j.get("error_code"), "retrying": True}
-    for j in jobs:
-        if j.get("status") == "done" and _proj(j):
-            return {"status": "stale", "revision": cur, "projection_revision": _rev(j),
-                    "job_id": str(j.get("id")), "projection": _proj(j)}
-    for j in jobs:
-        if j.get("status") == "dead":
-            return {"status": "failed", "revision": cur, "job_id": str(j.get("id")), "error_code": j.get("error_code"), "retrying": False}
-    return {"status": "none", "revision": cur}
 
 
 CONSUMERS: dict[str, Callable[[dict], tuple[str, Optional[str], dict]]] = {
@@ -640,5 +567,5 @@ __all__ = [
     "verdict_for_display_result", "current_plan_revision", "enqueue_plan_job", "maybe_enqueue_display_i18n",
     "wake_plan_jobs_worker", "claim_plan_jobs", "heartbeat_plan_job", "reclaim_stale_processing",
     "finish_plan_job", "CONSUMERS", "enabled_consumers", "process_plan_jobs",
-    "build_shopping_projection", "classify_projection_jobs",
+    "build_shopping_projection", "classify_projection_jobs", "shopping_list_fingerprint", "enqueue_shopping_reprojection",
 ]

@@ -1107,6 +1107,12 @@ def swap_meal(form_data: dict, surface: str = "individual"):
     # `invoke_with_retry`. country_for_form_data es la ÚNICA puerta (T1); knob apagado ⇒ 'DO'.
     from constants import country_for_form_data
     _swap_country = country_for_form_data(form_data)
+    # [P1-ARQ25-F7-CULTURE · 2026-09-05] La OTRA puerta: la COCINA del plan (sello `_culture_weights` que el
+    # endpoint hidrata desde `_plan_policy`, o la elección del perfil). Inspiración, reglas de franja, plantilla
+    # del prompt y los feedbacks de retry son culturales; catálogo, despensa y cierres de proteína siguen
+    # con `_swap_country` (mercado). Sin sello ni elección ⇒ ambas coinciden (legado byte-idéntico).
+    from constants import cultural_country_for_form_data as _ccffd_swap
+    _swap_culture = _ccffd_swap(form_data)
 
     # [P1-SWAP-MACROS · 2026-05-22] Targets per-meal: si el cliente envía
     # target_protein/carbs/fats explícitos (pre-rejected meal's macros) los
@@ -1287,8 +1293,8 @@ def swap_meal(form_data: dict, surface: str = "individual"):
             # [P1-DISH-LIBRARY-COUNTRY · 2026-08-21] Sin esto, el swap de un plato español
             # devolvía inspiración dominicana: arreglar sólo el day-gen habría dejado la mitad
             # post-generación con el defecto — la misma asimetría de callers que Fase 1 tuvo que
-            # barrer dos veces. `_swap_country` ya está resuelto arriba, por la única puerta.
-            country=_swap_country,
+            # barrer dos veces. [P1-ARQ25-F7-CULTURE] la inspiración es CULTURAL: `_swap_culture`.
+            country=_swap_culture,
         )
         if _insp_swap:
             context_extras += _insp_swap
@@ -1826,7 +1832,7 @@ def swap_meal(form_data: dict, surface: str = "individual"):
             from constants import build_meal_timing_rules as _bmtr
             # [P1-COUNTRY-SYSTEM-F1 · 2026-08-16 (T4)] reusa `_swap_country` (derivado UNA vez al
             # inicio de swap_meal, T3) — DO ⇒ camino byte-idéntico.
-            _timing_block = _bmtr(meal_type, _swap_country)
+            _timing_block = _bmtr(meal_type, _swap_culture)
             if _timing_block:
                 context_extras += _timing_block
         except Exception as _tr_e:
@@ -1922,7 +1928,7 @@ def swap_meal(form_data: dict, surface: str = "individual"):
 
     # [P1-COUNTRY-SYSTEM-F1 · 2026-08-16 (FINAL-FIX F1c)] reusa `_swap_country` (derivado UNA vez
     # al inicio de swap_meal, T3) — DO ⇒ SWAP_MEAL_PROMPT_TEMPLATE byte-idéntico.
-    prompt_text = build_swap_meal_prompt_template(_swap_country).format(
+    prompt_text = build_swap_meal_prompt_template(_swap_culture).format(
         rejected_meal=rejected_meal,
         meal_type=meal_type,
         target_calories=target_calories,
@@ -2889,14 +2895,14 @@ def swap_meal(form_data: dict, surface: str = "individual"):
                 _slot_dump = res.model_dump() if hasattr(res, "model_dump") else (res if isinstance(res, dict) else {})
                 # [P1-COUNTRY-SYSTEM-F1 · 2026-08-16 (T4 fix-round 1)] reusa `_swap_country`
                 # (derivado UNA vez al inicio de swap_meal, T3) — DO ⇒ camino byte-idéntico.
-                _slot_viol = slot_coherence_backstop_for_meal(_slot_dump, meal_type, _swap_country)
+                _slot_viol = slot_coherence_backstop_for_meal(_slot_dump, meal_type, _swap_culture)
             except Exception:
                 _slot_viol = []
             if _slot_viol:
                 logger.warning(
                     f"🕒 [P1-SLOT-APPROPRIATENESS] swap fuera de horario | meal_type={meal_type} | viol={_slot_viol}"
                 )
-                _current_prompt[0] = prompt_text + _swap_slot_feedback_suffix(_swap_country, meal_type, _slot_viol)
+                _current_prompt[0] = prompt_text + _swap_slot_feedback_suffix(_swap_culture, meal_type, _slot_viol)
                 raise ValueError("SLOT_INCOHERENCE: " + "; ".join(_slot_viol))
 
         # [P1-UPDATE-APPETIBILITY · 2026-06-27] (audit Fase 0) Pareo chocante fruta+salado en swap
@@ -2973,7 +2979,7 @@ def swap_meal(form_data: dict, surface: str = "individual"):
             if _rs_raw:
                 _RS_MARKER = "🍳 RETRY PLATO TRANSFORMADO"
                 if _RS_MARKER not in str(_current_prompt[0]):
-                    _current_prompt[0] = prompt_text + _swap_raw_staple_feedback_suffix(_swap_country, _RS_MARKER, _rs_reason)
+                    _current_prompt[0] = prompt_text + _swap_raw_staple_feedback_suffix(_swap_culture, _RS_MARKER, _rs_reason)
                     raise ValueError("RAW_STAPLE: " + str(_rs_reason)[:100])
                 logger.info(f"🍳 [P2-AUDIT-V5-BATCH] (GAP-13) swap sigue raw-staple tras el retry — "
                             f"entregado con advisory | meal_type={meal_type}")

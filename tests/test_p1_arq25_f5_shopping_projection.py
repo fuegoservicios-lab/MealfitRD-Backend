@@ -113,6 +113,8 @@ def test_f_endpoint_exento_con_ownership_y_documentado():
     src = (_BACKEND / "routers" / "plans.py").read_text(encoding="utf-8")
     assert '@router.get("/{plan_id}/projections")' in src
     assert "_PROJECTIONS_LIMITER = RateLimiter(max_calls=30, period_seconds=60)" in src
+    i0 = src.index('@router.get("/{plan_id}/projections")')
+    assert 'raise HTTPException(status_code=401, detail="Autenticación requerida")' in src[i0:i0 + 900], "sin usuario → 401, no un 404 que parezca plan inexistente"
     i = src.index("def _projection_snapshot(")
     body = src[i:i + 1600]
     assert body.count("AND user_id = %s") == 2, "plan y jobs, ambos con ownership"

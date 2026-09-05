@@ -1,103 +1,2951 @@
 {
   "_note": "[P1-COUNTRY-SYSTEM-F2 · T6 · 2026-08-17] Biblioteca curada de plantillas de platos mexicanos para el juez culinario (espejo de `dish_templates.json` RD y `dish_templates_es.json` ES/T5) — consumida por `_culinary_judge_rubric_for_country('MX')` (graph_orchestrator.py) SOLO cuando `MEALFIT_COUNTRY_SYSTEM` está encendido Y el país del plan es MX; con el knob apagado o país DO/ES el juez sigue usando su ruta preexistente (ver `_dish_templates_path_for_country`). Mismo schema que RD/ES (name/slots/protein/base/technique/transform) MÁS `constituents` (nombres EXACTOS de `master_ingredients` post-altas T6 + gramos CRUDOS, regla del yield — leguminosas SECAS salvo Frijoles refritos [producto preparado/enlatado, mismo criterio que Gandules], carnes/mariscos/vegetales/frutas CRUDOS, curados en su estado de venta real). slots respetan el SSOT de constants.SLOT_INAPPROPRIATE_FOODS (arroz como base NUNCA en desayuno ni cena — todas las plantillas con base='arroz' van SOLO en almuerzo; tortilla de maíz NO está sujeta a esa regla, aparece en los 4 slots como el pan/casabe dominicano). Homógrafo 'Tortilla de maíz' NUNCA se confunde con 'Tortilla de trigo'/'Tortilla integral' (RD) ni 'Tortilla española' (ES) — nombres de fila completamente distintos, sin alias compartido. 'Tomatillo' del catálogo T1 resuelve por FUZZY a 'Tomillo' (tomillo, hierba — NO es el mismo alimento, sustitución silenciosa pre-existente fuera de alcance de esta task) — ninguna plantilla de este archivo lo referencia; las salsas 'verdes' usan Chile jalapeño/Cilantro en su lugar.",
   "templates": [
-    {"name": "Chilaquiles al horno con pollo y queso", "slots": ["desayuno", "almuerzo"], "protein": "pollo", "base": "maiz", "technique": "horneado", "transform": true,
-     "constituents": [{"name": "Tortilla de maíz", "grams": 100}, {"name": "Pechuga de pollo", "grams": 120}, {"name": "Queso blanco", "grams": 40}, {"name": "Chile guajillo", "grams": 10}, {"name": "Tomate", "grams": 100}]},
-    {"name": "Huevos rancheros con salsa de chile guajillo", "slots": ["desayuno"], "protein": "huevo", "base": "maiz", "technique": "salteado", "transform": false,
-     "constituents": [{"name": "Huevo", "grams": 150}, {"name": "Tortilla de maíz", "grams": 60}, {"name": "Chile guajillo", "grams": 8}, {"name": "Tomate", "grams": 80}, {"name": "Cebolla", "grams": 30}]},
-    {"name": "Molletes de frijol con queso", "slots": ["desayuno", "merienda"], "protein": "legumbre", "base": "pan", "technique": "horneado", "transform": true,
-     "constituents": [{"name": "Pan blanco familiar", "grams": 60}, {"name": "Frijoles refritos", "grams": 100}, {"name": "Queso blanco", "grams": 40}, {"name": "Chile jalapeño", "grams": 10}]},
-    {"name": "Huevo a la mexicana con tortilla de maíz", "slots": ["desayuno"], "protein": "huevo", "base": "maiz", "technique": "revuelto", "transform": false,
-     "constituents": [{"name": "Huevo", "grams": 150}, {"name": "Tomate", "grams": 80}, {"name": "Cebolla", "grams": 30}, {"name": "Chile serrano", "grams": 10}, {"name": "Tortilla de maíz", "grams": 60}]},
-    {"name": "Avena con canela y plátano estilo mexicano", "slots": ["desayuno", "merienda"], "protein": "none", "base": "avena", "technique": "hervido", "transform": false,
-     "constituents": [{"name": "Avena", "grams": 50}, {"name": "Leche", "grams": 200}, {"name": "Canela en polvo", "grams": 2}, {"name": "Plátano maduro", "grams": 100}]},
-    {"name": "Quesadillas de queso con nopales", "slots": ["desayuno", "merienda"], "protein": "queso", "base": "maiz", "technique": "plancha", "transform": true,
-     "constituents": [{"name": "Tortilla de maíz", "grams": 80}, {"name": "Queso blanco", "grams": 60}, {"name": "Nopal", "grams": 100}]},
-    {"name": "Chilaquiles con huevo y chile jalapeño", "slots": ["desayuno"], "protein": "huevo", "base": "maiz", "technique": "salteado", "transform": true,
-     "constituents": [{"name": "Tortilla de maíz", "grams": 100}, {"name": "Huevo", "grams": 100}, {"name": "Chile jalapeño", "grams": 15}, {"name": "Cilantro", "grams": 10}, {"name": "Queso blanco", "grams": 30}]},
-    {"name": "Machaca de cecina con huevo", "slots": ["desayuno"], "protein": "mixta", "base": "none", "technique": "revuelto", "transform": true,
-     "constituents": [{"name": "Cecina", "grams": 80}, {"name": "Huevo", "grams": 100}, {"name": "Cebolla", "grams": 30}, {"name": "Chile serrano", "grams": 10}]},
-    {"name": "Tostada de aguacate con huevo", "slots": ["desayuno"], "protein": "huevo", "base": "pan", "technique": "frío", "transform": false,
-     "constituents": [{"name": "Pan integral personal", "grams": 50}, {"name": "Aguacate", "grams": 80}, {"name": "Huevo", "grams": 100}, {"name": "Limón", "grams": 10}]},
-    {"name": "Tacos de pollo al pastor ligero", "slots": ["almuerzo"], "protein": "pollo", "base": "maiz", "technique": "plancha", "transform": true,
-     "constituents": [{"name": "Pechuga de pollo", "grams": 180}, {"name": "Tortilla de maíz", "grams": 90}, {"name": "Piña", "grams": 60}, {"name": "Achiote", "grams": 5}, {"name": "Cebolla", "grams": 30}, {"name": "Cilantro", "grams": 5}]},
-    {"name": "Pozole ligero de pollo", "slots": ["almuerzo"], "protein": "pollo", "base": "maiz", "technique": "sopa espesa", "transform": true,
-     "constituents": [{"name": "Pechuga de pollo", "grams": 180}, {"name": "Maíz dulce en granos", "grams": 150}, {"name": "Chile guajillo", "grams": 8}, {"name": "Repollo", "grams": 60}, {"name": "Rábano", "grams": 30}]},
-    {"name": "Tinga de pollo con tortillas", "slots": ["almuerzo"], "protein": "pollo", "base": "maiz", "technique": "guisado", "transform": true,
-     "constituents": [{"name": "Pechuga de pollo", "grams": 180}, {"name": "Tomate", "grams": 150}, {"name": "Cebolla", "grams": 60}, {"name": "Chile chipotle", "grams": 10}, {"name": "Tortilla de maíz", "grams": 80}]},
-    {"name": "Enfrijoladas de pollo", "slots": ["almuerzo", "cena"], "protein": "pollo", "base": "maiz", "technique": "guisado", "transform": true,
-     "constituents": [{"name": "Tortilla de maíz", "grams": 100}, {"name": "Frijoles refritos", "grams": 120}, {"name": "Pechuga de pollo", "grams": 100}, {"name": "Queso blanco", "grams": 30}]},
-    {"name": "Cochinita ligera con cebolla morada", "slots": ["almuerzo"], "protein": "cerdo", "base": "maiz", "technique": "horneado", "transform": true,
-     "constituents": [{"name": "Cerdo", "grams": 200}, {"name": "Achiote", "grams": 8}, {"name": "Limón", "grams": 20}, {"name": "Cebolla", "grams": 40}, {"name": "Tortilla de maíz", "grams": 80}]},
-    {"name": "Carnitas de cerdo con tortillas", "slots": ["almuerzo"], "protein": "cerdo", "base": "maiz", "technique": "horneado", "transform": false,
-     "constituents": [{"name": "Cerdo", "grams": 200}, {"name": "Tortilla de maíz", "grams": 90}, {"name": "Cilantro", "grams": 5}, {"name": "Limón", "grams": 15}]},
-    {"name": "Chile relleno de queso al horno", "slots": ["almuerzo"], "protein": "queso", "base": "none", "technique": "horneado", "transform": true,
-     "constituents": [{"name": "Chile poblano", "grams": 150}, {"name": "Queso blanco", "grams": 60}, {"name": "Huevo", "grams": 50}, {"name": "Tomate", "grams": 80}]},
-    {"name": "Mole ligero de pollo con arroz", "slots": ["almuerzo"], "protein": "pollo", "base": "arroz", "technique": "guisado", "transform": true,
-     "constituents": [{"name": "Pechuga de pollo", "grams": 200}, {"name": "Chocolate de mesa", "grams": 15}, {"name": "Chile ancho", "grams": 10}, {"name": "Chile mulato", "grams": 8}, {"name": "Arroz blanco", "grams": 100}]},
-    {"name": "Camarones al mojo de ajo con arroz", "slots": ["almuerzo"], "protein": "camarones", "base": "arroz", "technique": "salteado", "transform": false,
-     "constituents": [{"name": "Camarones", "grams": 180}, {"name": "Ajo", "grams": 15}, {"name": "Arroz blanco", "grams": 120}, {"name": "Limón", "grams": 15}]},
-    {"name": "Pescado a la veracruzana con arroz", "slots": ["almuerzo"], "protein": "pescado", "base": "arroz", "technique": "guisado", "transform": false,
-     "constituents": [{"name": "Filete de pescado blanco", "grams": 180}, {"name": "Tomate", "grams": 150}, {"name": "Aceitunas", "grams": 20}, {"name": "Ají morrón", "grams": 40}, {"name": "Arroz blanco", "grams": 100}]},
-    {"name": "Frijoles charros con longaniza", "slots": ["almuerzo"], "protein": "mixta", "base": "legumbre", "technique": "guisado", "transform": false,
-     "constituents": [{"name": "Frijoles pintos", "grams": 120}, {"name": "Longaniza dominicana", "grams": 60}, {"name": "Tomate", "grams": 60}, {"name": "Cilantro", "grams": 5}]},
-    {"name": "Arroz rojo con chile poblano", "slots": ["almuerzo"], "protein": "none", "base": "arroz", "technique": "guisado", "transform": false,
-     "constituents": [{"name": "Arroz blanco", "grams": 120}, {"name": "Tomate", "grams": 100}, {"name": "Chile poblano", "grams": 40}, {"name": "Cebolla", "grams": 30}]},
-    {"name": "Sopa de tortilla con pollo", "slots": ["almuerzo"], "protein": "pollo", "base": "maiz", "technique": "sopa espesa", "transform": true,
-     "constituents": [{"name": "Tortilla de maíz", "grams": 60}, {"name": "Pechuga de pollo", "grams": 150}, {"name": "Tomate", "grams": 120}, {"name": "Chile pasilla", "grams": 8}, {"name": "Queso blanco", "grams": 30}]},
-    {"name": "Bistec a la mexicana con nopales", "slots": ["almuerzo"], "protein": "res", "base": "none", "technique": "guisado", "transform": false,
-     "constituents": [{"name": "Carne de res", "grams": 200}, {"name": "Tomate", "grams": 100}, {"name": "Chile serrano", "grams": 10}, {"name": "Nopal", "grams": 100}]},
-    {"name": "Barbacoa ligera de res con tortillas", "slots": ["almuerzo"], "protein": "res", "base": "maiz", "technique": "horneado", "transform": true,
-     "constituents": [{"name": "Carne de res", "grams": 200}, {"name": "Chile guajillo", "grams": 10}, {"name": "Comino", "grams": 2}, {"name": "Tortilla de maíz", "grams": 90}]},
-    {"name": "Camarones a la diabla con arroz", "slots": ["almuerzo"], "protein": "camarones", "base": "arroz", "technique": "salteado", "transform": true,
-     "constituents": [{"name": "Camarones", "grams": 180}, {"name": "Chile de árbol", "grams": 8}, {"name": "Chile guajillo", "grams": 8}, {"name": "Ajo", "grams": 10}, {"name": "Arroz blanco", "grams": 100}]},
-    {"name": "Esquites con queso y limón", "slots": ["almuerzo", "merienda"], "protein": "none", "base": "maiz", "technique": "hervido", "transform": true,
-     "constituents": [{"name": "Maíz dulce en granos", "grams": 200}, {"name": "Queso blanco", "grams": 30}, {"name": "Limón", "grams": 15}, {"name": "Chile jalapeño", "grams": 5}]},
-    {"name": "Ensalada de nopales con queso", "slots": ["almuerzo", "cena"], "protein": "queso", "base": "none", "technique": "frío", "transform": false,
-     "constituents": [{"name": "Nopal", "grams": 150}, {"name": "Queso blanco", "grams": 50}, {"name": "Tomate", "grams": 80}, {"name": "Cebolla", "grams": 30}, {"name": "Cilantro", "grams": 5}]},
-    {"name": "Huachinango al horno con hierbas", "slots": ["almuerzo"], "protein": "pescado", "base": "none", "technique": "horneado", "transform": false,
-     "constituents": [{"name": "Filete de pescado blanco", "grams": 200}, {"name": "Limón", "grams": 20}, {"name": "Ajo", "grams": 10}, {"name": "Tomate", "grams": 100}]},
-    {"name": "Sopes de frijol con pollo deshebrado", "slots": ["almuerzo"], "protein": "pollo", "base": "maiz", "technique": "masa horneada", "transform": true,
-     "constituents": [{"name": "Harina de maíz precocida", "grams": 80}, {"name": "Frijoles refritos", "grams": 80}, {"name": "Pechuga de pollo", "grams": 100}, {"name": "Queso blanco", "grams": 30}]},
-    {"name": "Enchiladas verdes de pollo al horno", "slots": ["almuerzo", "cena"], "protein": "pollo", "base": "maiz", "technique": "horneado", "transform": true,
-     "constituents": [{"name": "Tortilla de maíz", "grams": 100}, {"name": "Pechuga de pollo", "grams": 150}, {"name": "Chile jalapeño", "grams": 20}, {"name": "Crema mexicana", "grams": 30}, {"name": "Queso blanco", "grams": 30}]},
-    {"name": "Quesadillas de champiñones y epazote", "slots": ["cena", "merienda"], "protein": "queso", "base": "maiz", "technique": "plancha", "transform": true,
-     "constituents": [{"name": "Tortilla de maíz", "grams": 80}, {"name": "Champiñones", "grams": 100}, {"name": "Queso blanco", "grams": 50}, {"name": "Epazote", "grams": 5}]},
-    {"name": "Sopa de frijol negro con epazote", "slots": ["cena"], "protein": "legumbre", "base": "legumbre", "technique": "hervido", "transform": false,
-     "constituents": [{"name": "Habichuelas negras", "grams": 150}, {"name": "Epazote", "grams": 5}, {"name": "Cebolla", "grams": 30}, {"name": "Chile serrano", "grams": 5}]},
-    {"name": "Tacos de pescado empanizado al horno", "slots": ["cena"], "protein": "pescado", "base": "maiz", "technique": "horneado", "transform": true,
-     "constituents": [{"name": "Filete de pescado blanco", "grams": 180}, {"name": "Tortilla de maíz", "grams": 90}, {"name": "Repollo", "grams": 60}, {"name": "Limón", "grams": 15}]},
-    {"name": "Ensalada de jícama con chile y limón", "slots": ["cena", "merienda"], "protein": "none", "base": "none", "technique": "frío", "transform": false,
-     "constituents": [{"name": "Jícama", "grams": 150}, {"name": "Limón", "grams": 20}, {"name": "Chile de árbol", "grams": 3}, {"name": "Pepino", "grams": 80}]},
-    {"name": "Tostadas de atún con aguacate", "slots": ["cena"], "protein": "pescado", "base": "maiz", "technique": "frío", "transform": true,
-     "constituents": [{"name": "Tortilla de maíz", "grams": 60}, {"name": "Atún en agua", "grams": 100}, {"name": "Aguacate", "grams": 60}, {"name": "Tomate", "grams": 60}]},
-    {"name": "Huevos con nopales y salsa de chile serrano", "slots": ["cena"], "protein": "huevo", "base": "none", "technique": "revuelto", "transform": false,
-     "constituents": [{"name": "Huevo", "grams": 150}, {"name": "Nopal", "grams": 120}, {"name": "Chile serrano", "grams": 8}, {"name": "Tomate", "grams": 60}]},
-    {"name": "Cecina con nopales asados", "slots": ["cena"], "protein": "res", "base": "none", "technique": "plancha", "transform": false,
-     "constituents": [{"name": "Cecina", "grams": 150}, {"name": "Nopal", "grams": 120}, {"name": "Cebollín", "grams": 20}, {"name": "Limón", "grams": 15}]},
-    {"name": "Enchiladas de queso al horno", "slots": ["cena"], "protein": "queso", "base": "maiz", "technique": "horneado", "transform": true,
-     "constituents": [{"name": "Tortilla de maíz", "grams": 90}, {"name": "Queso blanco", "grams": 50}, {"name": "Chile guajillo", "grams": 8}, {"name": "Cebolla", "grams": 30}]},
-    {"name": "Filete de pescado a la plancha con chile poblano", "slots": ["cena"], "protein": "pescado", "base": "none", "technique": "plancha", "transform": false,
-     "constituents": [{"name": "Filete de pescado blanco", "grams": 180}, {"name": "Chile poblano", "grams": 60}, {"name": "Ajo", "grams": 8}, {"name": "Limón", "grams": 15}]},
-    {"name": "Pechuga de pollo en salsa de chile pasilla", "slots": ["cena"], "protein": "pollo", "base": "none", "technique": "guisado", "transform": false,
-     "constituents": [{"name": "Pechuga de pollo", "grams": 180}, {"name": "Chile pasilla", "grams": 10}, {"name": "Tomate", "grams": 100}, {"name": "Ajo", "grams": 8}]},
-    {"name": "Rajas poblanas con crema y elote", "slots": ["cena"], "protein": "none", "base": "maiz", "technique": "salteado", "transform": true,
-     "constituents": [{"name": "Chile poblano", "grams": 120}, {"name": "Maíz dulce en granos", "grams": 100}, {"name": "Crema mexicana", "grams": 40}, {"name": "Cebolla", "grams": 30}]},
-    {"name": "Pepino con chile y limón", "slots": ["merienda"], "protein": "none", "base": "none", "technique": "frío", "transform": false,
-     "constituents": [{"name": "Pepino", "grams": 150}, {"name": "Chile de árbol", "grams": 3}, {"name": "Limón", "grams": 15}]},
-    {"name": "Jícama con chile y limón", "slots": ["merienda"], "protein": "none", "base": "none", "technique": "frío", "transform": false,
-     "constituents": [{"name": "Jícama", "grams": 150}, {"name": "Chile de árbol", "grams": 3}, {"name": "Limón", "grams": 15}]},
-    {"name": "Elote preparado con queso y crema", "slots": ["merienda"], "protein": "none", "base": "maiz", "technique": "hervido", "transform": true,
-     "constituents": [{"name": "Maíz dulce en granos", "grams": 150}, {"name": "Crema mexicana", "grams": 20}, {"name": "Queso blanco", "grams": 20}, {"name": "Chile de árbol", "grams": 2}]},
-    {"name": "Yogur con guayaba y avena", "slots": ["merienda", "desayuno"], "protein": "none", "base": "avena", "technique": "frío", "transform": false,
-     "constituents": [{"name": "Yogurt griego sin azúcar", "grams": 150}, {"name": "Guayaba", "grams": 80}, {"name": "Avena", "grams": 20}]},
-    {"name": "Tuna de nopal con limón y chile", "slots": ["merienda"], "protein": "none", "base": "none", "technique": "frío", "transform": false,
-     "constituents": [{"name": "Tuna de nopal", "grams": 150}, {"name": "Limón", "grams": 10}, {"name": "Chile de árbol", "grams": 2}]},
-    {"name": "Xoconostle con miel", "slots": ["merienda"], "protein": "none", "base": "none", "technique": "frío", "transform": false,
-     "constituents": [{"name": "Xoconostle", "grams": 100}, {"name": "Miel", "grams": 15}]},
-    {"name": "Chocolate de mesa caliente", "slots": ["merienda", "desayuno"], "protein": "none", "base": "none", "technique": "hervido", "transform": false,
-     "constituents": [{"name": "Chocolate de mesa", "grams": 30}, {"name": "Leche", "grams": 200}]},
-    {"name": "Huitlacoche con queso en tortilla", "slots": ["merienda", "cena"], "protein": "queso", "base": "maiz", "technique": "salteado", "transform": true,
-     "constituents": [{"name": "Huitlacoche", "grams": 80}, {"name": "Queso blanco", "grams": 30}, {"name": "Tortilla de maíz", "grams": 60}, {"name": "Epazote", "grams": 3}]}
+    {
+      "name": "Chilaquiles al horno con pollo y queso",
+      "slots": [
+        "desayuno",
+        "almuerzo"
+      ],
+      "protein": "pollo",
+      "base": "maiz",
+      "technique": "horneado",
+      "transform": true,
+      "constituents": [
+        {
+          "name": "Tortilla de maíz",
+          "grams": 100
+        },
+        {
+          "name": "Pechuga de pollo",
+          "grams": 120
+        },
+        {
+          "name": "Queso blanco",
+          "grams": 40
+        },
+        {
+          "name": "Chile guajillo",
+          "grams": 10
+        },
+        {
+          "name": "Tomate",
+          "grams": 100
+        }
+      ]
+    },
+    {
+      "name": "Huevos rancheros con salsa de chile guajillo",
+      "slots": [
+        "desayuno"
+      ],
+      "protein": "huevo",
+      "base": "maiz",
+      "technique": "salteado",
+      "transform": false,
+      "constituents": [
+        {
+          "name": "Huevo",
+          "grams": 150
+        },
+        {
+          "name": "Tortilla de maíz",
+          "grams": 60
+        },
+        {
+          "name": "Chile guajillo",
+          "grams": 8
+        },
+        {
+          "name": "Tomate",
+          "grams": 80
+        },
+        {
+          "name": "Cebolla",
+          "grams": 30
+        }
+      ]
+    },
+    {
+      "name": "Molletes de frijol con queso",
+      "slots": [
+        "desayuno",
+        "merienda"
+      ],
+      "protein": "legumbre",
+      "base": "pan",
+      "technique": "horneado",
+      "transform": true,
+      "constituents": [
+        {
+          "name": "Pan blanco familiar",
+          "grams": 60
+        },
+        {
+          "name": "Frijoles refritos",
+          "grams": 100
+        },
+        {
+          "name": "Queso blanco",
+          "grams": 40
+        },
+        {
+          "name": "Chile jalapeño",
+          "grams": 10
+        }
+      ]
+    },
+    {
+      "name": "Huevo a la mexicana con tortilla de maíz",
+      "slots": [
+        "desayuno"
+      ],
+      "protein": "huevo",
+      "base": "maiz",
+      "technique": "revuelto",
+      "transform": false,
+      "constituents": [
+        {
+          "name": "Huevo",
+          "grams": 150
+        },
+        {
+          "name": "Tomate",
+          "grams": 80
+        },
+        {
+          "name": "Cebolla",
+          "grams": 30
+        },
+        {
+          "name": "Chile serrano",
+          "grams": 10
+        },
+        {
+          "name": "Tortilla de maíz",
+          "grams": 60
+        }
+      ]
+    },
+    {
+      "name": "Avena con canela y plátano estilo mexicano",
+      "slots": [
+        "desayuno"
+      ],
+      "protein": "none",
+      "base": "avena",
+      "technique": "hervido",
+      "transform": false,
+      "constituents": [
+        {
+          "name": "Avena",
+          "grams": 50
+        },
+        {
+          "name": "Leche",
+          "grams": 200
+        },
+        {
+          "name": "Canela en polvo",
+          "grams": 2
+        },
+        {
+          "name": "Plátano maduro",
+          "grams": 100
+        }
+      ]
+    },
+    {
+      "name": "Quesadillas de queso con nopales",
+      "slots": [
+        "desayuno",
+        "merienda"
+      ],
+      "protein": "queso",
+      "base": "maiz",
+      "technique": "plancha",
+      "transform": true,
+      "constituents": [
+        {
+          "name": "Tortilla de maíz",
+          "grams": 80
+        },
+        {
+          "name": "Queso blanco",
+          "grams": 60
+        },
+        {
+          "name": "Nopal",
+          "grams": 100
+        }
+      ]
+    },
+    {
+      "name": "Chilaquiles con huevo y chile jalapeño",
+      "slots": [
+        "desayuno"
+      ],
+      "protein": "huevo",
+      "base": "maiz",
+      "technique": "salteado",
+      "transform": true,
+      "constituents": [
+        {
+          "name": "Tortilla de maíz",
+          "grams": 100
+        },
+        {
+          "name": "Huevo",
+          "grams": 100
+        },
+        {
+          "name": "Chile jalapeño",
+          "grams": 15
+        },
+        {
+          "name": "Cilantro",
+          "grams": 10
+        },
+        {
+          "name": "Queso blanco",
+          "grams": 30
+        }
+      ]
+    },
+    {
+      "name": "Machaca de cecina con huevo",
+      "slots": [
+        "desayuno"
+      ],
+      "protein": "mixta",
+      "base": "none",
+      "technique": "revuelto",
+      "transform": true,
+      "constituents": [
+        {
+          "name": "Cecina",
+          "grams": 50.0
+        },
+        {
+          "name": "Huevo",
+          "grams": 100
+        },
+        {
+          "name": "Cebolla",
+          "grams": 30
+        },
+        {
+          "name": "Chile serrano",
+          "grams": 10
+        }
+      ]
+    },
+    {
+      "name": "Tostada de aguacate con huevo",
+      "slots": [
+        "desayuno"
+      ],
+      "protein": "huevo",
+      "base": "pan",
+      "technique": "frío",
+      "transform": false,
+      "constituents": [
+        {
+          "name": "Pan integral personal",
+          "grams": 50
+        },
+        {
+          "name": "Aguacate",
+          "grams": 80
+        },
+        {
+          "name": "Huevo",
+          "grams": 100
+        },
+        {
+          "name": "Limón",
+          "grams": 10
+        }
+      ]
+    },
+    {
+      "name": "Tacos de pollo al pastor ligero",
+      "slots": [
+        "almuerzo"
+      ],
+      "protein": "pollo",
+      "base": "maiz",
+      "technique": "plancha",
+      "transform": true,
+      "constituents": [
+        {
+          "name": "Pechuga de pollo",
+          "grams": 180
+        },
+        {
+          "name": "Tortilla de maíz",
+          "grams": 90
+        },
+        {
+          "name": "Piña",
+          "grams": 60
+        },
+        {
+          "name": "Achiote",
+          "grams": 5
+        },
+        {
+          "name": "Cebolla",
+          "grams": 30
+        },
+        {
+          "name": "Cilantro",
+          "grams": 5
+        }
+      ]
+    },
+    {
+      "name": "Pozole ligero de pollo",
+      "slots": [
+        "almuerzo"
+      ],
+      "protein": "pollo",
+      "base": "maiz",
+      "technique": "sopa espesa",
+      "transform": true,
+      "constituents": [
+        {
+          "name": "Pechuga de pollo",
+          "grams": 180
+        },
+        {
+          "name": "Maíz dulce en granos",
+          "grams": 150
+        },
+        {
+          "name": "Chile guajillo",
+          "grams": 8
+        },
+        {
+          "name": "Repollo",
+          "grams": 60
+        },
+        {
+          "name": "Rábano",
+          "grams": 30
+        }
+      ]
+    },
+    {
+      "name": "Tinga de pollo con tortillas",
+      "slots": [
+        "almuerzo"
+      ],
+      "protein": "pollo",
+      "base": "maiz",
+      "technique": "guisado",
+      "transform": true,
+      "constituents": [
+        {
+          "name": "Pechuga de pollo",
+          "grams": 180
+        },
+        {
+          "name": "Tomate",
+          "grams": 150
+        },
+        {
+          "name": "Cebolla",
+          "grams": 60
+        },
+        {
+          "name": "Chile chipotle",
+          "grams": 10
+        },
+        {
+          "name": "Tortilla de maíz",
+          "grams": 80
+        }
+      ]
+    },
+    {
+      "name": "Enfrijoladas de pollo",
+      "slots": [
+        "almuerzo",
+        "cena"
+      ],
+      "protein": "pollo",
+      "base": "maiz",
+      "technique": "guisado",
+      "transform": true,
+      "constituents": [
+        {
+          "name": "Tortilla de maíz",
+          "grams": 100
+        },
+        {
+          "name": "Frijoles refritos",
+          "grams": 120
+        },
+        {
+          "name": "Pechuga de pollo",
+          "grams": 100
+        },
+        {
+          "name": "Queso blanco",
+          "grams": 30
+        }
+      ]
+    },
+    {
+      "name": "Cochinita ligera con cebolla morada",
+      "slots": [
+        "almuerzo"
+      ],
+      "protein": "cerdo",
+      "base": "maiz",
+      "technique": "horneado",
+      "transform": true,
+      "constituents": [
+        {
+          "name": "Cerdo",
+          "grams": 200
+        },
+        {
+          "name": "Achiote",
+          "grams": 8
+        },
+        {
+          "name": "Limón",
+          "grams": 20
+        },
+        {
+          "name": "Cebolla",
+          "grams": 40
+        },
+        {
+          "name": "Tortilla de maíz",
+          "grams": 80
+        }
+      ]
+    },
+    {
+      "name": "Carnitas de cerdo con tortillas",
+      "slots": [
+        "almuerzo"
+      ],
+      "protein": "cerdo",
+      "base": "maiz",
+      "technique": "horneado",
+      "transform": false,
+      "constituents": [
+        {
+          "name": "Cerdo",
+          "grams": 200
+        },
+        {
+          "name": "Tortilla de maíz",
+          "grams": 90
+        },
+        {
+          "name": "Cilantro",
+          "grams": 5
+        },
+        {
+          "name": "Limón",
+          "grams": 15
+        }
+      ]
+    },
+    {
+      "name": "Chile relleno de queso al horno",
+      "slots": [
+        "almuerzo"
+      ],
+      "protein": "queso",
+      "base": "none",
+      "technique": "horneado",
+      "transform": true,
+      "constituents": [
+        {
+          "name": "Chile poblano",
+          "grams": 150
+        },
+        {
+          "name": "Queso blanco",
+          "grams": 60
+        },
+        {
+          "name": "Huevo",
+          "grams": 50
+        },
+        {
+          "name": "Tomate",
+          "grams": 80
+        }
+      ]
+    },
+    {
+      "name": "Mole ligero de pollo con arroz",
+      "slots": [
+        "almuerzo"
+      ],
+      "protein": "pollo",
+      "base": "arroz",
+      "technique": "guisado",
+      "transform": true,
+      "constituents": [
+        {
+          "name": "Pechuga de pollo",
+          "grams": 200
+        },
+        {
+          "name": "Chocolate de mesa",
+          "grams": 15
+        },
+        {
+          "name": "Chile ancho",
+          "grams": 10
+        },
+        {
+          "name": "Chile mulato",
+          "grams": 8
+        },
+        {
+          "name": "Arroz blanco",
+          "grams": 100
+        }
+      ]
+    },
+    {
+      "name": "Camarones al mojo de ajo con arroz",
+      "slots": [
+        "almuerzo"
+      ],
+      "protein": "camarones",
+      "base": "arroz",
+      "technique": "salteado",
+      "transform": false,
+      "constituents": [
+        {
+          "name": "Camarones",
+          "grams": 180
+        },
+        {
+          "name": "Ajo",
+          "grams": 15
+        },
+        {
+          "name": "Arroz blanco",
+          "grams": 120
+        },
+        {
+          "name": "Limón",
+          "grams": 15
+        }
+      ]
+    },
+    {
+      "name": "Pescado a la veracruzana con arroz",
+      "slots": [
+        "almuerzo"
+      ],
+      "protein": "pescado",
+      "base": "arroz",
+      "technique": "guisado",
+      "transform": false,
+      "constituents": [
+        {
+          "name": "Filete de pescado blanco",
+          "grams": 180
+        },
+        {
+          "name": "Tomate",
+          "grams": 150
+        },
+        {
+          "name": "Aceitunas",
+          "grams": 20
+        },
+        {
+          "name": "Ají morrón",
+          "grams": 40
+        },
+        {
+          "name": "Arroz blanco",
+          "grams": 100
+        }
+      ]
+    },
+    {
+      "name": "Frijoles charros con longaniza",
+      "slots": [
+        "almuerzo"
+      ],
+      "protein": "mixta",
+      "base": "legumbre",
+      "technique": "guisado",
+      "transform": false,
+      "constituents": [
+        {
+          "name": "Frijoles pintos",
+          "grams": 120
+        },
+        {
+          "name": "Longaniza dominicana",
+          "grams": 60
+        },
+        {
+          "name": "Tomate",
+          "grams": 60
+        },
+        {
+          "name": "Cilantro",
+          "grams": 5
+        }
+      ]
+    },
+    {
+      "name": "Arroz rojo con chile poblano",
+      "slots": [
+        "almuerzo"
+      ],
+      "protein": "none",
+      "base": "arroz",
+      "technique": "guisado",
+      "transform": false,
+      "constituents": [
+        {
+          "name": "Arroz blanco",
+          "grams": 120
+        },
+        {
+          "name": "Tomate",
+          "grams": 100
+        },
+        {
+          "name": "Chile poblano",
+          "grams": 40
+        },
+        {
+          "name": "Cebolla",
+          "grams": 30
+        }
+      ]
+    },
+    {
+      "name": "Sopa de tortilla con pollo",
+      "slots": [
+        "almuerzo"
+      ],
+      "protein": "pollo",
+      "base": "maiz",
+      "technique": "sopa espesa",
+      "transform": true,
+      "constituents": [
+        {
+          "name": "Tortilla de maíz",
+          "grams": 60
+        },
+        {
+          "name": "Pechuga de pollo",
+          "grams": 150
+        },
+        {
+          "name": "Tomate",
+          "grams": 120
+        },
+        {
+          "name": "Chile pasilla",
+          "grams": 8
+        },
+        {
+          "name": "Queso blanco",
+          "grams": 30
+        }
+      ]
+    },
+    {
+      "name": "Bistec a la mexicana con nopales",
+      "slots": [
+        "almuerzo"
+      ],
+      "protein": "res",
+      "base": "none",
+      "technique": "guisado",
+      "transform": false,
+      "constituents": [
+        {
+          "name": "Carne de res",
+          "grams": 200
+        },
+        {
+          "name": "Tomate",
+          "grams": 100
+        },
+        {
+          "name": "Chile serrano",
+          "grams": 10
+        },
+        {
+          "name": "Nopal",
+          "grams": 100
+        }
+      ]
+    },
+    {
+      "name": "Barbacoa ligera de res con tortillas",
+      "slots": [
+        "almuerzo"
+      ],
+      "protein": "res",
+      "base": "maiz",
+      "technique": "horneado",
+      "transform": true,
+      "constituents": [
+        {
+          "name": "Carne de res",
+          "grams": 200
+        },
+        {
+          "name": "Chile guajillo",
+          "grams": 10
+        },
+        {
+          "name": "Comino",
+          "grams": 2
+        },
+        {
+          "name": "Tortilla de maíz",
+          "grams": 90
+        }
+      ]
+    },
+    {
+      "name": "Camarones a la diabla con arroz",
+      "slots": [
+        "almuerzo"
+      ],
+      "protein": "camarones",
+      "base": "arroz",
+      "technique": "salteado",
+      "transform": true,
+      "constituents": [
+        {
+          "name": "Camarones",
+          "grams": 180
+        },
+        {
+          "name": "Chile de árbol",
+          "grams": 8
+        },
+        {
+          "name": "Chile guajillo",
+          "grams": 8
+        },
+        {
+          "name": "Ajo",
+          "grams": 10
+        },
+        {
+          "name": "Arroz blanco",
+          "grams": 100
+        }
+      ]
+    },
+    {
+      "name": "Esquites con queso y limón",
+      "slots": [
+        "almuerzo",
+        "merienda"
+      ],
+      "protein": "none",
+      "base": "maiz",
+      "technique": "hervido",
+      "transform": true,
+      "constituents": [
+        {
+          "name": "Maíz dulce en granos",
+          "grams": 200
+        },
+        {
+          "name": "Queso blanco",
+          "grams": 30
+        },
+        {
+          "name": "Limón",
+          "grams": 15
+        },
+        {
+          "name": "Chile jalapeño",
+          "grams": 5
+        }
+      ]
+    },
+    {
+      "name": "Ensalada de nopales con queso",
+      "slots": [
+        "cena"
+      ],
+      "protein": "queso",
+      "base": "none",
+      "technique": "frío",
+      "transform": false,
+      "constituents": [
+        {
+          "name": "Nopal",
+          "grams": 150
+        },
+        {
+          "name": "Queso blanco",
+          "grams": 50
+        },
+        {
+          "name": "Tomate",
+          "grams": 80
+        },
+        {
+          "name": "Cebolla",
+          "grams": 30
+        },
+        {
+          "name": "Cilantro",
+          "grams": 5
+        }
+      ]
+    },
+    {
+      "name": "Huachinango al horno con hierbas",
+      "slots": [
+        "almuerzo"
+      ],
+      "protein": "pescado",
+      "base": "none",
+      "technique": "horneado",
+      "transform": false,
+      "constituents": [
+        {
+          "name": "Filete de pescado blanco",
+          "grams": 200
+        },
+        {
+          "name": "Limón",
+          "grams": 20
+        },
+        {
+          "name": "Ajo",
+          "grams": 10
+        },
+        {
+          "name": "Tomate",
+          "grams": 100
+        },
+        {
+          "name": "Arroz blanco",
+          "grams": 60.0
+        }
+      ]
+    },
+    {
+      "name": "Sopes de frijol con pollo deshebrado",
+      "slots": [
+        "almuerzo"
+      ],
+      "protein": "pollo",
+      "base": "maiz",
+      "technique": "masa horneada",
+      "transform": true,
+      "constituents": [
+        {
+          "name": "Harina de maíz precocida",
+          "grams": 80
+        },
+        {
+          "name": "Frijoles refritos",
+          "grams": 80
+        },
+        {
+          "name": "Pechuga de pollo",
+          "grams": 100
+        },
+        {
+          "name": "Queso blanco",
+          "grams": 30
+        }
+      ]
+    },
+    {
+      "name": "Enchiladas verdes de pollo al horno",
+      "slots": [
+        "almuerzo",
+        "cena"
+      ],
+      "protein": "pollo",
+      "base": "maiz",
+      "technique": "horneado",
+      "transform": true,
+      "constituents": [
+        {
+          "name": "Tortilla de maíz",
+          "grams": 100
+        },
+        {
+          "name": "Pechuga de pollo",
+          "grams": 150
+        },
+        {
+          "name": "Chile jalapeño",
+          "grams": 20
+        },
+        {
+          "name": "Crema mexicana",
+          "grams": 30
+        },
+        {
+          "name": "Queso blanco",
+          "grams": 30
+        }
+      ]
+    },
+    {
+      "name": "Quesadillas de champiñones y epazote",
+      "slots": [
+        "cena",
+        "merienda"
+      ],
+      "protein": "queso",
+      "base": "maiz",
+      "technique": "plancha",
+      "transform": true,
+      "constituents": [
+        {
+          "name": "Tortilla de maíz",
+          "grams": 80
+        },
+        {
+          "name": "Champiñones",
+          "grams": 100
+        },
+        {
+          "name": "Queso blanco",
+          "grams": 50
+        },
+        {
+          "name": "Epazote",
+          "grams": 5
+        }
+      ]
+    },
+    {
+      "name": "Sopa de frijol negro con epazote",
+      "slots": [
+        "cena"
+      ],
+      "protein": "legumbre",
+      "base": "legumbre",
+      "technique": "hervido",
+      "transform": false,
+      "constituents": [
+        {
+          "name": "Habichuelas negras",
+          "grams": 150
+        },
+        {
+          "name": "Epazote",
+          "grams": 5
+        },
+        {
+          "name": "Cebolla",
+          "grams": 30
+        },
+        {
+          "name": "Chile serrano",
+          "grams": 5
+        }
+      ]
+    },
+    {
+      "name": "Tacos de pescado empanizado al horno",
+      "slots": [
+        "cena"
+      ],
+      "protein": "pescado",
+      "base": "maiz",
+      "technique": "horneado",
+      "transform": true,
+      "constituents": [
+        {
+          "name": "Filete de pescado blanco",
+          "grams": 180
+        },
+        {
+          "name": "Tortilla de maíz",
+          "grams": 90
+        },
+        {
+          "name": "Repollo",
+          "grams": 60
+        },
+        {
+          "name": "Limón",
+          "grams": 15
+        }
+      ]
+    },
+    {
+      "name": "Tostadas de atún con aguacate",
+      "slots": [
+        "cena"
+      ],
+      "protein": "pescado",
+      "base": "maiz",
+      "technique": "frío",
+      "transform": true,
+      "constituents": [
+        {
+          "name": "Tortilla de maíz",
+          "grams": 60
+        },
+        {
+          "name": "Atún en agua",
+          "grams": 100
+        },
+        {
+          "name": "Aguacate",
+          "grams": 60
+        },
+        {
+          "name": "Tomate",
+          "grams": 60
+        }
+      ]
+    },
+    {
+      "name": "Huevos con nopales y salsa de chile serrano",
+      "slots": [
+        "cena"
+      ],
+      "protein": "huevo",
+      "base": "none",
+      "technique": "revuelto",
+      "transform": false,
+      "constituents": [
+        {
+          "name": "Huevo",
+          "grams": 150
+        },
+        {
+          "name": "Nopal",
+          "grams": 120
+        },
+        {
+          "name": "Chile serrano",
+          "grams": 8
+        },
+        {
+          "name": "Tomate",
+          "grams": 60
+        }
+      ]
+    },
+    {
+      "name": "Cecina con nopales asados",
+      "slots": [
+        "cena"
+      ],
+      "protein": "res",
+      "base": "none",
+      "technique": "plancha",
+      "transform": false,
+      "constituents": [
+        {
+          "name": "Cecina",
+          "grams": 70.0
+        },
+        {
+          "name": "Nopal",
+          "grams": 120
+        },
+        {
+          "name": "Cebollín",
+          "grams": 20
+        },
+        {
+          "name": "Limón",
+          "grams": 15
+        },
+        {
+          "name": "Habichuelas negras",
+          "grams": 60.0
+        }
+      ]
+    },
+    {
+      "name": "Enchiladas de queso al horno",
+      "slots": [
+        "cena"
+      ],
+      "protein": "queso",
+      "base": "maiz",
+      "technique": "horneado",
+      "transform": true,
+      "constituents": [
+        {
+          "name": "Tortilla de maíz",
+          "grams": 90
+        },
+        {
+          "name": "Queso blanco",
+          "grams": 50
+        },
+        {
+          "name": "Chile guajillo",
+          "grams": 8
+        },
+        {
+          "name": "Cebolla",
+          "grams": 30
+        }
+      ]
+    },
+    {
+      "name": "Filete de pescado a la plancha con chile poblano",
+      "slots": [
+        "cena"
+      ],
+      "protein": "pescado",
+      "base": "none",
+      "technique": "plancha",
+      "transform": false,
+      "constituents": [
+        {
+          "name": "Filete de pescado blanco",
+          "grams": 180
+        },
+        {
+          "name": "Chile poblano",
+          "grams": 60
+        },
+        {
+          "name": "Ajo",
+          "grams": 8
+        },
+        {
+          "name": "Limón",
+          "grams": 15
+        }
+      ]
+    },
+    {
+      "name": "Pechuga de pollo en salsa de chile pasilla",
+      "slots": [
+        "cena"
+      ],
+      "protein": "pollo",
+      "base": "none",
+      "technique": "guisado",
+      "transform": false,
+      "constituents": [
+        {
+          "name": "Pechuga de pollo",
+          "grams": 180
+        },
+        {
+          "name": "Chile pasilla",
+          "grams": 10
+        },
+        {
+          "name": "Tomate",
+          "grams": 100
+        },
+        {
+          "name": "Ajo",
+          "grams": 8
+        }
+      ]
+    },
+    {
+      "name": "Rajas poblanas con crema y elote",
+      "slots": [
+        "cena"
+      ],
+      "protein": "none",
+      "base": "maiz",
+      "technique": "salteado",
+      "transform": true,
+      "constituents": [
+        {
+          "name": "Chile poblano",
+          "grams": 120
+        },
+        {
+          "name": "Maíz dulce en granos",
+          "grams": 100
+        },
+        {
+          "name": "Crema mexicana",
+          "grams": 40
+        },
+        {
+          "name": "Cebolla",
+          "grams": 30
+        }
+      ]
+    },
+    {
+      "name": "Pepino con chile y limón",
+      "slots": [
+        "merienda"
+      ],
+      "protein": "none",
+      "base": "none",
+      "technique": "frío",
+      "transform": false,
+      "constituents": [
+        {
+          "name": "Pepino",
+          "grams": 150
+        },
+        {
+          "name": "Chile de árbol",
+          "grams": 3
+        },
+        {
+          "name": "Limón",
+          "grams": 15
+        }
+      ]
+    },
+    {
+      "name": "Jícama con chile y limón",
+      "slots": [
+        "merienda"
+      ],
+      "protein": "none",
+      "base": "none",
+      "technique": "frío",
+      "transform": false,
+      "constituents": [
+        {
+          "name": "Jícama",
+          "grams": 150
+        },
+        {
+          "name": "Chile de árbol",
+          "grams": 3
+        },
+        {
+          "name": "Limón",
+          "grams": 15
+        }
+      ]
+    },
+    {
+      "name": "Elote preparado con queso y crema",
+      "slots": [
+        "merienda"
+      ],
+      "protein": "none",
+      "base": "maiz",
+      "technique": "hervido",
+      "transform": true,
+      "constituents": [
+        {
+          "name": "Maíz dulce en granos",
+          "grams": 150
+        },
+        {
+          "name": "Crema mexicana",
+          "grams": 20
+        },
+        {
+          "name": "Queso blanco",
+          "grams": 20
+        },
+        {
+          "name": "Chile de árbol",
+          "grams": 2
+        }
+      ]
+    },
+    {
+      "name": "Yogur con guayaba y avena",
+      "slots": [
+        "merienda",
+        "desayuno"
+      ],
+      "protein": "none",
+      "base": "avena",
+      "technique": "frío",
+      "transform": false,
+      "constituents": [
+        {
+          "name": "Yogurt griego sin azúcar",
+          "grams": 150
+        },
+        {
+          "name": "Guayaba",
+          "grams": 80
+        },
+        {
+          "name": "Avena",
+          "grams": 20
+        }
+      ]
+    },
+    {
+      "name": "Tuna de nopal con limón y chile",
+      "slots": [
+        "merienda"
+      ],
+      "protein": "none",
+      "base": "none",
+      "technique": "frío",
+      "transform": false,
+      "constituents": [
+        {
+          "name": "Tuna de nopal",
+          "grams": 150
+        },
+        {
+          "name": "Limón",
+          "grams": 10
+        },
+        {
+          "name": "Chile de árbol",
+          "grams": 2
+        }
+      ]
+    },
+    {
+      "name": "Xoconostle con miel",
+      "slots": [
+        "merienda"
+      ],
+      "protein": "none",
+      "base": "none",
+      "technique": "frío",
+      "transform": false,
+      "constituents": [
+        {
+          "name": "Xoconostle",
+          "grams": 100
+        },
+        {
+          "name": "Miel",
+          "grams": 15
+        }
+      ]
+    },
+    {
+      "name": "Chocolate de mesa caliente",
+      "slots": [
+        "merienda",
+        "desayuno"
+      ],
+      "protein": "none",
+      "base": "none",
+      "technique": "hervido",
+      "transform": false,
+      "constituents": [
+        {
+          "name": "Chocolate de mesa",
+          "grams": 30
+        },
+        {
+          "name": "Leche",
+          "grams": 200
+        }
+      ]
+    },
+    {
+      "name": "Huitlacoche con queso en tortilla",
+      "slots": [
+        "merienda",
+        "cena"
+      ],
+      "protein": "queso",
+      "base": "maiz",
+      "technique": "salteado",
+      "transform": true,
+      "constituents": [
+        {
+          "name": "Huitlacoche",
+          "grams": 80
+        },
+        {
+          "name": "Queso blanco",
+          "grams": 30
+        },
+        {
+          "name": "Tortilla de maíz",
+          "grams": 60
+        },
+        {
+          "name": "Epazote",
+          "grams": 3
+        }
+      ]
+    },
+    {
+      "name": "Chilaquiles rojos con huevo estrellado",
+      "slots": [
+        "desayuno"
+      ],
+      "protein": "huevo",
+      "base": "maiz",
+      "technique": "salteado",
+      "transform": true,
+      "constituents": [
+        {
+          "name": "Tortilla de maíz",
+          "grams": 80.0
+        },
+        {
+          "name": "Huevo",
+          "grams": 50.0
+        },
+        {
+          "name": "Chile guajillo",
+          "grams": 6.0
+        },
+        {
+          "name": "Tomate",
+          "grams": 100.0
+        },
+        {
+          "name": "Cebolla",
+          "grams": 30.0
+        },
+        {
+          "name": "Queso blanco",
+          "grams": 30.0
+        },
+        {
+          "name": "Crema mexicana",
+          "grams": 20.0
+        },
+        {
+          "name": "Aceite vegetal",
+          "grams": 6.0
+        }
+      ]
+    },
+    {
+      "name": "Huevos divorciados con frijoles refritos",
+      "slots": [
+        "desayuno"
+      ],
+      "protein": "huevo",
+      "base": "legumbre",
+      "technique": "frito",
+      "transform": false,
+      "constituents": [
+        {
+          "name": "Huevo",
+          "grams": 100.0
+        },
+        {
+          "name": "Frijoles refritos",
+          "grams": 80.0
+        },
+        {
+          "name": "Tortilla de maíz",
+          "grams": 60.0
+        },
+        {
+          "name": "Salsa de tomate",
+          "grams": 40.0
+        },
+        {
+          "name": "Chile jalapeño",
+          "grams": 5.0
+        }
+      ]
+    },
+    {
+      "name": "Enfrijoladas de queso",
+      "slots": [
+        "desayuno",
+        "cena"
+      ],
+      "protein": "queso",
+      "base": "maiz",
+      "technique": "guisado",
+      "transform": true,
+      "constituents": [
+        {
+          "name": "Tortilla de maíz",
+          "grams": 80.0
+        },
+        {
+          "name": "Habichuelas negras",
+          "grams": 60.0
+        },
+        {
+          "name": "Queso blanco",
+          "grams": 40.0
+        },
+        {
+          "name": "Crema mexicana",
+          "grams": 20.0
+        },
+        {
+          "name": "Cebolla",
+          "grams": 20.0
+        }
+      ]
+    },
+    {
+      "name": "Avena con leche, cacao y plátano",
+      "slots": [
+        "desayuno"
+      ],
+      "protein": "none",
+      "base": "avena",
+      "technique": "hervido",
+      "transform": false,
+      "constituents": [
+        {
+          "name": "Avena",
+          "grams": 50.0
+        },
+        {
+          "name": "Leche",
+          "grams": 200.0
+        },
+        {
+          "name": "Cacao en polvo",
+          "grams": 5.0
+        },
+        {
+          "name": "Guineo",
+          "grams": 80.0
+        }
+      ]
+    },
+    {
+      "name": "Licuado de plátano con avena y canela",
+      "slots": [
+        "desayuno",
+        "merienda"
+      ],
+      "protein": "none",
+      "base": "avena",
+      "technique": "licuado",
+      "transform": false,
+      "constituents": [
+        {
+          "name": "Guineo",
+          "grams": 100.0
+        },
+        {
+          "name": "Leche",
+          "grams": 200.0
+        },
+        {
+          "name": "Avena",
+          "grams": 20.0
+        },
+        {
+          "name": "Canela en polvo",
+          "grams": 1.0
+        }
+      ]
+    },
+    {
+      "name": "Tamales de pollo al vapor",
+      "slots": [
+        "desayuno",
+        "almuerzo"
+      ],
+      "protein": "pollo",
+      "base": "maiz",
+      "technique": "hervido",
+      "transform": true,
+      "constituents": [
+        {
+          "name": "Harina de maíz precocida",
+          "grams": 80.0
+        },
+        {
+          "name": "Pechuga de pollo",
+          "grams": 80.0
+        },
+        {
+          "name": "Chile guajillo",
+          "grams": 5.0
+        },
+        {
+          "name": "Aceite vegetal",
+          "grams": 8.0
+        },
+        {
+          "name": "Cebolla",
+          "grams": 20.0
+        }
+      ]
+    },
+    {
+      "name": "Huevos con chorizo mexicano y tortillas",
+      "slots": [
+        "desayuno"
+      ],
+      "protein": "huevo",
+      "base": "maiz",
+      "technique": "salteado",
+      "transform": false,
+      "constituents": [
+        {
+          "name": "Huevo",
+          "grams": 100.0
+        },
+        {
+          "name": "Chorizo mexicano",
+          "grams": 40.0
+        },
+        {
+          "name": "Tortilla de maíz",
+          "grams": 60.0
+        },
+        {
+          "name": "Cebolla",
+          "grams": 20.0
+        }
+      ]
+    },
+    {
+      "name": "Sincronizadas de jamón de pavo y queso",
+      "slots": [
+        "desayuno",
+        "merienda"
+      ],
+      "protein": "queso",
+      "base": "maiz",
+      "technique": "plancha",
+      "transform": false,
+      "constituents": [
+        {
+          "name": "Tortilla de trigo",
+          "grams": 60.0
+        },
+        {
+          "name": "Jamón de pavo",
+          "grams": 40.0
+        },
+        {
+          "name": "Queso en hebras",
+          "grams": 40.0
+        }
+      ]
+    },
+    {
+      "name": "Fruta con chile, limón y yogur",
+      "slots": [
+        "desayuno",
+        "merienda"
+      ],
+      "protein": "none",
+      "base": "none",
+      "technique": "frío",
+      "transform": false,
+      "constituents": [
+        {
+          "name": "Sandía",
+          "grams": 150.0
+        },
+        {
+          "name": "Mango",
+          "grams": 100.0
+        },
+        {
+          "name": "Limón",
+          "grams": 10.0
+        },
+        {
+          "name": "Chile en polvo",
+          "grams": 1.0
+        },
+        {
+          "name": "Yogurt",
+          "grams": 100.0
+        }
+      ]
+    },
+    {
+      "name": "Caldo de pollo con verduras y arroz",
+      "slots": [
+        "almuerzo"
+      ],
+      "protein": "pollo",
+      "base": "arroz",
+      "technique": "hervido",
+      "transform": false,
+      "constituents": [
+        {
+          "name": "Muslo de pollo",
+          "grams": 150.0
+        },
+        {
+          "name": "Arroz blanco",
+          "grams": 40.0
+        },
+        {
+          "name": "Zanahoria",
+          "grams": 50.0
+        },
+        {
+          "name": "Calabacín",
+          "grams": 60.0
+        },
+        {
+          "name": "Cilantro",
+          "grams": 5.0
+        },
+        {
+          "name": "Cebolla",
+          "grams": 30.0
+        }
+      ]
+    },
+    {
+      "name": "Picadillo de res con papa y zanahoria",
+      "slots": [
+        "almuerzo"
+      ],
+      "protein": "res",
+      "base": "papa",
+      "technique": "guisado",
+      "transform": true,
+      "constituents": [
+        {
+          "name": "Carne de res molida",
+          "grams": 130.0
+        },
+        {
+          "name": "Papa",
+          "grams": 100.0
+        },
+        {
+          "name": "Zanahoria",
+          "grams": 50.0
+        },
+        {
+          "name": "Tomate",
+          "grams": 100.0
+        },
+        {
+          "name": "Cebolla",
+          "grams": 30.0
+        },
+        {
+          "name": "Comino",
+          "grams": 1.0
+        }
+      ]
+    },
+    {
+      "name": "Pollo en salsa de chile serrano y cilantro con arroz",
+      "slots": [
+        "almuerzo"
+      ],
+      "protein": "pollo",
+      "base": "arroz",
+      "technique": "guisado",
+      "transform": true,
+      "constituents": [
+        {
+          "name": "Pechuga de pollo",
+          "grams": 150.0
+        },
+        {
+          "name": "Tomate",
+          "grams": 100.0
+        },
+        {
+          "name": "Chile serrano",
+          "grams": 5.0
+        },
+        {
+          "name": "Cilantro",
+          "grams": 5.0
+        },
+        {
+          "name": "Cebolla",
+          "grams": 30.0
+        },
+        {
+          "name": "Arroz blanco",
+          "grams": 60.0
+        }
+      ]
+    },
+    {
+      "name": "Tacos de bistec con nopales",
+      "slots": [
+        "almuerzo"
+      ],
+      "protein": "res",
+      "base": "maiz",
+      "technique": "plancha",
+      "transform": false,
+      "constituents": [
+        {
+          "name": "Carne de res",
+          "grams": 140.0
+        },
+        {
+          "name": "Tortilla de maíz",
+          "grams": 80.0
+        },
+        {
+          "name": "Nopal",
+          "grams": 60.0
+        },
+        {
+          "name": "Cebolla",
+          "grams": 30.0
+        },
+        {
+          "name": "Cilantro",
+          "grams": 5.0
+        },
+        {
+          "name": "Limón",
+          "grams": 10.0
+        }
+      ]
+    },
+    {
+      "name": "Pescado a la talla con arroz",
+      "slots": [
+        "almuerzo"
+      ],
+      "protein": "pescado",
+      "base": "arroz",
+      "technique": "parrilla",
+      "transform": false,
+      "constituents": [
+        {
+          "name": "Filete de pescado blanco",
+          "grams": 160.0
+        },
+        {
+          "name": "Chile guajillo",
+          "grams": 5.0
+        },
+        {
+          "name": "Ajo",
+          "grams": 5.0
+        },
+        {
+          "name": "Limón",
+          "grams": 15.0
+        },
+        {
+          "name": "Arroz blanco",
+          "grams": 60.0
+        },
+        {
+          "name": "Aceite vegetal",
+          "grams": 6.0
+        }
+      ]
+    },
+    {
+      "name": "Albóndigas al chipotle con arroz",
+      "slots": [
+        "almuerzo"
+      ],
+      "protein": "res",
+      "base": "arroz",
+      "technique": "guisado",
+      "transform": true,
+      "constituents": [
+        {
+          "name": "Carne de res molida",
+          "grams": 130.0
+        },
+        {
+          "name": "Arroz blanco",
+          "grams": 60.0
+        },
+        {
+          "name": "Chile chipotle",
+          "grams": 5.0
+        },
+        {
+          "name": "Tomate",
+          "grams": 120.0
+        },
+        {
+          "name": "Cebolla",
+          "grams": 30.0
+        },
+        {
+          "name": "Huevo",
+          "grams": 25.0
+        }
+      ]
+    },
+    {
+      "name": "Calabacitas con elote, queso y pollo",
+      "slots": [
+        "almuerzo",
+        "cena"
+      ],
+      "protein": "pollo",
+      "base": "maiz",
+      "technique": "salteado",
+      "transform": false,
+      "constituents": [
+        {
+          "name": "Calabacín",
+          "grams": 150.0
+        },
+        {
+          "name": "Maíz dulce en granos",
+          "grams": 60.0
+        },
+        {
+          "name": "Pechuga de pollo",
+          "grams": 120.0
+        },
+        {
+          "name": "Queso blanco",
+          "grams": 30.0
+        },
+        {
+          "name": "Cebolla",
+          "grams": 30.0
+        },
+        {
+          "name": "Tomate",
+          "grams": 60.0
+        }
+      ]
+    },
+    {
+      "name": "Sopa de lentejas con verduras",
+      "slots": [
+        "almuerzo"
+      ],
+      "protein": "legumbre",
+      "base": "legumbre",
+      "technique": "hervido",
+      "transform": false,
+      "constituents": [
+        {
+          "name": "Lentejas",
+          "grams": 70.0
+        },
+        {
+          "name": "Zanahoria",
+          "grams": 50.0
+        },
+        {
+          "name": "Papa",
+          "grams": 80.0
+        },
+        {
+          "name": "Tomate",
+          "grams": 60.0
+        },
+        {
+          "name": "Cebolla",
+          "grams": 30.0
+        },
+        {
+          "name": "Cilantro",
+          "grams": 5.0
+        }
+      ]
+    },
+    {
+      "name": "Arroz a la mexicana con frijoles de la olla y queso",
+      "slots": [
+        "almuerzo"
+      ],
+      "protein": "legumbre",
+      "base": "arroz",
+      "technique": "guisado",
+      "transform": false,
+      "constituents": [
+        {
+          "name": "Arroz blanco",
+          "grams": 60.0
+        },
+        {
+          "name": "Tomate",
+          "grams": 60.0
+        },
+        {
+          "name": "Habichuelas negras",
+          "grams": 60.0
+        },
+        {
+          "name": "Queso blanco",
+          "grams": 30.0
+        },
+        {
+          "name": "Cebolla",
+          "grams": 20.0
+        }
+      ]
+    },
+    {
+      "name": "Tostadas de pollo deshebrado con frijoles",
+      "slots": [
+        "almuerzo",
+        "cena"
+      ],
+      "protein": "pollo",
+      "base": "maiz",
+      "technique": "frío",
+      "transform": true,
+      "constituents": [
+        {
+          "name": "Tortilla de maíz",
+          "grams": 60.0
+        },
+        {
+          "name": "Pechuga de pollo",
+          "grams": 100.0
+        },
+        {
+          "name": "Frijoles refritos",
+          "grams": 60.0
+        },
+        {
+          "name": "Lechuga",
+          "grams": 40.0
+        },
+        {
+          "name": "Crema mexicana",
+          "grams": 15.0
+        },
+        {
+          "name": "Queso blanco",
+          "grams": 20.0
+        },
+        {
+          "name": "Tomate",
+          "grams": 50.0
+        }
+      ]
+    },
+    {
+      "name": "Pozole rojo ligero de cerdo",
+      "slots": [
+        "almuerzo"
+      ],
+      "protein": "cerdo",
+      "base": "maiz",
+      "technique": "sopa espesa",
+      "transform": true,
+      "constituents": [
+        {
+          "name": "Cerdo",
+          "grams": 130.0
+        },
+        {
+          "name": "Maíz dulce en granos",
+          "grams": 80.0
+        },
+        {
+          "name": "Chile guajillo",
+          "grams": 8.0
+        },
+        {
+          "name": "Cebolla",
+          "grams": 30.0
+        },
+        {
+          "name": "Lechuga",
+          "grams": 40.0
+        },
+        {
+          "name": "Rábano",
+          "grams": 30.0
+        },
+        {
+          "name": "Limón",
+          "grams": 10.0
+        }
+      ]
+    },
+    {
+      "name": "Sopa de verduras con pollo y epazote",
+      "slots": [
+        "cena"
+      ],
+      "protein": "pollo",
+      "base": "none",
+      "technique": "hervido",
+      "transform": false,
+      "constituents": [
+        {
+          "name": "Pechuga de pollo",
+          "grams": 150.0
+        },
+        {
+          "name": "Calabacín",
+          "grams": 80.0
+        },
+        {
+          "name": "Zanahoria",
+          "grams": 50.0
+        },
+        {
+          "name": "Chile poblano",
+          "grams": 40.0
+        },
+        {
+          "name": "Epazote",
+          "grams": 3.0
+        },
+        {
+          "name": "Cebolla",
+          "grams": 30.0
+        },
+        {
+          "name": "Papa",
+          "grams": 80.0
+        }
+      ]
+    },
+    {
+      "name": "Pescado al mojo de ajo con verduras",
+      "slots": [
+        "cena"
+      ],
+      "protein": "pescado",
+      "base": "none",
+      "technique": "salteado",
+      "transform": false,
+      "constituents": [
+        {
+          "name": "Filete de pescado blanco",
+          "grams": 160.0
+        },
+        {
+          "name": "Ajo",
+          "grams": 8.0
+        },
+        {
+          "name": "Aceite vegetal",
+          "grams": 8.0
+        },
+        {
+          "name": "Calabacín",
+          "grams": 100.0
+        },
+        {
+          "name": "Limón",
+          "grams": 10.0
+        }
+      ]
+    },
+    {
+      "name": "Omelet de champiñones con queso y salsa",
+      "slots": [
+        "cena",
+        "desayuno"
+      ],
+      "protein": "huevo",
+      "base": "none",
+      "technique": "sartén",
+      "transform": false,
+      "constituents": [
+        {
+          "name": "Huevo",
+          "grams": 100.0
+        },
+        {
+          "name": "Champiñones",
+          "grams": 60.0
+        },
+        {
+          "name": "Queso en hebras",
+          "grams": 30.0
+        },
+        {
+          "name": "Tomate",
+          "grams": 60.0
+        },
+        {
+          "name": "Chile serrano",
+          "grams": 3.0
+        }
+      ]
+    },
+    {
+      "name": "Caldo de camarón con verduras",
+      "slots": [
+        "cena"
+      ],
+      "protein": "camarones",
+      "base": "none",
+      "technique": "hervido",
+      "transform": false,
+      "constituents": [
+        {
+          "name": "Camarones",
+          "grams": 120.0
+        },
+        {
+          "name": "Zanahoria",
+          "grams": 50.0
+        },
+        {
+          "name": "Papa",
+          "grams": 80.0
+        },
+        {
+          "name": "Chile guajillo",
+          "grams": 5.0
+        },
+        {
+          "name": "Cebolla",
+          "grams": 30.0
+        },
+        {
+          "name": "Cilantro",
+          "grams": 5.0
+        }
+      ]
+    },
+    {
+      "name": "Pechuga a la plancha con nopales y frijoles",
+      "slots": [
+        "cena"
+      ],
+      "protein": "pollo",
+      "base": "legumbre",
+      "technique": "plancha",
+      "transform": false,
+      "constituents": [
+        {
+          "name": "Pechuga de pollo",
+          "grams": 150.0
+        },
+        {
+          "name": "Nopal",
+          "grams": 80.0
+        },
+        {
+          "name": "Habichuelas negras",
+          "grams": 50.0
+        },
+        {
+          "name": "Limón",
+          "grams": 10.0
+        },
+        {
+          "name": "Aceite vegetal",
+          "grams": 5.0
+        }
+      ]
+    },
+    {
+      "name": "Tortitas de atún con ensalada",
+      "slots": [
+        "cena"
+      ],
+      "protein": "atun",
+      "base": "none",
+      "technique": "sartén",
+      "transform": true,
+      "constituents": [
+        {
+          "name": "Atún en agua",
+          "grams": 100.0
+        },
+        {
+          "name": "Huevo",
+          "grams": 50.0
+        },
+        {
+          "name": "Pan rallado",
+          "grams": 20.0
+        },
+        {
+          "name": "Cebolla",
+          "grams": 20.0
+        },
+        {
+          "name": "Lechuga",
+          "grams": 60.0
+        },
+        {
+          "name": "Tomate",
+          "grams": 60.0
+        }
+      ]
+    },
+    {
+      "name": "Ensalada de pollo con aguacate y elote",
+      "slots": [
+        "cena",
+        "almuerzo"
+      ],
+      "protein": "pollo",
+      "base": "none",
+      "technique": "frío",
+      "transform": false,
+      "constituents": [
+        {
+          "name": "Pechuga de pollo",
+          "grams": 120.0
+        },
+        {
+          "name": "Aguacate",
+          "grams": 60.0
+        },
+        {
+          "name": "Maíz dulce en granos",
+          "grams": 50.0
+        },
+        {
+          "name": "Lechuga romana",
+          "grams": 80.0
+        },
+        {
+          "name": "Tomate",
+          "grams": 60.0
+        },
+        {
+          "name": "Limón",
+          "grams": 10.0
+        }
+      ]
+    },
+    {
+      "name": "Crema de chile poblano con elote",
+      "slots": [
+        "cena"
+      ],
+      "protein": "none",
+      "base": "maiz",
+      "technique": "crema",
+      "transform": true,
+      "constituents": [
+        {
+          "name": "Chile poblano",
+          "grams": 100.0
+        },
+        {
+          "name": "Maíz dulce en granos",
+          "grams": 80.0
+        },
+        {
+          "name": "Leche",
+          "grams": 150.0
+        },
+        {
+          "name": "Cebolla",
+          "grams": 30.0
+        },
+        {
+          "name": "Papa",
+          "grams": 60.0
+        }
+      ]
+    },
+    {
+      "name": "Tacos de pavo molido con lechuga",
+      "slots": [
+        "cena"
+      ],
+      "protein": "pavo",
+      "base": "maiz",
+      "technique": "salteado",
+      "transform": false,
+      "constituents": [
+        {
+          "name": "Pavo molido",
+          "grams": 130.0
+        },
+        {
+          "name": "Tortilla de maíz",
+          "grams": 80.0
+        },
+        {
+          "name": "Lechuga",
+          "grams": 40.0
+        },
+        {
+          "name": "Tomate",
+          "grams": 50.0
+        },
+        {
+          "name": "Cebolla",
+          "grams": 20.0
+        },
+        {
+          "name": "Sazonador para tacos",
+          "grams": 3.0
+        }
+      ]
+    },
+    {
+      "name": "Tortitas de papa con queso",
+      "slots": [
+        "cena",
+        "merienda"
+      ],
+      "protein": "queso",
+      "base": "papa",
+      "technique": "frito",
+      "transform": true,
+      "constituents": [
+        {
+          "name": "Papa",
+          "grams": 200.0
+        },
+        {
+          "name": "Queso blanco",
+          "grams": 40.0
+        },
+        {
+          "name": "Huevo",
+          "grams": 25.0
+        },
+        {
+          "name": "Harina de trigo",
+          "grams": 15.0
+        },
+        {
+          "name": "Aceite vegetal",
+          "grams": 8.0
+        }
+      ]
+    },
+    {
+      "name": "Mango con chile y limón",
+      "slots": [
+        "merienda"
+      ],
+      "protein": "none",
+      "base": "none",
+      "technique": "frío",
+      "transform": false,
+      "constituents": [
+        {
+          "name": "Mango",
+          "grams": 150.0
+        },
+        {
+          "name": "Chile en polvo",
+          "grams": 1.0
+        },
+        {
+          "name": "Limón",
+          "grams": 10.0
+        }
+      ]
+    },
+    {
+      "name": "Batido de fresa con leche",
+      "slots": [
+        "merienda"
+      ],
+      "protein": "none",
+      "base": "none",
+      "technique": "licuado",
+      "transform": false,
+      "constituents": [
+        {
+          "name": "Fresas",
+          "grams": 120.0
+        },
+        {
+          "name": "Leche",
+          "grams": 200.0
+        },
+        {
+          "name": "Miel",
+          "grams": 5.0
+        }
+      ]
+    },
+    {
+      "name": "Cacahuates con limón y chile",
+      "slots": [
+        "merienda"
+      ],
+      "protein": "none",
+      "base": "none",
+      "technique": "frío",
+      "transform": false,
+      "constituents": [
+        {
+          "name": "Maní",
+          "grams": 30.0
+        },
+        {
+          "name": "Limón",
+          "grams": 5.0
+        },
+        {
+          "name": "Chile en polvo",
+          "grams": 1.0
+        }
+      ]
+    },
+    {
+      "name": "Tostada de frijoles con aguacate",
+      "slots": [
+        "merienda"
+      ],
+      "protein": "legumbre",
+      "base": "maiz",
+      "technique": "frío",
+      "transform": false,
+      "constituents": [
+        {
+          "name": "Tortilla de maíz",
+          "grams": 40.0
+        },
+        {
+          "name": "Frijoles refritos",
+          "grams": 50.0
+        },
+        {
+          "name": "Aguacate",
+          "grams": 40.0
+        },
+        {
+          "name": "Queso blanco",
+          "grams": 15.0
+        }
+      ]
+    },
+    {
+      "name": "Arroz rojo con atún a la mexicana",
+      "slots": [
+        "almuerzo"
+      ],
+      "protein": "atun",
+      "base": "arroz",
+      "technique": "guisado",
+      "transform": true,
+      "constituents": [
+        {
+          "name": "Arroz blanco",
+          "grams": 60.0
+        },
+        {
+          "name": "Atún en agua",
+          "grams": 90.0
+        },
+        {
+          "name": "Salsa de tomate",
+          "grams": 60.0
+        },
+        {
+          "name": "Cebolla",
+          "grams": 30.0
+        },
+        {
+          "name": "Chile chipotle",
+          "grams": 3.0
+        },
+        {
+          "name": "Aceite vegetal",
+          "grams": 6.0
+        }
+      ]
+    },
+    {
+      "name": "Frijoles de la olla con huevo y tortillas",
+      "slots": [
+        "desayuno",
+        "cena"
+      ],
+      "protein": "huevo",
+      "base": "legumbre",
+      "technique": "guisado",
+      "transform": false,
+      "constituents": [
+        {
+          "name": "Habichuelas negras",
+          "grams": 60.0
+        },
+        {
+          "name": "Huevo",
+          "grams": 100.0
+        },
+        {
+          "name": "Tortilla de maíz",
+          "grams": 60.0
+        },
+        {
+          "name": "Cebolla",
+          "grams": 20.0
+        },
+        {
+          "name": "Comino",
+          "grams": 1.0
+        }
+      ]
+    },
+    {
+      "name": "Enfrijoladas de huevo",
+      "slots": [
+        "cena"
+      ],
+      "protein": "huevo",
+      "base": "maiz",
+      "technique": "guisado",
+      "transform": true,
+      "constituents": [
+        {
+          "name": "Tortilla de maíz",
+          "grams": 80.0
+        },
+        {
+          "name": "Habichuelas negras",
+          "grams": 60.0
+        },
+        {
+          "name": "Huevo",
+          "grams": 100.0
+        },
+        {
+          "name": "Cebolla",
+          "grams": 20.0
+        }
+      ]
+    },
+    {
+      "name": "Atún a la veracruzana con arroz",
+      "slots": [
+        "almuerzo"
+      ],
+      "protein": "atun",
+      "base": "arroz",
+      "technique": "guisado",
+      "transform": true,
+      "constituents": [
+        {
+          "name": "Atún en agua",
+          "grams": 100.0
+        },
+        {
+          "name": "Salsa de tomate",
+          "grams": 80.0
+        },
+        {
+          "name": "Aceitunas",
+          "grams": 15.0
+        },
+        {
+          "name": "Cebolla",
+          "grams": 30.0
+        },
+        {
+          "name": "Chile chipotle",
+          "grams": 3.0
+        },
+        {
+          "name": "Arroz blanco",
+          "grams": 60.0
+        }
+      ]
+    },
+    {
+      "name": "Lentejas guisadas con papa y comino",
+      "slots": [
+        "almuerzo"
+      ],
+      "protein": "legumbre",
+      "base": "legumbre",
+      "technique": "guisado",
+      "transform": true,
+      "constituents": [
+        {
+          "name": "Lentejas",
+          "grams": 70.0
+        },
+        {
+          "name": "Papa",
+          "grams": 80.0
+        },
+        {
+          "name": "Zanahoria",
+          "grams": 40.0
+        },
+        {
+          "name": "Cebolla",
+          "grams": 30.0
+        },
+        {
+          "name": "Comino",
+          "grams": 1.0
+        },
+        {
+          "name": "Chile guajillo",
+          "grams": 3.0
+        }
+      ]
+    },
+    {
+      "name": "Huevos en salsa de chile guajillo con frijoles",
+      "slots": [
+        "desayuno"
+      ],
+      "protein": "huevo",
+      "base": "legumbre",
+      "technique": "guisado",
+      "transform": false,
+      "constituents": [
+        {
+          "name": "Huevo",
+          "grams": 100.0
+        },
+        {
+          "name": "Chile guajillo",
+          "grams": 6.0
+        },
+        {
+          "name": "Salsa de tomate",
+          "grams": 50.0
+        },
+        {
+          "name": "Habichuelas negras",
+          "grams": 50.0
+        },
+        {
+          "name": "Tortilla de maíz",
+          "grams": 40.0
+        }
+      ]
+    },
+    {
+      "name": "Sardinas a la mexicana con tortillas",
+      "slots": [
+        "cena"
+      ],
+      "protein": "pescado",
+      "base": "maiz",
+      "technique": "salteado",
+      "transform": false,
+      "constituents": [
+        {
+          "name": "Sardinas en lata",
+          "grams": 90.0
+        },
+        {
+          "name": "Salsa de tomate",
+          "grams": 60.0
+        },
+        {
+          "name": "Cebolla",
+          "grams": 30.0
+        },
+        {
+          "name": "Chile de árbol",
+          "grams": 1.0
+        },
+        {
+          "name": "Tortilla de maíz",
+          "grams": 60.0
+        }
+      ]
+    },
+    {
+      "name": "Sopa de fideo con garbanzo",
+      "slots": [
+        "cena"
+      ],
+      "protein": "legumbre",
+      "base": "none",
+      "technique": "hervido",
+      "transform": false,
+      "constituents": [
+        {
+          "name": "Fideos",
+          "grams": 40.0
+        },
+        {
+          "name": "Garbanzos",
+          "grams": 50.0
+        },
+        {
+          "name": "Salsa de tomate",
+          "grams": 40.0
+        },
+        {
+          "name": "Cebolla",
+          "grams": 20.0
+        },
+        {
+          "name": "Zanahoria",
+          "grams": 40.0
+        },
+        {
+          "name": "Papa",
+          "grams": 60.0
+        }
+      ]
+    },
+    {
+      "name": "Papas guisadas con queso y chipotle",
+      "slots": [
+        "cena"
+      ],
+      "protein": "queso",
+      "base": "papa",
+      "technique": "guisado",
+      "transform": true,
+      "constituents": [
+        {
+          "name": "Papa",
+          "grams": 200.0
+        },
+        {
+          "name": "Queso en hebras",
+          "grams": 40.0
+        },
+        {
+          "name": "Chile chipotle",
+          "grams": 4.0
+        },
+        {
+          "name": "Salsa de tomate",
+          "grams": 40.0
+        },
+        {
+          "name": "Cebolla",
+          "grams": 30.0
+        }
+      ]
+    },
+    {
+      "name": "Arroz con huevo y frijoles refritos",
+      "slots": [
+        "almuerzo"
+      ],
+      "protein": "huevo",
+      "base": "arroz",
+      "technique": "salteado",
+      "transform": false,
+      "constituents": [
+        {
+          "name": "Arroz blanco",
+          "grams": 60.0
+        },
+        {
+          "name": "Huevo",
+          "grams": 100.0
+        },
+        {
+          "name": "Frijoles refritos",
+          "grams": 60.0
+        },
+        {
+          "name": "Cebolla",
+          "grams": 20.0
+        },
+        {
+          "name": "Aceite vegetal",
+          "grams": 5.0
+        }
+      ]
+    },
+    {
+      "name": "Bacalao a la vizcaína con papa",
+      "slots": [
+        "almuerzo"
+      ],
+      "protein": "pescado",
+      "base": "papa",
+      "technique": "guisado",
+      "transform": true,
+      "constituents": [
+        {
+          "name": "Bacalao",
+          "grams": 120.0
+        },
+        {
+          "name": "Papa",
+          "grams": 120.0
+        },
+        {
+          "name": "Salsa de tomate",
+          "grams": 80.0
+        },
+        {
+          "name": "Aceitunas",
+          "grams": 15.0
+        },
+        {
+          "name": "Cebolla",
+          "grams": 40.0
+        },
+        {
+          "name": "Ajo",
+          "grams": 5.0
+        },
+        {
+          "name": "Aceite de oliva",
+          "grams": 8.0
+        }
+      ]
+    },
+    {
+      "name": "Avena con leche evaporada y cacao",
+      "slots": [
+        "desayuno"
+      ],
+      "protein": "none",
+      "base": "avena",
+      "technique": "hervido",
+      "transform": false,
+      "constituents": [
+        {
+          "name": "Avena",
+          "grams": 50.0
+        },
+        {
+          "name": "Leche evaporada",
+          "grams": 80.0
+        },
+        {
+          "name": "Cacao en polvo",
+          "grams": 5.0
+        },
+        {
+          "name": "Azúcar morena",
+          "grams": 5.0
+        }
+      ]
+    },
+    {
+      "name": "Quesadillas de harina con frijoles y queso",
+      "slots": [
+        "merienda",
+        "desayuno"
+      ],
+      "protein": "queso",
+      "base": "maiz",
+      "technique": "plancha",
+      "transform": false,
+      "constituents": [
+        {
+          "name": "Tortilla de trigo",
+          "grams": 60.0
+        },
+        {
+          "name": "Queso en hebras",
+          "grams": 40.0
+        },
+        {
+          "name": "Frijoles refritos",
+          "grams": 40.0
+        }
+      ]
+    }
   ]
 }

@@ -49,7 +49,7 @@ MAX_ANCHORS = 8
 # [P1-ARQ25-F4-FORM · 2026-09-03] Lo que el formulario progresivo (Fase 4) escribe además del
 # V1. Su presencia marca `source.form_version = "v2"`; su ausencia cae a los defaults V1, así que
 # un cliente viejo sigue produciendo la misma política que ayer.
-FORM_V2_FIELDS = ("mealOrganization", "freezerMode", "freshTopup", "batchCooking", "stapleAnchors")
+FORM_V2_FIELDS = ("mealOrganization", "freezerMode", "freshTopup", "batchCooking", "stapleAnchors", "cultureProfiles")  # [P1-ARQ25-F7-CULTURE] cultureProfiles
 PREPARATION_MODES = ("vary_preparation", "same_preparation")
 
 _SLOT_ALIASES = {
@@ -60,6 +60,14 @@ _SLOT_ALIASES = {
 }
 _NONE_SENTINELS = {"", "ninguna", "ninguno", "none", "no", "n/a", "na", "nada", "sin"}
 _CYCLE_DAYS_FALLBACK = {"weekly": 7, "biweekly": 15, "monthly": 30}
+def _culture_weights_for(form: dict, cc: str) -> list:
+    try:
+        from cultural_profiles import culture_weights_for_form
+        return culture_weights_for_form({**(form or {}), "country": cc})
+    except Exception:
+        return [{"profile_id": _PROFILE_BY_COUNTRY.get(cc, "dominican_criolla"), "weight": 1.0}]
+
+
 _PROFILE_BY_COUNTRY = {
     "DO": "dominican_criolla", "US": "us_everyday", "ES": "spain_mediterranea",
     "MX": "mexico_casera", "PR": "puertorico_criolla", "CO": "colombia_casera",
@@ -340,7 +348,9 @@ def policy_from_form(form_data: dict, *, country: Optional[str] = None) -> dict:
         "clinical": {"conditions": conditions},
         "budget": {"tier": tier, "amount": amount, "currency": currency, "period_days": cycle, "mode": "hard"},
         "household_size": household,
-        "culture_weights": [{"profile_id": _PROFILE_BY_COUNTRY.get(cc, "dominican_criolla"), "weight": 1.0}],
+        # [P1-ARQ25-F7-CULTURE · 2026-09-05] cultura ≠ mercado (I16): elección explícita del usuario (principal +
+        # hasta 2 secundarias) o, sin elección, la cocina del país de compra — SUGERIDA, no inferida como identidad.
+        "culture_weights": _culture_weights_for(form, cc),
         "source": {
             "form_version": "v2" if any(form.get(k) not in (None, "", [], {}) for k in FORM_V2_FIELDS) else "v1",
             "adapter": COMPILER_VERSION,
@@ -501,11 +511,13 @@ def compile_policy(requested: dict, *, context: Optional[dict] = None) -> tuple[
         budget["status"] = "ok" if budget.get("mode") == "hard" else "advisory"
     eff["budget"] = budget
     shopping = dict(eff.get("shopping") or {})
+    # [P1-ARQ25-F7-CULTURE · subfase G] Sin congelador ni reposición en un ciclo > 7 días ya NO se acorta el ciclo:
+    # el usuario pidió UNA compra y el motor la respeta con proteínas de despensa (huevo, enlatados, legumbres, queso
+    # curado) desde el día 8 — el registry filtra por durabilidad y el validador lo vigila. Se declara, no se cambia.
     if (int(shopping.get("main_cycle_days") or 7) > 7 and shopping.get("freezer_mode") == "none"
             and not shopping.get("fresh_topup_days")):
-        _relax(rels, field="shopping.main_cycle_days", requested=shopping.get("main_cycle_days"), applied=7,
-               reason="cycle_shortened_no_freezer_no_topup", rank=4)
-        shopping["main_cycle_days"] = 7
+        _relax(rels, field="shopping.freezer_mode", requested="none", applied="none",
+               reason="pantry_proteins_after_first_week", rank=4, action="applied", evidence={"fresh_days": 7})
     eff["shopping"] = shopping
     # 5. anclas y recurrencia
     for a in anchors:
@@ -563,6 +575,7 @@ _REASON_COPY = {
     "budget_advisory_no_prices": "En tu país aún no hay precios: el presupuesto es orientativo, no un límite.",
     "budget_below_floor": "Tu presupuesto ({amount_dop}) está por debajo del mínimo para un plan que cumpla tus metas ({floor_dop}). Súbelo o ajusta las metas.",
     "cycle_shortened_no_freezer_no_topup": "Sin congelador ni reposición de frescos, el ciclo de compra pasa a 7 días.",
+    "pantry_proteins_after_first_week": "Sin congelador ni reposición de frescos: la proteína fresca es para la primera semana; después huevos, enlatados, legumbres y queso curado.",
     "recurrence_clamped": "La frecuencia pedida se ajustó al rango posible (0–7 por semana).",
     "anchors_capped": "Solo los primeros {applied} básicos se usan como anclas.",
 }

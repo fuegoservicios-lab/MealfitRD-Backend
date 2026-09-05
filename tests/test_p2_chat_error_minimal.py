@@ -21,5 +21,6 @@ def test_error_bubble_is_minimal_and_turn_marks_inflight():
 
 
 def test_marker_present():
-    app = (Path(__file__).resolve().parents[1] / "app.py").read_text(encoding="utf-8")
-    assert "P2-CHAT-ERROR-MINIMAL · 2026-09-04" in app
+    # `_LAST_KNOWN_PFIX` avanza con cada cierre: el ancla es el comentario del P-fix en el componente que lo implementa
+    mb = (_FRONT / "components" / "agent" / "MessageBubble.jsx").read_text(encoding="utf-8")
+    assert "P2-CHAT-ERROR-MINIMAL · 2026-09-04" in mb

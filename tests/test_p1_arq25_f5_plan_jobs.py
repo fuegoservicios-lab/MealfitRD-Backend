@@ -96,7 +96,8 @@ def test_h_finish_convierte_failed_en_dead_al_agotar_intentos(monkeypatch):
     seen = {}
 
     def fake_write(sql, params=None, returning=False, **kw):
-        seen["params"] = params
+        if "UPDATE plan_jobs" in sql:  # el dead letter también inserta la alerta (P2-PLAN-JOBS-DEAD-ALERT)
+            seen["params"] = params
         return [{"id": "x"}]
 
     import db
@@ -202,3 +203,27 @@ def test_p_doc_y_claude_md():
     assert (_BACKEND / "docs" / "plan_jobs_f5.md").exists()
     claude = (_BACKEND / "CLAUDE.md").read_text(encoding="utf-8")
     assert "P1-ARQ25-F5-PLAN-JOBS" in claude and "MEALFIT_PLAN_JOBS_ENABLED" in claude
+
+
+def test_q_un_job_muerto_deja_alerta_en_system_alerts(monkeypatch):
+    # [P2-PLAN-JOBS-DEAD-ALERT · 2026-09-05] dead letter ⇒ upsert `plan_jobs_dead:<job_type>` (modelo Manual)
+    writes = []
+
+    def fake_write(sql, params=None, returning=False, **kw):
+        writes.append((sql, params))
+        return [{"id": "x"}]
+
+    import db
+    monkeypatch.setattr(db, "execute_sql_write", fake_write)
+    monkeypatch.setenv("MEALFIT_PLAN_JOBS_MAX_ATTEMPTS", "2")
+    job = {"id": "x", "claimed_by": "w1", "attempts": 2, "job_type": "shopping_projection", "plan_id": _PLAN, "user_id": _USER}
+    assert pj.finish_plan_job(job, "failed", error_code="empty_projection") is True
+    alerts = [w for w in writes if "INSERT INTO system_alerts" in w[0]]
+    assert len(alerts) == 1
+    sql, params = alerts[0]
+    assert params[0] == "plan_jobs_dead:shopping_projection" and params[1] == "plan_jobs_dead"
+    assert "ON CONFLICT (alert_key) DO UPDATE" in sql and "resolved_at = NULL" in sql
+    # un failed con intentos de sobra NO alerta
+    writes.clear()
+    pj.finish_plan_job(dict(job, attempts=1), "failed", error_code="x")
+    assert not [w for w in writes if "system_alerts" in w[0]]

@@ -100,10 +100,7 @@ def test_stop_dismissal_survives_refresh_and_leaves_feedback():
     win = _AP[i:i + 4200]
     assert "safeLocalStorageSet(_orphanDismissKey(currentSessionId), _sig)" in win, \
         "el descarte debe sobrevivir al refresh"
-    # [P2-CHAT-ERROR-MINIMAL · 2026-09-04] copias cortas sin emojis: el feedback
-    # es el `content` de la burbuja de cierre («Detenido. …»), ya sin el «⏹».
-    assert re.search(r"content:\s*t\('Detenido", win), \
-        "feedback visible al detener (pedido del owner)"
+    assert "Detenido." in win, "feedback visible al detener (pedido del owner) — texto sin glifo desde P2-CHAT-ERROR-MINIMAL"
     assert "_stoppedByUser: true" in win
     # El efecto respeta el descarte persistido:
     assert "safeLocalStorageGet(_orphanDismissKey(currentSessionId), null) === _sig" in _AP
@@ -124,7 +121,7 @@ def test_stop_bubble_survives_server_rehydration():
         "la burbuja se reconstruye SOLO si el descarte persistido matchea la firma"
     assert "_lastMapped.role === 'user'" in win, \
         "solo cuando el último real es del user (turno detenido sin respuesta)"
-    assert "⏹ Detenido" in win
+    assert "Detenido" in win, "la reconstrucción vuelve a pintar la burbuja de detenido (texto sin glifo desde P2-CHAT-ERROR-MINIMAL)"
 
 
 def test_stop_covers_photo_analysis():

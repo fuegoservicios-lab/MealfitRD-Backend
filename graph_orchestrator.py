@@ -1709,6 +1709,7 @@ from constants import (
     # lanzado NameError en runtime. Los tests unitarios no lo vieron porque no ejercitan esa
     # rama — lo cazó una comprobación explícita del ámbito, no la suite.
     country_for_form_data,
+    cultural_country_for_form_data,  # [P1-ARQ25-F7-CULTURE] puerta CULTURAL (I16)
     normalize_ingredient_for_tracking, strip_accents,
     ALL_TECHNIQUES, TECH_TO_FAMILY, PLAN_CHUNK_SIZE, validate_ingredients_against_pantry, safe_fromisoformat,
     # P1-11: vocabularios canónicos centralizados (técnicas + stopwords).
@@ -5253,7 +5254,7 @@ def _day_system_instruction_for_diet(form_data) -> str:
     from constants import canonicalize_diet_type as _cdt, country_for_form_data
     from prompts.day_generator import build_day_generator_system_prompt as _bdgsp
     canon = _cdt((form_data or {}).get("dietType") or (form_data or {}).get("diet"))
-    country = country_for_form_data(form_data)
+    country = cultural_country_for_form_data(form_data)
     if canon not in ("vegan", "vegetarian") and country == "DO":
         return _DAY_SYSTEM_INSTRUCTION_CACHED
     cache_key = (canon, country)
@@ -8527,6 +8528,15 @@ def _apply_protein_pool_scrub(
 # ============================================================
 # NODO 2: GENERADORES PARALELOS (Fase Reduce — 3 días simultáneos)
 # ============================================================
+def _culture_weights_for_form_data(form_data):
+    """[P1-ARQ25-F7-CULTURE] Pesos de cocina del formulario (fail-open: None ⇒ encabezado legado)."""
+    try:
+        from cultural_profiles import cultural_profiles_enabled, culture_weights_for_form
+        return culture_weights_for_form(form_data) if cultural_profiles_enabled() else None
+    except Exception:
+        return None
+
+
 @_node_label("day_generator")
 async def generate_days_parallel_node(state: PlanState) -> dict:
     """Genera los 7 días completos en PARALELO usando el esqueleto del planificador."""
@@ -8667,7 +8677,10 @@ async def generate_days_parallel_node(state: PlanState) -> dict:
             small_universe=_small_universe_active(form_data),
             # [P1-DIET-BLIND-DIRECTIVES · 2026-08-08] bloque de diversidad de proteína por dieta.
             diet_type=(form_data or {}).get("dietType"),
-            country=country_for_form_data(form_data),
+            # [P1-ARQ25-F7-CULTURE] la cocina asignada a ESTE día (reparto determinista de la mezcla) y los
+            # pesos para el encabezado de inspiración; el mercado (precios/catálogo) NO pasa por aquí.
+            country=cultural_country_for_form_data(form_data, day_index=max(0, int(global_day) - 1)),
+            culture_weights=_culture_weights_for_form_data(form_data),
         )
 
         random_seed = random.randint(10000, 99999)
@@ -8721,7 +8734,7 @@ async def generate_days_parallel_node(state: PlanState) -> dict:
             # puerta (T1) — knob apagado ⇒ 'DO' siempre ⇒ camino actual exacto.
             from prompts.day_generator import build_day_generator_system_prompt as _bdgsp_nc
             from constants import country_for_form_data
-            _nc_country = country_for_form_data(form_data)
+            _nc_country = cultural_country_for_form_data(form_data)
             prompt_text = dynamic_day_prompt + _bdgsp_nc((form_data or {}).get("dietType"), _nc_country)
 
         # [P1-FLASH-FIRST · 2026-06-28] CADENA de modelos por costo (solo GLM): glm-5.3-flash → glm-5.3
@@ -10782,7 +10795,7 @@ def _detect_slot_appropriateness(days: list, form_data: dict = None) -> list:
     from constants import slot_positive_hint as _sph
     from constants import country_for_form_data, slot_rules_for_country
     from constants import _SLOT_POSITIVE_HINT_NEUTRAL as _dsa_hint_neutral
-    _country = country_for_form_data(form_data)
+    _country = cultural_country_for_form_data(form_data)
     _rules_table = slot_rules_for_country(_country)
     _diet_for_hint = (form_data or {}).get("dietType") if isinstance(form_data, dict) else None
     issues: list = []
@@ -10973,7 +10986,7 @@ async def self_critique_node(state: PlanState) -> dict:
     # cultural_score re-anclado a `name_es` (memoizada en _CRITIQUE_COUNTRY_ARTIFACT_CACHE).
     from constants import country_for_form_data
     form_data = state.get("form_data") or {}
-    _critique_country = country_for_form_data(form_data)
+    _critique_country = cultural_country_for_form_data(form_data)
     # [P1-ARQ25-F3-HORIZON · 2026-09-02] El evaluador lee la política del run: con recurrencia
     # RUTINA no debe bajar `diversity_score` por repeticiones que el usuario pidió. Vacío
     # (prompt byte-idéntico) salvo en `enforce`.
@@ -25591,7 +25604,7 @@ def _apply_deterministic_clinical_layer(plan: dict, form_data: dict, nutrition: 
         # [P1-COUNTRY-SYSTEM-F1 · 2026-08-16 (T4)] país vía la ÚNICA puerta (T1) — knob apagado ⇒
         # 'DO' siempre ⇒ los dos autofixes de abajo corren exactamente como antes.
         from constants import country_for_form_data
-        _dcl_country = country_for_form_data(form_data)
+        _dcl_country = cultural_country_for_form_data(form_data)
         _nr_layer = _night_rice_autofix(plan.get("days") or [], _db, country=_dcl_country)
         if _nr_layer:
             logger.warning(f"🌙 [P0-FALLBACK-CENA-ARROZ] capa clínica reescribió arroz nocturno en "
@@ -38467,7 +38480,7 @@ async def assemble_plan_node(state: PlanState) -> dict:
             # [P1-COUNTRY-SYSTEM-F1 · 2026-08-16 (T4)] país vía la ÚNICA puerta (T1) — knob apagado
             # ⇒ 'DO' siempre ⇒ los dos autofixes de abajo corren exactamente como antes.
             from constants import country_for_form_data
-            _apn_country = country_for_form_data(form_data)
+            _apn_country = cultural_country_for_form_data(form_data)
             _nr_fixed = _night_rice_autofix(days, country=_apn_country)
             if _nr_fixed:
                 logger.info(f"🕒 [P1-NIGHT-RICE-AUTOFIX] {_nr_fixed} cena(s) con 'arroz de noche' reescrita(s) "
@@ -40507,7 +40520,7 @@ async def surgical_marker_regen_node(state: PlanState) -> dict:
     # siempre ⇒ los dos consumidores de abajo (texto del regen + build_day_assignment_context)
     # toman el camino DO byte-idéntico.
     from constants import country_for_form_data
-    _surgical_country = country_for_form_data(form_data)
+    _surgical_country = cultural_country_for_form_data(form_data)
 
     async def _re_correct_one(day_num: int):
         target_day = next((d for d in days if d.get("day") == day_num), None)
@@ -41750,7 +41763,7 @@ async def review_plan_node(state: PlanState) -> dict:
     # los gates: el de huevo precedía la derivación histórica dentro del gate
     # de horario. Una sola lectura SSOT gobierna los cuatro feedbacks y slots.
     from constants import country_for_form_data
-    _rpn_country = country_for_form_data(form_data)
+    _rpn_country = cultural_country_for_form_data(form_data)
     taste_profile = state.get("taste_profile", "")
     attempt = state.get("attempt", 1)
     
@@ -43094,7 +43107,7 @@ Responde ÚNICAMENTE con el JSON de revisión.
     if CULINARY_JUDGE_GUARD != "off":
         # [P1-COUNTRY-SYSTEM-F1 · 2026-08-16] (T3) país del usuario para el juez culinario.
         from constants import country_for_form_data
-        _cj_country = country_for_form_data(form_data)
+        _cj_country = cultural_country_for_form_data(form_data)
         _cj = await run_culinary_judge(plan, _cj_country)
         _cj_viol = [v.model_dump() for v in (_cj.violations if _cj else [])]
         _cj_hist = plan.setdefault("_culinary_judge_history", [])

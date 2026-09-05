@@ -425,19 +425,10 @@ jsonb decía algo; un panel que agrupe por las columnas numéricas veía ceros. 
 acumula su reloj, las invocaciones por encima de los lotes iniciales (= reintentos) y los
 tokens que el provider declara en cada respuesta (`_tokens_de`).
 
-### Con GLM y con la cola `plan_jobs` (2026-09-04)
+## Cambios del 2026-09-04
 
-**El turno de usuario que GLM exige.** [P1-I18N-GLM-USER-TURN] GLM (Z.ai) rechaza un `messages`
-con SOLO un system message (HTTP 400, code 1214 «The messages parameter is illegal»). Gemini y
-Luna lo aceptaban, así que la migración a GLM dejó esta capa muerta dos días en silencio
-(fail-open + LLM mockeado en los tests): el primer usuario francés real recibió su plan en
-español. `_build_messages` añade un turno de usuario fijo (`_USER_TURN`) que refuerza el
-FORMATO; el idioma lo sigue dictando la directiva del system prompt, no ese turno.
-
-**La traducción como job del outbox.** [P1-ARQ25-F5-PLAN-JOBS] Con la cola viva
-(`MEALFIT_PLAN_JOBS_ENABLED`), el disparador no abre el hilo legacy: encola un job
-`display_i18n` en `plan_jobs` vía `maybe_enqueue_display_i18n` (dedup por plan + revisión +
-locale, reintentos con backoff, `stale` si `meal_plans.revision` cambió antes de escribir) y el
-worker invoca este mismo motor. Los guests y el knob apagado siguen por el hilo legacy. El
-protocolo del worker (claim `SKIP LOCKED`, `attempts` como fencing, dead letter, reclaim) vive en
-`docs/plan_jobs_f5.md`; aquí solo cambia QUIÉN llama al motor, no lo que el motor escribe.
+- **`P1-I18N-GLM-USER-TURN`** — GLM (Z.ai) rechaza un `messages` con SOLO un system message (400/1214): la capa `_display` llevaba dos
+  días muerta en silencio desde la migración de proveedor y el primer usuario francés recibió su plan en español. `_build_messages`
+  manda system + un turno de usuario; un test blanket impide que vuelva la forma de un solo mensaje.
+- **`P1-ARQ25-F5-PLAN-JOBS`** — con la cola viva, el enriquecimiento `_display` ya no corre inline: es un job `display_i18n` del outbox
+  `plan_jobs` (Fase 5 del roadmap 2.5), con reintentos, dead letter y `stale` por revisión. Doc: `backend/docs/plan_jobs_f5.md`.

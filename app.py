@@ -68,7 +68,13 @@ _PROCESS_START_ISO = datetime.now(timezone.utc).isoformat()
 #   P2-SHOPPING-COPY-QUIET · 2026-09-04 — el «costo del ciclo» del PDF solo con sustancia (>2 ítems, >15 %) y en una línea; el toast de coherencia dice qué pasa, no cuántas veces se detectó.
 #   P1-AJO-SINGLE-ROW · 2026-09-04 — el ajo en UNA fila (gramos + dientes + cabezas → paquete de 4) con la demanda en gramos como base: el guard dejaba de ver 92 g de los 98.
 #   P1-ARQ25-F5-SHOPPING-PROJECTION · 2026-09-04 — Fase 5 rebanada 2: consumidor shopping_projection (listas 7/15/30 por revisión en payload.result) + GET /{plan_id}/projections (estado none/pending/ready/failed/stale).
-_LAST_KNOWN_PFIX = "P1-ARQ25-F5-SHOPPING-PROJECTION · 2026-09-04"
+#   P1-ARQ25-F5-UI-STATES · 2026-09-05 — Fase 5: estados none/pending/ready/failed/stale de la proyección de compras en el Dashboard (una línea discreta, sondeo solo en pending).
+#   P1-ARQ25-F5-REPROJECTION · 2026-09-05 — la proyección de compras se re-encola en el commit de recálculo/swap/regen-día/relleno de bloques, con huella de la lista (sin cambio, sin job).
+#   P1-SINGLE-TRIP-POLICY · 2026-09-05 — «No, solo la compra grande» llega a las recetas (prompt + validador warn fresh_beyond_horizon), a la lista (sin ventaneo semanal) y al PDF (una sola compra); alerta plan_jobs_dead.
+#   P3-SHOPPING-PROJECTION-PKG · 2026-09-05 — paquete shopping/projection/ (read model, reproyección, estado); plan_jobs.py = outbox puro; god files congelados en tamaño por test.
+#   P1-ARQ25-F6-DISH-REGISTRY · 2026-09-05 — Fase 6 rebanada 1: constituents DO curados, compilador (100 % resuelve o exclusión explícita, riesgo intrínseco derivado), 6 snapshots reproducibles, hash en blueprint y métrica.
+#   P1-ARQ25-F6-REGISTRY-PROMPT · 2026-09-05 — Fase 6 rebanada 2: candidatos del registry en el prompt (knob, métrica registry_in_prompt), logística derivada y editorial por plantilla; snapshots schema 2.
+_LAST_KNOWN_PFIX = "P1-ARQ25-F7-CULTURE · 2026-09-05"
 
 # [P1-SENTRY-SAMPLE-COST · 2026-05-12] Sentry sampling driven from env vars
 # con default seguro 0.1 (10%). Pre-fix tenía `traces_sample_rate=1.0` y

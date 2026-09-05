@@ -101,7 +101,11 @@ SELECT id, plan_id, attempts, error_code, dead_lettered_at FROM plan_jobs WHERE 
 
 1. ~~Consumidor `shopping_projection`~~ (rebanada 2, 2026-09-04). Falta: marcas/retailer por presentación del
    `supermarket_products` como capa aparte (`shopping_commercial`), si el producto la pide.
-2. Reproyección encolada en el commit de swap, inventario y cambio de política.
-3. Estados UI `pending/ready/failed/stale` en Dashboard/Plan (la Fase 4 dejó los huecos).
-4. Extracción de `shopping/projection/` desde `shopping_calculator.py`.
-5. `system_alerts` para `dead` (hoy: `logger.error` + `pipeline_metrics`).
+2. ~~Reproyección encolada en el commit~~ (2026-09-05, `P1-ARQ25-F5-REPROJECTION`): `enqueue_shopping_reprojection`
+   en recálculo (cubre Nevera/restock/consumo), swap, regeneración de día y relleno de bloques (T1); la huella
+   de la lista (`list_fingerprint`) evita re-proyectar cuando la lista no cambió (el recálculo corre en cada visita).
+3. ~~Estados UI~~ (2026-09-05, `P1-ARQ25-F5-UI-STATES`: `ShoppingProjectionStatus` en el Dashboard).
+4. ~~Extracción de `shopping/projection/`~~ (2026-09-05, `P3-SHOPPING-PROJECTION-PKG`): `shopping/projection/{read_model,reprojection,status}.py`;
+   `plan_jobs.py` queda como outbox puro y re-exporta. Packaging/pricing/shelf-life siguen en `shopping_calculator.py` (→ Fase 9); su
+   tamaño y el de los otros god files queda CONGELADO por `test_p3_shopping_projection_pkg.py`.
+5. ~~`system_alerts` para `dead`~~ (2026-09-05, `plan_jobs_dead:<job_type>`, modelo Manual).

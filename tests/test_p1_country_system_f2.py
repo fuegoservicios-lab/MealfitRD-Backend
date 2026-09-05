@@ -1565,7 +1565,7 @@ def test_dish_templates_es_json_existe_con_forma_esperada():
     data = _load_dish_templates_es()
     templates = data.get("templates")
     assert isinstance(templates, list)
-    assert 40 <= len(templates) <= 60, f"{len(templates)} plantillas — fuera del rango ~40-60 del brief"
+    assert 40 <= len(templates) <= 120  # [P1-ARQ25-F7-CULTURE] F7-D sube la barra a ≥80, f"{len(templates)} plantillas — fuera del rango ~40-60 del brief"
     nombres = [t.get("name") for t in templates]
     assert all(isinstance(n, str) and n.strip() for n in nombres), "una plantilla sin name"
     assert len(nombres) == len(set(nombres)), "nombres de plantilla duplicados"
@@ -2209,7 +2209,7 @@ def test_dish_templates_json_existe_con_forma_esperada(cc, loader):
     data = loader()
     templates = data.get("templates")
     assert isinstance(templates, list)
-    assert 40 <= len(templates) <= 60, f"[{cc}] {len(templates)} plantillas — fuera del rango ~40-60 del brief"
+    assert 40 <= len(templates) <= 120  # [P1-ARQ25-F7-CULTURE] F7-D sube la barra a ≥80, f"[{cc}] {len(templates)} plantillas — fuera del rango ~40-60 del brief"
     nombres = [t.get("name") for t in templates]
     assert all(isinstance(n, str) and n.strip() for n in nombres), f"[{cc}] una plantilla sin name"
     assert len(nombres) == len(set(nombres)), f"[{cc}] nombres de plantilla duplicados"
@@ -2956,7 +2956,7 @@ def test_dish_templates_pr_us_json_existe_con_forma_esperada(cc, loader):
     data = loader()
     templates = data.get("templates")
     assert isinstance(templates, list)
-    assert 40 <= len(templates) <= 60, f"[{cc}] {len(templates)} plantillas — fuera del rango ~40-60 del brief"
+    assert 40 <= len(templates) <= 120  # [P1-ARQ25-F7-CULTURE] F7-D sube la barra a ≥80, f"[{cc}] {len(templates)} plantillas — fuera del rango ~40-60 del brief"
     nombres = [t.get("name") for t in templates]
     assert all(isinstance(n, str) and n.strip() for n in nombres), f"[{cc}] una plantilla sin name"
     assert len(nombres) == len(set(nombres)), f"[{cc}] nombres de plantilla duplicados"
@@ -5035,7 +5035,8 @@ def test_f_wiring_deriva_pais_via_ssot_no_lector_crudo():
     assert len(assignments) == 1
     value = assignments[0].value
     assert isinstance(value, ast.Call)
-    assert isinstance(value.func, ast.Name) and value.func.id == "country_for_form_data"
+    # [P1-ARQ25-F7-CULTURE] el gate de horario es CULTURAL: lee la puerta cultural (SSOT que cae al mercado sin elección)
+    assert isinstance(value.func, ast.Name) and value.func.id in ("country_for_form_data", "cultural_country_for_form_data")
     assert len(value.args) == 1 and isinstance(value.args[0], ast.Name) and value.args[0].id == "form_data"
 
 

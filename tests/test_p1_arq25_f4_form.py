@@ -80,8 +80,8 @@ def test_las_preguntas_4_a_6_llegan_al_compilador():
     assert pol["source"]["form_version"] == "v2"
     # y el compilador sigue aplicando la precedencia: sin congelador ni reposición, el ciclo baja a 7
     effective, rels = pp.compile_policy(pol, context={})
-    assert effective["shopping"]["main_cycle_days"] == 7
-    assert any(r["reason_code"] == "cycle_shortened_no_freezer_no_topup" for r in rels)
+    assert effective["shopping"]["main_cycle_days"] > 7  # [F7-G] el ciclo se respeta; se declara la relajación
+    assert any(r["reason_code"] == "pantry_proteins_after_first_week" for r in rels)
 
 
 def test_valor_invalido_de_mealOrganization_no_rompe():

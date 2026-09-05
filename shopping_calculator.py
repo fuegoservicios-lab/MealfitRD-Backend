@@ -2027,6 +2027,16 @@ def _parse_plan_day_date(value):
         return None
 
 
+def plan_single_trip_policy(plan_data) -> bool:
+    """[P1-SINGLE-TRIP-POLICY] Regla SSOT en `horizon.single_trip_policy` leída desde la política persistida."""
+    try:
+        from horizon import single_trip_policy
+        eff = ((plan_data or {}).get("_plan_policy") or {}).get("effective") if isinstance(plan_data, dict) else None
+        return bool(single_trip_policy(eff))
+    except Exception:
+        return False
+
+
 def active_trip_window_days(
     plan_data: dict,
     window_len: int = TRIP_WINDOW_DAYS,
@@ -2059,6 +2069,10 @@ def active_trip_window_days(
     if not ignore_knob and not _trip_windowed_perishables_enabled():
         return None
     if not isinstance(plan_data, dict):
+        return None
+    # [P1-SINGLE-TRIP-POLICY · 2026-09-05] «No, solo la compra grande»: NO ventanear (los perecederos van
+    # para todo el ciclo en una sola compra; el prompt ya pide duraderos/congelados tras el día 7).
+    if not ignore_knob and plan_single_trip_policy(plan_data):
         return None
     days = plan_data.get("days")
     if not isinstance(days, list) or not days:

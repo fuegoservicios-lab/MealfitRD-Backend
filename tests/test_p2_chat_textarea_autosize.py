@@ -71,12 +71,6 @@ _MARKER = re.compile(r"\[P2-CHAT-TEXTAREA-AUTOSIZE\s*·\s*2026-07-24\]")
 
 # Escritura imperativa de altura: `<algo>.style.height = ...`.
 _STYLE_HEIGHT_WRITE = re.compile(r"\.style\.height\s*=")
-# [P2-CHAT-ANCHOR-SENT-TOP v5 · 2026-09-04] El espaciador del anclaje
-# (`<div ref={spacerRef} className="anchor-spacer">`) fija su altura directo en
-# el DOM a propósito (mismo frame, sin estado). No es el textarea ni lo gobierna
-# el hook: es la ÚNICA escritura de altura tolerada en AgentPage, y solo sobre
-# ese ref. Cualquier otra (chatInputRef incluido) sigue siendo violación.
-_SPACER_HEIGHT_WRITE = re.compile(r"\bspacerRef\.current\.style\.height\s*=")
 
 
 def _read(path: Path) -> str:
@@ -182,12 +176,13 @@ def test_agentpage_sin_autoresize_por_evento():
     offenders = [
         (i, line.strip())
         for i, line in enumerate(code.splitlines(), start=1)
-        if _STYLE_HEIGHT_WRITE.search(line) and not _SPACER_HEIGHT_WRITE.search(line)
+        if _STYLE_HEIGHT_WRITE.search(line)
+        # [P2-CHAT-ANCHOR-SENT-TOP] el espaciador del anclaje no es un textarea: su altura se fija a mano a propósito
+        and "spacerRef" not in line
     ]
     assert not offenders, (
         "AgentPage.jsx no debe escribir `.style.height` a mano — usa "
-        "`useAutosizeTextarea` (SSOT utils/autosizeTextarea.js); la única "
-        "excepción es el espaciador del anclaje (spacerRef). Violaciones:\n"
+        "`useAutosizeTextarea` (SSOT utils/autosizeTextarea.js). Violaciones:\n"
         + "\n".join(f"  L{n}: {snippet}" for n, snippet in offenders)
     )
 

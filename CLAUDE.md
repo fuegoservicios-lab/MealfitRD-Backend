@@ -97,13 +97,17 @@ Cinco regresiones históricas que este diseño protege (P1-G mode=block no-op, `
 
 [P1-ARQ25-F1-LIFECYCLE · 2026-09-02] Bloque 1 = chunk `initial` (I1); `attempts` = fencing (I10); `revision` por trigger (I12). Doc `backend/docs/generation_lifecycle_2_5.md`; tests `test_p1_arq25_f1_*.py`.
 
-[P1-ARQ25-F2-PLANPOLICY · 2026-09-02] Fase 2, `shadow`: política pedida/aplicada + `relaxations[]` por run y en `plan_data._plan_policy`; presupuesto duro (decisión #4) ⇒ `waiting_user`, nunca silencioso. Knob `MEALFIT_PLAN_POLICY_MODE`. Doc `backend/docs/plan_policy_f2.md`; test `test_p1_arq25_f2_planpolicy.py`.
+[P1-ARQ25-F2-PLANPOLICY · 2026-09-02] Fase 2: política pedida/aplicada + `relaxations[]` en `plan_data._plan_policy`; presupuesto duro ⇒ `waiting_user`, nunca silencioso. Knob `MEALFIT_PLAN_POLICY_MODE`. Doc `backend/docs/plan_policy_f2.md`; test `test_p1_arq25_f2_planpolicy.py`.
 
-[P1-ARQ25-F3-HORIZON · 2026-09-02] Fase 3: blueprint 7/15/30 por run (`horizon.py` → `plan_generation_runs.blueprint`), rebanada inmutable por chunk en `form_data["_blueprint_slice"]` + `input_hash`; validadores de fidelidad (`review_fidelity_gate`, knob `MEALFIT_FIDELITY_GATE` warn|block) sustituyen a los gates de repetición en `enforce`; motivo neutral `renewal.v1` (alias `variety`); canary `MEALFIT_PLAN_POLICY_ENFORCE_USERS`. Doc `backend/docs/plan_policy_f3.md`; test `test_p1_arq25_f3_horizon.py`.
+[P1-ARQ25-F3-HORIZON · 2026-09-02] Fase 3: blueprint 7/15/30 por run (`horizon.py`), rebanada inmutable por chunk (`_blueprint_slice` + `input_hash`), gate de fidelidad (`MEALFIT_FIDELITY_GATE`), canary `MEALFIT_PLAN_POLICY_ENFORCE_USERS`. Doc `backend/docs/plan_policy_f3.md`; test `test_p1_arq25_f3_horizon.py`.
 
-[P1-ARQ25-F4-FORM · 2026-09-03] Fase 4: formulario progresivo (§6.7: `mealOrganization` obligatoria solo en el wizard, «Mis básicos» = editor de anclas `stapleAnchors`, frescos/congelador/tandas opcionales sin defaults sembrados; knob `VITE_PLAN_POLICY_FORM`), panel «solicitaste / aplicamos / por qué» sobre `_plan_policy` + `_fidelity_report.mode`, embudo del wizard en `pipeline_metrics.wizard_funnel`. Doc `backend/docs/plan_policy_f4.md`; test `test_p1_arq25_f4_form.py`.
+[P1-ARQ25-F4-FORM · 2026-09-03] Fase 4: formulario progresivo (§6.7, knob `VITE_PLAN_POLICY_FORM`), panel «solicitaste / aplicamos / por qué» y embudo del wizard. Doc `backend/docs/plan_policy_f4.md`; test `test_p1_arq25_f4_form.py`.
 
-[P1-ARQ25-F5-PLAN-JOBS · 2026-09-04 · +SHOPPING-PROJECTION] Fase 5: worker del outbox `plan_jobs` (claim `SKIP LOCKED`, `attempts` como fencing, backoff, dead letter, reclaim, `stale` por `revision`) + consumidores `display_i18n` y `shopping_projection` (listas 7/15/30 por revisión en `payload.result`, leídas por `/{plan_id}/projections`). Knob `MEALFIT_PLAN_JOBS_ENABLED`. Doc `backend/docs/plan_jobs_f5.md`; tests `test_p1_arq25_f5_*.py`.
+[P1-ARQ25-F5-PLAN-JOBS · 2026-09-04] Fase 5: worker del outbox `plan_jobs` + consumidores `display_i18n` y `shopping_projection` (`/{plan_id}/projections`). Knob `MEALFIT_PLAN_JOBS_ENABLED`. Doc `backend/docs/plan_jobs_f5.md`; tests `test_p1_arq25_f5_*.py`.
+
+[P1-ARQ25-F6-DISH-REGISTRY · 2026-09-05] Fase 6: Dish Registry compilado (6 snapshots en `data/registry/`, hash en blueprint y fidelidad). Doc `backend/docs/dish_registry_f6.md`; test `test_p1_arq25_f6_dish_registry.py`.
+
+[P1-ARQ25-F7-CULTURE · 2026-09-05] Fase 7: cocina SEPARADA del mercado (I16): `constants.cultural_country_for_form_data` (platos) vs `country_for_form_data` (precios, catálogo, despensa). 6 perfiles como DATA (`cultural_profiles.py`), principal + 2 secundarias; paso «Cocinas que te representan» (sugerida, no sembrada); 6 bibliotecas ≥94 platos con despensa duradera y congelador sincronizados (`pantry_durability.py`); benchmark §13.4 con revisión curatorial firmada. Knob `MEALFIT_CULTURAL_PROFILES`. Doc `backend/docs/cultural_profiles_f7.md`; tests `test_p1_arq25_f7_culture*.py`.
 
 ## RAG + Dreaming (consolidación de memoria offline)
 
@@ -113,19 +117,19 @@ Cinco regresiones históricas que este diseño protege (P1-G mode=block no-op, `
 
 ## Benchmark del landing (matriz clínica del formulario)
 
-[P1-LANDING-BENCH-1 · 2026-08-07 · comprimido doc-first 2026-08-22] Benchmark cuyo output alimenta las cifras públicas del landing y guía la mejora del motor: matriz de 20 perfiles **FIEL a los chips del wizard** (los harnesses previos usaban texto libre que el wizard ya no emite) + scorers deterministas, en 5 modos. Los claims estructurales del frontend viven en `frontend/src/data/systemFacts.js`. Motor SSOT [`backend/landing_benchmarks.py`](backend/landing_benchmarks.py); runner `scripts/landing_benchmark.py`; doc canónica (matriz, 5 modos, 4 scorers, métrica→claim, métrica→palanca y los hallazgos — entre ellos que `renal` ya NO es expresable desde el formulario) [`backend/docs/landing_benchmarks.md`](backend/docs/landing_benchmarks.md). Test ancla [`test_p1_landing_bench_1_anchors.py`](backend/tests/test_p1_landing_bench_1_anchors.py).
+[P1-LANDING-BENCH-1 · 2026-08-07] Matriz de 20 perfiles FIEL a los chips del wizard + scorers deterministas en 5 modos; alimenta las cifras públicas del landing (`frontend/src/data/systemFacts.js`). Motor [`backend/landing_benchmarks.py`](backend/landing_benchmarks.py); doc [`backend/docs/landing_benchmarks.md`](backend/docs/landing_benchmarks.md); test [`test_p1_landing_bench_1_anchors.py`](backend/tests/test_p1_landing_bench_1_anchors.py).
 
 ---
 
 ## Supermercado RD artificial
 
-[P1-SUPERMARKET-DB · 2026-07-02 · token separado P2-SUPERMARKET-TOKEN-SPLIT 2026-08-14 · comprimido doc-first 2026-08-22] Tabla `supermarket_products` (Neon): presentaciones comprables, navegables y editables en `/supermercado` con gate admin **PROPIO** (`_verify_supermarket_token`; mutaciones SOLO vía [`backend/routers/supermarket.py`](backend/routers/supermarket.py) — simétrica a I6). **Era `CRON_SECRET`**, el que abre `purge-data`, tecleado en una página PÚBLICA. ⚠️ **Son DOS secretos que rotar, a sabiendas** — unificarlos otra vez parece limpieza y es reabrir el radio de daño. Doc canónica (schema/endpoints/seed/roadmap + el detalle del split): [`backend/docs/supermarket_db.md`](backend/docs/supermarket_db.md). Test ancla: [`test_p1_supermarket_db.py`](backend/tests/test_p1_supermarket_db.py).
+[P1-SUPERMARKET-DB · 2026-07-02 · token separado P2-SUPERMARKET-TOKEN-SPLIT 2026-08-14] Tabla `supermarket_products` (Neon) editable en `/supermercado` con gate admin PROPIO (`_verify_supermarket_token`; mutaciones SOLO vía [`backend/routers/supermarket.py`](backend/routers/supermarket.py)). ⚠️ **Son DOS secretos que rotar, a sabiendas** — unificarlos con `CRON_SECRET` reabre el radio de daño. Doc: [`backend/docs/supermarket_db.md`](backend/docs/supermarket_db.md); test [`test_p1_supermarket_db.py`](backend/tests/test_p1_supermarket_db.py).
 
 ---
 
 ## Memoria de días pasados en el chat
 
-[P1-CHAT-PAST-DAYS · 2026-07-27 · comprimido doc-first 2026-08-22] El coach recuerda los días pasados por **dos vías que NUNCA deben confundirse**: lo que el plan *prescribió* (índice barato, siempre inyectado) y lo que el usuario *registró* comer (diario multi-día, con los días sin registro declarados uno a uno). El detalle caro va bajo demanda por `consultar_dia_del_plan`. Prerequisito estructural: cada día nace con `date` ISO estampada; los planes viejos degradan a inferencia anclada por `grocery_start_date`. Motor SSOT [`backend/chat_history_context.py`](backend/chat_history_context.py); doc canónica (las 3 piezas, la cadena de fallback, knobs, costos medidos, lo que NO resuelve) [`backend/docs/chat_past_days_memory.md`](backend/docs/chat_past_days_memory.md). Test ancla [`test_p1_chat_past_days_memory.py`](backend/tests/test_p1_chat_past_days_memory.py).
+[P1-CHAT-PAST-DAYS · 2026-07-27] El coach recuerda los días pasados por **dos vías que NUNCA deben confundirse**: lo que el plan *prescribió* (índice barato, siempre inyectado) y lo que el usuario *registró* (diario multi-día); el detalle caro va bajo demanda por `consultar_dia_del_plan`. Motor [`backend/chat_history_context.py`](backend/chat_history_context.py); doc [`backend/docs/chat_past_days_memory.md`](backend/docs/chat_past_days_memory.md); test [`test_p1_chat_past_days_memory.py`](backend/tests/test_p1_chat_past_days_memory.py).
 
 ---
 

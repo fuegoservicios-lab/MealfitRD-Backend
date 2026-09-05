@@ -32777,6 +32777,12 @@ __PLAN_MODE_GATE__
             # Despachar el enriquecimiento de los días NUEVOS de este bloque.
             # Best-effort: el worker de chunks jamás puede fallar por esto.
             if _p1_i18n_new_day_indices:
+                # [P1-ARQ25-F5-REPROJECTION · 2026-09-05] días nuevos ⇒ la lista cambia ⇒ re-encolar la proyección
+                try:
+                    from plan_jobs import enqueue_shopping_reprojection as _f5_reproj
+                    _f5_reproj(meal_plan_id, user_id, reason="chunk_fill")
+                except Exception as _f5_e:
+                    logger.debug(f"[ARQ25-F5] reprojection (chunk_fill) no encolada: {_f5_e!r}")
                 try:
                     from db import execute_sql_query as _p1_i18n_query
                     from plan_display_i18n import schedule_plan_display_enrichment as _p1_i18n_schedule

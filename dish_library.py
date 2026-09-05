@@ -147,7 +147,19 @@ def _canon_country_or_do(country=None) -> str:
         return "DO"
 
 
-def _inspiration_heading(country=None) -> str:
+def _inspiration_heading(country=None, culture_weights=None) -> str:
+    """[P1-ARQ25-F7-CULTURE] Con pesos de cocina, el encabezado los nombra («INSPIRACIÓN: COCINA DOMINICANA 70 % ·
+    COCINA ESPAÑOLA 30 %»); un solo perfil ⇒ literal histórico byte a byte."""
+    if culture_weights:
+        try:
+            from cultural_profiles import heading_for_weights
+            return heading_for_weights(culture_weights)
+        except Exception:
+            pass
+    return _inspiration_heading_legacy(country)
+
+
+def _inspiration_heading_legacy(country=None) -> str:
     """[P1-DISH-LIBRARY-COUNTRY · 2026-08-21] Encabezado del bloque. DO conserva el literal
     histórico byte a byte; un país beta lee su propio nombre, tomado de
     `COUNTRY_PROFILES[cc]['name_es']` — el MISMO SSOT que usa el juez culinario para su variante,
@@ -164,7 +176,7 @@ def _inspiration_heading(country=None) -> str:
     return "INSPIRACIÓN DOMINICANA"
 
 
-def build_dish_library_context(skeleton_day: dict, day_num: int, country=None) -> str:
+def build_dish_library_context(skeleton_day: dict, day_num: int, country=None, culture_weights=None) -> str:
     """Bloque de inspiración por día para el prompt del day-generator. '' si knob OFF /
     sin plantillas compatibles. Determinista por (día, pool) → prompt-cache friendly.
 
@@ -231,7 +243,7 @@ def build_dish_library_context(skeleton_day: dict, day_num: int, country=None) -
             "siempre que encaje con los macros, el horario y las reglas clínicas del día.\n"
         ) if _tf_min > 0 else "\n"
         return (
-            f"\n🍽️ {_inspiration_heading(country)} (biblioteca curada — ELIGE Y ADAPTA una, o crea un plato "
+            f"\n🍽️ {_inspiration_heading(country, culture_weights)} (biblioteca curada — ELIGE Y ADAPTA una, o crea un plato "
             "equivalente en espíritu; ajusta porciones a los macros del día):\n"
             + "\n".join(lines)
             + "\n   💡 Prioriza preparaciones TRANSFORMADAS (masas, guisos, rellenos, horneados) "
