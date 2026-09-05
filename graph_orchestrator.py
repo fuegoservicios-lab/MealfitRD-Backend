@@ -10723,6 +10723,13 @@ def _detect_gainmuscle_dinner_issues(days: list, form_data: dict) -> list:
         _goal = _sa_gd(str((form_data or {}).get("mainGoal") or (form_data or {}).get("goal") or "").lower())
         if not any(t in _goal for t in ("gain_muscle", "ganar_musculo", "ganancia", "bulk")):
             return []
+        # [P1-VEG-OMNIVORE-RULES · 2026-09-05] En vegetariano/vegano esta señal es INSATISFACIBLE: pide
+        # «pollo/pavo/pescado/res/atún como plato» y en esas dietas no existe ninguno. Medido en el plan vivo
+        # 18326457 (vegetariano, ganancia muscular): 3 avisos, corrección de los 3 días del bloque, y la cena
+        # del día 3 BAJÓ de 54 g a 34 g de proteína persiguiendo una regla que no podía cumplir. El
+        # pescetariano NO se exime: el pescado sí está en `_HEAVY_PROTEIN_LABELS`.
+        if _canonicalize_diet_type((form_data or {}).get("dietType")) in ("vegetarian", "vegan"):
+            return []
         issues, cheese_dinner_days = [], []
         for _i, _d in enumerate(days or []):
             if not isinstance(_d, dict):
@@ -12794,6 +12801,9 @@ PRO_REVIEW_FLAG_ENABLED = _env_bool("MEALFIT_PRO_REVIEW_FLAG", True)
 # el cap+threshold. El lever upstream es el prompt; esto da presión de retry. Flip a False → advisory.
 VARIETY_HARD_GATE_ENABLED = _env_bool("MEALFIT_VARIETY_HARD_GATE", True)
 VARIETY_HARD_GATE_EGG_SLACK = _env_int("MEALFIT_VARIETY_HARD_GATE_EGG_SLACK", 1)  # rechaza si egg > cap+slack
+# [P1-VEG-OMNIVORE-RULES · 2026-09-05] Fracción de comidas con huevo tolerada en dieta VEGETARIANA (0,40 ⇒ 5 de
+# 12 pasa, 6 ya no). Knob para poder apretarlo sin redespliegue si la variedad se resiente.
+VARIETY_HARD_GATE_EGG_PCT_VEG = _env_float("MEALFIT_VARIETY_EGG_PCT_VEG", 0.40)
 # [P2-VARIETY-GATE-REPEAT · 2026-06-25] Fruta dulce repetida + plato-base repetido el mismo día como
 # gate de RETRY (eran advisory en build_variety_report). El lever upstream es el prompt (regla 15f);
 # esto añade presión de retry acotada (should_retry entrega en el attempt final) cuando el LLM no
@@ -14483,7 +14493,42 @@ def _apply_renal_cap_to_nutrition(nutrition: dict, form_data: dict) -> None:
 # "0.5 taza de ") para preservarlo al sustituir → la lista de compras conserva el peso y el coherence
 # guard sigue cuadrando. Sin prefijo (condimentos "al gusto") el sustituto queda sin cantidad (OK).
 _COND_SUB_QTY_PREFIX_RE = _re.compile(
-    r"^\s*(\d[\d.,/]*\s*[a-záéíóúñ]*\.?\s*(?:de\s+)?)", _re.IGNORECASE)
+    r"^\s*(\d[\d.,/]*\s*([a-záéíóúñ]+)?\.?\s*(?:de\s+)?)", _re.IGNORECASE)
+
+# [P1-SUBS-QTY-UNIT-GUARD · 2026-09-05] La expresión de arriba acepta CUALQUIER palabra tras el número, y ahí
+# estaba el fallo: cuando el alimento se cuenta directo —«4 ciruelas», sin «de» de por medio— la palabra NO es
+# una unidad, es el alimento. Preservar ese prefijo y pegarle detrás el reemplazo producía «4 ciruelas Soya
+# texturizada» (plan vivo 18326457, merienda del día 3, sustitución de dieta del 2026-09-05).
+#
+# El prefijo solo se conserva si lo que sigue al número es una unidad DE VERDAD. Si no lo es, la cantidad
+# pertenecía al alimento viejo y no se puede heredar: se cae al reemplazo desnudo, que es exactamente lo que ya
+# hacía el condimento cuya unidad era lo contraindicado («1 cubito de pollo»).
+_SUB_QTY_UNIT_TOKENS = frozenset({
+    "g", "gr", "grs", "gramo", "gramos", "kg", "kilo", "kilos", "kilogramo", "kilogramos",
+    "mg", "ml", "cl", "l", "lt", "litro", "litros", "oz", "onza", "onzas", "lb", "lbs", "libra", "libras",
+    "taza", "tazas", "cda", "cdas", "cdta", "cdtas", "cucharada", "cucharadas", "cucharadita", "cucharaditas",
+    "cucharon", "cucharones", "unidad", "unidades", "pieza", "piezas", "porcion", "porciones",
+    "racion", "raciones", "lonja", "lonjas", "rebanada", "rebanadas", "rodaja", "rodajas",
+    "filete", "filetes", "trozo", "trozos", "pedazo", "pedazos", "tira", "tiras", "gajo", "gajos",
+    "punado", "punados", "pizca", "pizcas", "vaso", "vasos", "lata", "latas", "paquete", "paquetes",
+    "sobre", "sobres", "bola", "bolas", "diente", "dientes", "rama", "ramas", "hoja", "hojas",
+    "tallo", "tallos", "manojo", "manojos",
+})
+
+
+def _sub_qty_token_is_unit(token: str) -> bool:
+    """True si `token` (la palabra que sigue al número) es una unidad de medida y no el alimento mismo.
+    Sin token (p. ej. «250 de …») se considera unidad: no hay palabra que pueda ser el alimento.
+    tooltip-anchor: P1-SUBS-QTY-UNIT-GUARD"""
+    _t = str(token or "").strip().lower()
+    if not _t:
+        return True
+    try:
+        from constants import strip_accents as _sa_qty
+        _t = _sa_qty(_t)
+    except Exception:
+        pass
+    return _t in _SUB_QTY_UNIT_TOKENS
 
 
 # [P1-SUBST-RECIPE-REWRITE · 2026-06-28] Tokens que NO se usan para localizar el ingrediente viejo en los pasos:
@@ -14807,7 +14852,10 @@ def _apply_substitutions_core(plan: dict, subs: list, note_builder, note_sentine
         # reemplazo bare (queda "al gusto"); preservar el prefijo dejaría la palabra ofensora ("cubito").
         if preserve_qty:
             m = _COND_SUB_QTY_PREFIX_RE.match(str(orig)) if _COND_SUB_QTY_PREFIX_RE else None
-            if m and m.group(1).strip():
+            # [P1-SUBS-QTY-UNIT-GUARD · 2026-09-05] …y solo si lo que sigue al número es una UNIDAD. Con un
+            # alimento contado («4 ciruelas») la cantidad es del alimento viejo y heredarla escribe un
+            # ingrediente que no existe.
+            if m and m.group(1).strip() and _sub_qty_token_is_unit(m.group(2)):
                 return m.group(1) + replacement
         return replacement
 
@@ -43205,7 +43253,15 @@ Responde ÚNICAMENTE con el JSON de revisión.
             if isinstance(_vr, dict):
                 _egg = int(_vr.get("egg_meals", 0))
                 _tot = int(_vr.get("total_meals", 0)) or 12
-                _cap = max(3, round(_tot * 0.25))
+                # [P1-VEG-OMNIVORE-RULES · 2026-09-05] El 25 % está calibrado para quien ADEMÁS tiene pollo,
+                # pescado y carne. En vegetariano el huevo es una de las pocas proteínas completas que quedan, y
+                # el tope rechazaba el intento entero por «5 de 12» (plan vivo 18326457): una replanificación
+                # completa por una diversidad que la dieta no permite. Tope propio, más ancho pero tope.
+                # El VEGANO no se toca: ahí el huevo es una violación de dieta y la caza otro guard.
+                _egg_pct = (VARIETY_HARD_GATE_EGG_PCT_VEG
+                            if _canonicalize_diet_type((form_data or {}).get("dietType")) == "vegetarian"
+                            else 0.25)
+                _cap = max(3, round(_tot * _egg_pct))
                 if _egg > _cap + VARIETY_HARD_GATE_EGG_SLACK:
                     logger.warning(f"🥚 [P3-VARIETY-HARD-GATE] Huevo en {_egg}/{_tot} comidas "
                                    f"(cap {_cap}+{VARIETY_HARD_GATE_EGG_SLACK}) → rechazo para diversificar")

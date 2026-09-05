@@ -73,7 +73,7 @@ _PROCESS_START_ISO = datetime.now(timezone.utc).isoformat()
 #   P3-SHOPPING-PROJECTION-PKG · 2026-09-05 — paquete shopping/projection/ (read model, reproyección, estado); plan_jobs.py = outbox puro; god files congelados en tamaño por test.
 #   P1-ARQ25-F6-DISH-REGISTRY · 2026-09-05 — Fase 6 rebanada 1: constituents DO curados, compilador (100 % resuelve o exclusión explícita, riesgo intrínseco derivado), 6 snapshots reproducibles, hash en blueprint y métrica.
 #   P1-ARQ25-F6-REGISTRY-PROMPT · 2026-09-05 — Fase 6 rebanada 2: candidatos del registry en el prompt (knob, métrica registry_in_prompt), logística derivada y editorial por plantilla; snapshots schema 2.
-_LAST_KNOWN_PFIX = "P1-DIET-SUBSTITUTION · 2026-09-05"
+_LAST_KNOWN_PFIX = "P1-VEG-OMNIVORE-RULES · 2026-09-05"
 
 # [P1-SENTRY-SAMPLE-COST · 2026-05-12] Sentry sampling driven from env vars
 # con default seguro 0.1 (10%). Pre-fix tenía `traces_sample_rate=1.0` y
