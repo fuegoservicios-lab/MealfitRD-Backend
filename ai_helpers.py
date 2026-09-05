@@ -836,6 +836,39 @@ def _intersect_cycle_base(persisted, allowed) -> "list | None":
         return None
 
 
+def _norm_food_key(name) -> str:
+    """[P1-PANTRY-POOL-MATCH] clave de comparación: sin acentos, minúsculas, singular por palabra («Papas»→«papa»,
+    «Habichuelas Rojas»→«habichuela roja»)."""
+    words = strip_accents(str(name or "")).lower().split()
+    return " ".join(w[:-1] if (len(w) > 3 and w.endswith("s")) else w for w in words)
+
+
+def _pantry_pick_in_pool(item_norm: str, full_catalog, syn_map, allowed) -> "str | None":
+    """[P1-PANTRY-POOL-MATCH · 2026-09-05] Resuelve un artículo de la Nevera contra el catálogo DO ∪ el POOL del
+    mercado (para que siga ganando el alias MÁS ESPECÍFICO sobre el universo completo: «filete de pescado» debe
+    resolver a pescado, no a res por el alias «filete») y acepta el ganador si está en `allowed` O si su nombre
+    NORMALIZADO existe en el pool. Antes se exigía igualdad de cadena contra el pool US («Papas»≠«Papa»,
+    «Huevos»≠«Huevo», «Habichuelas Rojas»≠«Habichuelas rojas»): de 49 artículos de la Nevera de la prueba B
+    casaron Avena y Yuca y NINGUNA proteína ⇒ pools 2P/2C para 4 días, avena de almuerzo y cena, 3 rechazos
+    (plan vivo c350dec0, bloque 2). Un alérgeno excluido del pool sigue sin resucitar: su ganador no está en el
+    pool ni por nombre normalizado. tooltip-anchor: P1-PANTRY-POOL-MATCH"""
+    try:
+        pool = [x for x in (allowed or []) if isinstance(x, str)]
+        universe = list(full_catalog) + [x for x in pool if x not in full_catalog]
+        best = _catalog_pick_wb(item_norm, universe, syn_map, set(universe))
+        if best is None:
+            return None
+        if best in allowed:
+            return best
+        key = _norm_food_key(best)
+        for x in pool:
+            if _norm_food_key(x) == key:
+                return x
+        return None
+    except Exception:
+        return _catalog_pick_wb(item_norm, full_catalog, syn_map, allowed)
+
+
 def _catalog_pick_wb(item_norm: str, full_catalog, syn_map, allowed) -> "str | None":
     """[P1-PANTRY-EXTRACT-FILTERED-WB · 2026-07-30] Resuelve una línea de texto libre
     ("2 lb de filete de pescado") al alimento del catálogo que nombra.
@@ -2156,7 +2189,7 @@ def get_deterministic_variety_prompt(history_text: str, form_data: dict = None, 
         # sorteo, ~280 líneas más arriba— aplique EXACTAMENTE el mismo matching y no nazca una
         # cuarta implementación de comparación de nombres.
         def _pantry_pick(item_norm: str, full_catalog, syn_map, allowed) -> str | None:
-            return _catalog_pick_wb(item_norm, full_catalog, syn_map, allowed)
+            return _pantry_pick_in_pool(item_norm, full_catalog, syn_map, allowed)
 
         _allow_p, _allow_c = set(filtered_proteins), set(filtered_carbs)
         _allow_v, _allow_f = set(filtered_veggies), set(filtered_fruits)

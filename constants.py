@@ -4195,6 +4195,14 @@ def _market_pool_with_extras(pool: dict, country: str, culture_country: str = No
         return pool
 
 
+# [P1-PANTRY-POOL-MATCH] mínimo de proteínas en un pool vegetariano/vegano antes de completar con el catálogo base
+try:
+    from knobs import _env_int as _env_int_pf
+    BETA_VEG_PROTEIN_FLOOR = max(2, min(30, _env_int_pf("MEALFIT_BETA_VEG_PROTEIN_FLOOR", 6)))
+except Exception:  # pragma: no cover
+    BETA_VEG_PROTEIN_FLOOR = 6
+
+
 def _get_fast_filtered_catalogs(allergies: tuple, dislikes: tuple, diet: str, country: str = None,
                                 market_extras: bool = False, culture_country: str = None):
     """Filtra el catálogo [dominicano|del país beta] basado en restricciones del usuario O(N)
@@ -4372,6 +4380,24 @@ def _get_fast_filtered_catalogs(allergies: tuple, dislikes: tuple, diet: str, co
     filtered_carbs = [c for c in filtered_carbs if is_allowed(c)]
     filtered_veggies = [v for v in filtered_veggies if is_allowed(v)]
     filtered_fruits = [f for f in filtered_fruits if is_allowed(f)]
+
+    # [P1-PANTRY-POOL-MATCH · 2026-09-05] Piso de proteínas vegetarianas/veganas. Medido (prueba B, mercado US +
+    # cocina DO, vegetariana): el pool US trae quesos y embutidos, la intersección con la cocina lo recorta y el
+    # filtro de dieta lo deja en 2 («Huevo», «Yogurt griego»); el mismo caso en mercado DO da 23. Con 2 proteínas
+    # el blueprint y el sembrador repiten huevo/yogurt y el modelo termina metiendo pollo (rechazo por dieta).
+    # Se completa con las proteínas del catálogo base que pasan EL MISMO filtro (dieta + alergias + gustos).
+    try:
+        if _diet_canon in ("vegan", "vegetarian") and len(filtered_proteins) < BETA_VEG_PROTEIN_FLOOR:
+            def _k_pf(x):   # singular por palabra: «Huevos» y «Huevo» son el mismo alimento
+                return " ".join(w[:-1] if (len(w) > 3 and w.endswith("s")) else w
+                                for w in strip_accents(str(x)).lower().split())
+            _seen_p = {_k_pf(x) for x in filtered_proteins}
+            for _p in DOMINICAN_PROTEINS:
+                _k = _k_pf(_p)
+                if _k not in _seen_p and is_allowed(_p):
+                    filtered_proteins.append(_p); _seen_p.add(_k)
+    except Exception:
+        pass
     
     return filtered_proteins, filtered_carbs, filtered_veggies, filtered_fruits
 
