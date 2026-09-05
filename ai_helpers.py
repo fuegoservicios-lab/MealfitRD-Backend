@@ -1059,7 +1059,8 @@ def _culture_staple_seed(carb_slots, form_data, pool_carbs, carb_freq, blocked, 
 
     Regla: si NINGUNA de las dos bases del día es básico de la cocina del día, la SEGUNDA se sustituye por el
     básico disponible menos usado (frecuencia fatigada), alternando entre los dos menos usados para los días de
-    la misma cocina (la lista de compras crece en ≤2 por cocina). Nunca un vetado (`blocked`). Solo actúa con
+    la misma cocina (la lista de compras crece en ≤2 por cocina). `blocked` excluye candidatos si el caller lo pide
+    (el call site de producción pasa `()` desde P1-CULTURE-STAPLE-SEED-2: los básicos de la cocina no se vetan). Solo actúa con
     una MEZCLA o con cocina ≠ mercado: un dominicano en el mercado DO sigue byte-idéntico (su pool ya es criollo).
     Knob `MEALFIT_CULTURE_STAPLE_SEED` (True). Puro y fail-open: cualquier error devuelve los slots tal cual.
     tooltip-anchor: P1-CULTURE-STAPLE-SEED"""
@@ -1081,7 +1082,7 @@ def _culture_staple_seed(carb_slots, form_data, pool_carbs, carb_freq, blocked, 
             offset = 0
         _n = lambda x: strip_accents(str(x)).lower().strip()
         blocked_n = {_n(b) for b in (blocked or [])}
-        out, used_by_pid, changed = [], {}, []
+        out, used_by_pid, changed, vetoed_days = [], {}, [], []
         for i in range(int(days)):
             pair = tuple(carb_slots[i] if i < len(carb_slots) else carb_slots[-1])
             pid = _cp.profile_for_day(weights, offset + i)
@@ -1089,6 +1090,8 @@ def _culture_staple_seed(carb_slots, form_data, pool_carbs, carb_freq, blocked, 
             staple_n = {_n(x) for x in staples_all}          # «ya tiene básico» cuenta también un vetado
             staples = [x for x in staples_all if _n(x) not in blocked_n]   # pero jamás se INYECTA un vetado
             if not staples or any(_n(x) in staple_n for x in pair):
+                if staples_all and not staples and not any(_n(x) in staple_n for x in pair):
+                    vetoed_days.append(i)
                 out.append(pair); continue
             staples.sort(key=lambda x: (int((carb_freq or {}).get(x, 0) or 0)))
             k = used_by_pid.get(pid, 0); used_by_pid[pid] = k + 1
@@ -1096,6 +1099,10 @@ def _culture_staple_seed(carb_slots, form_data, pool_carbs, carb_freq, blocked, 
             out.append((pair[0], pick)); changed.append((i, pid, pick))
         if changed:
             logger.info(f"🍚 [P1-CULTURE-STAPLE-SEED] base básica de la cocina del día garantizada: {changed}")
+        elif vetoed_days:
+            # observabilidad: la cocina del día tenía básicos en el pool pero TODOS vetados por sobreuso
+            # (cuenta de pruebas con 8 planes en un día) — sin esta línea el silencio se confunde con un no-op
+            logger.info(f"🍚 [P1-CULTURE-STAPLE-SEED] sin cambio: básicos de la cocina vetados por sobreuso en días {vetoed_days}")
         return out
     except Exception as _e:
         logger.warning(f"[P1-CULTURE-STAPLE-SEED] no-op (fail-open): {type(_e).__name__}: {_e}")
@@ -2473,6 +2480,20 @@ def get_deterministic_variety_prompt(history_text: str, form_data: dict = None, 
     if chosen_fruits:
         random.shuffle(chosen_fruits)
     
+    # [P1-CULTURE-STAPLE-SEED-2 · 2026-09-05] La siembra cultural corre AQUÍ, antes del bloque EVITA, y SIN el veto
+    # de sobreuso: un dominicano come arroz casi a diario — es la cocina, no monotonía (misma excepción que los
+    # «básicos del usuario» del prompt). Medido (plan vivo 4f348954): la siembra respetaba el veto y con
+    # arroz=64/yuca=57 en el contador quedó muda; el día dominicano recibió «Garbanzos + Avena» y el modelo hizo
+    # arepitas de avena en la cena (rechazo del revisor). Los básicos inyectados entran en `chosen_carbs` para
+    # que el EVITA de abajo los exima (`chosen_set`). La frecuencia sigue eligiendo el MENOS usado entre ellos.
+    _carb_slots_seeded = _culture_staple_seed(_rotate_pairs(chosen_carbs, days=_dc), form_data, filtered_carbs,
+                                              carb_freq, (), _dc, _variety_country)
+    if _carb_slots_seeded:
+        for _pa, _pb in _carb_slots_seeded:
+            for _x in (_pa, _pb):
+                if _x not in chosen_carbs:
+                    chosen_carbs.append(_x)
+
     blocked_text = ""
     if used_proteins or used_carbs or used_veggies:
         # Solo bloquear ingredientes sobreusados (freq >= OVERUSE_THRESHOLD) que NO fueron elegidos por el determinismo.
@@ -2676,9 +2697,9 @@ def get_deterministic_variety_prompt(history_text: str, form_data: dict = None, 
     # base y en la misma frase PROHÍBE repetirla. Medido: 29 de 90 días colisionaban.
     # Frutas y vegetales ya tomaban ambos slots del mismo `_slots[i]`; los carbos eran la única
     # categoría fuera del contrato. tooltip-anchor: P2-SEEDER-PAIRS-GOALS
-    _carb_slots = _rotate_pairs(chosen_carbs, days=_dc)
     # [P1-CULTURE-STAPLE-SEED · 2026-09-05] la cocina del día manda sobre la rotación anti-repetición
-    _carb_slots = _culture_staple_seed(_carb_slots, form_data, filtered_carbs, carb_freq, used_carbs, _dc, _variety_country)
+    # (sembrado arriba, ANTES del bloque EVITA — P1-CULTURE-STAPLE-SEED-2); sin siembra, la rotación de siempre.
+    _carb_slots = _carb_slots_seeded if _carb_slots_seeded else _rotate_pairs(chosen_carbs, days=_dc)
     if _carb_slots:
         carb_params = {f"carb_{i}": _carb_slots[i][0] for i in range(_dc)}
         carb_params.update({f"carb_{i}b": _carb_slots[i][1] for i in range(_dc)})

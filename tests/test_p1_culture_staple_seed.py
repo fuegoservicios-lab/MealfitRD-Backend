@@ -87,10 +87,15 @@ def test_legacy_paths_are_byte_identical(monkeypatch):
     assert _culture_staple_seed(slots, "no-dict", POOL_US_DO, {}, [], 2, "US") == slots or True
 
 
-def test_seeder_call_site_is_wired_after_rotation():
+def test_seeder_call_site_runs_before_the_overuse_veto_and_without_it():
+    """[P1-CULTURE-STAPLE-SEED-2] la siembra va ANTES del bloque EVITA (para que sus básicos queden exentos vía
+    `chosen_carbs`/`chosen_set`) y se llama SIN el veto (`()`), y sus pares son los que publican carb_params."""
     src = (_BACKEND / "ai_helpers.py").read_text(encoding="utf-8")
-    i = src.index("_carb_slots = _rotate_pairs(chosen_carbs, days=_dc)")
-    j = src.index("_carb_slots = _culture_staple_seed(_carb_slots, form_data, filtered_carbs, carb_freq, used_carbs, _dc, _variety_country)")
-    k = src.index('carb_params = {f"carb_{i}": _carb_slots[i][0] for i in range(_dc)}')
-    assert i < j < k, "el sesgo cultural va DESPUÉS de la rotación y ANTES de publicar carb_params/carb_pairs"
+    i = src.index("_carb_slots_seeded = _culture_staple_seed(_rotate_pairs(chosen_carbs, days=_dc), form_data, filtered_carbs,")
+    assert "carb_freq, (), _dc, _variety_country)" in src[i:i + 300], "sin veto de sobreuso"
+    j = src.index('blocked_text = ""\n    if used_proteins or used_carbs or used_veggies:')
+    k = src.index("_carb_slots = _carb_slots_seeded if _carb_slots_seeded else _rotate_pairs(chosen_carbs, days=_dc)")
+    m = src.index('carb_params = {f"carb_{i}": _carb_slots[i][0] for i in range(_dc)}')
+    assert i < j < k < m
+    assert "if _x not in chosen_carbs:\n                    chosen_carbs.append(_x)" in src[i:j], "los básicos entran en chosen_carbs (exentos del EVITA)"
     assert "tooltip-anchor: P1-CULTURE-STAPLE-SEED" in src
