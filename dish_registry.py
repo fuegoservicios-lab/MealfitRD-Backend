@@ -234,9 +234,12 @@ def _constituents_source(library: str, template: dict, do_constituents: Optional
     """(constituyentes [{name, grams}], declarados_sin_resolver) según la biblioteca."""
     if library == "do":
         entry = ((do_constituents or {}).get("templates") or {}).get(str(template.get("name") or ""))
-        if not entry:
+        if entry:
+            return list(entry.get("constituents") or []), list(entry.get("declared_unresolved") or [])
+        # [P1-ARQ25-F7-CULTURE] plantillas DO nuevas sin entrada curada: valen los constituyentes inline (mismo
+        # contrato que las bibliotecas beta); sin ninguno de los dos, la plantilla queda sin constituyentes.
+        if not (template.get("constituents") or []):
             return [], []
-        return list(entry.get("constituents") or []), list(entry.get("declared_unresolved") or [])
     cons = template.get("constituents") or []
     out = []
     for c in cons:

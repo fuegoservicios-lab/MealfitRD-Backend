@@ -32,7 +32,7 @@ PROFILES: dict[str, dict] = {
     "dominican_criolla": {
         "name_es": "Cocina dominicana", "library": "do", "market_default": "DO",
         "staples": ["arroz", "habichuelas", "plátano", "yuca", "guineo verde", "casabe", "auyama", "batata"],
-        "dish_families": ["locrio", "moro", "sancocho", "mangú", "guisado criollo", "pastelón", "tostones"],
+        "dish_families": ["locrio", "moro", "sancocho", "mangú", "guisado criollo", "pastelón", "tostones", "asopao", "mofongo", "arepa", "pernil", "chenchén", "yaniqueque", "domplines", "catibías", "quipes", "tipile", "pica pollo", "majarete"],
         "techniques": ["guisado", "hervido+majado", "sofrito", "horneado", "plancha"],
         "flavor_base": ["ajo", "cebolla", "ají cubanela", "orégano dominicano", "cilantro", "sazón"],
         "slot_affinity": {"desayuno": ["mangú", "avena", "huevo", "casabe"], "almuerzo": ["arroz + habichuela + proteína"],

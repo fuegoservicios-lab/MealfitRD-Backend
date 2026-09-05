@@ -155,7 +155,7 @@ def test_template_id_is_minted_for_all_six_libraries_unique_and_stable():
     assert set(cov) == {"do", "co", "es", "mx", "pr", "us"}, cov
     for lib, c in cov.items():
         assert c["templates"] > 0 and c["with_id"] == c["templates"] == c["unique"], (lib, c)
-    assert sum(c["templates"] for c in cov.values()) == 338, "las 338 plantillas del roadmap"
+    assert sum(c["templates"] for c in cov.values()) >= 338, "al menos las 338 plantillas del roadmap (F7-D subió la barra a ≥80 por biblioteca: 522)"
 
 
 def test_template_id_golden_and_alias_keeps_id_across_rename():

@@ -1,0 +1,1477 @@
+{
+  "bar": {
+    "almuerzo": 28,
+    "cena": 22,
+    "desayuno": 18,
+    "merienda": 16,
+    "proteins": 10,
+    "techniques": 12,
+    "total": 80
+  },
+  "failures": [],
+  "gate_ok": true,
+  "mixing": {
+    "ok": true,
+    "pairs": {
+      "colombia_casera+dominican_criolla": {
+        "missing": [],
+        "ok": true,
+        "split": {
+          "colombia_casera": 7,
+          "dominican_criolla": 3
+        }
+      },
+      "colombia_casera+mexico_casera": {
+        "missing": [],
+        "ok": true,
+        "split": {
+          "colombia_casera": 7,
+          "mexico_casera": 3
+        }
+      },
+      "colombia_casera+puertorico_criolla": {
+        "missing": [],
+        "ok": true,
+        "split": {
+          "colombia_casera": 7,
+          "puertorico_criolla": 3
+        }
+      },
+      "colombia_casera+spain_mediterranea": {
+        "missing": [],
+        "ok": true,
+        "split": {
+          "colombia_casera": 7,
+          "spain_mediterranea": 3
+        }
+      },
+      "colombia_casera+us_everyday": {
+        "missing": [],
+        "ok": true,
+        "split": {
+          "colombia_casera": 7,
+          "us_everyday": 3
+        }
+      },
+      "dominican_criolla+colombia_casera": {
+        "missing": [],
+        "ok": true,
+        "split": {
+          "colombia_casera": 3,
+          "dominican_criolla": 7
+        }
+      },
+      "dominican_criolla+mexico_casera": {
+        "missing": [],
+        "ok": true,
+        "split": {
+          "dominican_criolla": 7,
+          "mexico_casera": 3
+        }
+      },
+      "dominican_criolla+puertorico_criolla": {
+        "missing": [],
+        "ok": true,
+        "split": {
+          "dominican_criolla": 7,
+          "puertorico_criolla": 3
+        }
+      },
+      "dominican_criolla+spain_mediterranea": {
+        "missing": [],
+        "ok": true,
+        "split": {
+          "dominican_criolla": 7,
+          "spain_mediterranea": 3
+        }
+      },
+      "dominican_criolla+us_everyday": {
+        "missing": [],
+        "ok": true,
+        "split": {
+          "dominican_criolla": 7,
+          "us_everyday": 3
+        }
+      },
+      "mexico_casera+colombia_casera": {
+        "missing": [],
+        "ok": true,
+        "split": {
+          "colombia_casera": 3,
+          "mexico_casera": 7
+        }
+      },
+      "mexico_casera+dominican_criolla": {
+        "missing": [],
+        "ok": true,
+        "split": {
+          "dominican_criolla": 3,
+          "mexico_casera": 7
+        }
+      },
+      "mexico_casera+puertorico_criolla": {
+        "missing": [],
+        "ok": true,
+        "split": {
+          "mexico_casera": 7,
+          "puertorico_criolla": 3
+        }
+      },
+      "mexico_casera+spain_mediterranea": {
+        "missing": [],
+        "ok": true,
+        "split": {
+          "mexico_casera": 7,
+          "spain_mediterranea": 3
+        }
+      },
+      "mexico_casera+us_everyday": {
+        "missing": [],
+        "ok": true,
+        "split": {
+          "mexico_casera": 7,
+          "us_everyday": 3
+        }
+      },
+      "puertorico_criolla+colombia_casera": {
+        "missing": [],
+        "ok": true,
+        "split": {
+          "colombia_casera": 3,
+          "puertorico_criolla": 7
+        }
+      },
+      "puertorico_criolla+dominican_criolla": {
+        "missing": [],
+        "ok": true,
+        "split": {
+          "dominican_criolla": 3,
+          "puertorico_criolla": 7
+        }
+      },
+      "puertorico_criolla+mexico_casera": {
+        "missing": [],
+        "ok": true,
+        "split": {
+          "mexico_casera": 3,
+          "puertorico_criolla": 7
+        }
+      },
+      "puertorico_criolla+spain_mediterranea": {
+        "missing": [],
+        "ok": true,
+        "split": {
+          "puertorico_criolla": 7,
+          "spain_mediterranea": 3
+        }
+      },
+      "puertorico_criolla+us_everyday": {
+        "missing": [],
+        "ok": true,
+        "split": {
+          "puertorico_criolla": 7,
+          "us_everyday": 3
+        }
+      },
+      "spain_mediterranea+colombia_casera": {
+        "missing": [],
+        "ok": true,
+        "split": {
+          "colombia_casera": 3,
+          "spain_mediterranea": 7
+        }
+      },
+      "spain_mediterranea+dominican_criolla": {
+        "missing": [],
+        "ok": true,
+        "split": {
+          "dominican_criolla": 3,
+          "spain_mediterranea": 7
+        }
+      },
+      "spain_mediterranea+mexico_casera": {
+        "missing": [],
+        "ok": true,
+        "split": {
+          "mexico_casera": 3,
+          "spain_mediterranea": 7
+        }
+      },
+      "spain_mediterranea+puertorico_criolla": {
+        "missing": [],
+        "ok": true,
+        "split": {
+          "puertorico_criolla": 3,
+          "spain_mediterranea": 7
+        }
+      },
+      "spain_mediterranea+us_everyday": {
+        "missing": [],
+        "ok": true,
+        "split": {
+          "spain_mediterranea": 7,
+          "us_everyday": 3
+        }
+      },
+      "us_everyday+colombia_casera": {
+        "missing": [],
+        "ok": true,
+        "split": {
+          "colombia_casera": 3,
+          "us_everyday": 7
+        }
+      },
+      "us_everyday+dominican_criolla": {
+        "missing": [],
+        "ok": true,
+        "split": {
+          "dominican_criolla": 3,
+          "us_everyday": 7
+        }
+      },
+      "us_everyday+mexico_casera": {
+        "missing": [],
+        "ok": true,
+        "split": {
+          "mexico_casera": 3,
+          "us_everyday": 7
+        }
+      },
+      "us_everyday+puertorico_criolla": {
+        "missing": [],
+        "ok": true,
+        "split": {
+          "puertorico_criolla": 3,
+          "us_everyday": 7
+        }
+      },
+      "us_everyday+spain_mediterranea": {
+        "missing": [],
+        "ok": true,
+        "split": {
+          "spain_mediterranea": 3,
+          "us_everyday": 7
+        }
+      }
+    }
+  },
+  "profiles": {
+    "colombia_casera": {
+      "appropriateness": {
+        "fried_share": 0.012,
+        "heavy_technique_in_snack": [],
+        "ok": true,
+        "starch_base_off_slot": []
+      },
+      "availability": {
+        "availability_risk_pct": 14.8,
+        "constituents": 311,
+        "dominican_cultivar_outside_do": [
+          {
+            "ingredient": "Papa",
+            "template": "Ensalada de atún con papa y huevo"
+          },
+          {
+            "ingredient": "Yuca",
+            "template": "Sancocho de gallina"
+          },
+          {
+            "ingredient": "Plátano verde",
+            "template": "Sancocho de gallina"
+          },
+          {
+            "ingredient": "Papa",
+            "template": "Sopa de verduras con pollo y mazorca"
+          },
+          {
+            "ingredient": "Auyama",
+            "template": "Sopa de verduras con pollo y mazorca"
+          },
+          {
+            "ingredient": "Guayaba",
+            "template": "Jugo de guayaba con leche"
+          },
+          {
+            "ingredient": "Auyama",
+            "template": "Crema de auyama con queso"
+          },
+          {
+            "ingredient": "Plátano verde",
+            "template": "Sopa de lentejas con plátano verde"
+          },
+          {
+            "ingredient": "Plátano maduro",
+            "template": "Bandeja paisa aligerada"
+          },
+          {
+            "ingredient": "Papa",
+            "template": "Arroz atollado con pollo"
+          },
+          {
+            "ingredient": "Longaniza dominicana",
+            "template": "Longaniza santarrosana con papa"
+          },
+          {
+            "ingredient": "Papa",
+            "template": "Longaniza santarrosana con papa"
+          },
+          {
+            "ingredient": "Papa",
+            "template": "Caldo de pollo con papa y cilantro"
+          },
+          {
+            "ingredient": "Papa",
+            "template": "Caldo de costilla con papa"
+          },
+          {
+            "ingredient": "Plátano maduro",
+            "template": "Fríjoles con arroz, plátano maduro y aguacate"
+          },
+          {
+            "ingredient": "Papa",
+            "template": "Sopa de guascas con pollo desmenuzado"
+          },
+          {
+            "ingredient": "Papa",
+            "template": "Carne molida guisada con papa y arroz"
+          },
+          {
+            "ingredient": "Plátano maduro",
+            "template": "Lentejas con arroz y plátano maduro"
+          },
+          {
+            "ingredient": "Guayaba",
+            "template": "Guayaba con queso blanco"
+          },
+          {
+            "ingredient": "Plátano maduro",
+            "template": "Plátano maduro asado con queso"
+          },
+          {
+            "ingredient": "Papa",
+            "template": "Ajiaco santafereño con pollo"
+          },
+          {
+            "ingredient": "Ñame",
+            "template": "Ñame y yuca sudados con costilla"
+          },
+          {
+            "ingredient": "Yuca",
+            "template": "Ñame y yuca sudados con costilla"
+          },
+          {
+            "ingredient": "Papa",
+            "template": "Sudado de carne con papa y yuca"
+          },
+          {
+            "ingredient": "Yuca",
+            "template": "Sudado de carne con papa y yuca"
+          },
+          {
+            "ingredient": "Guanábana",
+            "template": "Batido de guanábana con leche"
+          },
+          {
+            "ingredient": "Plátano verde",
+            "template": "Tilapia frita con patacón"
+          },
+          {
+            "ingredient": "Plátano verde",
+            "template": "Patacones con hogao y queso"
+          },
+          {
+            "ingredient": "Papa",
+            "template": "Sobrebarriga en salsa criolla con papa"
+          },
+          {
+            "ingredient": "Papa",
+            "template": "Empanadas de carne al horno"
+          },
+          {
+            "ingredient": "Papa",
+            "template": "Tilapia al horno con ensalada y papa"
+          },
+          {
+            "ingredient": "Papa",
+            "template": "Sopa de pollo con fideos y verduras"
+          },
+          {
+            "ingredient": "Plátano verde",
+            "template": "Pescado frito con patacones y ensalada"
+          },
+          {
+            "ingredient": "Plátano maduro",
+            "template": "Frijol cargamanto con costilla"
+          },
+          {
+            "ingredient": "Yuca",
+            "template": "Sudado de pescado con yuca"
+          },
+          {
+            "ingredient": "Coco",
+            "template": "Camarones al ajillo con arroz de coco"
+          },
+          {
+            "ingredient": "Papa",
+            "template": "Pechuga en salsa de champiñones con puré"
+          },
+          {
+            "ingredient": "Papa",
+            "template": "Sudado de pollo con papa"
+          },
+          {
+            "ingredient": "Papa",
+            "template": "Morcilla con papa criolla"
+          },
+          {
+            "ingredient": "Papa",
+            "template": "Gallina criolla guisada con papa criolla"
+          },
+          {
+            "ingredient": "Batata",
+            "template": "Batata asada con queso costeño"
+          },
+          {
+            "ingredient": "Yuca",
+            "template": "Mondongo ligero con yuca"
+          },
+          {
+            "ingredient": "Papa",
+            "template": "Mondongo ligero con yuca"
+          },
+          {
+            "ingredient": "Plátano verde",
+            "template": "Trucha a la plancha con patacones"
+          },
+          {
+            "ingredient": "Papa",
+            "template": "Tamal tolimense ligero"
+          },
+          {
+            "ingredient": "Auyama",
+            "template": "Huevos con auyama y queso"
+          }
+        ],
+        "needs_review": false,
+        "ok": true,
+        "priced_pct": 87.5,
+        "review_threshold_pct": 15.0
+      },
+      "clinical": {
+        "allergen_leaks": [],
+        "ok": true,
+        "processed_meat": [
+          "Bandeja paisa aligerada",
+          "Longaniza santarrosana con papa",
+          "Calentado paisa con huevo",
+          "Chicharrón con arepa y aguacate",
+          "Lentejas con chorizo santarrosano",
+          "Morcilla con papa criolla"
+        ],
+        "sodium_high": [
+          "Pan con queso costeño y chocolate caliente",
+          "Bandeja paisa aligerada",
+          "Longaniza santarrosana con papa",
+          "Calentado paisa con huevo",
+          "Chicharrón con arepa y aguacate",
+          "Perico de huevo con queso y pan",
+          "Morcilla con papa criolla",
+          "Palmito salteado con camarones"
+        ]
+      },
+      "contamination": {
+        "hits": [],
+        "ok": true
+      },
+      "country": "CO",
+      "coverage": {
+        "gaps": [],
+        "ok": true,
+        "slots": {
+          "almuerzo": 34,
+          "cena": 25,
+          "desayuno": 20,
+          "merienda": 22
+        },
+        "templates": 86
+      },
+      "diversity": {
+        "bases": 10,
+        "distinct_heads_ratio": 0.837,
+        "ok": true,
+        "proteins": 11,
+        "techniques": 13,
+        "top_protein_share": 0.198,
+        "transform_share": 0.372
+      },
+      "library": "co",
+      "resolvability": {
+        "excluded": 0,
+        "ok": true,
+        "pct": 100.0
+      },
+      "review": {
+        "editorial": {
+          "curated": 86
+        },
+        "flagged_for_human_review": [
+          "Ajiaco santafereño con pollo",
+          "Arroz atollado con pollo",
+          "Bandeja paisa aligerada",
+          "Batata asada con queso costeño",
+          "Batido de guanábana con leche",
+          "Caldo de costilla con papa",
+          "Caldo de pollo con papa y cilantro",
+          "Camarones al ajillo con arroz de coco",
+          "Carne molida guisada con papa y arroz",
+          "Crema de auyama con queso",
+          "Empanadas de carne al horno",
+          "Ensalada de atún con papa y huevo",
+          "Frijol cargamanto con costilla",
+          "Fríjoles con arroz, plátano maduro y aguacate",
+          "Gallina criolla guisada con papa criolla",
+          "Guayaba con queso blanco",
+          "Huevos con auyama y queso",
+          "Jugo de guayaba con leche",
+          "Lentejas con arroz y plátano maduro",
+          "Longaniza santarrosana con papa",
+          "Mondongo ligero con yuca",
+          "Morcilla con papa criolla",
+          "Patacones con hogao y queso",
+          "Pechuga en salsa de champiñones con puré",
+          "Pescado frito con patacones y ensalada",
+          "Plátano maduro asado con queso",
+          "Sancocho de gallina",
+          "Sobrebarriga en salsa criolla con papa",
+          "Sopa de guascas con pollo desmenuzado",
+          "Sopa de lentejas con plátano verde",
+          "Sopa de pollo con fideos y verduras",
+          "Sopa de verduras con pollo y mazorca",
+          "Sudado de carne con papa y yuca",
+          "Sudado de pescado con yuca",
+          "Sudado de pollo con papa",
+          "Tamal tolimense ligero",
+          "Tilapia al horno con ensalada y papa",
+          "Tilapia frita con patacón",
+          "Trucha a la plancha con patacones",
+          "Ñame y yuca sudados con costilla"
+        ],
+        "human_signoff": false
+      },
+      "snapshot_hash": "76880b93946021f72baf2f351b86376a406e39ed3eb9f070efb1247698ec7320"
+    },
+    "dominican_criolla": {
+      "appropriateness": {
+        "fried_share": 0.0,
+        "heavy_technique_in_snack": [],
+        "ok": true,
+        "starch_base_off_slot": []
+      },
+      "availability": {
+        "availability_risk_pct": 0.0,
+        "constituents": 561,
+        "dominican_cultivar_outside_do": [],
+        "needs_review": false,
+        "ok": true,
+        "priced_pct": 98.8,
+        "review_threshold_pct": 15.0
+      },
+      "clinical": {
+        "allergen_leaks": [],
+        "ok": true,
+        "processed_meat": [
+          "Mangú con salami de pavo a la plancha (versión magra)",
+          "Espaguetis criollos con pollo desmenuzado"
+        ],
+        "sodium_high": [
+          "Locrio de arenque con aguacate",
+          "Arenque desmenuzado con huevo y yuca hervida",
+          "Lentejas guisadas con arroz y aguacate",
+          "La bandera: arroz, habichuelas rojas guisadas y pollo guisado",
+          "Mangú con salami de pavo a la plancha (versión magra)",
+          "Moro de guandules con pollo guisado",
+          "Pescado guisado a la criolla con arroz blanco",
+          "Moro de habichuelas negras con bistec encebollado",
+          "Pollo horneado al limón con arroz amarillo",
+          "Berenjenas guisadas con carne molida y arroz",
+          "Tortitas de pescado con ensalada verde",
+          "Asopao de pollo (porción moderada)",
+          "Chicharrón de pollo al airfryer con yuca hervida",
+          "Chivo guisado estilo liniero con yuca hervida",
+          "Espaguetis criollos con pollo desmenuzado",
+          "Res mechada con puré de papa",
+          "Pinchos de pollo y vegetales con yuca hervida",
+          "Guineítos verdes guisados con costillitas magras de cerdo",
+          "Yuca al mojo con cerdo magro a la plancha",
+          "Camarones guisados con moro de guandules",
+          "Pescado con coco estilo Samaná con arroz blanco",
+          "Revoltillo de atún con plátano hervido",
+          "Croquetas de atún y yuca al horno con ensalada",
+          "Tortilla de huevos con espinaca y queso fresco",
+          "Sopa-crema de auyama con pollo desmenuzado"
+        ]
+      },
+      "contamination": {
+        "hits": [
+          {
+            "foreign_profile": "mexico_casera",
+            "template": "Tacos en hoja de lechuga con res mechada",
+            "token": "tacos"
+          }
+        ],
+        "ok": true
+      },
+      "country": "DO",
+      "coverage": {
+        "gaps": [],
+        "ok": true,
+        "slots": {
+          "almuerzo": 41,
+          "cena": 31,
+          "desayuno": 23,
+          "merienda": 32
+        },
+        "templates": 97
+      },
+      "diversity": {
+        "bases": 16,
+        "distinct_heads_ratio": 0.887,
+        "ok": true,
+        "proteins": 12,
+        "techniques": 36,
+        "top_protein_share": 0.247,
+        "transform_share": 0.505
+      },
+      "library": "do",
+      "resolvability": {
+        "excluded": 0,
+        "ok": true,
+        "pct": 99.3
+      },
+      "review": {
+        "editorial": {
+          "curated": 97
+        },
+        "flagged_for_human_review": [
+          "Tacos en hoja de lechuga con res mechada"
+        ],
+        "human_signoff": false
+      },
+      "snapshot_hash": "3605159b411f636e9ad92ac7e5920a769321debf54827b569300f612fc63d780"
+    },
+    "mexico_casera": {
+      "appropriateness": {
+        "fried_share": 0.024,
+        "heavy_technique_in_snack": [],
+        "ok": true,
+        "starch_base_off_slot": []
+      },
+      "availability": {
+        "availability_risk_pct": 2.1,
+        "constituents": 380,
+        "dominican_cultivar_outside_do": [
+          {
+            "ingredient": "Papa",
+            "template": "Caldo de camarón con verduras"
+          },
+          {
+            "ingredient": "Papa",
+            "template": "Crema de chile poblano con elote"
+          },
+          {
+            "ingredient": "Longaniza dominicana",
+            "template": "Frijoles charros con longaniza"
+          },
+          {
+            "ingredient": "Papa",
+            "template": "Picadillo de res con papa y zanahoria"
+          },
+          {
+            "ingredient": "Guayaba",
+            "template": "Yogur con guayaba y avena"
+          },
+          {
+            "ingredient": "Plátano maduro",
+            "template": "Avena con canela y plátano estilo mexicano"
+          },
+          {
+            "ingredient": "Papa",
+            "template": "Sopa de lentejas con verduras"
+          },
+          {
+            "ingredient": "Papa",
+            "template": "Tortitas de papa con queso"
+          }
+        ],
+        "needs_review": false,
+        "ok": true,
+        "priced_pct": 71.3,
+        "review_threshold_pct": 15.0
+      },
+      "clinical": {
+        "allergen_leaks": [],
+        "ok": true,
+        "processed_meat": [
+          "Sincronizadas de jamón de pavo y queso",
+          "Machaca de cecina con huevo",
+          "Frijoles charros con longaniza",
+          "Cecina con nopales asados",
+          "Huevos con chorizo mexicano y tortillas"
+        ],
+        "sodium_high": [
+          "Sincronizadas de jamón de pavo y queso",
+          "Machaca de cecina con huevo",
+          "Cecina con nopales asados",
+          "Huevos divorciados con frijoles refritos",
+          "Molletes de frijol con queso",
+          "Enfrijoladas de pollo"
+        ]
+      },
+      "contamination": {
+        "hits": [],
+        "ok": true
+      },
+      "country": "MX",
+      "coverage": {
+        "gaps": [],
+        "ok": true,
+        "slots": {
+          "almuerzo": 35,
+          "cena": 28,
+          "desayuno": 21,
+          "merienda": 22
+        },
+        "templates": 83
+      },
+      "diversity": {
+        "bases": 7,
+        "distinct_heads_ratio": 0.795,
+        "ok": true,
+        "proteins": 12,
+        "techniques": 14,
+        "top_protein_share": 0.229,
+        "transform_share": 0.434
+      },
+      "library": "mx",
+      "resolvability": {
+        "excluded": 0,
+        "ok": true,
+        "pct": 100.0
+      },
+      "review": {
+        "editorial": {
+          "curated": 83
+        },
+        "flagged_for_human_review": [
+          "Avena con canela y plátano estilo mexicano",
+          "Caldo de camarón con verduras",
+          "Crema de chile poblano con elote",
+          "Frijoles charros con longaniza",
+          "Picadillo de res con papa y zanahoria",
+          "Sopa de lentejas con verduras",
+          "Tortitas de papa con queso",
+          "Yogur con guayaba y avena"
+        ],
+        "human_signoff": false
+      },
+      "snapshot_hash": "06e1f79836618105f42182752585ad4864d9453539b2cba188886972e89b66f8"
+    },
+    "puertorico_criolla": {
+      "appropriateness": {
+        "fried_share": 0.081,
+        "heavy_technique_in_snack": [],
+        "ok": true,
+        "starch_base_off_slot": []
+      },
+      "availability": {
+        "availability_risk_pct": 16.2,
+        "constituents": 308,
+        "dominican_cultivar_outside_do": [
+          {
+            "ingredient": "Yuca",
+            "template": "Bacalao guisado con viandas"
+          },
+          {
+            "ingredient": "Ñame",
+            "template": "Bacalao guisado con viandas"
+          },
+          {
+            "ingredient": "Guayaba",
+            "template": "Ensalada de frutas tropicales"
+          },
+          {
+            "ingredient": "Auyama",
+            "template": "Guisado de garbanzos con calabaza y arroz"
+          },
+          {
+            "ingredient": "Guineo verde",
+            "template": "Guineos verdes majados con huevo y cebolla"
+          },
+          {
+            "ingredient": "Pan de agua",
+            "template": "Pan con mantequilla y jugo de chinola"
+          },
+          {
+            "ingredient": "Plátano verde",
+            "template": "Tostones con pique"
+          },
+          {
+            "ingredient": "Plátano verde",
+            "template": "Chicharrón de cerdo con tostones y pique"
+          },
+          {
+            "ingredient": "Ñame",
+            "template": "Jamón de cocinar con puré de ñame"
+          },
+          {
+            "ingredient": "Yuca",
+            "template": "Sancocho puertorriqueño"
+          },
+          {
+            "ingredient": "Ñame",
+            "template": "Sancocho puertorriqueño"
+          },
+          {
+            "ingredient": "Auyama",
+            "template": "Sancocho puertorriqueño"
+          },
+          {
+            "ingredient": "Auyama",
+            "template": "Habichuelas guisadas con calabaza y arroz"
+          },
+          {
+            "ingredient": "Plátano maduro",
+            "template": "Pechuga a la plancha con amarillos y ensalada"
+          },
+          {
+            "ingredient": "Coco",
+            "template": "Piña con coco rallado"
+          },
+          {
+            "ingredient": "Plátano verde",
+            "template": "Mofongo con chicharrón"
+          },
+          {
+            "ingredient": "Pan de agua",
+            "template": "Huevos revueltos con queso de papa y pan de agua"
+          },
+          {
+            "ingredient": "Plátano verde",
+            "template": "Puré de plátano verde con huevo frito"
+          },
+          {
+            "ingredient": "Yautía",
+            "template": "Serenata de bacalao con viandas"
+          },
+          {
+            "ingredient": "Ñame",
+            "template": "Serenata de bacalao con viandas"
+          },
+          {
+            "ingredient": "Papa",
+            "template": "Pavo molido guisado con papa"
+          },
+          {
+            "ingredient": "Yuca",
+            "template": "Pescado a la plancha con yuca hervida"
+          },
+          {
+            "ingredient": "Plátano verde",
+            "template": "Morcilla a la plancha con tostones"
+          },
+          {
+            "ingredient": "Batata",
+            "template": "Batata hervida con canela"
+          },
+          {
+            "ingredient": "Plátano verde",
+            "template": "Camarones al ajillo con tostones"
+          },
+          {
+            "ingredient": "Guineo verde",
+            "template": "Guineítos en escabeche"
+          },
+          {
+            "ingredient": "Pan sobao",
+            "template": "Tostadas de pan sobao con queso y jugo de naranja"
+          },
+          {
+            "ingredient": "Papa",
+            "template": "Chuletas de cerdo guisadas con arroz"
+          },
+          {
+            "ingredient": "Auyama",
+            "template": "Habichuelas guisadas con arroz integral"
+          },
+          {
+            "ingredient": "Plátano verde",
+            "template": "Bistec encebollado con tostones"
+          },
+          {
+            "ingredient": "Coco",
+            "template": "Arroz con dulce"
+          },
+          {
+            "ingredient": "Batata",
+            "template": "Pechuga de pollo con puré de batata"
+          },
+          {
+            "ingredient": "Auyama",
+            "template": "Pollo guisado con calabaza y arroz"
+          },
+          {
+            "ingredient": "Papa",
+            "template": "Pastelón de papa con carne"
+          },
+          {
+            "ingredient": "Auyama",
+            "template": "Arroz con habichuelas y pechuga guisada"
+          },
+          {
+            "ingredient": "Papa",
+            "template": "Ensalada de pollo con aceitunas y papas"
+          },
+          {
+            "ingredient": "Yuca",
+            "template": "Sopa de pollo con viandas"
+          },
+          {
+            "ingredient": "Auyama",
+            "template": "Sopa de pollo con viandas"
+          },
+          {
+            "ingredient": "Papa",
+            "template": "Sopa de fideos con pollo"
+          },
+          {
+            "ingredient": "Pan de agua",
+            "template": "Tostadas con queso de papa"
+          },
+          {
+            "ingredient": "Guayaba",
+            "template": "Queso de papa con guayaba"
+          },
+          {
+            "ingredient": "Batata",
+            "template": "Batata al horno con especias"
+          },
+          {
+            "ingredient": "Plátano verde",
+            "template": "Mofongo relleno de camarones"
+          },
+          {
+            "ingredient": "Pan de agua",
+            "template": "Pan con jamón de cocinar y queso de papa"
+          },
+          {
+            "ingredient": "Auyama",
+            "template": "Crema de auyama con queso blanco"
+          },
+          {
+            "ingredient": "Yautía",
+            "template": "Filete de pescado en escabeche con viandas"
+          },
+          {
+            "ingredient": "Yuca",
+            "template": "Alcapurrias horneadas de camarón"
+          },
+          {
+            "ingredient": "Guineo verde",
+            "template": "Alcapurrias horneadas de camarón"
+          },
+          {
+            "ingredient": "Auyama",
+            "template": "Pavochón con puré de auyama"
+          },
+          {
+            "ingredient": "Plátano maduro",
+            "template": "Pastelón de plátano maduro con carne"
+          }
+        ],
+        "needs_review": true,
+        "ok": true,
+        "priced_pct": 78.2,
+        "review_threshold_pct": 15.0
+      },
+      "clinical": {
+        "allergen_leaks": [],
+        "ok": true,
+        "processed_meat": [
+          "Huevos revueltos con jamón de cocinar",
+          "Chicharrón de cerdo con tostones y pique",
+          "Arroz con salchichas y habichuelas",
+          "Jamón de cocinar con puré de ñame",
+          "Mofongo con chicharrón",
+          "Morcilla a la plancha con tostones",
+          "Pan con jamón de cocinar y queso de papa",
+          "Huevos con longaniza puertorriqueña",
+          "Pavochón con puré de auyama",
+          "Longaniza puertorriqueña con arroz y habichuelas"
+        ],
+        "sodium_high": [
+          "Guisado de garbanzos con calabaza y arroz",
+          "Huevos revueltos con jamón de cocinar",
+          "Chicharrón de cerdo con tostones y pique",
+          "Arroz con salchichas y habichuelas",
+          "Jamón de cocinar con puré de ñame",
+          "Chuletas ahumadas a la plancha con vegetales",
+          "Mofongo con chicharrón",
+          "Huevos revueltos con queso de papa y pan de agua",
+          "Morcilla a la plancha con tostones",
+          "Arroz con pollo y aceitunas rellenas",
+          "Asopao de pollo",
+          "Chuletas ahumadas con arroz blanco",
+          "Tostadas con queso de papa",
+          "Pan con jamón de cocinar y queso de papa",
+          "Huevos con longaniza puertorriqueña",
+          "Tortilla de huevo con queso de papa",
+          "Longaniza puertorriqueña con arroz y habichuelas"
+        ]
+      },
+      "contamination": {
+        "hits": [],
+        "ok": true
+      },
+      "country": "PR",
+      "coverage": {
+        "gaps": [],
+        "ok": true,
+        "slots": {
+          "almuerzo": 33,
+          "cena": 22,
+          "desayuno": 19,
+          "merienda": 20
+        },
+        "templates": 86
+      },
+      "diversity": {
+        "bases": 10,
+        "distinct_heads_ratio": 0.709,
+        "ok": true,
+        "proteins": 12,
+        "techniques": 14,
+        "top_protein_share": 0.198,
+        "transform_share": 0.43
+      },
+      "library": "pr",
+      "resolvability": {
+        "excluded": 0,
+        "ok": true,
+        "pct": 100.0
+      },
+      "review": {
+        "editorial": {
+          "curated": 86
+        },
+        "flagged_for_human_review": [
+          "Alcapurrias horneadas de camarón",
+          "Arroz con dulce",
+          "Arroz con habichuelas y pechuga guisada",
+          "Bacalao guisado con viandas",
+          "Batata al horno con especias",
+          "Batata hervida con canela",
+          "Bistec encebollado con tostones",
+          "Camarones al ajillo con tostones",
+          "Chicharrón de cerdo con tostones y pique",
+          "Chuletas de cerdo guisadas con arroz",
+          "Crema de auyama con queso blanco",
+          "Ensalada de frutas tropicales",
+          "Ensalada de pollo con aceitunas y papas",
+          "Filete de pescado en escabeche con viandas",
+          "Guineos verdes majados con huevo y cebolla",
+          "Guineítos en escabeche",
+          "Guisado de garbanzos con calabaza y arroz",
+          "Habichuelas guisadas con arroz integral",
+          "Habichuelas guisadas con calabaza y arroz",
+          "Huevos revueltos con queso de papa y pan de agua",
+          "Jamón de cocinar con puré de ñame",
+          "Mofongo con chicharrón",
+          "Mofongo relleno de camarones",
+          "Morcilla a la plancha con tostones",
+          "Pan con jamón de cocinar y queso de papa",
+          "Pan con mantequilla y jugo de chinola",
+          "Pastelón de papa con carne",
+          "Pastelón de plátano maduro con carne",
+          "Pavo molido guisado con papa",
+          "Pavochón con puré de auyama",
+          "Pechuga a la plancha con amarillos y ensalada",
+          "Pechuga de pollo con puré de batata",
+          "Pescado a la plancha con yuca hervida",
+          "Piña con coco rallado",
+          "Pollo guisado con calabaza y arroz",
+          "Puré de plátano verde con huevo frito",
+          "Queso de papa con guayaba",
+          "Sancocho puertorriqueño",
+          "Serenata de bacalao con viandas",
+          "Sopa de fideos con pollo",
+          "Sopa de pollo con viandas",
+          "Tostadas con queso de papa",
+          "Tostadas de pan sobao con queso y jugo de naranja",
+          "Tostones con pique"
+        ],
+        "human_signoff": false
+      },
+      "snapshot_hash": "e088178e581c611396742f3cbbe35de0da50cfdd0216cd4095ff33a4a1efdd30"
+    },
+    "spain_mediterranea": {
+      "appropriateness": {
+        "fried_share": 0.0,
+        "heavy_technique_in_snack": [],
+        "ok": true,
+        "starch_base_off_slot": []
+      },
+      "availability": {
+        "availability_risk_pct": 4.7,
+        "constituents": 337,
+        "dominican_cultivar_outside_do": [
+          {
+            "ingredient": "Papa",
+            "template": "Potaje de garbanzos con acelgas"
+          },
+          {
+            "ingredient": "Papa",
+            "template": "Pulpo a la gallega con patata y pimentón"
+          },
+          {
+            "ingredient": "Papa",
+            "template": "Tortilla española con patata y cebolla"
+          },
+          {
+            "ingredient": "Papa",
+            "template": "Cordero asado con patatas panaderas"
+          },
+          {
+            "ingredient": "Papa",
+            "template": "Ensaladilla rusa con atún en lata"
+          },
+          {
+            "ingredient": "Papa",
+            "template": "Albóndigas en salsa con puré de patata"
+          },
+          {
+            "ingredient": "Papa",
+            "template": "Pollo al ajillo con patatas panaderas"
+          },
+          {
+            "ingredient": "Pan de agua",
+            "template": "Bocadillo de jamón serrano con tomate"
+          },
+          {
+            "ingredient": "Papa",
+            "template": "Tortilla de patatas con jamón serrano"
+          },
+          {
+            "ingredient": "Papa",
+            "template": "Crema de calabacín con queso"
+          },
+          {
+            "ingredient": "Papa",
+            "template": "Ternera guisada con patatas y zanahoria"
+          },
+          {
+            "ingredient": "Papa",
+            "template": "Bocadillo de tortilla española"
+          },
+          {
+            "ingredient": "Papa",
+            "template": "Conejo al ajillo con patatas"
+          },
+          {
+            "ingredient": "Papa",
+            "template": "Pollo asado con verduras al horno"
+          },
+          {
+            "ingredient": "Papa",
+            "template": "Trucha al horno con patatas panaderas"
+          },
+          {
+            "ingredient": "Papa",
+            "template": "Sopa de verduras con fideos y pollo"
+          }
+        ],
+        "needs_review": false,
+        "ok": true,
+        "priced_pct": 86.1,
+        "review_threshold_pct": 15.0
+      },
+      "clinical": {
+        "allergen_leaks": [],
+        "ok": true,
+        "processed_meat": [
+          "Menestra de verduras con jamón serrano",
+          "Sopa de fideos con jamón serrano",
+          "Habas con jamón serrano salteadas",
+          "Lentejas estofadas con chorizo y verduras",
+          "Butifarra con alubias blancas",
+          "Chistorra a la plancha con pimientos",
+          "Croquetas de jamón ibérico caseras",
+          "Bocadillo de jamón serrano con tomate",
+          "Higos con jamón serrano",
+          "Tortilla de patatas con jamón serrano",
+          "Judías blancas estofadas con panceta ibérica",
+          "Cocido madrileño con garbanzos y chorizo",
+          "Sobrasada con pan y miel",
+          "Sopa de picadillo con jamón y huevo duro",
+          "Salmorejo cordobés con jamón y huevo picado",
+          "Tostada con tomate, aceite de oliva y jamón serrano",
+          "Fabada asturiana con judías blancas, morcilla y panceta",
+          "Tortilla francesa con jamón de pavo y pan",
+          "Alcachofas salteadas con jamón serrano"
+        ],
+        "sodium_high": [
+          "Menestra de verduras con jamón serrano",
+          "Sopa de fideos con jamón serrano",
+          "Habas con jamón serrano salteadas",
+          "Percebes al vapor con limón",
+          "Tostada integral con aguacate y huevo poché",
+          "Ensaladilla rusa con atún en lata",
+          "Butifarra con alubias blancas",
+          "Merluza en salsa verde con almejas",
+          "Chistorra a la plancha con pimientos",
+          "Croquetas de jamón ibérico caseras",
+          "Bocadillo de jamón serrano con tomate",
+          "Higos con jamón serrano",
+          "Tortilla de patatas con jamón serrano",
+          "Paella de mariscos con gambas y almejas",
+          "Judías blancas estofadas con panceta ibérica",
+          "Cocido madrileño con garbanzos y chorizo",
+          "Sobrasada con pan y miel",
+          "Vieiras a la plancha con puerro",
+          "Sopa de picadillo con jamón y huevo duro",
+          "Salmorejo cordobés con jamón y huevo picado",
+          "Tostada con tomate, aceite de oliva y jamón serrano",
+          "Fabada asturiana con judías blancas, morcilla y panceta",
+          "Pan con tomate y queso manchego",
+          "Tortilla francesa con jamón de pavo y pan",
+          "Alcachofas salteadas con jamón serrano",
+          "Coca de vegetales con anchoas"
+        ]
+      },
+      "contamination": {
+        "hits": [],
+        "ok": true
+      },
+      "country": "ES",
+      "coverage": {
+        "gaps": [],
+        "ok": true,
+        "slots": {
+          "almuerzo": 46,
+          "cena": 36,
+          "desayuno": 21,
+          "merienda": 22
+        },
+        "templates": 83
+      },
+      "diversity": {
+        "bases": 9,
+        "distinct_heads_ratio": 0.88,
+        "ok": true,
+        "proteins": 11,
+        "techniques": 14,
+        "top_protein_share": 0.313,
+        "transform_share": 0.241
+      },
+      "library": "es",
+      "resolvability": {
+        "excluded": 0,
+        "ok": true,
+        "pct": 100.0
+      },
+      "review": {
+        "editorial": {
+          "curated": 83
+        },
+        "flagged_for_human_review": [
+          "Albóndigas en salsa con puré de patata",
+          "Bocadillo de jamón serrano con tomate",
+          "Bocadillo de tortilla española",
+          "Conejo al ajillo con patatas",
+          "Cordero asado con patatas panaderas",
+          "Crema de calabacín con queso",
+          "Ensaladilla rusa con atún en lata",
+          "Pollo al ajillo con patatas panaderas",
+          "Pollo asado con verduras al horno",
+          "Potaje de garbanzos con acelgas",
+          "Pulpo a la gallega con patata y pimentón",
+          "Sopa de verduras con fideos y pollo",
+          "Ternera guisada con patatas y zanahoria",
+          "Tortilla de patatas con jamón serrano",
+          "Tortilla española con patata y cebolla",
+          "Trucha al horno con patatas panaderas"
+        ],
+        "human_signoff": false
+      },
+      "snapshot_hash": "4c2069f01b6b19738836f22d4091b29208aa364bfcdda5bb71a03fc72d54f637"
+    },
+    "us_everyday": {
+      "appropriateness": {
+        "fried_share": 0.023,
+        "heavy_technique_in_snack": [],
+        "ok": true,
+        "starch_base_off_slot": []
+      },
+      "availability": {
+        "availability_risk_pct": 3.9,
+        "constituents": 311,
+        "dominican_cultivar_outside_do": [
+          {
+            "ingredient": "Papa",
+            "template": "Filete de pescado blanco al horno con papa y vainitas"
+          },
+          {
+            "ingredient": "Papa",
+            "template": "Sopa de almejas estilo Nueva Inglaterra"
+          },
+          {
+            "ingredient": "Auyama",
+            "template": "Pechuga de pollo a la parrilla con vegetales"
+          },
+          {
+            "ingredient": "Papa",
+            "template": "Crema de brócoli con queso cheddar"
+          },
+          {
+            "ingredient": "Papa",
+            "template": "Pastel de carne con puré de papa"
+          },
+          {
+            "ingredient": "Papa",
+            "template": "Pavo al horno con puré de papa"
+          },
+          {
+            "ingredient": "Papa",
+            "template": "Chuletas de cerdo al horno"
+          },
+          {
+            "ingredient": "Papa",
+            "template": "Huevos revueltos con papas y espinaca"
+          },
+          {
+            "ingredient": "Papa",
+            "template": "Chuletas de cerdo con puré de papa"
+          },
+          {
+            "ingredient": "Papa",
+            "template": "Papa al horno con crema agria"
+          },
+          {
+            "ingredient": "Batata",
+            "template": "Pechuga de pollo al horno con batata y espárragos"
+          },
+          {
+            "ingredient": "Papa",
+            "template": "Pavo al horno con puré y salsa de arándanos"
+          }
+        ],
+        "needs_review": false,
+        "ok": true,
+        "priced_pct": 80.7,
+        "review_threshold_pct": 15.0
+      },
+      "clinical": {
+        "allergen_leaks": [],
+        "ok": true,
+        "processed_meat": [
+          "Salchicha italiana con vegetales asados",
+          "Salchicha italiana con pimientos",
+          "Bolitas de papa con salchichas",
+          "Ensalada Cobb con pollo, huevo y aguacate",
+          "Sándwich de jamón de sándwich con queso provolone",
+          "Pechuga de pollo envuelta en tocineta",
+          "Salchichas con frijoles horneados",
+          "Pepperoni con queso provolone y pan",
+          "Huevos revueltos con tocineta",
+          "Sándwich de huevo con jamón de pavo en panecillo inglés"
+        ],
+        "sodium_high": [
+          "Salchicha italiana con vegetales asados",
+          "Salchicha italiana con pimientos",
+          "Sopa de almejas estilo Nueva Inglaterra",
+          "Pasta integral con pavo molido y salsa de tomate",
+          "Panecillos de mantequilla con miel",
+          "Espagueti integral con albóndigas de pavo",
+          "Bolitas de papa con salchichas",
+          "Wafles con jarabe de arce",
+          "Burrito de desayuno con huevo, frijoles y queso",
+          "Sándwich de jamón de sándwich con queso provolone",
+          "Pan de maíz con mantequilla",
+          "Tacos con sazonador para tacos",
+          "Salchichas con frijoles horneados",
+          "Pepperoni con queso provolone y pan",
+          "Sloppy joe de res magra en pan",
+          "Panqueques con arándanos rojos",
+          "Pizza rápida de tortilla integral con pollo y mozzarella",
+          "Sándwich de huevo con jamón de pavo en panecillo inglés",
+          "Chili con carne con pan de maíz"
+        ]
+      },
+      "contamination": {
+        "hits": [
+          {
+            "foreign_profile": "mexico_casera",
+            "template": "Tacos de pescado con repollo y crema agria",
+            "token": "tacos"
+          },
+          {
+            "foreign_profile": "mexico_casera",
+            "template": "Tacos con sazonador para tacos",
+            "token": "tacos"
+          }
+        ],
+        "ok": true
+      },
+      "country": "US",
+      "coverage": {
+        "gaps": [],
+        "ok": true,
+        "slots": {
+          "almuerzo": 36,
+          "cena": 25,
+          "desayuno": 21,
+          "merienda": 16
+        },
+        "templates": 87
+      },
+      "diversity": {
+        "bases": 9,
+        "distinct_heads_ratio": 0.759,
+        "ok": true,
+        "proteins": 11,
+        "techniques": 14,
+        "top_protein_share": 0.184,
+        "transform_share": 0.253
+      },
+      "library": "us",
+      "resolvability": {
+        "excluded": 0,
+        "ok": true,
+        "pct": 100.0
+      },
+      "review": {
+        "editorial": {
+          "curated": 87
+        },
+        "flagged_for_human_review": [
+          "Chuletas de cerdo al horno",
+          "Chuletas de cerdo con puré de papa",
+          "Crema de brócoli con queso cheddar",
+          "Filete de pescado blanco al horno con papa y vainitas",
+          "Huevos revueltos con papas y espinaca",
+          "Papa al horno con crema agria",
+          "Pastel de carne con puré de papa",
+          "Pavo al horno con puré de papa",
+          "Pavo al horno con puré y salsa de arándanos",
+          "Pechuga de pollo a la parrilla con vegetales",
+          "Pechuga de pollo al horno con batata y espárragos",
+          "Sopa de almejas estilo Nueva Inglaterra",
+          "Tacos con sazonador para tacos",
+          "Tacos de pescado con repollo y crema agria"
+        ],
+        "human_signoff": false
+      },
+      "snapshot_hash": "2a423c6a9ff7558185964a9d82c0664bc247f94695eacfa29a91073fa1d72254"
+    }
+  },
+  "schema_version": 1
+}

@@ -97,15 +97,17 @@ Cinco regresiones históricas que este diseño protege (P1-G mode=block no-op, `
 
 [P1-ARQ25-F1-LIFECYCLE · 2026-09-02] Bloque 1 = chunk `initial` (I1); `attempts` = fencing (I10); `revision` por trigger (I12). Doc `backend/docs/generation_lifecycle_2_5.md`; tests `test_p1_arq25_f1_*.py`.
 
-[P1-ARQ25-F2-PLANPOLICY · 2026-09-02] Fase 2, `shadow`: política pedida/aplicada + `relaxations[]` por run y en `plan_data._plan_policy`; presupuesto duro (decisión #4) ⇒ `waiting_user`, nunca silencioso. Knob `MEALFIT_PLAN_POLICY_MODE`. Doc `backend/docs/plan_policy_f2.md`; test `test_p1_arq25_f2_planpolicy.py`.
+[P1-ARQ25-F2-PLANPOLICY · 2026-09-02] Fase 2: política pedida/aplicada + `relaxations[]` en `plan_data._plan_policy`; presupuesto duro ⇒ `waiting_user`, nunca silencioso. Knob `MEALFIT_PLAN_POLICY_MODE`. Doc `backend/docs/plan_policy_f2.md`; test `test_p1_arq25_f2_planpolicy.py`.
 
-[P1-ARQ25-F3-HORIZON · 2026-09-02] Fase 3: blueprint 7/15/30 por run (`horizon.py` → `plan_generation_runs.blueprint`), rebanada inmutable por chunk en `form_data["_blueprint_slice"]` + `input_hash`; validadores de fidelidad (`review_fidelity_gate`, knob `MEALFIT_FIDELITY_GATE` warn|block) sustituyen a los gates de repetición en `enforce`; motivo neutral `renewal.v1` (alias `variety`); canary `MEALFIT_PLAN_POLICY_ENFORCE_USERS`. Doc `backend/docs/plan_policy_f3.md`; test `test_p1_arq25_f3_horizon.py`.
+[P1-ARQ25-F3-HORIZON · 2026-09-02] Fase 3: blueprint 7/15/30 por run (`horizon.py`), rebanada inmutable por chunk (`_blueprint_slice` + `input_hash`), gate de fidelidad (`MEALFIT_FIDELITY_GATE`), canary `MEALFIT_PLAN_POLICY_ENFORCE_USERS`. Doc `backend/docs/plan_policy_f3.md`; test `test_p1_arq25_f3_horizon.py`.
 
-[P1-ARQ25-F4-FORM · 2026-09-03] Fase 4: formulario progresivo (§6.7, knob `VITE_PLAN_POLICY_FORM`), panel «solicitaste / aplicamos / por qué» y embudo `pipeline_metrics.wizard_funnel`. Doc `backend/docs/plan_policy_f4.md`; test `test_p1_arq25_f4_form.py`.
+[P1-ARQ25-F4-FORM · 2026-09-03] Fase 4: formulario progresivo (§6.7, knob `VITE_PLAN_POLICY_FORM`), panel «solicitaste / aplicamos / por qué» y embudo del wizard. Doc `backend/docs/plan_policy_f4.md`; test `test_p1_arq25_f4_form.py`.
 
-[P1-ARQ25-F5-PLAN-JOBS · 2026-09-04 · +SHOPPING-PROJECTION] Fase 5: worker del outbox `plan_jobs` (claim `SKIP LOCKED`, `attempts` como fencing, backoff, dead letter, reclaim, `stale` por `revision`) + consumidores `display_i18n` y `shopping_projection` (listas 7/15/30 por revisión en `payload.result`, leídas por `/{plan_id}/projections`). Knob `MEALFIT_PLAN_JOBS_ENABLED`. Doc `backend/docs/plan_jobs_f5.md`; tests `test_p1_arq25_f5_*.py`.
+[P1-ARQ25-F5-PLAN-JOBS · 2026-09-04] Fase 5: worker del outbox `plan_jobs` + consumidores `display_i18n` y `shopping_projection` (`/{plan_id}/projections`). Knob `MEALFIT_PLAN_JOBS_ENABLED`. Doc `backend/docs/plan_jobs_f5.md`; tests `test_p1_arq25_f5_*.py`.
 
-[P1-ARQ25-F6-DISH-REGISTRY · 2026-09-05] Fase 6: Dish Registry compilado — `constituents` curados para las 87 DO, 6 snapshots reproducibles (`data/registry/`), hash en blueprint y métrica de fidelidad. Doc `backend/docs/dish_registry_f6.md`; test `test_p1_arq25_f6_dish_registry.py`.
+[P1-ARQ25-F6-DISH-REGISTRY · 2026-09-05] Fase 6: Dish Registry compilado (6 snapshots en `data/registry/`, hash en blueprint y fidelidad). Doc `backend/docs/dish_registry_f6.md`; test `test_p1_arq25_f6_dish_registry.py`.
+
+[P1-ARQ25-F7-CULTURE · 2026-09-05] Fase 7: cocina SEPARADA del mercado (I16): `constants.cultural_country_for_form_data` (platos) vs `country_for_form_data` (precios, catálogo, despensa). 6 perfiles como DATA (`cultural_profiles.py`), principal + 2 secundarias; paso «Cocinas que te representan» (sugerida, no sembrada); 6 bibliotecas ≥80 platos; benchmark §13.4 con firma humana pendiente. Knob `MEALFIT_CULTURAL_PROFILES`. Doc `backend/docs/cultural_profiles_f7.md`; tests `test_p1_arq25_f7_culture*.py`.
 
 ## RAG + Dreaming (consolidación de memoria offline)
 

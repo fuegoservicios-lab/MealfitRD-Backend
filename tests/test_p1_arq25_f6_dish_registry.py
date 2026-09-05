@@ -128,7 +128,12 @@ def test_f_las_87_plantillas_do_tienen_constituyentes_curados():
         pytest.skip("curación DO no generada")
     cur = json.loads(p.read_text(encoding="utf-8"))["templates"]
     templates = json.loads((_BACKEND / "data" / "dish_templates.json").read_text(encoding="utf-8"))["templates"]
-    assert set(cur) == {t["name"] for t in templates}, "una entrada por plantilla, ni más ni menos"
+    names = {t["name"] for t in templates}
+    assert set(cur) <= names, "la tabla curada no puede citar plantillas que ya no existen"
+    # [P1-ARQ25-F7-CULTURE] las plantillas DO nuevas (F7-D) llevan constituyentes INLINE; `_constituents_source`
+    # cae a ellos cuando la tabla curada no tiene la entrada. Ninguna plantilla puede quedarse sin ninguno de los dos.
+    inline = {t["name"] for t in templates if t.get("constituents")}
+    assert names - set(cur) <= inline, f"plantillas DO sin curación ni constituyentes inline: {names - set(cur) - inline}"
     assert all(len(v["constituents"]) >= 1 for v in cur.values())
     assert all(v["origin"] == "curated" for v in cur.values()), "las 87 curadas a mano, ninguna por reglas de respaldo"
 
