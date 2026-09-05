@@ -235,7 +235,10 @@ _QUOTED_STRING = re.compile(r"'([^']+)'")
 # equilibrio / exploración) es obligatorio en el wizard (roadmap §6.7: «solo el perfil global y el
 # ciclo principal son obligatorios»), pero el backend lo defaultea a `balanced` en
 # `plan_policy.policy_from_form`: un cliente viejo (app nativa sin actualizar) sigue generando.
-_FRONTEND_ONLY_BY_DESIGN = frozenset({"dietType", "planSource", "appMode", "mealOrganization"})
+# [P1-ARQ25-F7-CULTURE · 2026-09-05] `cultureProfiles` es obligatorio en el wizard (decisión del dueño) pero
+# frontend-only: sin él el backend cae a la cocina del país de compra (legado byte-idéntico), y exigirlo
+# rompería a los clientes que no montan el paso (knob apagado, builds nativos anteriores).
+_FRONTEND_ONLY_BY_DESIGN = frozenset({"dietType", "planSource", "appMode", "mealOrganization", "cultureProfiles"})
 
 
 def _read_form_validation_js() -> str:
@@ -369,7 +372,7 @@ def test_exclusiones_intencionales_son_exactamente_las_documentadas():
         el modo se conmuta vía /api/profile/plan-mode. Exigirlo backend-side
         sería exigir un campo que ningún caller no-wizard puede conocer.
     """
-    assert _FRONTEND_ONLY_BY_DESIGN == frozenset({"dietType", "planSource", "appMode", "mealOrganization"}), (
+    assert _FRONTEND_ONLY_BY_DESIGN == frozenset({"dietType", "planSource", "appMode", "mealOrganization", "cultureProfiles"}), (
         f"Conjunto de exclusiones cambió: {sorted(_FRONTEND_ONLY_BY_DESIGN)}.\n"
         f"Cada exclusión bypasses la red de safety cross-language. Documenta "
         f"la razón en el comentario de `_FRONTEND_ONLY_BY_DESIGN` Y en el "
