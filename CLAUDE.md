@@ -107,7 +107,7 @@ Cinco regresiones históricas que este diseño protege (P1-G mode=block no-op, `
 
 [P1-ARQ25-F6-DISH-REGISTRY · 2026-09-05] Fase 6: Dish Registry compilado (6 snapshots en `data/registry/`, hash en blueprint y fidelidad). Doc `backend/docs/dish_registry_f6.md`; test `test_p1_arq25_f6_dish_registry.py`.
 
-[P1-ARQ25-F7-CULTURE · 2026-09-05] Fase 7: cocina SEPARADA del mercado (I16): `constants.cultural_country_for_form_data` (platos) vs `country_for_form_data` (precios, catálogo, despensa). 6 perfiles como DATA (`cultural_profiles.py`), principal + 2 secundarias; paso «Cocinas que te representan» (sugerida, no sembrada); 6 bibliotecas ≥80 platos; benchmark §13.4 con firma humana pendiente. Knob `MEALFIT_CULTURAL_PROFILES`. Doc `backend/docs/cultural_profiles_f7.md`; tests `test_p1_arq25_f7_culture*.py`.
+[P1-ARQ25-F7-CULTURE · 2026-09-05] Fase 7: cocina SEPARADA del mercado (I16): `constants.cultural_country_for_form_data` (platos) vs `country_for_form_data` (precios, catálogo, despensa). 6 perfiles como DATA (`cultural_profiles.py`), principal + 2 secundarias; paso «Cocinas que te representan» (sugerida, no sembrada); 6 bibliotecas ≥94 platos con despensa duradera y congelador sincronizados (`pantry_durability.py`); benchmark §13.4 con revisión curatorial firmada. Knob `MEALFIT_CULTURAL_PROFILES`. Doc `backend/docs/cultural_profiles_f7.md`; tests `test_p1_arq25_f7_culture*.py`.
 
 ## RAG + Dreaming (consolidación de memoria offline)
 
