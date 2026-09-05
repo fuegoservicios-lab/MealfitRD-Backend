@@ -18578,6 +18578,37 @@ def _rewrite_stale_cooking_step(original_step: str, current_text: str, cooking_v
         return current_text
 
 
+_NAME_DUP_WORD_RE = _re.compile(r"(?i)\b([a-záéíóúüñ]{3,})(?:\s*,\s*|\s+y\s+|\s+)\1\b")
+
+
+def _dedupe_adjacent_name_words(name: str) -> str:
+    """[P2-NAME-POLISH-EGG-DUP · 2026-09-05] «… con casabe, Aguacate, aguacate y Huevo» → «… con casabe, Aguacate y Huevo».
+    Colapsa una palabra repetida consecutiva (con coma, «y» o espacio entre medias), sin distinguir mayúsculas."""
+    try:
+        out = str(name or "")
+        for _ in range(3):
+            new = _NAME_DUP_WORD_RE.sub(r"\1", out)
+            if new == out:
+                break
+            out = new
+        return out
+    except Exception:
+        return name
+
+
+def _polish_meal_names(days) -> int:
+    """Aplica `_dedupe_adjacent_name_words` a los nombres de las comidas. Devuelve nº de nombres cambiados."""
+    n = 0
+    for _d in days or []:
+        for _m in ((_d.get("meals") or []) if isinstance(_d, dict) else []):
+            if isinstance(_m, dict) and _m.get("name"):
+                _new = _dedupe_adjacent_name_words(str(_m["name"]))
+                if _new != _m["name"]:
+                    _m["name"] = _new
+                    n += 1
+    return n
+
+
 def _fix_egg_swap_dangling_adjectives(text: str) -> str:
     """[P1-SWAP-PROSE-HONEST-2 · 2026-07-29] Repara la concordancia de género/número que
     `_egg_step_subs` deja rota inmediatamente DESPUÉS de "(el) yogur griego" — a diferencia de
@@ -20710,6 +20741,18 @@ def _reflect_added_protein_in_name(meal: dict, protein_name: str, strip_accents_
         try:
             if any(_re.search(r"\b" + _re.escape(t) + r"(?:s|es)?\b", name_low) for t in sig_tokens):
                 return False
+            # [P2-NAME-POLISH-EGG-DUP · 2026-09-05] «Revoltillo criollo … y Huevo» (plan vivo 606e9017): el plato YA es
+            # huevo por su nombre (revoltillo/tortilla/omelette). Los alias del label de la proteína
+            # (`_MAIN_PROTEIN_ALIASES`, el mismo mapa del gate) cuentan como «ya representada».
+            _lbl = _gate_label_of(pname)
+            if _lbl:
+                for _al in (_MAIN_PROTEIN_ALIASES.get(_lbl) or ()):
+                    _aln = strip_accents_fn(str(_al).lower())
+                    if len(_aln) >= 4 and _re.search(r"\b" + _re.escape(_aln) + r"(?:s|es)?\b", name_low):
+                        return False
+            for _egg_syn in ("revoltillo", "tortilla", "omelet", "omelette", "frittata", "revuelto"):
+                if any(t in ("huevo", "clara", "claras") for t in sig_tokens) and _re.search(r"\b" + _egg_syn + r"s?\b", name_low):
+                    return False
         except Exception:
             if any(t in name_low for t in sig_tokens):   # fail-open al comportamiento previo
                 return False
@@ -28243,6 +28286,10 @@ def finalize_plan_data_coherence(days: list, db=None, allergies=None, target_fat
                     _nsq += _sync_recipe_step_quantities(_m)
         if _nsq:
             total += _nsq; parts.append(f"qty_sync={_nsq}")
+        # [P2-NAME-POLISH-EGG-DUP] título sin palabras duplicadas consecutivas (INSERT y bloques)
+        _npn = _polish_meal_names(days)
+        if _npn:
+            total += _npn; parts.append(f"name_dedupe={_npn}")
     except Exception as _e5:
         logger.warning(f"[P1-COHERENCE-FINALIZE] qty-sync no-op: {type(_e5).__name__}: {_e5}")
     # [P2-RECIPE-NONEMPTY-BACKSTOP · 2026-06-29] Persist boundary (INSERT/chunk degradado/SSE-fallback que salta
