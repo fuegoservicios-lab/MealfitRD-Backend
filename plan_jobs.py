@@ -49,7 +49,7 @@ from knobs import _env_bool, _env_int
 logger = logging.getLogger(__name__)
 
 JOB_TYPE_DISPLAY_I18N = "display_i18n"
-JOB_TYPE_SHOPPING_PROJECTION = "shopping_projection"  # lo encola la Fase 3; consumidor en la siguiente rebanada
+JOB_TYPE_SHOPPING_PROJECTION = "shopping_projection"  # lo encola la Fase 3 (horizon.enqueue_shopping_projection_job)
 JOB_STATUSES = ("pending", "processing", "done", "failed", "dead", "stale")
 WORKER_JOB_ID = "process_plan_jobs"
 METRIC_NODE = "plan_jobs"
@@ -394,8 +394,159 @@ def _consume_display_i18n(job: dict) -> tuple[str, Optional[str], dict]:
     return status, error_code, {"enrich": result if isinstance(result, dict) else str(result)[:200]}
 
 
+# ----------------------------------------------------------------------------- consumidor: shopping_projection
+# [P1-ARQ25-F5-SHOPPING-PROJECTION · 2026-09-04] Las listas 7/15/30 como PROYECCIÓN (roadmap §5.7):
+# la Fase 3 encola `shopping_projection` con las ventanas de la política (principal + top-ups de
+# frescos); este consumidor las materializa con el MISMO agregador que `/recalculate-shopping-list`
+# (paquetes, precios, Nevera descontada) por revisión, y guarda el read model en `payload.result`
+# del job (no en `plan_data`: escribir ahí bumpea `revision` y haría stale a la propia proyección).
+# La lista síncrona no cambia. Lo lee `GET /api/plans/{plan_id}/projections`.
+_PROJECTION_ROW_KEYS = ("name", "display_string", "display_name_en", "category", "display_category", "market_qty",
+                        "market_unit", "base_qty", "base_unit", "is_perishable", "is_staple", "package_grams")
+_PROJECTION_MAX_ITEMS = 150
+
+
+def _duration_for_days(days: int) -> str:
+    d = int(days or 0)
+    return "weekly" if d <= 7 else ("biweekly" if d <= 15 else "monthly")
+
+
+def _compact_row(row: dict) -> dict:
+    out = {k: row.get(k) for k in _PROJECTION_ROW_KEYS if row.get(k) is not None}
+    cost = row.get("estimated_cost", row.get("cost_rd"))
+    if isinstance(cost, (int, float)):
+        out["cost_rd"] = round(float(cost), 2)
+    return out
+
+
+def _load_plan_for_projection(plan_id: str, user_id: str) -> tuple:
+    from db import execute_sql_query
+    row = execute_sql_query("SELECT plan_data, revision FROM meal_plans WHERE id = %s AND user_id = %s",
+                            (plan_id, user_id), fetch_one=True)
+    if not row:
+        return None, None
+    pd = row.get("plan_data")
+    if isinstance(pd, str):
+        try:
+            pd = json.loads(pd)
+        except Exception:
+            pd = None
+    rev = int(row["revision"]) if row.get("revision") is not None else None
+    return (pd if isinstance(pd, dict) else None), rev
+
+
+def build_shopping_projection(plan_data: dict, user_id: str, windows: list, *, revision: Optional[int],
+                              policy_hash: Optional[str] = None, max_items: int = _PROJECTION_MAX_ITEMS) -> dict:
+    """Read model: una lista por ventana. Principal = ciclo completo (multiplicador de ciclo, como el
+    recálculo); `fresh_only` = solo perecederos de ese top-up. Determinista, cero LLM."""
+    import shopping_calculator as sc
+    try:
+        hm = float(plan_data.get("calc_household_multiplier") or 1.0)
+    except (TypeError, ValueError):
+        hm = 1.0
+    hm = max(0.5, min(10.0, hm))
+    inv, cons = sc.fetch_inventory_and_consumed_for_plan(user_id, plan_data, is_new_plan=True)
+    try:
+        trip = sc.active_trip_window_days(plan_data)
+    except Exception:
+        trip = None
+    out_windows = []
+    for w in windows or []:
+        if not isinstance(w, dict):
+            continue
+        days = int(w.get("days") or 0)
+        if days <= 0:
+            continue
+        fresh_only = bool(w.get("fresh_only"))
+        mult = hm if fresh_only else hm * float(sc.cycle_qty_multiplier(_duration_for_days(days)) or 1.0)
+        rows = sc.get_shopping_list_delta(
+            user_id, plan_data, is_new_plan=True, structured=True, multiplier=mult,
+            inventory_override=inv, consumed_override=cons, cycle_days=days, window_days=trip,
+        ) or []
+        rows = [r for r in rows if isinstance(r, dict)]
+        if fresh_only:
+            rows = [r for r in rows if r.get("is_perishable")]
+        items = [_compact_row(r) for r in rows][:max_items]
+        cost = round(sum(float(r.get("estimated_cost") or r.get("cost_rd") or 0) for r in rows), 2)
+        out_windows.append({
+            "kind": str(w.get("kind") or ("fresh_topup" if fresh_only else "main")),
+            "start_day": int(w.get("start_day") or 0), "end_day": int(w.get("end_day") or days),
+            "days": days, "cycle_days": int(w.get("cycle_days") or days), "fresh_only": fresh_only,
+            "item_count": len(items), "cost_rd": cost, "items": items,
+        })
+    return {
+        "schema_version": 1, "revision": revision, "policy_hash": policy_hash,
+        "household_multiplier": hm, "computed_at": datetime.now(timezone.utc).isoformat(),
+        "windows": out_windows,
+    }
+
+
+def _consume_shopping_projection(job: dict) -> tuple[str, Optional[str], dict]:
+    payload = job.get("payload") or {}
+    if isinstance(payload, str):
+        try:
+            payload = json.loads(payload)
+        except Exception:
+            payload = {}
+    windows = payload.get("windows") or []
+    plan_id = str(job.get("plan_id") or "")
+    user_id = str(job.get("user_id") or "")
+    if not windows or not plan_id or not user_id:
+        return "dead", "bad_payload", {"payload_keys": sorted(payload.keys()) if isinstance(payload, dict) else []}
+    plan_data, cur = _load_plan_for_projection(plan_id, user_id)
+    if plan_data is None:
+        return "done", None, {"reason": "plan_gone"}
+    job_rev = job.get("plan_revision")
+    if job_rev is not None and cur is not None and int(job_rev) != int(cur):
+        suffix = str(job.get("dedup_key") or "").rsplit(":", 1)[-1] or "policy"
+        new_id = enqueue_plan_job(
+            JOB_TYPE_SHOPPING_PROJECTION, plan_id, user_id, plan_revision=cur,
+            dedup_key=f"{JOB_TYPE_SHOPPING_PROJECTION}:{plan_id}:{cur}:{suffix}",
+            payload={k: v for k, v in payload.items() if k != "result"} | {"requeued_from": str(job.get("id"))}, wake=False,
+        )
+        return "stale", "revision_changed", {"job_revision": job_rev, "current_revision": cur, "requeued_job_id": new_id}
+    projection = build_shopping_projection(plan_data, user_id, windows, revision=cur, policy_hash=payload.get("policy_hash"))
+    if not projection.get("windows"):
+        return "failed", "empty_projection", {"windows_in": len(windows)}
+    return "done", None, {"projection": projection}
+
+
+def classify_projection_jobs(current_revision: Optional[int], jobs: list) -> dict:
+    """Estado UI de la proyección a partir de los jobs del plan (más reciente primero). Puro."""
+    cur = int(current_revision or 0)
+
+    def _proj(j):
+        pl = j.get("payload") or {}
+        if isinstance(pl, str):
+            try:
+                pl = json.loads(pl)
+            except Exception:
+                pl = {}
+        return ((pl.get("result") or {}).get("projection")) if isinstance(pl, dict) else None
+
+    for j in jobs:
+        if j.get("status") == "done" and int(j.get("plan_revision") or -1) == cur and _proj(j):
+            return {"status": "ready", "revision": cur, "job_id": str(j.get("id")), "projection": _proj(j)}
+    for j in jobs:
+        if j.get("status") in ("pending", "processing"):
+            return {"status": "pending", "revision": cur, "job_id": str(j.get("id")), "attempts": int(j.get("attempts") or 0)}
+    for j in jobs:
+        if j.get("status") == "failed":
+            return {"status": "failed", "revision": cur, "job_id": str(j.get("id")), "attempts": int(j.get("attempts") or 0),
+                    "error_code": j.get("error_code"), "retrying": True}
+    for j in jobs:
+        if j.get("status") == "done" and _proj(j):
+            return {"status": "stale", "revision": cur, "projection_revision": j.get("plan_revision"),
+                    "job_id": str(j.get("id")), "projection": _proj(j)}
+    for j in jobs:
+        if j.get("status") == "dead":
+            return {"status": "failed", "revision": cur, "job_id": str(j.get("id")), "error_code": j.get("error_code"), "retrying": False}
+    return {"status": "none", "revision": cur}
+
+
 CONSUMERS: dict[str, Callable[[dict], tuple[str, Optional[str], dict]]] = {
     JOB_TYPE_DISPLAY_I18N: _consume_display_i18n,
+    JOB_TYPE_SHOPPING_PROJECTION: _consume_shopping_projection,
 }
 
 
@@ -466,4 +617,5 @@ __all__ = [
     "verdict_for_display_result", "current_plan_revision", "enqueue_plan_job", "maybe_enqueue_display_i18n",
     "wake_plan_jobs_worker", "claim_plan_jobs", "heartbeat_plan_job", "reclaim_stale_processing",
     "finish_plan_job", "CONSUMERS", "enabled_consumers", "process_plan_jobs",
+    "build_shopping_projection", "classify_projection_jobs",
 ]

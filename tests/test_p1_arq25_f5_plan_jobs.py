@@ -157,7 +157,7 @@ def test_l_tick_completo_reclaim_claim_consumo_commit(monkeypatch):
     monkeypatch.setattr(pj, "reclaim_stale_processing", lambda: 1)
     job = {"id": "j1", "job_type": "display_i18n", "plan_id": _PLAN, "user_id": _USER, "plan_revision": 2,
            "payload": {"locale": "fr-FR"}, "attempts": 1, "claimed_by": "w"}
-    monkeypatch.setattr(pj, "claim_plan_jobs", lambda limit, me, types: [job] if types == ["display_i18n"] else [])
+    monkeypatch.setattr(pj, "claim_plan_jobs", lambda limit, me, types: [job] if "display_i18n" in types else [])
     monkeypatch.setitem(pj.CONSUMERS, "display_i18n", lambda j: ("done", None, {"enriched_meals": 3}))
     finished = []
     monkeypatch.setattr(pj, "finish_plan_job", lambda j, status, **kw: finished.append((j["id"], status)) or True)

@@ -107,6 +107,8 @@ _PLAN_GEN_LIMITER = RateLimiter(max_calls=3, period_seconds=60)
 _HISTORY_PREVIEW_MEALS_CAP = 6
 
 _RECALC_LIMITER = RateLimiter(max_calls=20, period_seconds=60)
+# [P1-ARQ25-F5-SHOPPING-PROJECTION · 2026-09-04] lectura del estado/read model de la proyección de compras
+_PROJECTIONS_LIMITER = RateLimiter(max_calls=30, period_seconds=60)
 _PDF_TELEMETRY_LIMITER = RateLimiter(max_calls=30, period_seconds=60)
 # [P2-LOADING-ETA-HONEST · 2026-09-03] lectura del p50/p90 real de la generación (pantalla de carga)
 _ETA_LIMITER = RateLimiter(max_calls=30, period_seconds=60)
@@ -5394,6 +5396,38 @@ def _generation_eta_snapshot() -> dict:
     _GENERATION_ETA_CACHE["at"] = now
     _GENERATION_ETA_CACHE["value"] = value
     return value
+
+
+@router.get("/{plan_id}/projections")
+async def api_plan_projections(
+    plan_id: str,
+    verified_user_id: str = Depends(get_verified_user_id),
+    _rl: None = Depends(_PROJECTIONS_LIMITER),
+):
+    """[P1-ARQ25-F5-SHOPPING-PROJECTION · 2026-09-04] Estado (`none/pending/ready/failed/stale`) y read
+    model de la proyección de compras 7/15/30 por revisión (`plan_jobs.shopping_projection`). Cero LLM,
+    exento de cuota (lectura), ownership `AND user_id`."""
+    try:
+        return await asyncio.to_thread(_projection_snapshot, plan_id, verified_user_id)
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.warning(f"[ARQ25-F5] /projections falló (fail-open) plan={plan_id}: {e!r}")
+        return {"status": "error", "revision": None}
+
+
+def _projection_snapshot(plan_id: str, user_id: str) -> dict:
+    from db import execute_sql_query
+    from plan_jobs import classify_projection_jobs
+    plan = execute_sql_query("SELECT revision FROM meal_plans WHERE id = %s AND user_id = %s", (plan_id, user_id), fetch_one=True)
+    if not plan:
+        raise HTTPException(status_code=404, detail="Plan no encontrado")
+    jobs = execute_sql_query(
+        "SELECT id, status, plan_revision, attempts, error_code, payload, processed_at, created_at FROM plan_jobs "
+        "WHERE plan_id = %s AND user_id = %s AND job_type = 'shopping_projection' ORDER BY created_at DESC LIMIT 8",
+        (plan_id, user_id), fetch_all=True,
+    ) or []
+    return classify_projection_jobs(plan.get("revision"), [dict(j) for j in jobs])
 
 
 @router.get("/generation-eta")

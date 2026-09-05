@@ -47,6 +47,20 @@ Semántica **at-least-once**: el consumidor es idempotente. `enrich_plan_display
   partial_loss}` ⇒ `failed` con backoff (el lote perdido de `partial_loss` se recupera en el siguiente
   intento: lo ya escrito no se toca).
 
+## Consumidor `shopping_projection` (rebanada 2 · P1-ARQ25-F5-SHOPPING-PROJECTION)
+
+- **Quién encola**: la Fase 3 (`horizon.enqueue_shopping_projection_job`, solo bajo `enforce`), con las ventanas de la
+  política (`main` + `fresh_topup` cada N días), `policy_hash`, `total_days`, `freezer_mode`. Dedup
+  `shopping_projection:<plan>:<revisión>:<hash12>`.
+- **Qué hace**: `build_shopping_projection` corre el MISMO agregador del recálculo (`get_shopping_list_delta`, Nevera
+  y consumidos descontados, `calc_household_multiplier` × multiplicador de ciclo para la principal; solo hogar para los
+  top-ups, filtrados a perecederos). Determinista, cero LLM.
+- **Dónde vive el read model**: en `plan_jobs.payload.result.projection` del job `done` (no en `plan_data`: escribir ahí
+  bumpea `revision` y haría stale a la propia proyección). `stale` ⇒ re-encola para la revisión vigente con el mismo hash.
+- **Quién lo lee**: `GET /api/plans/{plan_id}/projections` (exento de cuota, `_PROJECTIONS_LIMITER` 30/60 s, `AND user_id`)
+  → `{status: none|pending|ready|failed|stale, revision, projection?}` vía `classify_projection_jobs` (puro). La lista
+  síncrona (`aggregated_shopping_list_*`) no cambia.
+
 ## Knobs
 
 | Knob | Default | Efecto |
@@ -85,8 +99,8 @@ SELECT id, plan_id, attempts, error_code, dead_lettered_at FROM plan_jobs WHERE 
 
 ## Pendiente de la Fase 5 (siguientes rebanadas)
 
-1. Consumidor `shopping_commercial` (paquetes, precios, supermercado por revisión): las filas
-   `shopping_projection` que la Fase 3 encola bajo `enforce` esperan `pending`.
+1. ~~Consumidor `shopping_projection`~~ (rebanada 2, 2026-09-04). Falta: marcas/retailer por presentación del
+   `supermarket_products` como capa aparte (`shopping_commercial`), si el producto la pide.
 2. Reproyección encolada en el commit de swap, inventario y cambio de política.
 3. Estados UI `pending/ready/failed/stale` en Dashboard/Plan (la Fase 4 dejó los huecos).
 4. Extracción de `shopping/projection/` desde `shopping_calculator.py`.
