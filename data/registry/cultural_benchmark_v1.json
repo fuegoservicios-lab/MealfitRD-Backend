@@ -258,14 +258,14 @@
   "profiles": {
     "colombia_casera": {
       "appropriateness": {
-        "fried_share": 0.01,
+        "fried_share": 0.008,
         "heavy_technique_in_snack": [],
         "ok": true,
         "starch_base_off_slot": []
       },
       "availability": {
-        "availability_risk_pct": 14.2,
-        "constituents": 372,
+        "availability_risk_pct": 13.4,
+        "constituents": 447,
         "dominican_cultivar_outside_do": [
           {
             "ingredient": "Papa",
@@ -298,6 +298,14 @@
           {
             "ingredient": "Papa",
             "template": "Sopa de garbanzo con papa y zanahoria"
+          },
+          {
+            "ingredient": "Ñame",
+            "template": "Ñame hervido con huevo y queso gouda"
+          },
+          {
+            "ingredient": "Papa",
+            "template": "Sopa de lentejas con zanahoria y papa"
           },
           {
             "ingredient": "Auyama",
@@ -392,6 +400,10 @@
             "template": "Batido de guanábana con leche"
           },
           {
+            "ingredient": "Papa",
+            "template": "Tortilla de huevo con papa y cebolla"
+          },
+          {
             "ingredient": "Plátano verde",
             "template": "Tilapia frita con patacón"
           },
@@ -428,6 +440,10 @@
             "template": "Frijol cargamanto con costilla"
           },
           {
+            "ingredient": "Papa",
+            "template": "Papa guisada con atún"
+          },
+          {
             "ingredient": "Yuca",
             "template": "Sudado de pescado con yuca"
           },
@@ -438,6 +454,10 @@
           {
             "ingredient": "Papa",
             "template": "Pechuga en salsa de champiñones con puré"
+          },
+          {
+            "ingredient": "Papa",
+            "template": "Lentejas guisadas con papa y arroz"
           },
           {
             "ingredient": "Papa",
@@ -464,12 +484,20 @@
             "template": "Mondongo ligero con yuca"
           },
           {
+            "ingredient": "Papa",
+            "template": "Huevos con papa y cebolla (revueltos)"
+          },
+          {
             "ingredient": "Plátano verde",
             "template": "Trucha a la plancha con patacones"
           },
           {
             "ingredient": "Papa",
             "template": "Tamal tolimense ligero"
+          },
+          {
+            "ingredient": "Auyama",
+            "template": "Puré de auyama con huevo duro"
           },
           {
             "ingredient": "Papa",
@@ -482,7 +510,7 @@
         ],
         "needs_review": false,
         "ok": true,
-        "priced_pct": 89.0,
+        "priced_pct": 89.9,
         "review_threshold_pct": 15.0
       },
       "clinical": {
@@ -515,21 +543,21 @@
         "gaps": [],
         "ok": true,
         "slots": {
-          "almuerzo": 39,
-          "cena": 31,
-          "desayuno": 23,
-          "merienda": 22
+          "almuerzo": 45,
+          "cena": 36,
+          "desayuno": 27,
+          "merienda": 27
         },
-        "templates": 99
+        "templates": 118
       },
       "diversity": {
         "bases": 11,
-        "distinct_heads_ratio": 0.808,
+        "distinct_heads_ratio": 0.771,
         "ok": true,
         "proteins": 11,
         "techniques": 13,
-        "top_protein_share": 0.182,
-        "transform_share": 0.374
+        "top_protein_share": 0.186,
+        "transform_share": 0.356
       },
       "library": "co",
       "resolvability": {
@@ -539,7 +567,7 @@
       },
       "review": {
         "editorial": {
-          "curated": 99
+          "curated": 118
         },
         "flagged_for_human_review": [
           "Ajiaco santafereño con pollo",
@@ -563,20 +591,25 @@
           "Garbanzos guisados con papa criolla",
           "Guayaba con queso blanco",
           "Huevos con auyama y queso",
+          "Huevos con papa y cebolla (revueltos)",
           "Jugo de guayaba con leche",
           "Lentejas con arroz y plátano maduro",
+          "Lentejas guisadas con papa y arroz",
           "Longaniza santarrosana con papa",
           "Mondongo ligero con yuca",
           "Morcilla con papa criolla",
+          "Papa guisada con atún",
           "Patacones con hogao y queso",
           "Pechuga en salsa de champiñones con puré",
           "Pescado frito con patacones y ensalada",
           "Plátano maduro asado con queso",
+          "Puré de auyama con huevo duro",
           "Sancocho de gallina",
           "Sobrebarriga en salsa criolla con papa",
           "Sopa de garbanzo con papa y zanahoria",
           "Sopa de guascas con pollo desmenuzado",
           "Sopa de lentejas con plátano verde",
+          "Sopa de lentejas con zanahoria y papa",
           "Sopa de pollo con fideos y verduras",
           "Sopa de verduras con pollo y mazorca",
           "Sudado de carne con papa y yuca",
@@ -585,9 +618,11 @@
           "Tamal tolimense ligero",
           "Tilapia al horno con ensalada y papa",
           "Tilapia frita con patacón",
+          "Tortilla de huevo con papa y cebolla",
           "Tortilla de papa con queso",
           "Trucha a la plancha con patacones",
           "Yuca con queso y huevo",
+          "Ñame hervido con huevo y queso gouda",
           "Ñame y yuca sudados con costilla"
         ],
         "human_signoff": true,
@@ -606,10 +641,10 @@
             "Bandeja paisa «aligerada» estaba en 1.265 kcal: fríjol 120→80 g, arroz 80→60 g, chicharrón 40→25 g, res 100→90 g.",
             "Chicharrón con arepa: 100→60 g; palmito con camarones + arroz; sopa de verduras con pollo a 140 g de pollo."
           ],
-          "snapshot_hash": "c5fad0f790d5b2a9f696a57b293e632407ccaebd8219c583aacc47742fdb2933"
+          "snapshot_hash": "934a0bf8d4e9deba8363b87b69642c40db731c23df7090b6efddfd6049812397"
         }
       },
-      "snapshot_hash": "c5fad0f790d5b2a9f696a57b293e632407ccaebd8219c583aacc47742fdb2933"
+      "snapshot_hash": "934a0bf8d4e9deba8363b87b69642c40db731c23df7090b6efddfd6049812397"
     },
     "dominican_criolla": {
       "appropriateness": {
@@ -620,11 +655,11 @@
       },
       "availability": {
         "availability_risk_pct": 0.0,
-        "constituents": 635,
+        "constituents": 688,
         "dominican_cultivar_outside_do": [],
         "needs_review": false,
         "ok": true,
-        "priced_pct": 98.3,
+        "priced_pct": 97.8,
         "review_threshold_pct": 15.0
       },
       "clinical": {
@@ -671,21 +706,21 @@
         "gaps": [],
         "ok": true,
         "slots": {
-          "almuerzo": 47,
-          "cena": 37,
-          "desayuno": 26,
-          "merienda": 29
+          "almuerzo": 51,
+          "cena": 39,
+          "desayuno": 29,
+          "merienda": 34
         },
-        "templates": 111
+        "templates": 123
       },
       "diversity": {
         "bases": 16,
-        "distinct_heads_ratio": 0.847,
+        "distinct_heads_ratio": 0.797,
         "ok": true,
         "proteins": 12,
         "techniques": 36,
-        "top_protein_share": 0.216,
-        "transform_share": 0.505
+        "top_protein_share": 0.195,
+        "transform_share": 0.488
       },
       "library": "do",
       "resolvability": {
@@ -695,7 +730,7 @@
       },
       "review": {
         "editorial": {
-          "curated": 111
+          "curated": 123
         },
         "flagged_for_human_review": [],
         "human_signoff": true,
@@ -714,23 +749,24 @@
             "«Tacos en hoja de lechuga con res mechada» → «Rollitos de lechuga con res mechada» (léxico mexicano en la biblioteca dominicana; el plato se conserva).",
             "Quipes, bollitos de yuca rellenos y croquetas de atún salen de merienda (500-600 kcal): quedan en almuerzo/cena.",
             "Las 10 plantillas nuevas llevan constituyentes inline (ganan a la tabla curada); la tabla sigue siendo solo curación a mano (87).",
-            "«Sopa de habichuelas negras con casabe» → «Habichuelas negras guisadas con casabe» (el SSOT de franjas no admite «sopa» en cena)."
+            "«Sopa de habichuelas negras con casabe» → «Habichuelas negras guisadas con casabe» (el SSOT de franjas no admite «sopa» en cena).",
+            "Tanda 2 de despensa duradera (semanas 3-4 sin congelador): calibrados los días de refrigerado duradero (cebolla/ajo 60, papa/auyama/repollo/zanahoria/quesos curados 45, cítricos/tortillas/batata/ñame 30); +12 platos DO; cobertura al día 30 sin congelador ≥ 7 por franja en las seis bibliotecas."
           ],
-          "snapshot_hash": "fad662845fb8ffd65a4374014fc2b0d426b3ecbfc75ee57c53bb74e6e82af07e"
+          "snapshot_hash": "df30b96607d631d7f85d8bb8af4f9a935b3574e495e571918d2265059103d834"
         }
       },
-      "snapshot_hash": "fad662845fb8ffd65a4374014fc2b0d426b3ecbfc75ee57c53bb74e6e82af07e"
+      "snapshot_hash": "df30b96607d631d7f85d8bb8af4f9a935b3574e495e571918d2265059103d834"
     },
     "mexico_casera": {
       "appropriateness": {
-        "fried_share": 0.021,
+        "fried_share": 0.018,
         "heavy_technique_in_snack": [],
         "ok": true,
         "starch_base_off_slot": []
       },
       "availability": {
-        "availability_risk_pct": 2.9,
-        "constituents": 446,
+        "availability_risk_pct": 3.0,
+        "constituents": 508,
         "dominican_cultivar_outside_do": [
           {
             "ingredient": "Papa",
@@ -770,7 +806,15 @@
           },
           {
             "ingredient": "Papa",
+            "template": "Papas con huevo y chile guajillo"
+          },
+          {
+            "ingredient": "Papa",
             "template": "Bacalao a la vizcaína con papa"
+          },
+          {
+            "ingredient": "Papa",
+            "template": "Atún guisado con papa y chipotle"
           },
           {
             "ingredient": "Papa",
@@ -787,7 +831,7 @@
         ],
         "needs_review": false,
         "ok": true,
-        "priced_pct": 72.4,
+        "priced_pct": 72.6,
         "review_threshold_pct": 15.0
       },
       "clinical": {
@@ -803,7 +847,9 @@
         "sodium_high": [
           "Sincronizadas de jamón de pavo y queso",
           "Machaca de cecina con huevo",
+          "Chilaquiles rojos con queso (salsa de despensa)",
           "Cecina con nopales asados",
+          "Galletas de soda con frijoles refritos y queso",
           "Huevos divorciados con frijoles refritos",
           "Quesadillas de harina con frijoles y queso",
           "Molletes de frijol con queso",
@@ -820,21 +866,21 @@
         "gaps": [],
         "ok": true,
         "slots": {
-          "almuerzo": 39,
-          "cena": 32,
-          "desayuno": 25,
-          "merienda": 21
+          "almuerzo": 43,
+          "cena": 35,
+          "desayuno": 28,
+          "merienda": 25
         },
-        "templates": 95
+        "templates": 109
       },
       "diversity": {
-        "bases": 7,
-        "distinct_heads_ratio": 0.779,
+        "bases": 8,
+        "distinct_heads_ratio": 0.734,
         "ok": true,
         "proteins": 12,
         "techniques": 14,
-        "top_protein_share": 0.2,
-        "transform_share": 0.442
+        "top_protein_share": 0.211,
+        "transform_share": 0.422
       },
       "library": "mx",
       "resolvability": {
@@ -844,15 +890,17 @@
       },
       "review": {
         "editorial": {
-          "curated": 95
+          "curated": 109
         },
         "flagged_for_human_review": [
+          "Atún guisado con papa y chipotle",
           "Avena con canela y plátano estilo mexicano",
           "Bacalao a la vizcaína con papa",
           "Caldo de camarón con verduras",
           "Crema de chile poblano con elote",
           "Frijoles charros con longaniza",
           "Lentejas guisadas con papa y comino",
+          "Papas con huevo y chile guajillo",
           "Papas guisadas con queso y chipotle",
           "Picadillo de res con papa y zanahoria",
           "Sopa de fideo con garbanzo",
@@ -878,21 +926,21 @@
             "Sopa de verduras con pollo y epazote: pollo 150 g + papa; huachinango al horno + arroz; avena con canela y plátano solo en desayuno.",
             "«Ensalada de jícama con chile y limón» eliminada (duplicado del snack «Jícama con chile y limón»); ensalada de nopales con queso solo en cena."
           ],
-          "snapshot_hash": "56885158c766065acb21c4fff94269ea0e16283b407eee3559a5b4bbeb3dd656"
+          "snapshot_hash": "ec099829b4b85d5dcbf9b4cd264802395b0fbf82b7dce450a26e23578723f21e"
         }
       },
-      "snapshot_hash": "56885158c766065acb21c4fff94269ea0e16283b407eee3559a5b4bbeb3dd656"
+      "snapshot_hash": "ec099829b4b85d5dcbf9b4cd264802395b0fbf82b7dce450a26e23578723f21e"
     },
     "puertorico_criolla": {
       "appropriateness": {
-        "fried_share": 0.071,
+        "fried_share": 0.064,
         "heavy_technique_in_snack": [],
         "ok": true,
         "starch_base_off_slot": []
       },
       "availability": {
-        "availability_risk_pct": 16.1,
-        "constituents": 367,
+        "availability_risk_pct": 15.2,
+        "constituents": 408,
         "dominican_cultivar_outside_do": [
           {
             "ingredient": "Yuca",
@@ -987,6 +1035,10 @@
             "template": "Pavo molido guisado con papa"
           },
           {
+            "ingredient": "Ñame",
+            "template": "Puré de ñame con huevo duro y queso de papa"
+          },
+          {
             "ingredient": "Yuca",
             "template": "Pescado a la plancha con yuca hervida"
           },
@@ -1001,6 +1053,10 @@
           {
             "ingredient": "Papa",
             "template": "Tortilla de huevo con papa y jamón de cocinar"
+          },
+          {
+            "ingredient": "Papa",
+            "template": "Tortilla de papa con queso de papa"
           },
           {
             "ingredient": "Batata",
@@ -1115,6 +1171,10 @@
             "template": "Batata asada con sardinas"
           },
           {
+            "ingredient": "Batata",
+            "template": "Bacalao guisado con batata"
+          },
+          {
             "ingredient": "Yuca",
             "template": "Alcapurrias horneadas de camarón"
           },
@@ -1133,7 +1193,7 @@
         ],
         "needs_review": true,
         "ok": true,
-        "priced_pct": 78.7,
+        "priced_pct": 78.4,
         "review_threshold_pct": 15.0
       },
       "clinical": {
@@ -1173,6 +1233,7 @@
           "Huevos con longaniza puertorriqueña",
           "Sardinas guisadas con ñame hervido",
           "Tortilla de huevo con queso de papa",
+          "Macarrones con atún y sofrito",
           "Arroz con huevo y salchichas",
           "Longaniza puertorriqueña con arroz y habichuelas"
         ]
@@ -1186,21 +1247,21 @@
         "gaps": [],
         "ok": true,
         "slots": {
-          "almuerzo": 39,
-          "cena": 27,
-          "desayuno": 22,
-          "merienda": 20
+          "almuerzo": 42,
+          "cena": 30,
+          "desayuno": 26,
+          "merienda": 23
         },
-        "templates": 99
+        "templates": 110
       },
       "diversity": {
         "bases": 11,
-        "distinct_heads_ratio": 0.677,
+        "distinct_heads_ratio": 0.636,
         "ok": true,
         "proteins": 12,
         "techniques": 14,
-        "top_protein_share": 0.182,
-        "transform_share": 0.414
+        "top_protein_share": 0.173,
+        "transform_share": 0.409
       },
       "library": "pr",
       "resolvability": {
@@ -1210,13 +1271,14 @@
       },
       "review": {
         "editorial": {
-          "curated": 99
+          "curated": 110
         },
         "flagged_for_human_review": [
           "Alcapurrias horneadas de camarón",
           "Arroz con dulce",
           "Arroz con habichuelas y pechuga guisada",
           "Bacalao a la vizcaína con arroz blanco",
+          "Bacalao guisado con batata",
           "Bacalao guisado con viandas",
           "Batata al horno con especias",
           "Batata asada con sardinas",
@@ -1255,6 +1317,7 @@
           "Piña con coco rallado",
           "Pollo guisado con calabaza y arroz",
           "Puré de plátano verde con huevo frito",
+          "Puré de ñame con huevo duro y queso de papa",
           "Queso de papa con guayaba",
           "Sancocho puertorriqueño",
           "Sardinas guisadas con ñame hervido",
@@ -1262,6 +1325,7 @@
           "Sopa de fideos con pollo",
           "Sopa de pollo con viandas",
           "Tortilla de huevo con papa y jamón de cocinar",
+          "Tortilla de papa con queso de papa",
           "Tostadas con queso de papa",
           "Tostadas de pan sobao con queso y jugo de naranja",
           "Tostones con pique",
@@ -1284,10 +1348,10 @@
             "Chicharrón 120→70 g y 100→60 g, jamón de cocinar 150→80 g, chuletas ahumadas 150→110 g (sodio 1.800-2.200 mg → bajo 1.500).",
             "Pescado al horno con sofrito (168 kcal) completado con yautía; tortilla de huevo a 3 huevos; camarones salteados con batata."
           ],
-          "snapshot_hash": "9c5c968a9b28c73eae1d72b2ca22b6490d50e8ae8c1c38c98d9bbe7092ec8510"
+          "snapshot_hash": "a9706fc04ed6c678387de1c9810e6b16b86db9b2178bcc455b1019fa28a7d1b3"
         }
       },
-      "snapshot_hash": "9c5c968a9b28c73eae1d72b2ca22b6490d50e8ae8c1c38c98d9bbe7092ec8510"
+      "snapshot_hash": "a9706fc04ed6c678387de1c9810e6b16b86db9b2178bcc455b1019fa28a7d1b3"
     },
     "spain_mediterranea": {
       "appropriateness": {
@@ -1297,8 +1361,8 @@
         "starch_base_off_slot": []
       },
       "availability": {
-        "availability_risk_pct": 5.4,
-        "constituents": 405,
+        "availability_risk_pct": 5.3,
+        "constituents": 433,
         "dominican_cultivar_outside_do": [
           {
             "ingredient": "Papa",
@@ -1319,6 +1383,10 @@
           {
             "ingredient": "Papa",
             "template": "Crema de zanahoria con queso"
+          },
+          {
+            "ingredient": "Papa",
+            "template": "Patatas a lo pobre con huevo"
           },
           {
             "ingredient": "Papa",
@@ -1391,13 +1459,14 @@
         ],
         "needs_review": false,
         "ok": true,
-        "priced_pct": 86.2,
+        "priced_pct": 86.4,
         "review_threshold_pct": 15.0
       },
       "clinical": {
         "allergen_leaks": [],
         "ok": true,
         "processed_meat": [
+          "Huevos revueltos con jamón serrano y cebolla",
           "Menestra de verduras con jamón serrano",
           "Sopa de fideos con jamón serrano",
           "Habas con jamón serrano salteadas",
@@ -1423,6 +1492,7 @@
           "Alcachofas salteadas con jamón serrano"
         ],
         "sodium_high": [
+          "Huevos revueltos con jamón serrano y cebolla",
           "Menestra de verduras con jamón serrano",
           "Sopa de fideos con jamón serrano",
           "Habas con jamón serrano salteadas",
@@ -1462,20 +1532,20 @@
         "ok": true,
         "slots": {
           "almuerzo": 52,
-          "cena": 38,
-          "desayuno": 24,
-          "merienda": 19
+          "cena": 40,
+          "desayuno": 27,
+          "merienda": 23
         },
-        "templates": 96
+        "templates": 104
       },
       "diversity": {
         "bases": 9,
-        "distinct_heads_ratio": 0.833,
+        "distinct_heads_ratio": 0.798,
         "ok": true,
         "proteins": 11,
         "techniques": 15,
-        "top_protein_share": 0.271,
-        "transform_share": 0.271
+        "top_protein_share": 0.25,
+        "transform_share": 0.25
       },
       "library": "es",
       "resolvability": {
@@ -1485,7 +1555,7 @@
       },
       "review": {
         "editorial": {
-          "curated": 96
+          "curated": 104
         },
         "flagged_for_human_review": [
           "Albóndigas en salsa con puré de patata",
@@ -1499,6 +1569,7 @@
           "Ensaladilla rusa con atún en lata",
           "Huevos rotos con patatas y jamón serrano",
           "Menestra de verduras con jamón serrano",
+          "Patatas a lo pobre con huevo",
           "Pollo al ajillo con patatas panaderas",
           "Pollo asado con verduras al horno",
           "Potaje de garbanzos con acelgas",
@@ -1529,21 +1600,21 @@
             "Menestra y vieiras completadas con papa; fabada: morcilla 80→50 g, panceta 60→40 g, chorizo 50→40 g.",
             "Ensaladilla rusa y ensalada de judías «con atún» llevaban sardinas: ahora atún."
           ],
-          "snapshot_hash": "141f50f8269c9d01ca5c6331120cfd4fab138af53ace5115857711edb3a52332"
+          "snapshot_hash": "0e8fc02437f203d942d3a53acc8c76ff421dd4f6142805fd10500feb4f1f2c4a"
         }
       },
-      "snapshot_hash": "141f50f8269c9d01ca5c6331120cfd4fab138af53ace5115857711edb3a52332"
+      "snapshot_hash": "0e8fc02437f203d942d3a53acc8c76ff421dd4f6142805fd10500feb4f1f2c4a"
     },
     "us_everyday": {
       "appropriateness": {
-        "fried_share": 0.011,
+        "fried_share": 0.01,
         "heavy_technique_in_snack": [],
         "ok": true,
         "starch_base_off_slot": []
       },
       "availability": {
-        "availability_risk_pct": 4.4,
-        "constituents": 361,
+        "availability_risk_pct": 4.7,
+        "constituents": 403,
         "dominican_cultivar_outside_do": [
           {
             "ingredient": "Batata",
@@ -1571,11 +1642,23 @@
           },
           {
             "ingredient": "Papa",
+            "template": "Huevos revueltos con papa y cebolla"
+          },
+          {
+            "ingredient": "Papa",
+            "template": "Papa al horno con frijoles pintos y cheddar"
+          },
+          {
+            "ingredient": "Papa",
             "template": "Pastel de carne con puré de papa"
           },
           {
             "ingredient": "Papa",
             "template": "Pavo al horno con puré de papa"
+          },
+          {
+            "ingredient": "Papa",
+            "template": "Guiso de lentejas con papa y salsa de tomate"
           },
           {
             "ingredient": "Papa",
@@ -1612,7 +1695,7 @@
         ],
         "needs_review": false,
         "ok": true,
-        "priced_pct": 85.0,
+        "priced_pct": 86.1,
         "review_threshold_pct": 15.0
       },
       "clinical": {
@@ -1632,6 +1715,7 @@
           "Salchicha italiana con pimientos",
           "Sopa de almejas estilo Nueva Inglaterra",
           "Pasta integral con pavo molido y salsa de tomate",
+          "Pasta con salsa de tomate, atún y parmesano",
           "Tuna melt en tortilla integral",
           "Panecillos de mantequilla con miel",
           "Espagueti integral con albóndigas de pavo",
@@ -1641,6 +1725,7 @@
           "Sándwich de jamón de sándwich con queso provolone",
           "Pan de maíz con mantequilla",
           "Tacos con sazonador para tacos",
+          "Burrito de huevo y frijoles refritos",
           "Sloppy joe de res magra en pan",
           "Panqueques con arándanos rojos",
           "Pizza rápida de tortilla integral con pollo y mozzarella",
@@ -1669,21 +1754,21 @@
         "gaps": [],
         "ok": true,
         "slots": {
-          "almuerzo": 38,
-          "cena": 30,
-          "desayuno": 23,
+          "almuerzo": 41,
+          "cena": 33,
+          "desayuno": 26,
           "merienda": 18
         },
-        "templates": 94
+        "templates": 103
       },
       "diversity": {
         "bases": 9,
-        "distinct_heads_ratio": 0.755,
+        "distinct_heads_ratio": 0.699,
         "ok": true,
         "proteins": 11,
         "techniques": 14,
-        "top_protein_share": 0.17,
-        "transform_share": 0.277
+        "top_protein_share": 0.165,
+        "transform_share": 0.282
       },
       "library": "us",
       "resolvability": {
@@ -1693,7 +1778,7 @@
       },
       "review": {
         "editorial": {
-          "curated": 94
+          "curated": 103
         },
         "flagged_for_human_review": [
           "Batata al horno con frijoles negros y queso",
@@ -1701,9 +1786,12 @@
           "Chuletas de cerdo con puré de papa",
           "Crema de brócoli con queso cheddar",
           "Filete de pescado blanco al horno con papa y vainitas",
+          "Guiso de lentejas con papa y salsa de tomate",
           "Huevos al horno con papa y queso cheddar",
+          "Huevos revueltos con papa y cebolla",
           "Huevos revueltos con papas y espinaca",
           "Papa al horno con crema agria",
+          "Papa al horno con frijoles pintos y cheddar",
           "Pastel de carne con puré de papa",
           "Pavo al horno con puré de papa",
           "Pavo al horno con puré y salsa de arándanos",
@@ -1730,10 +1818,10 @@
             "Seis bajas: «Yogur griego con duraznos» (duplicado exacto), «Queso en hebras con vegetales», «Ensalada de huevos rellenos», «Bolitas de papa con salchichas», «Pepperoni con queso provolone y pan», «Salchichas con frijoles horneados» (sin valor nutricional o > 1.900 mg Na).",
             "Ensalada de repollo con pollo + aguacate y maíz; camarones a la parrilla + arroz integral; «Ensalada verde con pollo y nueces pecanas» (antes sin proteína); salmón con espárragos + papa; chili en lata 250→200 g; jamón del sándwich 100→70 g."
           ],
-          "snapshot_hash": "7a61b568a4b360c5388f82b09a91067571da7fa545668e8ca3f99de4c3f12226"
+          "snapshot_hash": "0f7d829fb9db0652e3338707da0b8df3a757045dc0e28c2b68775a5e3cd65fce"
         }
       },
-      "snapshot_hash": "7a61b568a4b360c5388f82b09a91067571da7fa545668e8ca3f99de4c3f12226"
+      "snapshot_hash": "0f7d829fb9db0652e3338707da0b8df3a757045dc0e28c2b68775a5e3cd65fce"
     }
   },
   "schema_version": 1

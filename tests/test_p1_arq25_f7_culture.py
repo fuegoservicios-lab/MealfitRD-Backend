@@ -102,6 +102,9 @@ def test_g_blueprint_y_prompt_llevan_la_cocina_del_dia(tmp_path, monkeypatch):
     import dish_library as dl
     assert dl._inspiration_heading(None, eff["culture_weights"]).startswith("INSPIRACIÓN: COCINA DOMINICANA 70 %")
     assert dl._inspiration_heading("DO") == "INSPIRACIÓN DOMINICANA" == dl._inspiration_heading(None, [{"profile_id": "dominican_criolla", "weight": 1.0}])
+    # con mezcla, el brief del día nombra la cocina de HOY (la del país de la biblioteca que se muestra)
+    src_dl = (_BACKEND / "dish_library.py").read_text(encoding="utf-8")
+    assert "COCINA DE HOY:" in src_dl and "+ _today_line" in src_dl
 
 
 def test_h_las_superficies_culturales_leen_la_puerta_cultural_y_las_de_mercado_no():

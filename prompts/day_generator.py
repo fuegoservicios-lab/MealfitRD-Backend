@@ -1173,7 +1173,7 @@ def build_slot_targets_block(daily_targets: dict, meal_types: list) -> str:
 def build_day_assignment_context(skeleton_day: dict, day_num: int, day_name: str = None,
                                  daily_targets: dict = None, user_staples: list = None,
                                  small_universe: bool = False, diet_type=None, country=None,
-                                 culture_weights=None) -> str:
+                                 culture_weights=None, goal=None) -> str:
     """Genera el bloque de contexto con la asignación del planificador para un día.
 
     [P1-STAPLE-FOODS · 2026-08-02] `user_staples` (lista de nombres del catálogo, máx 8 — ver
@@ -1339,6 +1339,19 @@ def build_day_assignment_context(skeleton_day: dict, day_num: int, day_name: str
             "el desayuno, pero la cena necesita su propio plato fuerte. Varía la preparación de la cena "
             "respecto a las técnicas de los OTROS días indicadas arriba (no repitas la misma forma 3 noches)."
         )
+        # [P1-GAINMUSCLE-DINNER-PROTEIN · 2026-09-05] Plan vivo b4316db6 (gain_muscle): dos cenas «batata rellena
+        # de queso» con 23-28 g de proteína, con pollo y pescado en el pool del día. En superávit muscular la cena
+        # es la 2ª comida fuerte: proteína ANIMAL MAGRA como plato; el queso solo como extensor. Solo gain_muscle
+        # (prompt-cache-safe: string estático, condicionado por objetivo). tooltip-anchor: P1-GAINMUSCLE-DINNER-PROTEIN
+        _goal_low = str(goal or "").strip().lower()
+        if any(t in _goal_low for t in ("gain_muscle", "ganar_musculo", "ganancia", "bulk")):
+            dinner_identity_block += (
+                "\n• 💪 CENA EN GANANCIA MUSCULAR: la Cena lleva una proteína ANIMAL MAGRA del pool como PLATO "
+                "(pollo, pavo, pescado, res magra, atún, camarones) con porción de comida fuerte, no de merienda. "
+                "El queso (fresco, mozzarella, cottage, ricotta) va SOLO como extensor o topping — NUNCA como la "
+                "proteína principal de la cena ni como relleno único de una batata/papa/yuca. No repitas el mismo "
+                "concepto de cena (p.ej. «tubérculo relleno de queso») en dos días."
+            )
 
     # [P1-DAYGEN-PROTEIN-DIVERSITY · 2026-07-09] Nudge additive + knob-gated para NO sobrecargar el día de
     # queso como proteína principal. Forense plan 55b659c5 (gain_muscle, renovación en vivo): 8/12 comidas

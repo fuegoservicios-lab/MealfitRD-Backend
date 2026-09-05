@@ -63,9 +63,11 @@ def test_c_el_registry_filtra_candidatos_por_durabilidad_y_las_bibliotecas_tiene
         for t in snap["templates"][:3]:
             assert all("durability" in c and "days_fresh" in c for c in t["constituents"])
         # día 29 sin congelador: cada franja principal sigue teniendo candidatos, y todos aguantan
-        for slot in ("almuerzo", "cena", "desayuno"):
-            c = dr.template_candidates(cc, slot, None, k=50, need_days=30, allow_frozen=False)
-            assert c, f"[{lib}] sin candidatos de despensa en {slot} para el día 30"
+        # día 30 sin congelador: cada franja tiene candidatos de sobra (semanas 3-4 de una compra única) y todos aguantan.
+        # Medido al fijar el listón (2026-09-05): mínimos entre las seis = desayuno 7 · almuerzo 9 · cena 8 · merienda 6.
+        for slot, floor in (("desayuno", 7), ("almuerzo", 9), ("cena", 8), ("merienda", 6)):
+            c = dr.template_candidates(cc, slot, None, k=200, need_days=30, allow_frozen=False)
+            assert len(c) >= floor, f"[{lib}] {slot}: {len(c)} candidatos de despensa para el día 30 (< {floor})"
             assert all(x["pantry_only"] or (x["logistics"].get("days_fresh_min") or 0) >= 30 for x in c)
         # con congelador, los de proteína fresca vuelven a entrar
         with_fz = dr.template_candidates(cc, "almuerzo", "pollo", k=50, need_days=10, allow_frozen=True)

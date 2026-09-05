@@ -7,7 +7,7 @@
   "caducity": "la firma vale solo para el snapshot_hash anotado por perfil; cambiar una biblioteca la caduca hasta repetir la revisión",
   "profiles": {
     "dominican_criolla": {
-      "snapshot_hash": "fad662845fb8ffd65a4374014fc2b0d426b3ecbfc75ee57c53bb74e6e82af07e",
+      "snapshot_hash": "df30b96607d631d7f85d8bb8af4f9a935b3574e495e571918d2265059103d834",
       "decisions": [
         "Alérgenos: el matcher del registry no reconocía plurales (sardinas, fideos, almejas) ni la salsa de soya como gluten: corregido y recompilado; cero clases sin marcar en las 6 bibliotecas (verificado con un chequeo independiente por constituyente).",
         "Raciones: meriendas > 450 kcal reasignadas a almuerzo/cena; almuerzos < 260 kcal y cenas < 180 kcal completados con base o proteína; almuerzos > 1.100 kcal reducidos.",
@@ -16,7 +16,8 @@
         "«Tacos en hoja de lechuga con res mechada» → «Rollitos de lechuga con res mechada» (léxico mexicano en la biblioteca dominicana; el plato se conserva).",
         "Quipes, bollitos de yuca rellenos y croquetas de atún salen de merienda (500-600 kcal): quedan en almuerzo/cena.",
         "Las 10 plantillas nuevas llevan constituyentes inline (ganan a la tabla curada); la tabla sigue siendo solo curación a mano (87).",
-        "«Sopa de habichuelas negras con casabe» → «Habichuelas negras guisadas con casabe» (el SSOT de franjas no admite «sopa» en cena)."
+        "«Sopa de habichuelas negras con casabe» → «Habichuelas negras guisadas con casabe» (el SSOT de franjas no admite «sopa» en cena).",
+        "Tanda 2 de despensa duradera (semanas 3-4 sin congelador): calibrados los días de refrigerado duradero (cebolla/ajo 60, papa/auyama/repollo/zanahoria/quesos curados 45, cítricos/tortillas/batata/ñame 30); +12 platos DO; cobertura al día 30 sin congelador ≥ 7 por franja en las seis bibliotecas."
       ],
       "accepted": [
         "Arenque desmenuzado (1.700 mg Na): plato tradicional de arenque salado, se mantiene; el motor lo marca sodium_high.",
@@ -24,7 +25,7 @@
       ]
     },
     "puertorico_criolla": {
-      "snapshot_hash": "9c5c968a9b28c73eae1d72b2ca22b6490d50e8ae8c1c38c98d9bbe7092ec8510",
+      "snapshot_hash": "a9706fc04ed6c678387de1c9810e6b16b86db9b2178bcc455b1019fa28a7d1b3",
       "decisions": [
         "Alérgenos: el matcher del registry no reconocía plurales (sardinas, fideos, almejas) ni la salsa de soya como gluten: corregido y recompilado; cero clases sin marcar en las 6 bibliotecas (verificado con un chequeo independiente por constituyente).",
         "Raciones: meriendas > 450 kcal reasignadas a almuerzo/cena; almuerzos < 260 kcal y cenas < 180 kcal completados con base o proteína; almuerzos > 1.100 kcal reducidos.",
@@ -40,7 +41,7 @@
       ]
     },
     "mexico_casera": {
-      "snapshot_hash": "56885158c766065acb21c4fff94269ea0e16283b407eee3559a5b4bbeb3dd656",
+      "snapshot_hash": "ec099829b4b85d5dcbf9b4cd264802395b0fbf82b7dce450a26e23578723f21e",
       "decisions": [
         "Alérgenos: el matcher del registry no reconocía plurales (sardinas, fideos, almejas) ni la salsa de soya como gluten: corregido y recompilado; cero clases sin marcar en las 6 bibliotecas (verificado con un chequeo independiente por constituyente).",
         "Raciones: meriendas > 450 kcal reasignadas a almuerzo/cena; almuerzos < 260 kcal y cenas < 180 kcal completados con base o proteína; almuerzos > 1.100 kcal reducidos.",
@@ -56,7 +57,7 @@
       ]
     },
     "colombia_casera": {
-      "snapshot_hash": "c5fad0f790d5b2a9f696a57b293e632407ccaebd8219c583aacc47742fdb2933",
+      "snapshot_hash": "934a0bf8d4e9deba8363b87b69642c40db731c23df7090b6efddfd6049812397",
       "decisions": [
         "Alérgenos: el matcher del registry no reconocía plurales (sardinas, fideos, almejas) ni la salsa de soya como gluten: corregido y recompilado; cero clases sin marcar en las 6 bibliotecas (verificado con un chequeo independiente por constituyente).",
         "Raciones: meriendas > 450 kcal reasignadas a almuerzo/cena; almuerzos < 260 kcal y cenas < 180 kcal completados con base o proteína; almuerzos > 1.100 kcal reducidos.",
@@ -71,7 +72,7 @@
       ]
     },
     "spain_mediterranea": {
-      "snapshot_hash": "141f50f8269c9d01ca5c6331120cfd4fab138af53ace5115857711edb3a52332",
+      "snapshot_hash": "0e8fc02437f203d942d3a53acc8c76ff421dd4f6142805fd10500feb4f1f2c4a",
       "decisions": [
         "Alérgenos: el matcher del registry no reconocía plurales (sardinas, fideos, almejas) ni la salsa de soya como gluten: corregido y recompilado; cero clases sin marcar en las 6 bibliotecas (verificado con un chequeo independiente por constituyente).",
         "Raciones: meriendas > 450 kcal reasignadas a almuerzo/cena; almuerzos < 260 kcal y cenas < 180 kcal completados con base o proteína; almuerzos > 1.100 kcal reducidos.",
@@ -88,7 +89,7 @@
       ]
     },
     "us_everyday": {
-      "snapshot_hash": "7a61b568a4b360c5388f82b09a91067571da7fa545668e8ca3f99de4c3f12226",
+      "snapshot_hash": "0f7d829fb9db0652e3338707da0b8df3a757045dc0e28c2b68775a5e3cd65fce",
       "decisions": [
         "Alérgenos: el matcher del registry no reconocía plurales (sardinas, fideos, almejas) ni la salsa de soya como gluten: corregido y recompilado; cero clases sin marcar en las 6 bibliotecas (verificado con un chequeo independiente por constituyente).",
         "Raciones: meriendas > 450 kcal reasignadas a almuerzo/cena; almuerzos < 260 kcal y cenas < 180 kcal completados con base o proteína; almuerzos > 1.100 kcal reducidos.",

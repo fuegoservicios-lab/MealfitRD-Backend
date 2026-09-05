@@ -731,3 +731,67 @@ def emit_policy_shadow_metric(user_id: Optional[str], plan_id: Optional[str], co
         )
     except Exception as e:
         logger.debug(f"[P1-ARQ25-F2-PLANPOLICY] métrica shadow no persistida: {e}")
+
+
+# [P2-FORM-SNAPSHOT-LOG · 2026-09-05] Lo que el usuario PIDIÓ en el asistente, paso a paso y legible. Nace de una
+# pregunta del dueño («¿lo vegetariano lo elegiste a propósito?») que no debería hacer falta: la respuesta está en el
+# formulario, y quien revisa un plan debe leerla ANTES de juzgar el plato. Sin datos sensibles de salud detallados
+# (peso, edad, condiciones textuales): solo las ELECCIONES del asistente. Puro; nunca lanza.
+FORM_CHOICE_FIELDS = (
+    "appMode", "planSource", "totalDays", "mainGoal", "goal", "dietType", "allergies", "otherAllergies",
+    "medicalConditions", "dislikes", "otherDislikes", "country", "cultureProfiles", "mealOrganization",
+    "stapleAnchors", "stapleFoods", "groceryDuration", "freshTopup", "freezerMode", "batchCooking",
+    "budget", "budgetAmount", "budgetCurrency", "householdSize", "cookingTime", "activityLevel",
+    "scheduleType", "locale",
+)
+
+
+def form_choices(form: Optional[dict]) -> dict:
+    """Subconjunto ESTABLE del formulario con las elecciones del asistente (solo claves presentes)."""
+    f = form if isinstance(form, dict) else {}
+    out = {}
+    for k in FORM_CHOICE_FIELDS:
+        if k in f and f.get(k) not in (None, "", [], {}):
+            v = f.get(k)
+            out[k] = v if isinstance(v, (str, int, float, bool, list, dict)) else str(v)
+    return out
+
+
+def form_choices_summary(form: Optional[dict]) -> str:
+    """Una línea legible: `dieta=vegetarian · país=US · cocina=dominican_criolla+us_everyday(frecuente) · …`."""
+    try:
+        f = form if isinstance(form, dict) else {}
+        if not f:
+            return "(formulario vacío)"
+        parts = []
+        g = f.get("mainGoal") or f.get("goal")
+        if g: parts.append(f"objetivo={g}")
+        if f.get("appMode"): parts.append(f"modo={f.get('appMode')}")
+        if f.get("totalDays"): parts.append(f"días={f.get('totalDays')}")
+        if f.get("dietType"): parts.append(f"dieta={f.get('dietType')}")
+        al = [str(x) for x in (f.get("allergies") or []) if x] + ([str(f.get("otherAllergies"))] if f.get("otherAllergies") else [])
+        parts.append("alergias=" + (",".join(al) if al else "ninguna"))
+        mc = [str(x) for x in (f.get("medicalConditions") or []) if x]
+        if mc: parts.append("condiciones=" + ",".join(mc))
+        dl = [str(x) for x in (f.get("dislikes") or []) if x]
+        if dl: parts.append("no_gusta=" + ",".join(dl))
+        if f.get("country"): parts.append(f"país={f.get('country')}")
+        cp = f.get("cultureProfiles")
+        if isinstance(cp, dict) and cp.get("main"):
+            sec = [f"{s.get('profile_id')}({s.get('intensity') or 'ocasional'})" for s in (cp.get("secondary") or []) if isinstance(s, dict) and s.get("profile_id")]
+            parts.append("cocina=" + "+".join([str(cp.get("main"))] + sec))
+        elif cp:
+            parts.append(f"cocina={cp}")
+        if f.get("mealOrganization"): parts.append(f"recurrencia={f.get('mealOrganization')}")
+        sa = f.get("stapleAnchors") or f.get("stapleFoods")
+        if sa: parts.append(f"anclas={sa if isinstance(sa, str) else ','.join(str(x.get('name') if isinstance(x, dict) else x) for x in sa)}")
+        shop = [str(f.get(k)) for k in ("groceryDuration", "freshTopup", "freezerMode", "batchCooking") if f.get(k)]
+        if shop: parts.append("compra=" + "/".join(shop))
+        if f.get("budget"): parts.append(f"presupuesto={f.get('budget')}" + (f"({f.get('budgetAmount')} {f.get('budgetCurrency') or ''})".rstrip() if f.get("budgetAmount") else ""))
+        if f.get("householdSize"): parts.append(f"hogar={f.get('householdSize')}")
+        if f.get("cookingTime"): parts.append(f"tiempo_cocina={f.get('cookingTime')}")
+        if f.get("activityLevel"): parts.append(f"actividad={f.get('activityLevel')}")
+        if f.get("locale"): parts.append(f"idioma={f.get('locale')}")
+        return " · ".join(parts) if parts else "(formulario vacío)"
+    except Exception:
+        return "(formulario ilegible)"

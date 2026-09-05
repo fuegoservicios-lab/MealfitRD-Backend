@@ -1726,6 +1726,364 @@
           "grams": 50.0
         }
       ]
+    },
+    {
+      "name": "Avena con leche evaporada, pasas y maní",
+      "slots": [
+        "desayuno",
+        "merienda"
+      ],
+      "protein": "none",
+      "base": "avena",
+      "technique": "hervido",
+      "transform": false,
+      "constituents": [
+        {
+          "name": "Avena",
+          "grams": 50.0
+        },
+        {
+          "name": "Leche evaporada",
+          "grams": 80.0
+        },
+        {
+          "name": "Pasas",
+          "grams": 15.0
+        },
+        {
+          "name": "Maní",
+          "grams": 15.0
+        }
+      ]
+    },
+    {
+      "name": "Huevos revueltos con cebolla y casabe",
+      "slots": [
+        "desayuno"
+      ],
+      "protein": "huevo",
+      "base": "pan",
+      "technique": "revuelto",
+      "transform": false,
+      "constituents": [
+        {
+          "name": "Huevo",
+          "grams": 100.0
+        },
+        {
+          "name": "Cebolla",
+          "grams": 40.0
+        },
+        {
+          "name": "Casabe",
+          "grams": 40.0
+        },
+        {
+          "name": "Aceite vegetal",
+          "grams": 5.0
+        }
+      ]
+    },
+    {
+      "name": "Arepitas de maíz con queso de papa (horneadas)",
+      "slots": [
+        "desayuno",
+        "merienda"
+      ],
+      "protein": "queso",
+      "base": "maiz",
+      "technique": "masa horneada",
+      "transform": true,
+      "constituents": [
+        {
+          "name": "Harina de maíz precocida",
+          "grams": 60.0
+        },
+        {
+          "name": "Queso de papa",
+          "grams": 30.0
+        },
+        {
+          "name": "Huevo",
+          "grams": 30.0
+        },
+        {
+          "name": "Leche evaporada",
+          "grams": 30.0
+        }
+      ]
+    },
+    {
+      "name": "Locrio de bacalao con repollo",
+      "slots": [
+        "almuerzo"
+      ],
+      "protein": "pescado",
+      "base": "arroz",
+      "technique": "guisado",
+      "transform": true,
+      "constituents": [
+        {
+          "name": "Arroz blanco",
+          "grams": 70.0
+        },
+        {
+          "name": "Bacalao",
+          "grams": 100.0
+        },
+        {
+          "name": "Cebolla",
+          "grams": 30.0
+        },
+        {
+          "name": "Ajo",
+          "grams": 5.0
+        },
+        {
+          "name": "Salsa de tomate",
+          "grams": 30.0
+        },
+        {
+          "name": "Repollo",
+          "grams": 80.0
+        }
+      ]
+    },
+    {
+      "name": "Arroz con lentejas y huevo duro",
+      "slots": [
+        "almuerzo"
+      ],
+      "protein": "legumbre",
+      "base": "arroz",
+      "technique": "guisado",
+      "transform": true,
+      "constituents": [
+        {
+          "name": "Arroz blanco",
+          "grams": 60.0
+        },
+        {
+          "name": "Lentejas",
+          "grams": 60.0
+        },
+        {
+          "name": "Huevo",
+          "grams": 50.0
+        },
+        {
+          "name": "Cebolla",
+          "grams": 30.0
+        },
+        {
+          "name": "Ajo",
+          "grams": 5.0
+        },
+        {
+          "name": "Aceite vegetal",
+          "grams": 5.0
+        }
+      ]
+    },
+    {
+      "name": "Espaguetis con atún y salsa criolla",
+      "slots": [
+        "almuerzo"
+      ],
+      "protein": "atun",
+      "base": "pasta",
+      "technique": "guisado",
+      "transform": false,
+      "constituents": [
+        {
+          "name": "Pasta integral",
+          "grams": 70.0
+        },
+        {
+          "name": "Atún en agua",
+          "grams": 90.0
+        },
+        {
+          "name": "Salsa de tomate",
+          "grams": 80.0
+        },
+        {
+          "name": "Cebolla",
+          "grams": 30.0
+        },
+        {
+          "name": "Ajo",
+          "grams": 5.0
+        },
+        {
+          "name": "Orégano dominicano",
+          "grams": 1.0
+        }
+      ]
+    },
+    {
+      "name": "Chenchén con guiso de habichuelas y huevo",
+      "slots": [
+        "almuerzo"
+      ],
+      "protein": "legumbre",
+      "base": "maiz",
+      "technique": "guisado",
+      "transform": true,
+      "constituents": [
+        {
+          "name": "Sémola de maíz",
+          "grams": 60.0
+        },
+        {
+          "name": "Habichuelas rojas",
+          "grams": 60.0
+        },
+        {
+          "name": "Huevo",
+          "grams": 50.0
+        },
+        {
+          "name": "Cebolla",
+          "grams": 30.0
+        },
+        {
+          "name": "Auyama",
+          "grams": 50.0
+        }
+      ]
+    },
+    {
+      "name": "Ñame hervido con bacalao encebollado",
+      "slots": [
+        "cena"
+      ],
+      "protein": "pescado",
+      "base": "viveres",
+      "technique": "salteado",
+      "transform": false,
+      "constituents": [
+        {
+          "name": "Ñame",
+          "grams": 180.0
+        },
+        {
+          "name": "Bacalao",
+          "grams": 100.0
+        },
+        {
+          "name": "Cebolla",
+          "grams": 60.0
+        },
+        {
+          "name": "Ajo",
+          "grams": 5.0
+        },
+        {
+          "name": "Aceite vegetal",
+          "grams": 8.0
+        }
+      ]
+    },
+    {
+      "name": "Puré de papa con huevo revuelto y queso de papa",
+      "slots": [
+        "cena"
+      ],
+      "protein": "huevo",
+      "base": "papa",
+      "technique": "hervido",
+      "transform": false,
+      "constituents": [
+        {
+          "name": "Papa",
+          "grams": 200.0
+        },
+        {
+          "name": "Huevo",
+          "grams": 100.0
+        },
+        {
+          "name": "Queso de papa",
+          "grams": 25.0
+        },
+        {
+          "name": "Leche evaporada",
+          "grams": 30.0
+        }
+      ]
+    },
+    {
+      "name": "Casabe con queso de papa y manzana",
+      "slots": [
+        "merienda"
+      ],
+      "protein": "queso",
+      "base": "pan",
+      "technique": "frío",
+      "transform": false,
+      "constituents": [
+        {
+          "name": "Casabe",
+          "grams": 40.0
+        },
+        {
+          "name": "Queso de papa",
+          "grams": 30.0
+        },
+        {
+          "name": "Manzana",
+          "grams": 100.0
+        }
+      ]
+    },
+    {
+      "name": "Maní tostado con pasas y dátiles",
+      "slots": [
+        "merienda"
+      ],
+      "protein": "none",
+      "base": "none",
+      "technique": "frío",
+      "transform": false,
+      "constituents": [
+        {
+          "name": "Maní",
+          "grams": 25.0
+        },
+        {
+          "name": "Pasas",
+          "grams": 15.0
+        },
+        {
+          "name": "Dátiles",
+          "grams": 20.0
+        }
+      ]
+    },
+    {
+      "name": "Huevo duro con casabe y naranja",
+      "slots": [
+        "merienda"
+      ],
+      "protein": "huevo",
+      "base": "pan",
+      "technique": "hervido",
+      "transform": false,
+      "constituents": [
+        {
+          "name": "Huevo",
+          "grams": 50.0
+        },
+        {
+          "name": "Casabe",
+          "grams": 25.0
+        },
+        {
+          "name": "Naranja",
+          "grams": 150.0
+        }
+      ]
     }
   ]
 }

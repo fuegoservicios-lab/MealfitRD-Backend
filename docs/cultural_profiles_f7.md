@@ -151,12 +151,57 @@ formulario apenas se usaba.
   queda solo para planes antiguos): se respeta la compra única y se declara `pantry_proteins_after_first_week`.
 - **PDF / lista**: el rótulo de perecederos dice lo que toca según el congelador (sin congelador: consume primero;
   limitado: congela lo de la segunda semana; completo: congela el día de la compra), en 5 idiomas.
-- **Bibliotecas**: +80 platos de despensa duradera (DO 111 · ES 96 · MX 95 · CO 99 · PR 99 · US 94), cada biblioteca con ≥ 12
-  platos `pantry_only`, ≥ 4 técnicas y las familias atún / huevo / legumbre; cada franja principal tiene candidatos para el
-  día 30 sin congelador. Test: `test_p1_arq25_f7_culture_pantry.py`.
+- **Bibliotecas**: dos tandas de despensa duradera (+155 platos: DO 123 · ES 104 · MX 109 · CO 118 · PR 110 · US 103). La segunda
+  tanda nació de MEDIR la cobertura real al día 30 sin congelador (MX tenía 1 desayuno, 2 cenas y 0 meriendas que aguantaran):
+  se calibraron los días del refrigerado duradero (cebolla/ajo 60; papa, auyama, repollo, zanahoria y quesos curados 45; cítricos,
+  tortillas, batata, ñame 30) y se añadieron platos para las franjas delgadas. Listón del test: al día 30 sin congelador,
+  desayuno ≥ 7 · almuerzo ≥ 9 · cena ≥ 8 · merienda ≥ 6 candidatos en cada biblioteca. Test: `test_p1_arq25_f7_culture_pantry.py`.
+
+## 8c. Subfase H — el pool de mercado también obedece a la cocina (2026-09-05, prueba real A)
+
+La primera generación real «mercado US + cocina dominicana 0,7» tenía la política y el blueprint correctos (5 días DO /
+2 US, candidatos del registry de las dos bibliotecas) y aun así los días dominicanos salieron «Pollo BBQ sobre frijoles
+horneados», «Bagel de pollo con ranch», «calabacín al kétchup». La causa no era la capa cultural sino el **pool de mercado
+del sembrador** (`COUNTRY_POOLS["US"]`): 10 carbos (bagels, frijoles horneados…, sin arroz, plátano, yuca ni aceite de
+oliva) y condimentos contando como «vegetales/grasas»; ese pool es la ASIGNACIÓN OBLIGATORIA del día, y contra eso el
+bloque de inspiración no puede.
+
+- `constants.UNIVERSAL_MARKET_STAPLES` (lo que cualquier supermercado de los seis mercados vende) se suma a los pools
+  beta; `MARKET_POOL_CONDIMENTS_EXCLUDED` saca ranch/barbacoa/kétchup/mostaza/sazonador de las «grasas».
+- Con cocina ≠ mercado, `_market_pool_with_extras` **interseca** el pool con los constituyentes del registry de esa cocina
+  (≥ 5 por categoría; si no, el pool entero): US + DO ⇒ arroz, plátano, yuca, batata, habichuelas, avena…, sin bagels.
+- Opt-in por kwargs (`market_extras=True, culture_country=`) en el sembrador, el swap y el camino degradado; la firma sin
+  kwargs sigue byte-idéntica (contrato de F2). Knob `MEALFIT_MARKET_POOL_UNIVERSAL`.
+- Test `test_p1_arq25_f7_culture_market_pool.py`. Lección: *el blueprint puede estar perfecto y el plato salir de otra
+  cocina si el sembrador de ingredientes no sabe de cultura — la prueba real con el LLM fue la que lo mostró.*
 
 ## 8. Lo que NO hace (a propósito)
 
 - No infiere la cocina del origen, del idioma ni de la zona horaria (solo SUGIERE la del país de compra, visible).
 - No traduce nombres de alimentos ni mezcla catálogos: el mercado sigue mandando en precios y despensa.
 - No sustituye la revisión humana: el benchmark marca, la persona firma.
+
+
+## 8d. Subfase I — el sembrador de bases conoce la cocina del día (`P1-CULTURE-STAPLE-SEED` · 2026-09-05)
+
+Prueba real A v3 (plan `f2f7a674`, mercado US, cocina dominicana 70 % + estadounidense 30 %): política, blueprint y pool
+correctos (F7-H ya traía arroz, plátano, yuca y habichuelas) y aun así el sorteo eligió *Pasta integral / Lentejas /
+Garbanzos* para los 3 días; el día dominicano salió en «canastas de pasta integral». Causa: la rotación anti-repetición
+penaliza lo que el usuario acaba de comer (3 planes con arroz y plátano en una hora) y el sembrador no sabía qué cocina
+tocaba cada día. La autocrítica lo puntuó Cultural 6/10 y nada lo bloqueó (la fidelidad mide familia y anclas, no cocina).
+
+Regla (`ai_helpers._culture_staple_seed`, tras `_rotate_pairs` y antes de publicar `carb_params`/`carb_pairs`): para cada
+día del chunk, `profile_for_day(pesos, offset + i)` ⇒ perfil ⇒ `staples` del perfil casados contra el pool del día
+(`cultural_profiles.staple_bases_for_day`: por palabra, plural tolerado, sin acentos; «papa» no casa «Papaya»). Si ninguna
+de las dos bases del día es básico de esa cocina, la **segunda** se sustituye por el básico disponible menos usado
+(frecuencia fatigada), alternando entre los dos menos usados para los días de la misma cocina (la lista crece ≤ 2 por
+cocina). Un básico vetado por sobreuso cuenta como «ya tiene» pero jamás se inyecta. Solo actúa con mezcla o con cocina ≠
+mercado: el dominicano en el mercado DO sigue byte-idéntico. Knob `MEALFIT_CULTURE_STAPLE_SEED` (True); fail-open.
+Las proteínas no se tocan: las manda la rebanada del blueprint (F3). Test `tests/test_p1_culture_staple_seed.py`.
+
+**Ronda 2 (`P1-CULTURE-STAPLE-SEED-2`, mismo día).** Medido en el plan `4f348954`: la siembra respetaba el veto de sobreuso
+(`used_carbs`) y en una cuenta con arroz=64 y yuca=57 en el contador quedó muda; el día dominicano recibió «Garbanzos + Avena»
+y el modelo hizo arepitas de avena en la cena (rechazo del revisor). Los básicos de la cocina del día **no caen bajo el veto**
+(un dominicano come arroz casi a diario: es la cocina, no monotonía — la misma excepción que los «básicos del usuario» del
+prompt): la siembra corre ANTES del bloque EVITA, se llama sin veto y sus básicos entran en `chosen_carbs` para quedar exentos
+del EVITA; la frecuencia sigue eligiendo el menos usado entre ellos. Log explícito cuando calla.

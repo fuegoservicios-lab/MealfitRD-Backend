@@ -4,16 +4,16 @@ Gate: **PASA**
 
 | Perfil | Biblioteca | Plantillas | Des/Alm/Cen/Mer | Resueltos | Contaminación | Adecuación | Disponib. riesgo | Proteínas/Técnicas | Clínico | Revisión humana |
 |---|---|---|---|---|---|---|---|---|---|---|
-| dominican_criolla | do | 111 | 26/47/37/29 | 99.4 % | 0 | ok (fritura 0 %) | 0.0 % | 12/36 | ok (procesados 2, sodio 25) | 0 marcadas · firma: sí (Claude (revisión curatorial delegada por el dueño), 2026-09-05) |
-| puertorico_criolla | pr | 99 | 22/39/27/20 | 100.0 % | 0 | ok (fritura 7 %) | 16.1 % | 12/14 | ok (procesados 12, sodio 21) | 53 marcadas · firma: sí (Claude (revisión curatorial delegada por el dueño), 2026-09-05) |
-| mexico_casera | mx | 95 | 25/39/32/21 | 100.0 % | 0 | ok (fritura 2 %) | 2.9 % | 12/14 | ok (procesados 5, sodio 8) | 13 marcadas · firma: sí (Claude (revisión curatorial delegada por el dueño), 2026-09-05) |
-| colombia_casera | co | 99 | 23/39/31/22 | 100.0 % | 0 | ok (fritura 1 %) | 14.2 % | 11/13 | ok (procesados 6, sodio 7) | 47 marcadas · firma: sí (Claude (revisión curatorial delegada por el dueño), 2026-09-05) |
-| spain_mediterranea | es | 96 | 24/52/38/19 | 100.0 % | 0 | ok (fritura 1 %) | 5.4 % | 11/15 | ok (procesados 23, sodio 27) | 22 marcadas · firma: sí (Claude (revisión curatorial delegada por el dueño), 2026-09-05) |
-| us_everyday | us | 94 | 23/38/30/18 | 100.0 % | 2 | ok (fritura 1 %) | 4.4 % | 11/14 | ok (procesados 7, sodio 19) | 18 marcadas · firma: sí (Claude (revisión curatorial delegada por el dueño), 2026-09-05) |
+| dominican_criolla | do | 123 | 29/51/39/34 | 99.4 % | 0 | ok (fritura 0 %) | 0.0 % | 12/36 | ok (procesados 2, sodio 25) | 0 marcadas · firma: sí (Claude (revisión curatorial delegada por el dueño), 2026-09-05) |
+| puertorico_criolla | pr | 110 | 26/42/30/23 | 100.0 % | 0 | ok (fritura 6 %) | 15.2 % | 12/14 | ok (procesados 12, sodio 22) | 56 marcadas · firma: sí (Claude (revisión curatorial delegada por el dueño), 2026-09-05) |
+| mexico_casera | mx | 109 | 28/43/35/25 | 100.0 % | 0 | ok (fritura 1 %) | 3.0 % | 12/14 | ok (procesados 5, sodio 10) | 15 marcadas · firma: sí (Claude (revisión curatorial delegada por el dueño), 2026-09-05) |
+| colombia_casera | co | 118 | 27/45/36/27 | 100.0 % | 0 | ok (fritura 0 %) | 13.4 % | 11/13 | ok (procesados 6, sodio 7) | 54 marcadas · firma: sí (Claude (revisión curatorial delegada por el dueño), 2026-09-05) |
+| spain_mediterranea | es | 104 | 27/52/40/23 | 100.0 % | 0 | ok (fritura 1 %) | 5.3 % | 11/15 | ok (procesados 24, sodio 28) | 23 marcadas · firma: sí (Claude (revisión curatorial delegada por el dueño), 2026-09-05) |
+| us_everyday | us | 103 | 26/41/33/18 | 100.0 % | 2 | ok (fritura 1 %) | 4.7 % | 11/14 | ok (procesados 7, sodio 21) | 21 marcadas · firma: sí (Claude (revisión curatorial delegada por el dueño), 2026-09-05) |
 
 Mezcla 0,7/0,3 en 10 días: todas las parejas con candidatos en las 4 franjas (30 parejas).
 
-- **puertorico_criolla** — para revisión humana: Alcapurrias horneadas de camarón; Arroz con dulce; Arroz con habichuelas y pechuga guisada; Bacalao a la vizcaína con arroz blanco; Bacalao guisado con viandas; Batata al horno con especias; Batata asada con sardinas; Batata hervida con canela; Bistec encebollado con tostones; Camarones al ajillo con tostones; Camarones salteados con vegetales; Chicharrón de cerdo con tostones y pique …
+- **puertorico_criolla** — para revisión humana: Alcapurrias horneadas de camarón; Arroz con dulce; Arroz con habichuelas y pechuga guisada; Bacalao a la vizcaína con arroz blanco; Bacalao guisado con batata; Bacalao guisado con viandas; Batata al horno con especias; Batata asada con sardinas; Batata hervida con canela; Bistec encebollado con tostones; Camarones al ajillo con tostones; Camarones salteados con vegetales …
   - disponibilidad: «Bacalao guisado con viandas» usa Yuca (cultivar dominicano)
   - disponibilidad: «Bacalao guisado con viandas» usa Ñame (cultivar dominicano)
   - disponibilidad: «Ensalada de frutas tropicales» usa Guayaba (cultivar dominicano)
@@ -37,10 +37,12 @@ Mezcla 0,7/0,3 en 10 días: todas las parejas con candidatos en las 4 franjas (3
   - disponibilidad: «Serenata de bacalao con viandas» usa Yautía (cultivar dominicano)
   - disponibilidad: «Serenata de bacalao con viandas» usa Ñame (cultivar dominicano)
   - disponibilidad: «Pavo molido guisado con papa» usa Papa (cultivar dominicano)
+  - disponibilidad: «Puré de ñame con huevo duro y queso de papa» usa Ñame (cultivar dominicano)
   - disponibilidad: «Pescado a la plancha con yuca hervida» usa Yuca (cultivar dominicano)
   - disponibilidad: «Morcilla a la plancha con tostones» usa Plátano verde (cultivar dominicano)
   - disponibilidad: «Bacalao a la vizcaína con arroz blanco» usa Papa (cultivar dominicano)
   - disponibilidad: «Tortilla de huevo con papa y jamón de cocinar» usa Papa (cultivar dominicano)
+  - disponibilidad: «Tortilla de papa con queso de papa» usa Papa (cultivar dominicano)
   - disponibilidad: «Batata hervida con canela» usa Batata (cultivar dominicano)
   - disponibilidad: «Camarones salteados con vegetales» usa Batata (cultivar dominicano)
   - disponibilidad: «Camarones al ajillo con tostones» usa Plátano verde (cultivar dominicano)
@@ -69,11 +71,12 @@ Mezcla 0,7/0,3 en 10 días: todas las parejas con candidatos en las 4 franjas (3
   - disponibilidad: «Sardinas guisadas con ñame hervido» usa Ñame (cultivar dominicano)
   - disponibilidad: «Ensalada de bacalao con papa y huevo» usa Papa (cultivar dominicano)
   - disponibilidad: «Batata asada con sardinas» usa Batata (cultivar dominicano)
+  - disponibilidad: «Bacalao guisado con batata» usa Batata (cultivar dominicano)
   - disponibilidad: «Alcapurrias horneadas de camarón» usa Yuca (cultivar dominicano)
   - disponibilidad: «Alcapurrias horneadas de camarón» usa Guineo verde (cultivar dominicano)
   - disponibilidad: «Pavochón con puré de auyama» usa Auyama (cultivar dominicano)
   - disponibilidad: «Pastelón de plátano maduro con carne» usa Plátano maduro (cultivar dominicano)
-- **mexico_casera** — para revisión humana: Avena con canela y plátano estilo mexicano; Bacalao a la vizcaína con papa; Caldo de camarón con verduras; Crema de chile poblano con elote; Frijoles charros con longaniza; Lentejas guisadas con papa y comino; Papas guisadas con queso y chipotle; Picadillo de res con papa y zanahoria; Sopa de fideo con garbanzo; Sopa de lentejas con verduras; Sopa de verduras con pollo y epazote; Tortitas de papa con queso …
+- **mexico_casera** — para revisión humana: Atún guisado con papa y chipotle; Avena con canela y plátano estilo mexicano; Bacalao a la vizcaína con papa; Caldo de camarón con verduras; Crema de chile poblano con elote; Frijoles charros con longaniza; Lentejas guisadas con papa y comino; Papas con huevo y chile guajillo; Papas guisadas con queso y chipotle; Picadillo de res con papa y zanahoria; Sopa de fideo con garbanzo; Sopa de lentejas con verduras …
   - disponibilidad: «Caldo de camarón con verduras» usa Papa (cultivar dominicano)
   - disponibilidad: «Crema de chile poblano con elote» usa Papa (cultivar dominicano)
   - disponibilidad: «Papas guisadas con queso y chipotle» usa Papa (cultivar dominicano)
@@ -83,7 +86,9 @@ Mezcla 0,7/0,3 en 10 días: todas las parejas con candidatos en las 4 franjas (3
   - disponibilidad: «Yogur con guayaba y avena» usa Guayaba (cultivar dominicano)
   - disponibilidad: «Avena con canela y plátano estilo mexicano» usa Plátano maduro (cultivar dominicano)
   - disponibilidad: «Lentejas guisadas con papa y comino» usa Papa (cultivar dominicano)
+  - disponibilidad: «Papas con huevo y chile guajillo» usa Papa (cultivar dominicano)
   - disponibilidad: «Bacalao a la vizcaína con papa» usa Papa (cultivar dominicano)
+  - disponibilidad: «Atún guisado con papa y chipotle» usa Papa (cultivar dominicano)
   - disponibilidad: «Sopa de lentejas con verduras» usa Papa (cultivar dominicano)
   - disponibilidad: «Sopa de fideo con garbanzo» usa Papa (cultivar dominicano)
   - disponibilidad: «Tortitas de papa con queso» usa Papa (cultivar dominicano)
@@ -96,6 +101,8 @@ Mezcla 0,7/0,3 en 10 días: todas las parejas con candidatos en las 4 franjas (3
   - disponibilidad: «Jugo de guayaba con leche» usa Guayaba (cultivar dominicano)
   - disponibilidad: «Yuca con queso y huevo» usa Yuca (cultivar dominicano)
   - disponibilidad: «Sopa de garbanzo con papa y zanahoria» usa Papa (cultivar dominicano)
+  - disponibilidad: «Ñame hervido con huevo y queso gouda» usa Ñame (cultivar dominicano)
+  - disponibilidad: «Sopa de lentejas con zanahoria y papa» usa Papa (cultivar dominicano)
   - disponibilidad: «Crema de auyama con queso» usa Auyama (cultivar dominicano)
   - disponibilidad: «Sopa de lentejas con plátano verde» usa Plátano verde (cultivar dominicano)
   - disponibilidad: «Batata asada con atún y cebolla» usa Batata (cultivar dominicano)
@@ -119,6 +126,7 @@ Mezcla 0,7/0,3 en 10 días: todas las parejas con candidatos en las 4 franjas (3
   - disponibilidad: «Sudado de carne con papa y yuca» usa Papa (cultivar dominicano)
   - disponibilidad: «Sudado de carne con papa y yuca» usa Yuca (cultivar dominicano)
   - disponibilidad: «Batido de guanábana con leche» usa Guanábana (cultivar dominicano)
+  - disponibilidad: «Tortilla de huevo con papa y cebolla» usa Papa (cultivar dominicano)
   - disponibilidad: «Tilapia frita con patacón» usa Plátano verde (cultivar dominicano)
   - disponibilidad: «Patacones con hogao y queso» usa Plátano verde (cultivar dominicano)
   - disponibilidad: «Sobrebarriga en salsa criolla con papa» usa Papa (cultivar dominicano)
@@ -128,25 +136,30 @@ Mezcla 0,7/0,3 en 10 días: todas las parejas con candidatos en las 4 franjas (3
   - disponibilidad: «Pescado frito con patacones y ensalada» usa Plátano verde (cultivar dominicano)
   - disponibilidad: «Bacalao guisado con papa y arroz» usa Papa (cultivar dominicano)
   - disponibilidad: «Frijol cargamanto con costilla» usa Plátano maduro (cultivar dominicano)
+  - disponibilidad: «Papa guisada con atún» usa Papa (cultivar dominicano)
   - disponibilidad: «Sudado de pescado con yuca» usa Yuca (cultivar dominicano)
   - disponibilidad: «Camarones al ajillo con arroz de coco» usa Coco (cultivar dominicano)
   - disponibilidad: «Pechuga en salsa de champiñones con puré» usa Papa (cultivar dominicano)
+  - disponibilidad: «Lentejas guisadas con papa y arroz» usa Papa (cultivar dominicano)
   - disponibilidad: «Sudado de pollo con papa» usa Papa (cultivar dominicano)
   - disponibilidad: «Morcilla con papa criolla» usa Papa (cultivar dominicano)
   - disponibilidad: «Gallina criolla guisada con papa criolla» usa Papa (cultivar dominicano)
   - disponibilidad: «Batata asada con queso costeño» usa Batata (cultivar dominicano)
   - disponibilidad: «Mondongo ligero con yuca» usa Yuca (cultivar dominicano)
   - disponibilidad: «Mondongo ligero con yuca» usa Papa (cultivar dominicano)
+  - disponibilidad: «Huevos con papa y cebolla (revueltos)» usa Papa (cultivar dominicano)
   - disponibilidad: «Trucha a la plancha con patacones» usa Plátano verde (cultivar dominicano)
   - disponibilidad: «Tamal tolimense ligero» usa Papa (cultivar dominicano)
+  - disponibilidad: «Puré de auyama con huevo duro» usa Auyama (cultivar dominicano)
   - disponibilidad: «Tortilla de papa con queso» usa Papa (cultivar dominicano)
   - disponibilidad: «Huevos con auyama y queso» usa Auyama (cultivar dominicano)
-- **spain_mediterranea** — para revisión humana: Albóndigas en salsa con puré de patata; Bacalao con patatas al horno; Bocadillo de jamón serrano con tomate; Bocadillo de tortilla española; Conejo al ajillo con patatas; Cordero asado con patatas panaderas; Crema de calabacín con queso; Crema de zanahoria con queso; Ensaladilla rusa con atún en lata; Huevos rotos con patatas y jamón serrano; Menestra de verduras con jamón serrano; Pollo al ajillo con patatas panaderas …
+- **spain_mediterranea** — para revisión humana: Albóndigas en salsa con puré de patata; Bacalao con patatas al horno; Bocadillo de jamón serrano con tomate; Bocadillo de tortilla española; Conejo al ajillo con patatas; Cordero asado con patatas panaderas; Crema de calabacín con queso; Crema de zanahoria con queso; Ensaladilla rusa con atún en lata; Huevos rotos con patatas y jamón serrano; Menestra de verduras con jamón serrano; Patatas a lo pobre con huevo …
   - disponibilidad: «Potaje de garbanzos con acelgas» usa Papa (cultivar dominicano)
   - disponibilidad: «Menestra de verduras con jamón serrano» usa Papa (cultivar dominicano)
   - disponibilidad: «Pulpo a la gallega con patata y pimentón» usa Papa (cultivar dominicano)
   - disponibilidad: «Tortilla española con patata y cebolla» usa Papa (cultivar dominicano)
   - disponibilidad: «Crema de zanahoria con queso» usa Papa (cultivar dominicano)
+  - disponibilidad: «Patatas a lo pobre con huevo» usa Papa (cultivar dominicano)
   - disponibilidad: «Cordero asado con patatas panaderas» usa Papa (cultivar dominicano)
   - disponibilidad: «Ensaladilla rusa con atún en lata» usa Papa (cultivar dominicano)
   - disponibilidad: «Albóndigas en salsa con puré de patata» usa Papa (cultivar dominicano)
@@ -164,7 +177,7 @@ Mezcla 0,7/0,3 en 10 días: todas las parejas con candidatos en las 4 franjas (3
   - disponibilidad: «Pollo asado con verduras al horno» usa Papa (cultivar dominicano)
   - disponibilidad: «Trucha al horno con patatas panaderas» usa Papa (cultivar dominicano)
   - disponibilidad: «Sopa de verduras con fideos y pollo» usa Papa (cultivar dominicano)
-- **us_everyday** — para revisión humana: Batata al horno con frijoles negros y queso; Chuletas de cerdo al horno; Chuletas de cerdo con puré de papa; Crema de brócoli con queso cheddar; Filete de pescado blanco al horno con papa y vainitas; Huevos al horno con papa y queso cheddar; Huevos revueltos con papas y espinaca; Papa al horno con crema agria; Pastel de carne con puré de papa; Pavo al horno con puré de papa; Pavo al horno con puré y salsa de arándanos; Pechuga de pollo a la parrilla con vegetales …
+- **us_everyday** — para revisión humana: Batata al horno con frijoles negros y queso; Chuletas de cerdo al horno; Chuletas de cerdo con puré de papa; Crema de brócoli con queso cheddar; Filete de pescado blanco al horno con papa y vainitas; Guiso de lentejas con papa y salsa de tomate; Huevos al horno con papa y queso cheddar; Huevos revueltos con papa y cebolla; Huevos revueltos con papas y espinaca; Papa al horno con crema agria; Papa al horno con frijoles pintos y cheddar; Pastel de carne con puré de papa …
   - contaminación: «Tacos de pescado con repollo y crema agria» lleva «tacos» (mexico_casera)
   - contaminación: «Tacos con sazonador para tacos» lleva «tacos» (mexico_casera)
   - disponibilidad: «Batata al horno con frijoles negros y queso» usa Batata (cultivar dominicano)
@@ -173,8 +186,11 @@ Mezcla 0,7/0,3 en 10 días: todas las parejas con candidatos en las 4 franjas (3
   - disponibilidad: «Sopa de papa con queso cheddar» usa Papa (cultivar dominicano)
   - disponibilidad: «Pechuga de pollo a la parrilla con vegetales» usa Auyama (cultivar dominicano)
   - disponibilidad: «Crema de brócoli con queso cheddar» usa Papa (cultivar dominicano)
+  - disponibilidad: «Huevos revueltos con papa y cebolla» usa Papa (cultivar dominicano)
+  - disponibilidad: «Papa al horno con frijoles pintos y cheddar» usa Papa (cultivar dominicano)
   - disponibilidad: «Pastel de carne con puré de papa» usa Papa (cultivar dominicano)
   - disponibilidad: «Pavo al horno con puré de papa» usa Papa (cultivar dominicano)
+  - disponibilidad: «Guiso de lentejas con papa y salsa de tomate» usa Papa (cultivar dominicano)
   - disponibilidad: «Chuletas de cerdo al horno» usa Papa (cultivar dominicano)
   - disponibilidad: «Huevos revueltos con papas y espinaca» usa Papa (cultivar dominicano)
   - disponibilidad: «Chuletas de cerdo con puré de papa» usa Papa (cultivar dominicano)

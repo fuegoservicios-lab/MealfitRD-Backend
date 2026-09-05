@@ -242,9 +242,21 @@ def build_dish_library_context(skeleton_day: dict, day_num: int, country=None, c
             f"\n   🎯 Incluye HOY al menos {_tf_min} plato(s) TRANSFORMADO(s) ({_tf_examples}) "
             "siempre que encaje con los macros, el horario y las reglas clínicas del día.\n"
         ) if _tf_min > 0 else "\n"
+        # [P1-ARQ25-F7-CULTURE] con una MEZCLA de cocinas, el encabezado nombra el reparto pero no el día: el LLM
+        # se iba a «bowls» en un día dominicano (prueba real A v2). Una línea dice cuál es la cocina de HOY.
+        _today_line = ""
+        try:
+            if culture_weights and len([w for w in culture_weights if isinstance(w, dict)]) > 1:
+                from cultural_profiles import profile_for_market, profile_name_es
+                _today = profile_name_es(profile_for_market(_canon_country_or_do(country)))
+                _today_line = (f"   ➤ COCINA DE HOY: {_today.upper()} — nombra y prepara TODOS los platos de hoy como en esa cocina "
+                               "(nada de bowls, wraps ni ensaladas genéricas si no son de esa cocina); la otra cocina de la mezcla va en OTROS días.\n")
+        except Exception:
+            _today_line = ""
         return (
             f"\n🍽️ {_inspiration_heading(country, culture_weights)} (biblioteca curada — ELIGE Y ADAPTA una, o crea un plato "
             "equivalente en espíritu; ajusta porciones a los macros del día):\n"
+            + _today_line
             + "\n".join(lines)
             + "\n   💡 Prioriza preparaciones TRANSFORMADAS (masas, guisos, rellenos, horneados) "
               "sobre staples sueltos — un plato con nombre propio se disfruta y se repite."
