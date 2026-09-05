@@ -28,17 +28,19 @@ def _merienda(name, ingredients):
 
 def test_light_slot_rejects_meat_and_seafood_even_when_not_sweet(monkeypatch):
     monkeypatch.setattr(go, "CLOSER_DISH_COHERENCE_ENABLED", True)
-    m = _merienda("Vaso de toronja con almendras y mantequilla de maní",
-                  ["1½ toronjas", "15 g de almendras fileteadas", "1 cdta de mantequilla de maní"])
-    assert not go._is_sweet_meal(m, _sa), "el caso vivo NO es dulce para el léxico: por eso el guard dulce no lo cubría"
+    # merienda SALADA y sin cocción: ni el guard dulce ni la excepción caliente aplican — manda la franja
+    m = _merienda("Tostada de pan integral con aguacate y tomate",
+                  ["1 rebanada de pan integral", "½ aguacate", "1 tomate"])
+    assert not go._is_sweet_meal(m, _sa)
     ok = go._dish_coherence_filter(m, _sa)
     for meat in ("camarones", "filete de pescado blanco", "pechuga de pollo", "atun en agua", "carne de res"):
         assert not ok(meat), meat
     for light in ("yogurt griego entero", "huevos", "lentejas", "claras de huevo"):
         assert ok(light), light
-    # tortilla de trigo con pera: mismo caso, segundo plato vivo
-    m2 = _merienda("Tortilla de trigo tostada con pera y mantequilla de maní", ["2 tortillas de trigo", "½ pera"])
-    assert not go._dish_coherence_filter(m2, _sa)("camarones")
+    # los dos platos vivos (toronja / pera): desde P1-GAINMUSCLE-CENA-TUBER además son dulces para el léxico
+    for nm in ("Vaso de toronja con almendras y mantequilla de maní", "Tortilla de trigo tostada con pera y mantequilla de maní"):
+        m2 = _merienda(nm, ["1 porción"])
+        assert not go._dish_coherence_filter(m2, _sa)("camarones"), nm
 
 
 def test_savory_hot_light_meal_admits_chicken_turkey_tuna_but_never_seafood(monkeypatch):

@@ -20304,7 +20304,10 @@ _SWEET_MEAL_MARKERS = ("yogur", "yogurt", "avena", "batido", "smoothie", "licuad
                        "panqueque", "pancake", "waffle", "hotcake", "crepe", "crepa", "cereal", "miel",
                        "mermelada", "mango", "guineo", "banana", "fresa", "lechosa", "papaya", "guayaba",
                        "pina", "piña", "manzana", "mora", "arandano", "arándano", "kiwi", "melon", "melón",
-                       "uva", "durazno", "melocoton", "cereza", "mamey", "nispero", "chocolate", "cacao")
+                       "uva", "durazno", "melocoton", "cereza", "mamey", "nispero", "chocolate", "cacao",
+                       # [P1-GAINMUSCLE-CENA-TUBER · 2026-09-05] «Vaso de ricotta con sandía y almendras» no era
+                       # dulce para este léxico y recibió huevo (plan vivo 080a91c7). Frutas dulces que faltaban:
+                       "sandia", "sandía", "pera", "toronja", "ciruela", "higo", "datil", "dátil", "tamarindo")
 # [P1-SWEET-MARKER-WORDBOUNDARY · 2026-06-28] Match con frontera de palabra IZQUIERDA (`\b<marker>`) en vez de substring
 # naïve: "pina" (piña) matcheaba DENTRO de "es-PINA-ca" (espinaca) → un revoltillo de huevo con espinaca se marcaba DULCE,
 # rompiendo el sweet-guard del closer (le metía lácteo en vez de carne) y el day-kcal-floor (saltaba la comida salada).
@@ -21234,6 +21237,14 @@ def _close_protein_gap_for_meal(meal: dict, slot_protein_target: float, db, cand
                                  if any(h in nlow for h in _pref2)
                                  and not any(h in nlow for h in _CLOSER_CHEESE_HINT)
                                  and float(getattr(info, "protein", 0) or 0) >= 12), None)
+                # [P1-GAINMUSCLE-CENA-TUBER · 2026-09-05] en plato DULCE (ricotta con sandía) el sustituto del 2º
+                # queso es el yogurt, no el huevo: `_pref2` ponía huevo primero por orden de la tupla.
+                if _is_sweet_meal(meal, _sa):
+                    _alt_y = next((info for (info, nlow) in _pool
+                                   if "yogur" in nlow and not _collides_day(nlow)
+                                   and float(getattr(info, "protein", 0) or 0) >= 5), None)
+                    if _alt_y is not None:
+                        _alt = _alt_y
                 if _alt is not None and _sa(str(_alt.name).lower()) != _ch_low:
                     logger.info(f"🧀 [P1-CLOSER-NO-DUP-CHEESE] plato ya tiene queso → uso '{_alt.name}' en vez de un "
                                 f"2º queso ('{chosen.name}') | meal={str(meal.get('name'))[:30]}")
@@ -31059,6 +31070,10 @@ def _repair_day_kcal_floor_post_caps(days: list, nutrition: dict, form_data: dic
 
 # arroz blanco cocido por gramo (USDA): 1.3 kcal, 0.28g carb, 0.027g prot, ~0.003g grasa.
 _GM_RICE_KCAL_G, _GM_RICE_CARB_G, _GM_RICE_PROT_G = 1.3, 0.28, 0.027
+# [P1-GAINMUSCLE-CENA-TUBER · 2026-09-05] en la CENA la guarnición del piso es batata cocida (≈90 kcal/100 g):
+# el arroz de noche está prohibido y la pasada FINAL de este piso corre DESPUÉS del guard de arroz nocturno
+# (plan vivo 080a91c7: «40 g de arroz blanco crudo» en las habichuelas guisadas de la cena, ya aprobadas).
+_GM_TUBER_FOOD, _GM_TUBER_KCAL_G, _GM_TUBER_CARB_G, _GM_TUBER_PROT_G = "batata cocida", 0.9, 0.21, 0.016
 
 
 def _repair_gainmuscle_day_kcal(days: list, nutrition: dict, form_data: dict, db=None, *,
@@ -31135,10 +31150,18 @@ def _repair_gainmuscle_day_kcal(days: list, nutrition: dict, form_data: dict, db
                 if _kcal_room < 40 or _carb_room < 10:
                     break
                 _need_k = floor - day_kcal
+                # [P1-GAINMUSCLE-CENA-TUBER] guarnición por franja: cena → batata; resto → arroz blanco
+                _is_cena_gm = "cena" in _sa_gm(str(m.get("meal", "")).lower())
+                if _is_cena_gm:
+                    _sd_food, _sd_k, _sd_c, _sd_p = _GM_TUBER_FOOD, _GM_TUBER_KCAL_G, _GM_TUBER_CARB_G, _GM_TUBER_PROT_G
+                    _sd_key, _sd_note = "batata", "🍠 Cuece la batata de tus ingredientes (hervida o al horno) y sírvela como acompañante."
+                else:
+                    _sd_food, _sd_k, _sd_c, _sd_p = "arroz blanco cocido", _GM_RICE_KCAL_G, _GM_RICE_CARB_G, _GM_RICE_PROT_G
+                    _sd_key, _sd_note = "arroz blanco", "🍚 Cuece el arroz blanco de tus ingredientes según el paquete y sírvelo como acompañante."
                 add_g = int(min(float(GAINMUSCLE_KCAL_FLOOR_MAX_CARB_PER_MEAL_G),
-                                _mgm.ceil(_need_k / _GM_RICE_KCAL_G),
-                                _mgm.floor(_kcal_room / _GM_RICE_KCAL_G),
-                                _mgm.floor(_carb_room / _GM_RICE_CARB_G)))
+                                _mgm.ceil(_need_k / _sd_k),
+                                _mgm.floor(_kcal_room / _sd_k),
+                                _mgm.floor(_carb_room / _sd_c)))
                 if add_g < 20:
                     continue
                 # [P1-GAINMUSCLE-NO-SECOND-RICE · 2026-07-30] No meter arroz BLANCO en un plato que
@@ -31167,6 +31190,9 @@ def _repair_gainmuscle_day_kcal(days: list, nutrition: dict, form_data: dict, db
                     )
                 except Exception:
                     _otro_arroz = False
+                if _is_cena_gm and any("batata" in _sa_gm(str(_gl).lower()) and _GM_TUBER_FOOD not in str(_gl).lower()
+                                       for _gl in (m.get("ingredients") or [])):
+                    _otro_arroz = True   # [P1-GAINMUSCLE-CENA-TUBER] la cena ya lleva batata: no una segunda
                 if _otro_arroz:
                     logger.info(
                         f"🍚 [P1-GAINMUSCLE-NO-SECOND-RICE] '{str(m.get('name'))[:40]}' ya lleva "
@@ -31177,26 +31203,27 @@ def _repair_gainmuscle_day_kcal(days: list, nutrition: dict, form_data: dict, db
                 _gm_rice_idx = None
                 if final_pass:
                     for _gi, _gl in enumerate(m.get("ingredients") or []):
-                        if "de arroz blanco cocido" in str(_gl).lower():
+                        if f"de {_sd_food}" in str(_gl).lower():
                             _gm_rice_idx = _gi
                             break
                 if _gm_rice_idx is not None:
                     import re as _re_gmrf
                     _gm_mch = _re_gmrf.match(r"\s*(\d+)", str(m["ingredients"][_gm_rice_idx]))
                     _gm_prev = int(_gm_mch.group(1)) if _gm_mch else 0
-                    line = f"{_gm_prev + add_g}g de arroz blanco cocido"
+                    line = f"{_gm_prev + add_g}g de {_sd_food}"
                     m["ingredients"][_gm_rice_idx] = line
                     _gm_raw = m.get("ingredients_raw")
                     if isinstance(_gm_raw, list) and _gm_rice_idx < len(_gm_raw):
                         _gm_raw[_gm_rice_idx] = line
                 else:
-                    line = f"{add_g}g de arroz blanco cocido"
+                    # (literal conservado: lo ancla test_p1_gainmuscle_no_second_rice)
+                    line = f"{add_g}g de arroz blanco cocido" if not _is_cena_gm else f"{add_g}g de {_sd_food}"
                     m.setdefault("ingredients", []).append(line)
                     if isinstance(m.get("ingredients_raw"), list):
                         m["ingredients_raw"].append(line)
-                _dk = add_g * _GM_RICE_KCAL_G
-                m["carbs"] = round(_meal_macro_num(m.get("carbs")) + add_g * _GM_RICE_CARB_G)
-                m["protein"] = round(_meal_macro_num(m.get("protein")) + add_g * _GM_RICE_PROT_G)
+                _dk = add_g * _sd_k
+                m["carbs"] = round(_meal_macro_num(m.get("carbs")) + add_g * _sd_c)
+                m["protein"] = round(_meal_macro_num(m.get("protein")) + add_g * _sd_p)
                 m["cals"] = round(_meal_macro_num(m.get("cals")) + _dk)
                 m["macros"] = [f"P:{m['protein']}g", f"C:{m['carbs']}g", f"G:{round(_meal_macro_num(m.get('fats')))}g"]
                 m["_gainmuscle_kcal_floor"] = True
@@ -31227,16 +31254,19 @@ def _repair_gainmuscle_day_kcal(days: list, nutrition: dict, form_data: dict, db
                 # sumar gramos en pasadas posteriores y una cifra escrita aquí quedaría stale.
                 try:
                     _rec_gm = m.get("recipe")
-                    if isinstance(_rec_gm, list) and _rec_gm and not any(
-                            "arroz blanco" in str(_s).lower() for _s in _rec_gm):
+                    _sd_step_missing = (not any("arroz blanco" in str(_s).lower() for _s in _rec_gm)
+                                        if not _is_cena_gm else
+                                        not any(_sd_key in str(_s).lower() for _s in _rec_gm))
+                    if isinstance(_rec_gm, list) and _rec_gm and _sd_step_missing:
                         m["recipe"] = _insert_step_before_montaje(
                             _rec_gm,
+                            _sd_note if _is_cena_gm else
                             "🍚 Cuece el arroz blanco de tus ingredientes según el paquete y "
                             "sírvelo como acompañante.")
                 except Exception:
                     pass
                 day_kcal += _dk
-                day_carbs += add_g * _GM_RICE_CARB_G
+                day_carbs += add_g * _sd_c
                 added_kcal += _dk
         if added_kcal:
             logger.info(f"🍚 [P1-GAINMUSCLE-KCAL-FLOOR] +{round(added_kcal)} kcal (arroz cocido en comidas "
