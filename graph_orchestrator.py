@@ -18364,6 +18364,11 @@ _EGG_SWAP_TAIL_RX = _re.compile(
 # `step_has_cooking_verb`. Si CUALQUIER mención resuelve, el paso se considera stale.
 _LICUAR_TOKEN_RE = _re.compile(r"\blic[uú]a\w*\b", _re.IGNORECASE)
 _YOGUR_GRIEGO_MENTION_RE = _re.compile(r"\byogur griego\b", _re.IGNORECASE)
+# [P1-LIGHT-SLOT-COHERENCE] utensilio/agua de cocción inmediatamente DESPUÉS de la mención swapeada
+_EGG_SWAP_UTENSIL_AFTER_RE = _re.compile(
+    # solo la cocción en AGUA (huevo hervido); «vierte en el sartén y cocina» queda para el verbo, como antes
+    r"\s+(?:en|dentro de|a)\s+(?:una?\s+|la\s+|el\s+)?(?:olla|cacerola|cazuela|caldero|agua\s+hirviendo|agua\s+caliente)\b"
+    r"|\s+con\s+agua\s+(?:hirviendo|caliente|fr[ií]a|a\s+hervir)\b|\s+en\s+agua\b", _re.IGNORECASE)
 # Mismas 3 secciones que `cron_tasks._CULINARY_STEP_SECTIONS` (prefijo que RecipesView/export a
 # PDF usan para agrupar pasos) — no se importa desde ahí para no acoplar graph_orchestrator.py a
 # cron_tasks.py; son 3 literales estables, no vale la pena una dependencia cruzada por esto.
@@ -18382,6 +18387,11 @@ def _stale_cooking_verb_precedes_egg_swap(text: str, cooking_verb_check, window_
             palabras_antes = _re.findall(r"\S+", text[:m.start()])[-window_words:]
             ventana = _LICUAR_TOKEN_RE.sub("", " ".join(palabras_antes))
             if cooking_verb_check(ventana):
+                return True
+            # [P1-LIGHT-SLOT-COHERENCE · 2026-09-05] «coloca 1 yogur griego en una olla con agua» (plan
+            # vivo c0dc2519): el huevo hervido deja su UTENSILIO, no siempre un verbo de cocción del
+            # catálogo. La ventana posterior a la mención delata el manejo fósil igual que el verbo.
+            if _EGG_SWAP_UTENSIL_AFTER_RE.match(text[m.end():]):
                 return True
         return False
     except Exception:
@@ -31104,8 +31114,12 @@ def _repair_gainmuscle_day_kcal(days: list, nutrition: dict, form_data: dict, db
             # refill consolida en vez de duplicar) van primero; el resto conserva su orden por
             # slot detrás. Si TODAS tienen base, el comportamiento es el de antes y el piso
             # calórico —que es clínico para gain-muscle— se cumple igual.
+            # [P1-LIGHT-SLOT-COHERENCE · 2026-09-05] merienda/desayuno jamás reciben la guarnición de arroz
+            # (plan vivo 2a2e2516: «40 g de arroz blanco crudo» en una merienda de tortillas con pera, que
+            # no era «dulce» para el léxico). tooltip-anchor: P1-LIGHT-SLOT-COHERENCE
             _mains = sorted(
                 (m for m in ms if not _is_sweet_meal(m, _sa_gm)
+                 and not _meal_slot_is_light(m, _sa_gm)
                  and not any(b in _sa_gm(str(m.get("name", "")).lower()) for b in _BEVERAGE_MEAL_MARKERS)),
                 key=lambda mm: (
                     1 if _meal_has_conflicting_carb_base(mm, _sa_gm) else 0,
