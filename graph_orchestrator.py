@@ -18396,6 +18396,11 @@ _EGG_SWAP_DROP_ADJ = frozenset((
     "duro", "dura", "duros", "duras",
     "cuajado", "cuajada", "cuajados", "cuajadas",
     "pochado", "pochada", "pochados", "pochadas",
+    # [P1-GAINMUSCLE-DINNER-CLOSER · 2026-09-05] «…con Yogurt Griego hervido» (plan vivo b267f07e): faltaban
+    # los participios del huevo en agua.
+    "hervido", "hervida", "hervidos", "hervidas",
+    "escalfado", "escalfada", "escalfados", "escalfadas",
+    "sancochado", "sancochada", "sancochados", "sancochadas",
 ))
 _EGG_SWAP_SINGULARIZE_ADJ = {
     "entero": "entero", "entera": "entero", "enteros": "entero", "enteras": "entero",
