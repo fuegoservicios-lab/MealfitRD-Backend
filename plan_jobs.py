@@ -402,7 +402,9 @@ def _consume_display_i18n(job: dict) -> tuple[str, Optional[str], dict]:
 # del job (no en `plan_data`: escribir ahí bumpea `revision` y haría stale a la propia proyección).
 # La lista síncrona no cambia. Lo lee `GET /api/plans/{plan_id}/projections`.
 _PROJECTION_ROW_KEYS = ("name", "display_string", "display_name_en", "category", "display_category", "market_qty",
-                        "market_unit", "base_qty", "base_unit", "is_perishable", "is_staple", "package_grams")
+                        "market_unit", "display_qty", "sku_size_label", "base_qty", "base_unit", "is_perishable",
+                        "is_staple", "package_grams", "shelf_life_days")
+_PROJECTION_COST_KEYS = ("estimated_cost_rd", "estimated_cost", "cost_rd")  # la fila del agregador usa la primera
 _PROJECTION_MAX_ITEMS = 150
 
 
@@ -413,10 +415,18 @@ def _duration_for_days(days: int) -> str:
 
 def _compact_row(row: dict) -> dict:
     out = {k: row.get(k) for k in _PROJECTION_ROW_KEYS if row.get(k) is not None}
-    cost = row.get("estimated_cost", row.get("cost_rd"))
-    if isinstance(cost, (int, float)):
-        out["cost_rd"] = round(float(cost), 2)
+    cost = _row_cost(row)
+    if cost is not None:
+        out["cost_rd"] = cost
     return out
+
+
+def _row_cost(row: dict) -> Optional[float]:
+    for k in _PROJECTION_COST_KEYS:
+        v = row.get(k)
+        if isinstance(v, (int, float)) and not isinstance(v, bool) and float(v) > 0:
+            return round(float(v), 2)
+    return None
 
 
 def _load_plan_for_projection(plan_id: str, user_id: str) -> tuple:
@@ -467,12 +477,14 @@ def build_shopping_projection(plan_data: dict, user_id: str, windows: list, *, r
         if fresh_only:
             rows = [r for r in rows if r.get("is_perishable")]
         items = [_compact_row(r) for r in rows][:max_items]
-        cost = round(sum(float(r.get("estimated_cost") or r.get("cost_rd") or 0) for r in rows), 2)
+        costs = [c for c in (_row_cost(r) for r in rows) if c is not None]
         out_windows.append({
             "kind": str(w.get("kind") or ("fresh_topup" if fresh_only else "main")),
             "start_day": int(w.get("start_day") or 0), "end_day": int(w.get("end_day") or days),
             "days": days, "cycle_days": int(w.get("cycle_days") or days), "fresh_only": fresh_only,
-            "item_count": len(items), "cost_rd": cost, "items": items,
+            "item_count": len(items), "priced_count": len(costs),
+            "cost_rd": round(sum(costs), 2) if costs else None,  # None = sin precios, no «gratis»
+            "items": items,
         })
     return {
         "schema_version": 1, "revision": revision, "policy_hash": policy_hash,
@@ -524,8 +536,15 @@ def classify_projection_jobs(current_revision: Optional[int], jobs: list) -> dic
                 pl = {}
         return ((pl.get("result") or {}).get("projection")) if isinstance(pl, dict) else None
 
+    def _rev(j):
+        # los jobs de la Fase 3 nacieron con plan_revision NULL: vale la revisión que la proyección declara
+        if j.get("plan_revision") is not None:
+            return int(j.get("plan_revision"))
+        pr = _proj(j) or {}
+        return int(pr.get("revision")) if pr.get("revision") is not None else -1
+
     for j in jobs:
-        if j.get("status") == "done" and int(j.get("plan_revision") or -1) == cur and _proj(j):
+        if j.get("status") == "done" and _rev(j) == cur and _proj(j):
             return {"status": "ready", "revision": cur, "job_id": str(j.get("id")), "projection": _proj(j)}
     for j in jobs:
         if j.get("status") in ("pending", "processing"):
@@ -536,7 +555,7 @@ def classify_projection_jobs(current_revision: Optional[int], jobs: list) -> dic
                     "error_code": j.get("error_code"), "retrying": True}
     for j in jobs:
         if j.get("status") == "done" and _proj(j):
-            return {"status": "stale", "revision": cur, "projection_revision": j.get("plan_revision"),
+            return {"status": "stale", "revision": cur, "projection_revision": _rev(j),
                     "job_id": str(j.get("id")), "projection": _proj(j)}
     for j in jobs:
         if j.get("status") == "dead":
@@ -587,7 +606,11 @@ def process_plan_jobs() -> dict:
         me = _worker_identity()
         jobs = claim_plan_jobs(worker_batch(), me, types)
         summary["claimed"] = len(jobs)
-        for job in jobs:
+        for idx, job in enumerate(jobs):
+            # [P1-ARQ25-F5-SHOPPING-PROJECTION (2)] latido de TODOS los que aún esperan en el lote: una
+            # proyección tarda ~1 min y el reclaim (600 s) robaría a los últimos del lote a mitad.
+            for pending_job in jobs[idx:]:
+                heartbeat_plan_job(str(pending_job.get("id")), pending_job.get("claimed_by"), int(pending_job.get("attempts") or 0))
             t0 = time.monotonic()
             consumer = CONSUMERS.get(str(job.get("job_type")))
             try:

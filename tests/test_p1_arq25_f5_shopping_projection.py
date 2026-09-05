@@ -28,9 +28,9 @@ def _fake_sc(monkeypatch, calls):
         calls.append({"multiplier": multiplier, "cycle_days": cycle_days, "inv": inventory_override, "window_days": window_days})
         return [
             {"name": "Pollo", "display_string": "2 lb de Pollo", "category": "Proteínas", "market_qty": 2, "market_unit": "lb",
-             "base_qty": 907, "base_unit": "g", "is_perishable": True, "estimated_cost": 300.0},
+             "base_qty": 907, "base_unit": "g", "is_perishable": True, "estimated_cost_rd": 300.0},
             {"name": "Arroz", "display_string": "1 funda de Arroz", "category": "Granos", "market_qty": 1, "market_unit": "funda",
-             "base_qty": 2000, "base_unit": "g", "is_perishable": False, "estimated_cost": 120.0},
+             "base_qty": 2000, "base_unit": "g", "is_perishable": False, "estimated_cost_rd": None},
         ]
 
     monkeypatch.setattr(sc, "get_shopping_list_delta", fake_delta)
@@ -47,9 +47,9 @@ def test_a_una_lista_por_ventana_con_el_multiplicador_del_recalculo(monkeypatch)
     assert calls[0]["multiplier"] == pytest.approx(1.5 * 4.0), "ciclo de 30 días: hogar × multiplicador mensual"
     assert calls[0]["cycle_days"] == 30 and calls[0]["inv"] == ["inv"] and calls[0]["window_days"] == [0, 1, 2]
     assert calls[1]["multiplier"] == pytest.approx(1.5), "top-up de frescos: solo hogar"
-    assert main["item_count"] == 2 and main["cost_rd"] == pytest.approx(420.0)
+    assert main["item_count"] == 2 and main["priced_count"] == 1 and main["cost_rd"] == pytest.approx(300.0), "solo suma lo que tiene precio"
     assert fresh["item_count"] == 1 and fresh["items"][0]["name"] == "Pollo", "fresh_only filtra perecederos"
-    assert main["items"][1]["cost_rd"] == 120.0 and "estimated_cost" not in main["items"][1]
+    assert main["items"][0]["cost_rd"] == 300.0 and "cost_rd" not in main["items"][1] and "estimated_cost_rd" not in main["items"][0]
 
 
 def test_b_consumidor_stale_reencola_para_la_revision_vigente(monkeypatch):
@@ -84,12 +84,29 @@ def test_e_estado_ui_por_revision():
     ready = {"id": "a", "status": "done", "plan_revision": 5, "payload": {"result": {"projection": {"windows": [1]}}}}
     old = {"id": "b", "status": "done", "plan_revision": 4, "payload": {"result": {"projection": {"windows": [1]}}}}
     assert pj.classify_projection_jobs(5, [ready, old])["status"] == "ready"
+    legacy = {"id": "f3", "status": "done", "plan_revision": None, "payload": {"result": {"projection": {"revision": 5, "windows": [1]}}}}
+    assert pj.classify_projection_jobs(5, [legacy])["status"] == "ready", "job de la Fase 3 sin plan_revision: vale la de la proyección"
+    assert pj.classify_projection_jobs(6, [legacy])["status"] == "stale"
     assert pj.classify_projection_jobs(6, [old])["status"] == "stale"
     assert pj.classify_projection_jobs(6, [{"id": "c", "status": "pending", "plan_revision": 6}, old])["status"] == "pending"
     f = pj.classify_projection_jobs(6, [{"id": "d", "status": "failed", "plan_revision": 6, "attempts": 2, "error_code": "x"}])
     assert f["status"] == "failed" and f["retrying"] is True
     assert pj.classify_projection_jobs(6, [{"id": "e", "status": "dead", "plan_revision": 6}])["retrying"] is False
     assert pj.classify_projection_jobs(1, [])["status"] == "none"
+
+
+def test_g_el_lote_late_por_los_que_esperan(monkeypatch):
+    monkeypatch.setenv("MEALFIT_PLAN_JOBS_ENABLED", "1")
+    monkeypatch.setattr(pj, "reclaim_stale_processing", lambda: 0)
+    jobs = [{"id": f"j{i}", "job_type": "display_i18n", "plan_id": _PLAN, "user_id": _USER, "plan_revision": 1, "payload": {}, "attempts": 1, "claimed_by": "w"} for i in range(3)]
+    monkeypatch.setattr(pj, "claim_plan_jobs", lambda limit, me, types: list(jobs))
+    beats = []
+    monkeypatch.setattr(pj, "heartbeat_plan_job", lambda jid, cb, at: beats.append(jid) or True)
+    monkeypatch.setitem(pj.CONSUMERS, "display_i18n", lambda j: ("done", None, {}))
+    monkeypatch.setattr(pj, "finish_plan_job", lambda j, status, **kw: True)
+    monkeypatch.setattr(pj, "_emit_metric", lambda *a, **k: None)
+    pj.process_plan_jobs()
+    assert beats == ["j0", "j1", "j2", "j1", "j2", "j2"], "antes de cada job, laten todos los que siguen en el lote"
 
 
 def test_f_endpoint_exento_con_ownership_y_documentado():
