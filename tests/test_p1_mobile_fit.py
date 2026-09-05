@@ -14,8 +14,14 @@ Tres defectos medidos con Playwright sobre producción a 320/360/390/430 px
    360», cierta cuando la celda 1 era el wordmark. El P-fix la cambió a un
    literal de 180,4 px y no se volvió a medir el móvil.
 
-   El corte está en 400 px y no en 376 a propósito: 376 dejaría 0,3 px de
+   El corte está en 410 px y no en 383 a propósito: 383 dejaría 0,3 px de
    holgura, a merced de cómo renderice la fuente cada dispositivo.
+
+   [P2-HERO-VANGUARDIA · 2026-09-05] Eran 400 y 376. La celda 1 pasó de «DE
+   PRECISIÓN» a «DE VANGUARDIA» (+1 carácter ≈ +6,9 px), la pareja pide ahora
+   ~382,6 px y el corte sube con ella. La aritmética viva la ancla
+   `test_p2_hero_vanguardia.py`; este fichero solo exige que el apilado
+   exista y cubra el corte.
 
 2. HOWITWORKS TRUNCABA SIN EXPANSOR. Las 4 descripciones piden 6, 9, 5 y 4
    líneas a 360 px y el recorte mostraba 3: 12 líneas escondidas (18 a 320) y
@@ -106,7 +112,7 @@ def _rule_body(css: str, selector: str) -> list[str]:
 # ── 1. La franja ────────────────────────────────────────────────────────────
 
 def test_cartridge_stacks_before_it_runs_out_of_room():
-    """La fila de dos celdas necesita 375,7 px. Bajo 400 px el cajetín TIENE que
+    """La fila de dos celdas necesita ~382,6 px. Bajo 410 px el cajetín TIENE que
     apilar en una columna — es la única salida que no pierde información ni
     rompe el piso tipográfico de 11 px que el repo fijó por escrito."""
     css = _strip_comments(_HERO_CSS.read_text(encoding="utf-8"))
@@ -121,12 +127,12 @@ def test_cartridge_stacks_before_it_runs_out_of_room():
     assert stacked, (
         "P1-MOBILE-FIT: no hay ningún bloque @media (entre 320 y 420px) donde "
         "`.cartridge` pase a una sola columna. Sin él las dos celdas piden "
-        "375,7px y a 320px se cortan 55,7px SIN scroll que lo revele "
+        "~382,6px y a 320px se cortan ~62,6px SIN scroll que lo revele "
         "(html/body llevan overflow-x: clip)."
     )
-    assert any(mw >= 376 for mw, _ in stacked), (
-        "P1-MOBILE-FIT: el apilado arranca por debajo de 376px, justo donde el "
-        "corte YA ocurre. Tiene que cubrir 376px hacia abajo."
+    assert any(mw >= 383 for mw, _ in stacked), (
+        "P1-MOBILE-FIT: el apilado arranca por debajo de 383px, justo donde el "
+        "corte YA ocurre. Tiene que cubrir 383px hacia abajo."
     )
 
 
