@@ -62,7 +62,7 @@ def test_light_slot_is_closed_even_when_the_day_floor_is_met(monkeypatch):
     assert added > 0
     snack = days[0]["meals"][2]
     assert snack["protein"] > 10 and any("yogur" in i.lower() for i in snack["ingredients"]), snack["ingredients"]
-    # las comidas fuertes no se tocan
+    # las comidas fuertes bien servidas (50 y 48 de ~47) no se tocan
     assert days[0]["meals"][1]["ingredients"] == ["1 taza de garbanzos"]
     assert days[0]["meals"][3]["ingredients"] == ["1 taza de quinoa"]
 
@@ -83,3 +83,22 @@ def test_wired_after_the_day_floor_loop():
     i = src.index("def _repair_protein_floor_post_caps(")
     assert "added += _repair_light_slot_protein(days, nutrition, form_data, db, _cands)" in src[i:i + 12000]
     assert "tooltip-anchor: P1-LIGHT-SLOT-PROTEIN-FLOOR" in src
+
+
+def test_main_meal_below_its_share_is_also_closed(monkeypatch):
+    """[P1-SLOT-PROTEIN-FLOOR-ALL] plan vivo a2b40e4e: «Croquetas de papa y queso» con 19 g sobre un reparto de 47."""
+    monkeypatch.setattr(go, "LIGHT_SLOT_PROTEIN_FLOOR", True)
+    monkeypatch.setattr(go, "SLOT_PROTEIN_FLOOR_ALL_SLOTS", True)
+    monkeypatch.setattr(go, "PROTEIN_CLOSER_SCALE_FIRST", False)
+    monkeypatch.setattr(go, "_scale_congruent_protein_line", lambda *a, **k: False)
+    monkeypatch.setattr(go, "_truth_up_meal_macros_from_strings", lambda meal, db: None)
+    days = _day()
+    days[0]["meals"][1].update({"name": "Croquetas de papa y queso", "protein": 19, "cals": 400,
+                                "ingredients": ["350 g de papa"], "ingredients_raw": ["350 g de papa"]})
+    added = go._repair_light_slot_protein(days, NUT, FD, _DB(), CANDS)
+    assert added > 0 and days[0]["meals"][1]["protein"] > 19, days[0]["meals"][1]
+    monkeypatch.setattr(go, "SLOT_PROTEIN_FLOOR_ALL_SLOTS", False)
+    days2 = _day()
+    days2[0]["meals"][1].update({"protein": 19, "cals": 400, "ingredients": ["350 g de papa"], "ingredients_raw": ["350 g de papa"]})
+    go._repair_light_slot_protein(days2, NUT, FD, _DB(), CANDS)
+    assert days2[0]["meals"][1]["ingredients"] == ["350 g de papa"], "con el knob apagado, solo franjas ligeras"

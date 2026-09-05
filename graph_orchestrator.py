@@ -37810,6 +37810,8 @@ def _consolidate_duplicate_gram_lines(days) -> int:
 # franjas ligeras muy por debajo de su target, con el mismo cerrador (respeta kcal del slot y hace sitio si hace falta).
 LIGHT_SLOT_PROTEIN_FLOOR = _env_bool("MEALFIT_LIGHT_SLOT_PROTEIN_FLOOR", True)
 LIGHT_SLOT_PROTEIN_MIN_PCT = _env_float("MEALFIT_LIGHT_SLOT_PROTEIN_MIN_PCT", 0.70, validator=lambda v: 0.4 <= v <= 1.0)
+# [P1-SLOT-PROTEIN-FLOOR-ALL] la misma red para almuerzo y cena (el reparto por franja es el target de TODAS)
+SLOT_PROTEIN_FLOOR_ALL_SLOTS = _env_bool("MEALFIT_SLOT_PROTEIN_FLOOR_ALL_SLOTS", True)
 
 
 def _repair_light_slot_protein(days: list, nutrition: dict, form_data: dict, db=None, cands=None) -> int:
@@ -37847,7 +37849,11 @@ def _repair_light_slot_protein(days: list, nutrition: dict, form_data: dict, db=
             _fracs = _canonical_slot_fractions(_ms) if SLOT_DISTRIBUTION_ENABLED else None
             _labels = [_protein_gate_labels_in_meal(_mm) for _mm in _ms]
             for _i, _m in enumerate(_ms):
-                if not _meal_slot_is_light(_m, _sa_lf):
+                # [P1-SLOT-PROTEIN-FLOOR-ALL · 2026-09-05] También las comidas FUERTES: el plan vivo a2b40e4e se
+                # entregó degradado con «Croquetas de papa y queso» de 19 g sobre un reparto de 47 (almuerzo) y
+                # 104 g de 135 en el día. El bucle de FASE A corre ANTES de los últimos recortes de banda y marca
+                # `_final_protein_close`; esta pasada es la última y mira el estado FINAL de cada franja.
+                if not (_meal_slot_is_light(_m, _sa_lf) or SLOT_PROTEIN_FLOOR_ALL_SLOTS):
                     continue
                 _share = _fracs[_i] if (_fracs and _i < len(_fracs)) else (1.0 / max(1, len(_ms)))
                 _slot_target = _pg * _share
@@ -37871,7 +37877,7 @@ def _repair_light_slot_protein(days: list, nutrition: dict, form_data: dict, db=
                 if _g > 0:
                     added += _g
                     _labels[_i] = _protein_gate_labels_in_meal(_m)
-                    logger.info(f"🥛 [P1-LIGHT-SLOT-PROTEIN-FLOOR] +{_g}g en franja ligera ({_cur:.0f}→"
+                    logger.info(f"🥛 [P1-LIGHT-SLOT-PROTEIN-FLOOR] +{_g}g en {'franja ligera' if _meal_slot_is_light(_m, _sa_lf) else 'comida fuerte'} ({_cur:.0f}→"
                                 f"{_meal_macro_num(_m.get('protein')):.0f} g de {_slot_target:.0f}) | meal={str(_m.get('name'))[:40]}")
         return added
     except Exception as _e:
