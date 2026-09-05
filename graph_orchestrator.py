@@ -14847,9 +14847,38 @@ def _apply_substitutions_core(plan: dict, subs: list, note_builder, note_sentine
     except Exception:
         _db = None
 
+    # [P1-SUBS-WORD-BOUNDARY · 2026-09-05] Modo PALABRA COMPLETA, opcional por sustitución.
+    #
+    # El motor compara por subcadena, y con las tablas de condición/alérgenos eso es lo correcto: sus tokens son
+    # largos y necesitan pescar variantes («jamon» dentro de «jamón serrano»). Pero la tabla de DIETA trae
+    # tokens de tres y cuatro letras, y ahí la subcadena muerde carne inocente. Medido el 2026-09-05:
+    #
+    #     «res»   ⊂ queso f-res-co · f-res-as · ciruelas f-res-cas · berenjena f-res-ca
+    #     «pollo» ⊂ re-pollo
+    #     «mero»  ⊂ nú-mero
+    #
+    # En el plan vivo 18326457 (vegetariano) eso «sustituyó» 4 comidas del intento 1 y 2 del intento 2: el queso
+    # fresco de un vegetariano cambiado por soya texturizada, con sus macros y su receta detrás. La misma clase
+    # de fallo que ya nos costó «sal»⊂«salsa» y «pollo»⊂«repollo» en su día; van 13.
+    #
+    # El sufijo `(?:e?s)?` mantiene los plurales que la subcadena daba gratis: «reses», «camarones», «pavos».
+    # Los NEGATIVOS siguen por subcadena a propósito: son un veto y ahí sobre-detectar es lo seguro.
+    _word_re_cache = {}
+
+    def _token_word_re(tok):
+        _r = _word_re_cache.get(tok)
+        if _r is None:
+            _r = _re.compile(r"(?<![a-z0-9])" + _re.escape(_sa(str(tok).lower())) + r"(?:e?s)?(?![a-z0-9])")
+            _word_re_cache[tok] = _r
+        return _r
+
     def _match(ing_norm):
         for s in subs:
             if any(neg in ing_norm for neg in s["negatives"]):
+                continue
+            if s.get("word_match"):
+                if any(_token_word_re(t).search(ing_norm) for t in s["tokens"]):
+                    return s
                 continue
             if any(t in ing_norm for t in s["tokens"]):
                 return s
@@ -15018,8 +15047,11 @@ def _apply_diet_substitutions(plan: dict, form_data: dict) -> int:
         for tokens, replacement, label, negatives in _DIET_SUB_TARGETS:
             if canon == "pescatarian" and label != "carne":
                 continue          # el pescetariano SÍ come pescado
+            # [P1-SUBS-WORD-BOUNDARY · 2026-09-05] `word_match` SOLO aquí: los tokens de dieta son cortos
+            # («res», «pavo», «mero») y por subcadena muerden queso fresco, repollo y número.
             subs.append({"tokens": list(tokens), "replacement": replacement, "label": label,
-                         "negatives": list(negatives), "condition": canon, "preserve_qty": True})
+                         "negatives": list(negatives), "condition": canon, "preserve_qty": True,
+                         "word_match": True})
         if not subs:
             return 0
 
