@@ -2116,7 +2116,7 @@ def test_mutator_recipeexpand_dispatch_gated_by_persisted_ok(_plans_src):
 # Funcional: chat-modify — un meal viejo CON `_display` heredado no sobrevive al
 # modify. Invoca `execute_modify_single_meal` de VERDAD (no hay forma de aislar el
 # callback anidado sin ejecutar la función completa), mockeando la cadena LLM +
-# los backstops que requieren DB/red: `get_latest_meal_plan_with_id`, el perfil
+# los backstops que requieren DB/red: `get_latest_usable_meal_plan_with_id`, el perfil
 # (`db.get_user_profile`), el circuit breaker, `ChatGLM` (constructor +
 # `.with_structured_output(MealModel).invoke(...)`), y `update_plan_data_atomic`
 # (capturado igual que el `engine` fixture de Task 1 — aplica el callback real
@@ -2172,7 +2172,7 @@ def _chatmod_engine(monkeypatch):
     state = {"plan_data": None, "atomic_calls": []}
 
     monkeypatch.setattr(
-        tools_module, "get_latest_meal_plan_with_id",
+        tools_module, "get_latest_usable_meal_plan_with_id",
         lambda uid: {"id": "plan-chatmod-1", "plan_data": state["plan_data"]},
     )
     monkeypatch.setattr(

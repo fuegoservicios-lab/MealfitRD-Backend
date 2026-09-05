@@ -23,10 +23,18 @@ _ROOT = Path(__file__).resolve().parents[2]
 _FRONT = _ROOT / "frontend" / "src"
 _DASH_PATH = _FRONT / "pages" / "Dashboard.jsx"
 _NUDGE_PATH = _FRONT / "components" / "dashboard" / "RestockNudge.jsx"
-_DASH = _DASH_PATH.read_text(encoding="utf-8") if _DASH_PATH.exists() else ""
-_NUDGE = _NUDGE_PATH.read_text(encoding="utf-8") if _NUDGE_PATH.exists() else ""
+_DASH = ""
+_NUDGE = ""
 
-pytestmark = pytest.mark.skipif(not (_DASH and _NUDGE), reason="frontend ausente")
+
+@pytest.fixture(scope="module", autouse=True)
+def _load_frontend_sibling_sources(frontend_repo_path):
+    # [P2-CI-BACKEND-CERO-TESTS] la fixture compartida salta el módulo si falta el hermano;
+    # la lectura ya no ocurre al importar (el checkout del backend no trae ../frontend).
+    _ = frontend_repo_path
+    global _DASH, _NUDGE
+    _DASH = _DASH_PATH.read_text(encoding="utf-8")
+    _NUDGE = _NUDGE_PATH.read_text(encoding="utf-8")
 
 _KEYS = (
     "Ya compré lo que faltaba ({n})",

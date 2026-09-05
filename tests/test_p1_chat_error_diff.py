@@ -352,7 +352,7 @@ def test_error_retry_button_rendered_conditionally(message_bubble_src: str):
     """El botón solo se renderiza si `isErrorBubble && msg.retryable && onErrorRetry`."""
     # Match flexible — los tres flags presentes alrededor del render
     pattern = re.compile(
-        r"isErrorBubble\s*&&\s*msg\.retryable[\s\S]*?<ErrorRetryButton",
+        r"isErrorBubble\s*&&\s*\([\s\S]*?msg\.retryable\s*&&\s*typeof onErrorRetry === 'function'[\s\S]*?<ErrorRetryButton",  # [P2-CHAT-ERROR-MINIMAL] gate en dos niveles
     )
     assert pattern.search(message_bubble_src), (
         "P1-CHAT-ERROR-DIFF regresión: el render de <ErrorRetryButton> no "

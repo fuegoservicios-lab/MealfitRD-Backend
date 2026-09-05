@@ -11,7 +11,7 @@ from knobs import _env_str, _env_float  # [P3-VISION-MODEL-KNOB · 2026-05-20] /
 # criterio de despacho por MODELO que `llm_provider.build_chat_llm` — un
 # modelo `gpt-*` real necesita `ChatOpenAI` PLANO, no `ChatGLM` (ver
 # comentario en `_dispatch_openai_compatible_vision`).
-from llm_provider import ChatGLM, is_openai_model, _openai_api_key
+from llm_provider import ChatGLM, is_openai_model, _openai_api_key, is_google_model, _google_api_key, GEMINI_OPENAI_BASE_URL
 from langchain_openai import ChatOpenAI
 from embeddings_provider import get_text_embedding
 from langchain_core.messages import HumanMessage
@@ -80,10 +80,12 @@ def _vision_base_url() -> str:
 def is_vision_enabled() -> bool:
     """True si hay provider de visión activo con config mínima completa."""
     provider = _vision_provider()
+    # [P1-VISION-GEMINI-FLASH] un modelo Gemini trae su base URL por defecto (la capa
+    # compatible con OpenAI de Google): no exigir el knob para encender el escáner.
     return (
         provider == _VISION_PROVIDER_OPENAI_COMPATIBLE
         and bool(_vision_model_name())
-        and bool(_vision_base_url())
+        and (bool(_vision_base_url()) or is_google_model(_vision_model_name()))
     )
 
 
@@ -495,6 +497,18 @@ def _resolve_vision_client(schema):
             api_key=explicit_key or _openai_api_key(),
             timeout=timeout,
         )
+    elif is_google_model(model):
+        # [P1-VISION-GEMINI-FLASH · 2026-09-04] Gemini por su endpoint compatible con OpenAI:
+        # cliente ChatOpenAI PLANO (sin `thinking` ni defaults de Z.ai), base URL por defecto
+        # si el knob viene vacío, key `VISION_API_KEY` > la de Gemini del entorno.
+        # `temperature=0.1` sí se respeta aquí (no es familia gpt-5).
+        llm = ChatOpenAI(
+            model=model,
+            temperature=0.1,
+            base_url=base_url or GEMINI_OPENAI_BASE_URL,
+            api_key=explicit_key or _google_api_key(),
+            timeout=timeout,
+        )
     else:
         # [P0-LLM-PROVIDER-MIGRATION] Cliente OpenAI-compatible con
         # base_url/key del provider de visión configurado.
@@ -506,6 +520,88 @@ def _resolve_vision_client(schema):
             timeout=timeout,
         )
     return llm.with_structured_output(schema)
+
+
+# [P2-VISION-USAGE-TOKENS · 2026-09-04] usage (tokens) de la ÚLTIMA llamada de visión de esta
+# tarea, para que el router lo anote en `llm_usage_events` (libro de COSTO). ContextVar: el
+# router y `_invoke_structured_vision` corren en la misma tarea; fuera de ella, None.
+import contextvars as _cv_vision
+from typing import Optional
+
+_LAST_VISION_USAGE: "_cv_vision.ContextVar[Optional[dict]]" = _cv_vision.ContextVar("mealfit_last_vision_usage", default=None)
+
+
+def _reset_last_vision_usage() -> None:
+    try:
+        _LAST_VISION_USAGE.set(None)
+    except Exception:
+        pass
+
+
+def _set_last_vision_usage(usage: Optional[dict]) -> None:
+    try:
+        _LAST_VISION_USAGE.set(usage or None)
+    except Exception:
+        pass
+
+
+def get_last_vision_usage() -> Optional[dict]:
+    """{'input_tokens': int|None, 'output_tokens': int|None} de la última llamada de visión, o None."""
+    try:
+        return _LAST_VISION_USAGE.get()
+    except Exception:
+        return None
+
+
+class _VisionUsageCapture:
+    """Callback mínimo de LangChain: lee el usage del `LLMResult` (usage_metadata del mensaje
+    o `llm_output.token_usage`). Sin herencia de BaseCallbackHandler para no acoplar la firma a
+    la versión de langchain-core: el manager solo llama a los hooks que existen."""
+    raise_error = False
+    run_inline = True
+    ignore_llm = False
+    ignore_chain = True
+    ignore_agent = True
+    ignore_retriever = True
+    ignore_chat_model = False
+    ignore_retry = True
+    ignore_custom_event = True
+
+    def __init__(self) -> None:
+        self.usage: Optional[dict] = None
+
+    @staticmethod
+    def _extract(response) -> Optional[dict]:
+        try:
+            gens = getattr(response, "generations", None) or []
+            for gen_list in gens:
+                for gen in gen_list or []:
+                    msg = getattr(gen, "message", None)
+                    um = getattr(msg, "usage_metadata", None) if msg is not None else None
+                    if isinstance(um, dict) and (um.get("input_tokens") or um.get("output_tokens")):
+                        return {"input_tokens": um.get("input_tokens"), "output_tokens": um.get("output_tokens")}
+            lo = getattr(response, "llm_output", None) or {}
+            tu = lo.get("token_usage") or lo.get("usage") or {}
+            if tu:
+                return {"input_tokens": tu.get("prompt_tokens") or tu.get("input_tokens"),
+                        "output_tokens": tu.get("completion_tokens") or tu.get("output_tokens")}
+        except Exception:
+            return None
+        return None
+
+    def on_llm_end(self, response, **kwargs) -> None:
+        got = self._extract(response)
+        if got:
+            self.usage = got
+
+    async def on_llm_end_async(self, response, **kwargs) -> None:  # pragma: no cover - alias defensivo
+        self.on_llm_end(response, **kwargs)
+
+    def __getattr__(self, name):
+        # cualquier otro hook (on_llm_start, on_chat_model_start, on_llm_error…) es un no-op
+        if name.startswith("on_"):
+            return lambda *a, **k: None
+        raise AttributeError(name)
 
 
 async def _invoke_structured_vision(image_bytes: bytes, prompt: str, schema):
@@ -528,7 +624,17 @@ async def _invoke_structured_vision(image_bytes: bytes, prompt: str, schema):
             {"type": "image_url", "image_url": {"url": f"data:image/jpeg;base64,{image_b64}"}},
         ]
     )
-    return await llm.ainvoke([message])
+    # [P2-VISION-USAGE-TOKENS · 2026-09-04] El primer escaneo con Gemini dejó la fila de costo con
+    # tokens NULL: el cliente de visión es PLANO (sin el mixin de costo) y el router anotaba solo
+    # el modelo. Un callback captura el usage del proveedor sin cambiar el shape del resultado ni
+    # la firma del resolver; los fakes sin `with_config` siguen funcionando (usage=None).
+    _cb = _VisionUsageCapture()
+    _runnable = llm.with_config(callbacks=[_cb]) if hasattr(llm, "with_config") else llm
+    _reset_last_vision_usage()
+    try:
+        return await _runnable.ainvoke([message])
+    finally:
+        _set_last_vision_usage(_cb.usage)
 
 
 async def analyze_image_structured(image_bytes: bytes, prompt: str, schema):

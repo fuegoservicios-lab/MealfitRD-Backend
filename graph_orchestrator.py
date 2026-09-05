@@ -1697,6 +1697,7 @@ from constants import (
     # lanzado NameError en runtime. Los tests unitarios no lo vieron porque no ejercitan esa
     # rama — lo cazó una comprobación explícita del ámbito, no la suite.
     country_for_form_data,
+    cultural_country_for_form_data,  # [P1-ARQ25-F7-CULTURE] puerta CULTURAL (I16)
     normalize_ingredient_for_tracking, strip_accents,
     TECHNIQUE_FAMILIES, ALL_TECHNIQUES, TECH_TO_FAMILY, SUPPLEMENT_NAMES,
     # P1-10: subidos para evitar reimport en hot paths
@@ -3953,7 +3954,7 @@ def _ensure_plan_result_contract(plan_result, *, source: str = "unknown") -> Non
 # ============================================================
 # SCHEMAS (importados del módulo canónico schemas.py)
 # ============================================================
-from schemas import MacrosModel, MealModel, DailyPlanModel, PlanModel, PlanSkeletonModel, SingleDayPlanModel
+from schemas import MacrosModel, MealModel, DailyPlanModel, PlanModel, PlanSkeletonModel, SingleDayPlanModel, SingleDayCorrectionModel
 
 
 # ============================================================
@@ -4851,6 +4852,14 @@ def _build_shared_context(state: PlanState, force_rebuild: bool = False) -> dict
     successful_tone_strategies = form_data.get("_successful_tone_strategies", [])
     previous_plan_quality = form_data.get("_previous_plan_quality")
     fatigued_ingredients = form_data.get("fatigued_ingredients", [])
+    # [P1-ARQ25-F3-HORIZON · 2026-09-02] Un ancla de la política nunca entra como «fatigada»:
+    # el usuario pidió repetirla (§6.6 aprendizaje). No-op sin política.
+    if form_data.get("_policy_enforced") and fatigued_ingredients:
+        try:
+            from horizon import exclude_anchors_from_fatigue as _excl_anchors_f3
+            fatigued_ingredients = _excl_anchors_f3(fatigued_ingredients, form_data.get("_plan_policy_effective"))
+        except Exception:
+            pass
     quality_hint = form_data.get("_quality_hint", "")
     drastic_strategy = form_data.get("_drastic_change_strategy", None)
     weight_history = form_data.get("weight_history", [])
@@ -5288,7 +5297,7 @@ def _day_system_instruction_for_diet(form_data) -> str:
     from constants import canonicalize_diet_type as _cdt, country_for_form_data
     from prompts.day_generator import build_day_generator_system_prompt as _bdgsp
     canon = _cdt((form_data or {}).get("dietType") or (form_data or {}).get("diet"))
-    country = country_for_form_data(form_data)
+    country = cultural_country_for_form_data(form_data)
     if canon not in ("vegan", "vegetarian") and country == "DO":
         return _DAY_SYSTEM_INSTRUCTION_CACHED
     cache_key = (canon, country)
@@ -6275,7 +6284,7 @@ async def _attempt_pro_critique_correction(
                 max_retries=0,
                 timeout=int(CRITIQUE_PRO_FALLBACK_TIMEOUT_S),
                 extra_body={"thinking": _surg_think_body},
-            ).with_structured_output(SingleDayPlanModel, method="json_mode")
+            ).with_structured_output(SingleDayCorrectionModel, method="json_mode")
             if SURGICAL_PRO_THINKING_EFFORT:
                 logger.info(f"🧠 {log_prefix} Corrector quirúrgico Pro con thinking "
                             f"(effort={SURGICAL_PRO_THINKING_EFFORT}).")
@@ -6285,7 +6294,7 @@ async def _attempt_pro_critique_correction(
                 temperature=0.3,
                 max_retries=0,
                 timeout=int(CRITIQUE_PRO_FALLBACK_TIMEOUT_S),
-            ).with_structured_output(SingleDayPlanModel)
+            ).with_structured_output(SingleDayCorrectionModel)
         result = await _safe_ainvoke(
             pro_corrector,
             correction_prompt,
@@ -6295,6 +6304,7 @@ async def _attempt_pro_critique_correction(
             await pro_cb.arecord_success()
             corrected = result.model_dump()
             corrected["day"] = day_num
+            _backfill_corrected_day_desc(corrected, {})  # [P2-CRITIQUE-FIX-DESC-BACKFILL] sin original a mano: desc mínima desde nombre
             # [P-PRO-FALLBACK-ON-NONE · 2026-06-19] Paridad con el path Flash exitoso
             # (`corrected_day["_critique_applied"] = True`): el día corregido por Pro
             # también deviene legítimamente del skeleton (swap de proteína para resolver
@@ -8561,6 +8571,15 @@ def _apply_protein_pool_scrub(
 # ============================================================
 # NODO 2: GENERADORES PARALELOS (Fase Reduce — 3 días simultáneos)
 # ============================================================
+def _culture_weights_for_form_data(form_data):
+    """[P1-ARQ25-F7-CULTURE] Pesos de cocina del formulario (fail-open: None ⇒ encabezado legado)."""
+    try:
+        from cultural_profiles import cultural_profiles_enabled, culture_weights_for_form
+        return culture_weights_for_form(form_data) if cultural_profiles_enabled() else None
+    except Exception:
+        return None
+
+
 @_node_label("day_generator")
 async def generate_days_parallel_node(state: PlanState) -> dict:
     """Genera los 7 días completos en PARALELO usando el esqueleto del planificador."""
@@ -8701,7 +8720,10 @@ async def generate_days_parallel_node(state: PlanState) -> dict:
             small_universe=_small_universe_active(form_data),
             # [P1-DIET-BLIND-DIRECTIVES · 2026-08-08] bloque de diversidad de proteína por dieta.
             diet_type=(form_data or {}).get("dietType"),
-            country=country_for_form_data(form_data),
+            # [P1-ARQ25-F7-CULTURE] la cocina asignada a ESTE día (reparto determinista de la mezcla) y los
+            # pesos para el encabezado de inspiración; el mercado (precios/catálogo) NO pasa por aquí.
+            country=cultural_country_for_form_data(form_data, day_index=max(0, int(global_day) - 1)),
+            culture_weights=_culture_weights_for_form_data(form_data),
         )
 
         random_seed = random.randint(10000, 99999)
@@ -8755,7 +8777,7 @@ async def generate_days_parallel_node(state: PlanState) -> dict:
             # puerta (T1) — knob apagado ⇒ 'DO' siempre ⇒ camino actual exacto.
             from prompts.day_generator import build_day_generator_system_prompt as _bdgsp_nc
             from constants import country_for_form_data
-            _nc_country = country_for_form_data(form_data)
+            _nc_country = cultural_country_for_form_data(form_data)
             prompt_text = dynamic_day_prompt + _bdgsp_nc((form_data or {}).get("dietType"), _nc_country)
 
         # [P1-FLASH-FIRST · 2026-06-28] CADENA de modelos por costo (solo GLM): glm-5.3-flash → glm-5.3
@@ -10820,7 +10842,7 @@ def _detect_slot_appropriateness(days: list, form_data: dict = None) -> list:
     from constants import slot_positive_hint as _sph
     from constants import country_for_form_data, slot_rules_for_country
     from constants import _SLOT_POSITIVE_HINT_NEUTRAL as _dsa_hint_neutral
-    _country = country_for_form_data(form_data)
+    _country = cultural_country_for_form_data(form_data)
     _rules_table = slot_rules_for_country(_country)
     _diet_for_hint = (form_data or {}).get("dietType") if isinstance(form_data, dict) else None
     issues: list = []
@@ -10926,6 +10948,31 @@ def _detect_slot_appropriateness(days: list, form_data: dict = None) -> list:
     return issues
 
 
+def _backfill_corrected_day_desc(corrected_day: dict, target_day: dict) -> int:
+    """[P2-CRITIQUE-FIX-DESC-BACKFILL · 2026-09-04] El corrector (SingleDayCorrectionModel) puede devolver
+    comidas sin `desc`. Rellena: mismo nombre que el plato original del slot ⇒ copia su descripción;
+    plato nuevo ⇒ descripción mínima honesta desde el nombre y los 3 primeros ingredientes. Devuelve
+    cuántas rellenó. Antes, 4 comidas sin `desc` = 4 errores de validación = corrección entera perdida."""
+    from constants import strip_accents as _sa
+    n = 0
+    orig = [m for m in ((target_day or {}).get("meals") or []) if isinstance(m, dict)]
+    for i, m in enumerate((corrected_day or {}).get("meals") or []):
+        if not isinstance(m, dict) or str(m.get("desc") or "").strip():
+            continue
+        slot = _sa(str(m.get("meal") or "").strip().lower())
+        src = next((o for o in orig if _sa(str(o.get("meal") or "").strip().lower()) == slot), None)
+        if src is None and i < len(orig):
+            src = orig[i]
+        same_name = bool(src) and _sa(str(src.get("name") or "").strip().lower()) == _sa(str(m.get("name") or "").strip().lower())
+        if same_name and str(src.get("desc") or "").strip():
+            m["desc"] = src["desc"]
+        else:
+            ings = [str(x) for x in (m.get("ingredients") or []) if str(x).strip()][:3]
+            m["desc"] = f"{m.get('name') or 'Plato'}" + (f", con {', '.join(ings)}." if ings else ".")
+        n += 1
+    return n
+
+
 @_node_label("self_critique")
 async def self_critique_node(state: PlanState) -> dict:
     """Evalúa los días generados y aplica correcciones in-place si hay deficiencias."""
@@ -10986,7 +11033,17 @@ async def self_critique_node(state: PlanState) -> dict:
     # cultural_score re-anclado a `name_es` (memoizada en _CRITIQUE_COUNTRY_ARTIFACT_CACHE).
     from constants import country_for_form_data
     form_data = state.get("form_data") or {}
-    _critique_country = country_for_form_data(form_data)
+    _critique_country = cultural_country_for_form_data(form_data)
+    # [P1-ARQ25-F3-HORIZON · 2026-09-02] El evaluador lee la política del run: con recurrencia
+    # RUTINA no debe bajar `diversity_score` por repeticiones que el usuario pidió. Vacío
+    # (prompt byte-idéntico) salvo en `enforce`.
+    try:
+        from horizon import policy_prompt_block as _policy_prompt_block_sc
+        policy_block = _policy_prompt_block_sc(
+            form_data.get("_plan_policy_effective"), form_data.get("_blueprint_slice"),
+            surface="self_critique", enforced=bool(form_data.get("_policy_enforced")))
+    except Exception:
+        policy_block = ""
     _CRITIQUE_EVALUATOR_SYSTEM_INSTRUCTION, CritiqueEvaluation = (
         _critique_evaluator_artifacts_for_country(_critique_country)
     )
@@ -11024,10 +11081,33 @@ async def self_critique_node(state: PlanState) -> dict:
     # Conteo determinístico de staples repetidos (pre-LLM hard signal).
     # Cubre el blind spot del compresor: el LLM no ve los ingredientes, así que
     # le damos esta tabla calculada por código para que penalice con certeza.
-    staple_repetitions = _count_staple_repetitions(days)
+    # [P2-CRITIQUE-RESPECTS-ROUTINE · 2026-09-04] Los cuatro contadores de REPETICIÓN (staples,
+    # proteína pesada, ingrediente concentrado, plato-base) entran al evaluador como «no opinable»
+    # y fuerzan needs_correction: con la política en `enforce` y rutina elegida, la autocrítica
+    # reescribía los 3 días por «avena en 2 días, yogur en 3» (2,5 min; el día 3 quedó sin
+    # resolver) contradiciendo lo pedido y lo que el revisor ya respeta
+    # (`filter_variety_issues_for_policy`). Misma regla aquí: rutina ⇒ sin señales de
+    # repetición; equilibrada ⇒ sin las de un ancla; explorar ⇒ todas; shadow ⇒ todas.
+    from horizon import filter_repetition_counts_for_policy as _filter_rep_counts
+    _sc_policy_eff = form_data.get("_plan_policy_effective")
+    _sc_policy_enforced = bool(form_data.get("_policy_enforced"))
+
+    def _sc_policy_filter(counts, what):
+        kept = _filter_rep_counts(counts, _sc_policy_eff, enforced=_sc_policy_enforced)
+        dropped = len(counts or {}) - len(kept)
+        if dropped > 0:
+            _mode = str(((_sc_policy_eff or {}).get("recurrence") or {}).get("global_mode") or "balanced")
+            logger.info(
+                f"📐 [P2-CRITIQUE-RESPECTS-ROUTINE] {what}: {dropped} señal(es) de repetición "
+                f"retirada(s) por política (modo={_mode}, enforce)."
+            )
+        return kept
+
+    staple_repetitions = _sc_policy_filter(_count_staple_repetitions(days), "staples cross-día")
     # [P2-ORCH-6] Monotonía cross-day de proteína pesada (incluye pescado, que
     # el mapa de staples OMITE). Alimenta el gate de skip-when-clean abajo.
-    heavy_protein_monotony = _count_cross_day_heavy_protein_repetition(days)
+    heavy_protein_monotony = _sc_policy_filter(
+        _count_cross_day_heavy_protein_repetition(days), "monotonía de proteína pesada")
     suggested_day_hint = ""
     if staple_repetitions:
         items_str = ", ".join([f"'{k}' en {v} días" for k, v in staple_repetitions.items()])
@@ -11049,7 +11129,9 @@ async def self_critique_node(state: PlanState) -> dict:
     # INGREDIENT_SPREAD_GATE_ENABLED (MEALFIT_INGREDIENT_SPREAD_GATE_ENABLED) — off ⇒ no-op total,
     # rollback sin redeploy si el volumen de disparos resulta problemático.
     try:
-        ingredient_spread = _count_ingredient_meal_frequency(days) if INGREDIENT_SPREAD_GATE_ENABLED else {}
+        ingredient_spread = _sc_policy_filter(
+            _count_ingredient_meal_frequency(days) if INGREDIENT_SPREAD_GATE_ENABLED else {},
+            "ingrediente concentrado")
     except Exception as _ing_spread_e:
         logger.debug(f"[P1-INGREDIENT-SPREAD] detector no-op: {_ing_spread_e}")
         ingredient_spread = {}
@@ -11113,7 +11195,8 @@ async def self_critique_node(state: PlanState) -> dict:
     cross_day_dish_repeats = {}
     if CRITIQUE_CROSSDAY_DISH_PARITY_ENABLED:
         try:
-            cross_day_dish_repeats = build_variety_report({"days": days}).get("cross_day_dishes") or {}
+            cross_day_dish_repeats = _sc_policy_filter(
+                build_variety_report({"days": days}).get("cross_day_dishes") or {}, "plato-base repetido")
         except Exception:
             cross_day_dish_repeats = {}
     if cross_day_dish_repeats:
@@ -11183,7 +11266,7 @@ async def self_critique_node(state: PlanState) -> dict:
     human_content = f"""
 PLAN A EVALUAR (días generados):
 {days_summary_json}
-{staples_block}{spread_block}{slot_block}{crossday_block}{user_context}
+{policy_block}{staples_block}{spread_block}{slot_block}{crossday_block}{user_context}
 {pista_dia}
 """.strip()
 
@@ -11269,7 +11352,7 @@ PLAN A EVALUAR (días generados):
                 # cliente recupera el blip sin tocar el timeout (80s) ni el CB.
                 max_retries=1,
                 timeout=80,
-            ).with_structured_output(SingleDayPlanModel)
+            ).with_structured_output(SingleDayCorrectionModel)
 
             ctx = _build_shared_context(state)
 
@@ -11442,6 +11525,9 @@ Devuelve el Día {day_num} corregido con EXACTAMENTE la misma estructura JSON y 
                     if corrected_result:
                         corrected_day = corrected_result.model_dump()
                         corrected_day["day"] = day_num
+                        _bf = _backfill_corrected_day_desc(corrected_day, target_day)  # [P2-CRITIQUE-FIX-DESC-BACKFILL]
+                        if _bf:
+                            logger.info(f"📝 [P2-CRITIQUE-FIX-DESC-BACKFILL] Día {day_num}: {_bf} desc rellenada(s) tras la corrección.")
                         # [P3-SKELETON-FIDELITY-CRITIQUE-AWARE · 2026-05-16]
                         # Marca el día como modificado por self_critique. El
                         # check de SKELETON FIDELITY en `_run_assembly_validations`
@@ -13166,6 +13252,10 @@ _GAINMUSCLE_GOAL_TOKENS = ("gain_muscle", "ganar_musculo", "ganancia", "bulk", "
 # aleja), acotado por techo calórico + re-cuantización inmediata (callsite assemble). Cierra la asimetría
 # proteína(3 closers)/carbos(0). Rollback sin redeploy: MEALFIT_CARB_FLOOR=false.
 CARB_FLOOR_ENABLED = _env_bool("MEALFIT_CARB_FLOOR", True)
+# [P2-FAT-FLOOR · 2026-09-03] Espejo del carb-floor para GRASAS bajo banda (ver `_close_fat_gap_for_day`).
+FAT_FLOOR_ENABLED = _env_bool("MEALFIT_FAT_FLOOR", True)
+FAT_FLOOR_TOL = _env_float("MEALFIT_FAT_FLOOR_TOL", 0.10, validator=lambda v: 0.0 < v < 0.5)
+FAT_FLOOR_MAX_SCALE = _env_float("MEALFIT_FAT_FLOOR_MAX_SCALE", 2.5, validator=lambda v: 1.0 < v <= 4.0)
 CARB_FLOOR_MAX_SCALE = max(1.8, min(4.0, _env_float("MEALFIT_CARB_FLOOR_MAX_SCALE", 2.5)))
 CARB_FLOOR_TOL = max(0.0, min(0.5, _env_float("MEALFIT_CARB_FLOOR_TOL", 0.10)))
 
@@ -21747,6 +21837,88 @@ def _relevel_fats_universal(days, target_fats, db) -> int:
     return n
 
 
+def _close_fat_gap_for_day(meals: list, target_fats: float, target_kcal: float, db, *,
+                           tol: float = 0.10, max_scale: float = 2.5, max_lines: int = 2) -> bool:
+    """[P2-FAT-FLOOR · 2026-09-03] Closer ADITIVO de GRASAS — espejo direccional de
+    `_close_carb_gap_for_day` y de `_relevel_fats_universal` (que solo RECORTA grasas sobre banda).
+    Hasta hoy la grasa era la única macro sin closer hacia arriba: el 2026-09-03 un «actualizar
+    día» del dueño entregó 58 g de grasa contra 69 de target (kcal 2370/2500), con protein/carbs
+    en banda; el relevel no tenía nada que recortar y el rebalance del día no levantó las
+    fuentes. Cuando el día entrega grasa MUY bajo la banda (< target×(1−tol)), ESCALA el/los
+    ingrediente(s) GRASA-dominantes existentes más ricos (aceite, aguacate, semillas, queso)
+    hacia el target, con clamp `max_scale`, acotado por el techo calórico (≤ 1.12×target_kcal),
+    hasta `max_lines` líneas distintas, y re-cuantiza. NO añade ingredientes nuevos (coherencia
+    receta↔lista intacta; `_sync_one_raw_line` mantiene `ingredients_raw`). Recompute HONESTO de
+    macros desde el string reescalado. Mutates meals. Retorna True si escaló. Gateado por
+    FAT_FLOOR_ENABLED (`MEALFIT_FAT_FLOOR`). Fail-safe. tooltip-anchor: P2-FAT-FLOOR"""
+    if not FAT_FLOOR_ENABLED or target_fats <= 0:
+        return False
+    try:
+        from nutrition_db import rescale_ingredient_string as _resc, quantize_ingredient_string as _quant
+        cur = sum(_meal_macro_num(m.get("fats")) for m in meals)
+        if cur >= target_fats * (1.0 - tol):
+            return False  # ya en/sobre el piso de banda → nada que cerrar
+        used: set = set()
+        scaled_any = False
+        for _round in range(max(1, int(max_lines))):
+            cur = sum(_meal_macro_num(m.get("fats")) for m in meals)
+            if cur >= target_fats * (1.0 - tol):
+                break
+            best = None  # (fats_contrib, meal, idx, ing_str)
+            for m in meals:
+                ings = m.get("ingredients")
+                if not isinstance(ings, list):
+                    continue
+                for idx, ing in enumerate(ings):
+                    if (id(m), idx) in used:
+                        continue
+                    if _ingredient_macro_group(str(ing), db) != "fats":
+                        continue
+                    _fv = (db.macros_from_ingredient_string(str(ing)) or {}).get("fats") or 0.0
+                    if _fv > 0 and (best is None or _fv > best[0]):
+                        best = (float(_fv), m, idx, str(ing))
+            if best is None:
+                if not scaled_any:
+                    logger.info(f"🥑 [P2-FAT-FLOOR] grasas {cur:.0f}g < piso ({target_fats:.0f}g) sin "
+                                f"ingrediente grasa-dominante que escalar → sin palanca (no se inventan compras).")
+                break
+            contrib, m, idx, orig = best
+            used.add((id(m), idx))
+            deficit = target_fats - cur
+            factor = min(max_scale, 1.0 + (deficit / contrib))
+            if target_kcal > 0:
+                cur_kcal = sum(_meal_macro_num(mm.get("cals")) for mm in meals)
+                _mo_k = (db.macros_from_ingredient_string(orig) or {}).get("kcal") or 0.0
+                if _mo_k > 0:
+                    kcal_room = (1.12 * target_kcal) - cur_kcal
+                    if kcal_room <= 0:
+                        break
+                    factor = min(factor, 1.0 + (kcal_room / _mo_k))
+            if factor <= 1.0 + 1e-3:
+                continue
+            quant, _f = _quant(_resc(orig, factor))
+            if quant == orig:
+                continue
+            _mo = db.macros_from_ingredient_string(orig) or {}
+            _mn = db.macros_from_ingredient_string(quant) or {}
+            ings = m.get("ingredients")
+            ings[idx] = quant
+            _sync_one_raw_line(m, idx, orig, factor * _f)
+            _np = max(0, round(_meal_macro_num(m.get("protein")) + ((_mn.get("protein") or 0) - (_mo.get("protein") or 0))))
+            _nc = max(0, round(_meal_macro_num(m.get("carbs")) + ((_mn.get("carbs") or 0) - (_mo.get("carbs") or 0))))
+            _nf = max(0, round(_meal_macro_num(m.get("fats")) + ((_mn.get("fats") or 0) - (_mo.get("fats") or 0))))
+            m["protein"], m["carbs"], m["fats"] = _np, _nc, _nf
+            m["cals"] = max(0, round(4 * _np + 4 * _nc + 9 * _nf))
+            m["macros"] = [f"P:{_np}g", f"C:{_nc}g", f"G:{_nf}g"]
+            scaled_any = True
+            logger.info(f"🥑 [P2-FAT-FLOOR] '{orig}' → '{quant}' (×{factor:.2f}) en "
+                        f"'{str(m.get('name') or '')[:40]}': grasas del día hacia {target_fats:.0f}g")
+        return scaled_any
+    except Exception as e:
+        logger.warning(f"[P2-FAT-FLOOR] fat-closer falló: {type(e).__name__}: {e}")
+        return False
+
+
 def _close_carb_gap_for_day(meals: list, target_carbs: float, target_kcal: float, db, *,
                             tol: float = 0.10, max_scale: float = 2.5) -> bool:
     """[P2-CARB-FLOOR · 2026-06-29] (re-audit objetivo · P2 MACRO-FG-CARBFAT-NOCLOSER) Closer ADITIVO de carbos —
@@ -25484,7 +25656,7 @@ def _apply_deterministic_clinical_layer(plan: dict, form_data: dict, nutrition: 
         # [P1-COUNTRY-SYSTEM-F1 · 2026-08-16 (T4)] país vía la ÚNICA puerta (T1) — knob apagado ⇒
         # 'DO' siempre ⇒ los dos autofixes de abajo corren exactamente como antes.
         from constants import country_for_form_data
-        _dcl_country = country_for_form_data(form_data)
+        _dcl_country = cultural_country_for_form_data(form_data)
         _nr_layer = _night_rice_autofix(plan.get("days") or [], _db, country=_dcl_country)
         if _nr_layer:
             logger.warning(f"🌙 [P0-FALLBACK-CENA-ARROZ] capa clínica reescribió arroz nocturno en "
@@ -25706,6 +25878,23 @@ def _apply_deterministic_clinical_layer(plan: dict, form_data: dict, nutrition: 
                                 f"(escala determinista, target {_tc_cf:.0f}g)")
         except Exception as _cf_e:
             logger.warning(f"[P2-CARB-FLOOR] carb-floor en assemble no-op: {type(_cf_e).__name__}: {_cf_e}")
+    # [P2-FAT-FLOOR · 2026-09-03] paridad con el carb-floor: la grasa bajo banda también se cierra
+    if FAT_FLOOR_ENABLED and _db is not None:
+        try:
+            _tf_ff = _meal_macro_num(active_macros.get("fats_str"))
+            if _tf_ff > 0:
+                _ff_days = 0
+                for _d in plan.get("days", []) or []:
+                    if _close_fat_gap_for_day(_d.get("meals", []) or [], _tf_ff, _daily_cals, _db,
+                                              tol=FAT_FLOOR_TOL, max_scale=FAT_FLOOR_MAX_SCALE):
+                        _ff_days += 1
+                if _ff_days and PORTION_QUANTIZE_ENABLED:
+                    _apply_portion_quantization(plan, _db)
+                if _ff_days:
+                    logger.info(f"🥑 [P2-FAT-FLOOR] cerró el piso de grasas en {_ff_days} día(s) "
+                                f"(escala determinista, target {_tf_ff:.0f}g)")
+        except Exception as _ff_e:
+            logger.warning(f"[P2-FAT-FLOOR] fat-floor en assemble no-op: {type(_ff_e).__name__}: {_ff_e}")
 
     # ── Guard 4d (FS6/ERC verificación FINAL) [P1-RENAL-RECHECK-POST-SUBS · 2026-06-18, review P1] ──
     # La cuantización (Guard 4) + carb-trim (4b) + post-quant reconcile (4c) recomputan macros desde porciones
@@ -38343,7 +38532,7 @@ async def assemble_plan_node(state: PlanState) -> dict:
             # [P1-COUNTRY-SYSTEM-F1 · 2026-08-16 (T4)] país vía la ÚNICA puerta (T1) — knob apagado
             # ⇒ 'DO' siempre ⇒ los dos autofixes de abajo corren exactamente como antes.
             from constants import country_for_form_data
-            _apn_country = country_for_form_data(form_data)
+            _apn_country = cultural_country_for_form_data(form_data)
             _nr_fixed = _night_rice_autofix(days, country=_apn_country)
             if _nr_fixed:
                 logger.info(f"🕒 [P1-NIGHT-RICE-AUTOFIX] {_nr_fixed} cena(s) con 'arroz de noche' reescrita(s) "
@@ -40375,7 +40564,7 @@ async def surgical_marker_regen_node(state: PlanState) -> dict:
         temperature=0.3,
         max_retries=0,
         timeout=80,
-    ).with_structured_output(SingleDayPlanModel)
+    ).with_structured_output(SingleDayCorrectionModel)
 
     ctx = _build_shared_context(state)
     # [P1-COUNTRY-SYSTEM-F1 · 2026-08-16 (T4)] país vía la ÚNICA puerta (T1), derivado UNA vez
@@ -40383,7 +40572,7 @@ async def surgical_marker_regen_node(state: PlanState) -> dict:
     # siempre ⇒ los dos consumidores de abajo (texto del regen + build_day_assignment_context)
     # toman el camino DO byte-idéntico.
     from constants import country_for_form_data
-    _surgical_country = country_for_form_data(form_data)
+    _surgical_country = cultural_country_for_form_data(form_data)
 
     async def _re_correct_one(day_num: int):
         target_day = next((d for d in days if d.get("day") == day_num), None)
@@ -40501,6 +40690,9 @@ Devuelve el Día {day_num} corregido con EXACTAMENTE la misma estructura JSON y 
             if corrected_result:
                 corrected_day = corrected_result.model_dump()
                 corrected_day["day"] = day_num
+                _bf = _backfill_corrected_day_desc(corrected_day, target_day)  # [P2-CRITIQUE-FIX-DESC-BACKFILL]
+                if _bf:
+                    logger.info(f"📝 [P2-CRITIQUE-FIX-DESC-BACKFILL] Día {day_num} (regen): {_bf} desc rellenada(s).")
                 # IMPORTANTE: NO copiar `_critique_unresolved` — la corrección
                 # es el evento que limpia el marker.
                 # [P1-SURGICAL-CRITIQUE-FLAG · 2026-07-05] Paridad con el pro-fallback (línea
@@ -41623,7 +41815,7 @@ async def review_plan_node(state: PlanState) -> dict:
     # los gates: el de huevo precedía la derivación histórica dentro del gate
     # de horario. Una sola lectura SSOT gobierna los cuatro feedbacks y slots.
     from constants import country_for_form_data
-    _rpn_country = country_for_form_data(form_data)
+    _rpn_country = cultural_country_for_form_data(form_data)
     taste_profile = state.get("taste_profile", "")
     attempt = state.get("attempt", 1)
     
@@ -42267,6 +42459,24 @@ Responde ÚNICAMENTE con el JSON de revisión.
                 # una fruta repetida es cosmética y bloquearla convierte un plan válido en "IA saturada"
                 # (cero-plan). En intentos 1..N-1 SÍ rechaza (presiona a diversificar). Anchor: P1-VARIETY-REPEAT-GRACEFUL.
                 _rep_issues = _variety_repeat_gate_issues(_vr)
+                # [P1-ARQ25-F3-HORIZON · 2026-09-02] Fidelidad a la política (§6.1): mide el
+                # chunk contra su rebanada del blueprint y sella `_fidelity_report` + métrica.
+                # En `enforce` retira los gates de REPETICIÓN de V1 que contradicen la banda
+                # pedida (rutina ⇒ todos; equilibrada ⇒ los que hablan de un ancla) y, con
+                # MEALFIT_FIDELITY_GATE=block, rechaza (nunca en el intento final: cero-plan
+                # prohibido, mismo criterio que P1-VARIETY-REPEAT-GRACEFUL). shadow ⇒ solo mide.
+                try:
+                    from horizon import review_fidelity_gate as _review_fidelity_gate
+                    _rep_issues, _fid_rejects = _review_fidelity_gate(
+                        plan, form_data, _rep_issues,
+                        attempt=int(state.get("attempt", 1)), max_attempts=MAX_ATTEMPTS)
+                    for _fid_issue in _fid_rejects:
+                        logger.warning(f"📐 [P1-ARQ25-F3-HORIZON] {_fid_issue[:72]}… → rechazo por fidelidad")
+                        approved = False
+                        issues.append(_fid_issue)
+                        severity = _severity_max(severity, "high")
+                except Exception as _fid_e:
+                    logger.warning(f"[P1-ARQ25-F3-HORIZON] gate de fidelidad falló (fail-open): {_fid_e}")
                 if _rep_issues:
                     _vg_attempt = int(state.get("attempt", 1))
                     _vg_is_final = _vg_attempt >= MAX_ATTEMPTS
@@ -42955,7 +43165,7 @@ Responde ÚNICAMENTE con el JSON de revisión.
     if CULINARY_JUDGE_GUARD != "off":
         # [P1-COUNTRY-SYSTEM-F1 · 2026-08-16] (T3) país del usuario para el juez culinario.
         from constants import country_for_form_data
-        _cj_country = country_for_form_data(form_data)
+        _cj_country = cultural_country_for_form_data(form_data)
         _cj = await run_culinary_judge(plan, _cj_country)
         _cj_viol = [v.model_dump() for v in (_cj.violations if _cj else [])]
         _cj_hist = plan.setdefault("_culinary_judge_history", [])
@@ -43063,7 +43273,11 @@ Responde ÚNICAMENTE con el JSON de revisión.
         # diferentes (simétrico a la supresión del bloque Zero-Waste en
         # build_pantry_context). Si validáramos los platos nuevos contra la
         # despensa, fallarían por no estar en ella → retries → plan degradado.
-        is_variety_regen = form_data.get("update_reason") == "variety"
+        # [P1-ARQ25-F3-HORIZON · 2026-09-02] motivo neutral versionado (`renewal.v1`); `variety`
+        # sigue aceptado como alias legado. La variable conserva su nombre: la semántica del
+        # skip (plan NUEVO con alimentos distintos ⇒ no validar contra la nevera vieja) no cambia.
+        from horizon import is_renewal_reason as _is_renewal_reason_f3
+        is_variety_regen = _is_renewal_reason_f3(form_data.get("update_reason"))
         # [P1-PANTRY-GUARD-EMPTY-FRIDGE · 2026-07-11] Nevera consultada y VACÍA es señal
         # de verdad moderna: si el cliente mandó current_pantry_ingredients=[] EXPLÍCITO
         # (renovación con fridge vacío), el fallback legacy current_shopping_list NO debe
@@ -44751,6 +44965,13 @@ async def semantic_cache_check_node(state: PlanState) -> dict:
     if is_reroll:
         return {"semantic_cache_hit": False, "cached_plan_data": None}
 
+    # [P1-ARQ25-F3-HORIZON · 2026-09-02] Bajo `enforce` la caché semántica se salta: un plan
+    # cacheado por similitud de perfil no sabe nada de la banda de recurrencia ni de las
+    # anclas del run (§6.6 «caché semántica obedece la política»). shadow ⇒ intacta.
+    if actual_form_data.get("_policy_enforced"):
+        _inc_semantic_cache_stat("policy_bypass")
+        return {"semantic_cache_hit": False, "cached_plan_data": None}
+
     # [P1-25] Attempt-guard: si el form_data carga señales de que ESTA
     # invocación es un reintento posterior a un rechazo, bypasear el cache.
     # Sin esto, el wrapper externo `_validate_pantry_and_retry_pipeline`
@@ -45923,6 +46144,25 @@ _TRUSTED_INTERNAL_FORM_KEYS: frozenset = frozenset({
     # filtrar por `metadata.caller_context`.
     "_caller_target_plan_id",
     "_caller_context",
+
+    # [P1-ARQ25-F3-HORIZON · 2026-09-02] rebanada del blueprint + política efectiva + flag
+    # enforce + día objetivo (swap/regen). Las inyecta el servidor (generation_inputs,
+    # _enqueue_remaining_chunks, chunk worker, attach_policy_to_swap_form); un cliente que
+    # las mande por el router cae en el strip estricto (allow_set=None) antes de llegar aquí.
+    "_blueprint_slice",
+    "_plan_policy_effective",
+    "_policy_enforced",
+    "_policy_day_index",
+
+    # [P3-STRIP-PANTRY-KEYS-NOISE · 2026-09-03] Metadatos de la despensa que `_enqueue_plan_chunk`
+    # sella en `pipeline_snapshot["form_data"]` (los lee el WORKER desde el snapshot, no el
+    # grafo). No estaban aquí y cada chunk arrancaba con un WARNING «stripped 4 clave(s)»: 31
+    # en 24 h, el aviso más frecuente del journal, sin ningún efecto (el grafo no los usa).
+    # Un aviso que dispara en cada ejecución normal no avisa de nada.
+    "_pantry_captured_at",
+    "_chunk_anchor_source",
+    "_pantry_quantity_mode",
+    "_pantry_quantity_hybrid_tolerance",
 })
 
 

@@ -55,7 +55,7 @@ except Exception:
     pass
 
 import psycopg
-from langchain_core.messages import SystemMessage
+from langchain_core.messages import HumanMessage, SystemMessage
 
 from llm_provider import build_chat_llm, GLM_FLASH
 from constants import strip_accents
@@ -119,7 +119,8 @@ def translate_batch(names: list, model: str, timeout_s: float = 180.0) -> dict:
     """
     prompt = _build_prompt(names)
     llm = build_chat_llm(model, temperature=0.1, timeout=timeout_s, max_output_tokens=16000)
-    response = llm.invoke([SystemMessage(content=prompt)])
+    # [P1-I18N-GLM-USER-TURN] GLM exige un turno de usuario: solo system => 400/1214
+    response = llm.invoke([SystemMessage(content=prompt), HumanMessage(content="Proceed. Reply with ONLY the JSON.")])
     raw = getattr(response, "content", "") or ""
     parsed = _parse_json_response(raw)
     if parsed is None or not isinstance(parsed.get("items"), list):

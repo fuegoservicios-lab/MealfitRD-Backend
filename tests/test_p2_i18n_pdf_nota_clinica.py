@@ -133,6 +133,11 @@ def _fragmentos_del_backend() -> set[str]:
 def _claves_del_glosador() -> set[str]:
     """Las claves españolas declaradas en `clinicalNoteGloss.js` (`t('…')` / `i18nKey('…')`)."""
     src = _fuente(_GLOSADOR)
+    # [P2-REVIEW-ISSUES-CLARO · 2026-09-02] El mismo archivo aloja desde entonces el glosador de
+    # las OBSERVACIONES del revisor (`_REVIEW_ISSUE_COPIES`, «Día N, franja: copy corto»), cuyo
+    # backend es `_REVIEW_ISSUE_HUMANIZE_MAP`, no la nota clínica: sus claves las cuida su propio
+    # test. Aquí sólo cuentan las de la nota (`_FRAGMENTOS`, tope de proteína, disclaimers).
+    src = src.split("const _REVIEW_ISSUE_COPIES")[0]
     # Mismo criterio TEXTUAL que usa `i18n-check.mjs`: el literal escrito dentro de la
     # llamada. Ninguna de estas cadenas lleva comilla simple, así que no hay que tratar
     # escapes -- y si alguien añade una que sí, este test lo verá como clave ausente.

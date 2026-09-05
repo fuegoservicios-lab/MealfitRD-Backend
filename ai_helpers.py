@@ -309,6 +309,18 @@ _BARIATRIC_LOW_DENSITY_AS_MAIN = {
     "queso de hoja", "queso parmesano", "queso cheddar", "queso gouda",
 }
 
+# [P2-SEEDER-DRAW-GAINMUSCLE-DENSITY · 2026-09-03] Leguminosas por TOKEN (word-boundary), para el
+# perfil de ganancia muscular. `_LOW_DENSITY_AS_MAIN` es exact-match sobre nombres DO y se quedó
+# corto cuando el catálogo de países (F2, 347 filas) trajo «Habas», «Guisantes secos», «Frijoles
+# pintos», «Alubias»: el sorteo del seeder las entregaba como proteína PRINCIPAL del día a un
+# perfil de 135 g de proteína, y el revisor rechazó 2 intentos seguidos por déficit (día 3: 91 g).
+# Siguen disponibles como acompañante; sólo dejan de ser la base del día.
+_GAINMUSCLE_LEGUME_TOKENS = (
+    "habichuela", "habichuelas", "frijol", "frijoles", "lenteja", "lentejas", "garbanzo", "garbanzos",
+    "gandul", "gandules", "guandul", "guandules", "haba", "habas", "guisante", "guisantes",
+    "alubia", "alubias", "judia", "judias", "poroto", "porotos", "caraota", "caraotas", "arveja", "arvejas",
+)
+
 # ─────────── vocabularios clínicos del seeder (nivel módulo = SSOT único) ───────────
 # [P1-PANTRY-FLOOR-CLINICAL-FILTER · 2026-08-02] (audit solver+seeder v7) Estos cuatro
 # vocabularios vivían DENTRO de `get_deterministic_variety_prompt`, y dos de ellos dentro de un
@@ -377,7 +389,7 @@ def _token_matches_wb(name, tokens) -> bool:
     return False
 
 
-def _is_low_density_main(name, _is_bariatric: bool) -> bool:
+def _is_low_density_main(name, _is_bariatric: bool, *, gain_muscle: bool = False) -> bool:
     """¿`name` es una proteína que NO debe ocupar el slot de proteína PRINCIPAL?
 
     [P1-PANTRY-FLOOR-CLINICAL-FILTER · 2026-08-02] Cuerpo subido desde el closure
@@ -398,11 +410,20 @@ def _is_low_density_main(name, _is_bariatric: bool) -> bool:
         return True
     if _is_bariatric and _token_matches_wb(_pl, _CURED_OR_PROCESSED_TOKENS):
         return True
+    # [P2-SEEDER-DRAW-GAINMUSCLE-DENSITY · 2026-09-03] ganancia muscular: ni leguminosa ni queso
+    # como base del día (el prompt del revisor exige «fuente animal de alta densidad» en cada
+    # comida principal; darle «Habas» como main era pedirle al LLM que se contradijera).
+    if gain_muscle and _env_bool("MEALFIT_GAINMUSCLE_MAIN_DENSITY_STRICT", True):
+        if _pl in _BARIATRIC_LOW_DENSITY_AS_MAIN or _pl.startswith("queso "):
+            return True
+        if _token_matches_wb(_pl, _GAINMUSCLE_LEGUME_TOKENS):
+            return True
     return False
 
 
 def _pantry_clinical_main_filter(extracted_p, extracted_f, *, penaliza_procesados: bool = False,
-                                 exige_densidad: bool = False, is_bariatric: bool = False):
+                                 exige_densidad: bool = False, is_bariatric: bool = False,
+                                 gain_muscle: bool = False):
     """[P1-PANTRY-FLOOR-CLINICAL-FILTER · 2026-08-02] (audit solver+seeder v7)
 
     Devuelve `(proteinas, frutas)` de la nevera que SÍ pueden ser BASE del día.
@@ -446,7 +467,7 @@ def _pantry_clinical_main_filter(extracted_p, extracted_f, *, penaliza_procesado
     if _p and (penaliza_procesados or exige_densidad):
         _kept = [x for x in _p
                  if not (penaliza_procesados and _token_matches_wb(x, _CURED_OR_PROCESSED_TOKENS))
-                 and not (exige_densidad and _is_low_density_main(x, is_bariatric))]
+                 and not (exige_densidad and _is_low_density_main(x, is_bariatric, gain_muscle=gain_muscle))]
         if len(_kept) < len(_p):
             logger.info(
                 f"🩺 [P1-PANTRY-FLOOR-CLINICAL-FILTER] {len(_p) - len(_kept)} proteína(s) de la "
@@ -1029,6 +1050,58 @@ def _pick_light_anchor_candidates(pool, k: int = 4) -> list:
     return random.sample(_items, min(int(k), len(_items)))
 
 
+def _culture_staple_seed(carb_slots, form_data, pool_carbs, carb_freq, blocked, days, market_country):
+    """[P1-CULTURE-STAPLE-SEED · 2026-09-05] Cada día de cocina X lleva al menos UNA base básica de X entre
+    sus dos bases. Medido en la prueba real A v3 (mercado US, cocina dominicana 70/30): política y blueprint
+    perfectos, el pool YA traía arroz/plátano/yuca (F7-H) y aun así el sorteo eligió Pasta integral / Lentejas /
+    Garbanzos para los 3 días — la rotación anti-repetición penalizaba lo que el usuario acababa de comer y el
+    sembrador no sabía qué cocina tocaba cada día; el día dominicano salió en «canastas de pasta».
+
+    Regla: si NINGUNA de las dos bases del día es básico de la cocina del día, la SEGUNDA se sustituye por el
+    básico disponible menos usado (frecuencia fatigada), alternando entre los dos menos usados para los días de
+    la misma cocina (la lista de compras crece en ≤2 por cocina). Nunca un vetado (`blocked`). Solo actúa con
+    una MEZCLA o con cocina ≠ mercado: un dominicano en el mercado DO sigue byte-idéntico (su pool ya es criollo).
+    Knob `MEALFIT_CULTURE_STAPLE_SEED` (True). Puro y fail-open: cualquier error devuelve los slots tal cual.
+    tooltip-anchor: P1-CULTURE-STAPLE-SEED"""
+    try:
+        if not carb_slots:
+            return carb_slots
+        from knobs import _env_bool as _eb
+        if not _eb("MEALFIT_CULTURE_STAPLE_SEED", True):
+            return carb_slots
+        import cultural_profiles as _cp
+        if not _cp.cultural_profiles_enabled():
+            return carb_slots
+        weights = _cp.culture_weights_for_form(form_data if isinstance(form_data, dict) else None)
+        if len(weights) < 2 and _cp.main_profile_id(weights) == _cp.profile_for_market(market_country):
+            return carb_slots
+        try:
+            offset = int((form_data or {}).get("_days_offset") or 0)
+        except (TypeError, ValueError):
+            offset = 0
+        _n = lambda x: strip_accents(str(x)).lower().strip()
+        blocked_n = {_n(b) for b in (blocked or [])}
+        out, used_by_pid, changed = [], {}, []
+        for i in range(int(days)):
+            pair = tuple(carb_slots[i] if i < len(carb_slots) else carb_slots[-1])
+            pid = _cp.profile_for_day(weights, offset + i)
+            staples_all = _cp.staple_bases_for_day(weights, offset + i, pool_carbs)
+            staple_n = {_n(x) for x in staples_all}          # «ya tiene básico» cuenta también un vetado
+            staples = [x for x in staples_all if _n(x) not in blocked_n]   # pero jamás se INYECTA un vetado
+            if not staples or any(_n(x) in staple_n for x in pair):
+                out.append(pair); continue
+            staples.sort(key=lambda x: (int((carb_freq or {}).get(x, 0) or 0)))
+            k = used_by_pid.get(pid, 0); used_by_pid[pid] = k + 1
+            pick = staples[k % min(2, len(staples))]
+            out.append((pair[0], pick)); changed.append((i, pid, pick))
+        if changed:
+            logger.info(f"🍚 [P1-CULTURE-STAPLE-SEED] base básica de la cocina del día garantizada: {changed}")
+        return out
+    except Exception as _e:
+        logger.warning(f"[P1-CULTURE-STAPLE-SEED] no-op (fail-open): {type(_e).__name__}: {_e}")
+        return carb_slots
+
+
 def _rotate_pairs(items, days: int = 3):
     """[P1-CARB-SEEDER-PAIRS · 2026-07-27] Núcleo de la rotación en pares, extraído de
     `_rotate_fruit_pairs` para que carbos y frutas usen LA MISMA: día i recibe
@@ -1151,6 +1224,12 @@ def get_deterministic_variety_prompt(history_text: str, form_data: dict = None, 
     # (`build_deterministic_variety_prompt`, más abajo — antes re-derivaba con su propio import
     # local; ahora reusa esta misma variable, sin doble llamada).
     _variety_country = country_for_form_data(form_data)
+    # [P1-ARQ25-F7-CULTURE · subfase H] la cocina elegida sesga el pool de mercado (mercado ≠ cocina)
+    try:
+        from constants import cultural_country_for_form_data as _ccffd_variety
+        _variety_culture = _ccffd_variety(form_data)
+    except Exception:
+        _variety_culture = _variety_country
 
     # --- FILTRO DE RESTRICCIONES MÉDICAS Y DIETÉTICAS ---
     if form_data:
@@ -1194,7 +1273,8 @@ def get_deterministic_variety_prompt(history_text: str, form_data: dict = None, 
         # tooltip-anchor: P2-SEEDER-DIET-NONE
         diet = str(form_data.get("diet") or form_data.get("dietType") or "").lower()
         
-        filtered_proteins, filtered_carbs, filtered_veggies, filtered_fruits = _get_fast_filtered_catalogs(allergies, dislikes, diet, country=_variety_country)
+        filtered_proteins, filtered_carbs, filtered_veggies, filtered_fruits = _get_fast_filtered_catalogs(
+            allergies, dislikes, diet, country=_variety_country, market_extras=True, culture_country=_variety_culture)
     else:
         # Guest sin form_data: usar catálogos completos sin filtrar
         filtered_proteins = DOMINICAN_PROTEINS
@@ -1829,7 +1909,7 @@ def get_deterministic_variety_prompt(history_text: str, form_data: dict = None, 
         # aplique EXACTAMENTE el mismo criterio: eran las dos mitades de una sola regla y solo
         # esta corría, así que lo extraído de la nevera la esquivaba entera.
         def _should_replace_main(_p):
-            return _is_low_density_main(_p, _is_bariatric)
+            return _is_low_density_main(_p, _is_bariatric, gain_muscle=(_main_goal == "gain_muscle"))
         _low_mains = [p for p in unique_proteins if _should_replace_main(p)]
         if _low_mains:
             _hd_pool = [(p, w) for p, w in zip(available_proteins, protein_weights)
@@ -2107,7 +2187,8 @@ def get_deterministic_variety_prompt(history_text: str, form_data: dict = None, 
                 penaliza_procesados=(_main_goal in _GOALS_PENALIZE_PROCESSED or _is_bariatric),
                 exige_densidad=((_main_goal == "gain_muscle" or _is_bariatric)
                                 and _env_bool("MEALFIT_GAINMUSCLE_HIGH_DENSITY_PROTEIN", True)),
-                is_bariatric=_is_bariatric)
+                is_bariatric=_is_bariatric,
+                gain_muscle=(_main_goal == "gain_muscle"))
 
         # [P3-SEEDER-TEMPLATE-COVERAGE · 2026-08-04] Snapshot POST-filtro clínico: lo que el filtro
         # de arriba descartó ya no puede ocupar días, así que tampoco debe generar telemetría.
@@ -2339,6 +2420,28 @@ def get_deterministic_variety_prompt(history_text: str, form_data: dict = None, 
     # 2 por día reutilizándolas entre días.
     chosen_fruits = unique_fruits[:_dc + 1] if unique_fruits else []
 
+    # [P1-ARQ25-F3-HORIZON · 2026-09-02] La rebanada del blueprint manda sobre el reparto del
+    # seeder cuando la política está en `enforce`: proteína del día según la familia programada
+    # (buscada en el MISMO pool ya filtrado por alergias/dieta/dislikes) y anclas del día
+    # publicadas como DATO (`out_assignment`). shadow/off ⇒ byte-idéntico a V1.
+    _bp_slice = form_data.get("_blueprint_slice") if isinstance(form_data, dict) else None
+    _bp_enforced = bool(form_data.get("_policy_enforced")) if isinstance(form_data, dict) else False
+    _bp_eff = form_data.get("_plan_policy_effective") if isinstance(form_data, dict) else None
+    if _bp_enforced and isinstance(_bp_slice, dict):
+        try:
+            from horizon import apply_slice_to_seeder_pools as _apply_slice_f3
+            # [P2-F3-FAMILY-INJECT-EMPTY-PANTRY · 2026-09-03] sin Nevera que respetar (por debajo del
+            # umbral del guard), una familia ausente del pool se cubre con su representante canónico.
+            from constants import PANTRY_GUARD_MIN_ITEMS as _pgmi_f3
+            _bp_inject = len(form_data.get("current_pantry_ingredients") or []) < int(_pgmi_f3 or 0)
+            chosen_proteins = _apply_slice_f3(_bp_slice, chosen_proteins, unique_proteins, days=_dc, inject_missing=_bp_inject)
+            if isinstance(out_assignment, dict):
+                out_assignment["blueprint_slice_hash"] = _bp_slice.get("slice_hash")
+                out_assignment["anchors_by_day"] = [list(d.get("anchors") or []) for d in (_bp_slice.get("days") or [])][:_dc]
+            logger.info(f"📐 [P1-ARQ25-F3-HORIZON] seeder obedece la rebanada {str(_bp_slice.get('slice_hash'))[:12]}: proteínas={chosen_proteins} inject={_bp_inject}")
+        except Exception as _bp_e:
+            logger.warning(f"[P1-ARQ25-F3-HORIZON] rebanada no aplicada al seeder (fail-open): {_bp_e}")
+
     # [P3-SEEDER-TEMPLATE-COVERAGE · 2026-08-04] TELEMETRÍA, no guard. Una base de la nevera sin
     # ninguna plantilla propia que además ocupa ≥2 de los días del chunk es el caso que el audit
     # describe: bajo `cycle_locked` el prompt prohíbe introducir bases nuevas, así que esos dos
@@ -2427,6 +2530,14 @@ def get_deterministic_variety_prompt(history_text: str, form_data: dict = None, 
             blocked_text += f"\n - {reason}"
             
     update_reason = form_data.get("update_reason") if form_data else None
+    # [P1-ARQ25-F3-HORIZON · 2026-09-02] `renewal.v1` (motivo neutral versionado) entra al chain
+    # por el alias legado; el TEXTO de la intención lo decide `_bp_enforced` más abajo.
+    try:
+        from horizon import is_renewal_reason as _is_renewal_reason_f3
+        if _is_renewal_reason_f3(update_reason):
+            update_reason = 'variety'
+    except Exception as _exc:
+        logger.debug("[P2-SILENT-DEGRADATION] P1-ARQ25-F3-HORIZON alias del motivo: %s: %s", type(_exc).__name__, str(_exc)[:160])
     
     # ======= [GAP 1] PERSISTENCIA DE SEÑALES DE APRENDIZAJE =======
     # Guardamos los "dislikes" y "skips" como patrones de rechazo permanentes
@@ -2488,7 +2599,11 @@ def get_deterministic_variety_prompt(history_text: str, form_data: dict = None, 
     # ==============================================================
 
     if update_reason == 'variety':
-        blocked_text += "\n\n💡 [INTENCIÓN DEL USUARIO]: El usuario solicitó explícitamente MAYOR VARIEDAD al actualizar el plan. Ofrece combinaciones creativas, diferentes técnicas de cocción y perfiles de sabor novedosos."
+        if _bp_enforced:
+            # [P1-ARQ25-F3-HORIZON] renovación bajo política: hereda la banda, no pide «más variedad».
+            blocked_text += "\n\n🔁 [INTENCIÓN DEL USUARIO]: El usuario RENUEVA su plan. NO es una petición de más variedad: respeta la banda de recurrencia y las anclas de su política (bloque 📐 más abajo) y cambia solo lo que la política permite cambiar."
+        else:
+            blocked_text += "\n\n💡 [INTENCIÓN DEL USUARIO]: El usuario solicitó explícitamente MAYOR VARIEDAD al actualizar el plan. Ofrece combinaciones creativas, diferentes técnicas de cocción y perfiles de sabor novedosos."
     elif update_reason == 'dislike':
         blocked_text += "\n\n🚨 [INTENCIÓN DEL USUARIO]: El usuario solicitó actualizar el plan porque NO LE GUSTARON las opciones generadas. EVITA los perfiles de sabor de los platos anteriores y cambia radicalmente la estrategia."
     elif update_reason == 'time':
@@ -2562,6 +2677,8 @@ def get_deterministic_variety_prompt(history_text: str, form_data: dict = None, 
     # Frutas y vegetales ya tomaban ambos slots del mismo `_slots[i]`; los carbos eran la única
     # categoría fuera del contrato. tooltip-anchor: P2-SEEDER-PAIRS-GOALS
     _carb_slots = _rotate_pairs(chosen_carbs, days=_dc)
+    # [P1-CULTURE-STAPLE-SEED · 2026-09-05] la cocina del día manda sobre la rotación anti-repetición
+    _carb_slots = _culture_staple_seed(_carb_slots, form_data, filtered_carbs, carb_freq, used_carbs, _dc, _variety_country)
     if _carb_slots:
         carb_params = {f"carb_{i}": _carb_slots[i][0] for i in range(_dc)}
         carb_params.update({f"carb_{i}b": _carb_slots[i][1] for i in range(_dc)})
@@ -2692,6 +2809,13 @@ def get_deterministic_variety_prompt(history_text: str, form_data: dict = None, 
     # `form_data` es el parámetro homónimo de esta función. Knob apagado ⇒ 'DO' siempre ⇒ camino
     # byte-idéntico. [P1-COUNTRY-SYSTEM-F2 · 2026-08-17 (Task 9, j)] reusa `_variety_country`
     # (derivado UNA vez arriba, closure) — ya no re-deriva con un 2º import+call local.
+    # [P1-ARQ25-F3-HORIZON · 2026-09-02] Bloque 📐 de la política (vacío salvo en `enforce`).
+    if _bp_enforced:
+        try:
+            from horizon import policy_prompt_block as _policy_prompt_block_f3
+            blocked_text += _policy_prompt_block_f3(_bp_eff, _bp_slice, surface="planner_seeder", enforced=True)
+        except Exception as _pb_e:
+            logger.warning(f"[P1-ARQ25-F3-HORIZON] bloque de política omitido en el seeder: {_pb_e}")
     prompt = build_deterministic_variety_prompt(_dc, _variety_country).format(
         light_protein_block=_light_block,
         blocked_text=blocked_text,

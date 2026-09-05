@@ -408,7 +408,30 @@ def get_guest_chat_sessions(session_ids: list):
         logger.error(f"Error en get_guest_chat_sessions: {e}")
         return []
 
-def get_user_chat_sessions(user_id: str):
+# [P2-CHAT-SESSIONS-PAGING · 2026-09-03] Tope y página de la lista de Recientes. Antes
+# `LIMIT 60` fijo: el chat 61 dejaba de existir para el usuario sin aviso ni forma de
+# llegar a él. Ahora el caller pagina por `offset` y `count_user_chat_sessions` le dice
+# si queda más. Tooltip-anchor: P2-CHAT-SESSIONS-PAGING.
+CHAT_SESSIONS_PAGE_SIZE = 60
+
+
+def count_user_chat_sessions(user_id: str) -> int:
+    """Total de sesiones del usuario (para `has_more`). 0 si la DB falla: fail-quiet."""
+    if not connection_pool or not user_id:
+        return 0
+    try:
+        row = execute_sql_query(
+            "SELECT count(*) AS total FROM public.agent_sessions WHERE user_id = %s",
+            (user_id,),
+            fetch_one=True,
+        )
+        return int((row or {}).get("total") or 0)
+    except Exception as e:
+        logger.error(f"Error contando sesiones: {e}")
+        return 0
+
+
+def get_user_chat_sessions(user_id: str, limit: int = CHAT_SESSIONS_PAGE_SIZE, offset: int = 0):
     """Obtiene la lista de sesiones, ordenadas por actividad reciente."""
     if not connection_pool: return[]
 
@@ -420,8 +443,8 @@ def get_user_chat_sessions(user_id: str):
                 "SELECT id::text AS id, created_at::text AS created_at, "
                 "locked_at::text AS locked_at, user_id::text AS user_id "
                 "FROM public.agent_sessions WHERE user_id = %s "
-                "ORDER BY created_at DESC LIMIT 60",
-                (user_id,),
+                "ORDER BY created_at DESC LIMIT %s OFFSET %s",
+                (user_id, int(limit), int(offset)),
                 fetch_all=True,
             )
             return _process_and_sort_sessions(sessions or [])

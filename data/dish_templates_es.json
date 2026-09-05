@@ -1,115 +1,3023 @@
 {
   "_note": "[P1-COUNTRY-SYSTEM-F2 · T5 · 2026-08-17] Biblioteca curada de plantillas de platos españoles para el juez culinario (espejo de `dish_templates.json`, RD) — consumida por `_culinary_judge_rubric_for_country('ES')` (graph_orchestrator.py) SOLO cuando `MEALFIT_COUNTRY_SYSTEM` está encendido Y el país del plan es ES; con el knob apagado o país DO el juez sigue usando `dish_templates.json` byte-idéntico (ver `_dish_templates_path_for_country`). Mismo schema que el RD (name/slots/protein/base/technique/transform) MÁS `constituents` (nombres EXACTOS de `master_ingredients` post-altas T5 + gramos CRUDOS, regla del yield — leguminosas SECAS, carnes/mariscos/vegetales/frutas CRUDOS, curados en su estado de venta real) para anclar el golden fixture (tortilla española conserva su huevo) y servir de referencia estructurada a futuros consumidores. slots respetan el SSOT de constants.SLOT_INAPPROPRIATE_FOODS (arroz/paella/fideos como base NUNCA en desayuno ni cena; gazpacho/salmorejo son sopas FRÍAS, no 'sopón' — sí van en cena). protein usa el mismo canon que el RD (pollo/res/cerdo/pavo/pescado/camarones/atun/huevo/queso/legumbre/mixta/none).",
   "templates": [
-    {"name": "Tortilla española con patata y cebolla", "slots": ["desayuno", "almuerzo", "cena"], "protein": "huevo", "base": "patata", "technique": "sartén", "transform": false,
-     "constituents": [{"name": "Huevo", "grams": 150}, {"name": "Papa", "grams": 200}, {"name": "Cebolla", "grams": 60}, {"name": "Aceite de oliva", "grams": 20}]},
-    {"name": "Tortilla de patatas con jamón serrano", "slots": ["desayuno", "cena"], "protein": "huevo", "base": "patata", "technique": "sartén", "transform": false,
-     "constituents": [{"name": "Huevo", "grams": 150}, {"name": "Papa", "grams": 180}, {"name": "Jamón serrano", "grams": 40}, {"name": "Aceite de oliva", "grams": 15}]},
-    {"name": "Paella de mariscos con gambas y almejas", "slots": ["almuerzo"], "protein": "mixta", "base": "arroz", "technique": "guisado", "transform": false,
-     "constituents": [{"name": "Gambas", "grams": 150}, {"name": "Almejas", "grams": 120}, {"name": "Arroz blanco", "grams": 150}, {"name": "Ají morrón", "grams": 50}, {"name": "Azafrán", "grams": 1}]},
-    {"name": "Paella valenciana con pollo y conejo", "slots": ["almuerzo"], "protein": "mixta", "base": "arroz", "technique": "guisado", "transform": false,
-     "constituents": [{"name": "Pechuga de pollo", "grams": 150}, {"name": "Conejo", "grams": 120}, {"name": "Arroz blanco", "grams": 150}, {"name": "Habas", "grams": 60}, {"name": "Azafrán", "grams": 1}]},
-    {"name": "Fabada asturiana con judías blancas, morcilla y panceta", "slots": ["almuerzo"], "protein": "mixta", "base": "legumbre", "technique": "guisado", "transform": false,
-     "constituents": [{"name": "Judías blancas", "grams": 100}, {"name": "Morcilla", "grams": 80}, {"name": "Panceta ibérica", "grams": 60}, {"name": "Chorizo español", "grams": 50}]},
-    {"name": "Cocido madrileño con garbanzos y chorizo", "slots": ["almuerzo"], "protein": "mixta", "base": "legumbre", "technique": "guisado", "transform": false,
-     "constituents": [{"name": "Garbanzos", "grams": 100}, {"name": "Chorizo español", "grams": 60}, {"name": "Carne de res", "grams": 100}, {"name": "Puerro", "grams": 50}]},
-    {"name": "Lentejas estofadas con chorizo y verduras", "slots": ["almuerzo"], "protein": "mixta", "base": "legumbre", "technique": "guisado", "transform": false,
-     "constituents": [{"name": "Lentejas", "grams": 100}, {"name": "Chorizo español", "grams": 50}, {"name": "Cebolla", "grams": 50}, {"name": "Ajo", "grams": 10}]},
-    {"name": "Garbanzos con espinacas y bacalao", "slots": ["almuerzo"], "protein": "pescado", "base": "legumbre", "technique": "guisado", "transform": false,
-     "constituents": [{"name": "Garbanzos", "grams": 100}, {"name": "Bacalao", "grams": 120}, {"name": "Espinacas", "grams": 80}, {"name": "Ajo", "grams": 8}]},
-    {"name": "Pollo al ajillo con patatas panaderas", "slots": ["almuerzo"], "protein": "pollo", "base": "patata", "technique": "guisado", "transform": false,
-     "constituents": [{"name": "Muslo de pollo", "grams": 200}, {"name": "Papa", "grams": 200}, {"name": "Ajo", "grams": 15}, {"name": "Aceite de oliva", "grams": 15}]},
-    {"name": "Merluza a la plancha con espárragos trigueros", "slots": ["almuerzo", "cena"], "protein": "pescado", "base": "none", "technique": "plancha", "transform": false,
-     "constituents": [{"name": "Filete de pescado blanco", "grams": 180}, {"name": "Espárragos", "grams": 100}, {"name": "Aceite de oliva", "grams": 10}, {"name": "Ajo", "grams": 6}]},
-    {"name": "Albóndigas en salsa con puré de patata", "slots": ["almuerzo"], "protein": "res", "base": "patata", "technique": "guisado", "transform": true,
-     "constituents": [{"name": "Carne de res molida", "grams": 180}, {"name": "Papa", "grams": 200}, {"name": "Tomate", "grams": 100}, {"name": "Cebolla", "grams": 40}]},
-    {"name": "Arroz con pollo y pimiento", "slots": ["almuerzo"], "protein": "pollo", "base": "arroz", "technique": "guisado", "transform": false,
-     "constituents": [{"name": "Pechuga de pollo", "grams": 180}, {"name": "Arroz blanco", "grams": 150}, {"name": "Ají morrón", "grams": 60}, {"name": "Cebolla", "grams": 40}]},
-    {"name": "Gazpacho andaluz con tomate y pepino", "slots": ["almuerzo", "cena"], "protein": "none", "base": "none", "technique": "licuado frío", "transform": true,
-     "constituents": [{"name": "Tomate", "grams": 300}, {"name": "Ají morrón", "grams": 60}, {"name": "Cebolla", "grams": 30}, {"name": "Aceite de oliva", "grams": 20}, {"name": "Vinagre blanco", "grams": 10}]},
-    {"name": "Pisto manchego con huevo escalfado", "slots": ["almuerzo", "cena"], "protein": "huevo", "base": "none", "technique": "salteado", "transform": false,
-     "constituents": [{"name": "Huevo", "grams": 100}, {"name": "Calabacín", "grams": 150}, {"name": "Berenjena", "grams": 120}, {"name": "Tomate", "grams": 100}, {"name": "Ají morrón", "grams": 50}]},
-    {"name": "Judías blancas estofadas con panceta ibérica", "slots": ["almuerzo"], "protein": "mixta", "base": "legumbre", "technique": "guisado", "transform": false,
-     "constituents": [{"name": "Judías blancas", "grams": 110}, {"name": "Panceta ibérica", "grams": 70}, {"name": "Cebolla", "grams": 40}, {"name": "Ajo", "grams": 10}]},
-    {"name": "Potaje de garbanzos con acelgas", "slots": ["almuerzo"], "protein": "legumbre", "base": "legumbre", "technique": "guisado", "transform": false,
-     "constituents": [{"name": "Garbanzos", "grams": 110}, {"name": "Acelgas", "grams": 120}, {"name": "Papa", "grams": 100}, {"name": "Pimentón", "grams": 3}]},
-    {"name": "Ensaladilla rusa con atún en lata", "slots": ["almuerzo", "merienda"], "protein": "pescado", "base": "patata", "technique": "frío", "transform": true,
-     "constituents": [{"name": "Papa", "grams": 200}, {"name": "Huevo", "grams": 100}, {"name": "Sardinas en lata", "grams": 80}, {"name": "Aceitunas", "grams": 30}]},
-    {"name": "Boquerones en vinagre con ensalada verde", "slots": ["cena"], "protein": "pescado", "base": "none", "technique": "frío/marinado", "transform": false,
-     "constituents": [{"name": "Boquerones", "grams": 120}, {"name": "Vinagre blanco", "grams": 30}, {"name": "Ajo", "grams": 8}, {"name": "Espinacas", "grams": 60}]},
-    {"name": "Pulpo a la gallega con patata y pimentón", "slots": ["almuerzo"], "protein": "mixta", "base": "patata", "technique": "hervido", "transform": false,
-     "constituents": [{"name": "Pulpo", "grams": 200}, {"name": "Papa", "grams": 180}, {"name": "Pimentón", "grams": 5}, {"name": "Aceite de oliva", "grams": 15}]},
-    {"name": "Calamares a la plancha con limón", "slots": ["cena", "almuerzo"], "protein": "mixta", "base": "none", "technique": "plancha", "transform": false,
-     "constituents": [{"name": "Calamar", "grams": 180}, {"name": "Limón", "grams": 30}, {"name": "Ajo", "grams": 8}, {"name": "Aceite de oliva", "grams": 10}]},
-    {"name": "Revuelto de champiñones y ajos tiernos", "slots": ["desayuno", "cena"], "protein": "huevo", "base": "none", "technique": "revuelto", "transform": false,
-     "constituents": [{"name": "Huevo", "grams": 120}, {"name": "Champiñones", "grams": 100}, {"name": "Ajo", "grams": 10}, {"name": "Aceite de oliva", "grams": 10}]},
-    {"name": "Tostada con tomate, aceite de oliva y jamón serrano", "slots": ["desayuno"], "protein": "mixta", "base": "pan", "technique": "frío", "transform": false,
-     "constituents": [{"name": "Pan blanco familiar", "grams": 60}, {"name": "Tomate", "grams": 80}, {"name": "Jamón serrano", "grams": 40}, {"name": "Aceite de oliva", "grams": 10}]},
-    {"name": "Bocadillo de tortilla española", "slots": ["merienda", "desayuno"], "protein": "huevo", "base": "pan", "technique": "frío", "transform": true,
-     "constituents": [{"name": "Pan blanco familiar", "grams": 70}, {"name": "Huevo", "grams": 100}, {"name": "Papa", "grams": 100}]},
-    {"name": "Café con leche y tostada con aceite", "slots": ["desayuno"], "protein": "none", "base": "pan", "technique": "frío", "transform": false,
-     "constituents": [{"name": "Leche", "grams": 200}, {"name": "Pan blanco familiar", "grams": 50}, {"name": "Aceite de oliva", "grams": 8}]},
-    {"name": "Yogur con miel y almendra marcona", "slots": ["merienda", "desayuno"], "protein": "none", "base": "none", "technique": "frío", "transform": false,
-     "constituents": [{"name": "Yogurt griego sin azúcar", "grams": 150}, {"name": "Miel", "grams": 15}, {"name": "Almendra marcona", "grams": 20}]},
-    {"name": "Sopa de picadillo con jamón y huevo duro", "slots": ["cena"], "protein": "mixta", "base": "none", "technique": "hervido", "transform": false,
-     "constituents": [{"name": "Jamón serrano", "grams": 30}, {"name": "Huevo", "grams": 100}, {"name": "Puerro", "grams": 40}]},
-    {"name": "Sopa de fideos con jamón serrano", "slots": ["almuerzo"], "protein": "mixta", "base": "pasta", "technique": "hervido", "transform": false,
-     "constituents": [{"name": "Fideos", "grams": 60}, {"name": "Jamón serrano", "grams": 30}, {"name": "Puerro", "grams": 40}, {"name": "Ajo", "grams": 6}]},
-    {"name": "Croquetas de jamón ibérico caseras", "slots": ["merienda", "cena"], "protein": "mixta", "base": "harina", "technique": "masa horneada", "transform": true,
-     "constituents": [{"name": "Jamón ibérico", "grams": 80}, {"name": "Harina de trigo", "grams": 60}, {"name": "Leche", "grams": 150}, {"name": "Huevo", "grams": 50}]},
-    {"name": "Espárragos trigueros a la plancha con ajo", "slots": ["cena", "merienda"], "protein": "none", "base": "none", "technique": "plancha", "transform": false,
-     "constituents": [{"name": "Espárragos", "grams": 150}, {"name": "Ajo", "grams": 10}, {"name": "Aceite de oliva", "grams": 10}]},
-    {"name": "Ensalada de judías blancas con atún y cebolla", "slots": ["almuerzo", "cena"], "protein": "pescado", "base": "legumbre", "technique": "frío", "transform": false,
-     "constituents": [{"name": "Judías blancas", "grams": 120}, {"name": "Sardinas en lata", "grams": 80}, {"name": "Cebolla", "grams": 40}, {"name": "Aceite de oliva", "grams": 10}]},
-    {"name": "Berenjenas gratinadas con queso blanco", "slots": ["cena"], "protein": "queso", "base": "none", "technique": "horneado", "transform": true,
-     "constituents": [{"name": "Berenjena", "grams": 200}, {"name": "Queso blanco", "grams": 60}, {"name": "Tomate", "grams": 80}]},
-    {"name": "Salmorejo cordobés con jamón y huevo picado", "slots": ["cena", "almuerzo"], "protein": "huevo", "base": "pan", "technique": "licuado frío", "transform": true,
-     "constituents": [{"name": "Tomate", "grams": 300}, {"name": "Pan blanco familiar", "grams": 40}, {"name": "Jamón serrano", "grams": 30}, {"name": "Huevo", "grams": 50}, {"name": "Aceite de oliva", "grams": 15}]},
-    {"name": "Sardinas a la plancha con pimientos asados", "slots": ["almuerzo", "cena"], "protein": "pescado", "base": "none", "technique": "plancha", "transform": false,
-     "constituents": [{"name": "Sardinas en lata", "grams": 150}, {"name": "Ají morrón", "grams": 80}, {"name": "Aceite de oliva", "grams": 10}]},
-    {"name": "Habas con jamón serrano salteadas", "slots": ["almuerzo", "cena"], "protein": "mixta", "base": "legumbre", "technique": "salteado", "transform": false,
-     "constituents": [{"name": "Habas", "grams": 150}, {"name": "Jamón serrano", "grams": 40}, {"name": "Ajo", "grams": 8}, {"name": "Aceite de oliva", "grams": 10}]},
-    {"name": "Pisto con huevo frito", "slots": ["cena"], "protein": "huevo", "base": "none", "technique": "salteado", "transform": false,
-     "constituents": [{"name": "Huevo", "grams": 100}, {"name": "Calabacín", "grams": 120}, {"name": "Berenjena", "grams": 100}, {"name": "Tomate", "grams": 100}]},
-    {"name": "Menestra de verduras con jamón serrano", "slots": ["almuerzo"], "protein": "mixta", "base": "none", "technique": "salteado", "transform": false,
-     "constituents": [{"name": "Vainitas", "grams": 100}, {"name": "Alcachofa", "grams": 100}, {"name": "Espárragos", "grams": 80}, {"name": "Jamón serrano", "grams": 30}]},
-    {"name": "Coliflor gratinada con queso blanco", "slots": ["cena"], "protein": "queso", "base": "none", "technique": "horneado", "transform": true,
-     "constituents": [{"name": "Coliflor", "grams": 220}, {"name": "Queso blanco", "grams": 60}, {"name": "Leche", "grams": 80}]},
-    {"name": "Alcachofas salteadas con jamón serrano", "slots": ["almuerzo", "cena"], "protein": "mixta", "base": "none", "technique": "salteado", "transform": false,
-     "constituents": [{"name": "Alcachofa", "grams": 180}, {"name": "Jamón serrano", "grams": 35}, {"name": "Ajo", "grams": 8}, {"name": "Aceite de oliva", "grams": 10}]},
-    {"name": "Pan con tomate y queso manchego", "slots": ["merienda", "desayuno"], "protein": "queso", "base": "pan", "technique": "frío", "transform": false,
-     "constituents": [{"name": "Pan blanco familiar", "grams": 60}, {"name": "Tomate", "grams": 70}, {"name": "Queso blanco", "grams": 40}]},
-    {"name": "Higos con jamón serrano", "slots": ["merienda"], "protein": "mixta", "base": "none", "technique": "frío", "transform": false,
-     "constituents": [{"name": "Higo", "grams": 100}, {"name": "Jamón serrano", "grams": 30}]},
-    {"name": "Membrillo con queso blanco", "slots": ["merienda"], "protein": "queso", "base": "none", "technique": "frío", "transform": false,
-     "constituents": [{"name": "Membrillo dulce", "grams": 50}, {"name": "Queso blanco", "grams": 50}]},
-    {"name": "Ensalada de espinacas, uva y almendra marcona", "slots": ["almuerzo", "cena"], "protein": "none", "base": "none", "technique": "frío", "transform": false,
-     "constituents": [{"name": "Espinacas", "grams": 100}, {"name": "Uva", "grams": 80}, {"name": "Almendra marcona", "grams": 20}, {"name": "Aceite de oliva", "grams": 10}]},
-    {"name": "Merluza en salsa verde con almejas", "slots": ["almuerzo"], "protein": "mixta", "base": "none", "technique": "guisado", "transform": false,
-     "constituents": [{"name": "Filete de pescado blanco", "grams": 180}, {"name": "Almejas", "grams": 100}, {"name": "Ajo", "grams": 10}, {"name": "Perejil", "grams": 5}]},
-    {"name": "Chuletas de cerdo con pimientos del piquillo", "slots": ["almuerzo"], "protein": "cerdo", "base": "none", "technique": "plancha", "transform": false,
-     "constituents": [{"name": "Cerdo", "grams": 200}, {"name": "Ají morrón", "grams": 100}, {"name": "Ajo", "grams": 8}]},
-    {"name": "Conejo al ajillo con patatas", "slots": ["almuerzo"], "protein": "mixta", "base": "patata", "technique": "guisado", "transform": false,
-     "constituents": [{"name": "Conejo", "grams": 220}, {"name": "Papa", "grams": 180}, {"name": "Ajo", "grams": 15}, {"name": "Laurel", "grams": 1}]},
-    {"name": "Cordero asado con patatas panaderas", "slots": ["almuerzo"], "protein": "mixta", "base": "patata", "technique": "horneado", "transform": false,
-     "constituents": [{"name": "Cordero", "grams": 220}, {"name": "Papa", "grams": 200}, {"name": "Cebolla", "grams": 50}, {"name": "Ajo", "grams": 10}]},
-    {"name": "Empanada gallega de sardinas", "slots": ["merienda", "almuerzo"], "protein": "pescado", "base": "harina", "technique": "masa horneada", "transform": true,
-     "constituents": [{"name": "Harina de trigo", "grams": 120}, {"name": "Sardinas en lata", "grams": 100}, {"name": "Cebolla", "grams": 60}, {"name": "Ají morrón", "grams": 50}]},
-    {"name": "Turrón con almendra marcona (merienda dulce)", "slots": ["merienda"], "protein": "none", "base": "none", "technique": "frío", "transform": false,
-     "constituents": [{"name": "Turrón", "grams": 30}, {"name": "Almendra marcona", "grams": 15}]},
-    {"name": "Champiñones al ajillo con perejil", "slots": ["cena", "merienda"], "protein": "none", "base": "none", "technique": "salteado", "transform": false,
-     "constituents": [{"name": "Champiñones", "grams": 180}, {"name": "Ajo", "grams": 12}, {"name": "Perejil", "grams": 5}, {"name": "Aceite de oliva", "grams": 10}]},
-    {"name": "Coca de vegetales con anchoas", "slots": ["merienda", "cena"], "protein": "mixta", "base": "harina", "technique": "masa horneada", "transform": true,
-     "constituents": [{"name": "Harina de trigo", "grams": 100}, {"name": "Anchoas", "grams": 40}, {"name": "Ají morrón", "grams": 60}, {"name": "Cebolla", "grams": 40}]},
-    {"name": "Vieiras a la plancha con puerro", "slots": ["cena", "almuerzo"], "protein": "mixta", "base": "none", "technique": "plancha", "transform": false,
-     "constituents": [{"name": "Vieira", "grams": 150}, {"name": "Puerro", "grams": 60}, {"name": "Aceite de oliva", "grams": 10}]},
-    {"name": "Percebes al vapor con limón", "slots": ["almuerzo", "merienda"], "protein": "mixta", "base": "none", "technique": "hervido", "transform": false,
-     "constituents": [{"name": "Percebes", "grams": 150}, {"name": "Limón", "grams": 20}, {"name": "Sal", "grams": 3}]},
-    {"name": "Chistorra a la plancha con pimientos", "slots": ["almuerzo", "cena"], "protein": "mixta", "base": "none", "technique": "plancha", "transform": false,
-     "constituents": [{"name": "Chistorra", "grams": 120}, {"name": "Ají morrón", "grams": 80}, {"name": "Cebolla", "grams": 40}]},
-    {"name": "Butifarra con alubias blancas", "slots": ["almuerzo"], "protein": "mixta", "base": "legumbre", "technique": "guisado", "transform": false,
-     "constituents": [{"name": "Butifarra", "grams": 150}, {"name": "Judías blancas", "grams": 100}, {"name": "Cebolla", "grams": 40}]},
-    {"name": "Sobrasada con pan y miel", "slots": ["desayuno", "merienda"], "protein": "mixta", "base": "pan", "technique": "frío", "transform": false,
-     "constituents": [{"name": "Sobrasada", "grams": 40}, {"name": "Pan blanco familiar", "grams": 60}, {"name": "Miel", "grams": 10}]}
+    {
+      "name": "Tortilla española con patata y cebolla",
+      "slots": [
+        "desayuno",
+        "almuerzo",
+        "cena"
+      ],
+      "protein": "huevo",
+      "base": "patata",
+      "technique": "sartén",
+      "transform": false,
+      "constituents": [
+        {
+          "name": "Huevo",
+          "grams": 150
+        },
+        {
+          "name": "Papa",
+          "grams": 200
+        },
+        {
+          "name": "Cebolla",
+          "grams": 60
+        },
+        {
+          "name": "Aceite de oliva",
+          "grams": 20
+        }
+      ]
+    },
+    {
+      "name": "Tortilla de patatas con jamón serrano",
+      "slots": [
+        "desayuno",
+        "cena"
+      ],
+      "protein": "huevo",
+      "base": "patata",
+      "technique": "sartén",
+      "transform": false,
+      "constituents": [
+        {
+          "name": "Huevo",
+          "grams": 150
+        },
+        {
+          "name": "Papa",
+          "grams": 180
+        },
+        {
+          "name": "Jamón serrano",
+          "grams": 40
+        },
+        {
+          "name": "Aceite de oliva",
+          "grams": 15
+        }
+      ]
+    },
+    {
+      "name": "Paella de mariscos con gambas y almejas",
+      "slots": [
+        "almuerzo"
+      ],
+      "protein": "mixta",
+      "base": "arroz",
+      "technique": "guisado",
+      "transform": false,
+      "constituents": [
+        {
+          "name": "Gambas",
+          "grams": 150
+        },
+        {
+          "name": "Almejas",
+          "grams": 120
+        },
+        {
+          "name": "Arroz blanco",
+          "grams": 150
+        },
+        {
+          "name": "Ají morrón",
+          "grams": 50
+        },
+        {
+          "name": "Azafrán",
+          "grams": 1
+        }
+      ]
+    },
+    {
+      "name": "Paella valenciana con pollo y conejo",
+      "slots": [
+        "almuerzo"
+      ],
+      "protein": "mixta",
+      "base": "arroz",
+      "technique": "guisado",
+      "transform": false,
+      "constituents": [
+        {
+          "name": "Pechuga de pollo",
+          "grams": 150
+        },
+        {
+          "name": "Conejo",
+          "grams": 120
+        },
+        {
+          "name": "Arroz blanco",
+          "grams": 150
+        },
+        {
+          "name": "Habas",
+          "grams": 60
+        },
+        {
+          "name": "Azafrán",
+          "grams": 1
+        }
+      ]
+    },
+    {
+      "name": "Fabada asturiana con judías blancas, morcilla y panceta",
+      "slots": [
+        "almuerzo"
+      ],
+      "protein": "mixta",
+      "base": "legumbre",
+      "technique": "guisado",
+      "transform": false,
+      "constituents": [
+        {
+          "name": "Judías blancas",
+          "grams": 100
+        },
+        {
+          "name": "Morcilla",
+          "grams": 50.0
+        },
+        {
+          "name": "Panceta ibérica",
+          "grams": 40.0
+        },
+        {
+          "name": "Chorizo español",
+          "grams": 40.0
+        }
+      ]
+    },
+    {
+      "name": "Cocido madrileño con garbanzos y chorizo",
+      "slots": [
+        "almuerzo"
+      ],
+      "protein": "mixta",
+      "base": "legumbre",
+      "technique": "guisado",
+      "transform": false,
+      "constituents": [
+        {
+          "name": "Garbanzos",
+          "grams": 100
+        },
+        {
+          "name": "Chorizo español",
+          "grams": 60
+        },
+        {
+          "name": "Carne de res",
+          "grams": 100
+        },
+        {
+          "name": "Puerro",
+          "grams": 50
+        }
+      ]
+    },
+    {
+      "name": "Lentejas estofadas con chorizo y verduras",
+      "slots": [
+        "almuerzo"
+      ],
+      "protein": "mixta",
+      "base": "legumbre",
+      "technique": "guisado",
+      "transform": false,
+      "constituents": [
+        {
+          "name": "Lentejas",
+          "grams": 100
+        },
+        {
+          "name": "Chorizo español",
+          "grams": 50
+        },
+        {
+          "name": "Cebolla",
+          "grams": 50
+        },
+        {
+          "name": "Ajo",
+          "grams": 10
+        }
+      ]
+    },
+    {
+      "name": "Garbanzos con espinacas y bacalao",
+      "slots": [
+        "almuerzo"
+      ],
+      "protein": "pescado",
+      "base": "legumbre",
+      "technique": "guisado",
+      "transform": false,
+      "constituents": [
+        {
+          "name": "Garbanzos",
+          "grams": 100
+        },
+        {
+          "name": "Bacalao",
+          "grams": 120
+        },
+        {
+          "name": "Espinacas",
+          "grams": 80
+        },
+        {
+          "name": "Ajo",
+          "grams": 8
+        }
+      ]
+    },
+    {
+      "name": "Pollo al ajillo con patatas panaderas",
+      "slots": [
+        "almuerzo"
+      ],
+      "protein": "pollo",
+      "base": "patata",
+      "technique": "guisado",
+      "transform": false,
+      "constituents": [
+        {
+          "name": "Muslo de pollo",
+          "grams": 200
+        },
+        {
+          "name": "Papa",
+          "grams": 200
+        },
+        {
+          "name": "Ajo",
+          "grams": 15
+        },
+        {
+          "name": "Aceite de oliva",
+          "grams": 15
+        }
+      ]
+    },
+    {
+      "name": "Merluza a la plancha con espárragos trigueros",
+      "slots": [
+        "almuerzo",
+        "cena"
+      ],
+      "protein": "pescado",
+      "base": "none",
+      "technique": "plancha",
+      "transform": false,
+      "constituents": [
+        {
+          "name": "Filete de pescado blanco",
+          "grams": 180
+        },
+        {
+          "name": "Espárragos",
+          "grams": 100
+        },
+        {
+          "name": "Aceite de oliva",
+          "grams": 10
+        },
+        {
+          "name": "Ajo",
+          "grams": 6
+        }
+      ]
+    },
+    {
+      "name": "Albóndigas en salsa con puré de patata",
+      "slots": [
+        "almuerzo"
+      ],
+      "protein": "res",
+      "base": "patata",
+      "technique": "guisado",
+      "transform": true,
+      "constituents": [
+        {
+          "name": "Carne de res molida",
+          "grams": 180
+        },
+        {
+          "name": "Papa",
+          "grams": 200
+        },
+        {
+          "name": "Tomate",
+          "grams": 100
+        },
+        {
+          "name": "Cebolla",
+          "grams": 40
+        }
+      ]
+    },
+    {
+      "name": "Arroz con pollo y pimiento",
+      "slots": [
+        "almuerzo"
+      ],
+      "protein": "pollo",
+      "base": "arroz",
+      "technique": "guisado",
+      "transform": false,
+      "constituents": [
+        {
+          "name": "Pechuga de pollo",
+          "grams": 180
+        },
+        {
+          "name": "Arroz blanco",
+          "grams": 150
+        },
+        {
+          "name": "Ají morrón",
+          "grams": 60
+        },
+        {
+          "name": "Cebolla",
+          "grams": 40
+        }
+      ]
+    },
+    {
+      "name": "Gazpacho andaluz con tomate y pepino",
+      "slots": [
+        "almuerzo",
+        "cena"
+      ],
+      "protein": "none",
+      "base": "none",
+      "technique": "licuado frío",
+      "transform": true,
+      "constituents": [
+        {
+          "name": "Tomate",
+          "grams": 300
+        },
+        {
+          "name": "Ají morrón",
+          "grams": 60
+        },
+        {
+          "name": "Cebolla",
+          "grams": 30
+        },
+        {
+          "name": "Aceite de oliva",
+          "grams": 20
+        },
+        {
+          "name": "Vinagre blanco",
+          "grams": 10
+        }
+      ]
+    },
+    {
+      "name": "Pisto manchego con huevo escalfado",
+      "slots": [
+        "almuerzo",
+        "cena"
+      ],
+      "protein": "huevo",
+      "base": "none",
+      "technique": "salteado",
+      "transform": false,
+      "constituents": [
+        {
+          "name": "Huevo",
+          "grams": 100
+        },
+        {
+          "name": "Calabacín",
+          "grams": 150
+        },
+        {
+          "name": "Berenjena",
+          "grams": 120
+        },
+        {
+          "name": "Tomate",
+          "grams": 100
+        },
+        {
+          "name": "Ají morrón",
+          "grams": 50
+        }
+      ]
+    },
+    {
+      "name": "Judías blancas estofadas con panceta ibérica",
+      "slots": [
+        "almuerzo"
+      ],
+      "protein": "mixta",
+      "base": "legumbre",
+      "technique": "guisado",
+      "transform": false,
+      "constituents": [
+        {
+          "name": "Judías blancas",
+          "grams": 110
+        },
+        {
+          "name": "Panceta ibérica",
+          "grams": 70
+        },
+        {
+          "name": "Cebolla",
+          "grams": 40
+        },
+        {
+          "name": "Ajo",
+          "grams": 10
+        }
+      ]
+    },
+    {
+      "name": "Potaje de garbanzos con acelgas",
+      "slots": [
+        "almuerzo"
+      ],
+      "protein": "legumbre",
+      "base": "legumbre",
+      "technique": "guisado",
+      "transform": false,
+      "constituents": [
+        {
+          "name": "Garbanzos",
+          "grams": 110
+        },
+        {
+          "name": "Acelgas",
+          "grams": 120
+        },
+        {
+          "name": "Papa",
+          "grams": 100
+        },
+        {
+          "name": "Pimentón",
+          "grams": 3
+        }
+      ]
+    },
+    {
+      "name": "Ensaladilla rusa con atún en lata",
+      "slots": [
+        "almuerzo"
+      ],
+      "protein": "pescado",
+      "base": "patata",
+      "technique": "frío",
+      "transform": true,
+      "constituents": [
+        {
+          "name": "Papa",
+          "grams": 200
+        },
+        {
+          "name": "Huevo",
+          "grams": 100
+        },
+        {
+          "name": "Atún en agua",
+          "grams": 80.0
+        },
+        {
+          "name": "Aceitunas",
+          "grams": 30
+        }
+      ]
+    },
+    {
+      "name": "Boquerones en vinagre con ensalada verde",
+      "slots": [
+        "merienda"
+      ],
+      "protein": "pescado",
+      "base": "none",
+      "technique": "frío/marinado",
+      "transform": false,
+      "constituents": [
+        {
+          "name": "Boquerones",
+          "grams": 120
+        },
+        {
+          "name": "Vinagre blanco",
+          "grams": 30
+        },
+        {
+          "name": "Ajo",
+          "grams": 8
+        },
+        {
+          "name": "Espinacas",
+          "grams": 60
+        }
+      ]
+    },
+    {
+      "name": "Pulpo a la gallega con patata y pimentón",
+      "slots": [
+        "almuerzo"
+      ],
+      "protein": "mixta",
+      "base": "patata",
+      "technique": "hervido",
+      "transform": false,
+      "constituents": [
+        {
+          "name": "Pulpo",
+          "grams": 200
+        },
+        {
+          "name": "Papa",
+          "grams": 180
+        },
+        {
+          "name": "Pimentón",
+          "grams": 5
+        },
+        {
+          "name": "Aceite de oliva",
+          "grams": 15
+        }
+      ]
+    },
+    {
+      "name": "Calamares a la plancha con limón",
+      "slots": [
+        "cena",
+        "almuerzo"
+      ],
+      "protein": "mixta",
+      "base": "none",
+      "technique": "plancha",
+      "transform": false,
+      "constituents": [
+        {
+          "name": "Calamar",
+          "grams": 180
+        },
+        {
+          "name": "Limón",
+          "grams": 30
+        },
+        {
+          "name": "Ajo",
+          "grams": 8
+        },
+        {
+          "name": "Aceite de oliva",
+          "grams": 10
+        }
+      ]
+    },
+    {
+      "name": "Revuelto de champiñones y ajos tiernos",
+      "slots": [
+        "desayuno",
+        "cena"
+      ],
+      "protein": "huevo",
+      "base": "none",
+      "technique": "revuelto",
+      "transform": false,
+      "constituents": [
+        {
+          "name": "Huevo",
+          "grams": 120
+        },
+        {
+          "name": "Champiñones",
+          "grams": 100
+        },
+        {
+          "name": "Ajo",
+          "grams": 10
+        },
+        {
+          "name": "Aceite de oliva",
+          "grams": 10
+        }
+      ]
+    },
+    {
+      "name": "Tostada con tomate, aceite de oliva y jamón serrano",
+      "slots": [
+        "desayuno"
+      ],
+      "protein": "mixta",
+      "base": "pan",
+      "technique": "frío",
+      "transform": false,
+      "constituents": [
+        {
+          "name": "Pan blanco familiar",
+          "grams": 60
+        },
+        {
+          "name": "Tomate",
+          "grams": 80
+        },
+        {
+          "name": "Jamón serrano",
+          "grams": 40
+        },
+        {
+          "name": "Aceite de oliva",
+          "grams": 10
+        }
+      ]
+    },
+    {
+      "name": "Bocadillo de tortilla española",
+      "slots": [
+        "merienda",
+        "desayuno"
+      ],
+      "protein": "huevo",
+      "base": "pan",
+      "technique": "frío",
+      "transform": true,
+      "constituents": [
+        {
+          "name": "Pan blanco familiar",
+          "grams": 70
+        },
+        {
+          "name": "Huevo",
+          "grams": 100
+        },
+        {
+          "name": "Papa",
+          "grams": 100
+        }
+      ]
+    },
+    {
+      "name": "Café con leche y tostada con aceite",
+      "slots": [
+        "desayuno"
+      ],
+      "protein": "none",
+      "base": "pan",
+      "technique": "frío",
+      "transform": false,
+      "constituents": [
+        {
+          "name": "Leche",
+          "grams": 200
+        },
+        {
+          "name": "Pan blanco familiar",
+          "grams": 50
+        },
+        {
+          "name": "Aceite de oliva",
+          "grams": 8
+        }
+      ]
+    },
+    {
+      "name": "Yogur con miel y almendra marcona",
+      "slots": [
+        "merienda",
+        "desayuno"
+      ],
+      "protein": "none",
+      "base": "none",
+      "technique": "frío",
+      "transform": false,
+      "constituents": [
+        {
+          "name": "Yogurt griego sin azúcar",
+          "grams": 150
+        },
+        {
+          "name": "Miel",
+          "grams": 15
+        },
+        {
+          "name": "Almendra marcona",
+          "grams": 20
+        }
+      ]
+    },
+    {
+      "name": "Sopa de picadillo con jamón y huevo duro",
+      "slots": [
+        "cena"
+      ],
+      "protein": "mixta",
+      "base": "none",
+      "technique": "hervido",
+      "transform": false,
+      "constituents": [
+        {
+          "name": "Jamón serrano",
+          "grams": 30
+        },
+        {
+          "name": "Huevo",
+          "grams": 100
+        },
+        {
+          "name": "Puerro",
+          "grams": 40
+        }
+      ]
+    },
+    {
+      "name": "Sopa de fideos con jamón serrano",
+      "slots": [
+        "almuerzo"
+      ],
+      "protein": "mixta",
+      "base": "pasta",
+      "technique": "hervido",
+      "transform": false,
+      "constituents": [
+        {
+          "name": "Fideos",
+          "grams": 60
+        },
+        {
+          "name": "Jamón serrano",
+          "grams": 30
+        },
+        {
+          "name": "Puerro",
+          "grams": 40
+        },
+        {
+          "name": "Ajo",
+          "grams": 6
+        }
+      ]
+    },
+    {
+      "name": "Croquetas de jamón ibérico caseras",
+      "slots": [
+        "cena"
+      ],
+      "protein": "mixta",
+      "base": "harina",
+      "technique": "masa horneada",
+      "transform": true,
+      "constituents": [
+        {
+          "name": "Jamón ibérico",
+          "grams": 80
+        },
+        {
+          "name": "Harina de trigo",
+          "grams": 60
+        },
+        {
+          "name": "Leche",
+          "grams": 150
+        },
+        {
+          "name": "Huevo",
+          "grams": 50
+        }
+      ]
+    },
+    {
+      "name": "Espárragos trigueros a la plancha con ajo",
+      "slots": [
+        "merienda"
+      ],
+      "protein": "none",
+      "base": "none",
+      "technique": "plancha",
+      "transform": false,
+      "constituents": [
+        {
+          "name": "Espárragos",
+          "grams": 150
+        },
+        {
+          "name": "Ajo",
+          "grams": 10
+        },
+        {
+          "name": "Aceite de oliva",
+          "grams": 10
+        }
+      ]
+    },
+    {
+      "name": "Ensalada de judías blancas con atún y cebolla",
+      "slots": [
+        "almuerzo",
+        "cena"
+      ],
+      "protein": "pescado",
+      "base": "legumbre",
+      "technique": "frío",
+      "transform": false,
+      "constituents": [
+        {
+          "name": "Judías blancas",
+          "grams": 120
+        },
+        {
+          "name": "Atún en agua",
+          "grams": 80.0
+        },
+        {
+          "name": "Cebolla",
+          "grams": 40
+        },
+        {
+          "name": "Aceite de oliva",
+          "grams": 10
+        }
+      ]
+    },
+    {
+      "name": "Berenjenas gratinadas con queso blanco",
+      "slots": [
+        "cena"
+      ],
+      "protein": "queso",
+      "base": "none",
+      "technique": "horneado",
+      "transform": true,
+      "constituents": [
+        {
+          "name": "Berenjena",
+          "grams": 200
+        },
+        {
+          "name": "Queso blanco",
+          "grams": 60
+        },
+        {
+          "name": "Tomate",
+          "grams": 80
+        }
+      ]
+    },
+    {
+      "name": "Salmorejo cordobés con jamón y huevo picado",
+      "slots": [
+        "cena",
+        "almuerzo"
+      ],
+      "protein": "huevo",
+      "base": "pan",
+      "technique": "licuado frío",
+      "transform": true,
+      "constituents": [
+        {
+          "name": "Tomate",
+          "grams": 300
+        },
+        {
+          "name": "Pan blanco familiar",
+          "grams": 40
+        },
+        {
+          "name": "Jamón serrano",
+          "grams": 30
+        },
+        {
+          "name": "Huevo",
+          "grams": 50
+        },
+        {
+          "name": "Aceite de oliva",
+          "grams": 15
+        }
+      ]
+    },
+    {
+      "name": "Sardinas a la plancha con pimientos asados",
+      "slots": [
+        "almuerzo",
+        "cena"
+      ],
+      "protein": "pescado",
+      "base": "none",
+      "technique": "plancha",
+      "transform": false,
+      "constituents": [
+        {
+          "name": "Sardinas en lata",
+          "grams": 150
+        },
+        {
+          "name": "Ají morrón",
+          "grams": 80
+        },
+        {
+          "name": "Aceite de oliva",
+          "grams": 10
+        }
+      ]
+    },
+    {
+      "name": "Habas con jamón serrano salteadas",
+      "slots": [
+        "almuerzo",
+        "cena"
+      ],
+      "protein": "mixta",
+      "base": "legumbre",
+      "technique": "salteado",
+      "transform": false,
+      "constituents": [
+        {
+          "name": "Habas",
+          "grams": 150
+        },
+        {
+          "name": "Jamón serrano",
+          "grams": 40
+        },
+        {
+          "name": "Ajo",
+          "grams": 8
+        },
+        {
+          "name": "Aceite de oliva",
+          "grams": 10
+        }
+      ]
+    },
+    {
+      "name": "Pisto con huevo frito",
+      "slots": [
+        "cena"
+      ],
+      "protein": "huevo",
+      "base": "none",
+      "technique": "salteado",
+      "transform": false,
+      "constituents": [
+        {
+          "name": "Huevo",
+          "grams": 100
+        },
+        {
+          "name": "Calabacín",
+          "grams": 120
+        },
+        {
+          "name": "Berenjena",
+          "grams": 100
+        },
+        {
+          "name": "Tomate",
+          "grams": 100
+        }
+      ]
+    },
+    {
+      "name": "Menestra de verduras con jamón serrano",
+      "slots": [
+        "almuerzo"
+      ],
+      "protein": "mixta",
+      "base": "none",
+      "technique": "salteado",
+      "transform": false,
+      "constituents": [
+        {
+          "name": "Vainitas",
+          "grams": 100
+        },
+        {
+          "name": "Alcachofa",
+          "grams": 100
+        },
+        {
+          "name": "Espárragos",
+          "grams": 80
+        },
+        {
+          "name": "Jamón serrano",
+          "grams": 30
+        },
+        {
+          "name": "Papa",
+          "grams": 120.0
+        }
+      ]
+    },
+    {
+      "name": "Coliflor gratinada con queso blanco",
+      "slots": [
+        "cena"
+      ],
+      "protein": "queso",
+      "base": "none",
+      "technique": "horneado",
+      "transform": true,
+      "constituents": [
+        {
+          "name": "Coliflor",
+          "grams": 220
+        },
+        {
+          "name": "Queso blanco",
+          "grams": 60
+        },
+        {
+          "name": "Leche",
+          "grams": 80
+        }
+      ]
+    },
+    {
+      "name": "Alcachofas salteadas con jamón serrano",
+      "slots": [
+        "almuerzo",
+        "cena"
+      ],
+      "protein": "mixta",
+      "base": "none",
+      "technique": "salteado",
+      "transform": false,
+      "constituents": [
+        {
+          "name": "Alcachofa",
+          "grams": 180
+        },
+        {
+          "name": "Jamón serrano",
+          "grams": 35
+        },
+        {
+          "name": "Ajo",
+          "grams": 8
+        },
+        {
+          "name": "Aceite de oliva",
+          "grams": 10
+        }
+      ]
+    },
+    {
+      "name": "Pan con tomate y queso manchego",
+      "slots": [
+        "merienda",
+        "desayuno"
+      ],
+      "protein": "queso",
+      "base": "pan",
+      "technique": "frío",
+      "transform": false,
+      "constituents": [
+        {
+          "name": "Pan blanco familiar",
+          "grams": 60
+        },
+        {
+          "name": "Tomate",
+          "grams": 70
+        },
+        {
+          "name": "Queso blanco",
+          "grams": 40
+        }
+      ]
+    },
+    {
+      "name": "Higos con jamón serrano",
+      "slots": [
+        "merienda"
+      ],
+      "protein": "mixta",
+      "base": "none",
+      "technique": "frío",
+      "transform": false,
+      "constituents": [
+        {
+          "name": "Higo",
+          "grams": 100
+        },
+        {
+          "name": "Jamón serrano",
+          "grams": 30
+        }
+      ]
+    },
+    {
+      "name": "Membrillo con queso blanco",
+      "slots": [
+        "merienda"
+      ],
+      "protein": "queso",
+      "base": "none",
+      "technique": "frío",
+      "transform": false,
+      "constituents": [
+        {
+          "name": "Membrillo dulce",
+          "grams": 50
+        },
+        {
+          "name": "Queso blanco",
+          "grams": 50
+        }
+      ]
+    },
+    {
+      "name": "Ensalada de espinacas, uva y almendra marcona",
+      "slots": [
+        "almuerzo",
+        "cena"
+      ],
+      "protein": "none",
+      "base": "none",
+      "technique": "frío",
+      "transform": false,
+      "constituents": [
+        {
+          "name": "Espinacas",
+          "grams": 100
+        },
+        {
+          "name": "Uva",
+          "grams": 80
+        },
+        {
+          "name": "Almendra marcona",
+          "grams": 20
+        },
+        {
+          "name": "Aceite de oliva",
+          "grams": 10
+        }
+      ]
+    },
+    {
+      "name": "Merluza en salsa verde con almejas",
+      "slots": [
+        "almuerzo"
+      ],
+      "protein": "mixta",
+      "base": "none",
+      "technique": "guisado",
+      "transform": false,
+      "constituents": [
+        {
+          "name": "Filete de pescado blanco",
+          "grams": 180
+        },
+        {
+          "name": "Almejas",
+          "grams": 100
+        },
+        {
+          "name": "Ajo",
+          "grams": 10
+        },
+        {
+          "name": "Perejil",
+          "grams": 5
+        }
+      ]
+    },
+    {
+      "name": "Chuletas de cerdo con pimientos del piquillo",
+      "slots": [
+        "almuerzo"
+      ],
+      "protein": "cerdo",
+      "base": "none",
+      "technique": "plancha",
+      "transform": false,
+      "constituents": [
+        {
+          "name": "Cerdo",
+          "grams": 200
+        },
+        {
+          "name": "Ají morrón",
+          "grams": 100
+        },
+        {
+          "name": "Ajo",
+          "grams": 8
+        }
+      ]
+    },
+    {
+      "name": "Conejo al ajillo con patatas",
+      "slots": [
+        "almuerzo"
+      ],
+      "protein": "mixta",
+      "base": "patata",
+      "technique": "guisado",
+      "transform": false,
+      "constituents": [
+        {
+          "name": "Conejo",
+          "grams": 220
+        },
+        {
+          "name": "Papa",
+          "grams": 180
+        },
+        {
+          "name": "Ajo",
+          "grams": 15
+        },
+        {
+          "name": "Laurel",
+          "grams": 1
+        }
+      ]
+    },
+    {
+      "name": "Cordero asado con patatas panaderas",
+      "slots": [
+        "almuerzo"
+      ],
+      "protein": "mixta",
+      "base": "patata",
+      "technique": "horneado",
+      "transform": false,
+      "constituents": [
+        {
+          "name": "Cordero",
+          "grams": 220
+        },
+        {
+          "name": "Papa",
+          "grams": 200
+        },
+        {
+          "name": "Cebolla",
+          "grams": 50
+        },
+        {
+          "name": "Ajo",
+          "grams": 10
+        }
+      ]
+    },
+    {
+      "name": "Empanada gallega de sardinas",
+      "slots": [
+        "almuerzo"
+      ],
+      "protein": "pescado",
+      "base": "harina",
+      "technique": "masa horneada",
+      "transform": true,
+      "constituents": [
+        {
+          "name": "Harina de trigo",
+          "grams": 120
+        },
+        {
+          "name": "Sardinas en lata",
+          "grams": 100
+        },
+        {
+          "name": "Cebolla",
+          "grams": 60
+        },
+        {
+          "name": "Ají morrón",
+          "grams": 50
+        }
+      ]
+    },
+    {
+      "name": "Turrón con almendra marcona (merienda dulce)",
+      "slots": [
+        "merienda"
+      ],
+      "protein": "none",
+      "base": "none",
+      "technique": "frío",
+      "transform": false,
+      "constituents": [
+        {
+          "name": "Turrón",
+          "grams": 30
+        },
+        {
+          "name": "Almendra marcona",
+          "grams": 15
+        }
+      ]
+    },
+    {
+      "name": "Champiñones al ajillo con perejil",
+      "slots": [
+        "merienda"
+      ],
+      "protein": "none",
+      "base": "none",
+      "technique": "salteado",
+      "transform": false,
+      "constituents": [
+        {
+          "name": "Champiñones",
+          "grams": 180
+        },
+        {
+          "name": "Ajo",
+          "grams": 12
+        },
+        {
+          "name": "Perejil",
+          "grams": 5
+        },
+        {
+          "name": "Aceite de oliva",
+          "grams": 10
+        }
+      ]
+    },
+    {
+      "name": "Coca de vegetales con anchoas",
+      "slots": [
+        "cena"
+      ],
+      "protein": "mixta",
+      "base": "harina",
+      "technique": "masa horneada",
+      "transform": true,
+      "constituents": [
+        {
+          "name": "Harina de trigo",
+          "grams": 100
+        },
+        {
+          "name": "Anchoas",
+          "grams": 40
+        },
+        {
+          "name": "Ají morrón",
+          "grams": 60
+        },
+        {
+          "name": "Cebolla",
+          "grams": 40
+        }
+      ]
+    },
+    {
+      "name": "Vieiras a la plancha con puerro",
+      "slots": [
+        "cena",
+        "almuerzo"
+      ],
+      "protein": "mixta",
+      "base": "none",
+      "technique": "plancha",
+      "transform": false,
+      "constituents": [
+        {
+          "name": "Vieira",
+          "grams": 150
+        },
+        {
+          "name": "Puerro",
+          "grams": 60
+        },
+        {
+          "name": "Aceite de oliva",
+          "grams": 10
+        },
+        {
+          "name": "Papa",
+          "grams": 100.0
+        }
+      ]
+    },
+    {
+      "name": "Chistorra a la plancha con pimientos",
+      "slots": [
+        "almuerzo",
+        "cena"
+      ],
+      "protein": "mixta",
+      "base": "none",
+      "technique": "plancha",
+      "transform": false,
+      "constituents": [
+        {
+          "name": "Chistorra",
+          "grams": 120
+        },
+        {
+          "name": "Ají morrón",
+          "grams": 80
+        },
+        {
+          "name": "Cebolla",
+          "grams": 40
+        }
+      ]
+    },
+    {
+      "name": "Butifarra con alubias blancas",
+      "slots": [
+        "almuerzo"
+      ],
+      "protein": "mixta",
+      "base": "legumbre",
+      "technique": "guisado",
+      "transform": false,
+      "constituents": [
+        {
+          "name": "Butifarra",
+          "grams": 150
+        },
+        {
+          "name": "Judías blancas",
+          "grams": 100
+        },
+        {
+          "name": "Cebolla",
+          "grams": 40
+        }
+      ]
+    },
+    {
+      "name": "Sobrasada con pan y miel",
+      "slots": [
+        "desayuno",
+        "merienda"
+      ],
+      "protein": "mixta",
+      "base": "pan",
+      "technique": "frío",
+      "transform": false,
+      "constituents": [
+        {
+          "name": "Sobrasada",
+          "grams": 40
+        },
+        {
+          "name": "Pan blanco familiar",
+          "grams": 60
+        },
+        {
+          "name": "Miel",
+          "grams": 10
+        }
+      ]
+    },
+    {
+      "name": "Tostada integral con aguacate y huevo poché",
+      "slots": [
+        "desayuno"
+      ],
+      "protein": "huevo",
+      "base": "pan",
+      "technique": "hervido",
+      "transform": false,
+      "constituents": [
+        {
+          "name": "Pan integral personal",
+          "grams": 60.0
+        },
+        {
+          "name": "Aguacate",
+          "grams": 60.0
+        },
+        {
+          "name": "Huevo",
+          "grams": 50.0
+        },
+        {
+          "name": "Aceite de oliva",
+          "grams": 5.0
+        },
+        {
+          "name": "Sal",
+          "grams": 1.0
+        }
+      ]
+    },
+    {
+      "name": "Porridge de avena con leche y fresas",
+      "slots": [
+        "desayuno",
+        "merienda"
+      ],
+      "protein": "none",
+      "base": "avena",
+      "technique": "hervido",
+      "transform": false,
+      "constituents": [
+        {
+          "name": "Avena",
+          "grams": 50.0
+        },
+        {
+          "name": "Leche",
+          "grams": 200.0
+        },
+        {
+          "name": "Fresas",
+          "grams": 80.0
+        },
+        {
+          "name": "Miel",
+          "grams": 8.0
+        }
+      ]
+    },
+    {
+      "name": "Tortilla francesa con jamón de pavo y pan",
+      "slots": [
+        "desayuno"
+      ],
+      "protein": "huevo",
+      "base": "pan",
+      "technique": "sartén",
+      "transform": false,
+      "constituents": [
+        {
+          "name": "Huevo",
+          "grams": 100.0
+        },
+        {
+          "name": "Jamón de pavo",
+          "grams": 30.0
+        },
+        {
+          "name": "Pan integral personal",
+          "grams": 50.0
+        },
+        {
+          "name": "Aceite de oliva",
+          "grams": 5.0
+        }
+      ]
+    },
+    {
+      "name": "Yogur griego con nueces y miel",
+      "slots": [
+        "desayuno",
+        "merienda"
+      ],
+      "protein": "none",
+      "base": "none",
+      "technique": "frío",
+      "transform": false,
+      "constituents": [
+        {
+          "name": "Yogurt griego sin azúcar",
+          "grams": 170.0
+        },
+        {
+          "name": "Nuez de Castilla",
+          "grams": 20.0
+        },
+        {
+          "name": "Miel",
+          "grams": 10.0
+        }
+      ]
+    },
+    {
+      "name": "Pan con tomate, aceite y queso fresco",
+      "slots": [
+        "desayuno"
+      ],
+      "protein": "queso",
+      "base": "pan",
+      "technique": "frío",
+      "transform": false,
+      "constituents": [
+        {
+          "name": "Pan integral personal",
+          "grams": 60.0
+        },
+        {
+          "name": "Tomate",
+          "grams": 80.0
+        },
+        {
+          "name": "Aceite de oliva",
+          "grams": 8.0
+        },
+        {
+          "name": "Queso blanco",
+          "grams": 40.0
+        }
+      ]
+    },
+    {
+      "name": "Huevos revueltos con espinacas y champiñones",
+      "slots": [
+        "desayuno",
+        "cena"
+      ],
+      "protein": "huevo",
+      "base": "none",
+      "technique": "revuelto",
+      "transform": false,
+      "constituents": [
+        {
+          "name": "Huevo",
+          "grams": 100.0
+        },
+        {
+          "name": "Espinacas",
+          "grams": 60.0
+        },
+        {
+          "name": "Champiñones",
+          "grams": 60.0
+        },
+        {
+          "name": "Aceite de oliva",
+          "grams": 5.0
+        }
+      ]
+    },
+    {
+      "name": "Tostada integral con hummus y pepino",
+      "slots": [
+        "desayuno",
+        "merienda"
+      ],
+      "protein": "legumbre",
+      "base": "pan",
+      "technique": "frío",
+      "transform": false,
+      "constituents": [
+        {
+          "name": "Pan integral personal",
+          "grams": 60.0
+        },
+        {
+          "name": "Hummus",
+          "grams": 50.0
+        },
+        {
+          "name": "Pepino",
+          "grams": 60.0
+        }
+      ]
+    },
+    {
+      "name": "Bocadillo de jamón serrano con tomate",
+      "slots": [
+        "desayuno",
+        "merienda"
+      ],
+      "protein": "mixta",
+      "base": "pan",
+      "technique": "frío",
+      "transform": false,
+      "constituents": [
+        {
+          "name": "Pan de agua",
+          "grams": 70.0
+        },
+        {
+          "name": "Jamón serrano",
+          "grams": 30.0
+        },
+        {
+          "name": "Tomate",
+          "grams": 50.0
+        },
+        {
+          "name": "Aceite de oliva",
+          "grams": 5.0
+        }
+      ]
+    },
+    {
+      "name": "Gachas de avena con manzana y canela",
+      "slots": [
+        "desayuno"
+      ],
+      "protein": "none",
+      "base": "avena",
+      "technique": "hervido",
+      "transform": false,
+      "constituents": [
+        {
+          "name": "Avena",
+          "grams": 50.0
+        },
+        {
+          "name": "Leche",
+          "grams": 200.0
+        },
+        {
+          "name": "Manzana",
+          "grams": 100.0
+        },
+        {
+          "name": "Canela en polvo",
+          "grams": 1.0
+        }
+      ]
+    },
+    {
+      "name": "Revuelto de gambas con ajetes",
+      "slots": [
+        "desayuno",
+        "cena"
+      ],
+      "protein": "camarones",
+      "base": "none",
+      "technique": "revuelto",
+      "transform": false,
+      "constituents": [
+        {
+          "name": "Huevo",
+          "grams": 100.0
+        },
+        {
+          "name": "Camarones",
+          "grams": 80.0
+        },
+        {
+          "name": "Cebollín",
+          "grams": 20.0
+        },
+        {
+          "name": "Aceite de oliva",
+          "grams": 5.0
+        }
+      ]
+    },
+    {
+      "name": "Lentejas con verduras y arroz",
+      "slots": [
+        "almuerzo"
+      ],
+      "protein": "legumbre",
+      "base": "legumbre",
+      "technique": "guisado",
+      "transform": true,
+      "constituents": [
+        {
+          "name": "Lentejas",
+          "grams": 80.0
+        },
+        {
+          "name": "Zanahoria",
+          "grams": 50.0
+        },
+        {
+          "name": "Cebolla",
+          "grams": 40.0
+        },
+        {
+          "name": "Ají morrón",
+          "grams": 40.0
+        },
+        {
+          "name": "Arroz blanco",
+          "grams": 40.0
+        },
+        {
+          "name": "Aceite de oliva",
+          "grams": 8.0
+        },
+        {
+          "name": "Pimentón",
+          "grams": 2.0
+        },
+        {
+          "name": "Laurel",
+          "grams": 0.5
+        }
+      ]
+    },
+    {
+      "name": "Pollo asado con verduras al horno",
+      "slots": [
+        "almuerzo",
+        "cena"
+      ],
+      "protein": "pollo",
+      "base": "none",
+      "technique": "horneado",
+      "transform": true,
+      "constituents": [
+        {
+          "name": "Muslo de pollo",
+          "grams": 180.0
+        },
+        {
+          "name": "Papa",
+          "grams": 150.0
+        },
+        {
+          "name": "Cebolla",
+          "grams": 50.0
+        },
+        {
+          "name": "Ají morrón",
+          "grams": 60.0
+        },
+        {
+          "name": "Aceite de oliva",
+          "grams": 8.0
+        },
+        {
+          "name": "Tomillo",
+          "grams": 1.0
+        }
+      ]
+    },
+    {
+      "name": "Trucha al horno con patatas panaderas",
+      "slots": [
+        "almuerzo",
+        "cena"
+      ],
+      "protein": "pescado",
+      "base": "papa",
+      "technique": "horneado",
+      "transform": true,
+      "constituents": [
+        {
+          "name": "Trucha",
+          "grams": 180.0
+        },
+        {
+          "name": "Papa",
+          "grams": 150.0
+        },
+        {
+          "name": "Cebolla",
+          "grams": 40.0
+        },
+        {
+          "name": "Aceite de oliva",
+          "grams": 8.0
+        },
+        {
+          "name": "Limón",
+          "grams": 20.0
+        }
+      ]
+    },
+    {
+      "name": "Bacalao al ajillo con pimientos",
+      "slots": [
+        "almuerzo"
+      ],
+      "protein": "pescado",
+      "base": "none",
+      "technique": "salteado",
+      "transform": false,
+      "constituents": [
+        {
+          "name": "Bacalao",
+          "grams": 160.0
+        },
+        {
+          "name": "Ajo",
+          "grams": 8.0
+        },
+        {
+          "name": "Aceite de oliva",
+          "grams": 12.0
+        },
+        {
+          "name": "Ají morrón",
+          "grams": 80.0
+        }
+      ]
+    },
+    {
+      "name": "Salmón a la plancha con verduras salteadas",
+      "slots": [
+        "almuerzo",
+        "cena"
+      ],
+      "protein": "pescado",
+      "base": "none",
+      "technique": "plancha",
+      "transform": false,
+      "constituents": [
+        {
+          "name": "Salmón",
+          "grams": 160.0
+        },
+        {
+          "name": "Calabacín",
+          "grams": 100.0
+        },
+        {
+          "name": "Ají morrón",
+          "grams": 60.0
+        },
+        {
+          "name": "Aceite de oliva",
+          "grams": 8.0
+        }
+      ]
+    },
+    {
+      "name": "Ternera guisada con patatas y zanahoria",
+      "slots": [
+        "almuerzo"
+      ],
+      "protein": "res",
+      "base": "papa",
+      "technique": "guisado",
+      "transform": true,
+      "constituents": [
+        {
+          "name": "Carne de res",
+          "grams": 150.0
+        },
+        {
+          "name": "Papa",
+          "grams": 150.0
+        },
+        {
+          "name": "Zanahoria",
+          "grams": 50.0
+        },
+        {
+          "name": "Cebolla",
+          "grams": 40.0
+        },
+        {
+          "name": "Salsa de tomate",
+          "grams": 40.0
+        },
+        {
+          "name": "Aceite de oliva",
+          "grams": 8.0
+        }
+      ]
+    },
+    {
+      "name": "Pisto con arroz integral",
+      "slots": [
+        "almuerzo"
+      ],
+      "protein": "none",
+      "base": "arroz",
+      "technique": "salteado",
+      "transform": true,
+      "constituents": [
+        {
+          "name": "Calabacín",
+          "grams": 100.0
+        },
+        {
+          "name": "Berenjena",
+          "grams": 80.0
+        },
+        {
+          "name": "Ají morrón",
+          "grams": 60.0
+        },
+        {
+          "name": "Tomate",
+          "grams": 100.0
+        },
+        {
+          "name": "Cebolla",
+          "grams": 40.0
+        },
+        {
+          "name": "Arroz integral",
+          "grams": 60.0
+        },
+        {
+          "name": "Aceite de oliva",
+          "grams": 10.0
+        }
+      ]
+    },
+    {
+      "name": "Garbanzos salteados con espinacas y huevo",
+      "slots": [
+        "almuerzo",
+        "cena"
+      ],
+      "protein": "legumbre",
+      "base": "legumbre",
+      "technique": "salteado",
+      "transform": true,
+      "constituents": [
+        {
+          "name": "Garbanzos",
+          "grams": 70.0
+        },
+        {
+          "name": "Espinacas",
+          "grams": 80.0
+        },
+        {
+          "name": "Huevo",
+          "grams": 50.0
+        },
+        {
+          "name": "Ajo",
+          "grams": 5.0
+        },
+        {
+          "name": "Aceite de oliva",
+          "grams": 8.0
+        },
+        {
+          "name": "Pimentón",
+          "grams": 1.0
+        }
+      ]
+    },
+    {
+      "name": "Sopa de verduras con fideos y pollo",
+      "slots": [
+        "cena"
+      ],
+      "protein": "pollo",
+      "base": "none",
+      "technique": "hervido",
+      "transform": false,
+      "constituents": [
+        {
+          "name": "Pechuga de pollo",
+          "grams": 100.0
+        },
+        {
+          "name": "Fideos",
+          "grams": 50.0
+        },
+        {
+          "name": "Zanahoria",
+          "grams": 50.0
+        },
+        {
+          "name": "Puerro",
+          "grams": 40.0
+        },
+        {
+          "name": "Apio",
+          "grams": 30.0
+        },
+        {
+          "name": "Papa",
+          "grams": 80.0
+        }
+      ]
+    },
+    {
+      "name": "Crema de calabacín con queso",
+      "slots": [
+        "cena"
+      ],
+      "protein": "queso",
+      "base": "none",
+      "technique": "crema",
+      "transform": true,
+      "constituents": [
+        {
+          "name": "Calabacín",
+          "grams": 250.0
+        },
+        {
+          "name": "Cebolla",
+          "grams": 40.0
+        },
+        {
+          "name": "Papa",
+          "grams": 60.0
+        },
+        {
+          "name": "Queso blanco",
+          "grams": 30.0
+        },
+        {
+          "name": "Aceite de oliva",
+          "grams": 6.0
+        }
+      ]
+    },
+    {
+      "name": "Ensalada de garbanzos con atún y pimiento",
+      "slots": [
+        "almuerzo",
+        "cena"
+      ],
+      "protein": "atun",
+      "base": "legumbre",
+      "technique": "frío",
+      "transform": false,
+      "constituents": [
+        {
+          "name": "Garbanzos",
+          "grams": 70.0
+        },
+        {
+          "name": "Atún en agua",
+          "grams": 80.0
+        },
+        {
+          "name": "Ají morrón",
+          "grams": 50.0
+        },
+        {
+          "name": "Cebolla",
+          "grams": 30.0
+        },
+        {
+          "name": "Tomate",
+          "grams": 80.0
+        },
+        {
+          "name": "Aceite de oliva",
+          "grams": 8.0
+        }
+      ]
+    },
+    {
+      "name": "Filete de pescado blanco en salsa de tomate",
+      "slots": [
+        "cena"
+      ],
+      "protein": "pescado",
+      "base": "none",
+      "technique": "guisado",
+      "transform": true,
+      "constituents": [
+        {
+          "name": "Filete de pescado blanco",
+          "grams": 160.0
+        },
+        {
+          "name": "Salsa de tomate",
+          "grams": 80.0
+        },
+        {
+          "name": "Cebolla",
+          "grams": 40.0
+        },
+        {
+          "name": "Ajo",
+          "grams": 5.0
+        },
+        {
+          "name": "Aceite de oliva",
+          "grams": 6.0
+        }
+      ]
+    },
+    {
+      "name": "Tortilla de calabacín",
+      "slots": [
+        "cena",
+        "merienda"
+      ],
+      "protein": "huevo",
+      "base": "none",
+      "technique": "sartén",
+      "transform": true,
+      "constituents": [
+        {
+          "name": "Huevo",
+          "grams": 100.0
+        },
+        {
+          "name": "Calabacín",
+          "grams": 120.0
+        },
+        {
+          "name": "Cebolla",
+          "grams": 30.0
+        },
+        {
+          "name": "Aceite de oliva",
+          "grams": 8.0
+        }
+      ]
+    },
+    {
+      "name": "Pechuga de pollo al limón con arroz",
+      "slots": [
+        "almuerzo"
+      ],
+      "protein": "pollo",
+      "base": "arroz",
+      "technique": "plancha",
+      "transform": false,
+      "constituents": [
+        {
+          "name": "Pechuga de pollo",
+          "grams": 160.0
+        },
+        {
+          "name": "Arroz blanco",
+          "grams": 60.0
+        },
+        {
+          "name": "Limón",
+          "grams": 20.0
+        },
+        {
+          "name": "Ajo",
+          "grams": 5.0
+        },
+        {
+          "name": "Aceite de oliva",
+          "grams": 6.0
+        },
+        {
+          "name": "Perejil",
+          "grams": 3.0
+        }
+      ]
+    },
+    {
+      "name": "Ensalada mixta con huevo duro y atún",
+      "slots": [
+        "cena",
+        "almuerzo"
+      ],
+      "protein": "atun",
+      "base": "none",
+      "technique": "frío",
+      "transform": false,
+      "constituents": [
+        {
+          "name": "Lechuga",
+          "grams": 80.0
+        },
+        {
+          "name": "Tomate",
+          "grams": 100.0
+        },
+        {
+          "name": "Huevo",
+          "grams": 50.0
+        },
+        {
+          "name": "Atún en agua",
+          "grams": 60.0
+        },
+        {
+          "name": "Aceitunas",
+          "grams": 15.0
+        },
+        {
+          "name": "Aceite de oliva",
+          "grams": 8.0
+        }
+      ]
+    },
+    {
+      "name": "Fruta con queso fresco y nueces",
+      "slots": [
+        "merienda"
+      ],
+      "protein": "queso",
+      "base": "none",
+      "technique": "frío",
+      "transform": false,
+      "constituents": [
+        {
+          "name": "Manzana",
+          "grams": 120.0
+        },
+        {
+          "name": "Queso blanco",
+          "grams": 40.0
+        },
+        {
+          "name": "Nuez de Castilla",
+          "grams": 15.0
+        }
+      ]
+    },
+    {
+      "name": "Batido de plátano con leche y avena",
+      "slots": [
+        "merienda",
+        "desayuno"
+      ],
+      "protein": "none",
+      "base": "avena",
+      "technique": "licuado",
+      "transform": false,
+      "constituents": [
+        {
+          "name": "Guineo",
+          "grams": 100.0
+        },
+        {
+          "name": "Leche",
+          "grams": 200.0
+        },
+        {
+          "name": "Avena",
+          "grams": 20.0
+        }
+      ]
+    },
+    {
+      "name": "Tortitas de avena y plátano a la sartén",
+      "slots": [
+        "merienda",
+        "desayuno"
+      ],
+      "protein": "huevo",
+      "base": "avena",
+      "technique": "masa a la plancha",
+      "transform": true,
+      "constituents": [
+        {
+          "name": "Avena",
+          "grams": 50.0
+        },
+        {
+          "name": "Guineo",
+          "grams": 80.0
+        },
+        {
+          "name": "Huevo",
+          "grams": 50.0
+        },
+        {
+          "name": "Canela en polvo",
+          "grams": 1.0
+        }
+      ]
+    },
+    {
+      "name": "Arroz con atún, cebolla y aceitunas",
+      "slots": [
+        "almuerzo"
+      ],
+      "protein": "atun",
+      "base": "arroz",
+      "technique": "salteado",
+      "transform": false,
+      "constituents": [
+        {
+          "name": "Arroz blanco",
+          "grams": 60.0
+        },
+        {
+          "name": "Atún en agua",
+          "grams": 90.0
+        },
+        {
+          "name": "Cebolla",
+          "grams": 40.0
+        },
+        {
+          "name": "Aceitunas",
+          "grams": 15.0
+        },
+        {
+          "name": "Aceite de oliva",
+          "grams": 8.0
+        },
+        {
+          "name": "Pimentón",
+          "grams": 1.0
+        }
+      ]
+    },
+    {
+      "name": "Potaje de garbanzos con bacalao",
+      "slots": [
+        "almuerzo"
+      ],
+      "protein": "pescado",
+      "base": "legumbre",
+      "technique": "guisado",
+      "transform": true,
+      "constituents": [
+        {
+          "name": "Garbanzos",
+          "grams": 70.0
+        },
+        {
+          "name": "Bacalao",
+          "grams": 100.0
+        },
+        {
+          "name": "Cebolla",
+          "grams": 40.0
+        },
+        {
+          "name": "Ajo",
+          "grams": 5.0
+        },
+        {
+          "name": "Pimentón",
+          "grams": 2.0
+        },
+        {
+          "name": "Aceite de oliva",
+          "grams": 8.0
+        },
+        {
+          "name": "Papa",
+          "grams": 80.0
+        }
+      ]
+    },
+    {
+      "name": "Lentejas con arroz y chorizo curado",
+      "slots": [
+        "almuerzo"
+      ],
+      "protein": "legumbre",
+      "base": "legumbre",
+      "technique": "guisado",
+      "transform": true,
+      "constituents": [
+        {
+          "name": "Lentejas",
+          "grams": 70.0
+        },
+        {
+          "name": "Arroz blanco",
+          "grams": 40.0
+        },
+        {
+          "name": "Chorizo español",
+          "grams": 30.0
+        },
+        {
+          "name": "Zanahoria",
+          "grams": 40.0
+        },
+        {
+          "name": "Cebolla",
+          "grams": 30.0
+        },
+        {
+          "name": "Laurel",
+          "grams": 0.5
+        }
+      ]
+    },
+    {
+      "name": "Tortilla de atún con cebolla",
+      "slots": [
+        "cena"
+      ],
+      "protein": "atun",
+      "base": "none",
+      "technique": "sartén",
+      "transform": true,
+      "constituents": [
+        {
+          "name": "Huevo",
+          "grams": 100.0
+        },
+        {
+          "name": "Atún en agua",
+          "grams": 80.0
+        },
+        {
+          "name": "Cebolla",
+          "grams": 40.0
+        },
+        {
+          "name": "Aceite de oliva",
+          "grams": 6.0
+        }
+      ]
+    },
+    {
+      "name": "Pasta con sardinas, ajo y pan rallado",
+      "slots": [
+        "almuerzo"
+      ],
+      "protein": "pescado",
+      "base": "pasta",
+      "technique": "salteado",
+      "transform": false,
+      "constituents": [
+        {
+          "name": "Pasta integral",
+          "grams": 70.0
+        },
+        {
+          "name": "Sardinas en lata",
+          "grams": 90.0
+        },
+        {
+          "name": "Ajo",
+          "grams": 8.0
+        },
+        {
+          "name": "Pan rallado",
+          "grams": 10.0
+        },
+        {
+          "name": "Aceite de oliva",
+          "grams": 8.0
+        }
+      ]
+    },
+    {
+      "name": "Huevos rotos con patatas y jamón serrano",
+      "slots": [
+        "cena"
+      ],
+      "protein": "huevo",
+      "base": "papa",
+      "technique": "frito",
+      "transform": false,
+      "constituents": [
+        {
+          "name": "Huevo",
+          "grams": 100.0
+        },
+        {
+          "name": "Papa",
+          "grams": 150.0
+        },
+        {
+          "name": "Jamón serrano",
+          "grams": 30.0
+        },
+        {
+          "name": "Aceite de oliva",
+          "grams": 10.0
+        }
+      ]
+    },
+    {
+      "name": "Judías blancas con chorizo y pimentón",
+      "slots": [
+        "almuerzo"
+      ],
+      "protein": "mixta",
+      "base": "legumbre",
+      "technique": "guisado",
+      "transform": true,
+      "constituents": [
+        {
+          "name": "Judías blancas",
+          "grams": 70.0
+        },
+        {
+          "name": "Chorizo español",
+          "grams": 40.0
+        },
+        {
+          "name": "Cebolla",
+          "grams": 30.0
+        },
+        {
+          "name": "Ajo",
+          "grams": 5.0
+        },
+        {
+          "name": "Pimentón",
+          "grams": 2.0
+        },
+        {
+          "name": "Laurel",
+          "grams": 0.5
+        }
+      ]
+    },
+    {
+      "name": "Crema de zanahoria con queso",
+      "slots": [
+        "cena"
+      ],
+      "protein": "queso",
+      "base": "none",
+      "technique": "crema",
+      "transform": true,
+      "constituents": [
+        {
+          "name": "Zanahoria",
+          "grams": 250.0
+        },
+        {
+          "name": "Papa",
+          "grams": 60.0
+        },
+        {
+          "name": "Cebolla",
+          "grams": 30.0
+        },
+        {
+          "name": "Queso parmesano",
+          "grams": 20.0
+        },
+        {
+          "name": "Aceite de oliva",
+          "grams": 6.0
+        }
+      ]
+    },
+    {
+      "name": "Bacalao con patatas al horno",
+      "slots": [
+        "cena"
+      ],
+      "protein": "pescado",
+      "base": "papa",
+      "technique": "horneado",
+      "transform": false,
+      "constituents": [
+        {
+          "name": "Bacalao",
+          "grams": 150.0
+        },
+        {
+          "name": "Papa",
+          "grams": 150.0
+        },
+        {
+          "name": "Cebolla",
+          "grams": 50.0
+        },
+        {
+          "name": "Aceite de oliva",
+          "grams": 8.0
+        }
+      ]
+    },
+    {
+      "name": "Arroz caldoso con bacalao",
+      "slots": [
+        "almuerzo"
+      ],
+      "protein": "pescado",
+      "base": "arroz",
+      "technique": "guisado",
+      "transform": true,
+      "constituents": [
+        {
+          "name": "Arroz blanco",
+          "grams": 70.0
+        },
+        {
+          "name": "Bacalao",
+          "grams": 100.0
+        },
+        {
+          "name": "Cebolla",
+          "grams": 30.0
+        },
+        {
+          "name": "Ajo",
+          "grams": 5.0
+        },
+        {
+          "name": "Pimentón",
+          "grams": 1.0
+        },
+        {
+          "name": "Aceite de oliva",
+          "grams": 6.0
+        }
+      ]
+    },
+    {
+      "name": "Huevos al plato con jamón serrano y salsa de tomate",
+      "slots": [
+        "cena",
+        "desayuno"
+      ],
+      "protein": "huevo",
+      "base": "none",
+      "technique": "horneado",
+      "transform": false,
+      "constituents": [
+        {
+          "name": "Huevo",
+          "grams": 100.0
+        },
+        {
+          "name": "Jamón serrano",
+          "grams": 25.0
+        },
+        {
+          "name": "Salsa de tomate",
+          "grams": 80.0
+        },
+        {
+          "name": "Aceite de oliva",
+          "grams": 5.0
+        }
+      ]
+    },
+    {
+      "name": "Macarrones con atún y tomate",
+      "slots": [
+        "almuerzo"
+      ],
+      "protein": "atun",
+      "base": "pasta",
+      "technique": "guisado",
+      "transform": false,
+      "constituents": [
+        {
+          "name": "Coditos",
+          "grams": 70.0
+        },
+        {
+          "name": "Atún en agua",
+          "grams": 80.0
+        },
+        {
+          "name": "Salsa de tomate",
+          "grams": 100.0
+        },
+        {
+          "name": "Cebolla",
+          "grams": 30.0
+        },
+        {
+          "name": "Queso parmesano",
+          "grams": 10.0
+        }
+      ]
+    },
+    {
+      "name": "Queso curado con membrillo y nueces",
+      "slots": [
+        "merienda",
+        "desayuno"
+      ],
+      "protein": "queso",
+      "base": "none",
+      "technique": "frío",
+      "transform": false,
+      "constituents": [
+        {
+          "name": "Queso gouda",
+          "grams": 40.0
+        },
+        {
+          "name": "Membrillo dulce",
+          "grams": 30.0
+        },
+        {
+          "name": "Nuez de Castilla",
+          "grams": 15.0
+        }
+      ]
+    },
+    {
+      "name": "Avena con leche evaporada, nueces y miel",
+      "slots": [
+        "desayuno"
+      ],
+      "protein": "none",
+      "base": "avena",
+      "technique": "hervido",
+      "transform": false,
+      "constituents": [
+        {
+          "name": "Avena",
+          "grams": 50.0
+        },
+        {
+          "name": "Leche evaporada",
+          "grams": 80.0
+        },
+        {
+          "name": "Nuez de Castilla",
+          "grams": 15.0
+        },
+        {
+          "name": "Miel",
+          "grams": 8.0
+        }
+      ]
+    },
+    {
+      "name": "Tortilla francesa con queso curado y pan tostado (de despensa)",
+      "slots": [
+        "desayuno"
+      ],
+      "protein": "huevo",
+      "base": "none",
+      "technique": "sartén",
+      "transform": false,
+      "constituents": [
+        {
+          "name": "Huevo",
+          "grams": 100.0
+        },
+        {
+          "name": "Queso gouda",
+          "grams": 25.0
+        },
+        {
+          "name": "Galletas de soda",
+          "grams": 25.0
+        },
+        {
+          "name": "Aceite de oliva",
+          "grams": 5.0
+        }
+      ]
+    },
+    {
+      "name": "Gachas de avena con leche evaporada y manzana",
+      "slots": [
+        "desayuno"
+      ],
+      "protein": "none",
+      "base": "avena",
+      "technique": "hervido",
+      "transform": false,
+      "constituents": [
+        {
+          "name": "Avena",
+          "grams": 50.0
+        },
+        {
+          "name": "Leche evaporada",
+          "grams": 80.0
+        },
+        {
+          "name": "Manzana",
+          "grams": 100.0
+        },
+        {
+          "name": "Canela en polvo",
+          "grams": 1.0
+        }
+      ]
+    },
+    {
+      "name": "Huevos revueltos con jamón serrano y cebolla",
+      "slots": [
+        "desayuno",
+        "cena"
+      ],
+      "protein": "huevo",
+      "base": "none",
+      "technique": "revuelto",
+      "transform": false,
+      "constituents": [
+        {
+          "name": "Huevo",
+          "grams": 100.0
+        },
+        {
+          "name": "Jamón serrano",
+          "grams": 25.0
+        },
+        {
+          "name": "Cebolla",
+          "grams": 30.0
+        },
+        {
+          "name": "Aceite de oliva",
+          "grams": 5.0
+        }
+      ]
+    },
+    {
+      "name": "Patatas a lo pobre con huevo",
+      "slots": [
+        "cena"
+      ],
+      "protein": "huevo",
+      "base": "papa",
+      "technique": "salteado",
+      "transform": false,
+      "constituents": [
+        {
+          "name": "Papa",
+          "grams": 180.0
+        },
+        {
+          "name": "Cebolla",
+          "grams": 50.0
+        },
+        {
+          "name": "Huevo",
+          "grams": 50.0
+        },
+        {
+          "name": "Aceite de oliva",
+          "grams": 10.0
+        },
+        {
+          "name": "Pimentón",
+          "grams": 1.0
+        }
+      ]
+    },
+    {
+      "name": "Queso curado con nueces y manzana",
+      "slots": [
+        "merienda"
+      ],
+      "protein": "queso",
+      "base": "none",
+      "technique": "frío",
+      "transform": false,
+      "constituents": [
+        {
+          "name": "Queso gouda",
+          "grams": 40.0
+        },
+        {
+          "name": "Nuez de Castilla",
+          "grams": 15.0
+        },
+        {
+          "name": "Manzana",
+          "grams": 100.0
+        }
+      ]
+    },
+    {
+      "name": "Galletas de soda con atún y aceitunas",
+      "slots": [
+        "merienda"
+      ],
+      "protein": "atun",
+      "base": "pan",
+      "technique": "frío",
+      "transform": false,
+      "constituents": [
+        {
+          "name": "Galletas de soda",
+          "grams": 30.0
+        },
+        {
+          "name": "Atún en agua",
+          "grams": 60.0
+        },
+        {
+          "name": "Aceitunas",
+          "grams": 15.0
+        }
+      ]
+    },
+    {
+      "name": "Almendras con dátiles y naranja",
+      "slots": [
+        "merienda"
+      ],
+      "protein": "none",
+      "base": "none",
+      "technique": "frío",
+      "transform": false,
+      "constituents": [
+        {
+          "name": "Almendras fileteadas",
+          "grams": 20.0
+        },
+        {
+          "name": "Dátiles",
+          "grams": 20.0
+        },
+        {
+          "name": "Naranja",
+          "grams": 150.0
+        }
+      ]
+    },
+    {
+      "name": "Turrón con almendra y mandarina",
+      "slots": [
+        "merienda"
+      ],
+      "protein": "none",
+      "base": "none",
+      "technique": "frío",
+      "transform": false,
+      "constituents": [
+        {
+          "name": "Turrón",
+          "grams": 30.0
+        },
+        {
+          "name": "Naranja",
+          "grams": 120.0
+        }
+      ]
+    }
   ]
 }

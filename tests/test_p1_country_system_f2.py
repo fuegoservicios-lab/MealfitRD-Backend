@@ -1565,7 +1565,7 @@ def test_dish_templates_es_json_existe_con_forma_esperada():
     data = _load_dish_templates_es()
     templates = data.get("templates")
     assert isinstance(templates, list)
-    assert 40 <= len(templates) <= 60, f"{len(templates)} plantillas — fuera del rango ~40-60 del brief"
+    assert 40 <= len(templates) <= 120  # [P1-ARQ25-F7-CULTURE] F7-D sube la barra a ≥80, f"{len(templates)} plantillas — fuera del rango ~40-60 del brief"
     nombres = [t.get("name") for t in templates]
     assert all(isinstance(n, str) and n.strip() for n in nombres), "una plantilla sin name"
     assert len(nombres) == len(set(nombres)), "nombres de plantilla duplicados"
@@ -2209,7 +2209,7 @@ def test_dish_templates_json_existe_con_forma_esperada(cc, loader):
     data = loader()
     templates = data.get("templates")
     assert isinstance(templates, list)
-    assert 40 <= len(templates) <= 60, f"[{cc}] {len(templates)} plantillas — fuera del rango ~40-60 del brief"
+    assert 40 <= len(templates) <= 120  # [P1-ARQ25-F7-CULTURE] F7-D sube la barra a ≥80, f"[{cc}] {len(templates)} plantillas — fuera del rango ~40-60 del brief"
     nombres = [t.get("name") for t in templates]
     assert all(isinstance(n, str) and n.strip() for n in nombres), f"[{cc}] una plantilla sin name"
     assert len(nombres) == len(set(nombres)), f"[{cc}] nombres de plantilla duplicados"
@@ -2956,7 +2956,7 @@ def test_dish_templates_pr_us_json_existe_con_forma_esperada(cc, loader):
     data = loader()
     templates = data.get("templates")
     assert isinstance(templates, list)
-    assert 40 <= len(templates) <= 60, f"[{cc}] {len(templates)} plantillas — fuera del rango ~40-60 del brief"
+    assert 40 <= len(templates) <= 120  # [P1-ARQ25-F7-CULTURE] F7-D sube la barra a ≥80, f"[{cc}] {len(templates)} plantillas — fuera del rango ~40-60 del brief"
     nombres = [t.get("name") for t in templates]
     assert all(isinstance(n, str) and n.strip() for n in nombres), f"[{cc}] una plantilla sin name"
     assert len(nombres) == len(set(nombres)), f"[{cc}] nombres de plantilla duplicados"
@@ -3626,9 +3626,11 @@ def test_canonicalize_shopping_food_name_sweep_346_filas_cero_altas_pais_trece_p
     # vez de a "Filete de pescado blanco", que es la mejora que se acepto al regenerar el
     # baseline C3. Se anaden EXPLICITAMENTE, como pide el mensaje de este assert.
     esperadas_preexistentes = {
-        "Cebolla en polvo", "Clara de huevo", "Guineo verde", "Lechuga romana", "Mero",
+        # [P2-WHITE-FISH-ALIAS-SPLIT · 2026-09-02] -Mero y -Tilapia: la migración les quitó el
+        # alias en la fila genérica "Filete de pescado blanco", así que ya no las sobreescribe el chain.
+        "Cebolla en polvo", "Clara de huevo", "Guineo verde", "Lechuga romana",
         "Nueces mixtas", "Orégano dominicano", "Plátano maduro", "Plátano verde",
-        "Queso cheddar", "Queso mozzarella", "Queso parmesano", "Tilapia", "Tofu firme",
+        "Queso cheddar", "Queso mozzarella", "Queso parmesano", "Tofu firme",
         "Yema de huevo",
     }
     assert overridden_preexisting == esperadas_preexistentes, (
@@ -4566,7 +4568,7 @@ def test_j_ai_helpers_variety_country_derivado_una_vez():
     assert cuerpo.count("country_for_form_data(form_data)") == 1, (
         "country_for_form_data(form_data) debe derivarse UNA sola vez dentro de esta función"
     )
-    assert "_get_fast_filtered_catalogs(allergies, dislikes, diet, country=_variety_country)" in cuerpo
+    assert "_get_fast_filtered_catalogs(\n            allergies, dislikes, diet, country=_variety_country, market_extras=True, culture_country=_variety_culture)" in cuerpo
     assert "build_deterministic_variety_prompt(_dc, _variety_country)" in cuerpo
 
 
@@ -4575,12 +4577,10 @@ def test_j_agent_swap_reusa_swap_country_no_rederiva():
     (ya derivado arriba, T3) — no vuelve a llamar country_for_form_data."""
     src = (_BACKEND / "agent.py").read_text(encoding="utf-8")
     sin_comentarios = "\n".join(l for l in src.splitlines() if not l.strip().startswith("#"))
-    assert (
-        "_get_fast_filtered_catalogs(\n            swap_allergies, swap_dislikes, swap_diet, "
-        "country=_swap_country\n        )" in sin_comentarios
-        or "_get_fast_filtered_catalogs(swap_allergies, swap_dislikes, swap_diet, country=_swap_country)"
-        in sin_comentarios
-    ), "el call site del swap debe pasar country=_swap_country"
+    # [F7-H] la llamada lleva además market_extras/culture_country; lo que se ancla es que el MERCADO sigue siendo _swap_country
+    assert "swap_allergies, swap_dislikes, swap_diet, country=_swap_country" in sin_comentarios, (
+        "el call site del swap debe pasar country=_swap_country"
+    )
     assert sin_comentarios.count("_swap_country = country_for_form_data(form_data)") == 1, (
         "_swap_country debe derivarse UNA sola vez en todo agent.py"
     )
@@ -5031,7 +5031,8 @@ def test_f_wiring_deriva_pais_via_ssot_no_lector_crudo():
     assert len(assignments) == 1
     value = assignments[0].value
     assert isinstance(value, ast.Call)
-    assert isinstance(value.func, ast.Name) and value.func.id == "country_for_form_data"
+    # [P1-ARQ25-F7-CULTURE] el gate de horario es CULTURAL: lee la puerta cultural (SSOT que cae al mercado sin elección)
+    assert isinstance(value.func, ast.Name) and value.func.id in ("country_for_form_data", "cultural_country_for_form_data")
     assert len(value.args) == 1 and isinstance(value.args[0], ast.Name) and value.args[0].id == "form_data"
 
 

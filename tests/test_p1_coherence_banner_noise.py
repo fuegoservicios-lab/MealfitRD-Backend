@@ -103,6 +103,9 @@ def test_empty_and_nondict_safe():
     assert summarize_divergences_for_ui([]) == []
     assert summarize_divergences_for_ui(None) == []
     out = summarize_divergences_for_ui(
-        [None, "x", {"food": "Sal", "hypothesis": "cap_swallowed_modifier", "expected_qty": 5, "actual_qty": 0}]
+        # [P2-COHERENCE-BANNER-CONDIMENTS · 2026-09-03] el alimento de muestra era «Sal», que
+        # ahora se omite del banner por ser condimento; lo que este test protege es que los
+        # entries vacíos/no-dict no rompan, así que la muestra pasa a un alimento accionable.
+        [None, "x", {"food": "Pollo", "hypothesis": "cap_swallowed_modifier", "expected_qty": 5, "actual_qty": 0}]
     )
-    assert _foods(out) == {"Sal"}
+    assert _foods(out) == {"Pollo"}

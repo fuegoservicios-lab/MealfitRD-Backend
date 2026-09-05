@@ -752,10 +752,14 @@ def test_doc_no_promete_un_cap_combinado_que_el_codigo_no_aplica():
     )
     assert "por bloque" in fila[0].lower()
     src = _src("chat_history_context.py")
-    assert src.count("return _assemble(") == 2, (
-        "si deja de haber exactamente 2 llamadas a `_assemble`, el multiplicador "
-        "del techo (2×) que documenta §5 deja de ser cierto"
+    # [P1-DIARY-FREETEXT-ESTIMATE · 2026-09-04] tercer bloque (desvíos declarados) con techo
+    # FIJO de 700 — el doc §5 lo suma aparte («2× el knob + 700»)
+    assert src.count("return _assemble(") == 3, (
+        "si deja de haber exactamente 3 llamadas a `_assemble`, el techo que documenta "
+        "§5 (2× el knob + 700 del bloque de desvíos) deja de ser cierto"
     )
+    assert "2× el knob + 700" in doc
+    assert 'return _assemble(header, lines, footer, max_chars, "deviations")' in src
 
 
 def test_marker_del_doc_no_va_por_detras_del_codigo():

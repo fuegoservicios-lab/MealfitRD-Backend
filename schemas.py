@@ -1,4 +1,4 @@
-from pydantic import BaseModel, Field, ConfigDict
+from pydantic import BaseModel, Field, ConfigDict, field_validator
 from typing import List, Optional, Literal
 
 class MacrosModel(BaseModel):
@@ -26,6 +26,18 @@ class MealModel(BaseModel):
     macros: Optional[List[str]] = Field(default=None, description="Lista rápida de macros (opcional, tags informativos)")
     ingredients: List[str] = Field(description="Lista de ingredientes consolidados sin clonar y con unidades comerciales exactas (texto simple), Ej:['1 plátano verde maduro', '2 huevos', '1/2 aguacate']")
     recipe: List[str] = Field(description="Pasos de preparación. DEBES usar los prefijos: 'Mise en place: ...', 'El Toque de Fuego: ...' y 'Montaje: ...'")
+
+    # [P2-INGREDIENT-TRAILING-QTY · 2026-09-04] «Cebada: 50 g» → «50 g de Cebada». El LLM a veces pone
+    # la cantidad DETRÁS del nombre y ningún lector lo entendía (solver 0/5, guarda de presencia
+    # anteponiendo «90 g de»). Aquí es el embudo de generación, swap y autocrítica. Best-effort.
+    @field_validator("ingredients", mode="after")
+    @classmethod
+    def _canonicalize_trailing_qty(cls, v):
+        try:
+            from nutrition_db import canonicalize_trailing_qty_line
+            return [canonicalize_trailing_qty_line(x) for x in v]
+        except Exception:
+            return v
 
 class SupplementModel(BaseModel):
     name: str = Field(description="Nombre del suplemento, Ej: 'Creatina Monohidrato'")
@@ -74,6 +86,22 @@ class DaySkeletonModel(BaseModel):
     meal_types: List[str] = Field(description="Tipos de comidas a generar en orden, Ej: ['Desayuno', 'Almuerzo', 'Merienda', 'Cena']")
     breakfast_category: str = Field(default="Libre", description="Categoría base del desayuno asignada a este día. DEBE ser diferente para cada día. Valores: 'Mangú/Tubérculos', 'Avena/Cereales', 'Pan/Tostadas', 'Batido/Bowl', 'Revoltillo/Tortilla'")
     brief_concept: str = Field(description="Concepto temático breve de este día, Ej: 'Día Caribeño con enfoque en proteína magra y tubérculos'")
+
+class MealCorrectionModel(MealModel):
+    """[P2-CRITIQUE-FIX-DESC-BACKFILL · 2026-09-04] Salida del CORRECTOR de días (autocrítica y regen
+    quirúrgica): igual que MealModel pero `desc` opcional. Tres generaciones seguidas del dueño (10:47,
+    12:32 y el regen post-aprobación) perdieron la corrección entera por «4 validation errors: meals.N.desc
+    Field required» — el modelo devolvió las 4 comidas sin descripción y pydantic tiró el día. La
+    descripción se rellena después desde el plato original (mismo nombre) o desde el nombre nuevo."""
+    desc: Optional[str] = Field(default=None, description="Descripción apetitosa y profesional de la receta")
+
+
+class SingleDayCorrectionModel(BaseModel):
+    """[P2-CRITIQUE-FIX-DESC-BACKFILL] SingleDayPlanModel con comidas tolerantes (solo para el corrector)."""
+    day: int = Field(description="Identificador del día (e.g. 1 para Día 1)")
+    day_name: Optional[str] = Field(default=None, description="Nombre del día de la semana (ej: Lunes, Martes)")
+    meals: List[MealCorrectionModel] = Field(description="Lista de comidas completas con ingredientes y recetas")
+
 
 class PlanSkeletonModel(BaseModel):
     """Esqueleto liviano del plan producido por el nodo Planificador (fase map)."""

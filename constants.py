@@ -183,6 +183,14 @@ PANTRY_RECOMMENDED_ITEMS = max(
 CHUNK_PANTRY_EMPTY_TTL_HOURS = max(1, int(os.environ.get("CHUNK_PANTRY_EMPTY_TTL_HOURS", "12")))
 CHUNK_PANTRY_EMPTY_REMINDER_HOURS = max(1, int(os.environ.get("CHUNK_PANTRY_EMPTY_REMINDER_HOURS", "4")))
 CHUNK_PANTRY_EMPTY_MAX_REMINDERS = max(0, int(os.environ.get("CHUNK_PANTRY_EMPTY_MAX_REMINDERS", "2")))
+# [P2-PANTRY-PAUSE-MAX-CYCLES · 2026-09-03] Tope de resurrecciones de un chunk pausado por nevera
+# vacía. Cada `CHUNK_PANTRY_EMPTY_TTL_HOURS` el recovery lo re-encolaba en modo flexible, el worker
+# lo pausaba otra vez (0 frescos) y vuelta a empezar: una cuenta de prueba sin actividad desde el
+# 5-ago llevaba 15 ciclos (34 pausas/re-encolados en una semana). Coste LLM cero, pero un plan que
+# «se está generando» desde hace un mes y ruido en cada tick. Al llegar al tope el chunk se queda en
+# `pending_user_action` esperando la compra: el recovery lo reanuda solo cuando la Nevera viva
+# supera el mínimo (mismo criterio P0-4). 0 = sin tope (comportamiento previo).
+CHUNK_PANTRY_EMPTY_MAX_CYCLES = max(0, min(100, _env_int("MEALFIT_PANTRY_PAUSE_MAX_CYCLES", 6)))
 # [P2-3] Frecuencia del cron dedicado de limpieza de chunks huérfanos. Antes
 # este cleanup vivía embebido en `process_plan_chunk_queue` (corre cada
 # CHUNK_SCHEDULER_INTERVAL_MINUTES, default 1 min) y se ejecutaba ANTES de
@@ -1936,6 +1944,29 @@ DOMINICAN_FRUITS = [
     "Granada",
 ]
 
+# [P1-ARQ25-F7-CULTURE · subfase H · 2026-09-05] Básicos UNIVERSALES de mercado: alimentos del catálogo que cualquier
+# supermercado de los seis mercados vende (arroz, avena, aceite de oliva, plátano, yuca, legumbres, pollo, huevo…).
+# Los pools beta nacieron SOLO con las altas de país (US: 10 carbos con bagels y frijoles horneados, sin arroz ni
+# aceite de oliva), y como el pool es la ASIGNACIÓN OBLIGATORIA del día, un dominicano que compra en US recibía
+# «pollo BBQ sobre frijoles horneados» aunque el bloque de inspiración fuera criollo. Se suman al pool beta (opt-in
+# `market_extras=True` en los call sites de producción; knob `MEALFIT_MARKET_POOL_UNIVERSAL`).
+UNIVERSAL_MARKET_STAPLES: dict[str, list] = {
+    "proteins": ["Pechuga de pollo", "Muslo de pollo", "Carne de res", "Carne de res molida", "Cerdo", "Tilapia", "Salmón",
+                 "Filete de pescado blanco", "Camarones", "Atún en agua", "Sardinas en lata", "Huevo", "Pavo molido",
+                 "Queso mozzarella", "Yogurt griego sin azúcar"],
+    "carbs": ["Arroz blanco", "Arroz integral", "Avena", "Pasta integral", "Papa", "Batata", "Yuca", "Plátano verde", "Plátano maduro",
+              "Quinoa", "Lentejas", "Garbanzos", "Habichuelas rojas", "Habichuelas negras", "Frijoles pintos", "Harina de maíz precocida",
+              "Tortilla de maíz", "Pan integral personal"],
+    "veggies_fats": ["Aceite de oliva", "Aceite vegetal", "Aguacate", "Cebolla", "Ajo", "Tomate", "Lechuga", "Zanahoria", "Repollo",
+                     "Brócoli", "Espinacas", "Calabacín", "Ají morrón", "Pepino", "Auyama", "Cilantro", "Limón", "Champiñones", "Maní",
+                     "Almendras fileteadas", "Nuez de Castilla"],
+    "fruits": ["Guineo", "Manzana", "Naranja", "Fresas", "Arándanos", "Piña", "Mango", "Uva", "Sandía"],
+}
+# Condimentos que entraron en `veggies_fats` de los pools beta y el sembrador servía como «grasa del día»
+# («calabacín al kétchup»): siguen en el catálogo para el LLM, pero no como asignación obligatoria.
+MARKET_POOL_CONDIMENTS_EXCLUDED = frozenset({"Salsa barbacoa", "Aderezo ranch", "Kétchup", "Mostaza", "Salsa inglesa",
+                                             "Sazonador para tacos", "Chile en polvo", "Salsa de soya", "Pique", "Alioli"})
+
 # [P1-COUNTRY-SYSTEM-F2 · T5 · 2026-08-17] Pools de catálogo por país beta para el camino
 # DEGRADADO (Smart Shuffle/Edge Recipes, `cron_tasks._build_filtered_edge_recipe_day` →
 # `_get_fast_filtered_catalogs`) — el ÚNICO lugar de ese camino que hoy arma un día desde un
@@ -2717,8 +2748,15 @@ def apply_synonyms(text: str) -> str:
 
 # Regex pre-compilado para stripear cantidades/unidades al inicio de un string de ingrediente.
 # Captura patrones como: "200g", "1/2", "3 cdas", "1 lb", "2 tazas de", "100 ml de", etc.
+# [P1-PANTRY-KEY-VULGAR-FRACTIONS · 2026-09-03] Las recetas escriben «⅓ taza de yogurt», «¾ cucharada
+# de mantequilla de maní», «1½ tazas» — fracciones UNICODE, no «1/3». La clase de cantidad sólo
+# conocía dígitos y «/», así que la clave canónica conservaba «¾ cucharada de mantequilla de
+# mani» y `pantry_names_match` decía que NO era mantequilla de maní (con «3/4» sí). Medido en el
+# primer plan del canary F3: un ancla marcada AUSENTE en un día que la tenía dos veces; la misma
+# clave decide la deducción de la Nevera, así que «me comí ⅓ taza de yogurt» tampoco encontraba
+# la fila. Un carácter en una clase de regex; la mitad del catálogo de recetas pasaba por él.
 _QUANTITY_PATTERN = re.compile(
-    r'^[\d\s/.,]+'                           # Números, fracciones, espacios iniciales
+    r'^[\d\s/.,¼½¾⅓⅔⅛⅜⅝⅞]+'                   # Números, fracciones (también unicode), espacios iniciales
     r'(?:'
         r'g\b|gr\b|kg\b|mg\b|ml\b|l\b|lb\b|lbs\b|oz\b'   # Unidades métricas/imperiales
         r'|cdas?\b|cdtas?\b|cucharadas?\b|cucharaditas?\b'  # Cucharadas
@@ -3938,6 +3976,33 @@ def stamp_plan_country(plan_data, form_data, *, emit_observability: bool = False
     return _cc
 
 
+def cultural_country_for_form_data(form_data, day_index=None) -> str:
+    """[P1-ARQ25-F7-CULTURE · 2026-09-05] La OTRA puerta (I16): país cuya COCINA guía plantillas, inspiración,
+    hábitos de franja, arroz nocturno y juez culinario. `country_for_form_data` sigue siendo la puerta del
+    MERCADO (precios, catálogo, moneda, unidades). Con el knob `MEALFIT_CULTURAL_PROFILES` apagado o sin
+    elección de cocina, devuelve el país de compra: legado byte-idéntico. Fail-open al mercado."""
+    try:
+        from cultural_profiles import cultural_country_for_form_data as _ccf
+        return _ccf(form_data, day_index=day_index)
+    except Exception:
+        return country_for_form_data(form_data)
+
+
+def cultural_country_for_plan(plan_data, health_profile=None, *, day_index=None) -> str:
+    """[P1-ARQ25-F7-CULTURE · 2026-09-05] Puerta CULTURAL de un plan YA generado (swap, regenerar día, coach):
+    el sello `_plan_policy.effective.culture_weights` manda; sin sello, la elección viva del perfil; sin nada
+    (o knob apagado), el país de MERCADO del plan (`country_for_plan`): legado byte-idéntico. Espejo post-generación
+    de `cultural_country_for_form_data`."""
+    try:
+        from cultural_profiles import cultural_country_for_plan as _ccp
+        cc = _ccp(plan_data, health_profile, day_index=day_index)
+        if cc:
+            return cc
+    except Exception:
+        pass
+    return country_for_plan(plan_data, health_profile)
+
+
 def country_for_plan(plan_data, health_profile, *, return_source: bool = False):
     """[P1-PLAN-STAMPS-COUNTRY · 2026-08-21] País de un plan YA GENERADO, para las superficies
     post-generación (recalc, swap, backstop, telemetría).
@@ -4094,7 +4159,44 @@ def slot_positive_hint(slot_key: str, diet=None) -> str:
     return SLOT_POSITIVE_HINT.get(slot_key, "")
 
 
-def _get_fast_filtered_catalogs(allergies: tuple, dislikes: tuple, diet: str, country: str = None):
+def _market_pool_with_extras(pool: dict, country: str, culture_country: str = None) -> dict:
+    """[F7-H] Pool beta + básicos universales (sin condimentos como grasa) y, si la cocina elegida no es la del
+    mercado, sesgado a los constituyentes del registry de esa cocina (mínimo 5 por categoría; si no, el pool entero).
+    Puro; nunca lanza (cae al pool tal cual)."""
+    try:
+        from knobs import _env_bool
+        if not _env_bool("MEALFIT_MARKET_POOL_UNIVERSAL", True):
+            return pool
+        out = {}
+        for key in ("proteins", "carbs", "veggies_fats", "fruits"):
+            base = [x for x in (pool.get(key) or []) if x not in MARKET_POOL_CONDIMENTS_EXCLUDED]
+            seen = {strip_accents(str(x)).lower() for x in base}
+            for x in UNIVERSAL_MARKET_STAPLES.get(key) or []:
+                k = strip_accents(x).lower()
+                if k not in seen:
+                    base.append(x); seen.add(k)
+            out[key] = base
+        cc = str(culture_country or "").strip().upper()
+        if cc and cc != str(country or "").strip().upper():
+            try:
+                import dish_registry as _dr
+                snap = _dr.load_registry(cc) or {}
+                names = {strip_accents(str(c.get("canonical") or c.get("name") or "")).lower()
+                         for t in (snap.get("templates") or []) for c in (t.get("constituents") or [])}
+                if names:
+                    for key in ("proteins", "carbs", "veggies_fats"):
+                        hit = [x for x in out[key] if strip_accents(str(x)).lower() in names]
+                        if len(hit) >= 5:
+                            out[key] = hit
+            except Exception:
+                pass
+        return out
+    except Exception:
+        return pool
+
+
+def _get_fast_filtered_catalogs(allergies: tuple, dislikes: tuple, diet: str, country: str = None,
+                                market_extras: bool = False, culture_country: str = None):
     """Filtra el catálogo [dominicano|del país beta] basado en restricciones del usuario O(N)
     sin Cache Thrashing volátil.
 
@@ -4105,6 +4207,9 @@ def _get_fast_filtered_catalogs(allergies: tuple, dislikes: tuple, diet: str, co
     `COUNTRY_POOLS` usa su propio pool; `None`/`'DO'`/un país sin pool dedicado cae a
     DOMINICAN_* — fallback explícito, no excepción (byte-idéntico al comportamiento pre-T5)."""
     _country_pool = COUNTRY_POOLS.get(str(country or "").strip().upper()) if country else None
+    if _country_pool and market_extras:
+        # [F7-H] opt-in de los call sites de producción: básicos universales + sesgo a la cocina elegida
+        _country_pool = _market_pool_with_extras(_country_pool, country, culture_country)
     if _country_pool:
         filtered_proteins = list(_country_pool["proteins"])
         filtered_carbs = list(_country_pool["carbs"])
@@ -4630,6 +4735,23 @@ _ALLOWED_CONDIMENTS_RES = [
     re.compile(r"\b" + re.escape(c) + r"(?:e?s)?\b")
     for c in _ALLOWED_CONDIMENTS
 ]
+
+
+def is_allowed_condiment(name) -> bool:
+    """[P2-COHERENCE-BANNER-CONDIMENTS · 2026-09-03] ¿Es `name` un condimento del SSOT
+    (`_ALLOWED_CONDIMENTS`)? Minúsculas y sin acentos («Limón» → «limon», «Orégano» →
+    «oregano») para que la membresía no dependa de cómo lo escribió el modelo. Único
+    punto de verdad para «esto es un condimento» fuera de la despensa: NO copies la
+    tupla a otro sitio (lección P1-DIET-CANON-SSOT)."""
+    if not name:
+        return False
+    try:
+        import unicodedata
+        base = unicodedata.normalize("NFKD", str(name))
+        plain = "".join(ch for ch in base if not unicodedata.combining(ch)).lower()
+    except Exception:
+        plain = str(name).lower()
+    return any(rx.search(plain) for rx in _ALLOWED_CONDIMENTS_RES)
 
 
 # [P1-COUNTRY-CONDIMENT-PARITY-BETA · 2026-08-23] El catálogo cerrado de cada

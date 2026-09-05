@@ -107,7 +107,11 @@ _PLAN_GEN_LIMITER = RateLimiter(max_calls=3, period_seconds=60)
 _HISTORY_PREVIEW_MEALS_CAP = 6
 
 _RECALC_LIMITER = RateLimiter(max_calls=20, period_seconds=60)
+# [P1-ARQ25-F5-SHOPPING-PROJECTION · 2026-09-04] lectura del estado/read model de la proyección de compras
+_PROJECTIONS_LIMITER = RateLimiter(max_calls=30, period_seconds=60)
 _PDF_TELEMETRY_LIMITER = RateLimiter(max_calls=30, period_seconds=60)
+# [P2-LOADING-ETA-HONEST · 2026-09-03] lectura del p50/p90 real de la generación (pantalla de carga)
+_ETA_LIMITER = RateLimiter(max_calls=30, period_seconds=60)
 
 # [P2-GUEST-LLM-RATELIMIT · 2026-05-30] `/swap-meal` y `/recipe/expand` invocan
 # Gemini pero solo tenían `Depends(verify_api_quota)`. Para un GUEST (no
@@ -1952,6 +1956,18 @@ def _seed_chunk1_learning(
         )
 
 
+def _horizon_inject(pipeline_data: dict, data: dict, total_days_requested: int, actual_user_id) -> None:
+    """[P1-ARQ25-F3-HORIZON · 2026-09-02] Rebanada del blueprint para el chunk 0 del path legacy
+    (sync/SSE): la cola lo hace en `build_initial_pipeline_inputs`. Fail-open; off ⇒ no-op."""
+    try:
+        from horizon import inject_policy_into_pipeline_data
+        inject_policy_into_pipeline_data(
+            pipeline_data, form_data=data, total_days=int(total_days_requested or 1), days_offset=0,
+            days_count=pipeline_data.get("_days_to_generate") or total_days_requested, user_id=actual_user_id)
+    except Exception as _hz_e:
+        logger.warning(f"[P1-ARQ25-F3-HORIZON] rebanada no inyectada (legacy): {_hz_e}")
+
+
 def _enqueue_remaining_chunks(
     actual_user_id: str,
     plan_id,
@@ -2015,6 +2031,24 @@ def _enqueue_remaining_chunks(
             inherited = {"history": _hist, "summary": _summ}
 
     chunks = split_with_absorb(total_days_requested, PLAN_CHUNK_SIZE)
+    # [P1-ARQ25-F3-HORIZON · 2026-09-02] El blueprint del run (o reconstruido desde el
+    # formulario: misma política ⇒ mismo hash) se REBANA por chunk con las MISMAS fronteras
+    # que esta cola (H2). La rebanada viaja en `form_data` del snapshot (whitelist del
+    # orquestador) y su hash entra en `input_hash` del chunk. off ⇒ None ⇒ nada cambia.
+    _bp_f3, _eff_f3, _enforced_f3, _fp_f3 = None, None, False, ""
+    try:
+        from horizon import (blueprint_for_plan as _bp_for_plan, slice_for_chunk as _slice_f3,
+                             chunk_input_hash as _chunk_hash_f3, policy_enforced as _pol_enf_f3)
+        from generation_lifecycle import request_fingerprint as _req_fp_f3
+        _bp_f3 = _bp_for_plan(str(plan_id), data, total_days_requested)
+        if _bp_f3:
+            from plan_policy import compile_from_form as _cff_f3
+            _eff_f3 = (_cff_f3(data) or {}).get("effective") or {}
+            _enforced_f3 = _pol_enf_f3(actual_user_id)
+            _fp_f3 = _req_fp_f3(data)
+    except Exception as _bp_e:
+        logger.warning(f"[P1-ARQ25-F3-HORIZON] blueprint no disponible para los chunks 2..N: {_bp_e}")
+        _bp_f3 = None
     offset = chunks[0]
     for wk, count in enumerate(chunks[1:], start=2):
         if count > 0:
@@ -2022,10 +2056,24 @@ def _enqueue_remaining_chunks(
                 chunk_snapshot = dict(snapshot)
                 if inherited:
                     chunk_snapshot["_inherited_lifetime_lessons"] = inherited
+                _slice_wk = None
+                if _bp_f3:
+                    _slice_wk = _slice_f3(_bp_f3, offset, count)
+                    chunk_snapshot["form_data"] = {
+                        **snapshot["form_data"], "_blueprint_slice": _slice_wk,
+                        "_plan_policy_effective": _eff_f3, "_policy_enforced": _enforced_f3,
+                    }
                 _enqueue_plan_chunk(
                     actual_user_id, plan_id, wk, offset, count,
                     chunk_snapshot, chunk_kind="initial_plan",
                 )
+                if _slice_wk:
+                    from db_core import execute_sql_write as _esw_f3
+                    _esw_f3(
+                        "UPDATE plan_chunk_queue SET input_hash = %s WHERE meal_plan_id = %s "
+                        "AND week_number = %s AND status = 'pending'",
+                        (_chunk_hash_f3(_fp_f3, _slice_wk), plan_id, wk),
+                    )
             except Exception as chunk_err:
                 logger.warning(
                     f"⚠️ [CHUNK] Error encolando chunk semana {wk} "
@@ -2275,6 +2323,10 @@ def _postprocess_pipeline_result(
         _compiled_policy = _stamp_policy(result, data, total_days_requested=total_days_requested)
         if _compiled_policy:
             _emit_policy_metric(actual_user_id, existing_plan_id, _compiled_policy, result.get("_plan_policy_shadow"))
+            # [P1-ARQ25-F3-HORIZON · 2026-09-02] ventanas de frescos/congelación en la
+            # IngredientDemand (H6) — se persisten con el plan_data.
+            from horizon import stamp_demand_windows as _stamp_windows_f3
+            _stamp_windows_f3(result, (_compiled_policy or {}).get("effective"))
     except Exception as _pol_err:
         logger.warning(f"[P1-ARQ25-F2-PLANPOLICY] sello de política omitido: {_pol_err}")
     selected_techniques = result.pop("_selected_techniques", None)
@@ -2312,6 +2364,15 @@ def _postprocess_pipeline_result(
                 context_label=f"seed_chunk1_{transport_label}",
                 user_id=actual_user_id,  # [P0-9] ownership check
             )
+            # [P1-ARQ25-F3-HORIZON · 2026-09-02] lista 7/15/30 como PROYECCIÓN (outbox
+            # `plan_jobs`, la Fase 5 la consume). Solo bajo `enforce`; dedup por plan+política.
+            try:
+                from horizon import enqueue_shopping_projection_job as _enq_proj_f3
+                _enq_proj_f3(str(plan_id), actual_user_id, revision=None,
+                             effective=(result.get("_plan_policy") or {}).get("effective"),
+                             total_days=int(total_days_requested or 1))
+            except Exception as _proj_e:
+                logger.debug(f"[P1-ARQ25-F3-HORIZON] proyección no encolada: {_proj_e}")
             _enqueue_remaining_chunks(
                 actual_user_id, plan_id, result,
                 data=data, taste_profile=taste_profile,
@@ -3605,6 +3666,8 @@ def api_analyze(
             # Usuario sin perfil o guest solicitó plan largo → capear a 3 días
             pipeline_data["_days_to_generate"] = PLAN_CHUNK_SIZE
 
+        _horizon_inject(pipeline_data, data, total_days_requested, actual_user_id)
+
         # [P0-A2] Cap defensivo: si en algún branch futuro `pipeline_data["_days_to_generate"]`
         # se asignara con un valor distinto a `PLAN_CHUNK_SIZE`, este enforce
         # garantiza el límite. Hoy es no-op porque las dos asignaciones de arriba
@@ -4104,6 +4167,8 @@ async def api_analyze_stream(
         elif total_days_requested > PLAN_CHUNK_SIZE:
             # Usuario sin perfil o guest solicitó plan largo → capear a 3 días
             pipeline_data["_days_to_generate"] = PLAN_CHUNK_SIZE
+
+        _horizon_inject(pipeline_data, data, total_days_requested, actual_user_id)
 
         # [P0-A2] Cap defensivo de `_days_to_generate` (invariante explícito).
         _enforce_days_to_generate_cap(pipeline_data, log_prefix="ROUTER /analyze/stream")
@@ -5279,6 +5344,108 @@ async def api_pending_pipeline_status(
         return {"status": "none"}
 
 
+# ── [P2-LOADING-ETA-HONEST · 2026-09-03] ETA real de la generación para la pantalla de carga ──
+# La pantalla decía «estimado 3-6 minutos» fijo. Medido sobre los 34 bloques 1 completados por la
+# cola desde el flip (2026-09-02): mediana 583 s (~10 min), p90 925 s (~15 min), mín 255 s, máx
+# 1856 s. El copy fijo mentía en casi todos los planes. La cifra ya la tiene la base: el tiempo de
+# pared del bloque 1 es `updated_at - created_at` de la fila `week_number=1` completada (la cola
+# lo ejecuta con `execute_after = NOW()`, así que la espera en cola es despreciable). Se sirve
+# p50/p90 de los últimos 14 días, cacheado 10 min en proceso; con menos de 5 muestras se devuelven
+# nulls y el frontend cae a un rango prudente. Cero LLM ⇒ `get_verified_user_id` + limitador, no
+# `verify_api_quota` (ver tabla «Historial-quota-exemption» en CLAUDE.md).
+_GENERATION_ETA_WINDOW_DAYS = 14
+_GENERATION_ETA_MIN_SAMPLES = 5
+_GENERATION_ETA_TTL_S = 600
+_GENERATION_ETA_CACHE: dict = {"at": 0.0, "value": None}
+
+
+def _generation_eta_from_row(row) -> dict:
+    """Forma pública del ETA a partir de la fila agregada (n, p50, p90). Pura, unit-testable."""
+    n = int((row or {}).get("n") or 0)
+    if n < _GENERATION_ETA_MIN_SAMPLES:
+        return {"p50_s": None, "p90_s": None, "n": n, "window_days": _GENERATION_ETA_WINDOW_DAYS}
+    p50 = int(float((row or {}).get("p50") or 0))
+    p90 = int(float((row or {}).get("p90") or 0))
+    if p50 <= 0 or p90 <= 0:
+        return {"p50_s": None, "p90_s": None, "n": n, "window_days": _GENERATION_ETA_WINDOW_DAYS}
+    return {"p50_s": p50, "p90_s": max(p90, p50), "n": n, "window_days": _GENERATION_ETA_WINDOW_DAYS}
+
+
+def _generation_eta_snapshot() -> dict:
+    """p50/p90 del tiempo de pared del bloque 1 (cola) en la ventana, con cache en proceso."""
+    import time as _time
+    from db_core import execute_sql_query  # import local (patrón del módulo); el fail-open ocultó el NameError en prod
+    now = _time.time()
+    cached = _GENERATION_ETA_CACHE.get("value")
+    if cached is not None and now - float(_GENERATION_ETA_CACHE.get("at") or 0) < _GENERATION_ETA_TTL_S:
+        return cached
+    row = execute_sql_query(
+        """
+        SELECT COUNT(*) AS n,
+               percentile_cont(0.5) WITHIN GROUP (ORDER BY EXTRACT(EPOCH FROM (updated_at - created_at))) AS p50,
+               percentile_cont(0.9) WITHIN GROUP (ORDER BY EXTRACT(EPOCH FROM (updated_at - created_at))) AS p90
+        FROM plan_chunk_queue
+        WHERE week_number = 1
+          AND status = 'completed'
+          AND created_at > NOW() - make_interval(days => %s)
+          AND EXTRACT(EPOCH FROM (updated_at - created_at)) BETWEEN 60 AND 7200
+        """,
+        (int(_GENERATION_ETA_WINDOW_DAYS),), fetch_one=True,
+    ) or {}
+    value = _generation_eta_from_row(row)
+    _GENERATION_ETA_CACHE["at"] = now
+    _GENERATION_ETA_CACHE["value"] = value
+    return value
+
+
+@router.get("/{plan_id}/projections")
+async def api_plan_projections(
+    plan_id: str,
+    verified_user_id: str = Depends(get_verified_user_id),
+    _rl: None = Depends(_PROJECTIONS_LIMITER),
+):
+    """[P1-ARQ25-F5-SHOPPING-PROJECTION · 2026-09-04] Estado (`none/pending/ready/failed/stale`) y read
+    model de la proyección de compras 7/15/30 por revisión (`plan_jobs.shopping_projection`). Cero LLM,
+    exento de cuota (lectura), ownership `AND user_id`."""
+    if not verified_user_id:
+        raise HTTPException(status_code=401, detail="Autenticación requerida")  # guests no tienen proyección
+    try:
+        return await asyncio.to_thread(_projection_snapshot, plan_id, verified_user_id)
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.warning(f"[ARQ25-F5] /projections falló (fail-open) plan={plan_id}: {e!r}")
+        return {"status": "error", "revision": None}
+
+
+def _projection_snapshot(plan_id: str, user_id: str) -> dict:
+    from db import execute_sql_query
+    from plan_jobs import classify_projection_jobs
+    plan = execute_sql_query("SELECT revision FROM meal_plans WHERE id = %s AND user_id = %s", (plan_id, user_id), fetch_one=True)
+    if not plan:
+        raise HTTPException(status_code=404, detail="Plan no encontrado")
+    jobs = execute_sql_query(
+        "SELECT id, status, plan_revision, attempts, error_code, payload, processed_at, created_at FROM plan_jobs "
+        "WHERE plan_id = %s AND user_id = %s AND job_type = 'shopping_projection' ORDER BY created_at DESC LIMIT 8",
+        (plan_id, user_id), fetch_all=True,
+    ) or []
+    return classify_projection_jobs(plan.get("revision"), [dict(j) for j in jobs])
+
+
+@router.get("/generation-eta")
+async def api_generation_eta(
+    verified_user_id: str = Depends(get_verified_user_id),
+    _rl: None = Depends(_ETA_LIMITER),
+):
+    """[P2-LOADING-ETA-HONEST · 2026-09-03] `{p50_s, p90_s, n, window_days}` del bloque 1 real.
+    Global (no depende del usuario), cero LLM, cache 10 min. Falla abierto a nulls."""
+    try:
+        return await asyncio.to_thread(_generation_eta_snapshot)
+    except Exception as e:
+        logger.warning(f"[P2-LOADING-ETA-HONEST] /generation-eta falló (fail-open): {e!r}")
+        return {"p50_s": None, "p90_s": None, "n": 0, "window_days": _GENERATION_ETA_WINDOW_DAYS}
+
+
 @router.get("/guest-plan")
 async def api_guest_plan(session_id: Optional[str] = Query(None)):
     """[P1-GUEST-PLAN-RECOVERY · 2026-07-09] Devuelve el plan_data guardado de un GUEST para recovery
@@ -6322,9 +6489,26 @@ def _retarget_band_ceiling() -> float:
     return min(max(_v, 1.0), 3.0)
 
 
+def _retarget_to_meta_on() -> bool:
+    """[P2-REGEN-DAY-RETARGET-TO-META · 2026-09-03] Knob del retarget simétrico: con él
+    encendido (default) el objetivo de cada macro al regenerar un día ES la meta del perfil,
+    en ambas direcciones. `MEALFIT_REGEN_DAY_RETARGET_TO_META=0` restaura el `max(suma, meta)`
+    + techo de P1-RETARGET-NO-PERPETUA-EXCESO sin redeploy. tooltip-anchor: P2-REGEN-DAY-RETARGET-TO-META"""
+    return os.environ.get("MEALFIT_REGEN_DAY_RETARGET_TO_META", "true").strip().lower() in ("1", "true", "yes", "on")
+
+
 def _retarget_macro_target(suma_actual: float, meta: float) -> float:
-    """Objetivo de UN macro al regenerar un día: nunca por debajo de la meta, nunca por
-    encima de la banda aceptable.
+    """Objetivo de UN macro al regenerar un día: la meta del perfil.
+
+    [P2-REGEN-DAY-RETARGET-TO-META · 2026-09-03] La meta manda en AMBAS direcciones. El
+    `max(suma_actual, meta)` protegía el DÉFICIT, pero un día por ENCIMA de la meta se fijaba
+    a sí mismo como objetivo y cada actualización adoptaba el pequeño exceso de la anterior:
+    8 actualizaciones seguidas del dueño (2026-09-03) llevaron el día 1 de 2390 a 2688 kcal y
+    los carbos de 321 a 387 g contra una meta de 2500 kcal / 334 g. El techo de 1.12 acota
+    el OBJETIVO, no el resultado, y el band score se mide contra ese objetivo desplazado, así
+    que reportó 1.0 durante toda la deriva. Ahora el objetivo ES la meta; el suelo de
+    P1-REGEN-DAY-RETARGET se conserva (un día deficitario también sube a la meta). Sin meta
+    real (0/None) se queda con la suma actual, como antes del retarget.
 
     SSOT de la aritmética del retarget. Vive fuera del endpoint a propósito: dentro de
     `api_regenerate_day` (cientos de líneas, requiere plan + usuario + LLM) esta regla solo
@@ -6332,10 +6516,16 @@ def _retarget_macro_target(suma_actual: float, meta: float) -> float:
     algo está ESCRITO, no que se DECIDA así. Aquí se puede ejecutar con los números del
     caso real.
     """
-    _t = max(float(suma_actual or 0.0), float(meta or 0.0))
+    _cur = float(suma_actual or 0.0)
+    _meta = float(meta or 0.0)
+    if _meta <= 0:
+        return _cur  # fail-open: sin meta real, la suma actual (comportamiento previo al retarget)
+    if _retarget_to_meta_on():
+        return _meta
+    _t = max(_cur, _meta)
     _ceil = _retarget_band_ceiling()
-    if _ceil > 0 and meta and meta > 0:
-        _t = min(_t, float(meta) * _ceil)
+    if _ceil > 0:
+        _t = min(_t, _meta * _ceil)
     return _t
 
 
@@ -6473,20 +6663,31 @@ def _load_swap_plan_country_stub(user_id: str, plan_id: Optional[str] = None) ->
 
         if plan_id and isinstance(plan_id, str):
             row = _exq_swap_country(
-                "SELECT plan_data->>'_country' AS plan_country "
+                "SELECT plan_data->>'_country' AS plan_country, plan_data->'_plan_policy'->'effective'->'culture_weights' AS plan_culture "
                 "FROM meal_plans WHERE id = %s AND user_id = %s",
                 (plan_id, user_id),
                 fetch_one=True,
             )
         else:
             row = _exq_swap_country(
-                "SELECT plan_data->>'_country' AS plan_country "
+                "SELECT plan_data->>'_country' AS plan_country, plan_data->'_plan_policy'->'effective'->'culture_weights' AS plan_culture "
                 "FROM meal_plans WHERE user_id = %s ORDER BY created_at DESC LIMIT 1",
                 (user_id,),
                 fetch_one=True,
             )
         raw = row.get("plan_country") if isinstance(row, dict) else None
-        return {"_country": raw} if raw else {}
+        out = {"_country": raw} if raw else {}
+        # [P1-ARQ25-F7-CULTURE] el sello de COCINA del plan viaja junto al de mercado (forma de plan_data)
+        cw = row.get("plan_culture") if isinstance(row, dict) else None
+        if isinstance(cw, str):
+            try:
+                import json as _json_cw
+                cw = _json_cw.loads(cw)
+            except Exception:
+                cw = None
+        if isinstance(cw, list) and cw:
+            out["_plan_policy"] = {"effective": {"culture_weights": cw}}
+        return out
     except Exception as _country_e:
         logger.debug(
             "[P1-COUNTRY-PLAN-VS-PERFIL-EN-BLOQUES] no se leyó sello del swap: "
@@ -6746,10 +6947,20 @@ def api_swap_meal(background_tasks: BackgroundTasks, data: dict = Body(...), ver
                 _swap_plan_stub,
                 _swap_health_profile,
             )
+            # [P1-ARQ25-F7-CULTURE] la cocina sellada en el plan viaja al motor del swap como pesos ya compilados
+            try:
+                from cultural_profiles import culture_weights_for_plan as _cwfp_swap
+                _cw_swap = _cwfp_swap(_swap_plan_stub)
+                if _cw_swap:
+                    data["_culture_weights"] = _cw_swap
+            except Exception:
+                pass
 
         rejected_meal = data.get("rejected_meal")
         meal_type = data.get("meal_type", "")
-        swap_reason = data.get("swap_reason", "variety")  # variety | time | dislike | similar | budget
+        # [P1-ARQ25-F3-HORIZON · 2026-09-02] sin motivo ⇒ `renewal.v1` bajo `enforce`, `variety` legado.
+        from horizon import default_swap_reason as _default_swap_reason_f3
+        swap_reason = data.get("swap_reason") or _default_swap_reason_f3(data.get("user_id"))  # variety | time | dislike | similar | budget
 
         # [P2-PANTRY-SUFFICIENCY · 2026-06-23] Gate de suficiencia de la Nevera ANTES de
         # consumir cuota o llamar al LLM. Requisito del owner: el plato nuevo debe ser
@@ -6861,6 +7072,12 @@ def api_swap_meal(background_tasks: BackgroundTasks, data: dict = Body(...), ver
         # [P1-SWAP-REGEN-RESUME · 2026-07-11] flag in-flight ANTES de la IA (el frontend lo
         # pollea si el usuario refresca); si swap_meal levanta, el except-clear lo retira
         # (el resume del cliente verá ausencia + plan sin cambios → apaga sin éxito).
+        # [P1-ARQ25-F3-HORIZON · 2026-09-02] el swap lee la política del plan vivo (server-side).
+        try:
+            from horizon import attach_policy_to_swap_form as _attach_policy_f3
+            _attach_policy_f3(data, user_id, plan_id=data.get("plan_id"))
+        except Exception as _ap_e:
+            logger.debug(f"[P1-ARQ25-F3-HORIZON] política no adjunta al swap: {_ap_e}")
         _mri_ctx = _swap_meal_regen_flag_set(data, verified_user_id) \
             if (user_id and user_id != "guest") else None
         try:
@@ -7255,7 +7472,7 @@ def api_swap_meal_persist(
     from db_plans import update_plan_data_atomic
     try:
         owner = execute_sql_query(
-            "SELECT id, plan_data->>'_country' AS plan_country "
+            "SELECT id, plan_data->>'_country' AS plan_country, plan_data->'_plan_policy'->'effective'->'culture_weights' AS plan_culture "
             "FROM meal_plans WHERE id = %s AND user_id = %s",
             (plan_id, verified_user_id),
             fetch_one=True,
@@ -7274,6 +7491,7 @@ def api_swap_meal_persist(
         _persist_allergies: list = []
         _persist_diet = None
         _swap_country = "DO"
+        _swap_culture = "DO"
         _hp_micro = {}
         # [P1-PLAN-DISPLAY-I18N-MUTATOR-swap] locale del usuario para el despacho de
         # re-enriquecimiento post-persist (abajo, fuera del lock). Se hidrata del MISMO
@@ -7334,6 +7552,12 @@ def api_swap_meal_persist(
             _hp_micro,
         )
         _micro_form["country"] = _swap_country
+        # [P1-ARQ25-F7-CULTURE] cocina del plan para el finalizador (arroz nocturno) y el backstop de franja
+        from constants import cultural_country_for_plan as _ccfp_swap_persist
+        _swap_culture = _ccfp_swap_persist(
+            {"_country": owner.get("plan_country"), "_plan_policy": {"effective": {"culture_weights": owner.get("plan_culture")}}},
+            _hp_micro,
+        )
 
         # [P0-SWAP-PERSIST-CLINICAL · 2026-07-01] (audit P0-3) `/swap-meal/persist` era la ÚNICA superficie de
         # update con round-trip CLIENTE entre la generación validada y la persistencia: el body `new_meal` se
@@ -7476,7 +7700,7 @@ def api_swap_meal_persist(
                     # protagonista deja de declinar aquí. Sin él llevaba inerte desde
                     # P1-PROTAGONIST-CONTEXT-GATE en el ÚNICO round-trip que persiste el swap.
                     _fin_sp(new_meal, db=_fdb_sp, pantry_strict=_ps_sp, allergies=_persist_allergies,
-                            day_kcal_target=_dkt_sp(plan_data.get("macros")), country=_swap_country)
+                            day_kcal_target=_dkt_sp(plan_data.get("macros")), country=_swap_culture)
                     _tu_sp(new_meal, _fdb_sp)
                     try:
                         # [P1-COUNTRY-SYSTEM-F2 · 2026-08-17 (Task 9, g)] CERRADO — `_swap_country`
@@ -7486,7 +7710,7 @@ def api_swap_meal_persist(
                         # dejaba este site EXENTO (país default 'DO' incondicional) porque
                         # P2-MUTATOR-PURITY prohíbe reentrar al pool DENTRO del lock — la lectura
                         # de perfil sigue prohibida ahí, pero el VALOR ya resuelto no lo está.
-                        _slot_viols_sp = _slot_sp(new_meal, str(new_meal.get("meal") or ""), country=_swap_country)
+                        _slot_viols_sp = _slot_sp(new_meal, str(new_meal.get("meal") or ""), country=_swap_culture)
                         if _slot_viols_sp:
                             new_meal["_slot_advisory"] = True
                     except Exception:
@@ -7792,6 +8016,12 @@ def api_swap_meal_persist(
             raise HTTPException(
                 status_code=404, detail="Plan no encontrado"
             )
+        # [P1-ARQ25-F5-REPROJECTION · 2026-09-05] la lista pudo cambiar: re-encolar la proyección (fail-open)
+        try:
+            from plan_jobs import enqueue_shopping_reprojection as _f5_reproj
+            _f5_reproj(plan_id, verified_user_id, reason="swap", plan_data=result)
+        except Exception as _f5_e:
+            logger.debug(f"[ARQ25-F5] reprojection (swap) no encolada: {_f5_e!r}")
         # [P1-PLAN-DISPLAY-I18N-MUTATOR-swap] Despacho best-effort post-persist (FUERA del
         # lock): el DELETE-on-write de arriba dejó el meal swapeado sin `_display` — si el
         # usuario lee el dashboard en otro idioma, re-enriquecer el día tocado
@@ -8548,6 +8778,14 @@ def api_regenerate_day(
         if isinstance(plan_data, str):
             import json as _json
             plan_data = _json.loads(plan_data)
+        # [P1-ARQ25-F7-CULTURE] la cocina sellada en el plan viaja a cada swap del día (meal_form la reenvía)
+        try:
+            from cultural_profiles import culture_weights_for_plan as _cwfp_rd
+            _cw_rd = _cwfp_rd(plan_data)
+            if _cw_rd:
+                data["_culture_weights"] = _cw_rd
+        except Exception:
+            pass
         # [P1-RENAL-UPDATE-ENFORCE · 2026-06-24] (re-audit P1-1) ¿El plan lleva cap renal KDIGO? Usado para
         # (a) NO empujar la proteína hacia la meta en el retarget (sería iatrogénico) y (b) trimar el día
         # regenerado al techo de proteína en el persist.
@@ -8887,6 +9125,7 @@ def api_regenerate_day(
                 # hace spread de `data`), así que sin esto `swap_meal(surface="day")` seguía
                 # cayendo a 'DO' aunque `data['country']` ya viniera hidratado.
                 "country": data.get("country"),
+                "_culture_weights": data.get("_culture_weights"),  # [P1-ARQ25-F7-CULTURE] cocina del plan
                 "goal": data.get("goal") or data.get("mainGoal"),
                 # [P2-REGEN-DAY-BIOMETRICS-PROPAGATE · 2026-06-29] (cierre follow-up testing en vivo) Propaga los
                 # biométricos —ya hidratados en `data` por _enrich_clinical_from_profile (block P2-UPDATE-HYDRATE-
@@ -8950,6 +9189,12 @@ def api_regenerate_day(
                 # cambiar si era factible cocinarlo desde la Nevera.
                 try:
                     _form_v = dict(meal_form)
+                    # [P1-ARQ25-F3-HORIZON · 2026-09-02] la regen de día hereda la política del plan.
+                    try:
+                        from horizon import attach_policy_to_swap_form as _attach_policy_f3
+                        _attach_policy_f3(_form_v, user_id, plan_data=plan_data, day_index=data.get("day_index"))
+                    except Exception as _ap_e:
+                        logger.debug(f"[P1-ARQ25-F3-HORIZON] política no adjunta a la regen: {_ap_e}")
                     if _variety_on and day_avoid:
                         _form_v["disliked_meals"] = list(day_avoid)
                     nm = swap_meal(_form_v, surface="day")
@@ -9220,6 +9465,27 @@ def api_regenerate_day(
                                 f"({_n_frl} día(s)) — paridad con el relevel de la generación.")
             except Exception as _frl_e:
                 logger.warning(f"[P2-REGEN-DAY-FATS-RELEVEL] no-op: {type(_frl_e).__name__}: {_frl_e}")
+        # [P2-REGEN-DAY-FAT-FLOOR · 2026-09-03] El relevel de arriba solo RECORTA grasa sobre banda; si
+        # el día regenerado quedó CORTO de grasa (58 g vs 69 g el 2026-09-03 → kcal fuera de banda y
+        # plan marcado degradado), el piso la sube escalando la fuente de grasa existente más rica
+        # (aceite, aguacate, semillas), acotado por kcal y sin inventar compras.
+        if (
+            regenerated > 0 and not _ai_unavailable
+            and os.environ.get("MEALFIT_REGEN_DAY_FAT_FLOOR", "true").strip().lower() in ("1", "true", "yes", "on")
+            and float(day_target.get("fats_g") or 0) > 0
+        ):
+            try:
+                from graph_orchestrator import (_close_fat_gap_for_day as _cfg_rd, FAT_FLOOR_TOL as _ff_tol,
+                                                FAT_FLOOR_MAX_SCALE as _ff_max)
+                _real_ff = [m for m in new_meals if isinstance(m, dict)]
+                _pre_ff = sum(float(m.get("fats") or 0) for m in _real_ff)
+                if _cfg_rd(_real_ff, float(day_target.get("fats_g") or 0), float(day_target.get("kcal") or 0), _db,
+                           tol=_ff_tol, max_scale=_ff_max):
+                    _post_ff = sum(float(m.get("fats") or 0) for m in _real_ff)
+                    logger.info(f"🥑 [P2-REGEN-DAY-FAT-FLOOR] grasas del día {_pre_ff:.0f}g → {_post_ff:.0f}g "
+                                f"(target {float(day_target.get('fats_g') or 0):.0f}g) escalando la fuente existente")
+            except Exception as _ff_e:
+                logger.warning(f"[P2-REGEN-DAY-FAT-FLOOR] no-op: {type(_ff_e).__name__}: {_ff_e}")
 
         # [P1-UPDATE-MACRO-PARITY · 2026-07-03] (audit v6 · P1-1) Refinador GLOBAL entero de 5g del día
         # regenerado (paridad con assemble: rebalance → refine): si tras el rebalance el día sigue fuera
@@ -9597,6 +9863,12 @@ def api_regenerate_day(
         result = update_plan_data_atomic(plan_id, _day_mutator, user_id=verified_user_id)
         if not result:
             raise HTTPException(status_code=404, detail="Plan no encontrado")
+        # [P1-ARQ25-F5-REPROJECTION · 2026-09-05] la lista pudo cambiar: re-encolar la proyección (fail-open)
+        try:
+            from plan_jobs import enqueue_shopping_reprojection as _f5_reproj
+            _f5_reproj(plan_id, verified_user_id, reason="regenerate_day", plan_data=result)
+        except Exception as _f5_e:
+            logger.debug(f"[ARQ25-F5] reprojection (regenerate_day) no encolada: {_f5_e!r}")
 
         # [P1-PLAN-DISPLAY-I18N-MUTATOR-regenday] Despacho best-effort post-persist (FUERA del
         # lock): re-enriquecer `_display` del día regenerado si el locale del usuario aplica.
@@ -10552,8 +10824,24 @@ def api_restock(data: dict = Body(...), verified_user_id: Optional[str] = Depend
             except Exception:
                 return False
 
+        # [P2-RESTOCK-DEDUP-RESPECTS-INVENTORY · 2026-09-04] El dedup por ciclo existe para no SUMAR dos
+        # veces una compra que sigue en la Nevera. Si el ítem YA NO está (lo borró el usuario, o se
+        # consumió a cero), volver a comprarlo es legítimo: el dueño borró calamar/espárragos/yogur,
+        # pulsó «Ya compré lo que faltaba (5)» y el servidor saltó los 5 en silencio (200 OK, «todos
+        # ya estaban registrados»). Se salta solo lo que sigue presente.
+        _present_keys = set()
+        try:
+            _inv_rows = execute_sql_query(
+                "SELECT ingredient_name FROM user_inventory WHERE user_id = %s AND quantity > 0",
+                (user_id,), fetch_all=True,
+            ) or []
+            _present_keys = {strip_accents(str(r.get("ingredient_name") or "").strip().lower()) for r in _inv_rows}
+        except Exception as _inv_e:
+            logger.warning(f"[P2-RESTOCK-DEDUP-RESPECTS-INVENTORY] lectura de inventario falló: {_inv_e}; dedup solo por ciclo.")
+            _present_keys = None
         filtered_ingredients = []
         skipped_dupes = []
+        rebought = []
         for raw_item in ingredients:
             name = _name_of(raw_item)
             if not name:
@@ -10561,15 +10849,19 @@ def api_restock(data: dict = Body(...), verified_user_id: Optional[str] = Depend
             key = strip_accents(name.lower())
             prev_ts = _existing_restocked.get(key)
             if isinstance(prev_ts, str) and _in_cycle(prev_ts):
-                skipped_dupes.append(name)
-                continue
+                if _present_keys is None or key in _present_keys:
+                    skipped_dupes.append(name)
+                    continue
+                rebought.append(name)
             filtered_ingredients.append(raw_item)
+        if rebought:
+            logger.info(f"🛒 [P2-RESTOCK-DEDUP-RESPECTS-INVENTORY] {len(rebought)} item(s) re-comprado(s) dentro del ciclo porque ya no estaban en la Nevera: {rebought[:5]}")
 
         if skipped_dupes:
             logger.info(f"🔁 [RESTOCK] {len(skipped_dupes)} item(s) ya registrado(s) en ciclo ({_cycle_days}d), saltando duplicados: {skipped_dupes[:5]}")
 
         if not filtered_ingredients:
-            return {"success": True, "message": "Todos los items ya estaban registrados en este ciclo."}
+            return {"success": True, "added": 0, "skipped": skipped_dupes, "message": "Todos los items ya estaban registrados en este ciclo."}
 
         # [P2-NEVERA-BRANDS · 2026-07-06] Resolver la MARCA comprada: los items
         # estructurados traen `brand_product_id` (el producto que la lista usó —
@@ -10739,6 +11031,8 @@ def api_restock(data: dict = Body(...), verified_user_id: Optional[str] = Depend
                 "success": True,
                 "message": "¡Despensa actualizada exitosamente!",
                 "persisted_count": len(persisted_names),
+                "added": len(persisted_names),  # [P2-RESTOCK-DEDUP-RESPECTS-INVENTORY] el cliente distingue «sumado» de «ya lo tenías»
+                "skipped": skipped_dupes,
                 "requested_count": len(filtered_ingredients),
                 "plan_unfrozen": _unfrozen_now,
             }
@@ -11911,6 +12205,12 @@ def api_recalculate_shopping_list(data: dict = Body(...), verified_user_id: Opti
             # por save_new_meal_plan_atomic, o filtro user_id no matched).
             # 404 explícito en lugar de retornar success con plan_data stale.
             raise HTTPException(status_code=404, detail="Plan no encontrado")
+        # [P1-ARQ25-F5-REPROJECTION · 2026-09-05] la lista pudo cambiar: re-encolar la proyección (fail-open)
+        try:
+            from plan_jobs import enqueue_shopping_reprojection as _f5_reproj
+            _f5_reproj(plan_id, user_id, reason="recalculate", plan_data=merged_plan_data)
+        except Exception as _f5_e:
+            logger.debug(f"[ARQ25-F5] reprojection (recalculate) no encolada: {_f5_e!r}")
 
         logger.info(f"✅ [RECALC] Listas recalculadas exitosamente ×{household_size} personas")
 
@@ -11996,6 +12296,59 @@ def api_recalculate_shopping_list(data: dict = Body(...), verified_user_id: Opti
                 detail="DB temporalmente saturada. Reintenta en unos segundos.",
             )
         raise HTTPException(status_code=500, detail=safe_error_detail(e))
+
+
+# [P1-ARQ25-F4-FORM · 2026-09-03] Sink del EMBUDO del wizard. El gate de la Fase 4 exige «sin
+# caída de conversión frente a la línea base, medida con pipeline_metrics» y no existía ninguna
+# métrica del formulario. Invitados incluidos (el wizard corre antes del registro): el limitador
+# cae a IP y el `sid` del cliente se hashea — nunca se persiste crudo. Best-effort: jamás bloquea
+# al wizard (fallo de DB ⇒ `accepted` parcial, 200). NO `verify_api_quota` (telemetría).
+_WIZARD_TELEMETRY_LIMITER = RateLimiter(max_calls=60, period_seconds=60)
+_WIZARD_EVENTS = frozenset({
+    "wizard_start", "step_view", "step_done", "step_skip", "wizard_submit", "wizard_abandon", "wizard_restore",
+})
+_WIZARD_META_KEYS = ("step_id", "field", "index", "total", "app_mode", "plan_source", "form_version", "policy_form", "locale")
+
+
+@router.post("/telemetry/wizard")
+def api_wizard_funnel_telemetry(
+    data: dict = Body(...),
+    verified_user_id: Optional[str] = Depends(_WIZARD_TELEMETRY_LIMITER),
+):
+    """[P1-ARQ25-F4-FORM] `{sid, events:[{event, step_id, field, index, total, …}]}` → filas
+    `pipeline_metrics.node='wizard_funnel'` (metadata con lista blanca de claves, valores acotados).
+    Conversión = wizard_submit / wizard_start por `session_id` (sid hasheado)."""
+    import hashlib as _hashlib
+    from db_core import execute_sql_write as _write
+    events = data.get("events") if isinstance(data, dict) else None
+    if not isinstance(events, list):
+        return {"accepted": 0}
+    sid_raw = str(data.get("sid") or "")[:128]
+    session_hash = _hashlib.sha256(sid_raw.encode("utf-8")).hexdigest()[:16] if sid_raw else None
+    accepted = 0
+    for ev in events[:20]:
+        if not isinstance(ev, dict):
+            continue
+        name = str(ev.get("event") or "")[:32]
+        if name not in _WIZARD_EVENTS:
+            continue
+        meta: dict = {"event": name}
+        for k in _WIZARD_META_KEYS:
+            v = ev.get(k)
+            if v is None:
+                continue
+            meta[k] = int(v) if isinstance(v, (int, float)) and not isinstance(v, bool) else str(v)[:64]
+        try:
+            _write(
+                "INSERT INTO pipeline_metrics (user_id, session_id, node, duration_ms, retries, tokens_estimated, confidence, metadata) "
+                "VALUES (%s, %s, 'wizard_funnel', 0, 0, 0, 0, %s::jsonb)",
+                (verified_user_id, session_hash, _json.dumps(meta, ensure_ascii=False)),
+            )
+            accepted += 1
+        except Exception as e:
+            logger.debug(f"[P1-ARQ25-F4-FORM] wizard_funnel no persistido: {type(e).__name__}: {e}")
+            break
+    return {"accepted": accepted}
 
 
 @router.post("/telemetry/pdf-stale-fallback")

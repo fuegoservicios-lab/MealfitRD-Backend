@@ -118,6 +118,10 @@ async def api_create_generation_run(
         })
 
     inputs = await asyncio.to_thread(build_initial_pipeline_inputs, data, user_id, session_id)
+    # [P1-ARQ25-F3-HORIZON · 2026-09-02] el blueprint se persiste CON el run (§6.5) antes de encolar.
+    if inputs.get("blueprint"):
+        from horizon import persist_run_blueprint
+        await asyncio.to_thread(persist_run_blueprint, str(run["id"]), inputs["blueprint"])
     snapshot = {
         "form_data": inputs["pipeline_data"],
         "raw_data": data,

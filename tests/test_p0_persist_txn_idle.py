@@ -27,7 +27,7 @@ Fix de dos capas:
   2) FOR UPDATE (T1 merge y demás mutators row-locked, que NO pueden hoistearse
      sin romper la invariante I7): `set_meal_plan_for_update_timeouts` emite
      además `SET LOCAL idle_in_transaction_session_timeout` (knob
-     `MEALFIT_PLAN_FOR_UPDATE_IDLE_TXN_TIMEOUT_MS`, default 60000). 0 ⇒ NO se
+     `MEALFIT_PLAN_FOR_UPDATE_IDLE_TXN_TIMEOUT_MS`, default 180000 desde P1-CHUNK-T1-IDLE-TXN-180S; era 60000). 0 ⇒ NO se
      emite el SET (en Postgres 0 = deshabilitado/infinito — nunca queremos eso).
 """
 from __future__ import annotations

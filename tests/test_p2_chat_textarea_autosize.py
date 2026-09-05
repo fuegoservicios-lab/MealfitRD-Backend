@@ -177,6 +177,8 @@ def test_agentpage_sin_autoresize_por_evento():
         (i, line.strip())
         for i, line in enumerate(code.splitlines(), start=1)
         if _STYLE_HEIGHT_WRITE.search(line)
+        # [P2-CHAT-ANCHOR-SENT-TOP] el espaciador del anclaje no es un textarea: su altura se fija a mano a propósito
+        and "spacerRef" not in line
     ]
     assert not offenders, (
         "AgentPage.jsx no debe escribir `.style.height` a mano — usa "

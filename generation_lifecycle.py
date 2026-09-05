@@ -561,6 +561,16 @@ def load_run_snapshot(run_id: str, user_id: str, *, include_plan: bool = False) 
 # Encolado del Bloque 1 (endpoint) — placeholder + chunk 0 + despertar al worker
 # ---------------------------------------------------------------------------
 
+def _chunk_input_hash_f3(form_data: dict) -> str:
+    """[P1-ARQ25-F3-HORIZON] `input_hash` = huella del formulario + hash de `_blueprint_slice`."""
+    fp = request_fingerprint(form_data or {})
+    try:
+        from horizon import chunk_input_hash
+        return chunk_input_hash(fp, (form_data or {}).get("_blueprint_slice"))
+    except Exception:
+        return fp
+
+
 def create_placeholder_plan_and_enqueue_initial(
     *,
     user_id: str,
@@ -607,7 +617,8 @@ def create_placeholder_plan_and_enqueue_initial(
         "UPDATE plan_chunk_queue SET run_id = %s, input_hash = %s, execute_after = NOW() "
         "WHERE meal_plan_id = %s AND week_number = 1 AND chunk_kind = %s AND status = 'pending' "
         "RETURNING id",
-        (run_id, request_fingerprint(chunk_snapshot.get("form_data") or {}), plan_id, INITIAL_CHUNK_KIND),
+        # [P1-ARQ25-F3-HORIZON · 2026-09-02] huella del formulario + hash de la rebanada (§6.5).
+        (run_id, _chunk_input_hash_f3(chunk_snapshot.get("form_data") or {}), plan_id, INITIAL_CHUNK_KIND),
         returning=True,
     ) or []
     chunk_id = str(rows[0]["id"]) if rows else None
@@ -702,6 +713,14 @@ def run_initial_chunk(*, task: dict, snap: dict, form_data: dict, pickup_attempt
     plan_start_date = str(form_data.get("_plan_start_date") or "")
     tz_offset_mins = int(form_data.get("tz_offset_minutes") or 0)
     session_id = snap.get("session_id")
+    # [P1-ARQ25-F3-HORIZON · 2026-09-02] el flag `enforce` se recalcula al ejecutar (canary/knob
+    # se leen en cada llamada); la rebanada del snapshot es inmutable.
+    if isinstance(form_data.get("_blueprint_slice"), dict):
+        try:
+            from horizon import policy_enforced as _policy_enforced_f3
+            form_data["_policy_enforced"] = _policy_enforced_f3(user_id)
+        except Exception:
+            form_data["_policy_enforced"] = False
     max_attempts = initial_chunk_max_attempts()
     exec_id = worker_execution_id()
 

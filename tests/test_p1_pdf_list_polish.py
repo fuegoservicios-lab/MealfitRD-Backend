@@ -22,10 +22,17 @@ import pytest
 
 _ROOT = Path(__file__).resolve().parents[2]
 _DASH_PATH = _ROOT / "frontend" / "src" / "pages" / "Dashboard.jsx"
-_DASH = _DASH_PATH.read_text(encoding="utf-8") if _DASH_PATH.exists() else ""
+_DASH = ""
 _LOCALES = _ROOT / "frontend" / "src" / "i18n" / "locales"
 
-pytestmark = pytest.mark.skipif(not _DASH, reason="frontend ausente")
+
+@pytest.fixture(scope="module", autouse=True)
+def _load_frontend_sibling_sources(frontend_repo_path):
+    # [P2-CI-BACKEND-CERO-TESTS] la fixture compartida salta el módulo si falta el hermano;
+    # la lectura ya no ocurre al importar (el checkout del backend no trae ../frontend).
+    _ = frontend_repo_path
+    global _DASH
+    _DASH = _DASH_PATH.read_text(encoding="utf-8")
 
 
 def _win_after(anchor: str, span: int = 2600) -> str:
@@ -59,16 +66,16 @@ def test_pdf_cycle_guard_rejects_inconsistent_summary():
 
 
 # ---------------------------------------------------------------- 1b. frase puente
-_BRIDGE = "Incluye ≈{monto} para recomprar en las semanas siguientes los frescos que hoy ya tienes en la Nevera"
+_BRIDGE = "Incluye ≈{monto} de recompras de frescos"  # [P2-SHOPPING-COPY-QUIET] frase puente corta
 
 
 def test_bridge_line_only_when_delta_aware():
-    i = _DASH.find("Costo real del ciclo de {duracion}")
+    i = _DASH.find("Estimado del ciclo de {duracion}")
     assert i != -1
     win = _DASH[i:i + 900]
     assert f"_deltaAware ? t('{_BRIDGE}'" in win, "la frase puente explica el salto SOLO cuando la Nevera descontó"
     assert "Math.round(_futureFreshRdPdf)" in win, "el importe de la frase es el MISMO que se sumó al ciclo"
-    assert "Despensa 1× + perecederos de {duracion} (recompra cada 7 días)" in win, "sin descuento, el copy de siempre"
+    assert "Despensa 1× + frescos cada 7 días" in win, "sin descuento, el copy de siempre"
 
 
 @pytest.mark.parametrize("locale", ["en-US", "fr-FR", "it-IT", "pt-BR"])
@@ -140,7 +147,7 @@ def test_reference_copy_is_plain_spanish():
 # ---------------------------------------------------------------- 6. leyenda al pie
 def test_legend_is_a_footnote_after_the_totals():
     legend = _DASH.find("<!-- Disclaimer de Cantidades")
-    totals = _DASH.find("Costo real del ciclo de {duracion}")
+    totals = _DASH.find("Estimado del ciclo de {duracion}")
     footer = _DASH.find("<!-- Footer -->")
     assert -1 not in (legend, totals, footer)
     assert totals < legend < footer, "la leyenda va DESPUÉS de los totales y ANTES del pie"

@@ -424,3 +424,11 @@ leía `batches_failed`, que nadie escribía, y `tokens_estimated` era un `0` lit
 jsonb decía algo; un panel que agrupe por las columnas numéricas veía ceros. Ahora el ciclo
 acumula su reloj, las invocaciones por encima de los lotes iniciales (= reintentos) y los
 tokens que el provider declara en cada respuesta (`_tokens_de`).
+
+## Cambios del 2026-09-04
+
+- **`P1-I18N-GLM-USER-TURN`** — GLM (Z.ai) rechaza un `messages` con SOLO un system message (400/1214): la capa `_display` llevaba dos
+  días muerta en silencio desde la migración de proveedor y el primer usuario francés recibió su plan en español. `_build_messages`
+  manda system + un turno de usuario; un test blanket impide que vuelva la forma de un solo mensaje.
+- **`P1-ARQ25-F5-PLAN-JOBS`** — con la cola viva, el enriquecimiento `_display` ya no corre inline: es un job `display_i18n` del outbox
+  `plan_jobs` (Fase 5 del roadmap 2.5), con reintentos, dead letter y `stale` por revisión. Doc: `backend/docs/plan_jobs_f5.md`.

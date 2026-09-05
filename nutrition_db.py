@@ -185,6 +185,46 @@ def _strip_qty_prefix(s: str) -> str:
     return s2.strip()
 
 
+# [P2-INGREDIENT-TRAILING-QTY · 2026-09-04] El LLM a veces emite el ingrediente como «Nombre: cantidad»
+# («Cebada: 50 g», «Leche descremada: 300 ml», «huevos: 2»). Nadie lo leía: el solver no cubría
+# ninguna línea (0/5), la guarda de presencia anteponía una porción por defecto y el plato quedó
+# persistido como «90 g de Cebada: 50 g» (swap del dueño, plan 05fb9d22, 2026-09-04). Forma canónica
+# = cantidad líder («50 g de Cebada»); se aplica en el validador de `MealModel` (generación, swap,
+# autocrítica) y como respaldo dentro de `_split_qty_unit_name`. tooltip-anchor: P2-INGREDIENT-TRAILING-QTY
+_TRAILING_QTY_RE = re.compile(r"^\s*(?P<name>[^:]{2,}?)\s*:\s*(?P<rest>\d.*)$")
+
+
+def canonicalize_trailing_qty_line(s: str) -> str:
+    """«Cebada: 50 g» → «50 g de Cebada»; «huevos: 2» → «2 huevos»; deja intacto lo que ya lleva
+    cantidad líder, lo que no tiene número tras los dos puntos («Sal: al gusto») y lo no-string."""
+    if not isinstance(s, str):
+        return s
+    from canonical_units import canonicalize_unit
+    raw = _normalize_unicode_fractions(s.strip())
+    if _LEAD_QTY_RE.match(raw) or _UNIT_TOKEN_RE.match(raw) and canonicalize_unit(_UNIT_TOKEN_RE.match(raw).group(1)):
+        return s
+    m = _TRAILING_QTY_RE.match(raw)
+    if not m:
+        return s
+    name, rest = m.group("name").strip(), m.group("rest").strip()
+    mq = _LEAD_QTY_RE.match(rest)
+    if not mq:
+        return s
+    qty_str = mq.group(1).strip()
+    after = rest[mq.end():]
+    mu = _UNIT_TOKEN_RE.match(after)
+    unit = None
+    if mu and canonicalize_unit(mu.group(1)):
+        unit = mu.group(1).lower()
+        after = after[mu.end():]
+    after = re.sub(r"^\s*(de|del)\s+", " ", after)
+    tail = after.strip()
+    tail = f" {tail}" if tail else ""
+    if unit:
+        return f"{qty_str} {unit} de {name}{tail}"
+    return f"{qty_str} {name}{tail}"
+
+
 def _split_qty_unit_name(s: str):
     """(string del plan) → (qty: float, unit: str, name: str). Lightweight, offline.
     qty 0.0 si no hay número líder (e.g. 'Sal al gusto').
@@ -195,6 +235,7 @@ def _split_qty_unit_name(s: str):
     líder) conserva qty=0.0. tooltip-anchor: P2-MICRO-DENSITY-QTYLESS"""
     from canonical_units import canonicalize_unit
     raw = _normalize_unicode_fractions(str(s).strip())
+    raw = canonicalize_trailing_qty_line(raw)  # [P2-INGREDIENT-TRAILING-QTY] «Nombre: 50 g» → «50 g de Nombre»
     mq = _LEAD_QTY_RE.match(raw)
     if not mq:
         mu0 = _UNIT_TOKEN_RE.match(raw)
@@ -398,6 +439,12 @@ class IngredientNutritionDB:
         self._rows = rows
         self._by_name: dict = {}
         self._aliases: list = []  # [(alias_stripped_lower, row)] orden desc por longitud
+        # [P1-INGREDIENT-MATCH-PRECOMPILED · 2026-09-04] patrones de alias (word-boundary) compilados UNA
+        # vez por índice (misma lista y mismo orden que `_aliases`) + memo de `_match_row` por instancia.
+        # Antes cada lookup recompilaba ~700 regex (el caché de `re` tiene 512 entradas: thrash):
+        # un swap persistido pagaba 751.727 compilaciones, unos 33 s bajo el FOR UPDATE.
+        self._alias_patterns: list = []  # [(alias_stripped_lower, compiled, row)]
+        self._match_memo: dict = {}
         if rows is not None:
             self._build_index(rows)
 
@@ -425,9 +472,28 @@ class IngredientNutritionDB:
         # más largos primero: evita que 'platano' se trague 'platano maduro'
         aliases.sort(key=lambda x: len(x[0]), reverse=True)
         self._aliases = aliases
+        # [P1-INGREDIENT-MATCH-PRECOMPILED] mismo orden que `_aliases` (largos primero)
+        _wb = chr(92) + "b"
+        self._alias_patterns = [
+            (a, re.compile(_wb + re.escape(a) + _wb), r) for a, r in aliases if a
+        ]
+        self._match_memo = {}
 
     # ---- matching nombre→row (tiers baratos + delegación unificada) -----
     def _match_row(self, raw_name: str) -> Optional[dict]:
+        self._ensure_loaded()
+        if not raw_name:
+            return None
+        # [P1-INGREDIENT-MATCH-PRECOMPILED] memo por instancia (una instancia = una petición/pasada);
+        # el mismo string del LLM se resuelve decenas de veces por pasada (macros, gramos, micros).
+        _memo_key = str(raw_name)
+        if _memo_key in self._match_memo:
+            return self._match_memo[_memo_key]
+        _row = self._match_row_uncached(raw_name)
+        self._match_memo[_memo_key] = _row
+        return _row
+
+    def _match_row_uncached(self, raw_name: str) -> Optional[dict]:
         self._ensure_loaded()
         if not raw_name:
             return None
@@ -459,8 +525,8 @@ class IngredientNutritionDB:
             if n_stripped == alias_stripped:
                 return row
         # Tier 2: alias como palabra dentro del texto (word-boundary)
-        for alias_stripped, row in self._aliases:
-            if alias_stripped and re.search(r"\b" + re.escape(alias_stripped) + r"\b", n_stripped):
+        for _alias_stripped, _pat, row in self._alias_patterns:  # [P1-INGREDIENT-MATCH-PRECOMPILED]
+            if _pat.search(n_stripped):
                 return row
         # Tier 3 [P4-UNIFIED-RESOLVER]: delega al resolver canónico (regex clean_n + fuzzy + Cohere
         # semántico) que resuelve lo que los tiers baratos no. Solo con catálogo real (NO en rows

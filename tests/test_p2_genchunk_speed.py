@@ -281,7 +281,7 @@ def test_g_agent_uses_inband_plan_before_refetch():
         "G: execute_tools debe usar parsed_mod.get('plan_data') antes de re-SELECTear."
     )
     # El re-fetch sigue presente como fallback (back-compat) — no se elimina del todo.
-    assert "get_latest_meal_plan_with_id(" in src, "G: el fallback get_latest_meal_plan_with_id debe conservarse."
+    assert "get_latest_usable_meal_plan_with_id(" in src, "G: el fallback get_latest_usable_meal_plan_with_id debe conservarse."
 
 
 # ---------------------------------------------------------------------------

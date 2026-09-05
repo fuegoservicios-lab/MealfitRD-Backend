@@ -60,6 +60,11 @@ _SHOULD_MATCH = [
     ("Habichuela", "habichuelas"),
     ("Cebolla roja", "Cebollas rojas"),
     ("Queso blanco", "  queso   blanco  "),  # espacios colapsados
+    # [P1-PANTRY-KEY-VULGAR-FRACTIONS · 2026-09-03] las recetas escriben fracciones UNICODE.
+    ("Yogurt", "⅓ taza de yogurt"),
+    ("Mantequilla de maní", "¾ cucharada de mantequilla de maní"),
+    ("Avena", "1½ tazas de avena"),
+    ("Kiwi", "½ kiwi"),
 ]
 
 # Alimentos DISTINTOS que jamás deben resolver a la misma fila física.

@@ -58,10 +58,11 @@ _LABEL_CANCELAR = r"(?:Cancelar|\{\s*t\(\s*['\"]Cancelar['\"]\s*\)\s*\})"
 
 def test_marker_stamped_in_loading_screen():
     text = _read_plan()
-    assert "P3-LOADING-PREMIUM-REDESIGN" in text, (
-        "Falta el marker `P3-LOADING-PREMIUM-REDESIGN` en Plan.jsx. "
-        "Si alguien refactoriza el LoadingScreen y no preserva el marker, "
-        "perdemos trazabilidad."
+    # [P2-LOADING-ONE-STROKE · 2026-09-03] El rediseño de un solo trazo sustituyó al marker y al
+    # anillo de esta versión (aprobado por el dueño): la trazabilidad la lleva el marker nuevo.
+    assert ("P3-LOADING-PREMIUM-REDESIGN" in text) or ("P2-LOADING-ONE-STROKE" in text), (
+        "Falta el marker del rediseño del LoadingScreen en Plan.jsx (`P3-LOADING-PREMIUM-REDESIGN` "
+        "o su sucesor `P2-LOADING-ONE-STROKE`). Sin marker perdemos trazabilidad."
     )
 
 
@@ -88,7 +89,8 @@ def test_new_minimalist_surfaces_present():
     new_surfaces = [
         ("Diseñando tu plan", "título nuevo minimalista"),
         ("mf-pulse", "animación del dot central"),
-        ("mf-spin", "animación del ring delgado"),
+        ("mf-ring-svg", "anillo de un solo trazo (P2-LOADING-ONE-STROKE · 2026-09-03; sustituye a mf-spin)"),
+        ("mfDotSweep", "brillo de la fase activa (P2-LOADING-NO-FREEZE-99 · 2026-09-03)"),
         # [P3-LOADING-PALETTE-ALIGN · 2026-05-16] el radial pasó de #14141a a
         # slate #1E293B; [LOADING-DARK-BG · 2026-05-31] el fondo se movió del
         # inline a la clase .mf-loading-bg en el bloque <style> (ver test

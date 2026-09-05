@@ -100,9 +100,9 @@ def test_surgical_pro_thinking_branch():
     # [P2-THINKING-EFFORT] body en `_surg_think_body` para inyectar effort opcional.
     assert '_surg_think_body = {"type": "enabled"}' in win
     assert 'extra_body={"thinking": _surg_think_body}' in win
-    assert 'with_structured_output(SingleDayPlanModel, method="json_mode")' in win
+    assert 'with_structured_output(SingleDayCorrectionModel, method="json_mode")' in win
     # rama por defecto intacta (function_calling implícito).
-    assert ".with_structured_output(SingleDayPlanModel)\n" in win
+    assert ".with_structured_output(SingleDayCorrectionModel)\n" in win  # [P2-CRITIQUE-FIX-DESC-BACKFILL]
 
 
 # NOTA: la 3ra superficie (fact-checker clínico, P1-FACTCHECKER-THINKING) tiene su

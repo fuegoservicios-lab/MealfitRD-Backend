@@ -44,6 +44,11 @@ from __future__ import annotations
 import io
 import re
 from pathlib import Path
+import pytest
+
+# [P2-CI-BACKEND-SIBLINGS · 2026-09-04] Este módulo necesita el catálogo/la base de datos o el
+# .env local (pasa en el checkout del dueño; en el CI sin NEON_DATABASE_URL se salta con motivo).
+pytestmark = pytest.mark.needs_local_data
 
 _BACKEND = Path(__file__).resolve().parent.parent
 _ROOT = _BACKEND.parent
@@ -93,9 +98,14 @@ def test_el_ci_del_backend_no_tiene_jobs_de_frontend():
     """Ese código vive en otro repo, con su propio CI. Duplicarlo aquí apuntando a un
     directorio inexistente no es redundancia: es un rojo garantizado."""
     codigo = _codigo_py(_leer(_BACKEND / ".github" / "workflows" / "ci.yml"))
-    assert "frontend/package-lock.json" not in codigo, (
-        f"volvió un job de frontend al CI del repo backend [{_MARKER}]"
-    )
+    # [P2-CI-BACKEND-SIBLINGS · 2026-09-04] El frontend (repo público) SÍ se descarga en
+    # `frontend/` y se instalan sus deps (`npm ci --ignore-scripts`) porque ~400 tests del
+    # backend leen `../frontend/src` y sondean sus scripts de node. Eso no es un "job de
+    # frontend": lo vetado sigue siendo construir/testear/lintar el frontend desde aquí.
+    for paso in ("npm run build", "npm test", "vitest", "npm run lint", "playwright", "npm run test:e2e"):
+        assert paso not in codigo, (
+            f"volvió un job de frontend ({paso!r}) al CI del repo backend [{_MARKER}]"
+        )
 
 
 def test_el_ci_del_backend_no_para_en_el_primer_fallo():

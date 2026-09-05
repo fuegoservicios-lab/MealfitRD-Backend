@@ -77,7 +77,7 @@ def test_timer_pauses_when_status_ready():
     src = _PLAN_JSX.read_text(encoding="utf-8")
     # Buscar el effect con el guard y setEelapsedSec
     effect_block = re.search(
-        r"useEffect\(\(\)\s*=>\s*\{\s*if\s*\(status\s*===\s*['\"]ready['\"]\)\s*return\s*undefined;\s*const\s+t\s*=\s*setInterval[^}]+setElapsedSec",
+        r"useEffect\(\(\)\s*=>\s*\{\s*if\s*\(status\s*===\s*['\"]ready['\"]\)\s*return\s*undefined;\s*const\s+\w+\s*=\s*setInterval[^}]+setElapsedSec",
         src,
         re.DOTALL,
     )
@@ -106,13 +106,14 @@ def test_adaptive_copy_four_phases():
     # El valor vivo tiene UN dueno: `_ETA_MIN`/`_ETA_MAX` en test_p2_loading_eta_57,
     # que es el fichero que ya documenta el historial de decisiones del owner sobre
     # este rango. Aqui se importa. La proxima vez que cambie, se edita una linea.
-    from test_p2_loading_eta_57 import _ETA_MIN, _ETA_MAX
-
+    # [P2-LOADING-ETA-HONEST · 2026-09-03] Las cuatro fases: sin ETA (rango prudente de respaldo),
+    # antes de la mediana real, entre la mediana y el p90, y pasado el p90. Ninguna con cifra fija
+    # salvo el respaldo; p50/p90 los sirve el backend.
     expected_phrases = [
-        f"Esto suele tomar entre {_ETA_MIN} y {_ETA_MAX} minutos",   # <30s
-        f"estimado {_ETA_MIN}-{_ETA_MAX} minutos",                   # fase de conteo
-        "ya casi terminamos, espera un poco más",                # 10-13min
-        "gracias por tu paciencia",                              # >13min
+        "Suele tardar entre 5 y 15 minutos según tu perfil y las revisiones del plan.",
+        "Normalmente tarda unos {p50} minutos; 9 de cada 10 planes están listos antes de {p90}.",
+        "Ya pasamos la marca habitual; casi todos los planes terminan antes de {p90} minutos.",
+        "Está tardando más de lo habitual. Seguimos trabajando en tu plan; puedes salir y te avisamos.",
     ]
     for phrase in expected_phrases:
         assert phrase in src, (
@@ -176,12 +177,12 @@ def test_div_uses_tabular_nums_and_aria_live():
     src = _PLAN_JSX.read_text(encoding="utf-8")
     # Localizar el div del timeMessage
     timemsg_block = re.search(
-        r"<div[^>]*aria-live=\"polite\"[^>]*>\s*\{timeMessage\}",
+        r"<(?:div|p)[^>]*aria-live=\"polite\"[^>]*>\s*\{timeMessage\}",
         src,
         re.DOTALL,
     )
     assert timemsg_block, (
-        "El div que renderiza timeMessage debe tener `aria-live=\"polite\"` "
+        "El elemento que renderiza timeMessage debe tener `aria-live=\"polite\"` "
         "(accesibilidad)."
     )
     assert "fontVariantNumeric: 'tabular-nums'" in src, (

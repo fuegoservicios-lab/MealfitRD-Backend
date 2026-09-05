@@ -64,6 +64,10 @@ def _swap_meal_block() -> str:
 # Section A — Parser/estructural
 # =====================================================================
 
+# [P1-ARQ25-F7-CULTURE · 2026-09-05] Las anclas de las superficies CULTURALES (inspiración, plantilla del prompt,
+# reglas de franja, feedbacks de retry, arroz nocturno) apuntan a `_swap_culture`/`_modify_culture`; las de MERCADO
+# (catálogo, despensa, cierres de proteína) siguen en `_swap_country`/`_modify_country`.
+
 def test_knob_exists_default_true():
     src = _swap_meal_block()
     assert 'os.environ.get(\n        "MEALFIT_SODIUM_AWARE_SWAP", "true"\n    )' in src or (
@@ -81,7 +85,7 @@ def test_directive_injected_before_prompt_format_when_ceiling_exists():
     # `build_swap_meal_prompt_template(_swap_country)` (T2 pattern país-aware — DO/knob-off sigue
     # devolviendo el MISMO objeto, byte-idéntico). El CONTRATO de este test (la directiva de sodio
     # se inyecta ANTES de construir prompt_text) sigue intacto; solo el literal buscado cambió.
-    i_format = src.find("prompt_text = build_swap_meal_prompt_template(_swap_country).format(")
+    i_format = src.find("prompt_text = build_swap_meal_prompt_template(_swap_culture).format(")
     assert i_budget > 0, "directiva de presupuesto de sodio ausente"
     assert i_format > 0, "construcción de prompt_text ausente"
     assert i_budget < i_format, "la directiva debe inyectarse ANTES de formatear prompt_text"

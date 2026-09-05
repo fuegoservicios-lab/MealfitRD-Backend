@@ -36,12 +36,14 @@ def test_progress_bar_removed():
 
 
 def test_percentage_display_removed():
-    """El texto `{Math.round(displayProgress)}%` debe estar removido."""
+    """[P2-LOADING-ETA-HONEST · 2026-09-03] SUPERSEDED en su letra, no en su espíritu: el anillo
+    vuelve a mostrar el número (rediseño aprobado por el dueño el 2026-09-03), pero el número es
+    HONESTO — techo 98 mientras el backend no confirma el final (P2-LOADING-NO-FREEZE-99) y 100
+    solo con `status === 'ready'`. Lo que este test protege ahora es esa honestidad."""
     text = _read()
-    assert "Math.round(displayProgress)" not in text, (
-        "P3-PLAN-FLOW-MINIMALIST: el porcentaje numérico (`{Math.round(displayProgress)}%`) "
-        "debe estar removido. El usuario no debe ver progreso numérico."
-    )
+    assert "const PROGRESS_CEIL = 98;" in text
+    assert "const displayProgress = status === 'ready' ? 100 : progress;" in text
+    assert "return Math.min(old + diff, PROGRESS_CEIL);" in text
 
 
 def test_deep_search_message_present():

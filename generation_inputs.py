@@ -192,8 +192,21 @@ def build_initial_pipeline_inputs(data: dict, actual_user_id: str, session_id: O
     else:
         days_count = int(pipeline_data.get("_days_to_generate") or total_days_requested)
 
+    # [P1-ARQ25-F3-HORIZON · 2026-09-02] blueprint del horizonte (§6.5) + rebanada del chunk 0
+    # en `pipeline_data` (whitelist del orquestador). El endpoint persiste `blueprint` con el
+    # run. off ⇒ None y `pipeline_data` intacto.
+    blueprint = None
+    try:
+        from horizon import inject_policy_into_pipeline_data
+        blueprint = inject_policy_into_pipeline_data(
+            pipeline_data, form_data=data, total_days=total_days_requested, days_offset=0,
+            days_count=max(1, days_count), user_id=actual_user_id)
+    except Exception as _hz_e:
+        logger.warning(f"[P1-ARQ25-F3-HORIZON] rebanada no inyectada (cola): {_hz_e}")
+
     memory_ctx = memory.get("full_context_str", "") if session_id else ""
     return {
+        "blueprint": blueprint,
         "pipeline_data": pipeline_data,
         "history": history,
         "taste_profile": taste_profile,

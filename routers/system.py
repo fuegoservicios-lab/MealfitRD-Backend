@@ -709,6 +709,7 @@ def admin_worker_drain(
     (True si quedó vacío dentro de `wait_s`), `initial_chunks_processing` (DB, informativo).
     """
     _verify_admin_token(request.headers.get("authorization"))
+    _check_admin_rate_limit(request)  # [P2-ADMIN-RATE-LIMIT]
     b = body or _WorkerDrainBody()
     try:
         from cron_tasks import (
@@ -823,6 +824,7 @@ def arq25_gate_status(execute_sql_query) -> dict:
 def admin_arq25_gate(request: Request):
     """[P1-ARQ25-F1-CLOSE] Lectura del gate de la Fase 1. Auth: `Bearer <CRON_SECRET>`."""
     _verify_admin_token(request.headers.get("authorization"))
+    _check_admin_rate_limit(request)  # [P2-ADMIN-RATE-LIMIT]
     from db import execute_sql_query
     return arq25_gate_status(execute_sql_query)
 

@@ -81,8 +81,10 @@ def test_sin_el_secret_la_degradacion_es_visible_y_derivada() -> None:
         f"desapareció el fixture `frontend_repo_path` de conftest.py: sin el secret, los 400 "
         f"tests que leen el frontend vuelven a reventar en colección. [{_MARKER}]"
     )
-    assert "frontend_repo_path" in ci, (
-        f"el resumen del job ya no nombra el fixture que hace el skip: la degradación deja de "
+    # [P2-CI-BACKEND-SIBLINGS · 2026-09-04] el frontend (público) se descarga SIEMPRE; la
+    # degradación que queda es la del workspace privado (CLAUDE.md/docs) y el resumen la declara.
+    assert "frontend_repo_path" in ci or "Hermanos en este checkout" in ci, (
+        f"el resumen del job ya no declara qué hermanos están: la degradación deja de "
         f"verse. [{_MARKER}]"
     )
 

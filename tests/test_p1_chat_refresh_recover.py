@@ -59,12 +59,16 @@ def test_poll_is_conservative():
 
 
 def test_timeout_leaves_retryable_bubble():
+    # [P1-CHAT-ORPHAN-TURN-TRUTH · 2026-09-03] La burbuja de cierre se fabrica en `_orphanBubble`
+    # (fuera del bloque de sondeo) para que Stop, sondeo agotado y turno muerto pinten lo mismo
+    # también al rehidratar. El bloque la INVOCA; las garantías viven en la fábrica.
     blk = _block()
-    assert "retryPrompt: canRetry ? lastPrev.content : null" in blk
-    assert "_isErrorBubble: true" in blk
-    assert "!lastPrev.isImage" in blk, \
-        "los huérfanos con foto NO auto-reintentan (el dataURL contaminaría el prompt) — se pide reenviar"
-
+    assert "_abandon(" in blk and "_orphanBubble(motivo, lastPrev)" in blk
+    i = _AP.index("const _orphanBubble = useCallback((reason, lastPrev) => {")
+    fabrica = _AP[i:_AP.index("}, [t]);", i)]
+    assert "retryPrompt: canRetry ? lastPrev.content : null" in fabrica
+    assert "_isErrorBubble: true" in fabrica
+    assert "!lastPrev.isImage" in fabrica,         "los huérfanos con foto NO auto-reintentan (el dataURL contaminaría el prompt) — se pide reenviar"
 
 def test_cleanup_on_unmount():
     blk = _block()

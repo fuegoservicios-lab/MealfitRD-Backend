@@ -48,6 +48,7 @@ from constants import (
     CHUNK_TEMPORAL_GATE_PUSH_COOLDOWN_HOURS,
     CHUNK_PREV_CHUNK_PAUSE_TTL_HOURS,
     CHUNK_PANTRY_EMPTY_MAX_REMINDERS,
+    CHUNK_PANTRY_EMPTY_MAX_CYCLES,
     CHUNK_PANTRY_EMPTY_REMINDER_HOURS,
     CHUNK_PANTRY_EMPTY_TTL_HOURS,
     CHUNK_ANCHOR_RECOVERY_MAX_ATTEMPTS,
@@ -446,6 +447,12 @@ _P0_5_LESSON_KEY_ALLOWLIST = frozenset({
     '_learning_window_starved',         # form_data flag
     # Inyección transitoria al prompt LLM (form_data/snapshot, no plan_data atómico):
     '_chunk_lessons',
+    # [P3-LESSON-KEY-INHERITED-FROM · 2026-09-04] Provenance de la herencia: `db_plans` estampa
+    # `plan_data._lifetime_lessons_inherited_from = <plan_id previo>` al crear el plan (línea
+    # ~1051). No es una lección ni cambia con los chunks: solo dice DE DÓNDE vinieron. Sin
+    # declararla, el invariante P0-5 logueaba ERROR en cada bloque ≥2 de todo plan heredero
+    # (visto en el bloque 2 del plan e45e649c del dueño).
+    '_lifetime_lessons_inherited_from',
     # Lecciones heredadas de plan previo: viaja en `snap` (snapshot transport) y se
     # copia a `plan_data._lifetime_lessons_*` (que SÍ están en deferred). El campo
     # `_inherited_lifetime_lessons` mismo no se persiste, sólo se consume.
@@ -933,6 +940,29 @@ def _validate_chunk_pre_llm(task_id, meal_plan_id, user_id):
 # única de verdad.
 
 
+# [P2-COH-ALERT-UNQUANTIFIED-NOISE · 2026-09-03] Hipótesis que NO cuentan como señal para el umbral
+# `MEALFIT_COH_ALERT_PLAN_FRACTION`. Medido en la alerta del 03-sep: 31/32 planes «con divergencias»
+# (96,9 %) y 101 de 113 divergencias eran `recipe_unquantified` — sal/pimienta/comino «al gusto», sin
+# gramos en la receta (Pimienta negra en 29 planes, Sal en 27). P1-COHERENCE-UNQUANTIFIED-LABEL ya
+# había separado la etiqueta y dejó escrito que era «el prerequisito para que los umbrales del cron
+# midan señal en vez de ruido»; este es ese paso. Una alerta ERROR que dispara TODOS los días no es
+# una alerta. El conteo bruto (`plans_with_div`) se conserva en el resumen y en las flags del tick.
+_COH_ALERT_IGNORE_HYPOTHESES_DEFAULT = "recipe_unquantified"
+
+
+def _coh_alert_ignored_hypotheses() -> frozenset:
+    raw = _env_str("MEALFIT_COH_ALERT_IGNORE_HYPOTHESES", _COH_ALERT_IGNORE_HYPOTHESES_DEFAULT) or ""
+    return frozenset(h.strip() for h in raw.split(",") if h.strip())
+
+
+def _coh_plan_has_signal(divs, ignored: frozenset) -> bool:
+    """True si al menos UNA divergencia del plan tiene una hipótesis que no es ruido conocido."""
+    for d in divs or []:
+        if str((d or {}).get("hypothesis") or "unknown") not in ignored:
+            return True
+    return False
+
+
 def _shopping_coherence_alert_job():
     """[P1-shop-coh-1 · 2026-05-07] Re-evalúa coherencia recetas↔lista en
     planes recientes y emite alerta si las hipótesis críticas superan umbral.
@@ -1075,6 +1105,8 @@ def _shopping_coherence_alert_job():
             return
 
         plans_with_div = 0
+        plans_with_signal = 0   # [P2-COH-ALERT-UNQUANTIFIED-NOISE] excluye hipótesis de ruido conocido
+        _ignored_hyp = _coh_alert_ignored_hypotheses()
         by_hypothesis = Counter()
         by_food = Counter()
         eval_errors = 0
@@ -1108,6 +1140,8 @@ def _shopping_coherence_alert_job():
                 continue
             if divs:
                 plans_with_div += 1
+                if _coh_plan_has_signal(divs, _ignored_hyp):
+                    plans_with_signal += 1
                 for d in divs:
                     by_hypothesis[d.get("hypothesis", "unknown")] += 1
                     by_food[d.get("food", "")] += 1
@@ -1141,7 +1175,8 @@ def _shopping_coherence_alert_job():
                         )
 
         n = len(plans)
-        plan_fraction = plans_with_div / n if n else 0.0
+        # [P2-COH-ALERT-UNQUANTIFIED-NOISE] el umbral mide planes con SEÑAL (no solo condimentos sin cantidad)
+        plan_fraction = plans_with_signal / n if n else 0.0
         cap_count = by_hypothesis.get("cap_swallowed_modifier", 0)
         cap_ratio = cap_count / n if n else 0.0
         # [P3-UNDERSUPPLY-VISIBILITY · 2026-08-04] mismo cómputo que `cap_count`, para la
@@ -1159,7 +1194,8 @@ def _shopping_coherence_alert_job():
 
         summary = (
             f"[COH-ALERT 24h] {n} planes evaluados ({eval_errors} errores parsing). "
-            f"{plans_with_div} con divergencias ({plan_fraction * 100:.1f}%). "
+            f"{plans_with_div} con divergencias, {plans_with_signal} con señal ({plan_fraction * 100:.1f}%; "
+            f"ignoradas={sorted(_ignored_hyp)}). "
             f"Hipótesis: {dict(by_hypothesis)}. "
             f"Top foods: {dict(by_food.most_common(5))}. "
             f"Persisted history: {persisted_count} (errors: {persist_errors}, "
@@ -6532,6 +6568,24 @@ def wake_chunk_worker(reason: str = "") -> bool:
         return False
 
 
+def _plan_jobs_worker_interval_s() -> int:
+    try:
+        from plan_jobs import worker_interval_s
+        return int(worker_interval_s())
+    except Exception:
+        return 60
+
+
+def _process_plan_jobs_job() -> None:
+    """[P1-ARQ25-F5-PLAN-JOBS · 2026-09-04] Tick del worker del outbox `plan_jobs` (proyecciones
+    asíncronas: hoy `display_i18n`). Motor SSOT `plan_jobs.process_plan_jobs`; nunca lanza."""
+    try:
+        from plan_jobs import process_plan_jobs
+        process_plan_jobs()
+    except Exception as e:
+        logger.warning(f"[ARQ25-F5] _process_plan_jobs_job falló: {e!r}")
+
+
 def register_plan_chunk_scheduler(scheduler) -> None:
     """Registra el polling del worker de chunks una sola vez en el scheduler global."""
     if not scheduler:
@@ -6552,6 +6606,22 @@ def register_plan_chunk_scheduler(scheduler) -> None:
         logger.info(
             f"⏰ [CHUNK SCHEDULER] Worker plan_chunk_queue registrado cada "
             f"{CHUNK_SCHEDULER_INTERVAL_MINUTES} min."
+        )
+
+    # [P1-ARQ25-F5-PLAN-JOBS · 2026-09-04] Worker del outbox `plan_jobs`. Siempre registrado; el tick
+    # no-opea con `MEALFIT_PLAN_JOBS_ENABLED=0`. `enqueue_plan_job` lo despierta (`wake_plan_jobs_worker`).
+    if not scheduler.get_job("process_plan_jobs"):
+        _add_job_jittered(scheduler,
+            _process_plan_jobs_job,
+            "interval",
+            seconds=_plan_jobs_worker_interval_s(),
+            id="process_plan_jobs",
+            max_instances=1,
+            coalesce=True,
+            replace_existing=True,
+        )
+        logger.info(
+            f"⏰ [ARQ25-F5] Worker plan_jobs registrado cada {_plan_jobs_worker_interval_s()} s."
         )
 
     # [P2-AUDIT-2 · 2026-05-12] Cron observable de bloat post-tuning P1-B.
@@ -13934,6 +14004,17 @@ def _chunk_recovery_wall_floor_met(started_at_iso, max_attempts: int) -> bool:
     return elapsed_min >= floor_min
 
 
+def _pantry_pause_over_cap(attempts) -> bool:
+    """[P2-PANTRY-PAUSE-MAX-CYCLES] ¿El chunk ya agotó sus resurrecciones? 0 = sin tope."""
+    cap = int(CHUNK_PANTRY_EMPTY_MAX_CYCLES or 0)
+    if cap <= 0:
+        return False
+    try:
+        return int(attempts or 0) >= cap
+    except (TypeError, ValueError):
+        return False
+
+
 def _recover_pantry_paused_chunks() -> None:
     """Revisa chunks en pending_user_action, recuerda al usuario y evita bloqueo indefinido."""
     try:
@@ -13952,7 +14033,7 @@ def _recover_pantry_paused_chunks() -> None:
         # refrescan esa columna y el TTL de 12h no llegaba nunca a cumplirse.
         paused_rows = execute_sql_query(
             f"""
-            SELECT id, user_id, meal_plan_id, week_number, days_offset, pipeline_snapshot,
+            SELECT id, user_id, meal_plan_id, week_number, days_offset, attempts, pipeline_snapshot,
                    ({pause_age_seconds_sql()})::int AS paused_seconds
             FROM plan_chunk_queue
             WHERE status = 'pending_user_action'
@@ -14941,6 +15022,49 @@ def _recover_pantry_paused_chunks() -> None:
 
             # empty_pantry / otros: mantenemos el comportamiento original (12h TTL + push).
             if paused_seconds >= ttl_hours * 3600:
+                # [P2-PANTRY-PAUSE-MAX-CYCLES · 2026-09-03] Con el tope alcanzado el chunk NO se
+                # re-encola en flexible (con 0 frescos volvería a pausarse en el mismo tick): se
+                # queda esperando la compra y se reanuda solo cuando la Nevera viva supera el
+                # mínimo — la reanudación que hasta hoy sólo tenía `empty_pantry_proactive`.
+                if _pantry_pause_over_cap(row.get("attempts")):
+                    try:
+                        _cap_live = get_user_inventory_net(user_id_str)
+                    except Exception as _cap_live_err:
+                        _cap_live = None
+                        logger.debug(f"[P2-PANTRY-PAUSE-MAX-CYCLES] live fetch falló chunk {week_num}: {_cap_live_err}")
+                    if _cap_live is not None and _count_meaningful_pantry_items(_cap_live) >= CHUNK_MIN_FRESH_PANTRY_ITEMS:
+                        resumed_snapshot = copy.deepcopy(snap)
+                        _resolve_pantry_pause_markers(resumed_snapshot, "pantry_restocked")
+                        resumed_snapshot.pop("_pantry_pause_cycles_exhausted_at", None)
+                        if isinstance(resumed_snapshot.get("form_data"), dict):
+                            resumed_snapshot["form_data"]["current_pantry_ingredients"] = _cap_live
+                            resumed_snapshot["form_data"]["_pantry_captured_at"] = datetime.now(timezone.utc).isoformat()
+                        execute_sql_write(
+                            "UPDATE plan_chunk_queue SET status = 'pending', execute_after = NOW(), "
+                            "pipeline_snapshot = %s::jsonb, updated_at = NOW() WHERE id = %s",
+                            (json.dumps(resumed_snapshot, ensure_ascii=False), row_id),
+                        )
+                        logger.info(
+                            f"[P2-PANTRY-PAUSE-MAX-CYCLES] Chunk {week_num} plan {meal_plan_id_str} reanudado: "
+                            f"la Nevera volvió a tener {_count_meaningful_pantry_items(_cap_live)} ítems tras "
+                            f"{int(row.get('attempts') or 0)} ciclos de pausa."
+                        )
+                        continue
+                    if not snap.get("_pantry_pause_cycles_exhausted_at"):
+                        exhausted_snapshot = copy.deepcopy(snap)
+                        exhausted_snapshot["_pantry_pause_cycles_exhausted_at"] = datetime.now(timezone.utc).isoformat()
+                        exhausted_snapshot["_pantry_pause_cycles"] = int(row.get("attempts") or 0)
+                        execute_sql_write(
+                            "UPDATE plan_chunk_queue SET pipeline_snapshot = %s::jsonb WHERE id = %s",
+                            (json.dumps(exhausted_snapshot, ensure_ascii=False), row_id),
+                        )
+                        logger.warning(
+                            f"[P2-PANTRY-PAUSE-MAX-CYCLES] Chunk {week_num} plan {meal_plan_id_str}: "
+                            f"{int(row.get('attempts') or 0)} ciclos de pausa por nevera vacía "
+                            f"(tope {CHUNK_PANTRY_EMPTY_MAX_CYCLES}). Deja de re-encolarse en flexible; "
+                            f"se reanudará solo cuando el usuario marque la compra."
+                        )
+                    continue
                 # [P1-3] Activación canónica vía helper.
                 degraded_snapshot = _activate_flexible_mode(
                     copy.deepcopy(snap),
@@ -17673,7 +17797,7 @@ def _inject_advanced_learning_signals(user_id: str, pipeline_data: dict, health_
                WHERE user_id = %s
                  AND created_at >= NOW() - INTERVAL '14 days'
                  AND NOT (
-                     reason IN ('swap:cravings', 'swap:weekend', 'swap:variety')
+                     reason IN ('swap:cravings', 'swap:weekend', 'swap:variety', 'swap:renewal.v1')
                      AND created_at < NOW() - INTERVAL '48 hours'
                  )""",
             (user_id,),
@@ -18404,7 +18528,7 @@ def inject_learning_signals_from_profile(user_id: str, pipeline_data: dict) -> d
                    WHERE user_id = %s 
                      AND created_at >= NOW() - INTERVAL '14 days'
                      AND NOT (
-                         reason IN ('swap:cravings', 'swap:weekend', 'swap:variety') 
+                         reason IN ('swap:cravings', 'swap:weekend', 'swap:variety', 'swap:renewal.v1') 
                          AND created_at < NOW() - INTERVAL '48 hours'
                      )""",
                 (user_id,), fetch_all=True
@@ -23473,7 +23597,7 @@ def _normalize_meal_name(text: str) -> str:
     return strip_accents(str(text).lower()).strip()
 
 
-def _calculate_chunk_consumption_ratio(previous_chunk_days: list, consumed_records: list, consumption_mutations_count: int = 0) -> dict:
+def _calculate_chunk_consumption_ratio(previous_chunk_days: list, consumed_records: list, consumption_mutations_count: int = 0, deviation_count: int = 0) -> dict:
     """Calcula cuánto del chunk previo fue realmente consumido usando nombres de platos.
 
     [P0-3] Proxy implícito extendido a logging esparso:
@@ -23504,7 +23628,11 @@ def _calculate_chunk_consumption_ratio(previous_chunk_days: list, consumed_recor
             consumed_list.append(meal_name)
 
     planned_total = sum(planned_pool.values())
-    explicit_logged = len(consumed_list)
+    # [P1-DIARY-FREETEXT-ESTIMATE · 2026-09-04] un desvío declarado («comí otra cosa» /
+    # «todavía no») es una señal EXPLÍCITA del usuario: cuenta como registro para no caer en
+    # el proxy «0 logs ⇒ 100 % consumido», pero NO casa con ningún plato (no lo comió).
+    _declared_deviations = max(0, int(deviation_count or 0))
+    explicit_logged = len(consumed_list) + _declared_deviations
     
     match_stats = {"exact": 0, "substring": 0, "embedding": 0, "unmatched": 0}
     explicit_matched = 0
@@ -23607,6 +23735,7 @@ def _calculate_chunk_consumption_ratio(previous_chunk_days: list, consumed_recor
         "planned_meals": planned_total,
         "explicit_matched_meals": explicit_matched,
         "explicit_logged_meals": explicit_logged,
+        "declared_deviations": _declared_deviations,
         "used_implicit_proxy": use_implicit_proxy,
         "sparse_logging_proxy": sparse_logging,
         "zero_log_proxy": zero_log_proxy,
@@ -24729,7 +24858,13 @@ def _check_chunk_learning_ready(user_id: str, meal_plan_id: str, week_number: in
     consumption_mutations_count = int(activity.get("consumption_mutations_count") or 0)
     inventory_mutations = int(activity.get("mutations_count") or 0)
 
-    ratio_info = _calculate_chunk_consumption_ratio(previous_chunk_days, consumed_records, consumption_mutations_count)
+    _deviation_count = 0
+    try:
+        from db_facts import get_plan_meal_deviations_since
+        _deviation_count = len(get_plan_meal_deviations_since(user_id, prev_start_iso) or [])
+    except Exception as e:
+        logger.debug(f"[P1-DIARY-FREETEXT-ESTIMATE] no se pudieron contar los desvíos para {user_id}: {e}")
+    ratio_info = _calculate_chunk_consumption_ratio(previous_chunk_days, consumed_records, consumption_mutations_count, deviation_count=_deviation_count)
     ratio = ratio_info["ratio"]
 
     # [P0-1] zero_log_proxy=True significa que NO hubo logs reales del chunk previo.
@@ -25185,6 +25320,7 @@ def _build_filtered_edge_recipe_day(
         dislikes,
         (diet or "").strip().lower(),
         country=country,
+        market_extras=True,  # [F7-H] el camino degradado tampoco arma un día con bagels y kétchup
     )
 
     # [P0-DEGRADED-SAFETY-SCAN · 2026-07-31] Segunda malla sobre el pool de candidatos. Va ANTES del
@@ -26908,6 +27044,15 @@ __PLAN_MODE_GATE__
                 logger.debug(f"[P1-REFILL-SIBLING-PAUSE-GATE] no-op: {_spg_e}")
 
         form_data = copy.deepcopy(snap.get("form_data", {}))
+        # [P1-ARQ25-F3-HORIZON · 2026-09-02] la rebanada viaja en el snapshot (inmutable); el
+        # flag `enforce` se RECALCULA al ejecutar (el canary por usuario puede cambiar entre
+        # encolar y correr, y el knob se lee en cada llamada).
+        if isinstance(form_data.get("_blueprint_slice"), dict):
+            try:
+                from horizon import policy_enforced as _policy_enforced_f3
+                form_data["_policy_enforced"] = _policy_enforced_f3(user_id)
+            except Exception:
+                form_data["_policy_enforced"] = False
         snapshot_form_data = snap.get("form_data", {}) or {}
         # País resuelto una sola vez para TODAS las capas del guard de Nevera
         # (LLM, shuffle, live-check y post-merge). El snapshot mantiene el país
@@ -29066,6 +29211,15 @@ __PLAN_MODE_GATE__
                         safe_pool,
                         form_data.get("current_pantry_ingredients", []),
                     )
+                    # [P1-ARQ25-F3-HORIZON · 2026-09-02] Smart Shuffle lee la política (§6.6): los
+                    # días candidatos se ordenan por cobertura de anclas (orden estable; sin
+                    # política o fuera de `enforce` la lista no cambia).
+                    if pantry_filtered_pool and form_data.get("_policy_enforced"):
+                        try:
+                            from horizon import rank_days_by_policy as _rank_days_f3
+                            pantry_filtered_pool = _rank_days_f3(pantry_filtered_pool, form_data.get("_plan_policy_effective"))
+                        except Exception:
+                            pass
                     if pantry_filtered_pool:
                         if len(pantry_filtered_pool) < len(safe_pool):
                             logger.info(
@@ -30167,6 +30321,13 @@ __PLAN_MODE_GATE__
                     _fatigue_consumed = chunk_consumed_records if (int(days_offset or 0) >= 14) else None
                     _fatigue_data = calculate_ingredient_fatigue(user_id, tuning_metrics=tuning_metrics, consumed=_fatigue_consumed)
                     _fatigued_ingredients = list(_fatigue_data.get('fatigued_ingredients', []) or [])
+                    # [P1-ARQ25-F3-HORIZON · 2026-09-02] un ancla de la política no se fatiga (§6.6).
+                    if form_data.get("_policy_enforced") and _fatigued_ingredients:
+                        try:
+                            from horizon import exclude_anchors_from_fatigue as _excl_anchors_f3
+                            _fatigued_ingredients = _excl_anchors_f3(_fatigued_ingredients, form_data.get("_plan_policy_effective"))
+                        except Exception:
+                            pass
                     _allergy_keywords = []
                     try:
                         for f in (alergias_facts or []):
@@ -32623,6 +32784,12 @@ __PLAN_MODE_GATE__
             # Despachar el enriquecimiento de los días NUEVOS de este bloque.
             # Best-effort: el worker de chunks jamás puede fallar por esto.
             if _p1_i18n_new_day_indices:
+                # [P1-ARQ25-F5-REPROJECTION · 2026-09-05] días nuevos ⇒ la lista cambia ⇒ re-encolar la proyección
+                try:
+                    from plan_jobs import enqueue_shopping_reprojection as _f5_reproj
+                    _f5_reproj(meal_plan_id, user_id, reason="chunk_fill")
+                except Exception as _f5_e:
+                    logger.debug(f"[ARQ25-F5] reprojection (chunk_fill) no encolada: {_f5_e!r}")
                 try:
                     from db import execute_sql_query as _p1_i18n_query
                     from plan_display_i18n import schedule_plan_display_enrichment as _p1_i18n_schedule

@@ -2028,6 +2028,16 @@ def _parse_plan_day_date(value):
         return None
 
 
+def plan_single_trip_policy(plan_data) -> bool:
+    """[P1-SINGLE-TRIP-POLICY] Regla SSOT en `horizon.single_trip_policy` leída desde la política persistida."""
+    try:
+        from horizon import single_trip_policy
+        eff = ((plan_data or {}).get("_plan_policy") or {}).get("effective") if isinstance(plan_data, dict) else None
+        return bool(single_trip_policy(eff))
+    except Exception:
+        return False
+
+
 def active_trip_window_days(
     plan_data: dict,
     window_len: int = TRIP_WINDOW_DAYS,
@@ -2060,6 +2070,10 @@ def active_trip_window_days(
     if not ignore_knob and not _trip_windowed_perishables_enabled():
         return None
     if not isinstance(plan_data, dict):
+        return None
+    # [P1-SINGLE-TRIP-POLICY · 2026-09-05] «No, solo la compra grande»: NO ventanear (los perecederos van
+    # para todo el ciclo en una sola compra; el prompt ya pide duraderos/congelados tras el día 7).
+    if not ignore_knob and plan_single_trip_policy(plan_data):
         return None
     days = plan_data.get("days")
     if not isinstance(days, list) or not days:
@@ -7195,10 +7209,22 @@ def summarize_divergences_for_ui(divergences: list, max_items: int = 5) -> list:
     divergencias para post-mortem; este filtro es solo para el banner UI.
     Knob `MEALFIT_COHERENCE_BANNER_ACTIONABLE_ONLY` (default True) revierte sin
     redeploy. Tooltip-anchor: P1-COHERENCE-BANNER-NOISE.
+
+    [P2-COHERENCE-BANNER-CONDIMENTS · 2026-09-03] También se OMITEN del banner los
+    CONDIMENTOS (`constants.is_allowed_condiment`: ajo, sal, cilantro, orégano, limón…),
+    aunque su hipótesis sea «accionable». Su compra está acotada a propósito
+    (P1-SHOPLIST-SANITY-CAP / topes de hierbas) y se compra por envase (cabezas, mazos),
+    así que «Ajo: compra menor que la receta, 76 %» (el dueño, 2026-09-03) no es una
+    compra que el usuario deba ajustar a mano. Mismo knob para revertir; la telemetría
+    conserva todas las divergencias. Tooltip-anchor: P2-COHERENCE-BANNER-CONDIMENTS.
     """
     if not divergences:
         return []
     _actionable_only = _knob_env_bool("MEALFIT_COHERENCE_BANNER_ACTIONABLE_ONLY", True)
+    try:
+        from constants import is_allowed_condiment as _is_condiment
+    except Exception:  # pragma: no cover — sin SSOT no se filtra nada (fail-open al aviso)
+        _is_condiment = lambda _n: False
     _ACTIONABLE_HYPOTHESES = {
         "cap_swallowed_modifier", "pantry_overdeduct",
         "magnitude_undersupply",  # [P2-GUARD-UNDERSUPPLY-CANONICAL]
@@ -7207,6 +7233,8 @@ def summarize_divergences_for_ui(divergences: list, max_items: int = 5) -> list:
     for d in divergences:
         if not isinstance(d, dict):
             continue
+        if _actionable_only and _is_condiment(d.get("food") or d.get("name") or ""):
+            continue  # [P2-COHERENCE-BANNER-CONDIMENTS] compra acotada a propósito: no es accionable
         if _actionable_only and (d.get("hypothesis") or "unknown") not in _ACTIONABLE_HYPOTHESES:
             # Benigno/no-accionable (magnitud por unidad/yield/cap): fuera del banner.
             continue
@@ -10361,6 +10389,30 @@ def run_shopping_coherence_guard_and_append_history(
             # Lazy import para evitar ciclo: graph_orchestrator ya importa
             # de shopping_calculator (módulo cargado primero), así que un
             # import top-level acá rompe el orden. Lazy resuelve runtime.
+            # [P2-COHERENCE-HISTORY-DEDUPE · 2026-09-04] Si la última entrada es la MISMA alerta (acción,
+            # hipótesis, nº de divergencias, block_set), no se apila otra: se funde en ella con
+            # `repeats`, `first_ts` y `ts` renovado (sigue «reciente» mientras la alerta persista). Antes
+            # 18 recálculos en 7 h llenaban el cap de 20 con entradas iguales y el aviso del Dashboard
+            # decía «16 revisiones automáticas». Knob `MEALFIT_COHERENCE_HISTORY_DEDUPE`.
+            try:
+                _last_entry = prior_history[-1] if prior_history else None
+                if (
+                    _knob_env_bool("MEALFIT_COHERENCE_HISTORY_DEDUPE", True)
+                    and isinstance(_last_entry, dict)
+                    and _last_entry.get("action_taken") == entry["action_taken"]
+                    and dict(_last_entry.get("hypotheses") or {}) == entry["hypotheses"]
+                    and int(_last_entry.get("divergence_count") or 0) == entry["divergence_count"]
+                    and bool(_last_entry.get("block_set")) == entry["block_set"]
+                ):
+                    _merged = dict(_last_entry)
+                    _merged["repeats"] = int(_last_entry.get("repeats") or 1) + 1
+                    _merged.setdefault("first_ts", _last_entry.get("ts"))
+                    _merged["ts"] = entry["ts"]
+                    _merged["attempt"] = entry["attempt"]
+                    prior_history = list(prior_history[:-1])
+                    entry = _merged
+            except Exception:
+                pass
             try:
                 from graph_orchestrator import _apply_coherence_history_cap as _cap_helper
                 new_history = _cap_helper(
@@ -10559,6 +10611,43 @@ def _cost_from_market(market_obj, master_item, price_per_lb, price_per_unit):
     if price_per_lb > 0 and container_g > 0:
         return mqty * container_g / 453.592 * price_per_lb
     return 0.0
+
+
+# [P1-AJO-SINGLE-ROW · 2026-09-04] El ajo salía en DOS filas: las recetas en «dientes» iban por
+# dientes → cabezas → paquete de 4 (P1-AJO-4PACK) y las recetas en GRAMOS («5 g de ajo triturado») se
+# quedaban en `units['g']` y parían una segunda fila («2 Cabezas (~10g total)», con la densidad de 5 g
+# —que es POR DIENTE— aplicada a la cabeza). El guard de coherencia solo veía la fila en gramos (6 g)
+# contra los 98 g que suman todas las recetas ⇒ `magnitude_undersupply` en cada recálculo del dueño.
+# Una sola fila: todo a dientes (5 g/diente), dientes a cabezas (10/cabeza), cabezas a paquetes de 4;
+# la DEMANDA en gramos viaja aparte para que la fila del paquete la exponga como `base_qty` (el guard
+# y la Nevera hablan en gramos). Puro y testeable: `test_p1_ajo_single_row.py`.
+AJO_G_PER_DIENTE = 5.0
+AJO_DIENTES_PER_CABEZA = 10.0
+AJO_CABEZAS_PER_PACK = 4
+AJO_PACK_GRAMS = AJO_CABEZAS_PER_PACK * AJO_DIENTES_PER_CABEZA * AJO_G_PER_DIENTE  # 200 g
+_AJO_GRAM_KEYS = ("g", "gr", "gramo", "gramos")
+_AJO_DIENTE_KEYS = ("diente", "dientes", "diente.", "dientes.")
+_AJO_CABEZA_KEYS = ("cabeza", "cabezas")
+
+
+def _consolidate_ajo_units(units: dict) -> tuple:
+    """Devuelve `(units_sin_ajo_suelto, demanda_g)`: gramos + dientes + cabezas → `paquete (4 uds.)`.
+    Deja intactas las claves que no son de ajo (p. ej. `cucharadita` de ajo en polvo mal atribuida)."""
+    out = dict(units or {})
+    dientes = 0.0
+    for k in list(out.keys()):
+        kl = str(k).strip().lower()
+        if kl in _AJO_GRAM_KEYS:
+            dientes += float(out.pop(k) or 0) / AJO_G_PER_DIENTE
+        elif kl in _AJO_DIENTE_KEYS:
+            dientes += float(out.pop(k) or 0)
+        elif kl in _AJO_CABEZA_KEYS:
+            dientes += float(out.pop(k) or 0) * AJO_DIENTES_PER_CABEZA
+    demand_g = round(dientes * AJO_G_PER_DIENTE, 2)
+    if dientes > 0:
+        cabezas = dientes / AJO_DIENTES_PER_CABEZA
+        out['paquete (4 uds.)'] = out.get('paquete (4 uds.)', 0) + math.ceil(cabezas / float(AJO_CABEZAS_PER_PACK))
+    return out, demand_g
 
 
 def aggregate_and_deduct_shopping_list(plan_ingredients: list[str], consumed_ingredients: list[str] = None, categorize: bool = False, structured: bool = False, multiplier: float = 1.0, brand_prefs: dict | None = None, brand_defaults: dict | None = None, num_days: int | None = None, cycle_days: int | None = None, text_demand_g_map: dict | None = None, apply_protein_yield: bool = False):
@@ -10765,6 +10854,8 @@ def aggregate_and_deduct_shopping_list(plan_ingredients: list[str], consumed_ing
     # los tiene como 3 llaves. Aquí los fusionamos en la llave canónica oficial ("Huevos")
     # para que su volumen se sume correctamente antes de calcular empaques comerciales.
     canonical_aggregated = defaultdict(lambda: defaultdict(float))
+    # [P1-AJO-SINGLE-ROW] demanda en gramos de las filas empaquetadas por conteo (hoy: ajo), por nombre
+    _packaged_demand_g: dict = {}
     for name, units in aggregated.items():
         canonical_name = canonicalize_shopping_food_name(name, master_map)
         for u, q in units.items():
@@ -10896,21 +10987,19 @@ def aggregate_and_deduct_shopping_list(plan_ingredients: list[str], consumed_ing
         
         # Consolidation para Ajo
         if name.lower() == 'ajo':
-            u_dientes = 0
-            for k in list(units.keys()):
-                if k.strip().lower() in ['diente', 'dientes', 'diente.', 'dientes.']:
-                    u_dientes += units.pop(k)
-            if u_dientes > 0:
-                units['cabeza'] = units.get('cabeza', 0) + (u_dientes / 10.0)
+            # [P1-AJO-SINGLE-ROW · 2026-09-04] gramos + dientes + cabezas → una sola fila (ver helper).
+            _ajo_units, _ajo_demand_g = _consolidate_ajo_units(units)
+            units.clear()
+            units.update(_ajo_units)
+            if _ajo_demand_g > 0:
+                _packaged_demand_g[name] = _ajo_demand_g
             # [P1-AJO-4PACK · 2026-06-22] El ajo en RD se vende en PAQUETES de 4 cabezas
             # (RD$60 el paquete, verificado in-store por el owner) — no por cabeza suelta.
             # Redondear las cabezas necesarias HACIA ARRIBA a paquetes de 4 (mismo patrón que
             # el cartón de huevos) para que un plan que necesite 1-2 cabezas cueste el paquete
             # completo (RD$60), no 15-30. El egg/units-cost branch de _cost_from_market lee el
             # precio real del 4-pack desde Ajo.market_packages [{units:4, price:60}].
-            _cab = units.pop('cabeza', 0)
-            if _cab and _cab > 0:
-                units['paquete (4 uds.)'] = units.get('paquete (4 uds.)', 0) + math.ceil(_cab / 4.0)
+            # (el redondeo a paquetes de 4 vive en `_consolidate_ajo_units`)
 
         # [P1-LAUREL-LEAF-UNIT · 2026-07-06] "N hojas de laurel" → gramos.
         # Las recetas piden laurel en HOJAS (count unit) y ninguna conversión lo
@@ -13039,6 +13128,14 @@ def aggregate_and_deduct_shopping_list(plan_ingredients: list[str], consumed_ing
                     logging.info(f"🔀 [DEDUP] Saltando entrada duplicada por {u} para '{name}' (ya tiene entrada por peso)")
                     continue
                 market_obj = apply_smart_market_units(name, 0.0, u, q, master_item, cycle_days=_cycle_days_for_note, text_demand_g=(text_demand_g_map or {}).get(name))
+                # [P1-AJO-SINGLE-ROW] la fila empaquetada por conteo lleva la DEMANDA en gramos como base: el
+                # guard de coherencia y la Nevera comparan en gramos (antes: base_unit='paquete (4 uds.)' y
+                # el guard no la veía). El paquete de 4 cabezas pesa ~200 g (package_grams).
+                if str(u).lower().startswith('paquete (') and float(_packaged_demand_g.get(name) or 0) > 0:
+                    market_obj["base_qty"] = round(float(_packaged_demand_g[name]), 2)
+                    market_obj["base_unit"] = "g"
+                    if name.lower() == 'ajo':
+                        market_obj.setdefault("package_grams", AJO_PACK_GRAMS)
                 # [P3-PRICE-MARKET-COVERAGE · 2026-06-20] Costo desde el DISPLAY (envase/carton
                 # redondeado); cubre huevo medio-carton (parsea "(N uds.)" x precio/30) y envases.
                 item_cost = _cost_from_market(market_obj, master_item, price_per_lb, price_per_unit)
@@ -13412,6 +13509,13 @@ def get_shopping_list_delta(
     days = shopping_source_days(plan_result)
     # [P1-ARQ25-F1-CLOSE] H6: el builder sella la demanda que está a punto de construir.
     stamp_ingredient_demand(plan_result, surface="get_shopping_list_delta")
+    # [P1-ARQ25-F3-HORIZON · 2026-09-02] ventanas de frescos/congelación de la política (si el
+    # plan ya la lleva sellada). Best-effort; sin política no toca nada.
+    try:
+        from horizon import stamp_demand_windows as _stamp_windows_f3
+        _stamp_windows_f3(plan_result)
+    except Exception as _sw_e:
+        logging.debug(f"[P1-ARQ25-F3-HORIZON] ventanas de la demanda no selladas: {_sw_e}")
     if not days and plan_result.get("meals"):
         days = [{"day": 1, "meals": plan_result.get("meals")}] 
     if not days and plan_result.get("perfectDay"):

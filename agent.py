@@ -644,9 +644,14 @@ def _chat_prompt_static_prefix() -> bool:
 # Knobs auto-registrados via `_env_float` (P3-NEW-D). Validator clamp (0, 120]
 # para evitar timeouts patológicos por env var corrupta.
 def _chat_agent_llm_timeout_s() -> float:
+    # [P1-CHAT-ORPHAN-TURN-TRUTH · 2026-09-03] 15 s era el techo de la era Gemini. Con GLM
+    # y un turno con tool + reintento (claim-verify), la llamada supera los 15 s y el
+    # cliente de OpenAI agota sus 3 intentos en ~47 s con "Request timed out" — el turno
+    # muere y el usuario se queda sin respuesta. 30 s por intento; el presupuesto del
+    # stream (P1-CHAT-STREAM-BUDGET) sigue acotando el total.
     return _env_float(
         "MEALFIT_CHAT_AGENT_LLM_TIMEOUT_S",
-        15.0,
+        30.0,
         validator=lambda v: 0.0 < v <= 120.0,
     )
 
@@ -1113,6 +1118,12 @@ def swap_meal(form_data: dict, surface: str = "individual"):
     # `invoke_with_retry`. country_for_form_data es la ÚNICA puerta (T1); knob apagado ⇒ 'DO'.
     from constants import country_for_form_data
     _swap_country = country_for_form_data(form_data)
+    # [P1-ARQ25-F7-CULTURE · 2026-09-05] La OTRA puerta: la COCINA del plan (sello `_culture_weights` que el
+    # endpoint hidrata desde `_plan_policy`, o la elección del perfil). Inspiración, reglas de franja, plantilla
+    # del prompt y los feedbacks de retry son culturales; catálogo, despensa y cierres de proteína siguen
+    # con `_swap_country` (mercado). Sin sello ni elección ⇒ ambas coinciden (legado byte-idéntico).
+    from constants import cultural_country_for_form_data as _ccffd_swap
+    _swap_culture = _ccffd_swap(form_data)
 
     # [P1-SWAP-MACROS · 2026-05-22] Targets per-meal: si el cliente envía
     # target_protein/carbs/fats explícitos (pre-rejected meal's macros) los
@@ -1293,8 +1304,8 @@ def swap_meal(form_data: dict, surface: str = "individual"):
             # [P1-DISH-LIBRARY-COUNTRY · 2026-08-21] Sin esto, el swap de un plato español
             # devolvía inspiración dominicana: arreglar sólo el day-gen habría dejado la mitad
             # post-generación con el defecto — la misma asimetría de callers que Fase 1 tuvo que
-            # barrer dos veces. `_swap_country` ya está resuelto arriba, por la única puerta.
-            country=_swap_country,
+            # barrer dos veces. [P1-ARQ25-F7-CULTURE] la inspiración es CULTURAL: `_swap_culture`.
+            country=_swap_culture,
         )
         if _insp_swap:
             context_extras += _insp_swap
@@ -1302,7 +1313,25 @@ def swap_meal(form_data: dict, surface: str = "individual"):
         logger.debug(f"[P2-AUDIT-V6-BATCH] (P2-F) inspiración swap no-op: {_insp_e}")
 
     swap_reason = form_data.get("swap_reason", "dislike")
-    
+    # [P1-ARQ25-F3-HORIZON · 2026-09-02] El swap lee la política del plan vivo (§6.6): bloque 📐
+    # con la banda y las anclas de ESTA franja (vacío salvo `enforce`), y el motivo neutral
+    # `renewal.v1` NO pide variedad — hereda la política. Sin política, `renewal.v1` cae al
+    # alias legado y el chain de abajo queda byte-idéntico.
+    _pol_block_f3 = ""
+    try:
+        from horizon import policy_prompt_block as _ppb_f3, is_renewal_reason as _irr_f3
+        _pol_block_f3 = _ppb_f3(form_data.get("_plan_policy_effective"), surface="swap", slot=meal_type,
+                                enforced=bool(form_data.get("_policy_enforced")))
+        if _pol_block_f3:
+            context_extras += "\n" + _pol_block_f3
+        if _irr_f3(swap_reason):
+            if _pol_block_f3:
+                context_extras += "\n    - 🔁 INTENCIÓN: el usuario RENUEVA este plato. No es una petición de variedad: respeta la banda de recurrencia y las anclas de su política."
+            else:
+                swap_reason = 'variety'
+    except Exception as _pol_e:
+        logger.debug(f"[P1-ARQ25-F3-HORIZON] política del swap no-op: {_pol_e}")
+
     if swap_reason == 'variety':
         context_extras += "\n    - 💡 INTENCIÓN: El usuario NO rechaza este plato, solo quiere VARIEDAD. Sugiere combinaciones creativas, diferentes técnicas de cocción o perfiles de sabor novedosos pero accesibles."
     elif swap_reason == 'time':
@@ -1677,7 +1706,8 @@ def swap_meal(form_data: dict, surface: str = "individual"):
         # SIEMPRE usaba el pool RD (default None de _get_fast_filtered_catalogs) sin importar el
         # país real del usuario beta.
         filtered_p, filtered_c, filtered_v, _ = _get_fast_filtered_catalogs(
-            swap_allergies, swap_dislikes, swap_diet, country=_swap_country
+            swap_allergies, swap_dislikes, swap_diet, country=_swap_country,
+            market_extras=True, culture_country=_swap_culture,  # [F7-H]
         )
         
         # Excluir ingredientes del plato rechazado
@@ -1814,7 +1844,7 @@ def swap_meal(form_data: dict, surface: str = "individual"):
             from constants import build_meal_timing_rules as _bmtr
             # [P1-COUNTRY-SYSTEM-F1 · 2026-08-16 (T4)] reusa `_swap_country` (derivado UNA vez al
             # inicio de swap_meal, T3) — DO ⇒ camino byte-idéntico.
-            _timing_block = _bmtr(meal_type, _swap_country)
+            _timing_block = _bmtr(meal_type, _swap_culture)
             if _timing_block:
                 context_extras += _timing_block
         except Exception as _tr_e:
@@ -1910,7 +1940,7 @@ def swap_meal(form_data: dict, surface: str = "individual"):
 
     # [P1-COUNTRY-SYSTEM-F1 · 2026-08-16 (FINAL-FIX F1c)] reusa `_swap_country` (derivado UNA vez
     # al inicio de swap_meal, T3) — DO ⇒ SWAP_MEAL_PROMPT_TEMPLATE byte-idéntico.
-    prompt_text = build_swap_meal_prompt_template(_swap_country).format(
+    prompt_text = build_swap_meal_prompt_template(_swap_culture).format(
         rejected_meal=rejected_meal,
         meal_type=meal_type,
         target_calories=target_calories,
@@ -2877,14 +2907,14 @@ def swap_meal(form_data: dict, surface: str = "individual"):
                 _slot_dump = res.model_dump() if hasattr(res, "model_dump") else (res if isinstance(res, dict) else {})
                 # [P1-COUNTRY-SYSTEM-F1 · 2026-08-16 (T4 fix-round 1)] reusa `_swap_country`
                 # (derivado UNA vez al inicio de swap_meal, T3) — DO ⇒ camino byte-idéntico.
-                _slot_viol = slot_coherence_backstop_for_meal(_slot_dump, meal_type, _swap_country)
+                _slot_viol = slot_coherence_backstop_for_meal(_slot_dump, meal_type, _swap_culture)
             except Exception:
                 _slot_viol = []
             if _slot_viol:
                 logger.warning(
                     f"🕒 [P1-SLOT-APPROPRIATENESS] swap fuera de horario | meal_type={meal_type} | viol={_slot_viol}"
                 )
-                _current_prompt[0] = prompt_text + _swap_slot_feedback_suffix(_swap_country, meal_type, _slot_viol)
+                _current_prompt[0] = prompt_text + _swap_slot_feedback_suffix(_swap_culture, meal_type, _slot_viol)
                 raise ValueError("SLOT_INCOHERENCE: " + "; ".join(_slot_viol))
 
         # [P1-UPDATE-APPETIBILITY · 2026-06-27] (audit Fase 0) Pareo chocante fruta+salado en swap
@@ -2961,7 +2991,7 @@ def swap_meal(form_data: dict, surface: str = "individual"):
             if _rs_raw:
                 _RS_MARKER = "🍳 RETRY PLATO TRANSFORMADO"
                 if _RS_MARKER not in str(_current_prompt[0]):
-                    _current_prompt[0] = prompt_text + _swap_raw_staple_feedback_suffix(_swap_country, _RS_MARKER, _rs_reason)
+                    _current_prompt[0] = prompt_text + _swap_raw_staple_feedback_suffix(_swap_culture, _RS_MARKER, _rs_reason)
                     raise ValueError("RAW_STAPLE: " + str(_rs_reason)[:100])
                 logger.info(f"🍳 [P2-AUDIT-V5-BATCH] (GAP-13) swap sigue raw-staple tras el retry — "
                             f"entregado con advisory | meal_type={meal_type}")
@@ -5310,6 +5340,14 @@ def _build_past_days_context(user_id: str, current_plan, local_date_str: Optiona
             logger.warning(f"[P1-CHAT-PAST-DAYS] no se pudo leer el diario multi-día: {e}")
             rows = []
         out += build_past_diary_block(rows, today, days_back=days_back, tz_offset_mins=tz_offset_mins)
+        # [P1-DIARY-FREETEXT-ESTIMATE · 2026-09-04] tercera vía: lo que el usuario NEGÓ haber comido
+        try:
+            from db_facts import get_plan_meal_deviations_since
+            from chat_history_context import build_plan_deviations_block
+            devs = get_plan_meal_deviations_since(user_id, since) or []
+            out += build_plan_deviations_block(devs, today, days_back=days_back, tz_offset_mins=tz_offset_mins)
+        except Exception as e:
+            logger.warning(f"[P1-DIARY-FREETEXT-ESTIMATE] desvíos del plan fail-open: {e}")
         return out
     except Exception as e:
         logger.warning(f"[P1-CHAT-PAST-DAYS] contexto de días pasados fail-open: {e}")
@@ -6077,7 +6115,10 @@ def chat_with_agent(session_id: str, prompt: str, current_plan: Optional[dict] =
             consumed_today = get_consumed_meals_today(user_id, date_str=local_date, tz_offset_mins=_tz_diario)
             if consumed_today:
                 total_consumed = sum(m.get('calories', 0) for m in consumed_today)
-                meals_text = ", ".join([f"{m.get('meal_name')} ({m.get('calories')} kcal)" for m in consumed_today])
+                meals_text = ", ".join([  # [P1-DIARY-FREETEXT-ESTIMATE v2] slot delante del plato
+                    f"{(str(m.get('meal_type') or '').strip() + ': ') if m.get('meal_type') else ''}{m.get('meal_name')} ({m.get('calories')} kcal)"
+                    for m in consumed_today
+                ])
                 
                 target_calories = form_data.get("target_calories") if form_data else None
                 # [P1-CHAT-PAUSED-PROMPT-BLOCKS · 2026-08-14] El respaldo sale del plan
@@ -6097,6 +6138,13 @@ def chat_with_agent(session_id: str, prompt: str, current_plan: Optional[dict] =
                         logger.warning(f"[P1-CHAT-PAUSED-PROMPT-BLOCKS] metas del contador ilegibles: {_tgt_e}")
                 
                 system_prompt += f"\n\nDIARIO DE HOY: El usuario ya ha registrado consumir hoy las siguientes comidas: {meals_text}."
+                # [P1-DIARY-FREETEXT-ESTIMATE v2 · 2026-09-04] un plato repetido con las mismas kcal es casi siempre un
+                # registro doble: avisar Y dar el total sin él (el coach solo EDITA filas; borrar es «Deshacer registro»).
+                system_prompt += (
+                    " Si dos registros de hoy llevan el MISMO plato con las MISMAS kcal, trátalos como un registro "
+                    "DUPLICADO: dilo con los dos slots, y da los totales del día SIN el duplicado (además del bruto). "
+                    "Tú no puedes borrar filas: el usuario lo quita con «Deshacer registro» en el diario."
+                )
                 # [P1-CHAT-MACRO-CONTEXT · 2026-07-12] Macros desglosadas del
                 # día — las MISMAS que la card 'Progreso en Tiempo Real'.
                 system_prompt += _macro_totals_line(consumed_today, current_plan)
@@ -6298,6 +6346,30 @@ from typing import Generator
 from sentiment_classifier import classify_sentiment
 from prompts.sentiment import normalize_personality_instruction_for_country
 
+# [P1-CHAT-ORPHAN-TURN-TRUTH · 2026-09-03] Registro en memoria de los turnos de chat que
+# este proceso está sirviendo AHORA (session_id → epoch de inicio). Existe para que
+# `GET /history` pueda decir `turn_active`: cuando la página se recarga con el último
+# mensaje del usuario sin respuesta, el cliente sondeaba el historial hasta 30 veces
+# (~4 min) «Recuperando tu respuesta…» aunque el turno ya hubiera muerto en el servidor
+# (p. ej. timeout del modelo). Con esta verdad, el cliente abandona en el primer sondeo
+# y ofrece reintentar. Un proceso, un dict: si algún día hay varios workers, el flag es
+# «lo mejor que sabe este worker» y el tope de edad evita entradas zombis.
+# Tooltip-anchor: P1-CHAT-ORPHAN-TURN-TRUTH.
+_ACTIVE_TURNS: dict[str, float] = {}
+_ACTIVE_TURN_MAX_AGE_S = 300.0
+
+
+def is_turn_active(session_id: str) -> bool:
+    """True si este proceso está sirviendo ahora mismo un turno para la sesión."""
+    started = _ACTIVE_TURNS.get(session_id)
+    if started is None:
+        return False
+    if (time.time() - started) > _ACTIVE_TURN_MAX_AGE_S:
+        _ACTIVE_TURNS.pop(session_id, None)
+        return False
+    return True
+
+
 def chat_with_agent_stream(session_id: str, prompt: str, current_plan: Optional[dict] = None, user_id: Optional[str] = None, form_data: Optional[dict] = None, local_date: Optional[str] = None, tz_offset: Optional[int] = None, is_call_mode: bool = False, plan_tier: str = "gratis", vision: Optional[dict] = None) -> Generator[str, None, None]:
     """Generador síncrono de chat que emite eventos del modelo y herramientas mediante SSE (JSONlines).
     FastAPI ejecuta esto en un threadpool externo, liberando el Event Loop para concurrencia real."""
@@ -6307,6 +6379,7 @@ def chat_with_agent_stream(session_id: str, prompt: str, current_plan: Optional[
     #  donde solo depende de sus parametros: cada vez que un consumidor nuevo
     #  aparecia mas arriba habia que volver a moverlo, y una de esas veces se
     #  colo un NameError. Aqui ya no puede quedar por debajo de nadie.
+    _ACTIVE_TURNS[session_id] = time.time()  # [P1-CHAT-ORPHAN-TURN-TRUTH] se retira en el finally del stream
     plan_vigente = _plan_vigente_para_prompt(user_id, current_plan)
 
     # [P1-COACH-PERSONA-CURIOSIDAD-DO · 2026-08-23] País resuelto antes de
@@ -6583,7 +6656,10 @@ def chat_with_agent_stream(session_id: str, prompt: str, current_plan: Optional[
             consumed_today = get_consumed_meals_today(user_id, date_str=local_date, tz_offset_mins=_tz_diario)
             if consumed_today:
                 total_consumed = sum(m.get('calories', 0) for m in consumed_today)
-                meals_text = ", ".join([f"{m.get('meal_name')} ({m.get('calories')} kcal)" for m in consumed_today])
+                meals_text = ", ".join([  # [P1-DIARY-FREETEXT-ESTIMATE v2] slot delante del plato
+                    f"{(str(m.get('meal_type') or '').strip() + ': ') if m.get('meal_type') else ''}{m.get('meal_name')} ({m.get('calories')} kcal)"
+                    for m in consumed_today
+                ])
                 
                 target_calories = form_data.get("target_calories") if form_data else None
                 # [P1-CHAT-PAUSED-PROMPT-BLOCKS · 2026-08-14] El respaldo sale del plan
@@ -6603,6 +6679,13 @@ def chat_with_agent_stream(session_id: str, prompt: str, current_plan: Optional[
                         logger.warning(f"[P1-CHAT-PAUSED-PROMPT-BLOCKS] metas del contador ilegibles: {_tgt_e}")
                 
                 system_prompt += f"\n\nDIARIO DE HOY: El usuario ya ha registrado consumir hoy las siguientes comidas: {meals_text}. [P1-CHAT-ACT-DONT-ASK] Úsalo para NO DUPLICAR, no para pedir permiso: si una foto o mensaje nuevo coincide con algo que ya está aquí, felicítalo o coméntalo sin volver a registrarlo de nuevo; si ya tiene una cena registrada y llega otra foto de noche, asume que es un snack nocturno (o pregúntale por qué repite) en vez de tratarla como si fuera la cena otra vez. Fuera de ese caso de duplicado, sigue la regla general: comida nueva en pasado = regístrala YA, sin preguntar."
+                # [P1-DIARY-FREETEXT-ESTIMATE v2 · 2026-09-04] un plato repetido con las mismas kcal es casi siempre un
+                # registro doble: avisar Y dar el total sin él (el coach solo EDITA filas; borrar es «Deshacer registro»).
+                system_prompt += (
+                    " Si dos registros de hoy llevan el MISMO plato con las MISMAS kcal, trátalos como un registro "
+                    "DUPLICADO: dilo con los dos slots, y da los totales del día SIN el duplicado (además del bruto). "
+                    "Tú no puedes borrar filas: el usuario lo quita con «Deshacer registro» en el diario."
+                )
                 # [P1-CHAT-MACRO-CONTEXT · 2026-07-12] Macros desglosadas del
                 # día — las MISMAS que la card 'Progreso en Tiempo Real'.
                 system_prompt += _macro_totals_line(consumed_today, current_plan)
@@ -6986,6 +7069,7 @@ def chat_with_agent_stream(session_id: str, prompt: str, current_plan: Optional[
         yield f"data: {json.dumps({'type': 'error', 'message': str(e)})}\n\n"
         return
     finally:
+        _ACTIVE_TURNS.pop(session_id, None)  # [P1-CHAT-ORPHAN-TURN-TRUTH] el turno ya no está vivo
         # [P1-CHAT-STREAM-FINALLY-CLOSE · 2026-05-19] Cleanup defensivo
         # del iterator de LangGraph en TODOS los exits (normal, exception,
         # GeneratorExit). Garbage collection eventualmente lo cerraría
