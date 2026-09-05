@@ -66,6 +66,20 @@ if _URL:
     os.environ["NEON_DATABASE_URL"] = _URL
     os.environ["NEON_DATABASE_URL_POOLED"] = _URL
     os.environ.setdefault("ENVIRONMENT", "development")
+    # `MEALFIT_TESTS_HAVE_DB` es la senal EXPLICITA que pide `conftest._db_available`.
+    # Su gate `_LOCAL_ONLY` escanea el FUENTE de cada test y este archivo casa
+    # `connection_pool.open(`, asi que sin la senal los 12 casos se SALTAN aunque
+    # haya un Postgres de verdad detras de MEALFIT_E2E_DATABASE_URL -- el modo de
+    # fallo exacto que este archivo existe para impedir: un verde que no probo nada.
+    #
+    # No basta con exportar `NEON_DATABASE_URL`, y es deliberado: el conftest dice
+    # que el entorno del job la tenia definida y los modulos corrian contra una base
+    # que no existia. Aqui la senal es honesta -- si `_URL` esta puesta, hay base.
+    #
+    # A nivel de modulo y no en un fixture: `pytest_collection_modifyitems` decide
+    # los skips despues de importar los modulos, asi que esto llega a tiempo; desde
+    # un fixture llegaria tarde.
+    os.environ["MEALFIT_TESTS_HAVE_DB"] = "1"
 
 _MIGRACIONES = (
     "p0_4_apply_inventory_delta_rpc.sql",
