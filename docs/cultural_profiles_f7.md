@@ -157,6 +157,24 @@ formulario apenas se usaba.
   tortillas, batata, ñame 30) y se añadieron platos para las franjas delgadas. Listón del test: al día 30 sin congelador,
   desayuno ≥ 7 · almuerzo ≥ 9 · cena ≥ 8 · merienda ≥ 6 candidatos en cada biblioteca. Test: `test_p1_arq25_f7_culture_pantry.py`.
 
+## 8c. Subfase H — el pool de mercado también obedece a la cocina (2026-09-05, prueba real A)
+
+La primera generación real «mercado US + cocina dominicana 0,7» tenía la política y el blueprint correctos (5 días DO /
+2 US, candidatos del registry de las dos bibliotecas) y aun así los días dominicanos salieron «Pollo BBQ sobre frijoles
+horneados», «Bagel de pollo con ranch», «calabacín al kétchup». La causa no era la capa cultural sino el **pool de mercado
+del sembrador** (`COUNTRY_POOLS["US"]`): 10 carbos (bagels, frijoles horneados…, sin arroz, plátano, yuca ni aceite de
+oliva) y condimentos contando como «vegetales/grasas»; ese pool es la ASIGNACIÓN OBLIGATORIA del día, y contra eso el
+bloque de inspiración no puede.
+
+- `constants.UNIVERSAL_MARKET_STAPLES` (lo que cualquier supermercado de los seis mercados vende) se suma a los pools
+  beta; `MARKET_POOL_CONDIMENTS_EXCLUDED` saca ranch/barbacoa/kétchup/mostaza/sazonador de las «grasas».
+- Con cocina ≠ mercado, `_market_pool_with_extras` **interseca** el pool con los constituyentes del registry de esa cocina
+  (≥ 5 por categoría; si no, el pool entero): US + DO ⇒ arroz, plátano, yuca, batata, habichuelas, avena…, sin bagels.
+- Opt-in por kwargs (`market_extras=True, culture_country=`) en el sembrador, el swap y el camino degradado; la firma sin
+  kwargs sigue byte-idéntica (contrato de F2). Knob `MEALFIT_MARKET_POOL_UNIVERSAL`.
+- Test `test_p1_arq25_f7_culture_market_pool.py`. Lección: *el blueprint puede estar perfecto y el plato salir de otra
+  cocina si el sembrador de ingredientes no sabe de cultura — la prueba real con el LLM fue la que lo mostró.*
+
 ## 8. Lo que NO hace (a propósito)
 
 - No infiere la cocina del origen, del idioma ni de la zona horaria (solo SUGIERE la del país de compra, visible).
