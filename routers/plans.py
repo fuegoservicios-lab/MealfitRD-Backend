@@ -7990,6 +7990,12 @@ def api_swap_meal_persist(
             raise HTTPException(
                 status_code=404, detail="Plan no encontrado"
             )
+        # [P1-ARQ25-F5-REPROJECTION · 2026-09-05] la lista pudo cambiar: re-encolar la proyección (fail-open)
+        try:
+            from plan_jobs import enqueue_shopping_reprojection as _f5_reproj
+            _f5_reproj(plan_id, verified_user_id, reason="swap", plan_data=result)
+        except Exception as _f5_e:
+            logger.debug(f"[ARQ25-F5] reprojection (swap) no encolada: {_f5_e!r}")
         # [P1-PLAN-DISPLAY-I18N-MUTATOR-swap] Despacho best-effort post-persist (FUERA del
         # lock): el DELETE-on-write de arriba dejó el meal swapeado sin `_display` — si el
         # usuario lee el dashboard en otro idioma, re-enriquecer el día tocado
@@ -9822,6 +9828,12 @@ def api_regenerate_day(
         result = update_plan_data_atomic(plan_id, _day_mutator, user_id=verified_user_id)
         if not result:
             raise HTTPException(status_code=404, detail="Plan no encontrado")
+        # [P1-ARQ25-F5-REPROJECTION · 2026-09-05] la lista pudo cambiar: re-encolar la proyección (fail-open)
+        try:
+            from plan_jobs import enqueue_shopping_reprojection as _f5_reproj
+            _f5_reproj(plan_id, verified_user_id, reason="regenerate_day", plan_data=result)
+        except Exception as _f5_e:
+            logger.debug(f"[ARQ25-F5] reprojection (regenerate_day) no encolada: {_f5_e!r}")
 
         # [P1-PLAN-DISPLAY-I18N-MUTATOR-regenday] Despacho best-effort post-persist (FUERA del
         # lock): re-enriquecer `_display` del día regenerado si el locale del usuario aplica.
@@ -12158,6 +12170,12 @@ def api_recalculate_shopping_list(data: dict = Body(...), verified_user_id: Opti
             # por save_new_meal_plan_atomic, o filtro user_id no matched).
             # 404 explícito en lugar de retornar success con plan_data stale.
             raise HTTPException(status_code=404, detail="Plan no encontrado")
+        # [P1-ARQ25-F5-REPROJECTION · 2026-09-05] la lista pudo cambiar: re-encolar la proyección (fail-open)
+        try:
+            from plan_jobs import enqueue_shopping_reprojection as _f5_reproj
+            _f5_reproj(plan_id, user_id, reason="recalculate", plan_data=merged_plan_data)
+        except Exception as _f5_e:
+            logger.debug(f"[ARQ25-F5] reprojection (recalculate) no encolada: {_f5_e!r}")
 
         logger.info(f"✅ [RECALC] Listas recalculadas exitosamente ×{household_size} personas")
 
