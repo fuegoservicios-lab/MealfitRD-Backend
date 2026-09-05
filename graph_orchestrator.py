@@ -12866,6 +12866,10 @@ CLOSER_BOLT_MAX_ADD_G = _env_int("MEALFIT_CLOSER_BOLT_MAX_ADD_G", 180, validator
 # clase + truth-up; el reparador de proteína post-caps (FASE A) y el carb-floor re-cierran redistribuyendo.
 PORTION_REALISM_CAP_ENABLED = _env_bool("MEALFIT_PORTION_REALISM_CAP", True)
 PORTION_CAP_PROTEIN_G = _env_int("MEALFIT_PORTION_CAP_PROTEIN_G", 300, validator=lambda v: 150 <= v <= 600)
+# [P1-GAINMUSCLE-DINNER-CLOSER · 2026-09-05] «600 g de papa en cubos» en una cena (plan vivo 9b73656d): el band-closer
+# infló el tubérculo hasta el techo duro de línea (600 g) porque los víveres no tenían techo propio. Tope por comida.
+PORTION_CAP_TUBER_G = _env_int("MEALFIT_PORTION_CAP_TUBER_G", 350, validator=lambda v: 150 <= v <= 800)
+_REALISM_TUBER_TOKENS = ("papa", "batata", "yuca", "name", "yautia", "platano", "guineo verde", "malanga", "mapuey", "camote")
 # [P2-AUDIT-V5-BATCH · 2026-07-02] (GAP-05) Piso cocinable del lado SHRINK — espejo-floor del cap de
 # arriba: solver (min 0.3) × reconcile (0.4) × rebalance (0.3) COMPONEN factores entre pasadas y el
 # quantize gram-path preserva múltiplos de 5g → líneas macro-bearing de 5-15g no servibles llegaban
@@ -20410,7 +20414,7 @@ _MEAT_MARKER_RE = _re.compile(
 )
 
 
-def _dish_coherence_filter(meal: dict, strip_accents_fn):
+def _dish_coherence_filter(meal: dict, strip_accents_fn, goal=None):
     """[P1-TOPUP-DISH-COHERENCE · 2026-07-24] SSOT del criterio "¿esta proteína pega en este
     plato?". Devuelve un predicado `nombre_normalizado -> bool`.
 
@@ -20439,8 +20443,20 @@ def _dish_coherence_filter(meal: dict, strip_accents_fn):
         # de lo que va el plato; en la lista de ingredientes puede ser un topping.
         _nm = strip_accents_fn(str(meal.get("name", "")).lower())
         _cheese_dish = any(h in _nm for h in _CLOSER_CHEESE_HINT)
+        # [P1-GAINMUSCLE-DINNER-CLOSER · 2026-09-05] En CENA de ganancia muscular el «queso como plato» NO
+        # bloquea la carne magra: el cerrador puede añadir pollo/pescado y el queso pasa a extensor. Plan vivo
+        # 9b73656d: «Plátano verde majado con queso fresco» recibió 40 g de soya texturizada porque el queso
+        # vetaba toda carne. La autocrítica que corrige esto se salta en los reintentos (budget-aware), así que
+        # el cerrador es la última defensa. tooltip-anchor: P1-GAINMUSCLE-DINNER-CLOSER
+        _goal_gd = strip_accents_fn(str(goal or "").lower())
+        _gm_cena_cede = bool(
+            _cheese_dish
+            and any(t in _goal_gd for t in ("gain_muscle", "ganar_musculo", "ganancia", "bulk"))
+            and "cena" in strip_accents_fn(str(meal.get("meal") or "").lower())
+            and not _meal_has_main_animal_protein(meal, strip_accents_fn))
         has_main = (CLOSER_DISH_COHERENCE_ENABLED and CLOSER_NO_DOUBLE_MAIN_ENABLED
-                    and (_meal_has_main_animal_protein(meal, strip_accents_fn) or _cheese_dish))
+                    and (_meal_has_main_animal_protein(meal, strip_accents_fn)
+                         or (_cheese_dish and not _gm_cena_cede)))
         # [P1-CLOSER-NO-SPREAD-PLUS-CHEESE · 2026-07-26] Se mira el NOMBRE (igual que
         # `_cheese_dish`): ahí es de lo que va el plato. En la lista de ingredientes una
         # cucharada de mantequilla de maní puede ser un topping, no el relleno.
@@ -21005,6 +21021,8 @@ CLOSER_SWEET_DAIRY_MIN_PROTEIN = _env_float("MEALFIT_CLOSER_SWEET_DAIRY_MIN_PROT
 # [P1-CLOSER-LIGHT-SLOT-NO-MEAT] únicas carnes admisibles en una merienda salada y cocinada
 _LIGHT_SLOT_OK_MEAT = ("pollo", "pavo", "atun", "atún")
 _SWEET_DAIRY_TOKENS = ("yogur", "cottage", "ricotta", "requeson")
+# [P1-GAINMUSCLE-DINNER-CLOSER] «carne vegetal»: candidatos del cerrador solo aptos para vegetarianos/veganos
+_PLANT_MEAT_TOKENS = ("soya", "soja", "tofu", "tempeh", "seitan")
 _SWEET_OK_CHEESE_TOKENS = ("ricotta", "requeson", "cottage", "crema")
 
 # [P1-CLOSER-SWEET-DAIRY-FIT · 2026-07-26] Dentro del pool dulce el orden lo daba SOLO la
@@ -21073,7 +21091,7 @@ def _is_savory_cheese_name(nlow: str) -> bool:
 def _close_protein_gap_for_meal(meal: dict, slot_protein_target: float, db, candidates,
                                 *, allergies=None, fill_pct: float = 0.92, max_add_g: int = 300,
                                 slot_cal_target: float = 0.0, enforce_min_threshold: bool = True,
-                                day_used_proteins=None, diet=None, country=None) -> int:
+                                day_used_proteins=None, diet=None, country=None, goal=None) -> int:
     """[P3-PROTEIN-FLOOR · 2026-06-13] Rellena el meal hasta ~fill_pct del target de proteína
     del slot con una proteína de ALTA DENSIDAD allergen-safe (de `candidates`), integrada como
     INGREDIENTE real en gramos (no como nota). Cierra el déficit que el escalado no puede (no
@@ -21122,6 +21140,20 @@ def _close_protein_gap_for_meal(meal: dict, slot_protein_target: float, db, cand
                 if any(t in nlow for t in _RAW_EGG_TERMS):
                     continue
             _pool.append((info, nlow))
+        # [P1-GAINMUSCLE-DINNER-CLOSER · 2026-09-05] «carne vegetal» (soya texturizada/tofu/tempeh/seitán) solo en
+        # dietas vegetarianas o veganas: en una cena dominicana omnívora es un pegote (plan vivo 9b73656d).
+        # Sin otro candidato ⇒ se conserva (el piso de proteína manda, misma asimetría que el guard dulce).
+        if _pool:
+            try:
+                from constants import canonicalize_diet_type as _cdt_pm
+                _diet_pm = _cdt_pm(diet)
+            except Exception:
+                _diet_pm = "balanced"
+            if _diet_pm not in ("vegan", "vegetarian"):
+                _pool_no_plant_meat = [(i_pm, n_pm) for (i_pm, n_pm) in _pool
+                                       if not any(t in n_pm for t in _PLANT_MEAT_TOKENS)]
+                if _pool_no_plant_meat:
+                    _pool = _pool_no_plant_meat
         # [P1-CLOSER-SWEET-GUARD · 2026-06-27] En plato DULCE (yogurt+fruta, avena+guineo, batido, tortilla con
         # fresas) NO inyectar proteína SALADA (camarón/pescado/carne) — era el rechazo CRÍTICO de corr=26311f6f
         # (FASE A metió +81g de camarones en 8 comidas dulces). Filtra el pool; si queda vacío → return 0 (el piso
@@ -21183,7 +21215,7 @@ def _close_protein_gap_for_meal(meal: dict, slot_protein_target: float, db, cand
         # (SSOT) y lo consulta también `_protein_topup_meal`: tener dos copias fue exactamente
         # lo que dejó sin blindar al rescate de proteína.
         if _pool:
-            _coh_ok = _dish_coherence_filter(meal, _sa)
+            _coh_ok = _dish_coherence_filter(meal, _sa, goal=goal)
             _pool_no_second_main = [(info, nlow) for (info, nlow) in _pool if _coh_ok(nlow)]
             if not _pool_no_second_main:
                 logger.info(
@@ -33201,6 +33233,9 @@ def _cap_unrealistic_portions(days, db=None) -> int:
                         # caps (vivo: "4 rebanadas de Pan integral familiar" ≈ 180g evadió el cap).
                         elif cur_g > 135.0 and _re.search(r"\bpan\b", il):
                             factor = 135.0 / cur_g
+                        elif (cur_g > float(PORTION_CAP_TUBER_G)
+                              and any(_re.search(r"\b" + t, il) for t in _REALISM_TUBER_TOKENS)):
+                            factor = float(PORTION_CAP_TUBER_G) / cur_g   # [P1-GAINMUSCLE-DINNER-CLOSER] víveres
                         # [P1-RECIPE-AUDIT-6 · 2026-07-12] 1.10) semillas (chía/linaza) en gramos
                         # sobre el techo servible — el micro-closer de fibra las infla sin cap.
                         elif (cur_g > float(SEED_GRAM_CAP_G)
@@ -37432,7 +37467,8 @@ def _repair_protein_floor_post_caps(days: list, nutrition: dict, form_data: dict
                                                  slot_cal_target=_slot_cal, enforce_min_threshold=False,
                                                  day_used_proteins=_used_others,
                                                  diet=form_data.get("dietType"),
-                                                 country=country_for_form_data(form_data))
+                                                 country=country_for_form_data(form_data),
+                                                 goal=form_data.get("mainGoal") or form_data.get("goal"))
                 if _g > 0:
                     added += _g
                     _m["_final_protein_close"] = True
