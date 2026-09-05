@@ -5033,7 +5033,8 @@ def test_f_wiring_deriva_pais_via_ssot_no_lector_crudo():
     assert len(assignments) == 1
     value = assignments[0].value
     assert isinstance(value, ast.Call)
-    assert isinstance(value.func, ast.Name) and value.func.id == "country_for_form_data"
+    # [P1-ARQ25-F7-CULTURE] el gate de horario es CULTURAL: lee la puerta cultural (SSOT que cae al mercado sin elección)
+    assert isinstance(value.func, ast.Name) and value.func.id in ("country_for_form_data", "cultural_country_for_form_data")
     assert len(value.args) == 1 and isinstance(value.args[0], ast.Name) and value.args[0].id == "form_data"
 
 

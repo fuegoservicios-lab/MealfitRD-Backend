@@ -3953,6 +3953,18 @@ def stamp_plan_country(plan_data, form_data, *, emit_observability: bool = False
     return _cc
 
 
+def cultural_country_for_form_data(form_data, day_index=None) -> str:
+    """[P1-ARQ25-F7-CULTURE · 2026-09-05] La OTRA puerta (I16): país cuya COCINA guía plantillas, inspiración,
+    hábitos de franja, arroz nocturno y juez culinario. `country_for_form_data` sigue siendo la puerta del
+    MERCADO (precios, catálogo, moneda, unidades). Con el knob `MEALFIT_CULTURAL_PROFILES` apagado o sin
+    elección de cocina, devuelve el país de compra: legado byte-idéntico. Fail-open al mercado."""
+    try:
+        from cultural_profiles import cultural_country_for_form_data as _ccf
+        return _ccf(form_data, day_index=day_index)
+    except Exception:
+        return country_for_form_data(form_data)
+
+
 def country_for_plan(plan_data, health_profile, *, return_source: bool = False):
     """[P1-PLAN-STAMPS-COUNTRY · 2026-08-21] País de un plan YA GENERADO, para las superficies
     post-generación (recalc, swap, backstop, telemetría).

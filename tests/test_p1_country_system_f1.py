@@ -1382,7 +1382,8 @@ def test_generate_days_parallel_node_wire_country_en_build_day_assignment_contex
     ini = sin_comentarios.index("assignment_context = build_day_assignment_context(")
     fin = sin_comentarios.index("\n        )", ini) + len("\n        )")
     cuerpo = sin_comentarios[ini:fin]
-    assert "country=country_for_form_data(form_data)" in cuerpo
+    # [P1-ARQ25-F7-CULTURE] la puerta del brief es la CULTURAL (cae al mercado sin elección de cocina)
+    assert "country=cultural_country_for_form_data(form_data" in cuerpo
 
 
 # ── (5) self_critique_node: hint del carbohidrato de la cena ─────────────────────────────────

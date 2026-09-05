@@ -358,26 +358,56 @@ def _schedule_days(total_days: int, min7: int, max7: int) -> list[int]:
     return sorted(days)
 
 
+def _main_profile(effective: Optional[dict]) -> str:
+    try:
+        from cultural_profiles import main_profile_id, profile_for_market
+        eff = effective or {}
+        ws = eff.get("culture_weights") or []
+        if ws:
+            return main_profile_id(ws)
+        # sin pesos (política anterior a F7 o efectivo mínimo): la cocina del mercado de la política
+        return profile_for_market(eff.get("market_country") or (eff.get("market") or {}).get("country"))
+    except Exception:
+        return "dominican_criolla"
+
+
+def _culture_country(profile_id: Optional[str]) -> str:
+    """País cuya biblioteca/registry representa la cocina (NO el de compra)."""
+    try:
+        from cultural_profiles import country_for_profile
+        return country_for_profile(profile_id)
+    except Exception:
+        return "DO"
+
+
 def _registry_block_for_country(country: Optional[str], *, effective: Optional[dict] = None, days_out: Optional[list] = None) -> dict:
     """[P1-ARQ25-F6-DISH-REGISTRY · 2026-09-05] El allocator consume el Dish Registry compilado: hash del
     snapshot activo + candidatos por día/franja (status ok, franja, familia de proteína programada, sin las
     clases de alérgeno declaradas). Fail-open: sin snapshot, `{snapshot_hash: None}` y nada cambia."""
     try:
         import dish_registry as dr
+        if country is None:
+            country = _culture_country(_main_profile(effective))
         h = dr.registry_hash(country)
         if not h:
             return {"snapshot_hash": None, "version": dr.registry_snapshot_version(), "candidates": {}}
         allergies = [str(a) for a in (((effective or {}).get("diet") or {}).get("allergies") or [])]
         cands = {}
+        hashes = {}
         for d in (days_out or [])[:60]:
             if not isinstance(d, dict):
                 continue
             fam = d.get("protein")
             for slot in (d.get("slots") or []):
-                ids = [c["template_id"] for c in dr.template_candidates(country, slot, fam, k=3, exclude_allergens=allergies)]
+                # [P1-ARQ25-F7-CULTURE] biblioteca de la cocina asignada al día (país de esa cocina), no del mercado
+                _pid = ((d.get("culture") or {}).get(slot)) if isinstance(d.get("culture"), dict) else None
+                _c = _culture_country(_pid) if _pid else country
+                hashes[_c] = hashes.get(_c) or dr.registry_hash(_c)
+                ids = [c["template_id"] for c in dr.template_candidates(_c, slot, fam, k=3, exclude_allergens=allergies)]
                 if ids:
                     cands[f"{d.get('day_index')}:{slot}"] = ids
-        return {"snapshot_hash": h, "version": dr.registry_snapshot_version(), "candidates": cands}
+        return {"snapshot_hash": h, "version": dr.registry_snapshot_version(), "candidates": cands,
+                "library_hashes": {k: v for k, v in hashes.items() if v}}
     except Exception as e:
         logger.debug(f"[ARQ25-F6] registry no disponible para el blueprint: {e!r}")
         return {"snapshot_hash": None, "candidates": {}}
@@ -402,7 +432,7 @@ def registry_prompt_lines(effective: Optional[dict], sl: Optional[dict] = None, 
     try:
         import dish_registry as dr
         eff = effective or {}
-        country = ((eff.get("market") or {}).get("country") if isinstance(eff.get("market"), dict) else None) or eff.get("market_country")
+        country = _culture_country(_main_profile(eff))  # [P1-ARQ25-F7-CULTURE] la cocina principal, no el mercado
         if not dr.registry_hash(country):
             return []
         allergies = [str(a) for a in ((eff.get("diet") or {}).get("allergies") or [])]
@@ -418,9 +448,12 @@ def registry_prompt_lines(effective: Optional[dict], sl: Optional[dict] = None, 
             fam = d.get("protein")
             slots = [slot] if slot else list(d.get("slots") or [])
             parts = []
+            # [P1-ARQ25-F7-CULTURE] la cocina asignada a ESTE día (mezcla) manda sobre los candidatos
+            _cul = d.get("culture") if isinstance(d.get("culture"), dict) else {}
             for s_ in slots:
                 key = dr.canonical_slot_es(s_)  # el motor dice «dinner», el registry «cena»
-                cands = dr.template_candidates(country, key, fam, k=per_slot, exclude_allergens=allergies)
+                _day_country = _culture_country(_cul.get(s_) or _cul.get(key)) if _cul else country
+                cands = dr.template_candidates(_day_country, key, fam, k=per_slot, exclude_allergens=allergies)
                 if cands:
                     parts.append(f"{_SLOT_ES.get(key, key)}: " + " | ".join(str(c.get("name")) for c in cands))
             if parts:
@@ -438,8 +471,7 @@ def _registry_hash_for_effective(effective: Optional[dict]) -> Optional[str]:
     try:
         import dish_registry as dr
         eff = effective or {}
-        country = ((eff.get("market") or {}).get("country") if isinstance(eff.get("market"), dict) else None) or eff.get("market_country")
-        return dr.registry_hash(country)
+        return dr.registry_hash(_culture_country(_main_profile(eff)))  # [P1-ARQ25-F7-CULTURE] la cocina, no el mercado
     except Exception:
         return None
 
@@ -490,17 +522,25 @@ def build_blueprint(effective: dict, *, total_days: int, base: Optional[int] = N
         for d in days:
             per_day_anchors[d].append({"ingredient_id": iid, "name": name, "slot": slot})
 
-    culture = (eff.get("culture_weights") or [{}])[0] if isinstance(eff.get("culture_weights"), list) else {}
-    profile_id = str((culture or {}).get("profile_id") or "dominican_criolla")
+    # [P1-ARQ25-F7-CULTURE · 2026-09-05] cultura por día según los pesos (reparto determinista): el mismo día
+    # lleva la misma cocina en blueprint, inspiración, candidatos del registry y juez culinario.
+    try:
+        from cultural_profiles import normalize_weights as _cw_norm, profile_for_day as _cw_day
+        _cw = _cw_norm(eff.get("culture_weights") or [])
+    except Exception:
+        _cw = [{"profile_id": "dominican_criolla", "weight": 1.0}]
+        _cw_day = lambda ws, d: ws[0]["profile_id"]  # noqa: E731
+    profile_id = str(_cw[0]["profile_id"])
     days_out = []
     for d in range(total):
+        _pid_d = str(_cw_day(_cw, d))
         days_out.append({
             "day_index": d,
             "chunk_index": chunk_of.get(d, 0),
             "slots": list(slots),
             "anchors": per_day_anchors[d],
             "protein": (pool[d % len(pool)] if pool else None),
-            "culture": {s: profile_id for s in slots},
+            "culture": {s: _pid_d for s in slots},
         })
 
     shopping = eff.get("shopping") or {}
@@ -524,11 +564,10 @@ def build_blueprint(effective: dict, *, total_days: int, base: Optional[int] = N
         "freezer": {"mode": freezer, "freeze_horizon_days": _freeze_horizon_days(freezer, total)},
         "main_cycle_days": cycle,
         "culture_profile": profile_id,
+        "culture_weights": _cw,
         # [P1-ARQ25-F6-DISH-REGISTRY] hash del snapshot + candidatos por día/franja (el allocator consume el registry)
-        "registry": _registry_block_for_country(
-            ((eff.get("market") or {}).get("country") if isinstance(eff.get("market"), dict) else None) or eff.get("market_country"),
-            effective=eff, days_out=days_out,
-        ),
+        # [P1-ARQ25-F7-CULTURE] los candidatos salen de la biblioteca de la COCINA del día, no del país de compra (I16)
+        "registry": _registry_block_for_country(None, effective=eff, days_out=days_out),
     }
     bp["blueprint_hash"] = blueprint_hash(bp)
     bp["built_at"] = datetime.now(timezone.utc).isoformat()
