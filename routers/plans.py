@@ -5407,6 +5407,8 @@ async def api_plan_projections(
     """[P1-ARQ25-F5-SHOPPING-PROJECTION · 2026-09-04] Estado (`none/pending/ready/failed/stale`) y read
     model de la proyección de compras 7/15/30 por revisión (`plan_jobs.shopping_projection`). Cero LLM,
     exento de cuota (lectura), ownership `AND user_id`."""
+    if not verified_user_id:
+        raise HTTPException(status_code=401, detail="Autenticación requerida")  # guests no tienen proyección
     try:
         return await asyncio.to_thread(_projection_snapshot, plan_id, verified_user_id)
     except HTTPException:
