@@ -237,6 +237,35 @@ def profile_for_day(weights: Optional[Iterable[dict]], day_index: int) -> str:
     return choice
 
 
+def staple_bases_for_day(weights: Optional[Iterable[dict]], day_index: int, pool: Iterable[str]) -> list[str]:
+    """[P1-CULTURE-STAPLE-SEED · 2026-09-05] Bases del POOL (nombres del catálogo) que son básicos de la cocina
+    del día, en el orden del perfil (arroz antes que batata). Puro; sin cocina/pool ⇒ `[]`.
+
+    Casa por PALABRA con plural tolerado y sin acentos: «arroz» → «Arroz blanco», «plátano» → «Plátano verde»,
+    «habichuelas» → «Habichuelas rojas», «frijol» → «Frijoles»; «papa» NO casa «Papaya» (frontera de palabra)."""
+    import re
+    try:
+        from constants import strip_accents as _sa
+    except Exception:  # pragma: no cover
+        _sa = lambda x: x
+    pid = profile_for_day(weights, day_index)
+    staples = (PROFILES.get(pid) or {}).get("staples") or []
+    out: list[str] = []
+    seen: set[str] = set()
+    for st in staples:
+        st_n = _sa(str(st)).lower().strip()
+        if not st_n:
+            continue
+        rx = re.compile(r"(?<![a-z])" + re.escape(st_n) + r"(?:es|s)?(?![a-z])")
+        for item in pool or []:
+            it = str(item)
+            if it in seen:
+                continue
+            if rx.search(_sa(it).lower()):
+                out.append(it); seen.add(it)
+    return out
+
+
 def culture_weights_for_plan(plan_data: Optional[dict]) -> Optional[list[dict]]:
     """Pesos de cocina SELLADOS en un plan (`_plan_policy.effective.culture_weights`), normalizados; None si el
     plan no los trae (anterior a F7)."""

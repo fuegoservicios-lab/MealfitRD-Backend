@@ -1050,6 +1050,58 @@ def _pick_light_anchor_candidates(pool, k: int = 4) -> list:
     return random.sample(_items, min(int(k), len(_items)))
 
 
+def _culture_staple_seed(carb_slots, form_data, pool_carbs, carb_freq, blocked, days, market_country):
+    """[P1-CULTURE-STAPLE-SEED · 2026-09-05] Cada día de cocina X lleva al menos UNA base básica de X entre
+    sus dos bases. Medido en la prueba real A v3 (mercado US, cocina dominicana 70/30): política y blueprint
+    perfectos, el pool YA traía arroz/plátano/yuca (F7-H) y aun así el sorteo eligió Pasta integral / Lentejas /
+    Garbanzos para los 3 días — la rotación anti-repetición penalizaba lo que el usuario acababa de comer y el
+    sembrador no sabía qué cocina tocaba cada día; el día dominicano salió en «canastas de pasta».
+
+    Regla: si NINGUNA de las dos bases del día es básico de la cocina del día, la SEGUNDA se sustituye por el
+    básico disponible menos usado (frecuencia fatigada), alternando entre los dos menos usados para los días de
+    la misma cocina (la lista de compras crece en ≤2 por cocina). Nunca un vetado (`blocked`). Solo actúa con
+    una MEZCLA o con cocina ≠ mercado: un dominicano en el mercado DO sigue byte-idéntico (su pool ya es criollo).
+    Knob `MEALFIT_CULTURE_STAPLE_SEED` (True). Puro y fail-open: cualquier error devuelve los slots tal cual.
+    tooltip-anchor: P1-CULTURE-STAPLE-SEED"""
+    try:
+        if not carb_slots:
+            return carb_slots
+        from knobs import _env_bool as _eb
+        if not _eb("MEALFIT_CULTURE_STAPLE_SEED", True):
+            return carb_slots
+        import cultural_profiles as _cp
+        if not _cp.cultural_profiles_enabled():
+            return carb_slots
+        weights = _cp.culture_weights_for_form(form_data if isinstance(form_data, dict) else None)
+        if len(weights) < 2 and _cp.main_profile_id(weights) == _cp.profile_for_market(market_country):
+            return carb_slots
+        try:
+            offset = int((form_data or {}).get("_days_offset") or 0)
+        except (TypeError, ValueError):
+            offset = 0
+        _n = lambda x: strip_accents(str(x)).lower().strip()
+        blocked_n = {_n(b) for b in (blocked or [])}
+        out, used_by_pid, changed = [], {}, []
+        for i in range(int(days)):
+            pair = tuple(carb_slots[i] if i < len(carb_slots) else carb_slots[-1])
+            pid = _cp.profile_for_day(weights, offset + i)
+            staples_all = _cp.staple_bases_for_day(weights, offset + i, pool_carbs)
+            staple_n = {_n(x) for x in staples_all}          # «ya tiene básico» cuenta también un vetado
+            staples = [x for x in staples_all if _n(x) not in blocked_n]   # pero jamás se INYECTA un vetado
+            if not staples or any(_n(x) in staple_n for x in pair):
+                out.append(pair); continue
+            staples.sort(key=lambda x: (int((carb_freq or {}).get(x, 0) or 0)))
+            k = used_by_pid.get(pid, 0); used_by_pid[pid] = k + 1
+            pick = staples[k % min(2, len(staples))]
+            out.append((pair[0], pick)); changed.append((i, pid, pick))
+        if changed:
+            logger.info(f"🍚 [P1-CULTURE-STAPLE-SEED] base básica de la cocina del día garantizada: {changed}")
+        return out
+    except Exception as _e:
+        logger.warning(f"[P1-CULTURE-STAPLE-SEED] no-op (fail-open): {type(_e).__name__}: {_e}")
+        return carb_slots
+
+
 def _rotate_pairs(items, days: int = 3):
     """[P1-CARB-SEEDER-PAIRS · 2026-07-27] Núcleo de la rotación en pares, extraído de
     `_rotate_fruit_pairs` para que carbos y frutas usen LA MISMA: día i recibe
@@ -2625,6 +2677,8 @@ def get_deterministic_variety_prompt(history_text: str, form_data: dict = None, 
     # Frutas y vegetales ya tomaban ambos slots del mismo `_slots[i]`; los carbos eran la única
     # categoría fuera del contrato. tooltip-anchor: P2-SEEDER-PAIRS-GOALS
     _carb_slots = _rotate_pairs(chosen_carbs, days=_dc)
+    # [P1-CULTURE-STAPLE-SEED · 2026-09-05] la cocina del día manda sobre la rotación anti-repetición
+    _carb_slots = _culture_staple_seed(_carb_slots, form_data, filtered_carbs, carb_freq, used_carbs, _dc, _variety_country)
     if _carb_slots:
         carb_params = {f"carb_{i}": _carb_slots[i][0] for i in range(_dc)}
         carb_params.update({f"carb_{i}b": _carb_slots[i][1] for i in range(_dc)})

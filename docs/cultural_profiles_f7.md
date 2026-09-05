@@ -180,3 +180,21 @@ bloque de inspiración no puede.
 - No infiere la cocina del origen, del idioma ni de la zona horaria (solo SUGIERE la del país de compra, visible).
 - No traduce nombres de alimentos ni mezcla catálogos: el mercado sigue mandando en precios y despensa.
 - No sustituye la revisión humana: el benchmark marca, la persona firma.
+
+
+## 8d. Subfase I — el sembrador de bases conoce la cocina del día (`P1-CULTURE-STAPLE-SEED` · 2026-09-05)
+
+Prueba real A v3 (plan `f2f7a674`, mercado US, cocina dominicana 70 % + estadounidense 30 %): política, blueprint y pool
+correctos (F7-H ya traía arroz, plátano, yuca y habichuelas) y aun así el sorteo eligió *Pasta integral / Lentejas /
+Garbanzos* para los 3 días; el día dominicano salió en «canastas de pasta integral». Causa: la rotación anti-repetición
+penaliza lo que el usuario acaba de comer (3 planes con arroz y plátano en una hora) y el sembrador no sabía qué cocina
+tocaba cada día. La autocrítica lo puntuó Cultural 6/10 y nada lo bloqueó (la fidelidad mide familia y anclas, no cocina).
+
+Regla (`ai_helpers._culture_staple_seed`, tras `_rotate_pairs` y antes de publicar `carb_params`/`carb_pairs`): para cada
+día del chunk, `profile_for_day(pesos, offset + i)` ⇒ perfil ⇒ `staples` del perfil casados contra el pool del día
+(`cultural_profiles.staple_bases_for_day`: por palabra, plural tolerado, sin acentos; «papa» no casa «Papaya»). Si ninguna
+de las dos bases del día es básico de esa cocina, la **segunda** se sustituye por el básico disponible menos usado
+(frecuencia fatigada), alternando entre los dos menos usados para los días de la misma cocina (la lista crece ≤ 2 por
+cocina). Un básico vetado por sobreuso cuenta como «ya tiene» pero jamás se inyecta. Solo actúa con mezcla o con cocina ≠
+mercado: el dominicano en el mercado DO sigue byte-idéntico. Knob `MEALFIT_CULTURE_STAPLE_SEED` (True); fail-open.
+Las proteínas no se tocan: las manda la rebanada del blueprint (F3). Test `tests/test_p1_culture_staple_seed.py`.
