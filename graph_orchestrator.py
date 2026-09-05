@@ -8345,6 +8345,11 @@ def harden_day_pools(skeleton: dict, form_data: dict, conditions=None, *, cohort
                     for _lbl in _candidates[:_missing]:
                         _pool.append(_universe[_lbl])
                         _added += 1
+                        # [P1-CLOSER-LIGHT-SLOT-NO-MEAT · 2026-09-05 · clase 6 round-robin] el contador
+                        # se actualiza al PRESTAR: antes `_freq` se calculaba una vez y «la menos usada»
+                        # era la MISMA para todos los días (plan vivo 2a2e2516: pescado prestado a los
+                        # días 2 y 3 ⇒ pescado en las tres cenas, Diversidad 4/10).
+                        _freq[_lbl] = _freq.get(_lbl, 0) + 1
                     if _added:
                         counts["main_arity_added"] += _added
                         _d["protein_pool"] = _pool
@@ -20359,14 +20364,30 @@ def _dish_coherence_filter(meal: dict, strip_accents_fn):
         # cucharada de mantequilla de maní puede ser un topping, no el relleno.
         spread_dish = CLOSER_NO_SPREAD_PLUS_CHEESE and any(
             h in _nm for h in _SPREAD_PROTAGONIST_HINT)
+        # [P1-CLOSER-LIGHT-SLOT-NO-MEAT · 2026-09-05] La FRANJA manda: una merienda o un desayuno
+        # jamás reciben carne, pescado ni marisco del cerrador, diga lo que diga el nombre. Hasta
+        # hoy «ligero» era solo una PREFERENCIA (lácteo/huevo primero) y el guard dulce solo
+        # miraba marcadores de fruta dulce: «Vaso de toronja con almendras y mantequilla de maní»
+        # y «Tortilla de trigo tostada con pera y mantequilla de maní» (plan vivo 2a2e2516) no son
+        # «dulces» para el léxico, la pasta de untar sacó al queso del pool y el huevo colisionaba
+        # con el desayuno ⇒ 75-135 g de camarones en una merienda de fruta, reflejados en el
+        # título. Si no queda candidato ligero ⇒ 0 y el piso se cubre en las comidas fuertes
+        # (misma degradación honesta que el guard dulce). tooltip-anchor: P1-CLOSER-LIGHT-SLOT-NO-MEAT
+        light = CLOSER_DISH_COHERENCE_ENABLED and _meal_slot_is_light(meal, strip_accents_fn)
+        # Excepción acotada: una merienda SALADA y COCINADA (sándwich caliente, wrap salteado) sí admite
+        # pollo/pavo/atún — lo que un cocinero pondría en un sándwich. Marisco y carnes pesadas, nunca.
+        light_savory_hot = bool(light and not sweet and _meal_is_hot_cooked(meal, strip_accents_fn))
     except Exception:
-        sweet = has_main = spread_dish = False
+        sweet = has_main = spread_dish = light = light_savory_hot = False
 
     def _ok(name_low: str) -> bool:
         try:
             nlow = strip_accents_fn(str(name_low).lower())
             if (sweet or has_main) and any(h in nlow for h in _MEAT_PROTEIN_HINT):
                 return False
+            if light and any(h in nlow for h in _MEAT_PROTEIN_HINT):
+                if not (light_savory_hot and any(h in nlow for h in _LIGHT_SLOT_OK_MEAT)):
+                    return False
             if sweet and CLOSER_SWEET_NO_LEGUME and any(h in nlow for h in _LEGUME_PROTEIN_HINT):
                 return False
             # Dos pastas de untar apiladas en el mismo relleno: fuera el queso, no el yogurt.
@@ -20890,6 +20911,8 @@ def _try_scale_existing_protein(meal: dict, target_protein: float, db, strip_acc
 CLOSER_SWEET_DAIRY_ENABLED = _env_bool("MEALFIT_CLOSER_SWEET_DAIRY", True)
 CLOSER_SWEET_DAIRY_MIN_PROTEIN = _env_float("MEALFIT_CLOSER_SWEET_DAIRY_MIN_PROTEIN", 7.0,
                                             lambda v: 3.0 <= v <= 18.0)
+# [P1-CLOSER-LIGHT-SLOT-NO-MEAT] únicas carnes admisibles en una merienda salada y cocinada
+_LIGHT_SLOT_OK_MEAT = ("pollo", "pavo", "atun", "atún")
 _SWEET_DAIRY_TOKENS = ("yogur", "cottage", "ricotta", "requeson")
 _SWEET_OK_CHEESE_TOKENS = ("ricotta", "requeson", "cottage", "crema")
 
