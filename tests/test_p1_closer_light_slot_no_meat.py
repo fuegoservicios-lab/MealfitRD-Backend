@@ -119,6 +119,10 @@ def test_egg_to_yogurt_name_sync_drops_the_dangling_participle():
         "Batido espeso de avena con Yogurt Griego"
     assert go._fix_egg_swap_dangling_adjectives("Tostadas con yogur griego entero y aguacate") == \
         "Tostadas con yogur griego entero y aguacate"
+    # plan vivo b267f07e: el huevo hervido/escalfado/sancochado también deja su participio
+    for adj in ("hervido", "escalfado", "sancochados"):
+        assert go._fix_egg_swap_dangling_adjectives(f"Batido tropical con Yogurt Griego {adj}") == \
+            "Batido tropical con Yogurt Griego", adj
     src = (_BACKEND / "graph_orchestrator.py").read_text(encoding="utf-8")
     i = src.index("swap huevo→yogur sincronizó el nombre")
     assert "_nm_new = _fix_egg_swap_dangling_adjectives(_nm_new)" in src[i - 900:i], "el nombre pasa por el reparador"
