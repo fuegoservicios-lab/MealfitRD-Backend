@@ -67,7 +67,8 @@ _PROCESS_START_ISO = datetime.now(timezone.utc).isoformat()
 #   P2-SHOPPING-COPY-QUIET · 2026-09-04 — el «costo del ciclo» del PDF solo con sustancia (>2 ítems, >15 %) y en una línea; el toast de coherencia dice qué pasa, no cuántas veces se detectó.
 #   P1-AJO-SINGLE-ROW · 2026-09-04 — el ajo en UNA fila (gramos + dientes + cabezas → paquete de 4) con la demanda en gramos como base: el guard dejaba de ver 92 g de los 98.
 #   P1-ARQ25-F5-SHOPPING-PROJECTION · 2026-09-04 — Fase 5 rebanada 2: consumidor shopping_projection (listas 7/15/30 por revisión en payload.result) + GET /{plan_id}/projections (estado none/pending/ready/failed/stale).
-_LAST_KNOWN_PFIX = "P1-ARQ25-F5-SHOPPING-PROJECTION · 2026-09-04"
+#   P1-ARQ25-F5-UI-STATES · 2026-09-05 — Fase 5: estados none/pending/ready/failed/stale de la proyección de compras en el Dashboard (una línea discreta, sondeo solo en pending).
+_LAST_KNOWN_PFIX = "P1-ARQ25-F5-UI-STATES · 2026-09-05"
 
 # [P1-SENTRY-SAMPLE-COST · 2026-05-12] Sentry sampling driven from env vars
 # con default seguro 0.1 (10%). Pre-fix tenía `traces_sample_rate=1.0` y
