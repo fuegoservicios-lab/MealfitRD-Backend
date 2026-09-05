@@ -43,6 +43,8 @@ def test_b_backoff_exponencial_con_tope(monkeypatch):
 def test_c_veredicto_del_resultado_de_traduccion():
     assert pj.verdict_for_display_result({"enriched_meals": 12, "skipped": None}) == ("done", None)
     assert pj.verdict_for_display_result({"enriched_meals": 0, "skipped": "no_meals"}) == ("done", None)
+    assert pj.verdict_for_display_result({"enriched_meals": 0, "skipped": "no_valid_meals"}) == ("done", None), "todo ya traducido: nada que reintentar (visto en prod)"
+    assert pj.verdict_for_display_result({"enriched_meals": 0, "skipped": "json_parse_error"}) == ("failed", "json_parse_error")
     assert pj.verdict_for_display_result({"enriched_meals": 0, "skipped": "circuit_breaker_open"}) == ("failed", "circuit_breaker_open")
     assert pj.verdict_for_display_result({"enriched_meals": 6, "skipped": "partial_loss"})[0] == "failed", "el lote perdido se reintenta"
     assert pj.verdict_for_display_result("basura") == ("failed", "bad_result")

@@ -120,8 +120,13 @@ def display_i18n_dedup_key(plan_id: str, revision: Optional[int], locale: str, d
 # es `done` (idempotencia: no hay nada que reintentar); lo transitorio es `failed` (reintento con
 # backoff); `partial_loss` (un lote perdido tras fallo de invoke) TAMBIÉN reintenta: el lote que sí
 # se escribió no se toca (jsonb_set por comida) y el perdido se recupera en el siguiente intento.
-_DONE_SKIPS = frozenset({"no_meals", "no_days", "knob_off", "locale", "not_found"})
-_RETRY_SKIPS = frozenset({"circuit_breaker_open", "dedupe_inprocess", "dedupe_locked", "exception", "partial_loss"})
+# Vocabulario completo = literales de `enrich_plan_display` + los valores de `last_skip_reason`
+# (verificado contra producción 2026-09-05: `no_valid_meals` = todo ya traducido, NO un fallo).
+_DONE_SKIPS = frozenset({"no_meals", "no_valid_meals", "no_days", "knob_off", "locale", "not_found"})
+_RETRY_SKIPS = frozenset({
+    "circuit_breaker_open", "dedupe_inprocess", "dedupe_locked", "exception", "partial_loss",
+    "invocation_budget_exhausted", "json_parse_error", "llm_exception", "persist_stale_mismatch",
+})
 
 
 def verdict_for_display_result(result: Any) -> tuple[str, Optional[str]]:
