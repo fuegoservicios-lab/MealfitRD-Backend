@@ -65,7 +65,8 @@ _PROCESS_START_ISO = datetime.now(timezone.utc).isoformat()
 #   P1-ARQ25-F5-PLAN-JOBS · 2026-09-04 — Fase 5 rebanada 1: worker del outbox plan_jobs (claim SKIP LOCKED, attempts=fencing, backoff, dead letter, reclaim, stale por revisión) + consumidor display_i18n.
 #   P2-COHERENCE-HISTORY-DEDUPE · 2026-09-04 — la misma alerta de coherencia consecutiva se funde en una entrada (repeats); el aviso cuenta alertas distintas.
 #   P2-SHOPPING-COPY-QUIET · 2026-09-04 — el «costo del ciclo» del PDF solo con sustancia (>2 ítems, >15 %) y en una línea; el toast de coherencia dice qué pasa, no cuántas veces se detectó.
-_LAST_KNOWN_PFIX = "P2-SHOPPING-COPY-QUIET · 2026-09-04"
+#   P1-AJO-SINGLE-ROW · 2026-09-04 — el ajo en UNA fila (gramos + dientes + cabezas → paquete de 4) con la demanda en gramos como base: el guard dejaba de ver 92 g de los 98.
+_LAST_KNOWN_PFIX = "P1-AJO-SINGLE-ROW · 2026-09-04"
 
 # [P1-SENTRY-SAMPLE-COST · 2026-05-12] Sentry sampling driven from env vars
 # con default seguro 0.1 (10%). Pre-fix tenía `traces_sample_rate=1.0` y

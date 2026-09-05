@@ -10599,6 +10599,43 @@ def _cost_from_market(market_obj, master_item, price_per_lb, price_per_unit):
     return 0.0
 
 
+# [P1-AJO-SINGLE-ROW · 2026-09-04] El ajo salía en DOS filas: las recetas en «dientes» iban por
+# dientes → cabezas → paquete de 4 (P1-AJO-4PACK) y las recetas en GRAMOS («5 g de ajo triturado») se
+# quedaban en `units['g']` y parían una segunda fila («2 Cabezas (~10g total)», con la densidad de 5 g
+# —que es POR DIENTE— aplicada a la cabeza). El guard de coherencia solo veía la fila en gramos (6 g)
+# contra los 98 g que suman todas las recetas ⇒ `magnitude_undersupply` en cada recálculo del dueño.
+# Una sola fila: todo a dientes (5 g/diente), dientes a cabezas (10/cabeza), cabezas a paquetes de 4;
+# la DEMANDA en gramos viaja aparte para que la fila del paquete la exponga como `base_qty` (el guard
+# y la Nevera hablan en gramos). Puro y testeable: `test_p1_ajo_single_row.py`.
+AJO_G_PER_DIENTE = 5.0
+AJO_DIENTES_PER_CABEZA = 10.0
+AJO_CABEZAS_PER_PACK = 4
+AJO_PACK_GRAMS = AJO_CABEZAS_PER_PACK * AJO_DIENTES_PER_CABEZA * AJO_G_PER_DIENTE  # 200 g
+_AJO_GRAM_KEYS = ("g", "gr", "gramo", "gramos")
+_AJO_DIENTE_KEYS = ("diente", "dientes", "diente.", "dientes.")
+_AJO_CABEZA_KEYS = ("cabeza", "cabezas")
+
+
+def _consolidate_ajo_units(units: dict) -> tuple:
+    """Devuelve `(units_sin_ajo_suelto, demanda_g)`: gramos + dientes + cabezas → `paquete (4 uds.)`.
+    Deja intactas las claves que no son de ajo (p. ej. `cucharadita` de ajo en polvo mal atribuida)."""
+    out = dict(units or {})
+    dientes = 0.0
+    for k in list(out.keys()):
+        kl = str(k).strip().lower()
+        if kl in _AJO_GRAM_KEYS:
+            dientes += float(out.pop(k) or 0) / AJO_G_PER_DIENTE
+        elif kl in _AJO_DIENTE_KEYS:
+            dientes += float(out.pop(k) or 0)
+        elif kl in _AJO_CABEZA_KEYS:
+            dientes += float(out.pop(k) or 0) * AJO_DIENTES_PER_CABEZA
+    demand_g = round(dientes * AJO_G_PER_DIENTE, 2)
+    if dientes > 0:
+        cabezas = dientes / AJO_DIENTES_PER_CABEZA
+        out['paquete (4 uds.)'] = out.get('paquete (4 uds.)', 0) + math.ceil(cabezas / float(AJO_CABEZAS_PER_PACK))
+    return out, demand_g
+
+
 def aggregate_and_deduct_shopping_list(plan_ingredients: list[str], consumed_ingredients: list[str] = None, categorize: bool = False, structured: bool = False, multiplier: float = 1.0, brand_prefs: dict | None = None, brand_defaults: dict | None = None, num_days: int | None = None, cycle_days: int | None = None, text_demand_g_map: dict | None = None, apply_protein_yield: bool = False):
     # [P2-PROTEIN-YIELD-CANONICAL · 2026-08-03] `apply_protein_yield`: el caller
     # (`get_shopping_list_delta`) lo activa SOLO cuando `is_new_plan=True` (lista
@@ -10803,6 +10840,8 @@ def aggregate_and_deduct_shopping_list(plan_ingredients: list[str], consumed_ing
     # los tiene como 3 llaves. Aquí los fusionamos en la llave canónica oficial ("Huevos")
     # para que su volumen se sume correctamente antes de calcular empaques comerciales.
     canonical_aggregated = defaultdict(lambda: defaultdict(float))
+    # [P1-AJO-SINGLE-ROW] demanda en gramos de las filas empaquetadas por conteo (hoy: ajo), por nombre
+    _packaged_demand_g: dict = {}
     for name, units in aggregated.items():
         canonical_name = canonicalize_shopping_food_name(name, master_map)
         for u, q in units.items():
@@ -10934,21 +10973,19 @@ def aggregate_and_deduct_shopping_list(plan_ingredients: list[str], consumed_ing
         
         # Consolidation para Ajo
         if name.lower() == 'ajo':
-            u_dientes = 0
-            for k in list(units.keys()):
-                if k.strip().lower() in ['diente', 'dientes', 'diente.', 'dientes.']:
-                    u_dientes += units.pop(k)
-            if u_dientes > 0:
-                units['cabeza'] = units.get('cabeza', 0) + (u_dientes / 10.0)
+            # [P1-AJO-SINGLE-ROW · 2026-09-04] gramos + dientes + cabezas → una sola fila (ver helper).
+            _ajo_units, _ajo_demand_g = _consolidate_ajo_units(units)
+            units.clear()
+            units.update(_ajo_units)
+            if _ajo_demand_g > 0:
+                _packaged_demand_g[name] = _ajo_demand_g
             # [P1-AJO-4PACK · 2026-06-22] El ajo en RD se vende en PAQUETES de 4 cabezas
             # (RD$60 el paquete, verificado in-store por el owner) — no por cabeza suelta.
             # Redondear las cabezas necesarias HACIA ARRIBA a paquetes de 4 (mismo patrón que
             # el cartón de huevos) para que un plan que necesite 1-2 cabezas cueste el paquete
             # completo (RD$60), no 15-30. El egg/units-cost branch de _cost_from_market lee el
             # precio real del 4-pack desde Ajo.market_packages [{units:4, price:60}].
-            _cab = units.pop('cabeza', 0)
-            if _cab and _cab > 0:
-                units['paquete (4 uds.)'] = units.get('paquete (4 uds.)', 0) + math.ceil(_cab / 4.0)
+            # (el redondeo a paquetes de 4 vive en `_consolidate_ajo_units`)
 
         # [P1-LAUREL-LEAF-UNIT · 2026-07-06] "N hojas de laurel" → gramos.
         # Las recetas piden laurel en HOJAS (count unit) y ninguna conversión lo
@@ -13077,6 +13114,14 @@ def aggregate_and_deduct_shopping_list(plan_ingredients: list[str], consumed_ing
                     logging.info(f"🔀 [DEDUP] Saltando entrada duplicada por {u} para '{name}' (ya tiene entrada por peso)")
                     continue
                 market_obj = apply_smart_market_units(name, 0.0, u, q, master_item, cycle_days=_cycle_days_for_note, text_demand_g=(text_demand_g_map or {}).get(name))
+                # [P1-AJO-SINGLE-ROW] la fila empaquetada por conteo lleva la DEMANDA en gramos como base: el
+                # guard de coherencia y la Nevera comparan en gramos (antes: base_unit='paquete (4 uds.)' y
+                # el guard no la veía). El paquete de 4 cabezas pesa ~200 g (package_grams).
+                if str(u).lower().startswith('paquete (') and float(_packaged_demand_g.get(name) or 0) > 0:
+                    market_obj["base_qty"] = round(float(_packaged_demand_g[name]), 2)
+                    market_obj["base_unit"] = "g"
+                    if name.lower() == 'ajo':
+                        market_obj.setdefault("package_grams", AJO_PACK_GRAMS)
                 # [P3-PRICE-MARKET-COVERAGE · 2026-06-20] Costo desde el DISPLAY (envase/carton
                 # redondeado); cubre huevo medio-carton (parsea "(N uds.)" x precio/30) y envases.
                 item_cost = _cost_from_market(market_obj, master_item, price_per_lb, price_per_unit)
