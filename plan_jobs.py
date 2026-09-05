@@ -355,10 +355,43 @@ def finish_plan_job(
             logger.warning(f"[ARQ25-F5] fencing_rejected job={job.get('id')} attempts={attempts} status→{status}")
         if status == "dead":
             logger.error(f"[ARQ25-F5] job DEAD type={job.get('job_type')} plan={job.get('plan_id')} attempts={attempts} error={error_code}")
+            if ok:
+                _emit_dead_alert(job, error_code)
         return ok
     except Exception as e:
         logger.warning(f"[ARQ25-F5] finish_plan_job falló job={job.get('id')}: {e!r}")
         return False
+
+
+def _emit_dead_alert(job: dict, error_code: Optional[str]) -> None:
+    """[P2-PLAN-JOBS-DEAD-ALERT · 2026-09-05] Un job agotó sus intentos: alerta `plan_jobs_dead:<job_type>`
+    (modelo Manual: el SRE reintenta con el runbook de `plan_jobs_f5.md` y cierra `resolved_at`). Sin esto,
+    un consumidor roto solo dejaba un `logger.error` que nadie mira."""
+    try:
+        from db import execute_sql_write
+        job_type = str(job.get("job_type") or "unknown")
+        alert_key = f"plan_jobs_dead:{job_type}"
+        execute_sql_write(
+            """
+            INSERT INTO system_alerts
+                (alert_key, alert_type, severity, title, message, metadata, affected_user_ids)
+            VALUES (%s, %s, 'warning', %s, %s, %s::jsonb, %s::jsonb)
+            ON CONFLICT (alert_key) DO UPDATE
+            SET triggered_at = NOW(),
+                metadata = EXCLUDED.metadata,
+                resolved_at = NULL
+            """,
+            (
+                alert_key, "plan_jobs_dead",
+                f"plan_jobs: un job {job_type} agotó sus intentos",
+                f"job={job.get('id')} plan={job.get('plan_id')} attempts={job.get('attempts')} error={error_code}",
+                json.dumps({"job_id": str(job.get("id")), "job_type": job_type, "plan_id": str(job.get("plan_id") or ""),
+                            "attempts": int(job.get("attempts") or 0), "error_code": error_code}, ensure_ascii=False),
+                json.dumps([str(job.get("user_id"))] if job.get("user_id") else []),
+            ),
+        )
+    except Exception as e:
+        logger.debug(f"[ARQ25-F5] alerta plan_jobs_dead no persistida: {e!r}")
 
 
 # ----------------------------------------------------------------------------- consumidores

@@ -655,6 +655,98 @@ _MODE_ES = {
 }
 
 
+# [P1-SINGLE-TRIP-POLICY · 2026-09-05] «No, solo la compra grande» (formulario §6.7 `freshTopup=no`) compila a
+# `shopping.fresh_topup_days=None` con `main_cycle_days > 7`. Hasta hoy solo la PROYECCIÓN lo respetaba: las
+# recetas seguían pidiendo lechuga y pescado fresco en la semana 4 y el PDF decía «repite cada 7 días».
+# Regla ÚNICA (la leen el prompt, el validador de fidelidad, el ventaneo de la lista y el PDF).
+FRESH_HORIZON_DAYS = 7
+_DELICATE_FRESH_TOKENS = (
+    "lechuga", "berro", "rucula", "arugula", "espinaca", "fresa", "frambuesa", "arandano", "mora", "tomate",
+    "aguacate", "pescado fresco", "filete de pescado", "camaron", "pulpo", "calamar", "marisco", "cilantro",
+    "perejil", "albahaca", "champinon", "champinones", "hongos", "leche fresca",
+)
+_DURABLE_HINTS = ("salsa", "pasta de", "pure de", "enlatad", "en lata", "lata de", "congelad", "seco", "secos", "deshidratad", "en polvo")
+
+
+def single_trip_policy(effective: Optional[dict]) -> bool:
+    """True cuando el usuario NO repone frescos entre compras y el ciclo supera la semana."""
+    try:
+        shopping = (effective or {}).get("shopping") or {}
+        return int(shopping.get("main_cycle_days") or 0) > 7 and not shopping.get("fresh_topup_days")
+    except Exception:
+        return False
+
+
+def _is_delicate_fresh(ingredient) -> bool:
+    try:
+        from constants import strip_accents
+        text = ingredient if isinstance(ingredient, str) else str((ingredient or {}).get("name") or "")
+        t = strip_accents(text).lower()
+    except Exception:
+        return False
+    if not t or any(h in t for h in _DURABLE_HINTS):
+        return False
+    return any(tok in t for tok in _DELICATE_FRESH_TOKENS)
+
+
+def fresh_beyond_horizon_issues(days: list, sl: Optional[dict], effective: Optional[dict]) -> list[dict]:
+    """Issues `fresh_beyond_horizon` (severity low, modo warn): frescos delicados en días posteriores al
+    horizonte de 7 días de un ciclo de UNA sola compra. Puro, nunca lanza, tope 20."""
+    out: list[dict] = []
+    if not single_trip_policy(effective):
+        return out
+    try:
+        offset = int((sl or {}).get("days_offset") or 0)
+        for i, day in enumerate([d for d in (days or []) if isinstance(d, dict)]):
+            abs_day = offset + i
+            if abs_day < FRESH_HORIZON_DAYS:
+                continue
+            for m in (day.get("meals") or []):
+                if not isinstance(m, dict):
+                    continue
+                for ing in (m.get("ingredients") or []):
+                    if _is_delicate_fresh(ing):
+                        label = ing if isinstance(ing, str) else str((ing or {}).get("name") or "")
+                        out.append({
+                            "code": "fresh_beyond_horizon", "severity": "low", "day": i + 1,
+                            "ingredient": label[:60],
+                            "message": (f"FRESCO DELICADO SIN REPOSICIÓN: el día {abs_day + 1} del ciclo usa «{label[:40]}» y el "
+                                        f"usuario hace una sola compra (sin frescos después del día {FRESH_HORIZON_DAYS})."),
+                        })
+                        if len(out) >= 20:
+                            return out
+    except Exception:
+        return out
+    return out
+
+
+def single_trip_prompt_lines(effective: Optional[dict], sl: Optional[dict] = None) -> list[str]:
+    """Líneas del bloque 📐 cuando hay una sola compra: qué frescos caben y cuándo."""
+    if not single_trip_policy(effective):
+        return []
+    shopping = (effective or {}).get("shopping") or {}
+    cycle = int(shopping.get("main_cycle_days") or 0)
+    freezer = str(shopping.get("freezer_mode") or "limited").lower()
+    lines = [
+        f"- Compras: el usuario hace UNA sola compra para {cycle} días y NO repone frescos. Del día {FRESH_HORIZON_DAYS + 1} del ciclo "
+        "en adelante usa solo vegetales y frutas que aguantan (repollo, zanahoria, calabaza, cebolla, ajo, papa, yuca, plátano, "
+        "manzana, naranja, limón), legumbres, arroz, avena y enlatados; lechuga, berros, tomate maduro, fresas, cilantro y pescado o "
+        f"mariscos frescos SOLO en los primeros {FRESH_HORIZON_DAYS} días.",
+        {
+            "none": f"- Sin congelador: proteína fresca solo en los primeros {FRESH_HORIZON_DAYS} días; después huevo, legumbres, atún o sardina en lata y queso.",
+            "full": "- Con congelador: las proteínas se compran una sola vez y se congelan; planifica descongelar la noche anterior.",
+        }.get(freezer, f"- Congelador limitado: proteína fresca en los primeros {FRESH_HORIZON_DAYS} días; después congelada, huevo, legumbres y enlatados."),
+    ]
+    try:
+        idxs = [int(d.get("day_index")) for d in ((sl or {}).get("days") or []) if isinstance(d, dict) and d.get("day_index") is not None]
+        if idxs and min(idxs) >= FRESH_HORIZON_DAYS:
+            lines.append(f"- Este bloque cubre los días {min(idxs) + 1}–{max(idxs) + 1} del ciclo: ya pasó la semana de frescos; "
+                         "todo debe ser duradero, congelado o enlatado.")
+    except Exception:
+        pass
+    return lines
+
+
 def policy_prompt_block(effective: Optional[dict], sl: Optional[dict] = None, *, surface: str,
                         day_index: Optional[int] = None, slot: Optional[str] = None,
                         enforced: bool = True) -> str:
@@ -700,6 +792,7 @@ def policy_prompt_block(effective: Optional[dict], sl: Optional[dict] = None, *,
             if slot_anchors:
                 lines.append(f"- Esta comida es {_SLOT_ES.get(s, s)}: ancla de la franja → " + ", ".join(
                     str(a.get("name")) for a in slot_anchors) + ".")
+        lines.extend(single_trip_prompt_lines(effective, sl))  # [P1-SINGLE-TRIP-POLICY]
         lines.append("- No «diversifiques» un ancla ni cambies la base de un plato por variedad: la política manda sobre la variedad.")
         return "\n".join(lines) + "\n"
     except Exception as e:
@@ -957,6 +1050,7 @@ def fidelity_issues(days: list, sl: Optional[dict], effective: Optional[dict], *
 def fidelity_report(days: list, sl: Optional[dict], effective: Optional[dict], *, surface: str,
                     meals_per_day: Optional[int] = None) -> dict:
     issues = fidelity_issues(days, sl, effective, meals_per_day=meals_per_day)
+    issues.extend(fresh_beyond_horizon_issues(days, sl, effective))  # [P1-SINGLE-TRIP-POLICY] warn
     n_checks = 0
     if isinstance(sl, dict):
         n_checks += sum(len(d.get("anchors") or []) for d in (sl.get("days") or []))
@@ -1230,4 +1324,5 @@ __all__ = [
     "anchor_in_text", "fidelity_issues", "fidelity_report", "filter_variety_issues_for_policy", "exclude_anchors_from_fatigue",
     "rank_days_by_policy", "emit_fidelity_metric", "review_fidelity_gate",
     "shopping_projection_windows", "stamp_demand_windows", "enqueue_shopping_projection_job",
+    "FRESH_HORIZON_DAYS", "single_trip_policy", "fresh_beyond_horizon_issues", "single_trip_prompt_lines",
 ]

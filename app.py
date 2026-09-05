@@ -69,7 +69,8 @@ _PROCESS_START_ISO = datetime.now(timezone.utc).isoformat()
 #   P1-ARQ25-F5-SHOPPING-PROJECTION · 2026-09-04 — Fase 5 rebanada 2: consumidor shopping_projection (listas 7/15/30 por revisión en payload.result) + GET /{plan_id}/projections (estado none/pending/ready/failed/stale).
 #   P1-ARQ25-F5-UI-STATES · 2026-09-05 — Fase 5: estados none/pending/ready/failed/stale de la proyección de compras en el Dashboard (una línea discreta, sondeo solo en pending).
 #   P1-ARQ25-F5-REPROJECTION · 2026-09-05 — la proyección de compras se re-encola en el commit de recálculo/swap/regen-día/relleno de bloques, con huella de la lista (sin cambio, sin job).
-_LAST_KNOWN_PFIX = "P1-ARQ25-F5-REPROJECTION · 2026-09-05"
+#   P1-SINGLE-TRIP-POLICY · 2026-09-05 — «No, solo la compra grande» llega a las recetas (prompt + validador warn fresh_beyond_horizon), a la lista (sin ventaneo semanal) y al PDF (una sola compra); alerta plan_jobs_dead.
+_LAST_KNOWN_PFIX = "P1-SINGLE-TRIP-POLICY · 2026-09-05"
 
 # [P1-SENTRY-SAMPLE-COST · 2026-05-12] Sentry sampling driven from env vars
 # con default seguro 0.1 (10%). Pre-fix tenía `traces_sample_rate=1.0` y
