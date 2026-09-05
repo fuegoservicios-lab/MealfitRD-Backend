@@ -106,7 +106,7 @@ from knobs import _env_bool, _env_str, _env_float, _env_int
 from constants import strip_accents
 from prompts.chat_agent import _COACH_LANGUAGE_NAMES
 from llm_provider import build_chat_llm, GLM_FLASH
-from langchain_core.messages import SystemMessage
+from langchain_core.messages import HumanMessage, SystemMessage
 from db import update_plan_data_atomic, log_llm_usage_event, execute_sql_query, execute_sql_write
 
 logger = logging.getLogger(__name__)
@@ -137,6 +137,18 @@ def _plan_display_i18n_max_inflight() -> int:
 # convierte en un `ValueError` ruidoso en vez de subir el techo en silencio para siempre.
 # Un techo que se relaja solo no es un techo.
 _INFLIGHT_SEMAPHORE = threading.BoundedSemaphore(_plan_display_i18n_max_inflight())
+
+
+# [P1-I18N-GLM-USER-TURN · 2026-09-04] GLM (Z.ai) rechaza un `messages` con SOLO un system message
+# (HTTP 400, code 1214 «The messages parameter is illegal»). Gemini y Luna lo aceptaban, así que la
+# migración a GLM dejó esta capa muerta dos días en silencio (fail-open + LLM mockeado en los tests):
+# el primer usuario francés real recibió su plan en español. El turno de usuario refuerza el FORMATO;
+# el idioma lo sigue dictando la directiva del system prompt.
+_USER_TURN = "Proceed with the meals above. Reply with ONLY the JSON."
+
+
+def _build_messages(prompt: str) -> list:
+    return [SystemMessage(content=prompt), HumanMessage(content=_USER_TURN)]
 
 
 def _plan_display_i18n_model_name() -> str:
@@ -1990,7 +2002,7 @@ def enrich_plan_display(
                         timeout=timeout_s,
                         max_output_tokens=max_tokens,
                     )
-                    response = llm.invoke([SystemMessage(content=prompt)])
+                    response = llm.invoke(_build_messages(prompt))  # [P1-I18N-GLM-USER-TURN]
                 except Exception as e:
                     # [P1-I18N-DISPLAY-LOTE-PERDIDO-SIN-SENAL · 2026-08-22] Antes esto era
                     # un `continue` seco: el lote desaparecía sin reintento Y sin contarse.
