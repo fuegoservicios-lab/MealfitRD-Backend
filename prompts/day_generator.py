@@ -1405,6 +1405,23 @@ def build_day_assignment_context(skeleton_day: dict, day_num: int, day_name: str
         _diet_canon_ctx = _cdt(diet_type) if diet_type else None
     except Exception:
         _diet_canon_ctx = None
+    # [P1-DAYGEN-VEG-HARD-LINE · 2026-09-05] La dieta viajaba en el pool y en un bloque de DIVERSIDAD, no como
+    # PROHIBICIÓN: en 4 planes vegetarianos seguidos (606e9017, 82d6f2a5, b40a3c48…) el generador metió «pechuga de
+    # pollo» y el guard duro cazó la violación DESPUÉS de generar el día ⇒ un reintento completo quemado cada vez.
+    # Línea dura, arriba del todo de la asignación, con el vocabulario del propio rechazo.
+    diet_hard_line = ""
+    if _diet_canon_ctx == "vegan":
+        diet_hard_line = ("\n🚫 DIETA VEGANA — PROHIBICIÓN ABSOLUTA: CERO carne, pollo, pavo, cerdo, res, pescado, mariscos, "
+                          "huevo, lácteos, miel y caldos de origen animal, en NINGUNA comida ni como guarnición o topping. "
+                          "Un solo gramo invalida el día entero y obliga a regenerarlo.")
+    elif _diet_canon_ctx == "vegetarian":
+        diet_hard_line = ("\n🚫 DIETA VEGETARIANA — PROHIBICIÓN ABSOLUTA: CERO carne, pollo, pavo, cerdo, res, pescado, atún, "
+                          "sardinas y mariscos, en NINGUNA comida ni como guarnición o topping. Huevo, lácteos y legumbres SÍ. "
+                          "Un solo gramo de carne o pescado invalida el día entero y obliga a regenerarlo.")
+    elif _diet_canon_ctx == "pescatarian":
+        diet_hard_line = ("\n🚫 DIETA PESCETARIANA — PROHIBICIÓN ABSOLUTA: CERO carne, pollo, pavo, cerdo y res en NINGUNA "
+                          "comida. Pescado, mariscos, huevo, lácteos y legumbres SÍ.")
+
     protein_diversity_block = ""
     if _protein_diversity_on and _diet_canon_ctx == "vegan":
         protein_diversity_block = (
@@ -1499,7 +1516,7 @@ def build_day_assignment_context(skeleton_day: dict, day_num: int, day_name: str
         )
 
     return f"""
---- 📋 ASIGNACIÓN DEL PLANIFICADOR PARA OPCIÓN {day_num} ---
+--- 📋 ASIGNACIÓN DEL PLANIFICADOR PARA OPCIÓN {day_num} ---{diet_hard_line}
 • Concepto Temático: {skeleton_day.get('brief_concept', 'Día variado')}{day_name_block}{breakfast_block}{cross_day_block}
 • Técnica de Cocción Principal: {skeleton_day.get('assigned_technique', 'Libre')}
 • Proteínas Asignadas: {pool_str}

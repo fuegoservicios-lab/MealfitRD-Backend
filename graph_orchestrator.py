@@ -33481,6 +33481,24 @@ def _cap_daily_whole_eggs(days, db=None, *, max_whole: int = None) -> int:
                 if isinstance(raw, list) and idx < len(raw):
                     raw[idx] = new_lines[0]
                 for extra in new_lines[1:]:
+                    # [P1-DAYGEN-VEG-HARD-LINE · 2026-09-05] si el plato YA tiene una línea de claras, se SUMA ahí
+                    # («3 huevos + 3 claras + 1 clara» en la tortilla del plan vivo b40a3c48).
+                    _mx = _re.match(r"^\s*(\d+)\s+claras?\b", str(extra), _re.IGNORECASE)
+                    _merged = False
+                    if _mx:
+                        _add_n = int(_mx.group(1))
+                        for _j, _ln in enumerate(ings):
+                            _mj = _re.match(r"^\s*(\d+)\s+claras?\s+de\s+huevo\b", str(_ln), _re.IGNORECASE)
+                            if _mj:
+                                _tot = int(_mj.group(1)) + _add_n
+                                _new_ln = f"{_tot} claras de huevo"
+                                ings[_j] = _new_ln
+                                if isinstance(raw, list) and _j < len(raw):
+                                    raw[_j] = _new_ln
+                                _merged = True
+                                break
+                    if _merged:
+                        continue
                     ings.append(extra)
                     if isinstance(raw, list):
                         raw.append(extra)
