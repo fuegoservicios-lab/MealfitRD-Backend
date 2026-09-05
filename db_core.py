@@ -1,8 +1,3 @@
-from functools import lru_cache as _lru_cache
-import json
-import uuid
-import unicodedata as _uc
-from datetime import datetime, timedelta, timezone
 import os
 import re
 import logging
@@ -59,9 +54,16 @@ def _float_env(name: str, default: float, lo: float, hi: float) -> float:
 #   - MIN_SIZE sin cambio (2): no consumir conexiones idle en entornos low-traffic.
 # Override cualquiera con `MEALFIT_DB_POOL_*` si el comportamiento previo era preferido
 # o si el pooler reporta saturación al alza.
+# [P1-POOL-DEFAULTS-SSOT · 2026-09-04] Defaults de CÓDIGO = valores afinados. Antes el
+# default era max=60 (y async max=12): la configuración que SATURÓ el pooler en mayo
+# (P0-DB-POOL-PGBOUNCER-SATURATION / P0-POOL-FREETIER-RETUNE) y que sólo el `.env` local
+# del dueño corregía. Un `.env` reseteado o un deploy nuevo volvía al estado saturado sin
+# que ningún test lo viera (los guards leían ese mismo `.env`). Cierra la regresión
+# silenciosa con el mismo criterio que P1-VERIFIED-ONLY-DEFAULT-ON: el default seguro
+# vive en el código; el env var del operador sigue ganando.
 DB_POOL_MIN_SIZE = _int_env("MEALFIT_DB_POOL_MIN_SIZE", 2, 0, 50)
-DB_POOL_MAX_SIZE = _int_env("MEALFIT_DB_POOL_MAX_SIZE", 60, 1, 200)
-DB_POOL_TIMEOUT_S = _float_env("MEALFIT_DB_POOL_TIMEOUT_S", 15.0, 1.0, 120.0)
+DB_POOL_MAX_SIZE = _int_env("MEALFIT_DB_POOL_MAX_SIZE", 12, 1, 200)
+DB_POOL_TIMEOUT_S = _float_env("MEALFIT_DB_POOL_TIMEOUT_S", 20.0, 1.0, 120.0)
 DB_POOL_MAX_IDLE_S = _float_env("MEALFIT_DB_POOL_MAX_IDLE_S", 300.0, 30.0, 1800.0)
 
 # [P1-POOL-ASYNC-SPLIT · 2026-05-16] Pool ASYNC con knobs SEPARADOS del SYNC.
@@ -88,8 +90,9 @@ DB_ASYNC_POOL_MIN_SIZE = _int_env("MEALFIT_DB_ASYNC_POOL_MIN_SIZE", 2, 0, 20)
 # al cap pgBouncer (sync 25 + async 12 = 37, todavía manejable con keepalive
 # recycling rápido). Si los warnings persisten >5/plan tras este tune, investigar
 # connection leak o subir clamp del knob.
-DB_ASYNC_POOL_MAX_SIZE = _int_env("MEALFIT_DB_ASYNC_POOL_MAX_SIZE", 12, 1, 100)
-DB_ASYNC_POOL_TIMEOUT_S = _float_env("MEALFIT_DB_ASYNC_POOL_TIMEOUT_S", 20.0, 1.0, 120.0)
+# [P1-POOL-DEFAULTS-SSOT] 12→10 y 20→12 s (P1-BESTEFFORT-DB-CB): sync 12 + async 10 = 22 ≤ 30.
+DB_ASYNC_POOL_MAX_SIZE = _int_env("MEALFIT_DB_ASYNC_POOL_MAX_SIZE", 10, 1, 100)
+DB_ASYNC_POOL_TIMEOUT_S = _float_env("MEALFIT_DB_ASYNC_POOL_TIMEOUT_S", 12.0, 1.0, 120.0)
 
 # [P1-DB-STMT-TIMEOUT · 2026-05-27] Timeout de sentencia + idle-in-transaction
 # a NIVEL DE SESIÓN sobre cada conexión de los pools sync/async principales.
@@ -192,6 +195,69 @@ MEALFIT_DB_BACKEND = (os.environ.get("MEALFIT_DB_BACKEND") or "neon").strip().lo
 NEON_DATABASE_URL = os.environ.get("NEON_DATABASE_URL")
 NEON_DATABASE_URL_POOLED = os.environ.get("NEON_DATABASE_URL_POOLED")
 
+# [P1-DBCORE-CONFIGURE-HOIST · 2026-09-04] Los configuradores de conexión viven a nivel de
+# módulo, NO dentro de la rama `if MEALFIT_DB_BACKEND == "neon": try: …` que construye los
+# pools. Ahí dentro sólo existían cuando había NEON_DATABASE_URL*: en un checkout sin DB
+# (CI, un clon limpio) `db_core.configure_sync_conn` ni siquiera era un atributo y los
+# tres tests que cablean la guarda P0-TEST-DB-ISOLATION contra el pool REAL fallaban con
+# AttributeError — es decir, la única prueba de que la guarda está enganchada al pool de
+# producción no corría precisamente donde importa. No dependen de nada de la rama:
+# `_install_write_guard_on_*` y `_session_timeout_statements()` son de módulo.
+def configure_sync_conn(conn):
+    conn.autocommit = True
+    # pgBouncer Transaction Mode no soporta server-side prepared statements.
+    # Deshabilitar auto-prepare para evitar errores "_pg3_N requires N params".
+    conn.prepare_threshold = None
+    # [P0-TEST-DB-ISOLATION-2 · 2026-07-29] Envuelve `conn.cursor` para que
+    # CUALQUIER escritura cruda (no solo la que pasa por `execute_sql_write`)
+    # quede sujeta a la guarda test-vs-prod. Ver comentario extenso arriba de
+    # `_install_write_guard_on_connection`.
+    _install_write_guard_on_connection(conn)
+    # [P1-DB-STMT-TIMEOUT · 2026-05-27] Session-level statement_timeout +
+    # idle_in_transaction_session_timeout. Best-effort: un fallo del SET
+    # NO debe impedir checkout de la conexión.
+    _stmts = _session_timeout_statements()
+    if _stmts:
+        try:
+            with conn.cursor() as _c:
+                for _stmt in _stmts:
+                    _c.execute(_stmt)
+        except Exception as _to_err:
+            logger.debug(f"[P1-DB-STMT-TIMEOUT] SET sync falló (best-effort): {_to_err}")
+
+async def configure_async_conn(conn):
+    await conn.set_autocommit(True)
+    conn.prepare_threshold = None
+    # [P0-TEST-DB-ISOLATION-2 · 2026-07-29] Variante async del wrapper sync
+    # de arriba — mismo razonamiento, ver `_install_write_guard_on_connection`.
+    _install_write_guard_on_async_connection(conn)
+    # [P1-DB-STMT-TIMEOUT · 2026-05-27] idem async.
+    _stmts = _session_timeout_statements()
+    if _stmts:
+        try:
+            async with conn.cursor() as _c:
+                for _stmt in _stmts:
+                    await _c.execute(_stmt)
+        except Exception as _to_err:
+            logger.debug(f"[P1-DB-STMT-TIMEOUT] SET async falló (best-effort): {_to_err}")
+
+def configure_checkpoint_conn(conn):
+    # [P1-DB-STMT-TIMEOUT · 2026-05-27] Pool del LangGraph checkpointer
+    # SIN session timeouts — preserva el comportamiento EXACTO del pool
+    # sensible (P1-CHAT-CHECKPOINT-*, bug SSL bad length / EOF detected).
+    # El PostgresSaver mantiene conexiones checked-out ~5-30s durante LLM
+    # calls; en autocommit NO están idle-in-transaction (el
+    # idle_in_transaction_session_timeout NO las mataría), pero por la
+    # fragilidad documentada de este pool (max=4, low-concurrency) no le
+    # aplicamos timeouts — el riesgo de exhaustion es despreciable.
+    conn.autocommit = True
+    conn.prepare_threshold = None
+    # [P0-TEST-DB-ISOLATION-2 · 2026-07-29] El checkpointer de LangGraph
+    # también persiste (`checkpoints`/`checkpoint_writes`) via SQL crudo del
+    # driver `PostgresSaver` — mismo riesgo si un test no-e2e llega a correr
+    # el grafo contra este pool real.
+    _install_write_guard_on_connection(conn)
+
 if MEALFIT_DB_BACKEND == "neon":
     try:
         from psycopg_pool import ConnectionPool, AsyncConnectionPool
@@ -223,61 +289,6 @@ if MEALFIT_DB_BACKEND == "neon":
                 "keepalives_count": 5,
                 "autocommit": True,
             }
-
-        def configure_sync_conn(conn):
-            conn.autocommit = True
-            # pgBouncer Transaction Mode no soporta server-side prepared statements.
-            # Deshabilitar auto-prepare para evitar errores "_pg3_N requires N params".
-            conn.prepare_threshold = None
-            # [P0-TEST-DB-ISOLATION-2 · 2026-07-29] Envuelve `conn.cursor` para que
-            # CUALQUIER escritura cruda (no solo la que pasa por `execute_sql_write`)
-            # quede sujeta a la guarda test-vs-prod. Ver comentario extenso arriba de
-            # `_install_write_guard_on_connection`.
-            _install_write_guard_on_connection(conn)
-            # [P1-DB-STMT-TIMEOUT · 2026-05-27] Session-level statement_timeout +
-            # idle_in_transaction_session_timeout. Best-effort: un fallo del SET
-            # NO debe impedir checkout de la conexión.
-            _stmts = _session_timeout_statements()
-            if _stmts:
-                try:
-                    with conn.cursor() as _c:
-                        for _stmt in _stmts:
-                            _c.execute(_stmt)
-                except Exception as _to_err:
-                    logger.debug(f"[P1-DB-STMT-TIMEOUT] SET sync falló (best-effort): {_to_err}")
-
-        async def configure_async_conn(conn):
-            await conn.set_autocommit(True)
-            conn.prepare_threshold = None
-            # [P0-TEST-DB-ISOLATION-2 · 2026-07-29] Variante async del wrapper sync
-            # de arriba — mismo razonamiento, ver `_install_write_guard_on_connection`.
-            _install_write_guard_on_async_connection(conn)
-            # [P1-DB-STMT-TIMEOUT · 2026-05-27] idem async.
-            _stmts = _session_timeout_statements()
-            if _stmts:
-                try:
-                    async with conn.cursor() as _c:
-                        for _stmt in _stmts:
-                            await _c.execute(_stmt)
-                except Exception as _to_err:
-                    logger.debug(f"[P1-DB-STMT-TIMEOUT] SET async falló (best-effort): {_to_err}")
-
-        def configure_checkpoint_conn(conn):
-            # [P1-DB-STMT-TIMEOUT · 2026-05-27] Pool del LangGraph checkpointer
-            # SIN session timeouts — preserva el comportamiento EXACTO del pool
-            # sensible (P1-CHAT-CHECKPOINT-*, bug SSL bad length / EOF detected).
-            # El PostgresSaver mantiene conexiones checked-out ~5-30s durante LLM
-            # calls; en autocommit NO están idle-in-transaction (el
-            # idle_in_transaction_session_timeout NO las mataría), pero por la
-            # fragilidad documentada de este pool (max=4, low-concurrency) no le
-            # aplicamos timeouts — el riesgo de exhaustion es despreciable.
-            conn.autocommit = True
-            conn.prepare_threshold = None
-            # [P0-TEST-DB-ISOLATION-2 · 2026-07-29] El checkpointer de LangGraph
-            # también persiste (`checkpoints`/`checkpoint_writes`) via SQL crudo del
-            # driver `PostgresSaver` — mismo riesgo si un test no-e2e llega a correr
-            # el grafo contra este pool real.
-            _install_write_guard_on_connection(conn)
 
         connection_pool = ConnectionPool(
             conninfo=clean_url,
@@ -395,11 +406,6 @@ def close_connection_pool():
         chat_checkpoint_pool.close()
         logger.info("chat_checkpoint_pool cerrado.")
 
-async def aclose_connection_pool():
-    if 'async_connection_pool' in globals() and async_connection_pool:
-        await async_connection_pool.close()
-        logger.info("Async Connection pool cerrado.")
-
 # [P-TYPING-1] Overloads para resolución de tipos por flag: `fetch_one=True`
 # devuelve `dict | None`; `fetch_all=True` (o sin flag, default seguro) devuelve
 # `list[dict]`. Sin esto, callsites que hacen `res.get(...)` / `res[0]` veían una
@@ -433,7 +439,6 @@ def execute_sql_query(query: str, params: Optional[tuple] = None, fetch_one: boo
         # Fallback de seguridad si el pool no estuviera disponible (aunque no debería)
         raise RuntimeError("db connection_pool is not available.")
 
-    import psycopg
     from psycopg.rows import dict_row
 
     with connection_pool.connection() as conn:

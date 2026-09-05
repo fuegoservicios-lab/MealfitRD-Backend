@@ -3,29 +3,26 @@ from fastapi.responses import StreamingResponse
 from error_utils import safe_error_detail
 from typing import Optional, Any
 import logging
-import traceback
 import os
 import hmac
-import threading
 import asyncio
 import json as _json
 import math as _math
-import time as _time
 from datetime import datetime, timezone, timedelta
 
 # Importaciones relativas del entorno
 from auth import get_verified_user_id, verify_api_quota
 from db import (
     get_user_likes, get_active_rejections, get_or_create_session,
-    save_message, update_user_health_profile, update_user_health_profile_atomic, log_api_usage, get_latest_meal_plan,
-    get_latest_meal_plan_with_id, update_meal_plan_data, insert_like,
+    save_message, update_user_health_profile_atomic, log_api_usage, get_latest_meal_plan_with_id, insert_like,
+    update_user_health_profile,  # noqa: F401  # [P2-RUFF-CLEAN] re-export/patch-target: consumido por tests (patch routers.plans.update_user_health_profile)
     # [P1-PLAN-DISPLAY-I18N · 2026-08-19] TRIGGER-1B lee el locale del usuario
     # tras la persistencia no-chunked (mismo patrón ya usado en otros ~6 call
     # sites de este archivo, ver L3223/6164/etc).
     get_user_profile,
 )
 from memory_manager import build_memory_context, summarize_and_prune
-from agent import analyze_preferences_agent, swap_meal, swap_meal_with_consent, LLMRateLimitedError, LLMCircuitBreakerOpen
+from agent import analyze_preferences_agent, swap_meal, swap_meal_with_consent, LLMRateLimitedError, LLMCircuitBreakerOpen  # noqa: F401  # [P2-RUFF-CLEAN] swap_meal: patch-target de tests (routers.plans.swap_meal)
 from graph_orchestrator import (
     run_plan_pipeline,
     arun_plan_pipeline,
@@ -2590,9 +2587,8 @@ def api_shift_plan(response: Response, data: dict = Body(...), verified_user_id:
     en vez de `verify_api_quota`: avanzar la ventana de un plan ya generado es
     mantenimiento, no debe bloquearse (402) ni cobrar un crédito al llegar al cap.
     """
-    from db_core import execute_sql_write, execute_sql_query
     from datetime import datetime, timezone, timedelta
-    import copy, random, json
+    import copy, json
     
     try:
         user_id = data.get("user_id")
@@ -10792,9 +10788,9 @@ def api_restock(data: dict = Body(...), verified_user_id: Optional[str] = Depend
                 )
                 if isinstance(_inv_count, int) and _inv_count == 0:
                     logger.info(
-                        f"🧹 [P3-RESTOCK-STALE-DEDUP] RESET: inventory vacío + "
-                        f"dedup stale → limpiando is_restocked + restocked_items + "
-                        f"restocked_at_iso de plan_data (in-memory, persist al UPDATE)"
+                        "🧹 [P3-RESTOCK-STALE-DEDUP] RESET: inventory vacío + "
+                        "dedup stale → limpiando is_restocked + restocked_items + "
+                        "restocked_at_iso de plan_data (in-memory, persist al UPDATE)"
                     )
                     _existing_restocked = {}
                     _restock_self_heal_reset = True
@@ -15513,7 +15509,6 @@ def api_rename_plan(
     # conn.transaction()` para tomar `pg_advisory_xact_lock` antes del
     # UPDATE — coherente con los otros dos mutators.
     from db_core import connection_pool
-    import psycopg
     from psycopg.rows import dict_row
     try:
         with connection_pool.connection() as conn:

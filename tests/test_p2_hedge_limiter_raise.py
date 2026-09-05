@@ -45,13 +45,16 @@ _GRAPH = (_BACKEND_ROOT / "graph_orchestrator.py").read_text(encoding="utf-8")
 # existe (verifican que el operador tenga el knob explícito, no el default
 # silencioso), así que se hacen SKIP en vez de borrarse. En una máquina con
 # `.env` corren exactamente igual que antes.
-_ENV_PATH = _BACKEND_ROOT / ".env"
+# [P1-POOL-DEFAULTS-SSOT · 2026-09-04] Ahora se lee el TEMPLATE versionado (`.env.example`),
+# espejo del `.env` afinado del operador: el contrato pasa a verificarse en CADA checkout (CI
+# incluido) en vez de saltarse donde no hay `.env`. La paridad `.env` ↔ `.env.example` la
+# vigila tests/test_p1_env_template_ssot.py.
+_ENV_PATH = _BACKEND_ROOT / ".env.example"
 _ENV = _ENV_PATH.read_text(encoding="utf-8") if _ENV_PATH.is_file() else None
 
 _requires_env = pytest.mark.skipif(
     _ENV is None,
-    reason="`.env` no existe (gitignored). Estos dos contratos aplican a la "
-           "config del operador, no al código versionado.",
+    reason="`.env.example` no existe: el template versionado es el SSOT de estos contratos.",
 )
 
 

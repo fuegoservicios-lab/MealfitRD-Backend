@@ -3,8 +3,6 @@ from typing import Any, Optional, cast
 from datetime import datetime
 import json
 import math
-import unicodedata
-import re
 import hashlib
 
 # Imports globales locales, movidos al tope para evitar el code smell "Lazy Loading"
@@ -17,7 +15,6 @@ from db import (
     save_message,
     insert_rejection,
     track_meal_friction,
-    update_user_health_profile,
     update_user_health_profile_atomic,
     upsert_user_profile
 )
@@ -97,7 +94,7 @@ def merge_form_data_with_profile(user_id: str, form_data: Optional[dict]) -> dic
                 existing_hp.update(non_empty_form)
                 merged = existing_hp
             if form_data and not existing_hp:
-                logger.debug(f"🔄 [SYNC] health_profile vacío, sincronizando desde formData del frontend...")
+                logger.debug("🔄 [SYNC] health_profile vacío, sincronizando desde formData del frontend...")
                 # [P1-2] Migración a atomic helper. El check `not existing_hp`
                 # se hizo PRE-LOCK; entre ese check y este write, otro caller
                 # del mismo user_id puede haber poblado hp (race con cron de
@@ -120,7 +117,7 @@ def merge_form_data_with_profile(user_id: str, form_data: Optional[dict]) -> dic
                 logger.warning(f"⚠️ [SYNC] No existe user_profile para {user_id}, intentando crear...")
                 try:
                     upsert_user_profile(user_id, merged)
-                    logger.info(f"✅ [SYNC] Perfil creado con health_profile")
+                    logger.info("✅ [SYNC] Perfil creado con health_profile")
                 except Exception as e:
                     logger.error(f"❌ [SYNC] Error creando perfil: {e}")
     except Exception as e:
@@ -256,7 +253,6 @@ def save_partial_plan_get_id(user_id: str, plan_data: dict, selected_techniques:
     try:
         # [GAP 3] Limpieza de días huérfanos al regenerar
         if "days" in plan_data and len(plan_data["days"]) > total_days_requested:
-            import logging
             logger.warning(f"🧹 [GAP 3] Recortando días huérfanos en partial plan. De {len(plan_data['days'])} a {total_days_requested}")
             plan_data["days"] = plan_data["days"][:total_days_requested]
 

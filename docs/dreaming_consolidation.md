@@ -39,7 +39,7 @@ Todos auto-registrados en `_KNOBS_REGISTRY` (P3-NEW-D) vía `_env_*`.
 | `MEALFIT_DREAMING_MAX_FACTS_PER_CALL` | `60` | Trunca facts/usuario por LLM call. Clamp `[10, 200]`. |
 | `MEALFIT_DREAMING_SALIENCE_DECAY_RATE` | `0.05` | Decay por ciclo de salience de no-clínicos no reforzados. Clamp `[0, 0.5]`. |
 | `MEALFIT_DREAMING_CONTRADICTION_ALERTS` | `True` | Emite `dream_contradiction:<user_id>` cuando hay conflicto. |
-| `MEALFIT_DREAMING_BATCH` | `50` | Tamaño de batch de encolado. Clamp `[1, 500]`. |
+| ~~`MEALFIT_DREAMING_BATCH`~~ | — | [P2-DEAD-CODE · 2026-09-04] Retirado: ningún camino lo leía (`_dreaming_batch()` no tenía consumidor). |
 | `MEALFIT_DREAMING_LLM_TIMEOUT_S` | `60.0` | Timeout del LLM call (`max_retries=0`). Clamp `[5, 180]`. |
 | `MEALFIT_DREAMING_USD_PER_1K_TOKENS` | `0.0003` | Precio blended flash para el cap de budget. Clamp `[0, 1]`. |
 | `MEALFIT_DREAMING_PROMPT_MAX_CHARS` | `1200` | Cap del bloque user_model inyectado al prompt. Clamp `[0, 4000]`. |

@@ -5,29 +5,26 @@ import logging
 import time
 import json
 import re
-import unicodedata
 logger = logging.getLogger(__name__)
 
 # [P3-CONSULTAR-DIA-USER-TODAY . 2026-08-22] Cuarta copia del 240 a mano: el fallback
 # de huso lee el SSOT que P3-TZ-FALLBACK-SSOT unifico.
 from constants import DEFAULT_TZ_OFFSET_MIN as _DEFAULT_TZ_OFFSET_MIN
-from constants import strip_accents, CULINARY_KNOWLEDGE_BASE, coach_country_context, culinary_knowledge_base_for_country, validate_ingredients_against_pantry, _to_base_unit
+from constants import strip_accents, coach_country_context, culinary_knowledge_base_for_country, validate_ingredients_against_pantry, _to_base_unit
 # [P0-LLM-PROVIDER-MIGRATION · 2026-06-12] Gemini → GLM con router por tier.
 from llm_provider import (ChatGLM, GLM_FLASH, GPT56_LUNA,
                           build_chat_llm, is_openai_model, resolve_model_for_user)
-from langchain_core.tools import tool
 from langchain_core.messages import SystemMessage, HumanMessage, AIMessage, ToolMessage
 from langgraph.graph import StateGraph, START, END
 from langgraph.graph.message import MessagesState
 from langgraph.checkpoint.memory import MemorySaver
-from pydantic import BaseModel, Field
 import random
-from typing import List, Optional, Annotated, TypedDict
+from typing import Optional
 from tenacity import retry, stop_after_attempt, wait_exponential
 
 
 
-from db import get_user_profile, update_user_health_profile
+from db import get_user_profile
 from knobs import _env_str, _env_float, _env_int, _env_bool  # [P3-CHAT-MODEL-KNOBS-REGISTRY · 2026-05-15] / [P0-CHAT-LLM-TIMEOUT · 2026-05-19] auto-registry
 # [P1-CHAT-CB · 2026-05-19] Breaker per-modelo del graph_orchestrator. NO
 # duplicamos la implementación — reusamos el singleton + knobs ya productivos
@@ -37,9 +34,7 @@ from knobs import _env_str, _env_float, _env_int, _env_bool  # [P3-CHAT-MODEL-KN
 # a un módulo neutro.
 from graph_orchestrator import _get_circuit_breaker, clinical_backstop_for_meal, UPDATE_CLINICAL_GUARD, renal_protein_trim_for_update, food_safety_backstop_for_meal, condition_substitution_backstop_for_meal, slot_coherence_backstop_for_meal, SLOT_APPROPRIATENESS_GATE_ENABLED, appetibility_fix_for_update, _meal_has_sweet_savory_clash, UPDATE_APPETIBILITY_GUARD
 import concurrent.futures
-import traceback
 from datetime import date, datetime, timezone, timedelta
-from cpu_tasks import _calcular_frecuencias_regex_cpu_bound
 from memory_manager import build_memory_context
 from fact_extractor import get_embedding
 from vision_agent import get_multimodal_embedding
@@ -413,10 +408,8 @@ def _prune_plan_for_chat(plan):
     return out
 
 
-from schemas import MacrosModel, MealModel, DailyPlanModel, PlanModel
+from schemas import MealModel
 from prompts import (
-    DETERMINISTIC_VARIETY_PROMPT, SWAP_MEAL_PROMPT_TEMPLATE,
-    CHAT_SYSTEM_PROMPT_BASE, CHAT_STREAM_SYSTEM_PROMPT_BASE,
     TITLE_GENERATION_PROMPT, RAG_ROUTER_PROMPT,
     # [P1-COUNTRY-SYSTEM-F1 · 2026-08-16 (FINAL-FIX F1c)] variante país-aware de
     # SWAP_MEAL_PROMPT_TEMPLATE (T2 pattern) — swap_meal() la usa en vez del template crudo.
@@ -448,11 +441,8 @@ from chat_history_context import (
 )
 
 from tools import (
-    update_form_field, generate_new_plan_from_chat,
-    log_consumed_meal, modify_single_meal,
-    search_deep_memory, agent_tools, analyze_preferences_agent,
-    execute_generate_new_plan, execute_modify_single_meal,
-    check_current_pantry
+    update_form_field, agent_tools, execute_generate_new_plan, execute_modify_single_meal,
+    analyze_preferences_agent,  # noqa: F401  # [P2-RUFF-CLEAN] re-export/patch-target: consumido por routers/plans, cron_tasks, proactive_agent vía `from agent import`
 )
 
 # Langchain Chat Model Initialization
@@ -793,7 +783,6 @@ from constants import (
     PROTEIN_SYNONYMS as protein_synonyms, 
     CARB_SYNONYMS as carb_synonyms,
     VEGGIE_FAT_SYNONYMS as veggie_fat_synonyms,
-    FRUIT_SYNONYMS as fruit_synonyms,
     _get_fast_filtered_catalogs
 )
 # [P3-SWAP-FALLBACK-TITLE-STRIP · 2026-05-23] Helper que extrae el nombre
@@ -1928,11 +1917,11 @@ def swap_meal(form_data: dict, surface: str = "individual"):
             )
         if _sua_sw(form_data):
             context_extras += (
-                f"\n    - 🔎 MODO UNIVERSO-CHICO: la Nevera disponible tiene pocos alimentos "
-                f"distintos. Si te quedas sin opciones de ingrediente NUEVO, recombina lo disponible "
-                f"con una TÉCNICA distinta (guisado, horneado, a la plancha, en tortitas, licuado) en "
-                f"vez de forzar un ingrediente que no está en la despensa. Esto NO afloja macros, "
-                f"reglas clínicas ni el cap de sodio — solo la exigencia de variedad por-ingrediente."
+                "\n    - 🔎 MODO UNIVERSO-CHICO: la Nevera disponible tiene pocos alimentos "
+                "distintos. Si te quedas sin opciones de ingrediente NUEVO, recombina lo disponible "
+                "con una TÉCNICA distinta (guisado, horneado, a la plancha, en tortitas, licuado) en "
+                "vez de forzar un ingrediente que no está en la despensa. Esto NO afloja macros, "
+                "reglas clínicas ni el cap de sodio — solo la exigencia de variedad por-ingrediente."
             )
     except Exception as _stp_ctx_e:
         logger.debug(f"[P1-STAPLE-FOODS] directiva de swap no aplicada (no bloquea): "
@@ -4082,7 +4071,7 @@ class ChatState(MessagesState):
     diary_claim_retried: bool
 
 def call_model(state: ChatState):
-    logger.info(f"🧠 [LANGGRAPH NODE] call_model")
+    logger.info("🧠 [LANGGRAPH NODE] call_model")
     messages = state["messages"]
     sys_prompt = state.get("sys_prompt", "")
     
@@ -5946,7 +5935,6 @@ def chat_with_agent(session_id: str, prompt: str, current_plan: Optional[dict] =
     except Exception:
         _coach_country = "DO"
     # Determinar si es un usuario autenticado o invitado
-    is_authenticated = user_id and user_id != session_id and user_id != "guest"
 
     # [P2-CHAT-PROMPT-STATIC-PREFIX · 2026-06-01] Estáticos al frente, volátiles
     # al final → maximiza cache implícito de Gemini sobre el prefijo. Ver
@@ -6260,7 +6248,7 @@ def chat_with_agent(session_id: str, prompt: str, current_plan: Optional[dict] =
         messages.append(HumanMessage(content=prompt))
         inputs["messages"] = messages
     else:
-        logger.debug(f"🔄 [LANGGRAPH] Thread existente detectado en Checkpointer. Inyectando solo el prompt actual.")
+        logger.debug("🔄 [LANGGRAPH] Thread existente detectado en Checkpointer. Inyectando solo el prompt actual.")
         inputs["messages"] = [HumanMessage(content=prompt)]
         
     logger.info("\n-------------------------------------------------------------")

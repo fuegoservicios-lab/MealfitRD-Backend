@@ -1158,7 +1158,7 @@ def fidelity_issues(days: list, sl: Optional[dict], effective: Optional[dict], *
                         "code": "anchor_missing_day", "severity": "high", "day": i + 1, "anchor": name,
                         "message": (f"ANCLA AUSENTE (fidelidad a la política del usuario): el día {i + 1} debía incluir "
                                     f"{name}" + (f" en {_SLOT_ES.get(slot, slot)}" if slot else "") +
-                                    f" y no aparece. Inclúyelo ese día" + (f" en {_SLOT_ES.get(slot, slot)}" if slot else "") +
+                                    " y no aparece. Inclúyelo ese día" + (f" en {_SLOT_ES.get(slot, slot)}" if slot else "") +
                                     " sin cambiar los demás platos."),
                     })
                 elif slot and not any(meal_slot(m) == slot for m in in_any):

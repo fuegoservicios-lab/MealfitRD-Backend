@@ -136,14 +136,22 @@ jobs:
         run: |
           cp workspace/CLAUDE.md CLAUDE.md
           [ -d workspace/docs ] && cp -r workspace/docs docs || true
+      # [P0-CI-VERDICT · 2026-09-04] Sin token, CLAUDE.md se emula con la copia que el backend SÍ
+      # versiona (`backend/CLAUDE.md`, espejo del workspace — misma disciplina que `migrations/`):
+      # los ~120 tests que lo leen EJECUTAN contra contenido real en vez de saltarse. Con token,
+      # la copia del workspace manda (el paso anterior ya la dejó y este no la pisa).
+      - name: CLAUDE.md = backend/CLAUDE.md si el workspace no se descargó
+        run: |
+          [ -e CLAUDE.md ] || ln -s backend/CLAUDE.md CLAUDE.md
+          echo "CLAUDE.md -> $(readlink CLAUDE.md || echo 'copia del workspace')" >> "$GITHUB_STEP_SUMMARY"
 
       - name: Declarar qué hermanos están (la degradación, visible)
         run: |
           {
             echo "## Hermanos en este checkout"
-            [ -d frontend/src ] && echo "- frontend: presente (repo público) — corren los tests de paridad que leen \`frontend/src\`." || echo "- ⚠️ frontend: AUSENTE."
+            [ -d frontend/src ] && echo "- frontend: presente (repo público) — corren los tests de paridad que leen \`frontend/src\`." || echo "- ⚠️ frontend: AUSENTE — los ~400 tests que leen \`frontend/src\` se SALTAN vía el fixture \`frontend_repo_path\` (conftest) y el marker P0-CI-VERDICT, no se ejecutan."
             [ -d migrations ] && echo "- migrations/: enlace a backend/migrations (copia SSOT)." || echo "- ⚠️ migrations/: ausente."
-            if [ -f CLAUDE.md ]; then echo "- workspace (CLAUDE.md, docs/): presente vía SIBLING_REPO_TOKEN."; else echo "- ⚠️ workspace (CLAUDE.md, docs/): AUSENTE — el repo es privado y no hay \`SIBLING_REPO_TOKEN\`; los tests que leen CLAUDE.md se SALTAN (ver conteo de pytest), no se ejecutan."; fi
+            if [ -f CLAUDE.md ]; then echo "- CLAUDE.md: presente ($( [ -L CLAUDE.md ] && echo "copia versionada del backend" || echo "workspace vía SIBLING_REPO_TOKEN" ))."; else echo "- ⚠️ workspace (CLAUDE.md, docs/): AUSENTE — el repo es privado y no hay \`SIBLING_REPO_TOKEN\`; los tests que leen CLAUDE.md se SALTAN (ver conteo de pytest), no se ejecutan."; fi
           } >> "$GITHUB_STEP_SUMMARY"
 
       - name: Set up Python
@@ -177,7 +185,10 @@ jobs:
           # verdad — los 400, incluido el P0 clínico de alérgenos. Las dos piezas se
           # complementan: el fixture es la degradación legible cuando falta el secret; el
           # checkout es lo único que hace que lleguen a ejecutarse en Actions alguna vez.
-          pytest tests/ -v --tb=short -m "not e2e"
+          # [P0-CI-VERDICT] `-rs`: los skips por artefacto ausente / catálogo vivo se listan
+          # agrupados por razón al final. Un verde con 1.000 skips se lee; sin esto se confunde
+          # con cobertura.
+          pytest tests/ -v --tb=short -m "not e2e" -rs
 
       # [P2-E2E-CATALOGO-PAIS-SIN-NINGUN-GATE · 2026-08-23] Sólo el fichero
       # read-only que contrasta el catálogo vivo. Nunca `-m e2e` sobre toda la

@@ -67,6 +67,9 @@ def test_skips_fraction_lead():
 def test_hint_yields_serving_macros_not_whole_fruit():
     from nutrition_db import IngredientNutritionDB
     import db_core
+    import pytest
+    if db_core.connection_pool is None:
+        pytest.skip("requiere DB viva (master_ingredients): sin NEON_DATABASE_URL* no hay pool")
     db_core.connection_pool.open()
     db = IngredientNutritionDB()
     phantom = db.macros_from_ingredient_string("1 lechosa")

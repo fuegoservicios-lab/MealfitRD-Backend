@@ -2,34 +2,31 @@ import os
 import logging
 import json
 import re
-import unicodedata
 import time
 from typing import Optional
 from langchain_core.tools import tool
 # [P0-LLM-PROVIDER-MIGRATION · 2026-06-12] Gemini → GLM con router por tier.
 from llm_provider import ChatGLM, GLM_FLASH, resolve_model_for_user
-from pydantic import BaseModel, Field
 from tenacity import retry, stop_after_attempt, wait_exponential
-from constants import normalize_ingredient_for_tracking, strip_accents, validate_ingredients_against_pantry, canonical_slot_key, slot_violations_for_meal_name, build_meal_timing_rules, canonicalize_diet_type
+from constants import strip_accents, validate_ingredients_against_pantry, canonical_slot_key, slot_violations_for_meal_name, build_meal_timing_rules, canonicalize_diet_type
 logger = logging.getLogger(__name__)
 
 from db import (
-    get_user_profile, update_user_health_profile, update_user_health_profile_atomic, delete_user_facts_by_metadata,
+    get_user_profile, update_user_health_profile_atomic, delete_user_facts_by_metadata,
     get_user_likes, get_active_rejections, get_latest_usable_meal_plan_with_id,
-    update_meal_plan_data, search_deep_memory as db_search_deep_memory,
+    search_deep_memory as db_search_deep_memory,
     log_consumed_meal as db_log_consumed_meal,
     update_consumed_meal as db_update_consumed_meal,
     save_new_meal_plan_robust, increment_ingredient_frequencies,
     get_latest_usable_meal_plan, user_tz_offset_min
 )
 from schemas import MealModel
-from prompts import PREFERENCES_AGENT_PROMPT, MODIFY_MEAL_PROMPT_TEMPLATE
+from prompts import PREFERENCES_AGENT_PROMPT
 # [P1-COUNTRY-SYSTEM-F1 · 2026-08-16 (FINAL-FIX F1c)] variante país-aware de
 # MODIFY_MEAL_PROMPT_TEMPLATE (T2 pattern) — execute_modify_single_meal() la usa en vez del
 # template crudo.
 from prompts import build_modify_meal_prompt_template
 from datetime import datetime
-import threading
 # [P1-TOOLS-LLM-HARDENING · 2026-05-20] Reuso del CB per-modelo del
 # graph_orchestrator. Espejo del patrón de `agent.py` (P1-CHAT-CB-EXTEND).
 # `run_plan_pipeline` ya se importa desde el mismo módulo — no añade ciclo.
@@ -1176,7 +1173,7 @@ def execute_modify_single_meal(user_id: str, day_number: int, meal_type: str, ch
     if clean_ingredients and not allow_pantry_expansion:
         context_extras = f"\n⚠️ REGLA DE RECICLAJE (ROTACIÓN DE DESPENSA): El usuario solicitó un cambio. DEBES utilizar OBLIGATORIAMENTE ingredientes que ya formen parte de su despensa actual. Ingredientes disponibles: {', '.join(clean_ingredients)}. Tienes permiso creativo para proponer un plato usando solo esta base, sin agregar ingredientes foráneos."
     elif allow_pantry_expansion:
-        context_extras = f"\n💡 PERMISO DE EXPANSIÓN DE DESPENSA: El usuario ha autorizado explícitamente agregar ingredientes nuevos que no están en su despensa para este cambio (¡Va de compras!). Siéntete libre de proponer CUALQUIER ingrediente ideal para lograr la mejor comida."
+        context_extras = "\n💡 PERMISO DE EXPANSIÓN DE DESPENSA: El usuario ha autorizado explícitamente agregar ingredientes nuevos que no están en su despensa para este cambio (¡Va de compras!). Siéntete libre de proponer CUALQUIER ingrediente ideal para lograr la mejor comida."
         
     # [P1-COUNTRY-SYSTEM-F1 · 2026-08-16 (T7)] `plan_data` (ya fetcheado arriba, línea ~997)
     # es la fuente MÁS confiable de "¿este plan tiene precios nativos?" en esta tool — a
@@ -3515,7 +3512,7 @@ def check_hydration_today(user_id: str) -> str:
         if remaining > 0:
             msg_parts.append(f"Le faltan {remaining:g} para cumplir su meta.")
         else:
-            msg_parts.append(f"Ya cumplio su meta del dia.")
+            msg_parts.append("Ya cumplio su meta del dia.")
         if is_personalized:
             w_str = str(int(weight_kg)) if float(weight_kg).is_integer() else f"{weight_kg:.1f}"
             msg_parts.append(f"Meta personalizada (basada en su peso de {w_str} kg).")
@@ -4264,7 +4261,7 @@ def consultar_dia_del_plan(user_id: str, fecha: str) -> str:
     # LIVE-TOOL CONTRACT: `user_id` viene force-overrideado por P0-AGENT-1.
     logger.info(f"📖 [TOOL EXECUTION] consultar_dia_del_plan user={user_id} fecha={fecha}")
     try:
-        from chat_history_context import find_plan_day_for_date, rd_today
+        from chat_history_context import find_plan_day_for_date
         from datetime import datetime as _dt
 
         try:

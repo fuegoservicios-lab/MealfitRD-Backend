@@ -64,6 +64,8 @@ import io
 import re
 from pathlib import Path
 
+import pytest
+
 _BACKEND = Path(__file__).resolve().parent.parent
 _FRONT = _BACKEND.parent / "frontend"
 _MARKER = "P3-I18N-PDF-GATE-CIEGO-HTML"

@@ -5,8 +5,6 @@ Analiza el tono emocional del mensaje del usuario y retorna una personalidad
 dinámica que se inyecta al system prompt del agente principal.
 """
 
-import os
-import json
 import logging
 import time
 from functools import lru_cache

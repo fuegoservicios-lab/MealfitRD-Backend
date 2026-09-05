@@ -1,15 +1,10 @@
-from functools import lru_cache as _lru_cache
-import uuid
-import unicodedata as _uc
-from typing import Optional, List, Dict, Any, Tuple, Union
-import os
+from typing import Optional, List, Dict, Any, Tuple
 import logging
 logger = logging.getLogger(__name__)
 from db_core import connection_pool, execute_sql_query, execute_sql_write
 from constants import strip_accents, GLOBAL_REVERSE_MAP
 from db_chat import insert_rejection, save_message
-from db_profiles import (get_user_profile, update_user_health_profile,
-                         update_user_health_profile_atomic,
+from db_profiles import (update_user_health_profile_atomic,
                          # [P1-PREINSERT-CLINICAL-CTX · 2026-07-30] contexto clínico del shield
                          # pre-INSERT (SSOT de la hidratación que estaba copiada en 3 surfaces).
                          build_clinical_form_from_profile as _build_clinical_form)

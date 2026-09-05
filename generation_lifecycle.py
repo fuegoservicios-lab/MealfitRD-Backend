@@ -477,11 +477,6 @@ def read_run_progress(run_id: str) -> dict | None:
     return val if isinstance(val, dict) else None
 
 
-def clear_run_progress(run_id: str) -> None:
-    from db_core import execute_sql_write
-    execute_sql_write("DELETE FROM app_kv_store WHERE key = %s", (_progress_key(run_id),))
-
-
 # ---------------------------------------------------------------------------
 # Snapshot durable del run (lo que lee GET /generation-runs/{id} y el tail SSE)
 # ---------------------------------------------------------------------------

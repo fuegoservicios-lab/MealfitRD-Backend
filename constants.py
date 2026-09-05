@@ -5228,7 +5228,7 @@ def validate_ingredients_against_pantry(generated_ingredients: list, pantry_ingr
         logger.warning(f"🚨 [PANTRY GUARD] RECHAZO | unauthorized={len(unauthorized)} | over_limit={len(over_limit)}")
         return (error_msg, list(unauthorized)) if return_unauthorized else error_msg
 
-    logger.debug(f"✅ [PANTRY GUARD] APROBADO (Cantidades & Confiabilidad validadas)")
+    logger.debug("✅ [PANTRY GUARD] APROBADO (Cantidades & Confiabilidad validadas)")
     return (True, list(unauthorized)) if return_unauthorized else True
 
 

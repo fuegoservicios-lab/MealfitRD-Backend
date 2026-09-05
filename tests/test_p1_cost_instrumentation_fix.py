@@ -27,7 +27,12 @@ import pytest
 
 _BACKEND_ROOT = Path(__file__).resolve().parent.parent
 _GRAPH_PATH = _BACKEND_ROOT / "graph_orchestrator.py"
-_ENV_PATH = _BACKEND_ROOT / ".env"
+# [P1-POOL-DEFAULTS-SSOT · 2026-09-04] Se lee el TEMPLATE versionado (`.env.example`), no el
+# `.env` local (gitignored): un guard sobre un fichero que ningún checkout limpio tiene es un
+# guard que sólo pasa en la máquina del dueño y nunca corre en CI. El template es lo que copia
+# un deploy nuevo o un `.env` reseteado — y llevaba desde mayo los valores que este test
+# prohíbe. La paridad `.env` ↔ `.env.example` la vigila tests/test_p1_env_template_ssot.py.
+_ENV_PATH = _BACKEND_ROOT / ".env.example"
 
 
 def _read_graph() -> str:

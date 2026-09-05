@@ -2,7 +2,6 @@ import logging
 import math
 import os
 import re
-import traceback
 from datetime import datetime, timezone, timedelta
 import json
 import copy
@@ -19,18 +18,16 @@ import random
 def _dt_p0b_now(tz=None):
     return datetime.now(tz)
 _tz_p0b = timezone
-from db_core import execute_sql_query, execute_sql_write, connection_pool
+from db_core import execute_sql_query, execute_sql_write
 from db_inventory import (
-    deduct_consumed_meal_from_inventory,
+    get_raw_user_inventory,  # noqa: F401  # [P2-RUFF-CLEAN] re-export/patch-target: consumido por tests (monkeypatch cron_tasks.get_raw_user_inventory)
     get_inventory_activity_since,
-    get_raw_user_inventory,
     get_user_inventory_net,
     release_chunk_reservations,
     reserve_plan_ingredients,
 )
-from db import get_latest_meal_plan_with_id, get_user_likes, get_active_rejections, get_recent_plans
+from db import get_user_likes, get_active_rejections, get_recent_plans
 from db_facts import get_all_user_facts, get_consumed_meals_since
-from pydantic import BaseModel, Field
 from typing import Dict, Any, List
 from collections import Counter
 
@@ -114,7 +111,6 @@ CHUNK_PANTRY_STRICT_MIN_ITEMS = max(0, min(100, int(os.environ.get("CHUNK_PANTRY
 # espejo de P1-3 (shopping_calculator) y P3-NEW-D (auto-registry).
 from graph_orchestrator import run_plan_pipeline, _env_int, _env_float, _env_bool, _env_str
 from memory_manager import build_memory_context
-from services import _save_plan_and_track_background
 from agent import analyze_preferences_agent
 from apscheduler.triggers.cron import CronTrigger
 
@@ -4394,7 +4390,7 @@ def _sweep_stale_app_kv_store_prefixes() -> None:
             # mismo viene del catálogo controlado `_KV_SWEEP_PREFIXES` (no de
             # input externo) → no es vector de injection.
             deleted = execute_sql_write(
-                f"""
+                """
                 DELETE FROM app_kv_store
                 WHERE key LIKE %s
                   AND updated_at < NOW() - make_interval(hours => %s)
@@ -7066,8 +7062,8 @@ def register_plan_chunk_scheduler(scheduler) -> None:
         logger.info(
             "⏰ [P1-NEW-D] Cron de recovery de pending chunks fuera del horizonte "
             "registrado cada 60 min "
-            f"(horizon_days_knob=MEALFIT_CHUNK_FUTURE_HORIZON_DAYS default=14, "
-            f"batch_knob=MEALFIT_CHUNK_FUTURE_HORIZON_BATCH default=50)."
+            "(horizon_days_knob=MEALFIT_CHUNK_FUTURE_HORIZON_DAYS default=14, "
+            "batch_knob=MEALFIT_CHUNK_FUTURE_HORIZON_BATCH default=50)."
         )
 
     # [P1-2/ZERO-LOG-NUDGE] Cron: aviso PROACTIVO a usuarios con plan activo + 0 logs.
@@ -17184,10 +17180,9 @@ def _persist_nightly_learning_signals(user_id: str, health_profile: dict, days: 
     planes activos del mismo usuario escriben simultáneamente. Utiliza un SELECT FOR UPDATE
     atómico para un read-modify-write estricto, dejando el LLM fuera del lock para evitar deadlocks.
     """
-    from db_core import execute_sql_query, connection_pool
+    from db_core import connection_pool
     import json
     from datetime import datetime, timezone, timedelta
-    import psycopg
     from psycopg.rows import dict_row
 
     # 1. Ejecutar procesos pesados y propensos a red FUERA del lock
@@ -18123,7 +18118,7 @@ def _inject_advanced_learning_signals(user_id: str, pipeline_data: dict, health_
 
                 logger.warning(f" [FEEDBACK LOOP] Quality Score muy bajo por 3 ciclos consecutivos. Se activará un CAMBIO RADICAL (Estrategia: {pipeline_data.get('_drastic_change_strategy', 'default')}).")
             elif _cron_hint == 'increase_complexity':
-                logger.info(f" [FEEDBACK LOOP] Quality Score muy alto por 3 ciclos consecutivos. Se permitirá MAYOR COMPLEJIDAD.")
+                logger.info(" [FEEDBACK LOOP] Quality Score muy alto por 3 ciclos consecutivos. Se permitirá MAYOR COMPLEJIDAD.")
             elif _cron_hint == 'break_plateau':
                 _mean_q = sum(quality_history_chunks) / len(quality_history_chunks)
                 logger.warning(f" [FEEDBACK LOOP] Plateau Silencioso detectado. Quality score estancado en {_mean_q:.2f}. Se forzará una ruptura de monotonía.")
@@ -18216,8 +18211,8 @@ def _inject_advanced_learning_signals(user_id: str, pipeline_data: dict, health_
                 pipeline_data['_nudge_conversion_rates'] = {
                     n['nudge_type']: float(n['conversion_rate']) for n in effective_nudges if n['conversion_rate'] is not None
                 }
-                logger.info(f" [NUDGE SYNC] Tasas de conversion reales agregadas al contexto.")
-        except Exception as eff_err:
+                logger.info(" [NUDGE SYNC] Tasas de conversion reales agregadas al contexto.")
+        except Exception:
             pass
 
         # MEJORA Gap F: Tonos de comunicacion exitosos
@@ -18230,7 +18225,7 @@ def _inject_advanced_learning_signals(user_id: str, pipeline_data: dict, health_
                 styles_list = [row['nudge_style'] for row in successful_styles]
                 pipeline_data['_successful_tone_strategies'] = styles_list
                 logger.info(f"  [TONE SYNC] Estilos de comunicacion exitosos inyectados: {styles_list}")
-        except Exception as style_err:
+        except Exception:
             pass
             
     except Exception as e:
@@ -28896,7 +28891,6 @@ __PLAN_MODE_GATE__
                     try:
                         # [P0-LLM-PROVIDER-MIGRATION · 2026-06-12] Probe via GLM.
                         from llm_provider import ChatGLM, model_free_tier
-                        import os
                         # [P0-1-RECOVERY/WORKER-FIX] No importar datetime/timezone aquí: el módulo
                         # ya los tiene globales (cron_tasks.py:3). Importarlos localmente
                         # promovía a `datetime` y `timezone` a variables locales de toda la función
@@ -28937,7 +28931,7 @@ __PLAN_MODE_GATE__
                             with _cf.ThreadPoolExecutor(max_workers=1) as ex:
                                 ex.submit(_do_probe).result(timeout=10)
                             
-                            logger.info(f" [GAP 6] LLM Probe exitoso. Sistema estabilizado, restaurando a modo AI.")
+                            logger.info(" [GAP 6] LLM Probe exitoso. Sistema estabilizado, restaurando a modo AI.")
                             is_degraded = False
                             snap.pop('_degraded', None)
                         
@@ -29778,7 +29772,7 @@ __PLAN_MODE_GATE__
                         if form_data.get("_pantry_diversity_warning"):
                             form_data["_force_technique_variety"] = True
                             logger.warning(
-                                f"[P0-gamma] _force_variety downgradeado a _force_technique_variety por baja diversidad en nevera."
+                                "[P0-gamma] _force_variety downgradeado a _force_technique_variety por baja diversidad en nevera."
                             )
                         else:
                             form_data["_force_variety"] = True
@@ -32828,7 +32822,6 @@ __PLAN_MODE_GATE__
             # Antes: solo logger.warning si fallaba -> plan quedaba con dias nuevos + shopping list vieja.
             # Ahora: retry 3x con backoff. Si falla -> marca chunk con flag para reintentar solo shopping.
             shopping_list_ok = False
-            last_shop_error = None
             _SHOP_MAX_RETRIES = 3
 
             for _shop_attempt in range(1, _SHOP_MAX_RETRIES + 1):
@@ -33067,7 +33060,6 @@ __PLAN_MODE_GATE__
                     break  # Exito, salir del retry loop
 
                 except Exception as shop_e:
-                    last_shop_error = shop_e
                     if _shop_attempt < _SHOP_MAX_RETRIES:
                         backoff_secs = 2 ** _shop_attempt  # 2s, 4s
                         logger.warning(f"[CHUNK/GAP2] Shopping list intento {_shop_attempt}/{_SHOP_MAX_RETRIES} fallo: {shop_e}. "

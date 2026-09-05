@@ -84,9 +84,6 @@ def _dreaming_salience_decay_rate() -> float:
 def _dreaming_contradiction_alerts() -> bool:
     return _env_bool("MEALFIT_DREAMING_CONTRADICTION_ALERTS", True)
 
-def _dreaming_batch() -> int:
-    return _env_int("MEALFIT_DREAMING_BATCH", 50, validator=lambda v: 1 <= v <= 500)
-
 def _dreaming_llm_timeout_s() -> float:
     return _env_float("MEALFIT_DREAMING_LLM_TIMEOUT_S", 60.0,
                       validator=lambda v: 5.0 <= v <= 180.0)

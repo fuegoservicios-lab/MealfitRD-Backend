@@ -1206,7 +1206,7 @@ def build_skeleton_quality_context(quality_score: float, meal_adherence: dict) -
     if quality_score is None:
         return ""
     
-    ctx = f"\n--- 📊 MÉTRICAS CUANTITATIVAS DEL PLAN ANTERIOR ---\n"
+    ctx = "\n--- 📊 MÉTRICAS CUANTITATIVAS DEL PLAN ANTERIOR ---\n"
     ctx += f"Quality Score: {quality_score:.2f} (0.0 a 1.0)\n"
     
     if meal_adherence:
@@ -1365,7 +1365,7 @@ def build_success_patterns_context(successful_techniques: list, abandoned_techni
     
     if cold_start_recs:
         rec_str = ", ".join(set(cold_start_recs))
-        ctx += f"❄️ COLD-START (USUARIO NUEVO): Perfiles similares al de este usuario han tenido MUCHO ÉXITO con los siguientes platos:\n"
+        ctx += "❄️ COLD-START (USUARIO NUEVO): Perfiles similares al de este usuario han tenido MUCHO ÉXITO con los siguientes platos:\n"
         ctx += f"   💡 {rec_str}\n"
         ctx += "   INSTRUCCIÓN: Inspírate en estos platos o inclúyelos directamente en el plan para garantizar una alta adherencia inicial.\n\n"
     
@@ -1632,7 +1632,7 @@ def build_chunk_lessons_context(chunk_lessons: dict) -> str:
     # [P0-gamma] Advertencia de diversidad de nevera agotada
     if chunk_lessons.get("pantry_diversity_warning"):
         lines.append(
-            f"• ⚠️ ALERTA DE INVENTARIO AGOTADO: El inventario es limitado — prioriza variar TÉCNICA CULINARIA y ACOMPAÑAMIENTO en vez de intentar variar la proteína base."
+            "• ⚠️ ALERTA DE INVENTARIO AGOTADO: El inventario es limitado — prioriza variar TÉCNICA CULINARIA y ACOMPAÑAMIENTO en vez de intentar variar la proteína base."
         )
 
     # [P1-5] BLOCKS HISTÓRICOS — siempre se emiten si hay datos en lifetime,
@@ -1704,7 +1704,7 @@ def build_chunk_lessons_context(chunk_lessons: dict) -> str:
                 f"(repeat_pct prom={_ch_avg:.0f}%, máx={_ch_max:.0f}%"
                 + (f", máx violaciones por chunk={_ch_max_viol}" if _ch_max_viol > 0 else "")
                 + "). Los patrones reportados arriba llevan rotando varios chunks; "
-                f"prioriza ROMPERLOS, no solo evitarlos en el chunk actual."
+                "prioriza ROMPERLOS, no solo evitarlos en el chunk actual."
             )
 
     if not lines:
@@ -1724,7 +1724,7 @@ def build_chunk_lessons_context(chunk_lessons: dict) -> str:
 
     header = f"--- 📋 LECCIONES DEL CHUNK {chunk_num} (APLICA OBLIGATORIAMENTE) ---"
     if is_lifetime:
-        header = f"--- 🧠 PATRONES CRÍTICOS Y LECCIONES ACUMULADAS (TODA LA VIDA DEL PLAN) ---"
+        header = "--- 🧠 PATRONES CRÍTICOS Y LECCIONES ACUMULADAS (TODA LA VIDA DEL PLAN) ---"
 
     # [P0-CHUNKS-1] Disclaimer cuando el agregado mezcla lecciones reales con
     # sintéticas (chunk previo crasheó pre-pipeline → señal derivada del plan,
@@ -1752,9 +1752,9 @@ def build_chunk_lessons_context(chunk_lessons: dict) -> str:
             )
         else:
             ctx += (
-                f"⚠️ AVISO: este bloque fue DERIVADO del plan previo "
-                f"(no de adherencia observada). Pondera con MENOS peso que "
-                f"reglas de alergia o rechazos confirmados.\n"
+                "⚠️ AVISO: este bloque fue DERIVADO del plan previo "
+                "(no de adherencia observada). Pondera con MENOS peso que "
+                "reglas de alergia o rechazos confirmados.\n"
             )
     ctx += "\n".join(lines) + "\n"
     ctx += "------------------------------------------------------------\n"
@@ -1938,19 +1938,19 @@ def build_pantry_context(form_data: dict) -> str:
 
     if perishables:
         import json
-        ctx += f"⚠️ INGREDIENTES URGENTES (a punto de dañarse - PRIORIDAD MÁXIMA PARA SALVARLOS ECONÓMICAMENTE):\n"
+        ctx += "⚠️ INGREDIENTES URGENTES (a punto de dañarse - PRIORIDAD MÁXIMA PARA SALVARLOS ECONÓMICAMENTE):\n"
         ctx += f"{json.dumps(perishables, ensure_ascii=False)}\n\n"
 
     if predictions:
         import json
-        ctx += f"📉 PREDICCIÓN DE AGOTAMIENTO (INVENTORY INTELLIGENCE):\n"
+        ctx += "📉 PREDICCIÓN DE AGOTAMIENTO (INVENTORY INTELLIGENCE):\n"
         ctx += f"{json.dumps(predictions, ensure_ascii=False)}\n"
-        ctx += f"INSTRUCCIÓN: El sistema ha calculado que estos ingredientes se agotarán muy pronto basado en la tasa de consumo.\n"
-        ctx += f"Diseña los primeros días usándolos, y para los últimos días de la semana diseña OPORTUNIDADES CON PROTEÍNAS/INGREDIENTES ALTERNATIVOS para cuando ya no haya.\n\n"
+        ctx += "INSTRUCCIÓN: El sistema ha calculado que estos ingredientes se agotarán muy pronto basado en la tasa de consumo.\n"
+        ctx += "Diseña los primeros días usándolos, y para los últimos días de la semana diseña OPORTUNIDADES CON PROTEÍNAS/INGREDIENTES ALTERNATIVOS para cuando ya no haya.\n\n"
 
     if stables:
         import json
-        ctx += f"✅ INGREDIENTES ESTABLES (Larga duración - Usar como complemento):\n"
+        ctx += "✅ INGREDIENTES ESTABLES (Larga duración - Usar como complemento):\n"
         ctx += f"{json.dumps(stables, ensure_ascii=False)}\n\n"
 
     ctx += "ESTRATEGIA ZERO-WASTE: Es OBLIGATORIO que bases este nuevo plan en agotar estos ingredientes sobrantes ANTES de pedirle que compre productos nuevos. Sé creativo para transformarlos en platos totalmente nuevos.\n"

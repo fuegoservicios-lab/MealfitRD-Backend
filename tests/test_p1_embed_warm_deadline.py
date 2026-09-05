@@ -65,11 +65,26 @@ def test_el_plazo_del_warmer_supera_el_piso_de_espera(catalogo):
         f"Sube MEALFIT_EMBED_WARM_DEADLINE_S o baja EMBED_INIT_BATCH_DELAY_S.")
 
 
+def _knob_del_template(nombre: str) -> float:
+    """Valor del knob en `.env.example` (el espejo versionado del `.env` afinado de producción).
+
+    [P1-POOL-DEFAULTS-SSOT · 2026-09-04] Este test leía `sc.EMBED_INIT_*`, que en la máquina del
+    dueño salen de su `.env` (lotes de 3, 3 s) y en un checkout limpio de los defaults del código
+    (10, 0,5 s) — con los defaults la aritmética del bug NO se reproduce y el test estaba rojo en
+    CI sin que fuera falso. La configuración VIVA es la del template versionado."""
+    import re
+    texto = (_BACKEND / ".env.example").read_text(encoding="utf-8")
+    m = re.search(rf"^{re.escape(nombre)}\s*=\s*([\d.]+)", texto, re.MULTILINE)
+    assert m, f"{nombre} no está en .env.example"
+    return float(m.group(1))
+
+
 def test_el_deadline_de_peticion_NO_alcanza_y_por_eso_existe_este_fix():
-    """Ancla del bug: con el plazo de petición la init del catálogo vivo es imposible. Si algún
-    día esto deja de ser cierto (lotes más grandes, menos delay), el warmer ya no haría falta."""
-    lotes = -(-CATALOGO_VIVO // sc.EMBED_INIT_BATCH_SIZE)
-    assert lotes * sc.EMBED_INIT_BATCH_DELAY_S > sc.EMBED_INIT_DEADLINE_S
+    """Ancla del bug: con el plazo de petición y la configuración VIVA (la del template
+    versionado, espejo del `.env` de producción) la init del catálogo es imposible. Si algún día
+    esto deja de ser cierto (lotes más grandes, menos delay), el warmer ya no haría falta."""
+    lotes = -(-CATALOGO_VIVO // int(_knob_del_template("MEALFIT_EMBED_INIT_BATCH_SIZE")))
+    assert lotes * _knob_del_template("MEALFIT_EMBED_INIT_BATCH_DELAY_S") > sc.EMBED_INIT_DEADLINE_S
 
 
 def test_el_plazo_de_peticion_sigue_siendo_corto():

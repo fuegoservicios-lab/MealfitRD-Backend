@@ -150,7 +150,9 @@ def test_dreaming_knobs_present_in_source():
         "MEALFIT_DREAMING_INJECT_PLAN_ENABLED", "MEALFIT_DREAMING_MODEL",
         "MEALFIT_DREAMING_CONSOLIDATION_INTERVAL_HOURS", "MEALFIT_DREAMING_MAX_USERS_PER_NIGHT",
         "MEALFIT_DREAMING_MAX_COST_USD_PER_NIGHT", "MEALFIT_DREAMING_SALIENCE_DECAY_RATE",
-        "MEALFIT_DREAMING_MAX_FACTS_PER_CALL", "MEALFIT_DREAMING_BATCH",
+        "MEALFIT_DREAMING_MAX_FACTS_PER_CALL",
+        # [P2-DEAD-CODE · 2026-09-04] MEALFIT_DREAMING_BATCH salió: su lector `_dreaming_batch()`
+        # no tenía ningún consumidor (un knob documentado que nadie leía engaña al operador).
     ):
         assert knob in src, f"Knob {knob} ausente en dreaming.py"
     # El knob del cache del user_model vive en el lado de lectura (memory_manager).

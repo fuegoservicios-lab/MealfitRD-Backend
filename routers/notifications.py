@@ -2,10 +2,9 @@ from fastapi import APIRouter, HTTPException, Depends, Request
 from error_utils import safe_error_detail
 import asyncio
 import logging
-from pydantic import BaseModel, Field
-from typing import Dict, Any, Optional
+from pydantic import BaseModel
+from typing import Dict, Optional
 
-from auth import get_verified_user_id
 from db_core import connection_pool
 from rate_limiter import RateLimiter
 
@@ -60,8 +59,6 @@ def subscribe_push(sub: PushSubscriptionItem, user_id: str = Depends(_PUSH_SUBSC
         raise HTTPException(status_code=500, detail="Database connection pool unavailable")
     
     try:
-        import psycopg
-        import json
         
         sub_json = sub.model_dump_json()
         
@@ -194,7 +191,7 @@ async def test_push_route(user_id: str, request: Request):
         push_payload = json.dumps({
             "title": "Aviso de tu Nutricionista IA \U0001f9d1\u200d\u2615",
             "body": "¡Esta es una notificación de prueba manual forzada!",
-            "url": f"/dashboard/agent"
+            "url": "/dashboard/agent"
         })
         
         success_count = 0

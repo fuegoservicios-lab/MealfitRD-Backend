@@ -49,3 +49,24 @@ from prompts.meal_operations import (
     build_swap_meal_prompt_template,
     build_modify_meal_prompt_template,
 )
+
+# [P2-RUFF-CLEAN · 2026-09-04] Contrato público explícito: sin `__all__`, cada re-export es un
+# «import sin uso» para cualquier linter y la fachada parece código muerto.
+__all__ = [
+    "GENERATOR_SYSTEM_PROMPT",
+    "build_planner_system_prompt",
+    "REVIEWER_SYSTEM_PROMPT",
+    "CHAT_SYSTEM_PROMPT_BASE",
+    "CHAT_STREAM_SYSTEM_PROMPT_BASE",
+    "RAG_ROUTER_PROMPT",
+    "TITLE_GENERATION_PROMPT",
+    "PREFERENCES_AGENT_PROMPT",
+    "DETERMINISTIC_VARIETY_PROMPT",
+    "build_deterministic_variety_prompt",
+    "option_letter",
+    "SWAP_MEAL_PROMPT_TEMPLATE",
+    "MODIFY_MEAL_PROMPT_TEMPLATE",
+    "RECIPE_EXPANSION_PROMPT",
+    "build_swap_meal_prompt_template",
+    "build_modify_meal_prompt_template",
+]

@@ -35,7 +35,6 @@ devuelve None y el disparador cae al camino legacy.
 """
 from __future__ import annotations
 
-import hashlib
 import json
 import logging
 import os

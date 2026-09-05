@@ -20,7 +20,7 @@ Estado del enforcement por condición (honesto):
 """
 from __future__ import annotations
 
-from dataclasses import dataclass, field
+from dataclasses import dataclass
 
 from constants import (
     RENAL_CONDITION_TERMS, DIABETES_CONDITION_TERMS, HTA_CONDITION_TERMS,
@@ -719,10 +719,6 @@ def collect_substitutions(form_data, diet_type=None) -> list:
     return out
 
 
-def active_condition_labels(form_data) -> list:
-    return [r.label for r in detect_active_rules(form_data)]
-
-
 def contraindicated_supplements(form_data) -> dict:
     """[P1-SUPPLEMENT-CLINICAL-GATE · 2026-08-12] `{supp_key: razón}` de los
     suplementos vetados para ESTE perfil. Determinista y registry-driven: las
@@ -972,17 +968,6 @@ def collect_allergen_substitutions(form_data, diet_type=None) -> list:
             out.append({"tokens": tokens, "replacement": repl, "label": label,
                         "negatives": negs, "condition": f"allergen:{cat}",
                         "preserve_qty": preserve_qty})
-    return out
-
-
-def active_allergen_labels(form_data) -> list:
-    """Etiquetas es-DO de las categorías de alérgeno con swap determinista activo para el perfil."""
-    seen, out = set(), []
-    for s in collect_allergen_substitutions(form_data):
-        cat = s["condition"]
-        if cat not in seen:
-            seen.add(cat)
-            out.append(s["label"])
     return out
 
 
