@@ -443,7 +443,7 @@ def canonical_slot_es(slot: Any) -> str:
 
 def template_candidates(country: Optional[str], slot: str, family: Optional[str] = None, *, k: int = 6,
                         exclude_allergens: Iterable[str] = (), need_days: Optional[int] = None,
-                        allow_frozen: bool = False) -> list[dict]:
+                        allow_frozen: bool = False, prefer_batch: bool = False) -> list[dict]:
     """Candidatos del registry para el allocator: `status='ok'`, franja compatible, familia de proteína
     compatible (vía `horizon.family_matches`), sin las clases de alérgeno excluidas. Orden estable."""
     snap = load_registry(country)
@@ -473,8 +473,13 @@ def template_candidates(country: Optional[str], slot: str, family: Optional[str]
         out.append({"template_id": t["template_id"], "name": t["name"], "protein": t.get("protein"),
                     "technique": t.get("technique"), "transform": t.get("transform"),
                     "logistics": t.get("logistics") or {}, "pantry_only": bool((t.get("logistics") or {}).get("pantry_only"))})
-        if len(out) >= max(1, int(k)):
+        if not prefer_batch and len(out) >= max(1, int(k)):
             break
+    if prefer_batch:
+        # [P1-STEP14-SHOPPING-COOKING] «Cocino por tandas»: primero las plantillas que rinden para varios días
+        # (`logistics.batch_friendly`), orden estable dentro de cada grupo; el corte a `k` va DESPUÉS.
+        out.sort(key=lambda c: 0 if (c.get("logistics") or {}).get("batch_friendly") else 1)
+        out = out[:max(1, int(k))]
     return out
 
 

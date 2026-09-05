@@ -1173,7 +1173,7 @@ def build_slot_targets_block(daily_targets: dict, meal_types: list) -> str:
 def build_day_assignment_context(skeleton_day: dict, day_num: int, day_name: str = None,
                                  daily_targets: dict = None, user_staples: list = None,
                                  small_universe: bool = False, diet_type=None, country=None,
-                                 culture_weights=None) -> str:
+                                 culture_weights=None, goal=None) -> str:
     """Genera el bloque de contexto con la asignación del planificador para un día.
 
     [P1-STAPLE-FOODS · 2026-08-02] `user_staples` (lista de nombres del catálogo, máx 8 — ver
@@ -1339,6 +1339,19 @@ def build_day_assignment_context(skeleton_day: dict, day_num: int, day_name: str
             "el desayuno, pero la cena necesita su propio plato fuerte. Varía la preparación de la cena "
             "respecto a las técnicas de los OTROS días indicadas arriba (no repitas la misma forma 3 noches)."
         )
+        # [P1-GAINMUSCLE-DINNER-PROTEIN · 2026-09-05] Plan vivo b4316db6 (gain_muscle): dos cenas «batata rellena
+        # de queso» con 23-28 g de proteína, con pollo y pescado en el pool del día. En superávit muscular la cena
+        # es la 2ª comida fuerte: proteína ANIMAL MAGRA como plato; el queso solo como extensor. Solo gain_muscle
+        # (prompt-cache-safe: string estático, condicionado por objetivo). tooltip-anchor: P1-GAINMUSCLE-DINNER-PROTEIN
+        _goal_low = str(goal or "").strip().lower()
+        if any(t in _goal_low for t in ("gain_muscle", "ganar_musculo", "ganancia", "bulk")):
+            dinner_identity_block += (
+                "\n• 💪 CENA EN GANANCIA MUSCULAR: la Cena lleva una proteína ANIMAL MAGRA del pool como PLATO "
+                "(pollo, pavo, pescado, res magra, atún, camarones) con porción de comida fuerte, no de merienda. "
+                "El queso (fresco, mozzarella, cottage, ricotta) va SOLO como extensor o topping — NUNCA como la "
+                "proteína principal de la cena ni como relleno único de una batata/papa/yuca. No repitas el mismo "
+                "concepto de cena (p.ej. «tubérculo relleno de queso») en dos días."
+            )
 
     # [P1-DAYGEN-PROTEIN-DIVERSITY · 2026-07-09] Nudge additive + knob-gated para NO sobrecargar el día de
     # queso como proteína principal. Forense plan 55b659c5 (gain_muscle, renovación en vivo): 8/12 comidas
@@ -1373,6 +1386,13 @@ def build_day_assignment_context(skeleton_day: dict, day_num: int, day_name: str
             f"en las dos comidas fuertes del día es un fallo: produce jornadas con papa en almuerzo Y "
             f"cena. Si el desayuno o la merienda ya llevan una de las dos, tanto mejor variar."
         )
+    # [P2-LIGHT-BASE-NO-REPEAT · 2026-09-05] La regla de arriba solo mira almuerzo↔cena: el plan vivo 82d6f2a5 llevaba
+    # 80 g de avena en el desayuno Y 65 g en la merienda del mismo día (dos comidas ligeras con la MISMA base).
+    carb_no_repeat_block += (
+        "\n• ⛔ TAMPOCO REPITAS LA BASE ENTRE DESAYUNO Y MERIENDA: si el desayuno es de avena, la merienda NO lleva "
+        "avena (usa fruta con lácteo, pan integral, casabe, tostada de maíz, frutos secos o yogur); la misma base de "
+        "cereal dos veces en el día se lee como el mismo plato repetido."
+    )
 
     # [P1-DIET-BLIND-DIRECTIVES · 2026-08-08] La versión balanced de este bloque ordenaba
     # "prioriza proteína animal magra (pollo, pescado, res...)" también a dietas veg* — una de las
@@ -1385,6 +1405,23 @@ def build_day_assignment_context(skeleton_day: dict, day_num: int, day_name: str
         _diet_canon_ctx = _cdt(diet_type) if diet_type else None
     except Exception:
         _diet_canon_ctx = None
+    # [P1-DAYGEN-VEG-HARD-LINE · 2026-09-05] La dieta viajaba en el pool y en un bloque de DIVERSIDAD, no como
+    # PROHIBICIÓN: en 4 planes vegetarianos seguidos (606e9017, 82d6f2a5, b40a3c48…) el generador metió «pechuga de
+    # pollo» y el guard duro cazó la violación DESPUÉS de generar el día ⇒ un reintento completo quemado cada vez.
+    # Línea dura, arriba del todo de la asignación, con el vocabulario del propio rechazo.
+    diet_hard_line = ""
+    if _diet_canon_ctx == "vegan":
+        diet_hard_line = ("\n🚫 DIETA VEGANA — PROHIBICIÓN ABSOLUTA: CERO carne, pollo, pavo, cerdo, res, pescado, mariscos, "
+                          "huevo, lácteos, miel y caldos de origen animal, en NINGUNA comida ni como guarnición o topping. "
+                          "Un solo gramo invalida el día entero y obliga a regenerarlo.")
+    elif _diet_canon_ctx == "vegetarian":
+        diet_hard_line = ("\n🚫 DIETA VEGETARIANA — PROHIBICIÓN ABSOLUTA: CERO carne, pollo, pavo, cerdo, res, pescado, atún, "
+                          "sardinas y mariscos, en NINGUNA comida ni como guarnición o topping. Huevo, lácteos y legumbres SÍ. "
+                          "Un solo gramo de carne o pescado invalida el día entero y obliga a regenerarlo.")
+    elif _diet_canon_ctx == "pescatarian":
+        diet_hard_line = ("\n🚫 DIETA PESCETARIANA — PROHIBICIÓN ABSOLUTA: CERO carne, pollo, pavo, cerdo y res en NINGUNA "
+                          "comida. Pescado, mariscos, huevo, lácteos y legumbres SÍ.")
+
     protein_diversity_block = ""
     if _protein_diversity_on and _diet_canon_ctx == "vegan":
         protein_diversity_block = (
@@ -1479,7 +1516,7 @@ def build_day_assignment_context(skeleton_day: dict, day_num: int, day_name: str
         )
 
     return f"""
---- 📋 ASIGNACIÓN DEL PLANIFICADOR PARA OPCIÓN {day_num} ---
+--- 📋 ASIGNACIÓN DEL PLANIFICADOR PARA OPCIÓN {day_num} ---{diet_hard_line}
 • Concepto Temático: {skeleton_day.get('brief_concept', 'Día variado')}{day_name_block}{breakfast_block}{cross_day_block}
 • Técnica de Cocción Principal: {skeleton_day.get('assigned_technique', 'Libre')}
 • Proteínas Asignadas: {pool_str}

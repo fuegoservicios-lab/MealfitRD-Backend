@@ -984,3 +984,59 @@ def active_allergen_labels(form_data) -> list:
             seen.add(cat)
             out.append(s["label"])
     return out
+
+
+# [P1-WIZARD-CONSUMERS-AUDIT · 2026-09-05] Auditoría de consumidores del asistente (26 pasos): `habitWater`,
+# `habitCaffeine`, `habitSmoking` y `waistCm` no los leía NADIE en el backend, y `habitAlcohol` solo con una condición
+# sensible. Texto canned (no re-emite input crudo). Puro; fail-open.
+HABITS_RULES_ENABLED = True
+
+
+def _waist_to_height_ratio(form_data) -> float | None:
+    try:
+        w = float(str((form_data or {}).get("waistCm") or "").replace(",", "."))
+        h = float(str((form_data or {}).get("height") or "").replace(",", "."))
+        if h > 100:      # cm (el asistente guarda altura en cm; en pulgadas nunca pasa de 100)
+            return w / h if w > 0 else None
+        return None
+    except (TypeError, ValueError):
+        return None
+
+
+def build_habits_prompt(form_data) -> str:
+    """Directivas por hábitos declarados en el paso «Tus hábitos de consumo» y por cintura (razón cintura/altura ≥ 0,5).
+    tooltip-anchor: P1-WIZARD-CONSUMERS-AUDIT"""
+    if not HABITS_RULES_ENABLED:
+        return ""
+    try:
+        fd = form_data if isinstance(form_data, dict) else {}
+        lines = []
+        water = str(fd.get("habitWater") or "").strip().lower()
+        if water.startswith("menos de 1"):
+            lines.append("💧 HIDRATACIÓN BAJA DECLARADA (menos de 1 L al día): incluye una nota de hidratación en cada comida "
+                         "principal (agua o infusión sin azúcar), sopas y caldos ligeros en almuerzo o cena varias veces por "
+                         "semana y frutas y vegetales ricos en agua (sandía, melón, pepino, lechuga, naranja); meta orientativa 2 L/día.")
+        elif water.startswith("1-2"):
+            lines.append("💧 HIDRATACIÓN JUSTA (1–2 L al día): recuerda el agua en las notas de almuerzo y cena y prefiere frutas ricas en agua.")
+        caf = str(fd.get("habitCaffeine") or "").strip().lower()
+        if caf == "diario":
+            lines.append("☕ CAFEÍNA DIARIA DECLARADA: café o té SIN azúcar solo en desayuno y merienda de la mañana; ninguna bebida "
+                         "con cafeína en la cena ni en la merienda de la tarde; nada de bebidas energizantes.")
+        smoke = str(fd.get("habitSmoking") or "").strip().lower()
+        if smoke in ("semanal", "diario"):
+            lines.append("🚭 TABACO DECLARADO: prioriza vitamina C y antioxidantes (guayaba, naranja, limón, ají morrón, brócoli, "
+                         "repollo, tomate) y magnesio (habichuelas, nueces, semillas) a lo largo del día; sin tono moral en las notas.")
+        alc = str(fd.get("habitAlcohol") or "").strip().lower()
+        if alc in ("semanal", "diario"):
+            lines.append("🍺 ALCOHOL RECURRENTE DECLARADO: el plan NO incluye alcohol; en las notas recuerda que si bebe sea con "
+                         "comida, sin sustituir una comida y con agua; no compenses saltando comidas.")
+        ratio = _waist_to_height_ratio(fd)
+        if ratio is not None and ratio >= 0.5:
+            lines.append("📏 CINTURA/ALTURA ≥ 0,5 (riesgo cardiometabólico): fibra soluble en cada comida principal (avena, "
+                         "habichuelas, lentejas, vegetales), grasas insaturadas (aguacate, aceite de oliva, nueces) en vez de "
+                         "saturadas, azúcar libre al mínimo y sodio moderado.")
+        if not lines:
+            return ""
+        return "\n\n🧭 HÁBITOS DECLARADOS EN EL ASISTENTE (aplican al plan):\n" + "\n".join(f"   • {l}" for l in lines) + "\n"
+    except Exception:
+        return ""

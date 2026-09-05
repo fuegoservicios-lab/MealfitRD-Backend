@@ -88,6 +88,24 @@ _INGREDIENT_DAYS_EXEMPT = frozenset({
     "oregano", "orégano", "vinagre", "cilantro", "perejil", "laurel", "comino", "sazon", "sazón",
     "mantequilla", "aji", "ají", "pimiento", "tomate", "azucar", "azúcar", "miel", "canela",
 })
+# [P1-EGG-DAY-CAP · 2026-09-05] La exención era por IGUALDAD exacta: «Sal al gusto» y «Pimienta negra al gusto» contaban
+# como ingrediente en 3 de 3 días y bajaban la fidelidad a 0,67 en modo explorar (plan vivo c350dec0). Un condimento se
+# reconoce por su PRIMERA palabra o por «al gusto». «mantequilla» sigue siendo exacta: «mantequilla de maní» es ancla.
+_INGREDIENT_DAYS_EXEMPT_LEAD = frozenset({
+    "sal", "pimienta", "aceite", "ajo", "cebolla", "limon", "limón", "oregano", "orégano", "vinagre", "cilantro", "perejil",
+    "laurel", "comino", "sazon", "sazón", "aji", "ají", "canela", "azucar", "azúcar", "miel", "agua", "tomillo", "vainilla",
+    "curcuma", "cúrcuma", "pimenton", "pimentón", "paprika", "nuez moscada", "polvo de hornear", "bicarbonato", "adobo",
+    "sofrito", "achiote", "bija", "clavo", "jengibre", "especias", "hierbas",
+})
+
+
+def _ingredient_days_is_exempt(nn: str) -> bool:
+    """Condimento/aromático: fuera del conteo de días (P1-EGG-DAY-CAP)."""
+    if nn in _INGREDIENT_DAYS_EXEMPT or "al gusto" in nn:
+        return True
+    words = nn.split()
+    return bool(words) and (words[0] in _INGREDIENT_DAYS_EXEMPT_LEAD or " ".join(words[:2]) in _INGREDIENT_DAYS_EXEMPT_LEAD
+                            or " ".join(words[:3]) in _INGREDIENT_DAYS_EXEMPT_LEAD)
 
 
 # ═══════════════════════════════════════════════════════════════════ knobs
@@ -376,9 +394,40 @@ def _dur_kwargs(effective: Optional[dict], day_index) -> dict:
     try:
         from pantry_durability import single_trip_requirements
         req = single_trip_requirements(effective, day_index)
-        return {"need_days": req["need_days"], "allow_frozen": req["allow_frozen"]} if req else {}
+        out = {"need_days": req["need_days"], "allow_frozen": req["allow_frozen"]} if req else {}
+        # [P1-STEP14-SHOPPING-COOKING] «Cocino por tandas» ⇒ candidatos batch_friendly primero
+        if batch_cooking_mode(effective) == "often":
+            out["prefer_batch"] = True
+        return out
     except Exception:
         return {}
+
+
+def batch_cooking_mode(effective: Optional[dict]) -> str:
+    """[P1-STEP14-SHOPPING-COOKING · 2026-09-05] `shopping.batch_cooking` ∈ never|sometimes|often ('' si no hay política).
+    El paso 14 del asistente lo guardaba en la política y NADIE lo leía: elegir «Cocino por tandas» no cambiaba el plan."""
+    try:
+        v = str(((effective or {}).get("shopping") or {}).get("batch_cooking") or "").strip().lower()
+        return v if v in ("never", "sometimes", "often") else ""
+    except Exception:
+        return ""
+
+
+def batch_cooking_prompt_lines(effective: Optional[dict]) -> list[str]:
+    """Líneas del bloque 📐 según cómo cocina el usuario (paso 14: «Cocino al día / a veces cocino de más / por tandas»)."""
+    mode = batch_cooking_mode(effective)
+    if mode == "often":
+        return ["- COCINA POR TANDAS: el usuario cocina varias porciones de una vez. Diseña bases que se cocinan UNA vez y "
+                "rinden 2-3 días (un guiso, una olla de habichuelas o lentejas, arroz, pollo desmenuzado, vegetales asados) "
+                "y en los días siguientes REUTILÍZALAS con otra preparación o acompañamiento; escríbelo en los pasos "
+                "(«cocina el doble y guarda la mitad para el día X»). Evita recetas de porción única que exigen cocinar desde cero cada vez."]
+    if mode == "sometimes":
+        return ["- A VECES COCINA DE MÁS: puedes proponer que una base fuerte (guiso, legumbres, arroz) se cocine doble y se "
+                "aproveche al día siguiente en otro plato; no lo exijas en cada comida."]
+    if mode == "never":
+        return ["- COCINA AL DÍA: cada comida se prepara en su momento y en porción de una vez; no dependas de sobras ni de "
+                "bases cocinadas otro día, y prefiere preparaciones de una sola olla o sartén."]
+    return []
 
 
 def _culture_country(profile_id: Optional[str]) -> str:
@@ -948,6 +997,7 @@ def policy_prompt_block(effective: Optional[dict], sl: Optional[dict] = None, *,
                 lines.append(f"- Esta comida es {_SLOT_ES.get(s, s)}: ancla de la franja → " + ", ".join(
                     str(a.get("name")) for a in slot_anchors) + ".")
         lines.extend(single_trip_prompt_lines(effective, sl))  # [P1-SINGLE-TRIP-POLICY]
+        lines.extend(batch_cooking_prompt_lines(effective))  # [P1-STEP14-SHOPPING-COOKING]
         lines.extend(registry_prompt_lines(effective, sl, day_index=day_index, slot=slot))  # [P1-ARQ25-F6-REGISTRY-PROMPT]
         lines.append("- No «diversifiques» un ancla ni cambies la base de un plato por variedad: la política manda sobre la variedad.")
         return "\n".join(lines) + "\n"
@@ -1182,7 +1232,7 @@ def fidelity_issues(days: list, sl: Optional[dict], effective: Optional[dict], *
                         if not nm:
                             continue
                         nn = _norm(nm)
-                        if len(nn) < 4 or nn in _INGREDIENT_DAYS_EXEMPT:
+                        if len(nn) < 4 or _ingredient_days_is_exempt(nn):
                             continue
                         iid = _ingredient_id(nm)
                         if iid in anchor_ids:
@@ -1268,6 +1318,28 @@ def _anchor_tokens_for_policy(effective: Optional[dict]) -> set:
     return tokens
 
 
+# [P1-ROUTINE-MONOTONY-CEILING · 2026-09-05] Techo por encima del cual ni «rutina» tolera la repetición.
+# Los contadores llegan en dos escalas: FRACCIÓN de comidas (ingrediente concentrado, 0..1) o NÚMERO de días
+# (staples, plato-base, proteína pesada). Un solo umbral por escala; sin política de rutina no se usa.
+try:
+    from knobs import _env_float as _env_float_rmc, _env_int as _env_int_rmc
+    ROUTINE_MONOTONY_MAX_MEAL_FRACTION = max(0.4, min(1.0, _env_float_rmc("MEALFIT_ROUTINE_MONOTONY_MAX_MEAL_FRACTION", 0.6)))
+    ROUTINE_MONOTONY_MAX_DAYS = max(2, min(30, _env_int_rmc("MEALFIT_ROUTINE_MONOTONY_MAX_DAYS", 4)))
+except Exception:  # pragma: no cover
+    ROUTINE_MONOTONY_MAX_MEAL_FRACTION, ROUTINE_MONOTONY_MAX_DAYS = 0.6, 4
+
+
+def _above_monotony_ceiling(value) -> bool:
+    """True si el contador supera el techo que ni la rutina tolera (fracción de comidas o nº de días)."""
+    try:
+        v = float(value)
+    except (TypeError, ValueError):
+        return False
+    if 0.0 < v <= 1.0:
+        return v > float(ROUTINE_MONOTONY_MAX_MEAL_FRACTION)
+    return v > float(ROUTINE_MONOTONY_MAX_DAYS)
+
+
 def filter_repetition_counts_for_policy(counts: Optional[dict], effective: Optional[dict], *, enforced: bool) -> dict:
     """[P2-CRITIQUE-RESPECTS-ROUTINE · 2026-09-04] Contadores determinísticos de REPETICIÓN que la
     autocrítica inyecta al evaluador como «no opinable» (staples cross-día, ingrediente concentrado,
@@ -1284,7 +1356,11 @@ def filter_repetition_counts_for_policy(counts: Optional[dict], effective: Optio
     if mode == "explore":
         return counts
     if mode == "routine":
-        return {}
+        # [P1-ROUTINE-MONOTONY-CEILING · 2026-09-05] Rutina significa REPETIR, no comer una sola cosa: el plan vivo
+        # a2b40e4e (rutina) llevaba avena en 8 de 12 comidas, incluidas dos cenas. Rutina silencia la señal salvo que
+        # supere el TECHO DE MONOTONÍA (fracción de comidas, o días para los contadores por día): por encima de ahí ya
+        # no es la rutina que el usuario pidió, es un plan de un solo alimento.
+        return {k: v for k, v in counts.items() if _above_monotony_ceiling(v)}
     anchor_tokens = _anchor_tokens_for_policy(effective)
     return {k: v for k, v in counts.items() if not any(tok in _norm(str(k)) for tok in anchor_tokens)}
 
@@ -1481,5 +1557,6 @@ __all__ = [
     "rank_days_by_policy", "emit_fidelity_metric", "review_fidelity_gate",
     "shopping_projection_windows", "stamp_demand_windows", "enqueue_shopping_projection_job",
     "FRESH_HORIZON_DAYS", "single_trip_policy", "fresh_beyond_horizon_issues", "single_trip_prompt_lines",
+    "batch_cooking_mode", "batch_cooking_prompt_lines", "_above_monotony_ceiling",
     "registry_prompt_enabled", "registry_prompt_lines",
 ]

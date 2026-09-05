@@ -4822,6 +4822,13 @@ def _build_shared_context(state: PlanState, force_rebuild: bool = False) -> dict
             clinical_directives += build_medical_condition_context(form_data)
         except Exception:
             pass
+    # [P1-WIZARD-CONSUMERS-AUDIT · 2026-09-05] hábitos (agua/cafeína/tabaco/alcohol) y cintura del asistente
+    if HABITS_RULES_ENABLED:
+        try:
+            from prompts.plan_generator import build_habits_context as _bhc
+            clinical_directives += _bhc(form_data)
+        except Exception:
+            pass
     # [P1-MEDICATION-RULES · 2026-06-18] (audit fresco P1-A) Interacciones fármaco-alimento
     # (warfarina↔vit K, metformina↔B12, IECA/ARA-II↔potasio, levotiroxina↔Ca/Fe). No-op para perfiles
     # sin medicamento cubierto. Lever de prompt; el gate FS9 + el monitor de vit K (anticoagulante)
@@ -7786,7 +7793,16 @@ async def plan_skeleton_node(state: PlanState) -> dict:
         # [P2-ORCH-4 · 2026-05-28] El 429 spending-cap es persistente: reintentar es desperdicio puro.
         retry=retry_if_exception(lambda e: not _is_plan_spend_cap_error(e)),
         reraise=True,
-        before_sleep=lambda retry_state: logger.warning(f"⚠️  [PLANIFICADOR] Reintento #{retry_state.attempt_number}...")
+        # [P1-PLANNER-RETRY-REASON · 2026-09-05] …y CON el motivo. El aviso decía solo «Reintento #N...», así que
+        # las 32 aperturas del disyuntor de 'glm-5.3-flash' del 2026-09-05 no dejaron ni una línea del error que
+        # las causó: tres fallos seguidos abren el breaker y el planificador cae al modelo de respaldo (37 s en
+        # vez de 12), pero el journal no distingue un timeout de un JSON roto o de un 400 del proveedor.
+        before_sleep=lambda retry_state: logger.warning(
+            f"⚠️  [PLANIFICADOR] Reintento #{retry_state.attempt_number} — "
+            f"{type(retry_state.outcome.exception()).__name__}: "
+            f"{str(retry_state.outcome.exception())[:220]}"
+            if (retry_state.outcome is not None and retry_state.outcome.failed)
+            else f"⚠️  [PLANIFICADOR] Reintento #{retry_state.attempt_number}...")
     )
     async def invoke_planner():
         return await _do_planner_invoke(planner_llm, _planner_cb, planner_model)
@@ -8345,6 +8361,11 @@ def harden_day_pools(skeleton: dict, form_data: dict, conditions=None, *, cohort
                     for _lbl in _candidates[:_missing]:
                         _pool.append(_universe[_lbl])
                         _added += 1
+                        # [P1-CLOSER-LIGHT-SLOT-NO-MEAT · 2026-09-05 · clase 6 round-robin] el contador
+                        # se actualiza al PRESTAR: antes `_freq` se calculaba una vez y «la menos usada»
+                        # era la MISMA para todos los días (plan vivo 2a2e2516: pescado prestado a los
+                        # días 2 y 3 ⇒ pescado en las tres cenas, Diversidad 4/10).
+                        _freq[_lbl] = _freq.get(_lbl, 0) + 1
                     if _added:
                         counts["main_arity_added"] += _added
                         _d["protein_pool"] = _pool
@@ -8724,6 +8745,8 @@ async def generate_days_parallel_node(state: PlanState) -> dict:
             # pesos para el encabezado de inspiración; el mercado (precios/catálogo) NO pasa por aquí.
             country=cultural_country_for_form_data(form_data, day_index=max(0, int(global_day) - 1)),
             culture_weights=_culture_weights_for_form_data(form_data),
+            # [P1-GAINMUSCLE-DINNER-PROTEIN] la cena de ganancia muscular pide proteína animal magra como plato
+            goal=(form_data or {}).get("mainGoal") or (form_data or {}).get("goal"),
         )
 
         random_seed = random.randint(10000, 99999)
@@ -10655,6 +10678,94 @@ _HEAVY_PROTEIN_LABELS = {"pollo", "pavo", "cerdo", "res", "pescado", "atun",
 _SAME_DAY_PROTEIN_GATE_LABELS = _HEAVY_PROTEIN_LABELS | {"huevo"}
 
 
+GAINMUSCLE_DINNER_PROTEIN_ENABLED = _env_bool("MEALFIT_GAINMUSCLE_DINNER_PROTEIN", True)
+
+
+LIGHT_BASE_REPEAT_ENABLED = _env_bool("MEALFIT_LIGHT_BASE_NO_REPEAT", True)
+_LIGHT_BASE_TOKENS = ("avena", "granola", "cereal", "hojuelas", "muesli", "pan integral", "casabe", "tostada", "arepa", "tortilla")
+
+
+def _detect_light_base_repeats(days: list) -> list:
+    """[P2-LIGHT-BASE-NO-REPEAT · 2026-09-05] Misma BASE de cereal/pan en desayuno Y merienda del mismo día (plan vivo
+    82d6f2a5: 80 g de avena en el desayuno y 65 g en la merienda). El gate de bases solo vigilaba almuerzo↔cena.
+    Devuelve textos «Día N: …» para la autocrítica. Puro; fail-safe ⇒ []. tooltip-anchor: P2-LIGHT-BASE-NO-REPEAT"""
+    try:
+        if not LIGHT_BASE_REPEAT_ENABLED:
+            return []
+        from constants import strip_accents as _sa_lb
+        out = []
+        for i, d in enumerate(days or []):
+            if not isinstance(d, dict):
+                continue
+            by_tok = {}
+            for m in (d.get("meals") or []):
+                if not isinstance(m, dict):
+                    continue
+                slot = _sa_lb(str(m.get("meal") or m.get("slot") or "").lower())
+                if not ("desayuno" in slot or "merienda" in slot or "snack" in slot):
+                    continue
+                blob = _sa_lb((str(m.get("name") or "") + " " + " ".join(str(x) for x in (m.get("ingredients") or []))).lower())
+                for tok in _LIGHT_BASE_TOKENS:
+                    if _re.search(r"\b" + _re.escape(tok), blob):
+                        by_tok.setdefault(tok, []).append(str(m.get("name") or "")[:40])
+            for tok, names in by_tok.items():
+                if len(names) >= 2:
+                    out.append(f"Día {i + 1}: «{tok}» es la base del desayuno Y de la merienda ({' / '.join(names)}); "
+                               f"cambia la base de una de las dos (fruta con lácteo, casabe, frutos secos, yogur)")
+        return out
+    except Exception:
+        return []
+
+
+def _detect_gainmuscle_dinner_issues(days: list, form_data: dict) -> list:
+    """[P1-GAINMUSCLE-DINNER-PROTEIN · 2026-09-05] Señal DETERMINISTA para la autocrítica (no opinable), solo
+    con objetivo de ganancia muscular: (1) una CENA sin ninguna proteína animal magra (labels pesados del gate:
+    pollo/pavo/pescado/res/atún/mariscos…) cuando el queso es el plato — plan vivo b4316db6: «Batata rellena de
+    queso fresco» (23 g) y «Batata horneada rellena de mozzarella» (28 g) con pollo y pescado en el pool;
+    (2) el mismo concepto «queso como plato» en 2+ cenas del chunk. Devuelve textos «Día N, cena: …» que la
+    autocrítica convierte en needs_correction del día. Puro; fail-safe ⇒ []. Knob MEALFIT_GAINMUSCLE_DINNER_PROTEIN.
+    tooltip-anchor: P1-GAINMUSCLE-DINNER-PROTEIN"""
+    try:
+        if not GAINMUSCLE_DINNER_PROTEIN_ENABLED:
+            return []
+        from constants import strip_accents as _sa_gd
+        _goal = _sa_gd(str((form_data or {}).get("mainGoal") or (form_data or {}).get("goal") or "").lower())
+        if not any(t in _goal for t in ("gain_muscle", "ganar_musculo", "ganancia", "bulk")):
+            return []
+        # [P1-VEG-OMNIVORE-RULES · 2026-09-05] En vegetariano/vegano esta señal es INSATISFACIBLE: pide
+        # «pollo/pavo/pescado/res/atún como plato» y en esas dietas no existe ninguno. Medido en el plan vivo
+        # 18326457 (vegetariano, ganancia muscular): 3 avisos, corrección de los 3 días del bloque, y la cena
+        # del día 3 BAJÓ de 54 g a 34 g de proteína persiguiendo una regla que no podía cumplir. El
+        # pescetariano NO se exime: el pescado sí está en `_HEAVY_PROTEIN_LABELS`.
+        if _canonicalize_diet_type((form_data or {}).get("dietType")) in ("vegetarian", "vegan"):
+            return []
+        issues, cheese_dinner_days = [], []
+        for _i, _d in enumerate(days or []):
+            if not isinstance(_d, dict):
+                continue
+            for _m in (_d.get("meals") or []):
+                if not isinstance(_m, dict) or "cena" not in _sa_gd(str(_m.get("meal") or "").lower()):
+                    continue
+                _nm = str(_m.get("name") or "")
+                _lean = _protein_gate_labels_in_meal(_m) & _HEAVY_PROTEIN_LABELS
+                _cheese_dish = any(h in _sa_gd(_nm.lower()) for h in _CLOSER_CHEESE_HINT)
+                if _lean:
+                    continue
+                if _cheese_dish:
+                    cheese_dinner_days.append(_i + 1)
+                    issues.append(
+                        f"Día {_i + 1}, cena: «{_nm[:60]}» tiene el QUESO como plato y ninguna proteína animal magra "
+                        f"({_meal_macro_num(_m.get('protein')):.0f} g de proteína) — en ganancia muscular la cena es "
+                        f"comida fuerte: pollo/pavo/pescado/res/atún del pool como plato, el queso solo de extensor")
+        if len(cheese_dinner_days) >= 2:
+            issues.append(
+                f"Días {', '.join(str(x) for x in cheese_dinner_days)}: el MISMO concepto de cena (queso como plato) "
+                f"se repite; varía la proteína y la preparación entre noches")
+        return issues
+    except Exception:
+        return []
+
+
 def _count_cross_day_heavy_protein_repetition(days: list, min_days: int = 3) -> dict:
     """[P2-ORCH-6 · 2026-05-28] Cuenta en cuántos días DISTINTOS aparece cada
     proteína PESADA (pollo/pavo/cerdo/res/pescado/atún). Devuelve las que
@@ -11213,6 +11324,37 @@ async def self_critique_node(state: PlanState) -> dict:
     else:
         crossday_block = ""
 
+    # [P2-LIGHT-BASE-NO-REPEAT · 2026-09-05] misma base de cereal/pan en desayuno Y merienda
+    _light_base_issues = _detect_light_base_repeats(days)
+    light_base_block = ""
+    if _light_base_issues:
+        _lb_joined = "\n   - " + "\n   - ".join(_light_base_issues)
+        logger.info(f"🥣 [P2-LIGHT-BASE-NO-REPEAT] base repetida entre desayuno y merienda:{_lb_joined}")
+        light_base_block = (
+            f"\n⚠️ MISMA BASE EN DESAYUNO Y MERIENDA (conteo determinístico, no opinable):{_lb_joined}\n"
+            f"   BAJA diversity_score a 4 o menos, marca needs_correction=True y en suggestions di qué comida cambiar.\n"
+        )
+        if not suggested_day_hint:
+            _mlb = _re.search(r'[Dd]ía\s*(\d+)', _light_base_issues[0])
+            suggested_day_hint = f"Día {_mlb.group(1)}" if _mlb else "Día 1"
+
+    # [P1-GAINMUSCLE-DINNER-PROTEIN · 2026-09-05] cena débil en ganancia muscular (determinista, no opinable)
+    gm_dinner_block = ""
+    _gm_dinner_issues = _detect_gainmuscle_dinner_issues(days, form_data)
+    if _gm_dinner_issues:
+        _gm_joined = "\n   - " + "\n   - ".join(_gm_dinner_issues)
+        logger.info(f"💪 [P1-GAINMUSCLE-DINNER-PROTEIN] cenas débiles detectadas:{_gm_joined}")
+        gm_dinner_block = (
+            f"\n⚠️ CENAS DÉBILES PARA GANANCIA MUSCULAR (conteo determinístico, no opinable):{_gm_joined}\n"
+            f"   Por CADA cena listada, BAJA diversity_score a 4 o menos, marca needs_correction=True y en "
+            f"suggestions especifica el día: la cena debe llevar una proteína ANIMAL MAGRA del pool del día "
+            f"(pollo, pavo, pescado, res magra, atún, camarones) como plato principal con porción de comida "
+            f"fuerte; el queso solo como extensor o topping.\n"
+        )
+        if not suggested_day_hint:
+            _mgd = _re.search(r'[Dd]ía\s*(\d+)', _gm_dinner_issues[0])
+            suggested_day_hint = f"Día {_mgd.group(1)}" if _mgd else "Día 1"
+
     # [P1-SELF-CRITIQUE-SKIP-CLEAN · 2026-05-28] Early-exit: si los detectores
     # determinísticos vinieron limpios (cero staples repetidos, cero incoherencias
     # de slot, cero monotonía cross-day de proteína pesada), saltamos el evaluador
@@ -11233,7 +11375,9 @@ async def self_critique_node(state: PlanState) -> dict:
     if (SELF_CRITIQUE_SKIP_WHEN_CLEAN and not staple_repetitions
             and not slot_issues and not heavy_protein_monotony
             and not cross_day_dish_repeats  # [P1-CRITIQUE-CROSSDAY-DISH-PARITY]
-            and not ingredient_spread):  # [P1-INGREDIENT-SPREAD]
+            and not ingredient_spread  # [P1-INGREDIENT-SPREAD]
+            and not _gm_dinner_issues  # [P1-GAINMUSCLE-DINNER-PROTEIN]
+            and not _light_base_issues):  # [P2-LIGHT-BASE-NO-REPEAT]
         logger.info(
             "⏭️ [SELF-CRITIQUE] Detectores determinísticos limpios (0 staples "
             "repetidos, 0 incoherencias de slot, 0 monotonía de proteína pesada, "
@@ -11266,7 +11410,7 @@ async def self_critique_node(state: PlanState) -> dict:
     human_content = f"""
 PLAN A EVALUAR (días generados):
 {days_summary_json}
-{policy_block}{staples_block}{spread_block}{slot_block}{crossday_block}{user_context}
+{policy_block}{staples_block}{spread_block}{slot_block}{crossday_block}{light_base_block}{gm_dinner_block}{user_context}
 {pista_dia}
 """.strip()
 
@@ -12271,6 +12415,14 @@ MICRO_DEGRADED_STALE_CLEAR_ENABLED = _env_bool("MEALFIT_MICRO_DEGRADED_STALE_CLE
 # vive ahí, decide el gate (retry). Marca `_protein_autofix_applied="huevo->X"` → el
 # fidelity-discount lo reconoce como mutación legítima.
 EGG_CAP_AUTOFIX_ENABLED = _env_bool("MEALFIT_EGG_CAP_AUTOFIX", True)
+# [P1-WIZARD-CONSUMERS-AUDIT] hábitos del asistente → directivas del generador (rollback: =false)
+HABITS_RULES_ENABLED = _env_bool("MEALFIT_HABITS_RULES", True)
+# [P1-EGG-DAY-CAP · 2026-09-05] Tope DETERMINISTA de huevos ENTEROS por día. El prompt dice «máximo 3 enteros, en UNA
+# comida» y el revisor lo dejó pasar: plan vivo c350dec0, día 1 = 3 huevos en el desayuno + 3 en el almuerzo (6 enteros).
+# El exceso pasa a CLARAS (misma proteína, sin colesterol, lo que el propio prompt aconseja) y solo la comida con más huevo
+# conserva enteros. Corre en los caps pre-INSERT (todas las pasadas). Rollback: MEALFIT_EGG_DAY_MAX_WHOLE alto.
+EGG_DAY_MAX_WHOLE = _env_int("MEALFIT_EGG_DAY_MAX_WHOLE", 3, validator=lambda v: 1 <= v <= 12)
+_WHOLE_EGG_LINE_RE = _re.compile(r"^\s*(\d+)\s*huevos?\b(?![^,;(]*\bclaras?\b)", _re.IGNORECASE)
 # [P1-EGG-POOL-DIVERSIFIER · 2026-07-05] RAÍZ del sobreuso de huevo (corrida 1b2d7696: huevo en
 # 6/12 comidas + 'revoltillo' ×3 días + repeticiones same-day = 3 gates distintos y 2 intentos
 # quemados en UNA renovación): el PLANNER asigna 'Huevos/Claras' al pool de TODOS los días → el
@@ -12658,6 +12810,9 @@ PRO_REVIEW_FLAG_ENABLED = _env_bool("MEALFIT_PRO_REVIEW_FLAG", True)
 # el cap+threshold. El lever upstream es el prompt; esto da presión de retry. Flip a False → advisory.
 VARIETY_HARD_GATE_ENABLED = _env_bool("MEALFIT_VARIETY_HARD_GATE", True)
 VARIETY_HARD_GATE_EGG_SLACK = _env_int("MEALFIT_VARIETY_HARD_GATE_EGG_SLACK", 1)  # rechaza si egg > cap+slack
+# [P1-VEG-OMNIVORE-RULES · 2026-09-05] Fracción de comidas con huevo tolerada en dieta VEGETARIANA (0,40 ⇒ 5 de
+# 12 pasa, 6 ya no). Knob para poder apretarlo sin redespliegue si la variedad se resiente.
+VARIETY_HARD_GATE_EGG_PCT_VEG = _env_float("MEALFIT_VARIETY_EGG_PCT_VEG", 0.40)
 # [P2-VARIETY-GATE-REPEAT · 2026-06-25] Fruta dulce repetida + plato-base repetido el mismo día como
 # gate de RETRY (eran advisory en build_variety_report). El lever upstream es el prompt (regla 15f);
 # esto añade presión de retry acotada (should_retry entrega en el attempt final) cuando el LLM no
@@ -12796,6 +12951,10 @@ CLOSER_BOLT_MAX_ADD_G = _env_int("MEALFIT_CLOSER_BOLT_MAX_ADD_G", 180, validator
 # clase + truth-up; el reparador de proteína post-caps (FASE A) y el carb-floor re-cierran redistribuyendo.
 PORTION_REALISM_CAP_ENABLED = _env_bool("MEALFIT_PORTION_REALISM_CAP", True)
 PORTION_CAP_PROTEIN_G = _env_int("MEALFIT_PORTION_CAP_PROTEIN_G", 300, validator=lambda v: 150 <= v <= 600)
+# [P1-GAINMUSCLE-DINNER-CLOSER · 2026-09-05] «600 g de papa en cubos» en una cena (plan vivo 9b73656d): el band-closer
+# infló el tubérculo hasta el techo duro de línea (600 g) porque los víveres no tenían techo propio. Tope por comida.
+PORTION_CAP_TUBER_G = _env_int("MEALFIT_PORTION_CAP_TUBER_G", 350, validator=lambda v: 150 <= v <= 800)
+_REALISM_TUBER_TOKENS = ("papa", "batata", "yuca", "name", "yautia", "platano", "guineo verde", "malanga", "mapuey", "camote")
 # [P2-AUDIT-V5-BATCH · 2026-07-02] (GAP-05) Piso cocinable del lado SHRINK — espejo-floor del cap de
 # arriba: solver (min 0.3) × reconcile (0.4) × rebalance (0.3) COMPONEN factores entre pasadas y el
 # quantize gram-path preserva múltiplos de 5g → líneas macro-bearing de 5-15g no servibles llegaban
@@ -14343,7 +14502,42 @@ def _apply_renal_cap_to_nutrition(nutrition: dict, form_data: dict) -> None:
 # "0.5 taza de ") para preservarlo al sustituir → la lista de compras conserva el peso y el coherence
 # guard sigue cuadrando. Sin prefijo (condimentos "al gusto") el sustituto queda sin cantidad (OK).
 _COND_SUB_QTY_PREFIX_RE = _re.compile(
-    r"^\s*(\d[\d.,/]*\s*[a-záéíóúñ]*\.?\s*(?:de\s+)?)", _re.IGNORECASE)
+    r"^\s*(\d[\d.,/]*\s*([a-záéíóúñ]+)?\.?\s*(?:de\s+)?)", _re.IGNORECASE)
+
+# [P1-SUBS-QTY-UNIT-GUARD · 2026-09-05] La expresión de arriba acepta CUALQUIER palabra tras el número, y ahí
+# estaba el fallo: cuando el alimento se cuenta directo —«4 ciruelas», sin «de» de por medio— la palabra NO es
+# una unidad, es el alimento. Preservar ese prefijo y pegarle detrás el reemplazo producía «4 ciruelas Soya
+# texturizada» (plan vivo 18326457, merienda del día 3, sustitución de dieta del 2026-09-05).
+#
+# El prefijo solo se conserva si lo que sigue al número es una unidad DE VERDAD. Si no lo es, la cantidad
+# pertenecía al alimento viejo y no se puede heredar: se cae al reemplazo desnudo, que es exactamente lo que ya
+# hacía el condimento cuya unidad era lo contraindicado («1 cubito de pollo»).
+_SUB_QTY_UNIT_TOKENS = frozenset({
+    "g", "gr", "grs", "gramo", "gramos", "kg", "kilo", "kilos", "kilogramo", "kilogramos",
+    "mg", "ml", "cl", "l", "lt", "litro", "litros", "oz", "onza", "onzas", "lb", "lbs", "libra", "libras",
+    "taza", "tazas", "cda", "cdas", "cdta", "cdtas", "cucharada", "cucharadas", "cucharadita", "cucharaditas",
+    "cucharon", "cucharones", "unidad", "unidades", "pieza", "piezas", "porcion", "porciones",
+    "racion", "raciones", "lonja", "lonjas", "rebanada", "rebanadas", "rodaja", "rodajas",
+    "filete", "filetes", "trozo", "trozos", "pedazo", "pedazos", "tira", "tiras", "gajo", "gajos",
+    "punado", "punados", "pizca", "pizcas", "vaso", "vasos", "lata", "latas", "paquete", "paquetes",
+    "sobre", "sobres", "bola", "bolas", "diente", "dientes", "rama", "ramas", "hoja", "hojas",
+    "tallo", "tallos", "manojo", "manojos",
+})
+
+
+def _sub_qty_token_is_unit(token: str) -> bool:
+    """True si `token` (la palabra que sigue al número) es una unidad de medida y no el alimento mismo.
+    Sin token (p. ej. «250 de …») se considera unidad: no hay palabra que pueda ser el alimento.
+    tooltip-anchor: P1-SUBS-QTY-UNIT-GUARD"""
+    _t = str(token or "").strip().lower()
+    if not _t:
+        return True
+    try:
+        from constants import strip_accents as _sa_qty
+        _t = _sa_qty(_t)
+    except Exception:
+        pass
+    return _t in _SUB_QTY_UNIT_TOKENS
 
 
 # [P1-SUBST-RECIPE-REWRITE · 2026-06-28] Tokens que NO se usan para localizar el ingrediente viejo en los pasos:
@@ -14653,9 +14847,38 @@ def _apply_substitutions_core(plan: dict, subs: list, note_builder, note_sentine
     except Exception:
         _db = None
 
+    # [P1-SUBS-WORD-BOUNDARY · 2026-09-05] Modo PALABRA COMPLETA, opcional por sustitución.
+    #
+    # El motor compara por subcadena, y con las tablas de condición/alérgenos eso es lo correcto: sus tokens son
+    # largos y necesitan pescar variantes («jamon» dentro de «jamón serrano»). Pero la tabla de DIETA trae
+    # tokens de tres y cuatro letras, y ahí la subcadena muerde carne inocente. Medido el 2026-09-05:
+    #
+    #     «res»   ⊂ queso f-res-co · f-res-as · ciruelas f-res-cas · berenjena f-res-ca
+    #     «pollo» ⊂ re-pollo
+    #     «mero»  ⊂ nú-mero
+    #
+    # En el plan vivo 18326457 (vegetariano) eso «sustituyó» 4 comidas del intento 1 y 2 del intento 2: el queso
+    # fresco de un vegetariano cambiado por soya texturizada, con sus macros y su receta detrás. La misma clase
+    # de fallo que ya nos costó «sal»⊂«salsa» y «pollo»⊂«repollo» en su día; van 13.
+    #
+    # El sufijo `(?:e?s)?` mantiene los plurales que la subcadena daba gratis: «reses», «camarones», «pavos».
+    # Los NEGATIVOS siguen por subcadena a propósito: son un veto y ahí sobre-detectar es lo seguro.
+    _word_re_cache = {}
+
+    def _token_word_re(tok):
+        _r = _word_re_cache.get(tok)
+        if _r is None:
+            _r = _re.compile(r"(?<![a-z0-9])" + _re.escape(_sa(str(tok).lower())) + r"(?:e?s)?(?![a-z0-9])")
+            _word_re_cache[tok] = _r
+        return _r
+
     def _match(ing_norm):
         for s in subs:
             if any(neg in ing_norm for neg in s["negatives"]):
+                continue
+            if s.get("word_match"):
+                if any(_token_word_re(t).search(ing_norm) for t in s["tokens"]):
+                    return s
                 continue
             if any(t in ing_norm for t in s["tokens"]):
                 return s
@@ -14667,7 +14890,10 @@ def _apply_substitutions_core(plan: dict, subs: list, note_builder, note_sentine
         # reemplazo bare (queda "al gusto"); preservar el prefijo dejaría la palabra ofensora ("cubito").
         if preserve_qty:
             m = _COND_SUB_QTY_PREFIX_RE.match(str(orig)) if _COND_SUB_QTY_PREFIX_RE else None
-            if m and m.group(1).strip():
+            # [P1-SUBS-QTY-UNIT-GUARD · 2026-09-05] …y solo si lo que sigue al número es una UNIDAD. Con un
+            # alimento contado («4 ciruelas») la cantidad es del alimento viejo y heredarla escribe un
+            # ingrediente que no existe.
+            if m and m.group(1).strip() and _sub_qty_token_is_unit(m.group(2)):
                 return m.group(1) + replacement
         return replacement
 
@@ -14733,9 +14959,10 @@ def _apply_substitutions_core(plan: dict, subs: list, note_builder, note_sentine
                 # [P1-SUBST-RECIPE-REWRITE · 2026-06-28] Reescribe las menciones del ingrediente VIEJO en los pasos de la
                 # receta ANTES de la nota (para que la nota siga siendo la última línea). Solo usa los tokens de la lista
                 # canónica `ingredients` (recipe_token_subs). Fail-safe: si falla, los pasos quedan intactos.
+                _steps_changed = False
                 if SUBST_RECIPE_REWRITE_ENABLED and recipe_token_subs:
                     try:
-                        _rewrite_recipe_steps_after_subs(meal, recipe_token_subs)
+                        _steps_changed = bool(_rewrite_recipe_steps_after_subs(meal, recipe_token_subs))
                     except Exception:
                         pass
                 uniq = sorted(set(labels))
@@ -14743,6 +14970,26 @@ def _apply_substitutions_core(plan: dict, subs: list, note_builder, note_sentine
                 rec = meal.get("recipe")
                 if not isinstance(rec, list):
                     rec = [] if rec is None else [str(rec)]
+                # [P1-SUBST-ORPHAN-STEP - 2026-09-05] El reescritor de pasos solo puede actuar si el alimento
+                # VIEJO se nombraba en la receta, y a veces el LLM no lo nombra: en la merienda del dia 3 del plan
+                # vivo 18326457 los pasos hablaban de ciruelas, queso y granola, y el ingrediente nuevo no aparecia
+                # en NINGUNA instruccion. Quedaba en la lista de la compra y en la lista de ingredientes del plato,
+                # sin que nadie dijera que hacer con el.
+                #
+                # Su retorno ya distinguia el caso (True si toco algun paso) y se estaba tirando. Cuando es False,
+                # la nota deja de ser solo procedencia y NOMBRA el ingrediente con su cantidad. No se inventa un
+                # paso nuevo: donde va exactamente depende de la receta, y afirmarlo seria adivinar.
+                if note and swaps and not _steps_changed:
+                    _nuevos = []
+                    for _o_sw, _n_sw in swaps:
+                        _d_sw = str(_n_sw).strip()
+                        if _d_sw and _d_sw not in _nuevos:
+                            _nuevos.append(_d_sw)
+                    if _nuevos:
+                        note = (note.rstrip()
+                                + " Los pasos de la receta no lo nombran: añade "
+                                + ", ".join(_nuevos[:3])
+                                + " junto con el resto de los ingredientes.")
                 if note and not any(note_sentinel in str(s) for s in rec):
                     meal["recipe"] = rec + [note]
                 if on_meal_fixed:
@@ -14786,6 +15033,64 @@ def _apply_condition_substitutions(plan: dict, form_data: dict) -> int:
             meal["_dm2_sugar_fixed"] = uniq  # flag de compatibilidad hacia atrás
 
     return _apply_substitutions_core(plan, subs, _note, "Ajuste clínico", _flags)
+
+
+# [P1-DIET-SUBSTITUTION · 2026-09-05] Sustitutos vegetales por categoría de producto animal. Mismo motor que las
+# sustituciones por alérgeno (`_apply_substitutions_core`): swap quirúrgico, conserva la cantidad y recalcula macros
+# por delta. Medido: en 5 de 7 planes vegetarianos de hoy el intento 1 murió por «pechuga de pollo» que el modelo
+# inventó FUERA del pool (el pool ya era vegetariano y el prompt lleva la prohibición desde P1-DAYGEN-VEG-HARD-LINE);
+# cada rechazo costaba una replanificación completa (~90 s + una llamada cara). El guard `_scan_diet_violations`
+# sigue corriendo en el review: lo que esta pasada no resuelva sigue siendo rechazo crítico.
+DIET_SUBSTITUTION_ENABLED = _env_bool("MEALFIT_DIET_SUBSTITUTION", True)
+_DIET_SUB_TARGETS = (
+    # (tokens del ofensor, reemplazo, etiqueta, negativos)
+    (("pechuga de pollo", "muslo de pollo", "pollo", "pavo", "cerdo", "chuleta", "lomo de cerdo", "res",
+      "carne molida", "bistec", "chivo", "conejo", "higado", "hígado", "longaniza", "salami", "tocineta",
+      "jamon", "jamón", "salchicha", "pepperoni", "costilla", "pernil"), "Soya texturizada", "carne",
+     ("soya", "soja", "vegetal", "vegana", "de coco", "de almendra")),
+    (("pescado", "tilapia", "salmon", "salmón", "bacalao", "mero", "chillo", "atun", "atún", "sardina",
+      "sardinas", "camaron", "camarón", "camarones", "calamar", "pulpo", "cangrejo", "langosta", "lambi", "arenque"),
+     "Garbanzos cocidos", "pescado o marisco", ("soya", "soja", "vegetal", "vegana", "de coco", "de almendra")),
+)
+
+
+def _apply_diet_substitutions(plan: dict, form_data: dict) -> int:
+    """Sustituye carne/pescado por su equivalente vegetal en planes vegetarianos o veganos (y carne en
+    pescetarianos), ANTES del review. Mutates `plan`; devuelve nº de comidas afectadas. Fail-safe.
+    tooltip-anchor: P1-DIET-SUBSTITUTION"""
+    if not DIET_SUBSTITUTION_ENABLED:
+        return 0
+    try:
+        canon = _canonicalize_diet_type((form_data or {}).get("dietType"))
+        if canon not in ("vegan", "vegetarian", "pescatarian"):
+            return 0
+        subs = []
+        for tokens, replacement, label, negatives in _DIET_SUB_TARGETS:
+            if canon == "pescatarian" and label != "carne":
+                continue          # el pescetariano SÍ come pescado
+            # [P1-SUBS-WORD-BOUNDARY · 2026-09-05] `word_match` SOLO aquí: los tokens de dieta son cortos
+            # («res», «pavo», «mero») y por subcadena muerden queso fresco, repollo y número.
+            subs.append({"tokens": list(tokens), "replacement": replacement, "label": label,
+                         "negatives": list(negatives), "condition": canon, "preserve_qty": True,
+                         "word_match": True})
+        if not subs:
+            return 0
+
+        def _note(uniq, conds):
+            return ("🌱 Ajuste por tu dieta: se reemplazó " + ", ".join(uniq)
+                    + " por una alternativa vegetal con proteína equivalente.")
+
+        def _flags(meal, uniq, conds):
+            meal["_diet_subs_fixed"] = uniq
+
+        n = _apply_substitutions_core(plan, subs, _note, "Ajuste por tu dieta", _flags)
+        if n:
+            logger.warning(f"🌱 [P1-DIET-SUBSTITUTION] {n} comida(s) con carne/pescado sustituidas por alternativa "
+                           f"vegetal (dieta {canon}) — antes esto costaba un reintento completo")
+        return n
+    except Exception as _ds_e:
+        logger.warning(f"[P1-DIET-SUBSTITUTION] no-op (fail-safe): {type(_ds_e).__name__}: {_ds_e}")
+        return 0
 
 
 def _apply_allergen_substitutions(plan: dict, form_data: dict) -> int:
@@ -18322,6 +18627,11 @@ _EGG_SWAP_DROP_ADJ = frozenset((
     "duro", "dura", "duros", "duras",
     "cuajado", "cuajada", "cuajados", "cuajadas",
     "pochado", "pochada", "pochados", "pochadas",
+    # [P1-GAINMUSCLE-DINNER-CLOSER · 2026-09-05] «…con Yogurt Griego hervido» (plan vivo b267f07e): faltaban
+    # los participios del huevo en agua.
+    "hervido", "hervida", "hervidos", "hervidas",
+    "escalfado", "escalfada", "escalfados", "escalfadas",
+    "sancochado", "sancochada", "sancochados", "sancochadas",
 ))
 _EGG_SWAP_SINGULARIZE_ADJ = {
     "entero": "entero", "entera": "entero", "enteros": "entero", "enteras": "entero",
@@ -18335,7 +18645,7 @@ _EGG_SWAP_PASSTHROUGH_ADV = frozenset((
     "completamente", "totalmente", "bien", "muy", "sumamente", "perfectamente",
 ))
 _EGG_SWAP_TAIL_RX = _re.compile(
-    r"(\byogur griego\b)((?:\s+[A-Za-zÁÉÍÓÚÜÑáéíóúüñ]+)*)", _re.IGNORECASE)
+    r"(\byogurt? griego\b)((?:\s+[A-Za-zÁÉÍÓÚÜÑáéíóúüñ]+)*)", _re.IGNORECASE)  # [P1-CLOSER-LIGHT-SLOT-NO-MEAT] también "Yogurt Griego" (el nombre)
 
 # [P1-SUBST-STALE-STEP · 2026-08-01] Plan real 97.2 (5f4bb17e-14cb-4db3-8d97-79933af690cf, día 2
 # Desayuno "Batido Caribeño de Mango, Avena y Chía"): `_egg_step_subs` renombra la MENCIÓN del
@@ -18359,6 +18669,11 @@ _EGG_SWAP_TAIL_RX = _re.compile(
 # `step_has_cooking_verb`. Si CUALQUIER mención resuelve, el paso se considera stale.
 _LICUAR_TOKEN_RE = _re.compile(r"\blic[uú]a\w*\b", _re.IGNORECASE)
 _YOGUR_GRIEGO_MENTION_RE = _re.compile(r"\byogur griego\b", _re.IGNORECASE)
+# [P1-LIGHT-SLOT-COHERENCE] utensilio/agua de cocción inmediatamente DESPUÉS de la mención swapeada
+_EGG_SWAP_UTENSIL_AFTER_RE = _re.compile(
+    # solo la cocción en AGUA (huevo hervido); «vierte en el sartén y cocina» queda para el verbo, como antes
+    r"\s+(?:en|dentro de|a)\s+(?:una?\s+|la\s+|el\s+)?(?:olla|cacerola|cazuela|caldero|agua\s+hirviendo|agua\s+caliente)\b"
+    r"|\s+con\s+agua\s+(?:hirviendo|caliente|fr[ií]a|a\s+hervir)\b|\s+en\s+agua\b", _re.IGNORECASE)
 # Mismas 3 secciones que `cron_tasks._CULINARY_STEP_SECTIONS` (prefijo que RecipesView/export a
 # PDF usan para agrupar pasos) — no se importa desde ahí para no acoplar graph_orchestrator.py a
 # cron_tasks.py; son 3 literales estables, no vale la pena una dependencia cruzada por esto.
@@ -18377,6 +18692,11 @@ def _stale_cooking_verb_precedes_egg_swap(text: str, cooking_verb_check, window_
             palabras_antes = _re.findall(r"\S+", text[:m.start()])[-window_words:]
             ventana = _LICUAR_TOKEN_RE.sub("", " ".join(palabras_antes))
             if cooking_verb_check(ventana):
+                return True
+            # [P1-LIGHT-SLOT-COHERENCE · 2026-09-05] «coloca 1 yogur griego en una olla con agua» (plan
+            # vivo c0dc2519): el huevo hervido deja su UTENSILIO, no siempre un verbo de cocción del
+            # catálogo. La ventana posterior a la mención delata el manejo fósil igual que el verbo.
+            if _EGG_SWAP_UTENSIL_AFTER_RE.match(text[m.end():]):
                 return True
         return False
     except Exception:
@@ -18472,6 +18792,37 @@ def _rewrite_stale_cooking_step(original_step: str, current_text: str, cooking_v
         return prefix + "".join(segments)
     except Exception:
         return current_text
+
+
+_NAME_DUP_WORD_RE = _re.compile(r"(?i)\b([a-záéíóúüñ]{3,})(?:\s*,\s*|\s+y\s+|\s+)\1\b")
+
+
+def _dedupe_adjacent_name_words(name: str) -> str:
+    """[P2-NAME-POLISH-EGG-DUP · 2026-09-05] «… con casabe, Aguacate, aguacate y Huevo» → «… con casabe, Aguacate y Huevo».
+    Colapsa una palabra repetida consecutiva (con coma, «y» o espacio entre medias), sin distinguir mayúsculas."""
+    try:
+        out = str(name or "")
+        for _ in range(3):
+            new = _NAME_DUP_WORD_RE.sub(r"\1", out)
+            if new == out:
+                break
+            out = new
+        return out
+    except Exception:
+        return name
+
+
+def _polish_meal_names(days) -> int:
+    """Aplica `_dedupe_adjacent_name_words` a los nombres de las comidas. Devuelve nº de nombres cambiados."""
+    n = 0
+    for _d in days or []:
+        for _m in ((_d.get("meals") or []) if isinstance(_d, dict) else []):
+            if isinstance(_m, dict) and _m.get("name"):
+                _new = _dedupe_adjacent_name_words(str(_m["name"]))
+                if _new != _m["name"]:
+                    _m["name"] = _new
+                    n += 1
+    return n
 
 
 def _fix_egg_swap_dangling_adjectives(text: str) -> str:
@@ -18663,6 +19014,10 @@ def _substitute_blended_raw_egg(meal: dict, db) -> bool:
                     _nm_new = _re.sub(r"\bclaras?\s+de\s+huevo\b|\bclaras?\b|\bhuevos?\b",
                                       "Yogurt Griego", _nm_es, count=1, flags=_re.IGNORECASE)
                 _nm_new = _re.sub(r"\s+", " ", _nm_new).strip(" ,y")
+                # [P1-CLOSER-LIGHT-SLOT-NO-MEAT · 2026-09-05] "…con huevo cocido" → "…con Yogurt Griego
+                # cocido" (plan vivo c0dc2519, desayuno): el reparador de concordancia solo corría en los
+                # pasos. Mismo reparador sobre el nombre (anclado a "yogur(t) griego", nada más se toca).
+                _nm_new = _fix_egg_swap_dangling_adjectives(_nm_new)
                 if _nm_new and _nm_new != _nm_es:
                     meal["name"] = _nm_new
                     logger.info(f"🥚 [P1-MENU-COHERENCE-2] swap huevo→yogur sincronizó el nombre: "
@@ -19773,6 +20128,16 @@ def _protein_topup_meal(meal: dict, slot_cal_target: float, db, approved_protein
         if slot_cal_target and slot_cal_target > cur_cal and info.kcal > 0:
             grams_cal_cap = int((slot_cal_target - cur_cal) / (info.kcal / 100.0))
             grams = min(grams, grams_cal_cap)
+        elif slot_cal_target and info.kcal > 0:
+            grams = 0   # sin headroom
+        # [P1-SNACK-MAKE-ROOM] rescate en franja ligera: hacer sitio encogiendo fruta/frutos secos
+        if grams < 15 and slot_cal_target and info.kcal > 0 and db is not None and _meal_slot_is_light(meal, _sa):
+            _need_k = (40.0 / 100.0) * float(info.kcal) - max(0.0, slot_cal_target - cur_cal) + 5.0
+            if _make_room_for_protein(meal, _need_k, db) > 0:
+                cur_cal = _meal_macro_num(meal.get("cals"))
+                cur_p = _meal_macro_num(meal.get("protein"))
+                gap = max(0.0, fill_to_g - cur_p)
+                grams = min(int(round(gap / (info.protein / 100.0))), int(max(0.0, slot_cal_target - cur_cal) / (info.kcal / 100.0)))
         grams = min(max_add_g, grams)
         if grams < 15:
             return 0
@@ -20285,7 +20650,10 @@ _SWEET_MEAL_MARKERS = ("yogur", "yogurt", "avena", "batido", "smoothie", "licuad
                        "panqueque", "pancake", "waffle", "hotcake", "crepe", "crepa", "cereal", "miel",
                        "mermelada", "mango", "guineo", "banana", "fresa", "lechosa", "papaya", "guayaba",
                        "pina", "piña", "manzana", "mora", "arandano", "arándano", "kiwi", "melon", "melón",
-                       "uva", "durazno", "melocoton", "cereza", "mamey", "nispero", "chocolate", "cacao")
+                       "uva", "durazno", "melocoton", "cereza", "mamey", "nispero", "chocolate", "cacao",
+                       # [P1-GAINMUSCLE-CENA-TUBER · 2026-09-05] «Vaso de ricotta con sandía y almendras» no era
+                       # dulce para este léxico y recibió huevo (plan vivo 080a91c7). Frutas dulces que faltaban:
+                       "sandia", "sandía", "pera", "toronja", "ciruela", "higo", "datil", "dátil", "tamarindo")
 # [P1-SWEET-MARKER-WORDBOUNDARY · 2026-06-28] Match con frontera de palabra IZQUIERDA (`\b<marker>`) en vez de substring
 # naïve: "pina" (piña) matcheaba DENTRO de "es-PINA-ca" (espinaca) → un revoltillo de huevo con espinaca se marcaba DULCE,
 # rompiendo el sweet-guard del closer (le metía lácteo en vez de carne) y el day-kcal-floor (saltaba la comida salada).
@@ -20323,7 +20691,7 @@ _MEAT_MARKER_RE = _re.compile(
 )
 
 
-def _dish_coherence_filter(meal: dict, strip_accents_fn):
+def _dish_coherence_filter(meal: dict, strip_accents_fn, goal=None):
     """[P1-TOPUP-DISH-COHERENCE · 2026-07-24] SSOT del criterio "¿esta proteína pega en este
     plato?". Devuelve un predicado `nombre_normalizado -> bool`.
 
@@ -20352,21 +20720,49 @@ def _dish_coherence_filter(meal: dict, strip_accents_fn):
         # de lo que va el plato; en la lista de ingredientes puede ser un topping.
         _nm = strip_accents_fn(str(meal.get("name", "")).lower())
         _cheese_dish = any(h in _nm for h in _CLOSER_CHEESE_HINT)
+        # [P1-GAINMUSCLE-DINNER-CLOSER · 2026-09-05] En CENA de ganancia muscular el «queso como plato» NO
+        # bloquea la carne magra: el cerrador puede añadir pollo/pescado y el queso pasa a extensor. Plan vivo
+        # 9b73656d: «Plátano verde majado con queso fresco» recibió 40 g de soya texturizada porque el queso
+        # vetaba toda carne. La autocrítica que corrige esto se salta en los reintentos (budget-aware), así que
+        # el cerrador es la última defensa. tooltip-anchor: P1-GAINMUSCLE-DINNER-CLOSER
+        _goal_gd = strip_accents_fn(str(goal or "").lower())
+        _gm_cena_cede = bool(
+            _cheese_dish
+            and any(t in _goal_gd for t in ("gain_muscle", "ganar_musculo", "ganancia", "bulk"))
+            and "cena" in strip_accents_fn(str(meal.get("meal") or "").lower())
+            and not _meal_has_main_animal_protein(meal, strip_accents_fn))
         has_main = (CLOSER_DISH_COHERENCE_ENABLED and CLOSER_NO_DOUBLE_MAIN_ENABLED
-                    and (_meal_has_main_animal_protein(meal, strip_accents_fn) or _cheese_dish))
+                    and (_meal_has_main_animal_protein(meal, strip_accents_fn)
+                         or (_cheese_dish and not _gm_cena_cede)))
         # [P1-CLOSER-NO-SPREAD-PLUS-CHEESE · 2026-07-26] Se mira el NOMBRE (igual que
         # `_cheese_dish`): ahí es de lo que va el plato. En la lista de ingredientes una
         # cucharada de mantequilla de maní puede ser un topping, no el relleno.
         spread_dish = CLOSER_NO_SPREAD_PLUS_CHEESE and any(
             h in _nm for h in _SPREAD_PROTAGONIST_HINT)
+        # [P1-CLOSER-LIGHT-SLOT-NO-MEAT · 2026-09-05] La FRANJA manda: una merienda o un desayuno
+        # jamás reciben carne, pescado ni marisco del cerrador, diga lo que diga el nombre. Hasta
+        # hoy «ligero» era solo una PREFERENCIA (lácteo/huevo primero) y el guard dulce solo
+        # miraba marcadores de fruta dulce: «Vaso de toronja con almendras y mantequilla de maní»
+        # y «Tortilla de trigo tostada con pera y mantequilla de maní» (plan vivo 2a2e2516) no son
+        # «dulces» para el léxico, la pasta de untar sacó al queso del pool y el huevo colisionaba
+        # con el desayuno ⇒ 75-135 g de camarones en una merienda de fruta, reflejados en el
+        # título. Si no queda candidato ligero ⇒ 0 y el piso se cubre en las comidas fuertes
+        # (misma degradación honesta que el guard dulce). tooltip-anchor: P1-CLOSER-LIGHT-SLOT-NO-MEAT
+        light = CLOSER_DISH_COHERENCE_ENABLED and _meal_slot_is_light(meal, strip_accents_fn)
+        # Excepción acotada: una merienda SALADA y COCINADA (sándwich caliente, wrap salteado) sí admite
+        # pollo/pavo/atún — lo que un cocinero pondría en un sándwich. Marisco y carnes pesadas, nunca.
+        light_savory_hot = bool(light and not sweet and _meal_is_hot_cooked(meal, strip_accents_fn))
     except Exception:
-        sweet = has_main = spread_dish = False
+        sweet = has_main = spread_dish = light = light_savory_hot = False
 
     def _ok(name_low: str) -> bool:
         try:
             nlow = strip_accents_fn(str(name_low).lower())
             if (sweet or has_main) and any(h in nlow for h in _MEAT_PROTEIN_HINT):
                 return False
+            if light and any(h in nlow for h in _MEAT_PROTEIN_HINT):
+                if not (light_savory_hot and any(h in nlow for h in _LIGHT_SLOT_OK_MEAT)):
+                    return False
             if sweet and CLOSER_SWEET_NO_LEGUME and any(h in nlow for h in _LEGUME_PROTEIN_HINT):
                 return False
             # Dos pastas de untar apiladas en el mismo relleno: fuera el queso, no el yogurt.
@@ -20410,6 +20806,12 @@ def _is_sweet_meal(meal: dict, strip_accents_fn) -> bool:
         nlow = strip_accents_fn(str(meal.get("name", "")).lower())
         if any(ov in nlow for ov in _SWEET_MEAL_SAVORY_OVERRIDE):
             return False  # ceviche / fruta verde / guiso → preparación salada, no postre
+        # [P1-YOGURT-MEAL-CAP · 2026-09-05] una ENSALADA de almuerzo/cena con fruta en el nombre («Ensalada tibia de
+        # queso blanco, piña y lechosa», plan vivo 0b0250ab) es un plato salado: marcarla dulce le quitaba las
+        # legumbres al cerrador y le metía 1½ tazas de yogurt. Solo «ensalada de frutas» sigue siendo dulce.
+        _slot_low = strip_accents_fn(str(meal.get("meal") or meal.get("slot") or "").lower())
+        if ("almuerzo" in _slot_low or "cena" in _slot_low) and "ensalada" in nlow                 and not any(t in nlow for t in ("ensalada de fruta", "ensalada frutal", "ensalada dulce")):
+            return False
         if _SWEET_MARKER_RE.search(nlow):  # [P1-SWEET-MARKER-WORDBOUNDARY] no falso-positivo "pina"⊂"espinaca"
             return True
         if SWEET_GUARD_CHECK_INGREDIENTS:
@@ -20565,6 +20967,18 @@ def _reflect_added_protein_in_name(meal: dict, protein_name: str, strip_accents_
         try:
             if any(_re.search(r"\b" + _re.escape(t) + r"(?:s|es)?\b", name_low) for t in sig_tokens):
                 return False
+            # [P2-NAME-POLISH-EGG-DUP · 2026-09-05] «Revoltillo criollo … y Huevo» (plan vivo 606e9017): el plato YA es
+            # huevo por su nombre (revoltillo/tortilla/omelette). Los alias del label de la proteína
+            # (`_MAIN_PROTEIN_ALIASES`, el mismo mapa del gate) cuentan como «ya representada».
+            _lbl = _gate_label_of(pname)
+            if _lbl:
+                for _al in (_MAIN_PROTEIN_ALIASES.get(_lbl) or ()):
+                    _aln = strip_accents_fn(str(_al).lower())
+                    if len(_aln) >= 4 and _re.search(r"\b" + _re.escape(_aln) + r"(?:s|es)?\b", name_low):
+                        return False
+            for _egg_syn in ("revoltillo", "tortilla", "omelet", "omelette", "frittata", "revuelto"):
+                if any(t in ("huevo", "clara", "claras") for t in sig_tokens) and _re.search(r"\b" + _egg_syn + r"s?\b", name_low):
+                    return False
         except Exception:
             if any(t in name_low for t in sig_tokens):   # fail-open al comportamiento previo
                 return False
@@ -20572,6 +20986,15 @@ def _reflect_added_protein_in_name(meal: dict, protein_name: str, strip_accents_
         proper = " ".join(w if w.lower() in _NAME_STOPWORDS else w.capitalize()
                           for w in pname.split())
         connector = _name_connector_for(name)
+        # [P1-CLOSER-LIGHT-SLOT-NO-MEAT · 2026-09-05 · enumeración] Con la enumeración ya abierta
+        # ("A con B y C") el conector era la coma y el título quedaba "…mantequilla de maní, Camarones"
+        # / "…durazno y almendras, Huevo" (plan vivo c0dc2519): la coma final NO es castellano. Se
+        # reabre la enumeración: "A con B, C y D". Sin " y " localizable cae a la coma de antes.
+        if connector == ", ":
+            _m_enum = _re.search(r"\s+y\s+(?=[^,]*$)", name, flags=_re.IGNORECASE)
+            if _m_enum:
+                meal["name"] = f"{name[:_m_enum.start()]}, {name[_m_enum.end():]} y {proper}"
+                return True
         meal["name"] = f"{name}{connector}{proper}"
         return True
     except Exception:
@@ -20890,7 +21313,11 @@ def _try_scale_existing_protein(meal: dict, target_protein: float, db, strip_acc
 CLOSER_SWEET_DAIRY_ENABLED = _env_bool("MEALFIT_CLOSER_SWEET_DAIRY", True)
 CLOSER_SWEET_DAIRY_MIN_PROTEIN = _env_float("MEALFIT_CLOSER_SWEET_DAIRY_MIN_PROTEIN", 7.0,
                                             lambda v: 3.0 <= v <= 18.0)
+# [P1-CLOSER-LIGHT-SLOT-NO-MEAT] únicas carnes admisibles en una merienda salada y cocinada
+_LIGHT_SLOT_OK_MEAT = ("pollo", "pavo", "atun", "atún")
 _SWEET_DAIRY_TOKENS = ("yogur", "cottage", "ricotta", "requeson")
+# [P1-GAINMUSCLE-DINNER-CLOSER] «carne vegetal»: candidatos del cerrador solo aptos para vegetarianos/veganos
+_PLANT_MEAT_TOKENS = ("soya", "soja", "tofu", "tempeh", "seitan")
 _SWEET_OK_CHEESE_TOKENS = ("ricotta", "requeson", "cottage", "crema")
 
 # [P1-CLOSER-SWEET-DAIRY-FIT · 2026-07-26] Dentro del pool dulce el orden lo daba SOLO la
@@ -20959,7 +21386,7 @@ def _is_savory_cheese_name(nlow: str) -> bool:
 def _close_protein_gap_for_meal(meal: dict, slot_protein_target: float, db, candidates,
                                 *, allergies=None, fill_pct: float = 0.92, max_add_g: int = 300,
                                 slot_cal_target: float = 0.0, enforce_min_threshold: bool = True,
-                                day_used_proteins=None, diet=None, country=None) -> int:
+                                day_used_proteins=None, diet=None, country=None, goal=None) -> int:
     """[P3-PROTEIN-FLOOR · 2026-06-13] Rellena el meal hasta ~fill_pct del target de proteína
     del slot con una proteína de ALTA DENSIDAD allergen-safe (de `candidates`), integrada como
     INGREDIENTE real en gramos (no como nota). Cierra el déficit que el escalado no puede (no
@@ -21008,6 +21435,20 @@ def _close_protein_gap_for_meal(meal: dict, slot_protein_target: float, db, cand
                 if any(t in nlow for t in _RAW_EGG_TERMS):
                     continue
             _pool.append((info, nlow))
+        # [P1-GAINMUSCLE-DINNER-CLOSER · 2026-09-05] «carne vegetal» (soya texturizada/tofu/tempeh/seitán) solo en
+        # dietas vegetarianas o veganas: en una cena dominicana omnívora es un pegote (plan vivo 9b73656d).
+        # Sin otro candidato ⇒ se conserva (el piso de proteína manda, misma asimetría que el guard dulce).
+        if _pool:
+            try:
+                from constants import canonicalize_diet_type as _cdt_pm
+                _diet_pm = _cdt_pm(diet)
+            except Exception:
+                _diet_pm = "balanced"
+            if _diet_pm not in ("vegan", "vegetarian"):
+                _pool_no_plant_meat = [(i_pm, n_pm) for (i_pm, n_pm) in _pool
+                                       if not any(t in n_pm for t in _PLANT_MEAT_TOKENS)]
+                if _pool_no_plant_meat:
+                    _pool = _pool_no_plant_meat
         # [P1-CLOSER-SWEET-GUARD · 2026-06-27] En plato DULCE (yogurt+fruta, avena+guineo, batido, tortilla con
         # fresas) NO inyectar proteína SALADA (camarón/pescado/carne) — era el rechazo CRÍTICO de corr=26311f6f
         # (FASE A metió +81g de camarones en 8 comidas dulces). Filtra el pool; si queda vacío → return 0 (el piso
@@ -21069,7 +21510,7 @@ def _close_protein_gap_for_meal(meal: dict, slot_protein_target: float, db, cand
         # (SSOT) y lo consulta también `_protein_topup_meal`: tener dos copias fue exactamente
         # lo que dejó sin blindar al rescate de proteína.
         if _pool:
-            _coh_ok = _dish_coherence_filter(meal, _sa)
+            _coh_ok = _dish_coherence_filter(meal, _sa, goal=goal)
             _pool_no_second_main = [(info, nlow) for (info, nlow) in _pool if _coh_ok(nlow)]
             if not _pool_no_second_main:
                 logger.info(
@@ -21107,8 +21548,11 @@ def _close_protein_gap_for_meal(meal: dict, slot_protein_target: float, db, cand
         # SALADO y COCINADO el lácteo dulce (yogur/cottage/ricotta/requesón) queda como
         # ÚLTIMO recurso: con cualquier otro candidato disponible, se filtra. Piso clínico
         # manda (pool quedaría vacío ⇒ se conserva) — misma asimetría que el sweet-guard.
+        # [P1-YOGURT-MEAL-CAP · 2026-09-05] también en comida FUERTE no caliente (ensalada tibia de almuerzo con
+        # 1½ tazas de yogurt, plan vivo 0b0250ab): en almuerzo/cena el lácteo dulce es último recurso.
         if (_pool and not no_cook and CLOSER_DISH_COHERENCE_ENABLED
-                and not _is_sweet_meal(meal, _sa) and _meal_is_hot_cooked(meal, _sa)):
+                and not _is_sweet_meal(meal, _sa)
+                and (_meal_is_hot_cooked(meal, _sa) or not _meal_slot_is_light(meal, _sa))):
             _pool_no_sd = [(info, nlow) for (info, nlow) in _pool
                            if not any(t in nlow for t in _SWEET_DAIRY_TOKENS)]
             if _pool_no_sd and len(_pool_no_sd) < len(_pool):
@@ -21188,6 +21632,14 @@ def _close_protein_gap_for_meal(meal: dict, slot_protein_target: float, db, cand
                                  if any(h in nlow for h in _pref2)
                                  and not any(h in nlow for h in _CLOSER_CHEESE_HINT)
                                  and float(getattr(info, "protein", 0) or 0) >= 12), None)
+                # [P1-GAINMUSCLE-CENA-TUBER · 2026-09-05] en plato DULCE (ricotta con sandía) el sustituto del 2º
+                # queso es el yogurt, no el huevo: `_pref2` ponía huevo primero por orden de la tupla.
+                if _is_sweet_meal(meal, _sa):
+                    _alt_y = next((info for (info, nlow) in _pool
+                                   if "yogur" in nlow and not _collides_day(nlow)
+                                   and float(getattr(info, "protein", 0) or 0) >= 5), None)
+                    if _alt_y is not None:
+                        _alt = _alt_y
                 if _alt is not None and _sa(str(_alt.name).lower()) != _ch_low:
                     logger.info(f"🧀 [P1-CLOSER-NO-DUP-CHEESE] plato ya tiene queso → uso '{_alt.name}' en vez de un "
                                 f"2º queso ('{chosen.name}') | meal={str(meal.get('name'))[:30]}")
@@ -21211,6 +21663,15 @@ def _close_protein_gap_for_meal(meal: dict, slot_protein_target: float, db, cand
             _cur_cal = _meal_macro_num(meal.get("cals"))
             _head = slot_cal_target - _cur_cal
             grams = min(grams, int(_head / (chosen.kcal / 100.0))) if _head > 0 else 0
+            # [P1-SNACK-MAKE-ROOM] franja ligera sin sitio: encoger fruta/frutos secos antes de rendirse
+            if grams < CLOSER_COOKABLE_MIN_G and light and db is not None:
+                _need_k = (CLOSER_COOKABLE_MIN_G / 100.0) * float(chosen.kcal) - max(0.0, _head) + 5.0
+                if _make_room_for_protein(meal, _need_k, db) > 0:
+                    _cur_cal = _meal_macro_num(meal.get("cals"))
+                    _head = slot_cal_target - _cur_cal
+                    grams = min(int(round((target - _meal_macro_num(meal.get("protein"))) / (chosen.protein / 100.0))),
+                                int(_head / (chosen.kcal / 100.0))) if _head > 0 else 0
+                    grams = min(grams, max_add_g, int(CLOSER_BOLT_MAX_ADD_G))
             # [P1-CLOSER-COOKABLE-MIN · 2026-07-01] antes `< 10`: un headroom que solo permite 10-39g
             # produce un add no-cocinable ("10g de pechuga" + paso dedicado). Bajo el piso cocinable →
             # no añadir aquí (el residuo de proteína lo tolera la banda / se cubre en otra comida).
@@ -21357,10 +21818,23 @@ def _protein_preserving_day_reconcile(meals: list, daily_cals: float, db) -> boo
         return False
 
 
+# [P1-PROTEIN-CARRIER-GROUP · 2026-09-05] Lácteos y huevo son PORTADORES DE PROTEÍNA aunque por kcal dominen las
+# grasas (yogurt griego entero P9/F5 ⇒ 37 % de sus kcal en proteína; queso blanco 31 %; huevo 34 %). Clasificarlos
+# «fats» los convertía en palanca del rebalance de grasa (factor hasta 0,3) y luego el piso de encogido borraba la
+# línea: merienda «Casabe con queso blanco, fresas y Yogurt Griego Entero» entregada con 10 g de queso, sin el yogurt
+# que el cerrador había puesto (nombre y pasos aún lo nombraban) y 3 g de proteína (plan vivo c350dec0, día 10).
+# Solo por TOKEN de lácteo/huevo y con ≥ PROTEIN_CARRIER_MIN_SHARE de sus kcal en proteína: queso crema (7 %),
+# mantequilla de maní (16 %) y almendras (13 %) siguen siendo grasa. tooltip-anchor: P1-PROTEIN-CARRIER-GROUP
+PROTEIN_CARRIER_GROUP_ENABLED = _env_bool("MEALFIT_PROTEIN_CARRIER_GROUP", True)
+PROTEIN_CARRIER_MIN_SHARE = _env_float("MEALFIT_PROTEIN_CARRIER_MIN_SHARE", 0.25, validator=lambda v: 0.1 <= v <= 0.6)
+_PROTEIN_CARRIER_TOKENS = ("queso", "yogur", "huevo", "clara", "ricotta", "cottage", "requeson", "whey", "proteina")
+
+
 def _ingredient_macro_group(s: str, db) -> str | None:
     """[P1-MACRO-AWARE-RECONCILE · 2026-06-15] Macro DOMINANTE (por kcal) del ingrediente:
     'protein' | 'carbs' | 'fats'. None si no resuelve o si su aporte calórico es despreciable
-    (agua/condimento). Generaliza `_ingredient_is_protein_dominant` a las tres macros."""
+    (agua/condimento). Generaliza `_ingredient_is_protein_dominant` a las tres macros.
+    [P1-PROTEIN-CARRIER-GROUP] lácteo/huevo con ≥25 % de sus kcal en proteína ⇒ 'protein'."""
     mc = db.macros_from_ingredient_string(str(s))
     if not mc:
         return None
@@ -21371,6 +21845,14 @@ def _ingredient_macro_group(s: str, db) -> str | None:
         return None
     if pc >= cc and pc >= fc:
         return "protein"
+    if PROTEIN_CARRIER_GROUP_ENABLED:
+        try:
+            from constants import strip_accents as _sa_pcg
+            _low = _sa_pcg(str(s).lower())
+            if any(t in _low for t in _PROTEIN_CARRIER_TOKENS) and pc / max(1e-9, pc + cc + fc) >= float(PROTEIN_CARRIER_MIN_SHARE):
+                return "protein"
+        except Exception:
+            pass
     return "carbs" if cc >= fc else "fats"
 
 
@@ -21917,6 +22399,67 @@ def _close_fat_gap_for_day(meals: list, target_fats: float, target_kcal: float, 
     except Exception as e:
         logger.warning(f"[P2-FAT-FLOOR] fat-closer falló: {type(e).__name__}: {e}")
         return False
+
+
+# [P1-SNACK-MAKE-ROOM · 2026-09-05] Meriendas de 3 y 11 g de proteína (planes vivos c350dec0 día 10, 606e9017 días 2-3):
+# «Vasito de higo, membrillo y almendras con Queso Cottage», ya en su tope de kcal con fruta y frutos secos ⇒ el cerrador
+# y el rescate calculaban headroom ≈ 0 y devolvían 0 g. En vez de rendirse, en franja LIGERA se encogen las líneas de
+# grasa/carbo sin proteína (frutos secos, mantequilla de maní, fruta), nunca por debajo de MIN_KEEP, hasta liberar las
+# kcal que necesita un añadido cocinable (CLOSER_COOKABLE_MIN_G). Rollback: MEALFIT_LIGHT_SNACK_MAKE_ROOM=false.
+LIGHT_SNACK_MAKE_ROOM = _env_bool("MEALFIT_LIGHT_SNACK_MAKE_ROOM", True)
+LIGHT_SNACK_MAKE_ROOM_MIN_KEEP = _env_float("MEALFIT_LIGHT_SNACK_MAKE_ROOM_MIN_KEEP", 0.5, validator=lambda v: 0.25 <= v <= 0.9)
+
+
+def _make_room_for_protein(meal: dict, needed_kcal: float, db, *, min_keep: float = None) -> float:
+    """Encoge líneas grasa/carbo-dominantes SIN proteína de una comida ligera hasta liberar `needed_kcal`. Devuelve las
+    kcal liberadas (0 si no hay palanca). Muta in-place (ingredients + raw lockstep) y hace truth-up de macros.
+    tooltip-anchor: P1-SNACK-MAKE-ROOM"""
+    try:
+        if not LIGHT_SNACK_MAKE_ROOM or needed_kcal <= 0 or db is None:
+            return 0.0
+        from nutrition_db import rescale_ingredient_string as _resc, quantize_ingredient_string as _quant
+        keep = float(LIGHT_SNACK_MAKE_ROOM_MIN_KEEP if min_keep is None else min_keep)
+        ings = meal.get("ingredients")
+        if not isinstance(ings, list):
+            return 0.0
+        levers = []
+        for idx, ing in enumerate(ings):
+            grp = _ingredient_macro_group(str(ing), db)
+            if grp not in ("fats", "carbs"):
+                continue
+            mc = db.macros_from_ingredient_string(str(ing)) or {}
+            kcal = float(mc.get("kcal") or 0.0)
+            if kcal >= 30:
+                levers.append((kcal, idx, str(ing)))
+        if not levers:
+            return 0.0
+        levers.sort(key=lambda t: -t[0])
+        freed = 0.0
+        for kcal, idx, orig in levers:
+            if freed >= needed_kcal:
+                break
+            remaining = needed_kcal - freed
+            factor = max(keep, 1.0 - remaining / kcal)
+            if factor >= 0.98:
+                continue
+            new_line, _f = _quant(_resc(orig, factor))
+            if new_line == orig:
+                continue
+            ings[idx] = new_line
+            _sync_one_raw_line(meal, idx, orig, factor * _f)
+            mc2 = db.macros_from_ingredient_string(new_line) or {}
+            freed += max(0.0, kcal - float(mc2.get("kcal") or 0.0))
+        if freed > 0:
+            try:
+                _truth_up_meal_macros_from_strings(meal, db)
+            except Exception:
+                pass
+            logger.info(f"🍽️ [P1-SNACK-MAKE-ROOM] {freed:.0f} kcal liberadas encogiendo fruta/frutos secos para meter "
+                        f"proteína | meal={str(meal.get('name'))[:40]}")
+        return freed
+    except Exception as _e:
+        logger.warning(f"[P1-SNACK-MAKE-ROOM] no-op (fail-safe): {type(_e).__name__}: {_e}")
+        return 0.0
 
 
 def _close_carb_gap_for_day(meals: list, target_carbs: float, target_kcal: float, db, *,
@@ -25721,6 +26264,16 @@ def _apply_deterministic_clinical_layer(plan: dict, form_data: dict, nutrition: 
         except Exception as _al_e:
             logger.warning(f"[P0-ALLERGEN-SUBS] error: {type(_al_e).__name__}: {_al_e}")
 
+    # ── Guard 2.6 (dieta declarada) [P1-DIET-SUBSTITUTION · 2026-09-05] ──
+    # Corre DESPUÉS del alérgeno (su precedencia es mayor) y ANTES de las subs por condición. El backstop
+    # `_scan_diet_violations` del review sigue escalando cualquier residual a crítico.
+    try:
+        _dt_n = _apply_diet_substitutions(plan, form_data)
+        if _dt_n:
+            logger.warning(f"🌱 [P1-DIET-SUBSTITUTION] Ajustó {_dt_n} comida(s) a la dieta declarada")
+    except Exception as _dt_e:
+        logger.warning(f"[P1-DIET-SUBSTITUTION] error: {type(_dt_e).__name__}: {_dt_e}")
+
     # ── Guard 3: sustitución de ingredientes por condición DM2/HTA/dislipidemia (vía SubstitutionEngineConstraint) ──
     if DM2_SUGAR_GUARD:
         try:
@@ -25780,6 +26333,14 @@ def _apply_deterministic_clinical_layer(plan: dict, form_data: dict, nutrition: 
                                f"{_al2_n} comida(s)")
         except Exception as _al2_e:
             logger.warning(f"[P2-12] re-pass allergen subs error: {type(_al2_e).__name__}: {_al2_e}")
+    # [P1-DIET-SUBSTITUTION] misma razón que la re-pasada de alérgenos: una sub por condición puede
+    # reintroducir carne (p. ej. HTA → «filete de pescado blanco») en un plan vegetariano.
+    try:
+        _dt2_n = _apply_diet_substitutions(plan, form_data)
+        if _dt2_n:
+            logger.warning(f"🌱 [P1-DIET-SUBSTITUTION] Re-ajustó {_dt2_n} comida(s) tras las subs por condición")
+    except Exception as _dt2_e:
+        logger.warning(f"[P1-DIET-SUBSTITUTION] re-pass error: {type(_dt2_e).__name__}: {_dt2_e}")
 
     # ── Guard 3.6 (FS6/ERC re-check) [P1-RENAL-RECHECK-POST-SUBS · 2026-06-18, audit fresco P1-C] ──
     # Re-enforza el cap renal DESPUÉS de las sustituciones por condición (Guard 3) + el re-pase de alérgenos
@@ -28039,6 +28600,10 @@ def finalize_plan_data_coherence(days: list, db=None, allergies=None, target_fat
                     _nsq += _sync_recipe_step_quantities(_m)
         if _nsq:
             total += _nsq; parts.append(f"qty_sync={_nsq}")
+        # [P2-NAME-POLISH-EGG-DUP] título sin palabras duplicadas consecutivas (INSERT y bloques)
+        _npn = _polish_meal_names(days)
+        if _npn:
+            total += _npn; parts.append(f"name_dedupe={_npn}")
     except Exception as _e5:
         logger.warning(f"[P1-COHERENCE-FINALIZE] qty-sync no-op: {type(_e5).__name__}: {_e5}")
     # [P2-RECIPE-NONEMPTY-BACKSTOP · 2026-06-29] Persist boundary (INSERT/chunk degradado/SSE-fallback que salta
@@ -31013,6 +31578,10 @@ def _repair_day_kcal_floor_post_caps(days: list, nutrition: dict, form_data: dic
 
 # arroz blanco cocido por gramo (USDA): 1.3 kcal, 0.28g carb, 0.027g prot, ~0.003g grasa.
 _GM_RICE_KCAL_G, _GM_RICE_CARB_G, _GM_RICE_PROT_G = 1.3, 0.28, 0.027
+# [P1-GAINMUSCLE-CENA-TUBER · 2026-09-05] en la CENA la guarnición del piso es batata cocida (≈90 kcal/100 g):
+# el arroz de noche está prohibido y la pasada FINAL de este piso corre DESPUÉS del guard de arroz nocturno
+# (plan vivo 080a91c7: «40 g de arroz blanco crudo» en las habichuelas guisadas de la cena, ya aprobadas).
+_GM_TUBER_FOOD, _GM_TUBER_KCAL_G, _GM_TUBER_CARB_G, _GM_TUBER_PROT_G = "batata cocida", 0.9, 0.21, 0.016
 
 
 def _repair_gainmuscle_day_kcal(days: list, nutrition: dict, form_data: dict, db=None, *,
@@ -31068,8 +31637,12 @@ def _repair_gainmuscle_day_kcal(days: list, nutrition: dict, form_data: dict, db
             # refill consolida en vez de duplicar) van primero; el resto conserva su orden por
             # slot detrás. Si TODAS tienen base, el comportamiento es el de antes y el piso
             # calórico —que es clínico para gain-muscle— se cumple igual.
+            # [P1-LIGHT-SLOT-COHERENCE · 2026-09-05] merienda/desayuno jamás reciben la guarnición de arroz
+            # (plan vivo 2a2e2516: «40 g de arroz blanco crudo» en una merienda de tortillas con pera, que
+            # no era «dulce» para el léxico). tooltip-anchor: P1-LIGHT-SLOT-COHERENCE
             _mains = sorted(
                 (m for m in ms if not _is_sweet_meal(m, _sa_gm)
+                 and not _meal_slot_is_light(m, _sa_gm)
                  and not any(b in _sa_gm(str(m.get("name", "")).lower()) for b in _BEVERAGE_MEAL_MARKERS)),
                 key=lambda mm: (
                     1 if _meal_has_conflicting_carb_base(mm, _sa_gm) else 0,
@@ -31085,10 +31658,18 @@ def _repair_gainmuscle_day_kcal(days: list, nutrition: dict, form_data: dict, db
                 if _kcal_room < 40 or _carb_room < 10:
                     break
                 _need_k = floor - day_kcal
+                # [P1-GAINMUSCLE-CENA-TUBER] guarnición por franja: cena → batata; resto → arroz blanco
+                _is_cena_gm = "cena" in _sa_gm(str(m.get("meal", "")).lower())
+                if _is_cena_gm:
+                    _sd_food, _sd_k, _sd_c, _sd_p = _GM_TUBER_FOOD, _GM_TUBER_KCAL_G, _GM_TUBER_CARB_G, _GM_TUBER_PROT_G
+                    _sd_key, _sd_note = "batata", "🍠 Cuece la batata de tus ingredientes (hervida o al horno) y sírvela como acompañante."
+                else:
+                    _sd_food, _sd_k, _sd_c, _sd_p = "arroz blanco cocido", _GM_RICE_KCAL_G, _GM_RICE_CARB_G, _GM_RICE_PROT_G
+                    _sd_key, _sd_note = "arroz blanco", "🍚 Cuece el arroz blanco de tus ingredientes según el paquete y sírvelo como acompañante."
                 add_g = int(min(float(GAINMUSCLE_KCAL_FLOOR_MAX_CARB_PER_MEAL_G),
-                                _mgm.ceil(_need_k / _GM_RICE_KCAL_G),
-                                _mgm.floor(_kcal_room / _GM_RICE_KCAL_G),
-                                _mgm.floor(_carb_room / _GM_RICE_CARB_G)))
+                                _mgm.ceil(_need_k / _sd_k),
+                                _mgm.floor(_kcal_room / _sd_k),
+                                _mgm.floor(_carb_room / _sd_c)))
                 if add_g < 20:
                     continue
                 # [P1-GAINMUSCLE-NO-SECOND-RICE · 2026-07-30] No meter arroz BLANCO en un plato que
@@ -31117,6 +31698,9 @@ def _repair_gainmuscle_day_kcal(days: list, nutrition: dict, form_data: dict, db
                     )
                 except Exception:
                     _otro_arroz = False
+                if _is_cena_gm and any("batata" in _sa_gm(str(_gl).lower()) and _GM_TUBER_FOOD not in str(_gl).lower()
+                                       for _gl in (m.get("ingredients") or [])):
+                    _otro_arroz = True   # [P1-GAINMUSCLE-CENA-TUBER] la cena ya lleva batata: no una segunda
                 if _otro_arroz:
                     logger.info(
                         f"🍚 [P1-GAINMUSCLE-NO-SECOND-RICE] '{str(m.get('name'))[:40]}' ya lleva "
@@ -31127,26 +31711,27 @@ def _repair_gainmuscle_day_kcal(days: list, nutrition: dict, form_data: dict, db
                 _gm_rice_idx = None
                 if final_pass:
                     for _gi, _gl in enumerate(m.get("ingredients") or []):
-                        if "de arroz blanco cocido" in str(_gl).lower():
+                        if f"de {_sd_food}" in str(_gl).lower():
                             _gm_rice_idx = _gi
                             break
                 if _gm_rice_idx is not None:
                     import re as _re_gmrf
                     _gm_mch = _re_gmrf.match(r"\s*(\d+)", str(m["ingredients"][_gm_rice_idx]))
                     _gm_prev = int(_gm_mch.group(1)) if _gm_mch else 0
-                    line = f"{_gm_prev + add_g}g de arroz blanco cocido"
+                    line = f"{_gm_prev + add_g}g de {_sd_food}"
                     m["ingredients"][_gm_rice_idx] = line
                     _gm_raw = m.get("ingredients_raw")
                     if isinstance(_gm_raw, list) and _gm_rice_idx < len(_gm_raw):
                         _gm_raw[_gm_rice_idx] = line
                 else:
-                    line = f"{add_g}g de arroz blanco cocido"
+                    # (literal conservado: lo ancla test_p1_gainmuscle_no_second_rice)
+                    line = f"{add_g}g de arroz blanco cocido" if not _is_cena_gm else f"{add_g}g de {_sd_food}"
                     m.setdefault("ingredients", []).append(line)
                     if isinstance(m.get("ingredients_raw"), list):
                         m["ingredients_raw"].append(line)
-                _dk = add_g * _GM_RICE_KCAL_G
-                m["carbs"] = round(_meal_macro_num(m.get("carbs")) + add_g * _GM_RICE_CARB_G)
-                m["protein"] = round(_meal_macro_num(m.get("protein")) + add_g * _GM_RICE_PROT_G)
+                _dk = add_g * _sd_k
+                m["carbs"] = round(_meal_macro_num(m.get("carbs")) + add_g * _sd_c)
+                m["protein"] = round(_meal_macro_num(m.get("protein")) + add_g * _sd_p)
                 m["cals"] = round(_meal_macro_num(m.get("cals")) + _dk)
                 m["macros"] = [f"P:{m['protein']}g", f"C:{m['carbs']}g", f"G:{round(_meal_macro_num(m.get('fats')))}g"]
                 m["_gainmuscle_kcal_floor"] = True
@@ -31177,16 +31762,19 @@ def _repair_gainmuscle_day_kcal(days: list, nutrition: dict, form_data: dict, db
                 # sumar gramos en pasadas posteriores y una cifra escrita aquí quedaría stale.
                 try:
                     _rec_gm = m.get("recipe")
-                    if isinstance(_rec_gm, list) and _rec_gm and not any(
-                            "arroz blanco" in str(_s).lower() for _s in _rec_gm):
+                    _sd_step_missing = (not any("arroz blanco" in str(_s).lower() for _s in _rec_gm)
+                                        if not _is_cena_gm else
+                                        not any(_sd_key in str(_s).lower() for _s in _rec_gm))
+                    if isinstance(_rec_gm, list) and _rec_gm and _sd_step_missing:
                         m["recipe"] = _insert_step_before_montaje(
                             _rec_gm,
+                            _sd_note if _is_cena_gm else
                             "🍚 Cuece el arroz blanco de tus ingredientes según el paquete y "
                             "sírvelo como acompañante.")
                 except Exception:
                     pass
                 day_kcal += _dk
-                day_carbs += add_g * _GM_RICE_CARB_G
+                day_carbs += add_g * _sd_c
                 added_kcal += _dk
         if added_kcal:
             logger.info(f"🍚 [P1-GAINMUSCLE-KCAL-FLOOR] +{round(added_kcal)} kcal (arroz cocido en comidas "
@@ -32400,7 +32988,15 @@ _REALISM_VOLUME_FRUIT_TOKENS = ("melon", "sandia", "patilla", "lechosa", "papaya
 # [P3-RECIPE-POLISH-4 · 2026-07-06] LÍQUIDOS lácteos: "2½ tazas de leche descremada (599 ml)"
 # en UNA batida (vivo, plan d4a001eb) — nadie sirve >2 tazas de leche en un plato/vaso.
 _REALISM_LIQUID_TOKENS = ("leche",)
-_REALISM_CUP_CAPS = ((_REALISM_HERB_TOKENS, 0.25), (_REALISM_AROMATIC_TOKENS, 1.0),
+# [P1-YOGURT-MEAL-CAP · 2026-09-05] Plan vivo 0b0250ab (vegetariano, gain_muscle): el cerrador rellenaba proteína con
+# yogurt griego en casi todo — 1½ tazas en un almuerzo, 2 tazas (≈500 g) en una merienda. El queso tenía tope por comida
+# (SNACK/MEAL_CHEESE_CAP_G); el yogurt no. Tope en tazas (va PRIMERO: «yogur» podría caer en los tokens líquidos, 2 tazas)
+# y en gramos. Rollback: MEALFIT_YOGURT_MEAL_CAP_G alto.
+_REALISM_YOGURT_TOKENS = ("yogur",)
+YOGURT_MEAL_CAP_G = _env_int("MEALFIT_YOGURT_MEAL_CAP_G", 250, lambda v: 100 <= v <= 400)   # 1 taza: porción generosa, no 2
+YOGURT_MEAL_CAP_CUPS = 1.0
+_REALISM_CUP_CAPS = ((_REALISM_YOGURT_TOKENS, YOGURT_MEAL_CAP_CUPS),
+                     (_REALISM_HERB_TOKENS, 0.25), (_REALISM_AROMATIC_TOKENS, 1.0),
                      (_REALISM_VOLUME_FRUIT_TOKENS, 2.0), (_REALISM_LIQUID_TOKENS, 2.0))
 REALISM_FRUIT_VOLUME_CAP_G = _env_int("MEALFIT_REALISM_FRUIT_VOLUME_CAP_G", 300,
                                       lambda v: 150 <= v <= 600)
@@ -32914,6 +33510,194 @@ def _strip_phantom_sugar_from_steps(days) -> int:
         return 0
 
 
+# [P1-STEP14-SHOPPING-COOKING · 2026-09-05] Sustitución DETERMINISTA del fresco fuera de horizonte en compra única.
+# `fresh_beyond_horizon` era solo un aviso (severidad baja, gate warn): el plato llegaba con lechuga el día 20. Tabla
+# por familia → equivalente duradero del catálogo; se conserva la cantidad de la línea. Proteína fresca sin ventana de
+# congelación ⇒ atún en agua (omnívoro) o garbanzos (vegetariano/vegano). Truth-up de macros desde los strings.
+SINGLE_TRIP_FRESH_SUBSTITUTE = _env_bool("MEALFIT_SINGLE_TRIP_FRESH_SUBSTITUTE", True)
+_FRESH_SUBSTITUTES = (
+    (("lechuga", "berro", "rucula", "arugula", "espinaca", "acelga", "kale", "col rizada"), "repollo"),
+    (("tomate cherry", "tomate"), "zanahoria"),
+    (("pepino", "calabacin", "zucchini", "brocoli", "coliflor", "vainitas", "habichuelas verdes", "esparrago", "champinon", "hongos", "setas"), "zanahoria"),
+    (("cilantro", "perejil", "albahaca", "menta", "cebollin", "cebollino"), "oregano"),
+    (("fresa", "frambuesa", "mora", "arandano", "uva", "lechosa", "papaya", "mango", "pina", "melon", "sandia", "guineo", "banana", "durazno", "melocoton", "pera", "kiwi", "cereza", "mamey", "nispero", "aguacate"), "manzana"),
+    (("pescado", "tilapia", "salmon", "mero", "chillo", "dorado", "bacalao fresco", "merluza", "camaron", "camarones", "mariscos", "calamar", "pulpo", "cangrejo", "langosta", "lambi"), "atun en agua"),
+    (("pechuga de pollo", "pollo", "muslo", "pavo", "carne de res", "res molida", "res", "bistec", "cerdo", "chuleta", "lomo", "chivo", "conejo", "higado"), "atun en agua"),
+    # lácteos: solo la leche tiene sustituto duradero honesto (UHT, misma unidad de volumen); yogurt, cottage y queso
+    # fresco se dejan al prompt (bloque 5 vivo: «305 ml de queso parmesano», «¾ taza de queso parmesano»)
+    (("leche descremada", "leche entera", "leche"), "leche UHT"),
+)
+# [P1-STEP14-CHUNK-PARITY] tokens que NO se sustituyen aunque no aguanten: sin equivalente duradero coherente
+_FRESH_SUB_SKIP = ("yogur", "yogurt", "cottage", "ricotta", "requeson", "queso fresco", "queso blanco", "queso de freir", "leche de coco", "leche de almendra")
+_FRESH_SUB_VEG_PROTEIN = "garbanzos cocidos"
+
+
+def _single_trip_fresh_substitute(days, db=None, *, effective=None, diet=None, days_offset: int = 0) -> int:
+    """Sustituye, en los días fuera de la semana de frescos de un ciclo de UNA sola compra, los ingredientes que no
+    aguantan (`pantry_durability.ingredient_issue_beyond_horizon`) por su equivalente duradero. Muta in-place; marca
+    `_fresh_substituted`; lockstep `ingredients_raw`; truth-up. Sin política de compra única ⇒ 0. Fail-safe.
+    tooltip-anchor: P1-STEP14-SHOPPING-COOKING"""
+    if not SINGLE_TRIP_FRESH_SUBSTITUTE or not days:
+        return 0
+    try:
+        from pantry_durability import single_trip_requirements, ingredient_issue_beyond_horizon
+        from constants import strip_accents as _sa_fs, canonicalize_diet_type as _cdt_fs
+        if db is None:
+            from nutrition_db import IngredientNutritionDB
+            db = IngredientNutritionDB()
+        _veg = _cdt_fs(diet) in ("vegan", "vegetarian")
+        changed = 0
+        # [P1-STEP14-CHUNK-PARITY] el chain del worker pasa solo los días NUEVOS: `days_offset` da el día absoluto
+        _off = int(days_offset or 0)
+        for i0, d in enumerate(days):
+            i = _off + i0
+            if not isinstance(d, dict):
+                continue
+            req = single_trip_requirements(effective, i)
+            if not req:
+                continue
+            for m in (d.get("meals") or []):
+                if not isinstance(m, dict) or not isinstance(m.get("ingredients"), list):
+                    continue
+                ings = m["ingredients"]
+                raw = m.get("ingredients_raw")
+                for idx, line in enumerate(list(ings)):
+                    text = str(line)
+                    low = _sa_fs(text.lower())
+                    if any(h in low for h in ("en lata", "enlatad", "congelad", "seco", "secos", "en polvo", "deshidratad")):
+                        continue
+                    code = ingredient_issue_beyond_horizon(text, i, bool(req.get("allow_frozen")))
+                    if not code:
+                        continue
+                    if any(t in low for t in _FRESH_SUB_SKIP):
+                        continue
+                    sub, hit_tok = None, None
+                    for toks, rep_name in _FRESH_SUBSTITUTES:
+                        for t in toks:
+                            if _re.search(r"\b" + _re.escape(t) + r"s?\b", low):
+                                sub, hit_tok = rep_name, t
+                                break
+                        if sub:
+                            break
+                    if not sub:
+                        continue
+                    if sub == "atun en agua" and _veg:
+                        sub = _FRESH_SUB_VEG_PROTEIN
+                    if sub == "queso parmesano" and _cdt_fs(diet) == "vegan":
+                        sub = _FRESH_SUB_VEG_PROTEIN
+                    mm = _re.match(r"^\s*([\d.,/½¼¾⅓⅔]+\s*(?:g|gr|gramos|ml|taza|tazas|cda|cdas|cdta|cdtas|unidad|unidades)?)\s+(?:de\s+)?", text, _re.IGNORECASE)
+                    qty = (mm.group(1).strip() + " de ") if mm else ""
+                    new_line = f"{qty}{sub}"
+                    if new_line == text:
+                        continue
+                    ings[idx] = new_line
+                    if isinstance(raw, list) and idx < len(raw):
+                        raw[idx] = new_line
+                    m["_fresh_substituted"] = (m.get("_fresh_substituted") or []) + [f"{text[:40]} → {sub}"]
+                    changed += 1
+                    # el NOMBRE y los PASOS dejan de nombrar el fresco sustituido («Lechosa en gajos» con manzana)
+                    try:
+                        _rx_tok = _re.compile(r"(?i)\b" + _re.escape(hit_tok) + r"s?\b")
+                        _cap = sub[:1].upper() + sub[1:]
+                        _nm0 = str(m.get("name") or "")
+                        if _rx_tok.search(_sa_fs(_nm0.lower())):
+                            _nm1 = _re.sub(r"(?i)\b" + _re.escape(hit_tok) + r"s?\b", lambda mo: _cap if mo.group(0)[:1].isupper() else sub,
+                                           _sa_fs(_nm0) if _rx_tok.search(_nm0) is None else _nm0)
+                            if _nm1 != _nm0:
+                                m["name"] = _nm1
+                        rec = m.get("recipe")
+                        if isinstance(rec, list):
+                            for _ri, _st in enumerate(rec):
+                                if isinstance(_st, str) and _rx_tok.search(_sa_fs(_st.lower())):
+                                    rec[_ri] = _re.sub(r"(?i)\b" + _re.escape(hit_tok) + r"s?\b", sub, _st)
+                    except Exception:
+                        pass
+                    logger.info(f"🧳 [P1-STEP14-SHOPPING-COOKING] día {i + 1}: «{text[:40]}» no aguanta ({code}) → «{sub}» | meal={str(m.get('name'))[:40]}")
+                if m.get("_fresh_substituted"):
+                    try:
+                        _truth_up_meal_macros_from_strings(m, db)
+                    except Exception:
+                        pass
+        return changed
+    except Exception as _e:
+        logger.warning(f"[P1-STEP14-SHOPPING-COOKING] sustitución no-op (fail-safe): {type(_e).__name__}: {_e}")
+        return 0
+
+
+def _cap_daily_whole_eggs(days, db=None, *, max_whole: int = None) -> int:
+    """[P1-EGG-DAY-CAP · 2026-09-05] Máximo `max_whole` huevos ENTEROS por día (default EGG_DAY_MAX_WHOLE). La comida con
+    más huevo conserva hasta el tope; su exceso y los enteros de las DEMÁS comidas pasan a claras («3 huevos» →
+    «3 claras de huevo»). Truth-up de macros desde los strings; lockstep `ingredients_raw`. Marca `_egg_day_capped`.
+    Idempotente, fail-safe, muta in-place. Devuelve nº de líneas reescritas. tooltip-anchor: P1-EGG-DAY-CAP"""
+    cap = int(EGG_DAY_MAX_WHOLE if max_whole is None else max_whole)
+    if not days or cap <= 0:
+        return 0
+    try:
+        if db is None:
+            from nutrition_db import IngredientNutritionDB
+            db = IngredientNutritionDB()
+        changed = 0
+        for _d in days:
+            meals = [m for m in ((_d.get("meals") or []) if isinstance(_d, dict) else []) if isinstance(m, dict)]
+            found = []  # (meal, idx, count)
+            for m in meals:
+                for idx, ing in enumerate(m.get("ingredients") or []):
+                    mm = _WHOLE_EGG_LINE_RE.match(str(ing))
+                    if mm:
+                        found.append((m, idx, int(mm.group(1))))
+            total = sum(c for _, _, c in found)
+            if total <= cap:
+                continue
+            found.sort(key=lambda t: -t[2])
+            keeper = found[0][0]
+            for m, idx, count in found:
+                ings = m["ingredients"]
+                if m is keeper:
+                    if count <= cap:
+                        continue
+                    new_lines = [f"{cap} huevos" if cap > 1 else "1 huevo", f"{count - cap} claras de huevo"]
+                else:
+                    new_lines = [f"{count} claras de huevo"]
+                old = str(ings[idx])
+                ings[idx] = new_lines[0]
+                raw = m.get("ingredients_raw")
+                if isinstance(raw, list) and idx < len(raw):
+                    raw[idx] = new_lines[0]
+                for extra in new_lines[1:]:
+                    # [P1-DAYGEN-VEG-HARD-LINE · 2026-09-05] si el plato YA tiene una línea de claras, se SUMA ahí
+                    # («3 huevos + 3 claras + 1 clara» en la tortilla del plan vivo b40a3c48).
+                    _mx = _re.match(r"^\s*(\d+)\s+claras?\b", str(extra), _re.IGNORECASE)
+                    _merged = False
+                    if _mx:
+                        _add_n = int(_mx.group(1))
+                        for _j, _ln in enumerate(ings):
+                            _mj = _re.match(r"^\s*(\d+)\s+claras?\s+de\s+huevo\b", str(_ln), _re.IGNORECASE)
+                            if _mj:
+                                _tot = int(_mj.group(1)) + _add_n
+                                _new_ln = f"{_tot} claras de huevo"
+                                ings[_j] = _new_ln
+                                if isinstance(raw, list) and _j < len(raw):
+                                    raw[_j] = _new_ln
+                                _merged = True
+                                break
+                    if _merged:
+                        continue
+                    ings.append(extra)
+                    if isinstance(raw, list):
+                        raw.append(extra)
+                m["_egg_day_capped"] = True
+                changed += 1
+                try:
+                    _truth_up_meal_macros_from_strings(m, db)
+                except Exception:
+                    pass
+                logger.info(f"🥚 [P1-EGG-DAY-CAP] {old!r} → {new_lines} | meal={str(m.get('name'))[:40]} (día con {total} enteros, tope {cap})")
+        return changed
+    except Exception as _e:
+        logger.warning(f"[P1-EGG-DAY-CAP] no-op (fail-safe): {type(_e).__name__}: {_e}")
+        return 0
+
+
 def _cap_unrealistic_portions(days, db=None) -> int:
     """[P1-PORTION-REALISM-CAP · 2026-07-01] (review de recetas en vivo, batch P1-DISH-REALISM-BATCH)
     Techo de porción REALISTA per-ingrediente, post-sizing. El solver escala el ingrediente dominante
@@ -33050,12 +33834,17 @@ def _cap_unrealistic_portions(days, db=None) -> int:
                         elif (cur_g > float(ORGAN_MEAT_CAP_G)
                               and any(_re.search(r"\b" + t, il) for t in _ORGAN_MEAT_TOKENS)):
                             factor = float(ORGAN_MEAT_CAP_G) / cur_g
+                        elif cur_g > float(YOGURT_MEAL_CAP_G) and _re.search(r"\byogur", il):
+                            factor = float(YOGURT_MEAL_CAP_G) / cur_g   # [P1-YOGURT-MEAL-CAP]
                         # [P1-RECIPE-POLISH-5 v3 · 2026-07-12] 1.9) pan en GRAMOS sobre el techo de
                         # 3 rebanadas (~45g c/u = 135g): el techo por CONTEO de rebanadas no ve las
                         # líneas gram-lead que el humanize convierte a "rebanadas" DESPUÉS de los
                         # caps (vivo: "4 rebanadas de Pan integral familiar" ≈ 180g evadió el cap).
                         elif cur_g > 135.0 and _re.search(r"\bpan\b", il):
                             factor = 135.0 / cur_g
+                        elif (cur_g > float(PORTION_CAP_TUBER_G)
+                              and any(_re.search(r"\b" + t, il) for t in _REALISM_TUBER_TOKENS)):
+                            factor = float(PORTION_CAP_TUBER_G) / cur_g   # [P1-GAINMUSCLE-DINNER-CLOSER] víveres
                         # [P1-RECIPE-AUDIT-6 · 2026-07-12] 1.10) semillas (chía/linaza) en gramos
                         # sobre el techo servible — el micro-closer de fibra las infla sin cap.
                         elif (cur_g > float(SEED_GRAM_CAP_G)
@@ -37197,6 +37986,106 @@ def _consolidate_duplicate_gram_lines(days) -> int:
         return 0
 
 
+# [P1-LIGHT-SLOT-PROTEIN-FLOOR · 2026-09-05] El reparto por franja (`MEAL_SLOT_SPLITS`: merienda 15 %) es el TARGET,
+# pero el bucle de FASE A se detiene en cuanto el DÍA alcanza su piso: con almuerzo y cena sobre-entregando (50 y 48 g),
+# las meriendas se quedaban en 10-14 g de 20 (plan vivo 56a71cc0; también 606e9017). En ganancia muscular eso desperdicia
+# la ventana anabólica de la tarde: cada comida debería rondar el umbral leucínico (~20 g). Segunda pasada SOLO para
+# franjas ligeras muy por debajo de su target, con el mismo cerrador (respeta kcal del slot y hace sitio si hace falta).
+LIGHT_SLOT_PROTEIN_FLOOR = _env_bool("MEALFIT_LIGHT_SLOT_PROTEIN_FLOOR", True)
+LIGHT_SLOT_PROTEIN_MIN_PCT = _env_float("MEALFIT_LIGHT_SLOT_PROTEIN_MIN_PCT", 0.70, validator=lambda v: 0.4 <= v <= 1.0)
+# [P1-SLOT-PROTEIN-FLOOR-ALL] la misma red para almuerzo y cena (el reparto por franja es el target de TODAS)
+SLOT_PROTEIN_FLOOR_ALL_SLOTS = _env_bool("MEALFIT_SLOT_PROTEIN_FLOOR_ALL_SLOTS", True)
+
+
+def _repair_light_slot_protein(days: list, nutrition: dict, form_data: dict, db=None, cands=None) -> int:
+    """Cierra las comidas LIGERAS (merienda/desayuno) por debajo de `LIGHT_SLOT_PROTEIN_MIN_PCT` de su franja en
+    ganancia muscular, aunque el día ya cumpla su piso. Devuelve gramos añadidos. Fail-safe.
+    tooltip-anchor: P1-LIGHT-SLOT-PROTEIN-FLOOR"""
+    if not LIGHT_SLOT_PROTEIN_FLOOR or not days:
+        return 0
+    try:
+        from constants import strip_accents as _sa_lf
+        _goal = _sa_lf(str((form_data or {}).get("mainGoal") or (form_data or {}).get("goal") or "").lower())
+        if not any(t in _goal for t in ("gain_muscle", "ganar_musculo", "ganancia", "bulk")):
+            return 0
+        macros = (nutrition or {}).get("macros") or {}
+        _pg = float(macros.get("protein_g") or 0)
+        _cg = float(macros.get("carbs_g") or 0)
+        _fg = float(macros.get("fats_g") or 0)
+        if _pg <= 0:
+            return 0
+        if db is None:
+            from nutrition_db import IngredientNutritionDB
+            db = IngredientNutritionDB()
+        if cands is None:
+            cands = _safe_high_density_proteins((form_data or {}).get("allergies"), db, min_protein=10.0,
+                                                diet=(form_data or {}).get("dietType"),
+                                                country=country_for_form_data(form_data))
+        _daily_cal = 4.0 * _pg + 4.0 * _cg + 9.0 * _fg
+        added = 0
+        for _d in days or []:
+            if not isinstance(_d, dict):
+                continue
+            _ms = [m for m in (_d.get("meals") or []) if isinstance(m, dict)]
+            if not _ms:
+                continue
+            _fracs = _canonical_slot_fractions(_ms) if SLOT_DISTRIBUTION_ENABLED else None
+            _labels = [_protein_gate_labels_in_meal(_mm) for _mm in _ms]
+            for _i, _m in enumerate(_ms):
+                # [P1-SLOT-PROTEIN-FLOOR-ALL · 2026-09-05] También las comidas FUERTES: el plan vivo a2b40e4e se
+                # entregó degradado con «Croquetas de papa y queso» de 19 g sobre un reparto de 47 (almuerzo) y
+                # 104 g de 135 en el día. El bucle de FASE A corre ANTES de los últimos recortes de banda y marca
+                # `_final_protein_close`; esta pasada es la última y mira el estado FINAL de cada franja.
+                if not (_meal_slot_is_light(_m, _sa_lf) or SLOT_PROTEIN_FLOOR_ALL_SLOTS):
+                    continue
+                _share = _fracs[_i] if (_fracs and _i < len(_fracs)) else (1.0 / max(1, len(_ms)))
+                _slot_target = _pg * _share
+                _cur = _meal_macro_num(_m.get("protein"))
+                if _slot_target <= 0 or _cur >= _slot_target * float(LIGHT_SLOT_PROTEIN_MIN_PCT):
+                    continue
+                _used_others = set()
+                for _j, _lb in enumerate(_labels):
+                    if _j != _i:
+                        _used_others |= _lb
+                _m["_protein_closed"] = False
+                _g = _close_protein_gap_for_meal(_m, _slot_target, db, cands,
+                                                 allergies=(form_data or {}).get("allergies"),
+                                                 fill_pct=PROTEIN_FLOOR_FILL_PCT, max_add_g=120,
+                                                 slot_cal_target=_daily_cal * _share,
+                                                 enforce_min_threshold=False,
+                                                 day_used_proteins=_used_others,
+                                                 diet=(form_data or {}).get("dietType"),
+                                                 country=country_for_form_data(form_data),
+                                                 goal=(form_data or {}).get("mainGoal") or (form_data or {}).get("goal"))
+                if _g > 0:
+                    added += _g
+                    _labels[_i] = _protein_gate_labels_in_meal(_m)
+                    logger.info(f"🥛 [P1-LIGHT-SLOT-PROTEIN-FLOOR] +{_g}g en {'franja ligera' if _meal_slot_is_light(_m, _sa_lf) else 'comida fuerte'} ({_cur:.0f}→"
+                                f"{_meal_macro_num(_m.get('protein')):.0f} g de {_slot_target:.0f}) | meal={str(_m.get('name'))[:40]}")
+                else:
+                    # [P1-SLOT-FLOOR-UNCLOSED · 2026-09-05] El piso CALLABA cuando no podía cerrar: sus dos
+                    # únicos logs son de éxito, así que una franja corta y una franja cerrada se veían igual
+                    # en el journal — cero. Medido en el plan vivo 18326457 (merienda del día 3, 13 g): la
+                    # pasada no dejó ni una línea y hubo que deducir a mano si había disparado siquiera.
+                    #
+                    # Las tres causas se distinguen SOLO con estos números: sin kcal libres (la franja ya está
+                    # en su tope y `_make_room_for_protein` no encontró palanca), sin candidato que quepa, o
+                    # un target mal repartido. Van todos, y con `slot_kcal` frente a su tope.
+                    _slot_kcal_t = _daily_cal * _share
+                    _cur_kcal = _meal_macro_num(_m.get("cals")) or (
+                        4.0 * _cur + 4.0 * _meal_macro_num(_m.get("carbs")) + 9.0 * _meal_macro_num(_m.get("fats")))
+                    logger.warning(
+                        f"🥛 [P1-SLOT-FLOOR-UNCLOSED] franja bajo el piso y el cerrador no pudo: "
+                        f"{_cur:.0f} g de {_slot_target:.0f} (piso {float(LIGHT_SLOT_PROTEIN_MIN_PCT) * 100:.0f}%) | "
+                        f"kcal {_cur_kcal:.0f}/{_slot_kcal_t:.0f} | candidatos={len(cands or [])} | "
+                        f"dieta={str((form_data or {}).get('dietType') or '-')[:14]} | "
+                        f"meal={str(_m.get('name'))[:40]}")
+        return added
+    except Exception as _e:
+        logger.warning(f"[P1-LIGHT-SLOT-PROTEIN-FLOOR] no-op (fail-safe): {type(_e).__name__}: {_e}")
+        return 0
+
+
 def _repair_protein_floor_post_caps(days: list, nutrition: dict, form_data: dict, db=None) -> int:
     """[P1-PROTEIN-FLOOR-POST-CAPS · 2026-06-27] (arquitectura) Re-cierre FINAL del piso de proteína tras los caps
     clínicos. El closer del motor (_close_protein_gap_for_meal) corre DENTRO de _apply_macro_engine (PRE-cap) y es
@@ -37287,7 +38176,8 @@ def _repair_protein_floor_post_caps(days: list, nutrition: dict, form_data: dict
                                                  slot_cal_target=_slot_cal, enforce_min_threshold=False,
                                                  day_used_proteins=_used_others,
                                                  diet=form_data.get("dietType"),
-                                                 country=country_for_form_data(form_data))
+                                                 country=country_for_form_data(form_data),
+                                                 goal=form_data.get("mainGoal") or form_data.get("goal"))
                 if _g > 0:
                     added += _g
                     _m["_final_protein_close"] = True
@@ -37305,6 +38195,11 @@ def _repair_protein_floor_post_caps(days: list, nutrition: dict, form_data: dict
                     _topup_healthy_fat_to_band_floor(_ms, _fg, (4.0 * _pg + 4.0 * _cg + 9.0 * _fg), db, is_bariatric=_is_baria)
                 except Exception:
                     pass
+        # [P1-LIGHT-SLOT-PROTEIN-FLOOR] franjas ligeras muy por debajo de su reparto, aunque el día ya cumpla
+        try:
+            added += _repair_light_slot_protein(days, nutrition, form_data, db, _cands)
+        except Exception:
+            pass
         return added
     except Exception as _rp_e:
         logger.warning(f"[P1-PROTEIN-FLOOR-POST-CAPS] falló (no bloquea): {type(_rp_e).__name__}: {_rp_e}")
@@ -42438,7 +43333,15 @@ Responde ÚNICAMENTE con el JSON de revisión.
             if isinstance(_vr, dict):
                 _egg = int(_vr.get("egg_meals", 0))
                 _tot = int(_vr.get("total_meals", 0)) or 12
-                _cap = max(3, round(_tot * 0.25))
+                # [P1-VEG-OMNIVORE-RULES · 2026-09-05] El 25 % está calibrado para quien ADEMÁS tiene pollo,
+                # pescado y carne. En vegetariano el huevo es una de las pocas proteínas completas que quedan, y
+                # el tope rechazaba el intento entero por «5 de 12» (plan vivo 18326457): una replanificación
+                # completa por una diversidad que la dieta no permite. Tope propio, más ancho pero tope.
+                # El VEGANO no se toca: ahí el huevo es una violación de dieta y la caza otro guard.
+                _egg_pct = (VARIETY_HARD_GATE_EGG_PCT_VEG
+                            if _canonicalize_diet_type((form_data or {}).get("dietType")) == "vegetarian"
+                            else 0.25)
+                _cap = max(3, round(_tot * _egg_pct))
                 if _egg > _cap + VARIETY_HARD_GATE_EGG_SLACK:
                     logger.warning(f"🥚 [P3-VARIETY-HARD-GATE] Huevo en {_egg}/{_tot} comidas "
                                    f"(cap {_cap}+{VARIETY_HARD_GATE_EGG_SLACK}) → rechazo para diversificar")

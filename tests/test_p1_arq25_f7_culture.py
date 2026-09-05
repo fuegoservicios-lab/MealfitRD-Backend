@@ -155,7 +155,11 @@ def test_j_swap_regen_y_coach_cablean_la_puerta_cultural_y_dejan_el_mercado_en_s
                      "slot_coherence_backstop_for_meal(_slot_dump, meal_type, _swap_culture)", "_swap_slot_feedback_suffix(_swap_culture,",
                      "_swap_raw_staple_feedback_suffix(_swap_culture,"):
         assert cultural in agent, cultural
-    for market in ("swap_allergies, swap_dislikes, swap_diet, country=_swap_country", "_safe_high_density_proteins(allergies, _cl_db, country=_swap_country)"):
+    # [P1-SUBS-WORD-BOUNDARY · 2026-09-05] La segunda ancla ganó `diet=diet_type`: el cerrador del coach elegía
+    # su proteína sin mirar la dieta y le metía pollo al plato de un vegetariano. Lo que este test vigila es el
+    # `country=`, que sigue en su sitio; el `diet=` es de otro P-fix y viaja en la misma llamada.
+    for market in ("swap_allergies, swap_dislikes, swap_diet, country=_swap_country",
+                   "_safe_high_density_proteins(allergies, _cl_db, country=_swap_country, diet=diet_type)"):
         assert market in agent, market
     tools = (_BACKEND / "tools.py").read_text(encoding="utf-8")
     assert "_modify_culture = _ccfp_modify(plan_data, form_data)" in tools

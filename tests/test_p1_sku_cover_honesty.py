@@ -386,10 +386,14 @@ def test_cycle_days_plumbing_local():
     # `apply_protein_yield=_apply_protein_yield)` (nuevo kwarg al final de la MISMA llamada) — el
     # ancla se actualiza a la línea real en vez de recortar antes del kwarg nuevo, que dejaría
     # pasar en verde un futuro editor que borre el plumbing de `cycle_days` sin tocar el final.
+    # [P1-SINGLE-TRIP-BADGES · 2026-09-05] el valor que viaja es `_cycle_days_eff` (el parámetro `cycle_days` o, si
+    # el caller no lo pasa, el ciclo de la POLÍTICA del plan): la pasada principal contaba «de 7 días» en planes
+    # quincenales/mensuales. El plumbing que este test ancla es el mismo.
     assert (
-        "cycle_days=cycle_days, text_demand_g_map=_tdg_para_agg, "
+        "cycle_days=_cycle_days_eff, text_demand_g_map=_tdg_para_agg, "
         "apply_protein_yield=_apply_protein_yield)"
     ) in src[j:j_end]
+    assert "_cycle_days_eff = int(cycle_days) if cycle_days else None" in src[j:j_end]
     # [RONDA 2 · ítem 1] SSOT hermano de `cycle_qty_multiplier`, misma tabla
     # `_CYCLE_DAYS_BY_DURATION` — evita que un callsite escriba un literal `15`/`30` suelto que
     # pueda driftear de la tabla que ya usa `cycle_qty_multiplier`.

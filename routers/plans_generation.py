@@ -26,6 +26,7 @@ from fastapi import APIRouter, Body, Depends, HTTPException, Request
 from fastapi.responses import StreamingResponse
 
 from auth import get_verified_user_id, verify_api_quota
+from plan_policy import form_choices as _form_choices_fs, form_choices_summary as _form_choices_summary_fs  # [P2-FORM-SNAPSHOT-LOG]
 from knobs import _env_int
 from rate_limiter import RateLimiter
 # El MISMO limitador que `/analyze/stream` (3/min): la cola no abre una segunda puerta.
@@ -91,7 +92,10 @@ async def api_create_generation_run(
             requested_days=int(data.get("totalDays", 3)),
             market_country=(str(data.get("country")) if data.get("country") else None),
             locale=(str(data.get("locale")) if data.get("locale") else None),
-            input_snapshot={"keys": sorted(k for k in data.keys() if not str(k).startswith("_"))},
+            # [P2-FORM-SNAPSHOT-LOG · 2026-09-05] además de las claves, las ELECCIONES del asistente (sin
+            # datos corporales): quien revisa un plan lee primero qué se pidió, no lo adivina.
+            input_snapshot={"keys": sorted(k for k in data.keys() if not str(k).startswith("_")),
+                            "form_choices": _form_choices_fs(data)},
             policy=_policy_for_run(data),
             correlation_id=get_correlation_id(),
         )
@@ -100,6 +104,12 @@ async def api_create_generation_run(
             "code": "idempotency_key_conflict", "run_id": e.run_id,
             "message": "Esa clave ya se usó con otro formulario. Genera una clave nueva.",
         })
+
+    if created:
+        try:
+            logger.info(f"📝 [FORM-SNAPSHOT] run={str(run.get('id'))[:8]} {_form_choices_summary_fs(data)}")
+        except Exception:
+            pass
 
     if not created:
         snap = await asyncio.to_thread(load_run_snapshot, str(run["id"]), user_id)

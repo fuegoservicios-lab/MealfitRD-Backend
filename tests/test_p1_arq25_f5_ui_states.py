@@ -20,7 +20,13 @@ def _frontend(*parts):
 def test_a_componente_lee_el_endpoint_y_sondea_solo_pending():
     src = _frontend("components", "dashboard", "ShoppingProjectionStatus.jsx")
     assert "fetchWithAuth(`/api/plans/${encodeURIComponent(planId)}/projections`)" in src
-    assert "if (j && j.status === 'pending' && pollsRef.current < POLL_MAX) {" in src
+    # [P2-PROJECTION-LINE-NO-FLICKER · 2026-09-05] El `j &&` de esta línea se mudó ARRIBA, a un
+    # `if (!j || typeof j !== 'object') return;`: la línea conserva el último estado conocido cuando la
+    # respuesta viene rara, en vez de parpadear. La guarda es más fuerte que antes (rechaza también
+    # respuestas que no son objeto), y lo que este test vigila —que solo se sondee en `pending` y bajo el
+    # tope— sigue intacto, así que se ancla eso y no el `j &&` que ya vive en otro sitio.
+    assert "if (!j || typeof j !== 'object') return;" in src, "respuesta rara: conservar lo último conocido"
+    assert "if (j.status === 'pending' && pollsRef.current < POLL_MAX) {" in src
     assert "document.visibilityState === 'hidden'" in src, "oculta no sondea (P2-PLAN-POLL-HIDDEN-NO-CLOCK)"
     # la línea la decide un helper puro fuera del .jsx (react-refresh solo quiere componentes ahí)
     line = _frontend("utils", "projectionLine.js")

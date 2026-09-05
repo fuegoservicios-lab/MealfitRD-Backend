@@ -198,3 +198,10 @@ de las dos bases del día es básico de esa cocina, la **segunda** se sustituye 
 cocina). Un básico vetado por sobreuso cuenta como «ya tiene» pero jamás se inyecta. Solo actúa con mezcla o con cocina ≠
 mercado: el dominicano en el mercado DO sigue byte-idéntico. Knob `MEALFIT_CULTURE_STAPLE_SEED` (True); fail-open.
 Las proteínas no se tocan: las manda la rebanada del blueprint (F3). Test `tests/test_p1_culture_staple_seed.py`.
+
+**Ronda 2 (`P1-CULTURE-STAPLE-SEED-2`, mismo día).** Medido en el plan `4f348954`: la siembra respetaba el veto de sobreuso
+(`used_carbs`) y en una cuenta con arroz=64 y yuca=57 en el contador quedó muda; el día dominicano recibió «Garbanzos + Avena»
+y el modelo hizo arepitas de avena en la cena (rechazo del revisor). Los básicos de la cocina del día **no caen bajo el veto**
+(un dominicano come arroz casi a diario: es la cocina, no monotonía — la misma excepción que los «básicos del usuario» del
+prompt): la siembra corre ANTES del bloque EVITA, se llama sin veto y sus básicos entran en `chosen_carbs` para quedar exentos
+del EVITA; la frecuencia sigue eligiendo el menos usado entre ellos. Log explícito cuando calla.

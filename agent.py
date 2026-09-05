@@ -3394,7 +3394,10 @@ def swap_meal(form_data: dict, surface: str = "individual"):
                 # [P2-AGENT-PROTEIN-CLOSER-COUNTRY · 2026-08-23] ver el bloque de arriba: sin
                 # `country=` el candidato se elige del pool dominicano (36 filas) aunque el
                 # usuario compre en España (43). `_swap_country` ya está derivado en esta función.
-                _cands = _safe_high_density_proteins(allergies, _cl_db, country=_swap_country)
+                # [P1-SUBS-WORD-BOUNDARY · 2026-09-05] …y `diet_type=`, que faltaba: sin él el cerrador del
+                # coach elige del pool completo y le mete pollo al plato de un vegetariano. Los cinco call
+                # sites del generador ya lo pasaban (P1-DIET-BLIND-DIRECTIVES); este se quedó atrás.
+                _cands = _safe_high_density_proteins(allergies, _cl_db, country=_swap_country, diet=diet_type)
                 _added = _close_protein_gap_for_meal(_out, float(target_protein), _cl_db, _cands,
                                                      country=_swap_country)
                 if _added and clean_ingredients:

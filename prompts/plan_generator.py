@@ -782,6 +782,16 @@ def build_medical_condition_context(form_data: dict) -> str:
         return ""
 
 
+def build_habits_context(form_data: dict) -> str:
+    """[P1-WIZARD-CONSUMERS-AUDIT · 2026-09-05] Hábitos declarados (agua, cafeína, tabaco, alcohol) y cintura →
+    directivas del generador. Texto canned; no-op sin hábitos relevantes."""
+    try:
+        from condition_rules import build_habits_prompt
+        return build_habits_prompt(form_data)
+    except Exception:
+        return ""
+
+
 def build_medication_context(form_data: dict) -> str:
     """[P1-MEDICATION-RULES · 2026-06-18] Directivas de interacción fármaco-alimento, dirigidas por el
     registro declarativo `medication_rules.MEDICATION_RULES` (warfarina↔vit K, metformina↔B12, IECA/ARA-II

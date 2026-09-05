@@ -32002,9 +32002,17 @@ __PLAN_MODE_GATE__
                                     # sobre 4 días y copiarla al plan de 22+ sería deshonesto. El valor real
                                     # del chain acá son las mutaciones per-día (dicts compartidos).
                                     _new_nums_ck = {d.get("day") for d in (new_days or []) if isinstance(d, dict)}
+                                    # [P1-STEP14-CHUNK-PARITY · 2026-09-05] el chain necesita la POLÍTICA (compra única,
+                                    # dieta) y el DÍA ABSOLUTO del primer día nuevo: sin ellos, la sustitución de frescos
+                                    # fuera de horizonte veía «día 0-3» y nunca actuaba en los bloques (bloque 4 vivo:
+                                    # lechuga, fresas y espinacas en la lista del día 12 con «solo la compra grande»).
+                                    _all_days_ck = [d for d in plan_data.get("days", []) if isinstance(d, dict)]
+                                    _first_new_idx_ck = next((ix for ix, d in enumerate(_all_days_ck) if d.get("day") in _new_nums_ck), 0)
                                     _chain_view_ck = {
                                         "days": [d for d in plan_data.get("days", [])
                                                  if isinstance(d, dict) and d.get("day") in _new_nums_ck],
+                                        "_plan_policy": plan_data.get("_plan_policy"),
+                                        "_days_offset": _first_new_idx_ck,
                                         "macros": plan_data.get("macros"),
                                         "calories": plan_data.get("calories"),
                                         "main_goal": plan_data.get("main_goal"),

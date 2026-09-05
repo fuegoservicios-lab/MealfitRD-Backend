@@ -1884,7 +1884,7 @@ def _build_hybrid_shopping_list(
                 _cubre_i = max(8, int(round(_cubre_d)))
                 out_item["display_qty"] = (
                     f"{out_item.get('display_qty', '')} · alcanza ~{_cubre_i} días — "
-                    f"no recompres cada semana")
+                    + ("consúmelo en esos días" if _single_trip_notes_on() else "no recompres cada semana"))
         except (TypeError, ValueError):
             pass
         hybrid.append(out_item)
@@ -4422,6 +4422,19 @@ def _resolve_brand_pref(name: str, prefs: dict):
 #     días 29-30): cuántas veces el usuario físicamente recompra perecederos.
 # Espejo frontend: Dashboard.jsx (_cycleCostMultiplier + _cycleTrips).
 _CYCLE_DAYS_BY_DURATION = {"weekly": 7, "biweekly": 15, "monthly": 30}
+# [P1-SINGLE-TRIP-BADGES · 2026-09-05] Con «solo la compra grande» (ciclo > 7 sin reposición) las notas de cobertura NO
+# pueden decir «recompra» ni «no recompres cada semana»: el usuario va UNA vez. Contexto de proceso (el agregador y sus
+# helpers son funciones puras encadenadas; pasar el flag por 6 firmas era peor). Lo setea `get_shopping_list_delta`.
+_SINGLE_TRIP_CTX = {"on": False}
+
+
+def _single_trip_notes_on() -> bool:
+    return bool(_SINGLE_TRIP_CTX.get("on"))
+
+
+def set_single_trip_notes(on: bool) -> None:
+    """Activa/desactiva el copy de compra única en las notas de cobertura (idempotente, sin estado por hilo)."""
+    _SINGLE_TRIP_CTX["on"] = bool(on)
 
 
 # [P1-COHERENCE-UNIT-MISMATCH-SYM · 2026-07-25] Marcar `unit_mismatch` también cuando el lado
@@ -5996,10 +6009,12 @@ def apply_smart_market_units(name: str, weight_in_lbs: float, unit_str: str, raw
             # ya pasó con P1-RICE-STEP-HONEST, y volvió a pasar al escribir ESTE comentario)
             _dias_alcanza = max(1, int(round(_frac * cycle_days)))
             if _frac and _frac < 0.9 and _tapa_avisa:
+                # [P1-SINGLE-TRIP-BADGES] sin reposición no hay «recompra»: se dice cuándo consumirlo
+                _tail = ("consúmelo en esos primeros días" if _single_trip_notes_on() else "recompra")
                 result["display_qty"] = (
-                    f"{display_qty_final} · alcanza ~{_dias_alcanza} de {cycle_days} días — recompra")
+                    f"{display_qty_final} · alcanza ~{_dias_alcanza} de {cycle_days} días — {_tail}")
                 result["display_string"] = (
-                    f"{final_str} (alcanza ~{_dias_alcanza} de {cycle_days} días — recompra)")
+                    f"{final_str} (alcanza ~{_dias_alcanza} de {cycle_days} días — {_tail})")
         except Exception:
             pass
     if sku_label:
@@ -13736,11 +13751,30 @@ def get_shopping_list_delta(
             f"({len(items_to_deduct)} ítems deducidos) y la demanda de recetas es bruta"
         )
 
+    # [P1-SINGLE-TRIP-BADGES · 2026-09-05] ciclo efectivo y contexto de compra única desde la política del plan.
+    _cycle_days_eff = int(cycle_days) if cycle_days else None
+    _single_trip_eff = False
+    try:
+        _eff_pol = ((plan_result or {}).get("_plan_policy") or {}).get("effective") or {}
+        _shop_pol = _eff_pol.get("shopping") or {}
+        if not _cycle_days_eff and _shop_pol.get("main_cycle_days"):
+            _cycle_days_eff = int(_shop_pol["main_cycle_days"])
+        if not _cycle_days_eff:
+            _dur_pol = str((plan_result or {}).get("groceryDuration") or "").strip().lower()
+            _cycle_days_eff = _CYCLE_DAYS_BY_DURATION.get(_dur_pol) if _dur_pol else None
+        _single_trip_eff = bool(int(_cycle_days_eff or 7) > 7 and not _shop_pol.get("fresh_topup_days")
+                                and _shop_pol.get("main_cycle_days"))
+    except Exception:
+        _cycle_days_eff, _single_trip_eff = (int(cycle_days) if cycle_days else None), False
+    set_single_trip_notes(_single_trip_eff)
+
     # [P1-PERSON-WEEKS-CYCLE-AWARE · 2026-07-30] `num_days` viaja al agregador porque los topes por
     # persona-semana necesitan deshacer el `base_duration_scale = 7/num_days` que se aplica tres
     # líneas más arriba. Sin él, `_person_weeks` usaba un `3` hardcodeado y los topes salían 4,7×
     # apretados en un ciclo de 14 días.
-    res = aggregate_and_deduct_shopping_list(all_ingredients, items_to_deduct, categorize=categorize, structured=structured, multiplier=effective_multiplier, brand_prefs=brand_prefs, brand_defaults=brand_defaults, num_days=num_days, cycle_days=cycle_days, text_demand_g_map=_tdg_para_agg, apply_protein_yield=_apply_protein_yield)
+    # [P1-SINGLE-TRIP-BADGES · 2026-09-05] el ciclo REAL (15/30) llega a la nota: la pasada principal no lo pasaba y
+    # las notas contaban «de 7 días» en un plan quincenal (captura del dueño, plan a2b40e4e).
+    res = aggregate_and_deduct_shopping_list(all_ingredients, items_to_deduct, categorize=categorize, structured=structured, multiplier=effective_multiplier, brand_prefs=brand_prefs, brand_defaults=brand_defaults, num_days=num_days, cycle_days=_cycle_days_eff, text_demand_g_map=_tdg_para_agg, apply_protein_yield=_apply_protein_yield)  # [P1-SINGLE-TRIP-BADGES] ciclo real
 
     # [P1-TRIP-WINDOWED-PERISHABLES · 2026-08-02] Segunda pasada SOLO cuando hay ventana
     # de viaje: mismo agregador, mismos descuentos de inventario, misma aritmética —
