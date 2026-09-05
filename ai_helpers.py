@@ -1172,6 +1172,12 @@ def get_deterministic_variety_prompt(history_text: str, form_data: dict = None, 
     # (`build_deterministic_variety_prompt`, más abajo — antes re-derivaba con su propio import
     # local; ahora reusa esta misma variable, sin doble llamada).
     _variety_country = country_for_form_data(form_data)
+    # [P1-ARQ25-F7-CULTURE · subfase H] la cocina elegida sesga el pool de mercado (mercado ≠ cocina)
+    try:
+        from constants import cultural_country_for_form_data as _ccffd_variety
+        _variety_culture = _ccffd_variety(form_data)
+    except Exception:
+        _variety_culture = _variety_country
 
     # --- FILTRO DE RESTRICCIONES MÉDICAS Y DIETÉTICAS ---
     if form_data:
@@ -1215,7 +1221,8 @@ def get_deterministic_variety_prompt(history_text: str, form_data: dict = None, 
         # tooltip-anchor: P2-SEEDER-DIET-NONE
         diet = str(form_data.get("diet") or form_data.get("dietType") or "").lower()
         
-        filtered_proteins, filtered_carbs, filtered_veggies, filtered_fruits = _get_fast_filtered_catalogs(allergies, dislikes, diet, country=_variety_country)
+        filtered_proteins, filtered_carbs, filtered_veggies, filtered_fruits = _get_fast_filtered_catalogs(
+            allergies, dislikes, diet, country=_variety_country, market_extras=True, culture_country=_variety_culture)
     else:
         # Guest sin form_data: usar catálogos completos sin filtrar
         filtered_proteins = DOMINICAN_PROTEINS

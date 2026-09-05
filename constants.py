@@ -1944,6 +1944,29 @@ DOMINICAN_FRUITS = [
     "Granada",
 ]
 
+# [P1-ARQ25-F7-CULTURE · subfase H · 2026-09-05] Básicos UNIVERSALES de mercado: alimentos del catálogo que cualquier
+# supermercado de los seis mercados vende (arroz, avena, aceite de oliva, plátano, yuca, legumbres, pollo, huevo…).
+# Los pools beta nacieron SOLO con las altas de país (US: 10 carbos con bagels y frijoles horneados, sin arroz ni
+# aceite de oliva), y como el pool es la ASIGNACIÓN OBLIGATORIA del día, un dominicano que compra en US recibía
+# «pollo BBQ sobre frijoles horneados» aunque el bloque de inspiración fuera criollo. Se suman al pool beta (opt-in
+# `market_extras=True` en los call sites de producción; knob `MEALFIT_MARKET_POOL_UNIVERSAL`).
+UNIVERSAL_MARKET_STAPLES: dict[str, list] = {
+    "proteins": ["Pechuga de pollo", "Muslo de pollo", "Carne de res", "Carne de res molida", "Cerdo", "Tilapia", "Salmón",
+                 "Filete de pescado blanco", "Camarones", "Atún en agua", "Sardinas en lata", "Huevo", "Pavo molido",
+                 "Queso mozzarella", "Yogurt griego sin azúcar"],
+    "carbs": ["Arroz blanco", "Arroz integral", "Avena", "Pasta integral", "Papa", "Batata", "Yuca", "Plátano verde", "Plátano maduro",
+              "Quinoa", "Lentejas", "Garbanzos", "Habichuelas rojas", "Habichuelas negras", "Frijoles pintos", "Harina de maíz precocida",
+              "Tortilla de maíz", "Pan integral personal"],
+    "veggies_fats": ["Aceite de oliva", "Aceite vegetal", "Aguacate", "Cebolla", "Ajo", "Tomate", "Lechuga", "Zanahoria", "Repollo",
+                     "Brócoli", "Espinacas", "Calabacín", "Ají morrón", "Pepino", "Auyama", "Cilantro", "Limón", "Champiñones", "Maní",
+                     "Almendras fileteadas", "Nuez de Castilla"],
+    "fruits": ["Guineo", "Manzana", "Naranja", "Fresas", "Arándanos", "Piña", "Mango", "Uva", "Sandía"],
+}
+# Condimentos que entraron en `veggies_fats` de los pools beta y el sembrador servía como «grasa del día»
+# («calabacín al kétchup»): siguen en el catálogo para el LLM, pero no como asignación obligatoria.
+MARKET_POOL_CONDIMENTS_EXCLUDED = frozenset({"Salsa barbacoa", "Aderezo ranch", "Kétchup", "Mostaza", "Salsa inglesa",
+                                             "Sazonador para tacos", "Chile en polvo", "Salsa de soya", "Pique", "Alioli"})
+
 # [P1-COUNTRY-SYSTEM-F2 · T5 · 2026-08-17] Pools de catálogo por país beta para el camino
 # DEGRADADO (Smart Shuffle/Edge Recipes, `cron_tasks._build_filtered_edge_recipe_day` →
 # `_get_fast_filtered_catalogs`) — el ÚNICO lugar de ese camino que hoy arma un día desde un
@@ -4136,7 +4159,44 @@ def slot_positive_hint(slot_key: str, diet=None) -> str:
     return SLOT_POSITIVE_HINT.get(slot_key, "")
 
 
-def _get_fast_filtered_catalogs(allergies: tuple, dislikes: tuple, diet: str, country: str = None):
+def _market_pool_with_extras(pool: dict, country: str, culture_country: str = None) -> dict:
+    """[F7-H] Pool beta + básicos universales (sin condimentos como grasa) y, si la cocina elegida no es la del
+    mercado, sesgado a los constituyentes del registry de esa cocina (mínimo 5 por categoría; si no, el pool entero).
+    Puro; nunca lanza (cae al pool tal cual)."""
+    try:
+        from knobs import _env_bool
+        if not _env_bool("MEALFIT_MARKET_POOL_UNIVERSAL", True):
+            return pool
+        out = {}
+        for key in ("proteins", "carbs", "veggies_fats", "fruits"):
+            base = [x for x in (pool.get(key) or []) if x not in MARKET_POOL_CONDIMENTS_EXCLUDED]
+            seen = {strip_accents(str(x)).lower() for x in base}
+            for x in UNIVERSAL_MARKET_STAPLES.get(key) or []:
+                k = strip_accents(x).lower()
+                if k not in seen:
+                    base.append(x); seen.add(k)
+            out[key] = base
+        cc = str(culture_country or "").strip().upper()
+        if cc and cc != str(country or "").strip().upper():
+            try:
+                import dish_registry as _dr
+                snap = _dr.load_registry(cc) or {}
+                names = {strip_accents(str(c.get("canonical") or c.get("name") or "")).lower()
+                         for t in (snap.get("templates") or []) for c in (t.get("constituents") or [])}
+                if names:
+                    for key in ("proteins", "carbs", "veggies_fats"):
+                        hit = [x for x in out[key] if strip_accents(str(x)).lower() in names]
+                        if len(hit) >= 5:
+                            out[key] = hit
+            except Exception:
+                pass
+        return out
+    except Exception:
+        return pool
+
+
+def _get_fast_filtered_catalogs(allergies: tuple, dislikes: tuple, diet: str, country: str = None,
+                                market_extras: bool = False, culture_country: str = None):
     """Filtra el catálogo [dominicano|del país beta] basado en restricciones del usuario O(N)
     sin Cache Thrashing volátil.
 
@@ -4147,6 +4207,9 @@ def _get_fast_filtered_catalogs(allergies: tuple, dislikes: tuple, diet: str, co
     `COUNTRY_POOLS` usa su propio pool; `None`/`'DO'`/un país sin pool dedicado cae a
     DOMINICAN_* — fallback explícito, no excepción (byte-idéntico al comportamiento pre-T5)."""
     _country_pool = COUNTRY_POOLS.get(str(country or "").strip().upper()) if country else None
+    if _country_pool and market_extras:
+        # [F7-H] opt-in de los call sites de producción: básicos universales + sesgo a la cocina elegida
+        _country_pool = _market_pool_with_extras(_country_pool, country, culture_country)
     if _country_pool:
         filtered_proteins = list(_country_pool["proteins"])
         filtered_carbs = list(_country_pool["carbs"])

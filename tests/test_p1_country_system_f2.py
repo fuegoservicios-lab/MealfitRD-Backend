@@ -4568,7 +4568,7 @@ def test_j_ai_helpers_variety_country_derivado_una_vez():
     assert cuerpo.count("country_for_form_data(form_data)") == 1, (
         "country_for_form_data(form_data) debe derivarse UNA sola vez dentro de esta función"
     )
-    assert "_get_fast_filtered_catalogs(allergies, dislikes, diet, country=_variety_country)" in cuerpo
+    assert "_get_fast_filtered_catalogs(\n            allergies, dislikes, diet, country=_variety_country, market_extras=True, culture_country=_variety_culture)" in cuerpo
     assert "build_deterministic_variety_prompt(_dc, _variety_country)" in cuerpo
 
 
@@ -4577,12 +4577,10 @@ def test_j_agent_swap_reusa_swap_country_no_rederiva():
     (ya derivado arriba, T3) — no vuelve a llamar country_for_form_data."""
     src = (_BACKEND / "agent.py").read_text(encoding="utf-8")
     sin_comentarios = "\n".join(l for l in src.splitlines() if not l.strip().startswith("#"))
-    assert (
-        "_get_fast_filtered_catalogs(\n            swap_allergies, swap_dislikes, swap_diet, "
-        "country=_swap_country\n        )" in sin_comentarios
-        or "_get_fast_filtered_catalogs(swap_allergies, swap_dislikes, swap_diet, country=_swap_country)"
-        in sin_comentarios
-    ), "el call site del swap debe pasar country=_swap_country"
+    # [F7-H] la llamada lleva además market_extras/culture_country; lo que se ancla es que el MERCADO sigue siendo _swap_country
+    assert "swap_allergies, swap_dislikes, swap_diet, country=_swap_country" in sin_comentarios, (
+        "el call site del swap debe pasar country=_swap_country"
+    )
     assert sin_comentarios.count("_swap_country = country_for_form_data(form_data)") == 1, (
         "_swap_country debe derivarse UNA sola vez en todo agent.py"
     )

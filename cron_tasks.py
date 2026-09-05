@@ -25320,6 +25320,7 @@ def _build_filtered_edge_recipe_day(
         dislikes,
         (diet or "").strip().lower(),
         country=country,
+        market_extras=True,  # [F7-H] el camino degradado tampoco arma un día con bagels y kétchup
     )
 
     # [P0-DEGRADED-SAFETY-SCAN · 2026-07-31] Segunda malla sobre el pool de candidatos. Va ANTES del

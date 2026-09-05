@@ -1706,7 +1706,8 @@ def swap_meal(form_data: dict, surface: str = "individual"):
         # SIEMPRE usaba el pool RD (default None de _get_fast_filtered_catalogs) sin importar el
         # país real del usuario beta.
         filtered_p, filtered_c, filtered_v, _ = _get_fast_filtered_catalogs(
-            swap_allergies, swap_dislikes, swap_diet, country=_swap_country
+            swap_allergies, swap_dislikes, swap_diet, country=_swap_country,
+            market_extras=True, culture_country=_swap_culture,  # [F7-H]
         )
         
         # Excluir ingredientes del plato rechazado
