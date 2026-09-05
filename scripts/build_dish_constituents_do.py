@@ -75,7 +75,8 @@ CURATED: dict[str, list] = {
     "Moro de guandules con pollo guisado": [(R, "moro de gandules", 1.0), (R, "pollo guisado", 1.0)],
     "Moro de habichuelas negras con bistec encebollado": [(R, "moro de habichuelas negras", 1.0), (I, "Carne de res", 120), (I, "Cebolla", 40)],
     "La bandera: arroz, habichuelas rojas guisadas y pollo": [(R, "arroz blanco", 1.0), (R, "habichuelas guisadas", 1.0), (R, "pollo guisado", 1.0)],
-    "Sancocho dominicano de pollo": [(R, "sancocho", 1.0), (I, "Aguacate", 50)],
+    # [revisión curatorial F7] la receta «sancocho» del diario es de RES; este plato promete POLLO: ingredientes explícitos
+    "Sancocho dominicano de pollo": [(I, "Muslo de pollo", 70), (I, "Yuca", 50), (I, "Plátano verde", 40), (I, "Auyama", 30), (I, "Ñame", 30), (I, "Cebolla", 10), (I, "Aceite vegetal", 5), (I, "Aguacate", 50)],
     "Pastelón de plátano maduro con res molida": [(I, "Plátano maduro", 200), (I, "Carne de res molida", 120), (I, "Queso blanco", 30), (I, "Cebolla", 20)],
     "Pastelón de yuca con pollo desmenuzado": [(I, "Yuca", 200), (I, "Pechuga de pollo", 120), (I, "Queso blanco", 30), (I, "Cebolla", 20)],
     "Pescado guisado a la criolla con arroz blanco": [(R, "pescado guisado", 1.0), (R, "arroz blanco", 1.0)],
@@ -117,7 +118,7 @@ CURATED: dict[str, list] = {
     "Chillo al horno con vegetales y batata asada": [(I, "Filete de pescado blanco", 160), (I, "Zanahoria", 60), (I, "Calabacín", 60), (I, "Batata", 150)],
     "Revoltillo de atún con plátano hervido": [(I, "Atún en agua", 100), (I, "Huevo", 50), (I, "Tomate", 40), (I, "Cebolla", 20), (R, "platano verde hervido", 1.0)],
     "Pinchos de pollo y vegetales con yuca hervida": [(I, "Pechuga de pollo", 140), (I, "Ají morrón", 50), (I, "Cebolla", 40), (R, "yuca hervida", 1.0)],
-    "Tacos en hoja de lechuga con res mechada": [(I, "Lechuga romana", 80), (R, "carne de res guisada", 1.0), (I, "Tomate", 40)],
+    "Rollitos de lechuga con res mechada": [(I, "Lechuga romana", 80), (R, "carne de res guisada", 1.0), (I, "Tomate", 40)],
     "Guacamole criollo con casabe y huevo duro": [(I, "Aguacate", 100), (I, "Tomate", 40), (I, "Cebolla", 20), (I, "Limón", 15), (I, "Casabe", 40), (I, "Huevo", 50)],
     "Pechuga al horno rellena de vegetales con ensalada verde": [(I, "Pechuga de pollo", 150), (I, "Espinacas", 40), (I, "Ají morrón", 40), (R, "ensalada verde", 1.0)],
     "Catibías al horno rellenas de queso": [(I, "Yuca", 150), (I, "Queso blanco", 60)],
@@ -214,6 +215,10 @@ def main() -> int:
     recipes = _load_recipes()
     out, by_origin = {}, {"curated": 0, "rules": 0}
     for t in templates:
+        # [revisión curatorial F7] las plantillas con constituyentes INLINE (F7-D) no van a la tabla: el registry
+        # los lee directo y la tabla sigue siendo solo curación a mano (test_f de F6).
+        if t.get("constituents"):
+            continue
         cons, unresolved, origin = compose(t, recipes)
         by_origin[origin] += 1
         out[t["name"]] = {"constituents": cons, "declared_unresolved": unresolved, "origin": origin}

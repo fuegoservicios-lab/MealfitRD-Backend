@@ -140,15 +140,15 @@
         },
         {
           "name": "Morcilla",
-          "grams": 80
+          "grams": 50.0
         },
         {
           "name": "Panceta ibérica",
-          "grams": 60
+          "grams": 40.0
         },
         {
           "name": "Chorizo español",
-          "grams": 50
+          "grams": 40.0
         }
       ]
     },
@@ -474,8 +474,7 @@
     {
       "name": "Ensaladilla rusa con atún en lata",
       "slots": [
-        "almuerzo",
-        "merienda"
+        "almuerzo"
       ],
       "protein": "pescado",
       "base": "patata",
@@ -491,8 +490,8 @@
           "grams": 100
         },
         {
-          "name": "Sardinas en lata",
-          "grams": 80
+          "name": "Atún en agua",
+          "grams": 80.0
         },
         {
           "name": "Aceitunas",
@@ -503,7 +502,7 @@
     {
       "name": "Boquerones en vinagre con ensalada verde",
       "slots": [
-        "cena"
+        "merienda"
       ],
       "protein": "pescado",
       "base": "none",
@@ -771,7 +770,6 @@
     {
       "name": "Croquetas de jamón ibérico caseras",
       "slots": [
-        "merienda",
         "cena"
       ],
       "protein": "mixta",
@@ -800,7 +798,6 @@
     {
       "name": "Espárragos trigueros a la plancha con ajo",
       "slots": [
-        "cena",
         "merienda"
       ],
       "protein": "none",
@@ -838,8 +835,8 @@
           "grams": 120
         },
         {
-          "name": "Sardinas en lata",
-          "grams": 80
+          "name": "Atún en agua",
+          "grams": 80.0
         },
         {
           "name": "Cebolla",
@@ -1015,6 +1012,10 @@
         {
           "name": "Jamón serrano",
           "grams": 30
+        },
+        {
+          "name": "Papa",
+          "grams": 120.0
         }
       ]
     },
@@ -1276,7 +1277,6 @@
     {
       "name": "Empanada gallega de sardinas",
       "slots": [
-        "merienda",
         "almuerzo"
       ],
       "protein": "pescado",
@@ -1325,7 +1325,6 @@
     {
       "name": "Champiñones al ajillo con perejil",
       "slots": [
-        "cena",
         "merienda"
       ],
       "protein": "none",
@@ -1354,7 +1353,6 @@
     {
       "name": "Coca de vegetales con anchoas",
       "slots": [
-        "merienda",
         "cena"
       ],
       "protein": "mixta",
@@ -1402,31 +1400,10 @@
         {
           "name": "Aceite de oliva",
           "grams": 10
-        }
-      ]
-    },
-    {
-      "name": "Percebes al vapor con limón",
-      "slots": [
-        "almuerzo",
-        "merienda"
-      ],
-      "protein": "mixta",
-      "base": "none",
-      "technique": "hervido",
-      "transform": false,
-      "constituents": [
-        {
-          "name": "Percebes",
-          "grams": 150
         },
         {
-          "name": "Limón",
-          "grams": 20
-        },
-        {
-          "name": "Sal",
-          "grams": 3
+          "name": "Papa",
+          "grams": 100.0
         }
       ]
     },

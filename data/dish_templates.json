@@ -59,8 +59,7 @@
       "name": "Bollitos de yuca rellenos de queso, horneados",
       "slots": [
         "desayuno",
-        "cena",
-        "merienda"
+        "cena"
       ],
       "protein": "queso",
       "base": "yuca",
@@ -390,8 +389,7 @@
     {
       "name": "Quipes horneados con ensalada fresca",
       "slots": [
-        "almuerzo",
-        "merienda"
+        "almuerzo"
       ],
       "protein": "res",
       "base": "bulgur",
@@ -603,8 +601,7 @@
     {
       "name": "Croquetas de atún y yuca al horno con ensalada",
       "slots": [
-        "cena",
-        "merienda"
+        "cena"
       ],
       "protein": "atun",
       "base": "yuca",
@@ -716,7 +713,7 @@
       "transform": false
     },
     {
-      "name": "Tacos en hoja de lechuga con res mechada",
+      "name": "Rollitos de lechuga con res mechada",
       "slots": [
         "cena"
       ],

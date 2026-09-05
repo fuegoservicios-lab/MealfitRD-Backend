@@ -264,8 +264,8 @@
         "starch_base_off_slot": []
       },
       "availability": {
-        "availability_risk_pct": 14.8,
-        "constituents": 311,
+        "availability_risk_pct": 14.7,
+        "constituents": 312,
         "dominican_cultivar_outside_do": [
           {
             "ingredient": "Papa",
@@ -470,7 +470,6 @@
         ],
         "sodium_high": [
           "Pan con queso costeño y chocolate caliente",
-          "Bandeja paisa aligerada",
           "Longaniza santarrosana con papa",
           "Calentado paisa con huevo",
           "Chicharrón con arepa y aguacate",
@@ -556,9 +555,26 @@
           "Trucha a la plancha con patacones",
           "Ñame y yuca sudados con costilla"
         ],
-        "human_signoff": false
+        "human_signoff": true,
+        "signoff": {
+          "accepted": [
+            "Cultivares dominicanos (14,7 %): yuca, plátano, arracacha, auyama son producto colombiano corriente.",
+            "Jugo de lulo y palmito con limón (< 40 kcal): snacks reales de bajo aporte."
+          ],
+          "by": "Claude (revisión curatorial delegada por el dueño)",
+          "date": "2026-09-05",
+          "decisions": [
+            "Alérgenos: el matcher del registry no reconocía plurales (sardinas, fideos, almejas) ni la salsa de soya como gluten: corregido y recompilado; cero clases sin marcar en las 6 bibliotecas (verificado con un chequeo independiente por constituyente).",
+            "Raciones: meriendas > 450 kcal reasignadas a almuerzo/cena; almuerzos < 260 kcal y cenas < 180 kcal completados con base o proteína; almuerzos > 1.100 kcal reducidos.",
+            "Sodio: recortados los constituyentes salados de los platos > 1.800 mg/ración (cecina, chicharrón, jamón de cocinar, chuletas ahumadas, embutidos de la fabada).",
+            "Nombre ↔ constituyentes verificado en las 516 plantillas: dos incoherencias corregidas (sancocho «de pollo» hecho con res; ensaladas «con atún» hechas con sardinas).",
+            "Bandeja paisa «aligerada» estaba en 1.265 kcal: fríjol 120→80 g, arroz 80→60 g, chicharrón 40→25 g, res 100→90 g.",
+            "Chicharrón con arepa: 100→60 g; palmito con camarones + arroz; sopa de verduras con pollo a 140 g de pollo."
+          ],
+          "snapshot_hash": "fbdd323cf10db26c5af69f7ac237c2406472737a1e90bc2a0062f047c9b20e8c"
+        }
       },
-      "snapshot_hash": "76880b93946021f72baf2f351b86376a406e39ed3eb9f070efb1247698ec7320"
+      "snapshot_hash": "fbdd323cf10db26c5af69f7ac237c2406472737a1e90bc2a0062f047c9b20e8c"
     },
     "dominican_criolla": {
       "appropriateness": {
@@ -612,13 +628,7 @@
         ]
       },
       "contamination": {
-        "hits": [
-          {
-            "foreign_profile": "mexico_casera",
-            "template": "Tacos en hoja de lechuga con res mechada",
-            "token": "tacos"
-          }
-        ],
+        "hits": [],
         "ok": true
       },
       "country": "DO",
@@ -629,7 +639,7 @@
           "almuerzo": 41,
           "cena": 31,
           "desayuno": 23,
-          "merienda": 32
+          "merienda": 29
         },
         "templates": 97
       },
@@ -652,12 +662,28 @@
         "editorial": {
           "curated": 97
         },
-        "flagged_for_human_review": [
-          "Tacos en hoja de lechuga con res mechada"
-        ],
-        "human_signoff": false
+        "flagged_for_human_review": [],
+        "human_signoff": true,
+        "signoff": {
+          "accepted": [
+            "Arenque desmenuzado (1.700 mg Na): plato tradicional de arenque salado, se mantiene; el motor lo marca sodium_high.",
+            "Molondrones guisados (250 kcal) y sopa-crema de auyama (283 kcal): platos ligeros reales; el generador ajusta porciones a los macros del día."
+          ],
+          "by": "Claude (revisión curatorial delegada por el dueño)",
+          "date": "2026-09-05",
+          "decisions": [
+            "Alérgenos: el matcher del registry no reconocía plurales (sardinas, fideos, almejas) ni la salsa de soya como gluten: corregido y recompilado; cero clases sin marcar en las 6 bibliotecas (verificado con un chequeo independiente por constituyente).",
+            "Raciones: meriendas > 450 kcal reasignadas a almuerzo/cena; almuerzos < 260 kcal y cenas < 180 kcal completados con base o proteína; almuerzos > 1.100 kcal reducidos.",
+            "Sodio: recortados los constituyentes salados de los platos > 1.800 mg/ración (cecina, chicharrón, jamón de cocinar, chuletas ahumadas, embutidos de la fabada).",
+            "Nombre ↔ constituyentes verificado en las 516 plantillas: dos incoherencias corregidas (sancocho «de pollo» hecho con res; ensaladas «con atún» hechas con sardinas).",
+            "«Tacos en hoja de lechuga con res mechada» → «Rollitos de lechuga con res mechada» (léxico mexicano en la biblioteca dominicana; el plato se conserva).",
+            "Quipes, bollitos de yuca rellenos y croquetas de atún salen de merienda (500-600 kcal): quedan en almuerzo/cena.",
+            "Las 10 plantillas nuevas llevan constituyentes inline (ganan a la tabla curada); la tabla sigue siendo solo curación a mano (87)."
+          ],
+          "snapshot_hash": "4a67c361c8b36e54bc7615d4fe146d1e772a6237d83337ac046a4cb2c797e9bf"
+        }
       },
-      "snapshot_hash": "3605159b411f636e9ad92ac7e5920a769321debf54827b569300f612fc63d780"
+      "snapshot_hash": "4a67c361c8b36e54bc7615d4fe146d1e772a6237d83337ac046a4cb2c797e9bf"
     },
     "mexico_casera": {
       "appropriateness": {
@@ -667,8 +693,8 @@
         "starch_base_off_slot": []
       },
       "availability": {
-        "availability_risk_pct": 2.1,
-        "constituents": 380,
+        "availability_risk_pct": 2.4,
+        "constituents": 379,
         "dominican_cultivar_outside_do": [
           {
             "ingredient": "Papa",
@@ -685,6 +711,10 @@
           {
             "ingredient": "Papa",
             "template": "Picadillo de res con papa y zanahoria"
+          },
+          {
+            "ingredient": "Papa",
+            "template": "Sopa de verduras con pollo y epazote"
           },
           {
             "ingredient": "Guayaba",
@@ -705,7 +735,7 @@
         ],
         "needs_review": false,
         "ok": true,
-        "priced_pct": 71.3,
+        "priced_pct": 71.8,
         "review_threshold_pct": 15.0
       },
       "clinical": {
@@ -736,21 +766,21 @@
         "gaps": [],
         "ok": true,
         "slots": {
-          "almuerzo": 35,
-          "cena": 28,
+          "almuerzo": 34,
+          "cena": 27,
           "desayuno": 21,
-          "merienda": 22
+          "merienda": 20
         },
-        "templates": 83
+        "templates": 82
       },
       "diversity": {
         "bases": 7,
-        "distinct_heads_ratio": 0.795,
+        "distinct_heads_ratio": 0.805,
         "ok": true,
         "proteins": 12,
         "techniques": 14,
-        "top_protein_share": 0.229,
-        "transform_share": 0.434
+        "top_protein_share": 0.22,
+        "transform_share": 0.439
       },
       "library": "mx",
       "resolvability": {
@@ -760,7 +790,7 @@
       },
       "review": {
         "editorial": {
-          "curated": 83
+          "curated": 82
         },
         "flagged_for_human_review": [
           "Avena con canela y plátano estilo mexicano",
@@ -769,12 +799,31 @@
           "Frijoles charros con longaniza",
           "Picadillo de res con papa y zanahoria",
           "Sopa de lentejas con verduras",
+          "Sopa de verduras con pollo y epazote",
           "Tortitas de papa con queso",
           "Yogur con guayaba y avena"
         ],
-        "human_signoff": false
+        "human_signoff": true,
+        "signoff": {
+          "accepted": [
+            "Pozole ligero de cerdo usa maíz en granos del catálogo (no hay maíz pozolero): adaptación declarada; el LLM adapta.",
+            "Pepino con chile y limón (35 kcal): snack real de bajo aporte; se conserva."
+          ],
+          "by": "Claude (revisión curatorial delegada por el dueño)",
+          "date": "2026-09-05",
+          "decisions": [
+            "Alérgenos: el matcher del registry no reconocía plurales (sardinas, fideos, almejas) ni la salsa de soya como gluten: corregido y recompilado; cero clases sin marcar en las 6 bibliotecas (verificado con un chequeo independiente por constituyente).",
+            "Raciones: meriendas > 450 kcal reasignadas a almuerzo/cena; almuerzos < 260 kcal y cenas < 180 kcal completados con base o proteína; almuerzos > 1.100 kcal reducidos.",
+            "Sodio: recortados los constituyentes salados de los platos > 1.800 mg/ración (cecina, chicharrón, jamón de cocinar, chuletas ahumadas, embutidos de la fabada).",
+            "Nombre ↔ constituyentes verificado en las 516 plantillas: dos incoherencias corregidas (sancocho «de pollo» hecho con res; ensaladas «con atún» hechas con sardinas).",
+            "Cecina con nopales: 150→70 g de cecina + frijoles negros (3.179 mg Na → ~1.500); machaca de cecina 80→50 g.",
+            "Sopa de verduras con pollo y epazote: pollo 150 g + papa; huachinango al horno + arroz; avena con canela y plátano solo en desayuno.",
+            "«Ensalada de jícama con chile y limón» eliminada (duplicado del snack «Jícama con chile y limón»); ensalada de nopales con queso solo en cena."
+          ],
+          "snapshot_hash": "c27d44d4abbcecd9eacb8fafb9a789fa0ab996261cfa1f8d01d60b38c84d2c65"
+        }
       },
-      "snapshot_hash": "06e1f79836618105f42182752585ad4864d9453539b2cba188886972e89b66f8"
+      "snapshot_hash": "c27d44d4abbcecd9eacb8fafb9a789fa0ab996261cfa1f8d01d60b38c84d2c65"
     },
     "puertorico_criolla": {
       "appropriateness": {
@@ -784,8 +833,8 @@
         "starch_base_off_slot": []
       },
       "availability": {
-        "availability_risk_pct": 16.2,
-        "constituents": 308,
+        "availability_risk_pct": 16.8,
+        "constituents": 310,
         "dominican_cultivar_outside_do": [
           {
             "ingredient": "Yuca",
@@ -810,6 +859,10 @@
           {
             "ingredient": "Pan de agua",
             "template": "Pan con mantequilla y jugo de chinola"
+          },
+          {
+            "ingredient": "Yautía",
+            "template": "Pescado al horno con limón y sofrito"
           },
           {
             "ingredient": "Plátano verde",
@@ -882,6 +935,10 @@
           {
             "ingredient": "Batata",
             "template": "Batata hervida con canela"
+          },
+          {
+            "ingredient": "Batata",
+            "template": "Camarones salteados con vegetales"
           },
           {
             "ingredient": "Plátano verde",
@@ -990,7 +1047,7 @@
         ],
         "needs_review": true,
         "ok": true,
-        "priced_pct": 78.2,
+        "priced_pct": 78.4,
         "review_threshold_pct": 15.0
       },
       "clinical": {
@@ -1072,6 +1129,7 @@
           "Batata hervida con canela",
           "Bistec encebollado con tostones",
           "Camarones al ajillo con tostones",
+          "Camarones salteados con vegetales",
           "Chicharrón de cerdo con tostones y pique",
           "Chuletas de cerdo guisadas con arroz",
           "Crema de auyama con queso blanco",
@@ -1097,6 +1155,7 @@
           "Pechuga a la plancha con amarillos y ensalada",
           "Pechuga de pollo con puré de batata",
           "Pescado a la plancha con yuca hervida",
+          "Pescado al horno con limón y sofrito",
           "Piña con coco rallado",
           "Pollo guisado con calabaza y arroz",
           "Puré de plátano verde con huevo frito",
@@ -1109,9 +1168,27 @@
           "Tostadas de pan sobao con queso y jugo de naranja",
           "Tostones con pique"
         ],
-        "human_signoff": false
+        "human_signoff": true,
+        "signoff": {
+          "accepted": [
+            "Yuca, plátano, ñame, auyama, guineo verde marcados «cultivar dominicano» (16,5 %): producto corriente en Puerto Rico, no es riesgo de disponibilidad.",
+            "Morcilla a la plancha (13 g de proteína): la morcilla es así; plato ocasional."
+          ],
+          "by": "Claude (revisión curatorial delegada por el dueño)",
+          "date": "2026-09-05",
+          "decisions": [
+            "Alérgenos: el matcher del registry no reconocía plurales (sardinas, fideos, almejas) ni la salsa de soya como gluten: corregido y recompilado; cero clases sin marcar en las 6 bibliotecas (verificado con un chequeo independiente por constituyente).",
+            "Raciones: meriendas > 450 kcal reasignadas a almuerzo/cena; almuerzos < 260 kcal y cenas < 180 kcal completados con base o proteína; almuerzos > 1.100 kcal reducidos.",
+            "Sodio: recortados los constituyentes salados de los platos > 1.800 mg/ración (cecina, chicharrón, jamón de cocinar, chuletas ahumadas, embutidos de la fabada).",
+            "Nombre ↔ constituyentes verificado en las 516 plantillas: dos incoherencias corregidas (sancocho «de pollo» hecho con res; ensaladas «con atún» hechas con sardinas).",
+            "Cinco almuerzos de 1.100-1.250 kcal (arroz con gandules y pernil, pernil con habichuelas, carne guisada, longaniza, habichuelas con calabaza): arroz 150→80 g y legumbre 100→70 g en seco.",
+            "Chicharrón 120→70 g y 100→60 g, jamón de cocinar 150→80 g, chuletas ahumadas 150→110 g (sodio 1.800-2.200 mg → bajo 1.500).",
+            "Pescado al horno con sofrito (168 kcal) completado con yautía; tortilla de huevo a 3 huevos; camarones salteados con batata."
+          ],
+          "snapshot_hash": "a7432df7bd9b9b6f2c5d5cc39a669cac0581e347dba0bd43c50a4426a77fc54a"
+        }
       },
-      "snapshot_hash": "e088178e581c611396742f3cbbe35de0da50cfdd0216cd4095ff33a4a1efdd30"
+      "snapshot_hash": "a7432df7bd9b9b6f2c5d5cc39a669cac0581e347dba0bd43c50a4426a77fc54a"
     },
     "spain_mediterranea": {
       "appropriateness": {
@@ -1121,12 +1198,16 @@
         "starch_base_off_slot": []
       },
       "availability": {
-        "availability_risk_pct": 4.7,
-        "constituents": 337,
+        "availability_risk_pct": 5.4,
+        "constituents": 336,
         "dominican_cultivar_outside_do": [
           {
             "ingredient": "Papa",
             "template": "Potaje de garbanzos con acelgas"
+          },
+          {
+            "ingredient": "Papa",
+            "template": "Menestra de verduras con jamón serrano"
           },
           {
             "ingredient": "Papa",
@@ -1174,6 +1255,10 @@
           },
           {
             "ingredient": "Papa",
+            "template": "Vieiras a la plancha con puerro"
+          },
+          {
+            "ingredient": "Papa",
             "template": "Conejo al ajillo con patatas"
           },
           {
@@ -1191,7 +1276,7 @@
         ],
         "needs_review": false,
         "ok": true,
-        "priced_pct": 86.1,
+        "priced_pct": 86.3,
         "review_threshold_pct": 15.0
       },
       "clinical": {
@@ -1222,9 +1307,7 @@
           "Menestra de verduras con jamón serrano",
           "Sopa de fideos con jamón serrano",
           "Habas con jamón serrano salteadas",
-          "Percebes al vapor con limón",
           "Tostada integral con aguacate y huevo poché",
-          "Ensaladilla rusa con atún en lata",
           "Butifarra con alubias blancas",
           "Merluza en salsa verde con almejas",
           "Chistorra a la plancha con pimientos",
@@ -1256,21 +1339,21 @@
         "gaps": [],
         "ok": true,
         "slots": {
-          "almuerzo": 46,
-          "cena": 36,
+          "almuerzo": 45,
+          "cena": 33,
           "desayuno": 21,
-          "merienda": 22
+          "merienda": 18
         },
-        "templates": 83
+        "templates": 82
       },
       "diversity": {
         "bases": 9,
-        "distinct_heads_ratio": 0.88,
+        "distinct_heads_ratio": 0.878,
         "ok": true,
         "proteins": 11,
         "techniques": 14,
-        "top_protein_share": 0.313,
-        "transform_share": 0.241
+        "top_protein_share": 0.305,
+        "transform_share": 0.244
       },
       "library": "es",
       "resolvability": {
@@ -1280,7 +1363,7 @@
       },
       "review": {
         "editorial": {
-          "curated": 83
+          "curated": 82
         },
         "flagged_for_human_review": [
           "Albóndigas en salsa con puré de patata",
@@ -1290,6 +1373,7 @@
           "Cordero asado con patatas panaderas",
           "Crema de calabacín con queso",
           "Ensaladilla rusa con atún en lata",
+          "Menestra de verduras con jamón serrano",
           "Pollo al ajillo con patatas panaderas",
           "Pollo asado con verduras al horno",
           "Potaje de garbanzos con acelgas",
@@ -1298,22 +1382,42 @@
           "Ternera guisada con patatas y zanahoria",
           "Tortilla de patatas con jamón serrano",
           "Tortilla española con patata y cebolla",
-          "Trucha al horno con patatas panaderas"
+          "Trucha al horno con patatas panaderas",
+          "Vieiras a la plancha con puerro"
         ],
-        "human_signoff": false
+        "human_signoff": true,
+        "signoff": {
+          "accepted": [
+            "19 platos con curados (jamón serrano/ibérico, chorizo, panceta): identidad de la cocina; el registry los marca processed_meat y el motor clínico decide por perfil.",
+            "Pistos, gazpacho y ensaladas de 210-300 kcal: platos ligeros reales de almuerzo/cena; el generador escala porciones."
+          ],
+          "by": "Claude (revisión curatorial delegada por el dueño)",
+          "date": "2026-09-05",
+          "decisions": [
+            "Alérgenos: el matcher del registry no reconocía plurales (sardinas, fideos, almejas) ni la salsa de soya como gluten: corregido y recompilado; cero clases sin marcar en las 6 bibliotecas (verificado con un chequeo independiente por constituyente).",
+            "Raciones: meriendas > 450 kcal reasignadas a almuerzo/cena; almuerzos < 260 kcal y cenas < 180 kcal completados con base o proteína; almuerzos > 1.100 kcal reducidos.",
+            "Sodio: recortados los constituyentes salados de los platos > 1.800 mg/ración (cecina, chicharrón, jamón de cocinar, chuletas ahumadas, embutidos de la fabada).",
+            "Nombre ↔ constituyentes verificado en las 516 plantillas: dos incoherencias corregidas (sancocho «de pollo» hecho con res; ensaladas «con atún» hechas con sardinas).",
+            "«Percebes al vapor con limón» eliminado (140 kcal, 1.600 mg Na, marisco de lujo sin valor cotidiano).",
+            "Espárragos a la plancha, champiñones al ajillo y boquerones en vinagre pasan a merienda (son tapas, no cenas); ensaladilla, empanada gallega, croquetas y coca salen de merienda (450-675 kcal).",
+            "Menestra y vieiras completadas con papa; fabada: morcilla 80→50 g, panceta 60→40 g, chorizo 50→40 g.",
+            "Ensaladilla rusa y ensalada de judías «con atún» llevaban sardinas: ahora atún."
+          ],
+          "snapshot_hash": "d1f796b97eb863b811f088108e886bc5b853ce7b2cce9a6f6f9dd8c35e6b4237"
+        }
       },
-      "snapshot_hash": "4c2069f01b6b19738836f22d4091b29208aa364bfcdda5bb71a03fc72d54f637"
+      "snapshot_hash": "d1f796b97eb863b811f088108e886bc5b853ce7b2cce9a6f6f9dd8c35e6b4237"
     },
     "us_everyday": {
       "appropriateness": {
-        "fried_share": 0.023,
+        "fried_share": 0.012,
         "heavy_technique_in_snack": [],
         "ok": true,
         "starch_base_off_slot": []
       },
       "availability": {
-        "availability_risk_pct": 3.9,
-        "constituents": 311,
+        "availability_risk_pct": 4.3,
+        "constituents": 302,
         "dominican_cultivar_outside_do": [
           {
             "ingredient": "Papa",
@@ -1361,12 +1465,16 @@
           },
           {
             "ingredient": "Papa",
+            "template": "Salmón con espárragos"
+          },
+          {
+            "ingredient": "Papa",
             "template": "Pavo al horno con puré y salsa de arándanos"
           }
         ],
         "needs_review": false,
         "ok": true,
-        "priced_pct": 80.7,
+        "priced_pct": 83.1,
         "review_threshold_pct": 15.0
       },
       "clinical": {
@@ -1375,12 +1483,9 @@
         "processed_meat": [
           "Salchicha italiana con vegetales asados",
           "Salchicha italiana con pimientos",
-          "Bolitas de papa con salchichas",
           "Ensalada Cobb con pollo, huevo y aguacate",
           "Sándwich de jamón de sándwich con queso provolone",
           "Pechuga de pollo envuelta en tocineta",
-          "Salchichas con frijoles horneados",
-          "Pepperoni con queso provolone y pan",
           "Huevos revueltos con tocineta",
           "Sándwich de huevo con jamón de pavo en panecillo inglés"
         ],
@@ -1391,14 +1496,11 @@
           "Pasta integral con pavo molido y salsa de tomate",
           "Panecillos de mantequilla con miel",
           "Espagueti integral con albóndigas de pavo",
-          "Bolitas de papa con salchichas",
           "Wafles con jarabe de arce",
           "Burrito de desayuno con huevo, frijoles y queso",
           "Sándwich de jamón de sándwich con queso provolone",
           "Pan de maíz con mantequilla",
           "Tacos con sazonador para tacos",
-          "Salchichas con frijoles horneados",
-          "Pepperoni con queso provolone y pan",
           "Sloppy joe de res magra en pan",
           "Panqueques con arándanos rojos",
           "Pizza rápida de tortilla integral con pollo y mozzarella",
@@ -1426,21 +1528,21 @@
         "gaps": [],
         "ok": true,
         "slots": {
-          "almuerzo": 36,
+          "almuerzo": 32,
           "cena": 25,
-          "desayuno": 21,
+          "desayuno": 20,
           "merienda": 16
         },
-        "templates": 87
+        "templates": 81
       },
       "diversity": {
         "bases": 9,
-        "distinct_heads_ratio": 0.759,
+        "distinct_heads_ratio": 0.778,
         "ok": true,
         "proteins": 11,
         "techniques": 14,
-        "top_protein_share": 0.184,
-        "transform_share": 0.253
+        "top_protein_share": 0.185,
+        "transform_share": 0.259
       },
       "library": "us",
       "resolvability": {
@@ -1450,7 +1552,7 @@
       },
       "review": {
         "editorial": {
-          "curated": 87
+          "curated": 81
         },
         "flagged_for_human_review": [
           "Chuletas de cerdo al horno",
@@ -1464,13 +1566,30 @@
           "Pavo al horno con puré y salsa de arándanos",
           "Pechuga de pollo a la parrilla con vegetales",
           "Pechuga de pollo al horno con batata y espárragos",
+          "Salmón con espárragos",
           "Sopa de almejas estilo Nueva Inglaterra",
           "Tacos con sazonador para tacos",
           "Tacos de pescado con repollo y crema agria"
         ],
-        "human_signoff": false
+        "human_signoff": true,
+        "signoff": {
+          "accepted": [
+            "«Tacos de pescado» y «Tacos con sazonador»: el taco es cotidiano en EE. UU. (Tex-Mex); contaminación léxica aceptada (2 de 81, bajo el 3 %)."
+          ],
+          "by": "Claude (revisión curatorial delegada por el dueño)",
+          "date": "2026-09-05",
+          "decisions": [
+            "Alérgenos: el matcher del registry no reconocía plurales (sardinas, fideos, almejas) ni la salsa de soya como gluten: corregido y recompilado; cero clases sin marcar en las 6 bibliotecas (verificado con un chequeo independiente por constituyente).",
+            "Raciones: meriendas > 450 kcal reasignadas a almuerzo/cena; almuerzos < 260 kcal y cenas < 180 kcal completados con base o proteína; almuerzos > 1.100 kcal reducidos.",
+            "Sodio: recortados los constituyentes salados de los platos > 1.800 mg/ración (cecina, chicharrón, jamón de cocinar, chuletas ahumadas, embutidos de la fabada).",
+            "Nombre ↔ constituyentes verificado en las 516 plantillas: dos incoherencias corregidas (sancocho «de pollo» hecho con res; ensaladas «con atún» hechas con sardinas).",
+            "Seis bajas: «Yogur griego con duraznos» (duplicado exacto), «Queso en hebras con vegetales», «Ensalada de huevos rellenos», «Bolitas de papa con salchichas», «Pepperoni con queso provolone y pan», «Salchichas con frijoles horneados» (sin valor nutricional o > 1.900 mg Na).",
+            "Ensalada de repollo con pollo + aguacate y maíz; camarones a la parrilla + arroz integral; «Ensalada verde con pollo y nueces pecanas» (antes sin proteína); salmón con espárragos + papa; chili en lata 250→200 g; jamón del sándwich 100→70 g."
+          ],
+          "snapshot_hash": "6990ec5aafb48b3c5924988b90c9b6ed8b1bfd39c425a9833e77a7a4c9aeda73"
+        }
       },
-      "snapshot_hash": "2a423c6a9ff7558185964a9d82c0664bc247f94695eacfa29a91073fa1d72254"
+      "snapshot_hash": "6990ec5aafb48b3c5924988b90c9b6ed8b1bfd39c425a9833e77a7a4c9aeda73"
     }
   },
   "schema_version": 1

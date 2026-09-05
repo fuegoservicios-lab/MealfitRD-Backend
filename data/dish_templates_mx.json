@@ -130,8 +130,7 @@
     {
       "name": "Avena con canela y plátano estilo mexicano",
       "slots": [
-        "desayuno",
-        "merienda"
+        "desayuno"
       ],
       "protein": "none",
       "base": "avena",
@@ -225,7 +224,7 @@
       "constituents": [
         {
           "name": "Cecina",
-          "grams": 80
+          "grams": 50.0
         },
         {
           "name": "Huevo",
@@ -786,7 +785,6 @@
     {
       "name": "Ensalada de nopales con queso",
       "slots": [
-        "almuerzo",
         "cena"
       ],
       "protein": "queso",
@@ -841,6 +839,10 @@
         {
           "name": "Tomate",
           "grams": 100
+        },
+        {
+          "name": "Arroz blanco",
+          "grams": 60.0
         }
       ]
     },
@@ -991,35 +993,6 @@
       ]
     },
     {
-      "name": "Ensalada de jícama con chile y limón",
-      "slots": [
-        "cena",
-        "merienda"
-      ],
-      "protein": "none",
-      "base": "none",
-      "technique": "frío",
-      "transform": false,
-      "constituents": [
-        {
-          "name": "Jícama",
-          "grams": 150
-        },
-        {
-          "name": "Limón",
-          "grams": 20
-        },
-        {
-          "name": "Chile de árbol",
-          "grams": 3
-        },
-        {
-          "name": "Pepino",
-          "grams": 80
-        }
-      ]
-    },
-    {
       "name": "Tostadas de atún con aguacate",
       "slots": [
         "cena"
@@ -1087,7 +1060,7 @@
       "constituents": [
         {
           "name": "Cecina",
-          "grams": 150
+          "grams": 70.0
         },
         {
           "name": "Nopal",
@@ -1100,6 +1073,10 @@
         {
           "name": "Limón",
           "grams": 15
+        },
+        {
+          "name": "Habichuelas negras",
+          "grams": 60.0
         }
       ]
     },
@@ -2109,7 +2086,7 @@
       "constituents": [
         {
           "name": "Pechuga de pollo",
-          "grams": 100.0
+          "grams": 150.0
         },
         {
           "name": "Calabacín",
@@ -2130,6 +2107,10 @@
         {
           "name": "Cebolla",
           "grams": 30.0
+        },
+        {
+          "name": "Papa",
+          "grams": 80.0
         }
       ]
     },

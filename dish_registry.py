@@ -144,13 +144,19 @@ def allergen_classes_for(names: Iterable[str]) -> list[str]:
         return []
     out: set[str] = set()
     norm_names = [_norm(n) for n in names if n]
-    for cls, tokens in (vocab or {}).items():
+    # La salsa de soya corriente lleva trigo (solo el tamari no): para el registry cuenta como gluten.
+    vocab = dict(vocab or {})
+    vocab["gluten"] = list(vocab.get("gluten") or []) + ["salsa de soya", "salsa soya", "soy sauce"]
+    for cls, tokens in vocab.items():
         for tok in (tokens or []):
             t = _norm(tok)
             if not t:
                 continue
             for n in norm_names:
-                if re.search(r"(?<![a-z])" + re.escape(t) + r"(?![a-z])", n):
+                # [P1-ARQ25-F7-CULTURE · revisión curatorial] tolerante a plural: el vocabulario dice «sardina»,
+                # «fideo», «almeja» y el catálogo «Sardinas en lata», «Fideos», «Almejas» — con frontera de palabra
+                # estricta, tres bibliotecas servían sardinas sin la clase «pescado».
+                if re.search(r"(?<![a-z])" + re.escape(t) + r"(?:e?s)?(?![a-z])", n):
                     out.add(str(cls))
                     break
             if str(cls) in out:
@@ -233,6 +239,11 @@ def derive_editorial(template: dict, library: str) -> dict:
 def _constituents_source(library: str, template: dict, do_constituents: Optional[dict]) -> tuple[list, list[str]]:
     """(constituyentes [{name, grams}], declarados_sin_resolver) según la biblioteca."""
     if library == "do":
+        # [revisión curatorial F7] constituyentes INLINE explícitos ganan a la tabla curada (que el script rellena por
+        # reglas para las plantillas sin entrada a mano): lo explícito manda sobre lo generado.
+        inline = [c for c in (template.get("constituents") or []) if isinstance(c, dict) and c.get("name")]
+        if inline:
+            return [{"name": c["name"], "grams": _f(c.get("grams", c.get("g")))} for c in inline], []
         entry = ((do_constituents or {}).get("templates") or {}).get(str(template.get("name") or ""))
         if entry:
             return list(entry.get("constituents") or []), list(entry.get("declared_unresolved") or [])

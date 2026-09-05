@@ -7,7 +7,7 @@
     "fideos integrales": "Pre-fase: sin resolver (passthrough). 'Fideos' (alta ES T5) matchea via su alias bare 'fideos' (CONTAINS). Candidato alternativo 'Pasta integral' (fila pre-fase) NO tiene 'fideos integrales' como alias -- no hay retargeteo desde una fila establecida. Macro similar (kcal 371 vs 370.5, protein 13g vs 13.5g, carbs 74.7g vs 73.1g) salvo fibra (3.2g vs 10.1g) -- divergencia menor, no clínicamente peligrosa como el caso chicharrón."
   },
   "corpus_size": 1487,
-  "generated_at": "2026-09-05T09:26:06.117363+00:00",
+  "generated_at": "2026-09-05T10:14:35.218971+00:00",
   "mapping": {
     "Aceite de Oliva": "Aceite de oliva",
     "Aceite de coco": "Aceite de coco",
@@ -283,6 +283,7 @@
     "Res mechada con puré de papa": "Papa",
     "Revoltillo de atún con plátano hervido": "Plátano verde",
     "Revoltillo dominicano con tomate y cebolla + casabe": "Cebolla",
+    "Rollitos de lechuga con res mechada": "Lechuga",
     "Rábano": "Rábano",
     "Rúcula": "Rúcula",
     "Sal": "Sal",
@@ -301,7 +302,6 @@
     "Sopa-crema de auyama con pollo desmenuzado": "Auyama",
     "Soya texturizada": "Soya texturizada",
     "Sándwich integral de huevo con aguacate": "Aguacate",
-    "Tacos en hoja de lechuga con res mechada": "Lechuga",
     "Tamarindo": "Tamarindo",
     "Tayota": "Tayota",
     "Tilapia": "Tilapia",

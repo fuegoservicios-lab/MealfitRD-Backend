@@ -174,26 +174,6 @@
       ]
     },
     {
-      "name": "Yogur griego con duraznos",
-      "slots": [
-        "desayuno"
-      ],
-      "protein": "queso",
-      "base": "none",
-      "technique": "frío",
-      "transform": false,
-      "constituents": [
-        {
-          "name": "Yogurt",
-          "grams": 150
-        },
-        {
-          "name": "Duraznos",
-          "grams": 100
-        }
-      ]
-    },
-    {
       "name": "Pan de maíz con mantequilla",
       "slots": [
         "desayuno"
@@ -225,7 +205,7 @@
       "constituents": [
         {
           "name": "Chili con carne",
-          "grams": 250
+          "grams": 200.0
         },
         {
           "name": "Pan de maíz",
@@ -265,7 +245,7 @@
       "constituents": [
         {
           "name": "Jamón de sándwich",
-          "grams": 100
+          "grams": 70.0
         },
         {
           "name": "Queso provolone",
@@ -342,50 +322,14 @@
         {
           "name": "Pechuga de pollo",
           "grams": 150
-        }
-      ]
-    },
-    {
-      "name": "Salchichas con frijoles horneados",
-      "slots": [
-        "almuerzo"
-      ],
-      "protein": "cerdo",
-      "base": "legumbre",
-      "technique": "hervido",
-      "transform": false,
-      "constituents": [
-        {
-          "name": "Salchichas",
-          "grams": 120
         },
         {
-          "name": "Frijoles horneados",
-          "grams": 150
-        }
-      ]
-    },
-    {
-      "name": "Pepperoni con queso provolone y pan",
-      "slots": [
-        "almuerzo"
-      ],
-      "protein": "cerdo",
-      "base": "pan",
-      "technique": "horneado",
-      "transform": true,
-      "constituents": [
-        {
-          "name": "Pepperoni",
-          "grams": 60
+          "name": "Aguacate",
+          "grams": 50.0
         },
         {
-          "name": "Queso provolone",
-          "grams": 50
-        },
-        {
-          "name": "Pan blanco familiar",
-          "grams": 80
+          "name": "Maíz dulce en granos",
+          "grams": 50.0
         }
       ]
     },
@@ -410,26 +354,6 @@
         {
           "name": "Cebolla",
           "grams": 60
-        }
-      ]
-    },
-    {
-      "name": "Bolitas de papa con salchichas",
-      "slots": [
-        "almuerzo"
-      ],
-      "protein": "cerdo",
-      "base": "viveres",
-      "technique": "frito",
-      "transform": false,
-      "constituents": [
-        {
-          "name": "Bolitas de papa",
-          "grams": 150
-        },
-        {
-          "name": "Salchichas",
-          "grams": 100
         }
       ]
     },
@@ -474,6 +398,10 @@
         {
           "name": "Maíz dulce en granos",
           "grams": 100
+        },
+        {
+          "name": "Arroz integral",
+          "grams": 60.0
         }
       ]
     },
@@ -484,7 +412,7 @@
         "cena"
       ],
       "protein": "pescado",
-      "base": "none",
+      "base": "papa",
       "technique": "plancha",
       "transform": false,
       "constituents": [
@@ -495,6 +423,10 @@
         {
           "name": "Espárragos",
           "grams": 100
+        },
+        {
+          "name": "Papa",
+          "grams": 120.0
         }
       ]
     },
@@ -519,26 +451,6 @@
         {
           "name": "Mantequilla",
           "grams": 10
-        }
-      ]
-    },
-    {
-      "name": "Ensalada de huevos rellenos",
-      "slots": [
-        "almuerzo"
-      ],
-      "protein": "huevo",
-      "base": "none",
-      "technique": "frío",
-      "transform": false,
-      "constituents": [
-        {
-          "name": "Huevos rellenos",
-          "grams": 120
-        },
-        {
-          "name": "Lechuga",
-          "grams": 50
         }
       ]
     },
@@ -595,11 +507,12 @@
       ]
     },
     {
-      "name": "Ensalada verde con nueces pecanas",
+      "name": "Ensalada verde con pollo y nueces pecanas",
       "slots": [
+        "cena",
         "almuerzo"
       ],
-      "protein": "none",
+      "protein": "pollo",
       "base": "none",
       "technique": "frío",
       "transform": false,
@@ -615,6 +528,10 @@
         {
           "name": "Arándanos rojos",
           "grams": 30
+        },
+        {
+          "name": "Pechuga de pollo",
+          "grams": 120.0
         }
       ]
     },
@@ -759,30 +676,6 @@
         {
           "name": "Cebolla",
           "grams": 40
-        }
-      ]
-    },
-    {
-      "name": "Queso en hebras con vegetales",
-      "slots": [
-        "cena"
-      ],
-      "protein": "queso",
-      "base": "none",
-      "technique": "frío",
-      "transform": false,
-      "constituents": [
-        {
-          "name": "Queso en hebras",
-          "grams": 60
-        },
-        {
-          "name": "Tomate",
-          "grams": 80
-        },
-        {
-          "name": "Ají morrón",
-          "grams": 60
         }
       ]
     },

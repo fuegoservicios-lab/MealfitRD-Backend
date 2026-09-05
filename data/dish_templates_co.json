@@ -248,15 +248,15 @@
       "constituents": [
         {
           "name": "Frijol cargamanto",
-          "grams": 120
+          "grams": 80.0
         },
         {
           "name": "Carne de res molida",
-          "grams": 100
+          "grams": 90.0
         },
         {
           "name": "Chicharrón",
-          "grams": 40
+          "grams": 25.0
         },
         {
           "name": "Huevo",
@@ -268,7 +268,7 @@
         },
         {
           "name": "Arroz blanco",
-          "grams": 80
+          "grams": 60.0
         }
       ]
     },
@@ -706,6 +706,10 @@
         {
           "name": "Ajo",
           "grams": 10
+        },
+        {
+          "name": "Arroz blanco",
+          "grams": 60.0
         }
       ]
     },
@@ -949,7 +953,7 @@
       "constituents": [
         {
           "name": "Chicharrón",
-          "grams": 100
+          "grams": 60.0
         },
         {
           "name": "Harina de maíz precocida",
@@ -1801,7 +1805,7 @@
       "constituents": [
         {
           "name": "Pechuga de pollo",
-          "grams": 100.0
+          "grams": 140.0
         },
         {
           "name": "Maíz dulce en granos",

@@ -223,6 +223,23 @@ def _mixing(profiles: Iterable[str], days: int = 10) -> dict:
     return {"pairs": results, "ok": all(r["ok"] for r in results.values())}
 
 
+SIGNOFF_PATH = os.path.join(os.path.dirname(os.path.abspath(__file__)), "data", "registry", "cultural_curation_review_v1.json")
+
+
+def _signoff_for(profile_id: str, snapshot_hash: Optional[str]) -> Optional[dict]:
+    """Registro de revisión curatorial de un perfil, SOLO si revisó exactamente este snapshot (mismo hash)."""
+    try:
+        with open(SIGNOFF_PATH, encoding="utf-8") as f:
+            rec = json.load(f)
+        e = (rec.get("profiles") or {}).get(profile_id)
+        if not isinstance(e, dict) or not snapshot_hash or e.get("snapshot_hash") != snapshot_hash:
+            return None
+        return {"by": rec.get("reviewer"), "date": rec.get("date"), "snapshot_hash": snapshot_hash,
+                "decisions": e.get("decisions") or [], "accepted": e.get("accepted") or []}
+    except Exception:
+        return None
+
+
 def run_benchmark(*, catalog_rows: Optional[list] = None) -> dict:
     import cultural_profiles as cp
     import dish_registry as dr
@@ -260,7 +277,11 @@ def run_benchmark(*, catalog_rows: Optional[list] = None) -> dict:
         flagged += entry["appropriateness"]["starch_base_off_slot"] + entry["appropriateness"]["heavy_technique_in_snack"]
         flagged += [h["template"] for h in (entry["availability"].get("dominican_cultivar_outside_do") or [])]
         entry["review"]["flagged_for_human_review"] = sorted(set(flagged))
-        entry["review"]["human_signoff"] = False
+        # Firma de la revisión curatorial: vive en `data/registry/cultural_curation_review_v1.json` y solo vale
+        # mientras el hash del snapshot revisado coincida con el actual — tocar la biblioteca la caduca.
+        so = _signoff_for(pid, snap.get("snapshot_hash"))
+        entry["review"]["signoff"] = so
+        entry["review"]["human_signoff"] = bool(so)
         report["profiles"][pid] = entry
     report["mixing"] = _mixing(cp.PROFILES.keys())
     ok, failures = gate_verdict(report)
@@ -303,7 +324,8 @@ def render_markdown(report: dict) -> str:
             f"{'ok' if e['appropriateness']['ok'] else 'revisar'} (fritura {int(e['appropriateness']['fried_share'] * 100)} %) | "
             f"{av.get('availability_risk_pct', 'n/a')} % | {e['diversity']['proteins']}/{e['diversity']['techniques']} | "
             f"{'ok' if e['clinical']['ok'] else 'FUGA'} (procesados {len(e['clinical']['processed_meat'])}, sodio {len(e['clinical']['sodium_high'])}) | "
-            f"{len(e['review']['flagged_for_human_review'])} marcadas · firma: {'sí' if e['review']['human_signoff'] else 'pendiente'} |")
+            f"{len(e['review']['flagged_for_human_review'])} marcadas · firma: "
+            f"{('sí (' + str((e['review'].get('signoff') or {}).get('by')) + ', ' + str((e['review'].get('signoff') or {}).get('date')) + ')') if e['review']['human_signoff'] else 'pendiente'} |")
     mixing = report.get("mixing") or {}
     lines += ["", f"Mezcla 0,7/0,3 en 10 días: {'todas las parejas con candidatos en las 4 franjas' if mixing.get('ok') else 'faltan candidatos'} "
               f"({len(mixing.get('pairs') or {})} parejas).", ""]

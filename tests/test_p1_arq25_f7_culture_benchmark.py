@@ -64,7 +64,11 @@ def test_e_los_snapshots_reales_pasan_el_gate_y_el_informe_es_reproducible():
     assert set(rep["profiles"]) == set(cp.PROFILES)
     for pid, e in rep["profiles"].items():
         assert e["coverage"]["ok"] and e["clinical"]["ok"] and e["contamination"]["ok"], pid
-        assert e["review"]["human_signoff"] is False, "la firma humana no la da el código"
+        # la firma vive en data/registry/cultural_curation_review_v1.json y caduca con el hash del snapshot:
+        # tocar una biblioteca sin volver a revisarla deja el perfil «pendiente» y este test en rojo
+        so = e["review"]["signoff"]
+        assert so and so["snapshot_hash"] == e["snapshot_hash"] and so["by"] and so["decisions"], f"{pid}: revisión curatorial pendiente o caducada"
+        assert e["review"]["human_signoff"] is True
         assert e["clinical"]["allergen_leaks"] == []
     assert rep["mixing"]["ok"] and len(rep["mixing"]["pairs"]) == 30
     md = cb.render_markdown(rep)
@@ -80,4 +84,5 @@ def test_e_los_snapshots_reales_pasan_el_gate_y_el_informe_es_reproducible():
 def test_f_la_doc_del_informe_existe_y_nombra_la_firma_pendiente():
     p = _BACKEND / "docs" / "cultural_benchmark_report.md"
     assert p.exists(), "python cultural_benchmark.py --write"
-    assert "firma: pendiente" in p.read_text(encoding="utf-8")
+    txt = p.read_text(encoding="utf-8")
+    assert "firma: sí (" in txt and "firma: pendiente" not in txt, "informe desfasado: python cultural_benchmark.py --write"

@@ -89,8 +89,27 @@ mezcla coherente (30 parejas 0,7/0,3 en 10 días con candidatos en las 4 franjas
 (`template_candidates(..., exclude_allergens=[clase])` jamás devuelve la clase) y revisión humana.
 
 Informe committed: `data/registry/cultural_benchmark_v1.json` + `docs/cultural_benchmark_report.md`. Gate **PASA** con los seis
-perfiles. La **firma humana está pendiente** por perfil (el código no la da): el informe lista las plantillas marcadas para que una
-persona las mire (3 «tacos» fuera de MX, los cultivares dominicanos en PR/CO, procesados y sodio alto por biblioteca).
+perfiles.
+
+**Revisión curatorial (2026-09-05, delegada por el dueño a Claude)** — registro en `data/registry/cultural_curation_review_v1.json`,
+atado al `snapshot_hash` de cada perfil: cambiar una biblioteca **caduca la firma** y deja el perfil «pendiente» (y el test en rojo)
+hasta repetir la revisión. Se revisaron las 516 plantillas con un chequeo independiente por plantilla (nutrición por ración, alérgenos
+esperados desde los constituyentes, técnica vs constituyentes, nombre vs constituyentes, duplicados, franja) más juicio plato a plato.
+Lo que la revisión encontró y corrigió:
+
+- **Alérgenos**: el matcher del registry usaba frontera de palabra estricta y el vocabulario está en singular — «Sardinas en lata»,
+  «Fideos», «Almejas» no marcaban pescado/gluten/mariscos, y la salsa de soya (lleva trigo) no marcaba gluten. Corregido en
+  `allergen_classes_for` (plural tolerante + soya como gluten); cero clases sin marcar en las seis bibliotecas.
+- **Nombre ↔ constituyentes**: el «Sancocho de pollo» dominicano se componía con res (la receta del diario es de res) y dos
+  ensaladas españolas «con atún» llevaban sardinas. Corregido (JSON, tabla curada y script).
+- **Raciones y franjas**: meriendas de 450-675 kcal reasignadas a almuerzo/cena; cinco almuerzos puertorriqueños de 1.100-1.250 kcal
+  y la bandeja paisa (1.265) reducidos a raciones reales; almuerzos < 260 kcal y cenas < 180 kcal completados; tapas españolas
+  (espárragos, champiñones, boquerones) pasan a merienda.
+- **Sodio**: recortes en cecina (3.179 mg → ~1.500), chicharrón, jamón de cocinar, chuletas ahumadas y embutidos de la fabada.
+- **Bajas**: percebes (ES), ensalada de jícama duplicada (MX) y seis de US (duplicado exacto de yogur, huevos rellenos, queso en hebras,
+  tater tots con salchichas, pepperoni con pan, salchichas con frijoles horneados); «Tacos en hoja de lechuga» → «Rollitos de lechuga».
+- **Aceptado con razón** (queda en el registro): curados españoles y cultivares caribeños en PR/CO (identidad, no riesgo), snacks de
+  < 60 kcal, platos ligeros reales que el generador escala a los macros del día, dos «tacos» en US (Tex-Mex cotidiano, 2 de 81).
 
 ## 6. Knobs
 

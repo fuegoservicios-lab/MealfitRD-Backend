@@ -2120,11 +2120,57 @@
       "declared_unresolved": [],
       "origin": "curated"
     },
+    "Rollitos de lechuga con res mechada": {
+      "constituents": [
+        {
+          "grams": 80.0,
+          "name": "Lechuga romana"
+        },
+        {
+          "grams": 150.0,
+          "name": "Carne de res"
+        },
+        {
+          "grams": 7.0,
+          "name": "Aceite vegetal"
+        },
+        {
+          "grams": 18.0,
+          "name": "Cebolla"
+        },
+        {
+          "grams": 12.0,
+          "name": "Ají cubanela"
+        },
+        {
+          "grams": 58.0,
+          "name": "Tomate"
+        },
+        {
+          "grams": 15.0,
+          "name": "Salsa de tomate"
+        },
+        {
+          "grams": 4.0,
+          "name": "Ajo"
+        },
+        {
+          "grams": 10.0,
+          "name": "Pimiento morrón"
+        },
+        {
+          "grams": 1.0,
+          "name": "Sal"
+        }
+      ],
+      "declared_unresolved": [],
+      "origin": "curated"
+    },
     "Sancocho dominicano de pollo (porción con aguacate)": {
       "constituents": [
         {
           "grams": 70.0,
-          "name": "Carne de res"
+          "name": "Muslo de pollo"
         },
         {
           "grams": 50.0,
@@ -2205,52 +2251,6 @@
         {
           "grams": 50.0,
           "name": "Aguacate"
-        }
-      ],
-      "declared_unresolved": [],
-      "origin": "curated"
-    },
-    "Tacos en hoja de lechuga con res mechada": {
-      "constituents": [
-        {
-          "grams": 80.0,
-          "name": "Lechuga romana"
-        },
-        {
-          "grams": 150.0,
-          "name": "Carne de res"
-        },
-        {
-          "grams": 7.0,
-          "name": "Aceite vegetal"
-        },
-        {
-          "grams": 18.0,
-          "name": "Cebolla"
-        },
-        {
-          "grams": 12.0,
-          "name": "Ají cubanela"
-        },
-        {
-          "grams": 58.0,
-          "name": "Tomate"
-        },
-        {
-          "grams": 15.0,
-          "name": "Salsa de tomate"
-        },
-        {
-          "grams": 4.0,
-          "name": "Ajo"
-        },
-        {
-          "grams": 10.0,
-          "name": "Pimiento morrón"
-        },
-        {
-          "grams": 1.0,
-          "name": "Sal"
         }
       ],
       "declared_unresolved": [],
