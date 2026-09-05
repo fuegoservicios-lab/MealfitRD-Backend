@@ -89,5 +89,9 @@ def test_e_pdf_una_sola_compra_y_catalogos():
     assert "t('COMPRA ESTA SEMANA — PERECEDEROS (REPITE CADA 7 DÍAS)')" in dash, "con reposiciones, el copy de siempre"
     for loc in ("en-US", "pt-BR", "fr-FR", "it-IT"):
         cat = json.loads(_frontend("i18n", "locales", f"{loc}.json"))
-        assert cat.get("PERECEDEROS — UNA SOLA COMPRA (CONGELA O CONSUME PRIMERO)"), loc
+        # [F7-G] el rótulo depende del congelador: los tres textos viven en los cuatro catálogos
+        for k in ("PERECEDEROS — UNA SOLA COMPRA (SIN CONGELADOR: CONSUME PRIMERO)",
+                  "PERECEDEROS — UNA SOLA COMPRA (CONGELA LAS PROTEÍNAS EL DÍA DE LA COMPRA)",
+                  "PERECEDEROS — UNA SOLA COMPRA (CONGELA LO DE LA SEGUNDA SEMANA)"):
+            assert cat.get(k), (loc, k)
         assert "{duracion}" in cat["Elegiste reponer solo en la compra grande: estas cantidades cubren todo tu ciclo de {duracion}. Congela las proteínas y consume primero lo más delicado."], loc
