@@ -63,7 +63,8 @@ _PROCESS_START_ISO = datetime.now(timezone.utc).isoformat()
 #   P1-I18N-GLM-USER-TURN · 2026-09-04 — GLM rechaza un messages con solo system (400/1214): la capa _display del plan llevaba 2 días muerta para todo usuario no hispanohablante.
 #   P2-PLAN-POLL-DORMANT-SLEEP · 2026-09-04 — el sondeo del plan dormido no se rinde: latido largo + despertar al volver a la pestaña; el banner «Dejamos de revisar» solo con pantalla muda.
 #   P1-ARQ25-F5-PLAN-JOBS · 2026-09-04 — Fase 5 rebanada 1: worker del outbox plan_jobs (claim SKIP LOCKED, attempts=fencing, backoff, dead letter, reclaim, stale por revisión) + consumidor display_i18n.
-_LAST_KNOWN_PFIX = "P1-ARQ25-F5-PLAN-JOBS · 2026-09-04"
+#   P2-COHERENCE-HISTORY-DEDUPE · 2026-09-04 — la misma alerta de coherencia consecutiva se funde en una entrada (repeats); el aviso cuenta alertas distintas.
+_LAST_KNOWN_PFIX = "P2-COHERENCE-HISTORY-DEDUPE · 2026-09-04"
 
 # [P1-SENTRY-SAMPLE-COST · 2026-05-12] Sentry sampling driven from env vars
 # con default seguro 0.1 (10%). Pre-fix tenía `traces_sample_rate=1.0` y

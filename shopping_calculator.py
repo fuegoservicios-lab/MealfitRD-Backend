@@ -10375,6 +10375,30 @@ def run_shopping_coherence_guard_and_append_history(
             # Lazy import para evitar ciclo: graph_orchestrator ya importa
             # de shopping_calculator (módulo cargado primero), así que un
             # import top-level acá rompe el orden. Lazy resuelve runtime.
+            # [P2-COHERENCE-HISTORY-DEDUPE · 2026-09-04] Si la última entrada es la MISMA alerta (acción,
+            # hipótesis, nº de divergencias, block_set), no se apila otra: se funde en ella con
+            # `repeats`, `first_ts` y `ts` renovado (sigue «reciente» mientras la alerta persista). Antes
+            # 18 recálculos en 7 h llenaban el cap de 20 con entradas iguales y el aviso del Dashboard
+            # decía «16 revisiones automáticas». Knob `MEALFIT_COHERENCE_HISTORY_DEDUPE`.
+            try:
+                _last_entry = prior_history[-1] if prior_history else None
+                if (
+                    _knob_env_bool("MEALFIT_COHERENCE_HISTORY_DEDUPE", True)
+                    and isinstance(_last_entry, dict)
+                    and _last_entry.get("action_taken") == entry["action_taken"]
+                    and dict(_last_entry.get("hypotheses") or {}) == entry["hypotheses"]
+                    and int(_last_entry.get("divergence_count") or 0) == entry["divergence_count"]
+                    and bool(_last_entry.get("block_set")) == entry["block_set"]
+                ):
+                    _merged = dict(_last_entry)
+                    _merged["repeats"] = int(_last_entry.get("repeats") or 1) + 1
+                    _merged.setdefault("first_ts", _last_entry.get("ts"))
+                    _merged["ts"] = entry["ts"]
+                    _merged["attempt"] = entry["attempt"]
+                    prior_history = list(prior_history[:-1])
+                    entry = _merged
+            except Exception:
+                pass
             try:
                 from graph_orchestrator import _apply_coherence_history_cap as _cap_helper
                 new_history = _cap_helper(
