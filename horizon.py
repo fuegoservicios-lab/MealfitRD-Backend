@@ -1318,6 +1318,28 @@ def _anchor_tokens_for_policy(effective: Optional[dict]) -> set:
     return tokens
 
 
+# [P1-ROUTINE-MONOTONY-CEILING · 2026-09-05] Techo por encima del cual ni «rutina» tolera la repetición.
+# Los contadores llegan en dos escalas: FRACCIÓN de comidas (ingrediente concentrado, 0..1) o NÚMERO de días
+# (staples, plato-base, proteína pesada). Un solo umbral por escala; sin política de rutina no se usa.
+try:
+    from knobs import _env_float as _env_float_rmc, _env_int as _env_int_rmc
+    ROUTINE_MONOTONY_MAX_MEAL_FRACTION = max(0.4, min(1.0, _env_float_rmc("MEALFIT_ROUTINE_MONOTONY_MAX_MEAL_FRACTION", 0.6)))
+    ROUTINE_MONOTONY_MAX_DAYS = max(2, min(30, _env_int_rmc("MEALFIT_ROUTINE_MONOTONY_MAX_DAYS", 4)))
+except Exception:  # pragma: no cover
+    ROUTINE_MONOTONY_MAX_MEAL_FRACTION, ROUTINE_MONOTONY_MAX_DAYS = 0.6, 4
+
+
+def _above_monotony_ceiling(value) -> bool:
+    """True si el contador supera el techo que ni la rutina tolera (fracción de comidas o nº de días)."""
+    try:
+        v = float(value)
+    except (TypeError, ValueError):
+        return False
+    if 0.0 < v <= 1.0:
+        return v > float(ROUTINE_MONOTONY_MAX_MEAL_FRACTION)
+    return v > float(ROUTINE_MONOTONY_MAX_DAYS)
+
+
 def filter_repetition_counts_for_policy(counts: Optional[dict], effective: Optional[dict], *, enforced: bool) -> dict:
     """[P2-CRITIQUE-RESPECTS-ROUTINE · 2026-09-04] Contadores determinísticos de REPETICIÓN que la
     autocrítica inyecta al evaluador como «no opinable» (staples cross-día, ingrediente concentrado,
@@ -1334,7 +1356,11 @@ def filter_repetition_counts_for_policy(counts: Optional[dict], effective: Optio
     if mode == "explore":
         return counts
     if mode == "routine":
-        return {}
+        # [P1-ROUTINE-MONOTONY-CEILING · 2026-09-05] Rutina significa REPETIR, no comer una sola cosa: el plan vivo
+        # a2b40e4e (rutina) llevaba avena en 8 de 12 comidas, incluidas dos cenas. Rutina silencia la señal salvo que
+        # supere el TECHO DE MONOTONÍA (fracción de comidas, o días para los contadores por día): por encima de ahí ya
+        # no es la rutina que el usuario pidió, es un plan de un solo alimento.
+        return {k: v for k, v in counts.items() if _above_monotony_ceiling(v)}
     anchor_tokens = _anchor_tokens_for_policy(effective)
     return {k: v for k, v in counts.items() if not any(tok in _norm(str(k)) for tok in anchor_tokens)}
 
@@ -1531,6 +1557,6 @@ __all__ = [
     "rank_days_by_policy", "emit_fidelity_metric", "review_fidelity_gate",
     "shopping_projection_windows", "stamp_demand_windows", "enqueue_shopping_projection_job",
     "FRESH_HORIZON_DAYS", "single_trip_policy", "fresh_beyond_horizon_issues", "single_trip_prompt_lines",
-    "batch_cooking_mode", "batch_cooking_prompt_lines",
+    "batch_cooking_mode", "batch_cooking_prompt_lines", "_above_monotony_ceiling",
     "registry_prompt_enabled", "registry_prompt_lines",
 ]
