@@ -7793,7 +7793,16 @@ async def plan_skeleton_node(state: PlanState) -> dict:
         # [P2-ORCH-4 · 2026-05-28] El 429 spending-cap es persistente: reintentar es desperdicio puro.
         retry=retry_if_exception(lambda e: not _is_plan_spend_cap_error(e)),
         reraise=True,
-        before_sleep=lambda retry_state: logger.warning(f"⚠️  [PLANIFICADOR] Reintento #{retry_state.attempt_number}...")
+        # [P1-PLANNER-RETRY-REASON · 2026-09-05] …y CON el motivo. El aviso decía solo «Reintento #N...», así que
+        # las 32 aperturas del disyuntor de 'glm-5.3-flash' del 2026-09-05 no dejaron ni una línea del error que
+        # las causó: tres fallos seguidos abren el breaker y el planificador cae al modelo de respaldo (37 s en
+        # vez de 12), pero el journal no distingue un timeout de un JSON roto o de un 400 del proveedor.
+        before_sleep=lambda retry_state: logger.warning(
+            f"⚠️  [PLANIFICADOR] Reintento #{retry_state.attempt_number} — "
+            f"{type(retry_state.outcome.exception()).__name__}: "
+            f"{str(retry_state.outcome.exception())[:220]}"
+            if (retry_state.outcome is not None and retry_state.outcome.failed)
+            else f"⚠️  [PLANIFICADOR] Reintento #{retry_state.attempt_number}...")
     )
     async def invoke_planner():
         return await _do_planner_invoke(planner_llm, _planner_cb, planner_model)
@@ -38000,6 +38009,24 @@ def _repair_light_slot_protein(days: list, nutrition: dict, form_data: dict, db=
                     _labels[_i] = _protein_gate_labels_in_meal(_m)
                     logger.info(f"🥛 [P1-LIGHT-SLOT-PROTEIN-FLOOR] +{_g}g en {'franja ligera' if _meal_slot_is_light(_m, _sa_lf) else 'comida fuerte'} ({_cur:.0f}→"
                                 f"{_meal_macro_num(_m.get('protein')):.0f} g de {_slot_target:.0f}) | meal={str(_m.get('name'))[:40]}")
+                else:
+                    # [P1-SLOT-FLOOR-UNCLOSED · 2026-09-05] El piso CALLABA cuando no podía cerrar: sus dos
+                    # únicos logs son de éxito, así que una franja corta y una franja cerrada se veían igual
+                    # en el journal — cero. Medido en el plan vivo 18326457 (merienda del día 3, 13 g): la
+                    # pasada no dejó ni una línea y hubo que deducir a mano si había disparado siquiera.
+                    #
+                    # Las tres causas se distinguen SOLO con estos números: sin kcal libres (la franja ya está
+                    # en su tope y `_make_room_for_protein` no encontró palanca), sin candidato que quepa, o
+                    # un target mal repartido. Van todos, y con `slot_kcal` frente a su tope.
+                    _slot_kcal_t = _daily_cal * _share
+                    _cur_kcal = _meal_macro_num(_m.get("cals")) or (
+                        4.0 * _cur + 4.0 * _meal_macro_num(_m.get("carbs")) + 9.0 * _meal_macro_num(_m.get("fats")))
+                    logger.warning(
+                        f"🥛 [P1-SLOT-FLOOR-UNCLOSED] franja bajo el piso y el cerrador no pudo: "
+                        f"{_cur:.0f} g de {_slot_target:.0f} (piso {float(LIGHT_SLOT_PROTEIN_MIN_PCT) * 100:.0f}%) | "
+                        f"kcal {_cur_kcal:.0f}/{_slot_kcal_t:.0f} | candidatos={len(cands or [])} | "
+                        f"dieta={str((form_data or {}).get('dietType') or '-')[:14]} | "
+                        f"meal={str(_m.get('name'))[:40]}")
         return added
     except Exception as _e:
         logger.warning(f"[P1-LIGHT-SLOT-PROTEIN-FLOOR] no-op (fail-safe): {type(_e).__name__}: {_e}")
