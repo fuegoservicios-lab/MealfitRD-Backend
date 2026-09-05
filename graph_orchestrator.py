@@ -21522,10 +21522,23 @@ def _protein_preserving_day_reconcile(meals: list, daily_cals: float, db) -> boo
         return False
 
 
+# [P1-PROTEIN-CARRIER-GROUP · 2026-09-05] Lácteos y huevo son PORTADORES DE PROTEÍNA aunque por kcal dominen las
+# grasas (yogurt griego entero P9/F5 ⇒ 37 % de sus kcal en proteína; queso blanco 31 %; huevo 34 %). Clasificarlos
+# «fats» los convertía en palanca del rebalance de grasa (factor hasta 0,3) y luego el piso de encogido borraba la
+# línea: merienda «Casabe con queso blanco, fresas y Yogurt Griego Entero» entregada con 10 g de queso, sin el yogurt
+# que el cerrador había puesto (nombre y pasos aún lo nombraban) y 3 g de proteína (plan vivo c350dec0, día 10).
+# Solo por TOKEN de lácteo/huevo y con ≥ PROTEIN_CARRIER_MIN_SHARE de sus kcal en proteína: queso crema (7 %),
+# mantequilla de maní (16 %) y almendras (13 %) siguen siendo grasa. tooltip-anchor: P1-PROTEIN-CARRIER-GROUP
+PROTEIN_CARRIER_GROUP_ENABLED = _env_bool("MEALFIT_PROTEIN_CARRIER_GROUP", True)
+PROTEIN_CARRIER_MIN_SHARE = _env_float("MEALFIT_PROTEIN_CARRIER_MIN_SHARE", 0.25, validator=lambda v: 0.1 <= v <= 0.6)
+_PROTEIN_CARRIER_TOKENS = ("queso", "yogur", "huevo", "clara", "ricotta", "cottage", "requeson", "whey", "proteina")
+
+
 def _ingredient_macro_group(s: str, db) -> str | None:
     """[P1-MACRO-AWARE-RECONCILE · 2026-06-15] Macro DOMINANTE (por kcal) del ingrediente:
     'protein' | 'carbs' | 'fats'. None si no resuelve o si su aporte calórico es despreciable
-    (agua/condimento). Generaliza `_ingredient_is_protein_dominant` a las tres macros."""
+    (agua/condimento). Generaliza `_ingredient_is_protein_dominant` a las tres macros.
+    [P1-PROTEIN-CARRIER-GROUP] lácteo/huevo con ≥25 % de sus kcal en proteína ⇒ 'protein'."""
     mc = db.macros_from_ingredient_string(str(s))
     if not mc:
         return None
@@ -21536,6 +21549,14 @@ def _ingredient_macro_group(s: str, db) -> str | None:
         return None
     if pc >= cc and pc >= fc:
         return "protein"
+    if PROTEIN_CARRIER_GROUP_ENABLED:
+        try:
+            from constants import strip_accents as _sa_pcg
+            _low = _sa_pcg(str(s).lower())
+            if any(t in _low for t in _PROTEIN_CARRIER_TOKENS) and pc / max(1e-9, pc + cc + fc) >= float(PROTEIN_CARRIER_MIN_SHARE):
+                return "protein"
+        except Exception:
+            pass
     return "carbs" if cc >= fc else "fats"
 
 

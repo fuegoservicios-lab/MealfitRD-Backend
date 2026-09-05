@@ -870,6 +870,9 @@ def _base_carbs_for_pairs(chosen_carbs) -> list:
         return list(chosen_carbs or [])
 
 
+_TORTILLA_BREAD_RE = re.compile(r"\btortillas?\s+(?:integral(?:es)?|de\s+harina|de\s+maiz|de\s+trigo|de\s+avena)\b")
+
+
 def _norm_food_key(name) -> str:
     """[P1-PANTRY-POOL-MATCH] clave de comparación: sin acentos, minúsculas, singular por palabra («Papas»→«papa»,
     «Habichuelas Rojas»→«habichuela roja»)."""
@@ -891,6 +894,9 @@ def _pantry_pick_in_pool(item_norm: str, full_catalog, syn_map, allowed) -> "str
         universe = list(full_catalog) + [x for x in pool if x not in full_catalog]
         best = _catalog_pick_wb(item_norm, universe, syn_map, set(universe))
         if best is None:
+            return None
+        # [P1-PROTEIN-CARRIER-GROUP] «tortilla integral/de harina/de maíz» es PAN: el alias «tortilla» de huevos no aplica
+        if _norm_food_key(best).startswith("huevo") and _TORTILLA_BREAD_RE.search(item_norm):
             return None
         if best in allowed:
             return best
