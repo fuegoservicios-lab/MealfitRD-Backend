@@ -394,9 +394,40 @@ def _dur_kwargs(effective: Optional[dict], day_index) -> dict:
     try:
         from pantry_durability import single_trip_requirements
         req = single_trip_requirements(effective, day_index)
-        return {"need_days": req["need_days"], "allow_frozen": req["allow_frozen"]} if req else {}
+        out = {"need_days": req["need_days"], "allow_frozen": req["allow_frozen"]} if req else {}
+        # [P1-STEP14-SHOPPING-COOKING] «Cocino por tandas» ⇒ candidatos batch_friendly primero
+        if batch_cooking_mode(effective) == "often":
+            out["prefer_batch"] = True
+        return out
     except Exception:
         return {}
+
+
+def batch_cooking_mode(effective: Optional[dict]) -> str:
+    """[P1-STEP14-SHOPPING-COOKING · 2026-09-05] `shopping.batch_cooking` ∈ never|sometimes|often ('' si no hay política).
+    El paso 14 del asistente lo guardaba en la política y NADIE lo leía: elegir «Cocino por tandas» no cambiaba el plan."""
+    try:
+        v = str(((effective or {}).get("shopping") or {}).get("batch_cooking") or "").strip().lower()
+        return v if v in ("never", "sometimes", "often") else ""
+    except Exception:
+        return ""
+
+
+def batch_cooking_prompt_lines(effective: Optional[dict]) -> list[str]:
+    """Líneas del bloque 📐 según cómo cocina el usuario (paso 14: «Cocino al día / a veces cocino de más / por tandas»)."""
+    mode = batch_cooking_mode(effective)
+    if mode == "often":
+        return ["- COCINA POR TANDAS: el usuario cocina varias porciones de una vez. Diseña bases que se cocinan UNA vez y "
+                "rinden 2-3 días (un guiso, una olla de habichuelas o lentejas, arroz, pollo desmenuzado, vegetales asados) "
+                "y en los días siguientes REUTILÍZALAS con otra preparación o acompañamiento; escríbelo en los pasos "
+                "(«cocina el doble y guarda la mitad para el día X»). Evita recetas de porción única que exigen cocinar desde cero cada vez."]
+    if mode == "sometimes":
+        return ["- A VECES COCINA DE MÁS: puedes proponer que una base fuerte (guiso, legumbres, arroz) se cocine doble y se "
+                "aproveche al día siguiente en otro plato; no lo exijas en cada comida."]
+    if mode == "never":
+        return ["- COCINA AL DÍA: cada comida se prepara en su momento y en porción de una vez; no dependas de sobras ni de "
+                "bases cocinadas otro día, y prefiere preparaciones de una sola olla o sartén."]
+    return []
 
 
 def _culture_country(profile_id: Optional[str]) -> str:
@@ -966,6 +997,7 @@ def policy_prompt_block(effective: Optional[dict], sl: Optional[dict] = None, *,
                 lines.append(f"- Esta comida es {_SLOT_ES.get(s, s)}: ancla de la franja → " + ", ".join(
                     str(a.get("name")) for a in slot_anchors) + ".")
         lines.extend(single_trip_prompt_lines(effective, sl))  # [P1-SINGLE-TRIP-POLICY]
+        lines.extend(batch_cooking_prompt_lines(effective))  # [P1-STEP14-SHOPPING-COOKING]
         lines.extend(registry_prompt_lines(effective, sl, day_index=day_index, slot=slot))  # [P1-ARQ25-F6-REGISTRY-PROMPT]
         lines.append("- No «diversifiques» un ancla ni cambies la base de un plato por variedad: la política manda sobre la variedad.")
         return "\n".join(lines) + "\n"
@@ -1499,5 +1531,6 @@ __all__ = [
     "rank_days_by_policy", "emit_fidelity_metric", "review_fidelity_gate",
     "shopping_projection_windows", "stamp_demand_windows", "enqueue_shopping_projection_job",
     "FRESH_HORIZON_DAYS", "single_trip_policy", "fresh_beyond_horizon_issues", "single_trip_prompt_lines",
+    "batch_cooking_mode", "batch_cooking_prompt_lines",
     "registry_prompt_enabled", "registry_prompt_lines",
 ]

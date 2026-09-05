@@ -33123,6 +33123,91 @@ def _strip_phantom_sugar_from_steps(days) -> int:
         return 0
 
 
+# [P1-STEP14-SHOPPING-COOKING · 2026-09-05] Sustitución DETERMINISTA del fresco fuera de horizonte en compra única.
+# `fresh_beyond_horizon` era solo un aviso (severidad baja, gate warn): el plato llegaba con lechuga el día 20. Tabla
+# por familia → equivalente duradero del catálogo; se conserva la cantidad de la línea. Proteína fresca sin ventana de
+# congelación ⇒ atún en agua (omnívoro) o garbanzos (vegetariano/vegano). Truth-up de macros desde los strings.
+SINGLE_TRIP_FRESH_SUBSTITUTE = _env_bool("MEALFIT_SINGLE_TRIP_FRESH_SUBSTITUTE", True)
+_FRESH_SUBSTITUTES = (
+    (("lechuga", "berro", "rucula", "arugula", "espinaca", "acelga", "kale", "col rizada"), "repollo"),
+    (("tomate cherry", "tomate"), "zanahoria"),
+    (("pepino", "calabacin", "zucchini", "brocoli", "coliflor", "vainitas", "habichuelas verdes", "esparrago", "champinon", "hongos", "setas"), "zanahoria"),
+    (("cilantro", "perejil", "albahaca", "menta", "cebollin", "cebollino"), "oregano"),
+    (("fresa", "frambuesa", "mora", "arandano", "uva", "lechosa", "papaya", "mango", "pina", "melon", "sandia", "guineo", "banana", "durazno", "melocoton", "pera", "kiwi", "cereza", "mamey", "nispero", "aguacate"), "manzana"),
+    (("pescado", "tilapia", "salmon", "mero", "chillo", "dorado", "bacalao fresco", "merluza", "camaron", "camarones", "mariscos", "calamar", "pulpo", "cangrejo", "langosta", "lambi"), "atun en agua"),
+    (("pechuga de pollo", "pollo", "muslo", "pavo", "carne de res", "res molida", "res", "bistec", "cerdo", "chuleta", "lomo", "chivo", "conejo", "higado"), "atun en agua"),
+    (("queso fresco", "queso blanco", "queso de freir", "ricotta", "requeson", "cottage", "yogur", "yogurt", "leche"), "queso parmesano"),
+)
+_FRESH_SUB_VEG_PROTEIN = "garbanzos cocidos"
+
+
+def _single_trip_fresh_substitute(days, db=None, *, effective=None, diet=None) -> int:
+    """Sustituye, en los días fuera de la semana de frescos de un ciclo de UNA sola compra, los ingredientes que no
+    aguantan (`pantry_durability.ingredient_issue_beyond_horizon`) por su equivalente duradero. Muta in-place; marca
+    `_fresh_substituted`; lockstep `ingredients_raw`; truth-up. Sin política de compra única ⇒ 0. Fail-safe.
+    tooltip-anchor: P1-STEP14-SHOPPING-COOKING"""
+    if not SINGLE_TRIP_FRESH_SUBSTITUTE or not days:
+        return 0
+    try:
+        from pantry_durability import single_trip_requirements, ingredient_issue_beyond_horizon
+        from constants import strip_accents as _sa_fs, canonicalize_diet_type as _cdt_fs
+        if db is None:
+            from nutrition_db import IngredientNutritionDB
+            db = IngredientNutritionDB()
+        _veg = _cdt_fs(diet) in ("vegan", "vegetarian")
+        changed = 0
+        for i, d in enumerate(days):
+            if not isinstance(d, dict):
+                continue
+            req = single_trip_requirements(effective, i)
+            if not req:
+                continue
+            for m in (d.get("meals") or []):
+                if not isinstance(m, dict) or not isinstance(m.get("ingredients"), list):
+                    continue
+                ings = m["ingredients"]
+                raw = m.get("ingredients_raw")
+                for idx, line in enumerate(list(ings)):
+                    text = str(line)
+                    low = _sa_fs(text.lower())
+                    if any(h in low for h in ("en lata", "enlatad", "congelad", "seco", "secos", "en polvo", "deshidratad")):
+                        continue
+                    code = ingredient_issue_beyond_horizon(text, i, bool(req.get("allow_frozen")))
+                    if not code:
+                        continue
+                    sub = None
+                    for toks, rep_name in _FRESH_SUBSTITUTES:
+                        if any(_re.search(r"\b" + _re.escape(t) + r"s?\b", low) for t in toks):
+                            sub = rep_name
+                            break
+                    if not sub:
+                        continue
+                    if sub == "atun en agua" and _veg:
+                        sub = _FRESH_SUB_VEG_PROTEIN
+                    if sub == "queso parmesano" and _cdt_fs(diet) == "vegan":
+                        sub = _FRESH_SUB_VEG_PROTEIN
+                    mm = _re.match(r"^\s*([\d.,/½¼¾⅓⅔]+\s*(?:g|gr|gramos|ml|taza|tazas|cda|cdas|cdta|cdtas|unidad|unidades)?)\s+(?:de\s+)?", text, _re.IGNORECASE)
+                    qty = (mm.group(1).strip() + " de ") if mm else ""
+                    new_line = f"{qty}{sub}"
+                    if new_line == text:
+                        continue
+                    ings[idx] = new_line
+                    if isinstance(raw, list) and idx < len(raw):
+                        raw[idx] = new_line
+                    m["_fresh_substituted"] = (m.get("_fresh_substituted") or []) + [f"{text[:40]} → {sub}"]
+                    changed += 1
+                    logger.info(f"🧳 [P1-STEP14-SHOPPING-COOKING] día {i + 1}: «{text[:40]}» no aguanta ({code}) → «{sub}» | meal={str(m.get('name'))[:40]}")
+                if m.get("_fresh_substituted"):
+                    try:
+                        _truth_up_meal_macros_from_strings(m, db)
+                    except Exception:
+                        pass
+        return changed
+    except Exception as _e:
+        logger.warning(f"[P1-STEP14-SHOPPING-COOKING] sustitución no-op (fail-safe): {type(_e).__name__}: {_e}")
+        return 0
+
+
 def _cap_daily_whole_eggs(days, db=None, *, max_whole: int = None) -> int:
     """[P1-EGG-DAY-CAP · 2026-09-05] Máximo `max_whole` huevos ENTEROS por día (default EGG_DAY_MAX_WHOLE). La comida con
     más huevo conserva hasta el tope; su exceso y los enteros de las DEMÁS comidas pasan a claras («3 huevos» →

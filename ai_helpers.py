@@ -836,6 +836,27 @@ def _intersect_cycle_base(persisted, allowed) -> "list | None":
         return None
 
 
+def _age_pantry_for_block(items, form_data, days: int) -> list:
+    """[P1-STEP14-SHOPPING-COOKING · 2026-09-05] Bajo compra única (ciclo > 7, sin reposición) la Nevera que
+    `P0-3/PANTRY-PROP` propaga a los bloques es la compra del día 1: un fresco (lechuga, fresas, pescado fresco sin
+    congelador) que no aguanta hasta el PRIMER día del bloque no se ofrece como base. Sin política de compra única, o
+    bloque dentro de la semana de frescos, devuelve `items` intacto. Puro; fail-open."""
+    try:
+        from pantry_durability import single_trip_requirements, ingredient_issue_beyond_horizon
+        fd = form_data if isinstance(form_data, dict) else {}
+        first = int(fd.get("_days_offset") or 0)
+        req = single_trip_requirements(fd.get("_plan_policy_effective"), first)
+        if not req or not items:
+            return list(items or [])
+        kept = [x for x in items if ingredient_issue_beyond_horizon(str(x), first, bool(req.get("allow_frozen"))) is None]
+        if len(kept) < len(items):
+            logger.info(f"🧳 [P1-STEP14-SHOPPING-COOKING] Nevera envejecida para el día {first + 1}: "
+                        f"{len(items) - len(kept)} fresco(s) fuera ({', '.join(str(x) for x in items if x not in kept)[:120]})")
+        return kept
+    except Exception:
+        return list(items or [])
+
+
 def _single_trip_durable_filter(items, form_data, days: int) -> list:
     """[P1-SINGLE-TRIP-ROTATION · 2026-09-05] En un ciclo de UNA sola compra (ciclo > 7 días, sin reposición de
     frescos), el sorteo solo puede completar los pools de un bloque con alimentos que AGUANTEN hasta el último día
@@ -2188,6 +2209,8 @@ def get_deterministic_variety_prompt(history_text: str, form_data: dict = None, 
     # no-op — el WARNING es sobre la base IMPUESTA, no sobre cualquier base sorteada.
     _tpl_pantry_p, _tpl_pantry_c = [], []
     current_pantry_ingredients = (form_data.get("current_pantry_ingredients") or form_data.get("current_shopping_list", [])) if form_data else []
+    # [P1-STEP14-SHOPPING-COOKING] bajo compra única la Nevera propagada envejece: un fresco comprado el día 1 no se ofrece el día 20
+    current_pantry_ingredients = _age_pantry_for_block(current_pantry_ingredients, form_data, _dc)
     if current_pantry_ingredients:
         logger.info(f"🔄 [ROTATION MODE] Extrayendo ingredientes base de la lista actual.")
         extracted_p, extracted_c, extracted_v, extracted_f = [], [], [], []
