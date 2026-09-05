@@ -94,4 +94,7 @@ def test_e_pdf_una_sola_compra_y_catalogos():
                   "PERECEDEROS — UNA SOLA COMPRA (CONGELA LAS PROTEÍNAS EL DÍA DE LA COMPRA)",
                   "PERECEDEROS — UNA SOLA COMPRA (CONGELA LO DE LA SEGUNDA SEMANA)"):
             assert cat.get(k), (loc, k)
-        assert "{duracion}" in cat["Elegiste reponer solo en la compra grande: estas cantidades cubren todo tu ciclo de {duracion}. Congela las proteínas y consume primero lo más delicado."], loc
+        for k in ("Elegiste reponer solo en la compra grande y no congelas: la proteína fresca es para la primera semana; después huevos, enlatados, legumbres y queso curado. Estas cantidades cubren todo tu ciclo de {duracion}.",
+                  "Elegiste reponer solo en la compra grande: congela las proteínas el día de la compra y descongela la noche anterior. Estas cantidades cubren todo tu ciclo de {duracion}.",
+                  "Elegiste reponer solo en la compra grande: congela la proteína de la segunda semana el día de la compra; de la tercera en adelante, huevos, enlatados, legumbres y queso curado. Estas cantidades cubren todo tu ciclo de {duracion}."):
+            assert "{duracion}" in cat[k], (loc, k)
