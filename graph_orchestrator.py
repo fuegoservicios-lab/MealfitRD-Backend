@@ -14928,6 +14928,61 @@ def _apply_condition_substitutions(plan: dict, form_data: dict) -> int:
     return _apply_substitutions_core(plan, subs, _note, "Ajuste clínico", _flags)
 
 
+# [P1-DIET-SUBSTITUTION · 2026-09-05] Sustitutos vegetales por categoría de producto animal. Mismo motor que las
+# sustituciones por alérgeno (`_apply_substitutions_core`): swap quirúrgico, conserva la cantidad y recalcula macros
+# por delta. Medido: en 5 de 7 planes vegetarianos de hoy el intento 1 murió por «pechuga de pollo» que el modelo
+# inventó FUERA del pool (el pool ya era vegetariano y el prompt lleva la prohibición desde P1-DAYGEN-VEG-HARD-LINE);
+# cada rechazo costaba una replanificación completa (~90 s + una llamada cara). El guard `_scan_diet_violations`
+# sigue corriendo en el review: lo que esta pasada no resuelva sigue siendo rechazo crítico.
+DIET_SUBSTITUTION_ENABLED = _env_bool("MEALFIT_DIET_SUBSTITUTION", True)
+_DIET_SUB_TARGETS = (
+    # (tokens del ofensor, reemplazo, etiqueta, negativos)
+    (("pechuga de pollo", "muslo de pollo", "pollo", "pavo", "cerdo", "chuleta", "lomo de cerdo", "res",
+      "carne molida", "bistec", "chivo", "conejo", "higado", "hígado", "longaniza", "salami", "tocineta",
+      "jamon", "jamón", "salchicha", "pepperoni", "costilla", "pernil"), "Soya texturizada", "carne",
+     ("soya", "soja", "vegetal", "vegana", "de coco", "de almendra")),
+    (("pescado", "tilapia", "salmon", "salmón", "bacalao", "mero", "chillo", "atun", "atún", "sardina",
+      "sardinas", "camaron", "camarón", "camarones", "calamar", "pulpo", "cangrejo", "langosta", "lambi", "arenque"),
+     "Garbanzos cocidos", "pescado o marisco", ("soya", "soja", "vegetal", "vegana", "de coco", "de almendra")),
+)
+
+
+def _apply_diet_substitutions(plan: dict, form_data: dict) -> int:
+    """Sustituye carne/pescado por su equivalente vegetal en planes vegetarianos o veganos (y carne en
+    pescetarianos), ANTES del review. Mutates `plan`; devuelve nº de comidas afectadas. Fail-safe.
+    tooltip-anchor: P1-DIET-SUBSTITUTION"""
+    if not DIET_SUBSTITUTION_ENABLED:
+        return 0
+    try:
+        canon = _canonicalize_diet_type((form_data or {}).get("dietType"))
+        if canon not in ("vegan", "vegetarian", "pescatarian"):
+            return 0
+        subs = []
+        for tokens, replacement, label, negatives in _DIET_SUB_TARGETS:
+            if canon == "pescatarian" and label != "carne":
+                continue          # el pescetariano SÍ come pescado
+            subs.append({"tokens": list(tokens), "replacement": replacement, "label": label,
+                         "negatives": list(negatives), "condition": canon, "preserve_qty": True})
+        if not subs:
+            return 0
+
+        def _note(uniq, conds):
+            return ("🌱 Ajuste por tu dieta: se reemplazó " + ", ".join(uniq)
+                    + " por una alternativa vegetal con proteína equivalente.")
+
+        def _flags(meal, uniq, conds):
+            meal["_diet_subs_fixed"] = uniq
+
+        n = _apply_substitutions_core(plan, subs, _note, "Ajuste por tu dieta", _flags)
+        if n:
+            logger.warning(f"🌱 [P1-DIET-SUBSTITUTION] {n} comida(s) con carne/pescado sustituidas por alternativa "
+                           f"vegetal (dieta {canon}) — antes esto costaba un reintento completo")
+        return n
+    except Exception as _ds_e:
+        logger.warning(f"[P1-DIET-SUBSTITUTION] no-op (fail-safe): {type(_ds_e).__name__}: {_ds_e}")
+        return 0
+
+
 def _apply_allergen_substitutions(plan: dict, form_data: dict) -> int:
     """[P0-ALLERGEN-SUBS · 2026-06-14] Sustitución QUIRÚRGICA de alérgenos IgE DECLARADOS
     (`form_data['allergies']`) por una alternativa segura que RESUELVE al catálogo, ANTES del review.
@@ -26099,6 +26154,16 @@ def _apply_deterministic_clinical_layer(plan: dict, form_data: dict, nutrition: 
         except Exception as _al_e:
             logger.warning(f"[P0-ALLERGEN-SUBS] error: {type(_al_e).__name__}: {_al_e}")
 
+    # ── Guard 2.6 (dieta declarada) [P1-DIET-SUBSTITUTION · 2026-09-05] ──
+    # Corre DESPUÉS del alérgeno (su precedencia es mayor) y ANTES de las subs por condición. El backstop
+    # `_scan_diet_violations` del review sigue escalando cualquier residual a crítico.
+    try:
+        _dt_n = _apply_diet_substitutions(plan, form_data)
+        if _dt_n:
+            logger.warning(f"🌱 [P1-DIET-SUBSTITUTION] Ajustó {_dt_n} comida(s) a la dieta declarada")
+    except Exception as _dt_e:
+        logger.warning(f"[P1-DIET-SUBSTITUTION] error: {type(_dt_e).__name__}: {_dt_e}")
+
     # ── Guard 3: sustitución de ingredientes por condición DM2/HTA/dislipidemia (vía SubstitutionEngineConstraint) ──
     if DM2_SUGAR_GUARD:
         try:
@@ -26158,6 +26223,14 @@ def _apply_deterministic_clinical_layer(plan: dict, form_data: dict, nutrition: 
                                f"{_al2_n} comida(s)")
         except Exception as _al2_e:
             logger.warning(f"[P2-12] re-pass allergen subs error: {type(_al2_e).__name__}: {_al2_e}")
+    # [P1-DIET-SUBSTITUTION] misma razón que la re-pasada de alérgenos: una sub por condición puede
+    # reintroducir carne (p. ej. HTA → «filete de pescado blanco») en un plan vegetariano.
+    try:
+        _dt2_n = _apply_diet_substitutions(plan, form_data)
+        if _dt2_n:
+            logger.warning(f"🌱 [P1-DIET-SUBSTITUTION] Re-ajustó {_dt2_n} comida(s) tras las subs por condición")
+    except Exception as _dt2_e:
+        logger.warning(f"[P1-DIET-SUBSTITUTION] re-pass error: {type(_dt2_e).__name__}: {_dt2_e}")
 
     # ── Guard 3.6 (FS6/ERC re-check) [P1-RENAL-RECHECK-POST-SUBS · 2026-06-18, audit fresco P1-C] ──
     # Re-enforza el cap renal DESPUÉS de las sustituciones por condición (Guard 3) + el re-pase de alérgenos
