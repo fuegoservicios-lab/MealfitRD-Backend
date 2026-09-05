@@ -55,7 +55,8 @@ def test_c_validador_warn_solo_tras_el_horizonte_y_solo_delicados():
     # bloque que empieza en el día 14 del ciclo: todo está fuera del horizonte de 7 días
     issues = hz.fresh_beyond_horizon_issues(days, {"days_offset": 14}, _SINGLE)
     codes = [(i["code"], i["day"]) for i in issues]
-    assert codes == [("fresh_beyond_horizon", 1), ("fresh_beyond_horizon", 2), ("fresh_beyond_horizon", 4)], codes
+    # [F7-G] la proteína fresca fuera de la ventana de congelación tiene código propio (antes se confundía con un fresco)
+    assert codes == [("fresh_beyond_horizon", 1), ("protein_beyond_freeze_window", 2), ("fresh_beyond_horizon", 4)], codes
     assert all(i["severity"] == "low" for i in issues), "modo warn: nunca bloquea"
     # el primer bloque (días 1-3) no avisa aunque use lechuga
     assert hz.fresh_beyond_horizon_issues(days, {"days_offset": 0}, _SINGLE) == []
@@ -82,7 +83,9 @@ def test_d_la_lista_no_se_ventanea_con_una_sola_compra(monkeypatch):
 def test_e_pdf_una_sola_compra_y_catalogos():
     dash = _frontend("pages", "Dashboard.jsx")
     assert "const isSingleTrip = !isWeekly && !!_policyShopping && Number(_policyShopping.main_cycle_days || 0) > 7 && !_policyShopping.fresh_topup_days;" in dash
-    assert "t('PERECEDEROS — UNA SOLA COMPRA (CONGELA O CONSUME PRIMERO)')" in dash
+    # [F7-G] el copy depende del congelador declarado (sin congelador / limitado / completo)
+    assert "t('PERECEDEROS — UNA SOLA COMPRA (SIN CONGELADOR: CONSUME PRIMERO)')" in dash
+    assert "t('PERECEDEROS — UNA SOLA COMPRA (CONGELA LO DE LA SEGUNDA SEMANA)')" in dash
     assert "t('COMPRA ESTA SEMANA — PERECEDEROS (REPITE CADA 7 DÍAS)')" in dash, "con reposiciones, el copy de siempre"
     for loc in ("en-US", "pt-BR", "fr-FR", "it-IT"):
         cat = json.loads(_frontend("i18n", "locales", f"{loc}.json"))

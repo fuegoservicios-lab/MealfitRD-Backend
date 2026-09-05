@@ -511,11 +511,13 @@ def compile_policy(requested: dict, *, context: Optional[dict] = None) -> tuple[
         budget["status"] = "ok" if budget.get("mode") == "hard" else "advisory"
     eff["budget"] = budget
     shopping = dict(eff.get("shopping") or {})
+    # [P1-ARQ25-F7-CULTURE · subfase G] Sin congelador ni reposición en un ciclo > 7 días ya NO se acorta el ciclo:
+    # el usuario pidió UNA compra y el motor la respeta con proteínas de despensa (huevo, enlatados, legumbres, queso
+    # curado) desde el día 8 — el registry filtra por durabilidad y el validador lo vigila. Se declara, no se cambia.
     if (int(shopping.get("main_cycle_days") or 7) > 7 and shopping.get("freezer_mode") == "none"
             and not shopping.get("fresh_topup_days")):
-        _relax(rels, field="shopping.main_cycle_days", requested=shopping.get("main_cycle_days"), applied=7,
-               reason="cycle_shortened_no_freezer_no_topup", rank=4)
-        shopping["main_cycle_days"] = 7
+        _relax(rels, field="shopping.freezer_mode", requested="none", applied="none",
+               reason="pantry_proteins_after_first_week", rank=4, action="applied", evidence={"fresh_days": 7})
     eff["shopping"] = shopping
     # 5. anclas y recurrencia
     for a in anchors:
@@ -573,6 +575,7 @@ _REASON_COPY = {
     "budget_advisory_no_prices": "En tu país aún no hay precios: el presupuesto es orientativo, no un límite.",
     "budget_below_floor": "Tu presupuesto ({amount_dop}) está por debajo del mínimo para un plan que cumpla tus metas ({floor_dop}). Súbelo o ajusta las metas.",
     "cycle_shortened_no_freezer_no_topup": "Sin congelador ni reposición de frescos, el ciclo de compra pasa a 7 días.",
+    "pantry_proteins_after_first_week": "Sin congelador ni reposición de frescos: la proteína fresca es para la primera semana; después huevos, enlatados, legumbres y queso curado.",
     "recurrence_clamped": "La frecuencia pedida se ajustó al rango posible (0–7 por semana).",
     "anchors_capped": "Solo los primeros {applied} básicos se usan como anclas.",
 }

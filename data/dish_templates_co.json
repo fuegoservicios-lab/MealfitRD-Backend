@@ -2295,6 +2295,403 @@
           "grams": 80.0
         }
       ]
+    },
+    {
+      "name": "Arroz con atún y zanahoria",
+      "slots": [
+        "almuerzo"
+      ],
+      "protein": "atun",
+      "base": "arroz",
+      "technique": "salteado",
+      "transform": false,
+      "constituents": [
+        {
+          "name": "Arroz blanco",
+          "grams": 60.0
+        },
+        {
+          "name": "Atún en agua",
+          "grams": 90.0
+        },
+        {
+          "name": "Zanahoria",
+          "grams": 50.0
+        },
+        {
+          "name": "Cebolla",
+          "grams": 30.0
+        },
+        {
+          "name": "Aceite vegetal",
+          "grams": 6.0
+        }
+      ]
+    },
+    {
+      "name": "Fríjoles con arroz y huevo frito",
+      "slots": [
+        "almuerzo"
+      ],
+      "protein": "legumbre",
+      "base": "legumbre",
+      "technique": "guisado",
+      "transform": true,
+      "constituents": [
+        {
+          "name": "Frijol cargamanto",
+          "grams": 70.0
+        },
+        {
+          "name": "Arroz blanco",
+          "grams": 60.0
+        },
+        {
+          "name": "Huevo",
+          "grams": 50.0
+        },
+        {
+          "name": "Cebolla",
+          "grams": 20.0
+        },
+        {
+          "name": "Ajo",
+          "grams": 5.0
+        }
+      ]
+    },
+    {
+      "name": "Garbanzos guisados con papa criolla",
+      "slots": [
+        "almuerzo"
+      ],
+      "protein": "legumbre",
+      "base": "legumbre",
+      "technique": "guisado",
+      "transform": true,
+      "constituents": [
+        {
+          "name": "Garbanzos",
+          "grams": 70.0
+        },
+        {
+          "name": "Papa",
+          "grams": 120.0
+        },
+        {
+          "name": "Zanahoria",
+          "grams": 40.0
+        },
+        {
+          "name": "Cebolla",
+          "grams": 30.0
+        },
+        {
+          "name": "Comino",
+          "grams": 1.0
+        }
+      ]
+    },
+    {
+      "name": "Arepas de queso con atún guisado",
+      "slots": [
+        "cena"
+      ],
+      "protein": "atun",
+      "base": "maiz",
+      "technique": "plancha",
+      "transform": true,
+      "constituents": [
+        {
+          "name": "Harina de maíz precocida",
+          "grams": 70.0
+        },
+        {
+          "name": "Queso blanco",
+          "grams": 30.0
+        },
+        {
+          "name": "Atún en agua",
+          "grams": 80.0
+        },
+        {
+          "name": "Salsa de tomate",
+          "grams": 40.0
+        },
+        {
+          "name": "Cebolla",
+          "grams": 30.0
+        }
+      ]
+    },
+    {
+      "name": "Bacalao guisado con papa y arroz",
+      "slots": [
+        "almuerzo"
+      ],
+      "protein": "pescado",
+      "base": "arroz",
+      "technique": "guisado",
+      "transform": true,
+      "constituents": [
+        {
+          "name": "Bacalao",
+          "grams": 120.0
+        },
+        {
+          "name": "Papa",
+          "grams": 100.0
+        },
+        {
+          "name": "Arroz blanco",
+          "grams": 50.0
+        },
+        {
+          "name": "Salsa de tomate",
+          "grams": 50.0
+        },
+        {
+          "name": "Cebolla",
+          "grams": 40.0
+        },
+        {
+          "name": "Ajo",
+          "grams": 5.0
+        }
+      ]
+    },
+    {
+      "name": "Sardinas con arepa y hogao",
+      "slots": [
+        "desayuno"
+      ],
+      "protein": "pescado",
+      "base": "maiz",
+      "technique": "salteado",
+      "transform": false,
+      "constituents": [
+        {
+          "name": "Harina de maíz precocida",
+          "grams": 60.0
+        },
+        {
+          "name": "Sardinas en lata",
+          "grams": 80.0
+        },
+        {
+          "name": "Salsa de tomate",
+          "grams": 40.0
+        },
+        {
+          "name": "Cebolla",
+          "grams": 30.0
+        }
+      ]
+    },
+    {
+      "name": "Tortilla de papa con queso",
+      "slots": [
+        "cena",
+        "desayuno"
+      ],
+      "protein": "huevo",
+      "base": "papa",
+      "technique": "sartén",
+      "transform": true,
+      "constituents": [
+        {
+          "name": "Huevo",
+          "grams": 100.0
+        },
+        {
+          "name": "Papa",
+          "grams": 120.0
+        },
+        {
+          "name": "Queso blanco",
+          "grams": 30.0
+        },
+        {
+          "name": "Cebolla",
+          "grams": 30.0
+        },
+        {
+          "name": "Aceite vegetal",
+          "grams": 6.0
+        }
+      ]
+    },
+    {
+      "name": "Sopa de garbanzo con papa y zanahoria",
+      "slots": [
+        "cena"
+      ],
+      "protein": "legumbre",
+      "base": "none",
+      "technique": "sopa espesa",
+      "transform": false,
+      "constituents": [
+        {
+          "name": "Garbanzos",
+          "grams": 60.0
+        },
+        {
+          "name": "Papa",
+          "grams": 80.0
+        },
+        {
+          "name": "Zanahoria",
+          "grams": 50.0
+        },
+        {
+          "name": "Cebolla",
+          "grams": 30.0
+        },
+        {
+          "name": "Comino",
+          "grams": 1.0
+        }
+      ]
+    },
+    {
+      "name": "Auyama guisada con huevo y arepa",
+      "slots": [
+        "cena"
+      ],
+      "protein": "huevo",
+      "base": "viveres",
+      "technique": "guisado",
+      "transform": false,
+      "constituents": [
+        {
+          "name": "Auyama",
+          "grams": 200.0
+        },
+        {
+          "name": "Huevo",
+          "grams": 100.0
+        },
+        {
+          "name": "Harina de maíz precocida",
+          "grams": 50.0
+        },
+        {
+          "name": "Cebolla",
+          "grams": 30.0
+        }
+      ]
+    },
+    {
+      "name": "Pasta con atún y salsa criolla",
+      "slots": [
+        "almuerzo"
+      ],
+      "protein": "atun",
+      "base": "pasta",
+      "technique": "guisado",
+      "transform": false,
+      "constituents": [
+        {
+          "name": "Pasta integral",
+          "grams": 70.0
+        },
+        {
+          "name": "Atún en agua",
+          "grams": 80.0
+        },
+        {
+          "name": "Salsa de tomate",
+          "grams": 80.0
+        },
+        {
+          "name": "Cebolla",
+          "grams": 30.0
+        },
+        {
+          "name": "Ajo",
+          "grams": 5.0
+        }
+      ]
+    },
+    {
+      "name": "Yuca con queso y huevo",
+      "slots": [
+        "cena"
+      ],
+      "protein": "huevo",
+      "base": "yuca",
+      "technique": "hervido",
+      "transform": false,
+      "constituents": [
+        {
+          "name": "Yuca",
+          "grams": 180.0
+        },
+        {
+          "name": "Queso blanco",
+          "grams": 30.0
+        },
+        {
+          "name": "Huevo",
+          "grams": 100.0
+        }
+      ]
+    },
+    {
+      "name": "Avena con leche evaporada y panela",
+      "slots": [
+        "desayuno"
+      ],
+      "protein": "none",
+      "base": "avena",
+      "technique": "hervido",
+      "transform": false,
+      "constituents": [
+        {
+          "name": "Avena",
+          "grams": 50.0
+        },
+        {
+          "name": "Leche evaporada",
+          "grams": 80.0
+        },
+        {
+          "name": "Panela",
+          "grams": 10.0
+        },
+        {
+          "name": "Canela en polvo",
+          "grams": 1.0
+        }
+      ]
+    },
+    {
+      "name": "Batata asada con atún y cebolla",
+      "slots": [
+        "cena"
+      ],
+      "protein": "atun",
+      "base": "viveres",
+      "technique": "horneado",
+      "transform": false,
+      "constituents": [
+        {
+          "name": "Batata",
+          "grams": 180.0
+        },
+        {
+          "name": "Atún en agua",
+          "grams": 80.0
+        },
+        {
+          "name": "Cebolla",
+          "grams": 40.0
+        },
+        {
+          "name": "Aceite vegetal",
+          "grams": 6.0
+        }
+      ]
     }
   ]
 }

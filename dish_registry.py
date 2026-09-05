@@ -25,6 +25,7 @@ snapshot reproducible desde la fuente. Fail-open total en runtime: sin snapshot 
 """
 from __future__ import annotations
 
+import pantry_durability as _pd  # [F7-G] SSOT de durabilidad
 import hashlib
 import json
 import logging
@@ -36,8 +37,8 @@ from knobs import _env_str
 
 logger = logging.getLogger(__name__)
 
-REGISTRY_SCHEMA_VERSION = 2
-COMPILER_VERSION = 2
+REGISTRY_SCHEMA_VERSION = 3   # [F7-G] durabilidad por constituyente + logística de despensa
+COMPILER_VERSION = 3
 BACKEND_DIR = os.path.dirname(os.path.abspath(__file__))
 DATA_DIR = os.path.join(BACKEND_DIR, "data")
 REGISTRY_DIR = os.path.join(DATA_DIR, "registry")
@@ -218,9 +219,12 @@ def derive_logistics(template: dict, resolved: list, index: dict) -> dict:
             sl = None
         if sl is not None and sl > 0:
             shelf.append(sl)
+    dur = _pd.durability_of(resolved)
     return {
         "batch_friendly": bool(batch), "freezer_friendly": bool(freezer),
         "min_shelf_life_days": min(shelf) if shelf else None,
+        # [F7-G] cuántos días aguanta el plato sin congelador / congelando la proteína, y si es de despensa (≥ 21 días)
+        "days_fresh_min": dur["days_fresh_min"], "days_with_freezer_min": dur["days_with_freezer_min"], "pantry_only": dur["pantry_only"],
         "prep_minutes_est": int(prep), "difficulty_est": diff, "estimated": True,
     }
 
@@ -276,7 +280,10 @@ def compile_template(template: dict, index: dict, *, library: str, constituents:
             iid = ingredient_id_for(row["name"])
         except Exception:
             iid = _norm(row["name"]).replace(" ", "_")
-        resolved.append({"name": name, "canonical": row["name"], "ingredient_id": iid, "grams": round(grams, 1)})
+        # [P1-ARQ25-F7-CULTURE · subfase G] durabilidad SSOT (pantry_durability): lo que el registry sabe de cuánto aguanta
+        _dur = _pd.classify(row["name"], row.get("category"))
+        resolved.append({"name": name, "canonical": row["name"], "ingredient_id": iid, "grams": round(grams, 1),
+                         "durability": _dur["cls"], "days_fresh": _dur["days_fresh"]})
     for name in declared_unresolved or []:
         excluded.append({"name": str(name), "grams": None, "reason": "declared_unresolved"})
     nutrition = {k: 0.0 for k in _NUTRIENT_COLS}
@@ -435,7 +442,8 @@ def canonical_slot_es(slot: Any) -> str:
 
 
 def template_candidates(country: Optional[str], slot: str, family: Optional[str] = None, *, k: int = 6,
-                        exclude_allergens: Iterable[str] = ()) -> list[dict]:
+                        exclude_allergens: Iterable[str] = (), need_days: Optional[int] = None,
+                        allow_frozen: bool = False) -> list[dict]:
     """Candidatos del registry para el allocator: `status='ok'`, franja compatible, familia de proteína
     compatible (vía `horizon.family_matches`), sin las clases de alérgeno excluidas. Orden estable."""
     snap = load_registry(country)
@@ -457,9 +465,14 @@ def template_candidates(country: Optional[str], slot: str, family: Optional[str]
             prot = str(t.get("protein") or "none").lower()
             if prot not in ("none", "mixta") and not family_matches(family, prot):
                 continue
+        # [F7-G] compra única: el plato debe aguantar hasta ese día del ciclo (sin congelador, o congelando si el modo lo permite)
+        if need_days:
+            _lg = t.get("logistics") or {}
+            if not _pd.template_fits(_lg.get("days_fresh_min"), _lg.get("days_with_freezer_min"), int(need_days), bool(allow_frozen)):
+                continue
         out.append({"template_id": t["template_id"], "name": t["name"], "protein": t.get("protein"),
                     "technique": t.get("technique"), "transform": t.get("transform"),
-                    "logistics": t.get("logistics") or {}})
+                    "logistics": t.get("logistics") or {}, "pantry_only": bool((t.get("logistics") or {}).get("pantry_only"))})
         if len(out) >= max(1, int(k)):
             break
     return out

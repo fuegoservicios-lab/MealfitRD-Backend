@@ -371,6 +371,16 @@ def _main_profile(effective: Optional[dict]) -> str:
         return "dominican_criolla"
 
 
+def _dur_kwargs(effective: Optional[dict], day_index) -> dict:
+    """[F7-G] Exigencia de durabilidad de un día bajo compra única (vacío si no aplica)."""
+    try:
+        from pantry_durability import single_trip_requirements
+        req = single_trip_requirements(effective, day_index)
+        return {"need_days": req["need_days"], "allow_frozen": req["allow_frozen"]} if req else {}
+    except Exception:
+        return {}
+
+
 def _culture_country(profile_id: Optional[str]) -> str:
     """País cuya biblioteca/registry representa la cocina (NO el de compra)."""
     try:
@@ -403,7 +413,8 @@ def _registry_block_for_country(country: Optional[str], *, effective: Optional[d
                 _pid = ((d.get("culture") or {}).get(slot)) if isinstance(d.get("culture"), dict) else None
                 _c = _culture_country(_pid) if _pid else country
                 hashes[_c] = hashes.get(_c) or dr.registry_hash(_c)
-                ids = [c["template_id"] for c in dr.template_candidates(_c, slot, fam, k=3, exclude_allergens=allergies)]
+                ids = [c["template_id"] for c in dr.template_candidates(_c, slot, fam, k=3, exclude_allergens=allergies,
+                                                                         **_dur_kwargs(effective, d.get("day_index")))]
                 if ids:
                     cands[f"{d.get('day_index')}:{slot}"] = ids
         return {"snapshot_hash": h, "version": dr.registry_snapshot_version(), "candidates": cands,
@@ -453,7 +464,8 @@ def registry_prompt_lines(effective: Optional[dict], sl: Optional[dict] = None, 
             for s_ in slots:
                 key = dr.canonical_slot_es(s_)  # el motor dice «dinner», el registry «cena»
                 _day_country = _culture_country(_cul.get(s_) or _cul.get(key)) if _cul else country
-                cands = dr.template_candidates(_day_country, key, fam, k=per_slot, exclude_allergens=allergies)
+                cands = dr.template_candidates(_day_country, key, fam, k=per_slot, exclude_allergens=allergies,
+                                               **_dur_kwargs(eff, d.get("day_index")))
                 if cands:
                     parts.append(f"{_SLOT_ES.get(key, key)}: " + " | ".join(str(c.get("name")) for c in cands))
             if parts:
@@ -820,12 +832,17 @@ def _is_delicate_fresh(ingredient) -> bool:
 
 
 def fresh_beyond_horizon_issues(days: list, sl: Optional[dict], effective: Optional[dict]) -> list[dict]:
-    """Issues `fresh_beyond_horizon` (severity low, modo warn): frescos delicados en días posteriores al
-    horizonte de 7 días de un ciclo de UNA sola compra. Puro, nunca lanza, tope 20."""
+    """Issues (severity low, modo warn) de un ciclo de UNA sola compra: `fresh_beyond_horizon` (un fresco que no
+    aguanta hasta ese día) y `protein_beyond_freeze_window` (proteína fresca en un día que la ventana de congelación
+    del usuario no cubre: sin congelador ⇒ ninguno; limitado ⇒ hasta el día 14; completo ⇒ todo el ciclo).
+    [F7-G] La durabilidad es la de `pantry_durability`, no una lista de tokens. Puro, nunca lanza, tope 20."""
     out: list[dict] = []
     if not single_trip_policy(effective):
         return out
     try:
+        from pantry_durability import ingredient_issue_beyond_horizon, freeze_window_days
+        shopping = (effective or {}).get("shopping") or {}
+        window = freeze_window_days(shopping.get("freezer_mode"), int(shopping.get("main_cycle_days") or 0))
         offset = int((sl or {}).get("days_offset") or 0)
         for i, day in enumerate([d for d in (days or []) if isinstance(d, dict)]):
             abs_day = offset + i
@@ -835,16 +852,20 @@ def fresh_beyond_horizon_issues(days: list, sl: Optional[dict], effective: Optio
                 if not isinstance(m, dict):
                     continue
                 for ing in (m.get("ingredients") or []):
-                    if _is_delicate_fresh(ing):
-                        label = ing if isinstance(ing, str) else str((ing or {}).get("name") or "")
-                        out.append({
-                            "code": "fresh_beyond_horizon", "severity": "low", "day": i + 1,
-                            "ingredient": label[:60],
-                            "message": (f"FRESCO DELICADO SIN REPOSICIÓN: el día {abs_day + 1} del ciclo usa «{label[:40]}» y el "
-                                        f"usuario hace una sola compra (sin frescos después del día {FRESH_HORIZON_DAYS})."),
-                        })
-                        if len(out) >= 20:
-                            return out
+                    label = ing if isinstance(ing, str) else str((ing or {}).get("name") or "")
+                    if not label or any(h in label.lower() for h in _DURABLE_HINTS):
+                        continue
+                    code = ingredient_issue_beyond_horizon(label, abs_day, allow_frozen=abs_day < window)
+                    if not code:
+                        continue
+                    msg = (f"FRESCO SIN REPOSICIÓN: el día {abs_day + 1} del ciclo usa «{label[:40]}» y el usuario hace una sola compra "
+                           f"(sin frescos después del día {FRESH_HORIZON_DAYS})." if code == "fresh_beyond_horizon" else
+                           f"PROTEÍNA FRESCA FUERA DE LA VENTANA DE CONGELACIÓN: el día {abs_day + 1} usa «{label[:40]}» y el congelador del "
+                           f"usuario ({shopping.get('freezer_mode') or 'limited'}) solo cubre hasta el día {window}; usa huevo, legumbres, "
+                           f"atún/sardinas en lata, bacalao o queso curado.")
+                    out.append({"code": code, "severity": "low", "day": i + 1, "ingredient": label[:60], "message": msg})
+                    if len(out) >= 20:
+                        return out
     except Exception:
         return out
     return out
@@ -865,7 +886,11 @@ def single_trip_prompt_lines(effective: Optional[dict], sl: Optional[dict] = Non
         {
             "none": f"- Sin congelador: proteína fresca solo en los primeros {FRESH_HORIZON_DAYS} días; después huevo, legumbres, atún o sardina en lata y queso.",
             "full": "- Con congelador: las proteínas se compran una sola vez y se congelan; planifica descongelar la noche anterior.",
-        }.get(freezer, f"- Congelador limitado: proteína fresca en los primeros {FRESH_HORIZON_DAYS} días; después congelada, huevo, legumbres y enlatados."),
+        }.get(freezer, f"- Congelador limitado: proteína fresca en los primeros {FRESH_HORIZON_DAYS} días; congelada del día 8 al 14; "
+                       "después huevo, legumbres, atún o sardina en lata, bacalao y queso curado."),
+        "- Misma despensa, distinta PREPARACIÓN: repite arroz, pasta, legumbres, atún/sardinas, huevo, queso curado, raíces, "
+        "repollo, zanahoria y cebolla cambiando la técnica (guisado, salteado, horneado, tortilla, ensalada tibia, sopa) y el "
+        "acompañamiento, no los ingredientes.",
     ]
     try:
         idxs = [int(d.get("day_index")) for d in ((sl or {}).get("days") or []) if isinstance(d, dict) and d.get("day_index") is not None]
@@ -1354,12 +1379,9 @@ def review_fidelity_gate(plan: dict, form_data: dict, variety_issues: list, *, a
 
 # ═══════════════════════════════════════════════════ shopping / proyección
 def _freeze_horizon_days(freezer_mode: str, total_days: int) -> int:
-    m = str(freezer_mode or "limited").lower()
-    if m == "none":
-        return 0
-    if m == "full":
-        return int(total_days)
-    return min(7, int(total_days))
+    """[F7-G] SSOT en pantry_durability.freeze_window_days: sin congelador 0, limitado 14 (frescos 7 + congelados 7), completo el ciclo."""
+    from pantry_durability import freeze_window_days
+    return int(freeze_window_days(freezer_mode, total_days))
 
 
 def shopping_projection_windows(effective: Optional[dict], total_days: int) -> list[dict]:

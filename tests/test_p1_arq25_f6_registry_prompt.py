@@ -37,7 +37,7 @@ def test_c_logistica_y_editorial_en_los_snapshots_reales():
     import json
     for f in files:
         snap = json.loads(f.read_text(encoding="utf-8"))
-        assert snap["schema_version"] == 2 and snap["compiler_version"] == 2, f.name
+        assert snap["schema_version"] == 3 and snap["compiler_version"] == 3, f.name  # [F7-G]
         for t in snap["templates"]:
             assert t["logistics"]["estimated"] is True and t["editorial"]["status"] == "curated", t["name"]
             assert set(t["logistics"]) >= {"batch_friendly", "freezer_friendly", "min_shelf_life_days", "prep_minutes_est", "difficulty_est"}

@@ -2363,6 +2363,452 @@
           "grams": 1.0
         }
       ]
+    },
+    {
+      "name": "Arroz con atún, cebolla y aceitunas",
+      "slots": [
+        "almuerzo"
+      ],
+      "protein": "atun",
+      "base": "arroz",
+      "technique": "salteado",
+      "transform": false,
+      "constituents": [
+        {
+          "name": "Arroz blanco",
+          "grams": 60.0
+        },
+        {
+          "name": "Atún en agua",
+          "grams": 90.0
+        },
+        {
+          "name": "Cebolla",
+          "grams": 40.0
+        },
+        {
+          "name": "Aceitunas",
+          "grams": 15.0
+        },
+        {
+          "name": "Aceite de oliva",
+          "grams": 8.0
+        },
+        {
+          "name": "Pimentón",
+          "grams": 1.0
+        }
+      ]
+    },
+    {
+      "name": "Potaje de garbanzos con bacalao",
+      "slots": [
+        "almuerzo"
+      ],
+      "protein": "pescado",
+      "base": "legumbre",
+      "technique": "guisado",
+      "transform": true,
+      "constituents": [
+        {
+          "name": "Garbanzos",
+          "grams": 70.0
+        },
+        {
+          "name": "Bacalao",
+          "grams": 100.0
+        },
+        {
+          "name": "Cebolla",
+          "grams": 40.0
+        },
+        {
+          "name": "Ajo",
+          "grams": 5.0
+        },
+        {
+          "name": "Pimentón",
+          "grams": 2.0
+        },
+        {
+          "name": "Aceite de oliva",
+          "grams": 8.0
+        },
+        {
+          "name": "Papa",
+          "grams": 80.0
+        }
+      ]
+    },
+    {
+      "name": "Lentejas con arroz y chorizo curado",
+      "slots": [
+        "almuerzo"
+      ],
+      "protein": "legumbre",
+      "base": "legumbre",
+      "technique": "guisado",
+      "transform": true,
+      "constituents": [
+        {
+          "name": "Lentejas",
+          "grams": 70.0
+        },
+        {
+          "name": "Arroz blanco",
+          "grams": 40.0
+        },
+        {
+          "name": "Chorizo español",
+          "grams": 30.0
+        },
+        {
+          "name": "Zanahoria",
+          "grams": 40.0
+        },
+        {
+          "name": "Cebolla",
+          "grams": 30.0
+        },
+        {
+          "name": "Laurel",
+          "grams": 0.5
+        }
+      ]
+    },
+    {
+      "name": "Tortilla de atún con cebolla",
+      "slots": [
+        "cena"
+      ],
+      "protein": "atun",
+      "base": "none",
+      "technique": "sartén",
+      "transform": true,
+      "constituents": [
+        {
+          "name": "Huevo",
+          "grams": 100.0
+        },
+        {
+          "name": "Atún en agua",
+          "grams": 80.0
+        },
+        {
+          "name": "Cebolla",
+          "grams": 40.0
+        },
+        {
+          "name": "Aceite de oliva",
+          "grams": 6.0
+        }
+      ]
+    },
+    {
+      "name": "Pasta con sardinas, ajo y pan rallado",
+      "slots": [
+        "almuerzo"
+      ],
+      "protein": "pescado",
+      "base": "pasta",
+      "technique": "salteado",
+      "transform": false,
+      "constituents": [
+        {
+          "name": "Pasta integral",
+          "grams": 70.0
+        },
+        {
+          "name": "Sardinas en lata",
+          "grams": 90.0
+        },
+        {
+          "name": "Ajo",
+          "grams": 8.0
+        },
+        {
+          "name": "Pan rallado",
+          "grams": 10.0
+        },
+        {
+          "name": "Aceite de oliva",
+          "grams": 8.0
+        }
+      ]
+    },
+    {
+      "name": "Huevos rotos con patatas y jamón serrano",
+      "slots": [
+        "cena"
+      ],
+      "protein": "huevo",
+      "base": "papa",
+      "technique": "frito",
+      "transform": false,
+      "constituents": [
+        {
+          "name": "Huevo",
+          "grams": 100.0
+        },
+        {
+          "name": "Papa",
+          "grams": 150.0
+        },
+        {
+          "name": "Jamón serrano",
+          "grams": 30.0
+        },
+        {
+          "name": "Aceite de oliva",
+          "grams": 10.0
+        }
+      ]
+    },
+    {
+      "name": "Judías blancas con chorizo y pimentón",
+      "slots": [
+        "almuerzo"
+      ],
+      "protein": "mixta",
+      "base": "legumbre",
+      "technique": "guisado",
+      "transform": true,
+      "constituents": [
+        {
+          "name": "Judías blancas",
+          "grams": 70.0
+        },
+        {
+          "name": "Chorizo español",
+          "grams": 40.0
+        },
+        {
+          "name": "Cebolla",
+          "grams": 30.0
+        },
+        {
+          "name": "Ajo",
+          "grams": 5.0
+        },
+        {
+          "name": "Pimentón",
+          "grams": 2.0
+        },
+        {
+          "name": "Laurel",
+          "grams": 0.5
+        }
+      ]
+    },
+    {
+      "name": "Crema de zanahoria con queso",
+      "slots": [
+        "cena"
+      ],
+      "protein": "queso",
+      "base": "none",
+      "technique": "crema",
+      "transform": true,
+      "constituents": [
+        {
+          "name": "Zanahoria",
+          "grams": 250.0
+        },
+        {
+          "name": "Papa",
+          "grams": 60.0
+        },
+        {
+          "name": "Cebolla",
+          "grams": 30.0
+        },
+        {
+          "name": "Queso parmesano",
+          "grams": 20.0
+        },
+        {
+          "name": "Aceite de oliva",
+          "grams": 6.0
+        }
+      ]
+    },
+    {
+      "name": "Bacalao con patatas al horno",
+      "slots": [
+        "cena"
+      ],
+      "protein": "pescado",
+      "base": "papa",
+      "technique": "horneado",
+      "transform": false,
+      "constituents": [
+        {
+          "name": "Bacalao",
+          "grams": 150.0
+        },
+        {
+          "name": "Papa",
+          "grams": 150.0
+        },
+        {
+          "name": "Cebolla",
+          "grams": 50.0
+        },
+        {
+          "name": "Aceite de oliva",
+          "grams": 8.0
+        }
+      ]
+    },
+    {
+      "name": "Arroz caldoso con bacalao",
+      "slots": [
+        "almuerzo"
+      ],
+      "protein": "pescado",
+      "base": "arroz",
+      "technique": "guisado",
+      "transform": true,
+      "constituents": [
+        {
+          "name": "Arroz blanco",
+          "grams": 70.0
+        },
+        {
+          "name": "Bacalao",
+          "grams": 100.0
+        },
+        {
+          "name": "Cebolla",
+          "grams": 30.0
+        },
+        {
+          "name": "Ajo",
+          "grams": 5.0
+        },
+        {
+          "name": "Pimentón",
+          "grams": 1.0
+        },
+        {
+          "name": "Aceite de oliva",
+          "grams": 6.0
+        }
+      ]
+    },
+    {
+      "name": "Huevos al plato con jamón serrano y salsa de tomate",
+      "slots": [
+        "cena",
+        "desayuno"
+      ],
+      "protein": "huevo",
+      "base": "none",
+      "technique": "horneado",
+      "transform": false,
+      "constituents": [
+        {
+          "name": "Huevo",
+          "grams": 100.0
+        },
+        {
+          "name": "Jamón serrano",
+          "grams": 25.0
+        },
+        {
+          "name": "Salsa de tomate",
+          "grams": 80.0
+        },
+        {
+          "name": "Aceite de oliva",
+          "grams": 5.0
+        }
+      ]
+    },
+    {
+      "name": "Macarrones con atún y tomate",
+      "slots": [
+        "almuerzo"
+      ],
+      "protein": "atun",
+      "base": "pasta",
+      "technique": "guisado",
+      "transform": false,
+      "constituents": [
+        {
+          "name": "Coditos",
+          "grams": 70.0
+        },
+        {
+          "name": "Atún en agua",
+          "grams": 80.0
+        },
+        {
+          "name": "Salsa de tomate",
+          "grams": 100.0
+        },
+        {
+          "name": "Cebolla",
+          "grams": 30.0
+        },
+        {
+          "name": "Queso parmesano",
+          "grams": 10.0
+        }
+      ]
+    },
+    {
+      "name": "Queso curado con membrillo y nueces",
+      "slots": [
+        "merienda",
+        "desayuno"
+      ],
+      "protein": "queso",
+      "base": "none",
+      "technique": "frío",
+      "transform": false,
+      "constituents": [
+        {
+          "name": "Queso gouda",
+          "grams": 40.0
+        },
+        {
+          "name": "Membrillo dulce",
+          "grams": 30.0
+        },
+        {
+          "name": "Nuez de Castilla",
+          "grams": 15.0
+        }
+      ]
+    },
+    {
+      "name": "Avena con leche evaporada, nueces y miel",
+      "slots": [
+        "desayuno"
+      ],
+      "protein": "none",
+      "base": "avena",
+      "technique": "hervido",
+      "transform": false,
+      "constituents": [
+        {
+          "name": "Avena",
+          "grams": 50.0
+        },
+        {
+          "name": "Leche evaporada",
+          "grams": 80.0
+        },
+        {
+          "name": "Nuez de Castilla",
+          "grams": 15.0
+        },
+        {
+          "name": "Miel",
+          "grams": 8.0
+        }
+      ]
     }
   ]
 }

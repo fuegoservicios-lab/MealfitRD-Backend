@@ -116,9 +116,10 @@ def test_budget_is_advisory_where_there_are_no_prices():
 def test_no_freezer_no_topup_shortens_the_cycle_rank_4():
     req = pp.policy_from_form(_form(groceryDuration="monthly", freezerMode="none", freshTopup="no"))
     eff, rels = pp.compile_policy(req, context=_CTX)
-    assert eff["shopping"]["main_cycle_days"] == 7
-    r = [x for x in rels if x["reason_code"] == "cycle_shortened_no_freezer_no_topup"]
-    assert r and r[0]["requested"] == 30 and r[0]["applied"] == 7
+    # [F7-G] sin congelador el ciclo ya NO se acorta: se declara «proteínas de despensa desde el día 8»
+    assert eff["shopping"]["main_cycle_days"] > 7
+    r = [x for x in rels if x["reason_code"] == "pantry_proteins_after_first_week"]
+    assert r and r[0]["action"] == "applied" and eff["shopping"]["main_cycle_days"] == 30  # [F7-G] se declara, no se acorta
 
 
 def test_recurrence_is_clamped_and_anchors_capped_rank_5():

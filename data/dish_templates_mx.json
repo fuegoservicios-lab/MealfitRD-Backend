@@ -2520,6 +2520,432 @@
           "grams": 15.0
         }
       ]
+    },
+    {
+      "name": "Arroz rojo con atún a la mexicana",
+      "slots": [
+        "almuerzo"
+      ],
+      "protein": "atun",
+      "base": "arroz",
+      "technique": "guisado",
+      "transform": true,
+      "constituents": [
+        {
+          "name": "Arroz blanco",
+          "grams": 60.0
+        },
+        {
+          "name": "Atún en agua",
+          "grams": 90.0
+        },
+        {
+          "name": "Salsa de tomate",
+          "grams": 60.0
+        },
+        {
+          "name": "Cebolla",
+          "grams": 30.0
+        },
+        {
+          "name": "Chile chipotle",
+          "grams": 3.0
+        },
+        {
+          "name": "Aceite vegetal",
+          "grams": 6.0
+        }
+      ]
+    },
+    {
+      "name": "Frijoles de la olla con huevo y tortillas",
+      "slots": [
+        "desayuno",
+        "cena"
+      ],
+      "protein": "huevo",
+      "base": "legumbre",
+      "technique": "guisado",
+      "transform": false,
+      "constituents": [
+        {
+          "name": "Habichuelas negras",
+          "grams": 60.0
+        },
+        {
+          "name": "Huevo",
+          "grams": 100.0
+        },
+        {
+          "name": "Tortilla de maíz",
+          "grams": 60.0
+        },
+        {
+          "name": "Cebolla",
+          "grams": 20.0
+        },
+        {
+          "name": "Comino",
+          "grams": 1.0
+        }
+      ]
+    },
+    {
+      "name": "Enfrijoladas de huevo",
+      "slots": [
+        "cena"
+      ],
+      "protein": "huevo",
+      "base": "maiz",
+      "technique": "guisado",
+      "transform": true,
+      "constituents": [
+        {
+          "name": "Tortilla de maíz",
+          "grams": 80.0
+        },
+        {
+          "name": "Habichuelas negras",
+          "grams": 60.0
+        },
+        {
+          "name": "Huevo",
+          "grams": 100.0
+        },
+        {
+          "name": "Cebolla",
+          "grams": 20.0
+        }
+      ]
+    },
+    {
+      "name": "Atún a la veracruzana con arroz",
+      "slots": [
+        "almuerzo"
+      ],
+      "protein": "atun",
+      "base": "arroz",
+      "technique": "guisado",
+      "transform": true,
+      "constituents": [
+        {
+          "name": "Atún en agua",
+          "grams": 100.0
+        },
+        {
+          "name": "Salsa de tomate",
+          "grams": 80.0
+        },
+        {
+          "name": "Aceitunas",
+          "grams": 15.0
+        },
+        {
+          "name": "Cebolla",
+          "grams": 30.0
+        },
+        {
+          "name": "Chile chipotle",
+          "grams": 3.0
+        },
+        {
+          "name": "Arroz blanco",
+          "grams": 60.0
+        }
+      ]
+    },
+    {
+      "name": "Lentejas guisadas con papa y comino",
+      "slots": [
+        "almuerzo"
+      ],
+      "protein": "legumbre",
+      "base": "legumbre",
+      "technique": "guisado",
+      "transform": true,
+      "constituents": [
+        {
+          "name": "Lentejas",
+          "grams": 70.0
+        },
+        {
+          "name": "Papa",
+          "grams": 80.0
+        },
+        {
+          "name": "Zanahoria",
+          "grams": 40.0
+        },
+        {
+          "name": "Cebolla",
+          "grams": 30.0
+        },
+        {
+          "name": "Comino",
+          "grams": 1.0
+        },
+        {
+          "name": "Chile guajillo",
+          "grams": 3.0
+        }
+      ]
+    },
+    {
+      "name": "Huevos en salsa de chile guajillo con frijoles",
+      "slots": [
+        "desayuno"
+      ],
+      "protein": "huevo",
+      "base": "legumbre",
+      "technique": "guisado",
+      "transform": false,
+      "constituents": [
+        {
+          "name": "Huevo",
+          "grams": 100.0
+        },
+        {
+          "name": "Chile guajillo",
+          "grams": 6.0
+        },
+        {
+          "name": "Salsa de tomate",
+          "grams": 50.0
+        },
+        {
+          "name": "Habichuelas negras",
+          "grams": 50.0
+        },
+        {
+          "name": "Tortilla de maíz",
+          "grams": 40.0
+        }
+      ]
+    },
+    {
+      "name": "Sardinas a la mexicana con tortillas",
+      "slots": [
+        "cena"
+      ],
+      "protein": "pescado",
+      "base": "maiz",
+      "technique": "salteado",
+      "transform": false,
+      "constituents": [
+        {
+          "name": "Sardinas en lata",
+          "grams": 90.0
+        },
+        {
+          "name": "Salsa de tomate",
+          "grams": 60.0
+        },
+        {
+          "name": "Cebolla",
+          "grams": 30.0
+        },
+        {
+          "name": "Chile de árbol",
+          "grams": 1.0
+        },
+        {
+          "name": "Tortilla de maíz",
+          "grams": 60.0
+        }
+      ]
+    },
+    {
+      "name": "Sopa de fideo con garbanzo",
+      "slots": [
+        "cena"
+      ],
+      "protein": "legumbre",
+      "base": "none",
+      "technique": "hervido",
+      "transform": false,
+      "constituents": [
+        {
+          "name": "Fideos",
+          "grams": 40.0
+        },
+        {
+          "name": "Garbanzos",
+          "grams": 50.0
+        },
+        {
+          "name": "Salsa de tomate",
+          "grams": 40.0
+        },
+        {
+          "name": "Cebolla",
+          "grams": 20.0
+        },
+        {
+          "name": "Zanahoria",
+          "grams": 40.0
+        },
+        {
+          "name": "Papa",
+          "grams": 60.0
+        }
+      ]
+    },
+    {
+      "name": "Papas guisadas con queso y chipotle",
+      "slots": [
+        "cena"
+      ],
+      "protein": "queso",
+      "base": "papa",
+      "technique": "guisado",
+      "transform": true,
+      "constituents": [
+        {
+          "name": "Papa",
+          "grams": 200.0
+        },
+        {
+          "name": "Queso en hebras",
+          "grams": 40.0
+        },
+        {
+          "name": "Chile chipotle",
+          "grams": 4.0
+        },
+        {
+          "name": "Salsa de tomate",
+          "grams": 40.0
+        },
+        {
+          "name": "Cebolla",
+          "grams": 30.0
+        }
+      ]
+    },
+    {
+      "name": "Arroz con huevo y frijoles refritos",
+      "slots": [
+        "almuerzo"
+      ],
+      "protein": "huevo",
+      "base": "arroz",
+      "technique": "salteado",
+      "transform": false,
+      "constituents": [
+        {
+          "name": "Arroz blanco",
+          "grams": 60.0
+        },
+        {
+          "name": "Huevo",
+          "grams": 100.0
+        },
+        {
+          "name": "Frijoles refritos",
+          "grams": 60.0
+        },
+        {
+          "name": "Cebolla",
+          "grams": 20.0
+        },
+        {
+          "name": "Aceite vegetal",
+          "grams": 5.0
+        }
+      ]
+    },
+    {
+      "name": "Bacalao a la vizcaína con papa",
+      "slots": [
+        "almuerzo"
+      ],
+      "protein": "pescado",
+      "base": "papa",
+      "technique": "guisado",
+      "transform": true,
+      "constituents": [
+        {
+          "name": "Bacalao",
+          "grams": 120.0
+        },
+        {
+          "name": "Papa",
+          "grams": 120.0
+        },
+        {
+          "name": "Salsa de tomate",
+          "grams": 80.0
+        },
+        {
+          "name": "Aceitunas",
+          "grams": 15.0
+        },
+        {
+          "name": "Cebolla",
+          "grams": 40.0
+        },
+        {
+          "name": "Ajo",
+          "grams": 5.0
+        },
+        {
+          "name": "Aceite de oliva",
+          "grams": 8.0
+        }
+      ]
+    },
+    {
+      "name": "Avena con leche evaporada y cacao",
+      "slots": [
+        "desayuno"
+      ],
+      "protein": "none",
+      "base": "avena",
+      "technique": "hervido",
+      "transform": false,
+      "constituents": [
+        {
+          "name": "Avena",
+          "grams": 50.0
+        },
+        {
+          "name": "Leche evaporada",
+          "grams": 80.0
+        },
+        {
+          "name": "Cacao en polvo",
+          "grams": 5.0
+        },
+        {
+          "name": "Azúcar morena",
+          "grams": 5.0
+        }
+      ]
+    },
+    {
+      "name": "Quesadillas de harina con frijoles y queso",
+      "slots": [
+        "merienda",
+        "desayuno"
+      ],
+      "protein": "queso",
+      "base": "maiz",
+      "technique": "plancha",
+      "transform": false,
+      "constituents": [
+        {
+          "name": "Tortilla de trigo",
+          "grams": 60.0
+        },
+        {
+          "name": "Queso en hebras",
+          "grams": 40.0
+        },
+        {
+          "name": "Frijoles refritos",
+          "grams": 40.0
+        }
+      ]
     }
   ]
 }

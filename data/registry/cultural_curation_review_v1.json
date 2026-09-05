@@ -7,7 +7,7 @@
   "caducity": "la firma vale solo para el snapshot_hash anotado por perfil; cambiar una biblioteca la caduca hasta repetir la revisión",
   "profiles": {
     "dominican_criolla": {
-      "snapshot_hash": "08a01de8ef79b2bdfc92f7fc926f0c8b94b7d775fdb64bfc7d9ace46b8854060",
+      "snapshot_hash": "fad662845fb8ffd65a4374014fc2b0d426b3ecbfc75ee57c53bb74e6e82af07e",
       "decisions": [
         "Alérgenos: el matcher del registry no reconocía plurales (sardinas, fideos, almejas) ni la salsa de soya como gluten: corregido y recompilado; cero clases sin marcar en las 6 bibliotecas (verificado con un chequeo independiente por constituyente).",
         "Raciones: meriendas > 450 kcal reasignadas a almuerzo/cena; almuerzos < 260 kcal y cenas < 180 kcal completados con base o proteína; almuerzos > 1.100 kcal reducidos.",
@@ -24,7 +24,7 @@
       ]
     },
     "puertorico_criolla": {
-      "snapshot_hash": "a7432df7bd9b9b6f2c5d5cc39a669cac0581e347dba0bd43c50a4426a77fc54a",
+      "snapshot_hash": "9c5c968a9b28c73eae1d72b2ca22b6490d50e8ae8c1c38c98d9bbe7092ec8510",
       "decisions": [
         "Alérgenos: el matcher del registry no reconocía plurales (sardinas, fideos, almejas) ni la salsa de soya como gluten: corregido y recompilado; cero clases sin marcar en las 6 bibliotecas (verificado con un chequeo independiente por constituyente).",
         "Raciones: meriendas > 450 kcal reasignadas a almuerzo/cena; almuerzos < 260 kcal y cenas < 180 kcal completados con base o proteína; almuerzos > 1.100 kcal reducidos.",
@@ -40,7 +40,7 @@
       ]
     },
     "mexico_casera": {
-      "snapshot_hash": "c27d44d4abbcecd9eacb8fafb9a789fa0ab996261cfa1f8d01d60b38c84d2c65",
+      "snapshot_hash": "56885158c766065acb21c4fff94269ea0e16283b407eee3559a5b4bbeb3dd656",
       "decisions": [
         "Alérgenos: el matcher del registry no reconocía plurales (sardinas, fideos, almejas) ni la salsa de soya como gluten: corregido y recompilado; cero clases sin marcar en las 6 bibliotecas (verificado con un chequeo independiente por constituyente).",
         "Raciones: meriendas > 450 kcal reasignadas a almuerzo/cena; almuerzos < 260 kcal y cenas < 180 kcal completados con base o proteína; almuerzos > 1.100 kcal reducidos.",
@@ -56,7 +56,7 @@
       ]
     },
     "colombia_casera": {
-      "snapshot_hash": "fbdd323cf10db26c5af69f7ac237c2406472737a1e90bc2a0062f047c9b20e8c",
+      "snapshot_hash": "c5fad0f790d5b2a9f696a57b293e632407ccaebd8219c583aacc47742fdb2933",
       "decisions": [
         "Alérgenos: el matcher del registry no reconocía plurales (sardinas, fideos, almejas) ni la salsa de soya como gluten: corregido y recompilado; cero clases sin marcar en las 6 bibliotecas (verificado con un chequeo independiente por constituyente).",
         "Raciones: meriendas > 450 kcal reasignadas a almuerzo/cena; almuerzos < 260 kcal y cenas < 180 kcal completados con base o proteína; almuerzos > 1.100 kcal reducidos.",
@@ -71,7 +71,7 @@
       ]
     },
     "spain_mediterranea": {
-      "snapshot_hash": "d1f796b97eb863b811f088108e886bc5b853ce7b2cce9a6f6f9dd8c35e6b4237",
+      "snapshot_hash": "141f50f8269c9d01ca5c6331120cfd4fab138af53ace5115857711edb3a52332",
       "decisions": [
         "Alérgenos: el matcher del registry no reconocía plurales (sardinas, fideos, almejas) ni la salsa de soya como gluten: corregido y recompilado; cero clases sin marcar en las 6 bibliotecas (verificado con un chequeo independiente por constituyente).",
         "Raciones: meriendas > 450 kcal reasignadas a almuerzo/cena; almuerzos < 260 kcal y cenas < 180 kcal completados con base o proteína; almuerzos > 1.100 kcal reducidos.",
@@ -88,7 +88,7 @@
       ]
     },
     "us_everyday": {
-      "snapshot_hash": "6990ec5aafb48b3c5924988b90c9b6ed8b1bfd39c425a9833e77a7a4c9aeda73",
+      "snapshot_hash": "7a61b568a4b360c5388f82b09a91067571da7fa545668e8ca3f99de4c3f12226",
       "decisions": [
         "Alérgenos: el matcher del registry no reconocía plurales (sardinas, fideos, almejas) ni la salsa de soya como gluten: corregido y recompilado; cero clases sin marcar en las 6 bibliotecas (verificado con un chequeo independiente por constituyente).",
         "Raciones: meriendas > 450 kcal reasignadas a almuerzo/cena; almuerzos < 260 kcal y cenas < 180 kcal completados con base o proteína; almuerzos > 1.100 kcal reducidos.",

@@ -125,6 +125,36 @@ Lo que la revisión encontró y corrigió:
 `test_p1_arq25_f7_culture_libraries.py` (barra de cobertura), `test_p1_arq25_f7_culture_benchmark.py` (benchmark y gate);
 frontend `QCulture.p1_arq25_f7.test.jsx`.
 
+## 8b. Subfase G — despensa duradera y congelador sincronizados (2026-09-05)
+
+Pregunta del dueño: ¿bastan las bibliotecas para «una sola compra grande para el mes», con gente que come lo mismo
+en distintas preparaciones (arroz + res + ensalada, arroz + atún con huevo + ensalada…)? No bastaban: había platos,
+pero pocos de **misma despensa, distinta preparación** que aguanten 3-4 semanas, y el congelador declarado en el
+formulario apenas se usaba.
+
+- **Durabilidad SSOT** (`backend/pantry_durability.py`): `master_ingredients.shelf_life_days` es un relleno (lechuga,
+  fresas, carne y repollo valen 14 por igual), así que la durabilidad es una tabla de reglas por nombre en cuatro clases:
+  `pantry` (seco/enlatado/curado, 90-365 d), `cold` (huevo, quesos curados, raíces, repollo, cítricos, 21-90 d),
+  `freezable` (proteína fresca: 3 d, 90 congelada), `fresh` (hojas, hierbas, frutas blandas, tomate, aguacate: ≤ 7 d).
+  Tokens cortos casan por palabra exacta («sal» ≠ «salmón»), largos por prefijo («yogur» → «yogurt»).
+- **Ventana de congelación** (`freeze_window_days`): sin congelador 0 · limitado 14 (semana de frescos + semana de
+  congelados) · completo el ciclo. Antes «limitado» valía 7 y nadie lo consumía.
+- **Registry** (schema/compiler 3): cada constituyente lleva `durability`/`days_fresh`; cada plato `logistics.days_fresh_min`,
+  `days_with_freezer_min` y `pantry_only` (≥ 21 días sin congelar). `template_candidates(..., need_days, allow_frozen)`
+  filtra por día del ciclo; el blueprint y `registry_prompt_lines` pasan la exigencia de cada día bajo compra única
+  (`single_trip_requirements`): días 1-7 libres, después solo lo que aguanta (o lo congelable dentro de la ventana).
+- **Validador** (`fresh_beyond_horizon_issues`): `fresh_beyond_horizon` para frescos que no llegan y
+  `protein_beyond_freeze_window` para proteína fresca fuera de la ventana del congelador del usuario.
+- **Prompt**: por modo de congelador (sin / limitado «congelada del día 8 al 14» / completo) más la consigna «misma despensa,
+  distinta PREPARACIÓN».
+- **Política**: sin congelador ni reposición en un ciclo > 7 días ya **no se acorta el ciclo a 7** (`cycle_shortened_no_freezer_no_topup`
+  queda solo para planes antiguos): se respeta la compra única y se declara `pantry_proteins_after_first_week`.
+- **PDF / lista**: el rótulo de perecederos dice lo que toca según el congelador (sin congelador: consume primero;
+  limitado: congela lo de la segunda semana; completo: congela el día de la compra), en 5 idiomas.
+- **Bibliotecas**: +80 platos de despensa duradera (DO 111 · ES 96 · MX 95 · CO 99 · PR 99 · US 94), cada biblioteca con ≥ 12
+  platos `pantry_only`, ≥ 4 técnicas y las familias atún / huevo / legumbre; cada franja principal tiene candidatos para el
+  día 30 sin congelador. Test: `test_p1_arq25_f7_culture_pantry.py`.
+
 ## 8. Lo que NO hace (a propósito)
 
 - No infiere la cocina del origen, del idioma ni de la zona horaria (solo SUGIERE la del país de compra, visible).

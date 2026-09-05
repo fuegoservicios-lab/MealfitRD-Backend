@@ -2192,6 +2192,401 @@
           "grams": 5.0
         }
       ]
+    },
+    {
+      "name": "Tuna melt en tortilla integral",
+      "slots": [
+        "almuerzo"
+      ],
+      "protein": "atun",
+      "base": "pan",
+      "technique": "plancha",
+      "transform": true,
+      "constituents": [
+        {
+          "name": "Tortilla integral",
+          "grams": 60.0
+        },
+        {
+          "name": "Atún en agua",
+          "grams": 90.0
+        },
+        {
+          "name": "Queso cheddar",
+          "grams": 30.0
+        },
+        {
+          "name": "Cebolla",
+          "grams": 20.0
+        },
+        {
+          "name": "Mostaza",
+          "grams": 5.0
+        }
+      ]
+    },
+    {
+      "name": "Arroz integral con frijoles negros y huevo",
+      "slots": [
+        "almuerzo"
+      ],
+      "protein": "huevo",
+      "base": "arroz",
+      "technique": "salteado",
+      "transform": false,
+      "constituents": [
+        {
+          "name": "Arroz integral",
+          "grams": 60.0
+        },
+        {
+          "name": "Habichuelas negras",
+          "grams": 60.0
+        },
+        {
+          "name": "Huevo",
+          "grams": 100.0
+        },
+        {
+          "name": "Cebolla",
+          "grams": 20.0
+        },
+        {
+          "name": "Chile en polvo",
+          "grams": 1.0
+        }
+      ]
+    },
+    {
+      "name": "Pasta con atún, aceite de oliva y ajo",
+      "slots": [
+        "almuerzo"
+      ],
+      "protein": "atun",
+      "base": "pasta",
+      "technique": "salteado",
+      "transform": false,
+      "constituents": [
+        {
+          "name": "Pasta integral",
+          "grams": 70.0
+        },
+        {
+          "name": "Atún en agua",
+          "grams": 90.0
+        },
+        {
+          "name": "Ajo",
+          "grams": 5.0
+        },
+        {
+          "name": "Aceite de oliva",
+          "grams": 8.0
+        },
+        {
+          "name": "Queso parmesano",
+          "grams": 10.0
+        }
+      ]
+    },
+    {
+      "name": "Chili de frijoles con arroz",
+      "slots": [
+        "almuerzo"
+      ],
+      "protein": "legumbre",
+      "base": "arroz",
+      "technique": "guisado",
+      "transform": true,
+      "constituents": [
+        {
+          "name": "Frijoles pintos",
+          "grams": 70.0
+        },
+        {
+          "name": "Salsa de tomate",
+          "grams": 100.0
+        },
+        {
+          "name": "Cebolla",
+          "grams": 30.0
+        },
+        {
+          "name": "Chile en polvo",
+          "grams": 3.0
+        },
+        {
+          "name": "Comino",
+          "grams": 1.0
+        },
+        {
+          "name": "Arroz blanco",
+          "grams": 50.0
+        }
+      ]
+    },
+    {
+      "name": "Lentejas al curry con arroz",
+      "slots": [
+        "almuerzo"
+      ],
+      "protein": "legumbre",
+      "base": "legumbre",
+      "technique": "guisado",
+      "transform": true,
+      "constituents": [
+        {
+          "name": "Lentejas",
+          "grams": 70.0
+        },
+        {
+          "name": "Leche de coco",
+          "grams": 60.0
+        },
+        {
+          "name": "Curry en polvo",
+          "grams": 3.0
+        },
+        {
+          "name": "Cebolla",
+          "grams": 30.0
+        },
+        {
+          "name": "Zanahoria",
+          "grams": 40.0
+        },
+        {
+          "name": "Arroz blanco",
+          "grams": 50.0
+        }
+      ]
+    },
+    {
+      "name": "Huevos al horno con papa y queso cheddar",
+      "slots": [
+        "cena",
+        "desayuno"
+      ],
+      "protein": "huevo",
+      "base": "papa",
+      "technique": "horneado",
+      "transform": true,
+      "constituents": [
+        {
+          "name": "Huevo",
+          "grams": 100.0
+        },
+        {
+          "name": "Papa",
+          "grams": 150.0
+        },
+        {
+          "name": "Queso cheddar",
+          "grams": 30.0
+        },
+        {
+          "name": "Cebolla",
+          "grams": 30.0
+        },
+        {
+          "name": "Aceite de oliva",
+          "grams": 5.0
+        }
+      ]
+    },
+    {
+      "name": "Wrap integral de atún con zanahoria y mostaza",
+      "slots": [
+        "almuerzo"
+      ],
+      "protein": "atun",
+      "base": "pan",
+      "technique": "frío",
+      "transform": false,
+      "constituents": [
+        {
+          "name": "Tortilla integral",
+          "grams": 60.0
+        },
+        {
+          "name": "Atún en agua",
+          "grams": 90.0
+        },
+        {
+          "name": "Zanahoria",
+          "grams": 40.0
+        },
+        {
+          "name": "Mostaza",
+          "grams": 5.0
+        },
+        {
+          "name": "Yogurt griego sin azúcar",
+          "grams": 30.0
+        }
+      ]
+    },
+    {
+      "name": "Sopa de papa con queso cheddar",
+      "slots": [
+        "cena"
+      ],
+      "protein": "queso",
+      "base": "papa",
+      "technique": "crema",
+      "transform": true,
+      "constituents": [
+        {
+          "name": "Papa",
+          "grams": 200.0
+        },
+        {
+          "name": "Leche evaporada",
+          "grams": 80.0
+        },
+        {
+          "name": "Queso cheddar",
+          "grams": 30.0
+        },
+        {
+          "name": "Cebolla",
+          "grams": 30.0
+        }
+      ]
+    },
+    {
+      "name": "Sardinas con galletas de soda y mostaza",
+      "slots": [
+        "cena",
+        "merienda"
+      ],
+      "protein": "pescado",
+      "base": "pan",
+      "technique": "frío",
+      "transform": false,
+      "constituents": [
+        {
+          "name": "Galletas de soda",
+          "grams": 40.0
+        },
+        {
+          "name": "Sardinas en lata",
+          "grams": 90.0
+        },
+        {
+          "name": "Mostaza",
+          "grams": 5.0
+        },
+        {
+          "name": "Cebolla",
+          "grams": 15.0
+        }
+      ]
+    },
+    {
+      "name": "Avena nocturna con leche evaporada y pasas",
+      "slots": [
+        "desayuno"
+      ],
+      "protein": "none",
+      "base": "avena",
+      "technique": "frío",
+      "transform": false,
+      "constituents": [
+        {
+          "name": "Avena",
+          "grams": 50.0
+        },
+        {
+          "name": "Leche evaporada",
+          "grams": 80.0
+        },
+        {
+          "name": "Pasas",
+          "grams": 15.0
+        },
+        {
+          "name": "Canela en polvo",
+          "grams": 1.0
+        }
+      ]
+    },
+    {
+      "name": "Quesadilla de frijoles con queso cheddar",
+      "slots": [
+        "merienda",
+        "cena"
+      ],
+      "protein": "queso",
+      "base": "pan",
+      "technique": "plancha",
+      "transform": false,
+      "constituents": [
+        {
+          "name": "Tortilla integral",
+          "grams": 60.0
+        },
+        {
+          "name": "Frijoles refritos",
+          "grams": 50.0
+        },
+        {
+          "name": "Queso cheddar",
+          "grams": 30.0
+        }
+      ]
+    },
+    {
+      "name": "Batata al horno con frijoles negros y queso",
+      "slots": [
+        "cena"
+      ],
+      "protein": "legumbre",
+      "base": "viveres",
+      "technique": "horneado",
+      "transform": false,
+      "constituents": [
+        {
+          "name": "Batata",
+          "grams": 200.0
+        },
+        {
+          "name": "Habichuelas negras",
+          "grams": 60.0
+        },
+        {
+          "name": "Queso cheddar",
+          "grams": 25.0
+        },
+        {
+          "name": "Cebolla",
+          "grams": 20.0
+        }
+      ]
+    },
+    {
+      "name": "Huevos revueltos con queso cheddar en tortilla integral",
+      "slots": [
+        "desayuno"
+      ],
+      "protein": "huevo",
+      "base": "pan",
+      "technique": "revuelto",
+      "transform": false,
+      "constituents": [
+        {
+          "name": "Huevo",
+          "grams": 100.0
+        },
+        {
+          "name": "Queso cheddar",
+          "grams": 25.0
+        },
+        {
+          "name": "Tortilla integral",
+          "grams": 50.0
+        }
+      ]
     }
   ]
 }

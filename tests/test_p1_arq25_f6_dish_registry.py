@@ -146,7 +146,7 @@ def test_h_logistica_y_editorial_derivadas_en_cada_plantilla():
     assert by["tpl_b"]["logistics"]["batch_friendly"] is True, "«hervido» se hace en tanda"
     ed = by["tpl_a"]["editorial"]
     assert ed["status"] == "curated" and ed["display_name"]["es"] == "Huevos con camarones" and ed["media"] == []
-    assert snap["schema_version"] == 2
+    assert snap["schema_version"] == 3  # [F7-G] durabilidad
 
 
 def test_i_los_candidatos_del_registry_llegan_al_prompt_con_knob(tmp_path, monkeypatch):
