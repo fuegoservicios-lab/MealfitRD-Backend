@@ -1,0 +1,2536 @@
+{
+  "_note": "[P1-ARQ25-F6-DISH-REGISTRY] constituents curados para las plantillas DO. Fuente: componentes de dominican_dish_recipes.json (60 recetas con gramos) + ítems con nombre exacto del catálogo. Generado por scripts/build_dish_constituents_do.py; edítalo allí, no aquí.",
+  "schema_version": 1,
+  "templates": {
+    "Arenque desmenuzado con huevo y yuca hervida": {
+      "constituents": [
+        {
+          "grams": 90.0,
+          "name": "Arenque"
+        },
+        {
+          "grams": 50.0,
+          "name": "Huevo"
+        },
+        {
+          "grams": 20.0,
+          "name": "Cebolla"
+        },
+        {
+          "grams": 200.0,
+          "name": "Yuca"
+        },
+        {
+          "grams": 2.0,
+          "name": "Sal"
+        }
+      ],
+      "declared_unresolved": [],
+      "origin": "curated"
+    },
+    "Arepa dominicana de maíz horneada (dulce suave)": {
+      "constituents": [
+        {
+          "grams": 60.0,
+          "name": "Harina de maíz precocida"
+        },
+        {
+          "grams": 100.0,
+          "name": "Leche"
+        },
+        {
+          "grams": 25.0,
+          "name": "Huevo"
+        },
+        {
+          "grams": 8.0,
+          "name": "Azúcar morena"
+        }
+      ],
+      "declared_unresolved": [],
+      "origin": "curated"
+    },
+    "Arepitas de yuca doradas al sartén": {
+      "constituents": [
+        {
+          "grams": 180.0,
+          "name": "Yuca"
+        },
+        {
+          "grams": 50.0,
+          "name": "Huevo"
+        },
+        {
+          "grams": 8.0,
+          "name": "Aceite vegetal"
+        }
+      ],
+      "declared_unresolved": [],
+      "origin": "curated"
+    },
+    "Asopao de pollo (porción moderada)": {
+      "constituents": [
+        {
+          "grams": 45.0,
+          "name": "Arroz blanco"
+        },
+        {
+          "grams": 85.0,
+          "name": "Pechuga de pollo"
+        },
+        {
+          "grams": 25.0,
+          "name": "Cebolla"
+        },
+        {
+          "grams": 15.0,
+          "name": "Ají cubanela"
+        },
+        {
+          "grams": 15.0,
+          "name": "Pimiento morrón"
+        },
+        {
+          "grams": 4.0,
+          "name": "Ajo"
+        },
+        {
+          "grams": 5.0,
+          "name": "Cilantro"
+        },
+        {
+          "grams": 20.0,
+          "name": "Salsa de tomate"
+        },
+        {
+          "grams": 8.0,
+          "name": "Aceite vegetal"
+        },
+        {
+          "grams": 0.5,
+          "name": "Orégano dominicano"
+        },
+        {
+          "grams": 1.5,
+          "name": "Sal"
+        }
+      ],
+      "declared_unresolved": [],
+      "origin": "curated"
+    },
+    "Avena caliente con canela y leche": {
+      "constituents": [
+        {
+          "grams": 50.0,
+          "name": "Avena"
+        },
+        {
+          "grams": 200.0,
+          "name": "Leche"
+        },
+        {
+          "grams": 2.5,
+          "name": "Canela en polvo"
+        }
+      ],
+      "declared_unresolved": [],
+      "origin": "curated"
+    },
+    "Bacalao guisado con papas": {
+      "constituents": [
+        {
+          "grams": 110.0,
+          "name": "Bacalao"
+        },
+        {
+          "grams": 270.0,
+          "name": "Papa"
+        },
+        {
+          "grams": 8.0,
+          "name": "Aceite de oliva"
+        },
+        {
+          "grams": 25.0,
+          "name": "Cebolla"
+        },
+        {
+          "grams": 12.0,
+          "name": "Ají cubanela"
+        },
+        {
+          "grams": 25.0,
+          "name": "Tomate"
+        },
+        {
+          "grams": 20.0,
+          "name": "Salsa de tomate"
+        },
+        {
+          "grams": 4.0,
+          "name": "Ajo"
+        },
+        {
+          "grams": 10.0,
+          "name": "Aceitunas"
+        },
+        {
+          "grams": 12.0,
+          "name": "Pimiento morrón"
+        }
+      ],
+      "declared_unresolved": [],
+      "origin": "curated"
+    },
+    "Batata asada con huevos pochados": {
+      "constituents": [
+        {
+          "grams": 180.0,
+          "name": "Batata"
+        },
+        {
+          "grams": 100.0,
+          "name": "Huevo"
+        }
+      ],
+      "declared_unresolved": [],
+      "origin": "curated"
+    },
+    "Batata asada fría con canela": {
+      "constituents": [
+        {
+          "grams": 150.0,
+          "name": "Batata"
+        },
+        {
+          "grams": 2.0,
+          "name": "Canela en polvo"
+        }
+      ],
+      "declared_unresolved": [],
+      "origin": "curated"
+    },
+    "Batida de guineo con avena y maní": {
+      "constituents": [
+        {
+          "grams": 110.0,
+          "name": "Guineo"
+        },
+        {
+          "grams": 240.0,
+          "name": "Leche"
+        },
+        {
+          "grams": 10.0,
+          "name": "Miel"
+        },
+        {
+          "grams": 25.0,
+          "name": "Avena"
+        },
+        {
+          "grams": 15.0,
+          "name": "Maní"
+        }
+      ],
+      "declared_unresolved": [],
+      "origin": "curated"
+    },
+    "Batida de lechosa con avena": {
+      "constituents": [
+        {
+          "grams": 200.0,
+          "name": "Lechosa"
+        },
+        {
+          "grams": 240.0,
+          "name": "Leche"
+        },
+        {
+          "grams": 10.0,
+          "name": "Miel"
+        },
+        {
+          "grams": 25.0,
+          "name": "Avena"
+        }
+      ],
+      "declared_unresolved": [],
+      "origin": "curated"
+    },
+    "Batida de zapote ligera (leche descremada)": {
+      "constituents": [
+        {
+          "grams": 250.0,
+          "name": "Leche descremada"
+        }
+      ],
+      "declared_unresolved": [
+        "Zapote"
+      ],
+      "origin": "curated"
+    },
+    "Berenjena rellena de res molida, gratinada": {
+      "constituents": [
+        {
+          "grams": 200.0,
+          "name": "Berenjena"
+        },
+        {
+          "grams": 110.0,
+          "name": "Carne de res molida"
+        },
+        {
+          "grams": 50.0,
+          "name": "Tomate"
+        },
+        {
+          "grams": 30.0,
+          "name": "Queso blanco"
+        }
+      ],
+      "declared_unresolved": [],
+      "origin": "curated"
+    },
+    "Berenjenas guisadas con carne molida y arroz": {
+      "constituents": [
+        {
+          "grams": 180.0,
+          "name": "Berenjena"
+        },
+        {
+          "grams": 30.0,
+          "name": "Cebolla"
+        },
+        {
+          "grams": 25.0,
+          "name": "Ají cubanela"
+        },
+        {
+          "grams": 20.0,
+          "name": "Pimiento morrón"
+        },
+        {
+          "grams": 40.0,
+          "name": "Tomate"
+        },
+        {
+          "grams": 25.0,
+          "name": "Salsa de tomate"
+        },
+        {
+          "grams": 4.0,
+          "name": "Ajo"
+        },
+        {
+          "grams": 17.0,
+          "name": "Aceite vegetal"
+        },
+        {
+          "grams": 3.0,
+          "name": "Sal"
+        },
+        {
+          "grams": 100.0,
+          "name": "Carne de res molida"
+        },
+        {
+          "grams": 70.0,
+          "name": "Arroz blanco"
+        }
+      ],
+      "declared_unresolved": [],
+      "origin": "curated"
+    },
+    "Bolitas de avena y maní (sin cocción)": {
+      "constituents": [
+        {
+          "grams": 40.0,
+          "name": "Avena"
+        },
+        {
+          "grams": 20.0,
+          "name": "Mantequilla de maní"
+        },
+        {
+          "grams": 10.0,
+          "name": "Miel"
+        }
+      ],
+      "declared_unresolved": [],
+      "origin": "curated"
+    },
+    "Bollitos de yuca rellenos de queso, horneados": {
+      "constituents": [
+        {
+          "grams": 180.0,
+          "name": "Yuca"
+        },
+        {
+          "grams": 60.0,
+          "name": "Queso blanco"
+        },
+        {
+          "grams": 25.0,
+          "name": "Huevo"
+        }
+      ],
+      "declared_unresolved": [],
+      "origin": "curated"
+    },
+    "Bulgur con leche y canela (estilo tradicional)": {
+      "constituents": [
+        {
+          "grams": 60.0,
+          "name": "Bulgur"
+        },
+        {
+          "grams": 200.0,
+          "name": "Leche"
+        },
+        {
+          "grams": 2.0,
+          "name": "Canela en polvo"
+        }
+      ],
+      "declared_unresolved": [],
+      "origin": "curated"
+    },
+    "Camarones guisados con moro de guandules": {
+      "constituents": [
+        {
+          "grams": 130.0,
+          "name": "Camarones"
+        },
+        {
+          "grams": 60.0,
+          "name": "Tomate"
+        },
+        {
+          "grams": 38.0,
+          "name": "Cebolla"
+        },
+        {
+          "grams": 8.0,
+          "name": "Ajo"
+        },
+        {
+          "grams": 70.0,
+          "name": "Arroz blanco"
+        },
+        {
+          "grams": 55.0,
+          "name": "Gandules"
+        },
+        {
+          "grams": 9.0,
+          "name": "Aceite vegetal"
+        },
+        {
+          "grams": 12.0,
+          "name": "Ají cubanela"
+        },
+        {
+          "grams": 15.0,
+          "name": "Salsa de tomate"
+        },
+        {
+          "grams": 4.0,
+          "name": "Cilantro"
+        },
+        {
+          "grams": 1.5,
+          "name": "Sal"
+        }
+      ],
+      "declared_unresolved": [],
+      "origin": "curated"
+    },
+    "Casabe con aguacate majado": {
+      "constituents": [
+        {
+          "grams": 40.0,
+          "name": "Casabe"
+        },
+        {
+          "grams": 80.0,
+          "name": "Aguacate"
+        }
+      ],
+      "declared_unresolved": [],
+      "origin": "curated"
+    },
+    "Catibías al horno rellenas de queso": {
+      "constituents": [
+        {
+          "grams": 150.0,
+          "name": "Yuca"
+        },
+        {
+          "grams": 60.0,
+          "name": "Queso blanco"
+        }
+      ],
+      "declared_unresolved": [],
+      "origin": "curated"
+    },
+    "Chenchén de maíz partido con pollo guisado": {
+      "constituents": [
+        {
+          "grams": 70.0,
+          "name": "Sémola de maíz"
+        },
+        {
+          "grams": 40.0,
+          "name": "Leche de coco"
+        },
+        {
+          "grams": 140.0,
+          "name": "Pechuga de pollo"
+        },
+        {
+          "grams": 7.0,
+          "name": "Aceite vegetal"
+        },
+        {
+          "grams": 18.0,
+          "name": "Cebolla"
+        },
+        {
+          "grams": 12.0,
+          "name": "Ají cubanela"
+        },
+        {
+          "grams": 18.0,
+          "name": "Tomate"
+        },
+        {
+          "grams": 15.0,
+          "name": "Salsa de tomate"
+        },
+        {
+          "grams": 4.0,
+          "name": "Ajo"
+        },
+        {
+          "grams": 0.5,
+          "name": "Orégano dominicano"
+        },
+        {
+          "grams": 1.0,
+          "name": "Sal"
+        }
+      ],
+      "declared_unresolved": [],
+      "origin": "curated"
+    },
+    "Chicharrón de pollo al airfryer con yuca hervida": {
+      "constituents": [
+        {
+          "grams": 150.0,
+          "name": "Pechuga de pollo"
+        },
+        {
+          "grams": 15.0,
+          "name": "Limón"
+        },
+        {
+          "grams": 4.0,
+          "name": "Ajo"
+        },
+        {
+          "grams": 200.0,
+          "name": "Yuca"
+        },
+        {
+          "grams": 2.0,
+          "name": "Sal"
+        }
+      ],
+      "declared_unresolved": [],
+      "origin": "curated"
+    },
+    "Chillo al horno con vegetales y batata asada": {
+      "constituents": [
+        {
+          "grams": 160.0,
+          "name": "Filete de pescado blanco"
+        },
+        {
+          "grams": 60.0,
+          "name": "Zanahoria"
+        },
+        {
+          "grams": 60.0,
+          "name": "Calabacín"
+        },
+        {
+          "grams": 150.0,
+          "name": "Batata"
+        }
+      ],
+      "declared_unresolved": [
+        "Chillo (se compone con filete de pescado blanco)"
+      ],
+      "origin": "curated"
+    },
+    "Chivo guisado estilo liniero con yuca hervida": {
+      "constituents": [
+        {
+          "grams": 150.0,
+          "name": "Chivo"
+        },
+        {
+          "grams": 50.0,
+          "name": "Tomate"
+        },
+        {
+          "grams": 25.0,
+          "name": "Cebolla"
+        },
+        {
+          "grams": 4.0,
+          "name": "Ajo"
+        },
+        {
+          "grams": 1.0,
+          "name": "Orégano dominicano"
+        },
+        {
+          "grams": 200.0,
+          "name": "Yuca"
+        },
+        {
+          "grams": 2.0,
+          "name": "Sal"
+        }
+      ],
+      "declared_unresolved": [],
+      "origin": "curated"
+    },
+    "Chuleta de cerdo a la plancha con moro de habichuelas": {
+      "constituents": [
+        {
+          "grams": 140.0,
+          "name": "Cerdo"
+        },
+        {
+          "grams": 11.0,
+          "name": "Aceite vegetal"
+        },
+        {
+          "grams": 60.0,
+          "name": "Arroz blanco"
+        },
+        {
+          "grams": 35.0,
+          "name": "Habichuelas rojas"
+        },
+        {
+          "grams": 12.0,
+          "name": "Cebolla"
+        },
+        {
+          "grams": 8.0,
+          "name": "Ají cubanela"
+        }
+      ],
+      "declared_unresolved": [],
+      "origin": "curated"
+    },
+    "Crepes de avena rellenas de queso fresco": {
+      "constituents": [
+        {
+          "grams": 45.0,
+          "name": "Avena"
+        },
+        {
+          "grams": 50.0,
+          "name": "Huevo"
+        },
+        {
+          "grams": 120.0,
+          "name": "Leche"
+        },
+        {
+          "grams": 50.0,
+          "name": "Queso blanco"
+        }
+      ],
+      "declared_unresolved": [],
+      "origin": "curated"
+    },
+    "Croquetas de atún y yuca al horno con ensalada": {
+      "constituents": [
+        {
+          "grams": 100.0,
+          "name": "Atún en agua"
+        },
+        {
+          "grams": 120.0,
+          "name": "Yuca"
+        },
+        {
+          "grams": 50.0,
+          "name": "Huevo"
+        },
+        {
+          "grams": 70.0,
+          "name": "Lechuga"
+        },
+        {
+          "grams": 60.0,
+          "name": "Tomate"
+        },
+        {
+          "grams": 20.0,
+          "name": "Cebolla"
+        },
+        {
+          "grams": 50.0,
+          "name": "Aguacate"
+        },
+        {
+          "grams": 8.0,
+          "name": "Aceite de oliva"
+        },
+        {
+          "grams": 10.0,
+          "name": "Limón"
+        },
+        {
+          "grams": 1.0,
+          "name": "Sal"
+        }
+      ],
+      "declared_unresolved": [],
+      "origin": "curated"
+    },
+    "Domplines hervidos con huevo revuelto criollo": {
+      "constituents": [
+        {
+          "grams": 70.0,
+          "name": "Harina de trigo"
+        },
+        {
+          "grams": 100.0,
+          "name": "Huevo"
+        },
+        {
+          "grams": 7.0,
+          "name": "Aceite vegetal"
+        },
+        {
+          "grams": 25.0,
+          "name": "Cebolla"
+        },
+        {
+          "grams": 1.0,
+          "name": "Sal"
+        },
+        {
+          "grams": 0.3,
+          "name": "Pimienta negra"
+        }
+      ],
+      "declared_unresolved": [],
+      "origin": "curated"
+    },
+    "Empanadas de yuca al horno rellenas de pollo desmenuzado": {
+      "constituents": [
+        {
+          "grams": 150.0,
+          "name": "Yuca"
+        },
+        {
+          "grams": 90.0,
+          "name": "Pechuga de pollo"
+        },
+        {
+          "grams": 15.0,
+          "name": "Cebolla"
+        },
+        {
+          "grams": 10.0,
+          "name": "Ají cubanela"
+        }
+      ],
+      "declared_unresolved": [],
+      "origin": "curated"
+    },
+    "Empanadita de maíz horneada rellena de queso": {
+      "constituents": [
+        {
+          "grams": 60.0,
+          "name": "Harina de maíz precocida"
+        },
+        {
+          "grams": 50.0,
+          "name": "Queso blanco"
+        }
+      ],
+      "declared_unresolved": [],
+      "origin": "curated"
+    },
+    "Ensalada tibia de pollo desmenuzado con aguacate y casabe": {
+      "constituents": [
+        {
+          "grams": 130.0,
+          "name": "Pechuga de pollo"
+        },
+        {
+          "grams": 60.0,
+          "name": "Lechuga"
+        },
+        {
+          "grams": 50.0,
+          "name": "Tomate"
+        },
+        {
+          "grams": 60.0,
+          "name": "Aguacate"
+        },
+        {
+          "grams": 40.0,
+          "name": "Casabe"
+        }
+      ],
+      "declared_unresolved": [],
+      "origin": "curated"
+    },
+    "Espaguetis criollos con pollo desmenuzado": {
+      "constituents": [
+        {
+          "grams": 90.0,
+          "name": "Pasta integral"
+        },
+        {
+          "grams": 50.0,
+          "name": "Salami dominicano"
+        },
+        {
+          "grams": 60.0,
+          "name": "Salsa de tomate"
+        },
+        {
+          "grams": 30.0,
+          "name": "Cebolla"
+        },
+        {
+          "grams": 8.0,
+          "name": "Aceite vegetal"
+        },
+        {
+          "grams": 1.5,
+          "name": "Sal"
+        },
+        {
+          "grams": 100.0,
+          "name": "Pechuga de pollo"
+        }
+      ],
+      "declared_unresolved": [],
+      "origin": "curated"
+    },
+    "Frutas picadas con limón y menta": {
+      "constituents": [
+        {
+          "grams": 80.0,
+          "name": "Lechosa"
+        },
+        {
+          "grams": 80.0,
+          "name": "Piña"
+        },
+        {
+          "grams": 80.0,
+          "name": "Guineo"
+        },
+        {
+          "grams": 10.0,
+          "name": "Limón"
+        }
+      ],
+      "declared_unresolved": [
+        "Menta"
+      ],
+      "origin": "curated"
+    },
+    "Guacamole criollo con casabe y huevo duro": {
+      "constituents": [
+        {
+          "grams": 100.0,
+          "name": "Aguacate"
+        },
+        {
+          "grams": 40.0,
+          "name": "Tomate"
+        },
+        {
+          "grams": 20.0,
+          "name": "Cebolla"
+        },
+        {
+          "grams": 15.0,
+          "name": "Limón"
+        },
+        {
+          "grams": 40.0,
+          "name": "Casabe"
+        },
+        {
+          "grams": 50.0,
+          "name": "Huevo"
+        }
+      ],
+      "declared_unresolved": [],
+      "origin": "curated"
+    },
+    "Guineítos verdes guisados con costillitas magras de cerdo": {
+      "constituents": [
+        {
+          "grams": 180.0,
+          "name": "Guineo verde"
+        },
+        {
+          "grams": 2.0,
+          "name": "Sal"
+        },
+        {
+          "grams": 120.0,
+          "name": "Costilla de cerdo"
+        },
+        {
+          "grams": 40.0,
+          "name": "Tomate"
+        },
+        {
+          "grams": 20.0,
+          "name": "Cebolla"
+        }
+      ],
+      "declared_unresolved": [],
+      "origin": "curated"
+    },
+    "Habichuelas rojas guisadas con auyama, arroz y aguacate": {
+      "constituents": [
+        {
+          "grams": 66.0,
+          "name": "Habichuelas rojas"
+        },
+        {
+          "grams": 84.0,
+          "name": "Auyama"
+        },
+        {
+          "grams": 16.6,
+          "name": "Aceite vegetal"
+        },
+        {
+          "grams": 14.4,
+          "name": "Cebolla"
+        },
+        {
+          "grams": 9.6,
+          "name": "Ají cubanela"
+        },
+        {
+          "grams": 70.0,
+          "name": "Arroz blanco"
+        },
+        {
+          "grams": 1.5,
+          "name": "Sal"
+        },
+        {
+          "grams": 50.0,
+          "name": "Aguacate"
+        }
+      ],
+      "declared_unresolved": [],
+      "origin": "curated"
+    },
+    "Huevo duro con casabe y sal mínima": {
+      "constituents": [
+        {
+          "grams": 100.0,
+          "name": "Huevo"
+        },
+        {
+          "grams": 40.0,
+          "name": "Casabe"
+        }
+      ],
+      "declared_unresolved": [],
+      "origin": "curated"
+    },
+    "Jugo de chinola natural sin azúcar con puñado de maní": {
+      "constituents": [
+        {
+          "grams": 80.0,
+          "name": "Chinola"
+        },
+        {
+          "grams": 25.0,
+          "name": "Maní"
+        }
+      ],
+      "declared_unresolved": [],
+      "origin": "curated"
+    },
+    "La bandera: arroz, habichuelas rojas guisadas y pollo guisado": {
+      "constituents": [
+        {
+          "grams": 70.0,
+          "name": "Arroz blanco"
+        },
+        {
+          "grams": 22.0,
+          "name": "Aceite vegetal"
+        },
+        {
+          "grams": 2.5,
+          "name": "Sal"
+        },
+        {
+          "grams": 55.0,
+          "name": "Habichuelas rojas"
+        },
+        {
+          "grams": 20.0,
+          "name": "Auyama"
+        },
+        {
+          "grams": 30.0,
+          "name": "Cebolla"
+        },
+        {
+          "grams": 20.0,
+          "name": "Ají cubanela"
+        },
+        {
+          "grams": 140.0,
+          "name": "Pechuga de pollo"
+        },
+        {
+          "grams": 18.0,
+          "name": "Tomate"
+        },
+        {
+          "grams": 15.0,
+          "name": "Salsa de tomate"
+        },
+        {
+          "grams": 4.0,
+          "name": "Ajo"
+        },
+        {
+          "grams": 0.5,
+          "name": "Orégano dominicano"
+        }
+      ],
+      "declared_unresolved": [],
+      "origin": "curated"
+    },
+    "Lentejas guisadas con arroz y aguacate": {
+      "constituents": [
+        {
+          "grams": 55.0,
+          "name": "Lentejas"
+        },
+        {
+          "grams": 25.0,
+          "name": "Zanahoria"
+        },
+        {
+          "grams": 15.0,
+          "name": "Cebolla"
+        },
+        {
+          "grams": 12.0,
+          "name": "Ají cubanela"
+        },
+        {
+          "grams": 4.0,
+          "name": "Ajo"
+        },
+        {
+          "grams": 3.0,
+          "name": "Cilantro"
+        },
+        {
+          "grams": 18.0,
+          "name": "Salsa de tomate"
+        },
+        {
+          "grams": 13.0,
+          "name": "Aceite vegetal"
+        },
+        {
+          "grams": 3.5,
+          "name": "Sal"
+        },
+        {
+          "grams": 70.0,
+          "name": "Arroz blanco"
+        },
+        {
+          "grams": 50.0,
+          "name": "Aguacate"
+        }
+      ],
+      "declared_unresolved": [],
+      "origin": "curated"
+    },
+    "Locrio de pavo estilo dominicano": {
+      "constituents": [
+        {
+          "grams": 60.0,
+          "name": "Arroz blanco"
+        },
+        {
+          "grams": 65.0,
+          "name": "Pechuga de pavo"
+        },
+        {
+          "grams": 8.0,
+          "name": "Aceite vegetal"
+        },
+        {
+          "grams": 12.0,
+          "name": "Cebolla"
+        },
+        {
+          "grams": 15.0,
+          "name": "Tomate"
+        }
+      ],
+      "declared_unresolved": [],
+      "origin": "curated"
+    },
+    "Locrio de pollo con ensalada verde": {
+      "constituents": [
+        {
+          "grams": 60.0,
+          "name": "Arroz blanco"
+        },
+        {
+          "grams": 65.0,
+          "name": "Pechuga de pollo"
+        },
+        {
+          "grams": 8.0,
+          "name": "Aceite vegetal"
+        },
+        {
+          "grams": 32.0,
+          "name": "Cebolla"
+        },
+        {
+          "grams": 75.0,
+          "name": "Tomate"
+        },
+        {
+          "grams": 70.0,
+          "name": "Lechuga"
+        },
+        {
+          "grams": 50.0,
+          "name": "Aguacate"
+        },
+        {
+          "grams": 8.0,
+          "name": "Aceite de oliva"
+        },
+        {
+          "grams": 10.0,
+          "name": "Limón"
+        },
+        {
+          "grams": 1.0,
+          "name": "Sal"
+        }
+      ],
+      "declared_unresolved": [],
+      "origin": "curated"
+    },
+    "Majarete ligero de maíz bajo en azúcar": {
+      "constituents": [
+        {
+          "grams": 45.0,
+          "name": "Harina de maíz precocida"
+        },
+        {
+          "grams": 200.0,
+          "name": "Leche"
+        },
+        {
+          "grams": 2.0,
+          "name": "Canela en polvo"
+        },
+        {
+          "grams": 8.0,
+          "name": "Azúcar morena"
+        }
+      ],
+      "declared_unresolved": [],
+      "origin": "curated"
+    },
+    "Mangú con salami de pavo a la plancha (versión magra)": {
+      "constituents": [
+        {
+          "grams": 180.0,
+          "name": "Plátano verde"
+        },
+        {
+          "grams": 8.0,
+          "name": "Aceite vegetal"
+        },
+        {
+          "grams": 15.0,
+          "name": "Cebolla"
+        },
+        {
+          "grams": 60.0,
+          "name": "Jamón de pavo"
+        }
+      ],
+      "declared_unresolved": [
+        "Salami de pavo (se compone con jamón de pavo)"
+      ],
+      "origin": "curated"
+    },
+    "Mangú de guineo verde con queso frito ligero al airfryer": {
+      "constituents": [
+        {
+          "grams": 180.0,
+          "name": "Guineo verde"
+        },
+        {
+          "grams": 15.0,
+          "name": "Cebolla"
+        },
+        {
+          "grams": 5.0,
+          "name": "Aceite vegetal"
+        },
+        {
+          "grams": 60.0,
+          "name": "Queso blanco"
+        }
+      ],
+      "declared_unresolved": [],
+      "origin": "curated"
+    },
+    "Mangú de plátano verde con huevos revueltos y cebollita morada": {
+      "constituents": [
+        {
+          "grams": 180.0,
+          "name": "Plátano verde"
+        },
+        {
+          "grams": 15.0,
+          "name": "Aceite vegetal"
+        },
+        {
+          "grams": 60.0,
+          "name": "Cebolla"
+        },
+        {
+          "grams": 100.0,
+          "name": "Huevo"
+        },
+        {
+          "grams": 1.0,
+          "name": "Sal"
+        },
+        {
+          "grams": 0.3,
+          "name": "Pimienta negra"
+        }
+      ],
+      "declared_unresolved": [],
+      "origin": "curated"
+    },
+    "Molondrones guisados con pollo y majado de auyama": {
+      "constituents": [
+        {
+          "grams": 120.0,
+          "name": "Molondrones"
+        },
+        {
+          "grams": 40.0,
+          "name": "Tomate"
+        },
+        {
+          "grams": 20.0,
+          "name": "Cebolla"
+        },
+        {
+          "grams": 130.0,
+          "name": "Pechuga de pollo"
+        },
+        {
+          "grams": 150.0,
+          "name": "Auyama"
+        }
+      ],
+      "declared_unresolved": [],
+      "origin": "curated"
+    },
+    "Moro de guandules con pollo guisado": {
+      "constituents": [
+        {
+          "grams": 70.0,
+          "name": "Arroz blanco"
+        },
+        {
+          "grams": 55.0,
+          "name": "Gandules"
+        },
+        {
+          "grams": 16.0,
+          "name": "Aceite vegetal"
+        },
+        {
+          "grams": 36.0,
+          "name": "Cebolla"
+        },
+        {
+          "grams": 24.0,
+          "name": "Ají cubanela"
+        },
+        {
+          "grams": 30.0,
+          "name": "Salsa de tomate"
+        },
+        {
+          "grams": 8.0,
+          "name": "Ajo"
+        },
+        {
+          "grams": 4.0,
+          "name": "Cilantro"
+        },
+        {
+          "grams": 2.5,
+          "name": "Sal"
+        },
+        {
+          "grams": 140.0,
+          "name": "Pechuga de pollo"
+        },
+        {
+          "grams": 18.0,
+          "name": "Tomate"
+        },
+        {
+          "grams": 0.5,
+          "name": "Orégano dominicano"
+        }
+      ],
+      "declared_unresolved": [],
+      "origin": "curated"
+    },
+    "Moro de habichuelas negras con bistec encebollado": {
+      "constituents": [
+        {
+          "grams": 70.0,
+          "name": "Arroz blanco"
+        },
+        {
+          "grams": 55.0,
+          "name": "Habichuelas negras"
+        },
+        {
+          "grams": 9.0,
+          "name": "Aceite vegetal"
+        },
+        {
+          "grams": 58.0,
+          "name": "Cebolla"
+        },
+        {
+          "grams": 12.0,
+          "name": "Ají cubanela"
+        },
+        {
+          "grams": 15.0,
+          "name": "Salsa de tomate"
+        },
+        {
+          "grams": 4.0,
+          "name": "Ajo"
+        },
+        {
+          "grams": 4.0,
+          "name": "Cilantro"
+        },
+        {
+          "grams": 1.5,
+          "name": "Sal"
+        },
+        {
+          "grams": 120.0,
+          "name": "Carne de res"
+        }
+      ],
+      "declared_unresolved": [],
+      "origin": "curated"
+    },
+    "Niño envuelto: rollitos de repollo rellenos de arroz y res": {
+      "constituents": [
+        {
+          "grams": 150.0,
+          "name": "Repollo"
+        },
+        {
+          "grams": 50.0,
+          "name": "Arroz blanco"
+        },
+        {
+          "grams": 100.0,
+          "name": "Carne de res molida"
+        },
+        {
+          "grams": 60.0,
+          "name": "Tomate"
+        },
+        {
+          "grams": 20.0,
+          "name": "Cebolla"
+        }
+      ],
+      "declared_unresolved": [],
+      "origin": "curated"
+    },
+    "Palitos de zanahoria y apio con dip de habichuelas (hummus criollo)": {
+      "constituents": [
+        {
+          "grams": 80.0,
+          "name": "Zanahoria"
+        },
+        {
+          "grams": 60.0,
+          "name": "Apio"
+        },
+        {
+          "grams": 60.0,
+          "name": "Hummus"
+        }
+      ],
+      "declared_unresolved": [],
+      "origin": "curated"
+    },
+    "Pan de batata casero (porción)": {
+      "constituents": [
+        {
+          "grams": 120.0,
+          "name": "Batata"
+        },
+        {
+          "grams": 30.0,
+          "name": "Harina de trigo"
+        },
+        {
+          "grams": 25.0,
+          "name": "Huevo"
+        },
+        {
+          "grams": 40.0,
+          "name": "Leche"
+        }
+      ],
+      "declared_unresolved": [],
+      "origin": "curated"
+    },
+    "Panecicos de yuca al horno (porción)": {
+      "constituents": [
+        {
+          "grams": 150.0,
+          "name": "Yuca"
+        },
+        {
+          "grams": 25.0,
+          "name": "Huevo"
+        },
+        {
+          "grams": 20.0,
+          "name": "Queso blanco"
+        }
+      ],
+      "declared_unresolved": [],
+      "origin": "curated"
+    },
+    "Panqueques de avena y guineo maduro": {
+      "constituents": [
+        {
+          "grams": 50.0,
+          "name": "Avena"
+        },
+        {
+          "grams": 100.0,
+          "name": "Guineo"
+        },
+        {
+          "grams": 50.0,
+          "name": "Huevo"
+        },
+        {
+          "grams": 100.0,
+          "name": "Leche"
+        },
+        {
+          "grams": 2.0,
+          "name": "Canela en polvo"
+        }
+      ],
+      "declared_unresolved": [],
+      "origin": "curated"
+    },
+    "Panqueques de harina de arroz con fresas": {
+      "constituents": [
+        {
+          "grams": 50.0,
+          "name": "Harina de trigo"
+        },
+        {
+          "grams": 50.0,
+          "name": "Huevo"
+        },
+        {
+          "grams": 120.0,
+          "name": "Leche"
+        },
+        {
+          "grams": 60.0,
+          "name": "Fresas"
+        }
+      ],
+      "declared_unresolved": [],
+      "origin": "curated"
+    },
+    "Pastelón de plátano maduro con res molida": {
+      "constituents": [
+        {
+          "grams": 200.0,
+          "name": "Plátano maduro"
+        },
+        {
+          "grams": 120.0,
+          "name": "Carne de res molida"
+        },
+        {
+          "grams": 30.0,
+          "name": "Queso blanco"
+        },
+        {
+          "grams": 20.0,
+          "name": "Cebolla"
+        }
+      ],
+      "declared_unresolved": [],
+      "origin": "curated"
+    },
+    "Pastelón de yuca con pollo desmenuzado": {
+      "constituents": [
+        {
+          "grams": 200.0,
+          "name": "Yuca"
+        },
+        {
+          "grams": 120.0,
+          "name": "Pechuga de pollo"
+        },
+        {
+          "grams": 30.0,
+          "name": "Queso blanco"
+        },
+        {
+          "grams": 20.0,
+          "name": "Cebolla"
+        }
+      ],
+      "declared_unresolved": [],
+      "origin": "curated"
+    },
+    "Pechuga al horno rellena de vegetales con ensalada verde": {
+      "constituents": [
+        {
+          "grams": 150.0,
+          "name": "Pechuga de pollo"
+        },
+        {
+          "grams": 40.0,
+          "name": "Espinacas"
+        },
+        {
+          "grams": 40.0,
+          "name": "Ají morrón"
+        },
+        {
+          "grams": 70.0,
+          "name": "Lechuga"
+        },
+        {
+          "grams": 60.0,
+          "name": "Tomate"
+        },
+        {
+          "grams": 20.0,
+          "name": "Cebolla"
+        },
+        {
+          "grams": 50.0,
+          "name": "Aguacate"
+        },
+        {
+          "grams": 8.0,
+          "name": "Aceite de oliva"
+        },
+        {
+          "grams": 10.0,
+          "name": "Limón"
+        },
+        {
+          "grams": 1.0,
+          "name": "Sal"
+        }
+      ],
+      "declared_unresolved": [],
+      "origin": "curated"
+    },
+    "Pechuga rellena de espinaca y queso al horno con batata": {
+      "constituents": [
+        {
+          "grams": 150.0,
+          "name": "Pechuga de pollo"
+        },
+        {
+          "grams": 50.0,
+          "name": "Espinacas"
+        },
+        {
+          "grams": 40.0,
+          "name": "Queso blanco"
+        },
+        {
+          "grams": 150.0,
+          "name": "Batata"
+        }
+      ],
+      "declared_unresolved": [],
+      "origin": "curated"
+    },
+    "Pescado a la plancha con puré de yuca al ajo": {
+      "constituents": [
+        {
+          "grams": 150.0,
+          "name": "Filete de pescado blanco"
+        },
+        {
+          "grams": 8.0,
+          "name": "Aceite de oliva"
+        },
+        {
+          "grams": 180.0,
+          "name": "Yuca"
+        },
+        {
+          "grams": 6.0,
+          "name": "Ajo"
+        }
+      ],
+      "declared_unresolved": [],
+      "origin": "curated"
+    },
+    "Pescado con coco estilo Samaná con arroz blanco": {
+      "constituents": [
+        {
+          "grams": 150.0,
+          "name": "Filete de pescado blanco"
+        },
+        {
+          "grams": 80.0,
+          "name": "Leche de coco"
+        },
+        {
+          "grams": 50.0,
+          "name": "Tomate"
+        },
+        {
+          "grams": 20.0,
+          "name": "Cebolla"
+        },
+        {
+          "grams": 70.0,
+          "name": "Arroz blanco"
+        },
+        {
+          "grams": 7.0,
+          "name": "Aceite vegetal"
+        },
+        {
+          "grams": 1.5,
+          "name": "Sal"
+        }
+      ],
+      "declared_unresolved": [],
+      "origin": "curated"
+    },
+    "Pescado guisado a la criolla con arroz blanco": {
+      "constituents": [
+        {
+          "grams": 160.0,
+          "name": "Filete de pescado blanco"
+        },
+        {
+          "grams": 14.0,
+          "name": "Aceite vegetal"
+        },
+        {
+          "grams": 18.0,
+          "name": "Cebolla"
+        },
+        {
+          "grams": 12.0,
+          "name": "Ají cubanela"
+        },
+        {
+          "grams": 20.0,
+          "name": "Tomate"
+        },
+        {
+          "grams": 15.0,
+          "name": "Salsa de tomate"
+        },
+        {
+          "grams": 4.0,
+          "name": "Ajo"
+        },
+        {
+          "grams": 8.0,
+          "name": "Limón"
+        },
+        {
+          "grams": 2.5,
+          "name": "Sal"
+        },
+        {
+          "grams": 70.0,
+          "name": "Arroz blanco"
+        }
+      ],
+      "declared_unresolved": [],
+      "origin": "curated"
+    },
+    "Pica pollo casero al horno con tostones al aire": {
+      "constituents": [
+        {
+          "grams": 150.0,
+          "name": "Pechuga de pollo"
+        },
+        {
+          "grams": 20.0,
+          "name": "Harina de trigo"
+        },
+        {
+          "grams": 1.0,
+          "name": "Orégano dominicano"
+        },
+        {
+          "grams": 120.0,
+          "name": "Plátano verde"
+        },
+        {
+          "grams": 12.0,
+          "name": "Aceite vegetal"
+        }
+      ],
+      "declared_unresolved": [],
+      "origin": "curated"
+    },
+    "Pinchos de pollo y vegetales con yuca hervida": {
+      "constituents": [
+        {
+          "grams": 140.0,
+          "name": "Pechuga de pollo"
+        },
+        {
+          "grams": 50.0,
+          "name": "Ají morrón"
+        },
+        {
+          "grams": 40.0,
+          "name": "Cebolla"
+        },
+        {
+          "grams": 200.0,
+          "name": "Yuca"
+        },
+        {
+          "grams": 2.0,
+          "name": "Sal"
+        }
+      ],
+      "declared_unresolved": [],
+      "origin": "curated"
+    },
+    "Pisto criollo de vegetales con huevo pochado": {
+      "constituents": [
+        {
+          "grams": 80.0,
+          "name": "Berenjena"
+        },
+        {
+          "grams": 80.0,
+          "name": "Calabacín"
+        },
+        {
+          "grams": 80.0,
+          "name": "Tomate"
+        },
+        {
+          "grams": 30.0,
+          "name": "Cebolla"
+        },
+        {
+          "grams": 40.0,
+          "name": "Ají morrón"
+        },
+        {
+          "grams": 100.0,
+          "name": "Huevo"
+        }
+      ],
+      "declared_unresolved": [],
+      "origin": "curated"
+    },
+    "Pollo guisado con bollitos de plátano": {
+      "constituents": [
+        {
+          "grams": 140.0,
+          "name": "Pechuga de pollo"
+        },
+        {
+          "grams": 7.0,
+          "name": "Aceite vegetal"
+        },
+        {
+          "grams": 18.0,
+          "name": "Cebolla"
+        },
+        {
+          "grams": 12.0,
+          "name": "Ají cubanela"
+        },
+        {
+          "grams": 18.0,
+          "name": "Tomate"
+        },
+        {
+          "grams": 15.0,
+          "name": "Salsa de tomate"
+        },
+        {
+          "grams": 4.0,
+          "name": "Ajo"
+        },
+        {
+          "grams": 0.5,
+          "name": "Orégano dominicano"
+        },
+        {
+          "grams": 1.0,
+          "name": "Sal"
+        },
+        {
+          "grams": 150.0,
+          "name": "Plátano verde"
+        }
+      ],
+      "declared_unresolved": [],
+      "origin": "curated"
+    },
+    "Pollo horneado al limón con arroz amarillo": {
+      "constituents": [
+        {
+          "grams": 160.0,
+          "name": "Pechuga de pollo"
+        },
+        {
+          "grams": 6.0,
+          "name": "Aceite de oliva"
+        },
+        {
+          "grams": 5.0,
+          "name": "Ajo"
+        },
+        {
+          "grams": 10.0,
+          "name": "Naranja"
+        },
+        {
+          "grams": 0.5,
+          "name": "Orégano dominicano"
+        },
+        {
+          "grams": 12.0,
+          "name": "Cebolla"
+        },
+        {
+          "grams": 2.7,
+          "name": "Sal"
+        },
+        {
+          "grams": 0.3,
+          "name": "Pimienta negra"
+        },
+        {
+          "grams": 15.0,
+          "name": "Limón"
+        },
+        {
+          "grams": 70.0,
+          "name": "Arroz blanco"
+        },
+        {
+          "grams": 7.0,
+          "name": "Aceite vegetal"
+        }
+      ],
+      "declared_unresolved": [],
+      "origin": "curated"
+    },
+    "Puré de batata con pavo a la plancha": {
+      "constituents": [
+        {
+          "grams": 180.0,
+          "name": "Batata"
+        },
+        {
+          "grams": 130.0,
+          "name": "Pechuga de pavo"
+        },
+        {
+          "grams": 5.0,
+          "name": "Aceite de oliva"
+        }
+      ],
+      "declared_unresolved": [],
+      "origin": "curated"
+    },
+    "Queso fresco con tomate y orégano": {
+      "constituents": [
+        {
+          "grams": 70.0,
+          "name": "Queso blanco"
+        },
+        {
+          "grams": 80.0,
+          "name": "Tomate"
+        },
+        {
+          "grams": 1.0,
+          "name": "Orégano dominicano"
+        }
+      ],
+      "declared_unresolved": [],
+      "origin": "curated"
+    },
+    "Quipes horneados con ensalada fresca": {
+      "constituents": [
+        {
+          "grams": 60.0,
+          "name": "Bulgur"
+        },
+        {
+          "grams": 100.0,
+          "name": "Carne de res molida"
+        },
+        {
+          "grams": 40.0,
+          "name": "Cebolla"
+        },
+        {
+          "grams": 70.0,
+          "name": "Lechuga"
+        },
+        {
+          "grams": 60.0,
+          "name": "Tomate"
+        },
+        {
+          "grams": 50.0,
+          "name": "Aguacate"
+        },
+        {
+          "grams": 8.0,
+          "name": "Aceite de oliva"
+        },
+        {
+          "grams": 10.0,
+          "name": "Limón"
+        },
+        {
+          "grams": 1.0,
+          "name": "Sal"
+        }
+      ],
+      "declared_unresolved": [],
+      "origin": "curated"
+    },
+    "Res a la plancha con puré de auyama": {
+      "constituents": [
+        {
+          "grams": 140.0,
+          "name": "Carne de res"
+        },
+        {
+          "grams": 6.0,
+          "name": "Aceite de oliva"
+        },
+        {
+          "grams": 200.0,
+          "name": "Auyama"
+        }
+      ],
+      "declared_unresolved": [],
+      "origin": "curated"
+    },
+    "Res mechada con puré de papa": {
+      "constituents": [
+        {
+          "grams": 150.0,
+          "name": "Carne de res"
+        },
+        {
+          "grams": 7.0,
+          "name": "Aceite vegetal"
+        },
+        {
+          "grams": 18.0,
+          "name": "Cebolla"
+        },
+        {
+          "grams": 12.0,
+          "name": "Ají cubanela"
+        },
+        {
+          "grams": 18.0,
+          "name": "Tomate"
+        },
+        {
+          "grams": 15.0,
+          "name": "Salsa de tomate"
+        },
+        {
+          "grams": 4.0,
+          "name": "Ajo"
+        },
+        {
+          "grams": 10.0,
+          "name": "Pimiento morrón"
+        },
+        {
+          "grams": 2.5,
+          "name": "Sal"
+        },
+        {
+          "grams": 200.0,
+          "name": "Papa"
+        },
+        {
+          "grams": 40.0,
+          "name": "Leche"
+        },
+        {
+          "grams": 8.0,
+          "name": "Mantequilla"
+        },
+        {
+          "grams": 0.3,
+          "name": "Pimienta negra"
+        }
+      ],
+      "declared_unresolved": [],
+      "origin": "curated"
+    },
+    "Revoltillo de atún con plátano hervido": {
+      "constituents": [
+        {
+          "grams": 100.0,
+          "name": "Atún en agua"
+        },
+        {
+          "grams": 50.0,
+          "name": "Huevo"
+        },
+        {
+          "grams": 40.0,
+          "name": "Tomate"
+        },
+        {
+          "grams": 20.0,
+          "name": "Cebolla"
+        },
+        {
+          "grams": 180.0,
+          "name": "Plátano verde"
+        },
+        {
+          "grams": 2.0,
+          "name": "Sal"
+        }
+      ],
+      "declared_unresolved": [],
+      "origin": "curated"
+    },
+    "Revoltillo dominicano con tomate y cebolla + casabe": {
+      "constituents": [
+        {
+          "grams": 100.0,
+          "name": "Huevo"
+        },
+        {
+          "grams": 7.0,
+          "name": "Aceite vegetal"
+        },
+        {
+          "grams": 50.0,
+          "name": "Cebolla"
+        },
+        {
+          "grams": 1.0,
+          "name": "Sal"
+        },
+        {
+          "grams": 0.3,
+          "name": "Pimienta negra"
+        },
+        {
+          "grams": 60.0,
+          "name": "Tomate"
+        },
+        {
+          "grams": 40.0,
+          "name": "Casabe"
+        }
+      ],
+      "declared_unresolved": [],
+      "origin": "curated"
+    },
+    "Sancocho dominicano de pollo (porción con aguacate)": {
+      "constituents": [
+        {
+          "grams": 70.0,
+          "name": "Carne de res"
+        },
+        {
+          "grams": 50.0,
+          "name": "Yuca"
+        },
+        {
+          "grams": 40.0,
+          "name": "Plátano verde"
+        },
+        {
+          "grams": 30.0,
+          "name": "Auyama"
+        },
+        {
+          "grams": 30.0,
+          "name": "Ñame"
+        },
+        {
+          "grams": 10.0,
+          "name": "Cebolla"
+        },
+        {
+          "grams": 5.0,
+          "name": "Aceite vegetal"
+        },
+        {
+          "grams": 50.0,
+          "name": "Aguacate"
+        }
+      ],
+      "declared_unresolved": [],
+      "origin": "curated"
+    },
+    "Sopa-crema de auyama con pollo desmenuzado": {
+      "constituents": [
+        {
+          "grams": 200.0,
+          "name": "Auyama"
+        },
+        {
+          "grams": 25.0,
+          "name": "Cebolla"
+        },
+        {
+          "grams": 3.0,
+          "name": "Ajo"
+        },
+        {
+          "grams": 8.0,
+          "name": "Mantequilla"
+        },
+        {
+          "grams": 30.0,
+          "name": "Leche evaporada"
+        },
+        {
+          "grams": 1.5,
+          "name": "Sal"
+        },
+        {
+          "grams": 100.0,
+          "name": "Pechuga de pollo"
+        }
+      ],
+      "declared_unresolved": [],
+      "origin": "curated"
+    },
+    "Sándwich integral de huevo con aguacate": {
+      "constituents": [
+        {
+          "grams": 60.0,
+          "name": "Pan integral personal"
+        },
+        {
+          "grams": 100.0,
+          "name": "Huevo"
+        },
+        {
+          "grams": 50.0,
+          "name": "Aguacate"
+        }
+      ],
+      "declared_unresolved": [],
+      "origin": "curated"
+    },
+    "Tacos en hoja de lechuga con res mechada": {
+      "constituents": [
+        {
+          "grams": 80.0,
+          "name": "Lechuga romana"
+        },
+        {
+          "grams": 150.0,
+          "name": "Carne de res"
+        },
+        {
+          "grams": 7.0,
+          "name": "Aceite vegetal"
+        },
+        {
+          "grams": 18.0,
+          "name": "Cebolla"
+        },
+        {
+          "grams": 12.0,
+          "name": "Ají cubanela"
+        },
+        {
+          "grams": 58.0,
+          "name": "Tomate"
+        },
+        {
+          "grams": 15.0,
+          "name": "Salsa de tomate"
+        },
+        {
+          "grams": 4.0,
+          "name": "Ajo"
+        },
+        {
+          "grams": 10.0,
+          "name": "Pimiento morrón"
+        },
+        {
+          "grams": 1.0,
+          "name": "Sal"
+        }
+      ],
+      "declared_unresolved": [],
+      "origin": "curated"
+    },
+    "Tipile (ensalada dominicana de bulgur) con pollo a la plancha": {
+      "constituents": [
+        {
+          "grams": 60.0,
+          "name": "Bulgur"
+        },
+        {
+          "grams": 60.0,
+          "name": "Tomate"
+        },
+        {
+          "grams": 20.0,
+          "name": "Cebolla"
+        },
+        {
+          "grams": 8.0,
+          "name": "Perejil"
+        },
+        {
+          "grams": 15.0,
+          "name": "Limón"
+        },
+        {
+          "grams": 130.0,
+          "name": "Pechuga de pollo"
+        }
+      ],
+      "declared_unresolved": [],
+      "origin": "curated"
+    },
+    "Tortilla de huevos con espinaca y queso fresco": {
+      "constituents": [
+        {
+          "grams": 100.0,
+          "name": "Huevo"
+        },
+        {
+          "grams": 20.0,
+          "name": "Cebolla"
+        },
+        {
+          "grams": 65.0,
+          "name": "Queso blanco"
+        },
+        {
+          "grams": 6.0,
+          "name": "Aceite vegetal"
+        },
+        {
+          "grams": 1.0,
+          "name": "Sal"
+        },
+        {
+          "grams": 60.0,
+          "name": "Espinacas"
+        }
+      ],
+      "declared_unresolved": [],
+      "origin": "curated"
+    },
+    "Tortitas de pescado con ensalada verde": {
+      "constituents": [
+        {
+          "grams": 140.0,
+          "name": "Filete de pescado blanco"
+        },
+        {
+          "grams": 50.0,
+          "name": "Huevo"
+        },
+        {
+          "grams": 20.0,
+          "name": "Pan rallado"
+        },
+        {
+          "grams": 70.0,
+          "name": "Lechuga"
+        },
+        {
+          "grams": 60.0,
+          "name": "Tomate"
+        },
+        {
+          "grams": 20.0,
+          "name": "Cebolla"
+        },
+        {
+          "grams": 50.0,
+          "name": "Aguacate"
+        },
+        {
+          "grams": 8.0,
+          "name": "Aceite de oliva"
+        },
+        {
+          "grams": 10.0,
+          "name": "Limón"
+        },
+        {
+          "grams": 1.0,
+          "name": "Sal"
+        }
+      ],
+      "declared_unresolved": [],
+      "origin": "curated"
+    },
+    "Tostada integral con mantequilla de maní y guineo": {
+      "constituents": [
+        {
+          "grams": 56.0,
+          "name": "Pan integral"
+        },
+        {
+          "grams": 32.0,
+          "name": "Mantequilla de maní"
+        },
+        {
+          "grams": 100.0,
+          "name": "Guineo"
+        }
+      ],
+      "declared_unresolved": [],
+      "origin": "curated"
+    },
+    "Tostones al horno con camarones al ajillo": {
+      "constituents": [
+        {
+          "grams": 120.0,
+          "name": "Plátano verde"
+        },
+        {
+          "grams": 12.0,
+          "name": "Aceite vegetal"
+        },
+        {
+          "grams": 130.0,
+          "name": "Camarones"
+        },
+        {
+          "grams": 8.0,
+          "name": "Ajo"
+        },
+        {
+          "grams": 10.0,
+          "name": "Aceite de oliva"
+        }
+      ],
+      "declared_unresolved": [],
+      "origin": "curated"
+    },
+    "Wrap de tortilla integral con pollo y vegetales salteados": {
+      "constituents": [
+        {
+          "grams": 60.0,
+          "name": "Tortilla integral"
+        },
+        {
+          "grams": 120.0,
+          "name": "Pechuga de pollo"
+        },
+        {
+          "grams": 40.0,
+          "name": "Ají morrón"
+        },
+        {
+          "grams": 30.0,
+          "name": "Cebolla"
+        },
+        {
+          "grams": 40.0,
+          "name": "Zanahoria"
+        }
+      ],
+      "declared_unresolved": [],
+      "origin": "curated"
+    },
+    "Yaniqueques horneados (no fritos) con huevo revuelto": {
+      "constituents": [
+        {
+          "grams": 70.0,
+          "name": "Harina de trigo"
+        },
+        {
+          "grams": 13.0,
+          "name": "Aceite vegetal"
+        },
+        {
+          "grams": 100.0,
+          "name": "Huevo"
+        },
+        {
+          "grams": 25.0,
+          "name": "Cebolla"
+        },
+        {
+          "grams": 1.0,
+          "name": "Sal"
+        },
+        {
+          "grams": 0.3,
+          "name": "Pimienta negra"
+        }
+      ],
+      "declared_unresolved": [],
+      "origin": "curated"
+    },
+    "Yogur con frutas picadas y avena tostada": {
+      "constituents": [
+        {
+          "grams": 170.0,
+          "name": "Yogurt griego sin azúcar"
+        },
+        {
+          "grams": 60.0,
+          "name": "Fresas"
+        },
+        {
+          "grams": 60.0,
+          "name": "Mango"
+        },
+        {
+          "grams": 8.0,
+          "name": "Miel"
+        },
+        {
+          "grams": 25.0,
+          "name": "Avena"
+        }
+      ],
+      "declared_unresolved": [],
+      "origin": "curated"
+    },
+    "Yogur con maní y guineo": {
+      "constituents": [
+        {
+          "grams": 150.0,
+          "name": "Yogurt griego sin azúcar"
+        },
+        {
+          "grams": 20.0,
+          "name": "Maní"
+        },
+        {
+          "grams": 100.0,
+          "name": "Guineo"
+        }
+      ],
+      "declared_unresolved": [],
+      "origin": "curated"
+    },
+    "Yuca al mojo con cerdo magro a la plancha": {
+      "constituents": [
+        {
+          "grams": 200.0,
+          "name": "Yuca"
+        },
+        {
+          "grams": 2.0,
+          "name": "Sal"
+        },
+        {
+          "grams": 6.0,
+          "name": "Ajo"
+        },
+        {
+          "grams": 8.0,
+          "name": "Aceite de oliva"
+        },
+        {
+          "grams": 130.0,
+          "name": "Cerdo"
+        }
+      ],
+      "declared_unresolved": [],
+      "origin": "curated"
+    }
+  }
+}

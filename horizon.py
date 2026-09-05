@@ -358,6 +358,41 @@ def _schedule_days(total_days: int, min7: int, max7: int) -> list[int]:
     return sorted(days)
 
 
+def _registry_block_for_country(country: Optional[str], *, effective: Optional[dict] = None, days_out: Optional[list] = None) -> dict:
+    """[P1-ARQ25-F6-DISH-REGISTRY · 2026-09-05] El allocator consume el Dish Registry compilado: hash del
+    snapshot activo + candidatos por día/franja (status ok, franja, familia de proteína programada, sin las
+    clases de alérgeno declaradas). Fail-open: sin snapshot, `{snapshot_hash: None}` y nada cambia."""
+    try:
+        import dish_registry as dr
+        h = dr.registry_hash(country)
+        if not h:
+            return {"snapshot_hash": None, "version": dr.registry_snapshot_version(), "candidates": {}}
+        allergies = [str(a) for a in (((effective or {}).get("diet") or {}).get("allergies") or [])]
+        cands = {}
+        for d in (days_out or [])[:60]:
+            if not isinstance(d, dict):
+                continue
+            fam = d.get("protein")
+            for slot in (d.get("slots") or []):
+                ids = [c["template_id"] for c in dr.template_candidates(country, slot, fam, k=3, exclude_allergens=allergies)]
+                if ids:
+                    cands[f"{d.get('day_index')}:{slot}"] = ids
+        return {"snapshot_hash": h, "version": dr.registry_snapshot_version(), "candidates": cands}
+    except Exception as e:
+        logger.debug(f"[ARQ25-F6] registry no disponible para el blueprint: {e!r}")
+        return {"snapshot_hash": None, "candidates": {}}
+
+
+def _registry_hash_for_effective(effective: Optional[dict]) -> Optional[str]:
+    try:
+        import dish_registry as dr
+        eff = effective or {}
+        country = ((eff.get("market") or {}).get("country") if isinstance(eff.get("market"), dict) else None) or eff.get("market_country")
+        return dr.registry_hash(country)
+    except Exception:
+        return None
+
+
 def build_blueprint(effective: dict, *, total_days: int, base: Optional[int] = None,
                     meals_per_day: Optional[int] = None) -> dict:
     """Blueprint determinista del horizonte completo (§6.5). Misma política ⇒ mismo blueprint."""
@@ -438,6 +473,11 @@ def build_blueprint(effective: dict, *, total_days: int, base: Optional[int] = N
         "freezer": {"mode": freezer, "freeze_horizon_days": _freeze_horizon_days(freezer, total)},
         "main_cycle_days": cycle,
         "culture_profile": profile_id,
+        # [P1-ARQ25-F6-DISH-REGISTRY] hash del snapshot + candidatos por día/franja (el allocator consume el registry)
+        "registry": _registry_block_for_country(
+            ((eff.get("market") or {}).get("country") if isinstance(eff.get("market"), dict) else None) or eff.get("market_country"),
+            effective=eff, days_out=days_out,
+        ),
     }
     bp["blueprint_hash"] = blueprint_hash(bp)
     bp["built_at"] = datetime.now(timezone.utc).isoformat()
@@ -1064,6 +1104,7 @@ def fidelity_report(days: list, sl: Optional[dict], effective: Optional[dict], *
         "days_checked": len([d for d in (days or []) if isinstance(d, dict)]),
         "issues": issues, "codes": sorted({i["code"] for i in issues}), "score": score,
         "measured_at": datetime.now(timezone.utc).isoformat(),
+        "registry_hash": _registry_hash_for_effective(effective),  # [P1-ARQ25-F6-DISH-REGISTRY] los benchmarks guardan su hash
     }
 
 
@@ -1166,6 +1207,7 @@ def emit_fidelity_metric(user_id: Optional[str], plan_id: Optional[str], report:
             "n_issues": len(report.get("issues") or []), "days_checked": report.get("days_checked"),
             "score": report.get("score"), "mode": mode, "gate": gate or fidelity_gate_mode(),
             "rejected": bool(rejected), "allocator_version": ALLOCATOR_VERSION,
+            "registry_hash": report.get("registry_hash"),
         }
         execute_sql_write(
             "INSERT INTO pipeline_metrics (user_id, session_id, node, duration_ms, retries, "
