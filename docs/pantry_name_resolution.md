@@ -425,3 +425,54 @@ Migración: [`migrations/p1_pantry_reconciliation_2026_08_07.sql`](../migrations
 El **banner en la Nevera** (`/dashboard/pantry`) que consume estos endpoints, y
 el enganche al `_dispatch_pantry_nudge` existente (cooldown 6h) para traer al
 usuario. Hasta entonces el backend responde pero nadie pregunta.
+
+---
+
+## Verificación de comportamiento (E2E contra Postgres)
+
+[P1-PANTRY-ROUNDTRIP-E2E · 2026-08-07] Todo lo anterior está anclado con tests
+parser-based: leen el fuente y comprueban que cierta línea siga ahí. Son baratos
+y atrapan renombres, pero no pueden contestar la única pregunta que importa —
+*¿la comida vuelve?*.
+
+Lo que cuesta esa ceguera ya se vio: `test_p1_consumption_ledger` estuvo **verde**
+mientras exigía `CREATE POLICY ... auth.uid()`, sintaxis de Supabase que hacía la
+migración imposible de aplicar contra Neon. Un test que solo lee texto no puede
+detectarlo; uno que corre SQL lo detecta a la primera.
+
+[`test_p1_pantry_roundtrip_e2e.py`](../tests/test_p1_pantry_roundtrip_e2e.py)
+levanta el esquema, aplica las migraciones **verbatim** y ejercita las funciones
+y los endpoints reales:
+
+```bash
+createdb mealfit_e2e
+MEALFIT_E2E_DATABASE_URL=postgresql://user:pass@127.0.0.1:5432/mealfit_e2e \
+    pytest backend/tests/test_p1_pantry_roundtrip_e2e.py -v
+```
+
+Sin esa variable, los 12 casos se **saltan**: los runners de CI no tienen
+Postgres, y un test que revienta por falta de infraestructura entrena a la gente
+a ignorar el rojo.
+
+Qué cubre, por orden de lo que rompe primero:
+
+| Caso | Por qué está |
+|---|---|
+| `"2 huevos"` (plural) contra la fila `Huevo` | El bug original: devolvía éxito SIN descontar |
+| Comer → deshacer → la Nevera queda idéntica | El round-trip completo, que es el producto |
+| Deshacer dos veces | Doble tap / reintento no puede duplicar comida |
+| Conversión `lonjas` ↔ `lb` simétrica | Una conversión asimétrica hace derivar la Nevera en silencio, comida a comida |
+| Deshacer un `not_in_pantry` | No puede CREAR comida que nunca estuvo |
+| Listar candidatos no mueve nada | El invariante de la fase 5: el banner pregunta, no descuenta |
+| `spoiled` ≠ `used` en el ledger | Colapsarlos haría imposible medir desperdicio |
+| Un ajeno intenta deshacer/resolver | IDOR, en las dos superficies |
+| Los endpoints, no solo las funciones | Que el router exponga bien lo que ya funciona |
+| El diario guarda 420 kcal, no 0 | El plato usa `cals`/`meal`; renombrarlos vaciaría el diario en silencio |
+
+⚠️ Límite conocido: las tablas base (`user_inventory`, `consumed_meals`,
+`user_profiles`, `master_ingredients`, `meal_plans`) son anteriores a la
+convención `migrations/` y **no están versionadas en ninguna parte**. El
+bootstrap del test las reconstruye desde lo que el código lee y escribe, así que
+si producción tiene columnas que ahí faltan, el harness puede pasar mientras
+producción falla — pasó tres veces mientras se escribía. Lo fiel al 100% son las
+migraciones reales, que se aplican sin editar.
