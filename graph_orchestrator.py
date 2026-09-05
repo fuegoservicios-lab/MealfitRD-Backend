@@ -18340,7 +18340,7 @@ _EGG_SWAP_PASSTHROUGH_ADV = frozenset((
     "completamente", "totalmente", "bien", "muy", "sumamente", "perfectamente",
 ))
 _EGG_SWAP_TAIL_RX = _re.compile(
-    r"(\byogur griego\b)((?:\s+[A-Za-zÁÉÍÓÚÜÑáéíóúüñ]+)*)", _re.IGNORECASE)
+    r"(\byogurt? griego\b)((?:\s+[A-Za-zÁÉÍÓÚÜÑáéíóúüñ]+)*)", _re.IGNORECASE)  # [P1-CLOSER-LIGHT-SLOT-NO-MEAT] también "Yogurt Griego" (el nombre)
 
 # [P1-SUBST-STALE-STEP · 2026-08-01] Plan real 97.2 (5f4bb17e-14cb-4db3-8d97-79933af690cf, día 2
 # Desayuno "Batido Caribeño de Mango, Avena y Chía"): `_egg_step_subs` renombra la MENCIÓN del
@@ -18668,6 +18668,10 @@ def _substitute_blended_raw_egg(meal: dict, db) -> bool:
                     _nm_new = _re.sub(r"\bclaras?\s+de\s+huevo\b|\bclaras?\b|\bhuevos?\b",
                                       "Yogurt Griego", _nm_es, count=1, flags=_re.IGNORECASE)
                 _nm_new = _re.sub(r"\s+", " ", _nm_new).strip(" ,y")
+                # [P1-CLOSER-LIGHT-SLOT-NO-MEAT · 2026-09-05] "…con huevo cocido" → "…con Yogurt Griego
+                # cocido" (plan vivo c0dc2519, desayuno): el reparador de concordancia solo corría en los
+                # pasos. Mismo reparador sobre el nombre (anclado a "yogur(t) griego", nada más se toca).
+                _nm_new = _fix_egg_swap_dangling_adjectives(_nm_new)
                 if _nm_new and _nm_new != _nm_es:
                     meal["name"] = _nm_new
                     logger.info(f"🥚 [P1-MENU-COHERENCE-2] swap huevo→yogur sincronizó el nombre: "
@@ -20593,6 +20597,15 @@ def _reflect_added_protein_in_name(meal: dict, protein_name: str, strip_accents_
         proper = " ".join(w if w.lower() in _NAME_STOPWORDS else w.capitalize()
                           for w in pname.split())
         connector = _name_connector_for(name)
+        # [P1-CLOSER-LIGHT-SLOT-NO-MEAT · 2026-09-05 · enumeración] Con la enumeración ya abierta
+        # ("A con B y C") el conector era la coma y el título quedaba "…mantequilla de maní, Camarones"
+        # / "…durazno y almendras, Huevo" (plan vivo c0dc2519): la coma final NO es castellano. Se
+        # reabre la enumeración: "A con B, C y D". Sin " y " localizable cae a la coma de antes.
+        if connector == ", ":
+            _m_enum = _re.search(r"\s+y\s+(?=[^,]*$)", name, flags=_re.IGNORECASE)
+            if _m_enum:
+                meal["name"] = f"{name[:_m_enum.start()]}, {name[_m_enum.end():]} y {proper}"
+                return True
         meal["name"] = f"{name}{connector}{proper}"
         return True
     except Exception:

@@ -93,3 +93,30 @@ def test_marker_and_anchor_present():
     src = (_BACKEND / "graph_orchestrator.py").read_text(encoding="utf-8")
     assert "tooltip-anchor: P1-CLOSER-LIGHT-SLOT-NO-MEAT" in src
     assert "_freq[_lbl] = _freq.get(_lbl, 0) + 1" in src
+
+
+# ─── el título tras el cerrador / el swap de huevo ───────────────────────────────────────────────
+
+def test_reflection_reopens_the_enumeration_instead_of_a_trailing_comma(monkeypatch):
+    monkeypatch.setattr(go, "CLOSER_DISH_COHERENCE_ENABLED", True)
+    m = {"name": "Vaso de toronja con almendras y mantequilla de maní"}
+    assert go._reflect_added_protein_in_name(m, "yogurt griego entero", _sa) is True
+    assert m["name"] == "Vaso de toronja con almendras, mantequilla de maní y Yogurt Griego Entero"
+    m2 = {"name": "Queso blanco fresco con durazno y almendras"}
+    go._reflect_added_protein_in_name(m2, "huevo", _sa)
+    assert m2["name"] == "Queso blanco fresco con durazno, almendras y Huevo"
+    # los dos casos previos del conector siguen igual
+    m3 = {"name": "Revoltillo con Kale"}; go._reflect_added_protein_in_name(m3, "yogur griego", _sa)
+    assert m3["name"] == "Revoltillo con Kale y Yogur Griego"
+    m4 = {"name": "Batido de Frutas"}; go._reflect_added_protein_in_name(m4, "yogur griego", _sa)
+    assert m4["name"] == "Batido de Frutas con Yogur Griego"
+
+
+def test_egg_to_yogurt_name_sync_drops_the_dangling_participle():
+    assert go._fix_egg_swap_dangling_adjectives("Batido espeso de avena con Yogurt Griego cocido") == \
+        "Batido espeso de avena con Yogurt Griego"
+    assert go._fix_egg_swap_dangling_adjectives("Tostadas con yogur griego entero y aguacate") == \
+        "Tostadas con yogur griego entero y aguacate"
+    src = (_BACKEND / "graph_orchestrator.py").read_text(encoding="utf-8")
+    i = src.index("swap huevo→yogur sincronizó el nombre")
+    assert "_nm_new = _fix_egg_swap_dangling_adjectives(_nm_new)" in src[i - 900:i], "el nombre pasa por el reparador"
