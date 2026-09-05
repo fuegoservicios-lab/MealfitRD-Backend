@@ -2809,6 +2809,215 @@
           "grams": 8.0
         }
       ]
+    },
+    {
+      "name": "Tortilla francesa con queso curado y pan tostado (de despensa)",
+      "slots": [
+        "desayuno"
+      ],
+      "protein": "huevo",
+      "base": "none",
+      "technique": "sartén",
+      "transform": false,
+      "constituents": [
+        {
+          "name": "Huevo",
+          "grams": 100.0
+        },
+        {
+          "name": "Queso gouda",
+          "grams": 25.0
+        },
+        {
+          "name": "Galletas de soda",
+          "grams": 25.0
+        },
+        {
+          "name": "Aceite de oliva",
+          "grams": 5.0
+        }
+      ]
+    },
+    {
+      "name": "Gachas de avena con leche evaporada y manzana",
+      "slots": [
+        "desayuno"
+      ],
+      "protein": "none",
+      "base": "avena",
+      "technique": "hervido",
+      "transform": false,
+      "constituents": [
+        {
+          "name": "Avena",
+          "grams": 50.0
+        },
+        {
+          "name": "Leche evaporada",
+          "grams": 80.0
+        },
+        {
+          "name": "Manzana",
+          "grams": 100.0
+        },
+        {
+          "name": "Canela en polvo",
+          "grams": 1.0
+        }
+      ]
+    },
+    {
+      "name": "Huevos revueltos con jamón serrano y cebolla",
+      "slots": [
+        "desayuno",
+        "cena"
+      ],
+      "protein": "huevo",
+      "base": "none",
+      "technique": "revuelto",
+      "transform": false,
+      "constituents": [
+        {
+          "name": "Huevo",
+          "grams": 100.0
+        },
+        {
+          "name": "Jamón serrano",
+          "grams": 25.0
+        },
+        {
+          "name": "Cebolla",
+          "grams": 30.0
+        },
+        {
+          "name": "Aceite de oliva",
+          "grams": 5.0
+        }
+      ]
+    },
+    {
+      "name": "Patatas a lo pobre con huevo",
+      "slots": [
+        "cena"
+      ],
+      "protein": "huevo",
+      "base": "papa",
+      "technique": "salteado",
+      "transform": false,
+      "constituents": [
+        {
+          "name": "Papa",
+          "grams": 180.0
+        },
+        {
+          "name": "Cebolla",
+          "grams": 50.0
+        },
+        {
+          "name": "Huevo",
+          "grams": 50.0
+        },
+        {
+          "name": "Aceite de oliva",
+          "grams": 10.0
+        },
+        {
+          "name": "Pimentón",
+          "grams": 1.0
+        }
+      ]
+    },
+    {
+      "name": "Queso curado con nueces y manzana",
+      "slots": [
+        "merienda"
+      ],
+      "protein": "queso",
+      "base": "none",
+      "technique": "frío",
+      "transform": false,
+      "constituents": [
+        {
+          "name": "Queso gouda",
+          "grams": 40.0
+        },
+        {
+          "name": "Nuez de Castilla",
+          "grams": 15.0
+        },
+        {
+          "name": "Manzana",
+          "grams": 100.0
+        }
+      ]
+    },
+    {
+      "name": "Galletas de soda con atún y aceitunas",
+      "slots": [
+        "merienda"
+      ],
+      "protein": "atun",
+      "base": "pan",
+      "technique": "frío",
+      "transform": false,
+      "constituents": [
+        {
+          "name": "Galletas de soda",
+          "grams": 30.0
+        },
+        {
+          "name": "Atún en agua",
+          "grams": 60.0
+        },
+        {
+          "name": "Aceitunas",
+          "grams": 15.0
+        }
+      ]
+    },
+    {
+      "name": "Almendras con dátiles y naranja",
+      "slots": [
+        "merienda"
+      ],
+      "protein": "none",
+      "base": "none",
+      "technique": "frío",
+      "transform": false,
+      "constituents": [
+        {
+          "name": "Almendras fileteadas",
+          "grams": 20.0
+        },
+        {
+          "name": "Dátiles",
+          "grams": 20.0
+        },
+        {
+          "name": "Naranja",
+          "grams": 150.0
+        }
+      ]
+    },
+    {
+      "name": "Turrón con almendra y mandarina",
+      "slots": [
+        "merienda"
+      ],
+      "protein": "none",
+      "base": "none",
+      "technique": "frío",
+      "transform": false,
+      "constituents": [
+        {
+          "name": "Turrón",
+          "grams": 30.0
+        },
+        {
+          "name": "Naranja",
+          "grams": 120.0
+        }
+      ]
     }
   ]
 }

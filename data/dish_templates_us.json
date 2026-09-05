@@ -2587,6 +2587,282 @@
           "grams": 50.0
         }
       ]
+    },
+    {
+      "name": "Avena con leche evaporada, nueces y canela",
+      "slots": [
+        "desayuno"
+      ],
+      "protein": "none",
+      "base": "avena",
+      "technique": "hervido",
+      "transform": false,
+      "constituents": [
+        {
+          "name": "Avena",
+          "grams": 50.0
+        },
+        {
+          "name": "Leche evaporada",
+          "grams": 80.0
+        },
+        {
+          "name": "Nuez de Castilla",
+          "grams": 15.0
+        },
+        {
+          "name": "Canela en polvo",
+          "grams": 1.0
+        }
+      ]
+    },
+    {
+      "name": "Huevos revueltos con papa y cebolla",
+      "slots": [
+        "desayuno"
+      ],
+      "protein": "huevo",
+      "base": "papa",
+      "technique": "revuelto",
+      "transform": false,
+      "constituents": [
+        {
+          "name": "Huevo",
+          "grams": 100.0
+        },
+        {
+          "name": "Papa",
+          "grams": 120.0
+        },
+        {
+          "name": "Cebolla",
+          "grams": 30.0
+        },
+        {
+          "name": "Aceite de oliva",
+          "grams": 6.0
+        }
+      ]
+    },
+    {
+      "name": "Burrito de huevo y frijoles refritos",
+      "slots": [
+        "desayuno"
+      ],
+      "protein": "huevo",
+      "base": "pan",
+      "technique": "salteado",
+      "transform": true,
+      "constituents": [
+        {
+          "name": "Tortilla integral",
+          "grams": 60.0
+        },
+        {
+          "name": "Huevo",
+          "grams": 100.0
+        },
+        {
+          "name": "Frijoles refritos",
+          "grams": 50.0
+        },
+        {
+          "name": "Queso cheddar",
+          "grams": 25.0
+        }
+      ]
+    },
+    {
+      "name": "Arroz integral con lentejas y huevo",
+      "slots": [
+        "almuerzo"
+      ],
+      "protein": "legumbre",
+      "base": "arroz",
+      "technique": "guisado",
+      "transform": true,
+      "constituents": [
+        {
+          "name": "Arroz integral",
+          "grams": 60.0
+        },
+        {
+          "name": "Lentejas",
+          "grams": 60.0
+        },
+        {
+          "name": "Huevo",
+          "grams": 50.0
+        },
+        {
+          "name": "Cebolla",
+          "grams": 30.0
+        },
+        {
+          "name": "Comino",
+          "grams": 1.0
+        }
+      ]
+    },
+    {
+      "name": "Pasta con salsa de tomate, atún y parmesano",
+      "slots": [
+        "almuerzo"
+      ],
+      "protein": "atun",
+      "base": "pasta",
+      "technique": "guisado",
+      "transform": false,
+      "constituents": [
+        {
+          "name": "Pasta integral",
+          "grams": 70.0
+        },
+        {
+          "name": "Salsa de tomate",
+          "grams": 100.0
+        },
+        {
+          "name": "Atún en agua",
+          "grams": 80.0
+        },
+        {
+          "name": "Queso parmesano",
+          "grams": 10.0
+        },
+        {
+          "name": "Ajo",
+          "grams": 5.0
+        }
+      ]
+    },
+    {
+      "name": "Ensalada de garbanzos con zanahoria y mostaza",
+      "slots": [
+        "almuerzo"
+      ],
+      "protein": "legumbre",
+      "base": "legumbre",
+      "technique": "frío",
+      "transform": false,
+      "constituents": [
+        {
+          "name": "Garbanzos",
+          "grams": 70.0
+        },
+        {
+          "name": "Zanahoria",
+          "grams": 60.0
+        },
+        {
+          "name": "Cebolla",
+          "grams": 20.0
+        },
+        {
+          "name": "Mostaza",
+          "grams": 5.0
+        },
+        {
+          "name": "Aceite de oliva",
+          "grams": 8.0
+        },
+        {
+          "name": "Limón",
+          "grams": 10.0
+        }
+      ]
+    },
+    {
+      "name": "Papa al horno con frijoles pintos y cheddar",
+      "slots": [
+        "cena"
+      ],
+      "protein": "legumbre",
+      "base": "papa",
+      "technique": "horneado",
+      "transform": false,
+      "constituents": [
+        {
+          "name": "Papa",
+          "grams": 220.0
+        },
+        {
+          "name": "Frijoles pintos",
+          "grams": 60.0
+        },
+        {
+          "name": "Queso cheddar",
+          "grams": 25.0
+        },
+        {
+          "name": "Cebolla",
+          "grams": 20.0
+        }
+      ]
+    },
+    {
+      "name": "Guiso de lentejas con papa y salsa de tomate",
+      "slots": [
+        "cena"
+      ],
+      "protein": "legumbre",
+      "base": "legumbre",
+      "technique": "guisado",
+      "transform": true,
+      "constituents": [
+        {
+          "name": "Lentejas",
+          "grams": 70.0
+        },
+        {
+          "name": "Zanahoria",
+          "grams": 60.0
+        },
+        {
+          "name": "Cebolla",
+          "grams": 40.0
+        },
+        {
+          "name": "Salsa de tomate",
+          "grams": 40.0
+        },
+        {
+          "name": "Comino",
+          "grams": 1.0
+        },
+        {
+          "name": "Papa",
+          "grams": 100.0
+        }
+      ]
+    },
+    {
+      "name": "Omelet de queso cheddar con cebolla",
+      "slots": [
+        "cena"
+      ],
+      "protein": "huevo",
+      "base": "none",
+      "technique": "sartén",
+      "transform": false,
+      "constituents": [
+        {
+          "name": "Huevo",
+          "grams": 100.0
+        },
+        {
+          "name": "Queso cheddar",
+          "grams": 30.0
+        },
+        {
+          "name": "Cebolla",
+          "grams": 30.0
+        },
+        {
+          "name": "Aceite de oliva",
+          "grams": 5.0
+        }
+      ]
     }
   ]
 }

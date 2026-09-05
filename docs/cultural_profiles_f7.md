@@ -151,9 +151,11 @@ formulario apenas se usaba.
   queda solo para planes antiguos): se respeta la compra única y se declara `pantry_proteins_after_first_week`.
 - **PDF / lista**: el rótulo de perecederos dice lo que toca según el congelador (sin congelador: consume primero;
   limitado: congela lo de la segunda semana; completo: congela el día de la compra), en 5 idiomas.
-- **Bibliotecas**: +80 platos de despensa duradera (DO 111 · ES 96 · MX 95 · CO 99 · PR 99 · US 94), cada biblioteca con ≥ 12
-  platos `pantry_only`, ≥ 4 técnicas y las familias atún / huevo / legumbre; cada franja principal tiene candidatos para el
-  día 30 sin congelador. Test: `test_p1_arq25_f7_culture_pantry.py`.
+- **Bibliotecas**: dos tandas de despensa duradera (+155 platos: DO 123 · ES 104 · MX 109 · CO 118 · PR 110 · US 103). La segunda
+  tanda nació de MEDIR la cobertura real al día 30 sin congelador (MX tenía 1 desayuno, 2 cenas y 0 meriendas que aguantaran):
+  se calibraron los días del refrigerado duradero (cebolla/ajo 60; papa, auyama, repollo, zanahoria y quesos curados 45; cítricos,
+  tortillas, batata, ñame 30) y se añadieron platos para las franjas delgadas. Listón del test: al día 30 sin congelador,
+  desayuno ≥ 7 · almuerzo ≥ 9 · cena ≥ 8 · merienda ≥ 6 candidatos en cada biblioteca. Test: `test_p1_arq25_f7_culture_pantry.py`.
 
 ## 8. Lo que NO hace (a propósito)
 

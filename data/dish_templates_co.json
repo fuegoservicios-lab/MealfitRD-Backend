@@ -2692,6 +2692,535 @@
           "grams": 6.0
         }
       ]
+    },
+    {
+      "name": "Arepa de harina con huevo revuelto y cebolla",
+      "slots": [
+        "desayuno"
+      ],
+      "protein": "huevo",
+      "base": "maiz",
+      "technique": "plancha",
+      "transform": false,
+      "constituents": [
+        {
+          "name": "Harina de maíz precocida",
+          "grams": 60.0
+        },
+        {
+          "name": "Huevo",
+          "grams": 100.0
+        },
+        {
+          "name": "Cebolla",
+          "grams": 30.0
+        },
+        {
+          "name": "Aceite vegetal",
+          "grams": 5.0
+        }
+      ]
+    },
+    {
+      "name": "Avena con leche evaporada y canela",
+      "slots": [
+        "desayuno"
+      ],
+      "protein": "none",
+      "base": "avena",
+      "technique": "hervido",
+      "transform": false,
+      "constituents": [
+        {
+          "name": "Avena",
+          "grams": 50.0
+        },
+        {
+          "name": "Leche evaporada",
+          "grams": 80.0
+        },
+        {
+          "name": "Canela en polvo",
+          "grams": 1.0
+        },
+        {
+          "name": "Panela",
+          "grams": 8.0
+        }
+      ]
+    },
+    {
+      "name": "Calentado de fríjoles con arroz y huevo",
+      "slots": [
+        "almuerzo"
+      ],
+      "protein": "legumbre",
+      "base": "arroz",
+      "technique": "salteado",
+      "transform": true,
+      "constituents": [
+        {
+          "name": "Frijol cargamanto",
+          "grams": 60.0
+        },
+        {
+          "name": "Arroz blanco",
+          "grams": 60.0
+        },
+        {
+          "name": "Huevo",
+          "grams": 50.0
+        },
+        {
+          "name": "Cebolla",
+          "grams": 20.0
+        },
+        {
+          "name": "Aceite vegetal",
+          "grams": 5.0
+        }
+      ]
+    },
+    {
+      "name": "Huevos con papa y cebolla (revueltos)",
+      "slots": [
+        "desayuno"
+      ],
+      "protein": "huevo",
+      "base": "papa",
+      "technique": "revuelto",
+      "transform": false,
+      "constituents": [
+        {
+          "name": "Huevo",
+          "grams": 100.0
+        },
+        {
+          "name": "Papa",
+          "grams": 100.0
+        },
+        {
+          "name": "Cebolla",
+          "grams": 30.0
+        },
+        {
+          "name": "Aceite vegetal",
+          "grams": 5.0
+        }
+      ]
+    },
+    {
+      "name": "Arepas con queso gouda a la plancha",
+      "slots": [
+        "desayuno",
+        "merienda"
+      ],
+      "protein": "queso",
+      "base": "maiz",
+      "technique": "plancha",
+      "transform": false,
+      "constituents": [
+        {
+          "name": "Harina de maíz precocida",
+          "grams": 60.0
+        },
+        {
+          "name": "Queso gouda",
+          "grams": 35.0
+        }
+      ]
+    },
+    {
+      "name": "Arroz con atún, huevo y cebolla",
+      "slots": [
+        "almuerzo"
+      ],
+      "protein": "atun",
+      "base": "arroz",
+      "technique": "salteado",
+      "transform": false,
+      "constituents": [
+        {
+          "name": "Arroz blanco",
+          "grams": 60.0
+        },
+        {
+          "name": "Atún en agua",
+          "grams": 80.0
+        },
+        {
+          "name": "Huevo",
+          "grams": 50.0
+        },
+        {
+          "name": "Cebolla",
+          "grams": 30.0
+        },
+        {
+          "name": "Aceite vegetal",
+          "grams": 5.0
+        }
+      ]
+    },
+    {
+      "name": "Lentejas guisadas con papa y arroz",
+      "slots": [
+        "almuerzo"
+      ],
+      "protein": "legumbre",
+      "base": "legumbre",
+      "technique": "guisado",
+      "transform": true,
+      "constituents": [
+        {
+          "name": "Lentejas",
+          "grams": 70.0
+        },
+        {
+          "name": "Papa",
+          "grams": 80.0
+        },
+        {
+          "name": "Arroz blanco",
+          "grams": 50.0
+        },
+        {
+          "name": "Zanahoria",
+          "grams": 40.0
+        },
+        {
+          "name": "Cebolla",
+          "grams": 30.0
+        },
+        {
+          "name": "Comino",
+          "grams": 1.0
+        }
+      ]
+    },
+    {
+      "name": "Sardinas guisadas con arroz y zanahoria",
+      "slots": [
+        "almuerzo"
+      ],
+      "protein": "pescado",
+      "base": "arroz",
+      "technique": "guisado",
+      "transform": false,
+      "constituents": [
+        {
+          "name": "Sardinas en lata",
+          "grams": 90.0
+        },
+        {
+          "name": "Arroz blanco",
+          "grams": 60.0
+        },
+        {
+          "name": "Zanahoria",
+          "grams": 50.0
+        },
+        {
+          "name": "Salsa de tomate",
+          "grams": 40.0
+        },
+        {
+          "name": "Cebolla",
+          "grams": 30.0
+        }
+      ]
+    },
+    {
+      "name": "Garbanzos con arroz y huevo duro",
+      "slots": [
+        "almuerzo"
+      ],
+      "protein": "legumbre",
+      "base": "arroz",
+      "technique": "guisado",
+      "transform": true,
+      "constituents": [
+        {
+          "name": "Garbanzos",
+          "grams": 70.0
+        },
+        {
+          "name": "Arroz blanco",
+          "grams": 60.0
+        },
+        {
+          "name": "Huevo",
+          "grams": 50.0
+        },
+        {
+          "name": "Cebolla",
+          "grams": 30.0
+        },
+        {
+          "name": "Ajo",
+          "grams": 5.0
+        },
+        {
+          "name": "Comino",
+          "grams": 1.0
+        }
+      ]
+    },
+    {
+      "name": "Pasta con sardinas y cebolla",
+      "slots": [
+        "almuerzo"
+      ],
+      "protein": "pescado",
+      "base": "pasta",
+      "technique": "salteado",
+      "transform": false,
+      "constituents": [
+        {
+          "name": "Pasta integral",
+          "grams": 70.0
+        },
+        {
+          "name": "Sardinas en lata",
+          "grams": 90.0
+        },
+        {
+          "name": "Cebolla",
+          "grams": 40.0
+        },
+        {
+          "name": "Ajo",
+          "grams": 5.0
+        },
+        {
+          "name": "Aceite vegetal",
+          "grams": 6.0
+        }
+      ]
+    },
+    {
+      "name": "Sopa de lentejas con zanahoria y papa",
+      "slots": [
+        "cena"
+      ],
+      "protein": "legumbre",
+      "base": "legumbre",
+      "technique": "hervido",
+      "transform": false,
+      "constituents": [
+        {
+          "name": "Lentejas",
+          "grams": 60.0
+        },
+        {
+          "name": "Zanahoria",
+          "grams": 50.0
+        },
+        {
+          "name": "Papa",
+          "grams": 80.0
+        },
+        {
+          "name": "Cebolla",
+          "grams": 30.0
+        },
+        {
+          "name": "Comino",
+          "grams": 1.0
+        }
+      ]
+    },
+    {
+      "name": "Puré de auyama con huevo duro",
+      "slots": [
+        "cena"
+      ],
+      "protein": "huevo",
+      "base": "viveres",
+      "technique": "hervido",
+      "transform": false,
+      "constituents": [
+        {
+          "name": "Auyama",
+          "grams": 220.0
+        },
+        {
+          "name": "Huevo",
+          "grams": 100.0
+        },
+        {
+          "name": "Cebolla",
+          "grams": 20.0
+        }
+      ]
+    },
+    {
+      "name": "Papa guisada con atún",
+      "slots": [
+        "cena"
+      ],
+      "protein": "atun",
+      "base": "papa",
+      "technique": "guisado",
+      "transform": true,
+      "constituents": [
+        {
+          "name": "Papa",
+          "grams": 180.0
+        },
+        {
+          "name": "Atún en agua",
+          "grams": 90.0
+        },
+        {
+          "name": "Salsa de tomate",
+          "grams": 50.0
+        },
+        {
+          "name": "Cebolla",
+          "grams": 30.0
+        },
+        {
+          "name": "Comino",
+          "grams": 1.0
+        }
+      ]
+    },
+    {
+      "name": "Tortilla de huevo con papa y cebolla",
+      "slots": [
+        "cena"
+      ],
+      "protein": "huevo",
+      "base": "papa",
+      "technique": "sartén",
+      "transform": true,
+      "constituents": [
+        {
+          "name": "Huevo",
+          "grams": 100.0
+        },
+        {
+          "name": "Papa",
+          "grams": 120.0
+        },
+        {
+          "name": "Cebolla",
+          "grams": 40.0
+        },
+        {
+          "name": "Aceite vegetal",
+          "grams": 6.0
+        }
+      ]
+    },
+    {
+      "name": "Ñame hervido con huevo y queso gouda",
+      "slots": [
+        "cena"
+      ],
+      "protein": "huevo",
+      "base": "viveres",
+      "technique": "hervido",
+      "transform": false,
+      "constituents": [
+        {
+          "name": "Ñame",
+          "grams": 180.0
+        },
+        {
+          "name": "Huevo",
+          "grams": 100.0
+        },
+        {
+          "name": "Queso gouda",
+          "grams": 25.0
+        }
+      ]
+    },
+    {
+      "name": "Maní con panela",
+      "slots": [
+        "merienda"
+      ],
+      "protein": "none",
+      "base": "none",
+      "technique": "frío",
+      "transform": false,
+      "constituents": [
+        {
+          "name": "Maní",
+          "grams": 30.0
+        },
+        {
+          "name": "Panela",
+          "grams": 10.0
+        }
+      ]
+    },
+    {
+      "name": "Manzana con mantequilla de maní",
+      "slots": [
+        "merienda"
+      ],
+      "protein": "none",
+      "base": "none",
+      "technique": "frío",
+      "transform": false,
+      "constituents": [
+        {
+          "name": "Manzana",
+          "grams": 150.0
+        },
+        {
+          "name": "Mantequilla de maní",
+          "grams": 20.0
+        }
+      ]
+    },
+    {
+      "name": "Galletas de soda con queso gouda y arequipe",
+      "slots": [
+        "merienda"
+      ],
+      "protein": "queso",
+      "base": "pan",
+      "technique": "frío",
+      "transform": false,
+      "constituents": [
+        {
+          "name": "Galletas de soda",
+          "grams": 30.0
+        },
+        {
+          "name": "Queso gouda",
+          "grams": 25.0
+        },
+        {
+          "name": "Arequipe",
+          "grams": 15.0
+        }
+      ]
+    },
+    {
+      "name": "Naranja con maní",
+      "slots": [
+        "merienda"
+      ],
+      "protein": "none",
+      "base": "none",
+      "technique": "frío",
+      "transform": false,
+      "constituents": [
+        {
+          "name": "Naranja",
+          "grams": 150.0
+        },
+        {
+          "name": "Maní",
+          "grams": 20.0
+        }
+      ]
     }
   ]
 }

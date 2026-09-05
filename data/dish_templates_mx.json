@@ -2946,6 +2946,422 @@
           "grams": 40.0
         }
       ]
+    },
+    {
+      "name": "Huevos revueltos con frijoles refritos y tortillas",
+      "slots": [
+        "desayuno"
+      ],
+      "protein": "huevo",
+      "base": "legumbre",
+      "technique": "revuelto",
+      "transform": false,
+      "constituents": [
+        {
+          "name": "Huevo",
+          "grams": 100.0
+        },
+        {
+          "name": "Frijoles refritos",
+          "grams": 70.0
+        },
+        {
+          "name": "Tortilla de maíz",
+          "grams": 60.0
+        },
+        {
+          "name": "Cebolla",
+          "grams": 20.0
+        }
+      ]
+    },
+    {
+      "name": "Avena con leche evaporada, canela y pasas",
+      "slots": [
+        "desayuno"
+      ],
+      "protein": "none",
+      "base": "avena",
+      "technique": "hervido",
+      "transform": false,
+      "constituents": [
+        {
+          "name": "Avena",
+          "grams": 50.0
+        },
+        {
+          "name": "Leche evaporada",
+          "grams": 80.0
+        },
+        {
+          "name": "Canela en polvo",
+          "grams": 1.0
+        },
+        {
+          "name": "Pasas",
+          "grams": 15.0
+        }
+      ]
+    },
+    {
+      "name": "Chilaquiles rojos con queso (salsa de despensa)",
+      "slots": [
+        "desayuno"
+      ],
+      "protein": "queso",
+      "base": "maiz",
+      "technique": "salteado",
+      "transform": true,
+      "constituents": [
+        {
+          "name": "Tortilla de maíz",
+          "grams": 80.0
+        },
+        {
+          "name": "Salsa de tomate",
+          "grams": 80.0
+        },
+        {
+          "name": "Chile guajillo",
+          "grams": 5.0
+        },
+        {
+          "name": "Queso en hebras",
+          "grams": 30.0
+        },
+        {
+          "name": "Cebolla",
+          "grams": 20.0
+        },
+        {
+          "name": "Aceite vegetal",
+          "grams": 6.0
+        }
+      ]
+    },
+    {
+      "name": "Arroz con lentejas y huevo estrellado",
+      "slots": [
+        "almuerzo"
+      ],
+      "protein": "legumbre",
+      "base": "arroz",
+      "technique": "guisado",
+      "transform": true,
+      "constituents": [
+        {
+          "name": "Arroz blanco",
+          "grams": 60.0
+        },
+        {
+          "name": "Lentejas",
+          "grams": 60.0
+        },
+        {
+          "name": "Huevo",
+          "grams": 50.0
+        },
+        {
+          "name": "Cebolla",
+          "grams": 30.0
+        },
+        {
+          "name": "Comino",
+          "grams": 1.0
+        },
+        {
+          "name": "Aceite vegetal",
+          "grams": 5.0
+        }
+      ]
+    },
+    {
+      "name": "Sopa de fideo con huevo",
+      "slots": [
+        "almuerzo"
+      ],
+      "protein": "huevo",
+      "base": "pasta",
+      "technique": "hervido",
+      "transform": false,
+      "constituents": [
+        {
+          "name": "Fideos",
+          "grams": 60.0
+        },
+        {
+          "name": "Salsa de tomate",
+          "grams": 60.0
+        },
+        {
+          "name": "Huevo",
+          "grams": 100.0
+        },
+        {
+          "name": "Cebolla",
+          "grams": 20.0
+        },
+        {
+          "name": "Ajo",
+          "grams": 5.0
+        }
+      ]
+    },
+    {
+      "name": "Tostadas de atún con frijoles refritos",
+      "slots": [
+        "almuerzo"
+      ],
+      "protein": "atun",
+      "base": "maiz",
+      "technique": "frío",
+      "transform": false,
+      "constituents": [
+        {
+          "name": "Tortilla de maíz",
+          "grams": 60.0
+        },
+        {
+          "name": "Frijoles refritos",
+          "grams": 60.0
+        },
+        {
+          "name": "Atún en agua",
+          "grams": 90.0
+        },
+        {
+          "name": "Cebolla",
+          "grams": 20.0
+        },
+        {
+          "name": "Limón",
+          "grams": 10.0
+        }
+      ]
+    },
+    {
+      "name": "Frijoles charros con chipotle y cebolla",
+      "slots": [
+        "almuerzo"
+      ],
+      "protein": "legumbre",
+      "base": "legumbre",
+      "technique": "guisado",
+      "transform": true,
+      "constituents": [
+        {
+          "name": "Frijoles pintos",
+          "grams": 70.0
+        },
+        {
+          "name": "Salsa de tomate",
+          "grams": 60.0
+        },
+        {
+          "name": "Cebolla",
+          "grams": 40.0
+        },
+        {
+          "name": "Chile chipotle",
+          "grams": 3.0
+        },
+        {
+          "name": "Comino",
+          "grams": 1.0
+        },
+        {
+          "name": "Arroz blanco",
+          "grams": 50.0
+        }
+      ]
+    },
+    {
+      "name": "Papas con huevo y chile guajillo",
+      "slots": [
+        "cena"
+      ],
+      "protein": "huevo",
+      "base": "papa",
+      "technique": "salteado",
+      "transform": false,
+      "constituents": [
+        {
+          "name": "Papa",
+          "grams": 180.0
+        },
+        {
+          "name": "Huevo",
+          "grams": 100.0
+        },
+        {
+          "name": "Chile guajillo",
+          "grams": 4.0
+        },
+        {
+          "name": "Cebolla",
+          "grams": 30.0
+        },
+        {
+          "name": "Aceite vegetal",
+          "grams": 6.0
+        }
+      ]
+    },
+    {
+      "name": "Caldo de frijol negro con tortillas",
+      "slots": [
+        "cena"
+      ],
+      "protein": "legumbre",
+      "base": "legumbre",
+      "technique": "hervido",
+      "transform": false,
+      "constituents": [
+        {
+          "name": "Habichuelas negras",
+          "grams": 70.0
+        },
+        {
+          "name": "Cebolla",
+          "grams": 30.0
+        },
+        {
+          "name": "Ajo",
+          "grams": 5.0
+        },
+        {
+          "name": "Comino",
+          "grams": 1.0
+        },
+        {
+          "name": "Tortilla de maíz",
+          "grams": 60.0
+        }
+      ]
+    },
+    {
+      "name": "Atún guisado con papa y chipotle",
+      "slots": [
+        "cena"
+      ],
+      "protein": "atun",
+      "base": "papa",
+      "technique": "guisado",
+      "transform": true,
+      "constituents": [
+        {
+          "name": "Atún en agua",
+          "grams": 100.0
+        },
+        {
+          "name": "Papa",
+          "grams": 150.0
+        },
+        {
+          "name": "Salsa de tomate",
+          "grams": 60.0
+        },
+        {
+          "name": "Chile chipotle",
+          "grams": 3.0
+        },
+        {
+          "name": "Cebolla",
+          "grams": 30.0
+        }
+      ]
+    },
+    {
+      "name": "Cacahuates con pasas",
+      "slots": [
+        "merienda"
+      ],
+      "protein": "none",
+      "base": "none",
+      "technique": "frío",
+      "transform": false,
+      "constituents": [
+        {
+          "name": "Maní",
+          "grams": 30.0
+        },
+        {
+          "name": "Pasas",
+          "grams": 15.0
+        }
+      ]
+    },
+    {
+      "name": "Manzana con chile en polvo y limón",
+      "slots": [
+        "merienda"
+      ],
+      "protein": "none",
+      "base": "none",
+      "technique": "frío",
+      "transform": false,
+      "constituents": [
+        {
+          "name": "Manzana",
+          "grams": 150.0
+        },
+        {
+          "name": "Chile en polvo",
+          "grams": 1.0
+        },
+        {
+          "name": "Limón",
+          "grams": 10.0
+        }
+      ]
+    },
+    {
+      "name": "Naranja con canela y nueces",
+      "slots": [
+        "merienda"
+      ],
+      "protein": "none",
+      "base": "none",
+      "technique": "frío",
+      "transform": false,
+      "constituents": [
+        {
+          "name": "Naranja",
+          "grams": 150.0
+        },
+        {
+          "name": "Canela en polvo",
+          "grams": 1.0
+        },
+        {
+          "name": "Nuez de Castilla",
+          "grams": 15.0
+        }
+      ]
+    },
+    {
+      "name": "Galletas de soda con frijoles refritos y queso",
+      "slots": [
+        "merienda"
+      ],
+      "protein": "legumbre",
+      "base": "pan",
+      "technique": "frío",
+      "transform": false,
+      "constituents": [
+        {
+          "name": "Galletas de soda",
+          "grams": 30.0
+        },
+        {
+          "name": "Frijoles refritos",
+          "grams": 50.0
+        },
+        {
+          "name": "Queso en hebras",
+          "grams": 20.0
+        }
+      ]
     }
   ]
 }
