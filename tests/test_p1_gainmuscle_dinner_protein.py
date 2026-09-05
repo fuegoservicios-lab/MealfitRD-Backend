@@ -58,6 +58,6 @@ def test_prompt_adds_the_dinner_rule_only_for_gain_muscle(monkeypatch):
 
 def test_wiring_in_orchestrator():
     src = (_BACKEND / "graph_orchestrator.py").read_text(encoding="utf-8")
-    assert '{crossday_block}{gm_dinner_block}{user_context}' in src, "el bloque entra en el prompt de la autocrítica"
+    assert '{gm_dinner_block}{user_context}' in src, "el bloque entra en el prompt de la autocrítica"
     assert 'goal=(form_data or {}).get("mainGoal") or (form_data or {}).get("goal"),' in src, "el day-gen recibe el objetivo"
     assert "tooltip-anchor: P1-GAINMUSCLE-DINNER-PROTEIN" in src

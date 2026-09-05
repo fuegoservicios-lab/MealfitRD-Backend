@@ -1386,6 +1386,13 @@ def build_day_assignment_context(skeleton_day: dict, day_num: int, day_name: str
             f"en las dos comidas fuertes del día es un fallo: produce jornadas con papa en almuerzo Y "
             f"cena. Si el desayuno o la merienda ya llevan una de las dos, tanto mejor variar."
         )
+    # [P2-LIGHT-BASE-NO-REPEAT · 2026-09-05] La regla de arriba solo mira almuerzo↔cena: el plan vivo 82d6f2a5 llevaba
+    # 80 g de avena en el desayuno Y 65 g en la merienda del mismo día (dos comidas ligeras con la MISMA base).
+    carb_no_repeat_block += (
+        "\n• ⛔ TAMPOCO REPITAS LA BASE ENTRE DESAYUNO Y MERIENDA: si el desayuno es de avena, la merienda NO lleva "
+        "avena (usa fruta con lácteo, pan integral, casabe, tostada de maíz, frutos secos o yogur); la misma base de "
+        "cereal dos veces en el día se lee como el mismo plato repetido."
+    )
 
     # [P1-DIET-BLIND-DIRECTIVES · 2026-08-08] La versión balanced de este bloque ordenaba
     # "prioriza proteína animal magra (pollo, pescado, res...)" también a dietas veg* — una de las

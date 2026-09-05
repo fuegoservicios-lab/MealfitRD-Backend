@@ -10672,6 +10672,42 @@ _SAME_DAY_PROTEIN_GATE_LABELS = _HEAVY_PROTEIN_LABELS | {"huevo"}
 GAINMUSCLE_DINNER_PROTEIN_ENABLED = _env_bool("MEALFIT_GAINMUSCLE_DINNER_PROTEIN", True)
 
 
+LIGHT_BASE_REPEAT_ENABLED = _env_bool("MEALFIT_LIGHT_BASE_NO_REPEAT", True)
+_LIGHT_BASE_TOKENS = ("avena", "granola", "cereal", "hojuelas", "muesli", "pan integral", "casabe", "tostada", "arepa", "tortilla")
+
+
+def _detect_light_base_repeats(days: list) -> list:
+    """[P2-LIGHT-BASE-NO-REPEAT · 2026-09-05] Misma BASE de cereal/pan en desayuno Y merienda del mismo día (plan vivo
+    82d6f2a5: 80 g de avena en el desayuno y 65 g en la merienda). El gate de bases solo vigilaba almuerzo↔cena.
+    Devuelve textos «Día N: …» para la autocrítica. Puro; fail-safe ⇒ []. tooltip-anchor: P2-LIGHT-BASE-NO-REPEAT"""
+    try:
+        if not LIGHT_BASE_REPEAT_ENABLED:
+            return []
+        from constants import strip_accents as _sa_lb
+        out = []
+        for i, d in enumerate(days or []):
+            if not isinstance(d, dict):
+                continue
+            by_tok = {}
+            for m in (d.get("meals") or []):
+                if not isinstance(m, dict):
+                    continue
+                slot = _sa_lb(str(m.get("meal") or m.get("slot") or "").lower())
+                if not ("desayuno" in slot or "merienda" in slot or "snack" in slot):
+                    continue
+                blob = _sa_lb((str(m.get("name") or "") + " " + " ".join(str(x) for x in (m.get("ingredients") or []))).lower())
+                for tok in _LIGHT_BASE_TOKENS:
+                    if _re.search(r"\b" + _re.escape(tok), blob):
+                        by_tok.setdefault(tok, []).append(str(m.get("name") or "")[:40])
+            for tok, names in by_tok.items():
+                if len(names) >= 2:
+                    out.append(f"Día {i + 1}: «{tok}» es la base del desayuno Y de la merienda ({' / '.join(names)}); "
+                               f"cambia la base de una de las dos (fruta con lácteo, casabe, frutos secos, yogur)")
+        return out
+    except Exception:
+        return []
+
+
 def _detect_gainmuscle_dinner_issues(days: list, form_data: dict) -> list:
     """[P1-GAINMUSCLE-DINNER-PROTEIN · 2026-09-05] Señal DETERMINISTA para la autocrítica (no opinable), solo
     con objetivo de ganancia muscular: (1) una CENA sin ninguna proteína animal magra (labels pesados del gate:
@@ -11272,6 +11308,20 @@ async def self_critique_node(state: PlanState) -> dict:
     else:
         crossday_block = ""
 
+    # [P2-LIGHT-BASE-NO-REPEAT · 2026-09-05] misma base de cereal/pan en desayuno Y merienda
+    _light_base_issues = _detect_light_base_repeats(days)
+    light_base_block = ""
+    if _light_base_issues:
+        _lb_joined = "\n   - " + "\n   - ".join(_light_base_issues)
+        logger.info(f"🥣 [P2-LIGHT-BASE-NO-REPEAT] base repetida entre desayuno y merienda:{_lb_joined}")
+        light_base_block = (
+            f"\n⚠️ MISMA BASE EN DESAYUNO Y MERIENDA (conteo determinístico, no opinable):{_lb_joined}\n"
+            f"   BAJA diversity_score a 4 o menos, marca needs_correction=True y en suggestions di qué comida cambiar.\n"
+        )
+        if not suggested_day_hint:
+            _mlb = _re.search(r'[Dd]ía\s*(\d+)', _light_base_issues[0])
+            suggested_day_hint = f"Día {_mlb.group(1)}" if _mlb else "Día 1"
+
     # [P1-GAINMUSCLE-DINNER-PROTEIN · 2026-09-05] cena débil en ganancia muscular (determinista, no opinable)
     gm_dinner_block = ""
     _gm_dinner_issues = _detect_gainmuscle_dinner_issues(days, form_data)
@@ -11310,7 +11360,8 @@ async def self_critique_node(state: PlanState) -> dict:
             and not slot_issues and not heavy_protein_monotony
             and not cross_day_dish_repeats  # [P1-CRITIQUE-CROSSDAY-DISH-PARITY]
             and not ingredient_spread  # [P1-INGREDIENT-SPREAD]
-            and not _gm_dinner_issues):  # [P1-GAINMUSCLE-DINNER-PROTEIN]
+            and not _gm_dinner_issues  # [P1-GAINMUSCLE-DINNER-PROTEIN]
+            and not _light_base_issues):  # [P2-LIGHT-BASE-NO-REPEAT]
         logger.info(
             "⏭️ [SELF-CRITIQUE] Detectores determinísticos limpios (0 staples "
             "repetidos, 0 incoherencias de slot, 0 monotonía de proteína pesada, "
@@ -11343,7 +11394,7 @@ async def self_critique_node(state: PlanState) -> dict:
     human_content = f"""
 PLAN A EVALUAR (días generados):
 {days_summary_json}
-{policy_block}{staples_block}{spread_block}{slot_block}{crossday_block}{gm_dinner_block}{user_context}
+{policy_block}{staples_block}{spread_block}{slot_block}{crossday_block}{light_base_block}{gm_dinner_block}{user_context}
 {pista_dia}
 """.strip()
 
