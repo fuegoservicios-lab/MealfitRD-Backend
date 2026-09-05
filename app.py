@@ -61,7 +61,8 @@ _PROCESS_START_ISO = datetime.now(timezone.utc).isoformat()
 #   P2-CHAT-ANCHOR-SENT-TOP · 2026-09-04 — al enviar, el mensaje queda arriba y la respuesta crece debajo.
 #   P2-CHAT-SCROLL-MODES · 2026-09-04 — el scroll del chat como máquina de 3 modos (bottom/anchored/free); asentar-y-revelar al refrescar.
 #   P1-I18N-GLM-USER-TURN · 2026-09-04 — GLM rechaza un messages con solo system (400/1214): la capa _display del plan llevaba 2 días muerta para todo usuario no hispanohablante.
-_LAST_KNOWN_PFIX = "P1-I18N-GLM-USER-TURN · 2026-09-04"
+#   P2-PLAN-POLL-DORMANT-SLEEP · 2026-09-04 — el sondeo del plan dormido no se rinde: latido largo + despertar al volver a la pestaña; el banner «Dejamos de revisar» solo con pantalla muda.
+_LAST_KNOWN_PFIX = "P2-PLAN-POLL-DORMANT-SLEEP · 2026-09-04"
 
 # [P1-SENTRY-SAMPLE-COST · 2026-05-12] Sentry sampling driven from env vars
 # con default seguro 0.1 (10%). Pre-fix tenía `traces_sample_rate=1.0` y
