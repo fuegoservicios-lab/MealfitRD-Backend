@@ -242,7 +242,6 @@ def _signoff_for(profile_id: str, snapshot_hash: Optional[str]) -> Optional[dict
 
 def run_benchmark(*, catalog_rows: Optional[list] = None) -> dict:
     import cultural_profiles as cp
-    import dish_registry as dr
     snaps = _load_snapshots()
     report: dict[str, Any] = {"schema_version": 1, "bar": BAR, "profiles": {}, "gate_ok": False, "failures": []}
     if not snaps:

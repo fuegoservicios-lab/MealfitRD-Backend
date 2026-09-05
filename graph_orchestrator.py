@@ -5251,7 +5251,7 @@ def _strip_offered_prohibited_examples_for(prompt_text: str, form_data) -> str:
 
 
 def _day_system_instruction_for_diet(form_data) -> str:
-    from constants import canonicalize_diet_type as _cdt, country_for_form_data
+    from constants import canonicalize_diet_type as _cdt
     from prompts.day_generator import build_day_generator_system_prompt as _bdgsp
     canon = _cdt((form_data or {}).get("dietType") or (form_data or {}).get("diet"))
     country = cultural_country_for_form_data(form_data)
@@ -8669,7 +8669,6 @@ async def generate_days_parallel_node(state: PlanState) -> dict:
             _dg_targets = None
         # [P1-COUNTRY-SYSTEM-F1 · 2026-08-16 (T4)] país vía la ÚNICA puerta (T1) — knob apagado ⇒
         # 'DO' siempre ⇒ assignment_context toma el camino DO byte-idéntico.
-        from constants import country_for_form_data
         assignment_context = build_day_assignment_context(
             skeleton_day, day_num, day_name=day_name, daily_targets=_dg_targets,
             # [P1-STAPLE-FOODS · 2026-08-02] básicos del usuario + modo universo-chico.
@@ -8733,7 +8732,6 @@ async def generate_days_parallel_node(state: PlanState) -> dict:
             # [P1-COUNTRY-SYSTEM-F1 · 2026-08-16] + país (T2): country_for_form_data es la ÚNICA
             # puerta (T1) — knob apagado ⇒ 'DO' siempre ⇒ camino actual exacto.
             from prompts.day_generator import build_day_generator_system_prompt as _bdgsp_nc
-            from constants import country_for_form_data
             _nc_country = cultural_country_for_form_data(form_data)
             prompt_text = dynamic_day_prompt + _bdgsp_nc((form_data or {}).get("dietType"), _nc_country)
 
@@ -10793,7 +10791,7 @@ def _detect_slot_appropriateness(days: list, form_data: dict = None) -> list:
     para país != DO en el sitio de consumo (abajo), contenido a esta función; ningún otro
     consumidor de `slot_ingredient_violations` hereda el override."""
     from constants import slot_positive_hint as _sph
-    from constants import country_for_form_data, slot_rules_for_country
+    from constants import slot_rules_for_country
     from constants import _SLOT_POSITIVE_HINT_NEUTRAL as _dsa_hint_neutral
     _country = cultural_country_for_form_data(form_data)
     _rules_table = slot_rules_for_country(_country)
@@ -10984,7 +10982,6 @@ async def self_critique_node(state: PlanState) -> dict:
     # test_p3_cost_cut_v2.py) sin reescribirlo línea por línea. DO/knob-off ⇒ AMBOS resuelven
     # al MISMO objeto global (mismo `is`, cache/schema intactos); beta ⇒ variante con
     # cultural_score re-anclado a `name_es` (memoizada en _CRITIQUE_COUNTRY_ARTIFACT_CACHE).
-    from constants import country_for_form_data
     form_data = state.get("form_data") or {}
     _critique_country = cultural_country_for_form_data(form_data)
     # [P1-ARQ25-F3-HORIZON · 2026-09-02] El evaluador lee la política del run: con recurrencia
@@ -25603,7 +25600,6 @@ def _apply_deterministic_clinical_layer(plan: dict, form_data: dict, nutrition: 
     try:
         # [P1-COUNTRY-SYSTEM-F1 · 2026-08-16 (T4)] país vía la ÚNICA puerta (T1) — knob apagado ⇒
         # 'DO' siempre ⇒ los dos autofixes de abajo corren exactamente como antes.
-        from constants import country_for_form_data
         _dcl_country = cultural_country_for_form_data(form_data)
         _nr_layer = _night_rice_autofix(plan.get("days") or [], _db, country=_dcl_country)
         if _nr_layer:
@@ -38479,7 +38475,6 @@ async def assemble_plan_node(state: PlanState) -> dict:
         try:
             # [P1-COUNTRY-SYSTEM-F1 · 2026-08-16 (T4)] país vía la ÚNICA puerta (T1) — knob apagado
             # ⇒ 'DO' siempre ⇒ los dos autofixes de abajo corren exactamente como antes.
-            from constants import country_for_form_data
             _apn_country = cultural_country_for_form_data(form_data)
             _nr_fixed = _night_rice_autofix(days, country=_apn_country)
             if _nr_fixed:
@@ -40519,7 +40514,6 @@ async def surgical_marker_regen_node(state: PlanState) -> dict:
     # (mismo `form_data` que ya alimenta `_build_shared_context` arriba) — knob apagado ⇒ 'DO'
     # siempre ⇒ los dos consumidores de abajo (texto del regen + build_day_assignment_context)
     # toman el camino DO byte-idéntico.
-    from constants import country_for_form_data
     _surgical_country = cultural_country_for_form_data(form_data)
 
     async def _re_correct_one(day_num: int):
