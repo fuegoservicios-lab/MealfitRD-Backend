@@ -46,6 +46,15 @@ from datetime import datetime, timezone
 from typing import Any, Callable, Optional
 
 from knobs import _env_bool, _env_int
+# [P3-SHOPPING-PROJECTION-PKG · 2026-09-05] El read model de la proyección vive en `shopping/projection/`;
+# aquí queda el OUTBOX (protocolo + consumidores). Re-exports: routers, cron y tests importan desde aquí, y los
+# tests parchean `plan_jobs.build_shopping_projection` — el consumidor la resuelve por este nombre global.
+from shopping.projection.read_model import (  # noqa: F401
+    build_shopping_projection, _compact_row, _row_cost, _duration_for_days,
+    _PROJECTION_ROW_KEYS, _PROJECTION_COST_KEYS, _PROJECTION_MAX_ITEMS,
+)
+from shopping.projection.reprojection import shopping_list_fingerprint, enqueue_shopping_reprojection  # noqa: F401
+from shopping.projection.status import classify_projection_jobs  # noqa: F401
 
 logger = logging.getLogger(__name__)
 
@@ -435,34 +444,6 @@ def _consume_display_i18n(job: dict) -> tuple[str, Optional[str], dict]:
 # (paquetes, precios, Nevera descontada) por revisión, y guarda el read model en `payload.result`
 # del job (no en `plan_data`: escribir ahí bumpea `revision` y haría stale a la propia proyección).
 # La lista síncrona no cambia. Lo lee `GET /api/plans/{plan_id}/projections`.
-_PROJECTION_ROW_KEYS = ("name", "display_string", "display_name_en", "category", "display_category", "market_qty",
-                        "market_unit", "display_qty", "sku_size_label", "base_qty", "base_unit", "is_perishable",
-                        "is_staple", "package_grams", "shelf_life_days")
-_PROJECTION_COST_KEYS = ("estimated_cost_rd", "estimated_cost", "cost_rd")  # la fila del agregador usa la primera
-_PROJECTION_MAX_ITEMS = 150
-
-
-def _duration_for_days(days: int) -> str:
-    d = int(days or 0)
-    return "weekly" if d <= 7 else ("biweekly" if d <= 15 else "monthly")
-
-
-def _compact_row(row: dict) -> dict:
-    out = {k: row.get(k) for k in _PROJECTION_ROW_KEYS if row.get(k) is not None}
-    cost = _row_cost(row)
-    if cost is not None:
-        out["cost_rd"] = cost
-    return out
-
-
-def _row_cost(row: dict) -> Optional[float]:
-    for k in _PROJECTION_COST_KEYS:
-        v = row.get(k)
-        if isinstance(v, (int, float)) and not isinstance(v, bool) and float(v) > 0:
-            return round(float(v), 2)
-    return None
-
-
 def _load_plan_for_projection(plan_id: str, user_id: str) -> tuple:
     from db import execute_sql_query
     row = execute_sql_query("SELECT plan_data, revision FROM meal_plans WHERE id = %s AND user_id = %s",
@@ -477,54 +458,6 @@ def _load_plan_for_projection(plan_id: str, user_id: str) -> tuple:
             pd = None
     rev = int(row["revision"]) if row.get("revision") is not None else None
     return (pd if isinstance(pd, dict) else None), rev
-
-
-def build_shopping_projection(plan_data: dict, user_id: str, windows: list, *, revision: Optional[int],
-                              policy_hash: Optional[str] = None, max_items: int = _PROJECTION_MAX_ITEMS) -> dict:
-    """Read model: una lista por ventana. Principal = ciclo completo (multiplicador de ciclo, como el
-    recálculo); `fresh_only` = solo perecederos de ese top-up. Determinista, cero LLM."""
-    import shopping_calculator as sc
-    try:
-        hm = float(plan_data.get("calc_household_multiplier") or 1.0)
-    except (TypeError, ValueError):
-        hm = 1.0
-    hm = max(0.5, min(10.0, hm))
-    inv, cons = sc.fetch_inventory_and_consumed_for_plan(user_id, plan_data, is_new_plan=True)
-    try:
-        trip = sc.active_trip_window_days(plan_data)
-    except Exception:
-        trip = None
-    out_windows = []
-    for w in windows or []:
-        if not isinstance(w, dict):
-            continue
-        days = int(w.get("days") or 0)
-        if days <= 0:
-            continue
-        fresh_only = bool(w.get("fresh_only"))
-        mult = hm if fresh_only else hm * float(sc.cycle_qty_multiplier(_duration_for_days(days)) or 1.0)
-        rows = sc.get_shopping_list_delta(
-            user_id, plan_data, is_new_plan=True, structured=True, multiplier=mult,
-            inventory_override=inv, consumed_override=cons, cycle_days=days, window_days=trip,
-        ) or []
-        rows = [r for r in rows if isinstance(r, dict)]
-        if fresh_only:
-            rows = [r for r in rows if r.get("is_perishable")]
-        items = [_compact_row(r) for r in rows][:max_items]
-        costs = [c for c in (_row_cost(r) for r in rows) if c is not None]
-        out_windows.append({
-            "kind": str(w.get("kind") or ("fresh_topup" if fresh_only else "main")),
-            "start_day": int(w.get("start_day") or 0), "end_day": int(w.get("end_day") or days),
-            "days": days, "cycle_days": int(w.get("cycle_days") or days), "fresh_only": fresh_only,
-            "item_count": len(items), "priced_count": len(costs),
-            "cost_rd": round(sum(costs), 2) if costs else None,  # None = sin precios, no «gratis»
-            "items": items,
-        })
-    return {
-        "schema_version": 1, "revision": revision, "policy_hash": policy_hash,
-        "household_multiplier": hm, "computed_at": datetime.now(timezone.utc).isoformat(),
-        "windows": out_windows,
-    }
 
 
 def _consume_shopping_projection(job: dict) -> tuple[str, Optional[str], dict]:
@@ -555,130 +488,6 @@ def _consume_shopping_projection(job: dict) -> tuple[str, Optional[str], dict]:
     if not projection.get("windows"):
         return "failed", "empty_projection", {"windows_in": len(windows)}
     return "done", None, {"projection": projection}
-
-
-# [P1-ARQ25-F5-REPROJECTION · 2026-09-05] Re-encolar la proyección cuando la LISTA cambia (roadmap §5.7:
-# «reproyección por swap, inventario y cambio de política, encolada en el commit»). La revisión del plan
-# sube con CUALQUIER escritura de `plan_data` (también con cada recálculo, que corre en cada visita al
-# Dashboard), así que la revisión sola dispararía una proyección de ~1 min por visita. La huella de la
-# lista semanal (nombre, cantidad base, unidad, cantidad de mercado) + hogar + días fuente decide:
-# misma huella que el último job ⇒ la proyección sería idéntica ⇒ no se encola.
-_FINGERPRINT_ROW_KEYS = ("name", "base_qty", "base_unit", "market_qty", "market_unit")
-
-
-def shopping_list_fingerprint(plan_data: dict) -> str:
-    rows = plan_data.get("aggregated_shopping_list_weekly") if isinstance(plan_data, dict) else None
-    parts = []
-    for r in (rows or []):
-        if isinstance(r, dict):
-            parts.append(tuple(str(r.get(k)) for k in _FINGERPRINT_ROW_KEYS))
-    parts.sort()
-    days = 0
-    if isinstance(plan_data, dict):
-        days = len(plan_data.get("days") or []) + len(plan_data.get("_archived_days") or [])
-    raw = json.dumps({"rows": parts, "hm": (plan_data or {}).get("calc_household_multiplier"), "days": days},
-                     ensure_ascii=False, sort_keys=True)
-    return hashlib.sha256(raw.encode("utf-8")).hexdigest()[:16]
-
-
-def enqueue_shopping_reprojection(plan_id: str, user_id: str, *, reason: str, plan_data: Optional[dict] = None) -> Optional[str]:
-    """Encola `shopping_projection` para la revisión vigente si la lista cambió desde el último job.
-    Fail-open: None si la cola está apagada, el plan no tiene política (pre-F3), la huella no cambió o
-    algo falla. Llamada desde los commits de recálculo, swap, regeneración de día y relleno de bloques."""
-    if not plan_jobs_enabled() or not consumer_enabled(JOB_TYPE_SHOPPING_PROJECTION):
-        return None
-    if not _is_uuid(plan_id) or not _is_uuid(user_id):
-        return None
-    try:
-        import horizon
-        if not horizon.shopping_projection_jobs_enabled():
-            return None
-        if plan_data is None:
-            plan_data, rev = _load_plan_for_projection(plan_id, user_id)
-        else:
-            rev = current_plan_revision(plan_id)
-        if not isinstance(plan_data, dict):
-            return None
-        eff = horizon.effective_policy_for_plan(plan_data)
-        if not eff:
-            return None  # sin política no hay ventanas: planes anteriores a la Fase 3
-        fp = shopping_list_fingerprint(plan_data)
-        from db import execute_sql_query
-        last = execute_sql_query(
-            "SELECT status, payload->>'list_fingerprint' AS fp FROM plan_jobs "
-            "WHERE plan_id = %s AND user_id = %s AND job_type = %s AND status IN ('pending', 'processing', 'failed', 'done') "
-            "ORDER BY created_at DESC LIMIT 1",
-            (plan_id, user_id, JOB_TYPE_SHOPPING_PROJECTION), fetch_one=True,
-        )
-        if last and last.get("fp") == fp:
-            return None  # la lista no cambió: la proyección sería idéntica
-        total = 0
-        try:
-            total = int(plan_data.get("total_days_requested") or 0)
-        except (TypeError, ValueError):
-            total = 0
-        if total <= 0:
-            try:
-                from shopping_calculator import shopping_source_days
-                total = len(shopping_source_days(plan_data) or [])
-            except Exception:
-                total = 0
-        total = total or len(plan_data.get("days") or []) or 1
-        windows = horizon.shopping_projection_windows(eff, total)
-        payload = {
-            "schema_version": horizon.BLUEPRINT_SCHEMA_VERSION, "policy_hash": eff.get("policy_hash"),
-            "total_days": int(total), "windows": windows,
-            "freezer_mode": str(((eff.get("shopping") or {}).get("freezer_mode")) or "limited"),
-            "list_fingerprint": fp, "reason": str(reason or "")[:40],
-        }
-        key = f"{JOB_TYPE_SHOPPING_PROJECTION}:{plan_id}:{int(rev or 0)}:{fp[:12]}"
-        jid = enqueue_plan_job(JOB_TYPE_SHOPPING_PROJECTION, plan_id, user_id, plan_revision=rev, dedup_key=key, payload=payload)
-        if jid:
-            logger.info(f"[ARQ25-F5] reprojection encolada job={jid} plan={plan_id} rev={rev} reason={reason} fp={fp[:12]}")
-        return jid
-    except Exception as e:
-        logger.debug(f"[ARQ25-F5] enqueue_shopping_reprojection no encolada ({reason}): {e!r}")
-        return None
-
-
-def classify_projection_jobs(current_revision: Optional[int], jobs: list) -> dict:
-    """Estado UI de la proyección a partir de los jobs del plan (más reciente primero). Puro."""
-    cur = int(current_revision or 0)
-
-    def _proj(j):
-        pl = j.get("payload") or {}
-        if isinstance(pl, str):
-            try:
-                pl = json.loads(pl)
-            except Exception:
-                pl = {}
-        return ((pl.get("result") or {}).get("projection")) if isinstance(pl, dict) else None
-
-    def _rev(j):
-        # los jobs de la Fase 3 nacieron con plan_revision NULL: vale la revisión que la proyección declara
-        if j.get("plan_revision") is not None:
-            return int(j.get("plan_revision"))
-        pr = _proj(j) or {}
-        return int(pr.get("revision")) if pr.get("revision") is not None else -1
-
-    for j in jobs:
-        if j.get("status") == "done" and _rev(j) == cur and _proj(j):
-            return {"status": "ready", "revision": cur, "job_id": str(j.get("id")), "projection": _proj(j)}
-    for j in jobs:
-        if j.get("status") in ("pending", "processing"):
-            return {"status": "pending", "revision": cur, "job_id": str(j.get("id")), "attempts": int(j.get("attempts") or 0)}
-    for j in jobs:
-        if j.get("status") == "failed":
-            return {"status": "failed", "revision": cur, "job_id": str(j.get("id")), "attempts": int(j.get("attempts") or 0),
-                    "error_code": j.get("error_code"), "retrying": True}
-    for j in jobs:
-        if j.get("status") == "done" and _proj(j):
-            return {"status": "stale", "revision": cur, "projection_revision": _rev(j),
-                    "job_id": str(j.get("id")), "projection": _proj(j)}
-    for j in jobs:
-        if j.get("status") == "dead":
-            return {"status": "failed", "revision": cur, "job_id": str(j.get("id")), "error_code": j.get("error_code"), "retrying": False}
-    return {"status": "none", "revision": cur}
 
 
 CONSUMERS: dict[str, Callable[[dict], tuple[str, Optional[str], dict]]] = {

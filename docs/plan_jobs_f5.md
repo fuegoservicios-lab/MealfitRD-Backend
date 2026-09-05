@@ -105,6 +105,7 @@ SELECT id, plan_id, attempts, error_code, dead_lettered_at FROM plan_jobs WHERE 
    en recálculo (cubre Nevera/restock/consumo), swap, regeneración de día y relleno de bloques (T1); la huella
    de la lista (`list_fingerprint`) evita re-proyectar cuando la lista no cambió (el recálculo corre en cada visita).
 3. ~~Estados UI~~ (2026-09-05, `P1-ARQ25-F5-UI-STATES`: `ShoppingProjectionStatus` en el Dashboard).
-4. Extracción de `shopping/projection/` desde `shopping_calculator.py` → **Fase 9** (refactor residual): el read model
-   nació fuera del god file (`plan_jobs.build_shopping_projection`); mover packaging/pricing hoy es refactor sin valor de producto.
+4. ~~Extracción de `shopping/projection/`~~ (2026-09-05, `P3-SHOPPING-PROJECTION-PKG`): `shopping/projection/{read_model,reprojection,status}.py`;
+   `plan_jobs.py` queda como outbox puro y re-exporta. Packaging/pricing/shelf-life siguen en `shopping_calculator.py` (→ Fase 9); su
+   tamaño y el de los otros god files queda CONGELADO por `test_p3_shopping_projection_pkg.py`.
 5. ~~`system_alerts` para `dead`~~ (2026-09-05, `plan_jobs_dead:<job_type>`, modelo Manual).
