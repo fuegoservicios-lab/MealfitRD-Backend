@@ -102,3 +102,16 @@ def test_wiring():
     src2 = (_BACKEND / "ai_helpers.py").read_text(encoding="utf-8")
     assert "current_pantry_ingredients = _age_pantry_for_block(current_pantry_ingredients, form_data, _dc)" in src2
     assert "tooltip-anchor: P1-STEP14-SHOPPING-COOKING" in (_BACKEND / "graph_orchestrator.py").read_text(encoding="utf-8")
+
+
+def test_substitution_uses_the_absolute_day_of_the_block(monkeypatch):
+    """[P1-STEP14-CHUNK-PARITY] el worker pasa solo los 4 días nuevos: sin offset el día 12 parecía el día 1."""
+    monkeypatch.setattr(go, "_truth_up_meal_macros_from_strings", lambda meal, db: None)
+    block = [{"day": 12, "meals": [{"meal": "Cena", "name": "Ensalada", "ingredients": ["2 tazas de lechuga"],
+                                    "ingredients_raw": ["2 tazas de lechuga"]}]}]
+    assert go._single_trip_fresh_substitute(block, db=_NoopDB(), effective=SINGLE, diet="balanced") == 0
+    assert go._single_trip_fresh_substitute(block, db=_NoopDB(), effective=SINGLE, diet="balanced", days_offset=11) == 1
+    assert block[0]["meals"][0]["ingredients"] == ["2 tazas de repollo"]
+    src = (_BACKEND / "cron_tasks.py").read_text(encoding="utf-8")
+    assert '"_plan_policy": plan_data.get("_plan_policy"),' in src and '"_days_offset": _first_new_idx_ck,' in src
+    assert 'days_offset=int(_pd.get("_days_offset") or 0)' in (_BACKEND / "db_plans.py").read_text(encoding="utf-8")

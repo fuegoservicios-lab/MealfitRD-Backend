@@ -1294,7 +1294,7 @@ def _finalize_plan_data_for_insert(data: dict, *, surface: str = "pre-INSERT",
                             _pass_n = _cup(_pd.get("days") or [], db=_db_ins)
                             _pass_n += _ccdf(_pd.get("days") or [], db=_db_ins)
                             _pass_n += _cdwe(_pd.get("days") or [], db=_db_ins)  # [P1-EGG-DAY-CAP]
-                            _pass_n += _stfs(_pd.get("days") or [], db=_db_ins,
+                            _pass_n += _stfs(_pd.get("days") or [], db=_db_ins, days_offset=int(_pd.get("_days_offset") or 0),
                                              effective=((_pd.get("_plan_policy") or {}).get("effective") if isinstance(_pd.get("_plan_policy"), dict) else None),
                                              diet=(((_pd.get("_plan_policy") or {}).get("effective") or {}).get("diet") or {}).get("type") if isinstance(_pd.get("_plan_policy"), dict) else None)
                             _cap_n += _pass_n

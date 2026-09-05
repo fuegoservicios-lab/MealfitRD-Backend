@@ -33150,7 +33150,7 @@ _FRESH_SUBSTITUTES = (
 _FRESH_SUB_VEG_PROTEIN = "garbanzos cocidos"
 
 
-def _single_trip_fresh_substitute(days, db=None, *, effective=None, diet=None) -> int:
+def _single_trip_fresh_substitute(days, db=None, *, effective=None, diet=None, days_offset: int = 0) -> int:
     """Sustituye, en los días fuera de la semana de frescos de un ciclo de UNA sola compra, los ingredientes que no
     aguantan (`pantry_durability.ingredient_issue_beyond_horizon`) por su equivalente duradero. Muta in-place; marca
     `_fresh_substituted`; lockstep `ingredients_raw`; truth-up. Sin política de compra única ⇒ 0. Fail-safe.
@@ -33165,7 +33165,10 @@ def _single_trip_fresh_substitute(days, db=None, *, effective=None, diet=None) -
             db = IngredientNutritionDB()
         _veg = _cdt_fs(diet) in ("vegan", "vegetarian")
         changed = 0
-        for i, d in enumerate(days):
+        # [P1-STEP14-CHUNK-PARITY] el chain del worker pasa solo los días NUEVOS: `days_offset` da el día absoluto
+        _off = int(days_offset or 0)
+        for i0, d in enumerate(days):
+            i = _off + i0
             if not isinstance(d, dict):
                 continue
             req = single_trip_requirements(effective, i)
