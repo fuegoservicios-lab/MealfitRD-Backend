@@ -37803,6 +37803,82 @@ def _consolidate_duplicate_gram_lines(days) -> int:
         return 0
 
 
+# [P1-LIGHT-SLOT-PROTEIN-FLOOR · 2026-09-05] El reparto por franja (`MEAL_SLOT_SPLITS`: merienda 15 %) es el TARGET,
+# pero el bucle de FASE A se detiene en cuanto el DÍA alcanza su piso: con almuerzo y cena sobre-entregando (50 y 48 g),
+# las meriendas se quedaban en 10-14 g de 20 (plan vivo 56a71cc0; también 606e9017). En ganancia muscular eso desperdicia
+# la ventana anabólica de la tarde: cada comida debería rondar el umbral leucínico (~20 g). Segunda pasada SOLO para
+# franjas ligeras muy por debajo de su target, con el mismo cerrador (respeta kcal del slot y hace sitio si hace falta).
+LIGHT_SLOT_PROTEIN_FLOOR = _env_bool("MEALFIT_LIGHT_SLOT_PROTEIN_FLOOR", True)
+LIGHT_SLOT_PROTEIN_MIN_PCT = _env_float("MEALFIT_LIGHT_SLOT_PROTEIN_MIN_PCT", 0.70, validator=lambda v: 0.4 <= v <= 1.0)
+
+
+def _repair_light_slot_protein(days: list, nutrition: dict, form_data: dict, db=None, cands=None) -> int:
+    """Cierra las comidas LIGERAS (merienda/desayuno) por debajo de `LIGHT_SLOT_PROTEIN_MIN_PCT` de su franja en
+    ganancia muscular, aunque el día ya cumpla su piso. Devuelve gramos añadidos. Fail-safe.
+    tooltip-anchor: P1-LIGHT-SLOT-PROTEIN-FLOOR"""
+    if not LIGHT_SLOT_PROTEIN_FLOOR or not days:
+        return 0
+    try:
+        from constants import strip_accents as _sa_lf
+        _goal = _sa_lf(str((form_data or {}).get("mainGoal") or (form_data or {}).get("goal") or "").lower())
+        if not any(t in _goal for t in ("gain_muscle", "ganar_musculo", "ganancia", "bulk")):
+            return 0
+        macros = (nutrition or {}).get("macros") or {}
+        _pg = float(macros.get("protein_g") or 0)
+        _cg = float(macros.get("carbs_g") or 0)
+        _fg = float(macros.get("fats_g") or 0)
+        if _pg <= 0:
+            return 0
+        if db is None:
+            from nutrition_db import IngredientNutritionDB
+            db = IngredientNutritionDB()
+        if cands is None:
+            cands = _safe_high_density_proteins((form_data or {}).get("allergies"), db, min_protein=10.0,
+                                                diet=(form_data or {}).get("dietType"),
+                                                country=country_for_form_data(form_data))
+        _daily_cal = 4.0 * _pg + 4.0 * _cg + 9.0 * _fg
+        added = 0
+        for _d in days or []:
+            if not isinstance(_d, dict):
+                continue
+            _ms = [m for m in (_d.get("meals") or []) if isinstance(m, dict)]
+            if not _ms:
+                continue
+            _fracs = _canonical_slot_fractions(_ms) if SLOT_DISTRIBUTION_ENABLED else None
+            _labels = [_protein_gate_labels_in_meal(_mm) for _mm in _ms]
+            for _i, _m in enumerate(_ms):
+                if not _meal_slot_is_light(_m, _sa_lf):
+                    continue
+                _share = _fracs[_i] if (_fracs and _i < len(_fracs)) else (1.0 / max(1, len(_ms)))
+                _slot_target = _pg * _share
+                _cur = _meal_macro_num(_m.get("protein"))
+                if _slot_target <= 0 or _cur >= _slot_target * float(LIGHT_SLOT_PROTEIN_MIN_PCT):
+                    continue
+                _used_others = set()
+                for _j, _lb in enumerate(_labels):
+                    if _j != _i:
+                        _used_others |= _lb
+                _m["_protein_closed"] = False
+                _g = _close_protein_gap_for_meal(_m, _slot_target, db, cands,
+                                                 allergies=(form_data or {}).get("allergies"),
+                                                 fill_pct=PROTEIN_FLOOR_FILL_PCT, max_add_g=120,
+                                                 slot_cal_target=_daily_cal * _share,
+                                                 enforce_min_threshold=False,
+                                                 day_used_proteins=_used_others,
+                                                 diet=(form_data or {}).get("dietType"),
+                                                 country=country_for_form_data(form_data),
+                                                 goal=(form_data or {}).get("mainGoal") or (form_data or {}).get("goal"))
+                if _g > 0:
+                    added += _g
+                    _labels[_i] = _protein_gate_labels_in_meal(_m)
+                    logger.info(f"🥛 [P1-LIGHT-SLOT-PROTEIN-FLOOR] +{_g}g en franja ligera ({_cur:.0f}→"
+                                f"{_meal_macro_num(_m.get('protein')):.0f} g de {_slot_target:.0f}) | meal={str(_m.get('name'))[:40]}")
+        return added
+    except Exception as _e:
+        logger.warning(f"[P1-LIGHT-SLOT-PROTEIN-FLOOR] no-op (fail-safe): {type(_e).__name__}: {_e}")
+        return 0
+
+
 def _repair_protein_floor_post_caps(days: list, nutrition: dict, form_data: dict, db=None) -> int:
     """[P1-PROTEIN-FLOOR-POST-CAPS · 2026-06-27] (arquitectura) Re-cierre FINAL del piso de proteína tras los caps
     clínicos. El closer del motor (_close_protein_gap_for_meal) corre DENTRO de _apply_macro_engine (PRE-cap) y es
@@ -37912,6 +37988,11 @@ def _repair_protein_floor_post_caps(days: list, nutrition: dict, form_data: dict
                     _topup_healthy_fat_to_band_floor(_ms, _fg, (4.0 * _pg + 4.0 * _cg + 9.0 * _fg), db, is_bariatric=_is_baria)
                 except Exception:
                     pass
+        # [P1-LIGHT-SLOT-PROTEIN-FLOOR] franjas ligeras muy por debajo de su reparto, aunque el día ya cumpla
+        try:
+            added += _repair_light_slot_protein(days, nutrition, form_data, db, _cands)
+        except Exception:
+            pass
         return added
     except Exception as _rp_e:
         logger.warning(f"[P1-PROTEIN-FLOOR-POST-CAPS] falló (no bloquea): {type(_rp_e).__name__}: {_rp_e}")
