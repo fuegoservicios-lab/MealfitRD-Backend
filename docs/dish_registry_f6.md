@@ -39,8 +39,17 @@ Compilador CLI: [`scripts/compile_dish_registry.py`](../scripts/compile_dish_reg
 3. Sin regresión clínica ni de fidelidad: el snapshot NO altera prompts todavía (los candidatos viajan en el blueprint y
    la métrica lleva el hash); inyectarlos al prompt es la siguiente rebanada, con su medición.
 
-## Fuera de esta rebanada
+## Rebanada 2 (P1-ARQ25-F6-REGISTRY-PROMPT · 2026-09-05)
 
-Candidatos del registry en el prompt del generador (hoy solo en el blueprint), metadata batch/freezer/shelf-life por
-plantilla, nombre localizado y aliases editoriales, referencias a medios (Fase 8), editor DB que publique el mismo
-snapshot (§7.3 punto 5).
+- **Candidatos en el prompt**: `horizon.registry_prompt_lines` añade al bloque 📐 «Platos del registro curado para este
+  bloque: Día N → almuerzo: A | B · cena: C | D» (2 por franja, familia programada, sin las clases de alérgeno
+  declaradas). Knob `MEALFIT_DISH_REGISTRY_PROMPT` (True); apagado ⇒ prompt byte-idéntico al anterior. La métrica de
+  fidelidad lleva `registry_in_prompt` para comparar antes/después (`pipeline_metrics.plan_policy_fidelity`).
+- **Logística derivada** (`logistics`, `estimated: true`): `batch_friendly`/`freezer_friendly`/`prep_minutes_est`/
+  `difficulty_est` por técnica y `min_shelf_life_days` = mínimo de la vida útil de sus constituyentes (catálogo).
+- **Editorial** (`editorial`): `status=curated`, `source`, `display_name.es`, `aliases` (de `plan_policy.TEMPLATE_ALIASES`),
+  `media: []` (Fase 8). Snapshot `schema_version` 2 / `compiler_version` 2 (recompilado: cambia el hash).
+
+## Fuera de la fase
+
+Referencias a medios reales (Fase 8) y el editor DB que publique el mismo snapshot (§7.3 punto 5).

@@ -133,8 +133,40 @@ def test_f_las_87_plantillas_do_tienen_constituyentes_curados():
     assert all(v["origin"] == "curated" for v in cur.values()), "las 87 curadas a mano, ninguna por reglas de respaldo"
 
 
+def test_h_logistica_y_editorial_derivadas_en_cada_plantilla():
+    snap = _snap()
+    by = {t["template_id"]: t for t in snap["templates"]}
+    lg = by["tpl_a"]["logistics"]
+    assert lg["estimated"] is True and lg["batch_friendly"] is False and lg["freezer_friendly"] is False, "«sartén» no es plato de tanda"
+    assert by["tpl_b"]["logistics"]["batch_friendly"] is True, "«hervido» se hace en tanda"
+    ed = by["tpl_a"]["editorial"]
+    assert ed["status"] == "curated" and ed["display_name"]["es"] == "Huevos con camarones" and ed["media"] == []
+    assert snap["schema_version"] == 2
+
+
+def test_i_los_candidatos_del_registry_llegan_al_prompt_con_knob(tmp_path, monkeypatch):
+    import horizon as hz
+    monkeypatch.setattr(dr, "REGISTRY_DIR", str(tmp_path)); dr._CACHE.clear()
+    dr.write_snapshot(_snap(), dr.snapshot_path("es", "t"))
+    monkeypatch.setenv("MEALFIT_DISH_REGISTRY_SNAPSHOT", "t")
+    eff = {"recurrence": {"global_mode": "balanced"}, "market": {"country": "ES"}, "diet": {"allergies": []}}
+    sl = {"days_offset": 0, "days": [{"day_index": 0, "protein": "pescado", "slots": ["cena"]}]}
+    lines = hz.registry_prompt_lines(eff, sl)
+    assert len(lines) == 1 and "Huevos con camarones" in lines[0] and "Día 1" in lines[0]
+    block = hz.policy_prompt_block(eff, sl, surface="test", enforced=True)
+    assert "Platos del registro curado" in block
+    # alérgeno declarado ⇒ el candidato con mariscos no se ofrece
+    eff2 = {**eff, "diet": {"allergies": ["mariscos"]}}
+    assert hz.registry_prompt_lines(eff2, sl) == []
+    # knob apagado ⇒ prompt byte-idéntico al de antes
+    monkeypatch.setenv("MEALFIT_DISH_REGISTRY_PROMPT", "0")
+    assert hz.registry_prompt_lines(eff, sl) == [] and "Platos del registro" not in hz.policy_prompt_block(eff, sl, surface="test", enforced=True)
+    dr._CACHE.clear()
+
+
 def test_g_el_allocator_y_la_metrica_llevan_el_hash_del_snapshot():
     src = (_BACKEND / "horizon.py").read_text(encoding="utf-8")
     assert '"registry": _registry_block_for_country(' in src, "el blueprint lleva hash + candidatos del registry"
     assert '"registry_hash": report.get("registry_hash")' in src, "la métrica de fidelidad guarda el hash"
     assert "def _registry_block_for_country(" in src
+    assert '"registry_in_prompt": report.get("registry_in_prompt")' in src, "la métrica distingue antes/después del prompt"

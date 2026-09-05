@@ -383,6 +383,57 @@ def _registry_block_for_country(country: Optional[str], *, effective: Optional[d
         return {"snapshot_hash": None, "candidates": {}}
 
 
+def registry_prompt_enabled() -> bool:
+    """[P1-ARQ25-F6-REGISTRY-PROMPT · 2026-09-05] Knob de la rebanada 2: candidatos del registry en el prompt."""
+    try:
+        from knobs import _env_bool
+        return _env_bool("MEALFIT_DISH_REGISTRY_PROMPT", True)
+    except Exception:
+        return True
+
+
+def registry_prompt_lines(effective: Optional[dict], sl: Optional[dict] = None, *, day_index: Optional[int] = None,
+                          slot: Optional[str] = None, per_slot: int = 2) -> list[str]:
+    """Líneas del bloque 📐 con los platos del registry compilado para los días/franjas de este bloque:
+    «Día N · almuerzo: A | B». Deterministas (mismo snapshot ⇒ mismas líneas). Vacío si el knob está
+    apagado, no hay snapshot o el bloque no trae días. Fail-open."""
+    if not registry_prompt_enabled() or not isinstance(effective, dict) or not effective:
+        return []
+    try:
+        import dish_registry as dr
+        eff = effective or {}
+        country = ((eff.get("market") or {}).get("country") if isinstance(eff.get("market"), dict) else None) or eff.get("market_country")
+        if not dr.registry_hash(country):
+            return []
+        allergies = [str(a) for a in ((eff.get("diet") or {}).get("allergies") or [])]
+        days = [d for d in ((sl or {}).get("days") or []) if isinstance(d, dict)]
+        if day_index is not None:
+            days = [d for d in days if int(d.get("day_index", -1)) == int(day_index)]
+        if not days:
+            return []
+        offset = int((sl or {}).get("days_offset") or 0)
+        out = []
+        for d in days[:7]:
+            rel = int(d.get("day_index", 0)) - offset + 1
+            fam = d.get("protein")
+            slots = [slot] if slot else list(d.get("slots") or [])
+            parts = []
+            for s_ in slots:
+                key = dr.canonical_slot_es(s_)  # el motor dice «dinner», el registry «cena»
+                cands = dr.template_candidates(country, key, fam, k=per_slot, exclude_allergens=allergies)
+                if cands:
+                    parts.append(f"{_SLOT_ES.get(key, key)}: " + " | ".join(str(c.get("name")) for c in cands))
+            if parts:
+                out.append(f"Día {rel} → " + " · ".join(parts))
+        if not out:
+            return []
+        return [("- Platos del registro curado para este bloque (elige uno de estos o una variante equivalente; "
+                 "mismos ingredientes base, misma técnica): " + " || ".join(out) + ".")]
+    except Exception as e:
+        logger.debug(f"[ARQ25-F6] registry_prompt_lines falló (fail-open): {e!r}")
+        return []
+
+
 def _registry_hash_for_effective(effective: Optional[dict]) -> Optional[str]:
     try:
         import dish_registry as dr
@@ -833,6 +884,7 @@ def policy_prompt_block(effective: Optional[dict], sl: Optional[dict] = None, *,
                 lines.append(f"- Esta comida es {_SLOT_ES.get(s, s)}: ancla de la franja → " + ", ".join(
                     str(a.get("name")) for a in slot_anchors) + ".")
         lines.extend(single_trip_prompt_lines(effective, sl))  # [P1-SINGLE-TRIP-POLICY]
+        lines.extend(registry_prompt_lines(effective, sl, day_index=day_index, slot=slot))  # [P1-ARQ25-F6-REGISTRY-PROMPT]
         lines.append("- No «diversifiques» un ancla ni cambies la base de un plato por variedad: la política manda sobre la variedad.")
         return "\n".join(lines) + "\n"
     except Exception as e:
@@ -1105,6 +1157,7 @@ def fidelity_report(days: list, sl: Optional[dict], effective: Optional[dict], *
         "issues": issues, "codes": sorted({i["code"] for i in issues}), "score": score,
         "measured_at": datetime.now(timezone.utc).isoformat(),
         "registry_hash": _registry_hash_for_effective(effective),  # [P1-ARQ25-F6-DISH-REGISTRY] los benchmarks guardan su hash
+        "registry_in_prompt": bool(registry_prompt_enabled()),  # [P1-ARQ25-F6-REGISTRY-PROMPT] para medir antes/después
     }
 
 
@@ -1207,7 +1260,7 @@ def emit_fidelity_metric(user_id: Optional[str], plan_id: Optional[str], report:
             "n_issues": len(report.get("issues") or []), "days_checked": report.get("days_checked"),
             "score": report.get("score"), "mode": mode, "gate": gate or fidelity_gate_mode(),
             "rejected": bool(rejected), "allocator_version": ALLOCATOR_VERSION,
-            "registry_hash": report.get("registry_hash"),
+            "registry_hash": report.get("registry_hash"), "registry_in_prompt": report.get("registry_in_prompt"),
         }
         execute_sql_write(
             "INSERT INTO pipeline_metrics (user_id, session_id, node, duration_ms, retries, "
@@ -1367,4 +1420,5 @@ __all__ = [
     "rank_days_by_policy", "emit_fidelity_metric", "review_fidelity_gate",
     "shopping_projection_windows", "stamp_demand_windows", "enqueue_shopping_projection_job",
     "FRESH_HORIZON_DAYS", "single_trip_policy", "fresh_beyond_horizon_issues", "single_trip_prompt_lines",
+    "registry_prompt_enabled", "registry_prompt_lines",
 ]

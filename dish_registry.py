@@ -36,8 +36,8 @@ from knobs import _env_str
 
 logger = logging.getLogger(__name__)
 
-REGISTRY_SCHEMA_VERSION = 1
-COMPILER_VERSION = 1
+REGISTRY_SCHEMA_VERSION = 2
+COMPILER_VERSION = 2
 BACKEND_DIR = os.path.dirname(os.path.abspath(__file__))
 DATA_DIR = os.path.join(BACKEND_DIR, "data")
 REGISTRY_DIR = os.path.join(DATA_DIR, "registry")
@@ -179,6 +179,56 @@ def derive_risk_attributes(nutrition: dict, constituent_names: Iterable[str]) ->
     }
 
 
+# ----------------------------------------------------------------------------- logística y editorial (§7.2)
+# [P1-ARQ25-F6-REGISTRY-PROMPT · 2026-09-05] Metadata batch/freezer/shelf-life y estado editorial. Todo
+# DERIVADO (técnica de la plantilla + vida útil por ingrediente del catálogo) y marcado como estimación:
+# ningún número clínico, ninguna curación manual escondida en el snapshot.
+_TECH_RULES = (
+    # (tokens de técnica, batch_friendly, freezer_friendly, prep_min, difficulty)
+    (("sopa", "sancocho", "asopao", "crema", "guisado", "estofado", "mechad"), True, True, 50, "media"),
+    (("horneado", "al horno", "airfryer", "horno"), True, True, 40, "media"),
+    (("masa horneada", "masa hervida", "masa al sart", "masa a la plancha"), True, True, 35, "media"),
+    (("hervido", "majado", "vapor"), True, True, 30, "baja"),
+    (("plancha", "salteado", "sart", "parrilla", "revuelto", "frito"), False, False, 20, "baja"),
+    (("frio", "frío", "licuado", "masa fria", "masa fría", "tibio"), False, False, 10, "baja"),
+)
+_PERISHABLE_CATEGORIES = ("proteínas", "proteinas", "carnes", "pescados", "mariscos", "lácteos", "lacteos", "vegetales", "frutas", "verduras")
+
+
+def derive_logistics(template: dict, resolved: list, index: dict) -> dict:
+    tech = _norm(template.get("technique"))
+    batch, freezer, prep, diff = True, True, 30, "media"
+    for tokens, b, fz, pm, d in _TECH_RULES:
+        if any(t in tech for t in tokens):
+            batch, freezer, prep, diff = b, fz, pm, d
+            break
+    shelf = []
+    for r in resolved:
+        row = index.get(_norm(r.get("canonical"))) or {}
+        sl = row.get("shelf_life_days")
+        try:
+            sl = int(sl) if sl is not None else None
+        except (TypeError, ValueError):
+            sl = None
+        if sl is not None and sl > 0:
+            shelf.append(sl)
+    return {
+        "batch_friendly": bool(batch), "freezer_friendly": bool(freezer),
+        "min_shelf_life_days": min(shelf) if shelf else None,
+        "prep_minutes_est": int(prep), "difficulty_est": diff, "estimated": True,
+    }
+
+
+def derive_editorial(template: dict, library: str) -> dict:
+    try:
+        from plan_policy import TEMPLATE_ALIASES
+        aliases = sorted(k for k, v in (TEMPLATE_ALIASES or {}).items() if v == template.get("name"))
+    except Exception:
+        aliases = []
+    return {"status": "curated", "source": f"data/dish_templates{'' if library == 'do' else '_' + library}.json",
+            "display_name": {"es": template.get("name")}, "aliases": aliases, "media": []}
+
+
 # ----------------------------------------------------------------------------- compilación
 def _constituents_source(library: str, template: dict, do_constituents: Optional[dict]) -> tuple[list, list[str]]:
     """(constituyentes [{name, grams}], declarados_sin_resolver) según la biblioteca."""
@@ -233,6 +283,8 @@ def compile_template(template: dict, index: dict, *, library: str, constituents:
         "serving_g": round(sum(r["grams"] for r in resolved), 1),
         "nutrition_per_serving": nutrition,
         "intrinsic_risk_attributes": derive_risk_attributes(nutrition, names),
+        "logistics": derive_logistics(template, resolved, index),
+        "editorial": derive_editorial(template, library),
     }
     body["content_hash"] = _sha(body)[:16]
     return body
@@ -352,6 +404,22 @@ def registry_hash(country: Optional[str] = None) -> Optional[str]:
     return snap.get("snapshot_hash") if snap else None
 
 
+_SLOT_ALIASES_ES = {
+    "breakfast": "desayuno", "desayuno": "desayuno",
+    "lunch": "almuerzo", "almuerzo": "almuerzo", "comida": "almuerzo",
+    "dinner": "cena", "cena": "cena",
+    "snack": "merienda", "merienda": "merienda", "merienda_am": "merienda", "merienda_pm": "merienda",
+    "colacion": "merienda", "colación": "merienda",
+}
+
+
+def canonical_slot_es(slot: Any) -> str:
+    """Franja en el vocabulario del registry (español). El motor canoniza a inglés (`meal_slot` → `dinner`);
+    las plantillas hablan español (`cena`). Acepta ambos y alias; desconocido ⇒ tal cual en minúsculas."""
+    s = _norm(slot)
+    return _SLOT_ALIASES_ES.get(s, s)
+
+
 def template_candidates(country: Optional[str], slot: str, family: Optional[str] = None, *, k: int = 6,
                         exclude_allergens: Iterable[str] = ()) -> list[dict]:
     """Candidatos del registry para el allocator: `status='ok'`, franja compatible, familia de proteína
@@ -360,13 +428,14 @@ def template_candidates(country: Optional[str], slot: str, family: Optional[str]
     if not snap:
         return []
     ex = {str(a).lower() for a in exclude_allergens or ()}
+    slot_es = canonical_slot_es(slot)
     out = []
     try:
         from horizon import family_matches
     except Exception:
         family_matches = None
     for t in snap.get("templates") or []:
-        if t.get("status") != "ok" or str(slot).lower() not in (t.get("slots") or []):
+        if t.get("status") != "ok" or slot_es not in (t.get("slots") or []):
             continue
         if ex and ex.intersection({a.lower() for a in (t.get("intrinsic_risk_attributes") or {}).get("allergens", [])}):
             continue
@@ -375,7 +444,8 @@ def template_candidates(country: Optional[str], slot: str, family: Optional[str]
             if prot not in ("none", "mixta") and not family_matches(family, prot):
                 continue
         out.append({"template_id": t["template_id"], "name": t["name"], "protein": t.get("protein"),
-                    "technique": t.get("technique"), "transform": t.get("transform")})
+                    "technique": t.get("technique"), "transform": t.get("transform"),
+                    "logistics": t.get("logistics") or {}})
         if len(out) >= max(1, int(k)):
             break
     return out
@@ -386,4 +456,5 @@ __all__ = [
     "registry_snapshot_version", "snapshot_path", "build_catalog_index", "resolve_constituent", "catalog_fingerprint",
     "allergen_classes_for", "derive_risk_attributes", "compile_template", "compile_library", "write_snapshot",
     "verify_snapshot", "library_for_country", "load_registry", "registry_hash", "template_candidates",
+    "derive_logistics", "derive_editorial",
 ]
