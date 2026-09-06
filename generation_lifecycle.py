@@ -828,6 +828,16 @@ def run_initial_chunk(*, task: dict, snap: dict, form_data: dict, pickup_attempt
         _resolve_live_pantry,
         _run_pantry_validation_for_initial_chunk,
     )
+    # [P0-FILL-FENCED · 2026-09-05] El token del claim viaja DENTRO del plan hasta la transacción que lo
+    # escribe. Hasta hoy el fencing se comprobaba en el CAS de más abajo —después de que el postprocesado
+    # rellenara el placeholder— y el propio mensaje de error lo admitía: «Plan ya persistido». Impedir un
+    # SEGUNDO llenado no impide que el primero lo haga un worker que ya perdió su lease.
+    #
+    # Viaja por `result` (que es el `plan_data` que acaba en la fila) y no por una firma nueva porque el camino
+    # es largo —run_initial_chunk → postprocess → save_partial_plan_get_id → fill_placeholder_meal_plan_atomic—
+    # y añadir un parámetro a cada tramo multiplica los sitios donde alguien puede olvidarse de pasarlo.
+    # `fill_placeholder_meal_plan_atomic` lo SACA del dict antes de escribir: nunca llega a la base.
+    result["_chunk_fence"] = {"task_id": str(task_id), "attempts": int(pickup_attempts)}
     bt = BackgroundTasks()
     try:
         result = _run_pantry_validation_for_initial_chunk(

@@ -1702,6 +1702,10 @@ def fill_placeholder_meal_plan_atomic(plan_id: str, user_id: str, insert_data: d
     Contrato:
       · Sólo rellena filas con `generation_status='generating'` — si alguien ya la rellenó
         (worker desplazado) devuelve None sin tocar nada.
+      · [P0-FILL-FENCED · 2026-09-05] Si `plan_data` trae `_chunk_fence` (lo pone `run_initial_chunk`),
+        comprueba el token del claim —id, attempts y status='processing'— con `FOR UPDATE` sobre la fila de
+        la cola DENTRO de esta misma transacción, y aborta si ya no es nuestro. Sin esto, «ya no eres el
+        dueño del trabajo» se descubría DESPUÉS de escribir el plan.
       · I2 (`AND user_id = %s`), I7 (advisory lock + `FOR UPDATE`), I11 (el finalize
         CPU-bound corre ANTES de abrir la transacción, como en el atomic).
       · Conserva del placeholder `_run_id` y las lecciones heredadas si el resultado no las trae.
@@ -1720,6 +1724,9 @@ def fill_placeholder_meal_plan_atomic(plan_id: str, user_id: str, insert_data: d
     pd_new = safe.get("plan_data") if isinstance(safe.get("plan_data"), dict) else None
     if pd_new is None:
         return None
+    # [P0-FILL-FENCED] El token sale del plan ANTES de escribir: es de transporte, no del contenido.
+    _fence = pd_new.pop("_chunk_fence", None)
+    _fence = _fence if isinstance(_fence, dict) and _fence.get("task_id") is not None else None
     _PRESERVE = ("_run_id", "_lifetime_lessons_history", "_lifetime_lessons_summary",
                  "_lifetime_lessons_inherited_from", "_placeholder_created_at")
 
@@ -1743,6 +1750,29 @@ def fill_placeholder_meal_plan_atomic(plan_id: str, user_id: str, insert_data: d
                     except Exception:
                         prev = {}
                 prev = prev if isinstance(prev, dict) else {}
+                # [P0-FILL-FENCED · 2026-09-05] El fencing, aquí dentro y no después de escribir.
+                #
+                # El `FOR UPDATE` es lo que lo convierte en garantía y no en una comprobación optimista: un
+                # reclaim concurrente se queda esperando esta fila hasta que confirmemos o abortemos, así que
+                # entre «compruebo que soy el dueño» y «escribo» no cabe nadie.
+                #
+                # Orden de locks: plan (advisory + FOR UPDATE) → cola. El pickup y el CAS solo tocan la cola y
+                # nunca esperan por un plan, así que este orden no puede cerrar un ciclo.
+                if _fence:
+                    cursor.execute(
+                        "SELECT status, attempts FROM plan_chunk_queue WHERE id = %s FOR UPDATE",
+                        (_fence.get("task_id"),),
+                    )
+                    q = cursor.fetchone()
+                    _st = str((q or {}).get("status") or "")
+                    _at = int((q or {}).get("attempts") or -1)
+                    if not q or _st != "processing" or _at != int(_fence.get("attempts", -2)):
+                        logger.warning(
+                            f"🛡️ [P0-FILL-FENCED] chunk {str(_fence.get('task_id'))[:8]} ya no es nuestro "
+                            f"(status={_st!r} attempts={_at} vs esperado {_fence.get('attempts')}); "
+                            f"NO se escribe el plan {str(plan_id)[:8]}."
+                        )
+                        return None
                 if str(prev.get("generation_status") or "") != "generating":
                     logger.warning(
                         f"[ARQ25-F1/FILL] plan {str(plan_id)[:8]} ya no es placeholder "
