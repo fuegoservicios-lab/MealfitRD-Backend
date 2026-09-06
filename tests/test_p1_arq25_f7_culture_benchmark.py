@@ -68,7 +68,14 @@ def test_e_los_snapshots_reales_pasan_el_gate_y_el_informe_es_reproducible():
         # tocar una biblioteca sin volver a revisarla deja el perfil «pendiente» y este test en rojo
         so = e["review"]["signoff"]
         assert so and so["snapshot_hash"] == e["snapshot_hash"] and so["by"] and so["decisions"], f"{pid}: revisión curatorial pendiente o caducada"
-        assert e["review"]["human_signoff"] is True
+        # [P1-REVIEW-KIND-HONEST · 2026-09-05] Había UN booleano, `human_signoff`, y valía True con una revisión
+        # firmada por Claude. Ahora son tres campos y ninguno se deduce de otro: esta revisión es AUTOMÁTICA, la
+        # cultural humana no existe y la clínica tampoco. Si algún día se firma a mano, este test cae y hay que
+        # venir a decidirlo — que es exactamente lo que debe pasar.
+        assert e["review"]["automated_review"] is True
+        assert e["review"]["human_cultural_review"] is False
+        assert e["review"]["clinical_review"] is False
+        assert "human_signoff" not in e["review"], "el campo que mentía no vuelve por la puerta de atrás"
         assert e["clinical"]["allergen_leaks"] == []
     assert rep["mixing"]["ok"] and len(rep["mixing"]["pairs"]) == 30
     md = cb.render_markdown(rep)

@@ -234,7 +234,11 @@ def _signoff_for(profile_id: str, snapshot_hash: Optional[str]) -> Optional[dict
         e = (rec.get("profiles") or {}).get(profile_id)
         if not isinstance(e, dict) or not snapshot_hash or e.get("snapshot_hash") != snapshot_hash:
             return None
+        # [P1-REVIEW-KIND-HONEST · 2026-09-05] `kind` viaja con la firma. Sin él, quien lee el informe no puede
+        # saber si detrás hay una persona; con él, el default de un registro antiguo es `automated`, que es la
+        # respuesta segura: nunca se ASCIENDE una revisión por omisión.
         return {"by": rec.get("reviewer"), "date": rec.get("date"), "snapshot_hash": snapshot_hash,
+                "kind": str(rec.get("kind") or "automated").strip().lower(),
                 "decisions": e.get("decisions") or [], "accepted": e.get("accepted") or []}
     except Exception:
         return None
@@ -281,7 +285,14 @@ def run_benchmark(*, catalog_rows: Optional[list] = None) -> dict:
         # mientras el hash del snapshot revisado coincida con el actual — tocar la biblioteca la caduca.
         so = _signoff_for(pid, snap.get("snapshot_hash"))
         entry["review"]["signoff"] = so
-        entry["review"]["human_signoff"] = bool(so)
+        # [P1-REVIEW-KIND-HONEST · 2026-09-05] Antes había UN booleano, `human_signoff`, y valía True con una
+        # revisión firmada por Claude: el informe afirmaba una revisión humana que no existía. Tres campos, uno
+        # por tipo de revisión, y ninguno se deduce de otro. La clínica todavía no existe y por eso es False
+        # explícito, no ausente: un campo que falta se lee como «no aplica», y aquí sí aplica.
+        _kind = (so or {}).get("kind") or ""
+        entry["review"]["automated_review"] = bool(so) and _kind == "automated"
+        entry["review"]["human_cultural_review"] = bool(so) and _kind == "human"
+        entry["review"]["clinical_review"] = False
         report["profiles"][pid] = entry
     report["mixing"] = _mixing(cp.PROFILES.keys())
     ok, failures = gate_verdict(report)
@@ -325,7 +336,7 @@ def render_markdown(report: dict) -> str:
             f"{av.get('availability_risk_pct', 'n/a')} % | {e['diversity']['proteins']}/{e['diversity']['techniques']} | "
             f"{'ok' if e['clinical']['ok'] else 'FUGA'} (procesados {len(e['clinical']['processed_meat'])}, sodio {len(e['clinical']['sodium_high'])}) | "
             f"{len(e['review']['flagged_for_human_review'])} marcadas · firma: "
-            f"{('sí (' + str((e['review'].get('signoff') or {}).get('by')) + ', ' + str((e['review'].get('signoff') or {}).get('date')) + ')') if e['review']['human_signoff'] else 'pendiente'} |")
+            f"{(str((e['review'].get('signoff') or {}).get('kind') or 'automática') + ' (' + str((e['review'].get('signoff') or {}).get('by')) + ', ' + str((e['review'].get('signoff') or {}).get('date')) + ')') if e['review'].get('signoff') else 'pendiente'} |")
     mixing = report.get("mixing") or {}
     lines += ["", f"Mezcla 0,7/0,3 en 10 días: {'todas las parejas con candidatos en las 4 franjas' if mixing.get('ok') else 'faltan candidatos'} "
               f"({len(mixing.get('pairs') or {})} parejas).", ""]

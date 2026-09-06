@@ -264,254 +264,8 @@
         "starch_base_off_slot": []
       },
       "availability": {
-        "availability_risk_pct": 13.4,
-        "constituents": 447,
-        "dominican_cultivar_outside_do": [
-          {
-            "ingredient": "Papa",
-            "template": "Ensalada de atún con papa y huevo"
-          },
-          {
-            "ingredient": "Yuca",
-            "template": "Sancocho de gallina"
-          },
-          {
-            "ingredient": "Plátano verde",
-            "template": "Sancocho de gallina"
-          },
-          {
-            "ingredient": "Papa",
-            "template": "Sopa de verduras con pollo y mazorca"
-          },
-          {
-            "ingredient": "Auyama",
-            "template": "Sopa de verduras con pollo y mazorca"
-          },
-          {
-            "ingredient": "Guayaba",
-            "template": "Jugo de guayaba con leche"
-          },
-          {
-            "ingredient": "Yuca",
-            "template": "Yuca con queso y huevo"
-          },
-          {
-            "ingredient": "Papa",
-            "template": "Sopa de garbanzo con papa y zanahoria"
-          },
-          {
-            "ingredient": "Ñame",
-            "template": "Ñame hervido con huevo y queso gouda"
-          },
-          {
-            "ingredient": "Papa",
-            "template": "Sopa de lentejas con zanahoria y papa"
-          },
-          {
-            "ingredient": "Auyama",
-            "template": "Crema de auyama con queso"
-          },
-          {
-            "ingredient": "Plátano verde",
-            "template": "Sopa de lentejas con plátano verde"
-          },
-          {
-            "ingredient": "Batata",
-            "template": "Batata asada con atún y cebolla"
-          },
-          {
-            "ingredient": "Plátano maduro",
-            "template": "Bandeja paisa aligerada"
-          },
-          {
-            "ingredient": "Auyama",
-            "template": "Auyama guisada con huevo y arepa"
-          },
-          {
-            "ingredient": "Papa",
-            "template": "Arroz atollado con pollo"
-          },
-          {
-            "ingredient": "Longaniza dominicana",
-            "template": "Longaniza santarrosana con papa"
-          },
-          {
-            "ingredient": "Papa",
-            "template": "Longaniza santarrosana con papa"
-          },
-          {
-            "ingredient": "Papa",
-            "template": "Caldo de pollo con papa y cilantro"
-          },
-          {
-            "ingredient": "Papa",
-            "template": "Caldo de costilla con papa"
-          },
-          {
-            "ingredient": "Papa",
-            "template": "Garbanzos guisados con papa criolla"
-          },
-          {
-            "ingredient": "Plátano maduro",
-            "template": "Fríjoles con arroz, plátano maduro y aguacate"
-          },
-          {
-            "ingredient": "Papa",
-            "template": "Sopa de guascas con pollo desmenuzado"
-          },
-          {
-            "ingredient": "Papa",
-            "template": "Carne molida guisada con papa y arroz"
-          },
-          {
-            "ingredient": "Plátano maduro",
-            "template": "Lentejas con arroz y plátano maduro"
-          },
-          {
-            "ingredient": "Guayaba",
-            "template": "Guayaba con queso blanco"
-          },
-          {
-            "ingredient": "Plátano maduro",
-            "template": "Plátano maduro asado con queso"
-          },
-          {
-            "ingredient": "Papa",
-            "template": "Ajiaco santafereño con pollo"
-          },
-          {
-            "ingredient": "Ñame",
-            "template": "Ñame y yuca sudados con costilla"
-          },
-          {
-            "ingredient": "Yuca",
-            "template": "Ñame y yuca sudados con costilla"
-          },
-          {
-            "ingredient": "Papa",
-            "template": "Sudado de carne con papa y yuca"
-          },
-          {
-            "ingredient": "Yuca",
-            "template": "Sudado de carne con papa y yuca"
-          },
-          {
-            "ingredient": "Guanábana",
-            "template": "Batido de guanábana con leche"
-          },
-          {
-            "ingredient": "Papa",
-            "template": "Tortilla de huevo con papa y cebolla"
-          },
-          {
-            "ingredient": "Plátano verde",
-            "template": "Tilapia frita con patacón"
-          },
-          {
-            "ingredient": "Plátano verde",
-            "template": "Patacones con hogao y queso"
-          },
-          {
-            "ingredient": "Papa",
-            "template": "Sobrebarriga en salsa criolla con papa"
-          },
-          {
-            "ingredient": "Papa",
-            "template": "Empanadas de carne al horno"
-          },
-          {
-            "ingredient": "Papa",
-            "template": "Tilapia al horno con ensalada y papa"
-          },
-          {
-            "ingredient": "Papa",
-            "template": "Sopa de pollo con fideos y verduras"
-          },
-          {
-            "ingredient": "Plátano verde",
-            "template": "Pescado frito con patacones y ensalada"
-          },
-          {
-            "ingredient": "Papa",
-            "template": "Bacalao guisado con papa y arroz"
-          },
-          {
-            "ingredient": "Plátano maduro",
-            "template": "Frijol cargamanto con costilla"
-          },
-          {
-            "ingredient": "Papa",
-            "template": "Papa guisada con atún"
-          },
-          {
-            "ingredient": "Yuca",
-            "template": "Sudado de pescado con yuca"
-          },
-          {
-            "ingredient": "Coco",
-            "template": "Camarones al ajillo con arroz de coco"
-          },
-          {
-            "ingredient": "Papa",
-            "template": "Pechuga en salsa de champiñones con puré"
-          },
-          {
-            "ingredient": "Papa",
-            "template": "Lentejas guisadas con papa y arroz"
-          },
-          {
-            "ingredient": "Papa",
-            "template": "Sudado de pollo con papa"
-          },
-          {
-            "ingredient": "Papa",
-            "template": "Morcilla con papa criolla"
-          },
-          {
-            "ingredient": "Papa",
-            "template": "Gallina criolla guisada con papa criolla"
-          },
-          {
-            "ingredient": "Batata",
-            "template": "Batata asada con queso costeño"
-          },
-          {
-            "ingredient": "Yuca",
-            "template": "Mondongo ligero con yuca"
-          },
-          {
-            "ingredient": "Papa",
-            "template": "Mondongo ligero con yuca"
-          },
-          {
-            "ingredient": "Papa",
-            "template": "Huevos con papa y cebolla (revueltos)"
-          },
-          {
-            "ingredient": "Plátano verde",
-            "template": "Trucha a la plancha con patacones"
-          },
-          {
-            "ingredient": "Papa",
-            "template": "Tamal tolimense ligero"
-          },
-          {
-            "ingredient": "Auyama",
-            "template": "Puré de auyama con huevo duro"
-          },
-          {
-            "ingredient": "Papa",
-            "template": "Tortilla de papa con queso"
-          },
-          {
-            "ingredient": "Auyama",
-            "template": "Huevos con auyama y queso"
-          }
-        ],
-        "needs_review": false,
-        "ok": true,
-        "priced_pct": 89.9,
-        "review_threshold_pct": 15.0
+        "available": null,
+        "note": "sin catálogo vivo: disponibilidad no evaluada"
       },
       "clinical": {
         "allergen_leaks": [],
@@ -566,66 +320,13 @@
         "pct": 100.0
       },
       "review": {
+        "automated_review": true,
+        "clinical_review": false,
         "editorial": {
           "curated": 118
         },
-        "flagged_for_human_review": [
-          "Ajiaco santafereño con pollo",
-          "Arroz atollado con pollo",
-          "Auyama guisada con huevo y arepa",
-          "Bacalao guisado con papa y arroz",
-          "Bandeja paisa aligerada",
-          "Batata asada con atún y cebolla",
-          "Batata asada con queso costeño",
-          "Batido de guanábana con leche",
-          "Caldo de costilla con papa",
-          "Caldo de pollo con papa y cilantro",
-          "Camarones al ajillo con arroz de coco",
-          "Carne molida guisada con papa y arroz",
-          "Crema de auyama con queso",
-          "Empanadas de carne al horno",
-          "Ensalada de atún con papa y huevo",
-          "Frijol cargamanto con costilla",
-          "Fríjoles con arroz, plátano maduro y aguacate",
-          "Gallina criolla guisada con papa criolla",
-          "Garbanzos guisados con papa criolla",
-          "Guayaba con queso blanco",
-          "Huevos con auyama y queso",
-          "Huevos con papa y cebolla (revueltos)",
-          "Jugo de guayaba con leche",
-          "Lentejas con arroz y plátano maduro",
-          "Lentejas guisadas con papa y arroz",
-          "Longaniza santarrosana con papa",
-          "Mondongo ligero con yuca",
-          "Morcilla con papa criolla",
-          "Papa guisada con atún",
-          "Patacones con hogao y queso",
-          "Pechuga en salsa de champiñones con puré",
-          "Pescado frito con patacones y ensalada",
-          "Plátano maduro asado con queso",
-          "Puré de auyama con huevo duro",
-          "Sancocho de gallina",
-          "Sobrebarriga en salsa criolla con papa",
-          "Sopa de garbanzo con papa y zanahoria",
-          "Sopa de guascas con pollo desmenuzado",
-          "Sopa de lentejas con plátano verde",
-          "Sopa de lentejas con zanahoria y papa",
-          "Sopa de pollo con fideos y verduras",
-          "Sopa de verduras con pollo y mazorca",
-          "Sudado de carne con papa y yuca",
-          "Sudado de pescado con yuca",
-          "Sudado de pollo con papa",
-          "Tamal tolimense ligero",
-          "Tilapia al horno con ensalada y papa",
-          "Tilapia frita con patacón",
-          "Tortilla de huevo con papa y cebolla",
-          "Tortilla de papa con queso",
-          "Trucha a la plancha con patacones",
-          "Yuca con queso y huevo",
-          "Ñame hervido con huevo y queso gouda",
-          "Ñame y yuca sudados con costilla"
-        ],
-        "human_signoff": true,
+        "flagged_for_human_review": [],
+        "human_cultural_review": false,
         "signoff": {
           "accepted": [
             "Cultivares dominicanos (14,7 %): yuca, plátano, arracacha, auyama son producto colombiano corriente.",
@@ -641,6 +342,7 @@
             "Bandeja paisa «aligerada» estaba en 1.265 kcal: fríjol 120→80 g, arroz 80→60 g, chicharrón 40→25 g, res 100→90 g.",
             "Chicharrón con arepa: 100→60 g; palmito con camarones + arroz; sopa de verduras con pollo a 140 g de pollo."
           ],
+          "kind": "automated",
           "snapshot_hash": "934a0bf8d4e9deba8363b87b69642c40db731c23df7090b6efddfd6049812397"
         }
       },
@@ -654,13 +356,8 @@
         "starch_base_off_slot": []
       },
       "availability": {
-        "availability_risk_pct": 0.0,
-        "constituents": 688,
-        "dominican_cultivar_outside_do": [],
-        "needs_review": false,
-        "ok": true,
-        "priced_pct": 97.8,
-        "review_threshold_pct": 15.0
+        "available": null,
+        "note": "sin catálogo vivo: disponibilidad no evaluada"
       },
       "clinical": {
         "allergen_leaks": [],
@@ -729,11 +426,13 @@
         "pct": 99.4
       },
       "review": {
+        "automated_review": true,
+        "clinical_review": false,
         "editorial": {
           "curated": 123
         },
         "flagged_for_human_review": [],
-        "human_signoff": true,
+        "human_cultural_review": false,
         "signoff": {
           "accepted": [
             "Arenque desmenuzado (1.700 mg Na): plato tradicional de arenque salado, se mantiene; el motor lo marca sodium_high.",
@@ -752,6 +451,7 @@
             "«Sopa de habichuelas negras con casabe» → «Habichuelas negras guisadas con casabe» (el SSOT de franjas no admite «sopa» en cena).",
             "Tanda 2 de despensa duradera (semanas 3-4 sin congelador): calibrados los días de refrigerado duradero (cebolla/ajo 60, papa/auyama/repollo/zanahoria/quesos curados 45, cítricos/tortillas/batata/ñame 30); +12 platos DO; cobertura al día 30 sin congelador ≥ 7 por franja en las seis bibliotecas."
           ],
+          "kind": "automated",
           "snapshot_hash": "df30b96607d631d7f85d8bb8af4f9a935b3574e495e571918d2265059103d834"
         }
       },
@@ -765,74 +465,8 @@
         "starch_base_off_slot": []
       },
       "availability": {
-        "availability_risk_pct": 3.0,
-        "constituents": 508,
-        "dominican_cultivar_outside_do": [
-          {
-            "ingredient": "Papa",
-            "template": "Caldo de camarón con verduras"
-          },
-          {
-            "ingredient": "Papa",
-            "template": "Crema de chile poblano con elote"
-          },
-          {
-            "ingredient": "Papa",
-            "template": "Papas guisadas con queso y chipotle"
-          },
-          {
-            "ingredient": "Longaniza dominicana",
-            "template": "Frijoles charros con longaniza"
-          },
-          {
-            "ingredient": "Papa",
-            "template": "Picadillo de res con papa y zanahoria"
-          },
-          {
-            "ingredient": "Papa",
-            "template": "Sopa de verduras con pollo y epazote"
-          },
-          {
-            "ingredient": "Guayaba",
-            "template": "Yogur con guayaba y avena"
-          },
-          {
-            "ingredient": "Plátano maduro",
-            "template": "Avena con canela y plátano estilo mexicano"
-          },
-          {
-            "ingredient": "Papa",
-            "template": "Lentejas guisadas con papa y comino"
-          },
-          {
-            "ingredient": "Papa",
-            "template": "Papas con huevo y chile guajillo"
-          },
-          {
-            "ingredient": "Papa",
-            "template": "Bacalao a la vizcaína con papa"
-          },
-          {
-            "ingredient": "Papa",
-            "template": "Atún guisado con papa y chipotle"
-          },
-          {
-            "ingredient": "Papa",
-            "template": "Sopa de lentejas con verduras"
-          },
-          {
-            "ingredient": "Papa",
-            "template": "Sopa de fideo con garbanzo"
-          },
-          {
-            "ingredient": "Papa",
-            "template": "Tortitas de papa con queso"
-          }
-        ],
-        "needs_review": false,
-        "ok": true,
-        "priced_pct": 72.6,
-        "review_threshold_pct": 15.0
+        "available": null,
+        "note": "sin catálogo vivo: disponibilidad no evaluada"
       },
       "clinical": {
         "allergen_leaks": [],
@@ -889,27 +523,13 @@
         "pct": 100.0
       },
       "review": {
+        "automated_review": true,
+        "clinical_review": false,
         "editorial": {
           "curated": 109
         },
-        "flagged_for_human_review": [
-          "Atún guisado con papa y chipotle",
-          "Avena con canela y plátano estilo mexicano",
-          "Bacalao a la vizcaína con papa",
-          "Caldo de camarón con verduras",
-          "Crema de chile poblano con elote",
-          "Frijoles charros con longaniza",
-          "Lentejas guisadas con papa y comino",
-          "Papas con huevo y chile guajillo",
-          "Papas guisadas con queso y chipotle",
-          "Picadillo de res con papa y zanahoria",
-          "Sopa de fideo con garbanzo",
-          "Sopa de lentejas con verduras",
-          "Sopa de verduras con pollo y epazote",
-          "Tortitas de papa con queso",
-          "Yogur con guayaba y avena"
-        ],
-        "human_signoff": true,
+        "flagged_for_human_review": [],
+        "human_cultural_review": false,
         "signoff": {
           "accepted": [
             "Pozole ligero de cerdo usa maíz en granos del catálogo (no hay maíz pozolero): adaptación declarada; el LLM adapta.",
@@ -926,6 +546,7 @@
             "Sopa de verduras con pollo y epazote: pollo 150 g + papa; huachinango al horno + arroz; avena con canela y plátano solo en desayuno.",
             "«Ensalada de jícama con chile y limón» eliminada (duplicado del snack «Jícama con chile y limón»); ensalada de nopales con queso solo en cena."
           ],
+          "kind": "automated",
           "snapshot_hash": "ec099829b4b85d5dcbf9b4cd264802395b0fbf82b7dce450a26e23578723f21e"
         }
       },
@@ -939,262 +560,8 @@
         "starch_base_off_slot": []
       },
       "availability": {
-        "availability_risk_pct": 15.2,
-        "constituents": 408,
-        "dominican_cultivar_outside_do": [
-          {
-            "ingredient": "Yuca",
-            "template": "Bacalao guisado con viandas"
-          },
-          {
-            "ingredient": "Ñame",
-            "template": "Bacalao guisado con viandas"
-          },
-          {
-            "ingredient": "Guayaba",
-            "template": "Ensalada de frutas tropicales"
-          },
-          {
-            "ingredient": "Auyama",
-            "template": "Guisado de garbanzos con calabaza y arroz"
-          },
-          {
-            "ingredient": "Guineo verde",
-            "template": "Guineos verdes majados con huevo y cebolla"
-          },
-          {
-            "ingredient": "Pan de agua",
-            "template": "Pan con mantequilla y jugo de chinola"
-          },
-          {
-            "ingredient": "Yautía",
-            "template": "Pescado al horno con limón y sofrito"
-          },
-          {
-            "ingredient": "Plátano verde",
-            "template": "Tostones con pique"
-          },
-          {
-            "ingredient": "Plátano verde",
-            "template": "Chicharrón de cerdo con tostones y pique"
-          },
-          {
-            "ingredient": "Ñame",
-            "template": "Jamón de cocinar con puré de ñame"
-          },
-          {
-            "ingredient": "Yuca",
-            "template": "Sancocho puertorriqueño"
-          },
-          {
-            "ingredient": "Ñame",
-            "template": "Sancocho puertorriqueño"
-          },
-          {
-            "ingredient": "Auyama",
-            "template": "Sancocho puertorriqueño"
-          },
-          {
-            "ingredient": "Auyama",
-            "template": "Habichuelas guisadas con calabaza y arroz"
-          },
-          {
-            "ingredient": "Plátano maduro",
-            "template": "Pechuga a la plancha con amarillos y ensalada"
-          },
-          {
-            "ingredient": "Coco",
-            "template": "Piña con coco rallado"
-          },
-          {
-            "ingredient": "Plátano verde",
-            "template": "Mofongo con chicharrón"
-          },
-          {
-            "ingredient": "Auyama",
-            "template": "Lentejas guisadas con calabaza y arroz"
-          },
-          {
-            "ingredient": "Pan de agua",
-            "template": "Huevos revueltos con queso de papa y pan de agua"
-          },
-          {
-            "ingredient": "Plátano verde",
-            "template": "Puré de plátano verde con huevo frito"
-          },
-          {
-            "ingredient": "Yautía",
-            "template": "Serenata de bacalao con viandas"
-          },
-          {
-            "ingredient": "Ñame",
-            "template": "Serenata de bacalao con viandas"
-          },
-          {
-            "ingredient": "Papa",
-            "template": "Pavo molido guisado con papa"
-          },
-          {
-            "ingredient": "Ñame",
-            "template": "Puré de ñame con huevo duro y queso de papa"
-          },
-          {
-            "ingredient": "Yuca",
-            "template": "Pescado a la plancha con yuca hervida"
-          },
-          {
-            "ingredient": "Plátano verde",
-            "template": "Morcilla a la plancha con tostones"
-          },
-          {
-            "ingredient": "Papa",
-            "template": "Bacalao a la vizcaína con arroz blanco"
-          },
-          {
-            "ingredient": "Papa",
-            "template": "Tortilla de huevo con papa y jamón de cocinar"
-          },
-          {
-            "ingredient": "Papa",
-            "template": "Tortilla de papa con queso de papa"
-          },
-          {
-            "ingredient": "Batata",
-            "template": "Batata hervida con canela"
-          },
-          {
-            "ingredient": "Batata",
-            "template": "Camarones salteados con vegetales"
-          },
-          {
-            "ingredient": "Plátano verde",
-            "template": "Camarones al ajillo con tostones"
-          },
-          {
-            "ingredient": "Guineo verde",
-            "template": "Guineítos en escabeche"
-          },
-          {
-            "ingredient": "Pan sobao",
-            "template": "Tostadas de pan sobao con queso y jugo de naranja"
-          },
-          {
-            "ingredient": "Papa",
-            "template": "Chuletas de cerdo guisadas con arroz"
-          },
-          {
-            "ingredient": "Yautía",
-            "template": "Yautía hervida con huevo y queso de papa"
-          },
-          {
-            "ingredient": "Auyama",
-            "template": "Habichuelas guisadas con arroz integral"
-          },
-          {
-            "ingredient": "Plátano verde",
-            "template": "Bistec encebollado con tostones"
-          },
-          {
-            "ingredient": "Coco",
-            "template": "Arroz con dulce"
-          },
-          {
-            "ingredient": "Batata",
-            "template": "Pechuga de pollo con puré de batata"
-          },
-          {
-            "ingredient": "Auyama",
-            "template": "Pollo guisado con calabaza y arroz"
-          },
-          {
-            "ingredient": "Papa",
-            "template": "Pastelón de papa con carne"
-          },
-          {
-            "ingredient": "Auyama",
-            "template": "Arroz con habichuelas y pechuga guisada"
-          },
-          {
-            "ingredient": "Papa",
-            "template": "Ensalada de pollo con aceitunas y papas"
-          },
-          {
-            "ingredient": "Yuca",
-            "template": "Sopa de pollo con viandas"
-          },
-          {
-            "ingredient": "Auyama",
-            "template": "Sopa de pollo con viandas"
-          },
-          {
-            "ingredient": "Papa",
-            "template": "Sopa de fideos con pollo"
-          },
-          {
-            "ingredient": "Pan de agua",
-            "template": "Tostadas con queso de papa"
-          },
-          {
-            "ingredient": "Guayaba",
-            "template": "Queso de papa con guayaba"
-          },
-          {
-            "ingredient": "Batata",
-            "template": "Batata al horno con especias"
-          },
-          {
-            "ingredient": "Plátano verde",
-            "template": "Mofongo relleno de camarones"
-          },
-          {
-            "ingredient": "Pan de agua",
-            "template": "Pan con jamón de cocinar y queso de papa"
-          },
-          {
-            "ingredient": "Auyama",
-            "template": "Crema de auyama con queso blanco"
-          },
-          {
-            "ingredient": "Yautía",
-            "template": "Filete de pescado en escabeche con viandas"
-          },
-          {
-            "ingredient": "Ñame",
-            "template": "Sardinas guisadas con ñame hervido"
-          },
-          {
-            "ingredient": "Papa",
-            "template": "Ensalada de bacalao con papa y huevo"
-          },
-          {
-            "ingredient": "Batata",
-            "template": "Batata asada con sardinas"
-          },
-          {
-            "ingredient": "Batata",
-            "template": "Bacalao guisado con batata"
-          },
-          {
-            "ingredient": "Yuca",
-            "template": "Alcapurrias horneadas de camarón"
-          },
-          {
-            "ingredient": "Guineo verde",
-            "template": "Alcapurrias horneadas de camarón"
-          },
-          {
-            "ingredient": "Auyama",
-            "template": "Pavochón con puré de auyama"
-          },
-          {
-            "ingredient": "Plátano maduro",
-            "template": "Pastelón de plátano maduro con carne"
-          }
-        ],
-        "needs_review": true,
-        "ok": true,
-        "priced_pct": 78.4,
-        "review_threshold_pct": 15.0
+        "available": null,
+        "note": "sin catálogo vivo: disponibilidad no evaluada"
       },
       "clinical": {
         "allergen_leaks": [],
@@ -1270,68 +637,13 @@
         "pct": 100.0
       },
       "review": {
+        "automated_review": true,
+        "clinical_review": false,
         "editorial": {
           "curated": 110
         },
-        "flagged_for_human_review": [
-          "Alcapurrias horneadas de camarón",
-          "Arroz con dulce",
-          "Arroz con habichuelas y pechuga guisada",
-          "Bacalao a la vizcaína con arroz blanco",
-          "Bacalao guisado con batata",
-          "Bacalao guisado con viandas",
-          "Batata al horno con especias",
-          "Batata asada con sardinas",
-          "Batata hervida con canela",
-          "Bistec encebollado con tostones",
-          "Camarones al ajillo con tostones",
-          "Camarones salteados con vegetales",
-          "Chicharrón de cerdo con tostones y pique",
-          "Chuletas de cerdo guisadas con arroz",
-          "Crema de auyama con queso blanco",
-          "Ensalada de bacalao con papa y huevo",
-          "Ensalada de frutas tropicales",
-          "Ensalada de pollo con aceitunas y papas",
-          "Filete de pescado en escabeche con viandas",
-          "Guineos verdes majados con huevo y cebolla",
-          "Guineítos en escabeche",
-          "Guisado de garbanzos con calabaza y arroz",
-          "Habichuelas guisadas con arroz integral",
-          "Habichuelas guisadas con calabaza y arroz",
-          "Huevos revueltos con queso de papa y pan de agua",
-          "Jamón de cocinar con puré de ñame",
-          "Lentejas guisadas con calabaza y arroz",
-          "Mofongo con chicharrón",
-          "Mofongo relleno de camarones",
-          "Morcilla a la plancha con tostones",
-          "Pan con jamón de cocinar y queso de papa",
-          "Pan con mantequilla y jugo de chinola",
-          "Pastelón de papa con carne",
-          "Pastelón de plátano maduro con carne",
-          "Pavo molido guisado con papa",
-          "Pavochón con puré de auyama",
-          "Pechuga a la plancha con amarillos y ensalada",
-          "Pechuga de pollo con puré de batata",
-          "Pescado a la plancha con yuca hervida",
-          "Pescado al horno con limón y sofrito",
-          "Piña con coco rallado",
-          "Pollo guisado con calabaza y arroz",
-          "Puré de plátano verde con huevo frito",
-          "Puré de ñame con huevo duro y queso de papa",
-          "Queso de papa con guayaba",
-          "Sancocho puertorriqueño",
-          "Sardinas guisadas con ñame hervido",
-          "Serenata de bacalao con viandas",
-          "Sopa de fideos con pollo",
-          "Sopa de pollo con viandas",
-          "Tortilla de huevo con papa y jamón de cocinar",
-          "Tortilla de papa con queso de papa",
-          "Tostadas con queso de papa",
-          "Tostadas de pan sobao con queso y jugo de naranja",
-          "Tostones con pique",
-          "Yautía hervida con huevo y queso de papa"
-        ],
-        "human_signoff": true,
+        "flagged_for_human_review": [],
+        "human_cultural_review": false,
         "signoff": {
           "accepted": [
             "Yuca, plátano, ñame, auyama, guineo verde marcados «cultivar dominicano» (16,5 %): producto corriente en Puerto Rico, no es riesgo de disponibilidad.",
@@ -1348,6 +660,7 @@
             "Chicharrón 120→70 g y 100→60 g, jamón de cocinar 150→80 g, chuletas ahumadas 150→110 g (sodio 1.800-2.200 mg → bajo 1.500).",
             "Pescado al horno con sofrito (168 kcal) completado con yautía; tortilla de huevo a 3 huevos; camarones salteados con batata."
           ],
+          "kind": "automated",
           "snapshot_hash": "a9706fc04ed6c678387de1c9810e6b16b86db9b2178bcc455b1019fa28a7d1b3"
         }
       },
@@ -1361,106 +674,8 @@
         "starch_base_off_slot": []
       },
       "availability": {
-        "availability_risk_pct": 5.3,
-        "constituents": 433,
-        "dominican_cultivar_outside_do": [
-          {
-            "ingredient": "Papa",
-            "template": "Potaje de garbanzos con acelgas"
-          },
-          {
-            "ingredient": "Papa",
-            "template": "Menestra de verduras con jamón serrano"
-          },
-          {
-            "ingredient": "Papa",
-            "template": "Pulpo a la gallega con patata y pimentón"
-          },
-          {
-            "ingredient": "Papa",
-            "template": "Tortilla española con patata y cebolla"
-          },
-          {
-            "ingredient": "Papa",
-            "template": "Crema de zanahoria con queso"
-          },
-          {
-            "ingredient": "Papa",
-            "template": "Patatas a lo pobre con huevo"
-          },
-          {
-            "ingredient": "Papa",
-            "template": "Cordero asado con patatas panaderas"
-          },
-          {
-            "ingredient": "Papa",
-            "template": "Ensaladilla rusa con atún en lata"
-          },
-          {
-            "ingredient": "Papa",
-            "template": "Albóndigas en salsa con puré de patata"
-          },
-          {
-            "ingredient": "Papa",
-            "template": "Pollo al ajillo con patatas panaderas"
-          },
-          {
-            "ingredient": "Papa",
-            "template": "Potaje de garbanzos con bacalao"
-          },
-          {
-            "ingredient": "Pan de agua",
-            "template": "Bocadillo de jamón serrano con tomate"
-          },
-          {
-            "ingredient": "Papa",
-            "template": "Tortilla de patatas con jamón serrano"
-          },
-          {
-            "ingredient": "Papa",
-            "template": "Huevos rotos con patatas y jamón serrano"
-          },
-          {
-            "ingredient": "Papa",
-            "template": "Crema de calabacín con queso"
-          },
-          {
-            "ingredient": "Papa",
-            "template": "Ternera guisada con patatas y zanahoria"
-          },
-          {
-            "ingredient": "Papa",
-            "template": "Bocadillo de tortilla española"
-          },
-          {
-            "ingredient": "Papa",
-            "template": "Vieiras a la plancha con puerro"
-          },
-          {
-            "ingredient": "Papa",
-            "template": "Bacalao con patatas al horno"
-          },
-          {
-            "ingredient": "Papa",
-            "template": "Conejo al ajillo con patatas"
-          },
-          {
-            "ingredient": "Papa",
-            "template": "Pollo asado con verduras al horno"
-          },
-          {
-            "ingredient": "Papa",
-            "template": "Trucha al horno con patatas panaderas"
-          },
-          {
-            "ingredient": "Papa",
-            "template": "Sopa de verduras con fideos y pollo"
-          }
-        ],
-        "needs_review": false,
-        "ok": true,
-        "priced_pct": 86.4,
-        "review_threshold_pct": 15.0
+        "available": null,
+        "note": "sin catálogo vivo: disponibilidad no evaluada"
       },
       "clinical": {
         "allergen_leaks": [],
@@ -1554,35 +769,13 @@
         "pct": 100.0
       },
       "review": {
+        "automated_review": true,
+        "clinical_review": false,
         "editorial": {
           "curated": 104
         },
-        "flagged_for_human_review": [
-          "Albóndigas en salsa con puré de patata",
-          "Bacalao con patatas al horno",
-          "Bocadillo de jamón serrano con tomate",
-          "Bocadillo de tortilla española",
-          "Conejo al ajillo con patatas",
-          "Cordero asado con patatas panaderas",
-          "Crema de calabacín con queso",
-          "Crema de zanahoria con queso",
-          "Ensaladilla rusa con atún en lata",
-          "Huevos rotos con patatas y jamón serrano",
-          "Menestra de verduras con jamón serrano",
-          "Patatas a lo pobre con huevo",
-          "Pollo al ajillo con patatas panaderas",
-          "Pollo asado con verduras al horno",
-          "Potaje de garbanzos con acelgas",
-          "Potaje de garbanzos con bacalao",
-          "Pulpo a la gallega con patata y pimentón",
-          "Sopa de verduras con fideos y pollo",
-          "Ternera guisada con patatas y zanahoria",
-          "Tortilla de patatas con jamón serrano",
-          "Tortilla española con patata y cebolla",
-          "Trucha al horno con patatas panaderas",
-          "Vieiras a la plancha con puerro"
-        ],
-        "human_signoff": true,
+        "flagged_for_human_review": [],
+        "human_cultural_review": false,
         "signoff": {
           "accepted": [
             "19 platos con curados (jamón serrano/ibérico, chorizo, panceta): identidad de la cocina; el registry los marca processed_meat y el motor clínico decide por perfil.",
@@ -1600,6 +793,7 @@
             "Menestra y vieiras completadas con papa; fabada: morcilla 80→50 g, panceta 60→40 g, chorizo 50→40 g.",
             "Ensaladilla rusa y ensalada de judías «con atún» llevaban sardinas: ahora atún."
           ],
+          "kind": "automated",
           "snapshot_hash": "0e8fc02437f203d942d3a53acc8c76ff421dd4f6142805fd10500feb4f1f2c4a"
         }
       },
@@ -1613,90 +807,8 @@
         "starch_base_off_slot": []
       },
       "availability": {
-        "availability_risk_pct": 4.7,
-        "constituents": 403,
-        "dominican_cultivar_outside_do": [
-          {
-            "ingredient": "Batata",
-            "template": "Batata al horno con frijoles negros y queso"
-          },
-          {
-            "ingredient": "Papa",
-            "template": "Filete de pescado blanco al horno con papa y vainitas"
-          },
-          {
-            "ingredient": "Papa",
-            "template": "Sopa de almejas estilo Nueva Inglaterra"
-          },
-          {
-            "ingredient": "Papa",
-            "template": "Sopa de papa con queso cheddar"
-          },
-          {
-            "ingredient": "Auyama",
-            "template": "Pechuga de pollo a la parrilla con vegetales"
-          },
-          {
-            "ingredient": "Papa",
-            "template": "Crema de brócoli con queso cheddar"
-          },
-          {
-            "ingredient": "Papa",
-            "template": "Huevos revueltos con papa y cebolla"
-          },
-          {
-            "ingredient": "Papa",
-            "template": "Papa al horno con frijoles pintos y cheddar"
-          },
-          {
-            "ingredient": "Papa",
-            "template": "Pastel de carne con puré de papa"
-          },
-          {
-            "ingredient": "Papa",
-            "template": "Pavo al horno con puré de papa"
-          },
-          {
-            "ingredient": "Papa",
-            "template": "Guiso de lentejas con papa y salsa de tomate"
-          },
-          {
-            "ingredient": "Papa",
-            "template": "Chuletas de cerdo al horno"
-          },
-          {
-            "ingredient": "Papa",
-            "template": "Huevos revueltos con papas y espinaca"
-          },
-          {
-            "ingredient": "Papa",
-            "template": "Chuletas de cerdo con puré de papa"
-          },
-          {
-            "ingredient": "Papa",
-            "template": "Papa al horno con crema agria"
-          },
-          {
-            "ingredient": "Batata",
-            "template": "Pechuga de pollo al horno con batata y espárragos"
-          },
-          {
-            "ingredient": "Papa",
-            "template": "Huevos al horno con papa y queso cheddar"
-          },
-          {
-            "ingredient": "Papa",
-            "template": "Salmón con espárragos"
-          },
-          {
-            "ingredient": "Papa",
-            "template": "Pavo al horno con puré y salsa de arándanos"
-          }
-        ],
-        "needs_review": false,
-        "ok": true,
-        "priced_pct": 86.1,
-        "review_threshold_pct": 15.0
+        "available": null,
+        "note": "sin catálogo vivo: disponibilidad no evaluada"
       },
       "clinical": {
         "allergen_leaks": [],
@@ -1777,33 +889,16 @@
         "pct": 100.0
       },
       "review": {
+        "automated_review": true,
+        "clinical_review": false,
         "editorial": {
           "curated": 103
         },
         "flagged_for_human_review": [
-          "Batata al horno con frijoles negros y queso",
-          "Chuletas de cerdo al horno",
-          "Chuletas de cerdo con puré de papa",
-          "Crema de brócoli con queso cheddar",
-          "Filete de pescado blanco al horno con papa y vainitas",
-          "Guiso de lentejas con papa y salsa de tomate",
-          "Huevos al horno con papa y queso cheddar",
-          "Huevos revueltos con papa y cebolla",
-          "Huevos revueltos con papas y espinaca",
-          "Papa al horno con crema agria",
-          "Papa al horno con frijoles pintos y cheddar",
-          "Pastel de carne con puré de papa",
-          "Pavo al horno con puré de papa",
-          "Pavo al horno con puré y salsa de arándanos",
-          "Pechuga de pollo a la parrilla con vegetales",
-          "Pechuga de pollo al horno con batata y espárragos",
-          "Salmón con espárragos",
-          "Sopa de almejas estilo Nueva Inglaterra",
-          "Sopa de papa con queso cheddar",
           "Tacos con sazonador para tacos",
           "Tacos de pescado con repollo y crema agria"
         ],
-        "human_signoff": true,
+        "human_cultural_review": false,
         "signoff": {
           "accepted": [
             "«Tacos de pescado» y «Tacos con sazonador»: el taco es cotidiano en EE. UU. (Tex-Mex); contaminación léxica aceptada (2 de 81, bajo el 3 %)."
@@ -1818,6 +913,7 @@
             "Seis bajas: «Yogur griego con duraznos» (duplicado exacto), «Queso en hebras con vegetales», «Ensalada de huevos rellenos», «Bolitas de papa con salchichas», «Pepperoni con queso provolone y pan», «Salchichas con frijoles horneados» (sin valor nutricional o > 1.900 mg Na).",
             "Ensalada de repollo con pollo + aguacate y maíz; camarones a la parrilla + arroz integral; «Ensalada verde con pollo y nueces pecanas» (antes sin proteína); salmón con espárragos + papa; chili en lata 250→200 g; jamón del sándwich 100→70 g."
           ],
+          "kind": "automated",
           "snapshot_hash": "0f7d829fb9db0652e3338707da0b8df3a757045dc0e28c2b68775a5e3cd65fce"
         }
       },

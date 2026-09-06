@@ -1,6 +1,8 @@
 {
   "schema_version": 1,
+  "kind": "automated",
   "reviewer": "Claude (revisión curatorial delegada por el dueño)",
+  "kind_note": "Revisión AUTOMATIZADA: la ejecutó un agente (Claude) por delegación del dueño. Vale como contrato interno y como control de calidad del catálogo; NO es una revisión cultural humana ni una revisión clínica independiente, y no debe presentarse como tal fuera del producto.",
   "date": "2026-09-05",
   "scope": "las 6 bibliotecas compiladas (data/registry/dish_registry_<lib>_v1.json): nombre, franja, técnica, constituyentes, nutrición por ración, alérgenos, sodio, procesados, duplicados y léxico de otra cocina",
   "method": "benchmark §13.4 + chequeo independiente por plantilla (scratch f7_review.py) + juicio plato a plato; las decisiones se aplicaron a los JSON y se recompilaron los snapshots",
