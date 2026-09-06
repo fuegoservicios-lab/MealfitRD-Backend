@@ -192,6 +192,29 @@ def _strip_qty_prefix(s: str) -> str:
 # = cantidad líder («50 g de Cebada»); se aplica en el validador de `MealModel` (generación, swap,
 # autocrítica) y como respaldo dentro de `_split_qty_unit_name`. tooltip-anchor: P2-INGREDIENT-TRAILING-QTY
 _TRAILING_QTY_RE = re.compile(r"^\s*(?P<name>[^:]{2,}?)\s*:\s*(?P<rest>\d.*)$")
+# [P2-TRAILING-QTY-NO-COLON · 2026-09-06] La misma inversion, SIN los dos puntos: «Comino 1/4 cdta»,
+# «Canela en polvo 1/2 cucharadita». Es la forma que el modelo escribe de verdad — medidas 255 lineas
+# asi en los planes servidos (2,3 % de 10.953), de las que 223 tienen esta forma exacta y 210 llevan
+# un nombre que SI esta en `master_ingredients`. Sin canonicalizar, `_split_qty_unit_name` devuelve
+# `(0.0, 'unidad', 'Comino 1/4 cdta')`: cantidad CERO y un nombre que ningun catalogo resuelve, asi
+# que el ingrediente aporta 0 macros y la lista de compras no puede pedirlo. Todas las medidas son
+# condimentos y aromaticos (canela 46, comino 35, tomillo 21, perejil 20, cilantro 18...), asi que el
+# error de macros es minusculo; lo que se pierde de verdad es que al usuario no se le dice que compre
+# el comino. El backstop de alergenos NO se ve afectado: lee el texto crudo, no el nombre parseado
+# (comprobado contra los cuatro ordenes posibles de «mani»).
+#
+# Este es el hallazgo del auditor sobre «un ingrediente sin gramos puede quedar como plantilla
+# valida», verificado en vez de descartado: existe, y por esta via.
+#
+# Conservador por construccion — la unidad TIENE que canonicalizar (`canonicalize_unit`), lo que deja
+# fuera «Yogurt griego 0%», «Omega 3» o «Vitamina D 1000 UI», donde el numero final es parte del
+# nombre. `\s*(?:de\s+)?` cubre «1/4 de cucharadita»; el sufijo opcional recoge el participio que a
+# veces cierra la linea («Perejil 1 cucharada picado») y lo devuelve al final del nombre.
+_TRAILING_QTY_NO_COLON_RE = re.compile(
+    r"^\s*(?P<name>.*?[A-Za-z\u00e1\u00e9\u00ed\u00f3\u00fa\u00fc\u00f1\u00c1\u00c9\u00cd\u00d3\u00da\u00dc\u00d1])\s+"
+    r"(?P<qty>\d+(?:[.,]\d+)?(?:\s*/\s*\d+)?|[\u00bd\u00bc\u00be\u2153\u2154])\s*(?:de\s+)?"
+    r"(?P<unit>[A-Za-z\u00e1\u00e9\u00ed\u00f3\u00fa\u00fc\u00f1]+\.?)"
+    r"(?P<suffix>\s+[A-Za-z\u00e1\u00e9\u00ed\u00f3\u00fa\u00fc\u00f1]+)?\s*$")
 
 
 def canonicalize_trailing_qty_line(s: str) -> str:
@@ -205,7 +228,19 @@ def canonicalize_trailing_qty_line(s: str) -> str:
         return s
     m = _TRAILING_QTY_RE.match(raw)
     if not m:
-        return s
+        # [P2-TRAILING-QTY-NO-COLON] Sin dos puntos: «Comino 1/4 cdta» → «1/4 cdta de Comino».
+        m2 = _TRAILING_QTY_NO_COLON_RE.match(raw)
+        if not m2:
+            return s
+        unidad = canonicalize_unit(m2.group("unit"))
+        if not unidad:
+            return s  # el ultimo token no es una unidad → el numero es parte del nombre
+        nombre = m2.group("name").strip()
+        if not nombre:
+            return s
+        cola = (m2.group("suffix") or "").strip()
+        cola = f" {cola}" if cola else ""
+        return f"{m2.group('qty').strip()} {m2.group('unit').lower()} de {nombre}{cola}"
     name, rest = m.group("name").strip(), m.group("rest").strip()
     mq = _LEAD_QTY_RE.match(rest)
     if not mq:
