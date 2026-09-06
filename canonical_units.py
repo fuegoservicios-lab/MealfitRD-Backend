@@ -59,6 +59,11 @@ CANONICAL_UNIT_MAP: dict = {
     'hoja': 'hoja', 'hojas': 'hoja',
     'rebanada': 'rebanada', 'rebanadas': 'rebanada',
     'lonja': 'rebanada', 'lonjas': 'rebanada',
+    # [P1-UNKNOWN-UNIT-NOT-WHOLE · 2026-09-06] El tallo es su propia unidad, no una
+    # «unidad» del alimento: `canonicalize_unit('tallo')` devolvía None y `to_grams` lo
+    # colapsaba a 'unidad', que para el cebollin es el MAZO ENTERO (50 g en el catálogo).
+    # Medido en planes vivos: «5 tallos de cebollin» = 250 g, «2 tallos» = 100 g.
+    'tallo': 'tallo', 'tallos': 'tallo',
     'mazo': 'mazo', 'mazos': 'mazo',
     'atado': 'mazo', 'atados': 'mazo',
     'manojo': 'mazo', 'manojos': 'mazo',

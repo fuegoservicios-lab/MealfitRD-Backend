@@ -210,6 +210,9 @@ _TRAILING_QTY_RE = re.compile(r"^\s*(?P<name>[^:]{2,}?)\s*:\s*(?P<rest>\d.*)$")
 # fuera «Yogurt griego 0%», «Omega 3» o «Vitamina D 1000 UI», donde el numero final es parte del
 # nombre. `\s*(?:de\s+)?` cubre «1/4 de cucharadita»; el sufijo opcional recoge el participio que a
 # veces cierra la linea («Perejil 1 cucharada picado») y lo devuelve al final del nombre.
+# Fracciones unicode → su equivalente ascii, que es lo que `_LEAD_QTY_RE` sabe leer.
+_FRAC_ASCII = {"½": "1/2", "¼": "1/4", "¾": "3/4", "⅓": "1/3", "⅔": "2/3",
+               "⅛": "1/8", "⅜": "3/8", "⅝": "5/8", "⅞": "7/8"}
 _TRAILING_QTY_NO_COLON_RE = re.compile(
     r"^\s*(?P<name>.*?[A-Za-z\u00e1\u00e9\u00ed\u00f3\u00fa\u00fc\u00f1\u00c1\u00c9\u00cd\u00d3\u00da\u00dc\u00d1])\s+"
     r"(?P<qty>\d+(?:[.,]\d+)?(?:\s*/\s*\d+)?|[\u00bd\u00bc\u00be\u2153\u2154])\s*(?:de\s+)?"
@@ -240,7 +243,18 @@ def canonicalize_trailing_qty_line(s: str) -> str:
             return s
         cola = (m2.group("suffix") or "").strip()
         cola = f" {cola}" if cola else ""
-        return f"{m2.group('qty').strip()} {m2.group('unit').lower()} de {nombre}{cola}"
+        # [P2-TRAILING-QTY-NO-COLON · remate 2026-09-06] La cantidad se emite en ASCII.
+        #
+        # `_LEAD_QTY_RE` (línea 136) solo entiende dígitos: `^\s*(\d+(?:[.,]\d+)?(?:\s*/\s*\d+)?)`.
+        # Devolver «½ cucharadita de Cúrcuma» dejaba la línea igual de ilegible que antes — la
+        # inversión ocurría y el parser seguía dando cantidad CERO. Medido: 63 de las 255 líneas
+        # con la cantidad al final se quedaban fuera SOLO por la fracción unicode, y todas eran
+        # de la misma forma («Cúrcuma ½ cucharadita», «Comino ½ cdta»).
+        #
+        # Se convierte a la fracción ascii equivalente, no a decimal: «1/2» es tan legible como
+        # «½» para el usuario y además la entienden los dos parsers.
+        _q = _FRAC_ASCII.get(m2.group("qty").strip(), m2.group("qty").strip())
+        return f"{_q} {m2.group('unit').lower()} de {nombre}{cola}"
     name, rest = m.group("name").strip(), m.group("rest").strip()
     mq = _LEAD_QTY_RE.match(rest)
     if not mq:
@@ -427,6 +441,33 @@ def quantize_ingredient_string(s: str):
         return _integerize_gram_hint(raw), 1.0
     factor = new_qty / qty
     return _integerize_gram_hint(rescale_ingredient_string(raw, factor)), factor
+
+
+# [P1-UNKNOWN-UNIT-NOT-WHOLE · 2026-09-06] Peso de UN tallo, que no es el de una «unidad».
+#
+# El catálogo guarda `density_g_per_unit=50` para Cilantro, Cebollin y Perejil: esos 50 g son un
+# MAZO, la forma en que se compran. Un tallo suelto pesa una fracción de eso. La cifra del apio
+# sale del propio sistema — `P1-APIO-STALK-CAP` da ~4 tallos por 150 g — y la del cebollin de que
+# un tallo de cebollin ronda los 15 g. El default de 20 g es deliberadamente pequeño: equivocarse
+# por abajo en un aromático cuesta una hierba de menos en la lista; por arriba, el kilo de
+# cilantro que el cap tiene que recortar.
+_STALK_GRAMS = {"apio": 37.0, "cebollin": 15.0, "cebolleta": 15.0, "puerro": 90.0}
+_STALK_GRAMS_DEFAULT = 20.0
+# Un mazo/atado/manojo: el peso de compra. Si el catálogo lo sabe, manda él.
+_BUNCH_GRAMS_DEFAULT = 50.0
+
+
+def _stalk_grams_for(info) -> float:
+    """Gramos de UN tallo del alimento. Por token del nombre, no por igualdad exacta: el catálogo
+    escribe «Cebollin» y las recetas «cebollin picado»."""
+    try:
+        _n = _strip_accents(str(getattr(info, "name", "") or "").lower())
+        for _tok, _g in _STALK_GRAMS.items():
+            if _tok in _n:
+                return _g
+    except Exception:
+        pass
+    return _STALK_GRAMS_DEFAULT
 
 
 @dataclass
@@ -707,7 +748,33 @@ class IngredientNutritionDB:
                 return base_qty * (info.density_g_per_cup / 240.0)
             return None  # sin densidad volumétrica conocida → no adivinar
         # No convertible por to_base_amount (unidad/diente/rebanada/paquete/…)
-        canonical = canonicalize_unit(unit) or "unidad"
+        #
+        # [P1-UNKNOWN-UNIT-NOT-WHOLE · 2026-09-06] El `or "unidad"` de antes era el bug: una
+        # unidad que el sistema NO reconoce se convertía en «una unidad entera del alimento», y
+        # para una hierba una unidad entera es el MAZO. Así «5 tallos de cebollin» pesaban 250 g
+        # y «2 tallos» 100 g, con el catálogo diciendo 50 g por unidad — que es el mazo de compra.
+        # De ahí salían los 415 g de cebollin y buena parte de los 568 g de cilantro que el
+        # `P3-HERB-CAP` tenía que recortar (2.043 recortes en 24 h, dejando de media el 58 %).
+        #
+        # La distinción clave: «sin unidad» y «unidad que no conozco» NO son lo mismo.
+        # `_split_qty_unit_name` devuelve literalmente 'unidad' cuando la línea no trae unidad
+        # ("2 huevos"), y ahí la unidad entera SÍ es lo correcto. Cuando trae una PALABRA que no
+        # está en el mapa, adivinar es exactamente lo que produjo el kilo de cilantro: se devuelve
+        # None y el caller deja el ingrediente tal cual, que es el contrato documentado arriba.
+        # Rollback sin redeploy: MEALFIT_UNKNOWN_UNIT_AS_WHOLE=true.
+        canonical = canonicalize_unit(unit)
+        if canonical is None:
+            _u_raw = str(unit or "").strip().lower()
+            if _u_raw in ("", "unidad", "unidades"):
+                canonical = "unidad"
+            elif os.environ.get("MEALFIT_UNKNOWN_UNIT_AS_WHOLE", "").strip().lower() in ("1", "true", "yes", "on"):
+                canonical = "unidad"          # conducta previa, solo bajo knob
+            else:
+                return None                   # unidad desconocida → no adivinar
+        if canonical == "tallo":
+            return q * _stalk_grams_for(info)
+        if canonical == "mazo":
+            return q * float(info.container_weight_g or _BUNCH_GRAMS_DEFAULT)
         if canonical in ("unidad", "rebanada", "hoja", "diente"):
             if info.density_g_per_unit:
                 return q * info.density_g_per_unit

@@ -80,9 +80,15 @@ Gate (roadmap): las 13 golden policies cumplen sus bandas (test); paridad initia
 | `MEALFIT_PLAN_POLICY_ENFORCE_USERS` | 2 UUID (el dueño + un segundo canario) |
 | `MEALFIT_FIDELITY_GATE` | `warn` |
 | Planes con `_plan_policy` en 7 días | 57 |
-| `relaxations[]` observadas | **0** en todos los planes inspeccionados (la lista existe y viene vacía) |
+| `relaxations[]` observadas | **21 de 57 planes** llevan al menos una: 17 `budget_advisory_no_prices` + 11 `pantry_proteins_after_first_week` |
+| `food_anchors` pedidos → aplicados | 2 → 2 en 56 de 57 (ningún ancla se cae) |
+| `effective.notes` | `market_check_skipped` en **57 de 57** |
 
-O sea que la precondición «con `enforce` vivo» **ya se cumple**: lo que falta es correr el benchmark clínico, y eso gasta presupuesto de API — decisión del dueño, no un gap de implementación. Que `relaxations[]` venga siempre vacía con 57 planes bajo `enforce` merece una mirada antes de correrlo: o ninguna política pedida ha necesitado relajarse, o nadie las está anotando; el benchmark no distingue esos dos casos.
+O sea que la precondición «con `enforce` vivo» **ya se cumple**: lo que falta es correr el benchmark clínico, y eso gasta presupuesto de API — decisión del dueño, no un gap de implementación.
+
+> **Corrección · 2026-09-06.** La primera versión de esta tabla decía que `relaxations[]` venía «vacía en todos los planes» y proponía averiguar si el compilador las anotaba. Era un error de medición, no del sistema: la sonda contaba por un campo `rule` que no existe —el campo es `reason_code`— y la muestra manual cayó en tres planes que legítimamente no tenían ninguna. Recompilando las políticas guardadas contra `compile_policy`, las relajaciones salen y coinciden con las persistidas. *Leer el campo equivocado fabrica un gap que no existe.*
+
+Lo que **sí** queda abierto y esta medición destapó: `market_check_skipped` aparece en los 57 planes. El paso 3 del compilador (¿el ancla existe en el mercado del país?) solo corre si se le pasa `known_ingredients` en el contexto, y nadie se lo pasa. El compilador es honesto —lo anota en vez de fingir que comprobó— pero el efecto práctico es que **ningún ancla se valida nunca contra el catálogo del país**, y con las 6 cocinas beta esa es justo la comprobación que más falta hace.
 
 ## Fuera de alcance (Fase 4/5)
 

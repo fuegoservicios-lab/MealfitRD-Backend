@@ -560,6 +560,58 @@ def _track_ingredient_frequencies(user_id: str, raw_ingredients: list) -> None:
         logger.error(f"⚠️ [BACKGROUND ERROR] Error en freq-tracking del plan (no afecta persistencia): {e}")
 
 
+def _promote_quality_alert_to_plan_id(plan_id: str, correlation_id: Optional[str]) -> int:
+    """[P1-QUALITY-ALERT-PLAN-ID · 2026-09-06] Canjea la clave centinela de una alerta
+    `plan_quality_degraded:<user>:no_plan_id` por el plan_id REAL, ahora que existe.
+
+    Por qué re-clavear y no añadir el id en la metadata: la clave es la identidad de la alerta y
+    la que leen los dos barridos de `_resolve_stale_plan_quality_alerts`. Re-claveada, la alerta
+    queda **indistinguible** de una emitida con plan_id y los barridos existentes la tratan sin
+    tocar una línea. La alternativa —un `COALESCE(metadata->>'plan_id', split_part(...))` en cada
+    consumidor— reparte la excepción por todo el sistema, que es como nacen los drifts.
+
+    Tres guardas:
+      · `metadata->>'correlation_id' = %s` — canjea SOLO la alerta de ESTA corrida. Sin ella, una
+        alerta vieja del mismo usuario se llevaría el plan_id de un plan que no es suyo.
+      · `resolved_at IS NULL` — una alerta ya cerrada no se reabre por la puerta de atrás.
+      · `NOT EXISTS` sobre la clave destino — `alert_key` es UNIQUE
+        (`system_alerts_alert_key_key`); sin esto el UPDATE reventaría si ya hubiera una alerta
+        para ese plan. Al no re-clavear, la centinela se queda como estaba: peor que el canje,
+        igual que hoy, y nunca un error.
+
+    Best-effort: devuelve el número de filas re-claveadas; cualquier fallo es 0 y se traga. Una
+    alerta mal etiquetada no puede costar un plan. tooltip-anchor: P1-QUALITY-ALERT-PLAN-ID
+    """
+    if not plan_id or not correlation_id:
+        return 0
+    try:
+        from db_core import execute_sql_write
+        filas = execute_sql_write(
+            """
+            UPDATE system_alerts AS a
+               SET alert_key = split_part(a.alert_key, ':', 1) || ':'
+                            || split_part(a.alert_key, ':', 2) || ':' || %s,
+                   metadata  = COALESCE(a.metadata, '{}'::jsonb)
+                            || jsonb_build_object('plan_id', %s::text)
+             WHERE a.resolved_at IS NULL
+               AND a.alert_key LIKE 'plan_quality_degraded:%%:no_plan_id'
+               AND a.metadata->>'correlation_id' = %s
+               AND NOT EXISTS (
+                   SELECT 1 FROM system_alerts b
+                    WHERE b.alert_key = split_part(a.alert_key, ':', 1) || ':'
+                                     || split_part(a.alert_key, ':', 2) || ':' || %s
+               )
+             RETURNING a.alert_key
+            """,
+            (str(plan_id), str(plan_id), str(correlation_id), str(plan_id)),
+            returning=True,
+        ) or []
+        return len(filas) if isinstance(filas, list) else 0
+    except Exception as _pq_e:                                            # noqa: BLE001
+        logger.debug(f"[P1-QUALITY-ALERT-PLAN-ID] canje no-op: {_pq_e!r}")
+        return 0
+
+
 def _save_plan_and_track_background(user_id: str, plan_data: dict, selected_techniques: Optional[list] = None,
                                     return_id: bool = False, existing_plan_id: Optional[str] = None):
     """Background task para guardar plan y actualizar frecuencias de ingredientes.
@@ -705,11 +757,21 @@ def _save_plan_and_track_background(user_id: str, plan_data: dict, selected_tech
             if return_id and isinstance(plan_id, str) and plan_id:
                 from correlation import get_correlation_id
                 from db_profiles import attach_plan_id_to_usage_events
-                _n = attach_plan_id_to_usage_events(plan_id, get_correlation_id())
+                _corr = get_correlation_id()
+                _n = attach_plan_id_to_usage_events(plan_id, _corr)
                 if _n:
                     logger.info(
                         f"💰 [P1-COST-ATTRIBUTION] {_n} evento(s) de costo atribuidos "
                         f"al plan {str(plan_id)[:8]}."
+                    )
+                # [P1-QUALITY-ALERT-PLAN-ID · 2026-09-06] Mismo canje, mismo momento: si este
+                # pipeline emitió una alerta de calidad degradada, nombraba `no_plan_id` porque
+                # el plan aún no existía. Ahora existe.
+                _nq = _promote_quality_alert_to_plan_id(plan_id, _corr)
+                if _nq:
+                    logger.info(
+                        f"📌 [P1-QUALITY-ALERT-PLAN-ID] alerta de calidad re-clavada al "
+                        f"plan {str(plan_id)[:8]} (ya es cerrable por los barridos)."
                     )
         except Exception as _attr_e:
             logger.debug(f"[P1-COST-ATTRIBUTION] canje corr→plan_id falló: {_attr_e!r}")

@@ -112,3 +112,32 @@ def test_el_backstop_de_alergenos_lee_el_texto_crudo():
     for linea in ("2 cucharadas de maní", "Maní 2 cucharadas", "30 g de maní", "Maní 30 g"):
         assert go._scan_allergen_violations(_plan(linea), ["maní"]), (
             f"el backstop dejó pasar {linea!r}")
+
+
+# ── remate 2026-09-06: la fracción unicode ───────────────────────────────────────────────────
+# «Comino 1/4 cdta» resolvía y «Cúrcuma ½ cucharadita» no. La inversión ocurría igual, pero
+# `_LEAD_QTY_RE` (nutrition_db.py:136) solo entiende dígitos, así que la línea reescrita seguía
+# dando cantidad CERO. Medido: 63 de las 255 líneas se quedaban fuera SOLO por esto.
+
+@pytest.mark.parametrize("linea, qty, unidad, nombre", [
+    ("Cúrcuma ½ cucharadita", 0.5, "cucharadita", "Cúrcuma"),
+    ("Canela en polvo ¼ cucharadita", 0.25, "cucharadita", "Canela en polvo"),
+    ("Comino ½ cdta", 0.5, "cdta", "Comino"),
+    ("Canela en polvo ¼ de cucharadita", 0.25, "cucharadita", "Canela en polvo"),
+    ("Orégano ⅓ cucharadita", 1.0 / 3.0, "cucharadita", "Orégano"),
+])
+def test_la_fraccion_unicode_al_final_tambien_resuelve(linea, qty, unidad, nombre):
+    q, u, n = nd._split_qty_unit_name(linea)
+    assert (u, n) == (unidad, nombre)
+    assert abs(q - qty) < 1e-6
+
+
+def test_la_fraccion_se_emite_en_ascii_no_en_decimal():
+    """«1/2» es tan legible como «½» para el usuario y además la entienden los dos parsers.
+    Emitirla como «0.5» habría resuelto igual y empeorado el texto."""
+    assert nd.canonicalize_trailing_qty_line("Cúrcuma ½ cucharadita") == "1/2 cucharadita de Cúrcuma"
+
+
+def test_la_cantidad_en_medio_sigue_intacta():
+    """«Zumo de ½ limón» no tiene la cantidad al final: no es esta forma y no se toca."""
+    assert nd.canonicalize_trailing_qty_line("Zumo de ½ limón") == "Zumo de ½ limón"

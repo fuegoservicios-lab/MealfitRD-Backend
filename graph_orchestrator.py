@@ -28678,6 +28678,7 @@ def finalize_plan_data_coherence(days: list, db=None, allergies=None, target_fat
     try:
         if RECIPE_STEP_CARB_GUARD_ENABLED:
             _ncgp = _add_missing_recipe_step_carbs(days, db=db, allergies=allergies)
+            _neutralize_cold_dairy_technique(days)   # [P1-COLD-DAIRY-TECHNIQUE]
             if _ncgp:
                 total += _ncgp; parts.append(f"carb_ghost={_ncgp}")
                 try:
@@ -29472,6 +29473,7 @@ def finalize_single_meal_recipe_coherence(meal: dict, db=None, pantry_strict: bo
         try:
             if RECIPE_STEP_CARB_GUARD_ENABLED and not pantry_strict:
                 _ncg = _add_missing_recipe_step_carbs(_wrap, db=db, allergies=allergies)
+                _neutralize_cold_dairy_technique(_wrap)   # [P1-COLD-DAIRY-TECHNIQUE]
                 if _ncg:
                     total += _ncg
                     try:
@@ -34727,6 +34729,16 @@ _STEP_CARB_GHOSTS = (
     ("avena", "40g de avena en hojuelas", ("harina de avena", "leche de avena", "agua de avena")),
     ("casabe", "30g de casabe", ()),
     ("batata", "150g de batata", ("harina de batata",)),
+    # [P1-NAME-GHOST-GAPS · 2026-09-06] Medido en los planes vivos del 06-sep: el nombre del
+    # plato cita un alimento que NO está en su lista y el juez lo reporta como
+    # `nombre_no_corresponde` — 40 violaciones en 7 días, su segunda bolsa más grande.
+    # Probando el pase contra los casos reales, los frutos secos SÍ se materializaban
+    # («…y pistachos» añade su línea) y estos NO tenían entrada: «Papas a la parrilla con tofu
+    # y ensalada de aceitunas» salía sin papa y sin aceituna. Cuentas medidas del token
+    # ausente: aguacate 7, aceitunas 4, papas 3, maíz 2.
+    ("papa", "150g de papa", ("harina de papa", "almidon de papa", "batata", "papa dulce")),
+    ("maiz", "80g de maíz en grano", ("harina de maiz", "aceite de maiz", "almidon de maiz",
+                                      "maicena", "arepita", "arepa", "tortilla de maiz")),
     ("yuca", "150g de yuca", ("harina de yuca", "almidon de yuca", "casabe")),
     # [P2-STEM-BOUNDED · 2026-07-06] (vivo, plan 6a078619: "Tuesta las lonjas de pan…" con CERO
     # pan en ingredients — fallout del desalineador; el ghost lo materializa venga de donde venga).
@@ -34763,6 +34775,17 @@ _STEP_NUT_GHOSTS = (
 # ahora para FRUTAS frescas (dirección segura: materializar una porción modesta; el scan de
 # alérgenos del guard aplica igual). Rollback: MEALFIT_RECIPE_STEP_FRUIT_GUARD=false.
 RECIPE_STEP_FRUIT_GUARD_ENABLED = _env_bool("MEALFIT_RECIPE_STEP_FRUIT_GUARD", True)
+# [P1-NAME-GHOST-GAPS · 2026-09-06] Grasas enteras fantasma. Misma clase que veg/carb/nut/fruit
+# y por eso comparte su motor: el token aparece en el NOMBRE o en un paso, no en la lista, y se
+# materializa una porción MODESTA. Las dos porciones son deliberadamente pequeñas — 30 g de
+# aguacate son ~48 kcal, dentro del mismo orden que el veg-guard (≤60 kcal) — porque el objetivo
+# es que la receta y la compra dejen de mentir, no rehacer los macros del plato.
+# Rollback: MEALFIT_RECIPE_STEP_FAT_GUARD=false.
+RECIPE_STEP_FAT_GUARD_ENABLED = _env_bool("MEALFIT_RECIPE_STEP_FAT_GUARD", True)
+_STEP_FAT_GHOSTS = (
+    ("aguacate", "30 g de aguacate", ("aceite de aguacate",)),
+    ("aceituna", "15 g de aceitunas", ("aceite de oliva", "aceite de aceituna")),
+)
 _STEP_FRUIT_GHOSTS = (
     ("uvas", "¼ taza de uvas (43g)", ("uva pasa", "pasas")),
     ("fresas", "50 g de fresas", ()),
@@ -34771,6 +34794,97 @@ _STEP_FRUIT_GHOSTS = (
     ("guineo", "1 guineo", ("guineo verde",)),
     ("mango", "½ mango", ("mangu",)),
 )
+
+
+# [P1-COLD-DAIRY-TECHNIQUE · 2026-09-06] Un lácteo frío como OBJETO de un verbo que aplica calor
+# (o que pela algo) es siempre un error, y siempre el mismo error: una sustitución cambió el
+# ALIMENTO dentro de un paso cuya TÉCNICA era del original. Los cuatro casos vivos son la receta
+# del huevo duro con la palabra cambiada:
+#
+#   «cuece las 3 yogurt griego entero en agua hirviendo durante 8 minutos, escúrrelas, pásalas
+#    por agua fría, pélalas y córtalas en cuartos»
+#   «mide la quinoa cocida… y cocina yogurt griego entero duro en agua hirviendo durante 10 min»
+#   «pela el yogur griego previamente cocido»
+#
+# El juez lo reporta como `tecnica_impropia` — 15 violaciones en 7 días, su tercera bolsa — y es
+# el texto más absurdo que llega al usuario.
+#
+# La detección exige que el lácteo sea el OBJETO del verbo (verbo + artículo/cantidad opcional +
+# hasta dos palabras + lácteo), no que compartan cláusula. Esa distinción es todo el fix: la
+# primera sonda, que solo pedía misma cláusula, marcó 29 de 93 planes y casi todo era inocente
+# («pela y separa 1 guineo, y mide… yogurt»). La versión de abajo da **4 de 4** sobre 400 planes.
+#
+# Qué se hace: se borra desde el verbo hasta el final de la frase y se pone una instrucción fría.
+# Borrar hasta el final de la frase y no solo el verbo es deliberado — en los cuatro casos el
+# resto de la frase sigue hablando de la técnica imposible («escúrrelas… pélalas…») y dejarlo
+# sería cambiar una instrucción absurda por media. La sustitución NO se revierte: puede venir de
+# una alergia, y quitar el arreglo del texto es barato mientras que devolver el alimento no lo es.
+#
+# Rollback: MEALFIT_COLD_DAIRY_TECHNIQUE=false.
+COLD_DAIRY_TECHNIQUE_ENABLED = _env_bool("MEALFIT_COLD_DAIRY_TECHNIQUE", True)
+_COLD_DAIRY_RE = r"(yogur|yogurt|yogures|kefir|queso cottage|cottage|requeson|ricotta)"
+_HEAT_VERB_RE = (r"(hierve|hervir|hirviendo|cuece|cuecen|cocina|cocinar|cocinando|asa|asar|asando|"
+                 r"fr[ií]e|freir|friendo|sofr[ií]e|sofreir|tuesta|tostar|hornea|hornear|horneando|"
+                 r"saltea|saltear|dora|dorar|pela|pelar|escalfa|escalfar|gratina|gratinar)")
+_COLD_DAIRY_TECHNIQUE_RE = _re.compile(
+    _HEAT_VERB_RE + r"\s+(?:el|la|los|las|un|una|\d+\s*g\s+de|\d+\s+)?\s*(?:\w+\s+){0,2}?"
+    + _COLD_DAIRY_RE, _re.IGNORECASE)
+
+
+def _neutralize_cold_dairy_technique(days) -> list:
+    """Quita la técnica imposible sobre un lácteo frío. Muta `days`; devuelve la lista de
+    (antes, después) — contenido, no un contador, para que el log de un incidente diga QUÉ se
+    corrigió. Fail-safe: cualquier error deja el texto intacto.
+    tooltip-anchor: P1-COLD-DAIRY-TECHNIQUE"""
+    if not COLD_DAIRY_TECHNIQUE_ENABLED or not days:
+        return []
+    cambios = []
+    try:
+        from constants import strip_accents as _sa_cd
+        for _d in days:
+            for meal in (_d.get("meals") or []) if isinstance(_d, dict) else []:
+                if not isinstance(meal, dict):
+                    continue
+                rec = meal.get("recipe")
+                if not isinstance(rec, list) or not rec:
+                    continue
+                nuevos = []
+                for paso in rec:
+                    if not isinstance(paso, str) or _is_recipe_safety_note_step(paso):
+                        nuevos.append(paso)
+                        continue
+                    mm = _COLD_DAIRY_TECHNIQUE_RE.search(_sa_cd(paso))
+                    if not mm:
+                        nuevos.append(paso)
+                        continue
+                    ini = mm.start()
+                    fin = len(paso)
+                    for _p in (".", ";"):
+                        _i = paso.find(_p, ini)
+                        if _i != -1:
+                            fin = min(fin, _i)
+                    _lacteo = mm.group(2) if mm.lastindex and mm.lastindex >= 2 else "lácteo"
+                    _nuevo = (paso[:ini] + f"incorpora el {_lacteo} frío" + paso[fin:]).strip()
+                    # Una frase que empieza por la parte borrada queda huérfana de conector.
+                    _nuevo = _re.sub(r",\s*(?=incorpora el)", " y ", _nuevo)
+                    _nuevo = _re.sub(r"\s{2,}", " ", _nuevo)
+                    if _nuevo and _nuevo != paso:
+                        cambios.append((paso, _nuevo))
+                        nuevos.append(_nuevo)
+                    else:
+                        nuevos.append(paso)
+                if any(a != b for a, b in zip(rec, nuevos)):
+                    meal["recipe"] = nuevos
+                    # `_display[locale].recipe` espeja los pasos por índice.
+                    meal.pop("_display", None)
+        if cambios:
+            logger.warning(
+                f"🧊 [P1-COLD-DAIRY-TECHNIQUE] {len(cambios)} paso(s) cocinaban un lácteo frío: "
+                + " | ".join(f"{a[:90]!r}→{b[:60]!r}" for a, b in cambios[:2]))
+    except Exception as _cd_e:                                              # noqa: BLE001
+        logger.warning(f"[P1-COLD-DAIRY-TECHNIQUE] no-op: {type(_cd_e).__name__}: {_cd_e}")
+        return []
+    return cambios
 
 
 def _add_missing_recipe_step_carbs(days, db=None, allergies=None) -> int:
@@ -34803,7 +34917,10 @@ def _add_missing_recipe_step_carbs(days, db=None, allergies=None) -> int:
                 # [P2-STEP-FRUIT-GHOST · 2026-07-05] + frutas frescas (uvas del plan 55846e5e).
                 _ghosts = (_STEP_CARB_GHOSTS
                            + (_STEP_NUT_GHOSTS if RECIPE_STEP_NUT_GUARD_ENABLED else ())
-                           + (_STEP_FRUIT_GHOSTS if RECIPE_STEP_FRUIT_GUARD_ENABLED else ()))
+                           + (_STEP_FRUIT_GHOSTS if RECIPE_STEP_FRUIT_GUARD_ENABLED else ())
+                           # [P1-NAME-GHOST-GAPS] mismo bucle, mismos excludes, mismo scan de
+                           # alérgenos: una tabla nueva no necesita un pase nuevo.
+                           + (_STEP_FAT_GHOSTS if RECIPE_STEP_FAT_GUARD_ENABLED else ()))
                 for token, line, excludes in _ghosts:
                     if not _re.search(r"\b" + token, hay):
                         continue
@@ -39757,6 +39874,7 @@ async def assemble_plan_node(state: PlanState) -> dict:
     if RECIPE_STEP_CARB_GUARD_ENABLED:
         try:
             _cg_added = _add_missing_recipe_step_carbs(days, allergies=form_data.get("allergies"))
+            _neutralize_cold_dairy_technique(days)   # [P1-COLD-DAIRY-TECHNIQUE]
             if _cg_added:
                 logger.info(f"🌾 [P2-STEP-CARB-GHOST] {_cg_added} carb(s) fantasma de nombre/pasos "
                             f"materializado(s) en ingredients[] (entran a compras + macros).")
@@ -44982,6 +45100,27 @@ def _emit_plan_quality_degraded_alert(
             or "no_plan_id"
         )
         alert_key = f"plan_quality_degraded:{user_id}:{plan_id}"
+        # [P1-QUALITY-ALERT-PLAN-ID · 2026-09-06] Cuando el plan aún NO existe, se estampa el id
+        # de CORRELACIÓN para poder canjearlo después por el plan_id real.
+        #
+        # El emisor corre en `should_retry`, o sea ANTES del INSERT: en el camino inicial no hay
+        # plan que nombrar y la clave cae al centinela. Medido el 06-sep: **112 de las 118**
+        # alertas abiertas de esta familia terminan en `:no_plan_id`, todas con
+        # `caller_context=initial_generate`. Y una alerta que no nombra ninguna fila **no la
+        # puede cerrar ningún barrido, nunca** — por eso el backlog no baja aunque los dos
+        # barridos de hoy funcionen.
+        #
+        # La maquinaria del canje ya existía para otra cosa: `attach_plan_id_to_usage_events`
+        # etiqueta el COSTO del pipeline con el mismo truco («el emisor sólo pudo estampar el id
+        # de correlación; aquí se canjea», services.py). Se reutiliza el idioma en vez de
+        # inventar un segundo mecanismo.
+        _corr_id = None
+        if plan_id == "no_plan_id":
+            try:
+                from correlation import get_correlation_id as _gci_alert
+                _corr_id = _gci_alert()
+            except Exception:
+                _corr_id = None
         rejection_reasons = state.get("rejection_reasons") or []
         attempts = state.get("attempt", 1)
         # [P1-NEW-9] Caller context para que SRE filtre alerts por origen
@@ -44998,6 +45137,8 @@ def _emit_plan_quality_degraded_alert(
             "user_id": user_id,
             "top_rejection_reasons": rejection_reasons[:5],
             "caller_context": caller_context,  # P1-NEW-9
+            # [P1-QUALITY-ALERT-PLAN-ID] Solo cuando falta el plan_id: es el asa del canje.
+            **({"correlation_id": _corr_id} if _corr_id else {}),
         }
         message = (
             f"Plan entregado al usuario {user_id} con calidad degradada "

@@ -43,7 +43,13 @@ class _FakeDB:
 
 
 def _meal():
-    return {"meal": "Almuerzo", "name": "Locrio de Pavo con Papa Majada",
+    # [P1-NAME-GHOST-GAPS · 2026-09-06] El nombre decía «con Papa Majada» y la lista no traía
+    # papa. Ese plato es exactamente el defecto que `_add_missing_recipe_step_carbs` cierra desde
+    # hoy: el ghost materializa 150 g de papa, el día se llena y el bump del protagonista deja de
+    # ser parcial — o sea que el fixture medía otra cosa de la que dice medir. Se le quita el
+    # ingrediente fantasma del NOMBRE (no se toca ni un número) para que este test siga siendo
+    # sobre el piso del protagonista y no sobre un plato incoherente.
+    return {"meal": "Almuerzo", "name": "Locrio de Pavo",
             "ingredients": ["25 g de pavo molido", "80 g de arroz blanco"],
             "ingredients_raw": ["25 g de pavo molido", "80 g de arroz blanco"],
             "recipe": ["Cocina el pavo molido con el sofrito.", "Agrega el arroz."],
