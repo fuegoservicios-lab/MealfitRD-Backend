@@ -45085,7 +45085,8 @@ def _persist_gemini_spend_cap_alert(user_id: Optional[str]) -> None:
         )
 
 
-def _persist_pipeline_crash_alert(alert_key: str, user_id: Optional[str], detail: str = "") -> None:
+def _persist_pipeline_crash_alert(alert_key: str, user_id: Optional[str], detail: str = "",
+                                  *, title: Optional[str] = None, message: Optional[str] = None) -> None:
     """[P2-PIPELINE-CRASH-NO-ALERT · 2026-06-22] (audit fresco P2-16) Emite un system_alert CRÍTICO cuando el
     pipeline de generación cae a un fallback de EMERGENCIA: (a) degradación global / timeout que fuerza
     review_passed=True (`pipeline_crash_fallback`), o (b) el último fallback de defensa P1-5
@@ -45094,7 +45095,13 @@ def _persist_pipeline_crash_alert(alert_key: str, user_id: Optional[str], detail
     (`_emit_plan_quality_degraded_alert` vive dentro de `should_retry`, que estos paths NO atraviesan; P1-5
     solo hacía `logger.critical`). Best-effort (no propaga — el pipeline ya degrada). Idempotente: `alert_key`
     GLOBAL → ON CONFLICT bumpea triggered_at. Modelo de resolution: Manual (SRE cierra tras estabilizar el
-    provider/bug). tooltip-anchor: P2-PIPELINE-CRASH-NO-ALERT"""
+    provider/bug). tooltip-anchor: P2-PIPELINE-CRASH-NO-ALERT
+
+    [P1-PIPELINE-TIMEOUT-DEGRADED · 2026-09-06] `title`/`message` son parametrizables porque el texto
+    de aqui AFIRMABA el fallback matematico sin comprobar si habia ocurrido. En el unico evento vivo
+    (2026-09-02 14:45) el usuario SÍ recibio el plan del LLM —`delivered_was_fallback: False` en tres
+    metricas— y la alerta decia lo contrario. Los defaults conservan el texto de siempre para la rama
+    que sí cae al fallback."""
     try:
         from db_core import execute_sql_write
         import json as _json
@@ -45111,7 +45118,8 @@ def _persist_pipeline_crash_alert(alert_key: str, user_id: Optional[str], detail
             """,
             (
                 alert_key,
-                "Pipeline de generacion cayo a fallback de emergencia",
+                title or "Pipeline de generacion cayo a fallback de emergencia",
+                message or
                 ("El pipeline de generacion de plan no pudo entregar un plan del LLM y cayo al fallback "
                  "matematico de emergencia. Causa tipica: outage/timeout del proveedor LLM o bug aguas "
                  "arriba en el grafo. El usuario recibio un plan degradado (no del LLM). Reintentar puede "
@@ -52622,6 +52630,10 @@ async def arun_plan_pipeline(form_data: dict, history: list = None, taste_profil
                     f"[P1-26] Flush en degradación global falló (best-effort): "
                     f"{_p126_err!r}"
                 )
+            # [P1-PIPELINE-TIMEOUT-DEGRADED · 2026-09-06] Fail-safe hacia la alerta RUIDOSA: si un día
+            # aparece un camino que no pasa por el if/else de abajo, es mejor gritar de más que
+            # tranquilizar de menos. Las dos ramas lo reasignan.
+            _entrego_fallback_total = True
             plan_partial = final_state.get("plan_result")
             # P0-1/P0-2: si no hay plan parcial usable, fallback total con la cantidad
             # de días solicitada. Si hay plan parcial (aunque sea con días vacíos o
@@ -52645,6 +52657,7 @@ async def arun_plan_pipeline(form_data: dict, history: list = None, taste_profil
                 # del grafo (estamos en el `except` de `arun_plan_pipeline`) — a diferencia de
                 # `guardrail_empty_result`/`guardrail_partial_repair` (graph success, otra causa).
                 final_state["plan_result"]["_fallback_source"] = "pipeline_exception"
+                _entrego_fallback_total = True   # [P1-PIPELINE-TIMEOUT-DEGRADED]
             else:
                 # P1-9: `_repair_partial_plan` ya setea `plan_partial["_is_fallback"]=True`
                 # cuando hace cualquier reparación. Nada más que hacer aquí.
@@ -52658,6 +52671,10 @@ async def arun_plan_pipeline(form_data: dict, history: list = None, taste_profil
                 # sobrevivido parcialmente en `final_state` antes del crash.
                 if isinstance(plan_partial, dict) and plan_partial.get("_is_fallback"):
                     plan_partial["_fallback_source"] = "pipeline_exception"
+                # [P1-PIPELINE-TIMEOUT-DEGRADED] Esta rama CONSERVA el plan del LLM (reparado o no):
+                # el usuario recibe su menu. Decirle al operador que cayo al fallback matematico es
+                # falso, y es lo primero que lee.
+                _entrego_fallback_total = False
 
             # [P1-SPEND-CAP-ALERT · 2026-05-28] Si el pipeline cayó por el spending
             # cap de Gemini: (1) marcar plan_result para que routers/plans.py emita
@@ -52673,10 +52690,43 @@ async def arun_plan_pipeline(form_data: dict, history: list = None, taste_profil
                 # [P2-PIPELINE-CRASH-NO-ALERT · 2026-06-22] Crash/timeout del grafo NO spend-cap → el único
                 # rastro era logger.error. Emitir system_alert dedicado para que SRE vea el outage del LLM /
                 # bug aguas arriba (best-effort, no bloquea la entrega del fallback).
-                _persist_pipeline_crash_alert(
-                    "pipeline_crash_fallback", actual_form_data.get("user_id"),
-                    detail=f"{type(e).__name__}: {str(e)[:200]}",
-                )
+                # [P1-PIPELINE-TIMEOUT-DEGRADED · 2026-09-06] Dos ramas, dos alertas.
+                #
+                # El texto era uno solo y AFIRMABA el fallback matematico. En el unico evento vivo de
+                # esta alerta (2026-09-02 14:45) eso era falso: `delivered_was_fallback` valia False en
+                # pipeline_holistic, resolution_coverage y solver_convergence, y el plan 2b692ef8 se
+                # entrego con 3 dias y 2,9 % de desviacion calorica. Lo que habia pasado es que el
+                # pipeline se comio sus propios 900 s (`pipeline_holistic = 900.320 ms`, clavado en
+                # MEALFIT_GLOBAL_PIPELINE_TIMEOUT_S) sin que el revisor llegara a aprobar.
+                #
+                # Y `detail` llegaba vacio —`TimeoutError: `— porque asyncio.TimeoutError no lleva
+                # mensaje, asi que no distinguia «se cayo el proveedor» de «me pase de mi techo». Se
+                # completa con el tiempo transcurrido y el techo vigente.
+                _msg_e = str(e)[:200]
+                _detalle = f"{type(e).__name__}: {_msg_e}"
+                if not _msg_e:
+                    try:
+                        _elapsed = round(time.time() - pipeline_start, 1)
+                    except Exception:
+                        _elapsed = None
+                    _detalle += (f"(sin mensaje) elapsed={_elapsed}s vs "
+                                 f"MEALFIT_GLOBAL_PIPELINE_TIMEOUT_S={GLOBAL_PIPELINE_TIMEOUT_S}s")
+                if _entrego_fallback_total:
+                    _persist_pipeline_crash_alert(
+                        "pipeline_crash_fallback", actual_form_data.get("user_id"), detail=_detalle,
+                    )
+                else:
+                    _persist_pipeline_crash_alert(
+                        "pipeline_timeout_degraded", actual_form_data.get("user_id"), detail=_detalle,
+                        title="Pipeline abortado: el plan SI se entrego, sin pasar el revisor",
+                        message=(
+                            "El grafo aborto (crash o techo de tiempo) pero el plan del LLM se conservo y "
+                            "se entrego al usuario, reparado si hizo falta. NO es el fallback matematico. "
+                            "Lo que falta es la aprobacion del revisor. Antes de sospechar del proveedor, "
+                            "mira `detail`: si el elapsed roza el techo, el pipeline se comio su propio "
+                            "presupuesto (mira self_critique y assemble_plan en pipeline_metrics) y no "
+                            "hubo outage. Reintentar suele funcionar."),
+                    )
 
         pipeline_duration = round(time.time() - pipeline_start, 2)
 
