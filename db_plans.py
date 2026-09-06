@@ -1765,11 +1765,22 @@ def fill_placeholder_meal_plan_atomic(plan_id: str, user_id: str, insert_data: d
                     )
                     q = cursor.fetchone()
                     _st = str((q or {}).get("status") or "")
-                    _at = int((q or {}).get("attempts") or -1)
-                    if not q or _st != "processing" or _at != int(_fence.get("attempts", -2)):
+                    # [P0-FILL-FENCED · corregido 2026-09-06] `int(x or -1)` convertía attempts=0 en -1, porque
+                    # CERO ES FALSO EN PYTHON. El primer intento de todo chunk lleva attempts=0, así que el
+                    # fence rechazaba la escritura legítima de CADA plan: visto en producción a los 40 minutos
+                    # de desplegarlo (plan c5ba1681, «attempts=-1 vs esperado 0»). El plan se salvó porque el
+                    # recovery re-reclamó el chunk y en el segundo intento attempts=1 ya es verdadero.
+                    #
+                    # El valor ausente y el valor cero son estados distintos — la misma invariante que el
+                    # roadmap 2.6 llama I20 y que yo acababa de escribir en un test.
+                    _at_raw = (q or {}).get("attempts")
+                    _at = int(_at_raw) if _at_raw is not None else -1
+                    _esperado = _fence.get("attempts")
+                    _esperado = int(_esperado) if _esperado is not None else -2
+                    if not q or _st != "processing" or _at != _esperado:
                         logger.warning(
                             f"🛡️ [P0-FILL-FENCED] chunk {str(_fence.get('task_id'))[:8]} ya no es nuestro "
-                            f"(status={_st!r} attempts={_at} vs esperado {_fence.get('attempts')}); "
+                            f"(status={_st!r} attempts={_at} vs esperado {_esperado}); "
                             f"NO se escribe el plan {str(plan_id)[:8]}."
                         )
                         return None

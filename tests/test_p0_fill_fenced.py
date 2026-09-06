@@ -170,3 +170,26 @@ def test_el_orquestador_pone_el_token_antes_del_postprocesado():
     assert i < src.index("_postprocess_pipeline_result(", i), "el token se pone antes de postprocesar"
     bloque = src[i:i + 200]
     assert '"attempts": int(pickup_attempts)' in bloque and '"task_id": str(task_id)' in bloque
+
+
+def test_el_primer_intento_escribe_aunque_attempts_sea_cero(monkeypatch):
+    """[corregido 2026-09-06] El bug que este archivo NO cazaba porque todos sus casos usaban attempts=3.
+
+    `int(x or -1)` convierte 0 en -1 —cero es falso en Python— y el primer intento de TODO chunk lleva
+    attempts=0, así que el fence rechazaba la escritura legítima de cada plan. Visto en producción a los 40
+    minutos de desplegarlo: «attempts=-1 vs esperado 0» en el plan c5ba1681. El plan se salvó solo porque el
+    recovery re-reclamó el chunk y en el segundo intento attempts=1 ya es verdadero.
+
+    Ausente y cero son estados distintos. Es la misma invariante que el roadmap 2.6 llama I20."""
+    cur = _preparar(monkeypatch, {"status": "processing", "attempts": 0})
+    out = db_plans.fill_placeholder_meal_plan_atomic("plan-1", "user-1", _insert_data(attempts=0))
+    assert out == "plan-1", "el primer intento de un chunk tiene que poder escribir"
+    assert _escribio_el_plan(cur), cur.sql
+
+
+def test_la_fila_sin_attempts_no_escribe(monkeypatch):
+    """Ausente sigue siendo distinto de cero: si la columna viene NULL, no sabemos de quién es el trabajo."""
+    cur = _preparar(monkeypatch, {"status": "processing", "attempts": None})
+    out = db_plans.fill_placeholder_meal_plan_atomic("plan-1", "user-1", _insert_data(attempts=0))
+    assert out is None
+    assert not _escribio_el_plan(cur)
