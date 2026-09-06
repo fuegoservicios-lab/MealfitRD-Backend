@@ -85,14 +85,42 @@ _CATEGORY_DEFAULT = {"despensa": ("pantry", 180), "viveres": ("cold", 21), "vege
                      "lacteos": ("fresh", 10), "proteinas": ("freezable", 3)}
 
 
+# [P1-DURABILITY-FRESH-STATE · 2026-09-05] La tabla de arriba resuelve por el ALIMENTO y no mira la palabra
+# de estado, y para cuatro pescados eso invierte el resultado: su nombre es a la vez el de la conserva y el del
+# pescado del mostrador. Medido contra este mismo módulo:
+#
+#     atún fresco      → despensa, 180 días        (la regla de «atun en agua»)
+#     bacalao fresco   → despensa, 180 días
+#     arenque fresco   → despensa, 180 días
+#     anchoas frescas  → despensa, 180 días
+#
+# Consecuencia real: en un ciclo de 30 días SIN congelador, un plato con atún fresco pasaba el guard el día 25.
+#
+# Lo que NO se toca, porque no está mal: «arroz cocido» y «claras de huevo» siguen siendo despensa 180 y frío 35.
+# Este módulo responde «¿cuánto aguanta lo que el usuario COMPRA?», y lo que compra es arroz y huevos; el plato se
+# cocina o se separa ese día. Tratarlos como sobras de nevera bloquearía platos correctos. La conservación de lo
+# ya cocinado es otra pregunta y pertenece al modo «cocino por tandas», que este módulo todavía no representa.
+_FRESH_QUALIFIERS = ("fresco", "fresca", "frescos", "frescas", "crudo", "cruda", "crudos", "crudas",
+                     "del dia", "de mostrador")
+# Pescados cuyo nombre desnudo significa CONSERVA en la tabla. Calificados de frescos, son proteína de 3 días.
+_PRESERVED_FISH = ("atun", "bacalao", "arenque", "anchoa", "sardina")
+
+
 def _norm(s: Any) -> str:
     s = unicodedata.normalize("NFKD", str(s or "")).encode("ascii", "ignore").decode().lower()
     return " ".join(s.split())
 
 
 def classify(name: Any, category: Optional[str] = None) -> dict:
-    """{cls, days_fresh, days_frozen} de un alimento por su nombre (canónico o alias)."""
+    """{cls, days_fresh, days_frozen, rule} de un alimento por su nombre (canónico o alias).
+
+    `rule` dice de dónde salió el plazo —el token que casó, `fresh_state` o `category_default`— para que un
+    plazo raro se pueda auditar sin releer la tabla entera. tooltip-anchor: P1-DURABILITY-FRESH-STATE"""
     n = " " + _norm(name) + " "
+    # [P1-DURABILITY-FRESH-STATE] El calificativo manda sobre la tabla, y solo para los pescados cuyo nombre
+    # desnudo es el de la conserva: «atún fresco» es proteína de 3 días, no una lata de 180.
+    if any((" " + q) in n for q in _FRESH_QUALIFIERS) and any((" " + f) in n for f in _PRESERVED_FISH):
+        return {"cls": "freezable", "days_fresh": 3, "days_frozen": FROZEN_DAYS, "rule": "fresh_state"}
     for tokens, cls, days in _RULES:
         for tok in tokens:
             t = _norm(tok)
@@ -100,9 +128,11 @@ def classify(name: Any, category: Optional[str] = None) -> dict:
                 continue
             hit = (" " + t + " ") in n if len(t) <= 4 else (" " + t) in n   # cortos exactos («sal»≠«salmon»), largos por prefijo («yogur»→«yogurt»)
             if hit:
-                return {"cls": cls, "days_fresh": int(days), "days_frozen": FROZEN_DAYS if cls == "freezable" else int(days)}
+                return {"cls": cls, "days_fresh": int(days),
+                        "days_frozen": FROZEN_DAYS if cls == "freezable" else int(days), "rule": t}
     cls, days = _CATEGORY_DEFAULT.get(_norm(category), ("fresh", 7))
-    return {"cls": cls, "days_fresh": int(days), "days_frozen": FROZEN_DAYS if cls == "freezable" else int(days)}
+    return {"cls": cls, "days_fresh": int(days), "days_frozen": FROZEN_DAYS if cls == "freezable" else int(days),
+            "rule": "category_default"}
 
 
 def durability_of(constituents: Iterable[Any], categories: Optional[dict] = None) -> dict:
@@ -173,4 +203,5 @@ def ingredient_issue_beyond_horizon(name: Any, abs_day_index: int, allow_frozen:
 
 
 __all__ = ["FRESH_HORIZON_DAYS", "FROZEN_DAYS", "LIMITED_FREEZE_WINDOW_DAYS", "classify", "durability_of",
+           "_FRESH_QUALIFIERS", "_PRESERVED_FISH",
            "freeze_window_days", "template_fits", "single_trip_requirements", "ingredient_issue_beyond_horizon"]

@@ -20,8 +20,13 @@ _FRONT = _BACKEND.parent / "frontend" / "src"
 
 def test_a_clases_de_durabilidad_por_nombre_no_por_la_columna_de_relleno():
     assert pd.classify("Atún en agua")["cls"] == "pantry" and pd.classify("Sardinas en lata")["days_fresh"] >= 90
-    assert pd.classify("Huevo") == {"cls": "cold", "days_fresh": 35, "days_frozen": 35}
-    assert pd.classify("Pechuga de pollo") == {"cls": "freezable", "days_fresh": 3, "days_frozen": 90}
+    # [P1-DURABILITY-FRESH-STATE · 2026-09-05] `classify` gana la clave `rule` —de qué token salió el plazo—
+    # para poder auditar un plazo raro sin releer la tabla entera. La igualdad exacta del dict se convierte en
+    # comprobación de los tres campos que este test vigila; el cuarto es procedencia, no comportamiento.
+    _huevo = pd.classify("Huevo")
+    assert (_huevo["cls"], _huevo["days_fresh"], _huevo["days_frozen"]) == ("cold", 35, 35), _huevo
+    _c1 = pd.classify("Pechuga de pollo")
+    assert (_c1["cls"], _c1["days_fresh"], _c1["days_frozen"]) == ("freezable", 3, 90), _c1
     assert pd.classify("Lechuga")["cls"] == "fresh" and pd.classify("Tomate")["cls"] == "fresh"
     assert pd.classify("Repollo")["days_fresh"] >= 21 and pd.classify("Cebolla")["days_fresh"] >= 21
     # tokens cortos son palabra exacta: «sal» no es «salmón»; los largos casan por prefijo: «yogur» → «yogurt»
