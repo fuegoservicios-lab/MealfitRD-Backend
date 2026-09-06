@@ -145,6 +145,22 @@ def allergen_classes_for(names: Iterable[str]) -> list[str]:
         return []
     out: set[str] = set()
     norm_names = [_norm(n) for n in names if n]
+    # [P1-PLANT-MILK-NOT-DAIRY · 2026-09-06] «Leche de coco» salía etiquetada como LÁCTEO, y con ella cualquier
+    # plato que la use. No es el fallo de subcadena de siempre —el matcher ya compara por palabra completa— sino
+    # el contrario: «leche» ES una palabra completa dentro de «leche de coco», y aun así la bebida no lleva
+    # lácteo. Medido al añadir los desayunos sin lácteos ni huevo: la batida de lechosa quedaba fuera del filtro
+    # de un alérgico a la leche por un alérgeno que no tiene.
+    #
+    # El daño va en las dos direcciones: excluye platos seguros para quien no tolera lácteos, y le dice a quien
+    # sí los tolera que ese plato lleva algo que no lleva.
+    # Y lo mismo por el otro lado del vocabulario: «mantequilla» es palabra láctea, pero la de maní no lleva
+    # leche — medido aquí mismo: «Mantequilla de maní» devolvía lacteos + lactosa + mani.
+    _leches_vegetales = ("leche de coco", "leche de almendra", "leche de almendras", "leche de soya",
+                         "leche de soja", "leche de avena", "leche de arroz", "leche de anacardo",
+                         "leche vegetal", "bebida de almendras", "bebida de avena", "bebida de soya",
+                         "mantequilla de mani", "mantequilla de almendra", "mantequilla de almendras",
+                         "mantequilla de anacardo", "mantequilla de semillas", "crema de cacahuate",
+                         "crema de mani", "crema de coco", "queso vegano", "yogur vegetal", "yogurt vegetal")
     # La salsa de soya corriente lleva trigo (solo el tamari no): para el registry cuenta como gluten.
     vocab = dict(vocab or {})
     vocab["gluten"] = list(vocab.get("gluten") or []) + ["salsa de soya", "salsa soya", "soy sauce"]
@@ -153,7 +169,12 @@ def allergen_classes_for(names: Iterable[str]) -> list[str]:
             t = _norm(tok)
             if not t:
                 continue
+            _es_lacteo = "lacte" in str(cls).lower() or "lactos" in str(cls).lower()
             for n in norm_names:
+                # [P1-PLANT-MILK-NOT-DAIRY] la bebida vegetal no aporta la clase láctea (sí las demás: una
+                # bebida de almendras SIGUE siendo frutos secos, y así se declara por su propio token).
+                if _es_lacteo and any(v in n for v in _leches_vegetales):
+                    continue
                 # [P1-ARQ25-F7-CULTURE · revisión curatorial] tolerante a plural: el vocabulario dice «sardina»,
                 # «fideo», «almeja» y el catálogo «Sardinas en lata», «Fideos», «Almejas» — con frontera de palabra
                 # estricta, tres bibliotecas servían sardinas sin la clase «pescado».

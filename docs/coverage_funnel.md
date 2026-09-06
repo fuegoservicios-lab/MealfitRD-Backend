@@ -21,59 +21,75 @@ python scripts/coverage_funnel.py --desglose vegetariano # etapa a etapa
 plato con esos gramos, ni el precio, ni las cuotas del horizonte: un candidato que sobrevive aquí es elegible,
 no necesariamente servible.
 
-## Medición del 2026-09-05
+## Medición del 2026-09-05 (antes de cerrar los huecos)
+
+Tres huecos reales, y ninguno era «faltan platos en general»:
+
+1. **Vegano en Puerto Rico: cero cenas.** El único cero que producía la dieta sola.
+2. **Vegetariano sin lácteos ni huevo: cero desayunos** en DO, PR, MX y CO — cuatro de las seis bibliotecas. El
+   desayuno criollo se sostiene sobre huevo y queso, así que quitarle los dos lo vaciaba.
+3. **Almuerzo vegetariano estrecho en las cocinas criollas**: 8 en DO y PR, 11 en MX y CO, contra 29 en España.
+
+Lo que **no** aparecía: ningún hueco por conservación. En el día 25 sin congelador quedaban 6-8 candidatos por
+franja en las seis bibliotecas — poco, pero no cero.
+
+## Medición del 2026-09-06 (después de P1-GAP-DISHES-VEG)
+
+23 plantillas nuevas, dirigidas a esos dos huecos, y una corrección de etiquetado que resultó valer tanto como
+los platos: **«Leche de coco» y «Mantequilla de maní» se declaraban LÁCTEOS**, así que desaparecían del plan de
+cualquier alérgico a la leche y mentían a quien sí los tolera.
 
 ```
 EMBUDO DE COBERTURA — cuántos platos sobreviven a los filtros de un usuario
 
 ── dominican_criolla  (mercado DO) ─────────────────────────────
    escenario                       desayuno  almuerzo  merienda      cena    mínimo
-   base                                  29        51        34        39        29
-   vegetariano                           27         8        32        15         8
-   vegano                                 9         6        20         2         2  ⚠
-   veg + sin lácteos                      8         8        11         7         7
-   veg + sin lácteos ni huevo             0         4         6         1         0  ⚠
-   sin mariscos ni pescado               28        39        34        28        28
-   sin gluten                            15        42        21        37        15
-   día 25 sin congelador                  9        10         8         8         8
-   veg · día 25 sin congelador            9         5         8         5         5
-   día 25 congelador limitado             9        10         8         8         8
+   base                                  32        52        34        43        32
+   vegetariano                           30         9        32        19         9
+   vegano                                12         7        20         6         6
+   veg + sin lácteos                     12         9        13        11         9
+   veg + sin lácteos ni huevo             4         5         8         5         4
+   sin mariscos ni pescado               31        40        34        32        31
+   sin gluten                            17        43        21        41        17
+   día 25 sin congelador                 10        11         8         8         8
+   veg · día 25 sin congelador           10         6         8         5         5
+   día 25 congelador limitado            10        11         8         8         8
 
 ── puertorico_criolla  (mercado PR) ────────────────────────────
    escenario                       desayuno  almuerzo  merienda      cena    mínimo
-   base                                  26        42        23        30        23
-   vegetariano                           24         9        18         8         8
-   vegano                                 8         6        13         0         0  ⚠
-   veg + sin lácteos                      8         9         8         2         2  ⚠
-   veg + sin lácteos ni huevo             0         5         8         0         0  ⚠
-   sin mariscos ni pescado               25        30        18        19        18
-   sin gluten                            11        40        17        27        11
-   día 25 sin congelador                  8        10         7         9         7
-   veg · día 25 sin congelador            8         6         6         4         4
-   día 25 congelador limitado             8        10         7         9         7
+   base                                  29        43        23        35        23
+   vegetariano                           27        10        18        13        10
+   vegano                                11         7        13         5         5
+   veg + sin lácteos                     13        10        10         7         7
+   veg + sin lácteos ni huevo             5         6        10         5         5
+   sin mariscos ni pescado               28        31        18        24        18
+   sin gluten                            12        41        17        32        12
+   día 25 sin congelador                  8        10         7        10         7
+   veg · día 25 sin congelador            8         6         6         5         5
+   día 25 congelador limitado             8        10         7        10         7
 
 ── mexico_casera  (mercado MX) ─────────────────────────────────
    escenario                       desayuno  almuerzo  merienda      cena    mínimo
-   base                                  28        43        25        35        25
-   vegetariano                           26        11        25        17        11
-   vegano                                10         8        19         5         5
-   veg + sin lácteos                      9         8         9         7         7
-   veg + sin lácteos ni huevo             0         5         9         3         0  ⚠
-   sin mariscos ni pescado               28        34        25        27        25
-   sin gluten                            18        42        18        32        18
+   base                                  31        43        25        35        25
+   vegetariano                           29        11        25        17        11
+   vegano                                13         8        19         5         5
+   veg + sin lácteos                     12         8         9         7         7
+   veg + sin lácteos ni huevo             3         5         9         3         3
+   sin mariscos ni pescado               31        34        25        27        25
+   sin gluten                            20        42        18        32        18
    día 25 sin congelador                  7         9         6         8         6
    veg · día 25 sin congelador            7         5         6         6         5
    día 25 congelador limitado             7         9         6         8         6
 
 ── colombia_casera  (mercado CO) ───────────────────────────────
    escenario                       desayuno  almuerzo  merienda      cena    mínimo
-   base                                  27        45        27        36        27
-   vegetariano                           22        11        26        17        11
-   vegano                                 5        10        18         5         5
-   veg + sin lácteos                      6        11        10         8         6
-   veg + sin lácteos ni huevo             0         6        10         5         0  ⚠
-   sin mariscos ni pescado               26        32        27        27        26
-   sin gluten                            20        43        25        35        20
+   base                                  30        45        27        36        27
+   vegetariano                           25        11        26        17        11
+   vegano                                 8        10        18         5         5
+   veg + sin lácteos                      9        11        11         8         8
+   veg + sin lácteos ni huevo             3         6        11         5         3
+   sin mariscos ni pescado               29        32        27        27        27
+   sin gluten                            22        43        25        35        22
    día 25 sin congelador                  7        11         7         8         7
    veg · día 25 sin congelador            6         5         7         6         5
    día 25 congelador limitado             7        11         7         8         7
@@ -96,8 +112,8 @@ EMBUDO DE COBERTURA — cuántos platos sobreviven a los filtros de un usuario
    base                                  26        41        18        33        18
    vegetariano                           26         8        16        12         8
    vegano                                12         5        10         5         5
-   veg + sin lácteos                      6         6         4         3         3
-   veg + sin lácteos ni huevo             2         3         3         3         2  ⚠
+   veg + sin lácteos                      8         7         7         3         3
+   veg + sin lácteos ni huevo             4         4         6         3         3
    sin mariscos ni pescado               26        31        17        26        17
    sin gluten                             8        23        11        28         8
    día 25 sin congelador                  8        10         7         8         7
@@ -108,19 +124,12 @@ EMBUDO DE COBERTURA — cuántos platos sobreviven a los filtros de un usuario
 «elegibles» = pasa franja, alergias, dieta y conservación. NO incluye solver, precio ni cuotas.
 ```
 
-## Lo que dice esta primera medición
+**Ninguna franja baja de 3 candidatos en ningún escenario de ninguna biblioteca.** Los ceros desaparecieron: el
+vegano puertorriqueño tiene 5 cenas y el vegetariano sin lácteos ni huevo tiene desayuno en las seis cocinas.
 
-Tres huecos reales, y ninguno es «faltan platos en general»:
-
-1. **Vegano en Puerto Rico: cero cenas.** No hay ninguna. Es el único cero que produce la dieta sola, sin
-   alergias encima.
-2. **Vegetariano sin lácteos ni huevo: cero desayunos** en DO, PR, MX y CO — cuatro de las seis bibliotecas. El
-   desayuno criollo se sostiene sobre huevo y queso, así que quitarle los dos lo vacía.
-3. **El almuerzo vegetariano es estrecho en las cocinas criollas**: 8 en DO, 8 en PR, 11 en MX y CO, contra 29
-   en España. No es un cero, pero con las cuotas del horizonte encima deja poco margen de variedad.
-
-Lo que **no** aparece: ningún hueco por conservación. En el día 25 sin congelador quedan 6-8 candidatos por
-franja en las seis bibliotecas — poco, pero no cero.
+Los platos nuevos respetan la regla editorial de la biblioteca —una cena no se declara con base de almidón—: el
+plato cuya identidad ES el arroz (moro, arroz con gandules) se declaró almuerzo, que es su sitio, y el guiso que
+se sirve con arroz declara base «legumbre», que es lo que estructura el plato.
 
 ## Dos trampas que ya costaron una medición falsa
 

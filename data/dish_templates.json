@@ -2084,6 +2084,258 @@
           "grams": 150.0
         }
       ]
+    },
+    {
+      "name": "Mangú de plátano verde con cebolla encurtida y aguacate",
+      "slots": [
+        "desayuno"
+      ],
+      "protein": "none",
+      "base": "platano",
+      "technique": "hervido+majado",
+      "transform": true,
+      "constituents": [
+        {
+          "name": "Plátano verde",
+          "grams": 200
+        },
+        {
+          "name": "Cebolla",
+          "grams": 40
+        },
+        {
+          "name": "Vinagre blanco",
+          "grams": 5
+        },
+        {
+          "name": "Aguacate",
+          "grams": 70
+        },
+        {
+          "name": "Aceite de oliva",
+          "grams": 10
+        }
+      ]
+    },
+    {
+      "name": "Avena caliente con manzana, canela y maní",
+      "slots": [
+        "desayuno"
+      ],
+      "protein": "none",
+      "base": "avena",
+      "technique": "hervido",
+      "transform": true,
+      "constituents": [
+        {
+          "name": "Avena",
+          "grams": 60
+        },
+        {
+          "name": "Manzana",
+          "grams": 130
+        },
+        {
+          "name": "Maní",
+          "grams": 20
+        },
+        {
+          "name": "Canela en polvo",
+          "grams": 2
+        }
+      ]
+    },
+    {
+      "name": "Casabe con aguacate y tomate aliñado",
+      "slots": [
+        "desayuno"
+      ],
+      "protein": "none",
+      "base": "casabe",
+      "technique": "frío",
+      "transform": false,
+      "constituents": [
+        {
+          "name": "Casabe",
+          "grams": 60
+        },
+        {
+          "name": "Aguacate",
+          "grams": 90
+        },
+        {
+          "name": "Tomate",
+          "grams": 80
+        },
+        {
+          "name": "Aceite de oliva",
+          "grams": 10
+        },
+        {
+          "name": "Limón",
+          "grams": 10
+        }
+      ]
+    },
+    {
+      "name": "Moro de habichuelas negras con auyama",
+      "slots": [
+        "almuerzo"
+      ],
+      "protein": "legumbre",
+      "base": "arroz",
+      "technique": "guisado",
+      "transform": true,
+      "constituents": [
+        {
+          "name": "Arroz blanco",
+          "grams": 150
+        },
+        {
+          "name": "Habichuelas negras",
+          "grams": 170
+        },
+        {
+          "name": "Auyama",
+          "grams": 90
+        },
+        {
+          "name": "Cebolla",
+          "grams": 30
+        },
+        {
+          "name": "Aceite de oliva",
+          "grams": 10
+        }
+      ]
+    },
+    {
+      "name": "Guiso de gandules con zanahoria y arroz blanco",
+      "slots": [
+        "cena"
+      ],
+      "protein": "legumbre",
+      "base": "legumbre",
+      "technique": "guisado",
+      "transform": true,
+      "constituents": [
+        {
+          "name": "Gandules",
+          "grams": 170
+        },
+        {
+          "name": "Zanahoria",
+          "grams": 120
+        },
+        {
+          "name": "Arroz blanco",
+          "grams": 140
+        },
+        {
+          "name": "Ají cubanela",
+          "grams": 30
+        },
+        {
+          "name": "Salsa de tomate",
+          "grams": 30
+        }
+      ]
+    },
+    {
+      "name": "Mangú de plátano verde con lentejas guisadas",
+      "slots": [
+        "cena"
+      ],
+      "protein": "legumbre",
+      "base": "platano",
+      "technique": "hervido+majado",
+      "transform": true,
+      "constituents": [
+        {
+          "name": "Plátano verde",
+          "grams": 210
+        },
+        {
+          "name": "Lentejas",
+          "grams": 170
+        },
+        {
+          "name": "Cebolla",
+          "grams": 35
+        },
+        {
+          "name": "Ajo",
+          "grams": 8
+        },
+        {
+          "name": "Aceite de oliva",
+          "grams": 12
+        }
+      ]
+    },
+    {
+      "name": "Sancocho de víveres con garbanzos",
+      "slots": [
+        "cena"
+      ],
+      "protein": "legumbre",
+      "base": "viveres",
+      "technique": "sopa espesa",
+      "transform": true,
+      "constituents": [
+        {
+          "name": "Garbanzos",
+          "grams": 170
+        },
+        {
+          "name": "Yuca",
+          "grams": 110
+        },
+        {
+          "name": "Ñame",
+          "grams": 100
+        },
+        {
+          "name": "Auyama",
+          "grams": 90
+        },
+        {
+          "name": "Cilantro",
+          "grams": 8
+        }
+      ]
+    },
+    {
+      "name": "Habichuelas blancas guisadas con batata y arroz",
+      "slots": [
+        "cena"
+      ],
+      "protein": "legumbre",
+      "base": "legumbre",
+      "technique": "guisado",
+      "transform": true,
+      "constituents": [
+        {
+          "name": "Habichuelas blancas",
+          "grams": 175
+        },
+        {
+          "name": "Batata",
+          "grams": 120
+        },
+        {
+          "name": "Arroz blanco",
+          "grams": 130
+        },
+        {
+          "name": "Ají morrón",
+          "grams": 30
+        },
+        {
+          "name": "Orégano dominicano",
+          "grams": 2
+        }
+      ]
     }
   ]
 }

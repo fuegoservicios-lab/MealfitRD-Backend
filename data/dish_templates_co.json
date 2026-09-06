@@ -3221,6 +3221,94 @@
           "grams": 20.0
         }
       ]
+    },
+    {
+      "name": "Arepa de maíz con aguacate y tomate",
+      "slots": [
+        "desayuno"
+      ],
+      "protein": "none",
+      "base": "maiz",
+      "technique": "plancha",
+      "transform": true,
+      "constituents": [
+        {
+          "name": "Harina de maíz precocida",
+          "grams": 70
+        },
+        {
+          "name": "Aguacate",
+          "grams": 80
+        },
+        {
+          "name": "Tomate",
+          "grams": 70
+        },
+        {
+          "name": "Aceite de oliva",
+          "grams": 8
+        }
+      ]
+    },
+    {
+      "name": "Avena con lulo, papaya y maní",
+      "slots": [
+        "desayuno"
+      ],
+      "protein": "none",
+      "base": "avena",
+      "technique": "hervido",
+      "transform": true,
+      "constituents": [
+        {
+          "name": "Avena",
+          "grams": 60
+        },
+        {
+          "name": "Lulo",
+          "grams": 90
+        },
+        {
+          "name": "Lechosa",
+          "grams": 120
+        },
+        {
+          "name": "Maní",
+          "grams": 20
+        }
+      ]
+    },
+    {
+      "name": "Calentado de frijol cargamanto con arroz y arepa",
+      "slots": [
+        "desayuno"
+      ],
+      "protein": "legumbre",
+      "base": "legumbre",
+      "technique": "sartén",
+      "transform": true,
+      "constituents": [
+        {
+          "name": "Frijol cargamanto",
+          "grams": 150
+        },
+        {
+          "name": "Arroz blanco",
+          "grams": 120
+        },
+        {
+          "name": "Harina de maíz precocida",
+          "grams": 50
+        },
+        {
+          "name": "Cebollín",
+          "grams": 20
+        },
+        {
+          "name": "Aceite vegetal",
+          "grams": 8
+        }
+      ]
     }
   ]
 }

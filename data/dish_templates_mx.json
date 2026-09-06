@@ -3362,6 +3362,98 @@
           "grams": 20.0
         }
       ]
+    },
+    {
+      "name": "Frijoles refritos con aguacate y tortilla de maíz",
+      "slots": [
+        "desayuno"
+      ],
+      "protein": "legumbre",
+      "base": "maiz",
+      "technique": "sartén",
+      "transform": true,
+      "constituents": [
+        {
+          "name": "Frijoles refritos",
+          "grams": 150
+        },
+        {
+          "name": "Aguacate",
+          "grams": 70
+        },
+        {
+          "name": "Tortilla de maíz",
+          "grams": 60
+        },
+        {
+          "name": "Cebolla",
+          "grams": 30
+        },
+        {
+          "name": "Cilantro",
+          "grams": 6
+        }
+      ]
+    },
+    {
+      "name": "Avena con guayaba, canela y cacao",
+      "slots": [
+        "desayuno"
+      ],
+      "protein": "none",
+      "base": "avena",
+      "technique": "hervido",
+      "transform": true,
+      "constituents": [
+        {
+          "name": "Avena",
+          "grams": 60
+        },
+        {
+          "name": "Guayaba",
+          "grams": 120
+        },
+        {
+          "name": "Cacao en polvo",
+          "grams": 8
+        },
+        {
+          "name": "Canela en polvo",
+          "grams": 2
+        }
+      ]
+    },
+    {
+      "name": "Nopal asado con frijoles negros y salsa de chile guajillo",
+      "slots": [
+        "desayuno"
+      ],
+      "protein": "legumbre",
+      "base": "legumbre",
+      "technique": "plancha",
+      "transform": true,
+      "constituents": [
+        {
+          "name": "Nopal",
+          "grams": 150
+        },
+        {
+          "name": "Habichuelas negras",
+          "grams": 140
+        },
+        {
+          "name": "Chile guajillo",
+          "grams": 8
+        },
+        {
+          "name": "Cebolla",
+          "grams": 30
+        },
+        {
+          "name": "Aceite vegetal",
+          "grams": 8
+        }
+      ]
     }
   ]
 }
