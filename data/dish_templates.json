@@ -2210,7 +2210,7 @@
       ]
     },
     {
-      "name": "Guiso de gandules con zanahoria y arroz blanco",
+      "name": "Gandules guisados con zanahoria y auyama",
       "slots": [
         "cena"
       ],
@@ -2221,15 +2221,15 @@
       "constituents": [
         {
           "name": "Gandules",
-          "grams": 170
+          "grams": 180
         },
         {
           "name": "Zanahoria",
           "grams": 120
         },
         {
-          "name": "Arroz blanco",
-          "grams": 140
+          "name": "Auyama",
+          "grams": 110
         },
         {
           "name": "Ají cubanela",
@@ -2274,7 +2274,7 @@
       ]
     },
     {
-      "name": "Sancocho de víveres con garbanzos",
+      "name": "Víveres guisados con garbanzos y cilantro",
       "slots": [
         "cena"
       ],
@@ -2285,7 +2285,7 @@
       "constituents": [
         {
           "name": "Garbanzos",
-          "grams": 170
+          "grams": 175
         },
         {
           "name": "Yuca",
@@ -2306,26 +2306,26 @@
       ]
     },
     {
-      "name": "Habichuelas blancas guisadas con batata y arroz",
+      "name": "Habichuelas blancas guisadas con batata y ñame",
       "slots": [
         "cena"
       ],
       "protein": "legumbre",
-      "base": "legumbre",
+      "base": "viveres",
       "technique": "guisado",
       "transform": true,
       "constituents": [
         {
           "name": "Habichuelas blancas",
-          "grams": 175
+          "grams": 180
         },
         {
           "name": "Batata",
-          "grams": 120
+          "grams": 130
         },
         {
-          "name": "Arroz blanco",
-          "grams": 130
+          "name": "Ñame",
+          "grams": 110
         },
         {
           "name": "Ají morrón",
