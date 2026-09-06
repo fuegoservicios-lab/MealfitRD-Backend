@@ -1,0 +1,34 @@
+# [ARQ27 · 2026-09-06] Finales de línea: LF en el árbol de trabajo, siempre.
+#
+# Los tres repos tenían `core.autocrlf=true` y ningún `.gitattributes`, así que cada checkout salía
+# con los finales de línea del día en que se creó. Mismo commit, bytes distintos: `AgentPage.jsx`
+# tenía 5.253 CRLF en el workspace y 5.253 LF en el worktree `C:/tmp/arq25`.
+#
+# No es cosmético. Costó dos falsos rojos el mismo día:
+#
+#   · cuatro tests que comparan BYTE A BYTE las copias gemelas de `migrations/` y `scripts/` entre el
+#     repo raíz y el del backend (el SSOT de migraciones vive en dos sitios a propósito);
+#   · varios tests del frontend que PARSEAN el fuente buscando `\n` + indentación literales
+#     (`AgentPage.composer_clear.test.js`, `Login.mobile_bg_uniform.test.js`): en un árbol CRLF
+#     devuelven -1 y el gate del deploy sale rojo por código que está perfectamente bien.
+#
+# Los blobs guardados ya eran LF, así que esto no renormaliza nada: solo fija cómo se escriben en
+# disco a partir del próximo checkout, y con ello que todos los árboles sean iguales.
+* text=auto eol=lf
+
+# Binarios: nunca tocar. `text=auto` los detecta solo, pero decirlo evita que un heurístico
+# los estropee — png y woff2 contienen la secuencia \r\n por azar más a menudo de lo que parece.
+*.png   binary
+*.jpg   binary
+*.jpeg  binary
+*.gif   binary
+*.ico   binary
+*.webp  binary
+*.pdf   binary
+*.woff  binary
+*.woff2 binary
+*.ttf   binary
+*.otf   binary
+*.zip   binary
+*.gz    binary
+*.mp4   binary
