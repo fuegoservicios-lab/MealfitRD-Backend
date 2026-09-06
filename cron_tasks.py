@@ -3939,6 +3939,13 @@ def _resolve_stale_plan_quality_alerts() -> None:
     pq_failed = False
     post_swap_swept = 0
     post_swap_failed = False
+    pq_orphan_swept = 0
+    pq_orphan_failed = False
+    # [P1-QUALITY-SWEEP-STATUS · 2026-09-06] Suelo de edad del barrido de huérfanas. Una alerta
+    # recién emitida podría, en teoría, adelantar por microsegundos al commit de su plan; 24 h
+    # deja esa carrera fuera de discusión sin retrasar nada que importe (estas alertas llevan
+    # meses abiertas). Clamp [1, 720].
+    pq_orphan_h = max(1, min(720, _env_int("MEALFIT_PLAN_QUALITY_ORPHAN_RESOLVE_HOURS", 24)))
     post_swap_h = _env_int("MEALFIT_POST_SWAP_DIVERGENCE_AUTO_RESOLVE_HOURS", 24)
     if post_swap_h < 6:
         # Hard floor: el cooldown del productor es 6h. Cerrar antes de eso
@@ -4022,6 +4029,79 @@ def _resolve_stale_plan_quality_alerts() -> None:
             f"[P2-NEW-10/PLAN-QUALITY-SWEEP] sweep plan_quality falló (best-effort): {e}"
         )
 
+    # Sweep #1-bis: `plan_quality_degraded:<user>:<plan>` cuyo PLAN ya no existe.
+    #
+    # [P1-QUALITY-SWEEP-STATUS · 2026-09-06] El sweep #1 arreglado (ahora acepta
+    # `complete_partial`) sigue cerrando CERO, y la razón no es el estado del plan posterior.
+    # Desglose medido de las 122 alertas abiertas el 06-sep:
+    #
+    #     con plan VIVO al que apuntan .............   3   → las cierra el sweep #1 cuando ese
+    #                                                        usuario reciba un plan limpio
+    #     con plan_id válido cuyo plan ya no está ..   4   → las cierra ESTE sweep
+    #     con la clave terminada en `:no_plan_id`
+    #       o con un segmento que no es un UUID ..... 115   → no las cierra nadie
+    #
+    # Las 115 salen del productor cuando emite la alerta SIN plan_id. Nombran a un usuario y
+    # traen `top_rejection_reasons` en la metadata, así que valen en agregado, pero no hay nada
+    # que un operador pueda ir a inspeccionar: no apuntan a ninguna fila. Cerrarlas por regla
+    # sería cerrar por cansancio, y esa decisión es del dueño, no del cron — quedan abiertas a
+    # propósito y documentadas aquí para que la próxima auditoría no las lea como «sin revisar».
+    #
+    # Lo que sí es indiscutible son las 4: la alerta nombra un plan concreto y ese plan no está
+    # en `meal_plans` (regeneración, purga, baja). No hay nada que inspeccionar, y el criterio
+    # sigue siendo semántico —mira al referente— en vez de temporal.
+    try:
+        resolved_pq_orphan = execute_sql_write(
+            """
+            UPDATE system_alerts AS a
+               SET resolved_at = NOW()
+             WHERE a.resolved_at IS NULL
+               AND a.alert_key LIKE 'plan_quality_degraded:%%'
+               AND a.triggered_at < NOW() - make_interval(hours => %s)
+               AND a.alert_key ~ ('^plan_quality_degraded:'
+                                  || '[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-'
+                                  || '[0-9a-fA-F]{4}-[0-9a-fA-F]{12}:'
+                                  || '[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-'
+                                  || '[0-9a-fA-F]{4}-[0-9a-fA-F]{12}$')
+               AND NOT EXISTS (
+                   -- [P1-QUALITY-SWEEP-STATUS] El `::uuid` va DENTRO del CASE, no detrás de un
+                   -- `AND` hermano: SQL no garantiza el orden de evaluación de los predicados y
+                   -- una clave `plan_quality_degraded:<uuid>:no_plan_id` (existen, 4 de 122)
+                   -- revienta el cast antes de que el regex la descarte. Probado contra la base:
+                   -- `invalid input syntax for type uuid: "no_plan_id"`. Mismo patrón que el
+                   -- sweep #1 (P2-CRON-OPT-5), que lo documenta unas líneas más arriba.
+                   -- El CASE evita el error; el regex de arriba sigue siendo quien decide que
+                   -- una clave malformada NO se cierra (con `= NULL` el NOT EXISTS daría True
+                   -- y la cerraría a ciegas).
+                   SELECT 1 FROM meal_plans mp
+                    WHERE mp.id = CASE
+                            WHEN a.alert_key ~ ('^plan_quality_degraded:'
+                                 || '[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-'
+                                 || '[0-9a-fA-F]{4}-[0-9a-fA-F]{12}:'
+                                 || '[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-'
+                                 || '[0-9a-fA-F]{4}-[0-9a-fA-F]{12}$')
+                            THEN (split_part(a.alert_key, ':', 3))::uuid
+                            ELSE NULL
+                          END
+               )
+             RETURNING a.alert_key
+            """,
+            (int(pq_orphan_h),),
+            returning=True,
+        ) or []
+        pq_orphan_swept = len(resolved_pq_orphan) if isinstance(resolved_pq_orphan, list) else 0
+        if pq_orphan_swept:
+            _s = [r.get("alert_key") for r in resolved_pq_orphan[:5] if isinstance(r, dict)]
+            logger.info(
+                f"⏰ [P1-QUALITY-SWEEP-STATUS/ORPHAN] Resueltas {pq_orphan_swept} alerts "
+                f"`plan_quality_degraded:*` cuyo plan ya no existe en meal_plans. Sample: {_s}."
+            )
+    except Exception as e:
+        pq_orphan_failed = True
+        logger.warning(
+            f"[P1-QUALITY-SWEEP-STATUS/ORPHAN] sweep de huérfanas falló (best-effort): {e}"
+        )
+
     # Sweep #2: post_swap_critical_divergence_<key_id> por edad absoluta.
     try:
         resolved_post = execute_sql_write(
@@ -4068,6 +4148,9 @@ def _resolve_stale_plan_quality_alerts() -> None:
                 json.dumps({
                     "enabled": True,
                     "swept_plan_quality": pq_swept,
+                    "swept_plan_quality_orphan": pq_orphan_swept,
+                    "orphan_resolve_hours": pq_orphan_h,
+                    "plan_quality_orphan_failed": pq_orphan_failed,
                     "swept_post_swap": post_swap_swept,
                     "post_swap_ttl_hours": post_swap_h,
                     "plan_quality_failed": pq_failed,

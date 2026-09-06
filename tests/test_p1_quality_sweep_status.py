@@ -44,6 +44,18 @@ def _cuerpo_del_sweep() -> str:
     return _CRON[i:i + 10 + (j.start() if j else len(_CRON))]
 
 
+def _sin_comentarios(txt: str) -> str:
+    """Los comentarios (`#` de Python, `--` de SQL) hablan DEL cast; mirarlos confunde al test
+    sobre dónde está el cast de verdad. Se leen las sentencias, no la prosa."""
+    fuera = []
+    for l in txt.splitlines():
+        d = l.strip()
+        if d.startswith("#") or d.startswith("--"):
+            continue
+        fuera.append(l)
+    return "\n".join(fuera)
+
+
 def test_el_sweep_acepta_los_dos_estados_terminales():
     cuerpo = _cuerpo_del_sweep()
     assert "generation_status" in cuerpo, "el sweep dejó de mirar el estado del plan"
@@ -95,3 +107,54 @@ def test_los_scripts_de_medicion_no_miran_el_estado_fantasma(script):
     assert "generation_status' = 'complete'" not in txt, (
         f"{script} volvió a filtrar por un estado que ningún plan tiene")
     assert "complete_partial" in txt, f"{script} no contempla el estado terminal real"
+
+
+# ── el barrido de huérfanas ──────────────────────────────────────────────────────────────────
+# El predicado corregido de arriba cierra CERO en producción, y la razón no era el estado del
+# plan posterior: de las 122 alertas abiertas, solo 3 apuntan a un plan que siga vivo. La
+# segunda mitad del arreglo cierra las que nombran un plan concreto que ya no está.
+
+def test_existe_el_barrido_de_huerfanas():
+    cuerpo = _cuerpo_del_sweep()
+    assert "Sweep #1-bis" in cuerpo, "desapareció el barrido de alertas huérfanas"
+    assert "NOT EXISTS" in cuerpo.split("Sweep #1-bis")[1].split("Sweep #2")[0], (
+        "el barrido de huérfanas dejó de comprobar la ausencia del plan")
+
+
+def test_el_cast_a_uuid_va_dentro_del_case():
+    """SQL no garantiza el orden de evaluación de los predicados: un `AND alert_key ~ '...'`
+    hermano NO protege al `::uuid`. Probado contra la base con una clave real:
+    `invalid input syntax for type uuid: "no_plan_id"` — y 115 de las 122 alertas abiertas
+    terminan justamente así. El sweep #1 ya documentaba la trampa (P2-CRON-OPT-5)."""
+    bis = _sin_comentarios(_cuerpo_del_sweep().split("Sweep #1-bis")[1].split("Sweep #2")[0])
+    trozo = bis[bis.find("NOT EXISTS"):bis.find("RETURNING")]
+    assert "CASE" in trozo and "::uuid" in trozo, "el cast salió del CASE"
+    i_case, i_cast, i_end = trozo.find("CASE"), trozo.find("::uuid"), trozo.find("END")
+    assert i_case < i_cast < i_end, (
+        f"el `::uuid` no está encerrado por CASE…END (CASE={i_case}, cast={i_cast}, END={i_end})")
+    assert "ELSE NULL" in trozo, "sin la rama ELSE el CASE no protege nada"
+
+
+def test_la_clave_malformada_no_se_cierra():
+    """Con `ELSE NULL`, `mp.id = NULL` no casa nunca y el `NOT EXISTS` daría True: una clave sin
+    plan_id se cerraría a ciegas. El regex externo es quien lo impide, así que tiene que seguir
+    ahí — es la pareja del CASE, no un duplicado."""
+    bis = _cuerpo_del_sweep().split("Sweep #1-bis")[1].split("Sweep #2")[0]
+    filtro = bis[:bis.find("NOT EXISTS")]
+    assert "alert_key ~" in filtro, (
+        "se fue el regex externo: sin él, las 115 claves `:no_plan_id` se cerrarían a ciegas")
+    assert "{12}$'" in filtro, "el regex externo dejó de anclar el UUID final de la clave"
+
+
+def test_el_suelo_de_edad_es_configurable_y_acotado():
+    cuerpo = _cuerpo_del_sweep()
+    assert "MEALFIT_PLAN_QUALITY_ORPHAN_RESOLVE_HOURS" in cuerpo
+    assert "max(1, min(720," in cuerpo, "el suelo de edad perdió su clamp"
+
+
+def test_el_tick_reporta_el_barrido_nuevo():
+    """Un barrido que no aparece en el tick es invisible: nadie distingue «cerró 0» de «no corrió»
+    — que es exactamente el fallo que este P-fix vino a arreglar."""
+    cuerpo = _cuerpo_del_sweep()
+    assert "swept_plan_quality_orphan" in cuerpo
+    assert "plan_quality_orphan_failed" in cuerpo
