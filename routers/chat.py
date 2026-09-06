@@ -917,12 +917,39 @@ def api_chat_stream(background_tasks: BackgroundTasks, data: dict = Body(...), v
         _billed = False
         _chunk_observed = False
 
+        # [P1-PHOTO-ONLY-TURN · 2026-09-06] Una foto sin texto dejaba el turno del usuario VACÍO.
+        #
+        # Caso vivo (06-sep 16:48): el dueño abre un chat nuevo y sube la foto de un almuerzo
+        # dominicano, sin escribir nada. El escáner acertó de lleno — «arroz blanco, espaguetis
+        # guisados con salsa de tomate y aceitunas, carne de res guisada y plátano maduro frito…
+        # (1065 kcal, 51 g de proteína)», guardado en `attachments[0].description`— y el bloque
+        # `build_vision_context` llegó al system prompt como debe. Aun así el coach contestó con
+        # el menú del día y terminó preguntando «¿Almorzaste algo distinto al ceviche?»: no miró
+        # la foto.
+        #
+        # La causa es el turno vacío. Un mensaje de usuario sin una sola palabra no es una
+        # pregunta; el modelo llena el vacío con lo que mejor encaja al abrir una sesión, que es
+        # saludar y recitar el plan. La instrucción del bloque de foto («actúa proactivamente y
+        # resume lo detectado») está ahí y perdió contra ese vacío.
+        #
+        # El marcador es UN EMOJI a propósito. `P3-I18N-PROMPT-VISION-CLIENTE-ESPANOL` sacó del
+        # turno del usuario los cuatro bloques en español justamente porque eran la señal más
+        # fuerte hacia el español; meter ahora «El usuario subió una foto» sería deshacerlo. Un
+        # emoji no tiene idioma.
+        #
+        # Y NO se persiste: lo que se guardó en `agent_messages` sigue siendo el texto del usuario
+        # (vacío), así que la burbuja del chat no cambia. Es el mismo reparto que ya usa el resto
+        # del sistema — lo que el usuario VE y lo que el modelo LEE no tienen por qué ser lo mismo.
+        _prompt_para_el_modelo = prompt
+        if not str(prompt or "").strip() and isinstance(vision, dict) and vision.get("kind"):
+            _prompt_para_el_modelo = "\U0001f4f7"
+
         def event_generator():
             nonlocal _billed, _chunk_observed
             try:
                 for chunk in chat_with_agent_stream(
                     session_id=session_id,
-                    prompt=prompt,
+                    prompt=_prompt_para_el_modelo,
                     current_plan=current_plan,
                     user_id=user_id,
                     form_data=form_data,
