@@ -2336,6 +2336,402 @@
           "grams": 2
         }
       ]
+    },
+    {
+      "name": "Mangú de plátano verde con tofu salteado",
+      "slots": [
+        "desayuno"
+      ],
+      "protein": "tofu",
+      "base": "platano",
+      "technique": "hervido+majado",
+      "transform": false,
+      "constituents": [
+        {
+          "name": "Plátano verde",
+          "grams": 200.0
+        },
+        {
+          "name": "Tofu firme",
+          "grams": 120.0
+        },
+        {
+          "name": "Cebolla",
+          "grams": 40.0
+        },
+        {
+          "name": "Aceite vegetal",
+          "grams": 8.0
+        }
+      ]
+    },
+    {
+      "name": "Avena con leche de soya, chía y guineo",
+      "slots": [
+        "desayuno"
+      ],
+      "protein": "none",
+      "base": "avena",
+      "technique": "hervido",
+      "transform": false,
+      "constituents": [
+        {
+          "name": "Avena",
+          "grams": 60.0
+        },
+        {
+          "name": "Leche de soya",
+          "grams": 200.0
+        },
+        {
+          "name": "Semillas de chía",
+          "grams": 10.0
+        },
+        {
+          "name": "Guineo",
+          "grams": 100.0
+        }
+      ]
+    },
+    {
+      "name": "Batida de lechosa con leche de soya y avena",
+      "slots": [
+        "desayuno"
+      ],
+      "protein": "none",
+      "base": "avena",
+      "technique": "licuado frío",
+      "transform": false,
+      "constituents": [
+        {
+          "name": "Lechosa",
+          "grams": 200.0
+        },
+        {
+          "name": "Leche de soya",
+          "grams": 200.0
+        },
+        {
+          "name": "Avena",
+          "grams": 30.0
+        }
+      ]
+    },
+    {
+      "name": "Chuleta de soya guisada con arroz y habichuelas",
+      "slots": [
+        "almuerzo"
+      ],
+      "protein": "legumbre",
+      "base": "arroz",
+      "technique": "guisado",
+      "transform": false,
+      "constituents": [
+        {
+          "name": "Soya texturizada",
+          "grams": 60.0
+        },
+        {
+          "name": "Arroz blanco",
+          "grams": 150.0
+        },
+        {
+          "name": "Habichuelas rojas",
+          "grams": 120.0
+        },
+        {
+          "name": "Cebolla",
+          "grams": 30.0
+        },
+        {
+          "name": "Ajo",
+          "grams": 5.0
+        },
+        {
+          "name": "Aceite vegetal",
+          "grams": 10.0
+        },
+        {
+          "name": "Sofrito",
+          "grams": 15.0
+        }
+      ]
+    },
+    {
+      "name": "Moro de gandules con tofu a la plancha",
+      "slots": [
+        "almuerzo"
+      ],
+      "protein": "tofu",
+      "base": "arroz",
+      "technique": "guisado+plancha",
+      "transform": false,
+      "constituents": [
+        {
+          "name": "Arroz blanco",
+          "grams": 150.0
+        },
+        {
+          "name": "Gandules",
+          "grams": 80.0
+        },
+        {
+          "name": "Tofu firme",
+          "grams": 130.0
+        },
+        {
+          "name": "Cebolla",
+          "grams": 30.0
+        },
+        {
+          "name": "Aceite vegetal",
+          "grams": 10.0
+        }
+      ]
+    },
+    {
+      "name": "Ensalada de quinoa con edamame y aguacate",
+      "slots": [
+        "almuerzo"
+      ],
+      "protein": "legumbre",
+      "base": "none",
+      "technique": "frío",
+      "transform": false,
+      "constituents": [
+        {
+          "name": "Quinoa",
+          "grams": 90.0
+        },
+        {
+          "name": "Edamame",
+          "grams": 100.0
+        },
+        {
+          "name": "Aguacate",
+          "grams": 60.0
+        },
+        {
+          "name": "Tomate",
+          "grams": 60.0
+        },
+        {
+          "name": "Limón",
+          "grams": 10.0
+        },
+        {
+          "name": "Aceite de oliva",
+          "grams": 10.0
+        }
+      ]
+    },
+    {
+      "name": "Salteado de edamame con tayota y batata",
+      "slots": [
+        "cena"
+      ],
+      "protein": "legumbre",
+      "base": "batata",
+      "technique": "salteado",
+      "transform": false,
+      "constituents": [
+        {
+          "name": "Edamame",
+          "grams": 120.0
+        },
+        {
+          "name": "Tayota",
+          "grams": 120.0
+        },
+        {
+          "name": "Batata",
+          "grams": 150.0
+        },
+        {
+          "name": "Ajo",
+          "grams": 5.0
+        },
+        {
+          "name": "Aceite vegetal",
+          "grams": 8.0
+        }
+      ]
+    },
+    {
+      "name": "Sancocho vegano de víveres con soya texturizada",
+      "slots": [
+        "almuerzo"
+      ],
+      "protein": "legumbre",
+      "base": "viveres",
+      "technique": "guisado",
+      "transform": false,
+      "constituents": [
+        {
+          "name": "Soya texturizada",
+          "grams": 50.0
+        },
+        {
+          "name": "Yuca",
+          "grams": 120.0
+        },
+        {
+          "name": "Ñame",
+          "grams": 100.0
+        },
+        {
+          "name": "Auyama",
+          "grams": 100.0
+        },
+        {
+          "name": "Plátano verde",
+          "grams": 100.0
+        },
+        {
+          "name": "Cilantro",
+          "grams": 5.0
+        },
+        {
+          "name": "Sofrito",
+          "grams": 15.0
+        }
+      ]
+    },
+    {
+      "name": "Batida de mango con leche de soya y chía",
+      "slots": [
+        "desayuno"
+      ],
+      "protein": "none",
+      "base": "none",
+      "technique": "licuado frío",
+      "transform": false,
+      "constituents": [
+        {
+          "name": "Mango",
+          "grams": 180.0
+        },
+        {
+          "name": "Leche de soya",
+          "grams": 220.0
+        },
+        {
+          "name": "Semillas de chía",
+          "grams": 12.0
+        }
+      ]
+    },
+    {
+      "name": "Yuca hervida con aguacate y cebolla",
+      "slots": [
+        "desayuno"
+      ],
+      "protein": "none",
+      "base": "yuca",
+      "technique": "hervido",
+      "transform": false,
+      "constituents": [
+        {
+          "name": "Yuca",
+          "grams": 180.0
+        },
+        {
+          "name": "Aguacate",
+          "grams": 70.0
+        },
+        {
+          "name": "Cebolla",
+          "grams": 35.0
+        },
+        {
+          "name": "Aceite vegetal",
+          "grams": 8.0
+        }
+      ]
+    },
+    {
+      "name": "Bowl de quinoa con lechosa y semillas de girasol",
+      "slots": [
+        "desayuno"
+      ],
+      "protein": "none",
+      "base": "none",
+      "technique": "frío",
+      "transform": false,
+      "constituents": [
+        {
+          "name": "Quinoa",
+          "grams": 90.0
+        },
+        {
+          "name": "Lechosa",
+          "grams": 150.0
+        },
+        {
+          "name": "Semillas de girasol",
+          "grams": 20.0
+        }
+      ]
+    },
+    {
+      "name": "Plátano maduro asado con mantequilla de maní",
+      "slots": [
+        "desayuno"
+      ],
+      "protein": "none",
+      "base": "platano",
+      "technique": "horneado",
+      "transform": false,
+      "constituents": [
+        {
+          "name": "Plátano maduro",
+          "grams": 170.0
+        },
+        {
+          "name": "Mantequilla de maní",
+          "grams": 28.0
+        },
+        {
+          "name": "Canela en polvo",
+          "grams": 2.0
+        }
+      ]
+    },
+    {
+      "name": "Berenjena guisada con soya texturizada y batata",
+      "slots": [
+        "cena"
+      ],
+      "protein": "legumbre",
+      "base": "batata",
+      "technique": "guisado",
+      "transform": false,
+      "constituents": [
+        {
+          "name": "Berenjena",
+          "grams": 180.0
+        },
+        {
+          "name": "Soya texturizada",
+          "grams": 55.0
+        },
+        {
+          "name": "Batata",
+          "grams": 150.0
+        },
+        {
+          "name": "Cebolla",
+          "grams": 35.0
+        },
+        {
+          "name": "Sofrito",
+          "grams": 15.0
+        },
+        {
+          "name": "Aceite vegetal",
+          "grams": 10.0
+        }
+      ]
     }
   ]
 }

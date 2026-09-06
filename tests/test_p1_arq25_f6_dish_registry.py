@@ -44,7 +44,14 @@ def test_a_resolucion_por_nombre_y_alias_y_exclusion_explicita():
     assert a["status"] == "ok" and a["excluded"] == []
     b = by["tpl_b"]
     assert b["status"] == "partial"
-    assert b["excluded"] == [{"name": "Zapote", "grams": 100.0, "reason": "not_in_catalog"}], "lo que no está en el catálogo se excluye EXPLÍCITAMENTE"
+    # [ARQ27-P0-02 · 2026-09-06] Cada línea excluida lleva ahora `optional`, la única salida curada
+    # para que una exclusión no degrade el estado. Se comparan los campos que este test defiende —
+    # que la exclusión sea EXPLÍCITA y diga por qué— en vez del dict entero, que ya no es el contrato.
+    assert len(b["excluded"]) == 1
+    assert {k: b["excluded"][0][k] for k in ("name", "grams", "reason")} == {
+        "name": "Zapote", "grams": 100.0, "reason": "not_in_catalog"}, \
+        "lo que no está en el catálogo se excluye EXPLÍCITAMENTE"
+    assert b["excluded"][0]["optional"] is False, "una exclusión no es opcional salvo que la fuente lo diga"
     assert by["tpl_c"]["status"] == "excluded"
     st = snap["stats"]
     assert st["constituents"] == st["resolved"] + 1 and st["ok"] == 1 and st["partial"] == 1 and st["excluded"] == 1

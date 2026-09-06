@@ -14,6 +14,7 @@ Cuatro clases:
   pantry     — seco, enlatado, curado, aceites, especias: 90-365 días;
   cold       — refrigerado duradero (huevo, quesos curados, raíces, repollo, cítricos, manzana): 21-90 días;
   freezable  — proteína fresca (pollo, res, cerdo, pescado, mariscos): 3 días en fresco, 90 congelada;
+  frozen     — congelado DE FÁBRICA (edamame, papas ralladas, wafles): 1 día fuera, 365 dentro. Exige congelador;
   fresh      — hojas, hierbas, frutas blandas, tomate, aguacate, lácteos frescos: 3-10 días.
 
 Puro y determinista. Fail-open: un nombre desconocido cae al default de su categoría (o a «fresh» 7 días).
@@ -25,6 +26,7 @@ from typing import Any, Iterable, Optional
 
 FRESH_HORIZON_DAYS = 7
 FROZEN_DAYS = 90
+FACTORY_FROZEN_DAYS = 365   # [ARQ27-P1-09] lo que venía congelado de fábrica, dentro del congelador
 LIMITED_FREEZE_WINDOW_DAYS = 14
 
 # (tokens, clase, días en fresco). Primer match gana; los tokens se buscan como subcadena del nombre normalizado.
@@ -38,7 +40,12 @@ _RULES: tuple[tuple[tuple[str, ...], str, int], ...] = (
     (("frijoles refritos", "frijoles horneados", "chili con carne", "maiz dulce en granos", "durazno en almibar",
       "aceitunas", "alcaparrado", "palmito", "leche evaporada", "leche de coco", "leche de cabra en polvo",
       "leche de almendras", "leche de avena", "leche de soya", "soya texturizada"), "pantry", 365),
-    (("papas ralladas", "bolitas de papa", "wafles", "edamame"), "pantry", 90),   # congelados de fábrica
+    # [ARQ27-P1-09 · 2026-09-06] Estos cuatro son CONGELADOS DE FÁBRICA y hasta hoy se clasificaban
+    # `pantry` 90: el módulo decía que un paquete de edamame aguanta tres meses en la alacena. En un
+    # ciclo de una sola compra SIN congelador pasaban el guard el día 30 sin que nada avisara. Su
+    # clase es `frozen`: 1 día fuera del congelador, 365 dentro — y exigen congelador aunque se hayan
+    # comprado ya congelados, que es literalmente el criterio de cierre del gap.
+    (("papas ralladas", "bolitas de papa", "wafles", "edamame"), "frozen", 1),
     (("arroz", "pasta", "fideos", "coditos", "avena", "harina", "lenteja", "garbanzo", "habichuelas", "frijol", "judias", "alubias",
       "gandules", "guisantes secos", "habas", "quinoa", "bulgur", "cebada", "semola", "casabe", "galletas",
       "pan rallado", "pretzel", "granola", "mezcla para panqueques", "masa para pie"), "pantry", 180),
@@ -102,8 +109,38 @@ _CATEGORY_DEFAULT = {"despensa": ("pantry", 180), "viveres": ("cold", 21), "vege
 # ya cocinado es otra pregunta y pertenece al modo «cocino por tandas», que este módulo todavía no representa.
 _FRESH_QUALIFIERS = ("fresco", "fresca", "frescos", "frescas", "crudo", "cruda", "crudos", "crudas",
                      "del dia", "de mostrador")
+
+# [ARQ27-P1-09 · 2026-09-06] Estado del ENVASE. «Una bebida estable cerrada no conserva el mismo
+# horizonte después de abrirse» —criterio de cierre del gap— y hasta hoy la tabla resolvía por el
+# alimento y punto: una leche vegetal era 365 días, abierta o no.
+#
+# El mecanismo es el mismo que el de `fresh_state`: el calificativo del NOMBRE manda sobre la tabla.
+# Lo que este módulo NO hace todavía —y conviene decirlo en vez de fingirlo— es deducir solo que un
+# cartón abierto el día 1 ya no sirve el día 20 de la misma compra. Eso necesita saber en qué días se
+# usa cada ingrediente, y esa pregunta pertenece al modo «cocino por tandas», que este módulo aún no
+# representa. Igual que la nota de «arroz cocido» de arriba: la frontera queda declarada, no borrosa.
+_OPENED_QUALIFIERS = ("abierto", "abierta", "abiertos", "abiertas", "empezado", "empezada",
+                      "destapado", "destapada")
+# Alimentos estables SOLO mientras el envase está cerrado. Abiertos son refrigerados de pocos días.
+_SHELF_STABLE_UNTIL_OPENED = (
+    ("leche de coco", 4), ("leche de almendras", 7), ("leche de avena", 7), ("leche de soya", 7),
+    ("leche evaporada", 4), ("frijoles refritos", 4), ("frijoles horneados", 4),
+    ("maiz dulce en granos", 4), ("aceitunas", 14), ("alcaparrado", 14), ("palmito", 5),
+    ("durazno en almibar", 5), ("salsa de tomate", 7), ("chili con carne", 4),
+    ("atun en agua", 2), ("sardinas en lata", 2),
+)
 # Pescados cuyo nombre desnudo significa CONSERVA en la tabla. Calificados de frescos, son proteína de 3 días.
 _PRESERVED_FISH = ("atun", "bacalao", "arenque", "anchoa", "sardina")
+
+
+def _frozen_days(cls: str, days: int) -> int:
+    """Cuánto aguanta CONGELADO. `freezable` (proteína fresca que el usuario congela) 90; `frozen`
+    (congelado de fábrica) 365, porque ya venía así y su cadena de frío nunca se rompió."""
+    if cls == "freezable":
+        return FROZEN_DAYS
+    if cls == "frozen":
+        return FACTORY_FROZEN_DAYS
+    return int(days)
 
 
 def _norm(s: Any) -> str:
@@ -121,6 +158,12 @@ def classify(name: Any, category: Optional[str] = None) -> dict:
     # desnudo es el de la conserva: «atún fresco» es proteína de 3 días, no una lata de 180.
     if any((" " + q) in n for q in _FRESH_QUALIFIERS) and any((" " + f) in n for f in _PRESERVED_FISH):
         return {"cls": "freezable", "days_fresh": 3, "days_frozen": FROZEN_DAYS, "rule": "fresh_state"}
+    # [ARQ27-P1-09] Envase abierto: la estabilidad era del envase CERRADO, no del alimento.
+    if any((" " + q) in n for q in _OPENED_QUALIFIERS):
+        for tok, dias in _SHELF_STABLE_UNTIL_OPENED:
+            if (" " + _norm(tok)) in n:
+                return {"cls": "cold", "days_fresh": int(dias), "days_frozen": int(dias),
+                        "rule": "opened_package"}
     for tokens, cls, days in _RULES:
         for tok in tokens:
             t = _norm(tok)
@@ -129,9 +172,9 @@ def classify(name: Any, category: Optional[str] = None) -> dict:
             hit = (" " + t + " ") in n if len(t) <= 4 else (" " + t) in n   # cortos exactos («sal»≠«salmon»), largos por prefijo («yogur»→«yogurt»)
             if hit:
                 return {"cls": cls, "days_fresh": int(days),
-                        "days_frozen": FROZEN_DAYS if cls == "freezable" else int(days), "rule": t}
+                        "days_frozen": _frozen_days(cls, days), "rule": t}
     cls, days = _CATEGORY_DEFAULT.get(_norm(category), ("fresh", 7))
-    return {"cls": cls, "days_fresh": int(days), "days_frozen": FROZEN_DAYS if cls == "freezable" else int(days),
+    return {"cls": cls, "days_fresh": int(days), "days_frozen": _frozen_days(cls, days),
             "rule": "category_default"}
 
 
@@ -197,11 +240,17 @@ def ingredient_issue_beyond_horizon(name: Any, abs_day_index: int, allow_frozen:
     """Código de issue si `name` no aguanta hasta `abs_day_index` (0-based) en un ciclo de una sola compra."""
     d = classify(name)
     need = int(abs_day_index) + 1
+    if d["cls"] == "frozen":
+        # [ARQ27-P1-09] Código propio: el consejo NO es el mismo. A la proteína fresca se le ofrece
+        # una alternativa de despensa; a un congelado de fábrica hay que decirle que sin congelador
+        # ese plato no cabe en su compra única.
+        return None if (allow_frozen or d["days_fresh"] >= need) else "frozen_needs_freezer"
     if d["cls"] == "freezable":
         return None if (allow_frozen or d["days_fresh"] >= need) else "protein_beyond_freeze_window"
     return None if d["days_fresh"] >= need else "fresh_beyond_horizon"
 
 
-__all__ = ["FRESH_HORIZON_DAYS", "FROZEN_DAYS", "LIMITED_FREEZE_WINDOW_DAYS", "classify", "durability_of",
-           "_FRESH_QUALIFIERS", "_PRESERVED_FISH",
+__all__ = ["FRESH_HORIZON_DAYS", "FROZEN_DAYS", "FACTORY_FROZEN_DAYS", "LIMITED_FREEZE_WINDOW_DAYS",
+           "classify", "durability_of", "_FRESH_QUALIFIERS", "_PRESERVED_FISH",
+           "_OPENED_QUALIFIERS", "_SHELF_STABLE_UNTIL_OPENED",
            "freeze_window_days", "template_fits", "single_trip_requirements", "ingredient_issue_beyond_horizon"]

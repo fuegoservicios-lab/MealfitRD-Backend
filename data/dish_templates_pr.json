@@ -3243,6 +3243,366 @@
           "grams": 15
         }
       ]
+    },
+    {
+      "name": "Batida de guineo con leche de soya y avena",
+      "slots": [
+        "desayuno"
+      ],
+      "protein": "none",
+      "base": "avena",
+      "technique": "licuado frío",
+      "transform": false,
+      "constituents": [
+        {
+          "name": "Guineo",
+          "grams": 150.0
+        },
+        {
+          "name": "Leche de soya",
+          "grams": 220.0
+        },
+        {
+          "name": "Avena",
+          "grams": 40.0
+        }
+      ]
+    },
+    {
+      "name": "Pan integral con hummus y aguacate",
+      "slots": [
+        "desayuno"
+      ],
+      "protein": "none",
+      "base": "pan",
+      "technique": "frío",
+      "transform": false,
+      "constituents": [
+        {
+          "name": "Pan integral personal",
+          "grams": 80.0
+        },
+        {
+          "name": "Hummus",
+          "grams": 60.0
+        },
+        {
+          "name": "Aguacate",
+          "grams": 60.0
+        },
+        {
+          "name": "Tomate",
+          "grams": 50.0
+        }
+      ]
+    },
+    {
+      "name": "Arroz con gandules y tofu al horno",
+      "slots": [
+        "almuerzo"
+      ],
+      "protein": "tofu",
+      "base": "arroz",
+      "technique": "horneado",
+      "transform": false,
+      "constituents": [
+        {
+          "name": "Arroz blanco",
+          "grams": 150.0
+        },
+        {
+          "name": "Gandules",
+          "grams": 80.0
+        },
+        {
+          "name": "Tofu firme",
+          "grams": 130.0
+        },
+        {
+          "name": "Sofrito",
+          "grams": 15.0
+        },
+        {
+          "name": "Aceite vegetal",
+          "grams": 10.0
+        }
+      ]
+    },
+    {
+      "name": "Sofrito de soya texturizada con arroz y habichuelas",
+      "slots": [
+        "almuerzo"
+      ],
+      "protein": "legumbre",
+      "base": "arroz",
+      "technique": "guisado",
+      "transform": false,
+      "constituents": [
+        {
+          "name": "Soya texturizada",
+          "grams": 60.0
+        },
+        {
+          "name": "Arroz blanco",
+          "grams": 150.0
+        },
+        {
+          "name": "Habichuelas rojas",
+          "grams": 120.0
+        },
+        {
+          "name": "Sofrito",
+          "grams": 15.0
+        },
+        {
+          "name": "Aceite vegetal",
+          "grams": 10.0
+        }
+      ]
+    },
+    {
+      "name": "Ensalada de garbanzos con edamame y aguacate",
+      "slots": [
+        "almuerzo"
+      ],
+      "protein": "legumbre",
+      "base": "none",
+      "technique": "frío",
+      "transform": false,
+      "constituents": [
+        {
+          "name": "Garbanzos",
+          "grams": 120.0
+        },
+        {
+          "name": "Edamame",
+          "grams": 80.0
+        },
+        {
+          "name": "Aguacate",
+          "grams": 60.0
+        },
+        {
+          "name": "Tomate",
+          "grams": 60.0
+        },
+        {
+          "name": "Aceite de oliva",
+          "grams": 10.0
+        }
+      ]
+    },
+    {
+      "name": "Tofu a la plancha con calabacín y yuca",
+      "slots": [
+        "cena"
+      ],
+      "protein": "tofu",
+      "base": "yuca",
+      "technique": "salteado",
+      "transform": false,
+      "constituents": [
+        {
+          "name": "Tofu firme",
+          "grams": 150.0
+        },
+        {
+          "name": "Calabacín",
+          "grams": 130.0
+        },
+        {
+          "name": "Yuca",
+          "grams": 160.0
+        },
+        {
+          "name": "Ajo",
+          "grams": 5.0
+        },
+        {
+          "name": "Aceite vegetal",
+          "grams": 8.0
+        }
+      ]
+    },
+    {
+      "name": "Guiso de habichuelas negras con auyama y quinoa",
+      "slots": [
+        "cena"
+      ],
+      "protein": "legumbre",
+      "base": "legumbre",
+      "technique": "guisado",
+      "transform": false,
+      "constituents": [
+        {
+          "name": "Habichuelas negras",
+          "grams": 130.0
+        },
+        {
+          "name": "Auyama",
+          "grams": 120.0
+        },
+        {
+          "name": "Quinoa",
+          "grams": 80.0
+        },
+        {
+          "name": "Sofrito",
+          "grams": 15.0
+        },
+        {
+          "name": "Aceite vegetal",
+          "grams": 8.0
+        }
+      ]
+    },
+    {
+      "name": "Batida de guineo con leche de soya y chía",
+      "slots": [
+        "desayuno"
+      ],
+      "protein": "none",
+      "base": "none",
+      "technique": "licuado frío",
+      "transform": false,
+      "constituents": [
+        {
+          "name": "Guineo",
+          "grams": 150.0
+        },
+        {
+          "name": "Leche de soya",
+          "grams": 220.0
+        },
+        {
+          "name": "Semillas de chía",
+          "grams": 12.0
+        }
+      ]
+    },
+    {
+      "name": "Bowl de quinoa con piña y semillas de girasol",
+      "slots": [
+        "desayuno"
+      ],
+      "protein": "none",
+      "base": "none",
+      "technique": "frío",
+      "transform": false,
+      "constituents": [
+        {
+          "name": "Quinoa",
+          "grams": 90.0
+        },
+        {
+          "name": "Piña",
+          "grams": 150.0
+        },
+        {
+          "name": "Semillas de girasol",
+          "grams": 20.0
+        }
+      ]
+    },
+    {
+      "name": "Yuca hervida con cebolla y aceite de oliva",
+      "slots": [
+        "desayuno"
+      ],
+      "protein": "none",
+      "base": "yuca",
+      "technique": "hervido",
+      "transform": false,
+      "constituents": [
+        {
+          "name": "Yuca",
+          "grams": 180.0
+        },
+        {
+          "name": "Cebolla",
+          "grams": 40.0
+        },
+        {
+          "name": "Aceite de oliva",
+          "grams": 10.0
+        }
+      ]
+    },
+    {
+      "name": "Plátano maduro asado con mantequilla de almendras",
+      "slots": [
+        "desayuno"
+      ],
+      "protein": "none",
+      "base": "platano",
+      "technique": "horneado",
+      "transform": false,
+      "constituents": [
+        {
+          "name": "Plátano maduro",
+          "grams": 170.0
+        },
+        {
+          "name": "Mantequilla de almendras",
+          "grams": 25.0
+        },
+        {
+          "name": "Canela en polvo",
+          "grams": 2.0
+        }
+      ]
+    },
+    {
+      "name": "Tostones de plátano verde con aguacate",
+      "slots": [
+        "desayuno"
+      ],
+      "protein": "none",
+      "base": "platano",
+      "technique": "frito",
+      "transform": false,
+      "constituents": [
+        {
+          "name": "Plátano verde",
+          "grams": 170.0
+        },
+        {
+          "name": "Aguacate",
+          "grams": 70.0
+        },
+        {
+          "name": "Ajo",
+          "grams": 4.0
+        },
+        {
+          "name": "Aceite vegetal",
+          "grams": 12.0
+        }
+      ]
+    },
+    {
+      "name": "Batata asada con canela y mantequilla de maní",
+      "slots": [
+        "desayuno"
+      ],
+      "protein": "none",
+      "base": "batata",
+      "technique": "horneado",
+      "transform": false,
+      "constituents": [
+        {
+          "name": "Batata",
+          "grams": 180.0
+        },
+        {
+          "name": "Mantequilla de maní",
+          "grams": 25.0
+        },
+        {
+          "name": "Canela en polvo",
+          "grams": 2.0
+        }
+      ]
     }
   ]
 }

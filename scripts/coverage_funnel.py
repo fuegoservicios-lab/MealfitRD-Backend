@@ -39,13 +39,16 @@ import pantry_durability as pdur    # noqa: E402
 
 SLOTS = ("desayuno", "almuerzo", "merienda", "cena")
 
-# Familias de proteína que cada dieta EXCLUYE. `none`, `queso`, `huevo` y `legumbre` sobreviven en todas.
-_DIET_EXCLUDES = {
-    "omnivora": frozenset(),
-    "vegetariana": frozenset({"pollo", "res", "cerdo", "pavo", "pescado", "atun", "camarones"}),
-    "vegana": frozenset({"pollo", "res", "cerdo", "pavo", "pescado", "atun", "camarones", "queso", "huevo"}),
-    "pescetariana": frozenset({"pollo", "res", "cerdo", "pavo"}),
-}
+# [ARQ27-P1-02 · 2026-09-06] Aquí vivía `_DIET_EXCLUDES`: una tabla PROPIA de familias de `protein`
+# que cada dieta excluye. Medía otra cosa que el selector — la etiqueta `protein` dice qué protagoniza
+# el plato, jamás qué contiene, así que una plantilla `none` con lácteos o una `mixta` con jamón
+# pasaban el filtro del embudo y el vegano las veía como elegibles. Sobre ES/almuerzo vegano el
+# recuento caía de 26 a 5 al ejecutar la guarda real sobre los constituyentes.
+#
+# Un embudo que no usa el filtro del producto no mide el producto: mide su propia tabla. Ahora la
+# etapa de dieta llama a `_diet_pool_item_banned`, el mismo guard SSOT que `template_candidates`, y
+# la etapa de mercado al mismo `catalog_capability` que la política. La prueba de que no han vuelto a
+# divergir es `test_p0_arq27_f1_embudo.py`, que compara los dos recuentos.
 # Alérgenos tal como los ESCRIBE el registry, en español y con las dos formas que convive cada uno
 # («lacteos»/«lactosa», «huevo»/«huevos»). Medido sobre los seis snapshots, no supuesto: escribir «dairy» aquí
 # dejaba el filtro inerte y las columnas salían idénticas a las de «sin alergias» sin que nada avisara.
@@ -55,6 +58,8 @@ _ALLERGY_SETS = {
     "lácteos + huevo": ("lacteos", "lactosa", "huevo", "huevos"),
     "mariscos + pescado": ("mariscos", "pescado"),
     "gluten": ("gluten",),
+    "soya": ("soya",),
+    "soya + gluten": ("soya", "gluten"),
 }
 
 # Los cruces que ya sabemos duros, más el caso base de cada biblioteca.
@@ -67,6 +72,9 @@ ESCENARIOS = [
     ("veg + sin lácteos ni huevo", None, None, "vegetariana",  "lácteos + huevo",     None, "limited"),
     ("sin mariscos ni pescado",    None, None, "omnivora",     "mariscos + pescado",  None, "limited"),
     ("sin gluten",                 None, None, "omnivora",     "gluten",              None, "limited"),
+    ("vegano sin gluten",          None, None, "vegana",       "gluten",              None, "limited"),
+    ("vegano sin soja",            None, None, "vegana",       "soya",                None, "limited"),
+    ("vegano sin soja ni gluten",  None, None, "vegana",       "soya + gluten",       None, "limited"),
     ("día 25 sin congelador",      None, None, "omnivora",     "sin alergias",          25, "none"),
     ("veg · día 25 sin congelador", None, None, "vegetariana", "sin alergias",          25, "none"),
     ("día 25 congelador limitado", None, None, "omnivora",     "sin alergias",          25, "limited"),
@@ -78,39 +86,73 @@ def _templates(country: str) -> list:
     return list(snap.get("templates") or [])
 
 
-def embudo(country: str, slot: str, dieta: str, alergias: tuple, need_days, freezer_mode: str) -> dict:
-    """Cuenta cuántos candidatos quedan tras cada filtro, en el MISMO orden que aplica el selector."""
-    ts = _templates(country)
-    etapas, restantes = [], ts
+def _cons(t) -> list:
+    return [c.get("canonical") or c.get("name") for c in (t.get("constituents") or [])]
+
+
+def _mercado(country):
+    """Nombres comprables del país, o `None` si el catálogo no se pudo leer. `None` no es cero: sin
+    catálogo la etapa se declara omitida en vez de tirar todos los platos."""
+    try:
+        from catalog_capability import known_ingredient_names
+        return known_ingredient_names(country)
+    except Exception:
+        return None
+
+
+def embudo(country: str, slot: str, dieta: str, alergias: tuple, need_days, freezer_mode: str,
+           *, requiere_nutrientes: tuple = ()) -> dict:
+    """Cuenta cuántos candidatos quedan tras cada filtro, en el MISMO orden que aplica el selector, y
+    conserva QUÉ cayó en cada etapa. Un contador dice que se perdieron veinte platos; la lista dice
+    cuáles, que es lo único con lo que se puede actuar."""
+    from graph_orchestrator import _diet_pool_item_banned
+
+    etapas, caidas, restantes = [], {}, _templates(country)
     etapas.append(("catálogo", len(restantes)))
 
-    restantes = [t for t in restantes if t.get("status") == "ok"]
-    etapas.append(("compilado ok", len(restantes)))
+    def _filtrar(nombre, predicado):
+        nonlocal restantes
+        pasan, caen = [], []
+        for t in restantes:
+            (pasan if predicado(t) else caen).append(t)
+        restantes = pasan
+        if caen:
+            caidas[nombre] = [{"id": t.get("template_id"), "name": t.get("name")} for t in caen]
+        etapas.append((nombre, len(restantes)))
 
-    restantes = [t for t in restantes if slot in (t.get("slots") or [])]
-    etapas.append(("franja", len(restantes)))
+    _filtrar("compilado ok", lambda t: t.get("status") == "ok")
+    _filtrar("franja", lambda t: slot in (t.get("slots") or []))
 
     ex = {a.lower() for a in alergias}
-    if ex:
-        restantes = [t for t in restantes
-                     if not ex.intersection({a.lower() for a in (t.get("intrinsic_risk_attributes") or {}).get("allergens", [])})]
-    etapas.append(("alergias", len(restantes)))
+    _filtrar("alergias", lambda t: not ex.intersection(
+        {a.lower() for a in (t.get("intrinsic_risk_attributes") or {}).get("allergens", [])}) if ex else True)
 
-    fuera = _DIET_EXCLUDES.get(dieta, frozenset())
-    if fuera:
-        restantes = [t for t in restantes if str(t.get("protein") or "none").lower() not in fuera]
-    etapas.append(("dieta", len(restantes)))
+    # La guarda REAL, sobre todos los constituyentes — no la etiqueta `protein`.
+    _filtrar("dieta", lambda t: not any(_diet_pool_item_banned(x, dieta) for x in _cons(t)))
+
+    conocidos = _mercado(country)
+    if conocidos is None:
+        etapas.append(("mercado (omitido)", len(restantes)))
+    else:
+        from plan_policy import _matches
+        _set = list(conocidos)
+        _filtrar("mercado", lambda t: all(any(_matches(x, k) for k in _set) for x in _cons(t)))
+
+    if requiere_nutrientes:
+        req = set(requiere_nutrientes)
+        _filtrar("datos exigidos", lambda t: not req.intersection(t.get("nutrition_unknown") or {}))
 
     if need_days:
         ventana = pdur.freeze_window_days(freezer_mode, 30)
         permite_congelar = int(need_days) < ventana
-        restantes = [t for t in restantes
-                     if pdur.template_fits((t.get("logistics") or {}).get("days_fresh_min"),
-                                           (t.get("logistics") or {}).get("days_with_freezer_min"),
-                                           int(need_days) + 1, permite_congelar)]
-    etapas.append(("conservación", len(restantes)))
+        _filtrar("conservación", lambda t: pdur.template_fits(
+            (t.get("logistics") or {}).get("days_fresh_min"),
+            (t.get("logistics") or {}).get("days_with_freezer_min"),
+            int(need_days) + 1, permite_congelar))
+    else:
+        etapas.append(("conservación", len(restantes)))
 
-    return {"etapas": etapas, "elegibles": len(restantes),
+    return {"etapas": etapas, "elegibles": len(restantes), "caidas": caidas,
             "ejemplos": [t["name"] for t in restantes[:3]]}
 
 
@@ -143,7 +185,8 @@ def render(res: dict) -> str:
             filas.append(f"   {etiqueta:30s} " + " ".join(f"{x:9d}" for x in n) + f"   {min(n):7d}{marca}")
         filas.append("")
     filas.append("⚠ = alguna franja baja de 3 candidatos · × = alguna franja se queda sin ninguno")
-    filas.append("«elegibles» = pasa franja, alergias, dieta y conservación. NO incluye solver, precio ni cuotas.")
+    filas.append("«elegibles» = pasa franja, alergias, dieta (guarda real sobre constituyentes), mercado")
+    filas.append("y conservación. NO incluye solver, precio ni cuotas: elegible no es servible.")
     return "\n".join(filas)
 
 
@@ -163,6 +206,16 @@ def main() -> int:
     ap.add_argument("--perfil", action="append", help="limitar a uno o varios perfiles")
     ap.add_argument("--desglose", metavar="ESCENARIO", help="etapa a etapa para ese escenario")
     a = ap.parse_args()
+    # [ARQ27-P1-07] La etapa de mercado lee `master_ingredients`, y fuera de FastAPI el pool no está
+    # abierto: sin esto el catálogo sale vacío, la etapa se declara omitida y el embudo mide de menos
+    # sin decir por qué. Fail-open: si no hay DB, la etapa se salta y la tabla lo dice.
+    try:
+        from dotenv import load_dotenv
+        load_dotenv(os.path.join(_BACKEND, ".env"))
+        import db_core
+        db_core.connection_pool.open()
+    except Exception as e:
+        print(f"(sin catálogo vivo: {type(e).__name__} — la etapa de mercado se omite)", file=sys.stderr)
     res = correr(a.perfil)
     if a.json:
         print(json.dumps(res, ensure_ascii=False, indent=2))     # [P2-LOGGER-EXEMPT: guion de línea de órdenes]

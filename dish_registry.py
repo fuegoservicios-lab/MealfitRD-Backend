@@ -160,7 +160,15 @@ def allergen_classes_for(names: Iterable[str]) -> list[str]:
                          "leche vegetal", "bebida de almendras", "bebida de avena", "bebida de soya",
                          "mantequilla de mani", "mantequilla de almendra", "mantequilla de almendras",
                          "mantequilla de anacardo", "mantequilla de semillas", "crema de cacahuate",
-                         "crema de mani", "crema de coco", "queso vegano", "yogur vegetal", "yogurt vegetal")
+                         "crema de mani", "crema de coco", "queso vegano", "yogur vegetal", "yogurt vegetal",
+                         # [ARQ27-P1-05 · 2026-09-06] «yogur vegetal» estaba; «Yogur de coco», que es como
+                         # se llama la FILA del catálogo, no. Auditadas las 347 filas contra el guard de
+                         # alergias: era la ÚNICA discrepancia entre lo que el registry declara y lo que el
+                         # scan decide — el registry la marcaba láctea y el scan no. Un plato con yogur de
+                         # coco quedaba fuera del pool de un alérgico a la leche por un alérgeno que no
+                         # tiene. `test_las_dos_capas_de_lacteo_coinciden` ancla la paridad para la próxima.
+                         "yogur de coco", "yogurt de coco", "yogur de soya", "yogurt de soya",
+                         "yogur de almendras", "yogurt de almendras", "yogur de anacardo")
     # La salsa de soya corriente lleva trigo (solo el tamari no): para el registry cuenta como gluten.
     vocab = dict(vocab or {})
     vocab["gluten"] = list(vocab.get("gluten") or []) + ["salsa de soya", "salsa soya", "soy sauce"]
@@ -186,24 +194,46 @@ def allergen_classes_for(names: Iterable[str]) -> list[str]:
     return sorted(out)
 
 
-def derive_risk_attributes(nutrition: dict, constituent_names: Iterable[str]) -> dict:
-    """Señales intrínsecas por porción (§7.2). Booleanos derivados de umbrales + lista de alérgenos."""
+# [ARQ27-P0-03 · 2026-09-06] Qué nutriente sostiene cada señal de riesgo. Si ese nutriente es
+# DESCONOCIDO en alguno de los constituyentes, la señal no puede decir `False`: dice `None`.
+_RISK_SOURCES = {
+    "sodium_high": ("sodium_mg",), "potassium_high": ("potassium_mg",),
+    "phosphorus_high": ("phosphorus_mg",), "sat_fat_high": ("saturated_fat_g",),
+    "sugar_high": ("sugars_g",), "energy_dense": ("kcal",),
+    "glycemic_load_high": ("carbs_g", "fiber_g"),
+}
+
+
+def derive_risk_attributes(nutrition: dict, constituent_names: Iterable[str],
+                           unknown: Iterable[str] = ()) -> dict:
+    """Señales intrínsecas por porción (§7.2), derivadas de umbrales + lista de alérgenos.
+
+    [ARQ27-P0-03] Tri-estado: `True` / `False` / `None`. `None` es «no lo sé», y aparece cuando algún
+    constituyente no trae ese nutriente en el catálogo. Antes `_f(None)` devolvía 0,0, la suma
+    incorporaba ese cero como si fuera un dato y la señal salía `False` — un plato con Hoja santa se
+    le presentaba a un perfil renal como «fósforo bajo» cuando la verdad era que nadie lo había
+    medido. Cero medido y cero por ausencia no son el mismo número. Contrato I20."""
     n = nutrition or {}
+    unk = {str(u) for u in (unknown or ())}
+
+    def _flag(key, valor):
+        return None if unk.intersection(_RISK_SOURCES.get(key, ())) else valor
+
     net_carbs = max(0.0, _f(n.get("carbs_g")) - _f(n.get("fiber_g")))
     names = list(constituent_names)
     processed = sorted({nm for nm in names if any(tok in _norm(nm) for tok in _PROCESSED_TOKENS)})
     return {
-        "sodium_high": _f(n.get("sodium_mg")) >= RISK_THRESHOLDS["sodium_high_mg"],
-        "potassium_high": _f(n.get("potassium_mg")) >= RISK_THRESHOLDS["potassium_high_mg"],
-        "phosphorus_high": _f(n.get("phosphorus_mg")) >= RISK_THRESHOLDS["phosphorus_high_mg"],
-        "sat_fat_high": _f(n.get("saturated_fat_g")) >= RISK_THRESHOLDS["sat_fat_high_g"],
-        "sugar_high": _f(n.get("sugars_g")) >= RISK_THRESHOLDS["sugar_high_g"],
-        "glycemic_load_high": net_carbs >= RISK_THRESHOLDS["glycemic_load_high_net_carbs_g"],
-        "energy_dense": _f(n.get("kcal")) >= RISK_THRESHOLDS["energy_dense_kcal"],
+        "sodium_high": _flag("sodium_high", _f(n.get("sodium_mg")) >= RISK_THRESHOLDS["sodium_high_mg"]),
+        "potassium_high": _flag("potassium_high", _f(n.get("potassium_mg")) >= RISK_THRESHOLDS["potassium_high_mg"]),
+        "phosphorus_high": _flag("phosphorus_high", _f(n.get("phosphorus_mg")) >= RISK_THRESHOLDS["phosphorus_high_mg"]),
+        "sat_fat_high": _flag("sat_fat_high", _f(n.get("saturated_fat_g")) >= RISK_THRESHOLDS["sat_fat_high_g"]),
+        "sugar_high": _flag("sugar_high", _f(n.get("sugars_g")) >= RISK_THRESHOLDS["sugar_high_g"]),
+        "glycemic_load_high": _flag("glycemic_load_high", net_carbs >= RISK_THRESHOLDS["glycemic_load_high_net_carbs_g"]),
+        "energy_dense": _flag("energy_dense", _f(n.get("kcal")) >= RISK_THRESHOLDS["energy_dense_kcal"]),
         "processed_meat": bool(processed),
         "processed_items": processed,
         "allergens": allergen_classes_for(names),
-        "net_carbs_g": round(net_carbs, 1),
+        "net_carbs_g": None if unk.intersection(_RISK_SOURCES["glycemic_load_high"]) else round(net_carbs, 1),
     }
 
 
@@ -284,17 +314,30 @@ def _constituents_source(library: str, template: dict, do_constituents: Optional
     return out, []
 
 
+# [ARQ27-P0-02 · 2026-09-06] Las tres exclusiones que impiden llamar ÍNTEGRA a una plantilla.
+# Antes solo contaba `not_in_catalog`: `declared_unresolved` y `no_grams` se ignoraban para el estado,
+# así que cuatro plantillas DO figuraban `status=ok` con exclusiones dentro — incluida una «Batida de
+# zapote» cuyo zapote no está resuelto. El plato salía al pool con su nombre prometiendo un
+# ingrediente que la receta compilada no tiene.
+#
+# «Cada ingrediente resuelto o excluido» cuadra un contador; no certifica que la receta esté completa.
+# La única salida de esto es que la fuente marque el constituyente `optional: true` — una excepción
+# curada y VISIBLE, no un silencio.
+_BLOCKING_EXCLUSIONS = ("not_in_catalog", "declared_unresolved", "no_grams")
+
+
 def compile_template(template: dict, index: dict, *, library: str, constituents: list, declared_unresolved: list[str]) -> dict:
     resolved, excluded = [], []
     for c in constituents:
         name = str((c or {}).get("name") or "")
         grams = _f((c or {}).get("grams"))
+        opt = bool((c or {}).get("optional"))
         row = resolve_constituent(name, index)
         if not row:
-            excluded.append({"name": name, "grams": grams, "reason": "not_in_catalog"})
+            excluded.append({"name": name, "grams": grams, "reason": "not_in_catalog", "optional": opt})
             continue
         if grams <= 0:
-            excluded.append({"name": name, "grams": grams, "reason": "no_grams"})
+            excluded.append({"name": name, "grams": grams, "reason": "no_grams", "optional": opt})
             continue
         try:
             from plan_policy import ingredient_id_for
@@ -306,16 +349,28 @@ def compile_template(template: dict, index: dict, *, library: str, constituents:
         resolved.append({"name": name, "canonical": row["name"], "ingredient_id": iid, "grams": round(grams, 1),
                          "durability": _dur["cls"], "days_fresh": _dur["days_fresh"]})
     for name in declared_unresolved or []:
-        excluded.append({"name": str(name), "grams": None, "reason": "declared_unresolved"})
+        excluded.append({"name": str(name), "grams": None, "reason": "declared_unresolved", "optional": False})
+    # [ARQ27-P0-03] Un nutriente AUSENTE en el catálogo no suma cero: se anota y la señal que depende
+    # de él sale `None`. Medido el 06-sep sobre el catálogo vivo: 5 de 347 filas sin `phosphorus_mg`
+    # (Hoja santa, Chontaduro, Champús, Borojó, Achiote — el lote beta), que sostienen 7 constituyentes
+    # ya compilados. Los otros nueve nutrientes están completos hoy; el contrato es lo que impide que
+    # la próxima fila con un hueco vuelva a certificarse como cero.
     nutrition = {k: 0.0 for k in _NUTRIENT_COLS}
+    unknown: dict[str, list] = {}
     for r in resolved:
         row = index.get(_norm(r["canonical"])) or {}
         factor = r["grams"] / 100.0
         for k, col in _NUTRIENT_COLS.items():
-            nutrition[k] += _f(row.get(col)) * factor
+            v = row.get(col)
+            if v is None or str(v).strip() == "":
+                unknown.setdefault(k, []).append(r["canonical"])
+                continue
+            nutrition[k] += _f(v) * factor
     nutrition = {k: round(v, 2) for k, v in nutrition.items()}
+    unknown = {k: sorted(set(v)) for k, v in sorted(unknown.items())}
     names = [r["canonical"] for r in resolved]
-    status = "ok" if resolved and not [e for e in excluded if e["reason"] == "not_in_catalog"] else ("partial" if resolved else "excluded")
+    blocking = [e for e in excluded if e["reason"] in _BLOCKING_EXCLUSIONS and not e.get("optional")]
+    status = "ok" if resolved and not blocking else ("partial" if resolved else "excluded")
     body = {
         "template_id": template.get("template_id"), "template_version": template.get("template_version"),
         "name": template.get("name"), "slots": sorted(template.get("slots") or []),
@@ -324,7 +379,8 @@ def compile_template(template: dict, index: dict, *, library: str, constituents:
         "constituents": resolved, "excluded": excluded, "status": status,
         "serving_g": round(sum(r["grams"] for r in resolved), 1),
         "nutrition_per_serving": nutrition,
-        "intrinsic_risk_attributes": derive_risk_attributes(nutrition, names),
+        "nutrition_unknown": unknown,
+        "intrinsic_risk_attributes": derive_risk_attributes(nutrition, names, unknown.keys()),
         "logistics": derive_logistics(template, resolved, index),
         "editorial": derive_editorial(template, library),
     }
@@ -366,6 +422,11 @@ def compile_library(library: str, *, catalog_rows: Optional[list] = None, versio
     }
     n_cons = sum(len(c["constituents"]) + len(c["excluded"]) for c in compiled)
     n_res = sum(len(c["constituents"]) for c in compiled)
+    # [ARQ27-P0-02] `excluded` (plantillas con status `excluded`) y `constituents_excluded` (LÍNEAS de
+    # ingrediente excluidas) se leían como si fueran la misma cifra. Son dos poblaciones distintas y
+    # ahora se nombran distinto; la identidad de abajo obliga a que cuadren.
+    n_cons_ex = sum(len(c["excluded"]) for c in compiled)
+    n_unknown = sum(1 for c in compiled if c.get("nutrition_unknown"))
     snap = {
         "schema_version": REGISTRY_SCHEMA_VERSION, "compiler_version": COMPILER_VERSION,
         "registry_version": str(version or registry_snapshot_version()),
@@ -377,7 +438,8 @@ def compile_library(library: str, *, catalog_rows: Optional[list] = None, versio
             "ok": sum(1 for c in compiled if c["status"] == "ok"),
             "partial": sum(1 for c in compiled if c["status"] == "partial"),
             "excluded": sum(1 for c in compiled if c["status"] == "excluded"),
-            "constituents": n_cons, "resolved": n_res,
+            "constituents": n_cons, "resolved": n_res, "constituents_excluded": n_cons_ex,
+            "templates_with_unknown_nutrient": n_unknown,
             "resolution_pct": round(100.0 * n_res / n_cons, 1) if n_cons else 0.0,
         },
         "templates": compiled,
@@ -462,29 +524,127 @@ def canonical_slot_es(slot: Any) -> str:
     return _SLOT_ALIASES_ES.get(s, s)
 
 
+# ----------------------------------------------------------------------------- dieta (ARQ27-P0-01)
+# [ARQ27-P0-01 · 2026-09-06] El selector perdía la dieta. `template_candidates` filtraba franja,
+# familia y alérgenos y NUNCA miraba el tipo de dieta, así que el bloque 📐 del prompt le ofrecía a un
+# vegano paella de pollo y conejo, y a una vegetariana yogur y jamón. Medido sobre los seis snapshots
+# el 06-sep: **1.109 de 1.646 candidatos ofrecidos (67,4 %) eran incompatibles** con la dieta pedida,
+# en 2 dietas × 6 bibliotecas × 4 franjas.
+#
+# Las guardas finales seguían ahí y el LLM podía proponer otra variante, así que esto NO era una tasa
+# de planes peligrosos. Era capacidad desperdiciada y una instrucción contradictoria: el prompt le
+# pedía al modelo un plato que su propia dieta prohíbe, y el arreglo llegaba más tarde y más caro.
+#
+# La comprobación NO es una tabla nueva: reusa `_diet_pool_item_banned`, el mismo guard SSOT
+# (`_scan_diet_violations`, mismos `_DIET_*_TERMS`, mismo matcher word-boundary, misma excusa
+# plant-adjacent «carne de soya» / «leche de coco») que ya decide esto en el skeleton y en el
+# day-gen. La lección de P1-DIET-CANON-SSOT es que una cuarta tabla de dieta deriva y sirve pollo a
+# vegetarianas; aquí no hay tabla, hay adaptador.
+#
+# Y resuelve por TODOS los constituyentes, no por la etiqueta `protein`: una plantilla `none` puede
+# llevar lácteos y una `mixta` puede llevar jamón. La etiqueta dice qué protagoniza el plato, jamás
+# qué contiene.
+_DIET_VERDICT_CACHE: dict[tuple, bool] = {}
+_DIET_UNAVAILABLE = "unavailable"
+
+
+def _diet_scope(diet: Any) -> Optional[str]:
+    """Dieta canónica cuando RESTRINGE; `None` cuando no hay nada que filtrar (balanced/desconocida);
+    `_DIET_UNAVAILABLE` cuando restringe pero el guard SSOT no se pudo cargar."""
+    if not diet:
+        return None
+    try:
+        from constants import canonicalize_diet_type
+        canon = canonicalize_diet_type(diet)
+    except Exception:
+        canon = str(diet or "").strip().lower()
+    if canon not in ("vegan", "vegetarian", "pescatarian"):
+        return None
+    try:
+        from graph_orchestrator import _diet_pool_item_banned  # noqa: F401
+    except Exception as e:
+        logger.warning(f"[ARQ27-P0-01] guard de dieta no disponible ({e!r}) → no se ofrecen candidatos "
+                       f"para '{canon}'. Sin bloque de registro (conducta previa a F6); ofrecer carne "
+                       f"a un vegano no es una degradación aceptable.")
+        return _DIET_UNAVAILABLE
+    return canon
+
+
+def _template_violates_diet(t: dict, canon: str) -> bool:
+    """¿Algún constituyente de esta plantilla viola la dieta? Memoizado por `content_hash`: el snapshot
+    es inmutable, así que cada plantilla se evalúa una vez por dieta y por proceso."""
+    key = (t.get("content_hash") or t.get("template_id"), canon)
+    hit = _DIET_VERDICT_CACHE.get(key)
+    if hit is not None:
+        return hit
+    from graph_orchestrator import _diet_pool_item_banned
+    verdict = False
+    for c in (t.get("constituents") or []):
+        nm = c.get("canonical") or c.get("name")
+        if nm and _diet_pool_item_banned(nm, canon):
+            verdict = True
+            break
+    _DIET_VERDICT_CACHE[key] = verdict
+    return verdict
+
+
+def _buyable(t: dict, market_country: Any) -> bool:
+    """[ARQ27-P1-07] ¿Se compran en ese mercado todos los constituyentes de la plantilla?"""
+    try:
+        from catalog_capability import template_buyable_in
+        return template_buyable_in(
+            [c.get("canonical") or c.get("name") for c in (t.get("constituents") or [])], market_country)
+    except Exception:
+        return True
+
+
 def template_candidates(country: Optional[str], slot: str, family: Optional[str] = None, *, k: int = 6,
                         exclude_allergens: Iterable[str] = (), need_days: Optional[int] = None,
-                        allow_frozen: bool = False, prefer_batch: bool = False) -> list[dict]:
+                        allow_frozen: bool = False, prefer_batch: bool = False,
+                        diet: Any = None, require_known_nutrients: Iterable[str] = (),
+                        market_country: Any = None) -> list[dict]:
     """Candidatos del registry para el allocator: `status='ok'`, franja compatible, familia de proteína
-    compatible (vía `horizon.family_matches`), sin las clases de alérgeno excluidas. Orden estable."""
+    compatible (vía `horizon.family_matches_template`), sin las clases de alérgeno excluidas y sin
+    violar la dieta declarada (ARQ27-P0-01). Orden estable.
+
+    `require_known_nutrients` (ARQ27-P0-03) descarta las plantillas cuyo dato de ESE nutriente sea
+    desconocido — el criterio del gap: un faltante de sodio/K/P bloquea solo los escenarios que
+    exigen ese dato, no todos. Un perfil renal no puede recibir un plato cuyo fósforo nadie midió.
+
+    `market_country` (ARQ27-P1-07) descarta lo que ese mercado no vende. La biblioteca es de la
+    COCINA y el catálogo es del MERCADO (I16), y no tienen por qué coincidir: 26 plantillas
+    dominicanas piden Casabe u Orégano dominicano, que ni ES ni US llevan en catálogo. Sin este
+    filtro, a una cocina dominicana comprando en Estados Unidos se le ofrecían igual. Desconocido no
+    recorta nada."""
     snap = load_registry(country)
     if not snap:
         return []
+    diet_canon = _diet_scope(diet)
+    if diet_canon is _DIET_UNAVAILABLE:
+        return []
+    need = {str(x) for x in (require_known_nutrients or ())}
     ex = {str(a).lower() for a in exclude_allergens or ()}
     slot_es = canonical_slot_es(slot)
     out = []
     try:
-        from horizon import family_matches
+        from horizon import family_matches_template
     except Exception:
-        family_matches = None
+        family_matches_template = None
     for t in snap.get("templates") or []:
         if t.get("status") != "ok" or slot_es not in (t.get("slots") or []):
             continue
         if ex and ex.intersection({a.lower() for a in (t.get("intrinsic_risk_attributes") or {}).get("allergens", [])}):
             continue
-        if family and family_matches is not None:
+        if diet_canon and _template_violates_diet(t, diet_canon):
+            continue
+        if need and need.intersection(t.get("nutrition_unknown") or {}):
+            continue
+        if market_country and not _buyable(t, market_country):
+            continue
+        if family and family_matches_template is not None:
             prot = str(t.get("protein") or "none").lower()
-            if prot not in ("none", "mixta") and not family_matches(family, prot):
+            if prot not in ("none", "mixta") and not family_matches_template(
+                    family, prot, [c.get("canonical") or c.get("name") for c in (t.get("constituents") or [])]):
                 continue
         # [F7-G] compra única: el plato debe aguantar hasta ese día del ciclo (sin congelador, o congelando si el modo lo permite)
         if need_days:

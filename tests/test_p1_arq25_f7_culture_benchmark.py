@@ -4,6 +4,7 @@ en el mercado, diversidad, mezcla coherente y cero bypass clínico — y su gate
 revisión humana; no cura. La firma humana queda `pendiente` en el informe hasta que una persona la dé.
 """
 import json
+import re
 from pathlib import Path
 
 import pytest
@@ -92,4 +93,11 @@ def test_f_la_doc_del_informe_existe_y_nombra_la_firma_pendiente():
     p = _BACKEND / "docs" / "cultural_benchmark_report.md"
     assert p.exists(), "python cultural_benchmark.py --write"
     txt = p.read_text(encoding="utf-8")
-    assert "firma: sí (" in txt and "firma: pendiente" not in txt, "informe desfasado: python cultural_benchmark.py --write"
+    # [ARQ27-P1-03 · 2026-09-06] Antes exigía el literal «firma: sí (», que es la redacción ANTERIOR a
+    # `P1-REVIEW-KIND-HONEST`: aquel commit cambió el renderer a «firma: <kind> (…)» y no regeneró el
+    # .md, así que este assert pasaba solo mientras el informe siguiera desfasado — justo lo contrario
+    # de lo que su mensaje de error dice vigilar. Ahora exige el contrato: que la firma NOMBRE su tipo
+    # (nunca se asciende una revisión por omisión) y que ningún perfil quede pendiente.
+    assert "firma: pendiente" not in txt, "informe desfasado: python cultural_benchmark.py --write"
+    assert re.search(r"firma: (automated|human)\b", txt), \
+        "el informe no dice de qué TIPO es la firma: python cultural_benchmark.py --write"

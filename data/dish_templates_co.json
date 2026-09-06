@@ -1068,7 +1068,7 @@
       ]
     },
     {
-      "name": "Longaniza santarrosana con papa",
+      "name": "Chorizo santarrosano con papa",
       "slots": [
         "cena"
       ],
@@ -1078,7 +1078,7 @@
       "transform": false,
       "constituents": [
         {
-          "name": "Longaniza dominicana",
+          "name": "Chorizo santarrosano",
           "grams": 120
         },
         {
@@ -3307,6 +3307,402 @@
         {
           "name": "Aceite vegetal",
           "grams": 8
+        }
+      ]
+    },
+    {
+      "name": "Arepa de maíz con hummus y tomate",
+      "slots": [
+        "desayuno"
+      ],
+      "protein": "none",
+      "base": "maiz",
+      "technique": "masa a la plancha",
+      "transform": false,
+      "constituents": [
+        {
+          "name": "Harina de maíz precocida",
+          "grams": 70.0
+        },
+        {
+          "name": "Hummus",
+          "grams": 60.0
+        },
+        {
+          "name": "Tomate",
+          "grams": 60.0
+        },
+        {
+          "name": "Aceite vegetal",
+          "grams": 6.0
+        }
+      ]
+    },
+    {
+      "name": "Avena caliente con leche de soya y panela",
+      "slots": [
+        "desayuno"
+      ],
+      "protein": "none",
+      "base": "avena",
+      "technique": "hervido",
+      "transform": false,
+      "constituents": [
+        {
+          "name": "Avena",
+          "grams": 60.0
+        },
+        {
+          "name": "Leche de soya",
+          "grams": 220.0
+        },
+        {
+          "name": "Panela",
+          "grams": 15.0
+        },
+        {
+          "name": "Canela en polvo",
+          "grams": 2.0
+        }
+      ]
+    },
+    {
+      "name": "Bowl de quinoa con frutas y semillas de girasol",
+      "slots": [
+        "desayuno"
+      ],
+      "protein": "none",
+      "base": "none",
+      "technique": "frío",
+      "transform": false,
+      "constituents": [
+        {
+          "name": "Quinoa",
+          "grams": 90.0
+        },
+        {
+          "name": "Guayaba",
+          "grams": 100.0
+        },
+        {
+          "name": "Mora",
+          "grams": 80.0
+        },
+        {
+          "name": "Semillas de girasol",
+          "grams": 20.0
+        }
+      ]
+    },
+    {
+      "name": "Tostada de pan integral con aguacate y tomate",
+      "slots": [
+        "desayuno"
+      ],
+      "protein": "none",
+      "base": "pan",
+      "technique": "frío",
+      "transform": false,
+      "constituents": [
+        {
+          "name": "Pan integral personal",
+          "grams": 80.0
+        },
+        {
+          "name": "Aguacate",
+          "grams": 70.0
+        },
+        {
+          "name": "Tomate",
+          "grams": 60.0
+        },
+        {
+          "name": "Aceite de oliva",
+          "grams": 8.0
+        }
+      ]
+    },
+    {
+      "name": "Frijol cargamanto con arroz y plátano maduro",
+      "slots": [
+        "almuerzo"
+      ],
+      "protein": "legumbre",
+      "base": "arroz",
+      "technique": "guisado",
+      "transform": false,
+      "constituents": [
+        {
+          "name": "Frijol cargamanto",
+          "grams": 140.0
+        },
+        {
+          "name": "Arroz blanco",
+          "grams": 150.0
+        },
+        {
+          "name": "Plátano maduro",
+          "grams": 100.0
+        },
+        {
+          "name": "Cebolla",
+          "grams": 30.0
+        },
+        {
+          "name": "Ajo",
+          "grams": 5.0
+        },
+        {
+          "name": "Aceite vegetal",
+          "grams": 10.0
+        }
+      ]
+    },
+    {
+      "name": "Sudado de soya texturizada con papa y arracacha",
+      "slots": [
+        "almuerzo"
+      ],
+      "protein": "legumbre",
+      "base": "papa",
+      "technique": "guisado",
+      "transform": false,
+      "constituents": [
+        {
+          "name": "Soya texturizada",
+          "grams": 60.0
+        },
+        {
+          "name": "Papa",
+          "grams": 150.0
+        },
+        {
+          "name": "Arracacha",
+          "grams": 120.0
+        },
+        {
+          "name": "Tomate",
+          "grams": 80.0
+        },
+        {
+          "name": "Cebolla",
+          "grams": 35.0
+        },
+        {
+          "name": "Guascas",
+          "grams": 3.0
+        },
+        {
+          "name": "Aceite vegetal",
+          "grams": 10.0
+        }
+      ]
+    },
+    {
+      "name": "Ensalada de quinoa con edamame y aguacate",
+      "slots": [
+        "almuerzo"
+      ],
+      "protein": "legumbre",
+      "base": "none",
+      "technique": "frío",
+      "transform": false,
+      "constituents": [
+        {
+          "name": "Quinoa",
+          "grams": 90.0
+        },
+        {
+          "name": "Edamame",
+          "grams": 100.0
+        },
+        {
+          "name": "Aguacate",
+          "grams": 60.0
+        },
+        {
+          "name": "Tomate",
+          "grams": 60.0
+        },
+        {
+          "name": "Limón",
+          "grams": 10.0
+        },
+        {
+          "name": "Aceite de oliva",
+          "grams": 10.0
+        }
+      ]
+    },
+    {
+      "name": "Sopa de lentejas con auyama y arroz",
+      "slots": [
+        "cena"
+      ],
+      "protein": "legumbre",
+      "base": "legumbre",
+      "technique": "sopa espesa",
+      "transform": false,
+      "constituents": [
+        {
+          "name": "Lentejas",
+          "grams": 120.0
+        },
+        {
+          "name": "Auyama",
+          "grams": 120.0
+        },
+        {
+          "name": "Arroz blanco",
+          "grams": 90.0
+        },
+        {
+          "name": "Cebolla",
+          "grams": 30.0
+        },
+        {
+          "name": "Aceite vegetal",
+          "grams": 8.0
+        }
+      ]
+    },
+    {
+      "name": "Salteado de tofu con habichuelas y papa",
+      "slots": [
+        "cena"
+      ],
+      "protein": "tofu",
+      "base": "papa",
+      "technique": "salteado",
+      "transform": false,
+      "constituents": [
+        {
+          "name": "Tofu firme",
+          "grams": 150.0
+        },
+        {
+          "name": "Vainitas",
+          "grams": 120.0
+        },
+        {
+          "name": "Papa",
+          "grams": 150.0
+        },
+        {
+          "name": "Ajo",
+          "grams": 5.0
+        },
+        {
+          "name": "Aceite vegetal",
+          "grams": 8.0
+        }
+      ]
+    },
+    {
+      "name": "Patacones con guacamole y frijoles",
+      "slots": [
+        "cena"
+      ],
+      "protein": "legumbre",
+      "base": "platano",
+      "technique": "frito",
+      "transform": false,
+      "constituents": [
+        {
+          "name": "Plátano verde",
+          "grams": 180.0
+        },
+        {
+          "name": "Aguacate",
+          "grams": 70.0
+        },
+        {
+          "name": "Habichuelas rojas",
+          "grams": 120.0
+        },
+        {
+          "name": "Limón",
+          "grams": 8.0
+        },
+        {
+          "name": "Aceite vegetal",
+          "grams": 12.0
+        }
+      ]
+    },
+    {
+      "name": "Cayeye de guineo verde con aguacate",
+      "slots": [
+        "desayuno"
+      ],
+      "protein": "none",
+      "base": "guineo",
+      "technique": "hervido+majado",
+      "transform": false,
+      "constituents": [
+        {
+          "name": "Guineo verde",
+          "grams": 200.0
+        },
+        {
+          "name": "Aguacate",
+          "grams": 70.0
+        },
+        {
+          "name": "Cebolla",
+          "grams": 30.0
+        },
+        {
+          "name": "Aceite vegetal",
+          "grams": 8.0
+        }
+      ]
+    },
+    {
+      "name": "Licuado de mora con leche de soya y linaza",
+      "slots": [
+        "desayuno"
+      ],
+      "protein": "none",
+      "base": "none",
+      "technique": "licuado frío",
+      "transform": false,
+      "constituents": [
+        {
+          "name": "Mora",
+          "grams": 150.0
+        },
+        {
+          "name": "Leche de soya",
+          "grams": 220.0
+        },
+        {
+          "name": "Linaza",
+          "grams": 12.0
+        }
+      ]
+    },
+    {
+      "name": "Bowl de quinoa con lechosa y semillas de calabaza",
+      "slots": [
+        "desayuno"
+      ],
+      "protein": "none",
+      "base": "none",
+      "technique": "frío",
+      "transform": false,
+      "constituents": [
+        {
+          "name": "Quinoa",
+          "grams": 90.0
+        },
+        {
+          "name": "Lechosa",
+          "grams": 150.0
+        },
+        {
+          "name": "Semillas de calabaza",
+          "grams": 20.0
         }
       ]
     }

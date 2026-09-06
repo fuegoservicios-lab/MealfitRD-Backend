@@ -2863,6 +2863,466 @@
           "grams": 5.0
         }
       ]
+    },
+    {
+      "name": "Avena con leche de soya, arándanos y linaza",
+      "slots": [
+        "desayuno"
+      ],
+      "protein": "none",
+      "base": "avena",
+      "technique": "hervido",
+      "transform": false,
+      "constituents": [
+        {
+          "name": "Avena",
+          "grams": 60.0
+        },
+        {
+          "name": "Leche de soya",
+          "grams": 220.0
+        },
+        {
+          "name": "Arándanos",
+          "grams": 90.0
+        },
+        {
+          "name": "Linaza",
+          "grams": 12.0
+        }
+      ]
+    },
+    {
+      "name": "Bowl de quinoa con fresas y semillas de calabaza",
+      "slots": [
+        "desayuno"
+      ],
+      "protein": "none",
+      "base": "none",
+      "technique": "frío",
+      "transform": false,
+      "constituents": [
+        {
+          "name": "Quinoa",
+          "grams": 90.0
+        },
+        {
+          "name": "Fresas",
+          "grams": 120.0
+        },
+        {
+          "name": "Semillas de calabaza",
+          "grams": 20.0
+        }
+      ]
+    },
+    {
+      "name": "Bowl de tofu con arroz integral y brócoli",
+      "slots": [
+        "almuerzo"
+      ],
+      "protein": "tofu",
+      "base": "arroz",
+      "technique": "salteado",
+      "transform": false,
+      "constituents": [
+        {
+          "name": "Tofu firme",
+          "grams": 150.0
+        },
+        {
+          "name": "Arroz integral",
+          "grams": 130.0
+        },
+        {
+          "name": "Brócoli",
+          "grams": 130.0
+        },
+        {
+          "name": "Salsa de soya",
+          "grams": 12.0
+        },
+        {
+          "name": "Aceite de sésamo",
+          "grams": 6.0
+        }
+      ]
+    },
+    {
+      "name": "Ensalada de garbanzos con kale y aguacate",
+      "slots": [
+        "almuerzo"
+      ],
+      "protein": "legumbre",
+      "base": "none",
+      "technique": "frío",
+      "transform": false,
+      "constituents": [
+        {
+          "name": "Garbanzos",
+          "grams": 130.0
+        },
+        {
+          "name": "Kale",
+          "grams": 90.0
+        },
+        {
+          "name": "Aguacate",
+          "grams": 60.0
+        },
+        {
+          "name": "Tomate",
+          "grams": 60.0
+        },
+        {
+          "name": "Aceite de oliva",
+          "grams": 10.0
+        }
+      ]
+    },
+    {
+      "name": "Chili vegano de frijoles pintos con arroz",
+      "slots": [
+        "almuerzo"
+      ],
+      "protein": "legumbre",
+      "base": "arroz",
+      "technique": "guisado",
+      "transform": false,
+      "constituents": [
+        {
+          "name": "Frijoles pintos",
+          "grams": 150.0
+        },
+        {
+          "name": "Arroz blanco",
+          "grams": 130.0
+        },
+        {
+          "name": "Tomate",
+          "grams": 90.0
+        },
+        {
+          "name": "Cebolla",
+          "grams": 35.0
+        },
+        {
+          "name": "Chile en polvo",
+          "grams": 4.0
+        },
+        {
+          "name": "Aceite vegetal",
+          "grams": 10.0
+        }
+      ]
+    },
+    {
+      "name": "Hummus con pepino y zanahoria",
+      "slots": [
+        "merienda"
+      ],
+      "protein": "legumbre",
+      "base": "none",
+      "technique": "frío",
+      "transform": false,
+      "constituents": [
+        {
+          "name": "Hummus",
+          "grams": 80.0
+        },
+        {
+          "name": "Pepino",
+          "grams": 100.0
+        },
+        {
+          "name": "Zanahoria",
+          "grams": 80.0
+        }
+      ]
+    },
+    {
+      "name": "Salteado de edamame con brócoli y batata",
+      "slots": [
+        "cena"
+      ],
+      "protein": "legumbre",
+      "base": "batata",
+      "technique": "salteado",
+      "transform": false,
+      "constituents": [
+        {
+          "name": "Edamame",
+          "grams": 130.0
+        },
+        {
+          "name": "Brócoli",
+          "grams": 130.0
+        },
+        {
+          "name": "Batata",
+          "grams": 160.0
+        },
+        {
+          "name": "Salsa de soya",
+          "grams": 12.0
+        },
+        {
+          "name": "Aceite de sésamo",
+          "grams": 6.0
+        }
+      ]
+    },
+    {
+      "name": "Tacos de soya texturizada con repollo",
+      "slots": [
+        "cena"
+      ],
+      "protein": "legumbre",
+      "base": "maiz",
+      "technique": "salteado",
+      "transform": false,
+      "constituents": [
+        {
+          "name": "Soya texturizada",
+          "grams": 60.0
+        },
+        {
+          "name": "Tortilla de maíz",
+          "grams": 90.0
+        },
+        {
+          "name": "Repollo",
+          "grams": 90.0
+        },
+        {
+          "name": "Tomate",
+          "grams": 60.0
+        },
+        {
+          "name": "Limón",
+          "grams": 10.0
+        },
+        {
+          "name": "Aceite vegetal",
+          "grams": 8.0
+        }
+      ]
+    },
+    {
+      "name": "Sopa de lentejas con kale y papa",
+      "slots": [
+        "cena"
+      ],
+      "protein": "legumbre",
+      "base": "legumbre",
+      "technique": "sopa espesa",
+      "transform": false,
+      "constituents": [
+        {
+          "name": "Lentejas",
+          "grams": 130.0
+        },
+        {
+          "name": "Kale",
+          "grams": 90.0
+        },
+        {
+          "name": "Papa",
+          "grams": 130.0
+        },
+        {
+          "name": "Cebolla",
+          "grams": 30.0
+        },
+        {
+          "name": "Aceite de oliva",
+          "grams": 10.0
+        }
+      ]
+    },
+    {
+      "name": "Tofu al horno con batata y espinacas",
+      "slots": [
+        "cena"
+      ],
+      "protein": "tofu",
+      "base": "batata",
+      "technique": "horneado",
+      "transform": false,
+      "constituents": [
+        {
+          "name": "Tofu firme",
+          "grams": 150.0
+        },
+        {
+          "name": "Batata",
+          "grams": 160.0
+        },
+        {
+          "name": "Espinacas",
+          "grams": 100.0
+        },
+        {
+          "name": "Aceite de oliva",
+          "grams": 10.0
+        }
+      ]
+    },
+    {
+      "name": "Granola con leche de soya y arándanos rojos",
+      "slots": [
+        "desayuno"
+      ],
+      "protein": "none",
+      "base": "none",
+      "technique": "frío",
+      "transform": false,
+      "constituents": [
+        {
+          "name": "Granola",
+          "grams": 60.0
+        },
+        {
+          "name": "Leche de soya",
+          "grams": 220.0
+        },
+        {
+          "name": "Arándanos rojos",
+          "grams": 80.0
+        }
+      ]
+    },
+    {
+      "name": "Batida de fresas con leche de soya y linaza",
+      "slots": [
+        "desayuno"
+      ],
+      "protein": "none",
+      "base": "none",
+      "technique": "licuado frío",
+      "transform": false,
+      "constituents": [
+        {
+          "name": "Fresas",
+          "grams": 150.0
+        },
+        {
+          "name": "Leche de soya",
+          "grams": 220.0
+        },
+        {
+          "name": "Linaza",
+          "grams": 12.0
+        }
+      ]
+    },
+    {
+      "name": "Papas doradas con aguacate y tomate",
+      "slots": [
+        "desayuno"
+      ],
+      "protein": "none",
+      "base": "papa",
+      "technique": "sartén",
+      "transform": false,
+      "constituents": [
+        {
+          "name": "Papas ralladas",
+          "grams": 150.0
+        },
+        {
+          "name": "Aguacate",
+          "grams": 70.0
+        },
+        {
+          "name": "Tomate",
+          "grams": 60.0
+        },
+        {
+          "name": "Aceite vegetal",
+          "grams": 10.0
+        }
+      ]
+    },
+    {
+      "name": "Bowl de quinoa con manzana y nueces",
+      "slots": [
+        "desayuno"
+      ],
+      "protein": "none",
+      "base": "none",
+      "technique": "frío",
+      "transform": false,
+      "constituents": [
+        {
+          "name": "Quinoa",
+          "grams": 90.0
+        },
+        {
+          "name": "Manzana",
+          "grams": 140.0
+        },
+        {
+          "name": "Nuez de Castilla",
+          "grams": 20.0
+        },
+        {
+          "name": "Canela en polvo",
+          "grams": 2.0
+        }
+      ]
+    },
+    {
+      "name": "Batata asada con mantequilla de maní y canela",
+      "slots": [
+        "desayuno"
+      ],
+      "protein": "none",
+      "base": "batata",
+      "technique": "horneado",
+      "transform": false,
+      "constituents": [
+        {
+          "name": "Batata",
+          "grams": 180.0
+        },
+        {
+          "name": "Mantequilla de maní",
+          "grams": 26.0
+        },
+        {
+          "name": "Canela en polvo",
+          "grams": 2.0
+        }
+      ]
+    },
+    {
+      "name": "Tazón de frutas con granola y semillas de calabaza",
+      "slots": [
+        "desayuno"
+      ],
+      "protein": "none",
+      "base": "none",
+      "technique": "frío",
+      "transform": false,
+      "constituents": [
+        {
+          "name": "Melón",
+          "grams": 150.0
+        },
+        {
+          "name": "Fresas",
+          "grams": 100.0
+        },
+        {
+          "name": "Granola",
+          "grams": 45.0
+        },
+        {
+          "name": "Semillas de calabaza",
+          "grams": 18.0
+        }
+      ]
     }
   ]
 }

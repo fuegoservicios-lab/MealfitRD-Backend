@@ -3018,6 +3018,562 @@
           "grams": 120.0
         }
       ]
+    },
+    {
+      "name": "Tostada de pan integral con tomate y aceite de oliva",
+      "slots": [
+        "desayuno"
+      ],
+      "protein": "none",
+      "base": "pan",
+      "technique": "frío",
+      "transform": false,
+      "constituents": [
+        {
+          "name": "Pan integral personal",
+          "grams": 80.0
+        },
+        {
+          "name": "Tomate",
+          "grams": 80.0
+        },
+        {
+          "name": "Aceite de oliva",
+          "grams": 10.0
+        },
+        {
+          "name": "Ajo",
+          "grams": 3.0
+        }
+      ]
+    },
+    {
+      "name": "Avena con leche de soya y fresas",
+      "slots": [
+        "desayuno"
+      ],
+      "protein": "none",
+      "base": "avena",
+      "technique": "hervido",
+      "transform": false,
+      "constituents": [
+        {
+          "name": "Avena",
+          "grams": 60.0
+        },
+        {
+          "name": "Leche de soya",
+          "grams": 220.0
+        },
+        {
+          "name": "Fresas",
+          "grams": 120.0
+        }
+      ]
+    },
+    {
+      "name": "Tostada con hummus y aguacate",
+      "slots": [
+        "desayuno"
+      ],
+      "protein": "none",
+      "base": "pan",
+      "technique": "frío",
+      "transform": false,
+      "constituents": [
+        {
+          "name": "Pan integral personal",
+          "grams": 80.0
+        },
+        {
+          "name": "Hummus",
+          "grams": 60.0
+        },
+        {
+          "name": "Aguacate",
+          "grams": 60.0
+        }
+      ]
+    },
+    {
+      "name": "Bowl de quinoa con manzana y almendras",
+      "slots": [
+        "desayuno"
+      ],
+      "protein": "none",
+      "base": "none",
+      "technique": "frío",
+      "transform": false,
+      "constituents": [
+        {
+          "name": "Quinoa",
+          "grams": 90.0
+        },
+        {
+          "name": "Manzana",
+          "grams": 120.0
+        },
+        {
+          "name": "Almendras fileteadas",
+          "grams": 20.0
+        },
+        {
+          "name": "Canela en polvo",
+          "grams": 2.0
+        }
+      ]
+    },
+    {
+      "name": "Batida de fresas con leche de soya y avena",
+      "slots": [
+        "desayuno"
+      ],
+      "protein": "none",
+      "base": "avena",
+      "technique": "licuado frío",
+      "transform": false,
+      "constituents": [
+        {
+          "name": "Fresas",
+          "grams": 150.0
+        },
+        {
+          "name": "Leche de soya",
+          "grams": 220.0
+        },
+        {
+          "name": "Avena",
+          "grams": 35.0
+        }
+      ]
+    },
+    {
+      "name": "Pan de agua con mantequilla de almendras y plátano",
+      "slots": [
+        "desayuno"
+      ],
+      "protein": "none",
+      "base": "pan",
+      "technique": "frío",
+      "transform": false,
+      "constituents": [
+        {
+          "name": "Pan de agua",
+          "grams": 80.0
+        },
+        {
+          "name": "Mantequilla de almendras",
+          "grams": 25.0
+        },
+        {
+          "name": "Guineo",
+          "grams": 100.0
+        }
+      ]
+    },
+    {
+      "name": "Garbanzos con espinacas y arroz",
+      "slots": [
+        "almuerzo"
+      ],
+      "protein": "legumbre",
+      "base": "legumbre",
+      "technique": "guisado",
+      "transform": false,
+      "constituents": [
+        {
+          "name": "Garbanzos",
+          "grams": 140.0
+        },
+        {
+          "name": "Espinacas",
+          "grams": 120.0
+        },
+        {
+          "name": "Arroz blanco",
+          "grams": 120.0
+        },
+        {
+          "name": "Ajo",
+          "grams": 5.0
+        },
+        {
+          "name": "Pimentón",
+          "grams": 3.0
+        },
+        {
+          "name": "Aceite de oliva",
+          "grams": 12.0
+        }
+      ]
+    },
+    {
+      "name": "Salteado de tofu con pimientos y quinoa",
+      "slots": [
+        "almuerzo"
+      ],
+      "protein": "tofu",
+      "base": "none",
+      "technique": "salteado",
+      "transform": false,
+      "constituents": [
+        {
+          "name": "Tofu firme",
+          "grams": 150.0
+        },
+        {
+          "name": "Ají morrón",
+          "grams": 120.0
+        },
+        {
+          "name": "Quinoa",
+          "grams": 90.0
+        },
+        {
+          "name": "Cebolla",
+          "grams": 35.0
+        },
+        {
+          "name": "Aceite de oliva",
+          "grams": 10.0
+        }
+      ]
+    },
+    {
+      "name": "Hummus con zanahoria y apio",
+      "slots": [
+        "merienda"
+      ],
+      "protein": "legumbre",
+      "base": "none",
+      "technique": "frío",
+      "transform": false,
+      "constituents": [
+        {
+          "name": "Hummus",
+          "grams": 80.0
+        },
+        {
+          "name": "Zanahoria",
+          "grams": 90.0
+        },
+        {
+          "name": "Apio",
+          "grams": 70.0
+        }
+      ]
+    },
+    {
+      "name": "Crema de calabacín con quinoa",
+      "slots": [
+        "cena"
+      ],
+      "protein": "none",
+      "base": "none",
+      "technique": "crema",
+      "transform": false,
+      "constituents": [
+        {
+          "name": "Calabacín",
+          "grams": 220.0
+        },
+        {
+          "name": "Quinoa",
+          "grams": 70.0
+        },
+        {
+          "name": "Puerro",
+          "grams": 60.0
+        },
+        {
+          "name": "Aceite de oliva",
+          "grams": 10.0
+        }
+      ]
+    },
+    {
+      "name": "Salteado de edamame con espárragos y patata",
+      "slots": [
+        "cena"
+      ],
+      "protein": "legumbre",
+      "base": "patata",
+      "technique": "salteado",
+      "transform": false,
+      "constituents": [
+        {
+          "name": "Edamame",
+          "grams": 120.0
+        },
+        {
+          "name": "Espárragos",
+          "grams": 110.0
+        },
+        {
+          "name": "Papa",
+          "grams": 160.0
+        },
+        {
+          "name": "Ajo",
+          "grams": 5.0
+        },
+        {
+          "name": "Aceite de oliva",
+          "grams": 10.0
+        }
+      ]
+    },
+    {
+      "name": "Guiso de lentejas con puerro y zanahoria",
+      "slots": [
+        "cena"
+      ],
+      "protein": "legumbre",
+      "base": "legumbre",
+      "technique": "guisado",
+      "transform": false,
+      "constituents": [
+        {
+          "name": "Lentejas",
+          "grams": 140.0
+        },
+        {
+          "name": "Puerro",
+          "grams": 80.0
+        },
+        {
+          "name": "Zanahoria",
+          "grams": 90.0
+        },
+        {
+          "name": "Pimentón",
+          "grams": 3.0
+        },
+        {
+          "name": "Aceite de oliva",
+          "grams": 12.0
+        }
+      ]
+    },
+    {
+      "name": "Berenjena al horno con hummus y quinoa",
+      "slots": [
+        "cena"
+      ],
+      "protein": "legumbre",
+      "base": "none",
+      "technique": "horneado",
+      "transform": false,
+      "constituents": [
+        {
+          "name": "Berenjena",
+          "grams": 200.0
+        },
+        {
+          "name": "Hummus",
+          "grams": 60.0
+        },
+        {
+          "name": "Quinoa",
+          "grams": 80.0
+        },
+        {
+          "name": "Aceite de oliva",
+          "grams": 10.0
+        }
+      ]
+    },
+    {
+      "name": "Soya texturizada a la jardinera con patata",
+      "slots": [
+        "cena"
+      ],
+      "protein": "legumbre",
+      "base": "patata",
+      "technique": "guisado",
+      "transform": false,
+      "constituents": [
+        {
+          "name": "Soya texturizada",
+          "grams": 60.0
+        },
+        {
+          "name": "Papa",
+          "grams": 160.0
+        },
+        {
+          "name": "Zanahoria",
+          "grams": 90.0
+        },
+        {
+          "name": "Vainitas",
+          "grams": 90.0
+        },
+        {
+          "name": "Cebolla",
+          "grams": 35.0
+        },
+        {
+          "name": "Aceite de oliva",
+          "grams": 12.0
+        }
+      ]
+    },
+    {
+      "name": "Bowl de quinoa con fresas y almendras",
+      "slots": [
+        "desayuno"
+      ],
+      "protein": "none",
+      "base": "none",
+      "technique": "frío",
+      "transform": false,
+      "constituents": [
+        {
+          "name": "Quinoa",
+          "grams": 90.0
+        },
+        {
+          "name": "Fresas",
+          "grams": 140.0
+        },
+        {
+          "name": "Almendras fileteadas",
+          "grams": 20.0
+        }
+      ]
+    },
+    {
+      "name": "Batida de manzana con leche de soya y almendras",
+      "slots": [
+        "desayuno"
+      ],
+      "protein": "none",
+      "base": "none",
+      "technique": "licuado frío",
+      "transform": false,
+      "constituents": [
+        {
+          "name": "Manzana",
+          "grams": 160.0
+        },
+        {
+          "name": "Leche de soya",
+          "grams": 220.0
+        },
+        {
+          "name": "Almendras fileteadas",
+          "grams": 18.0
+        }
+      ]
+    },
+    {
+      "name": "Tomate aliñado con aguacate y aceite de oliva",
+      "slots": [
+        "desayuno"
+      ],
+      "protein": "none",
+      "base": "none",
+      "technique": "frío",
+      "transform": false,
+      "constituents": [
+        {
+          "name": "Tomate",
+          "grams": 180.0
+        },
+        {
+          "name": "Aguacate",
+          "grams": 80.0
+        },
+        {
+          "name": "Aceite de oliva",
+          "grams": 12.0
+        },
+        {
+          "name": "Albahaca seca",
+          "grams": 2.0
+        }
+      ]
+    },
+    {
+      "name": "Macedonia de frutas con nueces y semillas",
+      "slots": [
+        "desayuno"
+      ],
+      "protein": "none",
+      "base": "none",
+      "technique": "frío",
+      "transform": false,
+      "constituents": [
+        {
+          "name": "Manzana",
+          "grams": 120.0
+        },
+        {
+          "name": "Naranja",
+          "grams": 120.0
+        },
+        {
+          "name": "Nuez de Castilla",
+          "grams": 20.0
+        },
+        {
+          "name": "Semillas de girasol",
+          "grams": 15.0
+        }
+      ]
+    },
+    {
+      "name": "Patata cocida con aceite de oliva y pimentón",
+      "slots": [
+        "desayuno"
+      ],
+      "protein": "none",
+      "base": "patata",
+      "technique": "hervido",
+      "transform": false,
+      "constituents": [
+        {
+          "name": "Papa",
+          "grams": 200.0
+        },
+        {
+          "name": "Aceite de oliva",
+          "grams": 12.0
+        },
+        {
+          "name": "Pimentón",
+          "grams": 3.0
+        },
+        {
+          "name": "Perejil",
+          "grams": 5.0
+        }
+      ]
+    },
+    {
+      "name": "Granola con leche de soya y arándanos",
+      "slots": [
+        "desayuno"
+      ],
+      "protein": "none",
+      "base": "none",
+      "technique": "frío",
+      "transform": false,
+      "constituents": [
+        {
+          "name": "Granola",
+          "grams": 60.0
+        },
+        {
+          "name": "Leche de soya",
+          "grams": 220.0
+        },
+        {
+          "name": "Arándanos",
+          "grams": 90.0
+        }
+      ]
     }
   ]
 }

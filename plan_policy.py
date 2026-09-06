@@ -465,6 +465,10 @@ def compile_policy(requested: dict, *, context: Optional[dict] = None) -> tuple[
     # 3. disponibilidad real en el mercado
     known = ctx.get("known_ingredients")
     if known is not None:
+        # [ARQ27-P1-07] Constancia POSITIVA de que el paso corrió. Sin ella, un plan sin anclas
+        # descartadas es indistinguible de un plan cuyo mercado nadie comprobó — y el embudo no
+        # puede medir la diferencia entre «pasó el filtro» y «no hubo filtro».
+        eff.setdefault("notes", []).append("market_check_applied")
         known_list = [str(k) for k in known]
         kept = []
         for a in anchors:
@@ -619,6 +623,18 @@ def compile_from_form(form_data: dict, *, country: Optional[str] = None) -> dict
                 ctx["budget_amount_dop"] = float(b["amount"]) * (_budget_usd_to_dop() if b.get("currency") == "USD" else 1.0)
         except Exception as e:
             logger.debug(f"[P1-ARQ25-F2-PLANPOLICY] contexto de presupuesto no disponible: {e}")
+        # [ARQ27-P1-07 · 2026-09-06] El paso 3 de `compile_policy` (disponibilidad real en el
+        # mercado) pedía `known_ingredients` y NADIE se lo pasaba: el único constructor que usa
+        # producción dejaba el contexto vacío, así que el paso se anotaba `market_check_skipped` y no
+        # corría nunca — 57 de 57 planes según el registro de F3. `None` (catálogo ilegible o vacío)
+        # conserva ese `skipped` a propósito: ausente no es lo mismo que «este país no vende nada».
+        try:
+            from catalog_capability import known_ingredient_names
+            _known = known_ingredient_names((requested or {}).get("market_country") or country)
+            if _known:
+                ctx["known_ingredients"] = _known
+        except Exception as e:
+            logger.debug(f"[ARQ27-P1-07] capacidad de mercado no disponible: {e}")
         effective, rels = compile_policy(requested, context=ctx)
         return {
             "schema_version": POLICY_SCHEMA_VERSION,

@@ -21494,9 +21494,25 @@ def _close_protein_gap_for_meal(meal: dict, slot_protein_target: float, db, cand
             def _sa(s):
                 import unicodedata
                 return "".join(c for c in unicodedata.normalize("NFKD", str(s)) if not unicodedata.combining(c))
+        # [ARQ27-P1-08 · 2026-09-06] El solver ya midió si este plato tiene un portador de proteína
+        # suficiente. `_solver_infeasible = {'protein': 'high'}` significa exactamente «no hay solución
+        # con estos alimentos dentro del clamp: falta un portador, ninguna re-escala lo arregla», y lo
+        # trae por macro y con dirección. Volver a intentar el escalado es re-deducir un hueco que ya
+        # está escrito en el propio plato — dos capas trabajando sobre la misma señal sin compartirla,
+        # que es justo lo que la medición del 06-sep señaló como el arreglo barato (34 de 1.174 platos).
+        #
+        # `_try_scale_existing_protein` es «cierre completo o nada», así que saltárselo no abre ningún
+        # hueco: solo evita la pasada que el solver ya demostró inútil y deja el log con la razón.
+        _infe_p = (meal.get("_solver_infeasible") or {}).get("protein")
+        _skip_scale = _infe_p == "high"
+        if _skip_scale:
+            logger.info(f"📐 [ARQ27-P1-08] {str(meal.get('name'))[:34]!r}: el solver ya marcó "
+                        f"protein:high (falta portador) → el cerrador va directo a añadir, sin "
+                        f"reintentar el escalado.")
+            meal["_closer_used_solver_signal"] = True
         # [P3-PROTEIN-CLOSER-SCALE-FIRST · 2026-06-28] Preferir CRECER una proteína ya presente (más "chef") antes de
         # pegar una nueva como ingrediente extra. Si lo logra → listo; si no hay proteína escalable, cae al pool/append.
-        if PROTEIN_CLOSER_SCALE_FIRST:
+        if PROTEIN_CLOSER_SCALE_FIRST and not _skip_scale:
             _g_scaled = _try_scale_existing_protein(meal, target, db, _sa, slot_cal_target=slot_cal_target)
             if _g_scaled > 0:
                 logger.info(f"🍳 [P3-PROTEIN-CLOSER-SCALE-FIRST] +{_g_scaled}g a la proteína EXISTENTE "

@@ -1,15 +1,35 @@
 {
-  "schema_version": 1,
-  "kind": "automated",
-  "reviewer": "Claude (revisión curatorial delegada por el dueño)",
-  "kind_note": "Revisión AUTOMATIZADA: la ejecutó un agente (Claude) por delegación del dueño. Vale como contrato interno y como control de calidad del catálogo; NO es una revisión cultural humana ni una revisión clínica independiente, y no debe presentarse como tal fuera del producto.",
-  "date": "2026-09-06",
-  "scope": "las 6 bibliotecas compiladas (data/registry/dish_registry_<lib>_v1.json): nombre, franja, técnica, constituyentes, nutrición por ración, alérgenos, sodio, procesados, duplicados y léxico de otra cocina",
-  "method": "benchmark §13.4 + chequeo independiente por plantilla (scratch f7_review.py) + juicio plato a plato; las decisiones se aplicaron a los JSON y se recompilaron los snapshots",
   "caducity": "la firma vale solo para el snapshot_hash anotado por perfil; cambiar una biblioteca la caduca hasta repetir la revisión",
+  "date": "2026-09-06",
+  "kind": "automated",
+  "kind_note": "Revisión AUTOMATIZADA: la ejecutó un agente (Claude) por delegación del dueño. Vale como contrato interno y como control de calidad del catálogo; NO es una revisión cultural humana ni una revisión clínica independiente, y no debe presentarse como tal fuera del producto.",
+  "method": "benchmark §13.4 + chequeo independiente por plantilla (scratch f7_review.py) + juicio plato a plato; las decisiones se aplicaron a los JSON y se recompilaron los snapshots · en esta repetición, además: preflight por plato contra el catálogo vivo, el guard de dieta y el filtro de mercado; benchmark §13.4 re-ejecutado (gate PASA) y sus avisos revisados uno a uno",
   "profiles": {
+    "colombia_casera": {
+      "accepted": [
+        "Cultivares dominicanos (14,7 %): yuca, plátano, arracacha, auyama son producto colombiano corriente.",
+        "Jugo de lulo y palmito con limón (< 40 kcal): snacks reales de bajo aporte."
+      ],
+      "decisions": [
+        "Alérgenos: el matcher del registry no reconocía plurales (sardinas, fideos, almejas) ni la salsa de soya como gluten: corregido y recompilado; cero clases sin marcar en las 6 bibliotecas (verificado con un chequeo independiente por constituyente).",
+        "Raciones: meriendas > 450 kcal reasignadas a almuerzo/cena; almuerzos < 260 kcal y cenas < 180 kcal completados con base o proteína; almuerzos > 1.100 kcal reducidos.",
+        "Sodio: recortados los constituyentes salados de los platos > 1.800 mg/ración (cecina, chicharrón, jamón de cocinar, chuletas ahumadas, embutidos de la fabada).",
+        "Nombre ↔ constituyentes verificado en las 516 plantillas: dos incoherencias corregidas (sancocho «de pollo» hecho con res; ensaladas «con atún» hechas con sardinas).",
+        "Bandeja paisa «aligerada» estaba en 1.265 kcal: fríjol 120→80 g, arroz 80→60 g, chicharrón 40→25 g, res 100→90 g.",
+        "Chicharrón con arepa: 100→60 g; palmito con camarones + arroz; sopa de verduras con pollo a 140 g de pollo.",
+        "[2026-09-06 · P1-GAP-DISHES-VEG] Platos añadidos para los dos huecos que midió el embudo de cobertura (backend/docs/coverage_funnel.md): cenas veganas y desayunos sin lácteos ni huevo. Revisión automática de lo añadido: todos los constituyentes resuelven contra el catálogo de su biblioteca (cero excluidos nuevos), las franjas respetan la regla editorial de base de almidón —el plato cuya identidad es el arroz se declaró almuerzo, el guiso servido con arroz declara base legumbre—, y ninguno introduce lácteo, huevo ni marisco. Corregido además el etiquetado de alérgenos: «Leche de coco» y «Mantequilla de maní» se declaraban LÁCTEOS.",
+        "Tanda vegana (ARQ27-P1-03, 89 platos): tofu firme, soya texturizada, leche de soya y edamame eran filas del catálogo con CERO usos como constituyente; ahora sostienen recetas en las 6 bibliotecas. Preflight por plato ANTES de escribir: cada ingrediente resuelve contra el catálogo vivo, no viola la dieta vegana, se vende en el mercado de su biblioteca y trae gramos > 0 — una plantilla con un ingrediente sin resolver nacería `partial` y el selector no la ofrecería nunca.",
+        "Piso de variedad: el mínimo de candidatos veganos por franja pasó de 1-4 a 7 en las seis cocinas (7 ocasiones sin repetir ⇒ 7 recetas distintas). Segunda tanda de desayunos sin gluten porque `Avena` lleva esa clase y un vegano celíaco tenía UN desayuno en PR, ES y US.",
+        "Ninguna ola queda cubierta exclusivamente con soja: quitando la soja siguen quedando ≥5 desayunos veganos en las seis cocinas (test).",
+        "«Longaniza santarrosana con papa» usaba `Longaniza dominicana` teniendo `Chorizo santarrosano`. Corregidos ingrediente y nombre («Chorizo santarrosano con papa»)."
+      ],
+      "snapshot_hash": "ff2c3939677ea2d7fa95df674f6bf7dbd5e4a5ca54969e6097594f72a23be93b"
+    },
     "dominican_criolla": {
-      "snapshot_hash": "612e9b35c6c3605b0ba324595d9c2c5c3c2bfef06a01133dd615f3d2392e8975",
+      "accepted": [
+        "Arenque desmenuzado (1.700 mg Na): plato tradicional de arenque salado, se mantiene; el motor lo marca sodium_high.",
+        "Molondrones guisados (250 kcal) y sopa-crema de auyama (283 kcal): platos ligeros reales; el generador ajusta porciones a los macros del día."
+      ],
       "decisions": [
         "Alérgenos: el matcher del registry no reconocía plurales (sardinas, fideos, almejas) ni la salsa de soya como gluten: corregido y recompilado; cero clases sin marcar en las 6 bibliotecas (verificado con un chequeo independiente por constituyente).",
         "Raciones: meriendas > 450 kcal reasignadas a almuerzo/cena; almuerzos < 260 kcal y cenas < 180 kcal completados con base o proteína; almuerzos > 1.100 kcal reducidos.",
@@ -20,32 +40,20 @@
         "Las 10 plantillas nuevas llevan constituyentes inline (ganan a la tabla curada); la tabla sigue siendo solo curación a mano (87).",
         "«Sopa de habichuelas negras con casabe» → «Habichuelas negras guisadas con casabe» (el SSOT de franjas no admite «sopa» en cena).",
         "Tanda 2 de despensa duradera (semanas 3-4 sin congelador): calibrados los días de refrigerado duradero (cebolla/ajo 60, papa/auyama/repollo/zanahoria/quesos curados 45, cítricos/tortillas/batata/ñame 30); +12 platos DO; cobertura al día 30 sin congelador ≥ 7 por franja en las seis bibliotecas.",
-        "[2026-09-06 · P1-GAP-DISHES-VEG] Platos añadidos para los dos huecos que midió el embudo de cobertura (backend/docs/coverage_funnel.md): cenas veganas y desayunos sin lácteos ni huevo. Revisión automática de lo añadido: todos los constituyentes resuelven contra el catálogo de su biblioteca (cero excluidos nuevos), las franjas respetan la regla editorial de base de almidón —el plato cuya identidad es el arroz se declaró almuerzo, el guiso servido con arroz declara base legumbre—, y ninguno introduce lácteo, huevo ni marisco. Corregido además el etiquetado de alérgenos: «Leche de coco» y «Mantequilla de maní» se declaraban LÁCTEOS."
+        "[2026-09-06 · P1-GAP-DISHES-VEG] Platos añadidos para los dos huecos que midió el embudo de cobertura (backend/docs/coverage_funnel.md): cenas veganas y desayunos sin lácteos ni huevo. Revisión automática de lo añadido: todos los constituyentes resuelven contra el catálogo de su biblioteca (cero excluidos nuevos), las franjas respetan la regla editorial de base de almidón —el plato cuya identidad es el arroz se declaró almuerzo, el guiso servido con arroz declara base legumbre—, y ninguno introduce lácteo, huevo ni marisco. Corregido además el etiquetado de alérgenos: «Leche de coco» y «Mantequilla de maní» se declaraban LÁCTEOS.",
+        "Tanda vegana (ARQ27-P1-03, 89 platos): tofu firme, soya texturizada, leche de soya y edamame eran filas del catálogo con CERO usos como constituyente; ahora sostienen recetas en las 6 bibliotecas. Preflight por plato ANTES de escribir: cada ingrediente resuelve contra el catálogo vivo, no viola la dieta vegana, se vende en el mercado de su biblioteca y trae gramos > 0 — una plantilla con un ingrediente sin resolver nacería `partial` y el selector no la ofrecería nunca.",
+        "Piso de variedad: el mínimo de candidatos veganos por franja pasó de 1-4 a 7 en las seis cocinas (7 ocasiones sin repetir ⇒ 7 recetas distintas). Segunda tanda de desayunos sin gluten porque `Avena` lleva esa clase y un vegano celíaco tenía UN desayuno en PR, ES y US.",
+        "Ninguna ola queda cubierta exclusivamente con soja: quitando la soja siguen quedando ≥5 desayunos veganos en las seis cocinas (test).",
+        "«Sancocho vegano de víveres con soya texturizada» movido de cena a ALMUERZO: el SSOT de franjas de la biblioteca dominicana no admite sopa/sancocho en desayuno ni cena (misma decisión que en la revisión anterior con «Sopa de habichuelas negras con casabe»). Su cena la cubre ahora «Berenjena guisada con soya texturizada y batata».",
+        "Cuatro plantillas dejan de figurar íntegras (ARQ27-P0-02): la batida de zapote, el chillo, el salami de pavo y las frutas con menta declaran ingredientes sin resolver y ahora son `partial`. Las dos del medio son SUSTITUCIONES declaradas: el título promete un alimento que la receta compilada no tiene, y un plato sustituido necesita identidad propia, no un rótulo heredado."
       ],
-      "accepted": [
-        "Arenque desmenuzado (1.700 mg Na): plato tradicional de arenque salado, se mantiene; el motor lo marca sodium_high.",
-        "Molondrones guisados (250 kcal) y sopa-crema de auyama (283 kcal): platos ligeros reales; el generador ajusta porciones a los macros del día."
-      ]
-    },
-    "puertorico_criolla": {
-      "snapshot_hash": "b48bae9d80dd3e51425c7cb0473e926a94d69a8df872b490385d53d6dfeeb2e9",
-      "decisions": [
-        "Alérgenos: el matcher del registry no reconocía plurales (sardinas, fideos, almejas) ni la salsa de soya como gluten: corregido y recompilado; cero clases sin marcar en las 6 bibliotecas (verificado con un chequeo independiente por constituyente).",
-        "Raciones: meriendas > 450 kcal reasignadas a almuerzo/cena; almuerzos < 260 kcal y cenas < 180 kcal completados con base o proteína; almuerzos > 1.100 kcal reducidos.",
-        "Sodio: recortados los constituyentes salados de los platos > 1.800 mg/ración (cecina, chicharrón, jamón de cocinar, chuletas ahumadas, embutidos de la fabada).",
-        "Nombre ↔ constituyentes verificado en las 516 plantillas: dos incoherencias corregidas (sancocho «de pollo» hecho con res; ensaladas «con atún» hechas con sardinas).",
-        "Cinco almuerzos de 1.100-1.250 kcal (arroz con gandules y pernil, pernil con habichuelas, carne guisada, longaniza, habichuelas con calabaza): arroz 150→80 g y legumbre 100→70 g en seco.",
-        "Chicharrón 120→70 g y 100→60 g, jamón de cocinar 150→80 g, chuletas ahumadas 150→110 g (sodio 1.800-2.200 mg → bajo 1.500).",
-        "Pescado al horno con sofrito (168 kcal) completado con yautía; tortilla de huevo a 3 huevos; camarones salteados con batata.",
-        "[2026-09-06 · P1-GAP-DISHES-VEG] Platos añadidos para los dos huecos que midió el embudo de cobertura (backend/docs/coverage_funnel.md): cenas veganas y desayunos sin lácteos ni huevo. Revisión automática de lo añadido: todos los constituyentes resuelven contra el catálogo de su biblioteca (cero excluidos nuevos), las franjas respetan la regla editorial de base de almidón —el plato cuya identidad es el arroz se declaró almuerzo, el guiso servido con arroz declara base legumbre—, y ninguno introduce lácteo, huevo ni marisco. Corregido además el etiquetado de alérgenos: «Leche de coco» y «Mantequilla de maní» se declaraban LÁCTEOS."
-      ],
-      "accepted": [
-        "Yuca, plátano, ñame, auyama, guineo verde marcados «cultivar dominicano» (16,5 %): producto corriente en Puerto Rico, no es riesgo de disponibilidad.",
-        "Morcilla a la plancha (13 g de proteína): la morcilla es así; plato ocasional."
-      ]
+      "snapshot_hash": "979a994899f59c2097212610c7c137e43f6145274624a4459202a3e7b45d4488"
     },
     "mexico_casera": {
-      "snapshot_hash": "addcb39fadd64ca308d21540e4bb65150f873620f6f994a97e8ea9ceb03ade4a",
+      "accepted": [
+        "Pozole ligero de cerdo usa maíz en granos del catálogo (no hay maíz pozolero): adaptación declarada; el LLM adapta.",
+        "Pepino con chile y limón (35 kcal): snack real de bajo aporte; se conserva."
+      ],
       "decisions": [
         "Alérgenos: el matcher del registry no reconocía plurales (sardinas, fideos, almejas) ni la salsa de soya como gluten: corregido y recompilado; cero clases sin marcar en las 6 bibliotecas (verificado con un chequeo independiente por constituyente).",
         "Raciones: meriendas > 450 kcal reasignadas a almuerzo/cena; almuerzos < 260 kcal y cenas < 180 kcal completados con base o proteína; almuerzos > 1.100 kcal reducidos.",
@@ -54,31 +62,41 @@
         "Cecina con nopales: 150→70 g de cecina + frijoles negros (3.179 mg Na → ~1.500); machaca de cecina 80→50 g.",
         "Sopa de verduras con pollo y epazote: pollo 150 g + papa; huachinango al horno + arroz; avena con canela y plátano solo en desayuno.",
         "«Ensalada de jícama con chile y limón» eliminada (duplicado del snack «Jícama con chile y limón»); ensalada de nopales con queso solo en cena.",
-        "[2026-09-06 · P1-GAP-DISHES-VEG] Platos añadidos para los dos huecos que midió el embudo de cobertura (backend/docs/coverage_funnel.md): cenas veganas y desayunos sin lácteos ni huevo. Revisión automática de lo añadido: todos los constituyentes resuelven contra el catálogo de su biblioteca (cero excluidos nuevos), las franjas respetan la regla editorial de base de almidón —el plato cuya identidad es el arroz se declaró almuerzo, el guiso servido con arroz declara base legumbre—, y ninguno introduce lácteo, huevo ni marisco. Corregido además el etiquetado de alérgenos: «Leche de coco» y «Mantequilla de maní» se declaraban LÁCTEOS."
+        "[2026-09-06 · P1-GAP-DISHES-VEG] Platos añadidos para los dos huecos que midió el embudo de cobertura (backend/docs/coverage_funnel.md): cenas veganas y desayunos sin lácteos ni huevo. Revisión automática de lo añadido: todos los constituyentes resuelven contra el catálogo de su biblioteca (cero excluidos nuevos), las franjas respetan la regla editorial de base de almidón —el plato cuya identidad es el arroz se declaró almuerzo, el guiso servido con arroz declara base legumbre—, y ninguno introduce lácteo, huevo ni marisco. Corregido además el etiquetado de alérgenos: «Leche de coco» y «Mantequilla de maní» se declaraban LÁCTEOS.",
+        "Tanda vegana (ARQ27-P1-03, 89 platos): tofu firme, soya texturizada, leche de soya y edamame eran filas del catálogo con CERO usos como constituyente; ahora sostienen recetas en las 6 bibliotecas. Preflight por plato ANTES de escribir: cada ingrediente resuelve contra el catálogo vivo, no viola la dieta vegana, se vende en el mercado de su biblioteca y trae gramos > 0 — una plantilla con un ingrediente sin resolver nacería `partial` y el selector no la ofrecería nunca.",
+        "Piso de variedad: el mínimo de candidatos veganos por franja pasó de 1-4 a 7 en las seis cocinas (7 ocasiones sin repetir ⇒ 7 recetas distintas). Segunda tanda de desayunos sin gluten porque `Avena` lleva esa clase y un vegano celíaco tenía UN desayuno en PR, ES y US.",
+        "Ninguna ola queda cubierta exclusivamente con soja: quitando la soja siguen quedando ≥5 desayunos veganos en las seis cocinas (test).",
+        "«Frijoles charros con longaniza» usaba `Longaniza dominicana` teniendo `Chorizo mexicano` en el catálogo — el nombre del plato ya decía «charros». Corregidos ingrediente Y nombre («Frijoles charros con chorizo»): un título que promete longaniza y sirve chorizo es la misma clase de defecto que el motor persigue en los planes vivos."
       ],
-      "accepted": [
-        "Pozole ligero de cerdo usa maíz en granos del catálogo (no hay maíz pozolero): adaptación declarada; el LLM adapta.",
-        "Pepino con chile y limón (35 kcal): snack real de bajo aporte; se conserva."
-      ]
+      "snapshot_hash": "8d9b336f312102a82dbe7d0b25c48acd74429f800704b9d62b56d0d7a75f1ede"
     },
-    "colombia_casera": {
-      "snapshot_hash": "f249d7605a15eee07721d1c38cbc03653e95c5978bed04c31d104b5b0f6236d2",
+    "puertorico_criolla": {
+      "accepted": [
+        "Yuca, plátano, ñame, auyama, guineo verde marcados «cultivar dominicano» (16,5 %): producto corriente en Puerto Rico, no es riesgo de disponibilidad.",
+        "Morcilla a la plancha (13 g de proteína): la morcilla es así; plato ocasional.",
+        "Los avisos «cultivar dominicano» de las altas nuevas: ver la decisión de arriba."
+      ],
       "decisions": [
         "Alérgenos: el matcher del registry no reconocía plurales (sardinas, fideos, almejas) ni la salsa de soya como gluten: corregido y recompilado; cero clases sin marcar en las 6 bibliotecas (verificado con un chequeo independiente por constituyente).",
         "Raciones: meriendas > 450 kcal reasignadas a almuerzo/cena; almuerzos < 260 kcal y cenas < 180 kcal completados con base o proteína; almuerzos > 1.100 kcal reducidos.",
         "Sodio: recortados los constituyentes salados de los platos > 1.800 mg/ración (cecina, chicharrón, jamón de cocinar, chuletas ahumadas, embutidos de la fabada).",
         "Nombre ↔ constituyentes verificado en las 516 plantillas: dos incoherencias corregidas (sancocho «de pollo» hecho con res; ensaladas «con atún» hechas con sardinas).",
-        "Bandeja paisa «aligerada» estaba en 1.265 kcal: fríjol 120→80 g, arroz 80→60 g, chicharrón 40→25 g, res 100→90 g.",
-        "Chicharrón con arepa: 100→60 g; palmito con camarones + arroz; sopa de verduras con pollo a 140 g de pollo.",
-        "[2026-09-06 · P1-GAP-DISHES-VEG] Platos añadidos para los dos huecos que midió el embudo de cobertura (backend/docs/coverage_funnel.md): cenas veganas y desayunos sin lácteos ni huevo. Revisión automática de lo añadido: todos los constituyentes resuelven contra el catálogo de su biblioteca (cero excluidos nuevos), las franjas respetan la regla editorial de base de almidón —el plato cuya identidad es el arroz se declaró almuerzo, el guiso servido con arroz declara base legumbre—, y ninguno introduce lácteo, huevo ni marisco. Corregido además el etiquetado de alérgenos: «Leche de coco» y «Mantequilla de maní» se declaraban LÁCTEOS."
+        "Cinco almuerzos de 1.100-1.250 kcal (arroz con gandules y pernil, pernil con habichuelas, carne guisada, longaniza, habichuelas con calabaza): arroz 150→80 g y legumbre 100→70 g en seco.",
+        "Chicharrón 120→70 g y 100→60 g, jamón de cocinar 150→80 g, chuletas ahumadas 150→110 g (sodio 1.800-2.200 mg → bajo 1.500).",
+        "Pescado al horno con sofrito (168 kcal) completado con yautía; tortilla de huevo a 3 huevos; camarones salteados con batata.",
+        "[2026-09-06 · P1-GAP-DISHES-VEG] Platos añadidos para los dos huecos que midió el embudo de cobertura (backend/docs/coverage_funnel.md): cenas veganas y desayunos sin lácteos ni huevo. Revisión automática de lo añadido: todos los constituyentes resuelven contra el catálogo de su biblioteca (cero excluidos nuevos), las franjas respetan la regla editorial de base de almidón —el plato cuya identidad es el arroz se declaró almuerzo, el guiso servido con arroz declara base legumbre—, y ninguno introduce lácteo, huevo ni marisco. Corregido además el etiquetado de alérgenos: «Leche de coco» y «Mantequilla de maní» se declaraban LÁCTEOS.",
+        "Tanda vegana (ARQ27-P1-03, 89 platos): tofu firme, soya texturizada, leche de soya y edamame eran filas del catálogo con CERO usos como constituyente; ahora sostienen recetas en las 6 bibliotecas. Preflight por plato ANTES de escribir: cada ingrediente resuelve contra el catálogo vivo, no viola la dieta vegana, se vende en el mercado de su biblioteca y trae gramos > 0 — una plantilla con un ingrediente sin resolver nacería `partial` y el selector no la ofrecería nunca.",
+        "Piso de variedad: el mínimo de candidatos veganos por franja pasó de 1-4 a 7 en las seis cocinas (7 ocasiones sin repetir ⇒ 7 recetas distintas). Segunda tanda de desayunos sin gluten porque `Avena` lleva esa clase y un vegano celíaco tenía UN desayuno en PR, ES y US.",
+        "Ninguna ola queda cubierta exclusivamente con soja: quitando la soja siguen quedando ≥5 desayunos veganos en las seis cocinas (test).",
+        "Las altas de PR (yuca hervida, tostones, batata asada, plátano maduro) heredan el aviso «cultivar dominicano» del catálogo, igual que las veinte plantillas puertorriqueñas que ya lo tenían. Es un marcador de PROCEDENCIA de la fila, no una falta de disponibilidad: yuca, plátano y batata son alimentos puertorriqueños. Se acepta, como en la revisión anterior."
       ],
-      "accepted": [
-        "Cultivares dominicanos (14,7 %): yuca, plátano, arracacha, auyama son producto colombiano corriente.",
-        "Jugo de lulo y palmito con limón (< 40 kcal): snacks reales de bajo aporte."
-      ]
+      "snapshot_hash": "c266bae6486960dd6b428da1feb0b367f68c6423853e11487b9937edb43d02d7"
     },
     "spain_mediterranea": {
-      "snapshot_hash": "0e8fc02437f203d942d3a53acc8c76ff421dd4f6142805fd10500feb4f1f2c4a",
+      "accepted": [
+        "19 platos con curados (jamón serrano/ibérico, chorizo, panceta): identidad de la cocina; el registry los marca processed_meat y el motor clínico decide por perfil.",
+        "Pistos, gazpacho y ensaladas de 210-300 kcal: platos ligeros reales de almuerzo/cena; el generador escala porciones."
+      ],
       "decisions": [
         "Alérgenos: el matcher del registry no reconocía plurales (sardinas, fideos, almejas) ni la salsa de soya como gluten: corregido y recompilado; cero clases sin marcar en las 6 bibliotecas (verificado con un chequeo independiente por constituyente).",
         "Raciones: meriendas > 450 kcal reasignadas a almuerzo/cena; almuerzos < 260 kcal y cenas < 180 kcal completados con base o proteína; almuerzos > 1.100 kcal reducidos.",
@@ -87,15 +105,19 @@
         "«Percebes al vapor con limón» eliminado (140 kcal, 1.600 mg Na, marisco de lujo sin valor cotidiano).",
         "Espárragos a la plancha, champiñones al ajillo y boquerones en vinagre pasan a merienda (son tapas, no cenas); ensaladilla, empanada gallega, croquetas y coca salen de merienda (450-675 kcal).",
         "Menestra y vieiras completadas con papa; fabada: morcilla 80→50 g, panceta 60→40 g, chorizo 50→40 g.",
-        "Ensaladilla rusa y ensalada de judías «con atún» llevaban sardinas: ahora atún."
+        "Ensaladilla rusa y ensalada de judías «con atún» llevaban sardinas: ahora atún.",
+        "Tanda vegana (ARQ27-P1-03, 89 platos): tofu firme, soya texturizada, leche de soya y edamame eran filas del catálogo con CERO usos como constituyente; ahora sostienen recetas en las 6 bibliotecas. Preflight por plato ANTES de escribir: cada ingrediente resuelve contra el catálogo vivo, no viola la dieta vegana, se vende en el mercado de su biblioteca y trae gramos > 0 — una plantilla con un ingrediente sin resolver nacería `partial` y el selector no la ofrecería nunca.",
+        "Piso de variedad: el mínimo de candidatos veganos por franja pasó de 1-4 a 7 en las seis cocinas (7 ocasiones sin repetir ⇒ 7 recetas distintas). Segunda tanda de desayunos sin gluten porque `Avena` lleva esa clase y un vegano celíaco tenía UN desayuno en PR, ES y US.",
+        "Ninguna ola queda cubierta exclusivamente con soja: quitando la soja siguen quedando ≥5 desayunos veganos en las seis cocinas (test).",
+        "Cena «Salteado de edamame con espárragos y arroz integral» → «…con patata»: arroz como BASE no va en cena (regla dura del juez culinario). Se cambió el acompañamiento en vez de recolocar la etiqueta — mover el rótulo habría mentido sobre lo que el plato es."
       ],
-      "accepted": [
-        "19 platos con curados (jamón serrano/ibérico, chorizo, panceta): identidad de la cocina; el registry los marca processed_meat y el motor clínico decide por perfil.",
-        "Pistos, gazpacho y ensaladas de 210-300 kcal: platos ligeros reales de almuerzo/cena; el generador escala porciones."
-      ]
+      "snapshot_hash": "cdea752fbf095116ba042337ad11ebf0eeb120a8a801158206645df06684af05"
     },
     "us_everyday": {
-      "snapshot_hash": "6c4b84d5453a8814aebfbe5393982cf000c466f175eefe0ae4358d93676f4527",
+      "accepted": [
+        "«Tacos de pescado» y «Tacos con sazonador»: el taco es cotidiano en EE. UU. (Tex-Mex); contaminación léxica aceptada (2 de 81, bajo el 3 %).",
+        "«Tacos de soya texturizada con repollo» dispara el aviso de léxico mexicano, igual que los dos platos de tacos que la biblioteca estadounidense YA tenía y que la revisión anterior aceptó: el taco es comida corriente en Estados Unidos. Se conserva, por coherencia con esa decisión."
+      ],
       "decisions": [
         "Alérgenos: el matcher del registry no reconocía plurales (sardinas, fideos, almejas) ni la salsa de soya como gluten: corregido y recompilado; cero clases sin marcar en las 6 bibliotecas (verificado con un chequeo independiente por constituyente).",
         "Raciones: meriendas > 450 kcal reasignadas a almuerzo/cena; almuerzos < 260 kcal y cenas < 180 kcal completados con base o proteína; almuerzos > 1.100 kcal reducidos.",
@@ -103,11 +125,16 @@
         "Nombre ↔ constituyentes verificado en las 516 plantillas: dos incoherencias corregidas (sancocho «de pollo» hecho con res; ensaladas «con atún» hechas con sardinas).",
         "Seis bajas: «Yogur griego con duraznos» (duplicado exacto), «Queso en hebras con vegetales», «Ensalada de huevos rellenos», «Bolitas de papa con salchichas», «Pepperoni con queso provolone y pan», «Salchichas con frijoles horneados» (sin valor nutricional o > 1.900 mg Na).",
         "Ensalada de repollo con pollo + aguacate y maíz; camarones a la parrilla + arroz integral; «Ensalada verde con pollo y nueces pecanas» (antes sin proteína); salmón con espárragos + papa; chili en lata 250→200 g; jamón del sándwich 100→70 g.",
-        "[2026-09-06 · P1-GAP-DISHES-VEG] Platos añadidos para los dos huecos que midió el embudo de cobertura (backend/docs/coverage_funnel.md): cenas veganas y desayunos sin lácteos ni huevo. Revisión automática de lo añadido: todos los constituyentes resuelven contra el catálogo de su biblioteca (cero excluidos nuevos), las franjas respetan la regla editorial de base de almidón —el plato cuya identidad es el arroz se declaró almuerzo, el guiso servido con arroz declara base legumbre—, y ninguno introduce lácteo, huevo ni marisco. Corregido además el etiquetado de alérgenos: «Leche de coco» y «Mantequilla de maní» se declaraban LÁCTEOS."
+        "[2026-09-06 · P1-GAP-DISHES-VEG] Platos añadidos para los dos huecos que midió el embudo de cobertura (backend/docs/coverage_funnel.md): cenas veganas y desayunos sin lácteos ni huevo. Revisión automática de lo añadido: todos los constituyentes resuelven contra el catálogo de su biblioteca (cero excluidos nuevos), las franjas respetan la regla editorial de base de almidón —el plato cuya identidad es el arroz se declaró almuerzo, el guiso servido con arroz declara base legumbre—, y ninguno introduce lácteo, huevo ni marisco. Corregido además el etiquetado de alérgenos: «Leche de coco» y «Mantequilla de maní» se declaraban LÁCTEOS.",
+        "Tanda vegana (ARQ27-P1-03, 89 platos): tofu firme, soya texturizada, leche de soya y edamame eran filas del catálogo con CERO usos como constituyente; ahora sostienen recetas en las 6 bibliotecas. Preflight por plato ANTES de escribir: cada ingrediente resuelve contra el catálogo vivo, no viola la dieta vegana, se vende en el mercado de su biblioteca y trae gramos > 0 — una plantilla con un ingrediente sin resolver nacería `partial` y el selector no la ofrecería nunca.",
+        "Piso de variedad: el mínimo de candidatos veganos por franja pasó de 1-4 a 7 en las seis cocinas (7 ocasiones sin repetir ⇒ 7 recetas distintas). Segunda tanda de desayunos sin gluten porque `Avena` lleva esa clase y un vegano celíaco tenía UN desayuno en PR, ES y US.",
+        "Ninguna ola queda cubierta exclusivamente con soja: quitando la soja siguen quedando ≥5 desayunos veganos en las seis cocinas (test).",
+        "Cena «Salteado de edamame con brócoli y arroz integral» → «…con batata», por la misma regla de arroz en cena."
       ],
-      "accepted": [
-        "«Tacos de pescado» y «Tacos con sazonador»: el taco es cotidiano en EE. UU. (Tex-Mex); contaminación léxica aceptada (2 de 81, bajo el 3 %)."
-      ]
+      "snapshot_hash": "1b9755d3c6ffba45705a743631fa7ca2c0754bfe2b72415f5668df07367ff3ce"
     }
-  }
+  },
+  "reviewer": "Claude (revisión curatorial delegada por el dueño)",
+  "schema_version": 1,
+  "scope": "las 6 bibliotecas compiladas (data/registry/dish_registry_<lib>_v1.json): nombre, franja, técnica, constituyentes, nutrición por ración, alérgenos, sodio, procesados, duplicados y léxico de otra cocina · repetida el 06-sep tras las 89 altas veganas de ARQ27-P1-03"
 }

@@ -460,7 +460,14 @@ def test_h_previous_provider_name_absent_from_repo():
     import pathlib
     root = pathlib.Path(__file__).resolve().parent.parent
     token = "deep" + "seek"
-    skip = {"venv", ".git", "migrations", "__pycache__", ".pytest_cache", "node_modules", "tests"}
+    # [ARQ27 · 2026-09-06] `venv-test/` (y `.venv/`, `test_venv/`) NO casaban con `"venv"`: `p.parts`
+    # trae el nombre completo del directorio. El guard entraba en el entorno virtual local y acusaba a
+    # `langchain`, `langchain_core`, `langchain_openai` y `langsmith` de mencionar al proveedor
+    # anterior — cuatro paquetes de terceros. Verde en CI (que no tiene venv en el árbol) y ROJO en
+    # local, que es la forma más cara de fallar: parece una regresión del repo y no lo es. La
+    # docstring ya declaraba `venv/` fuera de alcance; esto es lo que hacía falta para cumplirla.
+    skip = {"venv", "venv-test", ".venv", "test_venv", ".git", "migrations", "__pycache__",
+            ".pytest_cache", "node_modules", "tests"}
     exts = {".py", ".md", ".yml", ".yaml", ".txt", ".example", ".toml", ".ini", ".cfg", ".json"}
     ofensores = []
     for p in root.rglob("*"):

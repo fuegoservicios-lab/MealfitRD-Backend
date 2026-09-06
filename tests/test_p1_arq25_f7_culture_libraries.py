@@ -15,7 +15,12 @@ _BACKEND = Path(__file__).resolve().parents[1]
 _DATA = _BACKEND / "data"
 
 BAR = {"total": 80, "desayuno": 18, "almuerzo": 28, "cena": 22, "merienda": 16, "proteins": 10, "techniques": 12}
-VOCAB_PROTEIN = {"none", "huevo", "pollo", "res", "cerdo", "pescado", "camarones", "atun", "pavo", "chivo", "queso", "legumbre", "mixta"}
+# [ARQ27-P1-03 · 2026-09-06] `tofu` entra al vocabulario: Tofu firme era una fila del catálogo con
+# CERO usos como constituyente mientras el pool vegano programaba una familia `Tofu` que ninguna
+# plantilla podía servir. Nombra un alimento —no una clase, como `legumbre`—, así que el selector la
+# resuelve por etiqueta y no necesita puente.
+VOCAB_PROTEIN = {"none", "huevo", "pollo", "res", "cerdo", "pescado", "camarones", "atun", "pavo",
+                 "chivo", "queso", "legumbre", "mixta", "tofu"}
 SLOTS = {"desayuno", "almuerzo", "cena", "merienda"}
 DROPPED_US = {"Malvaviscos con galletas Graham y cacao", "Pretzels con mostaza", "Miel con nueces pecanas",
               "Bolitas de papa con salsa barbacoa", "Papas ralladas fritas con kétchup"}
@@ -61,7 +66,14 @@ def test_c_snapshots_compilados_con_todo_resuelto(lib):
     snap = json.loads(p.read_text(encoding="utf-8"))
     st = snap["stats"]
     assert st["templates"] == len(_templates(lib)), f"[{lib}] snapshot desfasado respecto a la biblioteca: recompila"
-    assert st["ok"] == st["templates"] and st["excluded"] == 0, f"[{lib}] plantillas no-ok en el snapshot"
+    assert st["excluded"] == 0, f"[{lib}] plantillas excluidas en el snapshot"
+    # [ARQ27-P0-02 · 2026-09-06] Las 4 de DO que este test ya nombraba abajo («solo los 4 declarados
+    # sin resolver») figuraban `ok` teniendo exclusiones dentro: el compilador solo miraba
+    # `not_in_catalog` para el estado. Ahora son `partial`, que es lo que siempre fueron — la Batida
+    # de zapote no lleva zapote. El test decía la verdad en su comentario y la contradecía en su assert.
+    esperados_parciales = 4 if lib == "do" else 0
+    assert st["ok"] == st["templates"] - esperados_parciales, f"[{lib}] plantillas no-ok en el snapshot"
+    assert st["partial"] == esperados_parciales, f"[{lib}] parciales: {st['partial']}"
     if lib == "do":
         assert st["resolution_pct"] >= 99.0, "DO: solo los 4 declarados sin resolver (Menta, Zapote, Chillo, Salami de pavo)"
     else:

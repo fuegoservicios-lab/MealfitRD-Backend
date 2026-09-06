@@ -66,7 +66,13 @@ _SLOT_ES = {"breakfast": "desayuno", "lunch": "almuerzo", "dinner": "cena", "sna
 
 # Familias de proteína por dieta (nombres tal como aparecen en el catálogo/seeder).
 _FAMILIES_BY_DIET = {
-    "vegan": ("Lentejas", "Garbanzos", "Habichuelas", "Tofu", "Guandules"),
+    # [ARQ27-P1-03 · 2026-09-06] «Soya texturizada» y «Edamame» son los NOMBRES DE FILA del catálogo,
+    # a propósito: se resuelven contra las plantillas nuevas por el puente de etiqueta genérica
+    # (`legumbre`, ARQ27-P1-01) mirando los constituyentes, sin inventar tokens de familia. Escribir
+    # aquí un «Soya» a secas habría hecho que «Salsa de soya» —un condimento de 8 g de proteína—
+    # pasara por proteína protagonista del día.
+    "vegan": ("Lentejas", "Garbanzos", "Habichuelas", "Tofu", "Guandules",
+              "Soya texturizada", "Edamame"),
     "vegetarian": ("Huevo", "Queso", "Lentejas", "Garbanzos", "Yogur", "Habichuelas"),
     "pescatarian": ("Pescado", "Atún", "Huevo", "Camarones", "Lentejas", "Queso"),
     "_default": ("Pollo", "Pescado", "Huevo", "Res", "Cerdo", "Atún", "Pavo", "Lentejas", "Habichuelas"),
@@ -403,6 +409,35 @@ def _dur_kwargs(effective: Optional[dict], day_index) -> dict:
         return {}
 
 
+# [ARQ27-P0-03 · 2026-09-06] Qué nutriente EXIGE conocer cada condición clínica. La regla del gap es
+# «bloquea solo los escenarios que exigen ese dato»: un fósforo desconocido no puede parar el plan de
+# alguien a quien el fósforo no le condiciona nada, pero sí tiene que parar el de un perfil renal —
+# a quien hoy se le presentaba como «fósforo bajo» un plato que nadie había medido.
+_CONDITION_REQUIRED_NUTRIENTS = {
+    "renal": ("phosphorus_mg", "potassium_mg"),
+    "hta": ("sodium_mg",),
+}
+
+
+def required_nutrients(effective: Optional[dict]) -> tuple:
+    """Nutrientes cuyo dato el perfil no puede permitirse desconocer. Resuelve las condiciones con el
+    registry SSOT (`condition_rules.detect_active_rules`), no con una tabla de términos propia.
+    Fail-open a `()`: sin señal clínica, el selector conserva su conducta."""
+    try:
+        conds = ((effective or {}).get("clinical") or {}).get("conditions") or []
+        if not conds:
+            return ()
+        from condition_rules import detect_active_rules
+        ids = {r.id for r in detect_active_rules({"medicalConditions": list(conds)})}
+        out = []
+        for cid in sorted(ids):
+            out.extend(_CONDITION_REQUIRED_NUTRIENTS.get(cid, ()))
+        return tuple(sorted(set(out)))
+    except Exception as e:
+        logger.debug(f"[ARQ27-P0-03] no se pudieron resolver los nutrientes exigidos: {e!r}")
+        return ()
+
+
 def batch_cooking_mode(effective: Optional[dict]) -> str:
     """[P1-STEP14-SHOPPING-COOKING · 2026-09-05] `shopping.batch_cooking` ∈ never|sometimes|often ('' si no hay política).
     El paso 14 del asistente lo guardaba en la política y NADIE lo leía: elegir «Cocino por tandas» no cambiaba el plan."""
@@ -451,6 +486,11 @@ def _registry_block_for_country(country: Optional[str], *, effective: Optional[d
         if not h:
             return {"snapshot_hash": None, "version": dr.registry_snapshot_version(), "candidates": {}}
         allergies = [str(a) for a in (((effective or {}).get("diet") or {}).get("allergies") or [])]
+        # [ARQ27-P0-01] La dieta viaja al selector. Sin ella el blueprint fijaba candidatos que la
+        # dieta del propio perfil prohíbe (67,4 % en la medición del 06-sep) y el prompt los recitaba.
+        diet = ((effective or {}).get("diet") or {}).get("type")
+        req_nutr = required_nutrients(effective)  # [ARQ27-P0-03]
+        mkt = (effective or {}).get("market_country")  # [ARQ27-P1-07] el MERCADO, no la cocina (I16)
         cands = {}
         hashes = {}
         for d in (days_out or [])[:60]:
@@ -463,6 +503,8 @@ def _registry_block_for_country(country: Optional[str], *, effective: Optional[d
                 _c = _culture_country(_pid) if _pid else country
                 hashes[_c] = hashes.get(_c) or dr.registry_hash(_c)
                 ids = [c["template_id"] for c in dr.template_candidates(_c, slot, fam, k=3, exclude_allergens=allergies,
+                                                                         diet=diet, require_known_nutrients=req_nutr,
+                                                                         market_country=mkt,
                                                                          **_dur_kwargs(effective, d.get("day_index")))]
                 if ids:
                     cands[f"{d.get('day_index')}:{slot}"] = ids
@@ -496,6 +538,9 @@ def registry_prompt_lines(effective: Optional[dict], sl: Optional[dict] = None, 
         if not dr.registry_hash(country):
             return []
         allergies = [str(a) for a in ((eff.get("diet") or {}).get("allergies") or [])]
+        diet = (eff.get("diet") or {}).get("type")  # [ARQ27-P0-01] el bloque 📐 respeta la dieta
+        req_nutr = required_nutrients(eff)  # [ARQ27-P0-03]
+        mkt = eff.get("market_country")  # [ARQ27-P1-07] el MERCADO, no la cocina (I16)
         days = [d for d in ((sl or {}).get("days") or []) if isinstance(d, dict)]
         if day_index is not None:
             days = [d for d in days if int(d.get("day_index", -1)) == int(day_index)]
@@ -514,7 +559,8 @@ def registry_prompt_lines(effective: Optional[dict], sl: Optional[dict] = None, 
                 key = dr.canonical_slot_es(s_)  # el motor dice «dinner», el registry «cena»
                 _day_country = _culture_country(_cul.get(s_) or _cul.get(key)) if _cul else country
                 cands = dr.template_candidates(_day_country, key, fam, k=per_slot, exclude_allergens=allergies,
-                                               **_dur_kwargs(eff, d.get("day_index")))
+                                               diet=diet, require_known_nutrients=req_nutr,
+                                               market_country=mkt, **_dur_kwargs(eff, d.get("day_index")))
                 if cands:
                     parts.append(f"{_SLOT_ES.get(key, key)}: " + " | ".join(str(c.get("name")) for c in cands))
             if parts:
@@ -907,7 +953,11 @@ def fresh_beyond_horizon_issues(days: list, sl: Optional[dict], effective: Optio
                     code = ingredient_issue_beyond_horizon(label, abs_day, allow_frozen=abs_day < window)
                     if not code:
                         continue
-                    msg = (f"FRESCO SIN REPOSICIÓN: el día {abs_day + 1} del ciclo usa «{label[:40]}» y el usuario hace una sola compra "
+                    msg = (f"CONGELADO SIN CONGELADOR: el día {abs_day + 1} usa «{label[:40]}», que viene congelado de "
+                           f"fábrica, y el usuario hace una sola compra con congelador '{shopping.get('freezer_mode') or 'limited'}' "
+                           f"(cubre hasta el día {window}). Usa una versión no congelada o cambia el plato."
+                           if code == "frozen_needs_freezer" else
+                           f"FRESCO SIN REPOSICIÓN: el día {abs_day + 1} del ciclo usa «{label[:40]}» y el usuario hace una sola compra "
                            f"(sin frescos después del día {FRESH_HORIZON_DAYS})." if code == "fresh_beyond_horizon" else
                            f"PROTEÍNA FRESCA FUERA DE LA VENTANA DE CONGELACIÓN: el día {abs_day + 1} usa «{label[:40]}» y el congelador del "
                            f"usuario ({shopping.get('freezer_mode') or 'limited'}) solo cubre hasta el día {window}; usa huevo, legumbres, "
@@ -1021,7 +1071,12 @@ _FAMILY_TOKENS = {
     "atun": ("atun",), "pavo": ("pavo",), "yogur": ("yogur", "yogurt"),
     "lentejas": ("lenteja", "lentejas"), "garbanzos": ("garbanzo", "garbanzos"),
     "habichuelas": ("habichuela", "habichuelas", "frijol", "frijoles"), "tofu": ("tofu",),
-    "camarones": ("camaron", "camarones"), "guandules": ("guandul", "guandules"),
+    # [ARQ27-P1-01 · 2026-09-06] «gandul/gandules» SIN u además de con ella: el catálogo escribe
+    # `Gandules` (fila canónica, con «guandules» como ALIAS) y esta tabla solo tenía la forma con u,
+    # así que la familia `Guandules` —que el pool VEGANO programa— no alcanzaba ni una sola plantilla,
+    # ni las dos de `protein=legumbre` que la llevan dentro. Dos ortografías del mismo alimento (la
+    # dominicana con u, la puertorriqueña sin ella) y cada tabla se quedó con una.
+    "camarones": ("camaron", "camarones"), "guandules": ("guandul", "guandules", "gandul", "gandules"),
 }
 
 
@@ -1036,7 +1091,9 @@ _FAMILY_REPRESENTATIVE = {
     "pollo": "Pechuga de pollo", "pescado": "Filete de pescado blanco", "huevo": "Huevo", "res": "Carne de res",
     "cerdo": "Cerdo", "atun": "Atún en agua", "pavo": "Pechuga de pavo", "lentejas": "Lentejas",
     "habichuelas": "Habichuelas", "garbanzos": "Garbanzos", "tofu": "Tofu", "camarones": "Camarones",
-    "queso": "Queso blanco", "yogur": "Yogur natural", "guandules": "Guandules",
+    # [ARQ27-P1-01] `Gandules` es el nombre de la FILA del catálogo; «Guandules» es solo su alias.
+    # El representante se inyecta como ingrediente y tiene que resolver por el nombre canónico.
+    "queso": "Queso blanco", "yogur": "Yogur natural", "guandules": "Gandules",
 }
 
 
@@ -1061,6 +1118,36 @@ def _stem_word(t: str) -> str:
         return _stem(t)
     except Exception:
         return t
+
+
+# [ARQ27-P1-01 · 2026-09-06] `legumbre` es la ÚNICA etiqueta de CLASE del registry: de las diez
+# etiquetas `protein` que existen en los seis snapshots, nueve nombran el alimento (`pollo`, `huevo`,
+# `pescado`, `queso`, `res`, `atun`, `cerdo`, `camarones`, `pavo`) y ésta nombra una FAMILIA — dice
+# «esta receta se apoya en una legumbre», no CUÁL. El allocator, en cambio, programa la familia por su
+# nombre de alimento («Lentejas»), y de ahí que `family_matches('Lentejas', 'legumbre')` fuera False,
+# igual que Garbanzos, Habichuelas y Guandules: las 64 plantillas de legumbre quedaban INALCANZABLES
+# para el único perfil que las necesita.
+#
+# El puente se abre SOLO para las genéricas, y eso es load-bearing. Resolver SIEMPRE por
+# constituyentes haría que «caldo de pollo» dentro de un guiso de res colara la receta como familia
+# `pollo`; con las etiquetas específicas resolviendo por etiqueta, ese falso positivo no existe.
+_GENERIC_PROTEIN_TAGS = frozenset({"legumbre", "legumbres"})
+
+
+def family_matches_template(family, protein_tag, constituents=()) -> bool:
+    """¿Esta plantilla del registry sirve a la familia programada?
+
+    Idéntico a `family_matches` cuando la etiqueta nombra un alimento. Cuando la etiqueta es de CLASE
+    la pertenencia se resuelve MIRANDO DENTRO: casa si algún constituyente pertenece a la familia. Así
+    una receta de lentejas satisface el ancla «Lentejas» y una de garbanzos no — que es exactamente lo
+    que una etiqueta compartida por las dos no puede distinguir. tooltip-anchor: ARQ27-P1-01"""
+    if not family:
+        return True
+    if family_matches(family, protein_tag):
+        return True
+    if _norm(protein_tag) not in _GENERIC_PROTEIN_TAGS:
+        return False
+    return any(family_matches(family, c) for c in (constituents or ()) if c)
 
 
 def apply_slice_to_seeder_pools(sl: dict, chosen: list, pool: list, *, days: int, inject_missing: bool = False) -> list:

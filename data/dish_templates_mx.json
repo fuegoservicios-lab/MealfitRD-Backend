@@ -578,7 +578,7 @@
       ]
     },
     {
-      "name": "Frijoles charros con longaniza",
+      "name": "Frijoles charros con chorizo",
       "slots": [
         "almuerzo"
       ],
@@ -592,7 +592,7 @@
           "grams": 120
         },
         {
-          "name": "Longaniza dominicana",
+          "name": "Chorizo mexicano",
           "grams": 60
         },
         {
@@ -3452,6 +3452,434 @@
         {
           "name": "Aceite vegetal",
           "grams": 8
+        }
+      ]
+    },
+    {
+      "name": "Licuado de avena con leche de soya y fresas",
+      "slots": [
+        "desayuno"
+      ],
+      "protein": "none",
+      "base": "avena",
+      "technique": "licuado frío",
+      "transform": false,
+      "constituents": [
+        {
+          "name": "Avena",
+          "grams": 50.0
+        },
+        {
+          "name": "Leche de soya",
+          "grams": 220.0
+        },
+        {
+          "name": "Fresas",
+          "grams": 120.0
+        }
+      ]
+    },
+    {
+      "name": "Molletes de pan integral con frijoles y aguacate",
+      "slots": [
+        "desayuno"
+      ],
+      "protein": "legumbre",
+      "base": "pan",
+      "technique": "horneado",
+      "transform": false,
+      "constituents": [
+        {
+          "name": "Pan integral personal",
+          "grams": 90.0
+        },
+        {
+          "name": "Frijoles pintos",
+          "grams": 100.0
+        },
+        {
+          "name": "Aguacate",
+          "grams": 50.0
+        },
+        {
+          "name": "Tomate",
+          "grams": 50.0
+        }
+      ]
+    },
+    {
+      "name": "Chilaquiles verdes de tortilla con tofu",
+      "slots": [
+        "desayuno"
+      ],
+      "protein": "tofu",
+      "base": "maiz",
+      "technique": "sartén",
+      "transform": false,
+      "constituents": [
+        {
+          "name": "Tortilla de maíz",
+          "grams": 90.0
+        },
+        {
+          "name": "Tofu firme",
+          "grams": 120.0
+        },
+        {
+          "name": "Tomate",
+          "grams": 80.0
+        },
+        {
+          "name": "Chile jalapeño",
+          "grams": 15.0
+        },
+        {
+          "name": "Cebolla",
+          "grams": 30.0
+        },
+        {
+          "name": "Aceite vegetal",
+          "grams": 10.0
+        }
+      ]
+    },
+    {
+      "name": "Bowl de quinoa con nopal y semillas de calabaza",
+      "slots": [
+        "desayuno"
+      ],
+      "protein": "none",
+      "base": "none",
+      "technique": "frío",
+      "transform": false,
+      "constituents": [
+        {
+          "name": "Quinoa",
+          "grams": 90.0
+        },
+        {
+          "name": "Nopal",
+          "grams": 100.0
+        },
+        {
+          "name": "Semillas de calabaza",
+          "grams": 20.0
+        },
+        {
+          "name": "Tomate",
+          "grams": 60.0
+        },
+        {
+          "name": "Limón",
+          "grams": 10.0
+        }
+      ]
+    },
+    {
+      "name": "Tinga de soya texturizada con arroz",
+      "slots": [
+        "almuerzo"
+      ],
+      "protein": "legumbre",
+      "base": "arroz",
+      "technique": "guisado",
+      "transform": false,
+      "constituents": [
+        {
+          "name": "Soya texturizada",
+          "grams": 60.0
+        },
+        {
+          "name": "Arroz blanco",
+          "grams": 150.0
+        },
+        {
+          "name": "Tomate",
+          "grams": 90.0
+        },
+        {
+          "name": "Cebolla",
+          "grams": 40.0
+        },
+        {
+          "name": "Chile chipotle",
+          "grams": 10.0
+        },
+        {
+          "name": "Aceite vegetal",
+          "grams": 10.0
+        }
+      ]
+    },
+    {
+      "name": "Ensalada de quinoa con edamame y jícama",
+      "slots": [
+        "almuerzo"
+      ],
+      "protein": "legumbre",
+      "base": "none",
+      "technique": "frío",
+      "transform": false,
+      "constituents": [
+        {
+          "name": "Quinoa",
+          "grams": 90.0
+        },
+        {
+          "name": "Edamame",
+          "grams": 100.0
+        },
+        {
+          "name": "Jícama",
+          "grams": 90.0
+        },
+        {
+          "name": "Limón",
+          "grams": 12.0
+        },
+        {
+          "name": "Aceite de oliva",
+          "grams": 10.0
+        }
+      ]
+    },
+    {
+      "name": "Enfrijoladas de tortilla con frijoles negros",
+      "slots": [
+        "almuerzo"
+      ],
+      "protein": "legumbre",
+      "base": "maiz",
+      "technique": "sartén",
+      "transform": false,
+      "constituents": [
+        {
+          "name": "Tortilla de maíz",
+          "grams": 100.0
+        },
+        {
+          "name": "Habichuelas negras",
+          "grams": 140.0
+        },
+        {
+          "name": "Cebolla",
+          "grams": 30.0
+        },
+        {
+          "name": "Aceite vegetal",
+          "grams": 10.0
+        }
+      ]
+    },
+    {
+      "name": "Tacos de tofu al pastor con piña",
+      "slots": [
+        "cena"
+      ],
+      "protein": "tofu",
+      "base": "maiz",
+      "technique": "salteado",
+      "transform": false,
+      "constituents": [
+        {
+          "name": "Tofu firme",
+          "grams": 150.0
+        },
+        {
+          "name": "Tortilla de maíz",
+          "grams": 90.0
+        },
+        {
+          "name": "Piña",
+          "grams": 70.0
+        },
+        {
+          "name": "Cebolla",
+          "grams": 30.0
+        },
+        {
+          "name": "Chile guajillo",
+          "grams": 8.0
+        },
+        {
+          "name": "Aceite vegetal",
+          "grams": 8.0
+        }
+      ]
+    },
+    {
+      "name": "Sopa de frijol con nopal y epazote",
+      "slots": [
+        "cena"
+      ],
+      "protein": "legumbre",
+      "base": "legumbre",
+      "technique": "sopa espesa",
+      "transform": false,
+      "constituents": [
+        {
+          "name": "Frijoles pintos",
+          "grams": 140.0
+        },
+        {
+          "name": "Nopal",
+          "grams": 100.0
+        },
+        {
+          "name": "Epazote",
+          "grams": 4.0
+        },
+        {
+          "name": "Cebolla",
+          "grams": 30.0
+        },
+        {
+          "name": "Aceite vegetal",
+          "grams": 8.0
+        }
+      ]
+    },
+    {
+      "name": "Calabacitas salteadas con soya texturizada",
+      "slots": [
+        "cena"
+      ],
+      "protein": "legumbre",
+      "base": "none",
+      "technique": "salteado",
+      "transform": false,
+      "constituents": [
+        {
+          "name": "Soya texturizada",
+          "grams": 55.0
+        },
+        {
+          "name": "Calabacín",
+          "grams": 150.0
+        },
+        {
+          "name": "Maíz dulce en granos",
+          "grams": 70.0
+        },
+        {
+          "name": "Tomate",
+          "grams": 70.0
+        },
+        {
+          "name": "Cebolla",
+          "grams": 30.0
+        },
+        {
+          "name": "Aceite vegetal",
+          "grams": 8.0
+        }
+      ]
+    },
+    {
+      "name": "Tacos de nopal con frijoles y aguacate",
+      "slots": [
+        "cena"
+      ],
+      "protein": "legumbre",
+      "base": "maiz",
+      "technique": "salteado",
+      "transform": false,
+      "constituents": [
+        {
+          "name": "Nopal",
+          "grams": 120.0
+        },
+        {
+          "name": "Tortilla de maíz",
+          "grams": 90.0
+        },
+        {
+          "name": "Frijoles pintos",
+          "grams": 110.0
+        },
+        {
+          "name": "Aguacate",
+          "grams": 50.0
+        },
+        {
+          "name": "Aceite vegetal",
+          "grams": 8.0
+        }
+      ]
+    },
+    {
+      "name": "Tacos de frijoles con aguacate y tortilla",
+      "slots": [
+        "desayuno"
+      ],
+      "protein": "legumbre",
+      "base": "maiz",
+      "technique": "sartén",
+      "transform": false,
+      "constituents": [
+        {
+          "name": "Tortilla de maíz",
+          "grams": 90.0
+        },
+        {
+          "name": "Frijoles pintos",
+          "grams": 110.0
+        },
+        {
+          "name": "Aguacate",
+          "grams": 55.0
+        },
+        {
+          "name": "Tomate",
+          "grams": 50.0
+        }
+      ]
+    },
+    {
+      "name": "Licuado de lechosa con leche de soya y chía",
+      "slots": [
+        "desayuno"
+      ],
+      "protein": "none",
+      "base": "none",
+      "technique": "licuado frío",
+      "transform": false,
+      "constituents": [
+        {
+          "name": "Lechosa",
+          "grams": 180.0
+        },
+        {
+          "name": "Leche de soya",
+          "grams": 220.0
+        },
+        {
+          "name": "Semillas de chía",
+          "grams": 12.0
+        }
+      ]
+    },
+    {
+      "name": "Bowl de quinoa con mango y semillas de girasol",
+      "slots": [
+        "desayuno"
+      ],
+      "protein": "none",
+      "base": "none",
+      "technique": "frío",
+      "transform": false,
+      "constituents": [
+        {
+          "name": "Quinoa",
+          "grams": 90.0
+        },
+        {
+          "name": "Mango",
+          "grams": 150.0
+        },
+        {
+          "name": "Semillas de girasol",
+          "grams": 20.0
         }
       ]
     }
