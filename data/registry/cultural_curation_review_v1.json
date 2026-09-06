@@ -9,7 +9,7 @@
   "caducity": "la firma vale solo para el snapshot_hash anotado por perfil; cambiar una biblioteca la caduca hasta repetir la revisión",
   "profiles": {
     "dominican_criolla": {
-      "snapshot_hash": "953d3ddf841bca21dc5844e5e716250ec692b471683523b4f06bd6d6d5307282",
+      "snapshot_hash": "612e9b35c6c3605b0ba324595d9c2c5c3c2bfef06a01133dd615f3d2392e8975",
       "decisions": [
         "Alérgenos: el matcher del registry no reconocía plurales (sardinas, fideos, almejas) ni la salsa de soya como gluten: corregido y recompilado; cero clases sin marcar en las 6 bibliotecas (verificado con un chequeo independiente por constituyente).",
         "Raciones: meriendas > 450 kcal reasignadas a almuerzo/cena; almuerzos < 260 kcal y cenas < 180 kcal completados con base o proteína; almuerzos > 1.100 kcal reducidos.",

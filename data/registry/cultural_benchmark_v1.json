@@ -454,10 +454,10 @@
             "[2026-09-06 · P1-GAP-DISHES-VEG] Platos añadidos para los dos huecos que midió el embudo de cobertura (backend/docs/coverage_funnel.md): cenas veganas y desayunos sin lácteos ni huevo. Revisión automática de lo añadido: todos los constituyentes resuelven contra el catálogo de su biblioteca (cero excluidos nuevos), las franjas respetan la regla editorial de base de almidón —el plato cuya identidad es el arroz se declaró almuerzo, el guiso servido con arroz declara base legumbre—, y ninguno introduce lácteo, huevo ni marisco. Corregido además el etiquetado de alérgenos: «Leche de coco» y «Mantequilla de maní» se declaraban LÁCTEOS."
           ],
           "kind": "automated",
-          "snapshot_hash": "953d3ddf841bca21dc5844e5e716250ec692b471683523b4f06bd6d6d5307282"
+          "snapshot_hash": "612e9b35c6c3605b0ba324595d9c2c5c3c2bfef06a01133dd615f3d2392e8975"
         }
       },
-      "snapshot_hash": "953d3ddf841bca21dc5844e5e716250ec692b471683523b4f06bd6d6d5307282"
+      "snapshot_hash": "612e9b35c6c3605b0ba324595d9c2c5c3c2bfef06a01133dd615f3d2392e8975"
     },
     "mexico_casera": {
       "appropriateness": {
