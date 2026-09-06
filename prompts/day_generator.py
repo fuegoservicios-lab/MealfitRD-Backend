@@ -1378,9 +1378,52 @@ def build_day_assignment_context(skeleton_day: dict, day_num: int, day_name: str
     # ningún día. Un test de basura lo destapó al añadir la regla.
     _carbs_asignados = [str(c).strip() for c in (skeleton_day.get('carb_pool') or [])
                         if c is not None and str(c).strip()]
+    # [P1-OATS-NOT-A-DINNER · 2026-09-06] La regla de abajo nombra DOS bases y ordena usarlas en almuerzo y
+    # cena. Si una es avena, la orden es «haz la cena de avena» — y el revisor cultural rechaza el plan entero
+    # por comida fuera de horario. Contado en el journal, 4 días: 16 rechazos de esta forma, casi todos avena
+    # («Tortitas de avena y atún», «Bowl de avena salada», «Arepitas de avena»), cada uno un plan regenerado.
+    #
+    # El sembrador YA excluye estos cereales de sus parejas (`ai_helpers._base_carbs_for_pairs`), pero sus
+    # parejas solo COMPLETAN pools cortos: cuando el planificador llenó el pool con dos bases —y a veces elige
+    # avena— la limpieza del sembrador nunca llega a aplicarse. Aquí es donde la orden se escribe, así que aquí
+    # se filtra.
+    try:
+        from ai_helpers import _BREAKFAST_ONLY_BASES as _BOB   # SSOT: la lista vive en el sembrador
+    except Exception:
+        _BOB = ("avena", "granola", "cereal", "hojuelas", "corn flakes", "muesli")
+
+    def _es_de_desayuno(_c: str) -> bool:
+        _n = _sa_dg(str(_c).lower()) if callable(globals().get("_sa_dg")) else str(_c).lower()
+        return any(t in _n for t in _BOB)
+
+    _carbs_fuertes = [c for c in _carbs_asignados if not _es_de_desayuno(c)]
+    _carbs_desayuno = [c for c in _carbs_asignados if _es_de_desayuno(c)]
+    # Si al quitar los cereales quedan menos de dos, se conserva la lista original: pedir «no repitas» con una
+    # sola base es una restricción insatisfacible, que es como el gate de fruta acabó forzando el 67 % de
+    # reintentos. Mejor una orden imperfecta que una imposible — pero el aviso de abajo sale igual.
+    if len(_carbs_fuertes) >= 2:
+        _carbs_asignados = _carbs_fuertes
     carb_no_repeat_block = ""
-    if len(_carbs_asignados) >= 2:
-        carb_no_repeat_block = (
+    if _carbs_desayuno:
+        carb_no_repeat_block += (
+            f"\n• ⛔ {', '.join(_carbs_desayuno)} es base de DESAYUNO o MERIENDA, nunca el plato principal del "
+            f"almuerzo ni de la cena. Nada de tortitas, arepitas, bowls salados ni «avena al caldo» en las "
+            f"comidas fuertes: en la mesa dominicana eso no es un almuerzo ni una cena, y el plan se rechaza."
+        )
+    if len(_carbs_fuertes) == 1 and _carbs_desayuno:
+        # [P1-OATS-NOT-A-DINNER] Con UNA sola base fuerte, la regla de «dos bases distintas» acabaría
+        # nombrando la avena para una comida fuerte — que es exactamente el caso del plan vivo, con el pool
+        # ['Avena', 'Yuca']. Se reparte explícitamente: la fuerte a almuerzo y cena, el cereal al desayuno.
+        # Es satisfacible, que es la condición que la otra rama cuida desde el gate de la fruta.
+        carb_no_repeat_block += (
+            f"\n• ⛔ La base del Almuerzo y de la Cena es '{_carbs_fuertes[0]}'. "
+            f"{', '.join(_carbs_desayuno)} va al Desayuno o a la Merienda, no a las comidas fuertes."
+        )
+    elif _carbs_fuertes and len(_carbs_asignados) >= 2:
+        # [P1-OATS-NOT-A-DINNER] Sin NINGUNA base fuerte (pool solo de cereales) no se emite la regla: nombrar
+        # avena y granola para almuerzo y cena es peor que no decir nada. El aviso de arriba se queda y el
+        # generador elige la base fuerte del catálogo.
+        carb_no_repeat_block += (
             f"\n• ⛔ NO REPITAS LA BASE: el Almuerzo y la Cena deben llevar bases DISTINTAS entre sí — "
             f"una con '{_carbs_asignados[0]}' y la otra con '{_carbs_asignados[1]}'. Usar la misma base "
             f"en las dos comidas fuertes del día es un fallo: produce jornadas con papa en almuerzo Y "
