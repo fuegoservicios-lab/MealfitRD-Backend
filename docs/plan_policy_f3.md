@@ -70,7 +70,19 @@ GROUP BY 1, 2;
 2. Canary: `MEALFIT_PLAN_POLICY_ENFORCE_USERS=<uuid del dueño>` → generar un plan y leer `_fidelity_report` + prompt del seeder (log `📐 [P1-ARQ25-F3-HORIZON] seeder obedece la rebanada`).
 3. Usuarios de test → `enforce` global. `block` solo cuando la métrica en `warn` muestre `score ≥ 0.9` sostenido.
 
-Gate (roadmap): las 13 golden policies cumplen sus bandas (test); paridad initial/chunk/renew/swap/regen por el mismo módulo (test parser + `fidelity_report` independiente de la superficie); benchmark clínico sin regresión frente a `baseline-v1` — pendiente de correr con `enforce` vivo.
+Gate (roadmap): las 13 golden policies cumplen sus bandas (test); paridad initial/chunk/renew/swap/regen por el mismo módulo (test parser + `fidelity_report` independiente de la superficie); benchmark clínico sin regresión frente a `baseline-v1`.
+
+**Estado del gate al 2026-09-06** (medido contra el `.env` del VPS, no deducido):
+
+| Precondición | Estado |
+|---|---|
+| `MEALFIT_PLAN_POLICY_MODE` | `enforce` — **vivo** |
+| `MEALFIT_PLAN_POLICY_ENFORCE_USERS` | 2 UUID (el dueño + un segundo canario) |
+| `MEALFIT_FIDELITY_GATE` | `warn` |
+| Planes con `_plan_policy` en 7 días | 57 |
+| `relaxations[]` observadas | **0** en todos los planes inspeccionados (la lista existe y viene vacía) |
+
+O sea que la precondición «con `enforce` vivo» **ya se cumple**: lo que falta es correr el benchmark clínico, y eso gasta presupuesto de API — decisión del dueño, no un gap de implementación. Que `relaxations[]` venga siempre vacía con 57 planes bajo `enforce` merece una mirada antes de correrlo: o ninguna política pedida ha necesitado relajarse, o nadie las está anotando; el benchmark no distingue esos dos casos.
 
 ## Fuera de alcance (Fase 4/5)
 
