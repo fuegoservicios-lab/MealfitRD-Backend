@@ -126,13 +126,35 @@ def ingredient_id_for(name: Any) -> str:
     return n or "unknown"
 
 
-def canonical_name_for(ingredient_id: str, catalog_names: Optional[Iterable[str]] = None) -> Optional[str]:
-    """Nombre canónico del motor para un `ingredient_id` (búsqueda por igualdad de slug)."""
+def canonical_name_for(ingredient_id: str, catalog_names: Optional[Iterable[str]] = None,
+                       catalog_rows: Optional[Iterable[dict]] = None) -> Optional[str]:
+    """Nombre canónico del motor para un `ingredient_id`.
+
+    Primero por igualdad de slug contra los nombres. Si no casa y se pasan filas del catálogo, se
+    prueba contra sus ALIAS.
+
+    [P1-ARQ27-F2-IDENTIDAD · 2026-09-06] El puente de alias que el gap pedía como rollback. El id
+    se deriva del NOMBRE (`ingredient_id_for`), así que renombrar un alimento en el catálogo
+    huérfana todo lo que ya lo citaba — y un id acuñado desde un alias no resolvía nunca. Medido:
+    1.137 alias del catálogo producen ids que no casan con ningún nombre canónico.
+
+    Daño VIVO hoy: cero. Solo hay 2 `ingredient_id` persistidos en 96 planes y los dos son
+    canónicos. Es una fragilidad latente, no un incendio — y por eso el puente es aditivo: no
+    fusiona filas ni cambia ningún id existente.
+
+    Los alias NO crean alimentos: varios alias resuelven al MISMO nombre canónico, que es lo que
+    el criterio «alias no aumenta alimentos únicos» exige."""
     if not ingredient_id:
         return None
     for n in (catalog_names or []):
         if ingredient_id_for(n) == ingredient_id:
             return str(n)
+    for row in (catalog_rows or []):
+        if not isinstance(row, dict):
+            continue
+        for a in (row.get("aliases") or []):
+            if ingredient_id_for(a) == ingredient_id:
+                return str(row.get("name") or "") or None
     return None
 
 

@@ -636,7 +636,11 @@ async def api_inventory_photo_scan(
 # envase de mercado, tamaños disponibles— no las usa ningún buscador: las usa la Nevera
 # para calcular costos y conversiones, y son el trabajo curado de este producto. Un
 # invitado no las necesita para escribir «arroz».
-_CATALOG_CAMPOS_INVITADO = ("id", "slug", "name", "category", "aliases", "default_unit", "staple_gate_label")
+# [P1-ARQ27-F2-IDENTIDAD · 2026-09-06] `diet` viaja TAMBIÉN al invitado: el paso 15 del wizard es
+# público y ahí es donde un vegano elige sus básicos. Mandarle `category` a secas le da «Lácteos»
+# para la leche de coco y nada con que corregirlo.
+_CATALOG_CAMPOS_INVITADO = ("id", "slug", "name", "category", "aliases", "default_unit",
+                            "staple_gate_label", "diet")
 
 # Anti-abuso del camino sin sesión: el catálogo es ~20KB y el cliente lo cachea 24h, así
 # que un uso legítimo pide esto UNA vez por wizard. El límite no molesta a nadie real y
@@ -730,6 +734,18 @@ async def api_get_catalog(
         ) or []
 
     items = await asyncio.to_thread(_catalog)
+
+    # [P1-ARQ27-F2-IDENTIDAD · 2026-09-06] La categoría es el PASILLO DE LA TIENDA, no una
+    # afirmación sobre el alimento: cinco filas de nombre vegetal viven en «Lácteos» porque ahí se
+    # compran. El motor ya lo resuelve bien por constituyentes, pero esta proyección mandaba
+    # `category` y NADA MÁS con que decidir, así que quien quisiera saber si algo es vegano tenía
+    # justo el campo que dice «Lácteos» para la leche de coco. `diet` compone los SSOT que ya
+    # deciden (`_diet_pool_item_banned` y `allergen_classes_for`); no es una tercera tabla.
+    try:
+        from food_identity import anotar_catalogo
+        await asyncio.to_thread(anotar_catalogo, items)
+    except Exception:
+        logger.warning("[P1-ARQ27-F2-IDENTIDAD] catálogo sin anotar `diet`", exc_info=True)
 
     # [P1-STAPLE-SEARCH-RANK · 2026-08-09] Rótulo del gate same-day-protein por
     # alimento, calculado AQUÍ desde el SSOT (`_MAIN_PROTEIN_ALIASES` +

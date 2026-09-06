@@ -210,3 +210,79 @@ Test: [`test_p1_arq27_f2_identidad.py`](../tests/test_p1_arq27_f2_identidad.py) 
 los que anclan que la excepción no se abrió de más (siete lácteos reales siguen siéndolo) y que una
 bebida vegetal conserva SUS alérgenos (la de almendras sigue siendo frutos secos; la de avena,
 gluten).
+
+---
+
+# ARQ27-P1-05 — Identidad ≠ categoría comercial: lo que faltaba
+
+`[P1-ARQ27-F2-IDENTIDAD · 2026-09-06]`
+
+La primera pasada del gap (test `test_p1_arq27_f2_identidad.py`) midió las 347 filas y encontró que
+**el motor ya resolvía bien**: por nombre y constituyentes, no por pasillo. Arregló la única
+discrepancia viva —`Yogur de coco` se declaraba `['lacteos','lactosa']`— y ancló la paridad entre lo
+que el registry DECLARA y lo que el guard DECIDE.
+
+Esta segunda pasada cierra lo que quedaba.
+
+## 1 · La proyección pública no certificaba nada
+
+Era la evidencia literal del gap. `/api/catalog` mandaba `category` —el **pasillo del
+supermercado**— y nada más con que decidir. Cinco filas de nombre vegetal viven en «Lácteos» porque
+ahí se compran:
+
+    Leche de almendras · Leche de avena · Leche de coco · Leche de soya · Yogur de coco
+
+Un consumidor que quisiera saber si algo es vegano tenía justo el campo que dice `Lácteos` para la
+leche de coco. Ahora cada fila lleva `diet`:
+
+| campo | de dónde sale |
+|---|---|
+| `vegan_ok` / `vegetarian_ok` | `_diet_pool_item_banned` — el SSOT de dieta desde `P1-DIET-CANON-SSOT` |
+| `allergen_classes` | `dish_registry.allergen_classes_for` |
+| `nutrition_confidence` | la fuente y el `fdc_id` de la propia fila |
+| `category_is_presentation` | dicho explícito, para que nadie vuelva a leer `category` como verdad |
+
+**Cero tablas nuevas.** [`food_identity.py`](../food_identity.py) compone las dos autoridades que ya
+deciden. Una tercera tabla de «qué es vegano» divergiría de las otras dos en cuanto alguien la
+editara — la lección de `canonicalize_diet_type` y de `pantry_names_match`.
+
+Y viaja también al **invitado**: el paso 15 del wizard es público y ahí es donde un vegano elige sus
+básicos.
+
+## 2 · Lo curado ya no se presenta como medido
+
+El criterio pedía que quesos, preparados y fortificados conservaran su incertidumbre. Medido: 16
+plantillas con queso o embutido, **cero la declaraban**. La señal no había que inventarla:
+
+- `referenced` — fuente externa (usda/bedca/latinfoods) con `fdc_id` propio. **305 filas.**
+- `curated` — `nutrition_source='manual'`: estimación del equipo, sin referencia. **42 filas.** Un
+  «queso de hoja» o un «salami de pavo» varían por marca y por receta.
+- `proxy` — el `fdc_id` lo comparte otra fila: la cifra describe OTRO alimento. **Hoy cero** (288
+  filas con id, las 288 distintas). Es un guard contra regresión: el 19-ago eran 47 de 347, y uno
+  sustituía a SIETE embutidos (`P1-BEDCA-DEPROXY-ES`).
+
+Ninguna bloquea nada. Lo que hacen es dejar de enseñar una estimación con la misma cara que una
+medición.
+
+## 3 · El puente de alias
+
+`ingredient_id_for` deriva el id del NOMBRE, así que renombrar un alimento huérfana lo que ya lo
+citaba, y un id acuñado desde un alias no resolvía nunca. Medido: **1.137 alias** del catálogo
+producen ids que no casan con ningún nombre canónico.
+
+**Daño vivo: cero.** Solo hay 2 `ingredient_id` persistidos en 96 planes y los dos son canónicos. Es
+fragilidad latente, no un incendio — y por eso el puente es aditivo, como el rollback del gap exigía:
+`canonical_name_for` prueba los alias **después** de los nombres, `ingredient_id_for` no cambia, y
+varios alias resuelven al MISMO nombre (el criterio «alias no aumenta alimentos únicos»).
+
+## Dónde NO estaba el defecto
+
+Comprobado uno a uno, para no arreglar lo que no está roto:
+
+- El guard de **embarazo** lee `category=='lacteos'`, pero ya excluye las bebidas vegetales con su
+  propia regex.
+- Las dos ramas de `db_inventory` son **tasas de consumo** (200 ml/día), heurística de despensa.
+- El **frontend** usa «Lácteos» para el chip de alergia (una CLASE, no la categoría) y para el
+  estante de la Nevera — presentación, que es justo lo que el gap permite.
+
+Test: [`test_p1_arq27_f2_identidad_catalogo.py`](../tests/test_p1_arq27_f2_identidad_catalogo.py).
