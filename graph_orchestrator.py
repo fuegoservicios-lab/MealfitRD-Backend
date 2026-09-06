@@ -12943,6 +12943,9 @@ CLOSER_COOKABLE_MIN_G = _env_int("MEALFIT_CLOSER_COOKABLE_MIN_G", 40, validator=
 # (medido en vivo: "275g de atún" pegado a una comida — macro-perfecto, plato irreal). Un añadido
 # jamás supera una porción completa servible; el déficit restante lo cubren las demás comidas /
 # la banda. min() con el max_add_g del caller (el más restrictivo gana).
+# [P1-CLOSER-DENSE-COOKABLE · 2026-09-06] Kill switch de la subida al mínimo cocinable. A False vuelve el
+# comportamiento anterior: si la proteína densa cierra el hueco con menos de 40 g, no se añade nada.
+CLOSER_DENSE_COOKABLE = _env_bool("MEALFIT_CLOSER_DENSE_COOKABLE", True)
 CLOSER_BOLT_MAX_ADD_G = _env_int("MEALFIT_CLOSER_BOLT_MAX_ADD_G", 180, validator=lambda v: 60 <= v <= 400)
 # [P1-PORTION-REALISM-CAP · 2026-07-01] (review de recetas en vivo, batch P1-DISH-REALISM-BATCH) Techos de
 # porción REALISTA per-ingrediente post-sizing: el solver/closers escalan un ingrediente hasta su clamp
@@ -21754,8 +21757,33 @@ def _close_protein_gap_for_meal(meal: dict, slot_protein_target: float, db, cand
             # [P1-CLOSER-COOKABLE-MIN · 2026-07-01] antes `< 10`: un headroom que solo permite 10-39g
             # produce un add no-cocinable ("10g de pechuga" + paso dedicado). Bajo el piso cocinable →
             # no añadir aquí (el residuo de proteína lo tolera la banda / se cubre en otra comida).
+            # [P1-CLOSER-DENSE-COOKABLE · 2026-09-06] …pero el piso de 40 g mataba justo a las proteínas
+            # BUENAS. La aritmética es al revés de lo que parece: cuanto MÁS densa es la proteína, MENOS
+            # gramos hacen falta para cerrar el hueco, y menos gramos significaba «no añadas nada».
+            #
+            # Medido en el plan vivo a903e339 (vegetariano, cena «Ají morrón relleno de queso fresco»):
+            # faltaban 13,2 g de proteína y había 188 kcal libres. Con soya texturizada (51,5 g/100 g) bastaban
+            # 26 g — y 26 < 40, así que el cerrador no hacía NADA. Consecuencia: déficit de proteína del día,
+            # rechazo clínico del revisor y un intento entero de generación tirado.
+            #
+            # En vez de rendirse, se SUBE la cantidad hasta el mínimo cocinable cuando las kcal lo permiten:
+            # 40 g de soya son 131 kcal, caben en 188, y el exceso de proteína sobre el target lo nivela el
+            # reconcile de más abajo. Solo se abandona si ni siquiera el mínimo cocinable cabe.
             if grams < CLOSER_COOKABLE_MIN_G:
-                return 0
+                _dense_ok = False
+                if CLOSER_DENSE_COOKABLE and grams > 0 and (getattr(chosen, "kcal", 0) or 0) > 0:
+                    _cur_cal2 = _meal_macro_num(meal.get("cals"))
+                    _head2 = (slot_cal_target - _cur_cal2) if (slot_cal_target and slot_cal_target > 0) else 0.0
+                    _kcal_min = (CLOSER_COOKABLE_MIN_G / 100.0) * float(chosen.kcal)
+                    if _head2 >= _kcal_min and CLOSER_COOKABLE_MIN_G <= min(max_add_g, int(CLOSER_BOLT_MAX_ADD_G)):
+                        logger.info(
+                            f"🍳 [P1-CLOSER-DENSE-COOKABLE] {grams}g de {str(chosen.name)[:24]} cerraban el hueco "
+                            f"pero no son cocinables; suben a {CLOSER_COOKABLE_MIN_G}g ({_kcal_min:.0f} kcal de "
+                            f"{_head2:.0f} libres) | meal={str(meal.get('name'))[:34]}")
+                        grams = int(CLOSER_COOKABLE_MIN_G)
+                        _dense_ok = True
+                if not _dense_ok:
+                    return 0
         # [P3-PROTEIN-CLOSER-MIN-THRESHOLD · 2026-06-28] No PEGAR proteína TRIVIAL como ingrediente extra (10g camarón
         # de relleno) — coherencia en la generación normal. PERO el reparador del PISO de proteína (FASE A) pasa
         # enforce_min_threshold=False: es prioridad CLÍNICA cumplir el piso (≥90% de 80g), y bloquear sus cierres
