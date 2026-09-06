@@ -3953,8 +3953,26 @@ def _resolve_stale_plan_quality_alerts() -> None:
         # Extracción de user_id del alert_key via split_part. Posición 2
         # porque el formato es `plan_quality_degraded:<user_id>:<plan_id>`
         # (índices 1-based en SQL: 1=key prefix, 2=user_id, 3=plan_id).
-        # Plan "limpio" = generation_status='complete' AND NO marcas de
-        # degradación (`_is_fallback`/`_review_failed_but_delivered`).
+        # Plan "limpio" = plan ENTREGADO y sin marcas de degradación
+        # (`_is_fallback`/`_review_failed_but_delivered`).
+        #
+        # [P1-QUALITY-SWEEP-STATUS · 2026-09-06] Este predicado pedía
+        # `generation_status = 'complete'` a secas y por eso el sweep no cerró
+        # NUNCA una sola alerta: en la base entera hay CERO planes en ese estado.
+        # Medido el 06-sep sobre las 95 filas de `meal_plans`:
+        #     complete_partial 71 · partial 21 · generating_next 1 ·
+        #     paused_by_user 1 · failed 1 · complete 0
+        # El estado terminal de un plan por bloques es `complete_partial`
+        # (cron_tasks.py:16332 y generation_lifecycle.py:322 ya tratan a los dos
+        # como entregado); `complete` lo estampa solo la vía no-troceada de
+        # `services.py`, que en producción hoy no se recorre. Resultado: 132 de
+        # las 180 alertas abiertas eran `plan_quality_degraded` que su propio
+        # auto-resolve no podía tocar — no un backlog sin revisar, un barrido
+        # inalcanzable. Es la misma clase que «un guard que ya no puede fallar»:
+        # el mecanismo existía, corría, reportaba 0 y nadie sospechaba.
+        #
+        # `partial` NO entra: ahí el plan aún tiene bloques en vuelo y su calidad
+        # todavía no es definitiva. Solo los DOS terminales entregados.
         resolved_pq = execute_sql_write(
             """
             UPDATE system_alerts AS a
@@ -3980,7 +3998,8 @@ def _resolve_stale_plan_quality_alerts() -> None:
                             ELSE NULL
                           END
                       AND mp.created_at > a.triggered_at
-                      AND mp.plan_data->>'generation_status' = 'complete'
+                      AND mp.plan_data->>'generation_status'
+                          IN ('complete', 'complete_partial')
                       AND COALESCE((mp.plan_data->>'_is_fallback')::bool, false) = false
                       AND (mp.plan_data->>'_review_failed_but_delivered') IS NULL
                )

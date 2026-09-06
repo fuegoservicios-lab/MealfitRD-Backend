@@ -92,12 +92,15 @@ def _parse_args(argv: list[str]) -> argparse.Namespace:
 
 
 def _select_active_plans(limit: int | None):
-    """READ-ONLY. Planes 'activos': generation_status='complete' (I8 garantiza days no vacío).
+    """READ-ONLY. Planes 'activos': generation_status='complete' (I8 garantiza days no vacío para `complete`).
     Mismo query que scripts/backfill_veg_lines_v7.py::_select_active_plans (SSOT del filtro)."""
     query = (
         "SELECT id::text AS plan_id, user_id::text AS user_id, plan_data "
         "FROM meal_plans "
-        "WHERE plan_data->>'generation_status' = 'complete' "
+        # [P1-QUALITY-SWEEP-STATUS · 2026-09-06] `complete` no existe en la base: el estado
+        # terminal de un plan troceado es `complete_partial` (0 filas en `complete`, 06-sep).
+        # Sin los dos, este script mide el conjunto vacío y reporta "nada que hacer".
+        "WHERE plan_data->>'generation_status' IN ('complete', 'complete_partial') "
         "ORDER BY created_at DESC"
     )
     if limit:

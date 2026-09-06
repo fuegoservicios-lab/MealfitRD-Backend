@@ -12568,6 +12568,10 @@ RECIPE_SLICE_GRAMS_ENABLED = _env_bool("MEALFIT_RECIPE_SLICE_GRAMS", True)
 # <alimento>" del paso a la cantidad ACTUAL del ingrediente (match conservador por token principal; las notas
 # ⚠/💡 no se tocan). Rollback: MEALFIT_RECIPE_STEP_QTY_SYNC=false. tooltip-anchor: P1-RECIPE-QTY-SYNC
 RECIPE_STEP_QTY_SYNC_ENABLED = _env_bool("MEALFIT_RECIPE_STEP_QTY_SYNC", True)
+# [P1-STEP-GRAM-HINT-STALE · 2026-09-06] Sub-pase del qty-sync que reconcilia el HINT entre
+# paréntesis de los pasos ("85 g de queso (135 g)") con la línea real del ingrediente. Knob
+# propio para poder revertirlo sin apagar el qty-sync entero.
+RECIPE_STEP_GRAM_HINT_SYNC = _env_bool("MEALFIT_RECIPE_STEP_GRAM_HINT_SYNC", True)
 # [P3-LEAF-VOLUME-CAP · 2026-06-28] El solver clasifica las hojas crudas (rúcula/lechuga/espinaca) como grupo "carbs"
 # (su macro dominante por kcal) y las escala para clavar el target de carbs → "5.5 taza de rúcula (165g)" en un
 # revoltillo (montaña de hojas). Las hojas son ~5 kcal/taza → recortarlas NO mueve macros pero sí la coherencia/UX.
@@ -28071,6 +28075,138 @@ def _qtysync_unit_norm(u) -> str:
     return {"gr": "g", "gramo": "g", "cucharada": "cda", "cucharadita": "cdta"}.get(u, u)
 
 
+# [P1-STEP-GRAM-HINT-STALE · 2026-09-06] Un paso puede llevar el peso entre paréntesis como
+# referencia de báscula: "mide ¾ taza de pasta integral seca (130 g)". Ese hint lo escribe el LLM
+# UNA vez, contra la lista de ingredientes de ESE momento — y después el motor reescala las líneas
+# (`rescale_ingredient_string` sí escala el hint DE LA LÍNEA, nadie escala el del PASO), las
+# sustituye, las cuantiza y las recorta. El hint del paso se queda con el valor viejo.
+#
+# Medido contra los 93 planes vivos con días (sondas `hint_scan.py` / `qtysync_scan.py`, 06-sep):
+#   · 45 menciones en 23 planes (25 %) llevan un hint que CONTRADICE la línea de su propio
+#     alimento — "85 g de queso (135 g)" con la línea en 85 g, "30 g de queso blanco (65 g)".
+#   · 10 pasos en 7 planes acumulan DOS hints seguidos, "(60 g) (55 g)", uno por reescalado.
+# El juez culinario los reporta como `paso_incoherente` («lа cantidad entre paréntesis contradice
+# la cantidad del ingrediente listado»), que es la bolsa más grande de sus violaciones.
+#
+# Regla conservadora: solo se toca lo que se puede PROBAR mal contra la lista final.
+#   (a) el líder del paso YA está en gramos → el paréntesis sobra (y cuando difiere, se
+#       contradice con el número que tiene tres palabras a la izquierda);
+#   (b) el líder está en volumen/conteo y la línea del alimento tiene gramos → el hint se corrige;
+#   (c) dos o más hints seguidos → acumulación de reescalados: se colapsan;
+#   (d) alimento no resoluble contra la lista → NO se toca (un hint que no se puede desmentir se
+#       respeta; borrarlo por sistema le quitaría la referencia de báscula a media receta).
+# El hint es SIEMPRE decorativo: los macros y la lista de compras salen de `ingredients[]`, nunca
+# de este paréntesis. Por eso borrarlo es seguro y corregirlo no mueve ningún número del plan.
+_STEP_HINT_RUN_RE = _re.compile(
+    r"(?:\s*\(\s*[≈~]?\s*\d+(?:[.,]\d+)?\s*(?:g|gr|gramos?|ml)\s*\))+", _re.IGNORECASE)
+_STEP_ONE_HINT_RE = _re.compile(
+    r"\(\s*[≈~]?\s*(\d+(?:[.,]\d+)?)\s*(g|gr|gramos?|ml)\s*\)", _re.IGNORECASE)
+_ING_GRAMS_HINT_RE = _re.compile(
+    r"\(\s*[≈~]?\s*(\d+(?:[.,]\d+)?)\s*(?:g|gr|gramos?|ml)\s*\)", _re.IGNORECASE)
+_ING_GRAMS_LEAD_RE = _re.compile(
+    r"^\s*(\d+(?:[.,]\d+)?)\s*(?:g|gr|gramos?|ml)\b", _re.IGNORECASE)
+# La mención + su cola de hints: el `sub` necesita ver lo que sigue al alimento para localizarlos.
+_STEP_QTY_MENTION_RE_WITH_TAIL = _re.compile(
+    _STEP_QTY_MENTION_RE.pattern
+    + r"(?:\s*\(\s*[≈~]?\s*\d+(?:[.,]\d+)?\s*(?:g|gr|gramos?|ml)\s*\))+")
+
+
+def _ingredient_grams_by_token(ings) -> dict:
+    """Token principal del alimento → gramos de SU línea. El token compartido por dos líneas con
+    pesos distintos se descarta (mismo criterio anti-ambigüedad que `_sync_recipe_step_quantities`):
+    con dos candidatos no hay forma de saber a cuál se refiere el paso, y corregir a ciegas es peor
+    que el hint viejo."""
+    out, amb = {}, set()
+    try:
+        from constants import strip_accents as _sa_h
+        for ing in (ings or []):
+            _txt = str(ing)
+            _g = None
+            _mh = _ING_GRAMS_HINT_RE.search(_txt)
+            if _mh:
+                _g = float(_mh.group(1).replace(",", "."))
+            else:
+                _ml = _ING_GRAMS_LEAD_RE.match(_txt.strip())
+                if _ml:
+                    _g = float(_ml.group(1).replace(",", "."))
+            if _g is None or _g <= 0:
+                continue
+            _body = _re.sub(r"^\s*[\d.,½¼¾⅓⅔]+\s*[a-zA-Záéíóúñ]*\.?\s*(?:de\s+|del\s+)?",
+                            "", _txt.strip())
+            _toks = [t for t in _re.split(r"[^\wáéíóúñü]+",
+                                          _sa_h(_body.lower())) if len(t) >= 4]
+            if not _toks:
+                continue
+            _t = _toks[0]
+            if _t in out and abs(out[_t] - _g) > 1e-6:
+                amb.add(_t)
+                continue
+            out.setdefault(_t, _g)
+        for _t in amb:
+            out.pop(_t, None)
+    except Exception:
+        return {}
+    return out
+
+
+def _sync_recipe_step_gram_hints(meal: dict) -> list:
+    """Reconcilia los hints "(N g)" de los PASOS con `ingredients[]`. Muta `meal`; devuelve la
+    lista de (antes, después) reescritos — contenido, no un contador, para que el log de un
+    incidente diga QUÉ se corrigió (lección P1-SLOT-FLOOR-UNCLOSED). Fail-safe: cualquier error
+    deja el texto intacto. tooltip-anchor: P1-STEP-GRAM-HINT-STALE"""
+    if not RECIPE_STEP_GRAM_HINT_SYNC or not isinstance(meal, dict):
+        return []
+    try:
+        from constants import strip_accents as _sa_h2
+        rec = meal.get("recipe")
+        if not isinstance(rec, list) or not rec:
+            return []
+        gmap = _ingredient_grams_by_token(meal.get("ingredients"))
+        cambios = []
+        nuevos = []
+        for step in rec:
+            if not isinstance(step, str) or _is_recipe_safety_note_step(step):
+                nuevos.append(step)
+                continue
+
+            def _fix(mm):
+                _corte = mm.end("food") - mm.start()
+                _base, _resto = mm.group(0)[:_corte], mm.group(0)[_corte:]
+                _run = _STEP_HINT_RUN_RE.match(_resto)
+                if not _run:
+                    return mm.group(0)
+                _cola = _resto[_run.end():]
+                _hints = [float(h.replace(",", ".")) for h, _u in _STEP_ONE_HINT_RE.findall(_run.group(0))]
+                if not _hints:
+                    return mm.group(0)
+                _lead_u = _qtysync_unit_norm(mm.group("unit"))
+                _lead_v = _qtysync_qty_to_float(mm.group("qty"))
+                if _lead_u in ("g", "ml") and _lead_v is not None:
+                    return _base + _cola                                    # (a)
+                _ftoks = [t for t in _re.split(r"[^\wáéíóúñü]+",
+                                               _sa_h2(str(mm.group("food")).strip().lower())) if len(t) >= 4]
+                _real = next((gmap[t] for t in _ftoks[:2] if t in gmap), None)
+                if _real is None:
+                    return _base + _cola if len(_hints) > 1 else mm.group(0)  # (c) / (d)
+                if len(_hints) == 1 and abs(_hints[0] - _real) <= max(1.0, 0.15 * _real):
+                    return mm.group(0)                                       # ya correcto
+                _fmt = f"{_real:.0f}" if abs(_real - round(_real)) < 0.05 else f"{_real:.1f}"
+                return _base + f" ({_fmt} g)" + _cola                        # (b)
+
+            _new = _STEP_QTY_MENTION_RE_WITH_TAIL.sub(_fix, step)
+            if _new != step:
+                cambios.append((step, _new))
+            nuevos.append(_new)
+        if cambios:
+            meal["recipe"] = nuevos
+            # DELETE-on-write: `_display[locale].recipe` espeja los pasos por índice.
+            meal.pop("_display", None)
+        return cambios
+    except Exception as _gh_e:
+        logger.warning(f"[P1-STEP-GRAM-HINT-STALE] no-op: {type(_gh_e).__name__}: {_gh_e}")
+        return []
+
+
 def _sync_recipe_step_quantities(meal: dict) -> int:
     """[P1-RECIPE-QTY-SYNC · 2026-07-01] (audit recetas P1-A) Re-sincroniza las CANTIDADES mencionadas en los
     PASOS de receta con la cantidad ACTUAL de `ingredients[]`, post-quantize (la última mutación de porciones).
@@ -28379,6 +28515,20 @@ def _sync_recipe_step_quantities(meal: dict) -> int:
             new_steps = _steps4
         except Exception:
             pass
+        # [P1-STEP-GRAM-HINT-STALE · 2026-09-06] El sub-pase del hint corre SIEMPRE, también con
+        # `fixed == 0`: el hint envejece por reescalados que ni siquiera tocaron el texto del paso
+        # (es el caso de "85 g de queso (135 g)", donde el líder ya estaba bien). Va DESPUÉS de
+        # `new_steps` para leer el texto final, y su propio pop de `_display` es redundante aquí
+        # pero necesario en cualquier futuro call site directo.
+        if fixed:
+            meal["recipe"] = new_steps
+        _hint_cambios = _sync_recipe_step_gram_hints(meal)
+        if _hint_cambios:
+            new_steps = list(meal.get("recipe") or new_steps)
+            fixed += len(_hint_cambios)
+            logger.info(f"[P1-STEP-GRAM-HINT-STALE] {len(_hint_cambios)} hint(s) reconciliados en "
+                        f"{str(meal.get('name'))[:40]!r}: "
+                        + " | ".join(f"{a[:70]!r}\u2192{b[:70]!r}" for a, b in _hint_cambios[:2]))
         if fixed:
             meal["recipe"] = new_steps
             # [P1-PLAN-DISPLAY-I18N-MUTATOR-qtysync · Ola final FF-1] DELETE-on-write: los PASOS
