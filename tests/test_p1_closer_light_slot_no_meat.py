@@ -103,11 +103,16 @@ def test_reflection_reopens_the_enumeration_instead_of_a_trailing_comma(monkeypa
     monkeypatch.setattr(go, "CLOSER_DISH_COHERENCE_ENABLED", True)
     m = {"name": "Vaso de toronja con almendras y mantequilla de maní"}
     assert go._reflect_added_protein_in_name(m, "yogurt griego entero", _sa) is True
-    assert m["name"] == "Vaso de toronja con almendras, mantequilla de maní y Yogurt Griego Entero"
+    # [P1-CLOSER-TITLE-CASE · 2026-09-06] Los dos primeros anfitriones van en FRASE NORMAL, así que el
+    # añadido ya no se capitaliza: capitalizar siempre delataba la costura dentro de la propia receta
+    # (129 títulos de 57 planes vivos). Lo que este test defiende es que la enumeración se REABRE —«A con
+    # B, C y D»— en vez de terminar en coma, no la caja de la última palabra.
+    assert m["name"] == "Vaso de toronja con almendras, mantequilla de maní y yogurt griego entero"
     m2 = {"name": "Queso blanco fresco con durazno y almendras"}
     go._reflect_added_protein_in_name(m2, "huevo", _sa)
-    assert m2["name"] == "Queso blanco fresco con durazno, almendras y Huevo"
-    # los dos casos previos del conector siguen igual
+    assert m2["name"] == "Queso blanco fresco con durazno, almendras y huevo"
+    # los dos casos previos del conector siguen igual — y «Revoltillo con Kale» SÍ va en Title Case, así
+    # que ahí el añadido se capitaliza como siempre: la caja la hereda del anfitrión, no es una constante.
     m3 = {"name": "Revoltillo con Kale"}; go._reflect_added_protein_in_name(m3, "yogur griego", _sa)
     assert m3["name"] == "Revoltillo con Kale y Yogur Griego"
     m4 = {"name": "Batido de Frutas"}; go._reflect_added_protein_in_name(m4, "yogur griego", _sa)

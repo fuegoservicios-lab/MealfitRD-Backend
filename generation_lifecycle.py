@@ -860,6 +860,19 @@ def run_initial_chunk(*, task: dict, snap: dict, form_data: dict, pickup_attempt
     finally:
         _run_background_tasks(bt)
 
+    # [P1-PERSIST-DECLINED-NOT-FAILED · 2026-09-06] Rechazada ≠ fallida: si el fence nos dijo que
+    # este trabajo ya no es nuestro, el plan lo escribe otro worker. Nos retiramos igual que la rama
+    # del CAS de más abajo —misma métrica `fencing_rejected`— en vez de llamar a `_fail`, que marcaría
+    # el chunk como fallido por el evento que el fence existe para producir.
+    if result.get("_persist_declined"):
+        _emit_lifecycle_metric("fencing_rejected", user_id,
+                               {"plan_id": plan_id, "site": "persist",
+                                "reason": str(result.get("_persist_declined"))})
+        logger.warning(
+            f"[ARQ25-F1] chunk 0 {str(task_id)[:8]} desplazado en la persistencia "
+            f"({result.get('_persist_declined')}); el plan {str(plan_id)[:8]} es de otro worker."
+        )
+        return
     if result.get("_persist_failed"):
         _fail("persist_failed", "no se pudo escribir el plan", terminal=False)
         return

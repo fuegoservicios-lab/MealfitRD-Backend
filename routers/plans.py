@@ -2338,9 +2338,12 @@ def _postprocess_pipeline_result(
         # actual_user_id garantizado no-None: use_chunking solo es True cuando
         # user_has_profile (que requiere actual_user_id truthy) — ver L2413/2729.
         assert actual_user_id is not None
+        # [P1-PERSIST-DECLINED-NOT-FAILED · 2026-09-06] `_persist_outcome` vuelve con el motivo.
+        _persist_outcome: dict = {}
         plan_id = save_partial_plan_get_id(
             actual_user_id, result, selected_techniques, total_days_requested,
             existing_plan_id=existing_plan_id,  # [P1-ARQ25-F1-LIFECYCLE] cola: rellena el placeholder
+            outcome=_persist_outcome,
         )
         if plan_id:
             # [P2-FREQ-TRACKING-CHUNKED · 2026-07-29] (audit solver+seeder v4) El tracking de
@@ -2393,13 +2396,37 @@ def _postprocess_pipeline_result(
             # consumidores (sync L2494, SSE L3233, done-callback L2933) propagan
             # como FALLA al usuario (error event / 503 / KV failed), y emitimos el
             # system_alert para visibilidad operacional. Tooltip-anchor: P2-PLAN-PERSIST-FAILED.
-            result["_persist_failed"] = True
-            logger.error(
-                f"🛑 [P2-PLAN-PERSIST-FAILED] save_partial_plan_get_id devolvió None "
-                f"(INSERT meal_plans fallido) user={actual_user_id or 'guest'} "
-                f"transport={transport_label}. El plan NO se persistió — propagando como error."
-            )
-            _persist_plan_persist_failed_alert(actual_user_id, f"chunk_insert_failed:{transport_label}")
+            #
+            # [P1-PERSIST-DECLINED-NOT-FAILED · 2026-09-06] …salvo que la escritura no haya FALLADO
+            # sino que la hayan RECHAZADO. `fence_declined` y `already_filled` significan «otro worker
+            # es el dueño de esta escritura»: es el fence de P0-FILL-FENCED haciendo exactamente su
+            # trabajo, y el plan del usuario lo escribe (o lo escribió ya) ese otro worker. Tratarlo
+            # como INSERT fallido levantaba tres señales falsas —un `logger.error` 🛑, una
+            # `system_alert` operacional que nadie podía cerrar porque no había nada roto, y un
+            # `persist_failed` de ciclo de vida— por el evento que el fence existe para producir.
+            #
+            # El `_persist_failed` se conserva en los demás transportes: solo la cola tiene un worker
+            # (`run_initial_chunk`) que sabe retirarse en silencio. En SSE/sync el usuario está
+            # esperando y necesita una respuesta definitiva, aunque el motivo sea un rechazo.
+            _persist_reason = str((_persist_outcome or {}).get("reason") or "unknown")
+            _declinada = _persist_reason in ("fence_declined", "already_filled")
+            if _declinada:
+                result["_persist_declined"] = _persist_reason
+                logger.warning(
+                    f"🛡️ [P1-PERSIST-DECLINED-NOT-FAILED] escritura RECHAZADA "
+                    f"({_persist_reason}) user={actual_user_id or 'guest'} transport={transport_label}. "
+                    f"El plan es de otro worker; no se alerta ni se cuenta como fallo de persistencia."
+                )
+            if not _declinada or transport_label != "queue":
+                result["_persist_failed"] = True
+            if not _declinada:
+                logger.error(
+                    f"🛑 [P2-PLAN-PERSIST-FAILED] save_partial_plan_get_id devolvió None "
+                    f"(motivo={_persist_reason}) user={actual_user_id or 'guest'} "
+                    f"transport={transport_label}. El plan NO se persistió — propagando como error."
+                )
+                _persist_plan_persist_failed_alert(
+                    actual_user_id, f"chunk_insert_failed:{transport_label}:{_persist_reason}")
         if actual_user_id:
             from cron_tasks import _seed_emergency_backup_if_empty
             background_tasks.add_task(

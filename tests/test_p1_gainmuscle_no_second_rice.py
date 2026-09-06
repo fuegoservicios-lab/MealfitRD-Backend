@@ -85,7 +85,11 @@ def test_el_caso_vivo_completo():
 def test_el_guard_esta_antes_de_anexar():
     """Load-bearing: si corriera DESPUÉS del append, el segundo arroz ya estaría puesto."""
     i_guard = _GO.index("P1-GAINMUSCLE-NO-SECOND-RICE")
-    i_append = _GO.index('line = f"{add_g}g de arroz blanco cocido"', i_guard - 4000)
+    # [P1-CLOSER-LINE-SPANISH · 2026-09-06] El ancla lleva ahora el espacio entre la cifra y la
+    # unidad («{add_g} g de …»): el cerrador escribía «65g de …» y el modelo «65 g de …», y la
+    # línea del añadido se distinguía a simple vista dentro de la receta. Lo que este test defiende
+    # es el ORDEN —el guard antes del append—, no el formato de la línea.
+    i_append = _GO.index('line = f"{add_g} g de arroz blanco cocido"', i_guard - 4000)
     assert i_guard < i_append, "el guard debe decidir ANTES de crear la línea"
 
 

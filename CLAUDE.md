@@ -109,7 +109,7 @@ Cinco regresiones históricas que este diseño protege (P1-G mode=block no-op, `
 
 [P1-ARQ25-F7-CULTURE · 2026-09-05] Fase 7: cocina SEPARADA del mercado (I16): `constants.cultural_country_for_form_data` (platos) vs `country_for_form_data` (precios, catálogo, despensa). 6 perfiles como DATA (`cultural_profiles.py`), principal + 2 secundarias; paso «Cocinas que te representan» (sugerida, no sembrada); 6 bibliotecas ≥94 platos con despensa duradera y congelador sincronizados (`pantry_durability.py`); benchmark §13.4 con revisión curatorial firmada. Knob `MEALFIT_CULTURAL_PROFILES`. Doc `backend/docs/cultural_profiles_f7.md`; tests `test_p1_arq25_f7_culture*.py`.
 
-[P0-ARQ27-F1 + P1-ARQ27-F2 · 2026-09-06] Roadmap 2.7: el selector perdía la dieta (1.109 de 1.646 candidatos incompatibles → 0), `legumbre` es etiqueta de CLASE, un plato incompleto no compila íntegro, un nutriente ausente no es cero, el mercado ≠ la cocina (I16) y tofu/soya/edamame pasan de 0 usos a servir 7 candidatos veganos por franja en las 6 cocinas. Docs `backend/docs/arq27_f1_seleccion.md` y `arq27_f2_veganos.md`; tests `test_p0_arq27_f1_*.py`, `test_p1_arq27_f2_veganos.py`.
+[P0-ARQ27-F1 + P1-ARQ27-F2 + P1-ARQ27-F3-CANDIDATESET · 2026-09-06] Roadmap 2.7: el selector perdía la dieta (1.109 de 1.646 candidatos incompatibles → 0), `legumbre` es etiqueta de CLASE, un nutriente ausente no es cero, el mercado ≠ la cocina (I16), y el prompt consume el CandidateSet **fijado al run** con su NOMBRE. Además: una escritura **rechazada** por el fence no es una **fallida**. Docs `arq27_f1_seleccion.md`, `arq27_f2_veganos.md`, `arq27_f3_candidateset.md`.
 
 ## RAG + Dreaming (consolidación de memoria offline)
 

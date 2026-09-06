@@ -492,6 +492,7 @@ def _registry_block_for_country(country: Optional[str], *, effective: Optional[d
         req_nutr = required_nutrients(effective)  # [ARQ27-P0-03]
         mkt = (effective or {}).get("market_country")  # [ARQ27-P1-07] el MERCADO, no la cocina (I16)
         cands = {}
+        names = {}
         hashes = {}
         for d in (days_out or [])[:60]:
             if not isinstance(d, dict):
@@ -502,13 +503,24 @@ def _registry_block_for_country(country: Optional[str], *, effective: Optional[d
                 _pid = ((d.get("culture") or {}).get(slot)) if isinstance(d.get("culture"), dict) else None
                 _c = _culture_country(_pid) if _pid else country
                 hashes[_c] = hashes.get(_c) or dr.registry_hash(_c)
-                ids = [c["template_id"] for c in dr.template_candidates(_c, slot, fam, k=3, exclude_allergens=allergies,
-                                                                         diet=diet, require_known_nutrients=req_nutr,
-                                                                         market_country=mkt,
-                                                                         **_dur_kwargs(effective, d.get("day_index")))]
+                # [ARQ27-P1-04] `rotate` = el día: días consecutivos con la misma franja y familia ya no
+                # reciben la misma cabeza de la lista. Determinista: mismo blueprint ⇒ mismos IDs.
+                _cc = dr.template_candidates(_c, slot, fam, k=3, exclude_allergens=allergies,
+                                             diet=diet, require_known_nutrients=req_nutr,
+                                             market_country=mkt,
+                                             rotate=int(d.get("day_index") or 0),
+                                             **_dur_kwargs(effective, d.get("day_index")))
+                ids = [c["template_id"] for c in _cc]
                 if ids:
-                    cands[f"{d.get('day_index')}:{slot}"] = ids
+                    _key = f"{d.get('day_index')}:{slot}"
+                    cands[_key] = ids
+                    # [ARQ27-P1-04] El NOMBRE también se fija. Con solo el ID, una plantilla retirada del
+                    # registro activo dejaba de resolver y el conjunto del run encogía en silencio — justo
+                    # lo que «cambiar el registro activo no altera los candidatos de un run ya iniciado»
+                    # prohíbe. El ID sigue ahí para poder recuperar la plantilla completa cuando existe.
+                    names[_key] = [str(c.get("name")) for c in _cc if c.get("name")]
         return {"snapshot_hash": h, "version": dr.registry_snapshot_version(), "candidates": cands,
+                "candidate_names": names,
                 "library_hashes": {k: v for k, v in hashes.items() if v}}
     except Exception as e:
         logger.debug(f"[ARQ25-F6] registry no disponible para el blueprint: {e!r}")
@@ -524,11 +536,47 @@ def registry_prompt_enabled() -> bool:
         return True
 
 
+def _pinned_candidate_names(dr, reg: dict, day_index, slot, country) -> list[str]:
+    """[ARQ27-P1-04 · 2026-09-06] Nombres de los candidatos FIJADOS a este run para (día, franja).
+
+    Tres capas, cada una con su razón:
+
+      1. Los nombres fijados en la rebanada. Es la única capa que sobrevive a que el registro activo
+         retire la plantilla, y por eso es la primera: el run tiene que poder recitar sus platos aunque
+         la biblioteca haya cambiado debajo.
+      2. Resolver los `template_id` contra el snapshot vivo — para rebanadas fijadas antes de que se
+         guardaran los nombres.
+      3. Nada: el llamador reconsulta (el adaptador para runs sin CandidateSet).
+    """
+    key = f"{day_index}:{slot}"
+    nombres = [str(x) for x in ((reg or {}).get("candidate_names") or {}).get(key) or [] if x]
+    if nombres:
+        return nombres
+    ids = ((reg or {}).get("candidates") or {}).get(key) or []
+    if not ids:
+        return []
+    idx = dr.templates_by_id(country)
+    out = []
+    for tid in ids:
+        t = idx.get(str(tid))
+        if t and t.get("name"):
+            out.append(str(t["name"]))
+    return out
+
+
 def registry_prompt_lines(effective: Optional[dict], sl: Optional[dict] = None, *, day_index: Optional[int] = None,
                           slot: Optional[str] = None, per_slot: int = 2) -> list[str]:
     """Líneas del bloque 📐 con los platos del registry compilado para los días/franjas de este bloque:
     «Día N · almuerzo: A | B». Deterministas (mismo snapshot ⇒ mismas líneas). Vacío si el knob está
-    apagado, no hay snapshot o el bloque no trae días. Fail-open."""
+    apagado, no hay snapshot o el bloque no trae días. Fail-open.
+
+    [ARQ27-P1-04 · 2026-09-06] Consume el CandidateSet **fijado al run** (`sl['registry']['candidates']`),
+    no el registro activo. Antes reconsultaba `template_candidates`, así que recompilar el registry
+    entre dos chunks cambiaba los platos que se le proponían a un plan ya empezado — y de los 3
+    candidatos fijados recitaba solo 2, siempre los mismos dos. Ahora los recita todos.
+
+    La reconsulta sigue viva como ADAPTADOR para los runs que se fijaron antes de este cambio: su
+    rebanada no trae `registry` y su historial no se reescribe."""
     if not registry_prompt_enabled() or not isinstance(effective, dict) or not effective:
         return []
     try:
@@ -547,6 +595,14 @@ def registry_prompt_lines(effective: Optional[dict], sl: Optional[dict] = None, 
         if not days:
             return []
         offset = int((sl or {}).get("days_offset") or 0)
+        # [ARQ27-P1-04] El CandidateSet de la rebanada. Si el snapshot activo ya no es el que se fijó, se
+        # deja constancia: los platos siguen siendo los del run, y eso es lo que se quiere.
+        _reg_sl = (sl or {}).get("registry") if isinstance(sl, dict) else None
+        _pinned = _reg_sl if ((_reg_sl or {}).get("candidates") or (_reg_sl or {}).get("candidate_names")) else None
+        if _pinned and _reg_sl.get("snapshot_hash") and _reg_sl.get("snapshot_hash") != dr.registry_hash(country):
+            logger.info(
+                f"[ARQ27-P1-04] el registro activo cambió desde que se fijó este run "
+                f"(fijado={str(_reg_sl.get('snapshot_hash'))[:12]}); se usan los candidatos del run.")
         out = []
         for d in days[:7]:
             rel = int(d.get("day_index", 0)) - offset + 1
@@ -558,11 +614,16 @@ def registry_prompt_lines(effective: Optional[dict], sl: Optional[dict] = None, 
             for s_ in slots:
                 key = dr.canonical_slot_es(s_)  # el motor dice «dinner», el registry «cena»
                 _day_country = _culture_country(_cul.get(s_) or _cul.get(key)) if _cul else country
-                cands = dr.template_candidates(_day_country, key, fam, k=per_slot, exclude_allergens=allergies,
-                                               diet=diet, require_known_nutrients=req_nutr,
-                                               market_country=mkt, **_dur_kwargs(eff, d.get("day_index")))
-                if cands:
-                    parts.append(f"{_SLOT_ES.get(key, key)}: " + " | ".join(str(c.get("name")) for c in cands))
+                # [ARQ27-P1-04] lo fijado al run manda; la reconsulta es el adaptador para runs viejos.
+                names = _pinned_candidate_names(dr, _pinned, d.get("day_index"), s_, _day_country)
+                if not names:
+                    cands = dr.template_candidates(_day_country, key, fam, k=per_slot, exclude_allergens=allergies,
+                                                   diet=diet, require_known_nutrients=req_nutr,
+                                                   market_country=mkt, rotate=int(d.get("day_index") or 0),
+                                                   **_dur_kwargs(eff, d.get("day_index")))
+                    names = [str(c.get("name")) for c in cands]
+                if names:
+                    parts.append(f"{_SLOT_ES.get(key, key)}: " + " | ".join(names))
             if parts:
                 out.append(f"Día {rel} → " + " · ".join(parts))
         if not out:
@@ -717,6 +778,27 @@ def slice_for_chunk(bp: dict, days_offset: int, days_count: int) -> dict:
         "fresh_windows": windows,
         "freezer": bp.get("freezer") or {},
     }
+    # [ARQ27-P1-04 · 2026-09-06] El CandidateSet viaja DENTRO de la rebanada. El blueprint ya fijaba los
+    # candidatos por día/franja, pero la rebanada los tiraba y el prompt volvía a consultar el registro
+    # ACTIVO: recompilar entre dos chunks cambiaba los platos de un run ya empezado. Al ir aquí entran
+    # además en `slice_hash` → `input_hash`, así que un cambio de catálogo se ve como revisión distinta
+    # en vez de colarse callado.
+    _reg = bp.get("registry") if isinstance(bp.get("registry"), dict) else None
+    if _reg:
+        _c_in, _n_in = {}, {}
+        _nm_all = _reg.get("candidate_names") or {}
+        for _k, _v in (_reg.get("candidates") or {}).items():
+            try:
+                _d = int(str(_k).split(":", 1)[0])
+            except Exception:
+                continue
+            if off <= _d < off + n:
+                _c_in[_k] = list(_v or [])
+                if _nm_all.get(_k):
+                    _n_in[_k] = list(_nm_all[_k])
+        sl["registry"] = {"snapshot_hash": _reg.get("snapshot_hash"), "version": _reg.get("version"),
+                          "library_hashes": _reg.get("library_hashes") or {}, "candidates": _c_in,
+                          "candidate_names": _n_in}
     sl["slice_hash"] = slice_hash(sl)
     return sl
 
@@ -726,11 +808,16 @@ def slice_hash(sl: dict) -> str:
 
 
 def chunk_input_hash(fingerprint: str, sl: Optional[dict]) -> str:
-    """`input_hash` del chunk: huella del formulario + hash de su rebanada (si la hay)."""
+    """`input_hash` del chunk: huella del formulario + hash de su rebanada (si la hay).
+
+    [ARQ27-P1-04 · 2026-09-06] El hash se RECALCULA del contenido; antes se prefería el `slice_hash`
+    que la propia rebanada lleva dentro. Una rebanada que se modifica en tránsito seguía declarando
+    su hash viejo, así que el `input_hash` decía que nada había cambiado — un dato que se certifica a
+    sí mismo. Para una rebanada bien formada los dos valores coinciden y nada cambia."""
     fp = str(fingerprint or "")
     if not isinstance(sl, dict) or not sl:
         return fp
-    return hashlib.sha256(f"{fp}:{sl.get('slice_hash') or slice_hash(sl)}".encode("utf-8")).hexdigest()
+    return hashlib.sha256(f"{fp}:{slice_hash(sl)}".encode("utf-8")).hexdigest()
 
 
 # ════════════════════════════════════════════════════ persistencia / lookup

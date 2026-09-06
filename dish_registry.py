@@ -508,6 +508,29 @@ def registry_hash(country: Optional[str] = None) -> Optional[str]:
     return snap.get("snapshot_hash") if snap else None
 
 
+_BY_ID: dict = {}
+
+
+def templates_by_id(country: Optional[str] = None) -> dict:
+    """[ARQ27-P1-04 · 2026-09-06] `template_id` → plantilla, para resolver un CandidateSet FIJADO a un
+    run sin volver a filtrar.
+
+    La caché va indexada por el **hash del snapshot**, no por el nombre de la biblioteca ni por
+    «v1»: el criterio del gap dice «resolver por hash de contenido, no solo por nombre v1», y una
+    caché por nombre serviría plantillas viejas después de recompilar sin cambiar de versión — que
+    es justo lo que el repo hace hoy (recompilar en `v1`)."""
+    snap = load_registry(country)
+    if not snap:
+        return {}
+    key = (library_for_country(country), str(snap.get("snapshot_hash") or ""))
+    idx = _BY_ID.get(key)
+    if idx is None:
+        idx = {str(t.get("template_id")): t for t in (snap.get("templates") or [])
+               if t.get("template_id")}
+        _BY_ID[key] = idx
+    return idx
+
+
 _SLOT_ALIASES_ES = {
     "breakfast": "desayuno", "desayuno": "desayuno",
     "lunch": "almuerzo", "almuerzo": "almuerzo", "comida": "almuerzo",
@@ -602,7 +625,7 @@ def template_candidates(country: Optional[str], slot: str, family: Optional[str]
                         exclude_allergens: Iterable[str] = (), need_days: Optional[int] = None,
                         allow_frozen: bool = False, prefer_batch: bool = False,
                         diet: Any = None, require_known_nutrients: Iterable[str] = (),
-                        market_country: Any = None) -> list[dict]:
+                        market_country: Any = None, rotate: int = 0) -> list[dict]:
     """Candidatos del registry para el allocator: `status='ok'`, franja compatible, familia de proteína
     compatible (vía `horizon.family_matches_template`), sin las clases de alérgeno excluidas y sin
     violar la dieta declarada (ARQ27-P0-01). Orden estable.
@@ -615,7 +638,15 @@ def template_candidates(country: Optional[str], slot: str, family: Optional[str]
     COCINA y el catálogo es del MERCADO (I16), y no tienen por qué coincidir: 26 plantillas
     dominicanas piden Casabe u Orégano dominicano, que ni ES ni US llevan en catálogo. Sin este
     filtro, a una cocina dominicana comprando en Estados Unidos se le ofrecían igual. Desconocido no
-    recorta nada."""
+    recorta nada.
+
+    [ARQ27-P1-04 · 2026-09-06] El orden era el de INSERCIÓN en el fichero con un corte al llegar a `k`:
+    añadir una plantilla al principio del JSON cambiaba los candidatos de todas las consultas, y las
+    últimas del fichero no se ofrecían jamás — el «ranking favorece siempre los primeros IDs» que el
+    gap nombra. Ahora se recogen TODAS las compatibles y se ordenan por hash del `template_id` con la
+    consulta como sal: determinista (mismo snapshot ⇒ mismo orden), independiente del orden de
+    inserción, y distinto por franja y familia. `rotate` (el índice del día) desplaza la lista para que
+    días consecutivos con la misma franja y familia no reciban siempre la misma cabeza."""
     snap = load_registry(country)
     if not snap:
         return []
@@ -654,20 +685,27 @@ def template_candidates(country: Optional[str], slot: str, family: Optional[str]
         out.append({"template_id": t["template_id"], "name": t["name"], "protein": t.get("protein"),
                     "technique": t.get("technique"), "transform": t.get("transform"),
                     "logistics": t.get("logistics") or {}, "pantry_only": bool((t.get("logistics") or {}).get("pantry_only"))})
-        if not prefer_batch and len(out) >= max(1, int(k)):
-            break
+    # [ARQ27-P1-04] Orden por hash de CONTENIDO, no por posición en el fichero. Sin corte temprano: hay
+    # que ver todas las compatibles para poder ordenarlas, y una biblioteca son ~100 plantillas.
+    _salt = f"{library_for_country(country)}:{slot_es}:{_norm(family) if family else ''}"
+    out.sort(key=lambda c: hashlib.sha256(
+        f"{_salt}:{c['template_id']}".encode("utf-8")).hexdigest())
+    if rotate and out:
+        _r = int(rotate) % len(out)
+        out = out[_r:] + out[:_r]
     if prefer_batch:
         # [P1-STEP14-SHOPPING-COOKING] «Cocino por tandas»: primero las plantillas que rinden para varios días
-        # (`logistics.batch_friendly`), orden estable dentro de cada grupo; el corte a `k` va DESPUÉS.
+        # (`logistics.batch_friendly`). `sort` es estable, así que dentro de cada grupo se conserva el
+        # orden por hash de arriba; el corte a `k` va DESPUÉS.
         out.sort(key=lambda c: 0 if (c.get("logistics") or {}).get("batch_friendly") else 1)
-        out = out[:max(1, int(k))]
-    return out
+    return out[:max(1, int(k))]
 
 
 __all__ = [
     "REGISTRY_SCHEMA_VERSION", "COMPILER_VERSION", "LIBRARIES", "RISK_THRESHOLDS", "REGISTRY_DIR",
     "registry_snapshot_version", "snapshot_path", "build_catalog_index", "resolve_constituent", "catalog_fingerprint",
     "allergen_classes_for", "derive_risk_attributes", "compile_template", "compile_library", "write_snapshot",
+    "templates_by_id",
     "verify_snapshot", "library_for_country", "load_registry", "registry_hash", "template_candidates",
     "derive_logistics", "derive_editorial",
 ]

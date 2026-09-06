@@ -152,7 +152,11 @@ def embudo(country: str, slot: str, dieta: str, alergias: tuple, need_days, free
     else:
         etapas.append(("conservación", len(restantes)))
 
+    # [P1-ARQ27-F3-BATERIA · 2026-09-06] `supervivientes` (los IDs, no solo el conteo) lo pide la
+    # batería de entrega para comprobar que restringir más SIEMPRE devuelve un subconjunto: un motor
+    # que relaja en silencio devolvería algo que la cohorte laxa no tenía, y un contador no lo vería.
     return {"etapas": etapas, "elegibles": len(restantes), "caidas": caidas,
+            "supervivientes": [t.get("template_id") for t in restantes],
             "ejemplos": [t["name"] for t in restantes[:3]]}
 
 

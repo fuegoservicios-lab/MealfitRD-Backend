@@ -55,7 +55,11 @@ def test_closer_never_adds_sub_cookable_portion(monkeypatch):
     assert g == 0 or g >= go.CLOSER_COOKABLE_MIN_G, f"add de {g}g = porción no-cocinable (el bug del 10g)"
     if g:
         _added = str(meal["ingredients"][-1])
-        m = re.match(r"(\d+)g", _added)
+        # [P1-CLOSER-LINE-SPANISH · 2026-09-06] el espacio es opcional en el patrón: la línea pasó de
+        # «40g de …» a «40 g de …». Sin `\s*` el regex no casaba y el test fallaba diciendo
+        # «línea no-cocinable: 40 g de pechuga de pollo cocida» — una línea de 40 g, perfectamente
+        # cocinable. Un patrón que no reconoce el formato nuevo acusa al código de su propia ceguera.
+        m = re.match(r"(\d+)\s*g", _added)
         assert m and int(m.group(1)) >= go.CLOSER_COOKABLE_MIN_G, f"línea no-cocinable: {_added}"
     # gap trivial SIN headroom calórico → skip total (no infla el slot)
     meal2 = {"name": "Bowl de guisantes", "ingredients": ["80g de guisantes"], "protein": 20,
@@ -157,7 +161,10 @@ def test_consolidate_duplicate_gram_lines():
     n = go._consolidate_duplicate_gram_lines(days)
     assert n == 1
     ings = days[0]["meals"][0]["ingredients"]
-    assert ings == ["55g de queso", "1 huevo entero"], f"consolidación incorrecta: {ings}"
+    # [P1-CLOSER-LINE-SPANISH · 2026-09-06] la línea lleva ahora el espacio entre la cifra y la
+    # unidad, como la escribe el modelo. Lo que este test defiende es la SUMA (15+40=55) y el
+    # descarte del duplicado, no el formato.
+    assert ings == ["55 g de queso", "1 huevo entero"], f"consolidación incorrecta: {ings}"
     assert days[0]["meals"][0]["ingredients_raw"] == ings
 
 
@@ -173,7 +180,7 @@ def test_consolidate_conservative():
                          "ingredients": ["15 g de queso", "40 g de queso"],
                          "ingredients_raw": ["solo una línea"]}]}]
     assert go._consolidate_duplicate_gram_lines(days2) == 1, "display SÍ consolida con raw desalineado"
-    assert days2[0]["meals"][0]["ingredients"] == ["55g de queso"]
+    assert days2[0]["meals"][0]["ingredients"] == ["55 g de queso"]  # [P1-CLOSER-LINE-SPANISH] con espacio
     assert days2[0]["meals"][0]["ingredients_raw"] == ["solo una línea"], "raw intacto (no lockstep)"
 
 

@@ -1692,7 +1692,8 @@ def save_new_meal_plan_atomic(user_id: str, insert_data: dict, return_id: bool =
     return plan_id if return_id else True
 
 
-def fill_placeholder_meal_plan_atomic(plan_id: str, user_id: str, insert_data: dict) -> Optional[str]:
+def fill_placeholder_meal_plan_atomic(plan_id: str, user_id: str, insert_data: dict,
+                                      outcome: Optional[dict] = None) -> Optional[str]:
     """[P1-ARQ25-F1-LIFECYCLE · 2026-09-02] Rellena el PLACEHOLDER que creó la cola
     (`generation_lifecycle.create_placeholder_plan_and_enqueue_initial`) con el plan ya
     generado. Es el gemelo de `save_new_meal_plan_atomic` para el Bloque 1 vía cola: mismo
@@ -1710,7 +1711,19 @@ def fill_placeholder_meal_plan_atomic(plan_id: str, user_id: str, insert_data: d
         CPU-bound corre ANTES de abrir la transacción, como en el atomic).
       · Conserva del placeholder `_run_id` y las lecciones heredadas si el resultado no las trae.
     Devuelve `plan_id` si actualizó exactamente 1 fila; None en cualquier otro caso.
+
+    [P1-PERSIST-DECLINED-NOT-FAILED · 2026-09-06] `outcome` es un dict de salida opcional donde se
+    deja `reason`. Los cinco None de esta función NO son la misma cosa: dos significan «otro worker
+    es el dueño de esta escritura» —`fence_declined` y `already_filled`, que son el fence haciendo
+    exactamente su trabajo— y el resto sí son fallos. El caller los trataba a todos como «INSERT de
+    meal_plans fallido»: un `logger.error` con 🛑, una `system_alert` operacional y un
+    `persist_failed` de ciclo de vida, tres señales falsas por el evento que el fence existe para
+    producir. Quien no pase `outcome` no nota ningún cambio.
     """
+    def _out(reason: str):
+        if isinstance(outcome, dict):
+            outcome["reason"] = reason
+
     if not connection_pool:
         raise RuntimeError("db connection_pool is not available.")
     import copy
@@ -1723,6 +1736,7 @@ def fill_placeholder_meal_plan_atomic(plan_id: str, user_id: str, insert_data: d
     _finalize_plan_data_for_insert(safe)
     pd_new = safe.get("plan_data") if isinstance(safe.get("plan_data"), dict) else None
     if pd_new is None:
+        _out("invalid_plan_data")
         return None
     # [P0-FILL-FENCED] El token sale del plan ANTES de escribir: es de transporte, no del contenido.
     _fence = pd_new.pop("_chunk_fence", None)
@@ -1742,6 +1756,7 @@ def fill_placeholder_meal_plan_atomic(plan_id: str, user_id: str, insert_data: d
                 row = cursor.fetchone()
                 if not row:
                     logger.warning(f"[ARQ25-F1/FILL] placeholder {str(plan_id)[:8]} no existe o no es de {str(user_id)[:8]}")
+                    _out("placeholder_missing")
                     return None
                 prev = row.get("plan_data")
                 if isinstance(prev, str):
@@ -1783,12 +1798,14 @@ def fill_placeholder_meal_plan_atomic(plan_id: str, user_id: str, insert_data: d
                             f"(status={_st!r} attempts={_at} vs esperado {_esperado}); "
                             f"NO se escribe el plan {str(plan_id)[:8]}."
                         )
+                        _out("fence_declined")
                         return None
                 if str(prev.get("generation_status") or "") != "generating":
                     logger.warning(
                         f"[ARQ25-F1/FILL] plan {str(plan_id)[:8]} ya no es placeholder "
                         f"(status={prev.get('generation_status')!r}); no se sobrescribe."
                     )
+                    _out("already_filled")
                     return None
                 for k in _PRESERVE:
                     if k in prev and not pd_new.get(k):
@@ -1812,7 +1829,9 @@ def fill_placeholder_meal_plan_atomic(plan_id: str, user_id: str, insert_data: d
                     vals,
                 )
                 if cursor.rowcount != 1:
+                    _out("update_no_rows")
                     return None
+    _out("ok")
     logger.info(f"✅ [ARQ25-F1/FILL] placeholder {str(plan_id)[:8]} rellenado ({len(pd_new.get('days') or [])} días)")
     return str(plan_id)
 

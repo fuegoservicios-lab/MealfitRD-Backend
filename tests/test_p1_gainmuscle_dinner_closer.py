@@ -69,7 +69,10 @@ def test_closer_adds_chicken_not_soy_to_the_live_dinner(monkeypatch):
     assert g > 0
     blob = " ".join(m["ingredients"]).lower()
     assert "pollo" in blob and "soya" not in blob, m["ingredients"]
-    assert "Pollo" in m["name"]
+    # [P1-CLOSER-TITLE-CASE · 2026-09-06] sin distinguir mayúsculas: el añadido copia ahora la caja del
+    # título anfitrión, y este plato va en frase normal («…y pechuga de pollo»). Lo que se defiende es
+    # que la proteína APAREZCA en el nombre — que el plato no esconda lo que el cerrador le metió.
+    assert "pollo" in m["name"].lower()
 
 
 def test_plant_meat_only_for_vegetarians(monkeypatch):

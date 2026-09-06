@@ -51,7 +51,14 @@ def test_precooked_ingredient_no_redundant_cocido():
     # el sufijo " cocido" no se añade a un enlatado (evita "sardinas en lata cocido")
     # [P1-CLOSER-HYGIENE · 2026-07-06] re-anclado: el guard creció (lácteos + nombres con "cocid"
     # tampoco llevan el sufijo — "½ taza de yogurt cocido" vivo en da7bb310).
-    assert 'cook = "" if (no_cook or _pre_cooked or _dairy_nm or "cocid" in _nm_strip) else " cocido"' in _GRAPH
+    # [P1-CLOSER-LINE-SPANISH · 2026-09-06] El participio ya no se escribe a mano: sale de
+    # `participio_concordado(nm)`, que lo concuerda con el núcleo del nombre («soya texturizada
+    # cocida», no «cocido»). El literal viejo entraba en contradicción directa con
+    # `test_p1_closer_line_spanish.py::test_los_dos_cerradores_usan_el_helper`, que exige que
+    # `else " cocido"` NO exista. Lo que este test defiende es la CONDICIÓN del guard —enlatado,
+    # lácteo o nombre que ya dice «cocid» no reciben sufijo—, no cómo se escribe el sufijo.
+    assert 'no_cook or _pre_cooked or _dairy_nm or "cocid" in _nm_strip' in _GRAPH
+    assert "participio_concordado(nm)" in _GRAPH
 
 
 # ───────────────────────── P1-RECIPE-OFFCATALOG-CONDIMENT (prompt) ─────────────────────────

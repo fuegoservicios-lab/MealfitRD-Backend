@@ -245,13 +245,18 @@ def _stamp_quality_index(plan_data: dict) -> dict:
         return plan_data
 
 
-def save_partial_plan_get_id(user_id: str, plan_data: dict, selected_techniques: Optional[list] = None, total_days_requested: int = 7, existing_plan_id: Optional[str] = None) -> Optional[str]:
+def save_partial_plan_get_id(user_id: str, plan_data: dict, selected_techniques: Optional[list] = None, total_days_requested: int = 7, existing_plan_id: Optional[str] = None,
+                             outcome: Optional[dict] = None) -> Optional[str]:
     """Guarda la Semana 1 de un plan chunked de forma sincrónica y retorna el plan_id UUID.
     Usado exclusivamente por el flujo de Background Chunking para encolar las semanas restantes.
 
     [P2-PARTIAL-PLAN-1 · 2026-05-11] Removido el lazy import de
     `save_new_meal_plan_robust` — el body real usa `save_new_meal_plan_atomic`
     (línea ~158). El import legacy nunca se referenciaba.
+
+    [P1-PERSIST-DECLINED-NOT-FAILED · 2026-09-06] `outcome` viaja hasta
+    `fill_placeholder_meal_plan_atomic` y vuelve con `reason`: sirve para que el caller distinga
+    una escritura RECHAZADA (el fence: otro worker es el dueño) de una FALLIDA.
     """
     try:
         # [GAP 3] Limpieza de días huérfanos al regenerar
@@ -317,9 +322,13 @@ def save_partial_plan_get_id(user_id: str, plan_data: dict, selected_techniques:
         # (creado ANTES de generar, I1) → se rellena en vez de insertar otro plan.
         if existing_plan_id:
             from db_plans import fill_placeholder_meal_plan_atomic
-            plan_id = fill_placeholder_meal_plan_atomic(existing_plan_id, user_id, insert_data)
+            plan_id = fill_placeholder_meal_plan_atomic(existing_plan_id, user_id, insert_data,
+                                                       outcome=outcome)
         else:
             plan_id = cast("Optional[str]", save_new_meal_plan_atomic(user_id, insert_data, return_id=True))
+            # [P1-PERSIST-DECLINED-NOT-FAILED] El INSERT no tiene fence: su None sí es un fallo.
+            if isinstance(outcome, dict):
+                outcome["reason"] = "ok" if plan_id else "insert_failed"
 
         # [P1-COST-ATTRIBUTION · 2026-07-31] Ruta CHUNKED (la de los planes de 7
         # días): mismo canje corr→plan_id que en `_save_plan_and_track_background`.

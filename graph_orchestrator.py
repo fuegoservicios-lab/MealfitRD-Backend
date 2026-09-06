@@ -20231,7 +20231,7 @@ def _protein_topup_meal(meal: dict, slot_cal_target: float, db, approved_protein
         name_disp = str(info.name).lower()
         # [P1-CLOSER-COHERENCE · 2026-06-27] sin el hint duplicado "(Ng)" (ej. "4.73g de queso (4.73g)") — el líder
         # ya está en gramos; el quantize final lo redondea a valor humano.
-        line = f"{grams}g de {name_disp}"
+        line = f"{grams} g de {name_disp}"
         meal.setdefault("ingredients", []).append(line)
         if isinstance(meal.get("ingredients_raw"), list):
             meal["ingredients_raw"].append(line)
@@ -21013,9 +21013,14 @@ def _meal_slot_is_light(meal: dict, strip_accents_fn) -> bool:
     return "merienda" in slot_low or "desayuno" in slot_low or "snack" in slot_low
 
 
-# [P2-DISH-COHERENCE-NAMEFIX · 2026-06-25] Stopwords es-DO para el reflejo del nombre: no se
-# capitalizan ('Carne de Res', no 'Carne De Res') ni cuentan como token significativo de la proteína.
-_NAME_STOPWORDS = {"de", "del", "la", "el", "los", "las", "con", "y", "a", "en", "sin", "al"}
+# [P1-CLOSER-TITLE-CASE · 2026-09-06] La morfología y la tipografía del nombre viven en
+# `dish_naming.py`: son funciones puras del castellano, no orquestación, y el techo de líneas de
+# este fichero (roadmap 2.5 §11) pedía exactamente esto — extraer un módulo, no subir el tope.
+# Se reexportan para que los call sites y los tests que importan de aquí sigan funcionando.
+from dish_naming import (  # noqa: E402,F401
+    _NAME_STOPWORDS, _NAME_FEM_FOODS, _NAME_ADJ_FEM,
+    participio_concordado, _titulo_en_title_case, _food_display_for_title,
+)
 
 
 def _reflect_added_protein_in_name(meal: dict, protein_name: str, strip_accents_fn) -> bool:
@@ -21068,9 +21073,10 @@ def _reflect_added_protein_in_name(meal: dict, protein_name: str, strip_accents_
         except Exception:
             if any(t in name_low for t in sig_tokens):   # fail-open al comportamiento previo
                 return False
-        # Display: nombre COMPLETO de la proteína, conectores en minúscula, resto capitalizado.
-        proper = " ".join(w if w.lower() in _NAME_STOPWORDS else w.capitalize()
-                          for w in pname.split())
+        # Display: nombre COMPLETO de la proteína. [P1-CLOSER-TITLE-CASE · 2026-09-06] La caja la
+        # decide el TÍTULO ANFITRIÓN, no este bloque: capitalizar siempre delataba el añadido dentro
+        # de una frase en minúsculas (129 títulos de 57 planes vivos).
+        proper = _food_display_for_title(pname, name)
         connector = _name_connector_for(name)
         # [P1-CLOSER-LIGHT-SLOT-NO-MEAT · 2026-09-05 · enumeración] Con la enumeración ya abierta
         # ("A con B y C") el conector era la coma y el título quedaba "…mantequilla de maní, Camarones"
@@ -21832,11 +21838,14 @@ def _close_protein_gap_for_meal(meal: dict, slot_protein_target: float, db, cand
         # yogurt cocido" en vivo — el yogurt no se cocina ni se compra cocido); nombres que ya
         # traen "cocid" tampoco (doble sufijo).
         _dairy_nm = any(h in _nm_strip for h in _NO_COOK_SAFE_PROTEIN_HINT)
-        cook = "" if (no_cook or _pre_cooked or _dairy_nm or "cocid" in _nm_strip) else " cocido"
+        # [P1-CLOSER-LINE-SPANISH] el participio concuerda con el núcleo del nombre del alimento.
+        cook = ("" if (no_cook or _pre_cooked or _dairy_nm or "cocid" in _nm_strip)
+                else " " + participio_concordado(nm))
         # [P1-CLOSER-INTEGRATE · 2026-07-06] línea congruente existente → se ESCALA (jamás una
         # segunda línea "200 g de queso" que ningún paso usa).
         if not _scale_congruent_protein_line(meal, nm, grams, db):
-            line = f"{grams}g de {nm}{cook}"  # [P1-CLOSER-COHERENCE] sin hint duplicado "(Ng)"; quantize final lo redondea
+            # [P1-CLOSER-LINE-SPANISH] espacio entre cifra y unidad, como escribe el modelo.
+            line = f"{grams} g de {nm}{cook}"  # [P1-CLOSER-COHERENCE] sin hint duplicado "(Ng)"; quantize final lo redondea
             meal.setdefault("ingredients", []).append(line)
             if isinstance(meal.get("ingredients_raw"), list):
                 meal["ingredients_raw"].append(line)
@@ -27268,7 +27277,8 @@ def _swap_excess_carbs_to_protein_for_day(meals, p_target_day, c_target_day, db,
         # [P1-CLOSER-INTEGRATE · 2026-07-06] mismo contrato del callsite principal: escalar la
         # línea congruente existente antes que apilar una nueva.
         if not _scale_congruent_protein_line(target_meal, nm, grams_food, db):
-            line = f"{grams_food}g de {nm}{'' if _skip_cook_pf else ' cocido'}"  # [P1-CLOSER-COHERENCE] sin hint duplicado
+            _cook_pf = "" if _skip_cook_pf else " " + participio_concordado(nm)
+            line = f"{grams_food} g de {nm}{_cook_pf}"  # [P1-CLOSER-COHERENCE] sin hint duplicado
             target_meal.setdefault("ingredients", []).append(line)
             if isinstance(target_meal.get("ingredients_raw"), list):
                 target_meal["ingredients_raw"].append(line)
@@ -31740,7 +31750,7 @@ def _topup_healthy_fat_to_band_floor(meals: list, target_fats: float, target_kca
             add = int(min(float(per_meal_cap), _math.ceil(need), _math.floor(kcal_room / 9.0)))
             if add < 5:
                 continue
-            line = f"{add}g de aceite de oliva virgen extra"
+            line = f"{add} g de aceite de oliva virgen extra"
             m.setdefault("ingredients", []).append(line)
             if isinstance(m.get("ingredients_raw"), list):
                 m["ingredients_raw"].append(line)
@@ -31830,7 +31840,7 @@ def _repair_day_kcal_floor_post_caps(days: list, nutrition: dict, form_data: dic
                 add_g = int(min(float(per_meal_cap), _math_k.ceil(need / 9.0), _math_k.floor(room / 9.0)))
                 if add_g < 4:
                     continue
-                line = f"{add_g}g de aceite de oliva virgen extra"
+                line = f"{add_g} g de aceite de oliva virgen extra"
                 m.setdefault("ingredients", []).append(line)
                 if isinstance(m.get("ingredients_raw"), list):
                     m["ingredients_raw"].append(line)
@@ -31995,14 +32005,14 @@ def _repair_gainmuscle_day_kcal(days: list, nutrition: dict, form_data: dict, db
                     import re as _re_gmrf
                     _gm_mch = _re_gmrf.match(r"\s*(\d+)", str(m["ingredients"][_gm_rice_idx]))
                     _gm_prev = int(_gm_mch.group(1)) if _gm_mch else 0
-                    line = f"{_gm_prev + add_g}g de {_sd_food}"
+                    line = f"{_gm_prev + add_g} g de {_sd_food}"
                     m["ingredients"][_gm_rice_idx] = line
                     _gm_raw = m.get("ingredients_raw")
                     if isinstance(_gm_raw, list) and _gm_rice_idx < len(_gm_raw):
                         _gm_raw[_gm_rice_idx] = line
                 else:
                     # (literal conservado: lo ancla test_p1_gainmuscle_no_second_rice)
-                    line = f"{add_g}g de arroz blanco cocido" if not _is_cena_gm else f"{add_g}g de {_sd_food}"
+                    line = f"{add_g} g de arroz blanco cocido" if not _is_cena_gm else f"{add_g} g de {_sd_food}"
                     m.setdefault("ingredients", []).append(line)
                     if isinstance(m.get("ingredients_raw"), list):
                         m["ingredients_raw"].append(line)
@@ -38375,7 +38385,7 @@ def _consolidate_duplicate_gram_lines(days) -> int:
                     total = sum(g for _, g in entries)
                     first_idx = entries[0][0]
                     food_txt = _lead.match(str(ings[first_idx])).group(2).strip()
-                    new_line = f"{int(round(total))}g de {food_txt}"
+                    new_line = f"{int(round(total))} g de {food_txt}"
                     ings[first_idx] = new_line
                     if isinstance(raw, list):
                         raw[first_idx] = new_line
@@ -49923,19 +49933,9 @@ def fix_ingredient_count_agreement(plan_data: dict) -> int:
         return 0
 
 
-# [P1-NAME-GENDER-POLISH · 2026-07-26] Alimentos FEMENINOS frecuentes en los nombres de plato +
-# adjetivos con forma femenina. Deliberadamente CORTO: solo se corrige lo que se puede afirmar.
-_NAME_FEM_FOODS = {
-    "lechosa", "manzana", "pera", "pina", "naranja", "auyama", "batata", "yuca",
-    "avena", "guayaba", "toronja", "mandarina", "chinola", "ciruela", "uva",
-    "sandia", "papaya", "coliflor", "zanahoria", "berenjena", "remolacha",
-    "pechuga", "carne", "tilapia", "tortilla", "ensalada", "sopa", "crema",
-}
-_NAME_ADJ_FEM = {
-    "fresco": "fresca", "asado": "asada", "salteado": "salteada", "molido": "molida",
-    "tostado": "tostada", "horneado": "horneada", "guisado": "guisada",
-    "cocido": "cocida", "rallado": "rallada", "picado": "picada", "crudo": "cruda",
-}
+# [P1-CLOSER-TITLE-CASE · 2026-09-06] `_NAME_FEM_FOODS`, `_NAME_ADJ_FEM` y `participio_concordado`
+# se importan de `dish_naming` al principio del fichero. `_fix_name_gender_agreement` sigue aquí:
+# muta el dict de la comida, que sí es cosa del orquestador.
 def _fix_name_gender_agreement(name):
     """[P1-NAME-GENDER-POLISH · 2026-07-26] Concuerda el adjetivo cuando el NÚCLEO del sintagma
     es un alimento femenino. Devuelve el nombre corregido, o `None` si no hay nada que tocar.
