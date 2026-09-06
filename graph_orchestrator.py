@@ -28679,6 +28679,7 @@ def finalize_plan_data_coherence(days: list, db=None, allergies=None, target_fat
         if RECIPE_STEP_CARB_GUARD_ENABLED:
             _ncgp = _add_missing_recipe_step_carbs(days, db=db, allergies=allergies)
             _neutralize_cold_dairy_technique(days)   # [P1-COLD-DAIRY-TECHNIQUE]
+            _specify_generic_lines_from_dish_name(days)   # [P1-NAME-SPECIFICITY]
             if _ncgp:
                 total += _ncgp; parts.append(f"carb_ghost={_ncgp}")
                 try:
@@ -29474,6 +29475,7 @@ def finalize_single_meal_recipe_coherence(meal: dict, db=None, pantry_strict: bo
             if RECIPE_STEP_CARB_GUARD_ENABLED and not pantry_strict:
                 _ncg = _add_missing_recipe_step_carbs(_wrap, db=db, allergies=allergies)
                 _neutralize_cold_dairy_technique(_wrap)   # [P1-COLD-DAIRY-TECHNIQUE]
+                _specify_generic_lines_from_dish_name(_wrap)   # [P1-NAME-SPECIFICITY]
                 if _ncg:
                     total += _ncg
                     try:
@@ -34887,6 +34889,136 @@ def _neutralize_cold_dairy_technique(days) -> list:
     return cambios
 
 
+# [P1-NAME-SPECIFICITY · 2026-09-06] El nombre dice el alimento ESPECÍFICO y la lista el genérico.
+#
+#   «Queso de hoja a la plancha con arroz cítrico»        lista: «30 g de queso»
+#   «Pastelitos… rellenos de chuleta de cerdo»              lista: «½ chuleta»
+#
+# El juez lo reporta como `nombre_no_corresponde` — «el nombre declara ‘gratinada con parmesano’
+# pero la lista solo contiene queso genérico»— y es la clase que quedaba tras materializar los
+# cuatro fantasmas de `P1-NAME-GHOST-GAPS`. Medido con emparejamiento por NOMBRE COMPLETO de
+# catálogo (la v1 partía los compuestos y marcaba «hoja» de «queso de hoja»): 7-12 % de los platos,
+# encabezado por Queso de hoja 10, Yogurt griego entero 5 y Queso blanco 4.
+#
+# Es el ESPEJO de `P1-RECIPE-POLISH-5`, que hace lo mismo en la otra dirección (display genérico
+# cuyo raw nombra el queso específico → el display hereda del raw). Aquí la fuente es el NOMBRE
+# del plato, que es donde el usuario ya leyó la promesa.
+#
+# No hace falta el catálogo: la forma «<cabeza> de <calificador>» está en el propio nombre. Se
+# renombra SOLO el texto del alimento en la línea — cantidad, unidad y hint intactos, byte a byte—
+# así que no mueve macros ni lista de compras, y el backstop de alérgenos lee el texto crudo, que
+# solo gana precisión. Rollback: MEALFIT_NAME_SPECIFICITY=false.
+NAME_SPECIFICITY_ENABLED = _env_bool("MEALFIT_NAME_SPECIFICITY", True)
+# Cabezas que en un nombre de plato son FORMATO o preparación, no un alimento a precisar.
+_NAME_SPEC_SKIP_HEADS = frozenset((
+    "ensalada", "salsa", "crema", "sopa", "guiso", "estofado", "batido", "bowl", "wrap", "vaso",
+    "copa", "plato", "toque", "mise", "montaje", "pizca", "taza", "tazas", "cucharada",
+    "cucharadita", "porcion", "racion", "trozo", "pedazo", "lata", "paquete", "sofrito",
+    # [P1-NAME-SPECIFICITY · ronda 2] «tortilla» es formato: contra los planes vivos produjo
+    # «1 tortilla integral de ropa vieja», que no es un alimento sino el relleno del plato.
+    "tortilla", "tortillas", "quesadilla", "pastelito", "pastelitos", "catibia", "catibias",
+))
+# El calificador se corta en el primer CONECTOR. Sin esto, «Queso de hoja con vainitas» dejaba
+# «60 g de queso de hoja con vainitas» — el nombre del plato entero metido en una línea de la
+# lista. Medido: 3 de las 7 primeras reescrituras eran de esta forma.
+_NAME_SPEC_CONECTORES = frozenset((
+    "con", "y", "sobre", "para", "sin", "en", "al", "del", "las", "los", "una", "unos", "unas",
+    "que", "mas", "estilo", "servido", "servida", "acompanado", "acompanada", "relleno",
+    "rellena", "rellenos", "rellenas", "banado", "banada", "tostado", "tostada", "horneado",
+    "horneada", "asado", "asada", "frito", "frita", "salteado", "salteada", "picado", "picada",
+))
+# Palabras tras las que SÍ empieza un alimento nuevo. Si la cabeza va detrás de cualquier otra
+# cosa, es un adjetivo del sintagma anterior y no la cabeza de nada.
+_NAME_SPEC_APERTURAS = frozenset((
+    "de", "con", "y", "e", "sobre", "en", "del", "al", "a", "para", "relleno", "rellena",
+    "rellenos", "rellenas", "acompanado", "acompanada", "servido", "servida", ",", "-",
+))
+_NAME_SPEC_RE = _re.compile(
+    r"(?<![a-záéíóúñ])(?P<cabeza>[a-záéíóúñ]{4,})\s+de\s+"
+    r"(?P<calif>[a-záéíóúñ]{3,}(?:\s+[a-záéíóúñ]{3,}){0,2})")
+
+
+def _specify_generic_lines_from_dish_name(days) -> list:
+    """Precisa el alimento de una línea genérica con el nombre que el propio plato promete.
+    Muta `days`; devuelve (antes, después) por línea tocada. Fail-safe.
+    tooltip-anchor: P1-NAME-SPECIFICITY"""
+    if not NAME_SPECIFICITY_ENABLED or not days:
+        return []
+    cambios = []
+    try:
+        from constants import strip_accents as _sa_ns
+        for _d in days:
+            for meal in (_d.get("meals") or []) if isinstance(_d, dict) else []:
+                if not isinstance(meal, dict):
+                    continue
+                ings = meal.get("ingredients")
+                if not isinstance(ings, list) or not ings:
+                    continue
+                nombre = _sa_ns(str(meal.get("name") or "").lower())
+                blob = _sa_ns(" | ".join(str(x) for x in ings).lower())
+                for mm in _NAME_SPEC_RE.finditer(nombre):
+                    # [P1-NAME-SPECIFICITY · ronda 3] La cabeza tiene que ABRIR un sintagma: o
+                    # empieza el nombre, o va detrás de un conector. En «Wrap integral de ropa
+                    # vieja de res» el patrón casaba `integral de ropa vieja` y renombraba la
+                    # línea «1 tortilla integral» a «tortilla integral de ropa vieja» — porque
+                    # `integral` es un ADJETIVO del wrap, no la cabeza de nada. Con la guarda,
+                    # «queso» (abre el nombre) y «chuleta» (tras «rellenos de») siguen entrando.
+                    _pre = nombre[:mm.start()].strip()
+                    # La puntuación pegada NO descalifica: en «…con revoltillo, queso de hoja y
+                    # Aguacate» la palabra previa es «revoltillo,» y sin este `strip` se perdía
+                    # un acierto legítimo por una coma.
+                    _prev = _pre.split()[-1].strip(",;:.·-") if _pre else ""
+                    if _pre and _prev not in _NAME_SPEC_APERTURAS and not _pre.endswith((",", ";", "-")):
+                        continue
+                    cabeza, calif = mm.group("cabeza"), mm.group("calif").strip()
+                    # el calificador termina donde empieza el resto del nombre del plato
+                    _palabras = []
+                    for _w in calif.split():
+                        # Conector explícito o PARTICIPIO: «gratinado», «guisado», «majado» son
+                        # cómo se cocina, no qué es. La regla morfológica evita una lista que
+                        # crece para siempre — la encontró el test, no producción.
+                        if _w in _NAME_SPEC_CONECTORES or _re.search(r"(ad|id)[oa]s?$", _w):
+                            break
+                        _palabras.append(_w)
+                    calif = " ".join(_palabras[:2]).strip()
+                    if cabeza in _NAME_SPEC_SKIP_HEADS or not calif:
+                        continue
+                    # el calificador YA está en la lista ⇒ nada que precisar
+                    if _re.search(r"(?<![a-z])" + _re.escape(calif.split()[0]) + r"(?:e?s)?(?![a-z])", blob):
+                        continue
+                    # la cabeza tiene que estar, y en UNA sola línea: con dos no se sabe cuál
+                    _hits = [i for i, ln in enumerate(ings)
+                             if _re.search(r"(?<![a-z])" + _re.escape(cabeza) + r"(?:e?s)?(?![a-z])",
+                                           _sa_ns(str(ln).lower()))]
+                    if len(_hits) != 1:
+                        continue
+                    _i = _hits[0]
+                    _linea = str(ings[_i])
+                    # solo si esa línea es GENÉRICA: la cabeza cierra el texto (o le sigue una coma)
+                    _low = _sa_ns(_linea.lower())
+                    _m2 = _re.search(r"(?<![a-z])" + _re.escape(cabeza) + r"(?:e?s)?(?![a-z])", _low)
+                    _cola = _low[_m2.end():].strip(" ,.;")
+                    if _cola and not _cola.startswith("("):
+                        continue                      # ya lleva calificador propio
+                    _nueva = (_linea[:_m2.end()] + f" de {calif}" + _linea[_m2.end():]).strip()
+                    if _nueva != _linea:
+                        ings[_i] = _nueva
+                        cambios.append((_linea, _nueva))
+                        blob = _sa_ns(" | ".join(str(x) for x in ings).lower())
+        if cambios:
+            for _d in days:
+                for meal in (_d.get("meals") or []) if isinstance(_d, dict) else []:
+                    if isinstance(meal, dict):
+                        meal.pop("_display", None)   # el display espeja los ingredientes
+            logger.info(
+                f"🏷 [P1-NAME-SPECIFICITY] {len(cambios)} línea(s) precisadas con el nombre del "
+                f"plato: " + " | ".join(f"{a!r}→{b!r}" for a, b in cambios[:2]))
+    except Exception as _ns_e:                                              # noqa: BLE001
+        logger.warning(f"[P1-NAME-SPECIFICITY] no-op: {type(_ns_e).__name__}: {_ns_e}")
+        return []
+    return cambios
+
+
 def _add_missing_recipe_step_carbs(days, db=None, allergies=None) -> int:
     """[P2-STEP-CARB-GHOST · 2026-07-01] (batch P1-DISH-REALISM-BATCH) Espejo del veg-guard para CARBS
     fantasma: "Revoltillo Criollo con Queso y AVENA" cuyos pasos dicen "cocinar la avena" y "servir junto
@@ -39875,6 +40007,7 @@ async def assemble_plan_node(state: PlanState) -> dict:
         try:
             _cg_added = _add_missing_recipe_step_carbs(days, allergies=form_data.get("allergies"))
             _neutralize_cold_dairy_technique(days)   # [P1-COLD-DAIRY-TECHNIQUE]
+            _specify_generic_lines_from_dish_name(days)   # [P1-NAME-SPECIFICITY]
             if _cg_added:
                 logger.info(f"🌾 [P2-STEP-CARB-GHOST] {_cg_added} carb(s) fantasma de nombre/pasos "
                             f"materializado(s) en ingredients[] (entran a compras + macros).")
