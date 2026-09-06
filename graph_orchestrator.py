@@ -14554,6 +14554,9 @@ _SUBST_REWRITE_SKIP_TOKENS = frozenset({
 })
 
 _SUBST_ARTICLE_RE_BODY = r"(?:\b(?:el|la|los|las|un|una|unos|unas)\s+)?\b"
+# [P1-SUBST-NAME-REWRITE · 2026-09-06] Knob propio, separado del de los pasos: reescribir el título es más
+# visible para el usuario y más barato de revertir que reescribir instrucciones.
+SUBST_NAME_REWRITE_ENABLED = _env_bool("MEALFIT_SUBST_NAME_REWRITE", True)
 
 
 def _accent_loose_body(tok: str) -> str:
@@ -14658,6 +14661,74 @@ def _strip_shellfish_only_clauses(days: list) -> int:
             except Exception:
                 continue
     return n
+
+
+def _rewrite_meal_name_after_subs(meal: dict, token_subs: list) -> bool:
+    """[P1-SUBST-NAME-REWRITE · 2026-09-06] Reescribe el TÍTULO del plato tras una sustitución de ingrediente.
+
+    Por qué hace falta, medido en el plan vivo c5ba1681 (vegetariano): la sustitución de dieta cambió el
+    ingrediente y dejó el título intacto, así que el plato se llamaba «Pechuga de pollo…» con soya texturizada
+    dentro. El revisor médico lo rechazó —con razón— y costó un INTENTO ENTERO de generación.
+
+    Ya existía `_fix_phantom_protein_in_name`, pero declina a propósito cuando el reemplazo no es otra carne:
+    su caso es una incoherencia de GENERACIÓN, donde renombrar disimularía el fallo. Aquí es lo contrario:
+    sabemos exactamente qué se sustituyó y por qué, así que el rename es la parte honesta — dejar la carne en
+    el título de un plan vegetariano es peor que cualquier nombre desmañado.
+
+    Misma maquinaria que los pasos: acento-tolerante, borra el artículo previo, salta texturas culinarias,
+    token más largo primero. Determinista, idempotente y fail-safe. tooltip-anchor: P1-SUBST-NAME-REWRITE"""
+    if not SUBST_NAME_REWRITE_ENABLED:
+        return False
+    nombre = str((meal or {}).get("name") or "")
+    if not nombre or not token_subs:
+        return False
+    try:
+        pats = []
+        vistos = set()
+        for tokens, nuevo in token_subs:
+            disp = _strip_qty_prefix_for_step(nuevo)
+            for tok in sorted({str(t).strip().lower() for t in (tokens or []) if t}, key=len, reverse=True):
+                # El corte de 4 caracteres que usan los pasos deja fuera «res», y «Guiso de res» se quedaba
+                # con la carne en el título. Aquí baja a 3 porque el patrón lleva frontera de palabra a los dos
+                # lados: «res» no casa dentro de «f-res-co» ni «pollo» dentro de «re-pollo» (comprobado en el
+                # test). Por debajo de 3 no se baja: un token de dos letras no distingue nada.
+                if len(tok) < 3 or tok in _SUBST_REWRITE_SKIP_TOKENS or tok in vistos:
+                    continue
+                vistos.add(tok)
+                try:
+                    pats.append((len(tok),
+                                 _re.compile(_SUBST_ARTICLE_RE_BODY + _accent_loose_body(tok) + r"(?:es|s)?\b",
+                                             _re.IGNORECASE),
+                                 disp))
+                except Exception:
+                    continue
+        if not pats:
+            return False
+        pats.sort(key=lambda x: x[0], reverse=True)
+        salida = nombre
+        for _ln, pat, disp in pats:
+            # Si el título YA nombra el reemplazo, el token fuente puede casar DENTRO de esa ocurrencia y
+            # duplicarla («Soya texturizada de Soya texturizada»). Mismo cuidado que en los pasos.
+            spans = _spans_of_phrase_accent_flex(salida, disp)
+
+            def _rep(m, _d=disp, _sp=spans):
+                for a, b in _sp:
+                    if a <= m.start() < b:
+                        return m.group(0)
+                return (_d[:1].upper() + _d[1:]) if m.start() == 0 else (_d[:1].lower() + _d[1:])
+            salida = pat.sub(_rep, salida)
+        salida = _re.sub(r"\s{2,}", " ", salida).strip(" ,;-")
+        if not salida or salida == nombre:
+            return False
+        try:
+            salida = _dedupe_adjacent_name_words(salida)
+        except Exception:
+            pass
+        meal["name"] = salida[:1].upper() + salida[1:]
+        return True
+    except Exception as _nr_e:
+        logger.warning(f"[P1-SUBST-NAME-REWRITE] no-op (fail-safe): {type(_nr_e).__name__}: {_nr_e}")
+        return False
 
 
 def _rewrite_recipe_steps_after_subs(meal: dict, token_subs: list) -> bool:
@@ -14960,6 +15031,14 @@ def _apply_substitutions_core(plan: dict, subs: list, note_builder, note_sentine
                 # receta ANTES de la nota (para que la nota siga siendo la última línea). Solo usa los tokens de la lista
                 # canónica `ingredients` (recipe_token_subs). Fail-safe: si falla, los pasos quedan intactos.
                 _steps_changed = False
+                if recipe_token_subs:
+                    # [P1-SUBST-NAME-REWRITE · 2026-09-06] El TÍTULO va primero: es lo que el revisor lee y lo
+                    # que rechazó el plan c5ba1681 («Pechuga de pollo…» con soya dentro). Se hace aunque el
+                    # reescritor de pasos esté apagado: son dos knobs porque son dos riesgos distintos.
+                    try:
+                        _rewrite_meal_name_after_subs(meal, recipe_token_subs)
+                    except Exception:
+                        pass
                 if SUBST_RECIPE_REWRITE_ENABLED and recipe_token_subs:
                     try:
                         _steps_changed = bool(_rewrite_recipe_steps_after_subs(meal, recipe_token_subs))
