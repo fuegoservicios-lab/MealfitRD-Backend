@@ -501,3 +501,55 @@ donde el prototipo daba 11.
 autoinforma.
 
 Test: [`test_p1_culinary_v6_step_overask.py`](../tests/test_p1_culinary_v6_step_overask.py).
+
+## El sello de lo que el juez juzgó
+
+[P1-JUDGE-REVISION-STAMP · 2026-09-06] Fui a por los 53 `nombre_no_corresponde` del juez esperando
+un detector nuevo, y **la maquinaria ya estaba**: `P1-NAME-GHOST-GAPS` y `P1-NAME-SPECIFICITY`.
+Lo que faltaba no era una comprobación, era **poder decidir si una queja del juez describe lo que
+se entregó**.
+
+`_culinary_judge_history` guardaba `{ts, model, violations, action_taken}` — nada que atara una
+entrada a una versión del plan. Con eso, «el juez se quejó y lo arreglamos» y «se quejó y lo
+entregamos» son indistinguibles.
+
+### La medición que lo prueba (96 planes, 2026-09-06)
+
+| comprobación | resultado |
+|---|---|
+| quejas juzgables «X no aparece en la lista» | 37 |
+| …que nombraban algo que **SÍ está** en el plan entregado | **6** (almendras, pistachos, guineítos verdes, queso cottage) |
+| líneas de queso con «lonja/pedazo» en planes vivos | 23 |
+| …sobre un queso que **no viene en lonjas** (cottage, ricotta, crema…) | **0** |
+
+Ese último es el más elocuente. El agujero existe —`_VAGUE_SLICE_FOOD_RE` es
+`(queso|jamon|…)\b.*` y sí casa «queso cottage», que se vende por peso y no en lonjas— y el juez lo
+citó cinco veces. Pero **la reparación lo convierte antes de entregar**: el usuario nunca lo ve.
+Por eso `_VAGUE_SLICE_FOOD_RE` se queda **como está**: estrecharlo sin datos arriesga los 23 casos
+legítimos para arreglar 0 reales.
+
+### El sello: `judged_fingerprint`
+
+SHA-256 de (día, franja, **nombre**, **ingredientes**, **pasos**) — exactamente lo que el juez lee.
+
+**No se reutiliza `services.compute_plan_hash`** pese a declararse «fuente única de verdad para
+detectar si un plan cambió»: hashea ingredientes y suplementos, y el bucket más grande del juez
+(`paso_incoherente`, 96 de 250) es de PASOS. Un paso reparado dejaría ese hash quieto y la
+comparación diría «es el mismo plan» justo en los casos que más importan. Una huella que no cubre
+lo que se juzgó reintroduce la misma ambigüedad, sólo que más difícil de ver.
+
+### Tres estados, y el tercero es el que importa
+
+`judgment_covers_delivered` devuelve `True` / `False` / **`None`**. Las 96 entradas que existen hoy
+no llevan sello, así que la respuesta honesta es «no se puede saber». Colapsar ese `None` hacia
+cualquier lado fabricaría una cifra — que es exactamente el error que este P-fix cierra. El medidor
+los cuenta por separado y los publica por separado (`juez_sobre_lo_entregado`).
+
+### La advertencia nace del código, no del JSON
+
+`culinary_baseline.json` lleva ahora la segunda razón con sus cifras. Pero enmendarlo a mano era una
+trampa: `--congelar` reescribe el fichero entero, así que la enmienda habría desaparecido en
+silencio en el siguiente congelado. La advertencia vive en `ADVERTENCIA`
+(`scripts/culinary_baseline.py`) y el JSON la recibe de ahí.
+
+Test: [`test_p1_judge_revision_stamp.py`](../tests/test_p1_judge_revision_stamp.py).

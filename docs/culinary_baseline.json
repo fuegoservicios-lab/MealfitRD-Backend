@@ -28,5 +28,15 @@
     "solo_determinista": 110,
     "solo_juez": 204
   },
-  "advertencia": "el juez es un LLM sin verdad de referencia: su tasa NO es la tasa de defectos reales. Calibrar contra ella es overfitting."
+  "advertencia": "el juez es un LLM sin verdad de referencia: su tasa NO es la tasa de defectos reales. Calibrar contra ella es overfitting. Y hay una segunda razon, medida el 2026-09-06: parte de sus quejas describen un estado que el pipeline REPARO antes de entregar — de 37 quejas juzgables del tipo «X no aparece en la lista», 6 nombraban algo que SI esta en el plan entregado, y el sub-patron mas citado («lonjas/pedazos de queso» sobre queso cottage) aparece 0 veces de 23 en planes vivos. Esta foto se tomo ANTES de que existiera `judged_fingerprint` (P1-JUDGE-REVISION-STAMP), asi que de sus entradas NO se puede saber cuales juzgaron lo entregado: leela como «cuantas comidas el juez senalo en algun momento», nunca como «cuantas se entregaron mal».",
+  "juez_sobre_lo_entregado": {
+    "decidible": false,
+    "motivo": "las entradas de `_culinary_judge_history` de esta foto no llevan `judged_fingerprint`; el sello nace con P1-JUDGE-REVISION-STAMP y solo las generaciones posteriores lo traen",
+    "medicion_2026_09_06": {
+      "quejas_falta_en_la_lista_juzgables": 37,
+      "nombraban_algo_que_hoy_SI_esta": 6,
+      "queso_no_lonjeable_en_lonjas_en_planes_vivos": 0,
+      "lineas_de_queso_con_lonja_revisadas": 23
+    }
+  }
 }

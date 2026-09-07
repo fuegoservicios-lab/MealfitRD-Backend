@@ -64,7 +64,7 @@ def medir(planes: int = 120) -> dict:
     import psycopg
     from psycopg.rows import dict_row
 
-    from culinary_coherence import culinary_contract_scan
+    from culinary_coherence import culinary_contract_scan, judgment_covers_delivered
 
     load_dotenv(_BACKEND / ".env")
     with psycopg.connect(os.environ["NEON_DATABASE_URL"], row_factory=dict_row) as c:
@@ -78,6 +78,7 @@ def medir(planes: int = 120) -> dict:
     comidas = 0
     por_check, por_tipo = collections.Counter(), collections.Counter()
     con_det, con_juez = set(), set()
+    cobertura = collections.Counter()   # P1-JUDGE-REVISION-STAMP: si / no / desconocido
 
     for f in filas:
         pid = str(f["id"])
@@ -90,6 +91,12 @@ def medir(planes: int = 120) -> dict:
         for h in (pd.get("_culinary_judge_history") or []):
             if not isinstance(h, dict):
                 continue
+            # [P1-JUDGE-REVISION-STAMP · 2026-09-06] ¿Esta entrada juzgó lo que se ENTREGÓ, o una
+            # versión que el pipeline reparó después? Tres estados, y el tercero manda: sin sello
+            # (todo lo generado antes del P-fix) la pregunta no es decidible, y colapsarlo hacia
+            # cualquier lado fabricaría una cifra. Se cuenta aparte y se publica aparte.
+            cubre = judgment_covers_delivered(h, pd)
+            cobertura["si" if cubre else ("no" if cubre is False else "desconocido")] += 1
             for v in (h.get("violations") or []):
                 if isinstance(v, dict):
                     por_tipo[str(v.get("tipo"))] += 1
@@ -104,13 +111,34 @@ def medir(planes: int = 120) -> dict:
                          "por_check": dict(por_check.most_common())},
         "juez": {"comidas": len(con_juez), "pct": pct(len(con_juez)),
                  "por_tipo": dict(por_tipo.most_common())},
+        # [P1-JUDGE-REVISION-STAMP] Cuantas entradas del juez se sabe que juzgaron lo
+        # ENTREGADO. Va al lado de la tasa, no dentro: no la corrige, la CALIFICA.
+        "juez_sobre_lo_entregado": dict(cobertura),
         "solapamiento": {"ambas": len(con_det & con_juez),
                          "solo_determinista": len(con_det - con_juez),
                          "solo_juez": len(con_juez - con_det)},
         # Se guarda EXPLICITO para que nadie lo derive de las tasas y se engañe.
-        "advertencia": ("el juez es un LLM sin verdad de referencia: su tasa NO es la tasa de "
-                        "defectos reales. Calibrar contra ella es overfitting."),
+        # [P1-JUDGE-REVISION-STAMP · 2026-09-06] La segunda frase NO es decorativa y por eso vive
+        # AQUÍ y no solo en el JSON congelado: `--congelar` reescribe el fichero entero, así que
+        # una advertencia enmendada a mano en el JSON se habría borrado en silencio en el próximo
+        # congelado. La advertencia tiene que nacer del mismo sitio que el dato.
+        "advertencia": ADVERTENCIA,
     }
+
+
+#: [P1-JUDGE-REVISION-STAMP · 2026-09-06] Dos razones para no leer la tasa del juez como calidad,
+#: no una. La segunda se midió DESPUÉS de congelar la foto: parte de sus quejas describen un
+#: estado que el pipeline REPARÓ antes de entregar.
+ADVERTENCIA = (
+    "el juez es un LLM sin verdad de referencia: su tasa NO es la tasa de defectos reales. "
+    "Calibrar contra ella es overfitting. Y hay una segunda razon, medida el 2026-09-06: parte de "
+    "sus quejas describen un estado que el pipeline REPARO antes de entregar — de 37 quejas "
+    "juzgables del tipo «X no aparece en la lista», 6 nombraban algo que SI esta en el plan "
+    "entregado, y el sub-patron mas citado («lonjas/pedazos de queso» sobre queso cottage) "
+    "aparece 0 veces de 23 en planes vivos. Las entradas SIN `judged_fingerprint` no permiten "
+    "saber cuales juzgaron lo entregado: leelas como «cuantas comidas el juez senalo en algun "
+    "momento», nunca como «cuantas se entregaron mal»."
+)
 
 
 def render(r: dict, previa: dict | None = None) -> str:
@@ -128,8 +156,14 @@ def render(r: dict, previa: dict | None = None) -> str:
     o += ["", f"  coinciden {s['ambas']}   ·   solo determinista {s['solo_determinista']}   ·   "
               f"solo juez {s['solo_juez']}",
           "", "  Las dos capas apenas se solapan: ninguna sustituye a la otra, y por eso NO se",
-          "  suman en un indice unico.", "",
-          "  " + r["advertencia"]]
+          "  suman en un indice unico."]
+    cob = r.get("juez_sobre_lo_entregado") or {}
+    if cob:
+        o += ["", "  entradas del juez que juzgaron LO ENTREGADO: "
+                  + "  ".join(f"{k}={n}" for k, n in cob.items()),
+              "  («desconocido» = sin `judged_fingerprint`, anterior a P1-JUDGE-REVISION-STAMP; "
+              "no cuenta a ningun lado)"]
+    o += ["", "  " + r["advertencia"]]
     return "\n".join(o)
 
 

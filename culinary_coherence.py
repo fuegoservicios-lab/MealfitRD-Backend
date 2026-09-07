@@ -11,6 +11,8 @@ tooltip-anchor: P1-CULINARY-CONTRACT
 """
 from __future__ import annotations
 
+import hashlib
+import json
 import re
 
 from constants import strip_accents
@@ -1062,6 +1064,67 @@ def culinary_contract_scan(plan_data: dict, catalog: list) -> list:
         return out
     except Exception:
         return []
+
+
+# ─────────────────────────────────────────────────────────────────────────────────────────────
+# La huella de lo que el juez MIRÓ
+#
+# [P1-JUDGE-REVISION-STAMP · 2026-09-06] `_culinary_judge_history` guardaba `{ts, model,
+# violations, action_taken}` — nada que atara una entrada a una VERSIÓN del plan. Con eso, «el juez
+# se quejó y lo arreglamos» y «se quejó y lo entregamos» son indistinguibles, y su tasa se lee como
+# si fuera de defectos ENTREGADOS.
+#
+# No es una sospecha. Medido el 2026-09-06 sobre 96 planes: de las 37 quejas juzgables del tipo
+# «X no aparece en la lista», **6 nombraban algo que SÍ está en el plan entregado** (almendras,
+# pistachos, guineítos verdes, queso cottage). Y el sub-patrón más citado —«los ingredientes dicen
+# 4¾ lonjas/pedazos de queso» cuando el plato lleva cottage— aparece **0 veces de 23** líneas de
+# queso con lonja en planes vivos: la reparación ya lo había convertido antes de entregar.
+#
+# La huella cubre NOMBRE, INGREDIENTES y PASOS porque eso es exactamente lo que el juez lee.
+# **No se reutiliza `services.compute_plan_hash`** pese a que se declara «fuente única de verdad
+# para detectar si un plan cambió»: hashea ingredientes y suplementos, y el bucket más grande del
+# juez (`paso_incoherente`) es de PASOS. Un paso reparado dejaría ese hash quieto y la comparación
+# diría «es el mismo plan» justo en los casos que más importan — una huella que no cubre lo que se
+# juzgó reintroduce la misma ambigüedad, sólo que más difícil de ver.
+#
+# Devuelve `None` cuando no puede calcularla, y quien la consuma DEBE tratar ese `None` como
+# **desconocido**, jamás como «coincide»: las entradas anteriores a este P-fix no la llevan, y
+# colapsar lo desconocido hacia cualquiera de los dos lados es cómo se fabrica una cifra falsa.
+# tooltip-anchor: P1-JUDGE-REVISION-STAMP
+def judged_fingerprint(plan_data: dict) -> "str | None":
+    """SHA-256 truncado de (día, franja, nombre, ingredientes, pasos) de cada comida."""
+    try:
+        filas = []
+        for di, d in enumerate((plan_data or {}).get("days") or [], 1):
+            for m in (d.get("meals") or []):
+                if not isinstance(m, dict):
+                    continue
+                filas.append([di, str(m.get("meal") or ""), str(m.get("name") or ""),
+                              [str(x) for x in (m.get("ingredients") or [])],
+                              [str(x) for x in (m.get("recipe") or [])]])
+        if not filas:
+            return None
+        crudo = json.dumps(filas, sort_keys=False, ensure_ascii=False)
+        return hashlib.sha256(crudo.encode("utf-8")).hexdigest()[:16]
+    except Exception:
+        return None
+
+
+def judgment_covers_delivered(entry: dict, plan_data: dict) -> "bool | None":
+    """¿La entrada del historial juzgó el plan que se entregó? `None` = no se puede saber.
+
+    Tres estados, no dos, y el tercero es el importante: una entrada sin `judged_fingerprint`
+    (todas las anteriores a este P-fix) no dice ni que sí ni que no. Devolver `False` ahí
+    convertiría «no lo sé» en «se reparó», que es precisamente la confusión que este P-fix cierra.
+    """
+    try:
+        sello = (entry or {}).get("judged_fingerprint")
+        if not sello:
+            return None
+        actual = judged_fingerprint(plan_data)
+        return None if not actual else (sello == actual)
+    except Exception:
+        return None
 
 
 def scan_coverage(plan_data: dict, catalog: list) -> float:

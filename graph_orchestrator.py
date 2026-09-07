@@ -44606,9 +44606,16 @@ Responde ÚNICAMENTE con el JSON de revisión.
         _cj = await run_culinary_judge(plan, _cj_country)
         _cj_viol = [v.model_dump() for v in (_cj.violations if _cj else [])]
         _cj_hist = plan.setdefault("_culinary_judge_history", [])
+        # [P1-JUDGE-REVISION-STAMP · 2026-09-06] Sin este sello, una entrada del historial no se
+        # puede atar a una versión del plan, y «el juez se quejó y lo arreglamos» es
+        # indistinguible de «se quejó y lo entregamos». Medido: de 37 quejas «X no aparece en la
+        # lista», 6 nombraban algo que SÍ está en el plan entregado. Ver `judged_fingerprint`
+        # (culinary_coherence.py) para por qué NO es `services.compute_plan_hash`.
+        from culinary_coherence import judged_fingerprint as _cj_fingerprint
         _cj_hist.append({
             "ts": datetime.now(timezone.utc).isoformat(),
             "model": CULINARY_JUDGE_MODEL,
+            "judged_fingerprint": _cj_fingerprint(plan),
             "violations": _cj_viol,
             "action_taken": ("blocked" if (_cj_viol and CULINARY_JUDGE_GUARD == "block")
                              else "warn_only"),
