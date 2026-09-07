@@ -1544,6 +1544,35 @@ _DISH_TEMPLATES_PR_US_NAMES = frozenset({
 # `is_country_catalog_unpriced_item`, ni antes ni después de esta task.
 _DISH_TEMPLATES_RD_TOPUP_NAMES = frozenset({"Hummus"})
 
+# [P1-DO-SHARED-FOODS · 2026-09-07] Las altas de país beta que TAMBIÉN son básicos dominicanos y
+# por eso SÍ llevan precio RD verificado.
+#
+# El defecto que esto cierra: la partición por país asumía que cada alimento pertenece a UN país
+# beta, y los que República Dominicana COMPARTE se cayeron por la grieta. Sin precio, el
+# `_vc_comprable` del catálogo verificado los deja FUERA del bloque «USA EXCLUSIVAMENTE ESTOS
+# ALIMENTOS» para un dominicano (con `country == "DO"` no hay rescate por token: `_iccui` es
+# None) — así que a nadie en RD le salía un espagueti con salchichas, ni un sancocho con gallina
+# criolla, aunque las siete filas existieran en el catálogo con su nutrición correcta.
+#
+# Precios de Supermercado Nacional, capturados por el dueño el 2026-09-07 (etiquetas reales, no
+# derivaciones). Su token salió de `_COUNTRY_CATALOG_UNPRICED_BY_COUNTRY`: con precio, el rescate
+# sobra —`_vc_comprable` los admite por la primera rama para TODOS los países, no solo el suyo— y
+# dejarlo puesto los volvía a marcar como «sin precio», que es un bug real en
+# `canonicalize_shopping_food_name` (lo detectó `test_i2_registry_collision_sweep_...`).
+#
+# Se fija con igualdad EXACTA en las tres aserciones de abajo, el mismo patrón que ya se usó para
+# los `fdc_id` de BEDCA: enumerar las excepciones en vez de relajar la regla. Así un precio puesto
+# por accidente a otra alta sigue fallando, y una promovida que PIERDA su precio también.
+_ALTAS_PROMOVIDAS_A_PRECIO_RD = frozenset({
+    "Fideos",           # T5/ES — Milano nido 350 g · RD$43
+    "Chicharrón",       # T6/MX — de cerdo por libra · RD$199
+    "Gallina criolla",  # T6/CO — Unipollo congelada por libra · RD$89
+    "Pernil",           # T7/PR — «pierna de cerdo» en RD · RD$135/lb
+    "Coditos",          # T7/US — Milano 400 g · RD$38
+    "Tocineta",         # T7/US — importada premium por libra · RD$265
+    "Salchichas",       # T7/US — Wala hot dog 8/1 · RD$155
+})
+
 
 @pytest.fixture(scope="module")
 def sc():
@@ -1723,6 +1752,15 @@ def test_jamon_serrano_se_dropea_si_el_knob_de_keep_esta_apagado(sc, monkeypatch
 
 @pytest.mark.parametrize("nombre", sorted(_DISH_TEMPLATES_ES_NAMES))
 def test_is_country_catalog_unpriced_item_reconoce_cada_alta(sc, nombre):
+    # [P1-DO-SHARED-FOODS · 2026-09-07] Las promovidas a básico dominicano se comprueban AL REVÉS,
+    # que es más fuerte que saltarlas: llevan precio RD, así que seguir reconociéndolas como «sin
+    # precio» es exactamente el bug que `test_i2_registry_collision_sweep_...` detecta sobre
+    # `canonicalize_shopping_food_name`.
+    if nombre in _ALTAS_PROMOVIDAS_A_PRECIO_RD:
+        assert not sc.is_country_catalog_unpriced_item(nombre), (
+            f"{nombre!r} tiene precio RD y su token debe haber salido de "
+            f"`_COUNTRY_CATALOG_UNPRICED_BY_COUNTRY`")
+        return
     assert sc.is_country_catalog_unpriced_item(nombre), f"{nombre!r} no reconocido como unpriced keep"
 
 
@@ -2116,9 +2154,15 @@ def test_32_altas_es_existen_en_catalogo_vivo_sin_precio_con_fdc_id():
     faltantes = sorted(_DISH_TEMPLATES_ES_NAMES - set(por_nombre))
     assert not faltantes, f"altas T5 ausentes del catálogo vivo: {faltantes}"
 
-    con_precio = [n for n, r in por_nombre.items()
-                  if float(r["price_per_lb"] or 0) > 0 or float(r["price_per_unit"] or 0) > 0]
-    assert not con_precio, f"altas T5 con precio RD (deberían estar en 0): {con_precio}"
+    # [P1-DO-SHARED-FOODS · 2026-09-07] Igualdad EXACTA, no «ninguna»: las promovidas a básico
+    # dominicano DEBEN tener precio y el resto DEBE seguir en 0. Un precio puesto por accidente
+    # falla igual que antes, y una promovida que lo PIERDA también.
+    con_precio = {n for n, r in por_nombre.items()
+                  if float(r["price_per_lb"] or 0) > 0 or float(r["price_per_unit"] or 0) > 0}
+    esperado = _ALTAS_PROMOVIDAS_A_PRECIO_RD & _DISH_TEMPLATES_ES_NAMES
+    assert con_precio == esperado, (
+        f"altas T5: el conjunto CON precio RD debe ser exactamente el promovido. "
+        f"Sobran {sorted(con_precio - esperado)}, faltan {sorted(esperado - con_precio)}")
 
     # [P1-BEDCA-DEPROXY-ES + P1-PROVENANCE-TRUTHFUL · 2026-08-19] Once altas espanolas
     # DEJARON de tener `fdc_id`, y fue a proposito: el que tenian era PRESTADO de otro
@@ -2368,6 +2412,15 @@ def test_is_country_catalog_unpriced_item_reconoce_cada_alta_t6(sc, nombre, monk
     pero encenderlo no les cambia el resultado, así que un solo `monkeypatch` cubre los 46 casos
     sin bifurcar el test."""
     monkeypatch.setenv("MEALFIT_COUNTRY_SYSTEM", "true")
+    # [P1-DO-SHARED-FOODS · 2026-09-07] Las promovidas a básico dominicano se comprueban AL REVÉS,
+    # que es más fuerte que saltarlas: llevan precio RD, así que seguir reconociéndolas como «sin
+    # precio» es exactamente el bug que `test_i2_registry_collision_sweep_...` detecta sobre
+    # `canonicalize_shopping_food_name`.
+    if nombre in _ALTAS_PROMOVIDAS_A_PRECIO_RD:
+        assert not sc.is_country_catalog_unpriced_item(nombre), (
+            f"{nombre!r} tiene precio RD y su token debe haber salido de "
+            f"`_COUNTRY_CATALOG_UNPRICED_BY_COUNTRY`")
+        return
     assert sc.is_country_catalog_unpriced_item(nombre), f"{nombre!r} no reconocido como unpriced keep"
 
 
@@ -2701,9 +2754,15 @@ def test_46_altas_t6_existen_en_catalogo_vivo_sin_precio_con_fdc_id_o_manual():
     faltantes = sorted(_DISH_TEMPLATES_MX_CO_NAMES - set(por_nombre))
     assert not faltantes, f"altas T6 ausentes del catálogo vivo: {faltantes}"
 
-    con_precio = [n for n, r in por_nombre.items()
-                  if float(r["price_per_lb"] or 0) > 0 or float(r["price_per_unit"] or 0) > 0]
-    assert not con_precio, f"altas T6 con precio RD (deberían estar en 0): {con_precio}"
+    # [P1-DO-SHARED-FOODS · 2026-09-07] Igualdad EXACTA, no «ninguna»: las promovidas a básico
+    # dominicano DEBEN tener precio y el resto DEBE seguir en 0. Un precio puesto por accidente
+    # falla igual que antes, y una promovida que lo PIERDA también.
+    con_precio = {n for n, r in por_nombre.items()
+                  if float(r["price_per_lb"] or 0) > 0 or float(r["price_per_unit"] or 0) > 0}
+    esperado = _ALTAS_PROMOVIDAS_A_PRECIO_RD & _DISH_TEMPLATES_MX_CO_NAMES
+    assert con_precio == esperado, (
+        f"altas T6: el conjunto CON precio RD debe ser exactamente el promovido. "
+        f"Sobran {sorted(con_precio - esperado)}, faltan {sorted(esperado - con_precio)}")
 
     # [T6 · a diferencia de T5] 3 filas SIN fdc_id real (nutrition_source='manual' en su lugar) —
     # ver docstring de add_foods_mx_co_2026_08_17.py. Las otras 43 SÍ exigen fdc_id + 'usda'.
@@ -3119,6 +3178,15 @@ def test_get_fast_filtered_catalogs_sin_country_pr_us_sigue_siendo_do_byte_ident
 @pytest.mark.parametrize("nombre", sorted(_DISH_TEMPLATES_PR_US_NAMES))
 def test_is_country_catalog_unpriced_item_reconoce_cada_alta_t7(sc, nombre, monkeypatch):
     monkeypatch.setenv("MEALFIT_COUNTRY_SYSTEM", "true")
+    # [P1-DO-SHARED-FOODS · 2026-09-07] Las promovidas a básico dominicano se comprueban AL REVÉS,
+    # que es más fuerte que saltarlas: llevan precio RD, así que seguir reconociéndolas como «sin
+    # precio» es exactamente el bug que `test_i2_registry_collision_sweep_...` detecta sobre
+    # `canonicalize_shopping_food_name`.
+    if nombre in _ALTAS_PROMOVIDAS_A_PRECIO_RD:
+        assert not sc.is_country_catalog_unpriced_item(nombre), (
+            f"{nombre!r} tiene precio RD y su token debe haber salido de "
+            f"`_COUNTRY_CATALOG_UNPRICED_BY_COUNTRY`")
+        return
     assert sc.is_country_catalog_unpriced_item(nombre), f"{nombre!r} no reconocido como unpriced keep"
 
 
@@ -3277,9 +3345,15 @@ def test_62_altas_t7_existen_en_catalogo_vivo_sin_precio_con_fdc_id_o_manual():
     faltantes = sorted(_DISH_TEMPLATES_PR_US_NAMES - set(por_nombre))
     assert not faltantes, f"altas T7 ausentes del catálogo vivo: {faltantes}"
 
-    con_precio = [n for n, r in por_nombre.items()
-                  if float(r["price_per_lb"] or 0) > 0 or float(r["price_per_unit"] or 0) > 0]
-    assert not con_precio, f"altas T7 con precio RD (deberían estar en 0): {con_precio}"
+    # [P1-DO-SHARED-FOODS · 2026-09-07] Igualdad EXACTA, no «ninguna»: las promovidas a básico
+    # dominicano DEBEN tener precio y el resto DEBE seguir en 0. Un precio puesto por accidente
+    # falla igual que antes, y una promovida que lo PIERDA también.
+    con_precio = {n for n, r in por_nombre.items()
+                  if float(r["price_per_lb"] or 0) > 0 or float(r["price_per_unit"] or 0) > 0}
+    esperado = _ALTAS_PROMOVIDAS_A_PRECIO_RD & _DISH_TEMPLATES_PR_US_NAMES
+    assert con_precio == esperado, (
+        f"altas T7: el conjunto CON precio RD debe ser exactamente el promovido. "
+        f"Sobran {sorted(con_precio - esperado)}, faltan {sorted(esperado - con_precio)}")
 
     # [T7] 8 filas 'manual': 2 SIN fdc_id real (Recao, Adobo) + 6 DERIVADAS como blend de 2 fdc_id
     # reales (nutrition_source='manual' porque el valor persistido es una TRANSFORMACIÓN -- mismo

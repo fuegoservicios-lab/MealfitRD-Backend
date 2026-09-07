@@ -1067,10 +1067,30 @@ _COUNTRY_CATALOG_UNPRICED_BY_COUNTRY: "dict[str, tuple[str, ...]]" = {
     # Esto NO reasigna ningún token: promueve a dato la partición que los bloques ya
     # declaraban. La tupla plana se DERIVA de aquí, así que las dos vistas no pueden
     # driftear. tooltip-anchor: P1-COUNTRY-CATALOG-BY-COUNTRY
+    #
+    # [P1-DO-SHARED-FOODS · 2026-09-07] SIETE tokens SALIERON de aquí, y el motivo es el defecto
+    # que esta ola cierra: la partición asumía que cada alimento pertenece a UN país beta, y los
+    # que República Dominicana COMPARTE se cayeron por esa grieta. `coditos`, `tocineta`,
+    # `salchichas` (US), `pernil` (PR), `fideos` (ES), `chicharron` (MX) y `gallina criolla` (CO)
+    # son de esos países, sí — y también básicos criollos de toda la vida. Sin precio RD, el
+    # `_vc_comprable` del catálogo verificado los dejaba FUERA del bloque «USA EXCLUSIVAMENTE
+    # ESTOS ALIMENTOS» para un dominicano (con `country == "DO"` no hay rescate: `_iccui` es
+    # None), así que a nadie en RD le salía un espagueti con salchichas.
+    #
+    # Ahora llevan precio RD verificado en Supermercado Nacional, así que el rescate SOBRA:
+    # `_vc_comprable` los admite por la primera rama (`price > 0`) para TODOS los países, no solo
+    # para el suyo. Dejar además el token los volvía a marcar como «sin precio» y ponía en rojo
+    # `test_i2_registry_collision_sweep_extendido_a_aliases` — que tenía razón: una fila con
+    # precio que este predicado sigue reconociendo es un bug real en
+    # `canonicalize_shopping_food_name`, no una regla de contabilidad.
+    #
+    # Los tokens VECINOS se quedan y no es descuido: `salsa de salchicha` y `salchicha italiana`
+    # (US) siguen sin precio RD porque son otro alimento; `sofrito` y `pan rallado` también, y
+    # ésos se derivan de un padre ya precificado en vez de comprarse.
     "ES": (
         "jamon serrano", "jamon iberico", "chorizo espanol", "morcilla", "lomo embuchado",
         "panceta iberica", "gambas", "almejas", "boquerones", "anchoas", "cordero", "requeson",
-        "cuajada", "nata", "judias blancas", "judias pintas", "acelgas", "fideos", "membrillo",
+        "cuajada", "nata", "judias blancas", "judias pintas", "acelgas", "membrillo",
         "higo", "azafran", "alioli", "turron", "mazapan", "sobrasada", "butifarra", "percebes",
         "vieira", "chistorra", "pinones", "almendra marcona", "membrillo dulce",
     ),
@@ -1088,12 +1108,12 @@ _COUNTRY_CATALOG_UNPRICED_BY_COUNTRY: "dict[str, tuple[str, ...]]" = {
         "chile ancho", "habanero", "chile de arbol", "pasilla", "mulato", "nopal", "jicama",
         "epazote", "chorizo mexicano", "chorizo verde", "cecina", "frijoles refritos",
         "crema mexicana", "tuna de nopal", "flor de jamaica", "xoconostle", "achiote",
-        "hoja santa", "chocolate de mesa", "panela", "huitlacoche", "chicharron",
+        "hoja santa", "chocolate de mesa", "panela", "huitlacoche",
     ),
     "CO": (
         "chorizo santarrosano", "trucha", "chontaduro", "frijol cargamanto", "suero costeno",
         "guascas", "arracacha", "lulo", "curuba", "uchuva", "arequipe", "natilla", "champus",
-        "gallina criolla", "borojo", "feijoa", "granadilla", "mora",
+        "borojo", "feijoa", "granadilla", "mora",
     ),
     # [P1-COUNTRY-SYSTEM-F2 · T7 · 2026-08-17] 62 altas de catálogo PR/US de este task — también
     # SIN precio RD a propósito (países beta, `pricing_mode='beta_no_prices'`). A diferencia de
@@ -1109,16 +1129,16 @@ _COUNTRY_CATALOG_UNPRICED_BY_COUNTRY: "dict[str, tuple[str, ...]]" = {
     # el catálogo vivo (346 filas) + los 7 pools (`DOMINICAN_*` + `COUNTRY_POOLS['ES'/'MX'/'CO'/
     # 'PR'/'US']`): cero falsos positivos.
     "PR": (
-        "panapen", "pernil", "jamon de cocinar", "sofrito", "recao", "adobo", "alcaparrado",
+        "panapen", "jamon de cocinar", "sofrito", "recao", "adobo", "alcaparrado",
         "harina de yuca", "pique", "pavochon", "bacalaitos", "ron de cocina",
         "longaniza puertorriquena", "chuleta ahumada", "sazon con culantro y achiote",
         "aceite de achiote", "queso de papa", "especias para arroz con dulce",
         "aceitunas rellenas",
     ),
     "US": (
-        "tocineta", "jamon de sandwich", "salchichas", "crema agria", "crema mitad y mitad",
+        "jamon de sandwich", "crema agria", "crema mitad y mitad",
         "bagels", "panecillos ingleses", "pretzels", "frijoles horneados", "jarabe de arce",
-        "aderezo ranch", "salsa barbacoa", "ketchup", "salsa inglesa", "malvaviscos", "coditos",
+        "aderezo ranch", "salsa barbacoa", "ketchup", "salsa inglesa", "malvaviscos",
         "masa para pie", "galletas graham", "salsa de salchicha", "ensalada de macarrones",
         "chile en polvo", "sazonador para tacos", "pepperoni", "salchicha italiana",
         "mezcla para panqueques", "wafles", "azucar morena", "suero de mantequilla",

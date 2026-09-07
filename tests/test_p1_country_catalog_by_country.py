@@ -55,7 +55,15 @@ def knob_on(monkeypatch):
 
 
 # El set histórico: 32 (T5·ES) + 46 (T6·MX/CO) + 62 (T7·PR/US) + 1 (Task 8·RD) = 141.
-_TOTAL_HISTORICO = 141
+#
+# [P1-DO-SHARED-FOODS · 2026-09-07] Menos SIETE: `coditos`, `tocineta`, `salchichas` (US),
+# `pernil` (PR), `fideos` (ES), `chicharron` (MX) y `gallina criolla` (CO) salieron de la
+# partición. Eran de esos países Y TAMBIÉN básicos dominicanos, y la partición asumía que cada
+# alimento pertenece a uno solo — así que sin precio RD quedaban invisibles para el generador
+# dominicano (`_vc_comprable` no tiene rescate por token cuando el país es DO). Ahora llevan
+# precio verificado, con lo que el rescate sobra y dejarlo puesto era un bug real en
+# `canonicalize_shopping_food_name`. Ver `test_p1_do_shared_foods.py`.
+_TOTAL_HISTORICO = 141 - 7
 
 _PAISES = ("ES", "MX", "CO", "PR", "US", "DO")
 
@@ -89,11 +97,15 @@ def test_la_tupla_plana_se_deriva_y_no_pierde_ni_inventa(sc):
     )
 
 
-@pytest.mark.parametrize("cc,n", [("ES", 32), ("MX", 28), ("CO", 18), ("PR", 19), ("US", 43),
+@pytest.mark.parametrize("cc,n", [("ES", 31), ("MX", 27), ("CO", 17), ("PR", 18), ("US", 40),
                                   ("DO", 1)])
 def test_cada_pais_conserva_el_tamano_de_su_bloque(sc, cc, n):
-    """Los tamaños salen de los bloques del fuente, no de mi criterio: T5 declara 32 altas de ES,
-    T6 declara 46 (28 MX + 18 CO), T7 declara 62 (19 PR + 43 US) y Task 8 una sola para RD."""
+    """Los tamaños salen de los bloques del fuente, no de mi criterio: T5 declaró 32 altas de ES,
+    T6 declaró 46 (28 MX + 18 CO), T7 declaró 62 (19 PR + 43 US) y Task 8 una sola para RD.
+
+    [P1-DO-SHARED-FOODS · 2026-09-07] Cada bloque perdió los suyos al promoverse a precio RD:
+    ES −1 (fideos), MX −1 (chicharrón), CO −1 (gallina criolla), PR −1 (pernil), US −3 (coditos,
+    tocineta, salchichas). DO no tenía ninguno de los siete."""
     assert len(sc._COUNTRY_CATALOG_UNPRICED_BY_COUNTRY[cc]) == n
 
 
@@ -122,7 +134,7 @@ def test_ninguna_fila_del_catalogo_se_queda_sin_pais(sc):
     ("Jamón serrano", "ES", "MX"),
     ("Huitlacoche", "MX", "ES"),
     ("Chontaduro", "CO", "ES"),
-    ("Pernil", "PR", "MX"),
+    ("Panapén", "PR", "MX"),
     ("Pretzels", "US", "ES"),
 ])
 def test_el_predicado_por_pais_discrimina(sc, nombre, suyo, ajeno):
@@ -130,9 +142,32 @@ def test_el_predicado_por_pais_discrimina(sc, nombre, suyo, ajeno):
     assert sc.is_country_catalog_unpriced_item(nombre, country=ajeno) is False
 
 
+# ── C-bis. Los siete que SALIERON de la partición ───────────────────────────────────────────────
+
+@pytest.mark.parametrize("nombre,era_de", [
+    ("Coditos", "US"), ("Tocineta", "US"), ("Salchichas", "US"),
+    ("Pernil", "PR"), ("Fideos", "ES"), ("Chicharrón", "MX"), ("Gallina criolla", "CO"),
+])
+def test_los_promovidos_ya_no_los_reclama_ningun_pais(sc, nombre, era_de):
+    """[P1-DO-SHARED-FOODS · 2026-09-07] `Pernil` era el caso PR de los tests de arriba y se
+    cambió por `Panapén`. Este test existe para que ese cambio no BORRE lo que pasó: los siete
+    eran de su país y también básicos dominicanos, y la partición —al ser partición— sólo los
+    dejaba en uno. Sin precio RD eso los volvía invisibles para el generador de RD.
+
+    Con precio verificado el rescate por token sobra (`_vc_comprable` los admite por la rama del
+    precio, para TODOS los países) y mantenerlo los marcaría a la vez como priced y sin precio,
+    que es el bug que `test_i2_registry_collision_sweep_...` detecta.
+    """
+    assert sc.is_country_catalog_unpriced_item(nombre) is False, (
+        f"{nombre!r} (era de {era_de}) sigue reclamado por la tupla plana")
+    for cc in _PAISES:
+        assert sc.is_country_catalog_unpriced_item(nombre, country=cc) is False, (
+            f"{nombre!r} sigue reclamado por {cc}")
+
+
 # ── D. Sin país ⇒ conducta de hoy ───────────────────────────────────────────────────────────────
 
-@pytest.mark.parametrize("nombre", ["Jamón serrano", "Huitlacoche", "Chontaduro", "Pernil",
+@pytest.mark.parametrize("nombre", ["Jamón serrano", "Huitlacoche", "Chontaduro", "Panapén",
                                     "Pretzels", "Hummus"])
 def test_sin_pais_conserva_la_conducta_historica(sc, nombre):
     """Los 4 call sites del agregador NO pasan país y no deben cambiar: ahí conservar de más es
@@ -166,7 +201,7 @@ _CATALOGO_FALSO = [
     {"name": "Jamón serrano", "price_per_lb": 0, "price_per_unit": 0},     # ES
     {"name": "Huitlacoche", "price_per_lb": 0, "price_per_unit": 0},       # MX
     {"name": "Chontaduro", "price_per_lb": 0, "price_per_unit": 0},        # CO
-    {"name": "Pernil", "price_per_lb": 0, "price_per_unit": 0},            # PR
+    {"name": "Panapén", "price_per_lb": 0, "price_per_unit": 0},           # PR
     {"name": "Pretzels", "price_per_lb": 0, "price_per_unit": 0},          # US
     {"name": "Percebes", "price_per_lb": 0, "price_per_unit": 0},          # ES
 ]
@@ -221,5 +256,5 @@ def test_el_catalogo_dominicano_no_cambia(catalogo):
     go = catalogo
     do = go._get_verified_catalog_instruction({"country": "DO"})
     assert do
-    for ajeno in ("Huitlacoche", "Percebes", "Pretzels", "Chontaduro", "Pernil", "Jamón serrano"):
+    for ajeno in ("Huitlacoche", "Percebes", "Pretzels", "Chontaduro", "Panapén", "Jamón serrano"):
         assert ajeno not in do, f"{ajeno} se coló en el catálogo dominicano"
