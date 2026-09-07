@@ -2320,6 +2320,18 @@ def _postprocess_pipeline_result(
     # que el plan es su único registro; para autenticados el run ya lleva la política (§6.4).
     try:
         from plan_policy import stamp_plan_policy as _stamp_policy, emit_policy_shadow_metric as _emit_policy_metric
+        # [P1-POLICY-STAMP-ENFORCED · 2026-09-07] El sello lee `_policy_enforced` de `form_data`,
+        # pero AQUÍ `data` es el formulario CRUDO del cliente: esa clave la inyecta el servidor y
+        # solo la llevaban los chunks 2..N y el worker al ejecutar. Resultado medido en el plan
+        # b9e9671a (usuario del canary): los 8 chunks con `_policy_enforced=True` y el sello con
+        # `enforced=False` — y como el techo por conteo del persist lee el SELLO, la ración pedida
+        # quedaba inerte justo en la vía que genera los planes. Se resuelve igual que los otros
+        # tres call sites: preguntándole a `horizon` por esta persona.
+        try:
+            from horizon import policy_enforced as _pol_enf_stamp
+            data["_policy_enforced"] = _pol_enf_stamp(actual_user_id)
+        except Exception as _pe_err:
+            logger.warning(f"[P1-POLICY-STAMP-ENFORCED] flag no resuelto (se sella False): {_pe_err}")
         _compiled_policy = _stamp_policy(result, data, total_days_requested=total_days_requested)
         if _compiled_policy:
             _emit_policy_metric(actual_user_id, existing_plan_id, _compiled_policy, result.get("_plan_policy_shadow"))
