@@ -32,3 +32,11 @@ httpx==0.28.1
 # manylinux para aarch64 (VPS Oracle ARM) desde hace varias major versions,
 # así el deploy no compila desde fuente.
 Pillow==12.2.0
+# [BIOBOROS-3.0-HIGHS-SOLVER · 2026-09-07] Optimizador MILP/HiGHS para Bioboros 3.0.
+# Publica wheels manylinux para aarch64 (VPS Oracle ARM) para instalación binaria directa.
+# Fijada a 1.17.1 y no `>=`: scipy 1.18 dejo de publicar wheel cp311 para aarch64, asi que
+# un `>=` instala 1.18 en un VPS con Python 3.12+ y en uno con 3.11 caeria a compilar desde
+# fuente. La 1.17.1 tiene wheel ARM para cp311, cp312 y cp313 — vale sea cual sea el Python
+# del VPS — y es la version contra la que corrio el gate en local.
+scipy==1.17.1
+
