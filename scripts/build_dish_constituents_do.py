@@ -51,7 +51,7 @@ CURATED: dict[str, list] = {
     "Mangú de plátano verde con huevos revueltos": [(R, "mangu", 1.0), (R, "huevos revueltos", 1.0), (I, "Cebolla", 20)],
     "Mangú de guineo verde con queso frito": [(I, "Guineo verde", 180), (I, "Cebolla", 15), (I, "Aceite vegetal", 5), (I, "Queso blanco", 60)],
     "Panqueques de avena y guineo maduro": [(I, "Avena", 50), (I, "Guineo", 100), (I, "Huevo", 50), (I, "Leche", 100), (I, "Canela en polvo", 2)],
-    "Panqueques de harina de arroz con fresas": [(I, "Harina de trigo", 50), (I, "Huevo", 50), (I, "Leche", 120), (I, "Fresas", 60)],
+    "Panqueques de trigo con fresas": [(I, "Harina de trigo", 50), (I, "Huevo", 50), (I, "Leche", 120), (I, "Fresas", 60)],
     "Arepitas de yuca doradas": [(I, "Yuca", 180), (I, "Huevo", 50), (I, "Aceite vegetal", 8)],
     "Bollitos de yuca rellenos de queso": [(I, "Yuca", 180), (I, "Queso blanco", 60), (I, "Huevo", 25)],
     "Revoltillo dominicano con tomate y cebolla": [(R, "huevos revueltos", 1.0), (I, "Tomate", 60), (I, "Cebolla", 25), (I, "Casabe", 40)],
