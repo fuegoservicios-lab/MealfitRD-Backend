@@ -87,7 +87,10 @@ def test_va_despues_de_los_caps():
     el cap está a punto de recortar → se compraría de más, y encima con la firma de estar
     'reconciliado'."""
     body = _finalize_body()
-    assert body.index("_cap_unrealistic_portions(days, db=db)") < body.index(
+    # [P1-PORTION-HONORED · 2026-09-07] El ancla es el PREFIJO de la llamada, no la llamada
+    # entera: atarla al paréntesis de cierre la rompía al añadir un argumento con nombre, y
+    # este guard comprueba el ORDEN de las operaciones, no su aridad.
+    assert body.index("_cap_unrealistic_portions(days, db=db") < body.index(
         "_reconcile_display_raw_lines(days)")
 
 

@@ -162,9 +162,21 @@ def test_day_generator_constructs_system_instruction_under_knob():
         "`_DAY_SYSTEM_INSTRUCTION_CACHED`; veg* → render por dieta cacheado)."
     )
     _helper = re.search(r"def _day_system_instruction_for_diet.*?\n\n", text, re.DOTALL)
-    assert _helper and "return _DAY_SYSTEM_INSTRUCTION_CACHED" in _helper.group(0), (
+    assert _helper and "_DAY_SYSTEM_INSTRUCTION_CACHED" in _helper.group(0), (
         "El helper por dieta debe devolver la constante pre-computada para balanced "
         "(byte-identidad = prompt-cache intacto para la mayoría)."
+    )
+    # [P1-PORTION-HONORED · 2026-09-07] La constante ya no se devuelve pelada: pasa por
+    # `_eggw_prompt_limit`, que ajusta el tope de claras a la ración pedida. Eso NO rompe la
+    # byte-identidad —devuelve el MISMO objeto cuando el tope no sube, o sea todo el mundo salvo
+    # el canary— pero un assert sobre el texto fuente no puede saberlo.
+    #
+    # Se comprueba la PROPIEDAD en vez del literal, que además es más fuerte: si alguien envuelve
+    # el retorno en algo que COPIA la cadena, este guard lo caza y el anterior no lo habría hecho.
+    import graph_orchestrator as _go_rt
+    assert _go_rt._day_system_instruction_for_diet({}) is _go_rt._DAY_SYSTEM_INSTRUCTION_CACHED, (
+        "el helper dejó de devolver EL MISMO objeto en el caso mayoritario: se rompe el "
+        "prompt-cache del proveedor, que exige system messages byte-idénticos"
     )
     assert "day_system_instruction = None" in region, (
         "Cuando knob=False, `day_system_instruction = None` señala al messages "

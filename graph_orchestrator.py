@@ -1919,78 +1919,10 @@ def _is_reviewer_transient_error(exc) -> bool:
     return False
 
 
-def _is_transient_upstream_error(exc: BaseException) -> bool:
-    """[P1-LLM-TRANSIENT-5XX · 2026-05-21] Detecta errores 5xx transitorios
-    de Google que NO deben contar como failure en el LLMCircuitBreaker.
-
-    Bug observado 2026-05-21 02:58:37:
-      Google retornó `502 Bad Gateway` en la compresión + planner. El CB
-      contó esos 3 retries como fallas → abrió `gemini-3.5-flash` por 30s →
-      Días 1/2/3 cayeron con `Circuit Breaker OPEN` aunque el modelo
-      principal estaba sano (era infra de Google teniendo un hipo).
-
-    Distinto a `_is_rate_limit_error` (429): los 5xx son **del lado de
-    Google** (problemas internos suyos), no del usuario/proyecto. La
-    estrategia correcta: backoff + retry SIN contaminar el CB. Por eso
-    los excluimos del conteo de failures.
-
-    Cubre 502/503/504/INTERNAL/UNAVAILABLE — los códigos transitorios que
-    Google documenta como retryable. Match por string + por attributes
-    porque LangChain wrappea estos errores de formas inconsistentes entre
-    versiones.
-
-    Tooltip-anchor: P1-LLM-TRANSIENT-5XX.
-    """
-    try:
-        _type_name = type(exc).__name__
-        # [P1-TRANSIENT-PRO-ERRORS · 2026-07-27] Taxonomía del cliente OpenAI-compatible, que es
-        # el que usa GLM desde P0-LLM-PROVIDER-MIGRATION (2026-06-12).
-        #
-        # Esta función se escribió el 2026-05-21 para las firmas de GOOGLE y NUNCA se actualizó
-        # al proveedor nuevo. Resultado: `APIConnectionError` —un fallo de RED puro, el error
-        # más transitorio que existe— contaba como mala salud del modelo y abría el circuit
-        # breaker. Es exactamente el bug que esta función existe para evitar, descrito en su
-        # propio docstring, con otro proveedor.
-        #
-        # Medido en los logs del VPS (6 h): 25 correcciones del self-critique intentadas, 12
-        # perdidas — 6 por `pro_error:APIConnectionError` y **6 por `pro_cb_open`**, o sea el
-        # breaker que abrieron las primeras. De ahí salieron 2 regeneraciones COMPLETAS de plan
-        # (el revisor rechaza por "misma proteína repetida" justo lo que la corrección perdida
-        # iba a arreglar). Un hipo de red desactivaba PRO para todos, incluido el revisor médico
-        # que va a PRO en todos los tiers.
-        #
-        # Coste del fix: cero llamadas LLM extra. Solo deja de castigar al modelo por la red.
-        if _type_name in (
-            "APIConnectionError", "APITimeoutError", "InternalServerError",
-            "ConnectionError", "ConnectTimeout", "ReadTimeout", "RemoteProtocolError",
-        ):
-            return True
-        # Excepciones canónicas que documentan transient upstream
-        if _type_name in (
-            "ServiceUnavailable", "InternalServerError", "GatewayTimeout",
-            "DeadlineExceeded", "Aborted", "ServerError", "BadGateway",
-        ):
-            return True
-        _msg = str(exc).lower() if exc else ""
-        # HTTP code 502/503/504 en el mensaje (LangChain/genai wrappean así)
-        if any(code in f" {_msg} " for code in (" 502 ", " 503 ", " 504 ")):
-            return True
-        if any(s in _msg for s in ("(502)", "(503)", "(504)", '"code":502', '"code":503', '"code":504')):
-            return True
-        # gRPC / google.api_core status strings
-        if "bad gateway" in _msg or "gateway timeout" in _msg or "service unavailable" in _msg:
-            return True
-        if "internal" in _msg and ("server error" in _msg or "google" in _msg):
-            return True
-        if "unavailable" in _msg and ("backend" in _msg or "google" in _msg or "service" in _msg):
-            return True
-        # google.genai ClientError expone `.code` numérico
-        _code = getattr(exc, "code", None)
-        if _code in (502, 503, 504):
-            return True
-        return False
-    except Exception:
-        return False
+# [P1-PORTION-HONORED · 2026-09-07] `_is_transient_upstream_error` vive ahora en
+# `upstream_errors.py` (extraído para bajar del techo de líneas; cero dependencias del módulo).
+# Se re-exporta para no tocar sus consumidores — mismo patrón que `dish_naming`.
+from upstream_errors import _is_transient_upstream_error  # noqa: E402,F401
 
 
 # ============================================================
@@ -5300,19 +5232,36 @@ def _strip_offered_prohibited_examples_for(prompt_text: str, form_data) -> str:
         return prompt_text
 
 
+def _eggw_prompt_limit(prompt_text: str, form_data) -> str:
+    """[P1-PORTION-HONORED · 2026-09-07] El tope de claras del PROMPT sigue a la ración pedida.
+
+    Se aplica DESPUÉS de la caché por (dieta, país) a propósito: el objeto cacheado sigue siendo
+    el mismo para todo el mundo y solo el texto de la persona del canary difiere. Sin esto, el
+    motor permitiría 10 claras y el prompt seguiría pidiendo 6 — el tope subido sería inerte.
+    """
+    try:
+        from plan_policy import portion_cap_for as _pcf
+        from prompts.day_generator import override_egg_white_limit as _oewl
+        f = form_data or {}
+        return _oewl(prompt_text, _pcf(f.get("_plan_policy_effective"), "Clara de huevo", 6,
+                                       enforced=bool(f.get("_policy_enforced"))))
+    except Exception:
+        return prompt_text
+
+
 def _day_system_instruction_for_diet(form_data) -> str:
     from constants import canonicalize_diet_type as _cdt, country_for_form_data
     from prompts.day_generator import build_day_generator_system_prompt as _bdgsp
     canon = _cdt((form_data or {}).get("dietType") or (form_data or {}).get("diet"))
     country = cultural_country_for_form_data(form_data)
     if canon not in ("vegan", "vegetarian") and country == "DO":
-        return _DAY_SYSTEM_INSTRUCTION_CACHED
+        return _eggw_prompt_limit(_DAY_SYSTEM_INSTRUCTION_CACHED, form_data)
     cache_key = (canon, country)
     cached = _DAY_SYSTEM_INSTRUCTION_BY_DIET_CACHE.get(cache_key)
     if cached is None:
         cached = _bdgsp(canon, country) + _DAY_SCHEMA_INSTRUCTION + _NUTRITION_LOOKUP_INSTRUCTION
         _DAY_SYSTEM_INSTRUCTION_BY_DIET_CACHE[cache_key] = cached
-    return cached
+    return _eggw_prompt_limit(cached, form_data)
 
 
 # [P3-VERIFIED-INGREDIENTS-ONLY · 2026-06-20] Catálogo verificado inyectado al
@@ -8802,6 +8751,9 @@ async def generate_days_parallel_node(state: PlanState) -> dict:
             from constants import country_for_form_data
             _nc_country = cultural_country_for_form_data(form_data)
             prompt_text = dynamic_day_prompt + _bdgsp_nc((form_data or {}).get("dietType"), _nc_country)
+            # [P1-PORTION-HONORED] En línea aparte: partir la de arriba rompía DOS guards que
+            # casan el patrón `dynamic_day_prompt + _bdgsp_nc(...)` con una regex de una línea.
+            prompt_text = _eggw_prompt_limit(prompt_text, form_data)
 
         # [P1-FLASH-FIRST · 2026-06-28] CADENA de modelos por costo (solo GLM): glm-5.3-flash → glm-5.3
         # (bariátrico → [glm-5.3]). El day-gen avanza al siguiente en CADA fallo (los 3 reintentos de tenacity) o si
@@ -28657,7 +28609,7 @@ def _enrich_generic_cheese_display_from_raw(meal: dict) -> int:
 
 
 def finalize_plan_data_coherence(days: list, db=None, allergies=None, target_fats=None, *,
-                                 main_goal=None, target_macros=None) -> tuple:
+                                 main_goal=None, target_macros=None, count_caps=None) -> tuple:
     """[P1-COHERENCE-FINALIZE · 2026-06-28] Aplica el post-engine coherence stack (slice-grams → leaf-cap → quantize) de
     forma DEFENSIVA antes de cualquier persist, para los paths que saltan assemble_plan_node (partial/degradado/SSE-fallback/
     chunk). ORDEN load-bearing: slice-grams ANTES de quantize ("1¼ lonja de queso"→"30 g" antes de redondear gramos);
@@ -28725,7 +28677,7 @@ def finalize_plan_data_coherence(days: list, db=None, allergies=None, target_fat
         logger.warning(f"[P1-COHERENCE-FINALIZE] carb-ghost no-op: {type(_ecgp).__name__}: {_ecgp}")
     try:
         if PORTION_REALISM_CAP_ENABLED:
-            _nprp = _cap_unrealistic_portions(days, db=db)
+            _nprp = _cap_unrealistic_portions(days, db=db, count_caps=count_caps)
             if _nprp:
                 total += _nprp; parts.append(f"realism_cap={_nprp}")
     except Exception as _eprp:
@@ -29369,7 +29321,7 @@ def finalize_plan_data_coherence(days: list, db=None, allergies=None, target_fat
     # no se puede comer no cumple el objetivo aunque el número cuadre.
     if CAPS_LAST_WORD and PORTION_REALISM_CAP_ENABLED:
         try:
-            _clw = _cap_unrealistic_portions(days, db=db)
+            _clw = _cap_unrealistic_portions(days, db=db, count_caps=count_caps)
             if _clw:
                 total += _clw; parts.append(f"caps_last_word={_clw}")
                 logger.info(f"📏 [P1-CAPS-LAST-WORD] {_clw} línea(s) recortada(s) por pases aditivos "
@@ -33985,7 +33937,9 @@ def _cap_daily_whole_eggs(days, db=None, *, max_whole: int = None) -> int:
         return 0
 
 
-def _cap_unrealistic_portions(days, db=None) -> int:
+def _cap_unrealistic_portions(days, db=None, *, count_caps=None) -> int:
+    # [P1-PORTION-HONORED] `count_caps` eleva el techo de un alimento a la ración pedida.
+    _CC = count_caps if isinstance(count_caps, dict) else _REALISM_COUNT_CAPS
     """[P1-PORTION-REALISM-CAP · 2026-07-01] (review de recetas en vivo, batch P1-DISH-REALISM-BATCH)
     Techo de porción REALISTA per-ingrediente, post-sizing. El solver escala el ingrediente dominante
     hasta su clamp matemático para clavar el target ("505g de calamar" = P71 en un almuerzo, flag
@@ -34197,7 +34151,7 @@ def _cap_unrealistic_portions(days, db=None) -> int:
                                     break
                             if _cap_n is None:
                                 _noun = m_n.group(3).rstrip("s")
-                                _cap_n = _REALISM_COUNT_CAPS.get(_noun)
+                                _cap_n = _CC.get(_noun)
                                 # [P1-COUNT-UNIT-NOUN · 2026-07-25] Si lo contado es la
                                 # PRESENTACIÓN ("6½ láminas de casabe"), el cap que aplica es el
                                 # del alimento que va tras "de". Sin esto, mi propio cap de
@@ -34212,7 +34166,7 @@ def _cap_unrealistic_portions(days, db=None) -> int:
                                     if not _re.search(r"\(\s*[\d.,]+\s*(?:g|gr|gramos)\b", il):
                                         _m_de = _re.search(r"\bde\s+([a-z]+)", il)
                                         if _m_de:
-                                            _cap_n = _REALISM_COUNT_CAPS.get(_m_de.group(1).rstrip("s"))
+                                            _cap_n = _CC.get(_m_de.group(1).rstrip("s"))
                             if _cap_n:
                                 cur_n = float((m_n.group(1) or "0").replace(",", "."))
                                 cur_n += _REALISM_FRAC_MAP.get(m_n.group(2) or "", 0.0)  # "1½"→1.5
@@ -39257,6 +39211,13 @@ async def assemble_plan_node(state: PlanState) -> dict:
 
     _capped_per_meal = 0
     _capped_per_day = 0
+    # [P1-PORTION-HONORED · 2026-09-07] El techo sube a la ración que la persona pidió (nunca baja,
+    # y solo con la política en vigor). Ver `portion_cap_for` en plan_policy.py.
+    from plan_policy import portion_cap_for as _pcf
+    _eggw_meal = _pcf(form_data.get("_plan_policy_effective"), "Clara de huevo",
+                      float(MAX_EGG_WHITES_PER_MEAL),
+                      enforced=bool(form_data.get("_policy_enforced")))
+    _eggw_day = max(float(MAX_EGG_WHITES_PER_DAY), _eggw_meal)
     for _d in result.get("days") or []:
         _day_total = 0.0
         _day_meals_with_eggw = []
@@ -39267,8 +39228,8 @@ async def assemble_plan_node(state: PlanState) -> dict:
                 if _count is None:
                     continue
                 _new_count = _count
-                if _new_count > MAX_EGG_WHITES_PER_MEAL:
-                    _new_count = float(MAX_EGG_WHITES_PER_MEAL)
+                if _new_count > _eggw_meal:
+                    _new_count = float(_eggw_meal)
                     _capped_per_meal += 1
                 if _new_count != _count:
                     _ings[_idx] = f"{int(_new_count) if _new_count.is_integer() else _new_count} {_rest}"
@@ -39276,9 +39237,9 @@ async def assemble_plan_node(state: PlanState) -> dict:
                 _day_meals_with_eggw.append((_m, _idx, _new_count, _rest))
             _m["ingredients"] = _ings
         # Cap por día: raspar de los últimos meals con claras hasta cumplir el cap.
-        while _day_total > MAX_EGG_WHITES_PER_DAY and _day_meals_with_eggw:
+        while _day_total > _eggw_day and _day_meals_with_eggw:
             _meal_ref, _ing_idx, _cur_count, _rest = _day_meals_with_eggw.pop()
-            _excess = _day_total - MAX_EGG_WHITES_PER_DAY
+            _excess = _day_total - _eggw_day
             _reduced = max(0.0, _cur_count - _excess)
             if _reduced <= 0:
                 # Eliminar el ingrediente entero

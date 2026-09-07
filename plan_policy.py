@@ -800,6 +800,11 @@ def stamp_plan_policy(plan_data: dict, form_data: dict, *, country: Optional[str
         return None
     try:
         compiled = compile_from_form(form_data, country=country)
+        # [P1-PORTION-HONORED · 2026-09-07] Se sella si la política estaba EN VIGOR para esta
+        # persona. Sin este campo, quien lee el plan al persistirlo no puede distinguir un usuario
+        # del canary de uno en modo sombra — y aplicaría una excepción de ración a quien solo
+        # estaba siendo medido. El dato viaja en `form_data`, pero `form_data` no llega al persist.
+        compiled["enforced"] = bool((form_data or {}).get("_policy_enforced"))
         plan_data["_plan_policy"] = compiled
         if compiled.get("effective"):
             plan_data["_plan_policy_shadow"] = measure_plan_against_policy(
@@ -893,3 +898,91 @@ def form_choices_summary(form: Optional[dict]) -> str:
         return " · ".join(parts) if parts else "(formulario vacío)"
     except Exception:
         return "(formulario ilegible)"
+
+
+# ═══════════════════════════════════════════════════════ el tope efectivo de un alimento contable
+#
+# [P1-PORTION-HONORED · 2026-09-07] Segunda mitad de P1-ANCHOR-PORTION: la ración pedida deja de
+# ser solo telemetría y **levanta el techo** de ese alimento para esa persona.
+#
+# Tres decisiones que hacen esto seguro, y las tres importan más que el cambio en sí:
+#
+# 1. **`max(default, pedido)`, nunca `pedido` a secas.** Una petición sube el techo; jamás lo baja.
+#    Si alguien escribe «2 claras», el motor conserva su margen de 6 en vez de apretarse.
+# 2. **Solo con la política EN VIGOR** (`enforced`). Es el mismo canary que ya gobierna el resto de
+#    la Fase 3: la primera persona que reciba 10 claras será una a la que se le encendió a
+#    propósito, no toda la base de usuarios de golpe.
+# 3. **Solo unidades de PIEZA.** «10 unidades» eleva un tope que cuenta piezas; «150 g» no dice
+#    nada sobre cuántas piezas caben, y tratarlo como tal es la trampa de
+#    `P1-UNKNOWN-UNIT-NOT-WHOLE` por la puerta de atrás.
+#
+# Fail-safe absoluto: sin política, sin ancla, con unidad rara o ante cualquier excepción devuelve
+# el `default` que le pasan. Este helper no puede EMPEORAR el comportamiento actual de nadie.
+_UNIDADES_DE_PIEZA = frozenset({"unidad", "unidades", "ud", "uds", "pieza", "piezas"})
+
+
+def portion_cap_for(effective: Optional[dict], name: Any, default: float,
+                    *, enforced: bool = False) -> float:
+    """Techo de PIEZAS para `name`, elevado a la ración que la persona pidió."""
+    try:
+        if not enforced or not isinstance(effective, dict) or not name:
+            return default
+        iid = ingredient_id_for(name)
+        if not iid:
+            return default
+        for a in (effective.get("food_anchors") or []):
+            if not isinstance(a, dict) or a.get("ingredient_id") != iid:
+                continue
+            p = a.get("portion")
+            if not isinstance(p, dict):
+                return default
+            if str(p.get("unit") or "").strip().lower() not in _UNIDADES_DE_PIEZA:
+                return default
+            q = float(p.get("qty") or 0)
+            return max(float(default), q) if q > 0 else default
+        return default
+    except Exception:
+        return default
+
+
+def build_count_caps_override(plan_policy: Optional[dict], base: dict) -> Optional[dict]:
+    """Copia de `base` con los techos elevados a las raciones pedidas, o `None` si no aplica.
+
+    [P1-PORTION-HONORED · 2026-09-07] La otra mitad del paso: el techo por conteo que corre AL
+    PERSISTIR (`_cap_unrealistic_portions`) no ve `form_data`, así que lee la política sellada en
+    el propio plan. Sin ella —o con la política solo en modo sombra— devuelve `None` y el llamador
+    usa el diccionario global de siempre.
+
+    Devuelve una COPIA: mutar `_REALISM_COUNT_CAPS` le cambiaría el techo a todo el proceso, que
+    es exactamente el fallo que este diseño evita (una petición de una persona no puede tocar el
+    plan de otra).
+
+    La clave del diccionario es el sustantivo en SINGULAR y sin acentos que usa el motor
+    («clara», «huevo»), no el nombre del catálogo: así lo consulta el cap.
+    """
+    try:
+        if not isinstance(plan_policy, dict) or not plan_policy.get("enforced"):
+            return None
+        eff = plan_policy.get("effective")
+        if not isinstance(eff, dict):
+            return None
+        fuera = dict(base or {})
+        tocado = False
+        for a in (eff.get("food_anchors") or []):
+            if not isinstance(a, dict):
+                continue
+            nombre = str(a.get("name") or "")
+            # El techo se eleva SOLO para el sustantivo cabecera del ancla. Comparar por
+            # subcadena hacía que «Clara de huevo» subiera también el tope de «huevo»: pedir 10
+            # claras habría autorizado 10 huevos enteros. Es `"res" ⊂ "fresco"` una vez más, y la
+            # cabecera es lo que distingue las tres formas del huevo, que es justo el caso.
+            _tok = (_norm(nombre).split() or [""])[0]
+            for clave in list(fuera.keys()):
+                if clave and clave in (_tok, _tok.rstrip("s")):
+                    nuevo = portion_cap_for(eff, nombre, float(fuera[clave]), enforced=True)
+                    if nuevo > float(fuera[clave]):
+                        fuera[clave] = nuevo
+                        tocado = True
+        return fuera if tocado else None
+    except Exception:
+        return None

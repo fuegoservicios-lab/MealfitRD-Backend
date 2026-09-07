@@ -911,6 +911,32 @@ def strip_offered_prohibited_examples(prompt_text: str, offered_names) -> str:
     return prompt_text.replace(RULE5_PROHIBITED_EXAMPLES_LITERAL, repl)
 
 
+_EGGW_DEFAULT_TXT = "máximo 6 claras/día"
+
+
+def override_egg_white_limit(prompt_text: str, max_per_day) -> str:
+    """Sustituye el tope de claras del prompt por el de ESTA persona.
+
+    [P1-PORTION-HONORED · 2026-09-07] Se sustituye el NÚMERO en la regla existente en vez de
+    añadir un bloque de excepción: dos instrucciones contradictorias en el mismo prompt son un
+    modo de fallo conocido en este repo —«una regla insatisfacible no se queda quieta: gasta
+    reintentos y empeora el plato»—. Una sola regla, con el número correcto.
+
+    Se aplica DESPUÉS del render cacheado, así que la caché por (dieta, país) sigue sirviendo el
+    mismo objeto a todo el mundo; solo el texto de la persona del canary difiere.
+
+    Fail-safe: sin tope, con un tope que no supera al de siempre, o si la frase no está (alguien
+    reescribió la regla), devuelve el prompt intacto.
+    """
+    try:
+        n = int(float(max_per_day))
+        if n <= 6 or _EGGW_DEFAULT_TXT not in (prompt_text or ""):
+            return prompt_text
+        return prompt_text.replace(_EGGW_DEFAULT_TXT, f"máximo {n} claras/día", 1)
+    except Exception:
+        return prompt_text
+
+
 def build_day_generator_system_prompt(diet=None, country=None) -> str:
     """Render del system prompt del day-gen por dieta canónica Y país (F1-T2), apilado SOBRE
     el render de dieta. `country` None/'DO' (o desconocido — `canonicalize_country` fail-safe)

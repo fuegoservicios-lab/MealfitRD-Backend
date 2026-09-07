@@ -1153,7 +1153,19 @@ def _finalize_plan_data_for_insert(data: dict, *, surface: str = "pre-INSERT",
                 if freeze_past_days:
                     from graph_orchestrator import snapshot_past_days as _spd
                     _frozen_token = _spd(_pd, surface=surface)
-                _n, _summ = _fpc(_pd["days"], db=_db_ins, target_fats=_tf_ins,
+                # [P1-PORTION-HONORED · 2026-09-07] El techo por conteo respeta la ración que la
+                # persona pidió. La política se lee del PROPIO plan (`_plan_policy`), no de
+                # `form_data`: aquí ya no existe, y enhebrarlo habría tocado media docena de
+                # firmas. Sin política sellada, sin `enforced`, o ante cualquier fallo, sale el
+                # diccionario global de siempre — este bloque no puede endurecer ningún tope.
+                _cc_ins = None
+                try:
+                    from plan_policy import build_count_caps_override as _bcco
+                    from graph_orchestrator import _REALISM_COUNT_CAPS as _rcc
+                    _cc_ins = _bcco(_pd.get("_plan_policy"), _rcc)
+                except Exception:
+                    _cc_ins = None
+                _n, _summ = _fpc(_pd["days"], db=_db_ins, target_fats=_tf_ins, count_caps=_cc_ins,
                                  main_goal=_pd.get("main_goal"), target_macros=_tm_ins)
                 if _n:
                     logger.info(f"🧩 [P1-COHERENCE-FINALIZE] {surface} aplicó coherencia a un plan no-finalizado ({_summ}).")

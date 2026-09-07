@@ -108,7 +108,10 @@ def test_los_caps_se_reejecutan_al_final_del_finalize():
     i_ret = src.index('return (total, ", ".join(parts))', i_fin)
     cuerpo = src[i_fin:i_ret]
     assert "P1-CAPS-LAST-WORD" in cuerpo
-    i_caps = cuerpo.rindex("_cap_unrealistic_portions(days, db=db)")
+    # [P1-PORTION-HONORED · 2026-09-07] El ancla es el PREFIJO de la llamada, no la llamada
+    # entera: atarla al paréntesis de cierre la rompía al añadir un argumento con nombre, y
+    # este guard comprueba el ORDEN de las operaciones, no su aridad.
+    i_caps = cuerpo.rindex("_cap_unrealistic_portions(days, db=db")
     # Los pases ADITIVOS de esta función: añaden líneas o suben cantidades, así que cada uno
     # puede dejar una porción por encima del techo. Todos deben quedar por DELANTE de los caps.
     # Sin guarda `if found`: si alguien renombra uno, este test tiene que fallar en vez de
