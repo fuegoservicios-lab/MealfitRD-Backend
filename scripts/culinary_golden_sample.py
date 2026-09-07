@@ -92,8 +92,13 @@ def construir(planes: int = 120) -> dict:
     for f in filas:
         pid, pd = str(f["id"]), (f["plan_data"] or {})
         for di, d in enumerate(pd.get("days") or [], 1):
-            for m in (d.get("meals") or []):
-                comidas[(pid, di, str(m.get("meal") or m.get("name")))] = {
+            for mi, m in enumerate(d.get("meals") or []):
+                # [P1-MEAL-IDENTITY-BY-OCCURRENCE - 2026-09-07] La clave lleva el INDICE, no solo
+                # la franja: dos meriendas el mismo dia colisionaban y una sobrescribia a la otra.
+                # Medido sobre los 96 planes vivos la incidencia es 0 de 1.182 -- es una
+                # fragilidad latente, no un defecto activo; se cierra porque nada impide que
+                # manana un plan traiga dos meriendas y la perdida seria SILENCIOSA.
+                comidas[(pid, di, mi, str(m.get("meal") or m.get("name")))] = {
                     "dia": di, "franja": str(m.get("meal") or ""), "nombre": str(m.get("name") or ""),
                     "ingredientes": [str(x) for x in (m.get("ingredients") or [])],
                     "pasos": [str(x) for x in (m.get("recipe") or [])]}
@@ -108,8 +113,24 @@ def construir(planes: int = 120) -> dict:
                     juez[(pid, v.get("day"), str(v.get("meal")))].append(
                         f"{v.get('tipo')}: {str(v.get('detalle'))[:130]}")
 
+    def _clave_hallazgo(k):
+        """(plan, dia, franja) -- la unica identidad que TRAEN los hallazgos.
+
+        [P1-MEAL-IDENTITY-BY-OCCURRENCE] `comidas` ya se indexa por ocurrencia, pero las
+        violaciones de ambas capas identifican la comida por su FRANJA y no llevan indice: no hay
+        forma de repartirlas entre dos meriendas del mismo dia. La identidad por ocurrencia queda
+        cerrada del lado del corpus y ABIERTA del lado de los hallazgos -- cerrarla entera exige
+        que `_viol` y el juez emitan el indice, que es trabajo de CUL-P0-01.
+
+        Consecuencia mientras tanto, dicha en voz alta: si un dia trajera dos meriendas, las dos
+        heredarian los hallazgos de la franja. Hoy no ocurre (0 de 1.182 medido).
+        """
+        pid, di, _mi, franja = k
+        return (pid, di, franja)
+
     def estrato(k):
-        d, j = k in det, k in juez
+        kh = _clave_hallazgo(k)
+        d, j = kh in det, kh in juez
         return ("ambas" if (d and j) else "solo_determinista" if d
                 else "solo_juez" if j else "sin_hallazgo")
 
@@ -128,8 +149,8 @@ def construir(planes: int = 120) -> dict:
             casos.append({
                 "id": hashlib.sha256(repr(k).encode()).hexdigest()[:10],
                 "estrato": e, "plan": k[0][:8], **c2,
-                "maquina_determinista": det.get(k, []),
-                "maquina_juez": juez.get(k, []),
+                "maquina_determinista": det.get(_clave_hallazgo(k), []),
+                "maquina_juez": juez.get(_clave_hallazgo(k), []),
                 "veredicto_humano": "",       # ok | defecto | dudoso
                 "nota_humana": "",
             })

@@ -160,18 +160,41 @@ def test_el_html_ofrece_enlaces_sin_javascript():
     )
 
 
+def _rutas_servidas_por_el_apex() -> set:
+    """Las rutas que nginx sirve desde el sitio estático, leídas de su PROPIA config.
+
+    [P1-ABOUT-UNA-SOLA-COPIA · 2026-09-07] El sitemap es de `bioboros.com`, y ahí una ruta puede
+    estar servida por el sitio estático en vez de por la SPA — `mealfit.conf:104` tiene la lista
+    explícita. Antes coincidían todas con rutas de `App.jsx`, así que la diferencia no se notaba;
+    `/about` es la primera que existe SOLO en el apex, y el guard la llamó «404 ofrecido a Google»
+    cuando en realidad se sirve perfectamente.
+
+    Se lee de `mealfit.conf` y no se copia aquí a mano: una segunda lista es exactamente cómo se
+    empieza a no saber cuál manda (la lección de `canonicalize_country` y de la 4ª tabla de dietas).
+    """
+    conf = (Path(__file__).resolve().parents[1] / "infra" / "nginx" / "mealfit.conf")
+    if not conf.exists():
+        return set()
+    m = re.search(r"location\s+~\s+\^/\(([a-z0-9|\-]+)\)\$\s*\{[^}]*?bioboros-v2",
+                  conf.read_text(encoding="utf-8", errors="ignore"), re.S)
+    return {f"/{r}" for r in m.group(1).split("|")} if m else set()
+
+
 def test_toda_ruta_del_sitemap_existe_en_la_app():
-    """El cruce que nunca existió: sitemap ↔ árbol de rutas."""
+    """El cruce que nunca existió: sitemap ↔ (árbol de rutas ∪ estáticas del apex)."""
     sitemap = _read(_SITEMAP)
     rutas = _rutas_declaradas_en_app()
+    apex = _rutas_servidas_por_el_apex()
+    assert apex, ("no se pudo leer la lista de estáticas de mealfit.conf: sin ella este test "
+                  "aprobaría por no encontrar nada, que es peor que fallar")
     fantasmas = []
     for loc in re.findall(r"<loc>https://bioboros\.com([^<]*)</loc>", sitemap):
         ruta = loc or "/"
         if ruta.startswith("/novedades/"):
             continue  # dinámica: la cubre el test de arriba
-        if ruta not in rutas:
+        if ruta not in rutas and ruta not in apex:
             fantasmas.append(ruta)
     assert not fantasmas, (
-        f"[P2-LANDING-SITEMAP-SSOT] El sitemap anuncia rutas que la app no sirve: "
-        f"{fantasmas}. Cada una es un 404 ofrecido a Google en bandeja."
+        f"[P2-LANDING-SITEMAP-SSOT] El sitemap anuncia rutas que NADIE sirve —ni la app ni el "
+        f"sitio estático del apex—: {fantasmas}. Cada una es un 404 ofrecido a Google en bandeja."
     )

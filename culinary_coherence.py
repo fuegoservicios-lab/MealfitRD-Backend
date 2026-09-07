@@ -1127,9 +1127,21 @@ def judgment_covers_delivered(entry: dict, plan_data: dict) -> "bool | None":
         return None
 
 
-def scan_coverage(plan_data: dict, catalog: list) -> float:
-    """Fracción de alimentos mencionados en el plan que tienen metadata
-    (telemetría de cobertura para el rollout warn→block)."""
+def scan_coverage(plan_data: dict, catalog: list) -> "float | None":
+    """Fracción de alimentos mencionados en el plan que tienen metadata.
+
+    [P1-COVERAGE-UNKNOWN-NOT-PERFECT · 2026-09-07] Devuelve **`None` cuando no pudo medir**
+    —excepción, o ningún alimento reconocido— y ya NO `1.0`. Ese `1.0` decía «cobertura perfecta»
+    justo en los dos casos en que la función no había mirado nada, que es la telemetría con la
+    que se decide el rollout `warn → block`.
+
+    No es hipotético: en `P1-CULINARY-METADATA-BETA` la cobertura real cayó de 100 % a 59 % con
+    141 filas nuevas sin `prep_methods`, la capa 1 quedó en fail-open y **los tests siguieron en
+    verde** porque ninguno miraba el DATO. Un medidor que al fallar informa del mejor valor
+    posible convierte su propia ceguera en una buena noticia.
+
+    Quien la consuma debe tratar `None` como *desconocido*, nunca como 1,0 ni como 0,0.
+    """
     try:
         index = build_culinary_index(catalog)
         vistos, con_meta = set(), 0
@@ -1142,6 +1154,6 @@ def scan_coverage(plan_data: dict, catalog: list) -> float:
                 vistos.add(f)
                 if (index.get(_norm(f)) or {}).get("prep_methods") is not None:
                     con_meta += 1
-        return (con_meta / len(vistos)) if vistos else 1.0
+        return (con_meta / len(vistos)) if vistos else None
     except Exception:
-        return 1.0
+        return None

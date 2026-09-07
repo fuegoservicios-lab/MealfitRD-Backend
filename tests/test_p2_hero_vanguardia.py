@@ -147,13 +147,34 @@ def test_precision_survives_where_it_describes():
     """«De precisión» sale del gancho, no del vocabulario. Sigue siendo la
     categoría técnica en el pie y en /about — retirarla de todas partes
     cambiaría de qué dice el producto que es, que no es lo que se pidió."""
-    about = (_SRC / "pages" / "AboutPage.jsx").read_text(encoding="utf-8")
-    assert "Precisión nutricional" in about, (
-        "P2-HERO-VANGUARDIA: el H1 de /about ya no reivindica precisión. Es la "
-        "afirmación que el motor respalda con números medidos (banda de macros, "
-        "piso de proteína, micronutrientes vs DRI); «vanguardia» no respalda "
-        "nada. El gancho se cambió; la evidencia no se retira."
-    )
+    # [P1-ABOUT-UNA-SOLA-COPIA · 2026-09-07] El ancla era el H1 de `AboutPage.jsx`, que ya NO
+    # existe: `/about` lo sirve el apex (mealfit.conf:104) y la copia React se borró porque
+    # renderizaba una SEGUNDA página con texto divergente. La invariante NO se relaja — cambia de
+    # sitio, y su otra mitad sale de este repo:
+    #
+    #   * En el apex, VERIFICADO en vivo el 2026-09-07 leyendo bioboros.com/about: su H1 sigue
+    #     diciendo «Precisión nutricional para la mesa dominicana». Ese fichero (`about.html` de
+    #     `bioboros-v2`) no está en este workspace, así que ningún test de aquí puede sujetarlo;
+    #     queda dicho para que quien lo edite sepa que hay una decisión detrás.
+    #   * En este repo, el vocabulario técnico se comprueba donde SÍ vive.
+    #
+    # Se anota la trampa que esto casi provoca: al mover el copy del hero a «vanguardia» se
+    # arrastró el H1 de la copia interna, que es exactamente lo que este guard existía para
+    # impedir. Lo cazó el gate, no la revisión.
+    assert not (_SRC / "pages" / "AboutPage.jsx").exists(), (
+        "AboutPage.jsx volvió: era la SEGUNDA copia de /about y su texto ya había divergido "
+        "del apex (ver P1-ABOUT-UNA-SOLA-COPIA)")
+    meta = (_SRC / "data" / "routeMeta.js").read_text(encoding="utf-8")
+    linea = [ln for ln in meta.splitlines() if "'/about'" in ln]
+    assert linea and all("precisión" in ln for ln in linea), (
+        "P2-HERO-VANGUARDIA: la metadata de /about dejó de reivindicar precisión. Es la "
+        "afirmación que el motor respalda con números medidos (banda de macros, piso de "
+        "proteína, micronutrientes vs DRI); «vanguardia» no respalda nada. Y aquí además "
+        f"contradiría al H1 que el apex sirve de verdad. Líneas: {linea}")
+    precision_page = (_SRC / "pages" / "PrecisionPage.jsx")
+    assert precision_page.exists(), (
+        "la categoría técnica perdió su propia página: el gancho se cambió, la evidencia no "
+        "se retira")
 
 
 # ── 2. Lo que el carácter extra cuesta ──────────────────────────────────────

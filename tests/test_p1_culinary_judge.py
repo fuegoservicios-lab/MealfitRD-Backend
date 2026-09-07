@@ -169,13 +169,21 @@ def test_history_entry_shape_y_action_taken_canonico():
     `blocked` — `off` nunca se persiste porque el bloque entero está gateado
     por `if CULINARY_JUDGE_GUARD != "off":`)."""
     win = _GO[_REVIEW_NODE_START:_REVIEW_NODE_END]
-    j = win.index("run_culinary_judge(plan, ")
-    block = win[j:j + 1200]
+    # [P1-MEASUREMENT-INTEGRITY · 2026-09-07] La ventana empieza en el `append` y termina donde
+    # termina el dict, NO a N caracteres de la llamada al juez. Era `[j:j+1200]` desde
+    # `run_culinary_judge(`, y añadir un comentario delante lo empujó fuera: el test se puso rojo
+    # sin que la forma del entry cambiara. Es la misma trampa que el guard del shell nativo ya
+    # documenta ("una ventana fija se comía la ruta siguiente"), y subir el número solo la mueve.
+    j = win.index("_cj_hist.append({")
+    block = win[j:win.index("})", j) + 2]
     assert '"ts":' in block and "datetime.now(timezone.utc).isoformat()" in block
     assert '"model": CULINARY_JUDGE_MODEL' in block
     assert '"violations": _cj_viol' in block
     assert '"action_taken":' in block
     assert '"blocked"' in block and '"warn_only"' in block
+    # [P1-MEASUREMENT-INTEGRITY] Un juicio que NO ocurrió (timeout/error/breaker) se guardaba
+    # idéntico a uno limpio. El estado es parte de la forma del entry desde ahora.
+    assert '"status": _cj_status' in block
 
 
 def test_violations_pydantic_se_serializan_con_model_dump():

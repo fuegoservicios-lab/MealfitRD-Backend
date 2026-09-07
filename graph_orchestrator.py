@@ -44555,7 +44555,10 @@ Responde ÚNICAMENTE con el JSON de revisión.
             _cul_viol = culinary_contract_scan(plan, _cul_cat)
             _cul_cov = scan_coverage(plan, _cul_cat)
             plan["_culinary_contract_violations"] = _cul_viol
-            plan["_culinary_contract_coverage"] = round(_cul_cov, 3)
+            # [P1-MEASUREMENT-INTEGRITY · 2026-09-07] `None` = no se pudo medir. Antes llegaba
+            # disfrazado de 1,0 y alimentaba la decisión de escalar `warn → block`.
+            plan["_culinary_contract_coverage"] = (
+                round(_cul_cov, 3) if _cul_cov is not None else None)
             if _cul_viol:
                 logger.warning(
                     f"🍳 [P1-CULINARY-CONTRACT] {len(_cul_viol)} violación(es) "
@@ -44604,18 +44607,23 @@ Responde ÚNICAMENTE con el JSON de revisión.
         from constants import country_for_form_data
         _cj_country = cultural_country_for_form_data(form_data)
         _cj = await run_culinary_judge(plan, _cj_country)
+        # [P1-MEASUREMENT-INTEGRITY · 2026-09-07] `None` = NO llegó a juzgar (timeout/error/
+        # breaker); sin estado se guardaba igual que un juicio limpio. Ver su test.
+        _cj_status = "judged" if _cj is not None else "unavailable"
         _cj_viol = [v.model_dump() for v in (_cj.violations if _cj else [])]
         _cj_hist = plan.setdefault("_culinary_judge_history", [])
-        # [P1-JUDGE-REVISION-STAMP · 2026-09-06] Sin este sello, una entrada del historial no se
-        # puede atar a una versión del plan, y «el juez se quejó y lo arreglamos» es
-        # indistinguible de «se quejó y lo entregamos». Medido: de 37 quejas «X no aparece en la
-        # lista», 6 nombraban algo que SÍ está en el plan entregado. Ver `judged_fingerprint`
-        # (culinary_coherence.py) para por qué NO es `services.compute_plan_hash`.
+        # [P1-JUDGE-REVISION-STAMP · 2026-09-06] Ata la entrada a una VERSIÓN del plan: sin
+        # sello, «se quejó y lo arreglamos» era indistinguible de «se quejó y lo entregamos»
+        # (6 de 37 quejas nombraban algo que SÍ está entregado). Por qué no es
+        # `compute_plan_hash`: ver `judged_fingerprint` en culinary_coherence.py.
         from culinary_coherence import judged_fingerprint as _cj_fingerprint
         _cj_hist.append({
             "ts": datetime.now(timezone.utc).isoformat(),
             "model": CULINARY_JUDGE_MODEL,
-            "judged_fingerprint": _cj_fingerprint(plan),
+            "status": _cj_status,
+            # El sello solo tiene sentido si HUBO juicio: sellar un `unavailable` afirmaría que
+            # esta versión del plan fue examinada.
+            "judged_fingerprint": _cj_fingerprint(plan) if _cj is not None else None,
             "violations": _cj_viol,
             "action_taken": ("blocked" if (_cj_viol and CULINARY_JUDGE_GUARD == "block")
                              else "warn_only"),

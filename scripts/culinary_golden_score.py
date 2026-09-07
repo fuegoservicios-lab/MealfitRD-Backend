@@ -40,6 +40,8 @@ except Exception:
 _BACKEND = Path(__file__).resolve().parents[1]
 GOLDEN = _BACKEND / "docs" / "culinary_golden_set.json"
 
+MINIMO_ETIQUETAS = 20
+
 _DEFECTO = {"defecto", "malo", "mal", "si", "sí"}
 _OK = {"ok", "bien", "correcto", "no"}
 
@@ -100,7 +102,7 @@ def puntuar(d: dict) -> dict:
 def render(r: dict) -> str:
     o = [f"casos {r['casos']} · etiquetados {r['etiquetados']} · dudosos {r['dudosos']} · "
          f"sin etiquetar {r['sin_etiquetar']}", ""]
-    if r["etiquetados"] < 20:
+    if r["etiquetados"] < MINIMO_ETIQUETAS:
         o += ["  ⛔ Con menos de 20 casos etiquetados estas cifras no significan nada.", ""]
     o.append("  capa            precision      recall        (crudo -> ponderado)")
     for capa, v in r["capas"].items():
@@ -124,6 +126,12 @@ def main() -> int:
         return 1
     r = puntuar(json.loads(GOLDEN.read_text(encoding="utf-8")))
     print(json.dumps(r, ensure_ascii=False, indent=2) if a.json else render(r))
+    # [P1-SCORE-INCOMPLETE-EXIT · 2026-09-07] Un experimento SIN etiquetas suficientes salia con
+    # codigo 0 y metricas `null`: para CI y para cualquier consumidor eso es indistinguible de
+    # "medido y correcto". El aviso en pantalla solo lo ve una persona que ademas lo lea.
+    # Exit 4 = incompleto (no es un fallo del programa, es la ausencia de la referencia humana).
+    if r["etiquetados"] < MINIMO_ETIQUETAS:
+        return 4
     return 0
 
 

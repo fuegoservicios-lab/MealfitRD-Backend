@@ -42,6 +42,7 @@ from __future__ import annotations
 
 import argparse
 import collections
+import hashlib
 import json
 import os
 import sys
@@ -76,6 +77,17 @@ def medir(planes: int = 120) -> dict:
             "ORDER BY created_at DESC LIMIT %s", (planes,)).fetchall()
 
     comidas = 0
+    # [P1-BASELINE-REPRODUCIBLE - 2026-09-07] La foto anterior guardaba `planes: 96` y
+    # `comidas: 1186` y NADA mas. No bastaba: el corpus es `ORDER BY created_at DESC LIMIT n`
+    # sobre `plan_data` VIVO, y el shift del cron ENCOGE la ventana de dias de un plan ya
+    # existente. Medido: 14 h despues de congelarla, los MISMOS 96 planes daban 1.182 comidas
+    # -- dos planes mutaron a las 00:00 y 00:30 y se llevaron 4 comidas por delante.
+    #
+    # O sea que una re-medicion no comparaba "antes vs despues del cambio": comparaba dos
+    # corpus distintos, y cualquier mejora o empeoramiento incluia esa deriva sin decirlo.
+    # Se graba la HUELLA del corpus para que la proxima corrida pueda afirmar si mide lo mismo.
+    huella_corpus = hashlib.sha256()
+    ids = []
     por_check, por_tipo = collections.Counter(), collections.Counter()
     con_det, con_juez = set(), set()
     cobertura = collections.Counter()   # P1-JUDGE-REVISION-STAMP: si / no / desconocido
@@ -83,8 +95,12 @@ def medir(planes: int = 120) -> dict:
     for f in filas:
         pid = str(f["id"])
         pd = f["plan_data"] or {}
-        for d in (pd.get("days") or []):
+        ids.append(pid[:8])
+        _dias = pd.get("days") or []
+        for d in _dias:
             comidas += len(d.get("meals") or [])
+        # el nº de dias es justo lo que el shift mueve: entra en la huella
+        huella_corpus.update(f"{pid}:{len(_dias)}:".encode())
         for v in culinary_contract_scan(pd, cat):
             por_check[str(v.get("check"))] += 1
             con_det.add((pid, v.get("day"), str(v.get("meal"))))
@@ -107,6 +123,13 @@ def medir(planes: int = 120) -> dict:
 
     return {
         "planes": len(filas), "comidas": comidas,
+        "corpus": {
+            "huella": huella_corpus.hexdigest()[:16],
+            "plan_ids": sorted(ids),
+            "nota": ("`plan_data` es VIVO: el shift encoge los dias de un plan ya existente. "
+                     "Si la huella cambia, las dos fotos NO son comparables aunque coincidan "
+                     "los ids."),
+        },
         "determinista": {"comidas": len(con_det), "pct": pct(len(con_det)),
                          "por_check": dict(por_check.most_common())},
         "juez": {"comidas": len(con_juez), "pct": pct(len(con_juez)),
@@ -141,8 +164,33 @@ ADVERTENCIA = (
 )
 
 
+def _corpus_comparable(r: dict, previa: dict | None) -> "bool | None":
+    """¿La foto congelada mide el MISMO corpus que esta? `None` = no se puede saber.
+
+    [P1-BASELINE-REPRODUCIBLE · 2026-09-07] Las fotos anteriores a este P-fix no llevan huella,
+    y ahí la respuesta honesta es «no se sabe» — nunca «sí». Restar dos cifras de corpus distintos
+    y presentar la diferencia como el efecto de un cambio es fabricar un resultado.
+    """
+    if not previa:
+        return None
+    a = ((r.get("corpus") or {}).get("huella"))
+    b = ((previa.get("corpus") or {}).get("huella"))
+    if not a or not b:
+        return None
+    return a == b
+
+
 def render(r: dict, previa: dict | None = None) -> str:
     o = [f"planes {r['planes']} · comidas {r['comidas']}", ""]
+    _cmp = _corpus_comparable(r, previa)
+    if _cmp is False:
+        o += ["  ⛔ EL CORPUS CAMBIO desde la foto congelada: los deltas de abajo NO son el efecto",
+              "     de ningun cambio de codigo. `plan_data` es vivo y el shift encoge los dias de",
+              "     un plan ya existente (medido: 4 comidas menos en 14 h, mismos 96 planes).", ""]
+    elif _cmp is None and previa:
+        o += ["  ⚠  La foto congelada no lleva huella de corpus (es anterior a",
+              "     P1-BASELINE-REPRODUCIBLE): no se puede saber si mide lo mismo. Trata los",
+              "     deltas como orientativos, no como el efecto de un cambio.", ""]
     for capa, etiq in (("determinista", "contrato determinista (V1-V5)"), ("juez", "juez culinario")):
         v = r[capa]
         linea = f"  {etiq:32s} {v['comidas']:5d} comidas   {v['pct']} %"
