@@ -360,6 +360,39 @@ if _USE_ALL_INGREDIENTS:
     )
 
 
+# [P1-DAYGEN-DONENESS-INSIDE · 2026-09-07] Medido en la flota antes de escribir, y la medición
+# cambió el objetivo: el horno YA lleva temperatura (1 de 214 sin ella), lo que falta es la señal
+# de que está listo POR DENTRO — 142 comidas con masa formada cocida en seco (11,9 %) y 38 con
+# pollo/cerdo/pavo (3,2 %) cierran solo con «hasta que dore». Es el rechazo textual del dueño en
+# el juicio a ciegas: «solo exige dorado exterior», «no usar el dorado como criterio final». En la
+# masa el dorado engaña (fuera antes que el centro); en la carne no es textura, es seguridad.
+# String ESTÁTICO a import-time → prompt-cache del SystemMessage intacto (P1-PROMPT-CACHE).
+# Rollback sin redeploy: MEALFIT_DAYGEN_DONENESS_INSIDE=0.
+# tooltip-anchor: P1-DAYGEN-DONENESS-INSIDE
+try:
+    from knobs import _env_bool as _di_env_bool
+
+    _DONENESS_INSIDE = _di_env_bool("MEALFIT_DAYGEN_DONENESS_INSIDE", True)
+except Exception:  # pragma: no cover — sin knobs el prompt sigue siendo el de antes
+    _DONENESS_INSIDE = True
+
+if _DONENESS_INSIDE:
+    DAY_GENERATOR_SYSTEM_PROMPT = DAY_GENERATOR_SYSTEM_PROMPT + (
+        "\n21. CÓMO SE SABE QUE ESTÁ LISTO POR DENTRO (el dorado exterior NUNCA basta solo):\n"
+        "    - MASA FORMADA cocida en seco (croquetas, tortitas, bollitos, arepitas, panqueques,\n"
+        "      muffins, empanadas, albóndigas, tortilla gruesa): el exterior dora mucho ANTES de que\n"
+        "      cuaje el centro. Cierra el paso con la señal real — sale limpio al pinchar con un\n"
+        "      palillo, el centro cuaja y no escurre, o al partir uno el interior no está crudo.\n"
+        "    - POLLO, CERDO o PAVO: hasta que el interior no tenga partes rosadas. Aquí no es\n"
+        "      textura, es seguridad.\n"
+        "    - VÍVERES que se majan o se rellenan (yuca, papa, batata, plátano, ñame, auyama):\n"
+        "      hiérvelos hasta que el cuchillo entre sin fuerza y ESCÚRRELOS antes de majar o\n"
+        "      rellenar. Rallar no es cocinar.\n"
+        "    - «hasta que dore» puede acompañar, pero jamás ser el único criterio en estos tres\n"
+        "      casos. En un sofrito o un salteado de vegetales sí basta: ahí no hay centro crudo.\n"
+    )
+
+
 # [P1-DIET-BLIND-DIRECTIVES · 2026-08-08] El prompt estático de arriba ordena proteína ANIMAL en
 # ≥6 fragmentos (rotación de huevo, "proteína fresca", patrones de almuerzo/cena) sin mirar la
 # dieta — el benchmark del issue #9 midió que la directiva de dieta PRIORIDAD-1 PIERDE contra esas
