@@ -1434,6 +1434,56 @@ def _v7d_masas(texto: str, index: dict) -> dict:
     return out
 
 
+def _v7e_paso_pide_mas_piezas(day, meal, index) -> list:
+    """[P1-CULINARY-V7E-PIEZAS · 2026-09-07] Un paso pide MÁS PIEZAS de las que la lista compra.
+
+    `V6` ya cubre esta dirección, pero exige una palabra de UNIDAD: `_v6_cuentas('½ diente de
+    ajo')` da `{('diente', 0.5)}` y `_v6_cuentas('½ guineo verde')` da `{}`. Con un conteo
+    DESNUDO los dos lados salen vacíos y no hay nada que comparar. `_v7_piezas` sí lo lee —y ya
+    rechaza «2 tazas» como medida, que es lo que hacía peligrosa esta comparación.
+
+    El hueco es el más ancho medido hasta hoy: **127 de 1.194 comidas (10,6 %)**, trece veces la
+    prevalencia de V7d. Y sobre las 140 etiquetadas por el dueño dispara 16 veces, **las 16 en
+    comidas que él marcó con defecto**, con sus notas describiendo esta acusación palabra por
+    palabra: «¾ de unidad en ingredientes frente a 2 unidades en la preparación», «Corregir pera:
+    se declara ½ y se utiliza 1», «Unificar ajíes —1 frente a 2—, cebolla —1 frente a ½—».
+
+    **Se compara POR PASO, nunca la suma.** En la dirección contraria (V7a, la lista compra de
+    más) sumar los pasos es seguro: más menciones sólo reducen el hueco. Aquí sumar sería un
+    falso positivo garantizado — «corta 1 tomate» y luego «añade el tomate» daría 2 contra 1. La
+    pregunta correcta es si ALGÚN paso, por sí solo, pide más de lo que hay comprado.
+
+    No solapa con V6: cuando el texto trae unidad («1 diente de ajo»), `_v7_piezas` ve la medida
+    delante del alimento y no cuenta la pieza, así que ese caso lo sigue reportando V6 y sólo V6.
+    """
+    out = []
+    try:
+        ings = [str(x) for x in (meal.get("ingredients") or [])]
+        pasos = [str(x) for x in (meal.get("recipe") or [])]
+        if not ings or not pasos:
+            return []
+        en_lista: dict = {}
+        for ing in ings:
+            for food, n in _v7_piezas(ing, index).items():
+                en_lista[food] = en_lista.get(food, 0.0) + n
+        for paso in pasos:
+            for food, n in _v7_piezas(paso, index).items():
+                total = en_lista.get(food)
+                if total is None:
+                    continue                           # no está en la lista: eso es V5
+                # Misma tolerancia que V6: «⅓» y «0.33» son la misma cantidad, y el suelo
+                # absoluto evita que un redondeo de redacción dispare sobre cantidades chicas.
+                if n <= total + max(0.06, 0.05 * total):
+                    continue
+                out.append(_viol(
+                    day, meal, "V7e", food,
+                    f"el paso pide {n:g} y la lista compra {total:g}: {paso[:100]}",
+                    "minor", False))
+    except Exception:
+        return []
+    return out
+
+
 def _v7d_masa_sobrante(day, meal, index) -> list:
     """La lista compra N gramos y los pasos, sumados, usan bastantes menos. Fail-open total."""
     out = []
@@ -1489,6 +1539,7 @@ def culinary_contract_scan(plan_data: dict, catalog: list) -> list:
             out.extend(_v7b_duplicado_incompatible(day, meal, index))
             out.extend(_v7c_seco_sin_coccion(day, meal, index))
             out.extend(_v7d_masa_sobrante(day, meal, index))
+            out.extend(_v7e_paso_pide_mas_piezas(day, meal, index))
         return out
     except Exception:
         return []
