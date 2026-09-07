@@ -336,6 +336,8 @@ def policy_from_form(form_data: dict, *, country: Optional[str] = None) -> dict:
         anchors.append({
             "ingredient_id": iid, "name": s, "slots": slots,
             "min_per_7d": lo, "max_per_7d": hi, "preparation_mode": prep,
+            # [P1-ANCHOR-PORTION · 2026-09-07] CUÁNTO, no solo cuándo y cuán a menudo.
+            "portion": _portion_of(d),
         })
     cycle = _cycle_days(form)
     freezer = str(form.get("freezerMode") or "limited").strip().lower()
@@ -440,6 +442,44 @@ def _anchor_hits_diet(anchor_name: str, diet: str) -> bool:
     if diet == "pescatarian":
         return _in(_MEAT)
     return False
+
+
+# ─────────────────────────────────────────────────────────────────────────────────────────────
+# La RACIÓN de un ancla
+#
+# [P1-ANCHOR-PORTION · 2026-09-07] `stapleAnchors` sabía decir *cuándo* (franjas) y *cuán a
+# menudo* (min/max por 7 días), pero no **cuánto**. Sin ese dato, «desayuno 10 claras» no tiene
+# dónde entrar: no es una alergia, ni un disgusto, ni un básico más — es una CANTIDAD.
+#
+# Medido antes de escribirlo, sobre 96 planes vivos: las claras entregadas son 1, 2, 3, 4, 5 y 6,
+# y ahí se cortan en seco. Esa distribución que muere justo en el tope es la firma de
+# `MAX_EGG_WHITES_PER_MEAL = 6`; nadie ha recibido nunca más, pidiera lo que pidiera.
+#
+# Este P-fix **solo transporta la intención**: los topes siguen recortando exactamente igual. Lo
+# que cambia es que el recorte deja de ser mudo — se registra como relajación «pediste N,
+# aplicamos M», que es la mitad del daño. Honrar la petición es el paso siguiente y toca cinco
+# capas (prompt, dos caps, solver y gate de variedad); mezclarlo aquí sería subir un tope global
+# y dar 10 claras a quien no las pidió.
+#
+# LA UNIDAD ES OBLIGATORIA, y no es burocracia: sin ella «150» de pollo se leería como 150
+# unidades. Es la lección de `P1-UNKNOWN-UNIT-NOT-WHOLE` — una unidad desconocida no es una
+# unidad entera. Sin unidad se descarta la ración y se dice por qué.
+_PORTION_MAX = 100.0          # cota anti-basura, NO un límite clínico (el encargo lo excluye)
+
+
+def _portion_of(detail: dict) -> Optional[dict]:
+    """`{"qty": float, "unit": str}` de un item de `stapleAnchors`, o `None` si no lo trae."""
+    raw = (detail or {}).get("portion")
+    if not isinstance(raw, dict):
+        return None
+    try:
+        qty = float(raw.get("qty"))
+    except (TypeError, ValueError):
+        return None
+    unit = str(raw.get("unit") or "").strip().lower()
+    if not unit or qty <= 0:
+        return None
+    return {"qty": qty, "unit": unit}
 
 
 def _relax(rels: list, *, field: str, requested: Any, applied: Any, reason: str, rank: int,
@@ -556,6 +596,21 @@ def compile_policy(requested: dict, *, context: Optional[dict] = None) -> tuple[
             _relax(rels, field=f"food_anchors[{a.get('ingredient_id')}].per_7d", requested=[lo, hi],
                    applied=[lo2, hi2], reason="recurrence_clamped", rank=5)
         a["min_per_7d"], a["max_per_7d"] = lo2, hi2
+        # [P1-ANCHOR-PORTION · 2026-09-07] La ración sobrevive a `compile_policy` o se cae
+        # DICIÉNDOLO. Una petición descartada en silencio es la que hace que el usuario repita
+        # el formulario creyendo que no le hicieron caso.
+        _p = a.get("portion")
+        if _p is not None:
+            _pn = _portion_of({"portion": _p})
+            if _pn is None:
+                _relax(rels, field=f"food_anchors[{a.get('ingredient_id')}].portion",
+                       requested=_p, applied=None, reason="portion_invalid", rank=5)
+            elif _pn["qty"] > _PORTION_MAX:
+                _relax(rels, field=f"food_anchors[{a.get('ingredient_id')}].portion",
+                       requested=_pn, applied={"qty": _PORTION_MAX, "unit": _pn["unit"]},
+                       reason="portion_out_of_range", rank=5)
+                _pn = {"qty": _PORTION_MAX, "unit": _pn["unit"]}
+            a["portion"] = _pn
         a["slots"] = [_SLOT_ALIASES.get(_norm(s), _norm(s)) for s in (a.get("slots") or []) if _norm(s)]
         if a.get("preparation_mode") not in ("vary_preparation", "same_preparation"):
             a["preparation_mode"] = "vary_preparation"
@@ -604,6 +659,11 @@ _REASON_COPY = {
     "pantry_proteins_after_first_week": "Sin congelador ni reposición de frescos: la proteína fresca es para la primera semana; después huevos, enlatados, legumbres y queso curado.",
     "recurrence_clamped": "La frecuencia pedida se ajustó al rango posible (0–7 por semana).",
     "anchors_capped": "Solo los primeros {applied} básicos se usan como anclas.",
+    # [P1-ANCHOR-PORTION · 2026-09-07] El usuario ve QUÉ pidió y QUÉ se aplicó. Sin este copy la
+    # relajación existiría en el jsonb y no llegaría al panel «solicitaste / aplicamos / por qué».
+    "portion_invalid": "No entendimos la cantidad que pediste para este básico (falta la unidad "
+                       "o no es un número), así que usamos la ración normal.",
+    "portion_out_of_range": "La cantidad pedida es demasiado alta para una ración; la ajustamos.",
 }
 
 
