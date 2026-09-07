@@ -439,3 +439,65 @@ cualquier «mejora» reportada después sería el sistema dándose la razón. Es
 el que desbloquea la decisión de si V5 escala de `warn` a `block`.
 
 Test: [`test_p0_culinary_golden.py`](../tests/test_p0_culinary_golden.py).
+
+## V6 — el paso pide MÁS de lo que la lista compra
+
+[P1-CULINARY-V6-STEP-OVERASK · 2026-09-06] V4 compara **gramos**. Las **piezas** no las miraba
+nadie, y ahí vivía un patrón sistemático: la lista dice «½ diente de ajo» y el paso «pica 1 diente
+de ajo». Medido sobre los mismos 96 planes y 1.186 comidas de la línea base: **37 hallazgos en 33
+comidas (2,8 %)**, 13 alimentos.
+
+El patrón es uno solo — **el modelo redondea las fracciones hacia arriba al recitar la lista en el
+«Mise en place»**, que es justamente el paso que la copia:
+
+| lista | paso | consecuencia |
+|---|---|---|
+| `3 rebanadas de pan integral familiar` | «mide **4 rebanadas**» | una rebanada que nadie compró |
+| `½ hoja grande de repollo` | «separa **6 hojas grandes**» | el plato se llama *Canoas de repollo* |
+| `1 rebanada de pan integral` | «mide **2 rebanadas**» | el doble |
+| `½ cda de aceite de oliva` | «mide **1 cda**» | el doble de grasa |
+| `½ pedazo mediano de yuca (≈200 g)` | «corta **¾ pedazo** (255 g)» | +55 g |
+| `¼ cdta de comino` | «mide **½ cdta**» | |
+| `½ tallo de cebollín` | «pica **2 tallos**» | |
+
+Distribución: `ajo` 15, `canela en polvo` 4, `aceite de oliva` 4, y 1-2 cada uno en los otros diez.
+
+### Las dos decisiones que lo hacen medible
+
+**1. Solo se acusa cuando el paso pide MÁS.** Un paso que usa *menos* que el total puede estar
+repartiendo el ingrediente —«calienta 1 cda» de las 2 que compra, el resto después—; acusarlo
+convertiría a V6 en un impuesto sobre la receta bien escrita. Uno que pide más no tiene de dónde
+sacarlo. **La dirección es lo que separa el defecto del reparto**, no el alimento: en la ronda 2
+`aceite de oliva` parecía el segundo peor infractor y era casi todo reparto legítimo.
+
+**2. La unidad es obligatoria, y eso cuesta casos reales.** «½ guineíto verde» en la lista contra
+«pela y corta 2 guineítos» en el paso es un defecto, y V6 lo deja pasar a sabiendas. Admitir la
+mención sin unidad sube de **37 a 153** hallazgos con ruido demostrable: sin una unidad que ancle
+el número al alimento se le pega cualquier cifra vecina — «coloca el Batata como base» heredó un
+`3` de otra frase de la receta, y un `huevo 4.0` salió de «2 minutos por lado». **Descartado
+MEDIDO**, no por prudencia; si algún día se recupera, será con un ancla de proximidad y una cifra
+al lado.
+
+`g`/`ml`/`oz` se reconocen **para descartarlos**: si `g` no estuviera en el vocabulario, «355 g de
+lechosa» caería al cubo de las piezas y se compararía contra unidades. La coherencia en gramos ya
+es de V4 (`P1-STEP-GRAM-HINT-STALE`).
+
+### Lo que V6 NO afirma
+
+**De qué lado está el error.** En «Canoas de repollo rellenas de soya» la lista pedía ½ hoja y el
+paso 6 hojas: la equivocada era **la lista**, porque con media hoja no hay canoas. V6 solo afirma
+que los dos se contradicen — decidir cuál corregir necesita criterio culinario que un detector
+determinista no tiene.
+
+### Cómo se portó
+
+El prototipo dio 36 hallazgos y el código en repo 37, con la diferencia **explicada línea a
+línea**: +2 de `cebollín` porque el repo añadió `tallo` al vocabulario (casos reales), −1 de
+`huevo` porque el repo quitó `claras` de las unidades (una clara es un alimento, no una unidad).
+Ese contraste es lo que detecta un port incompleto: al portar V5 se me olvidó un filtro y dio 64
+donde el prototipo daba 11.
+
+`warn`, como V5. Escalarlo se decide con el golden set etiquetado, no con la tasa que se
+autoinforma.
+
+Test: [`test_p1_culinary_v6_step_overask.py`](../tests/test_p1_culinary_v6_step_overask.py).

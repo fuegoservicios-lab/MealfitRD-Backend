@@ -934,6 +934,110 @@ def _v5_paso_usa_lo_que_no_esta(day, meal, index) -> list:
     return out
 
 
+# ─────────────────────────────────────────────────────────────────────────────────────────────
+# V6 — el paso PIDE MÁS de lo que la lista compra, en unidades contables
+#
+# [P1-CULINARY-V6-STEP-OVERASK · 2026-09-06] V4 compara GRAMOS. Nadie miraba las piezas: la lista
+# dice «½ diente de ajo» y el paso «pica 1 diente de ajo»; «3 rebanadas de pan» y «mide 4
+# rebanadas»; «½ cda de aceite» y «mide 1 cda». Medido sobre 96 planes: 36 comidas (3,0 %), 13
+# alimentos, y el patrón es uno solo — **el modelo redondea las fracciones hacia arriba al
+# recitar la lista en el «Mise en place»**.
+#
+# Dos decisiones que hacen esto medible y no ruidoso:
+#
+# 1. **Solo se acusa cuando el paso pide MÁS.** Un paso que usa MENOS que el total puede estar
+#    repartiendo el ingrediente entre pasos («calienta 1 cda» de las 2 que compra, y el resto
+#    después) — legítimo, y contarlo castigaría a la receta bien escrita. Uno que pide más no
+#    tiene de dónde sacarlo. La dirección es la que distingue el defecto del reparto.
+# 2. **La unidad es obligatoria.** Se probó admitir la mención sin unidad («2 guineítos» contra
+#    «½ guineíto») y sube de 36 a 153 hallazgos con ruido demostrable: sin unidad que ancle el
+#    número al alimento, se le pega cualquier cifra vecina — «coloca el Batata como base» heredó
+#    el «3» de otra frase, y un «huevo 4.0» salió de «2 minutos por lado». Descartado MEDIDO.
+#
+# `g`/`ml` se reconocen para que «355 g de lechosa» no caiga al cubo de las piezas, pero NO se
+# comparan: la coherencia en gramos ya es de V4 (P1-STEP-GRAM-HINT-STALE).
+#
+# V6 no decide de qué LADO está el error, y no debe: en «Canoas de repollo» la lista pedía ½ hoja
+# y el paso 6 hojas — ahí la equivocada era la lista, porque con media hoja no hay canoas. Lo que
+# afirma es que los dos se contradicen.
+_V6_FRAC = {"½": 0.5, "¼": 0.25, "¾": 0.75, "⅓": 1 / 3, "⅔": 2 / 3, "⅛": 0.125}
+_V6_CONTABLE = (r"unidades?|dientes?|rebanadas?|lonjas?|tazas?|cucharadas?|cucharaditas?|cdas?|"
+                r"cdtas?|gajos?|ramitas?|filetes?|pedazos?|hojas?|tallos?|latas?|paquetes?")
+_V6_MASA = r"gramos?|g|kg|mililitros?|ml|litros?|l|onzas?|oz|lb|libras?"
+_V6_MASA_RE = re.compile(_V6_MASA, re.IGNORECASE)
+_V6_RE = re.compile(r"(\d+(?:[.,]\d+)?|[½¼¾⅓⅔⅛]|\d[½¼¾⅓⅔])\s*"
+                    r"(" + _V6_CONTABLE + "|" + _V6_MASA + r")\s*(?:de\s+)?([a-zñ ]{3,28})")
+
+
+def _v6_valor(txt: str):
+    """«½» → 0.5, «1½» → 1.5, «0,33» → 0.33. None si no es un número que entienda."""
+    t = (txt or "").strip()
+    if t in _V6_FRAC:
+        return _V6_FRAC[t]
+    m = re.match(r"^(\d+)([½¼¾⅓⅔])$", t)
+    if m:
+        return float(m.group(1)) + _V6_FRAC.get(m.group(2), 0)
+    try:
+        return float(t.replace(",", "."))
+    except Exception:
+        return None
+
+
+def _v6_cuentas(texto: str, index: dict) -> dict:
+    """{alimento: {(unidad_singular, valor)}} de las menciones CONTABLES del texto.
+
+    La clave es el NOMBRE DEL CATÁLOGO («Ajo»), no su forma normalizada: V1-V4 reportan así, y una
+    agrupación aguas abajo que viera «Ajo» y «ajo» los contaría como dos alimentos. La forma
+    normalizada se usa solo para el filtro de especificidad, igual que en V5."""
+    out: dict = {}
+    for m in _V6_RE.finditer(_norm(texto)):
+        val = _v6_valor(m.group(1))
+        if val is None or _V6_MASA_RE.fullmatch(m.group(2) or ""):
+            continue                                   # la masa se reconoce y se descarta: es V4
+        uni = re.sub(r"e?s$", "", m.group(2))
+        # se queda el alias MÁS específico: «yogurt griego sin azúcar» casa también `Yogur`
+        crudos = list(find_catalog_foods(m.group(3), index))
+        normas = {f: _norm(f) for f in crudos}
+        for f in crudos:
+            if any(f != o and normas[f] in normas[o] for o in crudos):
+                continue
+            out.setdefault(f, set()).add((uni, round(val, 3)))
+    return out
+
+
+def _v6_paso_pide_mas_que_la_lista(day, meal, index) -> list:
+    """[P1-CULINARY-V6-STEP-OVERASK] Fail-open total."""
+    out = []
+    try:
+        ings = [str(x) for x in (meal.get("ingredients") or [])]
+        pasos = [str(x) for x in (meal.get("recipe") or [])]
+        if not ings or not pasos:
+            return []
+        en_lista: dict = {}
+        for ing in ings:
+            for food, pares in _v6_cuentas(ing, index).items():
+                en_lista.setdefault(food, set()).update(pares)
+        for paso in pasos:
+            for food, pares in _v6_cuentas(paso, index).items():
+                if food not in en_lista:
+                    continue                           # eso es V5, no V6
+                for uni, val in pares:
+                    vals = {v for u, v in en_lista[food] if u == uni}
+                    if not vals:
+                        continue                       # otra unidad: no comparable sin densidad
+                    total = max(vals)
+                    # tolerancia: «⅓ taza» y «0.33 taza» son la misma cantidad
+                    if val <= total + max(0.06, 0.05 * total):
+                        continue                       # usa lo mismo o menos: puede repartir
+                    out.append(_viol(day, meal, "V6", food,
+                                     f"el paso pide {val:g} {uni} y la lista compra "
+                                     f"{min(vals):g}: {paso[:100]}",
+                                     "minor", False))
+    except Exception:
+        return []
+    return out
+
+
 def _viol(day, meal, check, food, detail, severity, repairable):
     return {"day": day, "meal": meal.get("meal") or meal.get("name"),
             "check": check, "food": food, "detail": detail,
@@ -954,6 +1058,7 @@ def culinary_contract_scan(plan_data: dict, catalog: list) -> list:
             out.extend(_v3_huerfanos(day, meal, index))
             out.extend(_v4_cantidad_inconsistente(day, meal, index))
             out.extend(_v5_paso_usa_lo_que_no_esta(day, meal, index))
+            out.extend(_v6_paso_pide_mas_que_la_lista(day, meal, index))
         return out
     except Exception:
         return []
