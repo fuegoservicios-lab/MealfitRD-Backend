@@ -803,6 +803,137 @@ def _v4_cantidad_inconsistente(day, meal, index) -> list:
     return out
 
 
+
+# ---------------------------------------------------------------------------
+# V5 — el espejo de V3: el paso USA algo que la lista NO trae
+# ---------------------------------------------------------------------------
+# [P1-CULINARY-V5-GHOST-STEP · 2026-09-06] V3 pregunta «¿hay un ingrediente que ningún paso
+# menciona?». Nadie preguntaba lo contrario, y es la categoría más frecuente del juez culinario
+# (`paso_incoherente`, 96 de 227 comidas señaladas): «coloca el cilantro por encima» en un plato
+# cuya lista trae orégano, «añade la piña» a un cottage con manzana. El usuario compra la lista y
+# la receta le manda usar algo que no tiene.
+#
+# Cinco filtros, y cada uno nació de un falso positivo MEDIDO sobre 1.186 comidas vivas. El detector
+# ingenuo daba 460 acusaciones; éste da 11, con 10 reales juzgadas a mano:
+#
+#   460 → 364  el índice devuelve el alias corto Y el largo: «yogurt griego» casaba también `Yogur`
+#   364 → 287  las notas de seguridad hablan de CLASES en abstracto («el pollo/cerdo debe cocinarse»)
+#   287 → 241  la lista y el paso nombran el mismo alimento con alias distintos
+#   241 → 100  el índice no resuelve «1½ filetes de pescado», y eso NO significa que no esté
+#   100 →  11  un paso que USA lo nombra tras un verbo de entrada; uno que lo PRODUCE, no
+#
+# El cuarto es el que más enseña: sin él el detector medía el recall del CATÁLOGO y acusaba al plan
+# de su propia ceguera — un ceviche con su pescado en la lista salía acusado de no tenerlo.
+#
+# Severidad `minor` y `repairable=False`: es telemetría. No escala a bloqueo sin un golden set
+# humano; subirlo a partir de la tasa del propio juez sería el overfitting que ya se pagó en agosto.
+
+#: Notas de seguridad: hablan de clases de alimento en abstracto, no de los ingredientes del plato.
+_V5_NOTA = re.compile("seguridad alimentaria|riesgo de salmonella|^\\s*\u26a0", re.IGNORECASE)
+
+#: Un paso que NIEGA un alimento no lo está usando: «se reemplazó el huevo crudo por yogur».
+_V5_NEGACION = re.compile(
+    r"(se reemplaz|reemplaza|en lugar de|en vez de|sustituy|se omit|se retir|no uses?|"
+    r"sin\s+(?:el|la|los|las)\s|se elimin|se quit)", re.IGNORECASE)
+
+#: Verbos de ENTRADA. Un paso que consume un ingrediente lo nombra como su objeto; uno que lo
+#: produce lo nombra como resultado («hasta formar el sofrito», «hasta que cuajada»).
+_V5_ENTRADA = re.compile(
+    r"\b(?:mide|midiendo|anade|anadir|agrega|agregar|incorpora|incorporar|coloca|colocar|pon|poner|"
+    r"echa|echar|sirve|servir|acompana|distribuye|reparte|espolvorea|unta|corta|cortar|pica|picar|"
+    r"pela|pelar|lava|lavar|ralla|rallar|trocea|exprime|escurre|bate|batir|mezcla|mezclar|licua|"
+    r"hidrata|porciona|reserva|vierte|cubre|termina con)\b")
+
+
+def _v5_mas_especifico(food: str) -> list:
+    return [w for w in re.split(r"[^a-z0-9]+", food) if len(w) >= 4]
+
+
+def _v5_resueltos(texto: str, index: dict) -> set:
+    """Alimentos de `texto`, quedandose SOLO con el mas especifico.
+
+    `find_catalog_foods` devuelve el alias corto y el largo: «yogurt griego sin azucar» casa `Yogur`
+    y `Yogurt griego sin azucar`. La linea de ingrediente resuelve al largo, asi que el corto se
+    convertia en fantasma — 128 de las 460 acusaciones de la primera version."""
+    fs = [_norm(f) for f in find_catalog_foods(texto, index)]
+    return {f for f in fs if not any(f != o and f in o for o in fs)}
+
+
+def _v5_en_texto(food: str, crudo_norm: str) -> bool:
+    """¿Alguna palabra significativa del alimento aparece LITERALMENTE en la lista cruda?
+
+    Deliberadamente permisivo: este check solo debe disparar cuando NADA en la lista se parece. Sin
+    el, «1½ filetes de pescado» —que el indice no resuelve a `Filete de pescado blanco`— acusaba a
+    un ceviche de no llevar pescado. Un detector que confunde «no lo encuentro» con «no esta» acusa
+    al plan de su propia ceguera."""
+    palabras = _v5_mas_especifico(food)
+    if not palabras:
+        return True                       # nombre demasiado corto para afirmar nada: no se acusa
+    return any(re.search(r"\b" + re.escape(w) + r"(?:s|es)?\b", crudo_norm)
+               for w in palabras)
+
+
+def _v5_paso_mas_especifico(pnorm: str, pos: int, crudo_norm: str) -> bool:
+    """¿El paso nombra el alimento con MÁS detalle que la lista? «pica la chuleta de cerdo» cuando la
+    lista dice «½ chuleta»: es el mismo alimento, no un fantasma.
+
+    Se mira una ventana corta alrededor del match. Ensancharla o bajar el umbral de palabra parece
+    inofensivo y NO lo es: probado sobre las 1.186 comidas, con palabras de 3 letras el filtro se
+    tragaba «con», «las» y «una» —presentes en toda lista— y el detector caía a CERO, llevandose por
+    delante los hallazgos reales. Un filtro que descarta todo no es preciso, es ciego."""
+    if pos < 0:
+        return False
+    ventana = pnorm[max(0, pos - 28):pos + 28]
+    for w in re.split(r"[^a-z0-9]+", ventana):
+        if len(w) >= 5 and re.search(r"\b" + re.escape(w) + r"(?:s|es)?\b", crudo_norm):
+            return True
+    return False
+
+
+def _v5_paso_usa_lo_que_no_esta(day, meal, index) -> list:
+    """[P1-CULINARY-V5-GHOST-STEP] El espejo de V3. Fail-open total."""
+    out = []
+    try:
+        ings = [str(x) for x in (meal.get("ingredients") or [])]
+        pasos = [str(x) for x in (meal.get("recipe") or [])]
+        if not ings or not pasos:
+            return out
+        lista = set()
+        for ing in ings:
+            lista |= _v5_resueltos(ing, index)
+        # El NOMBRE del plato tambien declara: «Vaso de yogur» no tiene que repetirlo en la lista.
+        lista |= _v5_resueltos(str(meal.get("name") or ""), index)
+        crudo = _norm(" | ".join(ings) + " | " + str(meal.get("name") or ""))
+
+        for paso in pasos:
+            if _V5_NOTA.search(paso) or _V5_NEGACION.search(paso):
+                continue
+            pnorm = _norm(paso)
+            for food in _v5_resueltos(paso, index):
+                if any(food in l or l in food for l in lista):
+                    continue                       # el mismo alimento con otro alias
+                if any(rx.search(food) for rx in _CONDIMENT_EXEMPT_RES):
+                    continue                       # condimentos: reusa CONDIMENT_EXEMPT
+                cabeza = (_v5_mas_especifico(food) or [""])[0]
+                if not cabeza:
+                    continue
+                m = re.search(r"\b" + re.escape(cabeza) + r"(?:s|es)?\b", pnorm)
+                if not m:
+                    continue                       # el match era un verbo, no el alimento
+                if _v5_en_texto(food, crudo):
+                    continue                       # el indice no lo resolvio, pero SI esta
+                if _v5_paso_mas_especifico(pnorm, m.start(), crudo):
+                    continue                       # «chuleta de cerdo» cuando la lista dice «chuleta»
+                if not _V5_ENTRADA.search(pnorm[max(0, m.start() - 60):m.start()]):
+                    continue                       # la receta lo PRODUCE, no lo consume
+                out.append(_viol(day, meal, "V5", food,
+                                 f"el paso lo usa pero la lista no lo trae: {paso[:110]}",
+                                 "minor", False))
+    except Exception:
+        return []
+    return out
+
+
 def _viol(day, meal, check, food, detail, severity, repairable):
     return {"day": day, "meal": meal.get("meal") or meal.get("name"),
             "check": check, "food": food, "detail": detail,
@@ -822,6 +953,7 @@ def culinary_contract_scan(plan_data: dict, catalog: list) -> list:
             out.extend(_v2_estado_imposible(day, meal, index))
             out.extend(_v3_huerfanos(day, meal, index))
             out.extend(_v4_cantidad_inconsistente(day, meal, index))
+            out.extend(_v5_paso_usa_lo_que_no_esta(day, meal, index))
         return out
     except Exception:
         return []

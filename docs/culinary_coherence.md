@@ -310,3 +310,63 @@ La mediana es clara — no hay ambigüedad ni corrida borderline: `combo_absurdo
 - Tests: [`test_p1_culinary_contract.py`](../tests/test_p1_culinary_contract.py) (migración + V1/V2/V3 + 3 superficies, catálogo sintético), [`test_p1_culinary_golden.py`](../tests/test_p1_culinary_golden.py) (golden set contra Neon real), [`test_p1_culinary_judge.py`](../tests/test_p1_culinary_judge.py) (juez: schema, knobs, fail-open, integración en review, parser-based — sin llamadas LLM).
 - Script de calibración: [`backend/scripts/calibrate_culinary_judge.py`](../scripts/calibrate_culinary_judge.py) — manual, hace llamadas LLM reales, no corre en CI.
 - Reports de implementación (Tasks 3-13 de este SDD, decisiones + concerns detallados): `.superpowers/sdd/2026-07-31-culinary-coherence/task-{3,4,5,6,7,8,9,11,12,13}-report.md`.
+
+---
+
+## V5 — el paso usa algo que la lista no trae
+
+`[P1-CULINARY-V5-GHOST-STEP · 2026-09-06]`
+
+V3 pregunta «¿hay un ingrediente que ningún paso menciona?». **Nadie preguntaba lo contrario**, y es
+la categoría más frecuente del juez culinario: de 227 comidas señaladas, **96 son
+`paso_incoherente`**. El daño es directo — el usuario compra la lista y la receta le manda usar algo
+que no tiene:
+
+```
+«Montaje: … coloca el cilantro por encima»    lista: orégano, ajo, cebolla… sin cilantro
+«Montaje: … añade la piña»                     lista: cottage, manzana, semillas de calabaza
+«Mise en place: … pela y trocea el plátano»    lista: yogurt, lechosa, fresas, leche
+```
+
+### Ocho rondas contra 1.186 comidas vivas
+
+El detector ingenuo daba **460** acusaciones. Cada filtro nació de un falso positivo **medido**:
+
+| | de → a | qué se descubrió |
+|---|---|---|
+| 1 | 460 → 364 | el índice devuelve el alias corto **y** el largo: «yogurt griego» casaba también `Yogur` |
+| 2 | 364 → 287 | las notas de seguridad hablan de CLASES en abstracto («el pollo/cerdo debe cocinarse») |
+| 3 | 287 → 241 | lista y paso nombran el mismo alimento con alias distintos |
+| 4 | 241 → 100 | el índice no resuelve «1½ filetes de pescado», y eso **no** significa que no esté |
+| 5 | 100 → 21 | «chuleta de cerdo» cuando la lista dice «chuleta»: el paso es más específico |
+| 6 | 21 → 11 | un paso que USA lo nombra tras un verbo de entrada; uno que lo PRODUCE, no |
+
+Juzgadas a mano las 11: **10 reales, 1 falso** (`ají morrón`, cuya lista dice «0.5 ají») ≈ **91 % de
+precisión**.
+
+### Las dos lecciones que costaron más
+
+**El filtro 4.** Sin él, el detector medía el recall del **catálogo**, no la coherencia del plan: un
+ceviche con «1½ filetes de pescado» en la lista salía acusado de no llevar pescado porque el índice
+no resolvía esa línea. *Un detector que confunde «no lo encuentro» con «no está» acusa al plan de su
+propia ceguera.*
+
+**Los tres intentos de matar el último 30 %.** Bajar el umbral de palabra a 3 letras, ensanchar la
+ventana, estrecharla a las 3 palabras previas: las tres veces el detector cayó a **CERO**,
+llevándose los hallazgos reales — porque «con», «las» o el ingrediente vecino están en toda lista.
+
+> Un filtro que descarta todo no es preciso, es ciego — y se parece muchísimo a uno que funciona si
+> solo miras el número.
+
+Lo que salvó la ronda fue tener **hallazgos ya juzgados a mano** con los que comparar. Si mira este
+código y le tienta ensanchar un umbral: hágalo, pero vuelva a contar contra planes vivos antes de
+darlo por bueno.
+
+### Por qué `warn` y no `block`
+
+`severity='minor'`, `repairable=False`. Con 91 % de precisión, bloquear castigaría un plan de cada
+once sin motivo. Y calibrar el umbral contra la tasa del propio juez LLM sería el overfitting que
+este repo ya pagó en agosto. **El siguiente paso es un golden set humano**, que es lo único que
+convierte «el juez dice que mejoró» en «mejoró».
+
+Test: [`test_p1_culinary_v5_ghost_step.py`](../tests/test_p1_culinary_v5_ghost_step.py).
