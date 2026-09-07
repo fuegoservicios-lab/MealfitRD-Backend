@@ -146,6 +146,9 @@ def test_el_json_congelado_lleva_la_segunda_razon_con_su_cifra():
     adv = d["advertencia"].lower()
     assert "overfitting" in adv and "sin verdad de referencia" in adv
     assert "reparo antes de entregar" in adv
+    # [P1-MEASUREMENT-INTEGRITY · 2ª iter] Estas cifras vivían escritas a mano en el JSON y el
+    # primer `--congelar` se las llevó. Ahora salen de `MEDICION_QUEJAS_OBSOLETAS` en el guion,
+    # así que sobreviven a cada congelado — que es lo único que las hace fiables.
     m = d["juez_sobre_lo_entregado"]["medicion_2026_09_06"]
     assert m["quejas_falta_en_la_lista_juzgables"] == 37
     assert m["nombraban_algo_que_hoy_SI_esta"] == 6
@@ -156,11 +159,19 @@ def test_la_foto_congelada_declara_que_NO_es_decidible():
     """Se tomó antes de que existiera el sello. Decirlo en el propio fichero evita que alguien
     la lea dentro de un año como si sus entradas fueran juicios sobre lo entregado."""
     d = json.loads((_BACKEND / "docs" / "culinary_baseline.json").read_text(encoding="utf-8"))
-    assert d["juez_sobre_lo_entregado"]["decidible"] is False
-    assert "judged_fingerprint" in d["juez_sobre_lo_entregado"]["motivo"]
+    j = d["juez_sobre_lo_entregado"]
+    assert j["decidible"] is False
+    assert "judged_fingerprint" in j["motivo"]
+    # Y se CALCULA de su propio conteo, no se afirma: mientras queden entradas sin sello, la
+    # foto no puede declararse decidible aunque alguien lo escriba.
+    assert j["conteo"].get("desconocido", 0) > 0
+    src = (_BACKEND / "scripts" / "culinary_baseline.py").read_text(encoding="utf-8")
+    assert '"decidible": cobertura.get("desconocido", 0) == 0' in src
 
 
 def test_el_medidor_cuenta_los_tres_estados_por_separado():
     src = (_BACKEND / "scripts" / "culinary_baseline.py").read_text(encoding="utf-8")
     assert 'cobertura["si" if cubre else ("no" if cubre is False else "desconocido")]' in src
-    assert '"juez_sobre_lo_entregado": dict(cobertura)' in src
+    # [P1-MEASUREMENT-INTEGRITY · 2ª iter] El conteo pasó a vivir bajo `conteo`, junto a
+    # `decidible` (calculado de él) y a la medición. Antes era el dict pelado.
+    assert '"conteo": dict(cobertura)' in src

@@ -136,7 +136,22 @@ def medir(planes: int = 120) -> dict:
                  "por_tipo": dict(por_tipo.most_common())},
         # [P1-JUDGE-REVISION-STAMP] Cuantas entradas del juez se sabe que juzgaron lo
         # ENTREGADO. Va al lado de la tasa, no dentro: no la corrige, la CALIFICA.
-        "juez_sobre_lo_entregado": dict(cobertura),
+        #
+        # [P1-MEASUREMENT-INTEGRITY - 2ª iter] `decidible` se CALCULA, no se afirma a mano. La
+        # version anterior la escribi directamente en el JSON... y el primer `--congelar` se la
+        # llevo por delante, junto con las cifras de la medicion. Es exactamente la trampa que
+        # habia diagnosticado una hora antes y solo cerre a medias: movi la `advertencia` al
+        # codigo y deje su bloque hermano en el fichero. Un dato corregido a mano en algo que un
+        # guion regenera es una correccion con fecha de caducidad, y esta vez la pague yo.
+        "juez_sobre_lo_entregado": {
+            "conteo": dict(cobertura),
+            "decidible": cobertura.get("desconocido", 0) == 0,
+            "motivo": (None if cobertura.get("desconocido", 0) == 0 else
+                       "hay entradas de `_culinary_judge_history` sin `judged_fingerprint` "
+                       "(anteriores a P1-JUDGE-REVISION-STAMP): de ellas NO se puede saber si "
+                       "juzgaron lo entregado"),
+            "medicion_2026_09_06": MEDICION_QUEJAS_OBSOLETAS,
+        },
         "solapamiento": {"ambas": len(con_det & con_juez),
                          "solo_determinista": len(con_det - con_juez),
                          "solo_juez": len(con_juez - con_det)},
@@ -152,6 +167,15 @@ def medir(planes: int = 120) -> dict:
 #: [P1-JUDGE-REVISION-STAMP · 2026-09-06] Dos razones para no leer la tasa del juez como calidad,
 #: no una. La segunda se midió DESPUÉS de congelar la foto: parte de sus quejas describen un
 #: estado que el pipeline REPARÓ antes de entregar.
+#: [P1-JUDGE-REVISION-STAMP] La medicion puntual que respalda la segunda razon de la advertencia.
+#: Vive en el codigo por lo mismo que ella: `--congelar` reescribe el JSON entero.
+MEDICION_QUEJAS_OBSOLETAS = {
+    "quejas_falta_en_la_lista_juzgables": 37,
+    "nombraban_algo_que_hoy_SI_esta": 6,
+    "queso_no_lonjeable_en_lonjas_en_planes_vivos": 0,
+    "lineas_de_queso_con_lonja_revisadas": 23,
+}
+
 ADVERTENCIA = (
     "el juez es un LLM sin verdad de referencia: su tasa NO es la tasa de defectos reales. "
     "Calibrar contra ella es overfitting. Y hay una segunda razon, medida el 2026-09-06: parte de "
@@ -205,7 +229,7 @@ def render(r: dict, previa: dict | None = None) -> str:
               f"solo juez {s['solo_juez']}",
           "", "  Las dos capas apenas se solapan: ninguna sustituye a la otra, y por eso NO se",
           "  suman en un indice unico."]
-    cob = r.get("juez_sobre_lo_entregado") or {}
+    cob = (r.get("juez_sobre_lo_entregado") or {}).get("conteo") or {}
     if cob:
         o += ["", "  entradas del juez que juzgaron LO ENTREGADO: "
                   + "  ".join(f"{k}={n}" for k, n in cob.items()),

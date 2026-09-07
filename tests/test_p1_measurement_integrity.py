@@ -172,9 +172,13 @@ def test_una_foto_SIN_huella_es_desconocido_no_comparable():
     assert _corpus_comparable({"corpus": {"huella": "aaaa"}}, None) is None
 
 
-def test_la_foto_congelada_del_6_sep_NO_lleva_huella_y_eso_es_correcto():
-    """Se congeló antes de este P-fix. NO se le añade a mano: sería inventar la huella de un
-    corpus que ya no existe."""
+def test_la_foto_congelada_lleva_huella_de_una_medicion_REAL():
+    """La foto se re-congeló el 7-sep, ya con huella. La condición no es que exista: es que sea
+    consistente con el resto del fichero — una huella escrita a mano sería peor que ninguna,
+    porque afirmaría comparabilidad sin respaldarla."""
     d = json.loads((_BACKEND / "docs" / "culinary_baseline.json").read_text(encoding="utf-8"))
-    assert "corpus" not in d, (
-        "si alguien la reescribio, revisa que la huella salga de una medicion real")
+    c = d["corpus"]
+    assert len(c["huella"]) == 16 and all(ch in "0123456789abcdef" for ch in c["huella"])
+    assert len(c["plan_ids"]) == d["planes"], (
+        "los ids y el nº de planes discrepan: la huella no salió de esta medición")
+    assert d["comidas"] > 500
