@@ -88,3 +88,75 @@ como el gap exige.
 
 Test: [`test_p1_arq30_f4_canonical.py`](../tests/test_p1_arq30_f4_canonical.py).
 Sonda: [`scripts/canonical_roundtrip.py`](../scripts/canonical_roundtrip.py).
+
+---
+
+# 3.0-F5 — Factibilidad conjunta: decisión medida de NO adoptar
+
+`[P1-ARQ30-F5-NO-ADOPT · 2026-09-06]` · gap `ARQ30-P1-02`
+
+## La limitación es real y está reproducida
+
+`_feasibility_report` calcula una cota **por coordenada**. El contraejemplo que la auditoría propone,
+ejecutado tal cual:
+
+```
+entries = [{macros: {protein: 20, fats: 10}}]     x ∈ [0,5 · 2]
+target  = {protein: 40, fats: 5}
+_feasibility_report(...) → {}                      ← «todo alcanzable»
+```
+
+Proteína 40 exige x=2; con x=2 la grasa es 20, no 5. Cada coordenada cabe sola, **conjuntamente no**.
+La cota es necesaria, no suficiente. Está anclado en `test_el_contraejemplo_sintetico_de_la_auditoria`
+como el gap exige.
+
+## Y aun así no se adopta
+
+El gap pone las dos condiciones él mismo: «primero cerrar `ARQ27-P1-08` y medir el residual» y
+«adoptar factibilidad conjunta **solo con mejora demostrada**». `ARQ27-P1-08` está cerrado, así que se
+midió (30 días, `scripts/solver_residual_probe.py`):
+
+| | |
+|---|---|
+| comidas dimensionadas | 3.217 |
+| no convergieron | 1.224 — **38,0 %** |
+| declaradas infactibles | 326 — **10,1 %** |
+| corridas con ≥1 infactible | 156 de 264 — 59,1 % |
+
+Cifras altas. Y entonces la pregunta que decide —el criterio «no gastar LLM regenerando con el mismo
+conjunto inviable»—, emparejando por `session_id`:
+
+| | con infactibles (6.706) | sin (4.018) |
+|---|---|---|
+| `attempts` medio | **1,552** | **1,544** |
+| `review_passed` | 92,4 % | 93,0 % |
+| desviación calórica p50 / p90 | 0,020 / 0,036 | 0,019 / 0,035 |
+| fallback | 2,5 % | 3,7 % |
+
+**La infactibilidad no cuesta ni un reintento ni un punto de calidad**, y las corridas que la sufren
+caen *menos* al fallback. El cerrador y los clamps la absorben. El daño que el criterio persigue no
+está ocurriendo, así que no hay mejora que obtener de un LP/MILP/CP-SAT.
+
+> «Si el prototipo no mejora, conserva el actual y registra el resultado experimental; no cambies de
+> librería solo para usar el nombre 3.0.» — el propio encargo.
+
+`test_no_se_anadio_ninguna_libreria_de_optimizacion` ancla que no entró ninguna.
+
+## El criterio que sí faltaba: a qué NIVEL vale el testigo
+
+«Un testigo local no certifica todos los niveles.» Medido: `_feasibility_report` se invoca **solo
+desde `portion_solver`, siempre a nivel de COMIDA**. En `horizon.py` y `plan_policy.py` no hay
+factibilidad. Un `_solver_infeasible` vacío dice que ESA comida es dimensionable — **no** que el día
+ni el horizonte lo sean.
+
+⚠️ Existe además `_pantry_feasibility_report`, que **es otra cosa**: la factibilidad de la NEVERA
+(«¿cuántos días aguanta la despensa?»), esa sí a nivel de día. Confundirlas sería leer una garantía de
+la despensa como una garantía del solver. Un `grep` sin frontera de palabra las mezcla — pasó al
+escribir este test.
+
+## Cuándo reabrir
+
+Corre `python scripts/solver_residual_probe.py`. Si las dos columnas se separan —`attempts` o
+desviación—, la decisión cambia. Es de los números, no de la opinión.
+
+Test: [`test_p1_arq30_f5_no_adopt.py`](../tests/test_p1_arq30_f5_no_adopt.py).

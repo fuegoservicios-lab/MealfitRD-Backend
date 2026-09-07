@@ -66,13 +66,37 @@ def test_render_line_se_declara_de_diagnostico():
 
 
 def test_nadie_en_produccion_escribe_con_esta_representacion():
-    """El `expand` de la migración: la vía anterior sigue siendo la única que entrega."""
-    import subprocess
-    r = subprocess.run(["git", "grep", "-l", "canonical_recipe"], cwd=str(_BACKEND),
-                       capture_output=True, text=True)
-    tocan = {x for x in r.stdout.split() if x and not x.startswith("tests/")
-             and not x.startswith("scripts/") and x != "canonical_recipe.py"}
-    assert not tocan, f"producción ya depende de la representación canónica: {tocan}"
+    """El `expand` de la migración: la vía anterior sigue siendo la única que entrega.
+
+    Se buscan IMPORTS en ficheros `.py`, no menciones. La primera versión usaba `git grep` sobre
+    cualquier aparición del nombre y se rompió sola en cuanto se commiteó el doc que la describe —
+    además de depender del ÍNDICE de git: mientras el fichero estaba sin rastrear, el guard no lo
+    veía. Un centinela cuyo veredicto depende de si algo está commiteado no mide el código.
+    """
+    import re
+
+    rx = re.compile(r"^\s*(?:from\s+canonical_recipe\s+import|import\s+canonical_recipe)", re.M)
+    tocan = set()
+    for _p in _BACKEND.rglob("*.py"):
+        rel = _p.relative_to(_BACKEND).as_posix()
+        if rel.startswith(("tests/", "venv", "scripts/")) or "__pycache__" in rel:
+            continue
+        try:
+            if rx.search(_p.read_text(encoding="utf-8")):
+                tocan.add(rel)
+        except Exception:
+            continue
+    assert not tocan, f"producción ya importa la representación canónica: {tocan}"
+
+
+def test_el_guard_del_expand_sabe_buscar():
+    """Centinela del centinela: si el patrón dejara de encontrar el import que SÍ existe (el de la
+    sonda), el guard de arriba pasaría en vacío."""
+    import re
+
+    rx = re.compile(r"^\s*(?:from\s+canonical_recipe\s+import|import\s+canonical_recipe)", re.M)
+    sonda = (_BACKEND / "scripts" / "canonical_roundtrip.py").read_text(encoding="utf-8")
+    assert rx.search(sonda), "el patrón ya no reconoce un import real: el guard sería vacuo"
 
 
 # ── lo que la representación SÍ tiene que hacer ───────────────────────────────────────────────
