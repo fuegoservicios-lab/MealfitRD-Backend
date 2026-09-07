@@ -441,24 +441,98 @@ _CONDIMENT_EXEMPT_RES = [
 ]
 
 
+def _index_entry(name: str, norm: str, row: dict) -> dict:
+    tokens = [_sing_plural_pattern(t) for t in norm.split()]
+    return {
+        "name": name,
+        "prep_methods": row.get("prep_methods"),
+        "ready_to_eat": row.get("ready_to_eat"),
+        "rx": re.compile(r"\b" + r"\s+".join(tokens) + r"\b"),
+    }
+
+
 def build_culinary_index(catalog: list) -> dict:
-    """Índice nombre-normalizado → metadata + regex word-boundary del alias."""
+    """Índice nombre-normalizado → metadata + regex word-boundary del alias.
+
+    [P1-CULINARY-ALIAS-INDEX · 2026-09-07] Carga TAMBIÉN `master_ingredients.aliases`.
+    Hasta hoy leía sólo `row["name"]` — mientras el docstring de esta función decía
+    «regex del ALIAS» y `find_catalog_foods` decía «alias más largo gana». El código
+    hablaba de alias por todas partes y no cargaba ninguno: el vocabulario de TODA la
+    capa culinaria eran los 348 nombres canónicos. Medido sobre la flota, **597 de 1.194
+    comidas (50 %)** mencionaban al menos un alimento que ninguna capa podía ver —
+    `Clara de huevo` (+107), `Yema de huevo` (+116), `Yogurt griego entero` (+87),
+    `Queso blanco` (+73). Un detector no puede acusar lo que no sabe nombrar.
+
+    Tres reglas de seguridad, porque ampliar vocabulario es la vía clásica al falso
+    positivo (19 colisiones por subcadena documentadas en este repo):
+
+    1. **El nombre canónico SIEMPRE gana.** Se indexan los 348 nombres primero; ningún
+       alias de otro alimento puede desplazar a uno (`repollo morado` es alias de
+       `Repollo` y nombre de `Repollo morado`: manda el segundo).
+    2. **Un alias ambiguo se DESCARTA, no se reparte.** `mariscos` lo reclaman Pulpo,
+       Calamar y Mejillones; `nueces`, Nueces mixtas y Almendras fileteadas. Elegir uno
+       por orden de fila sería inventar una identidad que el dato no tiene.
+    3. Los `\\b` + `_sing_plural_pattern` que ya usaba el nombre valen igual para el
+       alias, así que `res` (→ Carne de res) no casa dentro de «queso f-res-co» ni `sal`
+       dentro de «ensalada». Es la defensa que faltaba en las 19 colisiones, no una nueva.
+
+    Efecto colateral que es CORRECCIÓN, no regresión: `Yogurt` pierde 68 comidas y `Sal`
+    8, porque «yogurt griego entero» y «mantequilla sin sal» pasan a resolver al alimento
+    largo — hoy resuelven al corto, que es el alimento equivocado (el yogurt normal tiene
+    3,47 g de proteína; el griego, 8,78).
+    """
     index = {}
-    for row in catalog or []:
-        if not isinstance(row, dict):
-            continue
-        name = str(row.get("name") or "").strip()
-        if not name:
-            continue
+    filas = [r for r in (catalog or []) if isinstance(r, dict) and str(r.get("name") or "").strip()]
+
+    for row in filas:                                   # regla 1: canónicos primero
+        name = str(row["name"]).strip()
         norm = _norm(name)
-        tokens = [_sing_plural_pattern(t) for t in norm.split()]
-        rx = re.compile(r"\b" + r"\s+".join(tokens) + r"\b")
-        index[norm] = {
-            "name": name,
-            "prep_methods": row.get("prep_methods"),
-            "ready_to_eat": row.get("ready_to_eat"),
-            "rx": rx,
-        }
+        if norm:
+            index[norm] = _index_entry(name, norm, row)
+
+    # Regla 3: una palabra que aparece como TOKEN en el nombre canónico de dos alimentos
+    # distintos no identifica a ninguno. `platano` es token de `Plátano maduro` y de
+    # `Plátano verde`; `soya`, de `Salsa de soya` y `Soya texturizada`. Sin esto, un paso que
+    # dice «maja el plátano» en una receta de plátano MADURO añadía un span de `Plátano verde`
+    # que desplazaba al objeto real del verbo — así se perdió la captura de V1 sobre unas
+    # lentejas horneadas. La ambigüedad se mide contra los nombres canónicos, no solo entre
+    # alias: dos alias que chocan entre sí son el caso fácil.
+    tok_duenos: dict = {}
+    for row in filas:
+        nombre_canon = str(row["name"]).strip()
+        for t in _norm(nombre_canon).split():
+            tok_duenos.setdefault(t, set()).add(nombre_canon)
+    tokens_ambiguos = {t for t, d in tok_duenos.items() if len(d) > 1}
+
+    duenos: dict = {}                                   # regla 2: alias → alimentos que lo reclaman
+    for row in filas:
+        name = str(row["name"]).strip()
+        al = row.get("aliases")
+        if not isinstance(al, list):
+            continue
+        for a in al:
+            na = _norm(str(a))
+            if not na or na in index:                   # el canónico ya ganó: ni se mira
+                continue
+            # Regla 4: un alias de UNA palabra que nombra una FORMA no identifica un
+            # alimento. `Harina de trigo` lleva el alias literal «harina» y `Pasta integral`
+            # el alias «pasta»; con ellos dentro, «muele la avena hasta obtener una harina
+            # fina» daba por usada la harina de trigo. Es LA MISMA ceguera que
+            # `_V3_FORMA_GENERICA` cerró en `_mencionado_por_prefijo` (P1-CULINARY-V7), y
+            # entró por otra puerta: aquel guard filtra PREFIJOS del nombre canónico, y un
+            # alias llega como clave entera, así que jamás pasaba por él. Medido: sin esta
+            # regla, V3 perdía sus tres mejores capturas («la harina de trigo queda sin
+            # utilizar»), y «harina de avena» resolvía a `Harina de trigo`.
+            if " " not in na and (na in _V3_FORMA_GENERICA or na in tokens_ambiguos):
+                continue
+            duenos.setdefault(na, {})[name] = row
+
+    for na, reclamantes in duenos.items():
+        if len(reclamantes) != 1:
+            continue                                    # ambiguo ⇒ fuera, no se reparte
+        name, row = next(iter(reclamantes.items()))
+        index[na] = _index_entry(name, na, row)
+
     return index
 
 
@@ -1129,20 +1203,45 @@ _V7_SECABLES_RE = re.compile(
     r"bulgur|avena|pasta|espagueti|fideo|codito|macarr)", re.IGNORECASE)
 
 
+_V7_RANGO_RE = re.compile(_V7_CANT + r"\s*(?:-|–|—|\ba\b)\s*$")
+
+
 def _v7_piezas(texto: str, index: dict) -> dict:
     """{alimento: total de PIEZAS} de «N <alimento>» — sin unidad de medida por medio.
 
     «2 tortillas de trigo» sí; «2 cucharadas de cilantro» NO — eso lo mide V6, y contar la
-    cucharada como pieza convertiría cada especia en un falso positivo."""
+    cucharada como pieza convertiría cada especia en un falso positivo.
+
+    [P1-CULINARY-V7A-CORTE-RANGO · 2026-09-07] Dos correcciones que salieron de medir el
+    detector contra 60 comidas retenidas que el dueño etiquetó a ciegas:
+
+    **La medida detrás del alimento describe el CORTE, no el conteo.** «corta 2 ciruelas
+    medianas EN GAJOS» son dos ciruelas partidas en gajos, no «2 gajos»; el guard veía
+    `gajos` en la cola y descartaba la pieza entera. Por eso V7a no vio su propio caso de
+    manual (lista «3 ciruelas», paso «corta 2 ciruelas»). La medida solo invalida el conteo
+    cuando va ANTES del alimento, que es donde una medida de verdad vive: «2 cucharadas de
+    cilantro». Se compara la POSICIÓN, no la presencia.
+
+    **El extremo alto de un rango no fija una cantidad.** «1–2 mandarinas» con un paso que
+    dice «pela la mandarina» no se contradice: el límite inferior autoriza el singular. Era
+    el único falso positivo del detector en toda la muestra. Un rango no es un conteo."""
     out: dict = {}
-    for m in _V7_PIEZA_RE.finditer(_norm(texto)):
+    blob = _norm(texto)
+    for m in _V7_PIEZA_RE.finditer(blob):
         val = _v6_valor(m.group(1))
         cola = m.group(2) or ""
-        if val is None or _V7_MEDIDA_RE.search(cola):
+        if val is None:
             continue
+        if _V7_RANGO_RE.search(blob[:m.start()]):
+            continue                                   # es el techo de «N–M»: no fija nada
+        medida = _V7_MEDIDA_RE.search(cola)
         crudos = list(find_catalog_foods(cola, index))
         if len(crudos) != 1:
             continue                                   # ambiguo o nada: no se cuenta
+        if medida:
+            spans = _catalog_food_spans(cola, index)
+            if not spans or medida.start() < spans[0][0]:
+                continue                               # medida ANTES del alimento ⇒ es medida
         out[crudos[0]] = out.get(crudos[0], 0.0) + val
     return out
 
@@ -1293,6 +1392,78 @@ def _v7c_seco_sin_coccion(day, meal, index) -> list:
     return out
 
 
+# [P1-CULINARY-V7D-MASA · 2026-09-07] El espejo en MASA que faltaba.
+#
+# V6 cubre «el paso pide MÁS que la lista». V7a cubre lo contrario —la lista compra de más—
+# pero SOLO en piezas contables, porque `_v7_piezas` descarta a propósito todo lo que lleve
+# unidad de medida («2 cucharadas de cilantro» son cucharadas, no piezas). El resultado es un
+# hueco exacto: «420 ml de leche» en la lista y «250 ml de leche» en el paso no lo ve nadie.
+#
+# Medido sobre la flota antes de escribirlo: 10 de 1.194 comidas (0,8 %), y siete son la misma
+# forma —leche de avena comprada a 340-545 ml y usada a 200-250—, lo que apunta a un sesgo del
+# generador, no a ruido. Prevalencia parecida a la de V7b (7 de 1.194), que ya está desplegado.
+_V7D_MASA_RE = re.compile(
+    r"(\d+(?:[.,]\d+)?|[½¼¾⅓⅔⅛]|\d[½¼¾⅓⅔])\s*"
+    r"(ml|mililitros?|l|litros?|g|gr|gramos?|kg|kilos?)\b\s*"
+    r"(?:de\s+)?([a-zñ]+(?:\s+[a-zñ]+){0,3})", re.IGNORECASE)
+_V7D_A_GRAMOS = {"ml": 1.0, "mililitro": 1.0, "mililitros": 1.0, "l": 1000.0, "litro": 1000.0,
+                 "litros": 1000.0, "g": 1.0, "gr": 1.0, "gramo": 1.0, "gramos": 1.0,
+                 "kg": 1000.0, "kilo": 1000.0, "kilos": 1000.0}
+# Por debajo de esto es redacción, no un sobrante: hace falta que falle EN PROPORCIÓN y además
+# que el hueco valga una compra. Un solo umbral dejaba pasar «100 g -> 75 g» (25 g no cambian
+# nada) o marcaba «40 g -> 30 g» como si importara.
+_V7D_TOLERANCIA = 0.25
+_V7D_MIN_GRAMOS = 30.0
+
+
+def _v7d_masas(texto: str, index: dict) -> dict:
+    """{alimento: gramos} de las masas EXPLÍCITAS del texto. Sin unidad, no cuenta.
+
+    Suma a lo largo de todo el texto a propósito: repartir un ingrediente entre dos pasos
+    («250 ml ahora, 170 ml al final») es legítimo y no debe disparar."""
+    out: dict = {}
+    for m in _V7D_MASA_RE.finditer(_norm(texto)):
+        val = _v6_valor(m.group(1))
+        fac = _V7D_A_GRAMOS.get(m.group(2).lower())
+        if val is None or fac is None:
+            continue
+        hits = find_catalog_foods(m.group(3), index)
+        if len(hits) != 1:
+            continue                                   # ambiguo o desconocido: no se cuenta
+        out[hits[0]] = out.get(hits[0], 0.0) + val * fac
+    return out
+
+
+def _v7d_masa_sobrante(day, meal, index) -> list:
+    """La lista compra N gramos y los pasos, sumados, usan bastantes menos. Fail-open total."""
+    out = []
+    try:
+        ings = [str(x) for x in (meal.get("ingredients") or [])]
+        pasos = [str(x) for x in (meal.get("recipe") or [])]
+        if not ings or not pasos:
+            return []
+        en_lista = _v7d_masas(" ".join(ings), index)
+        usado = _v7d_masas(" ".join(pasos), index)
+        for food, g_lista in en_lista.items():
+            g_paso = usado.get(food)
+            # Un paso que NO cuantifica no contradice a la lista: «cocina la avena con la leche»
+            # es una instrucción normal, no una declaración de cantidad. Exigir la cifra en los
+            # DOS lados es lo que separa esta capa de V3, que ya cubre el ingrediente ausente.
+            if g_paso is None:
+                continue
+            if g_paso >= g_lista * (1 - _V7D_TOLERANCIA):
+                continue
+            if (g_lista - g_paso) < _V7D_MIN_GRAMOS:
+                continue
+            out.append(_viol(
+                day, meal, "V7d", food,
+                f"la lista compra {g_lista:g} g y los pasos usan {g_paso:g} g",
+                "minor", True))
+    except Exception:
+        return []
+    return out
+
+
 def _viol(day, meal, check, food, detail, severity, repairable):
     return {"day": day, "meal": meal.get("meal") or meal.get("name"),
             "check": check, "food": food, "detail": detail,
@@ -1317,6 +1488,7 @@ def culinary_contract_scan(plan_data: dict, catalog: list) -> list:
             out.extend(_v7a_lista_compra_de_mas(day, meal, index))
             out.extend(_v7b_duplicado_incompatible(day, meal, index))
             out.extend(_v7c_seco_sin_coccion(day, meal, index))
+            out.extend(_v7d_masa_sobrante(day, meal, index))
         return out
     except Exception:
         return []
