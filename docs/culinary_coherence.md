@@ -370,3 +370,72 @@ este repo ya pagó en agosto. **El siguiente paso es un golden set humano**, que
 convierte «el juez dice que mejoró» en «mejoró».
 
 Test: [`test_p1_culinary_v5_ghost_step.py`](../tests/test_p1_culinary_v5_ghost_step.py).
+
+---
+
+## Línea base congelada y golden set
+
+`[P0-CULINARY-GOLDEN · 2026-09-06]`
+
+Dos capas juzgan hoy la coherencia culinaria y **de ninguna se conoce su precisión ni su recall**,
+porque no hay verdad de referencia. «El juez señala el 19,1 % de las comidas» no dice que el 19,1 %
+esté mal: dice que él lo cree.
+
+### La foto congelada (`docs/culinary_baseline.json`)
+
+96 planes · 1.186 comidas, medido el 2026-09-06 **antes** de mejorar nada — una medición posterior al
+efecto no mide el efecto.
+
+| capa | comidas | | desglose |
+|---|---|---|---|
+| contrato determinista (V1–V5) | 133 | 11,2 % | V1=80 V3=55 V4=34 V5=11 V2=4 |
+| juez culinario (LLM) | 227 | 19,1 % | paso_incoherente=96 · nombre_no_corresponde=53 · combo_absurdo=50 · slot_inapropiado=28 · tecnica_impropia=23 |
+| **coinciden** | **23** | | solo det 110 · solo juez 204 |
+
+**Las dos capas apenas se solapan**, así que se publican separadas y **nunca sumadas** en un índice
+único: fundirlas escondería que ninguna sustituye a la otra.
+
+    python scripts/culinary_baseline.py              # la foto de hoy, con delta vs la congelada
+    python scripts/culinary_baseline.py --congelar   # reescribe la congelada
+
+### El golden set (`docs/culinary_golden_set.json`)
+
+80 comidas estratificadas:
+
+| estrato | n | mide |
+|---|---|---|
+| solo determinista | 20 | precisión de V1–V5 |
+| solo juez | 20 | precisión del juez — sus ~200 exclusivos son la incógnita |
+| ambas | 15 | los casos que las dos ven |
+| **sin hallazgo** | **25** | **el recall: lo que se les escapa a las dos** |
+
+El último estrato es el que se suele omitir y el que impide engañarse: sin comidas limpias solo se
+mide precisión, y **un detector que no dispara nunca sale perfecto**.
+
+Cuatro decisiones deliberadas:
+
+- **La muestra no la elige quien la mide**: orden por `sha256` de la clave, no azar ni fecha.
+- **Se etiqueta antes de leer a la máquina** — su opinión ancla la tuya. Por eso el `.md` esconde los
+  hallazgos en un `<details>`.
+- **`dudoso` no cuenta en ninguna dirección.** Forzar un binario donde no lo hay contamina la medida.
+- **El muestreador se niega a sobrescribir** un fichero ya etiquetado.
+
+### El marcador
+
+    python scripts/culinary_golden_score.py
+
+Precisión y recall por capa, **en crudo y ponderado**: los estratos raros están sobre-representados a
+propósito (15 de 23 «ambas», 25 de 919 limpias), así que sin ponderar la cifra sería inventada. Con
+menos de 20 etiquetas **avisa en vez de dar un número**.
+
+No calcula una nota de calidad de 1 a 10. Precisión y recall son propiedades del **detector**; la
+calidad del plan necesitaría un criterio de gravedad que nadie ha definido, y fabricarla desde aquí
+sería darle a una opinión la cara de una medición.
+
+### Lo que falta, y no lo puede hacer una máquina
+
+**Las etiquetas.** Si las pusiera el modelo, el marcador mediría el acuerdo del juez consigo mismo, y
+cualquier «mejora» reportada después sería el sistema dándose la razón. Ese es el paso humano, y es
+el que desbloquea la decisión de si V5 escala de `warn` a `block`.
+
+Test: [`test_p0_culinary_golden.py`](../tests/test_p0_culinary_golden.py).

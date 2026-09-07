@@ -1,0 +1,32 @@
+{
+  "planes": 96,
+  "comidas": 1186,
+  "determinista": {
+    "comidas": 133,
+    "pct": 11.2,
+    "por_check": {
+      "V1": 80,
+      "V3": 55,
+      "V4": 34,
+      "V5": 11,
+      "V2": 4
+    }
+  },
+  "juez": {
+    "comidas": 227,
+    "pct": 19.1,
+    "por_tipo": {
+      "paso_incoherente": 96,
+      "nombre_no_corresponde": 53,
+      "combo_absurdo": 50,
+      "slot_inapropiado": 28,
+      "tecnica_impropia": 23
+    }
+  },
+  "solapamiento": {
+    "ambas": 23,
+    "solo_determinista": 110,
+    "solo_juez": 204
+  },
+  "advertencia": "el juez es un LLM sin verdad de referencia: su tasa NO es la tasa de defectos reales. Calibrar contra ella es overfitting."
+}
