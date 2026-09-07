@@ -614,6 +614,15 @@ def _v2_estado_imposible(day, meal, index) -> list:
     return out
 
 
+# [P1-CULINARY-V7 · 2026-09-07] Sustantivos de FORMA: lo que un alimento PUEDE LLEGAR A SER, no
+# lo que es. La prosa de una receta los produce sola («hasta obtener una harina», «hasta formar una
+# pasta»), así que como prefijo de una palabra no prueban que el alimento esté mencionado.
+_V3_FORMA_GENERICA = frozenset({
+    "harina", "polvo", "pasta", "crema", "pure", "masa", "salsa", "caldo", "jugo", "mezcla",
+    "aderezo", "trozos", "tiras", "cubos", "hojuelas",
+})
+
+
 def _mencionado_por_prefijo(food: str, pasos_norm: str, comida_foods: list) -> bool:
     """[Task-5 · golden set] Nombres compuestos con calificador final ('Arroz
     blanco', 'Yogurt griego sin azúcar') que la prosa dominicana menciona por
@@ -633,6 +642,18 @@ def _mencionado_por_prefijo(food: str, pasos_norm: str, comida_foods: list) -> b
     tokens = _norm(food).split()
     for k in range(len(tokens) - 1, 0, -1):
         prefijo = tokens[:k]
+        # [P1-CULINARY-V7 · 2026-09-07] Un prefijo de UNA palabra que nombra una FORMA —no una
+        # identidad— lo produce la prosa a partir de cualquier ingrediente, y aceptarlo ciega a V3.
+        #
+        # Caso real del golden set (028ad9ed64): el paso dice «muele la avena hasta obtener una
+        # HARINA fina» y esto daba por mencionada la «Harina de trigo», que estaba genuinamente
+        # huérfana — 40 g comprados y jamás usados. El guard de ambigüedad de abajo no lo veía
+        # porque la colisión no es con otro alimento de la comida, es con una palabra que la prosa
+        # FABRICA al describir una técnica.
+        #
+        # «Arroz blanco» → «arroz» sigue funcionando: `arroz` es una identidad, no una forma.
+        if k == 1 and prefijo[0] in _V3_FORMA_GENERICA:
+            continue
         ambiguo = any(
             otro != food and _norm(otro).split()[:k] == prefijo
             for otro in comida_foods
@@ -1040,6 +1061,238 @@ def _v6_paso_pide_mas_que_la_lista(day, meal, index) -> list:
     return out
 
 
+# ─────────────────────────────────────────────────────────────────────────────────────────────
+# [P1-CULINARY-V7 · 2026-09-07] Las tres clases que el golden set humano destapó.
+#
+# De las 25 comidas que NINGUNA capa marcó, el dueño encontró defecto en 19 — recall ponderado
+# 12,3 % (determinista) y 15,2 % (juez). Sus notas, escritas en 79 de 80 casos, agrupan esos
+# defectos ciegos en clases, y estas tres son las mecanizables:
+#
+#   V7a  la lista compra N piezas y los pasos usan MENOS  (6 casos)
+#        «declara dos tortillas, pero el procedimiento solo utiliza una y prepara un burrito»
+#        Es el ESPEJO de V6, que solo mira el exceso (`paso > lista`). El defecto contrario —lo
+#        que se compra y sobra— no lo veía nadie.
+#
+#   V7b  el mismo alimento dos veces con unidades INCOMPATIBLES  (3 casos)
+#        «½ ají y 50 g de ají cubanela»; «el calabacín duplicado en unidades y gramos». No es que
+#        sobre: es que no se sabe cuánto comprar. V4 no lo ve porque compara gramos CON gramos.
+#
+#   V7c  legumbre declarada SECA que ningún paso remoja ni hierve  (5 casos)
+#        «Las habichuelas figuran secas, pero el procedimiento las trata como cocidas.» Servir
+#        habichuelas crudas no es un defecto de estilo.
+#
+# La cuarta clase que las notas destapan —usado A MEDIAS: «la mitad del ajo queda sin usar»,
+# «falta asignar la mitad restante del aceite»— NO se implementa aquí a propósito: exige seguir
+# cantidades repartidas ENTRE pasos, y meterla de prisa haría ruido en las tres que sí son
+# nítidas. Queda anotada, no olvidada.
+#
+# Las tres nacen en `warn`, como V5 y V6 y por el mismo motivo: su precisión no está medida contra
+# un golden set INDEPENDIENTE. El de hoy dejó de serlo en cuanto se leyeron sus notas para diseñar
+# esto — medir aquí sería medir cuánto me aprendí las respuestas, que es el sobreajuste que este
+# proyecto ya tiene documentado con el juez al 89 %.
+
+_V7_MEDIDA_RE = re.compile(r"\b(" + _V6_CONTABLE + "|" + _V6_MASA + r")\b", re.IGNORECASE)
+# `_V6_MASA_RE` NO sirve aquí: no lleva límites de palabra porque V6 lo usa con `.fullmatch()`.
+# Con `.search()`, la `l` de «cubane_l_a» casa como «litro» y «½ ají cubanela» se clasificaba como
+# MASA — con lo que V7b veía una sola familia y callaba. Lo cazó su propio test unitario a los dos
+# minutos de escribirlo. 19ª colisión por subcadena del proyecto, y van dos mías hoy.
+_V7_MASA_RE = re.compile(r"\b(" + _V6_MASA + r")\b", re.IGNORECASE)
+_V7_CANT = r"(\d+(?:[.,]\d+)?|[½¼¾⅓⅔⅛]|\d[½¼¾⅓⅔])"
+_V7_PIEZA_RE = re.compile(_V7_CANT + r"\s+((?:de\s+)?[a-zñ]+(?:\s+[a-zñ]+){0,3})")
+# Verbos que convierten una pieza en MASA. Tras uno de ellos el singular es COLECTIVO («ralla el
+# tomate» con 2 tomates en la lista) y el número gramatical deja de informar.
+#
+# Lo enseñó un guard preexistente: `test_trampa_fp_plural_singular` tiene un fixture commiteado
+# EXACTAMENTE para este par —«2½ tomates» vs «Ralla el tomate»— identificado como falso positivo
+# el 2026-07-31. Se reintrodujo aquí por no haber buscado antes lo que el repo ya sabía.
+#
+# Se elige el VERBO y no una lista de alimentos a propósito: «rellena la tortilla» sí significa una
+# tortilla, y una lista de «alimentos masificables» habría que mantenerla a mano para siempre.
+_V7_MASIFICA_RE = re.compile(
+    r"\brall|\bpica\b|\bpicad|\bpique|\btritur|\bmaja\b|\bmajad|\blicu|\bmuele\b|\bmolid|"
+    r"\bmachac|\bdesmenuz|\bpure\b|\bpuré\b|\bhaz una pasta", re.IGNORECASE)
+_V7_SECO_RE = re.compile(r"\bsec[oa]s?\b", re.IGNORECASE)
+# ACCIONES de cocción, y `cocid*` NO está entre ellas a propósito.
+#
+# La primera versión la incluía y por eso V7c no disparó ni una vez teniendo cinco casos: el paso
+# de 01c22c6847 dice «escurre las lentejas y las habichuelas negras COCIDAS» — y eso no prueba que
+# se cocieran, es exactamente la contradicción que se busca. El ingrediente las declara SECAS y el
+# paso las da por cocidas sin que ningún paso las cueza.
+#
+# Usar el síntoma como coartada es cómo un detector se ciega a sí mismo.
+_V7_COCCION_RE = re.compile(r"\bremoj|\bhierv|\bhervi|\bcoce|\bcocin|\bcuece|\bhidrat", re.IGNORECASE)
+# El estado declarado, que es señal en la dirección CONTRARIA: si aparece sin una acción, refuerza.
+_V7_ESTADO_COCIDO_RE = re.compile(r"\bcocid[oa]s?\b", re.IGNORECASE)
+# Solo lo que CAMBIA de peso y de comestibilidad al cocerse. Una lechuga «seca» no es esto.
+_V7_SECABLES_RE = re.compile(
+    r"\b(habichuela|frijol|lenteja|garbanzo|guandul|gandul|haba|soya|arroz|quinoa|cebada|"
+    r"bulgur|avena|pasta|espagueti|fideo|codito|macarr)", re.IGNORECASE)
+
+
+def _v7_piezas(texto: str, index: dict) -> dict:
+    """{alimento: total de PIEZAS} de «N <alimento>» — sin unidad de medida por medio.
+
+    «2 tortillas de trigo» sí; «2 cucharadas de cilantro» NO — eso lo mide V6, y contar la
+    cucharada como pieza convertiría cada especia en un falso positivo."""
+    out: dict = {}
+    for m in _V7_PIEZA_RE.finditer(_norm(texto)):
+        val = _v6_valor(m.group(1))
+        cola = m.group(2) or ""
+        if val is None or _V7_MEDIDA_RE.search(cola):
+            continue
+        crudos = list(find_catalog_foods(cola, index))
+        if len(crudos) != 1:
+            continue                                   # ambiguo o nada: no se cuenta
+        out[crudos[0]] = out.get(crudos[0], 0.0) + val
+    return out
+
+
+def _v7a_lista_compra_de_mas(day, meal, index) -> list:
+    """La lista compra N piezas y los pasos, sumados, usan menos. Fail-open total."""
+    out = []
+    try:
+        ings = [str(x) for x in (meal.get("ingredients") or [])]
+        pasos = [str(x) for x in (meal.get("recipe") or [])]
+        if not ings or not pasos:
+            return []
+        en_lista: dict = {}
+        for ing in ings:
+            for food, n in _v7_piezas(ing, index).items():
+                en_lista[food] = en_lista.get(food, 0.0) + n
+        usado: dict = {}
+        for paso in pasos:
+            for food, n in _v7_piezas(paso, index).items():
+                usado[food] = usado.get(food, 0.0) + n
+        pasos_norm = [_norm(p) for p in pasos]
+        for food, comprado in en_lista.items():
+            if comprado <= 1:
+                continue
+            gastado = usado.get(food)
+            if gastado is not None:
+                if gastado >= comprado - 0.05:
+                    continue
+                out.append(_viol(day, meal, "V7a", food,
+                                 f"la lista compra {comprado:g} y los pasos usan {gastado:g}",
+                                 "minor", True))
+                continue
+            # Sin cifra en los pasos, la señal es el NÚMERO GRAMATICAL, que es lo que el humano
+            # usó: «la cantidad de pan no coincide con el plural "tostadas"», «declara dos
+            # tortillas pero el procedimiento solo utiliza una». Exigir una cifra dejaba fuera los
+            # seis casos de esta clase, porque la prosa dice «coloca la tortilla», no «1 tortilla».
+            #
+            # Solo dispara si el alimento SÍ aparece en los pasos —si no, es huérfano y lo ve V3—
+            # y SIEMPRE en singular. Una sola mención en plural basta para callarlo: el reparto
+            # entre pasos es legítimo y no hay por qué adivinarlo.
+            # El número gramatical solo es evidencia con conteos ENTEROS ≥ 2. «1½ guineos» y un
+            # paso que dice «el guineo» no se contradicen — media pieza no tiene plural. Sin este
+            # guard, ese caso era el único falso positivo del detector.
+            if comprado < 2 or abs(comprado - round(comprado)) > 0.01:
+                continue
+            cabeza = _norm(food).split()[0]
+            sing = re.compile(r"\b" + re.escape(cabeza) + r"\b")
+            plur = re.compile(r"\b" + re.escape(cabeza) + r"(?:e?s)\b")
+            menciones = [pn for pn in pasos_norm if sing.search(pn) or plur.search(pn)]
+            if not menciones or any(plur.search(pn) for pn in menciones):
+                continue
+            # Si algún paso lo convierte en MASA, el singular es colectivo y no dice nada. Se mira
+            # la cláusula, no el paso entero: «ralla el queso; coloca las tortillas» ralla el
+            # queso, no las tortillas.
+            masificado = False
+            for pn in menciones:
+                for mm in re.finditer(r"\b" + re.escape(cabeza) + r"\w*", pn):
+                    ini, fin = _clause_bounds(pn, mm.start())
+                    if _V7_MASIFICA_RE.search(pn[ini:fin]):
+                        masificado = True
+                        break
+                if masificado:
+                    break
+            if masificado:
+                continue
+            out.append(_viol(day, meal, "V7a", food,
+                             f"la lista compra {comprado:g} y los pasos hablan de una sola "
+                             f"({cabeza}, siempre en singular)", "minor", True))
+    except Exception:
+        return []
+    return out
+
+
+def _v7b_duplicado_incompatible(day, meal, index) -> list:
+    """El mismo alimento en dos líneas con familias de unidad distintas (pieza y masa)."""
+    out = []
+    try:
+        familias: dict = {}
+        for ing in [str(x) for x in (meal.get("ingredients") or [])]:
+            crudos = list(find_catalog_foods(ing, index))
+            if len(crudos) != 1:
+                continue
+            n = _norm(ing)
+            fam = "masa" if _V7_MASA_RE.search(n) else ("pieza" if _V7_PIEZA_RE.search(n) else None)
+            if not fam:
+                continue
+            familias.setdefault(crudos[0], {}).setdefault(fam, []).append(str(ing)[:44])
+        for food, fams in familias.items():
+            if len(fams) < 2:
+                continue
+            muestras = " / ".join(v[0] for v in fams.values())
+            out.append(_viol(day, meal, "V7b", food,
+                             f"aparece en dos unidades incompatibles: {muestras}",
+                             "minor", False))
+    except Exception:
+        return []
+    return out
+
+
+def _v7c_seco_sin_coccion(day, meal, index) -> list:
+    """Legumbre o grano declarado SECO que ningún paso remoja ni hierve."""
+    out = []
+    try:
+        pasos = [str(x) for x in (meal.get("recipe") or [])]
+        if not pasos:
+            return []
+        pasos_norm = [_norm(p) for p in pasos]
+        for ing in [str(x) for x in (meal.get("ingredients") or [])]:
+            n = _norm(ing)
+            if not _V7_SECO_RE.search(n) or not _V7_SECABLES_RE.search(n):
+                continue
+            crudos = list(find_catalog_foods(ing, index))
+            if not crudos:
+                continue
+            food = crudos[0]
+            cabeza = _norm(food).split()[0]
+            # Se busca un paso que nombre ESE alimento Y lo cueza. Basta el sustantivo cabeza: la
+            # prosa dice «las habichuelas», no «las habichuelas blancas», y exigir el nombre
+            # completo produciría el mismo falso positivo que `_mencionado_por_prefijo` documenta.
+            # La acción y el alimento tienen que estar en la MISMA CLÁUSULA, no solo en el mismo
+            # paso. «El Toque de Fuego: calienta la plancha; cocina la berenjena y el ají; añade
+            # las lentejas» cuece la berenjena, no las lentejas — y comprobando por paso, ese
+            # `cocina` daba por cocidas unas lentejas que nadie coció. Es el mismo error de
+            # alcance que `_occurrence_resolves` ya resuelve para V1, con su misma herramienta.
+            cocido = False
+            for pn in pasos_norm:
+                for m in re.finditer(r"\b" + re.escape(cabeza) + r"\w*", pn):
+                    ini, fin = _clause_bounds(pn, m.start())
+                    if _V7_COCCION_RE.search(pn[ini:fin]):
+                        cocido = True
+                        break
+                if cocido:
+                    break
+            if cocido:
+                continue
+            # Si además algún paso lo da por COCIDO sin haberlo cocido, no es un olvido de
+            # redacción: es una contradicción entre la lista y el procedimiento.
+            contradice = any(
+                _V7_ESTADO_COCIDO_RE.search(pn) and re.search(r"\b" + re.escape(cabeza) + r"\w*", pn)
+                for pn in pasos_norm)
+            detalle = (f"declarado seco ('{str(ing)[:44]}') y un paso lo da por COCIDO sin cocerlo"
+                       if contradice else
+                       f"declarado seco ('{str(ing)[:44]}') y ningún paso lo remoja ni lo hierve")
+            out.append(_viol(day, meal, "V7c", food, detalle,
+                             "major" if contradice else "minor", True))
+    except Exception:
+        return []
+    return out
+
+
 def _viol(day, meal, check, food, detail, severity, repairable):
     return {"day": day, "meal": meal.get("meal") or meal.get("name"),
             "check": check, "food": food, "detail": detail,
@@ -1061,6 +1314,9 @@ def culinary_contract_scan(plan_data: dict, catalog: list) -> list:
             out.extend(_v4_cantidad_inconsistente(day, meal, index))
             out.extend(_v5_paso_usa_lo_que_no_esta(day, meal, index))
             out.extend(_v6_paso_pide_mas_que_la_lista(day, meal, index))
+            out.extend(_v7a_lista_compra_de_mas(day, meal, index))
+            out.extend(_v7b_duplicado_incompatible(day, meal, index))
+            out.extend(_v7c_seco_sin_coccion(day, meal, index))
         return out
     except Exception:
         return []

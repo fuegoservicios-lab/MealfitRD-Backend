@@ -101,12 +101,43 @@ def test_un_juicio_que_no_ocurrio_NO_lleva_sello():
 
 
 # ── 3. el marcador no puede aprobar en silencio ───────────────────────────────────────────────
-def test_el_marcador_sale_con_codigo_4_si_faltan_etiquetas():
+def test_el_marcador_sale_con_codigo_4_si_faltan_etiquetas(tmp_path, monkeypatch):
     """Un aviso en pantalla solo lo ve quien lo lea. CI necesita el código de salida: exit 0 con
-    métricas `null` es indistinguible de «medido y correcto»."""
-    r = subprocess.run([sys.executable, str(_BACKEND / "scripts" / "culinary_golden_score.py")],
-                       capture_output=True, text=True, cwd=str(_BACKEND))
-    assert r.returncode == 4, (r.returncode, r.stdout[-400:], r.stderr[-400:])
+    métricas `null` es indistinguible de «medido y correcto».
+
+    [2026-09-07] Este test corría el marcador contra el golden set REAL y se apoyaba en que
+    estuviera sin etiquetar. El dueño etiquetó las 80 y se puso rojo — midiendo el ENTORNO, no el
+    contrato, que es justo el defecto que este mismo fichero documenta en otros tres guards.
+
+    Ahora fabrica un golden set incompleto y comprueba la regla sobre él. Se comprueban los DOS
+    lados: incompleto ⇒ 4, completo ⇒ 0. Un guard que solo mira un lado no distingue «la regla
+    funciona» de «esta rama nunca se ejecuta».
+    """
+    import json as _json
+    import shutil
+
+    origen = _BACKEND / "docs" / "culinary_golden_set.json"
+    real = _json.loads(origen.read_text(encoding="utf-8"))
+
+    def _correr(casos):
+        raiz = tmp_path / "backend"
+        (raiz / "docs").mkdir(parents=True, exist_ok=True)
+        (raiz / "scripts").mkdir(parents=True, exist_ok=True)
+        shutil.copy2(_BACKEND / "scripts" / "culinary_golden_score.py",
+                     raiz / "scripts" / "culinary_golden_score.py")
+        (raiz / "docs" / "culinary_golden_set.json").write_text(
+            _json.dumps({**real, "casos": casos}, ensure_ascii=False), encoding="utf-8")
+        return subprocess.run(
+            [sys.executable, str(raiz / "scripts" / "culinary_golden_score.py")],
+            capture_output=True, text=True, cwd=str(raiz)).returncode
+
+    # 19 etiquetados: por debajo de MINIMO_ETIQUETAS (20)
+    pocos = [dict(c, veredicto_humano=(c["veredicto_humano"] if i < 19 else ""))
+             for i, c in enumerate(real["casos"])]
+    assert _correr(pocos) == 4, "no avisó por código de salida con el golden set incompleto"
+
+    # y con TODOS etiquetados sale limpio: si no, el 4 de arriba no probaría nada
+    assert _correr(real["casos"]) == 0, "el marcador falla con el golden set completo"
 
 
 def test_el_umbral_es_una_constante_y_no_dos_numeros_sueltos():
