@@ -4,12 +4,12 @@ Gate: **PASA**
 
 | Perfil | Biblioteca | Plantillas | Des/Alm/Cen/Mer | Resueltos | Contaminación | Adecuación | Disponib. riesgo | Proteínas/Técnicas | Clínico | Revisión humana |
 |---|---|---|---|---|---|---|---|---|---|---|
-| dominican_criolla | do | 144 | 39/56/45/34 | 99.5 % | 0 | ok (fritura 0 %) | 0.0 % | 13/37 | ok (procesados 2, sodio 25) | 0 marcadas · firma: automated (Claude (revisión curatorial delegada por el dueño), 2026-09-06) |
-| puertorico_criolla | pr | 132 | 37/46/37/23 | 100.0 % | 1 | ok (fritura 6 %) | 14.9 % | 13/15 | ok (procesados 12, sodio 23) | 67 marcadas · firma: automated (Claude (revisión curatorial delegada por el dueño), 2026-09-06) |
-| mexico_casera | mx | 126 | 38/46/39/25 | 100.0 % | 0 | ok (fritura 1 %) | 2.6 % | 13/15 | ok (procesados 5, sodio 10) | 15 marcadas · firma: automated (Claude (revisión curatorial delegada por el dueño), 2026-09-06) |
-| colombia_casera | co | 134 | 37/48/39/27 | 100.0 % | 0 | ok (fritura 1 %) | 12.7 % | 12/16 | ok (procesados 6, sodio 7) | 61 marcadas · firma: automated (Claude (revisión curatorial delegada por el dueño), 2026-09-06) |
-| spain_mediterranea | es | 124 | 39/54/45/24 | 100.0 % | 0 | ok (fritura 0 %) | 5.3 % | 12/15 | ok (procesados 24, sodio 29) | 27 marcadas · firma: automated (Claude (revisión curatorial delegada por el dueño), 2026-09-06) |
-| us_everyday | us | 119 | 34/44/37/19 | 100.0 % | 3 | ok (fritura 0 %) | 4.9 % | 12/16 | ok (procesados 7, sodio 21) | 26 marcadas · firma: automated (Claude (revisión curatorial delegada por el dueño), 2026-09-06) |
+| dominican_criolla | do | 144 | 39/56/45/34 | 99.5 % | 0 | ok (fritura 0 %) | 0.0 % | 13/37 | ok (procesados 2, sodio 25) | 0 marcadas · firma: automated (Claude (revisión curatorial delegada por el dueño), 2026-09-07) |
+| puertorico_criolla | pr | 132 | 37/46/37/23 | 100.0 % | 1 | ok (fritura 6 %) | 14.9 % | 13/15 | ok (procesados 12, sodio 23) | 67 marcadas · firma: automated (Claude (revisión curatorial delegada por el dueño), 2026-09-07) |
+| mexico_casera | mx | 126 | 38/46/39/25 | 100.0 % | 0 | ok (fritura 1 %) | 2.6 % | 13/15 | ok (procesados 5, sodio 10) | 15 marcadas · firma: automated (Claude (revisión curatorial delegada por el dueño), 2026-09-07) |
+| colombia_casera | co | 134 | 37/48/39/27 | 100.0 % | 0 | ok (fritura 1 %) | 12.7 % | 12/16 | ok (procesados 6, sodio 7) | 61 marcadas · firma: automated (Claude (revisión curatorial delegada por el dueño), 2026-09-07) |
+| spain_mediterranea | es | 124 | 39/54/45/24 | 100.0 % | 0 | ok (fritura 0 %) | 5.3 % | 12/15 | ok (procesados 24, sodio 29) | 27 marcadas · firma: automated (Claude (revisión curatorial delegada por el dueño), 2026-09-07) |
+| us_everyday | us | 119 | 34/44/37/19 | 100.0 % | 3 | ok (fritura 0 %) | 4.9 % | 12/16 | ok (procesados 7, sodio 21) | 26 marcadas · firma: automated (Claude (revisión curatorial delegada por el dueño), 2026-09-07) |
 
 Mezcla 0,7/0,3 en 10 días: todas las parejas con candidatos en las 4 franjas (30 parejas).
 

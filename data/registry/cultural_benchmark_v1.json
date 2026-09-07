@@ -534,7 +534,7 @@
         ],
         "needs_review": false,
         "ok": true,
-        "priced_pct": 89.4,
+        "priced_pct": 90.6,
         "review_threshold_pct": 15.0
       },
       "clinical": {
@@ -665,7 +665,7 @@
             "Jugo de lulo y palmito con limón (< 40 kcal): snacks reales de bajo aporte."
           ],
           "by": "Claude (revisión curatorial delegada por el dueño)",
-          "date": "2026-09-06",
+          "date": "2026-09-07",
           "decisions": [
             "Alérgenos: el matcher del registry no reconocía plurales (sardinas, fideos, almejas) ni la salsa de soya como gluten: corregido y recompilado; cero clases sin marcar en las 6 bibliotecas (verificado con un chequeo independiente por constituyente).",
             "Raciones: meriendas > 450 kcal reasignadas a almuerzo/cena; almuerzos < 260 kcal y cenas < 180 kcal completados con base o proteína; almuerzos > 1.100 kcal reducidos.",
@@ -781,7 +781,7 @@
             "Molondrones guisados (250 kcal) y sopa-crema de auyama (283 kcal): platos ligeros reales; el generador ajusta porciones a los macros del día."
           ],
           "by": "Claude (revisión curatorial delegada por el dueño)",
-          "date": "2026-09-06",
+          "date": "2026-09-07",
           "decisions": [
             "Alérgenos: el matcher del registry no reconocía plurales (sardinas, fideos, almejas) ni la salsa de soya como gluten: corregido y recompilado; cero clases sin marcar en las 6 bibliotecas (verificado con un chequeo independiente por constituyente).",
             "Raciones: meriendas > 450 kcal reasignadas a almuerzo/cena; almuerzos < 260 kcal y cenas < 180 kcal completados con base o proteína; almuerzos > 1.100 kcal reducidos.",
@@ -797,13 +797,14 @@
             "Piso de variedad: el mínimo de candidatos veganos por franja pasó de 1-4 a 7 en las seis cocinas (7 ocasiones sin repetir ⇒ 7 recetas distintas). Segunda tanda de desayunos sin gluten porque `Avena` lleva esa clase y un vegano celíaco tenía UN desayuno en PR, ES y US.",
             "Ninguna ola queda cubierta exclusivamente con soja: quitando la soja siguen quedando ≥5 desayunos veganos en las seis cocinas (test).",
             "«Sancocho vegano de víveres con soya texturizada» movido de cena a ALMUERZO: el SSOT de franjas de la biblioteca dominicana no admite sopa/sancocho en desayuno ni cena (misma decisión que en la revisión anterior con «Sopa de habichuelas negras con casabe»). Su cena la cubre ahora «Berenjena guisada con soya texturizada y batata».",
-            "Cuatro plantillas dejan de figurar íntegras (ARQ27-P0-02): la batida de zapote, el chillo, el salami de pavo y las frutas con menta declaran ingredientes sin resolver y ahora son `partial`. Las dos del medio son SUSTITUCIONES declaradas: el título promete un alimento que la receta compilada no tiene, y un plato sustituido necesita identidad propia, no un rótulo heredado."
+            "Cuatro plantillas dejan de figurar íntegras (ARQ27-P0-02): la batida de zapote, el chillo, el salami de pavo y las frutas con menta declaran ingredientes sin resolver y ahora son `partial`. Las dos del medio son SUSTITUCIONES declaradas: el título promete un alimento que la receta compilada no tiene, y un plato sustituido necesita identidad propia, no un rótulo heredado.",
+            "[2026-09-07 · P1-REGISTRY-TITLE-TRUTH] Tercera incoherencia nombre↔constituyentes, que la verificación del 06-sep dio por completa y se le escapó: «Panqueques de harina de ARROZ con fresas» traía Harina de TRIGO. Renombrado a «Panqueques de trigo con fresas» — el catálogo no tiene harina de arroz y crear la fila sería inventarla. Re-verificadas las 779 plantillas de las 6 bibliotecas con el detector de contradicción de calificativo (`test_p1_registry_title_truth`): 0 restantes."
           ],
           "kind": "automated",
-          "snapshot_hash": "979a994899f59c2097212610c7c137e43f6145274624a4459202a3e7b45d4488"
+          "snapshot_hash": "92a422c0d9b5bfa99d7dbe6fb93cbda9b46fbd8d0cfe7e05b6d6ad24ecd92923"
         }
       },
-      "snapshot_hash": "979a994899f59c2097212610c7c137e43f6145274624a4459202a3e7b45d4488"
+      "snapshot_hash": "92a422c0d9b5bfa99d7dbe6fb93cbda9b46fbd8d0cfe7e05b6d6ad24ecd92923"
     },
     "mexico_casera": {
       "appropriateness": {
@@ -879,7 +880,7 @@
         ],
         "needs_review": false,
         "ok": true,
-        "priced_pct": 73.3,
+        "priced_pct": 73.6,
         "review_threshold_pct": 15.0
       },
       "clinical": {
@@ -966,7 +967,7 @@
             "Pepino con chile y limón (35 kcal): snack real de bajo aporte; se conserva."
           ],
           "by": "Claude (revisión curatorial delegada por el dueño)",
-          "date": "2026-09-06",
+          "date": "2026-09-07",
           "decisions": [
             "Alérgenos: el matcher del registry no reconocía plurales (sardinas, fideos, almejas) ni la salsa de soya como gluten: corregido y recompilado; cero clases sin marcar en las 6 bibliotecas (verificado con un chequeo independiente por constituyente).",
             "Raciones: meriendas > 450 kcal reasignadas a almuerzo/cena; almuerzos < 260 kcal y cenas < 180 kcal completados con base o proteína; almuerzos > 1.100 kcal reducidos.",
@@ -1301,7 +1302,7 @@
         ],
         "needs_review": false,
         "ok": true,
-        "priced_pct": 80.1,
+        "priced_pct": 81.7,
         "review_threshold_pct": 15.0
       },
       "clinical": {
@@ -1467,7 +1468,7 @@
             "Los avisos «cultivar dominicano» de las altas nuevas: ver la decisión de arriba."
           ],
           "by": "Claude (revisión curatorial delegada por el dueño)",
-          "date": "2026-09-06",
+          "date": "2026-09-07",
           "decisions": [
             "Alérgenos: el matcher del registry no reconocía plurales (sardinas, fideos, almejas) ni la salsa de soya como gluten: corregido y recompilado; cero clases sin marcar en las 6 bibliotecas (verificado con un chequeo independiente por constituyente).",
             "Raciones: meriendas > 450 kcal reasignadas a almuerzo/cena; almuerzos < 260 kcal y cenas < 180 kcal completados con base o proteína; almuerzos > 1.100 kcal reducidos.",
@@ -1610,7 +1611,7 @@
         ],
         "needs_review": false,
         "ok": true,
-        "priced_pct": 87.7,
+        "priced_pct": 88.3,
         "review_threshold_pct": 15.0
       },
       "clinical": {
@@ -1747,7 +1748,7 @@
             "Pistos, gazpacho y ensaladas de 210-300 kcal: platos ligeros reales de almuerzo/cena; el generador escala porciones."
           ],
           "by": "Claude (revisión curatorial delegada por el dueño)",
-          "date": "2026-09-06",
+          "date": "2026-09-07",
           "decisions": [
             "Alérgenos: el matcher del registry no reconocía plurales (sardinas, fideos, almejas) ni la salsa de soya como gluten: corregido y recompilado; cero clases sin marcar en las 6 bibliotecas (verificado con un chequeo independiente por constituyente).",
             "Raciones: meriendas > 450 kcal reasignadas a almuerzo/cena; almuerzos < 260 kcal y cenas < 180 kcal completados con base o proteína; almuerzos > 1.100 kcal reducidos.",
@@ -1874,7 +1875,7 @@
         ],
         "needs_review": false,
         "ok": true,
-        "priced_pct": 86.8,
+        "priced_pct": 87.9,
         "review_threshold_pct": 15.0
       },
       "clinical": {
@@ -2001,7 +2002,7 @@
             "«Tacos de soya texturizada con repollo» dispara el aviso de léxico mexicano, igual que los dos platos de tacos que la biblioteca estadounidense YA tenía y que la revisión anterior aceptó: el taco es comida corriente en Estados Unidos. Se conserva, por coherencia con esa decisión."
           ],
           "by": "Claude (revisión curatorial delegada por el dueño)",
-          "date": "2026-09-06",
+          "date": "2026-09-07",
           "decisions": [
             "Alérgenos: el matcher del registry no reconocía plurales (sardinas, fideos, almejas) ni la salsa de soya como gluten: corregido y recompilado; cero clases sin marcar en las 6 bibliotecas (verificado con un chequeo independiente por constituyente).",
             "Raciones: meriendas > 450 kcal reasignadas a almuerzo/cena; almuerzos < 260 kcal y cenas < 180 kcal completados con base o proteína; almuerzos > 1.100 kcal reducidos.",

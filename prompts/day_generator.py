@@ -385,7 +385,11 @@ if _DONENESS_INSIDE:
         "      palillo, el centro cuaja y no escurre, o al partir uno el interior no está crudo.\n"
         "    - POLLO, CERDO o PAVO: hasta que el interior no tenga partes rosadas. Aquí no es\n"
         "      textura, es seguridad.\n"
-        "    - VÍVERES que se majan o se rellenan (yuca, papa, batata, plátano, ñame, auyama):\n"
+        # «víveres» va en MINÚSCULA a propósito: `_DO_LEXICON_NEUTRAL` lo mapea a «tubérculos»
+        # para los países beta con un `str.replace` case-SENSITIVE, así que en mayúscula se colaba
+        # sin neutralizar y un usuario español leía vocabulario dominicano. Lo cazó
+        # `test_p1_daygen_prompt_no_neutralize`, que es exactamente para lo que existe.
+        "    - Los víveres que se majan o se rellenan (yuca, papa, batata, plátano, ñame, auyama):\n"
         "      hiérvelos hasta que el cuchillo entre sin fuerza y ESCÚRRELOS antes de majar o\n"
         "      rellenar. Rallar no es cocinar.\n"
         "    - «hasta que dore» puede acompañar, pero jamás ser el único criterio en estos tres\n"
