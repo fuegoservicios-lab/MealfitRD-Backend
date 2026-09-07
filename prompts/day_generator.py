@@ -330,6 +330,35 @@ DAY_GENERATOR_SYSTEM_PROMPT = DAY_GENERATOR_SYSTEM_PROMPT + (
     "      cantidades de proteína/carbohidrato/grasa del plato.\n"
 )
 
+# [P1-DAYGEN-USE-ALL-INGREDIENTS · 2026-09-07] Medido por ablación (37-38 comidas, 2026-09-07): el
+# brazo que sólo añadía esta frase al prompt igualó o superó al que montaba un solver de cantidades
+# + narrador sin cifras, en las tres columnas del escáner culinario. El mérito era de la frase, no
+# de la maquinaria — por eso esto es un párrafo y no una arquitectura. Cierra las dos direcciones
+# del mismo defecto: V3 (la lista compra algo que ningún paso toca) y V5 (un paso usa algo que la
+# lista no compró). String ESTÁTICO a import-time → prompt-cache del SystemMessage intacto
+# (P1-PROMPT-CACHE); leer el knob POR PETICIÓN cambiaría los bytes entre usuarios y mataría el
+# cache. Rollback sin redeploy: MEALFIT_DAYGEN_USE_ALL_INGREDIENTS=0.
+# tooltip-anchor: P1-DAYGEN-USE-ALL-INGREDIENTS
+try:
+    from knobs import _env_bool as _uai_env_bool
+
+    _USE_ALL_INGREDIENTS = _uai_env_bool("MEALFIT_DAYGEN_USE_ALL_INGREDIENTS", True)
+except Exception:  # pragma: no cover — sin knobs el prompt sigue siendo el de antes
+    _USE_ALL_INGREDIENTS = True
+
+if _USE_ALL_INGREDIENTS:
+    DAY_GENERATOR_SYSTEM_PROMPT = DAY_GENERATOR_SYSTEM_PROMPT + (
+        "\n20. USA TODOS LOS INGREDIENTES, Y SOLO ESOS (el escáner culinario marca las dos faltas):\n"
+        "    - Cada alimento que listes en `ingredients` DEBE aparecer en al menos un paso de la\n"
+        "      receta. Un ingrediente que ningún paso toca es un fallo real: el usuario lo pagó en la\n"
+        "      lista de compras, lo tiene en la nevera, y la receta no le dice qué hacer con él.\n"
+        "    - Al revés también: NO menciones en los pasos ningún alimento que no esté en\n"
+        "      `ingredients`. Si el paso manda echar cilantro, el cilantro va en la lista; si no está\n"
+        "      en la lista, el paso no puede pedirlo (el usuario no lo compró).\n"
+        "    - Antes de cerrar cada receta, repasa tu propia lista de arriba abajo y comprueba que\n"
+        "      cada línea aparece en algún paso. Es la comprobación que más fallos evita.\n"
+    )
+
 
 # [P1-DIET-BLIND-DIRECTIVES · 2026-08-08] El prompt estático de arriba ordena proteína ANIMAL en
 # ≥6 fragmentos (rotación de huevo, "proteína fresca", patrones de almuerzo/cena) sin mirar la
