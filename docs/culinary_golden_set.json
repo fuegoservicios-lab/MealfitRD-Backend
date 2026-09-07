@@ -46,8 +46,8 @@
         "V4: ingrediente declara 85 g, pasos declaran 140 g"
       ],
       "maquina_juez": [],
-      "veredicto_humano": "",
-      "nota_humana": ""
+      "veredicto_humano": "defecto",
+      "nota_humana": "Varias cantidades no coinciden entre ingredientes y preparación: res (85/140 g), aceite (1 cdta/2 cdas/2 cdtas), tomate (1½/1) y cebolla (½/¼). Además, parece ser una receta duplicada dentro del conjunto."
     },
     {
       "id": "0468ff03aa",
@@ -73,8 +73,8 @@
         "V4: ingrediente declara 45 g, pasos declaran 20 g"
       ],
       "maquina_juez": [],
-      "veredicto_humano": "",
-      "nota_humana": ""
+      "veredicto_humano": "defecto",
+      "nota_humana": "No coinciden las cantidades de casabe y queso. La instrucción sobre la miel y los 6–8 minutos está mal construida y debe aclararse el método de tostado. También debe verificarse la afirmación nutricional sobre vitamina E."
     },
     {
       "id": "05856e2162",
@@ -105,8 +105,8 @@
         "V1: paso aplica 'hervir' a un listo-para-comer: El Toque de Fuego: hierve la pasta integral en agua durante 9-11 minutos hasta que que"
       ],
       "maquina_juez": [],
-      "veredicto_humano": "",
-      "nota_humana": ""
+      "veredicto_humano": "defecto",
+      "nota_humana": "La proporción de yogur frente a pasta parece excesiva y debe probarse. Las instrucciones de conservación contradicen el montaje, porque la salsa ya fue incorporada, y la indicación de congelar el ají no aplica después de utilizarlo."
     },
     {
       "id": "06416aacbb",
@@ -132,8 +132,8 @@
         "V4: ingrediente declara 5 g, pasos declaran 15 g"
       ],
       "maquina_juez": [],
-      "veredicto_humano": "",
-      "nota_humana": ""
+      "veredicto_humano": "defecto",
+      "nota_humana": "No coinciden las cantidades de sandía, queso ni semillas de girasol entre los ingredientes y la preparación. Deben unificarse según el cálculo nutricional y especificarse linaza molida; la afirmación sobre omega‑3 también necesita validación diaria."
     },
     {
       "id": "0b1f190ac9",
@@ -170,8 +170,8 @@
         "V3: listado ('½ taza de habichuelas blancas seco') pero ningún paso lo menciona"
       ],
       "maquina_juez": [],
-      "veredicto_humano": "",
-      "nota_humana": ""
+      "veredicto_humano": "defecto",
+      "nota_humana": "Las habichuelas blancas secas son un ingrediente sobrante y quedan completamente sin cocinar ni utilizar. Deben eliminarse o añadirse con instrucciones completas de cocción. También conviene definir el líquido del guiso y corregir la medida del cilantro."
     },
     {
       "id": "0d16ef69e3",
@@ -206,8 +206,8 @@
         "V3: listado ('½ hoja de laurel') pero ningún paso lo menciona"
       ],
       "maquina_juez": [],
-      "veredicto_humano": "",
-      "nota_humana": ""
+      "veredicto_humano": "defecto",
+      "nota_humana": "Faltan casi por completo las instrucciones de cocción de los frijoles, las papas en air fryer, los vegetales y el pollo. Deben definirse estados, tiempos, temperaturas y distribución de ingredientes antes de curar esta receta."
     },
     {
       "id": "0d4eeb64eb",
@@ -241,8 +241,8 @@
         "V4: ingrediente declara 45 g, pasos declaran 250 g"
       ],
       "maquina_juez": [],
-      "veredicto_humano": "",
-      "nota_humana": ""
+      "veredicto_humano": "defecto",
+      "nota_humana": "La receta contiene múltiples cantidades incompatibles y omite completamente la cocción de la quinoa. Deben unificarse quinoa, queso, mango, ají, aceite y limón según el cálculo nutricional antes de reconstruir el procedimiento. No debe curarse en su estado actual."
     },
     {
       "id": "0ef0ba50b7",
@@ -276,8 +276,8 @@
         "V3: listado ('5 cdas de queso ricotta') pero ningún paso lo menciona"
       ],
       "maquina_juez": [],
-      "veredicto_humano": "",
-      "nota_humana": ""
+      "veredicto_humano": "defecto",
+      "nota_humana": "El método no coincide con el título: las arepitas se hacen en sartén, no al horno. Debe revisarse la proporción de agua, definir el rendimiento y aclarar si la soya se mide seca o cocida. También conviene validar el volumen de la ensalada."
     },
     {
       "id": "119f0e6a06",
@@ -301,8 +301,8 @@
         "V4: ingrediente declara 25 g, pasos declaran 35 g"
       ],
       "maquina_juez": [],
-      "veredicto_humano": "",
-      "nota_humana": ""
+      "veredicto_humano": "defecto",
+      "nota_humana": "La cantidad y presentación del casabe son ambiguas: aparecen tortas y hojuelas con cantidades distintas. Debe definirse una sola cantidad total en gramos y corregirse el texto corrupto del yogur y el azúcar."
     },
     {
       "id": "1794ad8c1d",
@@ -329,8 +329,8 @@
         "V3: listado ('½ manzana') pero ningún paso lo menciona"
       ],
       "maquina_juez": [],
-      "veredicto_humano": "",
-      "nota_humana": ""
+      "veredicto_humano": "defecto",
+      "nota_humana": "La lista de ingredientes no corresponde con el título ni con la preparación: el parmesano parece haber sustituido por error al yogur y la leche, y falta completamente la cantidad de mango. Esta receta debe regenerarse desde cero; no es corregible con ajustes menores."
     },
     {
       "id": "17fda2a839",
@@ -364,8 +364,8 @@
         "V4: ingrediente declara 300 g, pasos declaran 460 g"
       ],
       "maquina_juez": [],
-      "veredicto_humano": "",
-      "nota_humana": ""
+      "veredicto_humano": "defecto",
+      "nota_humana": "No coinciden las cantidades de yuca, edamame ni zanahoria. Deben unificarse según el cálculo nutricional y especificarse el estado inicial del edamame. El método general es viable después de corregir esas porciones."
     },
     {
       "id": "1929f8cf78",
@@ -395,8 +395,8 @@
         "V2: '(ya viene cocido)' sobre alimento fresco: El Toque de Fuego: Calienta el aceite de oliva en una sartén a fuego medio. Fríe las ro"
       ],
       "maquina_juez": [],
-      "veredicto_humano": "",
-      "nota_humana": ""
+      "veredicto_humano": "defecto",
+      "nota_humana": "El aceite es insuficiente para la doble fritura y el volumen del relleno excede ampliamente la cantidad de tostones. Debe reducirse el relleno, aumentar los tostones o servir parte como ensalada, además de adaptar el método a air fryer/horno o ajustar el aceite."
     },
     {
       "id": "19b13609c9",
@@ -430,8 +430,8 @@
         "V3: listado ('½ tomate') pero ningún paso lo menciona"
       ],
       "maquina_juez": [],
-      "veredicto_humano": "",
-      "nota_humana": ""
+      "veredicto_humano": "defecto",
+      "nota_humana": "Los garbanzos secos se tratan como cocidos y los tomates frescos quedan sin utilizar. Debe declararse el peso cocido de los garbanzos, eliminar o incorporar los tomates y especificar especie y gramos del pescado."
     },
     {
       "id": "1c0c5e6582",
@@ -454,8 +454,8 @@
         "V3: listado ('300 g de manzana') pero ningún paso lo menciona"
       ],
       "maquina_juez": [],
-      "veredicto_humano": "",
-      "nota_humana": ""
+      "veredicto_humano": "defecto",
+      "nota_humana": "La lista de ingredientes pertenece a otra receta o sufrió sustituciones incorrectas. No coincide con el título ni con el montaje y contiene cantidades imposibles. Debe regenerarse desde cero; no es reparable mediante ajustes menores."
     },
     {
       "id": "20055f9f33",
@@ -487,8 +487,8 @@
         "V1: 'saltear' no está en prep_methods('hervir', 'freir', 'hornear', 'guisar'): El Toque de Fuego: calienta el aceite de oliva en un wo"
       ],
       "maquina_juez": [],
-      "veredicto_humano": "",
-      "nota_humana": ""
+      "veredicto_humano": "dudoso",
+      "nota_humana": "La receta es coherente, pero debe validarse la cocción del plátano. Conviene indicar que se pele y corte en cubos de 1–1.5 cm, además de precocerlo o extender la cocción hasta que esté completamente tierno. Si no se corrige, debe considerarse defectuosa."
     },
     {
       "id": "2168899312",
@@ -522,8 +522,8 @@
         "V4: ingrediente declara 120 g, pasos declaran 30 g"
       ],
       "maquina_juez": [],
-      "veredicto_humano": "",
-      "nota_humana": ""
+      "veredicto_humano": "defecto",
+      "nota_humana": "Deben unificarse tomate y rábano, y decidirse si la proteína será pescado, camarones o ambas. El pescado necesita especie, peso y cocción exactos; los camarones ya cocidos solo deberían recalentarse. La receta requiere una revisión estructural, no un ajuste menor."
     },
     {
       "id": "24dbfaebdb",
@@ -561,8 +561,8 @@
         "V3: listado ('½ manzana') pero ningún paso lo menciona"
       ],
       "maquina_juez": [],
-      "veredicto_humano": "",
-      "nota_humana": ""
+      "veredicto_humano": "defecto",
+      "nota_humana": "La receta mezcla ingredientes de platos diferentes: faltan queso blanco y aguacate, sobran manzana y parmesano, las habichuelas no se cocinan y la batata tiene cantidades contradictorias y queda cruda. Necesita reconstrucción completa antes de curarse."
     },
     {
       "id": "2546d9d030",
@@ -587,8 +587,8 @@
         "V1: 'tostar' no está en prep_methods('hervir', 'ninguno'): El Toque de Fuego: tuesta la avena en una sartén seca a fuego medio durante"
       ],
       "maquina_juez": [],
-      "veredicto_humano": "",
-      "nota_humana": ""
+      "veredicto_humano": "ok",
+      "nota_humana": "Especificar avena en hojuelas.\nExpresar ¼ de cucharadita de mantequilla de maní en gramos, porque es una cantidad muy pequeña y difícil de medir o distribuir."
     },
     {
       "id": "2878e78af8",
@@ -614,8 +614,8 @@
         "V1: 'tostar' no está en prep_methods('hervir', 'ninguno'): El Toque de Fuego: tuesta la avena en una sartén seca a fuego medio durante"
       ],
       "maquina_juez": [],
-      "veredicto_humano": "",
-      "nota_humana": ""
+      "veredicto_humano": "ok",
+      "nota_humana": "Ajuste menor: corregir “1 canela en polvo ¼ cucharadita” por “¼ cdta de canela en polvo”. La porción es abundante, pero razonable para un desayuno completo."
     },
     {
       "id": "292b09e344",
@@ -649,8 +649,8 @@
         "V3: listado ('40 g de arroz blanco crudo') pero ningún paso lo menciona"
       ],
       "maquina_juez": [],
-      "veredicto_humano": "",
-      "nota_humana": ""
+      "veredicto_humano": "defecto",
+      "nota_humana": "El número de tortillas no coincide, el arroz queda completamente sin utilizar y la soya recibe instrucciones incompatibles con su estado cocido. Debe eliminarse o incorporar el arroz, definir el rendimiento y aclarar si la soya se mide seca o cocida."
     },
     {
       "id": "00fae1c079",
@@ -676,8 +676,8 @@
       "maquina_juez": [
         "combo_absurdo: El revoltillo criollo con casabe y aguacate es un desayuno dominicano coherente, pero incorporar atún en agua al revoltillo de hue"
       ],
-      "veredicto_humano": "",
-      "nota_humana": ""
+      "veredicto_humano": "defecto",
+      "nota_humana": "Las almendras aparecen en la preparación, pero faltan en la lista de ingredientes y no tienen cantidad. Además, debe revisarse la proporción de líquido, porque 95 ml de leche para ¾ de taza de avena difícilmente producirán una textura cremosa."
     },
     {
       "id": "01606d0573",
@@ -709,8 +709,8 @@
       "maquina_juez": [
         "slot_inapropiado: El desayuno incluye 40 g de arroz blanco crudo que se 'incorpora durante la preparación' del wrap — el arroz como plato fuerte nun"
       ],
-      "veredicto_humano": "",
-      "nota_humana": ""
+      "veredicto_humano": "defecto",
+      "nota_humana": "El arroz aparece crudo y se manda a incorporar sin ningún proceso de cocción. El puré tampoco tiene preparación, y el volumen del relleno parece excesivo para una tortilla. La receta necesita corregir la integración y preparación de los acompañamientos."
     },
     {
       "id": "05145657e1",
@@ -746,8 +746,8 @@
       "maquina_juez": [
         "paso_incoherente: El paso de mise en place ordena 'pica el ají cubanela, la cebolla, el ajo y el cilantro', pero el ajo no figura en la lista de ing"
       ],
-      "veredicto_humano": "",
-      "nota_humana": ""
+      "veredicto_humano": "defecto",
+      "nota_humana": "Debe especificarse que el pollo y la batata están previamente cocidos, incluyendo sus pesos cocidos. También hay que dividir claramente el ají entre la mezcla y la ensalada, y definir el número y tamaño de las croquetas."
     },
     {
       "id": "06d4e17091",
@@ -783,8 +783,8 @@
       "maquina_juez": [
         "paso_incoherente: El montaje menciona 'el queso cottage', pero la lista de ingredientes trae '5½ lonjas/pedazos de queso'; además el mise en place d"
       ],
-      "veredicto_humano": "",
-      "nota_humana": ""
+      "veredicto_humano": "defecto",
+      "nota_humana": "No coinciden las cantidades de guineíto ni queso cottage, y la batata recibe instrucciones contradictorias. El volumen del relleno no cabe en un solo wrap; debe reducirse o especificarse que la receta produce varias unidades."
     },
     {
       "id": "078dcac1d0",
@@ -812,8 +812,8 @@
       "maquina_juez": [
         "nombre_no_corresponde: El nombre declara 'gratinada con parmesano', pero la lista de ingredientes solo contiene 'queso (≈50 g)' genérico, sin parmesano e"
       ],
-      "veredicto_humano": "",
-      "nota_humana": ""
+      "veredicto_humano": "defecto",
+      "nota_humana": "La receta comienza utilizando batata cocida, aunque el ingrediente no especifica ese estado ni explica la cocción previa. Debe declararse en peso cocido o añadirse el proceso completo antes del gratinado. También hay que corregir la medida del perejil."
     },
     {
       "id": "098d23388f",
@@ -838,8 +838,8 @@
       "maquina_juez": [
         "nombre_no_corresponde: El nombre declara 'Queso Cottage', pero la lista de ingredientes especifica '3 lonjas/pedazos de queso (≈75 g)', que es queso en l"
       ],
-      "veredicto_humano": "",
-      "nota_humana": ""
+      "veredicto_humano": "defecto",
+      "nota_humana": "Falta el paso de tostar el merey y debe aclararse el uso de 1½ toronjas. También se recomienda especificar linaza molida, validar la afirmación sobre omega‑3 y aplicar el filtro clínico de interacciones de la toronja."
     },
     {
       "id": "0a22373d6b",
@@ -874,8 +874,8 @@
       "maquina_juez": [
         "tecnica_impropia: El ingrediente es '½ taza de lentejas secas' pero la receta solo las 'calienta en la misma sartén durante 3-4 minutos' junto a las"
       ],
-      "veredicto_humano": "",
-      "nota_humana": ""
+      "veredicto_humano": "defecto",
+      "nota_humana": "Las lentejas figuran secas, pero el procedimiento las trata como cocidas. Deben incluirse instrucciones de cocción o declararse directamente en peso cocido. También conviene ajustar el tiempo de las coles y eliminar la referencia innecesaria al cerdo."
     },
     {
       "id": "0bd5722712",
@@ -900,8 +900,8 @@
       "maquina_juez": [
         "paso_incoherente: Los ingredientes listan '½ kiwi', pero el mise en place indica cortar 'los 2 kiwis en ruedas'; hay una contradicción entre la list"
       ],
-      "veredicto_humano": "",
-      "nota_humana": ""
+      "veredicto_humano": "defecto",
+      "nota_humana": "La cantidad de kiwi no coincide: ¾ de unidad en ingredientes frente a 2 unidades en la preparación. Debe unificarse según la porción nutricional calculada. También debe corregirse el formato de “¼ cdta de canela en polvo”."
     },
     {
       "id": "0ee6d0a81c",
@@ -931,8 +931,8 @@
       "maquina_juez": [
         "paso_incoherente: La nota de seguridad ordena 'cocinar la preparación con queso blanco POR COMPLETO (≥71°C)', tratando el queso fresco como si fuera"
       ],
-      "veredicto_humano": "",
-      "nota_humana": ""
+      "veredicto_humano": "defecto",
+      "nota_humana": "Falta construir la masa y definir cuánto yogur se incorpora y cuánto se reserva para servir. Con solo 5 ml de leche, la harina no forma una mezcla vertible. También debe eliminarse la advertencia de seguridad incorrecta sobre el queso."
     },
     {
       "id": "0eeebbee4d",
@@ -967,8 +967,8 @@
       "maquina_juez": [
         "paso_incoherente: Los pasos tratan la pechuga de pollo como si fuera huevo: 'bate pechuga de pollo con los 2 pechuga de pollo' y 'mezcla pechuga de "
       ],
-      "veredicto_humano": "",
-      "nota_humana": ""
+      "veredicto_humano": "defecto",
+      "nota_humana": "La receta mezcló instrucciones propias de un cuajado de huevo con pechuga de pollo. La cantidad de pollo es contradictoria, no existe aglutinante y la cocción no es segura. Debe reconstruirse usando pollo previamente cocido y desmenuzado más un aglutinante definido, o reformularse como una receta con huevo."
     },
     {
       "id": "1191a15521",
@@ -991,8 +991,8 @@
       "maquina_juez": [
         "paso_incoherente: Los ingredientes y el paso de mise en place indican queso blanco en lonjas (4¾ lonjas ≈119 g), pero el paso de montaje dice 'coloc"
       ],
-      "veredicto_humano": "",
-      "nota_humana": ""
+      "veredicto_humano": "defecto",
+      "nota_humana": "No coinciden las cantidades de casabe, durazno ni queso cottage. Deben unificarse exactamente según la porción nutricional antes de curar la receta. El resto del montaje es sencillo y viable una vez corregidas."
     },
     {
       "id": "12dc5c0e78",
@@ -1027,8 +1027,8 @@
       "maquina_juez": [
         "slot_inapropiado: Sopón espeso de garbanzos con batata (la receta misma indica 'aplastando algunos garbanzos para espesar la sopa') servido como cen"
       ],
-      "veredicto_humano": "",
-      "nota_humana": ""
+      "veredicto_humano": "defecto",
+      "nota_humana": "Deben unificarse las cantidades de tomate, ajo, cilantro y limón. También hay que declarar los garbanzos explícitamente en peso o volumen cocido y aclarar si la soya se mide seca o cocida. La base de la sopa es viable después de esas correcciones."
     },
     {
       "id": "15ddcb26c1",
@@ -1056,8 +1056,8 @@
       "maquina_juez": [
         "paso_incoherente: La lista de ingredientes declara '½ guineíto verde' (sin indicar cocido), pero la receta lo trata como '2 guineítos verdes cocidos"
       ],
-      "veredicto_humano": "",
-      "nota_humana": ""
+      "veredicto_humano": "defecto",
+      "nota_humana": "La cantidad de guineíto cambia de ½ a 2 unidades y la receta asume que ya está cocido sin explicar la cocción. Debe unificarse la porción, declarar el estado cocido e indicar cuánto líquido se utiliza para formar el mangú."
     },
     {
       "id": "19f304d513",
@@ -1080,8 +1080,8 @@
       "maquina_juez": [
         "nombre_no_corresponde: El plato se llama 'Yogurt frío con lechosa, nueces y linaza' y la receta indica añadir 'las nueces', pero las nueces no aparecen e"
       ],
-      "veredicto_humano": "",
-      "nota_humana": ""
+      "veredicto_humano": "defecto",
+      "nota_humana": "Faltan por completo la cantidad y el tipo de nueces utilizadas. Deben añadirse en gramos y registrarse como alérgeno; también conviene especificar que la linaza sea molida. El resto de la receta es coherente."
     },
     {
       "id": "1a75c5ae61",
@@ -1117,8 +1117,8 @@
       "maquina_juez": [
         "slot_inapropiado: La cena incluye arroz blanco cocido como acompañante de las papas rellenas; el arroz es plato fuerte de almuerzo según la regla du"
       ],
-      "veredicto_humano": "",
-      "nota_humana": ""
+      "veredicto_humano": "dudoso",
+      "nota_humana": "Los ingredientes se utilizan correctamente, pero debe probarse la textura de la salsa. Se recomienda añadir una cantidad medida de agua de cocción de la pasta y aclarar que el queso se integra desmenuzado. También debe validarse la combinación de pasta y arroz."
     },
     {
       "id": "1d6d7dc439",
@@ -1140,8 +1140,8 @@
       "maquina_juez": [
         "paso_incoherente: La lista de ingredientes declara 6 chinolas pero el paso de mise en place dice 'corta las 2 chinolas'; la cantidad contradictoria "
       ],
-      "veredicto_humano": "",
-      "nota_humana": ""
+      "veredicto_humano": "defecto",
+      "nota_humana": "La cantidad de chinola cambia de seis a dos unidades y el volumen/peso del yogur necesita revisión. También debe eliminarse la palabra “azúcar” sobrante. Una vez unificadas esas cantidades, el montaje es viable."
     },
     {
       "id": "1ea600db80",
@@ -1176,8 +1176,8 @@
       "maquina_juez": [
         "tecnica_impropia: Las habichuelas negras secas se añaden al guiso sin remojo ni cocción previa y solo se cocinan 5 minutos; las leguminosas secas re"
       ],
-      "veredicto_humano": "",
-      "nota_humana": ""
+      "veredicto_humano": "defecto",
+      "nota_humana": "Las habichuelas negras secas quedan prácticamente crudas y requieren remojo y cocción completa o deben declararse en peso cocido. También debe definirse el líquido del guiso y aclararse si la soya se mide seca o cocida."
     },
     {
       "id": "2327193370",
@@ -1210,8 +1210,8 @@
       "maquina_juez": [
         "nombre_no_corresponde: El nombre y la receta sirven 'queso cottage' como acompañante, pero la lista de ingredientes declara '7¼ lonjas/pedazos de queso ("
       ],
-      "veredicto_humano": "",
-      "nota_humana": ""
+      "veredicto_humano": "dudoso",
+      "nota_humana": "Receta duplicada. Debe probarse la consistencia de las tortitas y ajustar auyama, yuca o harina antes de considerarla correcta."
     },
     {
       "id": "26910ac91d",
@@ -1243,8 +1243,8 @@
       "maquina_juez": [
         "paso_incoherente: El mise en place indica 'corta guineo' y el montaje 'termina con guineo', pero el guineo no figura en la lista de ingredientes; un"
       ],
-      "veredicto_humano": "",
-      "nota_humana": ""
+      "veredicto_humano": "defecto",
+      "nota_humana": "Falta por completo la cocción del plátano verde antes de majarlo. Debe declararse como cocido o añadirse el proceso de hervido. También conviene especificar la especie y el estado exacto del pescado para mantener precisión nutricional."
     },
     {
       "id": "2697e63381",
@@ -1277,8 +1277,8 @@
       "maquina_juez": [
         "paso_incoherente: La receta pocha los huevos 3 minutos (técnicamente yema líquida), pero la nota de seguridad alimentaria exige yema y clara complet"
       ],
-      "veredicto_humano": "",
-      "nota_humana": ""
+      "veredicto_humano": "defecto",
+      "nota_humana": "Debe unificarse el peso del ñame e incluirse su cocción completa. El método de pochar cinco claras adicionales junto con dos huevos no es viable y contradice la advertencia de cocción total. Conviene cocinar las claras revueltas aparte o reformular el componente de huevo."
     },
     {
       "id": "0dbc337c25",
@@ -1304,8 +1304,8 @@
       "maquina_juez": [
         "tecnica_impropia: La receta indica hervir el yogurt griego en agua hirviendo durante 8 minutos y luego pelarlo y cortarlo en cuartos (como si fuera "
       ],
-      "veredicto_humano": "",
-      "nota_humana": ""
+      "veredicto_humano": "defecto",
+      "nota_humana": "La receta mezcló instrucciones de huevos hervidos con yogur. Debe eliminarse por completo el paso de cocción y utilizar el yogur frío como base o capa; alternativamente, si se pretendían huevos, habría que reconstruir ingredientes, título y montaje. No es curable con un ajuste menor."
     },
     {
       "id": "17285dfa78",
@@ -1344,8 +1344,8 @@
       "maquina_juez": [
         "tecnica_impropia: Las lentejas se listan como 'secas' y el mise en place solo indica 'escurre', pero la receta las saltea en la plancha apenas 4 min"
       ],
-      "veredicto_humano": "",
-      "nota_humana": ""
+      "veredicto_humano": "defecto",
+      "nota_humana": "Falta cocinar las lentejas y el cilantro no está declarado. La cantidad de orégano parece un error crítico de unidad, mientras que el limón y el repollo resultan insuficientes para el concepto descrito. La receta necesita reconstrucción antes de curarse."
     },
     {
       "id": "20fdfb4de7",
@@ -1382,8 +1382,8 @@
       "maquina_juez": [
         "combo_absurdo: El revoltillo de huevo con espinaca, tomate y cebolla es un desayuno dominicano perfectamente válido, y el casabe también. Pero añ"
       ],
-      "veredicto_humano": "",
-      "nota_humana": ""
+      "veredicto_humano": "defecto",
+      "nota_humana": "La preparación utiliza cantidades muy superiores a las declaradas de leche, ajo, comino y orégano, y menciona ingredientes “restantes” que ya se agotaron. Deben recalcularse las proporciones y reescribirse el procedimiento; no es curable con un ajuste menor."
     },
     {
       "id": "2538fbe6a2",
@@ -1410,8 +1410,8 @@
       "maquina_juez": [
         "tecnica_impropia: El paso de cocción dice 'pela ½ toronja separando sus gajos (~6-8 min hasta dorar)' — la toronja se consume fría/fresca y no se 'd"
       ],
-      "veredicto_humano": "",
-      "nota_humana": ""
+      "veredicto_humano": "defecto",
+      "nota_humana": "El procedimiento está mal secuenciado: contiene acciones imposibles, ingredientes “restantes” inexistentes y un tiempo de tostado fuera de lugar. También debe unificarse si se prepara una tostada o tres y revisar la cantidad de mantequilla de maní."
     },
     {
       "id": "340665859e",
@@ -1447,8 +1447,8 @@
       "maquina_juez": [
         "nombre_no_corresponde: El plato se llama 'Revoltillo de papa, auyama y queso blanco' y los pasos instruyen cortar 'la papa cocida', pero la papa NO apare"
       ],
-      "veredicto_humano": "",
-      "nota_humana": ""
+      "veredicto_humano": "defecto",
+      "nota_humana": "El tipo de queso no coincide, la clara queda sin utilizar y falta el cilantro en los ingredientes. También debe corregirse la cantidad de orégano y validarse el tamaño total de la porción. No debe curarse hasta resolver esas diferencias."
     },
     {
       "id": "3b8dd7ce2c",
@@ -1482,8 +1482,8 @@
       "maquina_juez": [
         "combo_absurdo: 'Wrap dominicano de arroz, queso de freír y kale con Soya Texturizada' — un wrap con arroz, queso de freír, kale, aguacate y soya "
       ],
-      "veredicto_humano": "",
-      "nota_humana": ""
+      "veredicto_humano": "defecto",
+      "nota_humana": "Deben unificarse tortillas, estado del arroz, kale, cebolla, ajo y ají. También hay que aclarar si la soya se mide seca o cocida. La receta no debe curarse hasta sincronizar completamente ingredientes y preparación."
     },
     {
       "id": "456feecd3a",
@@ -1520,8 +1520,8 @@
       "maquina_juez": [
         "paso_incoherente: La lista de ingredientes declara 3 huevos + 2 claras, pero la receta dice 'bate 4 huevos' y 'aplasta 4 huevos (95 g)', contradicie"
       ],
-      "veredicto_humano": "",
-      "nota_humana": ""
+      "veredicto_humano": "defecto",
+      "nota_humana": "Hay sustituciones erróneas de ingredientes, claras sin usar, agua ausente y una salsa que nunca se prepara. La masa, el relleno y el acompañamiento necesitan reconstruirse completamente; no es corregible con cambios menores."
     },
     {
       "id": "46c02301b2",
@@ -1554,8 +1554,8 @@
       "maquina_juez": [
         "tecnica_impropia: El plato lleva un filete de pescado blanco como proteína principal, pero la receta solo hornea el ñame y calienta la tayota: el fi"
       ],
-      "veredicto_humano": "",
-      "nota_humana": ""
+      "veredicto_humano": "defecto",
+      "nota_humana": "Falta definir y cocinar correctamente el pescado, además de unificar su peso y especie. El ñame cambia de 305 a 255 g y carece de instrucciones de cocción previa. También debe aclararse si la tayota se sirve fría o caliente."
     },
     {
       "id": "4f073559b3",
@@ -1588,8 +1588,8 @@
       "maquina_juez": [
         "combo_absurdo: Bollitos de plátano verde con salsa criolla, huevo escalfado y sardinas acompañados de '¼ taza de granola... como toque crocante':"
       ],
-      "veredicto_humano": "",
-      "nota_humana": ""
+      "veredicto_humano": "defecto",
+      "nota_humana": "La granola parece un ingrediente contaminante y debe eliminarse o justificarse. También hay que repartir el aceite entre los bollitos y la salsa, ajustar la cantidad de queso y eliminar la instrucción duplicada sobre las sardinas."
     },
     {
       "id": "55fef36cd9",
@@ -1621,8 +1621,8 @@
       "maquina_juez": [
         "nombre_no_corresponde: El plato se llama 'tortitas de mozzarella... con ensalada de aceitunas' y la receta instruye rallar la mozzarella y rebajar aceitu"
       ],
-      "veredicto_humano": "",
-      "nota_humana": ""
+      "veredicto_humano": "defecto",
+      "nota_humana": "Faltan por completo las aceitunas y la mezcla de las tortitas carece de un aglutinante claro. Debe añadirse una cantidad exacta de aceitunas y probarse la estructura, incorporando un aglutinante medido si las tortitas no mantienen su forma."
     },
     {
       "id": "69d4dcbd6f",
@@ -1651,8 +1651,8 @@
       "maquina_juez": [
         "paso_incoherente: Los pasos de la receta indican agregar el huevo crudo directamente a la licuadora junto con la toronja, la leche y el hielo, y lic"
       ],
-      "veredicto_humano": "",
-      "nota_humana": ""
+      "veredicto_humano": "defecto",
+      "nota_humana": "El huevo crudo no debe licuarse: debe eliminarse del batido o cocinarse completamente y servirse aparte. Además, la combinación directa de toronja y leche necesita una prueba de estabilidad o reformulación. No es segura ni coherente en su estado actual."
     },
     {
       "id": "77c78d3990",
@@ -1679,8 +1679,8 @@
       "maquina_juez": [
         "nombre_no_corresponde: El nombre declara 'huevo, mango y maní', pero la lista de ingredientes no incluye ni el maní ni las pasas que el mise en place y e"
       ],
-      "veredicto_humano": "",
-      "nota_humana": ""
+      "veredicto_humano": "ok",
+      "nota_humana": "Ajuste recomendado: si se prepara con anticipación, guardar la avena tostada en un recipiente separado y añadirla al consumir; dentro del yogur perderá rápidamente la textura crujiente. Una cucharadita de canela también puede resultar intensa, pero es una cuestión de preferencia."
     },
     {
       "id": "7ef0b23dd8",
@@ -1718,8 +1718,8 @@
         "nombre_no_corresponde: El nombre declara '...y aceitunas' y la receta indica rebaniarlas y distribuirlas sobre el guiso, pero las aceitunas no aparecen e",
         "tecnica_impropia: El plato usa lentejas SECAS, pero la receta las agrega al sofrito y las cocina solo 4 minutos — un tiempo de cocción imposible par"
       ],
-      "veredicto_humano": "",
-      "nota_humana": ""
+      "veredicto_humano": "defecto",
+      "nota_humana": "Exceso de agua para la masa; falta cocción previa y agua para las lentejas secas; aceitunas sin cantidad ni presencia en ingredientes; cilantro sin uso; medidas ambiguas de orégano, limón y cilantro. Especificar tamaño de las tres mini arepitas."
     },
     {
       "id": "8474cf4488",
@@ -1753,8 +1753,8 @@
       "maquina_juez": [
         "combo_absurdo: Wrap salado de queso de hoja, rábano y tomate con '15 g de granola' espolvoreada dentro: no existe patrón culinario que incorpore "
       ],
-      "veredicto_humano": "",
-      "nota_humana": ""
+      "veredicto_humano": "defecto",
+      "nota_humana": "Relleno excesivo para dos tortillas: revisar 250 g de rábano y 3 tomates. Especificar peso de tomates y tamaño de tortillas; revisar ¼ cdta de cebolla; identificar el queso como queso de hoja e incorporar el orégano en los pasos."
     },
     {
       "id": "84c2e6d4f0",
@@ -1790,8 +1790,8 @@
       "maquina_juez": [
         "slot_inapropiado: La pasta integral es el plato base de la cena; la regla dura de horario reserva arroz/moro/pasta como base exclusivamente para el "
       ],
-      "veredicto_humano": "",
-      "nota_humana": ""
+      "veredicto_humano": "defecto",
+      "nota_humana": "Falta tofu y su cantidad en ingredientes; tomate sin uso; volumen elevado para una porción individual. Especificar edamame desgranado y estado de cocción, pasta seca en gramos y cocción suficiente de los vegetales. Corregir el paso de la batata, declarada ya cocida."
     },
     {
       "id": "0006d5207d",
@@ -1820,8 +1820,8 @@
       ],
       "maquina_determinista": [],
       "maquina_juez": [],
-      "veredicto_humano": "",
-      "nota_humana": ""
+      "veredicto_humano": "defecto",
+      "nota_humana": "La receta indica una sola rebanada, pero habla de “tostadas” en plural. Además, 250 g de champiñones requieren más tiempo para perder el exceso de agua; se recomienda añadir el ajo después para evitar que se queme."
     },
     {
       "id": "00c6bc53c7",
@@ -1842,7 +1842,7 @@
       ],
       "maquina_determinista": [],
       "maquina_juez": [],
-      "veredicto_humano": "",
+      "veredicto_humano": "ok",
       "nota_humana": ""
     },
     {
@@ -1868,8 +1868,8 @@
       ],
       "maquina_determinista": [],
       "maquina_juez": [],
-      "veredicto_humano": "",
-      "nota_humana": ""
+      "veredicto_humano": "defecto",
+      "nota_humana": "Falta indicar si la avena es instantánea, cocida o remojada y durante cuánto tiempo. También debe especificarse linaza molida y eliminar o condicionar la afirmación absoluta sobre cubrir el omega‑3 diario."
     },
     {
       "id": "01b41535b1",
@@ -1901,8 +1901,8 @@
       ],
       "maquina_determinista": [],
       "maquina_juez": [],
-      "veredicto_humano": "",
-      "nota_humana": ""
+      "veredicto_humano": "defecto",
+      "nota_humana": "Falta asignar la mitad restante del aceite y aclarar si ½ ají y 50 g de ají cubanela son ingredientes distintos o un duplicado. También conviene verificar la elevada cantidad de arroz crudo para una sola porción."
     },
     {
       "id": "01c22c6847",
@@ -1937,8 +1937,8 @@
       ],
       "maquina_determinista": [],
       "maquina_juez": [],
-      "veredicto_humano": "",
-      "nota_humana": ""
+      "veredicto_humano": "defecto",
+      "nota_humana": "Las legumbres figuran secas, pero el procedimiento asume que ya están cocidas y no incluye remojo ni cocción. Deben cambiarse a pesos cocidos o añadirse instrucciones completas. También falta utilizar la mitad restante del aceite y corregir las medidas de cilantro y comino."
     },
     {
       "id": "01c46fd2a5",
@@ -1967,8 +1967,8 @@
       ],
       "maquina_determinista": [],
       "maquina_juez": [],
-      "veredicto_humano": "",
-      "nota_humana": ""
+      "veredicto_humano": "defecto",
+      "nota_humana": "La cantidad de pan no coincide con el plural “tostadas” y el cilantro queda sin utilizar. También debe verificarse el tiempo de horneado por el volumen y la humedad de tres tomates, además de indicar que el recipiente se engrase."
     },
     {
       "id": "02068c1382",
@@ -1996,8 +1996,8 @@
       ],
       "maquina_determinista": [],
       "maquina_juez": [],
-      "veredicto_humano": "",
-      "nota_humana": ""
+      "veredicto_humano": "defecto",
+      "nota_humana": "La receta declara dos tortillas, pero el procedimiento solo utiliza una y prepara un burrito. Debe eliminarse una tortilla o indicar que se elaboran dos unidades. También hay que unificar el corte de la cebolla y corregir las medidas del cilantro y el orégano."
     },
     {
       "id": "023da1766e",
@@ -2023,8 +2023,8 @@
       ],
       "maquina_determinista": [],
       "maquina_juez": [],
-      "veredicto_humano": "",
-      "nota_humana": ""
+      "veredicto_humano": "defecto",
+      "nota_humana": "Faltan los frijoles horneados y el kétchup en la lista de ingredientes. El calabacín parece estar duplicado en unidades y gramos, y la cantidad de pollo necesita un peso exacto. La receta no puede curarse hasta unificar esas cantidades."
     },
     {
       "id": "023e151c4e",
@@ -2054,8 +2054,8 @@
       ],
       "maquina_determinista": [],
       "maquina_juez": [],
-      "veredicto_humano": "",
-      "nota_humana": ""
+      "veredicto_humano": "defecto",
+      "nota_humana": "Receta duplicada. Falta definir el agua y el rendimiento de las empanadas; además, debe aclararse si los 25 g de soya corresponden al peso seco o cocido."
     },
     {
       "id": "028ad9ed64",
@@ -2088,8 +2088,8 @@
       ],
       "maquina_determinista": [],
       "maquina_juez": [],
-      "veredicto_humano": "",
-      "nota_humana": ""
+      "veredicto_humano": "defecto",
+      "nota_humana": "La harina de trigo queda sin utilizar y es necesaria para dar estructura a la masa. Debe incorporarse explícitamente y revisarse la proporción de 120 ml de agua para evitar una mezcla demasiado líquida. También hay que corregir el formato de las especias y el cilantro."
     },
     {
       "id": "028f7003f6",
@@ -2114,8 +2114,8 @@
       ],
       "maquina_determinista": [],
       "maquina_juez": [],
-      "veredicto_humano": "",
-      "nota_humana": ""
+      "veredicto_humano": "defecto",
+      "nota_humana": "La preparación es coherente, pero debe especificarse linaza molida y comprobarse contra el plan diario tanto la cantidad de yogur como la afirmación de cubrir el omega‑3. Si esos datos están validados, puede marcarse como correcta."
     },
     {
       "id": "0338feb3a9",
@@ -2146,8 +2146,8 @@
       ],
       "maquina_determinista": [],
       "maquina_juez": [],
-      "veredicto_humano": "",
-      "nota_humana": ""
+      "veredicto_humano": "defecto",
+      "nota_humana": "Debe unificarse el número de tortillas y definirse la cantidad de agua para los crocantes. También hay que verificar que el volumen de 215 g de calamar y vegetales sea compatible con un solo wrap."
     },
     {
       "id": "033afcafbf",
@@ -2176,8 +2176,8 @@
       ],
       "maquina_determinista": [],
       "maquina_juez": [],
-      "veredicto_humano": "",
-      "nota_humana": ""
+      "veredicto_humano": "defecto",
+      "nota_humana": "El aceite se consume por completo antes de cocinar el conejo y la mitad del ajo queda sin usar. Además, la marinada cruda debe hervirse antes de convertirse en salsa y la cocción del conejo debe verificarse mediante temperatura interna, no solamente por tiempo."
     },
     {
       "id": "03c57e55a5",
@@ -2200,8 +2200,8 @@
       ],
       "maquina_determinista": [],
       "maquina_juez": [],
-      "veredicto_humano": "",
-      "nota_humana": ""
+      "veredicto_humano": "defecto",
+      "nota_humana": "Falta el paso de tostar el pan. Las cantidades de semillas y mantequilla de maní deben expresarse en medidas prácticas, y conviene comprobar que la elevada porción de yogur corresponde al objetivo nutricional."
     },
     {
       "id": "03e16ec7fb",
@@ -2229,8 +2229,8 @@
       ],
       "maquina_determinista": [],
       "maquina_juez": [],
-      "veredicto_humano": "",
-      "nota_humana": ""
+      "veredicto_humano": "defecto",
+      "nota_humana": "El número de tortillas no coincide con el rendimiento: se declaran dos, pero solo se prepara un wrap. Debe cambiarse a una tortilla o indicar claramente la preparación de dos unidades y la distribución del relleno."
     },
     {
       "id": "045b2e2131",
@@ -2260,8 +2260,8 @@
       ],
       "maquina_determinista": [],
       "maquina_juez": [],
-      "veredicto_humano": "",
-      "nota_humana": ""
+      "veredicto_humano": "defecto",
+      "nota_humana": "El pan presenta una discrepancia de una frente a dos rebanadas. Además, la preparación utiliza toda la canela en el huevo y luego menciona una cantidad restante inexistente. Debe corregirse la distribución y validarse la afirmación sobre vitamina E."
     },
     {
       "id": "049c5eb771",
@@ -2283,8 +2283,8 @@
       ],
       "maquina_determinista": [],
       "maquina_juez": [],
-      "veredicto_humano": "",
-      "nota_humana": ""
+      "veredicto_humano": "ok",
+      "nota_humana": "Único ajuste opcional: expresar ¼ de cucharada de mantequilla de almendras como ¾ de cucharadita, porque es más fácil de medir."
     },
     {
       "id": "049fbef8b5",
@@ -2313,8 +2313,8 @@
       ],
       "maquina_determinista": [],
       "maquina_juez": [],
-      "veredicto_humano": "",
-      "nota_humana": ""
+      "veredicto_humano": "defecto",
+      "nota_humana": "La yuca no puede cocinarse desde cruda únicamente 4–5 minutos en la plancha; debe hervirse previamente. Además, no coinciden los pesos de yuca ni la cantidad de cebolla, y debe aclararse el estado del edamame."
     },
     {
       "id": "04d25439d9",
@@ -2346,8 +2346,8 @@
       ],
       "maquina_determinista": [],
       "maquina_juez": [],
-      "veredicto_humano": "",
-      "nota_humana": ""
+      "veredicto_humano": "defecto",
+      "nota_humana": "Falta el ajo en los ingredientes y el ají aparece duplicado o triplicado con cantidades incompatibles. Debe conservarse una sola cantidad exacta de ají morrón, añadir la medida del ajo y corregir el formato de cilantro y orégano."
     },
     {
       "id": "04e303030f",
@@ -2374,8 +2374,8 @@
       ],
       "maquina_determinista": [],
       "maquina_juez": [],
-      "veredicto_humano": "",
-      "nota_humana": ""
+      "veredicto_humano": "ok",
+      "nota_humana": "Ajuste opcional: especificar el tipo de yogur —natural, griego, entero o descremado y sin azúcar— para mantener precisión nutricional."
     },
     {
       "id": "04eb731253",
@@ -2403,8 +2403,8 @@
       ],
       "maquina_determinista": [],
       "maquina_juez": [],
-      "veredicto_humano": "",
-      "nota_humana": ""
+      "veredicto_humano": "defecto",
+      "nota_humana": "La cantidad de aceite no coincide, debe definirse si el queso es realmente queso de freír y aclararse si la soya está seca o cocida. También deben revisarse las cantidades excesivas de tayota y cilantro para una sola porción."
     },
     {
       "id": "050a6b5a97",
@@ -2429,8 +2429,8 @@
       ],
       "maquina_determinista": [],
       "maquina_juez": [],
-      "veredicto_humano": "",
-      "nota_humana": ""
+      "veredicto_humano": "ok",
+      "nota_humana": "Observación opcional: produce aproximadamente 800–900 ml, una porción bastante grande. Conviene indicar el rendimiento o confirmar que todo corresponde a un solo desayuno. También sería más claro decir “utiliza la mitad del ½ kiwi y reserva el resto”."
     },
     {
       "id": "0547761d8a",
@@ -2456,8 +2456,8 @@
       ],
       "maquina_determinista": [],
       "maquina_juez": [],
-      "veredicto_humano": "",
-      "nota_humana": ""
+      "veredicto_humano": "ok",
+      "nota_humana": "Aclarar si el plátano se hornea pelado o con la cáscara.\nConfirmar los 413 g de coles de Bruselas, porque es una guarnición muy grande para una sola cena.\nIndicar que se hornee hasta que el plátano esté tierno, extendiendo el tiempo si 25 minutos no bastan."
     },
     {
       "id": "05f6ea7c63",
@@ -2478,8 +2478,8 @@
       ],
       "maquina_determinista": [],
       "maquina_juez": [],
-      "veredicto_humano": "",
-      "nota_humana": ""
+      "veredicto_humano": "ok",
+      "nota_humana": "Corregir “1 canela en polvo ¼ cucharadita” por “¼ cdta de canela en polvo”.\nPor ser grab-and-go, indicar que se guarde en un recipiente con tapa y se mantenga refrigerado."
     },
     {
       "id": "060b4fda6a",
@@ -2509,8 +2509,8 @@
       ],
       "maquina_determinista": [],
       "maquina_juez": [],
-      "veredicto_humano": "",
-      "nota_humana": ""
+      "veredicto_humano": "defecto",
+      "nota_humana": "Las habichuelas figuran secas, pero el procedimiento las trata como cocidas. Deben incluirse instrucciones completas de remojo y cocción o declararse directamente en peso cocido. También debe corregirse el método de tostado y unificarse el número de rebanadas."
     }
   ]
 }
