@@ -970,6 +970,42 @@ _STEP_GRAMS_MENTION_RE = re.compile(
     re.IGNORECASE)
 
 
+# [P1-STEP-NAME-TAIL · 2026-09-07] La forma humanizada que YA termina en gramos no lleva otra
+# cifra detrás: «Yogurt griego sin azúcar 150g (95 g)» son dos pesos que se contradicen dentro de
+# la misma frase, y el usuario no tiene forma de saber cuál obedecer.
+_YA_TRAE_GRAMOS_RE = re.compile(r"\d+(?:[.,]\d+)?\s*(?:g|gr|gramos)\b\s*\)?\s*$", re.IGNORECASE)
+
+
+def _fin_del_nombre(step: str, ini: int, fin_regex: int, food_ing: str) -> int:
+    """Dónde acaba REALMENTE el nombre del alimento dentro del paso.
+
+    `_STEP_GRAMS_MENTION_RE` captura como mucho tres palabras, así que con un nombre más largo
+    («yogurt griego sin azúcar») el tramo se queda corto y la cola sobrevive a la sustitución.
+    Aquí se extiende palabra a palabra **mientras el paso siga reproduciendo el nombre de ESE
+    ingrediente** — nunca una palabra más, así que «40 g de semillas de linaza en lonjas» sigue
+    conservando «en lonjas», que no es parte del nombre.
+
+    Devuelve `fin_regex` si no hay nada que extender (caso mayoritario) o si algo no encaja: el
+    comportamiento previo es el fallback, no una excepción.
+    """
+    try:
+        objetivo = [t for t in re.split(r"[^\wáéíóúñü]+", strip_accents(str(food_ing).lower())) if t]
+        if not objetivo:
+            return fin_regex
+        consumido, i = ini, 0
+        for mw in re.finditer(r"[\wáéíóúñü]+", step[ini:]):
+            if i >= len(objetivo):
+                break
+            if strip_accents(mw.group(0).lower()) != objetivo[i]:
+                break
+            i += 1
+            consumido = ini + mw.end()
+        # Sin ni una palabra en común no sabemos nada: comportamiento previo.
+        return consumido if i else fin_regex
+    except Exception:
+        return fin_regex
+
+
 def sync_recipe_steps_to_household(meal: dict) -> int:
     """[P2-STEP-HOUSEHOLD-SYNC · 2026-07-01] (audit v2 recetas GAP-5, batch P2-AUDIT-V2-BATCH)
     Armoniza las UNIDADES entre lista y pasos: `humanize_ingredient` convierte la LISTA a medida
@@ -1011,7 +1047,10 @@ def sync_recipe_steps_to_household(meal: dict) -> int:
             if tok in token_map:
                 ambiguous.add(tok)
                 continue
-            token_map[tok] = (raw_qty, h_s)
+            # [P1-STEP-NAME-TAIL · 2026-09-07] se guarda además el NOMBRE del ingrediente
+            # (`m.group(2)`, sin acentos ni caso) para poder acotar por él el tramo que se
+            # sustituye en el paso — ver `_fin_del_nombre`.
+            token_map[tok] = (raw_qty, h_s, food)
         for tok in ambiguous:
             token_map.pop(tok, None)
         if not token_map:
@@ -1024,21 +1063,37 @@ def sync_recipe_steps_to_household(meal: dict) -> int:
                 new_steps.append(step)
                 continue
 
-            def _sub(mm):
-                nonlocal fixed
+            # [P1-STEP-NAME-TAIL · 2026-09-07] Se reconstruye a mano en vez de con `.sub`: el
+            # callback de `sub` solo puede reemplazar el tramo que caso la regex, y ese tramo se
+            # queda CORTO cuando el nombre del alimento tiene más de tres palabras («yogurt griego
+            # sin azúcar» → captura «yogurt griego sin»). Escribir la forma humanizada sobre ese
+            # tramo dejaba «azúcar» colgando detrás del paréntesis: 24 de 1.194 comidas vivas.
+            piezas, cursor = [], 0
+            for mm in _STEP_GRAMS_MENTION_RE.finditer(step):
+                if mm.start() < cursor:
+                    continue
                 food_m = strip_accents(mm.group(2).strip().lower())
                 toks_m = [t for t in re.split(r"[^\wáéíóúñü]+", food_m) if len(t) >= 4]
+                entry = None
                 for ft in toks_m[:2]:
-                    entry = token_map.get(ft)
-                    if entry:
-                        raw_qty, human = entry
-                        if mm.group(1).replace(",", ".") == raw_qty:
-                            fixed += 1
-                            return f"{human} ({mm.group(1)} g)"
+                    if ft in token_map:
+                        entry = token_map[ft]
                         break
-                return mm.group(0)
-
-            new_steps.append(_STEP_GRAMS_MENTION_RE.sub(_sub, step))
+                    if ft in ambiguous:
+                        break
+                if not entry or mm.group(1).replace(",", ".") != entry[0]:
+                    continue
+                raw_qty, human, food_ing = entry
+                fin = _fin_del_nombre(step, mm.start(2), mm.end(2), food_ing)
+                # El gramaje solo se añade si la forma humanizada no lo trae ya: «Yogurt griego
+                # sin azúcar 150g (95 g)» son dos cifras que se contradicen (32 comidas vivas).
+                cola = "" if _YA_TRAE_GRAMOS_RE.search(human) else f" ({mm.group(1)} g)"
+                piezas.append(step[cursor:mm.start()])
+                piezas.append(f"{human}{cola}")
+                cursor = fin
+                fixed += 1
+            piezas.append(step[cursor:])
+            new_steps.append("".join(piezas) if fixed else step)
         if fixed:
             meal["recipe"] = new_steps
         return fixed
