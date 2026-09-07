@@ -1006,6 +1006,54 @@ def _fin_del_nombre(step: str, ini: int, fin_regex: int, food_ing: str) -> int:
         return fin_regex
 
 
+def _pares_display_raw(ings, raws) -> list:
+    """Empareja cada línea humanizada con su línea CRUDA — por índice solo si de verdad alinean.
+
+    [P1-HUMANIZE-RAW-BY-FOOD · 2026-09-07] Este pase cruzaba las dos listas por posición con la
+    sola guarda de que midieran igual. `P2-RAW-PAIR-BY-FOOD` ya había medido que eso no basta —el
+    reconciliador reconstruye `ingredients_raw` como `[conservadas] + [añadidas]`, preservando el
+    largo y cambiando el orden— y `P1-DM-RAW-BY-FOOD` migró los pases de `graph_orchestrator` al
+    contrato by-food creyendo cerrar el último. Éste vive en otro fichero y se quedó fuera: en la
+    flota, 699 de 1.172 comidas (59,6 %) tenían las listas desalineadas, y la función escribía
+    «corta 25 g de avena (115 g)» donde el paso decía «corta 115 g de lechosa».
+
+    Mismo criterio y mismo sesgo conservador que sus hermanos: índice con paralelismo VERIFICADO;
+    si no, por alimento; 0 o >1 coincidencias ⇒ esa línea no entra al mapa (escribir el alimento
+    equivocado es peor que no armonizar la unidad).
+
+    El import es local a propósito: `graph_orchestrator` importa este módulo, no al revés. Si no
+    se puede importar, se cae a la conducta previa en vez de dejar de funcionar.
+    """
+    try:
+        from graph_orchestrator import (_raw_display_parallel_by_food,
+                                        _resolve_line_food_grams)
+    except Exception:
+        return list(zip(ings, raws))            # sin el contrato de la casa, conducta previa
+    try:
+        _disp = [str(x) for x in ings]
+        if _raw_display_parallel_by_food(_disp, raws):
+            return list(zip(ings, raws))
+        # Se resuelve cada línea display UNA vez: `_resolve_line_food_grams` memoiza, pero
+        # dejarlo en el bucle interno esconde una cuadrática detrás de la caché.
+        _por_alimento = {}
+        for _d in _disp:
+            _fd, _ = _resolve_line_food_grams(_d, cheap=True)
+            if _fd:
+                _por_alimento.setdefault(_fd, []).append(_d)
+        _fuera = []
+        for _r in raws:
+            _fr, _ = _resolve_line_food_grams(str(_r), cheap=True)
+            if not _fr:
+                continue
+            _hits = _por_alimento.get(_fr) or []
+            if len(_hits) != 1:
+                continue                        # 0 → no está; >1 → ambiguo, no adivinamos
+            _fuera.append((_hits[0], _r))
+        return _fuera
+    except Exception:
+        return []                               # ante la duda, no reescribir nada
+
+
 def sync_recipe_steps_to_household(meal: dict) -> int:
     """[P2-STEP-HOUSEHOLD-SYNC · 2026-07-01] (audit v2 recetas GAP-5, batch P2-AUDIT-V2-BATCH)
     Armoniza las UNIDADES entre lista y pasos: `humanize_ingredient` convierte la LISTA a medida
@@ -1031,7 +1079,7 @@ def sync_recipe_steps_to_household(meal: dict) -> int:
             return 0
         token_map = {}
         ambiguous = set()
-        for h, r in zip(ings, raws):
+        for h, r in _pares_display_raw(ings, raws):
             h_s, r_s = str(h).strip(), str(r).strip()
             if not h_s or h_s == r_s:
                 continue
