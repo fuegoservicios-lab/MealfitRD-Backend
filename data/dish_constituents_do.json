@@ -1897,6 +1897,10 @@
         {
           "grams": 7.0,
           "name": "Aceite vegetal"
+        },
+        {
+          "grams": 2.0,
+          "name": "Sazón con culantro y achiote"
         }
       ],
       "declared_unresolved": [],

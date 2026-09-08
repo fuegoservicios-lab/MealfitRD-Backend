@@ -81,7 +81,13 @@ CURATED: dict[str, list] = {
     "Pastelón de yuca con pollo desmenuzado": [(I, "Yuca", 200), (I, "Pechuga de pollo", 120), (I, "Queso blanco", 30), (I, "Cebolla", 20)],
     "Pescado guisado a la criolla con arroz blanco": [(R, "pescado guisado", 1.0), (R, "arroz blanco", 1.0)],
     "Camarones guisados con moro de guandules": [(I, "Camarones", 130), (I, "Tomate", 60), (I, "Cebolla", 20), (I, "Ajo", 4), (R, "moro de gandules", 1.0)],
-    "Pollo horneado al limón con arroz amarillo": [(R, "pollo al horno", 1.0), (I, "Limón", 15), (R, "arroz blanco", 1.0)],
+    # [P1-REGISTRY-COLOR-PROMETE · 2026-09-08] El título promete arroz AMARILLO y no traía nada que
+    # lo pusiera amarillo: el limón no da color. Lo vio el dueño juzgando la biblioteca a ciegas, y
+    # ofreció las dos salidas — «añadir un ingrediente que aporte color con su cantidad en la lista
+    # o cambiar el nombre». Se añade, porque `Sazón con culantro y achiote` es **0 kcal**: hace
+    # honesto el título y mejor el plato sin mover un solo macro. Renombrar habría tocado además un
+    # baseline histórico del 18-ago, que no se reescribe.
+    "Pollo horneado al limón con arroz amarillo": [(R, "pollo al horno", 1.0), (I, "Limón", 15), (R, "arroz blanco", 1.0), (I, "Sazón con culantro y achiote", 2)],
     "Res mechada con puré de papa": [(R, "carne de res guisada", 1.0), (R, "pure de papa", 1.0)],
     "Chuleta de cerdo a la plancha con moro de habichuelas": [(I, "Cerdo", 140), (I, "Aceite vegetal", 5), (R, "moro", 1.0)],
     "Espaguetis criollos con pollo desmenuzado": [(R, "espagueti guisado", 1.0), (I, "Pechuga de pollo", 100)],
