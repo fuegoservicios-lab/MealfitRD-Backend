@@ -106,3 +106,43 @@ dia = [{"day": 1, "meals": [{
 }]}]
 go._cap_unrealistic_portions(dia)   # raw pasa de 300 g a 222 g
 ```
+
+## Segundo intento, también revertido (2026-09-08, misma sesión)
+
+La regla parecía la buena, y su propiedad se demuestra sin medir:
+
+```
+factor_raw = min(1.0, max(factor_display, objetivo / gramos_raw))
+```
+
+El `max` acota por abajo con el factor del display, así que **lo que se aplica a la compra nunca es
+más agresivo que lo que se aplica a la receta** — los recortes brutales no pueden aumentar por
+construcción. Y contra la flota funcionaba: la lechosa pasaba de comprar 222 g a comprar 300, las
+líneas tocadas bajaban de 48 a 38, y los recortes brutales se quedaban en 1 (el legítimo: 1.599 g de
+calabacín al techo).
+
+**Se revirtió igual: rompía 12 tests que ya existían.**
+
+### Los tres errores, en orden
+
+1. **El helper construía su propia `IngredientNutritionDB`.** Resolvía los gramos con OTRA vara que
+   el propio cap y abría el pool por su cuenta — tres errores de pool por línea capada en cualquier
+   test. Pasar el `db` del llamador lo arregló a medias.
+2. **«Cero líneas tocadas» se leía como «no encontré el alimento».** La primera versión devolvía
+   1,0 («ya está en el techo, nada que hacer»), el mapeo por alimento no cambiaba nada, y el `elif`
+   caía al fallback por índice con el factor original. El arreglo se deshacía solo — y las cifras
+   agregadas no lo delataban (48 → 42, brutales 1 → 1: con pinta de sano). Sólo se vio mirando el
+   caso concreto que el arreglo existía para resolver.
+3. **Aun con los dos anteriores corregidos, seguían rojos `test_milk_capped_at_two_cups` y los de
+   densidad.** El cap tiene ~12 ramas y el ajuste interfiere con varias por vías que no acabé de
+   aislar.
+
+### Por qué se para aquí y no en el tercer intento
+
+El daño real son **seis platos que compran 105 g de lechosa de menos**, sin efecto en macros (los
+macros salen del display, que el usuario lee, y ése sí queda correcto). Enfrente: un cap con doce
+ramas y una batería de tests que lo defienden bien.
+
+*Un defecto real y un defecto que merece este riesgo no son lo mismo.* Si alguien retoma esto, el
+camino no es una tercera variante de la fórmula: es separar las ramas del cap para que cada una
+declare su techo absoluto, y entonces la convergencia sale sola.
