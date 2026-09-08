@@ -1961,6 +1961,7 @@ def _resolver_alerta_deploy(alert_key: str) -> None:
             "SELECT 1 AS alerta_abierta FROM system_alerts "
             "WHERE alert_key = %s AND resolved_at IS NULL LIMIT 1",
             (alert_key,),
+            fetch_all=True,   # [P1-FETCH-EXPLICIT] sin esto, un WARNING por tick horario
         )
         # `execute_sql_query` devuelve una LISTA de filas contra la DB real (`[{'alerta_abierta': 1}]`)
         # y algunos tests la mockean como dict suelto. Mi primera versión sólo aceptaba dict y por eso
