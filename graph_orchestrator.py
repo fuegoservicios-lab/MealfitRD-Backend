@@ -32277,9 +32277,15 @@ def _repair_name_phantom_dairy(days: list) -> list:
                                     _new_pd = _re.sub(r"^\s*\d+(?:[.,]\d+)?", str(NAME_PHANTOM_DAIRY_G),
                                                       _s_pd, count=1)
                                     ings[_i_pd] = _new_pd
-                                    if isinstance(raw, list) and _i_pd < len(raw) and isinstance(raw[_i_pd], str):
-                                        raw[_i_pd] = _re.sub(r"^\s*\d+(?:[.,]\d+)?",
-                                                             str(NAME_PHANTOM_DAIRY_G), raw[_i_pd], count=1)
+                                    # [P1-PHANTOM-DAIRY-RAW-BY-FOOD · 2026-09-07] por ALIMENTO y solo
+                                    # si raw TAMBIÉN viene en gramos: con el índice ciego la compra
+                                    # salía «30 huevos», «30 dientes de ajo», «30 limones».
+                                    _ri_pd = _raw_idx_for_display(raw, _s_pd, _i_pd, ings)
+                                    _mg_rw = _re.match(r"^\s*(\d+(?:[.,]\d+)?)\s*(?:g|gr|gramos)",
+                                                       str(raw[_ri_pd])) if _ri_pd is not None else None
+                                    if _mg_rw and float(_mg_rw.group(1).replace(",", ".")) < float(NAME_PHANTOM_DAIRY_G):
+                                        raw[_ri_pd] = _re.sub(r"^\s*\d+(?:[.,]\d+)?",
+                                                              str(NAME_PHANTOM_DAIRY_G), raw[_ri_pd], count=1)
                                     out.append({"day": day.get("day"), "meal": str(meal.get("name") or "?"),
                                                 "food": tok, "line": _new_pd, "bumped_from_g": _cur_pd})
                                     logger.info(f"🧀 [P1-MENU-COHERENCE-2] lácteo del NOMBRE bump "
@@ -32776,30 +32782,22 @@ def _sync_one_raw_line(meal: dict, idx: int, display_old: str, factor: float) ->
         # `except` de abajo → el sync devolvía False siempre y raw no se escribía nunca. Lo cazó la
         # regresión funcional, no el except. Por eso el except ahora LOGUEA (ver abajo).
         from nutrition_db import rescale_ingredient_string
-        _ings = meal.get("ingredients") or []
-        _parallel = (isinstance(_ings, list) and len(_raw) == len(_ings)
-                     and (not RAW_PAIR_BY_FOOD
-                          or _raw_display_parallel_by_food([str(x) for x in _ings], _raw)))
-        if _parallel and 0 <= idx < len(_raw) and isinstance(_raw[idx], str):
-            _nr = rescale_ingredient_string(_raw[idx], factor)
-            if _nr:
-                _raw[idx] = _nr
-                return True
+        # [P1-PHANTOM-DAIRY-RAW-BY-FOOD · 2026-09-07] Esta era la TERCERA copia del mismo lookup
+        # (paralelismo verificado → índice; si no, por alimento con coincidencia única). Tenerlo
+        # repetido es el mecanismo por el que unos sitios se arreglan y otros no — lo vivimos hoy
+        # entre julio y ahora. `MICRO_CLOSER_RAW_BY_FOOD` sigue apagando SOLO el mapeo by-food,
+        # que es lo que documenta: con el knob off, un índice distinto del propio no se escribe.
+        _i = _raw_idx_for_display(_raw, display_old, idx, meal.get("ingredients") or [])
+        if _i is None or not isinstance(_raw[_i], str):
             return False
-        if not MICRO_CLOSER_RAW_BY_FOOD:
+        if _i != idx and not MICRO_CLOSER_RAW_BY_FOOD:
             return False
-        _food, _ = _resolve_line_food_grams(str(display_old), cheap=True)
-        if not _food:
-            return False
-        _hits = [i for i, r in enumerate(_raw)
-                 if isinstance(r, str) and _resolve_line_food_grams(r, cheap=True)[0] == _food]
-        if len(_hits) != 1:
-            return False  # 0 → nada que escalar; >1 → ambiguo, no adivinamos
-        _nr = rescale_ingredient_string(_raw[_hits[0]], factor)
+        _nr = rescale_ingredient_string(_raw[_i], factor)
         if not _nr:
             return False
-        _raw[_hits[0]] = _nr
-        meal["_closer_raw_by_food"] = int(meal.get("_closer_raw_by_food") or 0) + 1
+        _raw[_i] = _nr
+        if _i != idx:
+            meal["_closer_raw_by_food"] = int(meal.get("_closer_raw_by_food") or 0) + 1
         return True
     except Exception as _sr_e:
         # NUNCA mudo: un fallo aquí significa que el panel y la lista de compras se quedan con la
