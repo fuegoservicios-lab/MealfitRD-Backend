@@ -1932,6 +1932,53 @@ def _parse_pfix_marker(marker: str | None) -> tuple[str, datetime] | None:
     return (m.group("prefix"), d)
 
 
+def _resolver_alerta_deploy(alert_key: str) -> None:
+    """[P2-DEPLOY-ALERT-SELF-RESOLVE · 2026-09-08] Cierra la alerta cuando su condición ya no existe.
+
+    `docs/system_alerts_resolution_table.md` prometía «cron re-eval tras bump» como resolver de
+    `deploy_lag_marker_stale` y `deploy_drift`. **Ese resolver no existía**: las dos ramas sólo
+    hacían INSERT ... ON CONFLICT con `resolved_at = NULL`, o sea REABRIR. Una vez encendidas se
+    quedaban encendidas para siempre.
+
+    Medido el 08-sep: `deploy_lag_marker_stale` llevaba abierta desde el 02-sep con el marcador ya
+    bumpeado tres veces ese mismo día y `drift=false` verificado en cada deploy. Un aviso que no
+    puede apagarse deja de ser un aviso — y la doc invitaba a confiar en que se apagaba solo.
+
+    Sólo cierra lo que este mismo cron abre, y sólo si estaba abierta. Fail-safe: si el UPDATE
+    falla, la alerta se queda como estaba (que es la conducta previa).
+    """
+    try:
+        # Se LEE antes de escribir a propósito. `test_p0_1_deploy_lag_detector` exige que un tick
+        # SANO no escriba nada, y tiene razón: este cron corre cada hora y una UPDATE de 0 filas en
+        # cada pasada sana es ruido permanente en la tabla por un caso que casi nunca ocurre. Los
+        # tests existentes codificaban una restricción que yo no había considerado — honrarla deja
+        # el arreglo mejor, no peor.
+        # Se comprueba la COLUMNA que se pidió, no la verdad del dict: `execute_sql_query` es
+        # compartido y un llamante que devuelva cualquier fila no-vacía no significa «hay una alerta
+        # abierta». Pedir un nombre propio y exigirlo es lo que distingue una respuesta a ESTA
+        # pregunta de una respuesta a otra.
+        fila = execute_sql_query(
+            "SELECT 1 AS alerta_abierta FROM system_alerts "
+            "WHERE alert_key = %s AND resolved_at IS NULL LIMIT 1",
+            (alert_key,),
+        )
+        # `execute_sql_query` devuelve una LISTA de filas contra la DB real (`[{'alerta_abierta': 1}]`)
+        # y algunos tests la mockean como dict suelto. Mi primera versión sólo aceptaba dict y por eso
+        # era INERTE en producción — verificado contra la base viva, no contra el mock.
+        if isinstance(fila, (list, tuple)):
+            fila = fila[0] if fila else None
+        if not (isinstance(fila, dict) and fila.get("alerta_abierta")):
+            return
+        execute_sql_write(
+            "UPDATE system_alerts SET resolved_at = NOW() "
+            "WHERE alert_key = %s AND resolved_at IS NULL",
+            (alert_key,),
+        )
+        logger.info(f"[P2-DEPLOY-ALERT-SELF-RESOLVE] {alert_key} cerrada: su condición ya no existe.")
+    except Exception as e:
+        logger.error(f"[P2-DEPLOY-ALERT-SELF-RESOLVE] no se pudo cerrar {alert_key!r}: {e}")
+
+
 def _alert_deploy_lag_marker_stale():
     """[P0-1-DEPLOY-LAG · 2026-05-10] Cron diario: detecta deriva de despliegue.
 
@@ -2051,6 +2098,8 @@ def _alert_deploy_lag_marker_stale():
             )
         except Exception as e:
             logger.error(f"[P0-1/DEPLOY-LAG] No se pudo persistir alerta stale: {e}")
+    else:
+        _resolver_alerta_deploy("deploy_lag_marker_stale")
 
     # ── Señal B: deploy_drift contra valor publicado en app_kv_store ────────
     # Si nadie publicó nunca el `expected_last_known_pfix`, este SELECT devuelve
@@ -2113,6 +2162,8 @@ def _alert_deploy_lag_marker_stale():
             )
         except Exception as e:
             logger.error(f"[P0-1/DEPLOY-LAG] No se pudo persistir alerta drift: {e}")
+    elif expected_marker:
+        _resolver_alerta_deploy("deploy_lag_drift_vs_expected")  # la CLAVE, no el alert_type
 
 
 # ---------------------------------------------------------------------------
