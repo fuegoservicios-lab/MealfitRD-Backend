@@ -43,6 +43,10 @@ _BACKEND = Path(__file__).resolve().parents[1]
 #             otro alimento) y para eso la sonda del 07-sep servía. Una que escribe bajo `sub` o
 #             `rescale` falla en SILENCIO (no arregla la línea que tocaba) y ahí era ciega: así se
 #             coló `_apply_budget_driver_aware_pass` con un 0 falso hasta el 08-sep.
+#             Y el razonamiento «sobreescribe entera ⇒ la sonda ruidosa aplica» tampoco basta si
+#             esa sonda no se verificó: `_cap_daily_whole_eggs` llevaba ese sello y escribía
+#             «3 claras de huevo» sobre «Sal al gusto» (P1-EGGCAP-RAW-BY-FOOD). Un veredicto vale
+#             lo que valga el instrumento, aunque el razonamiento sea bueno.
 # «no dispara» ni una activación sobre las 1.172 comidas vivas. NO es «escritura segura»: es que
 #             nunca corre. Un detector que no dispara nunca sale perfecto.
 _INVENTARIO = {
@@ -60,7 +64,7 @@ _INVENTARIO = {
         "_day_sodium_autofix":                     (1, "0 medido 07-sep · sobreescribe entera (sonda ruidosa aplica)"),
         "_cap_cheese_dumps_final":                 (1, "0 activaciones 08-sep · no dispara"),
         "_single_trip_fresh_substitute":           (1, "0 medido 07-sep · sobreescribe entera (sonda ruidosa aplica)"),
-        "_cap_daily_whole_eggs":                   (2, "0 medido 07-sep · sobreescribe entera (sonda ruidosa aplica)"),
+        "_cap_daily_whole_eggs":                   (2, "resuelto"),
         "_apply_budget_cheapen_pass":              (1, "resuelto"),
         "_apply_budget_driver_aware_pass":         (1, "resuelto"),
         "_baking_powder_cap_pass":                 (1, "0 activaciones 08-sep · no dispara"),

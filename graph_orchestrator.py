@@ -33855,10 +33855,8 @@ def _single_trip_fresh_substitute(days, db=None, *, effective=None, diet=None, d
 
 
 def _cap_daily_whole_eggs(days, db=None, *, max_whole: int = None) -> int:
-    """[P1-EGG-DAY-CAP · 2026-09-05] Máximo `max_whole` huevos ENTEROS por día (default EGG_DAY_MAX_WHOLE). La comida con
-    más huevo conserva hasta el tope; su exceso y los enteros de las DEMÁS comidas pasan a claras («3 huevos» →
-    «3 claras de huevo»). Truth-up de macros desde los strings; lockstep `ingredients_raw`. Marca `_egg_day_capped`.
-    Idempotente, fail-safe, muta in-place. Devuelve nº de líneas reescritas. tooltip-anchor: P1-EGG-DAY-CAP"""
+    """[P1-EGG-DAY-CAP · 2026-09-05] Máximo `max_whole` huevos ENTEROS por día (default EGG_DAY_MAX_WHOLE). La comida con más huevo conserva hasta el tope; su exceso y los enteros de las DEMÁS comidas pasan a claras («3 huevos» → «3 claras de huevo»). Truth-up de macros desde los strings. Marca `_egg_day_capped`. Idempotente, fail-safe, muta in-place. Devuelve nº de líneas reescritas.
+    [P1-EGGCAP-RAW-BY-FOOD · 2026-09-08] El «lockstep raw» que este docstring prometía era por ÍNDICE: escribió «3 claras de huevo» sobre la línea «Sal al gusto» de un plan vivo, y la de huevo real se quedó sin arreglar — las DOS mitades del mismo fallo. Ahora por ALIMENTO. tooltip-anchor: P1-EGG-DAY-CAP"""
     cap = int(EGG_DAY_MAX_WHOLE if max_whole is None else max_whole)
     if not days or cap <= 0:
         return 0
@@ -33889,13 +33887,13 @@ def _cap_daily_whole_eggs(days, db=None, *, max_whole: int = None) -> int:
                 else:
                     new_lines = [f"{count} claras de huevo"]
                 old = str(ings[idx])
-                ings[idx] = new_lines[0]
                 raw = m.get("ingredients_raw")
-                if isinstance(raw, list) and idx < len(raw):
-                    raw[idx] = new_lines[0]
+                _ri_eg = _raw_idx_for_display(raw, old, idx, ings)  # ANTES de mutar `ings`, desde la línea VIEJA
+                ings[idx] = new_lines[0]
+                if _ri_eg is not None:
+                    raw[_ri_eg] = new_lines[0]
                 for extra in new_lines[1:]:
-                    # [P1-DAYGEN-VEG-HARD-LINE · 2026-09-05] si el plato YA tiene una línea de claras, se SUMA ahí
-                    # («3 huevos + 3 claras + 1 clara» en la tortilla del plan vivo b40a3c48).
+                    # [P1-DAYGEN-VEG-HARD-LINE · 2026-09-05] si el plato YA tiene línea de claras, se SUMA ahí («3 huevos + 3 claras + 1 clara», tortilla del plan b40a3c48).
                     _mx = _re.match(r"^\s*(\d+)\s+claras?\b", str(extra), _re.IGNORECASE)
                     _merged = False
                     if _mx:
@@ -33905,9 +33903,10 @@ def _cap_daily_whole_eggs(days, db=None, *, max_whole: int = None) -> int:
                             if _mj:
                                 _tot = int(_mj.group(1)) + _add_n
                                 _new_ln = f"{_tot} claras de huevo"
+                                _ri_mg = _raw_idx_for_display(raw, _ln, _j, ings)
                                 ings[_j] = _new_ln
-                                if isinstance(raw, list) and _j < len(raw):
-                                    raw[_j] = _new_ln
+                                if _ri_mg is not None:
+                                    raw[_ri_mg] = _new_ln
                                 _merged = True
                                 break
                     if _merged:
