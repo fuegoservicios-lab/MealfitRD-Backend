@@ -88,7 +88,7 @@
         },
         {
           "grams": 15.0,
-          "name": "Pimiento morrón"
+          "name": "Ají morrón"
         },
         {
           "grams": 4.0,
@@ -176,7 +176,7 @@
         },
         {
           "grams": 12.0,
-          "name": "Pimiento morrón"
+          "name": "Ají morrón"
         }
       ],
       "declared_unresolved": [],
@@ -308,7 +308,7 @@
         },
         {
           "grams": 20.0,
-          "name": "Pimiento morrón"
+          "name": "Ají morrón"
         },
         {
           "grams": 40.0,
@@ -806,7 +806,7 @@
         },
         {
           "grams": 50.0,
-          "name": "Salami dominicano"
+          "name": "Salami"
         },
         {
           "grams": 60.0,
@@ -2034,7 +2034,7 @@
         },
         {
           "grams": 10.0,
-          "name": "Pimiento morrón"
+          "name": "Ají morrón"
         },
         {
           "grams": 2.5,
@@ -2160,7 +2160,7 @@
         },
         {
           "grams": 10.0,
-          "name": "Pimiento morrón"
+          "name": "Ají morrón"
         },
         {
           "grams": 1.0,
@@ -2370,7 +2370,7 @@
       "constituents": [
         {
           "grams": 56.0,
-          "name": "Pan integral"
+          "name": "Pan integral personal"
         },
         {
           "grams": 32.0,

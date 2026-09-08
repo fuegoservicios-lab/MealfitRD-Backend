@@ -113,6 +113,34 @@ def deterministic_day_enabled() -> bool:
         return False
 
 
+def deterministic_day_for_user(user_id=None) -> bool:
+    """¿Este usuario recibe días deterministas?
+
+    Tres estados, y el del medio es el que hace que esto se pueda llevar a producción:
+
+      · knob global ON  ⇒ todos.
+      · knob global OFF + usuario en `MEALFIT_DETERMINISTIC_DAY_USERS` ⇒ **sólo él**.
+      · nada ⇒ nadie.
+
+    Sin el estado del medio, encender esto cambia la dieta de TODOS a la vez y la única marcha
+    atrás es otro despliegue. El repo ya tenía el patrón —`MEALFIT_PLAN_POLICY_ENFORCE_USERS`,
+    «dueño → test → flip»— y no copiarlo era exactamente lo que separaba «funciona en mi medición»
+    de «se puede poner delante de usuarios».
+    """
+    if deterministic_day_enabled():
+        return True
+    if not user_id:
+        return False
+    try:
+        import os
+        crudo = os.environ.get("MEALFIT_DETERMINISTIC_DAY_USERS", "") or ""
+        if not crudo.strip():
+            return False
+        permitidos = {u.strip().lower() for u in crudo.split(",") if u.strip()}
+        return str(user_id).strip().lower() in permitidos
+    except Exception:
+        return False
+
 def _candidatos_k() -> int:
     """Cuántos candidatos pedir por franja. Medido: con 3 la proteína se iba a −39 % en pérdida de
     grasa; con 25 y selección por macros, 12 de 14 días entran en banda. Pedir más no cuesta
@@ -341,7 +369,7 @@ def verifica_comida(meal: dict, form_data: dict, catalogo: dict) -> list:
         logger.debug(f"[P1-DETERMINISTIC-DAY] backstop clínico no-op: {e!r}")
     return fuera
 
-def build_day_for_skeleton(nutrition, form_data, skeleton_day, day_num):
+def build_day_for_skeleton(nutrition, form_data, skeleton_day, day_num, user_id=None):
     """Punto de entrada desde el pipeline. Devuelve un día completo o `None`.
 
     `None` es la respuesta segura y la más frecuente: knob apagado, sin objetivos, sin candidatos
@@ -351,7 +379,8 @@ def build_day_for_skeleton(nutrition, form_data, skeleton_day, day_num):
     NO usa `state` a propósito: acoplar este módulo a `PlanState` lo haría imposible de probar sin
     montar el grafo entero, y todo lo que necesita cabe en cuatro argumentos.
     """
-    if not deterministic_day_enabled():
+    _uid = user_id or (form_data or {}).get("user_id") or (form_data or {}).get("_user_id")
+    if not deterministic_day_for_user(_uid):
         return None
     try:
         m = (nutrition or {}).get("macros") or {}
