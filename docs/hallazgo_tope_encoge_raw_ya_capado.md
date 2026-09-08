@@ -75,13 +75,25 @@ minúsculo y arrasa la compra.
 *Los tres casos sintéticos que diseñé pasaban los tres. La flota dijo que no.* Revertido — el
 árbol queda como estaba.
 
-### Lo que hace falta de verdad
+### Una afirmación mía que RETIRO: «las ramas de conteo no sincronizan raw»
 
-El objetivo tiene que derivarse de **la línea de raw que se va a escribir**, no de la del display,
-y la cascada tiene ramas (las de CONTEO, `_REALISM_COUNT_CAPS`) que capean el display **sin tocar
-raw en absoluto** — verificado en aislado: «3 calabacín» pasa a «1.5 calabacín» en la receta y raw
-se queda en 3, con `recortes=0`, o sea por un camino que ni siquiera entra en el bloque de `factor`.
-Mientras esas ramas no sincronicen, cualquier arreglo del bloque de `factor` es parcial.
+Escribí eso como «verificado en aislado» —«3 calabacín» pasaba a «1.5 calabacín» en la receta, raw
+se quedaba en 3, `recortes=0`— y **es falso**. Medí con mi propio parche roto todavía activo en el
+árbol: era él quien dejaba raw sin tocar, al convertir el rescale en no-op y saltarse después el
+fallback que yo mismo había gateado.
+
+Con el árbol revertido, ese mismo caso da `recortes=1` y raw pasa a «1.5 calabacín», correcto. Y
+sobre la flota: el tope capa el display en **76 comidas (6,4 %)** y en **todas** cambia también la
+línea de raw del mismo alimento — **0 huérfanas**.
+
+*Medir mientras tu propio parche defectuoso está vivo es medir el parche, no el sistema.* Es la
+misma familia de error que el resto de la sesión: el instrumento no estaba en el estado que yo creía.
+
+### Lo que sí hace falta
+
+El objetivo tiene que derivarse de **la línea de raw que se va a escribir**, no de la del display —
+que es justo lo que mi intento hacía mal: tomaba los gramos de una línea del display que podía ser
+otra cosa del mismo alimento. Sigue abierto, y sin la pista falsa de arriba.
 
 ## Reproducción
 
