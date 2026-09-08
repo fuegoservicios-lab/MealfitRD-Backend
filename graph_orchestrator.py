@@ -32281,7 +32281,7 @@ def _repair_name_phantom_dairy(days: list) -> list:
                                     # si raw TAMBIÉN viene en gramos: con el índice ciego la compra
                                     # salía «30 huevos», «30 dientes de ajo», «30 limones».
                                     _ri_pd = _raw_idx_for_display(raw, _s_pd, _i_pd, ings)
-                                    _mg_rw = _re.match(r"^\s*(\d+(?:[.,]\d+)?)\s*(?:g|gr|gramos)",
+                                    _mg_rw = _re.match(r"^\s*(\d+(?:[.,]\d+)?)\s*(?:g|gr|gramos)\b",
                                                        str(raw[_ri_pd])) if _ri_pd is not None else None
                                     if _mg_rw and float(_mg_rw.group(1).replace(",", ".")) < float(NAME_PHANTOM_DAIRY_G):
                                         raw[_ri_pd] = _re.sub(r"^\s*\d+(?:[.,]\d+)?",
