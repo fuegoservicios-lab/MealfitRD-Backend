@@ -3,7 +3,17 @@
 Valida:
 1. Convergencia exacta en almuerzo típico dominicano (pechuga, arroz, habichuelas, aceite).
 2. Restricción entera para alimentos discretos (ej. 2 huevos enteros, nunca 2.37 huevos).
-3. Respuesta determinista y rápida (<10ms) ante el contraejemplo 20x/10x (macros acoplados imposibles).
+3. Respuesta determinista ante el contraejemplo 20x/10x (macros acoplados imposibles).
+
+[P2-MILP-RELOJ-NO-MIDE-EL-SOLVER · 2026-09-08] Los topes de tiempo de este fichero eran 50 ms y
+15 ms, y la suite corre 23k tests en 8 workers de xdist: el 08-sep este fichero tumbó la fase A del
+gate con `assert 51.91 < 50.0` — status 'optimal', converged True, fallado por 1,9 ms de
+contención. Un tope de decenas de ms no mide el solver: mide cuán ocupada está la máquina, y
+convierte carga en rojo. Lo que este test SÍ puede afirmar honestamente es que la llamada RETORNA y
+no se cuelga; una regresión real (HiGHS ausente y fallback, o un bucle de re-solve) es de órdenes de
+magnitud, no de 2 ms. De ahí el techo generoso. **No lo vuelvas a apretar «porque típicamente son
+5 ms»**: típicamente sí, pero no bajo la fase A. Un guard de rendimiento de verdad necesita correr
+SOLO, y eso es otro fichero.
 4. Estabilidad numérica sin dependencias de red ni persistencia.
 """
 import pytest
@@ -83,7 +93,7 @@ def test_almuerzo_dominicano_convergencia_optima():
 
     assert result.status == "optimal"
     assert result.converged is True
-    assert result.execution_time_ms < 50.0  # Típicamente < 5ms
+    assert result.execution_time_ms < 1000.0, "el solver no retorna: mira si HiGHS está vivo"
 
     # Verificar que el error en cada macro esté por debajo de la tolerancia
     for macro, err in result.macro_errors.items():
@@ -179,8 +189,8 @@ def test_contraejemplo_macros_acoplados_incompatibles():
 
     result = sizer.solve(ingredients, target)
 
-    # Debe completarse rápidamente
-    assert result.execution_time_ms < 15.0
+    # Debe RETORNAR (ver cabecera: el reloj aquí no mide el solver, mide la máquina)
+    assert result.execution_time_ms < 1000.0, "el solver no retorna: mira si HiGHS está vivo"
     # No puede ser convergado estricto al 2% porque es matemáticamente imposible
     assert result.converged is False
     # Pero no debe fallar con excepción, sino devolver el mejor compromiso ponderado
