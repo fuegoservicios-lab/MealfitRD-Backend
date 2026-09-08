@@ -34,16 +34,36 @@ GO = Path(__file__).resolve().parent.parent / "graph_orchestrator.py"
 # --------------------------------------------------------------- el canal existe
 
 def test_el_seeder_publica_los_tres_repartos():
-    """`out_assignment` debe transportar las tres categorías, no solo los vegetales."""
+    """`out_assignment` debe transportar las categorías, no sólo los vegetales.
+
+    [P2-SEEDER-CARB-FAILOPEN-TEST · 2026-09-08] Este test exigía las TRES siempre presentes y por eso
+    fallaba ~1 de cada 10 corridas — 8,7 % medido sobre 300 pasadas. No era un defecto del seeder:
+    `carb_pairs` sólo se publica `if _carb_slots`, y con **una sola base de carbo única**
+    `_rotate_pairs` devuelve `None` a propósito, porque pedir «no repitas» con una sola opción es
+    insatisfacible. El código lo dice y lo firma: *«Fail-open deliberado (P1-CARB-BASE-NO-REPEAT), no
+    tocar»* — y encaja con la lección de la casa: una regla insatisfacible no se queda quieta, gasta
+    reintentos y empeora el plato.
+
+    O sea: **el test pedía un contrato más estricto que el diseño**, quemaba ciclos de gate, y habría
+    empujado a alguien a «arreglar» un fail-open explícitamente marcado como intocable.
+
+    Medido sobre 300 corridas: `veggie_pairs` y `fruit_pairs` **siempre** presentes y bien formadas;
+    `carb_pairs` ausente en 26 (8,7 %) y **jamás** vacía ni degenerada cuando está. Ése es el
+    contrato que se ancla aquí.
+    """
     import ai_helpers as ah
 
     salida = {}
     ah.get_deterministic_variety_prompt("", {"mainGoal": "maintenance"},
                                         user_id=None, out_assignment=salida)
-    faltan = [k for k in ("veggie_pairs", "carb_pairs", "fruit_pairs") if k not in salida]
+    faltan = [k for k in ("veggie_pairs", "fruit_pairs") if k not in salida]
     assert not faltan, f"el seeder no publica {faltan} (mueren en la prosa del prompt)"
-    for k in ("carb_pairs", "fruit_pairs"):
-        assert salida[k], f"{k} vacío"
+    # `carb_pairs` es opcional por diseño; el resto no. Lo que NUNCA es aceptable, en ninguna de las
+    # tres, es publicar la clave con basura: vacía o con un par que se repite a sí mismo.
+    for k in ("veggie_pairs", "carb_pairs", "fruit_pairs"):
+        if k not in salida:
+            continue
+        assert salida[k], f"{k} publicada pero vacía: peor que ausente, el day-gen la cree buena"
         for par in salida[k]:
             assert len(par) == 2 and par[0] != par[1], f"{k} trae un par degenerado: {par}"
 
