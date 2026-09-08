@@ -55,7 +55,7 @@ _INVENTARIO = {
         "_cap_cheese_dumps_final":                 (1, "0 medido 07-sep"),
         "_single_trip_fresh_substitute":           (1, "0 medido 07-sep"),
         "_cap_daily_whole_eggs":                   (2, "0 medido 07-sep"),
-        "_apply_budget_cheapen_pass":              (1, "0 medido 07-sep"),
+        "_apply_budget_cheapen_pass":              (1, "resuelto"),
         "_apply_budget_driver_aware_pass":         (1, "0 medido 07-sep"),
         "_baking_powder_cap_pass":                 (1, "0 medido 07-sep"),
         # Trazada tras publicar el inventario: corre en `finalize_plan_data_coherence:29061`,

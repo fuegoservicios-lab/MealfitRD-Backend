@@ -35806,10 +35806,13 @@ def _apply_budget_cheapen_pass(days, form_data, force: bool = False, *,
                         new_line = _re.sub(rf"\b(?:{rx})\b", candidate, ing, count=1, flags=_re.IGNORECASE)
                         if new_line == ing:
                             continue
-                        ings[idx] = new_line
+                        # [P1-CHEAPEN-RAW-BY-FOOD · 2026-09-07] Índice resuelto ANTES de mutar `ings`
+                        # y desde la línea VIEJA: en raw hay que abaratar la de la proteína CARA.
                         raw = meal.get("ingredients_raw")
-                        if isinstance(raw, list) and idx < len(raw) and isinstance(raw[idx], str):
-                            raw[idx] = _re.sub(rf"\b(?:{rx})\b", candidate, raw[idx], count=1, flags=_re.IGNORECASE)
+                        _ri_ch = _raw_idx_for_display(raw, ing, idx, ings)
+                        ings[idx] = new_line
+                        if _ri_ch is not None and isinstance(raw[_ri_ch], str):
+                            raw[_ri_ch] = _re.sub(rf"\b(?:{rx})\b", candidate, raw[_ri_ch], count=1, flags=_re.IGNORECASE)
                         # Nombre honesto del plato: si menciona el premium, renombrar
                         # (el phantom-protein namefix corre después como backstop).
                         name = meal.get("name")
