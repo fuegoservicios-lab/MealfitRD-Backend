@@ -3944,7 +3944,7 @@ from prompts.medical_reviewer import REVIEWER_SYSTEM_PROMPT
 # test_f1a_planner_do_o_none_es_byte_identico_is) — el import crudo ya no tiene consumidor en
 # este módulo. `prompts.planner` sigue exportando la constante para su propio uso interno.
 from prompts.planner import build_planner_system_prompt
-from prompts.day_generator import DAY_GENERATOR_SYSTEM_PROMPT, build_day_assignment_context
+from prompts.day_generator import DAY_GENERATOR_SYSTEM_PROMPT, build_day_assignment_context; from deterministic_day import build_day_for_skeleton as _det_day
 
 
 # ============================================================
@@ -9286,7 +9286,7 @@ async def generate_days_parallel_node(state: PlanState) -> dict:
 
     async def _safe_gen(skel_day, day_num, temp_override=None):
         try:
-            result = await _generate_day_hedged(skel_day, day_num, temp_override)
+            result = _det_day(nutrition, form_data, skel_day, day_num) or await _generate_day_hedged(skel_day, day_num, temp_override)  # [P1-DETERMINISTIC-DAY] knob OFF ⇒ None ⇒ camino de siempre
             return day_num, result, None
         except Exception as e:
             return day_num, None, e

@@ -243,3 +243,47 @@ def test_la_costura_calla_con_el_knob_apagado(monkeypatch, plantillas):
                             for c in (t.get("constituents") or [])]}
     assert rl.apply_library_recipe(meal) is False
     assert rl.apply_library_recipes_to_days([{"meals": [meal]}]) == 0
+
+
+def test_el_enganche_al_pipeline_existe_y_es_0_NETO():
+    """[P1-DETERMINISTIC-DAY · enganche] El módulo enchufado, y enchufado sin engordar el god-file.
+
+    Dos contratos en un test porque son inseparables: un enganche que no está es una feature
+    inerte (lo que este repo lleva todo el día encontrando), y uno que rompe el techo de
+    `graph_orchestrator.py` no se arregla subiendo el número — se arregla extrayendo.
+    """
+    go = _BACKEND / "graph_orchestrator.py"
+    src = go.read_text(encoding="utf-8")
+    assert "from deterministic_day import build_day_for_skeleton as _det_day" in src, (
+        "el import desapareció: el ensamblador vuelve a estar desenchufado")
+    assert "_det_day(nutrition, form_data, skel_day, day_num) or await _generate_day_hedged" in src, (
+        "el enganche debe ir ANTES del LLM y caer a él con `or`: si se invierte, el día "
+        "determinista nunca se usa y la feature queda inerte otra vez")
+
+
+def test_el_camino_de_siempre_queda_intacto_con_el_knob_apagado(monkeypatch):
+    """El contrato de riesgo: apagado, `build_day_for_skeleton` no toca la base, no lee el
+    catálogo y devuelve `None` antes de nada. Un fallo aquí rompería la generación de TODOS."""
+    import deterministic_day as dd
+    monkeypatch.delenv("MEALFIT_DETERMINISTIC_DAY", raising=False)
+    nut = {"target_calories": "2000 kcal",
+           "macros": {"protein": "100g", "carbs": "250g", "fats": "67g"}}
+    skel = {"slots": ["desayuno", "almuerzo", "cena", "merienda"]}
+    assert dd.build_day_for_skeleton(nut, {}, skel, 1) is None
+
+
+def test_una_franja_desconocida_NO_se_reparte_a_ojo(monkeypatch):
+    """Si el esqueleto trae una franja que la tabla de reparto no conoce, el día no se arma. La
+    alternativa —repartirla a ojo— serviría calorías inventadas con cara de deterministas."""
+    import deterministic_day as dd
+    monkeypatch.setenv("MEALFIT_DETERMINISTIC_DAY", "1")
+    nut = {"target_calories": "2000 kcal",
+           "macros": {"protein": "100g", "carbs": "250g", "fats": "67g"}}
+    assert dd.build_day_for_skeleton(nut, {}, {"slots": ["brunch"]}, 1) is None
+
+
+def test_sin_objetivo_calorico_no_se_inventa(monkeypatch):
+    import deterministic_day as dd
+    monkeypatch.setenv("MEALFIT_DETERMINISTIC_DAY", "1")
+    assert dd.build_day_for_skeleton({}, {}, {"slots": ["almuerzo"]}, 1) is None
+    assert dd.build_day_for_skeleton(None, {}, {"slots": ["almuerzo"]}, 1) is None

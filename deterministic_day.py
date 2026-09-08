@@ -89,6 +89,10 @@ _NO_ESCALAN = (
 _TILT_TOPE = 0.35
 _TILT_MIN_FRAC = 0.30
 
+# Reparto tipico del dia. Vive aqui y no en el llamador porque es parte del contrato de este
+# modulo: si una franja no esta en la tabla, el dia NO se arma en vez de repartirla a ojo.
+_REPARTO = {"desayuno": 0.25, "almuerzo": 0.35, "cena": 0.30, "merienda": 0.10}
+
 _RE_LINEA = re.compile(r"^\s*([\d.]+)\s*g\s+de\s+(.+)$")
 
 
@@ -279,3 +283,69 @@ def construir_comida(t: dict, factor: float, catalogo: dict, slot: str, country:
     if not meal.get("recipe"):
         return None      # sin receta congelada no hay determinismo del texto: que lo haga el LLM
     return meal
+
+
+def build_day_for_skeleton(nutrition, form_data, skeleton_day, day_num):
+    """Punto de entrada desde el pipeline. Devuelve un día completo o `None`.
+
+    `None` es la respuesta segura y la más frecuente: knob apagado, sin objetivos, sin candidatos
+    escalables o sin receta congelada. El llamador cae al camino del LLM, que es el estado de
+    siempre — la generación de planes no puede depender de que esto acierte.
+
+    NO usa `state` a propósito: acoplar este módulo a `PlanState` lo haría imposible de probar sin
+    montar el grafo entero, y todo lo que necesita cabe en cuatro argumentos.
+    """
+    if not deterministic_day_enabled():
+        return None
+    try:
+        m = (nutrition or {}).get("macros") or {}
+
+        def _num(v):
+            try:
+                return float(str(v).replace("g", "").replace("kcal", "").strip().split()[0])
+            except Exception:
+                return 0.0
+
+        kcal = _num((nutrition or {}).get("target_calories"))
+        if kcal <= 0:
+            return None
+        objetivo_dia = {"kcal": kcal, "protein_g": _num(m.get("protein")),
+                        "carbs_g": _num(m.get("carbs")), "fats_g": _num(m.get("fats"))}
+
+        from constants import cultural_country_for_form_data      # la COCINA, no el mercado (I16)
+        country = cultural_country_for_form_data(form_data or {}) or "DO"
+
+        import dish_registry as dr
+        from shopping_calculator import get_master_ingredients
+        catalogo = {str(r.get("name")): r for r in (get_master_ingredients() or [])}
+        if not catalogo:
+            return None
+        por_id = dr.templates_by_id(country) or {}
+        if not por_id:
+            return None
+
+        slots = [s for s in (skeleton_day or {}).get("slots") or []] or list(_REPARTO)
+        meals = []
+        for slot in slots:
+            r = _REPARTO.get(_norm(slot))
+            if not r:
+                return None            # una franja que no sabemos repartir: que la haga el LLM
+            obj = {k: v * r for k, v in objetivo_dia.items()}
+            tids = [c["template_id"] for c in
+                    dr.template_candidates(country, slot, (skeleton_day or {}).get("protein"),
+                                           k=_candidatos_k(), rotate=int(day_num or 0))]
+            el = elegir_plantilla(tids, obj, catalogo, por_id, slot)
+            if not el:
+                return None
+            comida = construir_comida(el[0], el[1], catalogo, slot, country, obj)
+            if not comida:
+                return None
+            meals.append(comida)
+        if not meals:
+            return None
+        logger.info(f"[P1-DETERMINISTIC-DAY] día {day_num} armado sin LLM: "
+                    f"{len(meals)} comidas, {sum(m['calories'] for m in meals)} kcal")
+        return {"day": day_num, "meals": meals, "_day_source": "deterministic"}
+    except Exception as e:                                          # noqa: BLE001
+        logger.debug(f"[P1-DETERMINISTIC-DAY] no-op para el día {day_num}: {e!r}")
+        return None
