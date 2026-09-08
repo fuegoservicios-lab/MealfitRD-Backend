@@ -51,9 +51,37 @@ El tope debe llevar la línea de raw a un **objetivo absoluto**, no multiplicarl
 display: si los gramos de raw ya están en o por debajo del techo, no se toca. Con eso, reparar un
 estado divergente converge en vez de componer.
 
-**No lo apliqué**: `graph_orchestrator.py` está a 2 líneas de su techo, el cambio vive dentro de una
-cascada de ~15 ramas de cap con `min()` entre ellas, y tocarlo pide una pasada de gate propia con
-más margen de contexto del que tenía. Prefiero dejarlo verificado y reproducible antes que a medias.
+### Lo intenté y lo REVERTÍ — el arreglo obvio empeora las cosas
+
+Implementé exactamente eso: un helper `_cap_raw_factor` que rederiva el factor contra los gramos de
+raw (`min(1.0, cur_g*factor/g_raw)`) y que además distingue «no encontré el alimento» de «lo
+encontré y no hay nada que recortar» —esa confusión era lo que disparaba el fallback por índice—.
+
+En los tres casos sintéticos funcionaba perfecto: el divergente convergía a 300 en vez de caer a
+222, el sano seguía idempotente, y un raw de 600 g bajaba a 300 exactos.
+
+**Contra la flota entera, no.** Comparando con y sin el helper sobre las 1.194 comidas vivas:
+
+| | líneas tocadas | recortes brutales (>80 %) |
+|---|---|---|
+| conducta previa | 48 | **1** |
+| con mi arreglo | 36 | **14** |
+
+Con ejemplos como `588 g → 12 g`, `612 g → 7 g`, `1599 g → 4 g`. El objetivo absoluto se calcula
+desde UNA línea del display y se aplica a una línea de raw que puede ser otra cosa del mismo
+alimento; cuando la del display ya venía recortada por otra rama de la cascada, el objetivo sale
+minúsculo y arrasa la compra.
+
+*Los tres casos sintéticos que diseñé pasaban los tres. La flota dijo que no.* Revertido — el
+árbol queda como estaba.
+
+### Lo que hace falta de verdad
+
+El objetivo tiene que derivarse de **la línea de raw que se va a escribir**, no de la del display,
+y la cascada tiene ramas (las de CONTEO, `_REALISM_COUNT_CAPS`) que capean el display **sin tocar
+raw en absoluto** — verificado en aislado: «3 calabacín» pasa a «1.5 calabacín» en la receta y raw
+se queda en 3, con `recortes=0`, o sea por un camino que ni siquiera entra en el bloque de `factor`.
+Mientras esas ramas no sincronicen, cualquier arreglo del bloque de `factor` es parcial.
 
 ## Reproducción
 
