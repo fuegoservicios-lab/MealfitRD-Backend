@@ -383,8 +383,19 @@ if _DONENESS_INSIDE:
         "      muffins, empanadas, albóndigas, tortilla gruesa): el exterior dora mucho ANTES de que\n"
         "      cuaje el centro. Cierra el paso con la señal real — sale limpio al pinchar con un\n"
         "      palillo, el centro cuaja y no escurre, o al partir uno el interior no está crudo.\n"
-        "    - POLLO, CERDO o PAVO: hasta que el interior no tenga partes rosadas. Aquí no es\n"
-        "      textura, es seguridad.\n"
+        # [P0-DONENESS-TEMPERATURA · 2026-09-08] El color NO es un criterio de seguridad, y la
+        # versión anterior de esta línea lo usaba como si lo fuera —diciendo en la frase siguiente
+        # que era seguridad—. La carne se dora ANTES de llegar a temperatura segura y puede seguir
+        # rosada DESPUÉS (mioglobina, nitritos, aves jóvenes). Lo cazó el juicio a ciegas del dueño
+        # sobre almuerzos y cenas: 13 de sus 16 «dudoso» pedían exactamente esto, y los desayunos
+        # habían sacado 17/20 sólo porque casi no llevan carne. La temperatura interna es el
+        # criterio real; el tiempo orientativo acompaña, nunca sustituye.
+        "    - POLLO, PAVO o cualquier ave: 74 °C en la parte más gruesa, con termómetro. Carne\n"
+        "      MOLIDA (res, cerdo): 71 °C. Piezas enteras de res o cerdo: 63 °C y 3 minutos de\n"
+        "      reposo. Aquí no es textura, es seguridad, y el COLOR NO SIRVE: la carne se dora\n"
+        "      antes de estar segura y puede seguir rosada después. Si quien cocina no tiene\n"
+        "      termómetro, di además la señal de respaldo (los jugos salen claros y la carne se\n"
+        "      separa del hueso sin resistencia) — pero la temperatura va SIEMPRE primero.\n"
         # «víveres» va en MINÚSCULA a propósito: `_DO_LEXICON_NEUTRAL` lo mapea a «tubérculos»
         # para los países beta con un `str.replace` case-SENSITIVE, así que en mayúscula se colaba
         # sin neutralizar y un usuario español leía vocabulario dominicano. Lo cazó

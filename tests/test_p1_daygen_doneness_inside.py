@@ -96,10 +96,23 @@ def test_nombra_la_masa_formada(bloque):
     assert "palillo" in bloque, "falta la señal concreta (el palillo)"
 
 
-def test_nombra_la_carne_como_SEGURIDAD_no_como_textura(bloque):
-    """La familia B: 38 comidas. Si esto se lee como textura, se negocia; como seguridad, no."""
-    assert "rosadas" in bloque
+def test_la_carne_se_comprueba_por_TEMPERATURA_no_por_color(bloque):
+    """[P0-DONENESS-TEMPERATURA · 2026-09-08] Este test pedía la palabra «rosadas» — o sea, exigía
+    el criterio EQUIVOCADO, y lo hacía mientras la frase de al lado decía «es seguridad».
+
+    El color no es un criterio de seguridad: la carne se dora antes de llegar a temperatura segura y
+    puede seguir rosada después. Lo cazó el juicio a ciegas del dueño sobre almuerzos y cenas —
+    **13 de sus 16 «dudoso» pedían exactamente esto**— y los desayunos habían sacado 17/20 sólo
+    porque casi no llevan carne.
+
+    *Un test puede anclar una regla equivocada con la misma firmeza que una correcta; lo que lo
+    delató no fue el test, fue un humano probando el producto.*
+    """
+    assert "74 °C" in bloque, "falta la temperatura del ave, que es la que importa"
+    assert "71 °C" in bloque, "falta la de la carne molida"
     assert "seguridad" in bloque
+    assert "COLOR NO SIRVE" in bloque, (
+        "volvió a admitirse el color como criterio: es lo que este P-fix cerró")
 
 
 def test_exige_hervir_los_viveres_antes_de_majar(bloque):
