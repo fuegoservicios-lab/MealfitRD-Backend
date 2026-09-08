@@ -36,9 +36,13 @@ conversión equivocada daría factores distintos en cada caso, no el mismo núme
 
 - **No es el humanizador.** Su rama de grasas (`humanize_ingredients.py:517-521`) sólo emite hasta
   `base_qty <= 60` y en SINGULAR (`cda`); estas líneas son plurales (`cdas`) y de magnitud mayor.
-- **No es residuo del cap por índice** (`P1-CAP-BIGFRUIT-BREAD-RAW-BY-FOOD`, cerrado el 07-sep). Se
-  probó re-ejecutando `_cap_unrealistic_portions` ya arreglado sobre las 7: **cura 2, deja 5**. Las
-  cinco que quedan no las cubre ese cap.
+- ~~**No es residuo del cap por índice.**~~ **CORRECCIÓN (misma sesión):** esa línea decía que se
+  había descartado porque re-ejecutar `_cap_unrealistic_portions` ya arreglado cura 2 de 7. **Ese
+  experimento no falsa nada**: re-ejecutar un pase corregido no cura daño ya escrito, así que su
+  resultado es compatible con la hipótesis y con su contraria. Además probé el TECHO cuando los
+  cuatro platos llevan `_portion_floor_adjusted` — el **PISO**. Repetido con los dos: **cura 2,
+  deja 5**, igual, y por la razón obvia: una línea que ya dice «30 cdas» no está por debajo del
+  piso ni por encima del techo, así que ninguno la mira.
 - **No es escalado por hogar** (multiplier `None`).
 - **No es el cap bariátrico**, pese a que `BARIATRIC_CHEESE_CAP_G` y `BARIATRIC_AVOCADO_CAP_G` valen
   exactamente `30` y la coincidencia invitaba. Probado `_resc_cap_coherent` directamente: escala por
@@ -55,6 +59,21 @@ honesto de casos reales es 3-4, no 8.
 
 Los dos lados del guard leen `ingredients_raw` (ver `P2-COHERENCE-EJE-CIEGO`), así que una cantidad
 absurda que vive en raw está en AMBOS lados de la comparación: la lista «coincide» consigo misma.
+
+## La hipótesis que el descarte fallido tapaba: el piso, por ÍNDICE
+
+Con la prueba corregida, la evidencia **apunta al piso**:
+
+- las cuatro comidas dañadas llevan `_portion_floor_adjusted`;
+- `_floor_subservible_portions` calcula `factor = PORTION_SHRINK_FLOOR_G / gramos` y aplica
+  `rescale_ingredient_string`, que **conserva la unidad**: con unos gramos mal resueltos (≈0,25 g) el
+  factor sale de 60× a 120×, y «½ cda» pasa a «30 cdas»;
+- **hasta el 07-sep ese pase escribía `ingredients_raw[idx]` por ÍNDICE**
+  (`P1-FLOOR-RAW-BY-FOOD`, 9 escrituras): aplicaba el factor enorme de UNA línea a OTRA. Eso explica
+  a la vez que el display esté sano y que la compra no lo esté.
+
+No está probado —haría falta reproducir la resolución de gramos que da el factor— pero es la
+hipótesis viva, y llegó por corregir un descarte mal hecho, no por una sonda nueva.
 
 ## Qué haría falta
 
