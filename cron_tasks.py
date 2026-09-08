@@ -231,7 +231,7 @@ def _track_cron_consecutive_failure(
                     VALUES (%s, %s, 'warning', %s, %s, %s::jsonb, %s::jsonb)
                     ON CONFLICT (alert_key) DO UPDATE
                     SET triggered_at = NOW(),
-                        metadata = EXCLUDED.metadata,
+                        message = EXCLUDED.message, metadata = EXCLUDED.metadata,
                         resolved_at = NULL
                     """,
                     (
@@ -1337,7 +1337,7 @@ def _shopping_coherence_alert_job():
                                 'warning', %s, %s, %s::jsonb, %s::jsonb)
                         ON CONFLICT (alert_key) DO UPDATE
                         SET triggered_at = NOW(),
-                            metadata = EXCLUDED.metadata,
+                            message = EXCLUDED.message, metadata = EXCLUDED.metadata,
                             resolved_at = NULL
                         """,
                         (
@@ -1849,7 +1849,7 @@ def _micro_floor_kpi_job():
                         VALUES (%s, 'micro_estimado_bajo_chronic', 'warning', %s, %s, %s::jsonb, %s::jsonb)
                         ON CONFLICT (alert_key) DO UPDATE
                         SET triggered_at = NOW(),
-                            metadata = EXCLUDED.metadata,
+                            message = EXCLUDED.message, metadata = EXCLUDED.metadata,
                             resolved_at = NULL
                         """,
                         (
@@ -2041,7 +2041,7 @@ def _alert_deploy_lag_marker_stale():
                 VALUES (%s, 'deploy_lag_marker_malformed', 'warning', %s, %s, %s::jsonb, %s::jsonb)
                 ON CONFLICT (alert_key) DO UPDATE
                 SET triggered_at = NOW(),
-                    metadata = EXCLUDED.metadata,
+                    message = EXCLUDED.message, metadata = EXCLUDED.metadata,
                     resolved_at = NULL
                 """,
                 (
@@ -5606,7 +5606,7 @@ def _emit_hot_table_bloat_tick() -> None:
                     VALUES (%s, 'hot_table_bloat', 'warning', %s, %s, %s::jsonb, %s::jsonb)
                     ON CONFLICT (alert_key) DO UPDATE
                     SET triggered_at = NOW(),
-                        metadata = EXCLUDED.metadata,
+                        message = EXCLUDED.message, metadata = EXCLUDED.metadata,
                         resolved_at = NULL
                     """,
                     (
@@ -5669,7 +5669,7 @@ def _emit_dreaming_alert(alert_key: str, alert_type: str, title: str,
             "(alert_key, alert_type, severity, title, message, metadata, affected_user_ids) "
             "VALUES (%s, %s, 'warning', %s, %s, %s::jsonb, %s::jsonb) "
             "ON CONFLICT (alert_key) DO UPDATE "
-            "SET triggered_at = NOW(), metadata = EXCLUDED.metadata, resolved_at = NULL",
+            "SET triggered_at = NOW(), message = EXCLUDED.message, metadata = EXCLUDED.metadata, resolved_at = NULL",
             (alert_key, alert_type, title, message,
              json.dumps(metadata, ensure_ascii=False),
              json.dumps([str(x) for x in (affected_user_ids or [])])),
@@ -6004,7 +6004,7 @@ def _clinical_band_drift_alert_job():
                         (alert_key, alert_type, severity, title, message, metadata)
                     VALUES (%s, 'precision_drift', 'warning', %s, %s, %s::jsonb)
                     ON CONFLICT (alert_key) DO UPDATE
-                    SET triggered_at = NOW(), metadata = EXCLUDED.metadata, resolved_at = NULL
+                    SET triggered_at = NOW(), message = EXCLUDED.message, metadata = EXCLUDED.metadata, resolved_at = NULL
                     """,
                     (
                         alert_key,
@@ -6103,7 +6103,7 @@ def _plan_fallback_rate_alert_job():
                         (alert_key, alert_type, severity, title, message, metadata)
                     VALUES (%s, 'reliability_degradation', 'warning', %s, %s, %s::jsonb)
                     ON CONFLICT (alert_key) DO UPDATE
-                    SET triggered_at = NOW(), metadata = EXCLUDED.metadata, resolved_at = NULL
+                    SET triggered_at = NOW(), message = EXCLUDED.message, metadata = EXCLUDED.metadata, resolved_at = NULL
                     """,
                     (
                         alert_key,
@@ -6196,7 +6196,7 @@ def _resolution_coverage_drift_alert_job():
                         (alert_key, alert_type, severity, title, message, metadata)
                     VALUES (%s, 'precision_drift', 'warning', %s, %s, %s::jsonb)
                     ON CONFLICT (alert_key) DO UPDATE
-                    SET triggered_at = NOW(), metadata = EXCLUDED.metadata, resolved_at = NULL
+                    SET triggered_at = NOW(), message = EXCLUDED.message, metadata = EXCLUDED.metadata, resolved_at = NULL
                     """,
                     (
                         alert_key,
@@ -6293,7 +6293,7 @@ def _review_failed_delivered_rate_alert_job():
                         (alert_key, alert_type, severity, title, message, metadata)
                     VALUES (%s, 'reliability_degradation', 'warning', %s, %s, %s::jsonb)
                     ON CONFLICT (alert_key) DO UPDATE
-                    SET triggered_at = NOW(), metadata = EXCLUDED.metadata, resolved_at = NULL
+                    SET triggered_at = NOW(), message = EXCLUDED.message, metadata = EXCLUDED.metadata, resolved_at = NULL
                     """,
                     (
                         alert_key,
@@ -6408,7 +6408,7 @@ def _auth_failure_alert_job():
                 INSERT INTO system_alerts (alert_key, alert_type, severity, title, message, metadata)
                 VALUES (%s, 'reliability_degradation', 'warning', %s, %s, %s::jsonb)
                 ON CONFLICT (alert_key) DO UPDATE
-                SET triggered_at = NOW(), metadata = EXCLUDED.metadata, resolved_at = NULL
+                SET triggered_at = NOW(), message = EXCLUDED.message, metadata = EXCLUDED.metadata, resolved_at = NULL
                 """,
                 (
                     alert_key,
@@ -6551,7 +6551,7 @@ def _chunk_overdue_alert_job():
                     (alert_key, alert_type, severity, title, message, metadata)
                 VALUES (%s, 'plan_paused_with_live_queue', 'warning', %s, %s, %s::jsonb)
                 ON CONFLICT (alert_key) DO UPDATE
-                SET triggered_at = NOW(), metadata = EXCLUDED.metadata, resolved_at = NULL
+                SET triggered_at = NOW(), message = EXCLUDED.message, metadata = EXCLUDED.metadata, resolved_at = NULL
                 """,
                 (
                     alert_key,
@@ -6657,7 +6657,7 @@ def _chunk_overdue_alert_job():
                     INSERT INTO system_alerts (alert_key, alert_type, severity, title, message, metadata)
                     VALUES (%s, 'chunk_overdue', 'warning', %s, %s, %s::jsonb)
                     ON CONFLICT (alert_key) DO UPDATE
-                    SET triggered_at = NOW(), metadata = EXCLUDED.metadata, resolved_at = NULL
+                    SET triggered_at = NOW(), message = EXCLUDED.message, metadata = EXCLUDED.metadata, resolved_at = NULL
                     """,
                     (
                         alert_key,
@@ -10465,7 +10465,7 @@ def _emit_plan_data_corruption_alert(
             VALUES (%s, 'plan_data_corrupted', 'warning', %s, %s, %s::jsonb, %s::jsonb)
             ON CONFLICT (alert_key) DO UPDATE
             SET triggered_at = NOW(),
-                metadata = EXCLUDED.metadata,
+                message = EXCLUDED.message, metadata = EXCLUDED.metadata,
                 affected_user_ids = EXCLUDED.affected_user_ids,
                 resolved_at = NULL
             """,
@@ -13909,7 +13909,7 @@ def _handle_reservation_reconciliation_exhausted(
                         %s, %s, %s::jsonb, %s::jsonb)
                 ON CONFLICT (alert_key) DO UPDATE
                   SET triggered_at = NOW(),
-                      metadata = EXCLUDED.metadata,
+                      message = EXCLUDED.message, metadata = EXCLUDED.metadata,
                       affected_user_ids = EXCLUDED.affected_user_ids,
                       resolved_at = NULL
                 """,
@@ -16196,7 +16196,7 @@ def _escalate_unrecoverable_chunk(
             VALUES (%s, 'dead_lettered_chunk', 'critical', %s, %s, %s::jsonb, %s::jsonb)
             ON CONFLICT (alert_key) DO UPDATE
               SET triggered_at = NOW(),
-                  metadata = EXCLUDED.metadata,
+                  message = EXCLUDED.message, metadata = EXCLUDED.metadata,
                   affected_user_ids = EXCLUDED.affected_user_ids,
                   resolved_at = NULL
             """,
@@ -20794,7 +20794,7 @@ def _detect_chronic_deferrals() -> None:
                 VALUES (%s, 'chronic_deferrals', 'warning', %s, %s, %s::jsonb, %s::jsonb)
                 ON CONFLICT (alert_key) DO UPDATE
                 SET triggered_at = NOW(),
-                    metadata = EXCLUDED.metadata,
+                    message = EXCLUDED.message, metadata = EXCLUDED.metadata,
                     affected_user_ids = EXCLUDED.affected_user_ids,
                     resolved_at = NULL
                 """,
@@ -21001,7 +21001,7 @@ def _alert_high_synthesized_lesson_ratio() -> None:
             VALUES (%s, 'chunk_lesson_synth_ratio_high', 'warning', %s, %s, %s::jsonb, %s::jsonb)
             ON CONFLICT (alert_key) DO UPDATE
             SET triggered_at = NOW(),
-                metadata = EXCLUDED.metadata,
+                message = EXCLUDED.message, metadata = EXCLUDED.metadata,
                 affected_user_ids = EXCLUDED.affected_user_ids,
                 resolved_at = NULL
             """,
@@ -21206,7 +21206,7 @@ def _pause_chunk_for_synthesis_overload(
             VALUES (%s, 'chunk_synthesis_overload_per_user', 'warning', %s, %s, %s::jsonb, %s::jsonb)
             ON CONFLICT (alert_key) DO UPDATE
             SET triggered_at = NOW(),
-                metadata = EXCLUDED.metadata,
+                message = EXCLUDED.message, metadata = EXCLUDED.metadata,
                 resolved_at = NULL
             """,
             (
@@ -21927,7 +21927,7 @@ def _alert_chunks_stuck_in_tz_unresolved() -> None:
             VALUES (%s, 'chunks_tz_unresolved_stuck', 'warning', %s, %s, %s::jsonb, %s::jsonb)
             ON CONFLICT (alert_key) DO UPDATE
             SET triggered_at = NOW(),
-                metadata = EXCLUDED.metadata,
+                message = EXCLUDED.message, metadata = EXCLUDED.metadata,
                 affected_user_ids = EXCLUDED.affected_user_ids,
                 resolved_at = NULL
             """,
@@ -22065,7 +22065,7 @@ def _alert_stuck_chunks() -> None:
                 VALUES (%s, 'plan_chunk_zombie', 'warning', %s, %s, %s::jsonb, %s::jsonb)
                 ON CONFLICT (alert_key) DO UPDATE
                 SET triggered_at = NOW(),
-                    metadata = EXCLUDED.metadata,
+                    message = EXCLUDED.message, metadata = EXCLUDED.metadata,
                     affected_user_ids = EXCLUDED.affected_user_ids,
                     resolved_at = NULL
                 """,
@@ -22172,7 +22172,7 @@ def _alert_chunks_stuck_processing() -> None:
                     (alert_key, alert_type, severity, title, message, metadata, affected_user_ids)
                 VALUES (%s, 'chunks_stuck_processing', 'warning', %s, %s, %s::jsonb, %s::jsonb)
                 ON CONFLICT (alert_key) DO UPDATE
-                SET triggered_at = NOW(), metadata = EXCLUDED.metadata,
+                SET triggered_at = NOW(), message = EXCLUDED.message, metadata = EXCLUDED.metadata,
                     affected_user_ids = EXCLUDED.affected_user_ids, resolved_at = NULL
                 """,
                 (
@@ -22348,7 +22348,7 @@ def _alert_stranded_partial_plans() -> None:
                 VALUES (%s, 'plan_stranded_partial', 'warning', %s, %s, %s::jsonb, %s::jsonb)
                 ON CONFLICT (alert_key) DO UPDATE
                 SET triggered_at = NOW(),
-                    metadata = EXCLUDED.metadata,
+                    message = EXCLUDED.message, metadata = EXCLUDED.metadata,
                     affected_user_ids = EXCLUDED.affected_user_ids,
                     resolved_at = NULL
                 """,
@@ -22527,7 +22527,7 @@ def _alert_stranded_partial_plans() -> None:
                 VALUES (%s, 'plan_rolling_abandoned', 'warning', %s, %s, %s::jsonb, %s::jsonb)
                 ON CONFLICT (alert_key) DO UPDATE
                 SET triggered_at = NOW(),
-                    metadata = EXCLUDED.metadata,
+                    message = EXCLUDED.message, metadata = EXCLUDED.metadata,
                     affected_user_ids = EXCLUDED.affected_user_ids,
                     resolved_at = NULL
                 """,
@@ -22767,7 +22767,7 @@ def _alert_chunk_pantry_snapshots_stale() -> None:
                 VALUES (%s, 'chunk_pantry_snapshots_stale', 'warning', %s, %s, %s::jsonb, %s::jsonb)
                 ON CONFLICT (alert_key) DO UPDATE
                 SET triggered_at = NOW(),
-                    metadata = EXCLUDED.metadata,
+                    message = EXCLUDED.message, metadata = EXCLUDED.metadata,
                     affected_user_ids = EXCLUDED.affected_user_ids,
                     resolved_at = NULL
                 """,
@@ -22938,7 +22938,7 @@ def _alert_chunk_lag_excessive() -> None:
             VALUES (%s, 'chunk_lag_excessive', 'warning', %s, %s, %s::jsonb, %s::jsonb)
             ON CONFLICT (alert_key) DO UPDATE
             SET triggered_at = NOW(),
-                metadata = EXCLUDED.metadata,
+                message = EXCLUDED.message, metadata = EXCLUDED.metadata,
                 affected_user_ids = EXCLUDED.affected_user_ids,
                 resolved_at = NULL
             """,
@@ -23079,7 +23079,7 @@ def _alert_chunk_dual_processing() -> None:
             ON CONFLICT (alert_key) DO UPDATE
             SET triggered_at = NOW(),
                 severity = EXCLUDED.severity,
-                metadata = EXCLUDED.metadata,
+                message = EXCLUDED.message, metadata = EXCLUDED.metadata,
                 affected_user_ids = EXCLUDED.affected_user_ids,
                 resolved_at = NULL
             """,
@@ -24904,7 +24904,7 @@ def _check_chunk_learning_ready(user_id: str, meal_plan_id: str, week_number: in
                         VALUES (%s, 'temporal_gate_proactive', 'info', %s, %s, %s::jsonb, %s::jsonb)
                         ON CONFLICT (alert_key) DO UPDATE
                         SET triggered_at = NOW(),
-                            metadata = EXCLUDED.metadata,
+                            message = EXCLUDED.message, metadata = EXCLUDED.metadata,
                             affected_user_ids = EXCLUDED.affected_user_ids,
                             resolved_at = NULL
                         """,

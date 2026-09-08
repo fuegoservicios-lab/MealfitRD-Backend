@@ -45067,7 +45067,7 @@ def _persist_gemini_spend_cap_alert(user_id: Optional[str]) -> None:
             VALUES (%s, 'gemini_spend_cap', 'critical', %s, %s, %s::jsonb, %s::jsonb)
             ON CONFLICT (alert_key) DO UPDATE
             SET triggered_at = NOW(),
-                metadata = EXCLUDED.metadata,
+                message = EXCLUDED.message, metadata = EXCLUDED.metadata,
                 affected_user_ids = EXCLUDED.affected_user_ids,
                 resolved_at = NULL
             """,
@@ -45125,7 +45125,7 @@ def _persist_pipeline_crash_alert(alert_key: str, user_id: Optional[str], detail
             VALUES (%s, 'pipeline_crash', 'critical', %s, %s, %s::jsonb, %s::jsonb)
             ON CONFLICT (alert_key) DO UPDATE
             SET triggered_at = NOW(),
-                metadata = EXCLUDED.metadata,
+                message = EXCLUDED.message, metadata = EXCLUDED.metadata,
                 affected_user_ids = EXCLUDED.affected_user_ids,
                 resolved_at = NULL
             """,
@@ -45191,7 +45191,7 @@ def _persist_skeleton_short_repair_alert(
             ON CONFLICT (alert_key) DO UPDATE
             SET triggered_at = NOW(),
                 severity = EXCLUDED.severity,
-                metadata = EXCLUDED.metadata,
+                message = EXCLUDED.message, metadata = EXCLUDED.metadata,
                 affected_user_ids = EXCLUDED.affected_user_ids,
                 resolved_at = NULL
             """,

@@ -1535,7 +1535,7 @@ def _emit_degraded_alert(plan_id: str, user_id: str, locale: str, razon: str) ->
             VALUES (%s, 'plan_display_i18n_degraded', 'warning', %s, %s, %s::jsonb, %s::jsonb)
             ON CONFLICT (alert_key) DO UPDATE
             SET triggered_at = NOW(),
-                metadata = EXCLUDED.metadata,
+                message = EXCLUDED.message, metadata = EXCLUDED.metadata,
                 resolved_at = NULL
             """,
             (
