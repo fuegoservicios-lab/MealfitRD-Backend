@@ -800,5 +800,12 @@
    "huella_viva": 2,
    "marca_tracer": 2
   }
- ]
+ ],
+ "cobertura_del_tracer": {
+  "huella_viva_total": 186,
+  "con_marca_del_tracer": 135,
+  "sin_marca_del_tracer": 51,
+  "los_51_son": "planes MUTADOS mas de 1 h despues de generarse (51 de 51; 0 anteriores al tracer)",
+  "lectura": "`_trace_misalign` tiene sus 8 puntos DENTRO del pipeline de generacion y ninguno en los caminos de mutacion (swap, shift, ediciones del chat, recalculos). El 27 % de la desalineacion viva nace donde el tracer no mira, asi que esas 51 comidas NO se moveran el 10-sep por buenos que sean los arreglos: los siete viven en generacion. Leer una mejora de 186 como si todo fuera atribuible al pipeline seria atribuirse trabajo ajeno."
+ }
 }
