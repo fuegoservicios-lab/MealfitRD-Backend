@@ -5511,3 +5511,38 @@ COHERENCE_ANOMALOUS_ACTIONS = (
     "reject_high",
     "hydration_error",
 )
+
+
+def distinto_alimento_raw_display(linea_raw: str, linea_display: str) -> bool:
+    """[P1-CAP-FALLBACK-MISMO-ALIMENTO · 2026-09-08] ¿Se puede AFIRMAR que son alimentos distintos?
+
+    La regla, en una frase: **si puedo NOMBRAR lo que hay en la línea de raw, tengo que poder
+    confirmar que es lo mismo antes de reescalarla.**
+
+        raw resuelve + display resuelve + `pantry_names_match` dice lo mismo  -> False (deja pasar)
+        raw resuelve + display NO resuelve, o resuelven a cosas distintas     -> True  (bloquea)
+        raw NO resuelve                                                       -> False (conducta histórica)
+
+    Las tres ramas salen de medir, no de razonar. Dos versiones anteriores intercambiaban un modo de
+    fallo por el otro y lo demostró la flota:
+
+      · exigir confirmación positiva de IGUALDAD bloqueaba «no resuelve ninguna» y dejaba la línea de
+        raw sin recortar — cambia «escribe el alimento equivocado» por «no escribe el correcto», que
+        es el modo silencioso (lo cazó `test_avocado_unicode_fraction_capped`);
+      · exigir discrepancia positiva dejaba pasar «`cebolla` contra algo sin resolver», que es el
+        caso REAL medido sobre las 986 comidas alineadas de la flota: escalaba el repollo en la
+        receta y la CEBOLLA en la compra.
+
+    Y comparar los nombres con `!=` hacía distintos `aguacate` y `aguacates`; por eso la igualdad la
+    decide `pantry_names_match`, el SSOT que ya absorbe singular/plural.
+
+    Vive aquí y no en `graph_orchestrator` porque ese fichero está en su techo de líneas, y su propio
+    test dice que eso se arregla extrayendo. El resolvedor se importa dentro para no crear el ciclo.
+    """
+    try:
+        from graph_orchestrator import _resolve_line_food_grams as _res
+        _a, _ = _res(str(linea_raw), cheap=True)
+        _b, _ = _res(str(linea_display), cheap=True)
+        return bool(_a) and (not _b or not pantry_names_match(_a, _b))
+    except Exception:
+        return False

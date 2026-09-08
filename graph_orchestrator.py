@@ -1690,7 +1690,7 @@ print = custom_print
 # NOTA: NO importar 'from agent import ...' a nivel de módulo → causa import circular
 # (app → agent → tools → graph_orchestrator → agent). Se usa lazy import donde se necesite.
 from cpu_tasks import _validar_repeticiones_cpu_bound, _normalize_meal_name
-from constants import (
+from constants import (distinto_alimento_raw_display as _distinto_alimento,
     # [P1-PROTEIN-CLOSER-COUNTRY · 2026-08-21] `country_for_form_data` sube al import de
     # MÓDULO: vivía sólo como import local dentro de `_build_shared_context`, así que los
     # call sites del closer del piso de proteína (dentro de `self_critique_node`) habrían
@@ -34324,9 +34324,9 @@ def _cap_unrealistic_portions(days, db=None, *, count_caps=None) -> int:
                                     if _cn:
                                         meal["ingredients_raw"] = _cr
                                         raw = meal["ingredients_raw"]
-                                    elif _lockstep and idx < len(raw):
-                                        # Fallback al camino histórico sólo si el mapeo por
-                                        # alimento no resolvió (línea sin alimento de catálogo).
+                                    elif _lockstep and idx < len(raw) and not _distinto_alimento(str(raw[idx]), s):
+                                        # [P1-CAP-FALLBACK-MISMO-ALIMENTO · 2026-09-08] Fallback histórico sólo si el mapeo por alimento no resolvió Y la línea de raw en `idx` es del MISMO alimento: sin esa 2ª mitad escribía a ciegas —sobre las 986 comidas ALINEADAS de la flota escaló el repollo en la receta y la CEBOLLA en la compra—.
+                                        # Dispara 3 de 78 veces, así que callarse cuesta poco, y la doctrina ya está en el hermano: recortar la línea equivocada es peor que no recortar ninguna.
                                         raw[idx] = _resc(str(raw[idx]), factor)
                                 capped += 1
                                 _meal_touched = True
