@@ -32826,21 +32826,14 @@ def _remove_one_raw_line_by_food(meal: dict, display_line: str, idx: int) -> boo
     if not (isinstance(_raw, list) and _raw):
         return False
     try:
-        _ings = meal.get("ingredients") or []
-        _parallel = (isinstance(_ings, list) and len(_raw) == len(_ings)
-                     and (not RAW_PAIR_BY_FOOD
-                          or _raw_display_parallel_by_food([str(x) for x in _ings], _raw)))
-        if _parallel and 0 <= idx < len(_raw):
-            del _raw[idx]
-            return True
-        _food, _ = _resolve_line_food_grams(str(display_line), cheap=True)
-        if not _food:
-            return False
-        _hits = [i for i, r in enumerate(_raw)
-                 if isinstance(r, str) and _resolve_line_food_grams(r, cheap=True)[0] == _food]
-        if len(_hits) != 1:
+        # [P1-CAP-BIGFRUIT-BREAD-RAW-BY-FOOD · 2026-09-07] La búsqueda vive ahora en
+        # `_raw_idx_for_display`, que es la MISMA que necesitaban los dos recortes de
+        # `_cap_unrealistic_portions`. Tenerla dos veces era la forma de que una se arreglara y
+        # la otra no — que es exactamente lo que pasó entre julio y hoy.
+        _i = _raw_idx_for_display(_raw, display_line, idx, meal.get("ingredients") or [])
+        if _i is None:
             return False  # 0 → no está en raw; >1 → ambiguo, no adivinamos cuál
-        del _raw[_hits[0]]
+        del _raw[_i]
         return True
     except Exception as _rm_e:
         # Nunca mudo, por la misma razón que el hermano: si esto falla, la 2ª proteína se quitó del
