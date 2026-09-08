@@ -169,3 +169,59 @@ def test_el_resolvedor_canonico_sigue_existiendo():
     for nombre in ("_raw_idx_for_display", "_rescale_raw_by_food",
                    "_remove_one_raw_line_by_food", "_raw_display_parallel_by_food"):
         assert callable(getattr(go, nombre, None)), f"falta {nombre}"
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# [P1-RAW-INDEX-INVENTORY-FICHEROS · 2026-09-08] El ratchet vigilaba DOS ficheros
+#
+# El inventario de arriba congela `graph_orchestrator.py` y `portion_solver.py`, y sus dos guards
+# preguntan «¿nació una función nueva AQUÍ?» y «¿creció el conteo AQUÍ?». Ninguno preguntaba
+# «¿empezó OTRO fichero a hacerlo?» — que es exactamente la forma en que esta clase sobrevivió desde
+# julio: cada P-fix cerraba los sitios que conocía y nada impedía que el siguiente naciera al lado.
+#
+# Escanear los 119 ficheros de producción con el detector desnudo da un falso positivo:
+# `cultural_benchmark._profile_lexicons` tiene un `raw: dict[str, set[str]]` de léxicos, sin ninguna
+# relación con `ingredients_raw`. Por eso el guard exige que la función TAMBIÉN mencione
+# `ingredients_raw`.
+#
+# Discriminador verificado antes de adoptarlo: no pierde NINGUNA de las 32 escrituras ya
+# inventariadas, y descarta el falso positivo. *Un detector que no se prueba contra los casos que ya
+# conoces no sabes si detecta o si reparte.*
+
+
+def _menciona_ingredients_raw(path: Path, nombre_funcion: str) -> bool:
+    try:
+        arbol = ast.parse(path.read_text(encoding="utf-8"))
+    except Exception:
+        return False
+    for top in arbol.body:
+        if getattr(top, "name", None) == nombre_funcion:
+            try:
+                return "ingredients_raw" in ast.unparse(top)
+            except Exception:
+                return False
+    return False
+
+
+def test_ningun_fichero_NUEVO_empieza_a_escribir_raw_por_indice():
+    """El tercer guard: la clase no puede mudarse a un fichero que el inventario no mira.
+
+    Si esto falla, decide una de dos y hazlo explícito:
+      · la escritura resuelve por ALIMENTO (`_raw_idx_for_display` y hermanos) → arréglala; o
+      · el fichero entra al `_INVENTARIO` con su veredicto y su traza.
+    Subir el número no es una opción aquí: no hay número que subir.
+    """
+    fuera = {}
+    for path in sorted(_BACKEND.rglob("*.py")):
+        rel = path.relative_to(_BACKEND).as_posix()
+        if rel.startswith(("tests/", "scripts/", "migrations/")) or "site-packages" in rel:
+            continue
+        if rel in _INVENTARIO:
+            continue
+        funcs = {fn: n for fn, n in _escrituras_por_funcion(path).items()
+                 if _menciona_ingredients_raw(path, fn)}
+        if funcs:
+            fuera[rel] = funcs
+    assert not fuera, (
+        "ficheros que empezaron a escribir `raw[i]` y el inventario no vigila:\n  "
+        + "\n  ".join(f"{f}: {d}" for f, d in fuera.items()))
