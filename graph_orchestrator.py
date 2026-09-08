@@ -29972,7 +29972,7 @@ def _night_rice_autofix(days: list, db=None, *, compound: bool = False, country:
     if _cc_nra(country) != "DO":
         return 0
     try:
-        from constants import canonical_slot_key, _SLOT_RICE_EXCLUDE, strip_accents as _sa
+        from constants import canonical_slot_key, _SLOT_RICE_EXCLUDE, strip_accents as _sa, sustituye_display_y_raw as _sub_dr  # [P1-NIGHTRICE-RAW-BY-FOOD]
         if db is None:
             from nutrition_db import IngredientNutritionDB
             db = IngredientNutritionDB()
@@ -30020,7 +30020,7 @@ def _night_rice_autofix(days: list, db=None, *, compound: bool = False, country:
                     if _min_g and _g and _g < _min_g:
                         continue  # guarnición tangencial → no tocar (solo aplica al pase ingredient-driven)
                     _new_g = int(round(_g * _NIGHT_RICE_CARB_FACTOR)) if _g > 0 else 150
-                    ings[j] = f"{_new_g} g de {sub}"
+                    ings[j] = _sub_dr(m, ing, j, ings, f"{_new_g} g de {sub}")  # [P1-NIGHTRICE-RAW-BY-FOOD] raw por ALIMENTO, o no se toca
                     _changed = True
                 if _rename:
                     _new_name = _NIGHT_RICE_NAME_RE.sub(sub, name)
@@ -31596,7 +31596,7 @@ def _breakfast_rice_autofix(days: list, db=None, *, country: str = "DO") -> int:
     if _cc_bra(country) != "DO":
         return 0
     try:
-        from constants import canonical_slot_key, _SLOT_RICE_EXCLUDE, strip_accents as _sa
+        from constants import canonical_slot_key, _SLOT_RICE_EXCLUDE, strip_accents as _sa, sustituye_display_y_raw as _sub_dr  # [P1-NIGHTRICE-RAW-BY-FOOD]
         if db is None:
             from nutrition_db import IngredientNutritionDB
             db = IngredientNutritionDB()
@@ -31631,7 +31631,7 @@ def _breakfast_rice_autofix(days: list, db=None, *, country: str = "DO") -> int:
                     except Exception:
                         _g = 0
                     _new_g = int(round(_g * _NIGHT_RICE_CARB_FACTOR)) if _g > 0 else 150
-                    ings[j] = f"{_new_g} g de {sub}"
+                    ings[j] = _sub_dr(m, ing, j, ings, f"{_new_g} g de {sub}")  # [P1-NIGHTRICE-RAW-BY-FOOD] raw por ALIMENTO, o no se toca
                     _changed = True
                 _name_has_rice = "arroz" in name_low and not any(_ex in name_low for _ex in _SLOT_RICE_EXCLUDE)
                 if _name_has_rice:

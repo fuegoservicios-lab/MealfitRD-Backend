@@ -77,6 +77,12 @@ _INVENTARIO = {
     "portion_solver.py": {
         "refine_day_portions_integer":             (1, "resuelto"),
     },
+    # [P1-NIGHTRICE-RAW-BY-FOOD · 2026-09-08] Este ratchet cazó su propio helper el día después de
+    # nacer: escribe `raw[_ri]`, pero `_ri` sale de `_raw_idx_for_display` — por ALIMENTO, y sin
+    # pareja no toca nada. Es exactamente la forma que el inventario existe para distinguir.
+    "constants.py": {
+        "sustituye_display_y_raw":                 (1, "resuelto"),
+    },
 }
 
 _NOMBRES = {"raw", "_raw"}

@@ -5546,3 +5546,36 @@ def distinto_alimento_raw_display(linea_raw: str, linea_display: str) -> bool:
         return bool(_a) and (not _b or not pantry_names_match(_a, _b))
     except Exception:
         return False
+
+
+def sustituye_display_y_raw(meal, display_old, idx, ings, nueva_linea):
+    """[P1-NIGHTRICE-RAW-BY-FOOD · 2026-09-08] Devuelve `nueva_linea` y, de paso, la escribe en la
+    linea de `ingredients_raw` que corresponde al MISMO alimento que `display_old`.
+
+    `_night_rice_autofix` sustituia el arroz de la cena por un tuberculo SOLO en `ingredients`: 116
+    lineas de funcion y cero menciones de `ingredients_raw`. El usuario leia «¼ batata mediana» y la
+    lista compraba «40 g de arroz blanco crudo».
+
+    Por que no se veia: las DOS cadenas de generacion terminan en reconciliadores que reparan raw,
+    asi que en los planes vivos no hay ni un caso. `finalize_single_meal_recipe_coherence` —la
+    superficie de swap / chat-modify / regenerar-dia, con 4 call sites de produccion— no tiene
+    ninguno. El defecto solo existe donde nadie estaba mirando.
+
+    Por que no se arregla con los reconciliadores: medido sobre 986 comidas alineadas, anadirlos al
+    finalizador baja el dano de 98 a 21 lineas PERO en 24 comidas `_reconcile_raw_missing_in_display`
+    devuelve el arroz al display y pelea con la regla «sin arroz de noche». Cambia «lee batata,
+    compra arroz» por «lee arroz y batata». El pase que cambia el display es quien debe llevarse raw.
+
+    Emparejar por INDICE aqui seria el error que este repo cerro siete veces en dos dias: se empareja
+    por ALIMENTO con `_raw_idx_for_display`, y si no resuelve o hay ambiguedad, raw no se toca.
+    Sustituye en el sitio (no apendea): asi no queda la linea vieja comprando el arroz retirado.
+    """
+    try:
+        from graph_orchestrator import _raw_idx_for_display as _idx
+        raw = meal.get("ingredients_raw") if isinstance(meal, dict) else None
+        _ri = _idx(raw, display_old, idx, ings)
+        if _ri is not None and isinstance(raw[_ri], str):
+            raw[_ri] = nueva_linea
+    except Exception:
+        pass
+    return nueva_linea
