@@ -47,9 +47,18 @@ Y hay un modo que es la FUNCIÓN, no el fallo: «1¼ cdas de mantequilla de man�
 
 La conclusión honesta no es un número: es que **este eje no tiene regla canónica de identidad**,
 al contrario que el eje de la Nevera (`constants.pantry_names_match`, `P1-PANTRY-NAME-RESOLUTION`).
-Por eso no tiene alarma — no se puede alarmar sobre algo que no se sabe definir. Montar el cron
-antes que la definición metería ruido en `system_alerts`, que es el desenlace opuesto al que se
-busca. *Un detector sin definición no mide: reparte.*
+Sin definición no hay alarma posible — *un detector sin definición no mide: reparte.*
+
+## Pero un tercio del eje SÍ se deja definir, y mide 0
+
+Son tres casos y sólo uno es ambiguo (ver `P2-EJE-CASO3-IDENTIDAD` al final del fichero). El caso
+«alimento DISTINTO» —la receta nombra algo que no está en la compra por ningún lado— no pide
+criterio de producto, y medirlo sobre la flota da **0 de 1.172 comidas vivas**.
+
+Eso cambia la recomendación: para la mitad inequívoca del eje **no hay alarma que montar**, porque
+no hay exposición. Los defectos `raw[idx]` de esos dos días fueron reales, pero de la clase
+CANTIDAD y LÍNEA EQUIVOCADA — no «lees pollo y compras camarones». Lo que sobrevive hoy en el eje
+es nombre, unidad y redondeo.
 
 Este test ancla los DOS hechos estructurales para que el próximo que llegue no los redescubra, y
 falla si alguien cambia uno sin actualizar el otro. **No ancla una demostración funcional**: se
@@ -60,7 +69,12 @@ import inspect
 
 import pytest
 
+import re as _re
+
+import graph_orchestrator as go
 import shopping_calculator as sc
+from constants import canonical_pantry_key
+from culinary_coherence import CONDIMENT_EXEMPT
 
 
 def test_el_lado_de_recetas_del_guard_lee_la_verdad_de_COMPRA():
@@ -123,3 +137,125 @@ def test_la_traza_sigue_SIN_consumidor(consumidor):
         f"{consumidor} empezó a leer la traza del eje ciego: documenta el consumidor y su umbral "
         "en `P2-COHERENCE-EJE-CIEGO` antes de dejarlo entrar."
     )
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# [P2-EJE-CASO3-IDENTIDAD · 2026-09-08] La mitad del eje que SÍ se puede definir
+#
+# Arriba se dice que el eje no tiene regla canónica de identidad y que por eso no puede tener
+# alarma. Cierto para el caso ambiguo — «pechuga» contra «pechuga de pollo» pide criterio de
+# producto. Pero el eje tiene tres casos y sólo uno es ambiguo:
+#
+#     1) mismo alimento, otra unidad   («1¼ cdas» vs «20 g»)              → la FUNCIÓN
+#     2) más o menos específico        («pechuga» vs «pechuga de pollo»)  → AMBIGUO
+#     3) alimento DISTINTO             («pollo» vs «camarones»)           → defecto sin discusión
+#
+# El caso 3 se puede definir hoy, y medirlo dio **0 de 1.172 comidas vivas**. Ese 0 llegó tras
+# CINCO revisiones del instrumento, y las cuatro primeras midieron de más:
+#
+#     37  →  singularizador ingenuo: `dientes`→`dient` mientras `diente` quedaba intacto
+#     20  →  condimentos «al gusto», que a propósito NO van a la lista
+#     11  →  el paréntesis de equivalencia: «(≈15 g)» contra «(≈14.81 g)», la MISMA línea
+#      0  →  con las cuatro correcciones
+#
+# *Cada versión equivocada del instrumento acusaba a producción de su propio defecto.* Por eso las
+# funciones viven aquí con sus casos de discriminación: un 0 sólo vale si el detector demuestra que
+# todavía dispara.
+
+# La lista exenta es la de la casa, no una mía — y NO se fusiona con `_ALLOWED_CONDIMENTS`, que
+# responde a otra pregunta (P1-PANTRY-CONDIMENT-PARITY).
+_EXENTO = frozenset(w for f in CONDIMENT_EXEMPT for w in str(f).split())
+
+# El paréntesis de equivalencia («(≈203 g)») es una ANOTACIÓN, no identidad: dejarlo entrar hacía
+# que «(≈15 g)» y «(≈14.81 g)» —la MISMA línea, redondeada distinto a cada lado— salieran como
+# alimentos distintos. Tres de los últimos once positivos eran exactamente eso.
+_PAREN = _re.compile(r"\([^)]*\)")
+
+# Tokens que no identifican un alimento: preparacion, envase, cortes.
+_RUIDO = {
+    "cocido", "cocida", "cocidos", "cocidas", "crudo", "cruda", "crudos", "crudas",
+    "picado", "picada", "rallado", "rallada", "molido", "molida", "fresco", "fresca",
+    "grande", "mediano", "mediana", "pequeno", "pequena", "sin", "piel", "hueso",
+    "natural", "entero", "entera", "en", "de", "la", "el", "los", "las", "y", "con",
+    "cubos", "tiras", "lonjas", "mitad", "mitades", "partido", "partida", "desmenuzado",
+    "desmenuzada", "lata", "escurrido", "escurrida", "hervido", "hervida", "asado", "asada",
+}
+
+
+def _sing(t):
+    """Raiz comun de singular y plural, sin diccionario.
+
+    En espanol no se puede deducir del plural: `diente`->`dientes` (vocal + s) y `flor`->`flores`
+    (consonante + es) se ven igual por la cola. Mis dos intentos anteriores lo trataron como regla
+    mecanica y partieron `dientes` en `dient` dejando `diente` intacto — dos formas del MISMO
+    alimento como alimentos distintos, que era la mayoria de los positivos.
+
+    La salida: no intentar el singular, sino una RAIZ a la que llegan los dos. Quitar la `s` final y
+    luego la `e` final lleva `dientes`->`diente`->`dient` y `diente`->`dient`; `flores`->`flore`->
+    `flor` y `flor`->`flor`. No es morfologia: es un punto de encuentro, que es lo unico que hace
+    falta para comparar.
+    """
+    if len(t) <= 3:
+        return t
+    if t.endswith("s"):
+        t = t[:-1]
+    if len(t) > 3 and t.endswith("e"):
+        t = t[:-1]
+    return t
+
+
+def _tokens(nombre):
+    k = canonical_pantry_key(_PAREN.sub(" ", str(nombre) or ""))
+    if not k:
+        return frozenset()
+    return frozenset(
+        _sing(t) for t in str(k).split()
+        if t and t not in _RUIDO and len(t) > 2 and not any(ch.isdigit() for ch in t))
+
+
+def _mismo_alimento(a, b):
+    """Mismo alimento si un conjunto de tokens contiene al otro. Nunca por subcadena."""
+    if not a or not b:
+        return True          # sin resolver -> no acuso
+    return a <= b or b <= a
+
+
+def _foods_de(lineas):
+    out = []
+    for s in lineas:
+        try:
+            f, _ = go._resolve_line_food_grams(str(s), cheap=True)
+        except Exception:
+            f = None
+        t = _tokens(f or s)
+        if t:
+            out.append((t, str(s)))
+    return out
+
+
+
+_CASOS = [
+    (True,  "lee pollo, compra camarones",        ["150 g de pechuga de pollo"], ["150 g de camarones"]),
+    (True,  "lee granola, compra avena",          ["32 g de Granola"],           ["31 g de Avena"]),
+    (False, "mismo alimento, otra unidad",        ["1¼ cdas de mantequilla de maní"], ["20 g de mantequilla de maní"]),
+    (False, "singular contra plural",             ["1 diente de ajo"],           ["0.87 dientes de ajo"]),
+    (False, "paréntesis redondeado distinto",     ["½ oz de queso blanco (≈15 g)"], ["0.49 oz de queso blanco (≈14.81 g)"]),
+    (False, "la compra es más específica",        ["1½ filetes de pescado"],     ["220 g de filete de pescado blanco"]),
+    (False, "condimento al gusto",                ["Sal al gusto"],              ["100 g de arroz"]),
+]
+
+
+@pytest.mark.parametrize("esperado,nombre,display,compra", _CASOS,
+                         ids=[c[1].replace(" ", "_") for c in _CASOS])
+def test_la_regla_del_caso_3_discrimina(esperado, nombre, display, compra):
+    """Los dos primeros DEBEN disparar; los cinco siguientes son variaciones legítimas y no.
+
+    Sin estos casos, el «0 sobre la flota» no significa nada: un detector que no dispara nunca sale
+    perfecto. Cada uno de los cinco negativos es un falso positivo que este instrumento cometió de
+    verdad antes de corregirse.
+    """
+    fd, fr = _foods_de(display), _foods_de(compra)
+    huerfanos = [s for t, s in fd
+                 if not (t & _EXENTO) and "al gusto" not in s.lower()
+                 and not any(_mismo_alimento(t, tr) for tr, _ in fr)]
+    assert bool(huerfanos) is esperado, f"{nombre}: huérfanos={huerfanos}"
