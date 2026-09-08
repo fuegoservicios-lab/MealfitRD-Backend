@@ -29763,7 +29763,7 @@ def _cap_leaf_volume_in_meals(days: list, db=None) -> int:
     if not LEAF_VOLUME_CAP_ENABLED:
         return 0
     try:
-        from nutrition_db import _LEAF_TOKENS, rescale_ingredient_string as _resc
+        from nutrition_db import _LEAF_TOKENS, rescale_ingredient_string as _resc; from constants import sustituye_display_y_raw as _sub_dr  # [P1-LEAFCAP-RAW-BY-FOOD]
         if db is None:
             from nutrition_db import IngredientNutritionDB
             db = IngredientNutritionDB()
@@ -29793,7 +29793,7 @@ def _cap_leaf_volume_in_meals(days: list, db=None) -> int:
                     factor = LEAF_VOLUME_CAP_G / float(grams)
                     new_ing = _resc(ing, factor)
                     if new_ing and new_ing != ing:
-                        ings[i] = new_ing
+                        ings[i] = _sub_dr(m, ing, i, ings, new_ing)  # [P1-LEAFCAP-RAW-BY-FOOD] la lista compraba la hoja SIN capar
                         _ch = True
                         capped += 1
                 if _ch:
