@@ -34437,10 +34437,13 @@ def _floor_subservible_portions(days, day_kcal_target=None, db=None) -> int:
                 if not isinstance(ings, list) or not ings:
                     continue
                 raw = meal.get("ingredients_raw")
-                _lockstep = isinstance(raw, list) and len(raw) == len(ings)
+                # [P1-FLOOR-RAW-BY-FOOD · 2026-09-07] «Mismo largo» no basta aquí: la llamada
+                # desde `finalize_single_meal_recipe_coherence` corre sobre comidas YA PERSISTIDAS,
+                # con el raw reordenado. Detalle en su test.
                 _meal_touched = False
                 _drop_idx = []
                 for idx, ing in enumerate(ings):
+                    _ri = _raw_idx_for_display(raw, str(ing), idx, ings)
                     s = str(ing)
                     il = _sa(s.lower())
                     if "al gusto" in il or "opcional" in il:
@@ -34453,9 +34456,9 @@ def _floor_subservible_portions(days, day_kcal_target=None, db=None) -> int:
                         _new_oil = _re.sub(r"\(\s*\d+(?:[.,]\d+)?\s*ml\s*\)", "(5ml)", _new_oil, count=1)
                         if _new_oil != s:
                             ings[idx] = _new_oil
-                            if _lockstep and isinstance(raw[idx], str):
-                                _new_oil_raw = _MICRO_OIL_LEAD_RE.sub("1 cdta", str(raw[idx]), count=1)
-                                raw[idx] = _re.sub(r"\(\s*\d+(?:[.,]\d+)?\s*ml\s*\)", "(5ml)",
+                            if _ri is not None and isinstance(raw[_ri], str):
+                                _new_oil_raw = _MICRO_OIL_LEAD_RE.sub("1 cdta", str(raw[_ri]), count=1)
+                                raw[_ri] = _re.sub(r"\(\s*\d+(?:[.,]\d+)?\s*ml\s*\)", "(5ml)",
                                                    _new_oil_raw, count=1)
                             touched += 1
                             _meal_touched = True
@@ -34471,9 +34474,9 @@ def _floor_subservible_portions(days, day_kcal_target=None, db=None) -> int:
                         _new_nb = _re.sub(r"\(\s*\d+(?:[.,]\d+)?\s*(?:g|ml)\s*\)", "(5g)", _new_nb, count=1)
                         if _new_nb != s:
                             ings[idx] = _new_nb
-                            if _lockstep and isinstance(raw[idx], str):
-                                _new_nb_raw = _MICRO_OIL_LEAD_RE.sub("1 cdta", str(raw[idx]), count=1)
-                                raw[idx] = _re.sub(r"\(\s*\d+(?:[.,]\d+)?\s*(?:g|ml)\s*\)", "(5g)",
+                            if _ri is not None and isinstance(raw[_ri], str):
+                                _new_nb_raw = _MICRO_OIL_LEAD_RE.sub("1 cdta", str(raw[_ri]), count=1)
+                                raw[_ri] = _re.sub(r"\(\s*\d+(?:[.,]\d+)?\s*(?:g|ml)\s*\)", "(5g)",
                                                    _new_nb_raw, count=1)
                             touched += 1
                             _meal_touched = True
@@ -34488,9 +34491,9 @@ def _floor_subservible_portions(days, day_kcal_target=None, db=None) -> int:
                             _new_ar = _MICRO_AROMATIC_HINT_RE.sub("(20g)", _new_ar, count=1)
                             if _new_ar != s:
                                 ings[idx] = _new_ar
-                                if _lockstep and isinstance(raw[idx], str):
-                                    _new_ar_raw = _MICRO_AROMATIC_LEAD_RE.sub("2 cdas", str(raw[idx]), count=1)
-                                    raw[idx] = _MICRO_AROMATIC_HINT_RE.sub("(20g)", _new_ar_raw, count=1)
+                                if _ri is not None and isinstance(raw[_ri], str):
+                                    _new_ar_raw = _MICRO_AROMATIC_LEAD_RE.sub("2 cdas", str(raw[_ri]), count=1)
+                                    raw[_ri] = _MICRO_AROMATIC_HINT_RE.sub("(20g)", _new_ar_raw, count=1)
                                 touched += 1
                                 _meal_touched = True
                             continue
@@ -34508,9 +34511,9 @@ def _floor_subservible_portions(days, day_kcal_target=None, db=None) -> int:
                                     _new_cn = None
                                 if _new_cn and _new_cn != s:
                                     ings[idx] = _new_cn
-                                    if _lockstep and isinstance(raw[idx], str):
+                                    if _ri is not None and isinstance(raw[_ri], str):
                                         try:
-                                            raw[idx] = _resc(str(raw[idx]), _cf)
+                                            raw[_ri] = _resc(str(raw[_ri]), _cf)
                                         except Exception:
                                             pass
                                     touched += 1
@@ -34528,9 +34531,9 @@ def _floor_subservible_portions(days, day_kcal_target=None, db=None) -> int:
                             _new_rz = _resc(s, _rzf)
                             if _new_rz != s:
                                 ings[idx] = _new_rz
-                                if _lockstep and isinstance(raw[idx], str):
+                                if _ri is not None and isinstance(raw[_ri], str):
                                     try:
-                                        raw[idx] = _resc(str(raw[idx]), _rzf)
+                                        raw[_ri] = _resc(str(raw[_ri]), _rzf)
                                     except Exception:
                                         pass
                                 touched += 1
@@ -34549,9 +34552,9 @@ def _floor_subservible_portions(days, day_kcal_target=None, db=None) -> int:
                             _new_q = _resc(s, _qf)
                             if _new_q != s:
                                 ings[idx] = _new_q
-                                if _lockstep and isinstance(raw[idx], str):
+                                if _ri is not None and isinstance(raw[_ri], str):
                                     try:
-                                        raw[idx] = _resc(str(raw[idx]), _qf)
+                                        raw[_ri] = _resc(str(raw[_ri]), _qf)
                                     except Exception:
                                         pass
                                 touched += 1
@@ -34608,9 +34611,9 @@ def _floor_subservible_portions(days, day_kcal_target=None, db=None) -> int:
                                     _new_pf = None
                                 if _new_pf and _new_pf != s:
                                     ings[idx] = _new_pf
-                                    if _lockstep and isinstance(raw[idx], str):
+                                    if _ri is not None and isinstance(raw[_ri], str):
                                         try:
-                                            raw[idx] = _resc(str(raw[idx]), _f_pf)
+                                            raw[_ri] = _resc(str(raw[_ri]), _f_pf)
                                         except Exception:
                                             pass
                                     if _headroom is not None:
@@ -34671,9 +34674,9 @@ def _floor_subservible_portions(days, day_kcal_target=None, db=None) -> int:
                                     _new_cf = None
                                 if _new_cf and _new_cf != s:
                                     ings[idx] = _new_cf
-                                    if _lockstep and isinstance(raw[idx], str):
+                                    if _ri is not None and isinstance(raw[_ri], str):
                                         try:
-                                            raw[idx] = _resc(str(raw[idx]), _tgt_cf / cur_g)
+                                            raw[_ri] = _resc(str(raw[_ri]), _tgt_cf / cur_g)
                                         except Exception:
                                             pass
                                     if _headroom is not None:
@@ -34708,9 +34711,9 @@ def _floor_subservible_portions(days, day_kcal_target=None, db=None) -> int:
                             continue
                         if _new and _new != s:
                             ings[idx] = _new
-                            if _lockstep:
+                            if _ri is not None:
                                 try:
-                                    raw[idx] = _resc(str(raw[idx]), factor)
+                                    raw[_ri] = _resc(str(raw[_ri]), factor)
                                 except Exception:
                                     pass
                             if _headroom is not None:
@@ -34721,9 +34724,9 @@ def _floor_subservible_portions(days, day_kcal_target=None, db=None) -> int:
                         _drop_idx.append(idx)
                 if _drop_idx and (len(ings) - len(_drop_idx)) >= 2:
                     for _di in sorted(_drop_idx, reverse=True):
+                        # ANTES de mutar `ings`: el helper compara las dos listas en el mismo estado.
+                        _remove_one_raw_line_by_food(meal, str(ings[_di]), _di)
                         ings.pop(_di)
-                        if _lockstep and _di < len(raw):
-                            raw.pop(_di)
                     touched += len(_drop_idx)
                     _meal_touched = True
                 if _meal_touched:
