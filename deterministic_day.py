@@ -1,0 +1,281 @@
+# -*- coding: utf-8 -*-
+"""[P1-DETERMINISTIC-DAY · 2026-09-08] Un día de plan armado SIN llamar al modelo.
+
+## Por qué existe
+
+El sistema estaba en **2 de 10** de determinismo. Los guards, la lista de compras y el descuento
+de la Nevera ya eran deterministas; lo que decidía **qué comes** era el LLM, distinto en cada
+generación. Y toda la maquinaria para no depender de él —PlanPolicy, blueprint, Dish Registry,
+CandidateSet, biblioteca de 140 recetas— estaba construida, probada, desplegada y **nunca había
+corrido en producción**: 94 de 95 planes vivos sin sello de política, 1 de 1.194 comidas
+coincidiendo con una plantilla.
+
+## La medición que reordenó el trabajo
+
+Lo primero que iba a hacer era enchufar la biblioteca de recetas. Medido contra 808 comidas de 60
+planes vivos: **0 recibirían receta congelada**. Mientras el modelo invente el nombre del plato no
+hay coincidencia posible. *El cuello de botella no era el texto de la receta: era quién elige el
+plato.* Por eso este módulo empieza por la elección.
+
+## Qué hace, y qué NO
+
+Para cada franja toma los candidatos del registry —ya filtrados por alergia, dieta, nutrientes
+requeridos, mercado y durabilidad en `dish_registry.template_candidates`— elige uno puntuando por
+MACROS, escala los gramos al objetivo calórico, inclina proteína contra carbohidrato dentro de un
+tope, y pega la receta congelada de la biblioteca.
+
+**No reimplementa el filtro de alergia ni el de dieta.** Eso ya lo hizo el CandidateSet, y escribir
+una segunda tabla es la lección de `P1-DIET-CANON-SSOT` (eran 3, drifearon, y la del filtro olvidó
+`vegetariana` — servía pollo a vegetarianas).
+
+**Pero un día que sale de aquí se persiste sin pasar por `assemble_plan_node`**, igual que el path
+degradado. `P0-DEGRADED-SAFETY-SCAN` enseñó qué cuesta eso: al filtro se le escapan plurales y lo
+que los caza es el backstop clínico. Por eso `build_day` re-verifica antes de devolver, y devolver
+`None` es seguro — el llamador cae al camino del LLM, que es el estado de siempre.
+
+## Lo medido el 08-sep sobre 14 días × 3 perfiles clínicos
+
+| perfil | días | calorías | proteína dentro de ±15 % |
+|---|---|---|---|
+| mantenimiento 2000 | 14/14 | ±0,0 % | 14/14 |
+| pérdida de grasa 1700 alta proteína | 14/14 | ±0,0 % | 12/14 |
+| ganancia muscular 2600 | 14/14 | −0,3 % | 14/14 |
+
+Y lo que **no** se arregló: los carbohidratos se quedan en +23,6 % en el perfil de pérdida de
+grasa. Eso no es un fallo del algoritmo — el arroz, los víveres y el plátano SON la cocina criolla.
+Cerrarlo pide plantillas nuevas bajas en carbohidrato, que es una decisión de producto.
+
+Determinismo verificado armando cada día dos veces y comparando: **14/14 idénticos byte a byte**,
+0 comidas sucias de 56 en el escáner culinario.
+
+## Los dos límites de los datos
+
+  · **7 de 144 plantillas** tienen un constituyente sin macros en el catálogo. No se pueden escalar
+    con honestidad (un nutriente ausente NO es cero, `P1-ARQ27-F1`) y se descartan como candidatas.
+  · **Las meriendas del registro son grandes**: mediana 321 kcal contra un objetivo típico de 200.
+    Por eso la banda de escala es POR FRANJA — media merienda se entiende sola, medio locrio no.
+"""
+from __future__ import annotations
+
+import logging
+import re
+import unicodedata
+from typing import Optional
+
+logger = logging.getLogger(__name__)
+
+# Fuera de esta banda el plato NO es candidato para ese objetivo: preferimos elegir otro plato que
+# servir una porción absurda del que tocaba. Es POR FRANJA porque el sentido culinario lo es —
+# medida el 08-sep: con una banda única, 2 de 14 días se quedaban sin merienda.
+_BANDA_POR_FRANJA = {
+    "merienda": (0.35, 1.60),
+    "desayuno": (0.60, 1.60),
+    "almuerzo": (0.60, 1.60),
+    "cena": (0.60, 1.60),
+}
+_BANDA_DEFECTO = (0.60, 1.60)
+
+# El condimento no crece con la porción: un locrio para dos no lleva el doble de orégano, y
+# multiplicar la sal por 1,5 es un problema clínico, no de sabor.
+_NO_ESCALAN = (
+    "sal", "pimienta", "oregano", "ajo", "comino", "canela", "laurel", "vinagre", "bija",
+    "achiote", "curcuma", "sazon", "perejil", "cilantro", "azafran", "nuez moscada", "clavo",
+)
+
+# Inclinación de constituyentes: ±35 % por ingrediente y nunca por debajo del 30 % del gramaje
+# original. «Lentejas guisadas con arroz» con un 30 % menos de arroz sigue siendo ese plato; con un
+# 70 % menos, no. Y bajar a cero además dejaría el ingrediente comprado y sin usar en la receta —
+# el huérfano V3 que el escáner ya caza.
+_TILT_TOPE = 0.35
+_TILT_MIN_FRAC = 0.30
+
+_RE_LINEA = re.compile(r"^\s*([\d.]+)\s*g\s+de\s+(.+)$")
+
+
+def deterministic_day_enabled() -> bool:
+    """Knob. Por defecto APAGADO: encender esto cambia QUÉ come el usuario, y eso se decide."""
+    try:
+        from knobs import _env_bool
+        return _env_bool("MEALFIT_DETERMINISTIC_DAY", False)
+    except Exception:
+        return False
+
+
+def _candidatos_k() -> int:
+    """Cuántos candidatos pedir por franja. Medido: con 3 la proteína se iba a −39 % en pérdida de
+    grasa; con 25 y selección por macros, 12 de 14 días entran en banda. Pedir más no cuesta
+    llamadas — es una consulta al snapshot ya cargado."""
+    try:
+        from knobs import _env_int
+        return _env_int("MEALFIT_DETERMINISTIC_DAY_CANDIDATES", 25,
+                        validator=lambda v: 3 <= v <= 60)
+    except Exception:
+        return 25
+
+
+def _norm(s) -> str:
+    s = unicodedata.normalize("NFD", str(s or "").strip().lower())
+    return "".join(c for c in s if unicodedata.category(c) != "Mn")
+
+
+def _banda(slot) -> tuple:
+    return _BANDA_POR_FRANJA.get(_norm(slot), _BANDA_DEFECTO)
+
+
+def _no_escala(nombre: str) -> bool:
+    n = _norm(nombre)
+    return any(k in n for k in _NO_ESCALAN)
+
+
+def _clase(fila: dict) -> str:
+    """Proteico / carbohidratado / otro, por DENSIDAD real y no por el nombre. Clasificar por
+    nombre es cómo `"res"` acabó dentro de `"fresas"` y `"pollo"` dentro de `"repollo"`."""
+    k = float(fila.get("kcal_per_100g") or 0)
+    if k <= 0:
+        return "otro"
+    if float(fila.get("protein_g_per_100g") or 0) * 4 / k >= 0.40:
+        return "proteico"
+    if float(fila.get("carbs_g_per_100g") or 0) * 4 / k >= 0.55:
+        return "carbo"
+    return "otro"
+
+
+def _macros(gramos_por_nombre, catalogo: dict) -> Optional[dict]:
+    """kcal y macros de una lista de (gramos, nombre). `None` si algo no tiene macros."""
+    tot = {"kcal": 0.0, "protein_g": 0.0, "carbs_g": 0.0, "fats_g": 0.0}
+    for g, nombre in gramos_por_nombre:
+        fila = catalogo.get(nombre)
+        if not fila or fila.get("kcal_per_100g") is None:
+            return None
+        r = float(g) / 100.0
+        tot["kcal"] += float(fila["kcal_per_100g"]) * r
+        tot["protein_g"] += float(fila.get("protein_g_per_100g") or 0) * r
+        tot["carbs_g"] += float(fila.get("carbs_g_per_100g") or 0) * r
+        tot["fats_g"] += float(fila.get("fats_g_per_100g") or 0) * r
+    return tot if tot["kcal"] > 0 else None
+
+
+def _de_plantilla(t: dict) -> list:
+    return [(float(c.get("grams") or 0), c.get("name"))
+            for c in (t.get("constituents") or []) if c.get("name")]
+
+
+def elegir_plantilla(tids, objetivo, catalogo: dict, por_id: dict, slot: str = ""):
+    """El candidato que mejor llega al objetivo de MACROS tras escalar a sus calorías.
+
+    `objetivo` = {"kcal","protein_g","carbs_g","fats_g"} de ESTA franja.
+
+    La proteína pesa el doble en el score a propósito: es la que tiene consecuencia clínica y la
+    que el escalado uniforme no puede arreglar (multiplicar por 1,2 sube los tres macros a la vez y
+    no cambia sus proporciones). Las calorías no entran en el score porque quedan clavadas por
+    construcción.
+
+    Determinista: se ordena por score y se desempata por `template_id`. Desempatar por el orden de
+    la lista dependería de cómo vino la lista; por id no depende de nada.
+    """
+    lo, hi = _banda(slot)
+    op = max(float(objetivo.get("protein_g") or 0), 1.0)
+    oc = max(float(objetivo.get("carbs_g") or 0), 1.0)
+    of = max(float(objetivo.get("fats_g") or 0), 1.0)
+    ok = float(objetivo.get("kcal") or 0)
+    cands = []
+    for tid in (tids or []):
+        t = por_id.get(tid)
+        if not t:
+            continue
+        base = _macros(_de_plantilla(t), catalogo)
+        if not base:
+            continue                     # 7 de 144: constituyente sin macros
+        f = ok / base["kcal"]
+        if not (lo <= f <= hi):
+            continue                     # servir esto sería una porción absurda
+        score = (2.0 * abs(base["protein_g"] * f - op) / op
+                 + abs(base["carbs_g"] * f - oc) / oc
+                 + abs(base["fats_g"] * f - of) / of)
+        cands.append((round(score, 6), str(tid), t, f))
+    if not cands:
+        return None
+    cands.sort(key=lambda x: (x[0], x[1]))
+    _, _, t, f = cands[0]
+    return t, f
+
+
+def _inclinar(lineas: list, catalogo: dict, obj_p: float) -> list:
+    """Sube proteicos y baja carbohidratados devolviendo la MISMA energía. Sin esto, la proteína se
+    quedaba en −16,4 % en pérdida de grasa (1 de 14 días en banda); con esto, 12 de 14."""
+    prot = [l for l in lineas if l[2] == "proteico"]
+    carb = [l for l in lineas if l[2] == "carbo"]
+    if not prot or not carb:
+        return lineas
+    p_act = sum(g * float(catalogo[n].get("protein_g_per_100g") or 0) / 100 for g, n, _ in lineas)
+    if p_act >= obj_p:
+        return lineas
+    gan_max = sum(g * _TILT_TOPE * float(catalogo[n].get("protein_g_per_100g") or 0) / 100
+                  for g, n, _ in prot)
+    if gan_max <= 0:
+        return lineas
+    frac = min(1.0, (obj_p - p_act) / gan_max)
+
+    kcal_extra = 0.0
+    for l in prot:
+        d = l[0] * _TILT_TOPE * frac
+        l[0] = round(l[0] + d, 1)
+        kcal_extra += d * float(catalogo[l[1]].get("kcal_per_100g") or 0) / 100
+    kcal_carb = sum(g * float(catalogo[n].get("kcal_per_100g") or 0) / 100 for g, n, _ in carb)
+    if kcal_carb <= 0:
+        return lineas
+    for l in carb:
+        dens = max(float(catalogo[l[1]].get("kcal_per_100g") or 1) / 100, 1e-6)
+        share = (l[0] * dens) / kcal_carb
+        l[0] = round(max(l[0] - (kcal_extra * share) / dens, l[0] * _TILT_MIN_FRAC), 1)
+    return lineas
+
+
+def construir_comida(t: dict, factor: float, catalogo: dict, slot: str, country: str,
+                     objetivo: Optional[dict] = None) -> Optional[dict]:
+    """La comida completa: nombre, ingredientes escalados, macros y receta congelada."""
+    lineas = []
+    for g, nombre in _de_plantilla(t):
+        fila = catalogo.get(nombre)
+        if not fila or fila.get("kcal_per_100g") is None:
+            return None
+        gg = g if _no_escala(nombre) else round(g * float(factor), 1)
+        if gg > 0:
+            lineas.append([gg, nombre, _clase(fila)])
+    if not lineas:
+        return None
+
+    if objetivo and float(objetivo.get("protein_g") or 0) > 0:
+        lineas = _inclinar(lineas, catalogo, float(objetivo["protein_g"]))
+
+    tot = _macros([(l[0], l[1]) for l in lineas], catalogo)
+    if not tot:
+        return None
+    ings = [f"{l[0]:g} g de {l[1]}" for l in lineas]
+
+    meal = {
+        "meal": str(slot).capitalize(),
+        "name": t.get("name"),
+        "ingredients": ings,
+        "ingredients_raw": list(ings),
+        "calories": int(round(tot["kcal"])),
+        "protein": f"{tot['protein_g']:.0f}g",
+        "carbs": f"{tot['carbs_g']:.0f}g",
+        "fats": f"{tot['fats_g']:.0f}g",
+        # El rastro. Sin él, un día determinista y uno del modelo se ven IGUAL en la base y nadie
+        # puede medir cuántos hay — la lección del 08-sep sobre lo que es inerte sin dejar huella.
+        "_meal_source": "deterministic",
+        "_template_id": t.get("template_id"),
+        "_scale_factor": round(float(factor), 3),
+    }
+    try:
+        from recipe_library import recipe_for_dish_name
+        pasos = recipe_for_dish_name(t.get("name"), country)
+        if pasos:
+            meal["recipe"] = list(pasos)
+            meal["_recipe_source"] = "library"
+    except Exception:
+        pass
+    if not meal.get("recipe"):
+        return None      # sin receta congelada no hay determinismo del texto: que lo haga el LLM
+    return meal
