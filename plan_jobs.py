@@ -132,7 +132,18 @@ def display_i18n_dedup_key(plan_id: str, revision: Optional[int], locale: str, d
 # se escribió no se toca (jsonb_set por comida) y el perdido se recupera en el siguiente intento.
 # Vocabulario completo = literales de `enrich_plan_display` + los valores de `last_skip_reason`
 # (verificado contra producción 2026-09-05: `no_valid_meals` = todo ya traducido, NO un fallo).
-_DONE_SKIPS = frozenset({"no_meals", "no_valid_meals", "no_days", "knob_off", "locale", "not_found"})
+# [P1-I18N-RECONCILE · 2026-09-08] `already_enriched` faltaba, y es el estado MÁS terminado que hay:
+# «no quedaba nada por traducir». Caía al `if skipped:` final → `failed` → reintento con backoff
+# hasta agotar `MEALFIT_PLAN_JOBS_MAX_ATTEMPTS` y morir en dead-letter, por haber hecho el trabajo.
+# Visto en producción el 08-sep: job rev=26 de un plan ya traducido al completo, `failed`.
+#
+# El mismo día, `plan_display_i18n._RAZONES_BENIGNAS` aprendió esta palabra
+# (`P2-I18N-YA-TRADUCIDO-NO-ES-DEGRADACION`) y este conjunto NO — dos vocabularios para el mismo
+# hecho y sólo uno actualizado. **No los fusiones**: aquel decide si ALERTAR (degradación) y éste si
+# REINTENTAR (trabajo), y difieren de verdad — `dedupe_locked` es benigno para la alerta y sí debe
+# reintentarse como job. Lo que comparten es este literal, y por eso queda anotado en ambos lados.
+_DONE_SKIPS = frozenset({"no_meals", "no_valid_meals", "no_days", "knob_off", "locale", "not_found",
+                         "already_enriched"})
 _RETRY_SKIPS = frozenset({
     "circuit_breaker_open", "dedupe_inprocess", "dedupe_locked", "exception", "partial_loss",
     "invocation_budget_exhausted", "json_parse_error", "llm_exception", "persist_stale_mismatch",
@@ -227,6 +238,113 @@ def maybe_enqueue_display_i18n(plan_id: str, user_id: str, locale: str, day_indi
     except Exception as e:
         logger.debug(f"[ARQ25-F5] maybe_enqueue_display_i18n cae a legacy: {e!r}")
         return False
+
+
+# ----------------------------------------------------------------------------- reconciliación
+def i18n_reconcile_enabled() -> bool:
+    return _env_bool("MEALFIT_I18N_RECONCILE", True)
+
+
+def i18n_reconcile_batch() -> int:
+    return _clamp(_env_int("MEALFIT_I18N_RECONCILE_BATCH", 20), 1, 200)
+
+
+def i18n_reconcile_max_age_days() -> int:
+    return _clamp(_env_int("MEALFIT_I18N_RECONCILE_MAX_AGE_DAYS", 14), 1, 90)
+
+
+def i18n_reconcile_interval_min() -> int:
+    return _clamp(_env_int("MEALFIT_I18N_RECONCILE_INTERVAL_MIN", 20), 5, 720)
+
+
+# La consulta es el contrato: un plan necesita traducción cuando su revisión VIGENTE no tiene un
+# trabajo `display_i18n` en un estado que vaya a producirla o ya la haya producido.
+_I18N_PENDIENTES_SQL = """
+SELECT m.id AS plan_id, m.user_id, m.revision, p.locale
+  FROM meal_plans m
+  JOIN user_profiles p ON p.id = m.user_id
+ WHERE p.locale = ANY(%s)
+   AND m.revision IS NOT NULL
+   AND m.updated_at > NOW() - make_interval(days => %s)
+   AND jsonb_array_length(COALESCE(m.plan_data->'days', '[]'::jsonb)) > 0
+   AND NOT EXISTS (
+         SELECT 1 FROM plan_jobs j
+          WHERE j.plan_id = m.id
+            AND j.job_type = %s
+            AND j.plan_revision = m.revision
+            AND j.status IN ('pending', 'processing', 'done')
+            AND j.payload->>'locale' = p.locale)
+ ORDER BY m.updated_at DESC
+ LIMIT %s
+"""
+
+
+def reconcile_missing_display_i18n(limit: Optional[int] = None) -> dict:
+    """Encola traducción para los planes cuya revisión VIGENTE no tiene trabajo que la cubra.
+
+    **Por qué existe.** `meal_plans.revision` la sube un TRIGGER de base de datos en cada
+    `UPDATE OF plan_data` (`meal_plans_bump_revision_trg`, migración ARQ25-F1) — decenas de caminos
+    de escritura. El trabajo de traducción, en cambio, se encola desde TRES sitios de aplicación.
+    El resultado medido el 08-sep sobre el único usuario real de producción: su plan iba por la
+    revisión **26** y el último `display_i18n` era de la **24**; veía la app en francés y las 12
+    comidas de su plan en español, desde el 5-sep, sin que nada lo reintentara.
+
+    La cadena de re-encolado por `revision_changed` (ver el consumidor) YA funcionaba — se la vio
+    encadenar 18→22→23→24 correctamente. Lo que faltaba era el encolado INICIAL en los caminos que
+    no son esos tres. Es la lección que este repo ya tiene escrita: *una defensa que depende de que
+    alguien la invoque es una costumbre, no una defensa*; y *cuando el mismo dato se copia a mano
+    en N sitios, el bug es que hay N*. Por eso esto NO añade un cuarto call site: barre contra la
+    misma columna que el trigger mantiene.
+
+    **Coste acotado, a propósito.** `enqueue_plan_job` es idempotente por `dedup_key` (que incluye
+    la revisión), así que un plan produce como mucho un trabajo por revisión y locale. Y
+    `enrich_plan_display` salta las comidas ya traducidas (`already_enriched`), de modo que un
+    cambio pequeño sólo paga por lo que cambió. `es-DO` queda fuera porque es el idioma base: la
+    clave ES el texto español y no lleva catálogo.
+    """
+    if not plan_jobs_enabled() or not consumer_enabled(JOB_TYPE_DISPLAY_I18N):
+        return {"skipped": "knob_off", "encolados": 0, "candidatos": 0}
+    if not i18n_reconcile_enabled():
+        return {"skipped": "reconcile_off", "encolados": 0, "candidatos": 0}
+    try:
+        from db import execute_sql_query
+        # `should_enrich_locale` es el SSOT de «este locale se traduce» y ya excluye el idioma base.
+        # Preguntarle a él —en vez de escribir un cuarto literal `!= "es-DO"` en este SQL— es la
+        # lección de `P1-DIET-CANON-SSOT`: un 2.º/3.º/4.º sitio que reimplementa la misma regla
+        # driftea, y la tabla que se olvidó de `vegetariana` sirvió pollo a vegetarianas.
+        from plan_display_i18n import should_enrich_locale
+    except Exception as e:                                           # noqa: BLE001
+        logger.warning(f"[P1-I18N-RECONCILE] imports no disponibles: {e!r}")
+        return {"skipped": "no_deps", "encolados": 0, "candidatos": 0}
+    try:
+        vivos = execute_sql_query(
+            "SELECT DISTINCT locale FROM user_profiles WHERE locale IS NOT NULL AND locale <> ''",
+            fetch_all=True) or []
+        traducibles = sorted({str(r.get("locale")) for r in vivos if should_enrich_locale(r.get("locale"))})
+        if not traducibles:
+            return {"skipped": None, "encolados": 0, "candidatos": 0}
+        filas = execute_sql_query(
+            _I18N_PENDIENTES_SQL,
+            (traducibles, int(i18n_reconcile_max_age_days()), JOB_TYPE_DISPLAY_I18N,
+             int(limit or i18n_reconcile_batch())),
+            fetch_all=True,
+        ) or []
+    except Exception as e:                                           # noqa: BLE001
+        logger.warning(f"[P1-I18N-RECONCILE] consulta falló: {e!r}")
+        return {"skipped": "query_failed", "encolados": 0, "candidatos": 0}
+
+    encolados = 0
+    for f in filas:
+        try:
+            if maybe_enqueue_display_i18n(str(f.get("plan_id")), str(f.get("user_id")), str(f.get("locale"))):
+                encolados += 1
+        except Exception as e:                                       # noqa: BLE001
+            logger.debug(f"[P1-I18N-RECONCILE] encolado falló plan={f.get('plan_id')}: {e!r}")
+    if filas:
+        logger.info(
+            f"[P1-I18N-RECONCILE] {encolados}/{len(filas)} plan(es) sin traducción para su revisión "
+            f"vigente re-encolados (locales: {sorted({str(f.get('locale')) for f in filas})}).")
+    return {"skipped": None, "encolados": encolados, "candidatos": len(filas)}
 
 
 # ----------------------------------------------------------------------------- DB: worker
@@ -566,6 +684,8 @@ __all__ = [
     "heartbeat_stale_s", "worker_interval_s", "backoff_seconds", "display_i18n_dedup_key",
     "verdict_for_display_result", "current_plan_revision", "enqueue_plan_job", "maybe_enqueue_display_i18n",
     "wake_plan_jobs_worker", "claim_plan_jobs", "heartbeat_plan_job", "reclaim_stale_processing",
+    "reconcile_missing_display_i18n", "i18n_reconcile_enabled", "i18n_reconcile_batch",
+    "i18n_reconcile_max_age_days", "i18n_reconcile_interval_min",
     "finish_plan_job", "CONSUMERS", "enabled_consumers", "process_plan_jobs",
     "build_shopping_projection", "classify_projection_jobs", "shopping_list_fingerprint", "enqueue_shopping_reprojection",
 ]

@@ -6740,6 +6740,22 @@ def _process_plan_jobs_job() -> None:
         logger.warning(f"[ARQ25-F5] _process_plan_jobs_job falló: {e!r}")
 
 
+def _reconcile_display_i18n_job() -> None:
+    """[P1-I18N-RECONCILE · 2026-09-08] Barrido: planes cuya revisión VIGENTE no tiene traducción.
+
+    `meal_plans.revision` la sube un TRIGGER de base de datos en CADA `UPDATE OF plan_data`; el
+    trabajo de traducción se encolaba desde tres sitios de aplicación. Medido en producción el
+    08-sep sobre el único usuario real: plan en revisión 26, último `display_i18n` en la 24 — veía
+    la app en francés y sus 12 comidas en español desde el 5-sep, y nada lo reintentaba. Motor SSOT
+    `plan_jobs.reconcile_missing_display_i18n`; nunca lanza.
+    """
+    try:
+        from plan_jobs import reconcile_missing_display_i18n
+        reconcile_missing_display_i18n()
+    except Exception as e:
+        logger.warning(f"[P1-I18N-RECONCILE] _reconcile_display_i18n_job falló: {e!r}")
+
+
 def register_plan_chunk_scheduler(scheduler) -> None:
     """Registra el polling del worker de chunks una sola vez en el scheduler global."""
     if not scheduler:
@@ -6777,6 +6793,26 @@ def register_plan_chunk_scheduler(scheduler) -> None:
         logger.info(
             f"⏰ [ARQ25-F5] Worker plan_jobs registrado cada {_plan_jobs_worker_interval_s()} s."
         )
+
+    # [P1-I18N-RECONCILE · 2026-09-08] Barrido de traducciones sin trabajo para la revisión vigente.
+    # No es un cuarto call site del disparador: barre contra la MISMA columna (`meal_plans.revision`)
+    # que el trigger de DB mantiene, que es la única que sabe de todas las escrituras.
+    if not scheduler.get_job("reconcile_display_i18n"):
+        try:
+            from plan_jobs import i18n_reconcile_interval_min as _i18n_int
+            _iv = int(_i18n_int())
+        except Exception:
+            _iv = 20
+        _add_job_jittered(scheduler,
+            _reconcile_display_i18n_job,
+            "interval",
+            minutes=_iv,
+            id="reconcile_display_i18n",
+            max_instances=1,
+            coalesce=True,
+            replace_existing=True,
+        )
+        logger.info(f"⏰ [P1-I18N-RECONCILE] Barrido de traducciones pendientes registrado cada {_iv} min.")
 
     # [P2-AUDIT-2 · 2026-05-12] Cron observable de bloat post-tuning P1-B.
     # Cada 6h reporta dead_pct + hours_since_autovacuum de las 7 tablas
