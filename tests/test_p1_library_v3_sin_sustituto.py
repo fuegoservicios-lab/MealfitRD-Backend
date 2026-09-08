@@ -97,10 +97,16 @@ def test_la_procedencia_dice_lo_que_NO_esta_resuelto(biblioteca):
     al dato, qué sigue sin medirse."""
     p = biblioteca.get("procedencia") or {}
     assert p.get("sin_resolver"), "falta el apartado de lo que la biblioteca NO arregla"
-    sr = _norm(p["sin_resolver"])
-    assert "crudo" in sr and "cocido" in sr, (
-        "los gramos crudo-vs-cocido son el hallazgo más serio de la ronda del dueño (cambian el "
-        "cálculo nutricional) y no están arreglados: tiene que constar")
+
+    # [P1-LIBRARY-V4-PESO-Y-TIEMPO · 2026-09-08] Este assert exigía «crudo» y «cocido» dentro de
+    # `sin_resolver`, y la v4 los movió: la causa dejó de estar abierta (17 de 83 platos decían el
+    # estado del peso; ahora 67). Anclar que siga SIN RESOLVER sería fijar un estado del mundo que
+    # ya cambió. Lo que no puede perderse es el HALLAZGO — de dónde salió la regla —, así que se
+    # busca en toda la procedencia, no en un apartado concreto.
+    todo = _norm(" ".join(str(v) for v in p.values()))
+    assert "crudo" in todo and ("cocido" in todo or "escurrid" in todo), (
+        "la procedencia perdió el hallazgo del peso crudo-vs-cocido: fue el más serio de la ronda "
+        "del dueño (cambia el cálculo nutricional) y es el origen de la regla 14 del prompt")
     assert "juzgada por un humano todavia" in _norm(p.get("veredicto_humano", "")), (
         "la v3 no ha pasado juicio humano; decir lo contrario es exactamente el error que este "
         "P-fix corrige")
