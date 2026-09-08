@@ -40,6 +40,10 @@ conversión equivocada daría factores distintos en cada caso, no el mismo núme
   probó re-ejecutando `_cap_unrealistic_portions` ya arreglado sobre las 7: **cura 2, deja 5**. Las
   cinco que quedan no las cubre ese cap.
 - **No es escalado por hogar** (multiplier `None`).
+- **No es el cap bariátrico**, pese a que `BARIATRIC_CHEESE_CAP_G` y `BARIATRIC_AVOCADO_CAP_G` valen
+  exactamente `30` y la coincidencia invitaba. Probado `_resc_cap_coherent` directamente: escala por
+  factor conservando la unidad y **sólo escribe el número del tope cuando la unidad ya es gramos**
+  (`450 g` → `30 g`; `3 cdas` → `0,99 cdas`). Además sólo toca `ingredients`, no `raw`.
 
 ## Un falso positivo de la sonda, para que no infle el número
 
