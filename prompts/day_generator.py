@@ -393,9 +393,15 @@ if _DONENESS_INSIDE:
         "    - POLLO, PAVO o cualquier ave: 74 °C en la parte más gruesa, con termómetro. Carne\n"
         "      MOLIDA (res, cerdo): 71 °C. Piezas enteras de res o cerdo: 63 °C y 3 minutos de\n"
         "      reposo. Aquí no es textura, es seguridad, y el COLOR NO SIRVE: la carne se dora\n"
-        "      antes de estar segura y puede seguir rosada después. Si quien cocina no tiene\n"
-        "      termómetro, di además la señal de respaldo (los jugos salen claros y la carne se\n"
-        "      separa del hueso sin resistencia) — pero la temperatura va SIEMPRE primero.\n"
+        # [P0-DONENESS-SIN-SUSTITUTO · 2026-09-08] La versión anterior ofrecía una señal de
+        # respaldo «para quien no tenga termómetro», con la temperatura primero. El dueño la
+        # rechazó en 9 de 20 notas: «eliminar los jugos claros, la firmeza y la ausencia de zonas
+        # rosadas como sustitutos del termómetro». Tenía razón — un sustituto ofrecido es un
+        # sustituto usado, y el orden no lo evita. Misma forma que el palillo del 07-sep: una
+        # cláusula bienintencionada que se convierte en la puerta de salida.
+        "      antes de estar segura y puede seguir rosada después. NO ofrezcas ningún sustituto\n"
+        "      (jugos claros, carne firme, sin zonas rosadas): ninguno garantiza inocuidad y\n"
+        "      ofrecerlo es que se use. Di la temperatura y dónde medirla, y nada más.\n"
         # «víveres» va en MINÚSCULA a propósito: `_DO_LEXICON_NEUTRAL` lo mapea a «tubérculos»
         # para los países beta con un `str.replace` case-SENSITIVE, así que en mayúscula se colaba
         # sin neutralizar y un usuario español leía vocabulario dominicano. Lo cazó

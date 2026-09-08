@@ -89,10 +89,19 @@ def test_los_pasos_no_llevan_cantidades_de_ingrediente(lib):
 
 
 def test_toda_receta_tiene_entre_3_y_5_pasos_con_texto(lib):
+    """[P1-LIBRARY-V3-SIN-SUSTITUTO · 2026-09-08] El umbral era `len > 20` y lo movió un falso
+    positivo REAL, no una build en rojo: «Pica el ajo finito.» son 19 caracteres y es una
+    instrucción perfectamente buena. Lo que este assert quiere impedir es un paso VACÍO o un
+    muñón («listo», «servir»), y para eso el número de palabras dice lo que el de caracteres
+    sólo aproximaba. Se conserva un mínimo de longitud para que «pica el ajo» tampoco pase."""
     for tid, r in lib["por_id"].items():
         n = len(r["pasos"])
         assert 3 <= n <= 5, f"{tid}: {n} pasos"
-        assert all(isinstance(p, str) and len(p.strip()) > 20 for p in r["pasos"]), tid
+        for p in r["pasos"]:
+            assert isinstance(p, str), f"{tid}: paso que no es texto"
+            t = p.strip()
+            assert len(t) >= 15 and len(t.split()) >= 4, (
+                f"{tid}: paso demasiado corto para ser una instrucción: {t!r}")
 
 
 def test_no_duplica_lo_que_ya_es_del_registry(lib):

@@ -59,13 +59,18 @@ def test_dice_EXPLICITAMENTE_que_el_color_no_sirve(bloque):
         "falta el PORQUÉ; una prohibición sin razón se ignora en cuanto estorba")
 
 
-def test_la_temperatura_va_ANTES_que_la_senal_de_respaldo(bloque):
-    """Quien no tiene termómetro necesita una alternativa, pero si se ofrece primero se vuelve la
-    norma. El orden es el mensaje."""
-    i_temp = bloque.find("74 °C")
-    i_resp = bloque.find("termómetro, di además")
-    assert i_temp >= 0 and i_resp > i_temp, (
-        "la señal de respaldo quedó antes que la temperatura: entonces la temperatura es opcional")
+def test_NO_se_ofrece_ningun_sustituto_del_termometro(bloque):
+    """[P0-DONENESS-SIN-SUSTITUTO · 2026-09-08] Este test pedía antes que el respaldo fuera DESPUÉS
+    de la temperatura, dando por bueno que hubiera respaldo. El dueño lo rechazó en 9 de 20 notas:
+    «eliminar los jugos claros, la firmeza y la ausencia de zonas rosadas como sustitutos del
+    termómetro».
+
+    Tenía razón y el orden no salvaba nada: *un sustituto ofrecido es un sustituto usado*. Es la
+    misma forma que el palillo — una cláusula bienintencionada que se vuelve la puerta de salida.
+    """
+    assert "NO ofrezcas ningún sustituto" in bloque
+    assert "termómetro, di además" not in bloque, (
+        "volvió la señal de respaldo: con ella, la temperatura es opcional en la práctica")
 
 
 def test_no_volvio_el_color_como_criterio_unico(bloque):
