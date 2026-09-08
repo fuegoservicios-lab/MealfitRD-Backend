@@ -52,9 +52,12 @@ BEGIN
    WHERE name = 'Avena' AND prep_methods IS NOT NULL
     INTO v_tostar;
 
+  -- OJO: `RAISE EXCEPTION` no acepta `||` en su formato — el mensaje va en UNA cadena, o con `%`.
+  -- La primera version llevaba concatenacion y reventó al aplicarla contra Neon, DESPUES de que el
+  -- gate la diera por buena: el test de migraciones parsea el TEXTO, no ejecuta el SQL. Un test
+  -- parser-based no puede decir que una migracion corre.
   IF v_tostar IS FALSE THEN
-    RAISE EXCEPTION '[P1-LIBRARY-V3-SIN-SUSTITUTO] `Avena` sigue sin ' ||
-                    '''tostar'' en prep_methods tras el UPDATE';
+    RAISE EXCEPTION '[P1-LIBRARY-V3-SIN-SUSTITUTO] Avena sigue sin tostar en prep_methods tras el UPDATE';
   END IF;
 END
 $$;
