@@ -11,6 +11,11 @@ las **claves documentadas** — no de los ficheros que EMITEN. Escanear el backe
 
 De esos cinco, **cuatro tenían el bug intacto**; sólo `agent.py` estaba bien.
 
+Y un sexto que ni la lista derivada veía: `routers/billing.py` escribe `INSERT INTO
+**public.**system_alerts` —calificado por esquema— y el criterio literal lo dejaba fuera. Ése sí
+refresca el mensaje, así que no había bug; pero el guard estaba ciego a él. *Un criterio literal es
+una lista disfrazada de derivación.*
+
 *Una lista heredada hereda también el límite de la pregunta que la creó.*
 
 Este fichero ancla la corrección estructural: que la lista salga de un `rglob` y no de la memoria de
@@ -32,7 +37,7 @@ def _emisores_reales() -> set:
         rel = path.relative_to(_BACKEND).as_posix()
         if rel.startswith(("tests/", "scripts/", "migrations/")) or "site-packages" in rel:
             continue
-        if "INSERT INTO system_alerts" in path.read_text(encoding="utf-8", errors="replace"):
+        if hermano._EMITE_RX.search(path.read_text(encoding="utf-8", errors="replace")):
             fuera.add(rel)
     return fuera
 

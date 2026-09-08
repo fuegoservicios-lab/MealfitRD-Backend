@@ -50,6 +50,7 @@ from pathlib import Path
 import pytest
 
 _BACKEND = Path(__file__).resolve().parents[1]
+_EMITE_RX = re.compile(r"INSERT\s+INTO\s+(?:public\.)?system_alerts", re.I)
 
 # [P2-ALERT-MESSAGE-REFRESH-FICHEROS · 2026-09-08] La lista se DERIVA, no se hereda.
 #
@@ -67,7 +68,10 @@ def _productores() -> list:
         rel = path.relative_to(_BACKEND).as_posix()
         if rel.startswith(("tests/", "scripts/", "migrations/")) or "site-packages" in rel:
             continue
-        if "INSERT INTO system_alerts" in path.read_text(encoding="utf-8", errors="replace"):
+        # `routers/billing.py` escribe `INSERT INTO public.system_alerts` (calificado por
+        # esquema) y el criterio literal lo dejaba fuera: 13 detectados contra 14 reales. Ese
+        # fichero SI refresca el mensaje, asi que no habia bug — pero el guard estaba ciego a el.
+        if _EMITE_RX.search(path.read_text(encoding="utf-8", errors="replace")):
             fuera.append(rel)
     return fuera
 
