@@ -51336,9 +51336,11 @@ def _apply_final_defense_guardrails(
             )
         elif plan_final.get("_is_fallback"):
             plan_final["_fallback_source"] = "guardrail_all_synthetic"
-            # [P1-SKELETON-SHORT-ALERT · 2026-07-29] Rama más severa (real_days<=0, cero contenido
-            # real revisado sobrevivió) — misma alerta, severidad escala a 'critical' adentro del
-            # helper vía `real_days`.
+            # [P1-SKELETON-SHORT-ALERT · 2026-07-29] Misma alerta; la severidad escala a 'critical' dentro del helper vía `real_days`.
+            # [P2-FALLBACK-LABEL-DOS-CAMINOS · 2026-09-08] Este comentario decía «real_days<=0, cero contenido real sobrevivió» y esa es SOLO
+            # UNA de las dos vías: el `if` de arriba exige `real_days>0` **Y** `review_passed`, así que un repair CON contenido real cuya
+            # revisión NO pasó cae aquí etiquetado `guardrail_all_synthetic` sin serlo (la alerta viva del 09-ago dice `real_days: 1`). No
+            # engaña al usuario —`routers/plans.py` sólo usa la etiqueta en el LOG— ni a la severidad; engaña a quien LEE la clave. Nombrar ese tercer caso es taxonomía de `system_alerts`: decisión de producto, anotada en vez de inventada.
             _persist_skeleton_short_repair_alert(
                 actual_form_data.get("user_id") or actual_form_data.get("session_id"),
                 plan_final.get("id") or plan_final.get("plan_id")
