@@ -58,7 +58,11 @@ _INVENTARIO = {
         "_apply_budget_cheapen_pass":              (1, "0 medido 07-sep"),
         "_apply_budget_driver_aware_pass":         (1, "0 medido 07-sep"),
         "_baking_powder_cap_pass":                 (1, "0 medido 07-sep"),
-        "_egg_count_step_sync":                    (1, "SIN TRAZAR — apareció en el barrido AST"),
+        # Trazada tras publicar el inventario: corre en `finalize_plan_data_coherence:29061`,
+        # DESPUÉS de los appenders → expuesta por posición. Pero su escritura pasa por
+        # `_EGG_ONE_LINE_RX.sub`, y su condición («el otro huevo» + exactamente una línea de
+        # huevo con lead 1) no se cumple en NINGUNA de las 1.172 comidas vivas: 0 activaciones.
+        "_egg_count_step_sync":                    (1, "0 medido 07-sep · expuesta por posición"),
     },
     "portion_solver.py": {
         "refine_day_portions_integer":             (1, "resuelto"),
@@ -136,6 +140,8 @@ def test_el_conteo_por_funcion_no_crece_en_silencio(fichero):
 
 def test_el_inventario_declara_un_veredicto_por_funcion():
     """Cada fila dice POR QUÉ es aceptable. Un inventario sin razones es una lista de deuda."""
+    # «SIN TRAZAR» sigue siendo válido a propósito: quien añada una fila sin haber trazado
+    # su cadena de llamada debe poder decirlo, en vez de inventarse un veredicto cómodo.
     validos = ("resuelto", "antes de los appenders", "0 medido", "SIN TRAZAR")
     for fichero, filas in _INVENTARIO.items():
         for fn, (_, veredicto) in filas.items():
