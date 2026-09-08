@@ -387,7 +387,7 @@ def _emit_dead_alert(job: dict, error_code: Optional[str]) -> None:
             VALUES (%s, %s, 'warning', %s, %s, %s::jsonb, %s::jsonb)
             ON CONFLICT (alert_key) DO UPDATE
             SET triggered_at = NOW(),
-                metadata = EXCLUDED.metadata,
+                message = EXCLUDED.message, metadata = EXCLUDED.metadata,
                 resolved_at = NULL
             """,
             (

@@ -419,7 +419,7 @@ def _persist_plan_persist_failed_alert(user_id: Optional[str], reason: str) -> N
             VALUES (%s, 'plan_persist_failed', 'critical', %s, %s, %s::jsonb, %s::jsonb)
             ON CONFLICT (alert_key) DO UPDATE
             SET triggered_at = NOW(),
-                metadata = EXCLUDED.metadata,
+                message = EXCLUDED.message, metadata = EXCLUDED.metadata,
                 affected_user_ids = EXCLUDED.affected_user_ids,
                 resolved_at = NULL
             """,

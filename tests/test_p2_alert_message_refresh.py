@@ -23,15 +23,26 @@ más que no tenerlo: dirige la investigación al sitio equivocado con toda la co
 
 ## Medido antes de arreglar
 
-58 upserts de alerta en los 9 ficheros productores. **36 no refrescaban el mensaje** — pero eso sólo
-hace daño si el mensaje lleva datos volátiles, así que se separó: **14 tienen mensaje estático**
-(inocuo) y **19 interpolan `plan_id`, `chunk_id`, contadores o ventanas** — ésos mienten.
+58 upserts de alerta en los 9 ficheros que creí productores. **36 no refrescaban el mensaje** — pero
+eso sólo hace daño si el mensaje lleva datos volátiles, así que se separó: **14 tienen mensaje
+estático** (inocuo) y **19 interpolan `plan_id`, `chunk_id`, contadores o ventanas** — ésos mienten.
 
 Se arreglaron los 32 alcanzables (uniformemente, también los estáticos: en ellos es un no-op y
 evita tener que decidir caso por caso otra vez). Sin crecer una sola línea: la cláusula se apila en
 la que ya existía, porque `graph_orchestrator.py` está a 2 líneas de su techo.
 
-Este test es lo que impide que el 33º nazca sin ella.
+## Y los 4 que se me escaparon, por heredar una lista
+
+«Los 9 ficheros productores» los tomé de `test_p2_audit_4_alert_keys_documented`, que es el SSOT de
+las CLAVES documentadas — **no de los ficheros que emiten**. Escanear el backend da **13**, y los
+cuatro que faltaban (`bg_executor`, `plan_jobs`, `rate_limiter`, `services`) tenían el bug intacto.
+
+*Una lista heredada hereda también el límite de la pregunta que la creó.* La lista se deriva ahora
+con un `rglob`, así que no hay que acordarse de actualizarla — el mismo hueco que
+`P1-RAW-INDEX-INVENTORY-FICHEROS` cerró en el ratchet hermano, encontrado el mismo día por la misma
+pregunta: *¿qué es lo que este guard NO vigila?*
+
+Este test es lo que impide que el 37º nazca sin ella.
 """
 import re
 from pathlib import Path
@@ -40,11 +51,28 @@ import pytest
 
 _BACKEND = Path(__file__).resolve().parents[1]
 
-# Los 9 ficheros que emiten a `system_alerts` (misma lista que `test_p2_audit_4_alert_keys_documented`).
-_PRODUCTORES = [
-    "cron_tasks.py", "db_inventory.py", "memory_manager.py", "app.py", "graph_orchestrator.py",
-    "constants.py", "routers/plans.py", "plan_display_i18n.py", "routers/billing.py",
-]
+# [P2-ALERT-MESSAGE-REFRESH-FICHEROS · 2026-09-08] La lista se DERIVA, no se hereda.
+#
+# La primera version tomaba los 9 ficheros de `test_p2_audit_4_alert_keys_documented` — que es el
+# SSOT de las CLAVES documentadas, no de los ficheros que EMITEN. Escanear el backend da 13, y los
+# 4 que faltaban (`bg_executor`, `plan_jobs`, `rate_limiter`, `services`) tenian el bug intacto:
+# refrescaban `metadata` y no `message`. Mi arreglo de 32 sitios se quedo corto por confiar en una
+# lista que respondia a OTRA pregunta.
+#
+# *Una lista heredada hereda tambien el limite de la pregunta que la creo.* Derivarla cuesta un
+# `rglob` y no hay que acordarse de nada.
+def _productores() -> list:
+    fuera = []
+    for path in sorted(_BACKEND.rglob("*.py")):
+        rel = path.relative_to(_BACKEND).as_posix()
+        if rel.startswith(("tests/", "scripts/", "migrations/")) or "site-packages" in rel:
+            continue
+        if "INSERT INTO system_alerts" in path.read_text(encoding="utf-8", errors="replace"):
+            fuera.append(rel)
+    return fuera
+
+
+_PRODUCTORES = _productores()
 _ANCLA = "ON CONFLICT (alert_key) DO UPDATE"
 # Insensible al espaciado: `app.py` escribe `message=EXCLUDED.message` sin espacios y una comparación
 # literal lo marcaba como incumplidor. Un detector que no tolera el estilo del repo acusa de un

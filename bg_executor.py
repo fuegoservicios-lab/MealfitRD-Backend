@@ -104,7 +104,7 @@ def _persist_bg_task_timeout_alert(task_name: str, timeout_s: int) -> None:
             VALUES (%s, 'bg_task_timeout', 'warning', %s, %s, %s::jsonb, %s::jsonb)
             ON CONFLICT (alert_key) DO UPDATE
             SET triggered_at = NOW(),
-                metadata = EXCLUDED.metadata,
+                message = EXCLUDED.message, metadata = EXCLUDED.metadata,
                 resolved_at = NULL
             """,
             (

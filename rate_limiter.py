@@ -244,7 +244,7 @@ def _emit_rl_saturation_alert(bucket_count: int, threshold: int) -> None:
             VALUES (%s, 'rate_limiter_bucket_saturation', 'warning', %s, %s, %s::jsonb, %s::jsonb)
             ON CONFLICT (alert_key) DO UPDATE
             SET triggered_at = NOW(),
-                metadata = EXCLUDED.metadata,
+                message = EXCLUDED.message, metadata = EXCLUDED.metadata,
                 resolved_at = NULL
             """,
             (
