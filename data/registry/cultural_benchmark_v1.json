@@ -665,7 +665,7 @@
             "Jugo de lulo y palmito con limón (< 40 kcal): snacks reales de bajo aporte."
           ],
           "by": "Claude (revisión curatorial delegada por el dueño)",
-          "date": "2026-09-07",
+          "date": "2026-09-08",
           "decisions": [
             "Alérgenos: el matcher del registry no reconocía plurales (sardinas, fideos, almejas) ni la salsa de soya como gluten: corregido y recompilado; cero clases sin marcar en las 6 bibliotecas (verificado con un chequeo independiente por constituyente).",
             "Raciones: meriendas > 450 kcal reasignadas a almuerzo/cena; almuerzos < 260 kcal y cenas < 180 kcal completados con base o proteína; almuerzos > 1.100 kcal reducidos.",
@@ -677,13 +677,14 @@
             "Tanda vegana (ARQ27-P1-03, 89 platos): tofu firme, soya texturizada, leche de soya y edamame eran filas del catálogo con CERO usos como constituyente; ahora sostienen recetas en las 6 bibliotecas. Preflight por plato ANTES de escribir: cada ingrediente resuelve contra el catálogo vivo, no viola la dieta vegana, se vende en el mercado de su biblioteca y trae gramos > 0 — una plantilla con un ingrediente sin resolver nacería `partial` y el selector no la ofrecería nunca.",
             "Piso de variedad: el mínimo de candidatos veganos por franja pasó de 1-4 a 7 en las seis cocinas (7 ocasiones sin repetir ⇒ 7 recetas distintas). Segunda tanda de desayunos sin gluten porque `Avena` lleva esa clase y un vegano celíaco tenía UN desayuno en PR, ES y US.",
             "Ninguna ola queda cubierta exclusivamente con soja: quitando la soja siguen quedando ≥5 desayunos veganos en las seis cocinas (test).",
-            "«Longaniza santarrosana con papa» usaba `Longaniza dominicana` teniendo `Chorizo santarrosano`. Corregidos ingrediente y nombre («Chorizo santarrosano con papa»)."
+            "«Longaniza santarrosana con papa» usaba `Longaniza dominicana` teniendo `Chorizo santarrosano`. Corregidos ingrediente y nombre («Chorizo santarrosano con papa»).",
+            "[2026-09-08] Re-anclada sin repetir el juicio plato a plato: medido contra el arbol firmado, esta biblioteca tiene CERO plantillas cambiadas (nombre, slots, constituyentes, gramos, excluidos y riesgo, byte a byte). Su `snapshot_hash` se movio solo porque se movio el `catalog_fingerprint` del catalogo (c89f400bb5fd13dd -> d0bd7b4737441a95). Las decisiones de abajo describen exactamente estos platos."
           ],
           "kind": "automated",
-          "snapshot_hash": "ff2c3939677ea2d7fa95df674f6bf7dbd5e4a5ca54969e6097594f72a23be93b"
+          "snapshot_hash": "cb31a52aa66be35c2f73e0e7aa7a5e6789e48f86fe9383670bea6f3fb8c94714"
         }
       },
-      "snapshot_hash": "ff2c3939677ea2d7fa95df674f6bf7dbd5e4a5ca54969e6097594f72a23be93b"
+      "snapshot_hash": "cb31a52aa66be35c2f73e0e7aa7a5e6789e48f86fe9383670bea6f3fb8c94714"
     },
     "dominican_criolla": {
       "appropriateness": {
@@ -694,11 +695,11 @@
       },
       "availability": {
         "availability_risk_pct": 0.0,
-        "constituents": 787,
+        "constituents": 788,
         "dominican_cultivar_outside_do": [],
         "needs_review": false,
         "ok": true,
-        "priced_pct": 97.7,
+        "priced_pct": 97.6,
         "review_threshold_pct": 15.0
       },
       "clinical": {
@@ -781,7 +782,7 @@
             "Molondrones guisados (250 kcal) y sopa-crema de auyama (283 kcal): platos ligeros reales; el generador ajusta porciones a los macros del día."
           ],
           "by": "Claude (revisión curatorial delegada por el dueño)",
-          "date": "2026-09-07",
+          "date": "2026-09-08",
           "decisions": [
             "Alérgenos: el matcher del registry no reconocía plurales (sardinas, fideos, almejas) ni la salsa de soya como gluten: corregido y recompilado; cero clases sin marcar en las 6 bibliotecas (verificado con un chequeo independiente por constituyente).",
             "Raciones: meriendas > 450 kcal reasignadas a almuerzo/cena; almuerzos < 260 kcal y cenas < 180 kcal completados con base o proteína; almuerzos > 1.100 kcal reducidos.",
@@ -798,13 +799,14 @@
             "Ninguna ola queda cubierta exclusivamente con soja: quitando la soja siguen quedando ≥5 desayunos veganos en las seis cocinas (test).",
             "«Sancocho vegano de víveres con soya texturizada» movido de cena a ALMUERZO: el SSOT de franjas de la biblioteca dominicana no admite sopa/sancocho en desayuno ni cena (misma decisión que en la revisión anterior con «Sopa de habichuelas negras con casabe»). Su cena la cubre ahora «Berenjena guisada con soya texturizada y batata».",
             "Cuatro plantillas dejan de figurar íntegras (ARQ27-P0-02): la batida de zapote, el chillo, el salami de pavo y las frutas con menta declaran ingredientes sin resolver y ahora son `partial`. Las dos del medio son SUSTITUCIONES declaradas: el título promete un alimento que la receta compilada no tiene, y un plato sustituido necesita identidad propia, no un rótulo heredado.",
-            "[2026-09-07 · P1-REGISTRY-TITLE-TRUTH] Tercera incoherencia nombre↔constituyentes, que la verificación del 06-sep dio por completa y se le escapó: «Panqueques de harina de ARROZ con fresas» traía Harina de TRIGO. Renombrado a «Panqueques de trigo con fresas» — el catálogo no tiene harina de arroz y crear la fila sería inventarla. Re-verificadas las 779 plantillas de las 6 bibliotecas con el detector de contradicción de calificativo (`test_p1_registry_title_truth`): 0 restantes."
+            "[2026-09-07 · P1-REGISTRY-TITLE-TRUTH] Tercera incoherencia nombre↔constituyentes, que la verificación del 06-sep dio por completa y se le escapó: «Panqueques de harina de ARROZ con fresas» traía Harina de TRIGO. Renombrado a «Panqueques de trigo con fresas» — el catálogo no tiene harina de arroz y crear la fila sería inventarla. Re-verificadas las 779 plantillas de las 6 bibliotecas con el detector de contradicción de calificativo (`test_p1_registry_title_truth`): 0 restantes.",
+            "[2026-09-08 · P1-REGISTRY-COLOR-PROMETE] «Pollo horneado al limon con arroz AMARILLO» no traia nada que pusiera amarillo el arroz: el limon no da color. Lo vio el dueno juzgando la biblioteca a ciegas y ofrecio las dos salidas (anadir el ingrediente o renombrar). Se anaden 2 g de `Sazon con culantro y achiote`, que es el colorante criollo y pesa **0 kcal**: el titulo pasa a ser cierto y el plato mejora sin mover un solo macro. Renombrar habria tocado un baseline historico del 18-ago. Unica plantilla tocada de las 144; el resto, byte a byte igual."
           ],
           "kind": "automated",
-          "snapshot_hash": "92a422c0d9b5bfa99d7dbe6fb93cbda9b46fbd8d0cfe7e05b6d6ad24ecd92923"
+          "snapshot_hash": "fee699ecb8b2fd0afdb961e986d1d1246b265a8cdc68a03ee86df48e8a9bd0ce"
         }
       },
-      "snapshot_hash": "92a422c0d9b5bfa99d7dbe6fb93cbda9b46fbd8d0cfe7e05b6d6ad24ecd92923"
+      "snapshot_hash": "fee699ecb8b2fd0afdb961e986d1d1246b265a8cdc68a03ee86df48e8a9bd0ce"
     },
     "mexico_casera": {
       "appropriateness": {
@@ -967,7 +969,7 @@
             "Pepino con chile y limón (35 kcal): snack real de bajo aporte; se conserva."
           ],
           "by": "Claude (revisión curatorial delegada por el dueño)",
-          "date": "2026-09-07",
+          "date": "2026-09-08",
           "decisions": [
             "Alérgenos: el matcher del registry no reconocía plurales (sardinas, fideos, almejas) ni la salsa de soya como gluten: corregido y recompilado; cero clases sin marcar en las 6 bibliotecas (verificado con un chequeo independiente por constituyente).",
             "Raciones: meriendas > 450 kcal reasignadas a almuerzo/cena; almuerzos < 260 kcal y cenas < 180 kcal completados con base o proteína; almuerzos > 1.100 kcal reducidos.",
@@ -980,13 +982,14 @@
             "Tanda vegana (ARQ27-P1-03, 89 platos): tofu firme, soya texturizada, leche de soya y edamame eran filas del catálogo con CERO usos como constituyente; ahora sostienen recetas en las 6 bibliotecas. Preflight por plato ANTES de escribir: cada ingrediente resuelve contra el catálogo vivo, no viola la dieta vegana, se vende en el mercado de su biblioteca y trae gramos > 0 — una plantilla con un ingrediente sin resolver nacería `partial` y el selector no la ofrecería nunca.",
             "Piso de variedad: el mínimo de candidatos veganos por franja pasó de 1-4 a 7 en las seis cocinas (7 ocasiones sin repetir ⇒ 7 recetas distintas). Segunda tanda de desayunos sin gluten porque `Avena` lleva esa clase y un vegano celíaco tenía UN desayuno en PR, ES y US.",
             "Ninguna ola queda cubierta exclusivamente con soja: quitando la soja siguen quedando ≥5 desayunos veganos en las seis cocinas (test).",
-            "«Frijoles charros con longaniza» usaba `Longaniza dominicana` teniendo `Chorizo mexicano` en el catálogo — el nombre del plato ya decía «charros». Corregidos ingrediente Y nombre («Frijoles charros con chorizo»): un título que promete longaniza y sirve chorizo es la misma clase de defecto que el motor persigue en los planes vivos."
+            "«Frijoles charros con longaniza» usaba `Longaniza dominicana` teniendo `Chorizo mexicano` en el catálogo — el nombre del plato ya decía «charros». Corregidos ingrediente Y nombre («Frijoles charros con chorizo»): un título que promete longaniza y sirve chorizo es la misma clase de defecto que el motor persigue en los planes vivos.",
+            "[2026-09-08] Re-anclada sin repetir el juicio plato a plato: medido contra el arbol firmado, esta biblioteca tiene CERO plantillas cambiadas (nombre, slots, constituyentes, gramos, excluidos y riesgo, byte a byte). Su `snapshot_hash` se movio solo porque se movio el `catalog_fingerprint` del catalogo (c89f400bb5fd13dd -> d0bd7b4737441a95). Las decisiones de abajo describen exactamente estos platos."
           ],
           "kind": "automated",
-          "snapshot_hash": "8d9b336f312102a82dbe7d0b25c48acd74429f800704b9d62b56d0d7a75f1ede"
+          "snapshot_hash": "7f92703b9643cc9c1f5f4068ad556215ec3e08a8c88f1e6d4e5d1398e0bce88d"
         }
       },
-      "snapshot_hash": "8d9b336f312102a82dbe7d0b25c48acd74429f800704b9d62b56d0d7a75f1ede"
+      "snapshot_hash": "7f92703b9643cc9c1f5f4068ad556215ec3e08a8c88f1e6d4e5d1398e0bce88d"
     },
     "puertorico_criolla": {
       "appropriateness": {
@@ -1468,7 +1471,7 @@
             "Los avisos «cultivar dominicano» de las altas nuevas: ver la decisión de arriba."
           ],
           "by": "Claude (revisión curatorial delegada por el dueño)",
-          "date": "2026-09-07",
+          "date": "2026-09-08",
           "decisions": [
             "Alérgenos: el matcher del registry no reconocía plurales (sardinas, fideos, almejas) ni la salsa de soya como gluten: corregido y recompilado; cero clases sin marcar en las 6 bibliotecas (verificado con un chequeo independiente por constituyente).",
             "Raciones: meriendas > 450 kcal reasignadas a almuerzo/cena; almuerzos < 260 kcal y cenas < 180 kcal completados con base o proteína; almuerzos > 1.100 kcal reducidos.",
@@ -1481,13 +1484,14 @@
             "Tanda vegana (ARQ27-P1-03, 89 platos): tofu firme, soya texturizada, leche de soya y edamame eran filas del catálogo con CERO usos como constituyente; ahora sostienen recetas en las 6 bibliotecas. Preflight por plato ANTES de escribir: cada ingrediente resuelve contra el catálogo vivo, no viola la dieta vegana, se vende en el mercado de su biblioteca y trae gramos > 0 — una plantilla con un ingrediente sin resolver nacería `partial` y el selector no la ofrecería nunca.",
             "Piso de variedad: el mínimo de candidatos veganos por franja pasó de 1-4 a 7 en las seis cocinas (7 ocasiones sin repetir ⇒ 7 recetas distintas). Segunda tanda de desayunos sin gluten porque `Avena` lleva esa clase y un vegano celíaco tenía UN desayuno en PR, ES y US.",
             "Ninguna ola queda cubierta exclusivamente con soja: quitando la soja siguen quedando ≥5 desayunos veganos en las seis cocinas (test).",
-            "Las altas de PR (yuca hervida, tostones, batata asada, plátano maduro) heredan el aviso «cultivar dominicano» del catálogo, igual que las veinte plantillas puertorriqueñas que ya lo tenían. Es un marcador de PROCEDENCIA de la fila, no una falta de disponibilidad: yuca, plátano y batata son alimentos puertorriqueños. Se acepta, como en la revisión anterior."
+            "Las altas de PR (yuca hervida, tostones, batata asada, plátano maduro) heredan el aviso «cultivar dominicano» del catálogo, igual que las veinte plantillas puertorriqueñas que ya lo tenían. Es un marcador de PROCEDENCIA de la fila, no una falta de disponibilidad: yuca, plátano y batata son alimentos puertorriqueños. Se acepta, como en la revisión anterior.",
+            "[2026-09-08] Re-anclada sin repetir el juicio plato a plato: medido contra el arbol firmado, esta biblioteca tiene CERO plantillas cambiadas (nombre, slots, constituyentes, gramos, excluidos y riesgo, byte a byte). Su `snapshot_hash` se movio solo porque se movio el `catalog_fingerprint` del catalogo (c89f400bb5fd13dd -> d0bd7b4737441a95). Las decisiones de abajo describen exactamente estos platos."
           ],
           "kind": "automated",
-          "snapshot_hash": "c266bae6486960dd6b428da1feb0b367f68c6423853e11487b9937edb43d02d7"
+          "snapshot_hash": "08c77edef5d66960e8b5ec40a478169cdcf4bc809150f1a4515443886412e37d"
         }
       },
-      "snapshot_hash": "c266bae6486960dd6b428da1feb0b367f68c6423853e11487b9937edb43d02d7"
+      "snapshot_hash": "08c77edef5d66960e8b5ec40a478169cdcf4bc809150f1a4515443886412e37d"
     },
     "spain_mediterranea": {
       "appropriateness": {
@@ -1748,7 +1752,7 @@
             "Pistos, gazpacho y ensaladas de 210-300 kcal: platos ligeros reales de almuerzo/cena; el generador escala porciones."
           ],
           "by": "Claude (revisión curatorial delegada por el dueño)",
-          "date": "2026-09-07",
+          "date": "2026-09-08",
           "decisions": [
             "Alérgenos: el matcher del registry no reconocía plurales (sardinas, fideos, almejas) ni la salsa de soya como gluten: corregido y recompilado; cero clases sin marcar en las 6 bibliotecas (verificado con un chequeo independiente por constituyente).",
             "Raciones: meriendas > 450 kcal reasignadas a almuerzo/cena; almuerzos < 260 kcal y cenas < 180 kcal completados con base o proteína; almuerzos > 1.100 kcal reducidos.",
@@ -1761,13 +1765,14 @@
             "Tanda vegana (ARQ27-P1-03, 89 platos): tofu firme, soya texturizada, leche de soya y edamame eran filas del catálogo con CERO usos como constituyente; ahora sostienen recetas en las 6 bibliotecas. Preflight por plato ANTES de escribir: cada ingrediente resuelve contra el catálogo vivo, no viola la dieta vegana, se vende en el mercado de su biblioteca y trae gramos > 0 — una plantilla con un ingrediente sin resolver nacería `partial` y el selector no la ofrecería nunca.",
             "Piso de variedad: el mínimo de candidatos veganos por franja pasó de 1-4 a 7 en las seis cocinas (7 ocasiones sin repetir ⇒ 7 recetas distintas). Segunda tanda de desayunos sin gluten porque `Avena` lleva esa clase y un vegano celíaco tenía UN desayuno en PR, ES y US.",
             "Ninguna ola queda cubierta exclusivamente con soja: quitando la soja siguen quedando ≥5 desayunos veganos en las seis cocinas (test).",
-            "Cena «Salteado de edamame con espárragos y arroz integral» → «…con patata»: arroz como BASE no va en cena (regla dura del juez culinario). Se cambió el acompañamiento en vez de recolocar la etiqueta — mover el rótulo habría mentido sobre lo que el plato es."
+            "Cena «Salteado de edamame con espárragos y arroz integral» → «…con patata»: arroz como BASE no va en cena (regla dura del juez culinario). Se cambió el acompañamiento en vez de recolocar la etiqueta — mover el rótulo habría mentido sobre lo que el plato es.",
+            "[2026-09-08] Re-anclada sin repetir el juicio plato a plato: medido contra el arbol firmado, esta biblioteca tiene CERO plantillas cambiadas (nombre, slots, constituyentes, gramos, excluidos y riesgo, byte a byte). Su `snapshot_hash` se movio solo porque se movio el `catalog_fingerprint` del catalogo (c89f400bb5fd13dd -> d0bd7b4737441a95). Las decisiones de abajo describen exactamente estos platos."
           ],
           "kind": "automated",
-          "snapshot_hash": "cdea752fbf095116ba042337ad11ebf0eeb120a8a801158206645df06684af05"
+          "snapshot_hash": "0bf4d482326069a093af9a9c93f8cdd76cc8fc55d6fa2188d7ad110ffdb9668f"
         }
       },
-      "snapshot_hash": "cdea752fbf095116ba042337ad11ebf0eeb120a8a801158206645df06684af05"
+      "snapshot_hash": "0bf4d482326069a093af9a9c93f8cdd76cc8fc55d6fa2188d7ad110ffdb9668f"
     },
     "us_everyday": {
       "appropriateness": {
@@ -2002,7 +2007,7 @@
             "«Tacos de soya texturizada con repollo» dispara el aviso de léxico mexicano, igual que los dos platos de tacos que la biblioteca estadounidense YA tenía y que la revisión anterior aceptó: el taco es comida corriente en Estados Unidos. Se conserva, por coherencia con esa decisión."
           ],
           "by": "Claude (revisión curatorial delegada por el dueño)",
-          "date": "2026-09-07",
+          "date": "2026-09-08",
           "decisions": [
             "Alérgenos: el matcher del registry no reconocía plurales (sardinas, fideos, almejas) ni la salsa de soya como gluten: corregido y recompilado; cero clases sin marcar en las 6 bibliotecas (verificado con un chequeo independiente por constituyente).",
             "Raciones: meriendas > 450 kcal reasignadas a almuerzo/cena; almuerzos < 260 kcal y cenas < 180 kcal completados con base o proteína; almuerzos > 1.100 kcal reducidos.",
@@ -2014,13 +2019,14 @@
             "Tanda vegana (ARQ27-P1-03, 89 platos): tofu firme, soya texturizada, leche de soya y edamame eran filas del catálogo con CERO usos como constituyente; ahora sostienen recetas en las 6 bibliotecas. Preflight por plato ANTES de escribir: cada ingrediente resuelve contra el catálogo vivo, no viola la dieta vegana, se vende en el mercado de su biblioteca y trae gramos > 0 — una plantilla con un ingrediente sin resolver nacería `partial` y el selector no la ofrecería nunca.",
             "Piso de variedad: el mínimo de candidatos veganos por franja pasó de 1-4 a 7 en las seis cocinas (7 ocasiones sin repetir ⇒ 7 recetas distintas). Segunda tanda de desayunos sin gluten porque `Avena` lleva esa clase y un vegano celíaco tenía UN desayuno en PR, ES y US.",
             "Ninguna ola queda cubierta exclusivamente con soja: quitando la soja siguen quedando ≥5 desayunos veganos en las seis cocinas (test).",
-            "Cena «Salteado de edamame con brócoli y arroz integral» → «…con batata», por la misma regla de arroz en cena."
+            "Cena «Salteado de edamame con brócoli y arroz integral» → «…con batata», por la misma regla de arroz en cena.",
+            "[2026-09-08] Re-anclada sin repetir el juicio plato a plato: medido contra el arbol firmado, esta biblioteca tiene CERO plantillas cambiadas (nombre, slots, constituyentes, gramos, excluidos y riesgo, byte a byte). Su `snapshot_hash` se movio solo porque se movio el `catalog_fingerprint` del catalogo (c89f400bb5fd13dd -> d0bd7b4737441a95). Las decisiones de abajo describen exactamente estos platos."
           ],
           "kind": "automated",
-          "snapshot_hash": "1b9755d3c6ffba45705a743631fa7ca2c0754bfe2b72415f5668df07367ff3ce"
+          "snapshot_hash": "fb4abc5481f6e7362d6547fee27c1836a5ccf1744e12dcc722b8222b9650824f"
         }
       },
-      "snapshot_hash": "1b9755d3c6ffba45705a743631fa7ca2c0754bfe2b72415f5668df07367ff3ce"
+      "snapshot_hash": "fb4abc5481f6e7362d6547fee27c1836a5ccf1744e12dcc722b8222b9650824f"
     }
   },
   "schema_version": 1
