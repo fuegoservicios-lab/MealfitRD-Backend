@@ -1,0 +1,1401 @@
+{
+  "schema_version": 1,
+  "country": "DO",
+  "generado_el": "2026-09-08",
+  "recetas": 140,
+  "procedencia": {
+    "escrito_por": "LLM (tier flash) offline, prompt de once reglas",
+    "reglas_nacidas_de": "tres rondas de juicio a ciegas del dueno sobre 20 desayunos: 8 -> 11 -> 17 «la serviria» de 20, 0 rechazadas. Cada regla cierra una queja concreta suya.",
+    "veredicto_humano": "17/20 sobre una MUESTRA de desayunos, y 20/20 del escaner sobre una muestra de almuerzo y cena. Las 140 NO estan revisadas una a una por un humano.",
+    "escaner": "140/140 limpias (11 capas de coherencia culinaria), 130 al primer intento",
+    "sin_cantidades": "los pasos NO llevan cantidades de ingrediente a proposito: asi la misma receta sirve para cualquier porcion y se escribe UNA vez. Las proporciones entre componentes («la mitad del huevo») si van, en palabras.",
+    "regenerar": "scratchpad/genera_biblioteca_rd.py (reanudable, ~20 min, centimos)"
+  },
+  "estado": "INERTE — ningun codigo de produccion la lee todavia",
+  "por_id": {
+    "tpl_b325a36ea98c": {
+      "franja": "almuerzo",
+      "pasos": [
+        "Sazona la pechuga de pollo con la mitad de la sal y déjala reposar un momento. Corta el pollo, el ají morrón y la cebolla en trozos del mismo tamaño y ármalos en los pinchos, intercalando pollo y vegetales.",
+        "Pon la yuca a hervir en agua con el resto de la sal a fuego medio-alto hasta que un cuchillo entre sin resistencia, entre 20 y 25 minutos. Escúrrela y resérvala tapada.",
+        "Lleva los pinchos a la plancha o parrilla seca bien caliente a fuego medio, dando vuelta cada pocos minutos, unos 12 a 15 minutos en total.",
+        "Los pinchos están listos cuando al cortar el trozo de pollo más grueso el interior no tiene ninguna parte rosada, está bien blanco y jugoso.",
+        "Sirve los pinchos calientes acompañados de la yuca hervida."
+      ]
+    },
+    "tpl_e5904abaa549": {
+      "franja": "desayuno",
+      "pasos": [
+        "Licúa la avena con la leche y el huevo hasta que quede una mezcla lisa y sin grumos. Si queda muy espesa, aflójala con un chorrito de agua. Déjala reposar unos minutos para que la avena se hidrate y quede como una crema fina que escurra fácil de la cuchara.",
+        "Ralla o desmenuza el queso blanco fresco y resérvalo. Recuerda que este queso no se derrite: en la plancha solo se ablanda y se calienta, y así debe quedar en el relleno.",
+        "Calienta una plancha o sartén antiadherente a fuego medio, sin aceite. Vierte un poco de la mezcla y muévela para que quede finita, como crepe.",
+        "Cocina cada crepe a fuego medio: cuando los bordes se despeguen solos, la superficie deje de escurrir y cuaje mate, ya está lista por dentro; dales la vuelta un momentico para calentar del otro lado y sácalas.",
+        "Rellena cada crepe con el queso blanco, dóblala y llévala un momento a la plancha a fuego bajo solo para calentar el queso y servir de una."
+      ]
+    },
+    "tpl_873b7595078a": {
+      "franja": "almuerzo",
+      "pasos": [
+        "Pica el chivo en pedazos no muy grandes y sazona con el orégano dominicano, la mitad del ajo machacado y una pizca de la sal. Déjalo reposar un rato para que tome el sazón.",
+        "En una olla a fuego medio, sofríe la cebolla y el tomate picaditos con el resto del ajo hasta que la cebolla esté transparente.",
+        "Agrega el chivo a la olla, revuelve bien para que se impregne del sofrito, añade un chorrito de agua, tapa y deja guisar a fuego bajo por unos 40 minutos. Si se seca, agrégale un poco más de agua. El chivo está listo cuando la carne esté blandita y se desprenda del hueso con facilidad al partir un pedazo.",
+        "Mientras el chivo guisa, pela la yuca, córtala en trozos y ponla a hervir en agua con el resto de la sal a fuego medio. Está lista cuando un cuchillo entra sin resistencia; escúrrela bien.",
+        "Sirve el chivo guisado caliente con la yuca hervida al lado, como se come en el campo dominicano."
+      ]
+    },
+    "tpl_d1e664195f48": {
+      "franja": "desayuno",
+      "pasos": [
+        "Pica la cebolla y el tomate en cuadritos pequeños y resérvalos.",
+        "Calienta el aceite en una sartén antiadherente a fuego medio, añade la cebolla con una pizca de la sal y sofríe hasta que esté transparente; agrega el tomate y cocina hasta que suelte su jugo y se ablande.",
+        "Bate el huevo con la pimienta negra y el resto de la sal, viértelo sobre el sofrito a fuego bajo y mueve con espátula hasta que el revoltillo cuaje por completo y no escurra en ninguna parte.",
+        "Calienta el casabe en una plancha seca o sartén antiadherente unos segundos por cada lado, hasta que esté caliente y ligeramente tostado.",
+        "Sirve el revoltillo caliente acompañado del casabe."
+      ]
+    },
+    "tpl_bc12130e50e9": {
+      "franja": "desayuno",
+      "pasos": [
+        "Hierve el huevo en agua en una olla: póngelo desde que el agua esté fría, sube a fuego alto, y cuando rompa el hervor cuenta unos 10 minutos. Sácalo, pásalo por agua fría, pélalo y verifica que esté cuajado por completo, sin partes escurridas por dentro.",
+        "Pela el aguacate y májalo con un tenedor hasta que quede cremoso.",
+        "Corta el pan integral por la mitad y tuéstalo en la plancha seca a fuego medio, hasta que esté calientito y con un leve dorado por dentro.",
+        "Unta el aguacate majado sobre una mitad del pan, corta el huevo en rodajas y colócalas encima.",
+        "Tapa con la otra mitad del pan, presiona suavecito y sirve de inmediato en el desayuno."
+      ]
+    },
+    "tpl_6a66a1dc6742": {
+      "franja": "almuerzo",
+      "pasos": [
+        "Pela los molondrones con cuidado de no abrirlos mucho y lávalos; pela la auyama, córtala en trozos y ponla a hervir en agua hasta que un cuchillo entre sin resistencia, luego escúrrela.",
+        "Corta la pechuga de pollo en trozos y séllala en una sartén antiadherente a fuego medio hasta que por dentro no quede ninguna parte rosada; retírala y reserva.",
+        "En la misma sartén echa la cebolla picada y el tomate picado, sofríe a fuego medio hasta que formen una salsita; si espesa mucho, aflójala con un chorrito de agua y devuelve el pollo para que se mezcle con el guiso.",
+        "Agrega los molondrones al guiso, tapa y cocina a fuego bajo hasta que estén blanditos al pincharlos, moviendo de vez en cuando para que se impregnen bien de la salsa.",
+        "Maja la auyama ya cocida hasta lograr un puré suave y crema (si queda muy densa, ajusta con un poquito de agua) y sirve el majado acompañado de los molondrones guisados con el pollo."
+      ]
+    },
+    "tpl_553af971a46c": {
+      "franja": "cena",
+      "pasos": [
+        "Lava bien la batata, ponla en una olla con agua y hiérvela a fuego medio hasta que un cuchillo entre sin resistencia por dentro, señal de que está lista. Escúrrela y déjala entibiar.",
+        "Pela la batata hervida y córtala en rodajas gruesas para servir de base.",
+        "Escurre el atún en agua y ponlo en un recipiente. Agrega la mitad de la cebolla picada en pedacitos finos y mézclalo bien con un chorrito del aceite de oliva.",
+        "Con la otra mitad de la cebolla en ruedas finas, ponla en un sartén pequeño con el resto del aceite de oliva a fuego bajo y sofríe hasta que transparente.",
+        "Sirve las rodajas de batata con el atún mezclado encima y la cebolla sofríe por encima como guarnición. Sírvelo calientico para la cena."
+      ]
+    },
+    "tpl_f9b386cf1e6f": {
+      "franja": "almuerzo",
+      "pasos": [
+        "Cocina la pechuga de pollo en agua hirviendo a fuego medio hasta que por dentro no quede ninguna parte rosada; sácala, déjala entibiar y desmenúzala. Reserva el caldo de la cocción.",
+        "Pela la auyama y córtala en trozos. Hiérvela en agua hasta que un cuchillo entre sin resistencia, luego escúrrela.",
+        "En una olla, derrite la mantequilla a fuego medio y sofríe la cebolla picada y el ajo hasta que estén translúcidos y suaves.",
+        "Agrega la auyama hervida y la leche evaporada, y licua o maja todo hasta lograr una crema lisa. Si queda muy espesa, afloja con un poquito del caldo reservado de hervir el pollo. Ajusta con la sal.",
+        "Sirve la crema caliente con el pollo desmenuzado por encima, y calienta un momento a fuego bajo antes de llevar a la mesa si hace falta."
+      ]
+    },
+    "tpl_bbc63aafb357": {
+      "franja": "almuerzo",
+      "pasos": [
+        "La noche anterior, remoja las habichuelas rojas en agua. Al día siguiente, cuézelas en olla a fuego medio hasta que estén blandas; están listas cuando se aplastan fácil con el tenedor.",
+        "Pica la cebolla bien finita. En una olla, sofríela a fuego bajo hasta que esté transparente, agrega la auyama pelada y en cuadritos, y cuando se ablande un poco, incorpora las habichuelas con un chorrito de agua. Déjalo guisar a fuego bajo hasta que la auyama se deshaga y espese el caldo como un guiso cremoso.",
+        "Aparte, hierve agua y cocina la sémola de maíz a fuego medio, revolviendo para que no se formen grumos, hasta que espese y se despegue del fondo de la olla: esa es la señal de que el chenchén está cocido por dentro. Deja que repose un minuto para que tome cuerpo.",
+        "Dura el huevo en agua hirviendo hasta que esté duro — la clara y la yema deben cuajar por completo, sin nada que escurra —, pélalo y pártelo en pedazos.",
+        "Sirve el chenchén en el plato, vierte encima el guiso de habichuelas y corona con los pedazos de huevo. No dejes que el guiso quede agüitado: si te queda muy espeso, aflójalo con un poquito de agua."
+      ]
+    },
+    "tpl_69c10af4c101": {
+      "franja": "almuerzo",
+      "pasos": [
+        "Pela la berenjena en tiras, córtala en cuadritos, ponla en un colador con un poco de sal y déjala sudar mientras preparas lo demás. Pica finito la cebolla, el ají cubanela, el pimiento morrón, el tomate y machaca el ajo.",
+        "En un caldero calienta el aceite vegetal a fuego medio y sofríe la cebolla, el ají cubanela, el pimiento morrón y el ajo hasta que estén blanditos y transparentes. Añade la carne molida y cocínala, moviendo para deshacerla, hasta que cambie de color rosado por completo y quede bien cocida por dentro — sin ninguna parte rosada.",
+        "Agrega el tomate picado y la salsa de tomate, revuelve bien, tapa el caldero y deja guisar a fuego bajo unos 10 minutos. Añade los cuadritos de berenjena, rectifica con la sal, echa un chorrito de agua para que suelte jugo, tapa y cocina a fuego bajo unos 12 a 15 minutos más, hasta que la berenjena esté bien blandita, se deshaga al presionarla con el tenedor y el guiso espese.",
+        "Mientras se guisa la berenjena, hierve el arroz blanco en agua con un poquito de sal: cuando el agua se haya absorbido, baja el fuego, tapa y deja a fuego bajo unos 15 minutos más, hasta que los granos estén blanditos y sueltos por dentro.",
+        "Sirve el arroz blanco en el plato, cubre con las berenjenas guisadas con su carne molida bien calientes y ¡a comer!"
+      ]
+    },
+    "tpl_93ea58cd86ea": {
+      "franja": "cena",
+      "pasos": [
+        "Lava la berenjena, córtala por la mitad a lo largo y vacía parte de la pulpa con una cuchara, dejando una pared gruesa para que quede como barca. Reserva la pulpa picada.",
+        "En una sartén a fuego medio, cocina la carne de res molida removiendo hasta que pierda por completo el color rosado. Añade la pulpa de berenjena reservada y el tomate picado, y cocina hasta que el tomate se deshaga y forme una salsa espesa con la carne. Si se seca demasiado, agrega un chorrito de agua.",
+        "Precalienta el horno a 180 °C. Rellena cada mitad de berenjena con la mezcla de carne, apretando bien para que asiente.",
+        "Pica el queso blanco en cubitos o rúyalo y repártelo por encima de cada berenjena rellena.",
+        "Hornea a 180 °C por unos 20-25 minutos, hasta que la berenjena esté tierna cuando le metas un cuchillo sin resistencia, el relleno burbujee y el queso se ablande y tome un ligero color. Sirve caliente."
+      ]
+    },
+    "tpl_3d37e8b49ab7": {
+      "franja": "merienda",
+      "pasos": [
+        "En un bol, mezcla la avena con la mantequilla de maní y la miel. Trabaja con las manos o una cuchara hasta que todo se integre en una masa uniforme.",
+        "Si la masa queda muy seca y no se une, agrégale gotitas de agua hasta que puedas amasarla sin que se desmorone. Debe quedar con cuerpo, firme pero moldeable, no pegajosa ni chorrosa.",
+        "Deja reposar la masa unos minutos en el refrigerador para que la avena se hidrate y la mezcla se enfrme y sea más fácil de trabajar.",
+        "Toma porciones de la masa y forma bolitas apretando bien con las palmas para que no se abran.",
+        "Como no lleva cocción, la señal de que están listas es que cada bolita mantiene su forma al soltarla, quedan firmes por dentro y no se deshacen ni se sienten crudas al morderlas. Guárdalas frías hasta la merienda."
+      ]
+    },
+    "tpl_7b598275db3c": {
+      "franja": "cena",
+      "pasos": [
+        "Pela la batata y la tayota y córtalas en tiritas delgaditas; pon las tiritas de batata a hervir en agua unos minutos hasta que un tenedor entre sin resistencia, y escúrrelas bien.",
+        "En un sartén antiadherente calienta el aceite vegetal a fuego medio-alto y sofríe el ajo picadito hasta que huela y esté apenas dorado, cuidando que no se queme.",
+        "Agrega la tayota y saltea a fuego alto unos minutos, luego añade la batata hervida y el edamame; sigue salteando todo junto, moviendo constantemente.",
+        "Cuando el edamame esté tierno por dentro y las verduras estén bien calientes y mezcladas, con un toque ligeramente dorado, retira del fuego y sirve de inmediato."
+      ]
+    },
+    "tpl_b9efc5243720": {
+      "franja": "almuerzo",
+      "pasos": [
+        "Pela los plátanos maduros y ponlos a hervir en agua hasta que estén blanditos; sabrás que están listos cuando un cuchillo entre sin resistencia. Escúrrelos bien y majalos hasta formar un puré espeso y manejable.",
+        "En una sartén, sofríe la cebolla picadita a fuego medio hasta que esté transparente, añade la carne de res molida y cocínala hasta que pierda por completo el color rosado por dentro. Sazona al gusto y reserva.",
+        "Divide el majado en dos mitades: usa la mitad para cubrir el fondo de un molde para horno, bien apretadito con el dorso de una cuchara.",
+        "Encima coloca la carne molida, luego el queso blanco en tajadas finas (recuerda que se ablanda con el calor, no se funde), y termina con la otra mitad del puré de plátano cubriendo todo por igual.",
+        "Lleva al horno precalentado a 180 °C por unos 20 minutos, hasta que el pastelón esté firme y bien caliente por dentro: al meter un palillo en el centro, este sale limpio y la masa se siente con cuerpo. Deja reposar unos minutos antes de cortar."
+      ]
+    },
+    "tpl_112dfb2c5930": {
+      "franja": "cena",
+      "pasos": [
+        "Remoja los gandules en agua desde unas horas antes; luego hiérvelos en agua a fuego medio hasta que ablanden y escúrrelos, reservando un poco del agua de cocción.",
+        "En una olla, sofríe el ají cubanela picadito, añade la salsa de tomate y cocina a fuego medio hasta que se forme un guisado con cuerpo.",
+        "Incorpora la zanahoria en rueditas finas y la auyama en trozos, agrega los gandules ya hervidos y un poco del agua de cocción, tapa y deja guisar a fuego bajo.",
+        "El guisado está listo cuando la zanahoria y la auyama ceden sin resistencia al meter un tenedor, los gandules están blanditos por dentro y la salsa ha espesado — si queda muy seco, afloja con un poquito de agua."
+      ]
+    },
+    "tpl_d7f71546deb5": {
+      "franja": "merienda",
+      "pasos": [
+        "Pela la lechosa, quítale las semillas y córtala en trozos.",
+        "Ponemos la avena en un mitúo de agua tibia por cinco minuticos para que se ablande y escurrimos bien.",
+        "Echa en la licuadora la lechosa, la avena escurrida, la leche y la miel.",
+        "Licúa a fuego... digo, a velocidad alta por uno o dos minuticos hasta que quede bien homogéneo y espumoso, sin pedacitos de avena ni de lechosa.",
+        "Si te queda muy espesa, afloja con un chin de agua y licúa otro poquito. Sabrás que está lista cuando esté bien suave, cremosa y la avena no se sienta granulada al probarla. Sírvela fría."
+      ]
+    },
+    "tpl_e6c912c74da3": {
+      "franja": "cena",
+      "pasos": [
+        "Pela la yuca, córtala en trozos y hiérvela en agua a fuego medio hasta que un tenedor entre sin resistencia. Escúrrela bien.",
+        "Maja la yuca caliente hasta hacer un puré liso. Deja que temple un poco y amásala hasta formar una masa con cuerpo; si queda muy espesa, humedécela con un poquito de agua. Tápala y deja que repose unos minutos.",
+        "Separa la mitad del queso blanco y córtalo en tiras o trozos para el relleno; el resto rállalo y resérvalo para cubrir por encima.",
+        "Toma porciones de la masa de yuca, aplánalas en la palma, pon en el centro el queso cortado y cierra formando las catibías. Colócalas en una bandeja de horno y cubre cada una con el queso rallado reservado.",
+        "Hornea a 180 °C por unos 20 minutos, hasta que el queso de encima se ablande y burbujee. Al partir una catibía, el interior debe verse cocido y sin partes crudas de masa."
+      ]
+    },
+    "tpl_a2cdc293f9c7": {
+      "franja": "merienda",
+      "pasos": [
+        "Ralla el queso de papa en un plato hondo y déjalo a temperatura ambiente para que se ablande bien; este queso fresco no se derrite, así que no esperes que se funda, lo que busca es que quede cremoso y maleable para untar.",
+        "Lava la manzana, córtala en tajadas finas sin pelarla si prefieres, y resérvala. Enfriadita queda mejor para esta merienda fría.",
+        "Parte el casabe en trozos o galletas del tamaño que te gusten. Si lo prefieres más suave y no tan seco, pásale un paño húmedo por encima o úntale unas gotitas de agua para que recupere algo de flexibilidad.",
+        "Unta el queso de papa ablandado sobre cada trozo de casabe, cubriendo bien la superficie.",
+        "Coloca las tajadas de manzana encima del queso, tapa con otro trozo de casabe si quieres hacerlo tipo sándwich, y sirve al momento bien fresquito."
+      ]
+    },
+    "tpl_68e6b8cd9c7b": {
+      "franja": "almuerzo",
+      "pasos": [
+        "Haz un adobo majando el ajo con la sal, la pimienta negra y el orégano dominicano; añade el jugo de la mitad de la naranja y de la mitad del limón y un poco del aceite de oliva. Unta la pechuga de pollo con ese adobo y déjala reposar al menos 20 minutos en la nevera.",
+        "Precalienta el horno a 200 °C. Coloca la pechuga adobada en una bandeja, rocíala con el resto del aceite de oliva y las cebollas en tajadas encima, y hornea unos 25-30 minutos, dando vuelta a mitad de camino. El pollo está listo por dentro cuando al partirlo en la parte gruesa no queda ninguna parte rosada y los jugos salen claros.",
+        "Mientras, para el arroz amarillo, sofoca en una olla el ajo restante con el aceite vegetal a fuego medio, agrega el arroz blanco crudo y remueve un momento para que se impregne.",
+        "Añade el jugo de la naranja y del limón restantes y agua caliente (como el doble del volumen del arroz), corrige con un poquito de sal, tapa y cocina a fuego bajo hasta que el agua se absorba.",
+        "Destapa al final, verifica que el arroz esté blando y suelto por dentro (prueba un grano: no debe estar duro ni crudo), y sirve junto al pollo horneado con sus cebollas."
+      ]
+    },
+    "tpl_54002908e67c": {
+      "franja": "almuerzo",
+      "pasos": [
+        "Lava y pica las espinacas. Sancocha la mitad de las espinacas en agua hirviendo por un minuto, escúrrelas bien y mézclalas con el queso blanco desmenuzado para hacer el relleno.",
+        "Abre la pechuga de pollo a lo largo sin partirla, formando una bolsita, y rellénala con la mezcla de espinaca y queso. Cierra presionando los bordes. Unta el resto de las espinacas crudas picadas alrededor.",
+        "Lava la batata y hiérvela con cáscara en agua hasta que un cuchillo entre sin resistencia, unos 20 minutos. Escúrrela, pélala y córtala en trozos gruesos.",
+        "Lleva la pechuga rellena al horno precalentado a 180 °C por unos 25 minutos. Está lista cuando al cortar el centro no hay ninguna parte rosada y el relleno está calientito, con el queso ablandado.",
+        "Sirve la pechuga al horno acompañada de la batata caliente."
+      ]
+    },
+    "tpl_5e6dd4d89e2b": {
+      "franja": "desayuno",
+      "pasos": [
+        "Pela el plátano maduro, córtalo en trozos y hiérvelo en agua hasta que un tenedor entre sin resistencia; escúrrelo bien y májalo hasta formar un puré.",
+        "Bate el huevo y mézclalo con el puré de plátano hasta que quede una masa uniforme y manejable, ni muy líquida ni muy espesa; déjala reposar unos minutos.",
+        "Ralla o desmenúza el queso blanco y resérvalo; recuerda que este queso fresco no se derrite, solo se ablanda con el calor.",
+        "Calienta el aceite vegetal en una sartén antiadherente a fuego medio, vierte la mitad de la masa y extiéndela, pon el queso encima y cubre con el resto de la masa (o forma la tortilla completa y añade el queso por encima).",
+        "Cocina a fuego medio-bajo hasta que el huevo cuaje por completo y no escurra en ninguna parte; dale la vuelta con cuidado, deja dorar y sirve caliente."
+      ]
+    },
+    "tpl_14f87c9ff17c": {
+      "franja": "cena",
+      "pasos": [
+        "Pela la batata y córtala en pedazos grandes. Ponla a hervir en agua a fuego medio-alto hasta que un cuchillo entre sin ninguna resistencia, como unos 20 minutos. Escúrrela bien.",
+        "Mientras, corta la pechuga de pavo en filete y ponla en la plancha bien caliente, a fuego medio, hasta que por dentro no quede ninguna parte rosada, volteando a la mitad.",
+        "Maja la batata escurrida con un tenedor hasta hacer un puré. Si queda muy espeso, afloja con un poquito de agua de la misma cocción hasta que quede suave y cremoso.",
+        "Dora el filete de pavo en la plancha un minuto más a fuego alto para que coja color por fuera.",
+        "Sirve el puré de batata caliente en el plato con el pavo a la plancha encima."
+      ]
+    },
+    "tpl_340d754b1ec5": {
+      "franja": "almuerzo",
+      "pasos": [
+        "Pela la yuca y ponla a hervir en agua hasta que un cuchillo entre sin resistencia. Escúrrela bien y majala mientras está caliente hasta formar una masa que se pueda amasar y moldear sin que se reviente; si queda muy seca, añade un poquito del agua de cocción. Déjala reposar mientras haces el relleno para que asiente.",
+        "Cocina la pechuga de pollo en agua hirviendo a fuego medio hasta que por dentro no quede ninguna parte rosada; eso es seguridad, no question de textura. Escúrrela y desmenúzala con dos tenedores.",
+        "Pica finito la cebolla y el ají cubanela. Con la mitad de ese sofrito base sofríe a fuego medio hasta que la cebolla esté translúcida, agrega el pollo desmenuzado y mezcla bien. Reserva el otro sofrito... no, espera: usa todo el sofrito en el relleno, porque la mitad del sofrito y la otra mitad no aplica aquí. Mejor: sofríe toda la cebolla con todo el ají cubanela a fuego medio hasta que la cebolla esté transparente, y añade el pollo desmenuzado para completar el relleno. Si queda aguado, déjalo secar un poco más al fuego.",
+        "Toma la mitad de la masa de yuca para la base de cada empanada, coloca el relleno de pollo, tapa con la otra mitad de la masa sellando bien los bordes presionando con los dedos.",
+        "Horna a 180 °C durante unos 20-25 minutos, volteando a la mitad del tiempo, hasta que estén firmes y doradas. Para saber que están listas por dentro, parte una: la masa de yuca debe verse cocida y con cuerpo en todo el grosor, sin partes húmedas ni crudas, y el relleno bien caliente."
+      ]
+    },
+    "tpl_23ad9c0b2ffc": {
+      "franja": "almuerzo",
+      "pasos": [
+        "Hierve una olla con agua y escalda las hojas de repollo unos minutos hasta que se ablanden y se puedan doblar sin romperse; escúrrelas y reserva. En esa misma agua, o aparte, cocina el arroz blanco hasta que esté tierno y escúrrelo.",
+        "En una sartén a fuego medio, sofríe la cebolla picada y el tomate picado hasta que suelten su jugo y se forme una salsita.",
+        "Agrega la carne de res molida al sofrito y guísala a fuego medio hasta que cambie de color por completo y no quede ninguna parte rosada por dentro; incorpora el arroz cocido, mezcla bien y deja unos minutos para que los sabores se integren.",
+        "Toma las hojas de repollo, pon un poco del relleno de arroz con res sobre cada una y enrolla apretando bien para que no se abran.",
+        "Coloca los rollitos en una olla, cúbrelos con agua y cocínalos tapados a fuego bajo-bajo unos 20 minutos. Están listos cuando la hoja de repollo esté bien tierna al morderla y el relleno salga caliente por dentro."
+      ]
+    },
+    "tpl_f8a01d7d3dc9": {
+      "franja": "almuerzo",
+      "pasos": [
+        "Pon el bulgur a hidratar en agua caliente hasta que esté tierno y esponjado, luego escúrrelo bien y déjalo enfriar.",
+        "Mientras tanto, sazona la pechuga de pollo con limón y ponla en la plancha a fuego medio-alto; cocínala por ambos lados hasta que por dentro no quede ninguna parte rosada, que eso es seguridad.",
+        "Pica finito el tomate, la cebolla y el perejil, y mézclalos con el bulgur ya frío; añade el jugo del limón restante y revuelve bien — esa es la ensalada tipile, que se sirve fría.",
+        "Deja reposar el pollo un minutito, córtalo en tiras o medallones y sírvelo encima o al lado del tipile bien fresquito."
+      ]
+    },
+    "tpl_38b33eeddfd4": {
+      "franja": "almuerzo",
+      "pasos": [
+        "Lava el arroz y ponlo a hervir en una olla con agua y una pizca de la sal a fuego alto; cuando seque el agua, baja el fuego, tapa y deja que ese hasta que los granos ablanden por dentro, blanditos pero sueltos.",
+        "Remoja las habichuelas rojas con anticipación y hiérvelas a fuego medio hasta que estén blandas por dentro; luego agrega la auyama en trocitos, la mitad de la cebolla y del ají cubanela picaditos, y un pedacito del tomate, y deja guisar a fuego bajo hasta que la auyama se deshaga y espese el caldo.",
+        "Para el pollo, sazona la pechuga en pedazos con el ajo machacado, el orégano dominicano y lo que queda de la sal; sofríe en una sartén antiadherente con parte del aceite vegetal a fuego medio junto con el resto de la cebolla, el ají cubanela y el tomate, añade la salsa de tomate y un chorrito de agua, tapa y guisa a fuego bajo hasta que el interior del pollo no tenga ninguna parte rosada.",
+        "En el mismo sofrito puedes hacer primero las habichuelas o el pollo, en orden, cuidando de repartir el aceite vegetal: una mitad para el sofrito de las habichuelas y la otra mitad para el pollo, sin repetir.",
+        "Sirve en el mismo plato el arroz, las habichuelas guisadas con su caldo espesito y el pollo guisado por encima, bien calientes."
+      ]
+    },
+    "tpl_a541f5a55786": {
+      "franja": "merienda",
+      "pasos": [
+        "Pela la batata, córtala en trozos y hiérvela en agua hasta que un cuchillo entre sin resistencia. Escúrrela bien y majala hasta hacer un puré.",
+        "En un recipiente, mezcla el puré de batata con la harina de trigo, el huevo batido y la leche. Trabaja hasta formar una masa homogénea con cuerpo, que no se pegue a las manos; si queda muy apretada, afloja con un poquito de agua. Déjala reposar unos minutos.",
+        "Forma un pan pequeño con la masa, colócalo en una bandeja de horno y llévalo al horno precalentado a 180 °C por unos 25 a 30 minutos, hasta que esté dorado por fuera.",
+        "Para saber que está listo por dentro, inserta un palillo en el centro: debe salir limpio, sin masa cruda pegada. Si al partirlo el interior está crudo, devuelve al horno unos minutos más."
+      ]
+    },
+    "tpl_e5074a0098ef": {
+      "franja": "merienda",
+      "pasos": [
+        "En un recipiente, hidrata la harina de maíz precocida con agua tibia poco a poco hasta formar una masa suave que no se pegue a las manos. Déjala reposar unos minutos tapada.",
+        "Separa un tercio de la masa para las tapas de arriba y ralla o desmenuza la mitad del queso blanco para el relleno; reserva el otro mitad del queso en trocitos para poner encima.",
+        "Toma porciones de la masa, forma bolitas y aplánalas, coloca el queso rallado en el centro, cierra bien los bordes sellando con los dedos y da forma de empanadita.",
+        "Coloca las empanaditas en una bandeja y hornea a fuego medio, unos 180 °C, por unos 15-20 minutos, volteándolas a la mitad del tiempo.",
+        "Sabrás que están listas cuando al partir una el interior de la masa no esté crudo y el queso esté calientito y ablandado (recuerda que el queso blanco fresco no se derrite). Sírvelas calientitas como merienda."
+      ]
+    },
+    "tpl_5d4995823591": {
+      "franja": "merienda",
+      "pasos": [
+        "Pela la yuca, córtala en trozos y hiérvela en agua hasta que un cuchillo entre sin resistencia. Escúrrela bien mientras aún está caliente.",
+        "Maja la yuca hasta hacer un puré liso, agrega el queso blanco rallado o desmenuzado y el huevo, y amasa hasta formar una masa uniforme que se pueda manejar sin pegarse a las manos. Si queda muy espesa, añade un chorrito de agua.",
+        "Deja reposar la masa unos minutos y forma panecitos pequeños, aplastándolos un poco con la palma de la mano.",
+        "Lleva los panecitos al horno precalentado a temperatura media-alta (unos 180 °C) durante 20 a 25 minutos, dándoles la vuelta a la mitad del tiempo.",
+        "Están listos cuando al partir uno el interior está cocido y no crudo, con la masa firme y esponjosa por dentro."
+      ]
+    },
+    "tpl_72483f9afdc5": {
+      "franja": "almuerzo",
+      "pasos": [
+        "Remoja las lentejas en agua un buen rato y luego hiérvalas a fuego medio hasta que estén blanditas por dentro, al morderlas se sienten tiernas y no duras. Escúrrelas y resérvalas.",
+        "Pica bien la cebolla y machaca el ajo. Calienta el aceite en una sartén a fuego medio, echa la cebolla y el ajo y sofríe hasta que la cebolla esté transparente y suavecita.",
+        "Agrega las lentejas escurridas al sofrito con un chorrito de agua y déjalas guisar a fuego bajo hasta que formen un guisadito espesito, revolviendo para que no se pegue. Sabe que está listo cuando ya no está aguado y las lentejas están bien tiernas.",
+        "Aparte, hierve el huevo en agua hasta que esté bien duro por dentro: al pelarlo y partirlo, la yema debe estar completamente cuajada y nada chorreando. Reserva la mitad del huevo para picarlo y mezclarlo con el guiso, y la otra mitad para adornar encima al servir.",
+        "Cocina el arroz blanco en agua hirviendo a fuego medio hasta que los granos estén blanditos por dentro, escúrrelo bien y sírvelo con el guiso de lentejas encima y el huevo duro picado."
+      ]
+    },
+    "tpl_395d169d8574": {
+      "franja": "desayuno",
+      "pasos": [
+        "Precalienta el horno a 200 °C.",
+        "Pela el plátano maduro y córtalo por la mitad a lo largo, sin separarlo del todo para que quede como un sándwich abierto.",
+        "Unta la mitad de la mantequilla de maní entre las dos mitades del plátano, ciérralo y envuélvelo en papel de aluminio.",
+        "Hornea por unos 20 minutos, hasta que al meter un cuchillo en el plátano entre sin resistencia, bien suave por dentro.",
+        "Sácalo del horno, ábrelo con cuidado y corónalo con el resto de la mantequilla de maní y espolvorea la canela en polvo por encima."
+      ]
+    },
+    "tpl_622910cfff4d": {
+      "franja": "almuerzo",
+      "pasos": [
+        "Remoja las habichuelas negras desde la noche anterior. Cuécelas en olla con agua a fuego medio hasta que estén blandas, como una hora y change, y resérvalas con un poco del caldo de la cocción.",
+        "Pica la mitad de la cebolla, la mitad del ajo, el ají cubanela y el cilantro. Sofríe todo en la mitad del aceite vegetal a fuego medio, añade la mitad de la salsa de tomate y deja que el sofrito se soaza bien.",
+        "Cuando el sofrito esté listo, echa las habichuelas negras con parte de su caldo, sazona con la mitad de la sal y deja hervir a fuego medio unos diez minutos hasta que el caldo espese como crema. Añade el arroz blanco, revuelve, baja el fuego, tapa y deja que se seque con el vapor; está listo cuando el arroz esponja suelto y cada grano está blando por dentro.",
+        "Para el bistec, sazona la carne de res con el resto de la sal y un poquito del ajo machacado. Séllala en plancha o sartén antiadherente a fuego medio-alto con el resto del aceite, dándole vuelta hasta que se dore por fuera; está lista por dentro cuando al cortar un pedacito no sale jugo roso ni partes crudas.",
+        "Baja el fuego, añade al bistec el resto de la cebolla en aros, el resto del ajo picado y el resto de la salsa de tomate con un chorrito de agua, tapa y deja que la cebolla se ablande y suelte su jugo unos cinco minutos. Termina con el resto del cilantro picado por encima y sirve el bistec encebollado junto al moro."
+      ]
+    },
+    "tpl_70ace44d119f": {
+      "franja": "desayuno",
+      "pasos": [
+        "Pon la avena en una olla con la leche de soya y un poco de agua, y ponla a fuego medio. Déjala hervir suavecito, moviendo de vez en cuando para que no se pegue en el fondo.",
+        "Cuando comience a hervir, baja el fuego a bajo y agrega las semillas de chía, moviendo bien para que no hagan grumos.",
+        "Deja cocinar a fuego bajo unos 5 a 7 minutos, revolviendo. Sabrás que está lista cuando la avena haya absorbido el líquido, esté blandita y cremosa, sin quedar aguada ni tan espesa que no se mueva.",
+        "Pela el guineo y pártelo en rueditas.",
+        "Sirve la avena caliente en un plato hondo y coloca las rueditas de guineo por encima. Deja reposar un minutito para que la chía termine de engrosar la mezcla y ¡a disfrutar ese desayuno!"
+      ]
+    },
+    "tpl_03a0f3927930": {
+      "franja": "almuerzo",
+      "pasos": [
+        "Hidrata la soya texturizada en agua caliente hasta que se ablande, escúrrela bien y resérvala.",
+        "En una olla con fuego medio, calienta el aceite vegetal, echa el sofrito, el ajo machacado y la cebolla picada, y sofríe hasta que la cebolla se transparente.",
+        "Añade la soya escurrida, revuelve bien para que se impregne del sofrito, agrega agua hasta cubrirla y deja que guise a fuego bajo hasta que el líquido se reduzca y la soya quede suave y jugosa por dentro, sin agua suelta en el fondo.",
+        "En otra olla, hierve las habichuelas rojas en agua hasta que estén blanditas, luego aplásta unas cuantas contra la pared de la olla para que el guiso espese naturalmente y deja cocinar a fuego bajo hasta que la salsa se vea cremosa.",
+        "Cocina el arroz blanco con agua hasta que hierva, baja el fuego, tapa y deja que se seque; está listo cuando los granos estén sueltos y tiernos por dentro. Sirve la chuleta de soya guisada con el arroz y las habichuelas."
+      ]
+    },
+    "tpl_14c76a1c346e": {
+      "franja": "desayuno",
+      "pasos": [
+        "Precalienta el horno a 200 °C y prepara una bandeja con papel de hornear o bandeja antiadherente, así los yaniqueques no se pegan sin necesidad de freír.",
+        "Haz la masa: mezcla la harina de trigo con la sal, la mitad del aceite vegetal y un poquito de agua hasta formar una masa suave que no se pegue en las manos. Déjala reposar unos 10 minutos tapada, que se relaje y quede manejable.",
+        "Estira la masa bien finita con un rodillo, pincha los discos con un tenedor y hornéalos unos 10 a 12 minutos, volteándolos a la mitad, hasta que estén dorados y crujientes. Al partir uno, el interior debe verse cocido y no crudo ni masa.",
+        "Mientras se hornean, pica la cebolla bien menudita y sofríela en una sartén antiadherente con el resto del aceite a fuego medio hasta que esté transparente.",
+        "Bate el huevo con la pimienta negra, agrégalo a la cebolla y cocina a fuego bajo, moviendo con cuidado, hasta que cuaje por completo y no escurra en ninguna parte. Sirve el huevo revuelto sobre o junto a los yaniqueques calentitos."
+      ]
+    },
+    "tpl_446aebe8e4ee": {
+      "franja": "desayuno",
+      "pasos": [
+        "Pon las semillas de chía en remojo en un poco de agua durante unos 10-15 minutos hasta que suelten su gel y se pongan como perlitas.",
+        "Pela el mango, córtalo en trozos y échalo a la licuadora.",
+        "Añade la leche de soya fría y la chía ya hidratada, y licúa a velocidad alta hasta que quede bien cremoso y sin grumos.",
+        "Si te queda muy espesa, agrégale un chorrito de agua y licúa un momentico más para aflojarla.",
+        "Sírvelo bien frío al momento: está listo cuando la batida se ve uniforme y sedosa, con la chía repartida por todo el vaso."
+      ]
+    },
+    "tpl_19b8ee8e0474": {
+      "franja": "almuerzo",
+      "pasos": [
+        "Pela la yuca, córtala en trozos y hiérvela en agua con un poco de la sal a fuego medio hasta que un tenedor entre sin resistencia, unos 20-25 minutos. Escúrrela y resérvala tapada.",
+        "Desmenúzale el arenque quitando espinas grandes y piécala fino. Pica la cebolla en cuadritos.",
+        "Bate el huevo con el resto de la sal en un recipiente hasta que quede homogéneo.",
+        "En una sartén antiadherente a fuego medio, saltea la cebolla hasta que transparente, añade el arenque desmenuzado y revuelve un minuto; entonces vierte el huevo batido y muévelo sin parar hasta que cuaje por completo y no escurra en ninguna parte.",
+        "Sirve el arenque salteado con huevo caliente acompañado de la yuca hervida."
+      ]
+    },
+    "tpl_74e843f26583": {
+      "franja": "almuerzo",
+      "pasos": [
+        "Pica bien la cebolla, el ají cubanela, el pimiento morrón, el ajo y el cilantro. Corta la pechuga de pollo en trozos pequeños y sazónala con el orégano dominicano y la mitad de la sal.",
+        "En una olla al fuego medio calienta el aceite vegetal y sofríe la cebolla, el ají cubanela, el pimiento morrón y el ajo hasta que estén blanditos y transparentes.",
+        "Añade la salsa de tomate y el pollo sazonado, mueve bien y cocina a fuego medio hasta que el pollo cambie de color por fuera.",
+        "Agrega agua suficiente, el arroz blanco y la mitad del cilantro. Déjalo hervir a fuego medio-alto y luego baja a fuego medio, moviendo de vez en cuando para que no se pegue, hasta que el arroz reventé y el asopao espese.",
+        "Al final, ajusta con el resto de la sal, echa el cilantro restante y verifica que el pollo esté bien cocido por dentro, sin ninguna parte rosada, antes de servir bien calientito."
+      ]
+    },
+    "tpl_605be41260e6": {
+      "franja": "merienda",
+      "pasos": [
+        "Poné el maní en una sartén seca a fuego bajo, moviéndolo constantemente, hasta que esté bien tostado por dentro: al partir un grano se ve dorado, no crudo ni pálido. Déjalo enfriar por completo.",
+        "Pica los dátiles en pedacitos pequeños, quitándoles el hueso, y déjalos junto con las pasas listos para mezclar.",
+        "Cuando el maní esté bien frío, frótalo entre las manos o con un paño limpio para soltarle la cascarita y deséchala.",
+        "En un recipiente, mezcla el maní tostado con las pasas y los dátiles picados, revolviendo bien frío para que todo quede integrado.",
+        "Guarda la mezcla en un recipiente tapado y sírvela como merienda bien fresquita."
+      ]
+    },
+    "tpl_e07ba75823ee": {
+      "franja": "cena",
+      "pasos": [
+        "Hierve el huevo en agua hasta que cuaje por completo y no escurra en ninguna parte; pela, córtalo por la mitad y aparta.",
+        "Machaca el aguacate en un pilón hasta lograr una pasta, añade el tomate y la cebolla bien picaditos y el jugo del limón; mezcla bien. Si queda muy espeso, aflójalo con unas gotitas de agua hasta que quede cremoso pero con cuerpo.",
+        "Pasa el casabe por un comal o plancha seca a fuego bajo, dándole vuelta, hasta que esté calientito y ligeramente tostadito por fuera; no importa el interior porque el casabe ya viene cocido.",
+        "Sirve el guacamole criollo en el plato con las mitades de huevo duro encima o al lado, y acompaña con el casabe tostadito para untar. Todo se sirve frío o a temperatura ambiente."
+      ]
+    },
+    "tpl_9af337536c6f": {
+      "franja": "merienda",
+      "pasos": [
+        "Pela el guineo y córtalo en rueditas o pedacitos.",
+        "Tuesta el maní en una sartén seca a fuego bajo, moviendo seguido, hasta que esté dedito y huela a maní tostado; por dentro debe estar blandito, no crudo. Déjalo enfriar y pícalo grueso.",
+        "En un baso o taza, pon el yogurt griego y mezcla con una cucharita hasta que quede cremoso y liso.",
+        "Agrega la mitad del maní picado y la mitad del guineo al yogurt y revuelve suave.",
+        "Pa terminar, pon encima el resto del guineo y el resto del maní, y llévalo a la nevera un ratito antes de comerlo bien frío."
+      ]
+    },
+    "tpl_6210ed33836b": {
+      "franja": "almuerzo",
+      "pasos": [
+        "Lava el filete de pescado, sazónalo con el jugo del limón, la sal y el ajo machacado, y déjalo marinar unos 15 minutos.",
+        "Pica la cebolla, el ají cubanela y el tomate en cuadritos. Calienta el aceite vegetal en un caldero a fuego medio y sofríe la cebolla, el ají y el ajo hasta que la cebolla esté transparente.",
+        "Añade el tomate picado y la salsa de tomate, cocina unos 3 minutos a fuego medio hasta que el tomate suelte su jugo y haga una cuentecita.",
+        "Agrega el pescado al caldero, tápalo y guísalo a fuego bajo unos 10-12 minutos, volteándolo con cuidado a mitad de cocción. Está listo por dentro cuando al partir un pedazo la carne es blanca y opaca en toda su grosor, sin zonas translúcidas ni crudas. Si el guiso espesa demasiado, agrégale un chorrito de agua.",
+        "Sirve el pescado guisado con su salsita criolla acompañado del arroz blanco bien calientito."
+      ]
+    },
+    "tpl_73189bbe122d": {
+      "franja": "cena",
+      "pasos": [
+        "Pela la yuca, córtala en trozos y ponla a hervir en agua con fuego alto. Cuando rompa el hervor, bájala a fuego medio y déjala unos 20-25 minutos, hasta que un tenedor entre sin resistencia. Escúrrela y resérvala tapadita.",
+        "Mientras, pela la zanahoria y córtala en rodajas, separa el brócoli en ramitos y pica fino el ajo. Frota el limón sobre el filete de tilapia y déjalo marinar mientras hierves los vegetales.",
+        "En una olla con agua hirviendo a fuego medio, echa la zanahoria primero unos 5 minutos, luego añade el brócoli y cocina 3-4 minutos más, hasta que estén tiernos pero firmes. Escúrrelos.",
+        "Para la tilapia al vapor: ponla en una vaporera o colador sobre una olla con agua hirviendo (sin que toque el agua), esparce el ajo por encima, tapa y cocina a fuego medio unos 10-12 minutos. Está lista cuando la carne se separa en hojadas blancas fácilmente con un tenedor y no hay nada translúcido por dentro.",
+        "Sirve el pescado con los vegetales alrededor y la yuca hervida al lado. Exprime el limón por encima de todo justo al llevar a la mesa."
+      ]
+    },
+    "tpl_0a34be073620": {
+      "franja": "almuerzo",
+      "pasos": [
+        "Pon a hervir las habichuelas rojas en una olla con agua hasta que estén blanditas; escúrrelas y resérvalas.",
+        "Prepara el moro: en un caldero con un chorrito del aceite vegetal sofríe la cebolla y el ají cubanela picaditos, agrega el arroz blanco crudo y las habichuelas hervidas, añade agua hasta cubrir un dedo por encima del arroz, y cocina a fuego medio hasta que seque; baja el fuego, tapa y deja que el arroz repose y termine de cocinarse bien sueltecito.",
+        "Pica fina una parte de la cebolla para acompañar y reserva el resto, ya sofrita, dentro del moro.",
+        "Calienta la plancha o un sartén bien caliente y coloca la chuleta de cerdo; cocínala a fuego medio dándole vuelta hasta que esté dorada por fuera y, al partirla, el interior esté completamente blanco, sin nada rosado — eso es seguridad en el cerdo.",
+        "Sirve la chuleta a la plancha acompañada del moro de habichuelas caliente, con la cebolla cruda picadita por encima."
+      ]
+    },
+    "tpl_84e2b0aae017": {
+      "franja": "almuerzo",
+      "pasos": [
+        "Pon el bacalao en remojo en agua desde la víspera, cambiándole el agua un par de veces para quitarle la sal. Después hiérvelo a fuego medio unos minutos, escúrrelo y desmenúzalo, revisando que no le queden espinas.",
+        "Pela las papas, córtalas en pedazos y hiérvelas en agua hasta que un cuchillo entre sin resistencia. Escúrrelas y resérvalas.",
+        "En una cazuela calienta el aceite de oliva a fuego medio y sofríe el ajo picado, la cebolla, el ají cubanela y el pimiento morrón en tiras. Cuando la cebolla esté transparente, añade el tomate picado y la salsa de tomate, y cocina unos minutos hasta que forme un guisado espesito.",
+        "Agrega el bacalao desmenuzado, las aceitunas y un chorrito de agua para que el guisado no se seque. Tapa y deja cocinar a fuego bajo unos 10 minutos, revolviendo de vez en cuando. Sabrás que el bacalao está listo cuando esté bien suelto y haya absorbido el sabor del sofrito.",
+        "Incorpora las papas hervidas, mezcla con cuidado para que se impregnen del guisado y cocina todo junto a fuego bajo unos 5 minutos más. El plato está listo cuando la salsa haya espesado y las papas estén tiernas por dentro, cubiertas del guisado."
+      ]
+    },
+    "tpl_330acceaf98a": {
+      "franja": "desayuno",
+      "pasos": [
+        "Tuesta la avena en una sartén antiadherente a fuego medio, moviéndola constantemente durante unos 3-4 minutos hasta que esté dorada y huela a nuez. Retírala y déjala enfriar por completo.",
+        "Lava las fresas, quítales la hojita y córtalas en pedacitos pequeños. Pela el mango y córtalo en cubitos igual de pequeños. Mézclalos en un recipiente.",
+        "En un plato hondo o recipiente, coloca el yogurt griego y añade la miel por encima; mezcla suave hasta integrar bien.",
+        "Sirve el yogurt endulzado en el fondo del plato, agrega la mezcla de frutas picadas encima y cubre con la avena tostada ya fría para que quede crujiente.",
+        "Llévalo directo a la mesa bien frío; sabe mejor recién armado, cuando la avena todavía cruje."
+      ]
+    },
+    "tpl_828571d8bc76": {
+      "franja": "almuerzo",
+      "pasos": [
+        "La noche antes, pon las habichuelas rojas a remojar en agua. Al día siguiente, escúrrelas y ponlas a hervir en agua fresca a fuego medio hasta que estén blanditas, que se aplasten fácil entre los dedos. Reserva un poco del caldo de la cocción.",
+        "En una cazuela, calienta el aceite a fuego medio y sofríe la cebolla picadita y el ají cubanela hasta que la cebolla esté transparente.",
+        "Agrega las habichuelas guisadas con un poco de su caldo y la auyama pelada y partida en trocitos. Tapa y deja a fuego bajo hasta que la auyama esté blandita y se deshaga un poco para espesar el guiso; si se seca mucho, añade un chin de agua. Ajusta con la sal.",
+        "Mientras, cocina el arroz blanco con agua y una pizca de sal a fuego medio-alto hasta que seque, luego baja el fuego, tapa y deja que repose hasta que los granos estén sueltos y blanditos por dentro, sin corazón duro.",
+        "Sirve las habichuelas guisadas calientes sobre el arroz, con rodajas de aguacate al lao'."
+      ]
+    },
+    "tpl_6796dd29c67e": {
+      "franja": "desayuno",
+      "pasos": [
+        "Remoja la avena en agua caliente unos minutos hasta que se ablande y luego escúrrela.",
+        "Pela la lechosa, quítale las semillas y córtala en trozos.",
+        "Echa la lechosa, la leche de soya y la avena escurrida en la licuadora.",
+        "Licúa a velocidad alta hasta que quede bien cremoso y sin pedacitos de fruta ni de avena.",
+        "Sírvelo frío de una; si queda muy espeso, añade un chorrito de agua y licúa un toque más."
+      ]
+    },
+    "tpl_66be00eacce3": {
+      "franja": "merienda",
+      "pasos": [
+        "Pela el aguacate, quítale la semilla y pon la pulpa en un plato hondo.",
+        "Con un tenedor, maja el aguacate hasta que quede una pasta suave con cuerpo; si quieres untarlo más fino, agrégale unas gotitas de agua y sigue majando.",
+        "Como es una merienda fría, no hay cocción: prueba el majado y confirma que esté bien cremoso, sin trozos duros en el centro.",
+        "Divide el casabe en dos mitades: usa la mitad como base y unta encima la mitad del majado.",
+        "Tapa con la otra mitad del casabe, aprieta suavecito para que el majado se asiente, y sirve de una vez, bien fresco."
+      ]
+    },
+    "tpl_0a2dd88deb13": {
+      "franja": "cena",
+      "pasos": [
+        "Pon el bacalao en agua desde la noche anterior, cambiándole el agua un par de veces para que suelte la sal, y escúrrelo bien. Desmenúzalo quitando espinas y piel.",
+        "Pela la batata, córtala en trozos y hiérvela en agua hasta que un tenedor entre sin resistencia. Escúrrela y resérvala tapada.",
+        "Calienta el aceite vegetal a fuego medio en una sartén y sofríe la cebolla picada y el ajo machacado hasta que la cebolla quede transparente.",
+        "Añade el bacalao desmenuzado al sofrito y guísalo a fuego bajo unos 10 minutos, moviendo de vez en cuando. Si se seca, échale un chorrito de agua.",
+        "Sirve el bacalao guisado caliente junto a la batata hervida, con la cebolla del guisado por encima."
+      ]
+    },
+    "tpl_f3e7e9e89180": {
+      "franja": "desayuno",
+      "pasos": [
+        "Pela y pica la manzana en cuadritos pequeños y ponla a hervir en agua a fuego medio unos cinco minutos, hasta que se ablanden un poco pero sin deshacerse.",
+        "Escurre la manzana y en esa misma agua, ya caliente, añade la avena a fuego bajo, moviendo de vez en cuando con una cuchara para que no se pegue al fondo.",
+        "Cuando la avena haya espesado y este bien calientica, entre tres y cinco minutos mas, incorpora la mitad de la manzana cocida y la mitad del mani picadito, y revuelve bien para que todo se mezcle.",
+        "Sirve la avena caliente en un plato hondo, y por encima coloca el resto de la manzana y del mani.",
+        "Para terminar, espolvorea la canela en polvo por encima y disfrutala calientica, bien cremosa y suave por dentro, sin grumos."
+      ]
+    },
+    "tpl_5e8d9f256e18": {
+      "franja": "cena",
+      "pasos": [
+        "Pon el ñame pelado y troceado a hervir en agua con fuego medio hasta que esté blando, unos 25 minutos; sabrás que está listo cuando un tenedor entre sin resistencia. Escúrrelo y resérvalo tapado para que no se seque.",
+        "Pon el bacalao a remojar en agua desde antes para desalar, cambiando el agua un par de veces; luego hiérvelo unos 10 minutos a fuego medio, escúrrelo y desmenúzalo en trocitos quitando espinas y piel.",
+        "Calienta el aceite vegetal en una sartén a fuego medio y saltea el ajo picado hasta que suelte su aroma, sin dejarlo quemar.",
+        "Añade la cebolla en rodajas al salteado y cocina a fuego medio hasta que esté transparente y blandita; entonces incorpora el bacalao desmenuzado y saltea todo junto un par de minutos para que se mezclen los sabores.",
+        "Sirve el ñame hervido caliente en un plato hondo y cubre con el bacalao encebollado por encima, bien caliente."
+      ]
+    },
+    "tpl_9d2e0c9c7362": {
+      "franja": "desayuno",
+      "pasos": [
+        "Pela la yuca, córtala en trozos y hiérvela en agua a fuego medio hasta que un tenedor entre sin resistencia. Escúrrela bien y majala hasta formar un puré.",
+        "Separa un tercio del huevo y mézclalo con la yuca majada todavía tibia, amasando hasta lograr una masa con cuerpo que no se pegue a las manos. Si queda muy espesa, agrega unas gotitas de agua. Déjala reposar unos minutos.",
+        "Corta el queso blanco en cuadritos y un tercio de la yuca la reservas... no: toma porciones de la masa, aplánalas en la mano, coloca un pedacito de queso en el centro y cierra formando bollitos.",
+        "Bate el huevo restante y barniza cada bollito con ayuda de una brocha o con los dedos.",
+        "Lleva los bollitos al horno precalentado a 350 °F por unos 20 minutos, dándoles la vuelta a la mitad del tiempo. Están listos cuando al partir uno por la mitad el interior de la masa no está crudo y el queso se ve ablandadito y caliente."
+      ]
+    },
+    "tpl_063853f589bc": {
+      "franja": "desayuno",
+      "pasos": [
+        "Bate el huevo en un bowl, añade la leche y mezcla bien. Incorpora la harina de trigo poco a poco batiendo hasta que no queden grumos y quede una masa líquida y suave, más ligera que una masa de bizcocho. Déjala reposar unos minutos mientras calientas la plancha.",
+        "Calienta una sartén antiadherente o plancha a fuego medio, bien seca, sin nada encima.",
+        "Vierte un cucharón de la masa y deja que se extienda formando un disco fino. Cocina a fuego medio hasta que la superficie deje de escurrir y quede mate, y los bordes se despeguen solos de la sartén; ese es el momento de voltear. Dale un minuto al otro lado y saca. Repite hasta acabar la masa.",
+        "Lava las fresas y córtalas en pedacitos.",
+        "Sirve los panqueques apilados y cubre con las fresas por encima."
+      ]
+    },
+    "tpl_f01650652d09": {
+      "franja": "cena",
+      "pasos": [
+        "Pela la yuca, córtala en trozos y ponla a hervir en agua con una pizca de la sal hasta que un tenedor entre sin resistencia. Escúrrela bien y májala hasta hacer un puré.",
+        "Escurre el atún y mézclalo con la yuca majada, la mitad del huevo y el resto de la sal. Amasa hasta formar una pasta con cuerpo que no se pegue a las manos; si queda muy espesa, afloja con poquita agua. Déjala reposar unos minutos.",
+        "Forma las croquetas con las manos, colócalas en una bandeja para horno, barniza con la otra mitad del huevo batido y hornea a 200 °C por unos 20-25 minutos, volteándolas a la mitad, hasta que estén doradas por fuera y al partir una veas el interior cocido, sin partes húmedas ni crudas.",
+        "Mientras tanto, prepara la ensalada: pica la lechuga, el tomate y la cebolla, y córtalo todo en una ensaladera con el aguacate en cuadritos.",
+        "Aliña la ensalada con el aceite de oliva, el jugo del limón y un toquecito de sal, mezcla bien y sirve junto a las croquetas calientes."
+      ]
+    },
+    "tpl_f7501db43fd2": {
+      "franja": "desayuno",
+      "pasos": [
+        "Pica la cebolla bien finita. En una sartén antiadherente calienta el aceite a fuego medio y sofríe la cebolla hasta que esté transparente.",
+        "Agrega las espinacas lavadas y cocínalas a fuego medio hasta que se marchiten y suelten el agua; escúrrelas bien para que no aguACEN la tortilla.",
+        "Bate los huevos con la sal hasta que estén espumosos. Mézclalos con las espinacas y la cebolla sofritas.",
+        "En la misma sartén a fuego medio-bajo vierte la mezcla y deja que cuaje por debajo. El queso blanco fresco no se derrite: desmenúzalo y espárcelo encima de la mitad de la tortilla, luego dobla la tortilla sobre el queso para que se ablande y se caliente con el calor.",
+        "La tortilla está lista cuando el huevo ha cuajado por completo y no escurre en ninguna parte al partirla; sirve de una caliente."
+      ]
+    },
+    "tpl_3b2ae5748a82": {
+      "franja": "almuerzo",
+      "pasos": [
+        "Hidrata la soya texturizada en agua caliente unos 10-15 minutos hasta que ablande, escúrrela bien y resérvala.",
+        "Pela y corta la yuca, el ñame, la auyama y el plátano verde en trozos; hiérvelos en agua a fuego medio hasta que un cuchillo entre sin resistencia, señal de que están cocidos por dentro.",
+        "En una olla al fuego, sofríe el sofrito con un poco del agua de cocción a fuego medio hasta que huela rico, luego añade la soya texturizada escurrida y sofríe unos minutos para que tome el sabor.",
+        "Agrega los víveres cocidos a la olla junto con agua suficiente para formar el sancocho, y guisa a fuego bajo unos 15-20 minutos, machacando un poco la auyama para que espese el caldo; añade más agua si espesa demasiado.",
+        "Pica el cilantro, échalo al final, cocina 2-3 minutos más a fuego bajo y apaga; el sancocho está listo cuando el caldo ha espesado y los víveres se deshacen suaves al presionarlos con la cuchara."
+      ]
+    },
+    "tpl_825f05f94706": {
+      "franja": "almuerzo",
+      "pasos": [
+        "Hidrata el bulgur en agua caliente hasta que ablande, escúrrelo bien y déjalo reposar hasta que quede como una masa húmeda pero con cuerpo, que se pueda amasar sin desbaratarse.",
+        "Dora la carne de res molida en una sartén antiadherente a fuego medio con la mitad de la cebolla picada y sal, cocinándola hasta que no quede nada rosada por dentro; deja enfriar un poco.",
+        "Mezcla el bulgur hidratado con la carne cocida y el resto de la cebolla, amasando hasta formar una mezcla uniforme con consistencia de masa moldeable; si queda muy seca, afloja con un poquito de agua. Forma los quipes y llévalos al horno precalentado a 375 °F por unos 20-25 minutos, dándoles vuelta a la mitad del tiempo. Están listos cuando al partir uno el interior no está crudo y la masa se ve cocida por completo.",
+        "Mientras se hornean, prepara la ensalada: corta la lechuga, el tomate y el aguacate, y aliña con el aceite de oliva, el jugo del limón y un pinito de sal.",
+        "Sirve los quipes calientes acompañados de la ensalada fresca."
+      ]
+    },
+    "tpl_fbee4134c694": {
+      "franja": "merienda",
+      "pasos": [
+        "Diluye la harina de maíz precocida en un poco de la leche, la mitad más o menos, hasta que no queden grumos.",
+        "Calienta el resto de la leche en una ollita a fuego medio y, cuando empiece a humear, agrega la mezcla de harina sin dejar de mover con cuchara de palo.",
+        "Baja el fuego a bajo y cocina removiendo siempre unos 8 a 10 minutos, hasta que espese como una crema que cubre la cuchara: esa es la señal de que está cocido por dentro, sin sabor a harina cruda.",
+        "Añade el azúcar morena y media cucharadita de la canela, mezcla bien hasta disolver y retira del fuego.",
+        "Sirve tibio o frío en tacitas y espolvorea por encima el resto de la canela en polvo. ¡Un majarete ligero, como el de la abuela pero sin tanta azúcar!"
+      ]
+    },
+    "tpl_04626e63fcef": {
+      "franja": "almuerzo",
+      "pasos": [
+        "Enjuaga bien la quinoa con agua fría y ponla a hervir en una olla con agua suficiente a fuego medio, unos 15 minutos, hasta que los granitos se abran y queden sueltos y blandos por dentro. Escúrrela y déjala enfriar por completo.",
+        "Hierve los edamames en agua con fuego alto unos 5 minutos, hasta que estén tiernos por dentro pero no aguados. Escúrrelos y déjalos enfriar.",
+        "Mientras tanto, pica el tomate en cuadritos y el aguacate en pedacitos, todo tamaño bocado.",
+        "En un recipiente mezcla la quinoa fría con el edamame, el tomate y el aguacate. Rocía con el aceite de oliva y el jugo del limón, y revuelve suavecito para que el aguacate no se haga puré.",
+        "Prueba y ajusta con más jugo de limón si quieres, y llévala a la nevera unos minutos antes de servir bien fresquita."
+      ]
+    },
+    "tpl_0ad4382c9e2f": {
+      "franja": "almuerzo",
+      "pasos": [
+        "Lava el arroz y ponlo a hervir en agua con fuego medio; cuando el agua se haya absorbido casi toda, bájale el fuego, tapa y déjalo sudar hasta que esté blandito por dentro y suelto. Resérvalo tapado.",
+        "En una sartén antiadherente calienta el aceite a fuego medio y sofríe la cebolla picadita, el ají cubanela en rodajitas y el tomate picado, moviendo hasta que formen una salsita blandita.",
+        "Añade el arenque en pedazos al sofrito, revuelve con cuidado y tápalo a fuego bajo unos minutos, hasta que el pescado se desmenuce solito y esté bien cocido por dentro, sin partes translúcidas.",
+        "Incorpora el arroz al guiso con un chorrito de agua si está apretado, mezcla bien a fuego bajo para que el arroz coja el color y el sabor del sofrito.",
+        "Sirve el locrio caliente con el aguacate en láminas por encima o al lado, bien maduro y fresquito."
+      ]
+    },
+    "tpl_d7d533d75564": {
+      "franja": "merienda",
+      "pasos": [
+        "Lava bien la zanahoria y el apio. Pela la zanahoria y córtala en palitos delgados, más o menos del largo de un dedo; haz lo mismo con el apio, quitándole las hebras gruesas.",
+        "Sumerge los palitos de zanahoria en agua fría por unos minutos para que queden bien crujientes y firmes, luego escúrrelos bien sobre papel o un colador.",
+        "Sirve el hummus en el centro de un plato o en bowls individuales. Si está muy espeso, agrégale un chorrito de agua fría y muévelo hasta que quede suave y cremoso, que caiga lento de la cuchara.",
+        "Coloca los palitos de zanahoria y apio alrededor del hummus, listos para mojar. Esta merienda es completamente fría: no lleva cocción, solo buen corte y buena presentación.",
+        "Consejo del cocinero: si los palitos van a esperar un rato antes de comerse, guárdalos en la nevera tapados con un paño húmedo para que no se marchiten."
+      ]
+    },
+    "tpl_c8dd8dab7243": {
+      "franja": "almuerzo",
+      "pasos": [
+        "Pela los guineítos verdes, córtalos en ruedas y ponlos a hervir en agua con un poquito de la sal a fuego medio hasta que estén blanditos, unos 20 minutos. Sabrás que están listos cuando el tenedor entre sin resistencia. Escúrrelos y resérvalos.",
+        "En una olla, sofríe la costilla de cerdo cortada en trocitos a fuego medio hasta que dore bien por fuera. Cocínala hasta que por dentro no quede ninguna parte rosada — eso es seguridad.",
+        "Agrega el tomate picadito y la cebolla en plumas a la olla con la costilla. Guisalos a fuego bajo unos 10 minutos, removiendo, hasta que el tomate se deshaga y forme la salsita. Si espesa mucho, añade un chorrito de agua.",
+        "Incorpora los guineítos hervidos a la olla, revuelve con cuidado para que se impregnen del guiso, tapa y deja a fuego bajo unos 5 minutos más para que todo se casen los sabores.",
+        "Prueba y ajusta con el resto de la sal. Sirve bien caliento, con el guisadito jugoso por encima de los guineítos."
+      ]
+    },
+    "tpl_704d1b022af5": {
+      "franja": "almuerzo",
+      "pasos": [
+        "La noche antes, pon las habichuelas blancas a remojar en agua. Al día siguiente, escúrrelas y ponlas a hervir en agua fresca a fuego medio hasta que estén blandas, como una hora y cuarto, revisando que al apretarlas con los dedos se aplasten fácil.",
+        "Pica la cebolla y el ají cubanela bien finitos. En una olla al fuego con un chorrito de agua, sofríe los dos hasta que la cebolla esté transparente.",
+        "Añade el cerdo en trozos pequeños al sofrito y cocínalo a fuego medio, moviendo, hasta que esté bien cocido por dentro, sin ninguna parte rosada.",
+        "Incorpora la auyama en trocitos, el orégano dominicano y las habichuelas ya blandas con un poco de su agua de cocción. Déjalo hervir a fuego bajo, medio tapado, hasta que la auyama se ablande y el guiso espese: la auyama está lista cuando un tenedor la atraviesa sin resistencia.",
+        "Aparte, cocina el arroz blanco con agua a fuego medio hasta que absorba todo el líquido, bájalo a fuego bajo, tápalo y déjalo terminar unos minutos hasta que los granos estén sueltos y blandos por dentro. Sirve las habichuelas guisadas con el cerdo encima del arzo recién hecho."
+      ]
+    },
+    "tpl_5719059873a3": {
+      "franja": "almuerzo",
+      "pasos": [
+        "Remoja los gandules y hiérvelos en agua hasta que ablanden; escúrrelos y resérvalos.",
+        "Sofríe en el aceite la cebolla, el ají cubanela, el ajo y el cilantro picaditos; cuando marchiten, añade la salsa de tomate, un poco del tomate picado, la sal, el orégano y un chorrito de agua, y deja formar el ahogao a fuego medio.",
+        "Incorpora el arroz y los gandules al sofrito, revuelve bien, añade agua suficiente y cocina a fuego medio hasta que el arroz absorba el líquido; tapa y baja el fuego hasta que el arroz esté suelto y blando por dentro, sin centro duro.",
+        "Aparte, sazona la pechuga de pollo troceada con el orégano restante, sofríela en el aceite con la cebolla y el ajo, añade la salsa de tomate y el tomate picado, y guisa a fuego bajo con un poquito de agua hasta que el interior del pollo quede sin ninguna parte rosada, bien cocido.",
+        "Sirve el moro de guandules con el pollo guisado encima, bien calientes."
+      ]
+    },
+    "tpl_e390f34c4300": {
+      "franja": "merienda",
+      "pasos": [
+        "Parte las chinolas por la mitad y saca la pulpa con una cuchara, echándola en un colador sobre un recipiente.",
+        "Machaca la pulpa con la cuchara para soltar todo el jugo y cuélala presionando bien; pasa el jugo al vaso de la licuadora o a una jarra.",
+        "Añade un poquito de agua fría si el jugo quedó muy concentrado, y mézclalo bien sin echarle ningún endulzante, que aquí se toma natural.",
+        "Tuesta ligeramente el maní en una sartén seca a fuego bajo, moviendo siempre, hasta que sienta tostadito por dentro; déjalo enfriar.",
+        "Sirve el jugo de chinola bien frío y accompáñalo con el puñado de maní tostado, que se pela y se come mordisqueando entre sorbos."
+      ]
+    },
+    "tpl_80abd6707331": {
+      "franja": "desayuno",
+      "pasos": [
+        "Pela el guineo maduro y machácalo con un tenedor hasta hacer un puré.",
+        "En un recipiente, mezcla el guineo machacado con la avena, el huevo batido, la leche y la canela en polvo. Bate bien hasta que quede una masa homogénea, con consistencia espesa pero que corra; si te queda muy espesa, agrégale un chorrito de agua. Déjala reposar unos minutos para que la avena se hidrate.",
+        "Calienta una plancha o sartén antiadherente a fuego medio, sin grasa.",
+        "Vierte porciones de la masa en la plancha. Cuando los bordes se despeguen solos y la superficie cuaje y quede mate, dale la vuelta con cuidado y dora del otro lado a fuego medio.",
+        "Los panqueques están listos cuando la masa cuaja por completo por dentro y ya no escurres nada: al partir uno, el interior debe verse cocido y no húmedo ni crudo."
+      ]
+    },
+    "tpl_f2a13ec72c4b": {
+      "franja": "merienda",
+      "pasos": [
+        "Pon a hervir agua en una olla a fuego alto; cuando rompa el hervor, mete los huevos con cuidado, baja el fuego a medio y déjalos hervir unos 10 minutos para que queden bien duros.",
+        "Saca los huevos del agua y pásalos por agua fría para que se puedan pelar sin problema. Ya pelados, córtalos en rodajas o en cuartos; la clara debe estar cuajada por completo y la yema firme, sin nada que escurra.",
+        "Mientras, pasa el casabe rápidamente por un sartén o comal seco a fuego bajo, unos minutos por cada lado, solo para calentarlo y que quede más suave y aromático.",
+        "Sirve el casabe en el plato y coloca encima las rodajas de huevo duro. Se come tibio, como merienda ligera, sin necesidad de añadir nada más."
+      ]
+    },
+    "tpl_d736958d6a6a": {
+      "franja": "almuerzo",
+      "pasos": [
+        "Pela y pica el ajo bien finito y la cebolla en cuadritos; ralla la zanahoria y pica el repollo en juliana. Reserva la mitad del repollo y de la zanahoria para la ensalada y la otra mitad también, porque la ensalada se arma cruda aparte con un chorrito de agua y ya.",
+        "Pon el arroz en una olla con agua, la mitad del ajo y un poquito del aceite vegetal, y déjalo hervir a fuego medio hasta que seque; baja el fuego, tapa y deja que se termine a fuego bajo unos quince minutos más. Sabe que está listo cuando los granos están blandos por dentro y sueltos, no duros al morder.",
+        "En una sartén, calienta el resto del aceite a fuego medio y sofríe el ajo y la cebolla hasta que la cebolla se vea transparente; añade la salsa de tomate con un chorrito de agua y deja que guise unos cinco minutos a fuego medio hasta que la salsa espese y cambie a un rojo más oscuro.",
+        "Escurre bien el atún del agua de la lata, añádelo a la salsa, revuelve y déjalo guisar a fuego bajo unos cinco minutos más; el guiso está listo cuando la salsa está espesita, no aguosa, y todo el atún está caliente por dentro.",
+        "Mezcla el repollo y la zanahoria reservados para la ensalada con unas gotitas de agua y revuelve bien; sirve el arroz blanco, el atún guisado a la criolla y la ensalada de repollo bien fresquita."
+      ]
+    },
+    "tpl_bba3ea17162c": {
+      "franja": "cena",
+      "pasos": [
+        "La noche antes, remoja las habichuelas blancas en agua. Al día siguiente, escúrrelas, ponlas en una olla con agua limpia y hiérvelas a fuego medio hasta que estén blandas, más o menos una hora; están listas cuando al probar una se aplasta fácil con la lengua contra el paladar. Escúrrelas reservando un poco del agua de cocción.",
+        "Pela la batata y el ñame, córtalos en trozos y hiérvelos en otra olla con agua a fuego medio hasta que un cuchillo entre sin resistencia; escúrrelos y resérvalos.",
+        "En la misma olla, sofríe el ají morrón picadito a fuego medio hasta que se ablande y suelte su jugo, y añade el orégano dominicano para que suelte su aroma.",
+        "Incorpora las habichuelas guisadas con el agua de cocción reservada, machaca una parte de los granos contra la pared de la olla para que el caldo espese naturalmente, y deja hervir a fuego bajo unos minutos.",
+        "Por último, añade la batata y el ñame hervidos a la olla, deja que se integren en el guisado a fuego bajo unos minutos más para que tomen el sabor, ajusta la consistencia con un chorrito de agua si espesó demasiado, y sirve bien calentito para la cena."
+      ]
+    },
+    "tpl_bfa3fe5df63c": {
+      "franja": "desayuno",
+      "pasos": [
+        "Tuesta el pan integral en la tostadora o en el horno a temperatura media-alta unos minutos, hasta que esté doradito y crujiente por fuera pero suave por dentro; al partirlo no debe sentirse húmedo ni crudo.",
+        "Unta la mantequilla de maní sobre la tostada todavía caliente, de manera que se ablande y se extienda bien por toda la superficie.",
+        "Pela el guineo y córtalo en rueditas finas.",
+        "Coloca las rueditas de guineo sobre la mantequilla de maní, cubriendo bien toda la tostada, y sirve de una vez, tibia o fría, como prefieras."
+      ]
+    },
+    "tpl_60ca1bdc2b3c": {
+      "franja": "desayuno",
+      "pasos": [
+        "Precalienta el horno a 200 °C y engrasa o forra una bandeja para que las arepitas no se peguen.",
+        "Ralla el queso de papa y resérvalo: una mitad para la masa y la otra mitad para poner encima de cada arepita antes de hornear.",
+        "En un bowl mezcla la harina de maíz precocida con el huevo batido, la leche evaporada y la mitad del queso rallado. Amasa hasta formar una masa suave que no se pegue a las manos; si queda muy seca, agrégale poquitos de agua hasta que tenga cuerpo y se pueda moldear. Déjala reposar unos cinco minutos.",
+        "Forma arepitas pequeñas y aplánalas, colócalas en la bandeja, ponles encima el resto del queso rallado y hornea unos 15-18 minutos a 200 °C, voltéandolas a mitad del tiempo para que doren parejo por ambos lados.",
+        "Saben que están listas cuando el queso de encima está blandito y burbujeando y, al partir una arepita por la mitad, el interior se ve completamente cocido y seco, sin masa cruda en el centro."
+      ]
+    },
+    "tpl_b6a72b5ffb68": {
+      "franja": "desayuno",
+      "pasos": [
+        "Pela la papa y la cebolla. Pica la cebolla finita y ralla la papa en tiras gruesas, apretándola después con las manos para soltarle el exceso de agua.",
+        "Pela y pica el queso de papa en cubitos pequeños y resérvalo aparte, que va al final.",
+        "Calienta el aceite vegetal en una sartén antiadherente a fuego medio, echa la cebolla y sofríela hasta que se ponga transparente.",
+        "Agrega la papa rallada a la sartén y cocina a fuego medio unos minutos, moviendo, hasta que se ablande. Bate el huevo en un recipiente, échalo sobre la papa con la cebolla, baja el fuego a bajo y deja que la tortilla cuaje por debajo; entonces reparte el queso de papa por encima, dobla la tortilla a la mitad o tapa la sartén para que se termine de cocinar.",
+        "Está lista cuando el huevo ha cuajado por completo y no escurre en ninguna parte, con el queso ablandadito y caliente por dentro. Sírvela recién hecha."
+      ]
+    },
+    "tpl_eed6cf680b16": {
+      "franja": "desayuno",
+      "pasos": [
+        "Pela el plátano verde, córtalo en trozos y ponlo a hervir en agua con un poco de la sal a fuego medio hasta que el cuchillo entre sin resistencia, unos 20 minutos. Escúrrelo y déjalo tapadito.",
+        "Mientras tanto, pica la cebolla y el tomate bien finitos.",
+        "En una sartén antiadherente a fuego medio, sofríe la cebolla y el tomate hasta que ablanden y suelten su jugo.",
+        "Agrega el atún escurrido y revuelve; luego añade el huevo batido y cocina a fuego bajo, moviendo sin parar, hasta que el huevo cuaje por completo y no esquurre en ninguna parte.",
+        "Sirve el revoltillo caliente acompañado del plátano hervido, con el resto de la sal espolvoreada al gusto."
+      ]
+    },
+    "tpl_2fe173137676": {
+      "franja": "cena",
+      "pasos": [
+        "Pela la papa, córtala en trozos y ponla a hervir en agua a fuego medio-alto hasta que un cuchillo entre sin resistencia, como unos veinte minutos. Escúrrela bien.",
+        "Majala la papa caliente hasta que quede un puré fino y sin grumos, y ve agregando la leche evaporada poco a poco hasta que quede cremosa y suave.",
+        "Aparte, bate el huevo y ponlo en una sartén antiadherente a fuego bajo, revolviendo de manera constante hasta que cuaje por completo y no escurra en ninguna parte.",
+        "Ralla o desmenuza el queso de papa y mezclalo con el puré, que se ablande y se caliente con el calor del puré, sin dejar que se seque.",
+        "Sirve el puré caliente en un plato hondo, pon el huevo revuelto encima y espolvorea más queso de papa rallado por encima si te queda reservado."
+      ]
+    },
+    "tpl_35249148dec3": {
+      "franja": "cena",
+      "pasos": [
+        "La noche antes, pon las habichuelas rojas a remojar en agua. Al día siguiente, escúrrelas y ponlas a hervir en agua fresca a fuego medio hasta que estén blandas, una hora aproximada.",
+        "Pica la cebolla bien finita y pela la auyama y córtala en cuadritos. Échalo todo a la olla con las habichuelas ya blandas, agrega un poco de agua y deja guisar a fuego bajo hasta que la auyama se deshaga y el guiso espese naturalmente.",
+        "Mientras el guiso se termina, pon los huevos a hervir en agua hasta que cuajen por completo, bien firmes por dentro, sin nada escurrido. Pélelos y resérvalos.",
+        "Pasa el casabe rápidamente por el vapor o por encima del guiso tapado un minuto, solo para que se humedezca y ablande sin deshacerse. Sírvelo en un plato, viértete las habichuelas guisadas encima y acompaña con el huevo cortado en cuartos."
+      ]
+    },
+    "tpl_6550ab4ff97a": {
+      "franja": "almuerzo",
+      "pasos": [
+        "Pon a hervir la pasta integral en agua con fuego alto hasta que esté al dente, escúrrela y reserva un poquito del agua de cocción por si hace falta aflozar después.",
+        "Pica finito el ajo y la cebolla.",
+        "En una sartén calienta el aceite de oliva a fuego medio, añade el ajo y la cebolla y saltea hasta que la cebolla esté transparente y el ajo suelte su aroma, sin dejar que se queme.",
+        "Agrega el atún escurrido a la sartén y revuelve un par de minutos para que se integre y se caliente bien con el sofrito.",
+        "Incorpora la pasta a la sartén, mezcla todo a fuego medio un minuto; si se ve seco, añade un chorrito del agua de cocción reservado. Está listo cuando la pasta está suave por dentro pero firme al morder y todo está bien caliente."
+      ]
+    },
+    "tpl_c44f3fd68b6c": {
+      "franja": "desayuno",
+      "pasos": [
+        "Pela los plátanos verdes, córtalos en trozos y hiérvelos en agua con fuego medio hasta que estén bien blandos, alrededor de 20 minutos. Sabrás que están listos cuando el tenedor entre sin resistencia.",
+        "Escurre los plátanos y majaditos en caliente con un poco del agua de cocción hasta lograr un puré suave y cremoso, sin grumos. Si queda muy espeso, añade poquito a poco agua hasta que quede fluido pero con cuerpo.",
+        "Pica la cebolla en plumas y ponla en un recipiente con el vinagre blanco para que se encurta mientras terminas el mangú. Debe quedar suavecita y ligeramente ácida.",
+        "Sirve el mangú caliente en el plato, cubre con la cebolla encurtida con su vinagre y un chorrito del aceite de oliva por encima.",
+        "Acompaña con el aguacate en láminas al lado del mangú, bien maduro, y sirve de una vez para que todo llegue calentito a la mesa."
+      ]
+    },
+    "tpl_9215d0ae51f0": {
+      "franja": "desayuno",
+      "pasos": [
+        "Pon la leche a hervir a fuego medio en una olla, cuidando que no se derrame cuando rompa el hervor.",
+        "Cuando esté hirviendo, baja el fuego y añade la avena poco a poco, moviendo constantemente para que no se formen grumos ni se pegue en el fondo.",
+        "Deja cocinar a fuego bajo unos 5 a 8 minutos, sin dejar de remover, hasta que la avena espese y quede cremosa, con la consistencia de un majado suave que cubre la cuchara. Si queda muy espesa, afloja con un chorrito de agua.",
+        "Agrega la canela en polvo, mezcla bien y deja que hierva un minuto más a fuego bajo para que los sabores se integren.",
+        "Está lista cuando la mezcla está completamente cocida, sin sabor a avena cruda, y queda espesa y homogénea. Sírvela caliente de inmediato."
+      ]
+    },
+    "tpl_a22edb563af4": {
+      "franja": "almuerzo",
+      "pasos": [
+        "Sazona la carne de res con un poquito de la sal y la pimienta negra. En una olla con el aceite vegetal a fuego medio, sofríe la cebolla, el ají cubanela, el pimiento morrón y el ajo picaditos hasta que estén transparentes. Añade el tomate y la salsa de tomate y cocina unos minutos hasta que forme un rico ahogao.",
+        "Agrega la carne entera a ese sofrito, tápala con agua, baja el fuego y déjala estofar destapada al final hasta que esté blandita y se pueda deshebrar con tenedor sin resistencia. Mechala (deshebrala) y devuélvela a la salsa para que se impregne bien. Está lista cuando al probarla se separa en hebras finitas y jugosas, sin partes duras.",
+        "Mientras, pela la papa y hiérvela en agua con el resto de la sal hasta que un cuchillo entre sin ninguna resistencia. Escúrrela bien y majala caliente con la mantequilla y la leche (reservando un chorrito de la leche para el final) hasta un puré suave y cremoso; si queda espeso, afloja con un poquito de agua de la cocción. Al final incorpora el chorrito de leche reservado para dar brillo.",
+        "Sirve el puré de papa como base o al lado, y encima la res mechada con su salsa. Si quieres, espolvorea lo que quede de la pimienta negra molida por encima."
+      ]
+    },
+    "tpl_5a72b172fb9a": {
+      "franja": "almuerzo",
+      "pasos": [
+        "La noche antes, pon los garbanzos en remojo en agua. Al día siguiente, escúrrelos y hiérvelos en agua a fuego medio hasta que estén blandos por dentro, que se aplasten fácil entre los dedos.",
+        "Pela y pica la cebolla y el ajo bien finitos. En una olla, sofrie a fuego medio hasta que la cebolla quede transparente y sudada.",
+        "Pela la auyama y córtala en trozos. Agrégala a la olla junto con los garbanzos hervidos, el orégano dominicano y suficiente agua para cubrir. Tápala y déjalo guisar a fuego bajo hasta que la auyama se ablande y se deshaga un poquito, espesando el caldo, y los garbanzos estén suaves por dentro.",
+        "Mientras tanto, cocina el arroz blanco: hiérvelo en agua a fuego medio hasta que ablande, escúrrelo bien, tápalo y déjalo reposar a fuego bajito hasta que esté suelto y cocido por dentro, sin centro duro.",
+        "Sirve los garbanzos guisados con su caldo espesito acompañados del arroz blanco. Si el guiso espesó demasiado, aflojalo con un chorrito de agua."
+      ]
+    },
+    "tpl_8387bb4f4f31": {
+      "franja": "almuerzo",
+      "pasos": [
+        "Pica la pechuga de pollo en trozos de bocado y sazona en un recipiente con el ajo machacado, el jugo del limón y la mitad de la sal. Deja marinar al menos 20 minutos en la nevera para que tome sabor.",
+        "Pela la yuca, córtala en trozos gruesos y ponla a hervir en agua con el resto de la sal a fuego medio. Está lista cuando un cuchillo o tenedor entra sin resistencia, unos 20 a 25 minutos; escúrrela y reserva tapada.",
+        "Precalienta el airfryer a 200 °C unos 3 minutos. Coloca los trozos de pollo en la canasta sin amontonarlos, en una sola capa.",
+        "Cocina a 200 °C por 12 a 15 minutos, volteando los trozos a la mitad del tiempo para que doren parejo por todos lados.",
+        "El pollo está listo cuando al partir el trozo más grueso el interior está completamente blanco, sin ninguna parte rosada. Sirve caliente acompañado de la yuca hervida."
+      ]
+    },
+    "tpl_17e6ac51cab1": {
+      "franja": "cena",
+      "pasos": [
+        "La noche antes, pon los garbanzos a remojar en agua. Al día siguiente, cuélalos y ponlos a hervir en una olla con agua fresca a fuego medio hasta que estén blanditos, como una hora y change; sabes que están listos cuando los aprietas con los dedos y se aplastan sin resistencia.",
+        "Pela la yuca, el ñame y la auyama, córtalos en trozos grandotes y échalos a la olla con los garbanzos ya ablandados. Déjalo hervir a fuego medio hasta que un cuchillo entre en los víveres sin resistencia, que es la señal de que están cocidos por dentro.",
+        "Baja el fuego y machaca parte de la auyama y del ñame contra la pared de la olla para que el caldo espese como un guisado cremoso. Si te queda muy espeso, agrégale un chorrito de agua hasta lograr la consistencia de sopa espesa que escurra despacito.",
+        "Pica el cilantro bien finito y échalo al final, apaga el fuego y revuelve para que suelte su aroma sin cocinarse de más. Prueba el caldo: debe estar espesito y los trozos de víveres blandos pero enteros.",
+        "Sirve caliente en plato hondo, bien humeante, que así se disfruta esta cena dominicana de verdad."
+      ]
+    },
+    "tpl_935114dfdb86": {
+      "franja": "cena",
+      "pasos": [
+        "Pica la berenjena, el calabacín, el tomate, la cebolla y el ají morrón en cuadritos del mismo tamaño para que se cocinen parejo.",
+        "Calienta una sartén antiadherente a fuego medio-alto y saltea primero la berenjena y el calabacín, moviendo sin parar, hasta que estén blanditos por dentro y empiecen a dorar.",
+        "Agrega la cebolla, el ají morrón y por último el tomate, y sigue salteando a fuego medio hasta que todo suelte su jugo, se forme un pisto jugosito y los vegetales estén tiernos por dentro, sin trozos crudos.",
+        "En una olla con agua a fuego suave, pocha el huevo: cuando el blanco cuaje por completo y la yema esté firme sin escurrir nada, saca el huevo del agua con cuidado.",
+        "Sirve el pisto criollo caliente en el plato y coloca encima el huevo pochado."
+      ]
+    },
+    "tpl_d7c81b115175": {
+      "franja": "desayuno",
+      "pasos": [
+        "Pela el guineo y córtalo en pedazos gruesos.",
+        "Pon el maní en una sartén seca a fuego bajo, moviéndolo para que no se queme; está listo cuando está tostadito por dentro, lo notas suelto y huele a maní asado. Déjalo enfriar y tritúralo.",
+        "Echa en la licuadora el guineo, la leche, la avena, la miel y la mitad del maní tostado. Licúa bien hasta que quede cremosa y sin grumos de avena; si quedó muy espesa, agrégale un chorrito de agua y licúa de nuevo.",
+        "Sirve la batida bien fría en un vaso y espolvorea por encima el resto del maní tostado."
+      ]
+    },
+    "tpl_9ed36d60084e": {
+      "franja": "desayuno",
+      "pasos": [
+        "Poné agua a hervir y echá el bulgur; cocinalo a fuego medio hasta que ablande y quede suelto, unos 10 minutos, escúrrelo bien.",
+        "En la misma olla poné la leche a fuego bajo y, cuando empiece a humear, agregá el bulgur ya escurrido.",
+        "Dejá que hierva suavecito a fuego bajo, moviendo de vez en cuando, hasta que la leche se absorba y quede una crema espesa; si espesa demasiado, echale un chorrito de agua para aflojarlo.",
+        "Sabrás que está listo cuando el bulgur esté blandito por dentro, sin estar durito ni crudo al probar un grano, y la mezcla tenga cuerpo de papilla.",
+        "Servilo caliente en el desayuno y espolvoreale la canela en polvo por encima."
+      ]
+    },
+    "tpl_f55f13fc06d3": {
+      "franja": "cena",
+      "pasos": [
+        "La noche antes, pon las habichuelas negras en remojo en agua. Al día siguiente, escúrrelas y ponlas a hervir en agua fresca a fuego medio hasta que estén blanditas, como por una hora más o menos. Sabes que están listas cuando al morder una se deshace sin resistencia.",
+        "Pica finito la cebolla, el ajo y el cilantro. En una olla con un chorrito del agua de cocción de las habichuelas, sofríe a fuego medio hasta que la cebolla se vea transparente y suelte todo su olor. También pela la auyama y córtala en pedacitos.",
+        "Agrega las habichuelas con su agua a la olla junto con la auyama. Déjalo guisar a fuego bajo, machacando algunas habichuelas contra la pared de la olla para que el caldo espese naturalmente. Si se pone muy espeso, afloja con un poquito de agua. El guisado está listo cuando la auyama se deshace sola al meterle un tenedor y el caldo queda cremoso, no agüado.",
+        "Justo antes de servir, añade el cilantro picado, mezcla y apaga el fuego para que suelte aroma sin cocinarse del todo. Calienta el casabe en un sartén seca a fuego bajo unos segundos por cada lado, hasta que se ablande y suelte su olor tostadito. Sirve las habichuelas bien calientes acompañadas del casabe para mojar."
+      ]
+    },
+    "tpl_35af884432f6": {
+      "franja": "desayuno",
+      "pasos": [
+        "Pela la yuca, quítale el hilo del centro y ponla a hervir en agua con fuego medio-alto hasta que un tenedor entre sin resistencia, unos 20-25 minutos. Escúrrela bien.",
+        "Mientras la yuca hierve, pela el aguacate y córtalo en gajos o rebanadas.",
+        "Pica la cebolla en aros finos y ponla en un recipiente con el aceite vegetal para que se marine y suelte su jugo.",
+        "Sirve la yuca caliente, ponle los gajos de aguacate al lado y encima la cebolla marinada con su aceite."
+      ]
+    },
+    "tpl_0b366158135e": {
+      "franja": "cena",
+      "pasos": [
+        "Pela los plátanos verdes, córtalos en trozos y ponlos a hervir en agua con fuego medio-alto hasta que estén blanditos; sabrás que están listos cuando un tenedor entre sin resistencia.",
+        "Remoja las lentejas y hiérvelas a fuego medio hasta que estén suaves por dentro, tiernas al morder pero sin deshacerse del todo.",
+        "Pica la cebolla y el ajo finitos, sofríelos en el aceite de oliva a fuego medio en una sartén antiadherente, y añade la mitad de ese sofrito a las lentejas guisadas para que tomen sabor, dejándolas hervir juntito un rato.",
+        "Escurre los plátanos y májalos bien, agregando un poquito del agua de cocción para que quede cremoso, no duro; el mangú debe quedar suave y húmedo, sin grumos.",
+        "Sirve el mangú con las lentejas guisadas encima y corona con el resto del sofrito de cebolla y ajo por encima."
+      ]
+    },
+    "tpl_df71ba455f5e": {
+      "franja": "almuerzo",
+      "pasos": [
+        "Pela la yuca, córtala en trozos y hiérvela en agua a fuego medio hasta que un cuchillo entre sin resistencia. Escúrrela bien y májala hasta formar un puré espeso; si queda muy duro, agrégale un chorrito de agua de la cocción para que quede manejable pero con cuerpo.",
+        "Hierve la pechuga de pollo en agua hasta que por dentro no quede ninguna parte rosada, luego escúrrela y desmenúzala con los tenedores. Sofríe con la cebolla picadita a fuego medio hasta que la cebolla esté transparente y el pollo tome sabor.",
+        "Toma la mitad del puré de yuca y cubre con él el fondo de un molde para horno. Reparte encima el pollo desmenuzado con la cebolla, y ralla o desmenúza la mitad del queso blanco sobre el relleno para que se ablande con el calor.",
+        "Cubre con la otra mitad del puré de yuca, empareja bien con una espátula y termina espolvoreando el resto del queso blanco por encima.",
+        "Lleva al horno precalentado a 180 °C por unos 20–25 minutos, hasta que esté bien caliente por dentro (comprueba metiendo un cuchillo al centro: debe salir caliente) y la superficie dorada. Deja reposar unos minutos antes de cortar para que cuaje en capas."
+      ]
+    },
+    "tpl_325d08dcd7fc": {
+      "franja": "cena",
+      "pasos": [
+        "Pela la auyama, córtala en trozos y ponla a hervir en agua a fuego medio hasta que el cuchillo entre sin resistencia, señal de que está bien cocida. Escúrrela bien.",
+        "Maja la auyama caliente hasta lograr un puré suave y sin grumos. Si queda muy espeso, afloja con un poquito del agua de la cocción. Tápalo para que se mantenga caliente.",
+        "Calienta una plancha o sartén antiadherente a fuego medio-alto con el aceite de oliva.",
+        "Sazona la carne de res y cocínala en la plancha caliente a fuego medio-alto, dándola vuelta para dorar por ambos lados.",
+        "La res está lista por dentro cuando al cortarla en el punto más grueso no se ve cruda y sus jugos salen claros. Sirve de inmediato con el puré de auyama caliente."
+      ]
+    },
+    "tpl_9dc9eb01b21f": {
+      "franja": "almuerzo",
+      "pasos": [
+        "Sazona la pechuga de pollo con el orégano dominicano molido y déjala reposar un rato para que tome el sabor.",
+        "Pasa el pollo por la harina de trigo hasta cubrirlo bien por todos lados; la capa debe quedar fina y pegada, sin grumos gruesos.",
+        "Coloca el pollo en una bandeja de horno, rocíalo con la mitad del aceite vegetal y hornea a 200 °C por unos 25 a 30 minutos, volteándolo a la mitad del tiempo. Está listo cuando al partir el pedazo más grueso el interior no tiene ninguna parte rosada.",
+        "Pela el plátano verde, córtalo en trozos y hiérvelo en agua hasta que un tenedor entre sin resistencia; escúrrelo bien y maja hasta formar el tostón, aplastándolo y dándole forma redonda.",
+        "Pinta los tostones con la otra mitad del aceite vegetal y llévalos al horno con el pollo los últimos minutos a 220 °C, volteándolos, hasta que estén crocantes por fuera y suaves por dentro. Sirve calientes junto al pica pollo."
+      ]
+    },
+    "tpl_d04b2ac55d9c": {
+      "franja": "almuerzo",
+      "pasos": [
+        "Pela y pica finito la cebolla, el ajo, el ají cubanela, el tomate y el cilantro. En una sartén o caldero calienta el aceite vegetal a fuego medio y sofríe la cebolla, el ajo y el ají cubanela hasta que la cebolla esté transparente.",
+        "Agrega el tomate picado, la salsa de tomate y un chorrito de agua; deja que haga un guisadito a fuego medio hasta que el tomate se deshaga y suelte su jugo.",
+        "Incorpora los camarones limpios y la mitad del cilantro picado, tapa y cocina a fuego bajo unos minutos, hasta que los camarones se pongan rosaditos, se encojan un poquito y estén firmes por dentro. Retira del fuego y reserva.",
+        "Para el moro, hierve los gandules (previamente remojados) en agua con un poquito de la sal hasta que estén blanditos, luego escúrrelos reservando el caldo de cocción.",
+        "En el mismo caldero, echa el arroz blanco con los gandules hervidos, el resto de la sal y el resto del cilantro, cúbrelo con el caldo de los gandules y cocina a fuego alto hasta que seque, luego baja a fuego bajo, tapa y deja que el arroz repose y termine de cocerse, bien suelto y graneado; sirve el moro con los camarones guisados por encima."
+      ]
+    },
+    "tpl_44be0f88232b": {
+      "franja": "desayuno",
+      "pasos": [
+        "Pela los plátanos verdes, córtalos en trozos y ponlos a hervir en agua con fuego medio-alto hasta que un cuchillo entre sin resistencia, unos 20 minutos; escúrrelos bien.",
+        "Maja los plátanos con un tenedor o pilón hasta formar un puré; si queda muy duro, agrégale un chorrito del agua de cocción para aflojarlo hasta que quede suave y con cuerpo. Tápalo para que se mantenga caliente.",
+        "Mientras tanto, corta la cebolla en plumas y el tofu firme en cubitos. En una sartén antiadherente con el aceite vegetal, sofríe la cebolla a fuego medio hasta que transparente.",
+        "Agrega el tofu a la sartén con la cebolla y saltea a fuego medio-alto unos 5 minutos, hasta que los cubitos estén ligeramente doraditos por fuera y bien calientes por dentro.",
+        "Sirve el mangú en el plato y cubre con el tofu salteado y la cebolla encima, bien caliente. ¡Buen provecho, compadre!"
+      ]
+    },
+    "tpl_8cf0f48ead58": {
+      "franja": "desayuno",
+      "pasos": [
+        "En un recipiente mezcla la harina de trigo con la mitad de la sal, el aceite vegetal y poquito a poquito agua hasta formar una masa suave que no se pegue en las manos. Deja reposar unos 10 minutos tapada.",
+        "Con la masa reposada, forma domplines alargaditos o bolitas, aplástalos un poquito y ponlos a hervir en agua con fuego alto. Cuando floten y suban a la superficie, déjalos unos 5 minutos más: al partir uno, el interior debe estar cocido y sin masa cruda. Escúrrelos bien.",
+        "Pica la cebolla bien finita. En un sartén antiadherente a fuego medio, sofríe la cebolla hasta que esté transparente.",
+        "Bate el huevo con la otra mitad de la sal y la pimienta negra, viértelo sobre la cebolla en el sartén y revuelve a fuego bajo. Está listo cuando el huevo cuaje por completo y no escurre en ninguna parte.",
+        "Sirve los domplines calientes acompañados del huevo revuelto criollo por encima o al lado."
+      ]
+    },
+    "tpl_6c4be23d3689": {
+      "franja": "cena",
+      "pasos": [
+        "Pica fino el filete de pescado blanco y mézclalo en un recipiente con la mitad del huevo, el pan rallado y la sal. Amasa bien hasta que quede una masa con cuerpo que no se pegue a las manos; si queda muy apretada, añade unas gotas de agua. Déjala reposar unos minutos para que se asiente.",
+        "Forma las tortitas con la masa, aplastándolas para que queden del grosor de una arepita. Calienta una sartén antiadherente a fuego medio y cocínalas por ambos lados hasta que doren. Para saber que están listas por dentro, parte una: el interior debe verse opaco y cocido, sin partes translúcidas ni crudas, o pincha con un palillo y debe salir limpio.",
+        "Mientras se cocinan las tortitas, prepara la ensalada verde: pica la lechuga en tiras, el tomate en cuadritos y la cebolla bien finita. Córtalo todo en un bol.",
+        "Haz la vinagreta batiendo la otra mitad del huevo ya cocido... no: mejor, mezcla el jugo del limón con el aceite de oliva y un piquito de sal, y bate hasta que se integre. Rebana el aguacate y resérvalo para el final.",
+        "Monta el plato: sirve las tortitas calientes, al lado la ensalada de lechuga, tomate y cebolla con la vinagreta de limón por encima, y corona con las rebanadas de aguacate. Que no se enfríe, que la cena es ahora."
+      ]
+    },
+    "tpl_d3094f282071": {
+      "franja": "desayuno",
+      "pasos": [
+        "Coloca el casabe en un plato y prepara todo en frío, sin fuego.",
+        "Pela el aguacate, quítale la semilla y móntalo en rodajas o machácalo suave con un tenedor, dejándolo con cuerpo, no puré líquido.",
+        "Pica el tomate en cubitos, alíñalo con la mitad del aceite de oliva y exprime encima la mitad del limón, mezclando bien para que suelte su jugo y se integre.",
+        "Riega el resto del aceite de oliva sobre el casabe y rocíalo con el resto del limón para que se humedezca y no quede seco.",
+        "Sirve el casabe con el aguacate encima y el tomate aliñado por encima o al lado; sabrás que el tomate está listo cuando esté brillante y suelto en su jugo, y el aguacate ceda al tocarlo sin estar aguado."
+      ]
+    },
+    "tpl_3b53108bc402": {
+      "franja": "almuerzo",
+      "pasos": [
+        "Pon los gandules a remojar un rato y luego hiérvelos en agua a fuego medio hasta que estén blanditos por dentro; escúrrelos y reserva.",
+        "En una olla con el aceite vegetal a fuego medio, sofríe la cebolla picadita hasta que esté transparente. Añade los gandules ya cocidos, el arroz blanco crudo y suficiente agua para que cubra todo. Déjalo guisar a fuego medio, y cuando seque, bájalo a fuego bajo y tápalo hasta que el arroz reviente y los granos estén blanditos por dentro, sin dureza en el centro.",
+        "Mientras el moro se termina, corta el tofu firme en tajadas y échalas en una plancha bien caliente, sin aceite, a fuego medio-alto. Dale la vuelta cuando suelten solas de la plancha y déjalas hasta que al cortar una el interior esté bien caliente por todo el centro.",
+        "Cuando el moro esté listo, apágalo y déjalo reposar tapadito unos minutos para que termine de secarse bien.",
+        "Sirve el moro de gandules con las tajadas de tofu a la plancha por encima o al lado, bien calientes."
+      ]
+    },
+    "tpl_15cf1272e7d0": {
+      "franja": "almuerzo",
+      "pasos": [
+        "Remoja el bacalao en agua un rato para quitarle la sal, cambiando el agua un par de veces; escúrrelo y desmenúzalo desechando espinas y piel.",
+        "En una olla al fuego medio, echa el ajo picado, la cebolla en pluma y la salsa de tomate; sofrie hasta que la cebolla esté transparente.",
+        "Añade el bacalao desmenuzado al sofrito y guisa unos minutos a fuego bajo para que tome el sabor; agrega el repollo picado y mezcla bien.",
+        "Incorpora el arroz blanco, revuélvelo con el guiso hasta que se impregne, cúbrelo con agua caliente y déjalo hervir a fuego alto.",
+        "Baja a fuego medio, tapa y cocina hasta que el arroz seque y abra; cuando el grano esté blando por dentro y hinchado, apaga y deja reposar tapadito unos minutos antes de servir."
+      ]
+    },
+    "tpl_be1fe5000900": {
+      "franja": "cena",
+      "pasos": [
+        "Precalienta el horno a 180 °C. Lava y seca las espinacas, pica el ají morrón en tiras finas y sofríelos brevemente en una sartén con la mitad del aceite de oliva a fuego medio, solo hasta que ablanden. Reserva el otro medio del aceite para la ensalada.",
+        "Abre la pechuga de pollo a lo largo como un librito sin partirala completa, sazónala con sal y el jugo del limón, y coloca las espinacas con el ají morrón en el centro. Cierra y asegura con palillos o hilo de cocina.",
+        "Lleva la pechuga rellena al horno precalentado a 180 °C por unos 25 a 30 minutos. Está lista cuando al cortar la parte más gruesa el interior está bien blanco, sin ninguna parte rosada — eso es seguridad, no te la juegues.",
+        "Mientras se hornea, prepara la ensalada verde: pica la lechuga, el tomate y la cebolla, y corta el aguacate en tajadas. Aliña con la otra mitad del aceite de oliva, un chispita de sal y el resto del jugo del limón.",
+        "Sirve la pechuga rellena caliente acompañada de la ensalada verde bien fresquita al lao. ¡Buen provecho!"
+      ]
+    },
+    "tpl_ec2d86993902": {
+      "franja": "cena",
+      "pasos": [
+        "Pela la yuca, córtala en trozos y ponla a hervir en agua a fuego medio hasta que un cuchillo entre sin resistencia por dentro (unos 20-25 minutos). Escúrrela bien y resérvala tapada para que no se seque.",
+        "Pica la cebolla en pluma y machaca el ajo. Calienta el aceite vegetal en una sartén antiadherente a fuego medio y saltea la cebolla con el ajo hasta que la cebolla quede transparente y blandita.",
+        "Añade el vinagre blanco, revuelve y deja un minuto para que se cocine el vinagre y coja ese toque encebollado. Baja el fuego.",
+        "Escurre bien las sardinas de la lata y añádelas a la sartén con la cebolla. Saltea con cuidado a fuego bajo un par de minutos, solo para calentarlas bien por dentro, sin deshacerlas del todo.",
+        "Sirve la yuca hervida caliente y cubre con las sardinas encebolladas por encima. Si la yuca se puso dura al enfriarse, pásala por agua caliente un momento antes de servir."
+      ]
+    },
+    "tpl_dbae3c086fa2": {
+      "franja": "cena",
+      "pasos": [
+        "Hidrata la soya texturizada en agua caliente hasta que ablande, escúrrela y resérvala. Mientras tanto, pela la batata, córtala en trozos y hiérvela en agua hasta que un tenedor entre sin resistencia; escúrrela y resérvala.",
+        "En un sartén con el aceite vegetal a fuego medio, sofríe la cebolla picada y el sofrito hasta que la cebolla quede translúcida.",
+        "Añade la soya texturizada escurrida y la berenjena cortada en cuadritos; guisa a fuego medio, moviendo de vez en cuando, hasta que la berenjena se ablande por dentro y se deshaga al presionarla con el tenedor. Si se seca, agrégale un chorrito de agua para que no se pegue.",
+        "Incorpora la batata hervida al guiso, mezcla con cuidado y deja a fuego bajo unos minutos para que los sabores se integren y todo quede bien caliente antes de servir."
+      ]
+    },
+    "tpl_a7799418aa9c": {
+      "franja": "cena",
+      "pasos": [
+        "Enciende el horno a 200 °C. Sazona el muslo de pollo con el jugo de medio limón y un chorrito del aceite de oliva, frota bien y déjalo reposar un ratito mientras preparas lo demás.",
+        "Pela la batata y córtala en trozos gruesos. Colócala en una bandeja de horno junto al pollo, con el resto del aceite de oliva. Hornea unos 40-45 minutos a 200 °C, volteando la batata a mitad de camino.",
+        "El pollo está listo cuando lo partes en el punto más grueso y el interior no sale rosado en ninguna parte; la batata, cuando el cuchillo entra sin resistencia.",
+        "Ralla el repollo y la zanahoria, mézclalos y aliña con el jugo del limón que sobró. Deja reposar la ensalada unos minutos para que suelte el sabor.",
+        "Sirve el pollo al horno con la batata caliente y la ensalada de repollo fría al lado."
+      ]
+    },
+    "tpl_fb536b60ebce": {
+      "franja": "merienda",
+      "pasos": [
+        "Pon agua a hervir en una olla a fuego alto y mete el huevo con cuidado; déjalo hervir unos diez minutos para que cueza bien.",
+        "Pasa el huevo a agua fría, pélalo y verifica que esté cuajado por completo, sin nada que escurra; pártelo en trozos.",
+        "Pela la naranja, quítale las membranas y córtala en gajos o trozos.",
+        "Coloca el casabe en el plato, pon encima los trozos de huevo y acompaña con los gajos de naranja.",
+        "Sírvelo de una vez como merienda, comiéndote un trozo de casabe con huevo y rematando con la naranja."
+      ]
+    },
+    "tpl_f8a2140ab081": {
+      "franja": "desayuno",
+      "pasos": [
+        "Pon a hervir agua en una ollita a fuego medio y, cuando rompa el hervor, añade la sémola de maíz poco a poco, moviendo con cuchara de palo para que no se formen grumos.",
+        "Deja hervir a fuego bajo, revolviendo de vez en cuando, hasta que la sémola esté bien cocida y la mezcla espese: debe quedar cremosa, con cuerpo, sin estar dura, y se sabe que está lista porque el sabor ya no está crudo y la masa se despega un poquito del fondo al moverla.",
+        "Agrega la leche de coco, la leche, el azúcar morena y la canela en polvo, mezcla bien y deja que dé un hervor suave a fuego bajo unos minutos más, moviendo para que se integre todo; si te quedó muy espesa, afloja con un poquito de agua.",
+        "Prueba la textura: el chacá debe quedar ligero, que corra pero con cremosidad, no aguado ni pastoso.",
+        "Sírvelo caliente recién hecho, bien cremoso, como desayuno reconfortante."
+      ]
+    },
+    "tpl_b3f1667b881c": {
+      "franja": "almuerzo",
+      "pasos": [
+        "Pon las habichuelas rojas a remojar desde la víspera. Al día siguiente, cuécelas en olla con agua a fuego medio hasta que estén blandas, agregando la auyama en pedacitos hacia el final para que se ablande también.",
+        "Machaca parte de la auyama contra las paredes de la olla para espesar el guiso, añade la cebolla picadita y deja guisar a fuego bajo hasta que la salsa ligue y las habichuelas estén tiernas por dentro.",
+        "En una sartén antiadherente con el aceite vegetal, cocina el arroz blanco previamente hervido y escurrido, moviendo a fuego medio hasta que esté suelto y caliente.",
+        "Bate el huevo y viértelo en la misma sartén antiadherente a fuego bajo; revuelve constantemente hasta que cuaje por completo y no escurra en ninguna parte.",
+        "Sirve el arroz con el huevo revuelto encima y las habichuelas guisadas al lado, bien calientes."
+      ]
+    },
+    "tpl_10a41e385f30": {
+      "franja": "almuerzo",
+      "pasos": [
+        "Remoja las habichuelas negras desde la noche anterior. Luego ponlas a hervir en agua a fuego medio hasta que estén blandas; sabrás que están listas cuando se aplasten fácil al presionarlas con la cuchara. Escúrrelas guardando un poco del caldo de cocción.",
+        "En una olla con el aceite de oliva a fuego medio, sofríe la cebolla picadita hasta que esté translúcida y suave.",
+        "Añade las habichuelas negras con un poco de su caldo y la auyama pelada y en cuadritos. Guisa a fuego bajo hasta que la auyama se ablande y se deshaga parcialmente, espesando el caldo; verás que la mezcla queda cremosa y la auyama entra sin resistencia con el tenedor.",
+        "Incorpora el arroz blanco y el agua suficiente, moviendo bien para que todo se integre. Cocina a fuego medio hasta que el agua se seque, luego tapa y baja a fuego mínimo hasta que el arroz esté tierno por dentro: al probar un grano no debe estar duro ni crudo en el centro.",
+        "Tapado y a fuego bajito, deja reposar el moro unos minutos para que asiente y quede meloso, no aguado. Si lo ves muy espeso, agrégale un chorrito de agua y revuelve con cuidado."
+      ]
+    },
+    "tpl_b1c65afb99c6": {
+      "franja": "merienda",
+      "pasos": [
+        "Lava el tomate y córtalo en rodajas o cuadritos, según te guste para la merienda.",
+        "Corta el queso blanco en tajadas gruesas y colócalo en un plato; recuerda que al ser fresco no se derrite, se sirve así, suave y frío.",
+        "Coloca las rodajas de tomate encima o al lado del queso, cubriendo bien el plato.",
+        "Espolvorea el orégano dominicano por encima de todo, frotándolo un poquito entre los dedos para que suelte el aroma.",
+        "Sirve de inmediato, bien frío: es una merienda fresquita lista en minutos, sin cocina y lista cuando el tomate brilla y el queso está fresco al tacto."
+      ]
+    },
+    "tpl_b4a2079731a8": {
+      "franja": "desayuno",
+      "pasos": [
+        "Precalienta el horno a 200 °C. Lava bien la batata, pícala en rodajas gruesas o tiras y ponla en una bandeja de horno, sin ningún tipo de grasa.",
+        "Hornea la batata por unos 25 a 30 minutos, dándole vuelta a la mitad del tiempo. Sabrás que está lista cuando un tenedor o un cuchillo entre hasta el centro sin ninguna resistencia.",
+        "Mientras la batata se termina de hornear, pon a hervir agua en una olla a fuego bajo, con el agua apenas temblando. Separa la mitad del huevo y resérvala: esa parte no se usa ahora.",
+        "Pocha la otra mitad del huevo en esa agua temblando: rómpela cerca del agua y deja que se cocine unos 3 a 4 minutos a fuego bajo. Está lista cuando la clara cuaja por completo y al levantarla no escurre nada.",
+        "Sirve la batata asada caliente y encima los huevos pochados; si quieres, cuece la porción reservada del huevo de la misma manera para acompañar."
+      ]
+    },
+    "tpl_35f39cc375cd": {
+      "franja": "desayuno",
+      "pasos": [
+        "Enjuaga bien la quinoa en un colador con agua fría. Hiérvela en una olla con agua (el doble de agua que de quinoa) a fuego medio hasta que los granitos se abran y se vea el anillito blanco suelto, como entre 12 y 15 minutos. Escúrrela bien y déjala enfriar por completo.",
+        "Una vez fría, sacude la quinoa con un tenedor para que quede suelta y esponjosa, sin grumos. Esa va a ser la base del bowl.",
+        "Pela la lechosa, quítale las semillas y córtala en cuadritos o bolitas. Reserva.",
+        "Arma el bowl: pon la quinoa fría en el fondo, distribuye la lechosa por encima y espolvorea las semillas de girasol por todo el centro para que tengan el crujiente al morder.",
+        "Llévalo directo a la mesa bien frío, como se disfruta un desayuno fresquito en esta calor. Si lo preparas con antelación, guárdalo en la nevera y agrega las semillas justo al servir para que no se ablanden."
+      ]
+    },
+    "tpl_d0e90990e198": {
+      "franja": "desayuno",
+      "pasos": [
+        "Pela la yuca, córtala en trozos y hiérvela en agua hasta que un cuchillo entre sin resistencia; escúrrela bien y majala hasta hacer un puré.",
+        "Cuando el puré esté tibio, revuélvelo con la mitad del huevo hasta formar una masa suave que no se pegue en las manos; si queda muy seca, agrégale poquito agua. Déjala reposar unos minutos para que tome cuerpo.",
+        "Forma arepitas aplastadas con las manos. Bate el resto del huevo y úsalo para barnizar cada arepita por ambos lados.",
+        "Calienta el aceite vegetal en un sartén antiadherente a fuego medio y dora las arepitas por ambos lados, unos minutos por cada lado.",
+        "Están listas cuando el dorado sea parejo y, al partir una, el interior se ve completamente cocido y con cuerpo, sin partes crudas ni húmedas de yuca cruda."
+      ]
+    },
+    "tpl_fcc5ba14ff6a": {
+      "franja": "cena",
+      "pasos": [
+        "Cocina la carne de res en una olla con agua hasta que ablande bien; sácala y méchala con dos tenedores, desmenuzándola en tiras finas. Resérvala con un poquito del caldo para que no se seque.",
+        "Haz un sofrito: calienta el aceite vegetal en una sartén a fuego medio y sofríe la cebolla picada, el ají cubanela, el pimiento morrón y el ajo hasta que estén transparentes y suelten su olor.",
+        "Añade el tomate picado y la salsa de tomate al sofrito, cocina a fuego medio hasta que el tomate se deshaga y forme una salsa espesita, luego incorpora la res mechada y la sal, removiendo bien para que la carne se impregne. Deja que hierva a fuego bajo unos minutos hasta que la salsa esté concentrada y la carne bien sazonada por dentro, jugosa pero sin líquido suelto.",
+        "Separa las hojas de lechuga romana, lávalas y sécalas bien, cuidando de que queden enteras para que sirvan de rollito.",
+        "Rellena cada hoja de lechuga con la res mechada calientica, dobla los bordes y sirve de una vez como cena ligera."
+      ]
+    },
+    "tpl_9ce963040c14": {
+      "franja": "cena",
+      "pasos": [
+        "Pon a hervir la auyama en una olla con agua a fuego medio hasta que un cuchillo entre sin resistencia, como unos 15-20 minutos; escúrrela bien.",
+        "En la misma agua, hierve el huevo unos 10-12 minutos hasta que cuaje por completo, sin partes blandas ni escurriendo; pela y reserva.",
+        "Maja la auyama caliente con un tenedor o un majador hasta lograr un puré liso; si queda muy espeso, agrégale un poquito del agua de cocción para aflojarlo.",
+        "Ralla o desmenuza el queso de papa y pica el huevo duro en cuadritos; mezcla la mitad del huevo dentro del puré y reserva el resto.",
+        "Sirve el puré caliente con el resto del huevo picado por encima y el queso de papa espolvoreado, que se ablandará con el calor del puré."
+      ]
+    },
+    "tpl_3c47d5db5243": {
+      "franja": "desayuno",
+      "pasos": [
+        "Pon a hervir agua en una olla a fuego medio.",
+        "Cuando hierva, agrega la avena y baja el fuego a bajo, moviendo de vez en cuando unos 5 minutos hasta que espese.",
+        "Añade la leche evaporada, la canela en polvo y el azúcar morena, y revuelve bien a fuego bajo unos 2-3 minutos más para que todo se integre y la avena quede cremosa y con cuerpo.",
+        "Si queda muy espesa, agrégale un chorrito de agua para aflojarla.",
+        "Está lista cuando la mezcla hierva suavecito y la avena esté tierna y bien cocida por dentro, sin puntos crudos. Sírvela caliente."
+      ]
+    },
+    "tpl_ce7b17d2082d": {
+      "franja": "almuerzo",
+      "pasos": [
+        "Pela los plátanos verdes, córtalos en ruedas gruesas y hiérvelos en agua con un poco del ajo hasta que el cuchillo entre sin resistencia. Escúrrelos bien.",
+        "Reserva la mitad de los plátanos cocidos para el mofongo; aparta también un tercio del ajo. En una bandeja de horno, mezcla ese plátano con la mitad del aceite de oliva y machácalo (majado) hasta formar una masa con cuerpo; si está muy apretada, afloja con un chorrito de agua. Forma el mofongo y llévalo al horno a 200 °C unos 10 minutos para que coja temperatura.",
+        "Pica el tomate, la cebolla y el resto del ajo. En una vasija apta para horno, sofríe suave con el resto del aceite de oliva (fuego bajo en la hornilla unos minutos o directo en el horno), añade el muslo de pollo troceado y un poquito de agua, tapa y guisa en el horno a 200 °C unos 25-30 minutos, hasta que el pollo esté por dentro sin ninguna parte rosada y la salsa haya espesado.",
+        "Suma el resto del plátano reservado al guiso o sírvelo al lado, y revisa la sazón del mofongo: al partir un pedazo, el interior debe verse cocido y uniforme, no crudo.",
+        "Sirve caliente: el mofongo horneado en el plato y el pollo guisado encima con su salsa de tomate y cebolla."
+      ]
+    },
+    "tpl_199edbef3330": {
+      "franja": "desayuno",
+      "pasos": [
+        "Ralla o parte el casabe en trozos pequeños y tuéstalo unos minutos en una sartén antiadherente a fuego bajo, dando vuelta hasta que quede ligeramente crujiente; resérvalo.",
+        "Ralla el queso de papa y tenlo listo aparte; recuerda que este queso se ablanda y calienta, no se derrite.",
+        "Bate el huevo en un recipiente hasta que la clara y la yema estén bien integradas.",
+        "Calienta el aceite vegetal en una sartén antiadherente a fuego medio, añade el huevo batido y mueve constantemente con una espátula; cuando esté casi cuajado, incorpora la mitad del queso de papa rallado y sigue revolviendo hasta que el huevo cuaje por completo y no escurra en ninguna parte.",
+        "Sirve el huevo revuelto sobre el casabe tostado, espolvorea el resto del queso de papa encima para que se ablande con el calor del huevo, y disfruta caliente."
+      ]
+    },
+    "tpl_e08414c10a4c": {
+      "franja": "desayuno",
+      "pasos": [
+        "Poné a hervir agua en una ollita a fuego medio.",
+        "Cuando rompa el hervor, agregá la avena y mové de vez en cuando para que no se pegue, dejándola cocinar unos 5 minutos hasta que espese.",
+        "Añadí la leche evaporada, bajá el fuego a bajo y revolvé unos 2 minutos más hasta que quede cremosa y con cuerpo; si quedó muy espesa, aflojala con un chin de agua.",
+        "Tostá el maní en un sartén seco a fuego bajo, moviéndolo hasta que esté ligeramente dorado por dentro y suelte su olor.",
+        "Serví la avena caliente, espolvoreá las pasas y el maní tostado por encima."
+      ]
+    },
+    "tpl_7e0880c32de3": {
+      "franja": "almuerzo",
+      "pasos": [
+        "Corta la pechuga de pavo en pedazos chiquitos y pica finito la cebolla y el tomate.",
+        "Calienta el aceite en una cazuela a fuego medio y sofríe la cebolla y el tomate hasta que formen un chin de salsa; añade el pavo y sofríelo hasta que cambie de color por completo, sin rosadito por dentro.",
+        "Incorpora el arroz, revuélvelo bien con el guisado para que se impregne, y agrégale agua suficiente (como para el locrio regular, un dedo por encima del arroz).",
+        "Deja que hierva a fuego alto hasta que el agua se seque al nivel del arroz, baja el fuego a mínimo, tapa y déjalo Sudar unos 15 minutos.",
+        "Apaga el fuego, deja reposar tapado 5 minutos más, revuelve y sirve cuando el arroz esté blandito y el pavo bien cocido, sin rosado en ninguna parte."
+      ]
+    },
+    "tpl_2b23ec4c73e3": {
+      "franja": "merienda",
+      "pasos": [
+        "Lava bien la batata y ponla a hornear entera en el horno a 200 °C por unos 45-50 minutos. Sabrás que está lista por dentro cuando un cuchillo entre hasta el centro sin resistencia alguna.",
+        "Saca la batata del horno y déjala enfriar por completo a temperatura ambiente; para merienda fría, mejor aún si la llevas a la nevera un rato.",
+        "Una vez fría, pélala y córtala en tajadas gruesas.",
+        "Sirve las tajadas frías espolvoreadas con la canela en polvo por encima."
+      ]
+    },
+    "tpl_191686c3dba0": {
+      "franja": "desayuno",
+      "pasos": [
+        "Precalienta el horno a 180 °C. En un bowl bate el huevo con la leche y el azúcar morena hasta que se disuelva bien.",
+        "Agrega la harina de maíz precocida poco a poco, mezclando hasta formar una masa suave que se despegue de las manos. Déjala reposar unos cinco minutos para que la harina se hidrate; debe quedar manejable, ni seca ni aguada.",
+        "Forma arepitas aplanadas con las manos y colócalas en una bandeja de horno.",
+        "Hornea unos 20-25 minutos a 180 °C. Están listas cuando al partir una por la mitad el interior se ve completamente cocido, sin masa cruda, y el palillo sale limpio."
+      ]
+    },
+    "tpl_a3e569b8e323": {
+      "franja": "almuerzo",
+      "pasos": [
+        "Pon a hervir la pasta integral en agua con fuego alto hasta que esté al dente, blanda por dentro pero con cuerpecito, y escúrrela.",
+        "Mientras, en una sartén a fuego medio, sofríe la cebolla picadita con el ajo machacado hasta que la cebolla esté translúcida y suave.",
+        "Añade la salsa de tomate y el orégano dominicano, baja el fuego a bajo y deja guisar unos minutos hasta que la salsa espese un poco y se vea brillante.",
+        "Escurre bien el atún, añádelo a la salsa, revuélvelo y déjalo un par de minutos a fuego bajo para que se impregne del sabor.",
+        "Junta la pasta con la salsa criolla de atún, mezcla a fuego bajo un minuto para que todo se integre, y si queda muy espesa agrégale un chorrito de agua."
+      ]
+    },
+    "tpl_79b30ab9873b": {
+      "franja": "cena",
+      "pasos": [
+        "Hierve la pechuga de pollo en agua a fuego medio hasta que esté bien cocida, sin nada rosado por dentro; sácala, deja que temple y desmenúzala con las manos o dos tenedores.",
+        "Pica la lechuga en tiras y el tomate en cuadritos, y colócalos en un recipiente hondo como base de la ensalada.",
+        "Pela el aguacate, córtalo en lascas gruesas y resérvalo aparte para el final, para que no se aplaste.",
+        "Pon el casabe en una sartén antiadherente a fuego bajo un minutico por cada lado, solo para que se tibie y quede crujientico; pártelo en trozos grandes.",
+        "Junta el pollo desmenuzado tibio con la lechuga y el tomate, revuelve bien, acomoda las lascas de aguacate encima y sirve de una vez con los trozos de casabe al lado."
+      ]
+    },
+    "tpl_34fa7f6fe965": {
+      "franja": "almuerzo",
+      "pasos": [
+        "Remoja los gandules en agua durante unas horas, luego hiérvelos a fuego medio hasta que estén blanditos por dentro; escúrrelos y déjalos enfriar.",
+        "Cocina la pechuga de pollo en agua hirviendo a fuego medio hasta que por dentro no quede ninguna parte rosada; déjala enfriar y desmenúzala o córtala en cuadritos.",
+        "Pica el tomate, la cebolla y el cilantro bien finitos, y corta la mitad del limón para su jugo; el resto del limón resérvalo.",
+        "En un recipiente mezcla los gandules fríos, el pollo, el tomate, la cebolla y el cilantro; rocía con el jugo de limón que reservaste y revuelve bien.",
+        "Al momento de servir, corta el aguacate en láminas y colócalo encima de la ensalada, bien fría, para que no se machaque."
+      ]
+    },
+    "tpl_289ce36d99f3": {
+      "franja": "almuerzo",
+      "pasos": [
+        "Remoja las lentejas en agua un rato, escúrrelas y ponlas a hervir en una olla con agua a fuego medio hasta que estén blanditas pero no deshechas, como en unos 25-30 minutos. Escúrrelas y reserva el caldo de la cocción.",
+        "En el mismo fuego, calienta el aceite en una sartén y sofríe la cebolla, el ají cubanela, el ajo y el cilantro todo picadito hasta que la cebolla quede transparente.",
+        "Agrega la zanahoria picada en cuadritos pequeños y la salsa de tomate, sofríe un par de minutos y luego incorpora las lentejas guisadas. Añade un poco del caldo que reservaste y la sal, baja el fuego a bajo y deja que espese unos 10 minutos, hasta que el guiso no esté aguado sino cremoso.",
+        "Aparte, cocina el arroz blanco como acostumbras: lávalo, ponlo a hervir con agua a fuego alto, cuando seque bájalo a fuego bajo y tápalo hasta que esté suelto y blandito por dentro, con el grano tierno, no duro.",
+        "Para servir, echa el arroz en el plato, pon al lado las lentejas guisadas y acompaña con rodajas de aguacate fresquito."
+      ]
+    },
+    "tpl_fedbadbe7394": {
+      "franja": "cena",
+      "pasos": [
+        "Pela el plátano verde, córtalo en pedazos gruesos y hiérvelo en agua hasta que un cuchillo entre sin resistencia, señal de que está cocido por dentro. Escúrrelo bien.",
+        "Maja cada pedazo de plátano, úntalo con el aceite vegetal y llévalo a una bandeja en horno precalentado a 200 °C unos 15 minutos, volteando a mitad de camino, hasta que estén doraditos y firmes por fuera pero suaves por dentro.",
+        "Pica fino el ajo y saltéalo en una sartén con el aceite de oliva a fuego bajo, sin dejar que se dore, hasta que suelte su aroma.",
+        "Añade los camarones a la sartén con el ajo y cocínalos a fuego medio, moviendo, hasta que se pongan rosados, se enrosquen y su interior esté blanco y opaco, sin partes translúcidas.",
+        "Sirve los camarones al ajillo por encima de los tostones recién sacados del horno."
+      ]
+    },
+    "tpl_43c0a34437c4": {
+      "franja": "almuerzo",
+      "pasos": [
+        "Pon a hervir la pasta integral en agua con fuego alto hasta que esté al dente, escúrrela y resérvala con un chorrito del aceite de oliva para que no se pegue.",
+        "Mientras la pasta se cocina, pica finito el tomate, la cebolla, el ají morrón y el ajo. Calienta el resto del aceite de oliva en una sartén antiadherente a fuego medio y saltea la cebolla y el ajo hasta que la cebolla se vea transparente.",
+        "Añade el ají morrón y el tomate, y sigue salteando a fuego medio hasta que el tomate se deshaga y forme una salsa que se vea espesita, como tres o cuatro minutos.",
+        "Escurre bien las sardinas de la lata, agrégalas al salteado y mézclalas con cuidado para que no se deshagan por completo; solo hay que calentarlas bien por dentro, que salgan calentitas al probarlas.",
+        "Incorpora la pasta escurrida a la sartén, revuelve todo a fuego medio un minutico para que los sabores se junten, y si se ve seco añade un chorrito de agua. Sirve caliente, verificando que la pasta esté suave y sin zonas duras al centro."
+      ]
+    },
+    "tpl_89c08b5a5fe2": {
+      "franja": "almuerzo",
+      "pasos": [
+        "Sazona la pechuga de pollo con la mitad de la sal y cuécela en agua hirviendo a fuego medio hasta que por dentro no quede ninguna parte rosada; escúrrela, déjala entibiar y desmenúzala.",
+        "Pica la cebolla bien finita y corta el salami dominicano en cuadritos pequeños.",
+        "En una sartén calienta el aceite a fuego medio, sofríe la cebolla hasta que esté translúcida, agrega el salami para que suelte su grasa y sabor, y luego añade la salsa de tomate con un chorrito de agua; deja que hierva bajito unos minutos hasta que la salsa espese.",
+        "Hierve la pasta integral en agua con el resto de la sal a fuego medio hasta que esté al dente, y escúrrela bien.",
+        "Junta los espaguetis con la salsa criolla y el pollo desmenuzado, revuelve a fuego bajo un par de minutos para que todo se impregne, y sirve bien caliente."
+      ]
+    },
+    "tpl_56a45eb82638": {
+      "franja": "almuerzo",
+      "pasos": [
+        "Pela la yuca, el plátano verde, la auyama y el ñame, y córtalos en trozos medianos. Pica la cebolla bien finita y corta el muslo de pollo en pedazos.",
+        "En una olla calienta el aceite vegetal a fuego medio y sofríe la cebolla hasta que esté transparente. Añade el pollo y sofríe moviendo hasta que pierda el color rosado por fuera.",
+        "Agrega los víveres a la olla, cúbrelos con agua y deja que hierva a fuego alto. Baja a fuego medio y cocina tapado unos 25 a 30 minutos, hasta que la yuca, el ñame y el plátano estén blandos: sabrás que están listos porque un cuchillo entra sin resistencia. Machaca algunos trozos contra la pared de la olla para que el sancocho espese bien.",
+        "Verifica que el pollo esté completamente cocido por dentro, sin ninguna parte rosada; si el caldo quedó muy espeso, aflójalo con un poco de agua y deja hervir a fuego bajo unos minutos más.",
+        "Sirve el sancocho bien caliente en un plato hondo y acompáñalo con el aguacate cortado en láminas por encima o al lado, como se acostumbra en el almuerzo dominicano."
+      ]
+    },
+    "tpl_ce7ab6997bd0": {
+      "franja": "almuerzo",
+      "pasos": [
+        "Pela la yuca, córtala en trozos y ponla a hervir en agua con parte de la sal a fuego medio hasta que un cuchillo entre sin resistencia, unos 20-25 minutos. Escúrrela bien y resérvala tapada.",
+        "Maja el ajo con el resto de la sal hasta hacer una pasta, y agrégale la mitad del aceite de oliva. Vierte esa mezcla sobre la yuca caliente ya escurrida, removiendo bien para que el mojo la impregne. Si queda muy apretada, afloja con un poquito del agua de cocción.",
+        "Corta el cerdo en filetes delgados y úntalos con la otra mitad del aceite de oliva.",
+        "Calienta una plancha o sartén antiadherente a fuego medio-alto y cocina el cerdo unos 4-5 minutos por lado, hasta que dore bien por fuera y, al cortar el pedazo más grueso, el interior quede completamente blanco, sin ninguna parte rosada.",
+        "Sirve el cerdo a la plancha acompañado de la yuca al mojo bien caliente."
+      ]
+    },
+    "tpl_b51afa741532": {
+      "franja": "cena",
+      "pasos": [
+        "Pela la yuca, córtala en trozos y ponla a hervir en agua a fuego medio-alto. Está lista cuando el cuchillo entra sin resistencia en el pedazo más grueso; escúrrela bien.",
+        "Maja la yuca caliente con dos tercios del ajo hasta formar un puré espeso. Si queda muy duro, agrégale agua de cocción poco a poco hasta que quede suave y cremoso. Tápalo para que se mantenga caliente.",
+        "Pica el tercio de ajo restante bien finito y frótalo sobre el filete de pescado blanco por los dos lados.",
+        "Calienta un sartén o plancha antiadherente a fuego medio-alto con el aceite de oliva. Coloca el filete y cocínalo unos minutos por cada lado, sin moverlo para que se dore. Está listo por dentro cuando la carne se separa en hojitas blancas al empujarla con un tenedor y ya no se ve ninguna parte translúcida en el centro.",
+        "Sirve el pescado caliente con el puré de yuca al ajo al lado y disfruta."
+      ]
+    },
+    "tpl_5643159717eb": {
+      "franja": "almuerzo",
+      "pasos": [
+        "Pica la cebolla, el ajo y pica bien fino el repollo. Ralla la zanahoria y mezclala con el repollo para hacer la ensalada; resérvala aparte.",
+        "En una sartén antiadherente, sofríe a fuego medio la cebolla y el ajo hasta que estén transparentes, luego añade la salsa de tomate y cocina unos minutos hasta que se forme un guisado.",
+        "Escurre las sardinas en lata, añádelas al guisado y mueve con cuidado, dejando que se sazonen a fuego bajo por unos minutos.",
+        "Agrega el arroz blanco crudo al guisado, revuelve bien para que se impregne, añade agua suficiente para que quede unos dedos por encima del arroz y déjalo hervir a fuego alto. Cuando el agua se haya consumido casi toda, baja el fuego, tapa y cocina a fuego bajo hasta que el arroz esté suelto y suave por dentro (prueba un grano: debe estar tierno, sin centro duro). Se sabe que el locrio está listo cuando el arroz absorbió todo el líquido y no queda agua en el fondo.",
+        "Sirve el locrio caliente acompañado de la ensalada de repollo con zanahoria, bien fresquita."
+      ]
+    },
+    "tpl_dbf40aee1f71": {
+      "franja": "almuerzo",
+      "pasos": [
+        "Lava el filete de pescado blanco, córtalo en trozos grandes y sazónalo con parte de la sal. Pica la cebolla en plumas y el tomate en cuadritos.",
+        "Calienta el aceite vegetal en un sartén a fuego medio, sofríe la cebolla hasta que se ablande, añade el tomate y cocina hasta que suelte su jugo y forme la rusa.",
+        "Vierte la leche de coco en el sofrito, deja que hierva a fuego bajo unos minutos, luego mete los trozos de pescado y guisa tapado a fuego bajo hasta que el pescado se vuelva opaco por dentro y se deshoje suave al tocarlo con un tenedor, como unos 10 minutos. Rectifica con la sal restante.",
+        "Aparte, cocina el arroz blanco con agua y la sal que quedó hasta que esté suelto y cada grano esté blando por dentro, sin corazón duro; escúrrelo si hace falta.",
+        "Sirve el pescado guisado en su salsita de coco bien caliente junto al arroz blanco, y bota la cucharada de la salsa por encima."
+      ]
+    },
+    "tpl_16326aceee3b": {
+      "franja": "almuerzo",
+      "pasos": [
+        "Pica la cebolla, el ají cubanela, el tomate y el ajo. Corta la pechuga de pollo en trozos.",
+        "En una olla con fuego medio, calienta el aceite y sofríe la cebolla, el ajo, el ají cubanela y el orégano dominicano hasta que la cebolla se transparente. Añade el tomate y la salsa de tomate, cocina unos minutos hasta formar el ahogao.",
+        "Agrega el pollo al sofrito, revuelve, tapa y deja guisar a fuego bajo hasta que por dentro no quede ninguna parte rosada. Si se seca, agrégale un chorrito de agua.",
+        "Aparte, hierve agua con un toque de la sal, añade la sémola de maíz revolviendo constantemente a fuego bajo para que no se formen grumos. Cuando espese y se despegue del fondo, incorpora la leche de coco poco a poco, mezclando hasta que quede una masa suave y con cuerpo. Si quedó muy espesa, aflójala con un poquito de agua. Déjala reposar dos minutos tapada para que asiente.",
+        "Sirve el chenchén en un plato, pon al lado el pollo guisado con su salsa, vierte el resto de la sal por encima del guiso y sirve bien caliente."
+      ]
+    },
+    "tpl_66a7e3481abd": {
+      "franja": "cena",
+      "pasos": [
+        "Corta la pechuga de pollo en tiras finas y ponla en la plancha a fuego medio, dándole vuelta hasta que el interior quede completamente blanco, sin ninguna parte rosada. Reserva.",
+        "Pica el ají morrón, la cebolla y la zanahoria en tiras o pedacitos pequeños. Saltea los vegetales en la plancha a fuego medio-alto, moviéndolos seguido, hasta que estén blanditos pero con un toque crujiente; la cebolla debe verse translúcida. Añade el pollo, mezcla bien y reserva.",
+        "Calienta la tortilla integral en la plancha seca a fuego bajo por ambos lados, solo para que se ablande y coja temperatura; verás que se pone flexible y con burbujitas.",
+        "Coloca el relleno de pollo y vegetales en el centro de la tortilla, dobla los lados hacia adentro y enrolla apretado.",
+        "Devuelve el wrap a la plancha a fuego bajo un par de minutos por cada lado, presionando con la espátula, hasta que esté doradito y sellado, y el relleno salga bien caliente al partirlo."
+      ]
+    },
+    "tpl_2af541adb844": {
+      "franja": "desayuno",
+      "pasos": [
+        "Pela los plátanos verdes, córtalos en trozos y ponlos a hervir en agua con un poquito de la sal a fuego medio. Están listos cuando el cuchillo entra sin resistencia, bien blanditos, unos 20 minutos. Escúrrelos bien.",
+        "Maja los plátanos calientes hasta que quede un puré con cuerpo. Si está muy espeso, agrégale un chorrito del agua de cocción para aflojarlo. Tapa y reserva calentito.",
+        "Pica la cebolla morada fina. En un sartén con un poquito del aceite a fuego medio, sofríela hasta que se ablande y quede transparente. Retírala del sartén y reserva la mitad de la cebolla para poner encima del mangú al final.",
+        "En ese mismo sartén con lo que queda del aceite, bate el huevo con la pimienta negra y lo restante de la sal, y haz los huevos revueltos a fuego bajo, moviendo hasta que cuajen por completo y no escurran por ninguna parte.",
+        "Sirve el mangú con los huevos revueltos encima y corona todo con la cebolla morada sofrita reservada. ¡A comer, que está buenísimo!"
+      ]
+    },
+    "tpl_1ebac624c448": {
+      "franja": "almuerzo",
+      "pasos": [
+        "Pela el plátano verde, córtalo en trozos y hiérvelo en agua con un poquito de la sal hasta que un tenedor entre sin resistencia. Escúrrelo bien y majado hasta formar una masa; si está muy dura, agrégale un poquito del agua de cocción. Deja reposar la masa unos minutos hasta que quede manejable y con cuerpo, y forma los bollitos.",
+        "Pica la pechuga de pollo en trozos y sazónala con el ajo machacado, el orégano dominicano y parte de la sal.",
+        "En una sartén con el aceite vegetal a fuego medio, sofríe la cebolla, el ají cubanela y el tomate picados. Añade la salsa de tomate y revuelve bien.",
+        "Incorpora el pollo sazonado al sofrito, baja el fuego, tapa y guisa unos 15 a 20 minutos hasta que el interior del pollo no tenga ninguna parte rosada. Si espesa mucho, agrégale un chorrito de agua.",
+        "Sirve el pollo guisado caliente acompañado de los bollitos de plátano."
+      ]
+    },
+    "tpl_100de836d0e3": {
+      "franja": "desayuno",
+      "pasos": [
+        "Pica la cebolla bien finita y rompe el casabe en pedacitos o tájalo en tiritas.",
+        "Calienta el aceite vegetal en una sartén antiadherente a fuego medio y sofríe la cebolla hasta que esté transparente y blandita.",
+        "Bate los huevos, bájalos a la sartén con la cebolla y mueve a fuego bajo hasta que cuajen por completo, sin que escurra líquido en ninguna parte.",
+        "En una plancha o sartén seca, tuesta los pedazos de casabe a fuego medio hasta que estén calientes y crujientitos por fuera.",
+        "Sirve los huevos revueltos calientes encima o al lado del casabe tostado."
+      ]
+    },
+    "tpl_1876d7cc7a09": {
+      "franja": "desayuno",
+      "pasos": [
+        "Pela los guineos verdes y ponlos a hervir en agua a fuego medio-alto hasta que un tenedor entre sin resistencia, unos 15-20 minutos; escúrrelos bien.",
+        "Maja los guineos caliente con un poco del agua de la cocción hasta lograr un puré suave pero con cuerpo, que no quede agüado.",
+        "Pica la cebolla finamente y sofríela en el aceite vegetal a fuego bajo hasta que esté transparente y suave; éntala al mangú y mezcla bien. Si el mangú quedó duro, afloja con un chorrito del agua de cocción.",
+        "Corta el queso blanco en láminas gruesas y llévalo al airfryer a 180 °C por unos 4-5 minutos, hasta que se ablande y se caliente por dentro, sin esperar que se derrita porque el queso fresco no se funde.",
+        "Sirve el mangú calientito con el queso calado encima y la cebolla por todo el plato."
+      ]
+    },
+    "tpl_5de59d1f3398": {
+      "franja": "almuerzo",
+      "pasos": [
+        "Sazona la pechuga de pollo con parte de la sal y ponla a guisar en una olla con el aceite vegetal a fuego medio, junto con la cebolla picada y el tomate picado. Sofríe hasta que el pollo esté bien cocido, sin ninguna parte rosada por dentro.",
+        "Agrega el arroz a la olla con el pollo guisado, cubre con agua (que pase un poquito por encima del arroz), rectifica con el resto de la sal, tapa y deja a fuego medio hasta que el agua se consuma. Baja a fuego bajo, tapa y deja que termine de reventar unos minutos más, hasta que el arroz esté suelto y tierno por dentro.",
+        "Para la ensalada verde, pica la lechuga en un recipiente. Riega con el aceite de oliva y el jugo del limón y mezcla bien.",
+        "Sirve el locrio de pollo caliente y acompaña con la ensalada verde y el aguacate en tajadas al lado."
+      ]
+    },
+    "tpl_632c903605f4": {
+      "franja": "almuerzo",
+      "pasos": [
+        "Remoja las habichuelas negras desde la noche anterior. Al día siguiente, cuécelas en una olla con agua a fuego medio hasta que estén blandas, hasta que al presionar una con el tenedor entre sin resistencia, y escúrrelas reservando un poco del caldo de la cocción.",
+        "Sofríe en la olla la cebolla picadita y el ajo machacado con un poco del aceite vegetal a fuego medio, hasta que la cebolla esté transparente. Añade las habichuelas guisadas con parte de su caldo y déjalas hacerse a fuego bajo hasta que el guisado espese, moviendo de vez en cuando. La señal de que está listo es que la salsa cuelgue de la cuchara y las habichuelas estén bien suaves por dentro.",
+        "Lava el arroz blanco y cuécelo en la misma olla o en una aparte con agua y el resto del aceite, primero a fuego alto hasta que seque el agua, luego baja el fuego, tapa y déjalo a fuego bajo hasta que esté suelto y tierno por dentro: al probar un grano, no debe estar duro en el centro.",
+        "Fríe el huevo en un sartén antiadherente con un chorrito del aceite a fuego medio, hasta que la clara cuaje por completo y no escurre en ninguna parte; la yema también debe cuajar bien, sin quedarse cruda.",
+        "Sirve el arroz con el moro de habichuelas negro por encima y el huevo frito al lado, bien calientes."
+      ]
+    }
+  }
+}
