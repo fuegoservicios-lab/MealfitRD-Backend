@@ -453,3 +453,49 @@ comidas, que sí es un fallo. La guarda `_hay_comidas` separa los dos — sin el
 también ese caso, y lo cazó `test_plan_sin_meals_en_los_days_pedidos`, que ya existía.
 
 Test: [`test_p2_i18n_ya_traducido_no_es_degradacion.py`](../tests/test_p2_i18n_ya_traducido_no_es_degradacion.py).
+
+## `P1-I18N-BUDGET-DICE-LA-CAUSA` — el techo agotado es el síntoma, no el diagnóstico
+
+[2026-09-08] El plan `3957a669` —del **único** usuario `fr-FR`— se servía en español. La alerta y la
+telemetría decían `invocation_budget_exhausted`, y esa razón manda a una sola acción: subir el
+techo. Los números decían otra cosa, y estaban ahí desde el primer ciclo:
+
+```
+batches: 2 · retries: 6 · targets: 16 · mismatch: 0 · meals_written: 0
+tokens_estimated: 0 · duration_ms: 977.646        (tres ciclos el 08-sep, casi idénticos)
+```
+
+`tokens_estimated: 0` **y** `mismatch: 0` a la vez descartan las dos hipótesis obvias: no es que el
+modelo devolviera basura (eso daría `mismatch`) ni que el techo fuera corto (eso daría `tokens`).
+**Ninguna llamada volvió.** Y 977 s entre 8 invocaciones son ~122 s cada una con un `timeout_s` de
+60: el cliente reintenta una vez y las dos mueren.
+
+La causa está **fuera**: el proveedor iba degradado esa tarde — el mismo que devolvía
+429 «service temporarily overloaded» en los experimentos de la misma sesión.
+
+### Qué se cambió
+
+| pieza | antes | ahora |
+|---|---|---|
+| contador | no existía | `_excepciones_llm`, sumado en el `except` del `llm.invoke` |
+| razón al agotar el techo | siempre `invocation_budget_exhausted` | `invocation_budget_exhausted_llm_errors` cuando la mitad o más de las invocaciones consumidas murieron en excepción |
+| telemetría | sin señal de la causa | `llm_exceptions` en `pipeline_metrics`, **siempre** — también en los ciclos que acaban bien |
+
+`llm_exceptions` viaja siempre a propósito: un ciclo que termina bien tras dos timeouts también lo
+cuenta, y **esa serie es la que avisa antes** de que el usuario vea su plan en español. La razón
+nueva **no** entra en `_RAZONES_BENIGNAS`: es una degradación real y debe alertar.
+
+### Qué se decidió NO tocar
+
+Ni `MEALFIT_PLAN_DISPLAY_I18N_TIMEOUT_S` (60 s) ni el tamaño del lote ni
+`_max_invocaciones_por_ciclo`. Son la respuesta tentadora al síntoma y los tres ajustarían el
+sistema a la meteorología de una tarde. `test_p1_i18n_budget_dice_la_causa` ancla los tres con su
+razón, para que el próximo que los mire sepa que se consideraron y por qué se dejaron.
+
+Es el tercer defecto de la MISMA forma cerrado el 08-sep, con `P2-ALERT-MESSAGE-REFRESH` (el texto
+de la alerta se congelaba en la primera versión) y `P2-I18N-YA-TRADUCIDO-NO-ES-DEGRADACION` (un
+valor inicial saliendo por un `return` se reportaba como motivo). Los tres estaban en la capa que
+existe **para explicar**, no en la que hace el trabajo. Y esta alerta se pudo leer bien justamente
+porque el arreglo del refresco ya estaba dentro: nombraba el plan **vivo**, no uno borrado.
+
+Test: [`test_p1_i18n_budget_dice_la_causa.py`](../tests/test_p1_i18n_budget_dice_la_causa.py).
