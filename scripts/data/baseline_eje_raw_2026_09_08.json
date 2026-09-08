@@ -1,0 +1,804 @@
+{
+ "congelado_at": "2026-09-08T08:54:50.744121+00:00",
+ "motivo": "fotografia del eje display<->raw ANTES del primer contenido generado con los 7 arreglos raw[idx] (llega 2026-09-10 00:30 local, bloque off=3 del plan b9e9671a)",
+ "instrumento": "test_p2_coherence_eje_ciego (7 casos de discriminacion verificados)",
+ "no_medido": "cuarto eje (lista almacenada vs comidas): _resolve_line_food_grams trunca compuestos y da ~49 % de falsos positivos — resolvedor de GRAMOS, no de IDENTIDAD",
+ "planes": 95,
+ "totales": {
+  "comidas": 1194,
+  "comparables": 1172,
+  "marca_tracer": 714,
+  "huella_viva": 186,
+  "largo_distinto": 74,
+  "compra_y_no_lee": 22,
+  "cantidad_absurda_en_compra": 7
+ },
+ "por_plan": [
+  {
+   "plan": "c0dc2519",
+   "created_at": "2026-09-05T12:55:15.437378+00:00",
+   "comidas": 12,
+   "comparables": 12,
+   "marca_tracer": 11,
+   "huella_viva": 2
+  },
+  {
+   "plan": "3931c249",
+   "created_at": "2026-09-02T05:52:23.628686+00:00",
+   "comidas": 12,
+   "comparables": 12,
+   "marca_tracer": 9,
+   "huella_viva": 4,
+   "largo_distinto": 1
+  },
+  {
+   "plan": "5f11e082",
+   "created_at": "2026-08-31T14:51:04.828752+00:00",
+   "comidas": 4,
+   "comparables": 4,
+   "marca_tracer": 4
+  },
+  {
+   "plan": "883645ab",
+   "created_at": "2026-09-02T16:10:33.979730+00:00",
+   "comidas": 12,
+   "comparables": 12,
+   "marca_tracer": 5,
+   "huella_viva": 2,
+   "largo_distinto": 1
+  },
+  {
+   "plan": "9d8ddb27",
+   "created_at": "2026-09-03T13:16:16.901181+00:00",
+   "comidas": 12,
+   "comparables": 12,
+   "marca_tracer": 9,
+   "largo_distinto": 1,
+   "huella_viva": 2,
+   "compra_y_no_lee": 1
+  },
+  {
+   "plan": "cf3a81fb",
+   "created_at": "2026-07-31T22:47:55.845460+00:00",
+   "comidas": 12,
+   "comparables": 12,
+   "marca_tracer": 5,
+   "huella_viva": 3
+  },
+  {
+   "plan": "5f4bb17e",
+   "created_at": "2026-08-01T16:54:14.259553+00:00",
+   "comidas": 12,
+   "comparables": 12,
+   "marca_tracer": 6,
+   "largo_distinto": 1,
+   "huella_viva": 1
+  },
+  {
+   "plan": "c06545cc",
+   "created_at": "2026-09-02T23:51:12.674477+00:00",
+   "comidas": 12,
+   "comparables": 12,
+   "marca_tracer": 8,
+   "huella_viva": 1
+  },
+  {
+   "plan": "080a91c7",
+   "created_at": "2026-09-05T13:27:54.979361+00:00",
+   "comidas": 12,
+   "comparables": 12,
+   "marca_tracer": 9,
+   "huella_viva": 1
+  },
+  {
+   "plan": "42dd5a11",
+   "created_at": "2026-09-02T19:11:10.593825+00:00",
+   "comidas": 12,
+   "comparables": 12,
+   "marca_tracer": 8,
+   "huella_viva": 2,
+   "largo_distinto": 1
+  },
+  {
+   "plan": "6c502869",
+   "created_at": "2026-09-02T10:33:24.534557+00:00",
+   "comidas": 12,
+   "comparables": 12,
+   "marca_tracer": 9,
+   "largo_distinto": 1,
+   "huella_viva": 1
+  },
+  {
+   "plan": "af58ec2e",
+   "created_at": "2026-07-31T01:55:38.947849+00:00",
+   "comidas": 8,
+   "comparables": 8,
+   "huella_viva": 3,
+   "marca_tracer": 3
+  },
+  {
+   "plan": "a74b2ae6",
+   "created_at": "2026-07-31T23:18:25.012445+00:00",
+   "comidas": 12,
+   "comparables": 12,
+   "marca_tracer": 5,
+   "huella_viva": 3
+  },
+  {
+   "plan": "95545cef",
+   "created_at": "2026-09-02T15:08:19.752723+00:00",
+   "comidas": 12,
+   "comparables": 12,
+   "marca_tracer": 11,
+   "huella_viva": 3,
+   "largo_distinto": 1
+  },
+  {
+   "plan": "d3bd23d6",
+   "created_at": "2026-09-03T10:22:46.452784+00:00",
+   "comidas": 12,
+   "comparables": 12,
+   "marca_tracer": 11,
+   "largo_distinto": 2,
+   "huella_viva": 4
+  },
+  {
+   "plan": "6e1125b5",
+   "created_at": "2026-09-02T17:13:48.624825+00:00",
+   "comidas": 12,
+   "comparables": 12,
+   "marca_tracer": 11,
+   "huella_viva": 2
+  },
+  {
+   "plan": "a4e8d9d3",
+   "created_at": "2026-09-02T19:33:01.020084+00:00",
+   "comidas": 12,
+   "comparables": 12,
+   "marca_tracer": 8,
+   "huella_viva": 2
+  },
+  {
+   "plan": "09b8bee0",
+   "created_at": "2026-09-03T09:27:18.729788+00:00",
+   "comidas": 12,
+   "comparables": 12,
+   "marca_tracer": 10,
+   "huella_viva": 1
+  },
+  {
+   "plan": "81e6ebd1",
+   "created_at": "2026-09-02T06:43:28.622392+00:00",
+   "comidas": 12,
+   "comparables": 12,
+   "marca_tracer": 5,
+   "largo_distinto": 1,
+   "huella_viva": 2
+  },
+  {
+   "plan": "72ce9d4a",
+   "created_at": "2026-09-02T06:59:45.469069+00:00",
+   "comidas": 12,
+   "comparables": 12,
+   "marca_tracer": 8,
+   "largo_distinto": 2,
+   "huella_viva": 3
+  },
+  {
+   "plan": "6cba45e9",
+   "created_at": "2026-09-02T15:23:58.427138+00:00",
+   "comidas": 12,
+   "comparables": 12,
+   "marca_tracer": 6,
+   "largo_distinto": 1,
+   "huella_viva": 2
+  },
+  {
+   "plan": "6c908e0a",
+   "created_at": "2026-09-02T18:35:12.872598+00:00",
+   "comidas": 12,
+   "comparables": 12,
+   "marca_tracer": 6
+  },
+  {
+   "plan": "df349714",
+   "created_at": "2026-09-02T15:56:09.668055+00:00",
+   "comidas": 12,
+   "comparables": 12,
+   "marca_tracer": 6,
+   "largo_distinto": 1,
+   "huella_viva": 1
+  },
+  {
+   "plan": "5eeb44f8",
+   "created_at": "2026-09-02T07:22:52.094216+00:00",
+   "comidas": 12,
+   "comparables": 12,
+   "marca_tracer": 6
+  },
+  {
+   "plan": "b4316db6",
+   "created_at": "2026-09-05T14:02:32.497506+00:00",
+   "comidas": 12,
+   "comparables": 12,
+   "largo_distinto": 1,
+   "marca_tracer": 5,
+   "huella_viva": 4
+  },
+  {
+   "plan": "d476023a",
+   "created_at": "2026-07-31T21:26:43.555030+00:00",
+   "comidas": 12,
+   "comparables": 12,
+   "marca_tracer": 7,
+   "huella_viva": 3,
+   "cantidad_absurda_en_compra": 2
+  },
+  {
+   "plan": "170a34a4",
+   "created_at": "2026-09-02T18:18:15.658554+00:00",
+   "comidas": 12,
+   "comparables": 12,
+   "marca_tracer": 7
+  },
+  {
+   "plan": "8d3f246a",
+   "created_at": "2026-08-01T19:17:33.831766+00:00",
+   "comidas": 12,
+   "comparables": 12,
+   "largo_distinto": 1,
+   "huella_viva": 3,
+   "marca_tracer": 5
+  },
+  {
+   "plan": "7c545d59",
+   "created_at": "2026-07-31T18:57:11.183258+00:00",
+   "comidas": 12,
+   "comparables": 12,
+   "huella_viva": 4,
+   "marca_tracer": 4,
+   "cantidad_absurda_en_compra": 1
+  },
+  {
+   "plan": "f474b4ea",
+   "created_at": "2026-08-12T05:39:35.789712+00:00",
+   "comidas": 12,
+   "comparables": 12,
+   "marca_tracer": 10
+  },
+  {
+   "plan": "82da3be1",
+   "created_at": "2026-09-02T07:48:59.180340+00:00",
+   "comidas": 12,
+   "comparables": 12,
+   "marca_tracer": 5,
+   "huella_viva": 1
+  },
+  {
+   "plan": "43ec0576",
+   "created_at": "2026-08-01T00:24:42.379862+00:00",
+   "comidas": 12,
+   "comparables": 12,
+   "largo_distinto": 1,
+   "huella_viva": 2,
+   "marca_tracer": 3
+  },
+  {
+   "plan": "ea8740dc",
+   "created_at": "2026-09-02T16:55:06.979034+00:00",
+   "comidas": 12,
+   "comparables": 12,
+   "marca_tracer": 11,
+   "largo_distinto": 3,
+   "huella_viva": 4
+  },
+  {
+   "plan": "e2bbb280",
+   "created_at": "2026-08-01T15:50:26.116612+00:00",
+   "comidas": 12,
+   "comparables": 12,
+   "marca_tracer": 6,
+   "huella_viva": 5,
+   "cantidad_absurda_en_compra": 4,
+   "largo_distinto": 1,
+   "compra_y_no_lee": 1
+  },
+  {
+   "plan": "af6b98ff",
+   "created_at": "2026-07-31T20:01:27.393641+00:00",
+   "comidas": 12,
+   "comparables": 12,
+   "marca_tracer": 6,
+   "huella_viva": 7
+  },
+  {
+   "plan": "197970fa",
+   "created_at": "2026-09-02T12:16:33.571927+00:00",
+   "comidas": 12,
+   "comparables": 12,
+   "largo_distinto": 3,
+   "marca_tracer": 10,
+   "huella_viva": 5
+  },
+  {
+   "plan": "c350dec0",
+   "created_at": "2026-09-05T14:50:56.965920+00:00",
+   "comidas": 92,
+   "comparables": 92,
+   "marca_tracer": 52,
+   "largo_distinto": 16,
+   "huella_viva": 21,
+   "compra_y_no_lee": 17
+  },
+  {
+   "plan": "95143564",
+   "created_at": "2026-09-03T09:10:26.170955+00:00",
+   "comidas": 12,
+   "comparables": 12,
+   "marca_tracer": 8,
+   "largo_distinto": 1,
+   "huella_viva": 1
+  },
+  {
+   "plan": "75d16d22",
+   "created_at": "2026-08-01T00:58:34.268775+00:00",
+   "comidas": 8,
+   "comparables": 8,
+   "marca_tracer": 3,
+   "huella_viva": 1
+  },
+  {
+   "plan": "4e35d6c6",
+   "created_at": "2026-08-04T14:42:52.264579+00:00",
+   "comidas": 12,
+   "comparables": 12,
+   "marca_tracer": 8,
+   "huella_viva": 1
+  },
+  {
+   "plan": "8ef8ace0",
+   "created_at": "2026-08-01T16:01:05.891617+00:00",
+   "comidas": 12,
+   "comparables": 12,
+   "marca_tracer": 9,
+   "huella_viva": 2
+  },
+  {
+   "plan": "2b692ef8",
+   "created_at": "2026-09-02T14:30:09.920498+00:00",
+   "comidas": 12
+  },
+  {
+   "plan": "5fba379a",
+   "created_at": "2026-08-01T16:15:20.279267+00:00",
+   "comidas": 12,
+   "comparables": 12,
+   "marca_tracer": 9,
+   "huella_viva": 2
+  },
+  {
+   "plan": "9d0cba11",
+   "created_at": "2026-08-02T18:18:42.696959+00:00",
+   "comidas": 4,
+   "comparables": 4,
+   "marca_tracer": 3
+  },
+  {
+   "plan": "b709b182",
+   "created_at": "2026-08-05T00:50:50.994050+00:00",
+   "comidas": 8,
+   "comparables": 8,
+   "marca_tracer": 5,
+   "huella_viva": 1
+  },
+  {
+   "plan": "8aa98e9c",
+   "created_at": "2026-08-01T23:46:05.411811+00:00",
+   "comidas": 8,
+   "comparables": 8,
+   "marca_tracer": 3
+  },
+  {
+   "plan": "2eec94a8",
+   "created_at": "2026-08-01T22:07:41.061685+00:00",
+   "comidas": 12,
+   "comparables": 12,
+   "marca_tracer": 6,
+   "largo_distinto": 1,
+   "huella_viva": 1
+  },
+  {
+   "plan": "fe788498",
+   "created_at": "2026-07-31T17:02:57.771637+00:00",
+   "comidas": 12,
+   "comparables": 12,
+   "marca_tracer": 1
+  },
+  {
+   "plan": "1da4e9ba",
+   "created_at": "2026-07-31T23:01:19.789417+00:00",
+   "comidas": 12,
+   "comparables": 12,
+   "largo_distinto": 2,
+   "huella_viva": 2,
+   "marca_tracer": 4
+  },
+  {
+   "plan": "8fc9749a",
+   "created_at": "2026-09-03T15:44:25.102320+00:00",
+   "comidas": 12,
+   "comparables": 12,
+   "marca_tracer": 4
+  },
+  {
+   "plan": "bcb8bd98",
+   "created_at": "2026-08-01T15:29:40.504246+00:00",
+   "comidas": 12,
+   "comparables": 12,
+   "marca_tracer": 3,
+   "largo_distinto": 1,
+   "huella_viva": 1
+  },
+  {
+   "plan": "e28e1f20",
+   "created_at": "2026-09-02T11:13:33.256821+00:00",
+   "comidas": 12,
+   "comparables": 12,
+   "marca_tracer": 6
+  },
+  {
+   "plan": "6c6989d9",
+   "created_at": "2026-09-02T19:41:47.645603+00:00",
+   "comidas": 12,
+   "comparables": 12,
+   "huella_viva": 2,
+   "marca_tracer": 4
+  },
+  {
+   "plan": "56a71cc0",
+   "created_at": "2026-09-05T18:24:57.321909+00:00",
+   "comidas": 12,
+   "comparables": 12,
+   "marca_tracer": 7,
+   "huella_viva": 2
+  },
+  {
+   "plan": "dabc30b6",
+   "created_at": "2026-09-02T20:29:02.736300+00:00",
+   "comidas": 12,
+   "comparables": 12,
+   "marca_tracer": 9,
+   "huella_viva": 3,
+   "largo_distinto": 1
+  },
+  {
+   "plan": "e4e4cc35",
+   "created_at": "2026-09-03T14:17:03.823579+00:00",
+   "comidas": 12,
+   "comparables": 12,
+   "marca_tracer": 7,
+   "huella_viva": 2,
+   "largo_distinto": 1
+  },
+  {
+   "plan": "73944ccf",
+   "created_at": "2026-09-02T14:49:52.017331+00:00",
+   "comidas": 12,
+   "comparables": 12,
+   "marca_tracer": 6,
+   "largo_distinto": 1,
+   "huella_viva": 2
+  },
+  {
+   "plan": "4bdf93a9",
+   "created_at": "2026-09-03T15:55:32.529510+00:00",
+   "comidas": 12,
+   "comparables": 12,
+   "marca_tracer": 9,
+   "huella_viva": 1
+  },
+  {
+   "plan": "981b9d6d",
+   "created_at": "2026-09-03T00:49:42.714915+00:00",
+   "comidas": 8,
+   "comparables": 8,
+   "marca_tracer": 7,
+   "huella_viva": 1
+  },
+  {
+   "plan": "91cb9faf",
+   "created_at": "2026-08-05T04:14:37.372907+00:00",
+   "comidas": 12,
+   "comparables": 12,
+   "largo_distinto": 2,
+   "huella_viva": 2,
+   "compra_y_no_lee": 2,
+   "marca_tracer": 5
+  },
+  {
+   "plan": "0c4f0244",
+   "created_at": "2026-09-03T18:55:40.834851+00:00",
+   "comidas": 12,
+   "comparables": 12,
+   "marca_tracer": 10,
+   "huella_viva": 3,
+   "largo_distinto": 1
+  },
+  {
+   "plan": "05fb9d22",
+   "created_at": "2026-09-04T11:04:37.194340+00:00",
+   "comidas": 28,
+   "comparables": 28,
+   "largo_distinto": 3,
+   "huella_viva": 6,
+   "compra_y_no_lee": 1,
+   "marca_tracer": 16
+  },
+  {
+   "plan": "d8913798",
+   "created_at": "2026-09-04T12:30:06.045339+00:00",
+   "comidas": 12,
+   "comparables": 12,
+   "marca_tracer": 12
+  },
+  {
+   "plan": "8f364c87",
+   "created_at": "2026-09-03T11:08:39.107230+00:00",
+   "comidas": 12,
+   "comparables": 12,
+   "largo_distinto": 5,
+   "marca_tracer": 11,
+   "huella_viva": 5
+  },
+  {
+   "plan": "e45e649c",
+   "created_at": "2026-09-04T12:52:33.971503+00:00",
+   "comidas": 24,
+   "comparables": 24,
+   "marca_tracer": 16,
+   "largo_distinto": 1,
+   "huella_viva": 2
+  },
+  {
+   "plan": "410b8f8b",
+   "created_at": "2026-09-02T11:43:01.844735+00:00",
+   "comidas": 12,
+   "comparables": 12,
+   "marca_tracer": 6
+  },
+  {
+   "plan": "c5ba1681",
+   "created_at": "2026-09-06T09:44:37.897225+00:00",
+   "comidas": 12,
+   "comparables": 12,
+   "marca_tracer": 10
+  },
+  {
+   "plan": "adc792f0",
+   "created_at": "2026-09-02T20:17:52.641862+00:00",
+   "comidas": 12,
+   "comparables": 12,
+   "marca_tracer": 10,
+   "huella_viva": 2,
+   "largo_distinto": 1
+  },
+  {
+   "plan": "90a0dd80",
+   "created_at": "2026-09-03T19:58:30.508363+00:00",
+   "comidas": 8,
+   "comparables": 8,
+   "marca_tracer": 5
+  },
+  {
+   "plan": "cc8136e0",
+   "created_at": "2026-09-02T20:53:02.767672+00:00",
+   "comidas": 12,
+   "comparables": 12,
+   "largo_distinto": 1,
+   "huella_viva": 1,
+   "marca_tracer": 6
+  },
+  {
+   "plan": "7cd53c40",
+   "created_at": "2026-09-02T16:37:13.789966+00:00",
+   "comidas": 12,
+   "comparables": 12,
+   "marca_tracer": 8,
+   "largo_distinto": 1,
+   "huella_viva": 1
+  },
+  {
+   "plan": "ac282ca8",
+   "created_at": "2026-09-02T19:50:52.655271+00:00",
+   "comidas": 12,
+   "comparables": 12,
+   "marca_tracer": 6,
+   "largo_distinto": 1,
+   "huella_viva": 2
+  },
+  {
+   "plan": "165dd761",
+   "created_at": "2026-08-01T14:55:25.930605+00:00",
+   "comidas": 12,
+   "comparables": 12,
+   "marca_tracer": 2,
+   "huella_viva": 1
+  },
+  {
+   "plan": "1fa3b7d5",
+   "created_at": "2026-09-03T13:57:14.911677+00:00",
+   "comidas": 12,
+   "comparables": 12,
+   "marca_tracer": 9,
+   "largo_distinto": 1,
+   "huella_viva": 3
+  },
+  {
+   "plan": "eb24dc95",
+   "created_at": "2026-09-02T09:16:05.508603+00:00",
+   "comidas": 10,
+   "comparables": 4,
+   "marca_tracer": 3
+  },
+  {
+   "plan": "19e8b509",
+   "created_at": "2026-09-02T10:06:15.682506+00:00",
+   "comidas": 12,
+   "comparables": 8,
+   "marca_tracer": 3,
+   "largo_distinto": 2,
+   "huella_viva": 2
+  },
+  {
+   "plan": "18326457",
+   "created_at": "2026-09-05T21:16:47.288584+00:00",
+   "comidas": 8,
+   "comparables": 8,
+   "marca_tracer": 2
+  },
+  {
+   "plan": "a903e339",
+   "created_at": "2026-09-06T10:01:23.989432+00:00",
+   "comidas": 12,
+   "comparables": 12,
+   "marca_tracer": 9,
+   "huella_viva": 1
+  },
+  {
+   "plan": "9b73656d",
+   "created_at": "2026-09-05T14:17:11.865956+00:00",
+   "comidas": 12,
+   "comparables": 12,
+   "marca_tracer": 9,
+   "largo_distinto": 1,
+   "huella_viva": 1
+  },
+  {
+   "plan": "a2b40e4e",
+   "created_at": "2026-09-05T18:40:18.089767+00:00",
+   "comidas": 12,
+   "comparables": 12,
+   "marca_tracer": 8
+  },
+  {
+   "plan": "55cf90bb",
+   "created_at": "2026-09-04T10:44:45.153044+00:00",
+   "comidas": 12,
+   "comparables": 12,
+   "marca_tracer": 10,
+   "huella_viva": 2
+  },
+  {
+   "plan": "f2f7a674",
+   "created_at": "2026-09-05T12:22:27.434405+00:00",
+   "comidas": 12,
+   "comparables": 12,
+   "marca_tracer": 8
+  },
+  {
+   "plan": "2a2e2516",
+   "created_at": "2026-09-05T12:37:32.865861+00:00",
+   "comidas": 12,
+   "comparables": 12,
+   "marca_tracer": 7,
+   "huella_viva": 1
+  },
+  {
+   "plan": "c5880d96",
+   "created_at": "2026-09-06T20:45:48.691701+00:00",
+   "comidas": 8,
+   "comparables": 8,
+   "marca_tracer": 2
+  },
+  {
+   "plan": "37488d48",
+   "created_at": "2026-09-05T11:35:35.986662+00:00",
+   "comidas": 12,
+   "comparables": 12,
+   "marca_tracer": 9,
+   "huella_viva": 3
+  },
+  {
+   "plan": "4f348954",
+   "created_at": "2026-09-05T13:43:03.146091+00:00",
+   "comidas": 12,
+   "comparables": 12,
+   "marca_tracer": 6,
+   "huella_viva": 1
+  },
+  {
+   "plan": "0b0250ab",
+   "created_at": "2026-09-05T17:17:01.710988+00:00",
+   "comidas": 12,
+   "comparables": 12,
+   "marca_tracer": 10,
+   "largo_distinto": 2,
+   "huella_viva": 2
+  },
+  {
+   "plan": "606e9017",
+   "created_at": "2026-09-05T17:36:25.854515+00:00",
+   "comidas": 12,
+   "comparables": 12,
+   "marca_tracer": 12,
+   "huella_viva": 4,
+   "largo_distinto": 1
+  },
+  {
+   "plan": "c3cd7954",
+   "created_at": "2026-09-05T11:56:45.263119+00:00",
+   "comidas": 12,
+   "comparables": 12,
+   "marca_tracer": 12,
+   "huella_viva": 3
+  },
+  {
+   "plan": "b267f07e",
+   "created_at": "2026-09-05T14:35:46.959944+00:00",
+   "comidas": 12,
+   "comparables": 12,
+   "marca_tracer": 8,
+   "huella_viva": 3
+  },
+  {
+   "plan": "82d6f2a5",
+   "created_at": "2026-09-05T17:58:53.094995+00:00",
+   "comidas": 12,
+   "comparables": 12,
+   "largo_distinto": 1,
+   "marca_tracer": 8,
+   "huella_viva": 3
+  },
+  {
+   "plan": "b40a3c48",
+   "created_at": "2026-09-05T18:11:59.997655+00:00",
+   "comidas": 12,
+   "comparables": 12,
+   "marca_tracer": 10
+  },
+  {
+   "plan": "a699a925",
+   "created_at": "2026-09-05T19:41:55.302745+00:00",
+   "comidas": 12,
+   "comparables": 12,
+   "marca_tracer": 7,
+   "huella_viva": 1
+  },
+  {
+   "plan": "b9e9671a",
+   "created_at": "2026-09-07T14:18:37.687183+00:00",
+   "comidas": 12,
+   "comparables": 12,
+   "marca_tracer": 6
+  },
+  {
+   "plan": "3957a669",
+   "created_at": "2026-09-04T22:17:12.635588+00:00",
+   "comidas": 8,
+   "comparables": 8,
+   "largo_distinto": 2,
+   "huella_viva": 2,
+   "marca_tracer": 2
+  }
+ ]
+}
