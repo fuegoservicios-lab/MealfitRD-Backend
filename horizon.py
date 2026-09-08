@@ -628,7 +628,18 @@ def registry_prompt_lines(effective: Optional[dict], sl: Optional[dict] = None, 
                 out.append(f"Día {rel} → " + " · ".join(parts))
         if not out:
             return []
-        return [("- Platos del registro curado para este bloque (elige uno de estos o una variante equivalente; "
+        # [P1-RECIPE-LIBRARY-SELECT · 2026-09-08] «o una variante equivalente» es la puerta por la
+        # que el modelo se va del catálogo. Da variedad, y cuesta el determinismo: un plato que no
+        # es una plantilla no tiene receta escrita que servirle. Con el knob de la biblioteca
+        # encendido la puerta se cierra; apagado, el texto es byte-idéntico al de siempre.
+        try:
+            from recipe_library import library_select_enabled as _lib_sel
+            _cerrado = _lib_sel()
+        except Exception:
+            _cerrado = False
+        _lic = ("elige EXACTAMENTE uno de estos, sin variantes" if _cerrado
+                else "elige uno de estos o una variante equivalente")
+        return [(f"- Platos del registro curado para este bloque ({_lic}; "
                  "mismos ingredientes base, misma técnica): " + " || ".join(out) + ".")]
     except Exception as e:
         logger.debug(f"[ARQ25-F6] registry_prompt_lines falló (fail-open): {e!r}")

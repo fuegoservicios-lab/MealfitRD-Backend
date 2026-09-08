@@ -114,14 +114,21 @@ def test_la_procedencia_dice_que_NO_estan_revisadas_una_a_una(lib):
         "la procedencia debe dejar claro que el juicio humano cubre una muestra, no las 140")
 
 
-def test_sigue_INERTE_y_el_dia_que_no_lo_este_sera_a_sabiendas(lib):
-    """Ningún módulo de producción lee todavía la biblioteca.
+def test_la_lee_UN_modulo_y_esta_gateado(lib):
+    """La biblioteca dejó de ser inerte el mismo día, y este guard lo cazó — para eso existía.
 
-    Cuando alguien enchufe la selección al runtime, este test fallará — y esa es la idea: el cambio
-    que hace que el mismo plato salga SIEMPRE igual es el que de verdad cambia el sistema, y merece
-    ser deliberado, no un efecto colateral. Al enchufarlo, actualizar este test con el call site.
+    Estado nuevo: la lee `recipe_library.py`, y SOLO ése. Ese módulo está detrás de
+    `MEALFIT_RECIPE_LIBRARY_SELECT` (default `False`), así que el comportamiento en producción sigue
+    siendo el de siempre: el LLM escribe la receta de cada plato.
+
+    El guard no se relaja, se estrecha: si mañana la lee un segundo módulo, o si `recipe_library`
+    deja de consultar el knob, vuelve a fallar. Lo que se pide no es que nadie la toque — es que
+    tocarla sea deliberado y quede a la vista de quien lea este fichero.
     """
-    assert lib.get("estado", "").startswith("INERTE")
+    import inspect
+
+    import recipe_library
+
     lectores = []
     for py in _B.rglob("*.py"):
         if any(x in py.parts for x in ("tests", "scripts", "__pycache__", ".venv")):
@@ -131,6 +138,12 @@ def test_sigue_INERTE_y_el_dia_que_no_lo_este_sera_a_sabiendas(lib):
                 lectores.append(py.name)
         except Exception:
             continue
-    assert not lectores, (
-        f"la biblioteca dejó de ser inerte: la leen {lectores}. Si es deliberado, actualiza este "
-        "test y el campo `estado` del fichero, y añade la cobertura de la ruta de selección.")
+    assert lectores == ["recipe_library.py"], (
+        f"esperaba que sólo `recipe_library.py` leyera la biblioteca, y la leen {lectores}. "
+        "Si el call site nuevo es deliberado, añádelo aquí junto con la cobertura de su ruta.")
+
+    src = inspect.getsource(recipe_library.recipe_for_dish_name)
+    assert "library_select_enabled()" in src, (
+        "el enganche dejó de consultar el knob: encendería la selección sin que nadie lo decida")
+    assert recipe_library.library_select_enabled() is False, (
+        "el knob de la biblioteca nace encendido — eso cambia lo que el usuario lee en cada plato")

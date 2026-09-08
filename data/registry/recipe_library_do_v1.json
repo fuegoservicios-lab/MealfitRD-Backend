@@ -11,7 +11,7 @@
     "sin_cantidades": "los pasos NO llevan cantidades de ingrediente a proposito: asi la misma receta sirve para cualquier porcion y se escribe UNA vez. Las proporciones entre componentes («la mitad del huevo») si van, en palabras.",
     "regenerar": "scratchpad/genera_biblioteca_rd.py (reanudable, ~20 min, centimos)"
   },
-  "estado": "INERTE — ningun codigo de produccion la lee todavia",
+  "estado": "ENGANCHADA pero APAGADA — la lee , gateado por MEALFIT_RECIPE_LIBRARY_SELECT (default False)",
   "por_id": {
     "tpl_b325a36ea98c": {
       "franja": "almuerzo",
