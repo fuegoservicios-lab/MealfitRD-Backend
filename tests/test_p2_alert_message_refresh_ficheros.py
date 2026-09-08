@@ -70,3 +70,39 @@ def test_los_cuatro_que_se_escaparon_estan_arreglados():
     for fichero in ("bg_executor.py", "plan_jobs.py", "rate_limiter.py", "services.py"):
         faltan = hermano._upserts_sin_refresco(_BACKEND / fichero)
         assert not faltan, f"{fichero}: volvió a perder `message = EXCLUDED.message` en {faltan}"
+
+
+def test_la_ventana_del_detector_tiene_margen_sobre_la_realidad():
+    """La última suposición sin verificar del guard: que 8 líneas bastan para ver la cláusula SET.
+
+    `_upserts_sin_refresco` lee 8 líneas tras el `ON CONFLICT`. Si un emisor escribiera un SET más
+    largo, la línea del mensaje caería fuera y el guard lo acusaría de un defecto que no tiene —
+    exactamente el modo de fallo que ya cometí dos veces hoy con otros detectores.
+
+    Medido sobre los 61 bloques SQL reales: la distancia máxima del ancla a
+    `message = EXCLUDED.message` es de **4 líneas**. Este test congela ese margen: si alguien
+    escribe un SET que lo agote, falla AQUÍ con una explicación en vez de convertirse en un falso
+    positivo del guard hermano.
+    """
+    from pathlib import Path as _P
+
+    peor, donde, bloques = 0, None, 0
+    for fichero in hermano._PRODUCTORES:
+        lineas = (_BACKEND / fichero).read_text(encoding="utf-8", errors="replace").split("\n")
+        for i, l in enumerate(lineas):
+            if hermano._ANCLA not in l:
+                continue
+            cabeza = "\n".join(lineas[i + 1:i + 9]).split('"""')[0].split('",')[0]
+            if "SET" not in cabeza and "SET" not in l:
+                continue        # prosa de docstring: el detector la salta, y hace bien
+            bloques += 1
+            for d in range(1, 20):
+                if i + d < len(lineas) and hermano._REFRESCA_RX.search(lineas[i + d]):
+                    if d > peor:
+                        peor, donde = d, f"{fichero}:{i + 1}"
+                    break
+    assert bloques >= 50, f"solo {bloques} bloques SQL: el detector dejó de encontrarlos"
+    assert peor <= 6, (
+        f"la cláusula del mensaje está a {peor} líneas del `ON CONFLICT` en {donde}, y la ventana "
+        "del guard hermano es de 8. Sube la ventana en `_upserts_sin_refresco` ANTES de que un SET "
+        "largo se convierta en un falso positivo silencioso.")
