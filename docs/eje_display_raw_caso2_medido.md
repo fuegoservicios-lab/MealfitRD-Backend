@@ -45,3 +45,22 @@ De los ~53 que sí son especificidad, ¿cuáles son defecto? Mi lectura: **«que
 «queso» genérico comprado sí lo es** (producto y precio distintos); **«pechuga» leída y «pechuga de
 pollo» comprada, no**. Esa frontera es criterio de producto, no técnico — y decide el destino de
 unas 53 comidas vivas.
+
+## Por qué NO normalicé el tracer, pudiendo
+
+La tentación obvia es normalizar la clave en `_misalign_fingerprint._idx` (tokens singularizados y
+ordenados) y borrar de un plumazo ~28 de los 81 disparos. No lo hice, por tres razones que conviene
+dejar escritas para que el próximo no lo lea como olvido:
+
+1. **`graph_orchestrator.py` está a 2 líneas de su techo** (53.098 de 53.100). El cambio son 4-5
+   líneas más un helper, y el propio test del techo dice que eso *«no se arregla subiendo el número:
+   se arregla extrayendo»*. Una extracción a cambio de menos ruido en telemetría que nadie lee no es
+   un trato bueno.
+2. **El canal no tiene consumidores** (`P2-COHERENCE-EJE-CIEGO`): bajar su ruido de 81 a 53 no
+   cambia ninguna decisión hoy.
+3. **Lo que de verdad sirvió del tracer no es este canal**, sino la atribución de ETAPA — es lo que
+   señaló `post_humanize` como la ventana del humanizador y del pase de presupuesto, y eso funciona
+   igual de bien con la clave sin normalizar.
+
+Si algún día se consume el canal, la normalización va ANTES que el consumo, no después: la regla
+está escrita arriba y el instrumento validado vive en `tests/test_p2_coherence_eje_ciego.py`.
