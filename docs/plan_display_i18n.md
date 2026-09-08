@@ -432,3 +432,24 @@ tokens que el provider declara en cada respuesta (`_tokens_de`).
   manda system + un turno de usuario; un test blanket impide que vuelva la forma de un solo mensaje.
 - **`P1-ARQ25-F5-PLAN-JOBS`** — con la cola viva, el enriquecimiento `_display` ya no corre inline: es un job `display_i18n` del outbox
   `plan_jobs` (Fase 5 del roadmap 2.5), con reintentos, dead letter y `stale` por revisión. Doc: `backend/docs/plan_jobs_f5.md`.
+
+### `P2-I18N-YA-TRADUCIDO-NO-ES-DEGRADACION`: «ya está» no es una caída
+
+[2026-09-08] `enrich_plan_display` inicializa `last_skip_reason = "no_meals"`. Cuando no queda nada
+pendiente **porque el plan ya está traducido**, el bucle no llega a correr y ese valor inicial sale
+por el `return` como si fuera un diagnóstico. Como `no_meals` no era benigno, levantaba
+`plan_display_i18n_degraded:<locale>` afirmando «el plan se sirve en español canónico».
+
+Medido sobre el único perfil con `locale='fr-FR'`: su plan tenía las **8 comidas** con
+`_display['fr-FR']` completo —`name`, `description`, `ingredients`, `recipe`— y el nombre y los
+insights también en francés. La alerta llevaba tres días diciendo lo contrario, y era la única
+warning de aspecto real en la vista del operador.
+
+*Un valor inicial que sale por un `return` no es un diagnóstico: es lo que quedaba en la variable.*
+
+El desenlace bueno pasa a llamarse **`already_enriched`** y entra en `_RAZONES_BENIGNAS`.
+`no_meals` **sigue sin ser benigno** a propósito: también lo devuelve la rama de días pedidos sin
+comidas, que sí es un fallo. La guarda `_hay_comidas` separa los dos — sin ella el corte se tragaba
+también ese caso, y lo cazó `test_plan_sin_meals_en_los_days_pedidos`, que ya existía.
+
+Test: [`test_p2_i18n_ya_traducido_no_es_degradacion.py`](../tests/test_p2_i18n_ya_traducido_no_es_degradacion.py).

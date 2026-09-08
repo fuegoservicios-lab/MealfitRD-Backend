@@ -1506,7 +1506,10 @@ def _validate_and_build_display(original: dict, item: dict) -> Optional[dict]:
 # `inflight_cap` es el techo de hilos HACIENDO su trabajo. Alertar por cualquiera de las dos
 # fabricaría una tasa de error que no existe — el mismo error que `P2-I18N-OBSERVABILIDAD-CERO`
 # evitó al contar `SUPERSEDED` aparte de los fallos.
-_RAZONES_BENIGNAS = frozenset({"dedupe_locked", "inflight_cap", "disabled", "ok"})
+# [P2-I18N-YA-TRADUCIDO-NO-ES-DEGRADACION · 2026-09-08] `already_enriched` = no quedaba nada por
+# traducir porque YA estaba traducido. Es el desenlace bueno; alertarlo llenaba la vista del
+# operador con la única warning de aspecto real que había, y era falsa.
+_RAZONES_BENIGNAS = frozenset({"dedupe_locked", "inflight_cap", "disabled", "ok", "already_enriched"})
 
 
 def _emit_degraded_alert(plan_id: str, user_id: str, locale: str, razon: str) -> None:
@@ -1968,6 +1971,33 @@ def enrich_plan_display(
             # El presupuesto no se resiente: `_max_invocaciones_por_ciclo(0)` da 5.
             if not _pendientes and (plan_name_pending is not None or insights_pending is not None):
                 _pendientes.append([])
+
+            # [P2-I18N-YA-TRADUCIDO-NO-ES-DEGRADACION · 2026-09-08] Nada pendiente de NINGÚN tipo
+            # significa que el plan YA está traducido — es el desenlace bueno, no una caída.
+            #
+            # `last_skip_reason` nace como `"no_meals"` y, si el bucle no llega a correr, ese valor
+            # inicial sale por el `return` de abajo como si fuera un diagnóstico. `no_meals` no está
+            # en `_RAZONES_BENIGNAS`, así que levantaba `plan_display_i18n_degraded:<locale>`
+            # diciendo «el plan se sirve en español canónico».
+            #
+            # Medido el 08-sep sobre el ÚNICO usuario con `locale='fr-FR'`: su plan 3957a669 tiene
+            # las 8 comidas con `_display` completo —«Avoine crémeuse avec œuf, raisins et
+            # cannelle», con `description`, `ingredients` y `recipe`— y el nombre y los insights
+            # también en francés. La alerta llevaba 3 días afirmando lo contrario. Era la única
+            # warning de aspecto real en la vista del operador, y no describía nada.
+            #
+            # `no_meals` sigue siendo NO benigno: también lo devuelve el caso de índices de día
+            # vacíos (línea ~1818), que sí es un problema. Lo que se separa es este desenlace.
+            # La guarda `_hay_comidas` es la mitad que faltaba en el primer intento: sin ella este
+            # corte se tragaba TAMBIÉN el plan que no tiene comidas en los días pedidos —el fallo
+            # real que `no_meals` debe seguir señalando— y habría cometido justo el error que este
+            # P-fix dice no cometer. Lo cazó `test_plan_sin_meals_en_los_days_pedidos`, que ya
+            # existía.
+            _hay_comidas = any(
+                (days[_i].get("meals") if isinstance(days[_i], dict) else None)
+                for _i in requested_day_indices if 0 <= _i < len(days))
+            if not _pendientes and _hay_comidas:
+                return {"enriched_meals": 0, "skipped": "already_enriched"}
 
             while _pendientes:
                 if _presupuesto_invocaciones <= 0:

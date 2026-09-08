@@ -130,7 +130,11 @@ def test_el_lote_vacio_NO_se_encola_si_no_hay_nada_de_nivel_plan(engine) -> None
     assert _FakeLLM.invoke_count == 0, (
         f"se llamo al LLM sin nada que traducir: {res!r} [{_MARKER}]"
     )
-    assert res.get("skipped") == "no_meals", res
+    # [P2-I18N-YA-TRADUCIDO-NO-ES-DEGRADACION · 2026-09-08] Este caso —todo ya traducido— pasa a
+    # reportarse `already_enriched`, que es benigno: con `no_meals` levantaba una alerta de
+    # degradacion sobre un plan sano. Lo que este test PROTEGE (invoke_count == 0) no cambia; el
+    # motivo era incidental, no su asunto.
+    assert res.get("skipped") == "already_enriched", res
 
 
 def test_el_camino_normal_con_comidas_pendientes_no_cambia(engine) -> None:
