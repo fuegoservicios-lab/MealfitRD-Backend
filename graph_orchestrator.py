@@ -33937,6 +33937,40 @@ def _cap_daily_whole_eggs(days, db=None, *, max_whole: int = None) -> int:
         return 0
 
 
+def _raw_idx_for_display(raw: list, display_line: str, idx: int, ings: list) -> "int | None":
+    """Índice de la línea de `ingredients_raw` que corresponde a `display_line`.
+
+    [P1-CAP-BIGFRUIT-BREAD-RAW-BY-FOOD · 2026-09-07] Gemelo de lectura de
+    `_remove_one_raw_line_by_food`, para los dos sitios de `_cap_unrealistic_portions` que
+    reescribían `raw[idx]` bajo `_lockstep` (mismo largo). Ese guard no basta: dentro de
+    `finalize_plan_data_coherence` la SEGUNDA invocación del cap corre después de
+    `_reconcile_display_missing_in_raw` y `_reconcile_raw_missing_in_display`, que APPENDEAN
+    líneas — el largo vuelve a coincidir y el orden no, la forma `[conservadas] + [añadidas]` que
+    midió `P2-RAW-PAIR-BY-FOOD`.
+
+    Mismo sesgo conservador que sus hermanos: índice con paralelismo VERIFICADO; si no, por
+    alimento; 0 o >1 coincidencias ⇒ `None` y el llamante no toca raw. `raw` es lo que COMPRA la
+    lista: recortar la línea equivocada deja al usuario comprando otra cosa, que es peor que no
+    recortar ninguna.
+    """
+    try:
+        if not (isinstance(raw, list) and raw):
+            return None
+        _parallel = (isinstance(ings, list) and len(raw) == len(ings)
+                     and (not RAW_PAIR_BY_FOOD
+                          or _raw_display_parallel_by_food([str(x) for x in ings], raw)))
+        if _parallel and 0 <= idx < len(raw):
+            return idx
+        _food, _ = _resolve_line_food_grams(str(display_line), cheap=True)
+        if not _food:
+            return None
+        _hits = [i for i, r in enumerate(raw)
+                 if isinstance(r, str) and _resolve_line_food_grams(r, cheap=True)[0] == _food]
+        return _hits[0] if len(_hits) == 1 else None
+    except Exception:
+        return None
+
+
 def _cap_unrealistic_portions(days, db=None, *, count_caps=None) -> int:
     # [P1-PORTION-HONORED] `count_caps` eleva el techo de un alimento a la ración pedida.
     _CC = count_caps if isinstance(count_caps, dict) else _REALISM_COUNT_CAPS
@@ -33988,9 +34022,13 @@ def _cap_unrealistic_portions(days, db=None, *, count_caps=None) -> int:
                         _bf_new = _bigfruit_bare_count_serving(s, il)
                         if _bf_new and _bf_new != s:
                             ings[idx] = _bf_new
-                            if _lockstep:
-                                _rs = str(raw[idx])
-                                raw[idx] = _bigfruit_bare_count_serving(_rs, _sa(_rs.lower())) or _rs
+                            # [P1-CAP-BIGFRUIT-BREAD-RAW-BY-FOOD · 2026-09-07] por ALIMENTO, no por
+                            # índice: la 2ª invocación de este cap corre tras los reconciliadores
+                            # que APPENDEAN líneas, así que «mismo largo» no es «mismo orden».
+                            _ri_bf = _raw_idx_for_display(raw, s, idx, ings)
+                            if _ri_bf is not None:
+                                _rs = str(raw[_ri_bf])
+                                raw[_ri_bf] = _bigfruit_bare_count_serving(_rs, _sa(_rs.lower())) or _rs
                             capped += 1
                             _meal_touched = True
                             continue
@@ -34006,9 +34044,12 @@ def _cap_unrealistic_portions(days, db=None, *, count_caps=None) -> int:
                             _new_br = _resc(s, 3.0 / _nbr)
                             if _new_br and _new_br != s:
                                 ings[idx] = _new_br
-                                if _lockstep:
+                                # [P1-CAP-BIGFRUIT-BREAD-RAW-BY-FOOD · 2026-09-07] ver el comentario
+                                # de la rama de fruta grande: mismo motivo, misma resolución.
+                                _ri_br = _raw_idx_for_display(raw, s, idx, ings)
+                                if _ri_br is not None:
                                     try:
-                                        raw[idx] = _resc(str(raw[idx]), 3.0 / _nbr)
+                                        raw[_ri_br] = _resc(str(raw[_ri_br]), 3.0 / _nbr)
                                     except Exception:
                                         pass
                                 capped += 1
