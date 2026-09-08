@@ -36194,14 +36194,14 @@ def _apply_budget_driver_aware_pass(days, form_data, weekly_list, *,
                         new_line = _re.sub(rf"\b(?:{rx})\b", candidate, ing, count=1, flags=_re.IGNORECASE)
                         if new_line == ing:
                             continue
-                        # [P2-SUBST-UNIT-DEDUP · 2026-07-05] "½ filete de mero" → candidato con la
-                        # misma unidad líder → "filete de Filete de..." — colapsar en línea/raw/
-                        # nombre/pasos (caso vivo del plan 23c958bb).
-                        ings[idx] = _dedup_unit_noun_collision(new_line)
+                        # [P2-SUBST-UNIT-DEDUP · 2026-07-05] "½ filete de mero" + candidato con el mismo lead → "filete de Filete de…" — colapsar (plan 23c958bb).
+                        # [P1-DRIVER-RAW-BY-FOOD · 2026-09-08] Gemelo de P1-CHEAPEN-RAW-BY-FOOD: el índice de raw va por ALIMENTO, resuelto ANTES de mutar
+                        # `ings` y desde la línea VIEJA — en raw hay que abaratar la del driver CARO, que es la que todavía está ahí.
                         raw = meal.get("ingredients_raw")
-                        if isinstance(raw, list) and idx < len(raw) and isinstance(raw[idx], str):
-                            raw[idx] = _dedup_unit_noun_collision(
-                                _re.sub(rf"\b(?:{rx})\b", candidate, raw[idx], count=1, flags=_re.IGNORECASE))
+                        _ri_dr = _raw_idx_for_display(raw, ing, idx, ings)
+                        ings[idx] = _dedup_unit_noun_collision(new_line)
+                        if _ri_dr is not None and isinstance(raw[_ri_dr], str):
+                            raw[_ri_dr] = _dedup_unit_noun_collision(_re.sub(rf"\b(?:{rx})\b", candidate, raw[_ri_dr], count=1, flags=_re.IGNORECASE))
                         name = meal.get("name")
                         if isinstance(name, str) and _re.search(rf"\b(?:{rx})\b", name, _re.IGNORECASE):
                             meal["name"] = _dedup_unit_noun_collision(

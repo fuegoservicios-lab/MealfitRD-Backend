@@ -38,7 +38,13 @@ _BACKEND = Path(__file__).resolve().parents[1]
 #
 # «resuelto»  la función pasa por el resolvedor por alimento.
 # «antes»     corre ANTES de los reconciliadores que appendean → el índice es válido ahí (trazado).
-# «0 medido»  expuesta, pero medida sobre la flota el 07-sep con 0 comidas dañadas.
+# «0 medido»  expuesta, medida sobre la flota con 0 comidas dañadas — y CON QUÉ SONDA:
+#             una que sobreescribe la línea entera sólo puede fallar RUIDOSAMENTE (escribe sobre
+#             otro alimento) y para eso la sonda del 07-sep servía. Una que escribe bajo `sub` o
+#             `rescale` falla en SILENCIO (no arregla la línea que tocaba) y ahí era ciega: así se
+#             coló `_apply_budget_driver_aware_pass` con un 0 falso hasta el 08-sep.
+# «no dispara» ni una activación sobre las 1.172 comidas vivas. NO es «escritura segura»: es que
+#             nunca corre. Un detector que no dispara nunca sale perfecto.
 _INVENTARIO = {
     "graph_orchestrator.py": {
         "_remove_one_raw_line_by_food":            (1, "resuelto"),
@@ -51,13 +57,13 @@ _INVENTARIO = {
         "_ensure_ingredient_quantities":           (1, "antes de los appenders"),
         "_swap_fat_dense_protein_to_lean_for_day": (1, "antes de los appenders"),
         "_consolidate_duplicate_gram_lines":       (4, "antes de los appenders"),
-        "_day_sodium_autofix":                     (1, "0 medido 07-sep"),
-        "_cap_cheese_dumps_final":                 (1, "0 medido 07-sep"),
-        "_single_trip_fresh_substitute":           (1, "0 medido 07-sep"),
-        "_cap_daily_whole_eggs":                   (2, "0 medido 07-sep"),
+        "_day_sodium_autofix":                     (1, "0 medido 07-sep · sobreescribe entera (sonda ruidosa aplica)"),
+        "_cap_cheese_dumps_final":                 (1, "0 activaciones 08-sep · no dispara"),
+        "_single_trip_fresh_substitute":           (1, "0 medido 07-sep · sobreescribe entera (sonda ruidosa aplica)"),
+        "_cap_daily_whole_eggs":                   (2, "0 medido 07-sep · sobreescribe entera (sonda ruidosa aplica)"),
         "_apply_budget_cheapen_pass":              (1, "resuelto"),
-        "_apply_budget_driver_aware_pass":         (1, "0 medido 07-sep"),
-        "_baking_powder_cap_pass":                 (1, "0 medido 07-sep"),
+        "_apply_budget_driver_aware_pass":         (1, "resuelto"),
+        "_baking_powder_cap_pass":                 (1, "0 activaciones 08-sep · no dispara"),
         # Trazada tras publicar el inventario: corre en `finalize_plan_data_coherence:29061`,
         # DESPUÉS de los appenders → expuesta por posición. Pero su escritura pasa por
         # `_EGG_ONE_LINE_RX.sub`, y su condición («el otro huevo» + exactamente una línea de
@@ -142,7 +148,10 @@ def test_el_inventario_declara_un_veredicto_por_funcion():
     """Cada fila dice POR QUÉ es aceptable. Un inventario sin razones es una lista de deuda."""
     # «SIN TRAZAR» sigue siendo válido a propósito: quien añada una fila sin haber trazado
     # su cadena de llamada debe poder decirlo, en vez de inventarse un veredicto cómodo.
-    validos = ("resuelto", "antes de los appenders", "0 medido", "SIN TRAZAR")
+    # [P1-DRIVER-RAW-BY-FOOD · 2026-09-08] «0 activaciones» es un veredicto DISTINTO de «0 medido»:
+    # el primero dice que la función no llegó a correr ni una vez, el segundo que corrió y no dañó.
+    # Colapsarlos deja creer que una escritura está probada cuando nadie la ha ejercido nunca.
+    validos = ("resuelto", "antes de los appenders", "0 medido", "0 activaciones", "SIN TRAZAR")
     for fichero, filas in _INVENTARIO.items():
         for fn, (_, veredicto) in filas.items():
             assert any(veredicto.startswith(v) for v in validos), \
