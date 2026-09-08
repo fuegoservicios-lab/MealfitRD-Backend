@@ -1891,6 +1891,14 @@ def enrich_plan_display(
             _presupuesto_inicial = _presupuesto_invocaciones
             _t0_ciclo = time.monotonic()
             _tokens_ciclo = 0
+            # [P1-I18N-BUDGET-DICE-LA-CAUSA · 2026-09-08] Cuántas invocaciones murieron en
+            # excepción. Sin este contador, agotar el techo por 8 timeouts seguidos y agotarlo
+            # porque el modelo devuelve basura reportan la MISMA razón, y sólo una de las dos se
+            # arregla subiendo el techo. Medido en el plan 3957a669 (único usuario fr-FR): tres
+            # ciclos el 08-sep, `tokens_estimated: 0`, `mismatch: 0`, entre 12 y 18 minutos cada
+            # uno — o sea, ninguna llamada volvió. La razón reportada decía «techo agotado» y
+            # habría mandado al operador a subirlo, que es quemar otras ocho llamadas.
+            _excepciones_llm = 0
             targets_perdidos = 0
 
             total_written = 0
@@ -2012,7 +2020,15 @@ def enrich_plan_display(
                         f"traducir en {len(_pendientes)} lote(s) pendiente(s)."
                     )
                     _pendientes = []
-                    last_skip_reason = "invocation_budget_exhausted"
+                    # [P1-I18N-BUDGET-DICE-LA-CAUSA · 2026-09-08] El techo es el SÍNTOMA; quien
+                    # se comió las invocaciones es el diagnóstico. Si la mayoría murió en
+                    # excepción, decirlo: subir el techo entonces sólo compra más timeouts.
+                    last_skip_reason = (
+                        "invocation_budget_exhausted_llm_errors"
+                        if _excepciones_llm * 2 >= (_presupuesto_inicial - _presupuesto_invocaciones)
+                        and _excepciones_llm > 0
+                        else "invocation_budget_exhausted"
+                    )
                     break
 
                 targets = _pendientes.pop()
@@ -2056,6 +2072,7 @@ def enrich_plan_display(
                         f"locale={locale} comidas={len(targets)}: {e!r}"
                     )
                     last_skip_reason = "llm_exception"
+                    _excepciones_llm += 1   # [P1-I18N-BUDGET-DICE-LA-CAUSA]
                     if _presupuesto_invocaciones > 0:
                         _pendientes.append(targets)
                     else:
@@ -2190,6 +2207,10 @@ def enrich_plan_display(
                 "duration_ms": int((time.monotonic() - _t0_ciclo) * 1000),
                 "retries": max(0, (_presupuesto_inicial - _presupuesto_invocaciones) - len(lotes_iniciales)),
                 "tokens_estimated": _tokens_ciclo,
+                # [P1-I18N-BUDGET-DICE-LA-CAUSA · 2026-09-08] Va SIEMPRE, no sólo cuando se
+                # agota el techo: un ciclo que acaba bien tras dos timeouts también lo cuenta,
+                # y esa serie es la que avisa ANTES de que el usuario vea su plan en español.
+                "llm_exceptions": _excepciones_llm,
                 # [P1-I18N-DISPLAY-LOTE-PERDIDO-SIN-SENAL · 2026-08-22] `reason` ya no
                 # colapsa a None en cuanto se escribió ALGO. Con `total_written > 0` y
                 # `targets_perdidos > 0` a la vez, el usuario tiene el plan MEDIO
