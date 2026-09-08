@@ -806,6 +806,7 @@
   "con_marca_del_tracer": 135,
   "sin_marca_del_tracer": 51,
   "los_51_son": "planes MUTADOS mas de 1 h despues de generarse (51 de 51; 0 anteriores al tracer)",
-  "lectura": "`_trace_misalign` tiene sus 8 puntos DENTRO del pipeline de generacion y ninguno en los caminos de mutacion (swap, shift, ediciones del chat, recalculos). El 27 % de la desalineacion viva nace donde el tracer no mira, asi que esas 51 comidas NO se moveran el 10-sep por buenos que sean los arreglos: los siete viven en generacion. Leer una mejora de 186 como si todo fuera atribuible al pipeline seria atribuirse trabajo ajeno."
+  "lectura": "RETIRADA la lectura anterior. Decia que las 51 nacen en rutas de mutacion porque sus planes fueron tocados >1 h despues de crearse. Eso es CORRELACION, no origen: el perfil de marcadores de las 51 es proporcionalmente IDENTICO al de las 135 con traza (solver_clamp_saturated 69 % vs 68 %, portion_floor_adjusted 39 % vs 56 %, solver_not_converged 33 % vs 44 %), o sea que pasaron por el MISMO pipeline de generacion. Por que perdieron la marca queda sin explicar — candidatos: el knob RAW_MISALIGN_TRACER_ENABLED apagado en parte del periodo, o una ruta que reescribe la comida y se lleva `_misalign_trace` por delante. NO asumir que estas 51 son inmunes a los arreglos: puede que se muevan el 10-sep como las demas.",
+  "correccion_2026_09_08": "La primera anotacion infirio origen a partir de una correlacion temporal. Un plan tocado mas tarde no dice donde nacio su desalineacion."
  }
 }
