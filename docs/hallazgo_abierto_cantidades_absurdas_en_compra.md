@@ -1,6 +1,6 @@
 # Hallazgo abierto: la lista compra 30 cucharadas de aceite para un plato que usa ¾ de cucharadita
 
-**Fecha:** 2026-09-08 · **Estado:** ABIERTO, productor NO identificado · **Severidad:** alta por caso, baja por volumen
+**Fecha:** 2026-09-08 · **Estado:** mecanismo IDENTIFICADO y fuente YA CERRADA; queda residuo histórico en 3 planes · **Severidad:** alta por caso, baja por volumen
 
 ## Qué se midió
 
@@ -75,7 +75,41 @@ Con la prueba corregida, la evidencia **apunta al piso**:
 No está probado —haría falta reproducir la resolución de gramos que da el factor— pero es la
 hipótesis viva, y llegó por corregir un descarte mal hecho, no por una sonda nueva.
 
-## Qué haría falta
+## Mecanismo, y por qué la fuente ya está cerrada
+
+El culpable es la rama «polvo de queso» del piso (`P1-CHEESE-DUST-BUMP`, `graph_orchestrator.py`
+~34545):
+
+```
+if m_qd and 0 < float(...) < 5.0:        # línea de queso gram-leading bajo 5 g
+    _qf = floor_g / _q_cur               # SIN cota superior
+    ings[idx] = _resc(s, _qf)
+    raw[_ri]  = _resc(str(raw[_ri]), _qf)
+```
+
+Con `floor_g = 15` y un polvo de queso de **0,25 g**, el factor sale **60×** — exactamente el que
+medí en «½ cda de cebolla» → «30 cdas» y «½ taza de rábanos» → «30 tazas». El factor se calcula de
+los GRAMOS del display y se aplica al NÚMERO de la línea de raw, sea cual sea su unidad; y hasta el
+07-sep `_ri` era el ÍNDICE, así que ese 60× caía sobre la línea de otro alimento.
+
+**Verificado que la fuente está cerrada.** Corriendo el piso YA ARREGLADO sobre las 1.194 comidas
+vivas:
+
+| | |
+|---|---|
+| toca el display | 39 comidas (3,3 %) |
+| toca raw | 30 de esas |
+| **crea una cantidad absurda nueva en raw** | **0** |
+
+Los bumps que produce son sanos («35 g de arroz» → «40 g», «10 g de mereyes» → «15 g»), así que ese
+0 no es el de un pase inerte. `P1-FLOOR-RAW-BY-FOOD` resuelve por alimento y, ante 0 o >1
+coincidencias, **no toca** — la conducta conservadora que corta también el riesgo de segundo orden
+(factor correcto sobre la línea correcta pero en otra unidad).
+
+**Lo que queda en producción es residuo histórico** de 3 planes generados antes del arreglo, y se irá
+cuando se regeneren. No hace falta código nuevo; sí decidir si merece un barrido puntual.
+
+## Lo único que seguiría abierto
 
 Identificar quién escribe el literal `30` conservando la unidad. Las 5 funciones que hacen
 `append` sobre raw están inventariadas (`_repair_name_phantom_dairy`,
