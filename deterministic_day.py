@@ -24,13 +24,21 @@ requeridos, mercado y durabilidad en `dish_registry.template_candidates`— elig
 MACROS, escala los gramos al objetivo calórico, inclina proteína contra carbohidrato dentro de un
 tope, y pega la receta congelada de la biblioteca.
 
-**No reimplementa el filtro de alergia ni el de dieta.** Eso ya lo hizo el CandidateSet, y escribir
-una segunda tabla es la lección de `P1-DIET-CANON-SSOT` (eran 3, drifearon, y la del filtro olvidó
-`vegetariana` — servía pollo a vegetarianas).
+**No reimplementa el filtro de alergia ni el de dieta**: se los PASA a
+`dish_registry.template_candidates`, que es el SSOT. Escribir una segunda tabla es la lección de
+`P1-DIET-CANON-SSOT` (eran 3, drifearon, y la del filtro olvidó `vegetariana` — servía pollo a
+vegetarianas).
+
+Y esa frase estuvo mal escrita durante unas horas: decía que «el CandidateSet ya filtra», cierto de
+`_registry_slice` pero NO de esta función, que llama a `template_candidates` directamente y no le
+pasaba nada. Lo cazó el backstop clínico rechazando un desayuno con huevo a un alérgico al huevo.
+La defensa en profundidad funcionó, y por eso mismo el hueco de arriba había que cerrarlo: una
+última línea de defensa que trabaja sola dejó de ser defensa en profundidad.
 
 **Pero un día que sale de aquí se persiste sin pasar por `assemble_plan_node`**, igual que el path
 degradado. `P0-DEGRADED-SAFETY-SCAN` enseñó qué cuesta eso: al filtro se le escapan plurales y lo
-que los caza es el backstop clínico. Por eso `build_day` re-verifica antes de devolver, y devolver
+que los caza es el backstop clínico. Por eso `verifica_comida` corre las seis capas del
+escáner culinario Y el backstop clínico sobre CADA plato antes de devolver el día, y devolver
 `None` es seguro — el llamador cae al camino del LLM, que es el estado de siempre.
 
 ## Lo medido el 08-sep sobre 14 días × 3 perfiles clínicos
@@ -285,6 +293,54 @@ def construir_comida(t: dict, factor: float, catalogo: dict, slot: str, country:
     return meal
 
 
+def verifica_comida(meal: dict, form_data: dict, catalogo: dict) -> list:
+    """Las violaciones de una comida armada sin LLM. Lista vacía = se puede servir.
+
+    Un día que sale de este módulo se persiste **sin pasar por `assemble_plan_node`**: ni reviewer
+    médico, ni capa clínica determinista, ni los scans de alérgeno y dieta. Es la misma clase de
+    superficie que `P0-DEGRADED-SAFETY-SCAN` cerró para el path degradado, y la lección de aquel
+    P-fix es literal: al filtro de arriba se le escapan cosas (plurales como Bulgur/Pistachos) y lo
+    que las caza es el backstop.
+
+    Que `template_candidates` ya filtre por alérgeno y dieta NO hace esto redundante: eso es un
+    filtro de CANDIDATOS y esto es una verificación del PLATO ARMADO. Defensa en profundidad, que
+    es como este repo trata todo lo clínico.
+    """
+    fuera = []
+    try:
+        import culinary_coherence as _cc
+        idx = _cc.build_culinary_index(list(catalogo.values()) if catalogo else [])
+        m = {"meal": meal.get("meal"), "name": meal.get("name"),
+             "ingredients": meal.get("ingredients"), "recipe": meal.get("recipe")}
+        for capa in ("_v1_verbo_alimento", "_v2_estado_imposible", "_v3_huerfanos",
+                     "_v4_cantidad_inconsistente", "_v5_paso_usa_lo_que_no_esta",
+                     "_v6_paso_pide_mas_que_la_lista"):
+            fn = getattr(_cc, capa, None)
+            if fn is None:
+                continue
+            try:
+                fuera.extend(fn({}, m, idx) or [])
+            except Exception:                                          # noqa: BLE001
+                pass
+    except Exception as e:                                             # noqa: BLE001
+        logger.debug(f"[P1-DETERMINISTIC-DAY] escáner culinario no-op: {e!r}")
+
+    # Import LAZY a propósito: `clinical_backstop_for_meal` vive en `graph_orchestrator`, que
+    # importa media casa. A nivel de módulo sería un ciclo y haría este archivo imposible de probar
+    # sin montar el grafo entero. Mismo patrón —y misma razón— que el import lazy que `db_plans`
+    # hace de `finalize_plan_data_coherence`.
+    try:
+        from graph_orchestrator import clinical_backstop_for_meal as _backstop
+        fd = form_data or {}
+        alergias = ((fd.get("health_profile") or {}).get("allergies")
+                    or fd.get("allergies") or [])
+        dieta = ((fd.get("health_profile") or {}).get("dietType")
+                 or fd.get("dietType") or fd.get("diet_type"))
+        fuera.extend(_backstop(meal, allergies=alergias, diet_type=dieta, form_data=fd) or [])
+    except Exception as e:                                             # noqa: BLE001
+        logger.debug(f"[P1-DETERMINISTIC-DAY] backstop clínico no-op: {e!r}")
+    return fuera
+
 def build_day_for_skeleton(nutrition, form_data, skeleton_day, day_num):
     """Punto de entrada desde el pipeline. Devuelve un día completo o `None`.
 
@@ -324,6 +380,11 @@ def build_day_for_skeleton(nutrition, form_data, skeleton_day, day_num):
         if not por_id:
             return None
 
+        _fd = form_data or {}
+        _hp = _fd.get("health_profile") or {}
+        _alergias = [str(a) for a in (_hp.get("allergies") or _fd.get("allergies") or []) if a]
+        _dieta = _hp.get("dietType") or _fd.get("dietType") or _fd.get("diet_type")
+
         slots = [s for s in (skeleton_day or {}).get("slots") or []] or list(_REPARTO)
         meals = []
         for slot in slots:
@@ -331,14 +392,35 @@ def build_day_for_skeleton(nutrition, form_data, skeleton_day, day_num):
             if not r:
                 return None            # una franja que no sabemos repartir: que la haga el LLM
             obj = {k: v * r for k, v in objetivo_dia.items()}
+            # Los filtros VAN AQUI. El docstring de este modulo decia que el CandidateSet ya
+            # filtraba por alergia y dieta — y es verdad de `_registry_slice`, pero esta funcion
+            # llama a `template_candidates` DIRECTAMENTE y no se los pasaba. Lo cazó el backstop
+            # clinico rechazando un desayuno con huevo a un alergico al huevo: la defensa en
+            # profundidad funcionó, y precisamente por eso el hueco de arriba hay que cerrarlo —
+            # una última linea de defensa que trabaja sola dejó de ser defensa en profundidad.
             tids = [c["template_id"] for c in
                     dr.template_candidates(country, slot, (skeleton_day or {}).get("protein"),
-                                           k=_candidatos_k(), rotate=int(day_num or 0))]
+                                           k=_candidatos_k(), rotate=int(day_num or 0),
+                                           exclude_allergens=_alergias, diet=_dieta)]
             el = elegir_plantilla(tids, obj, catalogo, por_id, slot)
             if not el:
                 return None
             comida = construir_comida(el[0], el[1], catalogo, slot, country, obj)
             if not comida:
+                return None
+            _viol = verifica_comida(comida, form_data or {}, catalogo)
+            if _viol:
+                # Las dos capas hablan idiomas distintos y hay que respetarlo: el escáner culinario
+                # devuelve dicts con `check`, el backstop clínico devuelve STRINGS legibles. Un
+                # `.get()` a secas revienta sobre la cadena, la excepción se traga el aviso y el
+                # operador se queda sin el motivo del rechazo — que es exactamente el modo de fallo
+                # que `P2-ALERT-MESSAGE-REFRESH` cerró esta misma mañana.
+                _motivos = sorted({
+                    (v.get("check") or v.get("detail") or "?") if isinstance(v, dict) else str(v)
+                    for v in _viol})[:4]
+                logger.warning(
+                    f"[P1-DETERMINISTIC-DAY] día {day_num} RECHAZADO en {slot} "
+                    f"({comida.get('name')}) → cae al LLM. Motivos: {_motivos}")
                 return None
             meals.append(comida)
         if not meals:
