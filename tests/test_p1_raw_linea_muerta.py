@@ -46,7 +46,8 @@ from pathlib import Path
 import pytest
 
 _BACKEND = Path(__file__).resolve().parents[1]
-_SRC = (_BACKEND / "graph_orchestrator.py").read_text(encoding="utf-8")
+_GO = (_BACKEND / "graph_orchestrator.py").read_text(encoding="utf-8")
+_SRC = (_BACKEND / "raw_linea_muerta.py").read_text(encoding="utf-8")
 
 # Identidades de COMPRA falsas: el test no depende del catálogo ni de la base.
 _COMPRA = {
@@ -73,8 +74,8 @@ def barrido(monkeypatch):
         return (1.0, "unidad", n) if n else (1.0, "unidad", None)
 
     monkeypatch.setattr(shopping_calculator, "_parse_quantity", _falso)
-    import graph_orchestrator
-    return graph_orchestrator._barrer_lineas_muertas_de_raw
+    import raw_linea_muerta
+    return raw_linea_muerta._barrer_lineas_muertas_de_raw
 
 
 def _dia(ingredients, ingredients_raw, nombre="Guiso criollo de Pavo"):
@@ -133,8 +134,8 @@ def test_el_tope_por_comida_acusa_al_RESOLVEDOR_y_no_toca_nada(barrido, monkeypa
     Un barrido sin tope convierte una regresión del resolvedor en una lista de compras vacía —
     y el usuario no tendría cómo saberlo. Se registra y no se toca nada.
     """
-    import graph_orchestrator
-    monkeypatch.setattr(graph_orchestrator, "RAW_DEAD_LINE_SWEEP_MAX_PER_MEAL", 1)
+    import raw_linea_muerta
+    monkeypatch.setattr(raw_linea_muerta, "RAW_DEAD_LINE_SWEEP_MAX_PER_MEAL", 1)
     dias = _dia(["1 cebolla"],
                 ["135 g de pechuga de pavo en lonjas/tiras", "1 huevo", "1 cebolla"])
     assert barrido(dias) == 0
@@ -156,8 +157,8 @@ def test_es_idempotente(barrido):
 
 
 def test_el_knob_lo_apaga(barrido, monkeypatch):
-    import graph_orchestrator
-    monkeypatch.setattr(graph_orchestrator, "RAW_DEAD_LINE_SWEEP_ENABLED", False)
+    import raw_linea_muerta
+    monkeypatch.setattr(raw_linea_muerta, "RAW_DEAD_LINE_SWEEP_ENABLED", False)
     dias = _dia(["185 g de pechuga de pavo"],
                 ["135 g de pechuga de pavo en lonjas/tiras", "185 g de pechuga de pavo"])
     assert barrido(dias) == 0
@@ -172,9 +173,8 @@ def test_pregunta_al_resolvedor_de_COMPRAS_no_al_nutricional():
     nada. La identidad que importa es la que gasta dinero: `_parse_quantity`.
     """
     fn = next((n for n in ast.walk(ast.parse(_SRC))
-               if isinstance(n, ast.FunctionDef) and n.name == "_barrer_lineas_muertas_de_raw"),
-              None)
-    assert fn is not None, "_barrer_lineas_muertas_de_raw desapareció"
+               if isinstance(n, ast.FunctionDef) and n.name == "_identidad_de_compra"), None)
+    assert fn is not None, "_identidad_de_compra desapareció"
     importados = {a.name for i in ast.walk(fn) if isinstance(i, ast.ImportFrom) for a in i.names}
     assert "_parse_quantity" in importados, (
         "no usa el resolvedor de compras; con el nutricional el barrido es un no-op")
@@ -189,10 +189,10 @@ def test_corre_DESPUES_de_la_reciproca_en_los_DOS_sitios():
     barrido QUITA de raw la que el display no respalda. Invertidas, se pelean por la misma
     línea — dos guardas sobre la misma condición oscilan.
     """
-    i_recip = [i for i in range(len(_SRC))
-               if _SRC.startswith("_reconcile_raw_missing_in_display(days)", i)]
-    i_barr = [i for i in range(len(_SRC))
-              if _SRC.startswith("_barrer_lineas_muertas_de_raw(days)", i)]
+    i_recip = [i for i in range(len(_GO))
+               if _GO.startswith("_reconcile_raw_missing_in_display(days)", i)]
+    i_barr = [i for i in range(len(_GO))
+              if _GO.startswith("_barrer_lineas_muertas_de_raw(days)", i)]
     assert len(i_recip) >= 2, f"call sites de la recíproca: {len(i_recip)}"
     assert len(i_barr) >= 2, (
         f"el barrido está en {len(i_barr)} call site(s); la recíproca corre en "
