@@ -22901,7 +22901,7 @@ def _featured_fruits_in_name(name) -> set:
 #     mango" / "Coliflor y mango" disparan; una fruta de guarnición en ingredientes NO (menos falsos positivos).
 _SWEET_DOMINANT_FRUITS = ("mango", "pina", "lechosa", "papaya", "guayaba", "melon", "sandia", "mamey", "zapote")
 _SAVORY_CLASH_TOKENS = ("arroz", "moro", "locrio", "pasta", "espagueti", "macarron", "fideo", "espaguetis",
-                        "revoltillo", "revuelto", "coliflor", "brocoli", "berenjena")
+                        "revoltillo", "revuelto", "coliflor", "brocoli", "berenjena", "huevo", "mangu", "platano verde", "tostones", "mofongo")  # [P1-CLASH-HUEVO-Y-VIVERES · 2026-09-09] el INGREDIENTE, no sólo sus preparaciones: «huevo+mango» es el primer ejemplo del docstring del autofix y no se detectaba. Razón y controles (incluida la frontera de falsos positivos) en test_p1_clash_huevo_y_viveres.py
 # [P1-MENU-COHERENCE-1 · 2026-07-29] Refinamiento pedido por el owner (plan vivo 73db1e79:
 # "Brochetas de Chuleta de Cerdo … y Ensalada de LECHOSA" de almuerzo — "comer lechosa en el
 # almuerzo es raro; quedaría mejor de merienda"). Las frutas DE AGUA (lechosa/papaya/melón/
