@@ -15,7 +15,12 @@ from db import (
     get_user_profile,
 )
 from neon_auth import verify_neon_jwt  # [P1-NEON-AUTH-MIGRATION · 2026-06-13]
-from knobs import _env_bool, _env_int, is_production  # [P3-TIER-LIMITS-ENV · 2026-05-20] auto-registry; is_production SSOT
+from knobs import _env_int, is_production  # [P3-TIER-LIMITS-ENV · 2026-05-20] auto-registry; is_production SSOT
+# [P1-AUTH-CUENTA-BORRADA · 2026-09-08] En su PROPIA línea a sabiendas:
+# `test_p3_cost_reduction_bundle::test_tier_limits_use_knobs_not_literal` busca la
+# cadena literal `from knobs import _env_int`, así que meter `_env_bool` en esa
+# línea rompe un guard de los límites por tier que no tiene nada que ver con esto.
+from knobs import _env_bool
 
 logger = logging.getLogger(__name__)
 
