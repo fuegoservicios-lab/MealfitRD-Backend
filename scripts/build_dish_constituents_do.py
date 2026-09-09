@@ -153,7 +153,7 @@ CURATED: dict[str, list] = {
 # Ingredientes con nombre EXACTO del catalogo, la regla de este fichero: nada inventado.
 CURATED.update({
     "Bacalao guisado con yuca y cebolla": [(I, "Bacalao", 120), (I, "Yuca", 200), (I, "Cebolla", 40), (I, "Ajo", 5), (I, "Aceite de oliva", 8), (I, "Sal", 2)],
-    "Arenque guisado con auyama y arroz blanco": [(I, "Arenque", 110), (I, "Auyama", 150), (I, "Arroz blanco", 70), (I, "Cebolla", 40), (I, "Ajo", 5), (I, "Aceite de oliva", 8), (I, "Sal", 2)],
+    "Arenque guisado con auyama y yuca": [(I, "Arenque", 110), (I, "Auyama", 150), (I, "Yuca", 180), (I, "Cebolla", 40), (I, "Ajo", 5), (I, "Aceite de oliva", 8), (I, "Sal", 2)],
     "Sardinas guisadas con papa y repollo": [(I, "Sardinas en lata", 120), (I, "Papa", 200), (I, "Repollo", 80), (I, "Cebolla", 40), (I, "Ajo", 5), (I, "Aceite de oliva", 8), (I, "Sal", 2)],
     "Moro de gandules con soya texturizada": [(I, "Gandules", 80), (I, "Arroz blanco", 80), (I, "Soya texturizada", 30), (I, "Cebolla", 30), (I, "Ajo", 5), (I, "Aceite de oliva", 8), (I, "Sal", 2)],
     "Lentejas guisadas con auyama y arroz blanco": [(I, "Lentejas", 80), (I, "Auyama", 120), (I, "Arroz blanco", 70), (I, "Cebolla", 35), (I, "Ajo", 5), (I, "Aceite de oliva", 8), (I, "Sal", 2)],
@@ -162,7 +162,7 @@ CURATED.update({
     "Atún guisado con papa y zanahoria": [(I, "Atún en agua", 120), (I, "Papa", 200), (I, "Zanahoria", 60), (I, "Cebolla", 35), (I, "Ajo", 5), (I, "Aceite de oliva", 8), (I, "Sal", 2)],
     "Tortilla de papa con queso gouda": [(I, "Papa", 180), (I, "Huevo", 100), (I, "Queso gouda", 40), (I, "Cebolla", 30), (I, "Aceite de oliva", 8), (I, "Sal", 2)],
     "Guiso de habas con ñame y ajo": [(I, "Habas", 80), (I, "Ñame", 200), (I, "Cebolla", 35), (I, "Ajo", 6), (I, "Aceite de oliva", 8), (I, "Sal", 2)],
-    "Soya texturizada guisada con auyama y arroz integral": [(I, "Soya texturizada", 45), (I, "Auyama", 150), (I, "Arroz integral", 70), (I, "Cebolla", 35), (I, "Ajo", 5), (I, "Aceite de oliva", 8), (I, "Sal", 2)],
+    "Soya texturizada guisada con auyama y ñame": [(I, "Soya texturizada", 45), (I, "Auyama", 150), (I, "Ñame", 180), (I, "Cebolla", 35), (I, "Ajo", 5), (I, "Aceite de oliva", 8), (I, "Sal", 2)],
     "Moro de habichuelas blancas con auyama": [(I, "Habichuelas blancas", 90), (I, "Arroz blanco", 80), (I, "Auyama", 120), (I, "Cebolla", 35), (I, "Ajo", 5), (I, "Aceite de oliva", 8), (I, "Sal", 2)],
     "Guisantes secos guisados con papa y zanahoria": [(I, "Guisantes secos", 85), (I, "Papa", 200), (I, "Zanahoria", 70), (I, "Cebolla", 35), (I, "Ajo", 5), (I, "Aceite de oliva", 8), (I, "Sal", 2)],
     "Arroz con lentejas y queso de papa": [(I, "Lentejas", 75), (I, "Arroz blanco", 80), (I, "Queso de papa", 45), (I, "Cebolla", 30), (I, "Ajo", 5), (I, "Aceite de oliva", 8), (I, "Sal", 2)],
@@ -196,6 +196,8 @@ CURATED.update({
     "Semillas de calabaza con dátiles": [(I, "Semillas de calabaza", 25), (I, "Dátiles", 35)],
     "Avena remojada con leche de coco y linaza": [(I, "Avena", 40), (I, "Leche de coco", 120), (I, "Linaza", 12)],
 })
+
+CURATED["Lentejas guisadas con auyama y batata"] = [(I, "Lentejas", 80), (I, "Auyama", 120), (I, "Batata", 180), (I, "Cebolla", 35), (I, "Ajo", 5), (I, "Aceite de oliva", 8), (I, "Sal", 2)]
 
 DECLARED_UNRESOLVED: dict[str, list[str]] = {
     "Frutas picadas con limón": ["Menta"],

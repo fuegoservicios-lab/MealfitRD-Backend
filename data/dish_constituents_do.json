@@ -42,7 +42,7 @@
       "declared_unresolved": [],
       "origin": "curated"
     },
-    "Arenque guisado con auyama y arroz blanco": {
+    "Arenque guisado con auyama y yuca": {
       "constituents": [
         {
           "grams": 110.0,
@@ -53,8 +53,8 @@
           "name": "Auyama"
         },
         {
-          "grams": 70.0,
-          "name": "Arroz blanco"
+          "grams": 180.0,
+          "name": "Yuca"
         },
         {
           "grams": 40.0,
@@ -1630,6 +1630,40 @@
       "declared_unresolved": [],
       "origin": "curated"
     },
+    "Lentejas guisadas con auyama y batata": {
+      "constituents": [
+        {
+          "grams": 80.0,
+          "name": "Lentejas"
+        },
+        {
+          "grams": 120.0,
+          "name": "Auyama"
+        },
+        {
+          "grams": 180.0,
+          "name": "Batata"
+        },
+        {
+          "grams": 35.0,
+          "name": "Cebolla"
+        },
+        {
+          "grams": 5.0,
+          "name": "Ajo"
+        },
+        {
+          "grams": 8.0,
+          "name": "Aceite de oliva"
+        },
+        {
+          "grams": 2.0,
+          "name": "Sal"
+        }
+      ],
+      "declared_unresolved": [],
+      "origin": "curated"
+    },
     "Locrio de pavo estilo dominicano": {
       "constituents": [
         {
@@ -3014,7 +3048,7 @@
       "declared_unresolved": [],
       "origin": "curated"
     },
-    "Soya texturizada guisada con auyama y arroz integral": {
+    "Soya texturizada guisada con auyama y ñame": {
       "constituents": [
         {
           "grams": 45.0,
@@ -3025,8 +3059,8 @@
           "name": "Auyama"
         },
         {
-          "grams": 70.0,
-          "name": "Arroz integral"
+          "grams": 180.0,
+          "name": "Ñame"
         },
         {
           "grams": 35.0,

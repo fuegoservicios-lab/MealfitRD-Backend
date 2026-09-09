@@ -2,8 +2,8 @@
  "schema_version": 1,
  "country": "DO",
  "generado_el": "2026-09-08",
- "revision": "v4 — estado del peso, tiempos orientativos, agua en volumen, reparto",
- "recetas": 140,
+ "revision": "v4 — estado del peso, tiempos orientativos, agua en volumen, reparto · v5 2026-09-09: +35 platos de despensa (P1-CICLO-30D-DURADERO), escritos a mano",
+ "recetas": 175,
  "procedencia": {
   "escrito_por": "LLM (tier flash) offline, prompt de quince reglas (v8)",
   "reglas_nacidas_de": "seis rondas de juicio a ciegas del dueno. Desayunos: 8 -> 11 -> 17 «la serviria» de 20. Almuerzo y cena: 3/16/1 (v1) -> 1/19/0 (v2) -> **8/12/0 (v3)**. Cada regla cierra una queja concreta suya, y DOS de mis reglas las tuvo que corregir el: el criterio de color y el sustituto del termometro.",
@@ -1350,11 +1350,10 @@
   "tpl_100de836d0e3": {
    "franja": "desayuno",
    "pasos": [
-    "Pela y pica la cebolla en plumitas finas. Parte el casabe en trozos o cuadritos pequeños y tuéstalo en una sartén antiadherente a fuego medio unos 2-3 minutos por lado, hasta que esté crujiente; reserva.",
-    "En la misma sartén, calienta el aceite vegetal a fuego medio y sofríe la cebolla unos 3-4 minutos, hasta que esté transparente y blandita.",
-    "Bate el huevo, que se pesa sin cáscara, en un recipiente, y viértelo sobre la cebolla en la sartén. Baja el fuego a bajo y mueve con una espátula despacito.",
-    "Sigue moviendo unos 3-4 minutos hasta que el huevo cuaje por completo y no escurra en ninguna parte. Retira del fuego.",
-    "Sirve los revueltos acompañados del casabe tostado por encima o al lado, para que se remoje un poquito en el huevo."
+    "Sofríe la cebolla picada en el aceite a fuego medio hasta que esté transparente.",
+    "Bate los huevos con sal y viértelos sobre la cebolla, bajando el fuego.",
+    "Remueve despacio desde los bordes hacia el centro hasta que cuajen sin secarse.",
+    "Sirve con el casabe al lado, ligeramente tostado."
    ]
   },
   "tpl_1876d7cc7a09": {
@@ -1385,6 +1384,311 @@
     "Añade las habichuelas ya hervidas con parte de su caldo de cocción, agrega el arroz blanco (que se pesa en crudo) y mezcla bien. Tapa y cocina a fuego bajo unos 20-25 minutos, hasta que el arroz absorba el líquido, quede tierno y suelto, sin agua en el fondo. Si espesa demasiado, añade un chorrito de agua.",
     "Mientras el moro se termina, en una sartén antiadherente con un poquito del aceite ya contado no hay: usa una sartén antiadherente bien caliente, fríe el huevo (sin cáscara, ya pesado) a fuego medio-alto unos 2-3 minutos, hasta que la clara cuaje por completo y no escurra en ninguna parte, con la yema a tu gusto.",
     "Sirve el moro de habichuelas negras caliente y pon el huevo frito encima."
+   ]
+  },
+  "tpl_c860d8960918": {
+   "franja": "cena",
+   "pasos": [
+    "Desala el bacalao la noche anterior en agua fría, cambiando el agua tres veces, y escúrrelo bien.",
+    "Pela la yuca, córtala en trozos y hiérvela en agua con sal unos 20-25 minutos, hasta que entre el tenedor sin resistencia.",
+    "Sofríe la cebolla y el ajo picados en el aceite a fuego medio, hasta que la cebolla se vea transparente.",
+    "Desmenuza el bacalao, incorpóralo al sofrito y cocina 5 minutos; sirve sobre la yuca escurrida."
+   ]
+  },
+  "tpl_66e61e8c795d": {
+   "franja": "cena",
+   "pasos": [
+    "Enjuaga el arenque bajo el chorro para quitarle el exceso de sal y escúrrelo.",
+    "Pela la yuca y la auyama, córtalas en trozos parejos y hiérvelas juntas unos 20 minutos hasta que ablanden.",
+    "Sofríe la cebolla y el ajo picados en el aceite a fuego medio, hasta que la cebolla se vea transparente.",
+    "Añade el arenque desmenuzado al sofrito, cocina 5 minutos y mézclalo con los víveres escurridos."
+   ]
+  },
+  "tpl_e2d752420590": {
+   "franja": "cena",
+   "pasos": [
+    "Pela las papas, córtalas en cubos y hiérvelas en agua con sal unos 15 minutos hasta que estén tiernas.",
+    "Sofríe la cebolla y el ajo picados en el aceite a fuego medio, hasta que la cebolla se vea transparente.",
+    "Agrega el repollo cortado en tiras finas y saltéalo 3 minutos, sin que pierda del todo el punto crujiente.",
+    "Incorpora las sardinas escurridas y las papas, mezcla con cuidado para no deshacerlas y calienta un par de minutos."
+   ]
+  },
+  "tpl_e069475c5e6c": {
+   "franja": "almuerzo",
+   "pasos": [
+    "Hidrata la soya texturizada en agua caliente durante 10 minutos y escúrrela apretándola con las manos.",
+    "Sofríe la cebolla y el ajo picados en el aceite a fuego medio, hasta que la cebolla se vea transparente.",
+    "Añade la soya escurrida y los gandules con su caldo, sazona y deja que rompa el hervor.",
+    "Agrega el arroz lavado, remueve una sola vez y cocina tapado a fuego bajo unos 20 minutos, hasta que seque."
+   ]
+  },
+  "tpl_c02f2e498793": {
+   "franja": "almuerzo",
+   "pasos": [
+    "Remoja las lentejas mientras preparas el resto; enjuágalas y escúrrelas antes de usarlas.",
+    "Sofríe la cebolla y el ajo picados en el aceite a fuego medio, hasta que la cebolla se vea transparente.",
+    "Incorpora las lentejas y la auyama en cubos, cubre con agua y cocina a fuego medio 25-30 minutos, hasta que la auyama se deshaga y espese el guiso.",
+    "Sirve el guiso sobre el arroz blanco cocido aparte."
+   ]
+  },
+  "tpl_fc758e30f5e7": {
+   "franja": "cena",
+   "pasos": [
+    "Enjuaga las lentejas y escúrrelas; pela la batata y córtala en cubos parejos.",
+    "Sofríe la cebolla y el ajo picados en el aceite a fuego medio, hasta que la cebolla se vea transparente.",
+    "Añade las lentejas, cubre con agua y cocina 20 minutos a fuego medio, removiendo de vez en cuando.",
+    "Incorpora la batata y sigue cocinando 15 minutos más, hasta que esté tierna y el guiso haya espesado."
+   ]
+  },
+  "tpl_3db2984de6b8": {
+   "franja": "cena",
+   "pasos": [
+    "Pela la batata y córtala en cubos del mismo tamaño para que se cocinen parejos.",
+    "Sofríe la cebolla y el ajo picados en el aceite a fuego medio, hasta que la cebolla se vea transparente.",
+    "Agrega las habichuelas negras con su líquido y la batata, y cocina tapado a fuego medio unos 20 minutos.",
+    "Machaca un poco de habichuela contra la olla para espesar la salsa y rectifica la sal antes de servir."
+   ]
+  },
+  "tpl_e514944b941e": {
+   "franja": "cena",
+   "pasos": [
+    "Pela la yuca, córtala en trozos y hiérvela en agua con sal unos 20-25 minutos hasta que ablande.",
+    "Corta el salami en rodajas y dóralas en el aceite a fuego medio-alto por ambas caras.",
+    "Baja el fuego, añade la cebolla en aros y el ajo, y cocina hasta que la cebolla se ablande.",
+    "Sirve el salami encebollado sobre la yuca escurrida, con el aceite del sartén por encima."
+   ]
+  },
+  "tpl_5fb76f809c1f": {
+   "franja": "cena",
+   "pasos": [
+    "Pela la papa y la zanahoria y córtalas en cubos pequeños para que se cocinen al mismo tiempo.",
+    "Sofríe la cebolla y el ajo picados en el aceite a fuego medio, hasta que la cebolla se vea transparente.",
+    "Añade la papa y la zanahoria, cubre con un poco de agua y cocina tapado unos 15 minutos.",
+    "Incorpora el atún escurrido, mezcla con suavidad y deja calentar dos minutos antes de servir."
+   ]
+  },
+  "tpl_f53968b75f95": {
+   "franja": "cena",
+   "pasos": [
+    "Pela las papas, córtalas en láminas finas y cocínalas en el aceite a fuego bajo hasta que estén tiernas.",
+    "Añade la cebolla en juliana y sigue cocinando hasta que se ablande sin llegar a dorarse.",
+    "Bate los huevos con sal, mezcla con la papa escurrida y el queso gouda rallado.",
+    "Cuaja la tortilla en el sartén a fuego bajo, dale la vuelta con un plato y termina el otro lado."
+   ]
+  },
+  "tpl_bb94f23ab89f": {
+   "franja": "cena",
+   "pasos": [
+    "Remoja las habas la noche anterior y escúrrelas antes de cocinarlas.",
+    "Pela el ñame y córtalo en trozos; resérvalo en agua para que no se oxide.",
+    "Sofríe la cebolla y el ajo picados en el aceite a fuego medio, hasta que la cebolla se vea transparente.",
+    "Añade las habas y el ñame, cubre con agua y cocina a fuego medio 30-35 minutos, hasta que ambos estén tiernos."
+   ]
+  },
+  "tpl_81c957f0fefa": {
+   "franja": "cena",
+   "pasos": [
+    "Hidrata la soya texturizada en agua caliente 10 minutos y escúrrela apretándola bien.",
+    "Pela el ñame y la auyama y córtalos en trozos parejos.",
+    "Sofríe la cebolla y el ajo picados en el aceite a fuego medio, hasta que la cebolla se vea transparente.",
+    "Incorpora la soya, el ñame y la auyama, cubre con agua y cocina tapado unos 25 minutos hasta que espese."
+   ]
+  },
+  "tpl_53cfd4141ee3": {
+   "franja": "almuerzo",
+   "pasos": [
+    "Sofríe la cebolla y el ajo picados en el aceite a fuego medio, hasta que la cebolla se vea transparente.",
+    "Añade las habichuelas blancas con su caldo y la auyama en cubos, y deja que rompa el hervor.",
+    "Agrega el arroz lavado, remueve una sola vez y baja el fuego al mínimo.",
+    "Tapa y cocina unos 20 minutos sin destapar; deja reposar cinco minutos antes de servir."
+   ]
+  },
+  "tpl_50164f2e368d": {
+   "franja": "almuerzo",
+   "pasos": [
+    "Remoja los guisantes secos la noche anterior, enjuágalos y escúrrelos.",
+    "Sofríe la cebolla y el ajo picados en el aceite a fuego medio, hasta que la cebolla se vea transparente.",
+    "Añade los guisantes, cubre con agua y cocina a fuego medio unos 25 minutos.",
+    "Incorpora la papa y la zanahoria en cubos y sigue cocinando 15 minutos más, hasta que todo esté tierno."
+   ]
+  },
+  "tpl_03667c8ba551": {
+   "franja": "almuerzo",
+   "pasos": [
+    "Enjuaga las lentejas y cocínalas en agua unos 20 minutos, hasta que estén tiernas pero enteras.",
+    "Sofríe la cebolla y el ajo picados en el aceite a fuego medio, hasta que la cebolla se vea transparente.",
+    "Añade el arroz lavado y las lentejas escurridas, cubre con agua y cocina tapado a fuego bajo unos 20 minutos.",
+    "Reparte el queso de papa en trozos por encima y tapa dos minutos para que se ablande con el vapor."
+   ]
+  },
+  "tpl_3fed1d443898": {
+   "franja": "almuerzo",
+   "pasos": [
+    "Sofríe la cebolla y el ajo picados en el aceite a fuego medio, hasta que la cebolla se vea transparente.",
+    "Añade el frijol cargamanto con su caldo y la auyama en cubos, y cocina a fuego medio unos 20 minutos.",
+    "Machaca parte de la auyama contra la olla para que la salsa quede espesa.",
+    "Sirve el guiso sobre el arroz blanco cocido aparte."
+   ]
+  },
+  "tpl_166288f52176": {
+   "franja": "almuerzo",
+   "pasos": [
+    "Pela las papas, córtalas en láminas finas y cocínalas en el aceite a fuego bajo hasta que ablanden.",
+    "Bate los huevos con sal y mézclalos con la papa escurrida y el queso cheddar rallado.",
+    "Cuaja la tortilla a fuego bajo, dale la vuelta con un plato y termina el otro lado.",
+    "Aliña el repollo en tiras finas con la cebolla y un chorrito del aceite, y sírvelo al lado."
+   ]
+  },
+  "tpl_4997cf5fe124": {
+   "franja": "almuerzo",
+   "pasos": [
+    "Hidrata la soya texturizada en agua caliente 10 minutos y escúrrela apretándola con las manos.",
+    "Sofríe la cebolla y el ajo picados en el aceite a fuego medio, hasta que la cebolla se vea transparente.",
+    "Añade la soya y las habichuelas rojas con su caldo, sazona y espera a que rompa el hervor.",
+    "Agrega el arroz lavado, remueve una vez y cocina tapado a fuego bajo unos 20 minutos hasta que seque."
+   ]
+  },
+  "tpl_764a6f3da360": {
+   "franja": "almuerzo",
+   "pasos": [
+    "Pela la batata, córtala en trozos y hiérvela hasta que un tenedor entre sin resistencia.",
+    "Májala aún caliente con el huevo batido y la sal, hasta obtener un puré liso.",
+    "Sofríe la cebolla picada en el aceite y mézclala con la mitad del puré.",
+    "Monta el puré en un molde, cubre con el queso mozzarella y hornea a 190 °C unos 20 minutos, hasta que gratine."
+   ]
+  },
+  "tpl_85f132a71e5e": {
+   "franja": "almuerzo",
+   "pasos": [
+    "Enjuaga los garbanzos y caliéntalos en agua unos cinco minutos; escúrrelos.",
+    "Cocina la zanahoria en bastones hasta que esté tierna pero firme al morder.",
+    "Mezcla los garbanzos y la zanahoria aún tibios con la cebolla picada muy fina.",
+    "Aliña con el aceite y la sal y reparte el queso gouda en dados por encima."
+   ]
+  },
+  "tpl_e1982113c58d": {
+   "franja": "desayuno",
+   "pasos": [
+    "Calienta la leche evaporada con la misma cantidad de agua a fuego medio, sin que llegue a hervir.",
+    "Añade la avena en lluvia y cocina removiendo unos cinco minutos, hasta que espese.",
+    "Retira del fuego, agrega la canela y deja reposar dos minutos para que termine de cuajar.",
+    "Sirve con el maní tostado y picado grueso por encima."
+   ]
+  },
+  "tpl_0f07f8c0974f": {
+   "franja": "desayuno",
+   "pasos": [
+    "Mezcla la harina de maíz con agua tibia y sal, y amasa hasta que la masa no se pegue a las manos.",
+    "Deja reposar la masa cinco minutos y forma discos de un dedo de grosor.",
+    "Ásalos en un budare o sartén caliente unos cuatro minutos por cada lado, hasta que suenen huecos.",
+    "Ábrelos por un lado, rellénalos con el queso gouda y el huevo revuelto, y tápalos un minuto."
+   ]
+  },
+  "tpl_9040bafa61f5": {
+   "franja": "desayuno",
+   "pasos": [
+    "Rocía el casabe con unas gotas de agua para que pierda dureza sin ablandarse del todo.",
+    "Úntalo con la mantequilla de maní, llegando bien hasta los bordes.",
+    "Reparte las pasas por encima y presiónalas ligeramente para que se queden pegadas."
+   ]
+  },
+  "tpl_2aab30cc9582": {
+   "franja": "desayuno",
+   "pasos": [
+    "Deshuesa los dátiles y pícalos en trozos pequeños.",
+    "Calienta la leche evaporada con agua y añade la avena en lluvia, removiendo cinco minutos.",
+    "Incorpora los dátiles fuera del fuego y deja reposar para que suelten su dulzor.",
+    "Termina con las almendras fileteadas, tostadas un momento en seco."
+   ]
+  },
+  "tpl_9549277f4d35": {
+   "franja": "desayuno",
+   "pasos": [
+    "Mezcla la harina de maíz con agua tibia y sal hasta formar una masa manejable.",
+    "Bate el huevo e incorpóralo a la masa junto con el queso cheddar rallado.",
+    "Extiende la mezcla en el sartén con el aceite y cocínala a fuego medio hasta que dore por debajo.",
+    "Dale la vuelta con ayuda de un plato y termina el otro lado."
+   ]
+  },
+  "tpl_42f25f9a7087": {
+   "franja": "desayuno",
+   "pasos": [
+    "Sirve la granola en un bol hondo y repártela de forma pareja.",
+    "Vierte la leche de avena bien fría por encima, sin llegar a cubrirla del todo.",
+    "Añade las pasas y deja reposar un par de minutos para que se hidraten."
+   ]
+  },
+  "tpl_c56a5a0d2a17": {
+   "franja": "desayuno",
+   "pasos": [
+    "Amasa la harina de trigo con agua y sal hasta obtener una masa firme y lisa.",
+    "Forma cilindros con la masa y córtalos en trozos del tamaño de un dedo.",
+    "Hiérvelos en agua con sal unos diez minutos, hasta que suban a la superficie.",
+    "Sírvelos con el huevo revuelto y el queso de papa en trozos por encima."
+   ]
+  },
+  "tpl_74788cfcf505": {
+   "franja": "merienda",
+   "pasos": [
+    "Tuesta el maní en un sartén seco a fuego medio, moviéndolo para que no se queme.",
+    "Déjalo enfriar del todo para que quede crujiente.",
+    "Mézclalo con las pasas justo antes de comer."
+   ]
+  },
+  "tpl_69fc9be43057": {
+   "franja": "merienda",
+   "pasos": [
+    "Rocía el casabe con unas gotas de agua y tuéstalo un momento en el sartén.",
+    "Corta el queso gouda en láminas finas y repártelas sobre el casabe caliente.",
+    "Tapa un minuto para que el calor del casabe ablande el queso."
+   ]
+  },
+  "tpl_f5dd6fb923fa": {
+   "franja": "merienda",
+   "pasos": [
+    "Licúa la leche evaporada con la avena hasta que no queden grumos.",
+    "Añade el maní y la canela y licúa de nuevo unos segundos.",
+    "Sirve bien frío, con hielo si lo prefieres más ligero."
+   ]
+  },
+  "tpl_5261bf173cb5": {
+   "franja": "merienda",
+   "pasos": [
+    "Tuesta las almendras fileteadas en seco a fuego bajo, vigilándolas para que no se quemen.",
+    "Deshuesa las ciruelas pasas y córtalas en tiras.",
+    "Mézclalas con las almendras ya frías y guárdalas en un frasco cerrado."
+   ]
+  },
+  "tpl_212bd794501e": {
+   "franja": "merienda",
+   "pasos": [
+    "Cuece los huevos en agua hirviendo durante diez minutos exactos.",
+    "Pásalos a agua fría para cortar la cocción y pélalos con facilidad.",
+    "Pártelos por la mitad, sálalos al gusto y acompáñalos con el casabe."
+   ]
+  },
+  "tpl_5af93ae136a1": {
+   "franja": "merienda",
+   "pasos": [
+    "Tuesta el casabe brevemente para que quede crujiente.",
+    "Úntalo con la mantequilla de maní mientras aún está tibio.",
+    "Espolvorea la canela por encima y córtalo en trozos manejables."
+   ]
+  },
+  "tpl_cde7a339e059": {
+   "franja": "merienda",
+   "pasos": [
+    "Tuesta las semillas de calabaza en un sartén seco hasta que empiecen a saltar.",
+    "Deshuesa los dátiles y córtalos en trozos pequeños.",
+    "Mezcla todo cuando las semillas estén frías, para que no se ablanden los dátiles."
+   ]
+  },
+  "tpl_24a8135915c9": {
+   "franja": "merienda",
+   "pasos": [
+    "Mezcla la avena con la leche de coco en un frasco con tapa.",
+    "Añade la linaza molida y remueve bien para que no se apelmace.",
+    "Deja reposar en la nevera al menos cuatro horas, o de un día para otro."
    ]
   }
  }

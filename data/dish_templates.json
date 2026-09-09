@@ -2744,12 +2744,12 @@
       "transform": true
     },
     {
-      "name": "Arenque guisado con auyama y arroz blanco",
+      "name": "Arenque guisado con auyama y yuca",
       "slots": [
         "cena"
       ],
       "protein": "pescado",
-      "base": "arroz",
+      "base": "yuca",
       "technique": "guisado",
       "transform": true
     },
@@ -2766,7 +2766,6 @@
     {
       "name": "Moro de gandules con soya texturizada",
       "slots": [
-        "cena",
         "almuerzo"
       ],
       "protein": "legumbre",
@@ -2777,7 +2776,6 @@
     {
       "name": "Lentejas guisadas con auyama y arroz blanco",
       "slots": [
-        "cena",
         "almuerzo"
       ],
       "protein": "legumbre",
@@ -2836,12 +2834,12 @@
       "transform": true
     },
     {
-      "name": "Soya texturizada guisada con auyama y arroz integral",
+      "name": "Soya texturizada guisada con auyama y ñame",
       "slots": [
         "cena"
       ],
       "protein": "legumbre",
-      "base": "arroz",
+      "base": "viveres",
       "technique": "guisado",
       "transform": true
     },
@@ -3073,6 +3071,16 @@
       "protein": "none",
       "base": "avena",
       "technique": "crudo",
+      "transform": true
+    },
+    {
+      "name": "Lentejas guisadas con auyama y batata",
+      "slots": [
+        "cena"
+      ],
+      "protein": "legumbre",
+      "base": "batata",
+      "technique": "guisado",
       "transform": true
     }
   ]

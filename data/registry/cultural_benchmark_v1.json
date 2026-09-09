@@ -665,7 +665,7 @@
             "Jugo de lulo y palmito con limón (< 40 kcal): snacks reales de bajo aporte."
           ],
           "by": "Claude (revisión curatorial delegada por el dueño)",
-          "date": "2026-09-08",
+          "date": "2026-09-09",
           "decisions": [
             "Alérgenos: el matcher del registry no reconocía plurales (sardinas, fideos, almejas) ni la salsa de soya como gluten: corregido y recompilado; cero clases sin marcar en las 6 bibliotecas (verificado con un chequeo independiente por constituyente).",
             "Raciones: meriendas > 450 kcal reasignadas a almuerzo/cena; almuerzos < 260 kcal y cenas < 180 kcal completados con base o proteína; almuerzos > 1.100 kcal reducidos.",
@@ -695,11 +695,11 @@
       },
       "availability": {
         "availability_risk_pct": 0.0,
-        "constituents": 788,
+        "constituents": 968,
         "dominican_cultivar_outside_do": [],
         "needs_review": false,
         "ok": true,
-        "priced_pct": 97.6,
+        "priced_pct": 97.7,
         "review_threshold_pct": 15.0
       },
       "clinical": {
@@ -707,34 +707,58 @@
         "ok": true,
         "processed_meat": [
           "Mangú con salami de pavo a la plancha (versión magra)",
-          "Espaguetis criollos con pollo desmenuzado"
+          "Espaguetis criollos con pollo desmenuzado",
+          "Salami guisado con yuca y cebolla"
         ],
         "sodium_high": [
+          "Arroz con lentejas y queso de papa",
           "Locrio de arenque con aguacate",
+          "Arepa de maíz con queso gouda",
+          "Tortilla de papa y queso cheddar con repollo",
           "Arenque desmenuzado con huevo y yuca hervida",
           "Lentejas guisadas con arroz y aguacate",
           "La bandera: arroz, habichuelas rojas guisadas y pollo guisado",
+          "Habichuelas negras guisadas con batata",
+          "Frijol cargamanto guisado con arroz y auyama",
+          "Moro de habichuelas rojas con soya texturizada",
           "Mangú con salami de pavo a la plancha (versión magra)",
+          "Guisantes secos guisados con papa y zanahoria",
+          "Moro de habichuelas blancas con auyama",
           "Moro de guandules con pollo guisado",
+          "Atún guisado con papa y zanahoria",
           "Pescado guisado a la criolla con arroz blanco",
           "Moro de habichuelas negras con bistec encebollado",
+          "Arenque guisado con auyama y yuca",
           "Pollo horneado al limón con arroz amarillo",
           "Berenjenas guisadas con carne molida y arroz",
           "Tortitas de pescado con ensalada verde",
           "Asopao de pollo (porción moderada)",
+          "Pastelón de batata con queso mozzarella",
+          "Soya texturizada guisada con auyama y ñame",
           "Chicharrón de pollo al airfryer con yuca hervida",
+          "Ensalada tibia de garbanzos con zanahoria y queso gouda",
           "Chivo guisado estilo liniero con yuca hervida",
           "Espaguetis criollos con pollo desmenuzado",
+          "Tortilla de harina de maíz con queso cheddar",
           "Res mechada con puré de papa",
           "Pinchos de pollo y vegetales con yuca hervida",
+          "Guiso de habas con ñame y ajo",
+          "Lentejas guisadas con auyama y arroz blanco",
+          "Domplines con huevo y queso de papa",
+          "Bacalao guisado con yuca y cebolla",
           "Guineítos verdes guisados con costillitas magras de cerdo",
           "Yuca al mojo con cerdo magro a la plancha",
           "Camarones guisados con moro de guandules",
           "Pescado con coco estilo Samaná con arroz blanco",
+          "Moro de gandules con soya texturizada",
+          "Sardinas guisadas con papa y repollo",
+          "Salami guisado con yuca y cebolla",
           "Revoltillo de atún con plátano hervido",
           "Croquetas de atún y yuca al horno con ensalada",
+          "Tortilla de papa con queso gouda",
           "Tortilla de huevos con espinaca y queso fresco",
-          "Sopa-crema de auyama con pollo desmenuzado"
+          "Sopa-crema de auyama con pollo desmenuzado",
+          "Lentejas guisadas con auyama y batata"
         ]
       },
       "contamination": {
@@ -746,33 +770,33 @@
         "gaps": [],
         "ok": true,
         "slots": {
-          "almuerzo": 56,
-          "cena": 45,
-          "desayuno": 39,
-          "merienda": 34
+          "almuerzo": 66,
+          "cena": 55,
+          "desayuno": 46,
+          "merienda": 42
         },
-        "templates": 144
+        "templates": 179
       },
       "diversity": {
         "bases": 16,
-        "distinct_heads_ratio": 0.729,
+        "distinct_heads_ratio": 0.67,
         "ok": true,
         "proteins": 13,
-        "techniques": 37,
-        "top_protein_share": 0.208,
-        "transform_share": 0.465
+        "techniques": 39,
+        "top_protein_share": 0.223,
+        "transform_share": 0.57
       },
       "library": "do",
       "resolvability": {
         "excluded": 0,
         "ok": true,
-        "pct": 99.5
+        "pct": 99.6
       },
       "review": {
         "automated_review": true,
         "clinical_review": false,
         "editorial": {
-          "curated": 144
+          "curated": 179
         },
         "flagged_for_human_review": [],
         "human_cultural_review": false,
@@ -782,7 +806,7 @@
             "Molondrones guisados (250 kcal) y sopa-crema de auyama (283 kcal): platos ligeros reales; el generador ajusta porciones a los macros del día."
           ],
           "by": "Claude (revisión curatorial delegada por el dueño)",
-          "date": "2026-09-08",
+          "date": "2026-09-09",
           "decisions": [
             "Alérgenos: el matcher del registry no reconocía plurales (sardinas, fideos, almejas) ni la salsa de soya como gluten: corregido y recompilado; cero clases sin marcar en las 6 bibliotecas (verificado con un chequeo independiente por constituyente).",
             "Raciones: meriendas > 450 kcal reasignadas a almuerzo/cena; almuerzos < 260 kcal y cenas < 180 kcal completados con base o proteína; almuerzos > 1.100 kcal reducidos.",
@@ -801,13 +825,14 @@
             "Cuatro plantillas dejan de figurar íntegras (ARQ27-P0-02): la batida de zapote, el chillo, el salami de pavo y las frutas con menta declaran ingredientes sin resolver y ahora son `partial`. Las dos del medio son SUSTITUCIONES declaradas: el título promete un alimento que la receta compilada no tiene, y un plato sustituido necesita identidad propia, no un rótulo heredado.",
             "[2026-09-07 · P1-REGISTRY-TITLE-TRUTH] Tercera incoherencia nombre↔constituyentes, que la verificación del 06-sep dio por completa y se le escapó: «Panqueques de harina de ARROZ con fresas» traía Harina de TRIGO. Renombrado a «Panqueques de trigo con fresas» — el catálogo no tiene harina de arroz y crear la fila sería inventarla. Re-verificadas las 779 plantillas de las 6 bibliotecas con el detector de contradicción de calificativo (`test_p1_registry_title_truth`): 0 restantes.",
             "[2026-09-08 · P1-REGISTRY-COLOR-PROMETE] «Pollo horneado al limon con arroz AMARILLO» no traia nada que pusiera amarillo el arroz: el limon no da color. Lo vio el dueno juzgando la biblioteca a ciegas y ofrecio las dos salidas (anadir el ingrediente o renombrar). Se anaden 2 g de `Sazon con culantro y achiote`, que es el colorante criollo y pesa **0 kcal**: el titulo pasa a ser cierto y el plato mejora sin mover un solo macro. Renombrar habria tocado un baseline historico del 18-ago. Unica plantilla tocada de las 144; el resto, byte a byte igual.",
-            "[2026-09-08 · P1-DETERMINISTIC-DAY-CANARY] Tres constituyentes citaban un nombre que el catalogo no tiene: «Pimiento morron» (el catalogo dice «Aji morron»), «Salami dominicano» («Salami») y «Pan integral» («Pan integral personal»). No faltaban datos: faltaba el nombre bueno, y por eso 7 plantillas quedaban fuera del pool determinista. Corregido en la fuente curada y recompilado. Verificado contra el snapshot anterior plantilla a plantilla: mismo conjunto de plantillas (144), ningun nombre de PLATO tocado, y el unico cambio en las 7 es ese renombre. Los platos son los mismos; lo que cambia es la fila del catalogo contra la que resuelven. Plantillas: Asopao de pollo (porción moderada); Bacalao guisado con papas; Berenjenas guisadas con carne molida y arroz; Espaguetis criollos con pollo desmenuzado; Res mechada con puré de papa; Rollitos de lechuga con res mechada; Tostada integral con mantequilla de maní y guineo."
+            "[2026-09-08 · P1-DETERMINISTIC-DAY-CANARY] Tres constituyentes citaban un nombre que el catalogo no tiene: «Pimiento morron» (el catalogo dice «Aji morron»), «Salami dominicano» («Salami») y «Pan integral» («Pan integral personal»). No faltaban datos: faltaba el nombre bueno, y por eso 7 plantillas quedaban fuera del pool determinista. Corregido en la fuente curada y recompilado. Verificado contra el snapshot anterior plantilla a plantilla: mismo conjunto de plantillas (144), ningun nombre de PLATO tocado, y el unico cambio en las 7 es ese renombre. Los platos son los mismos; lo que cambia es la fila del catalogo contra la que resuelven. Plantillas: Asopao de pollo (porción moderada); Bacalao guisado con papas; Berenjenas guisadas con carne molida y arroz; Espaguetis criollos con pollo desmenuzado; Res mechada con puré de papa; Rollitos de lechuga con res mechada; Tostada integral con mantequilla de maní y guineo.",
+            "[2026-09-09 · P1-CICLO-30D-DURADERO] 35 plantillas nuevas de despensa (144 -> 179) para sostener el ciclo de UNA compra de 30 dias sin congelador: del dia 15 solo quedaban 9 cenas y 12 almuerzos vegetarianos, y la construccion de menus se atascaba en el dia 13-17 (0 de 8 meses completos). Tras anadirlas, 8 de 8 con los 4 macros en banda, sin repetir plato en 7 dias, dieta vegetariana y alergia a lacteos incluidas. Constituyentes con nombre EXACTO del catalogo; nutricion y logistica derivadas por el compilador. Cuatro cenas mias con base arroz violaban el SSOT de franjas (en RD el arroz es almuerzo) y se corrigieron a vivere o se movieron a almuerzo -- el guard no se toco."
           ],
           "kind": "automated",
-          "snapshot_hash": "0ddb20d2ffc6481a3cce9d97c1787e20aa1edbb264d71238fbdcd12327c04481"
+          "snapshot_hash": "9d226b0a7b65ee1e9f319b5dac08651527c7eeb054256a67cc321ae7f5d9331e"
         }
       },
-      "snapshot_hash": "0ddb20d2ffc6481a3cce9d97c1787e20aa1edbb264d71238fbdcd12327c04481"
+      "snapshot_hash": "9d226b0a7b65ee1e9f319b5dac08651527c7eeb054256a67cc321ae7f5d9331e"
     },
     "mexico_casera": {
       "appropriateness": {
@@ -970,7 +995,7 @@
             "Pepino con chile y limón (35 kcal): snack real de bajo aporte; se conserva."
           ],
           "by": "Claude (revisión curatorial delegada por el dueño)",
-          "date": "2026-09-08",
+          "date": "2026-09-09",
           "decisions": [
             "Alérgenos: el matcher del registry no reconocía plurales (sardinas, fideos, almejas) ni la salsa de soya como gluten: corregido y recompilado; cero clases sin marcar en las 6 bibliotecas (verificado con un chequeo independiente por constituyente).",
             "Raciones: meriendas > 450 kcal reasignadas a almuerzo/cena; almuerzos < 260 kcal y cenas < 180 kcal completados con base o proteína; almuerzos > 1.100 kcal reducidos.",
@@ -1472,7 +1497,7 @@
             "Los avisos «cultivar dominicano» de las altas nuevas: ver la decisión de arriba."
           ],
           "by": "Claude (revisión curatorial delegada por el dueño)",
-          "date": "2026-09-08",
+          "date": "2026-09-09",
           "decisions": [
             "Alérgenos: el matcher del registry no reconocía plurales (sardinas, fideos, almejas) ni la salsa de soya como gluten: corregido y recompilado; cero clases sin marcar en las 6 bibliotecas (verificado con un chequeo independiente por constituyente).",
             "Raciones: meriendas > 450 kcal reasignadas a almuerzo/cena; almuerzos < 260 kcal y cenas < 180 kcal completados con base o proteína; almuerzos > 1.100 kcal reducidos.",
@@ -1753,7 +1778,7 @@
             "Pistos, gazpacho y ensaladas de 210-300 kcal: platos ligeros reales de almuerzo/cena; el generador escala porciones."
           ],
           "by": "Claude (revisión curatorial delegada por el dueño)",
-          "date": "2026-09-08",
+          "date": "2026-09-09",
           "decisions": [
             "Alérgenos: el matcher del registry no reconocía plurales (sardinas, fideos, almejas) ni la salsa de soya como gluten: corregido y recompilado; cero clases sin marcar en las 6 bibliotecas (verificado con un chequeo independiente por constituyente).",
             "Raciones: meriendas > 450 kcal reasignadas a almuerzo/cena; almuerzos < 260 kcal y cenas < 180 kcal completados con base o proteína; almuerzos > 1.100 kcal reducidos.",
@@ -2008,7 +2033,7 @@
             "«Tacos de soya texturizada con repollo» dispara el aviso de léxico mexicano, igual que los dos platos de tacos que la biblioteca estadounidense YA tenía y que la revisión anterior aceptó: el taco es comida corriente en Estados Unidos. Se conserva, por coherencia con esa decisión."
           ],
           "by": "Claude (revisión curatorial delegada por el dueño)",
-          "date": "2026-09-08",
+          "date": "2026-09-09",
           "decisions": [
             "Alérgenos: el matcher del registry no reconocía plurales (sardinas, fideos, almejas) ni la salsa de soya como gluten: corregido y recompilado; cero clases sin marcar en las 6 bibliotecas (verificado con un chequeo independiente por constituyente).",
             "Raciones: meriendas > 450 kcal reasignadas a almuerzo/cena; almuerzos < 260 kcal y cenas < 180 kcal completados con base o proteína; almuerzos > 1.100 kcal reducidos.",
