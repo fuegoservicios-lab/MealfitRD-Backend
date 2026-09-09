@@ -316,6 +316,29 @@ def reconcile_missing_display_i18n(limit: Optional[int] = None) -> dict:
     except Exception as e:                                           # noqa: BLE001
         logger.warning(f"[P1-I18N-RECONCILE] imports no disponibles: {e!r}")
         return {"skipped": "no_deps", "encolados": 0, "candidatos": 0}
+    # [P1-I18N-DEAD-VEREDICTO · 2026-09-08] Repara los veredictos que el vocabulario VIEJO dejó mal.
+    #
+    # `already_enriched` («no quedaba nada por traducir») se clasificaba como fallo reintentable:
+    # en producción mató un job con `attempts=5` **por haber hecho el trabajo**, y la fila quedó
+    # `dead` reteniendo su `dedup_key` para siempre. Corregido el vocabulario, esas filas siguen
+    # bloqueando: `enqueue_plan_job` hace `ON CONFLICT DO NOTHING` y `maybe_enqueue_display_i18n`
+    # sólo considera «ya en cola» los estados vivos — así que el barrido encontraba el plan cada
+    # 20 min y encolaba CERO. Un no-op perpetuo que parece vivo desde fuera, que es exactamente el
+    # defecto que este P-fix vino a cerrar.
+    #
+    # Sólo toca filas cuyo `error_code` HOY es terminal. Una `dead` con error transitorio se queda
+    # como está: un dead-letter es una decisión de operador, y revivirla en bucle quemaría LLM.
+    try:
+        from db import execute_sql_write
+        execute_sql_write(
+            """UPDATE plan_jobs SET status = 'done', error_code = NULL,
+                      processed_at = COALESCE(processed_at, NOW()), updated_at = NOW()
+                WHERE job_type = %s AND status IN ('failed', 'dead') AND error_code = ANY(%s)""",
+            (JOB_TYPE_DISPLAY_I18N, sorted(_DONE_SKIPS)),
+        )
+    except Exception as e:                                           # noqa: BLE001
+        logger.debug(f"[P1-I18N-RECONCILE] reparación de veredictos no-op: {e!r}")
+
     try:
         vivos = execute_sql_query(
             "SELECT DISTINCT locale FROM user_profiles WHERE locale IS NOT NULL AND locale <> ''",
