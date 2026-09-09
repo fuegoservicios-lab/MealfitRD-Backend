@@ -655,6 +655,23 @@ def _registry_hash_for_effective(effective: Optional[dict]) -> Optional[str]:
         return None
 
 
+def _registry_dishes_for_effective(days: list, effective: Optional[dict]) -> dict:
+    """[P1-FIDELIDAD-PLATO-DEL-REGISTRY · 2026-09-09] Cuántos platos SERVIDOS salieron del catálogo.
+
+    El informe ya declaraba `registry_in_prompt` —si los candidatos VIAJARON— y nunca si el modelo
+    los USÓ. Medido el 09-sep contra un plan real: `registry_in_prompt: true`, `score: 1.0`,
+    `issues: []` y **0 de 12 platos del registry**. Las dos cosas eran ciertas a la vez porque
+    miden cosas distintas; el informe sólo publicaba una.
+
+    País por CULTURA (`_culture_country`), no por mercado — I16, la cocina no es la tienda.
+    """
+    try:
+        import recipe_library as rl
+        return rl.dish_provenance(days or [], _culture_country(_main_profile(effective or {})) or "DO")
+    except Exception:
+        return {"total": 0, "del_registry": 0, "con_receta": 0, "aplicables": 0, "tasa": None}
+
+
 def build_blueprint(effective: dict, *, total_days: int, base: Optional[int] = None,
                     meals_per_day: Optional[int] = None) -> dict:
     """Blueprint determinista del horizonte completo (§6.5). Misma política ⇒ mismo blueprint."""
@@ -1457,6 +1474,9 @@ def fidelity_report(days: list, sl: Optional[dict], effective: Optional[dict], *
         "measured_at": datetime.now(timezone.utc).isoformat(),
         "registry_hash": _registry_hash_for_effective(effective),  # [P1-ARQ25-F6-DISH-REGISTRY] los benchmarks guardan su hash
         "registry_in_prompt": bool(registry_prompt_enabled()),  # [P1-ARQ25-F6-REGISTRY-PROMPT] para medir antes/después
+        # [P1-FIDELIDAD-PLATO-DEL-REGISTRY] los candidatos VIAJARON (arriba) vs el modelo los USÓ (aquí).
+        # NO entra en `score` ni en `issues`: mide, no juzga. Quien quiera que juzgue, que lo decida aparte.
+        "registry_dishes": _registry_dishes_for_effective(days, effective),
     }
 
 
@@ -1586,6 +1606,11 @@ def emit_fidelity_metric(user_id: Optional[str], plan_id: Optional[str], report:
             "score": report.get("score"), "mode": mode, "gate": gate or fidelity_gate_mode(),
             "rejected": bool(rejected), "allocator_version": ALLOCATOR_VERSION,
             "registry_hash": report.get("registry_hash"), "registry_in_prompt": report.get("registry_in_prompt"),
+            # [P1-FIDELIDAD-PLATO-DEL-REGISTRY] aplanado: el cron agrega por columnas jsonb, no por sub-objeto
+            "registry_dishes_total": (report.get("registry_dishes") or {}).get("total"),
+            "registry_dishes_matched": (report.get("registry_dishes") or {}).get("del_registry"),
+            "registry_dishes_applicable": (report.get("registry_dishes") or {}).get("aplicables"),
+            "registry_dish_rate": (report.get("registry_dishes") or {}).get("tasa"),
         }
         execute_sql_write(
             "INSERT INTO pipeline_metrics (user_id, session_id, node, duration_ms, retries, "

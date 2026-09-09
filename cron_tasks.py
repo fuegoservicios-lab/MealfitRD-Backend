@@ -6337,6 +6337,119 @@ def _review_failed_delivered_rate_alert_job():
             pass
 
 
+def _registry_dish_rate_alert_job():
+    """[P1-FIDELIDAD-PLATO-DEL-REGISTRY · 2026-09-09] ¿El catálogo de platos se está USANDO?
+
+    El informe de fidelidad ya publica `registry_dish_rate` (fracción de platos servidos que la
+    costura sustituiría de verdad). Este cron lo vigila a nivel flota.
+
+    **Sólo corre con `MEALFIT_RECIPE_LIBRARY_SELECT` encendido, a propósito.** Con el knob apagado
+    el prompt dice «o una variante equivalente» y una tasa de 0 es el comportamiento PEDIDO —
+    medido el 09-sep: 0/12 platos del registry en un plan con la política en `enforce`. Una alerta
+    que suena en el estado normal se aprende a ignorar, y entonces no avisa el día que importa.
+    Encendido el knob, la pregunta cambia de sentido: forzamos el catálogo y hay que saber si
+    prendió. Tick observable SIEMPRE (con `skip_reason`), que es cómo se distingue «no aplica» de
+    «no corrió».
+
+    Knobs: MEALFIT_REGDISH_RATE_LOOKBACK_H (72, clamp [1,168]), MEALFIT_REGDISH_RATE_MIN_SAMPLES
+    (5, clamp [1,10000]), MEALFIT_REGDISH_RATE_FLOOR (0.50), MEALFIT_REGDISH_RATE_INTERVAL_H
+    (6, clamp [1,48]). Tooltip-anchor: P1-FIDELIDAD-PLATO-DEL-REGISTRY."""
+    alert_key = "registry_dishes_unused"
+    lookback_h = max(1, min(_env_int("MEALFIT_REGDISH_RATE_LOOKBACK_H", 72), 168))
+    min_samples = max(1, min(_env_int("MEALFIT_REGDISH_RATE_MIN_SAMPLES", 5), 10_000))
+    floor = _env_float("MEALFIT_REGDISH_RATE_FLOOR", 0.50)
+    _n = 0
+    _rate = None
+    _alert_emitted = False
+    _skip = None
+    try:
+        try:
+            from recipe_library import library_select_enabled
+            _on = bool(library_select_enabled())
+        except Exception:
+            _on = False
+        if not _on:
+            _skip = "library_select_off"
+        else:
+            rows = execute_sql_query(
+                """
+                SELECT COUNT(*) AS n,
+                       SUM(COALESCE((metadata->>'registry_dishes_total')::int, 0))      AS platos,
+                       SUM(COALESCE((metadata->>'registry_dishes_applicable')::int, 0)) AS del_catalogo
+                  FROM pipeline_metrics
+                 WHERE node = 'plan_policy_fidelity'
+                   AND created_at > NOW() - (%s || ' hours')::interval
+                   AND COALESCE(metadata->>'registry_in_prompt', 'false') = 'true'
+                   AND COALESCE((metadata->>'registry_dishes_total')::int, 0) > 0
+                """,
+                (str(lookback_h),), fetch_all=True
+            ) or []
+            _platos = 0
+            _cat = 0
+            if rows:
+                try:
+                    _n = int(rows[0].get("n") or 0)
+                    _platos = int(rows[0].get("platos") or 0)
+                    _cat = int(rows[0].get("del_catalogo") or 0)
+                except (TypeError, ValueError):
+                    _n, _platos, _cat = 0, 0, 0
+            if _n < min_samples or _platos <= 0:
+                _skip = f"insufficient_samples ({_n}<{min_samples})"
+            else:
+                _rate = round(_cat / _platos, 3)
+                if _rate < floor:
+                    execute_sql_write(
+                        """
+                        INSERT INTO system_alerts
+                            (alert_key, alert_type, severity, title, message, metadata)
+                        VALUES (%s, 'reliability_degradation', 'warning', %s, %s, %s::jsonb)
+                        ON CONFLICT (alert_key) DO UPDATE
+                        SET triggered_at = NOW(), message = EXCLUDED.message,
+                            metadata = EXCLUDED.metadata, resolved_at = NULL
+                        """,
+                        (
+                            alert_key,
+                            "El catálogo de platos viaja en el prompt y no se usa",
+                            f"Con la biblioteca ENCENDIDA, sólo el {int(_rate * 100)}% de los platos "
+                            f"servidos ({_cat}/{_platos} en {lookback_h}h) sale del registry — bajo el "
+                            f"piso {int(floor * 100)}%. El modelo sigue inventando el nombre del plato, "
+                            f"así que no hay receta escrita que enganchar ni durabilidad garantizada.",
+                            json.dumps({"registry_dish_rate": _rate, "n_runs": _n, "n_dishes": _platos,
+                                        "n_from_registry": _cat, "floor": floor,
+                                        "lookback_h": lookback_h}, ensure_ascii=False),
+                        ),
+                    )
+                    _alert_emitted = True
+                    logger.warning(
+                        f"🚨 [P1-FIDELIDAD-PLATO-DEL-REGISTRY] {int(_rate * 100)}% de platos del catálogo "
+                        f"({_cat}/{_platos}, {lookback_h}h) < piso {int(floor * 100)}% → alert `{alert_key}`")
+                else:
+                    execute_sql_write(
+                        "UPDATE system_alerts SET resolved_at = NOW() "
+                        "WHERE alert_key = %s AND resolved_at IS NULL",
+                        (alert_key,),
+                    )
+                    logger.info(
+                        f"✅ [P1-FIDELIDAD-PLATO-DEL-REGISTRY] {int(_rate * 100)}% de platos del catálogo "
+                        f"({_cat}/{_platos}) ≥ piso {int(floor * 100)}%")
+    except Exception as e:
+        logger.error(f"❌ [P1-FIDELIDAD-PLATO-DEL-REGISTRY] cron de uso del catálogo falló: {type(e).__name__}: {e}")
+    finally:
+        try:
+            execute_sql_write(
+                """
+                INSERT INTO pipeline_metrics (node, duration_ms, retries, tokens_estimated, confidence, metadata)
+                VALUES ('_registry_dish_rate_alert_job_tick', 0, 0, 0, %s, %s::jsonb)
+                """,
+                (_rate if _rate is not None else -1.0,
+                 json.dumps({"n_runs": _n, "registry_dish_rate": _rate, "alert_emitted": _alert_emitted,
+                             "skip_reason": _skip, "floor": floor, "lookback_h": lookback_h},
+                            ensure_ascii=False)),
+            )
+        except Exception:
+            pass
+
+
 def _price_inflation_adjust_job():
     """[P2-PRICES-ENGINE-1 · 2026-06-16] Reescala los precios vivos de la lista de
     compras desde la base × el último índice de inflación de alimentos (BCRD).
@@ -6910,6 +7023,25 @@ def register_plan_chunk_scheduler(scheduler) -> None:
         logger.info(
             f"⏰ [P2-REVIEW-FAILED-RATE] Cron review_failed_delivered_rate_alert registrado cada "
             f"{_revfail_interval_h}h (tasa de entregas degradadas no-fallback del pipeline inicial).")
+
+    # [P1-FIDELIDAD-PLATO-DEL-REGISTRY · 2026-09-09] ¿El catálogo de platos se usa cuando se fuerza?
+    # SIEMPRE se registra; el gate (`MEALFIT_RECIPE_LIBRARY_SELECT`) vive DENTRO del job, para que el
+    # tick sea observable también con la biblioteca apagada.
+    _regdish_interval_h = max(1, min(_env_int("MEALFIT_REGDISH_RATE_INTERVAL_H", 6), 48))
+    if not scheduler.get_job("registry_dish_rate_alert"):
+        _add_job_jittered(scheduler,
+            _registry_dish_rate_alert_job,
+            "interval",
+            hours=_regdish_interval_h,
+            id="registry_dish_rate_alert",
+            max_instances=1,
+            coalesce=True,
+            replace_existing=True,
+            misfire_grace_time=_aggregator_misfire_grace_s(),
+        )
+        logger.info(
+            f"⏰ [P1-FIDELIDAD-PLATO-DEL-REGISTRY] Cron registry_dish_rate_alert registrado cada "
+            f"{_regdish_interval_h}h (uso real del catálogo de platos con la biblioteca encendida).")
 
     # [P2-PRICES-ENGINE-1 · 2026-06-16] Cron de reescala de precios por inflación.
     # SIEMPRE se registra; el gate de ejecución vive DENTRO de

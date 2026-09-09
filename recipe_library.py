@@ -214,3 +214,93 @@ def apply_library_recipes_to_days(days, country: str = "DO") -> int:
             if isinstance(m, dict) and apply_library_recipe(m, country):
                 n += 1
     return n
+
+
+# ---------------------------------------------------------------------------
+# [P1-FIDELIDAD-PLATO-DEL-REGISTRY · 2026-09-09] El medidor de procedencia.
+#
+# Medido en producción el 09-sep, sobre un plan recién generado contra el registry de 179
+# plantillas, con la política en `enforce` y `registry_in_prompt: true`: **0 de 12 platos salieron
+# del catálogo**, y el informe de fidelidad de ese mismo plan puntuó **1.0 con `issues: []`**.
+#
+# No se contradicen: la fidelidad mide anclas, repetición y el contrato de la rebanada — nunca la
+# IDENTIDAD del plato. Es la forma exacta del defecto que este repo ya nombró dos veces («un
+# veredicto que no puede fallar no informa», «el gate cuenta VEREDICTOS no DESTINOS»): mientras
+# nadie cuente los platos, encender o no `MEALFIT_RECIPE_LIBRARY_SELECT` es una decisión a ciegas.
+#
+# Tres niveles, porque la costura tiene tres condiciones y el dueño merece el número honesto:
+#
+#   · `del_registry` — el nombre resuelve a una plantilla. Procedencia.
+#   · `con_receta`   — esa plantilla además tiene pasos escritos.
+#   · `aplicables`   — nombre Y conjunto de alimentos coinciden ⇒ la costura sustituiría de verdad.
+#
+# `aplicables` es el único que predice el rendimiento real de encender el knob; los otros dos
+# separan «no está en el catálogo» de «está pero la comida servida es otra».
+#
+# **No cuelga de `library_select_enabled()`, a propósito.** Un medidor gateado por el interruptor
+# que existe para informar sólo sabe medir después de haber decidido — que es justo cuando ya no
+# hace falta. Es la misma trampa que `P1-I18N-DEAD-VEREDICTO`: la defensa reprodujo dentro de sí
+# el defecto que venía a cerrar.
+
+
+@lru_cache(maxsize=8)
+def _registry_name_index(country: str = "DO") -> dict:
+    """`nombre normalizado` → `template_id` de TODAS las plantillas, tengan receta o no.
+
+    Hermano de `_name_index`, que filtra a las que SÍ tienen pasos. La diferencia entre ambos es
+    exactamente la brecha «plantilla sin receta», que hoy vale cero para DO y que este par vuelve
+    verificable en producción y no sólo en la suite.
+    """
+    p = _DIR / f"dish_registry_{str(country).lower()}_v1.json"
+    if not p.exists():
+        return {}
+    try:
+        reg = json.loads(p.read_text(encoding="utf-8"))
+    except Exception as e:
+        logger.warning(f"[P1-FIDELIDAD-PLATO-DEL-REGISTRY] registry {country} ilegible: {e!r}")
+        return {}
+    idx = {}
+    for t in reg.get("templates") or []:
+        tid = t.get("template_id")
+        nom = ((t.get("editorial") or {}).get("display_name") or {}).get("es") or t.get("name")
+        if tid and nom:
+            idx[_norm(nom)] = tid
+    return idx
+
+
+def dish_provenance(days, country: str = "DO") -> dict:
+    """Cuántos platos servidos vienen del catálogo. Fail-open: ante cualquier fallo, ceros y `None`.
+
+    `tasa` es `aplicables / total` —el rendimiento real de la costura—, no `del_registry / total`:
+    prometer el número optimista es cómo un informe acaba afirmando algo que no ocurrió.
+    """
+    vacio = {"total": 0, "del_registry": 0, "con_receta": 0, "aplicables": 0, "tasa": None}
+    try:
+        idx_reg = _registry_name_index(country)
+        idx_rec = _name_index(country)
+        if not idx_reg:
+            return vacio
+        total = del_reg = con_rec = aplica = 0
+        for d in (days or []):
+            for m in ((d.get("meals") or []) if isinstance(d, dict) else []):
+                if not isinstance(m, dict):
+                    continue
+                nombre = _norm(m.get("name"))
+                if not nombre:
+                    continue
+                total += 1
+                tid = idx_reg.get(nombre)
+                if not tid:
+                    continue
+                del_reg += 1
+                if idx_rec.get(nombre) != tid:  # la plantilla existe pero no tiene pasos escritos
+                    continue
+                con_rec += 1
+                esperados = _foods_de_plantilla(tid, country)
+                if esperados is not None and _foods_de_comida(m) == esperados:
+                    aplica += 1
+        return {"total": total, "del_registry": del_reg, "con_receta": con_rec,
+                "aplicables": aplica, "tasa": (round(aplica / total, 3) if total else None)}
+    except Exception as e:
+        logger.debug(f"[P1-FIDELIDAD-PLATO-DEL-REGISTRY] procedencia no medida: {e!r}")
+        return vacio
