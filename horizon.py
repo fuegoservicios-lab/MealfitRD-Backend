@@ -491,6 +491,9 @@ def _registry_block_for_country(country: Optional[str], *, effective: Optional[d
         diet = ((effective or {}).get("diet") or {}).get("type")
         req_nutr = required_nutrients(effective)  # [ARQ27-P0-03]
         mkt = (effective or {}).get("market_country")  # [ARQ27-P1-07] el MERCADO, no la cocina (I16)
+        # [P1-CANDIDATO-CON-PRECIO · 2026-09-09] El presupuesto lo compila la Fase 2 y este módulo
+        # —el que ELIGE los platos— no lo nombraba ni una vez. No faltaba el dato: faltaba el cable.
+        bud = ((effective or {}).get("budget") or {}).get("tier")
         cands = {}
         names = {}
         hashes = {}
@@ -507,7 +510,7 @@ def _registry_block_for_country(country: Optional[str], *, effective: Optional[d
                 # reciben la misma cabeza de la lista. Determinista: mismo blueprint ⇒ mismos IDs.
                 _cc = dr.template_candidates(_c, slot, fam, k=3, exclude_allergens=allergies,
                                              diet=diet, require_known_nutrients=req_nutr,
-                                             market_country=mkt,
+                                             market_country=mkt, budget_tier=bud,
                                              rotate=int(d.get("day_index") or 0),
                                              **_dur_kwargs(effective, d.get("day_index")))
                 ids = [c["template_id"] for c in _cc]
@@ -589,6 +592,7 @@ def registry_prompt_lines(effective: Optional[dict], sl: Optional[dict] = None, 
         diet = (eff.get("diet") or {}).get("type")  # [ARQ27-P0-01] el bloque 📐 respeta la dieta
         req_nutr = required_nutrients(eff)  # [ARQ27-P0-03]
         mkt = eff.get("market_country")  # [ARQ27-P1-07] el MERCADO, no la cocina (I16)
+        bud = (eff.get("budget") or {}).get("tier")  # [P1-CANDIDATO-CON-PRECIO] el bloque 📐 también
         days = [d for d in ((sl or {}).get("days") or []) if isinstance(d, dict)]
         if day_index is not None:
             days = [d for d in days if int(d.get("day_index", -1)) == int(day_index)]
@@ -619,7 +623,8 @@ def registry_prompt_lines(effective: Optional[dict], sl: Optional[dict] = None, 
                 if not names:
                     cands = dr.template_candidates(_day_country, key, fam, k=per_slot, exclude_allergens=allergies,
                                                    diet=diet, require_known_nutrients=req_nutr,
-                                                   market_country=mkt, rotate=int(d.get("day_index") or 0),
+                                                   market_country=mkt, budget_tier=bud,
+                                                   rotate=int(d.get("day_index") or 0),
                                                    **_dur_kwargs(eff, d.get("day_index")))
                     names = [str(c.get("name")) for c in cands]
                 if names:

@@ -639,7 +639,8 @@ def template_candidates(country: Optional[str], slot: str, family: Optional[str]
                         exclude_allergens: Iterable[str] = (), need_days: Optional[int] = None,
                         allow_frozen: bool = False, prefer_batch: bool = False,
                         diet: Any = None, require_known_nutrients: Iterable[str] = (),
-                        market_country: Any = None, rotate: int = 0) -> list[dict]:
+                        market_country: Any = None, rotate: int = 0,
+                        budget_tier: Any = None) -> list[dict]:
     """Candidatos del registry para el allocator: `status='ok'`, franja compatible, familia de proteína
     compatible (vía `horizon.family_matches_template`), sin las clases de alérgeno excluidas y sin
     violar la dieta declarada (ARQ27-P0-01). Orden estable.
@@ -660,7 +661,15 @@ def template_candidates(country: Optional[str], slot: str, family: Optional[str]
     gap nombra. Ahora se recogen TODAS las compatibles y se ordenan por hash del `template_id` con la
     consulta como sal: determinista (mismo snapshot ⇒ mismo orden), independiente del orden de
     inserción, y distinto por franja y familia. `rotate` (el índice del día) desplaza la lista para que
-    días consecutivos con la misma franja y familia no reciban siempre la misma cabeza."""
+    días consecutivos con la misma franja y familia no reciban siempre la misma cabeza.
+
+    [P1-CANDIDATO-CON-PRECIO · 2026-09-09] `budget_tier` (`low`/`medium`/`custom`/`high`/`unlimited`,
+    el que la política ya compiló en `effective["budget"]["tier"]`) recorta la cola CARA del conjunto.
+    Medido: al presupuesto ajustado el prompt pide «evita mariscos caros» y el modelo puso Cangrejo
+    2 lb = RD$958 — pedir no es imponer. Y elegir barato o caro son 5,8× sobre el ciclo, así que la
+    elección del plato no es un factor del coste: es EL factor. La aritmética y la frontera viven en
+    `dish_cost` porque el precio es del MERCADO y esto es la COCINA (I16), igual que `_buyable`.
+    Sin tier ⇒ no se poda. Fail-open."""
     snap = load_registry(country)
     if not snap:
         return []
@@ -671,6 +680,8 @@ def template_candidates(country: Optional[str], slot: str, family: Optional[str]
     ex = {str(a).lower() for a in exclude_allergens or ()}
     slot_es = canonical_slot_es(slot)
     out = []
+    compatibles = []   # [P1-CANDIDATO-CON-PRECIO] la plantilla ENTERA, en paralelo a `out`: costear
+                       # necesita `constituents`, que el dict del candidato no lleva (ni debe llevar)
     try:
         from horizon import family_matches_template
     except Exception:
@@ -699,6 +710,21 @@ def template_candidates(country: Optional[str], slot: str, family: Optional[str]
         out.append({"template_id": t["template_id"], "name": t["name"], "protein": t.get("protein"),
                     "technique": t.get("technique"), "transform": t.get("transform"),
                     "logistics": t.get("logistics") or {}, "pantry_only": bool((t.get("logistics") or {}).get("pantry_only"))})
+        compatibles.append(t)
+    # [P1-CANDIDATO-CON-PRECIO · 2026-09-09] La poda va AQUÍ: antes del orden por hash y del corte a
+    # `k`. Podar después dejaría fuera candidatos baratos sólo por su posición en la lista. El coste
+    # se calcula, se poda y SE DESCARTA — no entra en el dict del candidato, porque los candidatos se
+    # fijan al run y entran en `slice_hash` → `input_hash`: un precio ahí ataría la huella de un plan
+    # al cron de inflación. Fail-open: cualquier fallo del catálogo deja la conducta previa.
+    if budget_tier and out:
+        try:
+            import dish_cost as _dc
+            if _dc.price_filter_enabled() and _dc.fraccion_asequible(budget_tier) is not None:
+                _precios = _dc.tabla_de_precios()
+                out = _dc.poda_por_presupuesto(
+                    [(c, _dc.costo_racion(t, _precios)) for c, t in zip(out, compatibles)], budget_tier)
+        except Exception as _e_precio:
+            logger.debug(f"[P1-CANDIDATO-CON-PRECIO] sin poda por precio ({_e_precio!r}): conducta previa")
     # [ARQ27-P1-04] Orden por hash de CONTENIDO, no por posición en el fichero. Sin corte temprano: hay
     # que ver todas las compatibles para poder ordenarlas, y una biblioteca son ~100 plantillas.
     _salt = f"{library_for_country(country)}:{slot_es}:{_norm(family) if family else ''}"

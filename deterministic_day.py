@@ -427,10 +427,14 @@ def build_day_for_skeleton(nutrition, form_data, skeleton_day, day_num, user_id=
             # clinico rechazando un desayuno con huevo a un alergico al huevo: la defensa en
             # profundidad funcionó, y precisamente por eso el hueco de arriba hay que cerrarlo —
             # una última linea de defensa que trabaja sola dejó de ser defensa en profundidad.
+            # [P1-CANDIDATO-CON-PRECIO · 2026-09-09] Éste es el ÚNICO camino donde el candidato se
+            # convierte en plato sin que el modelo pueda ignorarlo: sin el tier aquí, el filtro de
+            # precio sólo aconseja. Del formulario, que es donde vive `budget` antes de compilarse.
             tids = [c["template_id"] for c in
                     dr.template_candidates(country, slot, (skeleton_day or {}).get("protein"),
                                            k=_candidatos_k(), rotate=int(day_num or 0),
-                                           exclude_allergens=_alergias, diet=_dieta)]
+                                           exclude_allergens=_alergias, diet=_dieta,
+                                           budget_tier=_fd.get("budget"))]
             el = elegir_plantilla(tids, obj, catalogo, por_id, slot)
             if not el:
                 return None
