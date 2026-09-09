@@ -1319,6 +1319,28 @@ def _finalize_plan_data_for_insert(data: dict, *, surface: str = "pre-INSERT",
                 except Exception as _cabc_e:
                     logger.debug(f"[P2-CAPS-AFTER-BAND-CLOSER] pre-INSERT no-op: "
                                  f"{type(_cabc_e).__name__}: {_cabc_e}")
+                # [P1-PROTEIN-FLOOR-LAST-WORD · 2026-09-09] AQUÍ, y no sólo en el merge del chunk.
+                #
+                # El orden dentro de este mismo shield es `_rpb` (sube proteína) → los caps de
+                # arriba (bajan porciones) → `_rbs` (re-mide la banda). Nadie vuelve a subir entre
+                # el cap y la medición, así que un día puede cruzar el piso clínico HACIA ABAJO y
+                # persistirse. Medido en el plan vivo cd1b2fd0: el reviewer registró 0.902 del
+                # target en el día 1 y lo ENTREGADO fue 0.870.
+                #
+                # La primera versión de este P-fix sólo enganchó el merge T1 del chunk worker —
+                # que cubre las semanas 2+ y **deja fuera el bloque inicial**, que persiste por
+                # `fill_placeholder_meal_plan_atomic` → este shield. Lo delató la medición del
+                # plan 125e45b1: `_protein_floor_delivered` AUSENTE. Cablear un paso no es
+                # ejecutarlo, y cablearlo en un solo camino es no cablearlo.
+                #
+                # Va DESPUÉS de los caps (que conservan su última palabra sobre las porciones) y
+                # ANTES de `_rbs`, para que la banda que se persiste mida el plato corregido.
+                try:
+                    from protein_floor_last_word import reencuadra_y_mide as _pflw_ins
+                    _pflw_ins(_pd, surface=str(surface or "pre-INSERT"))
+                except Exception as _pflw_ins_e:
+                    logger.debug(f"[P1-PROTEIN-FLOOR-LAST-WORD] pre-INSERT no-op: "
+                                 f"{type(_pflw_ins_e).__name__}: {_pflw_ins_e}")
                 # [P2-RECONCILE-AFTER-BAND-CLOSER · 2026-07-29] (audit solver+seeder v4) El único
                 # reconciliador display↔raw que actúa como "última palabra" vive DENTRO de
                 # `finalize_plan_data_coherence` (_fpc, más arriba). Pero `_rpb` y sobre todo `_ramb`

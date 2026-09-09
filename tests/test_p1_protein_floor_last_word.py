@@ -140,6 +140,7 @@ def test_si_el_CAP_reabre_el_hueco_se_REPORTA_no_se_pelea(monkeypatch):
 
     monkeypatch.setattr(go, "reconcile_protein_band_post_finalize", _sube, raising=False)
     monkeypatch.setattr(go, "PORTION_REALISM_CAP_ENABLED", True, raising=False)
+    monkeypatch.setattr(go, "CAPS_AFTER_BAND_CLOSER", True, raising=False)
     monkeypatch.setattr(go, "_cap_unrealistic_portions", _cap, raising=False)
 
     p = _plan(107, 116, 112)
@@ -148,6 +149,49 @@ def test_si_el_CAP_reabre_el_hueco_se_REPORTA_no_se_pelea(monkeypatch):
     assert inf["cortos"] and inf["cortos"][0]["dia"] == 1
     assert p["_protein_floor_delivered"]["cortos"][0]["proteina_g"] == 107.0, (
         "el número registrado debe ser el ENTREGADO, no el que hubo a mitad de la cadena")
+
+
+def test_no_corre_el_cap_si_el_bump_no_inflo_nada(monkeypatch):
+    """El cap de este pase existe para recortar lo que ESTE pase infló, nada más.
+
+    Lo destapó el gate: un plan sintético con 0 g de proteína hacía que el bump devolviera
+    False —no había porción proteica que escalar— y aun así yo llamaba al cap, que recortó una
+    línea de pepino ajena. Correr un pase de otro por la puerta de atrás.
+    """
+    import graph_orchestrator as go
+
+    monkeypatch.setattr(go, "reconcile_protein_band_post_finalize", lambda *_a, **_k: False,
+                        raising=False)
+    monkeypatch.setattr(go, "PORTION_REALISM_CAP_ENABLED", True, raising=False)
+    monkeypatch.setattr(go, "CAPS_AFTER_BAND_CLOSER", True, raising=False)
+    monkeypatch.setattr(go, "_cap_unrealistic_portions",
+                        lambda *_a, **_k: pytest.fail("el cap corrió sin que el bump inflara nada"),
+                        raising=False)
+
+    inf = pflw.reencuadra_y_mide(_plan(107, 116, 112), surface="prueba")
+    assert inf["recuperado"] is False
+    assert inf["cumple"] is False, "sin bump el día sigue corto, y el informe debe decirlo"
+
+
+def test_honra_el_ROLLBACK_de_los_caps(monkeypatch):
+    """`MEALFIT_CAPS_AFTER_BAND_CLOSER=false` es el rollback de los caps en este punto de la
+    cadena. Si este pase los corre igual, convierte el rollback de otro en mentira — y el
+    operador que lo accionó para apagar un incendio se queda sin la palanca.
+
+    Lo enseñó el gate rechazando: `test_p2_caps_after_band_closer` comprueba que con el knob en
+    False la línea inflada SOBREVIVE, y mi llamada la recortaba.
+    """
+    import graph_orchestrator as go
+
+    monkeypatch.setattr(go, "reconcile_protein_band_post_finalize", lambda *_a, **_k: True,
+                        raising=False)
+    monkeypatch.setattr(go, "PORTION_REALISM_CAP_ENABLED", True, raising=False)
+    monkeypatch.setattr(go, "CAPS_AFTER_BAND_CLOSER", False, raising=False)   # ← el rollback
+    monkeypatch.setattr(go, "_cap_unrealistic_portions",
+                        lambda *_a, **_k: pytest.fail("corrió el cap con su rollback puesto"),
+                        raising=False)
+
+    pflw.reencuadra_y_mide(_plan(107, 116, 112), surface="prueba")
 
 
 def test_un_plan_que_ya_cumple_no_se_toca(monkeypatch):
@@ -230,3 +274,35 @@ def test_esta_CABLEADO_en_el_merge_del_chunk_antes_de_la_foto():
     assert i_hook < i_sello, (
         "el re-encuadre corre DESPUÉS del sello CAS: el sello no reflejaría las porciones que "
         "este pase acaba de cambiar (P0-6, CAS ciego ante el cambio estructural)")
+
+
+def test_esta_CABLEADO_tambien_en_el_shield_pre_INSERT():
+    """La lección que costó un despliegue: cablearlo en UN camino es no cablearlo.
+
+    La primera versión sólo enganchó el merge T1 del chunk worker. El **bloque inicial** no pasa
+    por ahí: lo persiste `services.py` vía `fill_placeholder_meal_plan_atomic` → el shield
+    pre-INSERT. Medido en el plan vivo 125e45b1, generado con el P-fix ya desplegado:
+    `_protein_floor_delivered` **AUSENTE**. El pase existía, estaba encendido, tenía tests en
+    verde — y no corría para el único bloque que el usuario ve el primer día.
+
+    Es la forma exacta de «una defensa que vive en un CAMINO y no en el DATO desaparece al abrir
+    un camino nuevo», con el agravante de que aquí el camino ya existía y era el principal.
+
+    Y el ORDEN dentro del shield es lo que hace falta el pase: `_rpb` sube la proteína, los caps
+    bajan las porciones DESPUÉS, y `_rbs` mide al final. Sin esto, entre el cap y la medición
+    nadie vuelve a subir.
+    """
+    import pathlib
+
+    src = (pathlib.Path(__file__).resolve().parent.parent / "db_plans.py").read_text(
+        encoding="utf-8", errors="ignore")
+    i_hook = src.find("from protein_floor_last_word import reencuadra_y_mide")
+    i_cap = src.find("_cap_unrealistic_portions as _cup")
+    i_band = src.find("refresh_clinical_band_score_post_finalize")
+    assert i_hook != -1, (
+        "el re-encuadre perdió su callsite en el shield pre-INSERT: el bloque inicial vuelve a "
+        "quedar sin él")
+    assert i_cap != -1 and i_band != -1, "cambiaron los anclajes del cap o del refresh; revísalos"
+    assert i_cap < i_hook < i_band, (
+        "el re-encuadre tiene que ir DESPUÉS de los caps (que conservan su última palabra) y "
+        "ANTES del refresh de banda (para que lo persistido mida el plato corregido)")

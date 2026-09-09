@@ -133,21 +133,34 @@ def reencuadra_y_mide(plan_data: dict, *, form_data: Optional[dict] = None,
             import graph_orchestrator as go
             # 1. el bump PROPONE: re-escala porciones proteína-dominantes que YA existen
             #    (nunca añade ingredientes ⇒ cero riesgo de alérgeno; el shield no tiene form_data).
-            go.reconcile_protein_band_post_finalize(plan_data)
-            # 2. el cap DISPONE: una pasada, no un bucle. Sólo baja cantidades, así que no puede
-            #    inventar comida ni deshacer más de lo que el trade-off de P1-CAPS-LAST-WORD ya
-            #    aceptaba. Si esto reabre el hueco, el hueco se REPORTA — no se vuelve a pelear.
-            try:
-                if go.PORTION_REALISM_CAP_ENABLED:
-                    go._cap_unrealistic_portions(plan_data.get("days"))
-            except Exception as e_cap:
-                logger.debug(f"[P1-PROTEIN-FLOOR-LAST-WORD] cap post-bump no-op: "
-                             f"{type(e_cap).__name__}: {e_cap}")
-            try:
-                go.refresh_delivered_macros(plan_data)
-            except Exception:
-                pass
-            informe["recuperado"] = True
+            subio = bool(go.reconcile_protein_band_post_finalize(plan_data))
+            # 2. el cap DISPONE — pero SÓLO sobre lo que este pase acaba de inflar.
+            #
+            #    Dos condiciones, ambas aprendidas de un gate en rojo:
+            #
+            #    · `subio`: si el bump no tocó nada, este pase no tiene nada que recortar y
+            #      llamar al cap sería correr un pase ajeno por la puerta de atrás. Un plan
+            #      sintético con 0 g de proteína (el bump devuelve False) veía su línea de
+            #      pepino recortada por MI llamada, no por la cadena.
+            #    · `CAPS_AFTER_BAND_CLOSER`: es el knob de ROLLBACK de los caps en este punto
+            #      de la cadena. Honrar sólo `PORTION_REALISM_CAP_ENABLED` dejaba a un operador
+            #      que hizo rollback con los caps corriendo igual — desde aquí. Una defensa que
+            #      ignora el interruptor de otra convierte su rollback en mentira.
+            #
+            #    Una pasada, no un bucle: dos guardas persiguiéndose OSCILAN. Si el recorte
+            #    reabre el hueco, el hueco se REPORTA — no se vuelve a pelear.
+            if subio:
+                try:
+                    if go.PORTION_REALISM_CAP_ENABLED and go.CAPS_AFTER_BAND_CLOSER:
+                        go._cap_unrealistic_portions(plan_data.get("days"))
+                except Exception as e_cap:
+                    logger.debug(f"[P1-PROTEIN-FLOOR-LAST-WORD] cap post-bump no-op: "
+                                 f"{type(e_cap).__name__}: {e_cap}")
+                try:
+                    go.refresh_delivered_macros(plan_data)
+                except Exception:
+                    pass
+            informe["recuperado"] = subio
         except Exception as e:
             logger.debug(f"[P1-PROTEIN-FLOOR-LAST-WORD] re-encuadre no-op: {type(e).__name__}: {e}")
 
