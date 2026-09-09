@@ -32929,6 +32929,17 @@ __PLAN_MODE_GATE__
                             # [P0-2] Si el CAS detectó datos obsoletos (degraded mode),
                             # NO escribir en BD. El re-encole ocurre post-transacción.
                             if not _stale_abort:
+                                # [P1-PROTEIN-FLOOR-LAST-WORD · 2026-09-09] Último pase que toca
+                                # cantidades, y por eso va ANTES del sello CAS de abajo: muta
+                                # porciones, así que el sello debe reflejarlo (P0-6). Detalle y
+                                # medición en `protein_floor_last_word.py`. Fail-safe.
+                                try:
+                                    from protein_floor_last_word import reencuadra_y_mide as _pflw
+                                    _pflw(plan_data, form_data=form_data,
+                                          surface=f"chunk-T1 semana {week_number}")
+                                except Exception as _pflw_e:
+                                    logger.debug(f"[P1-PROTEIN-FLOOR-LAST-WORD] chunk T1 no-op: "
+                                                 f"{type(_pflw_e).__name__}: {_pflw_e}")
                                 # Sellar nuevo timestamp CAS en memoria. Se escribirá al final.
                                 from datetime import datetime as _dt, timezone as _tz
                                 plan_data['_plan_modified_at'] = _dt.now(_tz.utc).isoformat()

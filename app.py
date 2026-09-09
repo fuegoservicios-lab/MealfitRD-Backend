@@ -75,7 +75,8 @@ _PROCESS_START_ISO = datetime.now(timezone.utc).isoformat()
 #   P1-ARQ25-F6-REGISTRY-PROMPT · 2026-09-05 — Fase 6 rebanada 2: candidatos del registry en el prompt (knob, métrica registry_in_prompt), logística derivada y editorial por plantilla; snapshots schema 2.
 #   P1-FIDELIDAD-PLATO-DEL-REGISTRY · 2026-09-09 — el informe de fidelidad ya cuenta cuántos platos SERVIDOS salen del catálogo (`registry_dishes`: del_registry / con_receta / aplicables), mide con el knob de la biblioteca APAGADO y no toca score ni issues; cron `registry_dish_rate_alert` sólo con la biblioteca encendida.
 #   P1-REGISTRY-CANTIDADES-EN-CRUDO · 2026-09-09 — la revisión HUMANA del dueño (35/35 «cambiar», 0 rechazos culturales) encontró que el registry NOMBRA en «plato servido» lo que MIDE en «ingrediente crudo»: `serving_g` es la suma en crudo en 179/179 plantillas y `days_fresh_min` es la vida de los INGREDIENTES. Los números son correctos y no llegan al usuario; lo roto era la documentación, que se contradecía. Anclado por tests (datos, código y un escáner del frontend) sin tocar `snapshot_hash`.
-_LAST_KNOWN_PFIX = "P1-REGISTRY-CANTIDADES-EN-CRUDO · 2026-09-09"
+#   P1-PROTEIN-FLOOR-LAST-WORD · 2026-09-09 — el último pase que toca cantidades no era el último que mide: el reviewer registró proteína 0.902 del target en el día 1 del plan cd1b2fd0 y lo ENTREGADO fue 0.870 (los caps de porción y de huevo recortan después). Pegado a la foto que persiste el chunk: intenta recuperar, el cap tiene la última palabra (trade-off de P1-CAPS-LAST-WORD intacto) y MIDE lo que queda en `_protein_floor_delivered`. Módulo aparte: el god file está en su tope.
+_LAST_KNOWN_PFIX = "P1-PROTEIN-FLOOR-LAST-WORD · 2026-09-09"
 
 # [P1-SENTRY-SAMPLE-COST · 2026-05-12] Sentry sampling driven from env vars
 # con default seguro 0.1 (10%). Pre-fix tenía `traces_sample_rate=1.0` y
