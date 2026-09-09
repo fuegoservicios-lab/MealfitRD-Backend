@@ -28954,6 +28954,16 @@ def finalize_plan_data_coherence(days: list, db=None, allergies=None, target_fat
             total += _nrd; parts.append(f"raw_display_recip={_nrd}")
     except Exception as _rrd_pb_e:
         logger.warning(f"[P1-RAW-DISPLAY-RECONCILE-RECIPROCAL] boundary no-op: {type(_rrd_pb_e).__name__}: {_rrd_pb_e}")
+    # [P1-RAW-LINEA-MUERTA · 2026-09-09] JUSTO DESPUÉS de la recíproca, nunca antes: ella ya
+    # adoptó al display las líneas de raw legítimamente ausentes, así que lo que siga sin
+    # respaldo en el display está muerto. Invertir el orden pone a las dos a pelearse por la
+    # misma línea.
+    try:
+        _nlm = _barrer_lineas_muertas_de_raw(days)
+        if _nlm:
+            total += _nlm; parts.append(f"raw_linea_muerta={_nlm}")
+    except Exception as _blm_pb_e:
+        logger.warning(f"[P1-RAW-LINEA-MUERTA] boundary no-op: {type(_blm_pb_e).__name__}: {_blm_pb_e}")
     # [P1-CURED-GHOST-STEPS · 2026-07-05] también en el boundary.
     try:
         _rewrite_cured_ghost_protein_steps(days)
@@ -38053,6 +38063,121 @@ def _reconcile_raw_missing_in_display(days) -> int:
         return 0
 
 
+# [P1-RAW-LINEA-MUERTA · 2026-09-09] La tercera dirección, la que cuesta dinero.
+#
+# Plan vivo c4098931, cena del día 1: `ingredients` traía «185 g de pechuga de pavo» e
+# `ingredients_raw` traía **las dos** — «135 g de pechuga de pavo en lonjas/tiras» (superada)
+# Y «185 g de pechuga de pavo». La lista de compras lee `ingredients_raw` PRIMERO
+# (`shopping_calculator` :6383 y :13611), así que compró pavo dos veces: `Pechuga de pavo`
+# RD$285 + `Jamón de pavo` RD$191,25 = RD$476 para el ÚNICO plato con pavo del plan. Segundo
+# caso el mismo día: desayuno del día 3, «1 huevo» superada por «1 clara de huevo».
+#
+# Por qué ninguna defensa lo vio, medido una por una:
+#   · `_reconcile_display_raw_lines` ejecutado sobre esa cena devuelve **0 filas y no cambia
+#     nada**: usa el resolvedor NUTRICIONAL, para el que las dos líneas son `Pechuga de pavo`
+#     — un solo alimento, presente en ambos lados, nada que reconciliar.
+#   · `_reconcile_raw_missing_in_display` va en la dirección contraria y es SOLO-APPEND
+#     («jamás se borra ni se muta una línea existente»), porque su premisa es que **raw es la
+#     verdad**. Una línea superada rompe justo esa premisa: raw pasa a ser la verdad MÁS su
+#     historia.
+#   · El guard de coherencia clasificó las 3 divergencias como `recipe_unquantified` y
+#     `action_taken: not_applicable`. Tiene hipótesis para «la receta no cuantifica» y ninguna
+#     para «sobra una línea».
+#
+# El fondo: **la misma cadena resuelve a dos alimentos distintos según quién pregunte** —
+# `macros_from_ingredient_string` dice `Pechuga de pavo`, `_parse_quantity` dice `Jamón de
+# pavo` (el discriminante es el token «lonjas»; «en tiras» a secas resuelve bien). Todo lo que
+# reconcilia usa el nutricional, así que del lado que MIRA hay un solo pavo y del lado que
+# GASTA hay dos. Este barrido pregunta por la identidad de COMPRA a propósito: es la que paga.
+#
+# Corre DESPUÉS de `_reconcile_raw_missing_in_display`, y ese orden es lo que impide que las
+# dos guardas oscilen: la recíproca ya adoptó al display las líneas de raw legítimamente
+# ausentes, así que lo que siga sin respaldo en el display está muerto de verdad.
+#
+# Tope por comida: si «muchas» líneas parecen muertas, lo que falló es el resolvedor, no la
+# receta — se registra y no se toca nada. Un barrido sin tope convierte una regresión del
+# resolvedor en una lista de compras vacía.
+# tooltip-anchor: P1-RAW-LINEA-MUERTA
+RAW_DEAD_LINE_SWEEP_ENABLED = _env_bool("MEALFIT_RAW_DEAD_LINE_SWEEP", True)
+RAW_DEAD_LINE_SWEEP_MAX_PER_MEAL = _env_int("MEALFIT_RAW_DEAD_LINE_SWEEP_MAX", 2,
+                                            validator=lambda v: 1 <= v <= 10)
+
+
+def _barrer_lineas_muertas_de_raw(days) -> int:
+    """Quita de `ingredients_raw` la línea que COMPRA un alimento que la receta ya no menciona.
+
+    Conservador por tres lados: si alguna línea del display no resuelve, la comida entera se
+    salta (sin el conjunto completo de «vivos» no hay veredicto); nunca vacía `raw`; y por
+    encima del tope por comida no toca nada. Idempotente y fail-safe.
+    tooltip-anchor: P1-RAW-LINEA-MUERTA"""
+    if not RAW_DEAD_LINE_SWEEP_ENABLED:
+        return 0
+    try:
+        from shopping_calculator import _parse_quantity as _pq_muerta
+    except Exception as _imp_e:                                        # noqa: BLE001
+        logger.warning(f"[P1-RAW-LINEA-MUERTA] no-op (import): {type(_imp_e).__name__}")
+        return 0
+
+    def _identidad_de_compra(_linea: str):
+        try:
+            _q, _u, _n = _pq_muerta(_linea, apply_yield_multiplier=False,
+                                    apply_legumbres_yield_only=True, apply_protein_yield=False)
+            return _n or None
+        except Exception:                                              # noqa: BLE001
+            return None
+
+    borradas = 0
+    try:
+        for _d in days or []:
+            for meal in (_d.get("meals") or []) if isinstance(_d, dict) else []:
+                if not isinstance(meal, dict):
+                    continue
+                ings = meal.get("ingredients")
+                raw = meal.get("ingredients_raw")
+                if not isinstance(ings, list) or not isinstance(raw, list) or not ings or not raw:
+                    continue
+                vivos, display_incompleto = set(), False
+                for _x in ings:
+                    if not isinstance(_x, str) or not _x.strip():
+                        continue
+                    _i = _identidad_de_compra(_x)
+                    if _i is None:
+                        display_incompleto = True
+                        break
+                    vivos.add(_i)
+                if display_incompleto or not vivos:
+                    continue
+                muertas = []
+                for _idx, _x in enumerate(raw):
+                    if not isinstance(_x, str) or not _x.strip():
+                        continue
+                    _i = _identidad_de_compra(_x)
+                    if _i is not None and _i not in vivos:
+                        muertas.append((_idx, _x, _i))
+                if not muertas:
+                    continue
+                if len(muertas) > RAW_DEAD_LINE_SWEEP_MAX_PER_MEAL:
+                    logger.warning(
+                        f"[P1-RAW-LINEA-MUERTA] «{str(meal.get('name'))[:40]}»: {len(muertas)} "
+                        f"líneas parecen muertas (tope {RAW_DEAD_LINE_SWEEP_MAX_PER_MEAL}) — eso "
+                        f"acusa al resolvedor, no a la receta: no se toca nada")
+                    continue
+                _fuera = {_idx for _idx, _, _ in muertas}
+                _nuevo = [_x for _idx, _x in enumerate(raw) if _idx not in _fuera]
+                if not _nuevo:
+                    continue
+                meal["ingredients_raw"] = _nuevo
+                borradas += len(muertas)
+                for _, _linea, _ident in muertas:
+                    logger.info(
+                        f"🧹 [P1-RAW-LINEA-MUERTA] «{str(meal.get('name'))[:40]}»: {_linea!r} "
+                        f"compraba {_ident!r} y la receta ya no lo menciona → fuera de la lista")
+        return borradas
+    except Exception as _blm_e:                                        # noqa: BLE001
+        logger.warning(f"[P1-RAW-LINEA-MUERTA] no-op: {type(_blm_e).__name__}: {_blm_e}")
+        return 0
+
+
 # [P2-COOKED-RAW-ANNOTATION · 2026-07-05] (plato vivo "Cerdo con bok choy": "⅓ taza de arroz
 # integral cocido (62g cocido, 60g raw)" — 60g de arroz crudo rinden ~1 taza cocida, así que el
 # crudo de ⅓ taza es ~22g: la anotación inflaba la compra 3× y encima en inglés). Sanea la
@@ -40502,6 +40627,13 @@ async def assemble_plan_node(state: PlanState) -> dict:
         _reconcile_raw_missing_in_display(days)
     except Exception as _rrd_as_e:
         logger.warning(f"[P1-RAW-DISPLAY-RECONCILE-RECIPROCAL] assemble no-op: {type(_rrd_as_e).__name__}: {_rrd_as_e}")
+    # [P1-RAW-LINEA-MUERTA · 2026-09-09] Tras la recíproca (ver el orden en su comentario): la
+    # línea de raw que compra un alimento que la receta ya no menciona sale de la lista. Sin
+    # esto el usuario pagó RD$476 de pavo para un solo plato (plan c4098931).
+    try:
+        _barrer_lineas_muertas_de_raw(days)
+    except Exception as _blm_as_e:
+        logger.warning(f"[P1-RAW-LINEA-MUERTA] assemble no-op: {type(_blm_as_e).__name__}: {_blm_as_e}")
     # [P1-CURED-GHOST-STEPS · 2026-07-05] proteína curada fantasma en pasos (arenque del plan
     # 55846e5e) → reescribir hacia la proteína presente + strip de desalado.
     try:
