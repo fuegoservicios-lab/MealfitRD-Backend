@@ -102,9 +102,21 @@ def test_el_prompt_cierra_la_puerta_SOLO_con_el_knob(monkeypatch):
 
 
 def test_cobertura_del_registry_DO():
+    """Cobertura COMPLETA: toda plantilla usable del registry tiene sus pasos escritos.
+
+    [P1-CICLO-30D-DURADERO · 2026-09-09] El número era `140` fijo y lo movió el crecimiento
+    legítimo de la biblioteca: 35 platos de despensa para sostener el ciclo de una sola
+    compra de 30 días. La cifra sube a 175 y el ratchet se conserva —una biblioteca que
+    ENCOGE sigue siendo sospechosa— pero lo que de verdad se exige es la igualdad
+    `con_receta == recetas`: encender el knob con una plantilla sin pasos deja al motor
+    determinista sin receta que servir justo para ese plato.
+    """
     cov = rl.coverage("DO")
     if not cov["recetas"]:
         pytest.skip("la biblioteca no está en el árbol")
-    assert cov["con_receta"] == cov["recetas"] == 140, (
-        f"cobertura inesperada: {cov}. Si el registry creció, regenerar con "
-        "`scratchpad/genera_biblioteca_rd.py` antes de encender el knob.")
+    assert cov["con_receta"] == cov["recetas"], (
+        f"cobertura incompleta: {cov}. Hay plantillas usables sin pasos escritos; encender "
+        f"el knob dejaría al motor sin receta para esos platos.")
+    assert cov["recetas"] >= 175, (
+        f"la biblioteca ENCOGIÓ a {cov['recetas']} (mínimo 175): si fue a propósito, baja "
+        f"este suelo en el mismo commit que retira los platos, para que se vea.")
