@@ -9,14 +9,70 @@ from typing import Optional
 import jwt  # PyJWT — ya dep (neon_auth lo usa para EdDSA); aquí HS256 para la cookie.
 from fastapi import Header, Cookie, Depends, HTTPException, Response
 from db import (
+    auth_user_row_exists,
     ensure_user_profile_exists,
     get_monthly_api_usage,
     get_user_profile,
 )
 from neon_auth import verify_neon_jwt  # [P1-NEON-AUTH-MIGRATION · 2026-06-13]
-from knobs import _env_int, is_production  # [P3-TIER-LIMITS-ENV · 2026-05-20] auto-registry; is_production SSOT
+from knobs import _env_bool, _env_int, is_production  # [P3-TIER-LIMITS-ENV · 2026-05-20] auto-registry; is_production SSOT
 
 logger = logging.getLogger(__name__)
+
+
+# ---------------------------------------------------------------------------
+# [P1-AUTH-CUENTA-BORRADA · 2026-09-08] Una cuenta borrada volvía entera.
+#
+# `verify_neon_jwt` valida la FIRMA contra el JWKS y nada más. Nada comprueba que
+# el usuario siga existiendo, así que un access token sin expirar sigue
+# autenticando después de borrar la cuenta — y `ensure_user_profile_exists`
+# recrea la fila espejo en `user_profiles` en ese mismo request. Medido el 08-sep:
+# tras purgar 7 cuentas de prueba (perfil + `neon_auth."user"` + `account` + 29
+# `session`), una de ellas generó un plan de 30 días. El frontend, además,
+# reenvió el perfil de salud entero desde localStorage, así que el «primer plan»
+# salió como `renewal.v1`: la cuenta no volvió coja, volvió con memoria.
+#
+# El guard es UNO y lo atraviesan los CUATRO puntos que devuelven identidad
+# (Bearer, cookie `__Host-mf_session`, header `X-MF-Session`, y el Bearer-only de
+# `/api/auth/session`). Escribir la comprobación en cada uno es la lección de
+# `P1-DIET-CANON-SSOT`: tres tablas a mano drifean y la que se olvida es la que
+# importa.
+#
+# NO debilita `P0-AUDIT-1`: jamás devuelve un `sub` sin firma verificada; solo
+# puede QUITAR identidad a un token ya verificado, nunca concederla.
+#
+# Rollback sin redeploy: `MEALFIT_AUTH_REQUIRE_AUTH_ROW=0` → conducta previa.
+# ---------------------------------------------------------------------------
+def _requiere_fila_de_auth() -> bool:
+    return _env_bool("MEALFIT_AUTH_REQUIRE_AUTH_ROW", True)
+
+
+def _uid_si_la_identidad_vive(uid: Optional[str], via: str) -> Optional[str]:
+    """Devuelve `uid` salvo que su identidad esté **demostrablemente** borrada.
+
+    `auth_user_row_exists` devuelve tres valores y solo uno cierra la puerta:
+    `False` (la consulta respondió y no hay fila). Ante `None` —pool ausente,
+    error, uuid mal formado— se falla ABIERTO a propósito: `None` no es un
+    veredicto, y convertir un hipo de la base en un 401 masivo cambia un riesgo
+    bajo (el token caducable de alguien sobre sus propios datos) por uno alto.
+
+    Tooltip-anchor: P1-AUTH-CUENTA-BORRADA-GATE.
+    """
+    if not uid or not _requiere_fila_de_auth():
+        return uid
+    try:
+        vive = auth_user_row_exists(uid)
+    except Exception as e:                                             # noqa: BLE001
+        logger.warning(f"[P1-AUTH-CUENTA-BORRADA] guard lanzó {type(e).__name__} "
+                       f"(se falla ABIERTO)")
+        return uid
+    if vive is False:
+        logger.warning(
+            f"[P1-AUTH-CUENTA-BORRADA] token válido de una cuenta BORRADA "
+            f"(via={via}, sub={uid}): se rechaza en vez de resucitar el perfil"
+        )
+        return None
+    return uid
 
 
 # ---------------------------------------------------------------------------
@@ -273,6 +329,25 @@ async def get_verified_user_id(
             if payload:
                 uid = payload.get("sub")
                 if uid:
+                    # [P1-AUTH-CUENTA-BORRADA · 2026-09-08] El guard va ANTES del
+                    # `ensure`: al revés, el perfil ya estaría resucitado cuando
+                    # decidimos rechazar — que es exactamente lo que pasó el 08-sep.
+                    # Identidad demostrablemente borrada ⇒ None YA, sin probar la
+                    # cookie: el fallback del mismo sujeto muerto solo gastaría otra
+                    # consulta para llegar al mismo veredicto.
+                    # `to_thread` por lo mismo que el `ensure` de al lado
+                    # (P2-AUTH-ASYNC-SLEEP): la consulta es I/O y no puede
+                    # bloquear el event loop.
+                    #
+                    # Se REBINDEA `uid` en vez de comprobarlo y seguir: así el
+                    # `return uid` de abajo devuelve, por construcción, la salida
+                    # del guard. Un `if ... : return None` deja el nombre intacto
+                    # y el siguiente que edite la función puede colar un camino
+                    # que lo devuelva sin filtrar.
+                    uid = await asyncio.to_thread(
+                        _uid_si_la_identidad_vive, uid, "bearer")
+                    if not uid:
+                        return None
                     # [P1-NEON-DB-MIGRATION · 2026-06-12] Garantiza la fila espejo
                     # en public.user_profiles (reemplaza el trigger handle_new_user).
                     # Cacheado in-process: tras el primer request es no-op. Best-
@@ -301,7 +376,9 @@ async def get_verified_user_id(
     if mf_session:
         uid = verify_session_cookie(mf_session)
         if uid:
-            return uid
+            # [P1-AUTH-CUENTA-BORRADA] La cookie se acuñó desde un Bearer vivo,
+            # pero sobrevive al borrado igual que el token que la originó.
+            return await asyncio.to_thread(_uid_si_la_identidad_vive, uid, "cookie")
 
     # 3) [P1-FIRST-PARTY-SESSION] Header `X-MF-Session` = el MISMO token de sesión
     #    pero guardado en localStorage (no en cookie). Necesario porque los PWA
@@ -312,7 +389,10 @@ async def get_verified_user_id(
     if x_mf_session:
         uid = verify_session_cookie(x_mf_session)
         if uid:
-            return uid
+            # [P1-AUTH-CUENTA-BORRADA] Mismo token que la cookie, guardado en
+            # localStorage: si se dejara fuera, el PWA de iOS sería el ÚNICO
+            # camino por el que una cuenta borrada seguiría entrando.
+            return await asyncio.to_thread(_uid_si_la_identidad_vive, uid, "header")
 
     return None
 
@@ -332,6 +412,13 @@ async def get_neon_bearer_user_id(authorization: Optional[str] = Header(None)) -
     if not payload:
         return None
     uid = payload.get("sub")
+    if not uid:
+        return None
+    # [P1-AUTH-CUENTA-BORRADA · 2026-09-08] ANTES del `ensure`, igual que en
+    # `get_verified_user_id`. Este es el camino que ACUÑA la cookie: dejarlo sin
+    # guard le daría a una cuenta borrada una credencial NUEVA de este backend,
+    # que ya no depende de que el token de Neon caduque.
+    uid = await asyncio.to_thread(_uid_si_la_identidad_vive, uid, "bearer_only")
     if not uid:
         return None
     try:

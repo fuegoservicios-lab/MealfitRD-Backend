@@ -182,6 +182,72 @@ def ensure_user_profile_exists(user_id: str, email: Optional[str] = None,
         )
 
 
+# [P1-AUTH-CUENTA-BORRADA · 2026-09-08] Cache in-process de user_ids con fila VIVA
+# en `neon_auth."user"`. SOLO se cachea el positivo: cachear el negativo dejaría
+# fuera durante toda la vida del proceso a un alta que corriera contra la ventana
+# entre el INSERT de Neon Auth y esta consulta.
+_AUTH_ROW_ALIVE_IDS: set = set()
+_AUTH_ROW_ALIVE_MAX = 50_000
+
+
+def auth_user_row_exists(user_id: str) -> Optional[bool]:
+    """¿Sigue existiendo la IDENTIDAD de este `sub` en `neon_auth."user"`?
+
+    [P1-AUTH-CUENTA-BORRADA · 2026-09-08] `P1-ACCOUNT-DELETE-IDENTITY` (2026-08-22)
+    ya razonó este modo de fallo y lo dio por cerrado, con estas palabras exactas en
+    `delete_account_data`: «mejor un perfil sin identidad (inaccesible) que una
+    identidad sin perfil (entra y `ensure_user_profile_exists` lo resucita)».
+
+    **La premisa era falsa: un perfil sin identidad NO es inaccesible.** Medido el
+    08-sep contra producción — tras la purga de usuarios de prueba (perfil borrado,
+    `neon_auth."user"` borrado, `account` y 29 filas de `session` en cascada) una de
+    las cuentas eliminadas generó un plan completo. `verify_neon_jwt` valida la FIRMA
+    contra el JWKS y nada más; un access token sin expirar sigue siendo válido después
+    de borrar la cuenta, y `ensure_user_profile_exists` recreó la fila espejo en el
+    primer request. Borrar la sesión en la base no revoca el token ya emitido.
+
+    La huella del zombi en `user_profiles` es `email = NULL` + `full_name = NULL` con
+    `created_at` de hoy: el JWT no trae esos claims, así que la fila renace vacía.
+
+    Tres valores, y la diferencia entre los dos últimos es el diseño entero:
+      * `True`  — la identidad existe (o el positivo está cacheado).
+      * `False` — la consulta respondió y **no hay fila**: identidad borrada.
+      * `None`  — no se pudo saber (pool ausente, error de la consulta, uuid mal
+        formado). **No es un veredicto**, y el caller debe tratarlo como tal.
+
+    El caller (`auth._uid_si_la_identidad_vive`) falla ABIERTO ante `None` a
+    propósito, y esto no debilita `P0-AUDIT-1`: la firma ya se verificó: `None`
+    devuelve exactamente la conducta previa al fix. Cerrar ante `None` cambiaría un
+    riesgo bajo (el token caducable de un usuario sobre SUS PROPIOS datos) por uno
+    alto (un hipo de la base deja fuera a toda la flota).
+
+    Tooltip-anchor: P1-AUTH-CUENTA-BORRADA-EXISTS.
+    """
+    if not user_id:
+        return False
+    if user_id in _AUTH_ROW_ALIVE_IDS:
+        return True
+    if not connection_pool:
+        return None
+    try:
+        filas = execute_sql_query(
+            'SELECT 1 AS vive FROM neon_auth."user" WHERE id = %s LIMIT 1',
+            (user_id,), fetch_all=True,
+        )
+    except Exception as e:                                             # noqa: BLE001
+        logger.warning(
+            f"[P1-AUTH-CUENTA-BORRADA] no se pudo comprobar la identidad de "
+            f"{user_id}: {type(e).__name__} (se falla ABIERTO: la firma ya se validó)"
+        )
+        return None
+    if filas:
+        if len(_AUTH_ROW_ALIVE_IDS) >= _AUTH_ROW_ALIVE_MAX:
+            _AUTH_ROW_ALIVE_IDS.clear()
+        _AUTH_ROW_ALIVE_IDS.add(user_id)
+        return True
+    return False
+
+
 def build_clinical_form_from_profile(user_id: str) -> dict:
     """[P1-PREINSERT-CLINICAL-CTX · 2026-07-30] Contexto clínico SERVER-SIDE de un usuario, con
     la forma que consumen el motor de macros, los caps de porción y el panel de micros.
