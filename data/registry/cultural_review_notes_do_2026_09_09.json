@@ -1,0 +1,327 @@
+{
+ "fecha": "2026-09-09",
+ "revisor": "dueño del producto (humano)",
+ "alcance": "los 35 platos de despensa añadidos por P1-CICLO-30D-DURADERO",
+ "marker": "P1-REGISTRY-CANTIDADES-EN-CRUDO",
+ "resumen": {
+  "revisados": 35,
+  "aprobados": 0,
+  "a_cambiar": 35,
+  "rechazados": 0,
+  "rechazos_culturales": 0
+ },
+ "hallazgos_sistemicos": [
+  {
+   "n": 35,
+   "tema": "«días sin nevera» leído como la vida del plato ya cocinado",
+   "veredicto_tecnico": "de ETIQUETA, no de motor: el selector pregunta por los ingredientes y la cifra no llega al usuario; los dos comentarios se contradecían"
+  },
+  {
+   "n": 32,
+   "tema": "gramos en crudo presentados como ración servida",
+   "veredicto_tecnico": "real y general: serving_g == suma en crudo en 179 de 179 plantillas; las macros son correctas, el nombre engaña"
+  },
+  {
+   "n": 32,
+   "tema": "producto ambiguo sin especificar (p. ej. «queso de papa»)",
+   "veredicto_tecnico": "del catálogo de ingredientes, no de las plantillas"
+  },
+  {
+   "n": 30,
+   "tema": "sal y sodio a reducir",
+   "veredicto_tecnico": "decisión de producto: las conservas saladas son el precio de los 45 días"
+  },
+  {
+   "n": 29,
+   "tema": "el tiempo no incluye remojo ni enfriado",
+   "veredicto_tecnico": "prep_minutes_est sale de una tabla por técnica, no del plato: una estimación presentada como dato"
+  },
+  {
+   "n": 16,
+   "tema": "leche como alérgeno y lactosa como intolerancia aparte",
+   "veredicto_tecnico": "NO es un agujero: allergen_classes_for emite ambos sinónimos a propósito para que cualquier filtro acierte; el punto es semántico"
+  }
+ ],
+ "veredictos": [
+  {
+   "plato": "Almendras fileteadas con ciruelas pasas",
+   "franjas": [
+    "merienda"
+   ],
+   "veredicto": "cambiar",
+   "nota": "Corregir la categoría «avena», ocultar «none» y cambiar «crudo» por «tostado». Precisar tiempo de tostado y enfriado; revisar los 30 minutos totales. Registrar los 35 g de ciruelas sin hueso y las almendras según su estado en el cálculo nutricional. Identificar almendra como alérgeno y declarar sulfitos solo si el producto los contiene. No asignar automáticamente 180 días a la mezcla: ajustar conservación a las etiquetas, apertura y condiciones de almacenamiento. Indicar frasco limpio, seco y cierre después del enfriado completo. Los 60 g son coherentes como suma de ingredientes comestibles antes del tostado."
+  },
+  {
+   "plato": "Arenque guisado con auyama y yuca",
+   "franjas": [
+    "cena"
+   ],
+   "veredicto": "cambiar",
+   "nota": "Especificar si el arenque es salado, ahumado o fresco y adaptar desalado y cocción al producto; un enjuague no garantiza retirar suficiente sal. Indicar retirada de espinas y peso comestible. Revisar el sodio según el producto y tratamiento, sin asumir una reducción fija; como mejora, omitir los 2 g de sal añadida. Cocinar la yuca pelada por separado, desechar su agua y comprobar que esté completamente cocida; ajustar la cocción de la auyama para evitar que se deshaga. Precisar líquido y tiempo del guiso, porque los pasos actuales describen una mezcla salteada. Los 495 g son el peso inicial, no necesariamente el servido. Ajustar los 50 minutos si se requiere desalado y corregir «21 días sin nevera» para el plato preparado."
+  },
+  {
+   "plato": "Arepa de maíz con queso gouda",
+   "franjas": [
+    "desayuno"
+   ],
+   "veredicto": "cambiar",
+   "nota": "Añadir la cantidad de agua y un paso para cocinar completamente el huevo antes de rellenar. Precisar el grosor de las arepas y ajustar la cocción para que el centro quede cocido. Calcular el peso final considerando hidratación y cocción. Corregir «sin nevera: 35 días» para el plato preparado. Unificar el alérgeno huevo y distinguir leche de lactosa. Valorar reducir la sal añadida por el aporte del gouda."
+  },
+  {
+   "plato": "Arroz con lentejas y queso de papa",
+   "franjas": [
+    "almuerzo"
+   ],
+   "veredicto": "cambiar",
+   "nota": "Especificar si arroz y lentejas se pesan secos y usar ese estado en el cálculo nutricional. Los ingredientes suman 245 g antes de cocinar, no representan el rendimiento final. Cuantificar por separado el agua para las lentejas y para el arroz; «cubrir con agua» es impreciso. Evitar cocinar las lentejas hasta tiernas y después otros 20 minutos: precocerlas parcialmente o incorporarlas más tarde para conservar su textura. Indicar cuándo añadir los 2 g de sal. Revisar que los 50 minutos incluyan preparación y calentamiento. Corregir «45 días sin nevera» si describe el plato preparado. Precisar qué producto es «queso de papa», identificar leche como alérgeno y separar lactosa como intolerancia. Como mejora, reducir la sal añadida considerando el queso."
+  },
+  {
+   "plato": "Atún guisado con papa y zanahoria",
+   "franjas": [
+    "cena"
+   ],
+   "veredicto": "cambiar",
+   "nota": "Especificar atún en conserva al agua, con 120 g de peso escurrido, y verificar nutrientes y sodio según el producto. Registrar papa y zanahoria peladas, precisar tamaño de los cubos y cantidad de agua; comprobar que ambas estén tiernas antes de añadir el atún. Indicar cuándo incorporar la sal; como mejora, reducirla considerando la del atún. Revisar los 50 minutos, que no se justifican con los pasos descritos. Los 430 g son la suma inicial, no el rendimiento final con caldo. Corregir «45 días sin nevera» si describe el plato preparado."
+  },
+  {
+   "plato": "Avena cocida con leche evaporada y maní",
+   "franjas": [
+    "desayuno"
+   ],
+   "veredicto": "cambiar",
+   "nota": "Corregir la conservación: distinguir ingredientes cerrados del plato cocido y evitar mostrar 180 días sin refrigeración para la preparación. Registrar el agua con cantidad y unidad, y separar el peso de ingredientes del rendimiento cocido: los 202 g actuales omiten el agua. Especificar el tipo de avena y ajustar líquido y cocción a esa presentación. Identificar el maní como tostado y con o sin sal, o incluir el paso de tostado. Revisar el tiempo total y ocultar «none». Validar los valores nutricionales contra las entradas exactas utilizadas y separar alérgenos de intolerancias."
+  },
+  {
+   "plato": "Avena con dátiles y almendras fileteadas",
+   "franjas": [
+    "desayuno"
+   ],
+   "veredicto": "cambiar",
+   "nota": "Corregir «180 días sin nevera» si corresponde al plato preparado. Especificar cantidad de agua, tipo de avena y tiempo de cocción correspondiente. Los ingredientes suman 210 g, pero ese no es el peso final cocido: considerar hidratación y evaporación. Registrar los 30 g de dátiles sin hueso. Precisar tiempo y fuego del tostado de almendras y duración del reposo. Revisar los 30 minutos totales. Ocultar «none». Identificar almendra y leche como alérgenos, separar lactosa como intolerancia y verificar la advertencia de gluten según la avena utilizada."
+  },
+  {
+   "plato": "Avena remojada con leche de coco y linaza",
+   "franjas": [
+    "merienda"
+   ],
+   "veredicto": "cambiar",
+   "nota": "Especificar bebida de coco o leche de coco concentrada: su composición cambia mucho y debe coincidir con las 254 kcal y los macros. Registrar linaza molida y avena en hojuelas apta para esta preparación. Verificar la proporción de líquido, porque la linaza espesa la mezcla; cuantificar cualquier ajuste. Sustituir los 30 minutos por tiempo activo más un mínimo de cuatro horas de refrigeración. Corregir «180 días sin nevera», que contradice la preparación. Ocultar «none» y usar «sin cocción». Verificar la advertencia de gluten según la avena utilizada. Los 172 g son coherentes si no se añade más líquido: la hidratación no aumenta el peso total de una mezcla cerrada."
+  },
+  {
+   "plato": "Bacalao guisado con yuca y cebolla",
+   "franjas": [
+    "cena"
+   ],
+   "veredicto": "cambiar",
+   "nota": "Especificar bacalao salado y realizar el desalado en refrigeración, ajustando duración y cambios de agua al grosor y al producto; separar ese tiempo de los 50 minutos. Aclarar si los 120 g se pesan antes o después del desalado, retirar espinas y verificar nutrientes y sodio sin asumir una reducción fija. Precisar la cocción completa del pescado, no depender únicamente de cinco minutos. Registrar yuca pelada y desechar su agua de cocción. No contabilizar toda la sal del agua como ingerida; como mejora, omitirla considerando el bacalao. Añadir líquido y cocción de guiso o cambiar la técnica a salteado. Los 375 g son la suma inicial, no el rendimiento servido. Corregir «21 días sin nevera» para el plato preparado."
+  },
+  {
+   "plato": "Batida de leche evaporada con avena y maní",
+   "franjas": [
+    "merienda"
+   ],
+   "veredicto": "cambiar",
+   "nota": "Especificar avena apta para consumo sin cocción y maní tostado sin sal, usando esas presentaciones en el cálculo nutricional. Cuantificar agua o hielo opcionales para ajustar la consistencia; los 197 g solo corresponden a la versión sin añadidos. Aclarar que el hielo diluye la bebida, pero no reduce las calorías totales. Ajustar los 30 minutos al tiempo real de licuado y usar ingredientes previamente fríos. Corregir «180 días sin nevera» para la batida preparada. Ocultar «none» y cambiar «crudo» por «licuado». Identificar leche y maní como alérgenos, separar lactosa como intolerancia y verificar gluten según la avena utilizada."
+  },
+  {
+   "plato": "Casabe con mantequilla de maní y canela",
+   "franjas": [
+    "merienda"
+   ],
+   "veredicto": "cambiar",
+   "nota": "Precisar método, temperatura o fuego y tiempo de tostado del casabe. Ajustar los 30 minutos a unos 5–10 minutos, cambiar «crudo» por «tostado» y ocultar «none». Especificar si la mantequilla de maní contiene sal o azúcar añadida y verificar nutrientes según el producto. No asignar automáticamente 180 días de conservación al casabe ya untado; distinguir ingredientes envasados y preparación. Los 67 g coinciden con la suma inicial. Como mejora opcional, reducir la canela si los 2 g resultan demasiado intensos para esta porción."
+  },
+  {
+   "plato": "Casabe con mantequilla de maní y pasas",
+   "franjas": [
+    "desayuno"
+   ],
+   "veredicto": "cambiar",
+   "nota": "Ajustar la preparación a unos 5 minutos; 30 minutos no se justifican. Cambiar «crudo» por «sin cocción» y ocultar «none». Eliminar el agua o dejarla opcional para conservar la textura crujiente; si se utiliza, registrar su cantidad. No atribuir 180 días de conservación al plato montado, especialmente si se humedece. Declarar sulfitos solo si las pasas utilizadas los contienen. Verificar calorías y macros con los productos concretos, incluyendo si la mantequilla de maní contiene sal o azúcar añadida. Los 105 g corresponden correctamente a los ingredientes sin agua."
+  },
+  {
+   "plato": "Casabe con queso gouda",
+   "franjas": [
+    "merienda"
+   ],
+   "veredicto": "cambiar",
+   "nota": "Ajustar los 30 minutos a unos 5–10 minutos y cambiar «crudo» por «tostado en sartén». Eliminar el agua o dejarla opcional y cuantificada según la textura buscada. Precisar fuego y tiempo de tostado, y aclarar si se mantiene fuego bajo al tapar para ablandar el queso sin quemar el casabe. Los 85 g coinciden con los ingredientes antes de añadir agua y calentar. Corregir «45 días sin nevera» si describe el plato preparado. Identificar leche como alérgeno y separar lactosa como intolerancia."
+  },
+  {
+   "plato": "Domplines con huevo y queso de papa",
+   "franjas": [
+    "desayuno"
+   ],
+   "veredicto": "cambiar",
+   "nota": "Añadir la cantidad de agua para la masa y el paso para cocinar completamente el huevo revuelto; si requiere aceite, incluirlo en ingredientes y cálculos. Distribuir los 2 g de sal entre masa y agua de cocción, evitando contabilizar toda la sal del agua como ingerida. Precisar el tamaño de los domplines y comprobar que el centro esté cocido: flotar no basta. Añadir el escurrido. Los 212 g son el peso inicial, no el rendimiento cocido. Corregir «35 días sin nevera» si describe el plato preparado. Unificar «huevo/huevos», identificar trigo y leche, y separar lactosa como intolerancia. Verificar qué queso corresponde a «queso de papa» en la base nutricional. Como mejora, reducir la sal añadida considerando el aporte del queso."
+  },
+  {
+   "plato": "Ensalada tibia de garbanzos con zanahoria y queso gouda",
+   "franjas": [
+    "almuerzo"
+   ],
+   "veredicto": "cambiar",
+   "nota": "Especificar garbanzos cocidos y escurridos; cinco minutos solo sirven para calentarlos. Verificar que calorías y macros correspondan a 90 g cocidos, no secos. Si se pesan secos, incluir cocción completa y ajustar tiempo y rendimiento. Precisar método y tiempo de cocción de la zanahoria. Corregir la categoría «arroz» y los «45 días sin nevera» del plato preparado. Calcular la ración según el estado real de los ingredientes. Identificar leche como alérgeno y separar lactosa como intolerancia. Como mejora, reducir la sal añadida por el aporte del gouda."
+  },
+  {
+   "plato": "Frijol cargamanto guisado con arroz y auyama",
+   "franjas": [
+    "almuerzo"
+   ],
+   "veredicto": "cambiar",
+   "nota": "Especificar si los 85 g de frijoles y 80 g de arroz se pesan secos o cocidos, y hacer coincidir ese estado con el cálculo nutricional. Los pasos presuponen frijoles previamente cocidos: incluir su preparación o declararlos cocidos; los 20 minutos indicados corresponden al guiso. Añadir instrucciones para cocinar el arroz, cantidades de agua y caldo, y cuándo incorporar la sal. Registrar la auyama sin cáscara ni semillas. Los 325 g son la suma inicial, no el rendimiento final si arroz y frijoles se pesan secos. Ajustar los 50 minutos según las preparaciones necesarias. Corregir «45 días sin nevera» para el plato preparado. Si el caldo contiene sal u otros ingredientes, incluirlos en nutrientes y alérgenos."
+  },
+  {
+   "plato": "Granola con leche de avena y pasas",
+   "franjas": [
+    "desayuno"
+   ],
+   "veredicto": "cambiar",
+   "nota": "Ajustar el tiempo total a unos 5 minutos. Indicar que se añadan los 200 g de bebida de avena completos: «sin cubrirla del todo» depende del recipiente y puede alterar la porción. Dejar el reposo como opcional para ablandar la granola, sin garantizar que las pasas se hidraten en dos minutos con líquido frío. Corregir «180 días sin nevera» para el plato preparado. Cambiar «crudo» por «sin cocción» y ocultar «none». Verificar nutrientes y alérgenos según los productos utilizados, incluidos posibles frutos secos en la granola y sulfitos en las pasas. Los 285 g de ración son coherentes."
+  },
+  {
+   "plato": "Guisantes secos guisados con papa y zanahoria",
+   "franjas": [
+    "almuerzo"
+   ],
+   "veredicto": "cambiar",
+   "nota": "Especificar si los guisantes secos son enteros o partidos y adaptar remojo y cocción a esa presentación; no imponer remojo nocturno para todos. Separar el tiempo de remojo de los 50 minutos de preparación. Cuantificar el agua, indicar el tamaño de los cubos de papa y zanahoria y cuándo añadir la sal. Confirmar que los 85 g de guisantes corresponden al peso seco en el cálculo nutricional. Los 405 g son la suma inicial, no el rendimiento cocido: considerar el agua retenida y la evaporación. Corregir «45 días sin nevera» si describe el guiso preparado."
+  },
+  {
+   "plato": "Guiso de habas con ñame y ajo",
+   "franjas": [
+    "cena"
+   ],
+   "veredicto": "cambiar",
+   "nota": "Especificar habas secas enteras o partidas y usar esa presentación en el cálculo nutricional. Ajustar remojo y cocción: 30–35 minutos pueden no bastar para habas enteras; precocerlas y añadir el ñame después según sus tiempos para evitar que se deshaga. Separar el remojo nocturno de los 50 minutos. Cuantificar el agua, indicar cuándo añadir la sal y registrar el ñame pelado con tamaño de corte definido. Los 331 g son la suma inicial, no el rendimiento cocido con agua. Corregir «30 días sin nevera» si describe el guiso preparado."
+  },
+  {
+   "plato": "Habichuelas negras guisadas con batata",
+   "franjas": [
+    "cena"
+   ],
+   "veredicto": "cambiar",
+   "nota": "Especificar habichuelas previamente cocidas y aclarar si los 90 g se pesan secos o cocidos; verificar que los nutrientes correspondan. Si se parte de secas, incluir su preparación y ajustar el tiempo total. Cuantificar el líquido del guiso y contabilizar su sodio si contiene sal. Registrar batata pelada, precisar tamaño de los cubos y comprobar que esté tierna. Sustituir «rectifica la sal» por una indicación limitada a los 2 g registrados. Los 340 g son la suma inicial, no el rendimiento final con caldo. Revisar los 50 minutos según el estado de las habichuelas. Corregir «30 días sin nevera» si describe el plato preparado."
+  },
+  {
+   "plato": "Huevo duro con casabe y sal",
+   "franjas": [
+    "merienda"
+   ],
+   "veredicto": "cambiar",
+   "nota": "La sal aparece en el título y los pasos, pero falta en ingredientes: cuantificarla y actualizar sodio y ración, o eliminarla. Registrar los 100 g de huevo sin cáscara y aclarar si corresponden a peso crudo o cocido para calcular nutrientes. Sustituir «diez minutos exactos» por un tiempo ajustado al tamaño del huevo, indicando cuándo empezar a contar y comprobando clara y yema firmes. Revisar el tiempo total incluyendo calentamiento y enfriado. Corregir «35 días sin nevera» para el plato preparado y unificar «huevo/huevos»."
+  },
+  {
+   "plato": "Lentejas guisadas con auyama y arroz blanco",
+   "franjas": [
+    "almuerzo"
+   ],
+   "veredicto": "cambiar",
+   "nota": "Especificar que lentejas y arroz se pesan secos y verificar que el cálculo nutricional use ese estado. Añadir la preparación del arroz, cuantificar el agua de ambas cocciones e indicar cuándo distribuir los 2 g de sal. Dejar el remojo de lentejas como opcional y ajustar la cocción según su variedad; comprobar que estén tiernas, no solo que la auyama se deshaga. Registrar la auyama sin cáscara ni semillas. Los 320 g son la suma inicial, no el rendimiento cocido: considerar hidratación y evaporación. Verificar que los 50 minutos incluyan la preparación del arroz. Corregir «45 días sin nevera» si describe el plato preparado."
+  },
+  {
+   "plato": "Lentejas guisadas con auyama y batata",
+   "franjas": [
+    "cena"
+   ],
+   "veredicto": "cambiar",
+   "nota": "Falta incorporar la auyama en los pasos: indicar pelado, retirada de semillas, corte y momento de añadirla. Indicar también cuándo agregar la sal. Especificar lentejas pesadas en seco y su variedad para ajustar la cocción. Cuantificar el agua y definir el tamaño de los cubos de batata y auyama; comprobar que las lentejas y ambos víveres estén tiernos. Los 430 g son la suma inicial, no el rendimiento cocido con agua. Corregir «30 días sin nevera» si describe el plato preparado."
+  },
+  {
+   "plato": "Maní tostado con pasas",
+   "franjas": [
+    "merienda"
+   ],
+   "veredicto": "cambiar",
+   "nota": "Corregir la categoría «avena», ocultar «none» y precisar «tostado en sartén». Especificar maní sin cáscara y sin sal, crudo o previamente tostado; adaptar los pasos y nutrientes a esa presentación. Indicar tiempo de tostado y enfriado para justificar el tiempo total. Declarar sulfitos solo si las pasas utilizadas los contienen. No asignar automáticamente 180 días de conservación a la mezcla: considerar etiquetas, apertura y almacenamiento. Los 60 g coinciden con la suma inicial de ingredientes comestibles."
+  },
+  {
+   "plato": "Moro de gandules con soya texturizada",
+   "franjas": [
+    "almuerzo"
+   ],
+   "veredicto": "cambiar",
+   "nota": "Especificar gandules cocidos y escurridos, arroz seco y soya texturizada seca, y hacer coincidir esos estados con el cálculo nutricional. Los pasos presuponen gandules cocidos; si los 80 g son secos, incluir su cocción y ajustar el tiempo. Cuantificar el agua de hidratación y el caldo para cocinar el arroz, considerando la absorción de la soya. Indicar que la soya se escurra y presione con un utensilio para evitar manipularla caliente. Sustituir «hasta que se seque» por comprobar que el arroz esté tierno y el líquido absorbido. Los 235 g son la suma inicial, no el rendimiento cocido. Corregir «60 días sin nevera» para el plato preparado e incluir el sodio del caldo si contiene sal."
+  },
+  {
+   "plato": "Moro de habichuelas blancas con auyama",
+   "franjas": [
+    "almuerzo"
+   ],
+   "veredicto": "cambiar",
+   "nota": "Especificar si los 90 g de habichuelas se pesan secos o cocidos: los pasos requieren habichuelas previamente cocidas. Hacer coincidir ese estado con los nutrientes; si se parte de secas, incluir su preparación y ajustar el tiempo total. Indicar arroz pesado en seco, cantidad de caldo y cuándo añadir los 2 g de sal; contabilizar la sal del caldo si corresponde. Precisar el tamaño de los cubos de auyama y registrar su peso sin cáscara ni semillas. Comprobar que arroz y auyama estén tiernos al terminar. Los 340 g son la suma inicial, no el rendimiento cocido. Corregir «45 días sin nevera» si describe el plato preparado."
+  },
+  {
+   "plato": "Moro de habichuelas rojas con soya texturizada",
+   "franjas": [
+    "almuerzo"
+   ],
+   "veredicto": "cambiar",
+   "nota": "Especificar habichuelas previamente cocidas y aclarar si los 85 g se pesan secos o cocidos, haciendo coincidir ese estado con los nutrientes. Si se parte de secas, incluir su cocción completa y ajustar los 50 minutos. Registrar arroz y soya en seco. Cuantificar agua de hidratación y caldo del moro, considerando la absorción de la soya; indicar cuándo añadir la sal y contabilizar la del caldo. Escurrir y presionar la soya con un utensilio mientras esté caliente. Comprobar que el arroz esté tierno, no solo seco. Los 245 g son la suma inicial, no el rendimiento cocido. Corregir «60 días sin nevera» para el plato preparado."
+  },
+  {
+   "plato": "Pastelón de batata con queso mozzarella",
+   "franjas": [
+    "almuerzo"
+   ],
+   "veredicto": "cambiar",
+   "nota": "Añadir el escurrido de la batata y dejarla entibiar antes de incorporar el huevo para evitar que cuaje irregularmente. Aclarar el montaje: se mezcla la cebolla con la mitad del puré, pero no se indica cómo colocar la otra mitad. Especificar tamaño del molde, precalentamiento y comprobar que el centro con huevo esté completamente cocido; gratinar no basta. Registrar la batata pelada y distinguir los 368 g iniciales del rendimiento final. Revisar que los 40 minutos incluyan todas las etapas. Corregir «30 días sin nevera» para el plato preparado. Unificar «huevo/huevos», identificar leche como alérgeno y separar lactosa como intolerancia. Como mejora, reducir la sal añadida considerando la mozzarella."
+  },
+  {
+   "plato": "Salami guisado con yuca y cebolla",
+   "franjas": [
+    "cena"
+   ],
+   "veredicto": "cambiar",
+   "nota": "Cambiar «guisado» por «salami encebollado» o añadir líquido y una etapa de guisado. Especificar tipo y marca de salami para verificar nutrientes, sodio, alérgenos y preparación indicada por el fabricante. Registrar yuca pelada, comprobar su cocción completa y desechar el agua. No contabilizar toda la sal del agua como ingerida. Como mejora, omitir la sal añadida y reducir el aceite considerando la grasa que libera el salami. Los 348 g son la suma inicial, no el peso servido. Revisar los 50 minutos y corregir «21 días sin nevera» para el plato preparado."
+  },
+  {
+   "plato": "Sardinas guisadas con papa y repollo",
+   "franjas": [
+    "cena"
+   ],
+   "veredicto": "cambiar",
+   "nota": "Especificar sardinas en agua, aceite o salsa y registrar los 120 g escurridos; ajustar nutrientes y sodio al producto. Añadir lavado del repollo y escurrido de las papas, indicando su peso pelado y tamaño de corte. Cambiar «guisadas» por «salteadas» o incorporar líquido y una etapa de guisado. No contabilizar toda la sal del agua como ingerida; como mejora, reducirla considerando las sardinas. Los 455 g son la suma inicial, no necesariamente el peso servido. Revisar los 50 minutos, que no se justifican con los pasos descritos. Corregir «45 días sin nevera» si describe el plato preparado."
+  },
+  {
+   "plato": "Semillas de calabaza con dátiles",
+   "franjas": [
+    "merienda"
+   ],
+   "veredicto": "cambiar",
+   "nota": "Corregir la categoría «avena», ocultar «none» y cambiar «crudo» por «tostado en sartén». Especificar semillas peladas y sin sal, y dátiles pesados sin hueso. Precisar fuego y tiempo de tostado, removiendo y comprobando un dorado ligero; no depender solo de que las semillas salten. Incluir el enfriado en el tiempo total y revisar los 30 minutos. No asignar automáticamente 180 días de conservación a la mezcla: considerar productos, apertura y almacenamiento. Los 60 g son coherentes como peso inicial de ingredientes comestibles."
+  },
+  {
+   "plato": "Soya texturizada guisada con auyama y ñame",
+   "franjas": [
+    "cena"
+   ],
+   "veredicto": "cambiar",
+   "nota": "Especificar que los 45 g de soya se pesan secos y ajustar la hidratación al producto. Cuantificar por separado el agua de hidratación y del guiso; escurrir y presionar con un utensilio si está caliente. Registrar ñame y auyama pelados, sin semillas donde corresponda, y precisar tamaño de corte. Comprobar que ambos estén tiernos, no solo que el guiso espese; añadir la auyama después si se busca conservar sus trozos. Indicar cuándo incorporar los 2 g de sal. Los 425 g son la suma inicial, no el rendimiento final con agua. Corregir «30 días sin nevera» si describe el plato preparado."
+  },
+  {
+   "plato": "Tortilla de harina de maíz con queso cheddar",
+   "franjas": [
+    "desayuno"
+   ],
+   "veredicto": "cambiar",
+   "nota": "Especificar cantidad de agua considerando la humedad del huevo para evitar una masa demasiado blanda. Indicar diámetro, grosor y tiempo por lado; dorar la superficie no garantiza que el huevo y el centro estén cocidos. Cambiar «salteado» por «a la sartén». Los 163 g corresponden a ingredientes iniciales, no al peso final: considerar agua y cocción. Corregir «35 días sin nevera» si describe el plato preparado. Unificar «huevo/huevos», identificar leche como alérgeno y separar lactosa como intolerancia. Como mejora, reducir los 2 g de sal añadida considerando el sodio del cheddar."
+  },
+  {
+   "plato": "Tortilla de papa con queso gouda",
+   "franjas": [
+    "cena"
+   ],
+   "veredicto": "cambiar",
+   "nota": "Adaptar la cocción de las papas a los 8 g de aceite: precisar grosor, tiempo, uso de tapa y reparto del aceite entre papas y tortilla; eliminar «escurrida» si no sobra aceite. Indicar que la cebolla también se incorpora al huevo. Precisar tamaño de sartén y tiempo por lado, comprobando que el centro quede completamente cuajado. Revisar si los 20 minutos cubren todas las etapas y cambiar «salteado» por «a la sartén». Registrar papa pelada y distinguir los 360 g iniciales del rendimiento cocido. Corregir «35 días sin nevera» para el plato preparado. Unificar huevo, identificar leche como alérgeno y separar lactosa como intolerancia. Como mejora, reducir la sal añadida considerando el gouda."
+  },
+  {
+   "plato": "Tortilla de papa y queso cheddar con repollo",
+   "franjas": [
+    "almuerzo"
+   ],
+   "veredicto": "cambiar",
+   "nota": "Distribuir los 8 g de aceite entre papas, sartén y ensalada; eliminar el «chorrito» sin cuantificar. Adaptar la cocción de las papas al poco aceite disponible, indicando grosor, tiempo y uso de tapa; «escurrirlas» no encaja si no sobra aceite. Dejar entibiar las papas antes de mezclarlas con el huevo. Precisar tiempo por lado y comprobar que el centro quede completamente cuajado. Añadir lavado del repollo y preparación de la cebolla. Revisar si los 20 minutos son suficientes. Registrar papa pelada y distinguir los 460 g iniciales del peso servido. Corregir «35 días sin nevera» para el plato preparado. Unificar huevo, identificar leche como alérgeno y separar lactosa como intolerancia. Como mejora, reducir la sal añadida considerando el cheddar."
+  }
+ ]
+}

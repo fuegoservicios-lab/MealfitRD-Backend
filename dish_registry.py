@@ -274,7 +274,14 @@ def derive_logistics(template: dict, resolved: list, index: dict) -> dict:
     return {
         "batch_friendly": bool(batch), "freezer_friendly": bool(freezer),
         "min_shelf_life_days": min(shelf) if shelf else None,
-        # [F7-G] cuántos días aguanta el plato sin congelador / congelando la proteína, y si es de despensa (≥ 21 días)
+        # [F7-G · corregido P1-REGISTRY-CANTIDADES-EN-CRUDO 2026-09-09] Días que aguantan sus INGREDIENTES
+        # CRUDOS sin congelador / congelando la proteína, y si son de despensa (≥ 21 días). NO es la vida
+        # del plato ya cocinado: una tortilla de papa dura 3 días, y su `days_fresh_min` dice 35 porque esa
+        # es la pregunta que el ciclo de una sola compra necesita — «¿puedo COCINAR esto el día 25?» —, no
+        # «¿cuánto aguanta el plato hecho?». `pantry_durability.template_fits` ya lo decía así; este
+        # comentario decía lo contrario, y esa contradicción es la que la revisión humana del 09-sep
+        # encontró en 35 de 35 platos. Si algún día este número se le enseña a un usuario, hay que
+        # etiquetarlo como vida de los INGREDIENTES o se convierte en una afirmación falsa sobre comida.
         "days_fresh_min": dur["days_fresh_min"], "days_with_freezer_min": dur["days_with_freezer_min"], "pantry_only": dur["pantry_only"],
         "prep_minutes_est": int(prep), "difficulty_est": diff, "estimated": True,
     }
@@ -377,6 +384,13 @@ def compile_template(template: dict, index: dict, *, library: str, constituents:
         "base": template.get("base"), "protein": template.get("protein"), "technique": template.get("technique"),
         "transform": bool(template.get("transform")), "library": library,
         "constituents": resolved, "excluded": excluded, "status": status,
+        # [P1-REGISTRY-CANTIDADES-EN-CRUDO · 2026-09-09] Suma de los gramos CRUDOS, no el peso del plato
+        # servido: 80 g de arroz seco pesan ~240 g cocidos. Las macros de arriba se calculan sobre ese
+        # mismo estado crudo contra un catálogo en crudo, así que son CORRECTAS — lo que engaña es el
+        # nombre, que promete una ración. Medido el 09-sep: 179 de 179 plantillas. No renombrar la clave
+        # a la ligera: entra en `snapshot_hash`, y cambiarlo expira las 6 firmas curatoriales y el
+        # `registry_hash` de los planes vivos. Si se le va a enseñar un peso al usuario, hay que calcular
+        # el rendimiento tras cocción, no reetiquetar éste.
         "serving_g": round(sum(r["grams"] for r in resolved), 1),
         "nutrition_per_serving": nutrition,
         "nutrition_unknown": unknown,
