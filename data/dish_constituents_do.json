@@ -2,6 +2,20 @@
   "_note": "[P1-ARQ25-F6-DISH-REGISTRY] constituents curados para las plantillas DO. Fuente: componentes de dominican_dish_recipes.json (60 recetas con gramos) + ítems con nombre exacto del catálogo. Generado por scripts/build_dish_constituents_do.py; edítalo allí, no aquí.",
   "schema_version": 1,
   "templates": {
+    "Almendras fileteadas con ciruelas pasas": {
+      "constituents": [
+        {
+          "grams": 25.0,
+          "name": "Almendras fileteadas"
+        },
+        {
+          "grams": 35.0,
+          "name": "Ciruela pasa"
+        }
+      ],
+      "declared_unresolved": [],
+      "origin": "curated"
+    },
     "Arenque desmenuzado con huevo y yuca hervida": {
       "constituents": [
         {
@@ -19,6 +33,62 @@
         {
           "grams": 200.0,
           "name": "Yuca"
+        },
+        {
+          "grams": 2.0,
+          "name": "Sal"
+        }
+      ],
+      "declared_unresolved": [],
+      "origin": "curated"
+    },
+    "Arenque guisado con auyama y arroz blanco": {
+      "constituents": [
+        {
+          "grams": 110.0,
+          "name": "Arenque"
+        },
+        {
+          "grams": 150.0,
+          "name": "Auyama"
+        },
+        {
+          "grams": 70.0,
+          "name": "Arroz blanco"
+        },
+        {
+          "grams": 40.0,
+          "name": "Cebolla"
+        },
+        {
+          "grams": 5.0,
+          "name": "Ajo"
+        },
+        {
+          "grams": 8.0,
+          "name": "Aceite de oliva"
+        },
+        {
+          "grams": 2.0,
+          "name": "Sal"
+        }
+      ],
+      "declared_unresolved": [],
+      "origin": "curated"
+    },
+    "Arepa de maíz con queso gouda": {
+      "constituents": [
+        {
+          "grams": 70.0,
+          "name": "Harina de maíz precocida"
+        },
+        {
+          "grams": 45.0,
+          "name": "Queso gouda"
+        },
+        {
+          "grams": 50.0,
+          "name": "Huevo"
         },
         {
           "grams": 2.0,
@@ -63,6 +133,40 @@
         {
           "grams": 8.0,
           "name": "Aceite vegetal"
+        }
+      ],
+      "declared_unresolved": [],
+      "origin": "curated"
+    },
+    "Arroz con lentejas y queso de papa": {
+      "constituents": [
+        {
+          "grams": 75.0,
+          "name": "Lentejas"
+        },
+        {
+          "grams": 80.0,
+          "name": "Arroz blanco"
+        },
+        {
+          "grams": 45.0,
+          "name": "Queso de papa"
+        },
+        {
+          "grams": 30.0,
+          "name": "Cebolla"
+        },
+        {
+          "grams": 5.0,
+          "name": "Ajo"
+        },
+        {
+          "grams": 8.0,
+          "name": "Aceite de oliva"
+        },
+        {
+          "grams": 2.0,
+          "name": "Sal"
         }
       ],
       "declared_unresolved": [],
@@ -118,6 +222,40 @@
       "declared_unresolved": [],
       "origin": "curated"
     },
+    "Atún guisado con papa y zanahoria": {
+      "constituents": [
+        {
+          "grams": 120.0,
+          "name": "Atún en agua"
+        },
+        {
+          "grams": 200.0,
+          "name": "Papa"
+        },
+        {
+          "grams": 60.0,
+          "name": "Zanahoria"
+        },
+        {
+          "grams": 35.0,
+          "name": "Cebolla"
+        },
+        {
+          "grams": 5.0,
+          "name": "Ajo"
+        },
+        {
+          "grams": 8.0,
+          "name": "Aceite de oliva"
+        },
+        {
+          "grams": 2.0,
+          "name": "Sal"
+        }
+      ],
+      "declared_unresolved": [],
+      "origin": "curated"
+    },
     "Avena caliente con canela y leche": {
       "constituents": [
         {
@@ -131,6 +269,68 @@
         {
           "grams": 2.5,
           "name": "Canela en polvo"
+        }
+      ],
+      "declared_unresolved": [],
+      "origin": "curated"
+    },
+    "Avena cocida con leche evaporada y maní": {
+      "constituents": [
+        {
+          "grams": 60.0,
+          "name": "Avena"
+        },
+        {
+          "grams": 120.0,
+          "name": "Leche evaporada"
+        },
+        {
+          "grams": 20.0,
+          "name": "Maní"
+        },
+        {
+          "grams": 2.0,
+          "name": "Canela en polvo"
+        }
+      ],
+      "declared_unresolved": [],
+      "origin": "curated"
+    },
+    "Avena con dátiles y almendras fileteadas": {
+      "constituents": [
+        {
+          "grams": 60.0,
+          "name": "Avena"
+        },
+        {
+          "grams": 30.0,
+          "name": "Dátiles"
+        },
+        {
+          "grams": 20.0,
+          "name": "Almendras fileteadas"
+        },
+        {
+          "grams": 100.0,
+          "name": "Leche evaporada"
+        }
+      ],
+      "declared_unresolved": [],
+      "origin": "curated"
+    },
+    "Avena remojada con leche de coco y linaza": {
+      "constituents": [
+        {
+          "grams": 40.0,
+          "name": "Avena"
+        },
+        {
+          "grams": 120.0,
+          "name": "Leche de coco"
+        },
+        {
+          "grams": 12.0,
+          "name": "Linaza"
         }
       ],
       "declared_unresolved": [],
@@ -177,6 +377,36 @@
         {
           "grams": 12.0,
           "name": "Ají morrón"
+        }
+      ],
+      "declared_unresolved": [],
+      "origin": "curated"
+    },
+    "Bacalao guisado con yuca y cebolla": {
+      "constituents": [
+        {
+          "grams": 120.0,
+          "name": "Bacalao"
+        },
+        {
+          "grams": 200.0,
+          "name": "Yuca"
+        },
+        {
+          "grams": 40.0,
+          "name": "Cebolla"
+        },
+        {
+          "grams": 5.0,
+          "name": "Ajo"
+        },
+        {
+          "grams": 8.0,
+          "name": "Aceite de oliva"
+        },
+        {
+          "grams": 2.0,
+          "name": "Sal"
         }
       ],
       "declared_unresolved": [],
@@ -231,6 +461,28 @@
         {
           "grams": 15.0,
           "name": "Maní"
+        }
+      ],
+      "declared_unresolved": [],
+      "origin": "curated"
+    },
+    "Batida de leche evaporada con avena y maní": {
+      "constituents": [
+        {
+          "grams": 150.0,
+          "name": "Leche evaporada"
+        },
+        {
+          "grams": 30.0,
+          "name": "Avena"
+        },
+        {
+          "grams": 15.0,
+          "name": "Maní"
+        },
+        {
+          "grams": 2.0,
+          "name": "Canela en polvo"
         }
       ],
       "declared_unresolved": [],
@@ -455,6 +707,56 @@
         {
           "grams": 80.0,
           "name": "Aguacate"
+        }
+      ],
+      "declared_unresolved": [],
+      "origin": "curated"
+    },
+    "Casabe con mantequilla de maní y canela": {
+      "constituents": [
+        {
+          "grams": 40.0,
+          "name": "Casabe"
+        },
+        {
+          "grams": 25.0,
+          "name": "Mantequilla de maní"
+        },
+        {
+          "grams": 2.0,
+          "name": "Canela en polvo"
+        }
+      ],
+      "declared_unresolved": [],
+      "origin": "curated"
+    },
+    "Casabe con mantequilla de maní y pasas": {
+      "constituents": [
+        {
+          "grams": 50.0,
+          "name": "Casabe"
+        },
+        {
+          "grams": 30.0,
+          "name": "Mantequilla de maní"
+        },
+        {
+          "grams": 25.0,
+          "name": "Pasas"
+        }
+      ],
+      "declared_unresolved": [],
+      "origin": "curated"
+    },
+    "Casabe con queso gouda": {
+      "constituents": [
+        {
+          "grams": 40.0,
+          "name": "Casabe"
+        },
+        {
+          "grams": 45.0,
+          "name": "Queso gouda"
         }
       ],
       "declared_unresolved": [],
@@ -706,6 +1008,28 @@
       "declared_unresolved": [],
       "origin": "curated"
     },
+    "Domplines con huevo y queso de papa": {
+      "constituents": [
+        {
+          "grams": 70.0,
+          "name": "Harina de trigo"
+        },
+        {
+          "grams": 100.0,
+          "name": "Huevo"
+        },
+        {
+          "grams": 40.0,
+          "name": "Queso de papa"
+        },
+        {
+          "grams": 2.0,
+          "name": "Sal"
+        }
+      ],
+      "declared_unresolved": [],
+      "origin": "curated"
+    },
     "Domplines hervidos con huevo revuelto criollo": {
       "constituents": [
         {
@@ -772,6 +1096,36 @@
       "declared_unresolved": [],
       "origin": "curated"
     },
+    "Ensalada tibia de garbanzos con zanahoria y queso gouda": {
+      "constituents": [
+        {
+          "grams": 90.0,
+          "name": "Garbanzos"
+        },
+        {
+          "grams": 70.0,
+          "name": "Zanahoria"
+        },
+        {
+          "grams": 45.0,
+          "name": "Queso gouda"
+        },
+        {
+          "grams": 25.0,
+          "name": "Cebolla"
+        },
+        {
+          "grams": 10.0,
+          "name": "Aceite de oliva"
+        },
+        {
+          "grams": 2.0,
+          "name": "Sal"
+        }
+      ],
+      "declared_unresolved": [],
+      "origin": "curated"
+    },
     "Ensalada tibia de pollo desmenuzado con aguacate y casabe": {
       "constituents": [
         {
@@ -832,6 +1186,40 @@
       "declared_unresolved": [],
       "origin": "curated"
     },
+    "Frijol cargamanto guisado con arroz y auyama": {
+      "constituents": [
+        {
+          "grams": 85.0,
+          "name": "Frijol cargamanto"
+        },
+        {
+          "grams": 80.0,
+          "name": "Arroz blanco"
+        },
+        {
+          "grams": 110.0,
+          "name": "Auyama"
+        },
+        {
+          "grams": 35.0,
+          "name": "Cebolla"
+        },
+        {
+          "grams": 5.0,
+          "name": "Ajo"
+        },
+        {
+          "grams": 8.0,
+          "name": "Aceite de oliva"
+        },
+        {
+          "grams": 2.0,
+          "name": "Sal"
+        }
+      ],
+      "declared_unresolved": [],
+      "origin": "curated"
+    },
     "Frutas picadas con limón y menta": {
       "constituents": [
         {
@@ -854,6 +1242,24 @@
       "declared_unresolved": [
         "Menta"
       ],
+      "origin": "curated"
+    },
+    "Granola con leche de avena y pasas": {
+      "constituents": [
+        {
+          "grams": 60.0,
+          "name": "Granola"
+        },
+        {
+          "grams": 200.0,
+          "name": "Leche de avena"
+        },
+        {
+          "grams": 25.0,
+          "name": "Pasas"
+        }
+      ],
+      "declared_unresolved": [],
       "origin": "curated"
     },
     "Guacamole criollo con casabe y huevo duro": {
@@ -912,6 +1318,100 @@
       "declared_unresolved": [],
       "origin": "curated"
     },
+    "Guisantes secos guisados con papa y zanahoria": {
+      "constituents": [
+        {
+          "grams": 85.0,
+          "name": "Guisantes secos"
+        },
+        {
+          "grams": 200.0,
+          "name": "Papa"
+        },
+        {
+          "grams": 70.0,
+          "name": "Zanahoria"
+        },
+        {
+          "grams": 35.0,
+          "name": "Cebolla"
+        },
+        {
+          "grams": 5.0,
+          "name": "Ajo"
+        },
+        {
+          "grams": 8.0,
+          "name": "Aceite de oliva"
+        },
+        {
+          "grams": 2.0,
+          "name": "Sal"
+        }
+      ],
+      "declared_unresolved": [],
+      "origin": "curated"
+    },
+    "Guiso de habas con ñame y ajo": {
+      "constituents": [
+        {
+          "grams": 80.0,
+          "name": "Habas"
+        },
+        {
+          "grams": 200.0,
+          "name": "Ñame"
+        },
+        {
+          "grams": 35.0,
+          "name": "Cebolla"
+        },
+        {
+          "grams": 6.0,
+          "name": "Ajo"
+        },
+        {
+          "grams": 8.0,
+          "name": "Aceite de oliva"
+        },
+        {
+          "grams": 2.0,
+          "name": "Sal"
+        }
+      ],
+      "declared_unresolved": [],
+      "origin": "curated"
+    },
+    "Habichuelas negras guisadas con batata": {
+      "constituents": [
+        {
+          "grams": 90.0,
+          "name": "Habichuelas negras"
+        },
+        {
+          "grams": 200.0,
+          "name": "Batata"
+        },
+        {
+          "grams": 35.0,
+          "name": "Cebolla"
+        },
+        {
+          "grams": 5.0,
+          "name": "Ajo"
+        },
+        {
+          "grams": 8.0,
+          "name": "Aceite de oliva"
+        },
+        {
+          "grams": 2.0,
+          "name": "Sal"
+        }
+      ],
+      "declared_unresolved": [],
+      "origin": "curated"
+    },
     "Habichuelas rojas guisadas con auyama, arroz y aguacate": {
       "constituents": [
         {
@@ -945,6 +1445,20 @@
         {
           "grams": 50.0,
           "name": "Aguacate"
+        }
+      ],
+      "declared_unresolved": [],
+      "origin": "curated"
+    },
+    "Huevo duro con casabe y sal": {
+      "constituents": [
+        {
+          "grams": 100.0,
+          "name": "Huevo"
+        },
+        {
+          "grams": 40.0,
+          "name": "Casabe"
         }
       ],
       "declared_unresolved": [],
@@ -1077,6 +1591,40 @@
         {
           "grams": 50.0,
           "name": "Aguacate"
+        }
+      ],
+      "declared_unresolved": [],
+      "origin": "curated"
+    },
+    "Lentejas guisadas con auyama y arroz blanco": {
+      "constituents": [
+        {
+          "grams": 80.0,
+          "name": "Lentejas"
+        },
+        {
+          "grams": 120.0,
+          "name": "Auyama"
+        },
+        {
+          "grams": 70.0,
+          "name": "Arroz blanco"
+        },
+        {
+          "grams": 35.0,
+          "name": "Cebolla"
+        },
+        {
+          "grams": 5.0,
+          "name": "Ajo"
+        },
+        {
+          "grams": 8.0,
+          "name": "Aceite de oliva"
+        },
+        {
+          "grams": 2.0,
+          "name": "Sal"
         }
       ],
       "declared_unresolved": [],
@@ -1252,6 +1800,20 @@
       "declared_unresolved": [],
       "origin": "curated"
     },
+    "Maní tostado con pasas": {
+      "constituents": [
+        {
+          "grams": 30.0,
+          "name": "Maní"
+        },
+        {
+          "grams": 30.0,
+          "name": "Pasas"
+        }
+      ],
+      "declared_unresolved": [],
+      "origin": "curated"
+    },
     "Molondrones guisados con pollo y majado de auyama": {
       "constituents": [
         {
@@ -1273,6 +1835,40 @@
         {
           "grams": 150.0,
           "name": "Auyama"
+        }
+      ],
+      "declared_unresolved": [],
+      "origin": "curated"
+    },
+    "Moro de gandules con soya texturizada": {
+      "constituents": [
+        {
+          "grams": 80.0,
+          "name": "Gandules"
+        },
+        {
+          "grams": 80.0,
+          "name": "Arroz blanco"
+        },
+        {
+          "grams": 30.0,
+          "name": "Soya texturizada"
+        },
+        {
+          "grams": 30.0,
+          "name": "Cebolla"
+        },
+        {
+          "grams": 5.0,
+          "name": "Ajo"
+        },
+        {
+          "grams": 8.0,
+          "name": "Aceite de oliva"
+        },
+        {
+          "grams": 2.0,
+          "name": "Sal"
         }
       ],
       "declared_unresolved": [],
@@ -1332,6 +1928,40 @@
       "declared_unresolved": [],
       "origin": "curated"
     },
+    "Moro de habichuelas blancas con auyama": {
+      "constituents": [
+        {
+          "grams": 90.0,
+          "name": "Habichuelas blancas"
+        },
+        {
+          "grams": 80.0,
+          "name": "Arroz blanco"
+        },
+        {
+          "grams": 120.0,
+          "name": "Auyama"
+        },
+        {
+          "grams": 35.0,
+          "name": "Cebolla"
+        },
+        {
+          "grams": 5.0,
+          "name": "Ajo"
+        },
+        {
+          "grams": 8.0,
+          "name": "Aceite de oliva"
+        },
+        {
+          "grams": 2.0,
+          "name": "Sal"
+        }
+      ],
+      "declared_unresolved": [],
+      "origin": "curated"
+    },
     "Moro de habichuelas negras con bistec encebollado": {
       "constituents": [
         {
@@ -1373,6 +2003,40 @@
         {
           "grams": 120.0,
           "name": "Carne de res"
+        }
+      ],
+      "declared_unresolved": [],
+      "origin": "curated"
+    },
+    "Moro de habichuelas rojas con soya texturizada": {
+      "constituents": [
+        {
+          "grams": 85.0,
+          "name": "Habichuelas rojas"
+        },
+        {
+          "grams": 80.0,
+          "name": "Arroz blanco"
+        },
+        {
+          "grams": 30.0,
+          "name": "Soya texturizada"
+        },
+        {
+          "grams": 35.0,
+          "name": "Cebolla"
+        },
+        {
+          "grams": 5.0,
+          "name": "Ajo"
+        },
+        {
+          "grams": 8.0,
+          "name": "Aceite de oliva"
+        },
+        {
+          "grams": 2.0,
+          "name": "Sal"
         }
       ],
       "declared_unresolved": [],
@@ -1505,6 +2169,36 @@
         {
           "grams": 60.0,
           "name": "Fresas"
+        }
+      ],
+      "declared_unresolved": [],
+      "origin": "curated"
+    },
+    "Pastelón de batata con queso mozzarella": {
+      "constituents": [
+        {
+          "grams": 220.0,
+          "name": "Batata"
+        },
+        {
+          "grams": 60.0,
+          "name": "Queso mozzarella"
+        },
+        {
+          "grams": 50.0,
+          "name": "Huevo"
+        },
+        {
+          "grams": 30.0,
+          "name": "Cebolla"
+        },
+        {
+          "grams": 6.0,
+          "name": "Aceite de oliva"
+        },
+        {
+          "grams": 2.0,
+          "name": "Sal"
         }
       ],
       "declared_unresolved": [],
@@ -2170,6 +2864,36 @@
       "declared_unresolved": [],
       "origin": "curated"
     },
+    "Salami guisado con yuca y cebolla": {
+      "constituents": [
+        {
+          "grams": 90.0,
+          "name": "Salami"
+        },
+        {
+          "grams": 200.0,
+          "name": "Yuca"
+        },
+        {
+          "grams": 45.0,
+          "name": "Cebolla"
+        },
+        {
+          "grams": 5.0,
+          "name": "Ajo"
+        },
+        {
+          "grams": 6.0,
+          "name": "Aceite de oliva"
+        },
+        {
+          "grams": 2.0,
+          "name": "Sal"
+        }
+      ],
+      "declared_unresolved": [],
+      "origin": "curated"
+    },
     "Sancocho dominicano de pollo (porción con aguacate)": {
       "constituents": [
         {
@@ -2208,6 +2932,54 @@
       "declared_unresolved": [],
       "origin": "curated"
     },
+    "Sardinas guisadas con papa y repollo": {
+      "constituents": [
+        {
+          "grams": 120.0,
+          "name": "Sardinas en lata"
+        },
+        {
+          "grams": 200.0,
+          "name": "Papa"
+        },
+        {
+          "grams": 80.0,
+          "name": "Repollo"
+        },
+        {
+          "grams": 40.0,
+          "name": "Cebolla"
+        },
+        {
+          "grams": 5.0,
+          "name": "Ajo"
+        },
+        {
+          "grams": 8.0,
+          "name": "Aceite de oliva"
+        },
+        {
+          "grams": 2.0,
+          "name": "Sal"
+        }
+      ],
+      "declared_unresolved": [],
+      "origin": "curated"
+    },
+    "Semillas de calabaza con dátiles": {
+      "constituents": [
+        {
+          "grams": 25.0,
+          "name": "Semillas de calabaza"
+        },
+        {
+          "grams": 35.0,
+          "name": "Dátiles"
+        }
+      ],
+      "declared_unresolved": [],
+      "origin": "curated"
+    },
     "Sopa-crema de auyama con pollo desmenuzado": {
       "constituents": [
         {
@@ -2237,6 +3009,40 @@
         {
           "grams": 100.0,
           "name": "Pechuga de pollo"
+        }
+      ],
+      "declared_unresolved": [],
+      "origin": "curated"
+    },
+    "Soya texturizada guisada con auyama y arroz integral": {
+      "constituents": [
+        {
+          "grams": 45.0,
+          "name": "Soya texturizada"
+        },
+        {
+          "grams": 150.0,
+          "name": "Auyama"
+        },
+        {
+          "grams": 70.0,
+          "name": "Arroz integral"
+        },
+        {
+          "grams": 35.0,
+          "name": "Cebolla"
+        },
+        {
+          "grams": 5.0,
+          "name": "Ajo"
+        },
+        {
+          "grams": 8.0,
+          "name": "Aceite de oliva"
+        },
+        {
+          "grams": 2.0,
+          "name": "Sal"
         }
       ],
       "declared_unresolved": [],
@@ -2290,6 +3096,32 @@
       "declared_unresolved": [],
       "origin": "curated"
     },
+    "Tortilla de harina de maíz con queso cheddar": {
+      "constituents": [
+        {
+          "grams": 65.0,
+          "name": "Harina de maíz precocida"
+        },
+        {
+          "grams": 40.0,
+          "name": "Queso cheddar"
+        },
+        {
+          "grams": 50.0,
+          "name": "Huevo"
+        },
+        {
+          "grams": 6.0,
+          "name": "Aceite de oliva"
+        },
+        {
+          "grams": 2.0,
+          "name": "Sal"
+        }
+      ],
+      "declared_unresolved": [],
+      "origin": "curated"
+    },
     "Tortilla de huevos con espinaca y queso fresco": {
       "constituents": [
         {
@@ -2315,6 +3147,70 @@
         {
           "grams": 60.0,
           "name": "Espinacas"
+        }
+      ],
+      "declared_unresolved": [],
+      "origin": "curated"
+    },
+    "Tortilla de papa con queso gouda": {
+      "constituents": [
+        {
+          "grams": 180.0,
+          "name": "Papa"
+        },
+        {
+          "grams": 100.0,
+          "name": "Huevo"
+        },
+        {
+          "grams": 40.0,
+          "name": "Queso gouda"
+        },
+        {
+          "grams": 30.0,
+          "name": "Cebolla"
+        },
+        {
+          "grams": 8.0,
+          "name": "Aceite de oliva"
+        },
+        {
+          "grams": 2.0,
+          "name": "Sal"
+        }
+      ],
+      "declared_unresolved": [],
+      "origin": "curated"
+    },
+    "Tortilla de papa y queso cheddar con repollo": {
+      "constituents": [
+        {
+          "grams": 200.0,
+          "name": "Papa"
+        },
+        {
+          "grams": 100.0,
+          "name": "Huevo"
+        },
+        {
+          "grams": 40.0,
+          "name": "Queso cheddar"
+        },
+        {
+          "grams": 80.0,
+          "name": "Repollo"
+        },
+        {
+          "grams": 30.0,
+          "name": "Cebolla"
+        },
+        {
+          "grams": 8.0,
+          "name": "Aceite de oliva"
+        },
+        {
+          "grams": 2.0,
+          "name": "Sal"
         }
       ],
       "declared_unresolved": [],

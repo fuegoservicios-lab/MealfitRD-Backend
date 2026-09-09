@@ -2732,6 +2732,348 @@
           "grams": 10.0
         }
       ]
+    },
+    {
+      "name": "Bacalao guisado con yuca y cebolla",
+      "slots": [
+        "cena"
+      ],
+      "protein": "pescado",
+      "base": "viveres",
+      "technique": "guisado",
+      "transform": true
+    },
+    {
+      "name": "Arenque guisado con auyama y arroz blanco",
+      "slots": [
+        "cena"
+      ],
+      "protein": "pescado",
+      "base": "arroz",
+      "technique": "guisado",
+      "transform": true
+    },
+    {
+      "name": "Sardinas guisadas con papa y repollo",
+      "slots": [
+        "cena"
+      ],
+      "protein": "pescado",
+      "base": "papa",
+      "technique": "guisado",
+      "transform": true
+    },
+    {
+      "name": "Moro de gandules con soya texturizada",
+      "slots": [
+        "cena",
+        "almuerzo"
+      ],
+      "protein": "legumbre",
+      "base": "arroz",
+      "technique": "guisado",
+      "transform": true
+    },
+    {
+      "name": "Lentejas guisadas con auyama y arroz blanco",
+      "slots": [
+        "cena",
+        "almuerzo"
+      ],
+      "protein": "legumbre",
+      "base": "arroz",
+      "technique": "guisado",
+      "transform": true
+    },
+    {
+      "name": "Habichuelas negras guisadas con batata",
+      "slots": [
+        "cena"
+      ],
+      "protein": "legumbre",
+      "base": "batata",
+      "technique": "guisado",
+      "transform": true
+    },
+    {
+      "name": "Salami guisado con yuca y cebolla",
+      "slots": [
+        "cena"
+      ],
+      "protein": "mixta",
+      "base": "viveres",
+      "technique": "guisado",
+      "transform": true
+    },
+    {
+      "name": "Atún guisado con papa y zanahoria",
+      "slots": [
+        "cena"
+      ],
+      "protein": "atun",
+      "base": "papa",
+      "technique": "guisado",
+      "transform": true
+    },
+    {
+      "name": "Tortilla de papa con queso gouda",
+      "slots": [
+        "cena"
+      ],
+      "protein": "huevo",
+      "base": "papa",
+      "technique": "salteado",
+      "transform": true
+    },
+    {
+      "name": "Guiso de habas con ñame y ajo",
+      "slots": [
+        "cena"
+      ],
+      "protein": "legumbre",
+      "base": "viveres",
+      "technique": "guisado",
+      "transform": true
+    },
+    {
+      "name": "Soya texturizada guisada con auyama y arroz integral",
+      "slots": [
+        "cena"
+      ],
+      "protein": "legumbre",
+      "base": "arroz",
+      "technique": "guisado",
+      "transform": true
+    },
+    {
+      "name": "Moro de habichuelas blancas con auyama",
+      "slots": [
+        "almuerzo"
+      ],
+      "protein": "legumbre",
+      "base": "arroz",
+      "technique": "guisado",
+      "transform": true
+    },
+    {
+      "name": "Guisantes secos guisados con papa y zanahoria",
+      "slots": [
+        "almuerzo"
+      ],
+      "protein": "legumbre",
+      "base": "papa",
+      "technique": "guisado",
+      "transform": true
+    },
+    {
+      "name": "Arroz con lentejas y queso de papa",
+      "slots": [
+        "almuerzo"
+      ],
+      "protein": "legumbre",
+      "base": "arroz",
+      "technique": "guisado",
+      "transform": true
+    },
+    {
+      "name": "Frijol cargamanto guisado con arroz y auyama",
+      "slots": [
+        "almuerzo"
+      ],
+      "protein": "legumbre",
+      "base": "arroz",
+      "technique": "guisado",
+      "transform": true
+    },
+    {
+      "name": "Tortilla de papa y queso cheddar con repollo",
+      "slots": [
+        "almuerzo"
+      ],
+      "protein": "huevo",
+      "base": "papa",
+      "technique": "salteado",
+      "transform": true
+    },
+    {
+      "name": "Moro de habichuelas rojas con soya texturizada",
+      "slots": [
+        "almuerzo"
+      ],
+      "protein": "legumbre",
+      "base": "arroz",
+      "technique": "guisado",
+      "transform": true
+    },
+    {
+      "name": "Pastelón de batata con queso mozzarella",
+      "slots": [
+        "almuerzo"
+      ],
+      "protein": "queso",
+      "base": "batata",
+      "technique": "horneado",
+      "transform": true
+    },
+    {
+      "name": "Ensalada tibia de garbanzos con zanahoria y queso gouda",
+      "slots": [
+        "almuerzo"
+      ],
+      "protein": "legumbre",
+      "base": "arroz",
+      "technique": "hervido",
+      "transform": true
+    },
+    {
+      "name": "Avena cocida con leche evaporada y maní",
+      "slots": [
+        "desayuno"
+      ],
+      "protein": "none",
+      "base": "avena",
+      "technique": "hervido",
+      "transform": true
+    },
+    {
+      "name": "Arepa de maíz con queso gouda",
+      "slots": [
+        "desayuno"
+      ],
+      "protein": "queso",
+      "base": "maiz",
+      "technique": "asado",
+      "transform": true
+    },
+    {
+      "name": "Casabe con mantequilla de maní y pasas",
+      "slots": [
+        "desayuno"
+      ],
+      "protein": "none",
+      "base": "casabe",
+      "technique": "crudo",
+      "transform": true
+    },
+    {
+      "name": "Avena con dátiles y almendras fileteadas",
+      "slots": [
+        "desayuno"
+      ],
+      "protein": "none",
+      "base": "avena",
+      "technique": "hervido",
+      "transform": true
+    },
+    {
+      "name": "Tortilla de harina de maíz con queso cheddar",
+      "slots": [
+        "desayuno"
+      ],
+      "protein": "queso",
+      "base": "maiz",
+      "technique": "salteado",
+      "transform": true
+    },
+    {
+      "name": "Granola con leche de avena y pasas",
+      "slots": [
+        "desayuno"
+      ],
+      "protein": "none",
+      "base": "avena",
+      "technique": "crudo",
+      "transform": true
+    },
+    {
+      "name": "Domplines con huevo y queso de papa",
+      "slots": [
+        "desayuno"
+      ],
+      "protein": "huevo",
+      "base": "harina",
+      "technique": "hervido",
+      "transform": true
+    },
+    {
+      "name": "Maní tostado con pasas",
+      "slots": [
+        "merienda"
+      ],
+      "protein": "none",
+      "base": "avena",
+      "technique": "asado",
+      "transform": true
+    },
+    {
+      "name": "Casabe con queso gouda",
+      "slots": [
+        "merienda"
+      ],
+      "protein": "queso",
+      "base": "casabe",
+      "technique": "crudo",
+      "transform": true
+    },
+    {
+      "name": "Batida de leche evaporada con avena y maní",
+      "slots": [
+        "merienda"
+      ],
+      "protein": "none",
+      "base": "avena",
+      "technique": "crudo",
+      "transform": true
+    },
+    {
+      "name": "Almendras fileteadas con ciruelas pasas",
+      "slots": [
+        "merienda"
+      ],
+      "protein": "none",
+      "base": "avena",
+      "technique": "crudo",
+      "transform": true
+    },
+    {
+      "name": "Huevo duro con casabe y sal",
+      "slots": [
+        "merienda"
+      ],
+      "protein": "huevo",
+      "base": "casabe",
+      "technique": "hervido",
+      "transform": true
+    },
+    {
+      "name": "Casabe con mantequilla de maní y canela",
+      "slots": [
+        "merienda"
+      ],
+      "protein": "none",
+      "base": "casabe",
+      "technique": "crudo",
+      "transform": true
+    },
+    {
+      "name": "Semillas de calabaza con dátiles",
+      "slots": [
+        "merienda"
+      ],
+      "protein": "none",
+      "base": "avena",
+      "technique": "crudo",
+      "transform": true
+    },
+    {
+      "name": "Avena remojada con leche de coco y linaza",
+      "slots": [
+        "merienda"
+      ],
+      "protein": "none",
+      "base": "avena",
+      "technique": "crudo",
+      "transform": true
     }
   ]
 }

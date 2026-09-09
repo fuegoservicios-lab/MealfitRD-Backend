@@ -145,6 +145,58 @@ CURATED: dict[str, list] = {
 }
 # Ítems que la plantilla nombra y el catálogo NO tiene: se declaran para que el compilador los liste como
 # exclusión explícita (gate: 100 % resuelve o queda excluido, nunca «desaparece en silencio»).
+
+# [P1-CICLO-30D-DURADERO · 2026-09-09] 19 platos cuyos constituyentes aguantan >= 21 dias
+# sin nevera. Cierran el hueco medido del ciclo de UNA compra sin congelador: del dia 15
+# en adelante solo quedaban 9 cenas y 12 almuerzos vegetarianos, y con la regla de no
+# repetir en 7 dias eso deja cero margen (0 de 8 meses se completaban, atasco en el 13-17).
+# Ingredientes con nombre EXACTO del catalogo, la regla de este fichero: nada inventado.
+CURATED.update({
+    "Bacalao guisado con yuca y cebolla": [(I, "Bacalao", 120), (I, "Yuca", 200), (I, "Cebolla", 40), (I, "Ajo", 5), (I, "Aceite de oliva", 8), (I, "Sal", 2)],
+    "Arenque guisado con auyama y arroz blanco": [(I, "Arenque", 110), (I, "Auyama", 150), (I, "Arroz blanco", 70), (I, "Cebolla", 40), (I, "Ajo", 5), (I, "Aceite de oliva", 8), (I, "Sal", 2)],
+    "Sardinas guisadas con papa y repollo": [(I, "Sardinas en lata", 120), (I, "Papa", 200), (I, "Repollo", 80), (I, "Cebolla", 40), (I, "Ajo", 5), (I, "Aceite de oliva", 8), (I, "Sal", 2)],
+    "Moro de gandules con soya texturizada": [(I, "Gandules", 80), (I, "Arroz blanco", 80), (I, "Soya texturizada", 30), (I, "Cebolla", 30), (I, "Ajo", 5), (I, "Aceite de oliva", 8), (I, "Sal", 2)],
+    "Lentejas guisadas con auyama y arroz blanco": [(I, "Lentejas", 80), (I, "Auyama", 120), (I, "Arroz blanco", 70), (I, "Cebolla", 35), (I, "Ajo", 5), (I, "Aceite de oliva", 8), (I, "Sal", 2)],
+    "Habichuelas negras guisadas con batata": [(I, "Habichuelas negras", 90), (I, "Batata", 200), (I, "Cebolla", 35), (I, "Ajo", 5), (I, "Aceite de oliva", 8), (I, "Sal", 2)],
+    "Salami guisado con yuca y cebolla": [(I, "Salami", 90), (I, "Yuca", 200), (I, "Cebolla", 45), (I, "Ajo", 5), (I, "Aceite de oliva", 6), (I, "Sal", 2)],
+    "Atún guisado con papa y zanahoria": [(I, "Atún en agua", 120), (I, "Papa", 200), (I, "Zanahoria", 60), (I, "Cebolla", 35), (I, "Ajo", 5), (I, "Aceite de oliva", 8), (I, "Sal", 2)],
+    "Tortilla de papa con queso gouda": [(I, "Papa", 180), (I, "Huevo", 100), (I, "Queso gouda", 40), (I, "Cebolla", 30), (I, "Aceite de oliva", 8), (I, "Sal", 2)],
+    "Guiso de habas con ñame y ajo": [(I, "Habas", 80), (I, "Ñame", 200), (I, "Cebolla", 35), (I, "Ajo", 6), (I, "Aceite de oliva", 8), (I, "Sal", 2)],
+    "Soya texturizada guisada con auyama y arroz integral": [(I, "Soya texturizada", 45), (I, "Auyama", 150), (I, "Arroz integral", 70), (I, "Cebolla", 35), (I, "Ajo", 5), (I, "Aceite de oliva", 8), (I, "Sal", 2)],
+    "Moro de habichuelas blancas con auyama": [(I, "Habichuelas blancas", 90), (I, "Arroz blanco", 80), (I, "Auyama", 120), (I, "Cebolla", 35), (I, "Ajo", 5), (I, "Aceite de oliva", 8), (I, "Sal", 2)],
+    "Guisantes secos guisados con papa y zanahoria": [(I, "Guisantes secos", 85), (I, "Papa", 200), (I, "Zanahoria", 70), (I, "Cebolla", 35), (I, "Ajo", 5), (I, "Aceite de oliva", 8), (I, "Sal", 2)],
+    "Arroz con lentejas y queso de papa": [(I, "Lentejas", 75), (I, "Arroz blanco", 80), (I, "Queso de papa", 45), (I, "Cebolla", 30), (I, "Ajo", 5), (I, "Aceite de oliva", 8), (I, "Sal", 2)],
+    "Frijol cargamanto guisado con arroz y auyama": [(I, "Frijol cargamanto", 85), (I, "Arroz blanco", 80), (I, "Auyama", 110), (I, "Cebolla", 35), (I, "Ajo", 5), (I, "Aceite de oliva", 8), (I, "Sal", 2)],
+    "Tortilla de papa y queso cheddar con repollo": [(I, "Papa", 200), (I, "Huevo", 100), (I, "Queso cheddar", 40), (I, "Repollo", 80), (I, "Cebolla", 30), (I, "Aceite de oliva", 8), (I, "Sal", 2)],
+    "Moro de habichuelas rojas con soya texturizada": [(I, "Habichuelas rojas", 85), (I, "Arroz blanco", 80), (I, "Soya texturizada", 30), (I, "Cebolla", 35), (I, "Ajo", 5), (I, "Aceite de oliva", 8), (I, "Sal", 2)],
+    "Pastelón de batata con queso mozzarella": [(I, "Batata", 220), (I, "Queso mozzarella", 60), (I, "Huevo", 50), (I, "Cebolla", 30), (I, "Aceite de oliva", 6), (I, "Sal", 2)],
+    "Ensalada tibia de garbanzos con zanahoria y queso gouda": [(I, "Garbanzos", 90), (I, "Zanahoria", 70), (I, "Queso gouda", 45), (I, "Cebolla", 25), (I, "Aceite de oliva", 10), (I, "Sal", 2)],
+})
+
+
+# [P1-CICLO-30D-DURADERO · 2026-09-09 · segunda tanda] desayunos y meriendas que
+# aguantan >= 21 dias. Tras la primera tanda el cuello se movio: las cenas pasaron de
+# 9 a 20 y los almuerzos de 13 a 23, pero desayunos (11) y meriendas (10) seguian sin
+# margen para la regla de no repetir plato en 7 dias.
+CURATED.update({
+    "Avena cocida con leche evaporada y maní": [(I, "Avena", 60), (I, "Leche evaporada", 120), (I, "Maní", 20), (I, "Canela en polvo", 2)],
+    "Arepa de maíz con queso gouda": [(I, "Harina de maíz precocida", 70), (I, "Queso gouda", 45), (I, "Huevo", 50), (I, "Sal", 2)],
+    "Casabe con mantequilla de maní y pasas": [(I, "Casabe", 50), (I, "Mantequilla de maní", 30), (I, "Pasas", 25)],
+    "Huevos revueltos con cebolla y casabe": [(I, "Huevo", 120), (I, "Cebolla", 30), (I, "Casabe", 40), (I, "Aceite de oliva", 6), (I, "Sal", 2)],
+    "Avena con dátiles y almendras fileteadas": [(I, "Avena", 60), (I, "Dátiles", 30), (I, "Almendras fileteadas", 20), (I, "Leche evaporada", 100)],
+    "Tortilla de harina de maíz con queso cheddar": [(I, "Harina de maíz precocida", 65), (I, "Queso cheddar", 40), (I, "Huevo", 50), (I, "Aceite de oliva", 6), (I, "Sal", 2)],
+    "Granola con leche de avena y pasas": [(I, "Granola", 60), (I, "Leche de avena", 200), (I, "Pasas", 25)],
+    "Domplines con huevo y queso de papa": [(I, "Harina de trigo", 70), (I, "Huevo", 100), (I, "Queso de papa", 40), (I, "Sal", 2)],
+    "Maní tostado con pasas": [(I, "Maní", 30), (I, "Pasas", 30)],
+    "Casabe con queso gouda": [(I, "Casabe", 40), (I, "Queso gouda", 45)],
+    "Batida de leche evaporada con avena y maní": [(I, "Leche evaporada", 150), (I, "Avena", 30), (I, "Maní", 15), (I, "Canela en polvo", 2)],
+    "Almendras fileteadas con ciruelas pasas": [(I, "Almendras fileteadas", 25), (I, "Ciruela pasa", 35)],
+    "Huevo duro con casabe y sal": [(I, "Huevo", 100), (I, "Casabe", 30), (I, "Sal", 1)],
+    "Casabe con mantequilla de maní y canela": [(I, "Casabe", 40), (I, "Mantequilla de maní", 25), (I, "Canela en polvo", 2)],
+    "Semillas de calabaza con dátiles": [(I, "Semillas de calabaza", 25), (I, "Dátiles", 35)],
+    "Avena remojada con leche de coco y linaza": [(I, "Avena", 40), (I, "Leche de coco", 120), (I, "Linaza", 12)],
+})
+
 DECLARED_UNRESOLVED: dict[str, list[str]] = {
     "Frutas picadas con limón": ["Menta"],
     "Batida de zapote ligera": ["Zapote"],
