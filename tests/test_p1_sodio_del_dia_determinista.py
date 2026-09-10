@@ -113,9 +113,24 @@ def test_el_candidato_salado_queda_de_RESERVA_no_descartado():
 
 
 def test_el_sodio_se_acumula_solo_cuando_la_comida_se_sirve():
-    """Sumar al descartar inflaría el día con platos que nadie come."""
+    """Sumar al descartar inflaría el día con platos que nadie come.
+
+    [P1-DIA-DETERMINISTA-VARIEDAD-DEL-DIA · 2026-09-10] La suma vive ahora en UN sitio, después de
+    decidir entre el candidato limpio y las dos reservas: es la única forma de que cuente exactamente lo
+    servido. La versión anterior sumaba en el `break` del candidato limpio y otra vez en la reserva.
+    """
     import inspect
     src = inspect.getsource(dd.build_day_for_skeleton)
-    cuerpo = src.split("_reserva = (_c, _t, _na)")[1]
-    assert "_sodio_dia += _na" in cuerpo.split("break")[0], (
-        "la suma dejó de ir pegada a la comida elegida")
+    assert src.count("_sodio_dia += ") == 1, "la suma de sodio vive en más de un sitio"
+    tras = src.split("_sodio_dia += _na_srv")[0].rsplit("if comida is None:", 1)[1]
+    assert "_reserva_var or _reserva" in tras, "la suma corre antes de decidir qué se sirve"
+
+
+def test_cada_candidato_salado_se_salta_no_solo_el_primero():
+    """El defecto que corrigió P1-DIA-DETERMINISTA-VARIEDAD-DEL-DIA: con `… > techo and _reserva is
+    None` en la misma condición, el segundo salado se aceptaba de largo."""
+    import inspect
+    src = inspect.getsource(dd.build_day_for_skeleton)
+    assert "> _techo_sodio() and _reserva is None" not in src
+    bloque = src.split("if _sodio_dia + _na > _techo_sodio():")[1].split("continue")[0]
+    assert "if _reserva is None:" in bloque

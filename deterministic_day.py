@@ -439,6 +439,69 @@ def _techo_sodio() -> float:
         return _TECHO_SODIO_RESPALDO_MG
 
 
+def _variedad_ssot():
+    """[P1-DIA-DETERMINISTA-VARIEDAD-DEL-DIA · 2026-09-10] Las dos puertas de variedad del camino del
+    modelo, leídas de donde viven.
+
+    `_SAME_DAY_PROTEIN_GATE_LABELS` (carnes, pescados y HUEVO; exime queso, legumbres y yogur, que en
+    RD se repiten por cultura) y `_LIGHT_BASE_TOKENS` (avena, casabe, arepa… en desayuno Y merienda).
+    El día determinista no pasa por `assemble_plan_node`, así que no las heredaba: medido sobre los
+    30 días del dueño, 12 repetían proteína y 4 base ligera. Copiarlas aquí sería la segunda tabla que
+    `P1-DIET-CANON-SSOT` prohíbe.
+    """
+    try:
+        from graph_orchestrator import _SAME_DAY_PROTEIN_GATE_LABELS
+        from bases_ligeras import LIGHT_BASE_TOKENS
+        return frozenset(_SAME_DAY_PROTEIN_GATE_LABELS), tuple(LIGHT_BASE_TOKENS)
+    except Exception:                                                  # noqa: BLE001
+        return frozenset(), ()
+
+
+def _repetir_proteina_ok(form_data) -> bool:
+    """El permiso de repetir proteína el mismo día sale de la política compilada del usuario.
+
+    `horizon.repetition_limits_for` es la tabla: `routine` lo permite, `balanced` y `explore` no. Sin
+    política ⇒ `balanced`, que es el defecto de `horizon` — no uno inventado aquí.
+    """
+    try:
+        import horizon
+        eff = (form_data or {}).get("_plan_policy_effective") or {}
+        modo = (eff.get("recurrence") or {}).get("global_mode") or "balanced"
+        return bool(horizon.repetition_limits_for(modo).get("same_day_protein_repeat_ok"))
+    except Exception:                                                  # noqa: BLE001
+        return False
+
+
+def _variedad_del_dia_on() -> bool:
+    """Knob de las dos puertas de variedad del día determinista. APAGADO por defecto, por medición.
+
+    Encendidas, en los 30 días del dueño los días con proteína repetida bajan de 12 a 0 y los de base
+    ligera de 4 a 0. Pero este módulo no tiene memoria ENTRE días, y restringir el día empuja la
+    elección hacia los platos exentos: las ventanas de 7 días que rompen el tope de su política
+    `balanced` (`max_exact_repeat_per_7d` = 2) pasan de 9 a 28, y el peor plato de 3 a 4 veces por
+    semana. Encenderlas antes de que exista esa memoria cambia una regla del dueño por otra suya.
+    `MEALFIT_DETERMINISTIC_DAY_SAME_DAY_VARIETY=true` las enciende sin redeploy.
+    """
+    try:
+        from knobs import _env_bool
+        return _env_bool("MEALFIT_DETERMINISTIC_DAY_SAME_DAY_VARIETY", False)
+    except Exception:                                                  # noqa: BLE001
+        return False
+
+
+def _bases_ligeras_de(comida, tokens) -> set:
+    """Las bases ligeras que nombra una comida, con el MISMO criterio que `_detect_light_base_repeats`:
+    sin acentos, en minúscula, prefijo de palabra sobre nombre + ingredientes («arepa» casa «arepitas»)."""
+    try:
+        from constants import strip_accents as _sa
+        blob = _sa((str((comida or {}).get("name") or "") + " " +
+                    " ".join(str(x) for x in ((comida or {}).get("ingredients") or []))).lower())
+        from bases_ligeras import familia_base_ligera as _fam
+        return {_fam(t) for t in tokens or () if re.search(r"\b" + re.escape(t), blob)}
+    except Exception:                                                  # noqa: BLE001
+        return set()
+
+
 def _sodio_de(plantilla) -> float:
     """Los mg de sodio de una ración según el registry. Sin dato ⇒ 0, y eso es deliberado.
 
@@ -615,6 +678,12 @@ def build_day_for_skeleton(nutrition, form_data, skeleton_day, day_num, user_id=
         meals = []
         usadas_hoy = set()   # [P1-DIA-DETERMINISTA-VARIEDAD] ninguna plantilla dos veces el mismo día
         _sodio_dia = 0.0     # [P1-SODIO-DEL-DIA-DETERMINISTA] presupuesto del DÍA, no del plato
+        # [P1-DIA-DETERMINISTA-VARIEDAD-DEL-DIA · 2026-09-10] Las dos puertas de variedad del camino del
+        # modelo: proteína que fatiga repetida el mismo día, y la misma base ligera en desayuno y merienda.
+        _proteinas_hoy, _bases_hoy = set(), set()
+        _labels_var, _tokens_var = _variedad_ssot()
+        _repite_ok = _repetir_proteina_ok(form_data)
+        _variedad_on = _variedad_del_dia_on()
         for slot in slots:
             r = _REPARTO.get(_norm(slot))
             if not r:
@@ -641,6 +710,7 @@ def build_day_for_skeleton(nutrition, form_data, skeleton_day, day_num, user_id=
             comida = None
             _ultimo_motivo = None
             _reserva = None
+            _reserva_var = None
             _elegibles = elegir_plantillas(tids, obj, catalogo, por_id, slot,
                                            rotacion=_rotacion_de(day_num, slot))
             # Primero los que no se han servido hoy; los ya usados quedan de RESPALDO al final, no
@@ -671,24 +741,44 @@ def build_day_for_skeleton(nutrition, form_data, skeleton_day, day_num, user_id=
                 # es deliberado: el sodio es un presupuesto del DÍA, no un veneno del plato, y un
                 # guard que tira candidatos sanos por una cuenta acumulada castiga al último slot.
                 _na = _sodio_de(_t)
-                if _sodio_dia + _na > _techo_sodio() and _reserva is None:
-                    _reserva = (_c, _t, _na)          # el mejor «demasiado salado», por si no hay otro
+                if _sodio_dia + _na > _techo_sodio():
+                    # [P1-DIA-DETERMINISTA-VARIEDAD-DEL-DIA] La condición era `… > techo and
+                    # _reserva is None`: el PRIMER salado quedaba de reserva y el SEGUNDO se aceptaba
+                    # de largo. Todo el que se pasa se salta; sólo el primero se guarda.
+                    if _reserva is None:
+                        _reserva = (_c, _t, _na)          # el mejor «demasiado salado», por si no hay otro
                     continue
-                comida = _c
-                usadas_hoy.add(str(_t.get("template_id")))
-                _sodio_dia += _na
+                # [P1-DIA-DETERMINISTA-VARIEDAD-DEL-DIA · 2026-09-10] Las dos puertas de variedad del
+                # modelo, con el mismo patrón: el que choca queda de reserva y se prueba el siguiente.
+                _prot = str(_t.get("protein") or "")
+                _bl = _bases_ligeras_de(_c, _tokens_var) if _norm(slot) in ("desayuno", "merienda") else set()
+                if _variedad_on and ((not _repite_ok and _prot in _labels_var and _prot in _proteinas_hoy)
+                                     or (_bl & _bases_hoy)):
+                    if _reserva_var is None:
+                        _reserva_var = (_c, _t, _na)
+                    continue
+                comida, _t_srv, _na_srv = _c, _t, _na
                 break
-            if comida is None and _reserva is not None:
-                comida, _t_res, _na_res = _reserva
-                usadas_hoy.add(str(_t_res.get("template_id")))
-                _sodio_dia += _na_res
-                logger.debug(f"[P1-SODIO-DEL-DIA-DETERMINISTA] {slot}: ningún candidato cabía en el "
-                             f"techo; se sirve {comida.get('name')!r} y el día queda a juicio final")
+            if comida is None:
+                # Entre reservas, primero la de variedad (sólo repite) y después la de sodio (el día
+                # sigue pasando por el juicio final de sodio).
+                _res = _reserva_var or _reserva
+                if _res is not None:
+                    comida, _t_srv, _na_srv = _res
+                    logger.debug(f"[P1-DIA-DETERMINISTA-VARIEDAD-DEL-DIA] {slot}: ningún candidato limpio; "
+                                 f"se sirve {comida.get('name')!r} de reserva y el día queda a juicio final")
             if not comida:
                 logger.warning(
                     f"[P1-DETERMINISTIC-DAY] día {day_num} RECHAZADO en {slot}: ninguno de los "
                     f"{len(_elegibles)} candidatos pasó → cae al LLM. Último motivo: {_ultimo_motivo}")
                 return None
+            # Lo servido —y sólo lo servido— entra en las cuentas del día, en UN sitio.
+            usadas_hoy.add(str(_t_srv.get("template_id")))
+            _sodio_dia += _na_srv
+            if str(_t_srv.get("protein") or "") in _labels_var:
+                _proteinas_hoy.add(str(_t_srv.get("protein")))
+            if _norm(slot) in ("desayuno", "merienda"):
+                _bases_hoy |= _bases_ligeras_de(comida, _tokens_var)
             meals.append(comida)
         if not meals:
             return None

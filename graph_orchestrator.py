@@ -10634,7 +10634,7 @@ GAINMUSCLE_DINNER_PROTEIN_ENABLED = _env_bool("MEALFIT_GAINMUSCLE_DINNER_PROTEIN
 
 
 LIGHT_BASE_REPEAT_ENABLED = _env_bool("MEALFIT_LIGHT_BASE_NO_REPEAT", True)
-_LIGHT_BASE_TOKENS = ("avena", "granola", "cereal", "hojuelas", "muesli", "pan integral", "casabe", "tostada", "arepa", "tortilla")
+from bases_ligeras import LIGHT_BASE_TOKENS as _LIGHT_BASE_TOKENS, familia_base_ligera as _familia_base_ligera  # [P1-DIA-DETERMINISTA-VARIEDAD-DEL-DIA] extraído: este fichero está en su tope
 
 
 def _detect_light_base_repeats(days: list) -> list:
@@ -10659,7 +10659,7 @@ def _detect_light_base_repeats(days: list) -> list:
                 blob = _sa_lb((str(m.get("name") or "") + " " + " ".join(str(x) for x in (m.get("ingredients") or []))).lower())
                 for tok in _LIGHT_BASE_TOKENS:
                     if _re.search(r"\b" + _re.escape(tok), blob):
-                        by_tok.setdefault(tok, []).append(str(m.get("name") or "")[:40])
+                        by_tok.setdefault(_familia_base_ligera(tok), []).append(str(m.get("name") or "")[:40])
             for tok, names in by_tok.items():
                 if len(names) >= 2:
                     out.append(f"Día {i + 1}: «{tok}» es la base del desayuno Y de la merienda ({' / '.join(names)}); "
