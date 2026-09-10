@@ -7,7 +7,7 @@
     "fideos integrales": "Pre-fase: sin resolver (passthrough). 'Fideos' (alta ES T5) matchea via su alias bare 'fideos' (CONTAINS). Candidato alternativo 'Pasta integral' (fila pre-fase) NO tiene 'fideos integrales' como alias -- no hay retargeteo desde una fila establecida. Macro similar (kcal 371 vs 370.5, protein 13g vs 13.5g, carbs 74.7g vs 73.1g) salvo fibra (3.2g vs 10.1g) -- divergencia menor, no clínicamente peligrosa como el caso chicharrón."
   },
   "corpus_size": 1603,
-  "generated_at": "2026-09-10T21:01:41.144355+00:00",
+  "generated_at": "2026-09-10T21:35:55.444343+00:00",
   "mapping": {
     "Aceite de Oliva": "Aceite de oliva",
     "Aceite de coco": "Aceite de coco",

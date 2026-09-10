@@ -681,10 +681,10 @@
             "[2026-09-08] Re-anclada sin repetir el juicio plato a plato: medido contra el arbol firmado, esta biblioteca tiene CERO plantillas cambiadas (nombre, slots, constituyentes, gramos, excluidos y riesgo, byte a byte). Su `snapshot_hash` se movio solo porque se movio el `catalog_fingerprint` del catalogo (c89f400bb5fd13dd -> d0bd7b4737441a95). Las decisiones de abajo describen exactamente estos platos."
           ],
           "kind": "automated",
-          "snapshot_hash": "9294bec0ed1c4d3f9a0aa89375aa52929d715d83a3cae7e99b9d68a3d4b54d9d"
+          "snapshot_hash": "35843fcd901bd71132b5bd56c4c95cf467dadb5464a85d0a1359127738bfdd0d"
         }
       },
-      "snapshot_hash": "9294bec0ed1c4d3f9a0aa89375aa52929d715d83a3cae7e99b9d68a3d4b54d9d"
+      "snapshot_hash": "35843fcd901bd71132b5bd56c4c95cf467dadb5464a85d0a1359127738bfdd0d"
     },
     "dominican_criolla": {
       "appropriateness": {
@@ -716,12 +716,10 @@
           "Arepa de maíz con queso gouda",
           "Tortilla de papa y queso cheddar con repollo",
           "Arenque desmenuzado con huevo y yuca hervida",
-          "Queso cottage con lechosa",
           "Mangú con salami de pavo a la plancha (versión magra)",
           "Arenque guisado con auyama y yuca",
           "Pollo horneado al limón con arroz amarillo",
           "Pastelón de batata con queso mozzarella",
-          "Queso cottage con casabe y tomate",
           "Ensalada tibia de garbanzos con zanahoria y queso gouda",
           "Tortilla de yuca con atún y queso blanco",
           "Espaguetis criollos con pollo desmenuzado",
@@ -802,10 +800,10 @@
             "[P1-CATALOGO-PROTEINA-DESAYUNO · 2026-09-09] +20 platos de DENSIDAD PROTEÍNICA (10 desayunos, 10 meriendas): el hueco medido era que el desayuno dominicano y la merienda son carbohidrato casi puro —mediana 3,86 y 3,37 g de proteína por 100 kcal contra un objetivo de 5,86— y por eso 14 días deterministas daban 7 platos distintos en 56 comidas. Cada plato pasó CINCO puertas antes de entrar (nombre exacto en catálogo, macros conocidas, densidad ≥ 5,0, factor de escalado dentro de banda, y precio de TODOS sus constituyentes) y su receta se escribió a mano contra las quince reglas de la v4. AUTOMÁTICA: estos 20 NO han pasado el juicio a ciegas del dueño — ver `pendiente_de_juicio_humano`."
           ],
           "kind": "automated",
-          "snapshot_hash": "668c004482b37f004c5f49606985ff705af62746bfd84275ab11fb4d19e8064e"
+          "snapshot_hash": "763307a52f508996bddbec278f944b31a48d3adcf8d9d49cee691d3fa41174fa"
         }
       },
-      "snapshot_hash": "668c004482b37f004c5f49606985ff705af62746bfd84275ab11fb4d19e8064e"
+      "snapshot_hash": "763307a52f508996bddbec278f944b31a48d3adcf8d9d49cee691d3fa41174fa"
     },
     "mexico_casera": {
       "appropriateness": {
@@ -985,10 +983,10 @@
             "[2026-09-08] Re-anclada sin repetir el juicio plato a plato: medido contra el arbol firmado, esta biblioteca tiene CERO plantillas cambiadas (nombre, slots, constituyentes, gramos, excluidos y riesgo, byte a byte). Su `snapshot_hash` se movio solo porque se movio el `catalog_fingerprint` del catalogo (c89f400bb5fd13dd -> d0bd7b4737441a95). Las decisiones de abajo describen exactamente estos platos."
           ],
           "kind": "automated",
-          "snapshot_hash": "10bb07c378e677261c5eeeac414a328b6f94b29a9d8f093775cefad502a52316"
+          "snapshot_hash": "f447e420035e5df96d7d14854f2b13d2166fb32d584dd853fee492aa49a3f839"
         }
       },
-      "snapshot_hash": "10bb07c378e677261c5eeeac414a328b6f94b29a9d8f093775cefad502a52316"
+      "snapshot_hash": "f447e420035e5df96d7d14854f2b13d2166fb32d584dd853fee492aa49a3f839"
     },
     "puertorico_criolla": {
       "appropriateness": {
@@ -1487,10 +1485,10 @@
             "[2026-09-08] Re-anclada sin repetir el juicio plato a plato: medido contra el arbol firmado, esta biblioteca tiene CERO plantillas cambiadas (nombre, slots, constituyentes, gramos, excluidos y riesgo, byte a byte). Su `snapshot_hash` se movio solo porque se movio el `catalog_fingerprint` del catalogo (c89f400bb5fd13dd -> d0bd7b4737441a95). Las decisiones de abajo describen exactamente estos platos."
           ],
           "kind": "automated",
-          "snapshot_hash": "273f41cf5069f11f67d462d6b8a345b1e81bc810dca4a462a8351f69a2403aaf"
+          "snapshot_hash": "685d9887b9e3882c1fe62d362ea70505a88acadc06e2c78b1ce6ce74532c349e"
         }
       },
-      "snapshot_hash": "273f41cf5069f11f67d462d6b8a345b1e81bc810dca4a462a8351f69a2403aaf"
+      "snapshot_hash": "685d9887b9e3882c1fe62d362ea70505a88acadc06e2c78b1ce6ce74532c349e"
     },
     "spain_mediterranea": {
       "appropriateness": {
@@ -1767,10 +1765,10 @@
             "[2026-09-08] Re-anclada sin repetir el juicio plato a plato: medido contra el arbol firmado, esta biblioteca tiene CERO plantillas cambiadas (nombre, slots, constituyentes, gramos, excluidos y riesgo, byte a byte). Su `snapshot_hash` se movio solo porque se movio el `catalog_fingerprint` del catalogo (c89f400bb5fd13dd -> d0bd7b4737441a95). Las decisiones de abajo describen exactamente estos platos."
           ],
           "kind": "automated",
-          "snapshot_hash": "1c68bb98dad89452c1864bb535c1f90a12c6d6777d5ed7bab0d049bbf090732f"
+          "snapshot_hash": "cb2241db6e8e0c2c5c1347d85f845cf4ba3f94db63837c4e53a66c9b63d2a562"
         }
       },
-      "snapshot_hash": "1c68bb98dad89452c1864bb535c1f90a12c6d6777d5ed7bab0d049bbf090732f"
+      "snapshot_hash": "cb2241db6e8e0c2c5c1347d85f845cf4ba3f94db63837c4e53a66c9b63d2a562"
     },
     "us_everyday": {
       "appropriateness": {
@@ -2021,10 +2019,10 @@
             "[2026-09-08] Re-anclada sin repetir el juicio plato a plato: medido contra el arbol firmado, esta biblioteca tiene CERO plantillas cambiadas (nombre, slots, constituyentes, gramos, excluidos y riesgo, byte a byte). Su `snapshot_hash` se movio solo porque se movio el `catalog_fingerprint` del catalogo (c89f400bb5fd13dd -> d0bd7b4737441a95). Las decisiones de abajo describen exactamente estos platos."
           ],
           "kind": "automated",
-          "snapshot_hash": "53d17bfdd016a3a7afc545788ab8990b99cc33d79110cf8baf13215ef380c6ba"
+          "snapshot_hash": "eab7cafd4ece07797f5b1d1952528faa01fe759177612dba7aacd04591c0caca"
         }
       },
-      "snapshot_hash": "53d17bfdd016a3a7afc545788ab8990b99cc33d79110cf8baf13215ef380c6ba"
+      "snapshot_hash": "eab7cafd4ece07797f5b1d1952528faa01fe759177612dba7aacd04591c0caca"
     }
   },
   "schema_version": 1

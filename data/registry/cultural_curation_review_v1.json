@@ -25,8 +25,8 @@
         "«Longaniza santarrosana con papa» usaba `Longaniza dominicana` teniendo `Chorizo santarrosano`. Corregidos ingrediente y nombre («Chorizo santarrosano con papa»).",
         "[2026-09-08] Re-anclada sin repetir el juicio plato a plato: medido contra el arbol firmado, esta biblioteca tiene CERO plantillas cambiadas (nombre, slots, constituyentes, gramos, excluidos y riesgo, byte a byte). Su `snapshot_hash` se movio solo porque se movio el `catalog_fingerprint` del catalogo (c89f400bb5fd13dd -> d0bd7b4737441a95). Las decisiones de abajo describen exactamente estos platos."
       ],
-      "reanchored_from": "cb31a52aa66be35c2f73e0e7aa7a5e6789e48f86fe9383670bea6f3fb8c94714",
-      "snapshot_hash": "9294bec0ed1c4d3f9a0aa89375aa52929d715d83a3cae7e99b9d68a3d4b54d9d"
+      "reanchored_from": "9294bec0ed1c4d3f9a0aa89375aa52929d715d83a3cae7e99b9d68a3d4b54d9d",
+      "snapshot_hash": "35843fcd901bd71132b5bd56c4c95cf467dadb5464a85d0a1359127738bfdd0d"
     },
     "dominican_criolla": {
       "accepted": [
@@ -56,8 +56,8 @@
         "[2026-09-09 · P1-REGISTRY-CANTIDADES-EN-CRUDO] REVISIÓN HUMANA de los 35 platos de despensa, uno a uno, por el dueño. Resultado: 35 de 35 marcados «cambiar», 0 aprobados, y CERO rechazos por motivos culturales — ni un plato se objetó por no ser dominicano. Las 35 notas (21.224 caracteres, íntegras en cultural_review_notes_do_2026_09_09.json) son de EXACTITUD y se agrupan en seis hallazgos sistémicos, de los cuales dos resultaron ser el mismo defecto raíz: el registry NOMBRA en «plato servido» cantidades que MIDE en «ingrediente crudo» (serving_g y days_fresh_min). Los números son correctos para lo que el motor pregunta y no llegan a ningún usuario; lo que estaba roto era la documentación, que se contradecía a sí misma. `kind` sigue siendo `automated`: hubo revisión humana, pero NO hubo aprobación de ningún plato, y una firma que insinuara lo contrario sería el defecto que P1-REVIEW-KIND-HONEST cerró. Queda pendiente la decisión del dueño sobre sal/sodio y sobre los platos de origen no dominicano (frijol cargamanto, habas, guisantes secos), que él no objetó.",
         "[P1-CATALOGO-PROTEINA-DESAYUNO · 2026-09-09] +20 platos de DENSIDAD PROTEÍNICA (10 desayunos, 10 meriendas): el hueco medido era que el desayuno dominicano y la merienda son carbohidrato casi puro —mediana 3,86 y 3,37 g de proteína por 100 kcal contra un objetivo de 5,86— y por eso 14 días deterministas daban 7 platos distintos en 56 comidas. Cada plato pasó CINCO puertas antes de entrar (nombre exacto en catálogo, macros conocidas, densidad ≥ 5,0, factor de escalado dentro de banda, y precio de TODOS sus constituyentes) y su receta se escribió a mano contra las quince reglas de la v4. AUTOMÁTICA: estos 20 NO han pasado el juicio a ciegas del dueño — ver `pendiente_de_juicio_humano`."
       ],
-      "reanchored_from": "e4efa1f8077246dbe77c657b84068f4e00f5ca81d85a35c90a54f9ab0f5eb017",
-      "snapshot_hash": "668c004482b37f004c5f49606985ff705af62746bfd84275ab11fb4d19e8064e",
+      "reanchored_from": "2ae27be8a459156bc543e0857809a3425719e92c29d82dec5601f44a330a0054",
+      "snapshot_hash": "763307a52f508996bddbec278f944b31a48d3adcf8d9d49cee691d3fa41174fa",
       "pendiente_de_juicio_humano": {
         "fecha": "2026-09-09",
         "motivo": "los 20 platos nuevos de P1-CATALOGO-PROTEINA-DESAYUNO entraron por medición, no por juicio. La revisión humana de las 35 fichas del 09-sep (`cultural_review_notes_do_2026_09_09.json`) cubre el catálogo ANTERIOR; éstos están sin juzgar.",
@@ -111,8 +111,8 @@
         "«Frijoles charros con longaniza» usaba `Longaniza dominicana` teniendo `Chorizo mexicano` en el catálogo — el nombre del plato ya decía «charros». Corregidos ingrediente Y nombre («Frijoles charros con chorizo»): un título que promete longaniza y sirve chorizo es la misma clase de defecto que el motor persigue en los planes vivos.",
         "[2026-09-08] Re-anclada sin repetir el juicio plato a plato: medido contra el arbol firmado, esta biblioteca tiene CERO plantillas cambiadas (nombre, slots, constituyentes, gramos, excluidos y riesgo, byte a byte). Su `snapshot_hash` se movio solo porque se movio el `catalog_fingerprint` del catalogo (c89f400bb5fd13dd -> d0bd7b4737441a95). Las decisiones de abajo describen exactamente estos platos."
       ],
-      "reanchored_from": "7f92703b9643cc9c1f5f4068ad556215ec3e08a8c88f1e6d4e5d1398e0bce88d",
-      "snapshot_hash": "10bb07c378e677261c5eeeac414a328b6f94b29a9d8f093775cefad502a52316"
+      "reanchored_from": "10bb07c378e677261c5eeeac414a328b6f94b29a9d8f093775cefad502a52316",
+      "snapshot_hash": "f447e420035e5df96d7d14854f2b13d2166fb32d584dd853fee492aa49a3f839"
     },
     "puertorico_criolla": {
       "accepted": [
@@ -135,8 +135,8 @@
         "Las altas de PR (yuca hervida, tostones, batata asada, plátano maduro) heredan el aviso «cultivar dominicano» del catálogo, igual que las veinte plantillas puertorriqueñas que ya lo tenían. Es un marcador de PROCEDENCIA de la fila, no una falta de disponibilidad: yuca, plátano y batata son alimentos puertorriqueños. Se acepta, como en la revisión anterior.",
         "[2026-09-08] Re-anclada sin repetir el juicio plato a plato: medido contra el arbol firmado, esta biblioteca tiene CERO plantillas cambiadas (nombre, slots, constituyentes, gramos, excluidos y riesgo, byte a byte). Su `snapshot_hash` se movio solo porque se movio el `catalog_fingerprint` del catalogo (c89f400bb5fd13dd -> d0bd7b4737441a95). Las decisiones de abajo describen exactamente estos platos."
       ],
-      "reanchored_from": "08c77edef5d66960e8b5ec40a478169cdcf4bc809150f1a4515443886412e37d",
-      "snapshot_hash": "273f41cf5069f11f67d462d6b8a345b1e81bc810dca4a462a8351f69a2403aaf"
+      "reanchored_from": "273f41cf5069f11f67d462d6b8a345b1e81bc810dca4a462a8351f69a2403aaf",
+      "snapshot_hash": "685d9887b9e3882c1fe62d362ea70505a88acadc06e2c78b1ce6ce74532c349e"
     },
     "spain_mediterranea": {
       "accepted": [
@@ -158,8 +158,8 @@
         "Cena «Salteado de edamame con espárragos y arroz integral» → «…con patata»: arroz como BASE no va en cena (regla dura del juez culinario). Se cambió el acompañamiento en vez de recolocar la etiqueta — mover el rótulo habría mentido sobre lo que el plato es.",
         "[2026-09-08] Re-anclada sin repetir el juicio plato a plato: medido contra el arbol firmado, esta biblioteca tiene CERO plantillas cambiadas (nombre, slots, constituyentes, gramos, excluidos y riesgo, byte a byte). Su `snapshot_hash` se movio solo porque se movio el `catalog_fingerprint` del catalogo (c89f400bb5fd13dd -> d0bd7b4737441a95). Las decisiones de abajo describen exactamente estos platos."
       ],
-      "reanchored_from": "f74d8dfce9e03bdd097410bbadc35897c8064c2a32bfa3ce7249dccf0dacc4b3",
-      "snapshot_hash": "1c68bb98dad89452c1864bb535c1f90a12c6d6777d5ed7bab0d049bbf090732f"
+      "reanchored_from": "1c68bb98dad89452c1864bb535c1f90a12c6d6777d5ed7bab0d049bbf090732f",
+      "snapshot_hash": "cb2241db6e8e0c2c5c1347d85f845cf4ba3f94db63837c4e53a66c9b63d2a562"
     },
     "us_everyday": {
       "accepted": [
@@ -180,8 +180,8 @@
         "Cena «Salteado de edamame con brócoli y arroz integral» → «…con batata», por la misma regla de arroz en cena.",
         "[2026-09-08] Re-anclada sin repetir el juicio plato a plato: medido contra el arbol firmado, esta biblioteca tiene CERO plantillas cambiadas (nombre, slots, constituyentes, gramos, excluidos y riesgo, byte a byte). Su `snapshot_hash` se movio solo porque se movio el `catalog_fingerprint` del catalogo (c89f400bb5fd13dd -> d0bd7b4737441a95). Las decisiones de abajo describen exactamente estos platos."
       ],
-      "reanchored_from": "9e0dc4666e95da3be0e4401c1af59fa5d2ff4f0d6e3221fae35ea7b5ade6717d",
-      "snapshot_hash": "53d17bfdd016a3a7afc545788ab8990b99cc33d79110cf8baf13215ef380c6ba"
+      "reanchored_from": "53d17bfdd016a3a7afc545788ab8990b99cc33d79110cf8baf13215ef380c6ba",
+      "snapshot_hash": "eab7cafd4ece07797f5b1d1952528faa01fe759177612dba7aacd04591c0caca"
     }
   },
   "reviewer": "Claude (revisión curatorial delegada por el dueño)",
@@ -190,5 +190,7 @@
   "reanchor_note_2026_09_10b": "P1-SODIO-DEL-DIA-DETERMINISTA: la Sal declarada se acota a 0,5 g por racion en 64 lineas (34 plantillas declaraban 2 g y una 3,5 g). Lo pidio el dueno en 8 de sus 19 notas y su razon es de CONTABILIDAD, no de sabor: la sal que se va con el agua del hervor no se come. Medido sobre los 30 dias reales de su canario: 13 de 30 dias por encima del techo OMS de 2.000 mg (maximo 3.867) antes; 1 de 30 con el tope; 0 de 29 con el guard del dia, que cede al LLM el unico dia que no cabe (lo empuja el arenque, salado de origen). Ningun plato entra ni sale.",
   "reanchor_note_2026_09_10": "P1-MINUTOS-DE-LA-RECETA: `prep_minutes_est` deja de salir de una tabla por tecnica (con 30 de defecto para 21 plantillas, 16 de ellas crudas) y pasa a leerse de los tiempos que la propia receta declara, descontando los pasos que dicen «mientras». Ningun plato entra, sale ni cambia de ingredientes: se movio UN campo de `logistics`. Medido contra la tercera ronda de juicio humano (19/19 «cambiar», 13 de ellas pidiendo el tiempo): acierta 13 de 13 (+-5 min).",
   "reanchor_note_2026_09_10c": "P1-RECETA-JUZGADA-R3: reescritas las 19 recetas con las correcciones que el dueno escribio en la tercera ronda. La de SEGURIDAD: la tortilla de yuca rallaba la yuca CRUDA y la freia; ahora se hierve, se BOTA el agua y se maja, que es lo que arrastra los glucosidos cianogenicos — el propio dueno escribio «no confiar en rallar y dorar para eliminar sus compuestos toxicos». Ademas: la sal entra despues de escurrir en los platos que botan el agua del hervor, el mangu gana Vinagre blanco como constituyente (la cantidad va en la LISTA, no en el paso), y la tilapia declara que hornea «mientras la yuca hierve» — lo que baja su tiempo de 45 a 30 min sin tocar un numero. Medido tras reescribir: 14/14 dias armados, 0 comidas sucias de 56, calorias -0,1 %, 34 platos distintos.",
-  "reanchor_note_2026_09_10d": "P1-DO-PLATO-SIN-MERCADO: retirado de la biblioteca DOMINICANA el plato 'Frijol cargamanto guisado con arroz y auyama' (198 -> 197). Decision delegada por el dueno ('haz lo que mejor consideres') sobre los platos no dominicanos de la ronda de 35. Tres razones medidas: el frijol cargamanto es colombiano y sigue en la biblioteca de Colombia; su fila del catalogo esta VACIA para RD (precio 0, sin peso), asi que ni la lista de compras ni el filtro de presupuesto lo ven; y su papel lo cubre 'Habichuelas rojas guisadas con auyama, arroz y aguacate'. Habas (RD$205/lb) y guisantes secos (RD$133/lb) se QUEDAN: caros pero con precio, el filtro los gestiona. Retirado de los tres sitios (plantilla, constituyentes, receta tpl_3fed1d443898); ninguna receta queda huerfana."
+  "reanchor_note_2026_09_10d": "P1-DO-PLATO-SIN-MERCADO: retirado de la biblioteca DOMINICANA el plato 'Frijol cargamanto guisado con arroz y auyama' (198 -> 197). Decision delegada por el dueno ('haz lo que mejor consideres') sobre los platos no dominicanos de la ronda de 35. Tres razones medidas: el frijol cargamanto es colombiano y sigue en la biblioteca de Colombia; su fila del catalogo esta VACIA para RD (precio 0, sin peso), asi que ni la lista de compras ni el filtro de presupuesto lo ven; y su papel lo cubre 'Habichuelas rojas guisadas con auyama, arroz y aguacate'. Habas (RD$205/lb) y guisantes secos (RD$133/lb) se QUEDAN: caros pero con precio, el filtro los gestiona. Retirado de los tres sitios (plantilla, constituyentes, receta tpl_3fed1d443898); ninguna receta queda huerfana.",
+  "reanchor_note_2026_09_10e": "P1-CATALOGO-DICE-QUE-PRODUCTO: migracion sobre master_ingredients verificada contra USDA FDC y contra supermarket_products. Queso cottage pasa ENTERO de 1 % (fdc 173417) a 2 % (fdc 172182), porque el supermercado del dueno solo vende 2 % y 4 %; Tofu firme corrige solo su puntero (172476 era tofu normal; los valores ya eran de firme, 172475); Salsa de soya y Yogurt griego sin azucar ganan gloss_es con el producto que sus numeros describen. El catalogo cambio, asi que el catalog_fingerprint movio las seis firmas; los platos que cambian de macros son los 4 que usan cottage (3 DO + 1 US).",
+  "reanchor_note_2026_09_10f": "P1-CATALOGO-DICE-QUE-PRODUCTO (consecuencia): pasar el cottage a 2 % bajó «Queso cottage con casabe, tomate y aguacate» a 4,79 g de proteína/100 kcal, por debajo del 5,0 con el que entró. Reequilibrado (casabe 55 -> 40 g, cottage 170 -> 200 g): 5,90 g/100 kcal, 386 kcal, 626 mg de sodio."
 }

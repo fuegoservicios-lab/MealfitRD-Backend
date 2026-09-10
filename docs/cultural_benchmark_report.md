@@ -4,7 +4,7 @@ Gate: **PASA**
 
 | Perfil | Biblioteca | Plantillas | Des/Alm/Cen/Mer | Resueltos | Contaminación | Adecuación | Disponib. riesgo | Proteínas/Técnicas | Clínico | Revisión humana |
 |---|---|---|---|---|---|---|---|---|---|---|
-| dominican_criolla | do | 197 | 55/65/56/54 | 99.6 % | 0 | ok (fritura 0 %) | 0.0 % | 13/41 | ok (procesados 3, sodio 19) | 0 marcadas · firma: automated (Claude (revisión curatorial delegada por el dueño), 2026-09-10) |
+| dominican_criolla | do | 197 | 55/65/56/54 | 99.6 % | 0 | ok (fritura 0 %) | 0.0 % | 13/41 | ok (procesados 3, sodio 17) | 0 marcadas · firma: automated (Claude (revisión curatorial delegada por el dueño), 2026-09-10) |
 | puertorico_criolla | pr | 132 | 37/46/37/23 | 100.0 % | 1 | ok (fritura 6 %) | 14.9 % | 13/15 | ok (procesados 12, sodio 23) | 67 marcadas · firma: automated (Claude (revisión curatorial delegada por el dueño), 2026-09-10) |
 | mexico_casera | mx | 126 | 38/46/39/25 | 100.0 % | 0 | ok (fritura 1 %) | 2.6 % | 13/15 | ok (procesados 5, sodio 10) | 15 marcadas · firma: automated (Claude (revisión curatorial delegada por el dueño), 2026-09-10) |
 | colombia_casera | co | 134 | 37/48/39/27 | 100.0 % | 0 | ok (fritura 1 %) | 12.7 % | 12/16 | ok (procesados 6, sodio 7) | 61 marcadas · firma: automated (Claude (revisión curatorial delegada por el dueño), 2026-09-10) |
