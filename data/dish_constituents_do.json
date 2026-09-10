@@ -3592,32 +3592,6 @@
    "declared_unresolved": [],
    "origin": "curated"
   },
-  "Hígado de res encebollado con plátano hervido": {
-   "constituents": [
-    {
-     "grams": 120.0,
-     "name": "Hígado de res"
-    },
-    {
-     "grams": 150.0,
-     "name": "Plátano verde"
-    },
-    {
-     "grams": 45.0,
-     "name": "Cebolla"
-    },
-    {
-     "grams": 6.0,
-     "name": "Aceite de oliva"
-    },
-    {
-     "grams": 2.0,
-     "name": "Sal"
-    }
-   ],
-   "declared_unresolved": [],
-   "origin": "curated"
-  },
   "Batida de leche con claras, avena y guineo": {
    "constituents": [
     {

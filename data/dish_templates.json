@@ -3145,17 +3145,6 @@
    "transform": true
   },
   {
-   "name": "Hígado de res encebollado con plátano hervido",
-   "slots": [
-    "desayuno",
-    "cena"
-   ],
-   "protein": "res",
-   "base": "platano",
-   "technique": "encebollado",
-   "transform": true
-  },
-  {
    "name": "Batida de leche con claras, avena y guineo",
    "slots": [
     "desayuno",

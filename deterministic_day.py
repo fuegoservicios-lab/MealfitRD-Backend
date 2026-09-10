@@ -408,6 +408,49 @@ def construir_comida(t: dict, factor: float, catalogo: dict, slot: str, country:
     return meal
 
 
+#: [P1-RETINOL-PREFORMADO · 2026-09-09] El UL de vitamina A (3.000 mcg RAE/día, IOM) es de retinol
+#: PREFORMADO. El beta-caroteno de la auyama o la zanahoria **no intoxica**, y el catálogo guarda los
+#: dos en la misma columna (`vitamin_a_mcg_rae_per_100g`), que es RAE total.
+#:
+#: Medido sobre 18 días de planes vivos: 2 pasaban el UL, y los DOS por **600 g de auyama**. Un techo
+#: sobre RAE total los habría rechazado — habría roto cocina dominicana legítima para «arreglar» algo
+#: que no está roto. *Un guard que no distingue la fuente no mide el riesgo: mide una columna.*
+#:
+#: Por eso el techo se aplica SÓLO a las fuentes animales de retinol. En las 349 filas del catálogo
+#: la única que importa es `Hígado de res` (4.970 mcg/100 g); las once siguientes por RAE son todas
+#: vegetales (nori, pimentón, chiles, zanahoria, batata). La lista se queda corta a propósito y el
+#: test fija esa frontera.
+#: tooltip-anchor: _RETINOL_ANIMAL (test_p1_retinol_preformado.py)
+_RETINOL_ANIMAL = ("higado", "hígado", "viscera", "víscera", "mondongo", "molleja", "riñon",
+                   "riñón", "rinon", "pate", "paté", "foie", "aceite de higado")
+_UL_RETINOL_MCG = 3000.0
+
+
+def _retinol_preformado_mcg(meal: dict, catalogo: dict) -> float:
+    """Microgramos de retinol PREFORMADO de una comida armada. Sólo cuenta las fuentes animales."""
+    total = 0.0
+    for linea in (meal.get("ingredients") or []):
+        m = _RE_LINEA.match(str(linea).strip())
+        if not m:
+            continue
+        try:
+            g = float(m.group(1))
+        except (TypeError, ValueError):
+            continue
+        nombre = m.group(2).strip()
+        if not any(t in _norm(nombre) for t in ("higado", "viscera", "mondongo", "molleja",
+                                                "rinon", "pate", "foie")):
+            continue
+        fila = (catalogo or {}).get(nombre) or {}
+        v = fila.get("vitamin_a_mcg_rae_per_100g")
+        if v:
+            try:
+                total += float(v) * g / 100.0
+            except (TypeError, ValueError):
+                pass
+    return total
+
+
 def verifica_comida(meal: dict, form_data: dict, catalogo: dict) -> list:
     """Las violaciones de una comida armada sin LLM. Lista vacía = se puede servir.
 
@@ -454,6 +497,22 @@ def verifica_comida(meal: dict, form_data: dict, catalogo: dict) -> list:
         fuera.extend(_backstop(meal, allergies=alergias, diet_type=dieta, form_data=fd) or [])
     except Exception as e:                                             # noqa: BLE001
         logger.debug(f"[P1-DETERMINISTIC-DAY] backstop clínico no-op: {e!r}")
+
+    # [P1-RETINOL-PREFORMADO · 2026-09-09] Tercera capa. El techo de vitamina A YA EXISTÍA en el
+    # repo (`graph_orchestrator._MICRO_CLOSER_UL`, «vit_a_mcg»: 3000) y sólo miraba a quien SUBE:
+    # impide que el cerrador de micros escale hígado, y deja pasar de largo un plato que nace por
+    # encima. Lo destapó un plato que metí yo hoy —hígado encebollado, 120 g = 5.964 mcg, 2× el UL,
+    # servido 8 veces en 30 días— y ni el escáner culinario ni el backstop clínico lo vieron.
+    # *Un techo que sólo vigila a quien sube no es un techo.*
+    try:
+        _ret = _retinol_preformado_mcg(meal, catalogo)
+        if _ret > _UL_RETINOL_MCG:
+            fuera.append(
+                f"retinol preformado {_ret:.0f} mcg en un solo plato — supera el límite superior "
+                f"tolerable del DÍA ({_UL_RETINOL_MCG:.0f} mcg RAE, IOM); hepatotóxico y "
+                f"teratogénico acumulado")
+    except Exception as e:                                             # noqa: BLE001
+        logger.debug(f"[P1-RETINOL-PREFORMADO] techo no-op: {e!r}")
     return fuera
 
 def _tier_presupuesto(form_data) -> Optional[str]:

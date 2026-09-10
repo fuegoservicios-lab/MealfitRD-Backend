@@ -57,7 +57,7 @@
     "[P1-CATALOGO-PROTEINA-DESAYUNO · 2026-09-09] +20 platos de DENSIDAD PROTEÍNICA (10 desayunos, 10 meriendas): el hueco medido era que el desayuno dominicano y la merienda son carbohidrato casi puro —mediana 3,86 y 3,37 g de proteína por 100 kcal contra un objetivo de 5,86— y por eso 14 días deterministas daban 7 platos distintos en 56 comidas. Cada plato pasó CINCO puertas antes de entrar (nombre exacto en catálogo, macros conocidas, densidad ≥ 5,0, factor de escalado dentro de banda, y precio de TODOS sus constituyentes) y su receta se escribió a mano contra las quince reglas de la v4. AUTOMÁTICA: estos 20 NO han pasado el juicio a ciegas del dueño — ver `pendiente_de_juicio_humano`."
    ],
    "reanchored_from": "0ddb20d2ffc6481a3cce9d97c1787e20aa1edbb264d71238fbdcd12327c04481",
-   "snapshot_hash": "b43a803be7769961d7c947d60abc01bd9d39fde45204389705c113ea36e6c20e",
+   "snapshot_hash": "85f8af49892aed3b735ccdee62cba23329cbde201c29f8e32dd8f9aacf02d94f",
    "pendiente_de_juicio_humano": {
     "fecha": "2026-09-09",
     "motivo": "los 20 platos nuevos de P1-CATALOGO-PROTEINA-DESAYUNO entraron por medición, no por juicio. La revisión humana de las 35 fichas del 09-sep (`cultural_review_notes_do_2026_09_09.json`) cubre el catálogo ANTERIOR; éstos están sin juzgar.",
@@ -68,7 +68,6 @@
      "Yogurt griego con avena tostada y maní",
      "Sardinas guisadas con casabe y tomate",
      "Tortilla de yuca con atún y queso blanco",
-     "Hígado de res encebollado con plátano hervido",
      "Batida de leche con claras, avena y guineo",
      "Queso cottage con casabe, tomate y aguacate",
      "Tilapia al horno con yuca y cebolla",
@@ -82,6 +81,13 @@
      "Pechuga desmenuzada con casabe y cebolla",
      "Tofu salteado con salsa de soya y cebolla",
      "Queso de hoja con tomate y cebolla"
+    ],
+    "retirados": [
+     {
+      "plato": "Hígado de res encebollado con plátano hervido",
+      "motivo": "retinol PREFORMADO: 4.970 mcg RAE/100 g, y la racion de 120 g daba 5.964 mcg = 2x el UL diario (3.000). Medido: el selector lo servia 8 veces en 30 dias. No se le bajo la racion porque incluso ~60 g agotan el techo del dia entero, y el selector no tiene memoria entre dias. Si vuelve, vuelve CON la maquinaria de frecuencia.",
+      "fecha": "2026-09-09"
+     }
     ]
    }
   },

@@ -27,8 +27,8 @@ sitio.** Lo que faltaba era materia prima con proteína:
 | merienda | 40 | **3,37** | **6** |
 
 Mangú, casabe, yuca y plátano: cocina real y correcta, y casi sin proteína. De ahí 20 platos
-nuevos (10 desayunos, 10 meriendas) construidos SOBRE esa cocina —claras, atún, sardinas, arenque,
-hígado, tilapia, queso cottage, jamón de pavo— y no en su contra.
+nuevos construidos SOBRE esa cocina —claras, atún, sardinas, tilapia, queso cottage, pechuga— y no
+en su contra. Uno de los veinte, el de hígado, se retiró el mismo día: ver `test_p1_retinol_preformado.py`.
 
 ## Los dos defectos que la ampliación destapó, que valen más que los platos
 
@@ -65,7 +65,9 @@ import deterministic_day as dd
 _BACKEND = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 _REG = os.path.join(_BACKEND, "data", "registry")
 
-#: Los 20 que entraron. Si alguien los borra, que sea a sabiendas de que vuelve el bucle de 22.
+#: Los que entraron y SIGUEN dentro. Nacieron 20; el de hígado se retiró el mismo día por el techo
+#: de retinol preformado (ver `test_p1_retinol_preformado.py`). Si alguien los borra, que sea a
+#: sabiendas de que vuelve el bucle de 22 platos en 56 comidas.
 PLATOS_NUEVOS = (
     "Revoltillo de claras con espinaca y casabe",
     "Mangú de plátano verde con atún y cebolla encurtida",
@@ -73,7 +75,6 @@ PLATOS_NUEVOS = (
     "Yogurt griego con avena tostada y maní",
     "Sardinas guisadas con casabe y tomate",
     "Tortilla de yuca con atún y queso blanco",
-    "Hígado de res encebollado con plátano hervido",
     "Batida de leche con claras, avena y guineo",
     "Queso cottage con casabe, tomate y aguacate",
     "Tilapia al horno con yuca y cebolla",
@@ -103,7 +104,7 @@ def _por_nombre():
 
 
 # ── El catálogo ──────────────────────────────────────────────────────────────
-def test_los_20_platos_estan_compilados_y_servibles():
+def test_los_platos_nuevos_estan_compilados_y_servibles():
     idx = _por_nombre()
     faltan = [n for n in PLATOS_NUEVOS if n not in idx]
     assert not faltan, f"salieron del snapshot compilado: {faltan}"

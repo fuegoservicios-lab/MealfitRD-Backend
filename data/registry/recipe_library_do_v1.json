@@ -3,7 +3,7 @@
  "country": "DO",
  "generado_el": "2026-09-08",
  "revision": "v4 — estado del peso, tiempos orientativos, agua en volumen, reparto · v5 2026-09-09: +35 platos de despensa (P1-CICLO-30D-DURADERO), escritos a mano · v6 2026-09-09: +20 platos de DENSIDAD PROTEICA (P1-CATALOGO-PROTEINA-DESAYUNO), escritos a mano contra las quince reglas",
- "recetas": 195,
+ "recetas": 194,
  "procedencia": {
   "escrito_por": "LLM (tier flash) offline, prompt de quince reglas (v8)",
   "reglas_nacidas_de": "seis rondas de juicio a ciegas del dueno. Desayunos: 8 -> 11 -> 17 «la serviria» de 20. Almuerzo y cena: 3/16/1 (v1) -> 1/19/0 (v2) -> **8/12/0 (v3)**. Cada regla cierra una queja concreta suya, y DOS de mis reglas las tuvo que corregir el: el criterio de color y el sustituto del termometro.",
@@ -1735,16 +1735,6 @@
     "Calienta el aceite de oliva en un sartén a fuego medio y sofríe la cebolla 3-4 minutos; añade el tomate y cocina otros 4-5 minutos, aplastándolo con la cuchara hasta que suelte su jugo y se haga salsa.",
     "Añade las sardinas enteras, baja el fuego y déjalas 3-4 minutos sólo para que tomen el guiso. No las revuelvas mucho o se deshacen del todo.",
     "Tuesta el casabe 1 minuto por lado en un sartén seco y sírvelo al lado para acompañar."
-   ]
-  },
-  "tpl_95f0dd7856d5": {
-   "franja": "cena",
-   "pasos": [
-    "Corta el hígado (se pesa crudo) en tiras de un dedo de grueso y déjalo escurrir en un colador mientras preparas lo demás.",
-    "Pela el plátano verde (se pesa ya pelado), córtalo en trozos y hiérvelo en agua que lo cubra con la sal, 15-20 minutos, hasta que un tenedor entre sin resistencia. Escurre.",
-    "Corta la cebolla en aros. Calienta el aceite de oliva en un sartén a fuego medio-alto y sella el hígado 2 minutos por lado, sin moverlo, para que dore.",
-    "Baja el fuego, añade la cebolla y cocina 5-6 minutos removiendo, hasta que la cebolla ablande. El hígado está seguro cuando el termómetro marca 71 °C en el centro de la tira más gruesa; pasarse lo pone duro y arenoso.",
-    "Sirve el hígado con su cebolla al lado del plátano hervido."
    ]
   },
   "tpl_cc64fe57c76f": {
