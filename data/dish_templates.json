@@ -1415,7 +1415,7 @@
    ]
   },
   {
-   "name": "Tortilla de papa con queso de papa y cebolla",
+   "name": "Tortilla de papa con queso gouda y cebolla",
    "slots": [
     "cena",
     "desayuno"
@@ -1434,7 +1434,7 @@
      "grams": 120.0
     },
     {
-     "name": "Queso de papa",
+     "name": "Queso gouda",
      "grams": 30.0
     },
     {
@@ -1588,7 +1588,7 @@
    ]
   },
   {
-   "name": "Puré de auyama con huevo duro y queso de papa",
+   "name": "Puré de auyama con huevo duro y queso gouda",
    "slots": [
     "cena"
    ],
@@ -1606,7 +1606,7 @@
      "grams": 100.0
     },
     {
-     "name": "Queso de papa",
+     "name": "Queso gouda",
      "grams": 30.0
     }
    ]
@@ -1668,7 +1668,7 @@
    ]
   },
   {
-   "name": "Casabe con huevo revuelto y queso de papa",
+   "name": "Casabe con huevo revuelto y queso gouda",
    "slots": [
     "desayuno"
    ],
@@ -1686,7 +1686,7 @@
      "grams": 100.0
     },
     {
-     "name": "Queso de papa",
+     "name": "Queso gouda",
      "grams": 30.0
     },
     {
@@ -1785,7 +1785,7 @@
    ]
   },
   {
-   "name": "Arepitas de maíz con queso de papa (horneadas)",
+   "name": "Arepitas de maíz con queso gouda (horneadas)",
    "slots": [
     "desayuno",
     "merienda"
@@ -1800,7 +1800,7 @@
      "grams": 60.0
     },
     {
-     "name": "Queso de papa",
+     "name": "Queso gouda",
      "grams": 30.0
     },
     {
@@ -1986,7 +1986,7 @@
    ]
   },
   {
-   "name": "Puré de papa con huevo revuelto y queso de papa",
+   "name": "Puré de papa con huevo revuelto y queso gouda",
    "slots": [
     "cena"
    ],
@@ -2004,7 +2004,7 @@
      "grams": 100.0
     },
     {
-     "name": "Queso de papa",
+     "name": "Queso gouda",
      "grams": 25.0
     },
     {
@@ -2014,7 +2014,7 @@
    ]
   },
   {
-   "name": "Casabe con queso de papa y manzana",
+   "name": "Casabe con queso gouda y manzana",
    "slots": [
     "merienda"
    ],
@@ -2028,7 +2028,7 @@
      "grams": 40.0
     },
     {
-     "name": "Queso de papa",
+     "name": "Queso gouda",
      "grams": 30.0
     },
     {
@@ -2864,7 +2864,7 @@
    "transform": true
   },
   {
-   "name": "Arroz con lentejas y queso de papa",
+   "name": "Arroz con lentejas y queso gouda",
    "slots": [
     "almuerzo"
    ],
@@ -2974,7 +2974,7 @@
    "transform": true
   },
   {
-   "name": "Domplines con huevo y queso de papa",
+   "name": "Domplines con huevo y queso gouda",
    "slots": [
     "desayuno"
    ],

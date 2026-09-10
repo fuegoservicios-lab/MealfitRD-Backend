@@ -699,7 +699,7 @@
         "dominican_cultivar_outside_do": [],
         "needs_review": false,
         "ok": true,
-        "priced_pct": 98.0,
+        "priced_pct": 98.7,
         "review_threshold_pct": 15.0
       },
       "clinical": {
@@ -711,9 +711,9 @@
           "Salami guisado con yuca y cebolla"
         ],
         "sodium_high": [
-          "Arroz con lentejas y queso de papa",
           "Locrio de arenque con aguacate",
           "Arepa de maíz con queso gouda",
+          "Domplines con huevo y queso gouda",
           "Tortilla de papa y queso cheddar con repollo",
           "Arenque desmenuzado con huevo y yuca hervida",
           "Mangú con salami de pavo a la plancha (versión magra)",
@@ -723,7 +723,6 @@
           "Ensalada tibia de garbanzos con zanahoria y queso gouda",
           "Tortilla de yuca con atún y queso blanco",
           "Espaguetis criollos con pollo desmenuzado",
-          "Domplines con huevo y queso de papa",
           "Queso cottage con casabe, tomate y aguacate",
           "Salami guisado con yuca y cebolla",
           "Tortilla de papa con queso gouda",
@@ -800,10 +799,10 @@
             "[P1-CATALOGO-PROTEINA-DESAYUNO · 2026-09-09] +20 platos de DENSIDAD PROTEÍNICA (10 desayunos, 10 meriendas): el hueco medido era que el desayuno dominicano y la merienda son carbohidrato casi puro —mediana 3,86 y 3,37 g de proteína por 100 kcal contra un objetivo de 5,86— y por eso 14 días deterministas daban 7 platos distintos en 56 comidas. Cada plato pasó CINCO puertas antes de entrar (nombre exacto en catálogo, macros conocidas, densidad ≥ 5,0, factor de escalado dentro de banda, y precio de TODOS sus constituyentes) y su receta se escribió a mano contra las quince reglas de la v4. AUTOMÁTICA: estos 20 NO han pasado el juicio a ciegas del dueño — ver `pendiente_de_juicio_humano`."
           ],
           "kind": "automated",
-          "snapshot_hash": "763307a52f508996bddbec278f944b31a48d3adcf8d9d49cee691d3fa41174fa"
+          "snapshot_hash": "36a59964dfdd0ea7c924141fa59a4cc9c4d576caad08358102044a7ce9825428"
         }
       },
-      "snapshot_hash": "763307a52f508996bddbec278f944b31a48d3adcf8d9d49cee691d3fa41174fa"
+      "snapshot_hash": "36a59964dfdd0ea7c924141fa59a4cc9c4d576caad08358102044a7ce9825428"
     },
     "mexico_casera": {
       "appropriateness": {

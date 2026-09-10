@@ -138,7 +138,7 @@
    "declared_unresolved": [],
    "origin": "curated"
   },
-  "Arroz con lentejas y queso de papa": {
+  "Arroz con lentejas y queso gouda": {
    "constituents": [
     {
      "grams": 75.0,
@@ -150,7 +150,7 @@
     },
     {
      "grams": 45.0,
-     "name": "Queso de papa"
+     "name": "Queso gouda"
     },
     {
      "grams": 30.0,
@@ -1008,7 +1008,7 @@
    "declared_unresolved": [],
    "origin": "curated"
   },
-  "Domplines con huevo y queso de papa": {
+  "Domplines con huevo y queso gouda": {
    "constituents": [
     {
      "grams": 70.0,
@@ -1020,7 +1020,7 @@
     },
     {
      "grams": 40.0,
-     "name": "Queso de papa"
+     "name": "Queso gouda"
     },
     {
      "grams": 0.5,

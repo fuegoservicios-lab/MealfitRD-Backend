@@ -184,15 +184,6 @@
     "Hornea a 200 °C unos 20-25 minutos, hasta que estén doradas por fuera y al partir una el interior esté cocido y no crudo. Sírvelas calientes."
    ]
   },
-  "tpl_a2cdc293f9c7": {
-   "franja": "merienda",
-   "pasos": [
-    "Pela la manzana, quítale el corazón y córtala en tajadas finas o cuadritos.",
-    "Ralla el queso de papa y pártelo o desmenúzalo en trozos para repartir bien.",
-    "Coloca el casabe en un plato y reparte encima el queso de papa y la manzana, cubriendo toda la superficie.",
-    "Deja reposar la merienda unos minutos a temperatura ambiente para que el casabe se humedezca un poquito con el jugo de la manzana y no quede seco, y sírvelo frío, como es la técnica de este plato."
-   ]
-  },
   "tpl_68e6b8cd9c7b": {
    "franja": "almuerzo",
    "pasos": [
@@ -714,25 +705,6 @@
     "Sirve de una vez, tibio, con la otra mitad de la mantequilla de maní por encima del guineo si quieres un toque más sabroso."
    ]
   },
-  "tpl_60ca1bdc2b3c": {
-   "franja": "desayuno",
-   "pasos": [
-    "Precalienta el horno a 200 °C. Ralla el queso de papa, que se pesa ya sin la corteza si trae.",
-    "En un bate mezcla la harina de maíz precocida (se pesa en crudo, seca) con el queso rallado. Aparte, bate el huevo (se pesa sin cáscara) con la leche evaporada y viértelo sobre la mezcla seca. Une bien hasta formar una masa que no se pegue de las manos; si queda muy seca, añade un poquito de agua hasta lograr una consistencia suave y maleable. Deja reposar la masa unos 5 minutos.",
-    "Forma arepitas aplastadas del tamaño que quieras, con la palma de la mano, y colócalas en una bandeja de horno sin engrasar.",
-    "Hornea unos 12-15 minutos, voltéalas y hornea otros 8-10 minutos más, hasta que estén doradas por fuera y al partir una el interior salga totalmente cocido, sin masa cruda. Sírvelas calientes."
-   ]
-  },
-  "tpl_b6a72b5ffb68": {
-   "franja": "desayuno",
-   "pasos": [
-    "Pela la papa y la cebolla (las viandas se pesan peladas) y pícalas finitas: la papa en cuadritos pequeños o láminas delgaditas para que se cocine rápido, y la cebolla en pluma.",
-    "Calienta el aceite vegetal en una sartén antiadherente a fuego medio y sofríe la cebolla unos 3-4 minutos, hasta que se vea transparente. Añade la papa, baja el fuego, tapa y cocina unos 10-12 minutos, moviendo de vez en cuando, hasta que el cuchillo entre en la papa sin resistencia (se prueba antes de armar la tortilla, no después).",
-    "Bate el huevo (se pesa sin cáscara) en un recipiente y mézclalo con la papa y la cebolla sofritas. El queso de papa se añade en cubitos o rallado a esa mezcla.",
-    "Vierte todo en la sartén, aún a fuego medio-bajo, repartiendo la mezcla en forma pareja. Tapa y cocina unos 5-7 minutos por ese lado, hasta que los bordes se despeguen solos y la superficie empiece a cuajar mate.",
-    "Con un plato o tapa, voltea la tortilla y cuézala del otro lado unos 3-4 minutos más, sin tapar. Está lista cuando el huevo cuajó por completo y no escurre en ninguna parte al partirla."
-   ]
-  },
   "tpl_eed6cf680b16": {
    "franja": "desayuno",
    "pasos": [
@@ -741,16 +713,6 @@
     "Añade el tomate picado y una pizca de la sal, y cocina otros 3-4 minutos a fuego medio, hasta que el tomate se deshaga y forme una salsita.",
     "Incorpora el atún, ya escurrido, mezcla bien y deja que se caliente un minuto. Agrega el huevo batido con el resto de la sal y revuelve a fuego bajo unos 2-3 minutos, hasta que el huevo cuaje por completo y no escurra en ninguna parte.",
     "Sirve el revoltillo de atún caliente acompañado del plátano verde hervido."
-   ]
-  },
-  "tpl_2fe173137676": {
-   "franja": "cena",
-   "pasos": [
-    "Pela la papa, córtala en trozos iguales y ponla a hervir en una olla con agua suficiente para cubrirla, unos 15-20 minutos, hasta que un tenedor entre sin resistencia.",
-    "Escurre la papa y majala en el mismo recipiente con la leche evaporada hasta conseguir un puré suave y cremoso; si queda muy espeso, afloja con un chorrito de agua.",
-    "Ralla o desmenuza el queso de papa y mézclalo con el puré removiendo bien para que se integre; tápalo y resérvalo caliente mientras preparas el huevo.",
-    "Bate el huevo y cuézalo revuelto a fuego bajo en una sartén antiadherente, moviendo con una espátula unos 2-3 minutos, hasta que cuaje por completo y no escurra en ninguna parte.",
-    "Sirve el puré de papa con queso en el plato y encima el huevo revuelto, caliente."
    ]
   },
   "tpl_35249148dec3": {
@@ -776,11 +738,11 @@
   "tpl_c44f3fd68b6c": {
    "franja": "desayuno",
    "pasos": [
-    "Pelá los plátanos verdes y córtalos en trozos grandes; ponlos a hervir en una olla con suficiente agua que los cubra a fuego medio, unos 15-20 minutos, hasta que el cuchillo entre sin resistencia. Nota: el plátano se pesa pelado, en crudo.",
-    "Mientras, cortá la cebolla en plumas finas y ponla en un frasco o bowl con el vinagre blanco y un chorrito de agua para que se encurta mientras terminás el resto.",
+    "Pela los plátanos verdes y córtalos en trozos grandes; ponlos a hervir en una olla con suficiente agua que los cubra a fuego medio, unos 15-20 minutos, hasta que el cuchillo entre sin resistencia. Nota: el plátano se pesa pelado, en crudo.",
+    "Mientras, corta la cebolla en plumas finas y ponla en un frasco o bowl con el vinagre blanco y un chorrito de agua para que se encurta mientras terminás el resto.",
     "Escorre los plátanos y majalos bien, agregando el aceite de oliva poco a poco y un chorrito del agua de cocción hasta que quede un mangú suave y cremoso, sin grumos. Ajustá la textura con más agua de cocción si queda tieso.",
-    "Pelá el aguacate, quitalé la semilla y córtalo en tajadas.",
-    "Serví el mangú caliente, poné las tajadas de aguacate encima y coroná con la cebolla encurtida con su vinagre."
+    "Pela el aguacate, quitalé la semilla y córtalo en tajadas.",
+    "Sirve el mangú caliente, pon las tajadas de aguacate encima y coroná con la cebolla encurtida con su vinagre."
    ]
   },
   "tpl_9215d0ae51f0": {
@@ -1109,16 +1071,6 @@
     "Separa las hojas de la lechuga, lávalas y sécalas con cuidado. Rellena cada hoja con la res mechada caliente, dobla o enrolla y sirve de inmediato."
    ]
   },
-  "tpl_9ce963040c14": {
-   "franja": "cena",
-   "pasos": [
-    "Pela la auyama y córtala en trozos grandes; ponla a hervir en una olla con agua suficiente para cubrirla (unas dos tazas), a fuego medio, durante unos 12-15 minutos, hasta que un tenedor entre en los trozos sin resistencia.",
-    "Mientras tanto, pon los huevos a hervir en una olla aparte con agua que los cubra bien, a fuego medio, durante unos 10-12 minutos, hasta que cuajen por completo y no escurran al pelarlos. Pélalos y resérvalos.",
-    "Escurre bien la auyama y majala con un tenedor o machacador; si queda muy espesa, añade un chorrito del agua de cocción hasta que quede un puré suave y cremoso.",
-    "Ralla el queso de papa y mézclalo con el puré todavía caliente, moviendo bien hasta que se integre.",
-    "Sirve el puré en el plato, coloca el huevo duro encima —entero o partido en cuartos— y termina esparciendo el queso rallado por encima."
-   ]
-  },
   "tpl_3c47d5db5243": {
    "franja": "desayuno",
    "pasos": [
@@ -1136,16 +1088,6 @@
     "Mientras tanto, corta el muslo de pollo en trozos (se pesa en crudo). En una sartén con el resto del aceite de oliva, sofríe la cebolla picada y el tomate picado a fuego medio unos 5 minutos, hasta que suelten su jugo y formen una salsita.",
     "Agrega el pollo a la sartén, añade un chorrito de agua, tapa y guisa a fuego medio unos 20-25 minutos. El pollo está listo cuando el termómetro marca 74 °C en el centro de la parte más gruesa.",
     "Sirve el mofongo caliente del horno y cubre cada porción con el pollo guisado y su salsa."
-   ]
-  },
-  "tpl_199edbef3330": {
-   "franja": "desayuno",
-   "pasos": [
-    "Rallá el queso de papa y resérvalo; rompé el casabe en trozos o pedazos no muy grandes. Bati los huevos en un recipiente hasta que la clara y la yema se integren. (El huevo se pesa sin cáscara y el queso se pesa ya pelado.)",
-    "Calentá el aceite vegetal en una sartén antiadherente a fuego medio. Echá el huevo batido y, cuando empiece a cuajar por los bordes, mové con una espátula dejando que se formen curdos blanditos.",
-    "Cuando el huevo esté casi cuajado pero todavía brillante, añadí el queso de papa rallado y seguí moviendo. El revuelto está listo cuando el huevo cuaja por completo y no escurre en ninguna parte; retirá del fuego enseguida para que no se reseque.",
-    "Pasá el casabe por la sartén caliente unos segundos por cada lado, sólo para que se atempere y quede flexiblish, sin que se dore demasiado.",
-    "Serví el casabe en el plato y poné encima el huevo revuelto con el queso de papa. Comélo de una vez, mientras está caliente."
    ]
   },
   "tpl_e08414c10a4c": {
@@ -1241,7 +1183,7 @@
   "tpl_43c0a34437c4": {
    "franja": "almuerzo",
    "pasos": [
-    "Poné a hervir la pasta integral en una olla con suficiente agua (taza y media por taza de pasta) a fuego alto; se pesa en crudo. Cocínala unos 8-10 minutos hasta que esté al dente, o sea, que al morderla no esté dura pero tampoco deshaciéndose. Escúrrela y resérvala.",
+    "Pon a hervir la pasta integral en una olla con suficiente agua (taza y media por taza de pasta) a fuego alto; se pesa en crudo. Cocínala unos 8-10 minutos hasta que esté al dente, o sea, que al morderla no esté dura pero tampoco deshaciéndose. Escúrrela y resérvala.",
     "Mientras la pasta hierve, pica la cebolla, el ají morrón y el ajo bien finitos, y el tomate en cuadritos.",
     "En una sartén, calienta el aceite de oliva a fuego medio y sofríe la cebolla, el ajo y el ají morrón unos 3-4 minutos, hasta que la cebolla se vea transparente y el morrón blandito.",
     "Agrega el tomate picado y las sardinas en lata (ya escurridas) y sofríe todo junto unos 5 minutos a fuego medio, aplastando las sardinas con la cuchara, hasta que el tomate suelte su jugo y se forme una salsita que espese un poquito. Si se seca mucho, afloja con un chorrito de agua.",
@@ -1512,15 +1454,6 @@
     "Incorpora la papa y la zanahoria en cubos y sigue cocinando 15 minutos más, hasta que todo esté tierno."
    ]
   },
-  "tpl_03667c8ba551": {
-   "franja": "almuerzo",
-   "pasos": [
-    "Enjuaga las lentejas y cocínalas en agua unos 20 minutos, hasta que estén tiernas pero enteras.",
-    "Sofríe la cebolla y el ajo picados en el aceite a fuego medio, hasta que la cebolla se vea transparente.",
-    "Añade el arroz lavado y las lentejas escurridas, cubre con agua y cocina tapado a fuego bajo unos 20 minutos.",
-    "Reparte el queso de papa en trozos por encima y tapa dos minutos para que se ablande con el vapor."
-   ]
-  },
   "tpl_166288f52176": {
    "franja": "almuerzo",
    "pasos": [
@@ -1607,15 +1540,6 @@
     "Sirve la granola en un bol hondo y repártela de forma pareja.",
     "Vierte la leche de avena bien fría por encima, sin llegar a cubrirla del todo.",
     "Añade las pasas y deja reposar un par de minutos para que se hidraten."
-   ]
-  },
-  "tpl_c56a5a0d2a17": {
-   "franja": "desayuno",
-   "pasos": [
-    "Amasa la harina de trigo con agua y sal hasta obtener una masa firme y lisa.",
-    "Forma cilindros con la masa y córtalos en trozos del tamaño de un dedo.",
-    "Hiérvelos en agua con sal unos diez minutos, hasta que suban a la superficie.",
-    "Sírvelos con el huevo revuelto y el queso de papa en trozos por encima."
    ]
   },
   "tpl_74788cfcf505": {
@@ -1848,6 +1772,82 @@
     "Tuesta el casabe 1 minuto por lado en un sartén seco y pártelo en trozos del tamaño de la palma.",
     "Corta el tomate en cubos pequeños y déjalo escurrir un momento en un colador: si lo pones con todo su jugo, el queso se aguacha.",
     "Sirve el queso cottage tal cual, con su suero —sus macros son las del producto sin escurrir—, reparte el tomate por encima y usa el casabe para llevarlo."
+   ]
+  },
+  "tpl_fd506c06d18d": {
+   "franja": "desayuno",
+   "pasos": [
+    "Pela la papa y la cebolla (las viandas se pesan peladas) y pícalas finitas: la papa en cuadritos pequeños o láminas delgaditas para que se cocine rápido, y la cebolla en pluma.",
+    "Calienta el aceite vegetal en una sartén antiadherente a fuego medio y sofríe la cebolla unos 3-4 minutos, hasta que se vea transparente. Añade la papa, baja el fuego, tapa y cocina unos 10-12 minutos, moviendo de vez en cuando, hasta que el cuchillo entre en la papa sin resistencia (se prueba antes de armar la tortilla, no después).",
+    "Bate el huevo (se pesa sin cáscara) en un recipiente y mézclalo con la papa y la cebolla sofritas. El queso gouda se añade en cubitos o rallado a esa mezcla.",
+    "Vierte todo en la sartén, aún a fuego medio-bajo, repartiendo la mezcla en forma pareja. Tapa y cocina unos 5-7 minutos por ese lado, hasta que los bordes se despeguen solos y la superficie empiece a cuajar mate.",
+    "Con un plato o tapa, voltea la tortilla y cuézala del otro lado unos 3-4 minutos más, sin tapar. Está lista cuando el huevo cuajó por completo y no escurre en ninguna parte al partirla."
+   ]
+  },
+  "tpl_464cf6b12e9a": {
+   "franja": "cena",
+   "pasos": [
+    "Pela la auyama y córtala en trozos grandes; ponla a hervir en una olla con agua suficiente para cubrirla (unas dos tazas), a fuego medio, durante unos 12-15 minutos, hasta que un tenedor entre en los trozos sin resistencia.",
+    "Mientras tanto, pon los huevos a hervir en una olla aparte con agua que los cubra bien, a fuego medio, durante unos 10-12 minutos, hasta que cuajen por completo y no escurran al pelarlos. Pélalos y resérvalos.",
+    "Escurre bien la auyama y majala con un tenedor o machacador; si queda muy espesa, añade un chorrito del agua de cocción hasta que quede un puré suave y cremoso.",
+    "Ralla el queso gouda y mézclalo con el puré todavía caliente, moviendo bien hasta que se integre.",
+    "Sirve el puré en el plato, coloca el huevo duro encima —entero o partido en cuartos— y termina esparciendo el queso rallado por encima."
+   ]
+  },
+  "tpl_9f6b1a0d11df": {
+   "franja": "desayuno",
+   "pasos": [
+    "Ralla el queso gouda y resérvalo; rompe el casabe en trozos o pedazos no muy grandes. Bati los huevos en un recipiente hasta que la clara y la yema se integren. (El huevo se pesa sin cáscara y el queso se pesa ya pelado.)",
+    "Calienta el aceite vegetal en una sartén antiadherente a fuego medio. Echa el huevo batido y, cuando empiece a cuajar por los bordes, mové con una espátula dejando que se formen curdos blanditos.",
+    "Cuando el huevo esté casi cuajado pero todavía brillante, añade el queso gouda rallado y sigue moviendo. El revuelto está listo cuando el huevo cuaja por completo y no escurre en ninguna parte; retirá del fuego enseguida para que no se reseque.",
+    "Pasá el casabe por la sartén caliente unos segundos por cada lado, sólo para que se atempere y quede flexiblish, sin que se dore demasiado.",
+    "Sirve el casabe en el plato y pon encima el huevo revuelto con el queso gouda. Cómelo de una vez, mientras está caliente."
+   ]
+  },
+  "tpl_614403a321f1": {
+   "franja": "desayuno",
+   "pasos": [
+    "Precalienta el horno a 200 °C. Ralla el queso gouda, que se pesa ya sin la corteza si trae.",
+    "En un bate mezcla la harina de maíz precocida (se pesa en crudo, seca) con el queso rallado. Aparte, bate el huevo (se pesa sin cáscara) con la leche evaporada y viértelo sobre la mezcla seca. Une bien hasta formar una masa que no se pegue de las manos; si queda muy seca, añade un poquito de agua hasta lograr una consistencia suave y maleable. Deja reposar la masa unos 5 minutos.",
+    "Forma arepitas aplastadas del tamaño que quieras, con la palma de la mano, y colócalas en una bandeja de horno sin engrasar.",
+    "Hornea unos 12-15 minutos, voltéalas y hornea otros 8-10 minutos más, hasta que estén doradas por fuera y al partir una el interior salga totalmente cocido, sin masa cruda. Sírvelas calientes."
+   ]
+  },
+  "tpl_0dd050230811": {
+   "franja": "cena",
+   "pasos": [
+    "Pela la papa, córtala en trozos iguales y ponla a hervir en una olla con agua suficiente para cubrirla, unos 15-20 minutos, hasta que un tenedor entre sin resistencia.",
+    "Escurre la papa y majala en el mismo recipiente con la leche evaporada hasta conseguir un puré suave y cremoso; si queda muy espeso, afloja con un chorrito de agua.",
+    "Ralla o desmenuza el queso gouda y mézclalo con el puré removiendo bien para que se integre; tápalo y resérvalo caliente mientras preparas el huevo.",
+    "Bate el huevo y cuézalo revuelto a fuego bajo en una sartén antiadherente, moviendo con una espátula unos 2-3 minutos, hasta que cuaje por completo y no escurra en ninguna parte.",
+    "Sirve el puré de papa con queso en el plato y encima el huevo revuelto, caliente."
+   ]
+  },
+  "tpl_b5e2e4716226": {
+   "franja": "merienda",
+   "pasos": [
+    "Pela la manzana, quítale el corazón y córtala en tajadas finas o cuadritos.",
+    "Ralla el queso gouda y pártelo o desmenúzalo en trozos para repartir bien.",
+    "Coloca el casabe en un plato y reparte encima el queso gouda y la manzana, cubriendo toda la superficie.",
+    "Deja reposar la merienda unos minutos a temperatura ambiente para que el casabe se humedezca un poquito con el jugo de la manzana y no quede seco, y sírvelo frío, como es la técnica de este plato."
+   ]
+  },
+  "tpl_94a2926bbb86": {
+   "franja": "almuerzo",
+   "pasos": [
+    "Enjuaga las lentejas y cocínalas en agua unos 20 minutos, hasta que estén tiernas pero enteras.",
+    "Sofríe la cebolla y el ajo picados en el aceite a fuego medio, hasta que la cebolla se vea transparente.",
+    "Añade el arroz lavado y las lentejas escurridas, cubre con agua y cocina tapado a fuego bajo unos 20 minutos.",
+    "Reparte el queso gouda en trozos por encima y tapa dos minutos para que se ablande con el vapor."
+   ]
+  },
+  "tpl_15de313aec3a": {
+   "franja": "desayuno",
+   "pasos": [
+    "Amasa la harina de trigo con agua y sal hasta obtener una masa firme y lisa.",
+    "Forma cilindros con la masa y córtalos en trozos del tamaño de un dedo.",
+    "Hiérvelos en agua con sal unos diez minutos, hasta que suban a la superficie.",
+    "Sírvelos con el huevo revuelto y el queso gouda en trozos por encima."
    ]
   }
  }
