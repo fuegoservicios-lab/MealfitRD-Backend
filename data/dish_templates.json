@@ -2874,16 +2874,6 @@
    "transform": true
   },
   {
-   "name": "Frijol cargamanto guisado con arroz y auyama",
-   "slots": [
-    "almuerzo"
-   ],
-   "protein": "legumbre",
-   "base": "arroz",
-   "technique": "guisado",
-   "transform": true
-  },
-  {
    "name": "Tortilla de papa y queso cheddar con repollo",
    "slots": [
     "almuerzo"

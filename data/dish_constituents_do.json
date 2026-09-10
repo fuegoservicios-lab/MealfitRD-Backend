@@ -1186,40 +1186,6 @@
    "declared_unresolved": [],
    "origin": "curated"
   },
-  "Frijol cargamanto guisado con arroz y auyama": {
-   "constituents": [
-    {
-     "grams": 85.0,
-     "name": "Frijol cargamanto"
-    },
-    {
-     "grams": 80.0,
-     "name": "Arroz blanco"
-    },
-    {
-     "grams": 110.0,
-     "name": "Auyama"
-    },
-    {
-     "grams": 35.0,
-     "name": "Cebolla"
-    },
-    {
-     "grams": 5.0,
-     "name": "Ajo"
-    },
-    {
-     "grams": 8.0,
-     "name": "Aceite de oliva"
-    },
-    {
-     "grams": 0.5,
-     "name": "Sal"
-    }
-   ],
-   "declared_unresolved": [],
-   "origin": "curated"
-  },
   "Frutas picadas con limón y menta": {
    "constituents": [
     {
