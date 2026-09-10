@@ -425,6 +425,32 @@ _RETINOL_ANIMAL = ("higado", "hígado", "viscera", "víscera", "mondongo", "moll
                    "riñón", "rinon", "pate", "paté", "foie", "aceite de higado")
 _UL_RETINOL_MCG = 3000.0
 
+# [P1-SODIO-DEL-DIA-DETERMINISTA · 2026-09-10] El techo ya existe en el repo y es UNO: el de
+# `graph_orchestrator`. Copiar aquí un 2000 sería la segunda tabla que `P1-DIET-CANON-SSOT` prohíbe
+# — dos números que empiezan iguales y divergen a la primera edición.
+_TECHO_SODIO_RESPALDO_MG = 2000.0
+
+
+def _techo_sodio() -> float:
+    try:
+        from graph_orchestrator import SODIUM_DAY_CEILING_MG
+        return float(SODIUM_DAY_CEILING_MG)
+    except Exception:                                                  # noqa: BLE001
+        return _TECHO_SODIO_RESPALDO_MG
+
+
+def _sodio_de(plantilla) -> float:
+    """Los mg de sodio de una ración según el registry. Sin dato ⇒ 0, y eso es deliberado.
+
+    Un nutriente ausente no es cero (ARQ27-P0-03), pero aquí la alternativa —tratarlo como
+    infinito— descartaría todo plato cuyo catálogo no publique sodio y dejaría al día sin candidatos.
+    El que mide de verdad es el reviewer del LLM al que cae el día si esto se pasa.
+    """
+    try:
+        return float(((plantilla or {}).get("nutrition_per_serving") or {}).get("sodium_mg") or 0.0)
+    except (TypeError, ValueError):
+        return 0.0
+
 
 def _retinol_preformado_mcg(meal: dict, catalogo: dict) -> float:
     """Microgramos de retinol PREFORMADO de una comida armada. Sólo cuenta las fuentes animales."""
@@ -588,6 +614,7 @@ def build_day_for_skeleton(nutrition, form_data, skeleton_day, day_num, user_id=
         slots = [s for s in (skeleton_day or {}).get("slots") or []] or list(_REPARTO)
         meals = []
         usadas_hoy = set()   # [P1-DIA-DETERMINISTA-VARIEDAD] ninguna plantilla dos veces el mismo día
+        _sodio_dia = 0.0     # [P1-SODIO-DEL-DIA-DETERMINISTA] presupuesto del DÍA, no del plato
         for slot in slots:
             r = _REPARTO.get(_norm(slot))
             if not r:
@@ -613,6 +640,7 @@ def build_day_for_skeleton(nutrition, form_data, skeleton_day, day_num, user_id=
             # tirar el DÍA ENTERO al LLM por un plato.
             comida = None
             _ultimo_motivo = None
+            _reserva = None
             _elegibles = elegir_plantillas(tids, obj, catalogo, por_id, slot,
                                            rotacion=_rotacion_de(day_num, slot))
             # Primero los que no se han servido hoy; los ya usados quedan de RESPALDO al final, no
@@ -638,9 +666,24 @@ def build_day_for_skeleton(nutrition, form_data, skeleton_day, day_num, user_id=
                     logger.debug(f"[P1-DETERMINISTIC-DAY] {slot}: descartado {comida_nombre!r} "
                                  f"por {_ultimo_motivo[1]}; se prueba el siguiente candidato")
                     continue
+                # [P1-SODIO-DEL-DIA-DETERMINISTA · 2026-09-10] Entre los que YA pasaron todo lo
+                # demás, prefiere el que deja el día por debajo del techo. Preferir y no descartar
+                # es deliberado: el sodio es un presupuesto del DÍA, no un veneno del plato, y un
+                # guard que tira candidatos sanos por una cuenta acumulada castiga al último slot.
+                _na = _sodio_de(_t)
+                if _sodio_dia + _na > _techo_sodio() and _reserva is None:
+                    _reserva = (_c, _t, _na)          # el mejor «demasiado salado», por si no hay otro
+                    continue
                 comida = _c
                 usadas_hoy.add(str(_t.get("template_id")))
+                _sodio_dia += _na
                 break
+            if comida is None and _reserva is not None:
+                comida, _t_res, _na_res = _reserva
+                usadas_hoy.add(str(_t_res.get("template_id")))
+                _sodio_dia += _na_res
+                logger.debug(f"[P1-SODIO-DEL-DIA-DETERMINISTA] {slot}: ningún candidato cabía en el "
+                             f"techo; se sirve {comida.get('name')!r} y el día queda a juicio final")
             if not comida:
                 logger.warning(
                     f"[P1-DETERMINISTIC-DAY] día {day_num} RECHAZADO en {slot}: ninguno de los "
@@ -649,8 +692,22 @@ def build_day_for_skeleton(nutrition, form_data, skeleton_day, day_num, user_id=
             meals.append(comida)
         if not meals:
             return None
+        # [P1-SODIO-DEL-DIA-DETERMINISTA · 2026-09-10] La última palabra. El techo de sodio del
+        # repo (`SODIUM_DAY_CEILING_MG`, OMS 2.000 mg) y su autofix viven en `assemble_plan_node`,
+        # y un día que sale de aquí NO pasa por ahí — la misma clase de agujero que cerró
+        # `P0-DEGRADED-SAFETY-SCAN` para el path degradado, y la misma que dejó pasar el hígado.
+        # Medido sobre los 30 días reales del dueño con su canario encendido: **13 de 30 días por
+        # encima del techo**, máximo 3.867 mg. Acotar la sal declarada a 0,5 g bajó eso a 1 de 30;
+        # ese último lo empuja el arenque, que es salado de ORIGEN y ningún dato lo arregla.
+        # Se devuelve `None` —que en este módulo significa «que lo haga el LLM»— porque el LLM SÍ
+        # pasa por el autofix de sodio. Ceder un día al modelo es más barato que servirlo.
+        if _sodio_dia > _techo_sodio():
+            logger.warning(f"[P1-SODIO-DEL-DIA-DETERMINISTA] día {day_num} RECHAZADO: "
+                           f"{_sodio_dia:.0f} mg de sodio > techo {_techo_sodio():.0f} mg → cae al LLM")
+            return None
         logger.info(f"[P1-DETERMINISTIC-DAY] día {day_num} armado sin LLM: "
-                    f"{len(meals)} comidas, {sum(m['calories'] for m in meals)} kcal")
+                    f"{len(meals)} comidas, {sum(m['calories'] for m in meals)} kcal, "
+                    f"{_sodio_dia:.0f} mg de sodio")
         return {"day": day_num, "meals": meals, "_day_source": "deterministic"}
     except Exception as e:                                          # noqa: BLE001
         logger.debug(f"[P1-DETERMINISTIC-DAY] no-op para el día {day_num}: {e!r}")

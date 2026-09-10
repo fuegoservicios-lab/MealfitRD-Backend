@@ -716,56 +716,20 @@
           "Arepa de maíz con queso gouda",
           "Tortilla de papa y queso cheddar con repollo",
           "Arenque desmenuzado con huevo y yuca hervida",
-          "Lentejas guisadas con arroz y aguacate",
-          "Mangú de plátano verde con atún y cebolla encurtida",
-          "La bandera: arroz, habichuelas rojas guisadas y pollo guisado",
           "Queso cottage con lechosa",
-          "Habichuelas negras guisadas con batata",
-          "Frijol cargamanto guisado con arroz y auyama",
-          "Moro de habichuelas rojas con soya texturizada",
           "Mangú con salami de pavo a la plancha (versión magra)",
-          "Guisantes secos guisados con papa y zanahoria",
-          "Moro de habichuelas blancas con auyama",
-          "Moro de guandules con pollo guisado",
-          "Atún guisado con papa y zanahoria",
-          "Pescado guisado a la criolla con arroz blanco",
-          "Moro de habichuelas negras con bistec encebollado",
           "Arenque guisado con auyama y yuca",
           "Pollo horneado al limón con arroz amarillo",
-          "Berenjenas guisadas con carne molida y arroz",
-          "Revoltillo de claras con espinaca y casabe",
-          "Tortitas de pescado con ensalada verde",
-          "Asopao de pollo (porción moderada)",
           "Pastelón de batata con queso mozzarella",
           "Queso cottage con casabe y tomate",
-          "Soya texturizada guisada con auyama y ñame",
-          "Chicharrón de pollo al airfryer con yuca hervida",
           "Ensalada tibia de garbanzos con zanahoria y queso gouda",
           "Tortilla de yuca con atún y queso blanco",
-          "Chivo guisado estilo liniero con yuca hervida",
           "Espaguetis criollos con pollo desmenuzado",
-          "Tilapia al horno con yuca y cebolla",
-          "Tortilla de harina de maíz con queso cheddar",
-          "Res mechada con puré de papa",
-          "Pinchos de pollo y vegetales con yuca hervida",
-          "Guiso de habas con ñame y ajo",
-          "Lentejas guisadas con auyama y arroz blanco",
           "Domplines con huevo y queso de papa",
-          "Bacalao guisado con yuca y cebolla",
-          "Guineítos verdes guisados con costillitas magras de cerdo",
-          "Yuca al mojo con cerdo magro a la plancha",
-          "Camarones guisados con moro de guandules",
-          "Pescado con coco estilo Samaná con arroz blanco",
-          "Moro de gandules con soya texturizada",
           "Queso cottage con casabe, tomate y aguacate",
-          "Sardinas guisadas con papa y repollo",
           "Salami guisado con yuca y cebolla",
-          "Revoltillo de atún con plátano hervido",
-          "Croquetas de atún y yuca al horno con ensalada",
           "Tortilla de papa con queso gouda",
-          "Tortilla de huevos con espinaca y queso fresco",
-          "Sopa-crema de auyama con pollo desmenuzado",
-          "Lentejas guisadas con auyama y batata"
+          "Tortilla de huevos con espinaca y queso fresco"
         ]
       },
       "contamination": {
@@ -838,10 +802,10 @@
             "[P1-CATALOGO-PROTEINA-DESAYUNO · 2026-09-09] +20 platos de DENSIDAD PROTEÍNICA (10 desayunos, 10 meriendas): el hueco medido era que el desayuno dominicano y la merienda son carbohidrato casi puro —mediana 3,86 y 3,37 g de proteína por 100 kcal contra un objetivo de 5,86— y por eso 14 días deterministas daban 7 platos distintos en 56 comidas. Cada plato pasó CINCO puertas antes de entrar (nombre exacto en catálogo, macros conocidas, densidad ≥ 5,0, factor de escalado dentro de banda, y precio de TODOS sus constituyentes) y su receta se escribió a mano contra las quince reglas de la v4. AUTOMÁTICA: estos 20 NO han pasado el juicio a ciegas del dueño — ver `pendiente_de_juicio_humano`."
           ],
           "kind": "automated",
-          "snapshot_hash": "cca3380ae0617ce1fcc05beeb5258d4dc33f8776ce1c5e40781ad6b6f2f1236c"
+          "snapshot_hash": "7d46743dfcc2f3c0e1c3f0dd72be92d28a1d1e5a7fd916d3f4808aaf49711dfe"
         }
       },
-      "snapshot_hash": "cca3380ae0617ce1fcc05beeb5258d4dc33f8776ce1c5e40781ad6b6f2f1236c"
+      "snapshot_hash": "7d46743dfcc2f3c0e1c3f0dd72be92d28a1d1e5a7fd916d3f4808aaf49711dfe"
     },
     "mexico_casera": {
       "appropriateness": {
@@ -1687,7 +1651,6 @@
           "Menestra de verduras con jamón serrano",
           "Sopa de fideos con jamón serrano",
           "Habas con jamón serrano salteadas",
-          "Tostada integral con aguacate y huevo poché",
           "Butifarra con alubias blancas",
           "Huevos al plato con jamón serrano y salsa de tomate",
           "Merluza en salsa verde con almejas",
@@ -1804,10 +1767,10 @@
             "[2026-09-08] Re-anclada sin repetir el juicio plato a plato: medido contra el arbol firmado, esta biblioteca tiene CERO plantillas cambiadas (nombre, slots, constituyentes, gramos, excluidos y riesgo, byte a byte). Su `snapshot_hash` se movio solo porque se movio el `catalog_fingerprint` del catalogo (c89f400bb5fd13dd -> d0bd7b4737441a95). Las decisiones de abajo describen exactamente estos platos."
           ],
           "kind": "automated",
-          "snapshot_hash": "f74d8dfce9e03bdd097410bbadc35897c8064c2a32bfa3ce7249dccf0dacc4b3"
+          "snapshot_hash": "1c68bb98dad89452c1864bb535c1f90a12c6d6777d5ed7bab0d049bbf090732f"
         }
       },
-      "snapshot_hash": "f74d8dfce9e03bdd097410bbadc35897c8064c2a32bfa3ce7249dccf0dacc4b3"
+      "snapshot_hash": "1c68bb98dad89452c1864bb535c1f90a12c6d6777d5ed7bab0d049bbf090732f"
     },
     "us_everyday": {
       "appropriateness": {
@@ -2058,10 +2021,10 @@
             "[2026-09-08] Re-anclada sin repetir el juicio plato a plato: medido contra el arbol firmado, esta biblioteca tiene CERO plantillas cambiadas (nombre, slots, constituyentes, gramos, excluidos y riesgo, byte a byte). Su `snapshot_hash` se movio solo porque se movio el `catalog_fingerprint` del catalogo (c89f400bb5fd13dd -> d0bd7b4737441a95). Las decisiones de abajo describen exactamente estos platos."
           ],
           "kind": "automated",
-          "snapshot_hash": "9e0dc4666e95da3be0e4401c1af59fa5d2ff4f0d6e3221fae35ea7b5ade6717d"
+          "snapshot_hash": "53d17bfdd016a3a7afc545788ab8990b99cc33d79110cf8baf13215ef380c6ba"
         }
       },
-      "snapshot_hash": "9e0dc4666e95da3be0e4401c1af59fa5d2ff4f0d6e3221fae35ea7b5ade6717d"
+      "snapshot_hash": "53d17bfdd016a3a7afc545788ab8990b99cc33d79110cf8baf13215ef380c6ba"
     }
   },
   "schema_version": 1

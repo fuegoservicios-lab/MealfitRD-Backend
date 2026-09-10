@@ -79,7 +79,11 @@ def test_el_backstop_clinico_se_invoca_de_verdad():
     # comida con violaciones no se sirve jamás. Eso lo prueba de verdad
     # `test_una_comida_con_violaciones_NUNCA_se_sirve` (funcional, más abajo); aquí sólo se ancla
     # que el rechazo sigue existiendo y sigue pudiendo tumbar el día.
-    _tras = src.split("_viol = verifica_comida(")[1][:1600]
+    # [P1-SODIO-DEL-DIA-DETERMINISTA · 2026-09-10] La ventana era `[:1600]` caracteres y la reventó
+    # un comentario. Un límite por CARACTERES mide la prosa, no la estructura: cualquier P-fix que
+    # documente su razón dentro del bucle rompe el test sin tocar la propiedad. Ahora va del inicio
+    # de la verificación al final del bucle de slots, que es la región que este test defiende.
+    _tras = src.split("_viol = verifica_comida(")[1].split("meals.append(comida)")[0]
     assert "continue" in _tras, (
         "una violación ya no cede el turno al siguiente candidato: o se sirve el plato sucio, o "
         "vuelve el día perdido por un solo plato")
@@ -98,7 +102,7 @@ def test_el_rechazo_dice_el_MOTIVO_con_las_dos_formas():
     que no llega a quien investiga.
     """
     src = (_BACKEND / "deterministic_day.py").read_text(encoding="utf-8")
-    bloque = src.split("_viol = verifica_comida(")[1][:1600]
+    bloque = src.split("_viol = verifica_comida(")[1].split("meals.append(comida)")[0]
     assert "isinstance(v, dict)" in bloque, (
         "el log asume una sola forma: con la otra revienta y el motivo se pierde")
     assert "else str(v)" in bloque
