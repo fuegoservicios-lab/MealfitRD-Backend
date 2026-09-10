@@ -695,7 +695,7 @@
       },
       "availability": {
         "availability_risk_pct": 0.0,
-        "constituents": 1040,
+        "constituents": 1041,
         "dominican_cultivar_outside_do": [],
         "needs_review": false,
         "ok": true,
@@ -802,10 +802,10 @@
             "[P1-CATALOGO-PROTEINA-DESAYUNO · 2026-09-09] +20 platos de DENSIDAD PROTEÍNICA (10 desayunos, 10 meriendas): el hueco medido era que el desayuno dominicano y la merienda son carbohidrato casi puro —mediana 3,86 y 3,37 g de proteína por 100 kcal contra un objetivo de 5,86— y por eso 14 días deterministas daban 7 platos distintos en 56 comidas. Cada plato pasó CINCO puertas antes de entrar (nombre exacto en catálogo, macros conocidas, densidad ≥ 5,0, factor de escalado dentro de banda, y precio de TODOS sus constituyentes) y su receta se escribió a mano contra las quince reglas de la v4. AUTOMÁTICA: estos 20 NO han pasado el juicio a ciegas del dueño — ver `pendiente_de_juicio_humano`."
           ],
           "kind": "automated",
-          "snapshot_hash": "7d46743dfcc2f3c0e1c3f0dd72be92d28a1d1e5a7fd916d3f4808aaf49711dfe"
+          "snapshot_hash": "e4efa1f8077246dbe77c657b84068f4e00f5ca81d85a35c90a54f9ab0f5eb017"
         }
       },
-      "snapshot_hash": "7d46743dfcc2f3c0e1c3f0dd72be92d28a1d1e5a7fd916d3f4808aaf49711dfe"
+      "snapshot_hash": "e4efa1f8077246dbe77c657b84068f4e00f5ca81d85a35c90a54f9ab0f5eb017"
     },
     "mexico_casera": {
       "appropriateness": {
