@@ -665,7 +665,7 @@
             "Jugo de lulo y palmito con limón (< 40 kcal): snacks reales de bajo aporte."
           ],
           "by": "Claude (revisión curatorial delegada por el dueño)",
-          "date": "2026-09-09",
+          "date": "2026-09-10",
           "decisions": [
             "Alérgenos: el matcher del registry no reconocía plurales (sardinas, fideos, almejas) ni la salsa de soya como gluten: corregido y recompilado; cero clases sin marcar en las 6 bibliotecas (verificado con un chequeo independiente por constituyente).",
             "Raciones: meriendas > 450 kcal reasignadas a almuerzo/cena; almuerzos < 260 kcal y cenas < 180 kcal completados con base o proteína; almuerzos > 1.100 kcal reducidos.",
@@ -681,10 +681,10 @@
             "[2026-09-08] Re-anclada sin repetir el juicio plato a plato: medido contra el arbol firmado, esta biblioteca tiene CERO plantillas cambiadas (nombre, slots, constituyentes, gramos, excluidos y riesgo, byte a byte). Su `snapshot_hash` se movio solo porque se movio el `catalog_fingerprint` del catalogo (c89f400bb5fd13dd -> d0bd7b4737441a95). Las decisiones de abajo describen exactamente estos platos."
           ],
           "kind": "automated",
-          "snapshot_hash": "cb31a52aa66be35c2f73e0e7aa7a5e6789e48f86fe9383670bea6f3fb8c94714"
+          "snapshot_hash": "9294bec0ed1c4d3f9a0aa89375aa52929d715d83a3cae7e99b9d68a3d4b54d9d"
         }
       },
-      "snapshot_hash": "cb31a52aa66be35c2f73e0e7aa7a5e6789e48f86fe9383670bea6f3fb8c94714"
+      "snapshot_hash": "9294bec0ed1c4d3f9a0aa89375aa52929d715d83a3cae7e99b9d68a3d4b54d9d"
     },
     "dominican_criolla": {
       "appropriateness": {
@@ -813,7 +813,7 @@
             "Molondrones guisados (250 kcal) y sopa-crema de auyama (283 kcal): platos ligeros reales; el generador ajusta porciones a los macros del día."
           ],
           "by": "Claude (revisión curatorial delegada por el dueño)",
-          "date": "2026-09-09",
+          "date": "2026-09-10",
           "decisions": [
             "Alérgenos: el matcher del registry no reconocía plurales (sardinas, fideos, almejas) ni la salsa de soya como gluten: corregido y recompilado; cero clases sin marcar en las 6 bibliotecas (verificado con un chequeo independiente por constituyente).",
             "Raciones: meriendas > 450 kcal reasignadas a almuerzo/cena; almuerzos < 260 kcal y cenas < 180 kcal completados con base o proteína; almuerzos > 1.100 kcal reducidos.",
@@ -838,10 +838,10 @@
             "[P1-CATALOGO-PROTEINA-DESAYUNO · 2026-09-09] +20 platos de DENSIDAD PROTEÍNICA (10 desayunos, 10 meriendas): el hueco medido era que el desayuno dominicano y la merienda son carbohidrato casi puro —mediana 3,86 y 3,37 g de proteína por 100 kcal contra un objetivo de 5,86— y por eso 14 días deterministas daban 7 platos distintos en 56 comidas. Cada plato pasó CINCO puertas antes de entrar (nombre exacto en catálogo, macros conocidas, densidad ≥ 5,0, factor de escalado dentro de banda, y precio de TODOS sus constituyentes) y su receta se escribió a mano contra las quince reglas de la v4. AUTOMÁTICA: estos 20 NO han pasado el juicio a ciegas del dueño — ver `pendiente_de_juicio_humano`."
           ],
           "kind": "automated",
-          "snapshot_hash": "85f8af49892aed3b735ccdee62cba23329cbde201c29f8e32dd8f9aacf02d94f"
+          "snapshot_hash": "cca3380ae0617ce1fcc05beeb5258d4dc33f8776ce1c5e40781ad6b6f2f1236c"
         }
       },
-      "snapshot_hash": "85f8af49892aed3b735ccdee62cba23329cbde201c29f8e32dd8f9aacf02d94f"
+      "snapshot_hash": "cca3380ae0617ce1fcc05beeb5258d4dc33f8776ce1c5e40781ad6b6f2f1236c"
     },
     "mexico_casera": {
       "appropriateness": {
@@ -1004,7 +1004,7 @@
             "Pepino con chile y limón (35 kcal): snack real de bajo aporte; se conserva."
           ],
           "by": "Claude (revisión curatorial delegada por el dueño)",
-          "date": "2026-09-09",
+          "date": "2026-09-10",
           "decisions": [
             "Alérgenos: el matcher del registry no reconocía plurales (sardinas, fideos, almejas) ni la salsa de soya como gluten: corregido y recompilado; cero clases sin marcar en las 6 bibliotecas (verificado con un chequeo independiente por constituyente).",
             "Raciones: meriendas > 450 kcal reasignadas a almuerzo/cena; almuerzos < 260 kcal y cenas < 180 kcal completados con base o proteína; almuerzos > 1.100 kcal reducidos.",
@@ -1021,10 +1021,10 @@
             "[2026-09-08] Re-anclada sin repetir el juicio plato a plato: medido contra el arbol firmado, esta biblioteca tiene CERO plantillas cambiadas (nombre, slots, constituyentes, gramos, excluidos y riesgo, byte a byte). Su `snapshot_hash` se movio solo porque se movio el `catalog_fingerprint` del catalogo (c89f400bb5fd13dd -> d0bd7b4737441a95). Las decisiones de abajo describen exactamente estos platos."
           ],
           "kind": "automated",
-          "snapshot_hash": "7f92703b9643cc9c1f5f4068ad556215ec3e08a8c88f1e6d4e5d1398e0bce88d"
+          "snapshot_hash": "10bb07c378e677261c5eeeac414a328b6f94b29a9d8f093775cefad502a52316"
         }
       },
-      "snapshot_hash": "7f92703b9643cc9c1f5f4068ad556215ec3e08a8c88f1e6d4e5d1398e0bce88d"
+      "snapshot_hash": "10bb07c378e677261c5eeeac414a328b6f94b29a9d8f093775cefad502a52316"
     },
     "puertorico_criolla": {
       "appropriateness": {
@@ -1506,7 +1506,7 @@
             "Los avisos «cultivar dominicano» de las altas nuevas: ver la decisión de arriba."
           ],
           "by": "Claude (revisión curatorial delegada por el dueño)",
-          "date": "2026-09-09",
+          "date": "2026-09-10",
           "decisions": [
             "Alérgenos: el matcher del registry no reconocía plurales (sardinas, fideos, almejas) ni la salsa de soya como gluten: corregido y recompilado; cero clases sin marcar en las 6 bibliotecas (verificado con un chequeo independiente por constituyente).",
             "Raciones: meriendas > 450 kcal reasignadas a almuerzo/cena; almuerzos < 260 kcal y cenas < 180 kcal completados con base o proteína; almuerzos > 1.100 kcal reducidos.",
@@ -1523,10 +1523,10 @@
             "[2026-09-08] Re-anclada sin repetir el juicio plato a plato: medido contra el arbol firmado, esta biblioteca tiene CERO plantillas cambiadas (nombre, slots, constituyentes, gramos, excluidos y riesgo, byte a byte). Su `snapshot_hash` se movio solo porque se movio el `catalog_fingerprint` del catalogo (c89f400bb5fd13dd -> d0bd7b4737441a95). Las decisiones de abajo describen exactamente estos platos."
           ],
           "kind": "automated",
-          "snapshot_hash": "08c77edef5d66960e8b5ec40a478169cdcf4bc809150f1a4515443886412e37d"
+          "snapshot_hash": "273f41cf5069f11f67d462d6b8a345b1e81bc810dca4a462a8351f69a2403aaf"
         }
       },
-      "snapshot_hash": "08c77edef5d66960e8b5ec40a478169cdcf4bc809150f1a4515443886412e37d"
+      "snapshot_hash": "273f41cf5069f11f67d462d6b8a345b1e81bc810dca4a462a8351f69a2403aaf"
     },
     "spain_mediterranea": {
       "appropriateness": {
@@ -1787,7 +1787,7 @@
             "Pistos, gazpacho y ensaladas de 210-300 kcal: platos ligeros reales de almuerzo/cena; el generador escala porciones."
           ],
           "by": "Claude (revisión curatorial delegada por el dueño)",
-          "date": "2026-09-09",
+          "date": "2026-09-10",
           "decisions": [
             "Alérgenos: el matcher del registry no reconocía plurales (sardinas, fideos, almejas) ni la salsa de soya como gluten: corregido y recompilado; cero clases sin marcar en las 6 bibliotecas (verificado con un chequeo independiente por constituyente).",
             "Raciones: meriendas > 450 kcal reasignadas a almuerzo/cena; almuerzos < 260 kcal y cenas < 180 kcal completados con base o proteína; almuerzos > 1.100 kcal reducidos.",
@@ -1804,10 +1804,10 @@
             "[2026-09-08] Re-anclada sin repetir el juicio plato a plato: medido contra el arbol firmado, esta biblioteca tiene CERO plantillas cambiadas (nombre, slots, constituyentes, gramos, excluidos y riesgo, byte a byte). Su `snapshot_hash` se movio solo porque se movio el `catalog_fingerprint` del catalogo (c89f400bb5fd13dd -> d0bd7b4737441a95). Las decisiones de abajo describen exactamente estos platos."
           ],
           "kind": "automated",
-          "snapshot_hash": "0bf4d482326069a093af9a9c93f8cdd76cc8fc55d6fa2188d7ad110ffdb9668f"
+          "snapshot_hash": "f74d8dfce9e03bdd097410bbadc35897c8064c2a32bfa3ce7249dccf0dacc4b3"
         }
       },
-      "snapshot_hash": "0bf4d482326069a093af9a9c93f8cdd76cc8fc55d6fa2188d7ad110ffdb9668f"
+      "snapshot_hash": "f74d8dfce9e03bdd097410bbadc35897c8064c2a32bfa3ce7249dccf0dacc4b3"
     },
     "us_everyday": {
       "appropriateness": {
@@ -2042,7 +2042,7 @@
             "«Tacos de soya texturizada con repollo» dispara el aviso de léxico mexicano, igual que los dos platos de tacos que la biblioteca estadounidense YA tenía y que la revisión anterior aceptó: el taco es comida corriente en Estados Unidos. Se conserva, por coherencia con esa decisión."
           ],
           "by": "Claude (revisión curatorial delegada por el dueño)",
-          "date": "2026-09-09",
+          "date": "2026-09-10",
           "decisions": [
             "Alérgenos: el matcher del registry no reconocía plurales (sardinas, fideos, almejas) ni la salsa de soya como gluten: corregido y recompilado; cero clases sin marcar en las 6 bibliotecas (verificado con un chequeo independiente por constituyente).",
             "Raciones: meriendas > 450 kcal reasignadas a almuerzo/cena; almuerzos < 260 kcal y cenas < 180 kcal completados con base o proteína; almuerzos > 1.100 kcal reducidos.",
@@ -2058,10 +2058,10 @@
             "[2026-09-08] Re-anclada sin repetir el juicio plato a plato: medido contra el arbol firmado, esta biblioteca tiene CERO plantillas cambiadas (nombre, slots, constituyentes, gramos, excluidos y riesgo, byte a byte). Su `snapshot_hash` se movio solo porque se movio el `catalog_fingerprint` del catalogo (c89f400bb5fd13dd -> d0bd7b4737441a95). Las decisiones de abajo describen exactamente estos platos."
           ],
           "kind": "automated",
-          "snapshot_hash": "fb4abc5481f6e7362d6547fee27c1836a5ccf1744e12dcc722b8222b9650824f"
+          "snapshot_hash": "9e0dc4666e95da3be0e4401c1af59fa5d2ff4f0d6e3221fae35ea7b5ade6717d"
         }
       },
-      "snapshot_hash": "fb4abc5481f6e7362d6547fee27c1836a5ccf1744e12dcc722b8222b9650824f"
+      "snapshot_hash": "9e0dc4666e95da3be0e4401c1af59fa5d2ff4f0d6e3221fae35ea7b5ade6717d"
     }
   },
   "schema_version": 1

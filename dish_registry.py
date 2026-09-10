@@ -29,6 +29,7 @@ import pantry_durability as _pd  # [F7-G] SSOT de durabilidad
 import hashlib
 import json
 import logging
+import math
 import os
 import re
 from typing import Any, Iterable, Optional
@@ -244,22 +245,82 @@ def derive_risk_attributes(nutrition: dict, constituent_names: Iterable[str],
 _TECH_RULES = (
     # (tokens de técnica, batch_friendly, freezer_friendly, prep_min, difficulty)
     (("sopa", "sancocho", "asopao", "crema", "guisado", "estofado", "mechad"), True, True, 50, "media"),
-    (("horneado", "al horno", "airfryer", "horno"), True, True, 40, "media"),
+    (("horneado", "al horno", "airfryer", "horno", "asado"), True, True, 40, "media"),
     (("masa horneada", "masa hervida", "masa al sart", "masa a la plancha"), True, True, 35, "media"),
     (("hervido", "majado", "vapor"), True, True, 30, "baja"),
-    (("plancha", "salteado", "sart", "parrilla", "revuelto", "frito"), False, False, 20, "baja"),
-    (("frio", "frío", "licuado", "masa fria", "masa fría", "tibio"), False, False, 10, "baja"),
+    (("plancha", "salteado", "sart", "parrilla", "revuelto", "frito", "tortilla"), False, False, 20, "baja"),
+    # [P1-MINUTOS-DE-LA-RECETA · 2026-09-10] `crudo`/`ensamblado`/`batido` no casaban NINGUNA fila y
+    # caían al defecto de 30: 21 plantillas, 16 de ellas crudas. «Yogurt griego con guineo» —pelar un
+    # guineo— anunciaba media hora. Un defecto que se aplica en silencio no es un defecto: es un dato
+    # inventado con la misma cara que uno medido.
+    (("crudo", "ensamblado", "frio", "frío", "licuado", "batido", "masa fria", "masa fría", "tibio"),
+     False, False, 10, "baja"),
 )
+
+# ----------------------------------------------------------------------------- tiempo declarado (§7.2)
+# [P1-MINUTOS-DE-LA-RECETA · 2026-09-10] La receta escrita YA dice cuánto tarda cada paso; la ficha lo
+# contradecía con una tabla por técnica. Medido contra la tercera ronda de juicio humano: la suma de
+# los pasos acierta el número que pidió el dueño en 13 de 13 platos (±5 min).
+_RE_RANGO = re.compile(r"(\d+)\s*(?:-|–|a)\s*(\d+)\s*(minutos?|segundos?)", re.I)
+_RE_SUELTO = re.compile(r"(\d+)\s*(minutos?|segundos?)", re.I)
+# Un paso que dice «mientras» no viene DESPUÉS del anterior: corre DENTRO. Sumarlo infló «Víveres
+# guisados con garbanzos» a 125 min contando los 25 de pelar los víveres encima de los 90 del hervor
+# que la propia receta dice que están ocurriendo a la vez.
+_RE_SOLAPE = re.compile(r"\b(?:mientras(?:\s+tanto)?|en\s+lo\s+que|al\s+mismo\s+tiempo|entre\s+tanto)\b", re.I)
+MARGEN_MANIPULACION_MIN = 3   # picar, pelar, montar: lo que ninguna receta cronometra
+PISO_MINUTOS = 5              # ni el plato más simple se arma en menos
+
+
+def _tiempo_de_un_paso(paso) -> float:
+    """Minutos que ESE paso declara. Del rango se toma el tope: promete que no pasará de ahí."""
+    resto = str(paso or "")
+    total = 0.0
+    for m in _RE_RANGO.finditer(resto):
+        alto = float(m.group(2))
+        if m.group(3).lower().startswith("segundo"):
+            alto /= 60.0
+        total += alto
+    resto = _RE_RANGO.sub(" ", resto)              # el tope del rango ya se contó: no lo cuentes otra vez
+    for m in _RE_SUELTO.finditer(resto):
+        v = float(m.group(1))
+        if m.group(2).lower().startswith("segundo"):
+            v /= 60.0
+        total += v
+    return total
+
+
+def minutos_de_los_pasos(pasos) -> Optional[int]:
+    """Minutos que la receta DECLARA, redondeados a 5. `None` si no hay receta.
+
+    Una receta SIN ningún tiempo (montar un yogurt con guineo) no es un dato ausente: es un plato de
+    ensamblaje, y vale el piso. Por eso el `None` se reserva para «no hay pasos» — mezclar los dos
+    casos devolvería la tabla justo para los platos que la tabla peor estima.
+    """
+    if not pasos:
+        return None
+    total = 0.0
+    previo = 0.0
+    for p in pasos:
+        t = _tiempo_de_un_paso(p)
+        # Lo que corre dentro del paso anterior sólo añade lo que se le SALGA por arriba.
+        total += max(0.0, t - previo) if _RE_SOLAPE.search(str(p or "")) else t
+        previo = t
+    return int(math.ceil(max(PISO_MINUTOS, total + MARGEN_MANIPULACION_MIN) / 5.0) * 5)
 _PERISHABLE_CATEGORIES = ("proteínas", "proteinas", "carnes", "pescados", "mariscos", "lácteos", "lacteos", "vegetales", "frutas", "verduras")
 
 
-def derive_logistics(template: dict, resolved: list, index: dict) -> dict:
+def derive_logistics(template: dict, resolved: list, index: dict, pasos: Optional[list] = None) -> dict:
     tech = _norm(template.get("technique"))
     batch, freezer, prep, diff = True, True, 30, "media"
+    fuente = "defecto"
     for tokens, b, fz, pm, d in _TECH_RULES:
         if any(t in tech for t in tokens):
             batch, freezer, prep, diff = b, fz, pm, d
+            fuente = "tecnica"
             break
+    de_receta = minutos_de_los_pasos(pasos)
+    if de_receta is not None:
+        prep, fuente = de_receta, "receta"
     shelf = []
     for r in resolved:
         row = index.get(_norm(r.get("canonical"))) or {}
@@ -283,7 +344,11 @@ def derive_logistics(template: dict, resolved: list, index: dict) -> dict:
         # encontró en 35 de 35 platos. Si algún día este número se le enseña a un usuario, hay que
         # etiquetarlo como vida de los INGREDIENTES o se convierte en una afirmación falsa sobre comida.
         "days_fresh_min": dur["days_fresh_min"], "days_with_freezer_min": dur["days_with_freezer_min"], "pantry_only": dur["pantry_only"],
-        "prep_minutes_est": int(prep), "difficulty_est": diff, "estimated": True,
+        # `estimated` sigue describiendo el BLOQUE (tanda, congelador, vida útil son derivados);
+        # `prep_minutes_source` dice de dónde salió ESTE número: `receta` lo declara la receta escrita,
+        # `tecnica` lo estima la tabla, `defecto` es el 30 de relleno — que ahora se ve.
+        "prep_minutes_est": int(prep), "prep_minutes_source": fuente,
+        "difficulty_est": diff, "estimated": True,
     }
 
 
@@ -333,7 +398,8 @@ def _constituents_source(library: str, template: dict, do_constituents: Optional
 _BLOCKING_EXCLUSIONS = ("not_in_catalog", "declared_unresolved", "no_grams")
 
 
-def compile_template(template: dict, index: dict, *, library: str, constituents: list, declared_unresolved: list[str]) -> dict:
+def compile_template(template: dict, index: dict, *, library: str, constituents: list,
+                     declared_unresolved: list[str], pasos: Optional[list] = None) -> dict:
     resolved, excluded = [], []
     for c in constituents:
         name = str((c or {}).get("name") or "")
@@ -395,15 +461,37 @@ def compile_template(template: dict, index: dict, *, library: str, constituents:
         "nutrition_per_serving": nutrition,
         "nutrition_unknown": unknown,
         "intrinsic_risk_attributes": derive_risk_attributes(nutrition, names, unknown.keys()),
-        "logistics": derive_logistics(template, resolved, index),
+        "logistics": derive_logistics(template, resolved, index, pasos),
         "editorial": derive_editorial(template, library),
     }
     body["content_hash"] = _sha(body)[:16]
     return body
 
 
+def recipe_steps_index(library: str) -> dict:
+    """`template_id` → pasos escritos, leídos del snapshot de recetas. `{}` si esa biblioteca no tiene.
+
+    Se lee AQUÍ y no vía `recipe_library.recipe_for_dish_name` a propósito: aquella resuelve por
+    NOMBRE y está gateada por `MEALFIT_RECIPE_LIBRARY_SELECT`, que es una decisión de servicio. La
+    compilación del registry no puede depender de un knob de runtime, o el mismo árbol daría dos
+    snapshots distintos según el `.env` de quien compile — que es exactamente cómo mi `.env` local
+    dio «0 de 14 días» en la sonda del día determinista.
+    """
+    p = os.path.join(REGISTRY_DIR, f"recipe_library_{str(library or 'do').lower()}_v1.json")
+    if not os.path.exists(p):
+        return {}
+    try:
+        with open(p, encoding="utf-8") as f:
+            por_id = json.load(f).get("por_id") or {}
+    except Exception as e:                                                     # noqa: BLE001
+        logger.warning(f"[P1-MINUTOS-DE-LA-RECETA] recetario {library} ilegible: {e!r}")
+        return {}
+    return {str(k): (v or {}).get("pasos") or [] for k, v in por_id.items() if isinstance(v, dict)}
+
+
 def compile_library(library: str, *, catalog_rows: Optional[list] = None, version: Optional[str] = None,
-                    templates: Optional[list] = None, do_constituents: Optional[dict] = None) -> dict:
+                    templates: Optional[list] = None, do_constituents: Optional[dict] = None,
+                    recipes: Optional[dict] = None) -> dict:
     """Snapshot de UNA biblioteca. Determinista: misma fuente + mismo catálogo ⇒ mismo `snapshot_hash`."""
     lib = str(library or "do").lower()
     if lib not in LIBRARIES:
@@ -421,18 +509,26 @@ def compile_library(library: str, *, catalog_rows: Optional[list] = None, versio
         if os.path.exists(p):
             with open(p, encoding="utf-8") as f:
                 do_constituents = json.load(f)
+    if recipes is None:
+        recipes = recipe_steps_index(lib)
     index = build_catalog_index(catalog_rows)
     compiled = []
     for t in templates:
         if not isinstance(t, dict) or not t.get("template_id"):
             continue
         cons, declared = _constituents_source(lib, t, do_constituents)
-        compiled.append(compile_template(t, index, library=lib, constituents=cons, declared_unresolved=declared))
+        compiled.append(compile_template(t, index, library=lib, constituents=cons,
+                                         declared_unresolved=declared,
+                                         pasos=(recipes or {}).get(str(t.get("template_id")))))
     compiled.sort(key=lambda x: str(x.get("template_id")))
     source_material = {
         "templates": [{k: t.get(k) for k in ("name", "slots", "base", "protein", "technique", "transform", "constituents")}
                       for t in templates if isinstance(t, dict)],
         "do_constituents": (do_constituents or {}).get("templates") if lib == "do" else None,
+        # [P1-MINUTOS-DE-LA-RECETA] La receta entra en el hash de la fuente porque ahora DECIDE un
+        # campo del snapshot. Va sólo el número derivado, no el texto: reescribir un paso sin tocar
+        # sus tiempos no debe expirar las firmas curatoriales, y cambiar un tiempo sí.
+        "recipe_minutes": {k: minutos_de_los_pasos(v) for k, v in sorted((recipes or {}).items())} or None,
     }
     n_cons = sum(len(c["constituents"]) + len(c["excluded"]) for c in compiled)
     n_res = sum(len(c["constituents"]) for c in compiled)
@@ -748,4 +844,5 @@ __all__ = [
     "templates_by_id",
     "verify_snapshot", "library_for_country", "load_registry", "registry_hash", "template_candidates",
     "derive_logistics", "derive_editorial",
+    "minutos_de_los_pasos", "recipe_steps_index",
 ]
