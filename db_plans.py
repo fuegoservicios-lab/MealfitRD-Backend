@@ -1341,6 +1341,19 @@ def _finalize_plan_data_for_insert(data: dict, *, surface: str = "pre-INSERT",
                 except Exception as _pflw_ins_e:
                     logger.debug(f"[P1-PROTEIN-FLOOR-LAST-WORD] pre-INSERT no-op: "
                                  f"{type(_pflw_ins_e).__name__}: {_pflw_ins_e}")
+
+                # [P1-DESC-CATEGORIA-FALSA · 2026-09-09] El dueño vio en su ficha «desayuno
+                # dominicano de tubérculo» sobre un plato de PLÁTANO, que es el fruto de una
+                # musácea. Medido: 1 de 72 fichas vivas. Va aquí —el único chokepoint que corre
+                # para TODO plan— por la lección que costó `P1-PROTEIN-FLOOR-LAST-WORD` el mismo
+                # día: cablear un paso en un solo camino es no cablearlo. Sólo BORRA la
+                # afirmación falsa; no reescribe la ficha.
+                try:
+                    from desc_sin_categoria_falsa import limpia_plan as _desc_cat
+                    _desc_cat(_pd)
+                except Exception as _desc_cat_e:
+                    logger.debug(f"[P1-DESC-CATEGORIA-FALSA] pre-INSERT no-op: "
+                                 f"{type(_desc_cat_e).__name__}: {_desc_cat_e}")
                 # [P2-RECONCILE-AFTER-BAND-CLOSER · 2026-07-29] (audit solver+seeder v4) El único
                 # reconciliador display↔raw que actúa como "última palabra" vive DENTRO de
                 # `finalize_plan_data_coherence` (_fpc, más arriba). Pero `_rpb` y sobre todo `_ramb`
