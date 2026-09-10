@@ -287,3 +287,21 @@ def test_el_dia_determinista_tambien_pasa_el_tier():
     assert "budget_tier=" in inspect.getsource(deterministic_day.build_day_for_skeleton), (
         "el día determinista es el ÚNICO camino donde el candidato se convierte en plato sin que "
         "el modelo pueda ignorarlo: sin el tier aquí, el filtro sólo aconseja")
+
+
+def test_el_tier_sale_de_la_politica_COMPILADA_no_del_campo_crudo():
+    """La Fase 2 no copia `budget`: resuelve `custom` y relaja el modo donde no hay precios.
+
+    Medido: en los 5 planes vivos del dueño `plan_data` NO persiste `form_data`, y lo único que
+    prueba que el presupuesto llegó es `_plan_policy.effective.budget.tier`. Colgar el filtro de
+    una clave que no se puede verificar es exactamente como se despliega algo inerte.
+    """
+    from deterministic_day import _tier_presupuesto as tp
+
+    assert tp({"_plan_policy_effective": {"budget": {"tier": "low"}}, "budget": "high"}) == "low", (
+        "ganó el campo crudo sobre lo compilado: se pierden `custom` resuelto y las relajaciones")
+    assert tp({"budget": "medium"}) == "medium"                      # respaldo
+    assert tp({"_plan_policy_effective": {"budget": {}}, "budget": "low"}) == "low"
+    for vacio in ({}, None, {"budget": ""}, {"_plan_policy_effective": None}):
+        assert tp(vacio) is None
+    assert tp({"_plan_policy_effective": "no soy un dict", "budget": "low"}) == "low"

@@ -200,18 +200,55 @@ def _de_plantilla(t: dict) -> list:
             for c in (t.get("constituents") or []) if c.get("name")]
 
 
-def elegir_plantilla(tids, objetivo, catalogo: dict, por_id: dict, slot: str = ""):
-    """El candidato que mejor llega al objetivo de MACROS tras escalar a sus calorías.
+def _empate_score() -> float:
+    """Cuánto peor que el mejor puede ser un candidato y seguir siendo elegible.
 
-    `objetivo` = {"kcal","protein_g","carbs_g","fats_g"} de ESTA franja.
+    [P1-DIA-DETERMINISTA-VARIEDAD · 2026-09-09] Medido sobre el perfil real del dueño (2.100 kcal):
+    con +0,05 hay UN elegible por franja en tres de las cuatro; con +0,50 hay entre 4 y 8. El score
+    es `2·|Δp|/p + |Δc|/c + |Δf|/f`, así que 0,50 es del orden de un 15 % de desvío en proteína más
+    un 10 % en los otros dos — y ese desvío lo recoge después el cerrador de banda de proteína, que
+    existe justamente para eso. Comer mofongo catorce días no lo recoge nadie."""
+    from knobs import _env_float
+    return _env_float("MEALFIT_DETERMINISTIC_DAY_TIE_SCORE", 0.50, validator=lambda v: 0.0 <= v <= 5.0)
 
-    La proteína pesa el doble en el score a propósito: es la que tiene consecuencia clínica y la
-    que el escalado uniforme no puede arreglar (multiplicar por 1,2 sube los tres macros a la vez y
-    no cambia sus proporciones). Las calorías no entran en el score porque quedan clavadas por
-    construcción.
 
-    Determinista: se ordena por score y se desempata por `template_id`. Desempatar por el orden de
-    la lista dependería de cómo vino la lista; por id no depende de nada.
+def _empate_max() -> int:
+    from knobs import _env_int
+    return _env_int("MEALFIT_DETERMINISTIC_DAY_TIE_MAX", 6, validator=lambda v: 1 <= v <= 50)
+
+
+def _rotacion_de(day_num, slot: str) -> int:
+    """La rotación de ESTA franja en ESTE día. Determinista y estable entre corridas.
+
+    [P1-DIA-DETERMINISTA-VARIEDAD · 2026-09-09] Rotar las cuatro franjas con el mismo `day_num` las
+    mueve en formación: si dos franjas comparten elegibles —«Arepitas de maíz» sale en desayuno Y
+    en merienda— avanzan juntas y el plato se repite el mismo día. El desfase por franja rompe la
+    formación sin introducir azar: `hash()` de Python está salado por proceso y daría un plan
+    distinto en cada arranque, así que se usa un dígito estable del sha256 del nombre.
+    """
+    import hashlib
+    try:
+        d = int(day_num or 0)
+    except (TypeError, ValueError):
+        d = 0            # un índice de día ilegible no puede tumbar el día entero
+    h = hashlib.sha256(_norm(slot).encode("utf-8")).hexdigest()
+    return d + int(h[:4], 16)
+
+
+def elegir_plantillas(tids, objetivo, catalogo: dict, por_id: dict, slot: str = "",
+                      rotacion: int = 0) -> list:
+    """Los candidatos ELEGIBLES para esta franja, del mejor al peor dentro del empate, rotados por
+    el día. Lista vacía si ninguno sirve.
+
+    [P1-DIA-DETERMINISTA-VARIEDAD · 2026-09-09] Antes esto devolvía UNO —`cands[0]`— y por eso
+    catorce días daban **7 platos distintos en 56 comidas**: el mismo almuerzo los 14 días. El
+    `rotate` que `template_candidates` ya aplicaba era INERTE aquí, porque reordenar una lista que
+    el scorer recorre entera no cambia quién gana. *Una palanca de variedad que el consumidor de la
+    lista anula no es una palanca.*
+
+    Devolver la lista y no el ganador arregla además un segundo modo de fallo: si al elegido le
+    falta la receta congelada, `construir_comida` devuelve `None` y **el día entero** se iba al
+    LLM. Ahora el llamador prueba el siguiente.
     """
     lo, hi = _banda(slot)
     op = max(float(objetivo.get("protein_g") or 0), 1.0)
@@ -234,10 +271,35 @@ def elegir_plantilla(tids, objetivo, catalogo: dict, por_id: dict, slot: str = "
                  + abs(base["fats_g"] * f - of) / of)
         cands.append((round(score, 6), str(tid), t, f))
     if not cands:
-        return None
+        return []
     cands.sort(key=lambda x: (x[0], x[1]))
-    _, _, t, f = cands[0]
-    return t, f
+    techo = cands[0][0] + _empate_score()
+    elegibles = [(t, f) for s, _, t, f in cands if s <= techo][:_empate_max()]
+    if rotacion and len(elegibles) > 1:
+        r = int(rotacion) % len(elegibles)
+        elegibles = elegibles[r:] + elegibles[:r]
+    return elegibles
+
+
+def elegir_plantilla(tids, objetivo, catalogo: dict, por_id: dict, slot: str = ""):
+    """El candidato que mejor llega al objetivo de MACROS tras escalar a sus calorías.
+
+    `objetivo` = {"kcal","protein_g","carbs_g","fats_g"} de ESTA franja.
+
+    La proteína pesa el doble en el score a propósito: es la que tiene consecuencia clínica y la
+    que el escalado uniforme no puede arreglar (multiplicar por 1,2 sube los tres macros a la vez y
+    no cambia sus proporciones). Las calorías no entran en el score porque quedan clavadas por
+    construcción.
+
+    Determinista: se ordena por score y se desempata por `template_id`. Desempatar por el orden de
+    la lista dependería de cómo vino la lista; por id no depende de nada.
+
+    [P1-DIA-DETERMINISTA-VARIEDAD · 2026-09-09] Ahora es la cabeza de `elegir_plantillas`. Se
+    conserva porque es lo que dice el contrato «el MEJOR candidato» y es lo que sus tests fijan;
+    quien arma el día usa la lista entera para no repetir plato.
+    """
+    el = elegir_plantillas(tids, objetivo, catalogo, por_id, slot)
+    return el[0] if el else None
 
 
 def _inclinar(lineas: list, catalogo: dict, obj_p: float) -> list:
@@ -369,6 +431,31 @@ def verifica_comida(meal: dict, form_data: dict, catalogo: dict) -> list:
         logger.debug(f"[P1-DETERMINISTIC-DAY] backstop clínico no-op: {e!r}")
     return fuera
 
+def _tier_presupuesto(form_data) -> Optional[str]:
+    """[P1-CANDIDATO-CON-PRECIO · 2026-09-09] El nivel de presupuesto, de la política COMPILADA
+    primero y del formulario crudo como respaldo.
+
+    Por qué no basta `form_data["budget"]`: la Fase 2 no se limita a copiarlo —resuelve `custom`,
+    y en un país sin precios relaja el modo a `advisory` con su `relaxations[]`—, así que lo
+    compilado es la verdad y el campo del formulario es la materia prima. `horizon` ya lee de ahí;
+    leer de otro sitio sería la segunda tabla que `P1-DIET-CANON-SSOT` prohíbe.
+
+    Y hay una razón medida: en los 5 planes vivos del dueño `plan_data` NO persiste `form_data`, y
+    lo único que prueba que el presupuesto llegó es `_plan_policy.effective.budget.tier = "low"`.
+    Colgar el filtro de una clave que no se puede verificar es como se despliega algo inerte.
+    """
+    fd = form_data or {}
+    try:
+        eff = fd.get("_plan_policy_effective")     # horizon.POLICY_EFFECTIVE_KEY, sin importarlo
+        t = ((eff or {}).get("budget") or {}).get("tier")
+        if t:
+            return str(t)
+    except Exception:
+        pass
+    b = fd.get("budget")
+    return str(b) if b else None
+
+
 def build_day_for_skeleton(nutrition, form_data, skeleton_day, day_num, user_id=None):
     """Punto de entrada desde el pipeline. Devuelve un día completo o `None`.
 
@@ -416,6 +503,7 @@ def build_day_for_skeleton(nutrition, form_data, skeleton_day, day_num, user_id=
 
         slots = [s for s in (skeleton_day or {}).get("slots") or []] or list(_REPARTO)
         meals = []
+        usadas_hoy = set()   # [P1-DIA-DETERMINISTA-VARIEDAD] ninguna plantilla dos veces el mismo día
         for slot in slots:
             r = _REPARTO.get(_norm(slot))
             if not r:
@@ -429,16 +517,26 @@ def build_day_for_skeleton(nutrition, form_data, skeleton_day, day_num, user_id=
             # una última linea de defensa que trabaja sola dejó de ser defensa en profundidad.
             # [P1-CANDIDATO-CON-PRECIO · 2026-09-09] Éste es el ÚNICO camino donde el candidato se
             # convierte en plato sin que el modelo pueda ignorarlo: sin el tier aquí, el filtro de
-            # precio sólo aconseja. Del formulario, que es donde vive `budget` antes de compilarse.
+            # precio sólo aconseja.
             tids = [c["template_id"] for c in
                     dr.template_candidates(country, slot, (skeleton_day or {}).get("protein"),
                                            k=_candidatos_k(), rotate=int(day_num or 0),
                                            exclude_allergens=_alergias, diet=_dieta,
-                                           budget_tier=_fd.get("budget"))]
-            el = elegir_plantilla(tids, obj, catalogo, por_id, slot)
-            if not el:
-                return None
-            comida = construir_comida(el[0], el[1], catalogo, slot, country, obj)
+                                           budget_tier=_tier_presupuesto(_fd))]
+            # [P1-DIA-DETERMINISTA-VARIEDAD · 2026-09-09] La lista, no el ganador: `rotacion` mueve
+            # la cabeza por día (medido: 7 platos distintos en 56 comidas cuando era siempre el
+            # mejor), y si al elegido le falta la receta congelada se prueba el siguiente en vez de
+            # tirar el DÍA ENTERO al LLM por un plato.
+            comida = None
+            _elegibles = elegir_plantillas(tids, obj, catalogo, por_id, slot,
+                                           rotacion=_rotacion_de(day_num, slot))
+            # Primero los que no se han servido hoy; los ya usados quedan de RESPALDO al final, no
+            # descartados: quedarse sin día por no repetir es peor que repetir.
+            for _t, _f in sorted(_elegibles, key=lambda p: str(p[0].get("template_id")) in usadas_hoy):
+                comida = construir_comida(_t, _f, catalogo, slot, country, obj)
+                if comida:
+                    usadas_hoy.add(str(_t.get("template_id")))
+                    break
             if not comida:
                 return None
             _viol = verifica_comida(comida, form_data or {}, catalogo)
