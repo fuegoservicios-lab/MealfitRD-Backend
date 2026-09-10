@@ -695,11 +695,11 @@
       },
       "availability": {
         "availability_risk_pct": 0.0,
-        "constituents": 968,
+        "constituents": 1045,
         "dominican_cultivar_outside_do": [],
         "needs_review": false,
         "ok": true,
-        "priced_pct": 97.7,
+        "priced_pct": 97.9,
         "review_threshold_pct": 15.0
       },
       "clinical": {
@@ -717,7 +717,9 @@
           "Tortilla de papa y queso cheddar con repollo",
           "Arenque desmenuzado con huevo y yuca hervida",
           "Lentejas guisadas con arroz y aguacate",
+          "Mangú de plátano verde con atún y cebolla encurtida",
           "La bandera: arroz, habichuelas rojas guisadas y pollo guisado",
+          "Queso cottage con lechosa",
           "Habichuelas negras guisadas con batata",
           "Frijol cargamanto guisado con arroz y auyama",
           "Moro de habichuelas rojas con soya texturizada",
@@ -731,15 +733,20 @@
           "Arenque guisado con auyama y yuca",
           "Pollo horneado al limón con arroz amarillo",
           "Berenjenas guisadas con carne molida y arroz",
+          "Revoltillo de claras con espinaca y casabe",
           "Tortitas de pescado con ensalada verde",
           "Asopao de pollo (porción moderada)",
           "Pastelón de batata con queso mozzarella",
+          "Queso cottage con casabe y tomate",
           "Soya texturizada guisada con auyama y ñame",
           "Chicharrón de pollo al airfryer con yuca hervida",
           "Ensalada tibia de garbanzos con zanahoria y queso gouda",
+          "Tortilla de yuca con atún y queso blanco",
           "Chivo guisado estilo liniero con yuca hervida",
           "Espaguetis criollos con pollo desmenuzado",
+          "Tilapia al horno con yuca y cebolla",
           "Tortilla de harina de maíz con queso cheddar",
+          "Hígado de res encebollado con plátano hervido",
           "Res mechada con puré de papa",
           "Pinchos de pollo y vegetales con yuca hervida",
           "Guiso de habas con ñame y ajo",
@@ -751,6 +758,7 @@
           "Camarones guisados con moro de guandules",
           "Pescado con coco estilo Samaná con arroz blanco",
           "Moro de gandules con soya texturizada",
+          "Queso cottage con casabe, tomate y aguacate",
           "Sardinas guisadas con papa y repollo",
           "Salami guisado con yuca y cebolla",
           "Revoltillo de atún con plátano hervido",
@@ -771,20 +779,20 @@
         "ok": true,
         "slots": {
           "almuerzo": 66,
-          "cena": 55,
-          "desayuno": 46,
-          "merienda": 42
+          "cena": 57,
+          "desayuno": 56,
+          "merienda": 54
         },
-        "templates": 179
+        "templates": 199
       },
       "diversity": {
-        "bases": 16,
-        "distinct_heads_ratio": 0.67,
+        "bases": 20,
+        "distinct_heads_ratio": 0.643,
         "ok": true,
         "proteins": 13,
-        "techniques": 39,
-        "top_protein_share": 0.223,
-        "transform_share": 0.57
+        "techniques": 42,
+        "top_protein_share": 0.211,
+        "transform_share": 0.568
       },
       "library": "do",
       "resolvability": {
@@ -796,7 +804,7 @@
         "automated_review": true,
         "clinical_review": false,
         "editorial": {
-          "curated": 179
+          "curated": 199
         },
         "flagged_for_human_review": [],
         "human_cultural_review": false,
@@ -826,13 +834,15 @@
             "[2026-09-07 · P1-REGISTRY-TITLE-TRUTH] Tercera incoherencia nombre↔constituyentes, que la verificación del 06-sep dio por completa y se le escapó: «Panqueques de harina de ARROZ con fresas» traía Harina de TRIGO. Renombrado a «Panqueques de trigo con fresas» — el catálogo no tiene harina de arroz y crear la fila sería inventarla. Re-verificadas las 779 plantillas de las 6 bibliotecas con el detector de contradicción de calificativo (`test_p1_registry_title_truth`): 0 restantes.",
             "[2026-09-08 · P1-REGISTRY-COLOR-PROMETE] «Pollo horneado al limon con arroz AMARILLO» no traia nada que pusiera amarillo el arroz: el limon no da color. Lo vio el dueno juzgando la biblioteca a ciegas y ofrecio las dos salidas (anadir el ingrediente o renombrar). Se anaden 2 g de `Sazon con culantro y achiote`, que es el colorante criollo y pesa **0 kcal**: el titulo pasa a ser cierto y el plato mejora sin mover un solo macro. Renombrar habria tocado un baseline historico del 18-ago. Unica plantilla tocada de las 144; el resto, byte a byte igual.",
             "[2026-09-08 · P1-DETERMINISTIC-DAY-CANARY] Tres constituyentes citaban un nombre que el catalogo no tiene: «Pimiento morron» (el catalogo dice «Aji morron»), «Salami dominicano» («Salami») y «Pan integral» («Pan integral personal»). No faltaban datos: faltaba el nombre bueno, y por eso 7 plantillas quedaban fuera del pool determinista. Corregido en la fuente curada y recompilado. Verificado contra el snapshot anterior plantilla a plantilla: mismo conjunto de plantillas (144), ningun nombre de PLATO tocado, y el unico cambio en las 7 es ese renombre. Los platos son los mismos; lo que cambia es la fila del catalogo contra la que resuelven. Plantillas: Asopao de pollo (porción moderada); Bacalao guisado con papas; Berenjenas guisadas con carne molida y arroz; Espaguetis criollos con pollo desmenuzado; Res mechada con puré de papa; Rollitos de lechuga con res mechada; Tostada integral con mantequilla de maní y guineo.",
-            "[2026-09-09 · P1-CICLO-30D-DURADERO] 35 plantillas nuevas de despensa (144 -> 179) para sostener el ciclo de UNA compra de 30 dias sin congelador: del dia 15 solo quedaban 9 cenas y 12 almuerzos vegetarianos, y la construccion de menus se atascaba en el dia 13-17 (0 de 8 meses completos). Tras anadirlas, 8 de 8 con los 4 macros en banda, sin repetir plato en 7 dias, dieta vegetariana y alergia a lacteos incluidas. Constituyentes con nombre EXACTO del catalogo; nutricion y logistica derivadas por el compilador. Cuatro cenas mias con base arroz violaban el SSOT de franjas (en RD el arroz es almuerzo) y se corrigieron a vivere o se movieron a almuerzo -- el guard no se toco."
+            "[2026-09-09 · P1-CICLO-30D-DURADERO] 35 plantillas nuevas de despensa (144 -> 179) para sostener el ciclo de UNA compra de 30 dias sin congelador: del dia 15 solo quedaban 9 cenas y 12 almuerzos vegetarianos, y la construccion de menus se atascaba en el dia 13-17 (0 de 8 meses completos). Tras anadirlas, 8 de 8 con los 4 macros en banda, sin repetir plato en 7 dias, dieta vegetariana y alergia a lacteos incluidas. Constituyentes con nombre EXACTO del catalogo; nutricion y logistica derivadas por el compilador. Cuatro cenas mias con base arroz violaban el SSOT de franjas (en RD el arroz es almuerzo) y se corrigieron a vivere o se movieron a almuerzo -- el guard no se toco.",
+            "[2026-09-09 · P1-REGISTRY-CANTIDADES-EN-CRUDO] REVISIÓN HUMANA de los 35 platos de despensa, uno a uno, por el dueño. Resultado: 35 de 35 marcados «cambiar», 0 aprobados, y CERO rechazos por motivos culturales — ni un plato se objetó por no ser dominicano. Las 35 notas (21.224 caracteres, íntegras en cultural_review_notes_do_2026_09_09.json) son de EXACTITUD y se agrupan en seis hallazgos sistémicos, de los cuales dos resultaron ser el mismo defecto raíz: el registry NOMBRA en «plato servido» cantidades que MIDE en «ingrediente crudo» (serving_g y days_fresh_min). Los números son correctos para lo que el motor pregunta y no llegan a ningún usuario; lo que estaba roto era la documentación, que se contradecía a sí misma. `kind` sigue siendo `automated`: hubo revisión humana, pero NO hubo aprobación de ningún plato, y una firma que insinuara lo contrario sería el defecto que P1-REVIEW-KIND-HONEST cerró. Queda pendiente la decisión del dueño sobre sal/sodio y sobre los platos de origen no dominicano (frijol cargamanto, habas, guisantes secos), que él no objetó.",
+            "[P1-CATALOGO-PROTEINA-DESAYUNO · 2026-09-09] +20 platos de DENSIDAD PROTEÍNICA (10 desayunos, 10 meriendas): el hueco medido era que el desayuno dominicano y la merienda son carbohidrato casi puro —mediana 3,86 y 3,37 g de proteína por 100 kcal contra un objetivo de 5,86— y por eso 14 días deterministas daban 7 platos distintos en 56 comidas. Cada plato pasó CINCO puertas antes de entrar (nombre exacto en catálogo, macros conocidas, densidad ≥ 5,0, factor de escalado dentro de banda, y precio de TODOS sus constituyentes) y su receta se escribió a mano contra las quince reglas de la v4. AUTOMÁTICA: estos 20 NO han pasado el juicio a ciegas del dueño — ver `pendiente_de_juicio_humano`."
           ],
           "kind": "automated",
-          "snapshot_hash": "9d226b0a7b65ee1e9f319b5dac08651527c7eeb054256a67cc321ae7f5d9331e"
+          "snapshot_hash": "b43a803be7769961d7c947d60abc01bd9d39fde45204389705c113ea36e6c20e"
         }
       },
-      "snapshot_hash": "9d226b0a7b65ee1e9f319b5dac08651527c7eeb054256a67cc321ae7f5d9331e"
+      "snapshot_hash": "b43a803be7769961d7c947d60abc01bd9d39fde45204389705c113ea36e6c20e"
     },
     "mexico_casera": {
       "appropriateness": {

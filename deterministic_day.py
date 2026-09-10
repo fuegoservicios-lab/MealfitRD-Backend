@@ -214,7 +214,15 @@ def _empate_score() -> float:
 
 def _empate_max() -> int:
     from knobs import _env_int
-    return _env_int("MEALFIT_DETERMINISTIC_DAY_TIE_MAX", 6, validator=lambda v: 1 <= v <= 50)
+    return _env_int("MEALFIT_DETERMINISTIC_DAY_TIE_MAX", 10, validator=lambda v: 1 <= v <= 50)
+
+
+#: El MISMO piso relativo de proteína que usa el resto del sistema (`go.PROTEIN_FLOOR_HARD_PCT`,
+#: `protein_floor_last_word._PISO_POR_DEFECTO`). Se escribe aquí como constante y no se importa de
+#: `graph_orchestrator` para no atar este módulo al god file; el test comprueba que no divergen —
+#: escribir un CUARTO número sería la lección de `P1-DIET-CANON-SSOT`.
+#: tooltip-anchor: PROTEIN_FLOOR_REL (test_p1_catalogo_proteina_desayuno.py)
+PROTEIN_FLOOR_REL = 0.90
 
 
 def _rotacion_de(day_num, slot: str) -> int:
@@ -269,12 +277,29 @@ def elegir_plantillas(tids, objetivo, catalogo: dict, por_id: dict, slot: str = 
         score = (2.0 * abs(base["protein_g"] * f - op) / op
                  + abs(base["carbs_g"] * f - oc) / oc
                  + abs(base["fats_g"] * f - of) / of)
-        cands.append((round(score, 6), str(tid), t, f))
+        cands.append((round(score, 6), str(tid), t, f, base["protein_g"] * f))
     if not cands:
         return []
     cands.sort(key=lambda x: (x[0], x[1]))
+    # [P1-CATALOGO-PROTEINA-DESAYUNO · 2026-09-09] DOS puertas, y la segunda existe porque la
+    # primera se estrecha sola: un techo `mejor + margen` se mueve con el mejor candidato, así que
+    # **añadir un plato bueno EXPULSA a otros**. Medido al dar de alta 20 platos: el fondo pasó de
+    # 25 a 31 supervivientes por franja y los elegibles se quedaron en 5. Un criterio relativo al
+    # rival no mide al plato: mide la competencia.
+    #
+    # La segunda puerta es ABSOLUTA y es la que el resto del sistema ya usa: si la proteína del
+    # plato, ya escalada, llega al piso clínico de la franja, el plato es servible aunque otro
+    # llegue mejor. Unión, nunca sustitución — sobre merienda la puerta de proteína sola daba 3
+    # donde el score daba 6, así que cambiarla habría empeorado justo la franja más pobre.
     techo = cands[0][0] + _empate_score()
-    elegibles = [(t, f) for s, _, t, f in cands if s <= techo][:_empate_max()]
+    piso_p = op * PROTEIN_FLOOR_REL
+    vistos, elegibles = set(), []
+    for s, tid, t, f, p in cands:
+        if s <= techo or (op > 0 and p >= piso_p):
+            if tid not in vistos:
+                vistos.add(tid)
+                elegibles.append((t, f))
+    elegibles = elegibles[:_empate_max()]
     if rotacion and len(elegibles) > 1:
         r = int(rotacion) % len(elegibles)
         elegibles = elegibles[r:] + elegibles[:r]
@@ -528,30 +553,39 @@ def build_day_for_skeleton(nutrition, form_data, skeleton_day, day_num, user_id=
             # mejor), y si al elegido le falta la receta congelada se prueba el siguiente en vez de
             # tirar el DÍA ENTERO al LLM por un plato.
             comida = None
+            _ultimo_motivo = None
             _elegibles = elegir_plantillas(tids, obj, catalogo, por_id, slot,
                                            rotacion=_rotacion_de(day_num, slot))
             # Primero los que no se han servido hoy; los ya usados quedan de RESPALDO al final, no
             # descartados: quedarse sin día por no repetir es peor que repetir.
             for _t, _f in sorted(_elegibles, key=lambda p: str(p[0].get("template_id")) in usadas_hoy):
-                comida = construir_comida(_t, _f, catalogo, slot, country, obj)
-                if comida:
-                    usadas_hoy.add(str(_t.get("template_id")))
-                    break
+                _c = construir_comida(_t, _f, catalogo, slot, country, obj)
+                if not _c:
+                    continue
+                # [P1-CATALOGO-PROTEINA-DESAYUNO · 2026-09-09] La verificación va DENTRO del bucle.
+                # Estaba fuera, así que un plato que se construía pero no pasaba el escáner tiraba
+                # el DÍA ENTERO en vez de ceder el turno al siguiente candidato — y sólo se notó al
+                # ensanchar los elegibles: 14/14 días pasaron a 12/14 justo cuando había MÁS donde
+                # elegir. Un guard que descarta el conjunto en vez del elemento castiga la abundancia.
+                _viol = verifica_comida(_c, form_data or {}, catalogo)
+                if _viol:
+                    # Las dos capas hablan idiomas distintos y hay que respetarlo: el escáner
+                    # culinario devuelve dicts con `check`, el backstop clínico devuelve STRINGS
+                    # legibles. Un `.get()` a secas revienta sobre la cadena, la excepción se traga
+                    # el aviso y el operador se queda sin el motivo del rechazo.
+                    _ultimo_motivo = (comida_nombre := _c.get("name"), sorted({
+                        (v.get("check") or v.get("detail") or "?") if isinstance(v, dict) else str(v)
+                        for v in _viol})[:4])
+                    logger.debug(f"[P1-DETERMINISTIC-DAY] {slot}: descartado {comida_nombre!r} "
+                                 f"por {_ultimo_motivo[1]}; se prueba el siguiente candidato")
+                    continue
+                comida = _c
+                usadas_hoy.add(str(_t.get("template_id")))
+                break
             if not comida:
-                return None
-            _viol = verifica_comida(comida, form_data or {}, catalogo)
-            if _viol:
-                # Las dos capas hablan idiomas distintos y hay que respetarlo: el escáner culinario
-                # devuelve dicts con `check`, el backstop clínico devuelve STRINGS legibles. Un
-                # `.get()` a secas revienta sobre la cadena, la excepción se traga el aviso y el
-                # operador se queda sin el motivo del rechazo — que es exactamente el modo de fallo
-                # que `P2-ALERT-MESSAGE-REFRESH` cerró esta misma mañana.
-                _motivos = sorted({
-                    (v.get("check") or v.get("detail") or "?") if isinstance(v, dict) else str(v)
-                    for v in _viol})[:4]
                 logger.warning(
-                    f"[P1-DETERMINISTIC-DAY] día {day_num} RECHAZADO en {slot} "
-                    f"({comida.get('name')}) → cae al LLM. Motivos: {_motivos}")
+                    f"[P1-DETERMINISTIC-DAY] día {day_num} RECHAZADO en {slot}: ninguno de los "
+                    f"{len(_elegibles)} candidatos pasó → cae al LLM. Último motivo: {_ultimo_motivo}")
                 return None
             meals.append(comida)
         if not meals:

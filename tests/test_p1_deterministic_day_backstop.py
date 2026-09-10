@@ -10,4 +10,5 @@ from tests.test_p1_deterministic_day_wired import (  # noqa: F401
     test_el_backstop_clinico_se_invoca_de_verdad,
     test_el_rechazo_dice_el_MOTIVO_con_las_dos_formas,
     test_los_filtros_clinicos_VIAJAN_al_selector,
+    test_una_comida_con_violaciones_NUNCA_se_sirve,
 )

@@ -68,8 +68,23 @@ def test_el_backstop_clinico_se_invoca_de_verdad():
     assert "_viol = verifica_comida(" in src, (
         "la función existe pero nadie la llama — que es justo lo que hoy encontramos en "
         "`recipe_for_dish_name`: correcta, probada y con cero call sites")
-    assert "return None" in src.split("_viol = verifica_comida(")[1][:1200], (
-        "una violación tiene que RECHAZAR el día y caer al LLM, no sólo registrarse")
+    # [P1-CATALOGO-PROTEINA-DESAYUNO · 2026-09-09] Este assert decía «una violación tiene que
+    # RECHAZAR EL DÍA». Ese contrato se cambió A SABIENDAS: la verificación se movió DENTRO del
+    # bucle de candidatos, así que una violación rechaza el CANDIDATO y se prueba el siguiente; el
+    # día sólo cae al LLM si no pasa ninguno. Motivo, medido: con la verificación fuera, ensanchar
+    # los elegibles bajó los días armados de 14/14 a 12/14 con las MISMAS 0 comidas sucias — un
+    # guard que descarta el conjunto en vez del elemento castiga la abundancia.
+    #
+    # Lo que NO cambia, y es lo que este test debe defender, es la propiedad de seguridad: una
+    # comida con violaciones no se sirve jamás. Eso lo prueba de verdad
+    # `test_una_comida_con_violaciones_NUNCA_se_sirve` (funcional, más abajo); aquí sólo se ancla
+    # que el rechazo sigue existiendo y sigue pudiendo tumbar el día.
+    _tras = src.split("_viol = verifica_comida(")[1][:1600]
+    assert "continue" in _tras, (
+        "una violación ya no cede el turno al siguiente candidato: o se sirve el plato sucio, o "
+        "vuelve el día perdido por un solo plato")
+    assert "return None" in _tras, (
+        "si NINGÚN candidato pasa, el día tiene que caer al LLM — no servirse a medias")
 
 
 def test_el_rechazo_dice_el_MOTIVO_con_las_dos_formas():
@@ -83,11 +98,37 @@ def test_el_rechazo_dice_el_MOTIVO_con_las_dos_formas():
     que no llega a quien investiga.
     """
     src = (_BACKEND / "deterministic_day.py").read_text(encoding="utf-8")
-    bloque = src.split("_viol = verifica_comida(")[1][:900]
+    bloque = src.split("_viol = verifica_comida(")[1][:1600]
     assert "isinstance(v, dict)" in bloque, (
         "el log asume una sola forma: con la otra revienta y el motivo se pierde")
     assert "else str(v)" in bloque
-    assert "logger.warning" in bloque, "un rechazo silencioso es indistinguible de que no pase nada"
+    # [P1-CATALOGO-PROTEINA-DESAYUNO] El `warning` se movió al final del bucle —descartar UN
+    # candidato es rutina y va a `debug`; quedarse sin ninguno es lo que el operador tiene que ver—
+    # y el motivo del último descarte viaja con él para que el aviso siga diciendo POR QUÉ.
+    assert "logger.debug" in bloque and "logger.warning" in bloque, (
+        "un rechazo silencioso es indistinguible de que no pase nada: el descarte por candidato va "
+        "a debug y el «no pasó ninguno» a warning, y el motivo tiene que ir en los dos")
+    assert "_ultimo_motivo" in bloque, (
+        "el warning perdió el motivo del último descarte: el operador se queda sin saber por qué "
+        "el día se fue al LLM, que es el modo de fallo que P2-ALERT-MESSAGE-REFRESH cerró")
+
+
+def test_una_comida_con_violaciones_NUNCA_se_sirve(monkeypatch):
+    """La propiedad de SEGURIDAD, probada ejercitándola en vez de leyéndola.
+
+    Es la que sustituye al viejo «una violación rechaza el día»: lo que importa no es a quién se
+    rechaza, sino que un plato sucio no llegue al usuario. Con todo sucio, el día cae al LLM.
+    """
+    import deterministic_day as dd
+
+    monkeypatch.setenv("MEALFIT_DETERMINISTIC_DAY", "1")
+    monkeypatch.setenv("MEALFIT_RECIPE_LIBRARY_SELECT", "1")
+    monkeypatch.setattr(dd, "verifica_comida",
+                        lambda meal, form_data, catalogo: ["alérgeno 'huevo' en el plato"])
+    dia = dd.build_day_for_skeleton(
+        {"target_calories": 2100, "macros": {"protein": "123g", "carbs": "271g", "fats": "58g"}},
+        {"user_id": "u", "health_profile": {}}, {"slots": ["desayuno"]}, 0, user_id="u")
+    assert dia is None, "se sirvió un día cuyas comidas TODAS violaban: el backstop quedó inerte"
 
 
 def test_los_filtros_clinicos_VIAJAN_al_selector():

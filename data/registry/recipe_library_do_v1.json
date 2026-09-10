@@ -2,8 +2,8 @@
  "schema_version": 1,
  "country": "DO",
  "generado_el": "2026-09-08",
- "revision": "v4 — estado del peso, tiempos orientativos, agua en volumen, reparto · v5 2026-09-09: +35 platos de despensa (P1-CICLO-30D-DURADERO), escritos a mano",
- "recetas": 175,
+ "revision": "v4 — estado del peso, tiempos orientativos, agua en volumen, reparto · v5 2026-09-09: +35 platos de despensa (P1-CICLO-30D-DURADERO), escritos a mano · v6 2026-09-09: +20 platos de DENSIDAD PROTEICA (P1-CATALOGO-PROTEINA-DESAYUNO), escritos a mano contra las quince reglas",
+ "recetas": 195,
  "procedencia": {
   "escrito_por": "LLM (tier flash) offline, prompt de quince reglas (v8)",
   "reglas_nacidas_de": "seis rondas de juicio a ciegas del dueno. Desayunos: 8 -> 11 -> 17 «la serviria» de 20. Almuerzo y cena: 3/16/1 (v1) -> 1/19/0 (v2) -> **8/12/0 (v3)**. Cada regla cierra una queja concreta suya, y DOS de mis reglas las tuvo que corregir el: el criterio de color y el sustituto del termometro.",
@@ -1689,6 +1689,180 @@
     "Mezcla la avena con la leche de coco en un frasco con tapa.",
     "Añade la linaza molida y remueve bien para que no se apelmace.",
     "Deja reposar en la nevera al menos cuatro horas, o de un día para otro."
+   ]
+  },
+  "tpl_6a5089265418": {
+   "franja": "desayuno",
+   "pasos": [
+    "Pica la cebolla en cubos pequeños y lava bien las espinacas. Bate las claras (se pesan sin cáscara, ya separadas de la yema) junto con el huevo entero hasta que la mezcla quede pareja.",
+    "Calienta el aceite de oliva en un sartén antiadherente a fuego medio y sofríe la cebolla 3-4 minutos, hasta que se ponga translúcida.",
+    "Añade las espinacas y remueve 1-2 minutos, sólo hasta que bajen de volumen. Escurre en el mismo sartén el agua que hayan soltado, o el revoltillo queda aguado.",
+    "Baja el fuego, vierte el batido de huevo y remueve despacio con espátula 2-3 minutos, hasta que cuaje pero siga húmedo. Sazona con la sal al final: la sal al principio suelta agua.",
+    "Tuesta el casabe 1 minuto por lado en un sartén seco o en el horno y sírvelo al lado, para partirlo con la mano."
+   ]
+  },
+  "tpl_36409c4726eb": {
+   "franja": "desayuno",
+   "pasos": [
+    "Corta la cebolla en aros finos y déjala en un envase con agua fría y un chorrito de vinagre si tienes, al menos 15 minutos, mientras haces el resto.",
+    "Pela el plátano verde (se pesa ya pelado), córtalo en trozos de dos dedos y hiérvelo en agua que lo cubra con la sal, 15-20 minutos, hasta que un tenedor entre sin resistencia.",
+    "Escurre el plátano y májalo caliente en un envase, añadiendo poco a poco un chorro del agua de la cocción hasta que quede un puré liso. Si esperas a que enfríe, se pone gomoso.",
+    "Escurre bien el atún (se pesa escurrido, sin el líquido de la lata) y desmenúzalo con un tenedor.",
+    "Sirve el mangú, coloca el atún encima y remata con la cebolla escurrida y el aceite de oliva en hilo."
+   ]
+  },
+  "tpl_b991edb7ec87": {
+   "franja": "desayuno",
+   "pasos": [
+    "Pon la leche a calentar en una olla pequeña a fuego medio y añade la avena (se pesa cruda, en hojuelas) cuando empiece a humear.",
+    "Cocina 5-6 minutos removiendo, hasta que la avena espese y se despegue del fondo.",
+    "Baja el fuego al mínimo y añade las claras (se pesan sin cáscara) en hilo mientras remueves SIN parar, 2-3 minutos: si las echas de golpe o con el fuego alto, cuajan en grumos en vez de integrarse.",
+    "Retira del fuego, tuesta el maní en un sartén seco 2-3 minutos hasta que huela, pícalo grueso y espárcelo por encima."
+   ]
+  },
+  "tpl_7f0b6fc54350": {
+   "franja": "desayuno",
+   "pasos": [
+    "Tuesta la avena (se pesa cruda) en un sartén seco a fuego medio 3-4 minutos, moviéndola, hasta que tome color dorado y huela a tostado. Pásala a un plato para que no siga cociéndose con el calor del sartén.",
+    "Tuesta el maní en el mismo sartén 2-3 minutos y pícalo grueso.",
+    "Sirve el yogurt frío en un envase hondo y reparte la avena y el maní por encima justo antes de comer, para que no se ablanden."
+   ]
+  },
+  "tpl_4e48570063d2": {
+   "franja": "desayuno",
+   "pasos": [
+    "Pica la cebolla y el tomate en cubos pequeños. Escurre las sardinas (se pesan escurridas, sin el aceite de la lata).",
+    "Calienta el aceite de oliva en un sartén a fuego medio y sofríe la cebolla 3-4 minutos; añade el tomate y cocina otros 4-5 minutos, aplastándolo con la cuchara hasta que suelte su jugo y se haga salsa.",
+    "Añade las sardinas enteras, baja el fuego y déjalas 3-4 minutos sólo para que tomen el guiso. No las revuelvas mucho o se deshacen del todo.",
+    "Tuesta el casabe 1 minuto por lado en un sartén seco y sírvelo al lado para acompañar."
+   ]
+  },
+  "tpl_95f0dd7856d5": {
+   "franja": "cena",
+   "pasos": [
+    "Corta el hígado (se pesa crudo) en tiras de un dedo de grueso y déjalo escurrir en un colador mientras preparas lo demás.",
+    "Pela el plátano verde (se pesa ya pelado), córtalo en trozos y hiérvelo en agua que lo cubra con la sal, 15-20 minutos, hasta que un tenedor entre sin resistencia. Escurre.",
+    "Corta la cebolla en aros. Calienta el aceite de oliva en un sartén a fuego medio-alto y sella el hígado 2 minutos por lado, sin moverlo, para que dore.",
+    "Baja el fuego, añade la cebolla y cocina 5-6 minutos removiendo, hasta que la cebolla ablande. El hígado está seguro cuando el termómetro marca 71 °C en el centro de la tira más gruesa; pasarse lo pone duro y arenoso.",
+    "Sirve el hígado con su cebolla al lado del plátano hervido."
+   ]
+  },
+  "tpl_cc64fe57c76f": {
+   "franja": "desayuno",
+   "pasos": [
+    "Cuece las claras (se pesan sin cáscara) antes de batirlas: viértelas en una olla pequeña con media taza de agua a fuego bajo y remueve 3-4 minutos, hasta que cuajen. La clara cruda no se bate en frío por seguridad, y esto no es opcional.",
+    "Deja que las claras cuajadas se templen 5 minutos.",
+    "Pela el guineo y ponlo en la licuadora con la leche, la avena (se pesa cruda) y las claras cuajadas.",
+    "Licúa 45-60 segundos, hasta que no queden trozos de avena. Sirve enseguida: la avena sigue absorbiendo y en diez minutos la batida se pone espesa."
+   ]
+  },
+  "tpl_e1265f14a8b4": {
+   "franja": "desayuno",
+   "pasos": [
+    "Tuesta el casabe 1 minuto por lado en un sartén seco y pártelo en trozos del tamaño de la palma.",
+    "Corta el tomate en cubos y el aguacate en láminas, justo antes de servir para que el aguacate no se oscurezca.",
+    "Sirve el queso cottage escurrido en el centro del plato, reparte el tomate por encima y coloca el aguacate y el casabe al lado."
+   ]
+  },
+  "tpl_8b37ecfd46e1": {
+   "franja": "cena",
+   "pasos": [
+    "Precalienta el horno a 200 °C.",
+    "Pela la yuca (se pesa ya pelada), córtala en trozos y hiérvela en agua que la cubra con la mitad de la sal, 20-25 minutos, hasta que un tenedor entre sin resistencia. Escurre y resérvala tapada.",
+    "Corta la cebolla en aros. Coloca los filetes de tilapia (se pesan crudos) en una bandeja, úntalos con el aceite de oliva, sazona con el resto de la sal y cúbrelos con la cebolla.",
+    "Hornea 12-15 minutos. El pescado está listo cuando el termómetro marca 63 °C en la parte más gruesa del filete.",
+    "Sirve la tilapia con su cebolla sobre la yuca hervida y riega por encima el jugo que quedó en la bandeja."
+   ]
+  },
+  "tpl_b83a2e9e039a": {
+   "franja": "merienda",
+   "pasos": [
+    "Pon los huevos en una olla, cúbrelos con agua fría —que sobrepase unos 2 cm— y llévalos a hervor a fuego alto.",
+    "Cuando rompa el hervor, baja a fuego medio y cuenta 10 minutos exactos. Pásalos enseguida a un envase con agua fría para cortar la cocción; así la yema no coge el borde gris.",
+    "Pela los huevos (se pesan sin cáscara) y pártelos por la mitad. Corta el aguacate en láminas, sazona con la sal y sirve."
+   ]
+  },
+  "tpl_af7f6c3725a6": {
+   "franja": "merienda",
+   "pasos": [
+    "Escurre bien el atún (se pesa escurrido, sin el agua de la lata) y desmenúzalo con un tenedor.",
+    "Pica la cebolla muy fina y mézclala con el atún.",
+    "Tuesta el casabe 1 minuto por lado en un sartén seco, pártelo en trozos y úsalo para llevar el atún."
+   ]
+  },
+  "tpl_b29321fc8917": {
+   "franja": "merienda",
+   "pasos": [
+    "Pela el guineo y córtalo en ruedas.",
+    "Si lo llevas fuera, guarda el guineo aparte y móntalo al momento: cortado con antelación se oscurece y suelta agua sobre el yogurt.",
+    "Sirve el yogurt frío en un envase hondo y coloca el guineo encima justo antes de comer, para que no se oscurezca."
+   ]
+  },
+  "tpl_3a0517b6dc80": {
+   "franja": "merienda",
+   "pasos": [
+    "Pela la lechosa, quítale las semillas con una cuchara y córtala en cubos (se pesa ya limpia, sin cáscara ni semillas).",
+    "Escurre el queso cottage un momento en un colador antes de servirlo; con su suero encima, la lechosa lo agua.",
+    "Sirve el queso cottage escurrido en un envase y reparte la lechosa por encima."
+   ]
+  },
+  "tpl_6a5fe80136a7": {
+   "franja": "merienda",
+   "pasos": [
+    "Escurre las sardinas (se pesan escurridas, sin el aceite de la lata) y ponlas en un plato.",
+    "Aplasta un poco las sardinas con el tenedor contra el plato: se reparten mejor sobre el casabe y no se caen al partirlo.",
+    "Tuesta el casabe 1 minuto por lado en un sartén seco, pártelo en trozos y úsalo para llevar las sardinas. Come también la espina central: es blanda y es de donde viene el calcio."
+   ]
+  },
+  "tpl_53d21a09b17f": {
+   "franja": "merienda",
+   "pasos": [
+    "Pon la pechuga (se pesa cruda) en una olla, cúbrela con agua que la sobrepase y hiérvela a fuego medio 15-18 minutos. Está segura cuando el termómetro marca 74 °C en el centro de la parte más gruesa.",
+    "Sácala, déjala templar 5 minutos y desmenúzala con dos tenedores. Guarda el caldo para otra preparación.",
+    "Pica la cebolla muy fina, mézclala con el pollo desmenuzado y sirve con el casabe tostado 1 minuto por lado en un sartén seco."
+   ]
+  },
+  "tpl_385a17ed7bed": {
+   "franja": "merienda",
+   "pasos": [
+    "Escurre el tofu (se pesa escurrido) y déjalo 10 minutos entre dos paños con un plato encima para sacarle el agua: si queda húmedo, se cuece en vez de dorarse.",
+    "Córtalo en cubos de dos dedos y pica la cebolla en tiras.",
+    "Calienta el aceite de oliva en un sartén a fuego medio-alto y dora el tofu 3-4 minutos por cada cara, sin moverlo entre volteos.",
+    "Añade la cebolla y saltea 3-4 minutos más; apaga el fuego, riega la salsa de soya por encima y remueve. La soya al final: si entra con el fuego alto se quema y amarga."
+   ]
+  },
+  "tpl_02895f974ed3": {
+   "franja": "merienda",
+   "pasos": [
+    "Corta el queso de hoja en lonjas, el tomate en ruedas y la cebolla en aros muy finos.",
+    "Monta el plato alternando queso y tomate, y reparte la cebolla por encima.",
+    "Déjalo reposar 5 minutos antes de comer: el tomate suelta jugo y el queso lo toma."
+   ]
+  },
+  "tpl_86da7bdca661": {
+   "franja": "desayuno",
+   "pasos": [
+    "Pela la yuca (se pesa ya pelada), rállala grueso y exprímela con las manos sobre el fregadero para sacarle el agua: si queda húmeda, la tortilla no se sostiene.",
+    "Pica la cebolla en cubos pequeños, desmenuza el queso blanco y escurre bien el atún (se pesa escurrido, sin el agua de la lata).",
+    "Bate los huevos (se pesan sin cáscara) con la sal y mézclalos con la yuca, la cebolla, el atún y el queso hasta que todo quede repartido.",
+    "Calienta el aceite de oliva en un sartén antiadherente a fuego medio-bajo, vierte la mezcla y aplánala. Tapa y cocina 7-8 minutos, hasta que los bordes se despeguen solos.",
+    "Voltea la tortilla con ayuda de un plato y cocina 5-6 minutos más por el otro lado, destapada. El centro está listo cuando un palillo sale limpio."
+   ]
+  },
+  "tpl_612f9a6638b2": {
+   "franja": "merienda",
+   "pasos": [
+    "Cuece las claras (se pesan sin cáscara) antes de batirlas: viértelas en una olla pequeña con media taza de agua a fuego bajo y remueve 3-4 minutos, hasta que cuajen. La clara cruda no se bate en frío por seguridad.",
+    "Deja que se templen 5 minutos y ponlas en la licuadora con la leche y la avena (se pesa cruda).",
+    "Licúa 45-60 segundos, hasta que no queden trozos de avena, y sirve enseguida."
+   ]
+  },
+  "tpl_7ec10278eed6": {
+   "franja": "merienda",
+   "pasos": [
+    "Tuesta el casabe 1 minuto por lado en un sartén seco y pártelo en trozos del tamaño de la palma.",
+    "Corta el tomate en cubos pequeños y déjalo escurrir un momento en un colador: si lo pones con todo su jugo, el queso se aguacha.",
+    "Sirve el queso cottage escurrido en un envase, reparte el tomate por encima y usa el casabe para llevarlo."
    ]
   }
  }
