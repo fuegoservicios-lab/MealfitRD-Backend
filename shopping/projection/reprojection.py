@@ -34,10 +34,47 @@ def shopping_list_fingerprint(plan_data: dict) -> str:
     return hashlib.sha256(raw.encode("utf-8")).hexdigest()[:16]
 
 
+def inventory_fingerprint(user_id: str, plan_data: Optional[dict]) -> str:
+    """[P1-AUDITORIA-ARQ-VERIFICADA · 2026-09-11] Huella de lo que la proyección LEE además de la lista:
+    la Nevera y los consumidos del usuario (`fetch_inventory_and_consumed_for_plan`, la misma llamada del
+    read model). Sin ella, «ya compré» (`/restock`) y «vaciar consumidos» (`/inventory/consume`) no tocan
+    `plan_data`, la revisión no sube, la huella de la lista no cambia y la proyección seguía `ready` con
+    un número calculado contra un inventario que ya no existe. Cadena vacía si no se puede calcular
+    (fail-open: la huella de la lista sigue mandando)."""
+    try:
+        from shopping_calculator import fetch_inventory_and_consumed_for_plan
+        inv, cons = fetch_inventory_and_consumed_for_plan(str(user_id), plan_data or {}, is_new_plan=True)
+
+        def _filas(x):
+            if isinstance(x, dict):
+                return sorted((str(k), str(v)) for k, v in x.items())
+            out = []
+            for r in (x or []):
+                if isinstance(r, dict):
+                    out.append((str(r.get("name") or r.get("ingredient") or r.get("food") or r),
+                                str(r.get("quantity") if "quantity" in r else r.get("qty")), str(r.get("unit"))))
+                else:
+                    out.append((str(r), "", ""))
+            return sorted(out)
+
+        filas_inv, filas_cons = _filas(inv), _filas(cons)
+        if not filas_inv and not filas_cons:
+            return ""   # sin Nevera ni consumidos no hay nada que la proyección lea aparte de la lista
+        raw = json.dumps({"inv": filas_inv, "cons": filas_cons}, ensure_ascii=False, sort_keys=True, default=str)
+        return hashlib.sha256(raw.encode("utf-8")).hexdigest()[:16]
+    except Exception:
+        return ""
+
+
 def enqueue_shopping_reprojection(plan_id: str, user_id: str, *, reason: str, plan_data: Optional[dict] = None) -> Optional[str]:
     """Encola `shopping_projection` para la revisión vigente si la lista cambió desde el último job.
     Fail-open: None si la cola está apagada, el plan no tiene política (pre-F3), la huella no cambió o
-    algo falla. Llamada desde los commits de recálculo, swap, regeneración de día y relleno de bloques."""
+    algo falla. Llamada desde los commits de recálculo, swap, regeneración de día y relleno de bloques.
+
+    [P1-AUDITORIA-ARQ-VERIFICADA · 2026-09-11] También desde `/shift-plan`, `/grocery-start-date`,
+    `/restore`, `/restore-local`, `/restock` y `/inventory/consume` — seis mutaciones que cambian lo que
+    la proyección lee y no la re-encolaban (cuatro la dejaban `stale` para siempre, dos la dejaban
+    `ready` mintiendo). La huella decide con la LISTA y con la NEVERA (`inventory_fingerprint`)."""
     import plan_jobs as pj
     if not pj.plan_jobs_enabled() or not pj.consumer_enabled(pj.JOB_TYPE_SHOPPING_PROJECTION):
         return None
@@ -57,15 +94,16 @@ def enqueue_shopping_reprojection(plan_id: str, user_id: str, *, reason: str, pl
         if not eff:
             return None  # sin política no hay ventanas: planes anteriores a la Fase 3
         fp = shopping_list_fingerprint(plan_data)
+        inv_fp = inventory_fingerprint(user_id, plan_data)
         from db import execute_sql_query
         last = execute_sql_query(
-            "SELECT status, payload->>'list_fingerprint' AS fp FROM plan_jobs "
+            "SELECT status, payload->>'list_fingerprint' AS fp, payload->>'inventory_fingerprint' AS inv FROM plan_jobs "
             "WHERE plan_id = %s AND user_id = %s AND job_type = %s AND status IN ('pending', 'processing', 'failed', 'done') "
             "ORDER BY created_at DESC LIMIT 1",
             (plan_id, user_id, pj.JOB_TYPE_SHOPPING_PROJECTION), fetch_one=True,
         )
-        if last and last.get("fp") == fp:
-            return None  # la lista no cambió: la proyección sería idéntica
+        if last and last.get("fp") == fp and str(last.get("inv") or "") == inv_fp:
+            return None  # ni la lista ni la Nevera cambiaron: la proyección sería idéntica
         total = 0
         try:
             total = int(plan_data.get("total_days_requested") or 0)
@@ -83,9 +121,10 @@ def enqueue_shopping_reprojection(plan_id: str, user_id: str, *, reason: str, pl
             "schema_version": horizon.BLUEPRINT_SCHEMA_VERSION, "policy_hash": eff.get("policy_hash"),
             "total_days": int(total), "windows": windows,
             "freezer_mode": str(((eff.get("shopping") or {}).get("freezer_mode")) or "limited"),
-            "list_fingerprint": fp, "reason": str(reason or "")[:40],
+            "list_fingerprint": fp, "inventory_fingerprint": inv_fp, "reason": str(reason or "")[:40],
         }
-        key = f"{pj.JOB_TYPE_SHOPPING_PROJECTION}:{plan_id}:{int(rev or 0)}:{fp[:12]}"
+        # La clave de dedupe lleva la Nevera sólo cuando se pudo medir: sin ella, la clave es la de siempre.
+        key = f"{pj.JOB_TYPE_SHOPPING_PROJECTION}:{plan_id}:{int(rev or 0)}:{fp[:12]}" + (f":{inv_fp[:8]}" if inv_fp else "")
         jid = pj.enqueue_plan_job(pj.JOB_TYPE_SHOPPING_PROJECTION, plan_id, user_id, plan_revision=rev, dedup_key=key, payload=payload)
         if jid:
             logger.info(f"[ARQ25-F5] reprojection encolada job={jid} plan={plan_id} rev={rev} reason={reason} fp={fp[:12]}")
@@ -95,4 +134,4 @@ def enqueue_shopping_reprojection(plan_id: str, user_id: str, *, reason: str, pl
         return None
 
 
-__all__ = ["shopping_list_fingerprint", "enqueue_shopping_reprojection", "_FINGERPRINT_ROW_KEYS"]
+__all__ = ["shopping_list_fingerprint", "inventory_fingerprint", "enqueue_shopping_reprojection", "_FINGERPRINT_ROW_KEYS"]

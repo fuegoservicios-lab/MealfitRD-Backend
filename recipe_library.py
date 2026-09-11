@@ -217,6 +217,65 @@ def apply_library_recipes_to_days(days, country: str = "DO") -> int:
 
 
 # ---------------------------------------------------------------------------
+# [P1-AUDITORIA-ARQ-VERIFICADA · 2026-09-11] El tiempo del plato, del registry y no del relleno.
+#
+# `assemble_plan_node` completaba `prep_time` ausente con «15 min»: un dato inventado con la misma
+# pinta que uno medido, para «La bandera» (105 min declarados por su receta) igual que para un jugo
+# (5). El registry lleva desde P1-MINUTOS-DE-LA-RECETA el número que la receta DECLARA
+# (`logistics.prep_minutes_est`, fuente `receta`) o la estimación por técnica (`tecnica`) — y ningún
+# código de producción lo leía. Aquí se lee. El relleno `defecto` (30) NO se devuelve: sería otro
+# número inventado con mejor disfraz.
+
+
+def prep_time_for_meal(meal, country: str = "DO") -> Optional[str]:
+    """«N min» si el registry conoce el plato y su tiempo viene de la receta o de la técnica; `None` si no.
+
+    Resuelve por `_template_id`/`_recipe_template_id` (platos del camino determinista) y, si no, por
+    nombre EXACTO normalizado — la doctrina de `recipe_for_dish_name`: un parecido serviría el tiempo
+    de otro plato. Fail-open a `None`: sin dato no hay dato."""
+    if not isinstance(meal, dict):
+        return None
+    try:
+        import dish_registry as dr
+        idx = dr.templates_by_id(country) or {}
+        tid = meal.get("_template_id") or meal.get("_recipe_template_id")
+        t = idx.get(str(tid)) if tid else None
+        if t is None:
+            tid2 = _registry_name_index(country).get(_norm(meal.get("name")))
+            t = idx.get(str(tid2)) if tid2 else None
+        if not t:
+            return None
+        lg = t.get("logistics") or {}
+        if str(lg.get("prep_minutes_source") or "") not in ("receta", "tecnica"):
+            return None
+        n = int(lg.get("prep_minutes_est") or 0)
+        return f"{n} min" if n > 0 else None
+    except Exception:
+        return None
+
+
+def fill_prep_time(meal, form_data=None) -> None:
+    """Completa `prep_time` en el plato SIN inventar: del registry si lo sabe, si no cadena vacía.
+
+    `_prep_time_source` dice de dónde salió (`registry` | `unknown`). El frontend (`RecipesView`,
+    `Dashboard`, PDF) pinta el chip sólo si `prep_time` es truthy, así que el vacío se OCULTA en vez
+    de mentir. `MealModel.prep_time` es `str`: la cadena vacía valida; `None` no."""
+    if not isinstance(meal, dict) or meal.get("prep_time"):
+        return
+    country = "DO"
+    try:
+        from constants import cultural_country_for_form_data
+        country = cultural_country_for_form_data(form_data or {}) or "DO"
+    except Exception:
+        pass
+    pt = prep_time_for_meal(meal, country)
+    if not pt and country != "DO":
+        pt = prep_time_for_meal(meal, "DO")
+    meal["prep_time"] = pt or ""
+    meal["_prep_time_source"] = "registry" if pt else "unknown"
+
+
+# ---------------------------------------------------------------------------
 # [P1-FIDELIDAD-PLATO-DEL-REGISTRY · 2026-09-09] El medidor de procedencia.
 #
 # Medido en producción el 09-sep, sobre un plan recién generado contra el registry de 179

@@ -39469,11 +39469,11 @@ async def assemble_plan_node(state: PlanState) -> dict:
             if "calories" in m and "cals" not in m: m["cals"] = m.pop("calories")
             if "description" in m and "desc" not in m: m["desc"] = m.pop("description")
             if "instructions" in m and "recipe" not in m: m["recipe"] = m.pop("instructions")
-            
             # Auto-fill missing required keys to pass Pydantic Validation & Frontend
             if "meal" not in m: m["meal"] = m.get("name", "Comida").split(" ")[0] if " " in m.get("name", "") else m.get("name", "Comida")
             if not m.get("time"): m["time"] = "Flexible"  # [Z3] Optional emite None → guard .get()
-            if "prep_time" not in m: m["prep_time"] = "15 min"
+            # [P1-AUDITORIA-ARQ-VERIFICADA · 2026-09-11] «15 min» era un relleno con pinta de dato: del registry si lo sabe (receta/técnica, P1-MINUTOS-DE-LA-RECETA); si no, vacío + `_prep_time_source="unknown"` (el frontend oculta el chip si está vacío)
+            if not m.get("prep_time"): __import__("recipe_library").fill_prep_time(m, form_data)
             # [P0-MEAL-MACRO-RECOVERY · 2026-06-13] Recupera el breakdown de macros
             # del meal (estima desde cals + split si vienen en 0) — antes shippeaba
             # protein=0 + placeholder "Plan Matemático" y el usuario veía 0g.
@@ -44561,7 +44561,7 @@ Responde ÚNICAMENTE con el JSON de revisión.
                 logger.warning(
                     f"🍳 [P1-CULINARY-CONTRACT] {len(_cul_viol)} violación(es) "
                     f"culinaria(s) (guard={CULINARY_CONTRACT_GUARD}, "
-                    f"cobertura={_cul_cov:.0%}): "
+                    f"cobertura={('%.0f%%' % (_cul_cov * 100)) if _cul_cov is not None else 'no medible'}): "  # [P1-AUDITORIA-ARQ-VERIFICADA] con `None` el `:.0%` reventaba dentro del try: se perdía el aviso y en block `approved=False` nunca corría
                     f"{[(v['check'], v['food'], v['day']) for v in _cul_viol[:6]]}")
             if _cul_viol and CULINARY_CONTRACT_GUARD == "block":
                 # [P1-CULINARY-CONTRACT-BLOCK-FIX · post-review-final] Espeja

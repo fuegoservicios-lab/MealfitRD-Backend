@@ -35,11 +35,15 @@ pasaba nada. Lo cazó el backstop clínico rechazando un desayuno con huevo a un
 La defensa en profundidad funcionó, y por eso mismo el hueco de arriba había que cerrarlo: una
 última línea de defensa que trabaja sola dejó de ser defensa en profundidad.
 
-**Pero un día que sale de aquí se persiste sin pasar por `assemble_plan_node`**, igual que el path
-degradado. `P0-DEGRADED-SAFETY-SCAN` enseñó qué cuesta eso: al filtro se le escapan plurales y lo
-que los caza es el backstop clínico. Por eso `verifica_comida` corre las seis capas del
-escáner culinario Y el backstop clínico sobre CADA plato antes de devolver el día, y devolver
-`None` es seguro — el llamador cae al camino del LLM, que es el estado de siempre.
+**Dónde se persiste.** [P1-AUDITORIA-ARQ-VERIFICADA · 2026-09-11] Este párrafo afirmaba que un día
+armado aquí se persistía SIN pasar por `assemble_plan_node`, y no es cierto: el ÚNICO llamador
+de producción es `_safe_gen` dentro de `generate_days_parallel_node`, y las aristas del grafo
+(`generate_days_parallel → adversarial_judge → self_critique → assemble_plan → review_plan`) son
+incondicionales — el día determinista pasa por el autofix de sodio, el de proteína repetida, el de
+huevo y el recorte de comidas igual que uno del modelo. Las capas de este módulo (`verifica_comida`,
+el techo de sodio del día) son DEFENSA EN PROFUNDIDAD, no la única defensa; la premisa falsa
+justificó dos P-fixes correctos por la razón equivocada. Devolver `None` sigue siendo seguro: el
+llamador cae al camino del LLM, que es el estado de siempre.
 
 ## Lo medido el 08-sep sobre 14 días × 3 perfiles clínicos
 
@@ -89,6 +93,16 @@ _NO_ESCALAN = (
     "sal", "pimienta", "oregano", "ajo", "comino", "canela", "laurel", "vinagre", "bija",
     "achiote", "curcuma", "sazon", "perejil", "cilantro", "azafran", "nuez moscada", "clavo",
 )
+# [P1-AUDITORIA-ARQ-VERIFICADA · 2026-09-11] Por PALABRA, no por subcadena. `"sal" in "salami"` era
+# True: Salami, Salsa de tomate, Ensalada, Salmón, Bacalao salado y Ajonjolí («ajo») quedaban sin
+# escalar — 15 plantillas dominicanas con un constituyente congelado, y en «Salami guisado con yuca»
+# el congelado era la proteína entera: el plato se elegía por sus 427 kcal escaladas y servía 574.
+# Los dos SSOT de condimentos del repo (`constants._ALLOWED_CONDIMENTS_RES`,
+# `culinary_coherence._CONDIMENT_EXEMPT_RES`) ya usan frontera de palabra; ésta era la tercera copia
+# sin migrar. Se admite el plural («clavos», «ajos»).
+_NO_ESCALAN_RES = tuple(
+    re.compile(r"(?<![a-z])" + re.escape(k) + r"(?:s|es)?(?![a-z])") for k in _NO_ESCALAN
+)
 
 # Inclinación de constituyentes: ±35 % por ingrediente y nunca por debajo del 30 % del gramaje
 # original. «Lentejas guisadas con arroz» con un 30 % menos de arroz sigue siendo ese plato; con un
@@ -97,9 +111,116 @@ _NO_ESCALAN = (
 _TILT_TOPE = 0.35
 _TILT_MIN_FRAC = 0.30
 
-# Reparto tipico del dia. Vive aqui y no en el llamador porque es parte del contrato de este
-# modulo: si una franja no esta en la tabla, el dia NO se arma en vez de repartirla a ojo.
-_REPARTO = {"desayuno": 0.25, "almuerzo": 0.35, "cena": 0.30, "merienda": 0.10}
+# [P1-AUDITORIA-ARQ-VERIFICADA · 2026-09-11] Aquí vivía `_REPARTO = {desayuno .25, almuerzo .35,
+# cena .30, merienda .10}`: una SEGUNDA tabla frente a `nutrition_calculator.MEAL_SLOT_SPLITS` (la del
+# solver del camino del LLM: .20/.35/.15/.30 para 4 comidas, con repartos propios para 2, 3, 5 y 6), y
+# se leía junto a `skeleton_day["slots"]` — la forma del BLUEPRINT (`horizon.build_blueprint`) — cuando
+# el único llamador de producción (`generate_days_parallel_node`) entrega un `DaySkeletonModel`, que
+# trae `meal_types` y `protein_pool` y ninguna de las dos claves. Medido: `slots` era siempre `None`
+# ⇒ siempre las 4 franjas de la tabla, en su orden, sin familia de proteína; un plan clínico de 3 o
+# de 6 comidas recibía 4 (`_enforce_meal_count` sólo recorta, no añade). Ningún test lo vio porque
+# todos pasaban `{"slots": [...]}`. Ahora las franjas salen de `_franjas_del_dia` y el reparto de
+# `_fracciones_por_franja`, sobre los SSOT que ya usa el resto del sistema.
+_FRANJAS_REGISTRY = ("desayuno", "almuerzo", "cena", "merienda")
+
+
+def _etiqueta_a_franja(etiqueta) -> Optional[str]:
+    """«Merienda AM» → `merienda`, «Desayuno» → `desayuno`, «dinner» → `cena`; `None` si no se reconoce.
+
+    Primero el mapa del camino del LLM (`graph_orchestrator._SLOT_KEY_MAP`, el que leen
+    `_canonical_slot_fractions` y `_enforce_meal_count`), después los alias del registry
+    (`dish_registry.canonical_slot_es`). Los dos existen; aquí no se escribe un tercero."""
+    n = _norm(etiqueta)
+    if not n:
+        return None
+    try:
+        from graph_orchestrator import _SLOT_KEY_MAP
+        k = _SLOT_KEY_MAP.get(n)
+        if k in _FRANJAS_REGISTRY:
+            return k
+    except Exception:                                                  # noqa: BLE001
+        pass
+    try:
+        import dish_registry as dr
+        k = dr.canonical_slot_es(n)
+        if k in _FRANJAS_REGISTRY:
+            return k
+    except Exception:                                                  # noqa: BLE001
+        pass
+    return None
+
+
+def _fracciones_por_franja(etiquetas: list) -> list:
+    """Fracción de kcal por comida, del reparto fisiológico SSOT (`MEAL_SLOT_SPLITS`) y con el MISMO
+    algoritmo que el solver del camino del LLM (`_canonical_slot_fractions`): las meriendas toman su
+    cuota en orden AM → PM → noche, lo no mapeado reparte el remanente, el vector suma 1,0."""
+    try:
+        from graph_orchestrator import _canonical_slot_fractions
+        return list(_canonical_slot_fractions([{"meal": e} for e in etiquetas]))
+    except Exception:                                                  # noqa: BLE001
+        pass
+    # Respaldo sin el god-file (pruebas unitarias del módulo): los MISMOS datos, la misma regla.
+    try:
+        from nutrition_calculator import MEAL_SLOT_SPLITS
+        split = MEAL_SLOT_SPLITS.get(len(etiquetas), MEAL_SLOT_SPLITS[4])
+        meriendas = [k for k in split if k.startswith("merienda")]
+        out, i = [], 0
+        for e in etiquetas:
+            f = _etiqueta_a_franja(e)
+            if f in split:
+                out.append(split[f])
+            elif f == "merienda" and meriendas:
+                out.append(split[meriendas[min(i, len(meriendas) - 1)]])
+                i += 1
+            else:
+                out.append(None)
+        asignado = sum(x for x in out if x is not None)
+        sin = sum(1 for x in out if x is None)
+        if sin:
+            resto = max(0.0, 1.0 - asignado) / sin
+            out = [resto if x is None else x for x in out]
+        tot = sum(out) or 1.0
+        return [x / tot for x in out]
+    except Exception:                                                  # noqa: BLE001
+        return []
+
+
+def _franjas_del_dia(skeleton_day) -> Optional[list]:
+    """Las franjas del día como `[(etiqueta, franja_registry, fracción_kcal)]`, o `None` si alguna
+    etiqueta no se reconoce (que la haga el LLM: ese contrato sí sabe qué es un «brunch»).
+
+    `meal_types` manda: es lo que emite el planificador (`DaySkeletonModel`) y lo que consume el
+    day-generator del LLM, así que las DOS rutas arman las mismas comidas, en el mismo orden y con la
+    misma etiqueta («Merienda AM» se conserva tal cual: `_enforce_meal_count` y el frontend cuentan
+    por esa etiqueta). `slots` (blueprint) se acepta como forma alternativa. Sin ninguna, las 4
+    comidas canónicas del producto (`meal_types_for_count(4)`)."""
+    sk = skeleton_day or {}
+    etiquetas = [str(x) for x in (sk.get("meal_types") or []) if x]
+    if not etiquetas:
+        etiquetas = [str(s).capitalize() for s in (sk.get("slots") or []) if s]
+    if not etiquetas:
+        try:
+            from nutrition_calculator import meal_types_for_count
+            etiquetas = list(meal_types_for_count(4))
+        except Exception:                                              # noqa: BLE001
+            etiquetas = ["Desayuno", "Almuerzo", "Merienda", "Cena"]
+    franjas = [_etiqueta_a_franja(e) for e in etiquetas]
+    if any(f is None for f in franjas):
+        return None
+    fracs = _fracciones_por_franja(etiquetas)
+    if len(fracs) != len(etiquetas):
+        return None
+    return list(zip(etiquetas, franjas, fracs))
+
+
+def _familias_del_dia(skeleton_day) -> list:
+    """La familia de proteína programada para el día: `protein` (blueprint) o `protein_pool`
+    (`DaySkeletonModel`: nombres de alimento como «Pechuga de pollo», que `horizon.family_matches`
+    ya sabe leer). Vacía ⇒ sin restricción de familia."""
+    sk = skeleton_day or {}
+    if sk.get("protein"):
+        return [str(sk["protein"])]
+    return [str(p) for p in (sk.get("protein_pool") or []) if p]
 
 _RE_LINEA = re.compile(r"^\s*([\d.]+)\s*g\s+de\s+(.+)$")
 
@@ -163,8 +284,10 @@ def _banda(slot) -> tuple:
 
 
 def _no_escala(nombre: str) -> bool:
+    """¿Es un condimento que no crece con la porción? Por palabra completa: «Sal», «Sal marina» y
+    «Ajo en polvo» sí; «Salami», «Salsa de tomate», «Ensalada», «Salmón» y «Ajonjolí» no."""
     n = _norm(nombre)
-    return any(k in n for k in _NO_ESCALAN)
+    return any(rx.search(n) for rx in _NO_ESCALAN_RES)
 
 
 def _clase(fila: dict) -> str:
@@ -299,11 +422,15 @@ def elegir_plantillas(tids, objetivo, catalogo: dict, por_id: dict, slot: str = 
             if tid not in vistos:
                 vistos.add(tid)
                 elegibles.append((t, f))
-    elegibles = elegibles[:_empate_max()]
+    # [P1-AUDITORIA-ARQ-VERIFICADA · 2026-09-11] La rotación va ANTES del corte. Cortando primero, los
+    # elegibles del puesto 11 en adelante eran inalcanzables TODOS los días, con cualquier rotación:
+    # la ventana giraba siempre sobre los mismos diez. Todos los elegibles ya pasaron las dos puertas
+    # (empate de score o piso de proteína), así que girar sobre el conjunto entero no sirve un plato
+    # peor: sirve más platos distintos. El corte sigue acotando cuántos se prueban por franja.
     if rotacion and len(elegibles) > 1:
         r = int(rotacion) % len(elegibles)
         elegibles = elegibles[r:] + elegibles[:r]
-    return elegibles
+    return elegibles[:_empate_max()]
 
 
 def elegir_plantilla(tids, objetivo, catalogo: dict, por_id: dict, slot: str = ""):
@@ -399,13 +526,122 @@ def construir_comida(t: dict, factor: float, catalogo: dict, slot: str, country:
         from recipe_library import recipe_for_dish_name
         pasos = recipe_for_dish_name(t.get("name"), country)
         if pasos:
-            meal["recipe"] = list(pasos)
+            # [P1-AUDITORIA-ARQ-VERIFICADA · 2026-09-11] La receta congelada se escribió UNA vez para
+            # la ración del registry y sus pasos no llevan cantidades de ingrediente — salvo el agua,
+            # que SÍ se mide («tres tazas de agua» para 90 g de quinoa). Escalar los gramos y copiar
+            # el paso tal cual servía 54 g de quinoa con tres tazas: el propio paso («hasta que el agua
+            # se haya absorbido») dejaba de poder cumplirse. El agua medida escala con el factor.
+            escalados, cambio = escalar_agua_en_pasos(list(pasos), float(factor))
+            meal["recipe"] = escalados
             meal["_recipe_source"] = "library"
+            if cambio:
+                meal["_recipe_water_scaled"] = True
     except Exception:
         pass
     if not meal.get("recipe"):
         return None      # sin receta congelada no hay determinismo del texto: que lo haga el LLM
+    # [P1-AUDITORIA-ARQ-VERIFICADA · 2026-09-11] El tiempo del plato sale de su receta
+    # (`logistics.prep_minutes_est`, `prep_minutes_source='receta'`, P1-MINUTOS-DE-LA-RECETA) o de la
+    # estimación por técnica — nunca del relleno «15 min» de `assemble_plan_node`, que no es un dato.
+    # El número existía desde el 10-sep y ningún código de producción lo leía.
+    try:
+        _lg = t.get("logistics") or {}
+        _src = str(_lg.get("prep_minutes_source") or "")
+        _min = int(_lg.get("prep_minutes_est") or 0)
+        if _src in ("receta", "tecnica") and _min > 0:
+            meal["prep_time"] = f"{_min} min"
+            meal["_prep_time_source"] = _src
+    except (TypeError, ValueError):
+        pass
     return meal
+
+
+# [P1-AUDITORIA-ARQ-VERIFICADA · 2026-09-11] «N tazas/litros/ml de agua» en un paso, con número en
+# cifra o en palabra («dos tazas y media», «un litro y medio», «media taza»). NO casa las frases en
+# proporción («dos tazas de agua POR CADA taza de arroz»): esas ya escalan solas. Tampoco cucharadas
+# ni cucharaditas de agua: no son volumen de cocción.
+_NUM_PALABRA = {
+    "un": 1.0, "una": 1.0, "uno": 1.0, "dos": 2.0, "tres": 3.0, "cuatro": 4.0, "cinco": 5.0,
+    "seis": 6.0, "siete": 7.0, "ocho": 8.0, "media": 0.5, "medio": 0.5,
+}
+_RE_AGUA = re.compile(
+    r"(?P<num>\d+(?:[.,]\d+)?|un|una|uno|dos|tres|cuatro|cinco|seis|siete|ocho|media|medio)\s*"
+    r"(?P<unidad>tazas?|litros?|ml|mililitros?)"
+    r"(?P<ymedia>\s+y\s+medi[oa])?\s+de\s+agua\b"
+    r"(?!\s+por\s+cada)(?!\s+por\s+taza)",
+    re.IGNORECASE,
+)
+_FRACCIONES = {0.25: "¼", 0.5: "½", 0.75: "¾"}
+
+
+def _formato_tazas(v: float) -> str:
+    v = max(0.25, round(v * 4) / 4.0)
+    entero, frac = int(v), round(v - int(v), 2)
+    if frac == 0:
+        return f"{entero} taza" if entero == 1 else f"{entero} tazas"
+    sufijo = _FRACCIONES.get(frac, f"{frac:g}")
+    return (f"{sufijo} taza" if entero == 0 else f"{entero}{sufijo} tazas")
+
+
+def _formato_litros(v: float) -> str:
+    if v < 1.0:
+        ml = max(50, int(round(v * 1000 / 50.0)) * 50)
+        return f"{ml} ml"
+    v = round(v * 4) / 4.0
+    if v == 1.0:
+        return "1 litro"
+    return f"{v:g}".replace(".", ",") + " litros"
+
+
+def escalar_agua_en_pasos(pasos: list, factor: float) -> tuple:
+    """Los pasos con el agua MEDIDA escalada por `factor`. Devuelve `(pasos, cambió)`.
+
+    Sólo cuando el factor se aleja de 1 más de un 5 %; sólo las menciones absolutas («tres tazas de
+    agua», «3 litros de agua», «media taza de agua»); las proporciones («por cada taza de arroz») y las
+    cucharadas se dejan tal cual. El agua no es un ingrediente comprado, así que ningún escáner la ve
+    (V4 mide gramos, V6 exige cifra): esta es la única costura donde la cantidad del paso puede seguir
+    a la cantidad servida."""
+    try:
+        f = float(factor)
+    except (TypeError, ValueError):
+        return list(pasos or []), False
+    if not pasos or abs(f - 1.0) < 0.05:
+        return list(pasos or []), False
+
+    def _cantidad(m) -> Optional[float]:
+        raw = m.group("num").lower()
+        if raw in _NUM_PALABRA:
+            v = _NUM_PALABRA[raw]
+        else:
+            try:
+                v = float(raw.replace(",", "."))
+            except ValueError:
+                return None
+        if m.group("ymedia"):
+            v += 0.5
+        return v
+
+    def _sustituir(m):
+        v = _cantidad(m)
+        if v is None or v <= 0:
+            return m.group(0)
+        u = m.group("unidad").lower()
+        if u.startswith("taza"):
+            texto = _formato_tazas(v * f)
+        elif u.startswith("litro"):
+            texto = _formato_litros(v * f)
+        else:
+            ml = max(10, int(round(v * f / 10.0)) * 10)
+            texto = f"{ml} ml"
+        return f"{texto} de agua"
+
+    out, cambio = [], False
+    for p in pasos:
+        s = str(p)
+        nuevo = _RE_AGUA.sub(_sustituir, s)
+        cambio = cambio or (nuevo != s)
+        out.append(nuevo)
+    return out, cambio
 
 
 #: [P1-RETINOL-PREFORMADO · 2026-09-09] El UL de vitamina A (3.000 mcg RAE/día, IOM) es de retinol
@@ -445,9 +681,13 @@ def _variedad_ssot():
 
     `_SAME_DAY_PROTEIN_GATE_LABELS` (carnes, pescados y HUEVO; exime queso, legumbres y yogur, que en
     RD se repiten por cultura) y `_LIGHT_BASE_TOKENS` (avena, casabe, arepa… en desayuno Y merienda).
-    El día determinista no pasa por `assemble_plan_node`, así que no las heredaba: medido sobre los
-    30 días del dueño, 12 repetían proteína y 4 base ligera. Copiarlas aquí sería la segunda tabla que
-    `P1-DIET-CANON-SSOT` prohíbe.
+    Medido sobre los 30 días del dueño, 12 repetían proteína y 4 base ligera. Copiarlas aquí sería la
+    segunda tabla que `P1-DIET-CANON-SSOT` prohíbe.
+
+    [P1-AUDITORIA-ARQ-VERIFICADA · 2026-09-11] Aquí decía que el día determinista no pasaba por
+    `assemble_plan_node` y por eso no las heredaba. Sí pasa (ver el docstring del módulo): los autofix
+    de `assemble_plan_node` corren también sobre estos días. Aplicarlas aquí, en la ELECCIÓN, evita
+    servir el plato repetido y que luego lo repare un autofix a ciegas — es preferir, no descartar.
     """
     try:
         from graph_orchestrator import _SAME_DAY_PROTEIN_GATE_LABELS
@@ -503,16 +743,52 @@ def _bases_ligeras_de(comida, tokens) -> set:
 
 
 def _sodio_de(plantilla) -> float:
-    """Los mg de sodio de una ración según el registry. Sin dato ⇒ 0, y eso es deliberado.
+    """Los mg de sodio de UNA RACIÓN DEL REGISTRY (la porción base, sin escalar). Sin dato ⇒ 0.
 
-    Un nutriente ausente no es cero (ARQ27-P0-03), pero aquí la alternativa —tratarlo como
-    infinito— descartaría todo plato cuyo catálogo no publique sodio y dejaría al día sin candidatos.
-    El que mide de verdad es el reviewer del LLM al que cae el día si esto se pasa.
+    [P1-AUDITORIA-ARQ-VERIFICADA · 2026-09-11] Ya no es lo que se carga al presupuesto del día: el
+    plato servido está escalado por `factor` (banda 0,60–1,60) e inclinado ±35 %, y este número no lo
+    sabía — el arenque guisado a 1,6× llevaba ~1.970 mg y se anotaban 1.232. Ahora el día se carga con
+    `_sodio_de_comida` (el plato armado, línea a línea contra el catálogo) y esto queda como RESPALDO
+    escalado cuando ninguna línea publica sodio. El 0 por ausencia sigue existiendo, pero ya no se
+    disfraza de medición: `_sodio_de_comida` devuelve cuántas líneas quedaron sin dato.
     """
     try:
         return float(((plantilla or {}).get("nutrition_per_serving") or {}).get("sodium_mg") or 0.0)
     except (TypeError, ValueError):
         return 0.0
+
+
+def _sodio_de_comida(comida: dict, catalogo: dict, plantilla: Optional[dict] = None,
+                     factor: float = 1.0) -> tuple:
+    """mg de sodio del plato ARMADO y cuántas de sus líneas no tienen dato: `(mg, sin_dato)`.
+
+    Suma `sodium_mg_per_100g` × gramos servidos por línea de `ingredients` («160 g de Pechuga de
+    pollo»). Una línea sin dato NO se cuenta como 0 a secas: se cuenta en `sin_dato`, y si NINGUNA
+    línea publica sodio se usa como respaldo la ración del registry × `factor`. Un nutriente ausente
+    no es cero (ARQ27-P0-03); aquí tampoco es infinito — es un número con su incertidumbre dicha.
+    """
+    total, sin_dato, con_dato = 0.0, 0, 0
+    for linea in ((comida or {}).get("ingredients") or []):
+        m = _RE_LINEA.match(str(linea).strip())
+        if not m:
+            sin_dato += 1
+            continue
+        fila = (catalogo or {}).get(m.group(2).strip()) or {}
+        v = fila.get("sodium_mg_per_100g")
+        if v is None:
+            sin_dato += 1
+            continue
+        try:
+            total += float(v) * float(m.group(1)) / 100.0
+            con_dato += 1
+        except (TypeError, ValueError):
+            sin_dato += 1
+    if con_dato == 0 and plantilla is not None:
+        try:
+            return _sodio_de(plantilla) * max(0.0, float(factor)), sin_dato
+        except (TypeError, ValueError):
+            return 0.0, sin_dato
+    return total, sin_dato
 
 
 def _retinol_preformado_mcg(meal: dict, catalogo: dict) -> float:
@@ -527,8 +803,12 @@ def _retinol_preformado_mcg(meal: dict, catalogo: dict) -> float:
         except (TypeError, ValueError):
             continue
         nombre = m.group(2).strip()
-        if not any(t in _norm(nombre) for t in ("higado", "viscera", "mondongo", "molleja",
-                                                "rinon", "pate", "foie")):
+        # [P1-AUDITORIA-ARQ-VERIFICADA · 2026-09-11] El mismo vocabulario que el ancla `_RETINOL_ANIMAL`
+        # (aquí había una copia más corta) y por PALABRA: «pate» como subcadena habría casado
+        # «empate»/«patacón» el día que entren al catálogo.
+        _n = _norm(nombre)
+        if not any(re.search(r"(?<![a-z])" + re.escape(_norm(t)) + r"(?![a-z])", _n)
+                   for t in _RETINOL_ANIMAL):
             continue
         fila = (catalogo or {}).get(nombre) or {}
         v = fila.get("vitamin_a_mcg_rae_per_100g")
@@ -543,34 +823,39 @@ def _retinol_preformado_mcg(meal: dict, catalogo: dict) -> float:
 def verifica_comida(meal: dict, form_data: dict, catalogo: dict) -> list:
     """Las violaciones de una comida armada sin LLM. Lista vacía = se puede servir.
 
-    Un día que sale de este módulo se persiste **sin pasar por `assemble_plan_node`**: ni reviewer
-    médico, ni capa clínica determinista, ni los scans de alérgeno y dieta. Es la misma clase de
-    superficie que `P0-DEGRADED-SAFETY-SCAN` cerró para el path degradado, y la lección de aquel
-    P-fix es literal: al filtro de arriba se le escapan cosas (plurales como Bulgur/Pistachos) y lo
-    que las caza es el backstop.
+    Es una verificación del PLATO ARMADO, no del candidato: que `template_candidates` ya filtre por
+    alérgeno y dieta no la hace redundante (al filtro se le escapan plurales como Bulgur/Pistachos —
+    `P0-DEGRADED-SAFETY-SCAN`— y lo que los caza es el backstop). El día sí pasa después por
+    `assemble_plan_node` y `review_plan_node` (ver el docstring del módulo); esto es la primera línea,
+    no la única. Defensa en profundidad, que es como este repo trata todo lo clínico.
 
-    Que `template_candidates` ya filtre por alérgeno y dieta NO hace esto redundante: eso es un
-    filtro de CANDIDATOS y esto es una verificación del PLATO ARMADO. Defensa en profundidad, que
-    es como este repo trata todo lo clínico.
+    [P1-AUDITORIA-ARQ-VERIFICADA · 2026-09-11] Tres cambios de semántica, los tres medidos:
+      · El backstop clínico es **fail-secure**: si no se puede evaluar (import, excepción), el plato
+        se rechaza con una violación sintética — igual que `clinical_backstop_for_meal` hace por
+        dentro y que el path degradado reproduce. Aquí un `except: logger.debug` convertía «no pude
+        evaluar» en «sin violaciones» = servible: dos rutas, el mismo validador, semánticas opuestas.
+      · El escáner culinario corre COMPLETO (`culinary_contract_scan`, las 11 comprobaciones), no una
+        lista a mano de 6: el camino del LLM ya lo usaba entero. Sigue siendo `warn` por contrato
+        (`CULINARY_CONTRACT_GUARD`): aquí rechaza al candidato, nunca al día.
+      · «No se pudo medir» se dice en `warning`, no en `debug`.
     """
     fuera = []
     try:
         import culinary_coherence as _cc
-        idx = _cc.build_culinary_index(list(catalogo.values()) if catalogo else [])
+        filas = list(catalogo.values()) if catalogo else []
         m = {"meal": meal.get("meal"), "name": meal.get("name"),
              "ingredients": meal.get("ingredients"), "recipe": meal.get("recipe")}
-        for capa in ("_v1_verbo_alimento", "_v2_estado_imposible", "_v3_huerfanos",
-                     "_v4_cantidad_inconsistente", "_v5_paso_usa_lo_que_no_esta",
-                     "_v6_paso_pide_mas_que_la_lista"):
-            fn = getattr(_cc, capa, None)
-            if fn is None:
-                continue
-            try:
-                fuera.extend(fn({}, m, idx) or [])
-            except Exception:                                          # noqa: BLE001
-                pass
+        mini = {"days": [{"day": 1, "meals": [m]}]}
+        fuera.extend(_cc.culinary_contract_scan(mini, filas) or [])
+        try:
+            if _cc.scan_coverage(mini, filas) is None:
+                logger.warning(f"[P1-DETERMINISTIC-DAY] escáner culinario sin cobertura medible para "
+                               f"{meal.get('name')!r}: el veredicto culinario de este plato no informa")
+        except Exception:                                              # noqa: BLE001
+            pass
     except Exception as e:                                             # noqa: BLE001
-        logger.debug(f"[P1-DETERMINISTIC-DAY] escáner culinario no-op: {e!r}")
+        logger.warning(f"[P1-DETERMINISTIC-DAY] escáner culinario NO EVALUABLE ({e!r}); el plato sigue "
+                       f"a juicio del backstop clínico y del review del plan")
 
     # Import LAZY a propósito: `clinical_backstop_for_meal` vive en `graph_orchestrator`, que
     # importa media casa. A nivel de módulo sería un ciclo y haría este archivo imposible de probar
@@ -585,7 +870,10 @@ def verifica_comida(meal: dict, form_data: dict, catalogo: dict) -> list:
                  or fd.get("dietType") or fd.get("diet_type"))
         fuera.extend(_backstop(meal, allergies=alergias, diet_type=dieta, form_data=fd) or [])
     except Exception as e:                                             # noqa: BLE001
-        logger.debug(f"[P1-DETERMINISTIC-DAY] backstop clínico no-op: {e!r}")
+        logger.warning(f"[P1-DETERMINISTIC-DAY] backstop clínico NO EVALUABLE para "
+                       f"{meal.get('name')!r}: {type(e).__name__}: {e} — se rechaza el plato (fail-secure)")
+        fuera.append(f"backstop clínico no evaluable ({type(e).__name__}): el plato no se sirve sin "
+                     f"verificación de alérgenos y dieta")
 
     # [P1-RETINOL-PREFORMADO · 2026-09-09] Tercera capa. El techo de vitamina A YA EXISTÍA en el
     # repo (`graph_orchestrator._MICRO_CLOSER_UL`, «vit_a_mcg»: 3000) y sólo miraba a quien SUBE:
@@ -601,7 +889,11 @@ def verifica_comida(meal: dict, form_data: dict, catalogo: dict) -> list:
                 f"tolerable del DÍA ({_UL_RETINOL_MCG:.0f} mcg RAE, IOM); hepatotóxico y "
                 f"teratogénico acumulado")
     except Exception as e:                                             # noqa: BLE001
-        logger.debug(f"[P1-RETINOL-PREFORMADO] techo no-op: {e!r}")
+        # [P1-AUDITORIA-ARQ-VERIFICADA · 2026-09-11] Un techo clínico que no se puede evaluar no
+        # aprueba: el plato se rechaza (el siguiente candidato lo intenta) y se dice en warning.
+        logger.warning(f"[P1-RETINOL-PREFORMADO] techo NO EVALUABLE para {meal.get('name')!r}: {e!r}")
+        fuera.append(f"techo de retinol no evaluable ({type(e).__name__}): el plato no se sirve sin "
+                     f"verificación de vitamina A preformada")
     return fuera
 
 def _tier_presupuesto(form_data) -> Optional[str]:
@@ -629,6 +921,61 @@ def _tier_presupuesto(form_data) -> Optional[str]:
     return str(b) if b else None
 
 
+def _candidatos(dr, country: str, franja: str, familias: list, fijados, **kw) -> tuple:
+    """[P1-AUDITORIA-ARQ-VERIFICADA · 2026-09-11] Los `template_id` candidatos de una franja y de
+    dónde salen: `(ids, fuente)` con fuente ∈ {`fijado`, `vivo`, `vivo_sin_familia`}.
+
+      1. Si el run trae CandidateSet fijado (`_blueprint_slice.registry.candidates["día:franja"]`,
+         ARQ27-F3) manda: los ids fijados que siguen pasando los filtros VIVOS (alergia, dieta,
+         nutrientes exigidos, mercado, durabilidad), en el orden fijado. «Cambiar el registro activo no
+         altera los candidatos de un run ya iniciado» — este módulo era la única ruta que lo violaba:
+         consultaba el snapshot vivo y recompilar la biblioteca a mitad de plan cambiaba los platos.
+      2. Sin fijados, la consulta viva por familia de proteína, en el orden del pool y sin duplicados.
+         Si el pool no deja ninguna plantilla servible se pierde la FAMILIA, no el día — y queda dicho
+         en la fuente, porque una restricción que se suelta en silencio es indistinguible de una que
+         se cumplió.
+      3. Sin familia: la consulta viva sin restricción.
+    """
+    k = int(kw.get("k") or 25)
+    # Alergias y dieta van EXPLÍCITAS en la llamada (no dentro de `**kw`): son los dos filtros que este
+    # módulo olvidó una vez (`P1-DETERMINISTIC-DAY-BACKSTOP`) y el test parser-based los busca aquí.
+    exclude_allergens = kw.pop("exclude_allergens", ())
+    diet = kw.pop("diet", None)
+
+    def _ids(fam):
+        return [str(c["template_id"]) for c in
+                (dr.template_candidates(country, franja, fam, exclude_allergens=exclude_allergens,
+                                        diet=diet, **kw) or [])
+                if c.get("template_id")]
+
+    vivos, vistos = [], set()
+    for fam in (familias or [None]):
+        for tid in _ids(fam):
+            if tid not in vistos:
+                vistos.add(tid)
+                vivos.append(tid)
+    fuente = "vivo"
+    if familias and not vivos:
+        vivos, fuente = _ids(None), "vivo_sin_familia"
+        logger.info(f"[P1-DETERMINISTIC-DAY] {franja}: ninguna plantilla sirve a la familia "
+                    f"{familias!r}; se elige sin familia y se deja constancia")
+    if fijados:
+        base = set(vivos) or set(_ids(None))
+        fij = [str(t) for t in fijados if str(t) in base]
+        if fij:
+            return fij, "fijado"
+        logger.info(f"[P1-DETERMINISTIC-DAY] {franja}: los {len(fijados)} candidatos fijados al run no "
+                    f"pasan los filtros vivos; se reconsulta el registro")
+    return vivos[:max(1, k)], fuente
+
+
+# [P1-AUDITORIA-ARQ-VERIFICADA · 2026-09-11] El contrato de `skeleton_day` es el del `DaySkeletonModel`
+# que emite el planificador (`meal_types`, `protein_pool`); la forma del blueprint (`slots`, `protein`)
+# se acepta también. `day_num` es el día RELATIVO al bloque (1-based, como lo entrega
+# `generate_days_parallel_node`); el índice absoluto del plan sale de `_blueprint_slice.days_offset` y
+# es el que gobierna la rotación, la cocina del día, la durabilidad y el CandidateSet fijado. Cada
+# comida deja rastro: `_candidate_source`, `_sodium_mg_est` (y `_sodium_unknown_lines` cuando el
+# catálogo calla), `_prep_time_source`, `_recipe_water_scaled`.
 def build_day_for_skeleton(nutrition, form_data, skeleton_day, day_num, user_id=None):
     """Punto de entrada desde el pipeline. Devuelve un día completo o `None`.
 
@@ -657,8 +1004,23 @@ def build_day_for_skeleton(nutrition, form_data, skeleton_day, day_num, user_id=
         objetivo_dia = {"kcal": kcal, "protein_g": _num(m.get("protein")),
                         "carbs_g": _num(m.get("carbs")), "fats_g": _num(m.get("fats"))}
 
-        from constants import cultural_country_for_form_data      # la COCINA, no el mercado (I16)
-        country = cultural_country_for_form_data(form_data or {}) or "DO"
+        _fd = form_data or {}
+        # El día ABSOLUTO del plan (0-based): la rebanada del bloque sabe dónde empieza.
+        _sl = _fd.get("_blueprint_slice") if isinstance(_fd.get("_blueprint_slice"), dict) else {}
+        try:
+            _offset = int((_sl or {}).get("days_offset") or 0)
+        except (TypeError, ValueError):
+            _offset = 0
+        try:
+            day_index = _offset + max(0, int(day_num or 1) - 1)
+        except (TypeError, ValueError):
+            day_index = _offset
+
+        from constants import cultural_country_for_form_data, country_for_form_data   # cocina ≠ mercado (I16)
+        # La cocina de ESTE día: con mezcla de cocinas el blueprint asigna una por día; sin `day_index`
+        # todos los días caían en la principal.
+        country = cultural_country_for_form_data(_fd, day_index=day_index) or "DO"
+        mercado = country_for_form_data(_fd)
 
         import dish_registry as dr
         from shopping_calculator import get_master_ingredients
@@ -669,40 +1031,48 @@ def build_day_for_skeleton(nutrition, form_data, skeleton_day, day_num, user_id=
         if not por_id:
             return None
 
-        _fd = form_data or {}
         _hp = _fd.get("health_profile") or {}
         _alergias = [str(a) for a in (_hp.get("allergies") or _fd.get("allergies") or []) if a]
         _dieta = _hp.get("dietType") or _fd.get("dietType") or _fd.get("diet_type")
+        _eff = _fd.get("_plan_policy_effective") or {}
+        # Los filtros que `horizon` ya pasa al MISMO `template_candidates` y este módulo omitía: los
+        # nutrientes que el perfil clínico exige conocer (renal ⇒ fósforo y potasio; HTA ⇒ sodio), el
+        # MERCADO donde se compra (una cocina dominicana comprada en España no puede ofrecer lo que ese
+        # mercado no vende) y la durabilidad bajo compra única. Se leen de `horizon`, no se reescriben.
+        _req_nutr, _dur = (), {}
+        try:
+            import horizon as _hz
+            _req_nutr = tuple(_hz.required_nutrients(_eff) or ())
+            _dur = dict(_hz._dur_kwargs(_eff, day_index) or {})
+        except Exception as _e_hz:                                     # noqa: BLE001
+            logger.warning(f"[P1-DETERMINISTIC-DAY] filtros de horizon no disponibles ({_e_hz!r}); "
+                           f"se consulta sin nutrientes exigidos ni durabilidad")
+        _kw_cands = dict(k=_candidatos_k(), rotate=int(day_index), exclude_allergens=_alergias,
+                         diet=_dieta, budget_tier=_tier_presupuesto(_fd), market_country=mercado,
+                         require_known_nutrients=_req_nutr, **_dur)
+        _fijados = ((_sl.get("registry") or {}).get("candidates") or {}) if _sl else {}
 
-        slots = [s for s in (skeleton_day or {}).get("slots") or []] or list(_REPARTO)
+        franjas = _franjas_del_dia(skeleton_day)
+        if not franjas:
+            return None            # una franja que no sabemos repartir: que la haga el LLM
+        familias = _familias_del_dia(skeleton_day)
         meals = []
         usadas_hoy = set()   # [P1-DIA-DETERMINISTA-VARIEDAD] ninguna plantilla dos veces el mismo día
         _sodio_dia = 0.0     # [P1-SODIO-DEL-DIA-DETERMINISTA] presupuesto del DÍA, no del plato
+        _sodio_sin_dato = 0  # líneas servidas sin sodio en el catálogo: el presupuesto es cota INFERIOR
         # [P1-DIA-DETERMINISTA-VARIEDAD-DEL-DIA · 2026-09-10] Las dos puertas de variedad del camino del
         # modelo: proteína que fatiga repetida el mismo día, y la misma base ligera en desayuno y merienda.
         _proteinas_hoy, _bases_hoy = set(), set()
         _labels_var, _tokens_var = _variedad_ssot()
         _repite_ok = _repetir_proteina_ok(form_data)
         _variedad_on = _variedad_del_dia_on()
-        for slot in slots:
-            r = _REPARTO.get(_norm(slot))
-            if not r:
-                return None            # una franja que no sabemos repartir: que la haga el LLM
+        for etiqueta, slot, r in franjas:
             obj = {k: v * r for k, v in objetivo_dia.items()}
-            # Los filtros VAN AQUI. El docstring de este modulo decia que el CandidateSet ya
-            # filtraba por alergia y dieta — y es verdad de `_registry_slice`, pero esta funcion
-            # llama a `template_candidates` DIRECTAMENTE y no se los pasaba. Lo cazó el backstop
-            # clinico rechazando un desayuno con huevo a un alergico al huevo: la defensa en
-            # profundidad funcionó, y precisamente por eso el hueco de arriba hay que cerrarlo —
-            # una última linea de defensa que trabaja sola dejó de ser defensa en profundidad.
             # [P1-CANDIDATO-CON-PRECIO · 2026-09-09] Éste es el ÚNICO camino donde el candidato se
             # convierte en plato sin que el modelo pueda ignorarlo: sin el tier aquí, el filtro de
-            # precio sólo aconseja.
-            tids = [c["template_id"] for c in
-                    dr.template_candidates(country, slot, (skeleton_day or {}).get("protein"),
-                                           k=_candidatos_k(), rotate=int(day_num or 0),
-                                           exclude_allergens=_alergias, diet=_dieta,
-                                           budget_tier=_tier_presupuesto(_fd))]
+            # precio sólo aconseja. Los demás filtros viajan en `_kw_cands`, los mismos que `horizon`.
+            tids, _fuente = _candidatos(dr, country, slot, familias,
+                                        _fijados.get(f"{day_index}:{slot}"), **_kw_cands)
             # [P1-DIA-DETERMINISTA-VARIEDAD · 2026-09-09] La lista, no el ganador: `rotacion` mueve
             # la cabeza por día (medido: 7 platos distintos en 56 comidas cuando era siempre el
             # mejor), y si al elegido le falta la receta congelada se prueba el siguiente en vez de
@@ -712,13 +1082,14 @@ def build_day_for_skeleton(nutrition, form_data, skeleton_day, day_num, user_id=
             _reserva = None
             _reserva_var = None
             _elegibles = elegir_plantillas(tids, obj, catalogo, por_id, slot,
-                                           rotacion=_rotacion_de(day_num, slot))
+                                           rotacion=_rotacion_de(day_index, slot))
             # Primero los que no se han servido hoy; los ya usados quedan de RESPALDO al final, no
             # descartados: quedarse sin día por no repetir es peor que repetir.
             for _t, _f in sorted(_elegibles, key=lambda p: str(p[0].get("template_id")) in usadas_hoy):
                 _c = construir_comida(_t, _f, catalogo, slot, country, obj)
                 if not _c:
                     continue
+                _c["meal"] = etiqueta          # la etiqueta del esqueleto, tal cual («Merienda AM»)
                 # [P1-CATALOGO-PROTEINA-DESAYUNO · 2026-09-09] La verificación va DENTRO del bucle.
                 # Estaba fuera, así que un plato que se construía pero no pasaba el escáner tiraba
                 # el DÍA ENTERO en vez de ceder el turno al siguiente candidato — y sólo se notó al
@@ -740,18 +1111,28 @@ def build_day_for_skeleton(nutrition, form_data, skeleton_day, day_num, user_id=
                 # demás, prefiere el que deja el día por debajo del techo. Preferir y no descartar
                 # es deliberado: el sodio es un presupuesto del DÍA, no un veneno del plato, y un
                 # guard que tira candidatos sanos por una cuenta acumulada castiga al último slot.
-                _na = _sodio_de(_t)
+                # [P1-AUDITORIA-ARQ-VERIFICADA · 2026-09-11] El sodio es el del plato SERVIDO
+                # (escalado e inclinado), línea a línea contra el catálogo — no la ración base del
+                # registry, que ignoraba el factor (hasta 1,6×) y disfrazaba de 0 lo desconocido.
+                _na, _na_sin = _sodio_de_comida(_c, catalogo, _t, _f)
+                _c["_sodium_mg_est"] = int(round(_na))
+                if _na_sin:
+                    _c["_sodium_unknown_lines"] = int(_na_sin)
                 if _sodio_dia + _na > _techo_sodio():
                     # [P1-DIA-DETERMINISTA-VARIEDAD-DEL-DIA] La condición era `… > techo and
                     # _reserva is None`: el PRIMER salado quedaba de reserva y el SEGUNDO se aceptaba
-                    # de largo. Todo el que se pasa se salta; sólo el primero se guarda.
+                    # de largo. Todo el que se pasa se salta. [P1-AUDITORIA-ARQ-VERIFICADA] Y de
+                    # reserva queda el MENOS salado, no el primero: la lista viene ordenada por
+                    # macros, nunca por sodio, y servir de respaldo al más salado castigaba el día.
                     if _reserva is None:
-                        _reserva = (_c, _t, _na)          # el mejor «demasiado salado», por si no hay otro
+                        _reserva = (_c, _t, _na)
+                    elif _na < _reserva[2]:
+                        _reserva = (_c, _t, _na)
                     continue
                 # [P1-DIA-DETERMINISTA-VARIEDAD-DEL-DIA · 2026-09-10] Las dos puertas de variedad del
                 # modelo, con el mismo patrón: el que choca queda de reserva y se prueba el siguiente.
                 _prot = str(_t.get("protein") or "")
-                _bl = _bases_ligeras_de(_c, _tokens_var) if _norm(slot) in ("desayuno", "merienda") else set()
+                _bl = _bases_ligeras_de(_c, _tokens_var) if slot in ("desayuno", "merienda") else set()
                 if _variedad_on and ((not _repite_ok and _prot in _labels_var and _prot in _proteinas_hoy)
                                      or (_bl & _bases_hoy)):
                     if _reserva_var is None:
@@ -772,33 +1153,37 @@ def build_day_for_skeleton(nutrition, form_data, skeleton_day, day_num, user_id=
                     f"[P1-DETERMINISTIC-DAY] día {day_num} RECHAZADO en {slot}: ninguno de los "
                     f"{len(_elegibles)} candidatos pasó → cae al LLM. Último motivo: {_ultimo_motivo}")
                 return None
+            comida["_candidate_source"] = _fuente
             # Lo servido —y sólo lo servido— entra en las cuentas del día, en UN sitio.
             usadas_hoy.add(str(_t_srv.get("template_id")))
             _sodio_dia += _na_srv
+            _sodio_sin_dato += int(comida.get("_sodium_unknown_lines") or 0)
             if str(_t_srv.get("protein") or "") in _labels_var:
                 _proteinas_hoy.add(str(_t_srv.get("protein")))
-            if _norm(slot) in ("desayuno", "merienda"):
+            if slot in ("desayuno", "merienda"):
                 _bases_hoy |= _bases_ligeras_de(comida, _tokens_var)
             meals.append(comida)
         if not meals:
             return None
-        # [P1-SODIO-DEL-DIA-DETERMINISTA · 2026-09-10] La última palabra. El techo de sodio del
-        # repo (`SODIUM_DAY_CEILING_MG`, OMS 2.000 mg) y su autofix viven en `assemble_plan_node`,
-        # y un día que sale de aquí NO pasa por ahí — la misma clase de agujero que cerró
-        # `P0-DEGRADED-SAFETY-SCAN` para el path degradado, y la misma que dejó pasar el hígado.
-        # Medido sobre los 30 días reales del dueño con su canario encendido: **13 de 30 días por
-        # encima del techo**, máximo 3.867 mg. Acotar la sal declarada a 0,5 g bajó eso a 1 de 30;
-        # ese último lo empuja el arenque, que es salado de ORIGEN y ningún dato lo arregla.
-        # Se devuelve `None` —que en este módulo significa «que lo haga el LLM»— porque el LLM SÍ
-        # pasa por el autofix de sodio. Ceder un día al modelo es más barato que servirlo.
+        # [P1-SODIO-DEL-DIA-DETERMINISTA · 2026-09-10] La última palabra local. El techo de sodio del
+        # repo (`SODIUM_DAY_CEILING_MG`, OMS 2.000 mg) y su autofix viven en `assemble_plan_node`, por
+        # donde este día TAMBIÉN pasa; devolver `None` aquí —«que lo haga el LLM»— sigue siendo más
+        # barato que servir un día que ya sabemos que rompe el techo y dejar que un autofix lo repare
+        # a ciegas. Medido sobre los 30 días reales del dueño: 13 de 30 por encima del techo con la
+        # sal declarada; acotarla a 0,5 g bajó eso a 1 de 30 (el arenque, salado de ORIGEN).
         if _sodio_dia > _techo_sodio():
             logger.warning(f"[P1-SODIO-DEL-DIA-DETERMINISTA] día {day_num} RECHAZADO: "
                            f"{_sodio_dia:.0f} mg de sodio > techo {_techo_sodio():.0f} mg → cae al LLM")
             return None
         logger.info(f"[P1-DETERMINISTIC-DAY] día {day_num} armado sin LLM: "
                     f"{len(meals)} comidas, {sum(m['calories'] for m in meals)} kcal, "
-                    f"{_sodio_dia:.0f} mg de sodio")
-        return {"day": day_num, "meals": meals, "_day_source": "deterministic"}
+                    f"{_sodio_dia:.0f} mg de sodio"
+                    + (f" (cota inferior: {_sodio_sin_dato} líneas sin dato)" if _sodio_sin_dato else ""))
+        dia = {"day": day_num, "meals": meals, "_day_source": "deterministic",
+               "_day_index": int(day_index), "_sodium_mg_est": int(round(_sodio_dia))}
+        if _sodio_sin_dato:
+            dia["_sodium_unknown_lines"] = int(_sodio_sin_dato)
+        return dia
     except Exception as e:                                          # noqa: BLE001
         logger.debug(f"[P1-DETERMINISTIC-DAY] no-op para el día {day_num}: {e!r}")
         return None

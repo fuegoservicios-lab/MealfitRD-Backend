@@ -9752,6 +9752,28 @@ _COHERENCE_OVERSUPPLY_PROTEIN_KEEP_RE = re.compile(
 )
 
 
+def _mark_guard_unevaluable(plan_result, stage: str, exc: BaseException) -> None:
+    """[P1-AUDITORIA-ARQ-VERIFICADA · 2026-09-11] «El guard no pudo evaluar» deja marca en el plan.
+
+    Antes, una excepción en el lado esperado (`expected_sum_from_recipes`) o en el guard entero
+    devolvía `[]` — indistinguible de «lista coherente» — incluso en modo `block`: el plan se
+    aprobaba, sin entrada en `_shopping_coherence_block_history` ni métrica, y el dashboard lo contaba
+    como limpio. Ahora `plan_result["_shopping_coherence_unevaluable"]` dice en qué etapa falló y con
+    qué error, y el log es `error`, no `warning`. NO bloquea a propósito: bloquear por un fallo del
+    propio guard reintentaría el MISMO cálculo determinista hasta la dead letter (la lección de
+    `MEALFIT_GUARD_UNDERSUPPLY_SEVERE`). Un plan con esta marca fue entregado SIN veredicto de
+    coherencia — y eso, dicho, es distinto de aprobado. Fail-safe: nunca lanza."""
+    try:
+        from datetime import datetime as _dt, timezone as _tz
+        if isinstance(plan_result, dict):
+            plan_result["_shopping_coherence_unevaluable"] = {
+                "stage": str(stage), "error": type(exc).__name__, "detail": str(exc)[:200],
+                "at": _dt.now(_tz.utc).isoformat(),
+            }
+    except Exception:
+        pass
+
+
 def run_shopping_coherence_guard(plan_result: dict, *, mode_override: str = None, multiplier: float = None) -> list:
     """[P1-shop-coh-1 · 2026-05-07 / P1-C 2026-05-07 v2] Guard recetas↔lista.
     Honra `MEALFIT_SHOPPING_COHERENCE_GUARD` (off|warn|block).
@@ -9950,7 +9972,10 @@ def run_shopping_coherence_guard(plan_result: dict, *, mode_override: str = None
             apply_protein_yield=_apply_protein_yield,
         )
     except Exception as e:
-        logging.warning(f"[COH-GUARD] expected_sum_from_recipes falló: {e}")
+        # [P1-AUDITORIA-ARQ-VERIFICADA · 2026-09-11] «no pude evaluar» ya no viaja disfrazado de «sin
+        # divergencias»: marca en el plan + log de error. Sigue sin bloquear (ver `_mark_guard_unevaluable`).
+        logging.error(f"[COH-GUARD] expected_sum_from_recipes falló: {type(e).__name__}: {e} — guard NO EVALUABLE")
+        _mark_guard_unevaluable(plan_result, "expected_sum_from_recipes", e)
         return []
 
     # [P1-TRIP-WINDOWED-PERISHABLES · 2026-08-02] ESPEJO OBLIGATORIO del ventaneo.
@@ -10410,7 +10435,10 @@ def run_shopping_coherence_guard_and_append_history(
             multiplier=multiplier,
         ) or []
     except Exception as e:
-        logging.warning(f"[COH-GUARD/HELPER] excepción en guard (no aborta): {e}")
+        # [P1-AUDITORIA-ARQ-VERIFICADA · 2026-09-11] `[], False` = «sin divergencias y sin bloqueo»
+        # era también lo que salía cuando el guard REVENTABA. Ahora el plan lleva la marca.
+        logging.error(f"[COH-GUARD/HELPER] excepción en guard (no aborta): {type(e).__name__}: {e} — guard NO EVALUABLE")
+        _mark_guard_unevaluable(plan_result, "run_shopping_coherence_guard", e)
         return [], False
 
     block_set = bool(plan_result.get("_shopping_coherence_block"))

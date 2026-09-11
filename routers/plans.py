@@ -3410,6 +3410,14 @@ def api_shift_plan(response: Response, data: dict = Body(...), verified_user_id:
         # shift, sin penalizar el uso legítimo. Costo LLM real sigue en
         # `llm_usage_events` (telemetría separada del paywall).
 
+        # [P1-AUDITORIA-ARQ-VERIFICADA · 2026-09-11] El shift ENCOGE la ventana viva y reescribe
+        # `plan_data`: la revisión subía, la proyección quedaba `stale` y nadie la re-encolaba (fail-open).
+        try:
+            from plan_jobs import enqueue_shopping_reprojection as _f5_reproj
+            _f5_reproj(plan_id, user_id, reason="shift_plan", plan_data=shifted_data)
+        except Exception as _f5_e:
+            logger.debug(f"[ARQ25-F5] reprojection (shift_plan) no encolada: {_f5_e!r}")
+
         return {
             "success": True,
             "message": "Plan actualizado a la fecha.",
@@ -5829,6 +5837,30 @@ def api_expand_recipe(data: dict = Body(...), verified_user_id: Optional[str] = 
         # Ahora: en fallo NO cobramos, NO persistimos y NO marcamos isExpanded —
         # devolvemos la original para display con `success=False` para que el
         # frontend abra el original SIN el flag (permitiendo retry posterior).
+        # [P1-AUDITORIA-ARQ-VERIFICADA · 2026-09-11] Una receta CONGELADA de la biblioteca —escrita,
+        # revisada y firmada, con sus pasos de seguridad (los 74 °C del pollo)— no se reescribe en «3
+        # pilares» por el LLM: `RECIPE_EXPANSION_PROMPT` exige exactamente 3 pasos y nadie miraba
+        # `_recipe_source`. Si el plato viene de la biblioteca (lo dice el propio meal, la fila
+        # persistida, o sus pasos son byte-idénticos a los congelados), se devuelve tal cual, sin LLM.
+        try:
+            from recipe_library import recipe_for_dish_name as _rl_recipe
+            _frozen = _rl_recipe(req_name)
+            _es_biblioteca = bool(_frozen) and (
+                data.get("_recipe_source") == "library"
+                or (isinstance(locals().get("existing_meal"), dict) and locals()["existing_meal"].get("_recipe_source") == "library")
+                or [str(x) for x in (req_recipe_original or [])] == [str(x) for x in _frozen]
+            )
+        except Exception:
+            _frozen, _es_biblioteca = None, False
+        if _es_biblioteca:
+            logger.info(f"[P1-AUDITORIA-ARQ-VERIFICADA] /recipe/expand: {req_name!r} es receta congelada de la "
+                        f"biblioteca; se devuelve sin reescritura LLM")
+            return {
+                "success": True,
+                "expanded_recipe": [str(x) for x in (req_recipe_original or _frozen)],
+                "recipe_source": "library",
+                "already_complete": True,
+            }
         expanded_steps = expand_recipe_agent(data)
 
         if not expanded_steps:
@@ -10270,6 +10302,16 @@ def api_set_grocery_start_date(
             )
             cycle_updated = bool(after and after.get("v"))
 
+        # [P1-AUDITORIA-ARQ-VERIFICADA · 2026-09-11] `grocery_start_date` alimenta `active_trip_window_days`,
+        # que el read model de la proyección usa como `window_days`: cambiarla dejaba la proyección `stale`
+        # sin re-encolarla (fail-open; sólo si algo cambió).
+        if grocery_updated or cycle_updated:
+            try:
+                from plan_jobs import enqueue_shopping_reprojection as _f5_reproj
+                _f5_reproj(plan_id, verified_user_id, reason="grocery_start_date")
+            except Exception as _f5_e:
+                logger.debug(f"[ARQ25-F5] reprojection (grocery_start_date) no encolada: {_f5_e!r}")
+
         return {
             "success": True,
             "grocery_updated": grocery_updated,
@@ -10439,6 +10481,14 @@ def api_restore_plan_local(
                     )
                     params.extend([plan_id, verified_user_id])
                     cursor.execute(sql, tuple(params))  # pyright: ignore[reportArgumentType]
+
+        # [P1-AUDITORIA-ARQ-VERIFICADA · 2026-09-11] overwrite completo de `plan_data` ⇒ la lista cambió:
+        # re-encolar la proyección (fail-open) en vez de dejarla `stale` hasta el próximo swap.
+        try:
+            from plan_jobs import enqueue_shopping_reprojection as _f5_reproj
+            _f5_reproj(plan_id, verified_user_id, reason="restore_local")
+        except Exception as _f5_e:
+            logger.debug(f"[ARQ25-F5] reprojection (restore_local) no encolada: {_f5_e!r}")
 
         return {"success": True}
         # P1-OPEN-1-END
@@ -11066,6 +11116,16 @@ def api_restock(data: dict = Body(...), verified_user_id: Optional[str] = Depend
             except Exception as _uf_e:
                 logger.debug(f"[P1-PLAN-FREEZE] hook restock no-op: {type(_uf_e).__name__}: {_uf_e}")
 
+            # [P1-AUDITORIA-ARQ-VERIFICADA · 2026-09-11] «Ya compré» cambia la Nevera que la proyección
+            # LEE, sin tocar `plan_data`: la revisión no subía y la proyección seguía `ready` con un
+            # número calculado contra un inventario que ya no existe. La huella de la Nevera decide.
+            if real_plan_id:
+                try:
+                    from plan_jobs import enqueue_shopping_reprojection as _f5_reproj
+                    _f5_reproj(str(real_plan_id), user_id, reason="restock")
+                except Exception as _f5_e:
+                    logger.debug(f"[ARQ25-F5] reprojection (restock) no encolada: {_f5_e!r}")
+
             return {
                 "success": True,
                 "message": "¡Despensa actualizada exitosamente!",
@@ -11192,6 +11252,16 @@ def api_consume_inventory(data: dict = Body(...), verified_user_id: Optional[str
         if success:
             # [P1-NEVERA-QUOTA-EXEMPT · 2026-06-24] NO log_api_usage: vaciar consumidos es inventario sin
             # costo LLM; contarlo abortaba la renovación de plan al cap con "Error al sincronizar despensa".
+            # [P1-AUDITORIA-ARQ-VERIFICADA · 2026-09-11] La Nevera que la proyección LEE cambió sin tocar
+            # `plan_data`: re-encolar la del plan activo (fail-open; la huella de la Nevera decide).
+            try:
+                from db import get_latest_meal_plan_with_id as _latest_for_reproj
+                from plan_jobs import enqueue_shopping_reprojection as _f5_reproj
+                _row = _latest_for_reproj(user_id) or {}
+                if _row.get("id"):
+                    _f5_reproj(str(_row["id"]), user_id, reason="inventory_consume", plan_data=_row.get("plan_data"))
+            except Exception as _f5_e:
+                logger.debug(f"[ARQ25-F5] reprojection (inventory_consume) no encolada: {_f5_e!r}")
             return {"success": True, "message": "Inventario actualizado exitosamente."}
         else:
             return {"success": False, "message": "Hubo un problema vaciando algunos ingredientes."}
@@ -13931,6 +14001,14 @@ def api_restore_plan(
             cancelled_chunks, cancelled_source_chunks,
             released_locks, is_noop,
         )
+        # [P1-AUDITORIA-ARQ-VERIFICADA · 2026-09-11] el plan activo cambió de contenido entero: la
+        # proyección de compras del target hay que re-encolarla (fail-open; no en el no-op).
+        if not is_noop:
+            try:
+                from plan_jobs import enqueue_shopping_reprojection as _f5_reproj
+                _f5_reproj(str(target_plan_id), verified_user_id, reason="restore")
+            except Exception as _f5_e:
+                logger.debug(f"[ARQ25-F5] reprojection (restore) no encolada: {_f5_e!r}")
         return {
             "success": True,
             "target_plan_id": str(target_plan_id),
