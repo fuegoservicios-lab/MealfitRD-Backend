@@ -166,6 +166,8 @@ def correr(perfiles=None) -> dict:
     for pid, perfil in cp.PROFILES.items():
         if perfiles and pid not in perfiles:
             continue
+        if not (perfil or {}).get("library"):
+            continue   # [P1-PLAN-LOTE-3 · B5] el perfil neutral no tiene biblioteca: la cocina es el mercado
         # El perfil es un dict y su mercado se llama `market_default`; `country` no existe y devolvía None,
         # con lo que las seis bibliotecas cargaban el snapshot por defecto y la tabla salía SEIS VECES IGUAL.
         country = (perfil or {}).get("market_default") or (perfil or {}).get("library")
