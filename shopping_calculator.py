@@ -954,7 +954,22 @@ def _apply_condiment_sanity_cap(market_obj, master_item, display_category, cycle
     market_obj["market_qty"] = str(_tope)
     _unidad = str(market_obj.get("market_unit") or "").strip()
     if _unidad:
-        market_obj["display_qty"] = f"{_tope} {_unidad}{'s' if _tope > 1 and not _unidad.endswith('s') else ''}"
+        _dq_old = str(market_obj.get("display_qty") or "")
+        _dq_new = f"{_tope} {_unidad}{'s' if _tope > 1 and not _unidad.endswith('s') else ''}"
+        market_obj["display_qty"] = _dq_new
+        # [P1-PLAN-LOTE-2 · 2026-09-11 · D3] `display_string` («3 frascos de Orégano») seguía diciendo la
+        # cantidad VIEJA: el tope reescribía `display_qty` y el coste, pero la frase que ve el usuario en la
+        # lista y en el PDF no. Se reescribe el prefijo de cantidad; si la frase no empieza por la cantidad
+        # que teníamos, se sustituye sólo el número inicial (y el plural del envase cuando queda en 1).
+        _ds = market_obj.get("display_string")
+        if isinstance(_ds, str) and _ds.strip():
+            if _dq_old and _ds.startswith(_dq_old):
+                market_obj["display_string"] = _dq_new + _ds[len(_dq_old):]
+            else:
+                _ds2 = re.sub(r"^\s*\d+(?:[.,]\d+)?\s*", f"{_tope} ", _ds, count=1)
+                if _tope == 1 and _unidad:
+                    _ds2 = re.sub(rf"^(1\s+){re.escape(_unidad.rstrip('s'))}s\b", rf"\g<1>{_unidad.rstrip('s')}", _ds2, count=1)
+                market_obj["display_string"] = _ds2
     for _k in ("estimated_cost_rd", "estimated_cost"):
         try:
             _c = market_obj.get(_k)
@@ -1547,6 +1562,11 @@ _CONTAINER_UNIT_ALIASES = frozenset({
     'bolsa', 'bolsas', 'bolsita', 'bolsitas',
     'sobre', 'sobres', 'sobrecito', 'sobrecitos',
 })
+# [P1-PLAN-LOTE-2 · 2026-09-11 · D1] Un SOBRE es una unidad DENTRO del envase, no el envase. «1 sobre de
+# sazón» pesaba los 40 g de la CAJA de 8 (`container_weight_g`) en vez de los 5 g del sobre
+# (`density_g_per_unit`): necesidad 8× y aviso de recompra en falso con 2+ sobres por semana. Con la
+# densidad por unidad curada, la unidad manda; sin ella, el envase como siempre.
+_SACHET_UNITS = frozenset({'sobre', 'sobres', 'sobrecito', 'sobrecitos'})
 
 # Pesos default por categoría cuando master_ingredients NO tiene
 # `container_weight_g` poblado. Defaults conservadores que reflejan tamaños
@@ -8657,6 +8677,10 @@ def canonicalize_cebolla(name) -> str | None:
         or re.search(r'\bcebolletas?\b', n_low)
     ):
         return 'Cebollín'
+    # [P1-PLAN-LOTE-2 · 2026-09-11 · D2] Un polvo o deshidratado NO es la cebolla fresca: «40 g de Cebolla
+    # en polvo» acababa comprando ½ lb de Cebolla. Misma excepción que el Ajo en `_consolidate_inline_canon`.
+    if _ES_POLVO_RX.search(n_low):
+        return None
     if re.search(r'\bcebollas?\b', n_low):
         return 'Cebolla'
     return None
@@ -8903,6 +8927,11 @@ _TRAILING_MODIFIERS_ES = frozenset({
 })
 
 
+# [P1-PLAN-LOTE-2 · 2026-09-11 · D2] Formas que cambian el PRODUCTO, no la variedad: un polvo, un
+# deshidratado o unas escamas se compran, se pesan y se cotizan aparte de su alimento fresco.
+_ES_POLVO_RX = re.compile(r"\b(?:en\s+polvo|deshidratad[ao]s?|en\s+escamas)\b", re.IGNORECASE)
+
+
 def _build_shopping_master_map() -> dict:
     """[P1-VEG-BACKFILL-HONESTY · 2026-08-03] SSOT del índice nombre/alias -> fila de
     `master_ingredients`. Extraído de `aggregate_and_deduct_shopping_list` (bloque "RESOLUCIÓN DE
@@ -8954,6 +8983,11 @@ def canonicalize_shopping_food_name(name: str, master_map: dict) -> str:
     """
     m_item = master_map.get(name) or master_map.get(name.lower()) or master_map.get(name.title())
     canonical_name = m_item["name"] if m_item else name
+    # [P1-PLAN-LOTE-2 · 2026-09-11 · D2] Una fila del catálogo que ES un polvo/deshidratado no se colapsa a
+    # su familia fresca. El chain existe para fundir variantes intercambiables (cebolla roja/blanca); un
+    # polvo es otra compra, otro precio y otra densidad — y el catálogo ya lo tiene como fila propia.
+    if m_item and _ES_POLVO_RX.search(str(canonical_name)):
+        return canonical_name
 
     # [P1-COUNTRY-SYSTEM-F2 · T7 fix-round 1 · 2026-08-17] La identidad EXACTA de una fila de
     # catálogo-país (altas T5/T6/T7, `is_country_catalog_unpriced_item`) es AUTORITATIVA — salta
@@ -11275,10 +11309,17 @@ def aggregate_and_deduct_shopping_list(plan_ingredients: list[str], consumed_ing
             else:
                 is_container_alias = (u_lower == db_container) or (u_lower in _CONTAINER_UNIT_ALIASES)
                 if is_container_alias:
-                    effective_g = (
-                        container_weight_g if container_weight_g > 0
-                        else _fallback_container_weight_g(master_item.get("category"))
-                    )
+                    try:
+                        _dens_u = float(master_item.get("density_g_per_unit") or 0)
+                    except (TypeError, ValueError):
+                        _dens_u = 0.0
+                    if u_lower in _SACHET_UNITS and _dens_u > 0:
+                        effective_g = _dens_u      # [P1-PLAN-LOTE-2 · D1] el sobre, no la caja
+                    else:
+                        effective_g = (
+                            container_weight_g if container_weight_g > 0
+                            else _fallback_container_weight_g(master_item.get("category"))
+                        )
                     if effective_g > 0:
                         units['g'] = units.get('g', 0) + q * effective_g
                         mapped_to_g = True

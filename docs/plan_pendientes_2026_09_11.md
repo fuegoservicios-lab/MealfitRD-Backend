@@ -14,6 +14,12 @@ Inventario consolidado de trabajo abierto, con fuente. Nace de la verificación 
 | F1 | ✅ ya estaba | la CHECK `user_profiles_country_supported` y su índice EXISTEN en Neon y el libro tiene su fila (el doc del 08-23 quedó viejo) |
 | F4 | 👤 dueño | secreto `SIBLING_REPO_TOKEN` (o deploy key, ver mensaje) — el repo backend sólo tiene `ZAI_API_KEY` |
 | CI | ✅ 2026-09-11 | `P0-CI-TIMEOUT-15` (`ff0162a`): TODAS las corridas desde el 09-09 morían a los 15 min; ahora xdist + cuarentena + 50 min |
+| B6 | ✅ 2026-09-11 | `P1-PLAN-LOTE-2`: memoria entre días (`memoria=` compartida por el run + días persistidos del bloque anterior); los saturados van al final. Falta medir sobre el canario si las 9 ventanas rotas bajan; después decidir `MEALFIT_DETERMINISTIC_DAY_SAME_DAY_VARIETY` (B8) |
+| D1, D2, D3 | ✅ 2026-09-11 | `P1-PLAN-LOTE-2`: el sobre pesa `density_g_per_unit` (5 g) y no la caja (40 g); «Cebolla en polvo» y todo polvo/deshidratado con fila propia deja de colapsar al fresco; el tope de condimentos reescribe `display_string`. Hallazgo colateral (sin tocar): el chain también colapsa «Plátano verde»/«Plátano maduro» → «Plátano» y «Guineo verde» → «Guineo» (13 filas pre-existentes anotadas en `test_p1_country_system_f2`) — para un mangú no da igual |
+| G2 | ✅ 2026-09-11 | `P1-PLAN-LOTE-2`: `get_user_tier` lee 'free' como 'gratis'; migración `p1_plan_tier_gratis` (UPDATE + DEFAULT + CHECK). Los 6 usuarios e2e y el `plus` sin suscripción ya no existen (2 perfiles vivos, ambos 'free' → 'gratis') |
+| G3 | ✅ 2026-09-11 | `P1-PLAN-LOTE-2`: la purga con `delete_auth_user=true` borra `neon_auth."user"` (cascade a `session`/`account`) y olvida el positivo cacheado del guard P1-AUTH-CUENTA-BORRADA |
+| F7 | ✅ parcial | `p1_fosforo_borojo_hoja_santa`: Borojó 160 mg y Hoja santa 38 mg con fuente citada. **Achiote, Chontaduro y Champús siguen en NULL a sabiendas**: la TCAC 2018 del ICBF es un PDF escaneado sin texto; si el dueño tiene la tabla en Excel, se completan en 5 min |
+| F10 | ✅ 2026-09-11 | el marker `P1-COUNTRY-CAPS-DO-LEXICON` ya está en `MEMORY.md` |
 | G6 | 👤 dueño | faltan `NEON_DATABASE_URL`, `NEON_DATABASE_URL_POOLED`, `COHERE_API_KEY`, `OPENAI_API_KEY` en Actions |
 
 ## Cómo leerlo

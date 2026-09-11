@@ -256,7 +256,8 @@ def test_el_enganche_al_pipeline_existe_y_es_0_NETO():
     src = go.read_text(encoding="utf-8")
     assert "from deterministic_day import build_day_for_skeleton as _det_day" in src, (
         "el import desapareció: el ensamblador vuelve a estar desenchufado")
-    assert "_det_day(nutrition, form_data, skel_day, day_num) or await _generate_day_hedged" in src, (
+    # [P1-PLAN-LOTE-2 · B6] el enganche lleva ahora la memoria entre días del run (`memoria=_det_prev`)
+    assert "_det_day(nutrition, form_data, skel_day, day_num, memoria=_det_prev) or await _generate_day_hedged" in src, (
         "el enganche debe ir ANTES del LLM y caer a él con `or`: si se invierte, el día "
         "determinista nunca se usa y la feature queda inerte otra vez")
 

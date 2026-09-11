@@ -104,13 +104,30 @@ Un día que no construye devuelve `None` y lo genera el modelo: el estado de sie
 
 ---
 
+## Memoria entre días (P1-PLAN-LOTE-2 · 2026-09-11)
+
+Cada día se armaba sin saber qué comieron los anteriores. Medido el 09-10 sobre los 30 días del dueño:
+el tope de repetición exacta de la política (`balanced`: 2 veces por 7 días) se rompía en **9 ventanas**
+con las puertas de variedad del día apagadas y en **28** con ellas encendidas. Ahora
+`generate_days_parallel_node` comparte una lista (`_det_prev`) entre los días del run —las tareas se
+crean en orden y este módulo corre en la primera fase síncrona de cada una, así que el día N ve a los
+N-1— y `build_day_for_skeleton(..., memoria=)` la **lee y la actualiza**. Si el bloque continúa un plan
+(`days_offset` > 0), los días ya entregados se cargan **una vez** de la base y entran al principio.
+`_conteo_ventana` cuenta cuántas veces se sirvió cada plantilla en los 6 días anteriores (por
+`_template_id` o, para días del modelo, por nombre exacto contra el registry) y `elegir_plantillas`
+manda al **final** —no fuera— a las que agotaron su cuota (`_max_repeticion_7d`, de
+`horizon.repetition_limits_for`). La rotación gira sólo sobre los frescos. Quedarse sin plato por no
+repetir sigue siendo peor que repetir: si todos están saturados, se sirve igual.
+
 ## Seguridad: el backstop no es opcional
 
-Un día que sale de aquí se persiste **sin pasar por `assemble_plan_node`** — ni reviewer médico,
-ni scans de alérgeno y dieta. Es la misma clase de superficie que `P0-DEGRADED-SAFETY-SCAN` cerró
-para el path degradado. Por eso `verifica_comida` corre las seis capas del escáner culinario **y**
-`clinical_backstop_for_meal` sobre cada plato antes de devolver el día, y una violación **rechaza**
-el día entero (cae al LLM), no sólo se registra.
+Un día que sale de aquí **sí pasa por `assemble_plan_node` y `review_plan_node`** (las aristas del grafo
+son incondicionales — la versión anterior de este párrafo afirmaba lo contrario, y esa premisa falsa
+vivió en cuatro docstrings y dos commits hasta P1-AUDITORIA-ARQ-VERIFICADA). Lo que NO tiene es un
+segundo juicio antes de entrar en el plan: por eso `verifica_comida` corre las seis capas del escáner
+culinario **y** `clinical_backstop_for_meal` sobre cada plato antes de devolver el día, y una violación
+**rechaza** el día entero (cae al LLM), no sólo se registra. Es la misma clase de superficie que
+`P0-DEGRADED-SAFETY-SCAN` cerró para el path degradado, que ése sí bypasea el ensamblador.
 
 El backstop ya cazó un fallo real: el selector llamaba a `template_candidates` **sin pasarle las
 alergias**, y un desayuno con huevo llegó a un alérgico al huevo. Se cerró pasando

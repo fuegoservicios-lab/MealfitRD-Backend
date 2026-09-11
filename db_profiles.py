@@ -190,6 +190,16 @@ _AUTH_ROW_ALIVE_IDS: set = set()
 _AUTH_ROW_ALIVE_MAX = 50_000
 
 
+def forget_auth_row_alive(user_id: str) -> None:
+    """[P1-PLAN-LOTE-2 · 2026-09-11 · G3] Olvida el positivo cacheado de `auth_user_row_exists` para una
+    identidad que ACABA de borrarse: sin esto, el proceso que la borró seguiría aceptando su token hasta
+    reiniciar (el positivo se cachea sin TTL a propósito)."""
+    try:
+        _AUTH_ROW_ALIVE_IDS.discard(str(user_id or ""))
+    except Exception:                                                  # noqa: BLE001
+        pass
+
+
 def auth_user_row_exists(user_id: str) -> Optional[bool]:
     """¿Sigue existiendo la IDENTIDAD de este `sub` en `neon_auth."user"`?
 

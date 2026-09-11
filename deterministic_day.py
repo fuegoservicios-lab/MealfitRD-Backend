@@ -368,7 +368,8 @@ def _rotacion_de(day_num, slot: str) -> int:
 
 
 def elegir_plantillas(tids, objetivo, catalogo: dict, por_id: dict, slot: str = "",
-                      rotacion: int = 0) -> list:
+                      rotacion: int = 0, saturados: Optional[dict] = None,
+                      max_rep: Optional[int] = None) -> list:
     """Los candidatos ELEGIBLES para esta franja, del mejor al peor dentro del empate, rotados por
     el día. Lista vacía si ninguno sirve.
 
@@ -428,10 +429,21 @@ def elegir_plantillas(tids, objetivo, catalogo: dict, por_id: dict, slot: str = 
     # la ventana giraba siempre sobre los mismos diez. Todos los elegibles ya pasaron las dos puertas
     # (empate de score o piso de proteína), así que girar sobre el conjunto entero no sirve un plato
     # peor: sirve más platos distintos. El corte sigue acotando cuántos se prueban por franja.
+    # [P1-PLAN-LOTE-2 · 2026-09-11 · B6] Los que ya agotaron su cuota de repetición en la ventana de 7
+    # días (`saturados` = {template_id: veces servido en los 6 días anteriores}, `max_rep` = el tope de
+    # la política del usuario) van al FINAL, no fuera: quedarse sin plato por no repetir es peor que
+    # repetir — la misma doctrina que `usadas_hoy`. La rotación gira sólo sobre los frescos, para que la
+    # cabeza rotada no vuelva a ser un saturado.
+    _llenos: list = []
+    if saturados and max_rep:
+        def _lleno(p):
+            return int((saturados or {}).get(str((p[0] or {}).get("template_id")), 0)) >= int(max_rep)
+        _llenos = [p for p in elegibles if _lleno(p)]
+        elegibles = [p for p in elegibles if not _lleno(p)]
     if rotacion and len(elegibles) > 1:
         r = int(rotacion) % len(elegibles)
         elegibles = elegibles[r:] + elegibles[:r]
-    return elegibles[:_empate_max()]
+    return (elegibles + _llenos)[:_empate_max()]
 
 
 def elegir_plantilla(tids, objetivo, catalogo: dict, por_id: dict, slot: str = ""):
@@ -970,6 +982,89 @@ def _candidatos(dr, country: str, franja: str, familias: list, fijados, **kw) ->
     return vivos[:max(1, k)], fuente
 
 
+# ---------------------------------------------------------------------------
+# [P1-PLAN-LOTE-2 · 2026-09-11 · B6] Memoria ENTRE días.
+#
+# Medido el 09-10 sobre los 30 días del dueño: el día determinista rompía el tope de repetición exacta de
+# su política (`balanced`: 2 veces por 7 días) en 9 ventanas aun con las puertas de variedad del día
+# APAGADAS, y encenderlas lo subía a 28 — porque cada día se armaba sin saber qué comieron los anteriores.
+# La memoria es una lista que el llamador comparte entre los días del run (`generate_days_parallel_node`
+# crea las tareas en orden y este módulo corre en la primera fase síncrona de cada una, así que el día N
+# ve a los N-1 anteriores) y que este módulo LEE y ACTUALIZA. Si el bloque continúa un plan ya entregado
+# (`days_offset` > 0), los días persistidos se cargan UNA vez de la base y entran al principio.
+
+
+def _max_repeticion_7d(form_data) -> int:
+    """El tope de repetición exacta por 7 días de la política compilada del usuario (`balanced` ⇒ 2).
+    La tabla es `horizon.repetition_limits_for`; aquí no se escribe otra."""
+    try:
+        import horizon
+        eff = (form_data or {}).get("_plan_policy_effective") or {}
+        modo = (eff.get("recurrence") or {}).get("global_mode") or "balanced"
+        return int(horizon.repetition_limits_for(modo).get("max_exact_repeat_per_7d") or 2)
+    except Exception:                                                  # noqa: BLE001
+        return 2
+
+
+def _dias_previos_persistidos(form_data, user_id) -> list:
+    """Los días YA ENTREGADOS del plan que este bloque continúa (archivados + vivos, en orden). `[]` si
+    no hay usuario, plan o base: fail-open, la memoria se queda con los días de este run."""
+    try:
+        import json
+        uid = user_id or (form_data or {}).get("user_id")
+        if not uid:
+            return []
+        from db import get_latest_meal_plan_with_id
+        row = get_latest_meal_plan_with_id(str(uid))
+        pd = row.get("plan_data") if isinstance(row, dict) else None
+        if isinstance(pd, str):
+            pd = json.loads(pd)
+        if not isinstance(pd, dict):
+            return []
+        return [d for d in list(pd.get("_archived_days") or []) + list(pd.get("days") or [])
+                if isinstance(d, dict)]
+    except Exception:                                                  # noqa: BLE001
+        return []
+
+
+def _tid_de_comida(comida, indice_nombre: dict) -> Optional[str]:
+    """La plantilla de un plato servido: por `_template_id`/`_recipe_template_id` (días deterministas y
+    recetas congeladas) o por nombre EXACTO normalizado contra el registry (días del modelo)."""
+    if not isinstance(comida, dict):
+        return None
+    tid = comida.get("_template_id") or comida.get("_recipe_template_id")
+    if tid:
+        return str(tid)
+    return indice_nombre.get(_norm(comida.get("name")))
+
+
+def _conteo_ventana(memoria, offset, form_data=None, user_id=None, por_id=None, ventana: int = 6) -> dict:
+    """{template_id: veces servido} en los últimos `ventana` días de la memoria. Vacío si no hay memoria."""
+    if not isinstance(memoria, list):
+        return {}
+    try:
+        # Sólo un bloque que CONTINÚA un plan (offset > 0) carga lo entregado; en el primer bloque el «último
+        # plan» del usuario sería otro plan, de otra semana, y contar sus repeticiones sería mentir.
+        if int(offset or 0) > 0 and not any(isinstance(d, dict) and d.get("_persistido") for d in memoria):
+            previos = [dict(d, _persistido=True) for d in _dias_previos_persistidos(form_data, user_id)]
+            # centinela aunque no haya nada: la base se consulta UNA vez por run, no una vez por día
+            memoria[0:0] = previos or [{"_persistido": True, "meals": []}]
+        indice = {}
+        for tid, t in (por_id or {}).items():
+            n = _norm((t or {}).get("name"))
+            if n:
+                indice[n] = str(tid)
+        conteo: dict = {}
+        for d in [x for x in memoria if isinstance(x, dict)][-max(1, int(ventana)):]:
+            for m in (d.get("meals") or []):
+                tid = _tid_de_comida(m, indice)
+                if tid:
+                    conteo[tid] = conteo.get(tid, 0) + 1
+        return conteo
+    except Exception:                                                  # noqa: BLE001
+        return {}
+
+
 # [P1-AUDITORIA-ARQ-VERIFICADA · 2026-09-11] El contrato de `skeleton_day` es el del `DaySkeletonModel`
 # que emite el planificador (`meal_types`, `protein_pool`); la forma del blueprint (`slots`, `protein`)
 # se acepta también. `day_num` es el día RELATIVO al bloque (1-based, como lo entrega
@@ -977,7 +1072,7 @@ def _candidatos(dr, country: str, franja: str, familias: list, fijados, **kw) ->
 # es el que gobierna la rotación, la cocina del día, la durabilidad y el CandidateSet fijado. Cada
 # comida deja rastro: `_candidate_source`, `_sodium_mg_est` (y `_sodium_unknown_lines` cuando el
 # catálogo calla), `_prep_time_source`, `_recipe_water_scaled`.
-def build_day_for_skeleton(nutrition, form_data, skeleton_day, day_num, user_id=None):
+def build_day_for_skeleton(nutrition, form_data, skeleton_day, day_num, user_id=None, memoria=None):
     """Punto de entrada desde el pipeline. Devuelve un día completo o `None`.
 
     `None` es la respuesta segura y la más frecuente: knob apagado, sin objetivos, sin candidatos
@@ -1067,6 +1162,10 @@ def build_day_for_skeleton(nutrition, form_data, skeleton_day, day_num, user_id=
         _labels_var, _tokens_var = _variedad_ssot()
         _repite_ok = _repetir_proteina_ok(form_data)
         _variedad_on = _variedad_del_dia_on()
+        # [P1-PLAN-LOTE-2 · 2026-09-11 · B6] Lo servido en los 6 días anteriores y el tope de repetición
+        # exacta por 7 días de la política (`balanced` ⇒ 2). Se PREFIERE al fresco, no se descarta al repetido.
+        _saturados = _conteo_ventana(memoria, _offset, _fd, _uid, por_id)
+        _max_rep = _max_repeticion_7d(_fd)
         for etiqueta, slot, r in franjas:
             obj = {k: v * r for k, v in objetivo_dia.items()}
             # [P1-CANDIDATO-CON-PRECIO · 2026-09-09] Éste es el ÚNICO camino donde el candidato se
@@ -1083,7 +1182,8 @@ def build_day_for_skeleton(nutrition, form_data, skeleton_day, day_num, user_id=
             _reserva = None
             _reserva_var = None
             _elegibles = elegir_plantillas(tids, obj, catalogo, por_id, slot,
-                                           rotacion=_rotacion_de(day_index, slot))
+                                           rotacion=_rotacion_de(day_index, slot),
+                                           saturados=_saturados, max_rep=_max_rep)
             # Primero los que no se han servido hoy; los ya usados quedan de RESPALDO al final, no
             # descartados: quedarse sin día por no repetir es peor que repetir.
             for _t, _f in sorted(_elegibles, key=lambda p: str(p[0].get("template_id")) in usadas_hoy):
@@ -1184,6 +1284,8 @@ def build_day_for_skeleton(nutrition, form_data, skeleton_day, day_num, user_id=
                "_day_index": int(day_index), "_sodium_mg_est": int(round(_sodio_dia))}
         if _sodio_sin_dato:
             dia["_sodium_unknown_lines"] = int(_sodio_sin_dato)
+        if isinstance(memoria, list):
+            memoria.append(dia)      # quien lee la memoria la actualiza: el día siguiente ya cuenta con éste
         return dia
     except Exception as e:                                          # noqa: BLE001
         logger.debug(f"[P1-DETERMINISTIC-DAY] no-op para el día {day_num}: {e!r}")

@@ -233,6 +233,9 @@ def invalidate_tier_cache(user_id: Optional[str] = None) -> None:
             _TIER_CACHE.pop(str(user_id), None)
 
 
+_TIER_ALIASES = {"free": "gratis", "gratuito": "gratis", "gratuita": "gratis"}
+
+
 def get_user_tier(user_id: Optional[str]) -> str:
     """Resuelve `plan_tier` para `user_id` con cache TTL.
 
@@ -261,6 +264,11 @@ def get_user_tier(user_id: Optional[str]) -> str:
         raw = get_user_plan_tier(uid)
         if raw:
             tier = str(raw).strip().lower() or "gratis"
+            # [P1-PLAN-LOTE-2 · 2026-09-11 · G2] El esquema nacía con DEFAULT 'free' y el código habla en
+            # 'gratis': los perfiles nuevos llevaban un tier que ninguna tabla conocía y caían al defecto por
+            # `.get(tier, gratis)`. La migración p1_plan_tier_gratis normaliza filas y DEFAULT; esto cubre lo
+            # que quede en caché o llegue por otro escritor.
+            tier = _TIER_ALIASES.get(tier, tier)
     except Exception as e:
         # Fail-cheap documentado: blip de DB → tier FREE cacheado ≤TTL.
         logger.debug(

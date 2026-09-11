@@ -96,7 +96,11 @@ _PROCESS_START_ISO = datetime.now(timezone.utc).isoformat()
 # salen del god-file (A6), «sin dato» de sodio deja de ser 0 (A3), el revisor consume el guard NO evaluable
 # (A4), el precio entra en la huella de la proyección (A5), el agua de la receta congelada escala en el
 # camino LLM (A7) y tres docs dejan de reabrir gaps cerrados (A8).
-_LAST_KNOWN_PFIX = "P1-PLAN-FASE-A · 2026-09-11"
+# [P1-PLAN-LOTE-2 · 2026-09-11] Segundo lote del plan de pendientes: memoria entre días del día determinista
+# (B6), el sobre pesa lo que pesa el sobre (D1), un polvo no compra su alimento fresco (D2), el tope de
+# condimentos reescribe la frase que ve el usuario (D3), plan_tier canónico (G2), la purga borra la identidad
+# en Neon Auth (G3), fósforo con fuente para dos filas (F7).
+_LAST_KNOWN_PFIX = "P1-PLAN-LOTE-2 · 2026-09-11"
 
 # [P1-SENTRY-SAMPLE-COST · 2026-05-12] Sentry sampling driven from env vars
 # con default seguro 0.1 (10%). Pre-fix tenía `traces_sample_rate=1.0` y

@@ -9288,9 +9288,10 @@ async def generate_days_parallel_node(state: PlanState) -> dict:
     parallel_start = time.time()
     generated_days = []
 
+    _det_prev: list = []  # [P1-PLAN-LOTE-2 · B6] memoria entre días deterministas del run (la lee y la actualiza deterministic_day)
     async def _safe_gen(skel_day, day_num, temp_override=None):
         try:
-            result = _det_day(nutrition, form_data, skel_day, day_num) or await _generate_day_hedged(skel_day, day_num, temp_override)  # [P1-DETERMINISTIC-DAY] knob OFF ⇒ None ⇒ camino de siempre
+            result = _det_day(nutrition, form_data, skel_day, day_num, memoria=_det_prev) or await _generate_day_hedged(skel_day, day_num, temp_override)  # [P1-DETERMINISTIC-DAY] knob OFF ⇒ None ⇒ camino de siempre
             return day_num, result, None
         except Exception as e:
             return day_num, None, e

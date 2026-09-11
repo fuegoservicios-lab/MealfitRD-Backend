@@ -779,6 +779,14 @@ class IngredientNutritionDB:
             if info.density_g_per_unit:
                 return q * info.density_g_per_unit
             return None
+        if canonical == "sobre":
+            # [P1-PLAN-LOTE-2 · 2026-09-11 · D1] El sobre es la UNIDAD y la caja el envase: con densidad por
+            # unidad curada («5 g por sobre») manda ella; sin ella, el peso del envase, como el resto.
+            if info.density_g_per_unit:
+                return q * info.density_g_per_unit
+            if info.container_weight_g:
+                return q * info.container_weight_g
+            return None
         if canonical in ("paquete", "caja", "bolsa", "lata", "pote", "botella"):
             if info.container_weight_g:
                 return q * info.container_weight_g

@@ -15,7 +15,8 @@ def test_el_ensamblador_esta_enchufado_al_generador_de_dias():
     src = (_BACKEND / "graph_orchestrator.py").read_text(encoding="utf-8")
     assert "from deterministic_day import build_day_for_skeleton as _det_day" in src, (
         "sin el import, el ensamblador vuelve a ser una feature inerte")
-    assert ("_det_day(nutrition, form_data, skel_day, day_num) or "
+    # [P1-PLAN-LOTE-2 · B6] el enganche lleva ahora la memoria entre días del run (`memoria=_det_prev`)
+    assert ("_det_day(nutrition, form_data, skel_day, day_num, memoria=_det_prev) or "
             "await _generate_day_hedged") in src, (
         "el determinista va PRIMERO y el LLM es el `or`. Invertirlo deja el día determinista "
         "inalcanzable — inerte con toda la apariencia de estar enchufado")

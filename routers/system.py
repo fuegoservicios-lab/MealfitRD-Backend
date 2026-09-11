@@ -1055,26 +1055,30 @@ def admin_purge_account_data(request: Request, body: _PurgeAccountBody):
 
     auth_user_deleted = False
     if body.delete_auth_user:
-        # [P1-NEON-AUTH-MIGRATION · 2026-06-13] El cliente de Auth legacy fue
-        # eliminado (el símbolo de compatibilidad siempre es None). El borrado
-        # del usuario de auth ahora requiere la admin API de Neon Auth (Better
-        # Auth admin plugin / DELETE sobre `neon_auth.user`). La purga de datos
-        # user-scoped (delete_account_data, arriba) YA ocurrió; solo queda
-        # el registro de identidad en Neon Auth. TODO: cablear Neon Auth
-        # admin API cuando se exponga el secret server key. Por ahora,
-        # no-op gracioso (no rompe el endpoint).
+        # [P1-PLAN-LOTE-2 · 2026-09-11 · G3] La identidad vive en la MISMA base: Neon Auth (Better Auth)
+        # guarda sus tablas en el esquema `neon_auth` de este Postgres, y `account` y `session` cuelgan
+        # de `"user"` con ON DELETE CASCADE (medido en producción: 3 FKs). No hace falta la admin API que
+        # el TODO de P1-NEON-AUTH-MIGRATION esperaba — era el único TODO real del backend y llevaba tres
+        # meses convirtiendo `delete_auth_user=true` en un no-op con aviso. El incidente de la cuenta
+        # resucitada (P1-AUTH-CUENTA-BORRADA, 08-sep) ya cerró la otra mitad: un token válido de una
+        # identidad borrada se rechaza; aquí además se olvida su positivo cacheado en ESTE proceso.
         try:
-            from db_core import _storage_client
-            if _storage_client:
-                _storage_client.auth.admin.delete_user(body.user_id)
-                auth_user_deleted = True
-            else:
+            from db_core import execute_sql_write
+            from db_profiles import forget_auth_row_alive
+            _borradas = execute_sql_write(
+                'DELETE FROM neon_auth."user" WHERE id = %s RETURNING id', (body.user_id,), returning=True,
+            )
+            forget_auth_row_alive(body.user_id)
+            _n = len(_borradas) if isinstance(_borradas, list) else 0
+            result["auth_rows_deleted"] = _n
+            auth_user_deleted = _n > 0
+            if not auth_user_deleted:
                 result.setdefault("warnings", []).append(
-                    "auth_user no borrado: requiere Neon Auth admin API (pendiente)."
+                    "auth_user no encontrado en neon_auth.user (¿ya borrado?)."
                 )
         except Exception as e:
-            result.setdefault("errors", []).append(f"auth.admin.delete_user: {e}")
-            logger.error(f"[P1-NEON-AUTH] delete auth user {body.user_id} falló: {e}")
+            result.setdefault("errors", []).append(f"neon_auth.user delete: {e}")
+            logger.error(f"[P1-PLAN-LOTE-2] delete neon_auth.user {body.user_id} falló: {e}")
 
     return {"success": len(result.get("errors", [])) == 0, "auth_user_deleted": auth_user_deleted, **result}
 

@@ -329,5 +329,8 @@ def test_a8_docs_actualizados():
 
 
 def test_marker_bumpeado():
+    """El marker avanza con cada lote; lo que queda anclado es que la Fase A se cerró con su comentario en
+    `app.py` (el cross-link marker↔test lo hace `test_p2_hist_audit_14_marker_test_link`)."""
     import app
-    assert app._LAST_KNOWN_PFIX == "P1-PLAN-FASE-A · 2026-09-11"
+    assert "[P1-PLAN-FASE-A · 2026-09-11]" in _src("app.py")
+    assert app._LAST_KNOWN_PFIX.startswith("P1-PLAN-") and "2026-09-11" in app._LAST_KNOWN_PFIX
