@@ -71,7 +71,13 @@ jobs:
   backend-tests:
     name: Backend pytest
     runs-on: ubuntu-latest
-    timeout-minutes: 15
+    # [P0-CI-TIMEOUT-15 · 2026-09-11] Eran 15 min y la suite completa (24.361 tests sin e2e, en
+    # serie y con `-v`) tarda más: TODAS las corridas desde el 2026-09-09 acababan `cancelled` por
+    # «exceeded the maximum execution time» — dos por push (main + glm-migration), ~32 min de
+    # runner y CERO veredictos. Un gate que nunca termina no gatea nada. Ahora corre como el gate
+    # local (`scripts/run_ci.ps1`): xdist con `--dist loadfile` (los tests dependientes del orden
+    # viven en el mismo fichero), cuarentena en serie, y techo holgado para el runner de 2 vCPU.
+    timeout-minutes: 50
     env:
       # [P1-I18N-CI-SIN-VEREDICTO] `secrets.*` no se evalúa dentro de un `if` de step; aquí
       # sí, y la condición del checkout del hermano lee esta variable.
@@ -158,7 +164,7 @@ jobs:
         run: |
           python -m pip install --upgrade pip
           pip install -r requirements.txt
-          pip install pytest pytest-asyncio
+          pip install pytest pytest-asyncio pytest-xdist
 
       - name: Run pytest (parser-based + functional)
         working-directory: backend
@@ -177,7 +183,13 @@ jobs:
           # verdad — los 400, incluido el P0 clínico de alérgenos. Las dos piezas se
           # complementan: el fixture es la degradación legible cuando falta el secret; el
           # checkout es lo único que hace que lleguen a ejecutarse en Actions alguna vez.
-          pytest tests/ -v --tb=short -m "not e2e"
+          # [P0-CI-TIMEOUT-15 · 2026-09-11] Misma receta que `scripts/run_ci.ps1` (fase A en
+          # paralelo + cuarentena en serie). Sin `-v`: 24k líneas de log no son un veredicto.
+          export PYTHONHASHSEED=0
+          QUARANTINE="tests/test_chunked_generation.py tests/test_renewal_15d.py tests/test_p1_17_purge_graph_cache.py tests/test_p1_audit_hist_7_lesson_whitelist_ssot.py tests/test_p1_bg_thread_timeout.py tests/test_p2_cap_log_level.py"
+          IGNORE=""; for f in $QUARANTINE; do IGNORE="$IGNORE --ignore $f"; done
+          pytest tests/ -q --tb=short -m "not e2e" -n 2 --dist loadfile --max-worker-restart=4 $IGNORE
+          pytest $QUARANTINE -q --tb=short -m "not e2e" -x -p no:cacheprovider
 
       # [P2-E2E-CATALOGO-PAIS-SIN-NINGUN-GATE · 2026-08-23] Sólo el fichero
       # read-only que contrasta el catálogo vivo. Nunca `-m e2e` sobre toda la
