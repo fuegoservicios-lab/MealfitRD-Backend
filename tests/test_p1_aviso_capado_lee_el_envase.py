@@ -115,24 +115,46 @@ def _sazon_de(res):
     return next(i for i in res if isinstance(i, dict) and "sazón" in str(i.get("name", "")).lower())
 
 
-def test_el_agregador_de_punta_a_punta(catalogo_sazon):
-    """El repro literal. Aquí el tope lo registra el AGREGADOR, no el test: prueba que la comparación
-    en gramos se abre en el camino real (el `post` del tope es lo que llega a la función)."""
+def test_un_sobre_pesa_cinco_gramos_y_no_dispara_el_tope(catalogo_sazon):
+    """[P1-PLAN-LOTE-2 · 2026-09-11 · D1] El repro literal del dueño, con la aritmética VERDADERA: «1 sobre»
+    son los 5 g del sobre (`density_g_per_unit`), no los 40 g de la caja de 8. Con 5 g no hay tope que
+    disparar (28 g), la caja cubre de sobra y no hay aviso. La versión anterior de este test exigía el
+    tope aquí porque el sobre entraba pesando la caja entera — codificaba el defecto como especificación."""
     item = _sazon_de(sc.aggregate_and_deduct_shopping_list(
         ["1 sobre de sazón con culantro y achiote"], structured=True))
-    assert item.get("capped_by") == "P6-SPICE-CAP", item
+    assert item.get("base_qty") == 5.0 and item.get("base_unit") == "g", item
+    assert item.get("capped_by") is None, item
     assert (item["market_unit"], item["market_qty_numeric"]) == ("caja", 1.0)
     assert item.get("estimated_cost_rd") == 99.0
     assert "recompra" not in item["display_qty"], item["display_qty"]
 
 
+def test_el_agregador_de_punta_a_punta(catalogo_sazon):
+    """Ocho sobres = 40 g: el tope de especias (28 g) SÍ dispara en el camino real y la comparación en
+    gramos se abre con el `post` del tope — pero la caja de 8 cubre los 8 sobres que el plan pide, así
+    que la nota no manda recomprar. Es la promesa original de P1-AVISO-CAPADO-LEE-EL-ENVASE con pesos
+    ciertos."""
+    item = _sazon_de(sc.aggregate_and_deduct_shopping_list(
+        ["8 sobres de sazón con culantro y achiote"], structured=True))
+    assert item.get("capped_by") == "P6-SPICE-CAP", item
+    assert (item["market_unit"], item["market_qty_numeric"]) == ("caja", 1.0)
+    assert item.get("estimated_cost_rd") == 99.0
+    assert "recompra" not in item["display_qty"], item["display_qty"]
+    assert item.get("coverage_ok_by_package") is True
+
+
 def test_cuando_de_verdad_falta_el_aviso_sigue(catalogo_sazon):
-    """Diez sobres: la necesidad llega en 400 g y la caja de 40 g cubre ~0,7 días de 7. Aviso cierto."""
+    """Diez sobres = 50 g y la caja trae 8 (40 g): cubre ~6 de 7 días. Aviso cierto, con la fracción
+    real de la compra (40/50 de la semana), no la del tope."""
     item = _sazon_de(sc.aggregate_and_deduct_shopping_list(
         ["10 sobres de sazón con culantro y achiote"], structured=True))
     assert (item["market_unit"], item["market_qty_numeric"]) == ("caja", 1.0)
-    assert "alcanza ~1 de 7 días — recompra" in item["display_qty"], item["display_qty"]
-    assert "alcanza ~1 de 7 días — recompra" in item["display_string"], item["display_string"]
+    assert "alcanza ~6 de 7 días — recompra" in item["display_qty"], item["display_qty"]
+    assert "alcanza ~6 de 7 días — recompra" in item["display_string"], item["display_string"]
+    # el doble de necesidad, la mitad de cobertura: la nota sigue a la compra real
+    item2 = _sazon_de(sc.aggregate_and_deduct_shopping_list(
+        ["20 sobres de sazón con culantro y achiote"], structured=True))
+    assert "alcanza ~3 de 7 días — recompra" in item2["display_qty"], item2["display_qty"]
 
 
 # ───────────── 2. las otras especias bajo el tope ─────────────

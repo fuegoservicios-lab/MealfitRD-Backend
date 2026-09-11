@@ -45198,6 +45198,7 @@ def _emit_shopping_guard_unevaluable_alert(state: "PlanState", unevaluable: dict
         form_data = state.get("form_data") or {}
         user_id = form_data.get("user_id") or form_data.get("session_id") or "unknown"
         plan_result = state.get("plan_result") or {}
+        unevaluable = unevaluable or (plan_result.get("_shopping_coherence_unevaluable") or {})
         plan_id = (plan_result.get("id") or plan_result.get("plan_id")
                    or form_data.get("_caller_target_plan_id") or "no_plan_id")
         alert_key = f"shopping_coherence_guard_unevaluable:{user_id}:{plan_id}"

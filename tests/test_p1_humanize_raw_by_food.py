@@ -29,6 +29,12 @@ abstenerse.
 """
 import pytest
 
+# [P0-CI-TIMEOUT-15 · 2026-09-11] La CI del backend nunca había TERMINADO (moría a los 15 min); al
+# terminar por primera vez este módulo salió rojo sin base de datos: sus casos convierten medidas
+# caseras y emparejan alimentos contra el catálogo VIVO (densidades, aliases). Se declara para que en
+# CI se salte con su motivo en vez de fingir un veredicto; en el checkout del dueño corre entero.
+pytestmark = pytest.mark.needs_local_data
+
 from humanize_ingredients import _pares_display_raw, sync_recipe_steps_to_household
 
 _PARALELAS_DISPLAY = ["½ cebolla", "1 taza de lechosa", "2 cdas de aceite de oliva"]
