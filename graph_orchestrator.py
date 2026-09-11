@@ -7521,7 +7521,7 @@ async def plan_skeleton_node(state: PlanState) -> dict:
 
     selected_techniques = _select_techniques(_uid, succ_techs, aban_techs)
 
-    random_seed = random.randint(10000, 99999)
+    random_seed = __import__("horizon").run_seed(form_data, attempt=state.get("attempt")) or random.randint(10000, 99999)  # [P1-PLAN-LOTE-3 · B4] semilla del run: reproducible por intento
 
     days_offset = form_data.get("_days_offset", 0)
     # P1-10: datetime/timezone/timedelta a nivel módulo
@@ -8702,7 +8702,7 @@ async def generate_days_parallel_node(state: PlanState) -> dict:
             goal=(form_data or {}).get("mainGoal") or (form_data or {}).get("goal"),
         )
 
-        random_seed = random.randint(10000, 99999)
+        random_seed = __import__("horizon").run_seed(form_data, attempt=state.get("attempt")) or random.randint(10000, 99999)  # [P1-PLAN-LOTE-3 · B4] semilla del run: reproducible por intento
 
         # [P1-PROMPT-CACHE-SYSTEMMSG · 2026-05-15] Mismo patrón que en
         # plan_skeleton: tramo DINÁMICO en `prompt_text`; tramo ESTÁTICO

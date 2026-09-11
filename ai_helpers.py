@@ -1124,7 +1124,20 @@ def _build_light_protein_pool(veggies, proteins, *, bariatric: bool = False) -> 
     return _out
 
 
-def _pick_light_anchor_candidates(pool, k: int = 4) -> list:
+def _seeder_rng(form_data):
+    """[P1-PLAN-LOTE-3 · 2026-09-11 · B4] El generador del sembrador: `random.Random` sembrado por el run
+    (`horizon.run_seed`) cuando hay de qué derivarlo, o el módulo `random` de siempre. Dentro de
+    `get_deterministic_variety_prompt` se enlaza al nombre local `random`, así que cada `random.sample`,
+    `random.choices` y `random.shuffle` de ese cuerpo lo usa sin cambiar una letra del código."""
+    try:
+        import horizon as _hz
+        seed = _hz.run_seed(form_data)
+        return random.Random(seed) if seed is not None else random
+    except Exception:
+        return random
+
+
+def _pick_light_anchor_candidates(pool, k: int = 4, rng=None) -> list:
     """[P2-SEEDER-PAIRS-GOALS · 2026-07-31] (audit v6 · F18) Elige `k` candidatos del pool del
     ancla liviana SIN REEMPLAZO y de verdad al azar.
 
@@ -1141,7 +1154,7 @@ def _pick_light_anchor_candidates(pool, k: int = 4) -> list:
     _items = [x for x in (pool or []) if x]
     if not _items:
         return []
-    return random.sample(_items, min(int(k), len(_items)))
+    return (rng or random).sample(_items, min(int(k), len(_items)))
 
 
 def _culture_staple_seed(carb_slots, form_data, pool_carbs, carb_freq, blocked, days, market_country):
@@ -1303,6 +1316,7 @@ def get_deterministic_variety_prompt(history_text: str, form_data: dict = None, 
     comportamiento previo. tooltip-anchor: P2-SEEDER-DAYS-COUNT
     """
     logger.debug("🎲 [ANTI MODE-COLLAPSE] Calculando Matriz de Ingredientes (Round-Robin)...")
+    random = _seeder_rng(form_data)   # [P1-PLAN-LOTE-3 · B4] sombra local: sembrado por el run, mismo código
     # El knob se lee en CADA llamada (no a nivel módulo) para que el rollback no necesite
     # redeploy ni reimport, igual que MEALFIT_GAINMUSCLE_HIGH_DENSITY_PROTEIN.
     if not _env_bool("MEALFIT_SEEDER_DAYS_COUNT", True):
@@ -2854,7 +2868,7 @@ def get_deterministic_variety_prompt(history_text: str, form_data: dict = None, 
                 # chunk, no para 3: con 4 días el día D se quedaba sin línea propia (el prompt
                 # solo nombraba A/B/C) mientras el resto del reparto sí escalaba.
                 _light_slots = _rotate_pairs(
-                    _pick_light_anchor_candidates(_light_pool, max(4, _dc + 1)), days=_dc)
+                    _pick_light_anchor_candidates(_light_pool, max(4, _dc + 1), rng=random), days=_dc)
                 if _light_slots:
                     _l = [" o ".join(s) if isinstance(s, (list, tuple)) else str(s)
                           for s in _light_slots[:_dc]]

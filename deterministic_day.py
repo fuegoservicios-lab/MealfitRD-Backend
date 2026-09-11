@@ -1143,9 +1143,12 @@ def build_day_for_skeleton(nutrition, form_data, skeleton_day, day_num, user_id=
         except Exception as _e_hz:                                     # noqa: BLE001
             logger.warning(f"[P1-DETERMINISTIC-DAY] filtros de horizon no disponibles ({_e_hz!r}); "
                            f"se consulta sin nutrientes exigidos ni durabilidad")
+        # [P1-PLAN-LOTE-3 · B5] los «no me gusta» del formulario y las exclusiones compiladas, al selector
+        _excluidos = [str(x) for x in (list(_hp.get("dislikes") or _fd.get("dislikes") or [])
+                                        + list(((_eff.get("diet") or {}).get("exclusions")) or [])) if x]
         _kw_cands = dict(k=_candidatos_k(), rotate=int(day_index), exclude_allergens=_alergias,
                          diet=_dieta, budget_tier=_tier_presupuesto(_fd), market_country=mercado,
-                         require_known_nutrients=_req_nutr, **_dur)
+                         require_known_nutrients=_req_nutr, exclude_foods=_excluidos, **_dur)
         _fijados = ((_sl.get("registry") or {}).get("candidates") or {}) if _sl else {}
 
         franjas = _franjas_del_dia(skeleton_day)

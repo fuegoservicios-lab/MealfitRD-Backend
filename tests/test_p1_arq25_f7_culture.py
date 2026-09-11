@@ -20,8 +20,13 @@ def _knob(monkeypatch):
 
 
 def test_a_seis_perfiles_como_data_y_ninguna_cadena_if_elif():
-    assert set(cp.profile_ids()) == {"dominican_criolla", "puertorico_criolla", "mexico_casera", "colombia_casera", "spain_mediterranea", "us_everyday"}
+    # [P1-PLAN-LOTE-3 · B5] + «neutral» (sin cocina en particular: la del mercado, sin sesgo)
+    assert set(cp.profile_ids()) == {"dominican_criolla", "puertorico_criolla", "mexico_casera", "colombia_casera", "spain_mediterranea", "us_everyday", "neutral"}
     for pid, p in cp.PROFILES.items():
+        if cp.is_neutral_profile(pid):
+            # [P1-PLAN-LOTE-3 · B5] sin biblioteca ni mercado propios A PROPÓSITO: la cocina es el mercado
+            assert p["library"] is None and p["market_default"] is None and p["name_es"]
+            continue
         assert p["library"] in ("do", "es", "mx", "co", "pr", "us") and p["market_default"] and p["name_es"]
         assert p["staples"] and p["dish_families"] and p["techniques"] and p["flavor_base"] and p["slot_affinity"]
     src = (_BACKEND / "cultural_profiles.py").read_text(encoding="utf-8")

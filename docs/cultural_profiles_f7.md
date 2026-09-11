@@ -205,3 +205,18 @@ y el modelo hizo arepitas de avena en la cena (rechazo del revisor). Los básico
 (un dominicano come arroz casi a diario: es la cocina, no monotonía — la misma excepción que los «básicos del usuario» del
 prompt): la siembra corre ANTES del bloque EVITA, se llama sin veto y sus básicos entran en `chosen_carbs` para quedar exentos
 del EVITA; la frecuencia sigue eligiendo el menos usado entre ellos. Log explícito cuando calla.
+
+## 8e. Perfil «neutral» y exclusiones al selector (`P1-PLAN-LOTE-3` · 2026-09-11)
+
+La auditoría de arquitectura (H15) señaló que no había forma de pedir «nada criollo»: el paso «Cocinas que te
+representan» SUGERÍA la cocina del mercado y la única salida era elegir otra cocina concreta. Nace el perfil
+`neutral` («Sin cocina en particular»): sin biblioteca ni mercado propios (`library`/`market_default` = None), no
+lo sugiere ningún país y `country_for_profile` devuelve `None` a propósito — `cultural_country_for_form_data`,
+`horizon._registry_block_for_country` y el prompt caen al **país de compra**, que es exactamente lo pedido (I16).
+En el formulario es un chip más, sin bandera (`marketDefault: null`).
+
+En la misma pasada: `diet.exclusions` (los «no me gusta») llegan a `dish_registry.template_candidates`
+(`exclude_foods`, identidad por `pantry_names_match`) desde el blueprint, el prompt y el día determinista — antes
+sólo viajaban al prompt como texto; y cuando la cocina asignada a un día no tiene plato para una franja con los
+filtros del usuario, el blueprint cae a la biblioteca del mercado y lo **anota** (`registry.culture_fallbacks`),
+que la rebanada conserva y el informe de fidelidad publica como `culture_unavailable`.

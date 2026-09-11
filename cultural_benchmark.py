@@ -79,6 +79,8 @@ def _profile_lexicons() -> dict[str, set[str]]:
     import cultural_profiles as cp
     raw: dict[str, set[str]] = {}
     for pid, p in cp.PROFILES.items():
+        if not (p or {}).get("library"):
+            continue   # [P1-PLAN-LOTE-3 · B5] el perfil neutral no tiene biblioteca que evaluar: es el mercado
         toks: set[str] = set()
         for item in (p.get("dish_families") or []):
             t = _norm(item)
@@ -95,6 +97,8 @@ def _profile_lexicons() -> dict[str, set[str]]:
 def _lib_profile(lib: str) -> str:
     import cultural_profiles as cp
     for pid, p in cp.PROFILES.items():
+        if not (p or {}).get("library"):
+            continue   # [P1-PLAN-LOTE-3 · B5] el perfil neutral no tiene biblioteca que evaluar: es el mercado
         if p.get("library") == lib:
             return pid
     return "dominican_criolla"
@@ -254,6 +258,8 @@ def run_benchmark(*, catalog_rows: Optional[list] = None) -> dict:
         return report
     lexicons = _profile_lexicons()
     for pid, p in cp.PROFILES.items():
+        if not (p or {}).get("library"):
+            continue   # [P1-PLAN-LOTE-3 · B5] el perfil neutral no tiene biblioteca que evaluar: es el mercado
         lib = p["library"]
         snap = snaps.get(lib)
         if not snap:
@@ -294,7 +300,7 @@ def run_benchmark(*, catalog_rows: Optional[list] = None) -> dict:
         entry["review"]["human_cultural_review"] = bool(so) and _kind == "human"
         entry["review"]["clinical_review"] = False
         report["profiles"][pid] = entry
-    report["mixing"] = _mixing(cp.PROFILES.keys())
+    report["mixing"] = _mixing([pid for pid, p in cp.PROFILES.items() if p.get("library")])  # [P1-PLAN-LOTE-3 · B5] sin el neutral
     ok, failures = gate_verdict(report)
     report["gate_ok"], report["failures"] = ok, failures
     return report

@@ -85,7 +85,19 @@ PROFILES: dict[str, dict] = {
         "main_meal": "cena",
     },
 }
-_PROFILE_BY_MARKET = {p["market_default"]: pid for pid, p in PROFILES.items()}
+# [P1-PLAN-LOTE-3 · 2026-09-11 · B5] «Sin cocina en particular». Hasta hoy no había forma de pedir «nada
+# criollo»: el formulario SUGERÍA la cocina del mercado y la única salida era elegir otra cocina concreta. El
+# perfil neutral no tiene biblioteca ni mercado propios (`library`/`market_default` = None): quien lo pide
+# recibe los platos que su MERCADO vende (I16: la cocina no es la tienda), sin sesgo de una cocina. No entra
+# en `_PROFILE_BY_MARKET` (ningún país lo sugiere solo) y `country_for_profile` devuelve None a propósito:
+# el llamador cae al país de compra, que es exactamente lo que el usuario pidió.
+NEUTRAL_PROFILE = "neutral"
+PROFILES[NEUTRAL_PROFILE] = {
+    "name_es": "Sin cocina en particular", "library": None, "market_default": None,
+    "staples": [], "dish_families": [], "techniques": [], "flavor_base": [],
+    "slot_affinity": {}, "main_meal": "almuerzo",
+}
+_PROFILE_BY_MARKET = {p["market_default"]: pid for pid, p in PROFILES.items() if p.get("market_default")}
 DEFAULT_PROFILE = "dominican_criolla"
 
 
@@ -114,9 +126,14 @@ def library_for_profile(pid: Any) -> str:
     return (PROFILES.get(str(pid or "")) or PROFILES[DEFAULT_PROFILE])["library"]
 
 
-def country_for_profile(pid: Any) -> str:
-    """País cuya biblioteca/registry representa la cocina (NO el país de compra)."""
+def country_for_profile(pid: Any) -> Optional[str]:
+    """País cuya biblioteca/registry representa la cocina (NO el país de compra). `None` para el perfil
+    neutral: el llamador usa el país de COMPRA (B5)."""
     return (PROFILES.get(str(pid or "")) or PROFILES[DEFAULT_PROFILE])["market_default"]
+
+
+def is_neutral_profile(pid: Any) -> bool:
+    return str(pid or "") == NEUTRAL_PROFILE
 
 
 def profile_name_es(pid: Any) -> str:
@@ -301,7 +318,15 @@ def cultural_country_for_form_data(form_data: Optional[dict], day_index: Optiona
     coincide con el país de compra: legado byte-idéntico."""
     ws = culture_weights_for_form(form_data)
     pid = profile_for_day(ws, day_index) if day_index is not None else ws[0]["profile_id"]
-    return country_for_profile(pid)
+    cc = country_for_profile(pid)
+    if cc:
+        return cc
+    # [P1-PLAN-LOTE-3 · B5] perfil neutral: la cocina ES el mercado
+    try:
+        from constants import country_for_form_data as _market_gate
+        return str(_market_gate(form_data if isinstance(form_data, dict) else {}) or "DO").upper()
+    except Exception:
+        return str((form_data or {}).get("country") or "DO").upper()
 
 
 def heading_for_weights(weights: Optional[Iterable[dict]]) -> str:

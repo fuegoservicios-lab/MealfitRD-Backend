@@ -62,7 +62,8 @@ def test_d_gate_verdict_nombra_cada_fallo():
 def test_e_los_snapshots_reales_pasan_el_gate_y_el_informe_es_reproducible():
     rep = cb.run_benchmark()
     assert rep["gate_ok"], rep["failures"]
-    assert set(rep["profiles"]) == set(cp.PROFILES)
+    # [P1-PLAN-LOTE-3 · B5] el perfil neutral no tiene biblioteca que evaluar: el benchmark lo salta a propósito
+    assert set(rep["profiles"]) == {pid for pid, p in cp.PROFILES.items() if p.get("library")}
     for pid, e in rep["profiles"].items():
         assert e["coverage"]["ok"] and e["clinical"]["ok"] and e["contamination"]["ok"], pid
         # la firma vive en data/registry/cultural_curation_review_v1.json y caduca con el hash del snapshot:
@@ -85,7 +86,7 @@ def test_e_los_snapshots_reales_pasan_el_gate_y_el_informe_es_reproducible():
     committed = _BACKEND / "data" / "registry" / "cultural_benchmark_v1.json"
     if committed.exists():
         saved = json.loads(committed.read_text(encoding="utf-8"))
-        for pid in cp.PROFILES:
+        for pid in rep["profiles"]:   # [P1-PLAN-LOTE-3 · B5] el neutral no está en el informe: no tiene biblioteca
             assert saved["profiles"][pid]["snapshot_hash"] == rep["profiles"][pid]["snapshot_hash"], f"{pid}: informe desfasado — corre `python cultural_benchmark.py --write`"
 
 

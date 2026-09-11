@@ -20,6 +20,10 @@ Inventario consolidado de trabajo abierto, con fuente. Nace de la verificación 
 | G3 | ✅ 2026-09-11 | `P1-PLAN-LOTE-2`: la purga con `delete_auth_user=true` borra `neon_auth."user"` (cascade a `session`/`account`) y olvida el positivo cacheado del guard P1-AUTH-CUENTA-BORRADA |
 | F7 | ✅ parcial | `p1_fosforo_borojo_hoja_santa`: Borojó 160 mg y Hoja santa 38 mg con fuente citada. **Achiote, Chontaduro y Champús siguen en NULL a sabiendas**: la TCAC 2018 del ICBF es un PDF escaneado sin texto; si el dueño tiene la tabla en Excel, se completan en 5 min |
 | F10 | ✅ 2026-09-11 | el marker `P1-COUNTRY-CAPS-DO-LEXICON` ya está en `MEMORY.md` |
+| B5 | ✅ 2026-09-11 | `P1-PLAN-LOTE-3`: perfil `neutral` («Sin cocina en particular», chip sin bandera, 4 idiomas), `diet.exclusions` → `template_candidates(exclude_foods=)` desde blueprint, prompt y día determinista, `culture_unavailable` anotado en el blueprint y publicado por el informe de fidelidad |
+| B1 | ✅ parcial | `P1-PLAN-LOTE-3`: el informe declara `checks_run`/`unmeasured`/`n_checks`; mide `culture_share_*` (≥2 cocinas, ≥4 platos identificados), `prep_time_over_budget` (`cookingTime` none/30min/1hour) y `anchor_portion_*` (anclas en piezas). `equipment_unavailable` sigue sin medirse: el formulario no pregunta el equipo (decisión de producto) |
+| B3 | ✅ | `P1-PLAN-LOTE-3`: `computation` en `_fidelity_report` + `computation_hash` en la métrica (registry, generación del catálogo, hash del prompt del día, modelo, semilla, marker del código). Separada de `input_hash`; sin columna nueva |
+| B4 | ✅ | `P1-PLAN-LOTE-3`: semilla del run (`horizon.run_seed`, knob `MEALFIT_SEED_FROM_RUN`) en el prompt del esqueleto/día y en el sembrador (`random.Random` local). Queda para el dueño: `PYTHONHASHSEED` en la unidad systemd del VPS (no está en el `.env`) |
 | G6 | 👤 dueño | faltan `NEON_DATABASE_URL`, `NEON_DATABASE_URL_POOLED`, `COHERE_API_KEY`, `OPENAI_API_KEY` en Actions |
 
 ## Cómo leerlo

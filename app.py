@@ -100,7 +100,9 @@ _PROCESS_START_ISO = datetime.now(timezone.utc).isoformat()
 # (B6), el sobre pesa lo que pesa el sobre (D1), un polvo no compra su alimento fresco (D2), el tope de
 # condimentos reescribe la frase que ve el usuario (D3), plan_tier canónico (G2), la purga borra la identidad
 # en Neon Auth (G3), fósforo con fuente para dos filas (F7).
-_LAST_KNOWN_PFIX = "P1-PLAN-LOTE-2 · 2026-09-11"
+# [P1-PLAN-LOTE-3 · 2026-09-11] Tercer lote: perfil «neutral» y exclusiones al selector (B5), métrica de
+# personalización con cobertura declarada (B1), huella de la computación (B3) y semilla del run (B4).
+_LAST_KNOWN_PFIX = "P1-PLAN-LOTE-3 · 2026-09-11"
 
 # [P1-SENTRY-SAMPLE-COST · 2026-05-12] Sentry sampling driven from env vars
 # con default seguro 0.1 (10%). Pre-fix tenía `traces_sample_rate=1.0` y

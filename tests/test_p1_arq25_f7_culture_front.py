@@ -25,7 +25,10 @@ def _front_list(js: str, name: str) -> list:
 def test_a_el_frontend_repite_los_perfiles_intensidades_y_tope():
     js = _CFG.read_text(encoding="utf-8")
     ids = re.findall(r"\{ id: '([a-z_]+)', labelKey: i18nKey\('([^']+)'\), marketDefault: '([A-Z]{2})' \}", js)
-    assert [i[0] for i in ids] == list(cp.PROFILES), "mismos ids y mismo orden que PROFILES"
+    # [P1-PLAN-LOTE-3 · B5] el perfil neutral no tiene mercado: va aparte, con `marketDefault: null`
+    assert [i[0] for i in ids] == [pid for pid, p_ in cp.PROFILES.items() if p_.get("market_default")], \
+        "mismos ids y mismo orden que PROFILES (los que tienen mercado)"
+    assert "{ id: 'neutral', labelKey: i18nKey('Sin cocina en particular'), marketDefault: null }" in js
     for pid, label, market in ids:
         assert cp.PROFILES[pid]["name_es"] == label, pid
         assert cp.PROFILES[pid]["market_default"] == market, pid

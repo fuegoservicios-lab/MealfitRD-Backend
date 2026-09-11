@@ -731,12 +731,29 @@ def _buyable(t: dict, market_country: Any) -> bool:
         return True
 
 
+def _template_uses_excluded_food(t: dict, excluded: list, pnm) -> bool:
+    """[P1-PLAN-LOTE-3 · B5] ¿Algún constituyente de la plantilla es uno de los alimentos excluidos?"""
+    for c in (t.get("constituents") or []):
+        for nombre in (c.get("name"), c.get("canonical")):
+            if not nombre:
+                continue
+            for e in excluded:
+                if _norm(e) == _norm(nombre):
+                    return True
+                try:
+                    if pnm is not None and pnm(str(nombre), str(e)):
+                        return True
+                except Exception:
+                    continue
+    return False
+
+
 def template_candidates(country: Optional[str], slot: str, family: Optional[str] = None, *, k: int = 6,
                         exclude_allergens: Iterable[str] = (), need_days: Optional[int] = None,
                         allow_frozen: bool = False, prefer_batch: bool = False,
                         diet: Any = None, require_known_nutrients: Iterable[str] = (),
                         market_country: Any = None, rotate: int = 0,
-                        budget_tier: Any = None) -> list[dict]:
+                        budget_tier: Any = None, exclude_foods: Iterable[str] = ()) -> list[dict]:
     """Candidatos del registry para el allocator: `status='ok'`, franja compatible, familia de proteína
     compatible (vía `horizon.family_matches_template`), sin las clases de alérgeno excluidas y sin
     violar la dieta declarada (ARQ27-P0-01). Orden estable.
@@ -774,6 +791,17 @@ def template_candidates(country: Optional[str], slot: str, family: Optional[str]
         return []
     need = {str(x) for x in (require_known_nutrients or ())}
     ex = {str(a).lower() for a in exclude_allergens or ()}
+    # [P1-PLAN-LOTE-3 · 2026-09-11 · B5] `diet.exclusions` (los «no me gusta» del formulario) llegaban al prompt
+    # como texto y a ningún filtro: el CandidateSet fijado al run podía traer el alimento que el usuario
+    # pidió no ver. Identidad por `pantry_names_match` (case/acentos/plural, por token completo) — la misma
+    # regla de la Nevera — y nunca por subcadena («res» ⊂ «queso fresco»).
+    excl_foods = [str(x).strip() for x in (exclude_foods or ()) if str(x or "").strip()]
+    _pnm = None
+    if excl_foods:
+        try:
+            from constants import pantry_names_match as _pnm
+        except Exception:
+            _pnm = None
     slot_es = canonical_slot_es(slot)
     out = []
     compatibles = []   # [P1-CANDIDATO-CON-PRECIO] la plantilla ENTERA, en paralelo a `out`: costear
@@ -792,6 +820,8 @@ def template_candidates(country: Optional[str], slot: str, family: Optional[str]
         if need and need.intersection(t.get("nutrition_unknown") or {}):
             continue
         if market_country and not _buyable(t, market_country):
+            continue
+        if excl_foods and _template_uses_excluded_food(t, excl_foods, _pnm):
             continue
         if family and family_matches_template is not None:
             prot = str(t.get("protein") or "none").lower()

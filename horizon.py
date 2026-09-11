@@ -38,6 +38,7 @@ import json
 import logging
 import math
 import os
+import re
 from datetime import datetime, timezone
 from typing import Any, Iterable, Optional
 
@@ -481,7 +482,7 @@ def _registry_block_for_country(country: Optional[str], *, effective: Optional[d
     try:
         import dish_registry as dr
         if country is None:
-            country = _culture_country(_main_profile(effective))
+            country = (_culture_country(_main_profile(effective)) or (effective or {}).get("market_country") or "DO")
         h = dr.registry_hash(country)
         if not h:
             return {"snapshot_hash": None, "version": dr.registry_snapshot_version(), "candidates": {}}
@@ -494,9 +495,12 @@ def _registry_block_for_country(country: Optional[str], *, effective: Optional[d
         # [P1-CANDIDATO-CON-PRECIO · 2026-09-09] El presupuesto lo compila la Fase 2 y este módulo
         # —el que ELIGE los platos— no lo nombraba ni una vez. No faltaba el dato: faltaba el cable.
         bud = ((effective or {}).get("budget") or {}).get("tier")
+        # [P1-PLAN-LOTE-3 · B5] los «no me gusta» compilados en la política viajan al selector
+        excl = [str(x) for x in (((effective or {}).get("diet") or {}).get("exclusions") or []) if x]
         cands = {}
         names = {}
         hashes = {}
+        fallbacks = []   # [P1-PLAN-LOTE-3 · B5] `culture_unavailable`: la cocina del día no tenía plato para la franja
         for d in (days_out or [])[:60]:
             if not isinstance(d, dict):
                 continue
@@ -504,15 +508,26 @@ def _registry_block_for_country(country: Optional[str], *, effective: Optional[d
             for slot in (d.get("slots") or []):
                 # [P1-ARQ25-F7-CULTURE] biblioteca de la cocina asignada al día (país de esa cocina), no del mercado
                 _pid = ((d.get("culture") or {}).get(slot)) if isinstance(d.get("culture"), dict) else None
-                _c = _culture_country(_pid) if _pid else country
+                _c = (_culture_country(_pid) if _pid else None) or country   # neutral ⇒ el mercado
                 hashes[_c] = hashes.get(_c) or dr.registry_hash(_c)
                 # [ARQ27-P1-04] `rotate` = el día: días consecutivos con la misma franja y familia ya no
                 # reciben la misma cabeza de la lista. Determinista: mismo blueprint ⇒ mismos IDs.
                 _cc = dr.template_candidates(_c, slot, fam, k=3, exclude_allergens=allergies,
                                              diet=diet, require_known_nutrients=req_nutr,
-                                             market_country=mkt, budget_tier=bud,
+                                             market_country=mkt, budget_tier=bud, exclude_foods=excl,
                                              rotate=int(d.get("day_index") or 0),
                                              **_dur_kwargs(effective, d.get("day_index")))
+                if not _cc and _c != country:
+                    # [P1-PLAN-LOTE-3 · B5] La cocina pedida no tiene plato para esta franja con estos
+                    # filtros: se cae a la biblioteca del mercado y QUEDA DICHO (antes la franja se quedaba
+                    # sin candidatos fijados y el modelo improvisaba sin que nadie lo anotara).
+                    _cc = dr.template_candidates(country, slot, fam, k=3, exclude_allergens=allergies,
+                                                 diet=diet, require_known_nutrients=req_nutr,
+                                                 market_country=mkt, budget_tier=bud, exclude_foods=excl,
+                                                 rotate=int(d.get("day_index") or 0),
+                                                 **_dur_kwargs(effective, d.get("day_index")))
+                    fallbacks.append({"day_index": int(d.get("day_index") or 0), "slot": slot, "profile": _pid,
+                                      "culture_country": _c, "fallback_country": country, "found": len(_cc)})
                 ids = [c["template_id"] for c in _cc]
                 if ids:
                     _key = f"{d.get('day_index')}:{slot}"
@@ -523,7 +538,7 @@ def _registry_block_for_country(country: Optional[str], *, effective: Optional[d
                     # prohíbe. El ID sigue ahí para poder recuperar la plantilla completa cuando existe.
                     names[_key] = [str(c.get("name")) for c in _cc if c.get("name")]
         return {"snapshot_hash": h, "version": dr.registry_snapshot_version(), "candidates": cands,
-                "candidate_names": names,
+                "candidate_names": names, "culture_fallbacks": fallbacks,
                 "library_hashes": {k: v for k, v in hashes.items() if v}}
     except Exception as e:
         logger.debug(f"[ARQ25-F6] registry no disponible para el blueprint: {e!r}")
@@ -617,7 +632,7 @@ def registry_prompt_lines(effective: Optional[dict], sl: Optional[dict] = None, 
             _cul = d.get("culture") if isinstance(d.get("culture"), dict) else {}
             for s_ in slots:
                 key = dr.canonical_slot_es(s_)  # el motor dice «dinner», el registry «cena»
-                _day_country = _culture_country(_cul.get(s_) or _cul.get(key)) if _cul else country
+                _day_country = (_culture_country(_cul.get(s_) or _cul.get(key)) if _cul else None) or country
                 # [ARQ27-P1-04] lo fijado al run manda; la reconsulta es el adaptador para runs viejos.
                 names = _pinned_candidate_names(dr, _pinned, d.get("day_index"), s_, _day_country)
                 if not names:
@@ -672,7 +687,8 @@ def _registry_dishes_for_effective(days: list, effective: Optional[dict]) -> dic
     """
     try:
         import recipe_library as rl
-        return rl.dish_provenance(days or [], _culture_country(_main_profile(effective or {})) or "DO")
+        return rl.dish_provenance(days or [], _culture_country(_main_profile(effective or {}))
+                                  or (effective or {}).get("market_country") or "DO")
     except Exception:
         return {"total": 0, "del_registry": 0, "con_receta": 0, "aplicables": 0, "tasa": None}
 
@@ -831,7 +847,10 @@ def slice_for_chunk(bp: dict, days_offset: int, days_count: int) -> dict:
                     _n_in[_k] = list(_nm_all[_k])
         sl["registry"] = {"snapshot_hash": _reg.get("snapshot_hash"), "version": _reg.get("version"),
                           "library_hashes": _reg.get("library_hashes") or {}, "candidates": _c_in,
-                          "candidate_names": _n_in}
+                          "candidate_names": _n_in,
+                          # [P1-PLAN-LOTE-3 · B5] los días de ESTA rebanada cuya cocina cayó al mercado
+                          "culture_fallbacks": [f for f in (_reg.get("culture_fallbacks") or [])
+                                                if off <= int(f.get("day_index", -1)) < off + n]}
     sl["slice_hash"] = slice_hash(sl)
     return sl
 
@@ -1460,15 +1479,243 @@ def fidelity_issues(days: list, sl: Optional[dict], effective: Optional[dict], *
     return out
 
 
+# ─────────────────────────────────────────────────────────────────────────────────────────────────
+# [P1-PLAN-LOTE-3 · 2026-09-11 · B1] La métrica de personalización medía 5 de las 11 dimensiones de la
+# política y el informe no decía cuáles NO: un `score: 1.0` con `n_checks = 2` (repetición exacta +
+# ingrediente) se leía como «plan fiel» cuando sólo decía «no repite». Ahora el informe declara
+# `checks_run` (lo que se midió) y `unmeasured` (lo que NO, y por qué), y mide tres dimensiones más:
+# la mezcla de cocinas servida (`culture_share_*`), el tiempo de cocina frente al que el usuario dijo
+# tener (`prep_time_over_budget`) y las raciones de las anclas en piezas (`anchor_portion_*`). El
+# equipo de cocina sigue sin medirse: el formulario no lo pregunta, y se dice.
+
+_COOKING_TIME_BUDGET_MIN = {"none": 10, "30min": 30, "1hour": 60}   # `plenty` ⇒ sin techo
+_PERSONALIZATION_MIN_IDENTIFIED = 4
+_CULTURE_SHARE_TOLERANCE = 0.25
+_PIECE_UNITS = ("unidad", "unidades", "ud", "uds", "pieza", "piezas")
+
+
+def _prep_minutes(meal: dict) -> Optional[int]:
+    """Minutos declarados en `prep_time` («40 min») si vienen de una fuente que no inventa."""
+    if not isinstance(meal, dict):
+        return None
+    src = str(meal.get("_prep_time_source") or "")
+    if src in ("unknown", "defecto"):
+        return None
+    m = re.search(r"(\d{1,3})\s*min", str(meal.get("prep_time") or ""))
+    return int(m.group(1)) if m else None
+
+
+def _culture_share_issues(days: list, effective: dict) -> tuple[list, list, list]:
+    """(issues, checks_run, unmeasured) de la mezcla de cocinas SERVIDA frente a la pedida."""
+    try:
+        from cultural_profiles import normalize_weights, country_for_profile, is_neutral_profile
+        import recipe_library as rl
+    except Exception:
+        return [], [], []
+    ws = normalize_weights((effective or {}).get("culture_weights") or [])
+    if len(ws) < 2:
+        return [], [], []       # una sola cocina: no hay mezcla que medir
+    idx = {}
+    for w in ws:
+        pid = w["profile_id"]
+        cc = None if is_neutral_profile(pid) else country_for_profile(pid)
+        if cc:
+            try:
+                idx[pid] = rl._registry_name_index(cc) or {}
+            except Exception:
+                idx[pid] = {}
+    counts = {w["profile_id"]: 0 for w in ws}
+    identified = 0
+    for d in days or []:
+        for m in ((d.get("meals") or []) if isinstance(d, dict) else []):
+            if not isinstance(m, dict):
+                continue
+            nombre = rl._norm(m.get("name"))
+            hit = [pid for pid, ix in idx.items() if nombre and nombre in ix]
+            if len(hit) == 1:
+                counts[hit[0]] += 1
+                identified += 1
+    if identified < _PERSONALIZATION_MIN_IDENTIFIED:
+        return [], [], [{"check": "culture_share", "reason": "too_few_identified", "identified": identified}]
+    out = []
+    for w in ws:
+        share = counts[w["profile_id"]] / float(identified)
+        if w is ws[0] and share < float(w["weight"]) - _CULTURE_SHARE_TOLERANCE:
+            out.append({"code": "culture_share_below", "severity": "low", "profile": w["profile_id"],
+                        "requested": round(float(w["weight"]), 2), "served": round(share, 2),
+                        "message": (f"COCINA PRINCIPAL POR DEBAJO: pediste {w['profile_id']} al {w['weight']:.0%} y "
+                                    f"los platos identificados la sirven al {share:.0%}.")})
+        elif w is not ws[0] and share > float(w["weight"]) + _CULTURE_SHARE_TOLERANCE:
+            out.append({"code": "culture_share_above", "severity": "low", "profile": w["profile_id"],
+                        "requested": round(float(w["weight"]), 2), "served": round(share, 2),
+                        "message": (f"COCINA SECUNDARIA POR ENCIMA: {w['profile_id']} pedida al {w['weight']:.0%} y "
+                                    f"servida al {share:.0%}.")})
+    return out, ["culture_share"], []
+
+
+def _prep_time_issues(days: list, form_data: Optional[dict]) -> tuple[list, list, list]:
+    budget = _COOKING_TIME_BUDGET_MIN.get(str((form_data or {}).get("cookingTime") or "").strip().lower())
+    if budget is None:
+        return [], [], [] if str((form_data or {}).get("cookingTime") or "").strip().lower() == "plenty" else \
+            [{"check": "prep_time", "reason": "no_cooking_time_in_form"}]
+    out, medidos = [], 0
+    for i, d in enumerate(days or []):
+        for m in ((d.get("meals") or []) if isinstance(d, dict) else []):
+            mins = _prep_minutes(m)
+            if mins is None:
+                continue
+            medidos += 1
+            if mins > budget * 1.25 and len(out) < 10:
+                out.append({"code": "prep_time_over_budget", "severity": "low", "day": i + 1,
+                            "meal": str(m.get("meal") or ""), "minutes": mins, "budget": budget,
+                            "message": (f"TIEMPO DE COCINA: día {i + 1}, {m.get('meal')}: {mins} min declarados y "
+                                        f"dijiste tener {budget}.")})
+    if not medidos:
+        return [], [], [{"check": "prep_time", "reason": "no_meal_declares_minutes"}]
+    return out, ["prep_time"], []
+
+
+def _anchor_portion_issues(days: list, effective: dict) -> tuple[list, list, list]:
+    out, run, unmeasured = [], [], []
+    for a in ((effective or {}).get("food_anchors") or []):
+        if not isinstance(a, dict):
+            continue
+        p = a.get("portion") if isinstance(a.get("portion"), dict) else None
+        if not p or str(p.get("unit") or "").lower() not in _PIECE_UNITS:
+            continue
+        try:
+            qty = float(p.get("qty"))
+        except (TypeError, ValueError):
+            continue
+        name, iid = str(a.get("name") or a.get("ingredient_id") or ""), a.get("ingredient_id")
+        medidas = []
+        for i, d in enumerate(days or []):
+            for m in ((d.get("meals") or []) if isinstance(d, dict) else []):
+                if not isinstance(m, dict) or not _meal_has(m, name, iid):
+                    continue
+                for line in (m.get("ingredients") or []):
+                    t = str(line)
+                    if not anchor_in_text(name, t):
+                        continue
+                    mm = re.match(r"^\s*(\d+(?:[.,]\d+)?)\s*(?:unidad(?:es)?|uds?\.?|piezas?)?\s*(?:de\s+)?", t, flags=re.I)
+                    if mm and not re.search(r"\b(g|gr|gramos|kg|lb|taza|tazas|cda|cdta|ml)\b", t.lower()):
+                        medidas.append((i + 1, float(mm.group(1).replace(",", "."))))
+        if not medidas:
+            unmeasured.append({"check": f"anchor_portion:{iid or name}", "reason": "no_piece_line_found"})
+            continue
+        run.append(f"anchor_portion:{iid or name}")
+        for dia, served in medidas:
+            if served <= qty - 1:
+                out.append({"code": "anchor_portion_below", "severity": "low", "anchor": name, "day": dia,
+                            "requested": qty, "served": served,
+                            "message": f"RACIÓN DEL BÁSICO: {name} día {dia}: pediste {qty:g} y salen {served:g}."})
+            elif served >= qty + 1:
+                out.append({"code": "anchor_portion_above", "severity": "low", "anchor": name, "day": dia,
+                            "requested": qty, "served": served,
+                            "message": f"RACIÓN DEL BÁSICO: {name} día {dia}: pediste {qty:g} y salen {served:g}."})
+    return out, run, unmeasured
+
+
+def personalization_issues(days: list, sl: Optional[dict], effective: Optional[dict],
+                           form_data: Optional[dict] = None) -> tuple[list, list, list]:
+    """(issues, checks_run, unmeasured). Puro, nunca lanza. `culture_unavailable` sale de la rebanada:
+    los días cuya cocina pedida no tenía plato y cayeron a la biblioteca del mercado (B5)."""
+    issues, run, unmeasured = [], [], []
+    try:
+        eff = effective or {}
+        for fn in (lambda: _culture_share_issues(days, eff), lambda: _prep_time_issues(days, form_data),
+                   lambda: _anchor_portion_issues(days, eff)):
+            try:
+                i_, r_, u_ = fn()
+                issues.extend(i_); run.extend(r_); unmeasured.extend(u_)
+            except Exception as e:  # cada dimensión falla sola
+                unmeasured.append({"check": getattr(fn, "__name__", "?"), "reason": f"error:{type(e).__name__}"})
+        for f in (((sl or {}).get("registry") or {}).get("culture_fallbacks") or []) if isinstance(sl, dict) else []:
+            issues.append({"code": "culture_unavailable", "severity": "low", "day_index": f.get("day_index"),
+                           "slot": f.get("slot"), "profile": f.get("profile"),
+                           "message": (f"COCINA NO DISPONIBLE: la cocina {f.get('profile')} no tenía plato para "
+                                       f"{f.get('slot')} el día {int(f.get('day_index') or 0) + 1}; se usó la del mercado.")})
+        unmeasured.append({"check": "equipment", "reason": "form_has_no_equipment_field"})
+    except Exception as e:
+        logger.debug(f"[P1-PLAN-LOTE-3] personalization_issues falló (fail-open): {e}")
+    return issues, run, unmeasured
+
+
+# [P1-PLAN-LOTE-3 · 2026-09-11 · B4] La semilla del run. `random.randint` en el prompt del esqueleto y del
+# día, y `random.sample/choices/shuffle` en el sembrador, hacían irrepetible cualquier generación: dos runs
+# con el MISMO formulario, política y registry daban planes distintos y nadie podía decir por qué. La semilla
+# sale de la rebanada del blueprint (o del plan/usuario) más el intento: mismo run y mismo intento ⇒ misma
+# semilla; un reintento sí varía. Knob `MEALFIT_SEED_FROM_RUN` (True) devuelve la conducta anterior.
+
+def run_seed(form_data: Optional[dict], attempt: Optional[int] = None) -> Optional[int]:
+    """Semilla de 5 cifras derivada del run, o `None` si no hay de qué derivarla (o el knob está apagado)."""
+    try:
+        from knobs import _env_bool
+        if not _env_bool("MEALFIT_SEED_FROM_RUN", True):
+            return None
+        fd = form_data if isinstance(form_data, dict) else {}
+        sl = fd.get(BLUEPRINT_SLICE_KEY) if isinstance(fd.get(BLUEPRINT_SLICE_KEY), dict) else {}
+        base = sl.get("slice_hash") or fd.get("_caller_target_plan_id") or fd.get("user_id") or fd.get("session_id")
+        if not base:
+            return None
+        raw = f"{base}:{int(fd.get('_days_offset') or 0)}:{attempt if attempt is not None else ''}"
+        return int(hashlib.sha256(raw.encode("utf-8")).hexdigest()[:8], 16) % 90000 + 10000
+    except Exception:
+        return None
+
+
+# [P1-PLAN-LOTE-3 · 2026-09-11 · B3] La huella de la COMPUTACIÓN, separada de `input_hash`. `input_hash`
+# certifica QUÉ se pidió (formulario + rebanada); esto certifica CON QUÉ se calculó: snapshot del registry,
+# generación del catálogo, hash del prompt del día, modelo, semilla y versión del código. Dos planes con el
+# mismo `input_hash` y distinta `computation_hash` difieren por el sistema, no por el usuario.
+
+def computation_stamp(effective: Optional[dict], form_data: Optional[dict] = None,
+                      attempt: Optional[int] = None) -> dict:
+    comp: dict = {}
+    try:
+        comp["registry_hash"] = _registry_hash_for_effective(effective)
+    except Exception:
+        comp["registry_hash"] = None
+    try:
+        from routers.supermarket import _catalog_generation
+        comp["catalog_generation"] = int(_catalog_generation())
+    except Exception:
+        comp["catalog_generation"] = None
+    try:
+        from prompts.day_generator import DAY_GENERATOR_SYSTEM_PROMPT as _dgp
+        comp["day_prompt_hash"] = hashlib.sha256(str(_dgp).encode("utf-8")).hexdigest()[:16]
+    except Exception:
+        comp["day_prompt_hash"] = None
+    try:
+        from llm_provider import resolve_model_for_user
+        comp["model"] = resolve_model_for_user((form_data or {}).get("user_id"))
+    except Exception:
+        comp["model"] = None
+    comp["seed"] = run_seed(form_data, attempt)
+    try:
+        import sys as _sys
+        comp["code_marker"] = getattr(_sys.modules.get("app"), "_LAST_KNOWN_PFIX", None)
+    except Exception:
+        comp["code_marker"] = None
+    comp["computation_hash"] = hashlib.sha256(
+        json.dumps({k: v for k, v in comp.items()}, sort_keys=True, default=str).encode("utf-8")).hexdigest()[:16]
+    return comp
+
+
 def fidelity_report(days: list, sl: Optional[dict], effective: Optional[dict], *, surface: str,
-                    meals_per_day: Optional[int] = None) -> dict:
+                    meals_per_day: Optional[int] = None, form_data: Optional[dict] = None,
+                    attempt: Optional[int] = None) -> dict:
     issues = fidelity_issues(days, sl, effective, meals_per_day=meals_per_day)
     issues.extend(fresh_beyond_horizon_issues(days, sl, effective))  # [P1-SINGLE-TRIP-POLICY] warn
+    # [P1-PLAN-LOTE-3 · B1] tres dimensiones más, y las que NO se miden quedan dichas
+    _extra, checks_run, unmeasured = personalization_issues(days, sl, effective, form_data)
+    issues.extend(_extra)
     n_checks = 0
     if isinstance(sl, dict):
         n_checks += sum(len(d.get("anchors") or []) for d in (sl.get("days") or []))
         n_checks += len(sl.get("anchors") or [])
     n_checks += 2  # repetición exacta + ingrediente
+    n_checks += len(checks_run)
     score = round(max(0.0, 1.0 - (len(issues) / float(max(1, n_checks)))), 3)
     return {
         "schema_version": BLUEPRINT_SCHEMA_VERSION, "surface": str(surface or "")[:40],
@@ -1482,6 +1729,10 @@ def fidelity_report(days: list, sl: Optional[dict], effective: Optional[dict], *
         # [P1-FIDELIDAD-PLATO-DEL-REGISTRY] los candidatos VIAJARON (arriba) vs el modelo los USÓ (aquí).
         # NO entra en `score` ni en `issues`: mide, no juzga. Quien quiera que juzgue, que lo decida aparte.
         "registry_dishes": _registry_dishes_for_effective(days, effective),
+        # [P1-PLAN-LOTE-3 · B1/B3] lo medido, lo no medido y con qué se calculó
+        "n_checks": n_checks, "checks_run": ["exact_repeat", "ingredient_days"] + list(checks_run),
+        "unmeasured": unmeasured,
+        "computation": computation_stamp(effective, form_data, attempt),
     }
 
 
@@ -1616,6 +1867,10 @@ def emit_fidelity_metric(user_id: Optional[str], plan_id: Optional[str], report:
             "registry_dishes_matched": (report.get("registry_dishes") or {}).get("del_registry"),
             "registry_dishes_applicable": (report.get("registry_dishes") or {}).get("aplicables"),
             "registry_dish_rate": (report.get("registry_dishes") or {}).get("tasa"),
+            # [P1-PLAN-LOTE-3 · B1/B3]
+            "n_checks": report.get("n_checks"), "checks_run": report.get("checks_run"),
+            "unmeasured": [u.get("check") for u in (report.get("unmeasured") or []) if isinstance(u, dict)],
+            "computation_hash": (report.get("computation") or {}).get("computation_hash"),
         }
         execute_sql_write(
             "INSERT INTO pipeline_metrics (user_id, session_id, node, duration_ms, retries, "
@@ -1642,7 +1897,8 @@ def review_fidelity_gate(plan: dict, form_data: dict, variety_issues: list, *, a
             return variety_issues, []
         enforced = bool(form_data.get(POLICY_ENFORCED_KEY))
         days = (plan or {}).get("days") if isinstance(plan, dict) else None
-        report = fidelity_report(days or [], sl if isinstance(sl, dict) else None, eff, surface="review_plan_node")
+        report = fidelity_report(days or [], sl if isinstance(sl, dict) else None, eff, surface="review_plan_node",
+                                 form_data=form_data, attempt=attempt)
         gate = fidelity_gate_mode()
         rejects: list = []
         if enforced and gate == "block" and int(attempt) < int(max_attempts):
@@ -1770,6 +2026,7 @@ __all__ = [
     "policy_prompt_block", "apply_slice_to_seeder_pools", "family_matches", "family_representative",
     "anchor_in_text", "fidelity_issues", "fidelity_report", "filter_variety_issues_for_policy", "exclude_anchors_from_fatigue",
     "rank_days_by_policy", "emit_fidelity_metric", "review_fidelity_gate",
+    "personalization_issues", "computation_stamp", "run_seed",
     "shopping_projection_windows", "stamp_demand_windows", "enqueue_shopping_projection_job",
     "FRESH_HORIZON_DAYS", "single_trip_policy", "fresh_beyond_horizon_issues", "single_trip_prompt_lines",
     "batch_cooking_mode", "batch_cooking_prompt_lines", "_above_monotony_ceiling",

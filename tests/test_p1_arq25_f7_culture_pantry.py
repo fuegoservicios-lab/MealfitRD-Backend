@@ -83,7 +83,9 @@ def test_c_el_registry_filtra_candidatos_por_durabilidad_y_las_bibliotecas_tiene
 def test_d_blueprint_y_prompt_exigen_durabilidad_solo_bajo_compra_unica():
     src = (_BACKEND / "horizon.py").read_text(encoding="utf-8")
     assert "def _dur_kwargs(" in src
-    assert src.count("**_dur_kwargs(") == 2, "el bloque del blueprint y las líneas del prompt filtran por día"
+    # [P1-PLAN-LOTE-3 · B5] tres: el bloque del blueprint, su caída a la biblioteca del mercado
+    # (`culture_unavailable`) y las líneas del prompt — las tres filtran por día
+    assert src.count("**_dur_kwargs(") == 3, "el bloque del blueprint (y su caída al mercado) y las líneas del prompt filtran por día"
     assert "from pantry_durability import freeze_window_days" in src, "_freeze_horizon_days delega en el SSOT"
     import horizon as hz
     assert hz._freeze_horizon_days("limited", 30) == 14 and hz._freeze_horizon_days("none", 30) == 0

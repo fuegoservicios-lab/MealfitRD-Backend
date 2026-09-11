@@ -275,5 +275,7 @@ def test_f7_fosforo_solo_con_fuente_citable():
 
 
 def test_marker_bumpeado():
+    """El marker avanza con cada lote; lo anclado es el comentario del lote en `app.py`."""
     import app
-    assert app._LAST_KNOWN_PFIX == "P1-PLAN-LOTE-2 · 2026-09-11"
+    assert "[P1-PLAN-LOTE-2 · 2026-09-11]" in _src("app.py")
+    assert app._LAST_KNOWN_PFIX.startswith("P1-PLAN-") and "2026-09-11" in app._LAST_KNOWN_PFIX
