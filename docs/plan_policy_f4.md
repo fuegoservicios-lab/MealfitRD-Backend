@@ -61,6 +61,28 @@ la telemetría nacen juntos. Se compara, por tanto, el embudo por paso (`step_vi
 `step_id`): si `mealOrganization` o «Mis básicos» pierden más usuarios que la mediana de los pasos
 vecinos, ahí está la caída.
 
+> **Medido el 2026-09-11 (`P1-PLAN-LOTE-10` · B9).** `pipeline_metrics.wizard_funnel` tiene **121 filas de 5 sesiones
+> en 2 días con datos** (09-04 y 09-09: el dueño probando). No hay línea base posible hasta que haya usuarios; la
+> condición «≥ 2 semanas» se cuenta desde el lanzamiento, no desde hoy. Y el embudo por paso tal como está escrito
+> arriba era **ciego**: el frontend (`InteractiveAssessmentFlow.jsx`, `trackWizard`) emitía `wizard_start`,
+> `step_view`, `wizard_submit` y `wizard_restore`, **nunca `step_done`** (0 de 121), aunque el backend ya lo aceptaba.
+> Desde `P1-PLAN-LOTE-10` (frontend `840b236`) lo emite al AVANZAR de paso (volver atrás no termina un paso). Para
+> las filas anteriores —y como control del nuevo evento— el paso N se da por terminado cuando la MISMA sesión ve un
+> paso con índice mayor:
+>
+> ```sql
+> WITH v AS (SELECT session_id, (metadata->>'index')::int AS idx, metadata->>'step_id' AS paso
+>            FROM pipeline_metrics WHERE node = 'wizard_funnel' AND metadata->>'event' = 'step_view')
+> SELECT a.paso, a.idx, COUNT(DISTINCT a.session_id) AS ven,
+>        COUNT(DISTINCT a.session_id) FILTER (WHERE EXISTS (
+>            SELECT 1 FROM v b WHERE b.session_id = a.session_id AND b.idx > a.idx)) AS siguen
+> FROM v a GROUP BY 1, 2 ORDER BY 2;
+> ```
+>
+> Con 5 sesiones: 5 ven `appMode`, 4 `planSource`, 3 llegan a `gender` y las 3 recorren hasta `motivation`; 3 de 5
+> envían. Los pasos sin `step_id` salen como `step_<índice>` (8, 12, 13, 18, 19, 21, 22, 24, 25): al añadir el id
+> en el frontend, este embudo deja de mezclarlos.
+
 3. Antes de publicarlo a usuarios nuevos, `MEALFIT_PLAN_POLICY_MODE=enforce` global (Fase 3): el
    formulario promete franjas y bandas que el motor solo obedece en `enforce`.
 

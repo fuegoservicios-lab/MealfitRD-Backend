@@ -137,6 +137,11 @@ construidas**: el espejo del guard se dispara por el sello `trip_window_days` de
 lista y no consulta este knob. Sin esa asimetría, apagarlo con listas selladas vivas en DB
 fabricaba la divergencia severa que el espejo existe para evitar.
 
+**[P1-PLAN-LOTE-10 · 2026-09-11 · D6] El «bug latente» de la rama ventaneada ya está cerrado**: la segunda
+pasada (`aggregate_and_deduct_shopping_list` sobre la ventana del viaje) recibe `text_demand_g_map` desde la
+ronda de revisión de `P1-VEG-BACKFILL-HONESTY` (el comentario junto al call site lo documenta). Lo abierto son
+los 4 prerequisitos, decisión del dueño; el knob sigue `False`.
+
 ### Sentry sampling (costo)
 
 | Knob | Default | Cuándo cambiar |
@@ -194,6 +199,13 @@ fabricaba la divergencia severa que el espejo existe para evitar.
 |---|---|---|
 | `MEALFIT_SWEEP_ORPHAN_PLANS_AGE_DAYS` | `7` | Bajar a 2-3 si los orphans plans están saturando metrics (clamp [1, 90]) |
 | `MEALFIT_SWAP_RECIPE_COHERENCE_VALIDATE` | `True` | Flip a `False` para revertir al pre-P1-SWAP-RECIPE-COHERENCE behavior si validator genera FPs |
+
+### Día determinista (scorer)
+
+| Knob | Default | Cuándo cambiar |
+|---|---|---|
+| `MEALFIT_DETERMINISTIC_DAY_W_CARB_SURPLUS` | `1.0` | Peso del EXCESO de carbohidrato en el scorer de `elegir_plantillas` (clamp [0.5, 5]); `1.0` = simétrico (conducta anterior). Medido 2026-09-11 en tres dianas: `2.0` recorta el carbohidrato 6-7 pts en pérdida/estándar a costa de ~2 pts de proteína y 2-4 platos distintos — **decisión del dueño** vía canario [P1-PLAN-LOTE-10 · B7] |
+| `MEALFIT_DETERMINISTIC_DAY_W_FAT_DEFICIT` | `1.0` | Peso del DÉFICIT de grasa (clamp [0.5, 5]). A `2.0` arregla la grasa en la diana estándar pero hunde la proteína en pérdida (−12 %): dejar en `1.0` |
 
 ### Knobs default-off sin plan de activación (inventario F5 · 2026-09-11)
 

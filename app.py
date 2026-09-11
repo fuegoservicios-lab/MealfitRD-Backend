@@ -116,7 +116,10 @@ _PROCESS_START_ISO = datetime.now(timezone.utc).isoformat()
 # offset del usuario y no con el reloj del servidor (un viernes 21:00 en Santo Domingo ya no es «Sábado»).
 # [P1-PLAN-LOTE-9 · 2026-09-11] Noveno lote (hermano de G52): los 8 sitios que resolvían el huso a mano (`or 0`) —
 # estampado de fecha/día, techo y ancla del chunk, drift/resync/persist del snapshot — usan el SSOT: sin dato, RD; no UTC.
-_LAST_KNOWN_PFIX = "P1-PLAN-LOTE-9 · 2026-09-11"
+# [P1-PLAN-LOTE-10 · 2026-09-11] Décimo lote (B7, B9, D6, F3, E3 medidos; E5-E7 diseñados): el scorer del día determinista
+# gana pesos direccionales (knobs, default = conducta anterior); medido en tres dianas, 2.0/1.0 es el compromiso y lo
+# decide el dueño. El embudo del wizard era ciego (`step_done` jamás se emite).
+_LAST_KNOWN_PFIX = "P1-PLAN-LOTE-10 · 2026-09-11"
 
 # [P1-SENTRY-SAMPLE-COST · 2026-05-12] Sentry sampling driven from env vars
 # con default seguro 0.1 (10%). Pre-fix tenía `traces_sample_rate=1.0` y

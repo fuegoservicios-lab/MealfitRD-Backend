@@ -17,6 +17,8 @@ tope y pega la receta congelada de la biblioteca de 140. Si cualquier paso no cu
 | `MEALFIT_DETERMINISTIC_DAY_USERS` | *(vacío)* | Lista de uuids separados por coma. Con el knob global **apagado**, sólo esos usuarios reciben días deterministas. Es la vía de encendido segura. |
 | `MEALFIT_RECIPE_LIBRARY_SELECT` | `False` | Knob maestro de la biblioteca de recetas. **Sin él, el día determinista no construye NADA.** |
 | `MEALFIT_DETERMINISTIC_DAY_CANDIDATES` | `25` | Candidatos por franja, clamp `[3, 60]`. |
+| `MEALFIT_DETERMINISTIC_DAY_W_CARB_SURPLUS` | `1.0` | Peso del EXCESO de carbohidrato en el scorer (`P1-PLAN-LOTE-10`). `1.0` = simétrico (conducta anterior). `2.0` es el mejor compromiso medido en tres dianas — **encenderlo lo decide el dueño** (canario). |
+| `MEALFIT_DETERMINISTIC_DAY_W_FAT_DEFICIT` | `1.0` | Peso del DÉFICIT de grasa. Subirlo a `2.0` arregla la grasa en la diana estándar pero hunde la proteína en pérdida (−12 %): se deja en `1.0`. |
 
 > ⚠️ **`MEALFIT_DETERMINISTIC_DAY` solo no hace nada.** `construir_comida` devuelve `None` cuando
 > no hay receta congelada —a propósito: sin ella no hay determinismo del texto— y
@@ -77,6 +79,11 @@ dos corridas independientes:
 | Error calórico | **−0,3 %** (máx. −0,4 %) |
 | Proteína dentro de ±15 % | 19 de 42 · media **−18,6 %** |
 | Carbohidratos dentro de ±15 % | 16 de 42 · media **+16,9 %** |
+
+> **Re-medición 2026-09-11** (`scripts/measure_deterministic_day_macros.py`, DO, 14 días, mismo objetivo, scorer sin
+> cambios): **14 de 14** días construidos; proteína **+2,4 %** (14 en banda), carbohidratos **+18,0 %** (5), grasa
+> **−17,7 %** (4), kcal −0,1 %; 30 platos distintos en 56 comidas. La proteína ya está cerrada; el sesgo vivo es
+> carbohidrato/grasa. Ver «Sesgo de macros» abajo, con la matriz de pesos del scorer en tres dianas.
 | Comidas sucias (escáner culinario + backstop clínico) | **0 de 132** |
 
 ### Lo que NO cubre, y por qué
@@ -87,14 +94,31 @@ dos corridas independientes:
   doble de la porción curada es el modo de fallo de `P1-CULINARY-V6-STEP-OVERASK` (la receta dice
   «una pechuga» y la lista pide 1,9). Se arregla escribiendo cenas de res/pavo más contundentes —
   es un hueco de **datos**, no de código, y la biblioteca la juzga el dueño a ciegas.
-- **Sesgo de macros.** Proteína baja y carbos altos de forma sistemática en los tres perfiles.
-  **Subir el tope de inclinación NO es la palanca, y está medido**: barrido de `_TILT_TOPE` a
-  0,35 · 0,50 · 0,70 · 1,00 · 1,50 (más de 4×) mueve la proteína media de **−18,6 % a −18,0 %** —
-  o sea, nada. La restricción que ata es el suelo de los carbohidratos, y por debajo de eso el
-  plato simplemente no tiene más proteína que repartir. El sesgo es de **datos** (qué platos hay y
-  con qué densidad proteica), no de ajuste; subir el tope sólo distorsionaría las porciones a
-  cambio de cero. Queda abierto: las palancas reales son el **scorer** de `elegir_plantilla` y la
-  composición de la biblioteca.
+- **Sesgo de macros — re-medido el 2026-09-11** (`scripts/measure_deterministic_day_macros.py`). La
+  proteína ya NO es el problema: con el catálogo de proteína del desayuno y la puerta absoluta del
+  piso (09-09) sale en **+2,4 % (14 de 14 en banda)**; el −18,6 % de la tabla de arriba es historia.
+  Lo que quedaba era **carbohidrato +18,0 % y grasa −17,7 %**, y vive en el almuerzo (+17 g de 70) y
+  el desayuno (+12 g de 40). Dos hallazgos: (1) subir `_TILT_TOPE` sigue sin ser la palanca (medido
+  0,35 → 1,50: nada); (2) el **scorer SÍ lo era, pero por la grasa, no por la proteína**: la
+  biblioteca es alta en carbohidrato y baja en grasa de forma sistemática, y un score simétrico
+  prefería el plato exacto en proteína aunque se pasara de carbohidrato, así que los bajos en
+  carbohidrato —que **existen y escalan** (desayuno 3,9 de 24,8 candidatos; almuerzo 1,8 de 18,2;
+  merienda 6,2 de 23,7; cena 5,0 de 21,1)— no se servían nunca. Siete variantes que sólo tocaban la
+  proteína (asimetría, puerta en el empate) movieron el carbohidrato entre +16,7 % y +21,6 %: nada.
+  Los pesos direccionales del scorer son knobs (`P1-PLAN-LOTE-10`:
+  `MEALFIT_DETERMINISTIC_DAY_W_CARB_SURPLUS` / `_W_FAT_DEFICIT`, default `1.0`/`1.0` = scorer anterior).
+  Pesar ×2 los dos daba, en la diana estándar, carbohidrato +8,5 %, grasa −0,8 %, proteína +0,1 % y 34
+  platos distintos — y **medido en tres dianas dejó de parecer perfecto**: en pérdida (1600 · 140/130/55)
+  la proteína caía a −12,2 %. La matriz completa (1.0/1.0 · 1.5/1.5 · 2/1 · 1/2 · 2/2 · 3/1 y cuatro formas
+  simétricas: cuadrados, minimax, híbrido) dice que **ninguna domina**; el mejor compromiso es **2.0/1.0**:
+  carbohidrato +21,9 → +15,4 % (pérdida) y +18,0 → +10,7 % (estándar), grasa −9,5 → −0,1 % y −17,7 → −6,9 %,
+  ganancia igual o mejor (14/14 días construidos), a costa de ~2 pts de proteína en pérdida (−6,9 → −9,1 %)
+  y 2-4 platos distintos menos. Proteína y variedad contra carbohidrato es una decisión de producto, así que
+  el default no cambia y el dueño decide con el canario (`MEALFIT_DETERMINISTIC_DAY_W_CARB_SURPLUS=2`). El
+  resto es **composición**, y es del dueño: en almuerzo sólo hay dos platos ≤ 70 g de carbohidrato
+  («Tortilla de papa y queso cheddar con repollo», «Guineítos verdes guisados con costillitas magras
+  de cerdo»); faltan almuerzos con proteína entera, ~70 g de carbohidrato y ~20 g de grasa (aguacate,
+  aceite, frutos secos). El script lista por franja los que sí cumplen (`--list-low-carb`).
 - **Las 4 plantillas sin receta** (Menta, Salami de pavo, Chillo, Zapote) son
   `declared_unresolved` a propósito. Dos tienen sustituto plausible en el catálogo —Zapote ≈
   Níspero, Chillo ≈ filete de pescado blanco— pero cambiar un pescado por otro **cambia el plato**

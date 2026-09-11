@@ -341,6 +341,22 @@ def _empate_max() -> int:
     return _env_int("MEALFIT_DETERMINISTIC_DAY_TIE_MAX", 10, validator=lambda v: 1 <= v <= 50)
 
 
+def _pesos_scorer() -> tuple:
+    """[P1-PLAN-LOTE-10 · 2026-09-11 · B7] Pesos del scorer para la dirección en que la biblioteca se equivoca de
+    forma SISTEMÁTICA: exceso de carbohidrato y déficit de grasa. Default `1.0`/`1.0` = el scorer simétrico anterior,
+    byte a byte. Medido en TRES dianas (14 días cada una; pérdida 1600·140/130/55, estándar 2000·150/200/60, ganancia 2600·180/300/80): con 1.0/1.0 el carbohidrato queda en +21,9 / +18,0 / −7,6 % y la grasa en −9,5 / −17,7 / +7,3 %; con 2.0/1.0 pasa a +15,4 / +10,7 / −9,0 % y −0,1 / −6,9 / +10,7 %, la proteína cede ~2 pts en pérdida (−6,9 → −9,1 %) y se sirven 2-4 platos distintos menos; con 2.0/2.0 la proteína en pérdida cae a −12,2 %. Ninguna forma simétrica (cuadrados, minimax) domina: todas hunden la proteína.
+    Encender `2.0`/`1.0` es una decisión de producto (proteína y variedad contra carbohidrato): canario del dueño,
+    rollback sin redeploy. Clamp [0.5, 5.0].
+    tooltip-anchor: MEALFIT_DETERMINISTIC_DAY_W_CARB_SURPLUS (test_p1_plan_lote_10.py)"""
+    try:
+        from knobs import _env_float
+        ok = lambda v: 0.5 <= v <= 5.0
+        return (_env_float("MEALFIT_DETERMINISTIC_DAY_W_CARB_SURPLUS", 1.0, validator=ok),
+                _env_float("MEALFIT_DETERMINISTIC_DAY_W_FAT_DEFICIT", 1.0, validator=ok))
+    except Exception:
+        return (1.0, 1.0)
+
+
 #: El MISMO piso relativo de proteína que usa el resto del sistema (`go.PROTEIN_FLOOR_HARD_PCT`,
 #: `protein_floor_last_word._PISO_POR_DEFECTO`). Se escribe aquí como constante y no se importa de
 #: `graph_orchestrator` para no atar este módulo al god file; el test comprueba que no divergen —
@@ -388,6 +404,7 @@ def elegir_plantillas(tids, objetivo, catalogo: dict, por_id: dict, slot: str = 
     oc = max(float(objetivo.get("carbs_g") or 0), 1.0)
     of = max(float(objetivo.get("fats_g") or 0), 1.0)
     ok = float(objetivo.get("kcal") or 0)
+    _w_cs, _w_fd = _pesos_scorer()
     cands = []
     for tid in (tids or []):
         t = por_id.get(tid)
@@ -399,9 +416,18 @@ def elegir_plantillas(tids, objetivo, catalogo: dict, por_id: dict, slot: str = 
         f = ok / base["kcal"]
         if not (lo <= f <= hi):
             continue                     # servir esto sería una porción absurda
+        # [P1-PLAN-LOTE-10 · 2026-09-11 · B7] El EXCESO de carbohidrato y el DÉFICIT de grasa pueden pesar más que
+        # la dirección contraria (knobs; default 1.0/1.0 = el scorer simétrico anterior). La biblioteca es alta en
+        # carbohidrato y baja en grasa de forma sistemática, así que el score simétrico prefiere el plato exacto en
+        # proteína aunque se pase de carbohidrato, y los bajos en carbohidrato —que existen y escalan— no se sirven.
+        # Medido en TRES dianas (docs/deterministic_day.md): 2.0/1.0 recorta el carbohidrato 6-7 pts y arregla la
+        # grasa en pérdida/estándar a costa de ~2 pts de proteína y 2-4 platos distintos; 2.0/2.0 —medido primero en
+        # UNA diana y parecía perfecto— hunde la proteína en pérdida a −12 %. Encenderlo lo decide el dueño.
+        _dc = base["carbs_g"] * f - oc
+        _df = base["fats_g"] * f - of
         score = (2.0 * abs(base["protein_g"] * f - op) / op
-                 + abs(base["carbs_g"] * f - oc) / oc
-                 + abs(base["fats_g"] * f - of) / of)
+                 + (_w_cs if _dc > 0 else 1.0) * abs(_dc) / oc
+                 + (_w_fd if _df < 0 else 1.0) * abs(_df) / of)
         cands.append((round(score, 6), str(tid), t, f, base["protein_g"] * f))
     if not cands:
         return []
