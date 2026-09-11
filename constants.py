@@ -1522,14 +1522,9 @@ def chunk_execute_after_ceiling(snapshot, nuevo_offset):
         return None
     if ancla.tzinfo is None:
         ancla = ancla.replace(tzinfo=timezone.utc)
-    try:
-        tz_min = int(
-            form_data.get("tzOffset")
-            or form_data.get("tz_offset_minutes")
-            or 0
-        )
-    except (TypeError, ValueError):
-        tz_min = 0
+    # [P1-PLAN-LOTE-9 · 2026-09-11] El huso sale del SSOT (G52): 0 explícito es UTC; sin dato, `DEFAULT_TZ_OFFSET_MIN`
+    # y no 0 — con 0, el techo de un snapshot sin huso quedaba 4 h adelantado para toda la población medida (RD).
+    tz_min = tz_offset_min_for_form_data(form_data)
     # [P1-CHUNK-ANCHOR-LOCAL-DATE · 2026-08-21] La medianoche sale del SSOT, que usa la fecha
     # LOCAL del ancla. Antes se tomaba `ancla.date()` (fecha UTC) y se sumaba `tz_min` encima:
     # para España el día se descontaba dos veces y el techo quedaba 23,5 h adelantado — y como el

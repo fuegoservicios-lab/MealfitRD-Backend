@@ -37,6 +37,7 @@ from collections import Counter
 from schemas import HealthProfileSchema
 
 from constants import (
+    tz_offset_min_for_form_data,  # [P1-PLAN-LOTE-9 · 2026-09-11] SSOT del huso del formulario (G52)
     CHUNK_MIN_FRESH_PANTRY_ITEMS,
     CHUNK_MAX_FAILURE_ATTEMPTS,
     CHUNK_LEARNING_MODE,
@@ -9002,13 +9003,18 @@ def _fetch_inventory_with_backoff(user_id: str, timeouts_csv: str | None = None)
     return None, durations_ms, last_error
 
 
-def _get_user_tz_live(user_id: str, fallback_minutes: int = 0) -> int:
+def _get_user_tz_live(user_id: str, fallback_minutes: int | None = None) -> int:
     """Lee tz_offset_minutes vivo de user_profiles.health_profile.
 
     Devuelve `fallback_minutes` si el query falla, el perfil no existe o no contiene
     el campo. Usado por flujos sensibles a timezone (pantry refresh, learning gate)
     para detectar cambios de zona del usuario sin depender del snapshot del chunk.
+    [P1-PLAN-LOTE-9 · 2026-09-11] Sin `fallback_minutes`, el SSOT `DEFAULT_TZ_OFFSET_MIN` (P3-TZ-FALLBACK-SSOT):
+    el default `0` era la 4.ª respuesta a «¿qué huso asumimos?», dormida en la firma.
     """
+    if fallback_minutes is None:
+        from constants import DEFAULT_TZ_OFFSET_MIN as _default_tz
+        fallback_minutes = _default_tz
     if not user_id or user_id == "guest":
         return int(fallback_minutes)
     try:
@@ -9809,12 +9815,12 @@ def _refresh_chunk_pantry_inner(
         CHUNK_TZ_DRIFT_THRESHOLD_MINUTES as _TZ_THRESHOLD,
         CHUNK_TZ_MAJOR_DRIFT_MINUTES as _TZ_MAJOR,
     )
-    _snapshot_tz = int(
-        snapshot_form_data.get("tzOffset")
-        or snapshot_form_data.get("tz_offset_minutes")
-        or form_data.get("tzOffset")
-        or form_data.get("tz_offset_minutes")
-        or 0
+    # [P1-PLAN-LOTE-9 · 2026-09-11] El huso del snapshot sale del SSOT (G52): 0 explícito es UTC y sin dato cae a
+    # `DEFAULT_TZ_OFFSET_MIN`, no a 0 — con 0, un perfil vivo en 240 disparaba «drift mayor» (un viaje que no existió).
+    _snapshot_tz = tz_offset_min_for_form_data(
+        snapshot_form_data
+        if any(snapshot_form_data.get(k) not in (None, "") for k in ("tzOffset", "tz_offset_minutes"))
+        else form_data
     )
     _live_tz = _get_user_tz_live(user_id, _snapshot_tz)
     _tz_drift = abs(_live_tz - _snapshot_tz)
@@ -12969,7 +12975,7 @@ def _persist_fresh_pantry_to_chunks(
             logger.warning(f"[P1-PLAN-LOTE-6] _persist_fresh_pantry_to_chunks: `execute_sql_query` tragado sin rastro ({type(_f5e).__name__}: {_f5e})")
     if _resolved_user_id:
         try:
-            _live_tz = _get_user_tz_live(_resolved_user_id, fallback_minutes=0)
+            _live_tz = _get_user_tz_live(_resolved_user_id)  # [P1-PLAN-LOTE-9] sin huso ⇒ SSOT, no fabricar UTC en el snapshot
         except Exception:
             _live_tz = None
 
@@ -13572,15 +13578,9 @@ def _resolve_chunk_start_anchor(
     if not isinstance(form_data, dict):
         form_data = {}
 
-    snapshot_tz = 0
-    try:
-        snapshot_tz = int(
-            form_data.get("tzOffset")
-            or form_data.get("tz_offset_minutes")
-            or 0
-        )
-    except (TypeError, ValueError):
-        snapshot_tz = 0
+    # [P1-PLAN-LOTE-9 · 2026-09-11] SSOT (G52): sin huso en el snapshot, RD y no UTC; la fuente 4 (`forced_8am_utc`)
+    # sigue siendo el único «no sé» explícito, y sólo aplica cuando tampoco hay ancla.
+    snapshot_tz = tz_offset_min_for_form_data(form_data)
 
     fail_reasons: list = []
 
@@ -24576,7 +24576,9 @@ def _check_chunk_learning_ready(user_id: str, meal_plan_id: str, week_number: in
     # creaba un binding nuevo en el frame de la función, invisible al patcher.
 
     # [P0-4] User timezone alignment
-    _tz_offset_snapshot = int(form_data.get("tzOffset") or form_data.get("tz_offset_minutes") or 0)
+    # [P1-PLAN-LOTE-9 · 2026-09-11] SSOT (G52): ausente ≠ UTC — con `or 0`, un snapshot sin huso frente a un perfil
+    # en 240 disparaba resync atómico + push de «cambio de zona horaria» por un viaje que no existió.
+    _tz_offset_snapshot = tz_offset_min_for_form_data(form_data)
     
     # [P0-delta] Leer tz_offset vivo del user_profile para detectar viajes / cambios de zona horaria
     _tz_offset_live = _tz_offset_snapshot
@@ -24666,11 +24668,7 @@ def _check_chunk_learning_ready(user_id: str, meal_plan_id: str, week_number: in
                                     except Exception:
                                         _p05_fresh_snap = {}
                                 _p05_fresh_form = (_p05_fresh_snap or {}).get("form_data") or {}
-                                _p05_fresh_tz = int(
-                                    _p05_fresh_form.get("tzOffset")
-                                    or _p05_fresh_form.get("tz_offset_minutes")
-                                    or 0
-                                )
+                                _p05_fresh_tz = tz_offset_min_for_form_data(_p05_fresh_form)  # [P1-PLAN-LOTE-9] SSOT
                                 _p05_fresh_drift = abs(_tz_offset_live - _p05_fresh_tz)
                                 _p05_fresh_drift_triggers = _p05_fresh_drift >= CHUNK_TZ_DRIFT_THRESHOLD_MINUTES
                                 _p05_fresh_safety_triggers = (

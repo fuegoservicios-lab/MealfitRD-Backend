@@ -114,7 +114,9 @@ _PROCESS_START_ISO = datetime.now(timezone.utc).isoformat()
 # del léxico (G53/G74: fuera la segunda tabla) y el knob sin rama `MEALFIT_HARDEN_SAMEDAY_PROTEIN` se retira.
 # [P1-PLAN-LOTE-8 · 2026-09-11] Octavo lote (G52): el bloque temporal «OBLIGATORIO» del prompt calcula «hoy» con el
 # offset del usuario y no con el reloj del servidor (un viernes 21:00 en Santo Domingo ya no es «Sábado»).
-_LAST_KNOWN_PFIX = "P1-PLAN-LOTE-8 · 2026-09-11"
+# [P1-PLAN-LOTE-9 · 2026-09-11] Noveno lote (hermano de G52): los 8 sitios que resolvían el huso a mano (`or 0`) —
+# estampado de fecha/día, techo y ancla del chunk, drift/resync/persist del snapshot — usan el SSOT: sin dato, RD; no UTC.
+_LAST_KNOWN_PFIX = "P1-PLAN-LOTE-9 · 2026-09-11"
 
 # [P1-SENTRY-SAMPLE-COST · 2026-05-12] Sentry sampling driven from env vars
 # con default seguro 0.1 (10%). Pre-fix tenía `traces_sample_rate=1.0` y

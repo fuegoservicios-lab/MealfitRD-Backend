@@ -7415,12 +7415,8 @@ def _stamp_missing_day_dates(plan: dict, form_data: dict, *, now=None) -> list:
             start_dt = None
     if start_dt is None:
         start_dt = now or datetime.now(timezone.utc)
-    tz_minutes = fd.get("tzOffset") or fd.get("tz_offset_minutes") or 0
-    try:
-        if tz_minutes:
-            start_dt = start_dt - timedelta(minutes=int(tz_minutes))
-    except Exception:
-        pass
+    from constants import tz_offset_min_for_form_data as _tz_for_fd
+    start_dt = start_dt - timedelta(minutes=_tz_for_fd(fd))  # [P1-PLAN-LOTE-9] SSOT del huso (G52): sin dato, RD; no UTC
     try:
         days_offset = int(fd.get("_days_offset", 0) or 0)
     except Exception:
@@ -39245,27 +39241,13 @@ async def assemble_plan_node(state: PlanState) -> dict:
     else:
         start_dt = datetime.now(timezone.utc)
     
-    # Ajustar al timezone local del usuario (tzOffset viene en minutos, ej. 240 = UTC-4).
-    # [P1-ORQ-10] Coalesce simétrico con `cron_tasks.py:2013-2017` y
-    # `db_profiles.py:209-214`. ANTES, este nodo solo leía `tzOffset` — el
-    # nombre que el frontend envía vía `Plan.jsx:419`. Pero `health_profile`
-    # persiste el campo como `tz_offset_minutes` (ver `_postprocess_pipeline_result`
-    # en `routers/plans.py:913`), y los snapshots de cron jobs / proactive_agent
-    # / scripts internos que reconstruyen `form_data` desde el perfil del
-    # usuario llegaban acá con SOLO `tz_offset_minutes` presente → defaultaba
-    # a 0 → `target_date` calculado en UTC en lugar del huso local → `day_name`
-    # desfasado hasta 1 día completo para usuarios en UTC±8/12. El plan se
-    # entregaba con "Lunes" cuando para el usuario era domingo o martes.
-    tz_offset_minutes = (
-        form_data.get("tzOffset")
-        or form_data.get("tz_offset_minutes")
-        or 0
-    )
-    if tz_offset_minutes:
-        try:
-            start_dt = start_dt - timedelta(minutes=int(tz_offset_minutes))
-        except Exception:
-            pass
+    # Ajustar al huso local del usuario (getTimezoneOffset: 240 = UTC-4). [P1-ORQ-10] leía `tzOffset` O
+    # `tz_offset_minutes` (el perfil persiste el 2.º); [P1-PLAN-LOTE-9 · 2026-09-11] la resolución es el SSOT
+    # `constants.tz_offset_min_for_form_data` (G52): 0 explícito es UTC y sin dato `DEFAULT_TZ_OFFSET_MIN`, no UTC —
+    # «Lunes» a las 21:00 de un domingo dominicano era el mismo defecto que el bloque temporal del prompt.
+    from constants import tz_offset_min_for_form_data as _tz_for_fd
+    tz_offset_minutes = _tz_for_fd(form_data)
+    start_dt = start_dt - timedelta(minutes=tz_offset_minutes)
         
     dias_es = ["Lunes", "Martes", "Miércoles", "Jueves", "Viernes", "Sábado", "Domingo"]
     

@@ -16,6 +16,8 @@ sys.modules.setdefault('langgraph.graph.message', MagicMock())
 
 
 def _build_form_data():
+    # [P1-PLAN-LOTE-9 · 2026-09-11] Sin huso en el form, el SSOT asume 240 (RD); el stub de `_get_user_tz_live`
+    # devuelve 240 para que NO haya drift — el defecto que este archivo prueba es otro (live None ⇒ re-validación).
     return {}
 
 
@@ -45,7 +47,7 @@ def test_a_pantry_live_none_no_longer_silently_uses_snapshot():
     with patch("cron_tasks.get_user_inventory_net", side_effect=fake_get_inv), \
          patch("cron_tasks._record_inventory_live_failure", return_value=False), \
          patch("cron_tasks._record_inventory_live_success"), \
-         patch("cron_tasks._get_user_tz_live", return_value=0), \
+         patch("cron_tasks._get_user_tz_live", return_value=240), \
          patch("cron_tasks._fetch_inventory_with_backoff", return_value=(None, [], "stub")), \
          patch("cron_tasks._pause_chunk_for_stale_inventory") as mock_pause:
         # [P0-5] Renamed from `_refresh_pantry_and_get_inventory` to `_refresh_chunk_pantry`
@@ -78,7 +80,7 @@ def test_b_pantry_live_ok_preserves_live_source():
 
     with patch("cron_tasks.get_user_inventory_net", side_effect=fake_get_inv), \
          patch("cron_tasks._record_inventory_live_success") as mock_succ, \
-         patch("cron_tasks._get_user_tz_live", return_value=0):
+         patch("cron_tasks._get_user_tz_live", return_value=240):
         # [P0-5] Renamed from `_refresh_pantry_and_get_inventory` to `_refresh_chunk_pantry`
         # in cron_tasks.py:1928. The signature is identical.
         from cron_tasks import _refresh_chunk_pantry
