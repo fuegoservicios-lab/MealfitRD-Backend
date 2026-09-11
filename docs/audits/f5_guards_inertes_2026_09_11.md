@@ -89,6 +89,8 @@ no reaparezcan en esta lista.
 - Efecto: el operador cree que el binding slot→proteína está activo en producción. No lo está.
 - **Disposición: needs-owner.** O se implementa la clase 1, o se quita el knob de `graph_orchestrator.py:536` **y** de
   `prod_profile.py:59` en el mismo commit.
+- **Decidido por el dueño (2026-09-11) → `P1-PLAN-LOTE-7`: QUITADO** del god-file y de `prod_profile` en el mismo commit.
+  `MEALFIT_HARDEN_SAMEDAY_PROTEIN=true` queda huérfano en el `.env` del VPS: inerte; limpiarlo en la próxima pasada del operador.
 
 ### 2.2 `COUNTRY_SYSTEM_ENABLED` — snapshot congelado sin lector
 

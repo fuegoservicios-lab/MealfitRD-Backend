@@ -110,7 +110,9 @@ _PROCESS_START_ISO = datetime.now(timezone.utc).isoformat()
 # [P1-PLAN-LOTE-6 · 2026-09-11] Sexto lote (F5, 2.ª tanda): 68 manejadores que se tragaban el paso lo registran, los
 # veredictos advisory del intento final llegan a la alerta SRE, tres knobs sin lector o sin rama fuera, dos `if True:`
 # fuera y 20 knobs default-off documentados con criterio de activación.
-_LAST_KNOWN_PFIX = "P1-PLAN-LOTE-6 · 2026-09-11"
+# [P1-PLAN-LOTE-7 · 2026-09-11] Séptimo lote, dos decisiones del dueño: el prompt clínico neutraliza con el SSOT
+# del léxico (G53/G74: fuera la segunda tabla) y el knob sin rama `MEALFIT_HARDEN_SAMEDAY_PROTEIN` se retira.
+_LAST_KNOWN_PFIX = "P1-PLAN-LOTE-7 · 2026-09-11"
 
 # [P1-SENTRY-SAMPLE-COST · 2026-05-12] Sentry sampling driven from env vars
 # con default seguro 0.1 (10%). Pre-fix tenía `traces_sample_rate=1.0` y

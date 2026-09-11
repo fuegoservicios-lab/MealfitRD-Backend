@@ -3743,6 +3743,12 @@ def pricing_mode_for_country(country: str) -> "str | None":
 # NO convierte un prompt dominicano en uno español: quita la contradicción, no añade cultura.
 # Eso es P1-BETA-FRAGMENT-DEPTH, una tarea de contenido.
 _DO_LEXICON_NEUTRAL = (
+    # [P1-PLAN-LOTE-7 · 2026-09-11 · G53] Las tres frases largas que sólo vivían en la 2.ª tabla clínica de
+    # `condition_rules` (`_BETA_CLINICAL_FOOD_SWAPS`, borrada: nació el mismo día que este SSOT y ya divergía).
+    # Van PRIMERO para que la frase gane a «Casabe»/«Auyama» sueltos.
+    ("Revoltillo de Huevo con Casabe", "Revoltillo de Huevo con Tostada integral"),
+    ("Atún con Casabe", "Atún con Tostada integral"),
+    ("Pescado al Horno con Auyama", "Pescado al Horno con Calabaza"),
     ("salami dominicano", "embutido curado"),
     ("Salami Dominicano", "Embutido curado"),
     ("longaniza dominicana", "embutido fresco"),

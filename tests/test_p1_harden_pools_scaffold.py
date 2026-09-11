@@ -12,7 +12,7 @@ def test_knobs_exist_and_default_off():
     assert go.HARDEN_POOLS_ENABLED is False
     assert go.HARDEN_CONDITION_CATALOG is False
     assert go.HARDEN_SALTCURED_MAIN is False
-    assert go.HARDEN_SAMEDAY_PROTEIN is False
+    assert not hasattr(go, "HARDEN_SAMEDAY_PROTEIN"), "[P1-PLAN-LOTE-7] la clase 1 no tiene rama: su knob se retiró"
     assert go.HARDEN_CROSSDAY_QUOTA is False
     assert go.HARDEN_MAIN_ARITY is False
     assert go.HARDEN_POOLS_CANARY_PCT == 0

@@ -56,7 +56,8 @@ PROD_KNOBS: dict[str, str] = {
     "MEALFIT_CARB_TO_PROTEIN_SWAP": "true",
     "MEALFIT_SPICE_UNIT_AS_TSP": "true",
     "MEALFIT_HARDEN_MAIN_ARITY": "true",
-    "MEALFIT_HARDEN_SAMEDAY_PROTEIN": "true",
+    # `MEALFIT_HARDEN_SAMEDAY_PROTEIN` salió del perfil en P1-PLAN-LOTE-7: nunca tuvo rama. Queda huérfano en el
+    # .env del VPS (inerte) hasta que el operador lo limpie.
     "MEALFIT_HARDEN_POOLS_ENABLED": "true",
     # ── swap y renovación ─────────────────────────────────────────────────────────────────────
     "MEALFIT_SWAP_PER_MEAL_MACRO_CLOSER": "true",

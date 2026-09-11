@@ -28,6 +28,7 @@ from constants import (
     PREGNANCY_CONDITION_TERMS, HYPOTHYROID_CONDITION_TERMS, GOUT_CONDITION_TERMS,
     NAFLD_CONDITION_TERMS, PCOS_CONDITION_TERMS, GASTRITIS_CONDITION_TERMS,
     BARIATRIC_CONDITION_TERMS,
+    neutralize_do_lexicon,   # [P1-PLAN-LOTE-7 · G53] el ÚNICO léxico DO→neutro; aquí vivía una 2.ª tabla
 )
 
 import logging
@@ -546,31 +547,19 @@ def detect_active_rules(form_data) -> list:
     return sorted(active, key=lambda r: r.precedence)
 
 
-# [P1-CONDITION-RULES-COUNTRY · 2026-08-21] Nombres es-DO que aparecen en los EJEMPLOS clínicos
-# del prompt, con su equivalente neutro. Es una sustitución de PRESENTACIÓN sobre el texto ya
-# renderizado, no un cambio de las reglas: lo clínico (proteína primero, porción pequeña, sin
-# azúcar) no depende del alimento, y el fragmento de país ya se encarga de elegir los locales.
-# Orden largo→corto para que «pan de casabe» no quede a medias si algún día existe.
-_BETA_CLINICAL_FOOD_SWAPS = (
-    ("Revoltillo de Huevo con Casabe", "Revoltillo de Huevo con Tostada integral"),
-    ("Atún con Casabe", "Atún con Tostada integral"),
-    ("Pescado al Horno con Auyama", "Pescado al Horno con Calabaza"),
-    ("casabe", "pan tostado integral"),
-    ("Casabe", "Pan tostado integral"),
-    ("auyama", "calabaza"),
-    ("Auyama", "Calabaza"),
-    ("vainitas", "judías verdes"),
-    ("Tayota", "Calabacín"),
-    ("tayota", "calabacín"),
-)
+# [P1-CONDITION-RULES-COUNTRY · 2026-08-21 → P1-PLAN-LOTE-7 · 2026-09-11 · G53/G74] Aquí vivió
+# `_BETA_CLINICAL_FOOD_SWAPS`: una SEGUNDA tabla es-DO→neutro de 10 filas, escrita el mismo día que el SSOT
+# `constants._DO_LEXICON_NEUTRAL` y divergida desde entonces (no sabía lechosa→papaya ni víveres→tubérculos:
+# el bariátrico español seguía leyendo «víveres hervidos»). Es la clase de fallo que ya costó
+# P1-DIET-CANON-SSOT. Sus tres frases largas pasaron al SSOT; la neutralización es `neutralize_do_lexicon`.
 
 
 def build_condition_prompt(form_data) -> str:
     """Bloque de reglas nutricionales por condición (registry-driven) + nota de comorbilidad.
 
     [P1-CONDITION-RULES-COUNTRY · 2026-08-21] Para país beta, los NOMBRES es-DO de los ejemplos
-    clínicos se neutralizan al final (ver `_BETA_CLINICAL_FOOD_SWAPS`). DO y knob apagado salen
-    byte-idénticos."""
+    clínicos se neutralizan al final con el SSOT `constants.neutralize_do_lexicon` (P1-PLAN-LOTE-7 · G53).
+    DO y knob apagado salen byte-idénticos."""
     active = detect_active_rules(form_data)
     if not active:
         return ""
@@ -640,8 +629,8 @@ def build_condition_prompt(form_data) -> str:
     # pequeño, gramos enteros, sin azúcar, sin bebida junto al sólido), que es clínica y
     # universal — vaciarlo habría sido el otro error.
     if _country_is_beta(form_data):
-        for _do_name, _neutro in _BETA_CLINICAL_FOOD_SWAPS:
-            _rendered = _rendered.replace(_do_name, _neutro)
+        # [P1-PLAN-LOTE-7 · G53/G74] Un solo léxico para los tres consumidores (planner, variedad, clínico).
+        _rendered = neutralize_do_lexicon(_rendered)
     return _rendered
 
 

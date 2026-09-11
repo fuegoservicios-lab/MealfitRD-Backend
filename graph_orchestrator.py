@@ -525,7 +525,8 @@ STAPLE_REPEAT_GATE_ENABLED = _env_bool("MEALFIT_STAPLE_REPEAT_GATE", False)
 # [A1-HARDEN-POOLS · 2026-07-09] Endurecimiento determinista de la SELECCIÓN de alimentos a nivel de
 # pool: vuelve imposibles-por-construcción ~5 clases de identidad que hoy se defienden con retry-loops
 # caros y backstops de paridad (el whack-a-mole) — condición-contraindicada (clase 3), salado-como-main
-# (clase 5), proteína repetida mismo-día (clase 1), repetición cross-día (clase 2). El day-gen LLM
+# (clase 5), repetición cross-día (clase 2); la clase 1 —proteína repetida mismo-día— nunca tuvo rama y su
+# knob placeholder se retiró en P1-PLAN-LOTE-7 (decisión del dueño, 2026-09-11). El day-gen LLM
 # conserva la composición del plato + recetas + personalización dentro de rieles ahora infranqueables.
 # NACE TODO OFF (canariar contra clinical_band antes de flipear). NO retira ningún backstop
 # (reviewer/coherence/allergen/diet/renal/collect_substitutions/_apply_protein_pool_scrub sobreviven
@@ -533,7 +534,6 @@ STAPLE_REPEAT_GATE_ENABLED = _env_bool("MEALFIT_STAPLE_REPEAT_GATE", False)
 HARDEN_POOLS_ENABLED     = _env_bool("MEALFIT_HARDEN_POOLS_ENABLED", False)       # master kill-switch
 HARDEN_CONDITION_CATALOG = _env_bool("MEALFIT_HARDEN_CONDITION_CATALOG", False)   # clase 3
 HARDEN_SALTCURED_MAIN    = _env_bool("MEALFIT_HARDEN_SALTCURED_MAIN", False)      # clase 5
-HARDEN_SAMEDAY_PROTEIN   = _env_bool("MEALFIT_HARDEN_SAMEDAY_PROTEIN", False)     # clase 1
 HARDEN_CROSSDAY_QUOTA    = _env_bool("MEALFIT_HARDEN_CROSSDAY_QUOTA", False)      # clase 2
 
 # [P1-DAYGEN-DIET-CONVERGE · 2026-08-07] Convergencia clínica en GENERACIÓN. Origen: benchmark del
@@ -8288,12 +8288,12 @@ def harden_day_pools(skeleton: dict, form_data: dict, conditions=None, *, cohort
         except Exception as _c6e:
             logger.warning(f"[A1-HARDEN-POOLS clase6] falló (skip): {type(_c6e).__name__}: {_c6e}")
 
-    # ── Clase 1 (HARDEN_SAMEDAY_PROTEIN) — binding slot→proteína mismo día ──
-    # DEFERIDA: el binding "1 proteína pesada distinta por slot principal" requiere que el day-generator
-    # (prompts/day_generator.py) CONSUMA un binding per-slot para ser inalcanzable-por-construcción, y ese
-    # archivo está en WIP activo del owner → coordinar el cambio ahí es un follow-up (no se toca aquí para
-    # no colisionar). El gate same-day (build_variety_report) sigue firing → sin regresión. El knob
-    # HARDEN_SAMEDAY_PROTEIN queda declarado (OFF) como placeholder del follow-up.
+    # ── Clase 1 (proteína repetida mismo día) — SIN IMPLEMENTAR ──
+    # El binding «1 proteína pesada distinta por slot principal» exige que el day-generator consuma un binding
+    # per-slot; el gate same-day (build_variety_report) sigue cubriéndolo. Su knob placeholder
+    # `MEALFIT_HARDEN_SAMEDAY_PROTEIN` (declarado OFF, `true` en el .env de prod, SIN una sola rama) se retiró en
+    # P1-PLAN-LOTE-7 por decisión del dueño: un knob que no gobierna nada miente al operador. Si la clase 1 se
+    # implementa, que nazca CON rama y OFF. `counts["sameday_bound"]` sigue en 0 (contrato del dict).
     return counts
 
 
