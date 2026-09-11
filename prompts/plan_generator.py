@@ -2,7 +2,7 @@
 """
 Prompts y builders de contexto para el nodo Generador del pipeline LangGraph (graph_orchestrator.py).
 """
-from datetime import datetime
+from datetime import datetime, timedelta, timezone
 
 
 # ============================================================
@@ -804,7 +804,7 @@ def build_medication_context(form_data: dict) -> str:
         return ""
 
 
-def build_time_context(country=None) -> str:
+def build_time_context(country=None, tz_offset_min=None) -> str:
     """Genera el bloque de contexto temporal dinámico (fecha, día, clima y cultura).
 
     [P1-TIME-CONTEXT-COUNTRY · 2026-08-21] Era el ÚNICO bloque del prompt marcado «(OBLIGATORIO)»
@@ -821,13 +821,26 @@ def build_time_context(country=None) -> str:
     señal cultural real. País por la única puerta (`country_for_form_data`), que además aplica el
     knob maestro: DO y knob-off son byte-idénticos al bloque de siempre.
 
+    [P1-PLAN-LOTE-8 · 2026-09-11 · G52 · P2-TIME-CONTEXT-SERVER-CLOCK] «Hoy» se calculaba con el reloj del
+    SERVIDOR: a las 21:00 de un viernes en Santo Domingo (01:00Z) el ÚNICO bloque «OBLIGATORIO» ya decía «Sábado ·
+    FIN DE SEMANA · meal prep dominical», y el error escala con |offset| — no era un defecto beta, también pegaba a
+    DO. `tz_offset_min` (convención getTimezoneOffset, +240 = UTC-4) lo pasa el contexto compartido desde el
+    formulario (`constants.tz_offset_min_for_form_data`). Sin offset (None) ⇒ el reloj del proceso, byte-idéntico
+    a la conducta previa: es el camino de los tests con reloj congelado y de los callers que sólo miden tamaño.
+
     tooltip-anchor: build_time_context (test_p1_time_context_country.py)"""
     try:
         from constants import country_for_form_data as _cffd_tc
         _tc_beta = _cffd_tc({"country": country}) != "DO"
     except Exception:
         _tc_beta = False
-    now_local = datetime.now()
+    if tz_offset_min is None:
+        now_local = datetime.now()   # conducta previa (reloj del proceso); producción SIEMPRE pasa offset
+    else:
+        _now_utc = datetime.now(timezone.utc)
+        if _now_utc.tzinfo is None:   # reloj congelado naive (tests): se toma como UTC
+            _now_utc = _now_utc.replace(tzinfo=timezone.utc)
+        now_local = (_now_utc - timedelta(minutes=int(tz_offset_min))).replace(tzinfo=None)
     dias = ["Lunes", "Martes", "Miércoles", "Jueves", "Viernes", "Sábado", "Domingo"]
     meses_es = ["Enero", "Febrero", "Marzo", "Abril", "Mayo", "Junio", "Julio", "Agosto", "Septiembre", "Octubre", "Noviembre", "Diciembre"]
     dia_str = dias[now_local.weekday()]

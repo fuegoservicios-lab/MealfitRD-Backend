@@ -4829,8 +4829,10 @@ def _build_shared_context(state: PlanState, force_rebuild: bool = False) -> dict
     # country_for_form_data es la ÚNICA puerta (T1). T7 reusa `_shared_ctx_country` para
     # gatear `prices_context` (país beta sin precios nativos ⇒ el LLM no recibe la tabla
     # RD$) en vez de derivar el país una 2ª vez.
-    from constants import country_for_form_data, COUNTRY_PROFILES, pricing_mode_for_country
+    from constants import country_for_form_data, COUNTRY_PROFILES, pricing_mode_for_country, tz_offset_min_for_form_data
     _shared_ctx_country = country_for_form_data(form_data)
+    # [P1-PLAN-LOTE-8 · G52] «hoy» era el reloj del SERVIDOR (viernes 21:00 en SD ⇒ «Sábado»): offset del usuario; sin dato, el SSOT.
+    _shared_ctx_tz = tz_offset_min_for_form_data(form_data)
 
     return {
         "user_id": _uid,
@@ -4881,7 +4883,7 @@ def _build_shared_context(state: PlanState, force_rebuild: bool = False) -> dict
         # más arriba por la única puerta: el bloque temporal era el único de este dict que no lo
         # usaba, y le contaba el clima del Caribe a los 5 países beta en el ÚNICO bloque del
         # prompt marcado «(OBLIGATORIO)».
-        "time_context": build_time_context(country=_shared_ctx_country),
+        "time_context": build_time_context(country=_shared_ctx_country, tz_offset_min=_shared_ctx_tz),
         "variety_prompt": variety_prompt,
         # [P2-VEGGIE-CHANNEL-DAYGEN · 2026-07-30] reparto del seeder como DATO (veggie_pairs).
         "seeder_assignment": _seeder_assignment,
@@ -8288,11 +8290,9 @@ def harden_day_pools(skeleton: dict, form_data: dict, conditions=None, *, cohort
         except Exception as _c6e:
             logger.warning(f"[A1-HARDEN-POOLS clase6] falló (skip): {type(_c6e).__name__}: {_c6e}")
 
-    # ── Clase 1 (proteína repetida mismo día) — SIN IMPLEMENTAR ──
-    # El binding «1 proteína pesada distinta por slot principal» exige que el day-generator consuma un binding
-    # per-slot; el gate same-day (build_variety_report) sigue cubriéndolo. Su knob placeholder
-    # `MEALFIT_HARDEN_SAMEDAY_PROTEIN` (declarado OFF, `true` en el .env de prod, SIN una sola rama) se retiró en
-    # P1-PLAN-LOTE-7 por decisión del dueño: un knob que no gobierna nada miente al operador. Si la clase 1 se
+    # ── Clase 1 (proteína repetida mismo día) — SIN IMPLEMENTAR: exige que el day-generator consuma un binding
+    # per-slot; el gate same-day (build_variety_report) la cubre. Su knob placeholder `MEALFIT_HARDEN_SAMEDAY_PROTEIN`
+    # (OFF declarado, `true` en prod, sin una sola rama) se retiró en P1-PLAN-LOTE-7 por decisión del dueño: si se
     # implementa, que nazca CON rama y OFF. `counts["sameday_bound"]` sigue en 0 (contrato del dict).
     return counts
 

@@ -953,6 +953,27 @@ CHUNK_GC_DEAD_LETTER_BATCH = max(10, min(10000, int(os.environ.get("CHUNK_GC_DEA
 # dominicana, se mueve sin redeploy. Clamp a un huso real: [-840, 720].
 DEFAULT_TZ_OFFSET_MIN = max(-840, min(720, _env_int("MEALFIT_DEFAULT_TZ_OFFSET_MIN", 240)))
 
+
+def tz_offset_min_for_form_data(form_data) -> int:
+    """[P1-PLAN-LOTE-8 · 2026-09-11 · G52] Offset del usuario en minutos (convención getTimezoneOffset: +240 = UTC-4)
+    tal como viaja en el formulario: `tzOffset` (lo manda el cliente) o `tz_offset_minutes` (lo inyecta el router
+    desde el perfil). Un 0 explícito es UTC, un DATO, no una ausencia (P1-1). Sin dato ⇒ `DEFAULT_TZ_OFFSET_MIN`,
+    el SSOT de P3-TZ-FALLBACK-SSOT — y NUNCA `default_tz_offset_min` del país: T5-F1 cerró a propósito la
+    distinción país≠ubicación (un dominicano en Madrid necesita SU offset, no el de su país declarado).
+
+    tooltip-anchor: tz_offset_min_for_form_data (test_p1_plan_lote_8.py)"""
+    fd = form_data if isinstance(form_data, dict) else {}
+    for key in ("tzOffset", "tz_offset_minutes"):
+        v = fd.get(key)
+        if v is None or v == "":
+            continue
+        try:
+            n = int(float(v))
+        except (TypeError, ValueError):
+            continue
+        return max(-840, min(720, n))
+    return DEFAULT_TZ_OFFSET_MIN
+
 PANTRY_GUARD_MIN_ITEMS = max(0, min(500, _env_int("MEALFIT_PANTRY_GUARD_MIN_ITEMS", 10)))  # [P2-1-KNOBS-HYGIENE · 2026-06-15] vía helper, no os.environ raw
 
 # [P1-RENEWAL-PANTRY-IGNORE · 2026-06-26] Variety-first en la generación de plan COMPLETO
