@@ -5159,23 +5159,54 @@ def _purchase_covers_need(item: dict, need_g: float) -> bool:
     """
     try:
         need = float(need_g or 0)
-        if need <= 0:
-            return False
+    except (TypeError, ValueError):
+        return False
+    comprado = _purchased_grams(item)
+    return need > 0 and comprado is not None and comprado >= need
+
+
+def _purchased_grams(item: dict) -> "float | None":
+    """[P1-AVISO-CAPADO-LEE-EL-ENVASE · 2026-09-11] Gramos que la lista manda COMPRAR: envase ×
+    cantidad, o la propia unidad si ya es de peso. `None` si no se puede saber (unidad contable sin
+    envase, «7 Uds.»). Una sola definición para `_purchase_covers_need` y para el número de la nota."""
+    try:
         qty = float(item.get("market_qty_numeric") or 0)
         if qty <= 0:
-            return False
-        pkg = item.get("package_grams")
-        if isinstance(pkg, (int, float)) and float(pkg) > 0:
-            return (qty * float(pkg)) >= need
+            return None
+        pkg = float(item.get("package_grams") or 0)
+        if pkg > 0:
+            return qty * pkg
         unit = str(item.get("market_unit") or "").strip().lower()
         if unit.startswith("lb"):
-            return (qty * _LB_TO_G) >= need
+            return qty * _LB_TO_G
         if unit == "kg":
-            return (qty * 1000.0) >= need
+            return qty * 1000.0
         if unit in ("g", "gr", "gramos"):
-            return qty >= need
-        return False
+            return qty
+        return None
     except Exception:
+        return None
+
+
+def _cap_in_grams(post_value, base_fields: dict) -> bool:
+    """[P1-AVISO-CAPADO-LEE-EL-ENVASE · 2026-09-11] ¿El tope registrado habla en GRAMOS?
+
+    `_record_cap_applied` no guarda la unidad y cada tope tiene dos ramas: la de peso registra
+    gramos y la de conteo registra sobres o latas (P6-SPICE-CAP anota «10 → 1» en su rama de
+    sobres). Su `pre` sólo se puede comparar con lo comprado si lo que quedó tras el tope (`post`)
+    es lo mismo que llega aquí en gramos. Ante la duda, False: la nota conserva la fracción del tope.
+    """
+    try:
+        unit = str(base_fields.get("base_unit") or "").strip().lower()
+        qty = float(base_fields.get("base_qty"))
+        if unit in ("g", "gr", "gramo", "gramos"):
+            llega_g = qty
+        elif unit in ("lb", "lbs"):
+            llega_g = qty * _LB_TO_G
+        else:
+            return False
+        return abs(float(post_value) - llega_g) <= max(0.5, 0.01 * llega_g)
+    except (TypeError, ValueError, AttributeError):
         return False
 
 def apply_smart_market_units(name: str, weight_in_lbs: float, unit_str: str, raw_qty: float, master_item: dict = None, cycle_days: int = 7, text_demand_g: float = None):
@@ -6035,9 +6066,24 @@ def apply_smart_market_units(name: str, weight_in_lbs: float, unit_str: str, raw
             # peso) y se calla el aviso cuando cubre lo necesario ANTES del tope. Fail-open: si no
             # se puede calcular —10 de 39 no traen datos suficientes— se conserva el aviso, que es
             # el comportamiento de hoy.
-            _tapa_avisa = not _purchase_covers_need(result, _pre)
+            #
+            # [P1-AVISO-CAPADO-LEE-EL-ENVASE · 2026-09-11] …y con envase NUNCA se calculaba: esto
+            # corría sobre `result` antes de que llevara `package_grams` (se adjunta más abajo, en
+            # P1-BRAND-SIZE-FILTER), así que caja/pote/frasco/sobre caían en «sin datos» y sólo
+            # contaban lb/kg/g. Medido: caja de sazón de 40 g para 40 g de necesidad, tope 28 g →
+            # «~5 de 7 — recompra». Además el número de días seguía saliendo de `post/pre` (lo que
+            # sobrevive al tope) aunque la compra fuera otra. Ahora, si el tope habla en gramos, los
+            # días salen de lo COMPRADO contra la necesidad antes del tope. Con un tope en sobres o
+            # latas, o un envase recontado por unidades (P2-PACK-UNITS-MATCH: sus gramos son del
+            # SKU y la necesidad de la densidad del master), queda `post/pre` como antes.
+            _compra = dict(result, package_grams=_pkg_size_g) if _pkg_size_g else result
+            _compra_g = (_purchased_grams(_compra)
+                         if _cap_in_grams(_post, _base_fields) and not _pkg_units_recounted else None)
+            _tapa_avisa = _compra_g is None or not _purchase_covers_need(_compra, _pre)
             if not _tapa_avisa:
                 result["coverage_ok_by_package"] = True
+            if _compra_g is not None and _pre > 0:
+                _frac = _compra_g / _pre
             # [P1-CAPPED-STAPLE-HONESTY · 2026-08-03 · review final] El denominador era un literal
             # fijo de un mes, mientras la nota GEMELA de `pkg_cover_ratio` (60 líneas abajo, misma
             # función) ya es paramétrica con `cycle_days` desde P1-SKU-COVER-HONESTY-R1. En una
