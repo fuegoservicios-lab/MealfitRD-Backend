@@ -1087,6 +1087,15 @@ _COUNTRY_CATALOG_UNPRICED_BY_COUNTRY: "dict[str, tuple[str, ...]]" = {
     # Los tokens VECINOS se quedan y no es descuido: `salsa de salchicha` y `salchicha italiana`
     # (US) siguen sin precio RD porque son otro alimento; `sofrito` y `pan rallado` también, y
     # ésos se derivan de un padre ya precificado en vez de comprarse.
+    #
+    # [P1-DO-DESPENSA-DE-SU-MERCADO · 2026-09-10] CUATRO más salen, con el precio que trajo el
+    # dueño de su supermercado: `azucar morena` (US; en RD se llama «azúcar crema», Wala RD$71 las
+    # 2 lb), `pan rallado` (US; en RD «pan molido», Buenhorno RD$73/lb — el párrafo de arriba lo
+    # dejaba fuera por «derivarse de un padre precificado» y la captura del dueño lo desmiente: se
+    # compra), `sazon con culantro y achiote` (PR; Sazón Goya RD$99 los 8 sobres) y `hummus` (DO:
+    # la única alta de Task 8, listada sin precio justo «para que el supermercado pueda
+    # precificarlo después» — Dietz & Watson RD$299 los 10 oz). `sofrito` se queda: el dueño lo
+    # confirma, se HACE, no se compra.
     "ES": (
         "jamon serrano", "jamon iberico", "chorizo espanol", "morcilla", "lomo embuchado",
         "panceta iberica", "gambas", "almejas", "boquerones", "anchoas", "cordero", "requeson",
@@ -1131,7 +1140,7 @@ _COUNTRY_CATALOG_UNPRICED_BY_COUNTRY: "dict[str, tuple[str, ...]]" = {
     "PR": (
         "panapen", "jamon de cocinar", "sofrito", "recao", "adobo", "alcaparrado",
         "harina de yuca", "pique", "pavochon", "bacalaitos", "ron de cocina",
-        "longaniza puertorriquena", "chuleta ahumada", "sazon con culantro y achiote",
+        "longaniza puertorriquena", "chuleta ahumada",
         "aceite de achiote", "queso de papa", "especias para arroz con dulce",
         "aceitunas rellenas",
     ),
@@ -1141,8 +1150,8 @@ _COUNTRY_CATALOG_UNPRICED_BY_COUNTRY: "dict[str, tuple[str, ...]]" = {
         "aderezo ranch", "salsa barbacoa", "ketchup", "salsa inglesa", "malvaviscos",
         "masa para pie", "galletas graham", "salsa de salchicha", "ensalada de macarrones",
         "chile en polvo", "sazonador para tacos", "pepperoni", "salchicha italiana",
-        "mezcla para panqueques", "wafles", "azucar morena", "suero de mantequilla",
-        "pan de maiz", "semola de maiz", "arandanos rojos", "duraznos", "pan rallado",
+        "mezcla para panqueques", "wafles", "suero de mantequilla",
+        "pan de maiz", "semola de maiz", "arandanos rojos", "duraznos",
         "panecillos de mantequilla", "huevos rellenos", "nuez de castilla", "nueces pecanas",
         "queso en hebras", "queso provolone", "carne molida mixta", "bolitas de papa",
         "papas ralladas", "chili con carne",
@@ -1155,9 +1164,8 @@ _COUNTRY_CATALOG_UNPRICED_BY_COUNTRY: "dict[str, tuple[str, ...]]" = {
     # explícito del contrato de la task: listar como CATÁLOGO SIN PRECIO en vez de dropear, para
     # que el supermercado artificial (`supermarket_products`) pueda precificarlo después en vez
     # de perder el alimento en silencio de la lista.
-    "DO": (
-        "hummus",
-    ),
+    # [P1-DO-DESPENSA-DE-SU-MERCADO · 2026-09-10] vacío: su único token, `hummus`, ya tiene precio RD.
+    "DO": (),
 }
 
 # Vista plana derivada (orden estable, dedupe conservando el primero). La usan los 4 call
@@ -1405,6 +1413,19 @@ def _master_category_for_unpriced_item(name) -> "str | None":
     return None
 
 
+# [P1-DO-DESPENSA-DE-SU-MERCADO · 2026-09-10] Frases de filas CON precio RD que contienen, como
+# palabra, el token de un alimento SIN precio de otro país. El token suelto `achiote` (MX: la
+# semilla) casaba dentro de «Sazón con culantro y ACHIOTE»: mientras el sazón no tenía precio daba
+# igual; con precio es un alimento cotizado reclamado a la vez como catálogo sin precio (el choque
+# que caza `test_i2_registry_collision_sweep_extendido_a_aliases`). La frase se BORRA antes de
+# buscar tokens —no se devuelve False—, así que otra mención del token en la misma línea sigue
+# contando. Entra aquí sólo el nombre o un alias de una fila PRICED; sin acentos, en minúscula.
+_COUNTRY_CATALOG_PRICED_SHADOWS = (
+    "sazon con culantro y achiote",
+    "sazon con achiote",
+)
+
+
 def is_country_catalog_unpriced_item(name, country=None) -> bool:
     """True si `name` es uno de los alimentos de catálogo-país sin precio RD.
 
@@ -1444,6 +1465,8 @@ def is_country_catalog_unpriced_item(name, country=None) -> bool:
     try:
         from constants import strip_accents as _sa
         low = _sa(str(name or "").lower())
+        for _sombra in _COUNTRY_CATALOG_PRICED_SHADOWS:
+            low = re.sub(r"\b" + re.escape(_sombra) + r"\b", " ", low)
         tokens = _COUNTRY_CATALOG_UNPRICED_TOKENS
         if country is not None:
             # `canonicalize_country` es el ÚNICO SSOT de países (lección P1-DIET-CANON-SSOT): aquí
@@ -1461,7 +1484,11 @@ def is_country_catalog_unpriced_item(name, country=None) -> bool:
             except Exception:
                 _cc = None
             _propios = _COUNTRY_CATALOG_UNPRICED_BY_COUNTRY.get(_cc) if _cc else None
-            if _propios:
+            # [P1-DO-DESPENSA-DE-SU-MERCADO · 2026-09-10] `is not None`, no truthiness: el bloque
+            # de RD quedó VACÍO a propósito (su única alta se promovió) y un `()` falsy caía a la
+            # unión de los seis — el generador habría «verificado» jamón serrano para un dominicano.
+            # Bloque vacío = «este país no tiene altas sin precio», no «no sé qué país es».
+            if _propios is not None:
                 tokens = _propios
         if not _knob_env_bool("MEALFIT_COUNTRY_SYSTEM", False):
             tokens = tuple(t for t in tokens if t != "tortilla de maiz")

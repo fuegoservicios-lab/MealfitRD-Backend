@@ -528,16 +528,6 @@
    "transform": true
   },
   {
-   "name": "Chenchén de maíz partido con pollo guisado",
-   "slots": [
-    "almuerzo"
-   ],
-   "protein": "pollo",
-   "base": "maiz",
-   "technique": "guisado",
-   "transform": true
-  },
-  {
    "name": "Chivo guisado estilo liniero con yuca hervida",
    "slots": [
     "almuerzo"
@@ -1121,39 +1111,6 @@
     {
      "name": "Limón",
      "grams": 10.0
-    }
-   ]
-  },
-  {
-   "name": "Chacá ligero de maíz con leche de coco",
-   "slots": [
-    "desayuno",
-    "merienda"
-   ],
-   "protein": "none",
-   "base": "maiz",
-   "technique": "hervido",
-   "transform": true,
-   "constituents": [
-    {
-     "name": "Sémola de maíz",
-     "grams": 50.0
-    },
-    {
-     "name": "Leche de coco",
-     "grams": 60.0
-    },
-    {
-     "name": "Leche",
-     "grams": 150.0
-    },
-    {
-     "name": "Canela en polvo",
-     "grams": 1.0
-    },
-    {
-     "name": "Azúcar morena",
-     "grams": 6.0
     }
    ]
   },
@@ -1922,38 +1879,6 @@
    ]
   },
   {
-   "name": "Chenchén con guiso de habichuelas y huevo",
-   "slots": [
-    "almuerzo"
-   ],
-   "protein": "legumbre",
-   "base": "maiz",
-   "technique": "guisado",
-   "transform": true,
-   "constituents": [
-    {
-     "name": "Sémola de maíz",
-     "grams": 60.0
-    },
-    {
-     "name": "Habichuelas rojas",
-     "grams": 60.0
-    },
-    {
-     "name": "Huevo",
-     "grams": 50.0
-    },
-    {
-     "name": "Cebolla",
-     "grams": 30.0
-    },
-    {
-     "name": "Auyama",
-     "grams": 50.0
-    }
-   ]
-  },
-  {
    "name": "Ñame hervido con bacalao encebollado",
    "slots": [
     "cena"
@@ -2452,8 +2377,12 @@
      "grams": 10.0
     },
     {
-     "name": "Sofrito",
-     "grams": 15.0
+     "name": "Ají cubanela",
+     "grams": 10.0
+    },
+    {
+     "name": "Cilantro",
+     "grams": 5.0
     }
    ]
   },
@@ -2592,8 +2521,16 @@
      "grams": 5.0
     },
     {
-     "name": "Sofrito",
-     "grams": 15.0
+     "name": "Ají cubanela",
+     "grams": 7.0
+    },
+    {
+     "name": "Cebolla",
+     "grams": 5.0
+    },
+    {
+     "name": "Ajo",
+     "grams": 3.0
     }
    ]
   },
@@ -2724,12 +2661,20 @@
      "grams": 35.0
     },
     {
-     "name": "Sofrito",
-     "grams": 15.0
-    },
-    {
      "name": "Aceite vegetal",
      "grams": 10.0
+    },
+    {
+     "name": "Ají cubanela",
+     "grams": 10.0
+    },
+    {
+     "name": "Ajo",
+     "grams": 3.0
+    },
+    {
+     "name": "Cilantro",
+     "grams": 2.0
     }
    ]
   },

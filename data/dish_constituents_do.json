@@ -776,56 +776,6 @@
    "declared_unresolved": [],
    "origin": "curated"
   },
-  "Chenchén de maíz partido con pollo guisado": {
-   "constituents": [
-    {
-     "grams": 70.0,
-     "name": "Sémola de maíz"
-    },
-    {
-     "grams": 40.0,
-     "name": "Leche de coco"
-    },
-    {
-     "grams": 140.0,
-     "name": "Pechuga de pollo"
-    },
-    {
-     "grams": 7.0,
-     "name": "Aceite vegetal"
-    },
-    {
-     "grams": 18.0,
-     "name": "Cebolla"
-    },
-    {
-     "grams": 12.0,
-     "name": "Ají cubanela"
-    },
-    {
-     "grams": 18.0,
-     "name": "Tomate"
-    },
-    {
-     "grams": 15.0,
-     "name": "Salsa de tomate"
-    },
-    {
-     "grams": 4.0,
-     "name": "Ajo"
-    },
-    {
-     "grams": 0.5,
-     "name": "Orégano dominicano"
-    },
-    {
-     "grams": 0.5,
-     "name": "Sal"
-    }
-   ],
-   "declared_unresolved": [],
-   "origin": "curated"
-  },
   "Chicharrón de pollo al airfryer con yuca hervida": {
    "constituents": [
     {

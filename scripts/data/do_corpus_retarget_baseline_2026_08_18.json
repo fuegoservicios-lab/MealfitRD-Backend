@@ -6,8 +6,8 @@
     "chicharrón de cerdo": "Mismo caso que 'chicharron de cerdo' (variante con tilde) -- ver esa entrada.",
     "fideos integrales": "Pre-fase: sin resolver (passthrough). 'Fideos' (alta ES T5) matchea via su alias bare 'fideos' (CONTAINS). Candidato alternativo 'Pasta integral' (fila pre-fase) NO tiene 'fideos integrales' como alias -- no hay retargeteo desde una fila establecida. Macro similar (kcal 371 vs 370.5, protein 13g vs 13.5g, carbs 74.7g vs 73.1g) salvo fibra (3.2g vs 10.1g) -- divergencia menor, no clínicamente peligrosa como el caso chicharrón."
   },
-  "corpus_size": 1603,
-  "generated_at": "2026-09-10T22:27:30.677236+00:00",
+  "corpus_size": 1600,
+  "generated_at": "2026-09-11T01:09:23.650902+00:00",
   "mapping": {
     "Aceite de Oliva": "Aceite de oliva",
     "Aceite de coco": "Aceite de coco",
@@ -112,10 +112,7 @@
     "Cebollín": "Cebollín",
     "Cerdo": "Cerdo",
     "Cereza maraschino": "Cereza maraschino",
-    "Chacá ligero de maíz con leche de coco": "Leche de coco",
     "Champiñones": "Champiñones",
-    "Chenchén con guiso de habichuelas y huevo": "Habichuelas rojas",
-    "Chenchén de maíz partido con pollo guisado": "Pechuga de pollo",
     "Chicharrón de pollo al airfryer con yuca hervida": "Pechuga de pollo",
     "Chillo al horno con vegetales y batata asada": "Filete de pescado blanco",
     "Chinola": "Chinola",

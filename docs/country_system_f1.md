@@ -105,10 +105,12 @@ está respaldada por el harness `country_catalog_gap.py` (T1), no por una cuota 
 | ES | 32 | 206→238 | 80/80 | T5 |
 | MX + CO | 46 (43 USDA + 3 manual: Achiote/Flor de Jamaica/Hoja santa) | 238→284 | MX 76/76, CO 74/74 | T6 |
 | PR + US | 62 (54 USDA directo + 8 manual, incl. 6 blends ponderados) | 284→346 | PR 67/67, US 78/78 | T7 |
-| RD (top-up) | 1 (Hummus, unpriced a propósito) | 346→347 | — (catálogo nativo, sin harness `--country`) | T8 |
+| RD (top-up) | 1 (Hummus, unpriced a propósito; con precio RD desde 2026-09-10 — el bloque DO quedó vacío) | 346→347 | — (catálogo nativo, sin harness `--country`) | T8 |
 
 347 filas verificado en vivo (`SELECT COUNT(*) FROM master_ingredients`) al cierre de Task 10;
-141 sin precio RD a propósito (`is_country_catalog_unpriced_item`/`is_baking_pantry_staple`,
+141 sin precio RD a propósito (hoy 130: once ganaron precio RD después — los 7 básicos compartidos
+de P1-DO-SHARED-FOODS 2026-09-07 y azúcar morena, pan rallado, sazón con culantro y achiote y hummus
+de P1-DO-DESPENSA-DE-SU-MERCADO 2026-09-10, con capturas del dueño) (`is_country_catalog_unpriced_item`/`is_baking_pantry_staple`,
 mismo mecanismo). Barrido final Task 10 (pool abierto, tier semántico Cohere activo): los 5
 países beta en 0 silenciosas / 0 drops — sin cambios de contenido desde el harness de su task de
 catálogo (T5-T7). `--rd-drops` (telemetría de producción, 30 días) repite los mismos 7 items del

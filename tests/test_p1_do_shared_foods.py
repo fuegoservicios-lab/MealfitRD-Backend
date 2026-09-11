@@ -42,10 +42,13 @@ if str(_BACKEND) not in sys.path:
 PROMOVIDOS = ("Coditos", "Fideos", "Tocineta", "Salchichas", "Chicharrón",
               "Gallina criolla", "Pernil")
 
-# Siguen sin precio A PROPÓSITO: se derivan de un padre ya precificado (los vegetales del sofrito,
-# el pan) en vez de comprarse — el mismo patrón que `Clara de huevo` (`price_source='derived_huevo'`,
-# sale del cartón). Están aquí para que una pasada futura no los arrastre sin pensarlo.
-NO_PROMOVIDOS = ("Sofrito", "Pan rallado")
+# Siguen sin precio A PROPÓSITO: se derivan de un padre ya precificado (los vegetales del sofrito)
+# en vez de comprarse — el mismo patrón que `Clara de huevo` (`price_source='derived_huevo'`, sale
+# del cartón). Están aquí para que una pasada futura no los arrastre sin pensarlo.
+# [P1-DO-DESPENSA-DE-SU-MERCADO · 2026-09-10] `Pan rallado` salió: la premisa «se deriva del pan» la
+# desmintió el dueño con una captura — en RD se COMPRA como «pan molido» (Buenhorno, RD$73 la libra).
+# El sofrito la confirmó: «hay que hacerlo, no es un ingrediente base».
+NO_PROMOVIDOS = ("Sofrito",)
 
 
 @pytest.fixture(scope="module")
@@ -83,8 +86,10 @@ def test_los_vecinos_que_no_se_promovieron_siguen_dentro(sc):
 def test_ningun_pais_perdio_mas_tokens_de_los_suyos(sc):
     """Cuántos salió de cada país. Fija el recorte para que un `replace` amplio se note."""
     d = sc._COUNTRY_CATALOG_UNPRICED_BY_COUNTRY
+    # [P1-DO-DESPENSA-DE-SU-MERCADO · 2026-09-10] cuatro más con el precio que trajo el dueño: PR −1
+    # (sazón con culantro y achiote), US −2 (azúcar morena, pan rallado), DO −1 (hummus, su única).
     assert {k: len(v) for k, v in d.items()} == {
-        "ES": 31, "MX": 27, "CO": 17, "PR": 18, "US": 40, "DO": 1}
+        "ES": 31, "MX": 27, "CO": 17, "PR": 17, "US": 38, "DO": 0}
 
 
 def test_la_vista_plana_se_deriva_y_no_se_edita_a_mano(sc):

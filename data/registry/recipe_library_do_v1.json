@@ -96,16 +96,6 @@
     "Reparte la sopa-crema en el plato y pon encima el pollo desmenuzado. Sirve caliente."
    ]
   },
-  "tpl_bbc63aafb357": {
-   "franja": "almuerzo",
-   "pasos": [
-    "La noche antes, pon las habichuelas rojas en remojo en un bol con agua (se pesan en crudo/secas).",
-    "Escurre las habichuelas del remojo y cuécelas en una olla con unas tres tazas de agua a fuego medio unos 40-50 minutos, hasta que estén blanditas y se aplasten fácil contra la pared de la olla.",
-    "Mientras, pela la cebolla y la auyama y pícalas en pedacitos. En una sartén antiadherente sofríe la cebolla con un chorrito de agua, añade la auyama y las habichuelas ya cocidas con un poquito del agua de cocción, y déjalo guisar a fuego bajo unos 10-12 minutos, hasta que la auyama esté blandita y el guiso espese.",
-    "Prepara el chenchén: calienta cerca de una taza de agua en una olla, cuando hierva baja el fuego, agrega la sémola de maíz poco a poco mientras revuelves con una cuchara de palo para no hacer grumos (la sémola se pesa en crudo), y sigue moviendo a fuego bajo unos 8-10 minutos, hasta que la masa se despegue del fondo de la olla y quede espesa y con cuerpo.",
-    "Bate el huevo (sin cáscara) y revuélvelo en el guiso de habichuelas a fuego bajo, moviendo hasta que cuaje por completo y no escurra en ninguna parte. Sirve el guiso caliente junto al chenchén."
-   ]
-  },
   "tpl_69c10af4c101": {
    "franja": "almuerzo",
    "pasos": [
@@ -335,9 +325,9 @@
   "tpl_03a0f3927930": {
    "franja": "almuerzo",
    "pasos": [
-    "Remoja la soya texturizada en agua caliente unos 10-15 minutos hasta que se ablande y escurría bien, apretándola para sacar el exceso de agua. El arroz se pesa en crudo y las habichuelas en crudo: lavalas y remójalas aparte.",
+    "Remoja la soya texturizada en agua caliente unos 10-15 minutos hasta que se ablande y escúrrela bien, apretándola para sacar el exceso de agua. El arroz se pesa en crudo y las habichuelas en crudo: lávalas y remójalas aparte.",
     "Pon el arroz en una olla con taza y media de agua por cada taza de arroz y llévalo a fuego alto; cuando seque, baja el fuego, tapa y deja unos 15-18 minutos más, hasta que los granos estén sueltos y blanditos al probar. Los granos se pesan en crudo, así que crecen bastante al cocinarse.",
-    "Calienta el aceite en una olla a fuego medio y sofríe el sofrito, la cebolla picada y el ajo hasta que la cebolla quede transparente, unos 3-4 minutos. Añade la soya escurrida y revuelve bien para que tome el sofrito.",
+    "Pica muy fino el ají cubanela, el cilantro, la cebolla y el ajo. Calienta el aceite en una olla a fuego medio y sofríelos 3-4 minutos, hasta que la cebolla quede transparente. Añade la soya escurrida y revuelve bien para que tome el sabor.",
     "Agrega agua hasta cubrir la soya, deja que hierva y baja a fuego medio unos 10 minutos hasta que el guiso espese y la soya esté suave y jugosa por dentro. Añade las habichuelas rojas ya remojadas y cocínalas en el mismo guiso unos 15-20 minutos más, hasta que estén blanditas al morder.",
     "Sirve la chuleta de soya guisada bien calientica junto al arroz blanco y las habichuelas. ¡Buen provecho!"
    ]
@@ -562,8 +552,8 @@
    "pasos": [
     "Hidrata la soya texturizada en agua caliente unos 10-15 minutos, hasta que se ablande y esponje (se pesa en seco); escúrrela y resérvala.",
     "Pela la yuca, el ñame, el plátano verde y la auyama (las viandas se pesan peladas) y córtalos en trozos gruesos; ponlos en una olla con unas dos tazas y media de agua y hiérvelos a fuego medio unos 15-20 minutos, hasta que un cuchillo entre sin resistencia en las viandas más duras como la yuca y el ñame.",
-    "En otra olla, sofríe el sofrito con un chorrito de agua en vez de aceite a fuego medio unos 2-3 minutos, hasta que suelte su aroma y el agua se reduzca.",
-    "Escurre las viandas reservando el agua de cocción; añade las viandas y la soya hidratada a la olla del sofrito, cubre con el agua de cocción (añade más agua si no alcanza) y cocina a fuego medio unos 10-12 minutos, hasta que el caldo espese un poco y la auyama empiece a deshacerse.",
+    "En otra olla, sofríe la cebolla, el ají cubanela y el ajo picados muy finos con un chorrito de agua en vez de aceite, a fuego medio unos 2-3 minutos, hasta que suelten su aroma y el agua se reduzca.",
+    "Escurre las viandas reservando el agua de cocción; añade las viandas y la soya hidratada a esa olla, cubre con el agua de cocción (añade más agua si no alcanza) y cocina a fuego medio unos 10-12 minutos, hasta que el caldo espese un poco y la auyama empiece a deshacerse.",
     "Pica el cilantro, agrégalo al sancocho, apaga el fuego y deja reposar tapado unos 2-3 minutos antes de servir bien calientito."
    ]
   },
@@ -973,7 +963,7 @@
    "pasos": [
     "Hidrata la soya texturizada en agua caliente unos 10-15 minutos, hasta que se ablande y esponje; escúrrela bien y resérvala. La soya se mide en seco, antes de remojar.",
     "Pela la batata, córtala en trozos y hiérvela en una olla con suficiente agua que la cubra, unos 15-20 minutos, hasta que un cuchillo entre sin resistencia. Escúrrela y resérvala.",
-    "Calienta el aceite en una sartén u olla a fuego medio, añade la cebolla picada y el sofrito, y sofríe unos 3-4 minutos hasta que la cebolla esté translúcida y huela bien.",
+    "Calienta el aceite en una sartén u olla a fuego medio, añade la cebolla, el ají cubanela, el ajo y el cilantro picados muy finos, y sofríe unos 3-4 minutos hasta que la cebolla esté translúcida y huela bien.",
     "Añade la berenjena cortada en cuadritos y la soya texturizada escurrida, revuelve, agrega un poco de agua (taza y media aprox.), baja el fuego, tapa y guisa unos 15-20 minutos, hasta que la berenjena esté blandita y deshecha y el guiso haya espesado; si se seca, añade un chorrito más de agua.",
     "Sirve el guiso de berenjena con soya acompañado de la batata hervida."
    ]
@@ -994,16 +984,6 @@
     "Saca el huevo del agua y pásalo a agua fría para poder pelarlo sin pena. pélalo y resérvalo.",
     "Pela la naranja y sepárala en gajos; quítale las semillas y las partes blancas del centro si quieres que no amargue.",
     "Sirve el casabe, córtalo en trozos o cuartos, y acompáñalo con el huevo duro partido y los gajos de naranja. Toda la merienda junta en el plato y a comer."
-   ]
-  },
-  "tpl_f8a2140ab081": {
-   "franja": "desayuno",
-   "pasos": [
-    "Pon la leche, la leche de coco y la canela en una ollita a fuego medio, y deja que se caliente sin que llegue a hervir fuerte.",
-    "Cuando empiece a humear, baja el fuego y añade la sémola de maíz en lluvia, moviendo constante con una cuchara para que no se formen grumos.",
-    "Sigues moviendo a fuego bajo unos 8-10 minutos: está listo cuando la mezcla espese y la sémola se vea cocida, sin sabor a crudo y con textura cremosa de chacá.",
-    "Agrega el azúcar morena, revuelve hasta que se disuelva por completo y prueba el punto de dulzor; si quedó muy espeso, afloja con un chorrito de agua.",
-    "Sírvelo caliente en el desayuno; si lo dejas reposar, espesa más, así que mueve bien antes de comer."
    ]
   },
   "tpl_b3f1667b881c": {
@@ -1247,16 +1227,6 @@
     "Mientras el arroz se cocina, pica la cebolla y el tomate en cuadritos. Calienta el aceite en un caldero a fuego medio y sofríe la cebolla unos 2-3 minutos, hasta que esté transparente.",
     "Añade el tomate y una pizca de la sal, sofríe unos 3-4 minutos más hasta que el tomate se deshaga y suelte su jugo, y ahí agrega la leche de coco. Mezcla bien y deja que se forme el guisado.",
     "Mete el pescado en el guisado, tápalo y cocínalo a fuego bajo unos 8-10 minutos, volteándolo a mitad de camino. Está listo cuando la carne se despega en lascas sin resistencia y está opaca por dentro, sin partes translúcidas. Prueba la salsa, ajusta con el resto de la sal si hace falta, y sirve el pescado con su salsa de coco encima del arroz blanco."
-   ]
-  },
-  "tpl_16326aceee3b": {
-   "franja": "almuerzo",
-   "pasos": [
-    "Sazona la pechuga de pollo, que se pesa en crudo, con la mitad de la sal, el orégano dominicano y el ajo machacado, y déjala reposar un rato mientras preparas el resto.",
-    "Pon la sémola de maíz, que se pesa en seco, en una olla con la leche de coco y agua suficiente (unas dos tazas), y hiérvelo a fuego medio, revolviendo de vez en cuando, unos 15-20 minutos, hasta que el chenchén espese, se despegue del fondo y el maíz esté blandito sin estar crudo.",
-    "En una sartén con el aceite vegetal a fuego medio, sofríe la cebolla, el ají cubanela y el tomate picaditos unos 3-4 minutos, hasta que la cebolla se vea transparente; añade la salsa de tomate y un chorrito de agua, deja que haga un caldito unos 2 minutos más y mete el pollo.",
-    "Cocina el pollo en el guiso a fuego medio, tapado, unos 12-15 minutos, hasta que el termómetro marque 74 °C en el centro de la parte más gruesa de la pechuga; corrige con la otra mitad de la sal.",
-    "Sirve el chenchén caliente en un plato hondo y baña con el pollo guisado y su caldito encima."
    ]
   },
   "tpl_66a7e3481abd": {

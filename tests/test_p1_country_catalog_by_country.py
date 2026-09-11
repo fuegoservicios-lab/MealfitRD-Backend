@@ -63,8 +63,7 @@ def knob_on(monkeypatch):
 # dominicano (`_vc_comprable` no tiene rescate por token cuando el país es DO). Ahora llevan
 # precio verificado, con lo que el rescate sobra y dejarlo puesto era un bug real en
 # `canonicalize_shopping_food_name`. Ver `test_p1_do_shared_foods.py`.
-_TOTAL_HISTORICO = 141 - 7
-
+_TOTAL_HISTORICO = 141 - 7 - 4  # P1-DO-DESPENSA-DE-SU-MERCADO: −4 promovidos a precio RD (2026-09-10)
 _PAISES = ("ES", "MX", "CO", "PR", "US", "DO")
 
 
@@ -77,7 +76,23 @@ def test_la_particion_por_pais_existe_como_dato(sc):
     assert isinstance(m, dict)
     assert set(m) == set(_PAISES), f"faltan/sobran países: {sorted(m)}"
     for cc, toks in m.items():
-        assert isinstance(toks, tuple) and toks, f"{cc}: vacío o no es tupla"
+        assert isinstance(toks, tuple), f"{cc}: no es tupla"
+        # [P1-DO-DESPENSA-DE-SU-MERCADO · 2026-09-10] RD es el mercado CON precio: su única alta sin
+        # precio (hummus, Task 8) se promovió, y su bloque queda vacío A PROPÓSITO. Los cinco beta
+        # siguen sin poder quedarse vacíos: eso sí sería un borrado accidental.
+        if cc == "DO":
+            assert toks == (), f"DO volvió a tener altas sin precio: {toks}"
+        else:
+            assert toks, f"{cc}: bloque vacío — ¿se borró por accidente?"
+
+
+def test_rd_sin_altas_no_cae_a_la_union(sc):
+    """Un bloque VACÍO de un país conocido no es un país desconocido. El predicado trataba `()` igual
+    que «no hay bloque» y caía a la unión de los seis: preguntar por RD habría reclamado jamón serrano
+    o huitlacoche. El fail-open a la unión es para lo que NO se reconoce, no para lo que no tiene nada."""
+    for nombre in ("Hummus", "Jamón serrano", "Huitlacoche", "Pretzels"):
+        assert sc.is_country_catalog_unpriced_item(nombre, country="DO") is False, (
+            f"{nombre!r} reclamado para RD: el bloque vacío cayó a la unión")
 
 
 def test_la_tupla_plana_se_deriva_y_no_pierde_ni_inventa(sc):
@@ -97,15 +112,18 @@ def test_la_tupla_plana_se_deriva_y_no_pierde_ni_inventa(sc):
     )
 
 
-@pytest.mark.parametrize("cc,n", [("ES", 31), ("MX", 27), ("CO", 17), ("PR", 18), ("US", 40),
-                                  ("DO", 1)])
+@pytest.mark.parametrize("cc,n", [("ES", 31), ("MX", 27), ("CO", 17), ("PR", 17), ("US", 38),
+                                  ("DO", 0)])
 def test_cada_pais_conserva_el_tamano_de_su_bloque(sc, cc, n):
     """Los tamaños salen de los bloques del fuente, no de mi criterio: T5 declaró 32 altas de ES,
     T6 declaró 46 (28 MX + 18 CO), T7 declaró 62 (19 PR + 43 US) y Task 8 una sola para RD.
 
     [P1-DO-SHARED-FOODS · 2026-09-07] Cada bloque perdió los suyos al promoverse a precio RD:
     ES −1 (fideos), MX −1 (chicharrón), CO −1 (gallina criolla), PR −1 (pernil), US −3 (coditos,
-    tocineta, salchichas). DO no tenía ninguno de los siete."""
+    tocineta, salchichas). DO no tenía ninguno de los siete.
+
+    [P1-DO-DESPENSA-DE-SU-MERCADO · 2026-09-10] Cuatro más, con precio que trajo el dueño: PR −1
+    (sazón con culantro y achiote), US −2 (azúcar morena, pan rallado), DO −1 (hummus, su único)."""
     assert len(sc._COUNTRY_CATALOG_UNPRICED_BY_COUNTRY[cc]) == n
 
 
@@ -147,6 +165,9 @@ def test_el_predicado_por_pais_discrimina(sc, nombre, suyo, ajeno):
 @pytest.mark.parametrize("nombre,era_de", [
     ("Coditos", "US"), ("Tocineta", "US"), ("Salchichas", "US"),
     ("Pernil", "PR"), ("Fideos", "ES"), ("Chicharrón", "MX"), ("Gallina criolla", "CO"),
+    # [P1-DO-DESPENSA-DE-SU-MERCADO · 2026-09-10] precio traído por el dueño de su supermercado
+    ("Azúcar morena", "US"), ("Pan rallado", "US"), ("Sazón con culantro y achiote", "PR"),
+    ("Hummus", "DO"),
 ])
 def test_los_promovidos_ya_no_los_reclama_ningun_pais(sc, nombre, era_de):
     """[P1-DO-SHARED-FOODS · 2026-09-07] `Pernil` era el caso PR de los tests de arriba y se
@@ -168,7 +189,7 @@ def test_los_promovidos_ya_no_los_reclama_ningun_pais(sc, nombre, era_de):
 # ── D. Sin país ⇒ conducta de hoy ───────────────────────────────────────────────────────────────
 
 @pytest.mark.parametrize("nombre", ["Jamón serrano", "Huitlacoche", "Chontaduro", "Panapén",
-                                    "Pretzels", "Hummus"])
+                                    "Pretzels"])  # Hummus salió: promovido a precio RD el 2026-09-10
 def test_sin_pais_conserva_la_conducta_historica(sc, nombre):
     """Los 4 call sites del agregador NO pasan país y no deben cambiar: ahí conservar de más es
     correcto (perder comida de la lista en silencio es el fallo caro), y este P-fix no los toca."""

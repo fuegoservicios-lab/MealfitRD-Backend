@@ -1543,6 +1543,9 @@ _DISH_TEMPLATES_PR_US_NAMES = frozenset({
 # pre-existentes que solo ganaron un alias (mereyes/rabanos) — nunca deben aparecer en
 # `is_country_catalog_unpriced_item`, ni antes ni después de esta task.
 _DISH_TEMPLATES_RD_TOPUP_NAMES = frozenset({"Hummus"})
+# [P1-DO-DESPENSA-DE-SU-MERCADO · 2026-09-10] Hummus ya tiene precio RD y su token salió: se queda en
+# este registro como la alta de Task 8 que fue; que ningún país lo reclame ya lo verifica
+# `test_los_promovidos_ya_no_los_reclama_ningun_pais` (test_p1_country_catalog_by_country.py).
 
 # [P1-DO-SHARED-FOODS · 2026-09-07] Las altas de país beta que TAMBIÉN son básicos dominicanos y
 # por eso SÍ llevan precio RD verificado.
@@ -1571,6 +1574,11 @@ _ALTAS_PROMOVIDAS_A_PRECIO_RD = frozenset({
     "Coditos",          # T7/US — Milano 400 g · RD$38
     "Tocineta",         # T7/US — importada premium por libra · RD$265
     "Salchichas",       # T7/US — Wala hot dog 8/1 · RD$155
+    # [P1-DO-DESPENSA-DE-SU-MERCADO · 2026-09-10] capturas del dueño en su supermercado:
+    "Azúcar morena",    # T7/US — «azúcar crema» en RD · Wala 2 lb · RD$71
+    "Pan rallado",      # T7/US — «pan molido» en RD · Buenhorno 1 lb · RD$73
+    "Sazón con culantro y achiote",  # T7/PR — Sazón Goya 1,41 oz (8 sobres) · RD$99
+    "Hummus",           # Task 8/DO — Dietz & Watson 10 oz · RD$299
 })
 
 
@@ -4036,7 +4044,9 @@ def test_hummus_resuelve_y_tiene_fdc_real(sc):
         assert sc.normalize_name(q) == "Hummus", f"{q!r} debe resolver a 'Hummus'"
     row = next(r for r in sc.get_master_ingredients() if r["name"] == "Hummus")
     assert row["fdc_id"] == 174289
-    assert row["price_per_lb"] == 0 and row["price_per_unit"] == 0
+    # [P1-DO-DESPENSA-DE-SU-MERCADO · 2026-09-10] Task 8 lo listó sin precio «para que el
+    # supermercado pueda precificarlo después»; el dueño lo precificó (Dietz & Watson RD$299/10 oz).
+    assert float(row["price_per_lb"] or 0) > 0, "el hummus perdió el precio que trajo el dueño"
     assert row["nutrition_source"] == "usda"
 
 
@@ -4048,22 +4058,25 @@ def test_hummus_atwater_consistente(sc):
     assert 0.40 <= ratio <= 1.40, f"Atwater ratio {ratio} fuera de banda de sanidad"
 
 
-def test_hummus_es_country_catalog_unpriced_item(sc):
-    assert sc.is_country_catalog_unpriced_item("Hummus") is True
-    assert sc._is_verified_for_shopping("Hummus") is False
+def test_hummus_promovido_ya_no_es_catalogo_sin_precio(sc):
+    """[P1-DO-DESPENSA-DE-SU-MERCADO · 2026-09-10] Con precio RD el rescate por token sobra, y dejarlo
+    lo marcaba a la vez como priced y sin precio — el bug que `test_i2_registry_collision_sweep_...`
+    caza. Antes: `is_country_catalog_unpriced_item("Hummus") is True`."""
+    assert sc.is_country_catalog_unpriced_item("Hummus") is False
 
 
 def test_hummus_no_depende_del_knob_country_system(sc, monkeypatch):
     """A diferencia de 'tortilla de maiz' (T6 Critical #2, el ÚNICO de los 140+1 tokens
     knob-dependiente), 'hummus' NO depende de MEALFIT_COUNTRY_SYSTEM -- es RD top-up, no país
-    beta. Debe reconocerse CON el knob apagado (default) y encendido, idéntico."""
+    beta. [P1-DO-DESPENSA-DE-SU-MERCADO · 2026-09-10] Promovido a precio RD: ya NO debe reconocerse,
+    con el knob apagado (default) y encendido, idéntico."""
     monkeypatch.delenv("MEALFIT_COUNTRY_SYSTEM", raising=False)
-    assert sc.is_country_catalog_unpriced_item("Hummus") is True
+    assert sc.is_country_catalog_unpriced_item("Hummus") is False
     monkeypatch.setenv("MEALFIT_COUNTRY_SYSTEM", "true")
-    assert sc.is_country_catalog_unpriced_item("Hummus") is True
+    assert sc.is_country_catalog_unpriced_item("Hummus") is False
 
 
-def test_hummus_sobrevive_en_el_agregador_real_como_catalogo_sin_precio(sc, monkeypatch):
+def test_hummus_sobrevive_en_el_agregador_real_ya_con_precio(sc, monkeypatch):
     monkeypatch.setenv("MEALFIT_VERIFIED_INGREDIENTS_ONLY", "true")
     result = sc.aggregate_and_deduct_shopping_list(["1 pote de hummus"], structured=True)
     items = result.get("items") if isinstance(result, dict) else result
@@ -4078,7 +4091,8 @@ def test_hummus_sobrevive_en_el_agregador_real_como_catalogo_sin_precio(sc, monk
     # el alimento sin precio solo. El ruling de Task 8 no cambia — lo que cambia es que el pasillo
     # real se escribe como todos los demás.
     assert hummus_item.get("display_category") == "DESPENSA"
-    assert hummus_item.get("estimated_cost_rd") is None
+    # [P1-DO-DESPENSA-DE-SU-MERCADO · 2026-09-10] ya no es CATÁLOGO SIN PRECIO: se cotiza.
+    assert (hummus_item.get("estimated_cost_rd") or 0) > 0, "el hummus volvió a salir sin coste"
 
 
 def test_hummus_engancha_ahora_a_la_clase_sesamo(go):
