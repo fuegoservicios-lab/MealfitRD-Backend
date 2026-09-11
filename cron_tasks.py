@@ -1377,8 +1377,8 @@ def _shopping_coherence_alert_job():
                             "WHERE alert_key = %s AND resolved_at IS NULL",
                             ("shopping_coherence_alert_job_failures_burst",),
                         )
-                    except Exception:
-                        pass
+                    except Exception as _f5e:
+                        logger.warning(f"[P1-PLAN-LOTE-6] _shopping_coherence_alert_job: `execute_sql_write` tragado sin rastro ({type(_f5e).__name__}: {_f5e})")
         except Exception as _consec_err:
             logger.debug(
                 f"[P1-COH-CRON-CONSECUTIVE-FAIL] counter falló (best-effort): {_consec_err}"
@@ -2741,8 +2741,8 @@ def _alert_coherence_watchdog_silent():
                 """,
                 ("coherence_watchdog_silent",),
             )
-        except Exception:
-            pass
+        except Exception as _f5e:
+            logger.warning(f"[P1-PLAN-LOTE-6] _alert_coherence_watchdog_silent: `execute_sql_write` tragado sin rastro ({type(_f5e).__name__}: {_f5e})")
         return
 
     # Sin emisiones en la ventana → alerta deduplicada.
@@ -6043,8 +6043,8 @@ def _clinical_band_drift_alert_job():
                              "skip_reason": _skip, "threshold": threshold, "lookback_h": lookback_h},
                             ensure_ascii=False)),
             )
-        except Exception:
-            pass
+        except Exception as _f5e:
+            logger.warning(f"[P1-PLAN-LOTE-6] _clinical_band_drift_alert_job: `execute_sql_write` tragado sin rastro ({type(_f5e).__name__}: {_f5e})")
 
 
 def _plan_fallback_rate_alert_job():
@@ -9857,8 +9857,8 @@ def _refresh_chunk_pantry_inner(
                 form_data["_pantry_snapshot_age_hours"] = round(
                     (datetime.now(timezone.utc) - _cap_dt).total_seconds() / 3600.0, 2
                 )
-            except Exception:
-                pass
+            except Exception as _f5e:
+                logger.warning(f"[P1-PLAN-LOTE-6] _refresh_chunk_pantry_inner: paso tragado sin rastro ({type(_f5e).__name__}: {_f5e})")
         logger.debug(f"[P0-4/PANTRY] Inventario live OK para {user_id} ({len(pantry_live)} items).")
         # [P0-2] Live OK → resetear contador de fallos sistémicos.
         _record_inventory_live_success(user_id)
@@ -9930,8 +9930,8 @@ def _refresh_chunk_pantry_inner(
             if captured_at.tzinfo is None:
                 captured_at = captured_at.replace(tzinfo=timezone.utc)
             snapshot_age_hours = (datetime.now(timezone.utc) - captured_at).total_seconds() / 3600
-        except Exception:
-            pass
+        except Exception as _f5e:
+            logger.warning(f"[P1-PLAN-LOTE-6] _refresh_chunk_pantry_inner: paso tragado sin rastro ({type(_f5e).__name__}: {_f5e})")
 
     if snapshot_age_hours is not None and snapshot_age_hours > CHUNK_PANTRY_SNAPSHOT_TTL_HOURS:
         logger.warning(
@@ -12965,8 +12965,8 @@ def _persist_fresh_pantry_to_chunks(
             )
             if _row and _row.get("user_id"):
                 _resolved_user_id = str(_row["user_id"])
-        except Exception:
-            pass
+        except Exception as _f5e:
+            logger.warning(f"[P1-PLAN-LOTE-6] _persist_fresh_pantry_to_chunks: `execute_sql_query` tragado sin rastro ({type(_f5e).__name__}: {_f5e})")
     if _resolved_user_id:
         try:
             _live_tz = _get_user_tz_live(_resolved_user_id, fallback_minutes=0)
@@ -14636,7 +14636,8 @@ def _recover_pantry_paused_chunks() -> None:
                             _p02c_parseable = str(_p02c_raw)
                         _p02c_source = _p02c_src
                         break
-                    except Exception:
+                    except Exception as _f5e:
+                        logger.info(f"[P1-PLAN-LOTE-6] _recover_pantry_paused_chunks: paso tragado sin rastro ({type(_f5e).__name__}: {_f5e})")
                         continue
 
                 if _p02c_parseable:
@@ -22921,8 +22922,8 @@ def _alert_chunk_pantry_snapshots_stale() -> None:
             if existing:
                 cooldown_skipped = True
                 return
-        except Exception:
-            pass
+        except Exception as _f5e:
+            logger.warning(f"[P1-PLAN-LOTE-6] _alert_chunk_pantry_snapshots_stale: `execute_sql_query` tragado sin rastro ({type(_f5e).__name__}: {_f5e})")
 
         try:
             execute_sql_write(

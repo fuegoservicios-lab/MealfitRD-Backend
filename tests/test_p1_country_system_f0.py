@@ -85,8 +85,11 @@ def test_monedas_y_husos():
 
 def test_knob_maestro_nace_apagado():
     src = (_BACKEND / "constants.py").read_text(encoding="utf-8")
+    # [P1-PLAN-LOTE-6 · F5] el snapshot module-level `COUNTRY_SYSTEM_ENABLED` se borró (cero lectores): el knob
+    # maestro se lee POR LLAMADA y sigue naciendo apagado.
+    assert not re.search(r"^COUNTRY_SYSTEM_ENABLED\s*=", src, re.M), "no resucites el snapshot al importar"
     assert re.search(
-        r"COUNTRY_SYSTEM_ENABLED\s*=\s*_env_bool\(\s*\"MEALFIT_COUNTRY_SYSTEM\"\s*,\s*False\s*\)",
+        r"if not _env_bool\(\s*\"MEALFIT_COUNTRY_SYSTEM\"\s*,\s*False\s*\)",
         src,
     ), (
         "El knob maestro debe ser _env_bool('MEALFIT_COUNTRY_SYSTEM', False): "

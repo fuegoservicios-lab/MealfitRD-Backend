@@ -515,11 +515,8 @@ CHUNK_PANTRY_HARD_FAIL_AGE_HOURS = max(
 CHUNK_PANTRY_HARD_FAIL_ON_STALE = os.environ.get(
     "CHUNK_PANTRY_HARD_FAIL_ON_STALE", "true"
 ).strip().lower() in {"1", "true", "yes", "on"}
-# [P0-3 / P0-4] Timeout final (en segundos) para el live fetch bloqueante antes de abortar.
-# [P0-4] Subido de 30→60: APIs de usuarios lentas con jitter pausaban chunks ~10% de las
-# veces innecesariamente con 30s. 60s cubre p99 de la mayoría de despensas; el retry con
-# backoff (CHUNK_LIVE_FETCH_BACKOFF_TIMEOUTS_SECONDS) cubre el resto.
-CHUNK_STALE_FINAL_LIVE_TIMEOUT_SECONDS = int(os.environ.get("CHUNK_STALE_FINAL_LIVE_TIMEOUT_SECONDS", "60"))
+# [P1-PLAN-LOTE-6 · 2026-09-11 · F5] `CHUNK_STALE_FINAL_LIVE_TIMEOUT_SECONDS` (P0-3/P0-4, 60 s) se leía del entorno y
+# NADIE lo consultaba: el live-fetch usa la lista de backoff de abajo. Un timeout sin reloj es una promesa vacía; borrado.
 # [P0-4] Lista CSV de timeouts (en segundos) para el retry con backoff del live-fetch en los
 # paths de fallback (TZ-drift mayor + stale snapshot). Cada intento usa el siguiente timeout;
 # si todos fallan, se considera que el live está caído. Empezar con timeouts bajos para no
@@ -3590,7 +3587,8 @@ def canonicalize_diet_type(diet) -> str:
 
 import logging as _logging
 
-COUNTRY_SYSTEM_ENABLED = _env_bool("MEALFIT_COUNTRY_SYSTEM", False)
+# [P1-PLAN-LOTE-6 · 2026-09-11 · F5] `COUNTRY_SYSTEM_ENABLED` (snapshot al importar) se borró: cero lectores reales y
+# `app.py` ya desaconsejaba usarlo. El knob maestro `MEALFIT_COUNTRY_SYSTEM` se lee POR LLAMADA (`country_for_form_data`).
 
 COUNTRY_PROFILES = {
     # [P1-UNIT-SYSTEM-BY-COUNTRY · 2026-08-21] `unit_system` gobierna cómo se LEE la lista de la
@@ -3692,7 +3690,7 @@ def country_for_form_data(form_data) -> str:
     """País canónico para un `form_data` de sesión de generación de plan.
 
     Lee el knob maestro POR LLAMADA (`_env_bool("MEALFIT_COUNTRY_SYSTEM",
-    False)`, NO el `COUNTRY_SYSTEM_ENABLED` module-level) — mismo patrón que
+    False)`; el snapshot module-level `COUNTRY_SYSTEM_ENABLED` se borró en P1-PLAN-LOTE-6) — mismo patrón que
     el gate cold-start de `cron_tasks.get_similar_user_patterns`: el flip
     solo exige restart del proceso, no redeploy de código.
 

@@ -107,7 +107,10 @@ _PROCESS_START_ISO = datetime.now(timezone.utc).isoformat()
 # [P1-PLAN-LOTE-5 · 2026-09-11] Quinto lote (F5, guards inertes): el escáner de alérgenos del pool veta por
 # duda, las notas clínicas avisan cuando no se evalúan, salen del god-file cuatro funciones sin llamador, y la
 # «cota absoluta de la cookie sin cablear» resultó falso positivo: la aplica `_decode_session_cookie`.
-_LAST_KNOWN_PFIX = "P1-PLAN-LOTE-5 · 2026-09-11"
+# [P1-PLAN-LOTE-6 · 2026-09-11] Sexto lote (F5, 2.ª tanda): 68 manejadores que se tragaban el paso lo registran, los
+# veredictos advisory del intento final llegan a la alerta SRE, tres knobs sin lector o sin rama fuera, dos `if True:`
+# fuera y 20 knobs default-off documentados con criterio de activación.
+_LAST_KNOWN_PFIX = "P1-PLAN-LOTE-6 · 2026-09-11"
 
 # [P1-SENTRY-SAMPLE-COST · 2026-05-12] Sentry sampling driven from env vars
 # con default seguro 0.1 (10%). Pre-fix tenía `traces_sample_rate=1.0` y
@@ -2042,7 +2045,7 @@ def health_version():
     # el .env del proceso y su default de código es False. Exponer el nombre
     # exacto permite a un monitor blackbox distinguir «usuario DO» de «toda
     # la flota colapsó a DO porque el knob se perdió». Lectura por request:
-    # no usar COUNTRY_SYSTEM_ENABLED, que es un snapshot tomado al importar.
+    # el snapshot `COUNTRY_SYSTEM_ENABLED` tomado al importar se borró en P1-PLAN-LOTE-6.
     try:
         from knobs import _env_bool as _env_bool_country_health
         country_system_enabled = _env_bool_country_health(

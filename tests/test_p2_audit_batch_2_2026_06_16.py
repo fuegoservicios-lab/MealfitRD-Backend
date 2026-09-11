@@ -131,8 +131,12 @@ def test_p2_11_gates_dedented_below_band_val_check():
     clin_gate = re.search(r"^(\s*)if _maybe_mark_clinical_layer_incomplete_degraded\(", _GO_SRC, re.MULTILINE)
     res_gate = re.search(r"^(\s*)if _maybe_mark_low_resolution_degraded\(", _GO_SRC, re.MULTILINE)
     assert band_gate and panel_gate and clin_gate and res_gate
-    assert len(panel_gate.group(1)) < len(band_gate.group(1)), "panel gate debe estar menos indentado (fuera del if)"
-    assert len(clin_gate.group(1)) == len(panel_gate.group(1)) == len(res_gate.group(1))
+    # [P1-PLAN-LOTE-6 · F5] El band-gate dejó de depender de `_band_val is not None` en P1-BAND-METRIC-NO-SILENT-DROP
+    # (la condición se volvió un `if True:` vestigial y `_maybe_mark_low_band_degraded` devuelve False con None);
+    # al retirar el vestigio, los CUATRO gates corren al mismo nivel, incondicionales. Este test anclaba la sangría
+    # del vestigio, no la semántica: lo que importa es que ninguno vuelva a esconderse bajo un `if` de datos.
+    assert len(band_gate.group(1)) == len(panel_gate.group(1)) == len(clin_gate.group(1)) == len(res_gate.group(1)), (
+        "los cuatro gates de degradación corren incondicionales (P2-11 + P1-BAND-METRIC-NO-SILENT-DROP)")
 
 
 # ───────────────────────── P2-10: chunk worker propaga _quality_degraded ─────────────────────────

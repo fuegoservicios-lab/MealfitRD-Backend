@@ -757,7 +757,8 @@ def _n_gate_fruits(fruits) -> int:
     try:
         from graph_orchestrator import _featured_fruits_in_name as _ffn
         return sum(1 for f in (fruits or []) if _ffn(f))
-    except Exception:
+    except Exception as _f5e:
+        logger.warning(f"[P1-PLAN-LOTE-6] _n_gate_fruits: paso tragado sin rastro ({type(_f5e).__name__}: {_f5e})")
         return 0
 
 

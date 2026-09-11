@@ -3664,6 +3664,10 @@ class PlanState(TypedDict):
     #     `shopping_calculator._mark_guard_unevaluable`, leída en `review_plan_node` — P1-PLAN-FASE-A · A4).
     #   - `_review_unevaluable_checks`         (comprobaciones que el revisor NO pudo hacer, hoy
     #     {"shopping_coherence"}: el plan salió SIN veredicto, no con uno favorable).
+    #   - `_reviewer_advisories`               (demandas de verificación del revisor degradadas a advisory; leída por
+    #     `_final_attempt_advisories` → alerta SRE `plan_quality_degraded` — P1-PLAN-LOTE-6: tenía escritor y ningún lector).
+    #   - `_slot_incoherence_advisory_final`, `_staple_repeat_advisory_final`, `_dish_quality_advisory_final` (gates degradados
+    #     a advisory en el intento final; mismo lector; `_repeat_gate_advisory_final_attempt` vive DENTRO de `variety_report`).
     #
     # PANTRY (nevera ↔ ingredientes):
     #   - `_pantry_supplement_required`       (categoría 🚨 Compra Urgente
@@ -13589,7 +13593,8 @@ MICRO_CLOSER_MACRO_DELTA_FALLBACK = _env_bool("MEALFIT_MICRO_CLOSER_MACRO_DELTA_
 # del piso de proteína por déficit relativo en vez de por índice) nace OFF: mueve el reparto físico
 # en 3 callsites y exige A/B contra `all4_ratio` — mismo criterio que MEALFIT_FAT_LEAN_SWAP.
 SLOT_DRIFT_TELEMETRY = _env_bool("MEALFIT_SLOT_DRIFT_TELEMETRY", True)
-SLOT_AWARE_DAY_REPAIR = _env_bool("MEALFIT_SLOT_AWARE_DAY_REPAIR", False)
+# [P1-PLAN-LOTE-6 · 2026-09-11 · F5] `MEALFIT_SLOT_AWARE_DAY_REPAIR` vivió seis semanas declarado y SIN RAMA: un knob que
+# no gobierna nada es una mentira para el operador. Retirado; si el reparto slot-aware se implementa, que nazca CON rama y OFF.
 # [P2-CLOSER-SNACK-CAP · 2026-07-05] Techo físico del añadido del closer de proteína en
 # meriendas/platos ligeros (145-155g de cottage sobre fruta, plan 7e4e5570). El déficit
 # restante se cubre en comidas fuertes. Clamp [40, 300].
@@ -16384,10 +16389,11 @@ def slot_coherence_backstop_for_meal(meal: dict, meal_type: str, country: str = 
             for v in _siv_b(meal.get("ingredients") or [], slot_key):
                 if v.get("hard") and _is_do:
                     out.append(f"{v['label']} (coherencia de horario es-DO)")
-        except Exception:
-            pass
+        except Exception as _f5e:
+            logger.warning(f"[P1-PLAN-LOTE-6] slot_coherence_backstop_for_meal: paso tragado sin rastro ({type(_f5e).__name__}: {_f5e})")
         return out
-    except Exception:
+    except Exception as _f5e:
+        logger.warning(f"[P1-PLAN-LOTE-6] slot_coherence_backstop_for_meal: paso tragado sin rastro ({type(_f5e).__name__}: {_f5e})")
         return []
 
 
@@ -19264,8 +19270,8 @@ def _apply_food_safety_fixes(plan: dict) -> int:
                                        + " ".join(str(s) for s in rec if isinstance(s, str))).lower())
                     if any(t in _eb_blob for t in _EGG_BATTER_CONTEXT_TOKENS):
                         note = _FOOD_SAFETY_NOTE_EGG_BATTER
-                except Exception:
-                    pass
+                except Exception as _f5e:
+                    logger.info(f"[P1-PLAN-LOTE-6] _apply_food_safety_fixes: paso tragado sin rastro ({type(_f5e).__name__}: {_f5e})")
             meal["_food_safety_fixed"] = kind
         meal["recipe"] = rec + [note]
         fixed += 1
@@ -19306,8 +19312,8 @@ def _apply_food_safety_fixes(plan: dict) -> int:
             try:
                 _inject_blanch_for_citrus_marinade(meal)
                 _blanched = bool(meal.get("_seafood_blanch_injected"))
-            except Exception:
-                pass
+            except Exception as _f5e:
+                logger.info(f"[P1-PLAN-LOTE-6] _apply_food_safety_fixes: `_inject_blanch_for_citrus_marinade` tragado sin rastro ({type(_f5e).__name__}: {_f5e})")
             rec = meal.get("recipe")
             if not isinstance(rec, list):
                 rec = [] if rec is None else [str(rec)]
@@ -24601,7 +24607,8 @@ def _clamp_recipe_time_temp_outliers(meal: dict) -> bool:
                 meal["_recipe_timetemp_clamped"] = True
                 changed = True
         return changed
-    except Exception:
+    except Exception as _f5e:
+        logger.warning(f"[P1-PLAN-LOTE-6] _clamp_recipe_time_temp_outliers: `get` tragado sin rastro ({type(_f5e).__name__}: {_f5e})")
         return False
 
 
@@ -24850,7 +24857,8 @@ def _recipe_step_contract_issues(meal: dict) -> list:
                 out.append("paso con inglés residual")
                 break
         return out
-    except Exception:
+    except Exception as _f5e:
+        logger.warning(f"[P1-PLAN-LOTE-6] _recipe_step_contract_issues: `get` tragado sin rastro ({type(_f5e).__name__}: {_f5e})")
         return []
 
 
@@ -25114,8 +25122,8 @@ def _repair_recipe_contract(meal: dict, issues: list) -> list:
         if any("sin tiempo/temperatura" in _i for _i in issues) or "falta 'El Toque de Fuego'" in issues:
             try:
                 _inject_recipe_time_temp_defaults(meal)
-            except Exception:
-                pass
+            except Exception as _f5e:
+                logger.warning(f"[P1-PLAN-LOTE-6] _repair_recipe_contract: `_inject_recipe_time_temp_defaults` tragado sin rastro ({type(_f5e).__name__}: {_f5e})")
 
         # ── (6) Re-lint honesto: lo reparado desaparece; lo irreparable (inglés residual...) queda.
         residual = _recipe_step_contract_issues(meal)
@@ -25403,7 +25411,8 @@ def _variety_repeat_gate_issues(variety_report: dict) -> list:
                 "técnicas GENUINAMENTE distintas (hervido vs revuelto, guisado vs horneado); "
                 "'revoltillo'/'huevo revuelto' y 'horneado'/'al horno' son la MISMA técnica con otro nombre."
             )
-    except Exception:
+    except Exception as _f5e:
+        logger.warning(f"[P1-PLAN-LOTE-6] _variety_repeat_gate_issues: `int` tragado sin rastro ({type(_f5e).__name__}: {_f5e})")
         return []
     return out
 
@@ -25810,8 +25819,8 @@ def _run_assembly_validations(
                                     logger.info(
                                         f"🩹 [P1-RECIPE-AUDIT-6] nota undercook pollo/cerdo retirada de "
                                         f"{str(meal.get('name'))[:30]!r} (proteína reescrita a {_repl!r})")
-                    except Exception:
-                        pass
+                    except Exception as _f5e:
+                        logger.info(f"[P1-PLAN-LOTE-6] _run_assembly_validations: paso tragado sin rastro ({type(_f5e).__name__}: {_f5e})")
                     logger.info(f"🩹 [RECIPE-COHERENCE-AUTOFIX] Día {day.get('day')} "
                                 f"{str(meal.get('name'))[:30]!r}: mención(es) huérfana(s) "
                                 f"{_orphan_keys} → {_repl!r} (evita retry, retry_penalty=1.0)")
@@ -25866,8 +25875,8 @@ def _run_assembly_validations(
                                 recipe_coherence_errors.append(
                                     f"Día {day.get('day')}, {meal.get('name')}: es un batido pero "
                                     f"ninguna instrucción dice licuar/batir.")
-                except Exception:
-                    pass
+                except Exception as _f5e:
+                    logger.info(f"[P1-PLAN-LOTE-6] _run_assembly_validations: paso tragado sin rastro ({type(_f5e).__name__}: {_f5e})")
 
             # [P1-STEP-UNIT-PLURAL · 2026-07-25] Los pasos describen MÁS unidades de las que hay.
             # Caso vivo (plan ea79db0e, D1 Tostadas): ingrediente `1 huevo`, pasos "rompe CADA
@@ -25903,8 +25912,8 @@ def _run_assembly_validations(
                             logger.info(f"🥚 [P1-STEP-UNIT-PLURAL] Día {day.get('day')} "
                                         f"{str(meal.get('name'))[:30]!r}: {_hits} mención(es) en plural "
                                         f"con 1 {_food} listado → singular")
-                except Exception:
-                    pass
+                except Exception as _f5e:
+                    logger.info(f"[P1-PLAN-LOTE-6] _run_assembly_validations: paso tragado sin rastro ({type(_f5e).__name__}: {_f5e})")
 
             for ing in ingredients:
                 clean_ing = _re.sub(r'[\d\.,\(\)/\-]', ' ', ing)
@@ -25967,8 +25976,8 @@ def _run_assembly_validations(
                     try:
                         if all(_is_seasoning_name(cn) for cn in _verificables):
                             continue
-                    except Exception:
-                        pass
+                    except Exception as _f5e:
+                        logger.info(f"[P1-PLAN-LOTE-6] _run_assembly_validations: paso tragado sin rastro ({type(_f5e).__name__}: {_f5e})")
                     err_noun = _verificables[0]
                     msg = f"Día {day.get('day')}, {meal.get('name')}: El ingrediente principal '{err_noun}' está listado pero no se menciona en las instrucciones de la receta."
                     recipe_coherence_errors.append(msg)
@@ -27842,8 +27851,8 @@ def _generation_sanity_autofix(plan, db=None) -> int:
                     m["ingredients"] = keep
                     try:
                         _truth_up_meal_macros_from_strings(m, db)
-                    except Exception:
-                        pass
+                    except Exception as _f5e:
+                        logger.info(f"[P1-PLAN-LOTE-6] _generation_sanity_autofix: `_truth_up_meal_macros_from_strings` tragado sin rastro ({type(_f5e).__name__}: {_f5e})")
         return fixed
     except Exception as _gsa_e:
         logger.warning(f"[P3-GEN-SANITY] falló (no bloquea): {type(_gsa_e).__name__}: {_gsa_e}")
@@ -28537,10 +28546,10 @@ def finalize_plan_data_coherence(days: list, db=None, allergies=None, target_fat
                             if isinstance(_m, dict):
                                 try:
                                     _truth_up_meal_macros_from_strings(_m, db)
-                                except Exception:
-                                    pass
-                except Exception:
-                    pass
+                                except Exception as _f5e:
+                                    logger.info(f"[P1-PLAN-LOTE-6] finalize_plan_data_coherence: `_truth_up_meal_macros_from_strings` tragado sin rastro ({type(_f5e).__name__}: {_f5e})")
+                except Exception as _f5e:
+                    logger.warning(f"[P1-PLAN-LOTE-6] finalize_plan_data_coherence: paso tragado sin rastro ({type(_f5e).__name__}: {_f5e})")
     except Exception as _e0:
         logger.warning(f"[P1-COHERENCE-FINALIZE] veg-guard no-op: {type(_e0).__name__}: {_e0}")
     # [P2-STEP-CARB-GHOST + P1-PORTION-REALISM-CAP + P2-INGREDIENT-LINE-CONSOLIDATE · 2026-07-01]
@@ -28563,10 +28572,10 @@ def finalize_plan_data_coherence(days: list, db=None, allergies=None, target_fat
                             if isinstance(_m, dict):
                                 try:
                                     _truth_up_meal_macros_from_strings(_m, db)
-                                except Exception:
-                                    pass
-                except Exception:
-                    pass
+                                except Exception as _f5e:
+                                    logger.info(f"[P1-PLAN-LOTE-6] finalize_plan_data_coherence: `_truth_up_meal_macros_from_strings` tragado sin rastro ({type(_f5e).__name__}: {_f5e})")
+                except Exception as _f5e:
+                    logger.warning(f"[P1-PLAN-LOTE-6] finalize_plan_data_coherence: paso tragado sin rastro ({type(_f5e).__name__}: {_f5e})")
     except Exception as _ecgp:
         logger.warning(f"[P1-COHERENCE-FINALIZE] carb-ghost no-op: {type(_ecgp).__name__}: {_ecgp}")
     try:
@@ -28773,12 +28782,12 @@ def finalize_plan_data_coherence(days: list, db=None, allergies=None, target_fat
                 if isinstance(_m, dict):
                     try:
                         _nrc += _ensure_ingredients_used_in_recipe(_m)
-                    except Exception:
-                        pass
+                    except Exception as _f5e:
+                        logger.info(f"[P1-PLAN-LOTE-6] finalize_plan_data_coherence: `_ensure_ingredients_used_in_recipe` tragado sin rastro ({type(_f5e).__name__}: {_f5e})")
                     try:
                         _noc += _strip_offcatalog_condiments_from_recipe(_m)
-                    except Exception:
-                        pass
+                    except Exception as _f5e:
+                        logger.info(f"[P1-PLAN-LOTE-6] finalize_plan_data_coherence: `_strip_offcatalog_condiments_from_recipe` tragado sin rastro ({type(_f5e).__name__}: {_f5e})")
         if _nrc:
             total += _nrc; parts.append(f"reverse_coh={_nrc}")
         if _noc:
@@ -28830,8 +28839,8 @@ def finalize_plan_data_coherence(days: list, db=None, allergies=None, target_fat
                         if isinstance(_m, dict):
                             try:
                                 _sync_recipe_step_quantities(_m)
-                            except Exception:
-                                pass
+                            except Exception as _f5e:
+                                logger.info(f"[P1-PLAN-LOTE-6] finalize_plan_data_coherence: `_sync_recipe_step_quantities` tragado sin rastro ({type(_f5e).__name__}: {_f5e})")
     except Exception as _e8:
         logger.warning(f"[P2-AUDIT-V6-BATCH] (P2-A) shrink-floor en persist boundary no-op: {type(_e8).__name__}: {_e8}")
     # [P2-RAW-DISPLAY-RECONCILE · 2026-07-05] también en el persist boundary (updates/chunks 2+):
@@ -28920,8 +28929,9 @@ def finalize_plan_data_coherence(days: list, db=None, allergies=None, target_fat
         if _n_rest:
             total += _n_rest
             parts.append(f"display_restored={_n_rest}")
-    except Exception:
-        pass
+    except Exception as _f5e:
+        logger.warning(f"[P1-PLAN-LOTE-6] finalize_plan_data_coherence: `_restore_display_from_raw_orphans` tragado sin rastro ({type(_f5e).__name__}: {_f5e})")
+        parts.append("_restore_display_from_raw_orphans=ERR")
     # [P1-FINALIZE-COUNTABLE-POLISH · 2026-07-06] Última pasada de frontera: decimales
     # contables re-introducidos por el re-trim de banda, dup unidad-alimento, marca del
     # súper en receta y cap cítrico por comida (review #13).
@@ -28930,16 +28940,18 @@ def finalize_plan_data_coherence(days: list, db=None, allergies=None, target_fat
         if _n_pol:
             total += _n_pol
             parts.append(f"display_polished={_n_pol}")
-    except Exception:
-        pass
+    except Exception as _f5e:
+        logger.warning(f"[P1-PLAN-LOTE-6] finalize_plan_data_coherence: `_polish_finalize_display` tragado sin rastro ({type(_f5e).__name__}: {_f5e})")
+        parts.append("_polish_finalize_display=ERR")
     # [P1-DESC-FOOD-HONESTY · 2026-07-27] la desc no puede vender alimentos que el plato no lleva.
     try:
         _n_dh = _desc_food_honesty_pass(days)
         if _n_dh:
             total += _n_dh
             parts.append(f"desc_honesty={_n_dh}")
-    except Exception:
-        pass
+    except Exception as _f5e:
+        logger.warning(f"[P1-PLAN-LOTE-6] finalize_plan_data_coherence: `_desc_food_honesty_pass` tragado sin rastro ({type(_f5e).__name__}: {_f5e})")
+        parts.append("_desc_food_honesty_pass=ERR")
     # [P1-CEVICHE-DAIRY-RENAME · 2026-07-28] "Ceviche de Queso" → "Queso Marinado en Cítricos"
     # (el lácteo no se cura; vegetal y pescado-crudo quedan intactos — ver el pase).
     try:
@@ -28947,8 +28959,9 @@ def finalize_plan_data_coherence(days: list, db=None, allergies=None, target_fat
         if _n_cv:
             total += _n_cv
             parts.append(f"ceviche_dairy={_n_cv}")
-    except Exception:
-        pass
+    except Exception as _f5e:
+        logger.warning(f"[P1-PLAN-LOTE-6] finalize_plan_data_coherence: `_ceviche_dairy_rename_pass` tragado sin rastro ({type(_f5e).__name__}: {_f5e})")
+        parts.append("_ceviche_dairy_rename_pass=ERR")
     # [P1-EGG-COUNT-STEP-SYNC · 2026-07-28] "1 huevo" listado pero los pasos usan "el otro
     # huevo" → 2 huevos (el truth-up de abajo re-mide macros).
     try:
@@ -28956,8 +28969,9 @@ def finalize_plan_data_coherence(days: list, db=None, allergies=None, target_fat
         if _n_eg:
             total += _n_eg
             parts.append(f"egg_count_sync={_n_eg}")
-    except Exception:
-        pass
+    except Exception as _f5e:
+        logger.warning(f"[P1-PLAN-LOTE-6] finalize_plan_data_coherence: `_egg_count_step_sync` tragado sin rastro ({type(_f5e).__name__}: {_f5e})")
+        parts.append("_egg_count_step_sync=ERR")
     # [P1-VARIETY-GATE-GAPS · 2026-07-29] "Espolvorea con perejil picado" sin perejil en
     # ingredientes (mero del plan vivo 73db1e79; misma clase que el cilantro fantasma del
     # day-gen): la receta ya usa la hierba → se lista para que la compra la incluya.
@@ -28966,16 +28980,18 @@ def finalize_plan_data_coherence(days: list, db=None, allergies=None, target_fat
         if _n_gb:
             total += _n_gb
             parts.append(f"garnish_backfill={_n_gb}")
-    except Exception:
-        pass
+    except Exception as _f5e:
+        logger.warning(f"[P1-PLAN-LOTE-6] finalize_plan_data_coherence: `_garnish_herb_mention_backfill` tragado sin rastro ({type(_f5e).__name__}: {_f5e})")
+        parts.append("_garnish_herb_mention_backfill=ERR")
     # [P1-MENU-COHERENCE-2 · 2026-07-29] harina cruda "de cumplimiento" (sin masa) fuera.
     try:
         _n_fl = _strip_raw_flour_compliance_bolt(days)
         if _n_fl:
             total += _n_fl
             parts.append(f"raw_flour_bolt={_n_fl}")
-    except Exception:
-        pass
+    except Exception as _f5e:
+        logger.warning(f"[P1-PLAN-LOTE-6] finalize_plan_data_coherence: `_strip_raw_flour_compliance_bolt` tragado sin rastro ({type(_f5e).__name__}: {_f5e})")
+        parts.append("_strip_raw_flour_compliance_bolt=ERR")
     # [P1-GROUND-MEAT-STEP-NOUN · 2026-07-28] pasos con "pechuga de X" cuando el ingrediente
     # es "X molido" → forma molida (display-only).
     try:
@@ -28983,8 +28999,9 @@ def finalize_plan_data_coherence(days: list, db=None, allergies=None, target_fat
         if _n_gm:
             total += _n_gm
             parts.append(f"ground_noun_sync={_n_gm}")
-    except Exception:
-        pass
+    except Exception as _f5e:
+        logger.warning(f"[P1-PLAN-LOTE-6] finalize_plan_data_coherence: `_ground_meat_step_noun_sync` tragado sin rastro ({type(_f5e).__name__}: {_f5e})")
+        parts.append("_ground_meat_step_noun_sync=ERR")
     # [P1-BIGFRUIT-COUNT-FRACTION · 2026-07-28] "1 lechosa mediana (202 g)" → "¼ de lechosa
     # mediana (202 g)" (la entera pesa ~700 g; display-only, el hint ya manda en macros).
     try:
@@ -28992,8 +29009,9 @@ def finalize_plan_data_coherence(days: list, db=None, allergies=None, target_fat
         if _n_bf:
             total += _n_bf
             parts.append(f"bigfruit_fraction={_n_bf}")
-    except Exception:
-        pass
+    except Exception as _f5e:
+        logger.warning(f"[P1-PLAN-LOTE-6] finalize_plan_data_coherence: `_bigfruit_count_fraction_honesty` tragado sin rastro ({type(_f5e).__name__}: {_f5e})")
+        parts.append("_bigfruit_count_fraction_honesty=ERR")
     # [P1-FRESH-CANNED-PROSE · 2026-07-28] verbos de lata sobre proteína fresca ("escurre
     # el filete... reservando el líquido de la lata") → prosa de fresco/batch.
     try:
@@ -29001,32 +29019,36 @@ def finalize_plan_data_coherence(days: list, db=None, allergies=None, target_fat
         if _n_fp:
             total += _n_fp
             parts.append(f"fresh_canned_prose={_n_fp}")
-    except Exception:
-        pass
+    except Exception as _f5e:
+        logger.warning(f"[P1-PLAN-LOTE-6] finalize_plan_data_coherence: `_fresh_protein_canned_prose_fix` tragado sin rastro ({type(_f5e).__name__}: {_f5e})")
+        parts.append("_fresh_protein_canned_prose_fix=ERR")
     # [P1-BAKING-POWDER-CAP · 2026-07-28] leudante en CDAS → 1 cdta (plausibilidad).
     try:
         _n_bp = _baking_powder_cap_pass(days)
         if _n_bp:
             total += _n_bp
             parts.append(f"baking_powder_cap={_n_bp}")
-    except Exception:
-        pass
+    except Exception as _f5e:
+        logger.warning(f"[P1-PLAN-LOTE-6] finalize_plan_data_coherence: `_baking_powder_cap_pass` tragado sin rastro ({type(_f5e).__name__}: {_f5e})")
+        parts.append("_baking_powder_cap_pass=ERR")
     # [P1-HERB-COUNT-GENDER · 2026-07-28] "3 perejil fresco"→ramitas + "Guisadas"→Guisado.
     try:
         _n_hg = _herb_count_and_gender_polish(days)
         if _n_hg:
             total += _n_hg
             parts.append(f"herb_gender={_n_hg}")
-    except Exception:
-        pass
+    except Exception as _f5e:
+        logger.warning(f"[P1-PLAN-LOTE-6] finalize_plan_data_coherence: `_herb_count_and_gender_polish` tragado sin rastro ({type(_f5e).__name__}: {_f5e})")
+        parts.append("_herb_count_and_gender_polish=ERR")
     # [P2-RICE-WATER-RATIO · 2026-07-24] agua del arroz fuera de proporción (8:1 en vivo).
     try:
         _n_rw = _rice_water_ratio_fix(days)
         if _n_rw:
             total += _n_rw
             parts.append(f"rice_water={_n_rw}")
-    except Exception:
-        pass
+    except Exception as _f5e:
+        logger.warning(f"[P1-PLAN-LOTE-6] finalize_plan_data_coherence: `_rice_water_ratio_fix` tragado sin rastro ({type(_f5e).__name__}: {_f5e})")
+        parts.append("_rice_water_ratio_fix=ERR")
     # [P1-CLOSER-STEP-INTEGRATE · 2026-07-08] fusiona el paso 💪 del closer en el TdF (platos cocinados) —
     # persist boundary / chunks semanas 2+ (paridad con assemble).
     try:
@@ -29034,16 +29056,18 @@ def finalize_plan_data_coherence(days: list, db=None, allergies=None, target_fat
         if _n_ci:
             total += _n_ci
             parts.append(f"complement_integrated={_n_ci}")
-    except Exception:
-        pass
+    except Exception as _f5e:
+        logger.warning(f"[P1-PLAN-LOTE-6] finalize_plan_data_coherence: `_integrate_complement_steps` tragado sin rastro ({type(_f5e).__name__}: {_f5e})")
+        parts.append("_integrate_complement_steps=ERR")
     # [P2-STEP-PHRASE-DEDUP · 2026-07-06] "queso blanco y queso blanco" → "queso blanco" (review #14).
     try:
         _n_dd2 = _dedup_repeated_phrases_in_plan(days)
         if _n_dd2:
             total += _n_dd2
             parts.append(f"phrase_deduped={_n_dd2}")
-    except Exception:
-        pass
+    except Exception as _f5e:
+        logger.warning(f"[P1-PLAN-LOTE-6] finalize_plan_data_coherence: `_dedup_repeated_phrases_in_plan` tragado sin rastro ({type(_f5e).__name__}: {_f5e})")
+        parts.append("_dedup_repeated_phrases_in_plan=ERR")
     # [P2-CLOSER-STEP-BOUNDARY-DEDUP · 2026-07-06] pasos 💪 "Incorpora X…" que otros pasos
     # reales dejaron redundantes (ordering-independiente, espejo de P1-CLOSER-HYGIENE).
     try:
@@ -29051,8 +29075,9 @@ def finalize_plan_data_coherence(days: list, db=None, allergies=None, target_fat
         if _n_dd:
             total += _n_dd
             parts.append(f"closer_steps_deduped={_n_dd}")
-    except Exception:
-        pass
+    except Exception as _f5e:
+        logger.warning(f"[P1-PLAN-LOTE-6] finalize_plan_data_coherence: `_dedup_redundant_closer_steps` tragado sin rastro ({type(_f5e).__name__}: {_f5e})")
+        parts.append("_dedup_redundant_closer_steps=ERR")
     # [P2-STEP-DECIMAL-POLISH · 2026-07-24] Pulido del TEXTO de los pasos (el de arriba solo
     # recorre ingredients/ingredients_raw). Va **AL FINAL, después de todos los pases que
     # reescriben pasos** — es el orden lo que lo hace efectivo:
@@ -29068,8 +29093,9 @@ def finalize_plan_data_coherence(days: list, db=None, allergies=None, target_fat
         if _n_sd:
             total += _n_sd
             parts.append(f"step_decimals={_n_sd}")
-    except Exception:
-        pass
+    except Exception as _f5e:
+        logger.warning(f"[P1-PLAN-LOTE-6] finalize_plan_data_coherence: `_polish_recipe_step_decimals` tragado sin rastro ({type(_f5e).__name__}: {_f5e})")
+        parts.append("_polish_recipe_step_decimals=ERR")
     # [P1-INTEGRATE-ALIGN-GUARD · 2026-07-06] TELEMETRÍA de desalineación display↔raw: crónica
     # (7-10 de 12 meals en los planes recientes — raw con "Sal al gusto"/"ajo" que display no
     # tiene, longitudes distintas) y ROMPE todo pase posicional (lockstep por idx). Este WARN
@@ -29088,8 +29114,8 @@ def finalize_plan_data_coherence(days: list, db=None, allergies=None, target_fat
                                    f"meal={str(_m.get('name'))[:45]}")
         if _mis_n:
             parts.append(f"raw_misalign={_mis_n}")
-    except Exception:
-        pass
+    except Exception as _f5e:
+        logger.warning(f"[P1-PLAN-LOTE-6] finalize_plan_data_coherence: paso tragado sin rastro ({type(_f5e).__name__}: {_f5e})")
     # [P2-MISE-COOK-SPLIT · 2026-07-06] cocción atrapada en el Mise sin pilar TdF → split ANTES
     # del lint (el advisory "falta El Toque de Fuego" era falso-positivo para el usuario).
     # [P1-CULINARY-CONTRACT · 2026-07-31] Paridad con assemble: en `assemble_plan_node` el trío
@@ -29162,8 +29188,8 @@ def finalize_plan_data_coherence(days: list, db=None, allergies=None, target_fat
                         try:
                             if _truth_up_meal_macros_from_strings(_m, db):
                                 _ntu += 1
-                        except Exception:
-                            pass
+                        except Exception as _f5e:
+                            logger.info(f"[P1-PLAN-LOTE-6] finalize_plan_data_coherence: paso tragado sin rastro ({type(_f5e).__name__}: {_f5e})")
             if _ntu:
                 total += _ntu; parts.append(f"final_truthup={_ntu}")
     except Exception as _etu:
@@ -29337,8 +29363,8 @@ def finalize_single_meal_recipe_coherence(meal: dict, db=None, pantry_strict: bo
                     total += _nv
                     try:
                         _truth_up_meal_macros_from_strings(meal, db)
-                    except Exception:
-                        pass
+                    except Exception as _f5e:
+                        logger.warning(f"[P1-PLAN-LOTE-6] finalize_single_meal_recipe_coherence: `_truth_up_meal_macros_from_strings` tragado sin rastro ({type(_f5e).__name__}: {_f5e})")
         except Exception as _ev:
             logger.warning(f"[P1-UPDATE-RECIPE-FINALIZE] veg-guard no-op: {type(_ev).__name__}: {_ev}")
         # [P2-STEP-CARB-GHOST · 2026-07-01] (batch P1-DISH-REALISM-BATCH) carbs fantasma también en updates
@@ -29352,8 +29378,8 @@ def finalize_single_meal_recipe_coherence(meal: dict, db=None, pantry_strict: bo
                     total += _ncg
                     try:
                         _truth_up_meal_macros_from_strings(meal, db)
-                    except Exception:
-                        pass
+                    except Exception as _f5e:
+                        logger.warning(f"[P1-PLAN-LOTE-6] finalize_single_meal_recipe_coherence: `_truth_up_meal_macros_from_strings` tragado sin rastro ({type(_f5e).__name__}: {_f5e})")
         except Exception as _ecg:
             logger.warning(f"[P1-UPDATE-RECIPE-FINALIZE] carb-ghost no-op: {type(_ecg).__name__}: {_ecg}")
         # [P1-PORTION-REALISM-CAP · 2026-07-01] techo de porción realista también en updates (un swap/modify
@@ -29481,8 +29507,8 @@ def finalize_single_meal_recipe_coherence(meal: dict, db=None, pantry_strict: bo
         try:
             total += _enrich_generic_cheese_display_from_raw(meal)
             _note_claras_save_yolks(meal)   # [P1-CLARAS-YOLK-NOTE]
-        except Exception:
-            pass
+        except Exception as _f5e:
+            logger.warning(f"[P1-PLAN-LOTE-6] finalize_single_meal_recipe_coherence: `_enrich_generic_cheese_display_from_raw` tragado sin rastro ({type(_f5e).__name__}: {_f5e})")
         # [P2-RECIPE-HUMANIZE-UPDATES · 2026-06-29] (re-audit objetivo · P2 RECIPE-HUMANIZE-UPDATES-2) La
         # humanización de display (colapso de doble-fracción, '1 huevos'→'1 huevo', '¼ cda'→'1 cdta', medidas
         # caseras) corría SOLO en form-gen (g_o.py:16929 sobre el result SSE); los platos editados mostraban
@@ -29536,8 +29562,8 @@ def finalize_single_meal_recipe_coherence(meal: dict, db=None, pantry_strict: bo
         try:
             if _split_cooking_from_mise(meal):
                 total += 1
-        except Exception:
-            pass
+        except Exception as _f5e:
+            logger.warning(f"[P1-PLAN-LOTE-6] finalize_single_meal_recipe_coherence: paso tragado sin rastro ({type(_f5e).__name__}: {_f5e})")
         try:
             _rc_issues = _recipe_step_contract_issues(meal)
             # [P1-RECIPE-CONTRACT-REPAIR · 2026-07-10] reparar ANTES de flagear (mismo patrón que
@@ -30220,8 +30246,8 @@ def _day_sodium_autofix(days: list, form_data=None, db=None) -> int:
             if SODIUM_DAIRY_SWAP_ENABLED and _sodium_clinical:
                 _active_ladder = _SODIUM_SWAP_LADDER + _SODIUM_DAIRY_SWAP_LADDER
                 _active_name_rx = f"(?:{_SODIUM_SWAP_NAME_RX}|{_SODIUM_DAIRY_NAME_RX})"
-        except Exception:
-            pass
+        except Exception as _f5e:
+            logger.warning(f"[P1-PLAN-LOTE-6] _day_sodium_autofix: `_condition_strings` tragado sin rastro ({type(_f5e).__name__}: {_f5e})")
         # [P1-SODIUM-BOMB-POOL · 2026-07-05] check de reemplazo PER-ENTRY (antes un único
         # "Filete de pescado blanco" hardcodeado): alergia a pescado bloquea el swap de
         # bacalao/enlatados pero salami→pollo sigue disponible. Cache por candidato.
@@ -30260,8 +30286,8 @@ def _day_sodium_autofix(days: list, form_data=None, db=None) -> int:
                 _unk = sum(meal_sodium_detail(_m, db)[1] for _m in meals if isinstance(_m, dict))
                 if _unk and isinstance(_d, dict):
                     _d["_sodium_unknown_lines"] = int(_unk)
-            except Exception:
-                pass
+            except Exception as _f5e:
+                logger.info(f"[P1-PLAN-LOTE-6] _day_sodium_autofix: `sum` tragado sin rastro ({type(_f5e).__name__}: {_f5e})")
             if not meals or _day_sodium(meals) <= float(SODIUM_DAY_CEILING_MG):
                 continue
             # (1) strip de bombas de sodio sin rol de macros.
@@ -30451,12 +30477,12 @@ def _day_sodium_autofix(days: list, form_data=None, db=None) -> int:
                 try:
                     _rewrite_recipe_steps_after_subs(
                         _bm, [(["sardina", "sardinas", "atun", _sa_na(str(_btok))], _swap_repl)])
-                except Exception:
-                    pass
+                except Exception as _f5e:
+                    logger.info(f"[P1-PLAN-LOTE-6] _day_sodium_autofix: `_rewrite_recipe_steps_after_subs` tragado sin rastro ({type(_f5e).__name__}: {_f5e})")
                 try:
                     _truth_up_meal_macros_from_strings(_bm, db)
-                except Exception:
-                    pass
+                except Exception as _f5e:
+                    logger.info(f"[P1-PLAN-LOTE-6] _day_sodium_autofix: `_truth_up_meal_macros_from_strings` tragado sin rastro ({type(_f5e).__name__}: {_f5e})")
                 # [P1-SODIUM-BOMB-POOL] marker por familia (el fidelity-discount distingue ambos).
                 _is_saltcured_swap = any(t in _sa_na(str(_btok).lower()) for t in _SALTCURED_TOKEN_SET)
                 _bm["_sodium_autofix_applied"] = "swap_saltcured" if _is_saltcured_swap else "swap_canned"
@@ -30466,8 +30492,8 @@ def _day_sodium_autofix(days: list, form_data=None, db=None) -> int:
                 if _is_saltcured_swap:
                     try:
                         _strip_desalt_instructions(_bm)
-                    except Exception:
-                        pass
+                    except Exception as _f5e:
+                        logger.info(f"[P1-PLAN-LOTE-6] _day_sodium_autofix: `_strip_desalt_instructions` tragado sin rastro ({type(_f5e).__name__}: {_f5e})")
                 actions += 1
                 _swaps_left -= 1
         if actions:
@@ -34055,39 +34081,38 @@ def _cap_unrealistic_portions(days, db=None, *, count_caps=None) -> int:
                     # es independiente de la masa, así que `min()` no puede quitar comida real que
                     # otro tope ya haya aprobado — recorta piezas, y el gramaje lo sigue mandando
                     # la rama de gramos. Las ramas 2/2b siguen en cascada.
-                    if True:
-                        m_n = _REALISM_COUNT_LEAD_RE.match(il)
-                        if m_n and (m_n.group(1) or m_n.group(2)):  # [P1-COUNT-UNICODE-FRAC] exige nº o fracción
-                            _cap_n = None
-                            for _ct, _cv in _REALISM_COMPOUND_COUNT_CAPS:
-                                if _ct in il:
-                                    _cap_n = _cv
-                                    break
-                            if _cap_n is None:
-                                _noun = m_n.group(3).rstrip("s")
-                                _cap_n = _CC.get(_noun)
-                                # [P1-COUNT-UNIT-NOUN · 2026-07-25] Si lo contado es la
-                                # PRESENTACIÓN ("6½ láminas de casabe"), el cap que aplica es el
-                                # del alimento que va tras "de". Sin esto, mi propio cap de
-                                # casabe no disparaba nunca porque el regex miraba 'lamina'.
-                                if _cap_n is None and (_noun in _COUNT_PRESENTATION_NOUNS
-                                                       or _noun + "s" in _COUNT_PRESENTATION_NOUNS):
-                                    # SOLO si la línea no declara gramos. "6½ láminas de casabe
-                                    # (95 g)" tiene un conteo absurdo pero una MASA razonable: el
-                                    # conteo es cosmético y los caps por gramos ya gobiernan.
-                                    # Capear ahí recortaría 95 g → 29 g, o sea quitar comida real
-                                    # por un problema de etiqueta — y la banda lo pagaría.
-                                    if not _re.search(r"\(\s*[\d.,]+\s*(?:g|gr|gramos)\b", il):
-                                        _m_de = _re.search(r"\bde\s+([a-z]+)", il)
-                                        if _m_de:
-                                            _cap_n = _CC.get(_m_de.group(1).rstrip("s"))
-                            if _cap_n:
-                                cur_n = float((m_n.group(1) or "0").replace(",", "."))
-                                cur_n += _REALISM_FRAC_MAP.get(m_n.group(2) or "", 0.0)  # "1½"→1.5
-                                if cur_n > _cap_n:
-                                    # [P1-CAP-STRICTEST-WINS] gana el más estricto, no el primero.
-                                    _f_count = _cap_n / cur_n
-                                    factor = _f_count if factor is None else min(factor, _f_count)
+                    m_n = _REALISM_COUNT_LEAD_RE.match(il)
+                    if m_n and (m_n.group(1) or m_n.group(2)):  # [P1-COUNT-UNICODE-FRAC] exige nº o fracción
+                        _cap_n = None
+                        for _ct, _cv in _REALISM_COMPOUND_COUNT_CAPS:
+                            if _ct in il:
+                                _cap_n = _cv
+                                break
+                        if _cap_n is None:
+                            _noun = m_n.group(3).rstrip("s")
+                            _cap_n = _CC.get(_noun)
+                            # [P1-COUNT-UNIT-NOUN · 2026-07-25] Si lo contado es la
+                            # PRESENTACIÓN ("6½ láminas de casabe"), el cap que aplica es el
+                            # del alimento que va tras "de". Sin esto, mi propio cap de
+                            # casabe no disparaba nunca porque el regex miraba 'lamina'.
+                            if _cap_n is None and (_noun in _COUNT_PRESENTATION_NOUNS
+                                                   or _noun + "s" in _COUNT_PRESENTATION_NOUNS):
+                                # SOLO si la línea no declara gramos. "6½ láminas de casabe
+                                # (95 g)" tiene un conteo absurdo pero una MASA razonable: el
+                                # conteo es cosmético y los caps por gramos ya gobiernan.
+                                # Capear ahí recortaría 95 g → 29 g, o sea quitar comida real
+                                # por un problema de etiqueta — y la banda lo pagaría.
+                                if not _re.search(r"\(\s*[\d.,]+\s*(?:g|gr|gramos)\b", il):
+                                    _m_de = _re.search(r"\bde\s+([a-z]+)", il)
+                                    if _m_de:
+                                        _cap_n = _CC.get(_m_de.group(1).rstrip("s"))
+                        if _cap_n:
+                            cur_n = float((m_n.group(1) or "0").replace(",", "."))
+                            cur_n += _REALISM_FRAC_MAP.get(m_n.group(2) or "", 0.0)  # "1½"→1.5
+                            if cur_n > _cap_n:
+                                # [P1-CAP-STRICTEST-WINS] gana el más estricto, no el primero.
+                                _f_count = _cap_n / cur_n
+                                factor = _f_count if factor is None else min(factor, _f_count)
                     # [P1-RECONCILE-CDA-DENSITY · 2026-08-02] 4) MASA IMPLÍCITA de vegetal acuoso
                     # en las unidades que ninguna rama de masa ve (taza / cda / cdta / conteo).
                     #
@@ -42431,8 +42456,8 @@ def _coherence_block_history_cap() -> int:
                 "es inválido (debe ser >= 1). Fallback al default %d.",
                 cap, _COHERENCE_BLOCK_HISTORY_CAP_DEFAULT,
             )
-        except Exception:
-            pass
+        except Exception as _f5e:
+            logger.warning(f"[P1-PLAN-LOTE-6] _coherence_block_history_cap: `warning` tragado sin rastro ({type(_f5e).__name__}: {_f5e})")
         return _COHERENCE_BLOCK_HISTORY_CAP_DEFAULT
     return cap
 
@@ -42539,9 +42564,9 @@ def _apply_coherence_history_cap(
                 truncated_count,
                 cap,
             )
-        except Exception:
+        except Exception as _f5e:
             # Logging es best-effort; no debe romper el append.
-            pass
+            logger.warning(f"[P1-PLAN-LOTE-6] _apply_coherence_history_cap: `warning` tragado sin rastro ({type(_f5e).__name__}: {_f5e})")
     return new_history
 
 
@@ -45261,6 +45286,7 @@ def _emit_plan_quality_degraded_alert(
             "user_id": user_id,
             "top_rejection_reasons": rejection_reasons[:5],
             "caller_context": caller_context,  # P1-NEW-9
+            "final_attempt_advisories": _final_attempt_advisories(plan_result),  # P1-PLAN-LOTE-6 (F5): el lector que faltaba
             # [P1-QUALITY-ALERT-PLAN-ID] Solo cuando falta el plan_id: es el asa del canje.
             **({"correlation_id": _corr_id} if _corr_id else {}),
         }
@@ -45387,6 +45413,25 @@ def _mark_plan_result_quality_degraded(state: PlanState, reason: str, severity: 
 # aprueba (lente ortogonal a slot-coherence/monotonía) y el flag de degradación nunca se seteaba.
 # Con el knob ON marcamos `_quality_degraded` (minor) para que el usuario sepa que puede haber
 # repetición y use Cambiar Plato. Rollback: MEALFIT_MARKER_UNRESOLVED_HONESTY=false.
+_FINAL_ATTEMPT_GATE_ADVISORY_FLAGS = (   # P1-SLOT-INCOHERENCE-GATE · P1-STAPLE-REPEAT-GATE · P2-DISH-QUALITY-GATE
+    "_slot_incoherence_advisory_final", "_staple_repeat_advisory_final", "_dish_quality_advisory_final")
+
+
+def _final_attempt_advisories(plan_result, include_reviewer: bool = True) -> list:
+    """[P1-PLAN-LOTE-6 · 2026-09-11 · F5] Los veredictos «advisory en el intento final» tenían ESCRITOR y ningún LECTOR
+    (0 lecturas en backend y frontend). Devuelve los presentes en `plan_result` para la alerta `plan_quality_degraded`
+    (`final_attempt_advisories`); `_reviewer_advisories` (frecuente por diseño) sólo acompaña: no dispara la alerta."""
+    if not isinstance(plan_result, dict):
+        return []
+    out = [k for k in _FINAL_ATTEMPT_GATE_ADVISORY_FLAGS if plan_result.get(k)]
+    _vr = plan_result.get("variety_report")
+    if isinstance(_vr, dict) and _vr.get("_repeat_gate_advisory_final_attempt"):
+        out.append("_repeat_gate_advisory_final_attempt")     # P1-VARIETY-REPEAT-GRACEFUL
+    if include_reviewer and plan_result.get("_reviewer_advisories"):
+        out.append("_reviewer_advisories")                    # P1-REVIEWER-VERIFICATION-ADVISORY
+    return out
+
+
 MARKER_UNRESOLVED_HONESTY = _env_bool("MEALFIT_MARKER_UNRESOLVED_HONESTY", True)
 # [P2-AUDIT-V5-BATCH · 2026-07-02] (GAP-03) `_day_fallback` era un marker write-only: días de
 # plantilla matemática (worker de día muerto tras hedging) se entregaban como plan plenamente
@@ -45532,6 +45577,14 @@ def should_retry(state: PlanState) -> str:
             # (mismo alert_key coalesced que las 5 ramas review_passed=False) con exit_reason
             # propio para que SRE filtre "aprobado pero con días residuales" del resto.
             if APPROVED_RESIDUAL_ALERT_ENABLED and (_residual_markers or _residual_fb):
+                _emit_plan_quality_degraded_alert(state, "approved_with_residual", severity="minor")
+        # [P1-PLAN-LOTE-6 · F5] Un gate degradado a advisory en el intento final ENTREGA el plan con una violación conocida;
+        # antes quedaba en una bandera sin lector. Misma alerta SRE que los residuales (mismo knob); el banner del usuario
+        # no cambia (sus 14 motivos son contrato con el frontend: decisión aparte).
+        _adv_final = _final_attempt_advisories(state.get("plan_result"), include_reviewer=False)
+        if _adv_final:
+            logger.warning(f"[P1-PLAN-LOTE-6] plan aprobado con {len(_adv_final)} veredicto(s) advisory del intento final: {_adv_final}")
+            if APPROVED_RESIDUAL_ALERT_ENABLED:
                 _emit_plan_quality_degraded_alert(state, "approved_with_residual", severity="minor")
         logger.info("✅ [ORQUESTADOR] Revisión aprobada → Enviando al usuario.")
         return "end"
@@ -46488,8 +46541,8 @@ async def semantic_cache_check_node(state: PlanState) -> dict:
                     f"≥ threshold {SEMANTIC_CACHE_COSINE_THRESHOLD:.3f} "
                     f"(mejor similitud: {_best_sim:.4f})."
                 )
-            except Exception:
-                pass
+            except Exception as _f5e:
+                logger.warning(f"[P1-PLAN-LOTE-6] semantic_cache_check_node: `max` tragado sin rastro ({type(_f5e).__name__}: {_f5e})")
 
         valid_plan = None
         plan_data = None
@@ -46565,8 +46618,8 @@ async def semantic_cache_check_node(state: PlanState) -> dict:
                         if days_old > 30:
                             logger.info(f"🗑️ [SEMANTIC CACHE] Plan descartado por antigüedad ({days_old} días > 30).")
                             continue
-                    except Exception:
-                        pass
+                    except Exception as _f5e:
+                        logger.info(f"[P1-PLAN-LOTE-6] semantic_cache_check_node: `safe_fromisoformat` tragado sin rastro ({type(_f5e).__name__}: {_f5e})")
 
                 # P1-Q4: Validar drift del target nutricional (calorías + macros).
                 # ------------------------------------------------------------
@@ -48925,7 +48978,8 @@ def _emit_slot_drift_metric_best_effort(slot_drift, plan, form_data=None) -> Non
     salía a ningún sitio: el único consumidor del dict que lo contiene es el gate de retry,
     que lee `score`/`per_macro` y descarta el resto. Medido el 2026-08-05: 0 menciones en
     24 h de log, 0 filas en la DB. Una medición que nadie puede leer no puede sostener la
-    decisión que aplazó — encender o no `MEALFIT_SLOT_AWARE_DAY_REPAIR`.
+    decisión que aplazó — implementar o no el reparto slot-aware (su knob `MEALFIT_SLOT_AWARE_DAY_REPAIR`,
+    declarado sin rama, se retiró en P1-PLAN-LOTE-6).
 
     Best-effort y sin efectos: cualquier fallo se traga: es telemetría, no puede tumbar una
     generación. `node='slot_drift'` para poder agrupar sin parsear texto.
@@ -49147,7 +49201,7 @@ def compute_clinical_band_score(plan: dict, nutrition: dict, *,
             # Desayuno→Almuerzo→Merienda y la CENA casi nunca recibe). Ninguna métrica del sistema
             # observaba la desviación por slot: la banda puntúa celdas día×macro, que son ciegas al
             # reparto interno. Esto la hace observable ANTES de tocar el reparto físico (los levers
-            # (a) y (b) del hallazgo nacen OFF bajo MEALFIT_SLOT_AWARE_DAY_REPAIR).
+            # (a) y (b) del hallazgo siguen sin implementar; su knob sin rama se retiró en P1-PLAN-LOTE-6).
             # tooltip-anchor: P2-SLOT-DRIFT-TELEMETRY
             "slot_drift": _compute_slot_drift(plan) if SLOT_DRIFT_TELEMETRY else None,
         }
@@ -49634,8 +49688,8 @@ def refresh_clinical_band_score_post_finalize(plan_data: dict, *, user_id: "str 
         _prev_val = _prev.get("score") if isinstance(_prev, dict) else None
         try:
             refresh_delivered_macros(plan_data)  # summary display refleja los meals finalizados
-        except Exception:
-            pass
+        except Exception as _f5e:
+            logger.warning(f"[P1-PLAN-LOTE-6] refresh_clinical_band_score_post_finalize: `refresh_delivered_macros` tragado sin rastro ({type(_f5e).__name__}: {_f5e})")
         _bs = compute_clinical_band_score(plan_data, {})
         _val = _bs.get("score")
         if _val is None:
@@ -50481,7 +50535,8 @@ def _maybe_mark_clinical_layer_incomplete_degraded(plan: dict, form_data: dict, 
         except Exception as _al_e:
             logger.warning(f"[P2-CLINICAL-LAYER-CONSUMER] alert best-effort falló: {type(_al_e).__name__}: {_al_e}")
         return marked
-    except Exception:
+    except Exception as _f5e:
+        logger.warning(f"[P1-PLAN-LOTE-6] _maybe_mark_clinical_layer_incomplete_degraded: paso tragado sin rastro ({type(_f5e).__name__}: {_f5e})")
         return False
 
 
@@ -50671,91 +50726,90 @@ def _compute_pipeline_holistic_score_and_emit(
                 # cuando no hay score. El lector puede excluirlas del promedio de banda sin perder
                 # el denominador ni los reintentos. Preferimos una fila honesta con un hueco marcado
                 # a ninguna fila. tooltip-anchor: P1-BAND-METRIC-NO-SILENT-DROP
-                if True:
-                    _emit_progress(initial_state, "metric", {
-                        "node": "clinical_band",
-                        "duration_ms": int(pipeline_duration * 1000),
-                        "retries": final_state.get("attempt", 1) - 1,
-                        "tokens_estimated": 0,
-                        # [P1-BAND-METRIC-NO-SILENT-DROP] `confidence` es NOT NULL en la tabla, así
-                        # que sin score va 0.0 — y `band_unavailable` lo marca para que el lector
-                        # NO lo promedie como un plan malo. Un 0 sin marca sería peor que la fila
-                        # ausente: bajaría la banda media de la cohorte con un dato inexistente.
-                        "confidence": _band_val if _band_val is not None else 0.0,
-                        "metadata": {
-                            "band_unavailable": _band_val is None,
-                            "cells_in_band": _band.get("cells_in_band"),
-                            "cells_total": _band.get("cells_total"),
-                            "score_macros_only": _band.get("score_macros_only"),  # [P2-BAND-MACROS-ONLY] kcal-excluido
-                            "per_macro": _band.get("per_macro"),
-                            "band_macros": _band.get("band_macros"),
-                            # [P1-BAND-TELEMETRY-PER-DAY · 2026-07-10] matriz día×macro — forensics sin
-                            # reprocesar logs (forensic corr=d57ffe04 tuvo que hacerlo línea por línea).
-                            "per_day": _band.get("per_day"),
-                            "delivered_was_fallback": delivered_was_fallback,
-                            "review_passed": final_state.get("review_passed"),
-                            # [P1-SELF-CRITIQUE-CANARY · 2026-07-09] cohorte del canario (ausente = 'on').
-                            # Única dimensión que permite sliceear OFF vs ON en pipeline_metrics.
-                            "self_critique_cohort": final_state.get("_self_critique_cohort") or "on",
-                            # [A1-HARDEN-POOLS · 2026-07-09] cohorte del canario A1 (ausente = 'on') +
-                            # violation-rate para medir la eliminación de clase por cohorte.
-                            "harden_pools_cohort": final_state.get("_harden_pools_cohort") or "on",
-                            # [P1-DAYGEN-LUNA-CANARY · 2026-07-26] SIN fallback `or "on"`: si la
-                            # clave falta hay que verlo como None y no como una rama inventada —
-                            # ese `or` es exactamente lo que hizo ilegible el canario anterior.
-                            "daygen_model_cohort": final_state.get("_daygen_model_cohort"),
-                            "daygen_canary_model": DAYGEN_CANARY_MODEL or None,
-                            # [P1-DAYGEN-LUNA-CANARY · 2026-07-26] POR QUÉ se reintentó, no sólo
-                            # cuántas veces. `retries` (arriba) dice el costo; sin las razones, un
-                            # A/B que muestre diferencia no se puede explicar y hay que volver a
-                            # los logs — que es de donde tuve que sacarlas a mano hoy.
-                            # `_cumulative_rejection_reasons` acumula entre intentos; se recorta
-                            # (3 × 160 chars) para no inflar `pipeline_metrics`.
-                            "rejection_reasons": [
-                                str(_r)[:160] for _r in
-                                (final_state.get("_cumulative_rejection_reasons")
-                                 or final_state.get("rejection_reasons") or [])[:3]
-                            ] or None,
-                            "same_day_protein_repeats": _a1_vr.get("same_day_protein_repeats"),
-                            "cross_day_proteins": _a1_vr.get("cross_day_proteins"),
-                            "cross_day_dishes": _a1_vr.get("cross_day_dishes"),
-                        },
-                    })
-                    logger.info(
-                        f"🎯 [CLINICAL BAND SCORE] Precisión medida: {_band_val:.2f} "
-                        f"({_band.get('cells_in_band')}/{_band.get('cells_total')} celdas en banda; "
-                        f"por-macro {_band.get('per_macro')}; fallback={delivered_was_fallback})")
-                    # [P2-BAND-SCORE-GATE · 2026-06-15] Si la precisión medida cae bajo el umbral marca el plan
-                    # degradado → dispara el banner de degradación existente del frontend (honestidad).
-                    # [P2-BAND-MACROS-ONLY · 2026-06-16] (P2-9) el gate puntúa sobre score_macros_only cuando
-                    # BAND_GATE_USE_MACROS_ONLY.
-                    # [P1-BAND-GATE-ALL4 · 2026-07-01] flip ON + el umbral acompaña al score elegido
-                    # (macros-only → *_MACROS_ONLY re-tuneado; combinado → el original). Espejo del retry-gate.
-                    _band_used_mo = bool(BAND_GATE_USE_MACROS_ONLY and _band.get("score_macros_only") is not None)
-                    _band_gate_val = _band.get("score_macros_only") if _band_used_mo else _band_val
-                    _band_gate_thr = (BAND_SCORE_GATE_THRESHOLD_MACROS_ONLY if _band_used_mo
-                                      else BAND_SCORE_GATE_THRESHOLD)
-                    # [P1-BAND-PER-MACRO-ON · 2026-07-01] band_payload → banner per-macro en agotamiento.
-                    if _maybe_mark_low_band_degraded(plan, _band_gate_val, delivered_was_fallback,
-                                                     final_state.get("attempt", 1), band_payload=_band,
-                                                     score_threshold=_band_gate_thr):
-                        # [P3-BAND-GATE-LOG-HONESTY · 2026-07-05] el mensaje distingue la rama que
-                        # disparó: agregado bajo umbral vs per-macro (antes imprimía "0.78 < 0.6",
-                        # falso cuando la rama era per-macro — confundía el diagnóstico en prod).
-                        _bg_reason = str(plan.get("_quality_degraded_reason") or "")
-                        if _bg_reason.startswith("low_band_macro:"):
-                            _bg_pm = _band.get("per_macro") or {}
-                            logger.warning(
-                                f"⚠️ [P2-BAND-SCORE-GATE] agregado {_band_gate_val:.2f} ≥ umbral "
-                                f"{_band_gate_thr} PERO macro(s) individual(es) bajo "
-                                f"{BAND_GATE_PER_MACRO_THRESHOLD} de celdas en banda "
-                                f"({_bg_reason.split(':', 1)[1]}: per_macro={_bg_pm}) → plan marcado "
-                                f"_quality_degraded (reason={_bg_reason})")
-                        else:
-                            logger.warning(
-                                f"⚠️ [P2-BAND-SCORE-GATE] band_score {_band_gate_val:.2f} < umbral "
-                                f"{_band_gate_thr} (macros_only={_band_used_mo}) → plan marcado "
-                                f"_quality_degraded (reason={_bg_reason})")
+                _emit_progress(initial_state, "metric", {
+                    "node": "clinical_band",
+                    "duration_ms": int(pipeline_duration * 1000),
+                    "retries": final_state.get("attempt", 1) - 1,
+                    "tokens_estimated": 0,
+                    # [P1-BAND-METRIC-NO-SILENT-DROP] `confidence` es NOT NULL en la tabla, así
+                    # que sin score va 0.0 — y `band_unavailable` lo marca para que el lector
+                    # NO lo promedie como un plan malo. Un 0 sin marca sería peor que la fila
+                    # ausente: bajaría la banda media de la cohorte con un dato inexistente.
+                    "confidence": _band_val if _band_val is not None else 0.0,
+                    "metadata": {
+                        "band_unavailable": _band_val is None,
+                        "cells_in_band": _band.get("cells_in_band"),
+                        "cells_total": _band.get("cells_total"),
+                        "score_macros_only": _band.get("score_macros_only"),  # [P2-BAND-MACROS-ONLY] kcal-excluido
+                        "per_macro": _band.get("per_macro"),
+                        "band_macros": _band.get("band_macros"),
+                        # [P1-BAND-TELEMETRY-PER-DAY · 2026-07-10] matriz día×macro — forensics sin
+                        # reprocesar logs (forensic corr=d57ffe04 tuvo que hacerlo línea por línea).
+                        "per_day": _band.get("per_day"),
+                        "delivered_was_fallback": delivered_was_fallback,
+                        "review_passed": final_state.get("review_passed"),
+                        # [P1-SELF-CRITIQUE-CANARY · 2026-07-09] cohorte del canario (ausente = 'on').
+                        # Única dimensión que permite sliceear OFF vs ON en pipeline_metrics.
+                        "self_critique_cohort": final_state.get("_self_critique_cohort") or "on",
+                        # [A1-HARDEN-POOLS · 2026-07-09] cohorte del canario A1 (ausente = 'on') +
+                        # violation-rate para medir la eliminación de clase por cohorte.
+                        "harden_pools_cohort": final_state.get("_harden_pools_cohort") or "on",
+                        # [P1-DAYGEN-LUNA-CANARY · 2026-07-26] SIN fallback `or "on"`: si la
+                        # clave falta hay que verlo como None y no como una rama inventada —
+                        # ese `or` es exactamente lo que hizo ilegible el canario anterior.
+                        "daygen_model_cohort": final_state.get("_daygen_model_cohort"),
+                        "daygen_canary_model": DAYGEN_CANARY_MODEL or None,
+                        # [P1-DAYGEN-LUNA-CANARY · 2026-07-26] POR QUÉ se reintentó, no sólo
+                        # cuántas veces. `retries` (arriba) dice el costo; sin las razones, un
+                        # A/B que muestre diferencia no se puede explicar y hay que volver a
+                        # los logs — que es de donde tuve que sacarlas a mano hoy.
+                        # `_cumulative_rejection_reasons` acumula entre intentos; se recorta
+                        # (3 × 160 chars) para no inflar `pipeline_metrics`.
+                        "rejection_reasons": [
+                            str(_r)[:160] for _r in
+                            (final_state.get("_cumulative_rejection_reasons")
+                             or final_state.get("rejection_reasons") or [])[:3]
+                        ] or None,
+                        "same_day_protein_repeats": _a1_vr.get("same_day_protein_repeats"),
+                        "cross_day_proteins": _a1_vr.get("cross_day_proteins"),
+                        "cross_day_dishes": _a1_vr.get("cross_day_dishes"),
+                    },
+                })
+                logger.info(
+                    f"🎯 [CLINICAL BAND SCORE] Precisión medida: {_band_val:.2f} "
+                    f"({_band.get('cells_in_band')}/{_band.get('cells_total')} celdas en banda; "
+                    f"por-macro {_band.get('per_macro')}; fallback={delivered_was_fallback})")
+                # [P2-BAND-SCORE-GATE · 2026-06-15] Si la precisión medida cae bajo el umbral marca el plan
+                # degradado → dispara el banner de degradación existente del frontend (honestidad).
+                # [P2-BAND-MACROS-ONLY · 2026-06-16] (P2-9) el gate puntúa sobre score_macros_only cuando
+                # BAND_GATE_USE_MACROS_ONLY.
+                # [P1-BAND-GATE-ALL4 · 2026-07-01] flip ON + el umbral acompaña al score elegido
+                # (macros-only → *_MACROS_ONLY re-tuneado; combinado → el original). Espejo del retry-gate.
+                _band_used_mo = bool(BAND_GATE_USE_MACROS_ONLY and _band.get("score_macros_only") is not None)
+                _band_gate_val = _band.get("score_macros_only") if _band_used_mo else _band_val
+                _band_gate_thr = (BAND_SCORE_GATE_THRESHOLD_MACROS_ONLY if _band_used_mo
+                                  else BAND_SCORE_GATE_THRESHOLD)
+                # [P1-BAND-PER-MACRO-ON · 2026-07-01] band_payload → banner per-macro en agotamiento.
+                if _maybe_mark_low_band_degraded(plan, _band_gate_val, delivered_was_fallback,
+                                                 final_state.get("attempt", 1), band_payload=_band,
+                                                 score_threshold=_band_gate_thr):
+                    # [P3-BAND-GATE-LOG-HONESTY · 2026-07-05] el mensaje distingue la rama que
+                    # disparó: agregado bajo umbral vs per-macro (antes imprimía "0.78 < 0.6",
+                    # falso cuando la rama era per-macro — confundía el diagnóstico en prod).
+                    _bg_reason = str(plan.get("_quality_degraded_reason") or "")
+                    if _bg_reason.startswith("low_band_macro:"):
+                        _bg_pm = _band.get("per_macro") or {}
+                        logger.warning(
+                            f"⚠️ [P2-BAND-SCORE-GATE] agregado {_band_gate_val:.2f} ≥ umbral "
+                            f"{_band_gate_thr} PERO macro(s) individual(es) bajo "
+                            f"{BAND_GATE_PER_MACRO_THRESHOLD} de celdas en banda "
+                            f"({_bg_reason.split(':', 1)[1]}: per_macro={_bg_pm}) → plan marcado "
+                            f"_quality_degraded (reason={_bg_reason})")
+                    else:
+                        logger.warning(
+                            f"⚠️ [P2-BAND-SCORE-GATE] band_score {_band_gate_val:.2f} < umbral "
+                            f"{_band_gate_thr} (macros_only={_band_used_mo}) → plan marcado "
+                            f"_quality_degraded (reason={_bg_reason})")
                 # [P2-11-DEGRADED-GATES-UNCONDITIONAL · 2026-06-16] (gap-audit P2-11) Estos 3 gates NO dependen
                 # de _band_val (cada uno guarda internamente delivered_was_fallback + no pisa razón peor) →
                 # DESINDENTADOS fuera del `if _band_val is not None:` para que corran AUNQUE

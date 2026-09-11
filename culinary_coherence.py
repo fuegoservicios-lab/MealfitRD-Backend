@@ -17,6 +17,10 @@ import re
 
 from constants import strip_accents
 
+import logging
+# [P1-PLAN-LOTE-6 · F5] los guards de este módulo se tragaban su fallo sin rastro: ahora hay a quién contárselo.
+logger = logging.getLogger(__name__)
+
 # Vocabulario canónico (el mismo de la migración; el sanity DO $$ lo enforza en DB)
 PREP_VOCAB = ("hervir", "plancha", "freir", "hornear", "guisar", "saltear",
               "licuar", "tostar", "crudo", "ninguno")
@@ -1541,7 +1545,8 @@ def culinary_contract_scan(plan_data: dict, catalog: list) -> list:
             out.extend(_v7d_masa_sobrante(day, meal, index))
             out.extend(_v7e_paso_pide_mas_piezas(day, meal, index))
         return out
-    except Exception:
+    except Exception as _f5e:
+        logger.warning(f"[P1-PLAN-LOTE-6] culinary_contract_scan: `build_culinary_index` tragado sin rastro ({type(_f5e).__name__}: {_f5e})")
         return []
 
 

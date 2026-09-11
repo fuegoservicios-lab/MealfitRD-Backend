@@ -404,8 +404,9 @@ def test_slot_drift_is_observable():
     assert drift and "cena" in drift
     assert drift["cena"]["protein"] < 1.0, "la cena bajo su cuota debe ser VISIBLE"
     assert '"slot_drift"' in _GO, "y viajar en el payload de la banda"
-    assert 'SLOT_AWARE_DAY_REPAIR = _env_bool("MEALFIT_SLOT_AWARE_DAY_REPAIR", False)' in _GO, \
-        "el cambio de reparto FÍSICO nace OFF (exige A/B contra all4_ratio)"
+    # [P1-PLAN-LOTE-6 · F5] el knob se declaró sin rama y se retiró: si el reparto FÍSICO se implementa, que nazca
+    # con rama y OFF (exige A/B contra all4_ratio).
+    assert 'SLOT_AWARE_DAY_REPAIR = _env_bool(' not in _GO, "un knob sin rama es una mentira para el operador"
 
 
 def test_slot_drift_uses_the_canonical_meal_key_not_meal_type():

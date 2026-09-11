@@ -864,8 +864,8 @@ def verifica_comida(meal: dict, form_data: dict, catalogo: dict) -> list:
             if _cc.scan_coverage(mini, filas) is None:
                 logger.warning(f"[P1-DETERMINISTIC-DAY] escáner culinario sin cobertura medible para "
                                f"{meal.get('name')!r}: el veredicto culinario de este plato no informa")
-        except Exception:                                              # noqa: BLE001
-            pass
+        except Exception as _f5e:                                              # noqa: BLE001
+            logger.warning(f"[P1-PLAN-LOTE-6] verifica_comida: paso tragado sin rastro ({type(_f5e).__name__}: {_f5e})")
     except Exception as e:                                             # noqa: BLE001
         logger.warning(f"[P1-DETERMINISTIC-DAY] escáner culinario NO EVALUABLE ({e!r}); el plato sigue "
                        f"a juicio del backstop clínico y del review del plan")

@@ -936,7 +936,8 @@ def _swap_real_pantry_ledger_lines(user_id: str) -> list:
                 grams = db.to_grams(float(qty or 0), row.get("unit") or "", info)
                 if grams and grams > 0:
                     ledger[info.name] = ledger.get(info.name, 0.0) + grams
-            except Exception:
+            except Exception as _f5e:
+                logger.info(f"[P1-PLAN-LOTE-6] _swap_real_pantry_ledger_lines: `lookup` tragado sin rastro ({type(_f5e).__name__}: {_f5e})")
                 continue
         return [f"{int(round(g))}g de {name}" for name, g in ledger.items() if g and g > 0]
     except Exception as e:

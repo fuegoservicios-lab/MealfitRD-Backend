@@ -1522,8 +1522,8 @@ def find_pantry_rows_for_name(
         from knobs import _env_bool as _knob_env_bool
         if not _knob_env_bool("MEALFIT_PANTRY_CANONICAL_MATCH", True):
             return ([], "none")
-    except Exception:
-        pass
+    except Exception as _f5e:
+        logger.warning(f"[P1-PLAN-LOTE-6] find_pantry_rows_for_name: paso tragado sin rastro ({type(_f5e).__name__}: {_f5e})")
 
     # Peldaño 2: canónico (case / acentos / cantidad al inicio / plural).
     try:

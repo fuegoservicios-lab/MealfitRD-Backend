@@ -195,6 +195,36 @@ fabricaba la divergencia severa que el espejo existe para evitar.
 | `MEALFIT_SWEEP_ORPHAN_PLANS_AGE_DAYS` | `7` | Bajar a 2-3 si los orphans plans están saturando metrics (clamp [1, 90]) |
 | `MEALFIT_SWAP_RECIPE_COHERENCE_VALIDATE` | `True` | Flip a `False` para revertir al pre-P1-SWAP-RECIPE-COHERENCE behavior si validator genera FPs |
 
+### Knobs default-off sin plan de activación (inventario F5 · 2026-09-11)
+
+[P1-PLAN-LOTE-6] La auditoría de guards inertes (`docs/audits/f5_guards_inertes_2026_09_11.md` §5) encontró 21 knobs
+`_env_bool(..., False)` con rama real y sin una sola mención en la documentación. Ninguno está en el `.env` de producción
+salvo `MEALFIT_CARB_TARGET_TRIM`. Aquí quedan con su criterio de activación; el que no tenga dueño ni criterio en seis
+meses es candidato a borrarse (el de `MEALFIT_SLOT_AWARE_DAY_REPAIR`, que además no tenía rama, se retiró en este lote).
+
+| Knob | Dónde | Qué enciende | Criterio de activación / dueño |
+|---|---|---|---|
+| `MEALFIT_HARDEN_MAIN_ARITY` | `graph_orchestrator.py` | Clase 6 de A1-HARDEN-POOLS: exige ≥3 proteínas gate-label distintas en el pool para las comidas principales | `prod_profile` lo pone `true`: producción YA lo tiene encendido; el default de código quedó atrás. Alinear default o documentar el porqué |
+| `MEALFIT_MICRONUTRIENT_SOFT_REJECT` | `graph_orchestrator.py` | Rechazo suave por micros alcanzables bajo el piso DRI (fibra/K/Mg/Ca; vit D/hierro/B12 excluidos) | Medir tasa de rechazo con `low_micros` en `_quality_degraded_reason` antes de encender (reintentos extra ⇒ coste) |
+| `MEALFIT_FAT_LEAN_SWAP` | `graph_orchestrator.py` | Swap a proteína magra cuando la grasa cae en la zona muerta (reescribe nombre/pasos/raw) | Cambia la identidad del plato: sólo con la serie P2-FAT-DEADZONE + A/B |
+| `MEALFIT_VARIETY_GATE_BASE_DISH_REPEAT` | `graph_orchestrator.py` | Gate de variedad sobre el plato-base repetido el mismo día | El vocabulario de plato-base incluye técnicas legítimamente repetibles («plancha»): encender sólo tras depurarlo |
+| `MEALFIT_CARB_TARGET_TRIM` | `graph_orchestrator.py` | Recorte del carbohidrato al objetivo con recompute honesto de macros | Único que SÍ está en el `.env` de prod. Validar por A/B; si se queda, subir el default |
+| `MEALFIT_CORRECTOR_NONE_DIAGNOSTIC` | `graph_orchestrator.py` | Re-invoca el modelo RAW cuando el corrector devuelve `None` y loguea `finish_reason` | Sólo diagnóstico puntual (2.ª llamada = tokens). Apagar al terminar la investigación |
+| `MEALFIT_EVALUATOR_USE_PRO` | `graph_orchestrator.py` | El evaluador usa el modelo PRO | Toca todos los planes: sólo tras validar calidad/latencia en canario |
+| `MEALFIT_DAYGEN_LITE_FOR_EASY` | `graph_orchestrator.py` | Modelo lite para perfiles fáciles (nunca clínicos complejos ni retries) | El operador lo activa tras validar calidad; medir `self_critique` correcciones (anulan el ahorro) |
+| `MEALFIT_INITIAL_CHUNK_PANTRY_GUARD` | `constants.py` | Restaura el guard estricto de despensa en la generación INICIAL | Decisión de producto (P1-RENEWAL-PANTRY-IGNORE eligió no bloquear el primer plan). Dueño |
+| `MEALFIT_RENEWAL_PANTRY_AWARE_ENABLED` | `constants.py` | En renovación, bloque advisory de duraderos en `build_pantry_context` | Rollout incremental: encender con `_renewal_pantry_aware` en un canario y medir el prompt |
+| `MEALFIT_PANTRY_COMPLETION_LIST_ENABLED` | `constants.py` | Lista de faltantes read-only post-plan (lo que el plan necesita y la nevera no cubre) | Fase 2 de la despensa; necesita superficie en el frontend antes de encender |
+| `MEALFIT_PANTRY_SUFFICIENCY_MICROS_GATE` | `inventory_sufficiency.py` | Los micros pasan de advisory a GATE en la suficiencia de despensa | **needs-owner** (carga clínica: puede pausar chunks por micros) |
+| `MEALFIT_REQUIRE_ATOMIC_POOL` | `db_profiles.py` | Exige pool atómico; sin pool, falla en vez de degradar | Sólo producción; en dev/scripts no hay pool. Encender en el VPS si se quiere fail-loud |
+| `MEALFIT_INVENTORY_RPC_STRICT` | `db_inventory.py` | Falla en vez de caer al camino legacy (sin control de carrera) del incremento de inventario | Encender cuando el RPC atómico lleve un ciclo sin alertas |
+| `MEALFIT_LEAK_DB_ERRORS` | `error_utils.py` | Devuelve el error de DB crudo en la respuesta HTTP | Sólo dev. JAMÁS en producción (filtra SQL/paths) |
+| `MEALFIT_READY_REQUIRE_DB` | `app.py` | `/ready` exige DB viva (503 sin ella) | Encender si el balanceador debe sacar del pool a un proceso sin DB; hoy `/ready` mide sólo el grafo |
+| `MEALFIT_LIGHT_PROTEIN_SEED` | `ai_helpers.py` | Sortea el ancla proteica de desayuno/merienda (con OFF el prompt es byte-idéntico) | A/B pendiente (audit solver+seeder v4) |
+| `MEALFIT_GROCERY_CYCLE_LOCK` | `ai_helpers.py` | Renovación reutiliza las compras del ciclo en vez de elegir ingredientes nuevos | Decisión de producto: ahorro vs. variedad. Dueño |
+| `MEALFIT_ANEMIA_CONDITION_TARGET` | `micronutrients.py` | Objetivo de hierro por condición (anemia) en panel/PDF | **needs-owner** (user-facing clínico; validar con la tabla de condiciones) |
+| `MEALFIT_DISABLE_SEMANTIC_CACHE` | `shopping_calculator.py` | Apaga el semantic cache | Interruptor de emergencia; encender sólo ante un incidente del cache |
+
 ## Cómo añadir un knob nuevo
 
 ```python

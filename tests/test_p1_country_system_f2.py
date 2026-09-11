@@ -4514,7 +4514,7 @@ def test_f9_docstring_menciona_sin_lector_por_diseno():
     un descuido a corregir."""
     src = (_BACKEND / "constants.py").read_text(encoding="utf-8")
     ini = src.index("`default_tz_offset_min` usa la convención")
-    fin = src.index('COUNTRY_SYSTEM_ENABLED = _env_bool', ini)
+    fin = src.index('COUNTRY_PROFILES = {', ini)  # [P1-PLAN-LOTE-6] el snapshot COUNTRY_SYSTEM_ENABLED se borro (0 lectores)
     cuerpo = src[ini:fin]
     assert "SIN LECTOR" in cuerpo
     assert "T5-F1" in cuerpo

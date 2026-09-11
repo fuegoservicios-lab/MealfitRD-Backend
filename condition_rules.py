@@ -30,6 +30,10 @@ from constants import (
     BARIATRIC_CONDITION_TERMS,
 )
 
+import logging
+# [P1-PLAN-LOTE-6 · F5] los guards de este módulo se tragaban su fallo sin rastro: ahora hay a quién contárselo.
+logger = logging.getLogger(__name__)
+
 SAFETY_HARD = "safety_hard"            # reglas que el motor REESCRIBE determinísticamente
 CLINICAL_REFERRAL = "clinical_referral"  # se derivan al profesional (no se auto-prescriben)
 
@@ -944,8 +948,8 @@ def collect_allergen_substitutions(form_data, diet_type=None) -> list:
             continue
         try:
             s = _sa(s)
-        except Exception:
-            pass
+        except Exception as _f5e:
+            logger.info(f"[P1-PLAN-LOTE-6] collect_allergen_substitutions: `_sa` tragado sin rastro ({type(_f5e).__name__}: {_f5e})")
         declared.append(s)
     if not declared:
         return []
