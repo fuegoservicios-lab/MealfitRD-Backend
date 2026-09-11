@@ -45,8 +45,11 @@ Compilador CLI: [`scripts/compile_dish_registry.py`](../scripts/compile_dish_reg
   bloque: Día N → almuerzo: A | B · cena: C | D» (2 por franja, familia programada, sin las clases de alérgeno
   declaradas). Knob `MEALFIT_DISH_REGISTRY_PROMPT` (True); apagado ⇒ prompt byte-idéntico al anterior. La métrica de
   fidelidad lleva `registry_in_prompt` para comparar antes/después (`pipeline_metrics.plan_policy_fidelity`).
-- **Logística derivada** (`logistics`, `estimated: true`): `batch_friendly`/`freezer_friendly`/`prep_minutes_est`/
-  `difficulty_est` por técnica y `min_shelf_life_days` = mínimo de la vida útil de sus constituyentes (catálogo).
+- **Logística derivada** (`logistics`, `estimated: true`): `batch_friendly`/`freezer_friendly`/`difficulty_est` por
+  técnica; `prep_minutes_est` con `prep_minutes_source` = `receta` (el tiempo que la receta congelada DECLARA,
+  P1-MINUTOS-DE-LA-RECETA · 2026-09-10) o `tecnica` (estimación por técnica); el relleno `defecto` (30) existe en el
+  snapshot pero **ningún lector lo sirve** (`recipe_library.prep_time_for_meal`, P1-AUDITORIA-ARQ-VERIFICADA);
+  `min_shelf_life_days` = mínimo de la vida útil de sus constituyentes (catálogo).
 - **Editorial** (`editorial`): `status=curated`, `source`, `display_name.es`, `aliases` (de `plan_policy.TEMPLATE_ALIASES`),
   `media: []` (Fase 8). Snapshot `schema_version` 2 / `compiler_version` 2 (recompilado: cambia el hash).
 

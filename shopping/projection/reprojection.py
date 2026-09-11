@@ -16,7 +16,10 @@ from typing import Optional
 
 logger = logging.getLogger(__name__)
 
-_FINGERPRINT_ROW_KEYS = ("name", "base_qty", "base_unit", "market_qty", "market_unit")
+# [P1-PLAN-FASE-A · 2026-09-11 · A5] `estimated_cost_rd` entra en la huella: el read model publica `cost_rd` por
+# ventana y un recálculo tras un cambio de precios del Supermercado reescribe el coste de la fila SIN mover
+# ni una cantidad — con la huella vieja la proyección seguía `ready` con un total que ya no era verdad.
+_FINGERPRINT_ROW_KEYS = ("name", "base_qty", "base_unit", "market_qty", "market_unit", "estimated_cost_rd")
 
 
 def shopping_list_fingerprint(plan_data: dict) -> str:

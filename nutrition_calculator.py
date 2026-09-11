@@ -428,6 +428,74 @@ def meal_types_for_count(n: int) -> list:
     return list(MEAL_TYPES_BY_COUNT.get(n, MEAL_TYPES_BY_COUNT[4]))
 
 
+# [P1-PLAN-FASE-A · 2026-09-11 · A6] El mapa de franjas y el reparto canónico vivían en `graph_orchestrator`
+# (P3-SLOT-DISTRIBUTION · 2026-06-13) a 25.000 líneas de `MEAL_SLOT_SPLITS`, su SSOT, y el god-file estaba
+# EXACTAMENTE en su tope (53.100): `deterministic_day` tenía que importarlos de allí con un import perezoso.
+# Ahora los datos y su regla viven juntos; `graph_orchestrator` los re-exporta para sus llamadores y para los
+# tests que hacen `monkeypatch.setattr(go, ...)`. Misma tabla, mismo algoritmo, cero cambio de comportamiento.
+# Mapa nombre-de-slot (es-DO) → key del split canónico.
+_SLOT_KEY_MAP = {
+    "desayuno": "desayuno", "breakfast": "desayuno",
+    "almuerzo": "almuerzo", "comida": "almuerzo", "lunch": "almuerzo",
+    "cena": "cena", "dinner": "cena",
+    "merienda": "merienda", "snack": "merienda", "merienda am": "merienda",
+    "merienda pm": "merienda", "media manana": "merienda", "media tarde": "merienda",
+    "merienda matutina": "merienda", "merienda vespertina": "merienda",
+    # [P1-CLINICAL-MEAL-COUNT · 2026-06-27] merienda nocturna del plan de 6 comidas → mapea a merienda
+    # para que reciba su fracción (merienda_noche) vía el reparto ordenado de _canonical_slot_fractions.
+    "merienda nocturna": "merienda", "merienda noche": "merienda", "merienda de la noche": "merienda",
+}
+SLOT_KEY_MAP = _SLOT_KEY_MAP
+
+
+def _canonical_slot_fractions(meals: list) -> list:
+    """[P3-SLOT-DISTRIBUTION · 2026-06-13] Fracción de macros/kcal por meal según el split
+    FISIOLÓGICO canónico (`MEAL_SLOT_SPLITS`: desayuno 20% / almuerzo 35% / merienda 15% /
+    cena 30% para 4 comidas), NO según la distribución (a menudo desbalanceada) que emite el
+    LLM. Cierra el hallazgo de la auditoría: el desayuno concentraba 48% de las kcal y 62%
+    de la proteína del día; usar el `cal_share` del LLM como target del solver propagaba ese
+    desbalance (3 comidas bajo el umbral leucínico ~22g). Mapea cada slot por nombre; los
+    no-mapeados reciben parte igual del remanente; el vector se normaliza a sumar 1.0 →
+    preserva el total diario. Retorna lista de fracciones alineada con `meals`. Anchor:
+    P3-SLOT-DISTRIBUTION."""
+    try:
+        from constants import strip_accents
+    except Exception:
+        def strip_accents(s):
+            import unicodedata
+            return "".join(c for c in unicodedata.normalize("NFKD", str(s)) if not unicodedata.combining(c))
+    n = len(meals)
+    if n == 0:
+        return []
+    split = MEAL_SLOT_SPLITS.get(n, MEAL_SLOT_SPLITS[4])
+    mer_keys = [k for k in split if k.startswith("merienda")]
+    fracs, mer_i = [], 0
+    for m in meals:
+        # [P1-SLOT-FRACTIONS-KEY · 2026-07-26] La clave del slot es `meal`, no `slot`: `m.get("slot")`
+        # devolvía None en TODAS las comidas y cada una caía a la rama «no mapeado» (reparto plano
+        # 0,25×4 en vez del canónico 0,20/0,35/0,15/0,30) — seis semanas inerte. Se leen las dos claves
+        # por si alguna superficie emite `slot`.
+        key = _SLOT_KEY_MAP.get(
+            strip_accents(str(m.get("meal") or m.get("slot") or "").lower().strip()))
+        f = None
+        if key in split:
+            f = split[key]
+        elif key == "merienda" and mer_keys:
+            f = split[mer_keys[min(mer_i, len(mer_keys) - 1)]]
+            mer_i += 1
+        fracs.append(f)
+    assigned = sum(f for f in fracs if f is not None)
+    n_un = sum(1 for f in fracs if f is None)
+    if n_un:
+        rem = max(0.0, 1.0 - assigned) / n_un
+        fracs = [rem if f is None else f for f in fracs]
+    total = sum(fracs) or 1.0
+    return [f / total for f in fracs]
+
+
+canonical_slot_fractions = _canonical_slot_fractions
+
+
 def _mc_norm_text(value) -> str:
     """Normaliza condiciones/medicamentos a un blob lower sin acentos para matching. Aplana listas
     ANIDADAS y strings (acepta `[medicalConditions_list, otherConditions_str, ...]`) → así el decisor

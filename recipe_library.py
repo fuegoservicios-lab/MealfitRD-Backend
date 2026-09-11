@@ -199,9 +199,86 @@ def apply_library_recipe(meal, country: str = "DO") -> bool:
         meal["recipe"] = list(pasos)
         meal["_recipe_source"] = "library"
         meal["_recipe_template_id"] = tid
+        _escalar_agua_de_biblioteca(meal, tid, country)
         return True
     except Exception:
         return False
+
+
+# [P1-PLAN-FASE-A · 2026-09-11 · A7] La receta congelada está escrita para la ración BASE de la plantilla y 19
+# de las 190 dicen agua MEDIDA («tres tazas de agua»); el plato del camino LLM llega ya escalado a su franja.
+# `deterministic_day` escala esa agua con el factor que conoce (P1-AUDITORIA-ARQ-VERIFICADA); aquí no hay
+# factor explícito, así que se DERIVA: gramos servidos frente a gramos de la plantilla, sobre los constituyentes
+# que el plato trae en gramos. Si no se puede derivar y la receta trae agua medida, el plato queda marcado
+# `_recipe_water_unscaled=True`: una cantidad que no se pudo ajustar se declara, no se disimula.
+# Medido al escribirlo: `apply_library_recipe` no tiene llamadores en producción (0 de 60 comidas LLM de los
+# últimos 14 días casan por nombre con la biblioteca); esto deja la costura correcta para cuando se cablee.
+_RE_GRAMOS_LINEA = re.compile(r"^\s*(\d+(?:[.,]\d+)?)\s*(?:g|gr|grs|gramos?)\s+de\s+(.+?)\s*$", re.IGNORECASE)
+
+
+def _gramos_por_alimento(meal: dict) -> dict:
+    """{alimento normalizado: gramos} de las líneas del plato que vienen en gramos («160 g de Pechuga de
+    pollo»). Las líneas en otras unidades («2 huevos») no entran: sin gramos no hay factor."""
+    out: dict = {}
+    lineas = meal.get("ingredients_raw") if isinstance(meal.get("ingredients_raw"), list) else meal.get("ingredients")
+    for s in (lineas or []):
+        m = _RE_GRAMOS_LINEA.match(str(s))
+        if not m:
+            continue
+        try:
+            k = _norm(m.group(2))
+            out[k] = out.get(k, 0.0) + float(m.group(1).replace(",", "."))
+        except ValueError:
+            continue
+    return out
+
+
+def _factor_implicito(meal: dict, tid: str, country: str) -> Optional[float]:
+    """Cuánto más (o menos) plato hay que en la plantilla base: gramos servidos / gramos de la plantilla,
+    sobre los constituyentes que el plato trae en gramos. `None` si ninguno se puede comparar o si la
+    comparación cubre menos de la mitad de la plantilla: un factor a medias es peor que ninguno."""
+    try:
+        import dish_registry as dr
+        t = (dr.templates_by_id(country) or {}).get(str(tid))
+        if not t:
+            return None
+        servidos = _gramos_por_alimento(meal)
+        base_total = comp_base = comp_serv = 0.0
+        for c in (t.get("constituents") or []):
+            g = float(c.get("grams") or 0.0)
+            if g <= 0:
+                continue
+            base_total += g
+            for k in (c.get("name"), c.get("canonical")):
+                if k and _norm(k) in servidos:
+                    comp_base += g
+                    comp_serv += servidos[_norm(k)]
+                    break
+        if base_total <= 0 or comp_base <= 0 or comp_base < 0.5 * base_total:
+            return None
+        return comp_serv / comp_base
+    except Exception:
+        return None
+
+
+def _escalar_agua_de_biblioteca(meal: dict, tid: str, country: str) -> None:
+    """Escala el agua medida de la receta recién puesta con el factor implícito; marca lo que no pudo."""
+    try:
+        from deterministic_day import escalar_agua_en_pasos, _RE_AGUA
+        pasos = meal.get("recipe") or []
+        if not any(_RE_AGUA.search(str(p)) for p in pasos):
+            return
+        f = _factor_implicito(meal, tid, country)
+        if f is None or f <= 0:
+            meal["_recipe_water_unscaled"] = True
+            return
+        nuevos, cambio = escalar_agua_en_pasos(pasos, f)
+        meal["_recipe_scale_factor"] = round(float(f), 3)
+        if cambio:
+            meal["recipe"] = nuevos
+            meal["_recipe_water_scaled"] = True
+    except Exception:
+        return
 
 
 def apply_library_recipes_to_days(days, country: str = "DO") -> int:

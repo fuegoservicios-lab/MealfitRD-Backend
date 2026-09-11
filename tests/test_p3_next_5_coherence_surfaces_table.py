@@ -54,6 +54,9 @@ _CANONICAL_ACTION_TAKEN_VALUES = {
     "warn_only_cron_daily",      # _shopping_coherence_alert_job (P2-NEXT-2)
     "warn_only_pantry_supplement",  # _persist/_clear_pantry_supplement (P2-COHERENCE-PANTRY-SUPPLEMENT, audit fresco)
     "warn_only_recovery_gap_f",     # _process_pending_shopping_lists (P2-COHERENCE-RECOVERY-GAP-F, audit fresco)
+    # [P1-PLAN-FASE-A · 2026-09-11 · A4] review_plan_node: el guard REVENTÓ (`_shopping_coherence_unevaluable`)
+    # y el plan salió SIN veredicto de coherencia — no es «aprobado», es «no evaluado» (9.º valor canónico).
+    "guard_unevaluable",
 }
 
 # Archivos donde los action_taken DEBEN aparecer como string literal.

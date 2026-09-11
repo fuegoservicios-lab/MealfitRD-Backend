@@ -189,7 +189,7 @@ jobs:
           QUARANTINE="tests/test_chunked_generation.py tests/test_renewal_15d.py tests/test_p1_17_purge_graph_cache.py tests/test_p1_audit_hist_7_lesson_whitelist_ssot.py tests/test_p1_bg_thread_timeout.py tests/test_p2_cap_log_level.py"
           IGNORE=""; for f in $QUARANTINE; do IGNORE="$IGNORE --ignore $f"; done
           pytest tests/ -q --tb=short -m "not e2e" -n 2 --dist loadfile --max-worker-restart=4 $IGNORE
-          pytest $QUARANTINE -q --tb=short -m "not e2e" -x -p no:cacheprovider
+          pytest $QUARANTINE -q --tb=short -m "not e2e" -p no:cacheprovider
 
       # [P2-E2E-CATALOGO-PAIS-SIN-NINGUN-GATE · 2026-08-23] Sólo el fichero
       # read-only que contrasta el catálogo vivo. Nunca `-m e2e` sobre toda la

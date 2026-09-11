@@ -2,6 +2,20 @@
 
 Inventario consolidado de trabajo abierto, con fuente. Nace de la verificación de la auditoría de arquitectura (`auditoria_arquitectura_verificacion_2026_09_11.md`) y del barrido de planes, specs, docs, memoria y knobs apagados. **Nada aquí está inventado: cada línea cita dónde está escrito.** Las prioridades son una propuesta de orden; las decisiones marcadas «dueño» no las cierra código.
 
+## Estado (se actualiza al cerrar cada ítem)
+
+| Ítem | Estado | Dónde |
+|---|---|---|
+| A1 | ✅ 2026-09-11 | main `3a783da` mergeado y desplegado; `drift=false`; el canario (`MEALFIT_DETERMINISTIC_DAY_USERS`) come ya con el esqueleto real |
+| A3, A4, A5, A6, A7, A8 | ✅ 2026-09-11 | `P1-PLAN-FASE-A` (`tests/test_p1_plan_fase_a.py`). A7: la costura `apply_library_recipe` **no tiene llamadores en producción** (0 de 60 comidas LLM de 14 días casan por nombre); queda correcta para cuando se cablee |
+| A2 | ⏳ bloqueado | falta `BioBoros_auditoria_arquitectura.md` |
+| A9 | 👤 dueño | re-firma curatorial |
+| E1 | ✅ parcial 2026-09-11 | los 445 «modificados» del frontend y los 6 de la raíz eran FANTASMAS de `core.autocrlf=true` contra `.gitattributes eol=lf` (`git add --renormalize` los limpió sin cambiar un byte; `autocrlf=false` en los 3 repos). Lo real se commiteó (`49a136e` raíz). Queda: tag `baseline-v1`, retirar worktrees viejos, `10k-websites/` sin dueño en la raíz |
+| F1 | ✅ ya estaba | la CHECK `user_profiles_country_supported` y su índice EXISTEN en Neon y el libro tiene su fila (el doc del 08-23 quedó viejo) |
+| F4 | 👤 dueño | secreto `SIBLING_REPO_TOKEN` (o deploy key, ver mensaje) — el repo backend sólo tiene `ZAI_API_KEY` |
+| CI | ✅ 2026-09-11 | `P0-CI-TIMEOUT-15` (`ff0162a`): TODAS las corridas desde el 09-09 morían a los 15 min; ahora xdist + cuarentena + 50 min |
+| G6 | 👤 dueño | faltan `NEON_DATABASE_URL`, `NEON_DATABASE_URL_POOLED`, `COHERE_API_KEY`, `OPENAI_API_KEY` en Actions |
+
 ## Cómo leerlo
 
 - **P0** — afecta restricciones clínicas, identidad de ingredientes, cantidades o validez de lo entregado, HOY, a usuarios reales.

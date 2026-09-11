@@ -212,12 +212,24 @@ def test_estimator_reused_from_day_autofix_ssot():
 
 def test_micros_from_ingredient_string_is_the_only_primitive():
     """Tanto el estimador de módulo como el autofix legado usan el MISMO primitivo del catálogo —
-    ninguno de los dos reimplementa una lectura de sodio por su cuenta."""
-    go_src = _go_source()
-    i_line = go_src.find("def _line_sodium_mg(")
-    block = go_src[i_line: i_line + 400]
+    ninguno de los dos reimplementa una lectura de sodio por su cuenta.
+
+    [P1-PLAN-FASE-A · 2026-09-11] El estimador vive ahora en `nutrition_db` (el módulo del primitivo) y
+    `graph_orchestrator` lo re-exporta: el anclaje sigue al código, no al fichero. `_line_sodium_mg`
+    delega en `line_sodium_mg_or_none`, que es quien toca `db.micros_from_ingredient_string`."""
+    import graph_orchestrator as go
+    import nutrition_db as nd
+    assert go._line_sodium_mg is nd._line_sodium_mg and go._meal_sodium_mg is nd._meal_sodium_mg
+    nd_src = Path(nd.__file__).read_text(encoding="utf-8")
+    i_prim = nd_src.find("def line_sodium_mg_or_none(")
+    assert i_prim > 0
+    block = nd_src[i_prim: i_prim + 700]
     assert "db.micros_from_ingredient_string" in block
     assert "sodium_mg" in block
+    i_line = nd_src.find("def _line_sodium_mg(")
+    assert i_line > 0
+    assert "line_sodium_mg_or_none(ingredient_line, db)" in nd_src[i_line: i_line + 500]
+    assert "def _line_sodium_mg(" not in _go_source(), "el god-file ya no define el estimador: lo re-exporta"
 
 
 # =====================================================================

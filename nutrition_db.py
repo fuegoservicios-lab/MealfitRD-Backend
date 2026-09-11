@@ -909,3 +909,64 @@ class IngredientNutritionDB:
             "sodium_mg": round((info.sodium_mg or 0.0) * f, 1),
             "source": info.source,
         }
+
+
+# ---------------------------------------------------------------------------
+# [P1-SODIUM-AWARE-PLACEMENT · 2026-08-02 → movidos aquí P1-PLAN-FASE-A · 2026-09-11 · A6/A3]
+# El estimador de sodio por línea/comida vivía en `graph_orchestrator` (extraído de las closures de
+# `_day_sodium_autofix`); su único primitivo es `micros_from_ingredient_string`, que vive AQUÍ. Se mueven junto
+# al primitivo y se añade lo que la auditoría de arquitectura señaló (H6a): «sin dato» NO es 0.
+# `line_sodium_mg_or_none` devuelve `None` cuando el catálogo no resuelve la línea, no sabe sus gramos o la
+# fila no trae `sodium_mg`; `_line_sodium_mg` conserva el contrato antiguo (0.0) para sus llamadores;
+# `meal_sodium_detail` cuenta las líneas sin dato para que el día pueda decir «esto es un piso, no una medida».
+# tooltip-anchor: P1-SODIUM-AWARE-PLACEMENT
+
+
+def line_sodium_mg_or_none(ingredient_line, db) -> Optional[float]:
+    """Sodio (mg) de UNA línea («150 g de Pollo») vía el catálogo, o `None` si NO hay dato (línea sin
+    resolver, sin gramos, o fila sin `sodium_mg`). Fail-safe a `None`: la duda no se convierte en cero."""
+    try:
+        mic = db.micros_from_ingredient_string(str(ingredient_line))
+    except Exception:
+        return None
+    if not isinstance(mic, dict):
+        return None
+    v = mic.get("sodium_mg")
+    if v is None:
+        return None
+    try:
+        return float(v)
+    except (TypeError, ValueError):
+        return None
+
+
+def _line_sodium_mg(ingredient_line, db) -> float:
+    """Sodio (mg) de UNA línea de ingrediente ("150 g de Pollo"), vía el catálogo. Fail-safe: 0.0.
+    Contrato histórico (P1-SODIUM-AWARE-PLACEMENT): quien necesite distinguir «0» de «sin dato» usa
+    `line_sodium_mg_or_none`."""
+    v = line_sodium_mg_or_none(ingredient_line, db)
+    return 0.0 if v is None else v
+
+
+def meal_sodium_detail(meal, db) -> tuple:
+    """`(mg_conocidos, lineas_sin_dato)` de UNA comida sobre `ingredients_raw` (preferido, mismo criterio que
+    el panel/autofix) o `ingredients`. Una comida que no es dict ⇒ `(0.0, 0)`."""
+    if not isinstance(meal, dict):
+        return 0.0, 0
+    total, unknown = 0.0, 0
+    _ings = meal.get("ingredients_raw") if isinstance(meal.get("ingredients_raw"), list) else meal.get("ingredients")
+    for _s in _ings or []:
+        if not isinstance(_s, str):
+            continue
+        v = line_sodium_mg_or_none(_s, db)
+        if v is None:
+            unknown += 1
+        else:
+            total += v
+    return total, unknown
+
+
+def _meal_sodium_mg(meal, db) -> float:
+    """Sodio (mg) total de UNA comida — suma `_line_sodium_mg` sobre `ingredients_raw` (preferido) o
+    `ingredients`. Fail-safe: 0.0 si `meal` no es dict. Las líneas sin dato suman 0 (ver `meal_sodium_detail`)."""
+    return meal_sodium_detail(meal, db)[0]

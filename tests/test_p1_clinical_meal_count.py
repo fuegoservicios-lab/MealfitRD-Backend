@@ -146,8 +146,12 @@ def test_anchors_and_wiring():
     # override determinista de meal_types en el skeleton + directiva al prompt
     assert '_d["meal_types"] = list(_mc_types)' in go_src
     assert "_meal_count_directive" in go_src
-    # merienda nocturna mapeada para el reparto de macros del plan de 6 comidas
-    assert '"merienda nocturna": "merienda"' in go_src
+    # merienda nocturna mapeada para el reparto de macros del plan de 6 comidas.
+    # [P1-PLAN-FASE-A · 2026-09-11] `_SLOT_KEY_MAP` vive ahora junto a `MEAL_SLOT_SPLITS` en
+    # nutrition_calculator (el god-file la re-exporta): el anclaje sigue a la tabla.
+    assert '"merienda nocturna": "merienda"' in nc_src
+    import graph_orchestrator as _g
+    assert _g._SLOT_KEY_MAP["merienda nocturna"] == "merienda"
 
 
 def test_knob_default_on():

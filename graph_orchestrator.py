@@ -3690,6 +3690,10 @@ class PlanState(TypedDict):
     #   - `_recipe_coherence_errors`           (lista de errores de coherencia
     #     intra-receta detectados durante validation; consumida por el flujo
     #     de review para decidir severidad).
+    #   - `_shopping_coherence_unevaluable`    ({stage,error,detail,at}: el guard REVENTÓ; escrita por
+    #     `shopping_calculator._mark_guard_unevaluable`, leída en `review_plan_node` — P1-PLAN-FASE-A · A4).
+    #   - `_review_unevaluable_checks`         (comprobaciones que el revisor NO pudo hacer, hoy
+    #     {"shopping_coherence"}: el plan salió SIN veredicto, no con uno favorable).
     #
     # PANTRY (nevera ↔ ingredientes):
     #   - `_pantry_supplement_required`       (categoría 🚨 Compra Urgente
@@ -25471,76 +25475,11 @@ def _refresh_variety_report_for_gates(plan: dict, form_data: dict) -> None:
                        f"previo): {type(_vrf_e).__name__}: {_vrf_e}")
 
 
-# [P3-SLOT-DISTRIBUTION · 2026-06-13] Mapa nombre-de-slot (es-DO) → key del split canónico.
-_SLOT_KEY_MAP = {
-    "desayuno": "desayuno", "breakfast": "desayuno",
-    "almuerzo": "almuerzo", "comida": "almuerzo", "lunch": "almuerzo",
-    "cena": "cena", "dinner": "cena",
-    "merienda": "merienda", "snack": "merienda", "merienda am": "merienda",
-    "merienda pm": "merienda", "media manana": "merienda", "media tarde": "merienda",
-    "merienda matutina": "merienda", "merienda vespertina": "merienda",
-    # [P1-CLINICAL-MEAL-COUNT · 2026-06-27] merienda nocturna del plan de 6 comidas → mapea a merienda
-    # para que reciba su fracción (merienda_noche) vía el reparto ordenado de _canonical_slot_fractions.
-    "merienda nocturna": "merienda", "merienda noche": "merienda", "merienda de la noche": "merienda",
-}
-
-
-def _canonical_slot_fractions(meals: list) -> list:
-    """[P3-SLOT-DISTRIBUTION · 2026-06-13] Fracción de macros/kcal por meal según el split
-    FISIOLÓGICO canónico (`MEAL_SLOT_SPLITS`: desayuno 20% / almuerzo 35% / merienda 15% /
-    cena 30% para 4 comidas), NO según la distribución (a menudo desbalanceada) que emite el
-    LLM. Cierra el hallazgo de la auditoría: el desayuno concentraba 48% de las kcal y 62%
-    de la proteína del día; usar el `cal_share` del LLM como target del solver propagaba ese
-    desbalance (3 comidas bajo el umbral leucínico ~22g). Mapea cada slot por nombre; los
-    no-mapeados reciben parte igual del remanente; el vector se normaliza a sumar 1.0 →
-    preserva el total diario. Retorna lista de fracciones alineada con `meals`. Anchor:
-    P3-SLOT-DISTRIBUTION."""
-    try:
-        from constants import strip_accents
-    except Exception:
-        def strip_accents(s):
-            import unicodedata
-            return "".join(c for c in unicodedata.normalize("NFKD", str(s)) if not unicodedata.combining(c))
-    from nutrition_calculator import MEAL_SLOT_SPLITS
-    n = len(meals)
-    if n == 0:
-        return []
-    split = MEAL_SLOT_SPLITS.get(n, MEAL_SLOT_SPLITS[4])
-    mer_keys = [k for k in split if k.startswith("merienda")]
-    fracs, mer_i = [], 0
-    for m in meals:
-        # [P1-SLOT-FRACTIONS-KEY · 2026-07-26] La clave del slot es `meal`, no `slot`.
-        #
-        # `m.get("slot")` devolvía None en TODAS las comidas (verificado sobre planes vivos: las
-        # claves son `cals/carbs/desc/fats/ingredients/macros/**meal**/name/...`, sin `slot`), así
-        # que cada comida caía a la rama "no mapeado" y recibía parte IGUAL del remanente:
-        #
-        #     devuelto:  0,25 / 0,25 / 0,25 / 0,25      (plano)
-        #     canónico:  0,20 / 0,35 / 0,15 / 0,30      (MEAL_SLOT_SPLITS)
-        #
-        # O sea que P3-SLOT-DISTRIBUTION (2026-06-13) llevaba **seis semanas inerte** y el solver
-        # apuntaba a un reparto plano. Efecto medido sobre 22 días de 8 planes: la merienda supera
-        # al almuerzo en el **27%** de los días, con un máximo del 43,7% de las kcal del día contra
-        # una mediana del 16%. Caso vivo `cd08ea3c` D2: merienda 911 kcal, cena 233.
-        #
-        # `_detect_slot_appropriateness` (mismo archivo) ya leía `meal` correctamente — el bug
-        # estaba sólo aquí. Se leen las dos claves por si alguna superficie emite `slot`.
-        key = _SLOT_KEY_MAP.get(
-            strip_accents(str(m.get("meal") or m.get("slot") or "").lower().strip()))
-        f = None
-        if key in split:
-            f = split[key]
-        elif key == "merienda" and mer_keys:
-            f = split[mer_keys[min(mer_i, len(mer_keys) - 1)]]
-            mer_i += 1
-        fracs.append(f)
-    assigned = sum(f for f in fracs if f is not None)
-    n_un = sum(1 for f in fracs if f is None)
-    if n_un:
-        rem = max(0.0, 1.0 - assigned) / n_un
-        fracs = [rem if f is None else f for f in fracs]
-    total = sum(fracs) or 1.0
-    return [f / total for f in fracs]
+# [P3-SLOT-DISTRIBUTION · 2026-06-13 → movido P1-PLAN-FASE-A · 2026-09-11] `_SLOT_KEY_MAP` y
+# `_canonical_slot_fractions` viven ahora en `nutrition_calculator`, junto a `MEAL_SLOT_SPLITS` (su SSOT).
+# Se re-exportan aquí: los llamadores de este módulo y los tests (`go._canonical_slot_fractions`,
+# `monkeypatch.setattr(go, ...)`) siguen encontrándolos por el nombre de siempre.
+from nutrition_calculator import _SLOT_KEY_MAP, _canonical_slot_fractions  # noqa: E402
 
 
 def _apply_portion_quantization(plan: dict, db) -> int:
@@ -30266,32 +30205,12 @@ _SODIUM_DAIRY_SWAP_LADDER = (
 _SODIUM_DAIRY_NAME_RX = r"queso\s+cottage|cottage\s+cheese|queso\s+blanco(?:\s+(?:fresco|rallado|dominicano))*"
 
 
-# [P1-SODIUM-AWARE-PLACEMENT · 2026-08-02] Extraídos de las closures `_line_sodium`/`_day_sodium`
-# que vivían DENTRO de `_day_sodium_autofix` (P1-SODIUM-DAY-AUTOFIX) — a nivel de módulo para que
-# otros callers (swap sodium-aware pre-generación en agent.py::swap_meal) puedan REUTILIZAR el
-# MISMO primitivo (`db.micros_from_ingredient_string`) en vez de reimplementar un 2º estimador.
-# `_day_sodium_autofix` delega en estas dos funciones más abajo — cero cambio de comportamiento.
+# [P1-SODIUM-AWARE-PLACEMENT · 2026-08-02 → movido P1-PLAN-FASE-A · 2026-09-11] `_line_sodium_mg` y
+# `_meal_sodium_mg` viven en `nutrition_db` (el módulo del primitivo `micros_from_ingredient_string`);
+# `meal_sodium_detail` añade cuántas líneas quedaron SIN dato (A3: «sin dato» ya no se disfraza de 0).
+# Re-exportados para `_day_sodium_autofix`, agent.py, routers/plans.py y los tests que parchean `go.`.
 # tooltip-anchor: P1-SODIUM-AWARE-PLACEMENT
-def _line_sodium_mg(ingredient_line, db) -> float:
-    """Sodio (mg) de UNA línea de ingrediente ("150 g de Pollo"), vía el catálogo. Fail-safe: 0.0."""
-    try:
-        mic = db.micros_from_ingredient_string(str(ingredient_line))
-        return float((mic or {}).get("sodium_mg") or 0.0)
-    except Exception:
-        return 0.0
-
-
-def _meal_sodium_mg(meal: dict, db) -> float:
-    """Sodio (mg) total de UNA comida — suma `_line_sodium_mg` sobre `ingredients_raw` (preferido,
-    mismo criterio que el panel/autofix) o `ingredients`. Fail-safe: 0.0 si `meal` no es dict."""
-    if not isinstance(meal, dict):
-        return 0.0
-    total = 0.0
-    _ings = meal.get("ingredients_raw") if isinstance(meal.get("ingredients_raw"), list) else meal.get("ingredients")
-    for _s in _ings or []:
-        if isinstance(_s, str):
-            total += _line_sodium_mg(_s, db)
-    return total
+from nutrition_db import _line_sodium_mg, _meal_sodium_mg, meal_sodium_detail  # noqa: E402
 
 
 def _sodium_day_ceiling_mg_for_banner(form_data: "dict | None" = None) -> float:
@@ -30379,6 +30298,15 @@ def _day_sodium_autofix(days: list, form_data=None, db=None) -> int:
         actions = 0
         for _d in days if isinstance(days, list) else []:
             meals = (_d.get("meals") or []) if isinstance(_d, dict) else []
+            # [P1-PLAN-FASE-A · 2026-09-11 · A3] Las líneas que el catálogo no resuelve sumaban 0 mg en
+            # silencio: un día lleno de «sin dato» pasaba por bajo en sodio. Se anota cuántas hay para que
+            # el panel y el juicio del día sepan que el número es un PISO, no una medida.
+            try:
+                _unk = sum(meal_sodium_detail(_m, db)[1] for _m in meals if isinstance(_m, dict))
+                if _unk and isinstance(_d, dict):
+                    _d["_sodium_unknown_lines"] = int(_unk)
+            except Exception:
+                pass
             if not meals or _day_sodium(meals) <= float(SODIUM_DAY_CEILING_MG):
                 continue
             # (1) strip de bombas de sodio sin rol de macros.
@@ -44494,6 +44422,39 @@ Responde ÚNICAMENTE con el JSON de revisión.
                     logger.info(f"🛒 [REVISOR/COH-BLOCK reject_minor] {msg} → retry si budget permite.")
 
     # Brechas 1 y 4: Errores deterministas del ensamblador
+    # [P1-PLAN-FASE-A · 2026-09-11 · A4] Un guard que NO pudo evaluar no es un guard que aprobó: el flag que
+    # deja `_mark_guard_unevaluable` no lo leía nadie y el plan salía como coherente. No se rechaza (reintentar
+    # repite el MISMO cómputo); queda constancia en history (`guard_unevaluable`), en la marca y, en `block`, en alerta.
+    _coh_unev = plan.get("_shopping_coherence_unevaluable")
+    if isinstance(_coh_unev, dict) and _coh_unev and not coherence_block:
+        try:
+            _unev_hist = plan.get("_shopping_coherence_block_history")
+            if not isinstance(_unev_hist, list):
+                _unev_hist = []
+            from datetime import datetime as _unev_dt, timezone as _unev_tz
+            _unev_hist.append({
+                "ts": _unev_dt.now(_unev_tz.utc).isoformat(), "attempt": state.get("attempt"),
+                "divergence_count": None, "block_set": False, "action_taken": "guard_unevaluable",
+                "unevaluable_stage": str(_coh_unev.get("stage") or "")[:60],
+                "unevaluable_error": str(_coh_unev.get("error") or "")[:120],
+            })
+            plan["_shopping_coherence_block_history"] = _unev_hist[-20:]
+            _unev_checks = plan.get("_review_unevaluable_checks")
+            if not isinstance(_unev_checks, list):
+                _unev_checks = []
+            if "shopping_coherence" not in _unev_checks:
+                _unev_checks.append("shopping_coherence")
+            plan["_review_unevaluable_checks"] = _unev_checks
+        except Exception as _unev_e:
+            logging.warning(f"[COH-UNEVALUABLE] no se pudo anotar la history: {_unev_e}")
+        _unev_mode = _env_str("MEALFIT_SHOPPING_COHERENCE_GUARD", "block", choices={"off", "warn", "block"})
+        logger.warning(
+            f"🛒 [REVISOR/COH-UNEVALUABLE] el guard de coherencia NO pudo evaluar el plan "
+            f"(etapa={_coh_unev.get('stage')}, error={str(_coh_unev.get('error'))[:80]}); modo={_unev_mode}. "
+            f"El plan se entrega SIN veredicto de coherencia recetas↔lista, no con uno favorable.")
+        if _unev_mode == "block":
+            _emit_shopping_guard_unevaluable_alert(state, _coh_unev)
+
     skeleton_fidelity_errors = plan.get("_skeleton_fidelity_errors", [])
     coherence_errors = plan.get("_recipe_coherence_errors", [])
 
@@ -45227,6 +45188,39 @@ def _persist_skeleton_short_repair_alert(
         )
     except Exception as _e:
         logger.debug(f"[P1-SKELETON-SHORT-ALERT] no se pudo persistir (best-effort): {_e!r}")
+
+
+def _emit_shopping_guard_unevaluable_alert(state: "PlanState", unevaluable: dict) -> None:
+    """[P1-PLAN-FASE-A · A4] `system_alerts.shopping_coherence_guard_unevaluable:<user_id>:<plan_id>` cuando el guard
+    reventó y el plan salió SIN veredicto (modo `block`). Best-effort, upsert, `warning`; Auto (implicit)."""
+    try:
+        form_data = state.get("form_data") or {}
+        user_id = form_data.get("user_id") or form_data.get("session_id") or "unknown"
+        plan_result = state.get("plan_result") or {}
+        plan_id = (plan_result.get("id") or plan_result.get("plan_id")
+                   or form_data.get("_caller_target_plan_id") or "no_plan_id")
+        alert_key = f"shopping_coherence_guard_unevaluable:{user_id}:{plan_id}"
+        import json as _json
+        _meta = {"stage": str(unevaluable.get("stage") or "")[:60], "error": str(unevaluable.get("error") or "")[:200],
+                 "detail": str(unevaluable.get("detail") or "")[:300], "at": unevaluable.get("at"),
+                 "attempt": state.get("attempt"), "plan_id": str(plan_id)}
+        execute_sql_write(
+            """
+            INSERT INTO system_alerts
+                (alert_key, alert_type, severity, title, message, metadata, affected_user_ids)
+            VALUES (%s, 'shopping_coherence_guard_unevaluable', 'warning', %s, %s, %s::jsonb, %s::jsonb)
+            ON CONFLICT (alert_key) DO UPDATE
+            SET triggered_at = NOW(), message = EXCLUDED.message, metadata = EXCLUDED.metadata,
+                affected_user_ids = EXCLUDED.affected_user_ids, resolved_at = NULL
+            """,
+            (alert_key, "Guard de coherencia recetas↔lista NO evaluable",
+             f"El plan {plan_id} se entregó sin veredicto de coherencia: el guard reventó en "
+             f"{_meta['stage']} ({_meta['error'][:80]}).",
+             _json.dumps(_meta, ensure_ascii=False, default=str),
+             _json.dumps([str(user_id)]) if user_id != "unknown" else _json.dumps([])),
+        )
+    except Exception as _e:
+        logger.warning(f"[COH-UNEVALUABLE] alerta no emitida (best-effort): {_e}")
 
 
 def _emit_plan_quality_degraded_alert(

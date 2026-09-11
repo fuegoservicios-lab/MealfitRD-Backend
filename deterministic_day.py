@@ -127,14 +127,15 @@ _FRANJAS_REGISTRY = ("desayuno", "almuerzo", "cena", "merienda")
 def _etiqueta_a_franja(etiqueta) -> Optional[str]:
     """«Merienda AM» → `merienda`, «Desayuno» → `desayuno`, «dinner» → `cena`; `None` si no se reconoce.
 
-    Primero el mapa del camino del LLM (`graph_orchestrator._SLOT_KEY_MAP`, el que leen
+    Primero el mapa del camino del LLM (`nutrition_calculator._SLOT_KEY_MAP` — vivía en el god-file
+    hasta P1-PLAN-FASE-A —, el que leen
     `_canonical_slot_fractions` y `_enforce_meal_count`), después los alias del registry
     (`dish_registry.canonical_slot_es`). Los dos existen; aquí no se escribe un tercero."""
     n = _norm(etiqueta)
     if not n:
         return None
     try:
-        from graph_orchestrator import _SLOT_KEY_MAP
+        from nutrition_calculator import _SLOT_KEY_MAP
         k = _SLOT_KEY_MAP.get(n)
         if k in _FRANJAS_REGISTRY:
             return k
@@ -155,11 +156,11 @@ def _fracciones_por_franja(etiquetas: list) -> list:
     algoritmo que el solver del camino del LLM (`_canonical_slot_fractions`): las meriendas toman su
     cuota en orden AM → PM → noche, lo no mapeado reparte el remanente, el vector suma 1,0."""
     try:
-        from graph_orchestrator import _canonical_slot_fractions
+        from nutrition_calculator import _canonical_slot_fractions
         return list(_canonical_slot_fractions([{"meal": e} for e in etiquetas]))
     except Exception:                                                  # noqa: BLE001
         pass
-    # Respaldo sin el god-file (pruebas unitarias del módulo): los MISMOS datos, la misma regla.
+    # Respaldo si `nutrition_calculator` no importa (pruebas aisladas): los MISMOS datos, la misma regla.
     try:
         from nutrition_calculator import MEAL_SLOT_SPLITS
         split = MEAL_SLOT_SPLITS.get(len(etiquetas), MEAL_SLOT_SPLITS[4])
