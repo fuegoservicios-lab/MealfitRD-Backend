@@ -385,20 +385,8 @@ if MEALFIT_DB_BACKEND == "neon":
     except Exception as pool_err:
         logger.error(f"⚠️ [psycopg] Error configurando ConnectionPool: {pool_err}")
 
-def close_connection_pool():
-    if connection_pool:
-        connection_pool.close()
-        logger.info("Connection pool cerrado.")
-    # [P1-CHECKPOINT-POOL-SPLIT · 2026-05-20] Cerrar también el pool del
-    # LangGraph checkpointer en shutdown — same convention que connection_pool.
-    if chat_checkpoint_pool:
-        chat_checkpoint_pool.close()
-        logger.info("chat_checkpoint_pool cerrado.")
-
-async def aclose_connection_pool():
-    if 'async_connection_pool' in globals() and async_connection_pool:
-        await async_connection_pool.close()
-        logger.info("Async Connection pool cerrado.")
+# [P1-PLAN-LOTE-5 · 2026-09-11 · F5] `close_connection_pool`/`aclose_connection_pool` vivieron aquí sin un solo
+# llamador: el teardown real es el `lifespan` de `app.py`, que cierra los tres pools inline. Borradas.
 
 # [P-TYPING-1] Overloads para resolución de tipos por flag: `fetch_one=True`
 # devuelve `dict | None`; `fetch_all=True` (o sin flag, default seguro) devuelve

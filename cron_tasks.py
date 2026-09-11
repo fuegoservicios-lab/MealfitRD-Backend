@@ -26933,8 +26933,10 @@ def process_plan_chunk_queue(target_plan_id=None):
       missing_prior_lessons               | 24h†          | auto-unblock o dead_letter (P1-CHUNKS-3)
       inventory_live_degraded             | (bypass)      | flex+advisory_only directo (P0-2)
 
-      * Bypass automático: si `_is_inventory_live_degraded()` detecta caída sistémica,
-        saltamos las ventanas y vamos directo a flex+advisory_only sin esperar TTL.
+      * [F5 · 2026-09-11] `_is_inventory_live_degraded()` EXISTE pero nadie la invoca: el «bypass
+        automático» que este comentario prometía (saltar las ventanas y pasar a flex+advisory_only
+        ante caída sistémica) NO corre. Cablearlo es una decisión de producto pendiente (needs-owner);
+        mientras, este texto dice lo que hay.
 
       † Cron `_alert_chunks_paused_indefinitely` corre cada CHUNK_INDEFINITE_PAUSE_INTERVAL_MINUTES.
         Fase 1 (>=12h): emite warning a system_alerts. Fase 2 (>=24h): reintenta unblock vía

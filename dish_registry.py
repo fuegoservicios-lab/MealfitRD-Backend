@@ -142,7 +142,9 @@ def allergen_classes_for(names: Iterable[str]) -> list[str]:
     """Clases de alérgeno (vocabulario SSOT de graph_orchestrator) presentes en los constituyentes."""
     try:
         from graph_orchestrator import _ALLERGEN_SYNONYMS as vocab
-    except Exception:
+    except Exception as _e:
+        # [P1-PLAN-LOTE-5 · F5] Sin vocabulario devolvía «sin alérgenos» en silencio: cada plantilla pasaba el filtro.
+        logger.warning(f"[P1-PLAN-LOTE-5] vocabulario de alérgenos no disponible ({type(_e).__name__}): clases vacías")
         return []
     out: set[str] = set()
     norm_names = [_norm(n) for n in names if n]

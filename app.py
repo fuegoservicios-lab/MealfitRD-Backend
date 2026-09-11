@@ -104,7 +104,10 @@ _PROCESS_START_ISO = datetime.now(timezone.utc).isoformat()
 # personalización con cobertura declarada (B1), huella de la computación (B3) y semilla del run (B4).
 # [P1-PLAN-LOTE-4 · 2026-09-11] Cuarto lote: el gate de reservas de la Nevera mide con la misma vara las dos
 # orillas (pizcas y condimentos no cuentan; `malla` pesa 5 lb) — D5.
-_LAST_KNOWN_PFIX = "P1-PLAN-LOTE-4 · 2026-09-11"
+# [P1-PLAN-LOTE-5 · 2026-09-11] Quinto lote (F5, guards inertes): el escáner de alérgenos del pool veta por
+# duda, las notas clínicas avisan cuando no se evalúan, salen del god-file cuatro funciones sin llamador, y la
+# «cota absoluta de la cookie sin cablear» resultó falso positivo: la aplica `_decode_session_cookie`.
+_LAST_KNOWN_PFIX = "P1-PLAN-LOTE-5 · 2026-09-11"
 
 # [P1-SENTRY-SAMPLE-COST · 2026-05-12] Sentry sampling driven from env vars
 # con default seguro 0.1 (10%). Pre-fix tenía `traces_sample_rate=1.0` y
@@ -1662,8 +1665,8 @@ async def lifespan(app: FastAPI):
         logger.info("🔌 [psycopg] Pool de conexiones asíncronas cerrado.")
     # [P3-PROD-AUDIT-2 · 2026-05-30] Cerrar también el pool del LangGraph
     # checkpointer (asimetría open/close: se abría en startup @986 pero el
-    # teardown inline lo omitía; `close_connection_pool()` que lo cubría es
-    # dead code sin callsites). Best-effort: con min_size=0 el impacto es nulo
+    # teardown inline lo omitía; `close_connection_pool()` que lo cubría era
+    # dead code sin callsites y se borró en P1-PLAN-LOTE-5). Best-effort: con min_size=0 el impacto es nulo
     # (proceso muere → conns liberadas), pero cerramos por higiene/consistencia.
     if chat_checkpoint_pool:
         try:

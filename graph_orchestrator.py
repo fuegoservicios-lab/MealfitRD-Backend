@@ -2595,36 +2595,6 @@ def _get_circuit_breaker(model: str | None = None) -> LLMCircuitBreaker:
         return cb
 
 
-def get_circuit_breaker_snapshot() -> dict:
-    """P1-Q3: snapshot read-only del estado de todos los CBs activos.
-
-    Útil para periodic scraping (Prometheus exporter), shutdown logging,
-    o tests de regresión. Devuelve un dict {model_name|"_global": health_info}.
-    No reads Redis/DB: solo el flag local `_local_healthy` que ya se
-    refresca con cada `acan_proceed`/`record_*`.
-    """
-    snapshot = {
-        "_global": {
-            "healthy": _circuit_breaker._local_healthy,
-            "last_failure_age_s": (
-                round(time.time() - _circuit_breaker._failure_propagated_at, 1)
-                if _circuit_breaker._failure_propagated_at > 0 else None
-            ),
-        }
-    }
-    with _CIRCUIT_BREAKERS_LOCK:
-        items = list(_CIRCUIT_BREAKERS_BY_MODEL.items())
-    for model, cb in items:
-        snapshot[model] = {
-            "healthy": cb._local_healthy,
-            "last_failure_age_s": (
-                round(time.time() - cb._failure_propagated_at, 1)
-                if cb._failure_propagated_at > 0 else None
-            ),
-        }
-    return snapshot
-
-
 # P0-5: Estructura fuerte de tasks de callback de progreso (fire-and-forget).
 # `loop.create_task()` solo guarda weak refs en el event loop, así que tasks
 # largas (SSE write a un cliente lento, DB hit) podían ser GC-eadas a mitad
@@ -4535,17 +4505,6 @@ def _inc_cb_stat(kind: str, n: int = 1) -> None:
         ppl = _pipeline_cb_stats_var.get()
         if ppl is not None:
             ppl[kind] = ppl.get(kind, 0) + n
-
-
-def get_progress_cb_stats_snapshot() -> dict:
-    """P1-NEW-4: snapshot read-only de los counters cumulativos.
-
-    Útil para periodic scraping (Prometheus exporter), shutdown logging,
-    o tests de regresión. Devuelve una copia para que el caller no pueda
-    mutar el estado interno.
-    """
-    with _PROGRESS_CB_STATS_LOCK:
-        return dict(_PROGRESS_CB_STATS)
 
 
 async def _run_async_cb_safe(cb, payload):
@@ -9671,21 +9630,10 @@ def _compute_ab_temp_pair_from_rows(rows: list) -> dict:
     return selected
 
 
-def _select_ab_temp_pair(user_id: str) -> dict:
-    """Sync legacy. Mantenido para callers externos (CLI, tests, scripts).
-    Producción async usa `_aselect_ab_temp_pair` para no bloquear el loop.
-    """
-    try:
-        rows = execute_sql_query(_AB_TEMP_QUERY, (user_id,), fetch_all=True) or []
-    except Exception as e:
-        logger.warning(f"⚠️ [AB-TEMP] Error leyendo historial: {e}")
-        rows = []
-    return _compute_ab_temp_pair_from_rows(rows)
-
-
 async def _aselect_ab_temp_pair(user_id: str) -> dict:
     """P0-NEW-1.a: variante async que usa `aexecute_sql_query` para no congelar
-    el event loop. Misma semántica que `_select_ab_temp_pair`. Se llama desde
+    el event loop. Misma semántica que la variante sync `_select_ab_temp_pair`
+    (borrada en P1-PLAN-LOTE-5: cero llamadores). Se llama desde
     `generate_days_parallel_node` (async) cuando el adversarial self-play está
     activo. La consulta se ejecuta sobre `pipeline_metrics` (~90 filas) y
     típicamente toma 30-150ms — sync bloqueaba ese tiempo todos los SSE
@@ -16115,12 +16063,16 @@ def _allergen_pool_item_banned(item, allergies) -> bool:
     """[P1-REVIEWER-VERIFICATION-ADVISORY · 2026-08-08] ¿Este ítem de pool del skeleton viola
     una ALERGIA declarada? Sibling exacto de `_diet_pool_item_banned` — el scrub era diet-only
     y asignó Huevos+Queso a un alérgico a huevo/lácteos declarando «limpio» (run 31232856541).
-    Reusa `_scan_allergen_violations` (mini-plan, sinónimos C2, excusa plant-adj). Fail-open."""
+    Reusa `_scan_allergen_violations` (mini-plan, sinónimos C2, excusa plant-adj).
+    Fail-SECURE con alergias declaradas desde P1-PLAN-LOTE-5: si el escáner revienta, el ítem se veta."""
     try:
         return bool(_scan_allergen_violations(
             {"days": [{"meals": [{"name": "_pool", "ingredients": [str(item)]}]}]}, allergies))
-    except Exception:
-        return False
+    except Exception as _e:
+        # [P1-PLAN-LOTE-5 · 2026-09-11 · F5] Era fail-OPEN: si el escáner reventaba, «no hay alérgeno». Con alergias
+        # declaradas la duda VETA el ítem (menos candidatos, cero riesgo); sin alergias no hay nada que vetar.
+        logger.warning(f"[P1-PLAN-LOTE-5] escáner de alérgenos del pool reventó ({type(_e).__name__}): se veta por duda")
+        return bool(allergies)
 
 
 def _diet_pool_item_banned(item, diet_type) -> bool:
@@ -19590,7 +19542,8 @@ def _apply_pregnancy_food_safety_annotations(plan: dict, form_data: dict) -> int
         if not _psn_ipl(form_data or {}):
             return 0
         from constants import strip_accents as _sa_psn
-    except Exception:
+    except Exception as _psn_e0:
+        logger.warning(f"[P1-PLAN-LOTE-5] notas de seguridad de embarazo NO evaluadas ({type(_psn_e0).__name__}: {_psn_e0})")
         return 0
     _catalog_deli, _catalog_dairy, _catalog_marine = _pregnancy_catalog_risk_tokens()
     annotated = 0
@@ -19735,7 +19688,8 @@ def _apply_condition_safety_annotations(plan: dict, form_data: dict) -> int:
         from condition_rules import detect_active_rules
         from constants import strip_accents as _sa_csn
         _active = [r.id for r in detect_active_rules(form_data or {})]
-    except Exception:
+    except Exception as _csn_e0:
+        logger.warning(f"[P1-PLAN-LOTE-5] notas de seguridad por condición NO evaluadas ({type(_csn_e0).__name__}: {_csn_e0})")
         return 0
     _clause_sets = [(_cid, _CONDITION_SAFETY_CLAUSES[_cid]) for _cid in _active
                     if _cid in _CONDITION_SAFETY_CLAUSES]
@@ -44365,12 +44319,6 @@ Responde ÚNICAMENTE con el JSON de revisión.
             # plan completo → degrada a warn (entrega + telemetría; el cron diario vigila la salud agregada).
             # SÍ rechaza si es SEVERA: ≥MIN_COUNT divergencias (sistemático) o magnitud ≥SEVERE_DELTA (egregio).
             # Knobs kill-switch → revierte al reject-siempre sin redeploy. tooltip-anchor: P1-REVIEW-COHERENCE-SEVERE-ONLY
-            def _coh_finite_delta_rv(_dv):
-                try:
-                    _v = float(_dv.get("delta_pct") or 0.0)
-                except (TypeError, ValueError):
-                    return 0.0
-                return _v if _v == _v and abs(_v) != float("inf") else 0.0
             _rv_severe_only = _env_bool("MEALFIT_REVIEW_COHERENCE_BLOCK_SEVERE_ONLY", True)
             _rv_min_count = _env_int("MEALFIT_REVIEW_COHERENCE_SEVERE_MIN_COUNT", 2,
                                      validator=lambda v: 1 <= v <= 20)
