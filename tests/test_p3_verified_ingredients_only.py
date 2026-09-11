@@ -100,7 +100,6 @@ def test_helper_classifies_invented_vs_verified():
     # off-catálogo estables son los que el prompt del day-gen prohíbe explícitamente.
     # invenciones del LLM (no en el catálogo verificado (~202)) → False
     assert _is_verified_for_shopping("achiote") is False
-    assert _is_verified_for_shopping("sazon en polvo") is False
     assert _is_verified_for_shopping("clavo dulce") is False
     # verificados (resuelven a master con precio) → True
     assert _is_verified_for_shopping("oregano") is True
@@ -109,6 +108,11 @@ def test_helper_classifies_invented_vs_verified():
     assert _is_verified_for_shopping("cilantro") is True  # el sofrito SÍ está
     assert _is_verified_for_shopping("laurel") is True    # promovido P1-SPICES-CATALOG-SYNC
     assert _is_verified_for_shopping("comino") is True    # promovido P1-SPICES-CATALOG-SYNC
+    # [P1-DO-DESPENSA-DE-SU-MERCADO · 2026-09-10] «sazon en polvo» pasó de inventada a verificada, y
+    # nunca fue inventada por RESOLUCIÓN: el alias `sazon` de «Sazón con culantro y achiote» (T7/PR)
+    # ya la resolvía a esa fila. Era «inventada» sólo porque la fila no tenía PRECIO; el dueño lo
+    # trajo (Sazón Goya, 8 sobres RD$99). El mismo envejecimiento de fixture que laurel/comino.
+    assert _is_verified_for_shopping("sazon en polvo") is True  # promovido P1-DO-DESPENSA-DE-SU-MERCADO
 
 
 @pytest.mark.skipif(not _DB, reason="requiere connection_pool a Neon prod")
