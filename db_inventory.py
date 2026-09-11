@@ -1233,6 +1233,14 @@ def _apply_reservation_delta(
     return False
 
 
+def _reservation_line_is_material(qty, unit, name) -> bool:
+    try:
+        from constants import reservation_line_is_material
+        return bool(reservation_line_is_material(qty, unit, name))
+    except Exception:
+        return True
+
+
 def reserve_plan_ingredients(user_id: str, chunk_id: str, days: List[Dict[str, Any]]) -> int:
     """Reserva ingredientes de un chunk confirmado para que el siguiente vea stock disponible real.
 
@@ -1280,7 +1288,9 @@ def reserve_plan_ingredients(user_id: str, chunk_id: str, days: List[Dict[str, A
                     continue
                 try:
                     qty, unit, name = _parse_quantity(str(item))
-                    if name and qty > 0:
+                    # [P1-PLAN-LOTE-4 · 2026-09-11 · D5] Misma vara que el gate: una pizca o un condimento
+                    # no se reserva (no hay fila de Nevera que la sostenga) ni cuenta como esperada.
+                    if name and qty > 0 and _reservation_line_is_material(qty, unit, name):
                         if _apply_reservation_delta(
                             user_id, name, qty, unit, reservation_key,
                             prefetched_rows=batch_rows,

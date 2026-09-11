@@ -4500,8 +4500,49 @@ def _to_base_unit(qty: float, unit: str):
     
     # Informal Containers -> always track as units for delta
     if unit in ['paquete', 'paquetes', 'paquetico', 'paqueticos', 'funda', 'fundas', 'sobre', 'sobres', 'sobrecito', 'sobrecitos', 'lata', 'latas', 'pote', 'potes']: return qty, 'unidad'
+    # [P1-PLAN-LOTE-4 · 2026-09-11 · D5] La malla de víveres del súper dominicano es de 5 lb (papa, cebolla,
+    # zanahoria): «2 mallas de Papa» se contaba como 2 UNIDADES y por eso «3 papas medianas» excedía el
+    # inventario del incidente (pantry_gate_fourth_guard.md). Peso, no cuenta.
+    if unit in ['malla', 'mallas']: return qty * 2267.96, 'g'
     
     return qty, unit
+
+# [P1-PLAN-LOTE-4 · 2026-09-11 · D5] ¿Esta línea de receta cuenta en el gate de RESERVAS de la Nevera?
+# El gate post-pipeline contaba TODA línea con cantidad > 0 y exigía reservar la mitad: «7 g de arroz» o «1 cdta
+# de sal» pesaban igual que «200 g de pollo», y una Nevera legítima con las proteínas y las bases se pausaba por
+# los condimentos y las pizcas que nadie tiene en la Nevera como fila. Umbral en gramos/ml (knob
+# `MEALFIT_PANTRY_RESERVE_MIN_G`, defecto 15) y los mismos términos que `_count_meaningful_pantry_items`
+# ignora en el lado de la Nevera — el gate mide ahora las DOS orillas con la misma vara. Una unidad contable
+# («2 huevos», «1 malla») siempre es material.
+PANTRY_IGNORED_TERMS = frozenset({
+    "", "agua", "sal", "pimienta", "aceite", "vinagre", "oregano", "cilantro",
+    "canela", "sazon", "condimento",
+})
+
+
+def pantry_reserve_min_g() -> float:
+    try:
+        return float(max(0, min(100, _env_int("MEALFIT_PANTRY_RESERVE_MIN_G", 15))))
+    except Exception:
+        return 15.0
+
+
+def reservation_line_is_material(qty, unit, name) -> bool:
+    """`True` si la línea debe contar (y reservarse) en el gate de la Nevera; `False` para pizcas y condimentos."""
+    try:
+        base = normalize_ingredient_for_tracking(str(name or "")) or strip_accents(str(name or "").lower().strip())
+        if not base or len(base) <= 2 or base in PANTRY_IGNORED_TERMS:
+            return False
+        q = float(qty or 0)
+        if q <= 0:
+            return False
+        b_qty, b_unit = _to_base_unit(q, str(unit or "").strip().lower())
+        if b_unit in ("g", "ml"):
+            return float(b_qty) >= pantry_reserve_min_g()
+        return True
+    except Exception:
+        return True   # ante la duda, cuenta: el gate no se afloja por un error de conversión
+
 
 def _format_unit_qty(base_qty: float, base_unit: str) -> str:
     """Para mensajes de error legibles."""

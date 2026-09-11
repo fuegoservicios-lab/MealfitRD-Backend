@@ -12075,12 +12075,9 @@ def _count_meaningful_pantry_items(pantry_ingredients: list) -> int:
     if not pantry_ingredients:
         return 0
 
-    from constants import normalize_ingredient_for_tracking
+    from constants import normalize_ingredient_for_tracking, PANTRY_IGNORED_TERMS
 
-    ignored_terms = {
-        "", "agua", "sal", "pimienta", "aceite", "vinagre", "oregano", "cilantro",
-        "canela", "sazon", "condimento",
-    }
+    ignored_terms = PANTRY_IGNORED_TERMS   # [P1-PLAN-LOTE-4 · D5] SSOT compartido con el gate de reservas
 
     normalized_items = set()
     for item in pantry_ingredients:
@@ -33492,6 +33489,7 @@ __PLAN_MODE_GATE__
 
             try:
                 from shopping_calculator import _parse_quantity
+                from constants import reservation_line_is_material as _rlm
                 _expected_ingredients = 0
                 for _rd in new_days:
                     for _rm in (_rd or {}).get('meals', []):
@@ -33499,7 +33497,7 @@ __PLAN_MODE_GATE__
                             if _ri and len(str(_ri).strip()) >= 3:
                                 try:
                                     _rq, _ru, _rn = _parse_quantity(str(_ri))
-                                    if _rn and _rq > 0:
+                                    if _rn and _rq > 0 and _rlm(_rq, _ru, _rn):   # [P1-PLAN-LOTE-4 · D5] pizcas y condimentos no cuentan
                                         _expected_ingredients += 1
                                 except Exception:
                                     pass

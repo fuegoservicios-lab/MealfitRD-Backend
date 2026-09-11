@@ -142,11 +142,13 @@ legítimamente poco variadas, y el modo de fallo que nos ocupa no era «se gener
 
 ## Lo que queda abierto
 
-- **No hay umbral de cantidad mínima** en el gate: «7 g de arroz blanco crudo» bloquea
-  igual que 200 g de pollo. Se dejó fuera a propósito — subir un umbral cambia la
-  semántica de seguridad para alimentos reales, y con el waiver honrado los
-  `initial_plan` ya no mueren ahí. Sigue vivo para `rolling_refill` sin waiver.
-- **`malla` no existe en `_to_base_unit`**: «2 mallas de Papa» (≈10-12 papas) se cuenta
-  como 2 unidades, y por eso «3 papas medianas» excedía el inventario del incidente.
+- ~~No hay umbral de cantidad mínima en el gate~~ **Cerrado (`P1-PLAN-LOTE-4` · 2026-09-11)**:
+  `constants.reservation_line_is_material` decide qué líneas cuentan (y se reservan): por debajo de
+  `MEALFIT_PANTRY_RESERVE_MIN_G` (15 g/ml) o dentro de `PANTRY_IGNORED_TERMS` (sal, aceite, orégano…) no
+  cuentan; una unidad contable siempre cuenta. Las DOS orillas —`_expected_ingredients` en el worker y
+  `reserve_plan_ingredients`— usan la misma función, y `_count_meaningful_pantry_items` comparte el set.
+  No afloja la seguridad de los alimentos reales: 200 g de pollo siguen exigiendo su fila.
+- ~~`malla` no existe en `_to_base_unit`~~ **Cerrado (`P1-PLAN-LOTE-4`)**: la malla del súper dominicano es
+  de 5 lb (2.268 g): «2 mallas de Papa» son 4,5 kg, no 2 unidades.
 - **Las otras 4 lecturas del flag** dentro de `_chunk_worker` siguen sueltas; están
   declaradas en `LECTURAS_DECLARADAS` con su motivo, y ninguna decide una pausa hoy.

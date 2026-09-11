@@ -102,7 +102,9 @@ _PROCESS_START_ISO = datetime.now(timezone.utc).isoformat()
 # en Neon Auth (G3), fósforo con fuente para dos filas (F7).
 # [P1-PLAN-LOTE-3 · 2026-09-11] Tercer lote: perfil «neutral» y exclusiones al selector (B5), métrica de
 # personalización con cobertura declarada (B1), huella de la computación (B3) y semilla del run (B4).
-_LAST_KNOWN_PFIX = "P1-PLAN-LOTE-3 · 2026-09-11"
+# [P1-PLAN-LOTE-4 · 2026-09-11] Cuarto lote: el gate de reservas de la Nevera mide con la misma vara las dos
+# orillas (pizcas y condimentos no cuentan; `malla` pesa 5 lb) — D5.
+_LAST_KNOWN_PFIX = "P1-PLAN-LOTE-4 · 2026-09-11"
 
 # [P1-SENTRY-SAMPLE-COST · 2026-05-12] Sentry sampling driven from env vars
 # con default seguro 0.1 (10%). Pre-fix tenía `traces_sample_rate=1.0` y
