@@ -1,0 +1,327 @@
+{
+  "anotador": "",
+  "generado": "2026-09-12",
+  "instrucciones": "por caso: veredicto ok|defecto|dudoso; defectos: [{clase, severidad, evidencia, alimento?}] con clase de RUBRICA (culinary_golden_score.py). Deja la lista vacia si el veredicto es ok.",
+  "casos": {
+    "20fdfb4de7": {
+      "veredicto": "",
+      "defectos": []
+    },
+    "17285dfa78": {
+      "veredicto": "",
+      "defectos": []
+    },
+    "0006d5207d": {
+      "veredicto": "",
+      "defectos": []
+    },
+    "01b41535b1": {
+      "veredicto": "",
+      "defectos": []
+    },
+    "04d25439d9": {
+      "veredicto": "",
+      "defectos": []
+    },
+    "05145657e1": {
+      "veredicto": "",
+      "defectos": []
+    },
+    "2878e78af8": {
+      "veredicto": "",
+      "defectos": []
+    },
+    "050a6b5a97": {
+      "veredicto": "",
+      "defectos": []
+    },
+    "1929f8cf78": {
+      "veredicto": "",
+      "defectos": []
+    },
+    "1c0c5e6582": {
+      "veredicto": "",
+      "defectos": []
+    },
+    "05f6ea7c63": {
+      "veredicto": "",
+      "defectos": []
+    },
+    "2327193370": {
+      "veredicto": "",
+      "defectos": []
+    },
+    "0ef0ba50b7": {
+      "veredicto": "",
+      "defectos": []
+    },
+    "2538fbe6a2": {
+      "veredicto": "",
+      "defectos": []
+    },
+    "00fae1c079": {
+      "veredicto": "",
+      "defectos": []
+    },
+    "01c46fd2a5": {
+      "veredicto": "",
+      "defectos": []
+    },
+    "24dbfaebdb": {
+      "veredicto": "",
+      "defectos": []
+    },
+    "84c2e6d4f0": {
+      "veredicto": "",
+      "defectos": []
+    },
+    "0dbc337c25": {
+      "veredicto": "",
+      "defectos": []
+    },
+    "0468ff03aa": {
+      "veredicto": "",
+      "defectos": []
+    },
+    "033afcafbf": {
+      "veredicto": "",
+      "defectos": []
+    },
+    "15ddcb26c1": {
+      "veredicto": "",
+      "defectos": []
+    },
+    "0108f857ae": {
+      "veredicto": "",
+      "defectos": []
+    },
+    "77c78d3990": {
+      "veredicto": "",
+      "defectos": []
+    },
+    "01c22c6847": {
+      "veredicto": "",
+      "defectos": []
+    },
+    "049c5eb771": {
+      "veredicto": "",
+      "defectos": []
+    },
+    "03e16ec7fb": {
+      "veredicto": "",
+      "defectos": []
+    },
+    "01606d0573": {
+      "veredicto": "",
+      "defectos": []
+    },
+    "0b1f190ac9": {
+      "veredicto": "",
+      "defectos": []
+    },
+    "0338feb3a9": {
+      "veredicto": "",
+      "defectos": []
+    },
+    "028ad9ed64": {
+      "veredicto": "",
+      "defectos": []
+    },
+    "02068c1382": {
+      "veredicto": "",
+      "defectos": []
+    },
+    "023da1766e": {
+      "veredicto": "",
+      "defectos": []
+    },
+    "00e3c06383": {
+      "veredicto": "",
+      "defectos": []
+    },
+    "078dcac1d0": {
+      "veredicto": "",
+      "defectos": []
+    },
+    "1794ad8c1d": {
+      "veredicto": "",
+      "defectos": []
+    },
+    "1a75c5ae61": {
+      "veredicto": "",
+      "defectos": []
+    },
+    "17fda2a839": {
+      "veredicto": "",
+      "defectos": []
+    },
+    "12dc5c0e78": {
+      "veredicto": "",
+      "defectos": []
+    },
+    "045b2e2131": {
+      "veredicto": "",
+      "defectos": []
+    },
+    "119f0e6a06": {
+      "veredicto": "",
+      "defectos": []
+    },
+    "19f304d513": {
+      "veredicto": "",
+      "defectos": []
+    },
+    "69d4dcbd6f": {
+      "veredicto": "",
+      "defectos": []
+    },
+    "0eeebbee4d": {
+      "veredicto": "",
+      "defectos": []
+    },
+    "060b4fda6a": {
+      "veredicto": "",
+      "defectos": []
+    },
+    "0d16ef69e3": {
+      "veredicto": "",
+      "defectos": []
+    },
+    "1ea600db80": {
+      "veredicto": "",
+      "defectos": []
+    },
+    "028f7003f6": {
+      "veredicto": "",
+      "defectos": []
+    },
+    "023e151c4e": {
+      "veredicto": "",
+      "defectos": []
+    },
+    "03c57e55a5": {
+      "veredicto": "",
+      "defectos": []
+    },
+    "7ef0b23dd8": {
+      "veredicto": "",
+      "defectos": []
+    },
+    "04e303030f": {
+      "veredicto": "",
+      "defectos": []
+    },
+    "0d4eeb64eb": {
+      "veredicto": "",
+      "defectos": []
+    },
+    "049fbef8b5": {
+      "veredicto": "",
+      "defectos": []
+    },
+    "292b09e344": {
+      "veredicto": "",
+      "defectos": []
+    },
+    "456feecd3a": {
+      "veredicto": "",
+      "defectos": []
+    },
+    "2546d9d030": {
+      "veredicto": "",
+      "defectos": []
+    },
+    "098d23388f": {
+      "veredicto": "",
+      "defectos": []
+    },
+    "8474cf4488": {
+      "veredicto": "",
+      "defectos": []
+    },
+    "26910ac91d": {
+      "veredicto": "",
+      "defectos": []
+    },
+    "06d4e17091": {
+      "veredicto": "",
+      "defectos": []
+    },
+    "04eb731253": {
+      "veredicto": "",
+      "defectos": []
+    },
+    "0547761d8a": {
+      "veredicto": "",
+      "defectos": []
+    },
+    "0ee6d0a81c": {
+      "veredicto": "",
+      "defectos": []
+    },
+    "00c6bc53c7": {
+      "veredicto": "",
+      "defectos": []
+    },
+    "3b8dd7ce2c": {
+      "veredicto": "",
+      "defectos": []
+    },
+    "46c02301b2": {
+      "veredicto": "",
+      "defectos": []
+    },
+    "2697e63381": {
+      "veredicto": "",
+      "defectos": []
+    },
+    "19b13609c9": {
+      "veredicto": "",
+      "defectos": []
+    },
+    "55fef36cd9": {
+      "veredicto": "",
+      "defectos": []
+    },
+    "06416aacbb": {
+      "veredicto": "",
+      "defectos": []
+    },
+    "0a22373d6b": {
+      "veredicto": "",
+      "defectos": []
+    },
+    "0bd5722712": {
+      "veredicto": "",
+      "defectos": []
+    },
+    "20055f9f33": {
+      "veredicto": "",
+      "defectos": []
+    },
+    "05856e2162": {
+      "veredicto": "",
+      "defectos": []
+    },
+    "4f073559b3": {
+      "veredicto": "",
+      "defectos": []
+    },
+    "1191a15521": {
+      "veredicto": "",
+      "defectos": []
+    },
+    "1d6d7dc439": {
+      "veredicto": "",
+      "defectos": []
+    },
+    "2168899312": {
+      "veredicto": "",
+      "defectos": []
+    },
+    "340665859e": {
+      "veredicto": "",
+      "defectos": []
+    }
+  }
+}

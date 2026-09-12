@@ -313,8 +313,10 @@ def test_review_invoca_el_scan_y_traduce_a_issues():
     _next_def = re.search(r"\n(?:async )?def ", _GO_SRC[i + 30:])
     end = (i + 30 + _next_def.start()) if _next_def else len(_GO_SRC)
     win = _GO_SRC[i:end]
-    assert "culinary_contract_scan(" in win, "review_plan_node no invoca el scan"
-    j = win.index("culinary_contract_scan(")
+    # [P1-PLAN-LOTE-22 · 2026-09-12] (C1) el callsite pasó a `culinary_contract_scan_status(` (el scan con su estado)
+    _m_scan = re.search(r"culinary_contract_scan(?:_status)?\(", win)
+    assert _m_scan, "review_plan_node no invoca el scan"
+    j = _m_scan.start()
     gate = win[j:j + 3000]
     assert 'CULINARY_CONTRACT_GUARD == "block"' in gate
     assert "_severity_max(" in gate, "en block las violaciones deben escalar severity"
@@ -328,7 +330,7 @@ def test_scan_corre_despues_de_los_reparadores():
     DESPUÉS del marker del auto-patch."""
     autopatch = _GO_SRC.index("huérfanos eliminados") if "huérfanos eliminados" in _GO_SRC \
         else _GO_SRC.index("AUTO-PATCH")
-    assert _GO_SRC.index("culinary_contract_scan(") > autopatch
+    assert re.search(r"culinary_contract_scan(?:_status)?\(", _GO_SRC).start() > autopatch   # [P1-PLAN-LOTE-22] con estado
 
 
 # ---------------------------------------------------------------------------

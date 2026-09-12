@@ -14,6 +14,7 @@ from __future__ import annotations
 import hashlib
 import json
 import re
+from pathlib import Path
 
 from constants import strip_accents
 
@@ -1524,15 +1525,63 @@ def _viol(day, meal, check, food, detail, severity, repairable):
             "severity": severity, "repairable": repairable}
 
 
-def culinary_contract_scan(plan_data: dict, catalog: list) -> list:
+#: Los checks de la capa 1, en el orden en que corren.
+CHECKS_CAPA1 = ("V1", "V2", "V3", "V4", "V5", "V6", "V7a", "V7b", "V7c", "V7d", "V7e")
+
+#: [P1-PLAN-LOTE-22 · 2026-09-12] (C1 · CUL-P0-01) Versión del ESQUEMA de hallazgo: desde aquí cada violación (capa 1 y
+#: juez) lleva `meal_index`, la posición de la comida en su día. Cambia cuando cambie la forma del hallazgo.
+FINDING_SCHEMA_VERSION = "2026-09-12.meal_index"
+
+_RULES_FP: "str | None" = None
+
+
+def rules_fingerprint() -> "str | None":
+    """[P1-PLAN-LOTE-22 · 2026-09-12] (C1) sha256[:16] del fuente de ESTE fichero: la versión de las reglas que produjo un
+    hallazgo. Mismo cálculo que `culinary_corpus.huella_reglas` (texto utf-8, saltos normalizados) para que las dos
+    huellas coincidan. Calculada una vez por proceso; `None` si no se puede leer (jamás lanza)."""
+    global _RULES_FP
+    if _RULES_FP is None:
+        try:
+            _RULES_FP = hashlib.sha256(Path(__file__).resolve().read_text(encoding="utf-8").encode("utf-8")).hexdigest()[:16]
+        except Exception:
+            return None
+    return _RULES_FP
+
+
+def _iter_meals_idx(plan_data: dict):
+    """[P1-PLAN-LOTE-22 · 2026-09-12] (C1 · CUL-P0-01) Como `_iter_meals`, más la POSICIÓN de la comida en su día: la
+    identidad por ocurrencia. Dos meriendas el mismo día son dos comidas y sus hallazgos no se mezclan."""
+    for d in (plan_data or {}).get("days") or []:
+        if not isinstance(d, dict):
+            continue
+        for mi, m in enumerate(d.get("meals") or []):
+            if isinstance(m, dict):
+                yield d.get("day"), m, mi
+
+
+def culinary_contract_scan(plan_data: dict, catalog: list, _estado: "dict | None" = None) -> list:
     """Escanea el plan completo. Retorna lista de Violations (vacía si todo
-    coherente o si no hay datos). Jamás lanza: fail-open total."""
+    coherente o si no hay datos). Jamás lanza: fail-open total.
+
+    [P1-PLAN-LOTE-22 · 2026-09-12] (C1 · CUL-P0-01) Cada violación lleva `meal_index` (posición de la comida en su día:
+    identidad por OCURRENCIA, no por franja) y `meal_seal` (contenido de esa comida). Si el caller pasa `_estado` (un
+    dict) se rellena con el ESTADO del scan — `culinary_contract_scan_status` es la forma cómoda de pedirlo: `[]`
+    significaba «coherente», «sin catálogo» y «reventó», y las tres se persistían igual. La cadena de checks vive AQUÍ,
+    literal, porque cinco tests la leen como texto: una capa que existe y nadie invoca es el modo de fallo de P1-G."""
+    estado = _estado if isinstance(_estado, dict) else {}
+    estado.update({"status": "error", "checks": list(CHECKS_CAPA1), "meals": 0, "violations": 0, "error": None,
+                   "reglas_huella": rules_fingerprint(), "schema": FINDING_SCHEMA_VERSION})
     try:
         index = build_culinary_index(catalog)
         if not index:
+            estado["status"] = "no_catalog"
+            estado["checks"] = []
             return []
         out = []
-        for day, meal in _iter_meals(plan_data):
+        n = 0
+        for day, meal, mi in _iter_meals_idx(plan_data):
+            n += 1
+            start = len(out)
             out.extend(_v1_verbo_alimento(day, meal, index))
             out.extend(_v2_estado_imposible(day, meal, index))
             out.extend(_v3_huerfanos(day, meal, index))
@@ -1544,10 +1593,30 @@ def culinary_contract_scan(plan_data: dict, catalog: list) -> list:
             out.extend(_v7c_seco_sin_coccion(day, meal, index))
             out.extend(_v7d_masa_sobrante(day, meal, index))
             out.extend(_v7e_paso_pide_mas_piezas(day, meal, index))
+            for v in out[start:]:
+                v.setdefault("meal_index", mi)
+                v.setdefault("meal_seal", meal_seal(meal))
+        estado["status"] = "scanned" if n else "no_meals"
+        estado["meals"] = n
+        estado["violations"] = len(out)
         return out
     except Exception as _f5e:
         logger.warning(f"[P1-PLAN-LOTE-6] culinary_contract_scan: `build_culinary_index` tragado sin rastro ({type(_f5e).__name__}: {_f5e})")
+        estado["error"] = f"{type(_f5e).__name__}: {_f5e}"[:240]
         return []
+
+
+def culinary_contract_scan_status(plan_data: dict, catalog: list) -> "tuple[list, dict]":
+    """[P1-PLAN-LOTE-22 · 2026-09-12] (C1 · CUL-P0-01) El scan con su ESTADO: `(violations, estado)`.
+
+        estado = {"status": "scanned" | "no_meals" | "no_catalog" | "error", "checks": [...], "meals": n,
+                  "violations": n, "error": None | "Tipo: mensaje", "reglas_huella": ..., "schema": ...}
+
+    Antes un catálogo vacío en producción aprobaba todos los planes en silencio (medido en P1-CULINARY-METADATA-BETA:
+    cobertura 100 % → 59 % con los tests en verde). Fail-open se conserva: jamás lanza, y con `no_catalog`/`error`
+    devuelve `[]` — pero ahora lo DICE. tooltip-anchor: P1-PLAN-LOTE-22-SCAN-STATUS"""
+    estado: dict = {}
+    return culinary_contract_scan(plan_data, catalog, _estado=estado), estado
 
 
 # ─────────────────────────────────────────────────────────────────────────────────────────────
@@ -1641,3 +1710,228 @@ def scan_coverage(plan_data: dict, catalog: list) -> "float | None":
         return (con_meta / len(vistos)) if vistos else None
     except Exception:
         return None
+
+
+# ─────────────────────────────────────────────────────────────────────────────────────────────
+# [P1-PLAN-LOTE-22 · 2026-09-12] (C1 · CUL-P0-01) Identidad, versión y estado EXPLÍCITO de evaluación
+#
+# Cuatro cosas que antes se confundían con «aprobado»: el juez que no llegó a juzgar, el scan sin catálogo, el juicio
+# de OTRA versión del plan y una comida que hereda el hallazgo de su hermana de franja. Las funciones de abajo no
+# deciden nada (siguen sin mutar el plan): dan nombre a cada estado para que el medidor y el orquestador no tengan
+# que adivinarlo a partir de una lista vacía.
+# tooltip-anchor: P1-PLAN-LOTE-22-EVAL-STATE
+
+def slot_norm(text) -> str:
+    """Franja normalizada para comparar «Merienda» con «merienda» o «Almuerzo» con «almuerzo»."""
+    return _norm(text).strip()
+
+
+def meal_seal(meal: dict) -> "str | None":
+    """Identidad de CONTENIDO de una comida: sha256[:16] de (franja, nombre, ingredientes, pasos) — lo mismo que lee el
+    juez, SIN el día ni la posición. Por qué hace falta además de `judged_fingerprint` (sello del plan entero, que lleva
+    la posición del día): el shift archiva y RENUMERA días, así que el sello del plan declara obsoleto todo lo juzgado
+    aunque la comida entregada sea byte a byte la juzgada — medido en el corpus fijo del 09-12: 5 de 5 planes
+    «juzgado_obsoleto», juez sobre lo entregado 0 de 64 comidas. El sello por comida sobrevive al shift y a la
+    reparación de OTRA comida. Jamás lanza. tooltip-anchor: P1-PLAN-LOTE-22-MEAL-SEAL"""
+    try:
+        crudo = json.dumps([str(meal.get("meal") or ""), str(meal.get("name") or ""),
+                            [str(x) for x in (meal.get("ingredients") or [])],
+                            [str(x) for x in (meal.get("recipe") or [])]], ensure_ascii=False)
+        return hashlib.sha256(crudo.encode("utf-8")).hexdigest()[:16]
+    except Exception:
+        return None
+
+
+def meal_seals_index(plan: dict) -> dict:
+    """sello → (day, meal_index) de cada comida ENTREGADA. Dos comidas idénticas comparten sello: gana la primera."""
+    out = {}
+    try:
+        for day, m, mi in _iter_meals_idx(plan):
+            s = meal_seal(m)
+            if s and s not in out:
+                out[s] = (day, mi)
+    except Exception:
+        pass
+    return out
+
+
+def scan_coverage_detail(plan_data: dict, catalog: list) -> dict:
+    """Tres coberturas, no una. `scan_coverage` da una sola cifra (alimentos con `prep_methods` / alimentos vistos) y
+    con ella se decide `warn → block`; pero un 59 % puede ser «el catálogo no tiene metadata» o «el índice no reconoce
+    la mitad de las líneas», y la reparación es distinta. Devuelve, cada una `None` cuando no es medible:
+
+      · `reconocimiento`: líneas de ingredientes en las que el índice encontró algún alimento (el PARSER);
+      · `catalogo`: alimentos reconocidos con `prep_methods` (lo que V1 necesita; = `scan_coverage`);
+      · `ready_to_eat`: alimentos reconocidos con `ready_to_eat` declarado (lo que V2 necesita);
+      · `por_check`: qué cobertura gobierna a cada check (V1 → catálogo, V2 → ready_to_eat, resto → reconocimiento).
+
+    `estado` ∈ {medida, sin_catalogo, sin_alimentos, error}. Jamás lanza."""
+    out = {"estado": "medida", "lineas": 0, "lineas_reconocidas": 0, "alimentos": 0, "con_prep_methods": 0,
+           "con_ready_to_eat": 0, "reconocimiento": None, "catalogo": None, "ready_to_eat": None, "por_check": {},
+           "error": None}
+    try:
+        index = build_culinary_index(catalog)
+        if not index:
+            out["estado"] = "sin_catalogo"
+            return out
+        vistos = set()
+        for _, meal in _iter_meals(plan_data):
+            lineas = list(meal.get("ingredients") or [])
+            for ln in lineas:
+                out["lineas"] += 1
+                if find_catalog_foods(str(ln), index):
+                    out["lineas_reconocidas"] += 1
+            blob = " | ".join(lineas + list(meal.get("recipe") or []))
+            vistos.update(find_catalog_foods(blob, index))
+        out["alimentos"] = len(vistos)
+        for f in vistos:
+            fila = index.get(_norm(f)) or {}
+            if fila.get("prep_methods") is not None:
+                out["con_prep_methods"] += 1
+            if fila.get("ready_to_eat") is not None:
+                out["con_ready_to_eat"] += 1
+        if out["lineas"]:
+            out["reconocimiento"] = round(out["lineas_reconocidas"] / out["lineas"], 3)
+        if vistos:
+            out["catalogo"] = round(out["con_prep_methods"] / len(vistos), 3)
+            out["ready_to_eat"] = round(out["con_ready_to_eat"] / len(vistos), 3)
+        else:
+            out["estado"] = "sin_alimentos"
+        out["por_check"] = {c: (out["catalogo"] if c == "V1" else out["ready_to_eat"] if c == "V2" else out["reconocimiento"])
+                            for c in CHECKS_CAPA1}
+        return out
+    except Exception as e:
+        out["estado"] = "error"
+        out["error"] = f"{type(e).__name__}: {e}"[:240]
+        return out
+
+
+def judge_payload_meals(plan: dict) -> list:
+    """Lo que el juez LEE — día, franja, nombre, ingredientes y pasos— más `idx`, la posición de la comida en su día,
+    para que pueda devolver `meal_index` y dos meriendas del mismo día dejen de ser indistinguibles."""
+    return [{"day": d.get("day"), "idx": mi, "slot": m.get("meal"), "name": m.get("name"),
+             "ingredients": m.get("ingredients"), "recipe": m.get("recipe")}
+            for d in ((plan or {}).get("days") or []) if isinstance(d, dict)
+            for mi, m in enumerate(d.get("meals") or []) if isinstance(m, dict)]
+
+
+def resolve_judge_violations(plan: dict, violations: list) -> list:
+    """Ata cada queja del juez a UNA ocurrencia. El juez habla en `(day, meal=franja)` y, si la rúbrica se lo pide,
+    `meal_index`; dos meriendas el mismo día comparten franja. Resolución, en `resolucion`:
+
+      · `por_sello`: la queja ya trae `meal_seal` (se selló al juzgar) y esa comida sigue ENTREGADA, quizá en otro día
+        tras el shift — `ocurrencia_actual = [day, meal_index]` dice dónde está hoy; `day`/`meal_index` quedan como
+        se juzgaron;
+      · `declarada`: trae `meal_index` válido y la franja de esa comida coincide;
+      · `unica`: una sola comida del día tiene esa franja (todo lo anterior a este P-fix cae aquí);
+      · `ambigua`: dos o más — el hallazgo NO se reparte: `meal_index = None`;
+      · `sin_comida`: ninguna comida con esa franja en ese día (día archivado por el shift, franja renombrada).
+
+    Las quejas resueltas a una comida quedan SELLADAS (`meal_seal`) si no lo estaban: es lo que permite, más tarde,
+    saber si la comida juzgada es la entregada sin depender del día. Devuelve copias; jamás lanza (fail-open: la lista
+    de entrada)."""
+    try:
+        sellos = meal_seals_index(plan)
+        por_dia = {}
+        for pos, d in enumerate((plan or {}).get("days") or [], 1):
+            if isinstance(d, dict):
+                por_dia.setdefault(d.get("day") if d.get("day") is not None else pos, d)
+        out = []
+        for v in violations or []:
+            if not isinstance(v, dict):
+                continue
+            v2 = dict(v)
+            if v2.get("meal_seal") and v2["meal_seal"] in sellos:
+                v2["resolucion"] = "por_sello"
+                v2["ocurrencia_actual"] = list(sellos[v2["meal_seal"]])
+                out.append(v2)
+                continue
+            meals = list(((por_dia.get(v2.get("day")) or {}).get("meals") or []))
+            franja = slot_norm(v2.get("meal"))
+            cand = [i for i, m in enumerate(meals) if isinstance(m, dict) and slot_norm(m.get("meal")) == franja]
+            mi = v2.get("meal_index")
+            if isinstance(mi, int) and not isinstance(mi, bool) and 0 <= mi < len(meals) and isinstance(meals[mi], dict) \
+                    and (not franja or slot_norm(meals[mi].get("meal")) == franja):
+                v2["resolucion"] = "declarada"
+            elif len(cand) == 1:
+                v2["meal_index"], v2["resolucion"] = cand[0], "unica"
+            elif len(cand) > 1:
+                v2["meal_index"], v2["resolucion"] = None, "ambigua"
+            else:
+                v2["meal_index"], v2["resolucion"] = None, "sin_comida"
+            if v2.get("meal_index") is not None and not v2.get("meal_seal"):
+                v2["meal_seal"] = meal_seal(meals[v2["meal_index"]])
+            out.append(v2)
+        return out
+    except Exception:
+        return list(violations or [])
+
+
+def judge_context(*, country=None, model=None, guard=None, rubric=None, plan=None) -> dict:
+    """El CONTEXTO en que se juzgó, al lado del sello de QUÉ se juzgó (`judged_fingerprint`). Un cambio de rúbrica, de
+    modelo o de país invalida la comparación entre dos juicios igual que un cambio de pasos; sin esto «el juez mejoró»
+    y «cambiamos la rúbrica» son indistinguibles. Jamás lanza."""
+    ctx = {"country": country, "model": model, "guard": guard, "rubric_fingerprint": None, "meals": None,
+           "schema": FINDING_SCHEMA_VERSION, "reglas_huella": rules_fingerprint()}
+    try:
+        if rubric:
+            ctx["rubric_fingerprint"] = hashlib.sha256(str(rubric).encode("utf-8")).hexdigest()[:16]
+        if plan is not None:
+            ctx["meals"] = sum(1 for _ in _iter_meals(plan))
+    except Exception:
+        pass
+    return ctx
+
+
+#: Los estados del juez sobre el plan ENTREGADO. Sólo `juzgado_vigente` puede aprobar.
+ESTADOS_JUEZ = ("juzgado_vigente", "juzgado_obsoleto", "no_disponible", "no_evaluado", "desconocido")
+
+
+def judge_evaluation_state(plan_data: dict) -> dict:
+    """El estado EXPLÍCITO del juez sobre la versión que se entrega:
+
+      · `no_evaluado`: sin historial (knob `off`, o nunca corrió);
+      · `juzgado_vigente`: alguna entrada juzgó ESTA versión (sello igual) — se toma la última de ellas;
+      · `no_disponible`: la última entrada no llegó a juzgar (timeout/error/breaker) y ninguna vigente;
+      · `juzgado_obsoleto`: juzgó OTRA versión (el plan cambió después);
+      · `desconocido`: entradas sin sello (anteriores a P1-JUDGE-REVISION-STAMP).
+
+    `aprobado` sólo cuando es vigente y sin hallazgos: timeout, error, off, catálogo vacío, obsoleto y desconocido
+    NO cuentan como aprobados. Jamás lanza."""
+    try:
+        hist = [h for h in ((plan_data or {}).get("_culinary_judge_history") or []) if isinstance(h, dict)]
+        if not hist:
+            return {"estado": "no_evaluado", "aprobado": False, "hallazgos": 0, "entrada": None}
+        sellos = meal_seals_index(plan_data)
+
+        def _por_sello(h):
+            vs = [v for v in (h.get("violations") or []) if isinstance(v, dict) and v.get("meal_seal")]
+            return {"con_sello": len(vs), "entregadas": sum(1 for v in vs if v["meal_seal"] in sellos)}
+
+        vigentes = [i for i, h in enumerate(hist) if judgment_covers_delivered(h, plan_data) is True]
+        if vigentes:
+            i = vigentes[-1]
+            n = len(hist[i].get("violations") or [])
+            return {"estado": "juzgado_vigente", "aprobado": n == 0, "hallazgos": n, "entrada": i, "sellos": _por_sello(hist[i])}
+        h = hist[-1]
+        n = len(h.get("violations") or [])
+        if h.get("status") == "unavailable":
+            estado = "no_disponible"
+        else:
+            estado = "juzgado_obsoleto" if judgment_covers_delivered(h, plan_data) is False else "desconocido"
+        return {"estado": estado, "aprobado": False, "hallazgos": n, "entrada": len(hist) - 1, "sellos": _por_sello(h)}
+    except Exception:
+        return {"estado": "desconocido", "aprobado": False, "hallazgos": 0, "entrada": None}
+
+
+def contract_evaluation_state(plan_data: dict, catalog: list) -> dict:
+    """El estado del contrato determinista sobre el plan, con el mismo vocabulario: `evaluado` (scan corrió sobre ≥1
+    comida), `no_evaluable` (sin catálogo o reventó), `no_evaluado` (sin comidas). `aprobado` sólo si evaluado y sin
+    hallazgos. Jamás lanza."""
+    viol, est = culinary_contract_scan_status(plan_data, catalog)
+    if est["status"] == "scanned":
+        return {"estado": "evaluado", "aprobado": not viol, "hallazgos": len(viol), "scan": est}
+    if est["status"] == "no_meals":
+        return {"estado": "no_evaluado", "aprobado": False, "hallazgos": 0, "scan": est}
+    return {"estado": "no_evaluable", "aprobado": False, "hallazgos": 0, "scan": est}
+

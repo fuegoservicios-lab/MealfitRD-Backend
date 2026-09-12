@@ -426,7 +426,7 @@ línea base comparable para esa huella. Y `--congelar` **sin** `--corpus` se nie
 ventana viva es exactamente el error del 6-sep.
 
 **Congelado el 2026-09-12** (`scripts/data/culinary_corpus_2026_09_12.json`, 310 KB, huella `087cfc31d3105f79`,
-catálogo 349 filas `1f4f95b33a191dfe`, reglas `35fc77fbf3416d08`), verificado dos veces: REPRODUCIBLE.
+catálogo 349 filas `1f4f95b33a191dfe`, reglas `35fc77fbf3416d08`), verificado dos veces: REPRODUCIBLE. Re-congelada el mismo día con las cifras de C1 (`P1-PLAN-LOTE-22`, reglas `c0379767939450e4`): mismas 46/64 y 15/64, más `estado_evaluacion`, `hallazgos`, `juez_entregado` y `particion`; REPRODUCIBLE ×2.
 
 | | |
 |---|---|
@@ -487,6 +487,12 @@ sería darle a una opinión la cara de una medición.
 **Las etiquetas.** Si las pusiera el modelo, el marcador mediría el acuerdo del juez consigo mismo, y
 cualquier «mejora» reportada después sería el sistema dándose la razón. Ese es el paso humano, y es
 el que desbloquea la decisión de si V5 escala de `warn` a `block`.
+
+**Actualización 2026-09-12 (`P1-PLAN-LOTE-22`)**: las 80 etiquetas BINARIAS existen desde el 2026-09-07
+(`a7d45ffe`: el dueño etiquetó a ciegas, 68 defecto / 9 ok / 3 dudoso) y el marcador binario ya da cifras
+(determinista 91,2 → 90,2 % precisión, 45,6 → 12,3 % recall; juez 97,0 → 98,9 / 47,1 → 15,2). Lo que sigue
+pendiente es la anotación con RÚBRICA (clase, severidad, evidencia por defecto) y un segundo anotador — sin eso
+el marcador estricto sale incompleto (exit 4). Ver «Estado explícito de evaluación» abajo.
 
 Test: [`test_p0_culinary_golden.py`](../tests/test_p0_culinary_golden.py).
 
@@ -603,3 +609,53 @@ silencio en el siguiente congelado. La advertencia vive en `ADVERTENCIA`
 (`scripts/culinary_baseline.py`) y el JSON la recibe de ahí.
 
 Test: [`test_p1_judge_revision_stamp.py`](../tests/test_p1_judge_revision_stamp.py).
+
+## Estado explícito de evaluación e identidad por ocurrencia (C1 · `P1-PLAN-LOTE-22` · 2026-09-12)
+
+CUL-P0-01 y CUL-P0-02 del paquete del 09-07. Cuatro cosas que se confundían con «aprobado» y ahora tienen nombre:
+
+| antes | ahora |
+|---|---|
+| `culinary_contract_scan` devolvía `[]` por «coherente», por «sin catálogo» y por «reventó» | `culinary_contract_scan_status` → `(violations, estado)` con `status ∈ {scanned, no_meals, no_catalog, error}`; el orquestador persiste `plan["_culinary_contract_scan"]` (viaja de T1 a T2 como sus hermanas) |
+| la comida se identificaba por FRANJA en las dos capas | cada violación de capa 1 lleva `meal_index` (posición en su día); el juez recibe `idx` en el payload y devuelve `meal_index`; `resolve_judge_violations` ata las quejas antiguas por franja SOLO cuando es única (`declarada / unica / ambigua / sin_comida`) |
+| la entrada del juez no decía con qué rúbrica, modelo ni país juzgó | `context` en cada entrada (`rubric_fingerprint`, `model`, `country`, `guard`, `schema`, `reglas_huella`) junto al sello `judged_fingerprint` |
+| el medidor contaba «comidas que el juez señaló alguna vez» | `judge_evaluation_state` (`juzgado_vigente / juzgado_obsoleto / no_disponible / no_evaluado / desconocido`; sólo vigente y sin hallazgos = aprobado) y `juez_entregado` (quejas de entradas vigentes atadas a una comida que existe), separado del histórico `juez` |
+
+**El sello por COMIDA (`meal_seal`).** Al re-congelar la línea base con estas cifras, los 5 planes del corpus salieron
+«juzgado_obsoleto» y `juez_entregado` = 0 de 64: `judged_fingerprint` sella el plan ENTERO con la posición del día, y el
+shift archiva y renumera días — declara obsoleto todo lo juzgado aunque la comida entregada sea byte a byte la juzgada.
+Desde C1 cada violación (capa 1 y juez) lleva `meal_seal` = sha de (franja, nombre, ingredientes, pasos) de SU comida:
+`resolve_judge_violations` la reencuentra por sello (`resolucion: por_sello`, `ocurrencia_actual`) aunque haya cambiado
+de día, y la línea base cuenta esas quejas como vigentes (`hallazgos.juez.vigentes_por_sello`). Las entradas anteriores
+no llevan sello por comida y siguen dependiendo del sello del plan: para ellas la cifra honesta sigue siendo «no se sabe»
+u «obsoleto». `juez_entregado` empezará a decir algo con los planes juzgados después de este despliegue.
+
+**Reconciliación con el denominador.** La línea base publica `particion` (ambas / solo_determinista /
+solo_juez_vigente / ninguna, por ocurrencia) y comprueba que suma `comidas` (`reconcilia`); lo que no se puede atar a
+una comida —franja ambigua, día archivado— se informa en `hallazgos.*.sin_comida/ambiguos`, no se reparte a nadie.
+Las cifras nuevas entran en `CIFRAS`: también tienen que reproducirse sobre el corpus fijo.
+
+**Coberturas, tres y no una.** `scan_coverage_detail`: `reconocimiento` (líneas de ingredientes en las que el índice
+encontró algún alimento: el PARSER), `catalogo` (alimentos con `prep_methods`: lo que V1 necesita; es `scan_coverage`)
+y `ready_to_eat` (V2), con `por_check`. Un 59 % por «no hay metadata» y un 59 % por «no reconozco la mitad de las
+líneas» se reparan en sitios distintos.
+
+**El marcador estricto (CUL-P0-02).** `culinary_golden_score.py --estricto` adjudica hallazgo a hallazgo con la
+`RUBRICA` (clase humana → códigos de la máquina): un hallazgo cuenta como TP sólo si su clase corresponde a un
+defecto humano de ESA comida (y menciona el `alimento` si el defecto lo nombra); si no, FP localizado y el defecto
+queda como FN; los duplicados no multiplican TP; cero división → `null`. Publica acuerdo entre anotadores (kappa) y
+discrepancias, usa la `adjudicacion` cuando existe, intervalos por conglomerado (plan) y `--particiones` por linaje.
+**Con las etiquetas de hoy sale incompleto (exit 4)**: son binarias. `culinary_golden_sample.py --plantilla` escribe
+el hueco por caso (`docs/culinary_golden_anotaciones_pendientes.json`) y `--ciego` la representación sin estrato ni
+máquina para el segundo anotador (`docs/culinary_golden_set_ciego.md`). Las etiquetas pendientes NO se rellenan con el
+modelo.
+
+**Calibrador y test golden por COMIDA.** Cruzaban `(día, clase)`: en `golden_05` un V1 del Desayuno contaba como
+acierto de la Cena. Ahora exigen la franja; las 16 mutaciones de capa 1 resuelven a comida (medido antes de endurecer).
+
+**Lo que queda del dueño**: la anotación con rúbrica de los 80 casos y un segundo anotador independiente. El
+software de evaluación está listo antes que las etiquetas, como el backlog admitía; la certificación de calidad
+sigue pendiente hasta tenerlas.
+
+Tests: [`test_p1_plan_lote_22.py`](../tests/test_p1_plan_lote_22.py).
+

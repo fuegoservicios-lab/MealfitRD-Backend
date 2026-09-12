@@ -229,7 +229,8 @@ def test_docs_y_plan():
     doc = (_BACKEND / "docs" / "culinary_coherence.md").read_text(encoding="utf-8")
     assert "### El corpus fijo" in doc and "087cfc31d3105f79" in doc and "--verificar" in doc
     plan = (_BACKEND / "docs" / "plan_pendientes_2026_09_11.md").read_text(encoding="utf-8")
-    assert "| C0 | ✅ 2026-09-12 · mitad técnica" in plan
+    # [P1-PLAN-LOTE-22] la fila C0 se corrigió: las 80 etiquetas binarias existían desde el 09-07
+    assert "| C0 | ✅ 2026-09-12 · corpus fijo + etiquetas binarias (09-07)" in plan
 
 
 def test_marker_bumpeado():

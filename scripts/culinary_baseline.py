@@ -102,7 +102,8 @@ def medir_corpus(corpus: dict, fichero: "str | None" = None) -> dict:
 
 def _medir_filas(filas: list, cat: list) -> dict:
     """El medidor, común a la ventana viva y al corpus fijo: `filas` son `{"id", "plan_data"}`."""
-    from culinary_coherence import culinary_contract_scan, judgment_covers_delivered
+    from culinary_coherence import (culinary_contract_scan_status, judgment_covers_delivered,
+                                    resolve_judge_violations, judge_evaluation_state)
     from culinary_corpus import huella_catalogo, huella_reglas
 
     comidas = 0
@@ -120,22 +121,66 @@ def _medir_filas(filas: list, cat: list) -> dict:
     por_check, por_tipo = collections.Counter(), collections.Counter()
     con_det, con_juez = set(), set()
     cobertura = collections.Counter()   # P1-JUDGE-REVISION-STAMP: si / no / desconocido
+    # [P1-PLAN-LOTE-22 · 2026-09-12] (C1 · CUL-P0-01) Lo que antes se colapsaba en «lista vacía»: el estado del scan por
+    # plan, el estado del juez sobre la versión ENTREGADA, y cada hallazgo atado (o no) a una comida que existe.
+    # tooltip-anchor: P1-PLAN-LOTE-22-RECONCILIA
+    estado_scan, estado_juez = collections.Counter(), collections.Counter()
+    hall_det = collections.Counter()      # con_comida / sin_comida
+    hall_juez = collections.Counter()     # vigentes/obsoletos/desconocidos/no_disponibles + con_comida/ambiguos/sin_comida
+    con_juez_vigente, por_tipo_vigente = set(), collections.Counter()
+    ocurrencias = set()                   # (pid, day, meal_index) de cada comida que existe
+    det_occ = set()                       # (pid, day, meal_index) marcadas por el determinista
 
     for f in filas:
         pid = str(f["id"])
         pd = f["plan_data"] or {}
         ids.append(pid[:8])
         _dias = pd.get("days") or []
-        for d in _dias:
+        for _pos, d in enumerate(_dias, 1):
             comidas += len(d.get("meals") or [])
+            for _mi in range(len(d.get("meals") or [])):
+                ocurrencias.add((pid, d.get("day") if d.get("day") is not None else _pos, _mi))
         # el nº de dias es justo lo que el shift mueve: entra en la huella
         huella_corpus.update(f"{pid}:{len(_dias)}:".encode())
-        for v in culinary_contract_scan(pd, cat):
+        _viols, _est = culinary_contract_scan_status(pd, cat)
+        estado_scan[_est["status"]] += 1
+        for v in _viols:
             por_check[str(v.get("check"))] += 1
             con_det.add((pid, v.get("day"), str(v.get("meal"))))
+            _occ = (pid, v.get("day"), v.get("meal_index"))
+            hall_det["con_comida" if _occ in ocurrencias else "sin_comida"] += 1
+            if _occ in ocurrencias:
+                det_occ.add(_occ)
+        estado_juez[judge_evaluation_state(pd)["estado"]] += 1
         for h in (pd.get("_culinary_judge_history") or []):
             if not isinstance(h, dict):
                 continue
+            # [C1] ¿esta entrada habla de lo entregado? y ¿cada queja suya tiene UNA comida a la que atarse?
+            _cubre = judgment_covers_delivered(h, pd)
+            hall_juez["no_disponibles" if h.get("status") == "unavailable" else
+                      "vigentes" if _cubre else ("obsoletos" if _cubre is False else "desconocidos")] += 1
+            _orig = [x for x in (h.get("violations") or []) if isinstance(x, dict)]
+            for x, v in zip(_orig, resolve_judge_violations(pd, _orig)):
+                # [C1] tres formas de estar atada: por SELLO (la comida juzgada sigue entregada, quizá en otro día tras
+                # el shift), por índice/franja con la entrada vigente, o por índice/franja de una entrada obsoleta
+                # (atada a una comida que existe, pero que ya no es la juzgada: cuenta como hallazgo, no como vigente).
+                if v.get("resolucion") == "por_sello":
+                    _occ = (pid,) + tuple(v["ocurrencia_actual"])
+                    hall_juez["con_comida"] += 1
+                    hall_juez["vigentes_por_sello"] += 1
+                    _vig = True
+                elif v.get("meal_index") is None:
+                    hall_juez["ambiguos" if v.get("resolucion") == "ambigua" else "sin_comida"] += 1
+                    continue
+                else:
+                    _occ = (pid, v.get("day"), v.get("meal_index"))
+                    hall_juez["con_comida"] += 1
+                    # sellada al juzgar (`x`) y NO reencontrada por sello ⇒ la comida juzgada ya no se entrega así;
+                    # sin sello (entradas anteriores a C1) ⇒ manda el sello del plan de la entrada
+                    _vig = False if x.get("meal_seal") else (_cubre is True)
+                if _vig:
+                    con_juez_vigente.add(_occ)
+                    por_tipo_vigente[str(v.get("tipo"))] += 1
             # [P1-JUDGE-REVISION-STAMP · 2026-09-06] ¿Esta entrada juzgó lo que se ENTREGÓ, o una
             # versión que el pipeline reparó después? Tres estados, y el tercero manda: sin sello
             # (todo lo generado antes del P-fix) la pregunta no es decidible, y colapsarlo hacia
@@ -189,6 +234,16 @@ def _medir_filas(filas: list, cat: list) -> dict:
         "solapamiento": {"ambas": len(con_det & con_juez),
                          "solo_determinista": len(con_det - con_juez),
                          "solo_juez": len(con_juez - con_det)},
+        # [P1-PLAN-LOTE-22 · 2026-09-12] (C1 · CUL-P0-01) Estado explícito de evaluación y reconciliación con el
+        # denominador. `juez` (arriba) sigue siendo «cuántas comidas señaló el juez en algún momento» (histórico);
+        # `juez_entregado` son SOLO las quejas de entradas que juzgaron la versión entregada, atadas a una comida
+        # que existe. La partición de las comidas ENTREGADAS suma exactamente `comidas` — si no, `reconcilia` es False
+        # y hay un defecto en el medidor, no en los planes.
+        "estado_evaluacion": {"contrato": dict(estado_scan), "juez": dict(estado_juez)},
+        "hallazgos": {"determinista": dict(hall_det), "juez": dict(hall_juez)},
+        "juez_entregado": {"comidas": len(con_juez_vigente), "pct": pct(len(con_juez_vigente)),
+                           "por_tipo": dict(por_tipo_vigente.most_common())},
+        "particion": _particion(ocurrencias, det_occ, con_juez_vigente, comidas),
         # Se guarda EXPLICITO para que nadie lo derive de las tasas y se engañe.
         # [P1-JUDGE-REVISION-STAMP · 2026-09-06] La segunda frase NO es decorativa y por eso vive
         # AQUÍ y no solo en el JSON congelado: `--congelar` reescribe el fichero entero, así que
@@ -196,6 +251,19 @@ def _medir_filas(filas: list, cat: list) -> dict:
         # congelado. La advertencia tiene que nacer del mismo sitio que el dato.
         "advertencia": ADVERTENCIA,
     }
+
+
+def _particion(ocurrencias: set, det_occ: set, con_juez_vigente: set, comidas: int) -> dict:
+    """[P1-PLAN-LOTE-22] (C1) Cada comida ENTREGADA cae en UN cubo: ambas / solo_determinista / solo_juez_vigente /
+    ninguna, por ocurrencia (pid, día, índice). La suma tiene que ser el denominador: `reconcilia` lo comprueba en vez
+    de suponerlo. Las alertas históricas sin comida a la que atarse no entran aquí: van en `hallazgos`."""
+    c = collections.Counter()
+    for occ in ocurrencias:
+        d, j = occ in det_occ, occ in con_juez_vigente
+        c["ambas" if (d and j) else "solo_determinista" if d else "solo_juez_vigente" if j else "ninguna"] += 1
+    total = sum(c.values())
+    return {**{k: c.get(k, 0) for k in ("ambas", "solo_determinista", "solo_juez_vigente", "ninguna")},
+            "total": total, "denominador": comidas, "reconcilia": total == comidas}
 
 
 #: [P1-JUDGE-REVISION-STAMP · 2026-09-06] Dos razones para no leer la tasa del juez como calidad,
@@ -272,6 +340,22 @@ def render(r: dict, previa: dict | None = None) -> str:
                   + "  ".join(f"{k}={n}" for k, n in cob.items()),
               "  («desconocido» = sin `judged_fingerprint`, anterior a P1-JUDGE-REVISION-STAMP; "
               "no cuenta a ningun lado)"]
+    ev = r.get("estado_evaluacion") or {}
+    if ev:
+        o += ["", f"  estado de evaluacion · contrato {ev.get('contrato')} · juez (sobre lo entregado) {ev.get('juez')}"]
+    je = r.get("juez_entregado") or {}
+    if je:
+        o.append(f"  juez SOBRE LO ENTREGADO: {je.get('comidas')} comidas   {je.get('pct')} %   "
+                 + "  ".join(f"{k}={n}" for k, n in (je.get("por_tipo") or {}).items()))
+    pa = r.get("particion") or {}
+    if pa:
+        o.append(f"  particion de las {pa.get('denominador')} comidas: ambas {pa.get('ambas')} · solo det {pa.get('solo_determinista')}"
+                 f" · solo juez vigente {pa.get('solo_juez_vigente')} · ninguna {pa.get('ninguna')} · "
+                 f"{'RECONCILIA' if pa.get('reconcilia') else 'NO RECONCILIA (defecto del medidor)'}")
+    ha = r.get("hallazgos") or {}
+    if ha:
+        o.append(f"  hallazgos: determinista {ha.get('determinista')} · juez {ha.get('juez')}  "
+                 "(«sin_comida»/«ambiguos» se informan aparte: no se reparten a nadie)")
     o += ["", "  " + r["advertencia"]]
     return "\n".join(o)
 
@@ -334,7 +418,9 @@ def _leer(p: Path) -> "dict | None":
 
 
 #: Lo que tiene que reproducirse entre dos mediciones del mismo corpus fijo.
-CIFRAS = ("planes", "comidas", "determinista", "juez", "solapamiento", "juez_sobre_lo_entregado")
+CIFRAS = ("planes", "comidas", "determinista", "juez", "solapamiento", "juez_sobre_lo_entregado",
+          # [P1-PLAN-LOTE-22] (C1) también tienen que reproducirse: estados, hallazgos atados y la partición
+          "estado_evaluacion", "hallazgos", "juez_entregado", "particion")
 
 
 def verificar(r: dict, previa: "dict | None", destino: Path) -> int:

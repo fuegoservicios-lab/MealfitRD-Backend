@@ -695,6 +695,7 @@ P0_4_T2_INCREMENTAL_KEYS = (
     # este overlay solo la lleva del in-memory de T1 a la fila fresca que T2 re-lee.
     '_culinary_contract_violations',
     '_culinary_contract_coverage',
+    '_culinary_contract_scan',   # [P1-PLAN-LOTE-22] (C1) el ESTADO del scan (scanned/no_catalog/error) viaja con las otras dos
     '_culinary_judge_history',
 )
 
@@ -33731,7 +33732,7 @@ __PLAN_MODE_GATE__
                     if isinstance(result, dict):
                         # Snapshot del scan de ESTE chunk (no histórico, mismo trato que
                         # `_quality_degraded*`) → overwrite directo.
-                        for _cul_k in ('_culinary_contract_violations', '_culinary_contract_coverage'):
+                        for _cul_k in ('_culinary_contract_violations', '_culinary_contract_coverage', '_culinary_contract_scan'):
                             if _cul_k in result:
                                 full_plan_data[_cul_k] = result[_cul_k]
                         # `_culinary_judge_history` SÍ es histórico — gemelo de

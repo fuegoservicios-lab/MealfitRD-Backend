@@ -6448,6 +6448,9 @@ class CulinaryViolation(BaseModel):
                   "slot_inapropiado", "nombre_no_corresponde"]
     detalle: str
     severidad: Literal["minor", "high"]
+    # [P1-PLAN-LOTE-22 · 2026-09-12] (C1 · CUL-P0-01) identidad por OCURRENCIA: el `idx` de la comida tal como llegó en
+    # el payload. Opcional: un juez que no lo devuelva se resuelve por franja (`culinary_coherence.resolve_judge_violations`).
+    meal_index: Optional[int] = None
 
 
 class CulinaryJudgeReport(BaseModel):
@@ -6601,7 +6604,8 @@ def _build_culinary_judge_rubric() -> str:
           "(mismo tipo de guiso, mismo tipo de arroz mixto, misma familia de ensalada). Revisa el "
           "ingrediente NOMBRADO específicamente contra la lista real de ingredientes, no solo la "
           "categoría genérica del plato.\n\n"
-          "Para cada violación reporta: day (número de día), meal (nombre del slot, ej. "
+          "Para cada violación reporta: day (número de día), meal_index (el `idx` de ESA comida tal como "
+          "llegó en el payload), meal (nombre del slot, ej. "
           "'Almuerzo'), tipo (uno de los 5 valores canónicos), detalle (explicación breve y "
           "concreta), severidad ('minor' si es cosmético/discutible, 'high' si un dominicano lo "
           "vería como un error claro). Si el plan es culinariamente coherente, devuelve una "
@@ -6787,11 +6791,8 @@ async def run_culinary_judge(plan: dict, country: str = "DO"):
                 timeout=CULINARY_JUDGE_TIMEOUT_S,
             )
             _judge = _llm.with_structured_output(CulinaryJudgeReport)
-        _meals = [
-            {"day": d.get("day"), "slot": m.get("meal"), "name": m.get("name"),
-             "ingredients": m.get("ingredients"), "recipe": m.get("recipe")}
-            for d in (plan.get("days") or []) for m in (d.get("meals") or [])
-        ]
+        from culinary_coherence import judge_payload_meals as _cj_payload   # [P1-PLAN-LOTE-22] (C1) con `idx` por comida
+        _meals = _cj_payload(plan)
         _msg = [
             SystemMessage(content=_culinary_judge_rubric_for_country(country)),
             HumanMessage(content=json.dumps({"meals": _meals}, ensure_ascii=False)),
@@ -44479,10 +44480,11 @@ Responde ÚNICAMENTE con el JSON de revisión.
     # tooltip-anchor: P1-CULINARY-CONTRACT
     if CULINARY_CONTRACT_GUARD != "off":
         try:
-            from culinary_coherence import culinary_contract_scan, scan_coverage
+            from culinary_coherence import culinary_contract_scan_status, scan_coverage
             from shopping_calculator import get_master_ingredients
             _cul_cat = get_master_ingredients()
-            _cul_viol = culinary_contract_scan(plan, _cul_cat)
+            # [P1-PLAN-LOTE-22 · 2026-09-12] (C1) `[]` ya no es «limpio» sin más: el estado viaja con el plan. tooltip-anchor: P1-PLAN-LOTE-22-SCAN-STATUS
+            _cul_viol, plan["_culinary_contract_scan"] = culinary_contract_scan_status(plan, _cul_cat)
             _cul_cov = scan_coverage(plan, _cul_cat)
             plan["_culinary_contract_violations"] = _cul_viol
             # [P1-MEASUREMENT-INTEGRITY · 2026-09-07] `None` = no se pudo medir. Antes llegaba
@@ -44546,7 +44548,8 @@ Responde ÚNICAMENTE con el JSON de revisión.
         # sello, «se quejó y lo arreglamos» era indistinguible de «se quejó y lo entregamos»
         # (6 de 37 quejas nombraban algo que SÍ está entregado). Por qué no es
         # `compute_plan_hash`: ver `judged_fingerprint` en culinary_coherence.py.
-        from culinary_coherence import judged_fingerprint as _cj_fingerprint
+        from culinary_coherence import judged_fingerprint as _cj_fingerprint, judge_context as _cj_context, resolve_judge_violations as _cj_resolve
+        _cj_viol = _cj_resolve(plan, _cj_viol)   # [P1-PLAN-LOTE-22] (C1) cada queja atada a UNA comida: `meal_index` + `resolucion`
         _cj_hist.append({
             "ts": datetime.now(timezone.utc).isoformat(),
             "model": CULINARY_JUDGE_MODEL,
@@ -44554,6 +44557,7 @@ Responde ÚNICAMENTE con el JSON de revisión.
             # El sello solo tiene sentido si HUBO juicio: sellar un `unavailable` afirmaría que
             # esta versión del plan fue examinada.
             "judged_fingerprint": _cj_fingerprint(plan) if _cj is not None else None,
+            "context": _cj_context(country=_cj_country, model=CULINARY_JUDGE_MODEL, guard=CULINARY_JUDGE_GUARD, rubric=_culinary_judge_rubric_for_country(_cj_country), plan=plan),  # [P1-PLAN-LOTE-22] (C1) qué rúbrica/modelo/país juzgó
             "violations": _cj_viol,
             "action_taken": ("blocked" if (_cj_viol and CULINARY_JUDGE_GUARD == "block")
                              else "warn_only"),

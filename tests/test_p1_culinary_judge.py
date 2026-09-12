@@ -19,7 +19,12 @@ def test_knobs_nacen_apagados_y_en_flash():
 def test_el_juez_recibe_recetas_completas():
     i = _GO.index("async def run_culinary_judge")
     win = _GO[i:i + 6000]
-    assert '"recipe"' in win, (
+    # [P1-PLAN-LOTE-22 · 2026-09-12] (C1) El payload salió del god-file a `culinary_coherence.judge_payload_meals`
+    # (para pagar el `meal_index` del esquema sin subir el tope de líneas): el ancla sigue a la función que lo arma.
+    assert "_meals = _cj_payload(plan)" in win and "judge_payload_meals as _cj_payload" in win
+    import inspect
+    from culinary_coherence import judge_payload_meals
+    assert '"recipe"' in inspect.getsource(judge_payload_meals), (
         "el input del juez DEBE incluir los pasos de receta — es el único ojo "
         "LLM que los ve (el reviewer médico recibe solo nombre+ingredientes)")
 

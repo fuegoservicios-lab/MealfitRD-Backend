@@ -17,7 +17,7 @@
     "congelado_at": "2026-09-12T18:32:13.249032+00:00"
   },
   "computation": {
-    "reglas_huella": "35fc77fbf3416d08",
+    "reglas_huella": "c0379767939450e4",
     "catalogo_huella": "1f4f95b33a191dfe",
     "catalogo_filas": 349
   },
@@ -65,6 +65,39 @@
     "ambas": 10,
     "solo_determinista": 36,
     "solo_juez": 5
+  },
+  "estado_evaluacion": {
+    "contrato": {
+      "scanned": 5
+    },
+    "juez": {
+      "juzgado_obsoleto": 5
+    }
+  },
+  "hallazgos": {
+    "determinista": {
+      "con_comida": 111
+    },
+    "juez": {
+      "obsoletos": 7,
+      "con_comida": 12,
+      "desconocidos": 1,
+      "sin_comida": 3
+    }
+  },
+  "juez_entregado": {
+    "comidas": 0,
+    "pct": 0.0,
+    "por_tipo": {}
+  },
+  "particion": {
+    "ambas": 0,
+    "solo_determinista": 46,
+    "solo_juez_vigente": 0,
+    "ninguna": 18,
+    "total": 64,
+    "denominador": 64,
+    "reconcilia": true
   },
   "advertencia": "el juez es un LLM sin verdad de referencia: su tasa NO es la tasa de defectos reales. Calibrar contra ella es overfitting. Y hay una segunda razon, medida el 2026-09-06: parte de sus quejas describen un estado que el pipeline REPARO antes de entregar — de 37 quejas juzgables del tipo «X no aparece en la lista», 6 nombraban algo que SI esta en el plan entregado, y el sub-patron mas citado («lonjas/pedazos de queso» sobre queso cottage) aparece 0 veces de 23 en planes vivos. Las entradas SIN `judged_fingerprint` no permiten saber cuales juzgaron lo entregado: leelas como «cuantas comidas el juez senalo en algun momento», nunca como «cuantas se entregaron mal»."
 }

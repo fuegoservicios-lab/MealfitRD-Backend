@@ -255,9 +255,15 @@ async def main():
         vj = rep.violations if rep else []
         for df in entry["defects"]:
             key = (df["class"], df["expected_by"].split(":")[0])
-            hit = (any(x["check"] == df["expected_by"].split(":")[1] and x["day"] == df["day"] for x in v1)
+            # [P1-PLAN-LOTE-22 · 2026-09-12] (C1 · CUL-P0-02) por COMIDA, no por día: cruzando sólo por día, en
+            # golden_05 un V1 del Desayuno (Salami/Avena, un defecto del juez) contaba como acierto de la Cena.
+            # «Error en almuerzo no cuenta como acierto de cena.» Las 16 mutaciones de capa 1 resuelven a comida (medido).
+            _m = str(df.get("meal") or "").lower()
+            hit = (any(x["check"] == df["expected_by"].split(":")[1] and x["day"] == df["day"]
+                       and (not _m or str(x.get("meal") or "").lower() == _m) for x in v1)
                    if df["expected_by"].startswith("capa1")
-                   else any(v.day == df["day"] and v.tipo == df["class"] for v in vj))
+                   else any(v.day == df["day"] and v.tipo == df["class"]
+                            and (not _m or str(v.meal or "").lower() == _m) for v in vj))
             s = stats.setdefault(key, [0, 0])
             s[1] += 1
             s[0] += 1 if hit else 0

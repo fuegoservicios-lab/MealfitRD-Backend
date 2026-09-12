@@ -85,6 +85,7 @@ def test_t2_incremental_keys_includes_learning_shopping_quality():
         # para _quality_degraded* arriba, ahora para el scan/juez culinario.
         '_culinary_contract_violations',
         '_culinary_contract_coverage',
+        '_culinary_contract_scan',   # [P1-PLAN-LOTE-22] (C1) estado explícito del scan
         '_culinary_judge_history',
     }
     assert set(P0_4_T2_INCREMENTAL_KEYS) == expected, (

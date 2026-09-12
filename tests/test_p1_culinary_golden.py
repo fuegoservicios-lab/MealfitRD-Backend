@@ -132,8 +132,11 @@ def test_capa1_atrapa_100pct_de_sus_clases():
             if not df["expected_by"].startswith("capa1:"):
                 continue
             check = df["expected_by"].split(":")[1]
-            if not any(x["check"] == check and x["day"] == df["day"] for x in v):
-                fallos.append(f"{nombre}: {df['class']} (día {df['day']}) no atrapado por {check}")
+            # [P1-PLAN-LOTE-22 · 2026-09-12] (C1) por COMIDA: un V1 de otra franja del mismo día ya no cuenta.
+            _m = str(df.get("meal") or "").lower()
+            if not any(x["check"] == check and x["day"] == df["day"]
+                       and (not _m or str(x.get("meal") or "").lower() == _m) for x in v):
+                fallos.append(f"{nombre}: {df['class']} (día {df['day']}, {df.get('meal')}) no atrapado por {check}")
     assert not fallos, "Si falla: el fix va al scan, JAMÁS relajar el fixture.\n" + "\n".join(fallos)
 
 
