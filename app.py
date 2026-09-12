@@ -151,7 +151,11 @@ _PROCESS_START_ISO = datetime.now(timezone.utc).isoformat()
 # (factor 15 g / 0,25 g = 60× por ÍNDICE sobre la línea de OTRO alimento; reproducido con la función real, y con
 # RAW_PAIR_BY_FOOD apagado volvía). La rama ya sólo escribe raw en una línea de queso. Residuo en la flota: 0 de 100
 # comidas, los 3 planes del hallazgo ya no existen ⇒ sin barrido. Sonda: scripts/medir_cantidades_absurdas_raw.py.
-_LAST_KNOWN_PFIX = "P1-PLAN-LOTE-17 · 2026-09-12"
+# [P1-PLAN-LOTE-18 · 2026-09-12] C0: la línea base culinaria se congela sobre un corpus FIJO (culinary_corpus.py:
+# `days` + juicios + estado + catálogo, con huella de contenido) y se verifica reproducible (exit 0/3/4);
+# `--congelar` sin corpus se niega. La del 6-sep medía la ventana viva y dejó de reproducirse en 14 h; la purga
+# del 09-11 se llevó sus 96 planes. Congelado hoy: 5 planes, 64 comidas, huella 087cfc31d3105f79, REPRODUCIBLE ×2.
+_LAST_KNOWN_PFIX = "P1-PLAN-LOTE-18 · 2026-09-12"
 
 # [P1-SENTRY-SAMPLE-COST · 2026-05-12] Sentry sampling driven from env vars
 # con default seguro 0.1 (10%). Pre-fix tenía `traces_sample_rate=1.0` y

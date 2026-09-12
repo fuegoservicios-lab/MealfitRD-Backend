@@ -61,11 +61,15 @@ CONGELADA = _BACKEND / "docs" / "culinary_baseline.json"
 
 
 def medir(planes: int = 120) -> dict:
+    """La foto de la VENTANA VIVA (`ORDER BY created_at DESC LIMIT n` sobre el `plan_data` de hoy).
+
+    [P1-PLAN-LOTE-18 · 2026-09-12] (C0) Sirve para mirar la flota de hoy; NO para congelar una línea base: la
+    ventana viva no se puede volver a medir mañana (el shift encoge los días, la purga se lleva planes). Para eso
+    está `medir_corpus` sobre un corpus FIJO (`scripts/congela_corpus_culinario.py`).
+    """
     from dotenv import load_dotenv
     import psycopg
     from psycopg.rows import dict_row
-
-    from culinary_coherence import culinary_contract_scan, judgment_covers_delivered
 
     load_dotenv(_BACKEND / ".env")
     with psycopg.connect(os.environ["NEON_DATABASE_URL"], row_factory=dict_row) as c:
@@ -75,6 +79,31 @@ def medir(planes: int = 120) -> dict:
         filas = c.execute(
             "SELECT id, plan_data FROM meal_plans WHERE plan_data->'days' IS NOT NULL "
             "ORDER BY created_at DESC LIMIT %s", (planes,)).fetchall()
+    return _medir_filas(filas, cat)
+
+
+def medir_corpus(corpus: dict, fichero: "str | None" = None) -> dict:
+    """[P1-PLAN-LOTE-18 · 2026-09-12] (C0) La misma medición sobre un corpus FIJO: filas y catálogo salen del
+    fichero congelado, la huella publicada es la del corpus (contenido + catálogo) y `corpus.fijo = True`.
+    Medirlo dos veces da las mismas cifras por construcción; si difieren, cambió el código
+    (`computation.reglas_huella`), no el corpus. tooltip-anchor: P1-PLAN-LOTE-18-CORPUS-FIJO"""
+    from culinary_corpus import filas_para_medir
+
+    r = _medir_filas(filas_para_medir(corpus), corpus.get("catalogo_filas") or [])
+    r["corpus"]["huella_ventana_viva"] = r["corpus"]["huella"]
+    r["corpus"]["huella"] = corpus["huella"]
+    r["corpus"]["fijo"] = True
+    r["corpus"]["fichero"] = fichero
+    r["corpus"]["congelado_at"] = corpus.get("congelado_at")
+    r["corpus"]["nota"] = ("Corpus FIJO (fichero congelado con huella de contenido + catálogo): dos mediciones con "
+                           "la misma huella miden lo MISMO; una diferencia de cifras es del código, no del cron.")
+    return r
+
+
+def _medir_filas(filas: list, cat: list) -> dict:
+    """El medidor, común a la ventana viva y al corpus fijo: `filas` son `{"id", "plan_data"}`."""
+    from culinary_coherence import culinary_contract_scan, judgment_covers_delivered
+    from culinary_corpus import huella_catalogo, huella_reglas
 
     comidas = 0
     # [P1-BASELINE-REPRODUCIBLE - 2026-09-07] La foto anterior guardaba `planes: 96` y
@@ -125,11 +154,16 @@ def medir(planes: int = 120) -> dict:
         "planes": len(filas), "comidas": comidas,
         "corpus": {
             "huella": huella_corpus.hexdigest()[:16],
+            "fijo": False,
             "plan_ids": sorted(ids),
             "nota": ("`plan_data` es VIVO: el shift encoge los dias de un plan ya existente. "
                      "Si la huella cambia, las dos fotos NO son comparables aunque coincidan "
                      "los ids."),
         },
+        # [P1-PLAN-LOTE-18 · 2026-09-12] (C0) Qué código produjo las cifras. Con el corpus fijo, dos mediciones con
+        # la misma `corpus.huella` y distinta `reglas_huella` miden el efecto del código — y sólo entonces.
+        "computation": {"reglas_huella": huella_reglas(), "catalogo_huella": huella_catalogo(cat),
+                        "catalogo_filas": len(cat or [])},
         "determinista": {"comidas": len(con_det), "pct": pct(len(con_det)),
                          "por_check": dict(por_check.most_common())},
         "juez": {"comidas": len(con_juez), "pct": pct(len(con_juez)),
@@ -206,6 +240,9 @@ def _corpus_comparable(r: dict, previa: dict | None) -> "bool | None":
 
 def render(r: dict, previa: dict | None = None) -> str:
     o = [f"planes {r['planes']} · comidas {r['comidas']}", ""]
+    if (r.get("corpus") or {}).get("fijo"):
+        o.insert(1, f"  corpus FIJO {r['corpus'].get('fichero')} · huella {r['corpus']['huella']} · "
+                    f"reglas {(r.get('computation') or {}).get('reglas_huella')}")
     _cmp = _corpus_comparable(r, previa)
     if _cmp is False:
         o += ["  ⛔ EL CORPUS CAMBIO desde la foto congelada: los deltas de abajo NO son el efecto",
@@ -215,7 +252,7 @@ def render(r: dict, previa: dict | None = None) -> str:
         o += ["  ⚠  La foto congelada no lleva huella de corpus (es anterior a",
               "     P1-BASELINE-REPRODUCIBLE): no se puede saber si mide lo mismo. Trata los",
               "     deltas como orientativos, no como el efecto de un cambio.", ""]
-    for capa, etiq in (("determinista", "contrato determinista (V1-V5)"), ("juez", "juez culinario")):
+    for capa, etiq in (("determinista", "contrato determinista (V1-V7)"), ("juez", "juez culinario")):
         v = r[capa]
         linea = f"  {etiq:32s} {v['comidas']:5d} comidas   {v['pct']} %"
         if previa and previa.get(capa):
@@ -245,24 +282,87 @@ def main() -> int:
     ap.add_argument("--planes", type=int, default=120)
     ap.add_argument("--json", action="store_true")
     ap.add_argument("--congelar", action="store_true",
-                    help="reescribe docs/culinary_baseline.json con la foto de AHORA")
+                    help="congela la linea base medida sobre --corpus en docs/culinary_baseline_<fecha>.json")
+    ap.add_argument("--corpus", help="[C0] fichero de corpus FIJO (scripts/congela_corpus_culinario.py); "
+                                     "sin el, se mide la ventana VIVA")
+    ap.add_argument("--verificar", action="store_true",
+                    help="[C0] re-mide --corpus y lo compara con su linea base congelada: exit 0 si reproduce, "
+                         "3 si mismas reglas y cifras distintas, 4 si no hay linea base para esa huella")
     a = ap.parse_args()
 
-    r = medir(a.planes)
-    previa = None
-    if CONGELADA.exists():
-        try:
-            previa = json.loads(CONGELADA.read_text(encoding="utf-8"))
-        except Exception:
-            previa = None
-
-    if a.congelar:
-        CONGELADA.write_text(json.dumps(r, ensure_ascii=False, indent=2) + "\n",
-                             encoding="utf-8", newline="\n")
-        print(f"linea base congelada en {CONGELADA.relative_to(_BACKEND)}")
+    if a.corpus:
+        from culinary_corpus import cargar
+        corpus = cargar(a.corpus)
+        r = medir_corpus(corpus, fichero=Path(a.corpus).as_posix())
+        destino = baseline_path_for(corpus)
+        previa = _leer(destino)
+        if a.verificar:
+            return verificar(r, previa, destino)
+        if a.congelar:
+            destino.write_text(json.dumps(r, ensure_ascii=False, indent=2) + "\n",
+                               encoding="utf-8", newline="\n")
+            print(f"linea base sobre corpus FIJO congelada en {destino.relative_to(_BACKEND).as_posix()} "
+                  f"(huella {r['corpus']['huella']}, reglas {r['computation']['reglas_huella']})")
+            return 0
+        print(json.dumps(r, ensure_ascii=False, indent=2) if a.json else render(r, previa))
         return 0
+
+    if a.congelar or a.verificar:
+        # [P1-PLAN-LOTE-18 · 2026-09-12] (C0) La ventana viva no se puede volver a medir mañana: la foto del 6-sep
+        # dejo de ser reproducible en 14 h. Una linea base se congela SOLO sobre un corpus fijo.
+        print("--congelar/--verificar exigen --corpus: una linea base sobre la ventana VIVA no es reproducible. "
+              "Congela el corpus con scripts/congela_corpus_culinario.py y pasa el fichero.")
+        return 2
+    r = medir(a.planes)
+    previa = _leer(CONGELADA)
     print(json.dumps(r, ensure_ascii=False, indent=2) if a.json else render(r, previa))
     return 0
+
+
+def baseline_path_for(corpus: dict) -> Path:
+    """`docs/culinary_baseline_<YYYY_MM_DD>.json`, con la fecha del congelado del corpus: una linea base por corpus.
+    `docs/culinary_baseline.json` (la foto viva del 6/7-sep) se conserva tal cual: es historia, no comparable."""
+    fecha = str(corpus.get("congelado_at") or "")[:10].replace("-", "_") or "sin_fecha"
+    return _BACKEND / "docs" / f"culinary_baseline_{fecha}.json"
+
+
+def _leer(p: Path) -> "dict | None":
+    try:
+        return json.loads(p.read_text(encoding="utf-8")) if p.exists() else None
+    except Exception:
+        return None
+
+
+#: Lo que tiene que reproducirse entre dos mediciones del mismo corpus fijo.
+CIFRAS = ("planes", "comidas", "determinista", "juez", "solapamiento", "juez_sobre_lo_entregado")
+
+
+def verificar(r: dict, previa: "dict | None", destino: Path) -> int:
+    """[P1-PLAN-LOTE-18] (C0) ¿La medicion de hoy sobre el corpus fijo reproduce la congelada? Tres salidas:
+    0 reproduce (o el delta es del codigo, dicho); 3 mismas reglas y cifras distintas (el medidor no es
+    determinista); 4 no hay linea base comparable para esta huella."""
+    if not previa:
+        print(f"sin linea base congelada para este corpus ({destino.name}): congela primero con --congelar")
+        return 4
+    if not _corpus_comparable(r, previa):
+        print(f"la linea base {destino.name} es de OTRO corpus (huella "
+              f"{(previa.get('corpus') or {}).get('huella')} != {r['corpus']['huella']}): no comparable")
+        return 4
+    iguales = all(r.get(k) == previa.get(k) for k in CIFRAS)
+    reglas_hoy = (r.get("computation") or {}).get("reglas_huella")
+    reglas_base = (previa.get("computation") or {}).get("reglas_huella")
+    if iguales:
+        print(f"REPRODUCIBLE: mismas cifras sobre el corpus {r['corpus']['huella']} (reglas {reglas_hoy})")
+        return 0
+    if reglas_hoy != reglas_base:
+        print(f"CIFRAS DISTINTAS con reglas distintas ({reglas_base} -> {reglas_hoy}): el delta es del CODIGO, "
+              f"no del corpus. Revisalo y, si es el esperado, re-congela con --congelar.")
+        print(render(r, previa))
+        return 0
+    print(f"NO REPRODUCIBLE: mismo corpus ({r['corpus']['huella']}), mismas reglas ({reglas_hoy}) y cifras "
+          f"distintas: el medidor no es determinista. Investigar antes de leer ningun delta.")
+    print(render(r, previa))
+    return 3
 
 
 if __name__ == "__main__":

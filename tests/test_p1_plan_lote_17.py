@@ -189,5 +189,8 @@ def test_el_hallazgo_queda_cerrado_con_la_reproduccion_y_el_residuo():
 
 
 def test_marker_bumpeado():
-    src = (_BACKEND / "app.py").read_text(encoding="utf-8")
-    assert re.search(r'^_LAST_KNOWN_PFIX = "P1-PLAN-LOTE-17 · 2026-09-12"$', src, re.M)
+    """«No anterior a este lote», no «igual a hoy»: el lote siguiente vuelve a bumpear el marker (lección de LOTE-13)."""
+    import app
+
+    assert "[P1-PLAN-LOTE-17 · 2026-09-12]" in (_BACKEND / "app.py").read_text(encoding="utf-8")
+    assert app._LAST_KNOWN_PFIX.split("·")[-1].strip() >= "2026-09-12", app._LAST_KNOWN_PFIX

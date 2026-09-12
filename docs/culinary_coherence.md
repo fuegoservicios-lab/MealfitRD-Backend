@@ -395,8 +395,58 @@ efecto no mide el efecto.
 **Las dos capas apenas se solapan**, así que se publican separadas y **nunca sumadas** en un índice
 único: fundirlas escondería que ninguna sustituye a la otra.
 
-    python scripts/culinary_baseline.py              # la foto de hoy, con delta vs la congelada
-    python scripts/culinary_baseline.py --congelar   # reescribe la congelada
+    python scripts/culinary_baseline.py              # la foto VIVA de hoy, con delta vs la congelada (orientativo)
+    python scripts/culinary_baseline.py --congelar   # ya NO sin --corpus: ver «El corpus fijo» más abajo
+
+### El corpus fijo (C0 · `P1-PLAN-LOTE-18` · 2026-09-12)
+
+La foto de arriba se midió sobre la ventana VIVA (`ORDER BY created_at DESC LIMIT n` sobre `plan_data`) y **dejó de
+ser reproducible en 14 h**: los mismos 96 planes daban 1.186 comidas y luego 1.182, porque el shift del cron encoge
+los días de un plan ya existente. Y la purga de cuentas del 09-11 se llevó la flota entera: hoy no queda ni uno de
+aquellos 96. Una re-medición sobre la ventana viva no compara «antes vs después del código»: compara dos corpus.
+
+Por eso la línea base se congela ahora en DOS pasos, y el corpus vive en un fichero, no en la base:
+
+    python scripts/congela_corpus_culinario.py --motivo "..."          # sólo SELECTs → scripts/data/culinary_corpus_<fecha>.json
+    python scripts/culinary_baseline.py --corpus <fichero> --congelar    # → docs/culinary_baseline_<fecha>.json
+    python scripts/culinary_baseline.py --corpus <fichero> --verificar   # ¿da hoy las mismas cifras?
+
+`culinary_corpus.py` congela exactamente lo que las capas LEEN —`days` tal cual, `_culinary_judge_history`, el estado
+(`revision`, `generation_status`, `updated_at`)— más el catálogo del índice culinario (`master_ingredients`: name,
+aliases, category, ready_to_eat, prep_methods), porque el vocabulario del detector cambia con el catálogo. La
+huella del corpus es sha256 de las huellas de los planes (ordenadas) + la del catálogo; ni el orden de lectura ni el
+orden de claves entran en ella; un paso cambiado o un alias nuevo sí. Un fichero editado a mano no se mide: `cargar`
+recalcula las huellas y lo rechaza. La medición publica además `computation.reglas_huella` (sha del fuente de
+`culinary_coherence.py`): dos mediciones con la misma `corpus.huella` y distinta `reglas_huella` miden el efecto del
+código, y sólo entonces.
+
+`--verificar` tiene tres salidas y ninguna ambigua: **0** reproduce (o el delta es del código, y lo dice); **3**
+mismas reglas y cifras distintas —el medidor no es determinista: investigar antes de leer ningún delta—; **4** sin
+línea base comparable para esa huella. Y `--congelar` **sin** `--corpus` se niega (exit 2): una línea base sobre la
+ventana viva es exactamente el error del 6-sep.
+
+**Congelado el 2026-09-12** (`scripts/data/culinary_corpus_2026_09_12.json`, 310 KB, huella `087cfc31d3105f79`,
+catálogo 349 filas `1f4f95b33a191dfe`, reglas `35fc77fbf3416d08`), verificado dos veces: REPRODUCIBLE.
+
+| | |
+|---|---|
+| planes · comidas en `days` | 5 · 64 (100 contando `_archived_days`, que la medición no lee) |
+| contrato determinista (V1–V7) | 46 comidas · 71,9 % · V7a=47 V7e=38 V6=11 V4=4 V1=4 V3=4 V7d=1 V5=1 V7c=1 |
+| juez culinario | 15 comidas · 23,4 % · paso_incoherente=9 tecnica_impropia=2 nombre_no_corresponde=2 slot_inapropiado=1 combo_absurdo=1 |
+| coinciden | 10 · solo determinista 36 · solo juez 5 |
+| juez sobre lo entregado | no=7 · desconocido=1 (no decidible) |
+
+Tres cosas para leer esta tabla sin engañarse. **No es comparable con la foto del 6-sep**: otro corpus (huella
+distinta) y otras reglas (aquella contaba V1–V5; el scan de hoy corre V1–V7e). **La flota es pequeña**: 5 planes tras
+la purga; el instrumento vale igual y se re-congela cuando haya flota — cada corpus lleva fecha y huella, y su línea
+base también. Y **V7a/V7e disparan en 47 y 38 de 64 comidas** («la lista compra N piezas y los pasos usan menos» /
+«un paso pide más piezas que la lista»): el 09-07, sobre 1.194 comidas, eran 154 y 162 (13-14 %). Es un hallazgo
+sobre los planes generados del 09-04 al 09-09, no sobre el medidor, y queda para el bloque C (CUL-P0-03) — aquí sólo
+se deja medido y reproducible.
+
+`docs/culinary_baseline.json` (la foto viva del 6/7-sep) se conserva tal cual: es historia y no es comparable. El
+golden set (`docs/culinary_golden_set.json`) guarda el CONTENIDO de sus 80 comidas, así que las etiquetas humanas
+siguen siendo posibles aunque la flota de la que salieron ya no exista. Test: `tests/test_p1_plan_lote_18.py`.
 
 ### El golden set (`docs/culinary_golden_set.json`)
 
