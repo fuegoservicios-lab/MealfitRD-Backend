@@ -57,13 +57,25 @@
         "[2026-09-09 · P1-REGISTRY-CANTIDADES-EN-CRUDO] REVISIÓN HUMANA de los 35 platos de despensa, uno a uno, por el dueño. Resultado: 35 de 35 marcados «cambiar», 0 aprobados, y CERO rechazos por motivos culturales — ni un plato se objetó por no ser dominicano. Las 35 notas (21.224 caracteres, íntegras en cultural_review_notes_do_2026_09_09.json) son de EXACTITUD y se agrupan en seis hallazgos sistémicos, de los cuales dos resultaron ser el mismo defecto raíz: el registry NOMBRA en «plato servido» cantidades que MIDE en «ingrediente crudo» (serving_g y days_fresh_min). Los números son correctos para lo que el motor pregunta y no llegan a ningún usuario; lo que estaba roto era la documentación, que se contradecía a sí misma. `kind` sigue siendo `automated`: hubo revisión humana, pero NO hubo aprobación de ningún plato, y una firma que insinuara lo contrario sería el defecto que P1-REVIEW-KIND-HONEST cerró. Queda pendiente la decisión del dueño sobre sal/sodio y sobre los platos de origen no dominicano (frijol cargamanto, habas, guisantes secos), que él no objetó.",
         "[P1-CATALOGO-PROTEINA-DESAYUNO · 2026-09-09] +20 platos de DENSIDAD PROTEÍNICA (10 desayunos, 10 meriendas): el hueco medido era que el desayuno dominicano y la merienda son carbohidrato casi puro —mediana 3,86 y 3,37 g de proteína por 100 kcal contra un objetivo de 5,86— y por eso 14 días deterministas daban 7 platos distintos en 56 comidas. Cada plato pasó CINCO puertas antes de entrar (nombre exacto en catálogo, macros conocidas, densidad ≥ 5,0, factor de escalado dentro de banda, y precio de TODOS sus constituyentes) y su receta se escribió a mano contra las quince reglas de la v4. AUTOMÁTICA: estos 20 NO han pasado el juicio a ciegas del dueño — ver `pendiente_de_juicio_humano`.",
         "[2026-09-11 · P1-PLAN-LOTE-11 · C8] REVISIÓN HUMANA de las 4 plantillas DO sin receta congelada (las 4 `partial` históricas: Menta, Salami de pavo, Chillo, Zapote), plato a plato, por el dueño en la ficha de curación interactiva. Resultado: 3 «con cambios» y 1 descartada. Las tres aprobadas con cambios se RENOMBRAN a lo que de verdad traen («Frutas picadas con limón» sin la menta, que no se compra y queda opcional en la receta; «Mangú con jamón de pavo a la plancha», porque el constituyente siempre fue jamón y «versión magra» no se sostiene sin especificar la grasa; «Filete de pescado blanco al horno con vegetales y batata», porque el chillo salió del catálogo) y CONSERVAN su template_id vía plan_policy.TEMPLATE_ALIASES; sus 3 recetas entran en recipe_library_do_v1.json (v7) con los cambios que él dictó. La cuarta, «Batida de zapote ligera (leche descremada)», sale de la biblioteca: falta el zapote, ingrediente principal (ver retirados_por_el_dueno). El registry DO pasa a 193 plantillas, 193 ok, 0 partial. Ningún otro plato cambia. `kind` sigue `automated`: hubo juicio humano sobre CUATRO fichas, no una revisión cultural de la biblioteca.",
-        "[2026-09-11 · P1-PLAN-LOTE-12 · C8-b] Segunda decisión del dueño sobre «Frutas picadas con limón»: el constituyente se llama «Jugo de limón» (10 g) y no «Limón»; resuelve a la fila «Limón» por alias del catálogo. Ningún otro plato cambia. El consumidor (deterministic_day) dejó de indexar su catálogo por nombre exacto y usa el resolutor del compilador."
+        "[2026-09-11 · P1-PLAN-LOTE-12 · C8-b] Segunda decisión del dueño sobre «Frutas picadas con limón»: el constituyente se llama «Jugo de limón» (10 g) y no «Limón»; resuelve a la fila «Limón» por alias del catálogo. Ningún otro plato cambia. El consumidor (deterministic_day) dejó de indexar su catálogo por nombre exacto y usa el resolutor del compilador.",
+        "[2026-09-12 · P1-PLAN-LOTE-16 · A9] REVISIÓN HUMANA de los 19 platos de P1-CATALOGO-PROTEINA-DESAYUNO (pendientes desde el 09-09), plato a plato, por el dueño en la ficha de curación interactiva A9: 19/19 «con cambios», aplicados. Qué cambió, MEDIDO contra el snapshot firmado: 19 plantillas tocadas, 0 ids perdidos ni nuevos (193/193), 0 cambios de nutrición, 0 cambios de estado (193 ok). (1) 12 técnicas corregidas —«crudo» → «tostado + montaje en frío» (5) o «montaje en frío» (3), «batido» → «cocido + batido» (2), «horneado» → «hervido + horneado», «hervido» → «hervido + tostado»— con el template_id conservado vía plan_policy.TEMPLATE_MINT_TECHNIQUE (la técnica entra en el id igual que el nombre). (2) «Huevo duro con aguacate y sal mínima» → «Huevo duro con aguacate» (TEMPLATE_ALIASES). (3) `spec` por constituyente en dish_constituents_do.json con el estado que él dictó (escurrido, sin cáscara, en hojuelas, tostado sin sal, yuca dulce cruda y pelada, tofu escurrido antes de prensar…): el `name` sigue siendo la fila del catálogo y la nutrición no se mueve. (4) Las 19 recetas reescritas al pie de la letra en recipe_library_do_v1.json v8 (ver procedencia.curacion_humana_a9). Lo que pidió y NO se aplicó tal cual, dicho: «eliminar/aclarar aguanta N d y solo despensa» — eran la etiqueta de la ficha para logistics.days_fresh_min / pantry_only, la vida de los INGREDIENTES crudos que el ciclo de una compra necesita, no la conservación del plato hecho (dish_registry.derive_logistics lo documenta desde el 09-09); se corrige la etiqueta, no el dato. Y «recalcular con el catálogo» ya era así: ninguna cifra cambia porque ningún constituyente cambió de fila (tofu: 252 mg de sodio salen de la fila «Salsa de soya», 2 890 mg/100 g, regular). `kind` sigue `automated`: hubo juicio humano sobre 19 fichas, no una revisión cultural de la biblioteca."
       ],
-      "reanchored_from": "d73278132f7dbb271b20b6298b4197fd454d7e19abbfe2df185bd56a2c5cc89b",
-      "snapshot_hash": "163fa9e312d0d2431a6aacb30c90e5aa02964b4318adb39ac700cfd23cfa8d15",
-      "pendiente_de_juicio_humano": {
-        "fecha": "2026-09-09",
-        "motivo": "los 20 platos nuevos de P1-CATALOGO-PROTEINA-DESAYUNO entraron por medición, no por juicio. La revisión humana de las 35 fichas del 09-sep (`cultural_review_notes_do_2026_09_09.json`) cubre el catálogo ANTERIOR; éstos están sin juzgar.",
+      "reanchored_from": "163fa9e312d0d2431a6aacb30c90e5aa02964b4318adb39ac700cfd23cfa8d15",
+      "snapshot_hash": "585208625f7f8171322714e8518bd6d582bd55d7a0f8292d7caed03a1a76ea5f",
+      "retirados_por_el_dueno": [
+        {
+          "plato": "Batida de zapote ligera (leche descremada)",
+          "template_id": "tpl_e63e01c38ad3",
+          "fecha": "2026-09-11",
+          "veredicto": "❌ descartar (ficha de curación C8, dueño)",
+          "motivo": "Falta el zapote, ingrediente principal. Recuperarla cuando esté incorporado al catálogo con cantidad de pulpa comestible, datos nutricionales y precio verificado; entonces redactar la preparación."
+        }
+      ],
+      "juicio_humano_a9": {
+        "fecha": "2026-09-12",
+        "ficha": "https://claude.ai/code/artifact/d9829853-4e63-469b-b20a-7db31a736d50",
+        "veredictos": "db del artefacto: colección a9, documento veredictos (28 entradas)",
+        "resultado": "19/19 «con cambios», aplicados en P1-PLAN-LOTE-16",
         "platos": [
           "Revoltillo de claras con espinaca y casabe",
           "Mangú de plátano verde con atún y cebolla encurtida",
@@ -85,23 +97,8 @@
           "Tofu salteado con salsa de soya y cebolla",
           "Queso de hoja con tomate y cebolla"
         ],
-        "retirados": [
-          {
-            "plato": "Hígado de res encebollado con plátano hervido",
-            "motivo": "retinol PREFORMADO: 4.970 mcg RAE/100 g, y la racion de 120 g daba 5.964 mcg = 2x el UL diario (3.000). Medido: el selector lo servia 8 veces en 30 dias. No se le bajo la racion porque incluso ~60 g agotan el techo del dia entero, y el selector no tiene memoria entre dias. Si vuelve, vuelve CON la maquinaria de frecuencia.",
-            "fecha": "2026-09-09"
-          }
-        ]
-      },
-      "retirados_por_el_dueno": [
-        {
-          "plato": "Batida de zapote ligera (leche descremada)",
-          "template_id": "tpl_e63e01c38ad3",
-          "fecha": "2026-09-11",
-          "veredicto": "❌ descartar (ficha de curación C8, dueño)",
-          "motivo": "Falta el zapote, ingrediente principal. Recuperarla cuando esté incorporado al catálogo con cantidad de pulpa comestible, datos nutricionales y precio verificado; entonces redactar la preparación."
-        }
-      ]
+        "no_aplicado_tal_cual": "«aguanta N d» y «solo despensa»: son la vida de los INGREDIENTES crudos (logistics), no del plato preparado; se corrige la etiqueta de la ficha, no el dato. «Recalcular con el catálogo»: ya era el cálculo; ninguna fila cambió."
+      }
     },
     "mexico_casera": {
       "accepted": [
@@ -171,13 +168,16 @@
         "Ninguna ola queda cubierta exclusivamente con soja: quitando la soja siguen quedando ≥5 desayunos veganos en las seis cocinas (test).",
         "Cena «Salteado de edamame con espárragos y arroz integral» → «…con patata»: arroz como BASE no va en cena (regla dura del juez culinario). Se cambió el acompañamiento en vez de recolocar la etiqueta — mover el rótulo habría mentido sobre lo que el plato es.",
         "[2026-09-08] Re-anclada sin repetir el juicio plato a plato: medido contra el arbol firmado, esta biblioteca tiene CERO plantillas cambiadas (nombre, slots, constituyentes, gramos, excluidos y riesgo, byte a byte). Su `snapshot_hash` se movio solo porque se movio el `catalog_fingerprint` del catalogo (c89f400bb5fd13dd -> d0bd7b4737441a95). Las decisiones de abajo describen exactamente estos platos.",
-        "[2026-09-12 · P1-PLAN-LOTE-13 · E9] Nueve almuerzos vegetarianos de DESPENSA añadidos (7 de ellos también cena): «Patatas guisadas con huevo escalfado y pimentón» (tpl_250f13abcd15); «Arroz con garbanzos, zanahoria y pimentón» (tpl_28e7588a586c); «Macarrones con salsa de tomate y queso curado» (tpl_50cf720cd524); «Ensalada de garbanzos con huevo duro, aceitunas y cebolla» (tpl_65b8503d7106); «Garbanzos guisados con pimentón y huevo duro» (tpl_6e7dacc8a2ef); «Judías blancas estofadas con patata, laurel y pimentón» (tpl_9a2990dc877a); «Trinxat de col y patata con huevo» (tpl_a1e6ad600e91); «Lentejas estofadas con patata y zanahoria» (tpl_c7303228987a); «Arroz a la cubana con huevo y salsa de tomate» (tpl_fa89b5d4bec3). Motivo medido con scripts/coverage_funnel.py: el cruce «vegetariano · día 25 sin congelador» dejaba UN almuerzo (la tortilla española; los otros 9 llevan calabacín, berenjena, tomate, pimiento, espinacas o acelgas de 7-10 días). Todo constituyente aguanta ≥ 35 días (legumbre seca, arroz, pasta, huevo, patata, zanahoria, col, cebolla, ajo, conserva); gramos CRUDOS y nombres EXACTOS del catálogo; 375-672 kcal y 18-26 g de proteína por ración; ninguno con sodio ≥ 600 mg. Resultado: almuerzo 1 → 10 y cena 3 → 8 en ese cruce; vegetariano 10 → 19 y vegano 7 → 10 en almuerzo. Las 124 plantillas anteriores quedan byte-idénticas (nombre, franja, constituyentes, gramos, riesgo, nutrición, logística). El catalog_fingerprint pasó también de c0f939dbb4bae32d a 0dfbba0b8837923c (drift de catálogo pre-existente desde el 09-09)."
+        "[2026-09-12 · P1-PLAN-LOTE-13 · E9] Nueve almuerzos vegetarianos de DESPENSA añadidos (7 de ellos también cena): «Patatas guisadas con huevo escalfado y pimentón» (tpl_250f13abcd15); «Arroz con garbanzos, zanahoria y pimentón» (tpl_28e7588a586c); «Macarrones con salsa de tomate y queso curado» (tpl_50cf720cd524); «Ensalada de garbanzos con huevo duro, aceitunas y cebolla» (tpl_65b8503d7106); «Garbanzos guisados con pimentón y huevo duro» (tpl_6e7dacc8a2ef); «Judías blancas estofadas con patata, laurel y pimentón» (tpl_9a2990dc877a); «Trinxat de col y patata con huevo» (tpl_a1e6ad600e91); «Lentejas estofadas con patata y zanahoria» (tpl_c7303228987a); «Arroz a la cubana con huevo y salsa de tomate» (tpl_fa89b5d4bec3). Motivo medido con scripts/coverage_funnel.py: el cruce «vegetariano · día 25 sin congelador» dejaba UN almuerzo (la tortilla española; los otros 9 llevan calabacín, berenjena, tomate, pimiento, espinacas o acelgas de 7-10 días). Todo constituyente aguanta ≥ 35 días (legumbre seca, arroz, pasta, huevo, patata, zanahoria, col, cebolla, ajo, conserva); gramos CRUDOS y nombres EXACTOS del catálogo; 375-672 kcal y 18-26 g de proteína por ración; ninguno con sodio ≥ 600 mg. Resultado: almuerzo 1 → 10 y cena 3 → 8 en ese cruce; vegetariano 10 → 19 y vegano 7 → 10 en almuerzo. Las 124 plantillas anteriores quedan byte-idénticas (nombre, franja, constituyentes, gramos, riesgo, nutrición, logística). El catalog_fingerprint pasó también de c0f939dbb4bae32d a 0dfbba0b8837923c (drift de catálogo pre-existente desde el 09-09).",
+        "[2026-09-12 · P1-PLAN-LOTE-16 · A9] REVISIÓN HUMANA de los 9 almuerzos de despensa de E9 (pendientes desde el 09-12), plato a plato, por el dueño en la ficha A9: 9/9 «con cambios», aplicados. Medido contra el snapshot firmado: 9 plantillas tocadas, 0 ids perdidos ni nuevos (133/133), 0 cambios de nutrición, 0 de estado (133 ok). (1) «Macarrones con salsa de tomate y queso curado» → «Coditos con salsa de tomate y queso gouda» (el catálogo no tiene queso curado; el título prometía lo que no traía; TEMPLATE_ALIASES). (2) 4 técnicas corregidas — «guisado» → «hervido + sofrito», «frío» → «cocción + montaje en frío», «salteado» → «hervido + majado + salteado», «sartén» → «hervido + sartén»— con el id conservado (TEMPLATE_MINT_TECHNIQUE). (3) `spec` por constituyente (arroz y coditos en seco; garbanzos, judías y lentejas SECOS con remojo y cocción previa; papa, zanahoria y repollo pelados/limpios en crudo; huevo sin cáscara pesado crudo; pimentón en polvo; comino molido; aceitunas sin hueso escurridas; laurel que se retira al servir). (4) `prep_notes` por plantilla con la preparación que dictó (remojo y cocción de la legumbre, cómo entra el huevo, reparto de los 10 g de aceite del arroz a la cubana: 4 + 6) — viajan en editorial.prep_notes para quien escriba la receta; el prompt del run no las lee todavía. Como en DO, «aguanta N d / solo despensa» era la etiqueta de la ficha para la vida de los ingredientes crudos, no del plato hecho: la duración del huevo (35 d) es la del huevo refrigerado en pantry_durability, y la regla ya asume nevera."
       ],
-      "reanchored_from": "cb2241db6e8e0c2c5c1347d85f845cf4ba3f94db63837c4e53a66c9b63d2a562",
-      "snapshot_hash": "158c7cd9e30922531e46883d01d37611ee3386ed3ce89b1ed26cab3ac965dc56",
-      "pendiente_de_juicio_humano": {
+      "reanchored_from": "158c7cd9e30922531e46883d01d37611ee3386ed3ce89b1ed26cab3ac965dc56",
+      "snapshot_hash": "fdeb98301d1aca40d1d378e3755958c1dbb2e72a68c64f6de3fbb787d2f477dd",
+      "juicio_humano_a9": {
         "fecha": "2026-09-12",
-        "motivo": "los 9 almuerzos de despensa de P1-PLAN-LOTE-13 (E9) entraron por medición del embudo de cobertura, no por juicio cultural humano. La revisión del dueño (A9 del plan de pendientes) debe mirarlos plato a plato.",
+        "ficha": "https://claude.ai/code/artifact/d9829853-4e63-469b-b20a-7db31a736d50",
+        "veredictos": "db del artefacto: colección a9, documento veredictos (28 entradas)",
+        "resultado": "9/9 «con cambios», aplicados en P1-PLAN-LOTE-16",
         "platos": [
           "Patatas guisadas con huevo escalfado y pimentón",
           "Arroz con garbanzos, zanahoria y pimentón",
@@ -188,7 +188,8 @@
           "Trinxat de col y patata con huevo",
           "Lentejas estofadas con patata y zanahoria",
           "Arroz a la cubana con huevo y salsa de tomate"
-        ]
+        ],
+        "no_aplicado_tal_cual": "«aguanta N d» y «solo despensa»: son la vida de los INGREDIENTES crudos (logistics), no del plato preparado; se corrige la etiqueta de la ficha, no el dato. «Recalcular con el catálogo»: ya era el cálculo; ninguna fila cambió."
       }
     },
     "us_everyday": {
@@ -228,5 +229,7 @@
   "reanchor_note_2026_09_10h": "P1-DO-DESPENSA-DE-SU-MERCADO: seis ingredientes sin precio resueltos con lo que el dueño trajo de su mercado. Azúcar morena = «azúcar crema» y pan rallado = «pan molido» en RD (gloss_es), con precio owner_verified igual que el sazón Goya culantro y achiote y el hummus. El SOFRITO se hace, no se compra: se desglosa en ají cubanela, cilantro, cebolla y ajo en los 3 platos que lo usaban (los 15 g se conservan). Salen de la biblioteca dominicana los 3 platos de SÉMOLA DE MAÍZ (2 chenchén y el chacá): el dueño no la conoce, la Maizena no la sustituye y el maíz partido no está en su súper; vuelven si aparece. El queso de hoja documenta su procedencia (sin etiqueta: se vende en funditas).",
   "reanchor_note_2026_09_11": "P1-PLAN-LOTE-11 · C8: re-anclaje de dominican_criolla tras aplicar la curación HUMANA del dueño sobre las 4 plantillas sin receta: 3 renombres (id estable por TEMPLATE_ALIASES) + 1 retirada + 3 recetas nuevas en la biblioteca (v7). Hash fb66c4eb297d → d73278132f7d. Las otras cinco bibliotecas no se tocan (siguen en DRIFT de catálogo desde el 06-sep, ya anotado: su firma es la de entonces).",
   "reanchor_note_2026_09_11b": "P1-PLAN-LOTE-12 · C8-b: re-anclaje de dominican_criolla tras renombrar UN constituyente («Limón» → «Jugo de limón», alias de la misma fila) a petición del dueño. Hash d73278132f7d → 163fa9e312d0.",
-  "reanchor_note_2026_09_12": "P1-PLAN-LOTE-13: re-anclaje de las CINCO bibliotecas no dominicanas, que llevaban en DRIFT de catálogo desde el 09-09 (la firma valía para un snapshot que ya no era reproducible). Medido plato a plato contra el árbol firmado antes de mover cada hash: es +9 (cb2241db6e8e→158c7cd9e309) · mx 0 cambios (f447e420035e→b1072fd9418d) · co 0 cambios (1 dato derivado) (35843fcd901b→8b0d1f213f65) · pr 0 cambios (685d9887b9e3→d05274910b25) · us 0 cambios (eab7cafd4ece→9568d3f39928). La española además gana 9 almuerzos vegetarianos de despensa (E9 del plan de pendientes), anotados en `pendiente_de_juicio_humano` para la revisión del dueño (A9)."
+  "reanchor_note_2026_09_12": "P1-PLAN-LOTE-13: re-anclaje de las CINCO bibliotecas no dominicanas, que llevaban en DRIFT de catálogo desde el 09-09 (la firma valía para un snapshot que ya no era reproducible). Medido plato a plato contra el árbol firmado antes de mover cada hash: es +9 (cb2241db6e8e→158c7cd9e309) · mx 0 cambios (f447e420035e→b1072fd9418d) · co 0 cambios (1 dato derivado) (35843fcd901b→8b0d1f213f65) · pr 0 cambios (685d9887b9e3→d05274910b25) · us 0 cambios (eab7cafd4ece→9568d3f39928). La española además gana 9 almuerzos vegetarianos de despensa (E9 del plan de pendientes), anotados en `pendiente_de_juicio_humano` para la revisión del dueño (A9).",
+  "reanchor_note_2026_09_12b": "P1-PLAN-LOTE-16 (A9): re-anclaje de dominican_criolla y spain_mediterranea tras aplicar los 28 veredictos del dueño. Medido plato a plato contra el árbol firmado antes de mover cada hash: do 19 plantillas cambiadas de 193 (técnica/nombre/spec; 0 nutrición, 0 estado) (163fa9e312d0→585208625f7f) · es 9 de 133 (nombre/técnica/spec/prep_notes; 0 nutrición, 0 estado) (158c7cd9e309→fdeb98301d1a). Las otras cuatro bibliotecas no cambian.",
+  "human_review_notes_a9": "ficha interactiva A9 (https://claude.ai/code/artifact/d9829853-4e63-469b-b20a-7db31a736d50); veredictos en la db del artefacto (a9/veredictos) y aplicados en P1-PLAN-LOTE-16. Lección de la ficha: 28 de 28 veredictos pidieron quitar «aguanta N d»/«solo despensa» — la ficha etiquetaba logistics.days_fresh_min como conservación del plato hecho; dish_registry.derive_logistics ya avisaba de ese error desde el 09-09. Etiquetar SIEMPRE como vida de los INGREDIENTES."
 }

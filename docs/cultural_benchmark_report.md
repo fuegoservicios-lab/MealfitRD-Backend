@@ -4,11 +4,11 @@ Gate: **PASA**
 
 | Perfil | Biblioteca | Plantillas | Des/Alm/Cen/Mer | Resueltos | Contaminación | Adecuación | Disponib. riesgo | Proteínas/Técnicas | Clínico | Revisión humana |
 |---|---|---|---|---|---|---|---|---|---|---|
-| dominican_criolla | do | 193 | 54/63/56/52 | 100.0 % | 0 | ok (fritura 0 %) | 0.0 % | 13/41 | ok (procesados 3, sodio 16) | 0 marcadas · firma: automated (Claude (revisión curatorial delegada por el dueño), 2026-09-12) |
+| dominican_criolla | do | 193 | 54/63/56/52 | 100.0 % | 0 | ok (fritura 0 %) | 0.0 % | 13/45 | ok (procesados 3, sodio 16) | 0 marcadas · firma: automated (Claude (revisión curatorial delegada por el dueño), 2026-09-12) |
 | puertorico_criolla | pr | 132 | 37/46/37/23 | 100.0 % | 1 | ok (fritura 6 %) | 14.9 % | 13/15 | ok (procesados 12, sodio 23) | 67 marcadas · firma: automated (Claude (revisión curatorial delegada por el dueño), 2026-09-12) |
 | mexico_casera | mx | 126 | 38/46/39/25 | 100.0 % | 0 | ok (fritura 1 %) | 2.6 % | 13/15 | ok (procesados 5, sodio 10) | 15 marcadas · firma: automated (Claude (revisión curatorial delegada por el dueño), 2026-09-12) |
 | colombia_casera | co | 134 | 37/48/39/27 | 100.0 % | 0 | ok (fritura 1 %) | 12.7 % | 12/16 | ok (procesados 6, sodio 7) | 61 marcadas · firma: automated (Claude (revisión curatorial delegada por el dueño), 2026-09-12) |
-| spain_mediterranea | es | 133 | 39/63/50/24 | 100.0 % | 0 | ok (fritura 0 %) | 5.4 % | 12/15 | ok (procesados 24, sodio 28) | 31 marcadas · firma: automated (Claude (revisión curatorial delegada por el dueño), 2026-09-12) |
+| spain_mediterranea | es | 133 | 39/63/50/24 | 100.0 % | 0 | ok (fritura 1 %) | 5.4 % | 12/19 | ok (procesados 24, sodio 28) | 31 marcadas · firma: automated (Claude (revisión curatorial delegada por el dueño), 2026-09-12) |
 | us_everyday | us | 119 | 34/44/37/19 | 100.0 % | 3 | ok (fritura 0 %) | 4.9 % | 12/16 | ok (procesados 7, sodio 21) | 26 marcadas · firma: automated (Claude (revisión curatorial delegada por el dueño), 2026-09-12) |
 
 Mezcla 0,7/0,3 en 10 días: todas las parejas con candidatos en las 4 franjas (30 parejas).

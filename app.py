@@ -143,7 +143,11 @@ _PROCESS_START_ISO = datetime.now(timezone.utc).isoformat()
 # `scripts/canary_plan_delivery.py` (fallos, reintentos, latencia y coste por plan entregado válido, con denominador)
 # y `scripts/verify_swap_last_chunk.py` (recetas↔lista con el MISMO guard, horizonte y proyección tras el último
 # chunk, sobre planes reales, sin escribir nada).
-_LAST_KNOWN_PFIX = "P1-PLAN-LOTE-15 · 2026-09-12"
+# [P1-PLAN-LOTE-16 · 2026-09-12] A9, la curación del DUEÑO aplicada: 28/28 platos pendientes «con cambios». 2 renombres y
+# 16 técnicas corregidas con id estable (TEMPLATE_ALIASES + TEMPLATE_MINT_TECHNIQUE: la técnica entra en el id como el
+# nombre), `spec` por constituyente y `prep_notes` por plantilla atraviesan el compilador sin mover nutrición, las 19
+# recetas DO reescritas (v8). «aguanta N d» era la etiqueta de la ficha para la vida de los INGREDIENTES, no del plato.
+_LAST_KNOWN_PFIX = "P1-PLAN-LOTE-16 · 2026-09-12"
 
 # [P1-SENTRY-SAMPLE-COST · 2026-05-12] Sentry sampling driven from env vars
 # con default seguro 0.1 (10%). Pre-fix tenía `traces_sample_rate=1.0` y

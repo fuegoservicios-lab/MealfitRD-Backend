@@ -1,5 +1,5 @@
 {
- "_note": "[P1-NEXT-LEVEL-BATCH · 2026-07-02] Biblioteca curada de plantillas de platos dominicanos para el day-generator: el LLM ELIGE Y ADAPTA en vez de inventar desde cero (creatividad por recombinación sobre un espacio verificado, cero disparates). slots respetan el SSOT de constants.SLOT_INAPPROPRIATE_FOODS (arroz/locrio/pasta/sopón NUNCA en desayuno ni cena; sopones solo almuerzo). protein usa el canon de _SD_PROT (pollo/res/cerdo/pavo/pescado/camarones/atun/huevo) + queso/legumbre/mixta/none. transform=true marca platos TRANSFORMADOS (masa→producto: panqueques, bollitos, arepitas, pastelón) — la creatividad que el owner pidió. Consumido por backend/dish_library.py (knob MEALFIT_DISH_LIBRARY).",
+ "_note": "[P1-NEXT-LEVEL-BATCH · 2026-07-02] Biblioteca curada de plantillas de platos dominicanos para el day-generator: el LLM ELIGE Y ADAPTA en vez de inventar desde cero (creatividad por recombinación sobre un espacio verificado, cero disparates). slots respetan el SSOT de constants.SLOT_INAPPROPRIATE_FOODS (arroz/locrio/pasta/sopón NUNCA en desayuno ni cena; sopones solo almuerzo). protein usa el canon de _SD_PROT (pollo/res/cerdo/pavo/pescado/camarones/atun/huevo) + queso/legumbre/mixta/none. transform=true marca platos TRANSFORMADOS (masa→producto: panqueques, bollitos, arepitas, pastelón) — la creatividad que el owner pidió. Consumido por backend/dish_library.py (knob MEALFIT_DISH_LIBRARY). [P1-PLAN-LOTE-16 · 2026-09-12 · A9] El dueño juzgó en la ficha A9 los 19 platos de P1-CATALOGO-PROTEINA-DESAYUNO (19/19 «con cambios»): 12 técnicas corregidas («crudo» no describe un plato con casabe tostado; «batido» esconde que las claras se cuecen) con el id conservado vía plan_policy.TEMPLATE_MINT_TECHNIQUE, y «Huevo duro con aguacate y sal mínima» → «Huevo duro con aguacate» (id conservado vía TEMPLATE_ALIASES). Los cambios de receta viven en recipe_library_do_v1.json (v8) y la precisión de cada constituyente en dish_constituents_do.json (`spec`).",
  "templates": [
   {
    "name": "Mangú de plátano verde con huevos revueltos y cebollita morada",
@@ -3046,7 +3046,7 @@
    ],
    "protein": "none",
    "base": "avena",
-   "technique": "crudo",
+   "technique": "tostado + montaje en frío",
    "transform": false
   },
   {
@@ -3077,7 +3077,7 @@
    ],
    "protein": "huevo",
    "base": "avena",
-   "technique": "batido",
+   "technique": "cocido + batido",
    "transform": true
   },
   {
@@ -3087,7 +3087,7 @@
    ],
    "protein": "queso",
    "base": "casabe",
-   "technique": "crudo",
+   "technique": "tostado + montaje en frío",
    "transform": false
   },
   {
@@ -3098,11 +3098,11 @@
    ],
    "protein": "pescado",
    "base": "yuca",
-   "technique": "horneado",
+   "technique": "hervido + horneado",
    "transform": true
   },
   {
-   "name": "Huevo duro con aguacate y sal mínima",
+   "name": "Huevo duro con aguacate",
    "slots": [
     "merienda"
    ],
@@ -3118,7 +3118,7 @@
    ],
    "protein": "atun",
    "base": "casabe",
-   "technique": "crudo",
+   "technique": "tostado + montaje en frío",
    "transform": false
   },
   {
@@ -3128,7 +3128,7 @@
    ],
    "protein": "none",
    "base": "yogurt",
-   "technique": "crudo",
+   "technique": "montaje en frío",
    "transform": false
   },
   {
@@ -3138,7 +3138,7 @@
    ],
    "protein": "queso",
    "base": "queso",
-   "technique": "crudo",
+   "technique": "montaje en frío",
    "transform": false
   },
   {
@@ -3148,7 +3148,7 @@
    ],
    "protein": "huevo",
    "base": "avena",
-   "technique": "batido",
+   "technique": "cocido + batido",
    "transform": true
   },
   {
@@ -3158,7 +3158,7 @@
    ],
    "protein": "pescado",
    "base": "casabe",
-   "technique": "crudo",
+   "technique": "tostado + montaje en frío",
    "transform": false
   },
   {
@@ -3168,7 +3168,7 @@
    ],
    "protein": "queso",
    "base": "casabe",
-   "technique": "crudo",
+   "technique": "tostado + montaje en frío",
    "transform": false
   },
   {
@@ -3178,7 +3178,7 @@
    ],
    "protein": "pollo",
    "base": "casabe",
-   "technique": "hervido",
+   "technique": "hervido + tostado",
    "transform": true
   },
   {
@@ -3198,7 +3198,7 @@
    ],
    "protein": "queso",
    "base": "queso",
-   "technique": "crudo",
+   "technique": "montaje en frío",
    "transform": false
   }
  ]

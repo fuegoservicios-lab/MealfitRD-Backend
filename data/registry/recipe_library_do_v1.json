@@ -2,12 +2,12 @@
  "schema_version": 1,
  "country": "DO",
  "generado_el": "2026-09-08",
- "revision": "v4 — estado del peso, tiempos orientativos, agua en volumen, reparto · v5 2026-09-09: +35 platos de despensa (P1-CICLO-30D-DURADERO), escritos a mano · v6 2026-09-09: +20 platos de DENSIDAD PROTEICA (P1-CATALOGO-PROTEINA-DESAYUNO), escritos a mano contra las quince reglas · v7 2026-09-11: +3 recetas de C8 (P1-PLAN-LOTE-11) escritas a mano y juzgadas UNA A UNA por el dueño (las tres «con cambios», aplicados); la cuarta ficha (batida de zapote) se retiró por decisión suya · v7b 2026-09-11: el rótulo «Jugo de limón» (P1-PLAN-LOTE-12), segunda decisión del dueño",
+ "revision": "v4 — estado del peso, tiempos orientativos, agua en volumen, reparto · v5 2026-09-09: +35 platos de despensa (P1-CICLO-30D-DURADERO), escritos a mano · v6 2026-09-09: +20 platos de DENSIDAD PROTEICA (P1-CATALOGO-PROTEINA-DESAYUNO), escritos a mano contra las quince reglas · v7 2026-09-11: +3 recetas de C8 (P1-PLAN-LOTE-11) escritas a mano y juzgadas UNA A UNA por el dueño (las tres «con cambios», aplicados); la cuarta ficha (batida de zapote) se retiró por decisión suya · v7b 2026-09-11: el rótulo «Jugo de limón» (P1-PLAN-LOTE-12), segunda decisión del dueño · v8 2026-09-12: las 19 recetas de P1-CATALOGO-PROTEINA-DESAYUNO (P1-PLAN-LOTE-16, A9) juzgadas UNA A UNA por el dueño en la ficha interactiva — 19/19 «con cambios», aplicados al pie de la letra (el estado del peso dicho en el paso y los gramos en la ficha —regla sin_cantidades—, sartén seco a fuego medio, sin alternativas de horno ni de tostar maní crudo, colador fino, tiempos orientativos). Lo que NO era receta —«aguanta N d», «solo despensa»— era la etiqueta de la ficha para la vida de los INGREDIENTES crudos, no del plato hecho: se corrige la etiqueta, no el dato.",
  "recetas": 193,
  "procedencia": {
   "escrito_por": "LLM (tier flash) offline, prompt de quince reglas (v8)",
   "reglas_nacidas_de": "seis rondas de juicio a ciegas del dueno. Desayunos: 8 -> 11 -> 17 «la serviria» de 20. Almuerzo y cena: 3/16/1 (v1) -> 1/19/0 (v2) -> **8/12/0 (v3)**. Cada regla cierra una queja concreta suya, y DOS de mis reglas las tuvo que corregir el: el criterio de color y el sustituto del termometro.",
-  "veredicto_humano": "v4 NO ha sido juzgada por un humano todavia. La v3 saco 8 «la serviria» / 12 «dudoso» / 0 «no» en almuerzo y cena — el mejor marcador de esa franja — y **ninguna de las 20 notas pedia el sustituto del termometro de vuelta ni discutia los 74 grados**: el fallo de SEGURIDAD de la v1 quedo cerrado y el escaner no lo habia visto. El juicio humano cubre una MUESTRA de 20 por franja: las 140 NO estan revisadas una a una. · EXCEPCIÓN [2026-09-11 · C8]: las 3 recetas de las plantillas que no tenían receta congelada (tpl_0ae55a98c3e3, tpl_4afb7ed71229, tpl_81b612498f83) SÍ las juzgó el dueño una a una en la ficha de curación: las tres «con cambios», aplicados al pie de la letra (el rótulo «Jugo de limón» entró en P1-PLAN-LOTE-12 tras una segunda decisión suya).",
+  "veredicto_humano": "v4 NO ha sido juzgada por un humano todavia. La v3 saco 8 «la serviria» / 12 «dudoso» / 0 «no» en almuerzo y cena — el mejor marcador de esa franja — y **ninguna de las 20 notas pedia el sustituto del termometro de vuelta ni discutia los 74 grados**: el fallo de SEGURIDAD de la v1 quedo cerrado y el escaner no lo habia visto. El juicio humano cubre una MUESTRA de 20 por franja: las 140 NO estan revisadas una a una. · EXCEPCIÓN [2026-09-11 · C8]: las 3 recetas de las plantillas que no tenían receta congelada (tpl_0ae55a98c3e3, tpl_4afb7ed71229, tpl_81b612498f83) SÍ las juzgó el dueño una a una en la ficha de curación: las tres «con cambios», aplicados al pie de la letra (el rótulo «Jugo de limón» entró en P1-PLAN-LOTE-12 tras una segunda decisión suya). · EXCEPCIÓN [2026-09-12 · A9]: las 19 recetas de P1-CATALOGO-PROTEINA-DESAYUNO (tpl_6a5089265418 … tpl_02895f974ed3) también las juzgó el dueño una a una en la ficha A9: 19/19 «con cambios», aplicados (P1-PLAN-LOTE-16). Con C8 son 22 recetas con juicio humano individual; las otras 171 siguen cubiertas sólo por la MUESTRA de 20 por franja.",
   "escaner": "139/140 contra el catalogo VIVO. La unica «sucia» es un FALSO POSITIVO de la capa V5, no un defecto de la receta: «Moro de habichuelas negras con auyama» dice «agrega las habichuelas a la olla con el SOFRITO» y el escaner resuelve «sofrito» a un producto del catalogo que la lista no trae — pero ahi es una RETRORREFERENCIA al sofrito que el paso 3 acaba de hacer con la cebolla y el aceite. No se retoca la prosa a mano (mezclar texto generado y escrito a mano rompe la procedencia); queda anotado como gap del escaner. Y el escaner NO mide seguridad: dio 140/140 con la regla del color.",
   "medido_v2_a_v3": "platos con carne que llevan temperatura interna: 40/40 en ambas. Platos con SUSTITUTO del termometro: 25 -> 0. Pasos que cuecen sin tiempo: 81% -> 18%. Agua sin medida: 95% -> 50%. Los dos ultimos porcentajes estan SOBREESTIMADOS: mi detector cuenta como «paso que cuece» un «sirve el arroz guisado» y un «precalienta el horno», que no llevan tiempo con razon.",
   "sin_cantidades": "los pasos NO llevan cantidades de ingrediente a proposito: asi la misma receta sirve para cualquier porcion y se escribe UNA vez. El agua SI se mide: no es un ingrediente comprado.",
@@ -15,7 +15,8 @@
   "regenerar": "scratchpad/genera_biblioteca_rd.py (reanudable, ~16 min, ~150 llamadas al tier flash). El prompt vive en scratchpad/exp_biblioteca_v8.py.",
   "medido_v3_a_v4": "las cinco causas de las 12 notas «dudoso» de la v3. Estado del peso dicho: 20 % -> 90 % (75 de 83 platos que lo piden). «Agua en vez de aceite» con grasa EN LA LISTA: 3 -> 0 (de 70 platos con grasa). «Dos dedos de agua»: 99 de 140 -> residual, y los que quedan son usos LEGITIMOS (dar el volumen y anadir el dedo como comprobacion; un dedo de agua al fondo para hacer VAPOR, donde el volumen da igual). Sustitutos del termometro: 0, igual que la v3.",
   "hallazgo_del_peso": "el mas serio de la ronda del dueno: «¿los 70 g de arroz se pesan CRUDOS?», «¿los 150 g de chivo incluyen hueso?», «¿los 180 g de gandules son secos o COCIDOS?», «el atun, escurrido», «el huevo, sin cascara». MEDIDO antes de escribir la regla: el catalogo cuenta CRUDO/SECO y porcion comestible, 10 de 10 sondas (arroz 359 kcal contra 360 crudo y 130 cocido; avena 382; lentejas 362) y por fdc_id de USDA — chivo sin hueso 174375, edamame desvainado 168411, atun escurrido 334194, pollo crudo 2646170. nutrition_db, dish_registry y la lista de compras leen el MISMO kcal_per_100g. **El calculo NO esta mal**: lo que faltaba era decir en que estado pesar. Quien pese 70 g de arroz ya cocido come un tercio — el plan acierta y la ejecucion falla. De ahi la regla 14 del prompt.",
-  "curacion_humana_c8": "2026-09-11 · el dueño curó en la ficha interactiva las 4 plantillas sin receta. Frutas picadas con limón: pesar el guineo sin cáscara, exprimir el limón y mezclar suave, la menta fuera del título y opcional en el último paso. Mangú con jamón de pavo a la plancha: el título dice lo que trae (jamón, no salami; sin «versión magra» porque no se especifica la grasa del jamón), la mitad del aceite a la cebolla y el resto al mangú. Filete de pescado blanco al horno con vegetales y batata: batata en cubos de unos 2 cm sobre papel de hornear (sin aceite no se pega), pimienta/orégano/limón opcionales, tiempo ajustado al grosor y los vegetales siguen solos si el pescado termina antes. Batida de zapote: RETIRADA — falta el zapote, ingrediente principal; vuelve cuando el catálogo tenga la fila con pulpa comestible, nutrición y precio verificado. El rótulo «Jugo de limón 10 g» pidió una segunda decisión y la tomó (P1-PLAN-LOTE-12): el constituyente se llama «Jugo de limón», resuelve a la fila «Limón» por alias del catálogo (es lo que la lista compra) y el día determinista dejó de indexar su catálogo por nombre exacto: usa el mismo resolutor que el compilador del registry (deterministic_day._CatalogoPorNombre)."
+  "curacion_humana_c8": "2026-09-11 · el dueño curó en la ficha interactiva las 4 plantillas sin receta. Frutas picadas con limón: pesar el guineo sin cáscara, exprimir el limón y mezclar suave, la menta fuera del título y opcional en el último paso. Mangú con jamón de pavo a la plancha: el título dice lo que trae (jamón, no salami; sin «versión magra» porque no se especifica la grasa del jamón), la mitad del aceite a la cebolla y el resto al mangú. Filete de pescado blanco al horno con vegetales y batata: batata en cubos de unos 2 cm sobre papel de hornear (sin aceite no se pega), pimienta/orégano/limón opcionales, tiempo ajustado al grosor y los vegetales siguen solos si el pescado termina antes. Batida de zapote: RETIRADA — falta el zapote, ingrediente principal; vuelve cuando el catálogo tenga la fila con pulpa comestible, nutrición y precio verificado. El rótulo «Jugo de limón 10 g» pidió una segunda decisión y la tomó (P1-PLAN-LOTE-12): el constituyente se llama «Jugo de limón», resuelve a la fila «Limón» por alias del catálogo (es lo que la lista compra) y el día determinista dejó de indexar su catálogo por nombre exacto: usa el mismo resolutor que el compilador del registry (deterministic_day._CatalogoPorNombre).",
+  "curacion_humana_a9": "2026-09-12 · el dueño curó en la ficha interactiva A9 los 19 platos de P1-CATALOGO-PROTEINA-DESAYUNO y los 9 almuerzos ES de E9 (28/28 «con cambios»). En las recetas DO: el paso dice el ESTADO del peso y los gramos viven en la ficha — regla `sin_cantidades`, la que él mismo validó en seis rondas y en R3 («el paso del vinagre no lleva números»): sin cifras la misma receta sirve para cualquier porción; donde pidió «los 8 g de vinagre» o «3 g de aceite», el paso dice «el vinagre de la ficha», «la MITAD del aceite» y «el resto». Estados dichos: huevo sin cáscara, atún y sardinas escurridos, yuca cruda y pelada, tofu escurrido antes de prensar, claras crudas antes de cocerlas); el casabe se tuesta en sartén seco a fuego medio sin quemarse y sin la alternativa del horno; fuera la alternativa de tostar maní crudo (el constituyente es maní tostado sin sal); colador fino para las claras; la cebolla del mangú se encurte en el vinagre sin agua y el aceite se reparte 3 g + 3 g; el hervor de la cebolla de la pechuga y el limón del atún quedan opcionales; «10 minutos exactos» → «unos 10-12, hasta que clara y yema estén firmes»; la tortilla de yuca se entibia antes del huevo, se le quita la fibra central y no pasa de 2 cm; la tilapia y la pechuga conservan sus 63 °C y 74 °C. «Huevo duro con aguacate y sal mínima» → «Huevo duro con aguacate» (id conservado). Doce técnicas corregidas en la plantilla («crudo» → «tostado + montaje en frío» / «montaje en frío», «batido» → «cocido + batido», «horneado» → «hervido + horneado», «hervido» → «hervido + tostado») con el id conservado vía TEMPLATE_MINT_TECHNIQUE. Lo que pidió «recalcular con el catálogo» ya estaba calculado así (compile_dish_registry suma las filas del catálogo en crudo): ninguna cifra cambia porque ningún constituyente cambió de fila; los 252 mg de sodio del tofu salen de la fila «Salsa de soya» (2 890 mg/100 g, regular). Lo que pidió quitar —«aguanta N d», «solo despensa»— NO es un atributo de la receta ni del plato hecho: es `logistics.days_fresh_min`/`pantry_only` del registry, la vida de los INGREDIENTES crudos que el ciclo de una sola compra necesita («¿puedo cocinar esto el día 25?»); la ficha lo etiquetaba como si fuera la conservación del plato preparado y por eso 28 de 28 veredictos lo señalaron. Se corrige la etiqueta de la ficha, no el dato."
  },
  "estado": "ENGANCHADA pero APAGADA — la lee , gateado por MEALFIT_RECIPE_LIBRARY_SELECT (default False)",
  "por_id": {
@@ -1580,21 +1581,21 @@
   "tpl_6a5089265418": {
    "franja": "desayuno",
    "pasos": [
-    "Pica la cebolla en cubos pequeños y lava bien las espinacas. Bate las claras (se pesan sin cáscara, ya separadas de la yema) junto con el huevo entero hasta que la mezcla quede pareja.",
+    "Pica la cebolla en cubos pequeños y lava bien las espinacas. Bate las claras (se pesan sin cáscara, ya separadas de la yema) junto con el huevo entero, que también se pesa sin cáscara (así está el peso de la ficha), hasta que la mezcla quede pareja.",
     "Calienta el aceite de oliva en un sartén antiadherente a fuego medio y sofríe la cebolla 3-4 minutos, hasta que se ponga translúcida.",
     "Añade las espinacas y remueve 2-3 minutos, hasta que bajen de volumen y el agua que soltaron se haya evaporado del todo. Con el sartén húmedo el revoltillo queda aguado.",
     "Baja el fuego, vierte el batido de huevo y remueve despacio con espátula 3-4 minutos, hasta que cuaje por completo y no quede líquido visible en el sartén. Sazona con la sal al final.",
-    "Tuesta el casabe 1 minuto por lado en un sartén seco o en el horno y sírvelo al lado, para partirlo con la mano."
+    "Tuesta el casabe en un sartén seco a fuego medio, 1 minuto por lado, vigilando que no se queme, y sírvelo al lado para partirlo con la mano."
    ]
   },
   "tpl_36409c4726eb": {
    "franja": "desayuno",
    "pasos": [
-    "Corta la cebolla en aros finos y déjala en un envase con agua fría y el vinagre al menos 15 minutos, mientras haces el resto: sin el vinagre no se encurte, sólo se remoja.",
+    "Corta la cebolla en aros finos y mézclala en un envase con el vinagre de la ficha, sin agua. Déjala reposar al menos 15 minutos mientras haces el resto, removiendo de vez en cuando para que todos los aros toquen el vinagre.",
     "Pela el plátano verde (se pesa ya pelado), córtalo en trozos de dos dedos y hiérvelo 15-20 minutos en agua que lo cubra, sin sal, hasta que un tenedor entre sin resistencia.",
-    "Escurre el plátano y májalo caliente añadiendo poco a poco un chorro del agua de la cocción y parte del aceite de oliva, hasta que quede un puré liso. Sazona ahora con la sal: si va en el agua de hervor se queda en el fregadero y el plato no la lleva. Si esperas a que enfríe, se pone gomoso.",
+    "Escurre el plátano y májalo caliente añadiendo poco a poco un chorro del agua de la cocción y la MITAD del aceite de oliva, hasta que quede un puré liso. Sazona el puré con la sal de la ficha. Si esperas a que enfríe, se pone gomoso.",
     "Escurre bien el atún (se pesa escurrido, sin el líquido de la lata) y desmenúzalo con un tenedor.",
-    "Sirve el mangú, coloca el atún encima y remata con la cebolla escurrida y el aceite que quedó."
+    "Sirve el mangú, coloca el atún encima, remata con la cebolla escurrida y riega por encima el resto del aceite (la otra mitad)."
    ]
   },
   "tpl_b991edb7ec87": {
@@ -1603,51 +1604,51 @@
     "Pon la leche a calentar en una olla pequeña a fuego medio y añade la avena en hojuelas (se pesa cruda) cuando empiece a humear.",
     "Cocina 5-6 minutos removiendo, hasta que quede cremosa. Si espesa demasiado, añade un chorro de agua caliente y sigue removiendo.",
     "Baja el fuego al mínimo y añade las claras (se pesan sin cáscara) en hilo mientras remueves SIN parar, 3-4 minutos, hasta que estén completamente cuajadas y no quede brillo crudo. Si las echas de golpe o con el fuego alto, cuajan en grumos en vez de integrarse.",
-    "Retira del fuego. Usa maní tostado sin sal: si ya viene tostado, sólo pícalo grueso; si está crudo, tuéstalo en un sartén seco 2-3 minutos hasta que huela. Espárcelo por encima."
+    "Retira del fuego. Pica grueso el maní tostado sin sal y espárcelo por encima."
    ]
   },
   "tpl_7f0b6fc54350": {
    "franja": "desayuno",
    "pasos": [
     "Tuesta la avena en hojuelas (se pesa cruda) en un sartén seco a fuego medio 3-4 minutos, moviéndola, hasta que tome color dorado y huela a tostado.",
-    "Usa maní tostado sin sal: si ya viene tostado, sólo pícalo grueso; si está crudo, tuéstalo en el mismo sartén 2-3 minutos y pícalo después.",
-    "Pasa la avena y el maní a un plato y déjalos enfriar 5 minutos. Calientes sobre el yogurt lo aguan y se ablandan enseguida.",
+    "Pica grueso el maní tostado sin sal.",
+    "Pasa la avena y el maní a un plato y déjalos enfriar del todo antes de montar: calientes sobre el yogurt lo aguan y se ablandan enseguida.",
     "Sirve el yogurt frío en un envase hondo y reparte la avena y el maní por encima justo antes de comer."
    ]
   },
   "tpl_4e48570063d2": {
    "franja": "desayuno",
    "pasos": [
-    "Pica la cebolla y el tomate en cubos pequeños. Escurre las sardinas en aceite (se pesan escurridas, sin el aceite de la lata).",
+    "Pica la cebolla y el tomate en cubos pequeños. Escurre las sardinas en aceite (el peso de la ficha es de sardinas escurridas, sin el aceite de la lata).",
     "Calienta el aceite de oliva en un sartén a fuego medio y sofríe la cebolla 3-4 minutos; añade el tomate y cocina otros 4-5 minutos, aplastándolo con la cuchara hasta que suelte su jugo y se haga salsa.",
     "Añade las sardinas enteras, baja el fuego y déjalas 3-4 minutos sólo para que tomen el guiso. No las revuelvas mucho o se deshacen del todo.",
-    "Tuesta el casabe 1 minuto por lado en un sartén seco y sírvelo al lado para acompañar."
+    "Tuesta el casabe en un sartén seco a fuego medio, 1 minuto por lado, vigilando que no se queme, y sírvelo al lado para acompañar."
    ]
   },
   "tpl_cc64fe57c76f": {
    "franja": "desayuno",
    "pasos": [
-    "Cuece las claras (se pesan sin cáscara) antes de batirlas: viértelas en una olla pequeña con media taza de agua a fuego bajo y remueve 3-4 minutos, hasta que cuajen. La clara cruda no se bate en frío por seguridad, y esto no es opcional.",
-    "Escurre las claras cuajadas y BOTA esa agua —no va al vaso— y deja que se templen 5 minutos.",
-    "Pela el guineo (se pesa sin cáscara) y ponlo en la licuadora con la leche, la avena en hojuelas (se pesa cruda; usa una apta para tomar sin cocer) y las claras cuajadas.",
+    "Pesa las claras crudas y sin cáscara (así está el peso de la ficha) y cuécelas antes de batirlas: viértelas en una olla pequeña con media taza de agua a fuego bajo y remueve hasta que cuajen completamente y no quede nada líquido ni brillante; los 3-4 minutos son orientativos. La clara cruda no se bate en frío por seguridad, y esto no es opcional.",
+    "Escurre las claras cuajadas con un colador fino, para no perder trozos con el agua, y BOTA esa agua —no va al vaso—; déjalas templar 5 minutos.",
+    "Pela el guineo (se pesa sin cáscara) y ponlo en la licuadora con la leche, la avena en hojuelas apta para consumo sin cocción (se pesa cruda) y las claras cuajadas.",
     "Licúa 45-60 segundos, hasta que no queden trozos de avena ni grumos de clara. Prueba la textura antes de servir: si queda granulosa, licúa otros 20 segundos. Sirve enseguida, que la avena sigue absorbiendo."
    ]
   },
   "tpl_e1265f14a8b4": {
    "franja": "desayuno",
    "pasos": [
-    "Tuesta el casabe 1 minuto por lado en un sartén seco y pártelo en trozos del tamaño de la palma.",
-    "Corta el tomate en cubos y el aguacate (se pesa sin piel ni semilla) en láminas, justo antes de servir para que el aguacate no se oscurezca.",
-    "Sirve el queso cottage tal cual, con su suero: sus macros son las del producto sin escurrir, y escurrirlo dejaría el plato por debajo de lo que dice la ficha. Reparte el tomate por encima y coloca el aguacate y el casabe al lado."
+    "Tuesta el casabe en un sartén seco a fuego medio, 1 minuto por lado, sin que se queme, y pártelo en trozos del tamaño de la palma.",
+    "Lava el tomate y córtalo en cubos; corta el aguacate (se pesa sin piel ni semilla) en láminas justo antes de servir, para que no se oscurezca.",
+    "Mezcla el queso cottage con su suero y pésalo sin escurrir (así está el peso de la ficha). Reparte el tomate por encima y coloca el aguacate y el casabe al lado."
    ]
   },
   "tpl_8b37ecfd46e1": {
    "franja": "cena",
    "pasos": [
-    "Precalienta el horno a 200 °C y pela la yuca (se pesa ya pelada).",
+    "Precalienta el horno a 200 °C. Pela la yuca dulce y pésala cruda y ya pelada (así está el peso de la ficha).",
     "Corta la yuca en trozos y hiérvela en agua que la cubra, sin sal, 20-25 minutos, hasta que un tenedor entre sin resistencia.",
     "Mientras la yuca hierve, corta la cebolla en aros finos, coloca los filetes de tilapia (se pesan crudos) en una bandeja, úntalos con el aceite de oliva y cúbrelos con la cebolla. Hornea 12-15 minutos: el pescado está listo cuando el termómetro marca 63 °C en la parte más gruesa del filete.",
-    "Escurre la yuca y sazónala ahora con la sal: en el agua de hervor se iría por el fregadero.",
+    "Escurre la yuca y desecha el agua de la cocción, retira la fibra central de cada trozo y sazónala con la sal de la ficha.",
     "Sirve la tilapia con su cebolla sobre la yuca y riega por encima el jugo de la bandeja."
    ]
   },
@@ -1655,94 +1656,94 @@
    "franja": "merienda",
    "pasos": [
     "Pon los huevos en una olla, cúbrelos con agua fría —que sobrepase unos dos dedos— y llévalos a hervor a fuego alto.",
-    "Cuando rompa el hervor, baja a fuego medio y cuenta 10 minutos exactos. Pásalos enseguida a un envase con agua fría para cortar la cocción; así la yema no coge el borde gris.",
-    "Pela los huevos (se pesan sin cáscara) y pártelos por la mitad. Corta el aguacate (se pesa sin piel ni semilla) en láminas.",
-    "Sazona con la sal justo antes de comer, que es poca a propósito, y sirve."
+    "Cuando rompa el hervor, baja a fuego medio y cuenta unos 10-12 minutos, hasta que clara y yema estén firmes. Pásalos enseguida a un envase con agua fría para cortar la cocción; así la yema no coge el borde gris.",
+    "Pela los huevos (el peso de la ficha es de huevo sin cáscara) y pártelos por la mitad. Corta el aguacate (se pesa sin piel ni semilla) en láminas.",
+    "Añade la sal de la ficha justo antes de comer y sirve."
    ]
   },
   "tpl_af7f6c3725a6": {
    "franja": "merienda",
    "pasos": [
-    "Escurre bien el atún (se pesa escurrido, sin el agua de la lata) y desmenúzalo con un tenedor.",
-    "Pica la cebolla muy fina y mézclala con el atún. Si tienes limón, exprime unas gotas por encima: le devuelve humedad y le quita el sabor a lata.",
-    "Tuesta el casabe 1 minuto por lado en un sartén seco, pártelo en trozos y úsalo para llevar el atún."
+    "Escurre bien el atún en agua (el peso de la ficha es de atún escurrido, sin el agua de la lata) y desmenúzalo con un tenedor.",
+    "Pica la cebolla muy fina y mézclala con el atún. Opcional: unas gotas de limón por encima le devuelven humedad y le quitan el sabor a lata.",
+    "Tuesta el casabe en un sartén seco a fuego medio, 1 minuto por lado, vigilando que no se queme; pártelo en trozos y úsalo para llevar el atún."
    ]
   },
   "tpl_b29321fc8917": {
    "franja": "merienda",
    "pasos": [
     "Pela el guineo (se pesa sin cáscara) y córtalo en ruedas justo antes de comer.",
-    "Si lo llevas fuera, lleva el guineo entero y sin pelar, y móntalo al momento: cortado con antelación se oscurece y suelta agua sobre el yogurt.",
+    "Si lo llevas fuera, transporta el yogurt en una bolsa térmica con hielo o un acumulador de frío, lleva el guineo entero y sin pelar, y móntalo al momento pesándolo ya pelado (así está el peso de la ficha): cortado con antelación se oscurece y suelta agua sobre el yogurt.",
     "Sirve el yogurt frío en un envase hondo y coloca el guineo encima."
    ]
   },
   "tpl_3a0517b6dc80": {
    "franja": "merienda",
    "pasos": [
-    "Pela la lechosa, quítale las semillas con una cuchara y córtala en cubos (se pesa ya limpia, sin cáscara ni semillas).",
-    "Sirve el queso cottage tal cual, con su suero: sus macros son las del producto sin escurrir.",
+    "Lava la lechosa antes de pelarla; pélala, quítale las semillas con una cuchara y córtala en cubos (se pesa ya limpia, sin cáscara ni semillas).",
+    "Mezcla el queso cottage con su suero y pésalo sin escurrir (así está el peso de la ficha); sírvelo frío.",
     "Reparte la lechosa por encima justo antes de comer, para que no suelte agua sobre el queso."
    ]
   },
   "tpl_6a5fe80136a7": {
    "franja": "merienda",
    "pasos": [
-    "Escurre las sardinas en aceite (se pesan escurridas, sin el aceite de la lata) y ponlas en un plato.",
+    "Escurre las sardinas en aceite (el peso de la ficha es de sardinas escurridas, con su espina, sin el aceite de la lata) y ponlas en un plato.",
     "Aplástalas un poco con el tenedor contra el plato: se reparten mejor sobre el casabe y no se caen al partirlo. La espina central es blanda, se come, y es de donde viene el calcio.",
-    "Tuesta el casabe 1 minuto por lado en un sartén seco, pártelo en trozos y úsalo para llevar las sardinas."
+    "Tuesta el casabe en un sartén seco a fuego medio, 1 minuto por lado, vigilando que no se queme; pártelo en trozos y úsalo para llevar las sardinas."
    ]
   },
   "tpl_53d21a09b17f": {
    "franja": "merienda",
    "pasos": [
-    "Usa pechuga sin piel ni hueso (se pesa cruda). Ponla en una olla, cúbrela con agua que la sobrepase y hiérvela a fuego medio 15-18 minutos. Está segura cuando el termómetro marca 74 °C en el centro de la parte más gruesa.",
+    "Usa pechuga de pollo sin piel ni hueso y pésala cruda (así está el peso de la ficha). Ponla en una olla, cúbrela con agua que la sobrepase y hiérvela a fuego medio 15-18 minutos. Está segura cuando el termómetro marca 74 °C en el centro de la parte más gruesa.",
     "Saca la pechuga, guarda el caldo y déjala templar 5 minutos. Desmenúzala con dos tenedores.",
-    "Pica la cebolla muy fina. Si la prefieres suave, dale un hervor de 1 minuto en el caldo caliente antes de mezclarla.",
-    "Mezcla el pollo con la cebolla y humedécelo con un chorro de su propio caldo: seco, con el casabe cuesta comerlo. Tuesta el casabe 1 minuto por lado en un sartén seco y sirve."
+    "Pica la cebolla muy fina. Opcional: si la prefieres suave, dale un hervor de 1 minuto en el caldo caliente antes de mezclarla.",
+    "Mezcla el pollo con la cebolla y humedécelo con un chorro de su propio caldo: seco, con el casabe cuesta comerlo. Tuesta el casabe en un sartén seco a fuego medio, 1 minuto por lado, vigilando que no se queme, y sirve."
    ]
   },
   "tpl_385a17ed7bed": {
    "franja": "merienda",
    "pasos": [
-    "Escurre el tofu (se pesa escurrido) y déjalo 10 minutos entre dos paños con un plato encima para sacarle el agua: si queda húmedo, se cuece en vez de dorarse.",
-    "Córtalo en cubos de dos dedos y pica la cebolla en tiras.",
-    "Calienta el aceite de oliva en un sartén a fuego medio-alto y dora los cubos 6-8 minutos en total, volteándolos para que se doren dos o tres caras; no los muevas entre volteos.",
+    "Escurre el tofu y pésalo escurrido, antes de prensarlo (así está el peso de la ficha); déjalo 10 minutos entre dos paños con un plato encima para sacarle el agua: si queda húmedo, se cuece en vez de dorarse.",
+    "Córtalo en cubos de unos 2 cm y pica la cebolla en tiras.",
+    "Calienta el aceite de oliva en un sartén antiadherente a fuego medio-alto y dora los cubos 6-8 minutos en total, volteándolos para que se doren dos o tres caras; no los muevas entre volteos.",
     "Añade la cebolla y saltea 3-4 minutos más; apaga el fuego, riega la salsa de soya por encima y remueve. La soya al final: si entra con el fuego alto se quema y amarga."
    ]
   },
   "tpl_02895f974ed3": {
    "franja": "merienda",
    "pasos": [
-    "Corta el queso de hoja en lonjas, el tomate en ruedas y la cebolla en aros muy finos.",
+    "Lava el tomate y pela la cebolla. Corta el queso de hoja en lonjas, el tomate en ruedas y la cebolla en aros muy finos.",
     "Monta el plato alternando queso y tomate, y reparte la cebolla por encima.",
-    "Cómelo enseguida. Si lo prefieres, déjalo reposar 5 minutos: el tomate suelta jugo y el plato queda más jugoso, aunque el queso de hoja apenas lo absorbe."
+    "Cómelo enseguida. Opcional: déjalo reposar 5 minutos para que el tomate suelte jugo y el plato quede más jugoso, aunque el queso de hoja apenas lo absorbe."
    ]
   },
   "tpl_86da7bdca661": {
    "franja": "desayuno",
    "pasos": [
-    "Usa yuca dulce, no amarga. Pélala (se pesa ya pelada), córtala en trozos y hiérvela en agua que la cubra 20-25 minutos, hasta que un tenedor entre sin resistencia.",
-    "Escurre la yuca y BOTA el agua de la cocción: es la que arrastra sus compuestos amargos, y rallarla cruda y dorarla no hace ese trabajo. Májala caliente hasta que quede una masa lisa.",
-    "Pica la cebolla en cubos pequeños, desmenuza el queso blanco y escurre bien el atún (se pesa escurrido, sin el agua de la lata).",
-    "Bate los huevos (se pesan sin cáscara) y mézclalos con la yuca majada, la cebolla, el atún y el queso hasta que todo quede repartido. Sazona con la sal al final.",
-    "Calienta el aceite de oliva en un sartén antiadherente a fuego medio-bajo, vierte la mezcla y aplánala. Tapa y cocina 7-8 minutos; voltea con ayuda de un plato y cocina 5-6 minutos más, destapada, hasta que un palillo salga limpio."
+    "Usa yuca dulce, no amarga. Pélala y pésala cruda y ya pelada (así está el peso de la ficha), córtala en trozos y hiérvela en agua que la cubra 20-25 minutos, hasta que un tenedor entre sin resistencia.",
+    "Escurre la yuca y BOTA el agua de la cocción: es la que arrastra sus compuestos amargos, y rallarla cruda y dorarla no hace ese trabajo. Retira la fibra central de cada trozo y májala caliente hasta que quede una masa lisa.",
+    "Pica la cebolla muy fina, desmenuza el queso blanco y escurre bien el atún (se pesa escurrido, sin el agua de la lata).",
+    "Deja entibiar la yuca majada: caliente cuajaría el huevo al mezclar. Bate los huevos (se pesan sin cáscara) y mézclalos con la yuca, la cebolla, el atún y el queso hasta que todo quede repartido. Sazona con la sal al final.",
+    "Calienta el aceite de oliva en un sartén antiadherente a fuego medio-bajo, vierte la mezcla y aplánala en una tortilla de no más de 2 cm de grosor. Tapa y cocina 7-8 minutos; voltea con ayuda de un plato y cocina 5-6 minutos más, destapada, hasta que el centro esté completamente cuajado (un palillo sale limpio)."
    ]
   },
   "tpl_612f9a6638b2": {
    "franja": "merienda",
    "pasos": [
-    "Cuece las claras (se pesan sin cáscara): viértelas en una olla pequeña con media taza de agua a fuego bajo y remueve 3-4 minutos, hasta que cuajen. La clara cruda no se bate en frío por seguridad.",
-    "Escurre las claras y BOTA esa agua —no va al vaso—; déjalas templar 5 minutos.",
-    "Ponlas en la licuadora con la leche y la avena en hojuelas (se pesa cruda; usa una apta para tomar sin cocer) y licúa 45-60 segundos.",
+    "Pesa las claras crudas y sin cáscara (así está el peso de la ficha) y cuécelas: viértelas en una olla pequeña con media taza de agua a fuego bajo y remueve hasta que cuajen completamente y no quede nada líquido; los 3-4 minutos son orientativos. La clara cruda no se bate en frío por seguridad.",
+    "Escurre las claras con un colador fino, para no perder trozos con el agua, y BOTA esa agua —no va al vaso—; déjalas templar 5 minutos.",
+    "Ponlas en la licuadora con la leche y la avena en hojuelas apta para consumo sin cocción (se pesa cruda) y licúa 45-60 segundos.",
     "Prueba la textura antes de servir: si quedó granulosa por la clara, licúa otros 20 segundos. Sirve enseguida."
    ]
   },
   "tpl_7ec10278eed6": {
    "franja": "merienda",
    "pasos": [
-    "Tuesta el casabe 1 minuto por lado en un sartén seco y pártelo en trozos del tamaño de la palma.",
-    "Corta el tomate en cubos pequeños y déjalo escurrir un momento en un colador: si lo pones con todo su jugo, el queso se aguacha.",
-    "Sirve el queso cottage tal cual, con su suero —sus macros son las del producto sin escurrir—, reparte el tomate por encima y usa el casabe para llevarlo."
+    "Tuesta el casabe en un sartén seco a fuego medio, 1 minuto por lado, vigilando que no se queme, y pártelo en trozos del tamaño de la palma.",
+    "Lava el tomate, córtalo en cubos pequeños y déjalo escurrir un momento en un colador: si lo pones con todo su jugo, el queso se aguacha.",
+    "Mezcla el queso cottage con su suero y pésalo sin escurrir (así está el peso de la ficha); sírvelo frío con el tomate por encima y el casabe para llevarlo."
    ]
   },
   "tpl_fd506c06d18d": {

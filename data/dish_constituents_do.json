@@ -1,5 +1,5 @@
 {
- "_note": "[P1-ARQ25-F6-DISH-REGISTRY] constituents curados para las plantillas DO. Fuente original: componentes de dominican_dish_recipes.json (60 recetas con gramos) + ítems con nombre exacto del catálogo, generados por scripts/build_dish_constituents_do.py. [P1-PLAN-LOTE-11 · 2026-09-11] ESTE JSON ES EL SSOT: desde las curaciones del 09-09/09-10 (vinagre del mangú, queso de papa→gouda, despensa de su mercado, tope de sal) se edita a mano y el script ya NO lo reproduce (medido al aplicar C8: 75 entradas divergen y dos plantillas quedarían sin constituyentes). Edita AQUÍ. [P1-PLAN-LOTE-13 · 2026-09-12] El generador se RETIRÓ (última versión: git show e4528a22:scripts/build_dish_constituents_do.py); la coherencia con dish_templates.json la comprueba scripts/check_dish_constituents_do.py (toda plantilla sin constituyentes inline tiene entrada, ninguna huérfana, gramos > 0, declared_unresolved vacío) y la resolución contra el catálogo, scripts/compile_dish_registry.py --check.",
+ "_note": "[P1-ARQ25-F6-DISH-REGISTRY] constituents curados para las plantillas DO. Fuente original: componentes de dominican_dish_recipes.json (60 recetas con gramos) + ítems con nombre exacto del catálogo, generados por scripts/build_dish_constituents_do.py. [P1-PLAN-LOTE-11 · 2026-09-11] ESTE JSON ES EL SSOT: desde las curaciones del 09-09/09-10 (vinagre del mangú, queso de papa→gouda, despensa de su mercado, tope de sal) se edita a mano y el script ya NO lo reproduce (medido al aplicar C8: 75 entradas divergen y dos plantillas quedarían sin constituyentes). Edita AQUÍ. [P1-PLAN-LOTE-13 · 2026-09-12] El generador se RETIRÓ (última versión: git show e4528a22:scripts/build_dish_constituents_do.py); la coherencia con dish_templates.json la comprueba scripts/check_dish_constituents_do.py (toda plantilla sin constituyentes inline tiene entrada, ninguna huérfana, gramos > 0, declared_unresolved vacío) y la resolución contra el catálogo, scripts/compile_dish_registry.py --check. [P1-PLAN-LOTE-16 · 2026-09-12 · A9] `spec` por constituyente: el estado en que se pesa o cómo se usa, dictado por el dueño plato a plato en la ficha A9 (escurrido, sin cáscara, en hojuelas, tostado sin sal…). El `name` sigue siendo la fila del catálogo: es lo que resuelve, compra y calcula; `spec` no cambia la nutrición. «Huevo duro con aguacate y sal mínima» pasó a «Huevo duro con aguacate».",
  "schema_version": 1,
  "templates": {
   "Almendras fileteadas con ciruelas pasas": {
@@ -3368,11 +3368,13 @@
    "constituents": [
     {
      "grams": 160.0,
-     "name": "Clara de huevo"
+     "name": "Clara de huevo",
+     "spec": "pesadas sin cáscara, ya separadas de la yema"
     },
     {
      "grams": 50.0,
-     "name": "Huevo"
+     "name": "Huevo",
+     "spec": "entero, pesado sin cáscara"
     },
     {
      "grams": 60.0,
@@ -3402,11 +3404,13 @@
    "constituents": [
     {
      "grams": 170.0,
-     "name": "Plátano verde"
+     "name": "Plátano verde",
+     "spec": "pesado ya pelado"
     },
     {
      "grams": 110.0,
-     "name": "Atún en agua"
+     "name": "Atún en agua",
+     "spec": "escurrido, sin el líquido de la lata"
     },
     {
      "grams": 40.0,
@@ -3422,7 +3426,8 @@
     },
     {
      "grams": 8.0,
-     "name": "Vinagre blanco"
+     "name": "Vinagre blanco",
+     "spec": "para encurtir la cebolla, sin agua"
     }
    ],
    "declared_unresolved": [],
@@ -3432,7 +3437,8 @@
    "constituents": [
     {
      "grams": 55.0,
-     "name": "Avena"
+     "name": "Avena",
+     "spec": "en hojuelas, pesada cruda"
     },
     {
      "grams": 200.0,
@@ -3440,11 +3446,13 @@
     },
     {
      "grams": 110.0,
-     "name": "Clara de huevo"
+     "name": "Clara de huevo",
+     "spec": "pesadas sin cáscara"
     },
     {
      "grams": 15.0,
-     "name": "Maní"
+     "name": "Maní",
+     "spec": "tostado, sin sal"
     }
    ],
    "declared_unresolved": [],
@@ -3458,11 +3466,13 @@
     },
     {
      "grams": 35.0,
-     "name": "Avena"
+     "name": "Avena",
+     "spec": "en hojuelas, pesada cruda"
     },
     {
      "grams": 18.0,
-     "name": "Maní"
+     "name": "Maní",
+     "spec": "tostado, sin sal"
     }
    ],
    "declared_unresolved": [],
@@ -3472,7 +3482,8 @@
    "constituents": [
     {
      "grams": 95.0,
-     "name": "Sardinas en lata"
+     "name": "Sardinas en lata",
+     "spec": "en aceite, escurridas (fila USDA 175139: en aceite, escurridas, con espina)"
     },
     {
      "grams": 45.0,
@@ -3502,15 +3513,18 @@
     },
     {
      "grams": 110.0,
-     "name": "Clara de huevo"
+     "name": "Clara de huevo",
+     "spec": "pesadas crudas, sin cáscara; se cuecen antes de batir"
     },
     {
      "grams": 45.0,
-     "name": "Avena"
+     "name": "Avena",
+     "spec": "en hojuelas, apta para consumo sin cocción; pesada cruda"
     },
     {
      "grams": 70.0,
-     "name": "Guineo"
+     "name": "Guineo",
+     "spec": "pesado sin cáscara"
     }
    ],
    "declared_unresolved": [],
@@ -3520,7 +3534,8 @@
    "constituents": [
     {
      "grams": 200.0,
-     "name": "Queso cottage"
+     "name": "Queso cottage",
+     "spec": "sin escurrir, con su suero"
     },
     {
      "grams": 40.0,
@@ -3532,7 +3547,8 @@
     },
     {
      "grams": 40.0,
-     "name": "Aguacate"
+     "name": "Aguacate",
+     "spec": "pesado sin piel ni semilla"
     }
    ],
    "declared_unresolved": [],
@@ -3542,11 +3558,13 @@
    "constituents": [
     {
      "grams": 140.0,
-     "name": "Tilapia"
+     "name": "Tilapia",
+     "spec": "filete, pesado crudo"
     },
     {
      "grams": 160.0,
-     "name": "Yuca"
+     "name": "Yuca",
+     "spec": "dulce, pesada cruda y pelada"
     },
     {
      "grams": 40.0,
@@ -3564,29 +3582,12 @@
    "declared_unresolved": [],
    "origin": "curated"
   },
-  "Huevo duro con aguacate y sal mínima": {
-   "constituents": [
-    {
-     "grams": 100.0,
-     "name": "Huevo"
-    },
-    {
-     "grams": 40.0,
-     "name": "Aguacate"
-    },
-    {
-     "grams": 0.5,
-     "name": "Sal"
-    }
-   ],
-   "declared_unresolved": [],
-   "origin": "curated"
-  },
   "Atún en agua con casabe y cebolla": {
    "constituents": [
     {
      "grams": 85.0,
-     "name": "Atún en agua"
+     "name": "Atún en agua",
+     "spec": "escurrido, sin el líquido de la lata"
     },
     {
      "grams": 28.0,
@@ -3608,7 +3609,8 @@
     },
     {
      "grams": 60.0,
-     "name": "Guineo"
+     "name": "Guineo",
+     "spec": "pesado sin cáscara"
     }
    ],
    "declared_unresolved": [],
@@ -3618,11 +3620,13 @@
    "constituents": [
     {
      "grams": 150.0,
-     "name": "Queso cottage"
+     "name": "Queso cottage",
+     "spec": "sin escurrir, con su suero"
     },
     {
      "grams": 100.0,
-     "name": "Lechosa"
+     "name": "Lechosa",
+     "spec": "pesada limpia, sin cáscara ni semillas"
     }
    ],
    "declared_unresolved": [],
@@ -3636,11 +3640,13 @@
     },
     {
      "grams": 100.0,
-     "name": "Clara de huevo"
+     "name": "Clara de huevo",
+     "spec": "pesadas crudas, sin cáscara; se cuecen antes de batir"
     },
     {
      "grams": 25.0,
-     "name": "Avena"
+     "name": "Avena",
+     "spec": "en hojuelas, apta para consumo sin cocción; pesada cruda"
     }
    ],
    "declared_unresolved": [],
@@ -3650,7 +3656,8 @@
    "constituents": [
     {
      "grams": 65.0,
-     "name": "Sardinas en lata"
+     "name": "Sardinas en lata",
+     "spec": "en aceite, con espina, escurridas (fila USDA 175139)"
     },
     {
      "grams": 28.0,
@@ -3664,7 +3671,8 @@
    "constituents": [
     {
      "grams": 85.0,
-     "name": "Pechuga de pollo"
+     "name": "Pechuga de pollo",
+     "spec": "sin piel ni hueso, pesada cruda"
     },
     {
      "grams": 28.0,
@@ -3682,11 +3690,13 @@
    "constituents": [
     {
      "grams": 140.0,
-     "name": "Tofu firme"
+     "name": "Tofu firme",
+     "spec": "pesado escurrido, antes de prensar"
     },
     {
      "grams": 8.0,
-     "name": "Salsa de soya"
+     "name": "Salsa de soya",
+     "spec": "regular (fila del catálogo: 2 890 mg de sodio/100 g); con salsa baja en sodio el plato baja"
     },
     {
      "grams": 30.0,
@@ -3722,15 +3732,18 @@
    "constituents": [
     {
      "grams": 140.0,
-     "name": "Yuca"
+     "name": "Yuca",
+     "spec": "dulce, pesada cruda y pelada"
     },
     {
      "grams": 100.0,
-     "name": "Huevo"
+     "name": "Huevo",
+     "spec": "pesado sin cáscara"
     },
     {
      "grams": 85.0,
-     "name": "Atún en agua"
+     "name": "Atún en agua",
+     "spec": "escurrido, sin el líquido de la lata"
     },
     {
      "grams": 25.0,
@@ -3756,7 +3769,8 @@
    "constituents": [
     {
      "grams": 160.0,
-     "name": "Queso cottage"
+     "name": "Queso cottage",
+     "spec": "sin escurrir, con su suero"
     },
     {
      "grams": 30.0,
@@ -3765,6 +3779,26 @@
     {
      "grams": 70.0,
      "name": "Tomate"
+    }
+   ],
+   "declared_unresolved": [],
+   "origin": "curated"
+  },
+  "Huevo duro con aguacate": {
+   "constituents": [
+    {
+     "grams": 100.0,
+     "name": "Huevo",
+     "spec": "cocido duro; los 100 g son huevo sin cáscara (≈ 2 huevos), nutrición de la fila «Huevo» del catálogo"
+    },
+    {
+     "grams": 40.0,
+     "name": "Aguacate",
+     "spec": "pesado sin piel ni semilla"
+    },
+    {
+     "grams": 0.5,
+     "name": "Sal"
     }
    ],
    "declared_unresolved": [],

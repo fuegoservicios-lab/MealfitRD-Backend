@@ -168,6 +168,33 @@ TEMPLATE_ALIASES: dict[str, str] = {
     "Frutas picadas con limón": "Frutas picadas con limón y menta",
     "Mangú con jamón de pavo a la plancha": "Mangú con salami de pavo a la plancha (versión magra)",
     "Filete de pescado blanco al horno con vegetales y batata": "Chillo al horno con vegetales y batata asada",
+    # [P1-PLAN-LOTE-16 · 2026-09-12 · A9] Dos renombres del dueño en la ficha de los 28 platos pendientes: la «sal
+    # mínima» no es parte del nombre de un plato, y los macarrones eran coditos con gouda (el catálogo no tiene «queso
+    # curado»; el título prometía lo que no traía).
+    "Huevo duro con aguacate": "Huevo duro con aguacate y sal mínima",
+    "Coditos con salsa de tomate y queso gouda": "Macarrones con salsa de tomate y queso curado",
+}
+# [P1-PLAN-LOTE-16 · 2026-09-12 · A9] La TÉCNICA también entra en el id (`mint_template_id`), así que corregirla lo
+# cambiaría igual que un renombre. El dueño corrigió 16 técnicas en la ficha A9 («crudo» no describe un plato con
+# casabe tostado; «batido» esconde que las claras se cuecen). Nombre ACTUAL → técnica con la que se ACUÑÓ el id.
+# tooltip-anchor: TEMPLATE_MINT_TECHNIQUE (test_p1_plan_lote_16.py)
+TEMPLATE_MINT_TECHNIQUE: dict[str, str] = {
+    "Yogurt griego con avena tostada y maní": "crudo",
+    "Batida de leche con claras, avena y guineo": "batido",
+    "Queso cottage con casabe, tomate y aguacate": "crudo",
+    "Tilapia al horno con yuca y cebolla": "horneado",
+    "Atún en agua con casabe y cebolla": "crudo",
+    "Yogurt griego con guineo": "crudo",
+    "Queso cottage con lechosa": "crudo",
+    "Batida de leche con claras y avena": "batido",
+    "Sardinas en lata con casabe": "crudo",
+    "Queso cottage con casabe y tomate": "crudo",
+    "Pechuga desmenuzada con casabe y cebolla": "hervido",
+    "Queso de hoja con tomate y cebolla": "crudo",
+    "Coditos con salsa de tomate y queso gouda": "guisado",
+    "Ensalada de garbanzos con huevo duro, aceitunas y cebolla": "frío",
+    "Trinxat de col y patata con huevo": "salteado",
+    "Arroz a la cubana con huevo y salsa de tomate": "sartén",
 }
 TEMPLATE_VERSION = 1
 
@@ -183,11 +210,12 @@ def library_key_for_path(path: str) -> str:
 def mint_template_id(template: dict, library: str = "do") -> str:
     name = str(template.get("name") or "")
     minted_name = TEMPLATE_ALIASES.get(name, name)
+    minted_technique = TEMPLATE_MINT_TECHNIQUE.get(name, template.get("technique"))  # [P1-PLAN-LOTE-16]
     raw = "|".join([
         str(library or "do").lower(),
         _norm(template.get("base")),
         _norm(minted_name),
-        _norm(template.get("technique")),
+        _norm(minted_technique),
     ])
     return "tpl_" + hashlib.sha256(raw.encode("utf-8")).hexdigest()[:12]
 

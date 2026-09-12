@@ -61,7 +61,7 @@ def _script(name: str):
 
 NUEVAS_ES = {
     "Lentejas estofadas con patata y zanahoria", "Garbanzos guisados con pimentón y huevo duro",
-    "Arroz a la cubana con huevo y salsa de tomate", "Macarrones con salsa de tomate y queso curado",
+    "Arroz a la cubana con huevo y salsa de tomate", "Coditos con salsa de tomate y queso gouda",  # [P1-PLAN-LOTE-16 · A9] renombrado por el dueño
     "Judías blancas estofadas con patata, laurel y pimentón", "Ensalada de garbanzos con huevo duro, aceitunas y cebolla",
     "Patatas guisadas con huevo escalfado y pimentón", "Arroz con garbanzos, zanahoria y pimentón",
     "Trinxat de col y patata con huevo",
@@ -152,9 +152,13 @@ def test_el_reanclaje_dice_lo_que_midio_y_deja_las_altas_es_pendientes_del_dueno
     co = rev["profiles"]["colombia_casera"]["decisions"][-1]
     assert "P1-PLAN-LOTE-13" in co and "Borojó" in co and "fósforo" in co, "el único cambio de CO es un dato derivado y se dice"
     es = rev["profiles"]["spain_mediterranea"]
-    assert "E9" in es["decisions"][-1] and "1 → 10" in es["decisions"][-1]
-    pend = es["pendiente_de_juicio_humano"]
-    assert set(pend["platos"]) == NUEVAS_ES and pend["fecha"] == "2026-09-12"
+    assert any("E9" in d and "1 → 10" in d for d in es["decisions"]), "la decisión de E9 sigue en el acta aunque ya no sea la última"
+    # [P1-PLAN-LOTE-16 · A9] Pendientes ANTES del juicio del dueño, juzgados DESPUÉS: el acta guarda los nombres de entonces
+    # («Macarrones…»), así que se comparan a través del alias del renombre.
+    import plan_policy
+    viejo_a_nuevo = {v: k for k, v in plan_policy.TEMPLATE_ALIASES.items()}
+    bloque = es.get("pendiente_de_juicio_humano") or es["juicio_humano_a9"]
+    assert {viejo_a_nuevo.get(x, x) for x in bloque["platos"]} == NUEVAS_ES and bloque["fecha"] == "2026-09-12"
     assert rev["date"] == "2026-09-12"
 
 

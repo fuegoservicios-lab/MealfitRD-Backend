@@ -78,7 +78,7 @@ PLATOS_NUEVOS = (
     "Batida de leche con claras, avena y guineo",
     "Queso cottage con casabe, tomate y aguacate",
     "Tilapia al horno con yuca y cebolla",
-    "Huevo duro con aguacate y sal mínima",
+    "Huevo duro con aguacate",  # [P1-PLAN-LOTE-16 · A9] renombrado por el dueño; id estable vía TEMPLATE_ALIASES
     "Atún en agua con casabe y cebolla",
     "Yogurt griego con guineo",
     "Queso cottage con lechosa",

@@ -57,3 +57,27 @@ Compilador CLI: [`scripts/compile_dish_registry.py`](../scripts/compile_dish_reg
 ## Fuera de la fase
 
 Referencias a medios reales (Fase 8) y el editor DB que publique el mismo snapshot (§7.3 punto 5).
+
+## Curación A9 (2026-09-12 · P1-PLAN-LOTE-16): `spec`, `prep_notes` y el puente de técnica
+
+El dueño juzgó en la ficha interactiva los 28 platos pendientes (19 DO, 9 ES): 28/28 «con cambios». Tres cosas
+entran al contrato del registry para poder aplicarlos sin mover un solo `template_id`:
+
+- **`constituents[].spec`** (opcional, texto): el estado en que se pesa o cómo se usa el constituyente — «en hojuelas»,
+  «escurrido, sin el líquido de la lata», «secos: remojo 8-12 h y cocción previa», «aromático: se retira al servir». El
+  `name` sigue siendo la fila del catálogo (es lo que resuelve, compra y calcula) y **la nutrición no se mueve**. Vive en
+  `dish_constituents_do.json` (DO) o inline en la plantilla (bibliotecas beta); `_inline_constituent` lo deja pasar y
+  `compile_template` lo copia al constituyente resuelto.
+- **`prep_notes`** (opcional, por plantilla): la preparación que el dueño dictó para plantillas SIN receta congelada
+  (las 9 ES): remojo y cocción de la legumbre seca, cómo entra el huevo, reparto del aceite. Viaja en
+  `editorial.prep_notes`. **El prompt del run no lo lee todavía**: es para quien escriba la receta (biblioteca ES o el
+  modelo, cuando se cablee).
+- **`plan_policy.TEMPLATE_MINT_TECHNIQUE`** (nombre actual → técnica con la que se acuñó el id): la técnica entra en
+  `mint_template_id` igual que el nombre, así que corregirla («crudo» → «tostado + montaje en frío») cambiaría el id como
+  un renombre. Mismo puente que `TEMPLATE_ALIASES`, para 16 platos.
+
+**La lección de la ficha.** 28 de 28 veredictos pidieron quitar «aguanta N d» y «solo despensa»: la ficha etiquetaba
+`logistics.days_fresh_min`/`pantry_only` como si fueran la conservación del plato preparado. No lo son: son la vida de los
+**INGREDIENTES crudos** — la pregunta del ciclo de una sola compra («¿puedo COCINAR esto el día 25?») — y
+`derive_logistics` ya avisaba de ese error desde el 09-09. Cualquier superficie que enseñe ese número lo etiqueta como
+vida de los ingredientes, o dice una falsedad sobre comida. Se corrigió la etiqueta, no el dato.

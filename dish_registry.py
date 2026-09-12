@@ -361,8 +361,14 @@ def derive_editorial(template: dict, library: str) -> dict:
         aliases = sorted(k for k, v in (TEMPLATE_ALIASES or {}).items() if v == template.get("name"))
     except Exception:
         aliases = []
-    return {"status": "curated", "source": f"data/dish_templates{'' if library == 'do' else '_' + library}.json",
-            "display_name": {"es": template.get("name")}, "aliases": aliases, "media": []}
+    out = {"status": "curated", "source": f"data/dish_templates{'' if library == 'do' else '_' + library}.json",
+           "display_name": {"es": template.get("name")}, "aliases": aliases, "media": []}
+    # [P1-PLAN-LOTE-16 · 2026-09-12 · A9] Notas de preparación de la plantilla (remojo y cocción de la legumbre seca,
+    # laurel que se retira, cómo entra el huevo, reparto del aceite): el dueño las dictó para las 9 plantillas ES sin
+    # receta congelada. Viajan en el snapshot para quien escriba la receta; el prompt del run NO las lee todavía.
+    if template.get("prep_notes"):
+        out["prep_notes"] = str(template["prep_notes"]).strip()
+    return out
 
 
 # ----------------------------------------------------------------------------- compilación
@@ -373,7 +379,7 @@ def _constituents_source(library: str, template: dict, do_constituents: Optional
         # reglas para las plantillas sin entrada a mano): lo explícito manda sobre lo generado.
         inline = [c for c in (template.get("constituents") or []) if isinstance(c, dict) and c.get("name")]
         if inline:
-            return [{"name": c["name"], "grams": _f(c.get("grams", c.get("g")))} for c in inline], []
+            return [_inline_constituent(c) for c in inline], []
         entry = ((do_constituents or {}).get("templates") or {}).get(str(template.get("name") or ""))
         if entry:
             return list(entry.get("constituents") or []), list(entry.get("declared_unresolved") or [])
@@ -385,8 +391,22 @@ def _constituents_source(library: str, template: dict, do_constituents: Optional
     out = []
     for c in cons:
         if isinstance(c, dict) and c.get("name"):
-            out.append({"name": c["name"], "grams": _f(c.get("grams", c.get("g")))})
+            out.append(_inline_constituent(c))
     return out, []
+
+
+def _inline_constituent(c: dict) -> dict:
+    """[P1-PLAN-LOTE-16 · 2026-09-12 · A9] Normaliza un constituyente inline SIN perder `spec` ni `optional`.
+
+    `spec` es la precisión que el dueño pidió plato a plato en la ficha A9 («en hojuelas», «secos», «sin cáscara,
+    pesado crudo», «se retira al servir»): el `name` sigue siendo la fila del catálogo (es lo que resuelve, compra y
+    calcula), y `spec` dice en qué estado se pesa o cómo se usa. Antes el aplanado tiraba cualquier clave extra."""
+    out = {"name": c["name"], "grams": _f(c.get("grams", c.get("g")))}
+    if c.get("spec"):
+        out["spec"] = str(c["spec"]).strip()
+    if c.get("optional"):
+        out["optional"] = True
+    return out
 
 
 # [ARQ27-P0-02 · 2026-09-06] Las tres exclusiones que impiden llamar ÍNTEGRA a una plantilla.
@@ -422,8 +442,11 @@ def compile_template(template: dict, index: dict, *, library: str, constituents:
             iid = _norm(row["name"]).replace(" ", "_")
         # [P1-ARQ25-F7-CULTURE · subfase G] durabilidad SSOT (pantry_durability): lo que el registry sabe de cuánto aguanta
         _dur = _pd.classify(row["name"], row.get("category"))
-        resolved.append({"name": name, "canonical": row["name"], "ingredient_id": iid, "grams": round(grams, 1),
-                         "durability": _dur["cls"], "days_fresh": _dur["days_fresh"]})
+        _res = {"name": name, "canonical": row["name"], "ingredient_id": iid, "grams": round(grams, 1),
+                "durability": _dur["cls"], "days_fresh": _dur["days_fresh"]}
+        if (c or {}).get("spec"):  # [P1-PLAN-LOTE-16 · A9] estado/uso del constituyente, dictado por el dueño
+            _res["spec"] = str(c["spec"]).strip()
+        resolved.append(_res)
     for name in declared_unresolved or []:
         excluded.append({"name": str(name), "grams": None, "reason": "declared_unresolved", "optional": False})
     # [ARQ27-P0-03] Un nutriente AUSENTE en el catálogo no suma cero: se anota y la señal que depende
