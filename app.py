@@ -137,7 +137,13 @@ _PROCESS_START_ISO = datetime.now(timezone.utc).isoformat()
 # CASCADE las filas del canary — ahora responde `phase`/`flip_live` sin depender de ellas. D8: lag de `plan_jobs`
 # medido (`scripts/measure_plan_jobs_lag.py`): el worker recoge en < 2 s; el p95 largo son reintentos del incidente
 # del 09-08 (ya cerrado) y cadenas `revision_changed`; `shopping_commercial` no se construye sin consumidor (dueño).
-_LAST_KNOWN_PFIX = "P1-PLAN-LOTE-14 · 2026-09-12"
+# [P1-PLAN-LOTE-15 · 2026-09-12] E4 (ARQ27-P1-06, la parte que la batería declaraba abierta). El canario de latencia
+# y coste por plan no existía porque el coste LLM nacía sin plan_id en la cola (0 de 116 `day_generator`, 0 de 117
+# `swap_meal` con user): `plan_id_var` + `set_llm_attribution` en el worker de chunks, /swap-meal y /regenerate-day.
+# `scripts/canary_plan_delivery.py` (fallos, reintentos, latencia y coste por plan entregado válido, con denominador)
+# y `scripts/verify_swap_last_chunk.py` (recetas↔lista con el MISMO guard, horizonte y proyección tras el último
+# chunk, sobre planes reales, sin escribir nada).
+_LAST_KNOWN_PFIX = "P1-PLAN-LOTE-15 · 2026-09-12"
 
 # [P1-SENTRY-SAMPLE-COST · 2026-05-12] Sentry sampling driven from env vars
 # con default seguro 0.1 (10%). Pre-fix tenía `traces_sample_rate=1.0` y

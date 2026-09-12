@@ -1634,6 +1634,9 @@ request_id_var = contextvars.ContextVar("request_id", default="SYS")
 # Default `None` → bypass del rate limit (preservar comportamiento de cron
 # jobs, batch y otros callers que no setean el var).
 user_id_var = contextvars.ContextVar("user_id", default=None)
+# [P1-PLAN-LOTE-15 · 2026-09-12] Atribución del coste LLM al plan: vive en `llm_attribution.py` (este fichero está
+# CONGELADO por tamaño — extraer, no subir el tope). Re-exportado aquí para quien ya importa de este módulo.
+from llm_attribution import plan_id_var, set_llm_attribution, reset_llm_attribution  # noqa: E402
 
 # [P1-6] Mapeo emoji → log level. La convención del codebase (verificada con
 # un censo de los 209 sitios `print(` del módulo) usa consistentemente
@@ -3304,6 +3307,12 @@ def _emit_llm_usage_event_best_effort(*, llm, result, duration_s: float, node: s
         # [P2-ORCH-14] Marcar ANTES del log (una sola fila por objeto-resultado).
         if result is not None:
             _mark_usage_emitted(result)
+        # [P1-PLAN-LOTE-15 · 2026-09-12] plan_id directo desde el contexto (worker de chunks, /swap-meal, /regenerate-day):
+        # en la cola el placeholder ya tiene id ANTES de generar, así que el canje por `corr` de abajo no dispara.
+        try:
+            _attr_pid = plan_id_var.get()
+        except Exception:
+            _attr_pid = None
         # [P1-COST-ATTRIBUTION · 2026-07-31] La "phase 2" que la docstring de
         # `log_llm_usage_event` prometía desde 2026-05-15 y nunca se hizo: sin
         # esto el libro de COSTO no se puede cruzar con nada. Medido el
@@ -3328,6 +3337,7 @@ def _emit_llm_usage_event_best_effort(*, llm, result, duration_s: float, node: s
             _attr_corr = None
         log_llm_usage_event(
             user_id=_attr_uid,
+            plan_id=_attr_pid,
             model=model_name,
             node=current_node,
             input_tokens=input_tokens,

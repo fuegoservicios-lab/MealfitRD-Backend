@@ -6719,6 +6719,24 @@ def _enrich_clinical_from_profile(data: dict, user_id: str) -> dict:
         return {}
 
 
+def _owned_plan_id_for_attribution(user_id: Optional[str], plan_id) -> Optional[str]:
+    """[P1-PLAN-LOTE-15 · 2026-09-12] Devuelve `plan_id` sólo si pertenece a `user_id`.
+
+    Telemetría de coste: el body no es prueba de propiedad y un plan ajeno no debe cargar con el gasto de otro.
+    Un id inválido o ajeno → None (la fila queda sin plan, como antes). Best-effort."""
+    if not user_id or user_id == "guest" or not plan_id:
+        return None
+    try:
+        from db_core import execute_sql_query as _exq_attr
+        row = _exq_attr(
+            "SELECT 1 AS ok FROM meal_plans WHERE id = %s AND user_id = %s",
+            (str(plan_id), str(user_id)), fetch_one=True,
+        )
+        return str(plan_id) if row else None
+    except Exception:
+        return None
+
+
 def _load_swap_plan_country_stub(user_id: str, plan_id: Optional[str] = None) -> dict:
     """[P1-COUNTRY-PLAN-VS-PERFIL-EN-BLOQUES · 2026-08-23]
     Lee sólo el sello de país del plan que va a mutarse.
@@ -7000,6 +7018,14 @@ def api_swap_meal(background_tasks: BackgroundTasks, data: dict = Body(...), ver
         if user_id and user_id != "guest":
             if not verified_user_id or verified_user_id != user_id:
                 raise HTTPException(status_code=401, detail="No autorizado. Token inválido o no coincide.")
+
+        # [P1-PLAN-LOTE-15 · 2026-09-12] Atribución del coste LLM del swap (medido el 09-12: 117 de 117 filas
+        # `swap_meal` sin user_id ni plan_id). El plan se atribuye sólo si es SUYO. El contexto es por request
+        # (Starlette copia el contexto al thread del handler), así que no hay que deshacerlo.
+        # tooltip-anchor: swap_llm_attribution
+        if verified_user_id and user_id == verified_user_id:
+            from llm_attribution import set_llm_attribution as _set_llm_attr_swap
+            _set_llm_attr_swap(verified_user_id, _owned_plan_id_for_attribution(verified_user_id, data.get("plan_id")))
 
         # [P0-UPDATE-CLINICAL-GUARD · 2026-06-23] Enriquecer allergies/diet SERVER-SIDE desde el
         # perfil ANTES del gate de suficiencia y del swap → el backstop clínico de swap_meal corre
@@ -8846,6 +8872,10 @@ def api_regenerate_day(
         if not plan_row:
             raise HTTPException(status_code=404, detail="Plan no encontrado")
         plan_data = plan_row.get("plan_data") or {}
+        # [P1-PLAN-LOTE-15 · 2026-09-12] Atribución del coste LLM del día regenerado (propiedad verificada arriba).
+        # tooltip-anchor: regenerate_day_llm_attribution
+        from llm_attribution import set_llm_attribution as _set_llm_attr_regen
+        _set_llm_attr_regen(user_id, plan_id)
         if isinstance(plan_data, str):
             import json as _json
             plan_data = _json.loads(plan_data)

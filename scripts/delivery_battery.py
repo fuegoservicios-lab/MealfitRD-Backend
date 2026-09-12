@@ -31,10 +31,13 @@ regresiones de una cohorte pequeña (la vegetal, siempre).
 
 **No mide latencia ni coste por plan entregado.** Eso es el canary del gap y necesita generaciones
 reales contra el proveedor: no se puede fabricar en una batería determinista, y fingirlo sería peor
-que no tenerlo. Queda como trabajo abierto de `ARQ27-P1-06`.
+que no tenerlo. Queda como trabajo abierto de `ARQ27-P1-06`. **[P1-PLAN-LOTE-15 · 2026-09-12] Lo mide
+`scripts/canary_plan_delivery.py` sobre los planes REALES de producción (fallos, reintentos, latencia y coste por
+plan, con denominador por cohorte), desde que el worker atribuye el coste al plan.**
 
 **No ejercita el swap ni el último chunk end-to-end.** Requieren DB y LLM. Lo que sí hace es medir el
-embudo con las banderas correctas, que es donde el gap encontró la ceguera.
+embudo con las banderas correctas, que es donde el gap encontró la ceguera. **[P1-PLAN-LOTE-15 · 2026-09-12] Lo
+verifica `scripts/verify_swap_last_chunk.py` con el MISMO guard de producción sobre los planes persistidos.**
 
 **Cero hallazgos en N cohortes no demuestra una garantía universal** — por eso la tabla imprime N
 junto a cada tasa, y no solo el porcentaje.

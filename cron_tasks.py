@@ -27326,6 +27326,12 @@ __PLAN_MODE_GATE__
         # thread-local para que los pause helpers hagan transiciones CAS ownership-aware.
         # Se limpia en el finally (thread del pool se reutiliza).
         _CHUNK_WORKER_CTX.pickup_attempts = _pickup_attempts
+        # [P1-PLAN-LOTE-15 · 2026-09-12] Atribución del coste LLM: este thread conoce usuario y plan ANTES de generar
+        # (el placeholder ya existe), así que las filas de `llm_usage_events` del chunk nacen con plan_id — antes, en la
+        # cola, nacían sin plan_id ni `corr` (0 de 116 `day_generator` en 30 días). Se deshace en el finally: el thread
+        # del pool se reutiliza. tooltip-anchor: chunk_worker_llm_attribution
+        from llm_attribution import set_llm_attribution as _set_llm_attr, reset_llm_attribution as _reset_llm_attr
+        _llm_attr_toks = _set_llm_attr(user_id, meal_plan_id)
         # [C3-LOCK-OWNERSHIP · 2026-05-29] locked_at de NUESTRA fila de lock (capturado del
         # INSERT RETURNING) para que el DELETE del finally no borre el lock de un worker
         # que nos desplazó. None hasta que adquirimos el lock.
@@ -34411,6 +34417,11 @@ __PLAN_MODE_GATE__
             # siguiente worker en este mismo thread).
             try:
                 _CHUNK_WORKER_CTX.pickup_attempts = None
+            except Exception:
+                pass
+            # [P1-PLAN-LOTE-15] deshacer la atribución LLM de este chunk (mismo motivo: el thread se reutiliza).
+            try:
+                _reset_llm_attr(_llm_attr_toks)
             except Exception:
                 pass
             # Liberar lock en exit paths
