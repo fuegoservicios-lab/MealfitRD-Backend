@@ -8578,10 +8578,18 @@ def _coordinate_user_horizons(rows: list) -> dict:
 
 
 def _is_user_local_refresh_hour(now_utc: datetime, tz_offset_minutes: int | None, target_hour: int = 3) -> bool:
-    try:
-        offset = int(tz_offset_minutes or 0)
-    except Exception:
-        offset = 0
+    # [P1-PLAN-LOTE-13 · 2026-09-12] Residuo de LOTE-9: «sin huso» resolvía a 0 (UTC) y un 0 explícito y una
+    # ausencia eran la misma cosa. Ahora la ausencia (o basura) cae al SSOT `DEFAULT_TZ_OFFSET_MIN` (RD) y el 0
+    # explícito sigue siendo UTC — la misma regla que `constants.tz_offset_min_for_form_data`.
+    # tooltip-anchor: _is_user_local_refresh_hour (test_p1_plan_lote_13.py)
+    from constants import DEFAULT_TZ_OFFSET_MIN as _default_tz
+    if tz_offset_minutes is None or tz_offset_minutes == "":
+        offset = int(_default_tz)
+    else:
+        try:
+            offset = int(float(tz_offset_minutes))
+        except Exception:
+            offset = int(_default_tz)
     user_now = now_utc - timedelta(minutes=offset)
     return user_now.hour == target_hour
 
@@ -8607,6 +8615,10 @@ def _nightly_refresh_all_pending_snapshots(now_utc: datetime | None = None) -> N
     failed_users = 0
     is_failure = False
     last_error: str | None = None
+    # [P1-PLAN-LOTE-13 · 2026-09-12] El huso ausente del snapshot cae al SSOT (RD), no a 0: con 0 el «3am local»
+    # de un snapshot sin huso era las 23:00 de la víspera en Santo Domingo. Va como parámetro bound (dos veces:
+    # la columna y el predicado de la hora), nunca interpolado en el SQL.
+    from constants import DEFAULT_TZ_OFFSET_MIN as _default_tz
     try:
         rows = execute_sql_query(
             """
@@ -8617,7 +8629,7 @@ def _nightly_refresh_all_pending_snapshots(now_utc: datetime | None = None) -> N
                 COALESCE(
                     (q.pipeline_snapshot->'form_data'->>'tzOffset')::int,
                     (q.pipeline_snapshot->'form_data'->>'tz_offset_minutes')::int,
-                    0
+                    %s::int
                 ) AS tz_offset_minutes,
                 COALESCE(
                     (p.plan_data->>'total_days_requested')::int,
@@ -8647,13 +8659,13 @@ def _nightly_refresh_all_pending_snapshots(now_utc: datetime | None = None) -> N
                     (%s::timestamptz AT TIME ZONE 'UTC') - make_interval(mins => COALESCE(
                         (q.pipeline_snapshot->'form_data'->>'tzOffset')::int,
                         (q.pipeline_snapshot->'form_data'->>'tz_offset_minutes')::int,
-                        0
+                        %s::int
                     ))
                   )) = 3
             ORDER BY q.user_id, q.meal_plan_id, q.execute_after ASC
             LIMIT %s
             """,
-            (now_utc, CHUNK_PANTRY_PROACTIVE_REFRESH_MAX_USERS * 8,),
+            (int(_default_tz), now_utc, int(_default_tz), CHUNK_PANTRY_PROACTIVE_REFRESH_MAX_USERS * 8,),
             fetch_all=True
         ) or []
 

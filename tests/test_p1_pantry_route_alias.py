@@ -93,9 +93,7 @@ def test_nudge_default_url_is_canonical():
 
 
 def test_stale_pantry_deeplink_default_is_canonical():
-    import importlib
-    import constants
-    importlib.reload(constants)
+    import constants  # [P1-PLAN-LOTE-13] sin reload: contaminación irreversible del worker
     assert constants.CHUNK_STALE_PANTRY_DEEPLINK == "/dashboard/pantry" or \
         not constants.CHUNK_STALE_PANTRY_DEEPLINK.startswith("/mi-nevera"), (
         f"CHUNK_STALE_PANTRY_DEEPLINK={constants.CHUNK_STALE_PANTRY_DEEPLINK!r}: "

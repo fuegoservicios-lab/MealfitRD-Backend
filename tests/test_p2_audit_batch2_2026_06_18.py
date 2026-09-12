@@ -31,7 +31,7 @@ def _load_frontend_sibling_sources(frontend_repo_path):
 
 # --------------------------------------------------------------------------- #8 validation helpers (funcional)
 def test_validation_macro_in_band():
-    sys.path.insert(0, str(_BE / "scripts"))
+    sys.path.append(str(_BE / "scripts"))  # [P1-PLAN-LOTE-13] al FINAL: en cabeza, scripts/plan_gym.py sombreaba a plan_gym
     import clinical_validation_export as cve
     assert cve._macro_in_band(100, 100) is True
     assert cve._macro_in_band(112, 100) is True       # techo banda
@@ -42,7 +42,7 @@ def test_validation_macro_in_band():
 
 
 def test_validation_integrity_in_band():
-    sys.path.insert(0, str(_BE / "scripts"))
+    sys.path.append(str(_BE / "scripts"))  # [P1-PLAN-LOTE-13] al FINAL: en cabeza, scripts/plan_gym.py sombreaba a plan_gym
     import clinical_validation_export as cve
     assert cve._integrity_in_band(100, 100) is True
     assert cve._integrity_in_band(115, 100) is True   # 15% exacto

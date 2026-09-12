@@ -314,9 +314,9 @@ def test_el_guard_nace_apagado_y_es_a_proposito():
     que es exactamente lo que a mí me faltó al ver los rojos: parecían "una validación no está
     corriendo" y eran "una validación apagada a conciencia".
     """
-    import importlib
+    # [P1-PLAN-LOTE-13 · 2026-09-12] sin `importlib.reload(constants)`: re-ejecutar el módulo real rompe
+    # las identidades `is` que otros tests del worker anclan (P1-SUITE-SWEEP ya lo había medido).
     import constants
-    importlib.reload(constants)
     assert constants.INITIAL_CHUNK_PANTRY_GUARD_ENABLED is False, (
         "El guard de nevera del chunk inicial debe nacer APAGADO. Si lo enciendes, documenta "
         "por qué y actualiza este test — el incidente d4bc3af5 está en el docstring."

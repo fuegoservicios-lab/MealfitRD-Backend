@@ -131,6 +131,31 @@ Los platos nuevos respetan la regla editorial de la biblioteca —una cena no se
 plato cuya identidad ES el arroz (moro, arroz con gandules) se declaró almuerzo, que es su sitio, y el guiso que
 se sirve con arroz declara base «legumbre», que es lo que estructura el plato.
 
+## Medición del 2026-09-12 (E9 · P1-PLAN-LOTE-13)
+
+El único ⚠ que quedaba en todo el embudo era `spain_mediterranea · veg · día 25 sin congelador · almuerzo = 1`. La
+medición del 06-sep lo daba en 7 porque el embudo de entonces filtraba la dieta por la etiqueta `protein`; con la
+guarda real sobre constituyentes (ARQ27-P1-02) el almuerzo vegetariano español bajó a 10 y, de esos 10, **9
+llevaban verdura fresca de 7-10 días** (calabacín, berenjena, tomate, pimiento, espinacas, acelgas). Sólo la
+tortilla de patata aguantaba el día 25. La regla de conservación no estaba mal: faltaban almuerzos de despensa.
+
+Nueve plantillas nuevas, todas con constituyentes de ≥ 35 días (legumbre seca, arroz, pasta, huevo, patata,
+zanahoria, col, cebolla, ajo, conserva), gramos crudos y nombres exactos del catálogo — pendientes de juicio humano
+en `cultural_curation_review_v1.json`:
+
+```
+── spain_mediterranea  (mercado ES) ── antes → después
+   escenario                       desayuno  almuerzo  merienda      cena    mínimo
+   vegetariano                        31→31     10→19     19→19     19→24     10→19
+   vegano                             13→13      7→10      7→7       7→8       7→7
+   día 25 sin congelador              11→11     14→23      6→6      11→16      6→6
+   veg · día 25 sin congelador         8→8       1→10      5→5       3→8       1→5  (⚠ desaparece)
+```
+
+Lo que NO se tocó: `pantry_durability` (la tortilla sigue diciendo 35 días de sus INGREDIENTES, no del plato) y las
+124 plantillas anteriores, byte-idénticas en el registry. El test `test_p1_plan_lote_13.py` ancla el cruce con el
+mismo `embudo()` del guion, no con la tabla.
+
 ## Dos trampas que ya costaron una medición falsa
 
 - El perfil cultural guarda su mercado en **`market_default`**, no en `country`. Con `country` la función

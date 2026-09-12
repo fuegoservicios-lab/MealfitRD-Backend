@@ -132,7 +132,7 @@ def test_el_json_se_entrega_SIN_etiquetar():
 
 # ── el marcador ───────────────────────────────────────────────────────────────────────────────
 def _puntuar(casos, disponibles):
-    sys.path.insert(0, str(_BACKEND / "scripts"))
+    sys.path.append(str(_BACKEND / "scripts"))  # [P1-PLAN-LOTE-13] al FINAL: en cabeza, scripts/plan_gym.py sombreaba a plan_gym
     from culinary_golden_score import puntuar
     return puntuar({"casos": casos, "disponibles_por_estrato": disponibles})
 

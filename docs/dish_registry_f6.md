@@ -1,7 +1,8 @@
 # Dish Registry compilado — Fase 6 del roadmap 2.5 (capa V2.3)
 
 [P1-ARQ25-F6-DISH-REGISTRY · 2026-09-05] Motor SSOT: [`backend/dish_registry.py`](../dish_registry.py). Curación DO:
-[`scripts/build_dish_constituents_do.py`](../scripts/build_dish_constituents_do.py) → `data/dish_constituents_do.json`.
+`data/dish_constituents_do.json` (tabla curada a mano, SSOT; validador
+[`scripts/check_dish_constituents_do.py`](../scripts/check_dish_constituents_do.py)).
 Compilador CLI: [`scripts/compile_dish_registry.py`](../scripts/compile_dish_registry.py) → `data/registry/`. Test ancla:
 [`tests/test_p1_arq25_f6_dish_registry.py`](../tests/test_p1_arq25_f6_dish_registry.py). Roadmap §7 y Fase 6.
 
@@ -9,7 +10,7 @@ Compilador CLI: [`scripts/compile_dish_registry.py`](../scripts/compile_dish_reg
 
 | Entregable (roadmap) | Dónde |
 |---|---|
-| `constituents` para las 87 plantillas DO | `data/dish_constituents_do.json`, compuestos desde los componentes con gramos de `dominican_dish_recipes.json` (las mismas 60 recetas del diario) + ítems con nombre EXACTO del catálogo. Lo que el catálogo no tiene (zapote, menta, chillo) se declara y el compilador lo lista como exclusión. |
+| `constituents` para las 87 plantillas DO | `data/dish_constituents_do.json`, compuestos EN ORIGEN (F6) desde los componentes con gramos de `dominican_dish_recipes.json` (las mismas 60 recetas del diario) + ítems con nombre EXACTO del catálogo. **[P1-PLAN-LOTE-13 · 2026-09-12] El JSON es el SSOT y se edita a mano**: el generador `build_dish_constituents_do.py` dejó de reproducirlo (75 entradas divergían tras las curaciones del 09-09/09-10 y C8) y se retiró (`git show e4528a22:scripts/build_dish_constituents_do.py`); `scripts/check_dish_constituents_do.py` valida la coherencia con las plantillas (sin catálogo) y `compile_dish_registry.py --check` la resolución. Las cuatro exclusiones históricas (zapote, menta, chillo, salami de pavo) las cerró el dueño en C8 (P1-PLAN-LOTE-11). |
 | Compilador → snapshot inmutable por versión/país/cultura | `compile_library(lib)` → `data/registry/dish_registry_<lib>_v<versión>.json` (6 bibliotecas: do/es/mx/co/pr/us). JSON canónico (claves ordenadas, sin timestamps): misma fuente + mismo catálogo ⇒ mismos bytes. `snapshot_hash`, `source_hash` (plantillas + constituyentes), `catalog_fingerprint` (nombres + nutrición del catálogo). |
 | Tags de riesgo derivados (§7.2), cero tags clínicos manuales | `derive_risk_attributes`: por porción, desde las columnas por 100 g del catálogo — `sodium_high` (≥600 mg), `potassium_high` (≥700), `phosphorus_high` (≥350), `sat_fat_high` (≥6 g), `sugar_high` (≥25 g), `glycemic_load_high` (carbohidrato neto ≥75 g), `energy_dense` (≥800 kcal), `processed_meat` (+ ítems), `allergens` (clases del vocabulario SSOT `graph_orchestrator._ALLERGEN_SYNONYMS`). Nunca `safe_for_*`: la elegibilidad se evalúa en runtime con el plato ya dimensionado. |
 | Resolubilidad 100 % o exclusión explícita | Cada constituyente resuelve por nombre canónico o alias (sin acentos, singular/plural) o entra en `excluded[]` con `reason ∈ {not_in_catalog, no_grams, declared_unresolved}`. `status`: `ok` (todo resuelve) · `partial` (algo excluido) · `excluded` (nada). Solo `ok` se ofrece al allocator. |

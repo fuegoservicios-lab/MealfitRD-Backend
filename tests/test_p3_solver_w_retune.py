@@ -263,7 +263,7 @@ def test_el_harness_del_tune_esta_versionado_y_es_determinista():
 def test_el_stub_catalogo_del_harness_resuelve_offline():
     """El harness no puede depender de Neon: en un worktree sin `.env` el catálogo sale VACÍO y el
     tune mediría el vacío, no el sistema. El stub embebido tiene que resolver líneas reales."""
-    sys.path.insert(0, os.path.join(_BACKEND, "scripts"))
+    sys.path.append(os.path.join(_BACKEND, "scripts"))  # [P1-PLAN-LOTE-13] al FINAL: en cabeza, scripts/plan_gym.py sombreaba a plan_gym
     import retune_solver_weights as rt
 
     rows = rt.build_stub_rows()

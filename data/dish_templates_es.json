@@ -1,5 +1,5 @@
 {
-  "_note": "[P1-COUNTRY-SYSTEM-F2 · T5 · 2026-08-17] Biblioteca curada de plantillas de platos españoles para el juez culinario (espejo de `dish_templates.json`, RD) — consumida por `_culinary_judge_rubric_for_country('ES')` (graph_orchestrator.py) SOLO cuando `MEALFIT_COUNTRY_SYSTEM` está encendido Y el país del plan es ES; con el knob apagado o país DO el juez sigue usando `dish_templates.json` byte-idéntico (ver `_dish_templates_path_for_country`). Mismo schema que el RD (name/slots/protein/base/technique/transform) MÁS `constituents` (nombres EXACTOS de `master_ingredients` post-altas T5 + gramos CRUDOS, regla del yield — leguminosas SECAS, carnes/mariscos/vegetales/frutas CRUDOS, curados en su estado de venta real) para anclar el golden fixture (tortilla española conserva su huevo) y servir de referencia estructurada a futuros consumidores. slots respetan el SSOT de constants.SLOT_INAPPROPRIATE_FOODS (arroz/paella/fideos como base NUNCA en desayuno ni cena; gazpacho/salmorejo son sopas FRÍAS, no 'sopón' — sí van en cena). protein usa el mismo canon que el RD (pollo/res/cerdo/pavo/pescado/camarones/atun/huevo/queso/legumbre/mixta/none).",
+  "_note": "[P1-COUNTRY-SYSTEM-F2 · T5 · 2026-08-17] Biblioteca curada de plantillas de platos españoles para el juez culinario (espejo de `dish_templates.json`, RD) — consumida por `_culinary_judge_rubric_for_country('ES')` (graph_orchestrator.py) SOLO cuando `MEALFIT_COUNTRY_SYSTEM` está encendido Y el país del plan es ES; con el knob apagado o país DO el juez sigue usando `dish_templates.json` byte-idéntico (ver `_dish_templates_path_for_country`). Mismo schema que el RD (name/slots/protein/base/technique/transform) MÁS `constituents` (nombres EXACTOS de `master_ingredients` post-altas T5 + gramos CRUDOS, regla del yield — leguminosas SECAS, carnes/mariscos/vegetales/frutas CRUDOS, curados en su estado de venta real) para anclar el golden fixture (tortilla española conserva su huevo) y servir de referencia estructurada a futuros consumidores. slots respetan el SSOT de constants.SLOT_INAPPROPRIATE_FOODS (arroz/paella/fideos como base NUNCA en desayuno ni cena; gazpacho/salmorejo son sopas FRÍAS, no 'sopón' — sí van en cena). protein usa el mismo canon que el RD (pollo/res/cerdo/pavo/pescado/camarones/atun/huevo/queso/legumbre/mixta/none). [P1-PLAN-LOTE-13 · 2026-09-12 · E9] +9 almuerzos vegetarianos de DESPENSA (legumbre seca, arroz/pasta, huevo, patata, zanahoria, col, cebolla/ajo, conserva): el cruce «vegetariano · día 25 sin congelador» dejaba UN almuerzo porque los demás llevaban verduras frescas de 7-10 días. Pendientes de juicio humano (cultural_curation_review_v1.json → spain_mediterranea.pendiente_de_juicio_humano).",
   "templates": [
     {
       "name": "Tortilla española con patata y cebolla",
@@ -3572,6 +3572,371 @@
         {
           "name": "Arándanos",
           "grams": 90.0
+        }
+      ]
+    },
+    {
+      "name": "Lentejas estofadas con patata y zanahoria",
+      "slots": [
+        "almuerzo"
+      ],
+      "protein": "legumbre",
+      "base": "legumbre",
+      "technique": "guisado",
+      "transform": true,
+      "constituents": [
+        {
+          "name": "Lentejas",
+          "grams": 80.0
+        },
+        {
+          "name": "Papa",
+          "grams": 120.0
+        },
+        {
+          "name": "Zanahoria",
+          "grams": 60.0
+        },
+        {
+          "name": "Cebolla",
+          "grams": 40.0
+        },
+        {
+          "name": "Ajo",
+          "grams": 5.0
+        },
+        {
+          "name": "Aceite de oliva",
+          "grams": 8.0
+        },
+        {
+          "name": "Pimentón",
+          "grams": 2.0
+        },
+        {
+          "name": "Comino",
+          "grams": 1.0
+        },
+        {
+          "name": "Laurel",
+          "grams": 0.5
+        }
+      ]
+    },
+    {
+      "name": "Garbanzos guisados con pimentón y huevo duro",
+      "slots": [
+        "almuerzo",
+        "cena"
+      ],
+      "protein": "legumbre",
+      "base": "legumbre",
+      "technique": "guisado",
+      "transform": true,
+      "constituents": [
+        {
+          "name": "Garbanzos",
+          "grams": 90.0
+        },
+        {
+          "name": "Huevo",
+          "grams": 50.0
+        },
+        {
+          "name": "Cebolla",
+          "grams": 40.0
+        },
+        {
+          "name": "Ajo",
+          "grams": 5.0
+        },
+        {
+          "name": "Aceite de oliva",
+          "grams": 10.0
+        },
+        {
+          "name": "Pimentón",
+          "grams": 3.0
+        },
+        {
+          "name": "Laurel",
+          "grams": 0.5
+        }
+      ]
+    },
+    {
+      "name": "Arroz a la cubana con huevo y salsa de tomate",
+      "slots": [
+        "almuerzo"
+      ],
+      "protein": "huevo",
+      "base": "arroz",
+      "technique": "sartén",
+      "transform": false,
+      "constituents": [
+        {
+          "name": "Arroz blanco",
+          "grams": 80.0
+        },
+        {
+          "name": "Huevo",
+          "grams": 100.0
+        },
+        {
+          "name": "Salsa de tomate",
+          "grams": 80.0
+        },
+        {
+          "name": "Ajo",
+          "grams": 3.0
+        },
+        {
+          "name": "Aceite de oliva",
+          "grams": 10.0
+        }
+      ]
+    },
+    {
+      "name": "Macarrones con salsa de tomate y queso curado",
+      "slots": [
+        "almuerzo"
+      ],
+      "protein": "queso",
+      "base": "pasta",
+      "technique": "guisado",
+      "transform": false,
+      "constituents": [
+        {
+          "name": "Coditos",
+          "grams": 80.0
+        },
+        {
+          "name": "Salsa de tomate",
+          "grams": 60.0
+        },
+        {
+          "name": "Queso gouda",
+          "grams": 25.0
+        },
+        {
+          "name": "Cebolla",
+          "grams": 30.0
+        },
+        {
+          "name": "Ajo",
+          "grams": 5.0
+        },
+        {
+          "name": "Aceite de oliva",
+          "grams": 8.0
+        }
+      ]
+    },
+    {
+      "name": "Judías blancas estofadas con patata, laurel y pimentón",
+      "slots": [
+        "almuerzo",
+        "cena"
+      ],
+      "protein": "legumbre",
+      "base": "legumbre",
+      "technique": "guisado",
+      "transform": true,
+      "constituents": [
+        {
+          "name": "Judías blancas",
+          "grams": 90.0
+        },
+        {
+          "name": "Papa",
+          "grams": 100.0
+        },
+        {
+          "name": "Zanahoria",
+          "grams": 50.0
+        },
+        {
+          "name": "Cebolla",
+          "grams": 40.0
+        },
+        {
+          "name": "Ajo",
+          "grams": 5.0
+        },
+        {
+          "name": "Aceite de oliva",
+          "grams": 8.0
+        },
+        {
+          "name": "Pimentón",
+          "grams": 2.0
+        },
+        {
+          "name": "Laurel",
+          "grams": 0.5
+        }
+      ]
+    },
+    {
+      "name": "Ensalada de garbanzos con huevo duro, aceitunas y cebolla",
+      "slots": [
+        "almuerzo",
+        "cena"
+      ],
+      "protein": "legumbre",
+      "base": "legumbre",
+      "technique": "frío",
+      "transform": false,
+      "constituents": [
+        {
+          "name": "Garbanzos",
+          "grams": 90.0
+        },
+        {
+          "name": "Huevo",
+          "grams": 50.0
+        },
+        {
+          "name": "Aceitunas",
+          "grams": 20.0
+        },
+        {
+          "name": "Cebolla",
+          "grams": 30.0
+        },
+        {
+          "name": "Aceite de oliva",
+          "grams": 10.0
+        },
+        {
+          "name": "Vinagre blanco",
+          "grams": 5.0
+        },
+        {
+          "name": "Pimentón",
+          "grams": 1.0
+        }
+      ]
+    },
+    {
+      "name": "Patatas guisadas con huevo escalfado y pimentón",
+      "slots": [
+        "almuerzo",
+        "cena"
+      ],
+      "protein": "huevo",
+      "base": "patata",
+      "technique": "guisado",
+      "transform": true,
+      "constituents": [
+        {
+          "name": "Papa",
+          "grams": 250.0
+        },
+        {
+          "name": "Huevo",
+          "grams": 100.0
+        },
+        {
+          "name": "Cebolla",
+          "grams": 40.0
+        },
+        {
+          "name": "Ajo",
+          "grams": 5.0
+        },
+        {
+          "name": "Aceite de oliva",
+          "grams": 10.0
+        },
+        {
+          "name": "Pimentón",
+          "grams": 3.0
+        },
+        {
+          "name": "Laurel",
+          "grams": 0.5
+        }
+      ]
+    },
+    {
+      "name": "Arroz con garbanzos, zanahoria y pimentón",
+      "slots": [
+        "almuerzo"
+      ],
+      "protein": "legumbre",
+      "base": "arroz",
+      "technique": "guisado",
+      "transform": true,
+      "constituents": [
+        {
+          "name": "Arroz blanco",
+          "grams": 70.0
+        },
+        {
+          "name": "Garbanzos",
+          "grams": 70.0
+        },
+        {
+          "name": "Zanahoria",
+          "grams": 50.0
+        },
+        {
+          "name": "Cebolla",
+          "grams": 40.0
+        },
+        {
+          "name": "Ajo",
+          "grams": 5.0
+        },
+        {
+          "name": "Aceite de oliva",
+          "grams": 10.0
+        },
+        {
+          "name": "Pimentón",
+          "grams": 3.0
+        },
+        {
+          "name": "Laurel",
+          "grams": 0.5
+        }
+      ]
+    },
+    {
+      "name": "Trinxat de col y patata con huevo",
+      "slots": [
+        "almuerzo",
+        "cena"
+      ],
+      "protein": "huevo",
+      "base": "patata",
+      "technique": "salteado",
+      "transform": true,
+      "constituents": [
+        {
+          "name": "Repollo",
+          "grams": 150.0
+        },
+        {
+          "name": "Papa",
+          "grams": 150.0
+        },
+        {
+          "name": "Huevo",
+          "grams": 100.0
+        },
+        {
+          "name": "Ajo",
+          "grams": 5.0
+        },
+        {
+          "name": "Aceite de oliva",
+          "grams": 10.0
+        },
+        {
+          "name": "Pimentón",
+          "grams": 1.0
         }
       ]
     }

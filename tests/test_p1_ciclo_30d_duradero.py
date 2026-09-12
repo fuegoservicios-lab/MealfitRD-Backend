@@ -37,7 +37,7 @@ zanahoria 45 d, cebolla y ajo 60 d). Desayunos y meriendas sobre avena, casabe, 
 granola, leches de larga vida, pasas y dátiles.
 
 **Ninguno inventado**: cada constituyente lleva el nombre EXACTO del catálogo, que es la
-regla que el propio `build_dish_constituents_do.py` se puso. La nutrición, la logística y
+regla del registry (F6; hoy la valida `scripts/check_dish_constituents_do.py`). La nutrición, la logística y
 el riesgo los deriva el compilador; aquí no se escribió ni una caloría a mano.
 """
 import json

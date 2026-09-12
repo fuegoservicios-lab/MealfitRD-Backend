@@ -125,7 +125,13 @@ _PROCESS_START_ISO = datetime.now(timezone.utc).isoformat()
 # [P1-PLAN-LOTE-12 · 2026-09-11] C8-b: el rótulo «Jugo de limón» que pidió el dueño. El catálogo del día determinista era
 # `{name: fila}` a secas: un constituyente por ALIAS compilaba `ok` y aquí no se servía jamás. Ahora responde por nombre
 # canónico y, si no, con el MISMO resolutor que el compilador del registry (`_CatalogoPorNombre`).
-_LAST_KNOWN_PFIX = "P1-PLAN-LOTE-12 · 2026-09-11"
+# [P1-PLAN-LOTE-13 · 2026-09-12] E9 + residuos. E9: «vegetariano · día 25 sin congelador» en ES dejaba UN almuerzo
+# (9 de 10 llevaban verdura fresca de 7-10 días): +9 almuerzos de DESPENSA, almuerzo 1 → 10 y cena 3 → 8. Residuos:
+# los 3 tests «flaky» tenían UNA causa (form_efecto filtraba MEALFIT_COUNTRY_SYSTEM=true al worker + reload(constants));
+# las 5 bibliotecas en DRIFT de catálogo recompiladas y re-ancladas con lo medido; el generador que no reproducía
+# dish_constituents_do.json retirado (validador en su lugar); el refresh nocturno resuelve el huso ausente al SSOT,
+# no a UTC; los 7 pasos del wizard sin campo llevan id propio en el embudo.
+_LAST_KNOWN_PFIX = "P1-PLAN-LOTE-13 · 2026-09-12"
 
 # [P1-SENTRY-SAMPLE-COST · 2026-05-12] Sentry sampling driven from env vars
 # con default seguro 0.1 (10%). Pre-fix tenía `traces_sample_rate=1.0` y

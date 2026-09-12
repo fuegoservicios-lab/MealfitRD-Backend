@@ -81,7 +81,9 @@ vecinos, ahí está la caída.
 >
 > Con 5 sesiones: 5 ven `appMode`, 4 `planSource`, 3 llegan a `gender` y las 3 recorren hasta `motivation`; 3 de 5
 > envían. Los pasos sin `step_id` salen como `step_<índice>` (8, 12, 13, 18, 19, 21, 22, 24, 25): al añadir el id
-> en el frontend, este embudo deja de mezclarlos.
+> en el frontend, este embudo deja de mezclarlos. **[P1-PLAN-LOTE-13 · 2026-09-12] Hecho**: los 7 pasos sin campo
+> (`habits`, `shoppingHabits`, `stapleFoods`, `goalTarget`, `supplements`, `pantryBuilder`, `trackingFinish`) llevan `id`
+> propio y `step_id` lo prefiere al campo; `step_<índice>` sólo puede aparecer ya en filas anteriores al despliegue.
 
 3. Antes de publicarlo a usuarios nuevos, `MEALFIT_PLAN_POLICY_MODE=enforce` global (Fase 3): el
    formulario promete franjas y bandas que el motor solo obedece en `enforce`.

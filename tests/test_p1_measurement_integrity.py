@@ -180,7 +180,7 @@ def test_la_medicion_graba_la_huella_del_corpus():
 
 
 def test_comparar_corpus_distintos_avisa_en_vez_de_restar():
-    sys.path.insert(0, str(_BACKEND / "scripts"))
+    sys.path.append(str(_BACKEND / "scripts"))  # [P1-PLAN-LOTE-13] al FINAL: en cabeza, scripts/plan_gym.py sombreaba a plan_gym
     from culinary_baseline import _corpus_comparable, render
     a = {"corpus": {"huella": "aaaa"}}
     b = {"corpus": {"huella": "bbbb"}}
@@ -197,7 +197,7 @@ def test_comparar_corpus_distintos_avisa_en_vez_de_restar():
 def test_una_foto_SIN_huella_es_desconocido_no_comparable():
     """Las fotos anteriores a este P-fix no la llevan. Tratarlas como comparables presentaría la
     deriva del corpus como el efecto de un cambio de código."""
-    sys.path.insert(0, str(_BACKEND / "scripts"))
+    sys.path.append(str(_BACKEND / "scripts"))  # [P1-PLAN-LOTE-13] al FINAL: en cabeza, scripts/plan_gym.py sombreaba a plan_gym
     from culinary_baseline import _corpus_comparable
     assert _corpus_comparable({"corpus": {"huella": "aaaa"}}, {"planes": 96}) is None
     assert _corpus_comparable({"corpus": {"huella": "aaaa"}}, None) is None

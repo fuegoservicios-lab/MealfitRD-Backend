@@ -182,19 +182,23 @@ def test_apagar_el_interruptor_PROHIBE_los_suplementos():
 
 
 # --------------------------------------------- el país no puede colapsar en silencio
-def test_el_pais_del_formulario_sobrevive_hasta_la_politica():
+def test_el_pais_del_formulario_sobrevive_hasta_la_politica(monkeypatch):
     """Con el sistema de países ENCENDIDO —como está en producción— el país elegido debe
     llegar al mercado y a la cultura.
 
     Se fuerza el knob a propósito: sin él, `country_for_form_data` colapsa cualquier país
     a `DO` y esta comprobación mediría el default, no el contrato. Es la trampa que se
     cobró la auditoría del 09-sep.
-    """
-    os.environ["MEALFIT_COUNTRY_SYSTEM"] = "true"
-    import importlib
 
-    import constants
-    importlib.reload(constants)
+    [P1-PLAN-LOTE-13 · 2026-09-12] Con `monkeypatch.setenv`, no con `os.environ[...] =`: la
+    versión anterior dejaba el knob maestro ENCENDIDO para el resto del worker y además hacía
+    `importlib.reload(constants)`. Eso volvía «flaky» a TRES tests de otros ficheros —la ruta USD
+    del piso de presupuesto, la tortilla de maíz del guard de preparaciones y la identidad
+    `go._RENAL_CONDITION_TERMS is constants.RENAL_CONDITION_TERMS`— que pasaban aislados y caían
+    cuando este fichero corría antes en el mismo proceso. El knob se lee POR LLAMADA, así que
+    el reload nunca hizo falta.
+    """
+    monkeypatch.setenv("MEALFIT_COUNTRY_SYSTEM", "true")
     from constants import country_for_form_data
 
     for cc in ("DO", "ES", "MX", "US", "CO", "PR"):

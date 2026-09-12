@@ -4,7 +4,8 @@ Compilador + snapshot inmutable + loader de runtime (§7.3):
 
   1. Fuente curada versionada: `data/dish_templates*.json` (6 bibliotecas, 338 plantillas con `template_id`
      acuñado en Fase 2) + `constituents` (nombre + gramos): en las 5 beta vienen en la plantilla; en DO los
-     aporta `data/dish_constituents_do.json` (curación de `scripts/build_dish_constituents_do.py`).
+     aporta `data/dish_constituents_do.json` — tabla curada a mano y SSOT; su generador histórico se retiró en
+     P1-PLAN-LOTE-13 y la coherencia con las plantillas la valida `scripts/check_dish_constituents_do.py`.
   2. `compile_library` valida el esquema, resuelve CADA constituyente contra `master_ingredients`
      (nombre canónico + alias, sin acentos) y deriva atributos intrínsecos por porción a partir de las
      columnas por 100 g del catálogo: sodio, potasio, fósforo, grasa saturada, azúcares, carga glucémica

@@ -192,4 +192,6 @@ def test_los_docs_cuentan_el_cierre_y_lo_que_no_se_aplico():
 def test_marker_bumpeado():
     import app
     assert "[P1-PLAN-LOTE-11 · 2026-09-11]" in _src("app.py")
-    assert app._LAST_KNOWN_PFIX.startswith("P1-PLAN-") and "2026-09-11" in app._LAST_KNOWN_PFIX
+    # [P1-PLAN-LOTE-13 · 2026-09-12] «no anterior a este lote», no «igual a hoy»: el pin de la fecha y del prefijo
+    # `P1-PLAN-` rompía 12 tests el primer día en que otro P-fix bumpeaba el marker.
+    assert app._LAST_KNOWN_PFIX.split("·")[-1].strip() >= "2026-09-11", app._LAST_KNOWN_PFIX

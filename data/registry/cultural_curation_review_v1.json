@@ -1,6 +1,6 @@
 {
   "caducity": "la firma vale solo para el snapshot_hash anotado por perfil; cambiar una biblioteca la caduca hasta repetir la revision. OJO [2026-09-08]: `snapshot_hash` se mueve tambien con `catalog_fingerprint`, asi que una edicion del CATALOGO caduca las seis firmas sin que cambie un solo plato — paso hoy, 5 de 6 se re-anclaron con 0 plantillas cambiadas. Si eso molesta, la via es atar la firma a un hash del CONTENIDO de las plantillas, no relajar este guard.",
-  "date": "2026-09-11",
+  "date": "2026-09-12",
   "human_review_notes": "cultural_review_notes_do_2026_09_09.json",
   "kind": "automated",
   "kind_note": "Revisión AUTOMATIZADA: la ejecutó un agente (Claude) por delegación del dueño. Vale como contrato interno y como control de calidad del catálogo; NO es una revisión cultural humana ni una revisión clínica independiente, y no debe presentarse como tal fuera del producto.",
@@ -23,10 +23,11 @@
         "Piso de variedad: el mínimo de candidatos veganos por franja pasó de 1-4 a 7 en las seis cocinas (7 ocasiones sin repetir ⇒ 7 recetas distintas). Segunda tanda de desayunos sin gluten porque `Avena` lleva esa clase y un vegano celíaco tenía UN desayuno en PR, ES y US.",
         "Ninguna ola queda cubierta exclusivamente con soja: quitando la soja siguen quedando ≥5 desayunos veganos en las seis cocinas (test).",
         "«Longaniza santarrosana con papa» usaba `Longaniza dominicana` teniendo `Chorizo santarrosano`. Corregidos ingrediente y nombre («Chorizo santarrosano con papa»).",
-        "[2026-09-08] Re-anclada sin repetir el juicio plato a plato: medido contra el arbol firmado, esta biblioteca tiene CERO plantillas cambiadas (nombre, slots, constituyentes, gramos, excluidos y riesgo, byte a byte). Su `snapshot_hash` se movio solo porque se movio el `catalog_fingerprint` del catalogo (c89f400bb5fd13dd -> d0bd7b4737441a95). Las decisiones de abajo describen exactamente estos platos."
+        "[2026-09-08] Re-anclada sin repetir el juicio plato a plato: medido contra el arbol firmado, esta biblioteca tiene CERO plantillas cambiadas (nombre, slots, constituyentes, gramos, excluidos y riesgo, byte a byte). Su `snapshot_hash` se movio solo porque se movio el `catalog_fingerprint` del catalogo (c89f400bb5fd13dd -> d0bd7b4737441a95). Las decisiones de abajo describen exactamente estos platos.",
+        "[2026-09-12 · P1-PLAN-LOTE-13] Re-anclada sin repetir el juicio plato a plato: medido contra el árbol firmado (scripts/compile_dish_registry.py --check decía DRIFT desde el catálogo del 09-09). Una plantilla cambia en un DATO derivado del catálogo, no en su composición: «Batido de borojó con leche» (tpl_c738ddb3b40d: risk, nut) — el fósforo del Borojó, que era desconocido (`phosphorus_high: null`, fila sin dato), hoy está en el catálogo (migración p1_fosforo_borojo_hoja_santa) y la señal pasa a `false` con 254 mg por ración. Su `snapshot_hash` se movió porque se movió el `catalog_fingerprint` (c0f939dbb4bae32d → 0dfbba0b8837923c). Las decisiones de arriba describen exactamente estos platos."
       ],
-      "reanchored_from": "9294bec0ed1c4d3f9a0aa89375aa52929d715d83a3cae7e99b9d68a3d4b54d9d",
-      "snapshot_hash": "35843fcd901bd71132b5bd56c4c95cf467dadb5464a85d0a1359127738bfdd0d"
+      "reanchored_from": "35843fcd901bd71132b5bd56c4c95cf467dadb5464a85d0a1359127738bfdd0d",
+      "snapshot_hash": "8b0d1f213f65f07e2174391cf87b53668ca2c3f851f4a96791f0725e5a2c70db"
     },
     "dominican_criolla": {
       "accepted": [
@@ -120,10 +121,11 @@
         "Piso de variedad: el mínimo de candidatos veganos por franja pasó de 1-4 a 7 en las seis cocinas (7 ocasiones sin repetir ⇒ 7 recetas distintas). Segunda tanda de desayunos sin gluten porque `Avena` lleva esa clase y un vegano celíaco tenía UN desayuno en PR, ES y US.",
         "Ninguna ola queda cubierta exclusivamente con soja: quitando la soja siguen quedando ≥5 desayunos veganos en las seis cocinas (test).",
         "«Frijoles charros con longaniza» usaba `Longaniza dominicana` teniendo `Chorizo mexicano` en el catálogo — el nombre del plato ya decía «charros». Corregidos ingrediente Y nombre («Frijoles charros con chorizo»): un título que promete longaniza y sirve chorizo es la misma clase de defecto que el motor persigue en los planes vivos.",
-        "[2026-09-08] Re-anclada sin repetir el juicio plato a plato: medido contra el arbol firmado, esta biblioteca tiene CERO plantillas cambiadas (nombre, slots, constituyentes, gramos, excluidos y riesgo, byte a byte). Su `snapshot_hash` se movio solo porque se movio el `catalog_fingerprint` del catalogo (c89f400bb5fd13dd -> d0bd7b4737441a95). Las decisiones de abajo describen exactamente estos platos."
+        "[2026-09-08] Re-anclada sin repetir el juicio plato a plato: medido contra el arbol firmado, esta biblioteca tiene CERO plantillas cambiadas (nombre, slots, constituyentes, gramos, excluidos y riesgo, byte a byte). Su `snapshot_hash` se movio solo porque se movio el `catalog_fingerprint` del catalogo (c89f400bb5fd13dd -> d0bd7b4737441a95). Las decisiones de abajo describen exactamente estos platos.",
+        "[2026-09-12 · P1-PLAN-LOTE-13] Re-anclada sin repetir el juicio plato a plato: medido contra el árbol firmado (scripts/compile_dish_registry.py --check decía DRIFT desde el catálogo del 09-09). CERO plantillas cambiadas (nombre, franja, constituyentes, gramos, excluidos, riesgo, nutrición y logística, byte a byte). Su `snapshot_hash` se movió porque se movió el `catalog_fingerprint` (c0f939dbb4bae32d → 0dfbba0b8837923c). Las decisiones de arriba describen exactamente estos platos."
       ],
-      "reanchored_from": "10bb07c378e677261c5eeeac414a328b6f94b29a9d8f093775cefad502a52316",
-      "snapshot_hash": "f447e420035e5df96d7d14854f2b13d2166fb32d584dd853fee492aa49a3f839"
+      "reanchored_from": "f447e420035e5df96d7d14854f2b13d2166fb32d584dd853fee492aa49a3f839",
+      "snapshot_hash": "b1072fd9418db92b01658bdac7c20ba7473855a562c215d0bc441b92547553c6"
     },
     "puertorico_criolla": {
       "accepted": [
@@ -144,10 +146,11 @@
         "Piso de variedad: el mínimo de candidatos veganos por franja pasó de 1-4 a 7 en las seis cocinas (7 ocasiones sin repetir ⇒ 7 recetas distintas). Segunda tanda de desayunos sin gluten porque `Avena` lleva esa clase y un vegano celíaco tenía UN desayuno en PR, ES y US.",
         "Ninguna ola queda cubierta exclusivamente con soja: quitando la soja siguen quedando ≥5 desayunos veganos en las seis cocinas (test).",
         "Las altas de PR (yuca hervida, tostones, batata asada, plátano maduro) heredan el aviso «cultivar dominicano» del catálogo, igual que las veinte plantillas puertorriqueñas que ya lo tenían. Es un marcador de PROCEDENCIA de la fila, no una falta de disponibilidad: yuca, plátano y batata son alimentos puertorriqueños. Se acepta, como en la revisión anterior.",
-        "[2026-09-08] Re-anclada sin repetir el juicio plato a plato: medido contra el arbol firmado, esta biblioteca tiene CERO plantillas cambiadas (nombre, slots, constituyentes, gramos, excluidos y riesgo, byte a byte). Su `snapshot_hash` se movio solo porque se movio el `catalog_fingerprint` del catalogo (c89f400bb5fd13dd -> d0bd7b4737441a95). Las decisiones de abajo describen exactamente estos platos."
+        "[2026-09-08] Re-anclada sin repetir el juicio plato a plato: medido contra el arbol firmado, esta biblioteca tiene CERO plantillas cambiadas (nombre, slots, constituyentes, gramos, excluidos y riesgo, byte a byte). Su `snapshot_hash` se movio solo porque se movio el `catalog_fingerprint` del catalogo (c89f400bb5fd13dd -> d0bd7b4737441a95). Las decisiones de abajo describen exactamente estos platos.",
+        "[2026-09-12 · P1-PLAN-LOTE-13] Re-anclada sin repetir el juicio plato a plato: medido contra el árbol firmado (scripts/compile_dish_registry.py --check decía DRIFT desde el catálogo del 09-09). CERO plantillas cambiadas (nombre, franja, constituyentes, gramos, excluidos, riesgo, nutrición y logística, byte a byte). Su `snapshot_hash` se movió porque se movió el `catalog_fingerprint` (c0f939dbb4bae32d → 0dfbba0b8837923c). Las decisiones de arriba describen exactamente estos platos."
       ],
-      "reanchored_from": "273f41cf5069f11f67d462d6b8a345b1e81bc810dca4a462a8351f69a2403aaf",
-      "snapshot_hash": "685d9887b9e3882c1fe62d362ea70505a88acadc06e2c78b1ce6ce74532c349e"
+      "reanchored_from": "685d9887b9e3882c1fe62d362ea70505a88acadc06e2c78b1ce6ce74532c349e",
+      "snapshot_hash": "d05274910b257584d8aa2c85703089aac6e84649b7ced59a69880ab8c0a561e7"
     },
     "spain_mediterranea": {
       "accepted": [
@@ -167,10 +170,26 @@
         "Piso de variedad: el mínimo de candidatos veganos por franja pasó de 1-4 a 7 en las seis cocinas (7 ocasiones sin repetir ⇒ 7 recetas distintas). Segunda tanda de desayunos sin gluten porque `Avena` lleva esa clase y un vegano celíaco tenía UN desayuno en PR, ES y US.",
         "Ninguna ola queda cubierta exclusivamente con soja: quitando la soja siguen quedando ≥5 desayunos veganos en las seis cocinas (test).",
         "Cena «Salteado de edamame con espárragos y arroz integral» → «…con patata»: arroz como BASE no va en cena (regla dura del juez culinario). Se cambió el acompañamiento en vez de recolocar la etiqueta — mover el rótulo habría mentido sobre lo que el plato es.",
-        "[2026-09-08] Re-anclada sin repetir el juicio plato a plato: medido contra el arbol firmado, esta biblioteca tiene CERO plantillas cambiadas (nombre, slots, constituyentes, gramos, excluidos y riesgo, byte a byte). Su `snapshot_hash` se movio solo porque se movio el `catalog_fingerprint` del catalogo (c89f400bb5fd13dd -> d0bd7b4737441a95). Las decisiones de abajo describen exactamente estos platos."
+        "[2026-09-08] Re-anclada sin repetir el juicio plato a plato: medido contra el arbol firmado, esta biblioteca tiene CERO plantillas cambiadas (nombre, slots, constituyentes, gramos, excluidos y riesgo, byte a byte). Su `snapshot_hash` se movio solo porque se movio el `catalog_fingerprint` del catalogo (c89f400bb5fd13dd -> d0bd7b4737441a95). Las decisiones de abajo describen exactamente estos platos.",
+        "[2026-09-12 · P1-PLAN-LOTE-13 · E9] Nueve almuerzos vegetarianos de DESPENSA añadidos (7 de ellos también cena): «Patatas guisadas con huevo escalfado y pimentón» (tpl_250f13abcd15); «Arroz con garbanzos, zanahoria y pimentón» (tpl_28e7588a586c); «Macarrones con salsa de tomate y queso curado» (tpl_50cf720cd524); «Ensalada de garbanzos con huevo duro, aceitunas y cebolla» (tpl_65b8503d7106); «Garbanzos guisados con pimentón y huevo duro» (tpl_6e7dacc8a2ef); «Judías blancas estofadas con patata, laurel y pimentón» (tpl_9a2990dc877a); «Trinxat de col y patata con huevo» (tpl_a1e6ad600e91); «Lentejas estofadas con patata y zanahoria» (tpl_c7303228987a); «Arroz a la cubana con huevo y salsa de tomate» (tpl_fa89b5d4bec3). Motivo medido con scripts/coverage_funnel.py: el cruce «vegetariano · día 25 sin congelador» dejaba UN almuerzo (la tortilla española; los otros 9 llevan calabacín, berenjena, tomate, pimiento, espinacas o acelgas de 7-10 días). Todo constituyente aguanta ≥ 35 días (legumbre seca, arroz, pasta, huevo, patata, zanahoria, col, cebolla, ajo, conserva); gramos CRUDOS y nombres EXACTOS del catálogo; 375-672 kcal y 18-26 g de proteína por ración; ninguno con sodio ≥ 600 mg. Resultado: almuerzo 1 → 10 y cena 3 → 8 en ese cruce; vegetariano 10 → 19 y vegano 7 → 10 en almuerzo. Las 124 plantillas anteriores quedan byte-idénticas (nombre, franja, constituyentes, gramos, riesgo, nutrición, logística). El catalog_fingerprint pasó también de c0f939dbb4bae32d a 0dfbba0b8837923c (drift de catálogo pre-existente desde el 09-09)."
       ],
-      "reanchored_from": "1c68bb98dad89452c1864bb535c1f90a12c6d6777d5ed7bab0d049bbf090732f",
-      "snapshot_hash": "cb2241db6e8e0c2c5c1347d85f845cf4ba3f94db63837c4e53a66c9b63d2a562"
+      "reanchored_from": "cb2241db6e8e0c2c5c1347d85f845cf4ba3f94db63837c4e53a66c9b63d2a562",
+      "snapshot_hash": "158c7cd9e30922531e46883d01d37611ee3386ed3ce89b1ed26cab3ac965dc56",
+      "pendiente_de_juicio_humano": {
+        "fecha": "2026-09-12",
+        "motivo": "los 9 almuerzos de despensa de P1-PLAN-LOTE-13 (E9) entraron por medición del embudo de cobertura, no por juicio cultural humano. La revisión del dueño (A9 del plan de pendientes) debe mirarlos plato a plato.",
+        "platos": [
+          "Patatas guisadas con huevo escalfado y pimentón",
+          "Arroz con garbanzos, zanahoria y pimentón",
+          "Macarrones con salsa de tomate y queso curado",
+          "Ensalada de garbanzos con huevo duro, aceitunas y cebolla",
+          "Garbanzos guisados con pimentón y huevo duro",
+          "Judías blancas estofadas con patata, laurel y pimentón",
+          "Trinxat de col y patata con huevo",
+          "Lentejas estofadas con patata y zanahoria",
+          "Arroz a la cubana con huevo y salsa de tomate"
+        ]
+      }
     },
     "us_everyday": {
       "accepted": [
@@ -189,10 +208,11 @@
         "Piso de variedad: el mínimo de candidatos veganos por franja pasó de 1-4 a 7 en las seis cocinas (7 ocasiones sin repetir ⇒ 7 recetas distintas). Segunda tanda de desayunos sin gluten porque `Avena` lleva esa clase y un vegano celíaco tenía UN desayuno en PR, ES y US.",
         "Ninguna ola queda cubierta exclusivamente con soja: quitando la soja siguen quedando ≥5 desayunos veganos en las seis cocinas (test).",
         "Cena «Salteado de edamame con brócoli y arroz integral» → «…con batata», por la misma regla de arroz en cena.",
-        "[2026-09-08] Re-anclada sin repetir el juicio plato a plato: medido contra el arbol firmado, esta biblioteca tiene CERO plantillas cambiadas (nombre, slots, constituyentes, gramos, excluidos y riesgo, byte a byte). Su `snapshot_hash` se movio solo porque se movio el `catalog_fingerprint` del catalogo (c89f400bb5fd13dd -> d0bd7b4737441a95). Las decisiones de abajo describen exactamente estos platos."
+        "[2026-09-08] Re-anclada sin repetir el juicio plato a plato: medido contra el arbol firmado, esta biblioteca tiene CERO plantillas cambiadas (nombre, slots, constituyentes, gramos, excluidos y riesgo, byte a byte). Su `snapshot_hash` se movio solo porque se movio el `catalog_fingerprint` del catalogo (c89f400bb5fd13dd -> d0bd7b4737441a95). Las decisiones de abajo describen exactamente estos platos.",
+        "[2026-09-12 · P1-PLAN-LOTE-13] Re-anclada sin repetir el juicio plato a plato: medido contra el árbol firmado (scripts/compile_dish_registry.py --check decía DRIFT desde el catálogo del 09-09). CERO plantillas cambiadas (nombre, franja, constituyentes, gramos, excluidos, riesgo, nutrición y logística, byte a byte). Su `snapshot_hash` se movió porque se movió el `catalog_fingerprint` (c0f939dbb4bae32d → 0dfbba0b8837923c). Las decisiones de arriba describen exactamente estos platos."
       ],
-      "reanchored_from": "53d17bfdd016a3a7afc545788ab8990b99cc33d79110cf8baf13215ef380c6ba",
-      "snapshot_hash": "eab7cafd4ece07797f5b1d1952528faa01fe759177612dba7aacd04591c0caca"
+      "reanchored_from": "eab7cafd4ece07797f5b1d1952528faa01fe759177612dba7aacd04591c0caca",
+      "snapshot_hash": "9568d3f399286482de65e83f266136f1ccde3f2a000be2fadc7fa3e9e271cf8c"
     }
   },
   "reviewer": "Claude (revisión curatorial delegada por el dueño)",
@@ -207,5 +227,6 @@
   "reanchor_note_2026_09_10g": "P1-QUESO-DE-PAPA-A-GOUDA: los 8 platos dominicanos con «queso de papa» pasan a queso GOUDA, nombre e ingrediente. La fila «Queso de papa» es EDAM (USDA 173419) con un nombre PUERTORRIQUEÑO y sin precio dominicano; el gouda es prácticamente el mismo queso (356 kcal, 24,9 g prot, 27,4 g grasa contra 357, 25,0, 28,6) con un 16 % menos de sodio, y el súper del dueño vende 17. El queso de papa sigue en la biblioteca de Puerto Rico. Además: el puntero USDA del gouda era el del FETA (173420) y pasa a 171241 sin tocar un valor, y 3 de 193 recetas dominicanas pasan del voseo al tuteo.",
   "reanchor_note_2026_09_10h": "P1-DO-DESPENSA-DE-SU-MERCADO: seis ingredientes sin precio resueltos con lo que el dueño trajo de su mercado. Azúcar morena = «azúcar crema» y pan rallado = «pan molido» en RD (gloss_es), con precio owner_verified igual que el sazón Goya culantro y achiote y el hummus. El SOFRITO se hace, no se compra: se desglosa en ají cubanela, cilantro, cebolla y ajo en los 3 platos que lo usaban (los 15 g se conservan). Salen de la biblioteca dominicana los 3 platos de SÉMOLA DE MAÍZ (2 chenchén y el chacá): el dueño no la conoce, la Maizena no la sustituye y el maíz partido no está en su súper; vuelven si aparece. El queso de hoja documenta su procedencia (sin etiqueta: se vende en funditas).",
   "reanchor_note_2026_09_11": "P1-PLAN-LOTE-11 · C8: re-anclaje de dominican_criolla tras aplicar la curación HUMANA del dueño sobre las 4 plantillas sin receta: 3 renombres (id estable por TEMPLATE_ALIASES) + 1 retirada + 3 recetas nuevas en la biblioteca (v7). Hash fb66c4eb297d → d73278132f7d. Las otras cinco bibliotecas no se tocan (siguen en DRIFT de catálogo desde el 06-sep, ya anotado: su firma es la de entonces).",
-  "reanchor_note_2026_09_11b": "P1-PLAN-LOTE-12 · C8-b: re-anclaje de dominican_criolla tras renombrar UN constituyente («Limón» → «Jugo de limón», alias de la misma fila) a petición del dueño. Hash d73278132f7d → 163fa9e312d0."
+  "reanchor_note_2026_09_11b": "P1-PLAN-LOTE-12 · C8-b: re-anclaje de dominican_criolla tras renombrar UN constituyente («Limón» → «Jugo de limón», alias de la misma fila) a petición del dueño. Hash d73278132f7d → 163fa9e312d0.",
+  "reanchor_note_2026_09_12": "P1-PLAN-LOTE-13: re-anclaje de las CINCO bibliotecas no dominicanas, que llevaban en DRIFT de catálogo desde el 09-09 (la firma valía para un snapshot que ya no era reproducible). Medido plato a plato contra el árbol firmado antes de mover cada hash: es +9 (cb2241db6e8e→158c7cd9e309) · mx 0 cambios (f447e420035e→b1072fd9418d) · co 0 cambios (1 dato derivado) (35843fcd901b→8b0d1f213f65) · pr 0 cambios (685d9887b9e3→d05274910b25) · us 0 cambios (eab7cafd4ece→9568d3f39928). La española además gana 9 almuerzos vegetarianos de despensa (E9 del plan de pendientes), anotados en `pendiente_de_juicio_humano` para la revisión del dueño (A9)."
 }

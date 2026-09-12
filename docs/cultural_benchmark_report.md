@@ -4,12 +4,12 @@ Gate: **PASA**
 
 | Perfil | Biblioteca | Plantillas | Des/Alm/Cen/Mer | Resueltos | Contaminación | Adecuación | Disponib. riesgo | Proteínas/Técnicas | Clínico | Revisión humana |
 |---|---|---|---|---|---|---|---|---|---|---|
-| dominican_criolla | do | 193 | 54/63/56/52 | 100.0 % | 0 | ok (fritura 0 %) | 0.0 % | 13/41 | ok (procesados 3, sodio 16) | 0 marcadas · firma: automated (Claude (revisión curatorial delegada por el dueño), 2026-09-11) |
-| puertorico_criolla | pr | 132 | 37/46/37/23 | 100.0 % | 1 | ok (fritura 6 %) | 14.9 % | 13/15 | ok (procesados 12, sodio 23) | 67 marcadas · firma: automated (Claude (revisión curatorial delegada por el dueño), 2026-09-11) |
-| mexico_casera | mx | 126 | 38/46/39/25 | 100.0 % | 0 | ok (fritura 1 %) | 2.6 % | 13/15 | ok (procesados 5, sodio 10) | 15 marcadas · firma: automated (Claude (revisión curatorial delegada por el dueño), 2026-09-11) |
-| colombia_casera | co | 134 | 37/48/39/27 | 100.0 % | 0 | ok (fritura 1 %) | 12.7 % | 12/16 | ok (procesados 6, sodio 7) | 61 marcadas · firma: automated (Claude (revisión curatorial delegada por el dueño), 2026-09-11) |
-| spain_mediterranea | es | 124 | 39/54/45/24 | 100.0 % | 0 | ok (fritura 0 %) | 5.3 % | 12/15 | ok (procesados 24, sodio 28) | 27 marcadas · firma: automated (Claude (revisión curatorial delegada por el dueño), 2026-09-11) |
-| us_everyday | us | 119 | 34/44/37/19 | 100.0 % | 3 | ok (fritura 0 %) | 4.9 % | 12/16 | ok (procesados 7, sodio 21) | 26 marcadas · firma: automated (Claude (revisión curatorial delegada por el dueño), 2026-09-11) |
+| dominican_criolla | do | 193 | 54/63/56/52 | 100.0 % | 0 | ok (fritura 0 %) | 0.0 % | 13/41 | ok (procesados 3, sodio 16) | 0 marcadas · firma: automated (Claude (revisión curatorial delegada por el dueño), 2026-09-12) |
+| puertorico_criolla | pr | 132 | 37/46/37/23 | 100.0 % | 1 | ok (fritura 6 %) | 14.9 % | 13/15 | ok (procesados 12, sodio 23) | 67 marcadas · firma: automated (Claude (revisión curatorial delegada por el dueño), 2026-09-12) |
+| mexico_casera | mx | 126 | 38/46/39/25 | 100.0 % | 0 | ok (fritura 1 %) | 2.6 % | 13/15 | ok (procesados 5, sodio 10) | 15 marcadas · firma: automated (Claude (revisión curatorial delegada por el dueño), 2026-09-12) |
+| colombia_casera | co | 134 | 37/48/39/27 | 100.0 % | 0 | ok (fritura 1 %) | 12.7 % | 12/16 | ok (procesados 6, sodio 7) | 61 marcadas · firma: automated (Claude (revisión curatorial delegada por el dueño), 2026-09-12) |
+| spain_mediterranea | es | 133 | 39/63/50/24 | 100.0 % | 0 | ok (fritura 0 %) | 5.4 % | 12/15 | ok (procesados 24, sodio 28) | 31 marcadas · firma: automated (Claude (revisión curatorial delegada por el dueño), 2026-09-12) |
+| us_everyday | us | 119 | 34/44/37/19 | 100.0 % | 3 | ok (fritura 0 %) | 4.9 % | 12/16 | ok (procesados 7, sodio 21) | 26 marcadas · firma: automated (Claude (revisión curatorial delegada por el dueño), 2026-09-12) |
 
 Mezcla 0,7/0,3 en 10 días: todas las parejas con candidatos en las 4 franjas (30 parejas).
 
@@ -173,11 +173,12 @@ Mezcla 0,7/0,3 en 10 días: todas las parejas con candidatos en las 4 franjas (3
   - disponibilidad: «Puré de auyama con huevo duro» usa Auyama (cultivar dominicano)
   - disponibilidad: «Tortilla de papa con queso» usa Papa (cultivar dominicano)
   - disponibilidad: «Huevos con auyama y queso» usa Auyama (cultivar dominicano)
-- **spain_mediterranea** — para revisión humana: Albóndigas en salsa con puré de patata; Bacalao con patatas al horno; Bocadillo de jamón serrano con tomate; Bocadillo de tortilla española; Conejo al ajillo con patatas; Cordero asado con patatas panaderas; Crema de calabacín con queso; Crema de zanahoria con queso; Ensaladilla rusa con atún en lata; Huevos rotos con patatas y jamón serrano; Menestra de verduras con jamón serrano; Pan de agua con mantequilla de almendras y plátano …
+- **spain_mediterranea** — para revisión humana: Albóndigas en salsa con puré de patata; Bacalao con patatas al horno; Bocadillo de jamón serrano con tomate; Bocadillo de tortilla española; Conejo al ajillo con patatas; Cordero asado con patatas panaderas; Crema de calabacín con queso; Crema de zanahoria con queso; Ensaladilla rusa con atún en lata; Huevos rotos con patatas y jamón serrano; Judías blancas estofadas con patata, laurel y pimentón; Lentejas estofadas con patata y zanahoria …
   - disponibilidad: «Pan de agua con mantequilla de almendras y plátano» usa Pan de agua (cultivar dominicano)
   - disponibilidad: «Potaje de garbanzos con acelgas» usa Papa (cultivar dominicano)
   - disponibilidad: «Menestra de verduras con jamón serrano» usa Papa (cultivar dominicano)
   - disponibilidad: «Patata cocida con aceite de oliva y pimentón» usa Papa (cultivar dominicano)
+  - disponibilidad: «Patatas guisadas con huevo escalfado y pimentón» usa Papa (cultivar dominicano)
   - disponibilidad: «Pulpo a la gallega con patata y pimentón» usa Papa (cultivar dominicano)
   - disponibilidad: «Tortilla española con patata y cebolla» usa Papa (cultivar dominicano)
   - disponibilidad: «Crema de zanahoria con queso» usa Papa (cultivar dominicano)
@@ -189,12 +190,15 @@ Mezcla 0,7/0,3 en 10 días: todas las parejas con candidatos en las 4 franjas (3
   - disponibilidad: «Pollo al ajillo con patatas panaderas» usa Papa (cultivar dominicano)
   - disponibilidad: «Potaje de garbanzos con bacalao» usa Papa (cultivar dominicano)
   - disponibilidad: «Bocadillo de jamón serrano con tomate» usa Pan de agua (cultivar dominicano)
+  - disponibilidad: «Judías blancas estofadas con patata, laurel y pimentón» usa Papa (cultivar dominicano)
   - disponibilidad: «Tortilla de patatas con jamón serrano» usa Papa (cultivar dominicano)
+  - disponibilidad: «Trinxat de col y patata con huevo» usa Papa (cultivar dominicano)
   - disponibilidad: «Huevos rotos con patatas y jamón serrano» usa Papa (cultivar dominicano)
   - disponibilidad: «Soya texturizada a la jardinera con patata» usa Papa (cultivar dominicano)
   - disponibilidad: «Crema de calabacín con queso» usa Papa (cultivar dominicano)
   - disponibilidad: «Ternera guisada con patatas y zanahoria» usa Papa (cultivar dominicano)
   - disponibilidad: «Bocadillo de tortilla española» usa Papa (cultivar dominicano)
+  - disponibilidad: «Lentejas estofadas con patata y zanahoria» usa Papa (cultivar dominicano)
   - disponibilidad: «Vieiras a la plancha con puerro» usa Papa (cultivar dominicano)
   - disponibilidad: «Bacalao con patatas al horno» usa Papa (cultivar dominicano)
   - disponibilidad: «Conejo al ajillo con patatas» usa Papa (cultivar dominicano)
