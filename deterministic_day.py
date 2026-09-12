@@ -319,6 +319,57 @@ def _macros(gramos_por_nombre, catalogo: dict) -> Optional[dict]:
     return tot if tot["kcal"] > 0 else None
 
 
+class _CatalogoPorNombre(dict):
+    """[P1-PLAN-LOTE-12 · 2026-09-11 · C8-b] `nombre → fila del catálogo`, con el MISMO resolutor que el compilador
+    del registry como respaldo (`dish_registry.build_catalog_index` + `resolve_constituent`: alias y plural simple).
+
+    Antes el catálogo era `{name: fila}` a secas y un constituyente escrito por ALIAS («Jugo de limón», alias de
+    la fila «Limón») compilaba `ok` en el registry pero aquí `catalogo.get()` devolvía `None` y `construir_comida`
+    descartaba el plato: una plantilla muerta que compilaba verde. Medido al curar C8, cuando el dueño pidió que el
+    rótulo dijera «Jugo de limón» y no «Limón». El nombre canónico gana siempre (los alias no lo pisan); la
+    resolución se hace UNA vez por nombre y se cachea. `values()`/`items()`/`len()` siguen siendo las filas
+    canónicas: el resolutor no añade filas, sólo responde por otro nombre.
+    tooltip-anchor: _CatalogoPorNombre (test_p1_plan_lote_12.py)
+    """
+
+    def __init__(self, rows):
+        rows = [r for r in (rows or []) if isinstance(r, dict) and r.get("name")]
+        super().__init__((str(r["name"]), r) for r in rows)
+        self._rows = rows
+        self._idx = None
+        self._cache: dict = {}
+
+    def _resolver(self, nombre):
+        k = str(nombre)
+        if k in self._cache:
+            return self._cache[k]
+        fila = None
+        try:
+            import dish_registry as dr
+            if self._idx is None:
+                self._idx = dr.build_catalog_index(self._rows)
+            fila = dr.resolve_constituent(k, self._idx)
+        except Exception:
+            fila = None
+        self._cache[k] = fila
+        return fila
+
+    def __missing__(self, nombre):
+        fila = self._resolver(nombre)
+        if fila is None:
+            raise KeyError(nombre)
+        return fila
+
+    def get(self, nombre, default=None):
+        if dict.__contains__(self, nombre):
+            return dict.__getitem__(self, nombre)
+        fila = self._resolver(nombre)
+        return default if fila is None else fila
+
+    def __contains__(self, nombre):
+        return dict.__contains__(self, nombre) or self._resolver(nombre) is not None
+
+
 def _de_plantilla(t: dict) -> list:
     return [(float(c.get("grams") or 0), c.get("name"))
             for c in (t.get("constituents") or []) if c.get("name")]
@@ -1146,7 +1197,8 @@ def build_day_for_skeleton(nutrition, form_data, skeleton_day, day_num, user_id=
 
         import dish_registry as dr
         from shopping_calculator import get_master_ingredients
-        catalogo = {str(r.get("name")): r for r in (get_master_ingredients() or [])}
+        # [P1-PLAN-LOTE-12] por nombre canónico y, si no, con el resolutor del compilador (alias del catálogo)
+        catalogo = _CatalogoPorNombre(get_master_ingredients() or [])
         if not catalogo:
             return None
         por_id = dr.templates_by_id(country) or {}

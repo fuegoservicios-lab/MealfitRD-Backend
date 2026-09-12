@@ -127,10 +127,15 @@ dos corridas independientes:
   chillo salió del catálogo)—, conservan su `template_id` (`plan_policy.TEMPLATE_ALIASES`) y entran en la
   biblioteca con sus recetas (v7: las únicas tres juzgadas una a una por un humano). La «Batida de zapote ligera»
   sale del registry: falta el zapote, ingrediente principal; vuelve cuando el catálogo tenga la fila con pulpa
-  comestible, nutrición y precio verificado. Registry DO: 193 plantillas, 193 `ok`, 0 `partial`. Lo único no
-  aplicado literal: el rótulo «Jugo de limón 10 g» — el día determinista resuelve su catálogo por nombre canónico,
-  sin alias (`catalogo = {name: fila}`), así que el constituyente sigue siendo «Limón» y el jugo se nombra en el
-  paso; cambiar el rótulo es decisión aparte del dueño. Y una trampa medida al aplicarlo: la tabla curada
+  comestible, nutrición y precio verificado. Registry DO: 193 plantillas, 193 `ok`, 0 `partial`. El rótulo
+  «Jugo de limón 10 g» pidió una segunda decisión y el dueño la tomó (`P1-PLAN-LOTE-12`): el constituyente se llama
+  «Jugo de limón», resuelve a la fila «Limón» por alias del catálogo, y el día determinista dejó de indexar su
+  catálogo por nombre exacto — `_CatalogoPorNombre` responde por nombre canónico y, si no, con el MISMO resolutor
+  que el compilador del registry (`dish_registry.resolve_constituent`). Antes, un alias que resolvía en el
+  compilador y no en el consumidor era una plantilla muerta que compilaba verde. La lista y la Nevera ya lo
+  resolvían solas: `_parse_quantity` canonicaliza «Jugo de limón» → «Limón» y aplica el rendimiento del jugo
+  (P1-CITRUS-JUICE-YIELD, ×2,86), así que «me lo comí» descuenta ~29 g de limón entero de la fila que compró la
+  lista — sin maquinaria nueva (`docs/pantry_name_resolution.md`). Y una trampa medida al aplicarlo: la tabla curada
   `data/dish_constituents_do.json` **es el SSOT** — su script generador ya no la reproduce (75 entradas divergen
   desde las curaciones del 09-09/09-10; regenerarla dejaba dos plantillas sin constituyentes).
 

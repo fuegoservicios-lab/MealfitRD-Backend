@@ -62,6 +62,13 @@ SSOT del acceso a datos: [`db_inventory.py`](../db_inventory.py) →
 El peldaño 2 solo corre si el 1 falla. No se puede indexar sin una columna
 generada, y eso es DDL: iría a `migrations/`, no a un fix de comportamiento.
 
+[P1-PLAN-LOTE-12 · 2026-09-11] Un rótulo que es ALIAS del catálogo («10 g de Jugo de limón», constituyente del
+registry desde C8) NO necesita peldaño propio: `pantry_names_match("Jugo de limón", "Limón")` da `False` a
+propósito (peldaño 4: un alias con calificativo no colapsa sobre su canónico), pero la línea nunca llega así al
+matcher — `shopping_calculator._parse_quantity` ya devuelve `normalize_name(name_raw)` («Limón») y aplica
+P1-CITRUS-JUICE-YIELD (×2,86: 10 g de jugo son ~29 g de limón entero), igual que la lista de compras. Medido antes
+de añadir maquinaria: la función aislada decía «no casa» y el camino real casaba. Mide la capa que corre.
+
 ### Equivalencia singular/plural
 
 `_pantry_token_variants` devuelve un **conjunto** de formas singulares

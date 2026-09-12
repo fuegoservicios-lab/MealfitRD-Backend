@@ -122,7 +122,10 @@ _PROCESS_START_ISO = datetime.now(timezone.utc).isoformat()
 # [P1-PLAN-LOTE-11 · 2026-09-11] Undécimo lote (C8, curación del DUEÑO): las 4 plantillas DO sin receta congelada se
 # cierran plato a plato desde la ficha interactiva — 3 renombradas a lo que de verdad traen (id estable) con sus recetas
 # en la biblioteca (v7) y la batida de zapote retirada. Registry DO 193/193 `ok`; la tabla curada es el SSOT, no su script.
-_LAST_KNOWN_PFIX = "P1-PLAN-LOTE-11 · 2026-09-11"
+# [P1-PLAN-LOTE-12 · 2026-09-11] C8-b: el rótulo «Jugo de limón» que pidió el dueño. El catálogo del día determinista era
+# `{name: fila}` a secas: un constituyente por ALIAS compilaba `ok` y aquí no se servía jamás. Ahora responde por nombre
+# canónico y, si no, con el MISMO resolutor que el compilador del registry (`_CatalogoPorNombre`).
+_LAST_KNOWN_PFIX = "P1-PLAN-LOTE-12 · 2026-09-11"
 
 # [P1-SENTRY-SAMPLE-COST · 2026-05-12] Sentry sampling driven from env vars
 # con default seguro 0.1 (10%). Pre-fix tenía `traces_sample_rate=1.0` y

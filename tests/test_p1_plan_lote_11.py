@@ -95,8 +95,8 @@ def test_el_registry_do_no_tiene_parciales_ni_declaraciones_sin_resolver(reg):
 def test_los_constituyentes_del_mangu_y_del_pescado_son_los_que_el_titulo_promete(por_id):
     assert "Jamón de pavo" in [c["name"] for c in por_id["tpl_4afb7ed71229"]["constituents"]]
     assert "Filete de pescado blanco" in [c["name"] for c in por_id["tpl_81b612498f83"]["constituents"]]
-    # el limón se compra entero: el día determinista resuelve su catálogo por nombre canónico, sin alias
-    assert "Limón" in [c["name"] for c in por_id["tpl_0ae55a98c3e3"]["constituents"]]
+    # [P1-PLAN-LOTE-12] el rótulo que pidió el dueño; resuelve a la fila «Limón» por alias del catálogo
+    assert "Jugo de limón" in [c["name"] for c in por_id["tpl_0ae55a98c3e3"]["constituents"]]
 
 
 # ─────────────────────────── el id no se mueve con el renombre ───────────────────────────
@@ -129,7 +129,7 @@ def test_frutas_picadas_guineo_sin_cascara_limon_exprimido_y_menta_opcional(lib)
     pasos = lib["por_id"]["tpl_0ae55a98c3e3"]["pasos"]
     txt = " ".join(pasos)
     assert "sin cáscara" in pasos[2]
-    assert "exprime el limón" in pasos[3] and "suavidad" in pasos[3]
+    assert "jugo de limón" in pasos[3] and "suavidad" in pasos[3]
     assert "menta" in pasos[-1].lower() and "opcional" in pasos[-1]
     assert txt.lower().count("menta") == 1, "la menta sólo aparece como opcional, en el último paso"
 
