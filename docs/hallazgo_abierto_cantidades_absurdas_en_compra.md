@@ -1,6 +1,6 @@
 # Hallazgo abierto: la lista compra 30 cucharadas de aceite para un plato que usa ¾ de cucharadita
 
-**Fecha:** 2026-09-08 · **Estado:** mecanismo IDENTIFICADO y fuente YA CERRADA; queda residuo histórico en 3 planes · **Severidad:** alta por caso, baja por volumen
+**Fecha:** 2026-09-08 · **Estado:** CERRADO 2026-09-12 (`P1-PLAN-LOTE-17`, D4) — productor identificado y REPRODUCIDO, residuo 0 en la flota actual, sin barrido · **Severidad:** alta por caso, baja por volumen
 
 ## Qué se midió
 
@@ -119,3 +119,50 @@ así que el productor escribe por asignación, no por append — o vive fuera de
 
 Volumen bajo (3-4 comidas de 1.194, en 3 planes), pero el caso del aceite es caro y visible: quien
 lo compre va a notar la botella entera.
+
+## Cierre 2026-09-12 · D4 (`P1-PLAN-LOTE-17`)
+
+### Quién escribe el `30`: reproducido con la función real
+
+El productor es la rama «polvo de queso» del piso (`P1-CHEESE-DUST-BUMP`, dentro de
+`_floor_subservible_portions`) llamando a `nutrition_db.rescale_ingredient_string` con
+`factor = PORTION_SHRINK_FLOOR_G / gramos_del_polvo` sobre la línea de `ingredients_raw` que eligió por ÍNDICE
+(hasta `P1-FLOOR-RAW-BY-FOOD`, 2026-09-07). `rescale` conserva el token de unidad tal cual (`cdas`, `tazas`) y sólo
+mueve el número: por eso el mismo `30` aparece con tres unidades. Y el `30` no es un default: es **15 g × 2**, porque
+en los tres casos la cantidad de raw era el doble de los gramos del polvo (½ frente a ¼ g; ¼ frente a ⅛ g).
+
+| raw ANTES (la misma cantidad que lee el display) | polvo de queso en el display | factor = 15 / g | raw DESPUÉS (el literal del hallazgo) |
+|---|---|---|---|
+| `0.5 cdas de cebolla picada` (= «½ cda») | 0,25 g | 60× | **`30 cdas de cebolla picada`** |
+| `0,5 tazas de rábanos` (= «½ taza») | 0,25 g | 60× | **`30 tazas de rábanos`** |
+| `0.25 cdas de aceite de oliva` (= «¾ cdta») | 0,125 g | 120× | **`30 cdas de aceite de oliva`** |
+
+Reproducido de punta a punta con `_floor_subservible_portions` sobre una comida con raw reordenado y
+`RAW_PAIR_BY_FOOD=False` (el resolutor por alimento vuelve al índice): salen exactamente `30 cdas de cebolla picada`
+y `30 cdas de aceite de oliva`, y el queso de raw se queda en 0,25 g sin subir — la misma asimetría que se midió el
+09-08 (display sano, compra rota). Con el knob encendido (producción) el queso sube en las dos listas y la cebolla no
+se mueve. Test: `tests/test_p1_plan_lote_17.py`.
+
+### Lo que se cerró además: la rama ya no depende del knob
+
+La resolución por alimento cerraba el defecto **mientras `RAW_PAIR_BY_FOOD` esté encendido**: apagarlo devolvía el
+índice y con él el `30`. La rama del queso ahora sólo escribe en raw si la línea elegida ES de queso
+(`"queso" in _sa(raw[_ri])`, tooltip-anchor `P1-PLAN-LOTE-17-QUESO-RAW-GUARD`): un factor de 60× o 120× nace de los
+gramos del polvo y no tiene sentido en ninguna otra línea. El factor sigue sin cota superior a propósito: sobre el
+queso, 0,25 g → 15 g es exactamente lo que la rama quiere hacer.
+
+### El residuo y el barrido
+
+Medido el 2026-09-12 (`scripts/medir_cantidades_absurdas_raw.py`, sólo SELECTs, incluye `_archived_days`):
+
+| | |
+|---|---|
+| planes en `meal_plans` | 6 (5 con días) |
+| comidas revisadas | 100 |
+| líneas de raw con cantidad absurda | **0** |
+| planes del hallazgo (`d476023a`, `7c545d59`, `e2bbb280`, de jul-31/ago-1) | ya no existen |
+
+La flota pasó de 95 planes (09-08) a 6: la purga de cuentas se llevó los planes dañados. **No hay nada que barrer**, y
+la decisión que la fila D4 dejaba al dueño queda sin objeto. La sonda queda para re-medir cuando haya flota: cruza
+cada línea absurda de raw con su gemela del display en ml (cdta 5 · cda 15 · taza 240) y sólo acusa si la compra
+supera 3× la receta, así que el falso positivo del 09-08 («2¼ tazas» = «34,75 cdas») no vuelve a inflar el número.

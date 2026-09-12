@@ -147,7 +147,11 @@ _PROCESS_START_ISO = datetime.now(timezone.utc).isoformat()
 # 16 técnicas corregidas con id estable (TEMPLATE_ALIASES + TEMPLATE_MINT_TECHNIQUE: la técnica entra en el id como el
 # nombre), `spec` por constituyente y `prep_notes` por plantilla atraviesan el compilador sin mover nutrición, las 19
 # recetas DO reescritas (v8). «aguanta N d» era la etiqueta de la ficha para la vida de los INGREDIENTES, no del plato.
-_LAST_KNOWN_PFIX = "P1-PLAN-LOTE-16 · 2026-09-12"
+# [P1-PLAN-LOTE-17 · 2026-09-12] D4: el literal «30 cdas» de la compra lo escribía la rama «polvo de queso» del piso
+# (factor 15 g / 0,25 g = 60× por ÍNDICE sobre la línea de OTRO alimento; reproducido con la función real, y con
+# RAW_PAIR_BY_FOOD apagado volvía). La rama ya sólo escribe raw en una línea de queso. Residuo en la flota: 0 de 100
+# comidas, los 3 planes del hallazgo ya no existen ⇒ sin barrido. Sonda: scripts/medir_cantidades_absurdas_raw.py.
+_LAST_KNOWN_PFIX = "P1-PLAN-LOTE-17 · 2026-09-12"
 
 # [P1-SENTRY-SAMPLE-COST · 2026-05-12] Sentry sampling driven from env vars
 # con default seguro 0.1 (10%). Pre-fix tenía `traces_sample_rate=1.0` y

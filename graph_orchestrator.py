@@ -34463,7 +34463,12 @@ def _floor_subservible_portions(days, day_kcal_target=None, db=None) -> int:
                             _new_q = _resc(s, _qf)
                             if _new_q != s:
                                 ings[idx] = _new_q
-                                if _ri is not None and isinstance(raw[_ri], str):
+                                # [P1-PLAN-LOTE-17 · 2026-09-12] (D4) El factor 15/polvo (60×, 120×) sólo puede caer en
+                                # una línea de QUESO. Por índice escribió «30 cdas de cebolla» y «30 cdas de aceite»
+                                # (hallazgo del 09-08), y `_raw_idx_for_display` vuelve al índice si RAW_PAIR_BY_FOOD
+                                # se apaga. tooltip-anchor: P1-PLAN-LOTE-17-QUESO-RAW-GUARD
+                                if _ri is not None and isinstance(raw[_ri], str) \
+                                        and "queso" in _sa(str(raw[_ri]).lower()):
                                     try:
                                         raw[_ri] = _resc(str(raw[_ri]), _qf)
                                     except Exception:
