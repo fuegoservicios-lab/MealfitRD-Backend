@@ -10334,6 +10334,16 @@ def run_shopping_coherence_guard(plan_result: dict, *, mode_override: str = None
         divergence_count=_coh_divergence_count,
     )
 
+    # [P1-PLAN-LOTE-19 · 2026-09-12] (E5-A · ARQ30-P1-01) Sombra de la lista CANÓNICA: mide la distancia entre la
+    # lista que se entrega y la que saldría de `IngredientLine`, con el MISMO multiplicador efectivo que el lado
+    # esperado de este guard, y la persiste en `pipeline_metrics`. No toca `plan_result` ni `divergences`: la vía
+    # anterior sigue siendo la única que entrega. tooltip-anchor: P1-PLAN-LOTE-19-CANONICAL-SHADOW-HOOK
+    try:
+        from canonical_shopping_shadow import emit_canonical_shopping_shadow as _css_emit
+        _css_emit(plan_result, multiplier=mult * _basis_scale, surface=f"guard:{mode}")
+    except Exception:
+        pass
+
     return divergences
 
 

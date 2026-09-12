@@ -237,6 +237,12 @@ meses es candidato a borrarse (el de `MEALFIT_SLOT_AWARE_DAY_REPAIR`, que ademá
 | `MEALFIT_ANEMIA_CONDITION_TARGET` | `micronutrients.py` | Objetivo de hierro por condición (anemia) en panel/PDF | **needs-owner** (user-facing clínico; validar con la tabla de condiciones) |
 | `MEALFIT_DISABLE_SEMANTIC_CACHE` | `shopping_calculator.py` | Apaga el semantic cache | Interruptor de emergencia; encender sólo ante un incidente del cache |
 
+### Sombra de la lista canónica (E5-A · `P1-PLAN-LOTE-19` · 2026-09-12)
+
+| Knob | Default | Efecto |
+|---|---|---|
+| `MEALFIT_CANONICAL_SHOPPING_SHADOW` | `True` | `canonical_shopping_shadow.emit_canonical_shopping_shadow` corre al final de `run_shopping_coherence_guard` (las 6 superficies) y persiste en `pipeline_metrics` (node `canonical_shopping_shadow`) la distancia entre la lista entregada y la que saldría de `IngredientLine`. Solo lectura sobre el plan. `False` = sin sombra, sin redeploy. Lector: `scripts/measure_canonical_shadow.py` |
+
 ## Cómo añadir un knob nuevo
 
 ```python

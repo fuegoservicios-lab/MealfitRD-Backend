@@ -155,7 +155,11 @@ _PROCESS_START_ISO = datetime.now(timezone.utc).isoformat()
 # `days` + juicios + estado + catálogo, con huella de contenido) y se verifica reproducible (exit 0/3/4);
 # `--congelar` sin corpus se niega. La del 6-sep medía la ventana viva y dejó de reproducirse en 14 h; la purga
 # del 09-11 se llevó sus 96 planes. Congelado hoy: 5 planes, 64 comidas, huella 087cfc31d3105f79, REPRODUCIBLE ×2.
-_LAST_KNOWN_PFIX = "P1-PLAN-LOTE-18 · 2026-09-12"
+# [P1-PLAN-LOTE-19 · 2026-09-12] E5-A (ARQ30-P1-01): la SOMBRA de la lista canónica corre al final del guard de
+# coherencia (6 superficies, mismo multiplicador) y persiste en pipeline_metrics la distancia con la lista entregada;
+# no escribe el plan. Knob MEALFIT_CANONICAL_SHOPPING_SHADOW. Medido offline: 0 fallos de parseo en 731 líneas; los
+# divergentes (11 %) son los topes realistas del agregador y densidades, no el parser. Gate a fase B: 30 planes.
+_LAST_KNOWN_PFIX = "P1-PLAN-LOTE-19 · 2026-09-12"
 
 # [P1-SENTRY-SAMPLE-COST · 2026-05-12] Sentry sampling driven from env vars
 # con default seguro 0.1 (10%). Pre-fix tenía `traces_sample_rate=1.0` y

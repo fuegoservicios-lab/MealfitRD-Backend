@@ -86,7 +86,10 @@ def test_nadie_en_produccion_escribe_con_esta_representacion():
                 tocan.add(rel)
         except Exception:
             continue
-    assert not tocan, f"producción ya importa la representación canónica: {tocan}"
+    # [P1-PLAN-LOTE-19 · 2026-09-12] (E5-A) La SOMBRA es el único módulo de producción que la lee: compara la lista
+    # canónica con la entregada y persiste la distancia en `pipeline_metrics`. Sigue sin ESCRIBIR planes con ella
+    # (`test_p1_plan_lote_19.py::test_la_sombra_no_escribe_en_el_plan`). Cualquier otro import reabre la pregunta.
+    assert tocan <= {"canonical_shopping_shadow.py"}, f"producción ya importa la representación canónica: {tocan}"
 
 
 def test_el_guard_del_expand_sabe_buscar():

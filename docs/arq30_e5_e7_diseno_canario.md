@@ -41,6 +41,54 @@ primero) y el momento de C.
 
 ---
 
+### Estado 2026-09-12 · fase A (sombra) implementada — `P1-PLAN-LOTE-19`
+
+**Dónde corre.** No en dos sitios sino en UNO que cubre las 6 superficies: al final de
+`shopping_calculator.run_shopping_coherence_guard`, después de que el guard emite su propia métrica y antes de que
+devuelva sus divergencias (tooltip-anchor `P1-PLAN-LOTE-19-CANONICAL-SHADOW-HOOK`). Recibe el MISMO multiplicador
+efectivo que el guard aplica al lado esperado (`mult × _basis_scale`: hogar × 7/días fuente cuando compara contra la
+lista semanal), así que compara like con like. Cero líneas en el god file.
+
+**Qué compara** ([`canonical_shopping_shadow.py`](../canonical_shopping_shadow.py)): la lista canónica —gramos de cada
+`IngredientLine`, sumados por alimento sobre `shopping_source_days` (SSOT del ciclo), con la identidad que decide el
+canonicalizador del guard (`_canonicalize_for_coherence`) y espejando la POLÍTICA que la lista ya lleva sellada
+(rendimiento de legumbres, `protein_yield_applied`, `pantry_deduction_applied`; preguntada al parser legacy, no
+reinventada)— frente a la lista entregada (`aggregated_shopping_list_weekly`, cuyos items llevan `base_qty`/`base_unit`
+en gramos; 46 de 47 en el plan medido, el 47.º es «cartón (20 uds.)» y queda como *no comparable*). Persiste SÓLO la
+comparación en `pipeline_metrics` (node `canonical_shopping_shadow`: líneas, `parse_fail`, sin gramos y por qué,
+comparables, divergentes > 10 % con ejemplos, sólo-canónica, sólo-lista, sellos, multiplicador, días archivados,
+huella de contenido del plan). **No toca `plan_result`**: `test_la_sombra_no_escribe_en_el_plan` y el guard del expand
+(`test_nadie_en_produccion_escribe_con_esta_representacion`, que ahora admite exactamente este módulo).
+
+**Knob** `MEALFIT_CANONICAL_SHOPPING_SHADOW` (default True; apagarlo quita la sombra sin redeploy). **Gate** de salida
+a la fase B: ≥ 30 planes distintos con `parse_fail` < 1 % y divergencia en < 5 % de los comparables —
+`scripts/measure_canonical_shadow.py` (lee la métrica; `--offline` la calcula ahora sobre los planes vivos sin
+escribir). Tres salidas: NO CONCLUYENTE / PASA / NO PASA.
+
+**Primera medición, `--offline`, 2026-09-12** (5 planes, la flota tras la purga; 1 de ellos ya desplazado):
+
+| | |
+|---|---|
+| líneas · `parse_fail` | 731 · **0** (0,0 %) |
+| sin cantidad («al gusto») · sin gramos | 87 · 20 (cilantro ×9, perejil, canela y orégano en polvo, agua: hierbas y especias sin densidad en el catálogo) |
+| gramos por autoridad | `to_base_amount` 195 · `nutrition_db.to_grams` 429 |
+| alimentos comparables · divergentes > 10 % | 214 · **24 (11,2 %)** |
+| sólo canónica · sólo lista · no comparables | 0 · 14 · 11 |
+| veredicto | NO CONCLUYENTE (5 < 30) |
+
+**Lo que dicen los 24 divergentes**: no es el parser. Rábano 524 g → **50 g**, puerro 312 → **50**, limón 938 → **201**,
+tomate 3.500 → **750** son los **topes realistas del agregador** (caps P6/`_REALISM`); chinola 140 → 642 y maní 35 → 82
+son **densidades** (la lista convierte piezas con otra tabla que `nutrition_db.to_grams`). Es decir: la
+representación aguanta (0 fallos de parseo, identidad simétrica, 0 «sólo canónica»), y lo que separa a las dos listas
+es **política de compra**. Para la fase B, el agregador canónico tiene que llevar los topes y las densidades del
+legacy —o el dueño decide moverlos—; si no, el canario compraría 3,5 kg de tomate. Con 5 planes la divergencia
+(11,2 %) no pasaría el 5 %; el veredicto real llega cuando la sombra acumule ≥ 30 planes.
+
+**Decide el dueño**: la cohorte de la fase B (recomendación: él, como con el día determinista) y si los topes P6 se
+espejan en la canónica o se mueven a ella.
+
+---
+
 ## E6 · ARQ30-P1-03 / P1-04 / P1-05
 
 ### P1-03 — asignación del horizonte por comidas viables
