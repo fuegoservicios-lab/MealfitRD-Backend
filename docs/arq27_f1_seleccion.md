@@ -88,6 +88,12 @@ compilada no tiene. Un plato sustituido necesita identidad propia, no un rótulo
 La única salida es que la fuente marque el constituyente `optional: true` — una excepción curada y
 visible, que sigue apareciendo en `excluded[]` para que el revisor la vea.
 
+> **[P1-PLAN-LOTE-11 · 2026-09-11 · C8] Las cuatro están cerradas, y las cerró el dueño**, no el compilador: las
+> dos sustituciones declaradas ganaron identidad propia («Mangú con jamón de pavo a la plancha», «Filete de pescado
+> blanco al horno con vegetales y batata»), la menta salió del título («Frutas picadas con limón») y la «Batida de
+> zapote» se retiró hasta que exista el zapote en el catálogo. Los tres renombres conservan su `template_id`
+> (`plan_policy.TEMPLATE_ALIASES`). El registry DO compila 193/193 `ok`. Detalle: `docs/deterministic_day.md`.
+
 ## Hallazgos que la implementación destapó
 
 - **La 14ª de la clase «dos ortografías del mismo alimento».** El catálogo escribe `Gandules` (fila

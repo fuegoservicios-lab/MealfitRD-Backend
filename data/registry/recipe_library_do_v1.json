@@ -2,19 +2,20 @@
  "schema_version": 1,
  "country": "DO",
  "generado_el": "2026-09-08",
- "revision": "v4 — estado del peso, tiempos orientativos, agua en volumen, reparto · v5 2026-09-09: +35 platos de despensa (P1-CICLO-30D-DURADERO), escritos a mano · v6 2026-09-09: +20 platos de DENSIDAD PROTEICA (P1-CATALOGO-PROTEINA-DESAYUNO), escritos a mano contra las quince reglas",
- "recetas": 194,
+ "revision": "v4 — estado del peso, tiempos orientativos, agua en volumen, reparto · v5 2026-09-09: +35 platos de despensa (P1-CICLO-30D-DURADERO), escritos a mano · v6 2026-09-09: +20 platos de DENSIDAD PROTEICA (P1-CATALOGO-PROTEINA-DESAYUNO), escritos a mano contra las quince reglas · v7 2026-09-11: +3 recetas de C8 (P1-PLAN-LOTE-11) escritas a mano y juzgadas UNA A UNA por el dueño (las tres «con cambios», aplicados); la cuarta ficha (batida de zapote) se retiró por decisión suya",
+ "recetas": 193,
  "procedencia": {
   "escrito_por": "LLM (tier flash) offline, prompt de quince reglas (v8)",
   "reglas_nacidas_de": "seis rondas de juicio a ciegas del dueno. Desayunos: 8 -> 11 -> 17 «la serviria» de 20. Almuerzo y cena: 3/16/1 (v1) -> 1/19/0 (v2) -> **8/12/0 (v3)**. Cada regla cierra una queja concreta suya, y DOS de mis reglas las tuvo que corregir el: el criterio de color y el sustituto del termometro.",
-  "veredicto_humano": "v4 NO ha sido juzgada por un humano todavia. La v3 saco 8 «la serviria» / 12 «dudoso» / 0 «no» en almuerzo y cena — el mejor marcador de esa franja — y **ninguna de las 20 notas pedia el sustituto del termometro de vuelta ni discutia los 74 grados**: el fallo de SEGURIDAD de la v1 quedo cerrado y el escaner no lo habia visto. El juicio humano cubre una MUESTRA de 20 por franja: las 140 NO estan revisadas una a una.",
+  "veredicto_humano": "v4 NO ha sido juzgada por un humano todavia. La v3 saco 8 «la serviria» / 12 «dudoso» / 0 «no» en almuerzo y cena — el mejor marcador de esa franja — y **ninguna de las 20 notas pedia el sustituto del termometro de vuelta ni discutia los 74 grados**: el fallo de SEGURIDAD de la v1 quedo cerrado y el escaner no lo habia visto. El juicio humano cubre una MUESTRA de 20 por franja: las 140 NO estan revisadas una a una. · EXCEPCIÓN [2026-09-11 · C8]: las 3 recetas de las plantillas que no tenían receta congelada (tpl_0ae55a98c3e3, tpl_4afb7ed71229, tpl_81b612498f83) SÍ las juzgó el dueño una a una en la ficha de curación: las tres «con cambios», aplicados al pie de la letra salvo uno (ver curacion_humana_c8).",
   "escaner": "139/140 contra el catalogo VIVO. La unica «sucia» es un FALSO POSITIVO de la capa V5, no un defecto de la receta: «Moro de habichuelas negras con auyama» dice «agrega las habichuelas a la olla con el SOFRITO» y el escaner resuelve «sofrito» a un producto del catalogo que la lista no trae — pero ahi es una RETRORREFERENCIA al sofrito que el paso 3 acaba de hacer con la cebolla y el aceite. No se retoca la prosa a mano (mezclar texto generado y escrito a mano rompe la procedencia); queda anotado como gap del escaner. Y el escaner NO mide seguridad: dio 140/140 con la regla del color.",
   "medido_v2_a_v3": "platos con carne que llevan temperatura interna: 40/40 en ambas. Platos con SUSTITUTO del termometro: 25 -> 0. Pasos que cuecen sin tiempo: 81% -> 18%. Agua sin medida: 95% -> 50%. Los dos ultimos porcentajes estan SOBREESTIMADOS: mi detector cuenta como «paso que cuece» un «sirve el arroz guisado» y un «precalienta el horno», que no llevan tiempo con razon.",
   "sin_cantidades": "los pasos NO llevan cantidades de ingrediente a proposito: asi la misma receta sirve para cualquier porcion y se escribe UNA vez. El agua SI se mide: no es un ingrediente comprado.",
   "sin_resolver": "el ORDEN DE OPERACIONES y la tecnica real, que el dueno nombro tres veces y no es de prosa generica: el pollo que se reseca esperando a los molondrones, los molondrones que NO se pelan, las catibias sin decir cuantas unidades salen ni como se sellan. Y un defecto de DATO que necesita decision del dueno: el CHENCHEN se hace con maiz partido y la plantilla trae `Semola de maiz` — cocida a masa da polenta; `Maiz partido` NO existe en el catalogo (349 filas), asi que arreglarlo bien es dar de alta un producto nuevo con precio y procedencia, y eso cambia lo que se compra en RD.",
   "regenerar": "scratchpad/genera_biblioteca_rd.py (reanudable, ~16 min, ~150 llamadas al tier flash). El prompt vive en scratchpad/exp_biblioteca_v8.py.",
   "medido_v3_a_v4": "las cinco causas de las 12 notas «dudoso» de la v3. Estado del peso dicho: 20 % -> 90 % (75 de 83 platos que lo piden). «Agua en vez de aceite» con grasa EN LA LISTA: 3 -> 0 (de 70 platos con grasa). «Dos dedos de agua»: 99 de 140 -> residual, y los que quedan son usos LEGITIMOS (dar el volumen y anadir el dedo como comprobacion; un dedo de agua al fondo para hacer VAPOR, donde el volumen da igual). Sustitutos del termometro: 0, igual que la v3.",
-  "hallazgo_del_peso": "el mas serio de la ronda del dueno: «¿los 70 g de arroz se pesan CRUDOS?», «¿los 150 g de chivo incluyen hueso?», «¿los 180 g de gandules son secos o COCIDOS?», «el atun, escurrido», «el huevo, sin cascara». MEDIDO antes de escribir la regla: el catalogo cuenta CRUDO/SECO y porcion comestible, 10 de 10 sondas (arroz 359 kcal contra 360 crudo y 130 cocido; avena 382; lentejas 362) y por fdc_id de USDA — chivo sin hueso 174375, edamame desvainado 168411, atun escurrido 334194, pollo crudo 2646170. nutrition_db, dish_registry y la lista de compras leen el MISMO kcal_per_100g. **El calculo NO esta mal**: lo que faltaba era decir en que estado pesar. Quien pese 70 g de arroz ya cocido come un tercio — el plan acierta y la ejecucion falla. De ahi la regla 14 del prompt."
+  "hallazgo_del_peso": "el mas serio de la ronda del dueno: «¿los 70 g de arroz se pesan CRUDOS?», «¿los 150 g de chivo incluyen hueso?», «¿los 180 g de gandules son secos o COCIDOS?», «el atun, escurrido», «el huevo, sin cascara». MEDIDO antes de escribir la regla: el catalogo cuenta CRUDO/SECO y porcion comestible, 10 de 10 sondas (arroz 359 kcal contra 360 crudo y 130 cocido; avena 382; lentejas 362) y por fdc_id de USDA — chivo sin hueso 174375, edamame desvainado 168411, atun escurrido 334194, pollo crudo 2646170. nutrition_db, dish_registry y la lista de compras leen el MISMO kcal_per_100g. **El calculo NO esta mal**: lo que faltaba era decir en que estado pesar. Quien pese 70 g de arroz ya cocido come un tercio — el plan acierta y la ejecucion falla. De ahi la regla 14 del prompt.",
+  "curacion_humana_c8": "2026-09-11 · el dueño curó en la ficha interactiva las 4 plantillas sin receta. Frutas picadas con limón: pesar el guineo sin cáscara, exprimir el limón y mezclar suave, la menta fuera del título y opcional en el último paso. Mangú con jamón de pavo a la plancha: el título dice lo que trae (jamón, no salami; sin «versión magra» porque no se especifica la grasa del jamón), la mitad del aceite a la cebolla y el resto al mangú. Filete de pescado blanco al horno con vegetales y batata: batata en cubos de unos 2 cm sobre papel de hornear (sin aceite no se pega), pimienta/orégano/limón opcionales, tiempo ajustado al grosor y los vegetales siguen solos si el pescado termina antes. Batida de zapote: RETIRADA — falta el zapote, ingrediente principal; vuelve cuando el catálogo tenga la fila con pulpa comestible, nutrición y precio verificado. Lo ÚNICO no aplicado literal: pidió leer «Jugo de limón 10 g» en vez de «Limón 10 g»; el constituyente sigue siendo la fila del catálogo «Limón» (es lo que la lista compra y lo único que el día determinista sabe servir: su catálogo va por nombre canónico, sin alias) y el jugo se nombra en el paso. Cambiar el rótulo es una decisión aparte del dueño."
  },
  "estado": "ENGANCHADA pero APAGADA — la lee , gateado por MEALFIT_RECIPE_LIBRARY_SELECT (default False)",
  "por_id": {
@@ -1818,6 +1819,36 @@
     "Forma cilindros con la masa y córtalos en trozos del tamaño de un dedo.",
     "Hiérvelos en agua con sal unos diez minutos, hasta que suban a la superficie.",
     "Sírvelos con el huevo revuelto y el queso gouda en trozos por encima."
+   ]
+  },
+  "tpl_0ae55a98c3e3": {
+   "franja": "merienda",
+   "pasos": [
+    "Pela la lechosa, quítale las semillas y córtala en cuadritos de bocado (se pesa ya pelada y sin semillas).",
+    "Pela la piña, retira el corazón duro y córtala en cuadritos del mismo tamaño (se pesa pelada, sin corazón).",
+    "Pela el guineo y pésalo sin cáscara; córtalo en rodajas gruesas y déjalo para el final, así no se oscurece.",
+    "Junta las tres frutas en un bol, exprime el limón por encima —lo que va al plato es su jugo— y mezcla con suavidad, con una cuchara, para que llegue a todo sin aplastar la fruta.",
+    "Si tienes menta fresca, pica dos o tres hojas y espárcelas por encima; es opcional y no va en la lista. Sírvelo frío, recién hecho."
+   ]
+  },
+  "tpl_4afb7ed71229": {
+   "franja": "desayuno",
+   "pasos": [
+    "Pela el plátano verde (se pesa pelado), córtalo en trozos de tres dedos y ponlo en una olla con agua fría que lo cubra y una pizca de sal.",
+    "Hiérvelo a fuego medio-alto unos 20-25 minutos, hasta que un tenedor lo atraviese sin resistencia. Antes de escurrir, reserva una taza del agua de cocción.",
+    "Mientras hierve, corta la cebolla en aros finos. Pon las rebanadas de jamón de pavo en una plancha o sartén antiadherente a fuego medio, sin aceite, unos 2-3 minutos por lado, hasta que doren en los bordes; el jamón está listo cuando el termómetro marca 74 °C en el centro de la rebanada. Retíralo.",
+    "En la misma sartén calienta la mitad del aceite a fuego medio y sofríe los aros de cebolla unos 3-4 minutos, hasta que estén blandos y apenas dorados.",
+    "Escurre el plátano y májalo caliente con un tenedor o pilón; incorpora el resto del aceite y el agua de cocción reservada poco a poco, hasta un puré liso y cremoso, sin grumos secos. Sirve el mangú con la cebolla encima y el jamón de pavo dorado al lado."
+   ]
+  },
+  "tpl_81b612498f83": {
+   "franja": "cena",
+   "pasos": [
+    "Precalienta el horno a 200 °C. Lava la batata, pélala y córtala en cubos de unos 2 cm (se pesa pelada). Forra una bandeja con papel de hornear —así no se pega sin aceite—, reparte la batata con una pizca de sal y hornéala sola unos 15 minutos: es lo que más tarda.",
+    "Mientras, pela la zanahoria y córtala en bastones finos; corta el calabacín en medias lunas de un dedo de grosor.",
+    "Seca el filete de pescado con papel absorbente y sazónalo con sal; pimienta, orégano y unas gotas de limón son opcionales, al gusto.",
+    "Saca la bandeja, añade la zanahoria y el calabacín alrededor de la batata y coloca el filete en el centro. Hornea unos 12-15 minutos más, ajustando al grosor del filete: el pescado está listo cuando se separa en lascas al presionarlo con un tenedor y el termómetro marca 63 °C en la parte más gruesa.",
+    "Si al sacar el pescado los vegetales siguen duros, retíralo a un plato tapado y deja la bandeja unos minutos más en el horno, hasta que la batata esté blanda por dentro y dorada por fuera. Sirve el filete con los vegetales y la batata y riega por encima el jugo de la bandeja."
    ]
   }
  }

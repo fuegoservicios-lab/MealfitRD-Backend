@@ -160,7 +160,15 @@ def canonical_name_for(ingredient_id: str, catalog_names: Optional[Iterable[str]
 
 # ── template_id ─────────────────────────────────────────────────────────────
 # Renombres: nombre ACTUAL → nombre con el que se acuñó el id (así un renombre no cambia el id).
-TEMPLATE_ALIASES: dict[str, str] = {}
+# [P1-PLAN-LOTE-11 · 2026-09-11 · C8] Los tres renombres que decidió el dueño al curar las plantillas sin receta:
+# un plato SUSTITUIDO lleva el nombre de lo que de verdad trae (jamón de pavo, filete de pescado blanco) y la menta,
+# que no se compra, sale del título. Conservan su `template_id` histórico: la biblioteca de recetas, los
+# blueprints de los planes vivos y las fichas de curación lo citan. tooltip-anchor: TEMPLATE_ALIASES (test_p1_plan_lote_11.py)
+TEMPLATE_ALIASES: dict[str, str] = {
+    "Frutas picadas con limón": "Frutas picadas con limón y menta",
+    "Mangú con jamón de pavo a la plancha": "Mangú con salami de pavo a la plancha (versión magra)",
+    "Filete de pescado blanco al horno con vegetales y batata": "Chillo al horno con vegetales y batata asada",
+}
 TEMPLATE_VERSION = 1
 
 

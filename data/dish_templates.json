@@ -164,7 +164,7 @@
    "transform": false
   },
   {
-   "name": "Mangú con salami de pavo a la plancha (versión magra)",
+   "name": "Mangú con jamón de pavo a la plancha",
    "slots": [
     "desayuno"
    ],
@@ -671,7 +671,7 @@
    "transform": false
   },
   {
-   "name": "Chillo al horno con vegetales y batata asada",
+   "name": "Filete de pescado blanco al horno con vegetales y batata",
    "slots": [
     "cena"
    ],
@@ -815,7 +815,7 @@
    "transform": false
   },
   {
-   "name": "Frutas picadas con limón y menta",
+   "name": "Frutas picadas con limón",
    "slots": [
     "merienda"
    ],
@@ -874,16 +874,6 @@
    "base": "none",
    "technique": "frío",
    "transform": true
-  },
-  {
-   "name": "Batida de zapote ligera (leche descremada)",
-   "slots": [
-    "merienda"
-   ],
-   "protein": "none",
-   "base": "none",
-   "technique": "licuado",
-   "transform": false
   },
   {
    "name": "Locrio de arenque con aguacate",

@@ -71,13 +71,12 @@ def test_c_snapshots_compilados_con_todo_resuelto(lib):
     # sin resolver») figuraban `ok` teniendo exclusiones dentro: el compilador solo miraba
     # `not_in_catalog` para el estado. Ahora son `partial`, que es lo que siempre fueron — la Batida
     # de zapote no lleva zapote. El test decía la verdad en su comentario y la contradecía en su assert.
-    esperados_parciales = 4 if lib == "do" else 0
-    assert st["ok"] == st["templates"] - esperados_parciales, f"[{lib}] plantillas no-ok en el snapshot"
-    assert st["partial"] == esperados_parciales, f"[{lib}] parciales: {st['partial']}"
-    if lib == "do":
-        assert st["resolution_pct"] >= 99.0, "DO: solo los 4 declarados sin resolver (Menta, Zapote, Chillo, Salami de pavo)"
-    else:
-        assert st["resolution_pct"] == 100.0, f"[{lib}] {st['resolution_pct']} % resueltos"
+    # [P1-PLAN-LOTE-11 · 2026-09-11 · C8] Las 4 de DO las cerró el DUEÑO plato a plato: tres renombradas a lo que
+    # de verdad traen (id estable vía `plan_policy.TEMPLATE_ALIASES`) y la «Batida de zapote» retirada. Ninguna
+    # biblioteca tolera ya una plantilla parcial: una parcial nueva es un alta a medias, no una excepción histórica.
+    assert st["ok"] == st["templates"], f"[{lib}] plantillas no-ok en el snapshot"
+    assert st["partial"] == 0, f"[{lib}] parciales: {st['partial']}"
+    assert st["resolution_pct"] == 100.0, f"[{lib}] {st['resolution_pct']} % resueltos"
 
 
 def test_d_los_snacks_sin_valor_salieron_de_us():

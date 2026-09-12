@@ -665,7 +665,7 @@
             "Jugo de lulo y palmito con limón (< 40 kcal): snacks reales de bajo aporte."
           ],
           "by": "Claude (revisión curatorial delegada por el dueño)",
-          "date": "2026-09-10",
+          "date": "2026-09-11",
           "decisions": [
             "Alérgenos: el matcher del registry no reconocía plurales (sardinas, fideos, almejas) ni la salsa de soya como gluten: corregido y recompilado; cero clases sin marcar en las 6 bibliotecas (verificado con un chequeo independiente por constituyente).",
             "Raciones: meriendas > 450 kcal reasignadas a almuerzo/cena; almuerzos < 260 kcal y cenas < 180 kcal completados con base o proteína; almuerzos > 1.100 kcal reducidos.",
@@ -695,7 +695,7 @@
       },
       "availability": {
         "availability_risk_pct": 0.0,
-        "constituents": 1018,
+        "constituents": 1017,
         "dominican_cultivar_outside_do": [],
         "needs_review": false,
         "ok": true,
@@ -706,7 +706,7 @@
         "allergen_leaks": [],
         "ok": true,
         "processed_meat": [
-          "Mangú con salami de pavo a la plancha (versión magra)",
+          "Mangú con jamón de pavo a la plancha",
           "Espaguetis criollos con pollo desmenuzado",
           "Salami guisado con yuca y cebolla"
         ],
@@ -716,7 +716,7 @@
           "Domplines con huevo y queso gouda",
           "Tortilla de papa y queso cheddar con repollo",
           "Arenque desmenuzado con huevo y yuca hervida",
-          "Mangú con salami de pavo a la plancha (versión magra)",
+          "Mangú con jamón de pavo a la plancha",
           "Arenque guisado con auyama y yuca",
           "Pollo horneado al limón con arroz amarillo",
           "Pastelón de batata con queso mozzarella",
@@ -741,30 +741,30 @@
           "almuerzo": 63,
           "cena": 56,
           "desayuno": 54,
-          "merienda": 53
+          "merienda": 52
         },
-        "templates": 194
+        "templates": 193
       },
       "diversity": {
         "bases": 20,
-        "distinct_heads_ratio": 0.634,
+        "distinct_heads_ratio": 0.637,
         "ok": true,
         "proteins": 13,
         "techniques": 41,
-        "top_protein_share": 0.211,
-        "transform_share": 0.557
+        "top_protein_share": 0.207,
+        "transform_share": 0.56
       },
       "library": "do",
       "resolvability": {
         "excluded": 0,
         "ok": true,
-        "pct": 99.6
+        "pct": 100.0
       },
       "review": {
         "automated_review": true,
         "clinical_review": false,
         "editorial": {
-          "curated": 194
+          "curated": 193
         },
         "flagged_for_human_review": [],
         "human_cultural_review": false,
@@ -774,7 +774,7 @@
             "Molondrones guisados (250 kcal) y sopa-crema de auyama (283 kcal): platos ligeros reales; el generador ajusta porciones a los macros del día."
           ],
           "by": "Claude (revisión curatorial delegada por el dueño)",
-          "date": "2026-09-10",
+          "date": "2026-09-11",
           "decisions": [
             "Alérgenos: el matcher del registry no reconocía plurales (sardinas, fideos, almejas) ni la salsa de soya como gluten: corregido y recompilado; cero clases sin marcar en las 6 bibliotecas (verificado con un chequeo independiente por constituyente).",
             "Raciones: meriendas > 450 kcal reasignadas a almuerzo/cena; almuerzos < 260 kcal y cenas < 180 kcal completados con base o proteína; almuerzos > 1.100 kcal reducidos.",
@@ -796,13 +796,14 @@
             "[2026-09-08 · P1-DETERMINISTIC-DAY-CANARY] Tres constituyentes citaban un nombre que el catalogo no tiene: «Pimiento morron» (el catalogo dice «Aji morron»), «Salami dominicano» («Salami») y «Pan integral» («Pan integral personal»). No faltaban datos: faltaba el nombre bueno, y por eso 7 plantillas quedaban fuera del pool determinista. Corregido en la fuente curada y recompilado. Verificado contra el snapshot anterior plantilla a plantilla: mismo conjunto de plantillas (144), ningun nombre de PLATO tocado, y el unico cambio en las 7 es ese renombre. Los platos son los mismos; lo que cambia es la fila del catalogo contra la que resuelven. Plantillas: Asopao de pollo (porción moderada); Bacalao guisado con papas; Berenjenas guisadas con carne molida y arroz; Espaguetis criollos con pollo desmenuzado; Res mechada con puré de papa; Rollitos de lechuga con res mechada; Tostada integral con mantequilla de maní y guineo.",
             "[2026-09-09 · P1-CICLO-30D-DURADERO] 35 plantillas nuevas de despensa (144 -> 179) para sostener el ciclo de UNA compra de 30 dias sin congelador: del dia 15 solo quedaban 9 cenas y 12 almuerzos vegetarianos, y la construccion de menus se atascaba en el dia 13-17 (0 de 8 meses completos). Tras anadirlas, 8 de 8 con los 4 macros en banda, sin repetir plato en 7 dias, dieta vegetariana y alergia a lacteos incluidas. Constituyentes con nombre EXACTO del catalogo; nutricion y logistica derivadas por el compilador. Cuatro cenas mias con base arroz violaban el SSOT de franjas (en RD el arroz es almuerzo) y se corrigieron a vivere o se movieron a almuerzo -- el guard no se toco.",
             "[2026-09-09 · P1-REGISTRY-CANTIDADES-EN-CRUDO] REVISIÓN HUMANA de los 35 platos de despensa, uno a uno, por el dueño. Resultado: 35 de 35 marcados «cambiar», 0 aprobados, y CERO rechazos por motivos culturales — ni un plato se objetó por no ser dominicano. Las 35 notas (21.224 caracteres, íntegras en cultural_review_notes_do_2026_09_09.json) son de EXACTITUD y se agrupan en seis hallazgos sistémicos, de los cuales dos resultaron ser el mismo defecto raíz: el registry NOMBRA en «plato servido» cantidades que MIDE en «ingrediente crudo» (serving_g y days_fresh_min). Los números son correctos para lo que el motor pregunta y no llegan a ningún usuario; lo que estaba roto era la documentación, que se contradecía a sí misma. `kind` sigue siendo `automated`: hubo revisión humana, pero NO hubo aprobación de ningún plato, y una firma que insinuara lo contrario sería el defecto que P1-REVIEW-KIND-HONEST cerró. Queda pendiente la decisión del dueño sobre sal/sodio y sobre los platos de origen no dominicano (frijol cargamanto, habas, guisantes secos), que él no objetó.",
-            "[P1-CATALOGO-PROTEINA-DESAYUNO · 2026-09-09] +20 platos de DENSIDAD PROTEÍNICA (10 desayunos, 10 meriendas): el hueco medido era que el desayuno dominicano y la merienda son carbohidrato casi puro —mediana 3,86 y 3,37 g de proteína por 100 kcal contra un objetivo de 5,86— y por eso 14 días deterministas daban 7 platos distintos en 56 comidas. Cada plato pasó CINCO puertas antes de entrar (nombre exacto en catálogo, macros conocidas, densidad ≥ 5,0, factor de escalado dentro de banda, y precio de TODOS sus constituyentes) y su receta se escribió a mano contra las quince reglas de la v4. AUTOMÁTICA: estos 20 NO han pasado el juicio a ciegas del dueño — ver `pendiente_de_juicio_humano`."
+            "[P1-CATALOGO-PROTEINA-DESAYUNO · 2026-09-09] +20 platos de DENSIDAD PROTEÍNICA (10 desayunos, 10 meriendas): el hueco medido era que el desayuno dominicano y la merienda son carbohidrato casi puro —mediana 3,86 y 3,37 g de proteína por 100 kcal contra un objetivo de 5,86— y por eso 14 días deterministas daban 7 platos distintos en 56 comidas. Cada plato pasó CINCO puertas antes de entrar (nombre exacto en catálogo, macros conocidas, densidad ≥ 5,0, factor de escalado dentro de banda, y precio de TODOS sus constituyentes) y su receta se escribió a mano contra las quince reglas de la v4. AUTOMÁTICA: estos 20 NO han pasado el juicio a ciegas del dueño — ver `pendiente_de_juicio_humano`.",
+            "[2026-09-11 · P1-PLAN-LOTE-11 · C8] REVISIÓN HUMANA de las 4 plantillas DO sin receta congelada (las 4 `partial` históricas: Menta, Salami de pavo, Chillo, Zapote), plato a plato, por el dueño en la ficha de curación interactiva. Resultado: 3 «con cambios» y 1 descartada. Las tres aprobadas con cambios se RENOMBRAN a lo que de verdad traen («Frutas picadas con limón» sin la menta, que no se compra y queda opcional en la receta; «Mangú con jamón de pavo a la plancha», porque el constituyente siempre fue jamón y «versión magra» no se sostiene sin especificar la grasa; «Filete de pescado blanco al horno con vegetales y batata», porque el chillo salió del catálogo) y CONSERVAN su template_id vía plan_policy.TEMPLATE_ALIASES; sus 3 recetas entran en recipe_library_do_v1.json (v7) con los cambios que él dictó. La cuarta, «Batida de zapote ligera (leche descremada)», sale de la biblioteca: falta el zapote, ingrediente principal (ver retirados_por_el_dueno). El registry DO pasa a 193 plantillas, 193 ok, 0 partial. Ningún otro plato cambia. `kind` sigue `automated`: hubo juicio humano sobre CUATRO fichas, no una revisión cultural de la biblioteca."
           ],
           "kind": "automated",
-          "snapshot_hash": "fb66c4eb297d1a265aef2eda3d73b58a354b5c66b7383f196b53e711fe0ee1e4"
+          "snapshot_hash": "d73278132f7dbb271b20b6298b4197fd454d7e19abbfe2df185bd56a2c5cc89b"
         }
       },
-      "snapshot_hash": "fb66c4eb297d1a265aef2eda3d73b58a354b5c66b7383f196b53e711fe0ee1e4"
+      "snapshot_hash": "d73278132f7dbb271b20b6298b4197fd454d7e19abbfe2df185bd56a2c5cc89b"
     },
     "mexico_casera": {
       "appropriateness": {
@@ -965,7 +966,7 @@
             "Pepino con chile y limón (35 kcal): snack real de bajo aporte; se conserva."
           ],
           "by": "Claude (revisión curatorial delegada por el dueño)",
-          "date": "2026-09-10",
+          "date": "2026-09-11",
           "decisions": [
             "Alérgenos: el matcher del registry no reconocía plurales (sardinas, fideos, almejas) ni la salsa de soya como gluten: corregido y recompilado; cero clases sin marcar en las 6 bibliotecas (verificado con un chequeo independiente por constituyente).",
             "Raciones: meriendas > 450 kcal reasignadas a almuerzo/cena; almuerzos < 260 kcal y cenas < 180 kcal completados con base o proteína; almuerzos > 1.100 kcal reducidos.",
@@ -1467,7 +1468,7 @@
             "Los avisos «cultivar dominicano» de las altas nuevas: ver la decisión de arriba."
           ],
           "by": "Claude (revisión curatorial delegada por el dueño)",
-          "date": "2026-09-10",
+          "date": "2026-09-11",
           "decisions": [
             "Alérgenos: el matcher del registry no reconocía plurales (sardinas, fideos, almejas) ni la salsa de soya como gluten: corregido y recompilado; cero clases sin marcar en las 6 bibliotecas (verificado con un chequeo independiente por constituyente).",
             "Raciones: meriendas > 450 kcal reasignadas a almuerzo/cena; almuerzos < 260 kcal y cenas < 180 kcal completados con base o proteína; almuerzos > 1.100 kcal reducidos.",
@@ -1747,7 +1748,7 @@
             "Pistos, gazpacho y ensaladas de 210-300 kcal: platos ligeros reales de almuerzo/cena; el generador escala porciones."
           ],
           "by": "Claude (revisión curatorial delegada por el dueño)",
-          "date": "2026-09-10",
+          "date": "2026-09-11",
           "decisions": [
             "Alérgenos: el matcher del registry no reconocía plurales (sardinas, fideos, almejas) ni la salsa de soya como gluten: corregido y recompilado; cero clases sin marcar en las 6 bibliotecas (verificado con un chequeo independiente por constituyente).",
             "Raciones: meriendas > 450 kcal reasignadas a almuerzo/cena; almuerzos < 260 kcal y cenas < 180 kcal completados con base o proteína; almuerzos > 1.100 kcal reducidos.",
@@ -2002,7 +2003,7 @@
             "«Tacos de soya texturizada con repollo» dispara el aviso de léxico mexicano, igual que los dos platos de tacos que la biblioteca estadounidense YA tenía y que la revisión anterior aceptó: el taco es comida corriente en Estados Unidos. Se conserva, por coherencia con esa decisión."
           ],
           "by": "Claude (revisión curatorial delegada por el dueño)",
-          "date": "2026-09-10",
+          "date": "2026-09-11",
           "decisions": [
             "Alérgenos: el matcher del registry no reconocía plurales (sardinas, fideos, almejas) ni la salsa de soya como gluten: corregido y recompilado; cero clases sin marcar en las 6 bibliotecas (verificado con un chequeo independiente por constituyente).",
             "Raciones: meriendas > 450 kcal reasignadas a almuerzo/cena; almuerzos < 260 kcal y cenas < 180 kcal completados con base o proteína; almuerzos > 1.100 kcal reducidos.",

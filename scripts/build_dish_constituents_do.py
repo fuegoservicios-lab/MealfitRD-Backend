@@ -8,8 +8,11 @@ DE DÓNDE SALEN, Y POR QUÉ NO ME LOS INVENTO. Cada plantilla se compone de:
   1. componentes de `data/dominican_dish_recipes.json` (60 recetas curadas con gramos, las MISMAS que ya
      usa el diario: mangú, moro, locrio, sancocho, pollo guisado, habichuelas guisadas…), escaladas;
   2. ítems sueltos con nombre EXACTO del catálogo (`master_ingredients`) y gramos de porción típica;
-  3. NUNCA una invención: lo que el catálogo no tiene (zapote, menta, chillo) se deja fuera y el
-     compilador lo reporta como exclusión explícita — ese es el gate de la fase.
+  3. NUNCA una invención: lo que el catálogo no tiene se deja fuera y el compilador lo reporta como
+     exclusión explícita — ese es el gate de la fase. [P1-PLAN-LOTE-11 · 2026-09-11 · C8] Las cuatro
+     exclusiones históricas (zapote, menta, chillo, salami de pavo) las resolvió el DUEÑO plato a plato: tres
+     plantillas renombradas a lo que de verdad traen y la batida de zapote retirada hasta que el catálogo tenga
+     zapote con pulpa comestible, nutrición y precio verificado.
 
 La tabla de abajo es la curación (una entrada por plantilla, por prefijo exacto del nombre); las reglas
 por `base`/`protein` solo cubren lo que la tabla no lista. Salida: `data/dish_constituents_do.json`.
@@ -63,7 +66,7 @@ CURATED: dict[str, list] = {
     "Batida de guineo con avena y maní": [(R, "batida de guineo", 1.0), (I, "Avena", 25), (I, "Maní", 15)],
     "Sándwich integral de huevo con aguacate": [(I, "Pan integral personal", 60), (I, "Huevo", 100), (I, "Aguacate", 50)],
     "Yogur con frutas picadas y avena tostada": [(R, "yogurt griego con frutas", 1.0), (I, "Avena", 25)],
-    "Mangú con salami de pavo": [(R, "mangu", 1.0), (I, "Jamón de pavo", 60)],
+    "Mangú con jamón de pavo a la plancha": [(R, "mangu", 1.0), (I, "Jamón de pavo", 60)],  # [C8] era «salami de pavo»: el constituyente siempre fue jamón
     "Crepes de avena rellenas de queso fresco": [(I, "Avena", 45), (I, "Huevo", 50), (I, "Leche", 120), (I, "Queso blanco", 50)],
     "Batata asada con huevos pochados": [(I, "Batata", 180), (I, "Huevo", 100)],
     "Arepa dominicana de maíz horneada": [(I, "Harina de maíz precocida", 60), (I, "Leche", 100), (I, "Huevo", 25), (I, "Azúcar morena", 8)],
@@ -121,7 +124,7 @@ CURATED: dict[str, list] = {
     "Berenjena rellena de res molida": [(I, "Berenjena", 200), (I, "Carne de res molida", 110), (I, "Tomate", 50), (I, "Queso blanco", 30)],
     "Yuca al mojo con cerdo magro a la plancha": [(R, "yuca hervida", 1.0), (I, "Ajo", 6), (I, "Aceite de oliva", 8), (I, "Cerdo", 130)],
     "Puré de batata con pavo a la plancha": [(I, "Batata", 180), (I, "Pechuga de pavo", 130), (I, "Aceite de oliva", 5)],
-    "Chillo al horno con vegetales y batata asada": [(I, "Filete de pescado blanco", 160), (I, "Zanahoria", 60), (I, "Calabacín", 60), (I, "Batata", 150)],
+    "Filete de pescado blanco al horno con vegetales y batata": [(I, "Filete de pescado blanco", 160), (I, "Zanahoria", 60), (I, "Calabacín", 60), (I, "Batata", 150)],  # [C8] era «Chillo»
     "Revoltillo de atún con plátano hervido": [(I, "Atún en agua", 100), (I, "Huevo", 50), (I, "Tomate", 40), (I, "Cebolla", 20), (R, "platano verde hervido", 1.0)],
     "Pinchos de pollo y vegetales con yuca hervida": [(I, "Pechuga de pollo", 140), (I, "Ají morrón", 50), (I, "Cebolla", 40), (R, "yuca hervida", 1.0)],
     "Rollitos de lechuga con res mechada": [(I, "Lechuga romana", 80), (R, "carne de res guisada", 1.0), (I, "Tomate", 40)],
@@ -135,13 +138,12 @@ CURATED: dict[str, list] = {
     "Queso fresco con tomate y orégano": [(I, "Queso blanco", 70), (I, "Tomate", 80), (I, "Orégano dominicano", 1)],
     "Huevo duro con casabe": [(I, "Huevo", 100), (I, "Casabe", 40)],
     "Batata asada fría con canela": [(I, "Batata", 150), (I, "Canela en polvo", 2)],
-    "Frutas picadas con limón": [(I, "Lechosa", 80), (I, "Piña", 80), (I, "Guineo", 80), (I, "Limón", 10)],  # «menta»: sin fila en el catálogo → fuera
+    "Frutas picadas con limón": [(I, "Lechosa", 80), (I, "Piña", 80), (I, "Guineo", 80), (I, "Limón", 10)],  # [C8] la menta salió del nombre (opcional en la receta); el limón se compra entero y va exprimido
     "Panecicos de yuca al horno": [(I, "Yuca", 150), (I, "Huevo", 25), (I, "Queso blanco", 20)],
     "Jugo de chinola natural sin azúcar con puñado de maní": [(I, "Chinola", 80), (I, "Maní", 25)],
     "Tostada integral con mantequilla de maní y guineo": [(R, "pan integral con mantequilla de mani", 1.0), (I, "Guineo", 100)],
     "Empanadita de maíz horneada rellena de queso": [(I, "Harina de maíz precocida", 60), (I, "Queso blanco", 50)],
     "Palitos de zanahoria y apio con dip de habichuelas": [(I, "Zanahoria", 80), (I, "Apio", 60), (I, "Hummus", 60)],
-    "Batida de zapote ligera": [(I, "Leche descremada", 250)],  # «zapote»: sin fila en el catálogo → exclusión explícita del compilador
 }
 # Ítems que la plantilla nombra y el catálogo NO tiene: se declaran para que el compilador los liste como
 # exclusión explícita (gate: 100 % resuelve o queda excluido, nunca «desaparece en silencio»).
@@ -199,12 +201,10 @@ CURATED.update({
 
 CURATED["Lentejas guisadas con auyama y batata"] = [(I, "Lentejas", 80), (I, "Auyama", 120), (I, "Batata", 180), (I, "Cebolla", 35), (I, "Ajo", 5), (I, "Aceite de oliva", 8), (I, "Sal", 2)]
 
-DECLARED_UNRESOLVED: dict[str, list[str]] = {
-    "Frutas picadas con limón": ["Menta"],
-    "Batida de zapote ligera": ["Zapote"],
-    "Chillo al horno con vegetales y batata asada": ["Chillo (se compone con filete de pescado blanco)"],
-    "Mangú con salami de pavo": ["Salami de pavo (se compone con jamón de pavo)"],
-}
+# [P1-PLAN-LOTE-11 · 2026-09-11 · C8] Vacío a propósito: las 4 declaraciones sin resolver (Menta, Zapote, Chillo, Salami de
+# pavo) las cerró el dueño — 3 renombres + 1 retirada. Si una plantilla nueva promete algo que el catálogo no tiene, va aquí
+# y el compilador la deja `partial` (ARQ27-P0-02), no `ok`.
+DECLARED_UNRESOLVED: dict[str, list[str]] = {}
 PROTEIN_SUBSTITUTIONS = {"Locrio de pavo": [("Pechuga de pollo", "Pechuga de pavo")]}
 
 

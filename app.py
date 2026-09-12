@@ -119,7 +119,10 @@ _PROCESS_START_ISO = datetime.now(timezone.utc).isoformat()
 # [P1-PLAN-LOTE-10 · 2026-09-11] Décimo lote (B7, B9, D6, F3, E3 medidos; E5-E7 diseñados): el scorer del día determinista
 # gana pesos direccionales (knobs, default = conducta anterior); medido en tres dianas, 2.0/1.0 es el compromiso y lo
 # decide el dueño. El embudo del wizard era ciego (`step_done` jamás se emite).
-_LAST_KNOWN_PFIX = "P1-PLAN-LOTE-10 · 2026-09-11"
+# [P1-PLAN-LOTE-11 · 2026-09-11] Undécimo lote (C8, curación del DUEÑO): las 4 plantillas DO sin receta congelada se
+# cierran plato a plato desde la ficha interactiva — 3 renombradas a lo que de verdad traen (id estable) con sus recetas
+# en la biblioteca (v7) y la batida de zapote retirada. Registry DO 193/193 `ok`; la tabla curada es el SSOT, no su script.
+_LAST_KNOWN_PFIX = "P1-PLAN-LOTE-11 · 2026-09-11"
 
 # [P1-SENTRY-SAMPLE-COST · 2026-05-12] Sentry sampling driven from env vars
 # con default seguro 0.1 (10%). Pre-fix tenía `traces_sample_rate=1.0` y

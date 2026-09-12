@@ -119,10 +119,20 @@ dos corridas independientes:
   («Tortilla de papa y queso cheddar con repollo», «Guineítos verdes guisados con costillitas magras
   de cerdo»); faltan almuerzos con proteína entera, ~70 g de carbohidrato y ~20 g de grasa (aguacate,
   aceite, frutos secos). El script lista por franja los que sí cumplen (`--list-low-carb`).
-- **Las 4 plantillas sin receta** (Menta, Salami de pavo, Chillo, Zapote) son
-  `declared_unresolved` a propósito. Dos tienen sustituto plausible en el catálogo —Zapote ≈
-  Níspero, Chillo ≈ filete de pescado blanco— pero cambiar un pescado por otro **cambia el plato**
-  y eso lo decide el dueño.
+- **Las 4 plantillas sin receta** (Menta, Salami de pavo, Chillo, Zapote) las cerró el **dueño** el 2026-09-11
+  (C8, `P1-PLAN-LOTE-11`), plato a plato en la ficha de curación: tres «con cambios» y una descartada. Las tres
+  se renombran a lo que de verdad traen —«Frutas picadas con limón» (la menta no se compra: queda opcional en el
+  último paso), «Mangú con jamón de pavo a la plancha» (el constituyente siempre fue jamón; «versión magra» cae
+  porque no se especifica la grasa del jamón) y «Filete de pescado blanco al horno con vegetales y batata» (el
+  chillo salió del catálogo)—, conservan su `template_id` (`plan_policy.TEMPLATE_ALIASES`) y entran en la
+  biblioteca con sus recetas (v7: las únicas tres juzgadas una a una por un humano). La «Batida de zapote ligera»
+  sale del registry: falta el zapote, ingrediente principal; vuelve cuando el catálogo tenga la fila con pulpa
+  comestible, nutrición y precio verificado. Registry DO: 193 plantillas, 193 `ok`, 0 `partial`. Lo único no
+  aplicado literal: el rótulo «Jugo de limón 10 g» — el día determinista resuelve su catálogo por nombre canónico,
+  sin alias (`catalogo = {name: fila}`), así que el constituyente sigue siendo «Limón» y el jugo se nombra en el
+  paso; cambiar el rótulo es decisión aparte del dueño. Y una trampa medida al aplicarlo: la tabla curada
+  `data/dish_constituents_do.json` **es el SSOT** — su script generador ya no la reproduce (75 entradas divergen
+  desde las curaciones del 09-09/09-10; regenerarla dejaba dos plantillas sin constituyentes).
 
 Un día que no construye devuelve `None` y lo genera el modelo: el estado de siempre.
 

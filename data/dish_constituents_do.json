@@ -1,5 +1,5 @@
 {
- "_note": "[P1-ARQ25-F6-DISH-REGISTRY] constituents curados para las plantillas DO. Fuente: componentes de dominican_dish_recipes.json (60 recetas con gramos) + ítems con nombre exacto del catálogo. Generado por scripts/build_dish_constituents_do.py; edítalo allí, no aquí.",
+ "_note": "[P1-ARQ25-F6-DISH-REGISTRY] constituents curados para las plantillas DO. Fuente original: componentes de dominican_dish_recipes.json (60 recetas con gramos) + ítems con nombre exacto del catálogo, generados por scripts/build_dish_constituents_do.py. [P1-PLAN-LOTE-11 · 2026-09-11] ESTE JSON ES EL SSOT: desde las curaciones del 09-09/09-10 (vinagre del mangú, queso de papa→gouda, despensa de su mercado, tope de sal) se edita a mano y el script ya NO lo reproduce (medido al aplicar C8: 75 entradas divergen y dos plantillas quedarían sin constituyentes). Edita AQUÍ; no lo regeneres con el script sin reconciliarlo antes.",
  "schema_version": 1,
  "templates": {
   "Almendras fileteadas con ciruelas pasas": {
@@ -510,18 +510,6 @@
    "declared_unresolved": [],
    "origin": "curated"
   },
-  "Batida de zapote ligera (leche descremada)": {
-   "constituents": [
-    {
-     "grams": 250.0,
-     "name": "Leche descremada"
-    }
-   ],
-   "declared_unresolved": [
-    "Zapote"
-   ],
-   "origin": "curated"
-  },
   "Berenjena rellena de res molida, gratinada": {
    "constituents": [
     {
@@ -802,7 +790,7 @@
    "declared_unresolved": [],
    "origin": "curated"
   },
-  "Chillo al horno con vegetales y batata asada": {
+  "Filete de pescado blanco al horno con vegetales y batata": {
    "constituents": [
     {
      "grams": 160.0,
@@ -821,9 +809,7 @@
      "name": "Batata"
     }
    ],
-   "declared_unresolved": [
-    "Chillo (se compone con filete de pescado blanco)"
-   ],
+   "declared_unresolved": [],
    "origin": "curated"
   },
   "Chivo guisado estilo liniero con yuca hervida": {
@@ -1136,7 +1122,7 @@
    "declared_unresolved": [],
    "origin": "curated"
   },
-  "Frutas picadas con limón y menta": {
+  "Frutas picadas con limón": {
    "constituents": [
     {
      "grams": 80.0,
@@ -1155,9 +1141,7 @@
      "name": "Limón"
     }
    ],
-   "declared_unresolved": [
-    "Menta"
-   ],
+   "declared_unresolved": [],
    "origin": "curated"
   },
   "Granola con leche de avena y pasas": {
@@ -1674,7 +1658,7 @@
    "declared_unresolved": [],
    "origin": "curated"
   },
-  "Mangú con salami de pavo a la plancha (versión magra)": {
+  "Mangú con jamón de pavo a la plancha": {
    "constituents": [
     {
      "grams": 180.0,
@@ -1693,9 +1677,7 @@
      "name": "Jamón de pavo"
     }
    ],
-   "declared_unresolved": [
-    "Salami de pavo (se compone con jamón de pavo)"
-   ],
+   "declared_unresolved": [],
    "origin": "curated"
   },
   "Mangú de guineo verde con queso frito ligero al airfryer": {

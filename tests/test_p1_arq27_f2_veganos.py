@@ -102,8 +102,9 @@ def test_todas_las_altas_compilan_integras():
     for cc in PAISES:
         snap = DR.load_registry(cc) or {}
         parciales = [t["name"] for t in snap.get("templates") or [] if t.get("status") != "ok"]
-        # DO conserva sus 4 históricas (zapote, chillo, salami de pavo, menta); nada más.
-        assert len(parciales) <= (4 if cc == "DO" else 0), f"{cc}: {parciales}"
+        # [P1-PLAN-LOTE-11 · 2026-09-11 · C8] DO ya no conserva sus 4 históricas (zapote, chillo, salami de pavo,
+        # menta): el dueño las cerró (3 renombres + 1 retirada). Ninguna biblioteca tolera parciales.
+        assert not parciales, f"{cc}: {parciales}"
 
 
 def test_las_altas_veganas_no_llevan_nada_animal():

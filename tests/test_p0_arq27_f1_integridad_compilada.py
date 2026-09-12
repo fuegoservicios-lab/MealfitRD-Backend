@@ -112,13 +112,23 @@ def test_las_cuatro_plantillas_do_ya_no_figuran_integras():
 
 
 def test_el_zapote_no_produce_una_batida_de_zapote_integra():
-    """Nombrado explícitamente en el criterio de cierre del gap."""
+    """Nombrado explícitamente en el criterio de cierre del gap.
+
+    [P1-PLAN-LOTE-11 · 2026-09-11 · C8] La plantilla ya no existe: el DUEÑO la retiró («falta el zapote,
+    ingrediente principal») hasta que el catálogo tenga la fila con pulpa comestible, nutrición y precio
+    verificado. El contrato sigue siendo el mismo, formulado sin exigir que el plato esté: si algún día una
+    plantilla vuelve a prometer zapote en el título, o trae zapote resuelto o no compila `ok`.
+    """
     do = DR.load_registry("DO") or {}
     zapote = [t for t in do.get("templates") or [] if "zapote" in str(t.get("name", "")).lower()]
-    assert zapote, "desapareció la plantilla del zapote: revisa si el caso sigue siendo el mismo"
     for t in zapote:
         tiene = any("zapote" in str(c.get("canonical", "")).lower() for c in (t.get("constituents") or []))
         assert tiene or t["status"] != "ok", f"«{t['name']}» figura íntegra sin zapote"
+    # y la retirada quedó firmada por quien la decidió, no borrada en silencio
+    import json, os
+    rev = json.load(open(os.path.join(DR.REGISTRY_DIR, "cultural_curation_review_v1.json"), encoding="utf-8"))
+    retirados = rev["profiles"]["dominican_criolla"].get("retirados_por_el_dueno") or []
+    assert any(r.get("template_id") == "tpl_e63e01c38ad3" for r in retirados), "la batida de zapote salió sin acta"
 
 
 def test_las_stats_distinguen_plantillas_de_lineas():
