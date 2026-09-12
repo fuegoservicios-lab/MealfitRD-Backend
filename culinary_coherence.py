@@ -838,19 +838,40 @@ def _v4_grams_by_food(text_norm: str, index: dict) -> dict:
                  for m in _V4_GRAMS_RE.finditer(clause)
                  if not _V4_APPROX_LEAD_RE.search(clause[:m.start()])]
         for g_start, g_end, val in grams:
-            best_food, best_dist = None, None
-            for f_start, f_end, f_name in foods:
-                if g_start >= f_end:
-                    dist = g_start - f_end
-                elif g_end <= f_start:
-                    dist = f_start - g_end
-                else:
-                    dist = 0
-                if best_dist is None or dist < best_dist:
-                    best_dist, best_food = dist, f_name
+            # [P1-PLAN-LOTE-23 · 2026-09-12] (C2) por GRAMÁTICA, no por cercanía: ver `grams_owner`.
+            best_food = grams_owner(clause, g_start, g_end, foods)
             if best_food is not None and best_food not in out:
                 out[best_food] = val
     return out
+
+
+_GRAMS_SIGUE_RE = re.compile(r"^\s*(?:de\s+|del\s+|de\s+l[ao]s?\s+)?$")
+_GRAMS_PRECEDE_RE = re.compile(r"^\s*[:(]?\s*$")
+
+
+def grams_owner(clause: str, g_start: int, g_end: int, foods: list) -> "str | None":
+    """[P1-PLAN-LOTE-23 · 2026-09-12] (C2 · CUL-P0-03) A qué alimento pertenece un «N g» dentro de su cláusula, por
+    GRAMÁTICA: el alimento que SIGUE al número («70 g de nabo, 265 g de tomate» → 70↔nabo, 265↔tomate; con «de»/«del»
+    opcional) o, si no hay, el que lo PRECEDE pegado («yogur natural (90 g)», con «(» o «:» entre medio). Si no se da
+    ninguna de las dos formas, `None`: sin dueño no hay comparación.
+
+    Antes se elegía el alimento MÁS CERCANO en caracteres, y en «corta 70 g de nabo, 265 g de tomate» el «265» estaba a
+    3 caracteres del nabo y a 9 del tomate. Medido en el corpus fijo del 09-12: 2 de los 4 V4 eran esta atribución
+    (los 265 g del tomate al nabo; los 90 g del yogur al maní), y el reparador del contrato final (`recipe_contract`)
+    los habría REESCRITO sobre el alimento equivocado. Un medidor que atribuye por distancia no puede alimentar un
+    reparador. `foods` son spans `(ini, fin, nombre)` sobre la cláusula normalizada. tooltip-anchor: P1-PLAN-LOTE-23-GRAMS-OWNER"""
+    try:
+        siguen = [(f_ini, f_name) for f_ini, f_fin, f_name in foods
+                  if f_ini >= g_end and _GRAMS_SIGUE_RE.match(clause[g_end:f_ini])]
+        if siguen:
+            return min(siguen)[1]
+        preceden = [(f_fin, f_name) for f_ini, f_fin, f_name in foods
+                    if f_fin <= g_start and _GRAMS_PRECEDE_RE.match(clause[f_fin:g_start])]
+        if preceden:
+            return max(preceden)[1]
+    except Exception:
+        return None
+    return None
 
 
 def _v4_cantidad_inconsistente(day, meal, index) -> list:

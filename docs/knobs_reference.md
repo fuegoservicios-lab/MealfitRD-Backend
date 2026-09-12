@@ -249,6 +249,12 @@ meses es candidato a borrarse (el de `MEALFIT_SLOT_AWARE_DAY_REPAIR`, que ademá
 |---|---|---|
 | `MEALFIT_HORIZON_VIABLE_FAMILY` | `True` (nació `False` en el lote 20; ON desde `P1-PLAN-LOTE-21` · 2026-09-12, decisión del dueño) | `horizon.build_blueprint`: si la familia de proteína del round-robin deja alguna franja del día sin candidato del registry, el día pasa a la familia del pool que cubre MÁS franjas (orden rotado, determinista) y queda anotado en `registry.family_reassignments`. Medido: vacías 4.311 → 100 de 49.200 (las 100 son huecos de biblioteca). Apagado ⇒ blueprint byte-idéntico (sólo el diagnóstico `registry.empty_slots`). Apagar sin redeploy: `MEALFIT_HORIZON_VIABLE_FAMILY=0`; los runs en vuelo conservan su blueprint. Lector: `scripts/measure_horizon_slots.py [--viable]` (sin `--viable` lo apaga explícitamente en su proceso) |
 
+### El contrato sobre la receta final (C2 · `P1-PLAN-LOTE-23` · 2026-09-12)
+
+| Knob | Default | Efecto |
+|---|---|---|
+| `MEALFIT_RECIPE_FINAL_CONTRACT` | `repair` | `recipe_contract.apply_final_contract[_meal]`, ÚLTIMO paso de `finalize_plan_data_coherence` y `finalize_single_meal_recipe_coherence`: los pasos siguen a la lista (gramos, unidades, piezas; nunca cruza familias). `shadow` anota en `_recipe_contract_final` lo que habría reescrito sin tocar; `off` apaga. Medido sobre el corpus fijo: V7e 38 → 3, V6 11 → 0, V4 4 → 0, 63 cantidades en 36 de 64 comidas; idempotente. Lector: `scripts/medir_contrato_receta_final.py [--vivo N]` |
+
 ## Cómo añadir un knob nuevo
 
 ```python

@@ -29,6 +29,7 @@ from tenacity import retry, stop_after_attempt, wait_exponential, before_sleep_l
 import logging
 import threading
 from db_plans import search_similar_plan
+from recipe_contract import apply_final_contract as _recipe_final_contract, apply_final_contract_meal as _recipe_final_contract_meal, _ground_meat_step_noun_sync  # [P1-PLAN-LOTE-23] (C2)
 
 # Mejora 1: Semaphore Distribuido Global para backpressure
 # P1-10: `time` y `uuid` ya están al inicio del módulo; no reimportar.
@@ -29294,6 +29295,9 @@ def finalize_plan_data_coherence(days: list, db=None, allergies=None, target_fat
                     + "; ".join(f"D{r['day']} {r['food']} {r['kind']}" for r in _rlw[:6]))
         except Exception as _erlw:
             logger.warning(f"[P1-RECONCILE-LAST-WORD] no-op: {type(_erlw).__name__}: {_erlw}")
+    # [P1-PLAN-LOTE-23 · 2026-09-12] (C2 · CUL-P0-03) ÚLTIMO, después de todo lo que muta la lista: los pasos siguen a la lista. tooltip-anchor: P1-PLAN-LOTE-23-FINAL-CONTRACT
+    _rfc = _recipe_final_contract(days, db)
+    if _rfc: parts.append(_rfc)  # noqa: E701
 
     return (total, ", ".join(parts))
 
@@ -29585,6 +29589,7 @@ def finalize_single_meal_recipe_coherence(meal: dict, db=None, pantry_strict: bo
                 meal.pop("_recipe_contract_advisory", None)
         except Exception as _erl:
             logger.debug(f"[P2-AUDIT-V6-BATCH] (P2-C) contract-lint en update no-op: {type(_erl).__name__}: {_erl}")
+        total += _recipe_final_contract_meal(meal, db)   # [P1-PLAN-LOTE-23] (C2) ÚLTIMO: la lista tiene la última palabra
         if total:
             logger.info(
                 f"🍳 [P1-UPDATE-RECIPE-FINALIZE] {total} fix(es) de coherencia de receta en plato de update "
@@ -37098,48 +37103,6 @@ def _bigfruit_count_fraction_honesty(days) -> int:
                     ings[idx] = _BIGFRUIT_COUNT_LEAD_RX.sub(
                         rf"\g<1>{frac} de \g<3>\g<4>", s, count=1)
                     fixed += 1
-            except Exception:
-                continue
-    return fixed
-
-
-def _ground_meat_step_noun_sync(days) -> int:
-    """[P1-GROUND-MEAT-STEP-NOUN · 2026-07-28] Ingredientes dicen "pollo MOLIDO" pero los
-    pasos hablan de "PECHUGA de pollo" ×3 (caso vivo, plan ab2b0a16 cena miércoles: el swap
-    cambió el sustantivo en un lado y no en el otro — la clase del 'yogur cocido'). Cuando
-    la especie está en forma MOLIDA en ingredientes y NINGUNA línea trae pechuga/filete de
-    esa especie, los pasos que digan "pechuga de <especie>" se reescriben a "el <especie>
-    molido". Display-only (cero macros). Fail-open por comida.
-    tooltip-anchor: P1-GROUND-MEAT-STEP-NOUN
-    """
-    if not isinstance(days, list):
-        return 0
-    from constants import strip_accents as _sa_gm
-    fixed = 0
-    for day in days:
-        for meal in (day.get("meals") or []) if isinstance(day, dict) else []:
-            try:
-                if not isinstance(meal, dict):
-                    continue
-                ings_sa = _sa_gm(" ".join(str(i) for i in (meal.get("ingredients") or [])).lower())
-                rec = meal.get("recipe")
-                if not isinstance(rec, list):
-                    continue
-                _tocado = False
-                for _esp in ("pollo", "pavo", "res", "cerdo"):
-                    if f"{_esp} molido" not in ings_sa and f"{_esp} molida" not in ings_sa:
-                        continue
-                    if f"pechuga de {_esp}" in ings_sa or f"filete de {_esp}" in ings_sa:
-                        continue
-                    _rx = _re_cv.compile(rf"(?:la\s+|el\s+)?[Pp]echuga\s+de\s+{_esp}\b")
-                    for j, p in enumerate(rec):
-                        if isinstance(p, str) and _rx.search(p):
-                            rec[j] = _rx.sub(f"el {_esp} molido", p)
-                            _tocado = True
-                if _tocado:
-                    fixed += 1
-                    logger.info(f"🔤 [P1-GROUND-MEAT-STEP-NOUN] '{str(meal.get('name'))[:40]}': "
-                                f"pasos re-sincronizados a la forma molida del ingrediente.")
             except Exception:
                 continue
     return fixed

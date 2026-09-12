@@ -426,7 +426,7 @@ línea base comparable para esa huella. Y `--congelar` **sin** `--corpus` se nie
 ventana viva es exactamente el error del 6-sep.
 
 **Congelado el 2026-09-12** (`scripts/data/culinary_corpus_2026_09_12.json`, 310 KB, huella `087cfc31d3105f79`,
-catálogo 349 filas `1f4f95b33a191dfe`, reglas `35fc77fbf3416d08`), verificado dos veces: REPRODUCIBLE. Re-congelada el mismo día con las cifras de C1 (`P1-PLAN-LOTE-22`, reglas `c0379767939450e4`): mismas 46/64 y 15/64, más `estado_evaluacion`, `hallazgos`, `juez_entregado` y `particion`; REPRODUCIBLE ×2.
+catálogo 349 filas `1f4f95b33a191dfe`, reglas `35fc77fbf3416d08`), verificado dos veces: REPRODUCIBLE. Re-congelada el mismo día con las cifras de C1 (`P1-PLAN-LOTE-22`, reglas `c0379767939450e4`): mismas 46/64 y 15/64, más `estado_evaluacion`, `hallazgos`, `juez_entregado` y `particion`; REPRODUCIBLE ×2. Y otra vez con C2 (`P1-PLAN-LOTE-23`, reglas `8f19140121f98a95`: V4 atribuye gramos por gramática): mismas cifras, REPRODUCIBLE ×2.
 
 | | |
 |---|---|
@@ -658,4 +658,52 @@ software de evaluación está listo antes que las etiquetas, como el backlog adm
 sigue pendiente hasta tenerlas.
 
 Tests: [`test_p1_plan_lote_22.py`](../tests/test_p1_plan_lote_22.py).
+
+## El contrato sobre la receta final (C2 · `P1-PLAN-LOTE-23` · 2026-09-12)
+
+CUL-P0-03 del paquete del 09-07: «sustituciones y ajustes dejan técnicas del alimento anterior, cantidades
+contradictorias o ingredientes añadidos sin preparación; su frecuencia no está medida».
+
+**Medido primero.** Corpus fijo del 09-12 (5 planes, 64 comidas): V7a 47, V7e 38, V6 11, V4 4 — **100 de 111 hallazgos de
+capa 1 son cantidades** que los pasos y la lista se contradicen; de las 68 comidas que el dueño marcó con defecto, 54 lo
+dicen en su nota. La causa: la lista la mutan media docena de reparadores (caps de huevo, porciones absurdas, pisos,
+motor de macros, sustituciones, `_reconcile_display_raw_lines`) y los sincronizadores de pasos que ya existían
+(`_sync_recipe_step_quantities`, `_egg_count_step_sync`, `_rewrite_recipe_steps_after_subs`) corren en puntos fijos:
+**una reparación que corre después del sincronizador deja lista y pasos desincronizados**. Re-ejecutar el sincronizador
+existente sobre el corpus sólo bajaba V7e 38 → 35 (no lee piezas desnudas ni alimentos de menos de 4 letras: «ajo»,
+«pan»), pero SÍ corregía «casca 6 huevos» → 3 — prueba de que al persistir no corrió después del cap.
+
+**El contrato (`recipe_contract.py`).** `reconcile_step_quantities(meal, index)` lee la lista con los mismos parsers del
+contrato determinista (gramos V4, unidades V6, piezas V7) y reescribe en los pasos la cantidad que la contradice, familia
+por familia; nunca cruza familias (eso es V7b). Reglas: la lista es la autoridad (nutrición y compra salen de ella);
+una sola mención → se alinea en las dos direcciones; dos o más → sólo se recorta la que pide más de lo comprado (un
+reparto no se adivina); tolerancias de las capas que miden (25 % gramos, 5 %/0,06 conteos); piezas que cruzan el
+singular/plural NO se tocan (`gramatical`); un conteo de compra con gramos («1 cebolla (25 g)») no infla el paso
+(`conteo_con_gramos`); rangos, «≈», notas ⚠/💡 y de procedencia quedan fuera; `ingredients_raw` no se toca. Concordancia
+de unidad y artículo («tuesta las 2 rebanadas» → «tuesta la 1 rebanada»). Idempotente y fail-open.
+
+**Dónde corre: ÚLTIMO.** `apply_final_contract(days, db)` al final de `finalize_plan_data_coherence` (el shield
+pre-INSERT de `db_plans`, después de `_reconcile_display_raw_lines`) y `apply_final_contract_meal(meal, db)` al final de
+`finalize_single_meal_recipe_coherence` (swap, chat-modify, regenerar día, recipe-expand). Knob
+`MEALFIT_RECIPE_FINAL_CONTRACT` = `repair` (default) / `shadow` (anota sin tocar) / `off`; telemetría por plato en
+`_recipe_contract_final` sólo cuando hay algo que decir. Lector: `scripts/medir_contrato_receta_final.py` (corpus fijo
+y, con `--vivo N`, la ventana viva SOLO en lectura).
+
+**V4 atribuye por gramática (`grams_owner`).** «corta 70 g de nabo, 265 g de tomate»: por cercanía los 265 g eran del
+nabo (2 de los 4 V4 del corpus), y el reparador los habría reescrito sobre el alimento equivocado. Ahora el dueño de un
+«N g» es el alimento que lo SIGUE («de» opcional) o el que lo PRECEDE pegado («yogur (90 g)»); sin dueño no hay
+comparación. *Un medidor que atribuye por distancia no puede alimentar un reparador.*
+
+**Resultado sobre el corpus** (copia; la base no se toca): 36 de 64 comidas tocadas, 63 cantidades reescritas
+(47 piezas, 4 gramos, 12 unidades); **V7e 38 → 3, V6 11 → 0, V4 4 → 0**; V7a 47 → 44 — lo que queda es número
+gramatical («2 claras» vs «la clara»), que se deja a V7a en `warn` a propósito. Segunda pasada: 0.
+
+**Lo que este lote NO hace, dicho.** No convierte el residuo crítico en rechazo: el guard de capa 1 sigue en `warn`
+(`MEALFIT_CULINARY_CONTRACT_GUARD`); pasar a `block` es la escalada F2 y necesita la precisión del marcador estricto
+(C1 → etiquetas con rúbrica del dueño). Y las «técnicas del alimento anterior» tras una sustitución siguen con la
+maquinaria que ya existía (`_rewrite_recipe_steps_after_subs`, `_substitute_blended_raw_egg` para el huevo licuado →
+yogur): en el corpus V1 vale 4 y los cuatro son falsos positivos del aceite/queso «a la plancha», no residuos de
+sustitución — sin caso medido no se construye un degradador de verbos que dependa de la precisión de V1.
+
+Tests: [`test_p1_plan_lote_23.py`](../tests/test_p1_plan_lote_23.py).
 
