@@ -205,12 +205,15 @@ def main(argv: Optional[list[str]] = None) -> int:
     ap.add_argument("--paises", default=",".join(PAISES))
     ap.add_argument("--perfiles", type=int, default=None, help="limita los perfiles del landing por país")
     ap.add_argument("--viable", action="store_true",
-                    help="mide con MEALFIT_HORIZON_VIABLE_FAMILY encendido en ESTE proceso (el allocator mínimo)")
+                    help="mide con MEALFIT_HORIZON_VIABLE_FAMILY encendido en ESTE proceso (el allocator mínimo); sin él se APAGA "
+                         "explícitamente (round-robin puro), aunque el default de producción sea ON desde el lote 21")
     args = ap.parse_args(argv)
     if str(os.environ.get("MEALFIT_PLAN_POLICY_MODE", "off")).strip().lower() == "off":
         os.environ["MEALFIT_PLAN_POLICY_MODE"] = "shadow"   # sólo en este proceso: la Fase 2 tiene que compilar
-    if args.viable:
-        os.environ["MEALFIT_HORIZON_VIABLE_FAMILY"] = "true"
+    # [P1-PLAN-LOTE-21 · 2026-09-12] El knob es ON por defecto desde este lote: la medición «round-robin puro» (sin
+    # --viable) tiene que APAGARLO explícitamente en este proceso, o mediría el allocator creyendo medir el diagnóstico.
+    # Las dos mediciones quedan reproducibles con cualquier default. tooltip-anchor: P1-PLAN-LOTE-21-MEDIR-EXPLICITO
+    os.environ["MEALFIT_HORIZON_VIABLE_FAMILY"] = "true" if args.viable else "false"
     from dotenv import load_dotenv
     load_dotenv(os.path.join(_BACKEND, ".env"))
     try:

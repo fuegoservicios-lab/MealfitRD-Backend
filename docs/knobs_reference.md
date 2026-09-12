@@ -247,7 +247,7 @@ meses es candidato a borrarse (el de `MEALFIT_SLOT_AWARE_DAY_REPAIR`, que ademá
 
 | Knob | Default | Efecto |
 |---|---|---|
-| `MEALFIT_HORIZON_VIABLE_FAMILY` | `False` | `horizon.build_blueprint`: si la familia de proteína del round-robin deja alguna franja del día sin candidato del registry, el día pasa a la familia del pool que cubre MÁS franjas (orden rotado, determinista) y queda anotado en `registry.family_reassignments`. Medido: vacías 4.311 → 100 de 49.200 (las 100 son huecos de biblioteca). Apagado ⇒ blueprint byte-idéntico (sólo el diagnóstico `registry.empty_slots`). Lector: `scripts/measure_horizon_slots.py [--viable]` |
+| `MEALFIT_HORIZON_VIABLE_FAMILY` | `True` (nació `False` en el lote 20; ON desde `P1-PLAN-LOTE-21` · 2026-09-12, decisión del dueño) | `horizon.build_blueprint`: si la familia de proteína del round-robin deja alguna franja del día sin candidato del registry, el día pasa a la familia del pool que cubre MÁS franjas (orden rotado, determinista) y queda anotado en `registry.family_reassignments`. Medido: vacías 4.311 → 100 de 49.200 (las 100 son huecos de biblioteca). Apagado ⇒ blueprint byte-idéntico (sólo el diagnóstico `registry.empty_slots`). Apagar sin redeploy: `MEALFIT_HORIZON_VIABLE_FAMILY=0`; los runs en vuelo conservan su blueprint. Lector: `scripts/measure_horizon_slots.py [--viable]` (sin `--viable` lo apaga explícitamente en su proceso) |
 
 ## Cómo añadir un knob nuevo
 

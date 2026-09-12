@@ -477,13 +477,18 @@ def _culture_country(profile_id: Optional[str]) -> str:
 
 def viable_family_enabled() -> bool:
     """[P1-PLAN-LOTE-20 · 2026-09-12] (E6 · ARQ30-P1-03) Knob del allocator mínimo: la familia de proteína del día se
-    mueve a una que tenga plato en TODAS sus franjas cuando la del round-robin no lo tiene. Default off: sin él el
-    blueprint es byte-idéntico al anterior (sólo gana el diagnóstico `empty_slots`). Lo enciende el dueño por cohorte."""
+    mueve a la que cubre MÁS franjas cuando la del round-robin deja alguna sin plato.
+
+    Nació off (lote 20: medido 4.311 → 100 franjas vacías de 49.200 con él encendido). [P1-PLAN-LOTE-21 · 2026-09-12]
+    default ON por decisión del dueño («enciende el knob por mí»); sin cohorte por usuario porque el knob no la tiene
+    y no hace falta: los runs en vuelo conservan su blueprint (`_run_blueprint_for_plan`), sólo los runs nuevos lo
+    ven. Apagado (`MEALFIT_HORIZON_VIABLE_FAMILY=0`, sin redeploy) el blueprint es byte-idéntico al anterior salvo el
+    diagnóstico `empty_slots`. tooltip-anchor: P1-PLAN-LOTE-21-VIABLE-DEFAULT-ON"""
     try:
         from knobs import _env_bool
-        return _env_bool("MEALFIT_HORIZON_VIABLE_FAMILY", False)
+        return _env_bool("MEALFIT_HORIZON_VIABLE_FAMILY", True)
     except Exception:
-        return False
+        return True
 
 
 def _registry_block_for_country(country: Optional[str], *, effective: Optional[dict] = None, days_out: Optional[list] = None,
@@ -545,7 +550,8 @@ def _registry_block_for_country(country: Optional[str], *, effective: Optional[d
                 # rotado desde la propuesta, que SÍ tenga plato en todas las franjas del día. Si ninguna cubre, se
                 # conserva la del round-robin (conducta anterior) y la franja queda anotada en `empty_slots`. Mueve
                 # `d["protein"]`, así que candidatos, prompt, sembrador y gate de fidelidad ven la MISMA familia.
-                # Knob `MEALFIT_HORIZON_VIABLE_FAMILY` (default off): sin él, byte-idéntico a antes.
+                # Knob `MEALFIT_HORIZON_VIABLE_FAMILY` (ON por defecto desde P1-PLAN-LOTE-21; nació off en el lote 20):
+                # apagado, byte-idéntico a antes.
                 # tooltip-anchor: P1-PLAN-LOTE-20-VIABLE-FAMILY
                 _di = int(d.get("day_index") or 0)
                 _slots_d = list(d.get("slots") or [])

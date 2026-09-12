@@ -195,7 +195,10 @@ def test_el_allocator_minimo_es_determinista(monkeypatch):
 
 
 def test_el_knob_nace_apagado_y_la_regla_vive_donde_se_fijan_los_candidatos():
-    assert horizon.viable_family_enabled.__doc__ and "Default off" in horizon.viable_family_enabled.__doc__
+    # [P1-PLAN-LOTE-21 · 2026-09-12] Nació off y así se midió; el dueño lo encendió por defecto en el lote 21. El
+    # docstring cuenta las dos cosas (ver test_p1_plan_lote_21.py para el default vivo).
+    doc = horizon.viable_family_enabled.__doc__ or ""
+    assert "Nació off" in doc and "P1-PLAN-LOTE-21" in doc and "byte-idéntico" in doc
     src = inspect.getsource(horizon._registry_block_for_country)
     assert "P1-PLAN-LOTE-20-VIABLE-FAMILY" in src and "P1-PLAN-LOTE-20-EMPTY-SLOTS" in src
     assert src.index('d["protein"] = fam = _mejor') < src.index("for slot in (d.get(\"slots\") or []):")
@@ -234,7 +237,7 @@ def test_docs_y_plan():
     knobs = (_BACKEND / "docs" / "knobs_reference.md").read_text(encoding="utf-8")
     assert "MEALFIT_HORIZON_VIABLE_FAMILY" in knobs
     plan = (_BACKEND / "docs" / "plan_pendientes_2026_09_11.md").read_text(encoding="utf-8")
-    assert "| E6 | ✅ 2026-09-12 · P1-03 medido + allocator mínimo (knob off)" in plan
+    assert "| E6 | ✅ 2026-09-12 · P1-03 medido + allocator mínimo" in plan  # [P1-PLAN-LOTE-21] el sufijo «(knob off)» cambió al encenderlo
 
 
 def test_marker_bumpeado():

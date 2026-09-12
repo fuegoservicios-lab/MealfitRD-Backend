@@ -145,8 +145,8 @@ rotado desde la propuesta— la familia del pool que cubre MÁS franjas del día
 ninguna familia no puede condenar al almuerzo y la cena; exigir «todas» dejaba 120 franjas rescatables sin rescatar),
 y sólo si mejora estrictamente. Mueve `d["protein"]`, así que candidatos, prompt, sembrador del día determinista y
 gate de fidelidad ven la MISMA familia; queda anotado en `registry.family_reassignments` (y en la rebanada).
-**Knob `MEALFIT_HORIZON_VIABLE_FAMILY`, default OFF**: apagado, el blueprint es byte-idéntico al anterior salvo el
-diagnóstico. `blueprint_hash`/`slice_hash` cambian sólo para runs con huecos o con el knob encendido.
+**Knob `MEALFIT_HORIZON_VIABLE_FAMILY`: nació OFF; ON por defecto desde `P1-PLAN-LOTE-21` (2026-09-12, decisión del
+dueño)**: apagado, el blueprint es byte-idéntico al anterior salvo el diagnóstico. `blueprint_hash`/`slice_hash` cambian sólo para runs con huecos o con el knob encendido.
 
 **Con el knob encendido (misma matriz, `--viable`):** vacías **4.311 → 100 (0,2 %)**, las 100 son los huecos de
 biblioteca del desayuno alérgico; 0 rescatables sin rescatar; **2.315 días reasignados** de ~12.300 (2.140 en
@@ -156,10 +156,13 @@ mensual sin congelador, 22 en semanal). Con 3 candidatos: 41.656 → 45.910 fran
 `allocator.py` del diseño, versionado, con comidas fijadas y ventanas deslizantes); no cambia la familia de días que
 ya tienen plato en todas sus franjas; no toca runs en curso (la rebanada del chunk fija lo que ya se fijó).
 
-**Decide el dueño**: encender `MEALFIT_HORIZON_VIABLE_FAMILY` (recomendación: sí, empezando por su usuario, como con
-el día determinista — el escenario que lo necesita es el mensual sin congelador, que hoy entrega un día 9+ con franjas
-que el modelo rellena sin candidato) y el hueco de biblioteca del desayuno sin lácteo/gluten/huevo de larga duración
-(trabajo de plantillas, como E9).
+**Decidido (2026-09-12, `P1-PLAN-LOTE-21`)**: el dueño delegó («enciende el knob por mí») y `MEALFIT_HORIZON_VIABLE_FAMILY`
+pasa a ON por defecto en el código — no por `.env` del VPS ni por cohorte de usuarios: el knob no tiene lista de usuarios
+(la de `MEALFIT_PLAN_POLICY_ENFORCE_USERS` es de otra decisión) y no la necesita, porque los runs en vuelo conservan su
+blueprint (`_run_blueprint_for_plan`) y sólo los runs NUEVOS ven la reasignación. Vuelta atrás sin redeploy:
+`MEALFIT_HORIZON_VIABLE_FAMILY=0`. `scripts/measure_horizon_slots.py` apaga el knob explícitamente cuando mide sin
+`--viable`, para que la cifra del round-robin puro siga siendo reproducible. **Queda del dueño** el hueco de biblioteca
+del desayuno sin lácteo/gluten/huevo de larga duración (trabajo de plantillas, como E9).
 
 ### P1-04 — una autoridad para porciones y reparaciones
 
