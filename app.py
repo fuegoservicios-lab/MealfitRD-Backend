@@ -159,7 +159,11 @@ _PROCESS_START_ISO = datetime.now(timezone.utc).isoformat()
 # coherencia (6 superficies, mismo multiplicador) y persiste en pipeline_metrics la distancia con la lista entregada;
 # no escribe el plan. Knob MEALFIT_CANONICAL_SHOPPING_SHADOW. Medido offline: 0 fallos de parseo en 731 líneas; los
 # divergentes (11 %) son los topes realistas del agregador y densidades, no el parser. Gate a fase B: 30 planes.
-_LAST_KNOWN_PFIX = "P1-PLAN-LOTE-19 · 2026-09-12"
+# [P1-PLAN-LOTE-20 · 2026-09-12] E6 (ARQ30-P1-03): una franja del horizonte sin candidato queda anotada en el
+# blueprint (`registry.empty_slots`); medido en 600 blueprints: 4.311 de 49.200 franjas vacías y 4.211 tendrían plato
+# con OTRA familia (compra mensual sin congelador). Allocator mínimo tras MEALFIT_HORIZON_VIABLE_FAMILY (off): la
+# familia del día pasa a la que cubre más franjas → 100 vacías, todas huecos de biblioteca. Apagado = byte-idéntico.
+_LAST_KNOWN_PFIX = "P1-PLAN-LOTE-20 · 2026-09-12"
 
 # [P1-SENTRY-SAMPLE-COST · 2026-05-12] Sentry sampling driven from env vars
 # con default seguro 0.1 (10%). Pre-fix tenía `traces_sample_rate=1.0` y

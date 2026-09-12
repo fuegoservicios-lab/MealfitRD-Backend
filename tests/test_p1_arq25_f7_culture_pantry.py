@@ -83,9 +83,16 @@ def test_c_el_registry_filtra_candidatos_por_durabilidad_y_las_bibliotecas_tiene
 def test_d_blueprint_y_prompt_exigen_durabilidad_solo_bajo_compra_unica():
     src = (_BACKEND / "horizon.py").read_text(encoding="utf-8")
     assert "def _dur_kwargs(" in src
-    # [P1-PLAN-LOTE-3 · B5] tres: el bloque del blueprint, su caída a la biblioteca del mercado
-    # (`culture_unavailable`) y las líneas del prompt — las tres filtran por día
-    assert src.count("**_dur_kwargs(") == 3, "el bloque del blueprint (y su caída al mercado) y las líneas del prompt filtran por día"
+    # [P1-PLAN-LOTE-3 · B5] el bloque del blueprint, su caída a la biblioteca del mercado
+    # (`culture_unavailable`) y las líneas del prompt filtran por día.
+    # [P1-PLAN-LOTE-20 · 2026-09-12] Era `count(...) == 3`: un número mágico que se puso rojo cuando el allocator
+    # mínimo añadió sus dos sondas (`_tiene_plato`, `rescuable_by_family`), que TAMBIÉN filtran por día. La regla
+    # real es estructural: TODA llamada a `template_candidates` en horizon.py lleva `**_dur_kwargs(`.
+    llamadas = [m.start() for m in re.finditer(r"template_candidates\(", src)]
+    assert len(llamadas) >= 3, "el bloque del blueprint (y su caída al mercado) y las líneas del prompt filtran por día"
+    for i in llamadas:
+        assert "**_dur_kwargs(" in src[i:i + 500], f"llamada a template_candidates sin _dur_kwargs en horizon.py@{i}"
+    assert src.count("**_dur_kwargs(") == len(llamadas)
     assert "from pantry_durability import freeze_window_days" in src, "_freeze_horizon_days delega en el SSOT"
     import horizon as hz
     assert hz._freeze_horizon_days("limited", 30) == 14 and hz._freeze_horizon_days("none", 30) == 0

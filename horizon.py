@@ -475,7 +475,19 @@ def _culture_country(profile_id: Optional[str]) -> str:
         return "DO"
 
 
-def _registry_block_for_country(country: Optional[str], *, effective: Optional[dict] = None, days_out: Optional[list] = None) -> dict:
+def viable_family_enabled() -> bool:
+    """[P1-PLAN-LOTE-20 · 2026-09-12] (E6 · ARQ30-P1-03) Knob del allocator mínimo: la familia de proteína del día se
+    mueve a una que tenga plato en TODAS sus franjas cuando la del round-robin no lo tiene. Default off: sin él el
+    blueprint es byte-idéntico al anterior (sólo gana el diagnóstico `empty_slots`). Lo enciende el dueño por cohorte."""
+    try:
+        from knobs import _env_bool
+        return _env_bool("MEALFIT_HORIZON_VIABLE_FAMILY", False)
+    except Exception:
+        return False
+
+
+def _registry_block_for_country(country: Optional[str], *, effective: Optional[dict] = None, days_out: Optional[list] = None,
+                                pool: Optional[list] = None) -> dict:
     """[P1-ARQ25-F6-DISH-REGISTRY · 2026-09-05] El allocator consume el Dish Registry compilado: hash del
     snapshot activo + candidatos por día/franja (status ok, franja, familia de proteína programada, sin las
     clases de alérgeno declaradas). Fail-open: sin snapshot, `{snapshot_hash: None}` y nada cambia."""
@@ -501,10 +513,66 @@ def _registry_block_for_country(country: Optional[str], *, effective: Optional[d
         names = {}
         hashes = {}
         fallbacks = []   # [P1-PLAN-LOTE-3 · B5] `culture_unavailable`: la cocina del día no tenía plato para la franja
+        empty = []       # [P1-PLAN-LOTE-20 · E6] franjas SIN candidato viable, con la pregunta que decide si urge un allocator
+        reassign = []    # [P1-PLAN-LOTE-20 · E6] días cuya familia de proteína se movió a una con plato en TODAS sus franjas
+        _viable_on = viable_family_enabled() and bool(pool)
+
+        def _lib_for(d_, slot_):
+            _pid_ = ((d_.get("culture") or {}).get(slot_)) if isinstance(d_.get("culture"), dict) else None
+            return (_culture_country(_pid_) if _pid_ else None) or country
+
+        def _tiene_plato(lib_c, slot_, fam_, day_idx):
+            """¿Hay ≥ 1 candidato para (franja, familia) en la cocina del día o, en su defecto, en el mercado?"""
+            for _lib in dict.fromkeys((lib_c, country)):
+                try:
+                    if dr.template_candidates(_lib, slot_, fam_, k=1, exclude_allergens=allergies, diet=diet,
+                                              require_known_nutrients=req_nutr, market_country=mkt, budget_tier=bud,
+                                              exclude_foods=excl, rotate=day_idx, **_dur_kwargs(effective, day_idx)):
+                        return True
+                except Exception:
+                    pass
+            return False
+
         for d in (days_out or [])[:60]:
             if not isinstance(d, dict):
                 continue
             fam = d.get("protein")
+            if _viable_on and fam:
+                # [P1-PLAN-LOTE-20 · 2026-09-12] (E6 · ARQ30-P1-03) Asignación por comidas VIABLES, versión mínima y
+                # determinista: el round-robin propone la familia del día; si alguna franja del día no tiene plato con
+                # ella (medido: en compra mensual sin congelador, del día 9 en adelante Res/Cerdo/Pollo no tienen almuerzo
+                # que aguante y el día se quedaba con la franja VACÍA), se toma la siguiente familia del pool, en orden
+                # rotado desde la propuesta, que SÍ tenga plato en todas las franjas del día. Si ninguna cubre, se
+                # conserva la del round-robin (conducta anterior) y la franja queda anotada en `empty_slots`. Mueve
+                # `d["protein"]`, así que candidatos, prompt, sembrador y gate de fidelidad ven la MISMA familia.
+                # Knob `MEALFIT_HORIZON_VIABLE_FAMILY` (default off): sin él, byte-idéntico a antes.
+                # tooltip-anchor: P1-PLAN-LOTE-20-VIABLE-FAMILY
+                _di = int(d.get("day_index") or 0)
+                _slots_d = list(d.get("slots") or [])
+
+                def _cobertura(f_):
+                    return sum(1 for s_ in _slots_d if _tiene_plato(_lib_for(d, s_), s_, f_, _di))
+
+                _cov = _cobertura(fam)
+                if _cov < len(_slots_d):
+                    # La familia que cubre MÁS franjas del día (no «todas»: un desayuno sin plato en ninguna familia
+                    # —hueco de biblioteca— no puede condenar el almuerzo y la cena a quedarse vacíos), en orden
+                    # rotado desde la propuesta; sólo si mejora estrictamente. Medido: exigir «todas» dejaba 120
+                    # franjas rescatables sin rescatar en los días con un hueco de desayuno.
+                    _start = pool.index(fam) if fam in pool else 0
+                    _mejor, _mejor_cov = None, _cov
+                    for _f2 in pool[_start + 1:] + pool[:_start]:
+                        if _f2 == fam:
+                            continue
+                        _c2 = _cobertura(_f2)
+                        if _c2 > _mejor_cov:
+                            _mejor, _mejor_cov = _f2, _c2
+                            if _c2 == len(_slots_d):
+                                break
+                    if _mejor is not None:
+                        reassign.append({"day_index": _di, "from": fam, "to": _mejor, "franjas_cubiertas": _mejor_cov,
+                                         "de": len(_slots_d)})
+                        d["protein"] = fam = _mejor
             for slot in (d.get("slots") or []):
                 # [P1-ARQ25-F7-CULTURE] biblioteca de la cocina asignada al día (país de esa cocina), no del mercado
                 _pid = ((d.get("culture") or {}).get(slot)) if isinstance(d.get("culture"), dict) else None
@@ -537,9 +605,36 @@ def _registry_block_for_country(country: Optional[str], *, effective: Optional[d
                     # lo que «cambiar el registro activo no altera los candidatos de un run ya iniciado»
                     # prohíbe. El ID sigue ahí para poder recuperar la plantilla completa cuando existe.
                     names[_key] = [str(c.get("name")) for c in _cc if c.get("name")]
-        return {"snapshot_hash": h, "version": dr.registry_snapshot_version(), "candidates": cands,
-                "candidate_names": names, "culture_fallbacks": fallbacks,
-                "library_hashes": {k: v for k, v in hashes.items() if v}}
+                else:
+                    # [P1-PLAN-LOTE-20 · 2026-09-12] (E6 · ARQ30-P1-03) Una franja SIN candidato no dejaba rastro: la clave
+                    # simplemente no existía en `candidates` y el modelo improvisaba sin que nadie lo anotara. Queda dicha,
+                    # con la pregunta que decide si un allocator urge: ¿OTRA familia de proteína sí tendría plato aquí
+                    # (`rescuable_by_family`: el round-robin eligió mal) o no hay plato en la biblioteca con estos filtros
+                    # (hueco de biblioteca, como E9)? Sólo diagnóstico: no cambia qué se fija ni qué se recita.
+                    # tooltip-anchor: P1-PLAN-LOTE-20-EMPTY-SLOTS
+                    _any = []
+                    for _lib in dict.fromkeys((_c, country)):
+                        try:
+                            _any = dr.template_candidates(_lib, slot, None, k=1, exclude_allergens=allergies, diet=diet,
+                                                          require_known_nutrients=req_nutr, market_country=mkt,
+                                                          budget_tier=bud, exclude_foods=excl,
+                                                          **_dur_kwargs(effective, d.get("day_index")))
+                        except Exception:
+                            _any = []
+                        if _any:
+                            break
+                    empty.append({"day_index": int(d.get("day_index") or 0), "slot": slot, "family": fam,
+                                  "culture_country": _c, "rescuable_by_family": bool(_any)})
+        out = {"snapshot_hash": h, "version": dr.registry_snapshot_version(), "candidates": cands,
+               "candidate_names": names, "culture_fallbacks": fallbacks,
+               "library_hashes": {k: v for k, v in hashes.items() if v}}
+        if empty:   # sólo cuando hay algo que decir: un blueprint sin huecos no cambia de forma ni de hash
+            out["empty_slots"] = empty
+        if _viable_on:
+            out["viable_family"] = True     # qué regla de asignación produjo este blueprint
+            if reassign:
+                out["family_reassignments"] = reassign
+        return out
     except Exception as e:
         logger.debug(f"[ARQ25-F6] registry no disponible para el blueprint: {e!r}")
         return {"snapshot_hash": None, "candidates": {}}
@@ -784,7 +879,7 @@ def build_blueprint(effective: dict, *, total_days: int, base: Optional[int] = N
         "culture_weights": _cw,
         # [P1-ARQ25-F6-DISH-REGISTRY] hash del snapshot + candidatos por día/franja (el allocator consume el registry)
         # [P1-ARQ25-F7-CULTURE] los candidatos salen de la biblioteca de la COCINA del día, no del país de compra (I16)
-        "registry": _registry_block_for_country(None, effective=eff, days_out=days_out),
+        "registry": _registry_block_for_country(None, effective=eff, days_out=days_out, pool=pool),
     }
     bp["blueprint_hash"] = blueprint_hash(bp)
     bp["built_at"] = datetime.now(timezone.utc).isoformat()
@@ -851,6 +946,15 @@ def slice_for_chunk(bp: dict, days_offset: int, days_count: int) -> dict:
                           # [P1-PLAN-LOTE-3 · B5] los días de ESTA rebanada cuya cocina cayó al mercado
                           "culture_fallbacks": [f for f in (_reg.get("culture_fallbacks") or [])
                                                 if off <= int(f.get("day_index", -1)) < off + n]}
+        # [P1-PLAN-LOTE-20 · E6] las franjas sin candidato de ESTA rebanada; sólo si las hay (hash estable si no)
+        _empty_in = [e for e in (_reg.get("empty_slots") or []) if off <= int(e.get("day_index", -1)) < off + n]
+        if _empty_in:
+            sl["registry"]["empty_slots"] = _empty_in
+        if _reg.get("viable_family"):
+            sl["registry"]["viable_family"] = True
+            _re_in = [r for r in (_reg.get("family_reassignments") or []) if off <= int(r.get("day_index", -1)) < off + n]
+            if _re_in:
+                sl["registry"]["family_reassignments"] = _re_in
     sl["slice_hash"] = slice_hash(sl)
     return sl
 

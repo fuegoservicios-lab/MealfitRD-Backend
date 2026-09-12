@@ -109,6 +109,58 @@ con el round-robin (el registry y el catálogo ya permiten calcularlo offline, c
 `scripts/measure_deterministic_day_macros.py`); si es 0, el allocator no urge y lo dice el número. Después, cohorte
 por uuid, y sólo para el camino determinista (el LLM sigue recibiendo sus 2 candidatos por franja como hoy).
 
+
+#### Estado 2026-09-12 · P1-03 medido en sombra y allocator MÍNIMO tras knob — `P1-PLAN-LOTE-20`
+
+**La sombra, primero.** Una franja sin candidato no dejaba rastro: la clave no existía en `registry.candidates` y el
+modelo improvisaba. Ahora el blueprint anota `registry.empty_slots` (día, franja, familia, cocina y
+`rescuable_by_family`: ¿OTRA familia de proteína sí tendría plato aquí, o no hay plato en la biblioteca con esos
+filtros?) y la rebanada lleva los de sus días — sólo cuando los hay, así un blueprint sin huecos no cambia de forma ni
+de hash. `scripts/measure_horizon_slots.py` construye blueprints para una matriz reproducible (6 países de mercado × 25
+perfiles clínicos del landing × 4 escenarios de compra: semanal, quincenal, mensual, mensual SIN congelador; horizonte
+= ciclo; 4 comidas) y cuenta.
+
+**Lo medido (round-robin de hoy, 600 blueprints, 49.200 franjas):**
+
+| | franjas | vacías | otra familia sí | hueco de biblioteca |
+|---|---|---|---|---|
+| total | 49.200 | **4.311 (8,8 %)** | **4.211** | 100 |
+| semanal | 4.200 | 28 | 28 | 0 |
+| quincenal | 9.000 | 69 | 69 | 0 |
+| mensual, congelador limitado | 18.000 | 138 | 138 | 0 |
+| **mensual sin congelador** | 18.000 | **4.076** | 3.976 | 100 |
+
+El acoplamiento que ARQ30-P1-03 describe, con cifra: en compra mensual sin congelador, del día 8-9 en adelante
+Res/Cerdo/Pollo no tienen almuerzo ni cena que aguante hasta el día, y el round-robin se los asignaba igual — mientras
+otra familia del pool (legumbre, huevo, conserva) sí tenía plato. Vacías por franja: almuerzo 2.161, cena 2.040,
+desayuno 110. Los 100 huecos de biblioteca son todos el mismo: desayuno del perfil alérgico a lácteo/gluten/huevo, del
+día 11 en adelante, en los cinco mercados beta (ningún desayuno sin lácteo, gluten ni huevo aguanta más de 10 días).
+Limitación de la matriz: los perfiles del landing no eligen cocina, así que ES/US/MX/PR/CO miden la biblioteca por
+defecto bajo su mercado (por eso salen idénticos entre sí). **Veredicto: el allocator urge.**
+
+**El allocator mínimo, tras knob.** Como el número lo pedía, se construyó la versión más pequeña que cierra el
+acoplamiento, determinista y en el sitio donde ya se fijan los candidatos (`horizon._registry_block_for_country`):
+el round-robin propone la familia del día; si alguna franja del día no tiene plato con ella, se toma —en orden
+rotado desde la propuesta— la familia del pool que cubre MÁS franjas del día (no «todas»: un desayuno sin plato en
+ninguna familia no puede condenar al almuerzo y la cena; exigir «todas» dejaba 120 franjas rescatables sin rescatar),
+y sólo si mejora estrictamente. Mueve `d["protein"]`, así que candidatos, prompt, sembrador del día determinista y
+gate de fidelidad ven la MISMA familia; queda anotado en `registry.family_reassignments` (y en la rebanada).
+**Knob `MEALFIT_HORIZON_VIABLE_FAMILY`, default OFF**: apagado, el blueprint es byte-idéntico al anterior salvo el
+diagnóstico. `blueprint_hash`/`slice_hash` cambian sólo para runs con huecos o con el knob encendido.
+
+**Con el knob encendido (misma matriz, `--viable`):** vacías **4.311 → 100 (0,2 %)**, las 100 son los huecos de
+biblioteca del desayuno alérgico; 0 rescatables sin rescatar; **2.315 días reasignados** de ~12.300 (2.140 en
+mensual sin congelador, 22 en semanal). Con 3 candidatos: 41.656 → 45.910 franjas.
+
+**Lo que NO hace, a propósito**: no resuelve cuotas de repetición ni cultura ni precio como CSP global (eso es el
+`allocator.py` del diseño, versionado, con comidas fijadas y ventanas deslizantes); no cambia la familia de días que
+ya tienen plato en todas sus franjas; no toca runs en curso (la rebanada del chunk fija lo que ya se fijó).
+
+**Decide el dueño**: encender `MEALFIT_HORIZON_VIABLE_FAMILY` (recomendación: sí, empezando por su usuario, como con
+el día determinista — el escenario que lo necesita es el mensual sin congelador, que hoy entrega un día 9+ con franjas
+que el modelo rellena sin candidato) y el hueco de biblioteca del desayuno sin lácteo/gluten/huevo de larga duración
+(trabajo de plantillas, como E9).
+
 ### P1-04 — una autoridad para porciones y reparaciones
 
 **Hoy:** `portion_solver.solve_meal_macros` / `solve_portion_macros` / `refine_day_portions_integer` y, en el god
