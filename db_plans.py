@@ -1421,6 +1421,21 @@ def _finalize_plan_data_for_insert(data: dict, *, surface: str = "pre-INSERT",
                 # Las listas de compras se construyen aguas ARRIBA de este helper (el seam T2 y
                 # assemble las rearman DESPUÉS de llamar al chain) → ven los pasados
                 # restaurados, que es justo lo que el usuario tiene apuntado.
+                # [P1-PLAN-LOTE-24 · 2026-09-12] (C3 · CUL-P0-04) El contrato sobre la receta final corre AQUÍ, en la
+                # cola REAL del shield: dentro de `finalize_plan_data_coherence` (más arriba) ya no era el último —
+                # detrás de él siguen mutando la lista el band-closer, los caps de realismo, el tope diario de huevos
+                # enteros (que convierte «6 huevos» en «3 huevos» + «3 claras» EN LA LISTA), el piso de proteína, los
+                # condimentos y el re-cuadre de conteos. Medido en el corpus fijo: las 6 comidas que salieron del tope
+                # de huevos tenían los pasos sin sincronizar. Va ANTES de restaurar los días pasados congelados (esos no
+                # se tocan) y de los detectores, que así juzgan los pasos entregados. Idempotente, fail-open.
+                # tooltip-anchor: P1-PLAN-LOTE-24-FINAL-CONTRACT-TAIL
+                try:
+                    from recipe_contract import apply_final_contract as _rfc_tail
+                    _rfc_tail_out = _rfc_tail(_pd.get("days") or [], _db_ins)
+                    if _rfc_tail_out and _rfc_tail_out != "recipe_contract=sin_catalogo":
+                        logger.info(f"📐 [P1-PLAN-LOTE-24] contrato final en la cola del shield ({surface}): {_rfc_tail_out}")
+                except Exception as _rfc_tail_e:
+                    logger.debug(f"[P1-PLAN-LOTE-24] contrato final (cola) no-op: {type(_rfc_tail_e).__name__}: {_rfc_tail_e}")
                 if _frozen_token is not None:
                     from graph_orchestrator import restore_past_days as _rpd_frz
                     _rpd_frz(_pd, _frozen_token)

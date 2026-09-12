@@ -1020,6 +1020,32 @@ def override_egg_white_limit(prompt_text: str, max_per_day) -> str:
         return prompt_text
 
 
+# [P1-PLAN-LOTE-24 · 2026-09-12] (C3 · CUL-P0-04) La regla «HUEVOS: ENTEROS PRIMERO» es una preferencia por defecto —
+# válida para quien no dijo nada— que contradecía a quien declaró la CLARA DE HUEVO como básico: el prompt le pedía al
+# modelo «2 huevos + 2 claras» antes que «4 claras» y convertía su petición de claras en yemas. Misma técnica que
+# `override_egg_white_limit`: se SUSTITUYE la regla existente por su espejo (una sola regla, sin contradicción), sólo
+# para esa persona, después del render cacheado. Sin declaración, el prompt vuelve INTACTO (byte-idéntico).
+# tooltip-anchor: P1-PLAN-LOTE-24-EGG-WHITES-FIRST
+import re as _re_l24  # noqa: E402  (el módulo no importa `re` arriba; el otro `import re as _re` vive más abajo)
+_EGG_RULE_WHOLE_FIRST_RE = _re_l24.compile(r"^(\s*-\s*)HUEVOS: ENTEROS PRIMERO\b.*$", _re_l24.MULTILINE)
+_EGG_RULE_WHITES_FIRST_TXT = (
+    "HUEVOS: CLARAS PRIMERO [P1-PLAN-LOTE-24]: esta persona declaró la CLARA DE HUEVO como básico. La forma por "
+    "defecto del huevo en sus platos es la CLARA («N claras de huevo» en la lista, nunca «huevos sin yema»); usa huevo "
+    "ENTERO solo si la banda de grasa de la comida lo pide y NUNCA en lugar de las claras pedidas. Las claras se "
+    "cocinan igual que el huevo (revoltillo, tortilla, al vapor); no separes yemas en los pasos si la lista no las lleva."
+)
+
+
+def override_egg_form_preference(prompt_text: str, prefers_whites) -> str:
+    """Espejo de la regla 9 para quien declaró claras como básico. Fail-safe: sin preferencia o sin la regla, intacto."""
+    try:
+        if not prefers_whites or not prompt_text or not _EGG_RULE_WHOLE_FIRST_RE.search(prompt_text):
+            return prompt_text
+        return _EGG_RULE_WHOLE_FIRST_RE.sub(lambda m: m.group(1) + _EGG_RULE_WHITES_FIRST_TXT, prompt_text, count=1)
+    except Exception:
+        return prompt_text
+
+
 def build_day_generator_system_prompt(diet=None, country=None) -> str:
     """Render del system prompt del day-gen por dieta canónica Y país (F1-T2), apilado SOBRE
     el render de dieta. `country` None/'DO' (o desconocido — `canonicalize_country` fail-safe)

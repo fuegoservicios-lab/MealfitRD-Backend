@@ -207,6 +207,21 @@ def _ingredient_id(name: Any) -> str:
         return _norm(name).replace(" ", "_")
 
 
+def _portion_txt(portion: Any) -> str:
+    """[P1-PLAN-LOTE-24] «10 unidad» / «150 g» de una ración de ancla (`{"qty", "unit"}`), o «» si no la trae."""
+    try:
+        if not isinstance(portion, dict):
+            return ""
+        qty = float(portion.get("qty") or 0)
+        unit = str(portion.get("unit") or "").strip()
+        if qty <= 0 or not unit:
+            return ""
+        q = str(int(qty)) if abs(qty - round(qty)) < 0.01 else f"{qty:g}"
+        return f"{q} {unit}"
+    except Exception:
+        return ""
+
+
 def _canon_json(obj: Any) -> str:
     return json.dumps(obj, sort_keys=True, ensure_ascii=False, separators=(",", ":"), default=str)
 
@@ -1266,7 +1281,10 @@ def policy_prompt_block(effective: Optional[dict], sl: Optional[dict] = None, *,
         if anchors:
             lines.append("- Alimentos ancla del usuario (deben aparecer con la frecuencia pedida): " + "; ".join(
                 f"{a.get('name') or a.get('ingredient_id')} ({a.get('min_per_7d', 0)}–{a.get('max_per_7d', 7)} de cada 7 días"
-                + (f", {_SLOT_ES.get(str(a.get('slots')[0]).lower(), a.get('slots')[0])}" if a.get("slots") else "") + ")"
+                + (f", {_SLOT_ES.get(str(a.get('slots')[0]).lower(), a.get('slots')[0])}" if a.get("slots") else "")
+                # [P1-PLAN-LOTE-24] la RACIÓN pedida viaja al modelo con su forma («Clara de huevo … 10 unidad por
+                # comida»): antes sólo llegaba el número al tope de claras y el ancla se leía sin cantidad.
+                + (f", {_portion_txt(a.get('portion'))} por comida" if _portion_txt(a.get("portion")) else "") + ")"
                 for a in anchors) + ".")
         if isinstance(sl, dict) and sl.get("days"):
             per_day = []

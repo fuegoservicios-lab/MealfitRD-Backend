@@ -2711,6 +2711,17 @@ def execute_modify_single_meal(user_id: str, day_number: int, meal_type: str, ch
             except Exception as _bp_cm_e:
                 logger.debug(f"[P1-BAND-PARITY-UPDATES] parity (chat-modify) no-op: {_bp_cm_e}")
 
+            # [P1-PLAN-LOTE-24 · 2026-09-12] (C3) El contrato sobre la receta final, tras TODO lo que mutó la lista
+            # dentro de este callback (abaratado, cierre de micros, motor, techos por condición, reconciliador, paridad).
+            # `finalize_single_meal_recipe_coherence` ya lo corrió sobre el plato, pero no era el último. Idempotente,
+            # fail-open; el catálogo llega del caché (cache-hit = memoria). tooltip-anchor: P1-PLAN-LOTE-24-FINAL-CONTRACT-TAIL
+            try:
+                from recipe_contract import apply_final_contract as _rfc_cm
+                from nutrition_db import IngredientNutritionDB as _NDB_rfc_cm
+                _rfc_cm(plan_data_fresh.get("days") or [], _NDB_rfc_cm())
+            except Exception as _rfc_cm_e:
+                logger.debug(f"[P1-PLAN-LOTE-24] contrato final (chat-modify) no-op: {type(_rfc_cm_e).__name__}: {_rfc_cm_e}")
+
             # Aggregated lists (overwrite — el agent_tool es source-of-truth
             # de estas keys tras una modificación). Solo escribimos si la
             # recomputación FUERA del lock tuvo éxito; si falló (variables

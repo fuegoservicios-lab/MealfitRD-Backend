@@ -34,6 +34,14 @@ eso es V7b, sin densidad no hay conversión). Reglas, por orden:
 Idempotente: la segunda pasada no cambia nada (test). Fail-open: jamás lanza; ante duda, no toca. PURO: el catálogo
 entra como índice (`build_culinary_index`), sin DB ni env. El caller (los dos finalizadores del persist boundary) decide
 el knob y el orden: ÚLTIMO, después de todo lo que muta la lista. tooltip-anchor: P1-PLAN-LOTE-23-RECIPE-CONTRACT
+
+[P1-PLAN-LOTE-24 · 2026-09-12] (C3 · CUL-P0-04) Dos cosas más. (1) El contrato conoce las TRES FORMAS del huevo
+(`reconcile_meal`: la lista nombra la forma, los pasos la siguen, y sólo después las cantidades) — ver la sección
+«Las tres formas del huevo». (2) «ÚLTIMO» se midió y no lo era: dentro de `finalize_plan_data_coherence` quedaban
+detrás el band-closer, los caps de realismo, el tope diario de huevos enteros, el piso de proteína y el re-cuadre de
+conteos (`db_plans._finalize_plan_data_for_insert`), y en swap y chat-modify el re-cuadre del día y el motor de macros.
+El contrato corre ahora también en la COLA de esos tres chokepoints (`P1-PLAN-LOTE-24-FINAL-CONTRACT-TAIL`); los ganchos
+de los finalizadores se conservan (idempotente: la segunda pasada no cambia nada).
 """
 from __future__ import annotations
 
@@ -66,7 +74,7 @@ _NOTA_PROCEDENCIA = ("se reemplaz", "sustituy", "seguridad alimentaria")
 def _es_nota(paso: str) -> bool:
     """Notas deterministas (⚠/💡) y de procedencia («se reemplazó X por Y» cita el alimento ORIGINAL a propósito)."""
     s = str(paso or "")
-    if "⚠" in s or "💡" in s:
+    if "⚠" in s or "💡" in s or "🌱" in s:   # [P1-PLAN-LOTE-24] la nota del nutricionista (🌱) tampoco es un paso
         return True
     low = strip_accents(s.lower())
     return any(t in low for t in _NOTA_PROCEDENCIA)
@@ -335,6 +343,189 @@ def reconcile_days(days: list, index: dict) -> dict:
     return agg
 
 
+# ─────────────────────────────────────────────────────────
+# [P1-PLAN-LOTE-24 · 2026-09-12] (C3 · CUL-P0-04) Las tres formas del huevo: entero, clara y yema NO son intercambiables.
+#
+# Medido en el corpus fijo del 09-12: 14 de 64 comidas llevan huevo; 6 de ellas salieron del tope diario de enteros
+# (`_cap_daily_whole_eggs`: «6 huevos» → «3 huevos» + «3 claras de huevo» EN LA LISTA) y en las 6 los pasos seguían
+# diciendo «casca 6 huevos» — la forma cambió en la lista y no en la receta. Peor: el contrato de cantidades de C2,
+# ciego a la forma, reescribía «casca 6 huevos» → «casca 3 huevos» y las claras desaparecían de la preparación.
+# Nutrición y compra ya distinguen las tres formas (`Clara de huevo` 33 g/ud y 0,1 g de grasa por 100 g; `Huevo` 50 g y
+# 9,5 g; `Yema de huevo` 17 g y 26,5 g): la receta era la única capa que las confundía.
+#
+# Dos reglas, ambas con la LISTA como autoridad:
+#   1. La lista dice la forma con su nombre: «N huevos sin yema» / «N huevos (solo claras)» → «N claras de huevo»;
+#      «N huevos sin clara» → «N yemas de huevo». Sin esto «12 huevos sin yema» hereda los macros de 12 enteros
+#      (medido: 600 g y 57 g de grasa contra 396 g y 0,7 g). Cambia la lista ⇒ el llamador re-mide los macros.
+#   2. Los pasos siguen a la forma de la lista. Si la lista trae claras (o yemas), toda mención «N huevos» de los pasos
+#      que no coincida con los enteros comprados se reescribe con el reparto real («3 huevos y 2 claras de huevo»);
+#      si NO hay enteros, «N huevo(s)» y «el/los huevo(s)» pasan a la forma comprada («1 clara de huevo», «la clara») y
+#      la nota de seguridad deja de exigir «yema y clara firmes». Si las claras de la lista no aparecen en NINGÚN paso,
+#      la primera mención de huevo recibe el reparto. Nunca al revés: una lista de enteros con pasos que hablan de
+#      «la clara cuajada» es técnica, no contradicción — no se toca. Nada convierte claras en yemas.
+# tooltip-anchor: P1-PLAN-LOTE-24-EGG-FORMS
+
+HUEVO, CLARA, YEMA = "Huevo", "Clara de huevo", "Yema de huevo"
+_EGG_LIST_SIN_YEMA_RE = re.compile(
+    r"^(\s*(?:\d+(?:[.,]\d+)?|[¼½¾⅓⅔⅛])\s+)huevos?\s*\(?\s*(?:sin\s+(?:la\s+|las\s+)?yemas?|s[oó]lo\s+(?:la\s+|las\s+)?claras?)"
+    r"\s*\)?\s*(?:\(\s*\d+(?:[.,]\d+)?\s*g\s*\))?\s*$", re.IGNORECASE)
+_EGG_LIST_SIN_CLARA_RE = re.compile(
+    r"^(\s*(?:\d+(?:[.,]\d+)?|[¼½¾⅓⅔⅛])\s+)huevos?\s*\(?\s*(?:sin\s+(?:la\s+|las\s+)?claras?|s[oó]lo\s+(?:la\s+|las\s+)?yemas?)"
+    r"\s*\)?\s*(?:\(\s*\d+(?:[.,]\d+)?\s*g\s*\))?\s*$", re.IGNORECASE)
+_EGG_NOUN_AFTER_NUM_RE = re.compile(r"\s+huevos?(?:\s+enteros?)?\b", re.IGNORECASE)
+_EGG_DEFINITE_RE = re.compile(
+    r"\b(el|los)\s+huevos?\b(?!\s+(?:duros?|fritos?|revueltos?|cocidos?|hervidos?|estrellados?|escalfados?|pasados?|batidos?)\b)",
+    re.IGNORECASE)
+_EGG_BARE_NOUN_RE = re.compile(r"(?<!\bde )(?:\b(?:el|los|un|unos)\s+)?\bhuevos?\b(?!\s+(?:duros?|fritos?|revueltos?|cocidos?|hervidos?)\b)",
+                               re.IGNORECASE)
+_EGG_SAFETY_WHOLE_TXT = "yema y clara firmes, sin partes líquidas"
+_EGG_SAFETY_WHITES_TXT = "la clara firme, sin partes líquidas"
+
+
+def _plural_huevo(n: float, forma: str) -> str:
+    uno = abs(n - 1.0) < 0.01
+    if forma == HUEVO:
+        return f"{formatear_cantidad(n)} {'huevo' if uno else 'huevos'}"
+    if forma == CLARA:
+        return f"{formatear_cantidad(n)} {'clara' if uno else 'claras'} de huevo"
+    return f"{formatear_cantidad(n)} {'yema' if uno else 'yemas'} de huevo"
+
+
+def egg_forms_in_list(ings: list, index: dict) -> dict:
+    """{"Huevo": a, "Clara de huevo": b, "Yema de huevo": c} en PIEZAS, leído con el mismo parser que V7."""
+    lista = _cantidades_lista([str(x) for x in (ings or []) if str(x).strip()], index)
+    return {f: float(lista.get((f, "pieza"), 0.0)) for f in (HUEVO, CLARA, YEMA)}
+
+
+def canonicalize_egg_form_lines(meal: dict) -> int:
+    """Regla 1: la lista nombra la forma. Reescribe `ingredients` y la línea IGUAL de `ingredients_raw` (por texto,
+    nunca por índice). Devuelve nº de líneas reescritas. Nunca convierte claras en enteros ni en yemas."""
+    n = 0
+    try:
+        ings = meal.get("ingredients")
+        if not isinstance(ings, list):
+            return 0
+        raw = meal.get("ingredients_raw") if isinstance(meal.get("ingredients_raw"), list) else None
+        for i, s in enumerate(ings):
+            if not isinstance(s, str):
+                continue
+            nuevo = None
+            m = _EGG_LIST_SIN_YEMA_RE.match(s)
+            if m:
+                nuevo = f"{m.group(1)}claras de huevo" if not _uno(m.group(1)) else f"{m.group(1)}clara de huevo"
+            else:
+                m = _EGG_LIST_SIN_CLARA_RE.match(s)
+                if m:
+                    nuevo = f"{m.group(1)}yemas de huevo" if not _uno(m.group(1)) else f"{m.group(1)}yema de huevo"
+            if nuevo is None or nuevo == s:
+                continue
+            ings[i] = nuevo
+            if raw is not None:
+                hits = [j for j, r in enumerate(raw) if isinstance(r, str) and r.strip() == s.strip()]
+                if len(hits) == 1:
+                    raw[hits[0]] = nuevo
+            n += 1
+        return n
+    except Exception:
+        return n
+
+
+def _uno(lead: str) -> bool:
+    try:
+        return abs(float(str(lead).strip().replace(",", ".")) - 1.0) < 0.01
+    except ValueError:
+        return False
+
+
+def egg_forms_step_sync(meal: dict, index: dict) -> dict:
+    """Regla 2: los pasos siguen a la forma de la lista. Muta `meal["recipe"]`. Informe: {"reescritas", "cambios"}."""
+    informe = {"reescritas": 0, "cambios": []}
+    try:
+        if not isinstance(meal, dict) or not index:
+            return informe
+        rec = meal.get("recipe")
+        if not isinstance(rec, list) or not rec:
+            return informe
+        formas = egg_forms_in_list(meal.get("ingredients") or [], index)
+        a, b, c = formas[HUEVO], formas[CLARA], formas[YEMA]
+        if b <= 0 and c <= 0:
+            return informe                       # lista de enteros: «hasta que la clara cuaje» es técnica
+        frase = " y ".join(_plural_huevo(n, f) for n, f in ((a, HUEVO), (b, CLARA), (c, YEMA)) if n > 0)
+        pasos_txt = strip_accents(" ".join(p for p in rec if isinstance(p, str) and not _es_nota(p)).lower())
+        claras_en_pasos = bool(re.search(r"\bclaras?\b", pasos_txt)) if b > 0 else True
+        yemas_en_pasos = bool(re.search(r"\byemas?\b", pasos_txt)) if c > 0 else True
+        primera_pendiente = not (claras_en_pasos and yemas_en_pasos)
+        for i, paso in enumerate(rec):
+            if not isinstance(paso, str):
+                continue
+            antes = paso
+            if _es_nota(paso):
+                if a <= 0 and c <= 0 and _EGG_SAFETY_WHOLE_TXT in paso:
+                    paso = paso.replace(_EGG_SAFETY_WHOLE_TXT, _EGG_SAFETY_WHITES_TXT)
+            else:
+                menciones = [m for m in _menciones_paso(paso, index) if m["food"] == HUEVO and m["familia"] == "pieza"]
+                for m in sorted(menciones, key=lambda x: x["ini"], reverse=True):
+                    coincide = a > 0 and _tolera("n", m["valor"], a)
+                    if coincide and not primera_pendiente:
+                        continue
+                    mn = _EGG_NOUN_AFTER_NUM_RE.match(paso, m["fin"])
+                    if not mn:
+                        continue
+                    paso = paso[:m["ini"]] + frase + paso[mn.end():]
+                    primera_pendiente = False
+                if a <= 0:
+                    forma_def = CLARA if b > 0 else YEMA
+                    n_def = b if b > 0 else c
+                    def _def(mm, _n=n_def, _f=forma_def):
+                        uno = abs(_n - 1.0) < 0.01
+                        art = ("la" if uno else "las")
+                        if mm.group(1)[:1].isupper():
+                            art = art.capitalize()
+                        sust = ("clara" if _f == CLARA else "yema") + ("" if uno else "s")
+                        return f"{art} {sust}"
+                    paso = _EGG_DEFINITE_RE.sub(_def, paso)
+            if paso != antes:
+                rec[i] = paso
+                informe["reescritas"] += 1
+                informe["cambios"].append({"paso": i, "food": HUEVO, "familia": "huevo_forma", "de": None, "a": frase,
+                                           "antes": antes[:120], "despues": paso[:120]})
+        if primera_pendiente and a > 0:
+            # Lista mixta cuyas claras no aparecen en NINGÚN paso y sin una sola mención numérica («Cocina huevo a la
+            # plancha»): la primera mención desnuda del huevo recibe el reparto comprado.
+            for i, paso in enumerate(rec):
+                if not isinstance(paso, str) or _es_nota(paso):
+                    continue
+                m = _EGG_BARE_NOUN_RE.search(paso)
+                if not m:
+                    continue
+                nuevo = paso[:m.start()] + frase + paso[m.end():]
+                rec[i] = nuevo
+                informe["reescritas"] += 1
+                informe["cambios"].append({"paso": i, "food": HUEVO, "familia": "huevo_forma", "de": None, "a": frase,
+                                           "antes": paso[:120], "despues": nuevo[:120]})
+                break
+        return informe
+    except Exception as e:
+        logger.warning(f"[P1-PLAN-LOTE-24] egg_forms_step_sync fail-open ({type(e).__name__}: {e})")
+        return informe
+
+
+def reconcile_meal(meal: dict, index: dict) -> dict:
+    """El contrato completo sobre UN plato, en orden: (1) la lista nombra la forma del huevo, (2) los pasos siguen a
+    esa forma, (3) las cantidades de los pasos siguen a la lista (C2). Informe agregado; `lista_reescrita` > 0 avisa
+    al llamador de que la lista cambió y los macros hay que re-medirlos."""
+    lista_n = canonicalize_egg_form_lines(meal)
+    huevo = egg_forms_step_sync(meal, index)
+    r = reconcile_step_quantities(meal, index)
+    r["lista_reescrita"] = lista_n
+    r["reescritas"] += huevo["reescritas"]
+    if huevo["reescritas"]:
+        r["familias"] = dict(r.get("familias") or {})
+        r["familias"]["huevo_forma"] = huevo["reescritas"]
+    r["cambios"] = list(huevo["cambios"]) + list(r.get("cambios") or [])
+    return r
+
+
 _INDEX_CACHE: dict = {"index": None, "n": -1}
 
 
@@ -379,26 +570,45 @@ def _index_default(db=None) -> dict:
         return {}
 
 
-def _aplicar_meal(meal: dict, index: dict, mode: str) -> int:
+def _remedir_macros(meal: dict, db) -> None:
+    """[P1-PLAN-LOTE-24] Si el contrato reescribió una línea de la LISTA («12 huevos sin yema» → «12 claras de huevo»),
+    los macros del plato se re-miden con el mismo truth-up del repo. Import perezoso (graph_orchestrator importa este
+    módulo). Fail-open."""
+    if db is None:
+        return
+    try:
+        from graph_orchestrator import _truth_up_meal_macros_from_strings as _tu
+        _tu(meal, db)
+    except Exception as e:
+        logger.debug(f"[P1-PLAN-LOTE-24] re-medición tras canonizar la forma del huevo no-op: {type(e).__name__}: {e}")
+
+
+def _aplicar_meal(meal: dict, index: dict, mode: str, db=None) -> int:
     """Un plato: en `repair` reescribe y anota; en `shadow` mide sobre una copia y anota lo que habría hecho.
     La anotación (`_recipe_contract_final`) sólo se escribe cuando hay algo que decir, para no engordar cada plato."""
     import copy as _copy
     if mode == "shadow":
         sombra = _copy.deepcopy(meal)
-        r = reconcile_step_quantities(sombra, index)
+        r = reconcile_meal(sombra, index)
     else:
-        r = reconcile_step_quantities(meal, index)
-    if r["reescritas"] or r["sin_reparar"]:
+        r = reconcile_meal(meal, index)
+        if r.get("lista_reescrita"):
+            _remedir_macros(meal, db)
+    if r["reescritas"] or r["sin_reparar"] or r.get("lista_reescrita"):
         meal[TELEMETRIA_KEY] = {"modo": mode, "reescritas": r["reescritas"], "familias": r["familias"],
                                 "sin_reparar": r["sin_reparar"]}
+        if r.get("lista_reescrita"):
+            meal[TELEMETRIA_KEY]["lista_reescrita"] = r["lista_reescrita"]   # [P1-PLAN-LOTE-24] sólo si la lista cambió
     else:
         meal.pop(TELEMETRIA_KEY, None)
     return r["reescritas"] if mode == "repair" else 0
 
 
 def apply_final_contract(days: list, db=None) -> str:
-    """Para `finalize_plan_data_coherence`: el contrato sobre TODAS las comidas, al final de todo. Devuelve el trozo
-    del resumen (`recipe_contract=<n>` o `recipe_contract_shadow=<n>`), «» si no hubo nada. Jamás lanza."""
+    """Para `finalize_plan_data_coherence` y la cola del persist boundary (`db_plans._finalize_plan_data_for_insert`,
+    swap, chat-modify): el contrato sobre TODAS las comidas, al final de todo. Devuelve el trozo del resumen
+    (`recipe_contract=<n>` o `recipe_contract_shadow=<n>`), «» si no hubo nada. Idempotente: correr dos veces no
+    cambia nada. Jamás lanza."""
     try:
         mode = final_contract_mode()
         if mode == "off" or not isinstance(days, list) or not days:
@@ -411,7 +621,7 @@ def apply_final_contract(days: list, db=None) -> str:
         for d in days:
             for m in (d.get("meals") or []) if isinstance(d, dict) else []:
                 if isinstance(m, dict):
-                    k = _aplicar_meal(m, index, mode)
+                    k = _aplicar_meal(m, index, mode, db)
                     n += k
                     if mode == "shadow" and m.get(TELEMETRIA_KEY, {}).get("reescritas"):
                         sombra += m[TELEMETRIA_KEY]["reescritas"]
@@ -435,7 +645,7 @@ def apply_final_contract_meal(meal: dict, db=None) -> int:
         index = _index_default(db)
         if not index:
             return 0
-        return _aplicar_meal(meal, index, mode)
+        return _aplicar_meal(meal, index, mode, db)
     except Exception as e:
         logger.warning(f"[P1-PLAN-LOTE-23] apply_final_contract_meal fail-open ({type(e).__name__}: {e})")
         return 0

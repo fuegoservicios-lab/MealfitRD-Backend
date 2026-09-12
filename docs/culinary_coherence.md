@@ -707,3 +707,61 @@ sustitución — sin caso medido no se construye un degradador de verbos que dep
 
 Tests: [`test_p1_plan_lote_23.py`](../tests/test_p1_plan_lote_23.py).
 
+
+## Las tres formas del huevo (C3 · `P1-PLAN-LOTE-24` · 2026-09-12)
+
+**Qué decía el gap (CUL-P0-04).** Huevo entero, clara y yema no son intercambiables; «12 huevos sin yema» debe conservar
+12 claras y no heredar los macros de 12 enteros; nada convierte una petición de claras en yemas; la petición sobrevive a
+«enteros primero» y a los fallbacks; separar huevos y comprar claras en envase son compras distintas.
+
+**Lo medido antes de construir.** El catálogo ya distinguía las tres formas con `fdc_id` propios (`Clara de huevo` 33 g/ud
+y 0,1 g de grasa por 100 g; `Huevo` 50 g y 9,5 g; `Yema de huevo` 17 g y 26,5 g), la nutrición resolvía «12 claras de huevo»
+a la clara (396 g, 0,7 g de grasa) y el techo por pieza comparaba por sustantivo cabecera. **La receta era la única capa
+que las confundía.** En el corpus fijo (5 planes, 64 comidas): 14 comidas con huevo; 6 salieron del tope diario de enteros
+(`_cap_daily_whole_eggs`: «6 huevos» → «3 huevos» + «3 claras de huevo» EN LA LISTA) y en las 6 los pasos seguían diciendo
+«casca 6 huevos». El contrato de C2, ciego a la forma, lo reescribía a «casca 3 huevos» y las claras desaparecían de la
+preparación: 5 comidas contradictorias lista↔pasos. Y una línea escrita como «12 huevos sin yema» resolvía a `Huevo`
+(600 g, 57 g de grasa).
+
+**Hallazgo de orden, y era de C2.** El contrato «ÚLTIMO en el persist boundary» no lo era: dentro de
+`db_plans._finalize_plan_data_for_insert` (el SSOT del orden, por el que pasan INSERT, merges de chunk y la cadena de
+calidad) detrás de `finalize_plan_data_coherence` siguen mutando la lista el band-closer, los caps de realismo, el tope
+diario de huevos, el piso de proteína, los condimentos y el re-cuadre de conteos; en swap y chat-modify, el re-cuadre del
+día y el motor de macros. El contrato corre ahora también en la COLA de esos tres chokepoints
+(`P1-PLAN-LOTE-24-FINAL-CONTRACT-TAIL`: antes de restaurar los días pasados congelados y de los detectores; en swap y
+chat-modify antes del rebuild de las listas). Los ganchos de los finalizadores se conservan: el contrato es idempotente.
+
+**Qué hace `recipe_contract.reconcile_meal`** (el contrato completo sobre un plato, en este orden):
+
+1. **La lista nombra la forma.** «N huevos sin yema(s)» / «N huevos (solo claras)» → «N claras de huevo»; «N huevos sin
+   clara» → «N yemas de huevo». Se reescribe `ingredients` y la línea IGUAL de `ingredients_raw` (por texto, nunca por
+   índice) y el llamador re-mide los macros (`_truth_up_meal_macros_from_strings`). Nunca en sentido contrario.
+2. **Los pasos siguen a la forma comprada.** Con enteros y claras en la lista, toda mención «N huevos» que no coincida con
+   los enteros comprados recibe el reparto real («casca 3 huevos y 2 claras de huevo»); si las claras compradas no aparecen
+   en ningún paso, la primera mención de huevo lo recibe (numérica o desnuda: «Cocina huevo a la plancha» → «Cocina 3 huevos
+   y 1 clara de huevo a la plancha»). Sin enteros, «N huevo(s)» y «el/los huevo(s)» pasan a la forma comprada («bate 1 clara
+   de huevo», «añade las claras») y la nota de seguridad deja de exigir «yema y clara firmes». **Una lista de enteros con
+   pasos que dicen «hasta que la clara cuaje» es técnica, no contradicción: no se toca.** Nada convierte claras en yemas.
+3. Las cantidades de los pasos siguen a la lista (C2), que ahora ve «3 huevos» = 3 y «2 claras de huevo» = 2.
+
+Resultado sobre el corpus (copia): **5 comidas contradictorias → 0**, 8 pasos reescritos por forma, segunda pasada 0.
+Lector: `scripts/medir_formas_huevo.py [--vivo N] [--json]` (solo lectura).
+
+**El pedido de claras sobrevive a «enteros primero» y a los fallbacks.** `plan_policy.egg_staple_forms(form)` es la única
+lectura de la declaración (`stapleFoods`/`stapleAnchors`, por sustantivo cabecera, como el techo por pieza). Con la Clara de
+huevo declarada básico y sin el huevo entero, `prompts.day_generator.override_egg_form_preference` sustituye la regla
+«HUEVOS: ENTEROS PRIMERO» por «HUEVOS: CLARAS PRIMERO» (misma técnica que el tope de claras: una regla, sin contradicción;
+prompt byte-idéntico para quien no declaró nada). Con cualquier forma del huevo declarada básico, `_diversify_egg_pools`
+no le quita el huevo al planificador a partir del 3.º día. La ración pedida viaja al bloque 📐 de la política con su forma
+(«Clara de huevo (… 10 unidad por comida)»). Knob `MEALFIT_EGG_STAPLE_HONORED` (default `True`).
+
+**Ya cierto, ahora anclado por test.** La alergia a huevo se expande a clara/yema (`constants`); el vegano rechaza las tres
+formas (`_DIET_EGG_TERMS`); el escáner de huevo crudo las ve (`_RAW_EGG_TERMS`); el ancla «Clara de huevo» NO se da por
+cumplida con «2 huevos» (`_matches`/`anchor_in_text`), aunque «Huevo» sí acepta claras y yemas.
+
+**Lo que NO hace, dicho.** La compra sigue colapsando claras y yemas en cartones de `Huevo` (`canonicalize_huevo`,
+decisión del 2026-05-11: el usuario separa y aprovecha las yemas; 13 filas dependen de esa cadena). El supermercado YA
+tiene «Clara de huevo · Don Papito · botella pasteurizada 400 g · RD$154,95» mapeada a `Clara de huevo`: comprar claras en
+envase es hoy una decisión de producto sobre el agregador, no un dato que falte — del dueño. El techo del 25 % de comidas
+con huevo del gate de variedad y la regla «1 comida con huevo por día» del prompt siguen; honrar «10 claras por comida»
+sigue bajo el canary de la política (`MEALFIT_PLAN_POLICY_ENFORCE_USERS`, E5 fase B).

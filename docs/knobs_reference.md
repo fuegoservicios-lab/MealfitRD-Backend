@@ -253,7 +253,13 @@ meses es candidato a borrarse (el de `MEALFIT_SLOT_AWARE_DAY_REPAIR`, que ademá
 
 | Knob | Default | Efecto |
 |---|---|---|
-| `MEALFIT_RECIPE_FINAL_CONTRACT` | `repair` | `recipe_contract.apply_final_contract[_meal]`, ÚLTIMO paso de `finalize_plan_data_coherence` y `finalize_single_meal_recipe_coherence`: los pasos siguen a la lista (gramos, unidades, piezas; nunca cruza familias). `shadow` anota en `_recipe_contract_final` lo que habría reescrito sin tocar; `off` apaga. Medido sobre el corpus fijo: V7e 38 → 3, V6 11 → 0, V4 4 → 0, 63 cantidades en 36 de 64 comidas; idempotente. Lector: `scripts/medir_contrato_receta_final.py [--vivo N]` |
+| `MEALFIT_RECIPE_FINAL_CONTRACT` | `repair` | `recipe_contract.apply_final_contract[_meal]`, ÚLTIMO paso de `finalize_plan_data_coherence` y `finalize_single_meal_recipe_coherence`: los pasos siguen a la lista (gramos, unidades, piezas; nunca cruza familias). `shadow` anota en `_recipe_contract_final` lo que habría reescrito sin tocar; `off` apaga. Medido sobre el corpus fijo: V7e 38 → 3, V6 11 → 0, V4 4 → 0, 63 cantidades en 36 de 64 comidas; idempotente. Lector: `scripts/medir_contrato_receta_final.py [--vivo N]`. **[`P1-PLAN-LOTE-24`]** El mismo knob gobierna las tres formas del huevo (`reconcile_meal`) y las tres colas nuevas del persist boundary (`db_plans._finalize_plan_data_for_insert`, swap, chat-modify: `P1-PLAN-LOTE-24-FINAL-CONTRACT-TAIL`) |
+
+### Las tres formas del huevo (C3 · `P1-PLAN-LOTE-24` · 2026-09-12)
+
+| Knob | Default | Efecto |
+|---|---|---|
+| `MEALFIT_EGG_STAPLE_HONORED` | `True` | El huevo declarado BÁSICO (`stapleFoods`/`stapleAnchors`) se honra en su forma: `_diversify_egg_pools` no le quita el huevo al planificador a partir del 3.º día, y quien declaró la **Clara de huevo** (y no el huevo entero) recibe en el prompt del día «HUEVOS: CLARAS PRIMERO» en lugar de «ENTEROS PRIMERO» (`prompts.day_generator.override_egg_form_preference`, misma técnica que el tope de claras: se sustituye la regla, no se añade una contradicción). Lectura única de la declaración: `plan_policy.egg_staple_forms`. Sin declaración, prompt byte-idéntico y diversificador intacto. `False` vuelve a la conducta anterior sin redeploy |
 
 ## Cómo añadir un knob nuevo
 

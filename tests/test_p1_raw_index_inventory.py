@@ -83,6 +83,12 @@ _INVENTARIO = {
     "constants.py": {
         "sustituye_display_y_raw":                 (1, "resuelto"),
     },
+    # [P1-PLAN-LOTE-24 · 2026-09-12] La lista nombra la forma del huevo («12 huevos sin yema» → «12 claras de huevo»)
+    # y la línea de `raw` se localiza por IGUALDAD DE TEXTO con la línea vieja de display (0 o >1 coincidencias ⇒ no
+    # se toca raw): más estricto que el resolvedor por alimento, porque exige la misma línea, no el mismo alimento.
+    "recipe_contract.py": {
+        "canonicalize_egg_form_lines":             (1, "resuelto por texto (igualdad exacta de la línea)"),
+    },
 }
 
 _NOMBRES = {"raw", "_raw"}

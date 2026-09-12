@@ -518,6 +518,43 @@ def _portion_of(detail: dict) -> Optional[dict]:
     return {"qty": qty, "unit": unit}
 
 
+# [P1-PLAN-LOTE-24 · 2026-09-12] (C3 · CUL-P0-04) ¿Qué FORMA del huevo declaró la persona como básico?
+#
+# El repo ya distinguía las tres formas en nutrición, compra y en el techo por pieza (`build_count_caps_override`
+# compara por sustantivo cabecera para que «Clara de huevo» no suba el tope del huevo entero). Faltaba que el resto
+# del motor PREGUNTARA: el prompt empujaba «huevos ENTEROS primero» a quien había pedido claras, y el diversificador de
+# pools quitaba el huevo del planificador a partir del 3.º día aunque la persona lo hubiera declarado básico. Este
+# helper es la única lectura de esa declaración; se decide por el sustantivo CABECERA del nombre («clara de huevo» →
+# clara; «huevo»/«huevos» → entero; «yema de huevo» → yema), como el techo por pieza. tooltip-anchor: P1-PLAN-LOTE-24-EGG-STAPLE
+_EGG_FORM_BY_HEAD = {"clara": "clara", "claras": "clara", "yema": "yema", "yemas": "yema", "huevo": "entero", "huevos": "entero"}
+
+
+def egg_staple_forms(form: Optional[dict]) -> set:
+    """Formas del huevo declaradas como básico: subconjunto de {"entero", "clara", "yema"}. Lee `stapleFoods`/`staple_foods`
+    y los nombres de `stapleAnchors`, igual que `compile_requested`. Sin declaración ⇒ set vacío. Nunca lanza."""
+    out: set = set()
+    try:
+        f = form or {}
+        nombres = _clean_list(f.get("stapleFoods") if f.get("stapleFoods") is not None else f.get("staple_foods"))
+        for item in (f.get("stapleAnchors") or []) if isinstance(f.get("stapleAnchors"), list) else []:
+            if isinstance(item, dict) and item.get("name"):
+                nombres.append(str(item["name"]))
+        for n in nombres:
+            head = (_norm(n).split() or [""])[0]
+            forma = _EGG_FORM_BY_HEAD.get(head)
+            if forma:
+                out.add(forma)
+    except Exception:
+        return out
+    return out
+
+
+def egg_white_staple_declared(form: Optional[dict]) -> bool:
+    """True si la persona declaró la CLARA DE HUEVO como básico (y no el huevo entero): pide claras, no yemas."""
+    formas = egg_staple_forms(form)
+    return "clara" in formas and "entero" not in formas
+
+
 def _relax(rels: list, *, field: str, requested: Any, applied: Any, reason: str, rank: int,
            evidence: Optional[dict] = None, action: str = "applied") -> None:
     rels.append({

@@ -5220,11 +5220,13 @@ def _eggw_prompt_limit(prompt_text: str, form_data) -> str:
     motor permitiría 10 claras y el prompt seguiría pidiendo 6 — el tope subido sería inerte.
     """
     try:
-        from plan_policy import portion_cap_for as _pcf
-        from prompts.day_generator import override_egg_white_limit as _oewl
+        from plan_policy import portion_cap_for as _pcf, egg_white_staple_declared as _ewsd
+        from prompts.day_generator import override_egg_white_limit as _oewl, override_egg_form_preference as _oefp
         f = form_data or {}
-        return _oewl(prompt_text, _pcf(f.get("_plan_policy_effective"), "Clara de huevo", 6,
-                                       enforced=bool(f.get("_policy_enforced"))))
+        out = _oewl(prompt_text, _pcf(f.get("_plan_policy_effective"), "Clara de huevo", 6,
+                                      enforced=bool(f.get("_policy_enforced"))))
+        # [P1-PLAN-LOTE-24] (C3) quien declaró la CLARA como básico no recibe «enteros primero». tooltip-anchor: P1-PLAN-LOTE-24-EGG-WHITES-FIRST
+        return _oefp(out, EGG_STAPLE_HONORED and _ewsd(f))
     except Exception:
         return prompt_text
 
@@ -12350,6 +12352,10 @@ _WHOLE_EGG_LINE_RE = _re.compile(r"^\s*(\d+)\s*huevos?\b(?![^,;(]*\bclaras?\b)",
 # Corre ANTES de day-gen → prompt, scrub y fidelity leen el MISMO pool mutado (coherencia E2E).
 EGG_POOL_DIVERSIFIER_ENABLED = _env_bool("MEALFIT_EGG_POOL_DIVERSIFIER", True)
 EGG_POOL_MAX_DAYS = _env_int("MEALFIT_EGG_POOL_MAX_DAYS", 2, lambda v: 1 <= v <= 7)
+# [P1-PLAN-LOTE-24 · 2026-09-12] (C3 · CUL-P0-04) El huevo declarado BÁSICO se honra en su forma: el diversificador de
+# pools no se lo quita al planificador y el prompt de quien declaró CLARA DE HUEVO deja de pedir «enteros primero».
+# Rollback sin redeploy: MEALFIT_EGG_STAPLE_HONORED=false.
+EGG_STAPLE_HONORED = _env_bool("MEALFIT_EGG_STAPLE_HONORED", True)
 # [P1-EGG-PROTAGONIST-SURPLUS · 2026-07-06] Cierra el ÚLTIMO hueco medido en vivo del gate
 # same-day-protein (3 rechazos consecutivos en la sesión, día con "Puré de Batata con Huevos
 # Revueltos" + "Arepitas con Huevo" + "Revoltillo de Huevo"): el egg-cap y el 🍗 saltan a
@@ -31294,6 +31300,11 @@ def _diversify_egg_pools(skeleton_days: list, form_data=None) -> int:
         return 0
     try:
         from constants import strip_accents as _sa_ep
+        # [P1-PLAN-LOTE-24] (C3) el huevo declarado BÁSICO no se diversifica: la persona pidió repetirlo. tooltip-anchor: P1-PLAN-LOTE-24-EGG-STAPLE
+        from plan_policy import egg_staple_forms as _esf_ep
+        if EGG_STAPLE_HONORED and _esf_ep(form_data):
+            logger.info("🥚 [P1-PLAN-LOTE-24] huevo declarado básico → el diversificador de pools no lo toca.")
+            return 0
         _fd = form_data or {}
         _diet = _sa_ep(str(_fd.get("dietType") or "").lower())
         if "vegan" in _diet:

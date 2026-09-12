@@ -8061,6 +8061,18 @@ def api_swap_meal_persist(
             except Exception as _bp_sw_e:
                 logger.debug(f"[P1-BAND-PARITY-UPDATES] parity (swap) no-op: {_bp_sw_e}")
 
+            # [P1-PLAN-LOTE-24 · 2026-09-12] (C3) El contrato sobre la receta final, tras TODO lo que mutó la lista en
+            # este mutator (re-cuadre del día, cierre de carbos, cuantización, caps clínicos, motor de macros, techos
+            # por condición, reconciliador display↔raw, paridad de banda) y ANTES del rebuild de las listas, que se
+            # derivan de la lista final. `finalize_single_meal_recipe_coherence` ya lo corrió sobre el plato nuevo,
+            # pero no era el último. Idempotente, fail-open. tooltip-anchor: P1-PLAN-LOTE-24-FINAL-CONTRACT-TAIL
+            try:
+                from recipe_contract import apply_final_contract as _rfc_sw
+                from nutrition_db import IngredientNutritionDB as _NDB_rfc_sw
+                _rfc_sw(plan_data.get("days") or [], _NDB_rfc_sw())
+            except Exception as _rfc_sw_e:
+                logger.debug(f"[P1-PLAN-LOTE-24] contrato final (swap) no-op: {type(_rfc_sw_e).__name__}: {_rfc_sw_e}")
+
             # [P1-UPDATE-LIST-INLINE-RECALC · 2026-07-02] ÚLTIMO paso del mutator: rebuild
             # inline de las listas (post closer/requantize/qty-sync → reflejan los
             # ingredientes finales). El strip de arriba queda como estado de FALLBACK si
