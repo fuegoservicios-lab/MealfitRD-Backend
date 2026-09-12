@@ -123,6 +123,27 @@ que deje de reclamar y devuelve `ticks_in_flight`; `deploy-mealfit.ps1` lo consu
 de 20 s hasta 12 min y sólo reinicia con 0 en vuelo (404 = binario viejo ⇒ sigue; timeout ⇒
 avisa y sigue). Test `test_p1_arq25_f1_close_deploy_drain.py`.
 
+## Estado 2026-09-12 · E2 cerrado (P1-PLAN-LOTE-14)
+
+**El flip está vivo.** `MEALFIT_INITIAL_VIA_QUEUE=true` en `/opt/mealfit/backend/.env` y `VITE_INITIAL_VIA_QUEUE=true`
+en `frontend/.env.production` (leídos en el VPS el 2026-09-12; `prod_profile.py` ya lo registraba el 09-06). Desde el
+09-04, 6 de 6 planes nuevos nacieron por la cola (`plan_generation_runs` ↔ `meal_plans`; 2 usuarios; 0 por el SSE legacy).
+
+**Gate, tal y como se midió:** 10/10 planes por la cola, 0 duplicados, 0 CAS stale, 0 `pending_pipeline`, 2/2 kills
+(+1 real, el del deploy) el 09-02 — memoria `project_p1_arq25_f1_close_2026_09_02`. Soak: 0 alertas del lifecycle
+desde el canary del 09-02 hasta el 09-12 (las 15 alertas de ese tramo son `plan_quality_degraded`,
+`plan_display_i18n_degraded`, `plan_jobs_dead`, `country_beta_first_plan`, `registry_dishes_unused`…).
+
+**Trampa que destapó el cierre:** `GET /api/system/admin/arq25-gate` decía `ready_to_flip: false` (`runs: 6`,
+`kills_recovered: 0`). No porque el gate hubiera fallado: `plan_generation_runs.user_id` y `plan_chunk_queue.user_id`
+son `ON DELETE CASCADE`, y la purga de cuentas del 09-11 (G3) borró al usuario del canary (f47126cb) con sus 10 runs
+y sus chunks rescatados. *Un gate que vive en filas que una purga borra no recuerda que pasó.* El endpoint responde
+ahora `phase` (`off` / `canary` / `flipped`), `flip_live` (leído con `generation_lifecycle.initial_via_queue_enabled`,
+la MISMA función que decide el 404 del endpoint — sin segunda tabla), `canary_users_configured` (cuenta, nunca lista:
+son personas) y `counts_scope` (`gate` o `informational_post_flip`). Los contadores siguen midiendo la DB tal cual —
+tras una purga dicen «no pasa», y eso es la verdad sobre las filas, no sobre la fase. Rollback: `MEALFIT_INITIAL_VIA_QUEUE=false`
++ reinicio con drain; los runs en vuelo se drenan y los nuevos caen al SSE legacy.
+
 ## Deuda declarada (Fase 9)
 
 - Los bloques de inyección server-side (`weight_history`/check-ins, «desde mi Nevera») están

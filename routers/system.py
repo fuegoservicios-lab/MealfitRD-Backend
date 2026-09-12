@@ -760,6 +760,10 @@ def arq25_gate_status(execute_sql_query) -> dict:
     stale y cero `pending_pipeline`; ≥2 con kill del proceso a mitad de LLM recuperados; 7 días
     sin alerta nueva; después el flip global. El «soak» de 7 días es OBSERVACIÓN, no código:
     aquí se mide para que el flip sea una lectura y no una corazonada.
+
+    [P1-PLAN-LOTE-14] Los contadores viven en filas con `ON DELETE CASCADE` al usuario: una purga
+    de cuentas (G3) borra la evidencia del canary. `phase`/`flip_live` dicen si la fase está
+    encendida sin depender de esas filas; `counts_scope` avisa cuándo los contadores ya no son el gate.
     """
     q = execute_sql_query
     since_row = q("SELECT min(created_at) AS t FROM plan_generation_runs", fetch_one=True) or {}
@@ -798,7 +802,21 @@ def arq25_gate_status(execute_sql_query) -> dict:
         and int(kills.get("n") or 0) >= 2
     )
     soak_ok = (days_lc or 0.0) >= ARQ25_GATE_SOAK_DAYS
+    # [P1-PLAN-LOTE-14 · 2026-09-12] El gate responde también «¿está el flip vivo?». El interruptor se lee con la MISMA
+    # función que decide el 404 del endpoint (SSOT, sin segunda tabla); el canary se CUENTA, nunca se lista: son personas
+    # reales. Medido el 09-12: el flip llevaba vivo desde ≤ 09-06 y este endpoint seguía diciendo `ready_to_flip: false`
+    # porque las filas de `plan_generation_runs` del canary (usuario f47126cb) se fueron en CASCADE con la purga del
+    # 09-11 — tras el flip los contadores son informativos, no el gate. tooltip-anchor: arq25_gate_flip_live
+    from generation_lifecycle import initial_via_queue_enabled
+    flip_live = bool(initial_via_queue_enabled())
+    canary_raw = os.environ.get("MEALFIT_INITIAL_VIA_QUEUE_USERS", "") or ""
+    canary_users = len({u.strip().lower() for u in canary_raw.split(",") if u.strip()})
+    phase = "flipped" if flip_live else ("canary" if canary_users else "off")
     return {
+        "phase": phase,
+        "flip_live": flip_live,
+        "canary_users_configured": canary_users,
+        "counts_scope": "informational_post_flip" if flip_live else "gate",
         "canary_since": since.isoformat() if hasattr(since, "isoformat") else since,
         "runs": n_runs,
         "users": int(runs.get("u") or 0),

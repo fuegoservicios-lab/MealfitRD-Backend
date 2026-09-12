@@ -131,7 +131,13 @@ _PROCESS_START_ISO = datetime.now(timezone.utc).isoformat()
 # las 5 bibliotecas en DRIFT de catálogo recompiladas y re-ancladas con lo medido; el generador que no reproducía
 # dish_constituents_do.json retirado (validador en su lugar); el refresh nocturno resuelve el huso ausente al SSOT,
 # no a UTC; los 7 pasos del wizard sin campo llevan id propio en el embudo.
-_LAST_KNOWN_PFIX = "P1-PLAN-LOTE-13 · 2026-09-12"
+# [P1-PLAN-LOTE-14 · 2026-09-12] E2 + D8, medidos. E2: el flip `MEALFIT_INITIAL_VIA_QUEUE=true` llevaba vivo desde
+# ≤ 09-06 (VPS, `.env.production`, 6/6 planes nuevos por la cola, 0 alertas del lifecycle desde el 09-02) y el plan
+# seguía llamándolo pendiente; el gate en DB decía `ready_to_flip: false` porque la purga del 09-11 se llevó en
+# CASCADE las filas del canary — ahora responde `phase`/`flip_live` sin depender de ellas. D8: lag de `plan_jobs`
+# medido (`scripts/measure_plan_jobs_lag.py`): el worker recoge en < 2 s; el p95 largo son reintentos del incidente
+# del 09-08 (ya cerrado) y cadenas `revision_changed`; `shopping_commercial` no se construye sin consumidor (dueño).
+_LAST_KNOWN_PFIX = "P1-PLAN-LOTE-14 · 2026-09-12"
 
 # [P1-SENTRY-SAMPLE-COST · 2026-05-12] Sentry sampling driven from env vars
 # con default seguro 0.1 (10%). Pre-fix tenía `traces_sample_rate=1.0` y

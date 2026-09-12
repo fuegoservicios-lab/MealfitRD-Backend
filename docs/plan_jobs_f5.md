@@ -88,6 +88,33 @@ FROM plan_jobs WHERE job_type = 'display_i18n' AND created_at > NOW() - INTERVAL
 SELECT id, plan_id, attempts, error_code, dead_lettered_at FROM plan_jobs WHERE status = 'dead' ORDER BY dead_lettered_at DESC LIMIT 20;
 ```
 
+## Medición del 2026-09-12 (D8 · P1-PLAN-LOTE-14)
+
+Script read-only y repetible: `python scripts/measure_plan_jobs_lag.py --days 30 [--json]`. Separa lo que ve el
+usuario (`created → processed`) de lo que controla el worker — RECOGIDA = `heartbeat_at − max(execute_after,
+created_at)` — y del CONSUMO (`processed_at − heartbeat_at`), sobre jobs `done` al primer intento con trabajo real;
+los no-ops (terminan en el segundo en que nacen: nada que traducir) se cuentan aparte. El gate «p95 < 2 min» se juzga
+sobre la recogida; sin jobs limpios el veredicto es «no concluyente», nunca «pasa».
+
+| job_type | jobs 30 d | recogida p95 | consumo p95 | total limpio p95 | total p95 (todos) | no-done |
+|---|---|---|---|---|---|---|
+| `display_i18n` | 19 (15 done, 4 stale) | **101,6 s** | 54,3 s | 180,9 s (5 jobs; +9 no-op) | 2.450,6 s (máx 8.552) | 4 `already_enriched`→failed, 1 →dead, 4 `revision_changed`, 3 `invocation_budget_exhausted`, 1 `no_valid_meals` |
+| `shopping_projection` | 16 (16 done) | **9,4 s** | 1,7 s | 10,4 s (10 jobs; +6 no-op) | 10,0 s | — |
+
+Veredicto: **PASA** (recogida ≤ 120 s en los dos tipos; 0 `dead`, 0 `dead` sin alerta, backlog vacío). El p95 «total»
+de `display_i18n` no es el worker: (1) el job `48a9dc4b` del incidente del 09-08 (`already_enriched` clasificado como
+fallo → 5 intentos → `dead` a las 23:48 UTC → alerta `plan_jobs_dead:display_i18n` → revivido y `done` a las 01:53;
+cerrado ese mismo día por `P1-I18N-RECONCILE` + `P1-I18N-DEAD-VEREDICTO`), y (2) 4 cadenas `revision_changed`
+re-encoladas por el reconcile (cada 20 min) mientras el dueño probaba swaps en el plan `3957a669` (revisión 26). La
+recogida de `display_i18n` (64-103 s) es el tick del worker (`MEALFIT_PLAN_JOBS_WORKER_INTERVAL_S=60`, a veces dos
+ticks): si el producto quisiera la traducción antes, la palanca es bajar ese knob a 30 (clamp mínimo 15), no tocar el
+consumidor.
+
+`shopping_commercial` (marcas/retailer por presentación): **no se construye** en este lote. Ningún consumidor la pide
+— el precio y el envase de `supermarket_products` ya llegan por `shopping_calculator` (packaging/pricing) y la
+proyección de compras los sirve — y añadir una capa sin lector es exactamente lo que la auditoría F5 acaba de retirar
+en otros sitios. Decisión de producto del dueño; si la pide, nace como `job_type` propio con el mismo protocolo.
+
 ## Runbook
 
 - **Encender**: `MEALFIT_PLAN_JOBS_ENABLED=1` en `/opt/mealfit/backend/.env` + restart. Verificar en el journal
@@ -100,7 +127,8 @@ SELECT id, plan_id, attempts, error_code, dead_lettered_at FROM plan_jobs WHERE 
 ## Pendiente de la Fase 5 (siguientes rebanadas)
 
 1. ~~Consumidor `shopping_projection`~~ (rebanada 2, 2026-09-04). Falta: marcas/retailer por presentación del
-   `supermarket_products` como capa aparte (`shopping_commercial`), si el producto la pide.
+   `supermarket_products` como capa aparte (`shopping_commercial`), si el producto la pide. **2026-09-12: ningún
+   consumidor la pide — decisión del dueño (ver «Medición del 2026-09-12»).**
 2. ~~Reproyección encolada en el commit~~ (2026-09-05, `P1-ARQ25-F5-REPROJECTION`): `enqueue_shopping_reprojection`
    en recálculo (cubre Nevera/restock/consumo), swap, regeneración de día y relleno de bloques (T1); la huella
    de la lista (`list_fingerprint`) evita re-proyectar cuando la lista no cambió (el recálculo corre en cada visita).
