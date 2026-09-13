@@ -2189,6 +2189,9 @@ def test_32_altas_es_existen_en_catalogo_vivo_sin_precio_con_fdc_id():
         "Jamón ibérico", "Chistorra", "Chorizo español", "Jamón serrano", "Morcilla",
         "Panceta ibérica", "Sobrasada", "Lomo embuchado", "Requesón", "Butifarra",
         "Boquerones",
+        # [P1-PLAN-LOTE-34 · 2026-09-13] el barrido descripción-USDA ↔ nombre: sus valores eran los de OTRO alimento
+        # (proxy no declarado) — ahora `manual` + `nutrition_source_ref = 'usda:<id> (proxy: …)'`, auditable.
+        "Membrillo dulce", "Percebes", "Alioli",
     }
     excepciones = {n for n in por_nombre if n in _ES_SIN_USDA}
     assert excepciones == _ES_SIN_USDA, (
@@ -2789,6 +2792,9 @@ def test_46_altas_t6_existen_en_catalogo_vivo_sin_precio_con_fdc_id_o_manual():
         "Champús", "Chorizo santarrosano", "Chontaduro", "Chorizo verde", "Xoconostle",
         "Curuba", "Suero costeño", "Chile guajillo", "Chile mulato", "Chile chipotle",
         "Borojó", "Cecina",
+        # [P1-PLAN-LOTE-34 · 2026-09-13] el barrido descripción-USDA ↔ nombre: sus valores eran los de OTRO alimento
+        # (proxy no declarado) — ahora `manual` + `nutrition_source_ref = 'usda:<id> (proxy: …)'`, auditable.
+        "Huitlacoche", "Guascas", "Arracacha",
     }
     presentes = {n for n in con_usda if n in _SIN_USDA_T6}
     assert presentes == _SIN_USDA_T6, (
@@ -3378,7 +3384,10 @@ def test_62_altas_t7_existen_en_catalogo_vivo_sin_precio_con_fdc_id_o_manual():
     #
     # Se enumeran en vez de relajar la regla: una fila nueva no puede perder su fdc_id
     # en silencio, tendria que anadirse a esta lista.
-    _SIN_USDA_T7 = {"Especias para arroz con dulce", "Longaniza puertorriqueña"}
+    _SIN_USDA_T7 = {"Especias para arroz con dulce", "Longaniza puertorriqueña",
+                    # [P1-PLAN-LOTE-34 · 2026-09-13] el barrido descripción-USDA ↔ nombre: sus valores eran los de OTRO alimento
+                    # (proxy no declarado) — ahora `manual` + `nutrition_source_ref = 'usda:<id> (proxy: …)'`, auditable.
+                    "Chuleta ahumada", "Panecillos de mantequilla", "Bacalaítos"}
     presentes = {n for n in con_usda if n in _SIN_USDA_T7}
     assert presentes == _SIN_USDA_T7, (
         f"el conjunto T7 sin fdc_id cambio: esperaba {sorted(_SIN_USDA_T7)}, "

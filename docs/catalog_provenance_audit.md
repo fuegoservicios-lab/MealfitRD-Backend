@@ -155,6 +155,47 @@ propios`), 3 dueños recuperados, **cero ids compartidos**, cero sentinels.
   BEDCA, no el barrido de duplicados. Un barrido que lo cazara compararía la descripción
   de la fila USDA contra el nombre del alimento — ahora es barato con clave propia.
 
+## Barrido descripción-USDA ↔ nombre: el id ÚNICO mal apuntado (`P1-PLAN-LOTE-34` · 2026-09-13)
+
+**Medido primero.** Esta auditoría dejó escrito que un `fdc_id` único mal apuntado era invisible a un barrido de
+duplicados. `scripts/catalog_fdc_sweep.py` mira las dos señales fila a fila sobre las **288** filas con `fdc_id` (todas;
+USDA respondió 287): la identidad (qué fracción de los tokens de `name_en`/`name` aparece en la descripción del id) y los
+valores (desvío máximo de kcal/proteína/grasa/carbohidrato, con tolerancia absoluta de 12 kcal / 1,5 g / 1,5 g / 3 g
+para no confundir convenciones de energía con otro alimento). Veredicto automático: 214 `coincide`, 19 `mal_apuntado`
+(las dos señales en contra), 54 `revisar` (una), 1 `sin_respuesta`. Artefacto con los umbrales, el método y la revisión
+humana de cada fila marcada: `scripts/data/catalog_fdc_sweep_2026_09_13.json`. Solo lectura (base `read_only`; la clave
+de USDA por cabecera, nunca en la URL; las respuestas en caché para re-clasificar sin red).
+
+**Lo que encontró, revisado a mano uno a uno** (y cada corrección verificada contra USDA antes de escribirla):
+
+| Veredicto | Filas | Ejemplos |
+|---|---|---|
+| id corregido: apuntaba a OTRO alimento y los valores eran los buenos | 22 | Tamarindo → «Purslane, raw» (verdolaga); Hígado de res → T-bone asado; Leche de almendras → un experimento de genética de TOMATES; Kéfir → leche de avena; Mero → salmón rosado en lata; Cangrejo → mahimahi; Salmón → el de GRANJA (208 kcal) con valores del salvaje (142); Pavo molido → cocido con valores crudos |
+| proxy no declarado → declarado (`fdc_id` NULL, `manual`, `usda:<id> (proxy: …)`) | 11 | Percebes con los valores del cangrejo azul; Guascas con los del diente de león; Huitlacoche con los del champiñón crimini; Leche de cabra en polvo con los de leche de VACA entera en polvo; Mapuey con los del ñame genérico (el id es de la fila Ñame) |
+| valores sin la fuente que decían tener → «valores propios» con la traza | 7 | Flor de Jamaica (id del cáliz fresco, valores de flor seca); Yogur de coco (id de un maíz dulce con mantequilla); Guisantes secos (id correcto, valores de una edición anterior de SR); Frijoles pintos (sinónimo de Judías pintas, que tiene el id) |
+| kcal por Atwater general con el id correcto → anotado | 17 | Canela 349,5 frente a 247; Vainilla 51 frente a 288 (el alcohol no está en 4·P+4·C+9·G); Vinagre 3,7 frente a 21 (el ácido acético tampoco) |
+| glosa inglesa de otro alimento | 2 | Níspero «Loquat» → «Sapodilla» (en RD el níspero es el zapote, y el id ya lo era); Cebollín «Chives» → «Scallions» |
+| correcto (nombre en español, uso dominicano o representante declarado) | 23 | Gambas/shrimp, Tuna de nopal/prickly pear, Auyama/pumpkin, Filete de pescado blanco/tilapia; Plátano maduro: Foundation publica dos energías y el catálogo usa la general |
+
+**Lo que NO era, medido.** Los backfills de micronutrientes leyeron USDA POR `fdc_id`, así que la sospecha era que las
+filas mal apuntadas llevaran los micros del alimento equivocado (Mapuey con la vitamina K de la col rizada). Comparado
+micro a micro: **0 de 19** filas los heredó — los ids se torcieron después, o los valores entraron por otra vía. No hay
+nada que re-traer, y la migración no toca ningún valor nutricional.
+
+**Qué se escribió.** `migrations/p1_plan_lote_34_catalogo_fdc_2026_09_13.sql` (espejo en la raíz): 59 UPDATE que sólo
+tocan `fdc_id`, `nutrition_source`, `nutrition_source_ref` y `name_en`, cada uno por `name` exacto, con tres sanity:
+las 22 correcciones escritas, **cero `fdc_id` compartidos** (dos filas no pueden ser el mismo alimento de USDA — por eso
+Mapuey y Frijoles pintos no toman el id de Ñame y Judías pintas: los declaran), y ninguna fila proxy o propia conserva un
+id que la contradiga.
+
+**Lo que sigue abierto, dicho.** Las 9 filas en proxy de antes siguen en proxy, ahora sabiendo por qué: USDA no tiene
+chipotle, guajillo ni mulato secos, ni xoconostle, ni los tres embutidos latinos, ni guineo verde, ni requesón (Requesón
+es sinónimo declarado de Queso ricotta; Yogurt de cabra sigue sobre su proxy de etiqueta). Salir del proxy exige tablas
+nacionales (SMAE/INSP para México, INCAP para Centroamérica, TCAC 2018 para Colombia) que se publican como PDF: bajarlas
+es una decisión del dueño. La vara del barrido no ve un id mal apuntado cuyos valores **y** nombre casen por casualidad
+con otro alimento; tampoco juzga si el valor de USDA es el adecuado para el mercado dominicano — sólo si la afirmación
+«esta fila es ese id» es verdad.
+
 ## Cómo re-ejecutarla
 
 La clasificación no necesita red: sale de comparar macros dentro de cada grupo de
