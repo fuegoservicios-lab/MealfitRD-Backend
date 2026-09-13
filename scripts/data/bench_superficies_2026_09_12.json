@@ -1,0 +1,1089 @@
+{
+ "schema_version": 1,
+ "modo": "offline",
+ "fecha": "2026-09-12",
+ "git_sha": "f51de0b3",
+ "reglas_huella": "411df02c49daba7d",
+ "n_planes": 5,
+ "superficies": {
+  "insert": {
+   "planes": [
+    {
+     "plan_id": null,
+     "estado": "medido",
+     "n_nuevos": 0,
+     "resueltos": 9,
+     "etapas": {
+      "entrada": {
+       "V7a": 10,
+       "V7e": 8
+      },
+      "salida": {
+       "V7a": 8,
+       "V7e": 1
+      }
+     },
+     "nuevos": [],
+     "contrato_estampado": 3,
+     "ms": 47296
+    },
+    {
+     "plan_id": null,
+     "estado": "medido",
+     "n_nuevos": 0,
+     "resueltos": 5,
+     "etapas": {
+      "entrada": {
+       "V7a": 8,
+       "V6": 1,
+       "V7e": 4,
+       "V8a": 1,
+       "V1": 3
+      },
+      "salida": {
+       "V7a": 8,
+       "V8a": 1,
+       "V1": 3
+      }
+     },
+     "nuevos": [],
+     "contrato_estampado": 5,
+     "ms": 12453
+    },
+    {
+     "plan_id": null,
+     "estado": "medido",
+     "n_nuevos": 0,
+     "resueltos": 9,
+     "etapas": {
+      "entrada": {
+       "V3": 4,
+       "V6": 3,
+       "V7a": 13,
+       "V7e": 4,
+       "V1": 1,
+       "V4": 1
+      },
+      "salida": {
+       "V7a": 13,
+       "V1": 1,
+       "V3": 2
+      }
+     },
+     "nuevos": [],
+     "contrato_estampado": 4,
+     "ms": 15984
+    },
+    {
+     "plan_id": null,
+     "estado": "medido",
+     "n_nuevos": 0,
+     "resueltos": 7,
+     "etapas": {
+      "entrada": {
+       "V7d": 1,
+       "V4": 2,
+       "V5": 1,
+       "V7a": 9,
+       "V7c": 1,
+       "V7e": 3
+      },
+      "salida": {
+       "V7d": 1,
+       "V5": 1,
+       "V7a": 7,
+       "V7c": 1
+      }
+     },
+     "nuevos": [],
+     "contrato_estampado": 4,
+     "ms": 12000
+    },
+    {
+     "plan_id": null,
+     "estado": "medido",
+     "n_nuevos": 0,
+     "resueltos": 24,
+     "etapas": {
+      "entrada": {
+       "V7a": 7,
+       "V7e": 19,
+       "V6": 7,
+       "V4": 1
+      },
+      "salida": {
+       "V7a": 6,
+       "V7e": 2
+      }
+     },
+     "nuevos": [],
+     "contrato_estampado": 4,
+     "ms": 12640
+    }
+   ],
+   "n_nuevos": 0,
+   "resueltos": 54,
+   "contrato_estampado": 20,
+   "ms": 100373
+  },
+  "quality": {
+   "planes": [
+    {
+     "plan_id": null,
+     "estado": "medido",
+     "n_nuevos": 0,
+     "resueltos": 9,
+     "etapas": {
+      "entrada": {
+       "V7a": 10,
+       "V7e": 8
+      },
+      "salida": {
+       "V7a": 8,
+       "V7e": 1
+      }
+     },
+     "nuevos": [],
+     "contrato_estampado": 3,
+     "ms": 12625
+    },
+    {
+     "plan_id": null,
+     "estado": "medido",
+     "n_nuevos": 0,
+     "resueltos": 5,
+     "etapas": {
+      "entrada": {
+       "V7a": 8,
+       "V6": 1,
+       "V7e": 4,
+       "V8a": 1,
+       "V1": 3
+      },
+      "salida": {
+       "V7a": 8,
+       "V8a": 1,
+       "V1": 3
+      }
+     },
+     "nuevos": [],
+     "contrato_estampado": 5,
+     "ms": 12562
+    },
+    {
+     "plan_id": null,
+     "estado": "medido",
+     "n_nuevos": 0,
+     "resueltos": 9,
+     "etapas": {
+      "entrada": {
+       "V3": 4,
+       "V6": 3,
+       "V7a": 13,
+       "V7e": 4,
+       "V1": 1,
+       "V4": 1
+      },
+      "salida": {
+       "V7a": 13,
+       "V1": 1,
+       "V3": 2
+      }
+     },
+     "nuevos": [],
+     "contrato_estampado": 4,
+     "ms": 15842
+    },
+    {
+     "plan_id": null,
+     "estado": "medido",
+     "n_nuevos": 0,
+     "resueltos": 7,
+     "etapas": {
+      "entrada": {
+       "V7d": 1,
+       "V4": 2,
+       "V5": 1,
+       "V7a": 9,
+       "V7c": 1,
+       "V7e": 3
+      },
+      "salida": {
+       "V7d": 1,
+       "V5": 1,
+       "V7a": 7,
+       "V7c": 1
+      }
+     },
+     "nuevos": [],
+     "contrato_estampado": 4,
+     "ms": 11860
+    },
+    {
+     "plan_id": null,
+     "estado": "medido",
+     "n_nuevos": 0,
+     "resueltos": 24,
+     "etapas": {
+      "entrada": {
+       "V7a": 7,
+       "V7e": 19,
+       "V6": 7,
+       "V4": 1
+      },
+      "salida": {
+       "V7a": 6,
+       "V7e": 2
+      }
+     },
+     "nuevos": [],
+     "contrato_estampado": 4,
+     "ms": 12546
+    }
+   ],
+   "n_nuevos": 0,
+   "resueltos": 54,
+   "contrato_estampado": 20,
+   "ms": 65435
+  },
+  "chunk_t2": {
+   "planes": [
+    {
+     "plan_id": null,
+     "estado": "medido",
+     "n_nuevos": 0,
+     "resueltos": 0,
+     "etapas": {
+      "entrada": {
+       "V7a": 10,
+       "V7e": 8
+      },
+      "salida": {
+       "V7a": 10,
+       "V7e": 8
+      }
+     },
+     "nuevos": [],
+     "contrato_estampado": 0,
+     "ms": 12672
+    },
+    {
+     "plan_id": null,
+     "estado": "medido",
+     "n_nuevos": 0,
+     "resueltos": 0,
+     "etapas": {
+      "entrada": {
+       "V7a": 8,
+       "V6": 1,
+       "V7e": 4,
+       "V8a": 1,
+       "V1": 3
+      },
+      "salida": {
+       "V7a": 8,
+       "V6": 1,
+       "V7e": 4,
+       "V8a": 1,
+       "V1": 3
+      }
+     },
+     "nuevos": [],
+     "contrato_estampado": 0,
+     "ms": 12375
+    },
+    {
+     "plan_id": null,
+     "estado": "medido",
+     "n_nuevos": 0,
+     "resueltos": 9,
+     "etapas": {
+      "entrada": {
+       "V3": 4,
+       "V6": 3,
+       "V7a": 13,
+       "V7e": 4,
+       "V1": 1,
+       "V4": 1
+      },
+      "salida": {
+       "V7a": 13,
+       "V1": 1,
+       "V3": 2
+      }
+     },
+     "nuevos": [],
+     "contrato_estampado": 4,
+     "ms": 15890
+    },
+    {
+     "plan_id": null,
+     "estado": "medido",
+     "n_nuevos": 0,
+     "resueltos": 0,
+     "etapas": {
+      "entrada": {
+       "V7d": 1,
+       "V4": 2,
+       "V5": 1,
+       "V7a": 9,
+       "V7c": 1,
+       "V7e": 3
+      },
+      "salida": {
+       "V7d": 1,
+       "V4": 2,
+       "V5": 1,
+       "V7a": 9,
+       "V7c": 1,
+       "V7e": 3
+      }
+     },
+     "nuevos": [],
+     "contrato_estampado": 0,
+     "ms": 11875
+    },
+    {
+     "plan_id": null,
+     "estado": "medido",
+     "n_nuevos": 0,
+     "resueltos": 0,
+     "etapas": {
+      "entrada": {
+       "V7a": 7,
+       "V7e": 19,
+       "V6": 7,
+       "V4": 1
+      },
+      "salida": {
+       "V7a": 7,
+       "V7e": 19,
+       "V6": 7,
+       "V4": 1
+      }
+     },
+     "nuevos": [],
+     "contrato_estampado": 0,
+     "ms": 12609
+    }
+   ],
+   "n_nuevos": 0,
+   "resueltos": 9,
+   "contrato_estampado": 4,
+   "ms": 65421
+  },
+  "swap": {
+   "planes": [
+    {
+     "plan_id": null,
+     "estado": "medido",
+     "n_nuevos": 0,
+     "resueltos": 9,
+     "etapas": {
+      "entrada": {
+       "V7a": 10,
+       "V7e": 8
+      },
+      "salida": {
+       "V7a": 8,
+       "V7e": 1
+      }
+     },
+     "nuevos": [],
+     "contrato_estampado": 3,
+     "ms": 6156
+    },
+    {
+     "plan_id": null,
+     "estado": "medido",
+     "n_nuevos": 0,
+     "resueltos": 5,
+     "etapas": {
+      "entrada": {
+       "V7a": 8,
+       "V6": 1,
+       "V7e": 4,
+       "V8a": 1,
+       "V1": 3
+      },
+      "salida": {
+       "V7a": 8,
+       "V8a": 1,
+       "V1": 3
+      }
+     },
+     "nuevos": [],
+     "contrato_estampado": 5,
+     "ms": 6375
+    },
+    {
+     "plan_id": null,
+     "estado": "medido",
+     "n_nuevos": 0,
+     "resueltos": 9,
+     "etapas": {
+      "entrada": {
+       "V3": 4,
+       "V6": 3,
+       "V7a": 13,
+       "V7e": 4,
+       "V1": 1,
+       "V4": 1
+      },
+      "salida": {
+       "V7a": 13,
+       "V1": 1,
+       "V3": 2
+      }
+     },
+     "nuevos": [],
+     "contrato_estampado": 4,
+     "ms": 7936
+    },
+    {
+     "plan_id": null,
+     "estado": "medido",
+     "n_nuevos": 0,
+     "resueltos": 7,
+     "etapas": {
+      "entrada": {
+       "V7d": 1,
+       "V4": 2,
+       "V5": 1,
+       "V7a": 9,
+       "V7c": 1,
+       "V7e": 3
+      },
+      "salida": {
+       "V7d": 1,
+       "V5": 1,
+       "V7a": 7,
+       "V7c": 1
+      }
+     },
+     "nuevos": [],
+     "contrato_estampado": 4,
+     "ms": 5827
+    },
+    {
+     "plan_id": null,
+     "estado": "medido",
+     "n_nuevos": 0,
+     "resueltos": 24,
+     "etapas": {
+      "entrada": {
+       "V7a": 7,
+       "V7e": 19,
+       "V6": 7,
+       "V4": 1
+      },
+      "salida": {
+       "V7a": 6,
+       "V7e": 2
+      }
+     },
+     "nuevos": [],
+     "contrato_estampado": 4,
+     "ms": 6235
+    }
+   ],
+   "n_nuevos": 0,
+   "resueltos": 54,
+   "contrato_estampado": 20,
+   "ms": 32529
+  },
+  "modify": {
+   "planes": [
+    {
+     "plan_id": null,
+     "estado": "medido",
+     "n_nuevos": 0,
+     "resueltos": 9,
+     "etapas": {
+      "entrada": {
+       "V7a": 10,
+       "V7e": 8
+      },
+      "salida": {
+       "V7a": 8,
+       "V7e": 1
+      }
+     },
+     "nuevos": [],
+     "contrato_estampado": 3,
+     "ms": 6186
+    },
+    {
+     "plan_id": null,
+     "estado": "medido",
+     "n_nuevos": 0,
+     "resueltos": 5,
+     "etapas": {
+      "entrada": {
+       "V7a": 8,
+       "V6": 1,
+       "V7e": 4,
+       "V8a": 1,
+       "V1": 3
+      },
+      "salida": {
+       "V7a": 8,
+       "V8a": 1,
+       "V1": 3
+      }
+     },
+     "nuevos": [],
+     "contrato_estampado": 5,
+     "ms": 6218
+    },
+    {
+     "plan_id": null,
+     "estado": "medido",
+     "n_nuevos": 0,
+     "resueltos": 9,
+     "etapas": {
+      "entrada": {
+       "V3": 4,
+       "V6": 3,
+       "V7a": 13,
+       "V7e": 4,
+       "V1": 1,
+       "V4": 1
+      },
+      "salida": {
+       "V7a": 13,
+       "V1": 1,
+       "V3": 2
+      }
+     },
+     "nuevos": [],
+     "contrato_estampado": 4,
+     "ms": 7875
+    },
+    {
+     "plan_id": null,
+     "estado": "medido",
+     "n_nuevos": 0,
+     "resueltos": 7,
+     "etapas": {
+      "entrada": {
+       "V7d": 1,
+       "V4": 2,
+       "V5": 1,
+       "V7a": 9,
+       "V7c": 1,
+       "V7e": 3
+      },
+      "salida": {
+       "V7d": 1,
+       "V5": 1,
+       "V7a": 7,
+       "V7c": 1
+      }
+     },
+     "nuevos": [],
+     "contrato_estampado": 4,
+     "ms": 5875
+    },
+    {
+     "plan_id": null,
+     "estado": "medido",
+     "n_nuevos": 0,
+     "resueltos": 24,
+     "etapas": {
+      "entrada": {
+       "V7a": 7,
+       "V7e": 19,
+       "V6": 7,
+       "V4": 1
+      },
+      "salida": {
+       "V7a": 6,
+       "V7e": 2
+      }
+     },
+     "nuevos": [],
+     "contrato_estampado": 4,
+     "ms": 6250
+    }
+   ],
+   "n_nuevos": 0,
+   "resueltos": 54,
+   "contrato_estampado": 20,
+   "ms": 32404
+  },
+  "closers": {
+   "planes": [
+    {
+     "plan_id": null,
+     "estado": "medido",
+     "n_nuevos": 0,
+     "resueltos": 0,
+     "etapas": {
+      "entrada": {
+       "V7a": 10,
+       "V7e": 8
+      },
+      "salida": {
+       "V7a": 10,
+       "V7e": 8
+      }
+     },
+     "nuevos": [],
+     "contrato_estampado": 0,
+     "ms": 4047
+    },
+    {
+     "plan_id": null,
+     "estado": "medido",
+     "n_nuevos": 0,
+     "resueltos": 0,
+     "etapas": {
+      "entrada": {
+       "V7a": 8,
+       "V6": 1,
+       "V7e": 4,
+       "V8a": 1,
+       "V1": 3
+      },
+      "salida": {
+       "V7a": 8,
+       "V6": 1,
+       "V7e": 4,
+       "V8a": 1,
+       "V1": 3
+      }
+     },
+     "nuevos": [],
+     "contrato_estampado": 0,
+     "ms": 4170
+    },
+    {
+     "plan_id": null,
+     "estado": "medido",
+     "n_nuevos": 0,
+     "resueltos": 0,
+     "etapas": {
+      "entrada": {
+       "V3": 4,
+       "V6": 3,
+       "V7a": 13,
+       "V7e": 4,
+       "V1": 1,
+       "V4": 1
+      },
+      "salida": {
+       "V3": 4,
+       "V6": 3,
+       "V7a": 13,
+       "V7e": 4,
+       "V1": 1,
+       "V4": 1
+      }
+     },
+     "nuevos": [],
+     "contrato_estampado": 0,
+     "ms": 5235
+    },
+    {
+     "plan_id": null,
+     "estado": "medido",
+     "n_nuevos": 0,
+     "resueltos": 0,
+     "etapas": {
+      "entrada": {
+       "V7d": 1,
+       "V4": 2,
+       "V5": 1,
+       "V7a": 9,
+       "V7c": 1,
+       "V7e": 3
+      },
+      "salida": {
+       "V7d": 1,
+       "V4": 2,
+       "V5": 1,
+       "V7a": 9,
+       "V7c": 1,
+       "V7e": 3
+      }
+     },
+     "nuevos": [],
+     "contrato_estampado": 0,
+     "ms": 3889
+    },
+    {
+     "plan_id": null,
+     "estado": "medido",
+     "n_nuevos": 0,
+     "resueltos": 0,
+     "etapas": {
+      "entrada": {
+       "V7a": 7,
+       "V7e": 19,
+       "V6": 7,
+       "V4": 1
+      },
+      "salida": {
+       "V7a": 7,
+       "V7e": 19,
+       "V6": 7,
+       "V4": 1
+      }
+     },
+     "nuevos": [],
+     "contrato_estampado": 0,
+     "ms": 4125
+    }
+   ],
+   "n_nuevos": 0,
+   "resueltos": 0,
+   "contrato_estampado": 0,
+   "ms": 21466
+  },
+  "degradado": {
+   "planes": [
+    {
+     "plan_id": null,
+     "estado": "medido",
+     "n_nuevos": 7,
+     "resueltos": 5,
+     "etapas": {
+      "entrada": {
+       "V7a": 10,
+       "V7e": 8
+      },
+      "salida": {
+       "V3": 6,
+       "V7a": 9,
+       "V7e": 5
+      }
+     },
+     "nuevos": [
+      {
+       "etapa": "salida",
+       "check": "V3",
+       "day": 1,
+       "meal_index": 0,
+       "food": "Cebolla"
+      },
+      {
+       "etapa": "salida",
+       "check": "V3",
+       "day": 1,
+       "meal_index": 3,
+       "food": "Ajo"
+      },
+      {
+       "etapa": "salida",
+       "check": "V3",
+       "day": 1,
+       "meal_index": 3,
+       "food": "Ají morrón"
+      },
+      {
+       "etapa": "salida",
+       "check": "V3",
+       "day": 1,
+       "meal_index": 3,
+       "food": "Tomillo"
+      },
+      {
+       "etapa": "salida",
+       "check": "V3",
+       "day": 1,
+       "meal_index": 3,
+       "food": "Zanahoria"
+      },
+      {
+       "etapa": "salida",
+       "check": "V3",
+       "day": 3,
+       "meal_index": 2,
+       "food": "Yogurt"
+      },
+      {
+       "etapa": "salida",
+       "check": "V7a",
+       "day": 1,
+       "meal_index": 0,
+       "food": "Huevo"
+      }
+     ],
+     "contrato_estampado": 0,
+     "ms": 7219
+    },
+    {
+     "plan_id": null,
+     "estado": "medido",
+     "n_nuevos": 4,
+     "resueltos": 4,
+     "etapas": {
+      "entrada": {
+       "V7a": 8,
+       "V6": 1,
+       "V7e": 4,
+       "V8a": 1,
+       "V1": 3
+      },
+      "salida": {
+       "V3": 4,
+       "V7a": 7,
+       "V6": 1,
+       "V7e": 4,
+       "V8a": 1
+      }
+     },
+     "nuevos": [
+      {
+       "etapa": "salida",
+       "check": "V3",
+       "day": 1,
+       "meal_index": 0,
+       "food": "Ajo"
+      },
+      {
+       "etapa": "salida",
+       "check": "V3",
+       "day": 1,
+       "meal_index": 0,
+       "food": "Cilantro"
+      },
+      {
+       "etapa": "salida",
+       "check": "V3",
+       "day": 1,
+       "meal_index": 0,
+       "food": "Pan integral familiar"
+      },
+      {
+       "etapa": "salida",
+       "check": "V3",
+       "day": 3,
+       "meal_index": 3,
+       "food": "Arenque"
+      }
+     ],
+     "contrato_estampado": 0,
+     "ms": 6327
+    },
+    {
+     "plan_id": null,
+     "estado": "medido",
+     "n_nuevos": 5,
+     "resueltos": 1,
+     "etapas": {
+      "entrada": {
+       "V3": 4,
+       "V6": 3,
+       "V7a": 13,
+       "V7e": 4,
+       "V1": 1,
+       "V4": 1
+      },
+      "salida": {
+       "V3": 5,
+       "V6": 2,
+       "V7a": 13,
+       "V7c": 4,
+       "V7e": 4,
+       "V4": 1
+      }
+     },
+     "nuevos": [
+      {
+       "etapa": "salida",
+       "check": "V3",
+       "day": 1,
+       "meal_index": 0,
+       "food": "Perejil"
+      },
+      {
+       "etapa": "salida",
+       "check": "V7c",
+       "day": 1,
+       "meal_index": 1,
+       "food": "Pasta integral"
+      },
+      {
+       "etapa": "salida",
+       "check": "V7c",
+       "day": 1,
+       "meal_index": 1,
+       "food": "Soya texturizada"
+      },
+      {
+       "etapa": "salida",
+       "check": "V7c",
+       "day": 3,
+       "meal_index": 1,
+       "food": "Pasta integral"
+      },
+      {
+       "etapa": "salida",
+       "check": "V7c",
+       "day": 4,
+       "meal_index": 1,
+       "food": "Pasta integral"
+      }
+     ],
+     "contrato_estampado": 0,
+     "ms": 8141
+    },
+    {
+     "plan_id": null,
+     "estado": "medido",
+     "n_nuevos": 0,
+     "resueltos": 0,
+     "etapas": {
+      "entrada": {
+       "V7d": 1,
+       "V4": 2,
+       "V5": 1,
+       "V7a": 9,
+       "V7c": 1,
+       "V7e": 3
+      },
+      "salida": {
+       "V7d": 1,
+       "V4": 2,
+       "V5": 1,
+       "V7a": 9,
+       "V7c": 1,
+       "V7e": 3
+      }
+     },
+     "nuevos": [],
+     "contrato_estampado": 0,
+     "ms": 6125
+    },
+    {
+     "plan_id": null,
+     "estado": "medido",
+     "n_nuevos": 5,
+     "resueltos": 6,
+     "etapas": {
+      "entrada": {
+       "V7a": 7,
+       "V7e": 19,
+       "V6": 7,
+       "V4": 1
+      },
+      "salida": {
+       "V7a": 7,
+       "V7e": 14,
+       "V6": 4,
+       "V4": 1,
+       "V7c": 1,
+       "V3": 4
+      }
+     },
+     "nuevos": [
+      {
+       "etapa": "salida",
+       "check": "V3",
+       "day": 3,
+       "meal_index": 0,
+       "food": "Harina de trigo"
+      },
+      {
+       "etapa": "salida",
+       "check": "V3",
+       "day": 3,
+       "meal_index": 0,
+       "food": "Leche"
+      },
+      {
+       "etapa": "salida",
+       "check": "V3",
+       "day": 3,
+       "meal_index": 0,
+       "food": "Polvo de hornear"
+      },
+      {
+       "etapa": "salida",
+       "check": "V3",
+       "day": 3,
+       "meal_index": 3,
+       "food": "Huevo"
+      },
+      {
+       "etapa": "salida",
+       "check": "V7c",
+       "day": 2,
+       "meal_index": 1,
+       "food": "Habichuelas rojas"
+      }
+     ],
+     "contrato_estampado": 0,
+     "ms": 6656
+    }
+   ],
+   "n_nuevos": 21,
+   "resueltos": 16,
+   "contrato_estampado": 0,
+   "ms": 34468
+  },
+  "expand": {
+   "planes": [
+    {
+     "plan_id": null,
+     "estado": "sin_cadena_determinista",
+     "n_nuevos": 0,
+     "resueltos": 0,
+     "etapas": {},
+     "nuevos": [],
+     "contrato_estampado": 0,
+     "ms": 0
+    },
+    {
+     "plan_id": null,
+     "estado": "sin_cadena_determinista",
+     "n_nuevos": 0,
+     "resueltos": 0,
+     "etapas": {},
+     "nuevos": [],
+     "contrato_estampado": 0,
+     "ms": 0
+    },
+    {
+     "plan_id": null,
+     "estado": "sin_cadena_determinista",
+     "n_nuevos": 0,
+     "resueltos": 0,
+     "etapas": {},
+     "nuevos": [],
+     "contrato_estampado": 0,
+     "ms": 0
+    },
+    {
+     "plan_id": null,
+     "estado": "sin_cadena_determinista",
+     "n_nuevos": 0,
+     "resueltos": 0,
+     "etapas": {},
+     "nuevos": [],
+     "contrato_estampado": 0,
+     "ms": 0
+    },
+    {
+     "plan_id": null,
+     "estado": "sin_cadena_determinista",
+     "n_nuevos": 0,
+     "resueltos": 0,
+     "etapas": {},
+     "nuevos": [],
+     "contrato_estampado": 0,
+     "ms": 0
+    }
+   ],
+   "n_nuevos": 0,
+   "resueltos": 0,
+   "contrato_estampado": 0,
+   "ms": 0
+  }
+ },
+ "corpus": "culinary_corpus_2026_09_12.json",
+ "modo_catalogo": "nutricion",
+ "catalogo": "catalogo_nutricion_2026_09_12.json"
+}

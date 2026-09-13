@@ -1722,7 +1722,7 @@ CHECKS_CAPA1 = ("V1", "V2", "V3", "V4", "V5", "V6", "V7a", "V7b", "V7c", "V7d", 
 
 #: [P1-PLAN-LOTE-22 · 2026-09-12] (C1 · CUL-P0-01) Versión del ESQUEMA de hallazgo: desde aquí cada violación (capa 1 y
 #: juez) lleva `meal_index`, la posición de la comida en su día. Cambia cuando cambie la forma del hallazgo.
-FINDING_SCHEMA_VERSION = "2026-09-12.meal_index"
+FINDING_SCHEMA_VERSION = "2026-09-12.certeza"   # [P1-PLAN-LOTE-28] + certeza/componente/intencion en el juez
 
 _RULES_FP: "str | None" = None
 

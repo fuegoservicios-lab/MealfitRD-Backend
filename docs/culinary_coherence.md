@@ -926,3 +926,60 @@ sin catálogo o con más de 200 comidas se dice (`estado = sin_catalogo` / no se
 No reabre la sustitución por LP/MILP (decisión previa vigente). La medición por etapas sobre planes REALES llega con la
 telemetría de cada plan persistido; al escribir esto la base no era alcanzable (red caída) y la medición offline se hizo
 con fichas fijadas en la prueba. CUL-P1-06 (juez) y CUL-P1-07 (benchmark de superficies) van en el lote siguiente.
+
+
+## El juez que admite la creatividad y el benchmark de todas las superficies (C5 · segunda parte (b) · `P1-PLAN-LOTE-28` · 2026-09-12)
+
+**CUL-P1-06 — evidencia por componente, intención del plato y estado INCIERTO.** `CulinaryViolation` gana tres campos
+con defaults compatibles con los jueces viejos: `componente` (el ingrediente o la parte del plato a la que se refiere la
+queja), `intencion` (`tradicional` · `fusion` · `transformado` · `dieta` · `desconocida`) y `certeza` (`segura` |
+`dudosa`). La rúbrica los pide y dice qué es `dudosa`: «alguna cocina, una intención declarada o un básico del
+`contexto` podría justificarlo» — y que **una dudosa se OBSERVA, no bloquea**: en `review_plan_node` sólo las `segura`
+deciden `action_taken=blocked`; todas quedan en `_culinary_judge_history` (observación antes de ampliar bloqueo
+semántico, como pide el backlog). El esquema de hallazgo sube a `2026-09-12.certeza` (C1 lo lleva en `judge_context`,
+así que dos juicios con esquemas distintos no se comparan sin saberlo). El marcador estricto excluye las `[dudosa]` del
+juez salvo `--con-dudosas` (las cuenta aparte: `dudosas_excluidas`) y `--excluir-dev ids.json` saca los casos de
+DESARROLLO del holdout (el corpus fijo del 09-12 y los 5 planes que se leyeron para diseñar C2-C4 no pueden ser también la
+prueba); el sampler marca `[dudosa]` al construir los casos. **Lo que NO se hizo, dicho**: no hay calibración nueva del
+juez — exige llamadas LLM reales (`scripts/calibrate_culinary_judge.py`) y la rúbrica anotada con 2.º anotador (C1,
+dueño); hasta entonces `MEALFIT_CULINARY_JUDGE_GUARD` sigue `off` en producción (C6).
+
+**CUL-P1-07 — `scripts/bench_superficies_culinarias.py`: el mismo caso por TODAS las superficies, medido con las mismas
+fotos.** Cada superficie es una cadena determinista `cadena(plan_data)` medida con `repair_stage_diff.medir_cadena`
+(hallazgos nuevos, resueltos, contrato final estampado, ms): `insert` (`_finalize_plan_data_for_insert`), `quality` y
+`chunk_t2` (`apply_plan_quality_finalize_chain`, con y sin días congelados), `swap` y `modify`
+(`finalize_single_meal_recipe_coherence` × comida → `apply_update_band_parity` → `apply_final_contract`: los tres pasos
+que corren `/swap-meal/persist` y el callback de `modify_single_meal`), `closers` (banda + caps), `degradado` (el postfix
+del día sin LLM: `_degrade_offending_steps`) y `expand` (`/recipe/expand` persiste lo que el LLM devuelve: **sin cadena
+determinista propia**, se dice). Dobles offline: el catálogo con nutrición se exporta UNA vez con la base en sólo lectura
+(`--exportar-catalogo` → `scripts/data/catalogo_nutricion_<fecha>.json`); sin él el bench corre con el catálogo del corpus
+(nombres) y el informe avisa de que los cerradores no tienen con qué cerrar. Artefacto JSON con git sha, huella de reglas
+y catálogo; `--informe A.json` lo reconstruye offline; `--comparar A B` da el informe PAREADO por superficie; `--real`
+genera planes con el LLM y **se niega sin `--perfil` y `--presupuesto-usd`** (registra intentos, estado y coste
+estimado desde `llm_usage_events`). Nada escribe planes de usuarios: copias en memoria, base sólo lectura.
+
+**Medido (corpus fijo: 5 planes, 64 comidas; catálogo con nutrición del 12-sep; git `f51de0b3`).**
+
+| superficie | nuevos | resueltos | contrato estampado | ms |
+|---|---|---|---|---|
+| insert | 0 | 54 | 20 | 100.373 |
+| quality | 0 | 54 | 20 | 65.435 |
+| chunk_t2 (días congelados) | 0 | 9 | 4 | 65.421 |
+| swap | 0 | 54 | 20 | 32.529 |
+| modify | 0 | 54 | 20 | 32.404 |
+| closers | 0 | 0 | 0 | 21.466 |
+| degradado (postfix sin LLM) | **21** | 16 | 0 | 34.468 |
+| expand | — | — | — | sin cadena |
+
+Tres lecturas. (1) **Swap, modify, insert y quality resuelven lo mismo (54) y estampan el mismo contrato (20 comidas)**:
+la receta final de la semana 3 y la cambiada por swap tienen el mismo contrato — la aceptación del backlog, medida. (2)
+**Ninguna cadena de producción introduce hallazgos nuevos** sobre el corpus con el catálogo real; con el catálogo de
+NOMBRES (sin nutrición) el swap «introducía» 22 — la cifra de un doble sin nutrición no es comparable, y por eso el
+artefacto declara `modo_catalogo`. (3) **El postfix del día degradado introduce 21** (V3 «comprado y sin mencionar» ×15,
+V7c «seco sin cocción» ×5, V7a ×1): `_degrade_offending_steps` quita el paso que ofende y deja el alimento comprado sin
+paso que lo use. Es un hallazgo real del camino sin LLM, no de esta medición; queda anotado para el reparador de
+CUL-P1-04 y no se toca aquí.
+
+**Lo que NO hace, dicho.** No calibra al juez (LLM + rúbrica del dueño); no compara la interfaz/PDF con los snapshots
+(superficie de frontend, fuera de este lote); `--real` está implementado y no se ejecutó (gasto). Con esto C5 queda
+cerrado en sus siete ítems, con los residuos escritos fila por fila en el plan.

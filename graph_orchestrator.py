@@ -6454,6 +6454,9 @@ class CulinaryViolation(BaseModel):
     # [P1-PLAN-LOTE-22 · 2026-09-12] (C1 · CUL-P0-01) identidad por OCURRENCIA: el `idx` de la comida tal como llegó en
     # el payload. Opcional: un juez que no lo devuelva se resuelve por franja (`culinary_coherence.resolve_judge_violations`).
     meal_index: Optional[int] = None
+    certeza: Literal["segura", "dudosa"] = "segura"     # [P1-PLAN-LOTE-28] (CUL-P1-06) una dudosa se OBSERVA, no bloquea
+    componente: Optional[str] = None                     # el ingrediente o la parte del plato a la que se refiere la queja
+    intencion: Optional[str] = None                      # tradicional | fusion | transformado | dieta | desconocida
 
 
 class CulinaryJudgeReport(BaseModel):
@@ -6633,7 +6636,11 @@ def _build_culinary_judge_rubric() -> str:
           "llegó en el payload), meal (nombre del slot, ej. "
           "'Almuerzo'), tipo (uno de los 5 valores canónicos), detalle (explicación breve y "
           "concreta), severidad ('minor' si es cosmético/discutible, 'high' si un dominicano lo "
-          "vería como un error claro). Si el plan es culinariamente coherente, devuelve una "
+          "vería como un error claro), componente (el ingrediente o la parte del plato a la que se refiere la queja), "
+          "intencion (qué pretende el plato: 'tradicional', 'fusion', 'transformado', 'dieta' o 'desconocida') y certeza "
+          "('segura' si ningún patrón culinario conocido ni el `contexto` lo justifica; 'dudosa' si alguna cocina, una "
+          "intención declarada o un básico del `contexto` podría justificarlo — una violación dudosa se OBSERVA y no "
+          "bloquea). Si el plan es culinariamente coherente, devuelve una "
           "lista de violaciones VACÍA — no inventes problemas para llenar el reporte."
     )
 
@@ -44542,6 +44549,7 @@ Responde ÚNICAMENTE con el JSON de revisión.
         # `compute_plan_hash`: ver `judged_fingerprint` en culinary_coherence.py.
         from culinary_coherence import judged_fingerprint as _cj_fingerprint, judge_context as _cj_context, resolve_judge_violations as _cj_resolve
         _cj_viol = _cj_resolve(plan, _cj_viol)   # [P1-PLAN-LOTE-22] (C1) cada queja atada a UNA comida: `meal_index` + `resolucion`
+        _cj_seguras = [v for v in _cj_viol if str(v.get("certeza") or "segura") != "dudosa"]   # [P1-PLAN-LOTE-28] (CUL-P1-06) la dudosa se observa
         _cj_hist.append({
             "ts": datetime.now(timezone.utc).isoformat(),
             "model": CULINARY_JUDGE_MODEL,
@@ -44551,7 +44559,7 @@ Responde ÚNICAMENTE con el JSON de revisión.
             "judged_fingerprint": _cj_fingerprint(plan) if _cj is not None else None,
             "context": _cj_context(country=_cj_country, model=CULINARY_JUDGE_MODEL, guard=CULINARY_JUDGE_GUARD, rubric=_culinary_judge_rubric_for_country(_cj_country), plan=plan),  # [P1-PLAN-LOTE-22] (C1) qué rúbrica/modelo/país juzgó
             "violations": _cj_viol,
-            "action_taken": ("blocked" if (_cj_viol and CULINARY_JUDGE_GUARD == "block")
+            "action_taken": ("blocked" if (_cj_seguras and CULINARY_JUDGE_GUARD == "block")
                              else "warn_only"),
         })
         # [P1-CULINARY-JUDGE-HIST-CAP · post-review-final] Su gemelo
@@ -44564,7 +44572,7 @@ Responde ÚNICAMENTE con el JSON de revisión.
             logger.warning(f"⚖️ [P1-CULINARY-JUDGE] {len(_cj_viol)} violación(es) "
                            f"(guard={CULINARY_JUDGE_GUARD}): "
                            f"{[(v['tipo'], v['day'], v['meal']) for v in _cj_viol[:6]]}")
-        if _cj_viol and CULINARY_JUDGE_GUARD == "block":
+        if _cj_seguras and CULINARY_JUDGE_GUARD == "block":
             # [P1-CULINARY-JUDGE-BLOCK-FIX · post-review-final] Mismo fix que la capa 1
             # (contract) arriba: sin `approved = False`, "block" del juez tampoco
             # rechazaba nada — las violaciones se apilaban en `issues` pero el

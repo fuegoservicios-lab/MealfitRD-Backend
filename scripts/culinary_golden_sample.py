@@ -121,7 +121,8 @@ def indexar_hallazgos(pid: str, pd: dict, cat: list) -> tuple[dict, dict, dict, 
         for v in resolve_judge_violations(pd, [x for x in (h.get("violations") or []) if isinstance(x, dict)]):
             mi = v.get("meal_index")
             if isinstance(mi, int):
-                juez[(pid, v.get("day"), mi)].append(f"{v.get('tipo')}: {str(v.get('detalle'))[:130]}")
+                _marca = " [dudosa]" if str(v.get("certeza") or "") == "dudosa" else ""   # [P1-PLAN-LOTE-28] (CUL-P1-06)
+                juez[(pid, v.get("day"), mi)].append(f"{v.get('tipo')}{_marca}: {str(v.get('detalle'))[:130]}")
             else:
                 sueltos.append({"capa": "juez", "day": v.get("day"), "meal": v.get("meal"),
                                 "motivo": v.get("resolucion")})

@@ -1,5 +1,5 @@
 # -*- coding: utf-8 -*-
-"""[P1-PLAN-LOTE-26 · 2026-09-12] C5 (primera parte) del plan de pendientes: CUL-P1-01 (claras según persona),
+"""[P1-PLAN-LOTE-26 · 2026-09-12]    assert re.search(r"^| C5 | (🟡|✅) 2026-09-12", plan, re.M) and "P1-PLAN-LOTE-26" in plan   # 🟡 en el lote 26, ✅ al cerrar C5(primera parte) del plan de pendientes: CUL-P1-01 (claras según persona),
 CUL-P1-03 (cultura y horario como contexto) y CUL-P1-05 (tiempos y equipo ejecutables).
 
 Lo que se prueba:
@@ -296,7 +296,7 @@ def test_docs_knob_marcador_y_el_god_file_no_subio_el_tope():
     knobs = (_BACKEND / "docs" / "knobs_reference.md").read_text(encoding="utf-8")
     assert "| `MEALFIT_CULINARY_CONTEXT` | `True` |" in knobs
     plan = (_BACKEND / "docs" / "plan_pendientes_2026_09_11.md").read_text(encoding="utf-8")
-    assert re.search(r"^\| C5 \| 🟡 2026-09-12", plan, re.M) and "P1-PLAN-LOTE-26" in plan
+    assert re.search(r"^| C5 | (🟡|✅) 2026-09-12", plan, re.M) and "P1-PLAN-LOTE-26" in plan   # 🟡 en el lote 26, ✅ al cerrar C5\| C5 \| 🟡 2026-09-12", plan, re.M) and "P1-PLAN-LOTE-26" in plan
     app = (_BACKEND / "app.py").read_text(encoding="utf-8")
     m = re.search(r'_LAST_KNOWN_PFIX = "P1-PLAN-LOTE-(\d+) · (\d{4}-\d{2}-\d{2})"', app)
     assert m and int(m.group(1)) >= 26 and m.group(2) >= "2026-09-12"

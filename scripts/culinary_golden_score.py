@@ -218,14 +218,39 @@ def _codigo(texto: str) -> str:
     return str(texto or "").split(":", 1)[0].strip()
 
 
+#: [P1-PLAN-LOTE-28 · 2026-09-12] (CUL-P1-06) Un hallazgo del juez marcado `[dudosa]` es OBSERVACIÓN: no cuenta como
+#: falso positivo ni como acierto salvo `--con-dudosas`. El estado incierto tiene que poder decirse sin pagar precisión.
+INCLUIR_DUDOSAS = False
+MARCA_DUDOSA = "[dudosa]"
+
+
 def _hallazgos_maquina(caso, clave) -> list:
-    """Hallazgos de la máquina deduplicados (mismo texto = mismo hallazgo): los duplicados no multiplican TP."""
+    """Hallazgos de la máquina deduplicados (mismo texto = mismo hallazgo): los duplicados no multiplican TP.
+    Las `[dudosa]` del juez se excluyen salvo `INCLUIR_DUDOSAS`."""
     vistos, out = set(), []
     for t in caso.get(clave) or []:
         k = str(t).strip()
+        if MARCA_DUDOSA in k and not INCLUIR_DUDOSAS:
+            continue
         if k and k not in vistos:
             vistos.add(k)
-            out.append({"codigo": _codigo(k), "texto": k})
+            out.append({"codigo": _codigo(k).replace(MARCA_DUDOSA, "").strip(), "texto": k})
+    return out
+
+
+def contar_dudosas(d: dict) -> int:
+    return sum(1 for c in (d.get("casos") or []) for t in (c.get("maquina_juez") or []) if MARCA_DUDOSA in str(t))
+
+
+def excluir_casos(d: dict, ids) -> dict:
+    """[P1-PLAN-LOTE-28] (CUL-P1-06) Los ejemplos de DESARROLLO (los que se leyeron para diseñar reglas) no pueden ser
+    holdout: se sacan por `id` antes de puntuar, y el informe dice cuántos."""
+    ids = {str(x) for x in (ids or [])}
+    if not ids:
+        return d
+    out = dict(d)
+    out["casos"] = [c for c in (d.get("casos") or []) if str(c.get("id")) not in ids]
+    out["excluidos_dev"] = len(d.get("casos") or []) - len(out["casos"])
     return out
 
 
@@ -508,11 +533,17 @@ def main() -> int:
     ap.add_argument("--estricto", action="store_true", help="[C1] por hallazgo, con rubrica; exit 4 si incompleto")
     ap.add_argument("--anotaciones", action="append", default=[], help="[C1] fichero(s) de anotacion externos")
     ap.add_argument("--particiones", type=int, default=0, help="[C1] k folds por linaje (plan)")
+    ap.add_argument("--con-dudosas", action="store_true", help="[P1-PLAN-LOTE-28] cuenta tambien los hallazgos [dudosa] del juez")
+    ap.add_argument("--excluir-dev", help="[P1-PLAN-LOTE-28] JSON con ids de casos de desarrollo que NO son holdout")
     a = ap.parse_args()
+    global INCLUIR_DUDOSAS
+    INCLUIR_DUDOSAS = bool(a.con_dudosas)
     if not GOLDEN.exists():
         print(f"no existe {GOLDEN.name}: crealo con scripts/culinary_golden_sample.py")
         return 1
     d = json.loads(GOLDEN.read_text(encoding="utf-8"))
+    if a.excluir_dev:
+        d = excluir_casos(d, json.loads(Path(a.excluir_dev).read_text(encoding="utf-8")))
     if a.particiones:
         part = particiones_por_linaje(d, a.particiones)
         print(json.dumps(part, ensure_ascii=False, indent=2) if a.json else
@@ -520,6 +551,8 @@ def main() -> int:
         return 0 if not part["cruzados"] else 3
     if a.estricto:
         r = puntuar_estricto(d, cargar_anotaciones(a.anotaciones))
+        r["dudosas_excluidas"] = 0 if INCLUIR_DUDOSAS else contar_dudosas(d)
+        r["excluidos_dev"] = d.get("excluidos_dev", 0)
         print(json.dumps(r, ensure_ascii=False, indent=2, default=str) if a.json else render_estricto(r))
         return 0 if r["completo"] else 4
     r = puntuar(d)
