@@ -352,3 +352,64 @@ def retirar_sin_lista(meal: dict, index: dict) -> dict:
     except Exception:
         return out
     return out
+
+
+# ─────────────────────────────────────────────────────────────────────────────────────────────
+# [P1-PLAN-LOTE-31 · 2026-09-13] la misma mención, tres veces seguidas: el LLM que se repite
+# ─────────────────────────────────────────────────────────────────────────────────────────────
+# Medido en el bench real: una cena DM2 recién generada decía «separa 3 huevos y 6 claras de huevo y 6 claras de huevo y 6
+# claras» y «casca 3 huevos y 6 claras de huevo y 6 claras de huevo sobre el guiso». No lo escribió la cadena: el sello del
+# contrato registra 6 piezas recortadas (el LLM las había escrito con OTRO número, seis veces) y el reescritor de la forma del
+# huevo es idempotente (probado ×3). Es el modelo repitiéndose — y V7e, sumando el paso, leía 18 claras contra 6. Aquí se
+# deja UNA: la misma mención numérica (alimento, familia y cantidad) repetida en cadena, unida sólo por «y»/«e»/coma. Se
+# comprueba con los detectores de capa 1 y se deshace si abre un hallazgo. La lista no se toca. tooltip-anchor: P1-PLAN-LOTE-31-REPETICION
+
+_CONECTOR_RE = re.compile(r"^(?:\s*,\s*|\s+(?:y|e)\s+)$", re.IGNORECASE)
+
+
+def colapsar_repeticiones(meal: dict, index: dict) -> dict:
+    """«separa 3 huevos y 6 claras de huevo y 6 claras de huevo y 6 claras.» → «separa 3 huevos y 6 claras de huevo.»
+    Devuelve `{"aplicado": [alimentos], "descartado": [alimentos], "cambios": [{"tipo", "food", "paso", "antes", "despues"}]}`.
+    «6 claras de huevo reservando 6 claras» no es una cadena (hay un verbo en medio) y no se toca."""
+    out = {"aplicado": [], "descartado": [], "cambios": []}
+    try:
+        if not isinstance(meal, dict) or not isinstance(meal.get("recipe"), list) or not meal["recipe"] or not index:
+            return out
+        from recipe_contract import _es_nota, _menciones_paso
+        antes = [str(p) for p in meal["recipe"]]
+        nuevos, cambios, foods = list(antes), [], []
+        for i, paso in enumerate(antes):
+            if _es_nota(paso):
+                continue
+            ms = sorted((m for m in _menciones_paso(paso, index) if m.get("food_fin") is not None), key=lambda x: x["ini"])
+            cortes, ultimo = [], None
+            for m in ms:
+                if (ultimo is not None and (m["food"], m["familia"], m["valor"]) == (ultimo["food"], ultimo["familia"], ultimo["valor"])
+                        and _CONECTOR_RE.match(paso[ultimo["food_fin"]:m["ini"]])):
+                    cortes.append((ultimo["food_fin"], m["food_fin"]))                  # cae « y 6 claras de huevo»
+                    if m["food"] not in foods:
+                        foods.append(m["food"])
+                ultimo = m
+            if not cortes:
+                continue
+            nuevo = paso
+            for a, b in sorted(cortes, reverse=True):
+                nuevo = nuevo[:a] + nuevo[b:]
+            nuevo = re.sub(r"\s+([.,;:])", r"\1", nuevo)
+            if nuevo != paso and nuevo.strip():
+                nuevos[i] = nuevo
+                cambios.append({"tipo": "repeticion", "food": ", ".join(sorted({f for f in foods})), "paso": i, "antes": paso, "despues": nuevo})
+        if not cambios:
+            return out
+        base = _hallazgos(meal, index)
+        meal["recipe"] = nuevos
+        if _hallazgos(meal, index) - base:                                              # abrió otro hallazgo: no era una reparación
+            meal["recipe"] = antes
+            out["descartado"] = list(foods)
+        else:
+            out["aplicado"] = list(foods)
+            out["cambios"] = cambios
+    except Exception:
+        return out
+    return out
+

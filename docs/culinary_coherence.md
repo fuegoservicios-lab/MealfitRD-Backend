@@ -1069,3 +1069,45 @@ contrato sí hizo. Ahora una pasada sin nada que decir no borra lo dicho; un pla
 y encuentra cosas. El `taste_profile` del router (LLM sobre historial) no se imita: un usuario nuevo no tiene historial. Los
 hallazgos «de fábrica» (V7e ×10, V7a ×4, V1, V3) son del generador y del gate, no de las cadenas; quedan medidos, no
 reparados. `/recipe/expand` sigue sin cadena determinista que medir.
+
+## Los V7e «de fábrica»: el paso pide más piezas de las que la lista compra (`P1-PLAN-LOTE-31` · 2026-09-13)
+
+**Medido primero.** El lote 30 dejó 10 V7e en los 3 planes recién generados y los declaró «del generador y del gate, no de las
+cadenas». Mirados uno a uno no eran una cosa sino tres:
+
+1. **Siete** eran la lista bajando de 2 a ½ (o a 1) — el motor de macros o un cerrador dejaron «½ plátanos verde», «½ cebollines»,
+   «½ ciruela», «1 tortilla integral» — con el paso diciendo todavía «pela los 2 plátanos verdes», «pica fino los 2 cebollines»,
+   «divide las 2 ciruelas», «calienta las 2 tortillas integrales». El contrato de C2 los veía y no los tocaba: una pieza desnuda
+   cuyo número cruza el 1 quedaba en `gramatical`, porque cambiar sólo el número produce «½ plátanos verdes». Los sellos lo
+   decían (`sin_reparar.gramatical` 3, 1, 1, 1 en los cuatro platos).
+2. **Tres** eran el detector sumando dentro del paso: «separa 3 huevos y 6 claras de huevo reservando 6 claras en un bol» son las
+   mismas seis claras y V7e leía 12 contra 6; «… y 6 claras de huevo y 6 claras de huevo y 6 claras» leía 18.
+3. Y esa última frase era **el LLM repitiéndose**, no la cadena: el sello del contrato registra 6 piezas recortadas (el modelo las
+   había escrito con OTRO número, seis veces) y el reescritor de la forma del huevo es idempotente (probado ×3 sobre cuatro
+   reconstrucciones del original). Nadie colapsaba la repetición; V7e la contaba.
+
+**Qué se hizo.** (a) `recipe_contract.reconcile_step_quantities` reescribe CON CONCORDANCIA cuando el paso pide MÁS de lo comprado
+(`_concordar_pieza`): el número, el artículo («los 2» → «el ½»), el sustantivo token a token contra el NOMBRE CANÓNICO del catálogo
+—con sus tildes: «cebollines» → «cebollín»; recortando letras salía «cebollin», y un alias que ya es plural («plátanos verdes» está
+en el índice tal cual) no dice cuál es su singular—, los adjetivos que le siguen («ciruelas frescas» → «ciruela fresca») y, si la
+cláusula sólo habla de ese alimento, sus clíticos («córtalos en 4 trozos cada uno» → «córtalo en 4 trozos»; «resérvalas enteras» →
+«resérvala entera»). Si la lista compra exactamente 1 y hay artículo, el número sobra: «divide las 2 ciruelas» → «divide la
+ciruela». La dirección contraria (el paso pide MENOS: «pica 1 tomate» con 3 en la lista; 21 menciones en el corpus frente a 3 en
+esta) sigue en `gramatical`: es la decisión V7a que el dueño tiene en su hoja, y se deja donde estaba a propósito. Lo que no sabe
+concordar sin dejar un residuo peor («1½ tostones de casabe»: el singular pide una tilde que el texto no trae; «2 rodajas de
+tomate» cuenta rodajas, no tomates) se declara y no se toca. (b) V7e compara la mención MAYOR del paso, no la suma
+(`_v7_piezas(..., agregar="max")`); la lista y V7a siguen sumando, porque ahí sumar es lo correcto. (c) Paso (6) del contrato:
+`recipe_repair.colapsar_repeticiones` deja una vez la misma mención numérica (alimento, familia, cantidad) repetida en cadena
+—unida sólo por «y»/«e»/coma—, lo verifica con los detectores de capa 1 y se deshace si abre un hallazgo; «6 claras de huevo
+reservando 6 claras» no es una cadena y no se toca. Telemetría: `_recipe_contract_final.concordancia` y `.repeticiones`.
+
+**Medido después.** Pareado real (`--planes-de`, mismos 3 planes, `bench_superficies_replay_2026_09_13_l31.json`): V7e tras el
+INSERT **10 → 0** — 7 concordados, 3 que eran la suma; el colapso deja «separa 3 huevos y 6 claras de huevo.» — con 0 hallazgos
+nuevos en las 8 superficies; `insert` resueltos 0 → 6 y sellos 9 → 9; `chunk_t2` 7 → 2 (sus días pasados se congelan: la fecha, no el código); `closers` y `degradado` no corren el contrato y quedan en 7, como antes. Corpus fijo (5 planes de producción): 0 hallazgos nuevos en las 8 superficies; `insert`/`quality`/`swap`/`modify` **V7e 38 → 1** (antes 38 → 3: caen «las 2 tostadas de casabe» → «la tostada de casabe» y «2 plátanos verdes» → «½ plátano verde»; el que queda es «1½ tostones de casabe», declarado `gramatical` a propósito), resueltos 55 → 57, sellos 45 → 45 y V7a 42 → 42 — la otra dirección no se tocó, como se decidió. Cada reescritura es idempotente (la segunda
+pasada no cambia nada) y ninguna toca la lista.
+
+**Lo que NO se hizo, dicho.** La dirección V7a numérica y «la clara» sin número siguen siendo avisos: decisión del dueño. Los verbos
+que conciertan con el sustantivo («hasta que estén») no se tocan. No se reescriben sustantivos de forma. La repetición del LLM se
+colapsa en la cola del contrato y no se «evita» en el prompt: un prompt no garantiza nada y la cola sí. Y la lección del lote:
+**diez hallazgos con el mismo código no son un defecto** — eran tres, uno de ellos del instrumento; hasta mirarlos uno a uno el
+lote 30 los había dado por «de fábrica» en bloque.

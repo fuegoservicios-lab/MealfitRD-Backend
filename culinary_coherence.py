@@ -1296,8 +1296,14 @@ _V7_SECABLES_RE = re.compile(
 _V7_RANGO_RE = re.compile(_V7_CANT + r"\s*(?:-|–|—|\ba\b)\s*$")
 
 
-def _v7_piezas(texto: str, index: dict) -> dict:
+def _v7_piezas(texto: str, index: dict, *, agregar: str = "suma") -> dict:
     """{alimento: total de PIEZAS} de «N <alimento>» — sin unidad de medida por medio.
+
+    [P1-PLAN-LOTE-31 · 2026-09-13] `agregar="max"`: en vez de SUMAR las menciones del texto, se queda con la mayor.
+    Es lo que V7e necesita dentro de UN paso — «separa 6 claras de huevo reservando 6 claras en un bol» son las
+    mismas seis claras, no doce: sumadas daban «el paso pide 12 y la lista compra 6», tres de los diez V7e de los
+    planes recién generados del bench real (los otros siete eran de verdad). La lista y V7a siguen sumando: dos
+    líneas del mismo alimento compran la suma, y en la dirección «la lista compra de más» sumar sólo reduce el hueco.
 
     «2 tortillas de trigo» sí; «2 cucharadas de cilantro» NO — eso lo mide V6, y contar la
     cucharada como pieza convertiría cada especia en un falso positivo.
@@ -1332,7 +1338,10 @@ def _v7_piezas(texto: str, index: dict) -> dict:
             spans = _catalog_food_spans(cola, index)
             if not spans or medida.start() < spans[0][0]:
                 continue                               # medida ANTES del alimento ⇒ es medida
-        out[crudos[0]] = out.get(crudos[0], 0.0) + val
+        if agregar == "max":
+            out[crudos[0]] = max(out.get(crudos[0], 0.0), val)
+        else:
+            out[crudos[0]] = out.get(crudos[0], 0.0) + val
     return out
 
 
@@ -1591,6 +1600,12 @@ def _v7e_paso_pide_mas_piezas(day, meal, index) -> list:
     falso positivo garantizado — «corta 1 tomate» y luego «añade el tomate» daría 2 contra 1. La
     pregunta correcta es si ALGÚN paso, por sí solo, pide más de lo que hay comprado.
 
+    [P1-PLAN-LOTE-31 · 2026-09-13] Y DENTRO del paso tampoco se suma: la mención mayor manda
+    (`_v7_piezas(..., agregar="max")`). «Separa 6 claras de huevo reservando 6 claras en un bol»
+    son las mismas seis claras; sumadas daban 12 contra 6 — tres de los diez V7e «de fábrica» del
+    bench real eran esto. Medido en el corpus fijo: 38 con suma, 38 con máximo (ningún coste allí).
+    tooltip-anchor: P1-PLAN-LOTE-31-V7E-MAX
+
     No solapa con V6: cuando el texto trae unidad («1 diente de ajo»), `_v7_piezas` ve la medida
     delante del alimento y no cuenta la pieza, así que ese caso lo sigue reportando V6 y sólo V6.
     """
@@ -1607,7 +1622,7 @@ def _v7e_paso_pide_mas_piezas(day, meal, index) -> list:
             for food, n in _v7_piezas(ing, index).items():
                 en_lista[food] = en_lista.get(food, 0.0) + n
         for paso in pasos:
-            for food, n in _v7_piezas(_texto_de_consumo(paso), index).items():   # [P1-PLAN-LOTE-26]
+            for food, n in _v7_piezas(_texto_de_consumo(paso), index, agregar="max").items():   # [P1-PLAN-LOTE-26] [P1-PLAN-LOTE-31]
                 total = en_lista.get(food)
                 if total is None:
                     continue                           # no está en la lista: eso es V5

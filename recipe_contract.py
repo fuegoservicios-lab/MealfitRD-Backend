@@ -26,8 +26,12 @@ eso es V7b, sin densidad no hay conversión). Reglas, por orden:
     subir una mención duplicaría el ingrediente);
   · tolerancias de las capas que miden: 25 % en gramos (V4), 5 % o 0,06 en conteos (V6/V7e) — lo que la medición
     tolera, el reparador no lo toca;
-  · piezas desnudas que cruzan el singular/plural («1 tomate» ↔ 2,5) NO se reescriben: cambiar el número sin
-    cambiar el sustantivo produce «2,5 tomate»; se informa como `gramatical`, y V7a lo sigue viendo;
+  · piezas desnudas que cruzan el singular/plural («1 tomate» ↔ 2,5) NO se reescriben cuando el paso pide MENOS de lo
+    comprado: cambiar el número sin cambiar el sustantivo produce «2,5 tomate»; se informa como `gramatical`, y V7a
+    lo sigue viendo. [P1-PLAN-LOTE-31] Cuando el paso pide MÁS de lo comprado («los 2 plátanos verdes» con «½ plátano
+    verde» en la lista) SÍ se reescribe, con concordancia: número, artículo, sustantivo y adjetivos («el ½ plátano
+    verde»), y si la lista compra exactamente 1, el número sobra («divide las 2 ciruelas» → «divide la ciruela»);
+    lo que no sabe concordar sin dejar un residuo peor («1½ tostones de casabe») sigue en `gramatical`;
   · rangos («1–2 mandarinas»), aproximaciones («≈ 30 g»), notas ⚠/💡 y notas de procedencia («se reemplazó…») quedan
     fuera; `ingredients_raw` no se toca (sólo `recipe`).
 
@@ -144,8 +148,10 @@ def _cantidades_lista(ings: list, index: dict) -> dict:
 
 def _menciones_paso(paso: str, index: dict) -> list:
     """Las menciones numéricas de un paso, con sus posiciones en el paso ORIGINAL:
-    {"familia", "food", "valor", "ini", "fin", "unidad", "u_ini", "u_fin"}. Se detecta sobre `_norm(paso)` (lo que
-    leen V4/V6/V7) y se traducen las posiciones con `_mapa_posiciones`."""
+    {"familia", "food", "valor", "ini", "fin", "unidad", "u_ini", "u_fin", "food_ini", "food_fin"}. Se detecta sobre
+    `_norm(paso)` (lo que leen V4/V6/V7) y se traducen las posiciones con `_mapa_posiciones`. [P1-PLAN-LOTE-31]
+    `food_ini`/`food_fin` acotan el NOMBRE del alimento en el paso (None si no se pudo situar): la concordancia
+    singular/plural y el colapso de repeticiones necesitan saber dónde termina la mención, no sólo dónde empieza."""
     mapa = _mapa_posiciones(paso)
     if mapa is None:
         return []
@@ -174,8 +180,9 @@ def _menciones_paso(paso: str, index: dict) -> list:
             continue
         a, b = _orig(m.start(1), m.end(1))
         ua, ub = _orig(m.start(2), m.end(2))
+        fa, fb = _span_alimento(m.group(3), crudos[0], index, m.start(3), _orig)
         menciones.append({"familia": ("u", _unidad_norm(unidad)), "food": crudos[0], "valor": val,
-                          "ini": a, "fin": b, "unidad": paso[ua:ub], "u_ini": ua, "u_fin": ub})
+                          "ini": a, "fin": b, "unidad": paso[ua:ub], "u_ini": ua, "u_fin": ub, "food_ini": fa, "food_fin": fb})
         ocupados.append((m.start(1), m.end(2)))
     # (a) gramos, por cláusula y por GRAMÁTICA (el alimento que sigue al «N g de», o el que lo precede pegado)
     for c_ini, c_fin in clause_bounds(blob):
@@ -190,8 +197,10 @@ def _menciones_paso(paso: str, index: dict) -> list:
             if food is None or not _libre(c_ini + m.start(1), c_ini + m.end(1)):
                 continue
             a, b = _orig(c_ini + m.start(1), c_ini + m.end(1))
+            fs = next(((s, e) for s, e, n in foods if n == food), None)
+            fa, fb = _orig(c_ini + fs[0], c_ini + fs[1]) if fs else (None, None)
             menciones.append({"familia": "g", "food": food, "valor": float(m.group(1).replace(",", ".")),
-                              "ini": a, "fin": b, "unidad": None, "u_ini": None, "u_fin": None})
+                              "ini": a, "fin": b, "unidad": None, "u_ini": None, "u_fin": None, "food_ini": fa, "food_fin": fb})
             ocupados.append((c_ini + m.start(1), c_ini + m.end(1)))
     # (c) piezas desnudas — las mismas guardas que `_v7_piezas`
     for m in _V7_PIEZA_RE.finditer(blob):
@@ -210,10 +219,182 @@ def _menciones_paso(paso: str, index: dict) -> list:
         if not _libre(m.start(1), m.end(1)):
             continue
         a, b = _orig(m.start(1), m.end(1))
+        fa, fb = _span_alimento(cola, crudos[0], index, m.start(2), _orig)
         menciones.append({"familia": "pieza", "food": crudos[0], "valor": val, "ini": a, "fin": b,
-                          "unidad": None, "u_ini": None, "u_fin": None})
+                          "unidad": None, "u_ini": None, "u_fin": None, "food_ini": fa, "food_fin": fb})
         ocupados.append((m.start(1), m.end(1)))
     return menciones
+
+
+def _span_alimento(texto_norm: str, food: str, index: dict, desplaz: int, _orig) -> tuple:
+    """[P1-PLAN-LOTE-31] (ini, fin) en el paso ORIGINAL del nombre de `food` dentro de `texto_norm` (un trozo del blob
+    normalizado que empieza en `desplaz`). (None, None) si el alimento no se sitúa."""
+    try:
+        sp = next(((s, e) for s, e, n in _catalog_food_spans(texto_norm, index) if n == food), None)
+        return _orig(desplaz + sp[0], desplaz + sp[1]) if sp else (None, None)
+    except Exception:
+        return (None, None)
+
+
+# ─────────────────────────────────────────────────────────
+# [P1-PLAN-LOTE-31 · 2026-09-13] Concordancia singular/plural cuando el paso pide MÁS piezas que la lista.
+#
+# El contrato de C2 dejaba en `gramatical` toda pieza desnuda cuyo número cruzaba el 1 («2 plátanos» ↔ ½): cambiar sólo
+# el número produce «½ plátanos verdes». Medido en el bench real (3 planes recién generados): 7 de los 10 V7e «de fábrica»
+# eran exactamente eso — el motor de macros o un cerrador bajó la lista de 2 a ½ (o a 1) y el paso siguió diciendo «pela
+# los 2 plátanos verdes», «divide las 2 ciruelas», «calienta las 2 tortillas integrales», «pica los 2 cebollines». En esa
+# dirección seguir el paso rompe la nutrición y la Nevera (se usa lo que no se compró), así que se reescribe CON
+# concordancia: el número, el artículo, el sustantivo (token a token contra la clave del índice: «plátanos verdes» →
+# «plátano verde», «cebollines» → «cebollín», sin inventar acentos), los adjetivos que le siguen («ciruelas frescas» →
+# «ciruela fresca») y, si la cláusula sólo habla de ese alimento, los clíticos («córtalos» → «córtalo», sin «cada uno»).
+# Si la lista compra exactamente 1 y hay artículo, el número sobra: «divide las 2 ciruelas» → «divide la ciruela».
+# La dirección contraria (el paso pide MENOS: «pica 1 tomate» con 3 en la lista, 21 menciones en el corpus) sigue en
+# `gramatical`: es la decisión V7a que el dueño tiene en su hoja. Lo que no sabe concordar sin dejar un residuo peor
+# («1½ tostones de casabe»: el singular pide un acento que el texto no trae) tampoco se toca y se declara.
+# tooltip-anchor: P1-PLAN-LOTE-31-CONCORDANCIA
+
+#: plurales que se vuelven singular RECORTANDO letras (sin inventar acentos): {plural normalizado: letras que sobran}.
+#: Sólo adjetivos de receta y «tostadas» (la pieza de casabe/pan). Sustantivos de forma («rodajas», «trozos») NO: «2
+#: rodajas de tomate» cuenta rodajas, no tomates, y reescribirlas cambiaría la receta.
+_PLURAL_RECORTE = {
+    **{w: 1 for w in (
+        "verdes", "maduros", "maduras", "frescos", "frescas", "medianos", "medianas", "grandes", "pequenos", "pequenas",
+        "enteros", "enteras", "crudos", "crudas", "cocidos", "cocidas", "picados", "picadas", "cortados", "cortadas",
+        "pelados", "peladas", "rallados", "ralladas", "tostados", "tostadas", "hervidos", "hervidas", "duros", "duras",
+        "firmes", "tiernos", "tiernas", "finos", "finas", "gruesos", "gruesas", "sancochados", "sancochadas", "fritos",
+        "fritas", "secos", "secas", "rojos", "rojas", "amarillos", "amarillas", "blancos", "blancas", "negros", "negras",
+        "morados", "moradas", "dulces", "criollos", "criollas", "dominicanos", "dominicanas", "limpios", "limpias",
+        "lavados", "lavadas", "troceados", "troceadas", "desmenuzados", "desmenuzadas", "asados", "asadas", "horneados",
+        "horneadas", "reservados", "reservadas", "restantes", "descongelados", "descongeladas", "escurridos", "escurridas",
+        "listos", "listas", "calientes", "frios", "frias", "tibios", "tibias", "suaves", "abiertos", "abiertas", "partidos",
+        "partidas", "batidos", "batidas", "escalfados", "escalfadas", "revueltos", "revueltas", "molidos", "molidas",
+        "machacados", "machacadas", "majados", "majadas", "dorados", "doradas", "crujientes", "jugosos", "jugosas",
+        "aplastados", "aplastadas", "hidratados", "hidratadas", "remojados", "remojadas", "tostaditas", "tostaditos",
+        "maduritos", "maduritas", "pequenitos", "pequenitas", "medianitos", "medianitas", "picaditos", "picaditas",
+    )},
+    **{w: 2 for w in ("integrales", "naturales", "azules", "especiales", "tradicionales", "artesanales", "vegetales",
+                      "normales", "adicionales", "individuales", "principales", "comunes", "jovenes")},
+}
+_ART_ANTES_RE = re.compile(r"\b(el|la|los|las|unos|unas)\s+$", re.IGNORECASE)
+#: imperativo + clítico plural con tilde («córtalos», «resérvalas», «escúrrelas»); «ponlos» no lleva tilde y no se toca
+_CLITICO_PLURAL_RE = re.compile(r"(?<![\wáéíóúñü])([\wáéíóúñü]*[áéíóú][\wáéíóúñü]*[aeiou]l[oa])s\b")
+_CADA_UNO_RE = re.compile(r"\s+cada\s+un[oa]\b", re.IGNORECASE)
+_PALABRA_TRAS_RE = re.compile(r"(\s+)([\wáéíóúñü]+)")
+
+
+def _plural_a_singular(palabra: str) -> "str | None":
+    n = _PLURAL_RECORTE.get(_norm(palabra))
+    return palabra[:-n] if n else None
+
+
+def _singular_span(span: str, index: dict, food: str) -> "str | None":
+    """«plátanos verdes» → «plátano verde», «cebollines» → «cebollín»: token a token contra el NOMBRE CANÓNICO del catálogo
+    (`food`, con sus acentos: el plural «cebollines» no lleva tilde y el singular sí — recortar letras la perdía). Si el span es
+    un alias que no casa con el canónico, se recorta «s»/«es» sobre el texto; un alias que ya es plural («plátanos verdes» está
+    en el índice tal cual) no dice cuál es su singular y devuelve None. Conserva mayúsculas del texto."""
+    sn = _norm(span)
+    toks = span.split()
+    canon = _norm(food)
+    ttoks = None
+    if canon in index and index[canon]["rx"].fullmatch(sn):
+        ktoks, ttoks = canon.split(), str(index[canon]["name"]).split()
+        if len(ttoks) != len(ktoks):
+            ttoks = None
+    else:
+        clave = next((k for k in sorted(index, key=len, reverse=True) if index[k]["rx"].fullmatch(sn)), None)
+        if clave is None:
+            return None
+        ktoks = clave.split()
+    if len(toks) != len(ktoks):
+        return None
+    out = []
+    for j, (t, k) in enumerate(zip(toks, ktoks)):
+        tn = _norm(t)
+        if tn == k:
+            if k.endswith("s") and ttoks is None:
+                return None                                  # alias en plural: su singular no está escrito en ningún sitio
+            out.append(t)
+        elif tn in (k + "s", k + "es"):
+            if ttoks is not None:
+                s = ttoks[j].lower()
+                out.append(s[:1].upper() + s[1:] if t[:1].isupper() else s)
+            else:
+                out.append(t[:-1] if tn == k + "s" else t[:-2])
+        elif k.endswith("s") and tn in (k[:-1], k[:-2]):
+            out.append(t)                                    # la clave es plural y el texto ya viene en singular
+        else:
+            return None
+    return " ".join(out)
+
+
+def _singulariza_adjetivos_tras(texto: str, pos: int, maximo: int = 2) -> str:
+    """Hasta `maximo` palabras seguidas a partir de `pos` que sean plurales del léxico pasan al singular."""
+    for _ in range(maximo):
+        m = _PALABRA_TRAS_RE.match(texto, pos)
+        if not m:
+            break
+        s = _plural_a_singular(m.group(2))
+        if s is None:
+            break
+        texto = texto[:m.start(2)] + s + texto[m.end(2):]
+        pos = m.start(2) + len(s)
+    return texto
+
+
+def _concordar_pieza(paso: str, m: dict, objetivo: float, index: dict) -> "str | None":
+    """«pela los 2 plátanos verdes y córtalos en 4 trozos cada uno» con «½ plátano verde» en la lista →
+    «pela el ½ plátano verde y córtalo en 4 trozos». Sólo hacia el singular (objetivo ≤ 1). None cuando no sabe hacerlo
+    sin dejar un residuo peor: entonces el llamador lo declara `gramatical` y no toca nada."""
+    fi, ff = m.get("food_ini"), m.get("food_fin")
+    if fi is None or ff is None or objetivo > 1.0 or fi < m["fin"]:
+        return None
+    entre = []
+    for w in paso[m["fin"]:fi].split():
+        if _norm(w) in ("de", "del") and entre:
+            entre.append(w)                              # «2 tostadas DE casabe»: el «de» sigue a la forma
+            continue
+        s = _plural_a_singular(w)
+        if s is None:
+            return None                                  # «1½ tostones de casabe»: no se inventa el acento
+        entre.append(s)
+    sing = _singular_span(paso[fi:ff], index, m["food"])
+    if sing is None:
+        return None
+    prefijo = paso[:m["ini"]]
+    art = _ART_ANTES_RE.search(prefijo)
+    uno = abs(objetivo - 1.0) < 0.01
+    cabeza = ""
+    if art:
+        a = art.group(1)
+        if a.lower() in ("unos", "unas"):
+            prefijo = prefijo[:art.start(1)]                   # «unas 2 ciruelas» → «½ ciruela»
+        else:
+            nuevo_art = _ARTICULO_SINGULAR.get(a.lower(), a)
+            prefijo = prefijo[:art.start(1)] + (nuevo_art.capitalize() if a[:1].isupper() else nuevo_art) + " "
+            if uno:
+                cabeza = ""                                      # «divide las 2 ciruelas» → «divide la ciruela»
+    if not (art and a.lower() not in ("unos", "unas") and uno):
+        cabeza = formatear_cantidad(objetivo) + " "
+    cuerpo = cabeza + "".join(w + " " for w in entre) + sing
+    nuevo = prefijo + cuerpo
+    pos_fin = len(nuevo)
+    nuevo += paso[ff:]
+    nuevo = _singulariza_adjetivos_tras(nuevo, pos_fin)          # «ciruelas frescas» → «ciruela fresca»
+    # la cláusula que sigue, si sólo habla de este alimento: «córtalos en 4 trozos cada uno» → «córtalo en 4 trozos»
+    try:
+        ini_cl = max([a_ for a_, b_ in clause_bounds(nuevo) if a_ <= pos_fin] or [0])
+        fin_cl = next((b_ for a_, b_ in clause_bounds(nuevo) if a_ <= pos_fin < b_), len(nuevo))
+        foods = {n for _, _, n in _catalog_food_spans(nuevo[ini_cl:fin_cl], index)}
+        if foods == {m["food"]}:
+            seg = nuevo[pos_fin:fin_cl]
+            seg2 = _CADA_UNO_RE.sub("", _CLITICO_PLURAL_RE.sub(r"\1", seg))
+            if seg2 != seg:
+                for mc in list(re.finditer(r"[\wáéíóúñü]*[áéíóú][\wáéíóúñü]*[aeiou]l[oa]\b", seg2)):
+                    seg2 = _singulariza_adjetivos_tras(seg2, mc.end(), 1)   # «resérvala enteras» → «resérvala entera»
+                nuevo = nuevo[:pos_fin] + seg2 + nuevo[fin_cl:]
+    except Exception:
+        pass
+    return nuevo if nuevo != paso else None
 
 
 def _cruza_plural(a: float, b: float) -> bool:
@@ -240,7 +421,7 @@ def _concordar_articulo(paso: str, ini: int, valor: float) -> str:
 def reconcile_step_quantities(meal: dict, index: dict) -> dict:
     """Reescribe en `meal["recipe"]` las cantidades que contradicen a `meal["ingredients"]`. Muta `meal` in-place.
     Devuelve el informe: {"reescritas", "familias", "sin_reparar": {"gramatical", "reparto"}, "cambios": [...]}."""
-    informe = {"reescritas": 0, "familias": Counter(), "sin_reparar": Counter(), "cambios": []}
+    informe = {"reescritas": 0, "familias": Counter(), "sin_reparar": Counter(), "cambios": [], "concordancia": 0}
     try:
         if not isinstance(meal, dict) or not index:
             return informe
@@ -276,7 +457,18 @@ def reconcile_step_quantities(meal: dict, index: dict) -> dict:
                     informe["sin_reparar"]["reparto"] += 1      # varias menciones: sólo se recorta el exceso
                     continue
                 if m["familia"] == "pieza" and _cruza_plural(m["valor"], objetivo):
-                    informe["sin_reparar"]["gramatical"] += 1
+                    # [P1-PLAN-LOTE-31] el paso pide MÁS que la lista ⇒ se reescribe con concordancia; pide MENOS ⇒ gramatical
+                    nuevo_paso = _concordar_pieza(paso, m, objetivo, index) if m["valor"] > objetivo else None
+                    if nuevo_paso is None:
+                        informe["sin_reparar"]["gramatical"] += 1
+                        continue
+                    informe["reescritas"] += 1
+                    informe["familias"]["pieza"] += 1
+                    informe["concordancia"] += 1
+                    informe["cambios"].append({"paso": i, "food": m["food"], "de": m["valor"], "a": objetivo, "familia": "pieza",
+                                               "concordancia": True, "antes": paso[max(0, m["ini"] - 30):m["fin"] + 40],
+                                               "despues": nuevo_paso[max(0, m["ini"] - 30):m["ini"] + 44]})
+                    paso = nuevo_paso
                     continue
                 if m["familia"] == "pieza" and m["valor"] < objetivo and (m["food"], "g") in lista:
                     # «1 cebolla (25 g)» en la lista y «pica ¼ de cebolla» en el paso: el conteo de la lista es
@@ -326,7 +518,7 @@ def reconcile_step_quantities(meal: dict, index: dict) -> dict:
 
 def reconcile_days(days: list, index: dict) -> dict:
     """El contrato sobre todas las comidas de `days`. Devuelve el agregado (comidas tocadas, reescritas, familias)."""
-    agg = {"comidas": 0, "comidas_tocadas": 0, "reescritas": 0, "familias": Counter(), "sin_reparar": Counter()}
+    agg = {"comidas": 0, "comidas_tocadas": 0, "reescritas": 0, "familias": Counter(), "sin_reparar": Counter(), "concordancia": 0}
     for d in days or []:
         for m in (d.get("meals") or []) if isinstance(d, dict) else []:
             if not isinstance(m, dict):
@@ -338,6 +530,7 @@ def reconcile_days(days: list, index: dict) -> dict:
                 agg["reescritas"] += r["reescritas"]
             agg["familias"].update(r["familias"])
             agg["sin_reparar"].update(r["sin_reparar"])
+            agg["concordancia"] += int(r.get("concordancia") or 0)
     agg["familias"] = dict(agg["familias"])
     agg["sin_reparar"] = dict(agg["sin_reparar"])
     return agg
@@ -520,6 +713,16 @@ def _reparar_estructura(meal: dict) -> dict:
         return {"aplicado": [], "descartado": [], "cambios": []}
 
 
+def _colapsar_repeticiones(meal: dict, index: dict) -> dict:
+    """[P1-PLAN-LOTE-31] Paso (6): la misma mención numérica repetida en cadena dentro de un paso («6 claras de huevo y 6
+    claras de huevo y 6 claras») se deja una vez (`recipe_repair.colapsar_repeticiones`). Fail-open."""
+    try:
+        from recipe_repair import colapsar_repeticiones
+        return colapsar_repeticiones(meal, index)
+    except Exception:
+        return {"aplicado": [], "descartado": [], "cambios": []}
+
+
 def _retirar_sin_lista(meal: dict, index: dict) -> dict:
     """[P1-PLAN-LOTE-30] Paso (5): los pasos dejan de nombrar lo que la lista no trae (`recipe_repair.retirar_sin_lista`).
     Fail-open: sin índice o con error, nada cambia y nada se anota."""
@@ -534,9 +737,12 @@ def reconcile_meal(meal: dict, index: dict) -> dict:
     """El contrato completo sobre UN plato, en orden: (1) la lista nombra la forma del huevo, (2) los pasos siguen a
     esa forma, (3) las cantidades de los pasos siguen a la lista (C2), (4) la ESTRUCTURA del plato se repara sin tocar la
     lista (`recipe_repair`, P1-PLAN-LOTE-29), (5) los pasos dejan de nombrar lo que la lista NO trae (V5 — nace cuando un
-    cerrador quita una línea; `recipe_repair.retirar_sin_lista`, P1-PLAN-LOTE-30). Informe agregado; `lista_reescrita` > 0
-    avisa al llamador de que la lista cambió y los macros hay que re-medirlos; `estructura` cuenta las reparaciones de (4)
-    y `sin_lista` los alimentos retirados de los pasos en (5); lo que (5) no pudo retirar va a `sin_reparar["sin_lista"]`."""
+    cerrador quita una línea; `recipe_repair.retirar_sin_lista`, P1-PLAN-LOTE-30), (6) la misma mención numérica repetida
+    en cadena dentro de un paso se deja una vez (`recipe_repair.colapsar_repeticiones`, P1-PLAN-LOTE-31: el LLM escribió
+    «6 claras de huevo y 6 claras de huevo y 6 claras»). Informe agregado; `lista_reescrita` > 0
+    avisa al llamador de que la lista cambió y los macros hay que re-medirlos; `estructura` cuenta las reparaciones de (4),
+    `sin_lista` los alimentos retirados de los pasos en (5), `repeticiones` las cadenas colapsadas en (6) y `concordancia`
+    las piezas que (3) reescribió cambiando de número gramatical; lo que (5)/(6) no pudo va a `sin_reparar[...]`."""
     lista_n = canonicalize_egg_form_lines(meal)
     huevo = egg_forms_step_sync(meal, index)
     r = reconcile_step_quantities(meal, index)
@@ -551,6 +757,13 @@ def reconcile_meal(meal: dict, index: dict) -> dict:
         r["sin_reparar"]["sin_lista"] = len(sl["descartado"])
     if r["sin_lista"]:
         r["cambios_sin_lista"] = list(sl.get("cambios") or [])
+    rp = _colapsar_repeticiones(meal, index)                              # (6) [P1-PLAN-LOTE-31]
+    r["repeticiones"] = len(rp.get("aplicado") or [])
+    if rp.get("descartado"):
+        r["sin_reparar"] = dict(r.get("sin_reparar") or {})
+        r["sin_reparar"]["repeticion"] = len(rp["descartado"])
+    if r["repeticiones"]:
+        r["cambios_repeticion"] = list(rp.get("cambios") or [])
     r["lista_reescrita"] = lista_n
     r["reescritas"] += huevo["reescritas"]
     if huevo["reescritas"]:
@@ -628,7 +841,7 @@ def _aplicar_meal(meal: dict, index: dict, mode: str, db=None) -> int:
         r = reconcile_meal(meal, index)
         if r.get("lista_reescrita"):
             _remedir_macros(meal, db)
-    if r["reescritas"] or r["sin_reparar"] or r.get("lista_reescrita") or r.get("estructura") or r.get("sin_lista"):
+    if r["reescritas"] or r["sin_reparar"] or r.get("lista_reescrita") or r.get("estructura") or r.get("sin_lista") or r.get("repeticiones"):
         meal[TELEMETRIA_KEY] = {"modo": mode, "reescritas": r["reescritas"], "familias": r["familias"],
                                 "sin_reparar": r["sin_reparar"]}
         if r.get("lista_reescrita"):
@@ -637,6 +850,10 @@ def _aplicar_meal(meal: dict, index: dict, mode: str, db=None) -> int:
             meal[TELEMETRIA_KEY]["estructura"] = r["estructura"]             # [P1-PLAN-LOTE-29] sólo si se reparó estructura
         if r.get("sin_lista"):
             meal[TELEMETRIA_KEY]["sin_lista"] = r["sin_lista"]               # [P1-PLAN-LOTE-30] sólo si se retiró algo de los pasos
+        if r.get("repeticiones"):
+            meal[TELEMETRIA_KEY]["repeticiones"] = r["repeticiones"]         # [P1-PLAN-LOTE-31] sólo si se colapsó una cadena
+        if r.get("concordancia"):
+            meal[TELEMETRIA_KEY]["concordancia"] = r["concordancia"]         # [P1-PLAN-LOTE-31] piezas reescritas cambiando de número
     elif not meal.get(TELEMETRIA_KEY):
         # [P1-PLAN-LOTE-30] una pasada que no tiene nada que decir no borra lo que dijo una anterior: el bench en modo real
         # vio 8 sellos del pipeline quedar en 5 tras el INSERT — la flota perdía la cuenta de lo que el contrato SÍ hizo.
@@ -660,6 +877,8 @@ def apply_final_contract(days: list, db=None) -> str:
         sombra = 0
         estructura = 0
         sin_lista = 0
+        repeticiones = 0
+        concordancia = 0
         for d in days:
             for m in (d.get("meals") or []) if isinstance(d, dict) else []:
                 if isinstance(m, dict):
@@ -667,6 +886,8 @@ def apply_final_contract(days: list, db=None) -> str:
                     n += k
                     estructura += int((m.get(TELEMETRIA_KEY) or {}).get("estructura") or 0)
                     sin_lista += int((m.get(TELEMETRIA_KEY) or {}).get("sin_lista") or 0)
+                    repeticiones += int((m.get(TELEMETRIA_KEY) or {}).get("repeticiones") or 0)
+                    concordancia += int((m.get(TELEMETRIA_KEY) or {}).get("concordancia") or 0)
                     if mode == "shadow" and m.get(TELEMETRIA_KEY, {}).get("reescritas"):
                         sombra += m[TELEMETRIA_KEY]["reescritas"]
         if estructura and mode == "repair":
@@ -674,6 +895,11 @@ def apply_final_contract(days: list, db=None) -> str:
         if sin_lista and mode == "repair":
             logger.info(f"🧹 [P1-PLAN-LOTE-30] {sin_lista} alimento(s) que la lista no trae retirado(s) de los pasos "
                         f"(la lista tiene la última palabra también cuando pierde una línea)")
+        if repeticiones and mode == "repair":
+            logger.info(f"🔁 [P1-PLAN-LOTE-31] {repeticiones} cadena(s) de la misma mención repetida colapsada(s) en los pasos")
+        if concordancia and mode == "repair":
+            logger.info(f"🔠 [P1-PLAN-LOTE-31] {concordancia} pieza(s) reescrita(s) con concordancia singular/plural "
+                        f"(el paso pedía más de lo que la lista compra)")
         if mode == "shadow":
             return f"recipe_contract_shadow={sombra}" if sombra else ""
         if n:
