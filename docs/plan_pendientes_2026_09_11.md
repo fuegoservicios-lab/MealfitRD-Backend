@@ -2,6 +2,8 @@
 
 Inventario consolidado de trabajo abierto, con fuente. Nace de la verificación de la auditoría de arquitectura (`auditoria_arquitectura_verificacion_2026_09_11.md`) y del barrido de planes, specs, docs, memoria y knobs apagados. **Nada aquí está inventado: cada línea cita dónde está escrito.** Las prioridades son una propuesta de orden; las decisiones marcadas «dueño» no las cierra código.
 
+> **Para el siguiente agente (2026-09-13):** los cinco cambios que no dependen del dueño (extracción del god-file, F8, F6, C7 medible, mediciones B6/E5/D7) están escritos como lotes 32-36 ejecutables, con protocolo, cifras y criterio de terminado, en [`plan_agente_lotes_32_36_2026_09_13.md`](plan_agente_lotes_32_36_2026_09_13.md).
+
 ## Estado (se actualiza al cerrar cada ítem)
 
 | Ítem | Estado | Dónde |
