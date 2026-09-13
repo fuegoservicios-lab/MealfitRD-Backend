@@ -827,3 +827,61 @@ vocabulario cerrado ni texto congelado al que atarse, ahí no hay suma exacta po
 receta congelada se escribió sin ellas a propósito. No corrige las 3 recetas: su texto es del dueño. No cambia el veredicto
 sobre ninguna comida del LLM. Y no convierte el residuo en rechazo: los hallazgos exactos nacen `minor`/`warn` como sus
 hermanos de texto.
+
+
+## Cultura, horario, equipo, tiempo y básicos como contexto (C5 · primera parte · `P1-PLAN-LOTE-26` · 2026-09-12)
+
+Tres gaps P1 del backlog culinario (CUL-P1-01 claras según persona, CUL-P1-03 cultura y horario como contexto, CUL-P1-05
+cantidades/tiempos/equipo ejecutables) comparten la forma: una regla GENERAL escrita en un sitio (un tope de claras,
+«arroz nunca de noche», «15 min») y una PERSONA que declaró algo que la contradice o la completa. `culinary_context.py`
+es la única lectura de esas declaraciones; cinco superficies enganchan con dos o tres líneas y fallan abiertas. Knob
+`MEALFIT_CULINARY_CONTEXT` (default `True`): apagado, cada enganche devuelve la conducta anterior.
+
+**Lo medido antes de construir (flota, corpus fijo y biblioteca).** Claras entregadas: 1, 2, 3 y 5 por comida; ningún
+plan vivo declara la clara como básico; 5 de 6 planes llevan la política EN VIGOR, así que el tope por ración (E5) ya
+está activo — lo que seguía ciego era el techo de COMIDAS con huevo (`max(3, 25 %)`) y el conteo que sumaba «1 clara»
+de aglutinante como otra comida de huevo. Tiempos: 5 de 64 comidas del corpus declaran 15-20 min y sus pasos hablan de
+horas; 4 son conservación («consume dentro de 24 horas», «refrigera el sobrante hasta 48 horas») y 1 es real («el
+arroz de la noche anterior»). Equipo: el formulario principal no lo pregunta (decisión de producto
+`P2-FORM-KITCHEN-EQUIPMENT`, 2026-06-22) pero el panel de Súper Personalización sí (`kitchenEquipment`), y sólo lo leía el
+prompt del plan; con «sólo estufa» declarado, 13 comidas del corpus piden horno, 5 licuadora y 2 airfryer; 53 de 193
+recetas congeladas piden horno. Horario: la rúbrica del juez llevaba «arroz/pasta NUNCA en desayuno ni cena» — los países
+beta la heredaban entera y la pasta de noche es legítima en RD desde 2026-06-27.
+
+**Decisión de producto (CUL-P1-03), registrada aquí.** Lo típico, lo preferido y lo prohibido son tres cosas: la guía
+positiva del juez y `SLOT_INAPPROPRIATE_FOODS` dicen lo típico; un básico declarado PARA esa franja (`stapleAnchors`
+con `slots`, o `stapleFoods` sin franja) es lo preferido y no se acusa (`_slot_pref_exempt` en
+`_detect_slot_appropriateness`; `_night_rice_autofix` no le quita el arroz de noche a quien lo pidió); lo prohibido son
+las restricciones explícitas (alergias, dieta, clínica), que no cambian. La rúbrica del juez pasa de «REGLA DURA» a
+«REGLA DE HORARIO — CONTEXTO, NO DOGMA» con tres condiciones para `slot_inapropiado`, dice que la pasta de noche es
+legítima, que la avena salada, el yogur como salsa o el pescado con salsa de fruta se juzgan por técnica y composición,
+y que los componentes SEPARADOS del plato (fruta al lado de unos huevos) no son una mezcla; los países beta reciben la
+versión NEUTRA (la costumbre del arroz de mediodía no es universal). El juez recibe además `contexto` (básicos con su
+franja, cocinas elegidas, equipo, tiempo). El detector determinista de pareo chocante respeta la separación dicha en el
+nombre («con mango al lado»). Ablandar el gate de `review_plan_node` para que soft no fuerce retry sigue PARKED (decisión
+aparte).
+
+**Claras según persona (CUL-P1-01).** El techo de comidas con huevo (gate de variedad y `_egg_cap_autofix`) honra al huevo
+declarado básico: al menos una comida por día, nunca menos que el de siempre (`culinary_context.egg_meal_cap`); una clara
+de aglutinante (≤ 1 pieza, sin huevo en el nombre, masa/mezcla/rebozado en el texto) no cuenta como comida de huevo
+(`egg_is_binder`). Con la política en modo SOMBRA, la ración de piezas por encima del tope por defecto no se honra (E5 lo
+decidió: canary) pero ya no se pierde en silencio: `plan_policy._note_portions_not_enforced` la escribe en
+`relaxations` con `reason_code=portion_cap_default_not_enforced`, `action=deferred` y copia legible. Sigue tal cual:
+`portion_cap_for`/`build_count_caps_override` (E5), «CLARAS PRIMERO» (C3), y ningún límite clínico inventado.
+
+**Tiempos y equipo ejecutables (CUL-P1-05).** Dos checks nuevos de capa 1, ambos `minor`, no reparables (el reparador es
+CUL-P1-04): **V8a tiempo oculto** — los pasos piden horas de espera (remojo, marinado, «la noche anterior») que el
+`prep_time` del plato no cubre; la conservación no cuenta; **V8b equipo no disponible** — la receta exige horno,
+airfryer, licuadora, microondas, olla de presión… y la persona declaró no tenerlo; sin declaración no se evalúa y el
+estado del scan lo dice (`contexto.equipo = no_declarado`). El equipo declarado llega también al prompt del día (bloque
+🍳, byte-idéntico sin declaración), al selector determinista (`template_candidates(available_equipment=…)` poda las
+plantillas cuya receta lo exige) y a la métrica de personalización (`equipment_unavailable` medido; antes
+`form_has_no_equipment_field`, siempre). Además: una cláusula de ALMACENAJE («congela porciones de 140 g») no es consumo
+para V4/V6/V7a/V7d/V7e (`_texto_de_consumo`), y V7d compara ml con ml y g con g; cruzar familias exige una densidad
+respaldada (`_V7D_DENSIDAD`: leche, caldo, aceite, miel…) — «400 ml de avena» contra «120 g de avena» ya no se compara con
+una conversión inventada. Corpus fijo tras el lote: V7d 1, V8a 1, V8b 0 (nadie declaró equipo).
+
+**Lo que NO hace, dicho.** No añade la pregunta del equipo al formulario principal (decisión de producto vigente); no
+convierte V8a/V8b en rechazo; no toca la regla DURA del arroz en el DESAYUNO (sigue `hard` en RD); no reparte claras por
+receta ni ajusta recipiente/técnica para raciones mayores (queda para C5 segunda parte, CUL-P1-02/04); no re-calibra al
+juez (CUL-P1-06 depende de la rúbrica anotada de C1).

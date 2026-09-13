@@ -6528,6 +6528,32 @@ def _culinary_judge_hints_block(hint_table) -> str:
             "abajo):\n" + "\n".join(_hint_lines) + "\n\n") if _hint_lines else ""
 
 
+# [P1-PLAN-LOTE-26 · 2026-09-12] (CUL-P1-03) La regla de horario del juez pasa de prohibición LITERAL a CONTEXTO: lo
+# típico (esta guía), lo preferido (los básicos declarados que llegan en `contexto`) y lo prohibido (una restricción
+# explícita) son tres cosas distintas. La pasta de noche es legítima en RD desde 2026-06-27 y aquí seguía escrita como
+# «NUNCA»; los países beta heredaban la costumbre dominicana como regla universal — reciben la versión NEUTRA. Decisión
+# de producto registrada en docs/culinary_coherence.md. tooltip-anchor: P1-PLAN-LOTE-26-JUDGE-SLOT-RULE
+_JUDGE_SLOT_RULE_DO = (
+    "REGLA DE HORARIO — CONTEXTO, NO DOGMA (la ÚNICA base para `slot_inapropiado` por horario): en la costumbre "
+    "dominicana el arroz, el locrio y el moro como base son plato fuerte de ALMUERZO y no van en el desayuno; los "
+    "sopones (asopao, sancocho, sopa espesa) son de almuerzo. La PASTA de noche es legítima (se cena espaguetis). "
+    "Marca `slot_inapropiado` por horario SOLO si se cumplen las tres: (1) el plato cae en esa costumbre, (2) el "
+    "`contexto` del payload NO declara ese alimento como básico de la persona para esa franja, y (3) ninguna cocina "
+    "elegida en `contexto` lo justifica. Un postre/dulce como plato PRINCIPAL (no como acompañante) de almuerzo o "
+    "cena también cuenta, siempre. La avena salada, el yogur como salsa o el pescado con una salsa de fruta se "
+    "juzgan por TÉCNICA y COMPOSICIÓN, no por asociación de nombres. Los componentes SEPARADOS del plato (fruta al "
+    "lado de unos huevos, ensalada de acompañamiento) no son una mezcla: juzga la mezcla sólo cuando la receta los "
+    "integra en la misma preparación.\n\n"
+)
+_JUDGE_SLOT_RULE_NEUTRAL = (
+    "REGLA DE HORARIO — CONTEXTO, NO DOGMA: esta cocina no hereda de otra la costumbre del arroz de mediodía. Usa "
+    "`slot_inapropiado` por horario SOLO para un postre/dulce como plato PRINCIPAL (no como acompañante) de almuerzo "
+    "o cena, o para un plato que el `contexto` del payload contradiga explícitamente. Los componentes SEPARADOS del "
+    "plato no son una mezcla; la avena salada, el yogur como salsa o el pescado con salsa de fruta se juzgan por "
+    "técnica y composición.\n\n"
+)
+
+
 def _build_culinary_judge_rubric() -> str:
     """[P1-CULINARY-JUDGE] Construye la rúbrica ESTABLE del juez culinario — llamada UNA sola
     vez a import-time, asignada abajo a `_CULINARY_JUDGE_RUBRIC`. El prefix del prompt (este
@@ -6554,20 +6580,16 @@ def _build_culinary_judge_rubric() -> str:
         "transformados como panqueques de avena, bollitos de yuca, pastelón) NO es una "
         "violación; en la duda, NO reportes.\n\n"
         + _examples_block + "\n\n"
-        + "REGLA DURA DE HORARIO (la ÚNICA base para `slot_inapropiado` por horario): arroz, "
-          "locrio, moro y pasta como base NUNCA van en desayuno ni cena — son plato fuerte de "
-          "almuerzo. Los sopones (asopao, sancocho, sopa espesa) van SOLO en almuerzo. Un "
-          "postre/dulce como plato PRINCIPAL (no como acompañante) de almuerzo o cena también "
-          "cuenta.\n\n"
+        + _JUDGE_SLOT_RULE_DO
         + _hints_block
         + "ACLARACIÓN IMPORTANTE sobre la guía positiva: es orientación de qué es TÍPICO, no una "
           "lista exhaustiva de lo permitido. Los guisos de proteína (pollo guisado, carne "
           "guisada, pescado guisado, vegetales guisados) SON cenas dominicanas legítimas y "
           "frecuentes en la vida real, aunque la guía diga que la cena \"es más ligera\" — NO "
           "reportes `slot_inapropiado` solo porque una cena sea un guiso o no siga al pie de la "
-          "letra la guía positiva. Reserva `slot_inapropiado` para violaciones de la REGLA DURA "
-          "de arriba (arroz/locrio/moro/pasta/sopón fuera de su horario, o postre como plato "
-          "principal).\n\n"
+          "letra la guía positiva. Reserva `slot_inapropiado` para violaciones de la REGLA DE HORARIO "
+          "de arriba (arroz/locrio/moro/sopón fuera de su costumbre SIN un básico declarado que lo pida, o "
+          "postre como plato principal).\n\n"
         + "TIPOS CANÓNICOS DE VIOLACIÓN (usa EXACTAMENTE uno de estos 5 valores en el campo "
           "`tipo` de cada violación reportada):\n"
           "- combo_absurdo: la tolerancia a la creatividad (ver arriba) cubre RECOMBINACIONES "
@@ -6594,8 +6616,8 @@ def _build_culinary_judge_rubric() -> str:
           "describe cruda y la cocina desde cero — es la contradicción ENTRE los dos pasos lo "
           "que lo hace `paso_incoherente`, no la técnica de un paso aislado; si solo hay UN paso "
           "problemático sin contradecir a otro, es `tecnica_impropia`, no esto).\n"
-          "- slot_inapropiado: el plato viola la REGLA DURA de horario de arriba — NO uses este "
-          "tipo por criterio propio de \"ligereza\" (ver ACLARACIÓN arriba).\n"
+          "- slot_inapropiado: el plato viola la REGLA DE HORARIO de arriba (con sus tres condiciones) — NO uses "
+          "este tipo por criterio propio de \"ligereza\" (ver ACLARACIÓN arriba).\n"
           "- nombre_no_corresponde: el nombre del plato no describe lo que la receta realmente "
           "prepara. Incluye tanto el caso obvio (se llama 'ensalada' pero la receta es un guiso "
           "caliente) como el caso SUTIL: si el nombre declara un ingrediente DISTINTIVO (el 'X' "
@@ -6686,6 +6708,7 @@ def _culinary_judge_rubric_for_country(country: str) -> str:
         "Eres un juez culinario dominicano experto",
         f"Eres un juez culinario experto en la cocina de {name_es} y cocina internacional",
     )
+    rendered = rendered.replace(_JUDGE_SLOT_RULE_DO, _JUDGE_SLOT_RULE_NEUTRAL)   # [P1-PLAN-LOTE-26] la costumbre RD no es universal
     # [P1-COUNTRY-SYSTEM-F2 · T5 · 2026-08-17] Fase 1 (T3) solo re-anclaba QUIÉN es el juez; el
     # catálogo de ejemplos ("EJEMPLOS DE PLATOS DOMINICANOS...") seguía siendo dominicano SIEMPRE
     # (comentario de `_CULINARY_JUDGE_RUBRIC_CACHE`: "el catálogo por país es Fase 2"). Esta es
@@ -6755,7 +6778,11 @@ def _culinary_judge_rubric_for_country(country: str) -> str:
     return rendered
 
 
-async def run_culinary_judge(plan: dict, country: str = "DO"):
+def _ctx_judge(form_data, country) -> dict:
+    return dict(_ctx("judge_context", {}, form_data, country) or {})   # [P1-PLAN-LOTE-26] (CUL-P1-03) lo que el juez sabe de la persona
+
+
+async def run_culinary_judge(plan: dict, country: str = "DO", form_data=None):
     """[P1-CULINARY-JUDGE] Juicio culinario LLM del plan COMPLETO (1 llamada batched, no por
     día — evita N llamadas y preserva el prefix estable de `_CULINARY_JUDGE_RUBRIC` para cache
     hits). Devuelve `CulinaryJudgeReport` o `None` (fail-open: knob OFF, timeout, o cualquier
@@ -6798,7 +6825,7 @@ async def run_culinary_judge(plan: dict, country: str = "DO"):
         _meals = _cj_payload(plan)
         _msg = [
             SystemMessage(content=_culinary_judge_rubric_for_country(country)),
-            HumanMessage(content=json.dumps({"meals": _meals}, ensure_ascii=False)),
+            HumanMessage(content=json.dumps({"meals": _meals, **_ctx_judge(form_data, country)}, ensure_ascii=False)),
         ]
         # [P1-CULINARY-JUDGE-RETRY] el exterior debe caber (1 + reintentos) intentos, o mata el reintento
         return await asyncio.wait_for(_judge.ainvoke(_msg), timeout=CULINARY_JUDGE_TIMEOUT_S * (1 + CULINARY_JUDGE_MAX_RETRIES) + 5)
@@ -8665,6 +8692,7 @@ async def generate_days_parallel_node(state: PlanState) -> dict:
             # [P1-STAPLE-FOODS · 2026-08-02] básicos del usuario + modo universo-chico.
             user_staples=_raw_staple_foods(form_data),
             small_universe=_small_universe_active(form_data),
+            kitchen_equipment=_ctx_equipment_labels(form_data),   # [P1-PLAN-LOTE-26] equipo declarado
             # [P1-DIET-BLIND-DIRECTIVES · 2026-08-08] bloque de diversidad de proteína por dieta.
             diet_type=(form_data or {}).get("dietType"),
             # [P1-ARQ25-F7-CULTURE] la cocina asignada a ESTE día (reparto determinista de la mezcla) y los
@@ -10848,6 +10876,24 @@ def _detect_slot_incoherence(days: list) -> list:
     return issues
 
 
+def _ctx(fn: str, default, *args):
+    """[P1-PLAN-LOTE-26 · 2026-09-12] (C5) Llamada FAIL-OPEN a `culinary_context` (básicos, horario, equipo, tiempo como
+    contexto de la persona): el contexto declarado jamás tumba el motor; sin módulo o con error, la conducta de siempre."""
+    try:
+        import culinary_context as _cx
+        return getattr(_cx, fn)(*args)
+    except Exception:
+        return default
+
+
+def _slot_pref_exempt(label, slot_key, form_data, rules_table) -> bool:
+    """(CUL-P1-03) la violación de horario que un básico declarado PARA ESA franja convierte en lo pedido."""
+    quien = _ctx("slot_preference_exempt", None, label, slot_key, form_data, rules_table)
+    if quien:
+        logger.info(f"[P1-PLAN-LOTE-26] slot_pref_exempt: «{label}» en {slot_key} es el básico declarado «{quien}»")
+    return bool(quien)
+
+
 def _detect_slot_appropriateness(days: list, form_data: dict = None) -> list:
     """[P1-SLOT-APPROPRIATENESS · 2026-06-27] (audit G4) Detector DETERMINISTA de platos cuyo TIPO
     no encaja con su horario para un dominicano: arroz/locrio/pasta en DESAYUNO; "arroz de noche" /
@@ -10888,6 +10934,8 @@ def _detect_slot_appropriateness(days: list, form_data: dict = None) -> list:
                 continue
             name = m.get("name", "")
             for v in slot_violations_for_meal_name(name, slot_key, _rules_table):
+                if _slot_pref_exempt(v.get("label"), slot_key, form_data, _rules_table):
+                    continue                     # [P1-PLAN-LOTE-26] (CUL-P1-03) lo preferido no es lo prohibido
                 # [P1-COUNTRY-SYSTEM-F1 · 2026-08-16 (FINAL-FIX F4)] `_country` ya derivado
                 # arriba (T4) — reusado, no re-derivado. DO ⇒ texto+hint EXACTOS de siempre
                 # (`_sph`, diet-aware, DO-flavored). Beta ⇒ texto neutro (sin "rechazo de
@@ -11472,7 +11520,7 @@ PLAN A EVALUAR (días generados):
                             f"\n⚠️ ASIGNACIÓN OBLIGATORIA DEL PLANIFICADOR (no la ignores):\n"
                             # [P1-COUNTRY-SYSTEM-F1 · 2026-08-16 (T4)] reusa `_critique_country`
                             # (T3's shadow work) — DO ⇒ camino byte-idéntico.
-                            f"{build_day_assignment_context(skeleton_day, day_num, user_staples=_raw_staple_foods(form_data), small_universe=_small_universe_active(form_data), diet_type=(form_data or {}).get('dietType'), country=_critique_country)}"
+                            f"{build_day_assignment_context(skeleton_day, day_num, user_staples=_raw_staple_foods(form_data), small_universe=_small_universe_active(form_data), kitchen_equipment=_ctx_equipment_labels(form_data), diet_type=(form_data or {}).get('dietType'), country=_critique_country)}"
                         )
 
                     # [P5-PROMPT-D] Usa `nutrition_context_minimal` en vez del
@@ -22868,59 +22916,10 @@ def _featured_fruits_in_name(name) -> set:
             return s
     return set(_FEATURED_FRUIT_RE.findall(_sa_ff(str(name or "").lower())))
 
-# [P1-FRUIT-SAVORY-CLASH · 2026-06-26] (audit gap #5) Detección determinista del pareo intra-plato chocante.
-# CONSERVADOR para minimizar falsos positivos (un falso positivo solo cuesta un retry — degrada a advisory
-# en intento final — pero igual queremos precisión):
-#   - Frutas: SOLO las inequívocamente dulces/postre. Excluye guineo/banana (plátano salado: mangú/tostones),
-#     manzana/pera/fresa/uva (aceptables en ensalada), naranja/limón (aderezo). Estas son las "fruta dulce
-#     dominante" que el prompt nombra.
-#   - Bases saladas: almidones (arroz/moro/pasta…), huevo-salado (revoltillo/revuelto) y crucíferas/berenjena.
-#     NO proteínas (pollo con piña / cerdo con guayaba son platos tropicales aceptables).
-#   - Match SOLO en el NOMBRE del plato (no ingredientes) + word-boundary: "Arroz con mango" / "Revoltillo con
-#     mango" / "Coliflor y mango" disparan; una fruta de guarnición en ingredientes NO (menos falsos positivos).
-_SWEET_DOMINANT_FRUITS = ("mango", "pina", "lechosa", "papaya", "guayaba", "melon", "sandia", "mamey", "zapote")
-_SAVORY_CLASH_TOKENS = ("arroz", "moro", "locrio", "pasta", "espagueti", "macarron", "fideo", "espaguetis",
-                        "revoltillo", "revuelto", "coliflor", "brocoli", "berenjena", "huevo", "mangu", "platano verde", "tostones", "mofongo")  # [P1-CLASH-HUEVO-Y-VIVERES · 2026-09-09] el INGREDIENTE, no sólo sus preparaciones: «huevo+mango» es el primer ejemplo del docstring del autofix y no se detectaba. Razón y controles (incluida la frontera de falsos positivos) en test_p1_clash_huevo_y_viveres.py
-# [P1-MENU-COHERENCE-1 · 2026-07-29] Refinamiento pedido por el owner (plan vivo 73db1e79:
-# "Brochetas de Chuleta de Cerdo … y Ensalada de LECHOSA" de almuerzo — "comer lechosa en el
-# almuerzo es raro; quedaría mejor de merienda"). Las frutas DE AGUA (lechosa/papaya/melón/
-# sandía/mamey/zapote) como ensalada/guarnición de un plato de CARNE o PESCADO sí son pareo
-# chocante — van en desayuno/merienda. La exclusión original de proteínas ("pollo con piña /
-# cerdo con guayaba aceptables") SIGUE VIGENTE para mango/piña/guayaba: solo el subconjunto
-# de agua gatea contra carnes.
-_WATER_SWEET_FRUITS = ("lechosa", "papaya", "melon", "sandia", "mamey", "zapote")
-_MEAT_MAIN_CLASH_TOKENS = ("chuleta", "cerdo", "brocheta", "pollo", "pavo", "res", "bistec",
-                           "conejo", "chivo", "mero", "pescado", "tilapia", "salmon", "atun",
-                           "camarones", "pulpo", "calamar", "langosta", "carne")
-
-
-def _meal_has_sweet_savory_clash(meal: dict) -> bool:
-    """[P1-FRUIT-SAVORY-CLASH] True si el NOMBRE del plato combina una fruta dulce dominante con una
-    base salada (mango+arroz, revoltillo+mango, coliflor+mango), o una fruta DE AGUA con un plato de
-    carne/pescado (brochetas de cerdo + ensalada de lechosa — P1-MENU-COHERENCE-1). SSOT del detector
-    per-comida — reusado por build_variety_report (S1) y appetibility_fix_for_update (S2/S3). Match
-    word-boundary sobre el nombre (anti-falso-positivo). FAIL-SAFE: error → False.
-    tooltip-anchor: P1-FRUIT-SAVORY-CLASH"""
-    try:
-        name_low = strip_accents(str((meal or {}).get("name", "")).lower())
-        if not name_low:
-            return False
-        if (any(_name_has_token(fr, name_low) for fr in _SWEET_DOMINANT_FRUITS)
-                and any(_name_has_token(tok, name_low) for tok in _SAVORY_CLASH_TOKENS)):
-            return True
-        return (any(_name_has_token(fr, name_low) for fr in _WATER_SWEET_FRUITS)
-                and any(_name_has_token(tok, name_low) for tok in _MEAT_MAIN_CLASH_TOKENS))
-    except Exception:
-        return False
-
-
-def _name_has_token(token: str, text_low: str) -> bool:
-    """True si `token` aparece en `text_low` (ya en minúscula/sin acentos) con frontera de palabra
-    inicial → evita que 'pina' matchee 'espina' o 'macarron' matchee substrings. [P1-FRUIT-SAVORY-CLASH]"""
-    try:
-        return _re.search(r"\b" + _re.escape(token), text_low) is not None
-    except Exception:
-        return token in text_low
+# [P1-FRUIT-SAVORY-CLASH · 2026-06-26 → P1-PLAN-LOTE-26 · 2026-09-12] El pareo chocante fruta+salado vive ahora en
+# `culinary_context` (extraer, no subir el tope); los nombres se re-exportan aquí tal cual para llamadores y tests.
+from culinary_context import (_SWEET_DOMINANT_FRUITS, _SAVORY_CLASH_TOKENS, _WATER_SWEET_FRUITS,  # noqa: E402,F401
+                              _MEAT_MAIN_CLASH_TOKENS, _meal_has_sweet_savory_clash, _name_has_token)
 
 
 # [P1-FRUIT-DEDUP · 2026-06-26] (audit gap #7) Pool de frutas dulces de reemplazo (nombres del catálogo es-DO
@@ -23301,6 +23300,10 @@ def _staple_technique_exempt(label: str, meals_for_label: list, user_staples, st
     return len(sigs) == len(set(sigs))
 
 
+def _ctx_equipment_labels(form_data) -> list:
+    return list(_ctx("declared_equipment_labels", [], form_data) or [])   # [P1-PLAN-LOTE-26] (CUL-P1-05) equipo declarado
+
+
 def _raw_staple_foods(form_data: dict) -> list:
     """[P1-STAPLE-FOODS · 2026-08-02] Lista cruda (nombres del catálogo, sin mapear a labels) de
     `form_data['staple_foods']` (snake_case — wire-format explícito de swap/regen-day) o
@@ -23459,6 +23462,18 @@ def _same_day_formula_repeat_pairs(meals: list, strip_accents) -> list:
     return pairs
 
 
+def _ctx_egg_binder(meal) -> bool:
+    return bool(_ctx("egg_is_binder", False, meal))          # [P1-PLAN-LOTE-26] (CUL-P1-01) una clara en una masa no es plato de huevo
+
+
+def _ctx_egg_cap(default_cap: int, total_meals: int, n_days: int, egg_staple: bool) -> int:
+    return int(_ctx("egg_meal_cap", default_cap, total_meals, n_days, egg_staple, default_cap))   # básico ⇒ ≥ 1 por día
+
+
+def _ctx_egg_staple(form_data) -> bool:
+    return bool(_ctx("egg_staple_declared", False, form_data))
+
+
 def build_variety_report(plan: dict, user_staples: set = None) -> dict:
     """[P3-VARIETY · 2026-06-13] Reporte ADVISORY de variedad/pertinencia cultural (FS5):
     cuenta apariciones de huevo, descriptor 'cremoso', ingredientes premium, y platos-base
@@ -23501,7 +23516,7 @@ def build_variety_report(plan: dict, user_staples: set = None) -> dict:
         for meal in meals:
             total_meals += 1
             name_low = strip_accents(str(meal.get("name", "")).lower())
-            if _meal_has_egg(meal, strip_accents):
+            if _meal_has_egg(meal, strip_accents) and not _ctx_egg_binder(meal):   # [P1-PLAN-LOTE-26]
                 egg_meals += 1
             if "cremos" in name_low:
                 cremoso += 1
@@ -23575,7 +23590,8 @@ def build_variety_report(plan: dict, user_staples: set = None) -> dict:
                 f"Día {day.get('day', '?')}: '{_m_a.get('name', '?')}' y '{_m_b.get('name', '?')}' "
                 f"comparten fórmula (misma base + formato + acompañantes: {', '.join(sorted(_shared))})"
             )
-    egg_cap = max(3, round(total_meals * 0.25))  # ~2-3 en 12 comidas
+    egg_cap = _ctx_egg_cap(max(3, round(total_meals * 0.25)), total_meals, len(plan.get("days") or []),
+                           bool(user_staples and any("huevo" in str(l) for l in user_staples)))  # [P1-PLAN-LOTE-26]
     if egg_meals > egg_cap:
         issues.append(f"Huevo en {egg_meals}/{total_meals} comidas (cap sugerido {egg_cap})")
     if cremoso > 1:
@@ -26205,7 +26221,7 @@ def _apply_deterministic_clinical_layer(plan: dict, form_data: dict, nutrition: 
         # 'DO' siempre ⇒ los dos autofixes de abajo corren exactamente como antes.
         from constants import country_for_form_data
         _dcl_country = cultural_country_for_form_data(form_data)
-        _nr_layer = _night_rice_autofix(plan.get("days") or [], _db, country=_dcl_country)
+        _nr_layer = _night_rice_autofix(plan.get("days") or [], _db, country=_dcl_country, form_data=form_data)
         if _nr_layer:
             logger.warning(f"🌙 [P0-FALLBACK-CENA-ARROZ] capa clínica reescribió arroz nocturno en "
                            f"{_nr_layer} cena(s) (path sin assemble)")
@@ -29877,7 +29893,7 @@ def _add_missing_recipe_step_vegetables(days, *, max_kcal=60.0, max_per_meal=3, 
     return added_total
 
 
-def _night_rice_autofix(days: list, db=None, *, compound: bool = False, country: str = "DO") -> int:
+def _night_rice_autofix(days: list, db=None, *, compound: bool = False, country: str = "DO", form_data=None) -> int:
     """[P1-NIGHT-RICE-AUTOFIX · 2026-06-27] (audit G4) Autofix DETERMINISTA del "arroz de noche": reescribe el
     ARROZ simple de la CENA por un tubérculo nocturno (batata/yuca/casabe, rotado por día) — ingrediente Y NOMBRE
     — corre ANTES del macro engine para que el motor dimensione el tubérculo y el reviewer (gate
@@ -29909,6 +29925,8 @@ def _night_rice_autofix(days: list, db=None, *, compound: bool = False, country:
     from constants import canonicalize_country as _cc_nra
     if _cc_nra(country) != "DO":
         return 0
+    if form_data is not None and _ctx("rice_staple_for_slot", None, form_data, "cena"):
+        return 0                             # [P1-PLAN-LOTE-26] (CUL-P1-03) el arroz de noche es su básico declarado
     try:
         from constants import canonical_slot_key, _SLOT_RICE_EXCLUDE, strip_accents as _sa, sustituye_display_y_raw as _sub_dr  # [P1-NIGHTRICE-RAW-BY-FOOD]
         if db is None:
@@ -31400,8 +31418,8 @@ def _egg_cap_autofix(days: list, form_data=None, db=None) -> int:
         total = len(meals_all)
         if not total:
             return 0
-        egg_meals = [(d, m) for d, m in meals_all if _meal_has_egg(m, _sa_egg)]
-        cap = max(3, round(total * 0.25))  # espejo exacto del gate P3-VARIETY-HARD-GATE
+        egg_meals = [(d, m) for d, m in meals_all if _meal_has_egg(m, _sa_egg) and not _ctx_egg_binder(m)]
+        cap = _ctx_egg_cap(max(3, round(total * 0.25)), total, len(days), _ctx_egg_staple(_fd))  # espejo del gate, básico-aware [P1-PLAN-LOTE-26]
         excess = len(egg_meals) - cap
         if excess <= 0:
             return 0
@@ -39838,7 +39856,7 @@ async def assemble_plan_node(state: PlanState) -> dict:
             # ⇒ 'DO' siempre ⇒ los dos autofixes de abajo corren exactamente como antes.
             from constants import country_for_form_data
             _apn_country = cultural_country_for_form_data(form_data)
-            _nr_fixed = _night_rice_autofix(days, country=_apn_country)
+            _nr_fixed = _night_rice_autofix(days, country=_apn_country, form_data=form_data)
             if _nr_fixed:
                 logger.info(f"🕒 [P1-NIGHT-RICE-AUTOFIX] {_nr_fixed} cena(s) con 'arroz de noche' reescrita(s) "
                             f"a tubérculo nocturno (batata/yuca/casabe) pre-reviewer.")
@@ -43842,7 +43860,7 @@ Responde ÚNICAMENTE con el JSON de revisión.
                 # limpiable se limpia antes de entregar, pase lo que pase con el veredicto.
                 if _sa_is_final and NIGHT_RICE_COMPOUND_FINAL and isinstance(plan, dict):
                     try:
-                        _nrc_fixed = _night_rice_autofix(plan.get("days", []), compound=True, country=_rpn_country)
+                        _nrc_fixed = _night_rice_autofix(plan.get("days", []), compound=True, country=_rpn_country, form_data=form_data)
                         if _nrc_fixed:
                             _slot_app_issues = _detect_slot_appropriateness(plan.get("days", []), form_data)
                             logger.info(
@@ -44458,7 +44476,7 @@ Responde ÚNICAMENTE con el JSON de revisión.
             from shopping_calculator import get_master_ingredients
             _cul_cat = get_master_ingredients()
             # [P1-PLAN-LOTE-22 · 2026-09-12] (C1) `[]` ya no es «limpio» sin más: el estado viaja con el plan. tooltip-anchor: P1-PLAN-LOTE-22-SCAN-STATUS
-            _cul_viol, plan["_culinary_contract_scan"] = culinary_contract_scan_status(plan, _cul_cat)
+            _cul_viol, plan["_culinary_contract_scan"] = culinary_contract_scan_status(plan, _cul_cat, form_data=form_data)
             _cul_cov = scan_coverage(plan, _cul_cat)
             plan["_culinary_contract_violations"] = _cul_viol
             # [P1-MEASUREMENT-INTEGRITY · 2026-09-07] `None` = no se pudo medir. Antes llegaba
@@ -44512,7 +44530,7 @@ Responde ÚNICAMENTE con el JSON de revisión.
         # [P1-COUNTRY-SYSTEM-F1 · 2026-08-16] (T3) país del usuario para el juez culinario.
         from constants import country_for_form_data
         _cj_country = cultural_country_for_form_data(form_data)
-        _cj = await run_culinary_judge(plan, _cj_country)
+        _cj = await run_culinary_judge(plan, _cj_country, form_data=form_data)
         # [P1-MEASUREMENT-INTEGRITY · 2026-09-07] `None` = NO llegó a juzgar (timeout/error/
         # breaker); sin estado se guardaba igual que un juicio limpio. Ver su test.
         _cj_status = "judged" if _cj is not None else "unavailable"

@@ -779,7 +779,8 @@ def template_candidates(country: Optional[str], slot: str, family: Optional[str]
                         allow_frozen: bool = False, prefer_batch: bool = False,
                         diet: Any = None, require_known_nutrients: Iterable[str] = (),
                         market_country: Any = None, rotate: int = 0,
-                        budget_tier: Any = None, exclude_foods: Iterable[str] = ()) -> list[dict]:
+                        budget_tier: Any = None, exclude_foods: Iterable[str] = (),
+                        available_equipment: Optional[Iterable[str]] = None) -> list[dict]:
     """Candidatos del registry para el allocator: `status='ok'`, franja compatible, familia de proteína
     compatible (vía `horizon.family_matches_template`), sin las clases de alérgeno excluidas y sin
     violar la dieta declarada (ARQ27-P0-01). Orden estable.
@@ -828,6 +829,17 @@ def template_candidates(country: Optional[str], slot: str, family: Optional[str]
             from constants import pantry_names_match as _pnm
         except Exception:
             _pnm = None
+    # [P1-PLAN-LOTE-26 · 2026-09-12] (CUL-P1-05) el equipo declarado (Súper Personalización) recorta las plantillas cuya
+    # receta exige lo que la persona no tiene: 53 de 193 recetas DO piden horno. `None` (no declarado) ⇒ no se poda.
+    _eq_req = None
+    _eq_have: set = set()
+    if available_equipment is not None:
+        try:
+            from culinary_context import equipment_required
+            _eq_have = set(available_equipment)
+            _eq_req = {tid: equipment_required(ps) for tid, ps in recipe_steps_index(library_for_country(country)).items()}
+        except Exception:
+            _eq_req = None
     slot_es = canonical_slot_es(slot)
     out = []
     compatibles = []   # [P1-CANDIDATO-CON-PRECIO] la plantilla ENTERA, en paralelo a `out`: costear
@@ -849,6 +861,8 @@ def template_candidates(country: Optional[str], slot: str, family: Optional[str]
             continue
         if excl_foods and _template_uses_excluded_food(t, excl_foods, _pnm):
             continue
+        if _eq_req is not None and ((_eq_req.get(str(t.get("template_id"))) or set()) - _eq_have):
+            continue                                       # [P1-PLAN-LOTE-26] pide horno y no hay horno
         if family and family_matches_template is not None:
             prot = str(t.get("protein") or "none").lower()
             if prot not in ("none", "mixta") and not family_matches_template(

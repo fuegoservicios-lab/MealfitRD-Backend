@@ -891,7 +891,7 @@ def test_culinary_judge_rubric_beta_contiene_name_es():
         )
         # el resto de la rúbrica (ejemplos + reglas duras) sobrevive intacto — no se reescribe
         # todo el prompt, solo se re-ancla la frase de apertura.
-        assert "REGLA DURA DE HORARIO" in out
+        assert "REGLA DE HORARIO" in out            # [P1-PLAN-LOTE-26] la regla es contexto, no dogma
         assert "TIPOS CANÓNICOS DE VIOLACIÓN" in out
 
 

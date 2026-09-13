@@ -267,6 +267,12 @@ meses es candidato a borrarse (el de `MEALFIT_SLOT_AWARE_DAY_REPAIR`, que ademá
 |---|---|---|
 | `MEALFIT_RECIPE_USAGE_EXACT` | `True` | En una comida de receta CONGELADA (`_recipe_source == "library"`) con asignación vigente (`data/registry/recipe_usage_do_v1.json`, atada al texto de los pasos por `pasos_hash`), los checks V3, V6, V7a y V7e del escáner culinario leen las CUENTAS de `recipe_usage` (Σ de fracciones por constituyente: 0 → V3, entre 0 y 1 → V7a, > 1 o dos veces «el resto» → V6) en vez de adivinar por texto — sobre pasos sin cifras, la heurística callaba. Comidas del LLM, recetas reescritas en el plato o asignación caducada: heurística de siempre. El estado del scan cuenta las comidas así evaluadas (`exactas`). Medido en la biblioteca: 155 exactas / 35 estimadas / 3 a revisar; 1004 de 1017 constituyentes con Σ = 1. `False` devuelve la heurística sin redeploy. Lector: `scripts/asignar_uso_pasos.py [--write\|--verificar\|--revisar]` |
 
+### Cultura, horario, equipo, tiempo y básicos como contexto (C5 · primera parte · `P1-PLAN-LOTE-26` · 2026-09-12)
+
+| Knob | Default | Efecto |
+|---|---|---|
+| `MEALFIT_CULINARY_CONTEXT` | `True` | `culinary_context`: lo declarado por la persona es CONTEXTO del plato. Un básico declarado para una franja no es violación de horario (`_detect_slot_appropriateness`) ni recibe el autofix del arroz de noche; el techo de comidas con huevo honra al huevo básico (≥ 1 por día, nunca menos que `max(3, 25 %)`) y una clara de aglutinante no cuenta; el equipo declarado en Súper Personalización llega al prompt del día, al selector determinista (poda plantillas que lo exigen) y al juez (`contexto`); el pareo chocante respeta «al lado». `False` ⇒ conducta anterior en los cinco enganches, sin redeploy. Los checks V8a (tiempo oculto) y V8b (equipo no disponible) del escáner y la relajación `portion_cap_default_not_enforced` NO dependen del knob (son aviso/escritura, no conducta) |
+
 ## Cómo añadir un knob nuevo
 
 ```python

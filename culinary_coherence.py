@@ -942,7 +942,7 @@ def _v4_cantidad_inconsistente(day, meal, index) -> list:
     # declara gramaje ahí, cae al primer paso (en orden) que sí lo declare.
     mise_grams, primer_grams = {}, {}
     for paso in pasos:
-        n = _norm(str(paso))
+        n = _norm(_texto_de_consumo(paso))   # [P1-PLAN-LOTE-26] el almacenaje no es consumo
         pares = _v4_grams_by_food(n, index)
         es_mise = bool(_RE_MISE_STEP.match(n))
         for food, val in pares.items():
@@ -1131,6 +1131,28 @@ _V6_RE = re.compile(r"(\d+(?:[.,]\d+)?|[½¼¾⅓⅔⅛]|\d[½¼¾⅓⅔])\s*"
                     r"(" + _V6_CONTABLE + "|" + _V6_MASA + r")\s*(?:de\s+)?([a-zñ ]{3,28})")
 
 
+#: [P1-PLAN-LOTE-26 · 2026-09-12] (CUL-P1-05) Una cláusula de ALMACENAJE («congela porciones de 140 g», «guarda el resto
+#: en la nevera») no consume: V4/V6/V7a/V7d/V7e leen el paso sin esas cláusulas. Medido en el corpus fijo: 1 de 64 comidas
+#: las traía; en la flota, congelar por porciones es lo que el ciclo de 30 días pide, así que crecerá.
+_ALMACENAJE_RE = re.compile(r"\b(congel|guard|conserv|reserva para|refrigera (?:el|la|los|las) rest|porciones? de\s*\d)", re.IGNORECASE)
+
+
+def _texto_de_consumo(paso) -> str:
+    """El paso sin sus cláusulas de almacenaje (separadas por . ; ,)."""
+    try:
+        partes = re.split(r"([.;,])", str(paso or ""))
+        out = []
+        for k in range(0, len(partes), 2):
+            cl = partes[k]
+            sep = partes[k + 1] if k + 1 < len(partes) else ""
+            if _ALMACENAJE_RE.search(cl):
+                continue
+            out.append(cl + sep)
+        return "".join(out)
+    except Exception:
+        return str(paso or "")
+
+
 def _v6_valor(txt: str):
     """«½» → 0.5, «1½» → 1.5, «0,33» → 0.33. None si no es un número que entienda."""
     t = (txt or "").strip()
@@ -1183,7 +1205,7 @@ def _v6_paso_pide_mas_que_la_lista(day, meal, index) -> list:
             for food, pares in _v6_cuentas(ing, index).items():
                 en_lista.setdefault(food, set()).update(pares)
         for paso in pasos:
-            for food, pares in _v6_cuentas(paso, index).items():
+            for food, pares in _v6_cuentas(_texto_de_consumo(paso), index).items():   # [P1-PLAN-LOTE-26]
                 if food not in en_lista:
                     continue                           # eso es V5, no V6
                 for uni, val in pares:
@@ -1331,7 +1353,7 @@ def _v7a_lista_compra_de_mas(day, meal, index) -> list:
                 en_lista[food] = en_lista.get(food, 0.0) + n
         usado: dict = {}
         for paso in pasos:
-            for food, n in _v7_piezas(paso, index).items():
+            for food, n in _v7_piezas(_texto_de_consumo(paso), index).items():   # [P1-PLAN-LOTE-26]
                 usado[food] = usado.get(food, 0.0) + n
         pasos_norm = [_norm(p) for p in pasos]
         for food, comprado in en_lista.items():
@@ -1485,24 +1507,69 @@ _V7D_A_GRAMOS = {"ml": 1.0, "mililitro": 1.0, "mililitros": 1.0, "l": 1000.0, "l
 # nada) o marcaba «40 g -> 30 g» como si importara.
 _V7D_TOLERANCIA = 0.25
 _V7D_MIN_GRAMOS = 30.0
+#: [P1-PLAN-LOTE-26 · 2026-09-12] (CUL-P1-05) ml → g SOLO con densidad respaldada (g/ml, USDA/BEDCA orientativos). Antes
+#: todo ml valía 1 g: la miel (1,42) o el aceite (0,92) se comparaban con una conversión inventada. Un líquido que no esté
+#: aquí no se compara en ml (no es un hallazgo: es «no comparable», como V4 con las tazas).
+_V7D_DENSIDAD = {"agua": 1.0, "leche": 1.03, "caldo": 1.0, "jugo": 1.04, "zumo": 1.04, "vinagre": 1.01, "aceite": 0.92,
+                 "yogur": 1.05, "yogurt": 1.05, "salsa de tomate": 1.05, "pure de tomate": 1.05, "crema": 1.0,
+                 "leche de coco": 0.97, "leche de almendra": 1.02, "leche de avena": 1.02, "miel": 1.42, "sirope": 1.33,
+                 "vino": 0.99, "cerveza": 1.01, "cafe": 1.0, "te": 1.0, "kefir": 1.03, "bebida": 1.02}
+
+
+def _densidad_respaldada(food: str):
+    n = _norm(food)
+    mejor = None
+    for k, d in _V7D_DENSIDAD.items():
+        if re.search(r"\b" + re.escape(k) + r"s?\b", n) and (mejor is None or len(k) > len(mejor[0])):
+            mejor = (k, d)
+    return mejor[1] if mejor else None
+
+
+_V7D_VOLUMEN = ("ml", "mililitro", "mililitros", "l", "litro", "litros")
 
 
 def _v7d_masas(texto: str, index: dict) -> dict:
-    """{alimento: gramos} de las masas EXPLÍCITAS del texto. Sin unidad, no cuenta.
+    """{alimento: gramos} de las masas EXPLÍCITAS del texto (ml se cuenta 1:1, como siempre). Sin unidad, no cuenta.
 
     Suma a lo largo de todo el texto a propósito: repartir un ingrediente entre dos pasos
     («250 ml ahora, 170 ml al final») es legítimo y no debe disparar."""
+    return {food: fam.get("g", 0.0) + fam.get("ml", 0.0) for food, fam in _v7d_masas_por_familia(texto, index).items()}
+
+
+def _v7d_masas_por_familia(texto: str, index: dict) -> dict:
+    """[P1-PLAN-LOTE-26 · 2026-09-12] (CUL-P1-05) `{alimento: {"g": gramos, "ml": mililitros}}`: la familia de la unidad
+    viaja con la cantidad. ml con ml y g con g se comparan sin convertir nada; cruzar familias exige una densidad
+    respaldada (`_V7D_DENSIDAD`) — «400 ml de avena» contra «100 ml de avena» es comparable; «400 ml de avena» contra
+    «120 g de avena» no lo es sin saber cuánto pesa un ml de avena, y nadie aquí lo sabe."""
     out: dict = {}
     for m in _V7D_MASA_RE.finditer(_norm(texto)):
         val = _v6_valor(m.group(1))
-        fac = _V7D_A_GRAMOS.get(m.group(2).lower())
+        uni = m.group(2).lower()
+        fac = _V7D_A_GRAMOS.get(uni)
         if val is None or fac is None:
             continue
         hits = find_catalog_foods(m.group(3), index)
         if len(hits) != 1:
             continue                                   # ambiguo o desconocido: no se cuenta
-        out[hits[0]] = out.get(hits[0], 0.0) + val * fac
+        fam = "ml" if uni in _V7D_VOLUMEN else "g"
+        d = out.setdefault(hits[0], {})
+        d[fam] = d.get(fam, 0.0) + val * fac
     return out
+
+
+def _v7d_comparables(lista: dict, usado: dict, food: str):
+    """`(g_lista, g_paso, unidad)` en una MISMA familia, o `None` si no hay forma respaldada de compararlas."""
+    a, b = lista.get(food) or {}, usado.get(food) or {}
+    for fam in ("g", "ml"):
+        if fam in a and fam in b and not (set(a) - {fam}) and not (set(b) - {fam}):
+            return a[fam], b[fam], fam
+    # familias cruzadas: sólo con densidad conocida del alimento (g/ml)
+    dens = _densidad_respaldada(food)
+    if dens is None:
+        return None
+    ga = a.get("g", 0.0) + a.get("ml", 0.0) * dens
+    gb = b.get("g", 0.0) + b.get("ml", 0.0) * dens
+    return ga, gb, "g"
 
 
 def _v7e_paso_pide_mas_piezas(day, meal, index) -> list:
@@ -1540,7 +1607,7 @@ def _v7e_paso_pide_mas_piezas(day, meal, index) -> list:
             for food, n in _v7_piezas(ing, index).items():
                 en_lista[food] = en_lista.get(food, 0.0) + n
         for paso in pasos:
-            for food, n in _v7_piezas(paso, index).items():
+            for food, n in _v7_piezas(_texto_de_consumo(paso), index).items():   # [P1-PLAN-LOTE-26]
                 total = en_lista.get(food)
                 if total is None:
                     continue                           # no está en la lista: eso es V5
@@ -1565,26 +1632,66 @@ def _v7d_masa_sobrante(day, meal, index) -> list:
         pasos = [str(x) for x in (meal.get("recipe") or [])]
         if not ings or not pasos:
             return []
-        en_lista = _v7d_masas(" ".join(ings), index)
-        usado = _v7d_masas(" ".join(pasos), index)
-        for food, g_lista in en_lista.items():
-            g_paso = usado.get(food)
+        en_lista = _v7d_masas_por_familia(" ".join(ings), index)
+        usado = _v7d_masas_por_familia(" ".join(_texto_de_consumo(p) for p in pasos), index)   # [P1-PLAN-LOTE-26]
+        for food in en_lista:
             # Un paso que NO cuantifica no contradice a la lista: «cocina la avena con la leche»
             # es una instrucción normal, no una declaración de cantidad. Exigir la cifra en los
             # DOS lados es lo que separa esta capa de V3, que ya cubre el ingrediente ausente.
-            if g_paso is None:
+            if food not in usado:
                 continue
+            comp = _v7d_comparables(en_lista, usado, food)     # [P1-PLAN-LOTE-26] misma familia, o densidad respaldada
+            if comp is None:
+                continue
+            g_lista, g_paso, uni = comp
             if g_paso >= g_lista * (1 - _V7D_TOLERANCIA):
                 continue
             if (g_lista - g_paso) < _V7D_MIN_GRAMOS:
                 continue
             out.append(_viol(
                 day, meal, "V7d", food,
-                f"la lista compra {g_lista:g} g y los pasos usan {g_paso:g} g",
+                f"la lista compra {g_lista:g} {uni} y los pasos usan {g_paso:g} {uni}",
                 "minor", True))
     except Exception:
         return []
     return out
+
+
+# ─────────────────────────────────────────────────────────────────────────────────────────────
+# [P1-PLAN-LOTE-26 · 2026-09-12] (C5 · CUL-P1-05) V8a tiempo oculto · V8b equipo no disponible
+#
+# V8a: los pasos piden una espera en HORAS (remojo, marinado, «la noche anterior») que el `prep_time` del plato no cubre.
+# Medido en el corpus fijo: 5 de 64 comidas declaran 15-20 min y piden horas; una era conservación («consume dentro de
+# 24 horas»), que no es espera y no dispara. Un plato de «10 minutos» no puede esconder una víspera.
+# V8b: la receta exige un equipo (horno, airfryer, licuadora, microondas, olla de presión…) que la persona declaró NO
+# tener en Súper Personalización. Sin declaración no se evalúa (`estado["contexto"]["equipo"] = "no_declarado"`): el
+# formulario principal no lo pregunta (decisión de producto P2-FORM-KITCHEN-EQUIPMENT) y fingir un dato es peor que
+# decir que falta. Las dos nacen `minor` y no reparables: el reparador de tiempos/equipo es CUL-P1-04.
+# tooltip-anchor: P1-PLAN-LOTE-26-V8
+
+def _v8a_tiempo_oculto(day, meal, index) -> list:
+    try:
+        from culinary_context import check_hidden_time
+        h = check_hidden_time(meal)
+        if not h:
+            return []
+        decl = (f"{h['declarado_min']} min declarados" if h.get("declarado_min") is not None else "sin tiempo declarado")
+        return [_viol(day, meal, "V8a", "tiempo",
+                      f"los pasos piden {h['espera_min'] / 60:g} h de espera («{h['evidencia'][:80]}») y el plato dice {decl}",
+                      "minor", False)]
+    except Exception:
+        return []
+
+
+def _v8b_equipo_no_disponible(day, meal, declared) -> list:
+    try:
+        if declared is None:
+            return []
+        from culinary_context import missing_equipment
+        return [_viol(day, meal, "V8b", eq, f"la receta pide {eq} y la persona declaró no tenerlo", "minor", False)
+                for eq in missing_equipment(meal, declared)]
+    except Exception:
+        return []
 
 
 def _viol(day, meal, check, food, detail, severity, repairable):
@@ -1594,7 +1701,7 @@ def _viol(day, meal, check, food, detail, severity, repairable):
 
 
 #: Los checks de la capa 1, en el orden en que corren.
-CHECKS_CAPA1 = ("V1", "V2", "V3", "V4", "V5", "V6", "V7a", "V7b", "V7c", "V7d", "V7e")
+CHECKS_CAPA1 = ("V1", "V2", "V3", "V4", "V5", "V6", "V7a", "V7b", "V7c", "V7d", "V7e", "V8a", "V8b")
 
 #: [P1-PLAN-LOTE-22 · 2026-09-12] (C1 · CUL-P0-01) Versión del ESQUEMA de hallazgo: desde aquí cada violación (capa 1 y
 #: juez) lleva `meal_index`, la posición de la comida en su día. Cambia cuando cambie la forma del hallazgo.
@@ -1627,7 +1734,7 @@ def _iter_meals_idx(plan_data: dict):
                 yield d.get("day"), m, mi
 
 
-def culinary_contract_scan(plan_data: dict, catalog: list, _estado: "dict | None" = None) -> list:
+def culinary_contract_scan(plan_data: dict, catalog: list, _estado: "dict | None" = None, form_data=None) -> list:
     """Escanea el plan completo. Retorna lista de Violations (vacía si todo
     coherente o si no hay datos). Jamás lanza: fail-open total.
 
@@ -1639,6 +1746,15 @@ def culinary_contract_scan(plan_data: dict, catalog: list, _estado: "dict | None
     estado = _estado if isinstance(_estado, dict) else {}
     estado.update({"status": "error", "checks": list(CHECKS_CAPA1), "meals": 0, "violations": 0, "error": None,
                    "reglas_huella": rules_fingerprint(), "schema": FINDING_SCHEMA_VERSION, "exactas": 0})
+    # [P1-PLAN-LOTE-26] (CUL-P1-05) el equipo declarado llega con el formulario (o dentro del plan persistido); si no, se dice
+    _declared = None
+    try:
+        from culinary_context import declared_equipment as _de
+        _fd = form_data if isinstance(form_data, dict) else (plan_data or {}).get("form_data")
+        _declared = _de(_fd)
+    except Exception:
+        _declared = None
+    estado["contexto"] = {"equipo": "declarado" if _declared is not None else "no_declarado"}
     try:
         index = build_culinary_index(catalog)
         if not index:
@@ -1663,6 +1779,8 @@ def culinary_contract_scan(plan_data: dict, catalog: list, _estado: "dict | None
             out.extend(_v7c_seco_sin_coccion(day, meal, index))
             out.extend(_v7d_masa_sobrante(day, meal, index))
             out.extend(_v7e_paso_pide_mas_piezas(day, meal, index))
+            out.extend(_v8a_tiempo_oculto(day, meal, index))
+            out.extend(_v8b_equipo_no_disponible(day, meal, _declared))
             for v in out[start:]:
                 v.setdefault("meal_index", mi)
                 v.setdefault("meal_seal", meal_seal(meal))
@@ -1676,7 +1794,7 @@ def culinary_contract_scan(plan_data: dict, catalog: list, _estado: "dict | None
         return []
 
 
-def culinary_contract_scan_status(plan_data: dict, catalog: list) -> "tuple[list, dict]":
+def culinary_contract_scan_status(plan_data: dict, catalog: list, form_data=None) -> "tuple[list, dict]":
     """[P1-PLAN-LOTE-22 · 2026-09-12] (C1 · CUL-P0-01) El scan con su ESTADO: `(violations, estado)`.
 
         estado = {"status": "scanned" | "no_meals" | "no_catalog" | "error", "checks": [...], "meals": n,
@@ -1686,7 +1804,7 @@ def culinary_contract_scan_status(plan_data: dict, catalog: list) -> "tuple[list
     cobertura 100 % → 59 % con los tests en verde). Fail-open se conserva: jamás lanza, y con `no_catalog`/`error`
     devuelve `[]` — pero ahora lo DICE. tooltip-anchor: P1-PLAN-LOTE-22-SCAN-STATUS"""
     estado: dict = {}
-    return culinary_contract_scan(plan_data, catalog, _estado=estado), estado
+    return culinary_contract_scan(plan_data, catalog, _estado=estado, form_data=form_data), estado
 
 
 # ─────────────────────────────────────────────────────────────────────────────────────────────

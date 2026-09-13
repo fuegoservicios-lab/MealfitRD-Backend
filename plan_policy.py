@@ -723,6 +723,8 @@ def policy_hash(policy: dict) -> str:
 
 
 _REASON_COPY = {
+    "portion_cap_default_not_enforced": "Pediste {requested} de tu básico por comida; por ahora salen {applied} (el tope de siempre). "
+                                        "La ración pedida se honra cuando tu plan entra en la política en vigor.",
     "anchor_conflicts_allergy": "Quitamos «{requested}» de tus básicos: choca con una alergia declarada ({allergy}).",
     "anchor_conflicts_diet": "Quitamos «{requested}» de tus básicos: no encaja con tu dieta ({diet}).",
     "anchor_not_in_market": "«{requested}» no está en el catálogo de tu país; no lo usamos como básico.",
@@ -865,6 +867,48 @@ def measure_plan_against_policy(plan_data: dict, effective: dict, *, total_days_
     }
 
 
+#: [P1-PLAN-LOTE-26 · 2026-09-12] (CUL-P1-01) techos por defecto de las PIEZAS que la ración pedida puede levantar
+#: (`portion_cap_for`): la clara sigue al knob del motor; el huevo entero, a `_REALISM_COUNT_CAPS["huevo"]`.
+_DEFAULT_PIECE_CAPS = {"clara": ("MEALFIT_MAX_EGG_WHITES_PER_MEAL", 6), "claras": ("MEALFIT_MAX_EGG_WHITES_PER_MEAL", 6),
+                       "huevo": (None, 4), "huevos": (None, 4)}
+
+
+def _note_portions_not_enforced(compiled: dict) -> None:
+    """Con la política en modo SOMBRA una ración de piezas por encima del techo por defecto no se honra (E5 lo decidió:
+    canary). Antes se perdía en silencio; ahora queda en `relaxations` con `action="deferred"`: el informe y la persona
+    saben por qué salieron 6 claras y no 10, y qué la desbloquea. Nunca lanza."""
+    try:
+        if not isinstance(compiled, dict) or compiled.get("enforced"):
+            return
+        eff = compiled.get("effective") or {}
+        rels = compiled.setdefault("relaxations", [])
+        for a in eff.get("food_anchors") or []:
+            if not isinstance(a, dict):
+                continue
+            p = a.get("portion")
+            if not isinstance(p, dict) or str(p.get("unit") or "").strip().lower() not in _UNIDADES_DE_PIEZA:
+                continue
+            head = (_norm(a.get("name")).split() or [""])[0]
+            spec = _DEFAULT_PIECE_CAPS.get(head)
+            if not spec:
+                continue
+            knob, dflt = spec
+            cap = float(dflt)
+            if knob:
+                try:
+                    from knobs import _env_int
+                    cap = float(_env_int(knob, dflt))
+                except Exception:
+                    cap = float(dflt)
+            q = float(p.get("qty") or 0)
+            if q > cap:
+                _relax(rels, field=f"food_anchors[{a.get('ingredient_id')}].portion", requested=q, applied=cap,
+                       reason="portion_cap_default_not_enforced", rank=99, action="deferred",
+                       evidence={"mode": "shadow", "cap": knob or "_REALISM_COUNT_CAPS"})
+    except Exception:
+        return
+
+
 def stamp_plan_policy(plan_data: dict, form_data: dict, *, country: Optional[str] = None,
                       total_days_requested: Optional[int] = None) -> Optional[dict]:
     """Sella `plan_data['_plan_policy']` (compilación) y `_plan_policy_shadow` (medición).
@@ -878,6 +922,7 @@ def stamp_plan_policy(plan_data: dict, form_data: dict, *, country: Optional[str
         # del canary de uno en modo sombra — y aplicaría una excepción de ración a quien solo
         # estaba siendo medido. El dato viaja en `form_data`, pero `form_data` no llega al persist.
         compiled["enforced"] = bool((form_data or {}).get("_policy_enforced"))
+        _note_portions_not_enforced(compiled)   # [P1-PLAN-LOTE-26] (CUL-P1-01) el motivo de no honrar una ración, escrito
         plan_data["_plan_policy"] = compiled
         if compiled.get("effective"):
             plan_data["_plan_policy_shadow"] = measure_plan_against_policy(

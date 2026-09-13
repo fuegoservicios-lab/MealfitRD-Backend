@@ -1308,7 +1308,7 @@ def build_slot_targets_block(daily_targets: dict, meal_types: list) -> str:
 def build_day_assignment_context(skeleton_day: dict, day_num: int, day_name: str = None,
                                  daily_targets: dict = None, user_staples: list = None,
                                  small_universe: bool = False, diet_type=None, country=None,
-                                 culture_weights=None, goal=None) -> str:
+                                 culture_weights=None, goal=None, kitchen_equipment=None) -> str:
     """Genera el bloque de contexto con la asignación del planificador para un día.
 
     [P1-STAPLE-FOODS · 2026-08-02] `user_staples` (lista de nombres del catálogo, máx 8 — ver
@@ -1693,6 +1693,16 @@ def build_day_assignment_context(skeleton_day: dict, day_num: int, day_name: str
             "cede la exigencia de variedad por-ingrediente."
         )
 
+    # [P1-PLAN-LOTE-26 · 2026-09-12] (CUL-P1-05) El equipo declarado en Súper Personalización llegaba SOLO al prompt del
+    # plan; el generador del día —el que escribe «hornea 25 minutos»— no lo veía. «» si no se declaró: prompt byte-idéntico.
+    equipment_block = ""
+    try:
+        if kitchen_equipment:
+            from culinary_context import equipment_block as _eqb
+            equipment_block = _eqb({"kitchenEquipment": list(kitchen_equipment)})
+    except Exception:
+        equipment_block = ""
+
     return f"""
 --- 📋 ASIGNACIÓN DEL PLANIFICADOR PARA OPCIÓN {day_num} ---{diet_hard_line}
 • Concepto Temático: {skeleton_day.get('brief_concept', 'Día variado')}{day_name_block}{breakfast_block}{cross_day_block}
@@ -1700,7 +1710,7 @@ def build_day_assignment_context(skeleton_day: dict, day_num: int, day_name: str
 • Proteínas Asignadas: {pool_str}
 • Carbohidratos Asignados: {', '.join(_carbs_asignados)}{carb_no_repeat_block}
 • Frutas Asignadas: {', '.join(skeleton_day.get('fruit_pool', []))}{_veggie_block}
-• Comidas a Generar: {', '.join(skeleton_day.get('meal_types', ['Desayuno', 'Almuerzo', 'Merienda', 'Cena']))}{_slot_targets_block}{dinner_identity_block}{protein_diversity_block}{staple_block}{small_universe_block}
+• Comidas a Generar: {', '.join(skeleton_day.get('meal_types', ['Desayuno', 'Almuerzo', 'Merienda', 'Cena']))}{_slot_targets_block}{dinner_identity_block}{protein_diversity_block}{staple_block}{small_universe_block}{equipment_block}
 {dish_library_block}{prohibited_block}
 DEBES basar tus recetas en estos ingredientes asignados para garantizar
 variedad entre los 3 días del plan. Puedes agregar condimentos, especias,

@@ -1224,9 +1224,15 @@ def build_day_for_skeleton(nutrition, form_data, skeleton_day, day_num, user_id=
         # [P1-PLAN-LOTE-3 · B5] los «no me gusta» del formulario y las exclusiones compiladas, al selector
         _excluidos = [str(x) for x in (list(_hp.get("dislikes") or _fd.get("dislikes") or [])
                                         + list(((_eff.get("diet") or {}).get("exclusions")) or [])) if x]
+        # [P1-PLAN-LOTE-26] (CUL-P1-05) el equipo declarado, al selector: `None` si no se declaró (no se poda nada)
+        try:
+            from culinary_context import declared_equipment as _de_ctx
+            _equipo = _de_ctx(_fd) if _de_ctx(_fd) is not None else _de_ctx(_hp)
+        except Exception:
+            _equipo = None
         _kw_cands = dict(k=_candidatos_k(), rotate=int(day_index), exclude_allergens=_alergias,
                          diet=_dieta, budget_tier=_tier_presupuesto(_fd), market_country=mercado,
-                         require_known_nutrients=_req_nutr, exclude_foods=_excluidos, **_dur)
+                         require_known_nutrients=_req_nutr, exclude_foods=_excluidos, available_equipment=_equipo, **_dur)
         _fijados = ((_sl.get("registry") or {}).get("candidates") or {}) if _sl else {}
 
         franjas = _franjas_del_dia(skeleton_day)

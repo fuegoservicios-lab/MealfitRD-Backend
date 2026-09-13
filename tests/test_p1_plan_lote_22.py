@@ -215,7 +215,7 @@ def test_las_violaciones_de_capa_1_tambien_llevan_sello_de_comida():
 
 def test_el_orquestador_persiste_el_estado_del_scan_y_resuelve_las_quejas_del_juez():
     src = (_BACKEND / "graph_orchestrator.py").read_text(encoding="utf-8", errors="ignore")
-    assert '_cul_viol, plan["_culinary_contract_scan"] = culinary_contract_scan_status(plan, _cul_cat)' in src
+    assert '_cul_viol, plan["_culinary_contract_scan"] = culinary_contract_scan_status(plan, _cul_cat, form_data=form_data)' in src   # [P1-PLAN-LOTE-26] + equipo declarado
     assert "P1-PLAN-LOTE-22-SCAN-STATUS" in src
     i = src.index("_cj_hist.append({")
     bloque = src[i:src.index("})", i) + 2]

@@ -1614,7 +1614,8 @@ def fidelity_issues(days: list, sl: Optional[dict], effective: Optional[dict], *
 # `checks_run` (lo que se midió) y `unmeasured` (lo que NO, y por qué), y mide tres dimensiones más:
 # la mezcla de cocinas servida (`culture_share_*`), el tiempo de cocina frente al que el usuario dijo
 # tener (`prep_time_over_budget`) y las raciones de las anclas en piezas (`anchor_portion_*`). El
-# equipo de cocina sigue sin medirse: el formulario no lo pregunta, y se dice.
+# equipo de cocina: el formulario principal no lo pregunta (decisión de producto), pero el panel de Súper
+# Personalización sí (`kitchenEquipment`) — desde P1-PLAN-LOTE-26 se mide cuando está declarado y se dice cuando no.
 
 _COOKING_TIME_BUDGET_MIN = {"none": 10, "30min": 30, "1hour": 60}   # `plenty` ⇒ sin techo
 _PERSONALIZATION_MIN_IDENTIFIED = 4
@@ -1744,6 +1745,27 @@ def _anchor_portion_issues(days: list, effective: dict) -> tuple[list, list, lis
     return out, run, unmeasured
 
 
+def _equipment_issues(days: list, form_data: Optional[dict]) -> tuple[list, list, list]:
+    """[P1-PLAN-LOTE-26 · 2026-09-12] (CUL-P1-05) El equipo que los pasos EXIGEN frente al que la persona declaró tener
+    (Súper Personalización). Sin declaración ⇒ `unmeasured` con motivo, nunca un dato fingido."""
+    try:
+        from culinary_context import declared_equipment, missing_equipment
+    except Exception:
+        return [], [], [{"check": "equipment", "reason": "culinary_context_unavailable"}]
+    declared = declared_equipment(form_data)
+    if declared is None:
+        return [], [], [{"check": "equipment", "reason": "equipment_not_declared"}]
+    out = []
+    for i, d in enumerate(days or []):
+        for m in ((d.get("meals") or []) if isinstance(d, dict) else []):
+            falta = missing_equipment(m, declared)
+            if falta and len(out) < 10:
+                out.append({"code": "equipment_unavailable", "severity": "low", "day": i + 1,
+                            "meal": str(m.get("meal") or ""), "missing": falta,
+                            "message": f"EQUIPO: día {i + 1}, {m.get('meal')}: la receta pide {', '.join(falta)} y dijiste no tenerlo."})
+    return out, ["equipment"], []
+
+
 def personalization_issues(days: list, sl: Optional[dict], effective: Optional[dict],
                            form_data: Optional[dict] = None) -> tuple[list, list, list]:
     """(issues, checks_run, unmeasured). Puro, nunca lanza. `culture_unavailable` sale de la rebanada:
@@ -1752,7 +1774,7 @@ def personalization_issues(days: list, sl: Optional[dict], effective: Optional[d
     try:
         eff = effective or {}
         for fn in (lambda: _culture_share_issues(days, eff), lambda: _prep_time_issues(days, form_data),
-                   lambda: _anchor_portion_issues(days, eff)):
+                   lambda: _anchor_portion_issues(days, eff), lambda: _equipment_issues(days, form_data)):
             try:
                 i_, r_, u_ = fn()
                 issues.extend(i_); run.extend(r_); unmeasured.extend(u_)
@@ -1763,7 +1785,6 @@ def personalization_issues(days: list, sl: Optional[dict], effective: Optional[d
                            "slot": f.get("slot"), "profile": f.get("profile"),
                            "message": (f"COCINA NO DISPONIBLE: la cocina {f.get('profile')} no tenía plato para "
                                        f"{f.get('slot')} el día {int(f.get('day_index') or 0) + 1}; se usó la del mercado.")})
-        unmeasured.append({"check": "equipment", "reason": "form_has_no_equipment_field"})
     except Exception as e:
         logger.debug(f"[P1-PLAN-LOTE-3] personalization_issues falló (fail-open): {e}")
     return issues, run, unmeasured
