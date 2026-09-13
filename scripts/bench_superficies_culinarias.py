@@ -6,8 +6,10 @@ dobles offline y un modo real explícito con presupuesto.
     python scripts/bench_superficies_culinarias.py --out X.json          # guarda el artefacto (por defecto scripts/data/bench_superficies_<fecha>.json)
     python scripts/bench_superficies_culinarias.py --informe A.json      # reconstruye el informe SOLO desde el artefacto
     python scripts/bench_superficies_culinarias.py --comparar A.json B.json   # informe PAREADO: mismo caso, dos versiones
+    python scripts/bench_superficies_culinarias.py --planes-de real.json      # re-mide SIN LLM los planes de un artefacto real (pareado real)
     python scripts/bench_superficies_culinarias.py --exportar-catalogo   # (base, sólo lectura) snapshot del catálogo con nutrición
-    python scripts/bench_superficies_culinarias.py --real --perfil f.json --presupuesto-usd 0.50   # genera con LLM: se NIEGA sin presupuesto
+    python scripts/bench_superficies_culinarias.py --real --perfil f.json --presupuesto-usd 0.50   # genera con LLM como /analyze: se NIEGA sin presupuesto y no escribe en la base
+    python scripts/bench_superficies_culinarias.py --real ... --telemetria-prod                     # (opcional) deja que la telemetría del pipeline caiga en producción
 
 ## Qué mide
 
@@ -32,7 +34,16 @@ nutrición (`--exportar-catalogo`, una vez, con base) para que los cerradores te
 declara `modo_catalogo` («nutricion» | «nombres»): sin nutrición los cerradores de banda no tienen con qué cerrar y sus cifras
 NO son comparables con producción — el informe lo dice en la cabecera. Nada de aquí escribe en la base (los planes son copias;
 las conexiones, si las hay, son de sólo lectura). `--real` genera planes con el LLM y exige `--presupuesto-usd`: sin cifra
-se niega, y registra en el artefacto intentos, coste estimado y estado de cada generación.
+se niega.
+
+[P1-PLAN-LOTE-30 · 2026-09-12] El modo real imita a `/analyze` (`_plan_start_date`, `_days_to_generate = PLAN_CHUNK_SIZE` — el
+bloque síncrono son 3 días, el resto lo hace la cola — y la rebanada del blueprint), abre los pools como el arranque de la app y,
+por defecto, SUSTITUYE las funciones de escritura de `db_core` por dobles que cuentan y no ejecutan: el pipeline LEE la base
+real (catálogo, registro, política) y su telemetría (`pipeline_metrics`, `app_kv_store`, `system_alerts`, `llm_usage_events`)
+no cae en producción. El coste se suma EN PROCESO con la tarifa del propio emisor (`compute_llm_cost_micros`), así que el
+presupuesto funciona sin leer la base; `--telemetria-prod` deja pasar esas escrituras. El artefacto registra por generación
+perfil, estado, días, comidas, segundos y coste, y guarda los planes generados: son la evidencia. Lo que NO imita: el
+`taste_profile` del router (LLM sobre el historial) — un usuario nuevo no tiene historial.
 
 Solo lectura. tooltip-anchor: P1-PLAN-LOTE-28-BENCH-SUPERFICIES
 """
@@ -43,6 +54,7 @@ import copy
 import glob
 import json
 import os
+import re
 import subprocess
 import sys
 import time
@@ -223,6 +235,14 @@ def render(art: dict) -> str:
     for s, r in (art.get("superficies") or {}).items():
         estados = sorted({str(p.get("estado")) for p in r.get("planes") or []})
         out.append(f"{s:<11} {r.get('n_nuevos', 0):>7} {r.get('resueltos', 0):>10} {r.get('contrato_estampado', 0):>9} {r.get('ms', 0):>7}  {','.join(estados)}")
+    for g in art.get("generaciones") or []:
+        out.append(f"  {g.get('plan_id')} · {g.get('perfil', '')} · {g.get('estado')} · {g.get('s', 0)} s · {g.get('dias', 0)} d / "
+                   f"{g.get('comidas', 0)} comidas · {g.get('llamadas_llm', 0)} llamadas · ${float(g.get('coste_usd_est') or 0):.4f}")
+    if art.get("modo") == "real":
+        sup = art.get("escrituras_suprimidas") or {}
+        out.append(f"  coste estimado ${float(art.get('coste_usd_est') or 0):.4f} de ${float(art.get('presupuesto_usd') or 0):.2f} · "
+                   f"telemetría a producción: {'sí' if art.get('telemetria_prod') else 'no'} · escrituras suprimidas: "
+                   + (", ".join(f"{k} {v}" for k, v in sup.items()) or "0"))
     return "\n".join(out)
 
 
@@ -239,14 +259,96 @@ def comparar(a: dict, b: dict) -> str:
 
 
 # ─────────────────────────────────────────────────────────────────────────────────────────────
-# modo real (explícito, con presupuesto)
+# modo real (explícito, con presupuesto): imita a /analyze y no escribe en la base del dueño
+# [P1-PLAN-LOTE-30 · 2026-09-12] tooltip-anchor: P1-PLAN-LOTE-30-BENCH-REAL
 # ─────────────────────────────────────────────────────────────────────────────────────────────
 
-def generar_real(perfiles: list, presupuesto_usd: float) -> list:
-    """Genera planes con el LLM, uno por perfil, y para en cuanto el coste estimado supere el presupuesto. Devuelve la lista de
-    `{"plan_id", "plan_data", "estado", "s", "coste_usd_est"}`; el coste se estima con `llm_usage_events` si la base está."""
-    import asyncio
-    from graph_orchestrator import arun_plan_pipeline
+_ESCRITURAS: dict = {}      # tabla → escrituras suprimidas en la corrida (modo real sin --telemetria-prod)
+_TABLA_RE = re.compile(r"(?is)\b(?:insert\s+into|update|delete\s+from)\s+([a-z_][a-z0-9_.]*)")
+
+
+def _tabla(sql) -> str:
+    m = _TABLA_RE.search(str(sql or ""))
+    return m.group(1).lower() if m else "?"
+
+
+def bloquear_escrituras(mod=None, contador: dict | None = None) -> dict:
+    """Sustituye las funciones de ESCRITURA (`execute_sql_write`, `aexecute_sql_write`, `execute_sql_transaction`) por dobles
+    que cuentan por tabla y no ejecutan; las lecturas siguen yendo a la base real. Llamar ANTES de importar el orquestador:
+    los módulos enlazan el nombre al importarlo. Parchea también la fachada `db` si ya está cargada."""
+    if mod is None:
+        import db_core as mod
+    contador = _ESCRITURAS if contador is None else contador
+
+    def _w(query, params=None, returning=False, **kw):
+        t = _tabla(query)
+        contador[t] = contador.get(t, 0) + 1
+        return [] if returning else True
+
+    async def _aw(query, params=None, returning=False, **kw):
+        return _w(query, params, returning)
+
+    def _tx(queries_with_params):
+        for q, _p in (queries_with_params or []):
+            _w(q)
+        return True
+
+    mod.execute_sql_write, mod.aexecute_sql_write, mod.execute_sql_transaction = _w, _aw, _tx
+    if getattr(mod, "__name__", "") == "db_core":
+        fachada = sys.modules.get("db")
+        if fachada is not None:
+            fachada.execute_sql_write, fachada.aexecute_sql_write, fachada.execute_sql_transaction = _w, _aw, _tx
+    return contador
+
+
+def contar_coste(*, telemetria_prod: bool = False, original=None) -> tuple:
+    """Envuelve `db_profiles.log_llm_usage_event` (el orquestador lo importa en cada llamada) y suma EN PROCESO el coste que
+    ese emisor calcularía — misma tarifa, `compute_llm_cost_micros` — para que el presupuesto funcione sin leer la base. Con
+    `telemetria_prod` además deja pasar la fila. Devuelve `(envoltura, estado)`; `estado` = {micros, llamadas, por_nodo, modelos}."""
+    import db_profiles as dp
+    original = original or dp.log_llm_usage_event
+    estado = {"micros": 0, "llamadas": 0, "por_nodo": {}, "modelos": []}
+
+    def _log(*, model, node=None, input_tokens=None, output_tokens=None, cached_tokens=None, **kw):
+        try:
+            estado["micros"] += int(dp.compute_llm_cost_micros(model, input_tokens, output_tokens, cached_tokens or 0) or 0)
+        except Exception:
+            pass
+        estado["llamadas"] += 1
+        estado["por_nodo"][node or "?"] = estado["por_nodo"].get(node or "?", 0) + 1
+        if model and model not in estado["modelos"]:
+            estado["modelos"].append(model)
+        if telemetria_prod:
+            return original(model=model, node=node, input_tokens=input_tokens, output_tokens=output_tokens,
+                            cached_tokens=cached_tokens, **kw)
+        return None
+
+    dp.log_llm_usage_event = _log
+    return _log, estado
+
+
+def form_para_pipeline(perfil: dict, hoy: str | None = None) -> dict:
+    """Lo que `/analyze` hace con el payload del wizard antes de llamar al pipeline: quita los `_` del cliente, fija
+    `_plan_start_date` y `_days_to_generate = PLAN_CHUNK_SIZE` (el bloque síncrono son 3 días; el resto lo hace la cola) e
+    inyecta la rebanada del blueprint (`horizon`, fail-open)."""
+    from constants import PLAN_CHUNK_SIZE
+    data = {k: v for k, v in dict(perfil or {}).items() if not str(k).startswith("_")}
+    pd = dict(data)
+    pd["_plan_start_date"] = hoy or date.today().isoformat()
+    pd["_days_to_generate"] = PLAN_CHUNK_SIZE
+    try:
+        from horizon import inject_policy_into_pipeline_data
+        total = int(data.get("totalDays", PLAN_CHUNK_SIZE) or PLAN_CHUNK_SIZE)
+        inject_policy_into_pipeline_data(pd, form_data=data, total_days=total, days_offset=0, days_count=PLAN_CHUNK_SIZE,
+                                         user_id=data.get("user_id"))
+    except Exception:
+        pass
+    return pd
+
+
+async def _ciclo(perfiles: list, presupuesto_usd: float, generar_uno) -> list:
+    """Una generación por perfil, en serie; para en cuanto lo gastado alcanza el presupuesto. `generar_uno(i, perfil)` es una
+    corrutina que devuelve `{"plan_data", "coste_usd_est", ...}`; una excepción se anota como estado, no tumba el bench."""
     out, gastado = [], 0.0
     for i, fd in enumerate(perfiles):
         if gastado >= presupuesto_usd:
@@ -254,16 +356,87 @@ def generar_real(perfiles: list, presupuesto_usd: float) -> list:
             continue
         t0 = time.time()
         try:
-            plan = asyncio.run(arun_plan_pipeline(dict(fd)))
-            coste = _coste_estimado(t0)
-            gastado += coste
-            out.append({"plan_id": f"real-{i}", "plan_data": plan, "estado": "generado", "s": round(time.time() - t0, 1), "coste_usd_est": coste})
+            r = dict(await generar_uno(i, fd) or {})
+            gastado += float(r.get("coste_usd_est") or 0.0)
+            plan = r.pop("plan_data", None)
+            ok = isinstance(plan, dict) and bool(plan.get("days"))
+            estado = ("generado:emergencia" if plan.get("_p1_5_emergency_return") else "generado") if ok else "sin_dias"
+            out.append({"plan_id": f"real-{i}", "plan_data": plan if ok else None, "estado": estado,
+                        "s": round(time.time() - t0, 1), **r})
         except Exception as e:                                                 # noqa: BLE001
-            out.append({"plan_id": f"real-{i}", "estado": f"error:{type(e).__name__}", "plan_data": None, "s": round(time.time() - t0, 1)})
+            out.append({"plan_id": f"real-{i}", "estado": f"error:{type(e).__name__}", "plan_data": None,
+                        "s": round(time.time() - t0, 1), "detalle": str(e)[:200]})
+        g = out[-1]
+        print(f"  {g['plan_id']} · {g.get('perfil', '')} · {g['estado']} · {g.get('s', 0)} s · {g.get('dias', 0)} d / "
+              f"{g.get('comidas', 0)} comidas · ${float(g.get('coste_usd_est') or 0):.4f}", flush=True)
     return out
 
 
+def _abrir_pool_sync() -> None:
+    try:
+        from db_core import connection_pool           # fuera de FastAPI el pool nace cerrado (runbook SQL forense)
+        if connection_pool:
+            connection_pool.open()
+    except Exception:
+        pass
+
+
+def generar_real(perfiles: list, presupuesto_usd: float, *, telemetria_prod: bool = False, etiquetas: list | None = None) -> list:
+    """Genera planes con el LLM como lo haría `/analyze`, uno por perfil, y para en cuanto el coste alcanza el presupuesto. Sin
+    `telemetria_prod` las escrituras del pipeline se suprimen y cuentan (`_ESCRITURAS`) y el coste se suma en proceso. Devuelve
+    `[{"plan_id", "plan_data", "estado", "s", "coste_usd_est", "perfil", "corr", "dias", "comidas", "llamadas_llm", ...}]`."""
+    import asyncio
+    if not telemetria_prod:
+        bloquear_escrituras()                            # ANTES del orquestador: los módulos enlazan el nombre al importar
+    _abrir_pool_sync()
+    from graph_orchestrator import arun_plan_pipeline
+    from correlation import reset_correlation_id, set_correlation_id
+    _log, coste = contar_coste(telemetria_prod=telemetria_prod)
+    etiquetas = list(etiquetas or [])
+
+    async def _uno(i, fd):
+        antes, antes_n, corr = coste["micros"], coste["llamadas"], f"bench-real-{i}"
+        tok = set_correlation_id(corr)
+        t0 = time.time()
+        try:
+            plan = await arun_plan_pipeline(form_para_pipeline(fd))
+        finally:
+            reset_correlation_id(tok)
+        plan = plan if isinstance(plan, dict) else {}
+        dias = [d for d in (plan.get("days") or []) if isinstance(d, dict)]
+        return {"plan_data": plan, "perfil": etiquetas[i] if i < len(etiquetas) else f"perfil-{i}", "corr": corr,
+                "coste_usd_est": round((coste["micros"] - antes) / 1e6, 5),
+                "coste_usd_db": (_coste_estimado(t0) if telemetria_prod else None),
+                "dias": len(dias), "comidas": sum(len(d.get("meals") or []) for d in dias),
+                "llamadas_llm": coste["llamadas"] - antes_n, "review_passed": plan.get("review_passed")}
+
+    async def _todo():
+        pool = None
+        try:
+            from db_core import async_connection_pool as pool
+            if pool:
+                await pool.open()                        # en ESTE loop: un pool async abierto en otro loop no sirve
+        except Exception:
+            pass
+        try:
+            return await _ciclo(perfiles, presupuesto_usd, _uno)
+        finally:
+            try:
+                if pool:
+                    await pool.close()
+            except Exception:
+                pass
+
+    if sys.platform == "win32":                          # psycopg async no corre sobre el Proactor de Windows
+        try:
+            asyncio.set_event_loop_policy(asyncio.WindowsSelectorEventLoopPolicy())
+        except Exception:
+            pass
+    return asyncio.run(_todo())
+
+
 def _coste_estimado(desde_ts: float) -> float:
+    """Con `--telemetria-prod`: lo que `llm_usage_events` registró desde `desde_ts` (contraste del contador en proceso)."""
     try:
         from db import execute_sql_query
         row = execute_sql_query("SELECT COALESCE(SUM(cost_usd_micros), 0) AS micros FROM llm_usage_events WHERE created_at >= to_timestamp(%s)",
@@ -277,6 +450,7 @@ def main(argv=None) -> int:
     ap = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     ap.add_argument("--catalogo", help="snapshot del catálogo con nutrición (por defecto el más reciente en scripts/data)")
     ap.add_argument("--corpus", help="corpus culinario fijo (por defecto el más reciente)")
+    ap.add_argument("--planes-de", help="[P1-PLAN-LOTE-30] re-mide (sin LLM) los `planes_generados` de un artefacto real: pareado real, dos versiones")
     ap.add_argument("--superficies", default=",".join(SUPERFICIES))
     ap.add_argument("--out", help="artefacto JSON (por defecto scripts/data/bench_superficies_<fecha>.json)")
     ap.add_argument("--sin-guardar", action="store_true")
@@ -286,6 +460,7 @@ def main(argv=None) -> int:
     ap.add_argument("--real", action="store_true", help="genera planes con el LLM (exige --perfil y --presupuesto-usd)")
     ap.add_argument("--perfil", action="append", help="JSON de form_data para --real (repetible)")
     ap.add_argument("--presupuesto-usd", type=float, help="tope de gasto estimado para --real")
+    ap.add_argument("--telemetria-prod", action="store_true", help="--real: dejar que la telemetría del pipeline se escriba en la base (por defecto se suprime y se cuenta)")
     a = ap.parse_args(argv)
 
     if a.exportar_catalogo:
@@ -310,11 +485,26 @@ def main(argv=None) -> int:
             print("--real exige --perfil <json> (repetible) y --presupuesto-usd > 0: sin presupuesto no se gasta")
             return 2
         perfiles = [json.loads(Path(x).read_text(encoding="utf-8")) for x in a.perfil]
-        generados = generar_real(perfiles, float(a.presupuesto_usd))
+        etiquetas = [Path(x).stem for x in a.perfil]
+        print(f"modo real · {len(perfiles)} perfil(es) · presupuesto ${a.presupuesto_usd:.2f} · telemetría a producción: "
+              f"{'sí' if a.telemetria_prod else 'NO (suprimida y contada)'}", flush=True)
+        generados = generar_real(perfiles, float(a.presupuesto_usd), telemetria_prod=a.telemetria_prod, etiquetas=etiquetas)
         planes = [g for g in generados if g.get("plan_data")]
         art = correr(planes, filas, superficies, modo="real")
         art["generaciones"] = [{k: v for k, v in g.items() if k != "plan_data"} for g in generados]
+        art["planes_generados"] = [{"plan_id": g["plan_id"], "perfil": g.get("perfil"), "plan_data": g["plan_data"]} for g in planes]
         art["presupuesto_usd"] = a.presupuesto_usd
+        art["coste_usd_est"] = round(sum(float(g.get("coste_usd_est") or 0) for g in generados), 5)
+        art["telemetria_prod"] = bool(a.telemetria_prod)
+        art["escrituras_suprimidas"] = dict(sorted(_ESCRITURAS.items()))
+    elif a.planes_de:
+        fuente = json.loads(Path(a.planes_de).read_text(encoding="utf-8"))
+        planes = [{"plan_id": p.get("plan_id"), "plan_data": p.get("plan_data")} for p in (fuente.get("planes_generados") or []) if p.get("plan_data")]
+        if not planes:
+            print("el artefacto no trae `planes_generados`: nada que re-medir")
+            return 2
+        art = correr(planes, filas, superficies, modo="real-replay")
+        art["planes_de"], art["generaciones"] = os.path.basename(a.planes_de), fuente.get("generaciones")
     else:
         c = a.corpus or _ultimo("culinary_corpus_*.json")
         if not c:
@@ -327,7 +517,8 @@ def main(argv=None) -> int:
     art["modo_catalogo"], art["catalogo"] = modo_cat, (os.path.basename(ruta_cat) if ruta_cat else None)
     print(render(art))
     if not a.sin_guardar:
-        p = Path(a.out) if a.out else _BACKEND / "scripts" / "data" / f"bench_superficies_{date.today():%Y_%m_%d}.json"
+        sufijo = "real_" if a.real else ("replay_" if a.planes_de else "")
+        p = Path(a.out) if a.out else _BACKEND / "scripts" / "data" / f"bench_superficies_{sufijo}{date.today():%Y_%m_%d}.json"
         p.write_text(json.dumps(art, ensure_ascii=False, indent=1, default=str) + "\n", encoding="utf-8")
         print("artefacto:", p)
     return 0

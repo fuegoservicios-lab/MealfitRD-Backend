@@ -1,0 +1,5218 @@
+{
+ "schema_version": 1,
+ "modo": "real",
+ "fecha": "2026-09-13",
+ "git_sha": "55cceb7b",
+ "reglas_huella": "411df02c49daba7d",
+ "n_planes": 3,
+ "superficies": {
+  "insert": {
+   "planes": [
+    {
+     "plan_id": "real-0",
+     "estado": "medido",
+     "n_nuevos": 0,
+     "resueltos": 0,
+     "etapas": {
+      "entrada": {
+       "V3": 1,
+       "V7a": 2,
+       "V1": 1,
+       "V7e": 5
+      },
+      "salida": {
+       "V3": 1,
+       "V7a": 2,
+       "V1": 1,
+       "V7e": 5
+      }
+     },
+     "nuevos": [],
+     "contrato_estampado": 3,
+     "ms": 15717
+    },
+    {
+     "plan_id": "real-1",
+     "estado": "medido",
+     "n_nuevos": 0,
+     "resueltos": 0,
+     "etapas": {
+      "entrada": {
+       "V7e": 5,
+       "V7a": 2
+      },
+      "salida": {
+       "V7e": 5,
+       "V7a": 2
+      }
+     },
+     "nuevos": [],
+     "contrato_estampado": 2,
+     "ms": 13563
+    },
+    {
+     "plan_id": "real-2",
+     "estado": "medido",
+     "n_nuevos": 1,
+     "resueltos": 0,
+     "etapas": {
+      "entrada": {},
+      "salida": {
+       "V5": 1
+      }
+     },
+     "nuevos": [
+      {
+       "etapa": "salida",
+       "check": "V5",
+       "day": 1,
+       "meal_index": 0,
+       "food": "granola"
+      }
+     ],
+     "contrato_estampado": 0,
+     "ms": 15343
+    }
+   ],
+   "n_nuevos": 1,
+   "resueltos": 0,
+   "contrato_estampado": 5,
+   "ms": 44623
+  },
+  "quality": {
+   "planes": [
+    {
+     "plan_id": "real-0",
+     "estado": "medido",
+     "n_nuevos": 0,
+     "resueltos": 0,
+     "etapas": {
+      "entrada": {
+       "V3": 1,
+       "V7a": 2,
+       "V1": 1,
+       "V7e": 5
+      },
+      "salida": {
+       "V3": 1,
+       "V7a": 2,
+       "V1": 1,
+       "V7e": 5
+      }
+     },
+     "nuevos": [],
+     "contrato_estampado": 3,
+     "ms": 15797
+    },
+    {
+     "plan_id": "real-1",
+     "estado": "medido",
+     "n_nuevos": 0,
+     "resueltos": 0,
+     "etapas": {
+      "entrada": {
+       "V7e": 5,
+       "V7a": 2
+      },
+      "salida": {
+       "V7e": 5,
+       "V7a": 2
+      }
+     },
+     "nuevos": [],
+     "contrato_estampado": 2,
+     "ms": 14186
+    },
+    {
+     "plan_id": "real-2",
+     "estado": "medido",
+     "n_nuevos": 1,
+     "resueltos": 0,
+     "etapas": {
+      "entrada": {},
+      "salida": {
+       "V5": 1
+      }
+     },
+     "nuevos": [
+      {
+       "etapa": "salida",
+       "check": "V5",
+       "day": 1,
+       "meal_index": 0,
+       "food": "granola"
+      }
+     ],
+     "contrato_estampado": 0,
+     "ms": 16375
+    }
+   ],
+   "n_nuevos": 1,
+   "resueltos": 0,
+   "contrato_estampado": 5,
+   "ms": 46358
+  },
+  "chunk_t2": {
+   "planes": [
+    {
+     "plan_id": "real-0",
+     "estado": "medido",
+     "n_nuevos": 0,
+     "resueltos": 0,
+     "etapas": {
+      "entrada": {
+       "V3": 1,
+       "V7a": 2,
+       "V1": 1,
+       "V7e": 5
+      },
+      "salida": {
+       "V3": 1,
+       "V7a": 2,
+       "V1": 1,
+       "V7e": 5
+      }
+     },
+     "nuevos": [],
+     "contrato_estampado": 3,
+     "ms": 15125
+    },
+    {
+     "plan_id": "real-1",
+     "estado": "medido",
+     "n_nuevos": 0,
+     "resueltos": 0,
+     "etapas": {
+      "entrada": {
+       "V7e": 5,
+       "V7a": 2
+      },
+      "salida": {
+       "V7e": 5,
+       "V7a": 2
+      }
+     },
+     "nuevos": [],
+     "contrato_estampado": 2,
+     "ms": 15250
+    },
+    {
+     "plan_id": "real-2",
+     "estado": "medido",
+     "n_nuevos": 0,
+     "resueltos": 0,
+     "etapas": {
+      "entrada": {},
+      "salida": {}
+     },
+     "nuevos": [],
+     "contrato_estampado": 0,
+     "ms": 15156
+    }
+   ],
+   "n_nuevos": 0,
+   "resueltos": 0,
+   "contrato_estampado": 5,
+   "ms": 45531
+  },
+  "swap": {
+   "planes": [
+    {
+     "plan_id": "real-0",
+     "estado": "medido",
+     "n_nuevos": 0,
+     "resueltos": 0,
+     "etapas": {
+      "entrada": {
+       "V3": 1,
+       "V7a": 2,
+       "V1": 1,
+       "V7e": 5
+      },
+      "salida": {
+       "V3": 1,
+       "V7a": 2,
+       "V1": 1,
+       "V7e": 5
+      }
+     },
+     "nuevos": [],
+     "contrato_estampado": 3,
+     "ms": 6922
+    },
+    {
+     "plan_id": "real-1",
+     "estado": "medido",
+     "n_nuevos": 0,
+     "resueltos": 0,
+     "etapas": {
+      "entrada": {
+       "V7e": 5,
+       "V7a": 2
+      },
+      "salida": {
+       "V7e": 5,
+       "V7a": 2
+      }
+     },
+     "nuevos": [],
+     "contrato_estampado": 2,
+     "ms": 6437
+    },
+    {
+     "plan_id": "real-2",
+     "estado": "medido",
+     "n_nuevos": 0,
+     "resueltos": 0,
+     "etapas": {
+      "entrada": {},
+      "salida": {}
+     },
+     "nuevos": [],
+     "contrato_estampado": 0,
+     "ms": 8375
+    }
+   ],
+   "n_nuevos": 0,
+   "resueltos": 0,
+   "contrato_estampado": 5,
+   "ms": 21734
+  },
+  "modify": {
+   "planes": [
+    {
+     "plan_id": "real-0",
+     "estado": "medido",
+     "n_nuevos": 0,
+     "resueltos": 0,
+     "etapas": {
+      "entrada": {
+       "V3": 1,
+       "V7a": 2,
+       "V1": 1,
+       "V7e": 5
+      },
+      "salida": {
+       "V3": 1,
+       "V7a": 2,
+       "V1": 1,
+       "V7e": 5
+      }
+     },
+     "nuevos": [],
+     "contrato_estampado": 3,
+     "ms": 6358
+    },
+    {
+     "plan_id": "real-1",
+     "estado": "medido",
+     "n_nuevos": 0,
+     "resueltos": 0,
+     "etapas": {
+      "entrada": {
+       "V7e": 5,
+       "V7a": 2
+      },
+      "salida": {
+       "V7e": 5,
+       "V7a": 2
+      }
+     },
+     "nuevos": [],
+     "contrato_estampado": 2,
+     "ms": 6983
+    },
+    {
+     "plan_id": "real-2",
+     "estado": "medido",
+     "n_nuevos": 0,
+     "resueltos": 0,
+     "etapas": {
+      "entrada": {},
+      "salida": {}
+     },
+     "nuevos": [],
+     "contrato_estampado": 0,
+     "ms": 6641
+    }
+   ],
+   "n_nuevos": 0,
+   "resueltos": 0,
+   "contrato_estampado": 5,
+   "ms": 19982
+  },
+  "closers": {
+   "planes": [
+    {
+     "plan_id": "real-0",
+     "estado": "medido",
+     "n_nuevos": 0,
+     "resueltos": 0,
+     "etapas": {
+      "entrada": {
+       "V3": 1,
+       "V7a": 2,
+       "V1": 1,
+       "V7e": 5
+      },
+      "salida": {
+       "V3": 1,
+       "V7a": 2,
+       "V1": 1,
+       "V7e": 5
+      }
+     },
+     "nuevos": [],
+     "contrato_estampado": 4,
+     "ms": 4219
+    },
+    {
+     "plan_id": "real-1",
+     "estado": "medido",
+     "n_nuevos": 0,
+     "resueltos": 0,
+     "etapas": {
+      "entrada": {
+       "V7e": 5,
+       "V7a": 2
+      },
+      "salida": {
+       "V7e": 5,
+       "V7a": 2
+      }
+     },
+     "nuevos": [],
+     "contrato_estampado": 4,
+     "ms": 5046
+    },
+    {
+     "plan_id": "real-2",
+     "estado": "medido",
+     "n_nuevos": 0,
+     "resueltos": 0,
+     "etapas": {
+      "entrada": {},
+      "salida": {}
+     },
+     "nuevos": [],
+     "contrato_estampado": 0,
+     "ms": 5281
+    }
+   ],
+   "n_nuevos": 0,
+   "resueltos": 0,
+   "contrato_estampado": 8,
+   "ms": 14546
+  },
+  "degradado": {
+   "planes": [
+    {
+     "plan_id": "real-0",
+     "estado": "medido",
+     "n_nuevos": 0,
+     "resueltos": 1,
+     "etapas": {
+      "entrada": {
+       "V3": 1,
+       "V7a": 2,
+       "V1": 1,
+       "V7e": 5
+      },
+      "salida": {
+       "V3": 1,
+       "V7a": 2,
+       "V7e": 5
+      }
+     },
+     "nuevos": [],
+     "contrato_estampado": 4,
+     "ms": 8233
+    },
+    {
+     "plan_id": "real-1",
+     "estado": "medido",
+     "n_nuevos": 0,
+     "resueltos": 0,
+     "etapas": {
+      "entrada": {
+       "V7e": 5,
+       "V7a": 2
+      },
+      "salida": {
+       "V7e": 5,
+       "V7a": 2
+      }
+     },
+     "nuevos": [],
+     "contrato_estampado": 4,
+     "ms": 6234
+    },
+    {
+     "plan_id": "real-2",
+     "estado": "medido",
+     "n_nuevos": 0,
+     "resueltos": 0,
+     "etapas": {
+      "entrada": {},
+      "salida": {}
+     },
+     "nuevos": [],
+     "contrato_estampado": 0,
+     "ms": 7000
+    }
+   ],
+   "n_nuevos": 0,
+   "resueltos": 1,
+   "contrato_estampado": 8,
+   "ms": 21467
+  },
+  "expand": {
+   "planes": [
+    {
+     "plan_id": "real-0",
+     "estado": "sin_cadena_determinista",
+     "n_nuevos": 0,
+     "resueltos": 0,
+     "etapas": {},
+     "nuevos": [],
+     "contrato_estampado": 4,
+     "ms": 0
+    },
+    {
+     "plan_id": "real-1",
+     "estado": "sin_cadena_determinista",
+     "n_nuevos": 0,
+     "resueltos": 0,
+     "etapas": {},
+     "nuevos": [],
+     "contrato_estampado": 4,
+     "ms": 0
+    },
+    {
+     "plan_id": "real-2",
+     "estado": "sin_cadena_determinista",
+     "n_nuevos": 0,
+     "resueltos": 0,
+     "etapas": {},
+     "nuevos": [],
+     "contrato_estampado": 0,
+     "ms": 0
+    }
+   ],
+   "n_nuevos": 0,
+   "resueltos": 0,
+   "contrato_estampado": 8,
+   "ms": 0
+  }
+ },
+ "generaciones": [
+  {
+   "plan_id": "real-0",
+   "estado": "generado",
+   "s": 650.1,
+   "perfil": "perfil_baseline_m",
+   "corr": "bench-real-0",
+   "coste_usd_est": 0.01527,
+   "coste_usd_db": null,
+   "dias": 3,
+   "comidas": 12,
+   "llamadas_llm": 8,
+   "review_passed": null
+  },
+  {
+   "plan_id": "real-1",
+   "estado": "generado",
+   "s": 475.0,
+   "perfil": "perfil_dm2_metformina",
+   "corr": "bench-real-1",
+   "coste_usd_est": 0.00773,
+   "coste_usd_db": null,
+   "dias": 3,
+   "comidas": 9,
+   "llamadas_llm": 7,
+   "review_passed": null
+  },
+  {
+   "plan_id": "real-2",
+   "estado": "generado",
+   "s": 411.4,
+   "perfil": "perfil_vegetariana",
+   "corr": "bench-real-2",
+   "coste_usd_est": 0.03061,
+   "coste_usd_db": null,
+   "dias": 3,
+   "comidas": 12,
+   "llamadas_llm": 9,
+   "review_passed": null
+  }
+ ],
+ "planes_generados": [
+  {
+   "plan_id": "real-0",
+   "perfil": "perfil_baseline_m",
+   "plan_data": {
+    "main_goal": "Pérdida de Grasa (Déficit 20%)",
+    "insights": [
+     "Diagnóstico: El rechazo previo obedeció a proteína repetida el mismo día, déficit proteico y sobrecarga de sodio; este plan asigna UNA proteína principal exclusiva por día y completa el resto con fuentes livianas distintas (huevo cocido, yogurt, queso fresco) sin duplicar en el mismo día.",
+     "Estrategia: Distribuir ~50g de proteína por comida principal (gouda/soya/gandules + acompañante) y ~40-50g en desayuno/merienda con huevo duro, queso fresco o yogurt griego, usando técnicas distintas (relleno, parrilla, wok) para evitar repeticiones de técnica y mantener sodio <2000mg con ajo, orégano y limón.",
+     "Tip del Chef: Haz meal prep dominical: hierve los huevos de los 3 días, cocina el lote de pasta integral y marina la soya texturizada la noche anterior; con el calor caribeño, sirve las frutas (granada, lechosa, mango, ciruela) bien frías en bowls y meriendas."
+    ],
+    "days": [
+     {
+      "day": 1,
+      "day_name": "Viernes",
+      "meals": [
+       {
+        "meal": "Desayuno",
+        "time": "7:30 AM",
+        "name": "Tortilla Criolla de Champiñones con Batido de Lechosa",
+        "desc": "Tortilla gruesa y dorada de yogur griego con champiñones salteados y cebolla, acompañada de un batido fresco de lechosa con leche — desayuno dominicano sustancioso para un domingo de mucho calor.",
+        "prep_time": "20 min",
+        "difficulty": "Fácil",
+        "cals": 208,
+        "protein": 6,
+        "carbs": 28,
+        "fats": 8,
+        "macros": [
+         "P:6g",
+         "C:28g",
+         "G:8g"
+        ],
+        "ingredients": [
+         "5 g de Yogurt natural sin azúcar",
+         "1 taza de champiñones rebanados",
+         "½ cebolla picada",
+         "1 cdta de aceite de oliva",
+         "Sal al gusto",
+         "Pimienta negra al gusto",
+         "1 taza de lechosa madura en cubos",
+         "¼ taza de leche"
+        ],
+        "recipe": [
+         "Mise en place: Lava y rebana los champiñones, pica la cebolla finamente, separa 4 yogur griego y bátelas ligeramente con los 3 yogur griego entero, la sal y la pimienta. Corta la lechosa en cubos y refrigérala para el batido.",
+         "El Toque de Fuego: Calienta la cucharada de aceite de oliva en sartén antiadherente y saltea los champiñones con la cebolla 1-2 min de licuado a velocidad altautos hasta que suelten su agua y doren. Vierte la mezcla de yogur griego, baja el fuego a medio-bajo y cocina 4-5 minutos por lado, deslizando los bordes con espátula, hasta que el centro cuaje y al pinchar no escurra líquido.",
+         "Montaje: Licúa la lechosa con las 0.25 taza de leche hasta quedar cremosa. Sirve la tortilla doblada en plato hondo junto al batido bien frío, ideal para el calor caribeño.",
+         "⚠️ Seguridad alimentaria: se reemplazó el huevo crudo del batido por yogur griego (aporte proteico similar, sin riesgo de Salmonella). Si prefieres huevo, úsalo PASTEURIZADO."
+        ],
+        "_recipe_timetemp_clamped": true,
+        "_solver_clamp_saturated": 1,
+        "_solver_clamp_saturated_hi": 0,
+        "_solver_clamp_saturated_lo": 1,
+        "_food_safety_fixed": "blended_substituted",
+        "_dish_quality_degraded": true,
+        "_dish_quality_reason": "portion_estimate",
+        "_portion_realism_capped": true,
+        "_budget_substitutions": [
+         "Yogurt griego → Yogurt natural"
+        ],
+        "ingredients_raw": [
+         "5 g de Yogurt natural sin azúcar",
+         "1 taza de champiñones rebanados",
+         "0.5 cebolla picada",
+         "Sal al gusto",
+         "Pimienta negra al gusto",
+         "1 taza de lechosa madura en cubos",
+         "0.25 taza de leche",
+         "1 cdta de aceite de oliva"
+        ],
+        "_closer_raw_by_food": 1,
+        "_refine_raw_by_food": 1
+       },
+       {
+        "meal": "Almuerzo",
+        "time": "12:30 PM",
+        "name": "Sándwich Integral Relleno de Gouda, Tomate y Pepino",
+        "desc": "Sándwich de pan integral relleno de queso gouda derretido con tomate, rúcula y pepino fresco — el plato relleno dominical, ligero y fresco para el calor de septiembre.",
+        "prep_time": "15 min",
+        "difficulty": "Fácil",
+        "cals": 546,
+        "protein": 27,
+        "carbs": 60,
+        "fats": 22,
+        "macros": [
+         "P:27g",
+         "C:60g",
+         "G:22g"
+        ],
+        "ingredients": [
+         "2 rebanadas de pan integral familiar",
+         "75 g de queso",
+         "3 tomates en rebanadas",
+         "1 pepino en láminas finas",
+         "2 tazas de rúcula",
+         "1 cdta de mostaza",
+         "Pimienta negra al gusto",
+         "1½ tazas de lechuga romana troceada",
+         "¾ cdta de vinagre blanco"
+        ],
+        "recipe": [
+         "Mise en place: Rebana el tomate y el pepino en láminas finas, lava y escurre la rúcula y la lechuga romana, y corta el queso gouda en lonjas si no vienen listas. Trocea la lechuga y mézclala con el vinagre blanco y pimienta para la ensalada de acompañamiento (el gouda ya aporta la sal).",
+         "El Toque de Fuego: Calienta una sartén a fuego medio-bajo 2 minutos y tuesta las rebanadas de pan integral 1-2 minutos por lado. Coloca el gouda sobre una rebanada caliente y tápala 1-2 minutos más a fuego mínimo para que el queso se ablande y derrita apenas.",
+         "Montaje: Unta la mostaza en la otra rebanada, monta el gouda derretido con el tomate, el pepino y la rúcula, cierra el sándwich y córtalo a la mitad. Sirve con la ensalada de lechuga romana al lado."
+        ],
+        "_solver_clamp_saturated": 5,
+        "_solver_clamp_saturated_hi": 5,
+        "_solver_clamp_saturated_lo": 0,
+        "_solver_not_converged": true,
+        "_solver_failed_macros": [
+         "protein",
+         "carbs",
+         "fats"
+        ],
+        "_protein_closed": true,
+        "_portion_realism_capped": true,
+        "ingredients_raw": [
+         "2 rebanadas de pan integral familiar",
+         "3 tomates en rebanadas",
+         "1 pepino en láminas finas",
+         "2 tazas de rúcula",
+         "1 cdta de mostaza",
+         "Pimienta negra al gusto",
+         "1.5 tazas de lechuga romana troceada",
+         "¾ cdta de vinagre blanco",
+         "75 g de queso"
+        ],
+        "_closer_raw_by_food": 4,
+        "_refine_raw_by_food": 1
+       },
+       {
+        "meal": "Merienda",
+        "time": "4:00 PM",
+        "name": "Parfait de Yogurt natural con Guineo y Nueces",
+        "desc": "Capas de yogur griego cremoso con arilos de granada jugosos y nueces tostadas — merienda fresca, proteica y hidratante, sin encender la estufa en pleno calor.",
+        "prep_time": "5 min",
+        "difficulty": "Fácil",
+        "cals": 316,
+        "protein": 8,
+        "carbs": 26,
+        "fats": 20,
+        "macros": [
+         "P:8g",
+         "C:26g",
+         "G:20g"
+        ],
+        "ingredients": [
+         "5 g de Yogurt natural sin azúcar",
+         "½ taza de arilos de Guineo",
+         "1 cdta de semillas de Linaza",
+         "Canela en polvo al gusto",
+         "20 g de semillas de girasol",
+         "15g de nueces"
+        ],
+        "recipe": [
+         "Mise en place: Desgrana guineo y separa 0.5 taza de arilos, trocea las nueces y mide el yogur griego y las semillas de linaza.",
+         "🌱 Nota del Nutricionista AI: espolvorea semillas de girasol sobre el plato al servir — cierra tu vitamina E del día.",
+         "Montaje: En un vaso alto, alterna capas de yogur griego, arilos de guineo y nueces troceadas. Espolvorea las semillas de linaza y un toque de canela en polvo por encima y sirve bien frío. Termina con Yogurt natural sin azúcar."
+        ],
+        "_solver_frozen_lines": 1,
+        "_micro_seeds_applied": [
+         "vit_e_mg"
+        ],
+        "_micro_seed_applied": "vit_e_mg",
+        "_portion_realism_capped": true,
+        "_portion_floor_adjusted": true,
+        "_budget_substitutions": [
+         "granada → Guineo",
+         "yogurt griego → Yogurt natural",
+         "chía → Linaza"
+        ],
+        "ingredients_raw": [
+         "5 g de Yogurt natural sin azúcar",
+         "0.5 taza de arilos de Guineo",
+         "1 cdta de semillas de Linaza",
+         "Canela en polvo al gusto",
+         "20 g de semillas de girasol",
+         "15g de nueces"
+        ]
+       },
+       {
+        "meal": "Cena",
+        "time": "7:30 PM",
+        "name": "Gratín de Pasta Integral con Champiñones y Garbanzos",
+        "desc": "Pasta integral al horno con champiñones salteados, garbanzos cremosos en salsa de tomate casera y una capa dorada de gouda gratinado — cena reconfortante pero ligera, cocinada con calma un domingo.",
+        "prep_time": "35 min",
+        "difficulty": "Intermedio",
+        "cals": 930,
+        "protein": 44,
+        "carbs": 121,
+        "fats": 30,
+        "macros": [
+         "P:44g",
+         "C:121g",
+         "G:30g"
+        ],
+        "ingredients": [
+         "75 g de pasta integral (coditos o espirales)",
+         "½ taza de garbanzos cocidos",
+         "2 1/2 tazas de champiñones rebanados",
+         "75 g de queso",
+         "¼ taza de salsa de tomate",
+         "½ cebolla picada",
+         "1 cdta de aceite de oliva",
+         "¼ cdta de orégano dominicano",
+         "Sal al gusto",
+         "Pimienta negra al gusto",
+         "½ diente de ajo picados"
+        ],
+        "recipe": [
+         "Mise en place: Limpia y rebana los champiñones, pica la cebolla y el ajo, y mide la salsa de tomate, los garbanzos y el gouda rallado. Precalienta el horno a 180°C.",
+         "El Toque de Fuego: Hierve la pasta integral en agua con la pizca de sal a fuego medio-alto 8-10 minutos hasta quedar al dente y escúrrela. En la misma sartén, calienta el aceite de oliva a fuego medio y saltea la cebolla, el ajo y los champiñones 5-6 minutos; añade la salsa de tomate, el orégano, los garbanzos y pimienta, y cocina 3-4 minutos más.",
+         "Montaje: Mezcla la pasta con la salsa de champiñones y garbanzos, colócala en un refractario pequeño, cubre con el gouda rallado y hornea a 180°C por 12-15 minutos, hasta que el queso burbujee y dore. Deja reposar 3 minutos antes de servir."
+        ],
+        "_solver_clamp_saturated": 7,
+        "_solver_clamp_saturated_hi": 1,
+        "_solver_clamp_saturated_lo": 6,
+        "_solver_not_converged": true,
+        "_solver_failed_macros": [
+         "protein",
+         "carbs",
+         "fats"
+        ],
+        "_protein_closed": true,
+        "_portion_floor_adjusted": true,
+        "_portion_realism_capped": true,
+        "ingredients_raw": [
+         "75 g de pasta integral (coditos o espirales)",
+         "0.5 taza de garbanzos cocidos",
+         "2½ 1/2 tazas de champiñones rebanados",
+         "¼ taza de salsa de tomate",
+         "0.5 cebolla picada",
+         "0.5 diente de ajo picados",
+         "1 cdta de aceite de oliva",
+         "0.26 cdta de orégano dominicano",
+         "Sal al gusto",
+         "Pimienta negra al gusto",
+         "75 g de queso"
+        ],
+        "_closer_raw_by_food": 4,
+        "_refine_raw_by_food": 1
+       }
+      ],
+      "supplements": null,
+      "date": "2026-09-11",
+      "_sodium_unknown_lines": 6
+     },
+     {
+      "day": 2,
+      "day_name": "Sábado",
+      "meals": [
+       {
+        "meal": "Desayuno",
+        "time": "Flexible",
+        "name": "Avena Cremosa Domingueña con Huevo Hervido, Aguacate y Queso Cottage",
+        "desc": "Desayuno de Avena/Cereales: avena cocida lenta con leche, endulzada suave con canela, acompañada de huevos hervidos y gajos de lechosa fresca. Proteína y fibra para empezar el domingo con energía sostenible.",
+        "prep_time": "15 min",
+        "difficulty": "Fácil",
+        "cals": 479,
+        "protein": 33,
+        "carbs": 19,
+        "fats": 30,
+        "macros": [
+         "P:33g",
+         "C:19g",
+         "G:30g"
+        ],
+        "ingredients": [
+         "15 g de avena",
+         "¼ taza de leche",
+         "3 huevos",
+         "¼ taza de aguacate en cubos",
+         "¼ cdta de canela en polvo",
+         "¼ cdta de vainilla",
+         "Sal al gusto",
+         "30 g de queso",
+         "1 clara de huevo"
+        ],
+        "recipe": [
+         "Mise en place: mide 15 g de avena y ¼ taza de leche; pela aguacate, retira las semillas y corta 1 taza en cubos; pon 3 huevos y 1 clara de huevo en una olla pequeña con agua que los cubra.",
+         "El Toque de Fuego: hierve los huevos a fuego medio 10 minutos, retíralos y pásalos por agua fría para pelarlos. En otra olla, lleva la leche con la avena a fuego medio-bajo 6-8 minutos, revolviendo hasta que espese; agrega la canela, la vainilla y una pizca de sal. Sirve queso al lado para acompañar.",
+         "Montaje: sirve la avena cremosa caliente en un bol, coloca los huevos hervidos pelados al lado y corona con los cubos de aguacate fresca — un desayuno dominicano completo y fresco para el calor caribeño. Acompaña con queso cottage."
+        ],
+        "_slot_autofix_applied": "fruit_savory",
+        "_solver_clamp_saturated": 4,
+        "_solver_clamp_saturated_hi": 0,
+        "_solver_clamp_saturated_lo": 4,
+        "_solver_not_converged": true,
+        "_solver_failed_macros": [
+         "protein",
+         "fats"
+        ],
+        "_solver_infeasible": {
+         "fats": "low"
+        },
+        "_solver_residuals": {
+         "kcal": 1.097,
+         "protein": 0.677,
+         "carbs": 0.983,
+         "fats": 1.714
+        },
+        "_protein_closed": true,
+        "_final_protein_close": true,
+        "_portion_floor_adjusted": true,
+        "_egg_day_capped": true,
+        "ingredients_raw": [
+         "15 g de avena",
+         "0.25 taza de leche",
+         "3 huevos",
+         "0.25 taza de aguacate en cubos",
+         "¼ cdta de canela en polvo",
+         "¼ cdta de vainilla",
+         "Sal al gusto",
+         "1 clara de huevo",
+         "30 g de queso"
+        ]
+       },
+       {
+        "meal": "Almuerzo",
+        "time": "Flexible",
+        "name": "Soya Texturizada Marinada a la Parrilla con Pasta Integral al Puerro",
+        "desc": "El plato fuerte del Día de Parrilla dominical: chuletitas de soya texturizada marinadas en limón, ajo y orégano, doradas en la parrilla, con pasta integral salteada con puerro y ensalada fresca de tomate. Tradición de domingo, ligera en grasa y alta en proteína.",
+        "prep_time": "30 min",
+        "difficulty": "Fácil",
+        "cals": 849,
+        "protein": 87,
+        "carbs": 91,
+        "fats": 17,
+        "macros": [
+         "P:87g",
+         "C:91g",
+         "G:17g"
+        ],
+        "ingredients": [
+         "155 g de soya texturizada (seca)",
+         "30 g de pasta integral (seca)",
+         "½ tallo de puerro",
+         "½ diente de ajo",
+         "½ limón (jugo)",
+         "¾ cda de orégano dominicano",
+         "¼ cdta de comino",
+         "1 cdta de salsa de soya",
+         "1 cda de aceite de oliva",
+         "½ tomate",
+         "½ taza de lechuga romana",
+         "½ cebolla",
+         "Pimienta negra al gusto",
+         "Sal al gusto"
+        ],
+        "recipe": [
+         "Mise en place: hidrata la soya texturizada en agua caliente 10 minutos, escúrrela y exprímela bien. Exprime el jugo del limón; pica fino los ajos y el puerro (parte blanca y verde separadas); corta el tomate en gajos y la cebolla en plumas; pica la lechuga romana.",
+         "El Toque de Fuego: marina la soya escurrida con el jugo de limón, los ajos, el orégano, el comino, la salsa de soya y pimienta negra por 10 minutos. Calienta la parrilla a fuego medio-alto, unta con el aceite de oliva y asa los filetes de soya 4-5 minutos por lado hasta que doren con marcas de parrilla. Mientras, hierve la pasta integral en agua con sal 9-10 minutos al dente; en una sartén saltea el puerro con 2 cdas del agua de la pasta 3 minutos y mezcla la pasta escurrida con el puerro.",
+         "Montaje: sirve la soya a la parrilla sobre la cama de pasta integral con puerro, acompaña con la ensalada fresca de tomate, cebolla y lechuga romana aliñada con un toque de limón — plato de domingo con sabor a parrilla y sin exceso de grasa."
+        ],
+        "_solver_clamp_saturated": 7,
+        "_solver_clamp_saturated_hi": 0,
+        "_solver_clamp_saturated_lo": 7,
+        "_portion_floor_adjusted": true,
+        "ingredients_raw": [
+         "155 g de soya texturizada (seca)",
+         "30 g de pasta integral (seca)",
+         "½ tallo de puerro",
+         "½ diente de ajo",
+         "½ limón (jugo)",
+         "¾ cda de orégano dominicano",
+         "¼ cdta de comino",
+         "1 cda de aceite de oliva",
+         "½ tomate",
+         "½ taza de lechuga romana",
+         "½ cebolla",
+         "Pimienta negra al gusto",
+         "Sal al gusto",
+         "1 cdta de salsa de soya"
+        ]
+       },
+       {
+        "meal": "Merienda",
+        "time": "Flexible",
+        "name": "Queso Blanco Fresco con Ciruela, Rábanos y Yogurt Griego Entero",
+        "desc": "Merienda liviana y refrescante para el calor de la tarde: queso blanco fresco (bajo en sodio) con ciruelas jugosas y láminas de rábano crocante, más un puñado de maní. Sin embutidos ni conservas — sodio bajo.",
+        "prep_time": "5 min",
+        "difficulty": "Fácil",
+        "cals": 365,
+        "protein": 24,
+        "carbs": 22,
+        "fats": 21,
+        "macros": [
+         "P:24g",
+         "C:22g",
+         "G:21g"
+        ],
+        "ingredients": [
+         "20 g de queso blanco fresco",
+         "1 ciruela",
+         "2 rábanos",
+         "¾ taza de yogurt griego entero",
+         "15g de maní"
+        ],
+        "recipe": [
+         "Mise en place: corta el queso blanco fresco en cubos, lávalos rábanos y córtalos en rodajas delgadas, y divide las 2 ciruelas por la mitad retirando el hueso. Mide 15 g de maní.",
+         "Montaje: arma una tablita fresca con los cubos de queso, las rodajas de rábano y las ciruelas al lado, y sirve el maní en un platito aparte — merienda ligera, hidratante y con proteína real para la tarde dominical. Termina con yogurt griego entero."
+        ],
+        "_solver_clamp_saturated": 2,
+        "_solver_clamp_saturated_hi": 1,
+        "_solver_clamp_saturated_lo": 1,
+        "_solver_not_converged": true,
+        "_solver_failed_macros": [
+         "protein",
+         "fats"
+        ],
+        "_solver_infeasible": {
+         "fats": "low"
+        },
+        "_solver_residuals": {
+         "kcal": 1.042,
+         "protein": 0.532,
+         "carbs": 1.082,
+         "fats": 1.662
+        },
+        "_protein_closed": true,
+        "_final_protein_close": true,
+        "_portion_floor_adjusted": true,
+        "_recipe_contract_final": {
+         "modo": "repair",
+         "reescritas": 0,
+         "familias": {},
+         "sin_reparar": {
+          "gramatical": 1
+         }
+        },
+        "ingredients_raw": [
+         "20 g de queso blanco fresco",
+         "1 ciruela",
+         "2 rábanos",
+         "15g de maní",
+         "¾ taza de yogurt griego entero"
+        ],
+        "_misalign_trace": {
+         "missing_in_raw": "post_humanize",
+         "qty": "post_humanize"
+        },
+        "_misalign_traced": "post_humanize"
+       },
+       {
+        "meal": "Cena",
+        "time": "Flexible",
+        "name": "Wraps de Garbanzos Guisados con Puerro en Tortilla Integral",
+        "desc": "Cena ligera sin arroz de noche: garbanzos guisados criollos con puerro, ajo y comino, envueltos en tortillas integrales suaves con ensalada fresca. Proteína vegetal, fibra y sabor dominicano en un formato liviano para cerrar el día.",
+        "prep_time": "25 min",
+        "difficulty": "Fácil",
+        "cals": 592,
+        "protein": 52,
+        "carbs": 78,
+        "fats": 12,
+        "macros": [
+         "P:52g",
+         "C:78g",
+         "G:12g"
+        ],
+        "ingredients": [
+         "2 tortillas integrales",
+         "½ tallo de puerro",
+         "½ diente de ajo",
+         "½ ají morrón",
+         "¼ taza de salsa de tomate",
+         "¼ cdta de comino",
+         "1 cdta de orégano dominicano",
+         "½ taza de espinacas",
+         "1 taza de yogurt griego sin azúcar",
+         "½ cda de aceite de oliva",
+         "Pimienta negra al gusto",
+         "Sal al gusto",
+         "½ filete de pescado"
+        ],
+        "recipe": [
+         "Mise en place: remoja los garbanzos (idealmente desde la mañana) y escúrrelos. Pica fino el puerro, los ajos y el ají morrón; deja listas las espinacas lavadas y las 2 tortillas integrales.",
+         "El Toque de Fuego: en una olla con ½ cda de aceite de oliva, sofríe a fuego medio el ajo, el puerro y el ají morrón 3-4 minutos; agrega los garbanzos, la salsa de tomate, el comino, el orégano, pimienta y una pizca de sal, y cuece a fuego medio-bajo tapado 15 minutos hasta que la salsa espese y los garbanzos estén blandos. Calienta las tortillas 30 segundos por lado en un sartén seco. Añade filete de pescado al guiso en los últimos minutos de cocción para que tome el sabor. Incorpóralos con cuidado para no deshacer el resto.",
+         "Montaje: reparte el guiso de garbanzos sobre cada tortilla integral, añade espinacas frescas y una cucharada de yogurt griego sin azúcar, enrolla los wraps firmemente y corta en diagonal; sirve con el resto de guiso al lado — cena reconfortante, ligera y perfecta para una noche cálida. Acompaña con filete de pescado blanco."
+        ],
+        "_solver_clamp_saturated": 9,
+        "_solver_clamp_saturated_hi": 0,
+        "_solver_clamp_saturated_lo": 9,
+        "_solver_not_converged": true,
+        "_solver_failed_macros": [
+         "carbs"
+        ],
+        "_portion_realism_capped": true,
+        "_portion_floor_adjusted": true,
+        "_budget_substitutions": [
+         "camarones → Filete de pescado blanco"
+        ],
+        "ingredients_raw": [
+         "2 tortillas integrales",
+         "½ tallo de puerro",
+         "½ diente de ajo",
+         "½ ají morrón",
+         "¼ taza de salsa de tomate",
+         "¼ cdta de comino",
+         "½ taza de espinacas",
+         "1 taza de yogurt griego sin azúcar",
+         "Pimienta negra al gusto",
+         "Sal al gusto",
+         "1 cdta de orégano dominicano",
+         "½ cda de aceite de oliva",
+         "½ filete de pescado"
+        ],
+        "_misalign_trace": {
+         "missing_in_raw": "post_humanize",
+         "qty": "post_humanize"
+        },
+        "_misalign_traced": "post_humanize"
+       }
+      ],
+      "supplements": null,
+      "date": "2026-09-12",
+      "_sodium_unknown_lines": 5
+     },
+     {
+      "day": 3,
+      "day_name": "Domingo",
+      "meals": [
+       {
+        "meal": "Desayuno",
+        "time": "7:30 AM",
+        "name": "Mangú Dominical con Huevo Duro y Ciruelas",
+        "desc": "El clásico desayuno de domingo dominicano: mangú cremoso y suave acompañado de su huevo duro, con ciruelas frescas de postre para aportar fibra y frescura en el calor caribeño.",
+        "prep_time": "25 min",
+        "difficulty": "Fácil",
+        "cals": 570,
+        "protein": 27,
+        "carbs": 66,
+        "fats": 22,
+        "macros": [
+         "P:27g",
+         "C:66g",
+         "G:22g"
+        ],
+        "ingredients": [
+         "½ plátanos verde",
+         "3 huevos",
+         "¼ taza de leche descremada",
+         "½ cda de aceite de oliva",
+         "½ cebolla",
+         "Sal al gusto",
+         "½ ciruela",
+         "1 clara de huevo"
+        ],
+        "recipe": [
+         "Mise en place: pela los 2 plátanos verdes y córtalos en 4 trozos cada uno; pela y corta 3 huevos y 1 clara de huevo ya reservado; pica la ½ de cebolla en plumas finas; lava las 2 ciruelas y resérvalas enteras para el plato.",
+         "El Toque de Fuego: hierve los plátanos en agua con Sal al gusto a fuego medio-alto durante 20 minutos, hasta que el cuchillo entre sin fuerza; en una sartén pequeña calienta la 0.5 cda de aceite de oliva a fuego medio y sofríe la cebolla 3-4 minutos hasta transparentar; cocina el huevo en agua hirviendo 10 minutos para que quede duro.",
+         "Montaje: escurre los plátanos y májalos caliente incorporando la ¼ taza de leche descremada poco a poco hasta un mangú cremoso; sirve coronado con la cebolla sofrita, el huevo duro partido a la mitad y las 2 ciruelas frescas al lado."
+        ],
+        "_solver_clamp_saturated": 4,
+        "_solver_clamp_saturated_hi": 0,
+        "_solver_clamp_saturated_lo": 4,
+        "_solver_not_converged": true,
+        "_solver_failed_macros": [
+         "protein",
+         "carbs",
+         "fats"
+        ],
+        "_solver_infeasible": {
+         "carbs": "low"
+        },
+        "_solver_residuals": {
+         "kcal": 1.273,
+         "protein": 0.687,
+         "carbs": 1.777,
+         "fats": 1.364
+        },
+        "_protein_closed": false,
+        "_portion_realism_capped": true,
+        "_recipe_contract_final": {
+         "modo": "repair",
+         "reescritas": 0,
+         "familias": {},
+         "sin_reparar": {
+          "gramatical": 3
+         }
+        },
+        "_egg_day_capped": true,
+        "ingredients_raw": [
+         "½ plátanos verde",
+         "3 huevos",
+         "¼ taza de leche descremada",
+         "0.5 cda de aceite de oliva",
+         "½ cebolla",
+         "Sal al gusto",
+         "½ ciruela",
+         "1 clara de huevo"
+        ]
+       },
+       {
+        "meal": "Almuerzo",
+        "time": "12:30 PM",
+        "name": "Salteado Wok de Gandules con Tortilla Integral, Repollo y Pechuga de Pollo",
+        "desc": "Plato fuerte tipo wok: gandules salteados al fuego alto con ajo, comino y limón, servidos con tortilla integral caliente y repollo fresco crocante. Ligero, proteico y perfecto para un domingo de mucho calor.",
+        "prep_time": "25 min",
+        "difficulty": "Fácil",
+        "cals": 820,
+        "protein": 58,
+        "carbs": 78,
+        "fats": 33,
+        "macros": [
+         "P:58g",
+         "C:78g",
+         "G:33g"
+        ],
+        "ingredients": [
+         "60 g de Gandules",
+         "1 tortilla integral",
+         "½ taza de repollo tajado",
+         "½ diente de ajo",
+         "½ cebolla",
+         "1 cdta de comino",
+         "¼ cdta de orégano dominicano",
+         "2 cdas de aceite de oliva",
+         "½ limón",
+         "Sal al gusto",
+         "Pimienta negra al gusto",
+         "1¾ cdas de cilantro picado",
+         "1 pechugas de pollo"
+        ],
+        "recipe": [
+         "Mise en place: escurre la 60 g de gandules cocidos; pica fino el ½ diente de ajo y la ½ cebolla; tajada la ½ taza de repollo bien finito como para ensalada; exprime el ½ limón y corta el cilantro.",
+         "El Toque de Fuego: calienta la 2 cdas de aceite de oliva en el wok a fuego alto; sofríe el ajo y la cebolla 2 minutos hasta oler; añade los gandules y saltea 5-6 minutos moviendo constantemente; sazona con el comino, el orégano dominicano, Sal al gusto y Pimienta negra al gusto, y termina rociando el jugo del limón fuera del fuego; calienta las 2 tortillas integrales 30 segundos por lado en una sartén seca. Cocina pechuga de pollo a la plancha o hervida y sírvela como proteína del plato.",
+         "Montaje: sirve el salteado de gandules al centro del plato, con las tortillas integrales calientes dobladas al lado y la el repollo fresco como restante ensalada crocante; espolvorea el cilantro picado por encima. Acompaña con pechuga de pollo."
+        ],
+        "_solver_clamp_saturated": 8,
+        "_solver_clamp_saturated_hi": 2,
+        "_solver_clamp_saturated_lo": 6,
+        "_solver_not_converged": true,
+        "_solver_failed_macros": [
+         "protein",
+         "carbs",
+         "fats"
+        ],
+        "_solver_infeasible": {
+         "carbs": "low"
+        },
+        "_solver_residuals": {
+         "kcal": 1.104,
+         "protein": 0.597,
+         "carbs": 1.829,
+         "fats": 0.887
+        },
+        "_protein_closed": true,
+        "_portion_realism_capped": true,
+        "_final_protein_close": true,
+        "_recipe_contract_final": {
+         "modo": "repair",
+         "reescritas": 0,
+         "familias": {},
+         "sin_reparar": {
+          "gramatical": 1
+         }
+        },
+        "ingredients_raw": [
+         "60 g de Gandules",
+         "1 tortilla integral",
+         "½ taza de repollo tajado",
+         "½ diente de ajo",
+         "½ cebolla",
+         "1 cdta de comino",
+         "¼ cdta de orégano dominicano",
+         "2 cdas de aceite de oliva",
+         "½ limón",
+         "Sal al gusto",
+         "Pimienta negra al gusto",
+         "1¾ cdas de cilantro picado",
+         "1 pechugas de pollo"
+        ],
+        "_misalign_trace": {
+         "missing_in_raw": "post_humanize"
+        },
+        "_misalign_traced": "post_humanize"
+       },
+       {
+        "meal": "Merienda",
+        "time": "4:00 PM",
+        "name": "Batido Cremoso de Mango con Yogurt Griego",
+        "desc": "Batido refrescante e hidratante para el calor de septiembre: yogurt griego natural batido con mango maduro dulce y un toque de canela. Proteína real sin cocinar nada.",
+        "prep_time": "5 min",
+        "difficulty": "Fácil",
+        "cals": 202,
+        "protein": 26,
+        "carbs": 22,
+        "fats": 1,
+        "macros": [
+         "P:26g",
+         "C:22g",
+         "G:1g"
+        ],
+        "ingredients": [
+         "1 taza de yogurt griego sin azúcar",
+         "½ taza de mango en trozos",
+         "¼ taza de agua fría",
+         "¼ cdta de canela en polvo",
+         "1½ hielos"
+        ],
+        "recipe": [
+         "Mise en place: pela el mango y corta 1 taza en trozos; mide el 1 taza de yogurt griego sin azúcar (250 g) y prepara los 4 hielos.",
+         "Montaje: licúa el yogurt griego con la ½ taza de mango, la ¼ taza de agua fría, los 4 hielos y la ¼ cdta de canela en polvo durante 40-60 segundos hasta quedar cremoso y bien frío; sirve de inmediato en vaso alto."
+        ],
+        "_solver_clamp_saturated": 1,
+        "_solver_clamp_saturated_hi": 0,
+        "_solver_clamp_saturated_lo": 1,
+        "_solver_not_converged": true,
+        "_solver_failed_macros": [
+         "carbs",
+         "fats"
+        ],
+        "_solver_infeasible": {
+         "fats": "high"
+        },
+        "_solver_residuals": {
+         "kcal": 0.874,
+         "protein": 1.044,
+         "carbs": 1.317,
+         "fats": 0.156
+        },
+        "_portion_realism_capped": true,
+        "ingredients_raw": [
+         "½ taza de mango en trozos",
+         "¼ taza de agua fría",
+         "¼ cdta de canela en polvo",
+         "1½ hielos",
+         "1 taza de yogurt griego sin azúcar"
+        ],
+        "_misalign_trace": {
+         "qty": "post_humanize"
+        },
+        "_misalign_traced": "post_humanize",
+        "_closer_raw_by_food": 1,
+        "_recipe_contract_final": {
+         "modo": "repair",
+         "reescritas": 1,
+         "familias": {
+          "u:taza": 1
+         },
+         "sin_reparar": {}
+        }
+       },
+       {
+        "meal": "Cena",
+        "time": "7:30 PM",
+        "name": "Queso Blanco Salteado al Wok con Alcachofas, Pan Integral y Pescado blanco",
+        "desc": "Cena ligera con identidad propia: cubos de queso blanco fresco dorados al wok con alcachofas, ajo y perejil, servidos con pan integral tostado. Salteado rápido, bajo en sodio y perfecto para la noche.",
+        "prep_time": "20 min",
+        "difficulty": "Fácil",
+        "cals": 651,
+        "protein": 77,
+        "carbs": 40,
+        "fats": 23,
+        "macros": [
+         "P:77g",
+         "C:40g",
+         "G:23g"
+        ],
+        "ingredients": [
+         "40 g de queso blanco fresco",
+         "1 taza de corazones de alcachofa",
+         "1 rebanada de pan integral",
+         "1 diente de ajo",
+         "½ cda de aceite de oliva",
+         "1¼ cdas de perejil picado",
+         "½ limón",
+         "Pimienta negra al gusto",
+         "2 filetes de pescado"
+        ],
+        "recipe": [
+         "Mise en place: corta los 40 g de queso blanco fresco en cubos grandes; escurre y parte en cuartos la 1 taza de corazones de alcachofa; pica fino el diente de ajo y el perejil; exprime el ½ de limón.",
+         "El Toque de Fuego: calienta la 0.5 cda de aceite de oliva en el wok a fuego medio-alto; dora los cubos de queso 2 minutos por lado sin moverlos mucho, retíralos y reserva; en el mismo wok saltea el ajo con la alcachofa 3-4 minutos, devuelve el queso, riega con el jugo del limón, la Pimienta negra al gusto y el perejil, y saltea 1 minuto más; tuesta las 1 rebanadas de pan integral 1-2 minutos en sartén seca hasta dorar. Cocina Filete de pescado blanco a la plancha o hervido y sírvelo como proteína del plato.",
+         "Montaje: sirve el salteado de queso y alcachofas en plato hondo, con el pan integral tostado al lado para mojar en los jugos del wok. Acompaña con filete de pescado blanco."
+        ],
+        "_solver_clamp_saturated": 6,
+        "_solver_clamp_saturated_hi": 3,
+        "_solver_clamp_saturated_lo": 3,
+        "_solver_not_converged": true,
+        "_solver_failed_macros": [
+         "protein",
+         "carbs",
+         "fats"
+        ],
+        "_protein_closed": true,
+        "_final_protein_close": true,
+        "_sodium_autofix_applied": "swap_saltcured",
+        "ingredients_raw": [
+         "40 g de queso blanco fresco",
+         "1 taza de corazones de alcachofa",
+         "1 rebanada de pan integral",
+         "1 diente de ajo",
+         "½ cda de aceite de oliva",
+         "1¼ cdas de perejil picado",
+         "½ limón",
+         "Pimienta negra al gusto",
+         "2 filetes de pescado"
+        ],
+        "_misalign_trace": {
+         "missing_in_raw": "post_humanize"
+        },
+        "_misalign_traced": "post_humanize"
+       }
+      ],
+      "supplements": null,
+      "date": "2026-09-13",
+      "_sodium_unknown_lines": 6
+     }
+    ],
+    "calories": 2300,
+    "macros": {
+     "protein": "198g",
+     "carbs": "204g",
+     "fats": "77g"
+    },
+    "micronutrient_report": {
+     "panel": [
+      {
+       "nutriente": "Fibra",
+       "key": "fiber_g",
+       "valor": 44.3,
+       "unidad": "g",
+       "piso": 38.0,
+       "status": "ok"
+      },
+      {
+       "nutriente": "Sodio",
+       "key": "sodium_mg",
+       "valor": 1758.9,
+       "unidad": "mg",
+       "techo": 2000.0,
+       "status": "ok",
+       "cobertura_nutriente": 1.0
+      },
+      {
+       "nutriente": "Azúcares añadidos",
+       "key": "free_sugars_g",
+       "valor": 0.2,
+       "unidad": "g",
+       "techo": 25.0,
+       "status": "ok",
+       "cobertura_nutriente": 0.85
+      },
+      {
+       "nutriente": "Vitamina D",
+       "key": "vit_d_mcg",
+       "valor": 8.9,
+       "unidad": "mcg",
+       "piso": 15.0,
+       "status": "bajo",
+       "nota": "Una dieta de alimentos enteros rara vez alcanza la vit D: añade pescado graso (salmón/sardina 1-2x/sem) o lácteo fortificado, o considera un suplemento de 600-800 UI."
+      },
+      {
+       "nutriente": "Calcio",
+       "key": "calcium_mg",
+       "valor": 1353.3,
+       "unidad": "mg",
+       "piso": 1000.0,
+       "status": "ok"
+      },
+      {
+       "nutriente": "Hierro",
+       "key": "iron_mg",
+       "valor": 20.5,
+       "unidad": "mg",
+       "piso": 8.0,
+       "status": "ok"
+      },
+      {
+       "nutriente": "Vitamina B12",
+       "key": "b12_mcg",
+       "valor": 5.7,
+       "unidad": "mcg",
+       "piso": 2.4,
+       "status": "ok"
+      },
+      {
+       "nutriente": "Potasio",
+       "key": "potassium_mg",
+       "valor": 5591.5,
+       "unidad": "mg",
+       "piso": 3400.0,
+       "status": "ok"
+      },
+      {
+       "nutriente": "Magnesio",
+       "key": "magnesium_mg",
+       "valor": 644.4,
+       "unidad": "mg",
+       "piso": 420.0,
+       "status": "ok"
+      },
+      {
+       "nutriente": "Zinc",
+       "key": "zinc_mg",
+       "valor": 13.7,
+       "unidad": "mg",
+       "piso": 11.0,
+       "status": "ok"
+      },
+      {
+       "nutriente": "Folato",
+       "key": "folate_mcg",
+       "valor": 899.7,
+       "unidad": "mcg",
+       "piso": 400.0,
+       "status": "ok"
+      },
+      {
+       "nutriente": "Vitamina A",
+       "key": "vit_a_mcg",
+       "valor": 1018.2,
+       "unidad": "mcg",
+       "piso": 900.0,
+       "status": "ok"
+      },
+      {
+       "nutriente": "Vitamina C",
+       "key": "vit_c_mg",
+       "valor": 186.1,
+       "unidad": "mg",
+       "piso": 90.0,
+       "status": "ok"
+      },
+      {
+       "nutriente": "Vitamina E",
+       "key": "vit_e_mg",
+       "valor": 13.2,
+       "unidad": "mg",
+       "piso": 15.0,
+       "status": "bajo",
+       "nota": "Refuerza con nueces/semillas (almendra, girasol), aceites vegetales, aguacate y hoja verde."
+      },
+      {
+       "nutriente": "Vitamina K",
+       "key": "vit_k_mcg",
+       "valor": 183.2,
+       "unidad": "mcg",
+       "piso": 120.0,
+       "status": "ok"
+      },
+      {
+       "nutriente": "Selenio",
+       "key": "selenium_mcg",
+       "valor": 227.4,
+       "unidad": "mcg",
+       "piso": 55.0,
+       "status": "ok"
+      },
+      {
+       "nutriente": "Omega-3",
+       "key": "omega3_g",
+       "valor": 1.0,
+       "unidad": "g",
+       "piso": 1.6,
+       "status": "bajo",
+       "nota": "Aumenta pescado graso (sardina/salmón), linaza/chía, nueces y aceite de canola."
+      }
+     ],
+     "gaps": [
+      {
+       "nutriente": "Vitamina D",
+       "key": "vit_d_mcg",
+       "valor": 8.9,
+       "unidad": "mcg",
+       "piso": 15.0,
+       "status": "bajo",
+       "nota": "Una dieta de alimentos enteros rara vez alcanza la vit D: añade pescado graso (salmón/sardina 1-2x/sem) o lácteo fortificado, o considera un suplemento de 600-800 UI."
+      },
+      {
+       "nutriente": "Vitamina E",
+       "key": "vit_e_mg",
+       "valor": 13.2,
+       "unidad": "mg",
+       "piso": 15.0,
+       "status": "bajo",
+       "nota": "Refuerza con nueces/semillas (almendra, girasol), aceites vegetales, aguacate y hoja verde."
+      },
+      {
+       "nutriente": "Omega-3",
+       "key": "omega3_g",
+       "valor": 1.0,
+       "unidad": "g",
+       "piso": 1.6,
+       "status": "bajo",
+       "nota": "Aumenta pescado graso (sardina/salmón), linaza/chía, nueces y aceite de canola."
+      }
+     ],
+     "coverage": 0.85,
+     "resolved_ings": 93,
+     "total_ings": 110,
+     "sex": "M",
+     "condition_targets": [],
+     "per_day_ceilings": {
+      "days_evaluated": 3,
+      "high_ratio_threshold": 1.5,
+      "worst_day": {
+       "day_index": 0,
+       "high": []
+      },
+      "days_above": 0,
+      "flagged": false
+     },
+     "per_day_floors": {
+      "days_evaluated": 3,
+      "low_ratio_threshold": 0.6,
+      "min_micros": 2,
+      "worst_day": {
+       "day_index": 2,
+       "low": [
+        "omega3_g"
+       ]
+      },
+      "days_below": 0,
+      "flagged": false
+     },
+     "disclaimer": "Estimado desde el catálogo nutricional (cobertura 85%); NO incluye la sal añadida 'al gusto'. Orientativo, no sustituye evaluación de un nutricionista."
+    },
+    "micronutrient_supplement_advice": {
+     "items": [
+      {
+       "nutriente": "Vitamina D",
+       "key": "vit_d_mcg",
+       "actual": 8.9,
+       "objetivo": 15.0,
+       "unidad": "mcg",
+       "suplemento": "Vitamina D3",
+       "dosis_sugerida": "600–800 UI/día (15–20 mcg)",
+       "primero_alimentos": "pescado graso (salmón/sardina enlatada 1–2x/sem), yema de huevo, lácteo fortificado, exposición solar 10–15 min",
+       "precaucion": "no exceder 4000 UI/día sin control médico (UL)."
+      },
+      {
+       "nutriente": "Vitamina E",
+       "key": "vit_e_mg",
+       "actual": 13.2,
+       "objetivo": 15.0,
+       "unidad": "mg",
+       "suplemento": "Vitamina E (d-alfa-tocoferol)",
+       "dosis_sugerida": "comida primero; ~15 mg/día solo si no alcanzas (evita dosis altas de rutina)",
+       "primero_alimentos": "almendras/avellanas, semillas de girasol, aceites vegetales, aguacate, hoja verde",
+       "precaucion": "no exceder 1000 mg/día (UL); dosis altas + anticoagulante aumentan riesgo de sangrado."
+      },
+      {
+       "nutriente": "Omega-3",
+       "key": "omega3_g",
+       "actual": 1.0,
+       "objetivo": 1.6,
+       "unidad": "g",
+       "suplemento": "Omega-3 (aceite de pescado EPA/DHA o de algas)",
+       "dosis_sugerida": "250–500 mg/día de EPA+DHA (o linaza/chía para ALA)",
+       "primero_alimentos": "pescado graso (sardina/salmón), linaza, chía, nueces",
+       "precaucion": "si tomas anticoagulante, consulta a tu médico (puede afectar la coagulación)."
+      }
+     ],
+     "count": 3,
+     "disclaimer": "Orientativo, no es una prescripción. Cubre los gaps con comida primero y consulta a tu médico antes de tomar suplementos (la dosis depende de tu análisis y tu caso)."
+    },
+    "variety_report": {
+     "total_meals": 12,
+     "egg_meals": 2,
+     "cremoso": 2,
+     "premium": 3,
+     "same_day_repeats": 1,
+     "fruit_repeats": 0,
+     "sweet_savory_clash": 0,
+     "same_day_protein_repeats": 0,
+     "same_day_formula_repeats": 0,
+     "meals_per_day": 4,
+     "cross_day_proteins": {},
+     "cross_day_preps": {},
+     "cross_day_dishes": {},
+     "sweet_fish_pairings": 0,
+     "light_name_heavy_meals": 0,
+     "cross_day_snack_pair_repeats": 0,
+     "issues": [
+      "Día 3: 'salteado' repetido 2x el mismo día",
+      "Descriptor 'cremoso' en 2 platos (cap sugerido 1)",
+      "Ingredientes premium en 3 comidas (cap sugerido 2)"
+     ],
+     "ok": false
+    },
+    "dish_quality_report": {
+     "total_meals": 12,
+     "low_quality_meals": 0,
+     "low_quality_ratio": 0.0,
+     "issues": [],
+     "raw_staple_meals": 0,
+     "raw_staple_ratio": 0.0,
+     "raw_staple_issues": [],
+     "contract_meals": 0,
+     "contract_ratio": 0.0,
+     "contract_issues": [],
+     "transform_meals": 5,
+     "transform_ratio": 0.417
+    },
+    "data_provenance": {
+     "primary_source": "USDA FoodData Central",
+     "secondary_sources": [
+      "INCAP/LATINFOODS",
+      "manual (curado es-DO)"
+     ],
+     "ingredients_resolved": 53,
+     "usda_traced": 47,
+     "fdc_sample": [
+      {
+       "name": "Yogurt griego sin azúcar",
+       "fdc_id": 330137
+      },
+      {
+       "name": "Champiñones",
+       "fdc_id": 169251
+      },
+      {
+       "name": "Cebolla",
+       "fdc_id": 170000
+      },
+      {
+       "name": "Aceite de oliva",
+       "fdc_id": 167737
+      },
+      {
+       "name": "Pimienta negra",
+       "fdc_id": 170931
+      },
+      {
+       "name": "Lechosa",
+       "fdc_id": 169926
+      },
+      {
+       "name": "Leche",
+       "fdc_id": 171265
+      },
+      {
+       "name": "Queso gouda",
+       "fdc_id": 171241
+      }
+     ],
+     "note": "Datos nutricionales anclados a fuentes verificables: 47 de 53 ingredientes resueltos trazables a USDA FoodData Central (IDs públicos en fdc.nal.usda.gov); el resto, INCAP/curado es-DO."
+    },
+    "resolution_coverage": {
+     "resolved": 106,
+     "total": 108,
+     "pct": 0.981
+    },
+    "_clinical_layer_applied": true,
+    "delivered_macros": {
+     "protein": 156,
+     "carbs": 217,
+     "fats": 80
+    },
+    "delivered_calories": 2176,
+    "grocery_start_date": "2026-09-13T04:02:04.367834+00:00",
+    "_protein_floor_delivered": {
+     "target_g": 198.0,
+     "piso_pct": 0.9,
+     "piso_g": 178.2,
+     "dias_medidos": 3,
+     "cortos": [
+      {
+       "dia": 1,
+       "proteina_g": 85.0,
+       "piso_g": 178.2,
+       "falta_g": 93.2
+      }
+     ],
+     "cumple": false,
+     "surface": "post-review-patch",
+     "recuperado": false,
+     "cortos_antes": [
+      {
+       "dia": 1,
+       "proteina_g": 85.0,
+       "piso_g": 178.2,
+       "falta_g": 93.2
+      }
+     ]
+    },
+    "_repair_stage_diff": {
+     "estado": "medido",
+     "surface": "post-review-patch",
+     "comidas": 12,
+     "etapas": {
+      "entrada": {
+       "V3": 1,
+       "V7a": 1,
+       "V1": 1,
+       "V7e": 5
+      },
+      "tras_caps": {
+       "V3": 1,
+       "V7a": 2,
+       "V1": 1,
+       "V7e": 5,
+       "V6": 1
+      },
+      "salida": {
+       "V3": 1,
+       "V7a": 2,
+       "V1": 1,
+       "V7e": 5
+      }
+     },
+     "nuevos": [
+      {
+       "etapa": "tras_caps",
+       "check": "V6",
+       "day": 3,
+       "meal_index": 2,
+       "food": "Yogurt griego sin azúcar"
+      },
+      {
+       "etapa": "tras_caps",
+       "check": "V7a",
+       "day": 3,
+       "meal_index": 3,
+       "food": "Filete de pescado blanco"
+      }
+     ],
+     "n_nuevos": 2,
+     "resueltos": 0,
+     "reglas_huella": "411df02c49daba7d"
+    },
+    "clinical_band_score": {
+     "score": 0.75,
+     "cells_in_band": 9,
+     "cells_total": 12,
+     "score_macros_only": 0.778,
+     "cells_in_band_macros": 7,
+     "cells_total_macros": 9,
+     "band_macros": [
+      0.9,
+      1.12
+     ],
+     "band_kcal": [
+      0.95,
+      1.05
+     ],
+     "per_macro": {
+      "protein": 0.667,
+      "carbs": 0.667,
+      "fats": 1.0,
+      "kcal": 0.667
+     },
+     "all4_days": 2,
+     "days_total": 3,
+     "all4_ratio": 0.667,
+     "per_day": [
+      {
+       "day": 1,
+       "ratios": {
+        "protein": 0.429,
+        "carbs": 1.152,
+        "fats": 1.039,
+        "kcal": 0.87
+       },
+       "all4_in_band": false
+      },
+      {
+       "day": 2,
+       "ratios": {
+        "protein": 0.99,
+        "carbs": 1.029,
+        "fats": 1.039,
+        "kcal": 0.993
+       },
+       "all4_in_band": true
+      },
+      {
+       "day": 3,
+       "ratios": {
+        "protein": 0.949,
+        "carbs": 1.01,
+        "fats": 1.026,
+        "kcal": 0.975
+       },
+       "all4_in_band": true
+      }
+     ],
+     "slot_drift": {
+      "desayuno": {
+       "protein": 0.718,
+       "carbs": 0.596,
+       "fats": 1.392
+      },
+      "almuerzo": {
+       "protein": 0.908,
+       "carbs": 1.082,
+       "fats": 0.786
+      },
+      "merienda": {
+       "protein": 0.816,
+       "carbs": 0.712,
+       "fats": 1.667
+      },
+      "cena": {
+       "protein": 1.365,
+       "carbs": 1.238,
+       "fats": 0.971
+      }
+     }
+    },
+    "_name_phantom_dairy_repaired": [
+     {
+      "day": 2,
+      "meal": "Queso Blanco Fresco con Ciruela, Rábanos y Yogurt Griego Entero",
+      "food": "queso blanco",
+      "line": "30 g de queso blanco fresco",
+      "bumped_from_g": 25.0
+     }
+    ],
+    "_cooked_grain_dry_rewrites": [
+     {
+      "day": 3,
+      "meal": "Salteado Wok de Gandules con Tortilla Integral, Repollo y Pechuga de Pollo",
+      "list": "ingredients",
+      "before": "25 g de gandules cocidos",
+      "after": "9 g de gandules secos"
+     }
+    ],
+    "_duplicate_food_lines_merged": [
+     {
+      "day": 3,
+      "meal": "Salteado Wok de Gandules con Tortilla Integral, Repollo y Pechuga de Pollo",
+      "list": "ingredients",
+      "food": "Gandules",
+      "merged": [
+       "9 g de gandules secos"
+      ],
+      "into": "59 g de Gandules"
+     }
+    ],
+    "_country": "DO",
+    "_ingredient_demand": {
+     "schema": 1,
+     "source_days": 3,
+     "source_hash": "5084f34dc4c7b620",
+     "revision": null,
+     "surface": "get_shopping_list_delta",
+     "computed_at": "2026-09-13T04:02:32.218571+00:00"
+    },
+    "aggregated_shopping_list": [],
+    "aggregated_shopping_list_weekly": [],
+    "aggregated_shopping_list_biweekly": [],
+    "aggregated_shopping_list_monthly": [],
+    "calc_household_multiplier": 1.0,
+    "shopping_cost_summary": {
+     "version": 1,
+     "source": "backend",
+     "active_duration": "weekly",
+     "computed_at": "2026-09-13T04:02:32.770158+00:00",
+     "by_duration": {
+      "weekly": {
+       "trip_total_rd": 7658.44,
+       "stable_rd": 2073.95,
+       "perishable_rd": 5584.49,
+       "cycle_weeks": 1.0,
+       "cycle_trips": 1,
+       "cycle_total_rd": 7664.03,
+       "cycle_repurchase_saving_rd": 0.0,
+       "items_priced": 53,
+       "items_total": 53
+      },
+      "biweekly": {
+       "trip_total_rd": 8062.44,
+       "stable_rd": 2477.95,
+       "perishable_rd": 5584.49,
+       "cycle_weeks": 2.143,
+       "cycle_trips": 3,
+       "cycle_total_rd": 12073.8,
+       "cycle_repurchase_saving_rd": 2370.91,
+       "items_priced": 53,
+       "items_total": 53
+      },
+      "monthly": {
+       "trip_total_rd": 8566.44,
+       "stable_rd": 2981.95,
+       "perishable_rd": 5584.49,
+       "cycle_weeks": 4.286,
+       "cycle_trips": 5,
+       "cycle_total_rd": 22173.65,
+       "cycle_repurchase_saving_rd": 4741.83,
+       "items_priced": 53,
+       "items_total": 53
+      }
+     }
+    },
+    "budget_reconciliation": {
+     "tier": "medium",
+     "basis": "medium",
+     "currency": "DOP",
+     "reference_rd": 5750,
+     "floor_rd": 4600,
+     "days": 7,
+     "household": 1,
+     "active_duration": "weekly",
+     "estimated_cycle_rd": 7664,
+     "items_priced": 53,
+     "items_total": 53,
+     "status": "excedido",
+     "ratio": 1.333,
+     "delta_rd": 1914,
+     "computed_at": "2026-09-13T04:02:32.770158+00:00",
+     "adjusted": true,
+     "converged_pass": true,
+     "substitutions": [
+      "Yogurt griego → Yogurt natural",
+      "granada → Guineo",
+      "yogurt griego → Yogurt natural",
+      "chía → Linaza",
+      "camarones → Filete de pescado blanco"
+     ],
+     "suggestions": [
+      {
+       "type": "marca",
+       "item": "Champiñones",
+       "text": "Champiñones: la opción más económica del súper es El Corte Inglés Lata Laminado (RD$168)"
+      },
+      {
+       "type": "marca",
+       "item": "Queso gouda",
+       "text": "Queso gouda: la opción más económica del súper es Babybel Malla Mini 5 unid (RD$189)"
+      },
+      {
+       "type": "marca",
+       "item": "Tortilla integral",
+       "text": "Tortilla integral: la opción más económica del súper es Toufayan Paquete Wraps Wholesome Wheat 6 unid 11 Oz (RD$150)"
+      },
+      {
+       "type": "marca",
+       "item": "Queso cottage",
+       "text": "Queso cottage: la opción más económica del súper es Westby Tarro Lowfat 2% Small Curd 16 Oz (RD$295)"
+      },
+      {
+       "type": "marca",
+       "item": "Yogurt",
+       "text": "Yogurt: la opción más económica del súper es Yoplait Bebible Natural 0% 220 Ml (RD$85)"
+      }
+     ]
+    },
+    "_budget_adjusted": true,
+    "_shopping_completeness": {
+     "days": 7,
+     "distinct": 53,
+     "expected_min": 6,
+     "is_empty": false,
+     "is_sparse": false,
+     "distinct_proteins": 4,
+     "is_protein_starved": false
+    },
+    "_selected_techniques": [
+     "Relleno (Ej. Canoas, Vegetales rellenos)",
+     "Asado a la Parrilla",
+     "Salteado tipo Wok"
+    ],
+    "_recipe_coherence_errors": [
+     "Día 1, Gratín de Pasta Integral con Champiñones y Garbanzos: El ingrediente principal 'picados' está listado pero no se menciona en las instrucciones de la receta."
+    ],
+    "_shopping_coherence_block_history": [
+     {
+      "ts": "2026-09-13T04:02:33.479387+00:00",
+      "attempt": 3,
+      "divergence_count": 2,
+      "presence_count": 0,
+      "magnitude_count": 2,
+      "hypotheses": {
+       "recipe_unquantified": 2
+      },
+      "block_set": false,
+      "action_taken": "not_applicable"
+     },
+     {
+      "ts": "2026-09-13T04:02:48.871261+00:00",
+      "attempt": null,
+      "swap": true,
+      "divergence_count": 50,
+      "presence_count": 50,
+      "magnitude_count": 0,
+      "hypotheses": {
+       "cap_swallowed_modifier": 50
+      },
+      "critical_count": 50,
+      "block_set": false,
+      "action_taken": "post_swap_revalidation",
+      "escalated_user_visible": true,
+      "alerted": true
+     }
+    ],
+    "_review_patch_removed_ingredients": [
+     "½ diente de ajo picados"
+    ],
+    "_culinary_contract_scan": {
+     "status": "scanned",
+     "checks": [
+      "V1",
+      "V2",
+      "V3",
+      "V4",
+      "V5",
+      "V6",
+      "V7a",
+      "V7b",
+      "V7c",
+      "V7d",
+      "V7e",
+      "V8a",
+      "V8b",
+      "V9"
+     ],
+     "meals": 12,
+     "violations": 8,
+     "error": null,
+     "reglas_huella": "411df02c49daba7d",
+     "schema": "2026-09-12.certeza",
+     "exactas": 0,
+     "contexto": {
+      "equipo": "no_declarado"
+     }
+    },
+    "_culinary_contract_violations": [
+     {
+      "day": 1,
+      "meal": "Desayuno",
+      "check": "V3",
+      "food": "Yogurt",
+      "detail": "listado ('5 g de Yogurt natural sin azúcar') pero ningún paso lo menciona",
+      "severity": "minor",
+      "repairable": true,
+      "meal_index": 0,
+      "meal_seal": "24450cd26c57ad9e"
+     },
+     {
+      "day": 1,
+      "meal": "Almuerzo",
+      "check": "V7a",
+      "food": "Tomate",
+      "detail": "la lista compra 3 y los pasos hablan de una sola (tomate, siempre en singular)",
+      "severity": "minor",
+      "repairable": true,
+      "meal_index": 1,
+      "meal_seal": "655cb12c8cbb0d9b"
+     },
+     {
+      "day": 2,
+      "meal": "Almuerzo",
+      "check": "V1",
+      "food": "Aceite de oliva",
+      "detail": "paso aplica 'plancha' a un listo-para-comer: El Toque de Fuego: marina la soya escurrida con el jugo de limón, los ajos, el orégano, el comino, la salsa de soya y pi",
+      "severity": "minor",
+      "repairable": false,
+      "meal_index": 1,
+      "meal_seal": "0a9d9f6848d822bb"
+     },
+     {
+      "day": 2,
+      "meal": "Merienda",
+      "check": "V7e",
+      "food": "Ciruela",
+      "detail": "el paso pide 2 y la lista compra 1: Mise en place: corta el queso blanco fresco en cubos, lávalos rábanos y córtalos en rodajas delgadas",
+      "severity": "minor",
+      "repairable": false,
+      "meal_index": 2,
+      "meal_seal": "0cdfda77a4f56f32"
+     },
+     {
+      "day": 3,
+      "meal": "Desayuno",
+      "check": "V7e",
+      "food": "Plátano verde",
+      "detail": "el paso pide 2 y la lista compra 0.5: Mise en place: pela los 2 plátanos verdes y córtalos en 4 trozos cada uno; pela y corta 3 huevos y 1",
+      "severity": "minor",
+      "repairable": false,
+      "meal_index": 0,
+      "meal_seal": "f75313afb117fb87"
+     },
+     {
+      "day": 3,
+      "meal": "Desayuno",
+      "check": "V7e",
+      "food": "Ciruela",
+      "detail": "el paso pide 2 y la lista compra 0.5: Mise en place: pela los 2 plátanos verdes y córtalos en 4 trozos cada uno; pela y corta 3 huevos y 1",
+      "severity": "minor",
+      "repairable": false,
+      "meal_index": 0,
+      "meal_seal": "f75313afb117fb87"
+     },
+     {
+      "day": 3,
+      "meal": "Desayuno",
+      "check": "V7e",
+      "food": "Ciruela",
+      "detail": "el paso pide 2 y la lista compra 0.5: Montaje: escurre los plátanos y májalos caliente incorporando la ¼ taza de leche descremada poco a p",
+      "severity": "minor",
+      "repairable": false,
+      "meal_index": 0,
+      "meal_seal": "f75313afb117fb87"
+     },
+     {
+      "day": 3,
+      "meal": "Almuerzo",
+      "check": "V7e",
+      "food": "Tortilla integral",
+      "detail": "el paso pide 2 y la lista compra 1: El Toque de Fuego: calienta la 1½ cda de aceite de oliva en el wok a fuego alto; sofríe el ajo y la ",
+      "severity": "minor",
+      "repairable": false,
+      "meal_index": 1,
+      "meal_seal": "d2c9e642145c1ecd"
+     }
+    ],
+    "_culinary_contract_coverage": 1.0,
+    "_quality_degraded": true,
+    "_quality_degraded_reason": "max_attempts",
+    "_quality_degraded_severity": "high",
+    "_quality_degraded_attempts": 3,
+    "_swap_coherence_warnings": {
+     "critical_count": 5,
+     "summary": [
+      {
+       "ingredient": "Aceite de oliva",
+       "hypothesis": "cap_swallowed_modifier",
+       "delta_pct": 0.0
+      },
+      {
+       "ingredient": "Aguacate",
+       "hypothesis": "cap_swallowed_modifier",
+       "delta_pct": 0.0
+      },
+      {
+       "ingredient": "Ajo",
+       "hypothesis": "cap_swallowed_modifier",
+       "delta_pct": 0.0
+      },
+      {
+       "ingredient": "Ají morrón",
+       "hypothesis": "cap_swallowed_modifier",
+       "delta_pct": 0.0
+      },
+      {
+       "ingredient": "Alcachofa",
+       "hypothesis": "cap_swallowed_modifier",
+       "delta_pct": 0.0
+      }
+     ],
+     "detected_at": "2026-09-13T04:02:48.871261+00:00"
+    },
+    "_review_failed_but_delivered": true,
+    "_review_issues_raw": [
+     "DÉFICIT DE PROTEÍNA (rechazo clínico — adecuación proteica diaria): el plan no alcanza el piso de proteína en Día 1: 116g de 198g. Cada comida PRINCIPAL (almuerzo y cena) DEBE incluir una fuente animal de alta densidad (pollo, pescado, cerdo, res, huevos, queso) dimensionada en gramos para que cada día sume al menos 90% del target (198g). NO dependas solo de leguminosas/almidón en las comidas principales."
+    ],
+    "_review_issues": [
+     "Algún día queda por debajo de tu meta de proteína — puedes cambiar un plato por uno con más proteína."
+    ],
+    "_review_severity": "high",
+    "_fallback_reason": "protein_floor",
+    "_review_disclaimer": "Tras varios intentos, este plan no alcanza del todo tu meta de proteína. Es un plan completo y válido (incluye tu lista de compras); te recomendamos regenerarlo para acercarlo más a tu objetivo de proteína.",
+    "_cache_schema_version": "v1"
+   }
+  },
+  {
+   "plan_id": "real-1",
+   "perfil": "perfil_dm2_metformina",
+   "plan_data": {
+    "main_goal": "Pérdida de Grasa (Déficit 20%)",
+    "insights": [
+     "Diagnóstico: Hombre de 52 años con Diabetes T2 en metformina, sedentario, objetivo de pérdida de grasa (1700 kcal, 149g proteína) — requiere carbohidratos integrales de alta fibra, sin toronja ni azúcares añadidos, y refrigerio de B12.",
+     "Estrategia: 3 comidas fijas (Desayuno, Almuerzo, Cena) con porciones de almidón ≤150g, proteína repartida en cada comida (incluida fuente liviana en desayuno), técnicas ligeras y frescas (wrap, parrilla, estilo ceviche) apropiadas para el calor caribeño de septiembre.",
+     "Tip del Chef: Aprovecha el domingo para meal prep: cuece los gandules y la soya texturizada, y conserva la lechosa picada en la nevera — así los días de semana requieren menos de 30 minutos de cocina."
+    ],
+    "days": [
+     {
+      "day": 1,
+      "day_name": "Sábado",
+      "meals": [
+       {
+        "meal": "Desayuno",
+        "time": "8:00 AM",
+        "name": "Revoltillo Criollo de Champiñones y Tofu Revuelto con Queso Cottage",
+        "desc": "Revoltillo Criollo de Champiñones y Tofu Revuelto, con 3 huevos, 200 g de tofu firme escurrido, 150 g de champiñones.",
+        "prep_time": "15 min",
+        "difficulty": "Fácil",
+        "cals": 441,
+        "protein": 32,
+        "carbs": 33,
+        "fats": 21,
+        "macros": [
+         "P:32g",
+         "C:33g",
+         "G:21g"
+        ],
+        "ingredients": [
+         "3 huevos",
+         "250 g de champiñones",
+         "½ cebollines",
+         "1 rebanada de pan integral familiar",
+         "¼ taza de lechosa en cubos",
+         "¼ cdta de aceite de oliva",
+         "¼ cdta de cúrcuma",
+         "Sal al gusto",
+         "Pimienta negra al gusto",
+         "Orégano dominicano al gusto",
+         "5 g de semillas de girasol",
+         "5 g de queso"
+        ],
+        "recipe": [
+         "Mise en place: Lava y rebana en láminas los 250 g de champiñones; pica fino los 2 cebollines. Desmenuza los 5 g de tofu firme con las manos o un tenedor y mézclalo en un tazón con 3 huevos, la ¼ cdta de cúrcuma, sal, pimienta negra y orégano dominicano. Corta la lechosa en cubos y reserva.",
+         "El Toque de Fuego: Calienta 0.25 cdta de aceite de oliva en un sartén a fuego medio-alto 1 minuto; añade los champiñones y el cebollín y sofríe 4-5 min hasta que doren. Baja a fuego medio, vierte la mezcla de tofu y huevos y revuelve suavemente 3-4 min hasta que cuaje cremoso. Tuesta la rebanada de pan integral en la misma sartén 1 min por lado. Sirve queso al lado para acompañar.",
+         "🌱 Nota del Nutricionista AI: espolvorea semillas de girasol sobre el plato al servir — cierra tu vitamina E del día.",
+         "Montaje: Sirve el revoltillo de tofu y champiñones junto al pan integral tostado y la taza de lechosa fresca al lado, para cerrar el desayuno con frescura tropical. Acompaña con queso cottage."
+        ],
+        "_solver_clamp_saturated": 3,
+        "_solver_clamp_saturated_hi": 1,
+        "_solver_clamp_saturated_lo": 2,
+        "_micro_seeds_applied": [
+         "vit_e_mg"
+        ],
+        "_micro_seed_applied": "vit_e_mg",
+        "_protein_closed": true,
+        "_final_protein_close": true,
+        "_portion_floor_adjusted": true,
+        "_portion_realism_capped": true,
+        "_recipe_contract_final": {
+         "modo": "repair",
+         "reescritas": 0,
+         "familias": {},
+         "sin_reparar": {
+          "gramatical": 1
+         }
+        },
+        "_dish_quality_degraded": true,
+        "_dish_quality_reason": "portion_estimate",
+        "ingredients_raw": [
+         "3 huevos",
+         "250 g de champiñones",
+         "½ cebollines",
+         "1 rebanada de pan integral familiar",
+         "¼ taza de lechosa en cubos",
+         "¼ cdta de cúrcuma",
+         "Sal al gusto",
+         "Pimienta negra al gusto",
+         "Orégano dominicano al gusto",
+         "5 g de semillas de girasol",
+         "5.01 g de queso",
+         "0.25 cdta de aceite de oliva"
+        ]
+       },
+       {
+        "meal": "Almuerzo",
+        "time": "1:00 PM",
+        "name": "Wrap Dominicano de Champiñones y Queso Gouda con Crema de Yogur",
+        "desc": "Nuestro plato fuerte dominical: tortillas integrales rellenas de champiñones salteados en ají cubanela, queso gouda derretido y una crema fresca de yogur griego con cilantro. Sustancioso, fibroso y perfecto para el calor.",
+        "prep_time": "25 min",
+        "difficulty": "Fácil",
+        "cals": 284,
+        "protein": 17,
+        "carbs": 43,
+        "fats": 7,
+        "macros": [
+         "P:17g",
+         "C:43g",
+         "G:7g"
+        ],
+        "ingredients": [
+         "1 tortilla integral",
+         "250 g de champiñones",
+         "15 g de queso",
+         "0.17 g de Yogurt natural sin azúcar",
+         "½ ají cubanela",
+         "½ tomate",
+         "½ hoja de lechuga romana",
+         "1¼ cdas de cilantro picado",
+         "½ diente de ajo",
+         "¼ cdta de aceite de oliva",
+         "½ cdta de vinagre blanco",
+         "Sal al gusto",
+         "Pimienta negra al gusto",
+         "Orégano dominicano al gusto"
+        ],
+        "recipe": [
+         "Mise en place: Rebana en tiras los 250 g de champiñones, el ají cubanela y el tomate; pica el diente de ajo y el cilantro. Ralla los 15 g de queso gouda. Lava y seca las hojas de lechuga romana. Mezcla yogurt natural con el cilantro picado, la cdta de vinagre blanco, una pizca de sal y pimienta negra — esta es tu crema fresca.",
+         "El Toque de Fuego: Calienta la cda de aceite de oliva en un sartén a fuego medio-alto 1 min; sofríe el ajo y el ají cubanela 1-2 min, añade los champiñones en tiras y saltea 6-8 min hasta dorar, sazona con sal, pimienta y orégano dominicano. Aparte, calienta las tortillas integrales en un comal o sartén seco 30 segundos por lado.",
+         "Montaje: Unta cada tortilla con la crema de yogur, coloca la lechuga romana, los champiñones salteados, el tomate en tiras y corona con el queso gouda rallado. Enrolla firme, corta en diagonal y sirve tibio."
+        ],
+        "_solver_clamp_saturated": 7,
+        "_solver_clamp_saturated_hi": 1,
+        "_solver_clamp_saturated_lo": 6,
+        "_solver_not_converged": true,
+        "_solver_failed_macros": [
+         "fats"
+        ],
+        "_portion_realism_capped": true,
+        "_budget_substitutions": [
+         "yogur griego → Yogurt natural"
+        ],
+        "ingredients_raw": [
+         "1 tortilla integral",
+         "250 g de champiñones",
+         "0.17 g de Yogurt natural sin azúcar",
+         "½ ají cubanela",
+         "½ tomate",
+         "0.5 hoja de lechuga romana",
+         "1¼ cdas de cilantro picado",
+         "½ diente de ajo",
+         "½ cdta de vinagre blanco",
+         "Sal al gusto",
+         "Pimienta negra al gusto",
+         "Orégano dominicano al gusto",
+         "15 g de queso",
+         "0.25 cdta de aceite de oliva"
+        ],
+        "_closer_raw_by_food": 8
+       },
+       {
+        "meal": "Cena",
+        "time": "7:00 PM",
+        "name": "Ensalada Fría de Pasta Integral con Aliño de Aguacate al Limón-Mostaza, Pepino, Guineo y Pescado blanco",
+        "desc": "Ensalada Fría de Pasta Integral con Aliño de Aguacate al Limón-Mostaza, Pepino y Granada, con 80 g de pasta integral (seca), 1/2 aguacate maduro, 1 taza de pepino en cubos.",
+        "prep_time": "20 min",
+        "difficulty": "Fácil",
+        "cals": 969,
+        "protein": 103,
+        "carbs": 72,
+        "fats": 30,
+        "macros": [
+         "P:103g",
+         "C:72g",
+         "G:30g"
+        ],
+        "ingredients": [
+         "55 g de pasta integral (seca)",
+         "½ aguacate maduro",
+         "1⅔ tazas de pepino en cubos",
+         "¼ taza de guineo (arilos)",
+         "½ cebolla morada en juliana",
+         "1 cdta de jugo de limón",
+         "¼ cdta de aceite de oliva",
+         "¼ cdta de mostaza dijon",
+         "1¼ cdas de perejil picado",
+         "Sal al gusto",
+         "Pimienta negra al gusto",
+         "3 filetes de pescado"
+        ],
+        "recipe": [
+         "Mise en place: Corta en cubos pequeños el pepino (1 taza) y pica la cebolla en juliana fina; desgrana guineo hasta reunir ½ taza de arilos y pica el perejil. Mide los 55 g de pasta integral. Machaca la ½ aguacate maduro en un tazón con la 1 cdta de jugo de limón, la 0.25 cdta de mostaza dijon, la 0.25 cdta de aceite de oliva, sal y pimienta negra hasta lograr un aliño cremoso.",
+         "El Toque de Fuego: Hierve la pasta integral en abundante agua con una pizca de sal, fuego fuerte 10-12 min hasta que esté al dente; escurre y enjuaga brevemente con agua fría para detener la cocción. Cocina filete de pescado blanco a la plancha o hervido y sírvelo como proteína del plato.",
+         "Montaje: En un bol grande combina la pasta fría con el aliño de aguacate limón-mostaza, el pepino, la cebolla y la mitad de los arilos de guineo; sirve en plato hondo decorando con el resto de guineo y el perejil picado por encima. Acompaña con filete de pescado blanco."
+        ],
+        "_solver_clamp_saturated": 7,
+        "_solver_clamp_saturated_hi": 3,
+        "_solver_clamp_saturated_lo": 4,
+        "_solver_not_converged": true,
+        "_solver_failed_macros": [
+         "protein",
+         "carbs"
+        ],
+        "_protein_closed": true,
+        "_sodium_autofix_applied": "swap_canned",
+        "_portion_realism_capped": true,
+        "_budget_substitutions": [
+         "granada → Guineo"
+        ],
+        "ingredients_raw": [
+         "57.29 g de pasta integral (seca)",
+         "0.5 aguacate maduro",
+         "1.67 tazas de pepino en cubos",
+         "¼ taza de guineo (arilos)",
+         "½ cebolla morada en juliana",
+         "0.25 cdta de mostaza dijon",
+         "1¼ cdas de perejil picado",
+         "Sal al gusto",
+         "Pimienta negra al gusto",
+         "1 cdta de jugo de limón",
+         "0.25 cdta de aceite de oliva",
+         "3 filetes de pescado"
+        ],
+        "_misalign_trace": {
+         "qty": "post_humanize"
+        },
+        "_misalign_traced": "post_humanize",
+        "_portion_floor_adjusted": true,
+        "_closer_raw_by_food": 1
+       }
+      ],
+      "_critique_applied": true,
+      "date": "2026-09-12",
+      "_sodium_unknown_lines": 8
+     },
+     {
+      "day": 2,
+      "day_name": "Domingo",
+      "meals": [
+       {
+        "meal": "Desayuno",
+        "time": "7:30 AM",
+        "name": "Bowl Frío de Lechosa, Yogurt natural y Avena con Mantequilla de Maní",
+        "desc": "Batido-bowl bien frío para el calor caribeño: lechosa madura cremosa con yogur griego (proteína y B12, clave con la metformina) y avena integral, coronado con mantequilla de maní. Fibra alta y sin azúcares añadidos, ideal para la glucosa estable desde temprano.",
+        "prep_time": "10 min",
+        "difficulty": "Fácil",
+        "cals": 381,
+        "protein": 18,
+        "carbs": 32,
+        "fats": 21,
+        "macros": [
+         "P:18g",
+         "C:32g",
+         "G:21g"
+        ],
+        "ingredients": [
+         "¼ taza de lechosa madura en cubos (26 g)",
+         "1 taza de Yogurt natural sin azúcar",
+         "¼ taza de leche descremada (80 ml)",
+         "10 g de avena (⅓ taza)",
+         "1¼ cdas de mantequilla de maní (19 g)",
+         "½ cdta de canela en polvo",
+         "1½ cubos de hielo",
+         "5 g de semillas de linaza"
+        ],
+        "recipe": [
+         "Mise en place: pela la lechosa, quítale las semillas y corta 2 tazas en cubos. Mide 1 taza de Yogurt natural sin azúcar (200 g), 0.25 taza de leche descremada, 10 g de avena y 15 g de mantequilla de maní.",
+         "🌱 Nota del Nutricionista AI: espolvorea semillas de linaza sobre el plato al servir — cierra tu omega-3 del día.",
+         "Montaje: licúa la lechosa con yogurt natural, la leche, la avena, la mantequilla de maní, la canela y el hielo a velocidad alta por 40-60 segundos hasta obtener una crema espesa. Vierte en un bowl profundo y deja reposar 3 minutos para que la avena se hidrate y espese. Decora con unos cubitos de lechosa reservados al centro."
+        ],
+        "_micro_seeds_applied": [
+         "omega3_g"
+        ],
+        "_micro_seed_applied": "omega3_g",
+        "_portion_realism_capped": true,
+        "_budget_substitutions": [
+         "yogurt griego → Yogurt natural"
+        ],
+        "_portion_floor_adjusted": true,
+        "ingredients_raw": [
+         "0.24 taza de lechosa madura en cubos (26.42 g)",
+         "0.24 taza de leche descremada (80.01 ml)",
+         "10 g de avena (⅓ taza)",
+         "1.25 cdas de mantequilla de maní (18.7 g)",
+         "0.5 cdta de canela en polvo",
+         "1½ cubos de hielo",
+         "5 g de semillas de linaza",
+         "1 taza de Yogurt natural sin azúcar"
+        ],
+        "_misalign_trace": {
+         "qty": "post_humanize"
+        },
+        "_misalign_traced": "post_humanize",
+        "_closer_raw_by_food": 6,
+        "_recipe_contract_final": {
+         "modo": "repair",
+         "reescritas": 1,
+         "familias": {
+          "u:taza": 1
+         },
+         "sin_reparar": {}
+        }
+       },
+       {
+        "meal": "Almuerzo",
+        "time": "12:30 PM",
+        "name": "Brochetas de Soya Texturizada a la Parrilla con Pasta Integral y Ensalada de Rábano",
+        "desc": "El plato fuerte dominical a la parrilla: soya texturizada marinada al estilo criollo que dora en las brasas con ají morrón y cebolla, acompañada de pasta integral al dente y ensalada fresca de rábano con limón. Proteína magra de calidad para cuidar la salud de forma sostenible.",
+        "prep_time": "30 min",
+        "difficulty": "Intermedio",
+        "cals": 769,
+        "protein": 75,
+        "carbs": 76,
+        "fats": 20,
+        "macros": [
+         "P:75g",
+         "C:76g",
+         "G:20g"
+        ],
+        "ingredients": [
+         "135 g de soya texturizada (proteína de soya en trozos)",
+         "10 g de pasta integral (spaghetti o coditos)",
+         "½ ají morrón rojo en cuadros",
+         "½ cebolla en cuadros",
+         "1¼ cdas de aceite de oliva",
+         "½ cda de salsa de tomate",
+         "¼ cdta de comino en polvo",
+         "½ cdta de orégano dominicano",
+         "1 rábanos en rodajas finas",
+         "½ taza de lechuga romana troceada",
+         "½ tomate en gajos",
+         "¾ cdta de vinagre blanco",
+         "½ limón (zumo)",
+         "½ ciruela",
+         "Sal al gusto",
+         "Pimienta negra al gusto",
+         "1 diente de ajo machacados"
+        ],
+        "recipe": [
+         "Mise en place: hidrata la soya texturizada en agua caliente con una pizca de sal por 10 minutos, escúrrela y exprímela bien. Corta el ají morrón y la cebolla en cuadros grandes para ensartar. Pica los ajos. Corta los rábanos en rodajas finas, trocea la lechuga y los gajos de tomate.",
+         "El Toque de Fuego: mezcla la soya escurrida con el ajo, el comino, el orégano, la pimienta, ½ cda de aceite de oliva y la salsa de tomate; deja marinar 10 minutos. Ensarta en pinchos alternando soya, ají morrón y cebolla. Lleva a la parrilla (o sartén grill bien caliente) a fuego medio-alto por 8-10 minutos, girando cada 2-3 minutos, hasta que estén doradas y ligeramente ahumadas. En paralelo, hierve la pasta integral en agua con sal por 8-10 minutos hasta al dente y escurre.",
+         "Montaje: sirve las brochetas calientes sobre la pasta integral. A un lado, la ensalada de lechuga, rábano y tomate aliñada con el vinagre blanco, el zumo de limón y la otra ½ cda de aceite de oliva. Acompaña con las 2 ciruelas frescas de postre."
+        ],
+        "_solver_clamp_saturated": 7,
+        "_solver_clamp_saturated_hi": 0,
+        "_solver_clamp_saturated_lo": 7,
+        "_recipe_contract_final": {
+         "modo": "repair",
+         "reescritas": 0,
+         "familias": {},
+         "sin_reparar": {
+          "reparto": 2,
+          "gramatical": 1
+         }
+        },
+        "ingredients_raw": [
+         "135 g de soya texturizada (proteína de soya en trozos)",
+         "10.58 g de pasta integral (spaghetti o coditos)",
+         "0.5 ají morrón rojo en cuadros",
+         "0.5 cebolla en cuadros",
+         "1 diente de ajo machacados",
+         "½ cda de salsa de tomate",
+         "0.25 cdta de comino en polvo",
+         "0.5 cdta de orégano dominicano",
+         "1 rábanos en rodajas finas",
+         "0.5 taza de lechuga romana troceada",
+         "0.5 tomate en gajos",
+         "¾ cdta de vinagre blanco",
+         "0.5 limón (zumo)",
+         "0.5 ciruela",
+         "Sal al gusto",
+         "Pimienta negra al gusto",
+         "1.25 cdas de aceite de oliva"
+        ],
+        "_portion_floor_adjusted": true,
+        "_closer_raw_by_food": 6
+       },
+       {
+        "meal": "Cena",
+        "time": "7:30 PM",
+        "name": "Huevos al Horno sobre Sofrito de Puerro con Tortilla Integral",
+        "desc": "Cena ligera dominicana con identidad propia: sofrito lento de puerro y ají morrón en salsa de tomate donde los huevos cuajan al horno, perfecto para untar en tortilla integral tostada. Ligera, rica en fibra y B12, sin arroz de noche.",
+        "prep_time": "25 min",
+        "difficulty": "Fácil",
+        "cals": 561,
+        "protein": 49,
+        "carbs": 53,
+        "fats": 17,
+        "macros": [
+         "P:49g",
+         "C:53g",
+         "G:17g"
+        ],
+        "ingredients": [
+         "3 huevos",
+         "6 claras de huevo",
+         "½ puerro en rodajas finas (parte blanca y verde clara)",
+         "1 ají morrón verde en tiras",
+         "¼ taza de salsa de tomate",
+         "1 tortilla integral pequeñas",
+         "½ cda de cilantro fresco picado",
+         "¼ cdta de cúrcuma",
+         "Sal al gusto",
+         "Pimienta negra al gusto"
+        ],
+        "recipe": [
+         "Mise en place: lava el puerro y córtalo en rodajas finas usando la parte blanca y la verde clara. Corta el ají morrón en tiras, pica los ajos y el cilantro. Separa 3 huevos y 6 claras de huevo reservando 6 claras en un bol (las yemas de las claras aparte no se usan). Precalienta el horno a 180°C.",
+         "El Toque de Fuego: en una sartén antiadherente apta para horno, sofríe el puerro con el ají morrón y los ajos a fuego medio por 6-8 minutos hasta que estén blandos y dulces. Añade la salsa de tomate, la cúrcuma, sal y pimienta; cocina 3 minutos más. Haz dos huecos en el sofrito, vierte las claras distribuidas y rompe 3 huevos y 6 claras de huevo encima. Hornea a 180°C por 10-12 minutos, hasta que las claras cuajen por completo y las yemas estén ligeramente tiernas al tocar. Tuesta las tortillas integrales en un comal por 1 minuto por lado.",
+         "Montaje: sirve la sartén al centro con el cilantro espolvoreado, acompañada de las tortillas integrales calientes para untar el sofrito y los huevos.",
+         "⚠️ Seguridad alimentaria: cocina el huevo por completo (≥71°C, yema y clara firmes, sin partes líquidas) antes de servir; evita el huevo crudo o poco cocido."
+        ],
+        "_solver_clamp_saturated": 1,
+        "_solver_clamp_saturated_hi": 0,
+        "_solver_clamp_saturated_lo": 1,
+        "_food_safety_fixed": "no_cook",
+        "_egg_day_capped": true,
+        "_portion_realism_capped": true,
+        "ingredients_raw": [
+         "3 huevos",
+         "6 claras de huevo",
+         "0.5 puerro en rodajas finas (parte blanca y verde clara)",
+         "1 ají morrón verde en tiras",
+         "0.24 taza de salsa de tomate",
+         "1 tortilla integral pequeñas",
+         "0.5 cda de cilantro fresco picado",
+         "0.24 cdta de cúrcuma",
+         "Sal al gusto",
+         "Pimienta negra al gusto"
+        ]
+       }
+      ],
+      "supplements": null,
+      "date": "2026-09-13",
+      "_sodium_unknown_lines": 5
+     },
+     {
+      "day": 3,
+      "day_name": "Lunes",
+      "meals": [
+       {
+        "meal": "Desayuno",
+        "time": "Flexible",
+        "name": "Arepitas Dulces de Maíz con Queso Blanco Untable, Mango y Yogurt natural Entero",
+        "desc": "Arepitas dulces de maíz doradas en sartén, untadas con queso blanco fresco bien sazonado y coronadas con cubos de mango maduro. Un desayuno caribeño transformado (masa cocida, no cereal remojado): dulce-salado, saciante y con proteína para empezar el día sin picos de glucosa.",
+        "prep_time": "20 min",
+        "difficulty": "Fácil",
+        "cals": 455,
+        "protein": 18,
+        "carbs": 44,
+        "fats": 23,
+        "macros": [
+         "P:18g",
+         "C:44g",
+         "G:23g"
+        ],
+        "ingredients": [
+         "¼ taza de harina de maíz precocida",
+         "Stevia al gusto",
+         "Sal al gusto",
+         "½ taza de agua tibia",
+         "1¼ cdtas de aceite de oliva",
+         "¼ taza de mango en cubos",
+         "1 rama de cilantro picado",
+         "Pimienta negra al gusto",
+         "1 taza de Yogurt natural entero",
+         "35 g de queso blanco"
+        ],
+        "recipe": [
+         "Mise en place: mezcla la harina de maíz precocida con stevia al gusto moreno y la sal; pela el mango y córtalo en cubos; pica el cilantro.",
+         "El Toque de Fuego: forma las arepitas añadiendo el agua tibia poco a poco hasta lograr una masa suave; haz 3 discos gruesos y cocínalos en un sartén con el aceite de oliva a fuego medio 4-5 minutos por lado hasta que estén dorados y cocidos por dentro. Sirve yogurt natural entero al lado para acompañar.",
+         "Montaje: unta el queso blanco fresco sobre las arepitas calientes, corona con el mango en cubos, el cilantro picado y una vuelta de pimienta negra. Acompaña con yogurt natural entero.",
+         "⚕️ Ajuste clínico (condición médica): se sustituyó azúcar por una alternativa segura (sin azúcar añadida / baja en sodio) para tu condición."
+        ],
+        "_sodium_autofix_applied": "salt_to_taste",
+        "_solver_clamp_saturated": 4,
+        "_solver_clamp_saturated_hi": 1,
+        "_solver_clamp_saturated_lo": 3,
+        "_solver_frozen_lines": 1,
+        "_solver_not_converged": true,
+        "_solver_failed_macros": [
+         "protein",
+         "carbs",
+         "fats"
+        ],
+        "_protein_closed": true,
+        "_condition_subs_fixed": [
+         "azúcar"
+        ],
+        "_dm2_sugar_fixed": [
+         "azúcar"
+        ],
+        "_final_protein_close": true,
+        "_portion_floor_adjusted": true,
+        "_portion_realism_capped": true,
+        "_name_phantom_dairy_added": "Queso blanco",
+        "_budget_substitutions": [
+         "yogurt griego → Yogurt natural"
+        ],
+        "ingredients_raw": [
+         "0.25 taza de harina de maíz precocida",
+         "Stevia al gusto",
+         "Sal al gusto",
+         "½ taza de agua tibia",
+         "0.25 taza de mango en cubos",
+         "1 rama de cilantro picado",
+         "Pimienta negra al gusto",
+         "35 g de Queso blanco",
+         "1 taza de Yogurt natural entero",
+         "1.25 cdtas de aceite de oliva"
+        ],
+        "_misalign_trace": {
+         "missing_in_raw": "post_humanize",
+         "qty": "post_humanize"
+        },
+        "_misalign_traced": "post_humanize",
+        "_closer_raw_by_food": 2,
+        "_refine_raw_by_food": 1
+       },
+       {
+        "meal": "Almuerzo",
+        "time": "Flexible",
+        "name": "Ensalada Fresca de Gandules al Estilo Ceviche con Tortilla Integral y Pechuga de Pollo",
+        "desc": "Moro frío reinterpretado: gandules cocidos con laurel y comino, marinados en limón con repollo crocante, cebolla, ají cubanela y cilantro fresco, servidos con una tortilla integral tibia. Técnica de ceviche ligera e hidratante, ideal para el calor caribeño y con la fibra de las leguminosas que tu diabetes agradece.",
+        "prep_time": "25 min",
+        "difficulty": "Fácil",
+        "cals": 814,
+        "protein": 77,
+        "carbs": 95,
+        "fats": 14,
+        "macros": [
+         "P:77g",
+         "C:95g",
+         "G:14g"
+        ],
+        "ingredients": [
+         "1 1/2 tazas de gandules crudos (remojados y cocidos, rinden ~2 1/2 tazas)",
+         "2 tortillas integrales",
+         "½ taza de repollo en juliana fina",
+         "½ cebolla en plumas finas",
+         "½ ají cubanela picado fino",
+         "¼ taza de cilantro fresco picado",
+         "¾ cda de vinagre blanco",
+         "1 cdta de comino",
+         "1 hoja de laurel",
+         "1¼ cdtas de aceite de oliva",
+         "½ limón (su jugo)",
+         "Sal al gusto",
+         "Pimienta negra al gusto",
+         "1½ pechugas de pollo"
+        ],
+        "recipe": [
+         "Mise en place: remoja los gandules desde temprano; pica el ají cubanela, corta la cebolla en plumas, ralla el repollo en juliana fina, pica el cilantro y mide comino, laurel, aceite de oliva y el jugo del limón.",
+         "El Toque de Fuego: hierve los gandules en agua con la hoja de laurel y el comino a fuego medio 35-40 minutos hasta que estén blandos; escúrrelos bien y deja que se enfríen 10 minutos. Cocina pechuga de pollo a la plancha o hervida y sírvela como proteína del plato.",
+         "El Toque de Fuego: calienta la tortilla integral en un sartén seco a fuego medio 1 minuto por lado hasta que esté flexible y con marcas leves; córtala en gajos.",
+         "Montaje: mezcla los gandules tibios con el repollo, la cebolla, el ají cubanela y el cilantro; adereza con el jugo de limón, el vinagre blanco, el aceite de oliva, sal y pimienta negra, y deja marinar 5 minutos como un ceviche. Sirve en plato hondo con los gajos de tortilla integral al lado. Acompaña con pechuga de pollo."
+        ],
+        "_solver_clamp_saturated": 7,
+        "_solver_clamp_saturated_hi": 7,
+        "_solver_clamp_saturated_lo": 0,
+        "_solver_not_converged": true,
+        "_solver_failed_macros": [
+         "protein",
+         "carbs"
+        ],
+        "_solver_infeasible": {
+         "protein": "high"
+        },
+        "_solver_residuals": {
+         "kcal": 0.915,
+         "protein": 0.27,
+         "carbs": 1.555,
+         "fats": 1.092
+        },
+        "_closer_used_solver_signal": true,
+        "_protein_closed": true,
+        "_portion_realism_capped": true,
+        "ingredients_raw": [
+         "1 1/2 tazas de gandules crudos (remojados y cocidos, rinden ~2 1/2 tazas)",
+         "2 tortillas integrales",
+         "0.5 taza de repollo en juliana fina",
+         "0.5 cebolla en plumas finas",
+         "0.5 ají cubanela picado fino",
+         "0.25 taza de cilantro fresco picado",
+         "¾ cda de vinagre blanco",
+         "1 cdta de comino",
+         "1 hoja de laurel",
+         "0.5 limón (su jugo)",
+         "Sal al gusto",
+         "Pimienta negra al gusto",
+         "1.5 pechugas de pollo",
+         "1.25 cdtas de aceite de oliva"
+        ],
+        "_misalign_trace": {
+         "missing_in_raw": "post_humanize"
+        },
+        "_misalign_traced": "post_humanize",
+        "_closer_raw_by_food": 1
+       },
+       {
+        "meal": "Cena",
+        "time": "Flexible",
+        "name": "Guiso Tibio de Alcachofas con Huevo Escalfado y Pan Integral Tostado",
+        "desc": "Guiso tibio de alcachofas al limón y ajo, terminado con huevos escalfados que se abren en la sartén, servido con pan integral tostado. Un plato de caza con identidad propia, alto en proteína y sin arroz de noche — la forma dominicana de cenar bien en un día caluroso.",
+        "prep_time": "25 min",
+        "difficulty": "Intermedio",
+        "cals": 482,
+        "protein": 46,
+        "carbs": 29,
+        "fats": 22,
+        "macros": [
+         "P:46g",
+         "C:29g",
+         "G:22g"
+        ],
+        "ingredients": [
+         "1 rebanada de pan integral",
+         "3 huevos",
+         "6 claras de huevo",
+         "¼ taza de alcachofas (corazones limpios y en cuartos)",
+         "¼ taza de perejil picado",
+         "½ limón (su jugo)",
+         "1¼ cdtas de aceite de oliva",
+         "1 diente de ajo machacado",
+         "¼ taza de caldo de vegetales",
+         "Sal al gusto",
+         "Pimienta negra al gusto"
+        ],
+        "recipe": [
+         "Mise en place: limpia las alcachofas, retira las hojas duras y córtalas en cuartos; machaca el ajo, pica el perejil y exprime el limón; separa 3 huevos y 6 claras de huevo y 6 claras de huevo y 6 claras.",
+         "El Toque de Fuego: hierve las alcachofas en agua a fuego medio 10-12 minutos hasta que un cuchillo entre sin fuerza; escúrrelas. Hierve también 6 claras en agua 6 minutos y pásalas a agua fría.",
+         "El Toque de Fuego: en un sartén con el aceite de oliva, sofríe el ajo, añade las alcachofas, el caldo de vegetales, el jugo de limón, sal y pimienta negra; guisa 8 minutos a fuego bajo hasta que se forme una salsita. Casca 3 huevos y 6 claras de huevo y 6 claras de huevo sobre el guiso, tapa y cocina 4-5 minutos hasta que las claras cuajen (huevo escalfado al sartén); añade las claras cocidas en cuartos.",
+         "Montaje: tuesta las 1 rebanada de pan integral hasta que estén crujientes, sirve el guiso de alcachofas con los huevos encima y el perejil picado espolvoreado, acompañado del pan integral tostado."
+        ],
+        "_solver_clamp_saturated": 3,
+        "_solver_clamp_saturated_hi": 1,
+        "_solver_clamp_saturated_lo": 2,
+        "_portion_realism_capped": true,
+        "_portion_floor_adjusted": true,
+        "_egg_day_capped": true,
+        "ingredients_raw": [
+         "1 rebanada de pan integral",
+         "3 huevos",
+         "6 claras de huevo",
+         "0.25 taza de alcachofas (corazones limpios y en cuartos)",
+         "0.25 taza de perejil picado",
+         "0.5 limón (su jugo)",
+         "1.25 cdtas de aceite de oliva",
+         "1 diente de ajo machacado",
+         "¼ taza de caldo de vegetales",
+         "Sal al gusto",
+         "Pimienta negra al gusto"
+        ],
+        "_recipe_contract_final": {
+         "modo": "repair",
+         "reescritas": 6,
+         "familias": {
+          "pieza": 6
+         },
+         "sin_reparar": {}
+        }
+       }
+      ],
+      "_critique_applied": true,
+      "date": "2026-09-14",
+      "_sodium_unknown_lines": 10
+     }
+    ],
+    "calories": 1700,
+    "macros": {
+     "protein": "149g",
+     "carbs": "149g",
+     "fats": "57g"
+    },
+    "micronutrient_report": {
+     "panel": [
+      {
+       "nutriente": "Fibra",
+       "key": "fiber_g",
+       "valor": 33.9,
+       "unidad": "g",
+       "piso": 38.0,
+       "status": "bajo",
+       "nota": "Aumenta vegetales, frutas con cáscara, legumbres (habichuelas) y granos integrales."
+      },
+      {
+       "nutriente": "Sodio",
+       "key": "sodium_mg",
+       "valor": 1386.7,
+       "unidad": "mg",
+       "techo": 2000.0,
+       "status": "ok",
+       "cobertura_nutriente": 1.0
+      },
+      {
+       "nutriente": "Azúcares añadidos",
+       "key": "free_sugars_g",
+       "valor": 3.8,
+       "unidad": "g",
+       "techo": 25.0,
+       "status": "ok",
+       "cobertura_nutriente": 0.79
+      },
+      {
+       "nutriente": "Vitamina D",
+       "key": "vit_d_mcg",
+       "valor": 9.0,
+       "unidad": "mcg",
+       "piso": 15.0,
+       "status": "bajo",
+       "nota": "Una dieta de alimentos enteros rara vez alcanza la vit D: añade pescado graso (salmón/sardina 1-2x/sem) o lácteo fortificado, o considera un suplemento de 600-800 UI."
+      },
+      {
+       "nutriente": "Calcio",
+       "key": "calcium_mg",
+       "valor": 835.9,
+       "unidad": "mg",
+       "piso": 1000.0,
+       "status": "bajo",
+       "nota": "Refuerza con lácteos (yogur/queso) o vegetales de hoja verde y sésamo."
+      },
+      {
+       "nutriente": "Hierro",
+       "key": "iron_mg",
+       "valor": 18.3,
+       "unidad": "mg",
+       "piso": 8.0,
+       "status": "ok"
+      },
+      {
+       "nutriente": "Vitamina B12",
+       "key": "b12_mcg",
+       "valor": 4.9,
+       "unidad": "mcg",
+       "piso": 2.4,
+       "status": "ok"
+      },
+      {
+       "nutriente": "Potasio",
+       "key": "potassium_mg",
+       "valor": 4945.0,
+       "unidad": "mg",
+       "piso": 3400.0,
+       "status": "ok"
+      },
+      {
+       "nutriente": "Magnesio",
+       "key": "magnesium_mg",
+       "valor": 494.0,
+       "unidad": "mg",
+       "piso": 420.0,
+       "status": "ok"
+      },
+      {
+       "nutriente": "Zinc",
+       "key": "zinc_mg",
+       "valor": 10.8,
+       "unidad": "mg",
+       "piso": 11.0,
+       "status": "bajo",
+       "nota": "Refuerza con carnes (res/cerdo), mariscos, huevo, legumbres, nueces/semillas (calabaza/ajonjolí)."
+      },
+      {
+       "nutriente": "Folato",
+       "key": "folate_mcg",
+       "valor": 678.6,
+       "unidad": "mcg",
+       "piso": 400.0,
+       "status": "ok"
+      },
+      {
+       "nutriente": "Vitamina A",
+       "key": "vit_a_mcg",
+       "valor": 981.7,
+       "unidad": "mcg",
+       "piso": 900.0,
+       "status": "ok"
+      },
+      {
+       "nutriente": "Vitamina C",
+       "key": "vit_c_mg",
+       "valor": 250.5,
+       "unidad": "mg",
+       "piso": 90.0,
+       "status": "ok"
+      },
+      {
+       "nutriente": "Vitamina E",
+       "key": "vit_e_mg",
+       "valor": 10.9,
+       "unidad": "mg",
+       "piso": 15.0,
+       "status": "bajo",
+       "nota": "Refuerza con nueces/semillas (almendra, girasol), aceites vegetales, aguacate y hoja verde."
+      },
+      {
+       "nutriente": "Vitamina K",
+       "key": "vit_k_mcg",
+       "valor": 300.5,
+       "unidad": "mcg",
+       "piso": 120.0,
+       "status": "ok"
+      },
+      {
+       "nutriente": "Selenio",
+       "key": "selenium_mcg",
+       "valor": 238.8,
+       "unidad": "mcg",
+       "piso": 55.0,
+       "status": "ok"
+      },
+      {
+       "nutriente": "Omega-3",
+       "key": "omega3_g",
+       "valor": 1.1,
+       "unidad": "g",
+       "piso": 1.6,
+       "status": "bajo",
+       "nota": "Aumenta pescado graso (sardina/salmón), linaza/chía, nueces y aceite de canola."
+      }
+     ],
+     "gaps": [
+      {
+       "nutriente": "Fibra",
+       "key": "fiber_g",
+       "valor": 33.9,
+       "unidad": "g",
+       "piso": 38.0,
+       "status": "bajo",
+       "nota": "Aumenta vegetales, frutas con cáscara, legumbres (habichuelas) y granos integrales."
+      },
+      {
+       "nutriente": "Vitamina D",
+       "key": "vit_d_mcg",
+       "valor": 9.0,
+       "unidad": "mcg",
+       "piso": 15.0,
+       "status": "bajo",
+       "nota": "Una dieta de alimentos enteros rara vez alcanza la vit D: añade pescado graso (salmón/sardina 1-2x/sem) o lácteo fortificado, o considera un suplemento de 600-800 UI."
+      },
+      {
+       "nutriente": "Calcio",
+       "key": "calcium_mg",
+       "valor": 835.9,
+       "unidad": "mg",
+       "piso": 1000.0,
+       "status": "bajo",
+       "nota": "Refuerza con lácteos (yogur/queso) o vegetales de hoja verde y sésamo."
+      },
+      {
+       "nutriente": "Zinc",
+       "key": "zinc_mg",
+       "valor": 10.8,
+       "unidad": "mg",
+       "piso": 11.0,
+       "status": "bajo",
+       "nota": "Refuerza con carnes (res/cerdo), mariscos, huevo, legumbres, nueces/semillas (calabaza/ajonjolí)."
+      },
+      {
+       "nutriente": "Vitamina E",
+       "key": "vit_e_mg",
+       "valor": 10.9,
+       "unidad": "mg",
+       "piso": 15.0,
+       "status": "bajo",
+       "nota": "Refuerza con nueces/semillas (almendra, girasol), aceites vegetales, aguacate y hoja verde."
+      },
+      {
+       "nutriente": "Omega-3",
+       "key": "omega3_g",
+       "valor": 1.1,
+       "unidad": "g",
+       "piso": 1.6,
+       "status": "bajo",
+       "nota": "Aumenta pescado graso (sardina/salmón), linaza/chía, nueces y aceite de canola."
+      }
+     ],
+     "coverage": 0.79,
+     "resolved_ings": 85,
+     "total_ings": 108,
+     "sex": "M",
+     "condition_targets": [
+      {
+       "condicion": "Diabetes T2 / prediabetes",
+       "regla": "Fibra ≥38.0g/día (≥14 g/1000 kcal)",
+       "guia": "ADA 2025/2026 — calidad del carbohidrato (reemplaza %carbos/índice glucémico)",
+       "actual": 33.9
+      }
+     ],
+     "per_day_ceilings": {
+      "days_evaluated": 3,
+      "high_ratio_threshold": 1.5,
+      "worst_day": {
+       "day_index": 0,
+       "high": []
+      },
+      "days_above": 0,
+      "flagged": false
+     },
+     "per_day_floors": {
+      "days_evaluated": 3,
+      "low_ratio_threshold": 0.6,
+      "min_micros": 2,
+      "worst_day": {
+       "day_index": 2,
+       "low": [
+        "fiber_g",
+        "vit_e_mg",
+        "omega3_g"
+       ]
+      },
+      "days_below": 2,
+      "flagged": true
+     },
+     "disclaimer": "Estimado desde el catálogo nutricional (cobertura 79%); NO incluye la sal añadida 'al gusto'. Orientativo, no sustituye evaluación de un nutricionista."
+    },
+    "micronutrient_supplement_advice": {
+     "items": [
+      {
+       "nutriente": "Fibra",
+       "key": "fiber_g",
+       "actual": 33.9,
+       "objetivo": 38.0,
+       "unidad": "g",
+       "suplemento": "Fibra (psyllium / cáscara de plántago)",
+       "dosis_sugerida": "comida primero; 5–10 g/día de psyllium si no alcanzas (sube gradual + agua)",
+       "primero_alimentos": "legumbres, avena, frutas con cáscara, vegetales, granos integrales, linaza/chía",
+       "precaucion": "aumenta gradual y con suficiente agua; sepáralo de medicamentos (puede reducir su absorción)."
+      },
+      {
+       "nutriente": "Vitamina D",
+       "key": "vit_d_mcg",
+       "actual": 9.0,
+       "objetivo": 15.0,
+       "unidad": "mcg",
+       "suplemento": "Vitamina D3",
+       "dosis_sugerida": "600–800 UI/día (15–20 mcg)",
+       "primero_alimentos": "pescado graso (salmón/sardina enlatada 1–2x/sem), yema de huevo, lácteo fortificado, exposición solar 10–15 min",
+       "precaucion": "no exceder 4000 UI/día sin control médico (UL)."
+      },
+      {
+       "nutriente": "Calcio",
+       "key": "calcium_mg",
+       "actual": 835.9,
+       "objetivo": 1000.0,
+       "unidad": "mg",
+       "suplemento": "Calcio (citrato o carbonato)",
+       "dosis_sugerida": "500 mg/día solo si no alcanzas con la dieta",
+       "primero_alimentos": "yogur/queso, sardina con espina, vegetales de hoja verde, sésamo/ajonjolí, tofu",
+       "precaucion": "tómalo separado del hierro (compiten); no exceder 2500 mg/día totales."
+      },
+      {
+       "nutriente": "Zinc",
+       "key": "zinc_mg",
+       "actual": 10.8,
+       "objetivo": 11.0,
+       "unidad": "mg",
+       "suplemento": "Zinc (citrato o gluconato)",
+       "dosis_sugerida": "8–11 mg/día solo si no alcanzas con la dieta",
+       "primero_alimentos": "carnes, mariscos, huevo, legumbres, semillas de calabaza/ajonjolí",
+       "precaucion": "no exceder 40 mg/día (UL); el exceso compite con el cobre."
+      },
+      {
+       "nutriente": "Vitamina E",
+       "key": "vit_e_mg",
+       "actual": 10.9,
+       "objetivo": 15.0,
+       "unidad": "mg",
+       "suplemento": "Vitamina E (d-alfa-tocoferol)",
+       "dosis_sugerida": "comida primero; ~15 mg/día solo si no alcanzas (evita dosis altas de rutina)",
+       "primero_alimentos": "almendras/avellanas, semillas de girasol, aceites vegetales, aguacate, hoja verde",
+       "precaucion": "no exceder 1000 mg/día (UL); dosis altas + anticoagulante aumentan riesgo de sangrado."
+      },
+      {
+       "nutriente": "Omega-3",
+       "key": "omega3_g",
+       "actual": 1.1,
+       "objetivo": 1.6,
+       "unidad": "g",
+       "suplemento": "Omega-3 (aceite de pescado EPA/DHA o de algas)",
+       "dosis_sugerida": "250–500 mg/día de EPA+DHA (o linaza/chía para ALA)",
+       "primero_alimentos": "pescado graso (sardina/salmón), linaza, chía, nueces",
+       "precaucion": "si tomas anticoagulante, consulta a tu médico (puede afectar la coagulación)."
+      }
+     ],
+     "count": 6,
+     "disclaimer": "Orientativo, no es una prescripción. Cubre los gaps con comida primero y consulta a tu médico antes de tomar suplementos (la dosis depende de tu análisis y tu caso)."
+    },
+    "variety_report": {
+     "total_meals": 9,
+     "egg_meals": 3,
+     "cremoso": 0,
+     "premium": 0,
+     "same_day_repeats": 0,
+     "fruit_repeats": 0,
+     "sweet_savory_clash": 0,
+     "same_day_protein_repeats": 0,
+     "same_day_formula_repeats": 0,
+     "meals_per_day": 3,
+     "cross_day_proteins": {},
+     "cross_day_preps": {},
+     "cross_day_dishes": {},
+     "sweet_fish_pairings": 1,
+     "light_name_heavy_meals": 0,
+     "cross_day_snack_pair_repeats": 0,
+     "issues": [],
+     "ok": true
+    },
+    "dish_quality_report": {
+     "total_meals": 9,
+     "low_quality_meals": 0,
+     "low_quality_ratio": 0.0,
+     "issues": [],
+     "raw_staple_meals": 0,
+     "raw_staple_ratio": 0.0,
+     "raw_staple_issues": [],
+     "contract_meals": 0,
+     "contract_ratio": 0.0,
+     "contract_issues": [],
+     "transform_meals": 6,
+     "transform_ratio": 0.667
+    },
+    "data_provenance": {
+     "primary_source": "USDA FoodData Central",
+     "secondary_sources": [
+      "INCAP/LATINFOODS",
+      "manual (curado es-DO)"
+     ],
+     "ingredients_resolved": 52,
+     "usda_traced": 48,
+     "fdc_sample": [
+      {
+       "name": "Huevo",
+       "fdc_id": 171287
+      },
+      {
+       "name": "Tofu firme",
+       "fdc_id": 172475
+      },
+      {
+       "name": "Champiñones",
+       "fdc_id": 169251
+      },
+      {
+       "name": "Cebollín",
+       "fdc_id": 170005
+      },
+      {
+       "name": "Lechosa",
+       "fdc_id": 169926
+      },
+      {
+       "name": "Aceite de oliva",
+       "fdc_id": 167737
+      },
+      {
+       "name": "Cúrcuma",
+       "fdc_id": 172231
+      },
+      {
+       "name": "Pimienta negra",
+       "fdc_id": 170931
+      }
+     ],
+     "note": "Datos nutricionales anclados a fuentes verificables: 48 de 52 ingredientes resueltos trazables a USDA FoodData Central (IDs públicos en fdc.nal.usda.gov); el resto, INCAP/curado es-DO."
+    },
+    "resolution_coverage": {
+     "resolved": 105,
+     "total": 109,
+     "pct": 0.963
+    },
+    "requires_professional_review": {
+     "flag": true,
+     "conditions": [
+      "Diabetes T2"
+     ],
+     "renal_gate": false,
+     "note": "⚕️ Declaraste condición(es) de salud (Diabetes T2). Este plan las considera de forma general pero NO sustituye la evaluación de tu médico o nutricionista. Consúltalo antes de seguir este plan, especialmente para ajustar porciones, sodio, azúcares o restricciones específicas. 💊 MEDICAMENTOS + ALIMENTACIÓN: declaraste medicamento(s) con interacción dietética conocida (Metformina). Este plan da pautas generales; el ajuste fino (dosis, timing, INR/potasio) lo define tu médico o farmacéutico. Consúltalo antes de cambios.",
+     "medication_interaction": true
+    },
+    "medication_review": {
+     "medications": [
+      "Metformina"
+     ],
+     "advisories": [
+      {
+       "medicamento": "Metformina",
+       "interaccion": "El uso prolongado de metformina puede reducir la absorción de vitamina B12 (riesgo de déficit con el tiempo).",
+       "recomendacion": "Asegura fuentes de vitamina B12 (huevo, lácteos, carne, pescado); si eres vegano/vegetariano, considera un suplemento de B12. Tu médico puede medir tu B12."
+      }
+     ]
+    },
+    "_clinical_layer_applied": true,
+    "delivered_macros": {
+     "protein": 145,
+     "carbs": 159,
+     "fats": 58
+    },
+    "delivered_calories": 1719,
+    "grocery_start_date": "2026-09-13T04:07:51.184560+00:00",
+    "_protein_floor_delivered": {
+     "target_g": 149.0,
+     "piso_pct": 0.9,
+     "piso_g": 134.1,
+     "dias_medidos": 3,
+     "cortos": [],
+     "cumple": true,
+     "surface": "post-review-patch",
+     "recuperado": false,
+     "cortos_antes": []
+    },
+    "_repair_stage_diff": {
+     "estado": "medido",
+     "surface": "post-review-patch",
+     "comidas": 9,
+     "etapas": {
+      "entrada": {
+       "V7e": 5,
+       "V7a": 1
+      },
+      "tras_caps": {
+       "V7e": 6,
+       "V7a": 2,
+       "V6": 1
+      },
+      "salida": {
+       "V7e": 5,
+       "V7a": 2
+      }
+     },
+     "nuevos": [
+      {
+       "etapa": "tras_caps",
+       "check": "V6",
+       "day": 2,
+       "meal_index": 0,
+       "food": "Yogurt"
+      },
+      {
+       "etapa": "tras_caps",
+       "check": "V7a",
+       "day": 1,
+       "meal_index": 2,
+       "food": "Filete de pescado blanco"
+      }
+     ],
+     "n_nuevos": 2,
+     "resueltos": 0,
+     "reglas_huella": "411df02c49daba7d"
+    },
+    "clinical_band_score": {
+     "score": 0.917,
+     "cells_in_band": 11,
+     "cells_total": 12,
+     "score_macros_only": 0.889,
+     "cells_in_band_macros": 8,
+     "cells_total_macros": 9,
+     "band_macros": [
+      0.9,
+      1.12
+     ],
+     "band_kcal": [
+      0.95,
+      1.05
+     ],
+     "per_macro": {
+      "protein": 1.0,
+      "carbs": 0.667,
+      "fats": 1.0,
+      "kcal": 1.0
+     },
+     "all4_days": 2,
+     "days_total": 3,
+     "all4_ratio": 0.667,
+     "per_day": [
+      {
+       "day": 1,
+       "ratios": {
+        "protein": 1.02,
+        "carbs": 0.993,
+        "fats": 1.018,
+        "kcal": 0.996
+       },
+       "all4_in_band": true
+      },
+      {
+       "day": 2,
+       "ratios": {
+        "protein": 0.953,
+        "carbs": 1.081,
+        "fats": 1.018,
+        "kcal": 1.006
+       },
+       "all4_in_band": true
+      },
+      {
+       "day": 3,
+       "ratios": {
+        "protein": 0.946,
+        "carbs": 1.128,
+        "fats": 1.035,
+        "kcal": 1.03
+       },
+       "all4_in_band": false
+      }
+     ],
+     "slot_drift": {
+      "desayuno": {
+       "protein": 0.425,
+       "carbs": 0.743,
+       "fats": 1.207
+      },
+      "almuerzo": {
+       "protein": 1.32,
+       "carbs": 1.18,
+       "fats": 0.593
+      },
+      "cena": {
+       "protein": 1.15,
+       "carbs": 1.097,
+       "fats": 1.243
+      }
+     }
+    },
+    "_phantom_ingredients_repaired": [
+     {
+      "day": 1,
+      "meal": "Revoltillo Criollo de Champiñones y Tofu Revuelto con Queso Cottage",
+      "food": "Tofu firme",
+      "line": "200 g de Tofu firme"
+     }
+    ],
+    "_name_phantom_dairy_repaired": [
+     {
+      "day": 3,
+      "meal": "Arepitas Dulces de Maíz con Queso Blanco Untable, Mango y Yogurt Griego Entero",
+      "food": "Queso blanco",
+      "line": "30 g de Queso blanco"
+     }
+    ],
+    "_country": "DO",
+    "_ingredient_demand": {
+     "schema": 1,
+     "source_days": 3,
+     "source_hash": "b8a44d40272ab9e2",
+     "revision": null,
+     "surface": "get_shopping_list_delta",
+     "computed_at": "2026-09-13T04:08:17.386616+00:00"
+    },
+    "aggregated_shopping_list": [],
+    "aggregated_shopping_list_weekly": [],
+    "aggregated_shopping_list_biweekly": [],
+    "aggregated_shopping_list_monthly": [],
+    "calc_household_multiplier": 1.0,
+    "shopping_cost_summary": {
+     "version": 1,
+     "source": "backend",
+     "active_duration": "weekly",
+     "computed_at": "2026-09-13T04:08:18.068832+00:00",
+     "by_duration": {
+      "weekly": {
+       "trip_total_rd": 6132.08,
+       "stable_rd": 1691.7,
+       "perishable_rd": 4440.38,
+       "cycle_weeks": 1.0,
+       "cycle_trips": 1,
+       "cycle_total_rd": 6172.56,
+       "cycle_repurchase_saving_rd": 0.0,
+       "items_priced": 51,
+       "items_total": 51
+      },
+      "biweekly": {
+       "trip_total_rd": 6346.08,
+       "stable_rd": 1947.7,
+       "perishable_rd": 4398.38,
+       "cycle_weeks": 2.143,
+       "cycle_trips": 3,
+       "cycle_total_rd": 9919.91,
+       "cycle_repurchase_saving_rd": 1452.89,
+       "items_priced": 50,
+       "items_total": 50
+      },
+      "monthly": {
+       "trip_total_rd": 6781.08,
+       "stable_rd": 2382.7,
+       "perishable_rd": 4398.38,
+       "cycle_weeks": 4.286,
+       "cycle_trips": 5,
+       "cycle_total_rd": 18327.11,
+       "cycle_repurchase_saving_rd": 2905.79,
+       "items_priced": 50,
+       "items_total": 50
+      }
+     }
+    },
+    "budget_reconciliation": {
+     "tier": "medium",
+     "basis": "medium",
+     "currency": "DOP",
+     "reference_rd": 5000,
+     "floor_rd": 4000,
+     "days": 7,
+     "household": 1,
+     "active_duration": "weekly",
+     "estimated_cycle_rd": 6173,
+     "items_priced": 51,
+     "items_total": 51,
+     "status": "excedido",
+     "ratio": 1.235,
+     "delta_rd": 1173,
+     "computed_at": "2026-09-13T04:08:18.068832+00:00",
+     "adjusted": true,
+     "converged_pass": true,
+     "substitutions": [
+      "yogur griego → Yogurt natural",
+      "granada → Guineo",
+      "yogurt griego → Yogurt natural",
+      "yogurt griego → Yogurt natural"
+     ],
+     "suggestions": [
+      {
+       "type": "marca",
+       "item": "Champiñones",
+       "text": "Champiñones: la opción más económica del súper es El Corte Inglés Lata Laminado (RD$168)"
+      },
+      {
+       "type": "marca",
+       "item": "Huevo",
+       "text": "Huevo: la opción más económica del súper es Endy Cartón Extra Grandes Blanco 6 unid (RD$65)"
+      },
+      {
+       "type": "marca",
+       "item": "Queso cottage",
+       "text": "Queso cottage: la opción más económica del súper es Westby Tarro Lowfat 2% Small Curd 16 Oz (RD$295)"
+      },
+      {
+       "type": "marca",
+       "item": "Yogurt",
+       "text": "Yogurt: la opción más económica del súper es Yoplait Bebible Natural 0% 220 Ml (RD$85)"
+      },
+      {
+       "type": "marca",
+       "item": "Tortilla integral",
+       "text": "Tortilla integral: la opción más económica del súper es Toufayan Paquete Wraps Wholesome Wheat 6 unid 11 Oz (RD$150)"
+      }
+     ]
+    },
+    "_budget_adjusted": true,
+    "_shopping_completeness": {
+     "days": 7,
+     "distinct": 50,
+     "expected_min": 6,
+     "is_empty": false,
+     "is_sparse": false,
+     "distinct_proteins": 4,
+     "is_protein_starved": false
+    },
+    "_selected_techniques": [
+     "Wrap o Burrito Dominicano",
+     "Asado a la Parrilla",
+     "Estilo Ceviche o Fresco"
+    ],
+    "_recipe_coherence_errors": [
+     "Día 2, Huevos al Horno sobre Sofrito de Puerro con Tortilla Integral: El ingrediente principal 'picados' está listado pero no se menciona en las instrucciones de la receta.",
+     "Día 2, Brochetas de Soya Texturizada a la Parrilla con Pasta Integral y Ensalada de Rábano: El ingrediente principal 'machacados' está listado pero no se menciona en las instrucciones de la receta."
+    ],
+    "_shopping_coherence_block_history": [
+     {
+      "ts": "2026-09-13T04:08:18.873667+00:00",
+      "attempt": 1,
+      "divergence_count": 2,
+      "presence_count": 0,
+      "magnitude_count": 2,
+      "hypotheses": {
+       "recipe_unquantified": 2
+      },
+      "block_set": false,
+      "action_taken": "not_applicable"
+     },
+     {
+      "ts": "2026-09-13T04:10:43.174127+00:00",
+      "attempt": null,
+      "swap": true,
+      "divergence_count": 48,
+      "presence_count": 48,
+      "magnitude_count": 0,
+      "hypotheses": {
+       "cap_swallowed_modifier": 48
+      },
+      "critical_count": 48,
+      "block_set": false,
+      "action_taken": "post_swap_revalidation",
+      "escalated_user_visible": true,
+      "alerted": true
+     }
+    ],
+    "_review_patch_removed_ingredients": [
+     "1 diente de ajo picados",
+     "1 diente de ajo machacados"
+    ],
+    "_culinary_contract_scan": {
+     "status": "scanned",
+     "checks": [
+      "V1",
+      "V2",
+      "V3",
+      "V4",
+      "V5",
+      "V6",
+      "V7a",
+      "V7b",
+      "V7c",
+      "V7d",
+      "V7e",
+      "V8a",
+      "V8b",
+      "V9"
+     ],
+     "meals": 9,
+     "violations": 6,
+     "error": null,
+     "reglas_huella": "411df02c49daba7d",
+     "schema": "2026-09-12.certeza",
+     "exactas": 0,
+     "contexto": {
+      "equipo": "no_declarado"
+     }
+    },
+    "_culinary_contract_violations": [
+     {
+      "day": 1,
+      "meal": "Desayuno",
+      "check": "V7e",
+      "food": "Cebollín",
+      "detail": "el paso pide 2 y la lista compra 0.5: Mise en place: Lava y rebana en láminas los 270 g de champiñones; pica fino los 2 cebollines. Desmen",
+      "severity": "minor",
+      "repairable": false,
+      "meal_index": 0,
+      "meal_seal": "0edb37615e2ef8e0"
+     },
+     {
+      "day": 2,
+      "meal": "Almuerzo",
+      "check": "V7e",
+      "food": "Ciruela",
+      "detail": "el paso pide 2 y la lista compra 0.5: Montaje: sirve las brochetas calientes sobre la pasta integral. A un lado, la ensalada de lechuga, r",
+      "severity": "minor",
+      "repairable": false,
+      "meal_index": 1,
+      "meal_seal": "272b87c18cff81ee"
+     },
+     {
+      "day": 2,
+      "meal": "Cena",
+      "check": "V7e",
+      "food": "Clara de huevo",
+      "detail": "el paso pide 12 y la lista compra 6: Mise en place: lava el puerro y córtalo en rodajas finas usando la parte blanca y la verde clara. Co",
+      "severity": "minor",
+      "repairable": false,
+      "meal_index": 2,
+      "meal_seal": "b885f77f3fd17119"
+     },
+     {
+      "day": 3,
+      "meal": "Almuerzo",
+      "check": "V7a",
+      "food": "Tortilla integral",
+      "detail": "la lista compra 2 y los pasos hablan de una sola (tortilla, siempre en singular)",
+      "severity": "minor",
+      "repairable": true,
+      "meal_index": 1,
+      "meal_seal": "b98ad00847ee78c4"
+     },
+     {
+      "day": 3,
+      "meal": "Cena",
+      "check": "V7e",
+      "food": "Clara de huevo",
+      "detail": "el paso pide 18 y la lista compra 6: Mise en place: limpia las alcachofas, retira las hojas duras y córtalas en cuartos; machaca el ajo, ",
+      "severity": "minor",
+      "repairable": false,
+      "meal_index": 2,
+      "meal_seal": "bd6f0cd51083a2d6"
+     },
+     {
+      "day": 3,
+      "meal": "Cena",
+      "check": "V7e",
+      "food": "Clara de huevo",
+      "detail": "el paso pide 12 y la lista compra 6: El Toque de Fuego: en un sartén con el aceite de oliva, sofríe el ajo, añade las alcachofas, el cald",
+      "severity": "minor",
+      "repairable": false,
+      "meal_index": 2,
+      "meal_seal": "bd6f0cd51083a2d6"
+     }
+    ],
+    "_culinary_contract_coverage": 1.0,
+    "_swap_coherence_warnings": {
+     "critical_count": 5,
+     "summary": [
+      {
+       "ingredient": "Aceite de oliva",
+       "hypothesis": "cap_swallowed_modifier",
+       "delta_pct": 0.0
+      },
+      {
+       "ingredient": "Aguacate",
+       "hypothesis": "cap_swallowed_modifier",
+       "delta_pct": 0.0
+      },
+      {
+       "ingredient": "Ajo",
+       "hypothesis": "cap_swallowed_modifier",
+       "delta_pct": 0.0
+      },
+      {
+       "ingredient": "Ají cubanela",
+       "hypothesis": "cap_swallowed_modifier",
+       "delta_pct": 0.0
+      },
+      {
+       "ingredient": "Ají morrón",
+       "hypothesis": "cap_swallowed_modifier",
+       "delta_pct": 0.0
+      }
+     ],
+     "detected_at": "2026-09-13T04:10:43.174127+00:00"
+    },
+    "_cache_schema_version": "v1"
+   }
+  },
+  {
+   "plan_id": "real-2",
+   "perfil": "perfil_vegetariana",
+   "plan_data": {
+    "main_goal": "Mantenimiento",
+    "insights": [
+     "Diagnóstico: Plan de mantenimiento vegetariano a 2050 kcal con piso proteico de 128g/día; el intento anterior falló por déficit proteico (Día 2: 90g/128g), por lo que ahora cada comida lleva proteína densa dimensionada en gramos (lentejas, queso cottage, yogur griego, huevos, mantequilla de almendras).",
+     "Estrategia: Repartir la proteína entre las 4 comidas (~30-35g en almuerzo y cena con porciones medidas de lentejas/cottage + refuerzo de huevo o yogur), usando bases de casabe y guineítos verdes transformadas en platos distintos cada día y técnicas caribeñas frescas para el calor de septiembre.",
+     "Tip del Chef: Aprovecha el domingo para cocinar un fondo grande de lentejas dominicanas (sofrito de ajo, cebolla, orégano y comino sin sodio) que alimenta el Día 1 y el Día 3, y sirve las comidas principales en bowls frescos con calabacín, vainitas y berenjena de temporada."
+    ],
+    "days": [
+     {
+      "day": 1,
+      "day_name": "Sábado",
+      "meals": [
+       {
+        "meal": "Desayuno",
+        "time": "Flexible",
+        "name": "Smoothie Bowl Verde de Yogurt natural y Lechosa",
+        "desc": "Bowl fresco e hidratante para el calor caribeño: yogur griego cremoso batido con lechosa dulce y espinacas suaves, coronado con chía y granola. Proteína real desde la mañana, sin pesadez.",
+        "prep_time": "10 min",
+        "difficulty": "Fácil",
+        "cals": 247,
+        "protein": 9,
+        "carbs": 33,
+        "fats": 9,
+        "macros": [
+         "P:9g",
+         "C:33g",
+         "G:9g"
+        ],
+        "ingredients": [
+         "½ taza de Yogurt natural natural",
+         "145 g de lechosa madura en trozos",
+         "1½ tazas de espinacas frescas",
+         "1 cdta de semillas de Linaza",
+         "½ cdta de canela en polvo",
+         "⅓ taza de agua fría",
+         "15 g de Granola"
+        ],
+        "recipe": [
+         "Mise en place: pela la lechosa, quítale las semillas y corta 150 g en cubos; lava y mide 1½ taza de espinacas; mide ¼ cda de linaza y 15 g de granola.",
+         "Montaje (parte 1): licúa yogurt natural con la lechosa, las espinacas, linaza, la canela y el agua fría hasta obtener una crema espesa.",
+         "Montaje: vierte el smoothie en un bowl, corona con la granola y unas cubitos de lechosa reservados. Sirve bien frío."
+        ],
+        "_solver_clamp_saturated": 2,
+        "_solver_clamp_saturated_hi": 0,
+        "_solver_clamp_saturated_lo": 2,
+        "_portion_floor_adjusted": true,
+        "_budget_substitutions": [
+         "chía → Linaza",
+         "yogur griego → Yogurt natural"
+        ],
+        "ingredients_raw": [
+         "145 g de lechosa madura en trozos",
+         "1½ tazas de espinacas frescas",
+         "½ cdta de canela en polvo",
+         "⅓ taza de agua fría",
+         "15 g de Granola",
+         "½ taza de Yogurt natural natural",
+         "1 cdta de semillas de Linaza"
+        ],
+        "_misalign_trace": {
+         "qty": "post_humanize"
+        },
+        "_misalign_traced": "post_humanize"
+       },
+       {
+        "meal": "Almuerzo",
+        "time": "Flexible",
+        "name": "Bowl Caribeño de Lentejas sobre Casabe con Calabacín y Ensalada de Remolacha",
+        "desc": "Domingo de cocina relajada: lentejas especiadas servidas estilo bowl sobre casabe crujiente, con calabacín salteado, remolacha fresca y aguacate. Plato fuerte, fresco y con hierro acompañado de limón para mejor absorción.",
+        "prep_time": "35 min",
+        "difficulty": "Fácil",
+        "cals": 881,
+        "protein": 28,
+        "carbs": 110,
+        "fats": 37,
+        "macros": [
+         "P:28g",
+         "C:110g",
+         "G:37g"
+        ],
+        "ingredients": [
+         "¾ taza de lentejas cocidas (≈66 g secas)",
+         "½ torta de casabe (≈39 g)",
+         "½ calabacín mediano en rodajas",
+         "½ remolacha pequeña cocida y en cubos",
+         "½ aguacate en lonjas",
+         "20 g de maní tostado",
+         "1 cdta de ajonjolí",
+         "1 cdta de aceite de oliva",
+         "½ cebolla picada",
+         "½ diente de ajo",
+         "½ ají cubanela picado",
+         "¼ cdta de comino",
+         "¼ cdta de cúrcuma",
+         "½ limón (su jugo)",
+         "Cilantro fresco picado al gusto",
+         "Sal al gusto",
+         "Pimienta negra al gusto"
+        ],
+        "recipe": [
+         "Mise en place: pica la cebolla, el ajo y el ají cubanela; corta el calabacín en rodajas de ½ cm y la remolacha cocida en cubos; mide las lentejas cocidas, el maní, el ajonjolí y exprime el limón.",
+         "El Toque de Fuego: en una sartén con el aceite de oliva a fuego medio, sofríe la cebolla, el ajo y el ají cubanela 3-4 minutos; añade el calabacín con sal y pimienta y saltea 5-6 minutos hasta que esté tierno pero firme; incorpora las lentejas con el comino y la cúrcuma y cocina 4 minutos más para que absorban las especias.",
+         "Montaje: calienta el casabe 1-2 minutos en una sartén seca hasta que esté crujiente; sirve como base del bowl las lentejas con calabacín, acompaña con la ensalada de remolacha rociada con el jugo de limón, las lonjas de aguacate, el maní, el ajonjolí y el cilantro fresco."
+        ],
+        "_solver_clamp_saturated": 13,
+        "_solver_clamp_saturated_hi": 1,
+        "_solver_clamp_saturated_lo": 12,
+        "_solver_not_converged": true,
+        "_solver_failed_macros": [
+         "protein",
+         "carbs"
+        ],
+        "_protein_closed": true,
+        "ingredients_raw": [
+         "½ torta de casabe (≈39 g)",
+         "½ calabacín mediano en rodajas",
+         "½ remolacha pequeña cocida y en cubos",
+         "0.51 aguacate en lonjas",
+         "20 g de maní tostado",
+         "½ cebolla picada",
+         "½ diente de ajo",
+         "½ ají cubanela picado",
+         "¼ cdta de comino",
+         "¼ cdta de cúrcuma",
+         "½ limón (su jugo)",
+         "Cilantro fresco picado al gusto",
+         "Sal al gusto",
+         "Pimienta negra al gusto",
+         "¾ taza de lentejas cocidas (≈66 g secas)",
+         "1 cdta de ajonjolí",
+         "1 cdta de aceite de oliva"
+        ],
+        "_misalign_trace": {
+         "qty": "post_humanize"
+        },
+        "_misalign_traced": "post_humanize"
+       },
+       {
+        "meal": "Merienda",
+        "time": "Flexible",
+        "name": "Queso Cottage con Uvas Frescas y Nueces",
+        "desc": "Snack ligero y refrescante de la tarde: queso cottage cremoso con uvas dulces y nueces crujientes. Proteína real sin cocinar, ideal para el calor.",
+        "prep_time": "5 min",
+        "difficulty": "Fácil",
+        "cals": 264,
+        "protein": 13,
+        "carbs": 17,
+        "fats": 17,
+        "macros": [
+         "P:13g",
+         "C:17g",
+         "G:17g"
+        ],
+        "ingredients": [
+         "70 g de queso",
+         "80 g de uvas frescas",
+         "Canela en polvo al gusto"
+        ],
+        "recipe": [
+         "Mise en place: lava las uvas y péchalas del racimo; mide el queso cottage y pica gruesas las nueces.",
+         "Montaje: sirve el cottage en un bol pequeño, corona con las uvas y las nueces, y espolvorea canela al gusto."
+        ],
+        "_portion_realism_capped": true,
+        "_portion_floor_adjusted": true,
+        "ingredients_raw": [
+         "80 g de uvas frescas",
+         "Canela en polvo al gusto",
+         "70 g de queso"
+        ]
+       },
+       {
+        "meal": "Cena",
+        "time": "Flexible",
+        "name": "Bowl Nocturno de Lentejas con Guineítos Hervidos, Edamame y Espinacas Sofreídas",
+        "desc": "Cena ligera con identidad propia: guineítos verdes hervidos con lentejas, edamame y huevo duro sobre espinacas salteadas al ajo. Fresca, saciante y sin arroz de noche.",
+        "prep_time": "30 min",
+        "difficulty": "Fácil",
+        "cals": 683,
+        "protein": 68,
+        "carbs": 78,
+        "fats": 11,
+        "macros": [
+         "P:68g",
+         "C:78g",
+         "G:11g"
+        ],
+        "ingredients": [
+         "35 g de lentejas cocidas (≈14 g secas)",
+         "40 g de edamame",
+         "110 g de Soya texturizada",
+         "2 tazas de espinacas frescas",
+         "½ cda de aceite de oliva",
+         "1 diente de ajo",
+         "½ cebolla en plumas",
+         "Orégano dominicano al gusto",
+         "Cilantro fresco picado al gusto",
+         "Sal al gusto",
+         "Pimienta negra al gusto",
+         "2½ guineítos verdes (≈100 g pulpa)"
+        ],
+        "recipe": [
+         "Mise en place: pela y corta los guineítos verdes en trozos gruesos; pica el ajo y la cebolla en plumas; mide las lentejas cocidas y el edamame.",
+         "El Toque de Fuego: hierve los guineítos en agua con sal a fuego medio 20-25 minutos hasta que el cuchillo entre sin fuerza y escúrrelos; en una sartén con el aceite de oliva sofríe el ajo y la cebolla a fuego medio 3 minutos, añade las espinacas con orégano y saltea 2 minutos hasta que marchiten; incorpora las lentejas y el edamame y cocina 3 minutos para entibiar; aparte, cuece soya texturizada en agua hirviendo 9 minutos para que queden duros, pélalos y córtalos en cuartos.",
+         "Montaje: sirve los guineítos hervidos como base del bowl, cubre con las lentejas, el edamame y las espinacas sofritas, corona con los cuartos de soya texturizada duro, cilantro fresco y pimienta negra recién molida.",
+         "🌱 Ajuste por tu dieta: se reemplazó carne por una alternativa vegetal con proteína equivalente."
+        ],
+        "_protein_autofix_applied": "huevo->pollo",
+        "_solver_clamp_saturated": 2,
+        "_solver_clamp_saturated_hi": 0,
+        "_solver_clamp_saturated_lo": 2,
+        "_diet_subs_fixed": [
+         "carne"
+        ],
+        "ingredients_raw": [
+         "35 g de lentejas cocidas (≈14 g secas)",
+         "38.06 g de edamame",
+         "108.74 g de Soya texturizada",
+         "2½ guineítos verdes (≈100 g pulpa)",
+         "2 tazas de espinacas frescas",
+         "1 diente de ajo",
+         "½ cebolla en plumas",
+         "Orégano dominicano al gusto",
+         "Cilantro fresco picado al gusto",
+         "Sal al gusto",
+         "Pimienta negra al gusto",
+         "½ cda de aceite de oliva"
+        ]
+       }
+      ],
+      "supplements": null,
+      "date": "2026-09-12",
+      "_sodium_unknown_lines": 7
+     },
+     {
+      "day": 2,
+      "day_name": "Domingo",
+      "meals": [
+       {
+        "meal": "Desayuno",
+        "time": "Flexible",
+        "name": "Tostadas Integrales con Revoltillo de Huevo, Tomate y Albahaca",
+        "desc": "Desayuno dominical sencillo y contundente: pan integral tostado con un revoltillo bien cocido y jugoso de huevo con tomate criollo, perfecto para empezar el lunes con energía sostenible.",
+        "prep_time": "15 min",
+        "difficulty": "Fácil",
+        "cals": 472,
+        "protein": 34,
+        "carbs": 39,
+        "fats": 20,
+        "macros": [
+         "P:34g",
+         "C:39g",
+         "G:20g"
+        ],
+        "ingredients": [
+         "2 rebanadas de pan integral familiar (60 g)",
+         "3 huevos",
+         "2 claras de huevo",
+         "1 tomate maduro mediano",
+         "¾ cdta de aceite de oliva",
+         "½ cda de leche descremada",
+         "Sal al gusto",
+         "Pimienta negra al gusto",
+         "Albahaca seca al gusto"
+        ],
+        "recipe": [
+         "Mise en place: pela y corta el tomate en cubos pequeños, separa 2 claras de huevo y bate 3 huevos con la clara, la leche descremada, la sal, la pimienta y la albahaca seca; deja las rebanadas de pan integral listas para tostar.",
+         "El Toque de Fuego: calienta el aceite de oliva en sartén a fuego medio, saltea el tomate en cubos 3 minutos, agrega la mezcla de huevo y cocina revolviendo con espátula 4-5 minutos hasta que el revoltillo esté bien cocido y seco. Tuesta el pan integral en la misma sartén o tostadora 2 minutos por lado.",
+         "Montaje: sirve las 2 tostadas de pan integral calientes coronadas con el revoltillo de huevo y tomate, espolvorea pimienta negra recién molida y acompaña con un vaso de agua fría para el calor caribeño."
+        ],
+        "_solver_frozen_lines": 1,
+        "_portion_floor_adjusted": true,
+        "ingredients_raw": [
+         "2 rebanadas de pan integral familiar (60 g)",
+         "3 huevos",
+         "2 claras de huevo",
+         "1 tomate maduro mediano",
+         "0.75 cdta de aceite de oliva",
+         "0.5 cda de leche descremada",
+         "Sal al gusto",
+         "Pimienta negra al gusto",
+         "Albahaca seca al gusto"
+        ]
+       },
+       {
+        "meal": "Almuerzo",
+        "time": "Flexible",
+        "name": "Guiso Ligero de Vainitas con Habichuelas Rojas y Queso Cottage sobre Guineítos Verdes Majados",
+        "desc": "La bandera vegetariana de guiso dominicano: vainitas y habichuelas rojas estofadas ligeras con sofrito criollo, ancladas con queso cottage cremoso y servidas sobre guineítos verdes majados. Un plato fuerte transformado, fresco para un domingo-calor caribeño.",
+        "prep_time": "35 min",
+        "difficulty": "Fácil",
+        "cals": 725,
+        "protein": 40,
+        "carbs": 94,
+        "fats": 21,
+        "macros": [
+         "P:40g",
+         "C:94g",
+         "G:21g"
+        ],
+        "ingredients": [
+         "½ taza y media de habichuelas rojas cocidas (120 g)",
+         "50 g de queso",
+         "¼ taza de vainitas picadas (26 g)",
+         "¼ taza de brócoli en floretes (24 g)",
+         "½ cebolla picada",
+         "½ diente de ajo machacados",
+         "½ ají cubanela picado",
+         "½ tomate maduro picado",
+         "½ cda de aceite de oliva",
+         "¼ cdta de comino",
+         "½ hoja de laurel",
+         "Sal al gusto",
+         "Pimienta negra al gusto",
+         "¾ cda de cilantro fresco picado",
+         "20 g de guineítos verdes pelados"
+        ],
+        "recipe": [
+         "Mise en place: pela y corta los guineítos verdes en trozos grandes; lava y corta las vainitas en tramos de 3 cm, separa los floretes de brócoli, pica la cebolla, el ají cubanela, el tomate, machaca el ajo y mide las habichuelas rojas ya cocidas.",
+         "El Toque de Fuego: hierve los guineítos verdes en agua con una pizca de sal a fuego medio-alto 20 minutos hasta que el cuchillo entre sin fuerza; escúrrelos bien. En paralelo, calienta el aceite de oliva en una olla a fuego medio y sofríe cebolla, ajo y ají cubanela 4 minutos; añade tomate, comino y laurel, cocina 3 minutos más, incorpora habichuelas rojas con ¼ taza de agua y las vainitas, y guisa tapado a fuego bajo 12 minutos; al final suma el brócoli y cocina 4 minutos más hasta que esté tierno pero verde.",
+         "Montaje: maja los guineítos escaldados con un tenedor hasta formar una masa gruesa, forma una base en el plato, sirve el guiso de vainitas y habichuelas a un lado, corona con el queso cottage frío recién servido y espolvorea cilantro fresco y pimienta negra."
+        ],
+        "_solver_clamp_saturated": 10,
+        "_solver_clamp_saturated_hi": 0,
+        "_solver_clamp_saturated_lo": 10,
+        "_portion_realism_capped": true,
+        "ingredients_raw": [
+         "20 g de guineítos verdes pelados",
+         "½ taza y media de habichuelas rojas cocidas (122 g)",
+         "0.26 taza de vainitas picadas (25.85 g)",
+         "0.26 taza de brócoli en floretes (23.78 g)",
+         "0.5 cebolla picada",
+         "0.5 diente de ajo machacados",
+         "0.5 ají cubanela picado",
+         "0.5 tomate maduro picado",
+         "0.25 cdta de comino",
+         "0.5 hoja de laurel",
+         "Sal al gusto",
+         "Pimienta negra al gusto",
+         "0.75 cda de cilantro fresco picado",
+         "50 g de queso",
+         "½ cda de aceite de oliva"
+        ],
+        "_closer_raw_by_food": 4
+       },
+       {
+        "meal": "Merienda",
+        "time": "Flexible",
+        "name": "Mango con Yogurt natural y Mantequilla de Maní",
+        "desc": "Snack fresco e hidratante para el calor de la tarde: mango maduro de temporada con yogur griego cremoso y un toque de mantequilla de almendras, que aporta proteína real sin pesar.",
+        "prep_time": "5 min",
+        "difficulty": "Fácil",
+        "cals": 297,
+        "protein": 9,
+        "carbs": 27,
+        "fats": 17,
+        "macros": [
+         "P:9g",
+         "C:27g",
+         "G:17g"
+        ],
+        "ingredients": [
+         "½ mango maduro mediano (57 g de pulpa)",
+         "¼ taza de Yogurt natural sin azúcar",
+         "1¾ cdas de mantequilla de Maní"
+        ],
+        "recipe": [
+         "Mise en place: pela el mango y córtalo en cubos medianos; deja yogurt natural y la mantequilla de maní listos.",
+         "Montaje: sirve yogurt natural en un tazón frío, cubre con los cubos de mango, añade la mantequilla de maní por cucharaditas encima en hilos generosos y disfruta inmediatamente bien fresquito."
+        ],
+        "_budget_substitutions": [
+         "almendras → Maní",
+         "yogurt griego → Yogurt natural"
+        ],
+        "ingredients_raw": [
+         "0.5 mango maduro mediano (57.45 g de pulpa)",
+         "1.75 cdas de mantequilla de Maní",
+         "0.25 taza de Yogurt natural sin azúcar"
+        ],
+        "_misalign_trace": {
+         "qty": "post_humanize"
+        },
+        "_misalign_traced": "post_humanize",
+        "_closer_raw_by_food": 2
+       },
+       {
+        "meal": "Cena",
+        "time": "Flexible",
+        "name": "Casabe Tostado con Estofado de Garbanzos al Tomillo, Queso Cottage y Brócoli al Vapor",
+        "desc": "Cena ligera con identidad propia: garbanzos estofados suaves al tomillo con sofrito criollo, servidos sobre casabe tostado crujiente, con queso cottage como ancla proteica y brócoli verde al vapor. Sin arroz de noche y sin repetir la base del almuerzo.",
+        "prep_time": "30 min",
+        "difficulty": "Fácil",
+        "cals": 612,
+        "protein": 42,
+        "carbs": 84,
+        "fats": 12,
+        "macros": [
+         "P:42g",
+         "C:84g",
+         "G:12g"
+        ],
+        "ingredients": [
+         "½ torta de casabe (49 g)",
+         "20 g de garbanzos secos (remojados y rendidos en ~1 taza cocida)",
+         "40 g de queso",
+         "¼ taza de brócoli en floretes (24 g)",
+         "½ tomate maduro picado",
+         "½ cebolla picada",
+         "½ diente de ajo machacados",
+         "55 g de Soya texturizada",
+         "¾ cdta de tomillo seco",
+         "¼ cdta de cúrcuma",
+         "Sal al gusto",
+         "Pimienta negra al gusto",
+         "½ cda de perejil fresco picado"
+        ],
+        "recipe": [
+         "Mise en place: ten los garbanzos remojados desde la mañana; pica el tomate y la cebolla, machaca el ajo, separa soya texturizada y bátela ligeramente, y corta el casabe en cuartos.",
+         "El Toque de Fuego: hierve los garbanzos en agua fresca a fuego medio 40 minutos hasta que estén tiernos y escúrrelos. En una sartén antiadherente sin aceite, sofríe cebolla, ajo y tomate con un poco del caldo de cocción 5 minutos a fuego medio; añade garbanzos, tomillo y cúrcuma, y estofa a fuego bajo 8 minutos. Al final, vierte soya texturizada batida en hilo revolviendo 2 minutos hasta que cuaje y ligue el estofado. Cuece el brócoli al vapor 5 minutos hasta verde brillante y tierno. Calienta el casabe en un comal seco 1 minuto por lado hasta tostarlo.",
+         "Montaje: sirve el casabe tostado como base, cubre con el estofado de garbanzos cremoso, coloca el queso cottage al lado en cucharadas, acompaña con el brócoli al vapor y termina con perejil fresco y pimienta negra recién molida.",
+         "🌱 Ajuste por tu dieta: se reemplazó carne por una alternativa vegetal con proteína equivalente."
+        ],
+        "_protein_autofix_applied": "huevo->pollo",
+        "_solver_clamp_saturated": 9,
+        "_solver_clamp_saturated_hi": 1,
+        "_solver_clamp_saturated_lo": 8,
+        "_solver_not_converged": true,
+        "_solver_failed_macros": [
+         "protein",
+         "carbs",
+         "fats"
+        ],
+        "_diet_subs_fixed": [
+         "carne"
+        ],
+        "ingredients_raw": [
+         "½ torta de casabe (49 g)",
+         "20 g de garbanzos secos (remojados y rendidos en ~1 taza cocida)",
+         "0.26 taza de brócoli en floretes (23.78 g)",
+         "0.5 tomate maduro picado",
+         "0.5 cebolla picada",
+         "0.5 diente de ajo machacados",
+         "55 g de Soya texturizada",
+         "0.75 cdta de tomillo seco",
+         "0.25 cdta de cúrcuma",
+         "Sal al gusto",
+         "Pimienta negra al gusto",
+         "0.5 cda de perejil fresco picado",
+         "40.01 g de queso"
+        ],
+        "_closer_raw_by_food": 11
+       }
+      ],
+      "supplements": null,
+      "date": "2026-09-13",
+      "_sodium_unknown_lines": 7
+     },
+     {
+      "day": 3,
+      "day_name": "Lunes",
+      "meals": [
+       {
+        "meal": "Desayuno",
+        "time": "Flexible",
+        "name": "Mangú Criollo con Huevo Revuelto, Tomate Asado, Aguacate Fresco y Queso Mozzarella",
+        "desc": "Mangú Criollo con Huevo Revuelto, Tomate Asado y Mango Fresco, con 1.5 plátanos verdes, 2 huevos, 1 tomate maduro para asar.",
+        "prep_time": "25 min",
+        "difficulty": "Fácil",
+        "cals": 787,
+        "protein": 23,
+        "carbs": 85,
+        "fats": 40,
+        "macros": [
+         "P:23g",
+         "C:85g",
+         "G:40g"
+        ],
+        "ingredients": [
+         "½ plátanos verde",
+         "2 huevos",
+         "1 tomate maduro para asar",
+         "½ aguacate maduro",
+         "¾ cdta de aceite vegetal",
+         "1 cebolla roja",
+         "1 diente de ajo",
+         "Sal al gusto",
+         "Pimienta negra al gusto",
+         "¾ cdta de aceite de oliva",
+         "Orégano dominicano al gusto",
+         "15 g de queso"
+        ],
+        "recipe": [
+         "Mise en place: pela y corta los plátanos verdes en trozos grandes; pela y machaca 1 diente de ajo; pica finamente 1 cebolla roja; pela el resto del ajo; corta el tomate por la mitad y aguacate en cubos, todo reservado aparte.",
+         "El Toque de Fuego: hierve los plátanos verdes con el ajo machacado en agua con sal a fuego medio-alto unos 20 min, hasta que el cuchillo entre sin resistencia; mientras tanto, dora la cebolla roja en ¼ cda de aceite de oliva a fuego medio 3-4 min (las cebollitas doradas criollas); asa las mitades de tomate en la misma sartén con un chorrito de aceite, cara cortada abajo, 4-5 min hasta que caramelicen, con sal, pimienta y una pizca de orégano; aparte revuelve 2 huevos batido con sal y pimienta en sartén antiadherente a fuego bajo 3-4 min hasta que cuajen cremosos. Cocina queso a la plancha o hervido y sírvelo como proteína del plato. Incorpora también aceite vegetal durante la preparación.",
+         "Montaje: escurre y maja los plátanos con un poco del agua de cocción hasta un mangú sedoso, sirve en plato hondo con el huevo revuelto encima, la cebolla dorada por encima, las mitades de tomate asado al lado y aguacate en cubos aparte para terminar dulce. Acompaña con queso mozzarella."
+        ],
+        "_slot_autofix_applied": "fruit_savory",
+        "_solver_clamp_saturated": 7,
+        "_solver_clamp_saturated_hi": 2,
+        "_solver_clamp_saturated_lo": 5,
+        "_solver_not_converged": true,
+        "_solver_failed_macros": [
+         "protein",
+         "fats"
+        ],
+        "_solver_infeasible": {
+         "kcal": "low",
+         "carbs": "low",
+         "fats": "low"
+        },
+        "_solver_residuals": {
+         "kcal": 1.201,
+         "protein": 0.402,
+         "carbs": 1.227,
+         "fats": 1.831
+        },
+        "_protein_closed": true,
+        "ingredients_raw": [
+         "0.5 plátanos verde",
+         "2 huevos",
+         "1 tomate maduro para asar",
+         "0.5 aguacate maduro",
+         "1 cebolla roja",
+         "1 diente de ajo",
+         "Sal al gusto",
+         "Pimienta negra al gusto",
+         "Orégano dominicano al gusto",
+         "¾ cdta de aceite de oliva",
+         "15 g de queso",
+         "0.75 cdta de aceite vegetal"
+        ],
+        "_misalign_trace": {
+         "missing_in_raw": "pre_engine"
+        },
+        "_misalign_traced": "pre_engine",
+        "_solver_raw_by_food": 6,
+        "_portion_floor_adjusted": true,
+        "_name_phantom_dairy_added": "Queso mozzarella",
+        "_refine_raw_by_food": 1
+       },
+       {
+        "meal": "Almuerzo",
+        "time": "Flexible",
+        "name": "Ceviche de Lentejas Criollo con Aguacate y Casabe Tostado",
+        "desc": "Ceviche de Lentejas Criollo con Aguacate y Casabe Tostado, con 100 g de lentejas secas, 60 g de casabe, 1 tomate maduro.",
+        "prep_time": "40 min",
+        "difficulty": "Intermedio",
+        "cals": 791,
+        "protein": 61,
+        "carbs": 85,
+        "fats": 23,
+        "macros": [
+         "P:61g",
+         "C:85g",
+         "G:23g"
+        ],
+        "ingredients": [
+         "½ tomate maduro",
+         "1 ají morrón rojo",
+         "½ cebolla roja",
+         "3½ aceitunas verdes",
+         "½ limón (su jugo)",
+         "¼ taza de cilantro fresco picado",
+         "½ diente de ajo",
+         "¾ cdta de aceite de oliva",
+         "½ aguacate pequeño en lonjas",
+         "Comino al gusto",
+         "Sal al gusto",
+         "Pimienta negra al gusto",
+         "1 taza de lechuga en tiras",
+         "95 g de soya texturizada cocida",
+         "½ torta pequeña de casabe"
+        ],
+        "recipe": [
+         "Mise en place: enjuaga las lentejas; pica el tomate en cubos pequeños sin semillas, el ají morrón en cuadritos finos, la cebolla roja bien picada, las aceitunas en ruedas y el cilantro; exprime el jugo del limón, machaca el ajo y corta el aguacate en lonjas.",
+         "El Toque de Fuego: hierve las lentejas en 3 tazas de agua con el ajo machacado a fuego medio 20-25 min, hasta que estén tiernas pero enteras; escúrrelas bien y déjalas enfriar 10 min; tuesta el casabe en sartén seca u horno 180°C por 1-2 min por lado hasta crujiente. Cocina soya texturizada en agua hasta que ablanden e incorpórala al plato.",
+         "Montaje: en un bowl mezcla las lentejas tibias con tomate, ají morrón, cebolla, aceitunas, cilantro, jugo de limón, aceite de oliva, comino, sal y pimienta; deja marinar 5 min para que el ceviche tome sabor; sirve sobre una base de lechuga en tiras, corona con las lonjas de aguacate y acompaña con el casabe tostado para picar. Acompaña con soya texturizada.",
+         "💡 Ajustamos ligeramente las porciones para que tus calorías del día cuadren con precisión."
+        ],
+        "_solver_clamp_saturated": 9,
+        "_solver_clamp_saturated_hi": 2,
+        "_solver_clamp_saturated_lo": 7,
+        "_solver_frozen_lines": 1,
+        "_solver_not_converged": true,
+        "_solver_failed_macros": [
+         "protein",
+         "carbs"
+        ],
+        "_protein_closed": true,
+        "_portion_floor_adjusted": true,
+        "ingredients_raw": [
+         "0.5 tomate maduro",
+         "1 ají morrón rojo",
+         "0.5 cebolla roja",
+         "3.5 aceitunas verdes",
+         "0.5 limón (su jugo)",
+         "0.24 taza de cilantro fresco picado",
+         "0.5 diente de ajo",
+         "0.5 aguacate pequeño en lonjas",
+         "Comino al gusto",
+         "Sal al gusto",
+         "Pimienta negra al gusto",
+         "1 taza de lechuga en tiras",
+         "95 g de soya texturizada cocida",
+         "¾ cdta de aceite de oliva",
+         "½ torta pequeña de casabe"
+        ],
+        "_solver_raw_by_food": 10,
+        "_misalign_trace": {
+         "len": "post_engine_seam"
+        },
+        "_misalign_traced": "post_engine_seam",
+        "_closer_raw_by_food": 4,
+        "_refine_raw_by_food": 1
+       },
+       {
+        "meal": "Merienda",
+        "time": "Flexible",
+        "name": "Pera Fresa con Mantequilla de Anacardo, Linaza, Merey y Queso Cottage",
+        "desc": "Pera Fresa con Mantequilla de Anacardo, Linaza y Merey, con 1 pera madura, 25 g de mantequilla de anacardo (merey) natural, 1 cda de linaza molida.",
+        "prep_time": "5 min",
+        "difficulty": "Fácil",
+        "cals": 169,
+        "protein": 3,
+        "carbs": 28,
+        "fats": 5,
+        "macros": [
+         "P:3g",
+         "C:28g",
+         "G:5g"
+        ],
+        "ingredients": [
+         "1 pera madura",
+         "¼ cdta de mantequilla de anacardo (merey) natural",
+         "¼ cdta de linaza molida",
+         "Canela en polvo al gusto",
+         "15 g de queso"
+        ],
+        "recipe": [
+         "Mise en place: lava la pera y córtala en gajos con cáscara; ten lista la mantequilla de anacardo, la linaza molida y los mereyes.",
+         "Montaje: sirve los gajos de pera en un plato frío con la mantequilla de anacardo para untar o en copete al centro, espolvorea la linaza y los mereyes por encima y termina con una pizca de canela. Acompaña con queso cottage."
+        ],
+        "_solver_clamp_saturated": 2,
+        "_solver_clamp_saturated_hi": 0,
+        "_solver_clamp_saturated_lo": 2,
+        "_solver_frozen_lines": 1,
+        "_solver_not_converged": true,
+        "_solver_failed_macros": [
+         "protein",
+         "fats"
+        ],
+        "_protein_closed": true,
+        "_portion_floor_adjusted": true,
+        "_nocook_tdf_stripped": true,
+        "_recipe_contract_repaired": true,
+        "ingredients_raw": [
+         "1 pera madura",
+         "1.26 g de mantequilla de anacardo (merey) natural",
+         "Canela en polvo al gusto",
+         "0.24 cdta de linaza molida",
+         "15 g de queso"
+        ],
+        "_misalign_trace": {
+         "qty": "post_humanize",
+         "missing_in_raw": "pre_engine"
+        },
+        "_misalign_traced": "post_humanize",
+        "_solver_raw_by_food": 3,
+        "_closer_raw_by_food": 3,
+        "_refine_raw_by_food": 1
+       },
+       {
+        "meal": "Cena",
+        "time": "Flexible",
+        "name": "Gratén de Berenjena al Horno con Salsa Criolla, Queso Blanco, Guineítos Sofreídos y Soya Texturizada",
+        "desc": "Gratén de Berenjena al Horno con Salsa Criolla, Queso Blanco y Guineítos Sofreídos, con 1 berenjena grande (aprox. 300 g), 180 g de queso blanco fresco, 250 g de guineítos verdes.",
+        "prep_time": "40 min",
+        "difficulty": "Intermedio",
+        "cals": 412,
+        "protein": 42,
+        "carbs": 43,
+        "fats": 8,
+        "macros": [
+         "P:42g",
+         "C:43g",
+         "G:8g"
+        ],
+        "ingredients": [
+         "½ berenjena grande (aprox. 148 g)",
+         "¼ taza de salsa de tomate",
+         "½ cebolla",
+         "1 diente de ajo",
+         "½ ají cubanela",
+         "¾ cdta de aceite de oliva",
+         "Orégano dominicano al gusto",
+         "Sal al gusto",
+         "Pimienta negra al gusto",
+         "Cilantro fresco picado al gusto",
+         "70 g de soya texturizada cocida",
+         "15 g de queso blanco"
+        ],
+        "recipe": [
+         "Mise en place: lava la berenjena y córtala en rodajas gruesas de 2 cm; pela los guineítos verdes; pica la cebolla, el ají cubanela y machaca el ajo; desmenuza el queso blanco fresco en trozos.",
+         "El Toque de Fuego: pinta las rodajas de berenjena con aceite de oliva, sal y pimienta y hornéalas a 200°C por 20 min dándolas vuelta a mitad, hasta que estén doradas y tiernas al pinchar; hierve los guineítos en agua con sal a fuego medio 20 min hasta que el cuchillo entre sin fuerza, luego sofriéolos 3 min en la sartén con un hilo de aceite para darles un toque dorado distinto; en la misma sartén prepara la salsa sofriendo cebolla, ají cubanela y ajo a fuego medio 4-5 min, añade la salsa de tomate y el orégano y cocina 5 min más. Cocina soya texturizada en agua hasta que ablanden e incorpórala al plato.",
+         "Montaje: en una bandeja monta las rodajas de berenjena cubiertas con la salsa criolla y el queso blanco desmenuzado, gratina a 200°C por 8-10 min hasta que el queso burbujee y dore; sirve al lado los guineítos verdes sofreídos calientes espolvoreados con cilantro fresco. Acompaña con soya texturizada."
+        ],
+        "_solver_clamp_saturated": 5,
+        "_solver_clamp_saturated_hi": 2,
+        "_solver_clamp_saturated_lo": 3,
+        "_solver_frozen_lines": 1,
+        "_solver_not_converged": true,
+        "_solver_failed_macros": [
+         "protein",
+         "carbs",
+         "fats"
+        ],
+        "_protein_closed": true,
+        "_portion_realism_capped": true,
+        "_portion_floor_adjusted": true,
+        "_name_phantom_dairy_added": "Queso blanco",
+        "ingredients_raw": [
+         "0.5 cebolla",
+         "1.25 dientes de ajo",
+         "0.5 ají cubanela",
+         "Orégano dominicano al gusto",
+         "Sal al gusto",
+         "Pimienta negra al gusto",
+         "Cilantro fresco picado al gusto",
+         "70 g de soya texturizada cocida",
+         "¾ cdta de aceite de oliva",
+         "15 g de Queso blanco",
+         "0.49 berenjena grande (aprox. 148.08 g)",
+         "¼ taza de salsa de tomate"
+        ],
+        "_misalign_trace": {
+         "missing_in_raw": "post_humanize",
+         "qty": "pre_engine"
+        },
+        "_misalign_traced": "post_humanize",
+        "_solver_raw_by_food": 6,
+        "_closer_raw_by_food": 13,
+        "_refine_raw_by_food": 2
+       }
+      ],
+      "_critique_applied": true,
+      "date": "2026-09-14",
+      "_sodium_unknown_lines": 11,
+      "_recycled_from_prior_attempt": true
+     }
+    ],
+    "calories": 2050,
+    "macros": {
+     "protein": "128g",
+     "carbs": "231g",
+     "fats": "68g"
+    },
+    "micronutrient_report": {
+     "panel": [
+      {
+       "nutriente": "Fibra",
+       "key": "fiber_g",
+       "valor": 62.5,
+       "unidad": "g",
+       "piso": 25.0,
+       "status": "ok"
+      },
+      {
+       "nutriente": "Sodio",
+       "key": "sodium_mg",
+       "valor": 1029.7,
+       "unidad": "mg",
+       "techo": 2000.0,
+       "status": "ok",
+       "cobertura_nutriente": 1.0
+      },
+      {
+       "nutriente": "Azúcares añadidos",
+       "key": "free_sugars_g",
+       "valor": 1.0,
+       "unidad": "g",
+       "techo": 25.0,
+       "status": "ok",
+       "cobertura_nutriente": 0.8
+      },
+      {
+       "nutriente": "Vitamina D",
+       "key": "vit_d_mcg",
+       "valor": 3.6,
+       "unidad": "mcg",
+       "piso": 15.0,
+       "status": "bajo",
+       "nota": "Una dieta de alimentos enteros rara vez alcanza la vit D: añade pescado graso (salmón/sardina 1-2x/sem) o lácteo fortificado, o considera un suplemento de 600-800 UI."
+      },
+      {
+       "nutriente": "Calcio",
+       "key": "calcium_mg",
+       "valor": 1165.6,
+       "unidad": "mg",
+       "piso": 1000.0,
+       "status": "ok"
+      },
+      {
+       "nutriente": "Hierro",
+       "key": "iron_mg",
+       "valor": 25.1,
+       "unidad": "mg",
+       "piso": 18.0,
+       "status": "ok"
+      },
+      {
+       "nutriente": "Vitamina B12",
+       "key": "b12_mcg",
+       "valor": 2.1,
+       "unidad": "mcg",
+       "piso": 2.4,
+       "status": "bajo",
+       "nota": "Asegura fuentes animales (huevo, lácteos, carne, pescado); si eres vegano, suplemento de B12."
+      },
+      {
+       "nutriente": "Potasio",
+       "key": "potassium_mg",
+       "valor": 7120.6,
+       "unidad": "mg",
+       "piso": 2600.0,
+       "status": "ok"
+      },
+      {
+       "nutriente": "Magnesio",
+       "key": "magnesium_mg",
+       "valor": 712.6,
+       "unidad": "mg",
+       "piso": 320.0,
+       "status": "ok"
+      },
+      {
+       "nutriente": "Zinc",
+       "key": "zinc_mg",
+       "valor": 14.2,
+       "unidad": "mg",
+       "piso": 8.0,
+       "status": "ok"
+      },
+      {
+       "nutriente": "Folato",
+       "key": "folate_mcg",
+       "valor": 1218.3,
+       "unidad": "mcg",
+       "piso": 400.0,
+       "status": "ok"
+      },
+      {
+       "nutriente": "Vitamina A",
+       "key": "vit_a_mcg",
+       "valor": 980.9,
+       "unidad": "mcg",
+       "piso": 700.0,
+       "status": "ok"
+      },
+      {
+       "nutriente": "Vitamina C",
+       "key": "vit_c_mg",
+       "valor": 279.9,
+       "unidad": "mg",
+       "piso": 75.0,
+       "status": "ok"
+      },
+      {
+       "nutriente": "Vitamina E",
+       "key": "vit_e_mg",
+       "valor": 13.1,
+       "unidad": "mg",
+       "piso": 15.0,
+       "status": "bajo",
+       "nota": "Refuerza con nueces/semillas (almendra, girasol), aceites vegetales, aguacate y hoja verde."
+      },
+      {
+       "nutriente": "Vitamina K",
+       "key": "vit_k_mcg",
+       "valor": 456.3,
+       "unidad": "mcg",
+       "piso": 90.0,
+       "status": "ok"
+      },
+      {
+       "nutriente": "Selenio",
+       "key": "selenium_mcg",
+       "valor": 111.2,
+       "unidad": "mcg",
+       "piso": 55.0,
+       "status": "ok"
+      },
+      {
+       "nutriente": "Omega-3",
+       "key": "omega3_g",
+       "valor": 1.1,
+       "unidad": "g",
+       "piso": 1.1,
+       "status": "ok"
+      }
+     ],
+     "gaps": [
+      {
+       "nutriente": "Vitamina D",
+       "key": "vit_d_mcg",
+       "valor": 3.6,
+       "unidad": "mcg",
+       "piso": 15.0,
+       "status": "bajo",
+       "nota": "Una dieta de alimentos enteros rara vez alcanza la vit D: añade pescado graso (salmón/sardina 1-2x/sem) o lácteo fortificado, o considera un suplemento de 600-800 UI."
+      },
+      {
+       "nutriente": "Vitamina B12",
+       "key": "b12_mcg",
+       "valor": 2.1,
+       "unidad": "mcg",
+       "piso": 2.4,
+       "status": "bajo",
+       "nota": "Asegura fuentes animales (huevo, lácteos, carne, pescado); si eres vegano, suplemento de B12."
+      },
+      {
+       "nutriente": "Vitamina E",
+       "key": "vit_e_mg",
+       "valor": 13.1,
+       "unidad": "mg",
+       "piso": 15.0,
+       "status": "bajo",
+       "nota": "Refuerza con nueces/semillas (almendra, girasol), aceites vegetales, aguacate y hoja verde."
+      }
+     ],
+     "coverage": 0.8,
+     "resolved_ings": 98,
+     "total_ings": 123,
+     "sex": "F",
+     "condition_targets": [],
+     "per_day_ceilings": {
+      "days_evaluated": 3,
+      "high_ratio_threshold": 1.5,
+      "worst_day": {
+       "day_index": 0,
+       "high": []
+      },
+      "days_above": 0,
+      "flagged": false
+     },
+     "per_day_floors": {
+      "days_evaluated": 3,
+      "low_ratio_threshold": 0.6,
+      "min_micros": 2,
+      "worst_day": {
+       "day_index": 0,
+       "low": []
+      },
+      "days_below": 0,
+      "flagged": false
+     },
+     "disclaimer": "Estimado desde el catálogo nutricional (cobertura 80%); NO incluye la sal añadida 'al gusto'. Orientativo, no sustituye evaluación de un nutricionista."
+    },
+    "micronutrient_supplement_advice": {
+     "items": [
+      {
+       "nutriente": "Vitamina D",
+       "key": "vit_d_mcg",
+       "actual": 3.6,
+       "objetivo": 15.0,
+       "unidad": "mcg",
+       "suplemento": "Vitamina D3",
+       "dosis_sugerida": "600–800 UI/día (15–20 mcg)",
+       "primero_alimentos": "pescado graso (salmón/sardina enlatada 1–2x/sem), yema de huevo, lácteo fortificado, exposición solar 10–15 min",
+       "precaucion": "no exceder 4000 UI/día sin control médico (UL)."
+      },
+      {
+       "nutriente": "Vitamina B12",
+       "key": "b12_mcg",
+       "actual": 2.1,
+       "objetivo": 2.4,
+       "unidad": "mcg",
+       "suplemento": "Vitamina B12 (cianocobalamina)",
+       "dosis_sugerida": "2.4 mcg/día (o 250–500 mcg/sem si suplementas)",
+       "primero_alimentos": "huevo, lácteos, carne, pescado",
+       "precaucion": "ESENCIAL si tu dieta es vegana/vegetariana estricta — no es opcional en ese caso."
+      },
+      {
+       "nutriente": "Vitamina E",
+       "key": "vit_e_mg",
+       "actual": 13.1,
+       "objetivo": 15.0,
+       "unidad": "mg",
+       "suplemento": "Vitamina E (d-alfa-tocoferol)",
+       "dosis_sugerida": "comida primero; ~15 mg/día solo si no alcanzas (evita dosis altas de rutina)",
+       "primero_alimentos": "almendras/avellanas, semillas de girasol, aceites vegetales, aguacate, hoja verde",
+       "precaucion": "no exceder 1000 mg/día (UL); dosis altas + anticoagulante aumentan riesgo de sangrado."
+      }
+     ],
+     "count": 3,
+     "disclaimer": "Orientativo, no es una prescripción. Cubre los gaps con comida primero y consulta a tu médico antes de tomar suplementos (la dosis depende de tu análisis y tu caso)."
+    },
+    "variety_report": {
+     "total_meals": 12,
+     "egg_meals": 2,
+     "cremoso": 0,
+     "premium": 1,
+     "same_day_repeats": 0,
+     "fruit_repeats": 0,
+     "sweet_savory_clash": 0,
+     "same_day_protein_repeats": 0,
+     "same_day_formula_repeats": 0,
+     "meals_per_day": 4,
+     "cross_day_proteins": {
+      "res": 3
+     },
+     "cross_day_preps": {},
+     "cross_day_dishes": {},
+     "sweet_fish_pairings": 0,
+     "light_name_heavy_meals": 1,
+     "cross_day_snack_pair_repeats": 0,
+     "issues": [],
+     "ok": true
+    },
+    "dish_quality_report": {
+     "total_meals": 12,
+     "low_quality_meals": 0,
+     "low_quality_ratio": 0.0,
+     "issues": [],
+     "raw_staple_meals": 0,
+     "raw_staple_ratio": 0.0,
+     "raw_staple_issues": [],
+     "contract_meals": 0,
+     "contract_ratio": 0.0,
+     "contract_issues": [],
+     "transform_meals": 4,
+     "transform_ratio": 0.333
+    },
+    "data_provenance": {
+     "primary_source": "USDA FoodData Central",
+     "secondary_sources": [
+      "INCAP/LATINFOODS",
+      "manual (curado es-DO)"
+     ],
+     "ingredients_resolved": 57,
+     "usda_traced": 51,
+     "fdc_sample": [
+      {
+       "name": "Yogurt griego entero",
+       "fdc_id": 2259794
+      },
+      {
+       "name": "Lechosa",
+       "fdc_id": 169926
+      },
+      {
+       "name": "Espinacas",
+       "fdc_id": 168462
+      },
+      {
+       "name": "Granola",
+       "fdc_id": 171646
+      },
+      {
+       "name": "Canela en polvo",
+       "fdc_id": 171320
+      },
+      {
+       "name": "Lentejas",
+       "fdc_id": 172420
+      },
+      {
+       "name": "Calabacín",
+       "fdc_id": 169291
+      },
+      {
+       "name": "Remolacha",
+       "fdc_id": 169145
+      }
+     ],
+     "note": "Datos nutricionales anclados a fuentes verificables: 51 de 57 ingredientes resueltos trazables a USDA FoodData Central (IDs públicos en fdc.nal.usda.gov); el resto, INCAP/curado es-DO."
+    },
+    "resolution_coverage": {
+     "resolved": 125,
+     "total": 126,
+     "pct": 0.992
+    },
+    "_clinical_layer_applied": true,
+    "delivered_macros": {
+     "protein": 124,
+     "carbs": 241,
+     "fats": 73
+    },
+    "delivered_calories": 2113,
+    "grocery_start_date": "2026-09-13T04:16:06.396124+00:00",
+    "_protein_floor_delivered": {
+     "target_g": 128.0,
+     "piso_pct": 0.9,
+     "piso_g": 115.2,
+     "dias_medidos": 3,
+     "cortos": [],
+     "cumple": true,
+     "surface": "post-review-patch",
+     "recuperado": false,
+     "cortos_antes": []
+    },
+    "_repair_stage_diff": {
+     "estado": "medido",
+     "surface": "post-review-patch",
+     "comidas": 12,
+     "etapas": {
+      "entrada": {},
+      "tras_caps": {},
+      "salida": {}
+     },
+     "nuevos": [],
+     "n_nuevos": 0,
+     "resueltos": 0,
+     "reglas_huella": "411df02c49daba7d"
+    },
+    "clinical_band_score": {
+     "score": 0.917,
+     "cells_in_band": 11,
+     "cells_total": 12,
+     "score_macros_only": 1.0,
+     "cells_in_band_macros": 9,
+     "cells_total_macros": 9,
+     "band_macros": [
+      0.9,
+      1.12
+     ],
+     "band_kcal": [
+      0.95,
+      1.05
+     ],
+     "per_macro": {
+      "protein": 1.0,
+      "carbs": 1.0,
+      "fats": 1.0,
+      "kcal": 0.667
+     },
+     "all4_days": 2,
+     "days_total": 3,
+     "all4_ratio": 0.667,
+     "per_day": [
+      {
+       "day": 1,
+       "ratios": {
+        "protein": 0.922,
+        "carbs": 1.03,
+        "fats": 1.088,
+        "kcal": 1.012
+       },
+       "all4_in_band": true
+      },
+      {
+       "day": 2,
+       "ratios": {
+        "protein": 0.977,
+        "carbs": 1.056,
+        "fats": 1.029,
+        "kcal": 1.027
+       },
+       "all4_in_band": true
+      },
+      {
+       "day": 3,
+       "ratios": {
+        "protein": 1.008,
+        "carbs": 1.043,
+        "fats": 1.118,
+        "kcal": 1.053
+       },
+       "all4_in_band": false
+      }
+     ],
+     "slot_drift": {
+      "desayuno": {
+       "protein": 0.891,
+       "carbs": 0.799,
+       "fats": 1.429
+      },
+      "almuerzo": {
+       "protein": 0.914,
+       "carbs": 1.101,
+       "fats": 0.865
+      },
+      "merienda": {
+       "protein": 0.48,
+       "carbs": 0.738,
+       "fats": 1.532
+      },
+      "cena": {
+       "protein": 1.12,
+       "carbs": 1.092,
+       "fats": 0.495
+      }
+     }
+    },
+    "_phantom_ingredients_repaired": [
+     {
+      "day": 1,
+      "meal": "Smoothie Bowl Verde de Yogur Griego y Lechosa",
+      "food": "Granola",
+      "line": "20 g de Granola"
+     }
+    ],
+    "_name_phantom_dairy_repaired": [
+     {
+      "day": 3,
+      "meal": "Mangú Criollo con Huevo Revuelto, Tomate Asado, Aguacate Fresco y Queso Mozzarella",
+      "food": "Queso mozzarella",
+      "line": "30 g de Queso mozzarella"
+     },
+     {
+      "day": 3,
+      "meal": "Gratén de Berenjena al Horno con Salsa Criolla, Queso Blanco, Guineítos Sofreídos y Soya Texturizada",
+      "food": "Queso blanco",
+      "line": "30 g de Queso blanco"
+     }
+    ],
+    "_raw_misalign_stages": {
+     "missing_in_raw": {
+      "pre_engine": 2,
+      "post_humanize": 1
+     },
+     "len": {
+      "post_engine_seam": 1
+     },
+     "qty": {
+      "post_humanize": 1,
+      "pre_engine": 1
+     }
+    },
+    "_display_raw_reconciled": [
+     {
+      "day": 3,
+      "meal": "Gratén de Berenjena al Horno con Salsa Criolla, Queso Blanco, Guineítos Sofreídos y Soya Texturizada",
+      "food": "berenjena",
+      "kind": "qty_divergence",
+      "ratio": 1.22,
+      "display": "1 berenjena grande (aprox. 305 g)",
+      "raw": "0.82 berenjena grande (aprox. 250.53 g)",
+      "macros_truthed_up": true
+     }
+    ],
+    "_raw_misalign_stages_post": {
+     "missing_in_raw": {
+      "pre_engine": 2,
+      "post_humanize": 1
+     },
+     "len": {
+      "post_engine_seam": 1
+     },
+     "qty": {
+      "post_humanize": 1,
+      "pre_engine": 1
+     }
+    },
+    "_country": "DO",
+    "_ingredient_demand": {
+     "schema": 1,
+     "source_days": 3,
+     "source_hash": "a36fe905a24a1775",
+     "revision": null,
+     "surface": "get_shopping_list_delta",
+     "computed_at": "2026-09-13T04:17:05.664466+00:00"
+    },
+    "aggregated_shopping_list": [],
+    "aggregated_shopping_list_weekly": [],
+    "aggregated_shopping_list_biweekly": [],
+    "aggregated_shopping_list_monthly": [],
+    "calc_household_multiplier": 1.0,
+    "shopping_cost_summary": {
+     "version": 1,
+     "source": "backend",
+     "active_duration": "weekly",
+     "computed_at": "2026-09-13T04:17:06.721167+00:00",
+     "by_duration": {
+      "weekly": {
+       "trip_total_rd": 6521.99,
+       "stable_rd": 3535.5,
+       "perishable_rd": 2986.49,
+       "cycle_weeks": 1.0,
+       "cycle_trips": 1,
+       "cycle_total_rd": 6521.99,
+       "cycle_repurchase_saving_rd": 0.0,
+       "items_priced": 54,
+       "items_total": 54
+      },
+      "biweekly": {
+       "trip_total_rd": 8176.99,
+       "stable_rd": 5190.5,
+       "perishable_rd": 2986.49,
+       "cycle_weeks": 2.143,
+       "cycle_trips": 3,
+       "cycle_total_rd": 10568.41,
+       "cycle_repurchase_saving_rd": 1021.71,
+       "items_priced": 54,
+       "items_total": 54
+      },
+      "monthly": {
+       "trip_total_rd": 10294.99,
+       "stable_rd": 7308.5,
+       "perishable_rd": 2986.49,
+       "cycle_weeks": 4.286,
+       "cycle_trips": 5,
+       "cycle_total_rd": 18022.04,
+       "cycle_repurchase_saving_rd": 2085.7,
+       "items_priced": 54,
+       "items_total": 54
+      }
+     }
+    },
+    "budget_reconciliation": {
+     "tier": "medium",
+     "basis": "medium",
+     "currency": "DOP",
+     "reference_rd": 5125,
+     "floor_rd": 4100,
+     "days": 7,
+     "household": 1,
+     "active_duration": "weekly",
+     "estimated_cycle_rd": 6522,
+     "items_priced": 54,
+     "items_total": 54,
+     "status": "excedido",
+     "ratio": 1.273,
+     "delta_rd": 1397,
+     "computed_at": "2026-09-13T04:17:06.722164+00:00",
+     "adjusted": true,
+     "converged_pass": true,
+     "substitutions": [
+      "chía → Linaza",
+      "yogur griego → Yogurt natural",
+      "almendras → Maní",
+      "yogurt griego → Yogurt natural"
+     ],
+     "suggestions": [
+      {
+       "type": "marca",
+       "item": "Aceitunas",
+       "text": "Aceitunas: la opción más económica del súper es El Serpis Bolsa Verdes Con Hueso 175 gr (RD$92)"
+      },
+      {
+       "type": "marca",
+       "item": "Aceite vegetal",
+       "text": "Aceite vegetal: la opción más económica del súper es Wesson Botella 48 Oz (RD$425)"
+      },
+      {
+       "type": "marca",
+       "item": "Queso cottage",
+       "text": "Queso cottage: la opción más económica del súper es Westby Tarro Lowfat 2% Small Curd 16 Oz (RD$295)"
+      },
+      {
+       "type": "marca",
+       "item": "Yogurt",
+       "text": "Yogurt: la opción más económica del súper es Yoplait Bebible Natural 0% 220 Ml (RD$85)"
+      },
+      {
+       "type": "marca",
+       "item": "Huevo",
+       "text": "Huevo: la opción más económica del súper es Endy Cartón Extra Grandes Blanco 6 unid (RD$65)"
+      }
+     ]
+    },
+    "_budget_adjusted": true,
+    "_shopping_completeness": {
+     "days": 7,
+     "distinct": 54,
+     "expected_min": 6,
+     "is_empty": false,
+     "is_sparse": false,
+     "distinct_proteins": 3,
+     "is_protein_starved": false
+    },
+    "_selected_techniques": [
+     "Estilo Bowl/Poke Tropical",
+     "Guiso o Estofado Ligero",
+     "Desmenuzado (Ropa Vieja)"
+    ],
+    "_recipe_coherence_errors": [
+     "Día 1, Bowl Nocturno de Lentejas con Guineítos Hervidos, Edamame y Espinacas Sofreídas: El ingrediente principal 'pulpa' está listado pero no se menciona en las instrucciones de la receta.",
+     "Día 2, Guiso Ligero de Vainitas con Habichuelas Rojas y Queso Cottage sobre Guineítos Verdes Majados: El ingrediente principal 'pelados' está listado pero no se menciona en las instrucciones de la receta."
+    ],
+    "_shopping_coherence_block_history": [
+     {
+      "ts": "2026-09-13T04:17:07.611839+00:00",
+      "attempt": 2,
+      "divergence_count": 4,
+      "presence_count": 0,
+      "magnitude_count": 4,
+      "hypotheses": {
+       "recipe_unquantified": 4
+      },
+      "block_set": false,
+      "action_taken": "not_applicable"
+     },
+     {
+      "ts": "2026-09-13T04:17:35.187377+00:00",
+      "attempt": null,
+      "swap": true,
+      "divergence_count": 52,
+      "presence_count": 52,
+      "magnitude_count": 0,
+      "hypotheses": {
+       "cap_swallowed_modifier": 52
+      },
+      "critical_count": 52,
+      "block_set": false,
+      "action_taken": "post_swap_revalidation",
+      "escalated_user_visible": true,
+      "alerted": true
+     }
+    ],
+    "_review_patch_removed_ingredients": [
+     "2½ guineítos verdes (≈100 g pulpa)",
+     "20 g de guineítos verdes pelados"
+    ],
+    "_culinary_contract_scan": {
+     "status": "scanned",
+     "checks": [
+      "V1",
+      "V2",
+      "V3",
+      "V4",
+      "V5",
+      "V6",
+      "V7a",
+      "V7b",
+      "V7c",
+      "V7d",
+      "V7e",
+      "V8a",
+      "V8b",
+      "V9"
+     ],
+     "meals": 12,
+     "violations": 0,
+     "error": null,
+     "reglas_huella": "411df02c49daba7d",
+     "schema": "2026-09-12.certeza",
+     "exactas": 0,
+     "contexto": {
+      "equipo": "no_declarado"
+     }
+    },
+    "_culinary_contract_violations": [],
+    "_culinary_contract_coverage": 1.0,
+    "_swap_coherence_warnings": {
+     "critical_count": 5,
+     "summary": [
+      {
+       "ingredient": "Aceite de oliva",
+       "hypothesis": "cap_swallowed_modifier",
+       "delta_pct": 0.0
+      },
+      {
+       "ingredient": "Aceite vegetal",
+       "hypothesis": "cap_swallowed_modifier",
+       "delta_pct": 0.0
+      },
+      {
+       "ingredient": "Aceitunas",
+       "hypothesis": "cap_swallowed_modifier",
+       "delta_pct": 0.0
+      },
+      {
+       "ingredient": "Aguacate",
+       "hypothesis": "cap_swallowed_modifier",
+       "delta_pct": 0.0
+      },
+      {
+       "ingredient": "Ajo",
+       "hypothesis": "cap_swallowed_modifier",
+       "delta_pct": 0.0
+      }
+     ],
+     "detected_at": "2026-09-13T04:17:35.187377+00:00"
+    },
+    "_cache_schema_version": "v1"
+   }
+  }
+ ],
+ "presupuesto_usd": 0.5,
+ "coste_usd_est": 0.05361,
+ "telemetria_prod": false,
+ "escrituras_suprimidas": {
+  "app_kv_store": 44,
+  "pipeline_metrics": 109,
+  "system_alerts": 5
+ },
+ "modo_catalogo": "nutricion",
+ "catalogo": "catalogo_nutricion_2026_09_12.json"
+}

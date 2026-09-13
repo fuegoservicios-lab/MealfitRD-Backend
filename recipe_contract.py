@@ -520,11 +520,23 @@ def _reparar_estructura(meal: dict) -> dict:
         return {"aplicado": [], "descartado": [], "cambios": []}
 
 
+def _retirar_sin_lista(meal: dict, index: dict) -> dict:
+    """[P1-PLAN-LOTE-30] Paso (5): los pasos dejan de nombrar lo que la lista no trae (`recipe_repair.retirar_sin_lista`).
+    Fail-open: sin índice o con error, nada cambia y nada se anota."""
+    try:
+        from recipe_repair import retirar_sin_lista
+        return retirar_sin_lista(meal, index)
+    except Exception:
+        return {"aplicado": [], "descartado": [], "cambios": []}
+
+
 def reconcile_meal(meal: dict, index: dict) -> dict:
     """El contrato completo sobre UN plato, en orden: (1) la lista nombra la forma del huevo, (2) los pasos siguen a
     esa forma, (3) las cantidades de los pasos siguen a la lista (C2), (4) la ESTRUCTURA del plato se repara sin tocar la
-    lista (`recipe_repair`, P1-PLAN-LOTE-29). Informe agregado; `lista_reescrita` > 0 avisa al llamador de que la lista
-    cambió y los macros hay que re-medirlos; `estructura` cuenta las reparaciones de (4)."""
+    lista (`recipe_repair`, P1-PLAN-LOTE-29), (5) los pasos dejan de nombrar lo que la lista NO trae (V5 — nace cuando un
+    cerrador quita una línea; `recipe_repair.retirar_sin_lista`, P1-PLAN-LOTE-30). Informe agregado; `lista_reescrita` > 0
+    avisa al llamador de que la lista cambió y los macros hay que re-medirlos; `estructura` cuenta las reparaciones de (4)
+    y `sin_lista` los alimentos retirados de los pasos en (5); lo que (5) no pudo retirar va a `sin_reparar["sin_lista"]`."""
     lista_n = canonicalize_egg_form_lines(meal)
     huevo = egg_forms_step_sync(meal, index)
     r = reconcile_step_quantities(meal, index)
@@ -532,6 +544,13 @@ def reconcile_meal(meal: dict, index: dict) -> dict:
     r["estructura"] = len(est.get("aplicado") or [])
     if r["estructura"]:
         r["cambios_estructura"] = list(est.get("cambios") or [])
+    sl = _retirar_sin_lista(meal, index)                                 # (5) [P1-PLAN-LOTE-30]
+    r["sin_lista"] = len(sl.get("aplicado") or [])
+    if sl.get("descartado"):
+        r["sin_reparar"] = dict(r.get("sin_reparar") or {})
+        r["sin_reparar"]["sin_lista"] = len(sl["descartado"])
+    if r["sin_lista"]:
+        r["cambios_sin_lista"] = list(sl.get("cambios") or [])
     r["lista_reescrita"] = lista_n
     r["reescritas"] += huevo["reescritas"]
     if huevo["reescritas"]:
@@ -609,14 +628,18 @@ def _aplicar_meal(meal: dict, index: dict, mode: str, db=None) -> int:
         r = reconcile_meal(meal, index)
         if r.get("lista_reescrita"):
             _remedir_macros(meal, db)
-    if r["reescritas"] or r["sin_reparar"] or r.get("lista_reescrita") or r.get("estructura"):
+    if r["reescritas"] or r["sin_reparar"] or r.get("lista_reescrita") or r.get("estructura") or r.get("sin_lista"):
         meal[TELEMETRIA_KEY] = {"modo": mode, "reescritas": r["reescritas"], "familias": r["familias"],
                                 "sin_reparar": r["sin_reparar"]}
         if r.get("lista_reescrita"):
             meal[TELEMETRIA_KEY]["lista_reescrita"] = r["lista_reescrita"]   # [P1-PLAN-LOTE-24] sólo si la lista cambió
         if r.get("estructura"):
             meal[TELEMETRIA_KEY]["estructura"] = r["estructura"]             # [P1-PLAN-LOTE-29] sólo si se reparó estructura
-    else:
+        if r.get("sin_lista"):
+            meal[TELEMETRIA_KEY]["sin_lista"] = r["sin_lista"]               # [P1-PLAN-LOTE-30] sólo si se retiró algo de los pasos
+    elif not meal.get(TELEMETRIA_KEY):
+        # [P1-PLAN-LOTE-30] una pasada que no tiene nada que decir no borra lo que dijo una anterior: el bench en modo real
+        # vio 8 sellos del pipeline quedar en 5 tras el INSERT — la flota perdía la cuenta de lo que el contrato SÍ hizo.
         meal.pop(TELEMETRIA_KEY, None)
     return r["reescritas"] if mode == "repair" else 0
 
@@ -636,16 +659,21 @@ def apply_final_contract(days: list, db=None) -> str:
         n = 0
         sombra = 0
         estructura = 0
+        sin_lista = 0
         for d in days:
             for m in (d.get("meals") or []) if isinstance(d, dict) else []:
                 if isinstance(m, dict):
                     k = _aplicar_meal(m, index, mode, db)
                     n += k
                     estructura += int((m.get(TELEMETRIA_KEY) or {}).get("estructura") or 0)
+                    sin_lista += int((m.get(TELEMETRIA_KEY) or {}).get("sin_lista") or 0)
                     if mode == "shadow" and m.get(TELEMETRIA_KEY, {}).get("reescritas"):
                         sombra += m[TELEMETRIA_KEY]["reescritas"]
         if estructura and mode == "repair":
             logger.info(f"🧱 [P1-PLAN-LOTE-29] estructura del plato reparada en {estructura} comida(s) (sin tocar la lista)")
+        if sin_lista and mode == "repair":
+            logger.info(f"🧹 [P1-PLAN-LOTE-30] {sin_lista} alimento(s) que la lista no trae retirado(s) de los pasos "
+                        f"(la lista tiene la última palabra también cuando pierde una línea)")
         if mode == "shadow":
             return f"recipe_contract_shadow={sombra}" if sombra else ""
         if n:

@@ -207,3 +207,148 @@ def _secable(food: str) -> bool:
         return bool(_V7_SECABLES_RE.search(_norm(food)))
     except Exception:
         return False
+
+
+# ─────────────────────────────────────────────────────────────────────────────────────────────
+# [P1-PLAN-LOTE-30 · 2026-09-13] la lista tiene la última palabra también cuando PIERDE un alimento
+# ─────────────────────────────────────────────────────────────────────────────────────────────
+# Medido en el benchmark en modo real (3 planes recién generados, 33 comidas): el piso de porciones servibles
+# (`_floor_subservible_portions`, GAP-05) borró «15 g de Granola» de un smoothie bowl sin cabida calórica y el paso siguió
+# diciendo «corona con la granola» — un V5 (el paso usa lo que la lista no trae) nacido en la propia cadena de
+# persistencia, no en el LLM. Ningún cerrador que quita una línea toca los pasos, así que la reparación va en la cola del
+# contrato, para TODOS: se retira la MENCIÓN del alimento del paso (el ítem de una enumeración, el complemento «con X» o,
+# si el paso no decía otra cosa, la frase entera), se comprueba con el propio detector V5 y, si la mención sobrevive, se
+# deshace y se declara. Nunca toca la lista. tooltip-anchor: P1-PLAN-LOTE-30-SIN-LISTA
+
+_ART = r"(?:(?:el|la|los|las|un|una|unos|unas|del|al)\s+)?"
+_CANT = (r"(?:[\d½⅓¼¾⅔⅛][\d.,/½⅓¼¾⅔⅛]*\s*(?:g|gr|gramos?|kg|ml|l|cdas?|cdtas?|cucharad\w*|tazas?|unid\w*|piezas?|rebanadas?|"
+         r"hojas?|dientes?|pizcas?|pu[nñ]ad\w*|ramitas?)?\s*(?:de\s+)?)?")
+_MOD = r"(?:\s+(?:reservad|tostad|picad|rallad|fresc|restant|troce|cortad|desmenuzad|cocid|crud|madur|natural|enter|integral)\w*)?"
+_TRAS = r"(?=\s*(?:[.,;:)]|$|\s+\d|\s+(?:y|e|o|hasta|para|en|con|sobre|por|durante|mientras|al|a)\b))"
+_PREP = r"(?:con|de|sobre|junto\s+a|junto\s+con|acompa[nñ]ad[oa]s?\s+de|encima\s+de|m[aá]s)"
+#: lo que sigue a «ITEM y » para que cuente como enumeración: otro ítem con artículo o cantidad, no un verbo
+_SIGUIENTE_ITEM = r"(?:[\d½⅓¼¾⅔⅛]|(?:el|la|los|las|un|una|unos|unas|del|al)\s)"
+_ACENTOS = {"a": "[aá]", "e": "[eé]", "i": "[ií]", "o": "[oó]", "u": "[uúü]", "n": "[nñ]"}
+
+
+def _rx_alimento(nombre: str) -> str:
+    """Regex del alimento tolerante a acentos, mayúsculas y plural, palabra a palabra: «jamon» casa «Jamón» y «jamones»;
+    «yogur de coco» casa «Yogur de Coco» entero (quitar sólo «yogur» dejaría «de coco, 65 ml de leche» colgando)."""
+    partes = [p for p in re.split(r"\s+", str(nombre or "").lower().strip()) if p]
+    return r"\s+".join("".join(_ACENTOS.get(c, re.escape(c)) for c in p) + r"(?:s|es)?\b" for p in partes)
+
+
+def _cabeza(nombre: str) -> str:
+    """La palabra que V5 usa para localizar la mención (`_v5_mas_especifico`): la primera de ≥4 letras."""
+    return next((w for w in re.split(r"[^a-z0-9]+", str(nombre or "").lower()) if len(w) >= 4), "")
+
+
+def _item(cabeza: str) -> str:
+    return rf"{_CANT}{_ART}\b{_rx_alimento(cabeza)}{_MOD}"
+
+
+def _frases(texto: str) -> list:
+    return [f for f in re.split(r"(?<=[.;])\s+", texto) if f.strip()]
+
+
+def quitar_mencion(paso: str, alimento: str) -> str:
+    """Quita del paso la mención del alimento (nombre normalizado, p. ej. «granola» o «yogur de coco»; si el nombre entero
+    no aparece, se busca su cabeza). Devuelve el paso reescrito, el mismo paso si no lo nombraba, o «» si sin ese alimento
+    no queda nada que decir. Orden: ítem de una enumeración («X, ITEM y Y» / «ITEM y Y» / «X y ITEM») → complemento
+    («corona con ITEM») → la frase entera que lo nombra."""
+    prefijo, cuerpo = _seccion(paso)
+    fl = re.IGNORECASE
+    nombre = next((n for n in (str(alimento or "").strip().lower(), _cabeza(alimento)) if n and cuerpo and re.search(rf"\b{_rx_alimento(n)}", cuerpo, fl)), "")
+    if not nombre:
+        return paso
+    al = _rx_alimento(nombre)
+    it = _item(nombre)
+    nuevo = re.sub(rf",\s*{it}(?=\s*(?:,|\s+(?:y|e)\s+))", "", cuerpo, count=1, flags=fl)          # «X, ITEM, Y» / «X, ITEM y Y»
+    if nuevo == cuerpo:
+        # «ITEM y Y» / «ITEM, Y»: sólo si lo que sigue es otro ítem (artículo o cantidad), no un verbo («…el jamón y mezcla bien»)
+        nuevo = re.sub(rf"\b{it}\s*(?:,|\s+(?:y|e))\s+(?={_SIGUIENTE_ITEM})", "", cuerpo, count=1, flags=fl)
+    if nuevo == cuerpo:
+        m = re.search(rf"\s+(?:y|e)\s+{it}{_TRAS}", cuerpo, fl)                                     # «X y ITEM»
+        if m:
+            antes, despues = cuerpo[:m.start()], cuerpo[m.end():]
+            ini = max(antes.rfind(". "), antes.rfind(": "), antes.rfind("; "), -1) + 1
+            clausula = antes[ini:]
+            if ", " in clausula and not re.search(r"\s(?:y|e)\s", clausula):                        # «A, B, C» → «A, B y C»
+                i = clausula.rfind(", ")
+                clausula = clausula[:i] + " y " + clausula[i + 2:]
+            nuevo = antes[:ini] + clausula + despues
+    if nuevo == cuerpo:
+        nuevo = re.sub(rf"\s+{_PREP}\s+{it}{_TRAS}", "", cuerpo, count=1, flags=fl)                 # «corona con ITEM»
+    if nuevo == cuerpo or re.search(rf"\b{al}", nuevo, fl):                                          # cae la frase que lo nombra
+        nuevo = " ".join(f for f in _frases(cuerpo) if not re.search(rf"\b{al}", f, fl))
+    nuevo = re.sub(r"\s+", " ", nuevo).replace(" ,", ",").replace(" .", ".").replace(",.", ".").replace(" ;", ";").strip()
+    nuevo = " ".join(f for f in _frases(nuevo) if len(re.findall(r"\w+", f)) >= 2).strip()          # «Corona.» no dice nada
+    if not nuevo:
+        return ""
+    if cuerpo[:1].isupper():                                                                          # respeta la grafía del paso
+        nuevo = nuevo[0].upper() + nuevo[1:]
+    return f"{prefijo}{nuevo}"
+
+
+def _hallazgos(meal: dict, index: dict) -> set:
+    """Los hallazgos de capa 1 que dependen del TEXTO de los pasos y sólo necesitan el índice (V1, V3, V5, V7a/b/c/e): el
+    espejo con el que la retirada comprueba que no abrió otro hallazgo. `{(check, alimento)}`; fail-open por check."""
+    out = set()
+    try:
+        import culinary_coherence as cc
+        dia = {"day": 0}
+        for fn in ("_v1_verbo_alimento", "_v3_huerfanos", "_v5_paso_usa_lo_que_no_esta", "_v7a_lista_compra_de_mas",
+                   "_v7b_duplicado_incompatible", "_v7c_seco_sin_coccion", "_v7e_paso_pide_mas_piezas"):
+            try:
+                for v in (getattr(cc, fn)(dia, meal, index) or []):
+                    out.add((v.get("check"), v.get("food")))
+            except Exception:
+                continue
+    except Exception:
+        pass
+    return out
+
+
+def retirar_sin_lista(meal: dict, index: dict) -> dict:
+    """Retira de `meal["recipe"]` los alimentos que V5 acusa (el paso los usa, la lista no los trae) y lo verifica con el
+    mismo detector; si la mención sobrevive o la receta se quedaría vacía, deshace ese alimento y lo declara. Devuelve
+    `{"aplicado": [alimentos], "descartado": [alimentos], "cambios": [{"tipo", "food", "paso", "antes", "despues"}]}`.
+    La lista de ingredientes no se toca jamás."""
+    out = {"aplicado": [], "descartado": [], "cambios": []}
+    try:
+        if not isinstance(meal, dict) or not isinstance(meal.get("recipe"), list) or not meal["recipe"] or not index:
+            return out
+        from culinary_coherence import _v5_paso_usa_lo_que_no_esta
+        dia = {"day": 0}
+        foods = []
+        for v in _v5_paso_usa_lo_que_no_esta(dia, meal, index):
+            f = v.get("food")
+            if f and f not in foods:
+                foods.append(f)
+        v5s = {("V5", f) for f in foods}
+        base = _hallazgos(meal, index) - v5s
+        for food in foods:
+            if not _cabeza(food):
+                out["descartado"].append(food)
+                continue
+            antes = [str(p) for p in meal["recipe"]]
+            nuevos, cambios = [], []
+            for i, p in enumerate(antes):
+                q = quitar_mencion(p, food)
+                if q != p:
+                    cambios.append({"tipo": "sin_lista", "food": food, "paso": i, "antes": p, "despues": q})
+                if q:
+                    nuevos.append(q)
+            meal["recipe"] = nuevos
+            despues = _hallazgos(meal, index)
+            # se deshace si la mención sobrevive, si la receta se vació o si la retirada ABRIÓ otro hallazgo (un V3 porque la
+            # frase que cayó era la única que nombraba a otro alimento — medido sobre el corpus fijo antes de escribir esto)
+            if ("V5", food) in despues or (despues - base - v5s) or not nuevos or not cambios:
+                meal["recipe"] = antes
+                out["descartado"].append(food)
+            else:
+                out["aplicado"].append(food)
+                out["cambios"].extend(cambios)
+    except Exception:
+        return out
+    return out

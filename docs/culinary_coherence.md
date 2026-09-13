@@ -1020,3 +1020,52 @@ intactos). Bench del corpus, superficie `degradado`: **1 nuevo → 0**, 4 resuel
 midió sobre los tres casos del backlog, no sobre la flota; aparecerá en `_recipe_contract_final.estructura` cuando la flota
 la necesite. No repara técnica impropia (V1) ni estado imposible (V2) fuera del camino degradado: eso sigue siendo del
 generador y del gate. No reabre LP/MILP.
+
+
+## El benchmark en modo real, ejecutado: 3 planes recién generados por $0,05 y un hallazgo que nace en la cadena (CUL-P1-07 · `P1-PLAN-LOTE-30` · 2026-09-13)
+
+**Qué se corrió.** `bench_superficies_culinarias.py --real` sobre tres perfiles del wizard (baseline masculino, DM2 con
+metformina, vegetariana; `totalDays` 30) con tope de $0,50. El pipeline REAL (`arun_plan_pipeline`, Luna/flash por tier de
+invitado) generó el bloque síncrono de 3 días de cada uno — 12, 9 y 12 comidas; 8, 7 y 9 llamadas al LLM; 650, 475 y 411 s
+(el primero pasó cuatro rechazos del revisor por proteína repetida el mismo día) — por **$0,0536 en total**, contado en
+proceso con la tarifa del propio emisor. Coste por plan de 3 días: 1 a 3 centavos.
+
+**Lo que el modo real del lote 28 no hacía, y ahora hace.** El lote 28 dejó el modo real escrito y sin ejecutar; al ejecutarlo
+faltaban cuatro cosas, y las cuatro están en el bench: (1) abrir los pools como el arranque de la app (fuera de FastAPI el
+catálogo sale vacío); (2) imitar a `/analyze` (`_plan_start_date`, `_days_to_generate = PLAN_CHUNK_SIZE`, rebanada del
+blueprint) en vez de llamar al pipeline a pelo; (3) **no escribir en la base del dueño**: las funciones de escritura de
+`db_core` se sustituyen por dobles que cuentan y no ejecutan — la corrida habría dejado **158 filas de telemetría en
+producción** (`pipeline_metrics` 109, `app_kv_store` 44, `system_alerts` 5) y una decena en `llm_usage_events`; `--telemetria-prod`
+las deja pasar a sabiendas; (4) contar el coste EN PROCESO (`compute_llm_cost_micros`, envolviendo a `log_llm_usage_event`),
+porque el presupuesto no puede depender de leer una tabla en la que ya no escribimos. Y `--planes-de <artefacto>` re-mide
+sin LLM los planes de una corrida real: el pareado real que el protocolo pedía, sin volver a pagar.
+
+**Lo que los planes recién generados traen de fábrica** (capa 1 a la ENTRADA de la cadena, es decir, lo que el pipeline
+entrega): baseline V3 1, V7a 2, V1 1, V7e 5; DM2 V7e 5, V7a 2; vegetariana 0. Ninguna cadena determinista los resuelve — no
+es su trabajo — y ninguna los empeora, salvo una.
+
+**El hallazgo: la lista pierde una línea y el paso la sigue nombrando.** En el smoothie bowl del plan vegetariano la cadena
+del INSERT (`insert` y `quality`, la misma SSOT) introdujo **1 hallazgo nuevo**: `_relevel_fats_universal` bajó la granola de
+15 a 10 g para cerrar la banda de grasa y `_floor_subservible_portions` (GAP-05, «una línea de 10 g sin cabida calórica no se
+sirve: se retira») **borró la línea** — pero el paso siguió diciendo «corona con la granola»: **V5 nacido en la propia
+cadena de persistencia**, no en el LLM. Ningún cerrador que quita una línea toca los pasos, así que la reparación va en la
+cola del contrato, para todos: **paso (5) de `reconcile_meal`** — `recipe_repair.retirar_sin_lista` retira la MENCIÓN del
+alimento (el ítem de la enumeración «…linaza y 15 g de granola», el complemento «corona con la granola y…», o la frase entera
+si no decía otra cosa), verifica con el propio detector V5 y **se deshace si la mención sobrevive, si la receta se vacía o si
+abrió otro hallazgo** (V1/V3/V5/V7a-b-c-e sobre el mismo plato). La lista no se toca jamás. Telemetría:
+`_recipe_contract_final.sin_lista`; lo que no pudo retirar, `sin_reparar.sin_lista`.
+
+**Medido antes de escribir la versión definitiva.** La primera versión quitaba sólo la CABEZA del nombre («yogur» de «yogur
+de coco») y, al no casar el ítem entero, tiraba la frase completa: sobre el corpus fijo abrió **3 V3** (mango, leche y maní
+se quedaron sin paso). De ahí las dos reglas: el nombre entero antes que la cabeza, y una retirada que abre un hallazgo no
+es una reparación. Pareado real (`--planes-de`, mismos 3 planes): `insert`/`quality` **1 → 0** nuevos, resto 0 → 0;
+sellos del contrato 5 → 9. Corpus fijo (5 planes de producción): 0 hallazgos nuevos en las 8 superficies; `insert`/`quality`/`swap`/`modify` 54 → 55 resueltos (el «yogur de coco» del batido: un V5 que escribió el LLM y que el paso (5) retira sin abrir otro) y sellos 20 → 45 (los que ya no se pierden); `chunk_t2` 9 → 7 resueltos es la FECHA, no el código — los días pasados se congelan y hoy hay uno más; el código de HEAD corrido HOY da 7 → 7 y sellos 1 → 6.
+
+**Y un sello que se perdía.** El pareado real enseñó 8 sellos `_recipe_contract_final` del pipeline convertidos en 5 tras el
+INSERT: una pasada del contrato sin nada que decir BORRABA el sello de la anterior, y la flota perdía la cuenta de lo que el
+contrato sí hizo. Ahora una pasada sin nada que decir no borra lo dicho; un plato que nunca necesitó nada sigue sin sello.
+
+**Lo que NO se hizo, dicho.** Tres planes de 3 días no son la flota: son la prueba de que el modo real corre, cuesta centavos
+y encuentra cosas. El `taste_profile` del router (LLM sobre historial) no se imita: un usuario nuevo no tiene historial. Los
+hallazgos «de fábrica» (V7e ×10, V7a ×4, V1, V3) son del generador y del gate, no de las cadenas; quedan medidos, no
+reparados. `/recipe/expand` sigue sin cadena determinista que medir.

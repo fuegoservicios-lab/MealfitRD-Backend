@@ -1,0 +1,532 @@
+{
+ "schema_version": 1,
+ "modo": "real-replay",
+ "fecha": "2026-09-13",
+ "git_sha": "55cceb7b",
+ "reglas_huella": "411df02c49daba7d",
+ "n_planes": 3,
+ "superficies": {
+  "insert": {
+   "planes": [
+    {
+     "plan_id": "real-0",
+     "estado": "medido",
+     "n_nuevos": 0,
+     "resueltos": 0,
+     "etapas": {
+      "entrada": {
+       "V3": 1,
+       "V7a": 2,
+       "V1": 1,
+       "V7e": 5
+      },
+      "salida": {
+       "V3": 1,
+       "V7a": 2,
+       "V1": 1,
+       "V7e": 5
+      }
+     },
+     "nuevos": [],
+     "contrato_estampado": 4,
+     "ms": 47234
+    },
+    {
+     "plan_id": "real-1",
+     "estado": "medido",
+     "n_nuevos": 0,
+     "resueltos": 0,
+     "etapas": {
+      "entrada": {
+       "V7e": 5,
+       "V7a": 2
+      },
+      "salida": {
+       "V7e": 5,
+       "V7a": 2
+      }
+     },
+     "nuevos": [],
+     "contrato_estampado": 4,
+     "ms": 13875
+    },
+    {
+     "plan_id": "real-2",
+     "estado": "medido",
+     "n_nuevos": 0,
+     "resueltos": 0,
+     "etapas": {
+      "entrada": {},
+      "salida": {}
+     },
+     "nuevos": [],
+     "contrato_estampado": 1,
+     "ms": 15170
+    }
+   ],
+   "n_nuevos": 0,
+   "resueltos": 0,
+   "contrato_estampado": 9,
+   "ms": 76279
+  },
+  "quality": {
+   "planes": [
+    {
+     "plan_id": "real-0",
+     "estado": "medido",
+     "n_nuevos": 0,
+     "resueltos": 0,
+     "etapas": {
+      "entrada": {
+       "V3": 1,
+       "V7a": 2,
+       "V1": 1,
+       "V7e": 5
+      },
+      "salida": {
+       "V3": 1,
+       "V7a": 2,
+       "V1": 1,
+       "V7e": 5
+      }
+     },
+     "nuevos": [],
+     "contrato_estampado": 4,
+     "ms": 14469
+    },
+    {
+     "plan_id": "real-1",
+     "estado": "medido",
+     "n_nuevos": 0,
+     "resueltos": 0,
+     "etapas": {
+      "entrada": {
+       "V7e": 5,
+       "V7a": 2
+      },
+      "salida": {
+       "V7e": 5,
+       "V7a": 2
+      }
+     },
+     "nuevos": [],
+     "contrato_estampado": 4,
+     "ms": 13875
+    },
+    {
+     "plan_id": "real-2",
+     "estado": "medido",
+     "n_nuevos": 0,
+     "resueltos": 0,
+     "etapas": {
+      "entrada": {},
+      "salida": {}
+     },
+     "nuevos": [],
+     "contrato_estampado": 1,
+     "ms": 14937
+    }
+   ],
+   "n_nuevos": 0,
+   "resueltos": 0,
+   "contrato_estampado": 9,
+   "ms": 43281
+  },
+  "chunk_t2": {
+   "planes": [
+    {
+     "plan_id": "real-0",
+     "estado": "medido",
+     "n_nuevos": 0,
+     "resueltos": 0,
+     "etapas": {
+      "entrada": {
+       "V3": 1,
+       "V7a": 2,
+       "V1": 1,
+       "V7e": 5
+      },
+      "salida": {
+       "V3": 1,
+       "V7a": 2,
+       "V1": 1,
+       "V7e": 5
+      }
+     },
+     "nuevos": [],
+     "contrato_estampado": 4,
+     "ms": 14188
+    },
+    {
+     "plan_id": "real-1",
+     "estado": "medido",
+     "n_nuevos": 0,
+     "resueltos": 0,
+     "etapas": {
+      "entrada": {
+       "V7e": 5,
+       "V7a": 2
+      },
+      "salida": {
+       "V7e": 5,
+       "V7a": 2
+      }
+     },
+     "nuevos": [],
+     "contrato_estampado": 4,
+     "ms": 13766
+    },
+    {
+     "plan_id": "real-2",
+     "estado": "medido",
+     "n_nuevos": 0,
+     "resueltos": 0,
+     "etapas": {
+      "entrada": {},
+      "salida": {}
+     },
+     "nuevos": [],
+     "contrato_estampado": 0,
+     "ms": 15047
+    }
+   ],
+   "n_nuevos": 0,
+   "resueltos": 0,
+   "contrato_estampado": 8,
+   "ms": 43001
+  },
+  "swap": {
+   "planes": [
+    {
+     "plan_id": "real-0",
+     "estado": "medido",
+     "n_nuevos": 0,
+     "resueltos": 0,
+     "etapas": {
+      "entrada": {
+       "V3": 1,
+       "V7a": 2,
+       "V1": 1,
+       "V7e": 5
+      },
+      "salida": {
+       "V3": 1,
+       "V7a": 2,
+       "V1": 1,
+       "V7e": 5
+      }
+     },
+     "nuevos": [],
+     "contrato_estampado": 4,
+     "ms": 8686
+    },
+    {
+     "plan_id": "real-1",
+     "estado": "medido",
+     "n_nuevos": 0,
+     "resueltos": 0,
+     "etapas": {
+      "entrada": {
+       "V7e": 5,
+       "V7a": 2
+      },
+      "salida": {
+       "V7e": 5,
+       "V7a": 2
+      }
+     },
+     "nuevos": [],
+     "contrato_estampado": 4,
+     "ms": 8219
+    },
+    {
+     "plan_id": "real-2",
+     "estado": "medido",
+     "n_nuevos": 0,
+     "resueltos": 0,
+     "etapas": {
+      "entrada": {},
+      "salida": {}
+     },
+     "nuevos": [],
+     "contrato_estampado": 0,
+     "ms": 8952
+    }
+   ],
+   "n_nuevos": 0,
+   "resueltos": 0,
+   "contrato_estampado": 8,
+   "ms": 25857
+  },
+  "modify": {
+   "planes": [
+    {
+     "plan_id": "real-0",
+     "estado": "medido",
+     "n_nuevos": 0,
+     "resueltos": 0,
+     "etapas": {
+      "entrada": {
+       "V3": 1,
+       "V7a": 2,
+       "V1": 1,
+       "V7e": 5
+      },
+      "salida": {
+       "V3": 1,
+       "V7a": 2,
+       "V1": 1,
+       "V7e": 5
+      }
+     },
+     "nuevos": [],
+     "contrato_estampado": 4,
+     "ms": 8625
+    },
+    {
+     "plan_id": "real-1",
+     "estado": "medido",
+     "n_nuevos": 0,
+     "resueltos": 0,
+     "etapas": {
+      "entrada": {
+       "V7e": 5,
+       "V7a": 2
+      },
+      "salida": {
+       "V7e": 5,
+       "V7a": 2
+      }
+     },
+     "nuevos": [],
+     "contrato_estampado": 4,
+     "ms": 8234
+    },
+    {
+     "plan_id": "real-2",
+     "estado": "medido",
+     "n_nuevos": 0,
+     "resueltos": 0,
+     "etapas": {
+      "entrada": {},
+      "salida": {}
+     },
+     "nuevos": [],
+     "contrato_estampado": 0,
+     "ms": 9047
+    }
+   ],
+   "n_nuevos": 0,
+   "resueltos": 0,
+   "contrato_estampado": 8,
+   "ms": 25906
+  },
+  "closers": {
+   "planes": [
+    {
+     "plan_id": "real-0",
+     "estado": "medido",
+     "n_nuevos": 0,
+     "resueltos": 0,
+     "etapas": {
+      "entrada": {
+       "V3": 1,
+       "V7a": 2,
+       "V1": 1,
+       "V7e": 5
+      },
+      "salida": {
+       "V3": 1,
+       "V7a": 2,
+       "V1": 1,
+       "V7e": 5
+      }
+     },
+     "nuevos": [],
+     "contrato_estampado": 4,
+     "ms": 3670
+    },
+    {
+     "plan_id": "real-1",
+     "estado": "medido",
+     "n_nuevos": 0,
+     "resueltos": 0,
+     "etapas": {
+      "entrada": {
+       "V7e": 5,
+       "V7a": 2
+      },
+      "salida": {
+       "V7e": 5,
+       "V7a": 2
+      }
+     },
+     "nuevos": [],
+     "contrato_estampado": 4,
+     "ms": 3422
+    },
+    {
+     "plan_id": "real-2",
+     "estado": "medido",
+     "n_nuevos": 0,
+     "resueltos": 0,
+     "etapas": {
+      "entrada": {},
+      "salida": {}
+     },
+     "nuevos": [],
+     "contrato_estampado": 0,
+     "ms": 3718
+    }
+   ],
+   "n_nuevos": 0,
+   "resueltos": 0,
+   "contrato_estampado": 8,
+   "ms": 10810
+  },
+  "degradado": {
+   "planes": [
+    {
+     "plan_id": "real-0",
+     "estado": "medido",
+     "n_nuevos": 0,
+     "resueltos": 1,
+     "etapas": {
+      "entrada": {
+       "V3": 1,
+       "V7a": 2,
+       "V1": 1,
+       "V7e": 5
+      },
+      "salida": {
+       "V3": 1,
+       "V7a": 2,
+       "V7e": 5
+      }
+     },
+     "nuevos": [],
+     "contrato_estampado": 4,
+     "ms": 6469
+    },
+    {
+     "plan_id": "real-1",
+     "estado": "medido",
+     "n_nuevos": 0,
+     "resueltos": 0,
+     "etapas": {
+      "entrada": {
+       "V7e": 5,
+       "V7a": 2
+      },
+      "salida": {
+       "V7e": 5,
+       "V7a": 2
+      }
+     },
+     "nuevos": [],
+     "contrato_estampado": 4,
+     "ms": 5171
+    },
+    {
+     "plan_id": "real-2",
+     "estado": "medido",
+     "n_nuevos": 0,
+     "resueltos": 0,
+     "etapas": {
+      "entrada": {},
+      "salida": {}
+     },
+     "nuevos": [],
+     "contrato_estampado": 0,
+     "ms": 5717
+    }
+   ],
+   "n_nuevos": 0,
+   "resueltos": 1,
+   "contrato_estampado": 8,
+   "ms": 17357
+  },
+  "expand": {
+   "planes": [
+    {
+     "plan_id": "real-0",
+     "estado": "sin_cadena_determinista",
+     "n_nuevos": 0,
+     "resueltos": 0,
+     "etapas": {},
+     "nuevos": [],
+     "contrato_estampado": 4,
+     "ms": 0
+    },
+    {
+     "plan_id": "real-1",
+     "estado": "sin_cadena_determinista",
+     "n_nuevos": 0,
+     "resueltos": 0,
+     "etapas": {},
+     "nuevos": [],
+     "contrato_estampado": 4,
+     "ms": 0
+    },
+    {
+     "plan_id": "real-2",
+     "estado": "sin_cadena_determinista",
+     "n_nuevos": 0,
+     "resueltos": 0,
+     "etapas": {},
+     "nuevos": [],
+     "contrato_estampado": 0,
+     "ms": 0
+    }
+   ],
+   "n_nuevos": 0,
+   "resueltos": 0,
+   "contrato_estampado": 8,
+   "ms": 0
+  }
+ },
+ "planes_de": "bench_superficies_real_2026_09_13.json",
+ "generaciones": [
+  {
+   "plan_id": "real-0",
+   "estado": "generado",
+   "s": 650.1,
+   "perfil": "perfil_baseline_m",
+   "corr": "bench-real-0",
+   "coste_usd_est": 0.01527,
+   "coste_usd_db": null,
+   "dias": 3,
+   "comidas": 12,
+   "llamadas_llm": 8,
+   "review_passed": null
+  },
+  {
+   "plan_id": "real-1",
+   "estado": "generado",
+   "s": 475.0,
+   "perfil": "perfil_dm2_metformina",
+   "corr": "bench-real-1",
+   "coste_usd_est": 0.00773,
+   "coste_usd_db": null,
+   "dias": 3,
+   "comidas": 9,
+   "llamadas_llm": 7,
+   "review_passed": null
+  },
+  {
+   "plan_id": "real-2",
+   "estado": "generado",
+   "s": 411.4,
+   "perfil": "perfil_vegetariana",
+   "corr": "bench-real-2",
+   "coste_usd_est": 0.03061,
+   "coste_usd_db": null,
+   "dias": 3,
+   "comidas": 12,
+   "llamadas_llm": 9,
+   "review_passed": null
+  }
+ ],
+ "modo_catalogo": "nutricion",
+ "catalogo": "catalogo_nutricion_2026_09_12.json"
+}
