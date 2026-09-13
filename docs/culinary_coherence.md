@@ -983,3 +983,40 @@ CUL-P1-04 y no se toca aquí.
 **Lo que NO hace, dicho.** No calibra al juez (LLM + rúbrica del dueño); no compara la interfaz/PDF con los snapshots
 (superficie de frontend, fuera de este lote); `--real` está implementado y no se ejecutó (gasto). Con esto C5 queda
 cerrado en sus siete ítems, con los residuos escritos fila por fila en el plan.
+
+
+## El reparador de estructura: adaptar sin desmontar (CUL-P1-04 · `P1-PLAN-LOTE-29` · 2026-09-12)
+
+**Corrección primero.** El lote 28 dijo que el postfix del día degradado «introducía 21 hallazgos». Era el adaptador del
+benchmark, no el cron: degradaba pasos por CUALQUIER check y el cron sólo degrada por V1/V2. Corregido el adaptador y
+re-medido sobre el corpus: **1 hallazgo nuevo, no 21** (un V3: el paso degradado a «Sirve el X» borraba los otros alimentos
+que nombraba). *Un doble que no imita al productor mide otra cosa con la misma pinta.*
+
+**Qué repara `recipe_repair`** — la regla que lo hace seguro para la nutrición: **no toca la lista ni una cifra de compra;
+sólo el texto de los pasos**. Lo que sobra se sirve APARTE con técnica o acompañamiento deliberado (la cláusula del
+backlog), no se recorta ni se estira. Los tres defectos que V9 acusa (`dish_structure`, lote 27):
+
+- `tortilla_vegetales_crudos` → se inserta, antes del paso que VIERTE o cuaja el huevo (no del que lo bate), «Saltea
+  {vegetales} 3-4 min en la sartén con un chorrito de agua hasta que suelten el agua y escúrrelos bien antes de añadir
+  el huevo / las claras» — como 12 de 14 recetas curadas; sin aceite añadido, ningún macro se mueve.
+- `wrap_desproporcionado` → «Montaje: rellena la {tortilla} con lo que cierra (unos {3,8 × pan} g del relleno) y sirve el
+  resto (~{sobrante} g) al lado, como ensalada» — 3,8 es el máximo curado, no un redondo; misma compra, mismos macros.
+- `crema_sin_espesante` → «Ajuste de textura: usa solo {2 ml por g de sólido, mín. 30} ml de {líquido} en la crema y sirve
+  los {resto} ml de {líquido} restantes como bebida al lado» — las dos cifras nombran el líquido para que V7d sume el total.
+
+`dish_structure` reconoce lo servido aparte (`_WRAP_APARTE_RE`, `_CREMA_APARTE_RE`) y deja de acusar: la reparación es
+**idempotente** y V9 baja a cero sobre el plato reparado. Corre como paso (4) de `recipe_contract.reconcile_meal`, detrás
+de cantidades (C2) y formas (C3), bajo el mismo knob `MEALFIT_RECIPE_FINAL_CONTRACT` (`repair` aplica, `shadow` anota sobre
+copia, `off` nada) y con su propia cuenta en la telemetría (`_recipe_contract_final.estructura`, sólo si reparó). Lo que
+no se puede reparar se declara en `descartado`, no se calla.
+
+**El camino sin LLM.** `cron_tasks._degrade_offending_steps` ya no borra a los vecinos: `recipe_repair.degradar_paso`
+convierte «Sofríe la cebolla, el ajo y las habichuelas con el casabe» (ofende el casabe) en «Cocina Habichuelas rojas según
+su envase…» + «Sirve el Casabe con Cebolla, Ajo y Habichuelas rojas.» — los otros alimentos siguen teniendo un paso (V3) y lo
+que se compra seco se cuece (V7c); sin otros alimentos el texto es EXACTAMENTE el de siempre (los tests del 07-31 siguen
+intactos). Bench del corpus, superficie `degradado`: **1 nuevo → 0**, 4 resueltos.
+
+**Lo que NO hace, dicho.** No hay casos de V9 en el corpus fijo ni en la biblioteca (0 y 0): la reparación de estructura se
+midió sobre los tres casos del backlog, no sobre la flota; aparecerá en `_recipe_contract_final.estructura` cuando la flota
+la necesite. No repara técnica impropia (V1) ni estado imposible (V2) fuera del camino degradado: eso sigue siendo del
+generador y del gate. No reabre LP/MILP.

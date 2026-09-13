@@ -25610,7 +25610,14 @@ def _degrade_offending_steps(edge_day: dict, violaciones: list, index: dict) -> 
                 if _food in find_catalog_foods(p, index) and step_has_cooking_verb(p):
                     _head = p.split(":", 1)[0]
                     _prefijo = f"{_head}: " if _head in _CULINARY_STEP_SECTIONS else ""
-                    _new_recipe.append(f"{_prefijo}Sirve el {_food}.")
+                    # [P1-PLAN-LOTE-29] (CUL-P1-04) el paso degradado conserva los demás alimentos que nombraba (antes
+                    # quedaban comprados y sin uso: V3) y cuece lo que se compra seco (V7c). Sin otros alimentos, el texto
+                    # es exactamente el de siempre. Fail-open al texto de siempre.
+                    try:
+                        from recipe_repair import degradar_paso as _dp
+                        _new_recipe.extend(_dp(p, _food, index, _prefijo))
+                    except Exception:
+                        _new_recipe.append(f"{_prefijo}Sirve el {_food}.")
                     n += 1
                 else:
                     _new_recipe.append(p)

@@ -168,7 +168,7 @@ def relaciones(meal, comp: Optional[dict] = None, fam: Optional[str] = None) -> 
             ratio = comp["solidos_g"] / comp["liquidos_ml"] if comp["liquidos_ml"] else None
             espesante_en_lista = any(_ESPESANTE_RE.search(_linea(i)[0]) and not _linea(i)[1] for i in ((meal or {}).get("ingredients") or []))
             if (ratio is not None and ratio < UMBRALES["crema_solidos_por_ml_min"] and not _PROCESO_ESPESA_RE.search(pasos)
-                    and not espesante_en_lista):
+                    and not espesante_en_lista and not _CREMA_APARTE_RE.search(pasos)):
                 out.append({"tipo": "crema_sin_espesante",
                             "detalle": (f"promete espesor con {comp['solidos_g']:g} g de sólidos en {comp['liquidos_ml']:g} ml "
                                         f"({ratio:.2f} g/ml, umbral {UMBRALES['crema_solidos_por_ml_min']}) y ningún paso reduce ni espesa"),
@@ -176,7 +176,7 @@ def relaciones(meal, comp: Optional[dict] = None, fam: Optional[str] = None) -> 
         if fam == "tostada_wrap" and comp["soporte"] and comp["soporte"][1] > 0:
             relleno = comp["solidos_g"] - comp["soporte"][1]
             ratio = relleno / comp["soporte"][1]
-            if ratio > UMBRALES["wrap_relleno_por_pan_max"]:
+            if ratio > UMBRALES["wrap_relleno_por_pan_max"] and not _WRAP_APARTE_RE.search(pasos):
                 out.append({"tipo": "wrap_desproporcionado",
                             "detalle": (f"{relleno:g} g de relleno para {comp['soporte'][1]:g} g de {comp['soporte'][0]} "
                                         f"({ratio:.1f}×, umbral {UMBRALES['wrap_relleno_por_pan_max']:g}×)"),
@@ -199,6 +199,10 @@ def relaciones(meal, comp: Optional[dict] = None, fam: Optional[str] = None) -> 
     return out
 
 
+#: [P1-PLAN-LOTE-29] lo servido APARTE con intención (el resto del relleno como ensalada; el líquido sobrante como bebida) no
+#: es un defecto de estructura: es la reparación de `recipe_repair`, y reconocerla es lo que la hace idempotente.
+_WRAP_APARTE_RE = re.compile(r"resto del relleno|relleno[^.]{0,40}\bal lado\b|como ensalada")
+_CREMA_APARTE_RE = re.compile(r"\d+\s*ml[^.]{0,40}\brestantes\b|como bebida|ml[^.]{0,30}\bal lado\b")
 _HUEVO_COCINA_RE = re.compile(r"\b(vierte|anade|agrega|incorpora|echa|cuaja|revuelve|mezcla|pon|vuelca)\b[^.]{0,50}?\b(huevos?|claras?)\b|"
                               r"\b(huevos?|claras?)\b[^.]{0,40}?\b(en la sarten|a la sarten|al sarten|cuaj\w+|revuelv\w+)")
 _VEG_FUERA_RE = re.compile(r"\b(ensalada|alina\w*|acompana\w*|sirve con|al lado|de guarnicion|aparte)\b")

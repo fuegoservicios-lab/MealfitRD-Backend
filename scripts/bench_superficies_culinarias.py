@@ -156,7 +156,9 @@ def _ad_degradado(p, filas):
     from culinary_coherence import culinary_contract_scan, build_culinary_index
     index = build_culinary_index(filas)
     for d in p.get("days") or []:
-        viol = culinary_contract_scan({"days": [d]}, filas)
+        # como el cron: sólo V1/V2 degradan (P1-CULINARY-CONTRACT/degradado); la primera versión de este adaptador
+        # pasaba TODOS los checks y «medía» 21 hallazgos nuevos que el cron jamás habría producido
+        viol = [v for v in culinary_contract_scan({"days": [d]}, filas) if v.get("check") in ("V1", "V2")]
         if viol:
             cron_tasks._degrade_offending_steps(d, viol, index)
 
