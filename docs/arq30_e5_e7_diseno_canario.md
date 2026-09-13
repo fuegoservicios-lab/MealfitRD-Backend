@@ -203,11 +203,54 @@ independiente y el más barato de medir en sombra.
 
 | Gap | Lo que ya hay | Primer paso (medición, sin cambiar conducta) |
 |---|---|---|
-| P2-01 god files | Cap duro 53.100 líneas en `graph_orchestrator.py` (53.080 hoy), extracciones ya hechas (`_apply_macro_engine`, `deterministic_day`, `horizon`, `canonical_recipe`) | Mapa de dominios (elegibilidad, receta, porciones, validación, presentación) con conteo de líneas y llamadores; migrar tests parser → comportamiento SOLO al tocar cada contrato |
+| P2-01 god files | Cap duro en `graph_orchestrator.py`: 53.100 hasta el 13-sep (53.099 ese día); 52.600 tras `P1-PLAN-LOTE-32` (51.956), extracciones ya hechas (`_apply_macro_engine`, `deterministic_day`, `horizon`, `canonical_recipe`) | Mapa de dominios (elegibilidad, receta, porciones, validación, presentación) con conteo de líneas y llamadores; migrar tests parser → comportamiento SOLO al tocar cada contrato |
 | P2-02 preferencias con evidencia | `user_facts` + Dreaming; `plan_meal_deviation` («comí otra cosa / todavía no») ya distingue registrado de prescrito | Registrar por separado elegido / cocinado / consumido / descartado / motivo del swap; **experimento offline** (reordenar candidatos seguros y comparar contra lo que el usuario eligió) antes de exponer nada |
 | P2-03 disponibilidad y coste por mercado | `pricing_mode_for_country`, catálogo de 347 filas, `MEALFIT_COUNTRY_CATALOG_UNPRICED_KEEP`; `known_ingredients` ya entra al compilador (ARQ27-P1-07) | Medir cuántas filas beta tienen precio y cuántas «0» son en realidad **ausente**; el modelo con confianza y fecha viene después del dato |
 | P2-04 latencia y coste por resultado útil | `llm_usage_events`, `/generation-eta` (p50/p90 real), timeouts por nodo | Instrumentar preflight vs generación vs reparaciones vs validación en `pipeline_metrics`; presupuesto de tokens por run como knob; comparar LLM necesario tras preflight |
 | P2-05 adecuación ≠ cobertura de datos | El informe ya dice «sin dato» para el sodio (A4) en vez de 0 | Separar en el informe `adecuación` (frente al target) de `cobertura` (nutrientes con dato / aplicables); la política vegetal la revisa un clínico — **dueño** |
+
+### P2-01 · primera extracción medida (`P1-PLAN-LOTE-32` · 2026-09-13)
+
+**Medido primero.** 53.099 líneas con el tope en 53.100 (13 tests lo fijan): el siguiente arreglo del grafo no cabía. El
+módulo tiene 577 definiciones de nivel superior y 1.062 globales. Las funciones grandes (`assemble_plan_node` 2.319 líneas,
+`review_plan_node` 1.828, `arun_plan_pipeline` 1.523) leen entre 50 y 80 símbolos del módulo cada una: moverlas no es
+mover, es reescribir. En cambio el bloque de resiliencia LLM (líneas 921-2599) sólo leía del grafo sus propios knobs
+(medido por AST): ningún test nombraba los semáforos, y cuatro leían el FUENTE del breaker en el grafo.
+
+**Qué se movió, tal cual** (mismo texto; sólo cambian los imports; el grafo re-exporta cada nombre):
+
+| Módulo | Qué | Líneas |
+|---|---|---|
+| `llm_concurrency.py` | `DistributedLLMSemaphore`, `DistributedPerUserSemaphore`, `_LLM_BUDGET_STATS` + `_inc_budget_stat` + `get_llm_budget_stats_snapshot`, y los knobs `MEALFIT_LLM_PER_USER_LOCAL_CACHE_MAX` / `MEALFIT_LLM_LOCAL_MAX_WAIT_S` (sólo los leen ellos) | 541 |
+| `llm_circuit_breaker.py` | `LLMCircuitBreaker`, `_BestEffortDBCircuitBreaker` + `_get_be_db_cb` + `_is_pool_timeout_error` (con sus dos knobs de `os.environ`), `LLMCircuitOpenError` | 682 |
+
+**Qué se quedó, a propósito:** las instancias (`LLM_SEMAPHORE`, `PER_USER_LLM_SEMAPHORE`, `_circuit_breaker`), el registro
+per-modelo `_get_circuit_breaker`, `acquire_user_and_global` y `_record_cb_failure_unless_transient`. Son la POLÍTICA
+—qué umbral, qué fallo cuenta— y leen los knobs `MEALFIT_LLM_*` / `MEALFIT_CB_*` que el grafo define; moverlos arrastraba
+una docena de knobs con sus anclas de test. Mecanismo fuera, política dentro.
+
+**Tres cosas que «mover y re-exportar» rompe en silencio, y cómo se evitaron:**
+
+1. *El nombre del logger.* El formato de producción imprime `%(name)s` y los `caplog` de la suite filtran por
+   `graph_orchestrator`. Los dos módulos usan `logging.getLogger("graph_orchestrator")`: mover el código no mueve sus logs.
+2. *Los parches.* `patch("graph_orchestrator.redis_client")` cambia el nombre en el grafo, no en el módulo que lo lee. El
+   test del fallback atómico del breaker parchea ahora `llm_circuit_breaker.*`. Dos de sus parches
+   (`graph_orchestrator.redis_async_client`) **ya no alcanzaban nada antes de mover**: el breaker lee el cliente per-loop
+   `get_redis_async()` desde P1-REDIS-ASYNC-PERLOOP-CB, y el test seguía verde porque en la suite no hay Redis.
+3. *Las lecturas del fuente.* Cinco tests leían el texto del grafo buscando código que ahora vive fuera
+   (`_deadline = time.monotonic() + LLM_LOCAL_MAX_WAIT_S`, `class LLMCircuitBreaker`, los callsites
+   `_get_be_db_cb("llm_cb_*")`…). Se encontraron comparando cada literal, regex y conteo de la suite contra el grafo de
+   antes y el de después — no por nombre de símbolo, que no ve un `count(...) >= 5` que cae por debajo de su mínimo. Se
+   re-apuntaron conservando su intención: al módulo nuevo, o a la unión de los dos cuando el contrato los abarca (los cinco
+   callsites best-effort son tres en el grafo y dos en el breaker).
+
+**Después.** 51.956 líneas (−1.143). El tope SSOT (`test_p3_shopping_projection_pkg`) baja de 53.100 a 52.600: 644 líneas de
+aire para arreglos, y quien quiera volver a 53.100 tendrá que extraer. Cero cambios de conducta: el grafo resuelve los mismos
+objetos (`go.LLMCircuitBreaker is llm_circuit_breaker.LLMCircuitBreaker`) y ningún nombre que el grafo usa quedó sin
+definir (comprobado con `symtable` antes y después). Test: `tests/test_p1_plan_lote_32.py`.
+
+**Lo que NO se hizo.** Las funciones grandes siguen dentro. El siguiente candidato natural es la caché LLM persistente
+(`PersistentLLMCache`, que ya usa el breaker best-effort); su acoplamiento no se midió en este lote.
 
 ---
 

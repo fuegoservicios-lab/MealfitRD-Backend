@@ -177,7 +177,7 @@ Convención: **Impacto** Alto/Medio/Bajo (qué tan visible es el daño si NO se 
 - **D4: Tier limits a env vars** (~30min).
 
 ### Semana 3 (~10-15h, una zona caliente)
-- **A2: Extraer LLMCircuitBreaker a `cb.py`** (~6-10h). Mover ~600 líneas + re-exports + tests siguen pasando. Cierre simbólico del refactor más entryable de graph_orchestrator.
+- **A2: Extraer LLMCircuitBreaker a `cb.py`** (~6-10h). Mover ~600 líneas + re-exports + tests siguen pasando. Cierre simbólico del refactor más entryable de graph_orchestrator. **Hecho 2026-09-13 (`P1-PLAN-LOTE-32`)**: `llm_circuit_breaker.py` y `llm_concurrency.py`, −1.143 líneas.
 - **G3: Lighthouse a11y baseline** (~1h). Score + lista de fixes obvios.
 - **H3: Vista SQL de business metrics** (~3h). Una `mv_daily_business_metrics` + view + cron diario.
 

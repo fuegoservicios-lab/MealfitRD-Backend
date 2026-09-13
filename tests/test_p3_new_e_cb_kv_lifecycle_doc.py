@@ -18,7 +18,8 @@ Drift detection (bidireccional):
       de CLAUDE.md → falla.
     - Marker `P3-NEW-E` removido del bloque → falla (sub-sección debe
       seguir referenciando su P-fix de origen).
-    - Símbolo `LLMCircuitBreaker` desaparece de `graph_orchestrator.py`
+    - Símbolo `LLMCircuitBreaker` desaparece de `llm_circuit_breaker.py`
+      (movido del grafo en P1-PLAN-LOTE-32; los knobs `MEALFIT_CB_*` siguen en el grafo)
       (rename de la clase sin actualizar docs) → falla.
     - Construcción `_key_suffix = f":{model_name}"` cambia
       (ej. a `f"_{model_name}"`) sin actualizar docs → falla.
@@ -42,6 +43,7 @@ _REPO_ROOT = Path(__file__).resolve().parent.parent.parent
 _BACKEND = _REPO_ROOT / "backend"
 _CLAUDE_MD = _REPO_ROOT / "CLAUDE.md"
 _ORCH = _BACKEND / "graph_orchestrator.py"
+_CB = _BACKEND / "llm_circuit_breaker.py"
 _CRON = _BACKEND / "cron_tasks.py"
 
 
@@ -52,7 +54,8 @@ def claude_md() -> str:
 
 @pytest.fixture(scope="module")
 def orch_source() -> str:
-    return _ORCH.read_text(encoding="utf-8")
+    # [P1-PLAN-LOTE-32] la clase vive en llm_circuit_breaker.py; knobs e instancia, en el grafo
+    return _ORCH.read_text(encoding="utf-8") + "\n" + _CB.read_text(encoding="utf-8")
 
 
 @pytest.fixture(scope="module")
@@ -238,3 +241,15 @@ def test_all_critical_knobs_mentioned_in_subsection(claude_md: str):
             f"'Knobs operacionales' para que `/health/version` tenga "
             f"contraparte documentada."
         )
+
+
+# ---------------------------------------------------------------------------
+# [P1-PLAN-LOTE-32 · 2026-09-13] La sub-sección enlaza el fichero donde vive la clase
+# ---------------------------------------------------------------------------
+def test_subsection_links_the_file_that_defines_the_class(claude_md: str):
+    """El breaker se movió del grafo a `llm_circuit_breaker.py`: un enlace al fichero equivocado manda al lector a buscar
+    una clase que ya no está allí."""
+    i = claude_md.find("Ciclo de vida del KV `llm_circuit_breaker:*`")
+    assert i >= 0
+    assert "backend/llm_circuit_breaker.py" in claude_md[i:i + 3500]
+    assert re.search(r"^class\s+LLMCircuitBreaker\s*[:\(]", _CB.read_text(encoding="utf-8"), re.MULTILINE)

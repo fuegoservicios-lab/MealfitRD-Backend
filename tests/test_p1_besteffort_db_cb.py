@@ -39,6 +39,13 @@ import pytest
 
 _BACKEND = Path(__file__).parent.parent
 _GO_PY = _BACKEND / "graph_orchestrator.py"
+# [P1-PLAN-LOTE-32] el CB best-effort y el LLMCircuitBreaker (2 de sus 5 callsites) viven en llm_circuit_breaker.py;
+# los otros 3 (caché LLM, AB-TEMP) siguen en el grafo. Se lee la unión.
+_CB_PY = _BACKEND / "llm_circuit_breaker.py"
+
+
+def _src() -> str:
+    return _GO_PY.read_text(encoding="utf-8") + "\n" + _CB_PY.read_text(encoding="utf-8")
 _ENV_PATH = _BACKEND / ".env"
 
 
@@ -49,7 +56,7 @@ _ENV_PATH = _BACKEND / ".env"
 def test_circuit_breaker_class_defined():
     """`_BestEffortDBCircuitBreaker` debe estar definida con los métodos
     canónicos `is_open`, `record_success`, `record_pool_timeout`, `snapshot`."""
-    src = _GO_PY.read_text(encoding="utf-8")
+    src = _src()
     assert "class _BestEffortDBCircuitBreaker:" in src, (
         "Clase _BestEffortDBCircuitBreaker no definida en graph_orchestrator.py."
     )
@@ -59,7 +66,7 @@ def test_circuit_breaker_class_defined():
 
 def test_registry_singleton_helper_defined():
     """`_get_be_db_cb(name)` debe estar definida como singleton per-name."""
-    src = _GO_PY.read_text(encoding="utf-8")
+    src = _src()
     assert "_BE_DB_CB_REGISTRY:" in src
     assert "def _get_be_db_cb(name: str)" in src
 
@@ -67,7 +74,7 @@ def test_registry_singleton_helper_defined():
 def test_pool_timeout_detector_defined():
     """`_is_pool_timeout_error(exc)` debe estar definida con el match canónico
     del mensaje 'couldn't get a connection' (psycopg_pool emit literal)."""
-    src = _GO_PY.read_text(encoding="utf-8")
+    src = _src()
     assert "def _is_pool_timeout_error(" in src
     # Verifica el match key
     idx = src.find("def _is_pool_timeout_error(")
@@ -81,7 +88,7 @@ def test_knobs_registered():
     """Los 2 knobs `MEALFIT_BE_DB_CB_FAILURE_THRESHOLD` y
     `MEALFIT_BE_DB_CB_OPEN_DURATION_S` deben estar registrados con defaults
     conservadores (3 y 60 respectivamente)."""
-    src = _GO_PY.read_text(encoding="utf-8")
+    src = _src()
     assert 'MEALFIT_BE_DB_CB_FAILURE_THRESHOLD' in src
     assert 'MEALFIT_BE_DB_CB_OPEN_DURATION_S' in src
     # Defaults
@@ -109,7 +116,7 @@ def test_callsite_uses_be_db_cb(cb_name: str, callsite_label: str):
     """Cada callsite identificado en el incidente debe usar el CB con el
     nombre canónico. Si añades un callsite nuevo best-effort sin aplicar el
     CB, este test no lo detecta — pero el blanket de la Sección 3 sí."""
-    src = _GO_PY.read_text(encoding="utf-8")
+    src = _src()
     expected = f'_get_be_db_cb("{cb_name}")'
     assert expected in src, (
         f"Callsite `{callsite_label}` debe instanciar `{expected}`. "
@@ -121,7 +128,7 @@ def test_each_callsite_records_outcome():
     """Cada uso de `_get_be_db_cb` debe seguirse de al menos un `record_success`
     O `record_pool_timeout` en el bloque siguiente. Sin estos, el CB nunca
     aprende del resultado real."""
-    src = _GO_PY.read_text(encoding="utf-8")
+    src = _src()
     # Conteo simple: el número de `_get_be_db_cb` calls (~5 producción + 1+ tests
     # internos) debe coincidir aproximadamente con record_success y record_pool_timeout.
     n_get = src.count("_get_be_db_cb(")
@@ -259,7 +266,7 @@ def test_funcional_registry_singleton(_cb_class):
 def test_marker_present_in_source():
     """El marker `P1-BESTEFFORT-DB-CB` debe estar en el bloque de definición
     de la clase y en cada callsite aplicado."""
-    src = _GO_PY.read_text(encoding="utf-8")
+    src = _src()
     assert "P1-BESTEFFORT-DB-CB" in src
     # Al menos 6 menciones (definición + 5 callsites)
     n = src.count("P1-BESTEFFORT-DB-CB")

@@ -46,7 +46,7 @@ def test_c_la_reproyeccion_usa_las_primitivas_del_outbox_en_tiempo_de_llamada(mo
 # ----------------------------------------------------------------------------- god files congelados
 # Foto 2026-09-05 (líneas) + 3 %. Superarlo NO se arregla subiendo el número: se arregla extrayendo.
 _CEILINGS = {
-    "graph_orchestrator.py": 53_100,   # 51 572
+    "graph_orchestrator.py": 52_600,   # 51 956 tras P1-PLAN-LOTE-32 (era 53_100: se extrajeron 1.143 líneas y el tope baja con ellas)
     "cron_tasks.py": 36_550,           # 35 479
     "routers/plans.py": 18_100,        # 17 549
     "shopping_calculator.py": 14_400,  # 13 968

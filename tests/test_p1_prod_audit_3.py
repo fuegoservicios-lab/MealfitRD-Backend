@@ -187,7 +187,7 @@ def test_p3_billing_verify_checks_row_matched():
 
 
 def test_p3_per_user_semaphore_gc():
-    src = _read("graph_orchestrator.py")
+    src = _read("llm_concurrency.py")  # [P1-PLAN-LOTE-32] movido del grafo con su semáforo
     assert 'LLM_PER_USER_LOCAL_CACHE_MAX = _env_int(' in src
     body = _fn_body(src, "def _get_local_sync(")
     assert "LLM_PER_USER_LOCAL_CACHE_MAX" in body

@@ -38,6 +38,8 @@ import pytest
 
 _BACKEND = Path(__file__).resolve().parent.parent
 _G = (_BACKEND / "graph_orchestrator.py").read_text(encoding="utf-8")
+# [P1-PLAN-LOTE-32] los semáforos distribuidos y su cota local se movieron del grafo a llm_concurrency.py
+_LC = (_BACKEND / "llm_concurrency.py").read_text(encoding="utf-8")
 _S = (_BACKEND / "services.py").read_text(encoding="utf-8")
 _DAYGEN_PROMPT = (_BACKEND / "prompts" / "day_generator.py").read_text(encoding="utf-8")
 _SCHEMAS = (_BACKEND / "schemas.py").read_text(encoding="utf-8")
@@ -255,11 +257,11 @@ def test_p2_orch_10_generation_status_stamp():
 # P2-ORCH-11 — cota del busy-poll local
 # ===========================================================================
 def test_p2_orch_11_local_wait_bound():
-    assert 'LLM_LOCAL_MAX_WAIT_S        = _env_int  ("MEALFIT_LLM_LOCAL_MAX_WAIT_S",        120,' in _G
-    assert "_inc_budget_stat(\"local_wait_timeout\")" in _G
-    assert "_inc_budget_stat(\"local_wait_timeout_user\")" in _G
+    assert 'LLM_LOCAL_MAX_WAIT_S        = _env_int  ("MEALFIT_LLM_LOCAL_MAX_WAIT_S",        120,' in _LC
+    assert "_inc_budget_stat(\"local_wait_timeout\")" in _LC
+    assert "_inc_budget_stat(\"local_wait_timeout_user\")" in _LC
     # La cota se aplica en ambos busy-polls.
-    assert _G.count("_deadline = time.monotonic() + LLM_LOCAL_MAX_WAIT_S") >= 2
+    assert _LC.count("_deadline = time.monotonic() + LLM_LOCAL_MAX_WAIT_S") >= 2
 
 
 # ===========================================================================

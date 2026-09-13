@@ -66,6 +66,8 @@ from unittest.mock import patch, MagicMock, AsyncMock
 import pytest
 
 import graph_orchestrator
+# [P1-PLAN-LOTE-32] el CB vive en llm_circuit_breaker.py (el grafo lo re-exporta): los parches van allí
+import llm_circuit_breaker
 from graph_orchestrator import LLMCircuitBreaker
 
 
@@ -98,7 +100,7 @@ def test_record_failure_uses_atomic_helper_when_redis_down():
     """Sin redis_client, `record_failure` debe invocar
     `_atomic_record_failure_db` (NO el patrón legacy SELECT+UPDATE)."""
     cb = LLMCircuitBreaker(failure_threshold=3, reset_timeout=30)
-    with patch("graph_orchestrator.redis_client", None), \
+    with patch("llm_circuit_breaker.redis_client", None), \
          patch.object(cb, "_atomic_record_failure_db") as mock_atomic, \
          patch.object(cb, "_get_db_state") as mock_get, \
          patch.object(cb, "_save_db_state") as mock_save:
@@ -118,7 +120,7 @@ def test_record_success_uses_atomic_helper_when_redis_down():
     # Forzar local_healthy=False para que el debounce no skip-ee la rama DB.
     cb._local_healthy = False
     cb._last_db_check = 0
-    with patch("graph_orchestrator.redis_client", None), \
+    with patch("llm_circuit_breaker.redis_client", None), \
          patch.object(cb, "_atomic_reset_db") as mock_atomic, \
          patch.object(cb, "_get_db_state") as mock_get, \
          patch.object(cb, "_save_db_state") as mock_save:
@@ -136,7 +138,7 @@ def test_arecord_failure_uses_atomic_helper_async():
     """`arecord_failure` debe invocar `_aatomic_record_failure_db` cuando
     redis_async_client no disponible."""
     cb = LLMCircuitBreaker(failure_threshold=3, reset_timeout=30)
-    with patch("graph_orchestrator.redis_async_client", None), \
+    with patch("llm_circuit_breaker.get_redis_async", return_value=None), \
          patch.object(cb, "_aatomic_record_failure_db", new_callable=AsyncMock) as mock_atomic, \
          patch.object(cb, "_aget_db_state", new_callable=AsyncMock) as mock_get, \
          patch.object(cb, "_asave_db_state", new_callable=AsyncMock) as mock_save:
@@ -152,7 +154,7 @@ def test_arecord_success_uses_atomic_helper_async():
     cb = LLMCircuitBreaker(failure_threshold=3, reset_timeout=30)
     cb._local_healthy = False
     cb._last_db_check = 0
-    with patch("graph_orchestrator.redis_async_client", None), \
+    with patch("llm_circuit_breaker.get_redis_async", return_value=None), \
          patch.object(cb, "_aatomic_reset_db", new_callable=AsyncMock) as mock_atomic, \
          patch.object(cb, "_aget_db_state", new_callable=AsyncMock) as mock_get, \
          patch.object(cb, "_asave_db_state", new_callable=AsyncMock) as mock_save:
@@ -177,7 +179,7 @@ def test_atomic_record_failure_sql_uses_jsonb_build_object_with_increment():
         captured.append((sql, params))
         return True
 
-    with patch("graph_orchestrator.execute_sql_write", side_effect=fake_write):
+    with patch("llm_circuit_breaker.execute_sql_write", side_effect=fake_write):
         cb._atomic_record_failure_db()
 
     assert len(captured) == 1
@@ -206,7 +208,7 @@ def test_atomic_record_failure_sql_passes_threshold():
         captured.append((sql, params))
         return True
 
-    with patch("graph_orchestrator.execute_sql_write", side_effect=fake_write):
+    with patch("llm_circuit_breaker.execute_sql_write", side_effect=fake_write):
         cb._atomic_record_failure_db()
 
     sql, params = captured[0]
@@ -226,7 +228,7 @@ def test_atomic_record_failure_sql_passes_db_key():
         captured.append((sql, params))
         return True
 
-    with patch("graph_orchestrator.execute_sql_write", side_effect=fake_write):
+    with patch("llm_circuit_breaker.execute_sql_write", side_effect=fake_write):
         cb._atomic_record_failure_db()
 
     sql, params = captured[0]
@@ -246,7 +248,7 @@ def test_atomic_reset_sql_is_idempotent_zero_state():
         captured.append((sql, params))
         return True
 
-    with patch("graph_orchestrator.execute_sql_write", side_effect=fake_write):
+    with patch("llm_circuit_breaker.execute_sql_write", side_effect=fake_write):
         cb._atomic_reset_db()
         cb._atomic_reset_db()
 
@@ -269,7 +271,7 @@ def test_atomic_record_failure_sql_includes_on_conflict_do_update():
     cb = LLMCircuitBreaker(failure_threshold=3, reset_timeout=30)
     captured = []
 
-    with patch("graph_orchestrator.execute_sql_write",
+    with patch("llm_circuit_breaker.execute_sql_write",
                side_effect=lambda sql, params=None, **kw: captured.append((sql, params)) or True):
         cb._atomic_record_failure_db()
 
@@ -283,7 +285,7 @@ def test_atomic_record_failure_sql_includes_on_conflict_do_update():
 # ---------------------------------------------------------------------------
 def test_documentation_p1_27_present():
     """Comentario `[P1-27]` debe documentar el fix de atomicidad."""
-    full_src = inspect.getsource(graph_orchestrator)
+    full_src = inspect.getsource(llm_circuit_breaker)
     assert "[P1-27]" in full_src
 
 
@@ -292,7 +294,7 @@ def test_documentation_mentions_lost_update_or_multi_worker():
     multi-worker. Sin esto un futuro lector podría reintroducir el
     patrón legacy pensando que el threading.Lock basta."""
     helper_src = inspect.getsource(LLMCircuitBreaker._atomic_record_failure_db)
-    full_src = inspect.getsource(graph_orchestrator)
+    full_src = inspect.getsource(llm_circuit_breaker)
     p127_idx = full_src.find("[P1-27]")
     window = full_src[p127_idx : p127_idx + 3000]
     needles = ["lost-update", "lost update", "multi-worker", "multi worker",

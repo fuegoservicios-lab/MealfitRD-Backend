@@ -4223,7 +4223,7 @@ def _sweep_stale_llm_circuit_breakers() -> int:
     `llm_circuit_breaker%` cuyo `last_failure` excede el knob de staleness.
 
     Gap cerrado:
-      `LLMCircuitBreaker.can_proceed()` (graph_orchestrator.py:1354) ya
+      `LLMCircuitBreaker.can_proceed()` (llm_circuit_breaker.py) ya
       retorna True una vez `time.time() - last_failure > reset_timeout`
       — runtime CORRECTO. Pero la fila en `app_kv_store` conserva
       `is_open=true` y los contadores ínvariablemente hasta que algún
