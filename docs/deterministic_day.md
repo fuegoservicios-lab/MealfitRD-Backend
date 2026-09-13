@@ -158,6 +158,12 @@ manda al **final** —no fuera— a las que agotaron su cuota (`_max_repeticion_
 `horizon.repetition_limits_for`). La rotación gira sólo sobre los frescos. Quedarse sin plato por no
 repetir sigue siendo peor que repetir: si todos están saturados, se sirve igual.
 
+**Re-medición (`P1-PLAN-LOTE-36` · 2026-09-13).** `scripts/measure_variety_windows.py` cuenta las ventanas de 7 días
+que rompen el tope sobre los planes PERSISTIDOS (solo lectura; artefacto `scripts/data/variety_windows_2026_09_13.json`).
+Antes del corte (2026-09-11): ninguno con día determinista y ≥ 7 días (el plan de 30 días del dueño que dio las 9 ventanas ya no está en la base); del modelo, 0 rotas de 7 ventanas. Después: SIN MUESTRA: ningún plan posterior al 2026-09-11 con día determinista y ≥ 7 días entregados.
+En el banco de 30 días del lote 35 (DO, 2000 kcal, CON memoria) siguen rotas 14 de 24 ventanas, todas por dos plantillas
+cuya franja no tiene con qué rotar: la memoria manda al final a las saturadas, pero «si todas lo están se sirve igual».
+
 ## Seguridad: el backstop no es opcional
 
 Un día que sale de aquí **sí pasa por `assemble_plan_node` y `review_plan_node`** (las aristas del grafo

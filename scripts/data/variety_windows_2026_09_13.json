@@ -1,0 +1,85 @@
+{
+ "cohortes": {
+  "antes_modelo": {
+   "con_ventana": 1,
+   "planes": 6,
+   "planes_con_rotura": 0,
+   "rotas": 0,
+   "tasa_rotas": 0.0,
+   "ventanas": 7
+  }
+ },
+ "corte": "2026-09-11",
+ "fecha": "2026-09-13",
+ "linea_base": "09-10: 9 ventanas rotas en el plan de 30 días del dueño (puertas apagadas)",
+ "planes": [
+  {
+   "creado": "2026-09-04",
+   "determinista": false,
+   "dias": 13,
+   "modo": "explore",
+   "plan": "3957a669",
+   "rotas": 0,
+   "sobre_tope": [],
+   "tope_7d": 1,
+   "ventanas": 7
+  },
+  {
+   "creado": "2026-09-09",
+   "determinista": false,
+   "dias": 3,
+   "modo": "balanced",
+   "plan": "c4098931",
+   "rotas": 0,
+   "sobre_tope": [],
+   "tope_7d": 2,
+   "ventanas": 0
+  },
+  {
+   "creado": "2026-09-09",
+   "determinista": false,
+   "dias": 3,
+   "modo": "balanced",
+   "plan": "1461aeca",
+   "rotas": 0,
+   "sobre_tope": [],
+   "tope_7d": 2,
+   "ventanas": 0
+  },
+  {
+   "creado": "2026-09-09",
+   "determinista": false,
+   "dias": 3,
+   "modo": "balanced",
+   "plan": "cd1b2fd0",
+   "rotas": 0,
+   "sobre_tope": [],
+   "tope_7d": 2,
+   "ventanas": 0
+  },
+  {
+   "creado": "2026-09-09",
+   "determinista": false,
+   "dias": 3,
+   "modo": "balanced",
+   "plan": "125e45b1",
+   "rotas": 0,
+   "sobre_tope": [],
+   "tope_7d": 2,
+   "ventanas": 0
+  },
+  {
+   "creado": "2026-09-09",
+   "determinista": false,
+   "dias": 3,
+   "modo": "balanced",
+   "plan": "0871ea93",
+   "rotas": 0,
+   "sobre_tope": [],
+   "tope_7d": 2,
+   "ventanas": 0
+  }
+ ],
+ "schema": "2026-09-13.variety_windows",
+ "ventana_dias": 60
+}
