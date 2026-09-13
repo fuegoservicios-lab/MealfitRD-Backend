@@ -226,7 +226,7 @@ def _git_sha():
 # informes
 # ─────────────────────────────────────────────────────────────────────────────────────────────
 
-def render(art: dict) -> str:
+def render(art: dict, desglose: bool = False, perfiles: dict | None = None) -> str:
     cab = (f"bench superficies · {art.get('fecha')} · git {art.get('git_sha')} · reglas {art.get('reglas_huella')} · "
            f"modo {art.get('modo')} · catálogo {art.get('modo_catalogo', '?')} · planes {art.get('n_planes')}")
     if art.get("modo_catalogo") == "nombres":
@@ -243,7 +243,49 @@ def render(art: dict) -> str:
         out.append(f"  coste estimado ${float(art.get('coste_usd_est') or 0):.4f} de ${float(art.get('presupuesto_usd') or 0):.2f} · "
                    f"telemetría a producción: {'sí' if art.get('telemetria_prod') else 'no'} · escrituras suprimidas: "
                    + (", ".join(f"{k} {v}" for k, v in sup.items()) or "0"))
+    if desglose:
+        out.extend(_desglose(art, perfiles or {}))
     return "\n".join(out)
+
+
+# [P1-PLAN-LOTE-35 · 2026-09-13] CUL-P2-03: la regresión de una cohorte no se esconde en la media, y un plan que no se
+# pudo medir se ve como MENOS COBERTURA, nunca como más calidad. Ningún veredicto cambia: sólo se reparte lo medido.
+def _perfiles_de(art: dict, base: Path) -> dict:
+    """plan_id → cohorte (el perfil del bench real). Del propio artefacto o del real que re-mide (`planes_de`)."""
+    gens = art.get("generaciones") or []
+    if not gens and art.get("planes_de"):
+        try:
+            gens = json.loads((base / str(art["planes_de"])).read_text(encoding="utf-8")).get("generaciones") or []
+        except Exception:
+            gens = []
+    return {str(g.get("plan_id")): str(g.get("perfil") or "sin_dato") for g in gens if isinstance(g, dict)}
+
+
+def _desglose(art: dict, perfiles: dict) -> list:
+    out = ["desglose (P1-PLAN-LOTE-35 · CUL-P2-03) · cohorte = perfil del bench real («sin_dato» si el corpus no lo guarda) · "
+           "semana = día del hallazgo // 7 + 1"]
+    for s, r in (art.get("superficies") or {}).items():
+        planes = r.get("planes") or []
+        medidos = sum(1 for p in planes if str(p.get("estado")) == "medido")
+        out.append(f"  {s:<11} cobertura {medidos}/{len(planes)} planes medidos")
+        por = {}
+        for p in planes:
+            d = por.setdefault(perfiles.get(str(p.get("plan_id")), "sin_dato"), {"planes": 0, "nuevos": 0, "resueltos": 0, "salida": 0})
+            d["planes"] += 1
+            d["nuevos"] += int(p.get("n_nuevos") or 0)
+            d["resueltos"] += int(p.get("resueltos") or 0)
+            d["salida"] += sum(int(v or 0) for v in ((p.get("etapas") or {}).get("salida") or {}).values())
+        for coh, d in sorted(por.items()):
+            out.append(f"      {coh:<24} planes {d['planes']} · nuevos {d['nuevos']} · resueltos {d['resueltos']} · "
+                       f"hallazgos a la salida {d['salida']}")
+        semanas = {}
+        for p in planes:
+            for n in (p.get("nuevos") or []):
+                k = int(n.get("day") or 0) // 7 + 1
+                semanas[k] = semanas.get(k, 0) + 1
+        if semanas:
+            out.append("      nuevos por semana: " + ", ".join(f"s{k} {v}" for k, v in sorted(semanas.items())))
+    return out
 
 
 def comparar(a: dict, b: dict) -> str:
@@ -456,6 +498,8 @@ def main(argv=None) -> int:
     ap.add_argument("--sin-guardar", action="store_true")
     ap.add_argument("--informe", help="reconstruye el informe desde un artefacto y sale")
     ap.add_argument("--comparar", nargs=2, metavar=("A", "B"), help="informe pareado entre dos artefactos")
+    ap.add_argument("--desglose", action="store_true",
+                    help="[P1-PLAN-LOTE-35] con --informe: por cohorte (perfil del bench real), semana y cobertura por superficie")
     ap.add_argument("--exportar-catalogo", action="store_true", help="(base, sólo lectura) snapshot del catálogo con nutrición")
     ap.add_argument("--real", action="store_true", help="genera planes con el LLM (exige --perfil y --presupuesto-usd)")
     ap.add_argument("--perfil", action="append", help="JSON de form_data para --real (repetible)")
@@ -467,7 +511,8 @@ def main(argv=None) -> int:
         print("catálogo exportado:", exportar_catalogo(a.out))
         return 0
     if a.informe:
-        print(render(json.loads(Path(a.informe).read_text(encoding="utf-8"))))
+        _art = json.loads(Path(a.informe).read_text(encoding="utf-8"))
+        print(render(_art, desglose=a.desglose, perfiles=_perfiles_de(_art, Path(a.informe).resolve().parent)))
         return 0
     if a.comparar:
         A, B = (json.loads(Path(x).read_text(encoding="utf-8")) for x in a.comparar)

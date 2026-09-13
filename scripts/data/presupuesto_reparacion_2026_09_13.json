@@ -1,0 +1,214 @@
+{
+ "composicion_no_cuenta": [
+  "_solver_raw_by_food"
+ ],
+ "contrato_final_cuenta": [
+  "reescritas",
+  "lista_reescrita",
+  "estructura",
+  "sin_lista",
+  "repeticiones",
+  "concordancia"
+ ],
+ "coste": {
+  "coste_por_plan_valido_usd": 0.0536,
+  "coste_usd_total": 0.0536,
+  "nota": "válido = sin hallazgos de capa 1 a la salida de la cadena del INSERT (pareado real del bench)",
+  "planes": 3,
+  "planes_validos_tras_insert": 1
+ },
+ "fecha": "2026-09-13",
+ "fuentes": {
+  "corpus": {
+   "capas_mas_frecuentes": [
+    {
+     "capa": "piso de porciones",
+     "comidas": 48,
+     "marca": "_portion_floor_adjusted"
+    },
+    {
+     "capa": "tope de realismo de porciones",
+     "comidas": 37,
+     "marca": "_portion_realism_capped"
+    },
+    {
+     "capa": "cerrador de macros/micros",
+     "comidas": 28,
+     "marca": "_closer_raw_by_food"
+    },
+    {
+     "capa": "cerrador de proteína",
+     "comidas": 22,
+     "marca": "_protein_closed"
+    },
+    {
+     "capa": "sustitución por presupuesto",
+     "comidas": 18,
+     "marca": "_budget_substitutions"
+    },
+    {
+     "capa": "refinado del día",
+     "comidas": 10,
+     "marca": "_refine_raw_by_food"
+    },
+    {
+     "capa": "semilla de micronutrientes",
+     "comidas": 9,
+     "marca": "_micro_seed_applied"
+    },
+    {
+     "capa": "piso de kcal (ganancia muscular)",
+     "comidas": 9,
+     "marca": "_gainmuscle_kcal_floor"
+    },
+    {
+     "capa": "seguridad alimentaria",
+     "comidas": 7,
+     "marca": "_food_safety_fixed"
+    },
+    {
+     "capa": "tope diario de huevos",
+     "comidas": 6,
+     "marca": "_egg_day_capped"
+    },
+    {
+     "capa": "cierre final de proteína",
+     "comidas": 5,
+     "marca": "_final_protein_close"
+    },
+    {
+     "capa": "lácteo que el nombre prometía",
+     "comidas": 5,
+     "marca": "_name_phantom_dairy_added"
+    }
+   ],
+   "capas_por_comida": {
+    "max": 7,
+    "media": 3.31,
+    "p50": 3,
+    "p90": 6,
+    "p95": 7
+   },
+   "comidas": 64,
+   "comidas_con_solver": 26,
+   "pct_con_3_o_mas": 59.4,
+   "reescrituras_contrato_final": 0
+  },
+  "real": {
+   "capas_mas_frecuentes": [
+    {
+     "capa": "tope de realismo de porciones",
+     "comidas": 19,
+     "marca": "_portion_realism_capped"
+    },
+    {
+     "capa": "piso de porciones",
+     "comidas": 19,
+     "marca": "_portion_floor_adjusted"
+    },
+    {
+     "capa": "cerrador de macros/micros",
+     "comidas": 16,
+     "marca": "_closer_raw_by_food"
+    },
+    {
+     "capa": "cerrador de proteína",
+     "comidas": 15,
+     "marca": "_protein_closed"
+    },
+    {
+     "capa": "sustitución por presupuesto",
+     "comidas": 9,
+     "marca": "_budget_substitutions"
+    },
+    {
+     "capa": "refinado del día",
+     "comidas": 8,
+     "marca": "_refine_raw_by_food"
+    },
+    {
+     "capa": "cierre final de proteína",
+     "comidas": 6,
+     "marca": "_final_protein_close"
+    },
+    {
+     "capa": "tope diario de huevos",
+     "comidas": 4,
+     "marca": "_egg_day_capped"
+    },
+    {
+     "capa": "semilla de micronutrientes",
+     "comidas": 3,
+     "marca": "_micro_seed_applied"
+    },
+    {
+     "capa": "contrato final de la receta",
+     "comidas": 3,
+     "marca": "_recipe_contract_final"
+    },
+    {
+     "capa": "autofix de sodio",
+     "comidas": 3,
+     "marca": "_sodium_autofix_applied"
+    },
+    {
+     "capa": "lácteo que el nombre prometía",
+     "comidas": 3,
+     "marca": "_name_phantom_dairy_added"
+    }
+   ],
+   "capas_por_comida": {
+    "max": 11,
+    "media": 3.67,
+    "p50": 3,
+    "p90": 6,
+    "p95": 6
+   },
+   "comidas": 33,
+   "comidas_con_solver": 4,
+   "pct_con_3_o_mas": 69.7,
+   "reescrituras_contrato_final": 8
+  }
+ },
+ "propuesta": {
+  "estado": "PROPUESTA — no implementada: cortar reparaciones cambia qué se entrega (decisión del dueño)",
+  "knob": "MEALFIT_RECIPE_REPAIR_BUDGET",
+  "regla": "p95 de capas por comida (corpus y planes reales) más uno",
+  "valor": 8
+ },
+ "reparadores": {
+  "_allergen_subs_fixed": "sustitución por alergia",
+  "_budget_substitutions": "sustitución por presupuesto",
+  "_closer_raw_by_food": "cerrador de macros/micros",
+  "_condition_subs_fixed": "sustitución por condición",
+  "_crossday_dish_diversified": "diversificador entre días",
+  "_cured_ghost_rewritten": "curado fantasma",
+  "_day_kcal_floor": "piso de kcal del día",
+  "_diet_subs_fixed": "sustitución por dieta",
+  "_dm2_sugar_fixed": "azúcar (DM2)",
+  "_egg_day_capped": "tope diario de huevos",
+  "_fat_topup": "relleno de grasa",
+  "_final_protein_close": "cierre final de proteína",
+  "_food_safety_fixed": "seguridad alimentaria",
+  "_fresh_substituted": "fresco sustituido",
+  "_gainmuscle_kcal_floor": "piso de kcal (ganancia muscular)",
+  "_ingredients_backfilled": "ingredientes rellenados",
+  "_micro_seed_applied": "semilla de micronutrientes",
+  "_mise_cook_split": "mise en place",
+  "_name_phantom_dairy_added": "lácteo que el nombre prometía",
+  "_nocook_tdf_stripped": "plato sin cocción",
+  "_portion_floor_adjusted": "piso de porciones",
+  "_portion_realism_capped": "tope de realismo de porciones",
+  "_protein_autofix_applied": "autofix de proteína repetida",
+  "_protein_closed": "cerrador de proteína",
+  "_recipe_contract_repaired": "contrato de receta (capa 1)",
+  "_recipe_timetemp_clamped": "tiempos y temperaturas",
+  "_recipe_timetemp_injected": "tiempos inyectados",
+  "_recipe_water_scaled": "agua de la receta",
+  "_refine_raw_by_food": "refinado del día",
+  "_seafood_blanch_injected": "blanqueo de mariscos",
+  "_slot_autofix_applied": "autofix de franja",
+  "_sodium_autofix_applied": "autofix de sodio"
+ },
+ "schema": "2026-09-13.presupuesto"
+}

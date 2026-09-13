@@ -1111,3 +1111,52 @@ que conciertan con el sustantivo («hasta que estén») no se tocan. No se reesc
 colapsa en la cola del contrato y no se «evita» en el prompt: un prompt no garantiza nada y la cola sí. Y la lección del lote:
 **diez hallazgos con el mismo código no son un defecto** — eran tres, uno de ellos del instrumento; hasta mirarlos uno a uno el
 lote 30 los había dado por «de fábrica» en bloque.
+
+## C7 medido: variedad perceptible, presupuesto de reparación y deriva (`P1-PLAN-LOTE-35` · 2026-09-13)
+
+Tres instrumentos de solo lectura para la parte MEDIBLE de CUL-P2-01/02/03. Ninguno cambia un veredicto ni una comida.
+
+**Variedad perceptible (CUL-P2-01)** — `scripts/measure_variedad_perceptible.py`. «Pollo con arroz y ensalada» renombrado
+siete veces son siete nombres y un plato; el reporte de variedad del grafo cuenta repeticiones del MISMO día. La **firma de
+preparación** separa nombre de plato: `_template_id` si viene de la biblioteca; si no, (familias de proteína, técnicas de
+cocción, bases de carbohidrato), con los vocabularios que ya existen (`_MAIN_PROTEIN_ALIASES`, `VERB_TO_METHOD`). **Nada del
+nombre entra**: la primera versión metía el formato sacado del nombre y un renombre cambiaba la firma — el test del
+«pollo con arroz renombrado siete veces» lo destapó. Medido (artefacto `scripts/data/variedad_perceptible_2026_09_13.json`):
+
+| Fuente | Días | 7 días | 15 días | 30 días | Ventanas de 7 d sobre el tope |
+|---|---|---|---|---|---|
+| día determinista (`deterministico:DO:30d`) | 30 | 18 nombres / 18 platos / 0 renombrados | 32 nombres / 32 platos / 0 renombrados | 43 nombres / 43 platos / 0 renombrados | 14 de 24 |
+
+Las ventanas rotas las causan **dos** plantillas: Pollo guisado con bollitos de plátano; Sardinas en lata con casabe — servidas
+más de 2 veces en 7 días CON la memoria entre días del lote 2, porque en su franja no hay con qué rotar (la cena sirve
+10 platos distintos en 30 días, el desayuno
+16). Compra reusada con otra técnica en 30 días:
+huevo, pescado, pollo, yogurt; con una sola técnica:
+atun, cerdo, gandules. La primera corrida salió con 30 días VACÍOS (el pool de la base
+no se abría fuera de FastAPI y el catálogo llegaba vacío) y el informe decía «0 platos»: ahora una ventana sin comidas se
+declara no medida.
+
+Los planes del modelo que hay para medir (corpus fijo y bench real) tienen [3, 4] días: ninguna ventana de 7 cabe, y el
+instrumento lo dice en vez de extrapolar. Medir 7/15/30 días del modelo exige planes largos generados — con coste, decisión
+del dueño.
+
+**Presupuesto de reparación (CUL-P2-02)** — `scripts/measure_presupuesto_reparacion.py`. Cuenta, por comida, las capas que
+la REESCRIBIERON (32 marcas con lo que hace cada una; los diagnósticos que sólo observan no cuentan, y el solver de porciones
+es composición y va aparte), más las reescrituras del contrato final. Corpus fijo: 64 comidas, capas p50
+3 · p95 7 · máx 7, 59.4 % con ≥ 3 capas; las más frecuentes: piso de porciones 48, tope de realismo de porciones 37, cerrador de macros/micros 28, cerrador de proteína 22, sustitución por presupuesto 18.
+Planes reales del bench: 33 comidas, p50 3 · p95 6, 69.7 % con ≥ 3.
+Coste: 3 planes reales por $0.0536, 1 válidos
+tras el INSERT → $0.0536 por plan válido. **Propuesta, no implementada**:
+`MEALFIT_RECIPE_REPAIR_BUDGET = 8` (p95 + 1) como aviso cuando una comida necesita más capas que el
+95 % de las que ya se entregan; cortar reparaciones cambia qué se entrega y es decisión del dueño.
+
+**Deriva y cobertura (CUL-P2-03)** — `bench_superficies_culinarias.py --informe A --desglose` reparte lo medido por cohorte
+(el perfil del bench real; «sin_dato» cuando el corpus no lo guarda), por semana (del día de cada hallazgo nuevo) y añade una
+línea de **cobertura** por superficie (planes medidos / planes): un plan que no se pudo medir se ve como menos cobertura,
+nunca como más calidad. `judge_violation_rate.py --por-pais` desglosa cada fecha por `plan_data._country`: la regresión de un
+país no se esconde en la media. Hoy los 6 planes vivos son DO, así que el desglose por país tiene una sola fila — el
+instrumento está listo para cuando no.
+
+**Lo que NO se mide aquí, dicho.** CUL-P2-04 (cocinado real: panel y cocina, no se sustituye con un LLM), los P3 (gustos de
+preparación, biblioteca de variantes, «magia» con usuarios: producto) y la calibración del juez con la rúbrica anotada
+(dueño). El presupuesto se propone con su cifra; no se cablea.

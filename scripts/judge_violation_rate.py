@@ -57,11 +57,13 @@ def _conectar():
 def main() -> int:
     ap = argparse.ArgumentParser(description=__doc__)
     ap.add_argument("--dias", type=int, default=8, help="ventana en días (default 8)")
+    # [P1-PLAN-LOTE-35 · 2026-09-13] CUL-P2-03: la regresión de un país no puede esconderse en la media global.
+    ap.add_argument("--por-pais", action="store_true", help="desglosa cada fecha por país (plan_data._country)")
     args = ap.parse_args()
 
     with _conectar() as conn, conn.cursor() as cur:
         cur.execute(
-            """SELECT created_at, plan_data->'_culinary_judge_history', plan_data->'days'
+            """SELECT created_at, plan_data->'_culinary_judge_history', plan_data->'days', plan_data->>'_country'
                  FROM meal_plans
                 WHERE jsonb_array_length(coalesce(plan_data->'days','[]'::jsonb)) > 0
                   AND created_at > now() - make_interval(days => %s)
@@ -83,8 +85,8 @@ def main() -> int:
     hints_malos = collections.Counter()
     lineas = collections.Counter()
 
-    for creado, hist, dias in filas:
-        f = str(creado)[:10]
+    for creado, hist, dias, pais in filas:
+        f = str(creado)[:10] + (f" {pais or 'sin_dato'}" if args.por_pais else "")
         planes[f] += 1
         for e in (hist or []):
             if not isinstance(e, dict):
@@ -122,12 +124,12 @@ def main() -> int:
 
     tipos = sorted({t for f in por_tipo for t in por_tipo[f]})
     print(f"ventana: {args.dias} días · planes: {sum(planes.values())}\n")
-    cab = f"{'fecha':12s}{'planes':>7s}" + "".join(f"{t[:13]:>14s}" for t in tipos) + f"{'total':>7s}{'/plan':>7s}"
+    cab = f"{'fecha':{17 if args.por_pais else 12}s}{'planes':>7s}" + "".join(f"{t[:13]:>14s}" for t in tipos) + f"{'total':>7s}{'/plan':>7s}"
     print(cab)
     print("-" * len(cab))
     for f in sorted(planes):
         tot = sum(por_tipo[f].values())
-        fila = f"{f:12s}{planes[f]:7d}" + "".join(f"{por_tipo[f].get(t, 0):14d}" for t in tipos)
+        fila = f"{f:{17 if args.por_pais else 12}s}{planes[f]:7d}" + "".join(f"{por_tipo[f].get(t, 0):14d}" for t in tipos)
         print(fila + f"{tot:7d}{tot / max(1, planes[f]):7.2f}")
 
     print("\npredicciones de los arreglos del 06-sep (deben tender a cero):")

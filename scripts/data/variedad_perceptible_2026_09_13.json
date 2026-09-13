@@ -1,0 +1,312 @@
+{
+ "fecha": "2026-09-13",
+ "firma": "template_id | (familias de proteína, técnicas, bases, formato)",
+ "planes": {
+  "corpus:125e45b1": {
+   "comidas": 12,
+   "dias": 3,
+   "firmas_sobre_tope": [],
+   "ventanas": {
+    "15": {
+     "medida": false,
+     "motivo": "el plan tiene 3 días"
+    },
+    "30": {
+     "medida": false,
+     "motivo": "el plan tiene 3 días"
+    },
+    "7": {
+     "medida": false,
+     "motivo": "el plan tiene 3 días"
+    }
+   },
+   "ventanas_7d_rotas": 0
+  },
+  "corpus:1461aeca": {
+   "comidas": 12,
+   "dias": 3,
+   "firmas_sobre_tope": [],
+   "ventanas": {
+    "15": {
+     "medida": false,
+     "motivo": "el plan tiene 3 días"
+    },
+    "30": {
+     "medida": false,
+     "motivo": "el plan tiene 3 días"
+    },
+    "7": {
+     "medida": false,
+     "motivo": "el plan tiene 3 días"
+    }
+   },
+   "ventanas_7d_rotas": 0
+  },
+  "corpus:3957a669": {
+   "comidas": 16,
+   "dias": 4,
+   "firmas_sobre_tope": [],
+   "ventanas": {
+    "15": {
+     "medida": false,
+     "motivo": "el plan tiene 4 días"
+    },
+    "30": {
+     "medida": false,
+     "motivo": "el plan tiene 4 días"
+    },
+    "7": {
+     "medida": false,
+     "motivo": "el plan tiene 4 días"
+    }
+   },
+   "ventanas_7d_rotas": 0
+  },
+  "corpus:c4098931": {
+   "comidas": 12,
+   "dias": 3,
+   "firmas_sobre_tope": [],
+   "ventanas": {
+    "15": {
+     "medida": false,
+     "motivo": "el plan tiene 3 días"
+    },
+    "30": {
+     "medida": false,
+     "motivo": "el plan tiene 3 días"
+    },
+    "7": {
+     "medida": false,
+     "motivo": "el plan tiene 3 días"
+    }
+   },
+   "ventanas_7d_rotas": 0
+  },
+  "corpus:cd1b2fd0": {
+   "comidas": 12,
+   "dias": 3,
+   "firmas_sobre_tope": [],
+   "ventanas": {
+    "15": {
+     "medida": false,
+     "motivo": "el plan tiene 3 días"
+    },
+    "30": {
+     "medida": false,
+     "motivo": "el plan tiene 3 días"
+    },
+    "7": {
+     "medida": false,
+     "motivo": "el plan tiene 3 días"
+    }
+   },
+   "ventanas_7d_rotas": 0
+  },
+  "deterministico:DO:30d": {
+   "comidas": 120,
+   "dias": 30,
+   "firmas_sobre_tope": [
+    "Pollo guisado con bollitos de plátano ('plantilla', 'tpl_1ebac624c448')",
+    "Sardinas en lata con casabe ('plantilla', 'tpl_6a5fe80136a7')"
+   ],
+   "ventanas": {
+    "15": {
+     "comidas": 60,
+     "firmas_distintas": 32,
+     "medida": true,
+     "nombres_distintos": 32,
+     "por_franja": {
+      "Almuerzo": {
+       "comidas": 15,
+       "firmas": 8,
+       "nombres": 8,
+       "renombrados": 0
+      },
+      "Cena": {
+       "comidas": 15,
+       "firmas": 6,
+       "nombres": 6,
+       "renombrados": 0
+      },
+      "Desayuno": {
+       "comidas": 15,
+       "firmas": 10,
+       "nombres": 10,
+       "renombrados": 0
+      },
+      "Merienda": {
+       "comidas": 15,
+       "firmas": 9,
+       "nombres": 9,
+       "renombrados": 0
+      }
+     },
+     "proteina_con_varias_tecnicas": [
+      "huevo",
+      "pescado",
+      "pollo",
+      "yogurt"
+     ],
+     "proteina_misma_tecnica": [
+      "atun"
+     ],
+     "renombrados": 0
+    },
+    "30": {
+     "comidas": 120,
+     "firmas_distintas": 43,
+     "medida": true,
+     "nombres_distintos": 43,
+     "por_franja": {
+      "Almuerzo": {
+       "comidas": 30,
+       "firmas": 12,
+       "nombres": 12,
+       "renombrados": 0
+      },
+      "Cena": {
+       "comidas": 30,
+       "firmas": 10,
+       "nombres": 10,
+       "renombrados": 0
+      },
+      "Desayuno": {
+       "comidas": 30,
+       "firmas": 16,
+       "nombres": 16,
+       "renombrados": 0
+      },
+      "Merienda": {
+       "comidas": 30,
+       "firmas": 11,
+       "nombres": 11,
+       "renombrados": 0
+      }
+     },
+     "proteina_con_varias_tecnicas": [
+      "huevo",
+      "pescado",
+      "pollo",
+      "yogurt"
+     ],
+     "proteina_misma_tecnica": [
+      "atun",
+      "cerdo",
+      "gandules"
+     ],
+     "renombrados": 0
+    },
+    "7": {
+     "comidas": 28,
+     "firmas_distintas": 18,
+     "medida": true,
+     "nombres_distintos": 18,
+     "por_franja": {
+      "Almuerzo": {
+       "comidas": 7,
+       "firmas": 6,
+       "nombres": 6,
+       "renombrados": 0
+      },
+      "Cena": {
+       "comidas": 7,
+       "firmas": 4,
+       "nombres": 4,
+       "renombrados": 0
+      },
+      "Desayuno": {
+       "comidas": 7,
+       "firmas": 5,
+       "nombres": 5,
+       "renombrados": 0
+      },
+      "Merienda": {
+       "comidas": 7,
+       "firmas": 4,
+       "nombres": 4,
+       "renombrados": 0
+      }
+     },
+     "proteina_con_varias_tecnicas": [
+      "huevo",
+      "pescado",
+      "pollo"
+     ],
+     "proteina_misma_tecnica": [
+      "atun",
+      "yogurt"
+     ],
+     "renombrados": 0
+    }
+   },
+   "ventanas_7d_rotas": 14
+  },
+  "real:perfil_baseline_m": {
+   "comidas": 12,
+   "dias": 3,
+   "firmas_sobre_tope": [],
+   "ventanas": {
+    "15": {
+     "medida": false,
+     "motivo": "el plan tiene 3 días"
+    },
+    "30": {
+     "medida": false,
+     "motivo": "el plan tiene 3 días"
+    },
+    "7": {
+     "medida": false,
+     "motivo": "el plan tiene 3 días"
+    }
+   },
+   "ventanas_7d_rotas": 0
+  },
+  "real:perfil_dm2_metformina": {
+   "comidas": 9,
+   "dias": 3,
+   "firmas_sobre_tope": [],
+   "ventanas": {
+    "15": {
+     "medida": false,
+     "motivo": "el plan tiene 3 días"
+    },
+    "30": {
+     "medida": false,
+     "motivo": "el plan tiene 3 días"
+    },
+    "7": {
+     "medida": false,
+     "motivo": "el plan tiene 3 días"
+    }
+   },
+   "ventanas_7d_rotas": 0
+  },
+  "real:perfil_vegetariana": {
+   "comidas": 12,
+   "dias": 3,
+   "firmas_sobre_tope": [],
+   "ventanas": {
+    "15": {
+     "medida": false,
+     "motivo": "el plan tiene 3 días"
+    },
+    "30": {
+     "medida": false,
+     "motivo": "el plan tiene 3 días"
+    },
+    "7": {
+     "medida": false,
+     "motivo": "el plan tiene 3 días"
+    }
+   },
+   "ventanas_7d_rotas": 0
+  }
+ },
+ "schema": "2026-09-13.variedad",
+ "tope_7d_balanced": 2,
+ "ventanas": [
+  7,
+  15,
+  30
+ ]
+}
