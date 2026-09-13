@@ -1694,6 +1694,23 @@ def _v8b_equipo_no_disponible(day, meal, declared) -> list:
         return []
 
 
+# ─────────────────────────────────────────────────────────────────────────────────────────────
+# [P1-PLAN-LOTE-27 · 2026-09-12] (C5 · CUL-P1-02) V9 estructura del plato — el contrato ligero de `dish_structure`
+# (familia, componentes, relaciones de cantidades sensibles) emite sus tres hallazgos mecanizables con la evidencia de la
+# biblioteca curada: `crema_sin_espesante`, `wrap_desproporcionado`, `tortilla_vegetales_crudos`. `minor`, no reparable.
+# Medido: 0 falsos positivos sobre las 193 recetas curadas y 0 sobre el corpus fijo; los tres casos del backlog disparan.
+# tooltip-anchor: P1-PLAN-LOTE-27-V9
+
+def _v9_estructura(day, meal, index) -> list:
+    try:
+        from dish_structure import contract
+        k = contract(meal)
+        return [_viol(day, meal, "V9", r.get("tipo"), f"{r.get('detalle')} — evidencia: {r.get('evidencia')}", "minor", False)
+                for r in (k.get("relaciones") or [])]
+    except Exception:
+        return []
+
+
 def _viol(day, meal, check, food, detail, severity, repairable):
     return {"day": day, "meal": meal.get("meal") or meal.get("name"),
             "check": check, "food": food, "detail": detail,
@@ -1701,7 +1718,7 @@ def _viol(day, meal, check, food, detail, severity, repairable):
 
 
 #: Los checks de la capa 1, en el orden en que corren.
-CHECKS_CAPA1 = ("V1", "V2", "V3", "V4", "V5", "V6", "V7a", "V7b", "V7c", "V7d", "V7e", "V8a", "V8b")
+CHECKS_CAPA1 = ("V1", "V2", "V3", "V4", "V5", "V6", "V7a", "V7b", "V7c", "V7d", "V7e", "V8a", "V8b", "V9")
 
 #: [P1-PLAN-LOTE-22 · 2026-09-12] (C1 · CUL-P0-01) Versión del ESQUEMA de hallazgo: desde aquí cada violación (capa 1 y
 #: juez) lleva `meal_index`, la posición de la comida en su día. Cambia cuando cambie la forma del hallazgo.
@@ -1781,6 +1798,7 @@ def culinary_contract_scan(plan_data: dict, catalog: list, _estado: "dict | None
             out.extend(_v7e_paso_pide_mas_piezas(day, meal, index))
             out.extend(_v8a_tiempo_oculto(day, meal, index))
             out.extend(_v8b_equipo_no_disponible(day, meal, _declared))
+            out.extend(_v9_estructura(day, meal, index))
             for v in out[start:]:
                 v.setdefault("meal_index", mi)
                 v.setdefault("meal_seal", meal_seal(meal))

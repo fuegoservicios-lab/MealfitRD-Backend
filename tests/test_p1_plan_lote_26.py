@@ -211,7 +211,7 @@ def test_v8a_tiempo_oculto_y_v8b_equipo_en_el_escaner():
     plan["form_data"] = {"super_personalization": {"kitchenEquipment": ["Horno"]}}
     viol3, est3 = cc.culinary_contract_scan_status(plan, _CAT)
     assert est3["contexto"]["equipo"] == "declarado" and not [v for v in viol3 if v["check"] == "V8b"], "el equipo viaja dentro del plan persistido"
-    assert cc.CHECKS_CAPA1[-2:] == ("V8a", "V8b") and est["checks"] == list(cc.CHECKS_CAPA1)
+    assert cc.CHECKS_CAPA1.index("V8b") == cc.CHECKS_CAPA1.index("V8a") + 1 and est["checks"] == list(cc.CHECKS_CAPA1)
 
 
 def test_el_almacenaje_no_es_consumo_para_los_checks_de_cantidad():

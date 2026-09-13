@@ -273,6 +273,12 @@ meses es candidato a borrarse (el de `MEALFIT_SLOT_AWARE_DAY_REPAIR`, que ademá
 |---|---|---|
 | `MEALFIT_CULINARY_CONTEXT` | `True` | `culinary_context`: lo declarado por la persona es CONTEXTO del plato. Un básico declarado para una franja no es violación de horario (`_detect_slot_appropriateness`) ni recibe el autofix del arroz de noche; el techo de comidas con huevo honra al huevo básico (≥ 1 por día, nunca menos que `max(3, 25 %)`) y una clara de aglutinante no cuenta; el equipo declarado en Súper Personalización llega al prompt del día, al selector determinista (poda plantillas que lo exigen) y al juez (`contexto`); el pareo chocante respeta «al lado». `False` ⇒ conducta anterior en los cinco enganches, sin redeploy. Los checks V8a (tiempo oculto) y V8b (equipo no disponible) del escáner y la relajación `portion_cap_default_not_enforced` NO dependen del knob (son aviso/escritura, no conducta) |
 
+### Estructura del plato y cadena de reparación medida (C5 · segunda parte (a) · `P1-PLAN-LOTE-27` · 2026-09-12)
+
+| Knob | Default | Efecto |
+|---|---|---|
+| `MEALFIT_REPAIR_STAGE_DIFF` | `True` | `repair_stage_diff`: el escáner culinario de capa 1 fotografía el plan a la ENTRADA de `db_plans._finalize_plan_data_for_insert`, TRAS los caps de realismo y a la SALIDA (tras el contrato final); `plan_data["_repair_stage_diff"]` guarda conteos por check y etapa, los hallazgos NUEVOS con la etapa que los introdujo, los resueltos y el coste (ms); `warning` en el log si la cadena introduce algo. No muta ni bloquea. Sin catálogo o con > 200 comidas no mide y lo dice. `False` apaga las tres fotos sin redeploy. V9 (estructura del plato: `dish_structure`) es un check de aviso y no depende de knob |
+
 ## Cómo añadir un knob nuevo
 
 ```python

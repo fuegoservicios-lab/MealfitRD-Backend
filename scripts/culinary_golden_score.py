@@ -93,6 +93,7 @@ RUBRICA = {
     "masa_sobrante": {"V7d"},
     "tiempo_oculto": {"V8a"},           # [P1-PLAN-LOTE-26]
     "equipo_no_disponible": {"V8b"},    # [P1-PLAN-LOTE-26]
+    "estructura_del_plato": {"V9"},      # [P1-PLAN-LOTE-27]
     "combo_absurdo": {"combo_absurdo"},
     "tecnica_impropia": {"tecnica_impropia"},
     "paso_incoherente": {"paso_incoherente"},
@@ -103,7 +104,7 @@ RUBRICA = {
     "otro": set(),
 }
 SEVERIDADES = ("minor", "high")
-_CODIGOS_DET = {"V1", "V2", "V3", "V4", "V5", "V6", "V7a", "V7b", "V7c", "V7d", "V7e", "V8a", "V8b"}
+_CODIGOS_DET = {"V1", "V2", "V3", "V4", "V5", "V6", "V7a", "V7b", "V7c", "V7d", "V7e", "V8a", "V8b", "V9"}
 BOOTSTRAP_N = 1000
 BOOTSTRAP_SEMILLA = 20260912
 

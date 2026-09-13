@@ -885,3 +885,44 @@ una conversión inventada. Corpus fijo tras el lote: V7d 1, V8a 1, V8b 0 (nadie 
 convierte V8a/V8b en rechazo; no toca la regla DURA del arroz en el DESAYUNO (sigue `hard` en RD); no reparte claras por
 receta ni ajusta recipiente/técnica para raciones mayores (queda para C5 segunda parte, CUL-P1-02/04); no re-calibra al
 juez (CUL-P1-06 depende de la rúbrica anotada de C1).
+
+
+## Estructura del plato y la cadena de reparación medida (C5 · segunda parte (a) · `P1-PLAN-LOTE-27` · 2026-09-12)
+
+**CUL-P1-02 — un contrato LIGERO de estructura, derivado de lo que el plato ya declara.** `dish_structure.contract(meal)`
+→ familia (tortilla/revoltillo, panqueque, bowl, guiso, ensalada, tostada/wrap, batido/crema, otro — por el NOMBRE; la
+«tortilla de trigo» es pan, no huevo), componentes (principal, soporte, líquidos en ml, sólidos en g, vegetales de agua —
+**sólo con lo que la lista declara en g/ml: una pieza sin gramos no inventa peso**), relaciones de cantidades sensibles y
+una confianza (`alta/media/baja` según cuántas líneas traen cifra). Es metadata de EVALUACIÓN: no escribe el texto del
+usuario (`canonical_recipe.render_line` sigue reservado a compras y macros, como fijó la revisión).
+
+**Los umbrales salen de la biblioteca curada, no de un número redondo.** Medido sobre las 193 recetas DO: wraps y
+tostadas — relleno ÷ pan 2,4 · 2,5 · 3,8 (mediana 2,5) ⇒ umbral 5,0 (el máximo curado + 30 %); batidos y cremas —
+sólidos ÷ líquido **mediana 0,90**, mínimo 0,26 ⇒ una «crema» que promete espesor con menos de 0,20 g de sólidos por ml,
+≥ 150 ml y sin proceso que espese (reducir, cocer hasta espesar) ni espesante en la lista (avena, chía, guineo, yogur,
+aguacate…) es la crema de 10 g de legumbre y 300 ml de leche del backlog; tortilla/revoltillo con vegetales de agua —
+en 12 de 14 recetas curadas se sofríen o escurren ANTES del huevo (el huevo que cuenta es el que se VIERTE o cuaja, no
+el que se bate en el mise en place; un vegetal que sólo aparece en «aliña… y sírvelo al lado» no va dentro). Los tres
+hallazgos —`crema_sin_espesante`, `wrap_desproporcionado`, `tortilla_vegetales_crudos`— salen del escáner como **V9**
+(`minor`, no reparable, con su evidencia en el detalle). Medido: **0 falsos positivos sobre las 193 recetas curadas y 0
+sobre el corpus fijo** (48 de sus 64 comidas tienen confianza `baja`: la lista viene en tazas y piezas — se dice, no se
+adivina); los tres casos del backlog disparan. Familias en el corpus: otro 35, batido/crema 7, panqueque 7, tostada/wrap
+6, bowl 3, ensalada 3, guiso 2, tortilla 1.
+
+**CUL-P1-04 — ajustar nutrición sin desarmar la receta: lo que ya estaba, y lo que faltaba.** Ya estaba: los
+cerradores de banda y de piso de proteína re-escalan porciones EXISTENTES (jamás añaden un alimento, así que no ponen
+pollo en un batido); la sustitución de huevo reescribe sus pasos (`_rewrite_recipe_steps_after_subs`); C2 y C3
+sincronizan cantidades y formas en la cola real; V2 acusa el estado imposible. Lo que faltaba: **nadie comparaba el
+plato antes y después de la cadena**. `repair_stage_diff` fotografía el plan con el escáner de capa 1 en tres puntos de
+`db_plans._finalize_plan_data_for_insert` — ENTRADA (antes de la coherencia), TRAS LOS CAPS de realismo (el pase que más
+mueve cantidades) y SALIDA (tras el contrato final, antes de restaurar los días congelados) — y escribe en
+`plan_data["_repair_stage_diff"]` los conteos por check de cada etapa, los hallazgos NUEVOS con la etapa que los
+introdujo, los resueltos y el coste en ms; loguea `warning` cuando la cadena introduce algo. No muta, no bloquea, no
+repara: informa, para que el reparador de CUL-P1-04 tenga qué medir. Knob `MEALFIT_REPAIR_STAGE_DIFF` (default `True`);
+sin catálogo o con más de 200 comidas se dice (`estado = sin_catalogo` / no se mide). El benchmark de superficies
+(siguiente lote) lo reutiliza con `medir_cadena(plan, cadena)`.
+
+**Lo que NO hace, dicho.** No adapta el relleno del wrap ni la técnica de la tortilla (V9 acusa; reparar es otro paso).
+No reabre la sustitución por LP/MILP (decisión previa vigente). La medición por etapas sobre planes REALES llega con la
+telemetría de cada plan persistido; al escribir esto la base no era alcanzable (red caída) y la medición offline se hizo
+con fichas fijadas en la prueba. CUL-P1-06 (juez) y CUL-P1-07 (benchmark de superficies) van en el lote siguiente.

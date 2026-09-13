@@ -1132,6 +1132,15 @@ def _finalize_plan_data_for_insert(data: dict, *, surface: str = "pre-INSERT",
                     _db_ins = _NDB_ins()
                 except Exception:
                     _db_ins = None
+                # [P1-PLAN-LOTE-27 · 2026-09-12] (C5 · CUL-P1-04) La cadena de reparación se MIDE: foto culinaria de
+                # ENTRADA; otra tras los caps y otra a la salida. Lo que aparezca y no estuviera es un defecto que la
+                # propia cadena introdujo, y queda escrito en `_repair_stage_diff`. tooltip-anchor: P1-PLAN-LOTE-27-STAGE-DIFF
+                _rsd = _rsd_ctx = None
+                try:
+                    import repair_stage_diff as _rsd
+                    _rsd_ctx = _rsd.start(_pd, surface=str(surface or "pre-INSERT"))
+                except Exception:
+                    _rsd_ctx = None
                 # [P2-T2-PAST-DAYS-FROZEN · 2026-08-04] (audit solver+seeder v7 · P3) SNAPSHOT
                 # de los días YA COCIDOS, antes del primer pase que mueve gramos; restauración
                 # más abajo, tras el último y ANTES del estampado de métricas. UN solo punto
@@ -1316,6 +1325,8 @@ def _finalize_plan_data_for_insert(data: dict, *, surface: str = "pre-INSERT",
                             logger.info(f"📏 [P2-CAPS-AFTER-BAND-CLOSER] {_cap_n} recorte(s) al techo de "
                                         f"realismo tras el band-closer pre-INSERT (antes se persistían "
                                         f"re-infladas por el rebalance).")
+                        if _rsd_ctx is not None:
+                            _rsd.mark(_rsd_ctx, "tras_caps", _pd)          # [P1-PLAN-LOTE-27] foto tras los caps
                 except Exception as _cabc_e:
                     logger.debug(f"[P2-CAPS-AFTER-BAND-CLOSER] pre-INSERT no-op: "
                                  f"{type(_cabc_e).__name__}: {_cabc_e}")
@@ -1436,6 +1447,11 @@ def _finalize_plan_data_for_insert(data: dict, *, surface: str = "pre-INSERT",
                         logger.info(f"📐 [P1-PLAN-LOTE-24] contrato final en la cola del shield ({surface}): {_rfc_tail_out}")
                 except Exception as _rfc_tail_e:
                     logger.debug(f"[P1-PLAN-LOTE-24] contrato final (cola) no-op: {type(_rfc_tail_e).__name__}: {_rfc_tail_e}")
+                if _rsd_ctx is not None:
+                    try:
+                        _rsd.finish(_rsd_ctx, _pd)                        # [P1-PLAN-LOTE-27] foto de salida + informe
+                    except Exception:
+                        pass
                 if _frozen_token is not None:
                     from graph_orchestrator import restore_past_days as _rpd_frz
                     _rpd_frz(_pd, _frozen_token)
