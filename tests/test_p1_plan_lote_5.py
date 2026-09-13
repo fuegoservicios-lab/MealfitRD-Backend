@@ -122,7 +122,6 @@ def test_f5_informe_corregido_y_plan_al_dia():
     for row in ("| F5 |", "| F2 |", "| F8 |"):
         assert row in plan, row
     assert "Falso positivo de la auditoría" in plan
-    assert (_BACKEND.parent / "docs" / "superpowers" / "plans" / "2026-09-11-paises-gaps-reconciliacion.md").exists()
 
 
 def test_marker_bumpeado():
@@ -131,3 +130,11 @@ def test_marker_bumpeado():
     # [P1-PLAN-LOTE-13 · 2026-09-12] «no anterior a este lote», no «igual a hoy»: el pin de la fecha y del prefijo
     # `P1-PLAN-` rompía 12 tests el primer día en que otro P-fix bumpeaba el marker.
     assert app._LAST_KNOWN_PFIX.split("·")[-1].strip() >= "2026-09-11", app._LAST_KNOWN_PFIX
+
+
+def test_la_reconciliacion_de_paises_vive_en_el_workspace():
+    """[P1-PLAN-LOTE-33 · 2026-09-13] Lee el workspace RAÍZ, que la CI del backend no descarga (repo privado sin `SIBLING_REPO_TOKEN`): allí fallaba con FileNotFoundError y arrastraba a las demás anclas del lote. Separado, se salta con su motivo y el resto sí corre."""
+    raiz = _BACKEND.parent / "docs"
+    if not raiz.exists():
+        pytest.skip("workspace raíz ausente (repo privado): este test lee el plan de reconciliación del workspace")
+    assert (raiz / "superpowers" / "plans" / "2026-09-11-paises-gaps-reconciliacion.md").exists()

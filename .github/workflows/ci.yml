@@ -84,7 +84,10 @@ jobs:
     # runner y CERO veredictos. Un gate que nunca termina no gatea nada. Ahora corre como el gate
     # local (`scripts/run_ci.ps1`): xdist con `--dist loadfile` (los tests dependientes del orden
     # viven en el mismo fichero), cuarentena en serie, y techo holgado para el runner de 2 vCPU.
-    timeout-minutes: 50
+    # [P1-PLAN-LOTE-33 · 2026-09-13] 50 → 75 y `-n 2` → `-n 4`: la suite volvió a pasar de los 50 min (las 9 corridas
+    # desde el lote 26 murieron `cancelled` con el paso de pytest en 49,4 min: cero veredictos otra vez). El repo es
+    # PÚBLICO y sus runners tienen 4 vCPU; con 2 workers se usaba la mitad.
+    timeout-minutes: 75
     env:
       # [P1-I18N-CI-SIN-VEREDICTO] `secrets.*` no se evalúa dentro de un `if` de step; aquí
       # sí, y la condición del checkout del hermano lee esta variable.
@@ -195,12 +198,12 @@ jobs:
           export PYTHONHASHSEED=0
           if [ "${{ matrix.perfil }}" = "produccion" ]; then
             # [P1-PLAN-LOTE-33] el perfil de producción (la cuarentena la lee el script de este mismo fichero)
-            python scripts/prod_profile_gate.py --workers 2
+            python scripts/prod_profile_gate.py --workers 4
             exit $?
           fi
           QUARANTINE="tests/test_chunked_generation.py tests/test_renewal_15d.py tests/test_p1_17_purge_graph_cache.py tests/test_p1_audit_hist_7_lesson_whitelist_ssot.py tests/test_p1_bg_thread_timeout.py tests/test_p2_cap_log_level.py"
           IGNORE=""; for f in $QUARANTINE; do IGNORE="$IGNORE --ignore $f"; done
-          pytest tests/ -q --tb=short -m "not e2e" -n 2 --dist loadfile --max-worker-restart=4 $IGNORE
+          pytest tests/ -q --tb=short -m "not e2e" -n 4 --dist loadfile --max-worker-restart=4 $IGNORE
           pytest $QUARANTINE -q --tb=short -m "not e2e" -p no:cacheprovider
 
       # [P2-E2E-CATALOGO-PAIS-SIN-NINGUN-GATE · 2026-08-23] Sólo el fichero

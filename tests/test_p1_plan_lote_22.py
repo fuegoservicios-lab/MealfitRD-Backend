@@ -490,9 +490,15 @@ def test_docs_plan_y_marker():
     plan = (_BACKEND / "docs" / "plan_pendientes_2026_09_11.md").read_text(encoding="utf-8")
     assert "| C1 | ✅ 2026-09-12 · software listo · 👤 anotación con rúbrica + 2º anotador |" in plan
     assert "| C0 | ✅ 2026-09-12 · corpus fijo + etiquetas binarias (09-07) · 👤 rúbrica |" in plan
-    rev = (_BACKEND.parent / "docs" / "audits" / "2026-09-07-coherencia-culinaria" / "REVISION-DE-LOS-GAPS.md").read_text(encoding="utf-8")
-    assert "## Hecho el 2026-09-12 (`P1-PLAN-LOTE-22`, C1 del plan de pendientes)" in rev
     app = (_BACKEND / "app.py").read_text(encoding="utf-8", errors="ignore")
     m = re.search(r'_LAST_KNOWN_PFIX = "([^"]+)"', app)
     assert m and m.group(1).split("·")[-1].strip() >= "2026-09-12"
     assert "P1-PLAN-LOTE-22" in (_BACKEND / "culinary_coherence.py").read_text(encoding="utf-8")
+
+
+def test_la_revision_del_workspace_anota_el_lote():
+    """[P1-PLAN-LOTE-33 · 2026-09-13] Lee el workspace RAÍZ, que la CI del backend no descarga (repo privado sin `SIBLING_REPO_TOKEN`): allí fallaba con FileNotFoundError y arrastraba a las demás anclas del lote. Separado, se salta con su motivo y el resto sí corre."""
+    rev = _BACKEND.parent / "docs" / "audits" / "2026-09-07-coherencia-culinaria" / "REVISION-DE-LOS-GAPS.md"
+    if not rev.exists():
+        pytest.skip("workspace raíz ausente (repo privado): este test lee docs/audits del workspace")
+    assert "## Hecho el 2026-09-12 (`P1-PLAN-LOTE-22`, C1 del plan de pendientes)" in rev.read_text(encoding="utf-8")

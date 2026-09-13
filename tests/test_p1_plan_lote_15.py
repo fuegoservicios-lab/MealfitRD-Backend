@@ -222,11 +222,17 @@ def test_los_docs_cuentan_el_lote():
         assert frag in doc, frag
     bat = _src("scripts/delivery_battery.py")
     assert "canary_plan_delivery.py" in bat and "verify_swap_last_chunk.py" in bat, "la batería apunta a lo que la cierra"
-    estado = (_ROOT / "docs" / "audits" / "2026-09-06-generacion" / "ESTADO-IMPLEMENTACION.md").read_text(encoding="utf-8")
-    assert "P1-PLAN-LOTE-15" in estado
 
 
 def test_marker_bumpeado():
     import app
     assert "[P1-PLAN-LOTE-15 · 2026-09-12]" in _src("app.py")
     assert app._LAST_KNOWN_PFIX.split("·")[-1].strip() >= "2026-09-12", app._LAST_KNOWN_PFIX
+
+
+def test_el_estado_del_workspace_anota_el_lote():
+    """[P1-PLAN-LOTE-33 · 2026-09-13] Lee el workspace RAÍZ, que la CI del backend no descarga (repo privado sin `SIBLING_REPO_TOKEN`): allí fallaba con FileNotFoundError y arrastraba a las demás anclas del lote. Separado, se salta con su motivo y el resto sí corre."""
+    estado = _ROOT / "docs" / "audits" / "2026-09-06-generacion" / "ESTADO-IMPLEMENTACION.md"
+    if not estado.exists():
+        pytest.skip("workspace raíz ausente (repo privado): este test lee docs/audits del workspace")
+    assert "P1-PLAN-LOTE-15" in estado.read_text(encoding="utf-8")
