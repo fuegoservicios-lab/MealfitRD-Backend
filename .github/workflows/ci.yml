@@ -69,8 +69,15 @@ concurrency:
 
 jobs:
   backend-tests:
-    name: Backend pytest
+    # [P1-PLAN-LOTE-33 · 2026-09-13] F8: dos patas en paralelo con los mismos pasos. `suite` es el gate de siempre;
+    # `produccion` corre `scripts/prod_profile_gate.py`: la suite con los knobs del `.env` del VPS exportados (menos
+    # `tests/prod_profile_excluded.txt`, cada línea con su motivo) + la batería. En serie no cabían en los 50 min.
+    name: Backend pytest (${{ matrix.perfil }})
     runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        perfil: [suite, produccion]
     # [P0-CI-TIMEOUT-15 · 2026-09-11] Eran 15 min y la suite completa (24.361 tests sin e2e, en
     # serie y con `-v`) tarda más: TODAS las corridas desde el 2026-09-09 acababan `cancelled` por
     # «exceeded the maximum execution time» — dos por push (main + glm-migration), ~32 min de
@@ -186,6 +193,11 @@ jobs:
           # [P0-CI-TIMEOUT-15 · 2026-09-11] Misma receta que `scripts/run_ci.ps1` (fase A en
           # paralelo + cuarentena en serie). Sin `-v`: 24k líneas de log no son un veredicto.
           export PYTHONHASHSEED=0
+          if [ "${{ matrix.perfil }}" = "produccion" ]; then
+            # [P1-PLAN-LOTE-33] el perfil de producción (la cuarentena la lee el script de este mismo fichero)
+            python scripts/prod_profile_gate.py --workers 2
+            exit $?
+          fi
           QUARANTINE="tests/test_chunked_generation.py tests/test_renewal_15d.py tests/test_p1_17_purge_graph_cache.py tests/test_p1_audit_hist_7_lesson_whitelist_ssot.py tests/test_p1_bg_thread_timeout.py tests/test_p2_cap_log_level.py"
           IGNORE=""; for f in $QUARANTINE; do IGNORE="$IGNORE --ignore $f"; done
           pytest tests/ -q --tb=short -m "not e2e" -n 2 --dist loadfile --max-worker-restart=4 $IGNORE
@@ -195,6 +207,7 @@ jobs:
       # read-only que contrasta el catálogo vivo. Nunca `-m e2e` sobre toda la
       # suite: ese marker también es la llave que autoriza escrituras de tests.
       - name: Country catalog live (read-only)
+        if: ${{ matrix.perfil == 'suite' }}
         working-directory: backend
         env:
           NEON_DATABASE_URL: ${{ secrets.NEON_DATABASE_URL }}
@@ -213,5 +226,7 @@ jobs:
         working-directory: backend
         if: always()
         run: |
+          # [P1-PLAN-LOTE-33] el aviso lo da la pata de la suite: la de producción no lo repite
+          [ "${{ matrix.perfil }}" = "suite" ] || exit 0
           COUNT=$(pytest tests/ -m "e2e" --collect-only -q 2>/dev/null | tail -1 || echo "?")
           echo "::notice title=E2E sin verificar::Este job corre SIN base de datos, así que los tests marcados @pytest.mark.e2e NO se ejecutan. Recuento: ${COUNT}. Verde aquí NO significa que estén verdes."

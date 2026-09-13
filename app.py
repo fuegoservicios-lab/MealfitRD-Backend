@@ -163,7 +163,7 @@ _PROCESS_START_ISO = datetime.now(timezone.utc).isoformat()
 # blueprint (`registry.empty_slots`); medido en 600 blueprints: 4.311 de 49.200 franjas vacías y 4.211 tendrían plato
 # con OTRA familia (compra mensual sin congelador). Allocator mínimo tras MEALFIT_HORIZON_VIABLE_FAMILY (off): la
 # familia del día pasa a la que cubre más franjas → 100 vacías, todas huecos de biblioteca. Apagado = byte-idéntico.
-_LAST_KNOWN_PFIX = "P1-PLAN-LOTE-32 · 2026-09-13"
+_LAST_KNOWN_PFIX = "P1-PLAN-LOTE-33 · 2026-09-13"
 
 # [P1-SENTRY-SAMPLE-COST · 2026-05-12] Sentry sampling driven from env vars
 # con default seguro 0.1 (10%). Pre-fix tenía `traces_sample_rate=1.0` y

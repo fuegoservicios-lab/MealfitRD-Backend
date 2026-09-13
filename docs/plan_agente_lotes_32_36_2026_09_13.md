@@ -69,7 +69,8 @@ Q=$(grep -m1 'QUARANTINE=' .github/workflows/ci.yml | sed 's/.*QUARANTINE="\([^"
 ```
 
 Referencia del 2026-09-13 (lote 31): paralelo **24.714 passed / 91 skipped / 2 xfailed** en ~15 min; serie **107 passed**
-en ~2 min. Verde = `EXIT_PAR=0` y `EXIT_SER=0`. Un fallo nuevo se diagnostica, no se marca `xfail`. Sondea el fichero
+en ~2 min. Verde = `EXIT_PAR=0` y `EXIT_SER=0`. **Desde el lote 33 hay una tercera fase**: `python scripts/prod_profile_gate.py`
+(la suite con el perfil de producción menos `tests/prod_profile_excluded.txt`, y la batería) → `EXIT_PROD=0`. Un fallo nuevo se diagnostica, no se marca `xfail`. Sondea el fichero
 (`until grep -q EXIT_SER …; do sleep 20; done` con `timeout`), no hagas `sleep` a ciegas.
 
 ### 0.4 Cierre de un lote (checklist — todos, en este orden)

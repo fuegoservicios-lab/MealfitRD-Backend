@@ -279,6 +279,32 @@ meses es candidato a borrarse (el de `MEALFIT_SLOT_AWARE_DAY_REPAIR`, que ademá
 |---|---|---|
 | `MEALFIT_REPAIR_STAGE_DIFF` | `True` | `repair_stage_diff`: el escáner culinario de capa 1 fotografía el plan a la ENTRADA de `db_plans._finalize_plan_data_for_insert`, TRAS los caps de realismo y a la SALIDA (tras el contrato final); `plan_data["_repair_stage_diff"]` guarda conteos por check y etapa, los hallazgos NUEVOS con la etapa que los introdujo, los resueltos y el coste (ms); `warning` en el log si la cadena introduce algo. No muta ni bloquea. Sin catálogo o con > 200 comidas no mide y lo dice. `False` apaga las tres fotos sin redeploy. V9 (estructura del plato: `dish_structure`) es un check de aviso y no depende de knob |
 
+### El paso del gate con el perfil de producción (F8 · `P1-PLAN-LOTE-33` · 2026-09-13)
+
+**El problema.** `tests/conftest.py` apaga a propósito cinco gates y la suite deja otros knobs en su default de código:
+**la suite entera mide un producto distinto del que se entrega**. `prod_profile.py` tiene los knobs del `.env` del VPS
+(leídos el 2026-09-06) y la batería los usaba para una matriz de cohortes, pero ningún test de la suite corría con
+ellos.
+
+**Medido.** La suite (`-m 'not e2e'`, sin la cuarentena) con `prod_profile.perfil_completo()` exportado al entorno:
+**109 fallos de 24819 tests, en 34 ficheros** (artefacto `scripts/data/f8_prod_profile_2026_09_13.json`). Atribución
+fichero a fichero —el conjunto mínimo de knobs cuya retirada deja el fichero en verde, corriéndolo SOLO—: 30 por
+un knob, 4 por combinación, 0 que sólo fallan en la corrida completa y
+0 que fallen también sin el perfil. Knobs que explican: `MEALFIT_VERIFIED_INGREDIENTS_ONLY` 18, `MEALFIT_COUNTRY_SYSTEM` 5, `MEALFIT_SODIUM_EXCESS_GATE` 3, `MEALFIT_PLAN_JOBS_ENABLED` 2, `MEALFIT_RECIPE_CONTRACT_GATE` 2, `MEALFIT_MICRO_CLOSER_PERDAY` 2. `MEALFIT_VERIFIED_INGREDIENTS_ONLY` sólo explica 90 de los
+109: son harnesses que construyen planes con alimentos sintéticos fuera del catálogo, y el filtro de verificados de
+producción los descarta. **No se «arreglan» a ciegas.**
+
+**El paso.** `scripts/prod_profile_gate.py` corre la suite con el perfil exportado (el `setdefault` de conftest no pisa una
+variable que ya existe) menos `tests/prod_profile_excluded.txt` menos la cuarentena de la CI, y después la batería con el
+entorno normal (la batería aplica el perfil por dentro y afirma que la suite diverge: bajo el perfil exportado fallaría por
+diseño). La lista de exclusión es NEGATIVA: un test nuevo entra al paso por defecto, y cada línea dice el knob que la
+explica y por qué. En la CI es una segunda pata en paralelo (`matrix.perfil: [suite, produccion]`), porque en serie no
+cabía en los 50 min; en local, la tercera fase del gate (`EXIT_PROD`). Tiempo del paso en local: ~19 min.
+
+**Boy scout.** Al tocar un fichero de la lista, migrarlo a alimentos del catálogo real (o a declarar el knob que prueba
+con `monkeypatch`) y borrar su línea: el test `tests/test_p1_plan_lote_33.py` exige que la lista sea exactamente la de
+ficheros que fallan bajo el perfil en el artefacto, así que una línea de más o de menos se nota.
+
 ## Cómo añadir un knob nuevo
 
 ```python
