@@ -301,6 +301,8 @@ diseño). La lista de exclusión es NEGATIVA: un test nuevo entra al paso por de
 explica y por qué. En la CI es una segunda pata en paralelo (`matrix.perfil: [suite, produccion]`), porque en serie no
 cabía en los 50 min; en local, la tercera fase del gate (`EXIT_PROD`). Tiempo del paso en local: ~19 min.
 
+**Sin base de datos (bis 4 · 2026-09-13).** La pata `produccion` de la CI dio **76 fallos en 19 ficheros** que el gate local nunca vio: el gate local tiene base (el `.env` del dueño) y la CI no. Bajo el perfil, `shopping_calculator` pide `master_ingredients` a la base (28.611 líneas «No connection_pool available to fetch master_ingredients» en el log) y el agregado queda vacío. Atribución en un árbol local sin `.env` con las versiones de `requirements.txt`, que reproduce los mismos fallos por fichero: 18 por `MEALFIT_VERIFIED_INGREDIENTS_ONLY`, 1 por sólo en la corrida completa. Esos ficheros van a `tests/prod_profile_excluded_sin_base.txt`, que el paso aplica SÓLO sin base (la misma señal que `conftest._db_available`): con base corren y pasan. Artefacto `scripts/data/f8_sin_base_2026_09_13.json` (run 34781436422). La CI imprime además los 30 tests más lentos (`--durations=30`) y su techo sube a 120 min: las dos patas llegan al 99 % en 13-40 min y la suite tarda 45-64 min más en cerrar — un test lento sólo en Linux, aún sin nombre.
+
 **Boy scout.** Al tocar un fichero de la lista, migrarlo a alimentos del catálogo real (o a declarar el knob que prueba
 con `monkeypatch`) y borrar su línea: el test `tests/test_p1_plan_lote_33.py` exige que la lista sea exactamente la de
 ficheros que fallan bajo el perfil en el artefacto, así que una línea de más o de menos se nota.

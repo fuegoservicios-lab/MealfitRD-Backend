@@ -1,0 +1,285 @@
+{
+ "con_base": false,
+ "corrida": {
+  "fallos": 76,
+  "pasados": 21684,
+  "saltados": 2107,
+  "tests": 23868
+ },
+ "fecha": "2026-09-13",
+ "ficheros": {
+  "tests/test_p0_11_weight_in_lbs_negative_clamp.py": {
+   "atribucion": {
+    "aislado_fallos": 3,
+    "knobs": [
+     "MEALFIT_VERIFIED_INGREDIENTS_ONLY"
+    ],
+    "runs": 3,
+    "veredicto": "knob"
+   },
+   "fallos": 3,
+   "primer_mensaje": "AssertionError: P0-11: net positivo (300g) DEBE producir entrada"
+  },
+  "tests/test_p0_2_sse_pantry_validation_e2e.py": {
+   "atribucion": {
+    "aislado_fallos": 0,
+    "knobs": [],
+    "runs": 1,
+    "veredicto": "no_reproduce_aislado"
+   },
+   "fallos": 1,
+   "primer_mensaje": "AssertionError: P1-6: 4to request en <60s debe ser 429; recibido 200"
+  },
+  "tests/test_p1_2_yield_multiplier_symmetry.py": {
+   "atribucion": {
+    "aislado_fallos": 1,
+    "knobs": [
+     "MEALFIT_VERIFIED_INGREDIENTS_ONLY"
+    ],
+    "runs": 3,
+    "veredicto": "knob"
+   },
+   "fallos": 1,
+   "primer_mensaje": "AssertionError: delta positivo debe agregar item"
+  },
+  "tests/test_p1_5_inventory_snapshot_consistency.py": {
+   "atribucion": {
+    "aislado_fallos": 1,
+    "knobs": [
+     "MEALFIT_VERIFIED_INGREDIENTS_ONLY"
+    ],
+    "runs": 3,
+    "veredicto": "knob"
+   },
+   "fallos": 1,
+   "primer_mensaje": "AssertionError: P1-5: inventory_override debe REDUCIR el delta. with=0 >= without=0"
+  },
+  "tests/test_p1_7_multiplier_guard.py": {
+   "atribucion": {
+    "aislado_fallos": 1,
+    "knobs": [
+     "MEALFIT_VERIFIED_INGREDIENTS_ONLY"
+    ],
+    "runs": 3,
+    "veredicto": "knob"
+   },
+   "fallos": 1,
+   "primer_mensaje": "AssertionError: P1-7: multiplier=0 NO debe anular el plan"
+  },
+  "tests/test_p1_coherence_day_basis.py": {
+   "atribucion": {
+    "aislado_fallos": 3,
+    "knobs": [
+     "MEALFIT_VERIFIED_INGREDIENTS_ONLY"
+    ],
+    "runs": 3,
+    "veredicto": "knob"
+   },
+   "fallos": 3,
+   "primer_mensaje": "AssertionError: sin el knob, 3 días contra lista de 7 DEBE diverger (es el bug que se cierra)"
+  },
+  "tests/test_p1_coherence_not_in_recipes.py": {
+   "atribucion": {
+    "aislado_fallos": 3,
+    "knobs": [
+     "MEALFIT_VERIFIED_INGREDIENTS_ONLY"
+    ],
+    "runs": 3,
+    "veredicto": "knob"
+   },
+   "fallos": 3,
+   "primer_mensaje": "AssertionError: el condimento nombrado sin cantidad debe caer en magnitud como `recipe_unquantified`. Salió: {'food': 'Sal', 'side': 'aggregated_only', 'hypothesis': 'unknown', 'ma"
+  },
+  "tests/test_p1_coherence_unquantified_label.py": {
+   "atribucion": {
+    "aislado_fallos": 1,
+    "knobs": [
+     "MEALFIT_VERIFIED_INGREDIENTS_ONLY"
+    ],
+    "runs": 3,
+    "veredicto": "knob"
+   },
+   "fallos": 1,
+   "primer_mensaje": "AssertionError: una ausencia real DEBE seguir bloqueando"
+  },
+  "tests/test_p1_new_1_coherence_guard_block_default.py": {
+   "atribucion": {
+    "aislado_fallos": 1,
+    "knobs": [
+     "MEALFIT_VERIFIED_INGREDIENTS_ONLY"
+    ],
+    "runs": 3,
+    "veredicto": "knob"
+   },
+   "fallos": 1,
+   "primer_mensaje": "AssertionError: Default debe ser block: un plan con divergencia crítica de magnitudes debe quedar con flag _shopping_coherence_block para que review_plan_node lo procese."
+  },
+  "tests/test_p2_pdf_2_3_agua_filter_and_garbanzos_yield.py": {
+   "atribucion": {
+    "aislado_fallos": 12,
+    "knobs": [
+     "MEALFIT_VERIFIED_INGREDIENTS_ONLY"
+    ],
+    "runs": 3,
+    "veredicto": "knob"
+   },
+   "fallos": 12,
+   "primer_mensaje": "AssertionError: pollo missing — names=set()"
+  },
+  "tests/test_p3_agg_num_days_propagate.py": {
+   "atribucion": {
+    "aislado_fallos": 2,
+    "knobs": [
+     "MEALFIT_VERIFIED_INGREDIENTS_ONLY"
+    ],
+    "runs": 3,
+    "veredicto": "knob"
+   },
+   "fallos": 2,
+   "primer_mensaje": "AssertionError: el ítem de atún debe sobrevivir en ambos: buggy=[] fixed=[]"
+  },
+  "tests/test_p3_protein_2_pavo_fresh_vs_processed.py": {
+   "atribucion": {
+    "aislado_fallos": 15,
+    "knobs": [
+     "MEALFIT_VERIFIED_INGREDIENTS_ONLY"
+    ],
+    "runs": 3,
+    "veredicto": "knob"
+   },
+   "fallos": 15,
+   "primer_mensaje": "AssertionError: Pechuga de pavo debe aparecer: set()"
+  },
+  "tests/test_p5_olive_veg_caps.py": {
+   "atribucion": {
+    "aislado_fallos": 9,
+    "knobs": [
+     "MEALFIT_VERIFIED_INGREDIENTS_ONLY"
+    ],
+    "runs": 3,
+    "veredicto": "knob"
+   },
+   "fallos": 9,
+   "primer_mensaje": "AssertionError: Cap mínimo no debe colapsar a 0; recibido -1g"
+  },
+  "tests/test_p6_eggs_aggregate_cap.py": {
+   "atribucion": {
+    "aislado_fallos": 3,
+    "knobs": [
+     "MEALFIT_VERIFIED_INGREDIENTS_ONLY"
+    ],
+    "runs": 3,
+    "veredicto": "knob"
+   },
+   "fallos": 3,
+   "primer_mensaje": "AssertionError: Eggs cap fallido: -1g excede cap de 13200g (~8 cartones)"
+  },
+  "tests/test_p6_fruits_perishable_cap.py": {
+   "atribucion": {
+    "aislado_fallos": 2,
+    "knobs": [
+     "MEALFIT_VERIFIED_INGREDIENTS_ONLY"
+    ],
+    "runs": 3,
+    "veredicto": "knob"
+   },
+   "fallos": 2,
+   "primer_mensaje": "AssertionError: Fresas cap fallido: -1g excede cap de 4173g (~8 lbs)"
+  },
+  "tests/test_p6_lacteos_broths_caps.py": {
+   "atribucion": {
+    "aislado_fallos": 4,
+    "knobs": [
+     "MEALFIT_VERIFIED_INGREDIENTS_ONLY"
+    ],
+    "runs": 3,
+    "veredicto": "knob"
+   },
+   "fallos": 4,
+   "primer_mensaje": "AssertionError: Yogurt cap fallido: -1g > 5987g (~12 potes)"
+  },
+  "tests/test_p6_lacteos_merge_carbs_canned_caps.py": {
+   "atribucion": {
+    "aislado_fallos": 1,
+    "knobs": [
+     "MEALFIT_VERIFIED_INGREDIENTS_ONLY"
+    ],
+    "runs": 3,
+    "veredicto": "knob"
+   },
+   "fallos": 1,
+   "primer_mensaje": "AssertionError: el par genérico+específico debe consolidar en UNA fila: []"
+  },
+  "tests/test_p6_olive_veg_citrus_caps_fixes.py": {
+   "atribucion": {
+    "aislado_fallos": 3,
+    "knobs": [
+     "MEALFIT_VERIFIED_INGREDIENTS_ONLY"
+    ],
+    "runs": 3,
+    "veredicto": "knob"
+   },
+   "fallos": 3,
+   "primer_mensaje": "AssertionError: Aceitunas cap fallido: -1g > 1225g (~3 frascos)"
+  },
+  "tests/test_p6_veg_spice_caps_extended.py": {
+   "atribucion": {
+    "aislado_fallos": 10,
+    "knobs": [
+     "MEALFIT_VERIFIED_INGREDIENTS_ONLY"
+    ],
+    "runs": 3,
+    "veredicto": "knob"
+   },
+   "fallos": 10,
+   "primer_mensaje": "AssertionError: Papa cap fallido: -1g excede cap de 6600g"
+  }
+ },
+ "ficheros_con_fallos": 19,
+ "fuente": {
+  "ci_run": 34781436422,
+  "job": 103789056311,
+  "pata": "produccion"
+ },
+ "git_sha": "ba5fe510",
+ "log_sin_pool": 28611,
+ "metodo": "la pata `produccion` de la CI (sin base de datos; Linux, Python 3.12, versiones de `requirements.txt`) con la lista general y la cuarentena fuera; fallos por fichero del resumen del log (`FAILED …`). Atribución fichero a fichero en un árbol local sin `.env` con las mismas versiones (reproduce los mismos fallos por fichero): el conjunto mínimo de knobs cuya retirada deja el fichero en verde corriendo SOLO ese fichero",
+ "perfil": {
+  "fuente": "/opt/mealfit/backend/.env (VPS Oracle, producción)",
+  "knobs": {
+   "MEALFIT_CARB_TARGET_TRIM": "true",
+   "MEALFIT_CARB_TO_PROTEIN_SWAP": "true",
+   "MEALFIT_COUNTRY_SYSTEM": "true",
+   "MEALFIT_CULINARY_JUDGE_GUARD": "warn",
+   "MEALFIT_DISH_QUALITY_SOFT_GATE": "true",
+   "MEALFIT_DREAMING_ENABLED": "true",
+   "MEALFIT_DREAMING_INJECT_PLAN_ENABLED": "true",
+   "MEALFIT_DREAMING_RETRIEVAL_ENABLED": "true",
+   "MEALFIT_FIDELITY_GATE": "warn",
+   "MEALFIT_HARDEN_MAIN_ARITY": "true",
+   "MEALFIT_HARDEN_POOLS_ENABLED": "true",
+   "MEALFIT_INITIAL_VIA_QUEUE": "true",
+   "MEALFIT_MACRO_AWARE_RECONCILE": "True",
+   "MEALFIT_MACRO_SOLVER_ENABLED": "true",
+   "MEALFIT_MAX_ATTEMPTS": "3",
+   "MEALFIT_MICRONUTRIENT_CLOSER": "true",
+   "MEALFIT_MICRO_CLOSER_PERDAY": "true",
+   "MEALFIT_PANTRY_COMPLETION_LIST_ENABLED": "true",
+   "MEALFIT_PANTRY_SUFFICIENCY_GATE": "true",
+   "MEALFIT_PLAN_JOBS_ENABLED": "1",
+   "MEALFIT_PLAN_POLICY_MODE": "enforce",
+   "MEALFIT_RECIPE_CONTRACT_GATE": "true",
+   "MEALFIT_RENEWAL_PANTRY_AWARE_ENABLED": "true",
+   "MEALFIT_SHOPPING_COHERENCE_GUARD": "block",
+   "MEALFIT_SODIUM_EXCESS_GATE": "true",
+   "MEALFIT_SPICE_UNIT_AS_TSP": "true",
+   "MEALFIT_SWAP_PER_MEAL_MACRO_CLOSER": "true",
+   "MEALFIT_SWAP_TARGET_FROM_SLOT": "true",
+   "MEALFIT_UPDATE_DISHES_STRICT_ALL_REASONS": "true",
+   "MEALFIT_UPDATE_MACRO_REBALANCE": "true",
+   "MEALFIT_VERIFIED_INGREDIENTS_ONLY": "true"
+  },
+  "leido": "2026-09-06"
+ },
+ "schema": "2026-09-13.f8"
+}

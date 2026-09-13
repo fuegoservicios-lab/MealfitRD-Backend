@@ -1,0 +1,25 @@
+# [P1-PLAN-LOTE-33 (bis 4) · 2026-09-13] F8 SIN BASE DE DATOS: ficheros que salen del paso con el perfil de producción
+# SÓLO cuando no hay base (ni `.env` en el backend ni MEALFIT_TESTS_HAVE_DB=1): la pata `produccion` de la CI. Con base
+# (el checkout del dueño) corren bajo el perfil y pasan. Nace de la propia CI —run 34781436422, 76 fallos en 19 ficheros—
+# y de la atribución en un árbol sin `.env` con las versiones de `requirements.txt` (artefacto
+# `scripts/data/f8_sin_base_2026_09_13.json`). Negativa como la general: para sacar un fichero, se mide y se escribe el
+# motivo. Boy scout: un test que no necesita la base para lo que prueba no debería leerla; al tocarlo, darle su catálogo.
+tests/test_p0_11_weight_in_lbs_negative_clamp.py  # MEALFIT_VERIFIED_INGREDIENTS_ONLY — sin base el catálogo de verificados (`master_ingredients`) sale vacío: el filtro de producción descarta todo alimento y el agregado queda sin filas
+tests/test_p0_2_sse_pantry_validation_e2e.py  # sólo en la corrida completa sin base (aislado pasa; con base pasa): AssertionError: P1-6: 4to request en <60s debe ser 429; recibido 200
+tests/test_p1_2_yield_multiplier_symmetry.py  # MEALFIT_VERIFIED_INGREDIENTS_ONLY — sin base el catálogo de verificados (`master_ingredients`) sale vacío: el filtro de producción descarta todo alimento y el agregado queda sin filas
+tests/test_p1_5_inventory_snapshot_consistency.py  # MEALFIT_VERIFIED_INGREDIENTS_ONLY — sin base el catálogo de verificados (`master_ingredients`) sale vacío: el filtro de producción descarta todo alimento y el agregado queda sin filas
+tests/test_p1_7_multiplier_guard.py  # MEALFIT_VERIFIED_INGREDIENTS_ONLY — sin base el catálogo de verificados (`master_ingredients`) sale vacío: el filtro de producción descarta todo alimento y el agregado queda sin filas
+tests/test_p1_coherence_day_basis.py  # MEALFIT_VERIFIED_INGREDIENTS_ONLY — sin base el catálogo de verificados (`master_ingredients`) sale vacío: el filtro de producción descarta todo alimento y el agregado queda sin filas
+tests/test_p1_coherence_not_in_recipes.py  # MEALFIT_VERIFIED_INGREDIENTS_ONLY — sin base el catálogo de verificados (`master_ingredients`) sale vacío: el filtro de producción descarta todo alimento y el agregado queda sin filas
+tests/test_p1_coherence_unquantified_label.py  # MEALFIT_VERIFIED_INGREDIENTS_ONLY — sin base el catálogo de verificados (`master_ingredients`) sale vacío: el filtro de producción descarta todo alimento y el agregado queda sin filas
+tests/test_p1_new_1_coherence_guard_block_default.py  # MEALFIT_VERIFIED_INGREDIENTS_ONLY — sin base el catálogo de verificados (`master_ingredients`) sale vacío: el filtro de producción descarta todo alimento y el agregado queda sin filas
+tests/test_p2_pdf_2_3_agua_filter_and_garbanzos_yield.py  # MEALFIT_VERIFIED_INGREDIENTS_ONLY — sin base el catálogo de verificados (`master_ingredients`) sale vacío: el filtro de producción descarta todo alimento y el agregado queda sin filas
+tests/test_p3_agg_num_days_propagate.py  # MEALFIT_VERIFIED_INGREDIENTS_ONLY — sin base el catálogo de verificados (`master_ingredients`) sale vacío: el filtro de producción descarta todo alimento y el agregado queda sin filas
+tests/test_p3_protein_2_pavo_fresh_vs_processed.py  # MEALFIT_VERIFIED_INGREDIENTS_ONLY — sin base el catálogo de verificados (`master_ingredients`) sale vacío: el filtro de producción descarta todo alimento y el agregado queda sin filas
+tests/test_p5_olive_veg_caps.py  # MEALFIT_VERIFIED_INGREDIENTS_ONLY — sin base el catálogo de verificados (`master_ingredients`) sale vacío: el filtro de producción descarta todo alimento y el agregado queda sin filas
+tests/test_p6_eggs_aggregate_cap.py  # MEALFIT_VERIFIED_INGREDIENTS_ONLY — sin base el catálogo de verificados (`master_ingredients`) sale vacío: el filtro de producción descarta todo alimento y el agregado queda sin filas
+tests/test_p6_fruits_perishable_cap.py  # MEALFIT_VERIFIED_INGREDIENTS_ONLY — sin base el catálogo de verificados (`master_ingredients`) sale vacío: el filtro de producción descarta todo alimento y el agregado queda sin filas
+tests/test_p6_lacteos_broths_caps.py  # MEALFIT_VERIFIED_INGREDIENTS_ONLY — sin base el catálogo de verificados (`master_ingredients`) sale vacío: el filtro de producción descarta todo alimento y el agregado queda sin filas
+tests/test_p6_lacteos_merge_carbs_canned_caps.py  # MEALFIT_VERIFIED_INGREDIENTS_ONLY — sin base el catálogo de verificados (`master_ingredients`) sale vacío: el filtro de producción descarta todo alimento y el agregado queda sin filas
+tests/test_p6_olive_veg_citrus_caps_fixes.py  # MEALFIT_VERIFIED_INGREDIENTS_ONLY — sin base el catálogo de verificados (`master_ingredients`) sale vacío: el filtro de producción descarta todo alimento y el agregado queda sin filas
+tests/test_p6_veg_spice_caps_extended.py  # MEALFIT_VERIFIED_INGREDIENTS_ONLY — sin base el catálogo de verificados (`master_ingredients`) sale vacío: el filtro de producción descarta todo alimento y el agregado queda sin filas

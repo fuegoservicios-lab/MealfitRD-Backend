@@ -88,7 +88,10 @@ jobs:
     # corridas desde el lote 26 murieron `cancelled` con el paso de pytest en 49,4 min: cero veredictos otra vez). Probado
     # subir los workers: `-n 4` murió con exit 143 a los 90 s de arrancar, `-n 3` con «The runner has received a shutdown
     # signal» a los 17 min — cuantos más workers, antes muere: la memoria del runner es el límite, no la CPU.
-    timeout-minutes: 90
+    # [P1-PLAN-LOTE-33 (bis 4) · 2026-09-13] 90 → 120: las dos patas llegan al 99 % en 13-40 min y la suite tarda luego
+    # 45-64 min más en cerrar (la de producción, 19 min o colgada hasta el techo). Es UN test lento sólo en Linux, sin
+    # nombre todavía: `--durations` lo nombra en la próxima corrida. El techo es margen, no el arreglo.
+    timeout-minutes: 120
     env:
       # [P1-I18N-CI-SIN-VEREDICTO] `secrets.*` no se evalúa dentro de un `if` de step; aquí
       # sí, y la condición del checkout del hermano lee esta variable.
@@ -184,6 +187,9 @@ jobs:
           # se marcan con @pytest.mark.e2e y se pueden filtrar en CI sin DB.
           PYTHONDONTWRITEBYTECODE: "1"
           PYTHONUNBUFFERED: "1"
+          # [P1-PLAN-LOTE-33 (bis 4) · 2026-09-13] Los 30 tests más lentos al cierre de cada pata. La de la suite pasó del
+          # 99 % a los 12 min y tardó 64 más en cerrar sin decir quién: sin nombre no hay arreglo, sólo techos más altos.
+          PYTEST_ADDOPTS: "--durations=30"
         run: |
           # [P2-CI-BACKEND-CERO-TESTS · 2026-08-23] Sin techo de errores de colección:
           # los tests cross-repo resuelven ../frontend mediante fixture y se saltan si el

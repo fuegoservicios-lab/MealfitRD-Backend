@@ -51,6 +51,9 @@ if str(_BACKEND) not in sys.path:
 import prod_profile  # noqa: E402
 
 EXCLUIDOS = _BACKEND / "tests" / "prod_profile_excluded.txt"
+#: [P1-PLAN-LOTE-33 (bis 4)] La lista que SÓLO aplica sin base de datos (la CI): ficheros que bajo el perfil leen algo
+#: de la base y sin ella fallan por construcción. Nace de su propio artefacto, medido en un árbol sin `.env`.
+EXCLUIDOS_SIN_BASE = _BACKEND / "tests" / "prod_profile_excluded_sin_base.txt"
 CI = _BACKEND / ".github" / "workflows" / "ci.yml"
 BATERIA = "tests/test_p1_arq27_f3_bateria.py"
 #: El knob que explicó todos los fallos de los cinco ficheros peores en la medición del 09-11: se prueba primero.
@@ -63,16 +66,38 @@ def cuarentena() -> list[str]:
     return m.group(1).split() if m else []
 
 
-def excluidos() -> dict[str, str]:
+def excluidos(ruta: Path = EXCLUIDOS) -> dict[str, str]:
     """`tests/<fichero>.py  # <motivo>` por línea; líneas vacías y comentarios de cabecera se ignoran."""
     out: dict[str, str] = {}
-    if EXCLUIDOS.exists():
-        for ln in EXCLUIDOS.read_text(encoding="utf-8").splitlines():
+    if ruta.exists():
+        for ln in ruta.read_text(encoding="utf-8").splitlines():
             s = ln.strip()
             if not s or s.startswith("#"):
                 continue
             ruta, _, motivo = s.partition("#")
             out[ruta.strip()] = motivo.strip()
+    return out
+
+
+def excluidos_sin_base() -> dict[str, str]:
+    return excluidos(EXCLUIDOS_SIN_BASE)
+
+
+def hay_base() -> bool:
+    """La MISMA señal que `tests/conftest.py::_db_available`: el `.env` del checkout del dueño o una señal explícita;
+    no `NEON_DATABASE_URL` suelta (el entorno del job de la CI resultó tenerla definida sin base real)."""
+    return (_BACKEND / ".env").exists() or os.environ.get("MEALFIT_TESTS_HAVE_DB") == "1"
+
+
+def ignorados(sin_exclusiones: bool = False, con_base: bool | None = None) -> list[str]:
+    """Lo que sale del subconjunto: la cuarentena siempre; la lista de exclusión salvo en la medición; y la lista sin
+    base SÓLO cuando no hay base — en el checkout del dueño esos ficheros corren bajo el perfil y pasan."""
+    out = cuarentena()
+    if sin_exclusiones:
+        return out
+    out += sorted(set(excluidos()) - set(out))
+    if not (hay_base() if con_base is None else con_base):
+        out += sorted(set(excluidos_sin_base()) - set(out))
     return out
 
 
@@ -107,12 +132,17 @@ def _cabecera(ignorar: list[str]) -> None:
     print(f"[PERFIL_PROD] {len(prod_profile.perfil_completo())} knobs; el perfil cambia {len(div)} respecto de este entorno:")
     for k, actual, prod in div:
         print(f"    {k}: {actual} → {prod}")
-    exc = excluidos()
+    exc, sb = excluidos(), excluidos_sin_base()
     print(f"[PERFIL_PROD] excluidos {len(exc)} + cuarentena {len(cuarentena())} → {len(ignorar)} ficheros fuera")
+    if hay_base():
+        print(f"[PERFIL_PROD] con base de datos: la lista sin base ({len(sb)} ficheros) no aplica")
+    else:
+        print(f"[PERFIL_PROD] SIN base de datos (ni .env en el backend ni MEALFIT_TESTS_HAVE_DB=1): la lista sin base "
+              f"({EXCLUIDOS_SIN_BASE.name}, {len(sb)} ficheros) sale también — en la medición no sale nada")
 
 
 def paso(workers: int, sin_exclusiones: bool = False, junit: str | None = None) -> int:
-    ignorar = cuarentena() + ([] if sin_exclusiones else sorted(excluidos()))
+    ignorar = ignorados(sin_exclusiones)
     _cabecera(ignorar)
     t0 = time.time()
     r1 = subprocess.run(comando_pytest(ignorar, workers, junit), cwd=_BACKEND, env=entorno_perfil()).returncode
@@ -216,6 +246,7 @@ def medir(junit: str, out: str, con_atribucion: bool, workers: int) -> int:
                    "corriendo SOLO ese fichero (primero el sospechoso de la medición del 09-11)"),
         "perfil": {"leido": prod_profile.PROFILE_READ_AT, "fuente": prod_profile.PROFILE_SOURCE,
                    "knobs": prod_profile.perfil_completo()},
+        "con_base": hay_base(),
         "corrida": datos["total"],
         "ficheros_con_fallos": len(con_fallos),
         "ficheros": {f: datos["ficheros"][f] for f in con_fallos},
@@ -236,9 +267,11 @@ def main(argv: list[str] | None = None) -> int:
     ap.add_argument("--atribuir", action="store_true")
     a = ap.parse_args(argv)
     if a.listar:
-        _cabecera(cuarentena() + sorted(excluidos()))
+        _cabecera(ignorados())
         for f, m in sorted(excluidos().items()):
             print(f"  {f}  # {m}")
+        for f, m in sorted(excluidos_sin_base().items()):
+            print(f"  {f}  # [sin base] {m}")
         return 0
     if a.medir:
         if not a.out:

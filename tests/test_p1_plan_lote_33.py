@@ -116,3 +116,73 @@ def test_docs_plan_marker():
     m = re.search(r'_LAST_KNOWN_PFIX = "P1-PLAN-LOTE-(\d+) · (\d{4}-\d{2}-\d{2})"',
                   (_BACKEND / "app.py").read_text(encoding="utf-8"))
     assert m and int(m.group(1)) >= 33
+
+
+# ─────────────── (bis 4) la lista que SÓLO aplica sin base de datos ───────────────
+# La pata de producción de la CI dio 76 fallos que el gate local nunca vio: el gate local tiene base (el `.env` del
+# dueño) y la CI no. Bajo el perfil, esos ficheros leen algo de la base; sin ella fallan por construcción. Se miden en
+# un árbol sin `.env` (su propio artefacto) y salen SÓLO cuando no hay base — con base corren y pasan.
+
+
+@pytest.fixture(scope="module")
+def artefacto_sin_base():
+    fs = sorted((_BACKEND / "scripts" / "data").glob("f8_sin_base_*.json"))
+    assert fs, "falta el artefacto de la medición sin base (scripts/data/f8_sin_base_<fecha>.json)"
+    return json.loads(fs[-1].read_text(encoding="utf-8"))
+
+
+def test_la_medicion_sin_base_se_hizo_sin_base_y_con_el_perfil_vigente(artefacto_sin_base):
+    import prod_profile
+    assert artefacto_sin_base["con_base"] is False, "medida con base no dice nada de la CI"
+    assert artefacto_sin_base["corrida"]["tests"] > 20_000, "la medición es sobre la suite entera, no una muestra"
+    assert artefacto_sin_base["perfil"]["knobs"] == prod_profile.perfil_completo(), "el perfil cambió: re-medir"
+
+
+def test_sin_base_sale_exactamente_lo_que_fallo_sin_base_y_no_estaba_ya_fuera(runner, artefacto_sin_base):
+    con_fallos = {f for f, d in artefacto_sin_base["ficheros"].items() if d["fallos"] > 0}
+    esperado = con_fallos - set(runner.excluidos()) - set(runner.cuarentena())
+    sb = set(runner.excluidos_sin_base())
+    assert sb - esperado == set(), f"en la lista sin base sin fallo medido sin base: {sorted(sb - esperado)}"
+    assert esperado - sb == set(), f"fallaron sin base y no salen por ninguna lista: {sorted(esperado - sb)}"
+
+
+def test_cada_fallo_sin_base_tiene_su_atribucion_y_ninguno_es_un_rojo_de_la_suite(runner, artefacto_sin_base):
+    for f, d in artefacto_sin_base["ficheros"].items():
+        if d["fallos"] > 0 and f in runner.excluidos_sin_base():
+            a = d.get("atribucion") or {}
+            assert a.get("veredicto") in {"knob", "combinacion", "no_reproduce_aislado"}, (f, a)
+
+
+def test_cada_linea_sin_base_existe_dice_por_que_y_no_repite(runner):
+    sb = runner.excluidos_sin_base()
+    assert sb, "sin la lista, la pata de producción de la CI da rojos que el gate local no puede ver"
+    ya = set(runner.excluidos()) | set(runner.cuarentena())
+    for f, motivo in sb.items():
+        assert f.startswith("tests/test_") and f.endswith(".py"), f
+        assert (_BACKEND / f).exists(), f"{f} ya no existe: sácalo de la lista"
+        assert len(motivo) >= 25, f"{f}: el motivo es la razón por la que sin base no se mide"
+        assert f not in ya, f"{f} ya sale por la lista general o la cuarentena"
+
+
+def test_la_lista_sin_base_solo_sale_cuando_no_hay_base(runner):
+    sb = set(runner.excluidos_sin_base())
+    assert not sb & set(runner.ignorados(con_base=True)), "con base esos ficheros corren bajo el perfil (y pasan)"
+    assert sb <= set(runner.ignorados(con_base=False))
+    assert set(runner.ignorados(sin_exclusiones=True, con_base=False)) == set(runner.cuarentena()),         "la medición no excluye nada"
+
+
+def test_la_senal_de_base_es_la_misma_que_la_de_conftest(runner):
+    """Dos señales distintas para «hay base» harían que el gate excluyera lo que conftest corre, o al revés."""
+    import inspect
+    conftest = (_BACKEND / "tests" / "conftest.py").read_text(encoding="utf-8")
+    cuerpo = conftest[conftest.index("def _db_available"):][:700]
+    src = inspect.getsource(runner.hay_base)
+    fichero = '/ "' + "." + 'env").exists()'
+    for senal in (fichero, 'os.environ.get("MEALFIT_TESTS_HAVE_DB") == "1"'):
+        assert senal in cuerpo and senal in src, senal
+
+
+def test_la_ci_nombra_los_tests_lentos():
+    ci = (_BACKEND / ".github" / "workflows" / "ci.yml").read_text(encoding="utf-8")
+    assert 'PYTEST_ADDOPTS: "--durations=30"' in ci
+
