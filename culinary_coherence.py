@@ -746,7 +746,46 @@ def _mencionado_por_prefijo(food: str, pasos_norm: str, comida_foods: list) -> b
     return False
 
 
+# ─────────────────────────────────────────────────────────────────────────────────────────────
+# [P1-PLAN-LOTE-25 · 2026-09-12] (C4 · H8) La receta CONGELADA trae su propia contabilidad
+#
+# Los pasos de la biblioteca no llevan cantidades de ingrediente a propósito, así que V6/V7a/V7e —que leen NÚMEROS del
+# texto— callan sobre ellos, y V3 sólo puede preguntar «¿lo nombra algún paso?». Medido materializando las 193 recetas
+# como plato: el escáner de hoy emite 6 hallazgos (V1 4, V3 1, V5 1) y ninguno de cantidad — «la mitad del aceite» …
+# «la otra mitad del aceite» … «la otra mitad del aceite» pasa limpio porque nadie podía mirarlo.
+#
+# `recipe_usage` asigna a cada paso los constituyentes que usa y con qué FRACCIÓN de lo comprado, atado al texto por
+# hash: con asignación vigente, estos cuatro checks leen las CUENTAS (Σ por constituyente) en vez de adivinar. «Usa lo
+# mismo o menos: puede repartir» deja de ser una excusa — se sabe cuánto reparte cada paso y si la suma cierra.
+# Knob `MEALFIT_RECIPE_USAGE_EXACT` (default True): apagado ⇒ la heurística de siempre, sin redeploy.
+#
+# La CADENA de checks de `culinary_contract_scan` no cambia (los tests la leen como texto): cada check se cede a sí mismo
+# desde dentro. Fail-open: cualquier excepción devuelve `None` y corre la heurística. tooltip-anchor: P1-PLAN-LOTE-25-SCAN-EXACT
+
+def _cuentas_exactas(meal):
+    """Las cuentas de `recipe_usage` para una comida de receta congelada con asignación vigente; `None` si no aplica
+    (comida del LLM, receta reescrita en el plato, knob apagado, biblioteca sin asignación, o cualquier excepción)."""
+    try:
+        from recipe_usage import cuentas_para_comida
+        return cuentas_para_comida(meal)
+    except Exception:
+        return None
+
+
+def _violaciones_exactas(day, meal, cuentas, checks: tuple) -> list:
+    """Las violaciones que la contabilidad exacta sostiene para ESTOS checks, con la forma de `_viol` (minor, no reparable)."""
+    try:
+        from recipe_usage import hallazgos_para_scanner
+        return [_viol(day, meal, check, food, detail, "minor", False)
+                for check, food, detail in hallazgos_para_scanner(cuentas) if check in checks]
+    except Exception:
+        return []
+
+
 def _v3_huerfanos(day, meal, index) -> list:
+    _ex = _cuentas_exactas(meal)                     # [P1-PLAN-LOTE-25] receta congelada: cuentas (Σ = 0), no texto
+    if _ex is not None:
+        return _violaciones_exactas(day, meal, _ex, ("V3",))
     pasos_blob = " || ".join(meal.get("recipe") or [])
     pasos_norm = _norm(pasos_blob)
     en_pasos = set(find_catalog_foods(pasos_blob, index))
@@ -1130,6 +1169,9 @@ def _v6_cuentas(texto: str, index: dict) -> dict:
 
 def _v6_paso_pide_mas_que_la_lista(day, meal, index) -> list:
     """[P1-CULINARY-V6-STEP-OVERASK] Fail-open total."""
+    _ex = _cuentas_exactas(meal)                     # [P1-PLAN-LOTE-25] receta congelada: cuentas (Σ > 1), no texto
+    if _ex is not None:
+        return _violaciones_exactas(day, meal, _ex, ("V6",))
     out = []
     try:
         ings = [str(x) for x in (meal.get("ingredients") or [])]
@@ -1274,6 +1316,9 @@ def _v7_piezas(texto: str, index: dict) -> dict:
 
 def _v7a_lista_compra_de_mas(day, meal, index) -> list:
     """La lista compra N piezas y los pasos, sumados, usan menos. Fail-open total."""
+    _ex = _cuentas_exactas(meal)                     # [P1-PLAN-LOTE-25] receta congelada: cuentas (0 < Σ < 1), no texto
+    if _ex is not None:
+        return _violaciones_exactas(day, meal, _ex, ("V7a",))
     out = []
     try:
         ings = [str(x) for x in (meal.get("ingredients") or [])]
@@ -1482,6 +1527,8 @@ def _v7e_paso_pide_mas_piezas(day, meal, index) -> list:
     No solapa con V6: cuando el texto trae unidad («1 diente de ajo»), `_v7_piezas` ve la medida
     delante del alimento y no cuenta la pieza, así que ese caso lo sigue reportando V6 y sólo V6.
     """
+    if _cuentas_exactas(meal) is not None:           # [P1-PLAN-LOTE-25] receta congelada: la dirección «pide más» es V6 exacto
+        return []
     out = []
     try:
         ings = [str(x) for x in (meal.get("ingredients") or [])]
@@ -1591,7 +1638,7 @@ def culinary_contract_scan(plan_data: dict, catalog: list, _estado: "dict | None
     literal, porque cinco tests la leen como texto: una capa que existe y nadie invoca es el modo de fallo de P1-G."""
     estado = _estado if isinstance(_estado, dict) else {}
     estado.update({"status": "error", "checks": list(CHECKS_CAPA1), "meals": 0, "violations": 0, "error": None,
-                   "reglas_huella": rules_fingerprint(), "schema": FINDING_SCHEMA_VERSION})
+                   "reglas_huella": rules_fingerprint(), "schema": FINDING_SCHEMA_VERSION, "exactas": 0})
     try:
         index = build_culinary_index(catalog)
         if not index:
@@ -1603,6 +1650,8 @@ def culinary_contract_scan(plan_data: dict, catalog: list, _estado: "dict | None
         for day, meal, mi in _iter_meals_idx(plan_data):
             n += 1
             start = len(out)
+            if _cuentas_exactas(meal) is not None:
+                estado["exactas"] += 1               # [P1-PLAN-LOTE-25] V3/V6/V7a/V7e por cuentas, no por texto
             out.extend(_v1_verbo_alimento(day, meal, index))
             out.extend(_v2_estado_imposible(day, meal, index))
             out.extend(_v3_huerfanos(day, meal, index))

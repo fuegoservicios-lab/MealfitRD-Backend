@@ -1,0 +1,8933 @@
+{
+ "country": "DO",
+ "generado_el": "2026-09-12",
+ "indice_huella": "1f4f95b33a191dfe",
+ "por_id": {
+  "tpl_02895f974ed3": {
+   "cuentas": {
+    "cebolla": 1.0,
+    "queso_de_hoja": 1.0,
+    "tomate": 1.0
+   },
+   "estado": "exacta",
+   "hallazgos": [],
+   "pasos_hash": "7ba9ea2107a4b5b2",
+   "usa": [
+    [
+     {
+      "fraccion": 1.0,
+      "ingredient_id": "queso_de_hoja"
+     },
+     {
+      "fraccion": 1.0,
+      "ingredient_id": "tomate"
+     },
+     {
+      "fraccion": 1.0,
+      "ingredient_id": "cebolla"
+     }
+    ],
+    [],
+    []
+   ]
+  },
+  "tpl_03a0f3927930": {
+   "cuentas": {
+    "aceite_vegetal": 1.0,
+    "aji_cubanela": 1.0,
+    "ajo": 1.0,
+    "arroz_blanco": 1.0,
+    "cebolla": 1.0,
+    "cilantro": 1.0,
+    "habichuelas_rojas": 1.0,
+    "soya_texturizada": 1.0
+   },
+   "estado": "exacta",
+   "hallazgos": [],
+   "pasos_hash": "01e5c2e97e6d33eb",
+   "usa": [
+    [
+     {
+      "fraccion": 1.0,
+      "ingredient_id": "soya_texturizada"
+     },
+     {
+      "fraccion": 1.0,
+      "ingredient_id": "arroz_blanco"
+     },
+     {
+      "fraccion": 1.0,
+      "ingredient_id": "habichuelas_rojas"
+     }
+    ],
+    [],
+    [
+     {
+      "fraccion": 1.0,
+      "ingredient_id": "cebolla"
+     },
+     {
+      "fraccion": 1.0,
+      "ingredient_id": "ajo"
+     },
+     {
+      "fraccion": 1.0,
+      "ingredient_id": "aceite_vegetal"
+     },
+     {
+      "fraccion": 1.0,
+      "ingredient_id": "aji_cubanela"
+     },
+     {
+      "fraccion": 1.0,
+      "ingredient_id": "cilantro"
+     }
+    ],
+    [],
+    []
+   ]
+  },
+  "tpl_04626e63fcef": {
+   "cuentas": {
+    "aceite_de_oliva": 1.0,
+    "aguacate": 1.0,
+    "edamame": 1.0,
+    "limon": 1.0,
+    "quinoa": 1.0,
+    "tomate": 1.0
+   },
+   "estado": "exacta",
+   "hallazgos": [],
+   "pasos_hash": "a17b309ffe94085c",
+   "usa": [
+    [
+     {
+      "fraccion": 1.0,
+      "ingredient_id": "quinoa"
+     }
+    ],
+    [
+     {
+      "fraccion": 1.0,
+      "ingredient_id": "edamame"
+     }
+    ],
+    [
+     {
+      "fraccion": 1.0,
+      "ingredient_id": "aguacate"
+     },
+     {
+      "fraccion": 1.0,
+      "ingredient_id": "tomate"
+     },
+     {
+      "fraccion": 1.0,
+      "ingredient_id": "limon"
+     },
+     {
+      "fraccion": 1.0,
+      "ingredient_id": "aceite_de_oliva"
+     }
+    ],
+    [],
+    []
+   ]
+  },
+  "tpl_063853f589bc": {
+   "cuentas": {
+    "fresas": 1.0,
+    "harina_de_trigo": 1.0,
+    "huevo": 1.0,
+    "leche": 1.0
+   },
+   "estado": "exacta",
+   "hallazgos": [],
+   "pasos_hash": "1bd09ea68bc8ef17",
+   "usa": [
+    [
+     {
+      "fraccion": 1.0,
+      "ingredient_id": "harina_de_trigo"
+     },
+     {
+      "fraccion": 1.0,
+      "ingredient_id": "huevo"
+     },
+     {
+      "fraccion": 1.0,
+      "ingredient_id": "leche"
+     }
+    ],
+    [
+     {
+      "fraccion": 1.0,
+      "ingredient_id": "fresas"
+     }
+    ],
+    [],
+    []
+   ]
+  },
+  "tpl_0a2dd88deb13": {
+   "cuentas": {
+    "aceite_vegetal": 1.0,
+    "ajo": 1.0,
+    "bacalao": 1.0,
+    "batata": 1.0,
+    "cebolla": 1.0
+   },
+   "estado": "exacta",
+   "hallazgos": [],
+   "pasos_hash": "d38b89c5cc5dc488",
+   "usa": [
+    [
+     {
+      "fraccion": 1.0,
+      "ingredient_id": "bacalao"
+     }
+    ],
+    [
+     {
+      "fraccion": 1.0,
+      "ingredient_id": "batata"
+     }
+    ],
+    [
+     {
+      "fraccion": 1.0,
+      "ingredient_id": "cebolla"
+     },
+     {
+      "fraccion": 1.0,
+      "ingredient_id": "ajo"
+     },
+     {
+      "fraccion": 1.0,
+      "ingredient_id": "aceite_vegetal"
+     }
+    ],
+    [],
+    []
+   ]
+  },
+  "tpl_0a34be073620": {
+   "cuentas": {
+    "aceite_vegetal": 1.0,
+    "aji_cubanela": 1.0,
+    "arroz_blanco": 1.0,
+    "cebolla": 1.0,
+    "cerdo": 1.0,
+    "habichuelas_rojas": 1.0
+   },
+   "estado": "exacta",
+   "hallazgos": [],
+   "pasos_hash": "582428f609727f4c",
+   "usa": [
+    [
+     {
+      "fraccion": 1.0,
+      "ingredient_id": "habichuelas_rojas"
+     }
+    ],
+    [
+     {
+      "fraccion": 1.0,
+      "ingredient_id": "aceite_vegetal"
+     },
+     {
+      "fraccion": 1.0,
+      "ingredient_id": "cebolla"
+     },
+     {
+      "fraccion": 1.0,
+      "ingredient_id": "aji_cubanela"
+     }
+    ],
+    [
+     {
+      "fraccion": 1.0,
+      "ingredient_id": "arroz_blanco"
+     }
+    ],
+    [
+     {
+      "fraccion": 1.0,
+      "ingredient_id": "cerdo"
+     }
+    ],
+    []
+   ]
+  },
+  "tpl_0ad4382c9e2f": {
+   "cuentas": {
+    "aceite_vegetal": 1.0,
+    "aguacate": 1.0,
+    "aji_cubanela": 1.0,
+    "arenque": 1.0,
+    "arroz_blanco": 1.0,
+    "cebolla": 1.0,
+    "tomate": 1.0
+   },
+   "estado": "exacta",
+   "hallazgos": [],
+   "pasos_hash": "3119c264776d160e",
+   "usa": [
+    [
+     {
+      "fraccion": 1.0,
+      "ingredient_id": "cebolla"
+     },
+     {
+      "fraccion": 1.0,
+      "ingredient_id": "aji_cubanela"
+     },
+     {
+      "fraccion": 1.0,
+      "ingredient_id": "tomate"
+     },
+     {
+      "fraccion": 1.0,
+      "ingredient_id": "aceite_vegetal"
+     }
+    ],
+    [
+     {
+      "fraccion": 1.0,
+      "ingredient_id": "arroz_blanco"
+     },
+     {
+      "fraccion": 1.0,
+      "ingredient_id": "arenque"
+     }
+    ],
+    [],
+    [],
+    [
+     {
+      "fraccion": 1.0,
+      "ingredient_id": "aguacate"
+     }
+    ]
+   ]
+  },
+  "tpl_0ae55a98c3e3": {
+   "cuentas": {
+    "guineo": 1.0,
+    "lechosa": 1.0,
+    "limon": 1.0,
+    "pina": 1.0
+   },
+   "estado": "exacta",
+   "hallazgos": [],
+   "pasos_hash": "6b83f62688757615",
+   "usa": [
+    [
+     {
+      "fraccion": 1.0,
+      "ingredient_id": "lechosa"
+     }
+    ],
+    [
+     {
+      "fraccion": 1.0,
+      "ingredient_id": "pina"
+     }
+    ],
+    [
+     {
+      "fraccion": 1.0,
+      "ingredient_id": "guineo"
+     }
+    ],
+    [
+     {
+      "fraccion": 1.0,
+      "ingredient_id": "limon"
+     }
+    ],
+    []
+   ]
+  },
+  "tpl_0b366158135e": {
+   "cuentas": {
+    "aceite_de_oliva": 1.0,
+    "ajo": 1.0,
+    "cebolla": 1.0,
+    "lentejas": 1.0,
+    "platano_verde": 1.0
+   },
+   "estado": "exacta",
+   "hallazgos": [
+    {
+     "alimento": "sofrito",
+     "detalle": "V5 sobre la plantilla materializada: el paso lo usa pero la lista no lo trae: Escurre los plátanos y májalos con un poco del agua de cocción hasta que quede un mangú suave y cremoso, sin g",
+     "tipo": "fuera_de_plantilla"
+    }
+   ],
+   "pasos_hash": "f7df60d7ea4bac1d",
+   "usa": [
+    [
+     {
+      "fraccion": 1.0,
+      "ingredient_id": "lentejas"
+     }
+    ],
+    [
+     {
+      "fraccion": 1.0,
+      "ingredient_id": "platano_verde"
+     }
+    ],
+    [
+     {
+      "fraccion": 1.0,
+      "ingredient_id": "cebolla"
+     },
+     {
+      "fraccion": 1.0,
+      "ingredient_id": "ajo"
+     },
+     {
+      "fraccion": 1.0,
+      "ingredient_id": "aceite_de_oliva"
+     }
+    ],
+    []
+   ]
+  },
+  "tpl_0dd050230811": {
+   "cuentas": {
+    "huevo": 1.0,
+    "leche_evaporada": 1.0,
+    "papa": 1.0,
+    "queso_gouda": 1.0
+   },
+   "estado": "exacta",
+   "hallazgos": [],
+   "pasos_hash": "6fd39c3647530291",
+   "usa": [
+    [
+     {
+      "fraccion": 1.0,
+      "ingredient_id": "papa"
+     }
+    ],
+    [
+     {
+      "fraccion": 1.0,
+      "ingredient_id": "leche_evaporada"
+     }
+    ],
+    [
+     {
+      "fraccion": 1.0,
+      "ingredient_id": "huevo"
+     },
+     {
+      "fraccion": 1.0,
+      "ingredient_id": "queso_gouda"
+     }
+    ],
+    [],
+    []
+   ]
+  },
+  "tpl_0f07f8c0974f": {
+   "cuentas": {
+    "harina_de_maiz_precocida": 1.0,
+    "huevo": 1.0,
+    "queso_gouda": 1.0,
+    "sal": 1.0
+   },
+   "estado": "exacta",
+   "hallazgos": [],
+   "pasos_hash": "2218a2cf659dc918",
+   "usa": [
+    [
+     {
+      "fraccion": 1.0,
+      "ingredient_id": "harina_de_maiz_precocida"
+     },
+     {
+      "fraccion": 1.0,
+      "ingredient_id": "sal"
+     }
+    ],
+    [],
+    [],
+    [
+     {
+      "fraccion": 1.0,
+      "ingredient_id": "queso_gouda"
+     },
+     {
+      "fraccion": 1.0,
+      "ingredient_id": "huevo"
+     }
+    ]
+   ]
+  },
+  "tpl_100de836d0e3": {
+   "cuentas": {
+    "aceite_vegetal": 1.0,
+    "casabe": 1.0,
+    "cebolla": 1.0,
+    "huevo": 1.0
+   },
+   "estado": "exacta",
+   "hallazgos": [],
+   "pasos_hash": "8a1b845e940789cb",
+   "usa": [
+    [
+     {
+      "fraccion": 1.0,
+      "ingredient_id": "cebolla"
+     },
+     {
+      "fraccion": 1.0,
+      "ingredient_id": "aceite_vegetal"
+     }
+    ],
+    [
+     {
+      "fraccion": 1.0,
+      "ingredient_id": "huevo"
+     }
+    ],
+    [],
+    [
+     {
+      "fraccion": 1.0,
+      "ingredient_id": "casabe"
+     }
+    ]
+   ]
+  },
+  "tpl_10a41e385f30": {
+   "cuentas": {
+    "aceite_de_oliva": 1.0,
+    "arroz_blanco": 1.0,
+    "auyama": 1.0,
+    "cebolla": 1.0,
+    "habichuelas_negras": 1.0
+   },
+   "estado": "exacta",
+   "hallazgos": [
+    {
+     "alimento": "sofrito",
+     "detalle": "V5 sobre la plantilla materializada: el paso lo usa pero la lista no lo trae: Agrega las habichuelas ya hervidas a la olla con el sofrito, machaca un puñito de granos contra la pared para ",
+     "tipo": "fuera_de_plantilla"
+    }
+   ],
+   "pasos_hash": "b0bfb1b1247532bb",
+   "usa": [
+    [
+     {
+      "fraccion": 1.0,
+      "ingredient_id": "habichuelas_negras"
+     }
+    ],
+    [
+     {
+      "fraccion": 1.0,
+      "ingredient_id": "auyama"
+     },
+     {
+      "fraccion": 1.0,
+      "ingredient_id": "cebolla"
+     }
+    ],
+    [
+     {
+      "fraccion": 1.0,
+      "ingredient_id": "aceite_de_oliva"
+     }
+    ],
+    [],
+    [
+     {
+      "fraccion": 1.0,
+      "ingredient_id": "arroz_blanco"
+     }
+    ]
+   ]
+  },
+  "tpl_112dfb2c5930": {
+   "cuentas": {
+    "aji_cubanela": 1.0,
+    "auyama": 1.0,
+    "gandules": 1.0,
+    "salsa_de_tomate": 1.0,
+    "zanahoria": 1.0
+   },
+   "estado": "exacta",
+   "hallazgos": [],
+   "pasos_hash": "2a8929adda297c85",
+   "usa": [
+    [
+     {
+      "fraccion": 1.0,
+      "ingredient_id": "gandules"
+     }
+    ],
+    [
+     {
+      "fraccion": 1.0,
+      "ingredient_id": "zanahoria"
+     },
+     {
+      "fraccion": 1.0,
+      "ingredient_id": "auyama"
+     },
+     {
+      "fraccion": 1.0,
+      "ingredient_id": "aji_cubanela"
+     }
+    ],
+    [
+     {
+      "fraccion": 1.0,
+      "ingredient_id": "salsa_de_tomate"
+     }
+    ],
+    [],
+    []
+   ]
+  },
+  "tpl_14c76a1c346e": {
+   "cuentas": {
+    "aceite_vegetal": 1.0,
+    "cebolla": 1.0,
+    "harina_de_trigo": 1.0,
+    "huevo": 1.0,
+    "pimienta_negra": 1.0,
+    "sal": 1.0
+   },
+   "estado": "revisar",
+   "hallazgos": [
+    {
+     "alimento": "Aceite vegetal",
+     "detalle": "«el resto» / «la otra mitad» aparece dos veces: la receta reparte más de lo que compra",
+     "ingredient_id": "aceite_vegetal",
+     "tipo": "sobre_asignado"
+    }
+   ],
+   "pasos_hash": "09e743e66427c82b",
+   "usa": [
+    [
+     {
+      "fraccion": 1.0,
+      "ingredient_id": "harina_de_trigo"
+     },
+     {
+      "fraccion": 0.5,
+      "ingredient_id": "aceite_vegetal"
+     },
+     {
+      "fraccion": 0.5,
+      "ingredient_id": "sal"
+     },
+     {
+      "estimada": true,
+      "fraccion": 0.5,
+      "ingredient_id": "pimienta_negra"
+     }
+    ],
+    [
+     {
+      "fraccion": 0.5,
+      "ingredient_id": "aceite_vegetal"
+     }
+    ],
+    [
+     {
+      "fraccion": 1.0,
+      "ingredient_id": "cebolla"
+     }
+    ],
+    [
+     {
+      "fraccion": 1.0,
+      "ingredient_id": "huevo"
+     },
+     {
+      "fraccion": 0.5,
+      "ingredient_id": "sal"
+     },
+     {
+      "estimada": true,
+      "fraccion": 0.5,
+      "ingredient_id": "pimienta_negra"
+     }
+    ],
+    []
+   ]
+  },
+  "tpl_14f87c9ff17c": {
+   "cuentas": {
+    "aceite_de_oliva": 1.0,
+    "batata": 1.0,
+    "pechuga_de_pavo": 1.0
+   },
+   "estado": "exacta",
+   "hallazgos": [],
+   "pasos_hash": "bb181e5e6e16c7b9",
+   "usa": [
+    [
+     {
+      "fraccion": 1.0,
+      "ingredient_id": "batata"
+     }
+    ],
+    [
+     {
+      "fraccion": 1.0,
+      "ingredient_id": "pechuga_de_pavo"
+     },
+     {
+      "fraccion": 0.5,
+      "ingredient_id": "aceite_de_oliva"
+     }
+    ],
+    [],
+    [
+     {
+      "fraccion": 0.5,
+      "ingredient_id": "aceite_de_oliva"
+     }
+    ],
+    []
+   ]
+  },
+  "tpl_15cf1272e7d0": {
+   "cuentas": {
+    "ajo": 1.0,
+    "arroz_blanco": 1.0,
+    "bacalao": 1.0,
+    "cebolla": 1.0,
+    "repollo": 1.0,
+    "salsa_de_tomate": 1.0
+   },
+   "estado": "exacta",
+   "hallazgos": [],
+   "pasos_hash": "467a2ff045264832",
+   "usa": [
+    [
+     {
+      "fraccion": 1.0,
+      "ingredient_id": "bacalao"
+     },
+     {
+      "fraccion": 1.0,
+      "ingredient_id": "cebolla"
+     },
+     {
+      "fraccion": 1.0,
+      "ingredient_id": "ajo"
+     },
+     {
+      "fraccion": 1.0,
+      "ingredient_id": "repollo"
+     }
+    ],
+    [],
+    [
+     {
+      "fraccion": 1.0,
+      "ingredient_id": "salsa_de_tomate"
+     }
+    ],
+    [],
+    [
+     {
+      "fraccion": 1.0,
+      "ingredient_id": "arroz_blanco"
+     }
+    ]
+   ]
+  },
+  "tpl_15de313aec3a": {
+   "cuentas": {
+    "harina_de_trigo": 1.0,
+    "huevo": 1.0,
+    "queso_gouda": 1.0,
+    "sal": 1.0
+   },
+   "estado": "exacta",
+   "hallazgos": [],
+   "pasos_hash": "caf3485f422d40a5",
+   "usa": [
+    [
+     {
+      "fraccion": 1.0,
+      "ingredient_id": "harina_de_trigo"
+     },
+     {
+      "fraccion": 1.0,
+      "ingredient_id": "sal"
+     }
+    ],
+    [],
+    [],
+    [
+     {
+      "fraccion": 1.0,
+      "ingredient_id": "huevo"
+     },
+     {
+      "fraccion": 1.0,
+      "ingredient_id": "queso_gouda"
+     }
+    ]
+   ]
+  },
+  "tpl_166288f52176": {
+   "cuentas": {
+    "aceite_de_oliva": 1.0,
+    "cebolla": 1.0,
+    "huevo": 1.0,
+    "papa": 1.0,
+    "queso_cheddar": 1.0,
+    "repollo": 1.0,
+    "sal": 1.0
+   },
+   "estado": "estimada",
+   "hallazgos": [],
+   "pasos_hash": "809c797c982727d4",
+   "usa": [
+    [
+     {
+      "fraccion": 1.0,
+      "ingredient_id": "papa"
+     },
+     {
+      "estimada": true,
+      "fraccion": 0.5,
+      "ingredient_id": "aceite_de_oliva"
+     }
+    ],
+    [
+     {
+      "fraccion": 1.0,
+      "ingredient_id": "huevo"
+     },
+     {
+      "fraccion": 1.0,
+      "ingredient_id": "queso_cheddar"
+     },
+     {
+      "fraccion": 1.0,
+      "ingredient_id": "sal"
+     }
+    ],
+    [],
+    [
+     {
+      "fraccion": 1.0,
+      "ingredient_id": "repollo"
+     },
+     {
+      "fraccion": 1.0,
+      "ingredient_id": "cebolla"
+     },
+     {
+      "estimada": true,
+      "fraccion": 0.5,
+      "ingredient_id": "aceite_de_oliva"
+     }
+    ]
+   ]
+  },
+  "tpl_17e6ac51cab1": {
+   "cuentas": {
+    "auyama": 1.0,
+    "cilantro": 1.0,
+    "garbanzos": 1.0,
+    "name": 1.0,
+    "yuca": 1.0
+   },
+   "estado": "exacta",
+   "hallazgos": [],
+   "pasos_hash": "588e11ab2758a043",
+   "usa": [
+    [
+     {
+      "fraccion": 1.0,
+      "ingredient_id": "garbanzos"
+     }
+    ],
+    [],
+    [
+     {
+      "fraccion": 1.0,
+      "ingredient_id": "yuca"
+     },
+     {
+      "fraccion": 1.0,
+      "ingredient_id": "name"
+     },
+     {
+      "fraccion": 1.0,
+      "ingredient_id": "auyama"
+     }
+    ],
+    [
+     {
+      "fraccion": 1.0,
+      "ingredient_id": "cilantro"
+     }
+    ],
+    []
+   ]
+  },
+  "tpl_1876d7cc7a09": {
+   "cuentas": {
+    "aceite_vegetal": 1.0,
+    "cebolla": 1.0,
+    "guineo_verde": 1.0,
+    "queso_blanco": 1.0
+   },
+   "estado": "exacta",
+   "hallazgos": [],
+   "pasos_hash": "9830548f973d21e5",
+   "usa": [
+    [
+     {
+      "fraccion": 1.0,
+      "ingredient_id": "guineo_verde"
+     }
+    ],
+    [
+     {
+      "fraccion": 1.0,
+      "ingredient_id": "cebolla"
+     },
+     {
+      "fraccion": 0.5,
+      "ingredient_id": "aceite_vegetal"
+     }
+    ],
+    [],
+    [
+     {
+      "fraccion": 0.5,
+      "ingredient_id": "aceite_vegetal"
+     },
+     {
+      "fraccion": 1.0,
+      "ingredient_id": "queso_blanco"
+     }
+    ],
+    []
+   ]
+  },
+  "tpl_191686c3dba0": {
+   "cuentas": {
+    "azucar_morena": 1.0,
+    "harina_de_maiz_precocida": 1.0,
+    "huevo": 1.0,
+    "leche": 1.0
+   },
+   "estado": "exacta",
+   "hallazgos": [],
+   "pasos_hash": "cb662992829be69d",
+   "usa": [
+    [
+     {
+      "fraccion": 1.0,
+      "ingredient_id": "harina_de_maiz_precocida"
+     },
+     {
+      "fraccion": 1.0,
+      "ingredient_id": "huevo"
+     },
+     {
+      "fraccion": 1.0,
+      "ingredient_id": "azucar_morena"
+     }
+    ],
+    [
+     {
+      "fraccion": 1.0,
+      "ingredient_id": "leche"
+     }
+    ],
+    [],
+    [],
+    []
+   ]
+  },
+  "tpl_19b8ee8e0474": {
+   "cuentas": {
+    "arenque": 1.0,
+    "cebolla": 1.0,
+    "huevo": 1.0,
+    "sal": 1.0,
+    "yuca": 1.0
+   },
+   "estado": "exacta",
+   "hallazgos": [],
+   "pasos_hash": "7d39fc1769c58fc2",
+   "usa": [
+    [
+     {
+      "fraccion": 1.0,
+      "ingredient_id": "yuca"
+     }
+    ],
+    [
+     {
+      "fraccion": 1.0,
+      "ingredient_id": "arenque"
+     },
+     {
+      "fraccion": 1.0,
+      "ingredient_id": "cebolla"
+     }
+    ],
+    [],
+    [
+     {
+      "fraccion": 1.0,
+      "ingredient_id": "huevo"
+     },
+     {
+      "fraccion": 1.0,
+      "ingredient_id": "sal"
+     }
+    ],
+    []
+   ]
+  },
+  "tpl_1ebac624c448": {
+   "cuentas": {
+    "aceite_vegetal": 1.0,
+    "aji_cubanela": 1.0,
+    "ajo": 1.0,
+    "cebolla": 1.0,
+    "oregano_dominicano": 1.0,
+    "pechuga_de_pollo": 1.0,
+    "platano_verde": 1.0,
+    "sal": 1.0,
+    "salsa_de_tomate": 1.0,
+    "tomate": 1.0
+   },
+   "estado": "exacta",
+   "hallazgos": [],
+   "pasos_hash": "d170502cff8d0950",
+   "usa": [
+    [
+     {
+      "fraccion": 1.0,
+      "ingredient_id": "platano_verde"
+     }
+    ],
+    [
+     {
+      "fraccion": 1.0,
+      "ingredient_id": "pechuga_de_pollo"
+     },
+     {
+      "fraccion": 1.0,
+      "ingredient_id": "aceite_vegetal"
+     },
+     {
+      "fraccion": 1.0,
+      "ingredient_id": "cebolla"
+     },
+     {
+      "fraccion": 1.0,
+      "ingredient_id": "aji_cubanela"
+     },
+     {
+      "fraccion": 1.0,
+      "ingredient_id": "tomate"
+     },
+     {
+      "fraccion": 1.0,
+      "ingredient_id": "ajo"
+     },
+     {
+      "fraccion": 1.0,
+      "ingredient_id": "oregano_dominicano"
+     },
+     {
+      "fraccion": 0.5,
+      "ingredient_id": "sal"
+     }
+    ],
+    [
+     {
+      "fraccion": 1.0,
+      "ingredient_id": "salsa_de_tomate"
+     },
+     {
+      "fraccion": 0.5,
+      "ingredient_id": "sal"
+     }
+    ],
+    [],
+    []
+   ]
+  },
+  "tpl_212bd794501e": {
+   "cuentas": {
+    "casabe": 1.0,
+    "huevo": 1.0
+   },
+   "estado": "exacta",
+   "hallazgos": [],
+   "pasos_hash": "3ff99785880eaf5a",
+   "usa": [
+    [
+     {
+      "fraccion": 1.0,
+      "ingredient_id": "huevo"
+     }
+    ],
+    [],
+    [
+     {
+      "fraccion": 1.0,
+      "ingredient_id": "casabe"
+     }
+    ]
+   ]
+  },
+  "tpl_23ad9c0b2ffc": {
+   "cuentas": {
+    "arroz_blanco": 1.0,
+    "carne_de_res_molida": 1.0,
+    "cebolla": 1.0,
+    "repollo": 1.0,
+    "tomate": 1.0
+   },
+   "estado": "estimada",
+   "hallazgos": [],
+   "pasos_hash": "0f907409caf65e73",
+   "usa": [
+    [
+     {
+      "estimada": true,
+      "fraccion": 0.5,
+      "ingredient_id": "arroz_blanco"
+     }
+    ],
+    [
+     {
+      "fraccion": 1.0,
+      "ingredient_id": "repollo"
+     }
+    ],
+    [
+     {
+      "fraccion": 1.0,
+      "ingredient_id": "carne_de_res_molida"
+     },
+     {
+      "fraccion": 1.0,
+      "ingredient_id": "tomate"
+     },
+     {
+      "fraccion": 1.0,
+      "ingredient_id": "cebolla"
+     }
+    ],
+    [
+     {
+      "estimada": true,
+      "fraccion": 0.5,
+      "ingredient_id": "arroz_blanco"
+     }
+    ],
+    []
+   ]
+  },
+  "tpl_24a8135915c9": {
+   "cuentas": {
+    "avena": 1.0,
+    "leche_de_coco": 1.0,
+    "linaza": 1.0
+   },
+   "estado": "exacta",
+   "hallazgos": [],
+   "pasos_hash": "8a9eef7da06a76a8",
+   "usa": [
+    [
+     {
+      "fraccion": 1.0,
+      "ingredient_id": "avena"
+     },
+     {
+      "fraccion": 1.0,
+      "ingredient_id": "leche_de_coco"
+     }
+    ],
+    [
+     {
+      "fraccion": 1.0,
+      "ingredient_id": "linaza"
+     }
+    ],
+    []
+   ]
+  },
+  "tpl_289ce36d99f3": {
+   "cuentas": {
+    "aceite_vegetal": 1.0,
+    "aguacate": 1.0,
+    "aji_cubanela": 1.0,
+    "ajo": 1.0,
+    "arroz_blanco": 1.0,
+    "cebolla": 1.0,
+    "cilantro": 1.0,
+    "lentejas": 1.0,
+    "sal": 1.0,
+    "salsa_de_tomate": 1.0,
+    "zanahoria": 1.0
+   },
+   "estado": "exacta",
+   "hallazgos": [],
+   "pasos_hash": "43679198c398dd21",
+   "usa": [
+    [
+     {
+      "fraccion": 1.0,
+      "ingredient_id": "lentejas"
+     },
+     {
+      "fraccion": 1.0,
+      "ingredient_id": "zanahoria"
+     },
+     {
+      "fraccion": 1.0,
+      "ingredient_id": "cebolla"
+     },
+     {
+      "fraccion": 1.0,
+      "ingredient_id": "aji_cubanela"
+     },
+     {
+      "fraccion": 1.0,
+      "ingredient_id": "ajo"
+     }
+    ],
+    [
+     {
+      "fraccion": 0.5,
+      "ingredient_id": "cilantro"
+     },
+     {
+      "fraccion": 1.0,
+      "ingredient_id": "salsa_de_tomate"
+     },
+     {
+      "fraccion": 1.0,
+      "ingredient_id": "aceite_vegetal"
+     }
+    ],
+    [
+     {
+      "fraccion": 0.5,
+      "ingredient_id": "cilantro"
+     },
+     {
+      "fraccion": 1.0,
+      "ingredient_id": "sal"
+     }
+    ],
+    [
+     {
+      "fraccion": 1.0,
+      "ingredient_id": "arroz_blanco"
+     }
+    ],
+    [
+     {
+      "fraccion": 1.0,
+      "ingredient_id": "aguacate"
+     }
+    ]
+   ]
+  },
+  "tpl_2aab30cc9582": {
+   "cuentas": {
+    "almendras_fileteadas": 1.0,
+    "avena": 1.0,
+    "datiles": 1.0,
+    "leche_evaporada": 1.0
+   },
+   "estado": "exacta",
+   "hallazgos": [],
+   "pasos_hash": "5e8ed0c9f43c649d",
+   "usa": [
+    [
+     {
+      "fraccion": 1.0,
+      "ingredient_id": "datiles"
+     }
+    ],
+    [
+     {
+      "fraccion": 1.0,
+      "ingredient_id": "avena"
+     },
+     {
+      "fraccion": 1.0,
+      "ingredient_id": "leche_evaporada"
+     }
+    ],
+    [],
+    [
+     {
+      "fraccion": 1.0,
+      "ingredient_id": "almendras_fileteadas"
+     }
+    ]
+   ]
+  },
+  "tpl_2af541adb844": {
+   "cuentas": {
+    "aceite_vegetal": 1.0,
+    "cebolla": 1.0,
+    "huevo": 1.0,
+    "pimienta_negra": 1.0,
+    "platano_verde": 1.0,
+    "sal": 1.0
+   },
+   "estado": "exacta",
+   "hallazgos": [],
+   "pasos_hash": "ae609e3dc753dce0",
+   "usa": [
+    [
+     {
+      "fraccion": 1.0,
+      "ingredient_id": "platano_verde"
+     },
+     {
+      "fraccion": 1.0,
+      "ingredient_id": "sal"
+     }
+    ],
+    [
+     {
+      "fraccion": 0.5,
+      "ingredient_id": "aceite_vegetal"
+     },
+     {
+      "fraccion": 1.0,
+      "ingredient_id": "cebolla"
+     }
+    ],
+    [],
+    [
+     {
+      "fraccion": 0.5,
+      "ingredient_id": "aceite_vegetal"
+     },
+     {
+      "fraccion": 1.0,
+      "ingredient_id": "huevo"
+     },
+     {
+      "fraccion": 1.0,
+      "ingredient_id": "pimienta_negra"
+     }
+    ],
+    []
+   ]
+  },
+  "tpl_2b23ec4c73e3": {
+   "cuentas": {
+    "batata": 1.0,
+    "canela_en_polvo": 1.0
+   },
+   "estado": "exacta",
+   "hallazgos": [],
+   "pasos_hash": "dd9219598a42d2d9",
+   "usa": [
+    [],
+    [
+     {
+      "fraccion": 1.0,
+      "ingredient_id": "batata"
+     }
+    ],
+    [
+     {
+      "fraccion": 1.0,
+      "ingredient_id": "canela_en_polvo"
+     }
+    ],
+    [],
+    []
+   ]
+  },
+  "tpl_325d08dcd7fc": {
+   "cuentas": {
+    "aceite_de_oliva": 1.0,
+    "auyama": 1.0,
+    "carne_de_res": 1.0
+   },
+   "estado": "exacta",
+   "hallazgos": [],
+   "pasos_hash": "fb319150afcb9994",
+   "usa": [
+    [
+     {
+      "fraccion": 1.0,
+      "ingredient_id": "carne_de_res"
+     }
+    ],
+    [
+     {
+      "fraccion": 1.0,
+      "ingredient_id": "auyama"
+     }
+    ],
+    [
+     {
+      "fraccion": 1.0,
+      "ingredient_id": "aceite_de_oliva"
+     }
+    ],
+    [],
+    []
+   ]
+  },
+  "tpl_330acceaf98a": {
+   "cuentas": {
+    "avena": 1.0,
+    "fresas": 1.0,
+    "mango": 1.0,
+    "miel": 1.0,
+    "yogurt_griego_sin_azucar": 1.0
+   },
+   "estado": "exacta",
+   "hallazgos": [],
+   "pasos_hash": "6d2258f5a45cdd8a",
+   "usa": [
+    [
+     {
+      "fraccion": 1.0,
+      "ingredient_id": "avena"
+     }
+    ],
+    [
+     {
+      "fraccion": 1.0,
+      "ingredient_id": "fresas"
+     },
+     {
+      "fraccion": 1.0,
+      "ingredient_id": "mango"
+     }
+    ],
+    [
+     {
+      "fraccion": 1.0,
+      "ingredient_id": "yogurt_griego_sin_azucar"
+     }
+    ],
+    [
+     {
+      "fraccion": 1.0,
+      "ingredient_id": "miel"
+     }
+    ],
+    []
+   ]
+  },
+  "tpl_340d754b1ec5": {
+   "cuentas": {
+    "aji_cubanela": 1.0,
+    "cebolla": 1.0,
+    "pechuga_de_pollo": 1.0,
+    "yuca": 1.0
+   },
+   "estado": "estimada",
+   "hallazgos": [],
+   "pasos_hash": "f427359c999f4fce",
+   "usa": [
+    [],
+    [
+     {
+      "estimada": true,
+      "fraccion": 0.5,
+      "ingredient_id": "yuca"
+     }
+    ],
+    [
+     {
+      "fraccion": 1.0,
+      "ingredient_id": "pechuga_de_pollo"
+     },
+     {
+      "fraccion": 1.0,
+      "ingredient_id": "cebolla"
+     },
+     {
+      "fraccion": 1.0,
+      "ingredient_id": "aji_cubanela"
+     }
+    ],
+    [
+     {
+      "estimada": true,
+      "fraccion": 0.5,
+      "ingredient_id": "yuca"
+     }
+    ],
+    []
+   ]
+  },
+  "tpl_34fa7f6fe965": {
+   "cuentas": {
+    "aguacate": 1.0,
+    "cebolla": 1.0,
+    "cilantro": 1.0,
+    "gandules": 1.0,
+    "limon": 1.0,
+    "pechuga_de_pollo": 1.0,
+    "tomate": 1.0
+   },
+   "estado": "exacta",
+   "hallazgos": [],
+   "pasos_hash": "d9f1f7af2471e028",
+   "usa": [
+    [
+     {
+      "fraccion": 1.0,
+      "ingredient_id": "gandules"
+     }
+    ],
+    [
+     {
+      "fraccion": 1.0,
+      "ingredient_id": "pechuga_de_pollo"
+     }
+    ],
+    [
+     {
+      "fraccion": 1.0,
+      "ingredient_id": "aguacate"
+     },
+     {
+      "fraccion": 1.0,
+      "ingredient_id": "tomate"
+     },
+     {
+      "fraccion": 1.0,
+      "ingredient_id": "cebolla"
+     },
+     {
+      "fraccion": 1.0,
+      "ingredient_id": "cilantro"
+     }
+    ],
+    [
+     {
+      "fraccion": 1.0,
+      "ingredient_id": "limon"
+     }
+    ],
+    []
+   ]
+  },
+  "tpl_35249148dec3": {
+   "cuentas": {
+    "auyama": 1.0,
+    "casabe": 1.0,
+    "cebolla": 1.0,
+    "habichuelas_rojas": 1.0,
+    "huevo": 1.0
+   },
+   "estado": "exacta",
+   "hallazgos": [],
+   "pasos_hash": "8c9a5a13ea64ef1d",
+   "usa": [
+    [
+     {
+      "fraccion": 1.0,
+      "ingredient_id": "habichuelas_rojas"
+     }
+    ],
+    [],
+    [
+     {
+      "fraccion": 1.0,
+      "ingredient_id": "auyama"
+     },
+     {
+      "fraccion": 1.0,
+      "ingredient_id": "cebolla"
+     }
+    ],
+    [
+     {
+      "fraccion": 1.0,
+      "ingredient_id": "huevo"
+     }
+    ],
+    [
+     {
+      "fraccion": 1.0,
+      "ingredient_id": "casabe"
+     }
+    ]
+   ]
+  },
+  "tpl_35af884432f6": {
+   "cuentas": {
+    "aceite_vegetal": 1.0,
+    "aguacate": 1.0,
+    "cebolla": 1.0,
+    "yuca": 1.0
+   },
+   "estado": "exacta",
+   "hallazgos": [],
+   "pasos_hash": "90b6e64b2bb83d57",
+   "usa": [
+    [
+     {
+      "fraccion": 1.0,
+      "ingredient_id": "yuca"
+     }
+    ],
+    [
+     {
+      "fraccion": 1.0,
+      "ingredient_id": "cebolla"
+     }
+    ],
+    [
+     {
+      "fraccion": 1.0,
+      "ingredient_id": "aceite_vegetal"
+     }
+    ],
+    [
+     {
+      "fraccion": 1.0,
+      "ingredient_id": "aguacate"
+     }
+    ],
+    []
+   ]
+  },
+  "tpl_35f39cc375cd": {
+   "cuentas": {
+    "lechosa": 1.0,
+    "quinoa": 1.0,
+    "semillas_de_girasol": 1.0
+   },
+   "estado": "exacta",
+   "hallazgos": [],
+   "pasos_hash": "a5820ac32ec03863",
+   "usa": [
+    [
+     {
+      "fraccion": 1.0,
+      "ingredient_id": "quinoa"
+     }
+    ],
+    [
+     {
+      "fraccion": 1.0,
+      "ingredient_id": "lechosa"
+     },
+     {
+      "fraccion": 1.0,
+      "ingredient_id": "semillas_de_girasol"
+     }
+    ],
+    [],
+    []
+   ]
+  },
+  "tpl_36409c4726eb": {
+   "cuentas": {
+    "aceite_de_oliva": 1.0,
+    "atun_en_agua": 1.0,
+    "cebolla": 1.0,
+    "platano_verde": 1.0,
+    "sal": 1.0,
+    "vinagre_blanco": 1.0
+   },
+   "estado": "exacta",
+   "hallazgos": [],
+   "pasos_hash": "b53031b662c81874",
+   "usa": [
+    [
+     {
+      "fraccion": 1.0,
+      "ingredient_id": "cebolla"
+     },
+     {
+      "fraccion": 1.0,
+      "ingredient_id": "vinagre_blanco"
+     }
+    ],
+    [
+     {
+      "fraccion": 1.0,
+      "ingredient_id": "platano_verde"
+     },
+     {
+      "fraccion": 1.0,
+      "ingredient_id": "atun_en_agua"
+     }
+    ],
+    [
+     {
+      "fraccion": 0.5,
+      "ingredient_id": "aceite_de_oliva"
+     },
+     {
+      "fraccion": 1.0,
+      "ingredient_id": "sal"
+     }
+    ],
+    [],
+    [
+     {
+      "fraccion": 0.5,
+      "ingredient_id": "aceite_de_oliva"
+     }
+    ]
+   ]
+  },
+  "tpl_385a17ed7bed": {
+   "cuentas": {
+    "aceite_de_oliva": 1.0,
+    "cebolla": 1.0,
+    "salsa_de_soya": 1.0,
+    "tofu_firme": 1.0
+   },
+   "estado": "exacta",
+   "hallazgos": [],
+   "pasos_hash": "9c2e3ec5a944d0d8",
+   "usa": [
+    [
+     {
+      "fraccion": 1.0,
+      "ingredient_id": "tofu_firme"
+     }
+    ],
+    [
+     {
+      "fraccion": 1.0,
+      "ingredient_id": "cebolla"
+     }
+    ],
+    [
+     {
+      "fraccion": 1.0,
+      "ingredient_id": "aceite_de_oliva"
+     }
+    ],
+    [
+     {
+      "fraccion": 1.0,
+      "ingredient_id": "salsa_de_soya"
+     }
+    ]
+   ]
+  },
+  "tpl_38b33eeddfd4": {
+   "cuentas": {
+    "aceite_vegetal": 1.0,
+    "aji_cubanela": 1.0,
+    "ajo": 1.0,
+    "arroz_blanco": 1.0,
+    "auyama": 1.0,
+    "cebolla": 1.0,
+    "habichuelas_rojas": 1.0,
+    "oregano_dominicano": 1.0,
+    "pechuga_de_pollo": 1.0,
+    "sal": 0,
+    "salsa_de_tomate": 1.0,
+    "tomate": 1.0
+   },
+   "estado": "estimada",
+   "hallazgos": [
+    {
+     "alimento": "Sal",
+     "detalle": "comprado y ningún paso lo nombra",
+     "ingredient_id": "sal",
+     "tipo": "sin_uso_condimento"
+    }
+   ],
+   "pasos_hash": "d3f6d33559737211",
+   "usa": [
+    [
+     {
+      "fraccion": 1.0,
+      "ingredient_id": "arroz_blanco"
+     }
+    ],
+    [
+     {
+      "estimada": true,
+      "fraccion": 0.5,
+      "ingredient_id": "habichuelas_rojas"
+     }
+    ],
+    [
+     {
+      "fraccion": 0.5,
+      "ingredient_id": "aceite_vegetal"
+     },
+     {
+      "fraccion": 1.0,
+      "ingredient_id": "cebolla"
+     },
+     {
+      "fraccion": 1.0,
+      "ingredient_id": "aji_cubanela"
+     },
+     {
+      "fraccion": 1.0,
+      "ingredient_id": "tomate"
+     },
+     {
+      "fraccion": 1.0,
+      "ingredient_id": "salsa_de_tomate"
+     },
+     {
+      "fraccion": 1.0,
+      "ingredient_id": "ajo"
+     },
+     {
+      "fraccion": 1.0,
+      "ingredient_id": "oregano_dominicano"
+     }
+    ],
+    [
+     {
+      "fraccion": 1.0,
+      "ingredient_id": "auyama"
+     }
+    ],
+    [
+     {
+      "fraccion": 0.5,
+      "ingredient_id": "aceite_vegetal"
+     },
+     {
+      "estimada": true,
+      "fraccion": 0.5,
+      "ingredient_id": "habichuelas_rojas"
+     },
+     {
+      "fraccion": 1.0,
+      "ingredient_id": "pechuga_de_pollo"
+     }
+    ]
+   ]
+  },
+  "tpl_395d169d8574": {
+   "cuentas": {
+    "canela_en_polvo": 1.0,
+    "mantequilla_de_mani": 1.0,
+    "platano_maduro": 1.0
+   },
+   "estado": "exacta",
+   "hallazgos": [],
+   "pasos_hash": "b6e2bdcc92f65601",
+   "usa": [
+    [
+     {
+      "fraccion": 1.0,
+      "ingredient_id": "platano_maduro"
+     }
+    ],
+    [
+     {
+      "fraccion": 1.0,
+      "ingredient_id": "mantequilla_de_mani"
+     },
+     {
+      "fraccion": 1.0,
+      "ingredient_id": "canela_en_polvo"
+     }
+    ],
+    [],
+    []
+   ]
+  },
+  "tpl_3a0517b6dc80": {
+   "cuentas": {
+    "lechosa": 1.0,
+    "queso_cottage": 1.0
+   },
+   "estado": "exacta",
+   "hallazgos": [],
+   "pasos_hash": "8bf9b82839bbb8df",
+   "usa": [
+    [
+     {
+      "fraccion": 1.0,
+      "ingredient_id": "lechosa"
+     }
+    ],
+    [
+     {
+      "fraccion": 1.0,
+      "ingredient_id": "queso_cottage"
+     }
+    ],
+    []
+   ]
+  },
+  "tpl_3b2ae5748a82": {
+   "cuentas": {
+    "aji_cubanela": 1.0,
+    "ajo": 1.0,
+    "auyama": 1.0,
+    "cebolla": 1.0,
+    "cilantro": 1.0,
+    "name": 1.0,
+    "platano_verde": 1.0,
+    "soya_texturizada": 1.0,
+    "yuca": 1.0
+   },
+   "estado": "exacta",
+   "hallazgos": [],
+   "pasos_hash": "b75d497bce6117f7",
+   "usa": [
+    [
+     {
+      "fraccion": 1.0,
+      "ingredient_id": "soya_texturizada"
+     }
+    ],
+    [
+     {
+      "fraccion": 1.0,
+      "ingredient_id": "yuca"
+     },
+     {
+      "fraccion": 1.0,
+      "ingredient_id": "name"
+     },
+     {
+      "fraccion": 1.0,
+      "ingredient_id": "auyama"
+     },
+     {
+      "fraccion": 1.0,
+      "ingredient_id": "platano_verde"
+     }
+    ],
+    [
+     {
+      "fraccion": 1.0,
+      "ingredient_id": "aji_cubanela"
+     },
+     {
+      "fraccion": 1.0,
+      "ingredient_id": "cebolla"
+     },
+     {
+      "fraccion": 1.0,
+      "ingredient_id": "ajo"
+     }
+    ],
+    [],
+    [
+     {
+      "fraccion": 1.0,
+      "ingredient_id": "cilantro"
+     }
+    ]
+   ]
+  },
+  "tpl_3b53108bc402": {
+   "cuentas": {
+    "aceite_vegetal": 1.0,
+    "arroz_blanco": 1.0,
+    "cebolla": 1.0,
+    "gandules": 1.0,
+    "tofu_firme": 1.0
+   },
+   "estado": "exacta",
+   "hallazgos": [],
+   "pasos_hash": "4d7c79b99834c96d",
+   "usa": [
+    [
+     {
+      "fraccion": 1.0,
+      "ingredient_id": "gandules"
+     }
+    ],
+    [
+     {
+      "fraccion": 1.0,
+      "ingredient_id": "arroz_blanco"
+     },
+     {
+      "fraccion": 1.0,
+      "ingredient_id": "cebolla"
+     },
+     {
+      "fraccion": 1.0,
+      "ingredient_id": "aceite_vegetal"
+     }
+    ],
+    [
+     {
+      "fraccion": 1.0,
+      "ingredient_id": "tofu_firme"
+     }
+    ],
+    []
+   ]
+  },
+  "tpl_3c47d5db5243": {
+   "cuentas": {
+    "avena": 1.0,
+    "azucar_morena": 1.0,
+    "canela_en_polvo": 1.0,
+    "leche_evaporada": 1.0
+   },
+   "estado": "exacta",
+   "hallazgos": [],
+   "pasos_hash": "f556cec8f609e7c3",
+   "usa": [
+    [
+     {
+      "fraccion": 1.0,
+      "ingredient_id": "avena"
+     }
+    ],
+    [],
+    [
+     {
+      "fraccion": 1.0,
+      "ingredient_id": "leche_evaporada"
+     },
+     {
+      "fraccion": 1.0,
+      "ingredient_id": "azucar_morena"
+     }
+    ],
+    [
+     {
+      "fraccion": 1.0,
+      "ingredient_id": "canela_en_polvo"
+     }
+    ]
+   ]
+  },
+  "tpl_3d37e8b49ab7": {
+   "cuentas": {
+    "avena": 1.0,
+    "mantequilla_de_mani": 1.0,
+    "miel": 1.0
+   },
+   "estado": "exacta",
+   "hallazgos": [],
+   "pasos_hash": "da55929fdb0da698",
+   "usa": [
+    [
+     {
+      "fraccion": 1.0,
+      "ingredient_id": "avena"
+     }
+    ],
+    [
+     {
+      "fraccion": 1.0,
+      "ingredient_id": "mantequilla_de_mani"
+     },
+     {
+      "fraccion": 1.0,
+      "ingredient_id": "miel"
+     }
+    ],
+    [],
+    [],
+    []
+   ]
+  },
+  "tpl_3db2984de6b8": {
+   "cuentas": {
+    "aceite_de_oliva": 1.0,
+    "ajo": 1.0,
+    "batata": 1.0,
+    "cebolla": 1.0,
+    "habichuelas_negras": 1.0,
+    "sal": 0
+   },
+   "estado": "estimada",
+   "hallazgos": [
+    {
+     "alimento": "Sal",
+     "detalle": "comprado y ningún paso lo nombra",
+     "ingredient_id": "sal",
+     "tipo": "sin_uso_condimento"
+    }
+   ],
+   "pasos_hash": "a661487b2fec21f3",
+   "usa": [
+    [
+     {
+      "fraccion": 1.0,
+      "ingredient_id": "batata"
+     }
+    ],
+    [
+     {
+      "fraccion": 1.0,
+      "ingredient_id": "cebolla"
+     },
+     {
+      "fraccion": 1.0,
+      "ingredient_id": "ajo"
+     },
+     {
+      "fraccion": 1.0,
+      "ingredient_id": "aceite_de_oliva"
+     }
+    ],
+    [
+     {
+      "estimada": true,
+      "fraccion": 0.5,
+      "ingredient_id": "habichuelas_negras"
+     }
+    ],
+    [
+     {
+      "estimada": true,
+      "fraccion": 0.5,
+      "ingredient_id": "habichuelas_negras"
+     }
+    ]
+   ]
+  },
+  "tpl_42f25f9a7087": {
+   "cuentas": {
+    "granola": 1.0,
+    "leche_de_avena": 1.0,
+    "pasas": 1.0
+   },
+   "estado": "exacta",
+   "hallazgos": [],
+   "pasos_hash": "2a04d3744f753ce4",
+   "usa": [
+    [
+     {
+      "fraccion": 1.0,
+      "ingredient_id": "granola"
+     }
+    ],
+    [
+     {
+      "fraccion": 1.0,
+      "ingredient_id": "leche_de_avena"
+     }
+    ],
+    [
+     {
+      "fraccion": 1.0,
+      "ingredient_id": "pasas"
+     }
+    ]
+   ]
+  },
+  "tpl_43c0a34437c4": {
+   "cuentas": {
+    "aceite_de_oliva": 1.0,
+    "aji_morron": 1.0,
+    "ajo": 1.0,
+    "cebolla": 1.0,
+    "pasta_integral": 1.0,
+    "sardinas_en_lata": 1.0,
+    "tomate": 1.0
+   },
+   "estado": "exacta",
+   "hallazgos": [],
+   "pasos_hash": "1bee0a3d380db0ee",
+   "usa": [
+    [
+     {
+      "fraccion": 1.0,
+      "ingredient_id": "pasta_integral"
+     }
+    ],
+    [
+     {
+      "fraccion": 1.0,
+      "ingredient_id": "tomate"
+     },
+     {
+      "fraccion": 1.0,
+      "ingredient_id": "cebolla"
+     },
+     {
+      "fraccion": 1.0,
+      "ingredient_id": "aji_morron"
+     },
+     {
+      "fraccion": 1.0,
+      "ingredient_id": "ajo"
+     }
+    ],
+    [
+     {
+      "fraccion": 1.0,
+      "ingredient_id": "aceite_de_oliva"
+     }
+    ],
+    [
+     {
+      "fraccion": 1.0,
+      "ingredient_id": "sardinas_en_lata"
+     }
+    ],
+    []
+   ]
+  },
+  "tpl_446aebe8e4ee": {
+   "cuentas": {
+    "leche_de_soya": 1.0,
+    "mango": 1.0,
+    "semillas_de_chia": 1.0
+   },
+   "estado": "exacta",
+   "hallazgos": [],
+   "pasos_hash": "228ea6e475652ba1",
+   "usa": [
+    [
+     {
+      "fraccion": 1.0,
+      "ingredient_id": "mango"
+     },
+     {
+      "fraccion": 1.0,
+      "ingredient_id": "leche_de_soya"
+     }
+    ],
+    [
+     {
+      "fraccion": 1.0,
+      "ingredient_id": "semillas_de_chia"
+     }
+    ],
+    [],
+    []
+   ]
+  },
+  "tpl_44be0f88232b": {
+   "cuentas": {
+    "aceite_vegetal": 1.0,
+    "cebolla": 1.0,
+    "platano_verde": 1.0,
+    "tofu_firme": 1.0
+   },
+   "estado": "exacta",
+   "hallazgos": [],
+   "pasos_hash": "491d29baaccbcf45",
+   "usa": [
+    [
+     {
+      "fraccion": 1.0,
+      "ingredient_id": "platano_verde"
+     }
+    ],
+    [
+     {
+      "fraccion": 1.0,
+      "ingredient_id": "tofu_firme"
+     },
+     {
+      "fraccion": 1.0,
+      "ingredient_id": "cebolla"
+     },
+     {
+      "fraccion": 1.0,
+      "ingredient_id": "aceite_vegetal"
+     }
+    ],
+    [],
+    []
+   ]
+  },
+  "tpl_464cf6b12e9a": {
+   "cuentas": {
+    "auyama": 1.0,
+    "huevo": 1.0,
+    "queso_gouda": 1.0
+   },
+   "estado": "exacta",
+   "hallazgos": [],
+   "pasos_hash": "1e6fb68714bd6e41",
+   "usa": [
+    [
+     {
+      "fraccion": 1.0,
+      "ingredient_id": "auyama"
+     }
+    ],
+    [
+     {
+      "fraccion": 1.0,
+      "ingredient_id": "huevo"
+     }
+    ],
+    [],
+    [
+     {
+      "fraccion": 1.0,
+      "ingredient_id": "queso_gouda"
+     }
+    ],
+    []
+   ]
+  },
+  "tpl_4997cf5fe124": {
+   "cuentas": {
+    "aceite_de_oliva": 1.0,
+    "ajo": 1.0,
+    "arroz_blanco": 1.0,
+    "cebolla": 1.0,
+    "habichuelas_rojas": 1.0,
+    "sal": 0,
+    "soya_texturizada": 1.0
+   },
+   "estado": "exacta",
+   "hallazgos": [
+    {
+     "alimento": "Sal",
+     "detalle": "comprado y ningún paso lo nombra",
+     "ingredient_id": "sal",
+     "tipo": "sin_uso_condimento"
+    }
+   ],
+   "pasos_hash": "37c4de51d75a770e",
+   "usa": [
+    [
+     {
+      "fraccion": 1.0,
+      "ingredient_id": "soya_texturizada"
+     }
+    ],
+    [
+     {
+      "fraccion": 1.0,
+      "ingredient_id": "cebolla"
+     },
+     {
+      "fraccion": 1.0,
+      "ingredient_id": "ajo"
+     },
+     {
+      "fraccion": 1.0,
+      "ingredient_id": "aceite_de_oliva"
+     }
+    ],
+    [
+     {
+      "fraccion": 1.0,
+      "ingredient_id": "habichuelas_rojas"
+     }
+    ],
+    [
+     {
+      "fraccion": 1.0,
+      "ingredient_id": "arroz_blanco"
+     }
+    ]
+   ]
+  },
+  "tpl_4afb7ed71229": {
+   "cuentas": {
+    "aceite_vegetal": 1.0,
+    "cebolla": 1.0,
+    "jamon_de_pavo": 1.0,
+    "platano_verde": 1.0
+   },
+   "estado": "exacta",
+   "hallazgos": [],
+   "pasos_hash": "76f3efa20ab9accc",
+   "usa": [
+    [
+     {
+      "fraccion": 1.0,
+      "ingredient_id": "platano_verde"
+     }
+    ],
+    [],
+    [
+     {
+      "fraccion": 1.0,
+      "ingredient_id": "cebolla"
+     },
+     {
+      "fraccion": 1.0,
+      "ingredient_id": "jamon_de_pavo"
+     }
+    ],
+    [
+     {
+      "fraccion": 0.5,
+      "ingredient_id": "aceite_vegetal"
+     }
+    ],
+    [
+     {
+      "fraccion": 0.5,
+      "ingredient_id": "aceite_vegetal"
+     }
+    ]
+   ]
+  },
+  "tpl_4e48570063d2": {
+   "cuentas": {
+    "aceite_de_oliva": 1.0,
+    "casabe": 1.0,
+    "cebolla": 1.0,
+    "sardinas_en_lata": 1.0,
+    "tomate": 1.0
+   },
+   "estado": "exacta",
+   "hallazgos": [],
+   "pasos_hash": "1a8cc0dda5656f48",
+   "usa": [
+    [
+     {
+      "fraccion": 1.0,
+      "ingredient_id": "sardinas_en_lata"
+     },
+     {
+      "fraccion": 1.0,
+      "ingredient_id": "tomate"
+     },
+     {
+      "fraccion": 1.0,
+      "ingredient_id": "cebolla"
+     },
+     {
+      "fraccion": 1.0,
+      "ingredient_id": "aceite_de_oliva"
+     }
+    ],
+    [],
+    [],
+    [
+     {
+      "fraccion": 1.0,
+      "ingredient_id": "casabe"
+     }
+    ]
+   ]
+  },
+  "tpl_50164f2e368d": {
+   "cuentas": {
+    "aceite_de_oliva": 1.0,
+    "ajo": 1.0,
+    "cebolla": 1.0,
+    "guisantes_secos": 1.0,
+    "papa": 1.0,
+    "sal": 0,
+    "zanahoria": 1.0
+   },
+   "estado": "exacta",
+   "hallazgos": [
+    {
+     "alimento": "Sal",
+     "detalle": "comprado y ningún paso lo nombra",
+     "ingredient_id": "sal",
+     "tipo": "sin_uso_condimento"
+    }
+   ],
+   "pasos_hash": "67dfdbdc0f4c835d",
+   "usa": [
+    [
+     {
+      "fraccion": 1.0,
+      "ingredient_id": "guisantes_secos"
+     }
+    ],
+    [
+     {
+      "fraccion": 1.0,
+      "ingredient_id": "cebolla"
+     },
+     {
+      "fraccion": 1.0,
+      "ingredient_id": "ajo"
+     },
+     {
+      "fraccion": 1.0,
+      "ingredient_id": "aceite_de_oliva"
+     }
+    ],
+    [],
+    [
+     {
+      "fraccion": 1.0,
+      "ingredient_id": "papa"
+     },
+     {
+      "fraccion": 1.0,
+      "ingredient_id": "zanahoria"
+     }
+    ]
+   ]
+  },
+  "tpl_5261bf173cb5": {
+   "cuentas": {
+    "almendras_fileteadas": 1.0,
+    "ciruela_pasa": 1.0
+   },
+   "estado": "exacta",
+   "hallazgos": [],
+   "pasos_hash": "13b4782eb467b841",
+   "usa": [
+    [
+     {
+      "fraccion": 1.0,
+      "ingredient_id": "almendras_fileteadas"
+     }
+    ],
+    [
+     {
+      "fraccion": 1.0,
+      "ingredient_id": "ciruela_pasa"
+     }
+    ],
+    []
+   ]
+  },
+  "tpl_53cfd4141ee3": {
+   "cuentas": {
+    "aceite_de_oliva": 1.0,
+    "ajo": 1.0,
+    "arroz_blanco": 1.0,
+    "auyama": 1.0,
+    "cebolla": 1.0,
+    "habichuelas_blancas": 1.0,
+    "sal": 0
+   },
+   "estado": "exacta",
+   "hallazgos": [
+    {
+     "alimento": "Sal",
+     "detalle": "comprado y ningún paso lo nombra",
+     "ingredient_id": "sal",
+     "tipo": "sin_uso_condimento"
+    }
+   ],
+   "pasos_hash": "c3d432015496fff4",
+   "usa": [
+    [
+     {
+      "fraccion": 1.0,
+      "ingredient_id": "cebolla"
+     },
+     {
+      "fraccion": 1.0,
+      "ingredient_id": "ajo"
+     },
+     {
+      "fraccion": 1.0,
+      "ingredient_id": "aceite_de_oliva"
+     }
+    ],
+    [
+     {
+      "fraccion": 1.0,
+      "ingredient_id": "habichuelas_blancas"
+     },
+     {
+      "fraccion": 1.0,
+      "ingredient_id": "auyama"
+     }
+    ],
+    [
+     {
+      "fraccion": 1.0,
+      "ingredient_id": "arroz_blanco"
+     }
+    ],
+    []
+   ]
+  },
+  "tpl_53d21a09b17f": {
+   "cuentas": {
+    "casabe": 1.0,
+    "cebolla": 1.0,
+    "pechuga_de_pollo": 1.0
+   },
+   "estado": "exacta",
+   "hallazgos": [],
+   "pasos_hash": "59c9bda24ef50814",
+   "usa": [
+    [
+     {
+      "fraccion": 1.0,
+      "ingredient_id": "pechuga_de_pollo"
+     }
+    ],
+    [],
+    [
+     {
+      "fraccion": 1.0,
+      "ingredient_id": "cebolla"
+     }
+    ],
+    [
+     {
+      "fraccion": 1.0,
+      "ingredient_id": "casabe"
+     }
+    ]
+   ]
+  },
+  "tpl_54002908e67c": {
+   "cuentas": {
+    "batata": 1.0,
+    "espinacas": 1.0,
+    "pechuga_de_pollo": 1.0,
+    "queso_blanco": 1.0
+   },
+   "estado": "exacta",
+   "hallazgos": [],
+   "pasos_hash": "7311e64510b6d9a3",
+   "usa": [
+    [],
+    [
+     {
+      "fraccion": 1.0,
+      "ingredient_id": "batata"
+     }
+    ],
+    [
+     {
+      "fraccion": 1.0,
+      "ingredient_id": "espinacas"
+     }
+    ],
+    [
+     {
+      "fraccion": 1.0,
+      "ingredient_id": "pechuga_de_pollo"
+     },
+     {
+      "fraccion": 1.0,
+      "ingredient_id": "queso_blanco"
+     }
+    ],
+    []
+   ]
+  },
+  "tpl_553af971a46c": {
+   "cuentas": {
+    "aceite_de_oliva": 1.0,
+    "atun_en_agua": 1.0,
+    "batata": 1.0,
+    "cebolla": 1.0
+   },
+   "estado": "estimada",
+   "hallazgos": [],
+   "pasos_hash": "7bcd301a642d1d27",
+   "usa": [
+    [
+     {
+      "fraccion": 1.0,
+      "ingredient_id": "batata"
+     },
+     {
+      "estimada": true,
+      "fraccion": 0.5,
+      "ingredient_id": "atun_en_agua"
+     }
+    ],
+    [
+     {
+      "fraccion": 1.0,
+      "ingredient_id": "cebolla"
+     }
+    ],
+    [],
+    [
+     {
+      "estimada": true,
+      "fraccion": 0.5,
+      "ingredient_id": "atun_en_agua"
+     },
+     {
+      "fraccion": 1.0,
+      "ingredient_id": "aceite_de_oliva"
+     }
+    ],
+    []
+   ]
+  },
+  "tpl_5643159717eb": {
+   "cuentas": {
+    "ajo": 1.0,
+    "arroz_blanco": 1.0,
+    "cebolla": 1.0,
+    "repollo": 1.0,
+    "salsa_de_tomate": 1.0,
+    "sardinas_en_lata": 1.0,
+    "zanahoria": 1.0
+   },
+   "estado": "exacta",
+   "hallazgos": [],
+   "pasos_hash": "b8b47ffb8967ff34",
+   "usa": [
+    [
+     {
+      "fraccion": 1.0,
+      "ingredient_id": "cebolla"
+     },
+     {
+      "fraccion": 1.0,
+      "ingredient_id": "ajo"
+     },
+     {
+      "fraccion": 1.0,
+      "ingredient_id": "repollo"
+     },
+     {
+      "fraccion": 1.0,
+      "ingredient_id": "zanahoria"
+     }
+    ],
+    [
+     {
+      "fraccion": 1.0,
+      "ingredient_id": "salsa_de_tomate"
+     }
+    ],
+    [
+     {
+      "fraccion": 1.0,
+      "ingredient_id": "arroz_blanco"
+     },
+     {
+      "fraccion": 1.0,
+      "ingredient_id": "sardinas_en_lata"
+     }
+    ],
+    [],
+    []
+   ]
+  },
+  "tpl_56a45eb82638": {
+   "cuentas": {
+    "aceite_vegetal": 1.0,
+    "aguacate": 1.0,
+    "auyama": 1.0,
+    "cebolla": 1.0,
+    "muslo_de_pollo": 1.0,
+    "name": 1.0,
+    "platano_verde": 1.0,
+    "yuca": 1.0
+   },
+   "estado": "exacta",
+   "hallazgos": [],
+   "pasos_hash": "20085bcde04a3732",
+   "usa": [
+    [
+     {
+      "fraccion": 1.0,
+      "ingredient_id": "yuca"
+     },
+     {
+      "fraccion": 1.0,
+      "ingredient_id": "platano_verde"
+     },
+     {
+      "fraccion": 1.0,
+      "ingredient_id": "auyama"
+     },
+     {
+      "fraccion": 1.0,
+      "ingredient_id": "name"
+     },
+     {
+      "fraccion": 1.0,
+      "ingredient_id": "cebolla"
+     }
+    ],
+    [
+     {
+      "fraccion": 1.0,
+      "ingredient_id": "muslo_de_pollo"
+     },
+     {
+      "fraccion": 1.0,
+      "ingredient_id": "aceite_vegetal"
+     }
+    ],
+    [],
+    [],
+    [
+     {
+      "fraccion": 1.0,
+      "ingredient_id": "aguacate"
+     }
+    ]
+   ]
+  },
+  "tpl_5719059873a3": {
+   "cuentas": {
+    "aceite_vegetal": 1.0,
+    "aji_cubanela": 1.0,
+    "ajo": 1.0,
+    "arroz_blanco": 1.0,
+    "cebolla": 1.0,
+    "cilantro": 1.0,
+    "gandules": 1.0,
+    "oregano_dominicano": 1.0,
+    "pechuga_de_pollo": 1.0,
+    "sal": 1.0,
+    "salsa_de_tomate": 1.0,
+    "tomate": 1.0
+   },
+   "estado": "estimada",
+   "hallazgos": [],
+   "pasos_hash": "6975bfe21ce38c46",
+   "usa": [
+    [
+     {
+      "fraccion": 1.0,
+      "ingredient_id": "gandules"
+     }
+    ],
+    [
+     {
+      "fraccion": 1.0,
+      "ingredient_id": "aceite_vegetal"
+     },
+     {
+      "estimada": true,
+      "fraccion": 0.5,
+      "ingredient_id": "cebolla"
+     },
+     {
+      "estimada": true,
+      "fraccion": 0.5,
+      "ingredient_id": "aji_cubanela"
+     },
+     {
+      "fraccion": 0.5,
+      "ingredient_id": "salsa_de_tomate"
+     },
+     {
+      "fraccion": 1.0,
+      "ingredient_id": "ajo"
+     },
+     {
+      "fraccion": 1.0,
+      "ingredient_id": "cilantro"
+     },
+     {
+      "fraccion": 1.0,
+      "ingredient_id": "sal"
+     },
+     {
+      "fraccion": 1.0,
+      "ingredient_id": "tomate"
+     },
+     {
+      "fraccion": 1.0,
+      "ingredient_id": "oregano_dominicano"
+     }
+    ],
+    [
+     {
+      "fraccion": 1.0,
+      "ingredient_id": "arroz_blanco"
+     },
+     {
+      "fraccion": 0.5,
+      "ingredient_id": "salsa_de_tomate"
+     }
+    ],
+    [
+     {
+      "estimada": true,
+      "fraccion": 0.5,
+      "ingredient_id": "cebolla"
+     },
+     {
+      "estimada": true,
+      "fraccion": 0.5,
+      "ingredient_id": "aji_cubanela"
+     },
+     {
+      "fraccion": 1.0,
+      "ingredient_id": "pechuga_de_pollo"
+     }
+    ],
+    []
+   ]
+  },
+  "tpl_5a72b172fb9a": {
+   "cuentas": {
+    "ajo": 1.0,
+    "arroz_blanco": 1.0,
+    "auyama": 1.0,
+    "cebolla": 1.0,
+    "garbanzos": 1.0,
+    "oregano_dominicano": 1.0
+   },
+   "estado": "estimada",
+   "hallazgos": [],
+   "pasos_hash": "c18dfc15ec0d2e6a",
+   "usa": [
+    [
+     {
+      "fraccion": 1.0,
+      "ingredient_id": "garbanzos"
+     }
+    ],
+    [],
+    [
+     {
+      "fraccion": 1.0,
+      "ingredient_id": "arroz_blanco"
+     },
+     {
+      "estimada": true,
+      "fraccion": 0.5,
+      "ingredient_id": "oregano_dominicano"
+     }
+    ],
+    [
+     {
+      "fraccion": 1.0,
+      "ingredient_id": "cebolla"
+     },
+     {
+      "fraccion": 1.0,
+      "ingredient_id": "ajo"
+     },
+     {
+      "estimada": true,
+      "fraccion": 0.5,
+      "ingredient_id": "oregano_dominicano"
+     }
+    ],
+    [
+     {
+      "fraccion": 1.0,
+      "ingredient_id": "auyama"
+     }
+    ]
+   ]
+  },
+  "tpl_5af93ae136a1": {
+   "cuentas": {
+    "canela_en_polvo": 1.0,
+    "casabe": 1.0,
+    "mantequilla_de_mani": 1.0
+   },
+   "estado": "exacta",
+   "hallazgos": [],
+   "pasos_hash": "920fb897013d585b",
+   "usa": [
+    [
+     {
+      "fraccion": 1.0,
+      "ingredient_id": "casabe"
+     }
+    ],
+    [
+     {
+      "fraccion": 1.0,
+      "ingredient_id": "mantequilla_de_mani"
+     }
+    ],
+    [
+     {
+      "fraccion": 1.0,
+      "ingredient_id": "canela_en_polvo"
+     }
+    ]
+   ]
+  },
+  "tpl_5d4995823591": {
+   "cuentas": {
+    "huevo": 1.0,
+    "queso_blanco": 1.0,
+    "yuca": 1.0
+   },
+   "estado": "exacta",
+   "hallazgos": [],
+   "pasos_hash": "5cad16775b7eb643",
+   "usa": [
+    [
+     {
+      "fraccion": 1.0,
+      "ingredient_id": "yuca"
+     }
+    ],
+    [
+     {
+      "fraccion": 1.0,
+      "ingredient_id": "huevo"
+     },
+     {
+      "fraccion": 1.0,
+      "ingredient_id": "queso_blanco"
+     }
+    ],
+    [],
+    []
+   ]
+  },
+  "tpl_5de59d1f3398": {
+   "cuentas": {
+    "aceite_de_oliva": 1.0,
+    "aceite_vegetal": 1.0,
+    "aguacate": 1.0,
+    "arroz_blanco": 1.0,
+    "cebolla": 1.0,
+    "lechuga": 1.0,
+    "limon": 1.0,
+    "pechuga_de_pollo": 1.0,
+    "sal": 1.0,
+    "tomate": 1.0
+   },
+   "estado": "estimada",
+   "hallazgos": [],
+   "pasos_hash": "3e7bfc33e75c88da",
+   "usa": [
+    [
+     {
+      "fraccion": 1.0,
+      "ingredient_id": "pechuga_de_pollo"
+     },
+     {
+      "fraccion": 1.0,
+      "ingredient_id": "aceite_vegetal"
+     },
+     {
+      "fraccion": 1.0,
+      "ingredient_id": "cebolla"
+     }
+    ],
+    [
+     {
+      "fraccion": 1.0,
+      "ingredient_id": "arroz_blanco"
+     },
+     {
+      "fraccion": 0.5,
+      "ingredient_id": "tomate"
+     },
+     {
+      "estimada": true,
+      "fraccion": 0.5,
+      "ingredient_id": "sal"
+     }
+    ],
+    [
+     {
+      "fraccion": 0.5,
+      "ingredient_id": "tomate"
+     }
+    ],
+    [
+     {
+      "estimada": true,
+      "fraccion": 1.0,
+      "ingredient_id": "lechuga"
+     },
+     {
+      "fraccion": 1.0,
+      "ingredient_id": "aceite_de_oliva"
+     },
+     {
+      "fraccion": 1.0,
+      "ingredient_id": "limon"
+     },
+     {
+      "estimada": true,
+      "fraccion": 0.5,
+      "ingredient_id": "sal"
+     }
+    ],
+    [
+     {
+      "fraccion": 1.0,
+      "ingredient_id": "aguacate"
+     }
+    ]
+   ]
+  },
+  "tpl_5e6dd4d89e2b": {
+   "cuentas": {
+    "aceite_vegetal": 1.0,
+    "huevo": 1.0,
+    "platano_maduro": 1.0,
+    "queso_blanco": 1.0
+   },
+   "estado": "estimada",
+   "hallazgos": [],
+   "pasos_hash": "4b51a0e37937bf9b",
+   "usa": [
+    [
+     {
+      "estimada": true,
+      "fraccion": 0.5,
+      "ingredient_id": "platano_maduro"
+     }
+    ],
+    [
+     {
+      "fraccion": 1.0,
+      "ingredient_id": "huevo"
+     },
+     {
+      "estimada": true,
+      "fraccion": 0.5,
+      "ingredient_id": "platano_maduro"
+     }
+    ],
+    [
+     {
+      "estimada": true,
+      "fraccion": 0.5,
+      "ingredient_id": "queso_blanco"
+     }
+    ],
+    [
+     {
+      "fraccion": 1.0,
+      "ingredient_id": "aceite_vegetal"
+     }
+    ],
+    [
+     {
+      "estimada": true,
+      "fraccion": 0.5,
+      "ingredient_id": "queso_blanco"
+     }
+    ]
+   ]
+  },
+  "tpl_5e8d9f256e18": {
+   "cuentas": {
+    "aceite_vegetal": 1.0,
+    "ajo": 1.0,
+    "bacalao": 1.0,
+    "cebolla": 1.0,
+    "name": 1.0
+   },
+   "estado": "exacta",
+   "hallazgos": [],
+   "pasos_hash": "b0038a52b2ec5126",
+   "usa": [
+    [
+     {
+      "fraccion": 1.0,
+      "ingredient_id": "bacalao"
+     }
+    ],
+    [
+     {
+      "fraccion": 1.0,
+      "ingredient_id": "name"
+     }
+    ],
+    [
+     {
+      "fraccion": 1.0,
+      "ingredient_id": "cebolla"
+     },
+     {
+      "fraccion": 1.0,
+      "ingredient_id": "ajo"
+     },
+     {
+      "fraccion": 1.0,
+      "ingredient_id": "aceite_vegetal"
+     }
+    ],
+    [],
+    []
+   ]
+  },
+  "tpl_5fb76f809c1f": {
+   "cuentas": {
+    "aceite_de_oliva": 1.0,
+    "ajo": 1.0,
+    "atun_en_agua": 1.0,
+    "cebolla": 1.0,
+    "papa": 1.0,
+    "sal": 0,
+    "zanahoria": 1.0
+   },
+   "estado": "estimada",
+   "hallazgos": [
+    {
+     "alimento": "Sal",
+     "detalle": "comprado y ningún paso lo nombra",
+     "ingredient_id": "sal",
+     "tipo": "sin_uso_condimento"
+    }
+   ],
+   "pasos_hash": "97f045fb05510579",
+   "usa": [
+    [
+     {
+      "fraccion": 1.0,
+      "ingredient_id": "papa"
+     },
+     {
+      "fraccion": 1.0,
+      "ingredient_id": "zanahoria"
+     }
+    ],
+    [
+     {
+      "fraccion": 1.0,
+      "ingredient_id": "cebolla"
+     },
+     {
+      "fraccion": 1.0,
+      "ingredient_id": "ajo"
+     },
+     {
+      "fraccion": 1.0,
+      "ingredient_id": "aceite_de_oliva"
+     }
+    ],
+    [
+     {
+      "estimada": true,
+      "fraccion": 1.0,
+      "ingredient_id": "atun_en_agua"
+     }
+    ],
+    []
+   ]
+  },
+  "tpl_605be41260e6": {
+   "cuentas": {
+    "datiles": 1.0,
+    "mani": 1.0,
+    "pasas": 1.0
+   },
+   "estado": "exacta",
+   "hallazgos": [],
+   "pasos_hash": "22a239635a1985a8",
+   "usa": [
+    [
+     {
+      "fraccion": 1.0,
+      "ingredient_id": "mani"
+     },
+     {
+      "fraccion": 1.0,
+      "ingredient_id": "pasas"
+     },
+     {
+      "fraccion": 1.0,
+      "ingredient_id": "datiles"
+     }
+    ],
+    [],
+    [],
+    [],
+    []
+   ]
+  },
+  "tpl_612f9a6638b2": {
+   "cuentas": {
+    "avena": 1.0,
+    "clara_de_huevo": 1.0,
+    "leche_descremada": 1.0
+   },
+   "estado": "exacta",
+   "hallazgos": [],
+   "pasos_hash": "184bb79d69796110",
+   "usa": [
+    [
+     {
+      "fraccion": 1.0,
+      "ingredient_id": "clara_de_huevo"
+     }
+    ],
+    [],
+    [
+     {
+      "fraccion": 1.0,
+      "ingredient_id": "leche_descremada"
+     },
+     {
+      "fraccion": 1.0,
+      "ingredient_id": "avena"
+     }
+    ],
+    []
+   ]
+  },
+  "tpl_614403a321f1": {
+   "cuentas": {
+    "harina_de_maiz_precocida": 1.0,
+    "huevo": 1.0,
+    "leche_evaporada": 1.0,
+    "queso_gouda": 1.0
+   },
+   "estado": "exacta",
+   "hallazgos": [],
+   "pasos_hash": "cc07e5da374b9015",
+   "usa": [
+    [
+     {
+      "fraccion": 1.0,
+      "ingredient_id": "queso_gouda"
+     }
+    ],
+    [
+     {
+      "fraccion": 1.0,
+      "ingredient_id": "harina_de_maiz_precocida"
+     },
+     {
+      "fraccion": 1.0,
+      "ingredient_id": "huevo"
+     },
+     {
+      "fraccion": 1.0,
+      "ingredient_id": "leche_evaporada"
+     }
+    ],
+    [],
+    []
+   ]
+  },
+  "tpl_6210ed33836b": {
+   "cuentas": {
+    "aceite_vegetal": 1.0,
+    "aji_cubanela": 1.0,
+    "ajo": 1.0,
+    "arroz_blanco": 1.0,
+    "cebolla": 1.0,
+    "filete_de_pescado_blanco": 1.0,
+    "limon": 1.0,
+    "sal": 1.0,
+    "salsa_de_tomate": 1.0,
+    "tomate": 1.0
+   },
+   "estado": "exacta",
+   "hallazgos": [],
+   "pasos_hash": "b7ef5e94dedcdfb7",
+   "usa": [
+    [
+     {
+      "fraccion": 1.0,
+      "ingredient_id": "arroz_blanco"
+     }
+    ],
+    [
+     {
+      "fraccion": 1.0,
+      "ingredient_id": "filete_de_pescado_blanco"
+     },
+     {
+      "fraccion": 0.5,
+      "ingredient_id": "ajo"
+     },
+     {
+      "fraccion": 1.0,
+      "ingredient_id": "limon"
+     },
+     {
+      "fraccion": 0.5,
+      "ingredient_id": "sal"
+     }
+    ],
+    [
+     {
+      "fraccion": 0.5,
+      "ingredient_id": "aceite_vegetal"
+     },
+     {
+      "fraccion": 1.0,
+      "ingredient_id": "cebolla"
+     },
+     {
+      "fraccion": 1.0,
+      "ingredient_id": "aji_cubanela"
+     },
+     {
+      "fraccion": 1.0,
+      "ingredient_id": "tomate"
+     },
+     {
+      "fraccion": 1.0,
+      "ingredient_id": "salsa_de_tomate"
+     },
+     {
+      "fraccion": 0.5,
+      "ingredient_id": "ajo"
+     }
+    ],
+    [
+     {
+      "fraccion": 0.5,
+      "ingredient_id": "aceite_vegetal"
+     }
+    ],
+    [
+     {
+      "fraccion": 0.5,
+      "ingredient_id": "sal"
+     }
+    ]
+   ]
+  },
+  "tpl_622910cfff4d": {
+   "cuentas": {
+    "aceite_vegetal": 1.0,
+    "aji_cubanela": 1.0,
+    "ajo": 1.0,
+    "arroz_blanco": 1.0,
+    "carne_de_res": 1.0,
+    "cebolla": 1.0,
+    "cilantro": 1.0,
+    "habichuelas_negras": 1.0,
+    "sal": 1.0,
+    "salsa_de_tomate": 1.0
+   },
+   "estado": "exacta",
+   "hallazgos": [],
+   "pasos_hash": "0f640d1f5e337d98",
+   "usa": [
+    [
+     {
+      "fraccion": 1.0,
+      "ingredient_id": "habichuelas_negras"
+     }
+    ],
+    [
+     {
+      "fraccion": 0.5,
+      "ingredient_id": "aceite_vegetal"
+     },
+     {
+      "fraccion": 0.5,
+      "ingredient_id": "cebolla"
+     },
+     {
+      "fraccion": 0.5,
+      "ingredient_id": "aji_cubanela"
+     },
+     {
+      "fraccion": 1.0,
+      "ingredient_id": "salsa_de_tomate"
+     },
+     {
+      "fraccion": 0.5,
+      "ingredient_id": "ajo"
+     },
+     {
+      "fraccion": 0.5,
+      "ingredient_id": "cilantro"
+     }
+    ],
+    [
+     {
+      "fraccion": 1.0,
+      "ingredient_id": "arroz_blanco"
+     }
+    ],
+    [
+     {
+      "fraccion": 0.5,
+      "ingredient_id": "aceite_vegetal"
+     },
+     {
+      "fraccion": 1.0,
+      "ingredient_id": "sal"
+     },
+     {
+      "fraccion": 1.0,
+      "ingredient_id": "carne_de_res"
+     }
+    ],
+    [
+     {
+      "fraccion": 0.5,
+      "ingredient_id": "cebolla"
+     },
+     {
+      "fraccion": 0.5,
+      "ingredient_id": "aji_cubanela"
+     },
+     {
+      "fraccion": 0.5,
+      "ingredient_id": "ajo"
+     },
+     {
+      "fraccion": 0.5,
+      "ingredient_id": "cilantro"
+     }
+    ]
+   ]
+  },
+  "tpl_632c903605f4": {
+   "cuentas": {
+    "aceite_vegetal": 1.0,
+    "ajo": 1.0,
+    "arroz_blanco": 1.0,
+    "cebolla": 1.0,
+    "habichuelas_negras": 1.0,
+    "huevo": 1.0
+   },
+   "estado": "estimada",
+   "hallazgos": [],
+   "pasos_hash": "a929e63ee5ef4ab6",
+   "usa": [
+    [
+     {
+      "fraccion": 1.0,
+      "ingredient_id": "habichuelas_negras"
+     }
+    ],
+    [
+     {
+      "fraccion": 1.0,
+      "ingredient_id": "cebolla"
+     },
+     {
+      "fraccion": 1.0,
+      "ingredient_id": "ajo"
+     },
+     {
+      "estimada": true,
+      "fraccion": 0.5,
+      "ingredient_id": "aceite_vegetal"
+     }
+    ],
+    [
+     {
+      "fraccion": 1.0,
+      "ingredient_id": "arroz_blanco"
+     }
+    ],
+    [
+     {
+      "fraccion": 1.0,
+      "ingredient_id": "huevo"
+     },
+     {
+      "estimada": true,
+      "fraccion": 0.5,
+      "ingredient_id": "aceite_vegetal"
+     }
+    ],
+    []
+   ]
+  },
+  "tpl_6550ab4ff97a": {
+   "cuentas": {
+    "aceite_de_oliva": 1.0,
+    "ajo": 1.0,
+    "atun_en_agua": 1.0,
+    "cebolla": 1.0,
+    "pasta_integral": 1.0
+   },
+   "estado": "exacta",
+   "hallazgos": [],
+   "pasos_hash": "f9a54f3aab342f8d",
+   "usa": [
+    [
+     {
+      "fraccion": 1.0,
+      "ingredient_id": "pasta_integral"
+     },
+     {
+      "fraccion": 1.0,
+      "ingredient_id": "atun_en_agua"
+     }
+    ],
+    [
+     {
+      "fraccion": 1.0,
+      "ingredient_id": "ajo"
+     },
+     {
+      "fraccion": 1.0,
+      "ingredient_id": "cebolla"
+     }
+    ],
+    [
+     {
+      "fraccion": 1.0,
+      "ingredient_id": "aceite_de_oliva"
+     }
+    ],
+    [],
+    []
+   ]
+  },
+  "tpl_66a7e3481abd": {
+   "cuentas": {
+    "aji_morron": 1.0,
+    "cebolla": 1.0,
+    "pechuga_de_pollo": 1.0,
+    "tortilla_integral": 1.0,
+    "zanahoria": 1.0
+   },
+   "estado": "exacta",
+   "hallazgos": [],
+   "pasos_hash": "e7955e2b1e1c990a",
+   "usa": [
+    [
+     {
+      "fraccion": 1.0,
+      "ingredient_id": "pechuga_de_pollo"
+     }
+    ],
+    [
+     {
+      "fraccion": 1.0,
+      "ingredient_id": "aji_morron"
+     },
+     {
+      "fraccion": 1.0,
+      "ingredient_id": "cebolla"
+     },
+     {
+      "fraccion": 1.0,
+      "ingredient_id": "zanahoria"
+     }
+    ],
+    [
+     {
+      "fraccion": 1.0,
+      "ingredient_id": "tortilla_integral"
+     }
+    ],
+    [],
+    []
+   ]
+  },
+  "tpl_66be00eacce3": {
+   "cuentas": {
+    "aguacate": 1.0,
+    "casabe": 1.0
+   },
+   "estado": "exacta",
+   "hallazgos": [],
+   "pasos_hash": "84927ac97d085f87",
+   "usa": [
+    [
+     {
+      "fraccion": 1.0,
+      "ingredient_id": "casabe"
+     }
+    ],
+    [
+     {
+      "fraccion": 1.0,
+      "ingredient_id": "aguacate"
+     }
+    ],
+    [],
+    []
+   ]
+  },
+  "tpl_66e61e8c795d": {
+   "cuentas": {
+    "aceite_de_oliva": 1.0,
+    "ajo": 1.0,
+    "arenque": 1.0,
+    "auyama": 1.0,
+    "cebolla": 1.0,
+    "sal": 1.0,
+    "yuca": 1.0
+   },
+   "estado": "exacta",
+   "hallazgos": [],
+   "pasos_hash": "320b18df49f01ac0",
+   "usa": [
+    [
+     {
+      "fraccion": 1.0,
+      "ingredient_id": "arenque"
+     },
+     {
+      "fraccion": 1.0,
+      "ingredient_id": "sal"
+     }
+    ],
+    [
+     {
+      "fraccion": 1.0,
+      "ingredient_id": "auyama"
+     },
+     {
+      "fraccion": 1.0,
+      "ingredient_id": "yuca"
+     }
+    ],
+    [
+     {
+      "fraccion": 1.0,
+      "ingredient_id": "cebolla"
+     },
+     {
+      "fraccion": 1.0,
+      "ingredient_id": "ajo"
+     },
+     {
+      "fraccion": 1.0,
+      "ingredient_id": "aceite_de_oliva"
+     }
+    ],
+    []
+   ]
+  },
+  "tpl_6796dd29c67e": {
+   "cuentas": {
+    "avena": 1.0,
+    "leche_de_soya": 1.0,
+    "lechosa": 1.0
+   },
+   "estado": "exacta",
+   "hallazgos": [],
+   "pasos_hash": "2cf640200501c937",
+   "usa": [
+    [
+     {
+      "fraccion": 1.0,
+      "ingredient_id": "avena"
+     }
+    ],
+    [
+     {
+      "fraccion": 1.0,
+      "ingredient_id": "lechosa"
+     }
+    ],
+    [
+     {
+      "fraccion": 1.0,
+      "ingredient_id": "leche_de_soya"
+     }
+    ],
+    [],
+    []
+   ]
+  },
+  "tpl_68e6b8cd9c7b": {
+   "cuentas": {
+    "aceite_de_oliva": 1.0,
+    "aceite_vegetal": 1.0,
+    "ajo": 1.0,
+    "arroz_blanco": 1.0,
+    "cebolla": 1.0,
+    "limon": 1.0,
+    "naranja": 1.0,
+    "oregano_dominicano": 1.0,
+    "pechuga_de_pollo": 1.0,
+    "pimienta_negra": 1.0,
+    "sal": 1.0,
+    "sazon_con_culantro_y_achiote": 1.0
+   },
+   "estado": "estimada",
+   "hallazgos": [],
+   "pasos_hash": "fac03f0f66157445",
+   "usa": [
+    [],
+    [
+     {
+      "fraccion": 1.0,
+      "ingredient_id": "pechuga_de_pollo"
+     },
+     {
+      "fraccion": 0.5,
+      "ingredient_id": "aceite_de_oliva"
+     },
+     {
+      "fraccion": 1.0,
+      "ingredient_id": "ajo"
+     },
+     {
+      "fraccion": 1.0,
+      "ingredient_id": "naranja"
+     },
+     {
+      "fraccion": 1.0,
+      "ingredient_id": "oregano_dominicano"
+     },
+     {
+      "estimada": true,
+      "fraccion": 0.5,
+      "ingredient_id": "sal"
+     },
+     {
+      "fraccion": 1.0,
+      "ingredient_id": "pimienta_negra"
+     }
+    ],
+    [
+     {
+      "fraccion": 0.5,
+      "ingredient_id": "aceite_de_oliva"
+     },
+     {
+      "fraccion": 1.0,
+      "ingredient_id": "limon"
+     }
+    ],
+    [
+     {
+      "fraccion": 1.0,
+      "ingredient_id": "cebolla"
+     },
+     {
+      "estimada": true,
+      "fraccion": 0.5,
+      "ingredient_id": "sal"
+     },
+     {
+      "fraccion": 1.0,
+      "ingredient_id": "arroz_blanco"
+     },
+     {
+      "fraccion": 1.0,
+      "ingredient_id": "aceite_vegetal"
+     },
+     {
+      "fraccion": 1.0,
+      "ingredient_id": "sazon_con_culantro_y_achiote"
+     }
+    ],
+    []
+   ]
+  },
+  "tpl_69c10af4c101": {
+   "cuentas": {
+    "aceite_vegetal": 1.0,
+    "aji_cubanela": 1.0,
+    "aji_morron": 1.0,
+    "ajo": 1.0,
+    "arroz_blanco": 1.0,
+    "berenjena": 1.0,
+    "carne_de_res_molida": 1.0,
+    "cebolla": 1.0,
+    "sal": 1.0,
+    "salsa_de_tomate": 1.0,
+    "tomate": 1.0
+   },
+   "estado": "estimada",
+   "hallazgos": [],
+   "pasos_hash": "6b836299e415503d",
+   "usa": [
+    [
+     {
+      "estimada": true,
+      "fraccion": 0.5,
+      "ingredient_id": "sal"
+     },
+     {
+      "fraccion": 1.0,
+      "ingredient_id": "arroz_blanco"
+     }
+    ],
+    [
+     {
+      "fraccion": 1.0,
+      "ingredient_id": "berenjena"
+     },
+     {
+      "fraccion": 1.0,
+      "ingredient_id": "cebolla"
+     },
+     {
+      "fraccion": 1.0,
+      "ingredient_id": "aji_cubanela"
+     },
+     {
+      "fraccion": 1.0,
+      "ingredient_id": "aji_morron"
+     },
+     {
+      "fraccion": 1.0,
+      "ingredient_id": "tomate"
+     },
+     {
+      "fraccion": 1.0,
+      "ingredient_id": "ajo"
+     }
+    ],
+    [
+     {
+      "fraccion": 1.0,
+      "ingredient_id": "aceite_vegetal"
+     },
+     {
+      "fraccion": 1.0,
+      "ingredient_id": "carne_de_res_molida"
+     }
+    ],
+    [
+     {
+      "fraccion": 1.0,
+      "ingredient_id": "salsa_de_tomate"
+     }
+    ],
+    [
+     {
+      "estimada": true,
+      "fraccion": 0.5,
+      "ingredient_id": "sal"
+     }
+    ]
+   ]
+  },
+  "tpl_69fc9be43057": {
+   "cuentas": {
+    "casabe": 1.0,
+    "queso_gouda": 1.0
+   },
+   "estado": "exacta",
+   "hallazgos": [],
+   "pasos_hash": "c60cd61960d68ba8",
+   "usa": [
+    [
+     {
+      "fraccion": 1.0,
+      "ingredient_id": "casabe"
+     }
+    ],
+    [
+     {
+      "fraccion": 1.0,
+      "ingredient_id": "queso_gouda"
+     }
+    ],
+    []
+   ]
+  },
+  "tpl_6a5089265418": {
+   "cuentas": {
+    "aceite_de_oliva": 1.0,
+    "casabe": 1.0,
+    "cebolla": 1.0,
+    "clara_de_huevo": 1.0,
+    "espinacas": 1.0,
+    "huevo": 1.0,
+    "sal": 1.0
+   },
+   "estado": "exacta",
+   "hallazgos": [],
+   "pasos_hash": "3e9cca8e245afb91",
+   "usa": [
+    [
+     {
+      "fraccion": 1.0,
+      "ingredient_id": "clara_de_huevo"
+     },
+     {
+      "fraccion": 1.0,
+      "ingredient_id": "huevo"
+     },
+     {
+      "fraccion": 1.0,
+      "ingredient_id": "espinacas"
+     },
+     {
+      "fraccion": 1.0,
+      "ingredient_id": "cebolla"
+     }
+    ],
+    [
+     {
+      "fraccion": 1.0,
+      "ingredient_id": "aceite_de_oliva"
+     }
+    ],
+    [],
+    [
+     {
+      "fraccion": 1.0,
+      "ingredient_id": "sal"
+     }
+    ],
+    [
+     {
+      "fraccion": 1.0,
+      "ingredient_id": "casabe"
+     }
+    ]
+   ]
+  },
+  "tpl_6a5fe80136a7": {
+   "cuentas": {
+    "casabe": 1.0,
+    "sardinas_en_lata": 1.0
+   },
+   "estado": "exacta",
+   "hallazgos": [],
+   "pasos_hash": "60de39de1a4dc1ba",
+   "usa": [
+    [
+     {
+      "fraccion": 1.0,
+      "ingredient_id": "sardinas_en_lata"
+     }
+    ],
+    [
+     {
+      "fraccion": 1.0,
+      "ingredient_id": "casabe"
+     }
+    ],
+    []
+   ]
+  },
+  "tpl_6a66a1dc6742": {
+   "cuentas": {
+    "auyama": 1.0,
+    "cebolla": 1.0,
+    "molondrones": 1.0,
+    "pechuga_de_pollo": 1.0,
+    "tomate": 1.0
+   },
+   "estado": "estimada",
+   "hallazgos": [],
+   "pasos_hash": "b087b92cc513e4d5",
+   "usa": [
+    [
+     {
+      "fraccion": 1.0,
+      "ingredient_id": "molondrones"
+     },
+     {
+      "estimada": true,
+      "fraccion": 0.5,
+      "ingredient_id": "tomate"
+     },
+     {
+      "estimada": true,
+      "fraccion": 0.5,
+      "ingredient_id": "cebolla"
+     },
+     {
+      "fraccion": 1.0,
+      "ingredient_id": "pechuga_de_pollo"
+     },
+     {
+      "fraccion": 1.0,
+      "ingredient_id": "auyama"
+     }
+    ],
+    [
+     {
+      "estimada": true,
+      "fraccion": 0.5,
+      "ingredient_id": "tomate"
+     },
+     {
+      "estimada": true,
+      "fraccion": 0.5,
+      "ingredient_id": "cebolla"
+     }
+    ],
+    [],
+    [],
+    []
+   ]
+  },
+  "tpl_6c4be23d3689": {
+   "cuentas": {
+    "aceite_de_oliva": 1.0,
+    "aguacate": 1.0,
+    "cebolla": 1.0,
+    "filete_de_pescado_blanco": 1.0,
+    "huevo": 1.0,
+    "lechuga": 1.0,
+    "limon": 1.0,
+    "pan_rallado": 1.0,
+    "sal": 1.0,
+    "tomate": 1.0
+   },
+   "estado": "exacta",
+   "hallazgos": [],
+   "pasos_hash": "fd612d49d21fc0a2",
+   "usa": [
+    [
+     {
+      "fraccion": 1.0,
+      "ingredient_id": "filete_de_pescado_blanco"
+     }
+    ],
+    [
+     {
+      "fraccion": 1.0,
+      "ingredient_id": "huevo"
+     },
+     {
+      "fraccion": 1.0,
+      "ingredient_id": "pan_rallado"
+     },
+     {
+      "fraccion": 0.5,
+      "ingredient_id": "limon"
+     },
+     {
+      "fraccion": 0.5,
+      "ingredient_id": "sal"
+     }
+    ],
+    [
+     {
+      "fraccion": 0.5,
+      "ingredient_id": "aceite_de_oliva"
+     }
+    ],
+    [
+     {
+      "fraccion": 1.0,
+      "ingredient_id": "lechuga"
+     },
+     {
+      "fraccion": 1.0,
+      "ingredient_id": "tomate"
+     },
+     {
+      "fraccion": 1.0,
+      "ingredient_id": "cebolla"
+     },
+     {
+      "fraccion": 1.0,
+      "ingredient_id": "aguacate"
+     }
+    ],
+    [
+     {
+      "fraccion": 0.5,
+      "ingredient_id": "aceite_de_oliva"
+     },
+     {
+      "fraccion": 0.5,
+      "ingredient_id": "limon"
+     },
+     {
+      "fraccion": 0.5,
+      "ingredient_id": "sal"
+     }
+    ]
+   ]
+  },
+  "tpl_704d1b022af5": {
+   "cuentas": {
+    "aji_cubanela": 1.0,
+    "arroz_blanco": 1.0,
+    "auyama": 1.0,
+    "cebolla": 1.0,
+    "cerdo": 1.0,
+    "habichuelas_blancas": 1.0,
+    "oregano_dominicano": 1.0
+   },
+   "estado": "exacta",
+   "hallazgos": [],
+   "pasos_hash": "79d23e82cc099ec7",
+   "usa": [
+    [
+     {
+      "fraccion": 1.0,
+      "ingredient_id": "habichuelas_blancas"
+     }
+    ],
+    [
+     {
+      "fraccion": 1.0,
+      "ingredient_id": "cerdo"
+     },
+     {
+      "fraccion": 1.0,
+      "ingredient_id": "auyama"
+     },
+     {
+      "fraccion": 1.0,
+      "ingredient_id": "cebolla"
+     },
+     {
+      "fraccion": 1.0,
+      "ingredient_id": "aji_cubanela"
+     }
+    ],
+    [],
+    [
+     {
+      "fraccion": 1.0,
+      "ingredient_id": "oregano_dominicano"
+     }
+    ],
+    [
+     {
+      "fraccion": 1.0,
+      "ingredient_id": "arroz_blanco"
+     }
+    ]
+   ]
+  },
+  "tpl_70ace44d119f": {
+   "cuentas": {
+    "avena": 1.0,
+    "guineo": 1.0,
+    "leche_de_soya": 1.0,
+    "semillas_de_chia": 1.0
+   },
+   "estado": "exacta",
+   "hallazgos": [],
+   "pasos_hash": "b7e582b76c5285f9",
+   "usa": [
+    [
+     {
+      "fraccion": 1.0,
+      "ingredient_id": "avena"
+     },
+     {
+      "fraccion": 1.0,
+      "ingredient_id": "guineo"
+     }
+    ],
+    [
+     {
+      "fraccion": 1.0,
+      "ingredient_id": "leche_de_soya"
+     }
+    ],
+    [],
+    [
+     {
+      "fraccion": 1.0,
+      "ingredient_id": "semillas_de_chia"
+     }
+    ],
+    []
+   ]
+  },
+  "tpl_72483f9afdc5": {
+   "cuentas": {
+    "aceite_vegetal": 1.0,
+    "ajo": 1.0,
+    "arroz_blanco": 1.0,
+    "cebolla": 1.0,
+    "huevo": 1.0,
+    "lentejas": 1.0
+   },
+   "estado": "exacta",
+   "hallazgos": [],
+   "pasos_hash": "21a9a650816640a1",
+   "usa": [
+    [
+     {
+      "fraccion": 1.0,
+      "ingredient_id": "lentejas"
+     }
+    ],
+    [
+     {
+      "fraccion": 1.0,
+      "ingredient_id": "cebolla"
+     },
+     {
+      "fraccion": 1.0,
+      "ingredient_id": "ajo"
+     },
+     {
+      "fraccion": 1.0,
+      "ingredient_id": "aceite_vegetal"
+     }
+    ],
+    [
+     {
+      "fraccion": 1.0,
+      "ingredient_id": "arroz_blanco"
+     }
+    ],
+    [
+     {
+      "fraccion": 1.0,
+      "ingredient_id": "huevo"
+     }
+    ],
+    []
+   ]
+  },
+  "tpl_73189bbe122d": {
+   "cuentas": {
+    "ajo": 1.0,
+    "brocoli": 1.0,
+    "limon": 1.0,
+    "tilapia": 1.0,
+    "yuca": 1.0,
+    "zanahoria": 1.0
+   },
+   "estado": "exacta",
+   "hallazgos": [],
+   "pasos_hash": "0a9de05e680800d8",
+   "usa": [
+    [
+     {
+      "fraccion": 1.0,
+      "ingredient_id": "yuca"
+     }
+    ],
+    [
+     {
+      "fraccion": 1.0,
+      "ingredient_id": "brocoli"
+     },
+     {
+      "fraccion": 1.0,
+      "ingredient_id": "zanahoria"
+     },
+     {
+      "fraccion": 1.0,
+      "ingredient_id": "ajo"
+     },
+     {
+      "fraccion": 0.5,
+      "ingredient_id": "limon"
+     }
+    ],
+    [
+     {
+      "fraccion": 1.0,
+      "ingredient_id": "tilapia"
+     }
+    ],
+    [],
+    [
+     {
+      "fraccion": 0.5,
+      "ingredient_id": "limon"
+     }
+    ]
+   ]
+  },
+  "tpl_74788cfcf505": {
+   "cuentas": {
+    "mani": 1.0,
+    "pasas": 1.0
+   },
+   "estado": "exacta",
+   "hallazgos": [],
+   "pasos_hash": "444f317a7f7a3510",
+   "usa": [
+    [
+     {
+      "fraccion": 1.0,
+      "ingredient_id": "mani"
+     }
+    ],
+    [],
+    [
+     {
+      "fraccion": 1.0,
+      "ingredient_id": "pasas"
+     }
+    ]
+   ]
+  },
+  "tpl_74e843f26583": {
+   "cuentas": {
+    "aceite_vegetal": 1.0,
+    "aji_cubanela": 1.0,
+    "aji_morron": 1.0,
+    "ajo": 1.0,
+    "arroz_blanco": 1.0,
+    "cebolla": 1.0,
+    "cilantro": 1.0,
+    "oregano_dominicano": 1.0,
+    "pechuga_de_pollo": 1.0,
+    "sal": 1.0,
+    "salsa_de_tomate": 1.0
+   },
+   "estado": "exacta",
+   "hallazgos": [],
+   "pasos_hash": "b6b7c781417bab4b",
+   "usa": [
+    [
+     {
+      "fraccion": 1.0,
+      "ingredient_id": "pechuga_de_pollo"
+     },
+     {
+      "fraccion": 1.0,
+      "ingredient_id": "oregano_dominicano"
+     },
+     {
+      "fraccion": 0.5,
+      "ingredient_id": "sal"
+     }
+    ],
+    [
+     {
+      "fraccion": 1.0,
+      "ingredient_id": "cebolla"
+     },
+     {
+      "fraccion": 1.0,
+      "ingredient_id": "aji_cubanela"
+     },
+     {
+      "fraccion": 1.0,
+      "ingredient_id": "aji_morron"
+     },
+     {
+      "fraccion": 1.0,
+      "ingredient_id": "ajo"
+     },
+     {
+      "fraccion": 1.0,
+      "ingredient_id": "aceite_vegetal"
+     }
+    ],
+    [
+     {
+      "fraccion": 0.5,
+      "ingredient_id": "cilantro"
+     },
+     {
+      "fraccion": 1.0,
+      "ingredient_id": "salsa_de_tomate"
+     }
+    ],
+    [
+     {
+      "fraccion": 1.0,
+      "ingredient_id": "arroz_blanco"
+     }
+    ],
+    [
+     {
+      "fraccion": 0.5,
+      "ingredient_id": "cilantro"
+     },
+     {
+      "fraccion": 0.5,
+      "ingredient_id": "sal"
+     }
+    ]
+   ]
+  },
+  "tpl_764a6f3da360": {
+   "cuentas": {
+    "aceite_de_oliva": 1.0,
+    "batata": 1.0,
+    "cebolla": 1.0,
+    "huevo": 1.0,
+    "queso_mozzarella": 1.0,
+    "sal": 1.0
+   },
+   "estado": "exacta",
+   "hallazgos": [],
+   "pasos_hash": "2243516ba4202f95",
+   "usa": [
+    [
+     {
+      "fraccion": 1.0,
+      "ingredient_id": "batata"
+     }
+    ],
+    [
+     {
+      "fraccion": 1.0,
+      "ingredient_id": "huevo"
+     },
+     {
+      "fraccion": 1.0,
+      "ingredient_id": "sal"
+     }
+    ],
+    [
+     {
+      "fraccion": 1.0,
+      "ingredient_id": "cebolla"
+     },
+     {
+      "fraccion": 1.0,
+      "ingredient_id": "aceite_de_oliva"
+     }
+    ],
+    [
+     {
+      "fraccion": 1.0,
+      "ingredient_id": "queso_mozzarella"
+     }
+    ]
+   ]
+  },
+  "tpl_79b30ab9873b": {
+   "cuentas": {
+    "aguacate": 1.0,
+    "casabe": 1.0,
+    "lechuga": 1.0,
+    "pechuga_de_pollo": 1.0,
+    "tomate": 1.0
+   },
+   "estado": "exacta",
+   "hallazgos": [],
+   "pasos_hash": "c1f5224a104be52b",
+   "usa": [
+    [
+     {
+      "fraccion": 1.0,
+      "ingredient_id": "pechuga_de_pollo"
+     }
+    ],
+    [
+     {
+      "fraccion": 1.0,
+      "ingredient_id": "lechuga"
+     },
+     {
+      "fraccion": 1.0,
+      "ingredient_id": "tomate"
+     }
+    ],
+    [
+     {
+      "fraccion": 1.0,
+      "ingredient_id": "aguacate"
+     }
+    ],
+    [
+     {
+      "fraccion": 1.0,
+      "ingredient_id": "casabe"
+     }
+    ],
+    []
+   ]
+  },
+  "tpl_7b598275db3c": {
+   "cuentas": {
+    "aceite_vegetal": 1.0,
+    "ajo": 1.0,
+    "batata": 1.0,
+    "edamame": 1.0,
+    "tayota": 1.0
+   },
+   "estado": "exacta",
+   "hallazgos": [],
+   "pasos_hash": "6b11d5265a742705",
+   "usa": [
+    [
+     {
+      "fraccion": 1.0,
+      "ingredient_id": "edamame"
+     },
+     {
+      "fraccion": 1.0,
+      "ingredient_id": "tayota"
+     },
+     {
+      "fraccion": 1.0,
+      "ingredient_id": "batata"
+     }
+    ],
+    [
+     {
+      "fraccion": 1.0,
+      "ingredient_id": "ajo"
+     },
+     {
+      "fraccion": 1.0,
+      "ingredient_id": "aceite_vegetal"
+     }
+    ],
+    [],
+    [],
+    []
+   ]
+  },
+  "tpl_7e0880c32de3": {
+   "cuentas": {
+    "aceite_vegetal": 1.0,
+    "arroz_blanco": 1.0,
+    "cebolla": 1.0,
+    "pechuga_de_pavo": 1.0,
+    "tomate": 1.0
+   },
+   "estado": "exacta",
+   "hallazgos": [],
+   "pasos_hash": "a51a01064260e3db",
+   "usa": [
+    [
+     {
+      "fraccion": 1.0,
+      "ingredient_id": "pechuga_de_pavo"
+     },
+     {
+      "fraccion": 1.0,
+      "ingredient_id": "cebolla"
+     },
+     {
+      "fraccion": 1.0,
+      "ingredient_id": "tomate"
+     }
+    ],
+    [
+     {
+      "fraccion": 1.0,
+      "ingredient_id": "aceite_vegetal"
+     }
+    ],
+    [],
+    [
+     {
+      "fraccion": 1.0,
+      "ingredient_id": "arroz_blanco"
+     }
+    ],
+    []
+   ]
+  },
+  "tpl_7ec10278eed6": {
+   "cuentas": {
+    "casabe": 1.0,
+    "queso_cottage": 1.0,
+    "tomate": 1.0
+   },
+   "estado": "exacta",
+   "hallazgos": [],
+   "pasos_hash": "52cfa82651df5c86",
+   "usa": [
+    [
+     {
+      "fraccion": 1.0,
+      "ingredient_id": "casabe"
+     }
+    ],
+    [
+     {
+      "fraccion": 1.0,
+      "ingredient_id": "queso_cottage"
+     },
+     {
+      "fraccion": 1.0,
+      "ingredient_id": "tomate"
+     }
+    ],
+    []
+   ]
+  },
+  "tpl_7f0b6fc54350": {
+   "cuentas": {
+    "avena": 1.0,
+    "mani": 1.0,
+    "yogurt_griego_sin_azucar": 1.0
+   },
+   "estado": "exacta",
+   "hallazgos": [],
+   "pasos_hash": "a3c8e530d458609c",
+   "usa": [
+    [
+     {
+      "fraccion": 1.0,
+      "ingredient_id": "avena"
+     }
+    ],
+    [
+     {
+      "fraccion": 1.0,
+      "ingredient_id": "mani"
+     }
+    ],
+    [
+     {
+      "fraccion": 1.0,
+      "ingredient_id": "yogurt_griego_sin_azucar"
+     }
+    ],
+    []
+   ]
+  },
+  "tpl_80abd6707331": {
+   "cuentas": {
+    "avena": 1.0,
+    "canela_en_polvo": 1.0,
+    "guineo": 1.0,
+    "huevo": 1.0,
+    "leche": 1.0
+   },
+   "estado": "exacta",
+   "hallazgos": [],
+   "pasos_hash": "c4f06e886424907b",
+   "usa": [
+    [
+     {
+      "fraccion": 1.0,
+      "ingredient_id": "guineo"
+     }
+    ],
+    [
+     {
+      "fraccion": 1.0,
+      "ingredient_id": "avena"
+     },
+     {
+      "fraccion": 1.0,
+      "ingredient_id": "huevo"
+     },
+     {
+      "fraccion": 1.0,
+      "ingredient_id": "leche"
+     },
+     {
+      "fraccion": 1.0,
+      "ingredient_id": "canela_en_polvo"
+     }
+    ],
+    [],
+    []
+   ]
+  },
+  "tpl_81b612498f83": {
+   "cuentas": {
+    "batata": 1.0,
+    "calabacin": 1.0,
+    "filete_de_pescado_blanco": 1.0,
+    "zanahoria": 1.0
+   },
+   "estado": "exacta",
+   "hallazgos": [],
+   "pasos_hash": "11c972f62c695627",
+   "usa": [
+    [
+     {
+      "fraccion": 1.0,
+      "ingredient_id": "batata"
+     }
+    ],
+    [
+     {
+      "fraccion": 1.0,
+      "ingredient_id": "zanahoria"
+     },
+     {
+      "fraccion": 1.0,
+      "ingredient_id": "calabacin"
+     }
+    ],
+    [
+     {
+      "fraccion": 1.0,
+      "ingredient_id": "filete_de_pescado_blanco"
+     }
+    ],
+    [],
+    []
+   ]
+  },
+  "tpl_81c957f0fefa": {
+   "cuentas": {
+    "aceite_de_oliva": 1.0,
+    "ajo": 1.0,
+    "auyama": 1.0,
+    "cebolla": 1.0,
+    "name": 1.0,
+    "sal": 0,
+    "soya_texturizada": 1.0
+   },
+   "estado": "exacta",
+   "hallazgos": [
+    {
+     "alimento": "Sal",
+     "detalle": "comprado y ningún paso lo nombra",
+     "ingredient_id": "sal",
+     "tipo": "sin_uso_condimento"
+    }
+   ],
+   "pasos_hash": "9e0fd20ec83337f2",
+   "usa": [
+    [
+     {
+      "fraccion": 1.0,
+      "ingredient_id": "soya_texturizada"
+     }
+    ],
+    [
+     {
+      "fraccion": 1.0,
+      "ingredient_id": "auyama"
+     },
+     {
+      "fraccion": 1.0,
+      "ingredient_id": "name"
+     }
+    ],
+    [
+     {
+      "fraccion": 1.0,
+      "ingredient_id": "cebolla"
+     },
+     {
+      "fraccion": 1.0,
+      "ingredient_id": "ajo"
+     },
+     {
+      "fraccion": 1.0,
+      "ingredient_id": "aceite_de_oliva"
+     }
+    ],
+    []
+   ]
+  },
+  "tpl_825f05f94706": {
+   "cuentas": {
+    "aceite_de_oliva": 1.0,
+    "aguacate": 1.0,
+    "bulgur": 1.0,
+    "carne_de_res_molida": 1.0,
+    "cebolla": 1.0,
+    "lechuga": 1.0,
+    "limon": 1.0,
+    "sal": 1.0,
+    "tomate": 1.0
+   },
+   "estado": "estimada",
+   "hallazgos": [],
+   "pasos_hash": "a6446482e45a1425",
+   "usa": [
+    [
+     {
+      "fraccion": 1.0,
+      "ingredient_id": "bulgur"
+     }
+    ],
+    [
+     {
+      "fraccion": 1.0,
+      "ingredient_id": "carne_de_res_molida"
+     },
+     {
+      "fraccion": 0.5,
+      "ingredient_id": "cebolla"
+     },
+     {
+      "estimada": true,
+      "fraccion": 0.5,
+      "ingredient_id": "aceite_de_oliva"
+     },
+     {
+      "fraccion": 0.5,
+      "ingredient_id": "sal"
+     }
+    ],
+    [
+     {
+      "estimada": true,
+      "fraccion": 0.5,
+      "ingredient_id": "aceite_de_oliva"
+     }
+    ],
+    [
+     {
+      "fraccion": 0.5,
+      "ingredient_id": "cebolla"
+     },
+     {
+      "fraccion": 1.0,
+      "ingredient_id": "lechuga"
+     },
+     {
+      "fraccion": 1.0,
+      "ingredient_id": "tomate"
+     },
+     {
+      "fraccion": 1.0,
+      "ingredient_id": "aguacate"
+     },
+     {
+      "fraccion": 1.0,
+      "ingredient_id": "limon"
+     },
+     {
+      "fraccion": 0.5,
+      "ingredient_id": "sal"
+     }
+    ],
+    []
+   ]
+  },
+  "tpl_828571d8bc76": {
+   "cuentas": {
+    "aceite_vegetal": 1.0,
+    "aguacate": 1.0,
+    "aji_cubanela": 1.0,
+    "arroz_blanco": 1.0,
+    "auyama": 1.0,
+    "cebolla": 1.0,
+    "habichuelas_rojas": 1.0,
+    "sal": 1.0
+   },
+   "estado": "exacta",
+   "hallazgos": [],
+   "pasos_hash": "a6d8974f75f5df09",
+   "usa": [
+    [
+     {
+      "fraccion": 1.0,
+      "ingredient_id": "habichuelas_rojas"
+     }
+    ],
+    [
+     {
+      "fraccion": 1.0,
+      "ingredient_id": "auyama"
+     },
+     {
+      "fraccion": 1.0,
+      "ingredient_id": "cebolla"
+     },
+     {
+      "fraccion": 1.0,
+      "ingredient_id": "aji_cubanela"
+     }
+    ],
+    [
+     {
+      "fraccion": 1.0,
+      "ingredient_id": "aceite_vegetal"
+     },
+     {
+      "fraccion": 1.0,
+      "ingredient_id": "sal"
+     }
+    ],
+    [
+     {
+      "fraccion": 1.0,
+      "ingredient_id": "arroz_blanco"
+     }
+    ],
+    [
+     {
+      "fraccion": 1.0,
+      "ingredient_id": "aguacate"
+     }
+    ]
+   ]
+  },
+  "tpl_8387bb4f4f31": {
+   "cuentas": {
+    "ajo": 1.0,
+    "limon": 1.0,
+    "pechuga_de_pollo": 1.0,
+    "sal": 1.0,
+    "yuca": 1.0
+   },
+   "estado": "exacta",
+   "hallazgos": [],
+   "pasos_hash": "b4b548e94ab36775",
+   "usa": [
+    [
+     {
+      "fraccion": 1.0,
+      "ingredient_id": "yuca"
+     },
+     {
+      "fraccion": 0.5,
+      "ingredient_id": "sal"
+     }
+    ],
+    [
+     {
+      "fraccion": 1.0,
+      "ingredient_id": "pechuga_de_pollo"
+     },
+     {
+      "fraccion": 1.0,
+      "ingredient_id": "limon"
+     },
+     {
+      "fraccion": 1.0,
+      "ingredient_id": "ajo"
+     },
+     {
+      "fraccion": 0.5,
+      "ingredient_id": "sal"
+     }
+    ],
+    [],
+    []
+   ]
+  },
+  "tpl_84e2b0aae017": {
+   "cuentas": {
+    "aceite_de_oliva": 1.0,
+    "aceitunas": 1.0,
+    "aji_cubanela": 1.0,
+    "aji_morron": 1.0,
+    "ajo": 1.0,
+    "bacalao": 1.0,
+    "cebolla": 1.0,
+    "papa": 1.0,
+    "salsa_de_tomate": 1.0,
+    "tomate": 1.0
+   },
+   "estado": "exacta",
+   "hallazgos": [],
+   "pasos_hash": "f62e0074238672cc",
+   "usa": [
+    [
+     {
+      "fraccion": 1.0,
+      "ingredient_id": "bacalao"
+     }
+    ],
+    [
+     {
+      "fraccion": 1.0,
+      "ingredient_id": "papa"
+     }
+    ],
+    [
+     {
+      "fraccion": 1.0,
+      "ingredient_id": "aceite_de_oliva"
+     },
+     {
+      "fraccion": 1.0,
+      "ingredient_id": "cebolla"
+     },
+     {
+      "fraccion": 1.0,
+      "ingredient_id": "aji_cubanela"
+     },
+     {
+      "fraccion": 1.0,
+      "ingredient_id": "tomate"
+     },
+     {
+      "fraccion": 1.0,
+      "ingredient_id": "salsa_de_tomate"
+     },
+     {
+      "fraccion": 1.0,
+      "ingredient_id": "ajo"
+     },
+     {
+      "fraccion": 1.0,
+      "ingredient_id": "aji_morron"
+     }
+    ],
+    [
+     {
+      "fraccion": 1.0,
+      "ingredient_id": "aceitunas"
+     }
+    ],
+    []
+   ]
+  },
+  "tpl_85f132a71e5e": {
+   "cuentas": {
+    "aceite_de_oliva": 1.0,
+    "cebolla": 1.0,
+    "garbanzos": 1.0,
+    "queso_gouda": 1.0,
+    "sal": 1.0,
+    "zanahoria": 1.0
+   },
+   "estado": "exacta",
+   "hallazgos": [],
+   "pasos_hash": "a53ee0fa66f5d885",
+   "usa": [
+    [
+     {
+      "fraccion": 1.0,
+      "ingredient_id": "garbanzos"
+     }
+    ],
+    [
+     {
+      "fraccion": 1.0,
+      "ingredient_id": "zanahoria"
+     }
+    ],
+    [
+     {
+      "fraccion": 1.0,
+      "ingredient_id": "cebolla"
+     }
+    ],
+    [
+     {
+      "fraccion": 1.0,
+      "ingredient_id": "queso_gouda"
+     },
+     {
+      "fraccion": 1.0,
+      "ingredient_id": "aceite_de_oliva"
+     },
+     {
+      "fraccion": 1.0,
+      "ingredient_id": "sal"
+     }
+    ]
+   ]
+  },
+  "tpl_86da7bdca661": {
+   "cuentas": {
+    "aceite_de_oliva": 1.0,
+    "atun_en_agua": 1.0,
+    "cebolla": 1.0,
+    "huevo": 1.0,
+    "queso_blanco": 1.0,
+    "sal": 1.0,
+    "yuca": 1.0
+   },
+   "estado": "exacta",
+   "hallazgos": [],
+   "pasos_hash": "9b9524da3e8b332f",
+   "usa": [
+    [
+     {
+      "fraccion": 1.0,
+      "ingredient_id": "yuca"
+     },
+     {
+      "fraccion": 1.0,
+      "ingredient_id": "atun_en_agua"
+     }
+    ],
+    [],
+    [
+     {
+      "fraccion": 1.0,
+      "ingredient_id": "queso_blanco"
+     },
+     {
+      "fraccion": 1.0,
+      "ingredient_id": "cebolla"
+     }
+    ],
+    [
+     {
+      "fraccion": 1.0,
+      "ingredient_id": "huevo"
+     },
+     {
+      "fraccion": 1.0,
+      "ingredient_id": "sal"
+     }
+    ],
+    [
+     {
+      "fraccion": 1.0,
+      "ingredient_id": "aceite_de_oliva"
+     }
+    ]
+   ]
+  },
+  "tpl_873b7595078a": {
+   "cuentas": {
+    "ajo": 1.0,
+    "cebolla": 1.0,
+    "chivo": 1.0,
+    "oregano_dominicano": 1.0,
+    "sal": 1.0,
+    "tomate": 1.0,
+    "yuca": 1.0
+   },
+   "estado": "estimada",
+   "hallazgos": [],
+   "pasos_hash": "f2e40b3445176c4c",
+   "usa": [
+    [
+     {
+      "fraccion": 1.0,
+      "ingredient_id": "yuca"
+     },
+     {
+      "estimada": true,
+      "fraccion": 0.5,
+      "ingredient_id": "sal"
+     }
+    ],
+    [
+     {
+      "fraccion": 1.0,
+      "ingredient_id": "chivo"
+     },
+     {
+      "fraccion": 0.5,
+      "ingredient_id": "ajo"
+     },
+     {
+      "fraccion": 1.0,
+      "ingredient_id": "oregano_dominicano"
+     },
+     {
+      "estimada": true,
+      "fraccion": 0.5,
+      "ingredient_id": "sal"
+     }
+    ],
+    [
+     {
+      "fraccion": 1.0,
+      "ingredient_id": "tomate"
+     },
+     {
+      "estimada": true,
+      "fraccion": 1.0,
+      "ingredient_id": "cebolla"
+     },
+     {
+      "fraccion": 0.5,
+      "ingredient_id": "ajo"
+     }
+    ],
+    [],
+    []
+   ]
+  },
+  "tpl_89c08b5a5fe2": {
+   "cuentas": {
+    "aceite_vegetal": 1.0,
+    "cebolla": 1.0,
+    "pasta_integral": 1.0,
+    "pechuga_de_pollo": 1.0,
+    "sal": 1.0,
+    "salami": 1.0,
+    "salsa_de_tomate": 1.0
+   },
+   "estado": "estimada",
+   "hallazgos": [
+    {
+     "alimento": "espaguetis",
+     "detalle": "V5 sobre la plantilla materializada: el paso lo usa pero la lista no lo trae: Sirve los espaguetis en un plato, cúbrelos con el guiso criollo de pollo y salami, y mezcla bien antes de come",
+     "tipo": "fuera_de_plantilla"
+    }
+   ],
+   "pasos_hash": "d7d7fc964703577f",
+   "usa": [
+    [
+     {
+      "fraccion": 1.0,
+      "ingredient_id": "salami"
+     },
+     {
+      "fraccion": 1.0,
+      "ingredient_id": "cebolla"
+     },
+     {
+      "fraccion": 1.0,
+      "ingredient_id": "pechuga_de_pollo"
+     }
+    ],
+    [
+     {
+      "fraccion": 1.0,
+      "ingredient_id": "aceite_vegetal"
+     }
+    ],
+    [
+     {
+      "fraccion": 1.0,
+      "ingredient_id": "salsa_de_tomate"
+     },
+     {
+      "estimada": true,
+      "fraccion": 1.0,
+      "ingredient_id": "sal"
+     }
+    ],
+    [
+     {
+      "fraccion": 1.0,
+      "ingredient_id": "pasta_integral"
+     }
+    ],
+    []
+   ]
+  },
+  "tpl_8b37ecfd46e1": {
+   "cuentas": {
+    "aceite_de_oliva": 1.0,
+    "cebolla": 1.0,
+    "sal": 1.0,
+    "tilapia": 1.0,
+    "yuca": 1.0
+   },
+   "estado": "exacta",
+   "hallazgos": [],
+   "pasos_hash": "4a294fb004b3f0e5",
+   "usa": [
+    [
+     {
+      "fraccion": 1.0,
+      "ingredient_id": "yuca"
+     }
+    ],
+    [],
+    [
+     {
+      "fraccion": 1.0,
+      "ingredient_id": "tilapia"
+     },
+     {
+      "fraccion": 1.0,
+      "ingredient_id": "cebolla"
+     },
+     {
+      "fraccion": 1.0,
+      "ingredient_id": "aceite_de_oliva"
+     }
+    ],
+    [
+     {
+      "fraccion": 1.0,
+      "ingredient_id": "sal"
+     }
+    ],
+    []
+   ]
+  },
+  "tpl_8cf0f48ead58": {
+   "cuentas": {
+    "aceite_vegetal": 1.0,
+    "cebolla": 1.0,
+    "harina_de_trigo": 1.0,
+    "huevo": 1.0,
+    "pimienta_negra": 1.0,
+    "sal": 1.0
+   },
+   "estado": "estimada",
+   "hallazgos": [],
+   "pasos_hash": "a59afbeebd4354d6",
+   "usa": [
+    [
+     {
+      "fraccion": 1.0,
+      "ingredient_id": "harina_de_trigo"
+     },
+     {
+      "fraccion": 1.0,
+      "ingredient_id": "cebolla"
+     },
+     {
+      "fraccion": 0.5,
+      "ingredient_id": "sal"
+     }
+    ],
+    [],
+    [
+     {
+      "fraccion": 1.0,
+      "ingredient_id": "aceite_vegetal"
+     },
+     {
+      "estimada": true,
+      "fraccion": 0.5,
+      "ingredient_id": "pimienta_negra"
+     }
+    ],
+    [
+     {
+      "fraccion": 1.0,
+      "ingredient_id": "huevo"
+     },
+     {
+      "fraccion": 0.5,
+      "ingredient_id": "sal"
+     },
+     {
+      "estimada": true,
+      "fraccion": 0.5,
+      "ingredient_id": "pimienta_negra"
+     }
+    ],
+    []
+   ]
+  },
+  "tpl_9040bafa61f5": {
+   "cuentas": {
+    "casabe": 1.0,
+    "mantequilla_de_mani": 1.0,
+    "pasas": 1.0
+   },
+   "estado": "exacta",
+   "hallazgos": [],
+   "pasos_hash": "07aea5f9af0da27b",
+   "usa": [
+    [
+     {
+      "fraccion": 1.0,
+      "ingredient_id": "casabe"
+     }
+    ],
+    [
+     {
+      "fraccion": 1.0,
+      "ingredient_id": "mantequilla_de_mani"
+     }
+    ],
+    [
+     {
+      "fraccion": 1.0,
+      "ingredient_id": "pasas"
+     }
+    ]
+   ]
+  },
+  "tpl_9215d0ae51f0": {
+   "cuentas": {
+    "avena": 1.0,
+    "canela_en_polvo": 1.0,
+    "leche": 1.0
+   },
+   "estado": "exacta",
+   "hallazgos": [],
+   "pasos_hash": "566dbcfb5e69e3ed",
+   "usa": [
+    [
+     {
+      "fraccion": 1.0,
+      "ingredient_id": "leche"
+     }
+    ],
+    [
+     {
+      "fraccion": 1.0,
+      "ingredient_id": "avena"
+     },
+     {
+      "fraccion": 1.0,
+      "ingredient_id": "canela_en_polvo"
+     }
+    ],
+    [],
+    [],
+    []
+   ]
+  },
+  "tpl_935114dfdb86": {
+   "cuentas": {
+    "aji_morron": 1.0,
+    "berenjena": 1.0,
+    "calabacin": 1.0,
+    "cebolla": 1.0,
+    "huevo": 1.0,
+    "tomate": 1.0
+   },
+   "estado": "exacta",
+   "hallazgos": [],
+   "pasos_hash": "5c56ea8e3e42ac28",
+   "usa": [
+    [
+     {
+      "fraccion": 1.0,
+      "ingredient_id": "berenjena"
+     },
+     {
+      "fraccion": 1.0,
+      "ingredient_id": "calabacin"
+     },
+     {
+      "fraccion": 1.0,
+      "ingredient_id": "tomate"
+     },
+     {
+      "fraccion": 1.0,
+      "ingredient_id": "cebolla"
+     },
+     {
+      "fraccion": 1.0,
+      "ingredient_id": "aji_morron"
+     }
+    ],
+    [],
+    [],
+    [],
+    [
+     {
+      "fraccion": 1.0,
+      "ingredient_id": "huevo"
+     }
+    ]
+   ]
+  },
+  "tpl_93ea58cd86ea": {
+   "cuentas": {
+    "berenjena": 1.0,
+    "carne_de_res_molida": 1.0,
+    "queso_blanco": 1.0,
+    "tomate": 1.0
+   },
+   "estado": "exacta",
+   "hallazgos": [],
+   "pasos_hash": "3863377084a9d279",
+   "usa": [
+    [
+     {
+      "fraccion": 1.0,
+      "ingredient_id": "berenjena"
+     }
+    ],
+    [
+     {
+      "fraccion": 1.0,
+      "ingredient_id": "tomate"
+     }
+    ],
+    [
+     {
+      "fraccion": 1.0,
+      "ingredient_id": "carne_de_res_molida"
+     }
+    ],
+    [
+     {
+      "fraccion": 1.0,
+      "ingredient_id": "queso_blanco"
+     }
+    ]
+   ]
+  },
+  "tpl_94a2926bbb86": {
+   "cuentas": {
+    "aceite_de_oliva": 1.0,
+    "ajo": 1.0,
+    "arroz_blanco": 1.0,
+    "cebolla": 1.0,
+    "lentejas": 1.0,
+    "queso_gouda": 1.0,
+    "sal": 0
+   },
+   "estado": "exacta",
+   "hallazgos": [
+    {
+     "alimento": "Sal",
+     "detalle": "comprado y ningún paso lo nombra",
+     "ingredient_id": "sal",
+     "tipo": "sin_uso_condimento"
+    }
+   ],
+   "pasos_hash": "9a44c39926b9d195",
+   "usa": [
+    [
+     {
+      "fraccion": 1.0,
+      "ingredient_id": "lentejas"
+     }
+    ],
+    [
+     {
+      "fraccion": 1.0,
+      "ingredient_id": "cebolla"
+     },
+     {
+      "fraccion": 1.0,
+      "ingredient_id": "ajo"
+     },
+     {
+      "fraccion": 1.0,
+      "ingredient_id": "aceite_de_oliva"
+     }
+    ],
+    [
+     {
+      "fraccion": 1.0,
+      "ingredient_id": "arroz_blanco"
+     }
+    ],
+    [
+     {
+      "fraccion": 1.0,
+      "ingredient_id": "queso_gouda"
+     }
+    ]
+   ]
+  },
+  "tpl_9549277f4d35": {
+   "cuentas": {
+    "aceite_de_oliva": 1.0,
+    "harina_de_maiz_precocida": 1.0,
+    "huevo": 1.0,
+    "queso_cheddar": 1.0,
+    "sal": 1.0
+   },
+   "estado": "exacta",
+   "hallazgos": [],
+   "pasos_hash": "5f0b3ca65bfe81b5",
+   "usa": [
+    [
+     {
+      "fraccion": 1.0,
+      "ingredient_id": "harina_de_maiz_precocida"
+     },
+     {
+      "fraccion": 1.0,
+      "ingredient_id": "sal"
+     }
+    ],
+    [
+     {
+      "fraccion": 1.0,
+      "ingredient_id": "queso_cheddar"
+     },
+     {
+      "fraccion": 1.0,
+      "ingredient_id": "huevo"
+     }
+    ],
+    [
+     {
+      "fraccion": 1.0,
+      "ingredient_id": "aceite_de_oliva"
+     }
+    ],
+    []
+   ]
+  },
+  "tpl_9af337536c6f": {
+   "cuentas": {
+    "guineo": 1.0,
+    "mani": 1.0,
+    "yogurt_griego_sin_azucar": 1.0
+   },
+   "estado": "exacta",
+   "hallazgos": [],
+   "pasos_hash": "3ccacbd52c7473c8",
+   "usa": [
+    [
+     {
+      "fraccion": 1.0,
+      "ingredient_id": "guineo"
+     }
+    ],
+    [
+     {
+      "fraccion": 1.0,
+      "ingredient_id": "mani"
+     }
+    ],
+    [
+     {
+      "fraccion": 1.0,
+      "ingredient_id": "yogurt_griego_sin_azucar"
+     }
+    ],
+    [],
+    []
+   ]
+  },
+  "tpl_9d2e0c9c7362": {
+   "cuentas": {
+    "huevo": 1.0,
+    "queso_blanco": 1.0,
+    "yuca": 1.0
+   },
+   "estado": "estimada",
+   "hallazgos": [],
+   "pasos_hash": "452132b730068b0c",
+   "usa": [
+    [
+     {
+      "fraccion": 1.0,
+      "ingredient_id": "yuca"
+     }
+    ],
+    [
+     {
+      "estimada": true,
+      "fraccion": 0.5,
+      "ingredient_id": "queso_blanco"
+     },
+     {
+      "fraccion": 0.5,
+      "ingredient_id": "huevo"
+     }
+    ],
+    [
+     {
+      "estimada": true,
+      "fraccion": 0.5,
+      "ingredient_id": "queso_blanco"
+     }
+    ],
+    [
+     {
+      "fraccion": 0.5,
+      "ingredient_id": "huevo"
+     }
+    ]
+   ]
+  },
+  "tpl_9dc9eb01b21f": {
+   "cuentas": {
+    "aceite_vegetal": 1.0,
+    "harina_de_trigo": 1.0,
+    "oregano_dominicano": 1.0,
+    "pechuga_de_pollo": 1.0,
+    "platano_verde": 1.0
+   },
+   "estado": "exacta",
+   "hallazgos": [],
+   "pasos_hash": "3b5a93963fc4b986",
+   "usa": [
+    [
+     {
+      "fraccion": 1.0,
+      "ingredient_id": "pechuga_de_pollo"
+     },
+     {
+      "fraccion": 1.0,
+      "ingredient_id": "oregano_dominicano"
+     },
+     {
+      "fraccion": 0.5,
+      "ingredient_id": "aceite_vegetal"
+     }
+    ],
+    [
+     {
+      "fraccion": 1.0,
+      "ingredient_id": "platano_verde"
+     },
+     {
+      "fraccion": 0.5,
+      "ingredient_id": "aceite_vegetal"
+     }
+    ],
+    [
+     {
+      "fraccion": 1.0,
+      "ingredient_id": "harina_de_trigo"
+     }
+    ],
+    []
+   ]
+  },
+  "tpl_9ed36d60084e": {
+   "cuentas": {
+    "bulgur": 1.0,
+    "canela_en_polvo": 1.0,
+    "leche": 1.0
+   },
+   "estado": "exacta",
+   "hallazgos": [],
+   "pasos_hash": "29cd6c762a793d96",
+   "usa": [
+    [
+     {
+      "fraccion": 1.0,
+      "ingredient_id": "bulgur"
+     }
+    ],
+    [],
+    [
+     {
+      "fraccion": 1.0,
+      "ingredient_id": "leche"
+     }
+    ],
+    [
+     {
+      "fraccion": 1.0,
+      "ingredient_id": "canela_en_polvo"
+     }
+    ]
+   ]
+  },
+  "tpl_9f6b1a0d11df": {
+   "cuentas": {
+    "aceite_vegetal": 1.0,
+    "casabe": 1.0,
+    "huevo": 1.0,
+    "queso_gouda": 1.0
+   },
+   "estado": "exacta",
+   "hallazgos": [],
+   "pasos_hash": "58a4ff168bbf464b",
+   "usa": [
+    [
+     {
+      "fraccion": 1.0,
+      "ingredient_id": "casabe"
+     },
+     {
+      "fraccion": 1.0,
+      "ingredient_id": "huevo"
+     },
+     {
+      "fraccion": 1.0,
+      "ingredient_id": "queso_gouda"
+     }
+    ],
+    [
+     {
+      "fraccion": 1.0,
+      "ingredient_id": "aceite_vegetal"
+     }
+    ],
+    [],
+    [],
+    []
+   ]
+  },
+  "tpl_a22edb563af4": {
+   "cuentas": {
+    "aceite_vegetal": 1.0,
+    "aji_cubanela": 1.0,
+    "aji_morron": 1.0,
+    "ajo": 1.0,
+    "carne_de_res": 1.0,
+    "cebolla": 1.0,
+    "leche": 1.0,
+    "mantequilla": 1.0,
+    "papa": 1.0,
+    "pimienta_negra": 1.0,
+    "sal": 1.0,
+    "salsa_de_tomate": 1.0,
+    "tomate": 1.0
+   },
+   "estado": "estimada",
+   "hallazgos": [],
+   "pasos_hash": "c6b41e0b37c28e5d",
+   "usa": [
+    [
+     {
+      "estimada": true,
+      "fraccion": 0.5,
+      "ingredient_id": "carne_de_res"
+     },
+     {
+      "fraccion": 1.0,
+      "ingredient_id": "aceite_vegetal"
+     },
+     {
+      "fraccion": 1.0,
+      "ingredient_id": "sal"
+     },
+     {
+      "fraccion": 1.0,
+      "ingredient_id": "pimienta_negra"
+     }
+    ],
+    [
+     {
+      "fraccion": 1.0,
+      "ingredient_id": "cebolla"
+     },
+     {
+      "fraccion": 1.0,
+      "ingredient_id": "aji_cubanela"
+     },
+     {
+      "fraccion": 1.0,
+      "ingredient_id": "tomate"
+     },
+     {
+      "fraccion": 1.0,
+      "ingredient_id": "salsa_de_tomate"
+     },
+     {
+      "fraccion": 1.0,
+      "ingredient_id": "ajo"
+     },
+     {
+      "fraccion": 1.0,
+      "ingredient_id": "aji_morron"
+     }
+    ],
+    [],
+    [
+     {
+      "fraccion": 1.0,
+      "ingredient_id": "papa"
+     }
+    ],
+    [
+     {
+      "estimada": true,
+      "fraccion": 0.5,
+      "ingredient_id": "carne_de_res"
+     },
+     {
+      "fraccion": 1.0,
+      "ingredient_id": "leche"
+     },
+     {
+      "fraccion": 1.0,
+      "ingredient_id": "mantequilla"
+     }
+    ]
+   ]
+  },
+  "tpl_a3e569b8e323": {
+   "cuentas": {
+    "ajo": 1.0,
+    "atun_en_agua": 0.9999,
+    "cebolla": 1.0,
+    "oregano_dominicano": 1.0,
+    "pasta_integral": 1.0,
+    "salsa_de_tomate": 1.0
+   },
+   "estado": "estimada",
+   "hallazgos": [],
+   "pasos_hash": "473f6fc3f9b2f3c0",
+   "usa": [
+    [
+     {
+      "fraccion": 1.0,
+      "ingredient_id": "pasta_integral"
+     },
+     {
+      "estimada": true,
+      "fraccion": 0.3333,
+      "ingredient_id": "atun_en_agua"
+     }
+    ],
+    [
+     {
+      "estimada": true,
+      "fraccion": 0.3333,
+      "ingredient_id": "atun_en_agua"
+     },
+     {
+      "estimada": true,
+      "fraccion": 1.0,
+      "ingredient_id": "cebolla"
+     },
+     {
+      "fraccion": 1.0,
+      "ingredient_id": "ajo"
+     }
+    ],
+    [
+     {
+      "estimada": true,
+      "fraccion": 0.3333,
+      "ingredient_id": "atun_en_agua"
+     },
+     {
+      "fraccion": 1.0,
+      "ingredient_id": "salsa_de_tomate"
+     },
+     {
+      "fraccion": 1.0,
+      "ingredient_id": "oregano_dominicano"
+     }
+    ],
+    [],
+    []
+   ]
+  },
+  "tpl_a541f5a55786": {
+   "cuentas": {
+    "batata": 1.0,
+    "harina_de_trigo": 1.0,
+    "huevo": 1.0,
+    "leche": 1.0
+   },
+   "estado": "exacta",
+   "hallazgos": [],
+   "pasos_hash": "4ffc14df6a6c31df",
+   "usa": [
+    [
+     {
+      "fraccion": 1.0,
+      "ingredient_id": "batata"
+     }
+    ],
+    [
+     {
+      "fraccion": 1.0,
+      "ingredient_id": "harina_de_trigo"
+     },
+     {
+      "fraccion": 1.0,
+      "ingredient_id": "huevo"
+     },
+     {
+      "fraccion": 1.0,
+      "ingredient_id": "leche"
+     }
+    ],
+    [],
+    [],
+    []
+   ]
+  },
+  "tpl_a7799418aa9c": {
+   "cuentas": {
+    "aceite_de_oliva": 1.0,
+    "batata": 1.0,
+    "limon": 1.0,
+    "muslo_de_pollo": 1.0,
+    "repollo": 1.0,
+    "zanahoria": 1.0
+   },
+   "estado": "revisar",
+   "hallazgos": [
+    {
+     "alimento": "Aceite de oliva",
+     "detalle": "«el resto» / «la otra mitad» aparece dos veces: la receta reparte más de lo que compra",
+     "ingredient_id": "aceite_de_oliva",
+     "tipo": "sobre_asignado"
+    }
+   ],
+   "pasos_hash": "3009649499fb75b9",
+   "usa": [
+    [
+     {
+      "estimada": true,
+      "fraccion": 0.5,
+      "ingredient_id": "muslo_de_pollo"
+     },
+     {
+      "estimada": true,
+      "fraccion": 0.5,
+      "ingredient_id": "batata"
+     }
+    ],
+    [
+     {
+      "fraccion": 0.5,
+      "ingredient_id": "limon"
+     },
+     {
+      "fraccion": 1.0,
+      "ingredient_id": "aceite_de_oliva"
+     }
+    ],
+    [],
+    [
+     {
+      "estimada": true,
+      "fraccion": 0.5,
+      "ingredient_id": "muslo_de_pollo"
+     },
+     {
+      "estimada": true,
+      "fraccion": 0.5,
+      "ingredient_id": "batata"
+     },
+     {
+      "fraccion": 1.0,
+      "ingredient_id": "repollo"
+     },
+     {
+      "fraccion": 1.0,
+      "ingredient_id": "zanahoria"
+     },
+     {
+      "fraccion": 0.5,
+      "ingredient_id": "limon"
+     }
+    ]
+   ]
+  },
+  "tpl_af7f6c3725a6": {
+   "cuentas": {
+    "atun_en_agua": 1.0,
+    "casabe": 1.0,
+    "cebolla": 1.0
+   },
+   "estado": "exacta",
+   "hallazgos": [],
+   "pasos_hash": "88ec47c02b90afdc",
+   "usa": [
+    [
+     {
+      "fraccion": 1.0,
+      "ingredient_id": "atun_en_agua"
+     }
+    ],
+    [
+     {
+      "fraccion": 1.0,
+      "ingredient_id": "cebolla"
+     }
+    ],
+    [
+     {
+      "fraccion": 1.0,
+      "ingredient_id": "casabe"
+     }
+    ]
+   ]
+  },
+  "tpl_b1c65afb99c6": {
+   "cuentas": {
+    "oregano_dominicano": 1.0,
+    "queso_blanco": 1.0,
+    "tomate": 1.0
+   },
+   "estado": "exacta",
+   "hallazgos": [],
+   "pasos_hash": "60de82763c6b2ddc",
+   "usa": [
+    [
+     {
+      "fraccion": 1.0,
+      "ingredient_id": "queso_blanco"
+     },
+     {
+      "fraccion": 1.0,
+      "ingredient_id": "tomate"
+     }
+    ],
+    [],
+    [
+     {
+      "fraccion": 1.0,
+      "ingredient_id": "oregano_dominicano"
+     }
+    ],
+    []
+   ]
+  },
+  "tpl_b29321fc8917": {
+   "cuentas": {
+    "guineo": 1.0,
+    "yogurt_griego_sin_azucar": 1.0
+   },
+   "estado": "exacta",
+   "hallazgos": [],
+   "pasos_hash": "c6c1cb5310fe8a3b",
+   "usa": [
+    [
+     {
+      "fraccion": 1.0,
+      "ingredient_id": "guineo"
+     }
+    ],
+    [
+     {
+      "fraccion": 1.0,
+      "ingredient_id": "yogurt_griego_sin_azucar"
+     }
+    ],
+    []
+   ]
+  },
+  "tpl_b325a36ea98c": {
+   "cuentas": {
+    "aji_morron": 1.0,
+    "cebolla": 1.0,
+    "pechuga_de_pollo": 1.0,
+    "sal": 1.0,
+    "yuca": 1.0
+   },
+   "estado": "estimada",
+   "hallazgos": [],
+   "pasos_hash": "d7e644597fd61615",
+   "usa": [
+    [
+     {
+      "fraccion": 1.0,
+      "ingredient_id": "yuca"
+     }
+    ],
+    [
+     {
+      "fraccion": 1.0,
+      "ingredient_id": "pechuga_de_pollo"
+     },
+     {
+      "estimada": true,
+      "fraccion": 0.5,
+      "ingredient_id": "aji_morron"
+     },
+     {
+      "estimada": true,
+      "fraccion": 0.5,
+      "ingredient_id": "cebolla"
+     },
+     {
+      "fraccion": 0.5,
+      "ingredient_id": "sal"
+     }
+    ],
+    [],
+    [
+     {
+      "estimada": true,
+      "fraccion": 0.5,
+      "ingredient_id": "aji_morron"
+     },
+     {
+      "estimada": true,
+      "fraccion": 0.5,
+      "ingredient_id": "cebolla"
+     },
+     {
+      "fraccion": 0.5,
+      "ingredient_id": "sal"
+     }
+    ]
+   ]
+  },
+  "tpl_b3f1667b881c": {
+   "cuentas": {
+    "aceite_vegetal": 1.0,
+    "arroz_blanco": 1.0,
+    "auyama": 1.0,
+    "cebolla": 1.0,
+    "habichuelas_rojas": 1.0,
+    "huevo": 1.0
+   },
+   "estado": "exacta",
+   "hallazgos": [],
+   "pasos_hash": "97f1a5f14f02d43c",
+   "usa": [
+    [
+     {
+      "fraccion": 1.0,
+      "ingredient_id": "habichuelas_rojas"
+     }
+    ],
+    [
+     {
+      "fraccion": 1.0,
+      "ingredient_id": "auyama"
+     },
+     {
+      "fraccion": 1.0,
+      "ingredient_id": "cebolla"
+     }
+    ],
+    [
+     {
+      "fraccion": 1.0,
+      "ingredient_id": "arroz_blanco"
+     }
+    ],
+    [
+     {
+      "fraccion": 1.0,
+      "ingredient_id": "huevo"
+     },
+     {
+      "fraccion": 1.0,
+      "ingredient_id": "aceite_vegetal"
+     }
+    ],
+    []
+   ]
+  },
+  "tpl_b4a2079731a8": {
+   "cuentas": {
+    "batata": 1.0,
+    "huevo": 1.0
+   },
+   "estado": "exacta",
+   "hallazgos": [],
+   "pasos_hash": "3c265f56cc9c4b15",
+   "usa": [
+    [
+     {
+      "fraccion": 1.0,
+      "ingredient_id": "batata"
+     }
+    ],
+    [],
+    [
+     {
+      "fraccion": 1.0,
+      "ingredient_id": "huevo"
+     }
+    ],
+    []
+   ]
+  },
+  "tpl_b51afa741532": {
+   "cuentas": {
+    "aceite_de_oliva": 1.0,
+    "ajo": 1.0,
+    "filete_de_pescado_blanco": 1.0,
+    "yuca": 1.0
+   },
+   "estado": "exacta",
+   "hallazgos": [],
+   "pasos_hash": "987d90ccab2edc7a",
+   "usa": [
+    [
+     {
+      "fraccion": 1.0,
+      "ingredient_id": "yuca"
+     }
+    ],
+    [
+     {
+      "fraccion": 0.5,
+      "ingredient_id": "ajo"
+     }
+    ],
+    [
+     {
+      "fraccion": 1.0,
+      "ingredient_id": "filete_de_pescado_blanco"
+     },
+     {
+      "fraccion": 0.5,
+      "ingredient_id": "ajo"
+     }
+    ],
+    [
+     {
+      "fraccion": 0.5,
+      "ingredient_id": "aceite_de_oliva"
+     }
+    ],
+    [
+     {
+      "fraccion": 0.5,
+      "ingredient_id": "aceite_de_oliva"
+     }
+    ]
+   ]
+  },
+  "tpl_b5e2e4716226": {
+   "cuentas": {
+    "casabe": 1.0,
+    "manzana": 1.0,
+    "queso_gouda": 1.0
+   },
+   "estado": "exacta",
+   "hallazgos": [],
+   "pasos_hash": "ede42ca2bbb8e544",
+   "usa": [
+    [
+     {
+      "fraccion": 1.0,
+      "ingredient_id": "manzana"
+     }
+    ],
+    [
+     {
+      "fraccion": 1.0,
+      "ingredient_id": "queso_gouda"
+     }
+    ],
+    [
+     {
+      "fraccion": 1.0,
+      "ingredient_id": "casabe"
+     }
+    ],
+    []
+   ]
+  },
+  "tpl_b83a2e9e039a": {
+   "cuentas": {
+    "aguacate": 1.0,
+    "huevo": 1.0,
+    "sal": 1.0
+   },
+   "estado": "exacta",
+   "hallazgos": [],
+   "pasos_hash": "56c81d952ef8270f",
+   "usa": [
+    [
+     {
+      "fraccion": 1.0,
+      "ingredient_id": "huevo"
+     }
+    ],
+    [],
+    [
+     {
+      "fraccion": 1.0,
+      "ingredient_id": "aguacate"
+     }
+    ],
+    [
+     {
+      "fraccion": 1.0,
+      "ingredient_id": "sal"
+     }
+    ]
+   ]
+  },
+  "tpl_b991edb7ec87": {
+   "cuentas": {
+    "avena": 1.0,
+    "clara_de_huevo": 1.0,
+    "leche_descremada": 1.0,
+    "mani": 1.0
+   },
+   "estado": "exacta",
+   "hallazgos": [],
+   "pasos_hash": "9cae52aeae6733b6",
+   "usa": [
+    [
+     {
+      "fraccion": 1.0,
+      "ingredient_id": "avena"
+     },
+     {
+      "fraccion": 1.0,
+      "ingredient_id": "leche_descremada"
+     }
+    ],
+    [],
+    [
+     {
+      "fraccion": 1.0,
+      "ingredient_id": "clara_de_huevo"
+     }
+    ],
+    [
+     {
+      "fraccion": 1.0,
+      "ingredient_id": "mani"
+     }
+    ]
+   ]
+  },
+  "tpl_b9efc5243720": {
+   "cuentas": {
+    "carne_de_res_molida": 1.0,
+    "cebolla": 1.0,
+    "platano_maduro": 1.0,
+    "queso_blanco": 1.0
+   },
+   "estado": "estimada",
+   "hallazgos": [],
+   "pasos_hash": "64aecaa27ca4a2b9",
+   "usa": [
+    [],
+    [
+     {
+      "estimada": true,
+      "fraccion": 0.5,
+      "ingredient_id": "platano_maduro"
+     }
+    ],
+    [
+     {
+      "fraccion": 1.0,
+      "ingredient_id": "carne_de_res_molida"
+     },
+     {
+      "fraccion": 1.0,
+      "ingredient_id": "cebolla"
+     }
+    ],
+    [
+     {
+      "estimada": true,
+      "fraccion": 0.5,
+      "ingredient_id": "platano_maduro"
+     }
+    ],
+    [
+     {
+      "fraccion": 1.0,
+      "ingredient_id": "queso_blanco"
+     }
+    ]
+   ]
+  },
+  "tpl_bb94f23ab89f": {
+   "cuentas": {
+    "aceite_de_oliva": 1.0,
+    "ajo": 1.0,
+    "cebolla": 1.0,
+    "habas": 1.0,
+    "name": 1.0,
+    "sal": 0
+   },
+   "estado": "exacta",
+   "hallazgos": [
+    {
+     "alimento": "Sal",
+     "detalle": "comprado y ningún paso lo nombra",
+     "ingredient_id": "sal",
+     "tipo": "sin_uso_condimento"
+    }
+   ],
+   "pasos_hash": "f86090e2b7e782a8",
+   "usa": [
+    [
+     {
+      "fraccion": 1.0,
+      "ingredient_id": "habas"
+     }
+    ],
+    [
+     {
+      "fraccion": 1.0,
+      "ingredient_id": "name"
+     }
+    ],
+    [
+     {
+      "fraccion": 1.0,
+      "ingredient_id": "cebolla"
+     },
+     {
+      "fraccion": 1.0,
+      "ingredient_id": "ajo"
+     },
+     {
+      "fraccion": 1.0,
+      "ingredient_id": "aceite_de_oliva"
+     }
+    ],
+    []
+   ]
+  },
+  "tpl_bba3ea17162c": {
+   "cuentas": {
+    "aji_morron": 1.0,
+    "batata": 1.0,
+    "habichuelas_blancas": 1.0,
+    "name": 1.0,
+    "oregano_dominicano": 1.0
+   },
+   "estado": "exacta",
+   "hallazgos": [],
+   "pasos_hash": "006a02f64f200602",
+   "usa": [
+    [
+     {
+      "fraccion": 1.0,
+      "ingredient_id": "habichuelas_blancas"
+     }
+    ],
+    [],
+    [
+     {
+      "fraccion": 1.0,
+      "ingredient_id": "batata"
+     },
+     {
+      "fraccion": 1.0,
+      "ingredient_id": "name"
+     }
+    ],
+    [
+     {
+      "fraccion": 1.0,
+      "ingredient_id": "aji_morron"
+     },
+     {
+      "fraccion": 1.0,
+      "ingredient_id": "oregano_dominicano"
+     }
+    ],
+    []
+   ]
+  },
+  "tpl_bc12130e50e9": {
+   "cuentas": {
+    "aguacate": 1.0,
+    "huevo": 1.0,
+    "pan_integral_personal": 1.0
+   },
+   "estado": "exacta",
+   "hallazgos": [],
+   "pasos_hash": "2a81f77966963ffd",
+   "usa": [
+    [
+     {
+      "fraccion": 1.0,
+      "ingredient_id": "huevo"
+     }
+    ],
+    [],
+    [
+     {
+      "fraccion": 1.0,
+      "ingredient_id": "pan_integral_personal"
+     },
+     {
+      "fraccion": 0.5,
+      "ingredient_id": "aguacate"
+     }
+    ],
+    [],
+    [
+     {
+      "fraccion": 0.5,
+      "ingredient_id": "aguacate"
+     }
+    ]
+   ]
+  },
+  "tpl_be1fe5000900": {
+   "cuentas": {
+    "aceite_de_oliva": 1.0,
+    "aguacate": 1.0,
+    "aji_morron": 1.0,
+    "cebolla": 1.0,
+    "espinacas": 1.0,
+    "lechuga": 1.0,
+    "limon": 1.0,
+    "pechuga_de_pollo": 1.0,
+    "sal": 1.0,
+    "tomate": 1.0
+   },
+   "estado": "estimada",
+   "hallazgos": [],
+   "pasos_hash": "defa8b424a1e5789",
+   "usa": [
+    [
+     {
+      "fraccion": 1.0,
+      "ingredient_id": "pechuga_de_pollo"
+     },
+     {
+      "estimada": true,
+      "fraccion": 0.5,
+      "ingredient_id": "sal"
+     }
+    ],
+    [
+     {
+      "fraccion": 1.0,
+      "ingredient_id": "espinacas"
+     },
+     {
+      "fraccion": 1.0,
+      "ingredient_id": "aji_morron"
+     },
+     {
+      "fraccion": 0.5,
+      "ingredient_id": "cebolla"
+     },
+     {
+      "fraccion": 0.5,
+      "ingredient_id": "aceite_de_oliva"
+     }
+    ],
+    [
+     {
+      "fraccion": 1.0,
+      "ingredient_id": "lechuga"
+     },
+     {
+      "fraccion": 1.0,
+      "ingredient_id": "tomate"
+     },
+     {
+      "fraccion": 0.5,
+      "ingredient_id": "cebolla"
+     },
+     {
+      "fraccion": 1.0,
+      "ingredient_id": "aguacate"
+     }
+    ],
+    [
+     {
+      "fraccion": 0.5,
+      "ingredient_id": "aceite_de_oliva"
+     },
+     {
+      "fraccion": 1.0,
+      "ingredient_id": "limon"
+     },
+     {
+      "estimada": true,
+      "fraccion": 0.5,
+      "ingredient_id": "sal"
+     }
+    ],
+    []
+   ]
+  },
+  "tpl_bfa3fe5df63c": {
+   "cuentas": {
+    "guineo": 1.0,
+    "mantequilla_de_mani": 1.0,
+    "pan_integral_personal": 1.0
+   },
+   "estado": "exacta",
+   "hallazgos": [],
+   "pasos_hash": "4f2e88664a630a25",
+   "usa": [
+    [
+     {
+      "fraccion": 1.0,
+      "ingredient_id": "pan_integral_personal"
+     }
+    ],
+    [
+     {
+      "fraccion": 1.0,
+      "ingredient_id": "guineo"
+     }
+    ],
+    [
+     {
+      "fraccion": 0.5,
+      "ingredient_id": "mantequilla_de_mani"
+     }
+    ],
+    [],
+    [
+     {
+      "fraccion": 0.5,
+      "ingredient_id": "mantequilla_de_mani"
+     }
+    ]
+   ]
+  },
+  "tpl_c02f2e498793": {
+   "cuentas": {
+    "aceite_de_oliva": 1.0,
+    "ajo": 1.0,
+    "arroz_blanco": 1.0,
+    "auyama": 1.0,
+    "cebolla": 1.0,
+    "lentejas": 1.0,
+    "sal": 0
+   },
+   "estado": "exacta",
+   "hallazgos": [
+    {
+     "alimento": "Sal",
+     "detalle": "comprado y ningún paso lo nombra",
+     "ingredient_id": "sal",
+     "tipo": "sin_uso_condimento"
+    }
+   ],
+   "pasos_hash": "67104e958a40bcb4",
+   "usa": [
+    [
+     {
+      "fraccion": 1.0,
+      "ingredient_id": "lentejas"
+     }
+    ],
+    [
+     {
+      "fraccion": 1.0,
+      "ingredient_id": "cebolla"
+     },
+     {
+      "fraccion": 1.0,
+      "ingredient_id": "ajo"
+     },
+     {
+      "fraccion": 1.0,
+      "ingredient_id": "aceite_de_oliva"
+     }
+    ],
+    [
+     {
+      "fraccion": 1.0,
+      "ingredient_id": "auyama"
+     }
+    ],
+    [
+     {
+      "fraccion": 1.0,
+      "ingredient_id": "arroz_blanco"
+     }
+    ]
+   ]
+  },
+  "tpl_c44f3fd68b6c": {
+   "cuentas": {
+    "aceite_de_oliva": 1.0,
+    "aguacate": 1.0,
+    "cebolla": 1.0,
+    "platano_verde": 1.0,
+    "vinagre_blanco": 1.0
+   },
+   "estado": "exacta",
+   "hallazgos": [],
+   "pasos_hash": "29e6bd7e5b873647",
+   "usa": [
+    [
+     {
+      "fraccion": 1.0,
+      "ingredient_id": "platano_verde"
+     }
+    ],
+    [
+     {
+      "fraccion": 1.0,
+      "ingredient_id": "cebolla"
+     },
+     {
+      "fraccion": 1.0,
+      "ingredient_id": "vinagre_blanco"
+     }
+    ],
+    [
+     {
+      "fraccion": 1.0,
+      "ingredient_id": "aceite_de_oliva"
+     }
+    ],
+    [
+     {
+      "fraccion": 1.0,
+      "ingredient_id": "aguacate"
+     }
+    ],
+    []
+   ]
+  },
+  "tpl_c860d8960918": {
+   "cuentas": {
+    "aceite_de_oliva": 1.0,
+    "ajo": 1.0,
+    "bacalao": 1.0,
+    "cebolla": 1.0,
+    "sal": 1.0,
+    "yuca": 1.0
+   },
+   "estado": "exacta",
+   "hallazgos": [],
+   "pasos_hash": "87d4e6590ac7de4d",
+   "usa": [
+    [
+     {
+      "fraccion": 1.0,
+      "ingredient_id": "bacalao"
+     }
+    ],
+    [
+     {
+      "fraccion": 1.0,
+      "ingredient_id": "yuca"
+     },
+     {
+      "fraccion": 1.0,
+      "ingredient_id": "sal"
+     }
+    ],
+    [
+     {
+      "fraccion": 1.0,
+      "ingredient_id": "cebolla"
+     },
+     {
+      "fraccion": 1.0,
+      "ingredient_id": "ajo"
+     },
+     {
+      "fraccion": 1.0,
+      "ingredient_id": "aceite_de_oliva"
+     }
+    ],
+    []
+   ]
+  },
+  "tpl_c8dd8dab7243": {
+   "cuentas": {
+    "cebolla": 1.0,
+    "costilla_de_cerdo": 1.0,
+    "guineo_verde": 1.0,
+    "sal": 1.0,
+    "tomate": 1.0
+   },
+   "estado": "exacta",
+   "hallazgos": [],
+   "pasos_hash": "1ab1880a2a9a5508",
+   "usa": [
+    [
+     {
+      "fraccion": 1.0,
+      "ingredient_id": "guineo_verde"
+     }
+    ],
+    [
+     {
+      "fraccion": 0.5,
+      "ingredient_id": "sal"
+     },
+     {
+      "fraccion": 1.0,
+      "ingredient_id": "costilla_de_cerdo"
+     }
+    ],
+    [
+     {
+      "fraccion": 1.0,
+      "ingredient_id": "tomate"
+     },
+     {
+      "fraccion": 1.0,
+      "ingredient_id": "cebolla"
+     }
+    ],
+    [],
+    [
+     {
+      "fraccion": 0.5,
+      "ingredient_id": "sal"
+     }
+    ]
+   ]
+  },
+  "tpl_cc64fe57c76f": {
+   "cuentas": {
+    "avena": 1.0,
+    "clara_de_huevo": 1.0,
+    "guineo": 1.0,
+    "leche_descremada": 1.0
+   },
+   "estado": "exacta",
+   "hallazgos": [
+    {
+     "alimento": "cuajada",
+     "detalle": "V5 sobre la plantilla materializada: el paso lo usa pero la lista no lo trae: Escurre las claras cuajadas con un colador fino, para no perder trozos con el agua, y BOTA esa agua —no va al ",
+     "tipo": "fuera_de_plantilla"
+    }
+   ],
+   "pasos_hash": "071de18a41c66ce3",
+   "usa": [
+    [
+     {
+      "fraccion": 1.0,
+      "ingredient_id": "clara_de_huevo"
+     }
+    ],
+    [],
+    [
+     {
+      "fraccion": 1.0,
+      "ingredient_id": "leche_descremada"
+     },
+     {
+      "fraccion": 1.0,
+      "ingredient_id": "avena"
+     },
+     {
+      "fraccion": 1.0,
+      "ingredient_id": "guineo"
+     }
+    ],
+    []
+   ]
+  },
+  "tpl_cde7a339e059": {
+   "cuentas": {
+    "datiles": 1.0,
+    "semillas_de_calabaza": 1.0
+   },
+   "estado": "exacta",
+   "hallazgos": [],
+   "pasos_hash": "04ee840fcfb1099e",
+   "usa": [
+    [
+     {
+      "fraccion": 1.0,
+      "ingredient_id": "semillas_de_calabaza"
+     }
+    ],
+    [
+     {
+      "fraccion": 1.0,
+      "ingredient_id": "datiles"
+     }
+    ],
+    []
+   ]
+  },
+  "tpl_ce7ab6997bd0": {
+   "cuentas": {
+    "aceite_de_oliva": 1.0,
+    "ajo": 1.0,
+    "cerdo": 1.0,
+    "sal": 1.0,
+    "yuca": 1.0
+   },
+   "estado": "exacta",
+   "hallazgos": [],
+   "pasos_hash": "8596cdfd717c75ab",
+   "usa": [
+    [
+     {
+      "fraccion": 1.0,
+      "ingredient_id": "yuca"
+     },
+     {
+      "fraccion": 0.5,
+      "ingredient_id": "sal"
+     }
+    ],
+    [
+     {
+      "fraccion": 0.5,
+      "ingredient_id": "sal"
+     },
+     {
+      "fraccion": 1.0,
+      "ingredient_id": "ajo"
+     },
+     {
+      "fraccion": 0.5,
+      "ingredient_id": "aceite_de_oliva"
+     }
+    ],
+    [],
+    [
+     {
+      "fraccion": 0.5,
+      "ingredient_id": "aceite_de_oliva"
+     },
+     {
+      "fraccion": 1.0,
+      "ingredient_id": "cerdo"
+     }
+    ],
+    []
+   ]
+  },
+  "tpl_ce7b17d2082d": {
+   "cuentas": {
+    "aceite_de_oliva": 1.0,
+    "ajo": 1.0,
+    "cebolla": 1.0,
+    "muslo_de_pollo": 1.0,
+    "platano_verde": 1.0,
+    "tomate": 1.0
+   },
+   "estado": "exacta",
+   "hallazgos": [],
+   "pasos_hash": "f40f52baf66aee28",
+   "usa": [
+    [
+     {
+      "fraccion": 1.0,
+      "ingredient_id": "platano_verde"
+     }
+    ],
+    [
+     {
+      "fraccion": 1.0,
+      "ingredient_id": "ajo"
+     },
+     {
+      "fraccion": 0.5,
+      "ingredient_id": "aceite_de_oliva"
+     }
+    ],
+    [
+     {
+      "fraccion": 0.5,
+      "ingredient_id": "aceite_de_oliva"
+     },
+     {
+      "fraccion": 1.0,
+      "ingredient_id": "muslo_de_pollo"
+     },
+     {
+      "fraccion": 1.0,
+      "ingredient_id": "tomate"
+     },
+     {
+      "fraccion": 1.0,
+      "ingredient_id": "cebolla"
+     }
+    ],
+    [],
+    []
+   ]
+  },
+  "tpl_d04b2ac55d9c": {
+   "cuentas": {
+    "aceite_vegetal": 1.0,
+    "aji_cubanela": 1.0,
+    "ajo": 1.0,
+    "arroz_blanco": 1.0,
+    "camarones": 1.0,
+    "cebolla": 1.0,
+    "cilantro": 1.0,
+    "gandules": 1.0,
+    "sal": 1.0,
+    "salsa_de_tomate": 1.0,
+    "tomate": 1.0
+   },
+   "estado": "exacta",
+   "hallazgos": [],
+   "pasos_hash": "18378253bfdd0ac7",
+   "usa": [
+    [
+     {
+      "fraccion": 1.0,
+      "ingredient_id": "gandules"
+     }
+    ],
+    [
+     {
+      "fraccion": 1.0,
+      "ingredient_id": "cebolla"
+     },
+     {
+      "fraccion": 1.0,
+      "ingredient_id": "ajo"
+     },
+     {
+      "fraccion": 1.0,
+      "ingredient_id": "aceite_vegetal"
+     },
+     {
+      "fraccion": 1.0,
+      "ingredient_id": "aji_cubanela"
+     },
+     {
+      "fraccion": 0.5,
+      "ingredient_id": "cilantro"
+     }
+    ],
+    [
+     {
+      "fraccion": 1.0,
+      "ingredient_id": "camarones"
+     },
+     {
+      "fraccion": 1.0,
+      "ingredient_id": "tomate"
+     },
+     {
+      "fraccion": 1.0,
+      "ingredient_id": "salsa_de_tomate"
+     },
+     {
+      "fraccion": 0.5,
+      "ingredient_id": "cilantro"
+     },
+     {
+      "fraccion": 1.0,
+      "ingredient_id": "sal"
+     }
+    ],
+    [
+     {
+      "fraccion": 1.0,
+      "ingredient_id": "arroz_blanco"
+     }
+    ],
+    []
+   ]
+  },
+  "tpl_d0e90990e198": {
+   "cuentas": {
+    "aceite_vegetal": 1.0,
+    "huevo": 1.0,
+    "yuca": 1.0
+   },
+   "estado": "estimada",
+   "hallazgos": [],
+   "pasos_hash": "452ecc2f18e0428a",
+   "usa": [
+    [
+     {
+      "fraccion": 1.0,
+      "ingredient_id": "yuca"
+     }
+    ],
+    [],
+    [
+     {
+      "fraccion": 1.0,
+      "ingredient_id": "huevo"
+     }
+    ],
+    [
+     {
+      "estimada": true,
+      "fraccion": 1.0,
+      "ingredient_id": "aceite_vegetal"
+     }
+    ]
+   ]
+  },
+  "tpl_d1e664195f48": {
+   "cuentas": {
+    "aceite_vegetal": 1.0,
+    "casabe": 1.0,
+    "cebolla": 1.0,
+    "huevo": 1.0,
+    "pimienta_negra": 1.0,
+    "sal": 1.0,
+    "tomate": 1.0
+   },
+   "estado": "exacta",
+   "hallazgos": [],
+   "pasos_hash": "c4e3926ad5ed2d25",
+   "usa": [
+    [
+     {
+      "fraccion": 1.0,
+      "ingredient_id": "huevo"
+     },
+     {
+      "fraccion": 1.0,
+      "ingredient_id": "cebolla"
+     },
+     {
+      "fraccion": 1.0,
+      "ingredient_id": "sal"
+     },
+     {
+      "fraccion": 1.0,
+      "ingredient_id": "pimienta_negra"
+     },
+     {
+      "fraccion": 1.0,
+      "ingredient_id": "tomate"
+     }
+    ],
+    [
+     {
+      "fraccion": 1.0,
+      "ingredient_id": "aceite_vegetal"
+     }
+    ],
+    [],
+    [],
+    [
+     {
+      "fraccion": 1.0,
+      "ingredient_id": "casabe"
+     }
+    ]
+   ]
+  },
+  "tpl_d3094f282071": {
+   "cuentas": {
+    "aceite_de_oliva": 1.0,
+    "aguacate": 1.0,
+    "casabe": 1.0,
+    "limon": 1.0,
+    "tomate": 1.0
+   },
+   "estado": "estimada",
+   "hallazgos": [],
+   "pasos_hash": "f07110cddf3ff086",
+   "usa": [
+    [
+     {
+      "estimada": true,
+      "fraccion": 0.5,
+      "ingredient_id": "tomate"
+     },
+     {
+      "estimada": true,
+      "fraccion": 0.75,
+      "ingredient_id": "aceite_de_oliva"
+     }
+    ],
+    [
+     {
+      "fraccion": 1.0,
+      "ingredient_id": "aguacate"
+     },
+     {
+      "estimada": true,
+      "fraccion": 0.5,
+      "ingredient_id": "tomate"
+     },
+     {
+      "fraccion": 1.0,
+      "ingredient_id": "limon"
+     }
+    ],
+    [
+     {
+      "fraccion": 1.0,
+      "ingredient_id": "casabe"
+     }
+    ],
+    [],
+    [
+     {
+      "estimada": true,
+      "fraccion": 0.25,
+      "ingredient_id": "aceite_de_oliva"
+     }
+    ]
+   ]
+  },
+  "tpl_d736958d6a6a": {
+   "cuentas": {
+    "aceite_vegetal": 1.0,
+    "ajo": 1.0,
+    "arroz_blanco": 1.0,
+    "atun_en_agua": 1.0,
+    "cebolla": 1.0,
+    "repollo": 1.0,
+    "salsa_de_tomate": 1.0,
+    "zanahoria": 1.0
+   },
+   "estado": "estimada",
+   "hallazgos": [],
+   "pasos_hash": "bb9e667e68e3a776",
+   "usa": [
+    [
+     {
+      "fraccion": 1.0,
+      "ingredient_id": "arroz_blanco"
+     },
+     {
+      "estimada": true,
+      "fraccion": 0.5,
+      "ingredient_id": "atun_en_agua"
+     }
+    ],
+    [
+     {
+      "fraccion": 1.0,
+      "ingredient_id": "cebolla"
+     },
+     {
+      "fraccion": 1.0,
+      "ingredient_id": "ajo"
+     },
+     {
+      "estimada": true,
+      "fraccion": 0.5,
+      "ingredient_id": "zanahoria"
+     },
+     {
+      "fraccion": 1.0,
+      "ingredient_id": "aceite_vegetal"
+     }
+    ],
+    [
+     {
+      "estimada": true,
+      "fraccion": 0.5,
+      "ingredient_id": "atun_en_agua"
+     },
+     {
+      "fraccion": 1.0,
+      "ingredient_id": "salsa_de_tomate"
+     }
+    ],
+    [
+     {
+      "fraccion": 1.0,
+      "ingredient_id": "repollo"
+     },
+     {
+      "estimada": true,
+      "fraccion": 0.5,
+      "ingredient_id": "zanahoria"
+     }
+    ],
+    []
+   ]
+  },
+  "tpl_d7c81b115175": {
+   "cuentas": {
+    "avena": 1.0,
+    "guineo": 1.0,
+    "leche": 1.0,
+    "mani": 1.0,
+    "miel": 1.0
+   },
+   "estado": "exacta",
+   "hallazgos": [],
+   "pasos_hash": "ca38be51c075e054",
+   "usa": [
+    [
+     {
+      "fraccion": 1.0,
+      "ingredient_id": "guineo"
+     },
+     {
+      "fraccion": 1.0,
+      "ingredient_id": "avena"
+     }
+    ],
+    [
+     {
+      "fraccion": 1.0,
+      "ingredient_id": "mani"
+     }
+    ],
+    [
+     {
+      "fraccion": 1.0,
+      "ingredient_id": "leche"
+     },
+     {
+      "fraccion": 1.0,
+      "ingredient_id": "miel"
+     }
+    ],
+    []
+   ]
+  },
+  "tpl_d7d533d75564": {
+   "cuentas": {
+    "apio": 1.0,
+    "hummus": 1.0,
+    "zanahoria": 1.0
+   },
+   "estado": "exacta",
+   "hallazgos": [],
+   "pasos_hash": "4c24be3fa1f134e0",
+   "usa": [
+    [
+     {
+      "fraccion": 1.0,
+      "ingredient_id": "zanahoria"
+     },
+     {
+      "fraccion": 1.0,
+      "ingredient_id": "apio"
+     }
+    ],
+    [],
+    [
+     {
+      "fraccion": 1.0,
+      "ingredient_id": "hummus"
+     }
+    ],
+    []
+   ]
+  },
+  "tpl_d7f71546deb5": {
+   "cuentas": {
+    "avena": 1.0,
+    "leche": 1.0,
+    "lechosa": 1.0,
+    "miel": 1.0
+   },
+   "estado": "exacta",
+   "hallazgos": [],
+   "pasos_hash": "64b348b402614725",
+   "usa": [
+    [
+     {
+      "fraccion": 1.0,
+      "ingredient_id": "lechosa"
+     },
+     {
+      "fraccion": 1.0,
+      "ingredient_id": "avena"
+     }
+    ],
+    [],
+    [
+     {
+      "fraccion": 1.0,
+      "ingredient_id": "leche"
+     },
+     {
+      "fraccion": 1.0,
+      "ingredient_id": "miel"
+     }
+    ],
+    [],
+    []
+   ]
+  },
+  "tpl_dbae3c086fa2": {
+   "cuentas": {
+    "aceite_vegetal": 1.0,
+    "aji_cubanela": 1.0,
+    "ajo": 1.0,
+    "batata": 1.0,
+    "berenjena": 1.0,
+    "cebolla": 1.0,
+    "cilantro": 1.0,
+    "soya_texturizada": 1.0
+   },
+   "estado": "exacta",
+   "hallazgos": [],
+   "pasos_hash": "e807fa8545c3971e",
+   "usa": [
+    [
+     {
+      "fraccion": 1.0,
+      "ingredient_id": "soya_texturizada"
+     }
+    ],
+    [
+     {
+      "fraccion": 1.0,
+      "ingredient_id": "batata"
+     }
+    ],
+    [
+     {
+      "fraccion": 1.0,
+      "ingredient_id": "cebolla"
+     },
+     {
+      "fraccion": 1.0,
+      "ingredient_id": "aceite_vegetal"
+     },
+     {
+      "fraccion": 1.0,
+      "ingredient_id": "aji_cubanela"
+     },
+     {
+      "fraccion": 1.0,
+      "ingredient_id": "ajo"
+     },
+     {
+      "fraccion": 1.0,
+      "ingredient_id": "cilantro"
+     }
+    ],
+    [
+     {
+      "fraccion": 1.0,
+      "ingredient_id": "berenjena"
+     }
+    ],
+    []
+   ]
+  },
+  "tpl_dbf40aee1f71": {
+   "cuentas": {
+    "aceite_vegetal": 1.0,
+    "arroz_blanco": 1.0,
+    "cebolla": 1.0,
+    "filete_de_pescado_blanco": 1.0,
+    "leche_de_coco": 1.0,
+    "sal": 0.9999,
+    "tomate": 1.0
+   },
+   "estado": "estimada",
+   "hallazgos": [],
+   "pasos_hash": "6edcaa9c9a424b87",
+   "usa": [
+    [
+     {
+      "fraccion": 1.0,
+      "ingredient_id": "arroz_blanco"
+     },
+     {
+      "estimada": true,
+      "fraccion": 0.3333,
+      "ingredient_id": "sal"
+     }
+    ],
+    [
+     {
+      "fraccion": 1.0,
+      "ingredient_id": "tomate"
+     },
+     {
+      "fraccion": 1.0,
+      "ingredient_id": "cebolla"
+     },
+     {
+      "fraccion": 1.0,
+      "ingredient_id": "aceite_vegetal"
+     }
+    ],
+    [
+     {
+      "fraccion": 1.0,
+      "ingredient_id": "leche_de_coco"
+     },
+     {
+      "estimada": true,
+      "fraccion": 0.3333,
+      "ingredient_id": "sal"
+     }
+    ],
+    [
+     {
+      "fraccion": 1.0,
+      "ingredient_id": "filete_de_pescado_blanco"
+     },
+     {
+      "estimada": true,
+      "fraccion": 0.3333,
+      "ingredient_id": "sal"
+     }
+    ]
+   ]
+  },
+  "tpl_df71ba455f5e": {
+   "cuentas": {
+    "cebolla": 1.0,
+    "pechuga_de_pollo": 1.0,
+    "queso_blanco": 1.0,
+    "yuca": 1.0
+   },
+   "estado": "estimada",
+   "hallazgos": [],
+   "pasos_hash": "777a4ba23d13635a",
+   "usa": [
+    [
+     {
+      "estimada": true,
+      "fraccion": 0.5,
+      "ingredient_id": "yuca"
+     }
+    ],
+    [
+     {
+      "fraccion": 1.0,
+      "ingredient_id": "cebolla"
+     }
+    ],
+    [
+     {
+      "fraccion": 1.0,
+      "ingredient_id": "pechuga_de_pollo"
+     }
+    ],
+    [
+     {
+      "estimada": true,
+      "fraccion": 0.5,
+      "ingredient_id": "yuca"
+     }
+    ],
+    [
+     {
+      "fraccion": 1.0,
+      "ingredient_id": "queso_blanco"
+     }
+    ]
+   ]
+  },
+  "tpl_e069475c5e6c": {
+   "cuentas": {
+    "aceite_de_oliva": 1.0,
+    "ajo": 1.0,
+    "arroz_blanco": 1.0,
+    "cebolla": 1.0,
+    "gandules": 1.0,
+    "sal": 0,
+    "soya_texturizada": 1.0
+   },
+   "estado": "exacta",
+   "hallazgos": [
+    {
+     "alimento": "Sal",
+     "detalle": "comprado y ningún paso lo nombra",
+     "ingredient_id": "sal",
+     "tipo": "sin_uso_condimento"
+    }
+   ],
+   "pasos_hash": "f46757382bed2d99",
+   "usa": [
+    [
+     {
+      "fraccion": 1.0,
+      "ingredient_id": "soya_texturizada"
+     }
+    ],
+    [
+     {
+      "fraccion": 1.0,
+      "ingredient_id": "cebolla"
+     },
+     {
+      "fraccion": 1.0,
+      "ingredient_id": "ajo"
+     },
+     {
+      "fraccion": 1.0,
+      "ingredient_id": "aceite_de_oliva"
+     }
+    ],
+    [
+     {
+      "fraccion": 1.0,
+      "ingredient_id": "gandules"
+     }
+    ],
+    [
+     {
+      "fraccion": 1.0,
+      "ingredient_id": "arroz_blanco"
+     }
+    ]
+   ]
+  },
+  "tpl_e07ba75823ee": {
+   "cuentas": {
+    "aguacate": 1.0,
+    "casabe": 1.0,
+    "cebolla": 1.0,
+    "huevo": 1.0,
+    "limon": 1.0,
+    "tomate": 1.0
+   },
+   "estado": "exacta",
+   "hallazgos": [],
+   "pasos_hash": "64022fe715c37d14",
+   "usa": [
+    [
+     {
+      "fraccion": 1.0,
+      "ingredient_id": "tomate"
+     },
+     {
+      "fraccion": 1.0,
+      "ingredient_id": "cebolla"
+     },
+     {
+      "fraccion": 1.0,
+      "ingredient_id": "huevo"
+     }
+    ],
+    [
+     {
+      "fraccion": 1.0,
+      "ingredient_id": "aguacate"
+     },
+     {
+      "fraccion": 1.0,
+      "ingredient_id": "limon"
+     }
+    ],
+    [],
+    [],
+    [
+     {
+      "fraccion": 1.0,
+      "ingredient_id": "casabe"
+     }
+    ]
+   ]
+  },
+  "tpl_e08414c10a4c": {
+   "cuentas": {
+    "avena": 1.0,
+    "leche_evaporada": 1.0,
+    "mani": 1.0,
+    "pasas": 1.0
+   },
+   "estado": "exacta",
+   "hallazgos": [],
+   "pasos_hash": "4f734b945c5b7940",
+   "usa": [
+    [
+     {
+      "fraccion": 1.0,
+      "ingredient_id": "mani"
+     }
+    ],
+    [
+     {
+      "fraccion": 1.0,
+      "ingredient_id": "avena"
+     }
+    ],
+    [],
+    [
+     {
+      "fraccion": 1.0,
+      "ingredient_id": "leche_evaporada"
+     },
+     {
+      "fraccion": 1.0,
+      "ingredient_id": "pasas"
+     }
+    ],
+    []
+   ]
+  },
+  "tpl_e1265f14a8b4": {
+   "cuentas": {
+    "aguacate": 1.0,
+    "casabe": 1.0,
+    "queso_cottage": 1.0,
+    "tomate": 1.0
+   },
+   "estado": "exacta",
+   "hallazgos": [],
+   "pasos_hash": "a1e42f9cee8344b0",
+   "usa": [
+    [
+     {
+      "fraccion": 1.0,
+      "ingredient_id": "casabe"
+     }
+    ],
+    [
+     {
+      "fraccion": 1.0,
+      "ingredient_id": "tomate"
+     },
+     {
+      "fraccion": 1.0,
+      "ingredient_id": "aguacate"
+     }
+    ],
+    [
+     {
+      "fraccion": 1.0,
+      "ingredient_id": "queso_cottage"
+     }
+    ]
+   ]
+  },
+  "tpl_e1982113c58d": {
+   "cuentas": {
+    "avena": 1.0,
+    "canela_en_polvo": 1.0,
+    "leche_evaporada": 1.0,
+    "mani": 1.0
+   },
+   "estado": "exacta",
+   "hallazgos": [],
+   "pasos_hash": "34fa38b6178a41a9",
+   "usa": [
+    [
+     {
+      "fraccion": 1.0,
+      "ingredient_id": "leche_evaporada"
+     }
+    ],
+    [
+     {
+      "fraccion": 1.0,
+      "ingredient_id": "avena"
+     }
+    ],
+    [
+     {
+      "fraccion": 1.0,
+      "ingredient_id": "canela_en_polvo"
+     }
+    ],
+    [
+     {
+      "fraccion": 1.0,
+      "ingredient_id": "mani"
+     }
+    ]
+   ]
+  },
+  "tpl_e2d752420590": {
+   "cuentas": {
+    "aceite_de_oliva": 1.0,
+    "ajo": 1.0,
+    "cebolla": 1.0,
+    "papa": 1.0,
+    "repollo": 1.0,
+    "sal": 1.0,
+    "sardinas_en_lata": 1.0
+   },
+   "estado": "exacta",
+   "hallazgos": [],
+   "pasos_hash": "7b9fd2c79e67909c",
+   "usa": [
+    [
+     {
+      "fraccion": 1.0,
+      "ingredient_id": "papa"
+     },
+     {
+      "fraccion": 1.0,
+      "ingredient_id": "sal"
+     }
+    ],
+    [
+     {
+      "fraccion": 1.0,
+      "ingredient_id": "cebolla"
+     },
+     {
+      "fraccion": 1.0,
+      "ingredient_id": "ajo"
+     },
+     {
+      "fraccion": 1.0,
+      "ingredient_id": "aceite_de_oliva"
+     }
+    ],
+    [
+     {
+      "fraccion": 1.0,
+      "ingredient_id": "repollo"
+     }
+    ],
+    [
+     {
+      "fraccion": 1.0,
+      "ingredient_id": "sardinas_en_lata"
+     }
+    ]
+   ]
+  },
+  "tpl_e390f34c4300": {
+   "cuentas": {
+    "chinola": 1.0,
+    "mani": 1.0
+   },
+   "estado": "exacta",
+   "hallazgos": [],
+   "pasos_hash": "9b6d460e83c39835",
+   "usa": [
+    [
+     {
+      "fraccion": 1.0,
+      "ingredient_id": "chinola"
+     }
+    ],
+    [],
+    [],
+    [
+     {
+      "fraccion": 1.0,
+      "ingredient_id": "mani"
+     }
+    ],
+    []
+   ]
+  },
+  "tpl_e5074a0098ef": {
+   "cuentas": {
+    "harina_de_maiz_precocida": 1.0,
+    "queso_blanco": 1.0
+   },
+   "estado": "exacta",
+   "hallazgos": [],
+   "pasos_hash": "beb4a6d9b6561aa3",
+   "usa": [
+    [],
+    [
+     {
+      "fraccion": 1.0,
+      "ingredient_id": "harina_de_maiz_precocida"
+     }
+    ],
+    [
+     {
+      "fraccion": 0.5,
+      "ingredient_id": "queso_blanco"
+     }
+    ],
+    [
+     {
+      "fraccion": 0.5,
+      "ingredient_id": "queso_blanco"
+     }
+    ],
+    []
+   ]
+  },
+  "tpl_e514944b941e": {
+   "cuentas": {
+    "aceite_de_oliva": 1.0,
+    "ajo": 1.0,
+    "cebolla": 1.0,
+    "sal": 1.0,
+    "salami": 1.0,
+    "yuca": 1.0
+   },
+   "estado": "exacta",
+   "hallazgos": [],
+   "pasos_hash": "10b56aaca4a0637b",
+   "usa": [
+    [
+     {
+      "fraccion": 1.0,
+      "ingredient_id": "yuca"
+     },
+     {
+      "fraccion": 1.0,
+      "ingredient_id": "sal"
+     }
+    ],
+    [
+     {
+      "fraccion": 1.0,
+      "ingredient_id": "salami"
+     },
+     {
+      "fraccion": 1.0,
+      "ingredient_id": "aceite_de_oliva"
+     }
+    ],
+    [
+     {
+      "fraccion": 1.0,
+      "ingredient_id": "cebolla"
+     },
+     {
+      "fraccion": 1.0,
+      "ingredient_id": "ajo"
+     }
+    ],
+    []
+   ]
+  },
+  "tpl_e5904abaa549": {
+   "cuentas": {
+    "avena": 1.0,
+    "huevo": 1.0,
+    "leche": 1.0,
+    "queso_blanco": 1.0
+   },
+   "estado": "estimada",
+   "hallazgos": [],
+   "pasos_hash": "809cff04795286a0",
+   "usa": [
+    [
+     {
+      "fraccion": 1.0,
+      "ingredient_id": "avena"
+     },
+     {
+      "fraccion": 1.0,
+      "ingredient_id": "huevo"
+     },
+     {
+      "fraccion": 1.0,
+      "ingredient_id": "leche"
+     },
+     {
+      "estimada": true,
+      "fraccion": 0.5,
+      "ingredient_id": "queso_blanco"
+     }
+    ],
+    [],
+    [],
+    [
+     {
+      "estimada": true,
+      "fraccion": 0.5,
+      "ingredient_id": "queso_blanco"
+     }
+    ]
+   ]
+  },
+  "tpl_e6c912c74da3": {
+   "cuentas": {
+    "queso_blanco": 1.0,
+    "yuca": 1.0
+   },
+   "estado": "exacta",
+   "hallazgos": [],
+   "pasos_hash": "258a485f01ebef13",
+   "usa": [
+    [
+     {
+      "fraccion": 1.0,
+      "ingredient_id": "yuca"
+     }
+    ],
+    [],
+    [
+     {
+      "fraccion": 1.0,
+      "ingredient_id": "queso_blanco"
+     }
+    ],
+    []
+   ]
+  },
+  "tpl_ec2d86993902": {
+   "cuentas": {
+    "aceite_vegetal": 1.0,
+    "ajo": 1.0,
+    "cebolla": 1.0,
+    "sardinas_en_lata": 1.0,
+    "vinagre_blanco": 1.0,
+    "yuca": 1.0
+   },
+   "estado": "exacta",
+   "hallazgos": [],
+   "pasos_hash": "524f4a9e963b797e",
+   "usa": [
+    [
+     {
+      "fraccion": 1.0,
+      "ingredient_id": "yuca"
+     }
+    ],
+    [
+     {
+      "fraccion": 1.0,
+      "ingredient_id": "sardinas_en_lata"
+     },
+     {
+      "fraccion": 1.0,
+      "ingredient_id": "cebolla"
+     },
+     {
+      "fraccion": 1.0,
+      "ingredient_id": "ajo"
+     }
+    ],
+    [
+     {
+      "fraccion": 1.0,
+      "ingredient_id": "aceite_vegetal"
+     }
+    ],
+    [
+     {
+      "fraccion": 1.0,
+      "ingredient_id": "vinagre_blanco"
+     }
+    ],
+    []
+   ]
+  },
+  "tpl_eed6cf680b16": {
+   "cuentas": {
+    "atun_en_agua": 1.0,
+    "cebolla": 1.0,
+    "huevo": 1.0,
+    "platano_verde": 1.0,
+    "sal": 1.0,
+    "tomate": 1.0
+   },
+   "estado": "estimada",
+   "hallazgos": [],
+   "pasos_hash": "6f26d57f617892a3",
+   "usa": [
+    [
+     {
+      "estimada": true,
+      "fraccion": 0.5,
+      "ingredient_id": "atun_en_agua"
+     },
+     {
+      "fraccion": 1.0,
+      "ingredient_id": "platano_verde"
+     }
+    ],
+    [
+     {
+      "estimada": true,
+      "fraccion": 0.5,
+      "ingredient_id": "atun_en_agua"
+     },
+     {
+      "fraccion": 1.0,
+      "ingredient_id": "tomate"
+     },
+     {
+      "fraccion": 1.0,
+      "ingredient_id": "cebolla"
+     }
+    ],
+    [
+     {
+      "estimada": true,
+      "fraccion": 0.5,
+      "ingredient_id": "sal"
+     }
+    ],
+    [
+     {
+      "fraccion": 1.0,
+      "ingredient_id": "huevo"
+     },
+     {
+      "estimada": true,
+      "fraccion": 0.5,
+      "ingredient_id": "sal"
+     }
+    ],
+    []
+   ]
+  },
+  "tpl_f01650652d09": {
+   "cuentas": {
+    "aceite_de_oliva": 1.0,
+    "aguacate": 1.0,
+    "atun_en_agua": 1.0,
+    "cebolla": 1.0,
+    "huevo": 1.0,
+    "lechuga": 1.0,
+    "limon": 1.0,
+    "sal": 1.0,
+    "tomate": 1.0,
+    "yuca": 1.0
+   },
+   "estado": "estimada",
+   "hallazgos": [],
+   "pasos_hash": "8678ebeffb337a0a",
+   "usa": [
+    [
+     {
+      "estimada": true,
+      "fraccion": 0.5,
+      "ingredient_id": "atun_en_agua"
+     },
+     {
+      "fraccion": 1.0,
+      "ingredient_id": "yuca"
+     }
+    ],
+    [
+     {
+      "estimada": true,
+      "fraccion": 0.5,
+      "ingredient_id": "atun_en_agua"
+     },
+     {
+      "fraccion": 0.5,
+      "ingredient_id": "huevo"
+     },
+     {
+      "estimada": true,
+      "fraccion": 0.5,
+      "ingredient_id": "sal"
+     }
+    ],
+    [
+     {
+      "fraccion": 0.5,
+      "ingredient_id": "huevo"
+     }
+    ],
+    [
+     {
+      "fraccion": 1.0,
+      "ingredient_id": "lechuga"
+     },
+     {
+      "fraccion": 1.0,
+      "ingredient_id": "tomate"
+     },
+     {
+      "fraccion": 1.0,
+      "ingredient_id": "cebolla"
+     },
+     {
+      "fraccion": 1.0,
+      "ingredient_id": "aguacate"
+     }
+    ],
+    [
+     {
+      "fraccion": 1.0,
+      "ingredient_id": "aceite_de_oliva"
+     },
+     {
+      "fraccion": 1.0,
+      "ingredient_id": "limon"
+     },
+     {
+      "estimada": true,
+      "fraccion": 0.5,
+      "ingredient_id": "sal"
+     }
+    ]
+   ]
+  },
+  "tpl_f2a13ec72c4b": {
+   "cuentas": {
+    "casabe": 1.0,
+    "huevo": 1.0
+   },
+   "estado": "exacta",
+   "hallazgos": [],
+   "pasos_hash": "919a74243863a7ef",
+   "usa": [
+    [
+     {
+      "fraccion": 1.0,
+      "ingredient_id": "huevo"
+     }
+    ],
+    [],
+    [],
+    [
+     {
+      "fraccion": 1.0,
+      "ingredient_id": "casabe"
+     }
+    ],
+    []
+   ]
+  },
+  "tpl_f3e7e9e89180": {
+   "cuentas": {
+    "avena": 1.0,
+    "canela_en_polvo": 1.0,
+    "mani": 1.0,
+    "manzana": 1.0
+   },
+   "estado": "exacta",
+   "hallazgos": [],
+   "pasos_hash": "19de161b76ab1564",
+   "usa": [
+    [
+     {
+      "fraccion": 1.0,
+      "ingredient_id": "manzana"
+     }
+    ],
+    [
+     {
+      "fraccion": 0.5,
+      "ingredient_id": "canela_en_polvo"
+     }
+    ],
+    [
+     {
+      "fraccion": 1.0,
+      "ingredient_id": "avena"
+     }
+    ],
+    [
+     {
+      "fraccion": 1.0,
+      "ingredient_id": "mani"
+     }
+    ],
+    [
+     {
+      "fraccion": 0.5,
+      "ingredient_id": "canela_en_polvo"
+     }
+    ]
+   ]
+  },
+  "tpl_f53968b75f95": {
+   "cuentas": {
+    "aceite_de_oliva": 1.0,
+    "cebolla": 1.0,
+    "huevo": 1.0,
+    "papa": 1.0,
+    "queso_gouda": 1.0,
+    "sal": 1.0
+   },
+   "estado": "exacta",
+   "hallazgos": [],
+   "pasos_hash": "358cab83e0f5d04d",
+   "usa": [
+    [
+     {
+      "fraccion": 1.0,
+      "ingredient_id": "papa"
+     },
+     {
+      "fraccion": 1.0,
+      "ingredient_id": "aceite_de_oliva"
+     }
+    ],
+    [
+     {
+      "fraccion": 1.0,
+      "ingredient_id": "cebolla"
+     }
+    ],
+    [
+     {
+      "fraccion": 1.0,
+      "ingredient_id": "huevo"
+     },
+     {
+      "fraccion": 1.0,
+      "ingredient_id": "queso_gouda"
+     },
+     {
+      "fraccion": 1.0,
+      "ingredient_id": "sal"
+     }
+    ],
+    []
+   ]
+  },
+  "tpl_f55f13fc06d3": {
+   "cuentas": {
+    "ajo": 1.0,
+    "auyama": 1.0,
+    "casabe": 1.0,
+    "cebolla": 1.0,
+    "cilantro": 1.0,
+    "habichuelas_negras": 1.0
+   },
+   "estado": "exacta",
+   "hallazgos": [],
+   "pasos_hash": "3e329b4b32e87469",
+   "usa": [
+    [
+     {
+      "fraccion": 1.0,
+      "ingredient_id": "habichuelas_negras"
+     }
+    ],
+    [],
+    [
+     {
+      "fraccion": 1.0,
+      "ingredient_id": "auyama"
+     },
+     {
+      "fraccion": 1.0,
+      "ingredient_id": "cebolla"
+     },
+     {
+      "fraccion": 1.0,
+      "ingredient_id": "ajo"
+     },
+     {
+      "fraccion": 0.5,
+      "ingredient_id": "cilantro"
+     }
+    ],
+    [
+     {
+      "fraccion": 0.5,
+      "ingredient_id": "cilantro"
+     }
+    ],
+    [
+     {
+      "fraccion": 1.0,
+      "ingredient_id": "casabe"
+     }
+    ]
+   ]
+  },
+  "tpl_f5dd6fb923fa": {
+   "cuentas": {
+    "avena": 1.0,
+    "canela_en_polvo": 1.0,
+    "leche_evaporada": 1.0,
+    "mani": 1.0
+   },
+   "estado": "exacta",
+   "hallazgos": [],
+   "pasos_hash": "4c2663c639d8754a",
+   "usa": [
+    [
+     {
+      "fraccion": 1.0,
+      "ingredient_id": "leche_evaporada"
+     },
+     {
+      "fraccion": 1.0,
+      "ingredient_id": "avena"
+     }
+    ],
+    [
+     {
+      "fraccion": 1.0,
+      "ingredient_id": "mani"
+     },
+     {
+      "fraccion": 1.0,
+      "ingredient_id": "canela_en_polvo"
+     }
+    ],
+    []
+   ]
+  },
+  "tpl_f7501db43fd2": {
+   "cuentas": {
+    "aceite_vegetal": 1.0,
+    "cebolla": 1.0,
+    "espinacas": 1.0,
+    "huevo": 1.0,
+    "queso_blanco": 1.0,
+    "sal": 1.0
+   },
+   "estado": "exacta",
+   "hallazgos": [],
+   "pasos_hash": "15efaba1f8b35338",
+   "usa": [
+    [
+     {
+      "fraccion": 1.0,
+      "ingredient_id": "cebolla"
+     },
+     {
+      "fraccion": 1.0,
+      "ingredient_id": "queso_blanco"
+     },
+     {
+      "fraccion": 1.0,
+      "ingredient_id": "espinacas"
+     }
+    ],
+    [
+     {
+      "fraccion": 1.0,
+      "ingredient_id": "aceite_vegetal"
+     }
+    ],
+    [
+     {
+      "fraccion": 1.0,
+      "ingredient_id": "huevo"
+     },
+     {
+      "fraccion": 1.0,
+      "ingredient_id": "sal"
+     }
+    ],
+    []
+   ]
+  },
+  "tpl_f8a01d7d3dc9": {
+   "cuentas": {
+    "bulgur": 1.0,
+    "cebolla": 1.0,
+    "limon": 1.0,
+    "pechuga_de_pollo": 1.0,
+    "perejil": 1.0,
+    "tomate": 1.0
+   },
+   "estado": "exacta",
+   "hallazgos": [],
+   "pasos_hash": "ec544435711f1408",
+   "usa": [
+    [
+     {
+      "fraccion": 1.0,
+      "ingredient_id": "bulgur"
+     }
+    ],
+    [
+     {
+      "fraccion": 1.0,
+      "ingredient_id": "pechuga_de_pollo"
+     }
+    ],
+    [
+     {
+      "fraccion": 1.0,
+      "ingredient_id": "tomate"
+     },
+     {
+      "fraccion": 1.0,
+      "ingredient_id": "cebolla"
+     },
+     {
+      "fraccion": 1.0,
+      "ingredient_id": "perejil"
+     }
+    ],
+    [
+     {
+      "fraccion": 1.0,
+      "ingredient_id": "limon"
+     }
+    ],
+    []
+   ]
+  },
+  "tpl_f9b386cf1e6f": {
+   "cuentas": {
+    "ajo": 1.0,
+    "auyama": 1.0,
+    "cebolla": 1.0,
+    "leche_evaporada": 1.0,
+    "mantequilla": 1.0,
+    "pechuga_de_pollo": 1.0,
+    "sal": 1.0
+   },
+   "estado": "estimada",
+   "hallazgos": [],
+   "pasos_hash": "41ef9816230e77d3",
+   "usa": [
+    [
+     {
+      "fraccion": 1.0,
+      "ingredient_id": "auyama"
+     },
+     {
+      "fraccion": 1.0,
+      "ingredient_id": "cebolla"
+     },
+     {
+      "fraccion": 1.0,
+      "ingredient_id": "ajo"
+     }
+    ],
+    [
+     {
+      "estimada": true,
+      "fraccion": 0.5,
+      "ingredient_id": "pechuga_de_pollo"
+     }
+    ],
+    [
+     {
+      "fraccion": 1.0,
+      "ingredient_id": "mantequilla"
+     }
+    ],
+    [
+     {
+      "fraccion": 1.0,
+      "ingredient_id": "leche_evaporada"
+     },
+     {
+      "fraccion": 1.0,
+      "ingredient_id": "sal"
+     },
+     {
+      "estimada": true,
+      "fraccion": 0.5,
+      "ingredient_id": "pechuga_de_pollo"
+     }
+    ],
+    []
+   ]
+  },
+  "tpl_fb536b60ebce": {
+   "cuentas": {
+    "casabe": 1.0,
+    "huevo": 1.0,
+    "naranja": 1.0
+   },
+   "estado": "exacta",
+   "hallazgos": [],
+   "pasos_hash": "9f61e14a33eae5ad",
+   "usa": [
+    [
+     {
+      "fraccion": 1.0,
+      "ingredient_id": "huevo"
+     }
+    ],
+    [],
+    [
+     {
+      "fraccion": 1.0,
+      "ingredient_id": "naranja"
+     }
+    ],
+    [
+     {
+      "fraccion": 1.0,
+      "ingredient_id": "casabe"
+     }
+    ]
+   ]
+  },
+  "tpl_fbee4134c694": {
+   "cuentas": {
+    "azucar_morena": 1.0,
+    "canela_en_polvo": 1.0,
+    "harina_de_maiz_precocida": 1.0,
+    "leche": 1.0
+   },
+   "estado": "exacta",
+   "hallazgos": [],
+   "pasos_hash": "d28dbb053c0e502c",
+   "usa": [
+    [
+     {
+      "fraccion": 1.0,
+      "ingredient_id": "harina_de_maiz_precocida"
+     },
+     {
+      "fraccion": 0.5,
+      "ingredient_id": "canela_en_polvo"
+     },
+     {
+      "fraccion": 1.0,
+      "ingredient_id": "azucar_morena"
+     }
+    ],
+    [
+     {
+      "fraccion": 1.0,
+      "ingredient_id": "leche"
+     }
+    ],
+    [],
+    [],
+    [
+     {
+      "fraccion": 0.5,
+      "ingredient_id": "canela_en_polvo"
+     }
+    ]
+   ]
+  },
+  "tpl_fc758e30f5e7": {
+   "cuentas": {
+    "aceite_de_oliva": 1.0,
+    "ajo": 1.0,
+    "auyama": 0,
+    "batata": 1.0,
+    "cebolla": 1.0,
+    "lentejas": 1.0,
+    "sal": 0
+   },
+   "estado": "revisar",
+   "hallazgos": [
+    {
+     "alimento": "Auyama",
+     "detalle": "comprado y ningún paso lo nombra",
+     "ingredient_id": "auyama",
+     "tipo": "sin_uso"
+    },
+    {
+     "alimento": "Sal",
+     "detalle": "comprado y ningún paso lo nombra",
+     "ingredient_id": "sal",
+     "tipo": "sin_uso_condimento"
+    }
+   ],
+   "pasos_hash": "c839e675b9e024ce",
+   "usa": [
+    [
+     {
+      "fraccion": 1.0,
+      "ingredient_id": "lentejas"
+     },
+     {
+      "fraccion": 1.0,
+      "ingredient_id": "batata"
+     }
+    ],
+    [
+     {
+      "fraccion": 1.0,
+      "ingredient_id": "cebolla"
+     },
+     {
+      "fraccion": 1.0,
+      "ingredient_id": "ajo"
+     },
+     {
+      "fraccion": 1.0,
+      "ingredient_id": "aceite_de_oliva"
+     }
+    ],
+    [],
+    []
+   ]
+  },
+  "tpl_fcc5ba14ff6a": {
+   "cuentas": {
+    "aceite_vegetal": 1.0,
+    "aji_cubanela": 1.0,
+    "aji_morron": 1.0,
+    "ajo": 1.0,
+    "carne_de_res": 1.0,
+    "cebolla": 1.0,
+    "lechuga_romana": 1.0,
+    "sal": 1.0,
+    "salsa_de_tomate": 1.0,
+    "tomate": 1.0
+   },
+   "estado": "estimada",
+   "hallazgos": [],
+   "pasos_hash": "540e558058a0eb0c",
+   "usa": [
+    [
+     {
+      "fraccion": 1.0,
+      "ingredient_id": "carne_de_res"
+     },
+     {
+      "estimada": true,
+      "fraccion": 1.0,
+      "ingredient_id": "ajo"
+     },
+     {
+      "estimada": true,
+      "fraccion": 0.5,
+      "ingredient_id": "sal"
+     }
+    ],
+    [
+     {
+      "fraccion": 1.0,
+      "ingredient_id": "aceite_vegetal"
+     },
+     {
+      "fraccion": 1.0,
+      "ingredient_id": "cebolla"
+     },
+     {
+      "fraccion": 1.0,
+      "ingredient_id": "aji_cubanela"
+     },
+     {
+      "fraccion": 1.0,
+      "ingredient_id": "tomate"
+     },
+     {
+      "fraccion": 1.0,
+      "ingredient_id": "aji_morron"
+     }
+    ],
+    [
+     {
+      "fraccion": 1.0,
+      "ingredient_id": "salsa_de_tomate"
+     },
+     {
+      "estimada": true,
+      "fraccion": 0.5,
+      "ingredient_id": "sal"
+     }
+    ],
+    [
+     {
+      "fraccion": 1.0,
+      "ingredient_id": "lechuga_romana"
+     }
+    ]
+   ]
+  },
+  "tpl_fd506c06d18d": {
+   "cuentas": {
+    "aceite_vegetal": 1.0,
+    "cebolla": 1.0,
+    "huevo": 1.0,
+    "papa": 1.0,
+    "queso_gouda": 1.0
+   },
+   "estado": "exacta",
+   "hallazgos": [],
+   "pasos_hash": "9d3fd2219d2d7659",
+   "usa": [
+    [
+     {
+      "fraccion": 1.0,
+      "ingredient_id": "papa"
+     },
+     {
+      "fraccion": 1.0,
+      "ingredient_id": "cebolla"
+     }
+    ],
+    [
+     {
+      "fraccion": 1.0,
+      "ingredient_id": "aceite_vegetal"
+     }
+    ],
+    [
+     {
+      "fraccion": 1.0,
+      "ingredient_id": "huevo"
+     },
+     {
+      "fraccion": 1.0,
+      "ingredient_id": "queso_gouda"
+     }
+    ],
+    [],
+    []
+   ]
+  },
+  "tpl_fedbadbe7394": {
+   "cuentas": {
+    "aceite_de_oliva": 1.0,
+    "aceite_vegetal": 1.0,
+    "ajo": 1.0,
+    "camarones": 1.0,
+    "platano_verde": 1.0
+   },
+   "estado": "exacta",
+   "hallazgos": [],
+   "pasos_hash": "2a31edd98025d8f1",
+   "usa": [
+    [
+     {
+      "fraccion": 1.0,
+      "ingredient_id": "platano_verde"
+     },
+     {
+      "fraccion": 0.5,
+      "ingredient_id": "aceite_vegetal"
+     }
+    ],
+    [
+     {
+      "fraccion": 0.5,
+      "ingredient_id": "aceite_vegetal"
+     }
+    ],
+    [
+     {
+      "fraccion": 1.0,
+      "ingredient_id": "ajo"
+     },
+     {
+      "fraccion": 1.0,
+      "ingredient_id": "aceite_de_oliva"
+     }
+    ],
+    [
+     {
+      "fraccion": 1.0,
+      "ingredient_id": "camarones"
+     }
+    ],
+    []
+   ]
+  }
+ },
+ "procedencia": {
+  "escrito_por": "recipe_usage.derivar_biblioteca (determinista, sin LLM)",
+  "que_es": "por receta congelada, qué constituyentes usa cada paso y con qué fracción de lo comprado; atado al texto por pasos_hash",
+  "veredicto_humano": "NO revisado a mano. `estado=revisar` es lo que la máquina no pudo decidir o encontró contradictorio; `estimada` reparte a partes iguales una parte sin cifra."
+ },
+ "resumen": {
+  "constituyentes": 1017,
+  "constituyentes_con_suma_1": 1004,
+  "estados": {
+   "estimada": 35,
+   "exacta": 155,
+   "revisar": 3
+  },
+  "fracciones_estimadas": 95,
+  "hallazgos": {
+   "fuera_de_plantilla": 4,
+   "sin_uso": 1,
+   "sin_uso_condimento": 12,
+   "sobre_asignado": 2
+  },
+  "recetas": 193,
+  "top": [
+   {
+    "alimento": "Sal",
+    "n": 12,
+    "tipo": "sin_uso_condimento"
+   },
+   {
+    "alimento": "sofrito",
+    "n": 2,
+    "tipo": "fuera_de_plantilla"
+   },
+   {
+    "alimento": "Aceite vegetal",
+    "n": 1,
+    "tipo": "sobre_asignado"
+   },
+   {
+    "alimento": "espaguetis",
+    "n": 1,
+    "tipo": "fuera_de_plantilla"
+   },
+   {
+    "alimento": "Aceite de oliva",
+    "n": 1,
+    "tipo": "sobre_asignado"
+   },
+   {
+    "alimento": "cuajada",
+    "n": 1,
+    "tipo": "fuera_de_plantilla"
+   },
+   {
+    "alimento": "Auyama",
+    "n": 1,
+    "tipo": "sin_uso"
+   }
+  ]
+ },
+ "schema_version": 1
+}

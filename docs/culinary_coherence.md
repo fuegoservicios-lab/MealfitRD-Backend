@@ -765,3 +765,65 @@ tiene «Clara de huevo · Don Papito · botella pasteurizada 400 g · RD$154,95�
 envase es hoy una decisión de producto sobre el agregador, no un dato que falte — del dueño. El techo del 25 % de comidas
 con huevo del gate de variedad y la regla «1 comida con huevo por día» del prompt siguen; honrar «10 claras por comida»
 sigue bajo el canary de la política (`MEALFIT_PLAN_POLICY_ENFORCE_USERS`, E5 fase B).
+
+
+## Asignación paso↔ingrediente en la receta congelada (C4 · `P1-PLAN-LOTE-25` · 2026-09-12)
+
+**Qué decía el gap (H8 de la auditoría del 09-11).** Extender la receta congelada con `pasos[i].usa: [{ingredient_id,
+fraccion}]` para las recetas DO (se escribe una vez); V6 pasa de «puede repartir» a suma exacta. Coste previsto: revisión
+editorial de 190 recetas y re-firma curatorial.
+
+**Lo medido antes de construir.** La biblioteca (`recipe_library_do_v1.json`) tiene 193 recetas y 867 pasos escritos A
+PROPÓSITO sin cantidades de ingrediente («valen para cualquier porción»). Materializadas como plato y pasadas por el
+escáner de hoy: **6 hallazgos (V1 4, V3 1, V5 1) y ninguno de cantidad** — no porque repartan bien, sino porque V6, V7a y
+V7e leen NÚMEROS del texto y aquí no hay ninguno: «la mitad del aceite» … «la otra mitad del aceite» … «la otra mitad del
+aceite» (tres mitades) pasa limpio, y «la mitad del cilantro» sin la otra mitad —la cuarta clase de las notas humanas del
+09-07, «usado a medias», que el comentario de V7 dejó anotada sin detector— tampoco lo ve nadie. En la flota: 0 comidas de
+receta congelada en 30 días (el día determinista sigue en canario); en el corpus fijo, 0. El terreno de esta capa es la
+biblioteca, no el plan vivo — todavía.
+
+**Qué hace `recipe_usage`** (módulo nuevo, puro, sin base ni red):
+
+1. **Asigna** a cada paso los constituyentes de SU plantilla que usa, con la FRACCIÓN de lo comprado: `usa[i]`, paralelo a
+   `pasos[i]`. El vocabulario es el de la plantilla —un mundo cerrado de 3-8 alimentos—, no el catálogo: dentro de
+   «Pinchos de pollo…», «el pollo» sólo puede ser la pechuga y «el morrón» el ají morrón. Un token que dos constituyentes
+   comparten («aceite» con dos aceites en la misma plantilla) no decide: se declara `ambigua`.
+2. **Reparte** por las pistas del texto, leídas en su cláusula (una pista no cruza un punto ni una coma, salvo la lista
+   «el resto del ají, el ajo y el cilantro»): «la mitad de» → 0,5; «la otra mitad» / «el resto» / «… restante» → lo que
+   queda; «parte de», «una pizca de», «un chorrito de» → una parte SIN cifra, estimada a partes iguales y marcada
+   `estimada`; sin pista, toda la cantidad entra en el PRIMER paso que lo nombra y las demás menciones son referencias («el
+   pollo está seguro cuando el termómetro…»). «Resérvala», «queda para untar», «corrige la sal», «sin sal» no consumen.
+   Una fracción fija heredada por conjunción («la mitad de la sal **y el orégano**») no parte al de al lado. Medido en la
+   biblioteca: «la mitad» en 71 pasos, «el resto» 41, «otra mitad» 34, «un poco» 45, «una parte» 19, «restante» 11; 398 de
+   1017 constituyentes se nombran en dos o más pasos — sin estas reglas la asignación sería una adivinanza.
+3. **Cuenta** por constituyente: Σ de fracciones = 1. Σ = 0 es «comprado y ningún paso lo usa» (V3); 0 < Σ < 1 es «usado a
+   medias» (V7a); Σ > 1 o dos veces «el resto» es «reparte más de lo que compra» (V6). «Fuera de plantilla» (la familia de
+   V5) se inventaría reutilizando V5 sobre la plantilla materializada: el matcher global crudo daba **50 acusaciones, casi
+   todas técnica leída como alimento** («al sofrito» → Sofrito ×18, «hasta que el agua salga clara» → Clara de huevo,
+   «cuajada»); V5 con sus guardas da 4. Un inventario con 46 falsos no es un inventario — descartado medido.
+4. **Ata** la asignación al TEXTO: `pasos_hash` (sha256[:16] de los pasos). Vive APARTE de la biblioteca
+   (`data/registry/recipe_usage_do_v1.json`), así que la receta no cambia ni un byte, su test de esquema sigue igual y **la
+   firma curatorial no caduca**; si alguien edita un paso, la asignación caduca sola (`usage_for_template` → `None`) y el
+   escáner vuelve a la heurística para ese plato. La «firma que caduca» de la auditoría, mecánica y sin ceremonia.
+
+**Resultado sobre la biblioteca** (`scripts/asignar_uso_pasos.py [--write|--verificar|--revisar|--json]`): 193 recetas ·
+**155 `exacta`, 35 `estimada`, 3 `revisar`** · 1017 constituyentes, **1004 con Σ = 1** (los 13 restantes: 12 veces la `Sal`
+comprada que ningún paso nombra —condimento, `sin_uso_condimento`, informativo como en V3— y 1 auyama) · 95 fracciones
+estimadas · idempotente y reproducible desde el texto y el catálogo congelado del corpus (`--verificar`, exit 3 si el
+snapshot caducó). Las 3 que la máquina no pudo cerrar son defectos de REDACCIÓN de la receta y van al dueño con nombre:
+«Yaniqueques horneados» (tres mitades del aceite), «Pollo al horno con batata y ensalada de repollo» («el resto del
+aceite» y luego «lo que quede del aceite») y «Lentejas guisadas con auyama y batata» (la auyama no aparece en ningún paso).
+El coste previsto —190 recetas de revisión editorial y una re-firma— queda en 3 recetas y ninguna firma.
+
+**Dónde engancha.** En `culinary_contract_scan`, para una comida con `_recipe_source == "library"` y asignación vigente
+(mismo hash, mismo número de pasos), **V3, V6, V7a y V7e dejan de adivinar por texto y leen las cuentas**
+(`P1-PLAN-LOTE-25-SCAN-EXACT`): cada check se cede a sí mismo desde dentro, la cadena del escáner no cambia (los tests la
+leen como texto), los hallazgos salen con `detail` «asignación exacta (estado): …» y el estado del scan cuenta las comidas
+evaluadas así (`exactas`). «Usa lo mismo o menos: puede repartir» sigue siendo la regla para las recetas del LLM: sin
+vocabulario cerrado ni texto congelado al que atarse, ahí no hay suma exacta posible. Knob `MEALFIT_RECIPE_USAGE_EXACT`
+(default `True`); apagado ⇒ heurística de siempre, sin redeploy.
+
+**Lo que NO hace, dicho.** No escribe cantidades en los pasos («corta 168 g de pechuga»): eso es CUL-P1-05 (C5), y la
+receta congelada se escribió sin ellas a propósito. No corrige las 3 recetas: su texto es del dueño. No cambia el veredicto
+sobre ninguna comida del LLM. Y no convierte el residuo en rechazo: los hallazgos exactos nacen `minor`/`warn` como sus
+hermanos de texto.

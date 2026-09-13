@@ -261,6 +261,12 @@ meses es candidato a borrarse (el de `MEALFIT_SLOT_AWARE_DAY_REPAIR`, que ademá
 |---|---|---|
 | `MEALFIT_EGG_STAPLE_HONORED` | `True` | El huevo declarado BÁSICO (`stapleFoods`/`stapleAnchors`) se honra en su forma: `_diversify_egg_pools` no le quita el huevo al planificador a partir del 3.º día, y quien declaró la **Clara de huevo** (y no el huevo entero) recibe en el prompt del día «HUEVOS: CLARAS PRIMERO» en lugar de «ENTEROS PRIMERO» (`prompts.day_generator.override_egg_form_preference`, misma técnica que el tope de claras: se sustituye la regla, no se añade una contradicción). Lectura única de la declaración: `plan_policy.egg_staple_forms`. Sin declaración, prompt byte-idéntico y diversificador intacto. `False` vuelve a la conducta anterior sin redeploy |
 
+### Asignación paso↔ingrediente de la receta congelada (C4 · `P1-PLAN-LOTE-25` · 2026-09-12)
+
+| Knob | Default | Efecto |
+|---|---|---|
+| `MEALFIT_RECIPE_USAGE_EXACT` | `True` | En una comida de receta CONGELADA (`_recipe_source == "library"`) con asignación vigente (`data/registry/recipe_usage_do_v1.json`, atada al texto de los pasos por `pasos_hash`), los checks V3, V6, V7a y V7e del escáner culinario leen las CUENTAS de `recipe_usage` (Σ de fracciones por constituyente: 0 → V3, entre 0 y 1 → V7a, > 1 o dos veces «el resto» → V6) en vez de adivinar por texto — sobre pasos sin cifras, la heurística callaba. Comidas del LLM, recetas reescritas en el plato o asignación caducada: heurística de siempre. El estado del scan cuenta las comidas así evaluadas (`exactas`). Medido en la biblioteca: 155 exactas / 35 estimadas / 3 a revisar; 1004 de 1017 constituyentes con Σ = 1. `False` devuelve la heurística sin redeploy. Lector: `scripts/asignar_uso_pasos.py [--write\|--verificar\|--revisar]` |
+
 ## Cómo añadir un knob nuevo
 
 ```python
