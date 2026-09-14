@@ -27,6 +27,13 @@ _os_conftest.environ.setdefault("MEALFIT_UPDATE_DISHES_STRICT_ALL_REASONS", "fal
 _os_conftest.environ.setdefault("MEALFIT_SODIUM_EXCESS_GATE", "false")
 _os_conftest.environ.setdefault("MEALFIT_RECIPE_CONTRACT_GATE", "false")
 _os_conftest.environ.setdefault("MEALFIT_MICRO_CLOSER_PERDAY", "false")
+# [P1-PLAN-LOTE-37 · 2026-09-13] La suite NO habla con Sentry, y aquí no vale `setdefault`. Con el `.env` del
+# dueño, `import app` inicializaba Sentry con el DSN real: cada `logging.error` de un test —la suite los provoca
+# a propósito— salía como evento hacia ese proyecto, tras serializar las variables locales de cada marco
+# (13-21 ms por evento; sin base de datos, `build_blueprint` emite 32.564). Vacío ⇒ sin DSN ⇒ sin integraciones
+# (`app.py`). Va ANTES de cualquier import que cargue el entorno: `load_dotenv()` no usa `override`, así que
+# una variable ya presente, aunque esté vacía, gana al fichero.
+_os_conftest.environ["SENTRY_DSN"] = ""
 
 # [P0-5] Eagerly resolve real `langgraph` BEFORE any test module loads. Several
 # test files do `sys.modules.setdefault('langgraph', MagicMock())` to support

@@ -91,6 +91,8 @@ jobs:
     # [P1-PLAN-LOTE-33 (bis 4) · 2026-09-13] 90 → 120: las dos patas llegan al 99 % en 13-40 min y la suite tarda luego
     # 45-64 min más en cerrar (la de producción, 19 min o colgada hasta el techo). Es UN test lento sólo en Linux, sin
     # nombre todavía: `--durations` lo nombra en la próxima corrida. El techo es margen, no el arreglo.
+    # [P1-PLAN-LOTE-37 · 2026-09-13] Lo nombró: el setup de `test_p1_arq27_f3_candidateset.py` (630-750 s por test),
+    # y la causa era Sentry sin DSN serializando cada error de log. Arreglado; el techo se revisa con la corrida siguiente.
     timeout-minutes: 120
     env:
       # [P1-I18N-CI-SIN-VEREDICTO] `secrets.*` no se evalúa dentro de un `if` de step; aquí

@@ -163,7 +163,7 @@ _PROCESS_START_ISO = datetime.now(timezone.utc).isoformat()
 # blueprint (`registry.empty_slots`); medido en 600 blueprints: 4.311 de 49.200 franjas vacías y 4.211 tendrían plato
 # con OTRA familia (compra mensual sin congelador). Allocator mínimo tras MEALFIT_HORIZON_VIABLE_FAMILY (off): la
 # familia del día pasa a la que cubre más franjas → 100 vacías, todas huecos de biblioteca. Apagado = byte-idéntico.
-_LAST_KNOWN_PFIX = "P1-PLAN-LOTE-36 · 2026-09-13"
+_LAST_KNOWN_PFIX = "P1-PLAN-LOTE-37 · 2026-09-13"
 
 # [P1-SENTRY-SAMPLE-COST · 2026-05-12] Sentry sampling driven from env vars
 # con default seguro 0.1 (10%). Pre-fix tenía `traces_sample_rate=1.0` y
@@ -196,6 +196,16 @@ _SENTRY_PROFILES_SAMPLE_RATE = _knob_env_float(
     0.1,
     validator=lambda v: 0.0 <= v <= 1.0,
 )
+
+# [P1-PLAN-LOTE-37 · 2026-09-13] SIN DSN, SIN INTEGRACIONES. Sin DSN Sentry no envía nada, pero con sus
+# integraciones por defecto SÍ trabaja: la de logging convertía cada `logging.error` en un evento completo
+# —serializando las variables locales de cada marco— para tirarlo al final por falta de transporte. Medido en
+# la CI (sin DSN ni base de datos): `get_master_ingredients` sin pool registra un error POR LLAMADA,
+# `build_blueprint` hace 32.564 llamadas y cada evento costaba 13-21 ms: 630-750 s por test, 80 de los 88 min
+# de la pata. Con DSN, idéntico a antes. Vive aquí, y no junto al `init`, porque
+# `test_p1_sentry_pii_scrubbing_backend` ejecuta aislado todo lo que hay entre los helpers y el `init`.
+# tooltip-anchor: P1-PLAN-LOTE-37-SENTRY-SIN-DSN
+_SENTRY_DSN = (os.environ.get("SENTRY_DSN") or "").strip() or None
 
 # [P1-SENTRY-PII-SCRUBBING-BACKEND · 2026-05-15] `before_send` +
 # `before_breadcrumb` que redactan PII (email, health_profile, plan_data,
@@ -304,11 +314,15 @@ def _sentry_redact_breadcrumb(crumb, hint):  # type: ignore[no-untyped-def]
 
 
 sentry_sdk.init(
-    dsn=os.environ.get("SENTRY_DSN"),
+    dsn=_SENTRY_DSN,
     traces_sample_rate=_SENTRY_TRACES_SAMPLE_RATE,
     profiles_sample_rate=_SENTRY_PROFILES_SAMPLE_RATE,
     before_send=_sentry_redact_pii,
     before_breadcrumb=_sentry_redact_breadcrumb,
+    # [P1-PLAN-LOTE-37] sin DSN no hay a quién enviar: sin integraciones, un error de log no se serializa
+    # para tirarse (con DSN, las de siempre)
+    default_integrations=_SENTRY_DSN is not None,
+    auto_enabling_integrations=_SENTRY_DSN is not None,
 )
 
 # Configuración centralizada de logging para todo el backend.

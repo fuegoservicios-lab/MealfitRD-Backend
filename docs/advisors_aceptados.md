@@ -88,6 +88,8 @@ rate desde env var, default 0.1 (10%).
 Detalle: `runbook_advisors_operational_subsections.md` (memoria).
 Test: [`test_p1_sentry_sample_cost.py`](../tests/test_p1_sentry_sample_cost.py).
 
+[P1-PLAN-LOTE-37 · 2026-09-13] **Sin DSN, sin integraciones.** Sin `SENTRY_DSN`, `sentry_sdk.init` pasa `default_integrations` y `auto_enabling_integrations` a `False`: sin destino, la integración de logging serializaba cada `logging.error` para tirarlo (13-21 ms por evento; era la cola de 80 min de la CI). Con DSN, idéntico a antes. La suite vacía `SENTRY_DSN` en `tests/conftest.py`: con el `.env` del dueño, los errores que los tests provocan a propósito salían como eventos hacia el proyecto real. Test: [`test_p1_plan_lote_37.py`](../tests/test_p1_plan_lote_37.py).
+
 
 ---
 
