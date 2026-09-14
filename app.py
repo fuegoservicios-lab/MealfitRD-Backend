@@ -167,7 +167,11 @@ _PROCESS_START_ISO = datetime.now(timezone.utc).isoformat()
 # 32.676 llamadas a `get_master_ingredients` y, sin pool, cada una era una línea de error (con un pool que falla,
 # un intento de conexión). Caché negativa corta (`MEALFIT_CATALOG_NEGATIVE_CACHE_S`, 30 s) en `get_master_ingredients`
 # y `None` por país cacheado en `catalog_capability` con la misma ventana: 1 intento y 1 línea por ventana.
-_LAST_KNOWN_PFIX = "P1-PLAN-LOTE-41 · 2026-09-14"
+# [P1-PLAN-LOTE-45 · 2026-09-14] La prueba RD del dueño (plan 40535829): el reparador del contrato ROTULA el pilar en su
+# sitio en vez de extraer oraciones (149 de 193 recetas de biblioteca salían con pasos fuera de orden; ahora 0), el día
+# determinista toma la familia del blueprint y el tiempo de cocina del formulario y deja de juzgarlo el pool del
+# planificador, el reintento siembra la memoria con los días reciclados, y `repair_stage_diff` cuenta el desorden.
+_LAST_KNOWN_PFIX = "P1-PLAN-LOTE-45 · 2026-09-14"
 
 # [P1-SENTRY-SAMPLE-COST · 2026-05-12] Sentry sampling driven from env vars
 # con default seguro 0.1 (10%). Pre-fix tenía `traces_sample_rate=1.0` y

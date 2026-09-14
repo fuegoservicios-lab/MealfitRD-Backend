@@ -159,9 +159,12 @@ def test_el_armador_consume_la_LISTA_y_no_el_ganador():
     import inspect
 
     src = inspect.getsource(dd.build_day_for_skeleton)
-    assert "elegir_plantillas(" in src, (
+    # [P1-PLAN-LOTE-45] el armador pasa por `elegir_con_tiempo` (tramos de tiempo de cocina), que devuelve la MISMA lista
+    # de `elegir_plantillas` —sin presupuesto es exactamente esa llamada—; lo que este guard protege es la lista.
+    assert "elegir_plantillas(" in src or "elegir_con_tiempo(" in src, (
         "el armador volvió a pedir un solo candidato: vuelven el bucle de 7 platos y el día "
         "perdido por un plato sin receta")
+    assert "elegir_plantillas(" in inspect.getsource(dd.elegir_con_tiempo)
     assert "usadas_hoy" in src, "se perdió el guard de no repetir plantilla dentro del mismo día"
 
 

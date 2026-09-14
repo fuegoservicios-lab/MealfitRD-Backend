@@ -164,6 +164,32 @@ Antes del corte (2026-09-11): ninguno con día determinista y ≥ 7 días (el pl
 En el banco de 30 días del lote 35 (DO, 2000 kcal, CON memoria) siguen rotas 14 de 24 ventanas, todas por dos plantillas
 cuya franja no tiene con qué rotar: la memoria manda al final a las saturadas, pero «si todas lo están se sirve igual».
 
+## La prueba RD del dueño (P1-PLAN-LOTE-45 · 2026-09-14)
+
+El dueño generó un plan con su perfil (plan `40535829`: ganar músculo, 30 días, compra mensual, presupuesto bajo, tiempo
+de cocina «Nada») y los tres días salieron de este módulo. Tres costuras con el resto del sistema, y un reintento inútil:
+
+- **La familia del día.** El blueprint asigna UNA familia por día, ya llevada a las que tienen plantilla (Pollo, Pescado,
+  Huevo…). El esqueleto del planificador trae otra cosa, un pool de ALIMENTOS («tilapia», «yogurt griego natural»), y
+  `_familias_del_dia` sólo sabía leer la clave `protein` del blueprint, que el esqueleto no lleva. Ahora `_familias_para`
+  toma la de la rebanada (`_blueprint_slice.days`) y, si no hay, lleva cada alimento del pool a su familia
+  (`_familia_canonica`: «tilapia» → `pescado`, que pasa de 1 a 13 almuerzos DO).
+- **Los candidatos fijados.** `horizon` los guarda por `día:franja` con la franja del motor (`1:lunch`) y este módulo
+  preguntaba por `1:almuerzo`: el CandidateSet fijado al run no se aplicó nunca. `_fijados_para` ya sabe leerlos, pero
+  queda APAGADO (`MEALFIT_DETERMINISTIC_DAY_PINNED_SLOT_ALIAS`): son 3 por franja y se eligieron sin mirar el tiempo, y
+  medido sobre el blueprint del dueño empeoran el plato (19 min, 8 fuera de presupuesto y 2 repetidos frente a 17, 6 y 1).
+- **El tiempo de cocina.** `elegir_con_tiempo` ordena los candidatos por tramos del presupuesto del formulario (≤1,25×,
+  ≤2×, ≤3× y el resto) y dentro de cada tramo decide `elegir_plantillas` como siempre. Se prefiere, no se descarta. Con
+  «Nada» (10 min) el registro DO tiene 2 almuerzos y 1 cena a tiempo, así que el día dice cuáles se pasaron
+  (`[P1-PLAN-LOTE-45] día N: tiempo de cocina ≤10 min — …`).
+- **El reintento.** El pool del planificador rechazaba HIGH al día determinista («omitió tilapia…») y el reintento lo
+  volvía a armar igual: 3 intentos y 427 s. Ahora `_run_assembly_validations` no lo cuenta
+  (`MEALFIT_SKELETON_FIDELITY_SKIP_DETERMINISTIC`), y en un reintento quirúrgico la memoria entre días empieza con los
+  días reciclados (`MEALFIT_DETERMINISTIC_MEMORY_SEES_RECYCLED`): el día 2 rehecho había servido el Mofongo del día 1.
+
+Medido sobre el blueprint real (simulación de solo lectura): 32 → 17 min de media, 10 → 6 platos fuera de presupuesto y
+4 → 1 repetidos en 3 días. Test: `tests/test_p1_plan_lote_45.py`.
+
 ## Seguridad: el backstop no es opcional
 
 Un día que sale de aquí **sí pasa por `assemble_plan_node` y `review_plan_node`** (las aristas del grafo

@@ -20,6 +20,12 @@ Sin catálogo (fuera de FastAPI, sin pool) no mide y lo dice (`estado = sin_cata
 
 Puro salvo la lectura del catálogo (`shopping_calculator.get_master_ingredients`, cacheado); nunca lanza.
 tooltip-anchor: P1-PLAN-LOTE-27-REPAIR-STAGE-DIFF
+
+[P1-PLAN-LOTE-45 · 2026-09-14] Y el ORDEN. Los códigos V no ven un paso que usa un resultado antes del paso que lo produce:
+en el plan 40535829 el reparador del contrato sacó de su sitio las oraciones de cocción de las 12 recetas de biblioteca y
+este informe dijo «sin hallazgos nuevos». Ahora cada foto cuenta también las oraciones de receta de biblioteca servidas
+fuera de su orden original (`recipe_order.medir_plan`), y el informe lleva `orden = {"etapas", "medidas", "desordenadas",
+"detalle"}`. Se avisa cuando la salida está más desordenada que la entrada.
 """
 from __future__ import annotations
 
@@ -50,6 +56,15 @@ def _catalogo(catalog=None):
         return get_master_ingredients() or None
     except Exception:
         return None
+
+
+def _orden(plan_data) -> dict:
+    """[P1-PLAN-LOTE-45] Oraciones de receta de biblioteca fuera de su orden (`recipe_order.medir_plan`); `{}` si falla."""
+    try:
+        import recipe_order
+        return recipe_order.medir_plan(plan_data)
+    except Exception:                                                          # noqa: BLE001
+        return {}
 
 
 def _firma(v: dict) -> tuple:
@@ -85,7 +100,8 @@ def start(plan_data: dict, *, surface: str = "", catalog=None, form_data=None) -
             return None
         return {"surface": str(surface or "")[:40], "catalog": cat, "form_data": form_data, "comidas": n,
                 "reglas_huella": est.get("reglas_huella"), "t0": t0,
-                "firmas": {"entrada": firmas}, "etapas": {"entrada": conteo}}
+                "firmas": {"entrada": firmas}, "etapas": {"entrada": conteo},
+                "orden": {"entrada": _orden(plan_data)}}
     except Exception:
         return None
 
@@ -98,6 +114,7 @@ def mark(ctx: Optional[dict], etapa: str, plan_data: dict) -> None:
         firmas, conteo, _est = _scan(plan_data, ctx["catalog"], ctx.get("form_data"))
         ctx["firmas"][etapa] = firmas
         ctx["etapas"][etapa] = conteo
+        ctx.setdefault("orden", {})[etapa] = _orden(plan_data)
     except Exception:
         return
 
@@ -111,6 +128,7 @@ def finish(ctx: Optional[dict], plan_data: dict) -> Optional[dict]:
         firmas, conteo, _est = _scan(plan_data, ctx["catalog"], ctx.get("form_data"))
         ctx["firmas"]["salida"] = firmas
         ctx["etapas"]["salida"] = conteo
+        ctx.setdefault("orden", {})["salida"] = _orden(plan_data)
         base = ctx["firmas"].get("entrada", set())
         nuevos, vistos = [], set()
         previo = base
@@ -131,7 +149,20 @@ def finish(ctx: Optional[dict], plan_data: dict) -> Optional[dict]:
             "etapas": ctx["etapas"], "nuevos": nuevos[:40], "n_nuevos": len(nuevos),
             "resueltos": len(base - firmas), "reglas_huella": ctx.get("reglas_huella"),
         }
+        _ord = ctx.get("orden") or {}
+        _ord_sal = _ord.get("salida") or {}
+        informe["orden"] = {
+            "etapas": {e: int((_ord.get(e) or {}).get("oraciones_fuera") or 0) for e in ETAPAS if e in _ord},
+            "medidas": int(_ord_sal.get("medidas") or 0), "desordenadas": int(_ord_sal.get("desordenadas") or 0),
+            "detalle": list(_ord_sal.get("detalle") or [])[:10],
+        }
         plan_data["_repair_stage_diff"] = informe
+        _o_in = informe["orden"]["etapas"].get("entrada", 0)
+        _o_out = informe["orden"]["etapas"].get("salida", 0)
+        if _o_out > _o_in:
+            logger.warning(f"🧪 [P1-PLAN-LOTE-45] {ctx['surface']}: la cadena de reparación desordenó {_o_out - _o_in} "
+                           f"oración(es) de receta de biblioteca ({informe['orden']['desordenadas']} comida(s) con pasos "
+                           f"fuera de su orden de {informe['orden']['medidas']} medidas).")
         if nuevos:
             por = Counter((x["etapa"], x["check"]) for x in nuevos)
             logger.warning(f"🧪 [P1-PLAN-LOTE-27] {ctx['surface']}: la cadena de reparación introdujo {len(nuevos)} hallazgo(s) "

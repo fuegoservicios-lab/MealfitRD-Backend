@@ -16,6 +16,7 @@ y se anota la discrepancia en el informe. El protocolo largo (entorno, gate, che
 | 42 | E1 (operativo) | Retirar los worktrees viejos que estén limpios y ya mergeados; los demás, listados para el dueño (G4) | ¼ sesión |
 | 43 | B6 · E5 · D7 · B9 | Re-mediciones con FECHA: los tres scripts del lote 36 el **2026-10-10**; el embudo B9 a las 2 semanas del lanzamiento | ¼ sesión, en su fecha |
 | 44 | Decisiones del dueño 14-sep | Aplicar lo delegado: 3 recetas a la biblioteca, claras en botella ≥ 4, cohorte B de la lista canónica = canario, pesos 2.0/1.0 en el canario, `block` en PayPal | 1-2 sesiones |
+| 45 | Prueba RD del dueño 14-sep (fuera del plan) | ✅ HECHO en otra sesión (`P1-PLAN-LOTE-45`): receta de biblioteca en su orden, día determinista con la familia del blueprint y el tiempo de cocina, sin reintento inútil. Ver la sección «Lote 45» | — |
 
 Orden recomendado: 38 → **44** → 39 → 40 (el 44 cambia lo que come el dueño, que quiere probar la generación ya; 38, 39 y 40 comparten instrumento y verdad humana), luego 42. El 41 lo está ejecutando otra sesión desde el 14-sep. 43
 sólo en su fecha. Si uno se atasca, se cierra lo que haya con su «lo que NO se hizo» y se sigue con el siguiente.
@@ -73,6 +74,11 @@ fila del ítem en `plan_pendientes_2026_09_11.md`, el doc del área) · párrafo
 explícitas y mensaje que cuente lo medido · push · deploy (`pwsh -NoProfile -File <raíz>/deploy-mealfit.ps1 backend -SkipTests`) ·
 `curl -s https://bioboros.com/health/version` → `last_known_pfix` = tu marker y `drift: false` · CI verde (run de GitHub; las dos patas
 cierran hoy en ~10 min con techo de 30). Un lote que sólo toca docs/scripts de medición no bumpea marker ni despliega.
+
+**Numeración (P1-PLAN-LOTE-45 · 14-sep).** El marker nunca baja: cada test de lote exige `N` ≥ el suyo. El 41 y el 45 ya
+están cerrados y desplegados, así que los lotes pendientes de este plan (38, 39, 40, 42, 43, 44) se cierran con el
+**siguiente número libre ≥ 46** —marker, `tests/test_p1_plan_lote_<N>.py` y memoria con ese número— y el título del commit
+cita su número de plan («`P1-PLAN-LOTE-46` (lote 38 del plan)»). Cerrar con el número del plan haría fallar los tests 41 y 45.
 
 ---
 
@@ -322,6 +328,16 @@ kill switch, peso del canario no toca el global, `block` sin cupón bloquea y co
 promover pesos al global, calibrar al juez.
 
 ---
+
+## Lote 45 · La prueba RD del dueño (HECHO · `P1-PLAN-LOTE-45` · 2026-09-14)
+
+No estaba en el plan: salió de revisar el plan `40535829` que el dueño generó con su perfil dominicano. Cerrado en otra
+sesión; se anota aquí para que nadie lo rehaga. Qué cambió: el reparador del contrato rotula el pilar en su sitio
+(`recipe_order`) en vez de extraer oraciones —149 de 193 recetas de biblioteca salían desordenadas— y `repair_stage_diff`
+cuenta el desorden; el día determinista toma la familia del blueprint y el tiempo de cocina del formulario; el pool del
+planificador ya no lo rechaza; el reintento siembra la memoria con los días reciclados. Pendiente y medido: los
+candidatos fijados por franja se leen detrás de `MEALFIT_DETERMINISTIC_DAY_PINNED_SLOT_ALIAS` (apagado), y encenderlo pide
+antes un CandidateSet más ancho que sepa del tiempo. Detalle: `deterministic_day.md` y `culinary_coherence.md`.
 
 ## Para el dueño (no lo cierra código)
 

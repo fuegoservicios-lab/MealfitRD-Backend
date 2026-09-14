@@ -223,6 +223,96 @@ def _familias_del_dia(skeleton_day) -> list:
         return [str(sk["protein"])]
     return [str(p) for p in (sk.get("protein_pool") or []) if p]
 
+
+# ---------------------------------------------------------------------------
+# [P1-PLAN-LOTE-45 · 2026-09-14] Prueba RD del dueño (plan 40535829): tres costuras entre el blueprint y este módulo.
+#
+#   1. La familia del día. El blueprint (`horizon`) asigna UNA por día, ya llevada a las que tienen plantilla
+#      (`viable_family`): Pollo, Pescado, Huevo, Res, Cerdo… El esqueleto del planificador trae otra cosa —un pool de
+#      ALIMENTOS («tilapia», «yogurt griego natural», «mantequilla de maní»)— y `_familias_del_dia` sólo sabía leer la
+#      clave `protein` del blueprint, que el esqueleto no lleva. El día 2 debía ser de pescado y salió con el mismo
+#      Mofongo con pollo del día 1. La rebanada (`_blueprint_slice.days`) sí trae la familia: ahora manda.
+#   2. Los candidatos fijados. `horizon` los guarda por `día:franja` con la franja del MOTOR («1:lunch») y este módulo
+#      preguntaba por «1:almuerzo»: el CandidateSet fijado al run no se aplicó ni una vez. La costura queda arreglada
+#      detrás de un knob APAGADO: medido, aplicarlo hoy empeora el plato (ver `_fijados_para`).
+#   3. Un alimento del pool que no es familia («tilapia») se lleva a la suya («pescado») antes de preguntar al
+#      registro; sin eso sólo casaban las plantillas sin proteína.
+# tooltip-anchor: P1-PLAN-LOTE-45-FAMILIA-DEL-BLUEPRINT
+# ---------------------------------------------------------------------------
+def _knob_on(nombre: str, defecto: bool = True) -> bool:
+    try:
+        from knobs import _env_bool
+        return _env_bool(nombre, defecto)
+    except Exception:                                                  # noqa: BLE001
+        return defecto
+
+
+def _familia_canonica(nombre) -> str:
+    """«tilapia» → «pescado». Sólo cuando el nombre, leído como familia, no casa con ninguna etiqueta del registro: lo que
+    ya se entiende («Pechuga de pollo», «Lentejas», «Atún en agua») se deja como está."""
+    n = str(nombre or "").strip()
+    if not n:
+        return n
+    try:
+        import horizon as _hz
+        fams = list(_hz._FAMILY_TOKENS)
+        if any(_hz.family_matches(n, f) for f in fams):
+            return n
+        suyas = [f for f in fams if _hz.family_matches(f, n)]
+        if not suyas:
+            return n
+        palabras = set(_hz._norm(n).split())
+        return next((f for f in suyas if _hz._norm(f) in palabras), suyas[0])
+    except Exception:                                                  # noqa: BLE001
+        return n
+
+
+def _familias_para(skeleton_day, sl, day_index) -> list:
+    """Las familias con las que se pregunta al registro: la del esqueleto si trae la forma del blueprint (`protein`); si
+    no, la de la rebanada para ESE día; si tampoco, el pool del planificador con cada alimento en su familia."""
+    if (skeleton_day or {}).get("protein"):
+        return _familias_del_dia(skeleton_day)
+    if _knob_on("MEALFIT_DETERMINISTIC_DAY_BLUEPRINT_FAMILY") and isinstance(sl, dict):
+        for d in sl.get("days") or []:
+            try:
+                if isinstance(d, dict) and int(d.get("day_index", -1)) == int(day_index) and d.get("protein"):
+                    return [str(d["protein"])]
+            except (TypeError, ValueError):
+                continue
+    fams = _familias_del_dia(skeleton_day)
+    if not _knob_on("MEALFIT_DETERMINISTIC_DAY_POOL_FAMILY_CANON"):
+        return fams
+    vistos, out = set(), []
+    for f in (_familia_canonica(x) for x in fams):
+        if f and f.lower() not in vistos:
+            vistos.add(f.lower())
+            out.append(f)
+    return out
+
+
+def _fijados_para(fijados, day_index, franja):
+    """Los candidatos fijados al run para `día:franja`, con la franja en el vocabulario del registro («almuerzo») o en el
+    del motor («lunch»), que es como `horizon` los guarda. `None` si no hay."""
+    if not isinstance(fijados, dict) or not fijados:
+        return None
+    v = fijados.get(f"{day_index}:{franja}")
+    # APAGADO por defecto, por medición: sobre el blueprint real del dueño (run f0bfd772, «Nada» de tiempo) los 3
+    # candidatos fijados por franja —elegidos sin mirar el tiempo de cocina— dieron 19 min de media, 8 platos por encima
+    # del presupuesto y 2 repetidos en 3 días; la consulta viva con la familia del blueprint, 17 min, 6 y 1. Encenderlo
+    # pide antes un CandidateSet más ancho y que sepa del tiempo.
+    if v is not None or not _knob_on("MEALFIT_DETERMINISTIC_DAY_PINNED_SLOT_ALIAS", False):
+        return v
+    try:
+        import dish_registry as _dr
+        for k, val in fijados.items():
+            d, _, s = str(k).partition(":")
+            if d == str(day_index) and _dr.canonical_slot_es(s) == franja:
+                return val
+    except Exception:                                                  # noqa: BLE001
+        return None
+    return None
+
+
 _RE_LINEA = re.compile(r"^\s*([\d.]+)\s*g\s+de\s+(.+)$")
 
 
@@ -521,6 +611,72 @@ def elegir_plantillas(tids, objetivo, catalogo: dict, por_id: dict, slot: str = 
         r = int(rotacion) % len(elegibles)
         elegibles = elegibles[r:] + elegibles[:r]
     return (elegibles + _llenos)[:_empate_max()]
+
+
+# ---------------------------------------------------------------------------
+# [P1-PLAN-LOTE-45 · 2026-09-14] El tiempo de cocina del formulario, al selector. El dueño eligió «Nada · opciones directas,
+# de 5 mins» (`cookingTime=none` ⇒ 10 min en `horizon._COOKING_TIME_BUDGET_MIN`) y 10 de 12 platos iban de 15 a 70 min:
+# este módulo no leía el campo y la fidelidad sólo lo medía. Se PREFIERE, no se descarta —la doctrina del módulo—: por
+# tramos de tiempo (≤1,25×, ≤2×, ≤3× el presupuesto y el resto), y dentro de cada tramo manda el ajuste de macros de
+# siempre. Los que ya agotaron su cuota de repetición van al final de TODOS los tramos: la regla de repetición tiene un
+# número y la puso el usuario. Medido sobre el registro DO: con 10 min hay 2 almuerzos y 1 cena; con 30, 14 y 23.
+# tooltip-anchor: P1-PLAN-LOTE-45-TIEMPO-DE-COCINA
+# ---------------------------------------------------------------------------
+TOLERANCIA_TIEMPO = 1.25          # la misma de `horizon._prep_time_issues`: por debajo no se marca como pasado
+_TRAMOS_TIEMPO = (1.25, 2.0, 3.0)
+
+
+def _presupuesto_minutos(form_data) -> Optional[int]:
+    """Los minutos que la persona dijo tener (`none`=10, `30min`=30, `1hour`=60); `None` sin límite o sin dato."""
+    if not _knob_on("MEALFIT_DETERMINISTIC_DAY_COOKING_TIME"):
+        return None
+    fd = form_data or {}
+    v = fd.get("cookingTime") or (fd.get("health_profile") or {}).get("cookingTime")
+    try:
+        import horizon as _hz
+        return _hz._COOKING_TIME_BUDGET_MIN.get(str(v or "").strip().lower())
+    except Exception:                                                  # noqa: BLE001
+        return None
+
+
+def _minutos_de(t) -> Optional[int]:
+    """Los minutos de la plantilla si salen de su receta o de su técnica (nunca del relleno de 15 min)."""
+    lg = (t or {}).get("logistics") or {}
+    if str(lg.get("prep_minutes_source") or "") not in ("receta", "tecnica"):
+        return None
+    try:
+        m = int(lg.get("prep_minutes_est") or 0)
+    except (TypeError, ValueError):
+        return None
+    return m if m > 0 else None
+
+
+def elegir_con_tiempo(tids, objetivo, catalogo: dict, por_id: dict, slot: str = "",
+                      presupuesto: Optional[int] = None, **kw) -> list:
+    """`elegir_plantillas` por tramos de tiempo. Sin presupuesto es exactamente `elegir_plantillas`."""
+    if not presupuesto:
+        return elegir_plantillas(tids, objetivo, catalogo, por_id, slot, **kw)
+    sat, mx = kw.get("saturados") or {}, kw.get("max_rep")
+    frescos, llenos, vistos, previos = [], [], set(), set()
+    for mult in _TRAMOS_TIEMPO + (None,):
+        lim = None if mult is None else float(presupuesto) * mult
+        tramo = []
+        for tid in (tids or []):
+            if tid in previos:
+                continue
+            m = _minutos_de(por_id.get(tid))
+            if lim is None or (m is not None and m <= lim):
+                tramo.append(tid)
+        previos.update(tramo)
+        if not tramo:
+            continue
+        for p in elegir_plantillas(tramo, objetivo, catalogo, por_id, slot, **kw):
+            tid = str((p[0] or {}).get("template_id"))
+            if tid in vistos:
+                continue
+            vistos.add(tid)
+            (llenos if (mx and int(sat.get(tid, 0)) >= int(mx)) else frescos).append(p)
+    return frescos + llenos
 
 
 def elegir_plantilla(tids, objetivo, catalogo: dict, por_id: dict, slot: str = ""):
@@ -1238,7 +1394,7 @@ def build_day_for_skeleton(nutrition, form_data, skeleton_day, day_num, user_id=
         franjas = _franjas_del_dia(skeleton_day)
         if not franjas:
             return None            # una franja que no sabemos repartir: que la haga el LLM
-        familias = _familias_del_dia(skeleton_day)
+        familias = _familias_para(skeleton_day, _sl, day_index)   # [P1-PLAN-LOTE-45] la del blueprint manda
         meals = []
         usadas_hoy = set()   # [P1-DIA-DETERMINISTA-VARIEDAD] ninguna plantilla dos veces el mismo día
         _sodio_dia = 0.0     # [P1-SODIO-DEL-DIA-DETERMINISTA] presupuesto del DÍA, no del plato
@@ -1253,13 +1409,15 @@ def build_day_for_skeleton(nutrition, form_data, skeleton_day, day_num, user_id=
         # exacta por 7 días de la política (`balanced` ⇒ 2). Se PREFIERE al fresco, no se descarta al repetido.
         _saturados = _conteo_ventana(memoria, _offset, _fd, _uid, por_id)
         _max_rep = _max_repeticion_7d(_fd)
+        _presup_min = _presupuesto_minutos(_fd)   # [P1-PLAN-LOTE-45] el tiempo de cocina del formulario
+        _lentos: list = []
         for etiqueta, slot, r in franjas:
             obj = {k: v * r for k, v in objetivo_dia.items()}
             # [P1-CANDIDATO-CON-PRECIO · 2026-09-09] Éste es el ÚNICO camino donde el candidato se
             # convierte en plato sin que el modelo pueda ignorarlo: sin el tier aquí, el filtro de
             # precio sólo aconseja. Los demás filtros viajan en `_kw_cands`, los mismos que `horizon`.
             tids, _fuente = _candidatos(dr, country, slot, familias,
-                                        _fijados.get(f"{day_index}:{slot}"), **_kw_cands)
+                                        _fijados_para(_fijados, day_index, slot), **_kw_cands)
             # [P1-DIA-DETERMINISTA-VARIEDAD · 2026-09-09] La lista, no el ganador: `rotacion` mueve
             # la cabeza por día (medido: 7 platos distintos en 56 comidas cuando era siempre el
             # mejor), y si al elegido le falta la receta congelada se prueba el siguiente en vez de
@@ -1268,7 +1426,7 @@ def build_day_for_skeleton(nutrition, form_data, skeleton_day, day_num, user_id=
             _ultimo_motivo = None
             _reserva = None
             _reserva_var = None
-            _elegibles = elegir_plantillas(tids, obj, catalogo, por_id, slot,
+            _elegibles = elegir_con_tiempo(tids, obj, catalogo, por_id, slot, _presup_min,
                                            rotacion=_rotacion_de(day_index, slot),
                                            saturados=_saturados, max_rep=_max_rep)
             # Primero los que no se han servido hoy; los ya usados quedan de RESPALDO al final, no
@@ -1350,6 +1508,10 @@ def build_day_for_skeleton(nutrition, form_data, skeleton_day, day_num, user_id=
                 _proteinas_hoy.add(str(_t_srv.get("protein")))
             if slot in ("desayuno", "merienda"):
                 _bases_hoy |= _bases_ligeras_de(comida, _tokens_var)
+            if _presup_min:
+                _mm = _minutos_de(_t_srv)
+                if _mm and _mm > _presup_min * TOLERANCIA_TIEMPO:
+                    _lentos.append(f"{slot} {_mm} min")
             meals.append(comida)
         if not meals:
             return None
@@ -1363,6 +1525,9 @@ def build_day_for_skeleton(nutrition, form_data, skeleton_day, day_num, user_id=
             logger.warning(f"[P1-SODIO-DEL-DIA-DETERMINISTA] día {day_num} RECHAZADO: "
                            f"{_sodio_dia:.0f} mg de sodio > techo {_techo_sodio():.0f} mg → cae al LLM")
             return None
+        if _lentos:
+            logger.info(f"[P1-PLAN-LOTE-45] día {day_num}: tiempo de cocina ≤{_presup_min} min — sin plato a tiempo en "
+                        f"{len(_lentos)} franja(s); se sirvió el más rápido que pasó: {', '.join(_lentos)}")
         logger.info(f"[P1-DETERMINISTIC-DAY] día {day_num} armado sin LLM: "
                     f"{len(meals)} comidas, {sum(m['calories'] for m in meals)} kcal, "
                     f"{_sodio_dia:.0f} mg de sodio"

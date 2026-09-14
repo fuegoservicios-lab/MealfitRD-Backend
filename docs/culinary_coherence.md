@@ -1160,3 +1160,33 @@ instrumento está listo para cuando no.
 **Lo que NO se mide aquí, dicho.** CUL-P2-04 (cocinado real: panel y cocina, no se sustituye con un LLM), los P3 (gustos de
 preparación, biblioteca de variantes, «magia» con usuarios: producto) y la calibración del juez con la rúbrica anotada
 (dueño). El presupuesto se propone con su cifra; no se cablea.
+
+
+## El orden de la receta: rotular en su sitio y medir el desorden (`P1-PLAN-LOTE-45` · 2026-09-14)
+
+**Qué pasaba.** El reparador del contrato de pasos (`graph_orchestrator._repair_recipe_contract`, P1-RECIPE-CONTRACT-REPAIR)
+nació para una receta del modelo con la cocción atrapada dentro del «Mise en place». Ante «falta 'El Toque de Fuego'»
+EXTRAÍA de todos los pasos cada oración con verbo de cocción y la llevaba a un único paso delante del Montaje. En una receta
+NARRATIVA —las 193 de la biblioteca, sin rótulos— eso la desordena: en el plan del dueño del 14-sep «Escúrrelos bien» y
+«maja el ajo con el plátano» quedaban antes de hervir el plátano, y los cinco `paso_incoherente` del juez eran eso. Medido
+sobre la biblioteca completa: 149 de 193 recetas salían con oraciones fuera de su orden (281 oraciones).
+
+**Qué cambia.** `recipe_order.rotular_fuego_en_su_sitio` antepone «El Toque de Fuego: » al primer paso de cocción sin rótulo
+(el primero que ya dice tiempo o temperatura, si lo hay) y no mueve nada; `rotular_montaje_en_su_sitio` rotula el último
+paso si empieza sirviendo (73 recetas), en vez de añadir detrás un segundo «sirve» genérico. La extracción queda para lo que
+nació: cocción dentro de un Mise o un Montaje sin pasos narrativos. Ahora: 0 recetas desordenadas. Knob
+`MEALFIT_RECIPE_TDF_IN_PLACE`.
+
+**Y se mide.** Los códigos V no ven un paso que usa un resultado antes del paso que lo produce. `recipe_order.fuera_de_orden`
+empareja cada oración servida con la de la biblioteca (Jaccard de palabras ≥ 0,6, así que sobrevive a los retoques de
+cantidad) y cuenta las que están fuera de su orden (emparejadas − la subsecuencia creciente más larga). `repair_stage_diff`
+lo hace en las tres fotos y el informe lleva `orden = {"etapas", "medidas", "desordenadas", "detalle"}`; si la salida está
+más desordenada que la entrada lo avisa (`[P1-PLAN-LOTE-45] … la cadena de reparación desordenó N oración(es)`).
+
+**El Mise de plantilla ya no cocina.** La plantilla que el reparador antepone decía «…ten todo listo antes de
+**cocinar**», y `cocin\w*` es señal de fuego para `_meal_is_no_cook`: al añadirla a un plato frío (batida, casabe con
+aguacate) el re-lint lo leía cocinado y pedía un «El Toque de Fuego» inexistente, así que 15 de las 193 recetas de la
+biblioteca salían con el badge «Receta con pasos incompletos». Ahora dice «antes de empezar»: 0 recetas con residual.
+
+De paso, «sofrito» y no «sofrit» en `_STEWY_DISH_HINT`: «la cebolla sofrita» encima de un mangú no es olla, y el cerrador
+de proteína le había escrito «añade el arenque al guiso» a un plato sin guiso. Test: `tests/test_p1_plan_lote_45.py`.

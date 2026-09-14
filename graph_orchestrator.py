@@ -7418,6 +7418,14 @@ def _culture_weights_for_form_data(form_data):
         return None
 
 
+# [P1-PLAN-LOTE-45 · 2026-09-14] Prueba RD del dueño. Rollback sin redeploy de cada pieza:
+#   · MEALFIT_SKELETON_FIDELITY_SKIP_DETERMINISTIC=false → el pool del planificador vuelve a juzgar al día determinista.
+#   · MEALFIT_DETERMINISTIC_MEMORY_SEES_RECYCLED=false → la memoria entre días vuelve a empezar vacía en el reintento.
+# tooltip-anchor: P1-PLAN-LOTE-45-FIDELIDAD-DETERMINISTA
+SKELETON_FIDELITY_SKIP_DETERMINISTIC = _env_bool("MEALFIT_SKELETON_FIDELITY_SKIP_DETERMINISTIC", True)
+DETERMINISTIC_MEMORY_SEES_RECYCLED = _env_bool("MEALFIT_DETERMINISTIC_MEMORY_SEES_RECYCLED", True)
+
+
 @_node_label("day_generator")
 async def generate_days_parallel_node(state: PlanState) -> dict:
     """Genera los 7 días completos en PARALELO usando el esqueleto del planificador."""
@@ -8154,6 +8162,11 @@ async def generate_days_parallel_node(state: PlanState) -> dict:
     generated_days = []
 
     _det_prev: list = []  # [P1-PLAN-LOTE-2 · B6] memoria entre días deterministas del run (la lee y la actualiza deterministic_day)
+    # [P1-PLAN-LOTE-45 · 2026-09-14] En un reintento quirúrgico los días reciclados no pasan por el día determinista, así que la
+    # memoria no los veía: el día 2 rehecho sirvió el MISMO almuerzo que el día 1 reciclado (plan 40535829, Mofongo ×2).
+    # tooltip-anchor: P1-PLAN-LOTE-45-MEMORIA-RECICLADOS
+    if DETERMINISTIC_MEMORY_SEES_RECYCLED and surgical_mode and recycled_days_cache:
+        _det_prev.extend(recycled_days_cache[_k] for _k in sorted(recycled_days_cache))
     async def _safe_gen(skel_day, day_num, temp_override=None):
         try:
             result = _det_day(nutrition, form_data, skel_day, day_num, memoria=_det_prev) or await _generate_day_hedged(skel_day, day_num, temp_override)  # [P1-DETERMINISTIC-DAY] knob OFF ⇒ None ⇒ camino de siempre
@@ -19134,7 +19147,9 @@ _LEGUME_PROTEIN_HINT = ("guisante", "arveja", "chicharo", "lenteja", "garbanzo",
 # convierte una receta en un añadido de última hora (caso vivo: 55 g de pavo molido sobre unos
 # frijoles pintos guisados que llevan 45 min al fuego — el alimento estaba BIEN, el texto no).
 _STEWY_DISH_HINT = ("guisad", "guiso", "estofad", "sancoch", "caldo", "sopa", "asopa",
-                    "salsa criolla", "en salsa", "sofrit", "locrio", "chilindron")
+                    # [P1-PLAN-LOTE-45] «sofrito» (la base del guiso), no «sofrit»: «la cebolla sofrita» encima de un mangú no
+                    # es olla, y el closer le escribió «añade el arenque al guiso» a un plato sin guiso (plan 40535829).
+                    "salsa criolla", "en salsa", "sofrito", "locrio", "chilindron")
 # [P1-STEAM-IS-NOT-STEW · 2026-07-25] Técnicas que también se "tapan" y NO son olla con líquido.
 _NOT_STEWY_HINT = ("vapor", "vaporera", "cesta de bambu", "horno", "hornea", "gratina",
                    "airfryer", "freidora", "microondas", "papillote")
@@ -23268,7 +23283,7 @@ def _ensure_nonempty_recipe(meal: dict) -> bool:
         # mide (`_recipe_step_contract_issues`: "Toque de Fuego sin tiempo/temperatura"). Rango genérico
         # plausible 10-15 min a fuego medio (paridad con `_fallback_recipe_steps`, que sí trae tiempos).
         meal["recipe"] = [
-            f"Mise en place: Lava, pela y mide {ings_txt}; ten todo listo antes de cocinar.",
+            f"Mise en place: Lava, pela y mide {ings_txt}; ten todo listo antes de empezar.",
             f"El Toque de Fuego: Cocina los ingredientes principales de «{name}» con la técnica indicada "
             f"(plancha, horno o hervido) a fuego medio 10-15 minutos, hasta que estén bien cocidos por "
             f"dentro, sazonando al gusto.",
@@ -23765,6 +23780,10 @@ def _recipe_step_contract_issues(meal: dict) -> list:
 # deterministas (siblings MISE_COOK_SPLIT/REVERSE-COHERENCE default ON): no puede rechazar nada,
 # solo toca meals YA rotos, fail-open. Rollback: MEALFIT_RECIPE_CONTRACT_REPAIR=false.
 RECIPE_CONTRACT_REPAIR_ENABLED = _env_bool("MEALFIT_RECIPE_CONTRACT_REPAIR", True)
+# [P1-PLAN-LOTE-45 · 2026-09-14] Receta NARRATIVA (pasos sin rótulo, p. ej. las 193 de la biblioteca): el pilar se ROTULA en
+# su sitio (`recipe_order`), nunca se extraen oraciones. Rollback: MEALFIT_RECIPE_TDF_IN_PLACE=false.
+# tooltip-anchor: P1-PLAN-LOTE-45-TDF-EN-SU-SITIO
+RECIPE_TDF_IN_PLACE_ENABLED = _env_bool("MEALFIT_RECIPE_TDF_IN_PLACE", True)
 
 
 # [P1-COHERENCE-SEVERE-DIRECTIONAL · 2026-07-10] La severidad de coherencia es DIRECCIONAL: solo la
@@ -23934,7 +23953,11 @@ def _repair_recipe_contract(meal: dict, issues: list) -> list:
         name = str(meal.get("name") or "").strip() or "el plato"
         _ings = [str(i).strip() for i in (meal.get("ingredients") or []) if str(i).strip()]
         ings_txt = ", ".join(_ings[:6]) if _ings else "los ingredientes de la receta"
-        _MISE_TPL = f"Mise en place: Lava, pela y mide {ings_txt}; ten todo listo antes de cocinar."
+        # [P1-PLAN-LOTE-45 · 2026-09-14] «antes de EMPEZAR», no «de cocinar»: `cocin\w*` es señal de fuego para
+        # `_meal_is_no_cook`, así que el Mise que este pase añade volvía COCINADO a un plato frío y el re-lint pedía un
+        # «El Toque de Fuego» que no existe — badge amarillo en 15 de las 193 recetas de biblioteca (batidas, casabe con
+        # aguacate). tooltip-anchor: P1-PLAN-LOTE-45-MISE-SIN-FUEGO
+        _MISE_TPL = f"Mise en place: Lava, pela y mide {ings_txt}; ten todo listo antes de empezar."
         _MONTAJE_TPL = f"Montaje: Emplata «{name}», rectifica la sal y sirve a la temperatura adecuada."
 
         def _pillar_idx(prefix):
@@ -23948,7 +23971,21 @@ def _repair_recipe_contract(meal: dict, issues: list) -> list:
         # de la oración, fuentes de 1 sola oración con backfill del Mise, pasos sin prefijo) — los
         # guards del split v2 (verbo al inicio, ≥2 oraciones) dejaban escapar exactamente el caso
         # vivo de las Tostadas. Verbatim-move; síntesis por template SOLO si no hay nada extraíble.
-        if "falta 'El Toque de Fuego'" in issues and not _meal_is_no_cook(meal):
+        # [P1-PLAN-LOTE-45 · 2026-09-14] En una receta NARRATIVA extraer oraciones las sacaba de su orden (plan 40535829:
+        # «Escúrrelos bien» antes de hervir; los 5 `paso_incoherente` del juez). El pilar se ROTULA donde ya está; la
+        # extracción queda para la cocción atrapada DENTRO de un Mise/Montaje, que es para lo que nació.
+        _tdf_en_sitio = False
+        if (RECIPE_TDF_IN_PLACE_ENABLED and "falta 'El Toque de Fuego'" in issues
+                and not _meal_is_no_cook(meal)):
+            try:
+                import recipe_order as _ro_rr
+                _tdf_en_sitio = _ro_rr.rotular_fuego_en_su_sitio(
+                    rec, lambda _s: bool(_NOCOOK_COOK_SIGNAL_RE.search(_sa_rr(str(_s).lower()))),
+                    lambda _s: bool(_CONTRACT_TIME_RE.search(str(_s)))) is not None
+            except Exception as _ro_e:
+                logger.warning(f"[P1-PLAN-LOTE-45] rotular en su sitio no-op ({type(_ro_e).__name__}: {_ro_e}); se extrae")
+                _tdf_en_sitio = False
+        if "falta 'El Toque de Fuego'" in issues and not _meal_is_no_cook(meal) and not _tdf_en_sitio:
             _cook_all, _drop_idx = [], []
             for _si, _s in enumerate(list(rec)):
                 if not isinstance(_s, str) or _is_recipe_safety_note_step(_s):
@@ -23997,8 +24034,18 @@ def _repair_recipe_contract(meal: dict, issues: list) -> list:
             rec.insert(0, _MISE_TPL)
 
         # ── (3) Montaje ausente → APPEND template
+        # [P1-PLAN-LOTE-45] …salvo que el último paso ya sea el de servir («Sirve el mofongo caliente…»): se rotula en su
+        # sitio en vez de añadir detrás un segundo «sirve» genérico.
         if "falta 'Montaje'" in issues and _pillar_idx("montaje") == -1:
-            rec.append(_MONTAJE_TPL)
+            _mo_en_sitio = None
+            if RECIPE_TDF_IN_PLACE_ENABLED:
+                try:
+                    import recipe_order as _ro_mo
+                    _mo_en_sitio = _ro_mo.rotular_montaje_en_su_sitio(rec)
+                except Exception:
+                    _mo_en_sitio = None
+            if _mo_en_sitio is None:
+                rec.append(_MONTAJE_TPL)
 
         # ── (4) Pilares fuera de orden → reorden estable (contenidos canónicos en los MISMOS slots;
         # los pasos no-pilar conservan su posición relativa)
@@ -24438,6 +24485,14 @@ def _run_assembly_validations(
         # actual produce "omitió X" falsos (X nunca le fue asignado). Skip SOLO fidelity;
         # las demás validaciones (coherence, schema) siguen aplicando abajo.
         if day.get("_recycled_from_prior_attempt"):
+            continue
+        # [P1-PLAN-LOTE-45 · 2026-09-14] Un día DETERMINISTA no desobedece al esqueleto: elige plantillas por la familia del
+        # BLUEPRINT (la que `horizon` ya dejó con plantilla) y declara cuándo la suelta (`_candidate_source`). Contarle el pool
+        # del planificador como «omitió» rechazaba HIGH un día que el reintento vuelve a armar igual: plan 40535829, 3
+        # intentos y el día 2 rehecho dos veces por «tilapia / yogurt griego / mantequilla de maní».
+        if SKELETON_FIDELITY_SKIP_DETERMINISTIC and day.get("_day_source") == "deterministic":
+            logger.info(f"🧬 [P1-PLAN-LOTE-45] Día {day_num} determinista: la fidelidad al pool del planificador no aplica "
+                        f"(se audita contra el blueprint).")
             continue
         skeleton_day = next((s for s in skeleton_days if s.get("day") == day_num), {})
         assigned_proteins = [_flatten_ingredient(p).lower() for p in skeleton_day.get("protein_pool", [])]
