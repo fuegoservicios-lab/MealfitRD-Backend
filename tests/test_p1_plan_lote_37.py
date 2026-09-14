@@ -67,6 +67,18 @@ def test_un_error_de_log_tras_import_app_no_construye_un_evento(monkeypatch):
     assert eventos == [], "sin DSN, un error de log no debe construir un evento de Sentry"
 
 
+def test_el_techo_de_la_ci_es_tres_veces_la_pata_mas_larga():
+    """[P1-PLAN-LOTE-37 (bis) · 2026-09-14] Con la cola arreglada las patas cierran en 10,5 y 8,3 min (run
+    34799738022): el techo baja de 120 a 30, tres veces la pata más larga. Si vuelve a subir, que sea con una
+    medición al lado, no como margen a ciegas; y `--durations` se queda, para que la próxima cola tenga nombre."""
+    ci = (_BACKEND / ".github" / "workflows" / "ci.yml").read_text(encoding="utf-8")
+    techos = re.findall(r"^\s+timeout-minutes:\s*(\d+)\s*$", ci, re.M)
+    assert techos, "el job backend-tests debe declarar timeout-minutes"
+    assert all(int(t) <= 30 for t in techos), f"techo {techos} min: con patas de 8-11 min, 30 es margen; más esconde una regresión"
+    assert "P1-PLAN-LOTE-37 (bis)" in ci
+    assert "--durations=30" in ci, "sin --durations la próxima cola no tiene nombre"
+
+
 def test_docs_plan_marker():
     for doc in ("knobs_reference.md", "plan_pendientes_2026_09_11.md", "advisors_aceptados.md"):
         assert "P1-PLAN-LOTE-37" in (_BACKEND / "docs" / doc).read_text(encoding="utf-8"), doc

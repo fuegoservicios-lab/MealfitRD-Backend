@@ -93,7 +93,10 @@ jobs:
     # nombre todavía: `--durations` lo nombra en la próxima corrida. El techo es margen, no el arreglo.
     # [P1-PLAN-LOTE-37 · 2026-09-13] Lo nombró: el setup de `test_p1_arq27_f3_candidateset.py` (630-750 s por test),
     # y la causa era Sentry sin DSN serializando cada error de log. Arreglado; el techo se revisa con la corrida siguiente.
-    timeout-minutes: 120
+    # [P1-PLAN-LOTE-37 (bis) · 2026-09-14] Revisado: con el arreglo las dos patas cierran en 10,5 y 8,3 min (run
+    # 34799738022; el test más lento, 49 s). 120 → 30: tres veces la pata más larga. Un techo que triplica lo normal
+    # sigue siendo margen, y una regresión de la cola vuelve a verse como `cancelled` en media hora, no en dos.
+    timeout-minutes: 30
     env:
       # [P1-I18N-CI-SIN-VEREDICTO] `secrets.*` no se evalúa dentro de un `if` de step; aquí
       # sí, y la condición del checkout del hermano lee esta variable.
