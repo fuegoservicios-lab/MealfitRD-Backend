@@ -1,0 +1,783 @@
+{
+  "anotador": "angelo",
+  "generado": "2026-09-13",
+  "fuente": "Hoja del dueno (artefacto, coleccion hoja, documento angelo), anotacion CIEGA: lo que marco la maquina se mostraba solo despues de decidir; volcado 2026-09-14 tal cual, sin editar",
+  "instrucciones": "por caso: veredicto ok|defecto|dudoso; defectos: [{clase, severidad, evidencia, alimento?}] con clase de RUBRICA (culinary_golden_score.py). Lista vacia si el veredicto es ok.",
+  "casos": {
+    "2168899312": {
+      "veredicto": "defecto",
+      "defectos": [
+        {
+          "alimento": "Tomate y rábano.",
+          "clase": "cantidad_inconsistente",
+          "evidencia": "La lista indica 1¼ tomates, pero el paso 1 usa ½ tomate. También lista ½ taza de rábanos y otros 120 g de rábano, pero los pasos solo usan ½ taza.",
+          "severidad": "minor"
+        }
+      ]
+    },
+    "2327193370": {
+      "veredicto": "dudoso",
+      "defectos": []
+    },
+    "0006d5207d": {
+      "veredicto": "dudoso",
+      "defectos": []
+    },
+    "00c6bc53c7": {
+      "veredicto": "ok",
+      "defectos": []
+    },
+    "00e3c06383": {
+      "veredicto": "defecto",
+      "defectos": [
+        {
+          "alimento": "Semillas de linaza.",
+          "clase": "otro",
+          "evidencia": "El paso 2 afirma «cierra tu omega-3 del día», pero no muestra un cálculo ni una necesidad individual que respalde esa afirmación.",
+          "severidad": "minor"
+        }
+      ]
+    },
+    "00fae1c079": {
+      "veredicto": "defecto",
+      "defectos": [
+        {
+          "alimento": "Almendras fileteadas.",
+          "clase": "usa_lo_que_no_esta",
+          "evidencia": "Los pasos 1 y 3 piden almendras fileteadas, pero no aparecen en la lista, no tienen cantidad y no se indican como opcionales.",
+          "severidad": "minor"
+        }
+      ]
+    },
+    "0108f857ae": {
+      "veredicto": "defecto",
+      "defectos": [
+        {
+          "alimento": "Carne de res magra",
+          "clase": "cantidad_inconsistente",
+          "evidencia": "Lista: 85 g de res; paso 1: porción de 140 g.",
+          "severidad": "high"
+        }
+      ]
+    },
+    "01606d0573": {
+      "veredicto": "defecto",
+      "defectos": [
+        {
+          "alimento": "Arroz blanco.",
+          "clase": "seco_sin_coccion",
+          "evidencia": "La lista incluye 40 g de arroz blanco crudo y el paso 2 pide incorporarlo directamente, sin hervirlo ni indicar agua o tiempo para cocinarlo.",
+          "severidad": "high"
+        }
+      ]
+    },
+    "01b41535b1": {
+      "veredicto": "defecto",
+      "defectos": [
+        {
+          "alimento": "Aceite de oliva.",
+          "clase": "cantidad_inconsistente",
+          "evidencia": "La lista indica 1.25 cucharadas de aceite de oliva, pero el paso 2 utiliza solo la mitad. Ningún otro paso usa la mitad restante.",
+          "severidad": "minor"
+        }
+      ]
+    },
+    "01c22c6847": {
+      "veredicto": "defecto",
+      "defectos": [
+        {
+          "alimento": "Lentejas y habichuelas negras.",
+          "clase": "seco_sin_coccion",
+          "evidencia": "La lista indica lentejas y habichuelas negras secas, pero el paso 1 las trata como cocidas. El paso 2 solo las calienta en la plancha durante 4 y 2 minutos, respectivamente, sin cocción previa.",
+          "severidad": "high"
+        }
+      ]
+    },
+    "01c46fd2a5": {
+      "veredicto": "defecto",
+      "defectos": [
+        {
+          "alimento": "Cilantro.",
+          "clase": "ingrediente_huerfano",
+          "evidencia": "La lista incluye 1¼ cucharadas de cilantro. El paso 1 lo pica, pero ningún paso lo incorpora al huevo ni lo añade al servir.",
+          "severidad": "minor"
+        }
+      ]
+    },
+    "02068c1382": {
+      "veredicto": "defecto",
+      "defectos": [
+        {
+          "alimento": "Tortillas integrales.",
+          "clase": "cantidad_inconsistente",
+          "evidencia": "La lista incluye 2 tortillas, pero los pasos 2 y 3 indican calentar y rellenar una sola, sin explicar cómo usar la segunda.",
+          "severidad": "minor"
+        }
+      ]
+    },
+    "023da1766e": {
+      "veredicto": "defecto",
+      "defectos": [
+        {
+          "alimento": "Frijoles horneados y kétchup.",
+          "clase": "usa_lo_que_no_esta",
+          "evidencia": "El paso 1 pide 1⅓ taza de frijoles horneados y 2¾ cucharadas de kétchup; los pasos 2 y 3 los incorporan al plato, pero ninguno aparece en la lista.",
+          "severidad": "high"
+        }
+      ]
+    },
+    "023e151c4e": {
+      "veredicto": "defecto",
+      "defectos": [
+        {
+          "alimento": "Soya texturizada.",
+          "clase": "paso_incoherente",
+          "evidencia": "La lista indica 25 g de soya texturizada cocida, pero el paso 2 manda cocinarla en agua hasta ablandarla, como si estuviera seca.",
+          "severidad": "minor"
+        }
+      ]
+    },
+    "028ad9ed64": {
+      "veredicto": "defecto",
+      "defectos": [
+        {
+          "alimento": "Harina de trigo.",
+          "clase": "ingrediente_huerfano",
+          "evidencia": "La lista incluye 40 g de harina de trigo, pero ningún paso la utiliza. El paso 2 prepara la masa solo con avena, agua, polvo de hornear y sal.",
+          "severidad": "high"
+        }
+      ]
+    },
+    "028f7003f6": {
+      "veredicto": "defecto",
+      "defectos": [
+        {
+          "alimento": "Semillas de linaza.",
+          "clase": "otro",
+          "evidencia": "El paso 3 afirma «cierra tu omega-3 del día», pero no muestra el cálculo ni la necesidad individual que respalde esa afirmación.",
+          "severidad": "minor"
+        }
+      ]
+    },
+    "0338feb3a9": {
+      "veredicto": "dudoso",
+      "defectos": []
+    },
+    "033afcafbf": {
+      "veredicto": "defecto",
+      "defectos": [
+        {
+          "alimento": "Aceite de oliva",
+          "clase": "cantidad_inconsistente",
+          "evidencia": "La lista indica 1½ cucharadas de aceite. El paso 1 usa 1 cucharada y el paso 2 usa ½ para el ñame; después pide «el resto del aceite» para el conejo, aunque ya se utilizó todo.",
+          "severidad": "minor"
+        }
+      ]
+    },
+    "03c57e55a5": {
+      "veredicto": "defecto",
+      "defectos": [
+        {
+          "alimento": "Pan integral",
+          "clase": "nombre_no_corresponde",
+          "evidencia": "El título promete una tostada, pero ningún paso tuesta el pan y la lista no lo declara tostado.",
+          "severidad": "minor"
+        }
+      ]
+    },
+    "03e16ec7fb": {
+      "veredicto": "defecto",
+      "defectos": [
+        {
+          "alimento": "Tortillas integrales.",
+          "clase": "cantidad_inconsistente",
+          "evidencia": "La lista incluye 2 tortillas, pero los pasos 2 y 3 solo calientan y rellenan una, sin indicar cómo utilizar la segunda.",
+          "severidad": "minor"
+        }
+      ]
+    },
+    "045b2e2131": {
+      "veredicto": "defecto",
+      "defectos": [
+        {
+          "alimento": "Pan integral y canela.",
+          "clase": "cantidad_inconsistente",
+          "evidencia": "La lista indica 1 rebanada de pan, pero los pasos 1 y 2 usan 2. Además, el paso 1 usa toda la canela (¼ cdta) y el paso 4 pide «la canela restante», aunque ya no queda.",
+          "severidad": "high"
+        }
+      ]
+    },
+    "0468ff03aa": {
+      "veredicto": "defecto",
+      "defectos": [
+        {
+          "alimento": "Casabe y queso fresco.",
+          "clase": "cantidad_inconsistente",
+          "evidencia": "Casabe: la lista indica 1 tostada y el paso 3 usa 2. Queso fresco: la lista indica 40 g y los pasos 1 y 3 usan 35 g.",
+          "severidad": "high"
+        }
+      ]
+    },
+    "049c5eb771": {
+      "veredicto": "ok",
+      "defectos": []
+    },
+    "049fbef8b5": {
+      "veredicto": "defecto",
+      "defectos": [
+        {
+          "alimento": "Yuca.",
+          "clase": "coccion_faltante",
+          "evidencia": "La lista no declara la yuca cocida y el paso 2 solo la calienta en la plancha durante 4–5 minutos. Falta la cocción previa antes de dorarla.",
+          "severidad": "high"
+        }
+      ]
+    },
+    "04d25439d9": {
+      "veredicto": "defecto",
+      "defectos": [
+        {
+          "alimento": "Ajo.",
+          "clase": "usa_lo_que_no_esta",
+          "evidencia": "El paso 1 pide picar ajo y el paso 2 lo sofríe, pero no aparece en la lista, no tiene cantidad y no se indica como opcional.",
+          "severidad": "minor"
+        }
+      ]
+    },
+    "04e303030f": {
+      "veredicto": "ok",
+      "defectos": []
+    },
+    "04eb731253": {
+      "veredicto": "defecto",
+      "defectos": [
+        {
+          "alimento": "Aceite de oliva.",
+          "clase": "cantidad_inconsistente",
+          "evidencia": "La lista indica 1 cucharadita de aceite, pero el paso 2 usa una para el queso y otra para la tayota: 2 cucharaditas en total.",
+          "severidad": "minor"
+        }
+      ]
+    },
+    "050a6b5a97": {
+      "veredicto": "ok",
+      "defectos": []
+    },
+    "05145657e1": {
+      "veredicto": "defecto",
+      "defectos": [
+        {
+          "alimento": "Batata y pechuga de pollo.",
+          "clase": "coccion_faltante",
+          "evidencia": "El paso 1 pide aplastar la batata cocida y desmenuzar el pollo, pero la lista no los declara cocidos y ningún paso explica su cocción previa.",
+          "severidad": "high"
+        }
+      ]
+    },
+    "0547761d8a": {
+      "veredicto": "ok",
+      "defectos": []
+    },
+    "05856e2162": {
+      "veredicto": "defecto",
+      "defectos": [
+        {
+          "alimento": "Pasta, salsa de yogurt y ají morrón.",
+          "clase": "paso_incoherente",
+          "evidencia": "El paso 3 pide guardar pasta y salsa por separado, pero el paso 2 ya las mezcló. También indica congelar el ají cortado, aunque ya se cocinó e incorporó completo. Alimento: Pasta, salsa de yogurt y ají morrón.",
+          "severidad": "minor"
+        }
+      ]
+    },
+    "05f6ea7c63": {
+      "veredicto": "ok",
+      "defectos": []
+    },
+    "060b4fda6a": {
+      "veredicto": "defecto",
+      "defectos": []
+    },
+    "06416aacbb": {
+      "veredicto": "defecto",
+      "defectos": [
+        {
+          "alimento": "Sandía, semillas de girasol y queso blanco.",
+          "clase": "cantidad_inconsistente",
+          "evidencia": "Sandía: 300 g en lista y 335 g en paso 1. Girasol: 5 g en lista y 15 g en paso 1. Queso: 40 g en lista y «40 g (35 g)» en paso 1.",
+          "severidad": "high"
+        }
+      ]
+    },
+    "06d4e17091": {
+      "veredicto": "defecto",
+      "defectos": [
+        {
+          "alimento": "Guineítos verdes y queso cottage.",
+          "clase": "cantidad_inconsistente",
+          "evidencia": "Guineítos: la lista indica 2½ unidades, pero el paso 1 usa 2. Queso cottage: la lista indica 85 g, pero el paso 1 dice «85 g de queso (140 g)».",
+          "severidad": "high"
+        }
+      ]
+    },
+    "078dcac1d0": {
+      "veredicto": "defecto",
+      "defectos": [
+        {
+          "alimento": "Batata.",
+          "clase": "coccion_faltante",
+          "evidencia": "Los pasos 1 y 2 usan batata ya cocida, pero la lista no indica ese estado y falta la cocción previa. El horno se utiliza únicamente para gratinar durante 10–12 minutos.",
+          "severidad": "high"
+        }
+      ]
+    },
+    "098d23388f": {
+      "veredicto": "defecto",
+      "defectos": [
+        {
+          "alimento": "Merey.",
+          "clase": "nombre_no_corresponde",
+          "evidencia": "El título promete merey tostado, pero la lista solo dice «merey» y ningún paso indica tostarlo ni usarlo ya tostado.",
+          "severidad": "minor"
+        }
+      ]
+    },
+    "0a22373d6b": {
+      "veredicto": "defecto",
+      "defectos": [
+        {
+          "alimento": "Lentejas.",
+          "clase": "seco_sin_coccion",
+          "evidencia": "La lista indica ¼ taza de lentejas secas, pero el paso 2 solo las calienta en la sartén durante 3–4 minutos, sin cocción previa ni agua.",
+          "severidad": "high"
+        }
+      ]
+    },
+    "0b1f190ac9": {
+      "veredicto": "defecto",
+      "defectos": [
+        {
+          "alimento": "Habichuelas blancas secas.",
+          "clase": "ingrediente_huerfano",
+          "evidencia": "La lista incluye ½ taza de habichuelas blancas secas, pero ningún paso las cocina ni las incorpora al plato.",
+          "severidad": "high"
+        }
+      ]
+    },
+    "0bd5722712": {
+      "veredicto": "defecto",
+      "defectos": [
+        {
+          "alimento": "Kiwi.",
+          "clase": "cantidad_inconsistente",
+          "evidencia": "La lista indica ½ kiwi, pero el paso 1 pide pelar y cortar 2 kiwis: cuatro veces la cantidad indicada.",
+          "severidad": "high"
+        }
+      ]
+    },
+    "0d16ef69e3": {
+      "veredicto": "defecto",
+      "defectos": [
+        {
+          "alimento": "Papas, repollo, zanahoria y frijoles pintos.",
+          "clase": "coccion_faltante",
+          "evidencia": "Se sirven papas «crujientes» y repollo y zanahoria «salteados», pero ningún paso los cocina. Los frijoles solo se remojan y se añaden al final, sin explicar su cocción previa.",
+          "severidad": "high"
+        }
+      ]
+    },
+    "0d4eeb64eb": {
+      "veredicto": "defecto",
+      "defectos": [
+        {
+          "alimento": "Quinoa.",
+          "clase": "seco_sin_coccion",
+          "evidencia": "La lista indica quinoa cruda. El paso 2 solo la saltea durante 3–4 minutos, sin hervirla previamente ni añadir agua para cocinarla.",
+          "severidad": "high"
+        }
+      ]
+    },
+    "0dbc337c25": {
+      "veredicto": "defecto",
+      "defectos": [
+        {
+          "alimento": "Yogurt griego entero.",
+          "clase": "verbo_alimento",
+          "evidencia": "El paso 2 pide hervir el yogurt, escurrirlo, pelarlo y cortarlo en cuartos como si fueran huevos. El yogurt no se puede pelar ni cortar de esa manera.",
+          "severidad": "high"
+        }
+      ]
+    },
+    "0ee6d0a81c": {
+      "veredicto": "defecto",
+      "defectos": [
+        {
+          "alimento": "Masa de las tortitas.",
+          "clase": "paso_incoherente",
+          "evidencia": "El paso 2 pide verter una masa, pero ningún paso explica cómo prepararla. No se indica mezclar la harina con la leche, el queso y el polvo de hornear ni cuánto yogurt incorporar; el paso 3 lo reserva para servir encima.",
+          "severidad": "high"
+        }
+      ]
+    },
+    "0eeebbee4d": {
+      "veredicto": "defecto",
+      "defectos": [
+        {
+          "alimento": "Pechuga de pollo.",
+          "clase": "paso_incoherente",
+          "evidencia": "El paso 1 dice «bate pechuga de pollo con los 2 pechuga de pollo» y el paso 2 pide verter ese pollo batido. No explica cómo transformar la pechuga en una mezcla que pueda verterse y formar el cuajado.",
+          "severidad": "high"
+        }
+      ]
+    },
+    "0ef0ba50b7": {
+      "veredicto": "defecto",
+      "defectos": [
+        {
+          "alimento": "Harina de trigo y agua.",
+          "clase": "masa_sobrante",
+          "evidencia": "El paso 2 mezcla 85 g de harina con 110 ml de agua y pide formar arepitas. Esa proporción produce una mezcla demasiado líquida y pegajosa para moldearlas y abrirlas como indica el paso 3.",
+          "severidad": "high"
+        }
+      ]
+    },
+    "1191a15521": {
+      "veredicto": "defecto",
+      "defectos": [
+        {
+          "alimento": "Casabe, durazno y queso cottage.",
+          "clase": "cantidad_inconsistente",
+          "evidencia": "Casabe: lista 1 tostada; paso 1, 2 tostadas. Durazno: lista ½ unidad; paso 1, 1 unidad. Cottage: lista 100 g; paso 1 dice «100 g de queso (120 g)».",
+          "severidad": "high"
+        }
+      ]
+    },
+    "119f0e6a06": {
+      "veredicto": "defecto",
+      "defectos": [
+        {
+          "alimento": "Casabe",
+          "clase": "cantidad_inconsistente",
+          "evidencia": "La lista indica 1½ tortas pequeñas de casabe y el paso 1 pide 1¾ tortas (35 g). Además, aparecen 25 g de hojuelas sin aclarar si son adicionales o provienen de esas tortas.",
+          "severidad": "minor"
+        }
+      ]
+    },
+    "12dc5c0e78": {
+      "veredicto": "defecto",
+      "defectos": [
+        {
+          "alimento": "Tomate, ajo, cilantro y limón.",
+          "clase": "cantidad_inconsistente",
+          "evidencia": "Tomate: lista ½ unidad; paso 1, 2 unidades. Ajo: lista ½ diente; paso 1, 1 diente. Cilantro: lista ½ taza; paso 1, ¼ taza. Limón: lista ½ unidad; paso 1, 1 unidad.",
+          "severidad": "high"
+        }
+      ]
+    },
+    "15ddcb26c1": {
+      "veredicto": "defecto",
+      "defectos": [
+        {
+          "alimento": "Guineíto verde.",
+          "clase": "cantidad_inconsistente",
+          "evidencia": "La lista indica ½ guineíto verde, pero el paso 1 usa 2 guineítos: cuatro veces la cantidad indicada.",
+          "severidad": "high"
+        }
+      ]
+    },
+    "17285dfa78": {
+      "veredicto": "defecto",
+      "defectos": [
+        {
+          "alimento": "Lentejas.",
+          "clase": "seco_sin_coccion",
+          "evidencia": "La lista indica ½ taza de lentejas secas. El paso 1 solo pide escurrirlas y el paso 2 las cocina en la plancha durante 4 minutos, sin hervirlas previamente.",
+          "severidad": "high"
+        }
+      ]
+    },
+    "1794ad8c1d": {
+      "veredicto": "defecto",
+      "defectos": [
+        {
+          "alimento": "Yogurt griego, leche y mango.",
+          "clase": "usa_lo_que_no_esta",
+          "evidencia": "El paso 1 pide yogurt griego y 125 ml de leche; el paso 2 añade mango. Ninguno aparece en la lista, que incluye queso parmesano en su lugar.",
+          "severidad": "high"
+        }
+      ]
+    },
+    "17fda2a839": {
+      "veredicto": "defecto",
+      "defectos": [
+        {
+          "alimento": "Yuca, edamame y zanahoria.",
+          "clase": "cantidad_inconsistente",
+          "evidencia": "Yuca: lista ≈200 g; paso 1, 130 g. Edamame: lista 300 g; paso 1, 460 g. Zanahoria: lista ½ unidad; paso 1, ¼ unidad (25 g).",
+          "severidad": "high"
+        }
+      ]
+    },
+    "1929f8cf78": {
+      "veredicto": "defecto",
+      "defectos": [
+        {
+          "alimento": "",
+          "clase": "estructura_del_plato",
+          "evidencia": "El paso 3 pide rellenar los tostones de ½ plátano con 3 huevos, 1½ pepinos, 1 cebolla y 40 g de sardinas. Ese volumen de relleno excede ampliamente lo que pueden sostener esos tostones. Alimento: Plátano y relleno.",
+          "severidad": "high"
+        }
+      ]
+    },
+    "19b13609c9": {
+      "veredicto": "defecto",
+      "defectos": [
+        {
+          "alimento": "Garbanzos.",
+          "clase": "seco_sin_coccion",
+          "evidencia": "La lista indica ½ taza de garbanzos secos, pero el paso 1 los trata como cocidos. No hay ningún paso de cocción previa antes de incorporarlos al guiso.",
+          "severidad": "high"
+        }
+      ]
+    },
+    "19f304d513": {
+      "veredicto": "defecto",
+      "defectos": [
+        {
+          "alimento": "Nueces mixtas.",
+          "clase": "usa_lo_que_no_esta",
+          "evidencia": "Los pasos 1 y 2 usan nueces, pero no aparecen en la lista, no tienen cantidad y no se indican como opcionales.",
+          "severidad": "minor"
+        }
+      ]
+    },
+    "1a75c5ae61": {
+      "veredicto": "dudoso",
+      "defectos": []
+    },
+    "1c0c5e6582": {
+      "veredicto": "defecto",
+      "defectos": [
+        {
+          "alimento": "Queso cottage, piña y yogurt griego entero.",
+          "clase": "usa_lo_que_no_esta",
+          "evidencia": "El paso 2 usa queso cottage, piña y yogurt griego entero, pero ninguno aparece en la lista; esta incluye queso parmesano, manzana y semillas de calabaza.",
+          "severidad": "high"
+        }
+      ]
+    },
+    "1d6d7dc439": {
+      "veredicto": "defecto",
+      "defectos": [
+        {
+          "alimento": "",
+          "clase": "cantidad_inconsistente",
+          "evidencia": "La lista indica 6 chinolas, pero el paso 1 utiliza solo 2: un tercio de la cantidad indicada. Alimento: Chinola.",
+          "severidad": "high"
+        }
+      ]
+    },
+    "1ea600db80": {
+      "veredicto": "defecto",
+      "defectos": [
+        {
+          "alimento": "Habichuelas negras.",
+          "clase": "seco_sin_coccion",
+          "evidencia": "La lista indica 20 g de habichuelas negras secas. Los pasos solo las enjuagan y las incorporan al guiso durante 5 minutos, sin cocción previa.",
+          "severidad": "high"
+        }
+      ]
+    },
+    "20055f9f33": {
+      "veredicto": "dudoso",
+      "defectos": []
+    },
+    "20fdfb4de7": {
+      "veredicto": "defecto",
+      "defectos": [
+        {
+          "alimento": "Leche, ajo, comino y orégano.",
+          "clase": "cantidad_inconsistente",
+          "evidencia": "Leche: lista 95 ml; pasos usan 95 ml más 280 ml. Ajo: lista 0.25 g; pasos usan 1 g dos veces. Comino: lista 0.48 g; pasos usan ½ g dos veces. Orégano: lista 0.1 g; paso 2 usa 1 g y el paso 3 pide más.",
+          "severidad": "high"
+        }
+      ]
+    },
+    "24dbfaebdb": {
+      "veredicto": "defecto",
+      "defectos": [
+        {
+          "alimento": "Habichuelas rojas.",
+          "clase": "seco_sin_coccion",
+          "evidencia": "La lista indica ⅔ taza de habichuelas rojas secas, pero los pasos solo las escurren y calientan 5 minutos antes de rellenar la batata. Falta su cocción previa.",
+          "severidad": "high"
+        }
+      ]
+    },
+    "2538fbe6a2": {
+      "veredicto": "defecto",
+      "defectos": [
+        {
+          "alimento": "Pan integral y toronja.",
+          "clase": "paso_incoherente",
+          "evidencia": "El paso 2 coloca «6–8 min hasta dorar» después de pelar la toronja, sin aclarar que corresponde al tostado del pan ni indicar cómo tostarlo. También llama «restantes» a ingredientes que aún no se han utilizado.",
+          "severidad": "minor"
+        }
+      ]
+    },
+    "2546d9d030": {
+      "veredicto": "ok",
+      "defectos": []
+    },
+    "26910ac91d": {
+      "veredicto": "defecto",
+      "defectos": [
+        {
+          "alimento": "Plátano verde.",
+          "clase": "coccion_faltante",
+          "evidencia": "La lista indica ½ plátano verde, pero el paso 1 lo da por cocido y pide majarlo. Ningún paso lo hierve; el paso 2 solo recalienta el majado durante 2 minutos.",
+          "severidad": "high"
+        }
+      ]
+    },
+    "2697e63381": {
+      "veredicto": "defecto",
+      "defectos": [
+        {
+          "alimento": "Ñame.",
+          "clase": "coccion_faltante",
+          "evidencia": "El paso 1 pide aplastar el ñame, pero la lista no lo declara cocido y ningún paso lo hierve. El paso 2 solo calienta el majado durante 2 minutos.",
+          "severidad": "high"
+        }
+      ]
+    },
+    "2878e78af8": {
+      "veredicto": "ok",
+      "defectos": []
+    },
+    "292b09e344": {
+      "veredicto": "defecto",
+      "defectos": [
+        {
+          "alimento": "Arroz blanco.",
+          "clase": "ingrediente_huerfano",
+          "evidencia": "La lista incluye 40 g de arroz blanco crudo, pero ningún paso lo cocina ni lo incorpora al plato.",
+          "severidad": "high"
+        }
+      ]
+    },
+    "340665859e": {
+      "veredicto": "defecto",
+      "defectos": [
+        {
+          "alimento": "Queso blanco y cilantro.",
+          "clase": "usa_lo_que_no_esta",
+          "evidencia": "Los pasos usan queso blanco y cilantro, pero la lista solo incluye queso parmesano y no incluye cilantro. Tampoco se presentan como opcionales.",
+          "severidad": "minor"
+        }
+      ]
+    },
+    "3b8dd7ce2c": {
+      "veredicto": "defecto",
+      "defectos": [
+        {
+          "alimento": "Arroz blanco.",
+          "clase": "seco_sin_coccion",
+          "evidencia": "La lista indica 40 g de arroz blanco crudo, pero el paso 1 lo trata como cocido y el paso 2 solo lo saltea durante 3 minutos. Falta la cocción previa.",
+          "severidad": "high"
+        }
+      ]
+    },
+    "456feecd3a": {
+      "veredicto": "defecto",
+      "defectos": [
+        {
+          "alimento": "Tomillo y huevos.",
+          "clase": "paso_incoherente",
+          "evidencia": "El paso 1 dice «corta ½ cucharadita de tomillo (250 g)» y «aplasta 3 huevos (95 g)», aunque antes pide batir esos huevos. Confunde ingredientes, cantidades y acciones, impidiendo seguir la preparación.",
+          "severidad": "high"
+        }
+      ]
+    },
+    "46c02301b2": {
+      "veredicto": "defecto",
+      "defectos": [
+        {
+          "alimento": "Filete de pescado.",
+          "clase": "coccion_faltante",
+          "evidencia": "El paso 1 solo escurre el filete y el paso 3 lo mezcla directamente con los vegetales para servir. Ningún paso cocina el pescado ni la lista lo declara cocido.",
+          "severidad": "high"
+        }
+      ]
+    },
+    "4f073559b3": {
+      "veredicto": "defecto",
+      "defectos": [
+        {
+          "alimento": "Sardinas en lata.",
+          "clase": "paso_incoherente",
+          "evidencia": "El paso 2 incorpora las sardinas al guiso, pero el paso 3 pide servirlas como acompañamiento sin reservar ninguna parte de los 40 g.",
+          "severidad": "minor"
+        }
+      ]
+    },
+    "55fef36cd9": {
+      "veredicto": "defecto",
+      "defectos": [
+        {
+          "alimento": "Aceitunas.",
+          "clase": "usa_lo_que_no_esta",
+          "evidencia": "El paso 1 pide rebanar aceitunas y el paso 3 las añade a la ensalada, pero no aparecen en la lista, no tienen cantidad y no se indican como opcionales.",
+          "severidad": "minor"
+        }
+      ]
+    },
+    "69d4dcbd6f": {
+      "veredicto": "defecto",
+      "defectos": [
+        {
+          "alimento": "Huevo.",
+          "clase": "coccion_faltante",
+          "evidencia": "El paso 2 añade el huevo directamente a la licuadora y el paso 3 sirve la batida fría. Ningún paso cocina el huevo, aunque el paso 4 exige servirlo completamente cocido.",
+          "severidad": "high"
+        }
+      ]
+    },
+    "77c78d3990": {
+      "veredicto": "ok",
+      "defectos": []
+    },
+    "7ef0b23dd8": {
+      "veredicto": "defecto",
+      "defectos": [
+        {
+          "alimento": "Lentejas",
+          "clase": "seco_sin_coccion",
+          "evidencia": "La lista indica 45 g de lentejas secas, pero el paso 2 solo las cocina en la sartén durante 4 minutos, sin agua ni cocción previa.",
+          "severidad": "high"
+        }
+      ]
+    },
+    "8474cf4488": {
+      "veredicto": "defecto",
+      "defectos": [
+        {
+          "alimento": "",
+          "clase": "ingrediente_huerfano",
+          "evidencia": "La lista incluye ½ cucharadita de orégano dominicano, pero ningún paso lo utiliza. Alimento: Orégano dominicano.",
+          "severidad": "minor"
+        }
+      ]
+    },
+    "84c2e6d4f0": {
+      "veredicto": "defecto",
+      "defectos": [
+        {
+          "alimento": "Tofu firme.",
+          "clase": "usa_lo_que_no_esta",
+          "evidencia": "El paso 1 pide cortar tofu firme y el paso 2 lo saltea, pero no aparece en la lista ni se indica su cantidad. Es un ingrediente principal del título.",
+          "severidad": "high"
+        }
+      ]
+    }
+  }
+}
