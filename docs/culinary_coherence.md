@@ -1210,3 +1210,21 @@ no reescribe recetas congeladas y la harina con que se empaniza («pasa cada tro
 toma por harina «de cumplimiento».
 
 Simulación de solo lectura del día determinista, 7 días en dos bloques sobre el blueprint del último run del dueño (tiempo «Nada»), contra sus 3 planes más recientes: platos de esos planes 15 → 5 de 28, repeticiones dentro del bloque 4 → 2, días con proteína repetida 4 → 0, platos distintos 19 → 21, minutos medios 19,6 → 20,9. Identidad sobre una copia del plan 63eedc6b: vuelven 4 alimentos (+8 g de maní, +24 g de leche evaporada, +6 g de dátiles, +38 g de aguacate) y la grasa de los tres días queda entre el 91 % y el 107 %. La primera versión (piso del 50 % y subir también lo que quedó pequeño) tocaba 7 platos, llevaba la grasa al 116-122 % y el salami de 5 a 41 g: por eso el piso es del 25 % y sólo vuelve lo que falta. Test: `tests/test_p1_plan_lote_46.py`.
+
+## Lo que se hace con un alimento lo decide el alimento que queda (`P1-PLAN-LOTE-47` · 2026-09-14)
+
+**Qué pasaba.** En la tercera prueba del dueño tres pasos contradecían al alimento que nombraban. El tiempo por defecto
+de «El Toque de Fuego» cayó en el paso que enfría los huevos («Pásalos a agua fría para cortar la cocción… (~10-12 min a
+fuego medio)»). La quinoa de una cena pasó a arroz integral por presupuesto y el arroz a casabe por la regla del arroz de
+noche: el nombre cambió dos veces y la técnica se quedó («Enjuaga 30 g de Casabe», «Cocina Casabe en agua hasta que
+ablanden»). Y el autofix del tope de huevo cambió el huevo de la arepa por queso blanco y dejó su verbo («revuelve queso
+blanco en una sartén»).
+
+**Qué cambia** (`pasos_sustitucion`). Un paso que enfría sin calentar no recibe tiempo de fuego. Tras cambiar el arroz
+por casabe, la frase que lo hierve pasa a tostarlo (una sola vez) y la que lo enjuaga, a tenerlo a mano. Tras cambiar un
+huevo por queso, «revuelve / bate / cuaja» pasan a «dora / desmenuza» en un queso que se dora y a «incorpora / mezcla» en
+uno que no; «queso blanco revuelto» pasa a «queso blanco dorado». Texto puro: no toca cantidades ni macros.
+
+Además, la causa de fondo de que esos pasos llegaran a ese plan: el corrector de la autocrítica reescribía días enteros
+y dejaba los platos de biblioteca sin su marca, así que la receta congelada ya no los protegía — ver
+`docs/deterministic_day.md` («re-elegir, no reescribir»). Test: `tests/test_p1_plan_lote_47.py`.

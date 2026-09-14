@@ -1413,7 +1413,206 @@ def _conteo_bloque(memoria, por_id=None) -> dict:
 # es el que gobierna la rotación, la cocina del día, la durabilidad y el CandidateSet fijado. Cada
 # comida deja rastro: `_candidate_source`, `_sodium_mg_est` (y `_sodium_unknown_lines` cuando el
 # catálogo calla), `_prep_time_source`, `_recipe_water_scaled`.
-def build_day_for_skeleton(nutrition, form_data, skeleton_day, day_num, user_id=None, memoria=None):
+# ---------------------------------------------------------------------------
+# [P1-PLAN-LOTE-47 · 2026-09-14] Las reglas fijas de la autocrítica, aquí, en la ELECCIÓN.
+#
+# Tercera prueba RD del dueño (plan d8b10b05): la autocrítica reescribió con el LLM los 3 días de este módulo por tres
+# señales deterministas que la elección no conocía — yuca en 2 días del bloque, una cena de solo queso en ganancia
+# muscular (bollitos de yuca rellenos de queso) y huevo dos veces el día 3 (la tortilla de maíz lleva 50 g de huevo con
+# la etiqueta «queso»: 16 de las 193 plantillas esconden huevo bajo otra etiqueta, y la puerta de proteína sólo leía la
+# etiqueta). Cada reescritura tiró la receta congelada. Las reglas se leen de donde viven (`graph_orchestrator`):
+# copiarlas sería la segunda tabla que `P1-DIET-CANON-SSOT` prohíbe. Preferir, no descartar: el candidato que rompe una
+# queda de reserva, y de reserva el que menos rompe. tooltip-anchor: P1-PLAN-LOTE-47-REGLAS-DE-LA-AUTOCRITICA
+
+def _go():
+    try:
+        import graph_orchestrator as go
+        return go
+    except Exception:                                                  # noqa: BLE001
+        return None
+
+
+def _repite_proteina(base, cand, form_data) -> bool:
+    """¿Añadir `cand` a las comidas `base` crea una proteína repetida el mismo día? Con el detector del revisor y de la
+    autocrítica (`_days_with_same_day_protein_repeat`) sobre el plato ARMADO: nombre + ingredientes, con el huevo que
+    liga una masa exento y los básicos del usuario. Sólo cuenta lo que `cand` añade: si la base ya repetía, no es suyo."""
+    go = _go()
+    if go is None or not isinstance(cand, dict):
+        return False
+    try:
+        st = go._user_staple_labels(form_data or {})
+
+        def _rep(ms):
+            return bool(go._days_with_same_day_protein_repeat({"days": [{"day": 1, "meals": list(ms)}]},
+                                                              user_staples=st))
+        base = [m for m in (base or []) if isinstance(m, dict)]
+        return _rep(base + [cand]) and not _rep(base)
+    except Exception:                                                  # noqa: BLE001
+        return False
+
+
+def _cena_debil(comida, form_data) -> bool:
+    """La cena que la autocrítica marca en ganancia muscular (el queso de plato, sin proteína animal magra), con SU
+    detector (`_detect_gainmuscle_dinner_issues`): fuera de ganancia muscular o en veg* no marca nada."""
+    go = _go()
+    if go is None or not isinstance(comida, dict):
+        return False
+    try:
+        return bool(go._detect_gainmuscle_dinner_issues([{"meals": [comida]}], form_data or {}))
+    except Exception:                                                  # noqa: BLE001
+        return False
+
+
+def _sin_acentos(s) -> str:
+    return unicodedata.normalize("NFD", str(s or "").lower()).encode("ascii", "ignore").decode("ascii")
+
+
+def _basicos_de(comida) -> set:
+    """Los básicos que la autocrítica cuenta entre días (`_STAPLE_INGREDIENT_ALIASES`) con SU criterio: subcadena sin
+    acentos sobre nombre + ingredientes, como `_count_staple_repetitions`. Un test ancla la paridad."""
+    go = _go()
+    if go is None or not isinstance(comida, dict):
+        return set()
+    try:
+        blob = _sin_acentos(" " + str(comida.get("name") or "") + " "
+                            + " ".join(str(i) for i in (comida.get("ingredients") or [])))
+        return {lbl for lbl, als in go._STAPLE_INGREDIENT_ALIASES.items()
+                if any(_sin_acentos(a) in blob for a in als)}
+    except Exception:                                                  # noqa: BLE001
+        return set()
+
+
+def _basicos_del_bloque(memoria, form_data) -> set:
+    """Los básicos ya servidos en OTROS días del bloque —no en los persistidos de bloques anteriores: la autocrítica sólo
+    ve el bloque—, tras el mismo filtro de política que ella aplica (con rutina, repetir es lo pedido)."""
+    usados: set = set()
+    for d in memoria or []:
+        if not isinstance(d, dict) or d.get("_persistido"):
+            continue
+        for m in d.get("meals") or []:
+            usados |= _basicos_de(m)
+    if not usados:
+        return set()
+    try:
+        import horizon
+        fd = form_data or {}
+        return set(horizon.filter_repetition_counts_for_policy(
+            {u: 2 for u in usados}, fd.get("_plan_policy_effective"), enforced=bool(fd.get("_policy_enforced"))))
+    except Exception:                                                  # noqa: BLE001
+        return usados
+
+
+def _plato_de_familia(familia) -> Optional[dict]:
+    """La familia del blueprint como si fuera un plato, para preguntarle al detector si otra franja la repite. `None` si la
+    familia no es una proteína que el gate cuente (queso, legumbres: ésas se repiten por cultura)."""
+    go = _go()
+    if go is None or not familia:
+        return None
+    try:
+        if not go._protein_gate_labels_in_text(str(familia)):
+            return None
+    except Exception:                                                  # noqa: BLE001
+        return None
+    return {"meal": "_familia", "name": str(familia), "ingredients": [str(familia)]}
+
+
+def _pesadas_de(comida) -> set:
+    """Las proteínas pesadas de un plato con el criterio de `_count_cross_day_heavy_protein_repetition`: subcadena sin
+    acentos de `_MAIN_PROTEIN_ALIASES` sobre nombre + ingredientes."""
+    go = _go()
+    if go is None or not isinstance(comida, dict):
+        return set()
+    try:
+        blob = _sin_acentos(" " + str(comida.get("name") or "") + " "
+                            + " ".join(str(i) for i in (comida.get("ingredients") or [])))
+        return {lbl for lbl in go._HEAVY_PROTEIN_LABELS
+                if any(_sin_acentos(a) in blob for a in go._MAIN_PROTEIN_ALIASES.get(lbl, ()))}
+    except Exception:                                                  # noqa: BLE001
+        return set()
+
+
+def _pesadas_vetadas(memoria, form_data) -> set:
+    """Las proteínas pesadas que ya están en 2 días del bloque: un tercero es la «monotonía» de la autocrítica (el pollo del
+    lote 47 en su primera medición: la cena fuerte de ganancia muscular lo llevó a 3 días de 3)."""
+    dias: dict = {}
+    for d in memoria or []:
+        if not isinstance(d, dict) or d.get("_persistido"):
+            continue
+        suyas: set = set()
+        for m in d.get("meals") or []:
+            suyas |= _pesadas_de(m)
+        for lbl in suyas:
+            dias[lbl] = dias.get(lbl, 0) + 1
+    cuentas = {lbl: n + 1 for lbl, n in dias.items() if n + 1 >= 3}
+    if not cuentas:
+        return set()
+    try:
+        import horizon
+        fd = form_data or {}
+        return set(horizon.filter_repetition_counts_for_policy(
+            cuentas, fd.get("_plan_policy_effective"), enforced=bool(fd.get("_policy_enforced"))))
+    except Exception:                                                  # noqa: BLE001
+        return set(cuentas)
+
+
+def _rompe_franja(base, cand, form_data) -> bool:
+    """¿`cand` abre una incoherencia de franja que la autocrítica cuenta como «no opinable»? Almuerzo y cena con la misma
+    proteína o el mismo carbohidrato principal, una merienda con técnica de plato fuerte (`_detect_slot_incoherence`),
+    o el plato fuera de su horario (`_detect_slot_appropriateness`: arroz de noche, cena de desayuno)."""
+    go = _go()
+    if go is None or not isinstance(cand, dict):
+        return False
+    try:
+        base = [m for m in (base or []) if isinstance(m, dict)]
+        antes = set(go._detect_slot_incoherence([{"day": 1, "meals": base}]))
+        if set(go._detect_slot_incoherence([{"day": 1, "meals": base + [cand]}])) - antes:
+            return True
+        return bool(go._detect_slot_appropriateness([{"day": 1, "meals": [cand]}], form_data or {}))
+    except Exception:                                                  # noqa: BLE001
+        return False
+
+
+def _plato_base_de(comida) -> Optional[str]:
+    """La cabeza del plato («guiso», «revoltillo», «ensalada») con el helper del gate (`_head_dish_base_token`)."""
+    go = _go()
+    if go is None or not isinstance(comida, dict):
+        return None
+    try:
+        return go._head_dish_base_token(_sin_acentos(comida.get("name"))) or None
+    except Exception:                                                  # noqa: BLE001
+        return None
+
+
+def _platos_base_vetados(memoria, form_data) -> set:
+    """Las cabezas de plato que ya están en tantos días del bloque que uno más dispara «plato-base repetido entre días»
+    (el umbral del gate: 3 días; 5 para un método como la plancha). Tras el filtro de política de la autocrítica."""
+    go = _go()
+    if go is None:
+        return set()
+    dias: dict = {}
+    for d in memoria or []:
+        if not isinstance(d, dict) or d.get("_persistido"):
+            continue
+        for t in {_plato_base_de(m) for m in (d.get("meals") or [])} - {None}:
+            dias[t] = dias.get(t, 0) + 1
+    try:
+        cuentas = {t: n + 1 for t, n in dias.items()
+                   if n + 1 >= (go.CROSS_DAY_METHOD_GATE_MIN_DAYS if t in go._PREP_METHOD_TOKENS
+                                else go.CROSS_DAY_DISH_GATE_MIN_DAYS)}
+    except Exception:                                                  # noqa: BLE001
+        return set()
+    if not cuentas:
+        return set()
+    try:
+        import horizon
+        fd = form_data or {}
+        return set(horizon.filter_repetition_counts_for_policy(
+            cuentas, fd.get("_plan_policy_effective"), enforced=bool(fd.get("_policy_enforced"))))
+    except Exception:                                                  # noqa: BLE001
+        return set(cuentas)
+
+
+def build_day_for_skeleton(nutrition, form_data, skeleton_day, day_num, user_id=None, memoria=None, evitar=None):
     """Punto de entrada desde el pipeline. Devuelve un día completo o `None`.
 
     `None` es la respuesta segura y la más frecuente: knob apagado, sin objetivos, sin candidatos
@@ -1537,6 +1736,28 @@ def build_day_for_skeleton(nutrition, form_data, skeleton_day, day_num, user_id=
                     _saturados[_t_b] = max(int(_saturados.get(_t_b, 0)), int(_max_rep))
         for _t_r in _plantillas_de_planes_recientes(memoria, _fd, _uid, por_id, _offset):
             _saturados[_t_r] = max(int(_saturados.get(_t_r, 0)), int(_max_rep))
+        # [P1-PLAN-LOTE-47 · 2026-09-14] Las reglas de la autocrítica y lo que el llamador pide evitar (`evitar`: la
+        # re-elección de `reeleccion_dia`, con las plantillas señaladas, los básicos repetidos y la puerta de base ligera).
+        # Todas PREFIEREN: el candidato que rompe alguna queda de reserva, y de reserva el que menos rompe.
+        _por_contenido = _knob_on("MEALFIT_DETERMINISTIC_DAY_PROTEIN_BY_CONTENT")
+        _cena_gm = _knob_on("MEALFIT_DETERMINISTIC_DAY_GAINMUSCLE_DINNER")
+        _basicos_vetados = (_basicos_del_bloque(memoria, _fd) if _knob_on("MEALFIT_DETERMINISTIC_DAY_BLOCK_STAPLES")
+                            else set())
+        _pesadas_vet = (_pesadas_vetadas(memoria, _fd) if _knob_on("MEALFIT_DETERMINISTIC_DAY_BLOCK_HEAVY_PROTEIN")
+                        else set())
+        _franja_on = _knob_on("MEALFIT_DETERMINISTIC_DAY_SLOT_COHERENCE")
+        _bases_plato_vet = (_platos_base_vetados(memoria, _fd) if _knob_on("MEALFIT_DETERMINISTIC_DAY_BLOCK_DISH_BASE")
+                            else set())
+        _ev = evitar if isinstance(evitar, dict) else {}
+        _evitar_t = {str(x) for x in (_ev.get("plantillas") or ())}
+        _basicos_vetados |= {str(x) for x in (_ev.get("basicos") or ())}
+        _puerta_bases = (_variedad_on or _knob_on("MEALFIT_DETERMINISTIC_DAY_LIGHT_BASE")
+                         or bool(_ev.get("bases_ligeras")))
+        # La familia del blueprint va a la comida principal (lote 46): las franjas que no son la principal no pueden
+        # gastarla, o la principal —obligada a esa familia— la repite (día 3: tortilla con huevo de desayuno, moro con
+        # huevo de almuerzo).
+        _reservada = (_plato_de_familia(familias[0]) if (_por_contenido and _fam_solo_principal and _franja_principal)
+                      else None)
         for etiqueta, slot, r in franjas:
             obj = {k: v * r for k, v in objetivo_dia.items()}
             # [P1-CANDIDATO-CON-PRECIO · 2026-09-09] Éste es el ÚNICO camino donde el candidato se
@@ -1553,6 +1774,7 @@ def build_day_for_skeleton(nutrition, form_data, skeleton_day, day_num, user_id=
             _ultimo_motivo = None
             _reserva = None
             _reserva_var = None
+            _reserva_faltas = 0
             _elegibles = elegir_con_tiempo(tids, obj, catalogo, por_id, slot, _presup_min,
                                            rotacion=_rotacion_de(day_index, slot),
                                            saturados=_saturados, max_rep=_max_rep)
@@ -1606,10 +1828,31 @@ def build_day_for_skeleton(nutrition, form_data, skeleton_day, day_num, user_id=
                 # modelo, con el mismo patrón: el que choca queda de reserva y se prueba el siguiente.
                 _prot = str(_t.get("protein") or "")
                 _bl = _bases_ligeras_de(_c, _tokens_var) if slot in ("desayuno", "merienda") else set()
-                if ((_puerta_proteina and not _repite_ok and _prot in _labels_var and _prot in _proteinas_hoy)
-                        or (_variedad_on and (_bl & _bases_hoy))):   # [P1-PLAN-LOTE-46] la de proteína, con su knob
-                    if _reserva_var is None:
+                if _por_contenido:   # [P1-PLAN-LOTE-47] lo que el plato LLEVA, con el detector del revisor
+                    _choca_prot = _puerta_proteina and not _repite_ok and (
+                        _repite_proteina(meals, _c, _fd)
+                        or (_reservada is not None and slot != _franja_principal
+                            and _repite_proteina([_reservada], _c, _fd)))
+                else:                # [P1-PLAN-LOTE-46] la etiqueta de la plantilla, con su knob
+                    _choca_prot = (_puerta_proteina and not _repite_ok and _prot in _labels_var
+                                   and _prot in _proteinas_hoy)
+                # [P1-PLAN-LOTE-47] cada regla rota suma; las de la autocrítica que reescribían el día pesan doble
+                _faltas = (2 * bool(_choca_prot)
+                           + 2 * bool(_cena_gm and slot == "cena" and _cena_debil(_c, _fd))
+                           + 2 * bool(_franja_on and _rompe_franja(meals, _c, _fd))
+                           + bool(_pesadas_vet and (_pesadas_de(_c) & _pesadas_vet))
+                           + bool(_bases_plato_vet and _plato_base_de(_c) in _bases_plato_vet)
+                           + bool(_basicos_vetados and (_basicos_de(_c) & _basicos_vetados))
+                           # la cuota de repetición ya agotada también cuenta, a MEDIAS: sin ella un plato repetido y
+                           # limpio le ganaba a uno fresco con otra falta (el rearmado sirvió dos «Sardinas guisadas» en
+                           # 3 días); entera, empataba con las que hacen saltar la autocrítica y ganaba la avena de dos días
+                           + 0.5 * bool(_max_rep and int(_saturados.get(str(_t.get("template_id")), 0)) >= int(_max_rep))
+                           + bool(str(_t.get("template_id")) in _evitar_t)
+                           + bool(_puerta_bases and (_bl & _bases_hoy)))
+                if _faltas:
+                    if _reserva_var is None or _faltas < _reserva_faltas:
                         _reserva_var = (_c, _t, _na)
+                        _reserva_faltas = _faltas
                     continue
                 comida, _t_srv, _na_srv = _c, _t, _na
                 break

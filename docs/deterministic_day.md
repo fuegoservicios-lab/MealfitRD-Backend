@@ -209,6 +209,25 @@ aprobar. Cuatro cambios:
 
 Simulación de solo lectura del día determinista, 7 días en dos bloques sobre el blueprint del último run del dueño (tiempo «Nada»), contra sus 3 planes más recientes: platos de esos planes 15 → 5 de 28, repeticiones dentro del bloque 4 → 2, días con proteína repetida 4 → 0, platos distintos 19 → 21, minutos medios 19,6 → 20,9. Identidad sobre una copia del plan 63eedc6b: vuelven 4 alimentos (+8 g de maní, +24 g de leche evaporada, +6 g de dátiles, +38 g de aguacate) y la grasa de los tres días queda entre el 91 % y el 107 %. La primera versión (piso del 50 % y subir también lo que quedó pequeño) tocaba 7 platos, llevaba la grasa al 116-122 % y el salami de 5 a 41 g: por eso el piso es del 25 % y sólo vuelve lo que falta. Test: `tests/test_p1_plan_lote_46.py`.
 
+## Tercera prueba RD: re-elegir, no reescribir (P1-PLAN-LOTE-47 · 2026-09-14)
+
+Tras el lote 46 el plan salió aprobado al primer intento, pero **ninguno de sus 3 días llegó como lo armó este módulo**:
+la autocrítica corrigió los días 1 y 2 con el LLM y la regeneración quirúrgica, el 3. Sus reglas fijas encontraron tres
+cosas que la elección no miraba —yuca en 2 días, una cena de solo queso en ganancia muscular y huevo dos veces el día 3
+(la tortilla de maíz lleva 50 g de huevo con la etiqueta «queso»)— y el corrector pegó encima días sin `_template_id`.
+Dos cambios:
+
+- **Re-elegir, no reescribir** (`reeleccion_dia`): el día señalado se rearma con `build_day_for_skeleton(…, evitar=…)`
+  (las plantillas implicadas, los básicos repetidos, la puerta de base ligera). Se acepta si sus señales verificables
+  bajan; el segundo intento libera también la comida principal. Sin nada verificable ni nombrado, el día se conserva. Lo
+  que el corrector LLM deja igual vuelve con su procedencia.
+- **Las reglas de la autocrítica, en la elección**: proteína del día por lo que el plato lleva (y la familia del
+  blueprint reservada para la principal), cena fuerte en ganancia muscular, básicos, proteína pesada y plato-base entre
+  días del bloque, franja y base ligera — todas leídas de sus detectores en `graph_orchestrator`, todas PREFIEREN. De
+  reserva queda el candidato que menos rompe; la cuota de repetición agotada pesa a medias.
+
+Simulación de solo lectura del día determinista sobre el blueprint del run del plan d8b10b05 (7 días en dos bloques, tiempo «Nada», contra los 2 planes que eran recientes a esa hora): con las reglas del lote 46 la autocrítica saltaba en los dos bloques —el primero por 4 detectores: avena en 2 días, almuerzo y cena con yuca, avena en desayuno y merienda, huevo dos veces el día 3—; con las del 47 el bloque 1 queda limpio y el 2 salta sólo por yuca en 2 días. Platos de planes recientes 5 → 2, exceso sobre el tope de 7 días 0 → 0, platos distintos 21 → 21, minutos medios 20,9 → 25,9 (el coste: con 10 min la biblioteca no tiene alternativa en almuerzos y cenas). Sobre los días del lote 46 con la sugerencia real del evaluador, la re-elección rehízo los 3 días sin LLM (el 3 por el barrido) y la autocrítica quedó en «yuca en 2 días». La primera medición, con sólo tres reglas, llevó el pollo a 3 días de 3 (monotonía): por eso entraron la proteína pesada, el plato-base, la franja y la base ligera; y la cuota de repetición pesa a medias porque, entera, empataba con lo que hace saltar la autocrítica. Test: `tests/test_p1_plan_lote_47.py`.
+
 ## Seguridad: el backstop no es opcional
 
 Un día que sale de aquí **sí pasa por `assemble_plan_node` y `review_plan_node`** (las aristas del grafo

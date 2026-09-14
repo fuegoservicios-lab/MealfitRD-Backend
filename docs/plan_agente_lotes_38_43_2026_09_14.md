@@ -16,6 +16,7 @@ y se anota la discrepancia en el informe. El protocolo largo (entorno, gate, che
 | 42 | E1 (operativo) | Retirar los worktrees viejos que estén limpios y ya mergeados; los demás, listados para el dueño (G4) | ¼ sesión |
 | 43 | B6 · E5 · D7 · B9 | Re-mediciones con FECHA: los tres scripts del lote 36 el **2026-10-10**; el embudo B9 a las 2 semanas del lanzamiento | ¼ sesión, en su fecha |
 | 44 | Decisiones del dueño 14-sep | Aplicar lo delegado: 3 recetas a la biblioteca, claras en botella ≥ 4, cohorte B de la lista canónica = canario, pesos 2.0/1.0 en el canario, `block` en PayPal | 1-2 sesiones |
+| 47 | Prueba RD 3 del dueño 14-sep (fuera del plan) | ✅ HECHO en otra sesión (`P1-PLAN-LOTE-47`): la autocrítica y la regeneración re-eligen un día determinista en vez de reescribirlo con el LLM, lo que el corrector deja igual vuelve con su procedencia, el armador conoce las reglas fijas de la autocrítica; parches de tiempo, casabe y queso. Ver la sección «Lote 47» | — |
 | 46 | Prueba RD 2 del dueño 14-sep (fuera del plan) | ✅ HECHO en otra sesión (`P1-PLAN-LOTE-46`): repetición entre planes y tope del bloque en el día determinista, el revisor no reintenta lo determinista, el ingrediente que da nombre al plato no se pierde, parches de pasos. Ver la sección «Lote 46» | — |
 | 45 | Prueba RD del dueño 14-sep (fuera del plan) | ✅ HECHO en otra sesión (`P1-PLAN-LOTE-45`): receta de biblioteca en su orden, día determinista con la familia del blueprint y el tiempo de cocina, sin reintento inútil. Ver la sección «Lote 45» | — |
 
@@ -77,9 +78,9 @@ explícitas y mensaje que cuente lo medido · push · deploy (`pwsh -NoProfile -
 cierran hoy en ~10 min con techo de 30). Un lote que sólo toca docs/scripts de medición no bumpea marker ni despliega.
 
 **Numeración (P1-PLAN-LOTE-45 · 14-sep).** El marker nunca baja: cada test de lote exige `N` ≥ el suyo. El 41 y el 45 ya
-están cerrados y desplegados, y el 46 también, así que los lotes pendientes de este plan (38, 39, 40, 42, 43, 44) se
-cierran con el **siguiente número libre ≥ 47** —marker, `tests/test_p1_plan_lote_<N>.py` y memoria con ese número— y el título del commit
-cita su número de plan («`P1-PLAN-LOTE-47` (lote 38 del plan)»). Cerrar con el número del plan haría fallar los tests 41, 45 y 46.
+están cerrados y desplegados, y el 46 y el 47 también, así que los lotes pendientes de este plan (38, 39, 40, 42, 43,
+44) se cierran con el **siguiente número libre ≥ 48** —marker, `tests/test_p1_plan_lote_<N>.py` y memoria con ese número— y el título del commit
+cita su número de plan («`P1-PLAN-LOTE-48` (lote 38 del plan)»). Cerrar con el número del plan haría fallar los tests 41, 45, 46 y 47.
 
 ---
 
@@ -349,6 +350,16 @@ días deterministas; el ingrediente que da nombre al plato no lo recortan los re
 (`identidad_plato`); el cerrador no manda hervir el queso y el autofix no reescribe recetas congeladas. Abierto: «si no
 cabe, se cambia el plato» (elegir otra plantilla cuando la identidad no cabe en los macros) no está hecho: hoy la identidad
 vuelve y el truth-up la cuenta.
+
+## Lote 47 · La tercera prueba RD del dueño (HECHO · `P1-PLAN-LOTE-47` · 2026-09-14)
+
+Tras el lote 46 el plan (`d8b10b05`) salió aprobado al primer intento y sin repetir los planes anteriores, pero la
+autocrítica corrigió con el LLM los días 1 y 2 y la regeneración quirúrgica el 3: el corrector pegó encima días sin
+procedencia y los 6 platos de biblioteca que conservó por el nombre perdieron las protecciones de los lotes 45 y 46.
+Cerrado en otra sesión: re-elegir con el armador en vez de reescribir (`reeleccion_dia`), procedencia restaurada en lo que
+el corrector deja igual, las reglas fijas de la autocrítica en la elección del día determinista y tres parches de pasos
+(`pasos_sustitucion`). Abierto: «Nada» de tiempo de cocina en almuerzos y cenas (la biblioteca no tiene con qué: los
+minutos medios del día determinista subieron de 20,9 a 25,9 al cumplir las reglas).
 
 ## Para el dueño (no lo cierra código)
 

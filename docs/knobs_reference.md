@@ -346,6 +346,25 @@ ficheros que fallan bajo el perfil en el artefacto, así que una línea de más 
 
 **Medido.** Simulación de solo lectura del día determinista, 7 días en dos bloques sobre el blueprint del último run del dueño (tiempo «Nada»), contra sus 3 planes más recientes: platos de esos planes 15 → 5 de 28, repeticiones dentro del bloque 4 → 2, días con proteína repetida 4 → 0, platos distintos 19 → 21, minutos medios 19,6 → 20,9. Identidad sobre una copia del plan 63eedc6b: vuelven 4 alimentos (+8 g de maní, +24 g de leche evaporada, +6 g de dátiles, +38 g de aguacate) y la grasa de los tres días queda entre el 91 % y el 107 %. La primera versión (piso del 50 % y subir también lo que quedó pequeño) tocaba 7 platos, llevaba la grasa al 116-122 % y el salami de 5 a 41 g: por eso el piso es del 25 % y sólo vuelve lo que falta.
 
+### La tercera prueba RD: re-elegir, no reescribir (`P1-PLAN-LOTE-47` · 2026-09-14)
+
+| Knob | Default | Efecto |
+|---|---|---|
+| `MEALFIT_CRITIQUE_REPICK_DETERMINISTIC` | `True` | La autocrítica y la regeneración quirúrgica REARMAN un día determinista señalado con el armador sin LLM, pidiéndole evitar lo señalado; se acepta si sus señales verificables bajan, se conserva si no hay nada verificable ni nombrado, y sólo el que no mejora va al corrector LLM. La autocrítica barre además los demás días deterministas con señal. |
+| `MEALFIT_CRITIQUE_RESTORE_PROVENANCE` | `True` | Cuando el corrector LLM reescribe un día, los platos de biblioteca que dejó iguales (mismo nombre, franja y alimentos) vuelven con su receta congelada y su plantilla; si vuelven todos, el día vuelve a ser determinista. |
+| `MEALFIT_DETERMINISTIC_DAY_PROTEIN_BY_CONTENT` | `True` | La puerta de proteína del día lee lo que el plato LLEVA con el detector del revisor (16 de 193 plantillas esconden huevo bajo otra etiqueta), y las franjas que no son la principal no gastan la familia del blueprint. |
+| `MEALFIT_DETERMINISTIC_DAY_GAINMUSCLE_DINNER` | `True` | En ganancia muscular la cena prefiere una proteína animal magra (el detector de la autocrítica: queso de plato ⇒ reserva). |
+| `MEALFIT_DETERMINISTIC_DAY_BLOCK_STAPLES` | `True` | Prefiere no repetir entre días del bloque un básico que la autocrítica cuenta (yuca, avena, queso blanco…). |
+| `MEALFIT_DETERMINISTIC_DAY_BLOCK_HEAVY_PROTEIN` | `True` | Prefiere no llevar una proteína pesada a un 3.er día del bloque (monotonía de la autocrítica). |
+| `MEALFIT_DETERMINISTIC_DAY_SLOT_COHERENCE` | `True` | Prefiere no abrir una incoherencia de franja: almuerzo y cena con la misma proteína o carbohidrato, merienda de plato fuerte, plato fuera de horario. |
+| `MEALFIT_DETERMINISTIC_DAY_BLOCK_DISH_BASE` | `True` | Prefiere no llevar una cabeza de plato (guiso, revoltillo…) al día que la haría «plato-base repetido». |
+| `MEALFIT_DETERMINISTIC_DAY_LIGHT_BASE` | `True` | La puerta de base ligera (misma base en desayuno y merienda), con knob propio; `MEALFIT_DETERMINISTIC_DAY_SAME_DAY_VARIETY` sigue encendiendo las dos a la vez. |
+| `MEALFIT_TIMETEMP_SKIP_COLD_STEP` | `True` | El tiempo por defecto de «El Toque de Fuego» no se añade a un paso que ENFRÍA sin calentar («pásalos a agua fría»). |
+| `MEALFIT_CARB_SWAP_TECHNIQUE` | `True` | Tras cambiar el arroz de la cena por casabe, la frase que lo hierve pasa a tostarlo y la que lo enjuaga, a tenerlo a mano. |
+| `MEALFIT_SWAP_CHEESE_WORDING` | `True` | Tras cambiar un huevo por queso, sus verbos no se heredan: «revuelve queso blanco» → «dora el queso blanco» (un queso que no se dora se incorpora o se mezcla). |
+
+**Medido.** Simulación de solo lectura del día determinista sobre el blueprint del run del plan d8b10b05 (7 días en dos bloques, tiempo «Nada», contra los 2 planes que eran recientes a esa hora): con las reglas del lote 46 la autocrítica saltaba en los dos bloques —el primero por 4 detectores: avena en 2 días, almuerzo y cena con yuca, avena en desayuno y merienda, huevo dos veces el día 3—; con las del 47 el bloque 1 queda limpio y el 2 salta sólo por yuca en 2 días. Platos de planes recientes 5 → 2, exceso sobre el tope de 7 días 0 → 0, platos distintos 21 → 21, minutos medios 20,9 → 25,9 (el coste: con 10 min la biblioteca no tiene alternativa en almuerzos y cenas). Sobre los días del lote 46 con la sugerencia real del evaluador, la re-elección rehízo los 3 días sin LLM (el 3 por el barrido) y la autocrítica quedó en «yuca en 2 días». La primera medición, con sólo tres reglas, llevó el pollo a 3 días de 3 (monotonía): por eso entraron la proteína pesada, el plato-base, la franja y la base ligera; y la cuota de repetición pesa a medias porque, entera, empataba con lo que hace saltar la autocrítica.
+
 ## Cómo añadir un knob nuevo
 
 ```python

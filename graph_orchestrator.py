@@ -2790,7 +2790,7 @@ from prompts.medical_reviewer import REVIEWER_SYSTEM_PROMPT
 # test_f1a_planner_do_o_none_es_byte_identico_is) — el import crudo ya no tiene consumidor en
 # este módulo. `prompts.planner` sigue exportando la constante para su propio uso interno.
 from prompts.planner import build_planner_system_prompt
-from prompts.day_generator import DAY_GENERATOR_SYSTEM_PROMPT, build_day_assignment_context; from deterministic_day import build_day_for_skeleton as _det_day
+from prompts.day_generator import DAY_GENERATOR_SYSTEM_PROMPT, build_day_assignment_context; from deterministic_day import build_day_for_skeleton as _det_day; import pasos_sustitucion as _ps; import reeleccion_dia as _reel  # [P1-PLAN-LOTE-47]
 
 
 # ============================================================
@@ -10628,6 +10628,15 @@ Devuelve el Día {day_num} corregido con EXACTAMENTE la misma estructura JSON y 
                     return day_num, None, f"error:{type(e).__name__}"
 
             days_to_fix = mentioned[:critique_max_days]
+            # [P1-PLAN-LOTE-47 · 2026-09-14] Re-elegir, no reescribir: un día determinista señalado se rearma con el
+            # armador sin LLM, evitando lo señalado; sólo el que no mejora va al corrector (plan d8b10b05: el corrector
+            # reescribió los 3 días de biblioteca). tooltip-anchor: P1-PLAN-LOTE-47-REELEGIR-AUTOCRITICA
+            _reelegidos: list = []
+            if _reel.enabled():
+                days_to_fix, _reelegidos, _ = _reel.reelegir_en_lugar(
+                    days, days_to_fix, nutrition=state.get("nutrition"), form_data=form_data, skeletons=_skeleton_days,
+                    textos=[critique.suggestions, *slot_issues, *_gm_dinner_issues, *_light_base_issues],
+                    etiqueta="SELF-CRITIQUE", barrer=True)
 
             # ============================================================
             # [P4-TIMEOUT-2] Circuit breaker en self-critique correction
@@ -10711,11 +10720,12 @@ Devuelve el Día {day_num} corregido con EXACTAMENTE la misma estructura JSON y 
                         await asyncio.gather(*pending, return_exceptions=True)
                     pending = set()
 
-            corrected_any = False
+            corrected_any = bool(_reelegidos)
             for day_num, corrected_day, _fail_reason in correction_results:
                 if corrected_day is not None:
                     for i, d in enumerate(days):
                         if d.get("day") == day_num:
+                            _reel.restaurar_procedencia(d, corrected_day)  # [P1-PLAN-LOTE-47] lo que dejó igual
                             days[i] = corrected_day
                             break
                     corrected_any = True
@@ -13776,6 +13786,10 @@ def _sanitize_swapped_protein_steps(steps: list, new_disps: list) -> tuple:
                     s = _re.sub(r"\s{2,}", " ", s2).strip()
                     s_flat = _sa_sw(s.lower())
                     changed = True
+                # [P1-PLAN-LOTE-47] (c) lo que se hacía con el huevo no se hace con el queso («revuelve queso blanco»)
+                s3 = _ps.redaccion_queso(s, nd_s)
+                if s3 != s:
+                    s, s_flat, changed = s3, _sa_sw(s3.lower()), True
             if not drop:
                 out.append(s)
         except Exception:
@@ -23636,6 +23650,8 @@ def _inject_recipe_time_temp_defaults(meal: dict) -> bool:
                 return False
             if _CONTRACT_TIME_RE.search(step):
                 return False  # ya trae tiempo/temp — contrato cumplido
+            if _ps.paso_frio(step):
+                return False  # [P1-PLAN-LOTE-47] el paso ENFRÍA («pásalos a agua fría»): no lleva tiempo de fuego
             hay = _strip_food_words_for_technique(
                 _sa_tt((str(meal.get("name") or "") + " " + step).lower()))
             default = _TIMETEMP_FALLBACK_DEFAULT
@@ -28990,6 +29006,7 @@ def _night_rice_autofix(days: list, db=None, *, compound: bool = False, country:
                     _recipe = m.get("recipe")
                     if isinstance(_recipe, list):
                         _new_recipe = [_NIGHT_RICE_NAME_RE.sub(sub, s) if isinstance(s, str) else s for s in _recipe]
+                        _new_recipe, _ = _ps.tecnica_del_sustituto(_new_recipe, sub)  # [P1-PLAN-LOTE-47] el casabe se tuesta
                         if _new_recipe != _recipe:
                             m["recipe"] = _new_recipe
                     elif isinstance(_recipe, str) and _recipe:
@@ -41113,15 +41130,24 @@ Devuelve el Día {day_num} corregido con EXACTAMENTE la misma estructura JSON y 
             )
         return day_num, None
 
+    # [P1-PLAN-LOTE-47 · 2026-09-14] Re-elegir antes de reescribir: el día 3 del plan d8b10b05 (huevo dos veces) lo rehízo
+    # el corrector LLM y perdió sus recetas de biblioteca. tooltip-anchor: P1-PLAN-LOTE-47-REELEGIR-REGEN
+    _para_llm_sr, _reelegidos_sr = list(marker_day_nums), []
+    if _reel.enabled():
+        _para_llm_sr, _reelegidos_sr, _ = _reel.reelegir_en_lugar(
+            days, marker_day_nums, nutrition=state.get("nutrition"), form_data=form_data, skeletons=skeleton_days,
+            textos=[str((d.get("_critique_unresolved") or {}).get("issue") or "") for d in days if isinstance(d, dict)]
+            + [s for _v in _reject_issues.values() for s in _v], etiqueta="P5-MARKER-REGEN")
     results = await asyncio.gather(
-        *[_re_correct_one(d) for d in marker_day_nums]
+        *[_re_correct_one(d) for d in _para_llm_sr]
     )
 
-    fixed_count = 0
+    fixed_count = len(_reelegidos_sr)
     for day_num, corrected_day in results:
         if corrected_day is not None:
             for i, d in enumerate(days):
                 if d.get("day") == day_num:
+                    _reel.restaurar_procedencia(d, corrected_day)  # [P1-PLAN-LOTE-47] lo que dejó igual
                     days[i] = corrected_day
                     break
             fixed_count += 1
