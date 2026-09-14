@@ -171,7 +171,11 @@ _PROCESS_START_ISO = datetime.now(timezone.utc).isoformat()
 # sitio en vez de extraer oraciones (149 de 193 recetas de biblioteca salían con pasos fuera de orden; ahora 0), el día
 # determinista toma la familia del blueprint y el tiempo de cocina del formulario y deja de juzgarlo el pool del
 # planificador, el reintento siembra la memoria con los días reciclados, y `repair_stage_diff` cuenta el desorden.
-_LAST_KNOWN_PFIX = "P1-PLAN-LOTE-45 · 2026-09-14"
+# [P1-PLAN-LOTE-46 · 2026-09-14] Segunda prueba RD del dueño (plan 63eedc6b): el día determinista prefiere lo que no
+# sirvió en los últimos 3 planes y respeta el tope del bloque, la familia del blueprint va a la comida principal con la
+# puerta de proteína del día, el revisor ya no reintenta lo que un día determinista arma igual, el ingrediente que da
+# nombre al plato no se recorta ni se pierde, y los parches dejan de mandar hervir el queso o pelar una pechuga.
+_LAST_KNOWN_PFIX = "P1-PLAN-LOTE-46 · 2026-09-14"
 
 # [P1-SENTRY-SAMPLE-COST · 2026-05-12] Sentry sampling driven from env vars
 # con default seguro 0.1 (10%). Pre-fix tenía `traces_sample_rate=1.0` y

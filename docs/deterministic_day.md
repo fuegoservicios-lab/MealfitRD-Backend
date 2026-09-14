@@ -190,6 +190,25 @@ de cocina «Nada») y los tres días salieron de este módulo. Tres costuras con
 Medido sobre el blueprint real (simulación de solo lectura): 32 → 17 min de media, 10 → 6 platos fuera de presupuesto y
 4 → 1 repetidos en 3 días. Test: `tests/test_p1_plan_lote_45.py`.
 
+## Segunda prueba RD (P1-PLAN-LOTE-46 · 2026-09-14)
+
+El dueño repitió la prueba con el mismo perfil tras el lote 45 (plan `63eedc6b`). Lo del lote 45 funcionó, pero el
+revisor rechazó los 3 intentos por **repetición contra los planes recientes**: pica pollo, salami guisado y avena del plan
+de la mañana. Este módulo no miraba otros planes, así que cada reintento armaba lo mismo: 354 s y el plan entregado sin
+aprobar. Cuatro cambios:
+
+- **Planes recientes.** En el primer bloque, lo servido en los últimos 3 planes (el mismo número que el revisor) va al
+  final de la lista, como un saturado (`_plantillas_de_planes_recientes`). Se prefiere, no se descarta.
+- **Tope del bloque.** Dentro del bloque manda su tope (`horizon.repetition_limits_for(modo, días)`): el salami había salido
+  dos veces en 3 días porque aquí se aplicaba el de 7 días.
+- **La familia en la comida principal.** Con la familia del blueprint en las cuatro franjas, el día de huevo sirvió arroz
+  con lentejas y huevo de almuerzo y guacamole con huevo de cena. Ahora la familia filtra sólo el almuerzo (o la cena si no
+  hay) y la **puerta de proteína del día** (`MEALFIT_DETERMINISTIC_DAY_SAME_DAY_PROTEIN`) evita repetirla en las demás.
+- **El revisor ya no reintenta lo que un día determinista arma igual**, ni por repetición entre planes ni por proteína
+  repetida en el día (`MEALFIT_ANTI_REPETITION_SKIP_DETERMINISTIC`, `MEALFIT_VARIETY_GATE_SKIP_DETERMINISTIC`).
+
+Simulación de solo lectura del día determinista, 7 días en dos bloques sobre el blueprint del último run del dueño (tiempo «Nada»), contra sus 3 planes más recientes: platos de esos planes 15 → 5 de 28, repeticiones dentro del bloque 4 → 2, días con proteína repetida 4 → 0, platos distintos 19 → 21, minutos medios 19,6 → 20,9. Identidad sobre una copia del plan 63eedc6b: vuelven 4 alimentos (+8 g de maní, +24 g de leche evaporada, +6 g de dátiles, +38 g de aguacate) y la grasa de los tres días queda entre el 91 % y el 107 %. La primera versión (piso del 50 % y subir también lo que quedó pequeño) tocaba 7 platos, llevaba la grasa al 116-122 % y el salami de 5 a 41 g: por eso el piso es del 25 % y sólo vuelve lo que falta. Test: `tests/test_p1_plan_lote_46.py`.
+
 ## Seguridad: el backstop no es opcional
 
 Un día que sale de aquí **sí pasa por `assemble_plan_node` y `review_plan_node`** (las aristas del grafo

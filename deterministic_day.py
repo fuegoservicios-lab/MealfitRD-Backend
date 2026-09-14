@@ -272,13 +272,10 @@ def _familias_para(skeleton_day, sl, day_index) -> list:
     no, la de la rebanada para ESE día; si tampoco, el pool del planificador con cada alimento en su familia."""
     if (skeleton_day or {}).get("protein"):
         return _familias_del_dia(skeleton_day)
-    if _knob_on("MEALFIT_DETERMINISTIC_DAY_BLUEPRINT_FAMILY") and isinstance(sl, dict):
-        for d in sl.get("days") or []:
-            try:
-                if isinstance(d, dict) and int(d.get("day_index", -1)) == int(day_index) and d.get("protein"):
-                    return [str(d["protein"])]
-            except (TypeError, ValueError):
-                continue
+    if _knob_on("MEALFIT_DETERMINISTIC_DAY_BLUEPRINT_FAMILY"):
+        _bp = _familia_del_blueprint(sl, day_index)
+        if _bp:
+            return [_bp]
     fams = _familias_del_dia(skeleton_day)
     if not _knob_on("MEALFIT_DETERMINISTIC_DAY_POOL_FAMILY_CANON"):
         return fams
@@ -288,6 +285,19 @@ def _familias_para(skeleton_day, sl, day_index) -> list:
             vistos.add(f.lower())
             out.append(f)
     return out
+
+
+def _familia_del_blueprint(sl, day_index) -> Optional[str]:
+    """La familia que la rebanada del blueprint asigna a ESE día (`days[*].protein`); `None` si no hay."""
+    if not isinstance(sl, dict):
+        return None
+    for d in sl.get("days") or []:
+        try:
+            if isinstance(d, dict) and int(d.get("day_index", -1)) == int(day_index) and d.get("protein"):
+                return str(d["protein"])
+        except (TypeError, ValueError):
+            continue
+    return None
 
 
 def _fijados_para(fijados, day_index, franja):
@@ -1298,6 +1308,104 @@ def _conteo_ventana(memoria, offset, form_data=None, user_id=None, por_id=None, 
         return {}
 
 
+# ---------------------------------------------------------------------------
+# [P1-PLAN-LOTE-46 · 2026-09-14] Segunda prueba RD del dueño (plan 63eedc6b): el revisor rechazó los 3 intentos por
+# REPETICIÓN contra los planes recientes (pica pollo, salami guisado y avena del plan de la mañana) y este módulo, que no
+# miraba otros planes, armó lo mismo cada vez: 354 s y el plan entregado sin aprobar. Y el salami salió dos veces en el
+# bloque de 3 días: aquí se aplicaba el tope POR 7 DÍAS (2) y el bloque sólo admite 1.
+#   · Lo servido en los últimos `_PLANES_RECIENTES` planes —el MISMO número que el revisor pasa a
+#     `get_recent_meals_from_plans`— va al final, como un saturado. Sólo en el primer bloque: los siguientes no pasan por
+#     el revisor y sus días previos ya los cuenta la memoria.
+#   · Dentro del bloque manda el tope del bloque (`horizon.repetition_limits_for(modo, días del bloque)`).
+# Se prefiere, no se descarta: si todo está saturado, se sirve igual. tooltip-anchor: P1-PLAN-LOTE-46-PLANES-RECIENTES
+# ---------------------------------------------------------------------------
+_PLANES_RECIENTES = 3
+_RECIENTES_TTL_S = 300          # los 3-4 días de un bloque y sus reintentos caben de sobra; el plan en curso no se guarda antes
+_RECIENTES_CACHE: dict = {}     # {user_id: (monotonic, frozenset(template_id))}
+
+
+def _indice_nombres(por_id) -> dict:
+    out = {}
+    for tid, t in (por_id or {}).items():
+        n = _norm((t or {}).get("name"))
+        if n:
+            out[n] = str(tid)
+    return out
+
+
+def _plantillas_de_planes_recientes(memoria, form_data, user_id, por_id, offset) -> set:
+    """Los `template_id` servidos en los últimos planes del usuario. Una consulta por usuario cada `_RECIENTES_TTL_S`
+    (el bloque arma 3-4 días y puede reintentar). Vacío en bloques que continúan un plan, sin usuario o sin base."""
+    if int(offset or 0) > 0 or not _knob_on("MEALFIT_DETERMINISTIC_DAY_RECENT_PLANS"):
+        return set()
+    uid = user_id or (form_data or {}).get("user_id")
+    if not uid or str(uid) == "guest":
+        return set()
+    import time
+    _hit = _RECIENTES_CACHE.get(str(uid))
+    if _hit and (time.monotonic() - _hit[0]) < _RECIENTES_TTL_S:
+        return set(_hit[1])
+    tids: set = set()
+    try:
+        if True:
+            import json
+            from db import execute_sql_query
+            filas = execute_sql_query(
+                "SELECT plan_data FROM meal_plans WHERE user_id = %s ORDER BY created_at DESC LIMIT %s",
+                (str(uid), _PLANES_RECIENTES), fetch_all=True) or []
+            indice = _indice_nombres(por_id)
+            for fila in filas:
+                pd = fila.get("plan_data") if isinstance(fila, dict) else None
+                if isinstance(pd, str):
+                    pd = json.loads(pd)
+                if not isinstance(pd, dict):
+                    continue
+                for dia in list(pd.get("_archived_days") or []) + list(pd.get("days") or []):
+                    for m in ((dia.get("meals") or []) if isinstance(dia, dict) else []):
+                        t = _tid_de_comida(m, indice)
+                        if t:
+                            tids.add(t)
+    except Exception as e:                                             # noqa: BLE001
+        logger.debug(f"[P1-PLAN-LOTE-46] planes recientes no disponibles ({e!r}): sin preferencia")
+        return set()                    # sin base no se cachea: el siguiente día vuelve a intentarlo
+    if len(_RECIENTES_CACHE) > 512:
+        _RECIENTES_CACHE.clear()
+    _RECIENTES_CACHE[str(uid)] = (time.monotonic(), frozenset(tids))
+    return tids
+
+
+def _max_repeticion_bloque(form_data, sl) -> Optional[int]:
+    """El tope de repetición exacta del BLOQUE (`balanced`, 3 días ⇒ 1); `None` sin rebanada."""
+    try:
+        if not _knob_on("MEALFIT_DETERMINISTIC_DAY_BLOCK_REPEAT") or not isinstance(sl, dict):
+            return None
+        n = int(sl.get("days_count") or len(sl.get("days") or []) or 0)
+        if n <= 0:
+            return None
+        import horizon
+        eff = (form_data or {}).get("_plan_policy_effective") or {}
+        modo = (eff.get("recurrence") or {}).get("global_mode") or "balanced"
+        return int(horizon.repetition_limits_for(modo, n).get("max_exact_repeat") or 0) or None
+    except Exception:                                                  # noqa: BLE001
+        return None
+
+
+def _conteo_bloque(memoria, por_id=None) -> dict:
+    """`{template_id: veces}` en los días de ESTE bloque (sin los persistidos)."""
+    if not isinstance(memoria, list):
+        return {}
+    indice = _indice_nombres(por_id)
+    out: dict = {}
+    for d in memoria:
+        if not isinstance(d, dict) or d.get("_persistido"):
+            continue
+        for m in d.get("meals") or []:
+            t = _tid_de_comida(m, indice)
+            if t:
+                out[t] = out.get(t, 0) + 1
+    return out
+
+
 # [P1-AUDITORIA-ARQ-VERIFICADA · 2026-09-11] El contrato de `skeleton_day` es el del `DaySkeletonModel`
 # que emite el planificador (`meal_types`, `protein_pool`); la forma del blueprint (`slots`, `protein`)
 # se acepta también. `day_num` es el día RELATIVO al bloque (1-based, como lo entrega
@@ -1395,6 +1503,16 @@ def build_day_for_skeleton(nutrition, form_data, skeleton_day, day_num, user_id=
         if not franjas:
             return None            # una franja que no sabemos repartir: que la haga el LLM
         familias = _familias_para(skeleton_day, _sl, day_index)   # [P1-PLAN-LOTE-45] la del blueprint manda
+        # [P1-PLAN-LOTE-46 · 2026-09-14] …pero en UNA franja. Aplicada a las cuatro, el día de huevo sirvió arroz con
+        # lentejas y huevo de almuerzo y guacamole con huevo de cena, el autofix de proteína repetida reescribió la cena a
+        # pollo sobre pasos escritos para un huevo («la pechuga se pesa sin cáscara… pélala»). La familia va a la comida
+        # principal; las demás eligen libres y la puerta de proteína del día evita repetirla.
+        # tooltip-anchor: P1-PLAN-LOTE-46-FAMILIA-PRINCIPAL
+        _fam_solo_principal = bool(_knob_on("MEALFIT_DETERMINISTIC_DAY_FAMILY_MAIN_SLOT_ONLY")
+                                   and familias and not (skeleton_day or {}).get("protein")
+                                   and familias == [_familia_del_blueprint(_sl, day_index)])
+        _franja_principal = next((s for s in ("almuerzo", "cena") if any(f == s for _e, f, _r in franjas)), None)
+        _puerta_proteina = _variedad_del_dia_on() or _knob_on("MEALFIT_DETERMINISTIC_DAY_SAME_DAY_PROTEIN")
         meals = []
         usadas_hoy = set()   # [P1-DIA-DETERMINISTA-VARIEDAD] ninguna plantilla dos veces el mismo día
         _sodio_dia = 0.0     # [P1-SODIO-DEL-DIA-DETERMINISTA] presupuesto del DÍA, no del plato
@@ -1411,12 +1529,21 @@ def build_day_for_skeleton(nutrition, form_data, skeleton_day, day_num, user_id=
         _max_rep = _max_repeticion_7d(_fd)
         _presup_min = _presupuesto_minutos(_fd)   # [P1-PLAN-LOTE-45] el tiempo de cocina del formulario
         _lentos: list = []
+        # [P1-PLAN-LOTE-46] el tope del bloque y lo servido en los planes recientes, como saturados (al final, no fuera)
+        _mb = _max_repeticion_bloque(_fd, _sl)
+        if _mb:
+            for _t_b, _n_b in _conteo_bloque(memoria, por_id).items():
+                if _n_b >= _mb:
+                    _saturados[_t_b] = max(int(_saturados.get(_t_b, 0)), int(_max_rep))
+        for _t_r in _plantillas_de_planes_recientes(memoria, _fd, _uid, por_id, _offset):
+            _saturados[_t_r] = max(int(_saturados.get(_t_r, 0)), int(_max_rep))
         for etiqueta, slot, r in franjas:
             obj = {k: v * r for k, v in objetivo_dia.items()}
             # [P1-CANDIDATO-CON-PRECIO · 2026-09-09] Éste es el ÚNICO camino donde el candidato se
             # convierte en plato sin que el modelo pueda ignorarlo: sin el tier aquí, el filtro de
             # precio sólo aconseja. Los demás filtros viajan en `_kw_cands`, los mismos que `horizon`.
-            tids, _fuente = _candidatos(dr, country, slot, familias,
+            tids, _fuente = _candidatos(dr, country, slot,
+                                        (familias if (not _fam_solo_principal or slot == _franja_principal) else []),
                                         _fijados_para(_fijados, day_index, slot), **_kw_cands)
             # [P1-DIA-DETERMINISTA-VARIEDAD · 2026-09-09] La lista, no el ganador: `rotacion` mueve
             # la cabeza por día (medido: 7 platos distintos en 56 comidas cuando era siempre el
@@ -1479,8 +1606,8 @@ def build_day_for_skeleton(nutrition, form_data, skeleton_day, day_num, user_id=
                 # modelo, con el mismo patrón: el que choca queda de reserva y se prueba el siguiente.
                 _prot = str(_t.get("protein") or "")
                 _bl = _bases_ligeras_de(_c, _tokens_var) if slot in ("desayuno", "merienda") else set()
-                if _variedad_on and ((not _repite_ok and _prot in _labels_var and _prot in _proteinas_hoy)
-                                     or (_bl & _bases_hoy)):
+                if ((_puerta_proteina and not _repite_ok and _prot in _labels_var and _prot in _proteinas_hoy)
+                        or (_variedad_on and (_bl & _bases_hoy))):   # [P1-PLAN-LOTE-46] la de proteína, con su knob
                     if _reserva_var is None:
                         _reserva_var = (_c, _t, _na)
                     continue

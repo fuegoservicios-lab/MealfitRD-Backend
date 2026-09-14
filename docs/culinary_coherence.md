@@ -1190,3 +1190,23 @@ biblioteca salían con el badge «Receta con pasos incompletos». Ahora dice «a
 
 De paso, «sofrito» y no «sofrit» en `_STEWY_DISH_HINT`: «la cebolla sofrita» encima de un mangú no es olla, y el cerrador
 de proteína le había escrito «añade el arenque al guiso» a un plato sin guiso. Test: `tests/test_p1_plan_lote_45.py`.
+
+## El ingrediente que da nombre al plato y los pasos de los parches (`P1-PLAN-LOTE-46` · 2026-09-14)
+
+**Qué pasaba.** En la segunda prueba del dueño salieron un guacamole sin aguacate, un «maní tostado» sin maní, uno «con
+dátiles» sin dátiles y una avena «con leche evaporada» sin leche evaporada. El re-trim de grasas del guardado recorta
+«aceite, queso, aguacate» sin mirar qué hace a ese plato ese plato, y otros ajustes de macros dejaban en cero la fuente que
+sobraba. Los pasos seguían mandando tostar el maní que ya no estaba, y el contrato final retiraba el aguacate de los pasos
+porque la lista ya no lo traía. Además dos parches escribían pasos sin sentido: el paso del cerrador de proteína no
+reconocía «queso» a secas ni la mozzarella («Cocina queso a la plancha o hervido») y el autofix de proteína repetida
+cambió el huevo del guacamole por pollo sobre pasos escritos para un huevo («la pechuga se pesa sin cáscara… pélala»).
+
+**Qué cambia.** `identidad_plato`: en un plato de biblioteca, la IDENTIDAD son los constituyentes que el nombre nombra más
+el más pesado de la plantilla. Los re-trims de grasa y carbohidrato no tocan esas líneas (`_identidad_protege`) y recortan
+de las demás fuentes; si aun así falta, vuelve con el 25 % de los gramos de la plantilla por el factor del plato, en la
+lista y en raw, antes del contrato final y del truth-up. Nunca vuelve lo que otro pase sustituyó a propósito ni lo que
+choca con una alergia. El cerrador trata cualquier queso como lácteo que no se cocina (`_CHEESE_WORDING_HINT`), el autofix
+no reescribe recetas congeladas y la harina con que se empaniza («pasa cada trozo por la harina, cubriéndolo») ya no se
+toma por harina «de cumplimiento».
+
+Simulación de solo lectura del día determinista, 7 días en dos bloques sobre el blueprint del último run del dueño (tiempo «Nada»), contra sus 3 planes más recientes: platos de esos planes 15 → 5 de 28, repeticiones dentro del bloque 4 → 2, días con proteína repetida 4 → 0, platos distintos 19 → 21, minutos medios 19,6 → 20,9. Identidad sobre una copia del plan 63eedc6b: vuelven 4 alimentos (+8 g de maní, +24 g de leche evaporada, +6 g de dátiles, +38 g de aguacate) y la grasa de los tres días queda entre el 91 % y el 107 %. La primera versión (piso del 50 % y subir también lo que quedó pequeño) tocaba 7 platos, llevaba la grasa al 116-122 % y el salami de 5 a 41 g: por eso el piso es del 25 % y sólo vuelve lo que falta. Test: `tests/test_p1_plan_lote_46.py`.

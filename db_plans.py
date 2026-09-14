@@ -1432,6 +1432,17 @@ def _finalize_plan_data_for_insert(data: dict, *, surface: str = "pre-INSERT",
                 # Las listas de compras se construyen aguas ARRIBA de este helper (el seam T2 y
                 # assemble las rearman DESPUÉS de llamar al chain) → ven los pasados
                 # restaurados, que es justo lo que el usuario tiene apuntado.
+                # [P1-PLAN-LOTE-46 · 2026-09-14] El ingrediente que da nombre al plato vuelve si un pase de ESTA cola lo quitó
+                # (band-closer, caps, re-trim de grasas): en el plan 63eedc6b el guacamole perdió el aguacate aquí, y el
+                # contrato final lo retiró después de los pasos. Va antes del contrato, que así ve la línea; el plato tocado
+                # se re-mide. tooltip-anchor: P1-PLAN-LOTE-46-IDENTIDAD-COLA
+                try:
+                    import identidad_plato as _idp_tail
+                    _pol_eff = ((_pd.get("_plan_policy") or {}).get("effective") or {}) if isinstance(_pd.get("_plan_policy"), dict) else {}
+                    _idp_tail.restaurar_identidad(_pd.get("days") or [], db=_db_ins,
+                                                  allergies=((_pol_eff.get("diet") or {}).get("allergies") or []))
+                except Exception as _idp_e:
+                    logger.debug(f"[P1-PLAN-LOTE-46] identidad (cola) no-op: {type(_idp_e).__name__}: {_idp_e}")
                 # [P1-PLAN-LOTE-24 · 2026-09-12] (C3 · CUL-P0-04) El contrato sobre la receta final corre AQUÍ, en la
                 # cola REAL del shield: dentro de `finalize_plan_data_coherence` (más arriba) ya no era el último —
                 # detrás de él siguen mutando la lista el band-closer, los caps de realismo, el tope diario de huevos

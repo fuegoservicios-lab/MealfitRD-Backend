@@ -331,6 +331,21 @@ ficheros que fallan bajo el perfil en el artefacto, así que una línea de más 
 
 **Medido.** Biblioteca DO completa por `_repair_recipe_contract`: antes 149 de 193 recetas con oraciones fuera de su orden (281 oraciones), ahora 0; 73 terminan sirviendo y ya no reciben un segundo «sirve» genérico. Día determinista sobre el blueprint real del dueño (run `f0bfd772`, «Nada» de tiempo, 3 días, simulación de solo lectura): antes 32 min de media, 10 de 12 platos por encima del presupuesto y 4 platos repetidos; ahora 17 min, 6 y 1, con Pollo, Pescado y Huevo como pedía el blueprint. Los que siguen por encima son almuerzos y cenas: el registro DO tiene 2 almuerzos y 1 cena de 10 minutos o menos.
 
+### La segunda prueba RD: repetición entre planes, identidad del plato y parches (`P1-PLAN-LOTE-46` · 2026-09-14)
+
+| Knob | Default | Efecto |
+|---|---|---|
+| `MEALFIT_DETERMINISTIC_DAY_RECENT_PLANS` | `True` | En el primer bloque, las plantillas servidas en los últimos 3 planes del usuario (el mismo número que el revisor) van al final de la lista, como saturadas. Una consulta por usuario cada 5 minutos. |
+| `MEALFIT_DETERMINISTIC_DAY_BLOCK_REPEAT` | `True` | Dentro del bloque manda su propio tope de repetición exacta (`balanced`, 3 días ⇒ 1), no el de 7 días. |
+| `MEALFIT_DETERMINISTIC_DAY_FAMILY_MAIN_SLOT_ONLY` | `True` | La familia del blueprint filtra sólo la comida principal (almuerzo, o cena si no hay); las demás franjas eligen libres. |
+| `MEALFIT_DETERMINISTIC_DAY_SAME_DAY_PROTEIN` | `True` | La puerta de proteína repetida en el día del día determinista, separada de la de base ligera (`MEALFIT_DETERMINISTIC_DAY_SAME_DAY_VARIETY`, que sigue apagada). |
+| `MEALFIT_ANTI_REPETITION_SKIP_DETERMINISTIC` | `True` | El revisor no rechaza por platos repetidos contra planes recientes cuando están en días deterministas: el reintento los arma igual. |
+| `MEALFIT_VARIETY_GATE_SKIP_DETERMINISTIC` | `True` | El rechazo por proteína repetida el mismo día cuenta `same_day_protein_repeats_modelo` (sin días deterministas); el informe sigue contando todos. |
+| `MEALFIT_PROTEIN_AUTOFIX_SKIP_LIBRARY` | `True` | El autofix de proteína repetida no reescribe recetas congeladas: sus pasos están escritos para esa proteína. |
+| `MEALFIT_DISH_IDENTITY_FLOOR` | `True` | El ingrediente que da nombre a un plato de biblioteca (lo que el nombre nombra y lo más pesado de la plantilla) no lo recortan los re-trims de grasa y carbohidrato; si aun así falta, vuelve con el 25 % de los gramos de la plantilla por el factor del plato. |
+
+**Medido.** Simulación de solo lectura del día determinista, 7 días en dos bloques sobre el blueprint del último run del dueño (tiempo «Nada»), contra sus 3 planes más recientes: platos de esos planes 15 → 5 de 28, repeticiones dentro del bloque 4 → 2, días con proteína repetida 4 → 0, platos distintos 19 → 21, minutos medios 19,6 → 20,9. Identidad sobre una copia del plan 63eedc6b: vuelven 4 alimentos (+8 g de maní, +24 g de leche evaporada, +6 g de dátiles, +38 g de aguacate) y la grasa de los tres días queda entre el 91 % y el 107 %. La primera versión (piso del 50 % y subir también lo que quedó pequeño) tocaba 7 platos, llevaba la grasa al 116-122 % y el salami de 5 a 41 g: por eso el piso es del 25 % y sólo vuelve lo que falta.
+
 ## Cómo añadir un knob nuevo
 
 ```python

@@ -11224,6 +11224,15 @@ SODIUM_SAUCE_CAP_MAX_CDA = _env_int("MEALFIT_SODIUM_SAUCE_CAP_MAX_CDA", 1, lambd
 # El gate queda como backstop. HUEVO y ATÚN excluidos v1 (huevo = platos-identidad tipo revoltillo;
 # atún = línea enlatada cuya sustitución textual produce disparates "lata de pescado blanco").
 PROTEIN_REPEAT_AUTOFIX_ENABLED = _env_bool("MEALFIT_PROTEIN_REPEAT_AUTOFIX", True)
+# [P1-PLAN-LOTE-46 · 2026-09-14] Una receta CONGELADA (biblioteca) no se reescribe cambiando el nombre de la proteína: sus
+# pasos están escritos para ESA proteína. El guacamole con huevo del plan 63eedc6b salió «con pechuga de pollo» y los pasos
+# decían «la pechuga se pesa sin cáscara… pélala». Rollback: MEALFIT_PROTEIN_AUTOFIX_SKIP_LIBRARY=false.
+# tooltip-anchor: P1-PLAN-LOTE-46-AUTOFIX-CONGELADA
+PROTEIN_AUTOFIX_SKIP_LIBRARY = _env_bool("MEALFIT_PROTEIN_AUTOFIX_SKIP_LIBRARY", True)
+
+
+def _receta_congelada(meal) -> bool:
+    return bool(PROTEIN_AUTOFIX_SKIP_LIBRARY and isinstance(meal, dict) and meal.get("_recipe_source") == "library")
 PROTEIN_REPEAT_AUTOFIX_MAX_PER_DAY = _env_int("MEALFIT_PROTEIN_REPEAT_AUTOFIX_MAX_PER_DAY", 2, lambda v: 0 <= v <= 4)
 # [P1-SAMEDAY-BURN-FIX · 2026-07-11] Re-pasada del autofix DESPUÉS del chain de calidad
 # (P0-BAND-PRE-REVIEW): el autofix corre temprano en assemble pero los re-closers del chain
@@ -11710,6 +11719,10 @@ VARIETY_GATE_FRUIT_CLASH = _env_bool("MEALFIT_VARIETY_GATE_FRUIT_CLASH", True)
 # ADVISORY) → cero riesgo de cero-plan/"saturada". Default ON. Flip a False revierte a la filosofía previa
 # (huevo/proteína podían repetirse el mismo día sin rechazo).
 VARIETY_GATE_SAME_DAY_PROTEIN = _env_bool("MEALFIT_VARIETY_GATE_SAME_DAY_PROTEIN", True)
+# [P1-PLAN-LOTE-46 · 2026-09-14] El RECHAZO por proteína repetida el mismo día cuenta sólo los días del modelo
+# (`same_day_protein_repeats_modelo`): el día determinista se arma igual en el reintento y su puerta de proteína ya elige
+# para no repetir. El informe sigue contando todos. Rollback: MEALFIT_VARIETY_GATE_SKIP_DETERMINISTIC=false.
+VARIETY_GATE_SKIP_DETERMINISTIC = _env_bool("MEALFIT_VARIETY_GATE_SKIP_DETERMINISTIC", True)
 # [P2-VARIETY-HIGH-MEALCOUNT-RELAX · 2026-06-27] Con 5-6 comidas/día (clínico: bariátrica/hipoglucemia/alto
 # gasto), exigir una proteína Y una fruta DISTINTAS en CADA comida es irreal (no hay 6 proteínas principales ni
 # 6 frutas dulces para rotar sin forzar repetición) → el gate same-day-protein/fruit rechazaba en bucle y
@@ -13030,6 +13043,28 @@ def _goal_aware_trim_ceiling_pct(form_data: dict, target_protein_day: float) -> 
 # natural (la gente tiene comidas favoritas). Default 2: hasta 2 repetidos = OK; 3+ =
 # rechazo legítimo por falta de variedad. Subir a 0 revierte al comportamiento estricto.
 ANTI_REPETITION_TOLERANCE = _env_int("MEALFIT_ANTI_REPETITION_TOLERANCE", 2)
+# [P1-PLAN-LOTE-46 · 2026-09-14] Un plato de un día DETERMINISTA repetido contra los planes recientes no cuenta para el
+# rechazo: el reintento arma el mismo día (plan 63eedc6b: 3 intentos, 354 s y entregado sin aprobar por pica pollo, salami
+# guisado y avena del plan de la mañana). La preferencia vive donde se elige: `deterministic_day` ya manda al final lo
+# servido en esos planes. Rollback: MEALFIT_ANTI_REPETITION_SKIP_DETERMINISTIC=false. tooltip-anchor: P1-PLAN-LOTE-46-ANTI-REPETICION
+ANTI_REPETITION_SKIP_DETERMINISTIC = _env_bool("MEALFIT_ANTI_REPETITION_SKIP_DETERMINISTIC", True)
+
+
+def _anti_repeticion_sin_deterministas(repetidos, days) -> list:
+    """Los repetidos contra planes recientes que cuentan para RECHAZAR: fuera los de días `_day_source == "deterministic"`."""
+    if not ANTI_REPETITION_SKIP_DETERMINISTIC or not repetidos:
+        return list(repetidos or [])
+    try:
+        det = {str(m.get("name") or "") for d in (days or []) if isinstance(d, dict)
+               and d.get("_day_source") == "deterministic"
+               for m in (d.get("meals") or []) if isinstance(m, dict)}
+        fuera = [r for r in repetidos if r in det]
+        if fuera:
+            logger.info(f"🔄 [P1-PLAN-LOTE-46] {len(fuera)} repetido(s) contra planes recientes en días deterministas: "
+                        f"no se reintenta (el reintento los arma igual): {fuera}")
+        return [r for r in repetidos if r not in det]
+    except Exception:
+        return list(repetidos or [])
 
 
 def _meal_macro_num(x) -> float:
@@ -19124,6 +19159,12 @@ def _protein_topup_meal(meal: dict, slot_cal_target: float, db, approved_protein
 _NO_COOK_SAFE_PROTEIN_HINT = ("yogur", "yogurt", "ricotta", "requeson", "cottage",
                               "queso crema", "queso blanco", "queso fresco",
                               "whey", "proteina", "proteína")
+# [P1-PLAN-LOTE-46 · 2026-09-14] Para la REDACCIÓN del paso del cerrador y el sufijo «cocido», cualquier queso. El hint de
+# arriba sólo conocía los lácteos blandos y «75 g de queso» o la mozzarella caían en la rama genérica: «Cocina queso a la
+# plancha o hervido y sírvelo como proteína del plato» y «queso mozzarella cocido» (plan 63eedc6b; el juez: hervir
+# mozzarella no es una técnica). El pool de proteínas de los platos fríos sigue con el hint de arriba.
+# tooltip-anchor: P1-PLAN-LOTE-46-QUESO
+_CHEESE_WORDING_HINT = ("queso", "mozzarella", "gouda", "cheddar", "parmesano")
 # [P1-PROTEIN-STEP-SOFT-DAIRY · 2026-06-29] El paso del closer "Cocina X a la plancha o hervido y sírvelo como proteína del
 # plato" era incoherente para LÁCTEOS BLANDOS (cottage/ricotta/yogur): no se cocinan a la plancha (se desarman) y la frase
 # "como proteína del plato" miente cuando son un añadido. Para esos → wording "Incorpora ... y mézclalo" (honesto sea
@@ -19330,7 +19371,8 @@ def _closer_protein_step_text(nm: str, no_cook: bool, blended: bool = False,
     # Decirle al usuario que cueza lo que ya compró cocido es la misma clase de absurdo que
     # cerró P1-CLOSER-HYGIENE para "huevo cocido".
     if no_cook or precooked or "cocid" in _nm_sa \
-            or (PROTEIN_STEP_SOFT_DAIRY_WORDING and any(h in _nm_sa for h in _NO_COOK_SAFE_PROTEIN_HINT)):
+            or (PROTEIN_STEP_SOFT_DAIRY_WORDING
+                and any(h in _nm_sa for h in _NO_COOK_SAFE_PROTEIN_HINT + _CHEESE_WORDING_HINT)):
         # Concordancia: "Incorpora camarones … mézclalo" (plan vivo) → mézclalos.
         # [P1-CLOSER-STEP-CONCORDANCIA · 2026-07-26] misma corrección que abajo: la concordancia
         # la manda el núcleo. "Incorpora Carne de res… y mézclalos" era el mismo fallo.
@@ -19338,7 +19380,7 @@ def _closer_protein_step_text(nm: str, no_cook: bool, blended: bool = False,
         # preparación y mézclalo antes de servir" manda mezclar lácteo frío dentro de una masa ya
         # horneada (bollitos del plan vivo 08114452) — disparate culinario. El lácteo blando va AL
         # LADO. Solo lácteos (hint soft-dairy): el atún en un guiso horneado sí se incorpora.
-        if baked and any(h in _nm_sa for h in _NO_COOK_SAFE_PROTEIN_HINT):
+        if baked and any(h in _nm_sa for h in _NO_COOK_SAFE_PROTEIN_HINT + _CHEESE_WORDING_HINT):
             return f"Sirve {nm} al lado para acompañar."
         _pl_inc, _fem_inc = _closer_step_agreement(_nm_sa)
         _v_inc = ("mézclalas" if _fem_inc else "mézclalos") if _pl_inc else \
@@ -20695,7 +20737,7 @@ def _close_protein_gap_for_meal(meal: dict, slot_protein_target: float, db, cand
         # [P1-CLOSER-HYGIENE · 2026-07-06] lácteos jamás llevan sufijo " cocido" ("½ taza de
         # yogurt cocido" en vivo — el yogurt no se cocina ni se compra cocido); nombres que ya
         # traen "cocid" tampoco (doble sufijo).
-        _dairy_nm = any(h in _nm_strip for h in _NO_COOK_SAFE_PROTEIN_HINT)
+        _dairy_nm = any(h in _nm_strip for h in _NO_COOK_SAFE_PROTEIN_HINT + _CHEESE_WORDING_HINT)  # [P1-PLAN-LOTE-46]
         # [P1-CLOSER-LINE-SPANISH] el participio concuerda con el núcleo del nombre del alimento.
         cook = ("" if (no_cook or _pre_cooked or _dairy_nm or "cocid" in _nm_strip)
                 else " " + participio_concordado(nm))
@@ -21064,6 +21106,17 @@ def _truth_up_meal_macros_from_strings(meal: dict, db) -> bool:
         return False
 
 
+def _identidad_protege(meal, linea) -> bool:
+    """[P1-PLAN-LOTE-46 · 2026-09-14] ¿Es la línea del alimento que da nombre a un plato de biblioteca? Los re-trims de
+    grasas y carbohidratos no la tocan: recortan de las demás fuentes. En el plan 63eedc6b el re-trim de grasas del guardado
+    dejó el guacamole sin aguacate. tooltip-anchor: P1-PLAN-LOTE-46-RECORTES-RESPETAN-IDENTIDAD"""
+    try:
+        import identidad_plato as _idp
+        return _idp.protege_linea(meal, linea)
+    except Exception:
+        return False
+
+
 def _trim_day_carbs_to_target(meals: list, target_carbs: float, db, *, tol: float = 0.10) -> bool:
     """[P2-CARB-TARGET-TRIM · 2026-06-15] Corre DESPUÉS de la cuantización (FS2). Si el día entrega carbos
     > target*(1+tol), reduce las porciones de los ingredientes CARBO-dominantes hacia el target y RE-CUANTIZA
@@ -21088,6 +21141,8 @@ def _trim_day_carbs_to_target(meals: list, target_carbs: float, db, *, tol: floa
             for idx, ing in enumerate(ings):
                 if _ingredient_macro_group(str(ing), db) != "carbs":
                     continue
+                if _identidad_protege(m, ing):
+                    continue  # [P1-PLAN-LOTE-46] el ingrediente que da nombre al plato no se recorta
                 _mc = db.macros_from_ingredient_string(str(ing)) or {}
                 _c = _mc.get("carbs") or 0.0
                 if _c > 0:
@@ -21194,6 +21249,8 @@ def _trim_day_fats_to_target(meals: list, target_fats: float, db, *, tol: float 
                 _il_ft = _sa_ft(str(ing).lower())
                 if any(t in _il_ft for t in _prot_ascii):
                     continue  # portador del cierre de micros → jamás encogerlo
+                if _identidad_protege(m, ing):
+                    continue  # [P1-PLAN-LOTE-46] el ingrediente que da nombre al plato no se recorta
                 _mc = db.macros_from_ingredient_string(str(ing)) or {}
                 _fv = _mc.get("fats") or 0.0
                 if _fv > 0:
@@ -22373,6 +22430,7 @@ def build_variety_report(plan: dict, user_staples: set = None) -> dict:
             return "".join(c for c in unicodedata.normalize("NFKD", str(s)) if not unicodedata.combining(c))
     total_meals = egg_meals = cremoso = premium = same_day_repeats = fruit_repeats = sweet_savory_clash = 0
     same_day_protein_repeats = 0
+    same_day_protein_repeats_modelo = 0  # [P1-PLAN-LOTE-46] sin los días deterministas: lo que el rechazo cuenta
     same_day_formula_repeats = 0  # [P1-SAME-DAY-FORMULA-REPEAT · 2026-08-02]
     meals_per_day_max = 0  # [P2-VARIETY-HIGH-MEALCOUNT-RELAX] mayor nº de comidas en un día (relaja gates en 5-6 comidas)
     # [P2-CROSSDAY-PREP-DIVERSITY · 2026-07-01] (audit creatividad G5) preparación → set de días en que aparece.
@@ -22460,6 +22518,8 @@ def build_variety_report(plan: dict, user_staples: set = None) -> dict:
                 if _staple_technique_exempt(_plabel, _meals_for_label, user_staples, strip_accents):
                     continue
                 same_day_protein_repeats += 1
+                if day.get("_day_source") != "deterministic":
+                    same_day_protein_repeats_modelo += 1
                 issues.append(f"Día {day.get('day', '?')}: proteína '{_plabel}' en {n} comidas el mismo día (repetición)")
         # [P1-SAME-DAY-FORMULA-REPEAT · 2026-08-02] misma BASE+FORMATO+≥2 acompañantes el mismo
         # día (ver comentario arriba de `_FORMULA_BASE_TOKENS`). NO staple-aware a propósito.
@@ -22575,6 +22635,7 @@ def build_variety_report(plan: dict, user_staples: set = None) -> dict:
             "premium": premium, "same_day_repeats": same_day_repeats,
             "fruit_repeats": fruit_repeats, "sweet_savory_clash": sweet_savory_clash,
             "same_day_protein_repeats": same_day_protein_repeats,
+            "same_day_protein_repeats_modelo": same_day_protein_repeats_modelo,
             "same_day_formula_repeats": same_day_formula_repeats,
             "meals_per_day": meals_per_day_max,
             "cross_day_proteins": cross_day_proteins,
@@ -24340,7 +24401,10 @@ def _variety_repeat_gate_issues(variety_report: dict) -> list:
             )
         # [P1-VARIETY-SAME-DAY-PROTEIN · 2026-06-27] La MISMA proteína principal (huevo/pollo/pavo/cerdo/res/
         # pescado/atún) en 2+ comidas del mismo día fatiga → rechazo (retry acotado; advisory en intento final).
-        if VARIETY_GATE_SAME_DAY_PROTEIN and not _relax_high_mc and int(variety_report.get("same_day_protein_repeats", 0)) > 0:
+        _sdp_key = ("same_day_protein_repeats_modelo"            # [P1-PLAN-LOTE-46] sin los días deterministas
+                    if VARIETY_GATE_SKIP_DETERMINISTIC and "same_day_protein_repeats_modelo" in variety_report
+                    else "same_day_protein_repeats")
+        if VARIETY_GATE_SAME_DAY_PROTEIN and not _relax_high_mc and int(variety_report.get(_sdp_key, 0)) > 0:
             out.append(
                 "MISMA PROTEÍNA REPETIDA EL MISMO DÍA (rechazo de variedad): la misma proteína principal "
                 "(p.ej. HUEVO, pollo, pavo, cerdo, res, pescado, atún) aparece en 2+ comidas del mismo día — "
@@ -26076,7 +26140,7 @@ def _swap_excess_carbs_to_protein_for_day(meals, p_target_day, c_target_day, db,
         except Exception:
             _nm_pf = str(nm).lower()
         _skip_cook_pf = (no_cook or "cocid" in _nm_pf
-                         or any(h in _nm_pf for h in _NO_COOK_SAFE_PROTEIN_HINT)
+                         or any(h in _nm_pf for h in _NO_COOK_SAFE_PROTEIN_HINT + _CHEESE_WORDING_HINT)
                          or any(h in _nm_pf for h in _PRECOOKED_PROTEIN_HINT))
         # [P1-CLOSER-INTEGRATE · 2026-07-06] mismo contrato del callsite principal: escalar la
         # línea congruente existente antes que apilar una nueva.
@@ -28097,6 +28161,16 @@ def finalize_plan_data_coherence(days: list, db=None, allergies=None, target_fat
             total += _nrv; parts.append(f"refill_verb={_nrv}")
     except Exception as _ems:
         logger.warning(f"[P2-MISE-COOK-SPLIT] boundary no-op: {type(_ems).__name__}: {_ems}")
+    # [P1-PLAN-LOTE-46 · 2026-09-14] El ingrediente que da nombre al plato vuelve si un pase de arriba lo quitó
+    # (`identidad_plato`): antes del contrato de pasos y del truth-up final, que re-miden con la línea ya puesta.
+    # tooltip-anchor: P1-PLAN-LOTE-46-IDENTIDAD-FINALIZE
+    try:
+        import identidad_plato as _idp
+        _nid = _idp.restaurar_identidad(days, db=db, allergies=allergies)
+        if _nid:
+            total += _nid; parts.append(f"identidad={_nid}")
+    except Exception as _eid:
+        logger.warning(f"[P1-PLAN-LOTE-46] identidad del plato no-op: {type(_eid).__name__}: {_eid}")
     # [P2-AUDIT-V6-BATCH · 2026-07-03] (P2-C) Contract-lint per-meal en el persist boundary: los
     # chunks semana 2+ no pasan por review_plan_node → el contrato de pasos (prefijos/orden/tiempo/
     # inglés) no dejaba rastro fuera de form-gen semana 1. Advisory persistido (LECTURA, jamás gate).
@@ -29952,6 +30026,9 @@ def _protein_repeat_autofix(days: list, form_data=None, db=None) -> int:
                     for _meal, _in_name in hits[1:]:
                         if fixes_left <= 0:
                             break
+                        if _receta_congelada(_meal):             # [P1-PLAN-LOTE-46]
+                            _log_autofix_impotent(_d.get("day", "?"), "huevo", "receta_congelada", _meal.get("name"))
+                            continue
                         _nl_eh = _sa_eh(str(_meal.get("name", "")).lower())
                         if _re.search(r"\bhuevos?\b|\bclaras?\b|revoltillo|tortilla|omelet", _nl_eh):
                             continue  # protagonista — el pase (2) decide
@@ -29986,7 +30063,8 @@ def _protein_repeat_autofix(days: list, form_data=None, db=None) -> int:
                                 m for m in _egg_now
                                 if _EGG_NAME_PHRASE_RX.search(str(m.get("name", "")))
                                 and not _egg_is_intrinsic_dish(m.get("name"))
-                                and not _protected_binder(m)]
+                                and not _protected_binder(m)
+                                and not _receta_congelada(m)]   # [P1-PLAN-LOTE-46]
                             # comidas-huevo que quedarán si reasigno TODAS las renombrables:
                             _unavoidable = [m for m in _egg_now if m not in _renameable]
                             # si NINGUNA es inevitable, conserva la 1ª renombrable (≥1 comida-huevo ok).
@@ -30028,7 +30106,8 @@ def _protein_repeat_autofix(days: list, form_data=None, db=None) -> int:
                                 _nl3b = _sa_eh(str(m.get("name", "")).lower())
                                 return (any(t in _nl3b for t in _EGG_BINDER_DISH_TOKENS)
                                         and not _EGG_SIDE_MODIFIER_RX.search(_nl3b))
-                            _protected3 = [m for m in _egg_now3 if _protected_binder3(m)]
+                            _protected3 = [m for m in _egg_now3
+                                           if _protected_binder3(m) or _receta_congelada(m)]   # [P1-PLAN-LOTE-46]
                             _rewritable3 = [m for m in _egg_now3 if m not in _protected3]
                             if len(_protected3) >= 2 or not _rewritable3:
                                 _log_autofix_impotent(_d.get("day", "?"), "huevo",
@@ -30105,6 +30184,9 @@ def _protein_repeat_autofix(days: list, form_data=None, db=None) -> int:
                 _keep_idx = next((i for i, (_, _in_name) in enumerate(hits) if _in_name), 0)
                 for i, (_meal, _) in enumerate(hits):
                     if i == _keep_idx or fixes_left <= 0:
+                        continue
+                    if _receta_congelada(_meal):                 # [P1-PLAN-LOTE-46]
+                        _log_autofix_impotent(_d.get("day", "?"), _lbl, "receta_congelada", _meal.get("name"))
                         continue
                     # [P1-RECIPE-QUALITY-100 · 2026-07-10] contexto DULCE/LIGERO: el closer ya tenía
                     # sweet/light-guard pero este autofix NO — escribía pescado/camarones en meriendas
@@ -35744,7 +35826,10 @@ _RAW_FLOUR_LINE_RX = _re.compile(
     r"(?:de\s+)?harina\b", _re.IGNORECASE)
 _DOUGH_CONTEXT_TOKENS = ("masa", "amasa", "arepita", "arepa", "panqueque", "pancake",
                          "costra", "empaniz", "reboz", "bollito", "bolita", "tortita",
-                         "mezcla la harina", "harina con", "pasa el", "cubre")
+                         "mezcla la harina", "harina con", "pasa el", "cubre",
+                         # [P1-PLAN-LOTE-46] «Pasa cada trozo de pollo por la harina de trigo, cubriéndolo bien» (el pica
+                         # pollo de la biblioteca): la harina sí se usa; quitarla dejó el paso sin su ingrediente.
+                         "por la harina", "enharin", "cubriendo")
 
 
 def _strip_raw_flour_compliance_bolt(days) -> int:
@@ -43648,6 +43733,7 @@ Responde ÚNICAMENTE con el JSON de revisión.
                     # Umbral: cero tolerancia, pero excluir nombres genéricos de desayuno
                     generic_ignores = ['huevosrevueltos', 'huevoshervidos', 'avenacocida', 'panezekiel', 'tostada', 'arepa']
                     filtered_repeated = [rm for rm in repeated_meals if not any(g in rm for g in generic_ignores)]
+                    filtered_repeated = _anti_repeticion_sin_deterministas(filtered_repeated, days)   # [P1-PLAN-LOTE-46]
                     
                     # [P2-ANTI-REPETITION-TOLERANCE · 2026-06-13] Rechazar SOLO si los
                     # repetidos superan la tolerancia (default 2). 1-2 repetidos vs los
