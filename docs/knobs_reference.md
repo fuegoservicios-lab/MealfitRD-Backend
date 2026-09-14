@@ -309,6 +309,14 @@ cabía en los 50 min; en local, la tercera fase del gate (`EXIT_PROD`). Tiempo d
 con `monkeypatch`) y borrar su línea: el test `tests/test_p1_plan_lote_33.py` exige que la lista sea exactamente la de
 ficheros que fallan bajo el perfil en el artefacto, así que una línea de más o de menos se nota.
 
+### La tormenta de reintentos del catálogo con la base caída (tarea propuesta del 13-sep · `P1-PLAN-LOTE-41` · 2026-09-14)
+
+| Knob | Default | Efecto |
+|---|---|---|
+| `MEALFIT_CATALOG_NEGATIVE_CACHE_S` | `30` (clamp [1, 300]) | Ventana (segundos) durante la que `shopping_calculator.get_master_ingredients` NO vuelve a tocar el pool tras un fallo («sin pool» o excepción del driver): devuelve `_master_cache or []`, registra el error UNA vez por ventana (las demás llamadas salen a DEBUG con el conteo) y JAMÁS sella `_master_cache_ts` (P1-CATALOG-INDEX-NO-STICKY: cinco minutos de vacío servidos como catálogo). El pool se comprueba ANTES que la ventana: si aparece, o es otro objeto, la ventana no aplica y se lee la tabla en esa misma llamada. `catalog_capability` cachea su `None` por país con la MISMA ventana (`None` sigue siendo «capacidad desconocida, no cero»). `invalidate_master_cache()` y `catalog_capability.reset_cache()` limpian los dos sellos. Subir a 120-300 si Neon tarda en volver y los blueprints de varios chunks compiten por el pool; bajar a 5-10 sólo para diagnosticar. Test: `tests/test_p1_plan_lote_41.py` |
+
+**Medido** (`horizon.build_blueprint` de un perfil del landing, 14 días × 4 comidas, la misma vara antes y después; script del scratchpad de la sesión, nada escrito en el repo ni en la base). **Antes:** 32.676 llamadas a `get_master_ingredients` por blueprint (32.564 con el `_EFF` de `test_p1_arq27_f3_candidateset`, la cifra de la CI del 13-sep), **32.676 líneas de error** sin pool y **32.676 intentos de conexión** con un pool que falla — `catalog_capability` sólo cacheaba snapshots no vacíos, así que cada ancla, constituyente y plantilla volvía a preguntar, y `get_master_ingredients` no sellaba nada. **Después:** 0 líneas de error y 0 intentos DURANTE el blueprint (1 y 1 en todo el proceso: los sella la compilación de la política, que corre antes, dentro de la misma ventana de 30 s; con el `_EFF` de la CI, 1 llamada, 1 error, 0 intentos); las 112 llamadas que quedan las hace `dish_cost.tabla_de_precios` (una por plantilla costeada) y se absorben en la ventana, a DEBUG. Tiempo del blueprint 0,92 → 0,37 s. En producción, un arranque en frío con Neon caído pasa de decenas de miles de intentos —cada uno esperando el timeout del pool— a uno cada 30 s.
+
 ## Cómo añadir un knob nuevo
 
 ```python

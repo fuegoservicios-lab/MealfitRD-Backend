@@ -26,21 +26,52 @@ from __future__ import annotations
 
 import hashlib
 import logging
+import time
 from typing import Any, Optional
 
 logger = logging.getLogger(__name__)
 
 # Positivos cacheados por país (el catálogo ya viene cacheado aguas arriba; esto evita rehacer el set
-# y la huella en cada ancla). Los negativos NO se cachean —la DB puede volver— pero su aviso se emite
-# una sola vez por país y proceso: repetirlo por llamada convierte una medición en un muro de logs.
+# y la huella en cada ancla). El aviso de un negativo se emite una sola vez por país y proceso: repetirlo
+# por llamada convierte una medición en un muro de logs.
 _CACHE: dict[str, dict] = {}
 _AVISADOS: set = set()
+# [P1-PLAN-LOTE-41 · 2026-09-14] Negativos cacheados por país con TTL CORTO: `cc → instante (time.time()) hasta
+# el que el «no se sabe» se sirve sin releer`. Antes el `None` no se cacheaba nunca —«la DB puede volver»— y
+# con la base caída cada ancla, cada constituyente y cada plantilla volvían a pedir el catálogo: 32.676
+# lecturas y 32.676 líneas de error en UN blueprint de 14 días (medido 2026-09-14). La ventana es la misma
+# que la de `get_master_ingredients` (`MEALFIT_CATALOG_NEGATIVE_CACHE_S`, 30 s) y la borran `reset_cache`,
+# `reset_negative_cache` y `shopping_calculator.invalidate_master_cache`. La semántica no cambia: `None`
+# sigue siendo «capacidad desconocida, no cero»; sólo deja de preguntarse lo mismo treinta mil veces.
+_CACHE_NEG: dict[str, float] = {}
 
 
 def _avisar_una_vez(cc: str, msg: str) -> None:
     if cc not in _AVISADOS:
         _AVISADOS.add(cc)
         logger.warning(msg)
+
+
+def _negative_ttl_s() -> float:
+    """El mismo knob que la caché negativa de `get_master_ingredients` (una sola ventana que gobernar)."""
+    try:
+        from shopping_calculator import _catalog_negative_cache_s
+        return float(_catalog_negative_cache_s())
+    except Exception:
+        return 30.0
+
+
+def _desconocido(cc: str, msg: str) -> None:
+    """[P1-PLAN-LOTE-41] Avisa (una vez por país y proceso) y sella el «no se sabe» de `cc` por la ventana corta."""
+    _avisar_una_vez(cc, msg)
+    _CACHE_NEG[cc] = time.time() + _negative_ttl_s()
+    return None
+
+
+def reset_negative_cache() -> None:
+    """[P1-PLAN-LOTE-41] Olvida los «no se sabe» sellados por país. La llama
+    `shopping_calculator.invalidate_master_cache` (quien invalida el catálogo quiere releer AHORA) y `reset_cache`."""
+    _CACHE_NEG.clear()
 
 
 def reset_cache() -> None:
@@ -50,6 +81,7 @@ def reset_cache() -> None:
     _CACHE.clear()
     _DISPONIBLE.clear()
     _AVISADOS.clear()
+    _CACHE_NEG.clear()
 
 
 def _country(country: Any) -> str:
@@ -91,17 +123,21 @@ def catalog_capability(country: Any) -> Optional[dict]:
     hit = _CACHE.get(cc)
     if hit is not None:
         return hit
+    # [P1-PLAN-LOTE-41] Un «no se sabe» reciente se sirve sin releer hasta que venza su ventana.
+    _neg_until = _CACHE_NEG.get(cc)
+    if _neg_until is not None:
+        if time.time() < _neg_until:
+            return None
+        _CACHE_NEG.pop(cc, None)
     try:
         from shopping_calculator import get_master_ingredients
         rows = list(get_master_ingredients() or [])
     except Exception as e:
-        _avisar_una_vez(cc, f"[ARQ27-P1-07] catálogo no legible para {cc}: {e!r} → capacidad desconocida")
-        return None
+        return _desconocido(cc, f"[ARQ27-P1-07] catálogo no legible para {cc}: {e!r} → capacidad desconocida")
     if not rows:
         # Vacío no es «este país no vende nada»: es que no lo sabemos. Con una lista vacía el paso 3
         # de `compile_policy` borraría TODAS las anclas del usuario y lo llamaría evidencia.
-        _avisar_una_vez(cc, f"[ARQ27-P1-07] catálogo VACÍO para {cc} → capacidad desconocida, no cero")
-        return None
+        return _desconocido(cc, f"[ARQ27-P1-07] catálogo VACÍO para {cc} → capacidad desconocida, no cero")
     permitido = _predicado_de_pais()
     names, aliases, filas_ok = [], [], []
     for r in rows:
@@ -117,8 +153,7 @@ def catalog_capability(country: Any) -> Optional[dict]:
             if a:
                 aliases.append(a)
     if not names:
-        _avisar_una_vez(cc, f"[ARQ27-P1-07] ninguna fila habilitada para {cc} → capacidad desconocida")
-        return None
+        return _desconocido(cc, f"[ARQ27-P1-07] ninguna fila habilitada para {cc} → capacidad desconocida")
     names = sorted(set(names))
     aliases = sorted(set(aliases))
     fp = hashlib.sha256(("|".join(names)).encode("utf-8")).hexdigest()[:12]

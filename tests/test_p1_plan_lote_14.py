@@ -148,7 +148,10 @@ def test_el_sql_separa_no_ops_de_trabajo_real_y_mide_la_recogida_con_el_heartbea
 def test_los_docs_cuentan_el_lote():
     plan = _src("docs/plan_pendientes_2026_09_11.md")
     assert re.search(r"^\| E2 \| ✅ 2026-09-12 \|", plan, re.M), "E2 cerrado en el Estado del plan"
-    assert re.search(r"^\| D8 \| 📏 medido", plan, re.M), "D8 medido en el Estado del plan"
+    # [2026-09-14 · gate del lote 41] D8 pasó de «📏 medido» a «✅ 2026-09-14 · decidido: NO construir» por decisión
+    # del dueño (commit 4e60116d, `docs/decisiones_dueno_2026_09_14.md`) y este ancla dejó la CI de main en rojo (run
+    # 34838035209). Acepta las dos formas: lo que el lote 14 fija es que D8 tenga estado con cifra, no que siga abierto.
+    assert re.search(r"^\| D8 \| (📏 medido|✅ 2026-09-14 · decidido)", plan, re.M), "D8 medido o decidido en el Estado del plan"
     lc = _src("docs/generation_lifecycle_2_5.md")
     assert "Estado 2026-09-12" in lc and "CASCADE" in lc and "flip_live" in lc
     f5 = _src("docs/plan_jobs_f5.md")

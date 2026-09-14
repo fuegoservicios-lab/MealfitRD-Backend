@@ -487,6 +487,11 @@ _CACHES_CONTAMINABLES = (
     ("graph_orchestrator", "_PHANTOM_CATALOG_INDEX_CACHE", None),
     ("graph_orchestrator", "_CATALOG_DENSITY_INDEX_CACHE", None),
     ("shopping_calculator", "_VERIFIED_SHOPPING_NAMES", None),
+    # [P1-PLAN-LOTE-41 · 2026-09-14] Estado NUEVO (no salió de un bisect: nace con la caché negativa del catálogo y
+    # su ventana de 30 s dura más que un test por construcción). Un test que deja `db_core.connection_pool = None`
+    # hace que `execute_sql_query` lance y el sello queda puesto con el id del pool real de `shopping_calculator`;
+    # el siguiente test, en la misma ventana y el mismo worker, leería `[]` con la base viva.
+    ("shopping_calculator", "_master_cache_neg_until", 0.0),
 )
 
 
@@ -500,6 +505,10 @@ def _limpiar_caches_de_catalogo():
                 setattr(_mod, _attr, _val)
             except Exception:
                 pass
+    _cc = sys.modules.get("catalog_capability")
+    _neg = getattr(_cc, "_CACHE_NEG", None) if _cc is not None else None
+    if isinstance(_neg, dict):
+        _neg.clear()       # [P1-PLAN-LOTE-41] el «no se sabe» por país, misma ventana, mismo motivo
     _go = sys.modules.get("graph_orchestrator")
     _memo = getattr(_go, "_LINE_FOOD_GRAMS_CACHE", None) if _go is not None else None
     if isinstance(_memo, dict):

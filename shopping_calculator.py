@@ -140,6 +140,16 @@ def _gemini_call_with_retry(fn, *args, _label: str = "gemini_call", **kwargs):
 _master_cache = None
 _master_cache_ts = 0
 _MASTER_CACHE_TTL = 300  # 5 minutos de TTL para que aliases nuevos se refresquen
+# [P1-PLAN-LOTE-41 · 2026-09-14] Caché NEGATIVA corta de `get_master_ingredients` (ver `_catalog_negative_cache_s`):
+#   _master_cache_neg_until   instante (`_time.time()`) hasta el que NO se vuelve a tocar el pool tras un fallo;
+#   _master_cache_neg_pool_id `id()` del pool que falló (None = «sin pool»): si el pool aparece o cambia, la
+#                             ventana se ignora — la selló un fallo de OTRO estado del mundo;
+#   _master_cache_neg_count   llamadas absorbidas dentro de la ventana (salen a DEBUG, no a ERROR).
+# `_master_cache_ts` NUNCA se sella en un fallo (P1-CATALOG-INDEX-NO-STICKY): esto es un «no insistas 30 s»,
+# no un catálogo verificado.
+_master_cache_neg_until = 0.0
+_master_cache_neg_pool_id = None
+_master_cache_neg_count = 0
 _semantic_cache = None
 
 # Negative cache: cuando la inicialización del caché semántico falla (típicamente
@@ -172,6 +182,40 @@ from knobs import (
 )
 
 _SEMANTIC_INIT_FAIL_COOLDOWN_S = max(0, _knob_env_int("MEALFIT_SEMANTIC_INIT_FAIL_COOLDOWN_S", 600))
+
+# [P1-PLAN-LOTE-41 · 2026-09-14] La tormenta de reintentos del catálogo con la base caída. Medido en la CI sin
+# base (job 103789056311) y reproducido en local el 14-sep con un perfil del landing: `horizon.build_blueprint`
+# (14 días) hace 32.676 llamadas a `get_master_ingredients` y, sin pool, CADA una registraba `logging.error(...)`
+# y devolvía `[]` sin sellar nada — 32.676 líneas iguales en un blueprint; con un pool que falla, 32.676 intentos
+# de conexión, que en producción (arranque en frío con Neon caído) se multiplican por el timeout del pool.
+# `catalog_capability` sólo cacheaba snapshots NO vacíos, así que cada ancla, constituyente y plantilla volvía
+# a preguntar. Arreglo: en las ramas «sin pool» y «excepción» se sella una ventana negativa de
+# `MEALFIT_CATALOG_NEGATIVE_CACHE_S` segundos (default 30, clamp [1, 300]); mientras dura, se devuelve
+# `_master_cache or []` sin tocar el pool y el error se registra UNA vez (las demás llamadas, DEBUG con el
+# conteo). El pool se comprueba ANTES que la ventana: si aparece (o es otro objeto), la ventana no aplica.
+# `catalog_capability` cachea su `None` por país con el MISMO knob; `invalidate_master_cache` limpia ambos.
+# Después, con la misma vara: 1 llamada al pool y 1 línea de error por ventana. Tooltip-anchor: P1-PLAN-LOTE-41.
+_CATALOG_NEGATIVE_CACHE_S_DEFAULT = 30
+
+
+def _catalog_negative_cache_s() -> int:
+    """Segundos de la ventana negativa del catálogo (`MEALFIT_CATALOG_NEGATIVE_CACHE_S`, clamp [1, 300])."""
+    return max(1, min(300, _knob_env_int("MEALFIT_CATALOG_NEGATIVE_CACHE_S", _CATALOG_NEGATIVE_CACHE_S_DEFAULT)))
+
+
+_catalog_negative_cache_s()  # registro en `_KNOBS_REGISTRY` al importar: visible en /health/version y dump_knobs
+
+
+def _sellar_ventana_negativa_catalogo(now: float, pool_id, motivo: str) -> None:
+    """[P1-PLAN-LOTE-41] Sella la ventana negativa y registra el fallo UNA vez por ventana."""
+    global _master_cache_neg_until, _master_cache_neg_pool_id, _master_cache_neg_count
+    ttl = _catalog_negative_cache_s()
+    _master_cache_neg_until = now + ttl
+    _master_cache_neg_pool_id = pool_id
+    _master_cache_neg_count = 0
+    logging.error(
+        f"{motivo} — [P1-PLAN-LOTE-41] sin reintentos durante {ttl}s (caché negativa; las llamadas dentro de la "
+        f"ventana salen a DEBUG con su conteo)")
 
 
 # [P2-LLM-TIMEOUT-SWEEP · 2026-05-30 · P0-LLM-PROVIDER-MIGRATION · 2026-06-12]
@@ -432,10 +476,23 @@ _semantic_cache_lock = _threading.Lock()
 def invalidate_master_cache():
     """Invalida el caché de master_ingredients para forzar recarga desde DB."""
     global _master_cache, _master_cache_ts, _semantic_cache, _semantic_cache_failed_until
+    global _master_cache_neg_until, _master_cache_neg_pool_id, _master_cache_neg_count
     _master_cache = None
     _master_cache_ts = 0
     _semantic_cache = None
     _semantic_cache_failed_until = 0.0
+    # [P1-PLAN-LOTE-41] El sello negativo también se va: quien invalida quiere releer AHORA, no dentro de 30 s.
+    # Y el «no se sabe» por país de `catalog_capability`, si el módulo está cargado (no se importa aquí).
+    _master_cache_neg_until = 0.0
+    _master_cache_neg_pool_id = None
+    _master_cache_neg_count = 0
+    import sys as _sys
+    _cc = _sys.modules.get("catalog_capability")
+    if _cc is not None:
+        try:
+            _cc.reset_negative_cache()
+        except Exception:
+            pass
 
 def get_semantic_cache(deadline_s: float | None = None):
     """Devuelve el caché semántico (master_list + vectors + embeddings_client).
@@ -603,9 +660,21 @@ def cosine_similarity(v1, v2):
     return dot / (mag1 * mag2)
 
 def get_master_ingredients():
-    global _master_cache, _master_cache_ts
+    global _master_cache, _master_cache_ts, _master_cache_neg_until, _master_cache_neg_pool_id, _master_cache_neg_count
     now = _time.time()
     if _master_cache is None or (now - _master_cache_ts) > _MASTER_CACHE_TTL:
+        # [P1-PLAN-LOTE-41 · 2026-09-14] El pool se mira ANTES que la ventana negativa: el sello lo puso un fallo
+        # de ESTE pool (o de su ausencia). Si apareció uno, o es otro objeto, la ventana no aplica y se lee la
+        # tabla en esta misma llamada (los tests parchean el pool en caliente; en producción el pool nace al
+        # importar `db_core` y no cambia).
+        _pool_id = id(connection_pool) if connection_pool else None
+        if now < _master_cache_neg_until and _pool_id == _master_cache_neg_pool_id:
+            _master_cache_neg_count += 1
+            logging.debug(
+                f"[P1-PLAN-LOTE-41] catálogo en ventana negativa: llamada {_master_cache_neg_count} sin tocar el "
+                f"pool; vence en {_master_cache_neg_until - now:.0f}s")
+            # `_master_cache_ts` NO se toca: la ventana es un «no insistas», no un catálogo verificado.
+            return _master_cache or []
         if connection_pool:
             try:
                 # [P1-CATALOG-ORDER-DETERMINISTIC · 2026-08-19] ORDER BY name: sin él, el
@@ -631,6 +700,9 @@ def get_master_ingredients():
                 if isinstance(res, list):
                     _master_cache = res
                     _master_cache_ts = now
+                    _master_cache_neg_until = 0.0  # [P1-PLAN-LOTE-41] la lectura buena cierra la ventana
+                    _master_cache_neg_pool_id = None
+                    _master_cache_neg_count = 0
                 else:
                     logging.error(
                         f"❌ [P1-CATALOG-INDEX-NO-STICKY] master_ingredients devolvió "
@@ -639,11 +711,13 @@ def get_master_ingredients():
                     if _master_cache is None:
                         _master_cache = []
             except Exception as e:
-                logging.error(f"Error fetching master_ingredients via pool: {e}")
+                # [P1-PLAN-LOTE-41] rama «excepción»: sella la ventana (una línea de error, no una por llamada).
+                _sellar_ventana_negativa_catalogo(now, _pool_id, f"Error fetching master_ingredients via pool: {e}")
                 if _master_cache is None:
                     _master_cache = []
         else:
-            logging.error("No connection_pool available to fetch master_ingredients")
+            # [P1-PLAN-LOTE-41] rama «sin pool»: idem, con `pool_id=None` (si un pool aparece, la ventana cae).
+            _sellar_ventana_negativa_catalogo(now, None, "No connection_pool available to fetch master_ingredients")
             if _master_cache is None:
                 _master_cache = []
     return _master_cache
