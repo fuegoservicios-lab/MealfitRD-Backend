@@ -289,6 +289,51 @@ def test_p1_cascade_inline_dedup_skips_within_cooldown(monkeypatch):
             del sys.modules["app"]
 
 
+def test_p1_cascade_inline_first_emit_on_fresh_clock(monkeypatch):
+    """[P1-PLAN-LOTE-46 (bis) · 2026-09-14] `_CASCADE_INLINE_LAST_EMIT_AT = 0.0` es «nunca emitió». Comparado como una marca
+    de tiempo, con `time.monotonic()` por debajo del dedup (una máquina recién arrancada: el runner de la CI, el VPS tras un
+    reinicio) la PRIMERA alerta en cascada se callaba. La pata de producción de la CI lo cazó en el lote 46, cuando el
+    reparto de ficheros puso el test de arriba en los primeros minutos del runner."""
+    from unittest.mock import MagicMock as _MM
+    import pytest as _pt
+    _ensure_apscheduler_stub(monkeypatch)
+    try:
+        import sentry_sdk  # noqa: F401
+    except Exception:
+        _stub = types.ModuleType("sentry_sdk")
+        _stub.init = lambda *a, **k: None
+        monkeypatch.setitem(sys.modules, "sentry_sdk", _stub)
+    write_mock = _MM()
+    monkeypatch.setenv("MEALFIT_SCHEDULER_CASCADE_INLINE_THRESHOLD", "3")
+    monkeypatch.setenv("MEALFIT_SCHEDULER_CASCADE_INLINE_WINDOW_S", "60")
+    monkeypatch.setenv("MEALFIT_SCHEDULER_CASCADE_INLINE_DEDUP_S", "300")
+    try:
+        import importlib
+        if "app" in sys.modules:
+            del sys.modules["app"]
+        try:
+            app_mod = importlib.import_module("app")
+        except Exception as e:
+            _pt.skip(f"app module no importable: {e}")
+            return
+        app_mod._CASCADE_INLINE_MISS_TIMESTAMPS.clear()
+        app_mod._CASCADE_INLINE_LAST_EMIT_AT = 0.0
+        app_mod.connection_pool = _MM()
+        app_mod.execute_sql_write = write_mock
+        monkeypatch.setattr(app_mod.time, "monotonic", lambda: 100.0)      # la máquina arrancó hace 100 s
+        for jid in ("job_a", "job_b", "job_c"):
+            app_mod._maybe_emit_inline_cascade_alert(jid)
+        assert write_mock.call_count >= 1, "la primera alerta en cascada no puede depender de cuánto lleva encendida la máquina"
+        n = write_mock.call_count
+        for jid in ("job_d", "job_e", "job_f"):
+            app_mod._maybe_emit_inline_cascade_alert(jid)
+        assert write_mock.call_count == n, "y la segunda, dentro del enfriamiento, sigue callada"
+        assert "P1-PLAN-LOTE-46-CASCADA-PRIMERA" in Path(app_mod.__file__).read_text(encoding="utf-8")
+    finally:
+        if "app" in sys.modules:
+            del sys.modules["app"]
+
+
 # ---------------------------------------------------------------------------
 # P1-ORPHAN-MISSED-SWEEP — parser tests
 # ---------------------------------------------------------------------------

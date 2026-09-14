@@ -615,7 +615,11 @@ def _maybe_emit_inline_cascade_alert(job_id: str) -> None:
                 return
 
             # Dedup contra emisiones recientes (cooldown).
-            if now_mono - _CASCADE_INLINE_LAST_EMIT_AT < dedup_s:
+            # [P1-PLAN-LOTE-46 (bis) · 2026-09-14] `0.0` es «nunca emitió», no una marca de tiempo: comparado como marca,
+            # con `time.monotonic()` < dedup (una máquina que arrancó hace menos de 5 min: el runner de la CI, o el VPS
+            # tras un reinicio) la PRIMERA alerta en cascada se callaba. La CI lo cazó cuando el reparto de ficheros puso
+            # este test en los primeros minutos del runner. tooltip-anchor: P1-PLAN-LOTE-46-CASCADA-PRIMERA
+            if _CASCADE_INLINE_LAST_EMIT_AT and now_mono - _CASCADE_INLINE_LAST_EMIT_AT < dedup_s:
                 logger.debug(
                     f"[P1-CASCADE-INLINE] skip emit (dedup): {distinct_count} "
                     f"distinct jobs in {window_s}s, but last emit "
