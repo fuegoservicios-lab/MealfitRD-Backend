@@ -2790,7 +2790,7 @@ from prompts.medical_reviewer import REVIEWER_SYSTEM_PROMPT
 # test_f1a_planner_do_o_none_es_byte_identico_is) — el import crudo ya no tiene consumidor en
 # este módulo. `prompts.planner` sigue exportando la constante para su propio uso interno.
 from prompts.planner import build_planner_system_prompt
-from prompts.day_generator import DAY_GENERATOR_SYSTEM_PROMPT, build_day_assignment_context; from deterministic_day import build_day_for_skeleton as _det_day; import pasos_sustitucion as _ps; import reeleccion_dia as _reel  # [P1-PLAN-LOTE-47]
+from prompts.day_generator import DAY_GENERATOR_SYSTEM_PROMPT, build_day_assignment_context; from deterministic_day import build_day_for_skeleton as _det_day; import pasos_sustitucion as _ps; import reeleccion_dia as _reel; import cierres_con_receta as _ccr  # [P1-PLAN-LOTE-47/48]
 
 
 # ============================================================
@@ -19472,6 +19472,8 @@ def _append_closer_protein_step(meal: dict, nm: str, no_cook: bool) -> bool:
         _human_blob = _re.sub(r"\(~[^)]*\)", " ", _steps_blob)
         _blended = ("licuadora" in _human_blob or "licua" in _human_blob
                     or _name_suggests_blended(meal.get("name", ""), _sa_cs))
+        _jugo = _ccr.es_jugo(meal)   # [P1-PLAN-LOTE-48] un jugo ácido no se licúa con queso: el lácteo va al lado
+        _blended = _blended and not _jugo
         # [P1-PRECOOKED-FROM-LINE · 2026-07-25] ¿la LÍNEA del plato ya dice "cocido"?
         # [P1-CLOSER-OWN-LINE-EXEMPT · 2026-07-27] …pero NO la línea que el PROPIO closer acaba de
         # insertar ("58g de pechuga de pollo cocido" — el sufijo es base de peso, no estado de
@@ -19489,7 +19491,9 @@ def _append_closer_protein_step(meal: dict, nm: str, no_cook: bool) -> bool:
                     _re.search(r"\b" + _re.escape(st) + r"(?:s|es)?\b", _l) for st in _stems):
                 _precooked_line = True
                 break
-        _step = f"💪 {_closer_protein_step_text(nm, no_cook, blended=_blended, stewy=_meal_is_stewy(meal, _sa_cs), precooked=_precooked_line, baked=(_meal_is_baked(meal, _sa_cs) or _meal_is_hot_cooked(meal, _sa_cs)))}"
+        _step = f"💪 {_closer_protein_step_text(nm, no_cook, blended=_blended, stewy=_meal_is_stewy(meal, _sa_cs), precooked=_precooked_line, baked=(_meal_is_baked(meal, _sa_cs) or _meal_is_hot_cooked(meal, _sa_cs) or _jugo))}"
+        if _jugo and not _step.startswith(("💪 Sirve ", "💪 Cocina ")):
+            _step = f"💪 Sirve {nm} al lado para acompañar."   # [P1-PLAN-LOTE-48] en un jugo nada se incorpora al vaso
         if any(isinstance(s, str) and s.strip() == _step.strip() for s in rec):
             return False  # (a) dup exacto
         # [P1-CLOSER-INTO-MONTAJE · 2026-07-27] El closer 💪 tenía su PROPIO camino y se quedó
@@ -27881,6 +27885,7 @@ def finalize_plan_data_coherence(days: list, db=None, allergies=None, target_fat
     # [P1-RAW-DISPLAY-RECONCILE-RECIPROCAL · 2026-07-07] dirección opuesta: raw sin contraparte en
     # display → el display la adopta (el chunk path dropeaba "0.5 diente de ajo" del display).
     try:
+        _ccr.nombrar_quesos_genericos(days)   # [P1-PLAN-LOTE-48] antes del barrido: el cottage del nombre no es línea muerta
         from raw_linea_muerta import _barrer_lineas_muertas_de_raw; _nrd = _reconcile_raw_missing_in_display(days) + _barrer_lineas_muertas_de_raw(days)  # [P1-RAW-LINEA-MUERTA] DESPUÉS de la recíproca, jamás antes
         if _nrd:
             total += _nrd; parts.append(f"raw_display_recip={_nrd}")
@@ -30865,6 +30870,18 @@ def _repair_gainmuscle_day_kcal(days: list, nutrition: dict, form_data: dict, db
                 if _kcal_room < 40 or _carb_room < 10:
                     break
                 _need_k = floor - day_kcal
+                # [P1-PLAN-LOTE-48 · 2026-09-14] Una receta de biblioteca que ya trae su base no recibe OTRA (mofongo + arroz,
+                # bollitos de plátano + batata, plan 358a2cdf): se escala su propia base, hasta ×1,5; si no cabe, se salta.
+                # tooltip-anchor: P1-PLAN-LOTE-48-BASE-PROPIA
+                if (m.get("_recipe_source") == "library" and _ccr.base_propia_on()
+                        and _meal_has_conflicting_carb_base(m, _sa_gm)):
+                    _kb, _cb_g = _ccr.escalar_base_propia(m, _need_k, _kcal_room, _carb_room, db)
+                    if _kb > 0:
+                        day_kcal += _kb
+                        day_carbs += _cb_g
+                        added_kcal += _kb
+                        m["_gainmuscle_kcal_floor"] = True
+                    continue
                 # [P1-GAINMUSCLE-CENA-TUBER] guarnición por franja: cena → batata; resto → arroz blanco
                 _is_cena_gm = "cena" in _sa_gm(str(m.get("meal", "")).lower())
                 if _is_cena_gm:
@@ -32198,6 +32215,10 @@ _REALISM_CUP_CAPS = ((_REALISM_YOGURT_TOKENS, YOGURT_MEAL_CAP_CUPS),
                      (_REALISM_VOLUME_FRUIT_TOKENS, 2.0), (_REALISM_LIQUID_TOKENS, 2.0))
 REALISM_FRUIT_VOLUME_CAP_G = _env_int("MEALFIT_REALISM_FRUIT_VOLUME_CAP_G", 300,
                                       lambda v: 150 <= v <= 600)
+# [P1-PLAN-LOTE-48 · 2026-09-14] La PULPA de chinola no es fruta de volumen: 335 g eran 14 chinolas para un solo jugo
+# (plan 358a2cdf). Techo propio, más bajo. tooltip-anchor: P1-PLAN-LOTE-48-PULPA
+_REALISM_PULP_FRUIT_TOKENS = ("chinola", "maracuya", "parcha", "granadilla")
+REALISM_PULP_CAP_G = _env_int("MEALFIT_REALISM_PULP_CAP_G", 120, lambda v: 60 <= v <= 300)
 # [P1-VEG-VOLUME-CAP · 2026-07-07] (review plan vivo 4e7b8dbb: "545 g de pepino" + "580 g de pepino"
 # en ensaladas de acompañamiento — el solver/rebalance infla vegetales ACUOSOS de bajo-caloría para
 # llenar volumen/fibra sin cap: ni el volume-FRUIT ni el leaf-cap (leafy) cubren el pepino). Techo
@@ -33048,6 +33069,10 @@ def _cap_unrealistic_portions(days, db=None, *, count_caps=None) -> int:
                         elif (cur_g > float(REALISM_FRUIT_VOLUME_CAP_G)
                               and any(_re.search(r"\b" + t, il) for t in _REALISM_VOLUME_FRUIT_TOKENS)):
                             factor = float(REALISM_FRUIT_VOLUME_CAP_G) / cur_g
+                        # [P1-PLAN-LOTE-48] 1.55) la pulpa de chinola, con su techo propio
+                        elif (cur_g > float(REALISM_PULP_CAP_G)
+                              and any(_re.search(r"\b" + t, il) for t in _REALISM_PULP_FRUIT_TOKENS)):
+                            factor = float(REALISM_PULP_CAP_G) / cur_g
                         # [P1-VEG-VOLUME-CAP · 2026-07-07 · derivado del catálogo P2-VEG-VOLUME-
                         # TOKENS-2 · 2026-08-01] 1.6) vegetal ACUOSO de volumen en gramos ("545 g de
                         # pepino" en una ensalada de acompañamiento, plan vivo 4e7b8dbb; "470 g de
@@ -35242,6 +35267,7 @@ def _strip_desalt_instructions(meal: dict) -> int:
             _mpref = _PILLAR_PREFIX_RE.match(s)
             _pref = s[:_mpref.end()] if _mpref else ""
             _body = s[_mpref.end():] if _mpref else s
+            _body = _ps.quitar_clausula_desalado(_body)   # [P1-PLAN-LOTE-48] el participio sale; la frase, sólo si su verbo desala
             _new_body = _DESALT_PHRASE_RE.sub("", _body).strip()
             if _new_body:
                 out.append((_pref + _new_body) if _pref else _new_body)
@@ -39418,6 +39444,7 @@ async def assemble_plan_node(state: PlanState) -> dict:
     # [P1-RAW-DISPLAY-RECONCILE-RECIPROCAL · 2026-07-07] dirección opuesta (raw→display): el aromático
     # presente en raw+lista pero dropeado del display humanizado (ajo del "Puré de Sardinas") se restaura.
     try:
+        _ccr.nombrar_quesos_genericos(days)   # [P1-PLAN-LOTE-48] antes del barrido
         from raw_linea_muerta import _barrer_lineas_muertas_de_raw; _reconcile_raw_missing_in_display(days); _barrer_lineas_muertas_de_raw(days)  # [P1-RAW-LINEA-MUERTA] DESPUÉS de la recíproca, jamás antes
     except Exception as _rrd_as_e:
         logger.warning(f"[P1-RAW-DISPLAY-RECONCILE-RECIPROCAL] assemble no-op: {type(_rrd_as_e).__name__}: {_rrd_as_e}")
@@ -39635,6 +39662,10 @@ async def assemble_plan_node(state: PlanState) -> dict:
         except Exception as _ph_e:
             logger.warning(f"[P1-PHANTOM-INGREDIENT] falló (no bloquea): {type(_ph_e).__name__}: {_ph_e}")
 
+    # [P1-PLAN-LOTE-48 · 2026-09-14] El «queso» genérico de un cerrador toma el nombre del queso del plato ANTES de que el
+    # lácteo del nombre se inserte aparte y de la lista de compras (plan 358a2cdf: la lista compró queso blanco para dos
+    # platos «con queso cottage»). tooltip-anchor: P1-PLAN-LOTE-48-QUESO-NOMBRADO
+    _ccr.nombrar_quesos_genericos(result.get("days") or [])
     # [P1-NAME-PHANTOM-DAIRY · 2026-07-25] El lácteo que el NOMBRE promete y el plato no lleva.
     # Va DESPUÉS del repair por cantidad declarada (si los pasos ya la traían, ese lo resolvió) y
     # antes de la lista de compras. Los caps corren después como última palabra.

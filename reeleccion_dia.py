@@ -224,6 +224,7 @@ def reelegir(days, n, *, nutrition, form_data, skeleton_day=None, textos: Iterab
     if antes and _princ and not _princ <= ev["plantillas"]:
         intentos.append(dict(ev, plantillas=set(ev["plantillas"]) | _princ))
     hubo_dia = False
+    vistos_despues: list = []
     for ev_i in intentos:
         otros = [copy.deepcopy(d) for d in days if isinstance(d, dict) and d is not dia]
         try:
@@ -237,6 +238,7 @@ def reelegir(days, n, *, nutrition, form_data, skeleton_day=None, textos: Iterab
         nuevo["day"] = n
         cambio = _firma(nuevo) != _firma(dia)
         despues = senales([nuevo if d is dia else d for d in days], n, form_data)
+        vistos_despues.append(sorted({t for t, _d in despues}))
         if not antes:
             if cambio and not despues:
                 nuevo["_reelegido_por"] = ["texto"]
@@ -245,6 +247,10 @@ def reelegir(days, n, *, nutrition, form_data, skeleton_day=None, textos: Iterab
         if cambio and len(despues) < len(antes):
             nuevo["_reelegido_por"] = sorted({t for t, _d in antes})
             return nuevo, "reelegido"
+    if hubo_dia:
+        # [P1-PLAN-LOTE-48] el porqué, en el log: plan 358a2cdf sólo dejó «el rearmado no mejora (sin_mejora)»
+        logger.info(f"🔁 [P1-PLAN-LOTE-48] día {n}: el rearmado no bajó sus señales — antes "
+                    f"{sorted({t for t, _d in antes})}, después {vistos_despues}")
     return None, ("sin_mejora" if hubo_dia else "sin_dia")
 
 
@@ -310,6 +316,17 @@ def reelegir_en_lugar(days, nums, *, nutrition, form_data, skeletons=(), textos:
             rearmados.append(n)
             logger.info(f"🔁 [P1-PLAN-LOTE-47] {etiqueta} día {n} (no nombrado) re-elegido sin LLM "
                         f"({', '.join(nuevo.get('_reelegido_por') or [])})")
+    # [P1-PLAN-LOTE-48 · 2026-09-14] Lo que otro rearmado ya arregló no va al corrector. Plan 358a2cdf: el día 3 (nombrado)
+    # no mejoraba solo y quedó en cola; el barrido rehízo el día 1 sin yuca, la señal del 3 desapareció, y el 3 igual lo
+    # reescribió el LLM (30 s y una cena de LLM). Se re-mide al final. tooltip-anchor: P1-PLAN-LOTE-48-REMEDIR-COLA
+    for n in list(para_llm):
+        dia = _dia(days, n)
+        if es_determinista(dia) and not senales(days, n, form_data):
+            para_llm.remove(n)
+            dia.pop("_critique_unresolved", None)
+            conservados.append(n)
+            logger.info(f"🔁 [P1-PLAN-LOTE-48] {etiqueta} día {n} determinista: otro rearmado ya le quitó la señal → "
+                        f"se conserva, sin LLM")
     return para_llm, rearmados, conservados
 
 

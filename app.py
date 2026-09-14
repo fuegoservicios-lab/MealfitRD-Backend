@@ -179,7 +179,11 @@ _PROCESS_START_ISO = datetime.now(timezone.utc).isoformat()
 # quirúrgica ya no reescriben con el LLM un día determinista —lo re-eligen con el armador y sólo el que no mejora va al
 # corrector—, lo que el corrector deja igual vuelve con su receta de biblioteca, el armador conoce las reglas fijas de la
 # autocrítica, y el tiempo, el casabe y el queso de los parches dejan de contradecir su paso.
-_LAST_KNOWN_PFIX = "P1-PLAN-LOTE-47 · 2026-09-14"
+# [P1-PLAN-LOTE-48 · 2026-09-14] Cuarta prueba RD del dueño (plan 358a2cdf): lo que añaden los cerradores respeta la
+# receta —la base propia se escala en vez de colgar otra, en un jugo el lácteo va al lado, el «queso» a secas toma el
+# nombre del plato, el desalado se quita como cláusula y la pulpa tiene techo—; el armador prefiere el plato que ya llega
+# al piso de proteína y la re-elección re-mide la cola antes de llamar al LLM.
+_LAST_KNOWN_PFIX = "P1-PLAN-LOTE-48 · 2026-09-14"
 
 # [P1-SENTRY-SAMPLE-COST · 2026-05-12] Sentry sampling driven from env vars
 # con default seguro 0.1 (10%). Pre-fix tenía `traces_sample_rate=1.0` y

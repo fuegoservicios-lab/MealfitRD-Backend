@@ -16,6 +16,7 @@ y se anota la discrepancia en el informe. El protocolo largo (entorno, gate, che
 | 42 | E1 (operativo) | Retirar los worktrees viejos que estén limpios y ya mergeados; los demás, listados para el dueño (G4) | ¼ sesión |
 | 43 | B6 · E5 · D7 · B9 | Re-mediciones con FECHA: los tres scripts del lote 36 el **2026-10-10**; el embudo B9 a las 2 semanas del lanzamiento | ¼ sesión, en su fecha |
 | 44 | Decisiones del dueño 14-sep | Aplicar lo delegado: 3 recetas a la biblioteca, claras en botella ≥ 4, cohorte B de la lista canónica = canario, pesos 2.0/1.0 en el canario, `block` en PayPal | 1-2 sesiones |
+| 48 | Prueba RD 4 del dueño 14-sep (fuera del plan) | ✅ HECHO en otra sesión (`P1-PLAN-LOTE-48`): los cerradores escalan la base propia en vez de colgar otra, en un jugo el lácteo va al lado, el «queso» a secas toma el nombre del plato, el desalado se quita como cláusula y la pulpa tiene techo; el armador prefiere el plato que ya llega al piso de proteína (por debajo de la cuota de repetición) y la re-elección re-mide la cola. Ver la sección «Lote 48» | — |
 | 47 | Prueba RD 3 del dueño 14-sep (fuera del plan) | ✅ HECHO en otra sesión (`P1-PLAN-LOTE-47`): la autocrítica y la regeneración re-eligen un día determinista en vez de reescribirlo con el LLM, lo que el corrector deja igual vuelve con su procedencia, el armador conoce las reglas fijas de la autocrítica; parches de tiempo, casabe y queso. Ver la sección «Lote 47» | — |
 | 46 | Prueba RD 2 del dueño 14-sep (fuera del plan) | ✅ HECHO en otra sesión (`P1-PLAN-LOTE-46`): repetición entre planes y tope del bloque en el día determinista, el revisor no reintenta lo determinista, el ingrediente que da nombre al plato no se pierde, parches de pasos. Ver la sección «Lote 46» | — |
 | 45 | Prueba RD del dueño 14-sep (fuera del plan) | ✅ HECHO en otra sesión (`P1-PLAN-LOTE-45`): receta de biblioteca en su orden, día determinista con la familia del blueprint y el tiempo de cocina, sin reintento inútil. Ver la sección «Lote 45» | — |
@@ -78,9 +79,9 @@ explícitas y mensaje que cuente lo medido · push · deploy (`pwsh -NoProfile -
 cierran hoy en ~10 min con techo de 30). Un lote que sólo toca docs/scripts de medición no bumpea marker ni despliega.
 
 **Numeración (P1-PLAN-LOTE-45 · 14-sep).** El marker nunca baja: cada test de lote exige `N` ≥ el suyo. El 41 y el 45 ya
-están cerrados y desplegados, y el 46 y el 47 también, así que los lotes pendientes de este plan (38, 39, 40, 42, 43,
-44) se cierran con el **siguiente número libre ≥ 48** —marker, `tests/test_p1_plan_lote_<N>.py` y memoria con ese número— y el título del commit
-cita su número de plan («`P1-PLAN-LOTE-48` (lote 38 del plan)»). Cerrar con el número del plan haría fallar los tests 41, 45, 46 y 47.
+están cerrados y desplegados, y del 46 al 48 también, así que los lotes pendientes de este plan (38, 39, 40, 42, 43,
+44) se cierran con el **siguiente número libre ≥ 49** —marker, `tests/test_p1_plan_lote_<N>.py` y memoria con ese número— y el título del commit
+cita su número de plan («`P1-PLAN-LOTE-49` (lote 38 del plan)»). Cerrar con el número del plan haría fallar los tests 41, 45, 46, 47 y 48.
 
 ---
 
@@ -360,6 +361,18 @@ Cerrado en otra sesión: re-elegir con el armador en vez de reescribir (`reelecc
 el corrector deja igual, las reglas fijas de la autocrítica en la elección del día determinista y tres parches de pasos
 (`pasos_sustitucion`). Abierto: «Nada» de tiempo de cocina en almuerzos y cenas (la biblioteca no tiene con qué: los
 minutos medios del día determinista subieron de 20,9 a 25,9 al cumplir las reglas).
+
+## Lote 48 · La cuarta prueba RD del dueño (HECHO · `P1-PLAN-LOTE-48` · 2026-09-14)
+
+Tras el lote 47 el plan (`358a2cdf`) llegó con 11 de 12 comidas de biblioteca y aprobado al primer intento, pero los
+cerradores de macros les colgaban cosas que la receta no haría (arroz junto al mofongo, queso licuado en un jugo, «queso»
+a secas que la lista compraba como queso blanco), el cambio del arenque borraba la frase del locrio con el arroz dentro,
+la chinola llegó a 335 g, y un día que el barrido de la re-elección ya había dejado limpio fue igual al LLM. Cerrado en
+otra sesión: `cierres_con_receta` (base propia, jugo, queso con nombre), el desalado como cláusula, el techo de la pulpa,
+el piso de proteína como preferencia del armador (peso 0,4; medido: con 1,5 repetía un plato 4 veces en 7 días) y la cola
+re-medida. Abierto: en la réplica del run la autocrítica aún saltaría por «yuca en 2 días» (y «pollo en 3» en el segundo
+bloque) —la recoge la re-elección del 47, sin LLM— y «Nada» de tiempo de cocina sigue sin alternativa en la biblioteca
+(29 min medios).
 
 ## Para el dueño (no lo cierra código)
 

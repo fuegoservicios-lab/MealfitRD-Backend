@@ -228,6 +228,23 @@ Dos cambios:
 
 Simulación de solo lectura del día determinista sobre el blueprint del run del plan d8b10b05 (7 días en dos bloques, tiempo «Nada», contra los 2 planes que eran recientes a esa hora): con las reglas del lote 46 la autocrítica saltaba en los dos bloques —el primero por 4 detectores: avena en 2 días, almuerzo y cena con yuca, avena en desayuno y merienda, huevo dos veces el día 3—; con las del 47 el bloque 1 queda limpio y el 2 salta sólo por yuca en 2 días. Platos de planes recientes 5 → 2, exceso sobre el tope de 7 días 0 → 0, platos distintos 21 → 21, minutos medios 20,9 → 25,9 (el coste: con 10 min la biblioteca no tiene alternativa en almuerzos y cenas). Sobre los días del lote 46 con la sugerencia real del evaluador, la re-elección rehízo los 3 días sin LLM (el 3 por el barrido) y la autocrítica quedó en «yuca en 2 días». La primera medición, con sólo tres reglas, llevó el pollo a 3 días de 3 (monotonía): por eso entraron la proteína pesada, el plato-base, la franja y la base ligera; y la cuota de repetición pesa a medias porque, entera, empataba con lo que hace saltar la autocrítica. Test: `tests/test_p1_plan_lote_47.py`.
 
+## Cuarta prueba RD: el plato que ya llega al piso (P1-PLAN-LOTE-48 · 2026-09-14)
+
+Tras el lote 47, 11 de 12 comidas del plan (`358a2cdf`) llegaron con su receta de biblioteca, pero en ganancia muscular
+el cerrador de proteína remendaba los platos que no llegaban al piso de su franja: un plátano maduro con mantequilla de
+maní de desayuno (5 g de proteína de 25) salió con 185 g de edamame encima. Dos cambios:
+
+- **El piso de proteína, en la elección** (`MEALFIT_DETERMINISTIC_DAY_PROTEIN_FLOOR`): el plato que queda por debajo
+  del piso del cerrador suma una falta de 0,4 — menos que la cuota de repetición agotada (0,5) y que cualquier regla de
+  la autocrítica: sólo decide entre candidatos que no rompen nada más. El peso salió de la medición: con 1,5 el piso le
+  ganaba a la cuota y repetía un plato 4 veces en 7 días.
+- **La cola se re-mide** (`reeleccion_dia.reelegir_en_lugar`): al final, un día determinista que iba al corrector LLM y
+  ya no tiene señal —otro rearmado se la quitó— se conserva. En 358a2cdf el barrido rehízo el día 1 sin yuca y el día 3,
+  que así quedaba limpio, igual lo reescribió el LLM. El log dice ahora por qué un rearmado no mejoró (las señales antes
+  y después de cada intento).
+
+Réplica de solo lectura del día determinista sobre el blueprint del run del plan 358a2cdf (7 días en dos bloques, «Nada» de tiempo, presupuesto bajo, contra los planes que eran recientes a esa hora): sin el piso, 5 de 28 comidas quedaban por debajo del piso de proteína de su franja (el desayuno medio, al 76 % de su objetivo). Con el piso pesando 1,5 quedaban 0 de 28, pero servía «Sardinas en lata con casabe» 4 veces en 7 días (3 en su bloque): el piso le ganaba a la cuota de repetición que el formulario («equilibrado») pide respetar. Con 0,4 —por debajo de la cuota— quedan 3 de 28 y la variedad no se mueve (0 sobre el tope de 7 días, 2 repetidos en bloque, 21 platos distintos, 6 de planes recientes; minutos medios 28,2 → 29,3). Los cambios de receta, comprobados sobre los platos del plan: la batida «con queso cottage» compra queso cottage (antes, «queso» ⇒ queso blanco), el jugo de chinola sirve el queso al lado, el locrio conserva «el filete de pescado blanco (en trozos)… y añade el arroz blanco», la chinola baja de 335 a 120 g y el piso de calorías escala el plátano del mofongo (×1,5 como mucho) en vez de colgarle arroz. Test: `tests/test_p1_plan_lote_48.py`.
+
 ## Seguridad: el backstop no es opcional
 
 Un día que sale de aquí **sí pasa por `assemble_plan_node` y `review_plan_node`** (las aristas del grafo

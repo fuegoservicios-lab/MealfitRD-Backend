@@ -60,7 +60,9 @@ def test_p2_1_knobs_and_wiring():
     # [2026-07-06] ventana 6000→12000: los seams de la madrugada 07-05/06
     # (cooked-raw, note-align) empujaron el recompute a offset ~7.1k — drift
     # de ventana, no ausencia (verificado: graph_orchestrator limpio vs HEAD).
-    _win = _GO[_sync:_sync + 12000]
+    # [P1-PLAN-LOTE-48 · 2026-09-14] ventana 12000→14000: el nombrado del queso genérico entró antes del barrido de
+    # líneas muertas y dejó el recompute en el offset 11.944 (la aguja terminaba 3 caracteres fuera). Mismo orden.
+    _win = _GO[_sync:_sync + 14000]
     assert "recompute_micronutrient_report_for_plan(result, form_data)" in _win, \
         "falta el recompute del panel post-motor en assemble (P2-1)"
     # y también en la convergencia de presupuesto (las sustituciones cambian micros).

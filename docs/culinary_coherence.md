@@ -1228,3 +1228,21 @@ uno que no; «queso blanco revuelto» pasa a «queso blanco dorado». Texto puro
 Además, la causa de fondo de que esos pasos llegaran a ese plan: el corrector de la autocrítica reescribía días enteros
 y dejaba los platos de biblioteca sin su marca, así que la receta congelada ya no los protegía — ver
 `docs/deterministic_day.md` («re-elegir, no reescribir»). Test: `tests/test_p1_plan_lote_47.py`.
+
+## Lo que un cerrador añade, como la receta lo haría (`P1-PLAN-LOTE-48` · 2026-09-14)
+
+**Qué pasaba.** En la cuarta prueba del dueño (plan 358a2cdf) 11 de 12 comidas llegaron con su receta de biblioteca,
+pero los cerradores de macros les colgaron cosas que la receta no haría: el piso de calorías de ganancia muscular puso
+arroz junto al mofongo y batata junto a los bollitos de plátano; el cerrador de proteína mandó a la licuadora queso
+cottage dentro de un jugo de chinola; y el queso que añaden salía «queso» a secas, que la lista compra como queso
+blanco: el plato se llamaba «…con queso cottage» y la compra traía otro. Además, el cambio del arenque por pescado
+fresco borraba entera la frase del locrio que decía «(ya desalado y en trozos)» —y con ella el pescado y el arroz—, y
+la chinola de un jugo llegó a 335 g (unas 14 frutas).
+
+**Qué cambia** (`cierres_con_receta`, `pasos_sustitucion`). El piso de calorías escala hasta ×1,5 la base que la
+receta de biblioteca ya trae, en la lista del plato y en la de compras, y si no cabe salta esa comida: nunca una segunda
+base. En un jugo lo que añade el cerrador va al lado (el lácteo no se licúa: el ácido lo corta). El «queso» a secas toma el nombre del único queso que el plato
+promete (en el nombre o, si no, en sus pasos), en las dos listas, antes de que el lácteo del nombre se inserte aparte y
+de que el barrido de líneas muertas lo tome por sobrante; con ninguno o con dos, no se adivina. Del desalado se quita la
+cláusula, no la frase. Las frutas de pulpa tienen techo propio (120 g, `MEALFIT_REALISM_PULP_CAP_G`). Test:
+`tests/test_p1_plan_lote_48.py`.

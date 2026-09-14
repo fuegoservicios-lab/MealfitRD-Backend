@@ -122,6 +122,26 @@ def tecnica_del_sustituto(pasos, sustituto) -> tuple:
     return out, cambios
 
 
+# ─────────────── el desalado es una CLÁUSULA, no la frase ───────────────
+# [P1-PLAN-LOTE-48 · 2026-09-14] Plan 358a2cdf: el tope de sodio cambió el arenque del «Locrio de arenque» por pescado
+# fresco y el limpiador del desalado borró la FRASE entera «Agrega el arenque (ya desalado y en trozos), remuévelo… y
+# añade el arroz blanco». Se fueron el pescado y el ARROZ del locrio; el pescado volvió como «complemento» después de
+# servir y el arroz se quedó sin paso. El participio sale; la frase sólo se va si su verbo es desalar o remojar.
+_DESALADO_PAREN_RE = re.compile(r"\(\s*(?:ya\s+|bien\s+|previamente\s+)?desalad[oa]s?\s*(?:y\s+|,\s*)?", re.IGNORECASE)
+_DESALADO_ADJ_RE = re.compile(r",?\s+(?:ya\s+|bien\s+|previamente\s+)?desalad[oa]s?(?![a-z])", re.IGNORECASE)
+
+
+def quitar_clausula_desalado(texto) -> str:
+    """«el arenque (ya desalado y en trozos)» → «el arenque (en trozos)»; «el bacalao desalado» → «el bacalao». No toca
+    los VERBOS («Desala el arenque…»): esa frase entera la quita el limpiador de siempre."""
+    if not _knob("MEALFIT_DESALT_CLAUSE_ONLY") or not isinstance(texto, str):
+        return texto
+    t = _DESALADO_PAREN_RE.sub("(", texto)
+    t = re.sub(r"\(\s*\)", "", t)
+    t = _DESALADO_ADJ_RE.sub("", t)
+    return re.sub(r"\s{2,}", " ", t).replace(" ,", ",").replace("( ", "(")
+
+
 # ─────────────── lo que se hacía con el huevo no se hace con el queso ───────────────
 _QUESOS = ("queso", "mozzarella", "cheddar", "gouda", "ricotta", "cottage", "parmesano", "requeson")
 _QUESOS_DE_FREIR = ("queso blanco", "queso de freir", "queso fresco", "queso paisa", "queso de hoja", "halloumi")

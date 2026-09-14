@@ -1612,6 +1612,24 @@ def _platos_base_vetados(memoria, form_data) -> set:
         return set(cuentas)
 
 
+def _bajo_piso_proteina(comida, obj_p, form_data) -> bool:
+    """[P1-PLAN-LOTE-48 · 2026-09-14] ¿El plato armado queda por debajo del piso de proteína de su franja —el MISMO con el
+    que el cerrador lo rellena (`LIGHT_SLOT_PROTEIN_MIN_PCT` del reparto)—? Sólo en ganancia muscular, que es donde ese
+    cerrador corre: plan 358a2cdf, un plátano maduro con mantequilla de maní de desayuno (5 g de 25) salió con 185 g de
+    edamame pegados encima. Preferir el plato que ya llega evita el remiendo. tooltip-anchor: P1-PLAN-LOTE-48-PISO-PROTEINA"""
+    go = _go()
+    if go is None or not isinstance(comida, dict) or not obj_p:
+        return False
+    try:
+        meta = _sin_acentos((form_data or {}).get("mainGoal") or (form_data or {}).get("goal"))
+        if not any(t in meta for t in ("gain_muscle", "ganar_musculo", "ganancia", "bulk")):
+            return False
+        p = float(re.sub(r"[^0-9.]", "", str(comida.get("protein") or "0")) or 0)
+        return p < float(obj_p) * float(go.LIGHT_SLOT_PROTEIN_MIN_PCT)
+    except Exception:                                                  # noqa: BLE001
+        return False
+
+
 def build_day_for_skeleton(nutrition, form_data, skeleton_day, day_num, user_id=None, memoria=None, evitar=None):
     """Punto de entrada desde el pipeline. Devuelve un día completo o `None`.
 
@@ -1746,6 +1764,7 @@ def build_day_for_skeleton(nutrition, form_data, skeleton_day, day_num, user_id=
         _pesadas_vet = (_pesadas_vetadas(memoria, _fd) if _knob_on("MEALFIT_DETERMINISTIC_DAY_BLOCK_HEAVY_PROTEIN")
                         else set())
         _franja_on = _knob_on("MEALFIT_DETERMINISTIC_DAY_SLOT_COHERENCE")
+        _piso_prot = _knob_on("MEALFIT_DETERMINISTIC_DAY_PROTEIN_FLOOR")   # [P1-PLAN-LOTE-48]
         _bases_plato_vet = (_platos_base_vetados(memoria, _fd) if _knob_on("MEALFIT_DETERMINISTIC_DAY_BLOCK_DISH_BASE")
                             else set())
         _ev = evitar if isinstance(evitar, dict) else {}
@@ -1840,6 +1859,10 @@ def build_day_for_skeleton(nutrition, form_data, skeleton_day, day_num, user_id=
                 _faltas = (2 * bool(_choca_prot)
                            + 2 * bool(_cena_gm and slot == "cena" and _cena_debil(_c, _fd))
                            + 2 * bool(_franja_on and _rompe_franja(meals, _c, _fd))
+                           # [P1-PLAN-LOTE-48] el plato que no llega al piso de proteína lo remienda un cerrador. Pesa
+                           # MENOS que la cuota de repetición: medido sobre el run de 358a2cdf, con 1,5 servía «Sardinas
+                           # en lata con casabe» 4 veces en 7 días; con 0,4 la variedad queda igual y 5 → 3 de 28 bajo el piso
+                           + 0.4 * bool(_piso_prot and _bajo_piso_proteina(_c, obj.get("protein_g"), _fd))
                            + bool(_pesadas_vet and (_pesadas_de(_c) & _pesadas_vet))
                            + bool(_bases_plato_vet and _plato_base_de(_c) in _bases_plato_vet)
                            + bool(_basicos_vetados and (_basicos_de(_c) & _basicos_vetados))
