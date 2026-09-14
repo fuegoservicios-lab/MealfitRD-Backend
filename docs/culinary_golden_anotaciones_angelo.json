@@ -1,7 +1,7 @@
 {
   "anotador": "angelo",
   "generado": "2026-09-13",
-  "fuente": "Hoja del dueno (artefacto, coleccion hoja, documento angelo), anotacion CIEGA: lo que marco la maquina se mostraba solo despues de decidir; volcado 2026-09-14 tal cual, sin editar",
+  "fuente": "Hoja del dueno (artefacto, coleccion hoja, documento angelo), anotacion CIEGA: lo que marco la maquina se mostraba solo despues de decidir; volcado 2026-09-14 tal cual, sin editar; 2026-09-14: el caso 060b4fda6a («defecto» sin defecto listado) transcrito de la nota del dueño del 09-07 por delegacion",
   "instrucciones": "por caso: veredicto ok|defecto|dudoso; defectos: [{clase, severidad, evidencia, alimento?}] con clase de RUBRICA (culinary_golden_score.py). Lista vacia si el veredicto es ok.",
   "casos": {
     "2168899312": {
@@ -295,7 +295,14 @@
     },
     "060b4fda6a": {
       "veredicto": "defecto",
-      "defectos": []
+      "defectos": [
+        {
+          "clase": "seco_sin_coccion",
+          "severidad": "high",
+          "alimento": "Habichuelas rojas",
+          "evidencia": "La lista indica 50 g de habichuelas rojas secas, pero el paso 1 las tritura ya cocidas y el paso 2 solo las calienta 2 minutos, sin remojo ni cocción previa. (Transcrito por el agente de la nota del dueño del 2026-09-07, que ya lo decía; delegado el 14-sep.)"
+        }
+      ]
     },
     "06416aacbb": {
       "veredicto": "defecto",

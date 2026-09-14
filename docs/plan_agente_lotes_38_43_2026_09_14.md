@@ -1,4 +1,4 @@
-# Plan ejecutable para otro agente — lotes 38 a 43 · 2026-09-14
+# Plan ejecutable para otro agente — lotes 38 a 44 · 2026-09-14
 
 Lo que queda del [plan de pendientes](plan_pendientes_2026_09_11.md) que puede cerrar código, ahora que el dueño entregó la
 **anotación con rúbrica de los 80 casos** del golden set (Hoja del dueño, 2026-09-13). Este documento está escrito para un
@@ -15,9 +15,10 @@ y se anota la discrepancia en el informe. El protocolo largo (entorno, gate, che
 | 41 | Tarea propuesta 13-sep | La tormenta de reintentos del catálogo con la base caída: caché negativa corta en `get_master_ingredients` y `catalog_capability` | ½ sesión |
 | 42 | E1 (operativo) | Retirar los worktrees viejos que estén limpios y ya mergeados; los demás, listados para el dueño (G4) | ¼ sesión |
 | 43 | B6 · E5 · D7 · B9 | Re-mediciones con FECHA: los tres scripts del lote 36 el **2026-10-10**; el embudo B9 a las 2 semanas del lanzamiento | ¼ sesión, en su fecha |
+| 44 | Decisiones del dueño 14-sep | Aplicar lo delegado: 3 recetas a la biblioteca, claras en botella ≥ 4, cohorte B de la lista canónica = canario, pesos 2.0/1.0 en el canario, `block` en PayPal | 1-2 sesiones |
 
-Orden recomendado: 38 → 39 → 40 (los tres comparten instrumento y verdad humana), luego 41 y 42 (independientes). 43 sólo
-en su fecha. Si uno se atasca, se cierra lo que haya con su «lo que NO se hizo» y se sigue con el siguiente.
+Orden recomendado: 38 → **44** → 39 → 40 (el 44 cambia lo que come el dueño, que quiere probar la generación ya; 38, 39 y 40 comparten instrumento y verdad humana), luego 42. El 41 lo está ejecutando otra sesión desde el 14-sep. 43
+sólo en su fecha. Si uno se atasca, se cierra lo que haya con su «lo que NO se hizo» y se sigue con el siguiente.
 
 ---
 
@@ -276,16 +277,60 @@ son del dueño. Antes de la fecha, no se corre: una medición repetida sobre la 
 
 ---
 
+## Lote 44 · Aplicar las decisiones del dueño (delegadas el 14-sep)
+
+Registro y razones: [`decisiones_dueno_2026_09_14.md`](decisiones_dueno_2026_09_14.md). La hoja (documento `angelo`) tiene el
+texto íntegro de las recetas. Cada punto se mide antes y después con el instrumento que ya existe; nada de esto se decide
+de nuevo aquí.
+
+### Qué hacer
+
+1. **Recetas** (C4): copia los pasos de la hoja a `data/registry/recipe_library_do_v1.json` (`por_id[<tpl>].pasos`) para
+   `tpl_14c76a1c346e`, `tpl_a7799418aa9c`, `tpl_fc758e30f5e7`, con `procedencia` «dueño 2026-09-14 (hoja), redacción del agente
+   por delegación». Corre `python scripts/asignar_uso_pasos.py --write --verificar` (lote 25): las tres deben quedar cerradas en
+   `recipe_usage_do_v1.json`. Si la biblioteca o el registry llevan hash anclado en tests (lo llevan: F6, «5 bibliotecas
+   re-ancladas con lo MEDIDO»), recompila con el script que nombra `docs/dish_registry_f6.md` y re-ancla con el valor medido; DO
+   sigue 193/193 `ok`. No toques ninguna otra receta.
+2. **Claras en botella a partir de 4** (C3): localiza dónde la compra colapsa claras y yemas en cartones de `Huevo` (busca
+   `MAX_EGG_WHITES_PER_MEAL`, `_cap_daily_whole_eggs` y la decisión del 11-may en `knobs_reference.md`). Knob
+   `MEALFIT_EGG_WHITE_BOTTLE_MIN_PER_MEAL` (default **4**, clamp [1, 12]; `0` = nunca botella): si una comida pide ≥ N claras, la
+   línea de compra resuelve a la fila de claras pasteurizadas del supermercado («Clara de huevo · Don Papito · botella 400 g»;
+   comprueba que la fila maestra y su mapeo existen, y que el `fdc_id` de clara ya es propio — lo es desde el lote 24); por
+   debajo, cartones como hoy. Mide primero en el corpus fijo cuántas comidas cruzan el umbral (14 de 64 llevan huevo; 6
+   salieron del tope de enteros) y anótalo en `culinary_coherence.md` §C3.
+3. **Lista canónica, fase B, cohorte = canario del dueño** (E5): knob `MEALFIT_CANONICAL_SHOPPING_USERS` (lista de ids; default:
+   **el mismo valor que `MEALFIT_DETERMINISTIC_DAY_USERS`**, para que la cohorte nazca igual al canario sin tocar el `.env` del
+   VPS). Para esos usuarios la lista entregada es la canónica, con los topes del agregador heredados tal cual; la sombra y su
+   métrica (`canonical_shopping_shadow`) siguen para TODOS. Diseño y trampas ya pagadas: `docs/arq30_e5_e7_diseno_canario.md`
+   fase B. Kill switch: lista vacía.
+4. **Pesos del día determinista solo en el canario** (B7): knob `MEALFIT_DETERMINISTIC_DAY_W_CARB_SURPLUS_CANARY` (default **2.0**)
+   que se aplica en lugar del global (`_W_CARB_SURPLUS`, sigue 1.0) cuando el usuario está en `MEALFIT_DETERMINISTIC_DAY_USERS`;
+   `_W_FAT_DEFICIT` queda 1.0. Mide antes/después con `scripts/measure_deterministic_day_macros.py` para el perfil del canario y
+   pega las cifras en `docs/deterministic_day.md` (hoy: carbohidrato +18 % / grasa −18 %).
+5. **PayPal `block`** (G1): `MEALFIT_BILLING_VERIFY_AMOUNT` default `block` en `routers/billing.py` (~línea 635): sin cupón activo,
+   un importe por debajo del precio del plan bloquea la activación y persiste alerta (si el `alert_key` es nuevo, fila en
+   `docs/system_alerts_resolution_table.md`: `test_p2_audit_4` exige paridad). Reproduce el escenario del
+   `paypal_audit_2026_08_22.md` §override en test; `I-Billing-1/2/3` intactas.
+6. **Sin código**: D8 se cierra en el plan («no construir»); F9 anota al nutricionista; V7a y equipo, sin cambios. La calibración
+   del juez (sí, tope $1) es DESPUÉS del lote 38 y nunca sobre el instrumento roto.
+
+### Criterio de terminado
+
+Tests `tests/test_p1_plan_lote_44.py` (recetas cerradas en `recipe_usage`, umbral de claras con 3 y 4, cohorte B por knob con
+kill switch, peso del canario no toca el global, `block` sin cupón bloquea y con cupón válido no); knobs registrados y en
+`knobs_reference.md`; marker ≥ 44; gate; deploy; `/health/version` sin drift. Lo que NO se hace: mover topes de la canónica,
+promover pesos al global, calibrar al juez.
+
+---
+
 ## Para el dueño (no lo cierra código)
 
-La [Hoja del dueño](https://claude.ai/code/artifact/fa74e5bb-85be-446c-9598-3fda3960c503) tiene la anotación completa y **tres secciones
-vacías** (leído del documento `angelo` el 14-sep): las 3 recetas de C4 (`tpl_14c76a1c346e` Yaniqueques, `tpl_a7799418aa9c` Pollo al horno
-con batata, `tpl_fc758e30f5e7` Lentejas con auyama y batata), las 10 decisiones (tope $ del juez, cohorte E5-B, claras en envase, V7a,
-B7 composición, equipo en el wizard, D8 `shopping_commercial`, G1 `MEALFIT_BILLING_VERIFY_AMOUNT`, F9 nutricionista) y las 4 tareas de
-GitHub (F4 `SIBLING_REPO_TOKEN`, G6 los 4 secretos del benchmark nocturno, G4 ramas, 2.º anotador). Además: el caso `060b4fda6a`
-(«defecto» sin defecto listado), el 2.º anotador para el kappa y la promoción, la re-firma curatorial (A9), la tabla del ICBF en Excel
-(F7: Achiote, Chontaduro, Champús), el recorrido humano de i18n en la app nativa (F3), `PYTHONHASHSEED` en la unidad systemd (B4), la
-decisión sobre E3, y el flip de C6 cuando el lote 40 le ponga cifras delante.
+Las cuatro tareas de GitHub de la sección 4 de la [Hoja del dueño](https://claude.ai/code/artifact/fa74e5bb-85be-446c-9598-3fda3960c503)
+(`SIBLING_REPO_TOKEN`, los 4 secretos del benchmark nocturno, las ramas superadas, el 2.º anotador), la fecha de la revisión de
+Juan Carlos Brito (F9), la re-firma curatorial si cambia algo del registry, la tabla del ICBF en Excel (F7: Achiote, Chontaduro,
+Champús), el recorrido humano de i18n en la app nativa (F3), `PYTHONHASHSEED` en la unidad systemd (B4), la decisión sobre E3, y el
+flip de C6 cuando el lote 40 le ponga cifras delante. Las diez decisiones del 14-sep las eligió el agente por delegación
+(`decisiones_dueno_2026_09_14.md`): si alguna no le convence, se revierte cambiando su knob.
 
 ---
 
