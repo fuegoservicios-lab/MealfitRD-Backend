@@ -243,19 +243,24 @@ def test_helper_returns_not_found_when_session_missing(import_helper):
 
 
 def test_helper_proceeds_when_owner_matches(import_helper):
-    """`get_session_owner` retorna ID == caller → 3 DELETEs ejecutan."""
+    """`get_session_owner` retorna ID == caller → 3 DELETEs ejecutan.
+
+    [P1-CHAT-ORPHAN-SESSIONS · 2026-09-14] El tercero (agent_sessions) pasó a
+    `delete_agent_sessions_with_checkpoints`: la sesión y sus checkpoints de LangGraph
+    (sin FK) caen en la misma transacción. El guard `AND user_id` sigue en ese SQL."""
     user_id = "user-uuid-aaaa"
     with patch("db_chat.get_session_owner", return_value=user_id):
-        with patch("db_chat.execute_sql_write") as mock_write:
+        with patch("db_chat.execute_sql_write") as mock_write, patch(
+            "db_chat.delete_agent_sessions_with_checkpoints", return_value=["session-uuid-xxxx"]
+        ) as mock_tx:
             ok, err = import_helper("session-uuid-xxxx", user_id)
             assert ok is True
             assert err == ""
-            # 3 DELETEs: conversation_summaries, agent_messages, agent_sessions.
-            assert mock_write.call_count == 3
-            # Último DELETE debe ser agent_sessions con (session_id, user_id).
-            last_call = mock_write.call_args_list[-1]
-            sql_str = last_call.args[0]
-            params = last_call.args[1]
+            # 2 DELETEs sueltos: conversation_summaries, agent_messages.
+            assert mock_write.call_count == 2
+            # El DELETE de agent_sessions (con sus checkpoints) va con (session_id, user_id).
+            mock_tx.assert_called_once()
+            sql_str, params = mock_tx.call_args.args
             assert "agent_sessions" in sql_str
             assert "user_id" in sql_str
             assert params == ("session-uuid-xxxx", user_id)

@@ -805,8 +805,17 @@ def _process_swap_rejection_background(session_id: str, user_id: str, rejected_m
     """Background task: Loguea mensajes y rechazos que expiran en 7 días, asíncronamente."""
     try:
         if session_id and rejected_meal:
-            get_or_create_session(session_id)
-            save_message(session_id, "user", f"Rechacé explícitamente: {rejected_meal}")
+            # [P1-CHAT-ORPHAN-SESSIONS · 2026-09-14] La sesión nace con dueño (antes NULL:
+            # sobrevivía al borrado de la cuenta), nunca se escribe en la de otro usuario, y
+            # el mensaje no pasa por los nudges: el usuario no lo escribió.
+            _uid = user_id if user_id and user_id != "guest" else None
+            _sess = get_or_create_session(session_id, user_id=_uid)
+            _owner = _sess.get("user_id") if isinstance(_sess, dict) else None
+            if _owner and str(_owner) != str(_uid or ""):
+                logger.warning(f"🚫 [P1-CHAT-ORPHAN-SESSIONS] Rechazo no anotado: la sesión {session_id} es de otro usuario.")
+            else:
+                save_message(session_id, "user", f"Rechacé explícitamente: {rejected_meal}",
+                             user_id=_uid, process_nudge=False)
         
         # Guardar rechazo TEMPORAL (expira en 7 días)
         if rejected_meal:

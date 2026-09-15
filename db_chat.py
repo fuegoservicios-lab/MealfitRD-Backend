@@ -246,22 +246,149 @@ def save_message_with_attachments(
             return str(existing["id"])
     return message_id
 
+# [P1-CHAT-ORPHAN-SESSIONS · 2026-09-14] Checkpoints de LangGraph que sobreviven a su sesión.
+# El checkpointer del chat (`PostgresSaver`, agent.py) guarda el estado del grafo en
+# `checkpoints` / `checkpoint_blobs` / `checkpoint_writes` con llave `thread_id` =
+# `agent_sessions.id::text` — SIN columna user_id y SIN FK: nada los cascadea. Borrar la
+# sesión (un chat, todos, el TTL de 90 días) dejaba vivos sus checkpoints. Forense del
+# 2026-09-14: 54 de 55 hilos no tenían sesión, eran de cuentas ya borradas y llevaban dentro
+# `sys_prompt` / `form_data` (el perfil de salud). Toda vía que borre sesiones pasa por
+# `delete_agent_sessions_with_checkpoints` (sesión + checkpoints en UNA transacción); el
+# borrado de checkpoints en sí vive SOLO en `delete_checkpoints_for_threads`.
+_CHECKPOINT_TABLES = ("checkpoint_writes", "checkpoint_blobs", "checkpoints")
+
+
+def delete_checkpoints_for_threads(cursor, thread_ids, *, only_without_session: bool = True) -> Dict[str, int]:
+    """[P1-CHAT-ORPHAN-SESSIONS · 2026-09-14] SSOT del borrado de checkpoints de LangGraph.
+
+    Ejecuta con el `cursor` del caller, así que corre DENTRO de su transacción. Devuelve las
+    filas borradas por tabla.
+
+    `only_without_session` (default True) añade `NOT EXISTS agent_sessions`: jamás borra el
+    estado de un hilo cuya sesión sigue viva. Todos los callers borran antes la sesión en la
+    misma transacción (o seleccionan hilos sin sesión), así que la guarda no les quita nada;
+    sí cierra la carrera de un cliente que recrea una sesión con un id ya barrido.
+    """
+    ids = sorted({str(t).strip() for t in (thread_ids or []) if t and str(t).strip()})
+    counts: Dict[str, int] = {tbl: 0 for tbl in _CHECKPOINT_TABLES}
+    if not ids:
+        return counts
+    guard = (
+        " AND NOT EXISTS (SELECT 1 FROM public.agent_sessions s WHERE s.id::text = ck.thread_id)"
+        if only_without_session else ""
+    )
+    for tbl in _CHECKPOINT_TABLES:
+        cursor.execute(
+            f"DELETE FROM public.{tbl} AS ck WHERE ck.thread_id = ANY(%s::text[]){guard}",
+            (ids,),
+        )
+        counts[tbl] = max(int(getattr(cursor, "rowcount", 0) or 0), 0)
+    return counts
+
+
+def _guard_chat_tx_write(query: str) -> None:
+    """La guarda de tests contra Neon producción vive en `execute_sql_write`; aquí vamos al
+    pool directo (hace falta el cursor para la transacción), así que la invocamos a mano.
+    Resolución dinámica: los tests la parchean en `db_core`."""
+    import db_core as _db_core
+    _guard = getattr(_db_core, "_guard_test_write_to_prod", None)
+    if _guard is not None:
+        _guard(query)
+
+
+def delete_agent_sessions_with_checkpoints(delete_sessions_sql: str, params: tuple) -> List[str]:
+    """[P1-CHAT-ORPHAN-SESSIONS · 2026-09-14] Borra sesiones Y sus checkpoints en UNA transacción.
+
+    `delete_sessions_sql` es un DELETE sobre `agent_sessions` con `RETURNING id`; los ids que
+    devuelve alimentan `delete_checkpoints_for_threads` con el MISMO cursor. Los mensajes, los
+    resúmenes y los adjuntos caen solos (FK ON DELETE CASCADE). Devuelve los ids borrados y
+    levanta la excepción: cada caller decide si es best-effort o un 500.
+    """
+    if "RETURNING" not in delete_sessions_sql.upper():
+        raise ValueError("delete_agent_sessions_with_checkpoints exige `RETURNING id`.")
+    _guard_chat_tx_write(delete_sessions_sql)
+    if not connection_pool:
+        raise RuntimeError("db connection_pool is not available.")
+    from psycopg.rows import dict_row
+
+    with connection_pool.connection() as conn:
+        with conn.transaction():
+            with conn.cursor(row_factory=dict_row) as cursor:
+                cursor.execute(delete_sessions_sql, params)  # pyright: ignore[reportArgumentType]
+                rows = cursor.fetchall() or []
+                ids = [str(r["id"]) for r in rows if r and r.get("id")]
+                counts = delete_checkpoints_for_threads(cursor, ids)
+    if ids:
+        logger.info(
+            f"🗑️ [P1-CHAT-ORPHAN-SESSIONS] {len(ids)} sesión(es) borradas junto a sus "
+            f"checkpoints (filas: {counts})."
+        )
+    return ids
+
+
+# [P1-CHAT-ORPHAN-SESSIONS · 2026-09-14] Predicado de hilo huérfano, SSOT del cron y del script
+# one-shot: el `thread_id` no existe en `agent_sessions` y su ÚLTIMO checkpoint es más viejo
+# que N días. La antigüedad sale de `checkpoint->>'ts'` (ISO-8601 que escribe LangGraph; las
+# tres tablas no tienen columna de fecha). Un `ts` que no parece fecha cuenta como NULL y el
+# hilo NO se barre (conservador). Medido en producción: 0 de 55 hilos sin `ts` parseable, y
+# todo `thread_id` es un uuid (ningún otro grafo usa este checkpointer).
+ORPHAN_CHECKPOINT_THREADS_SQL = """
+    SELECT ck.thread_id,
+           max(CASE WHEN ck.checkpoint->>'ts' ~ '^[0-9]{4}-[0-9]{2}-[0-9]{2}'
+                    THEN (ck.checkpoint->>'ts')::timestamptz END) AS last_ts
+    FROM public.checkpoints ck
+    WHERE NOT EXISTS (
+        SELECT 1 FROM public.agent_sessions s WHERE s.id::text = ck.thread_id
+    )
+    GROUP BY ck.thread_id
+    HAVING max(CASE WHEN ck.checkpoint->>'ts' ~ '^[0-9]{4}-[0-9]{2}-[0-9]{2}'
+                    THEN (ck.checkpoint->>'ts')::timestamptz END)
+           < NOW() - make_interval(days => %s::int)
+    ORDER BY last_ts ASC
+    LIMIT %s
+"""
+
+
+def sweep_orphan_chat_checkpoints(min_age_days: int, batch: int) -> Dict[str, Any]:
+    """[P1-CHAT-ORPHAN-SESSIONS · 2026-09-14] Borra hasta `batch` hilos de checkpoint sin sesión
+    cuyo último checkpoint tenga más de `min_age_days` días. Selección y borrado en UNA
+    transacción; el borrado re-verifica que el hilo siga sin sesión. Levanta la excepción."""
+    _guard_chat_tx_write("DELETE FROM public.checkpoints")
+    if not connection_pool:
+        raise RuntimeError("db connection_pool is not available.")
+    from psycopg.rows import dict_row
+
+    with connection_pool.connection() as conn:
+        with conn.transaction():
+            with conn.cursor(row_factory=dict_row) as cursor:
+                cursor.execute(ORPHAN_CHECKPOINT_THREADS_SQL, (int(min_age_days), int(batch)))
+                rows = cursor.fetchall() or []
+                ids = [str(r["thread_id"]) for r in rows if r and r.get("thread_id")]
+                counts = delete_checkpoints_for_threads(cursor, ids)
+    return {"threads": ids, "deleted": counts}
+
+
 def delete_user_agent_sessions(user_id: str) -> bool:
-    """Elimina todas las sesiones de agente para un usuario."""
+    """Elimina todas las sesiones de agente para un usuario (y sus checkpoints de LangGraph)."""
     if not connection_pool: return False
     try:
-        # FKs de agent_messages/conversation_summaries son ON DELETE CASCADE.
-        execute_sql_write("DELETE FROM public.agent_sessions WHERE user_id = %s", (user_id,))
+        # FKs de agent_messages/conversation_summaries/chat_attachments son ON DELETE CASCADE;
+        # los checkpoints no tienen FK → misma transacción [P1-CHAT-ORPHAN-SESSIONS].
+        delete_agent_sessions_with_checkpoints(
+            "DELETE FROM public.agent_sessions WHERE user_id = %s RETURNING id", (user_id,)
+        )
         return True
     except Exception as e:
         logger.error(f"Error eliminando sesiones de agente de {user_id}: {e}")
         return False
 
 def delete_single_agent_session(session_id: str) -> bool:
-    """Elimina una sesión específica de agente."""
+    """Elimina una sesión específica de agente (y sus checkpoints de LangGraph)."""
     if not connection_pool: return False
     try:
-        execute_sql_write("DELETE FROM public.agent_sessions WHERE id = %s", (session_id,))
+        delete_agent_sessions_with_checkpoints(
+            "DELETE FROM public.agent_sessions WHERE id = %s RETURNING id", (session_id,)
+        )
         return True
     except Exception as e:
         logger.error(f"Error eliminando sesion de agente {session_id}: {e}")
@@ -674,8 +801,10 @@ def delete_chat_session(session_id: str, user_id: str) -> Tuple[bool, str]:
         # Ownership validado — orden respeta FK constraints.
         execute_sql_write("DELETE FROM conversation_summaries WHERE session_id = %s", (session_id,))
         execute_sql_write("DELETE FROM agent_messages WHERE session_id = %s", (session_id,))
-        execute_sql_write(
-            "DELETE FROM agent_sessions WHERE id = %s AND user_id = %s",
+        # [P1-CHAT-ORPHAN-SESSIONS · 2026-09-14] La sesión y sus checkpoints de LangGraph
+        # (sin FK: nada los cascadea) caen en la MISMA transacción.
+        delete_agent_sessions_with_checkpoints(
+            "DELETE FROM agent_sessions WHERE id = %s AND user_id = %s RETURNING id",
             (session_id, user_id),
         )
         logger.info(f"🗑️ [DB] Sesión {session_id} eliminada (owner={user_id})")
@@ -746,12 +875,18 @@ def save_message(
     role: str,
     content: str,
     user_id: Optional[str] = None,
+    process_nudge: bool = True,
 ):
     """[P1-CHAT-DB-USER-ID-RLS · 2026-05-19] `user_id` opcional — los
     callsites en routers/chat.py lo pasan explícitamente (ya está en
     scope post-auth); callsites legacy (db_plans.py, proactive_agent.py,
     services.py, etc.) no lo pasan y la función hace lookup vía
-    `get_session_owner` como fallback. Tooltip-anchor: P1-CHAT-DB-USER-ID-RLS."""
+    `get_session_owner` como fallback. Tooltip-anchor: P1-CHAT-DB-USER-ID-RLS.
+
+    [P1-CHAT-ORPHAN-SESSIONS · 2026-09-14] `process_nudge=False` para mensajes de rol
+    'user' que el usuario NO escribió (la semilla de «plan generado»): con la sesión ya
+    con dueño, `handle_nudge_response` la clasificaría y marcaría como respuesta a un
+    nudge pendiente."""
     if not connection_pool: return None
 
     # [P1-CHAT-DB-USER-ID-RLS · 2026-05-19] Resolver user_id: prefer el
@@ -761,7 +896,7 @@ def save_message(
     if user_id is None:
         user_id = get_session_owner(session_id)
 
-    if role == "user":
+    if role == "user" and process_nudge:
         if user_id:
             try:
                 from proactive_agent import handle_nudge_response
@@ -775,6 +910,50 @@ def save_message(
     # pero el caller decide cómo manejar el log. NO usamos `pass` silente:
     # 3 fallos consecutivos a la DB es un incidente real, no transient.
     _save_message_insert_with_retry(session_id, role, content, user_id)
+
+
+def should_seed_plan_messages(session_id: str, user_text: str, user_id: Optional[str]) -> bool:
+    """[P1-CHAT-ORPHAN-SESSIONS · 2026-09-14] ¿Se siembra el par de mensajes de «plan generado»?
+
+    1. Crea la sesión o le pone dueño si no lo tenía (`get_or_create_session` rellena un
+       `user_id` NULL). Forense: las 175 sesiones y los 303 mensajes tenían user_id NULL.
+    2. NO si la sesión ya es de OTRO usuario (o de alguien, y el run es de invitado): la
+       semilla se firmaría como suya en un chat ajeno.
+    3. NO si el último mensaje de USUARIO de la sesión ya es exactamente ese texto. Criterio
+       elegido tras medir: 57 repeticiones en producción, TODAS consecutivas (0 intercaladas
+       con otro mensaje del usuario), hasta 24 en una sesión. «Ya existe en la sesión» habría
+       borrado del hilo la marca de un plan nuevo generado tras conversar; éste no.
+
+    Falla abierto (True) si la base no responde a la lectura: la conducta previa, antes que
+    un chat sin semilla.
+    """
+    session = None
+    try:
+        session = get_or_create_session(session_id, user_id=user_id)
+    except Exception as e:
+        logger.warning(f"⚠️ [P1-CHAT-ORPHAN-SESSIONS] get_or_create_session({session_id}) falló: {e}")
+    owner = session.get("user_id") if isinstance(session, dict) else None
+    owner = str(owner) if owner else None
+    if owner and owner != str(user_id or ""):
+        logger.warning(
+            f"🚫 [P1-CHAT-ORPHAN-SESSIONS] Semilla omitida: la sesión {session_id} es de otro usuario."
+        )
+        return False
+    try:
+        last = execute_sql_query(
+            "SELECT content FROM public.agent_messages "
+            "WHERE session_id = %s AND role = 'user' "
+            "ORDER BY created_at DESC, id DESC LIMIT 1",
+            (session_id,),
+            fetch_one=True,
+        )
+    except Exception as e:
+        logger.warning(f"⚠️ [P1-CHAT-ORPHAN-SESSIONS] Lectura del último mensaje falló ({session_id}): {e}")
+        return True
+    if last and last.get("content") == user_text:
+        logger.info(f"➡️ [P1-CHAT-ORPHAN-SESSIONS] Semilla repetida omitida en la sesión {session_id}.")
+        return False
+    return True
 
 
 def get_model_response_id_for_regeneration(

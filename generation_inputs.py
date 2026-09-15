@@ -153,9 +153,18 @@ def build_initial_pipeline_inputs(data: dict, actual_user_id: str, session_id: O
     likes: list = []
     memory: dict = {}
     if session_id:
-        rp.get_or_create_session(session_id)
-        memory = rp.build_memory_context(session_id)
-        history = memory.get("recent_messages") or []
+        # [P1-CHAT-ORPHAN-SESSIONS · 2026-09-14] La sesión nace con dueño (antes NULL), y la
+        # memoria de una sesión de OTRO usuario no entra en el plan: `session_id` viene del
+        # body, y sin esta guarda su historial de chat acababa en el prompt de generación.
+        _sess = rp.get_or_create_session(session_id, user_id=actual_user_id or None)
+        _owner = _sess.get("user_id") if isinstance(_sess, dict) else None
+        if _owner and str(_owner) != str(actual_user_id or ""):
+            logger.warning(
+                f"🚫 [P1-CHAT-ORPHAN-SESSIONS] Memoria de la sesión {session_id} omitida: es de otro usuario."
+            )
+        else:
+            memory = rp.build_memory_context(session_id)
+            history = memory.get("recent_messages") or []
     if actual_user_id:
         likes = rp.get_user_likes(actual_user_id)
     active_rejections = rp.get_active_rejections(user_id=actual_user_id, session_id=session_id)

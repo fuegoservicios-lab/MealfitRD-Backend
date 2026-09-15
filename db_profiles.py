@@ -1287,12 +1287,19 @@ def delete_account_data(user_id: str, include_profile: bool = True) -> Dict[str,
 
     # 1. Checkpoints LangGraph (keyed por thread_id = agent_sessions.id::text).
     #    DELETE ANTES de borrar agent_sessions (su fuente de thread_ids).
+    #    [P1-CHAT-ORPHAN-SESSIONS · 2026-09-14] Tres fuentes de hilos del usuario, no una: sus
+    #    sesiones, las sesiones donde escribió mensajes (la sesión puede tener user_id NULL — el
+    #    forense halló las 175 así — mientras el mensaje sí lo lleva) y el hilo cuyo id ES su
+    #    user_id (convención session_id = user_id; 2 sesiones vivas así). Un uuid de usuario
+    #    como thread_id sólo puede ser suyo.
     for ck_tbl in ("checkpoint_writes", "checkpoint_blobs", "checkpoints"):
         try:
             r = execute_sql_write(
-                f"DELETE FROM {ck_tbl} WHERE thread_id IN "
-                "(SELECT id::text FROM agent_sessions WHERE user_id = %s) RETURNING thread_id",
-                (user_id,), returning=True,
+                f"DELETE FROM {ck_tbl} WHERE thread_id IN ("
+                "SELECT id::text FROM agent_sessions WHERE user_id = %s "
+                "UNION SELECT session_id::text FROM agent_messages WHERE user_id = %s "
+                "UNION SELECT %s::text) RETURNING thread_id",
+                (user_id, user_id, user_id), returning=True,
             )
             result["deleted"][ck_tbl] = len(r) if isinstance(r, list) else 0
         except Exception as e:

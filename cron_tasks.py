@@ -35404,6 +35404,45 @@ def trigger_background_rolling_refill() -> None:
 
 
 # ============================================================
+# [P1-CHAT-ORPHAN-SESSIONS · 2026-09-14] Barrido de checkpoints de LangGraph sin sesión.
+#
+# Los checkpoints del chat (`checkpoints`/`checkpoint_blobs`/`checkpoint_writes`, llave
+# `thread_id` = agent_sessions.id) no tienen FK: borrar la sesión los dejaba vivos. Forense
+# 2026-09-14: 54 de 55 hilos sin sesión, de cuentas borradas, con el perfil de salud dentro
+# (~33 MB en las tres tablas). Las vías de borrado de sesión ya los arrastran en su
+# transacción (db_chat.delete_agent_sessions_with_checkpoints); este barrido es la red para
+# lo que se escape (sesiones borradas a mano o por un camino futuro).
+#
+# Corre DENTRO del job `sweep_stale_chat_sessions` (ya registrado en
+# `register_plan_chunk_scheduler`, diario) y no como job propio: es la misma higiene de
+# almacenamiento del chat, y un id de job nuevo exige su fila en el runbook de prioridades
+# de crons (test_p3_live_13). Interruptor y knobs propios:
+#   - MEALFIT_CHECKPOINT_ORPHAN_SWEEP_ENABLED (True)
+#   - MEALFIT_CHECKPOINT_ORPHAN_SWEEP_DAYS (7, clamp [1, 90]) — edad del ÚLTIMO checkpoint.
+#   - MEALFIT_CHECKPOINT_ORPHAN_SWEEP_BATCH (100, clamp [1, 1000]) — hilos por tick.
+def _sweep_orphan_chat_checkpoints() -> int:
+    """[P1-CHAT-ORPHAN-SESSIONS · 2026-09-14] Borra hilos de checkpoint sin sesión y viejos.
+    Best-effort: un error se registra y devuelve 0. Devuelve los hilos borrados."""
+    if not _env_bool("MEALFIT_CHECKPOINT_ORPHAN_SWEEP_ENABLED", True):
+        return 0
+    min_age_days = max(1, min(_env_int("MEALFIT_CHECKPOINT_ORPHAN_SWEEP_DAYS", 7), 90))
+    batch = max(1, min(_env_int("MEALFIT_CHECKPOINT_ORPHAN_SWEEP_BATCH", 100), 1000))
+    try:
+        from db import sweep_orphan_chat_checkpoints
+        res = sweep_orphan_chat_checkpoints(min_age_days, batch) or {}
+    except Exception as e:
+        logger.error(f"❌ [P1-CHAT-ORPHAN-SESSIONS] Barrido de checkpoints huérfanos falló: {e!r}")
+        return 0
+    threads = res.get("threads") or []
+    if threads:
+        logger.info(
+            f"🧹 [P1-CHAT-ORPHAN-SESSIONS] {len(threads)} hilo(s) de checkpoint sin sesión y "
+            f">{min_age_days}d borrados (filas: {res.get('deleted')})."
+        )
+    return len(threads)
+
+
+# ============================================================
 # [P1-CHAT-SESSION-TTL · 2026-05-20] Storage hygiene: purga sesiones de
 # chat con cero actividad por N días.
 #
@@ -35448,7 +35487,13 @@ def _sweep_stale_chat_sessions() -> int:
     Returns: número de sesiones eliminadas en este tick.
 
     Tooltip-anchor: P1-CHAT-SESSION-TTL.
+
+    [P1-CHAT-ORPHAN-SESSIONS · 2026-09-14] Las sesiones caen junto a sus checkpoints de
+    LangGraph (misma transacción) y el job corre además el barrido de checkpoints huérfanos
+    (`_sweep_orphan_chat_checkpoints`, interruptor propio: no depende del de este TTL).
     """
+    orphan_checkpoint_threads = _sweep_orphan_chat_checkpoints()
+
     if not _env_bool("MEALFIT_CHAT_SESSION_TTL_ENABLED", True):
         logger.info(
             "[P1-CHAT-SESSION-TTL] Desactivado via knob "
@@ -35479,7 +35524,11 @@ def _sweep_stale_chat_sessions() -> int:
         # 90d aunque haya tráfico fresco. Si esto se vuelve problemático,
         # añadir migration que cree `last_activity TIMESTAMPTZ` + trigger
         # AFTER INSERT ON agent_messages que UPDATE la sesión.
-        rows = execute_sql_write(
+        # [P1-CHAT-ORPHAN-SESSIONS · 2026-09-14] Vía el helper de db_chat: las sesiones
+        # y sus checkpoints de LangGraph (sin FK) caen en la MISMA transacción. Antes
+        # este DELETE suelto dejaba los checkpoints huérfanos para siempre.
+        from db import delete_agent_sessions_with_checkpoints
+        rows = delete_agent_sessions_with_checkpoints(
             """
             DELETE FROM agent_sessions
             WHERE id IN (
@@ -35491,7 +35540,6 @@ def _sweep_stale_chat_sessions() -> int:
             RETURNING id
             """,
             (ttl_days, batch),
-            returning=True,
         )
         if rows is not None:
             try:
@@ -35526,6 +35574,8 @@ def _sweep_stale_chat_sessions() -> int:
                         "batch": int(batch),
                         "deleted": int(deleted_count),
                         "sweep_failed": bool(sweep_failed),
+                        # [P1-CHAT-ORPHAN-SESSIONS · 2026-09-14]
+                        "orphan_checkpoint_threads": int(orphan_checkpoint_threads),
                     },
                     ensure_ascii=False,
                 ),

@@ -17,6 +17,8 @@ from datetime import datetime, timezone, timedelta
 from auth import get_verified_user_id, verify_api_quota
 from db import (
     get_user_likes, get_active_rejections, get_or_create_session,
+    # [P1-CHAT-ORPHAN-SESSIONS · 2026-09-14] Dueño + dedupe del mensaje sembrado.
+    should_seed_plan_messages,
     save_message, update_user_health_profile, update_user_health_profile_atomic, log_api_usage, get_latest_meal_plan,
     get_latest_meal_plan_with_id, update_meal_plan_data, insert_like,
     # [P1-PLAN-DISPLAY-I18N · 2026-08-19] TRIGGER-1B lee el locale del usuario
@@ -2298,8 +2300,17 @@ def _postprocess_pipeline_result(
                 _seed_locale = None
             from prompts.chat_agent import plan_seed_messages as _plan_seed_messages
             _seed_user_text, _seed_model_text = _plan_seed_messages(_seed_locale, goal)
-            save_message(session_id, "user", _seed_user_text)
-            save_message(session_id, "model", _seed_model_text)
+            # [P1-CHAT-ORPHAN-SESSIONS · 2026-09-14] La semilla lleva dueño (el usuario del
+            # run, ya verificado aguas arriba; invitado ⇒ None), no se escribe en la sesión de
+            # OTRO usuario y no se repite si el último mensaje de usuario ya es ella: en
+            # producción llegó a 24 copias seguidas en una sesión, todas consecutivas.
+            # `should_seed_plan_messages` además rellena el dueño de una sesión con user_id
+            # NULL (el camino encolado la crea sin usuario en generation_inputs). La semilla
+            # no la escribió el usuario: no cuenta como respuesta a un nudge.
+            _seed_owner = actual_user_id if actual_user_id and actual_user_id != "guest" else None
+            if should_seed_plan_messages(session_id, _seed_user_text, _seed_owner):
+                save_message(session_id, "user", _seed_user_text, user_id=_seed_owner, process_nudge=False)
+                save_message(session_id, "model", _seed_model_text, user_id=_seed_owner)
             background_tasks.add_task(summarize_and_prune, session_id)
         except Exception as _msg_err:
             logger.warning(f"⚠️ Error registrando mensajes de chat: {_msg_err}")
@@ -3635,7 +3646,12 @@ def api_analyze(
         memory: dict = {}  # default cuando no hay session_id; .get(...) abajo guardado por `if session_id`
 
         if session_id:
-            get_or_create_session(session_id)
+            # [P1-CHAT-ORPHAN-SESSIONS · 2026-09-14] Con dueño: el user_id VERIFICADO por la
+            # dependencia de auth (el del body sólo se usa para exigir que coincida, arriba);
+            # invitado ⇒ None. Sin esto las 175 sesiones de producción quedaron con user_id NULL.
+            get_or_create_session(
+                session_id, user_id=(verified_user_id if user_id and user_id != "guest" else None)
+            )
             memory = build_memory_context(session_id)
             history = memory["recent_messages"]
 
@@ -4076,7 +4092,12 @@ async def api_analyze_stream(
         memory: dict = {}  # default cuando no hay session_id; .get(...) abajo guardado por `if session_id`
 
         if session_id:
-            get_or_create_session(session_id)
+            # [P1-CHAT-ORPHAN-SESSIONS · 2026-09-14] Con dueño: el user_id VERIFICADO por la
+            # dependencia de auth (el del body sólo se usa para exigir que coincida, arriba);
+            # invitado ⇒ None. Sin esto las 175 sesiones de producción quedaron con user_id NULL.
+            get_or_create_session(
+                session_id, user_id=(verified_user_id if user_id and user_id != "guest" else None)
+            )
             memory = build_memory_context(session_id)
             history = memory["recent_messages"]
 
