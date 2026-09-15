@@ -546,10 +546,19 @@ async def _cloud_vision_scan(image_bytes: bytes) -> list:
     ]
 
 
+# [P1-PLAN-LOTE-53 · 2026-09-15] El escáner de Nevera llama a un modelo de visión PAGO
+# (Gemini) y era el único camino de visión sin limitador y sin fila en el libro de coste:
+# cada foto era gasto sin tope e invisible. Mismo 10/60 s que `/api/diary/upload`; el
+# gasto va a `llm_usage_events` (node `pantry_photo_scan`), NUNCA a `api_usage` (el libro
+# de CUOTA de planes: escanear la Nevera no puede quemar crédito de generación).
+_PHOTO_SCAN_LIMITER = RateLimiter(max_calls=10, period_seconds=60)
+
+
 @router.post("/inventory/photo-scan")
 async def api_inventory_photo_scan(
     body: Dict[str, Any] = Body(...),
     verified_user_id: str = Depends(get_verified_user_id),
+    _rl: None = Depends(_PHOTO_SCAN_LIMITER),
 ):
     """Foto (base64) → items detectados con match al catálogo. READ-ONLY:
     no escribe user_inventory — el cliente confirma y agrega vía /inventory/items."""
@@ -581,6 +590,23 @@ async def api_inventory_photo_scan(
             status_code=502,
             detail="No pudimos analizar la foto (el modelo de visión no respondió). Intenta de nuevo.",
         )
+
+    # [P1-PLAN-LOTE-53] El usage lo deja `_invoke_structured_vision` en un ContextVar de ESTA
+    # tarea: se lee aquí, antes de cualquier `to_thread`. Best-effort: el coste no tumba el scan.
+    try:
+        from vision_agent import _vision_model_name, get_last_vision_usage
+        from db import log_llm_usage_event
+        _uso = get_last_vision_usage() or {}
+        await asyncio.to_thread(
+            log_llm_usage_event,
+            user_id=verified_user_id,
+            model=_vision_model_name(),
+            node="pantry_photo_scan",
+            input_tokens=_uso.get("input_tokens"),
+            output_tokens=_uso.get("output_tokens"),
+        )
+    except Exception as _uso_err:
+        logger.debug(f"[P1-PLAN-LOTE-53] coste de photo-scan no anotado: {_uso_err!r}")
 
     def _match_against_catalog():
         from db import execute_sql_query

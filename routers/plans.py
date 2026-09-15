@@ -17579,9 +17579,15 @@ _PANTRY_FEAS_LIMITER = RateLimiter(max_calls=10, period_seconds=60)
 
 def _photo_scan_enabled() -> bool:
     """[P1-PANTRY-SCAN-V0 · 2026-07-11] True si hay provider de visión activo
-    (knob MEALFIT_VISION_PROVIDER != 'off'). SSOT del knob: routers/user_data.py."""
+    (knob MEALFIT_VISION_PROVIDER != 'off'). SSOT del knob: routers/user_data.py.
+
+    [P1-PLAN-LOTE-53 · 2026-09-15] Y el provider tiene que estar DE VERDAD disponible
+    (`is_vision_enabled`: provider + modelo + URL). Con el knob en su default de
+    vision_agent («disabled») o sin modelo, esto decía True y la UI ofrecía un botón que
+    siempre acababa en 503/502."""
     from routers.user_data import vision_scan_provider
-    return vision_scan_provider() != "off"
+    from vision_agent import is_vision_enabled
+    return vision_scan_provider() != "off" and is_vision_enabled()
 
 
 def _pantry_mode_min_items() -> int:

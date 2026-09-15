@@ -3248,9 +3248,21 @@ DR_DISH_PROPER_NAMES = frozenset({
 })
 
 
+# [P1-PLAN-LOTE-53 · 2026-09-15] Adjetivos que CALIFICAN el plato sin nombrar un
+# componente. Caso vivo (escaneo del 04-sep): «Sándwich vegetal en pan integral» contra
+# un inventario de lechuga, tomate, remolacha y pepino — «vegetal» no aparece literal y el
+# guard sustituyó un nombre correcto por «Sándwich preparado en pan de molde integral
+# relleno». Solo descriptores: ninguno es un alimento que el rótulo pueda inventar.
+_MEAL_NAME_DESCRIPTOR_TOKENS = frozenset({
+    "vegetal", "vegetales", "mixto", "mixta", "criollo", "criolla", "casero", "casera",
+    "light", "saludable", "tipico", "tipica", "especial", "sencillo", "sencilla",
+})
+
+
 def meal_name_backed_by_description(meal_name: str, description: str) -> bool:
     """¿Todo lo que nombra el rótulo aparece en el inventario del plato?"""
-    nombre_tokens = _significant_food_tokens(meal_name)
+    nombre_tokens = tuple(t for t in _significant_food_tokens(meal_name)
+                          if t not in _MEAL_NAME_DESCRIPTOR_TOKENS)
     if not nombre_tokens:
         return True          # sin rótulo no hay nada que contradecir
     desc_tokens = set(_significant_food_tokens(description))
@@ -3273,6 +3285,12 @@ def derive_meal_name_from_description(description: str, max_words: int = 8) -> s
 
     Se corta en la primera frase para no arrastrar la estimación de macros que el
     modelo concatena al final del texto.
+
+    [P1-PLAN-LOTE-53 · 2026-09-15] Los tres escaneos reales del 04-06 sep dieron
+    «Plato servido con arroz blanco, espaguetis guisados con» y «Plato servido compuesto
+    por papas asadas en gajos»: el marco («Plato servido con…») gastaba la mitad del
+    rótulo y el corte por palabras dejaba el nombre colgando de un conector. Se quita el
+    marco y se recortan las colas que no cierran una frase.
     """
     texto = str(description or "").strip()
     if not texto:
@@ -3280,11 +3298,27 @@ def derive_meal_name_from_description(description: str, max_words: int = 8) -> s
     for corte in (".", "(", ";"):
         if corte in texto:
             texto = texto.split(corte, 1)[0].strip()
+    texto = _MEAL_DESC_FRAME_RE.sub("", texto, count=1).strip()
     palabras = texto.split()
     if not palabras:
         return ""
-    corto = " ".join(palabras[:max_words]).rstrip(",;:").strip()
+    corto = palabras[:max_words]
+    while len(corto) > 1 and corto[-1].rstrip(",;:").lower() in _MEAL_NAME_DANGLING_TAIL:
+        corto.pop()
+    corto = " ".join(corto).rstrip(",;:").strip()
     return corto[:1].upper() + corto[1:] if corto else ""
+
+
+_MEAL_DESC_FRAME_RE = re.compile(
+    r"^(?:un\s+|una\s+)?(?:plato|porci[oó]n|raci[oó]n|bandeja|comida)\s+(?:servid[oa]\s+)?"
+    r"(?:compuest[oa]\s+(?:por|de)|con|de)\s+",
+    re.IGNORECASE,
+)
+_MEAL_NAME_DANGLING_TAIL = frozenset({
+    "de", "del", "la", "el", "los", "las", "un", "una", "y", "e", "o", "u", "en", "con",
+    "sin", "al", "a", "para", "por", "relleno", "rellena", "coronado", "coronada",
+    "acompañado", "acompañada", "servido", "servida", "bañado", "bañada", "cubierto", "cubierta",
+})
 
 
 # ============================================================

@@ -87,7 +87,6 @@ _SIN_LIMITADOR_PENDIENTES = {
     "PATCH /inventory/items/{item_id}",
     "DELETE /inventory/items/{item_id}",
     "DELETE /inventory/items",
-    "POST /inventory/photo-scan",
     "PUT /user/preferences/super-personalization",
     "PUT /user/preferences/clinical-profile",
     "PUT /user/preferences/staple-foods",
