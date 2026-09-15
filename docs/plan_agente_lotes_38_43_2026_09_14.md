@@ -10,7 +10,7 @@ y se anota la discrepancia en el informe. El protocolo largo (entorno, gate, che
 | Lote | Ítem del plan | Qué se entrega | Tamaño |
 |---|---|---|---|
 | 38 | C1 (cierre) · C0 | ✅ HECHO (`P1-PLAN-LOTE-60` · 2026-09-15): adjudicador arreglado, columnas de la máquina refrescadas, línea base ESTRICTA publicada — determinista 11/30/36 → 18/60/29 (tp/fp/fn; recall 23,4 → 38,3 %, precisión 26,8 → 23,1 %), juez 2/32/7 → 0/28/9. Ver la sección «Lote 38» | — |
-| 39 | C5 / CUL-P1-05 | Detector para `coccion_faltante` (8 high sin ningún código) y recall de `seco_sin_coccion` (10 high, 0 detectados) y `usa_lo_que_no_esta` (1 de 9) | 1 sesión |
+| 39 | C5 / CUL-P1-05 | ✅ HECHO (`P1-PLAN-LOTE-62` · 2026-09-15): V7f `coccion_faltante` 0/8 → 8/8, `seco_sin_coccion` 3/11 → 11/11 (V7c lee «crudo» y la cocción de 3 minutos), `usa_lo_que_no_esta` 1/9 → 2/9; 0 hallazgos sobre los 9 `ok`; ningún detector a bloqueo | 1 sesión |
 | 40 | C5 / C6 (parte medible) | Precisión del juez por código sobre la verdad humana; códigos con precisión baja pasan a observación; recomendación para el flip de C6 (que decide el dueño) | ½-1 sesión |
 | 41 | Tarea propuesta 13-sep | La tormenta de reintentos del catálogo con la base caída: caché negativa corta en `get_master_ingredients` y `catalog_capability` | ½ sesión |
 | 42 | E1 (operativo) | Retirar los worktrees viejos que estén limpios y ya mergeados; los demás, listados para el dueño (G4) | ¼ sesión |
@@ -191,6 +191,15 @@ llevaba el componente; (4) V7a frente a `cantidad_inconsistente` es una frontera
 
 Tabla recall/FP por clase antes/después en el doc del área (`culinary_coherence.md` §C5, con fecha); ningún detector cambia de `warn`
 a bloqueo; `culinary_golden_set.json` no se edita a mano (sólo el refresco del lote 38).
+
+### Estado · ✅ HECHO (`P1-PLAN-LOTE-62` · 2026-09-15)
+
+Paso 1, la señal ingenua contada antes del detector: `coccion_faltante` 4/8, `seco_sin_coccion` 5/11, `ok` 0/9. Con V7f
+y la forma nueva de V7c: 8/8 y 11/11, con 0/9. Discrepancias con este plan, anotadas: el test es
+`test_p1_plan_lote_62.py` y no `_39` (el enlace marker↔test exige el número del marker); `seco_sin_coccion` son 11 con
+la anotación vigente, no 10; y el plato mínimo «arroz crudo + incorporar» es de V7c (lo secable), no de V7f — el test lo
+fija así y V7f se prueba con yuca, pollo y huevo. Tabla, FP leídos uno a uno y lo que queda:
+[`culinary_coherence.md`](culinary_coherence.md) §«La cocción que falta».
 
 ---
 

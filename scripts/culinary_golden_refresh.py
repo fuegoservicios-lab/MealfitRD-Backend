@@ -97,7 +97,7 @@ def plan_de(caso: dict) -> dict:
 
 
 #: Los checks cuyo `food` es un alimento (V8a dice «tiempo», V8b el equipo, V9 el tipo de estructura).
-CHECKS_CON_ALIMENTO = frozenset({"V1", "V2", "V3", "V4", "V5", "V6", "V7a", "V7b", "V7c", "V7d", "V7e"})
+CHECKS_CON_ALIMENTO = frozenset({"V1", "V2", "V3", "V4", "V5", "V6", "V7a", "V7b", "V7c", "V7d", "V7e", "V7f"})
 
 
 def _sin_parentesis(x) -> str:

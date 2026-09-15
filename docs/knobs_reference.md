@@ -404,6 +404,12 @@ Los planes recientes (el día determinista y el revisor) cuentan sólo los plane
 | `MEALFIT_BILLING_VERIFY_AMOUNT` | `block` (era `warn`) | `off`/`warn`/`block` para `_verify_subscription_amount` (`routers/billing.py`). En `block` se bloquea (409 + alerta crítica `billing_price_tampering:*`) el underpayment PROBADO bajo un cupón re-validado (como antes) y, desde este lote, el override por debajo del precio de lista cuando NO existe ningún cupón activo aplicable al tier (`_active_coupon_exists_for_tier`: un cupón agotado cuenta, y uno vencido hace menos de 24 h también). Si existe alguno, o la consulta falla, el caso sigue siendo ambiguo: alerta sin bloquear (`P1-BILLING-AMOUNT-FP-FIX`). Decisión del dueño delegada el 14-sep («block»), con el cierre que proponía `paypal_audit_2026_08_22.md` §1. Rollback sin redeploy: `warn`. Tests: `test_p1_plan_lote_61.py`, `test_p1_billing_amount_verification.py` |
 | `MEALFIT_DETERMINISTIC_DAY_W_CARB_SURPLUS_CANARY` | `1.0` (clamp [0.5, 5.0]) | Peso del exceso de carbohidrato del scorer del día determinista **sólo** para quien está en `MEALFIT_DETERMINISTIC_DAY_USERS`; el global (`MEALFIT_DETERMINISTIC_DAY_W_CARB_SURPLUS`) no se toca. El default es INERTE y no el 2.0 de la decisión B7: medido en el perfil del canario (ganancia muscular, 2600 kcal · 180/300/80 g, 14 días, `measure_deterministic_day_macros.py`): con 1.0 el carbohidrato queda en −5,5 % y la grasa en +4,7 % (en banda: C 8, G 7 de 14); con 2.0, −16,5 % y +22,9 % (C 5, G 5 de 14); la proteína, 14/14 en los dos (−4,5 → −5,1 %). En ganancia la biblioteca ya se queda corta de carbohidrato, así que castigar su exceso empuja a platos grasos. 2.0 ayuda en pérdida/estándar (`P1-PLAN-LOTE-10`); para un canario con ese perfil es esta variable. Test: `test_p1_plan_lote_61.py` |
 
+### La cocción que falta (C5 · lote 39 del plan · `P1-PLAN-LOTE-62` · 2026-09-15)
+
+| Knob | Default | Efecto |
+|---|---|---|
+| `MEALFIT_CULINARY_V7F` | `True` | V7f `coccion_faltante` en la capa 1 del escáner culinario (`culinary_coherence._v7f_coccion_faltante`): víveres y proteínas animales que la lista no declara cocidos y ningún paso cuece, o que un paso usa ya cocidos. `warn` (`minor`, no reparable), un hallazgo por comida. `False` lo quita sin redeploy (0 hallazgos V7f; el resto del escáner, igual). El día determinista (`verifica_comida`) descarta al candidato con cualquier hallazgo: con la biblioteca encendida, V7f aparta 2 desayunos de 192 (el huevo revuelto sin paso que lo revuelva). |
+
 ## Cómo añadir un knob nuevo
 
 ```python

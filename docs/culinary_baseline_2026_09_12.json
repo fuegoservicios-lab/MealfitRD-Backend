@@ -17,7 +17,7 @@
     "congelado_at": "2026-09-12T18:32:13.249032+00:00"
   },
   "computation": {
-    "reglas_huella": "8f19140121f98a95",
+    "reglas_huella": "6ff0a9de99a70902",
     "catalogo_huella": "1f4f95b33a191dfe",
     "catalogo_filas": 349
   },
@@ -31,9 +31,11 @@
       "V1": 4,
       "V3": 4,
       "V4": 4,
+      "V7c": 2,
+      "V8a": 1,
       "V7d": 1,
       "V5": 1,
-      "V7c": 1
+      "V7f": 1
     }
   },
   "juez": {
@@ -76,7 +78,7 @@
   },
   "hallazgos": {
     "determinista": {
-      "con_comida": 111
+      "con_comida": 114
     },
     "juez": {
       "obsoletos": 7,

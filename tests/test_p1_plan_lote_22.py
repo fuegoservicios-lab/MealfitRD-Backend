@@ -362,7 +362,8 @@ def test_el_estricto_adjudica_hallazgo_a_hallazgo():
         # duplicados no multiplican TP
         _caso("c", "p2", ["V3: Zanahoria sin uso", "V3: Zanahoria sin uso"], [], _anot("defecto", [{"clase": "ingrediente_huerfano", "severidad": "minor", "evidencia": "zanahoria"}])),
         # un defecto que ninguna capa mecaniza: FN del sistema entero, no de cada capa
-        _caso("d", "p2", [], [], _anot("defecto", [{"clase": "coccion_faltante", "severidad": "high", "evidencia": "frijoles"}])),
+        # [P1-PLAN-LOTE-62] era `coccion_faltante`, que desde el lote 62 mecaniza V7f: el ejemplo pasa a `otro`
+        _caso("d", "p2", [], [], _anot("defecto", [{"clase": "otro", "severidad": "high", "evidencia": "frijoles"}])),
         # ok limpio: nada que emparejar
         _caso("e", "p3", [], [], _anot("ok", [])),
     ]
@@ -372,7 +373,7 @@ def test_el_estricto_adjudica_hallazgo_a_hallazgo():
     assert det["precision"] == 66.7 and det["recall"] == 66.7
     juez = r["capas"]["juez"]["crudo"]
     assert (juez["tp"], juez["fp"], juez["fn"]) == (0, 0, 0) and juez["precision"] is None and juez["recall"] is None
-    assert r["no_mecanizable"] == {"coccion_faltante": 1}
+    assert r["no_mecanizable"] == {"otro": 1}
     assert r["por_clase"]["seco_sin_coccion"]["fn"] == 1 and r["por_clase"]["cantidad_inconsistente"]["tp"] == 1
     assert r["completos"] == 5 and r["completo"] is False and r["promocion_habilitada"] is False
 

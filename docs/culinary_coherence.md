@@ -1026,6 +1026,81 @@ CUL-P1-04 y no se toca aquí.
 cerrado en sus siete ítems, con los residuos escritos fila por fila en el plan.
 
 
+## La cocción que falta: lo que el dueño más marcó y la máquina no veía (C5 · CUL-P1-05 · `P1-PLAN-LOTE-62` · 2026-09-15)
+
+Lote 39 del plan 38-44. Con la línea base del lote 38 —columna `maquina_determinista_2026-09-15`, adjudicador estricto,
+anotación del dueño— `coccion_faltante` (8 defectos, todos `high`) no tenía ningún código en la RUBRICA: nada podía
+acertarla. `seco_sin_coccion` (11) mapeaba a V7c, que acertaba 3; `usa_lo_que_no_esta` (9) a V5, que acertaba 1.
+
+**Medido primero** (paso 1 del plan, hecho ejecutable): la señal que el plan describe —crudo o seco en la LISTA y ningún
+verbo de cocción sobre ese alimento en los PASOS— separa `coccion_faltante` 4/8 y `seco_sin_coccion` 5/11, con 0 de los 9
+`ok`. Limpia, pero la mitad. Lo que no ve, leído caso a caso: la cocción que cuece OTRO alimento de la misma frase, el
+alimento que un paso usa ya cocido sin que nadie lo cueza («maja el plátano verde cocido», «desmenuza la pechuga»), el
+toque de sartén de 3-4 minutos que no cuece una yuca ni unas lentejas, y «crudo» donde V7c sólo leía «seco».
+
+**Tres cambios, todos `warn`; ninguno de severidad:**
+
+- **V7f `coccion_faltante`** (capa 1, `minor`, no reparable; knob `MEALFIT_CULINARY_V7F`, default `True`). Víveres
+  (categoría «Víveres» sin `crudo`/`ninguno` en `prep_methods`) y proteínas animales no listas para comer que la lista no
+  declara cocidos y que ningún paso cuece, o que un paso usa YA cocidos antes de cocerlos. Las legumbres y los granos secos
+  siguen siendo de V7c. La cocción se busca cláusula a cláusula, en orden: en la que nombra el alimento; en la siguiente
+  si habla de él con un pronombre enclítico («córtalos…; hornéalas 10-12 minutos»); en una que cuece sin nombrar otro
+  alimento («Hornea unos 20-25 minutos»); y, si el alimento ya se mezcló, en la que cuece la preparación («vierte la masa y
+  cocina»). Un participio describe, no cuece («la yuca horneada»), salvo el de resultado («hasta que estén cuajados»);
+  fuego y tiempo sin verbo sí cuecen. En víveres, dorar o saltear menos de 8 minutos no cuece. Las notas de seguridad no
+  cuentan. **Un hallazgo por comida**, con los alimentos nombrados: el dueño anota «Batata y pechuga de pollo» como un
+  defecto, no como dos.
+- **V7c amplía la FORMA.** «crudo/cruda» marca un grano o una legumbre sin cocer igual que «seco», y el verbo genérico
+  (cocinar, cocer) con una duración explícita de menos de 8 minutos no cuece lo seco («agrega los garbanzos y cocina 3
+  minutos»; «por lado» cuenta doble; pasta, fideos y avena quedan fuera). Si ningún paso nombra el alimento, no es una
+  cocción que falta sino un huérfano: eso es de V3.
+- **V5 mira la frase del alimento.** La ventana de «el paso lo nombra con más detalle que la lista» era de ±28 caracteres
+  y cruzaba a la frase vecina: «lava los arándanos; separa las almendras fileteadas» daba las almendras por declaradas
+  porque los arándanos sí están en la lista, y «125 ml de leche y 1 cucharada de…» encontraba «cucharada». Ahora va de la
+  última coma o conjunción antes del alimento a la primera después, sin unidades de medida. Además, un hallazgo por
+  alimento y comida, y el sofrito que la receta HACE («sofríe la cebolla…») no falta.
+
+**Resultado.** Estricto, anotación del dueño, 75 casos adjudicables; `culinary_golden_score.py --estricto --desde
+2026-09-15 --comparar-maquina 2026-09-15-lote62`. La columna nueva la escribió `culinary_golden_refresh.py` con el
+catálogo del corpus fijo: sin base y sin LLM. El juez no se re-corrió; con `--desde`, la capa sin columna nueva se compara
+con la de la línea base y no con la del 09-06.
+
+| Clase del dueño (defectos) | Lote 38 (tp/fn) | Lote 62 (tp/fn) | Recall |
+|---|---|---|---|
+| `coccion_faltante` (8) | 0/8 | 8/0 | 0 → 100 % |
+| `seco_sin_coccion` (11) | 3/8 | 11/0 | 27,3 → 100 % |
+| `usa_lo_que_no_esta` (9) | 1/8 | 2/7 | 11,1 → 22,2 % |
+| `cantidad_inconsistente` (19) | 10/9 | 10/9 | igual |
+| `ingrediente_huerfano` (5) | 3/2 | 3/2 | igual |
+| `verbo_alimento` (1) | 1/0 | 1/0 | igual |
+| `paso_incoherente` (7), `nombre_no_corresponde` (2), `estructura_del_plato` (1), `masa_sobrante` (1) | 0 | 0 | igual |
+| **Determinista** (tp/fp/fn) | **18/60/37** | **35/65/20** | recall 32,7 → 63,6 %; precisión 23,1 → 35,0 % |
+| Hallazgos sobre los 9 `ok` | 0 | 0 | ningún FP nuevo |
+
+La línea base re-puntuada da 18/60/**37** y no el 18/60/29 que publicó el lote 60: entonces `coccion_faltante` no tenía
+código y sus 8 defectos no entraban en el denominador. Es la misma columna medida con la RUBRICA de hoy. Los 5 FP nuevos,
+leídos uno a uno: 3 son defectos reales que el dueño no anotó en ese caso (una batata que sólo se calienta 3 minutos;
+cilantro y aguacate que los pasos usan y la lista no trae, en dos casos); 1 es el mismo defecto anotado con otra clase
+(«aplasta 3 huevos» en un paso que el dueño marcó `paso_incoherente`), y 1 es un defecto del dueño con dos legumbres que
+V7c acusa por separado.
+
+**La biblioteca y el día determinista.** Sobre las 193 recetas curadas, V7f dispara en 2 y las dos son verdaderas:
+«Arepa de maíz con queso gouda» y «Domplines con huevo y queso gouda» sirven «el huevo revuelto» y ningún paso lo revuelve.
+V5 deja de acusar el sofrito en 2 (el snapshot `recipe_usage_do_v1.json` se re-derivó). Como `verifica_comida` descarta al
+candidato con CUALQUIER hallazgo del escáner, con `MEALFIT_RECIPE_LIBRARY_SELECT` encendido el día determinista pasaría
+de rechazar 23 a 25 de 192 platos: esos dos desayunos, hasta que su receta diga cómo se revuelve el huevo. Con el knob en
+su default (apagado) no se sirve ninguna receta de la biblioteca y nada cambia. Añadir el paso toca la redacción que el
+dueño juzgó a ciegas: propuesto, no aplicado.
+
+**Corpus fijo.** Cambian las reglas (`8f19140121f98a95` → `6ff0a9de99a70902`) y no las cifras por comida (44 de 64 con
+hallazgo determinista, +0); re-congelado con `culinary_baseline.py --congelar`.
+
+**Lo que NO hace.** No re-corre el juez (cero gasto) ni toca su mapa de códigos (lote 40). La regla «lo que el nombre del
+plato declara no es un fantasma» sigue callando unos 4 de los 9 `usa_lo_que_no_esta` del dueño: es política, medida y no
+cambiada. Ningún detector pasa de `warn` a bloqueo. Test:
+[`test_p1_plan_lote_62.py`](../tests/test_p1_plan_lote_62.py).
+
+
 ## El reparador de estructura: adaptar sin desmontar (CUL-P1-04 · `P1-PLAN-LOTE-29` · 2026-09-12)
 
 **Corrección primero.** El lote 28 dijo que el postfix del día degradado «introducía 21 hallazgos». Era el adaptador del

@@ -358,13 +358,7 @@
     "platano_verde": 1.0
    },
    "estado": "exacta",
-   "hallazgos": [
-    {
-     "alimento": "sofrito",
-     "detalle": "V5 sobre la plantilla materializada: el paso lo usa pero la lista no lo trae: Escurre los plátanos y májalos con un poco del agua de cocción hasta que quede un mangú suave y cremoso, sin g",
-     "tipo": "fuera_de_plantilla"
-    }
-   ],
+   "hallazgos": [],
    "pasos_hash": "f7df60d7ea4bac1d",
    "usa": [
     [
@@ -513,13 +507,7 @@
     "habichuelas_negras": 1.0
    },
    "estado": "exacta",
-   "hallazgos": [
-    {
-     "alimento": "sofrito",
-     "detalle": "V5 sobre la plantilla materializada: el paso lo usa pero la lista no lo trae: Agrega las habichuelas ya hervidas a la olla con el sofrito, machaca un puñito de granos contra la pared para ",
-     "tipo": "fuera_de_plantilla"
-    }
-   ],
+   "hallazgos": [],
    "pasos_hash": "b0bfb1b1247532bb",
    "usa": [
     [
@@ -8870,7 +8858,7 @@
   },
   "fracciones_estimadas": 93,
   "hallazgos": {
-   "fuera_de_plantilla": 4,
+   "fuera_de_plantilla": 2,
    "sin_uso_condimento": 12
   },
   "recetas": 193,
@@ -8879,11 +8867,6 @@
     "alimento": "Sal",
     "n": 12,
     "tipo": "sin_uso_condimento"
-   },
-   {
-    "alimento": "sofrito",
-    "n": 2,
-    "tipo": "fuera_de_plantilla"
    },
    {
     "alimento": "espaguetis",

@@ -13,6 +13,8 @@ juez, que es un LLM opinando sobre sí mismo.
     python scripts/culinary_golden_score.py --estricto --anotaciones docs/culinary_golden_anotaciones_angelo.json --maquina 2026-09-15
     python scripts/culinary_golden_score.py --estricto --anotaciones docs/culinary_golden_anotaciones_angelo.json \
         --comparar-maquina 2026-09-15 --json                 # [lote 60] antes/después del refresco: la línea base estricta
+    python scripts/culinary_golden_score.py --estricto --anotaciones docs/culinary_golden_anotaciones_angelo.json \
+        --desde 2026-09-15 --comparar-maquina 2026-09-15-lote62   # [lote 62] contra la línea base del lote 38
 
 ## Cómo se corrige el sesgo del muestreo
 
@@ -137,11 +139,11 @@ RUBRICA = {
     "slot_inapropiado": {"slot_inapropiado"},
     "nombre_no_corresponde": {"nombre_no_corresponde"},
     "rendimiento_vs_unidades": set(),
-    "coccion_faltante": set(),
+    "coccion_faltante": {"V7f"},        # [P1-PLAN-LOTE-62]
     "otro": set(),
 }
 SEVERIDADES = ("minor", "high")
-_CODIGOS_DET = {"V1", "V2", "V3", "V4", "V5", "V6", "V7a", "V7b", "V7c", "V7d", "V7e", "V8a", "V8b", "V9"}
+_CODIGOS_DET = {"V1", "V2", "V3", "V4", "V5", "V6", "V7a", "V7b", "V7c", "V7d", "V7e", "V7f", "V8a", "V8b", "V9"}
 BOOTSTRAP_N = 1000
 BOOTSTRAP_SEMILLA = 20260912
 
@@ -627,14 +629,20 @@ def particiones_por_linaje(d: dict, k: int = 2) -> dict:
             "cruzados": cruzados}
 
 
-def columnas_de(d: dict, fecha: str | None) -> tuple[dict, list]:
+def columnas_de(d: dict, fecha: str | None, respaldo: dict | None = None) -> tuple[dict, list]:
     """[P1-PLAN-LOTE-60] Las columnas de la máquina de una fecha: `maquina_<capa>_<fecha>` si ALGÚN caso la trae; si no,
-    la del 09-06, y una nota que lo dice (sin `--con-juez` el refresco no escribe la del juez)."""
+    la del 09-06, y una nota que lo dice (sin `--con-juez` el refresco no escribe la del juez).
+
+    [P1-PLAN-LOTE-62] `respaldo` (las columnas de `--desde`) manda sobre la del 09-06: una capa que el lote no re-corrió
+    se compara consigo misma, no con la de hace nueve días — si no, la tabla muestra un «cambio» que es de columna."""
     out, notas = {}, []
     for capa in ("determinista", "juez"):
         k = f"maquina_{capa}_{fecha}"
         if fecha and any(k in c for c in d.get("casos") or []):
             out[capa] = k
+        elif respaldo and respaldo.get(capa) and respaldo[capa] != f"maquina_{capa}":
+            out[capa] = respaldo[capa]
+            notas.append(f"{capa}: sin columna del {fecha}; se usa `{respaldo[capa]}` (la de --desde)")
         else:
             out[capa] = f"maquina_{capa}"
             if fecha:
@@ -722,6 +730,7 @@ def main() -> int:
     ap.add_argument("--excluir-dev", help="[P1-PLAN-LOTE-28] JSON con ids de casos de desarrollo que NO son holdout")
     ap.add_argument("--maquina", help="[P1-PLAN-LOTE-60] puntua con las columnas maquina_<capa>_<FECHA> del refresco")
     ap.add_argument("--comparar-maquina", help="[P1-PLAN-LOTE-60] con --estricto: antes (09-06) y despues (<FECHA>) a la vez")
+    ap.add_argument("--desde", help="[P1-PLAN-LOTE-62] con --comparar-maquina: el ANTES es la columna de esta fecha, no la del 09-06")
     a = ap.parse_args()
     global INCLUIR_DUDOSAS
     INCLUIR_DUDOSAS = bool(a.con_dudosas)
@@ -740,16 +749,17 @@ def main() -> int:
     if a.estricto and a.comparar_maquina:
         # [P1-PLAN-LOTE-60] la línea base estricta: el MISMO adjudicador sobre las columnas del 09-06 y las refrescadas
         ext = cargar_anotaciones(a.anotaciones)
-        despues_cols, notas = columnas_de(d, a.comparar_maquina)
-        out = {"anotaciones": [Path(p).name for p in a.anotaciones], "notas": notas,
-               "antes": puntuar_estricto(d, ext), "despues": puntuar_estricto(d, ext, despues_cols)}
+        antes_cols, notas_antes = columnas_de(d, a.desde) if a.desde else (None, [])
+        despues_cols, notas = columnas_de(d, a.comparar_maquina, antes_cols)
+        out = {"anotaciones": [Path(p).name for p in a.anotaciones], "notas": notas_antes + notas,
+               "antes": puntuar_estricto(d, ext, antes_cols), "despues": puntuar_estricto(d, ext, despues_cols)}
         for k in ("antes", "despues"):
             out[k]["dudosas_excluidas"] = 0 if INCLUIR_DUDOSAS else contar_dudosas(d, out[k]["columnas"]["juez"])
             out[k]["excluidos_dev"] = d.get("excluidos_dev", 0)
         if a.json:
             print(json.dumps(out, ensure_ascii=False, indent=2, default=str))
         else:
-            print("\n".join(["== ANTES · columnas de la maquina del 2026-09-06 ==", render_estricto(out["antes"]), "",
+            print("\n".join([f"== ANTES · {out['antes']['columnas']} ==", render_estricto(out["antes"]), "",
                              f"== DESPUES · {out['despues']['columnas']} ==", *[f"  nota: {n}" for n in notas],
                              render_estricto(out["despues"])]))
         return 0 if (out["antes"]["completo"] and out["despues"]["completo"]) else 4

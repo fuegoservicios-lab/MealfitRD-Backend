@@ -226,7 +226,11 @@ _PROCESS_START_ISO = datetime.now(timezone.utc).isoformat()
 # biblioteca (y `recipe_usage` entiende «otro tercio» / «el último tercio»), el peso del canario del día determinista por
 # usuario (inerte por defecto: medido, 2.0 empeora su perfil de ganancia) y PayPal en `block` también cuando no existe
 # ningún cupón para el tier. Claras en botella (1 de 64 comidas) y la fase B de la lista canónica (su gate no pasa): medidas.
-_LAST_KNOWN_PFIX = "P1-PLAN-LOTE-61 · 2026-09-15"
+# [P1-PLAN-LOTE-62 · 2026-09-15] (lote 39 del plan 38-44) La cocción que falta: V7f acusa víveres y proteínas que ningún
+# paso cuece (o que un paso usa ya cocidos), V7c lee «crudo» y no da por cocida una legumbre seca con «cocina 3 minutos»,
+# y V5 mira la frase del alimento. Contra la línea base del lote 38: coccion_faltante 0/8 → 8/8, seco_sin_coccion
+# 3/11 → 11/11 y 0 hallazgos sobre los 9 `ok`. Todo warn; knob MEALFIT_CULINARY_V7F.
+_LAST_KNOWN_PFIX = "P1-PLAN-LOTE-62 · 2026-09-15"
 
 # [P1-SENTRY-SAMPLE-COST · 2026-05-12] Sentry sampling driven from env vars
 # con default seguro 0.1 (10%). Pre-fix tenía `traces_sample_rate=1.0` y

@@ -459,6 +459,7 @@ def _index_entry(name: str, norm: str, row: dict) -> dict:
         "name": name,
         "prep_methods": row.get("prep_methods"),
         "ready_to_eat": row.get("ready_to_eat"),
+        "category": row.get("category"),          # [P1-PLAN-LOTE-62] V7f: los víveres se cuecen
         "rx": re.compile(r"\b" + r"\s+".join(tokens) + r"\b"),
     }
 
@@ -1052,11 +1053,29 @@ def _v5_paso_mas_especifico(pnorm: str, pos: int, crudo_norm: str) -> bool:
     delante los hallazgos reales. Un filtro que descarta todo no es preciso, es ciego."""
     if pos < 0:
         return False
-    ventana = pnorm[max(0, pos - 28):pos + 28]
-    for w in re.split(r"[^a-z0-9]+", ventana):
-        if len(w) >= 5 and re.search(r"\b" + re.escape(w) + r"(?:s|es)?\b", crudo_norm):
+    # [P1-PLAN-LOTE-62 · 2026-09-15] (lote 39) La ventana era de ±28 caracteres y cruzaba frases: «lava los arándanos;
+    # separa las almendras fileteadas» encontraba «arándanos» (que SÍ está en la lista) y daba las almendras por
+    # declaradas; «125 ml de leche y 1 cucharada de mantequilla» encontraba «cucharada». En el golden set esas dos
+    # formas callaban 2 de los 9 «usa lo que no está» del dueño. Ahora es la FRASE del alimento: desde la última coma,
+    # punto o conjunción antes del alimento hasta la primera después, sin unidades de medida.
+    ini = max((m.end() for m in _V5_FRASE_CORTE.finditer(pnorm, 0, pos)), default=max(0, pos - 28))
+    fin_m = _V5_FRASE_CORTE.search(pnorm, pos)
+    fin = fin_m.start() if fin_m else min(len(pnorm), pos + 28)
+    for w in re.split(r"[^a-z0-9]+", pnorm[max(ini, pos - 28):min(fin, pos + 28)]):
+        if len(w) >= 5 and w not in _V5_UNIDADES and re.search(r"\b" + re.escape(w) + r"(?:s|es)?\b", crudo_norm):
             return True
     return False
+
+
+#: [P1-PLAN-LOTE-62] Dónde termina la frase de un alimento: puntuación o una conjunción/preposición que lo separa del
+#: vecino («los arándanos y las almendras»). Y las unidades, que están en toda lista y no nombran nada.
+_V5_FRASE_CORTE = re.compile(r"[,;:.()]|\s(?:y|e|o|u|con|sobre|encima|junto)\s")
+#: [P1-PLAN-LOTE-62] El VERBO sofreír (sofríe, sofreír, sofriendo…) y no el sustantivo: «agrega el sofrito» no lo hace.
+_V5_SOFREIR_RE = re.compile(r"\bsofr[ie](?!tos?\b)")
+_V5_UNIDADES = frozenset({"cucharada", "cucharadas", "cucharadita", "cucharaditas", "tazas", "gramos", "litros",
+                          "mililitros", "onzas", "libras", "unidades", "rebanada", "rebanadas", "lonjas", "pedazo",
+                          "pedazos", "dientes", "ramitas", "pizca", "porcion", "porciones", "mediano", "mediana",
+                          "medianos", "medianas", "grande", "grandes", "pequeno", "pequena"})
 
 
 def _v5_paso_usa_lo_que_no_esta(day, meal, index) -> list:
@@ -1074,6 +1093,7 @@ def _v5_paso_usa_lo_que_no_esta(day, meal, index) -> list:
         lista |= _v5_resueltos(str(meal.get("name") or ""), index)
         crudo = _norm(" | ".join(ings) + " | " + str(meal.get("name") or ""))
 
+        acusados = set()                           # [P1-PLAN-LOTE-62] una acusación por alimento y comida
         for paso in pasos:
             if _V5_NOTA.search(paso) or _V5_NEGACION.search(paso):
                 continue
@@ -1083,6 +1103,8 @@ def _v5_paso_usa_lo_que_no_esta(day, meal, index) -> list:
                     continue                       # el mismo alimento con otro alias
                 if any(rx.search(food) for rx in _CONDIMENT_EXEMPT_RES):
                     continue                       # condimentos: reusa CONDIMENT_EXEMPT
+                if food == "sofrito" and _V5_SOFREIR_RE.search(_norm(" ".join(pasos))):
+                    continue                       # [P1-PLAN-LOTE-62] el sofrito lo HACE la receta («sofríe la cebolla…»)
                 cabeza = (_v5_mas_especifico(food) or [""])[0]
                 if not cabeza:
                     continue
@@ -1095,6 +1117,9 @@ def _v5_paso_usa_lo_que_no_esta(day, meal, index) -> list:
                     continue                       # «chuleta de cerdo» cuando la lista dice «chuleta»
                 if not _V5_ENTRADA.search(pnorm[max(0, m.start() - 60):m.start()]):
                     continue                       # la receta lo PRODUCE, no lo consume
+                if food in acusados:
+                    continue                       # «los pasos 1 y 3 piden almendras» es UN defecto, no dos
+                acusados.add(food)
                 out.append(_viol(day, meal, "V5", food,
                                  f"el paso lo usa pero la lista no lo trae: {paso[:110]}",
                                  "minor", False))
@@ -1450,6 +1475,44 @@ def _v7b_duplicado_incompatible(day, meal, index) -> list:
     return out
 
 
+#: [P1-PLAN-LOTE-62 · 2026-09-15] (lote 39 del plan · C5) V7c no veía 8 de los 11 «seco sin cocción» del dueño, por dos
+#: formas que el detector no conocía: la lista dice «crudo/cruda» en vez de «seco» (arroz, quinoa: 3 casos), y el paso
+#: SÍ tiene un verbo de cocción en la cláusula… de 3-5 minutos en la sartén («agrega los garbanzos y cocina 3 minutos»,
+#: «incorpora las lentejas … durante 4 minutos»: 5 casos). Se amplía la forma, no la severidad. La duración sólo manda
+#: con el verbo GENÉRICO (cocinar/cocer): hervir, remojar o hidratar siguen contando como antes, y la pasta, los fideos,
+#: la avena y la soya texturizada (que se hacen en minutos) quedan fuera de la regla. tooltip-anchor: P1-PLAN-LOTE-62-V7C
+_V7C_CRUDO_RE = re.compile(r"\bcrud[oa]s?\b", re.IGNORECASE)
+_V7C_RAPIDOS_RE = re.compile(r"\b(pasta|espagueti|fideo|codito|macarr|avena|soya)", re.IGNORECASE)
+_V7C_GENERICO_RE = re.compile(r"\bcocin|\bcoce|\bcuec", re.IGNORECASE)
+_V7C_TRATAMIENTO_RE = re.compile(r"\bremoj|\bhierv|\bhervi|\bhidrat", re.IGNORECASE)
+_V7C_MIN_MINUTOS = 8
+_MINUTOS_RE = re.compile(r"(\d+(?:[.,]\d+)?)\s*(?:-|–|a)?\s*(\d+(?:[.,]\d+)?)?\s*(?:minutos?|min)\b", re.IGNORECASE)
+
+
+def _duracion_max_min(texto: str):
+    """[P1-PLAN-LOTE-62] La mayor duración explícita, en minutos, de una cláusula («3 minutos», «4-5 min»; «2 minutos por
+    lado» cuenta doble). `None` si la cláusula no dice ninguna."""
+    mx = None
+    for m in _MINUTOS_RE.finditer(texto or ""):
+        try:
+            v = max(float(m.group(1).replace(",", ".")), float((m.group(2) or m.group(1)).replace(",", ".")))
+        except ValueError:
+            continue
+        if re.match(r"\s*por\s+(?:cada\s+)?lado", texto[m.end():m.end() + 18]):
+            v *= 2
+        mx = v if mx is None else max(mx, v)
+    return mx
+
+
+def _coccion_insuficiente(clausula: str) -> bool:
+    """[P1-PLAN-LOTE-62] ¿La única cocción de la cláusula es el verbo genérico con una duración explícita demasiado corta
+    para un grano o una legumbre secos? Sin duración, o con hervir/remojar/hidratar, no se juzga."""
+    if _V7C_TRATAMIENTO_RE.search(clausula) or not _V7C_GENERICO_RE.search(clausula):
+        return False
+    d = _duracion_max_min(clausula)
+    return d is not None and d < _V7C_MIN_MINUTOS
+
+
 def _v7c_seco_sin_coccion(day, meal, index) -> list:
     """Legumbre o grano declarado SECO que ningún paso remoja ni hierve."""
     out = []
@@ -1460,13 +1523,17 @@ def _v7c_seco_sin_coccion(day, meal, index) -> list:
         pasos_norm = [_norm(p) for p in pasos]
         for ing in [str(x) for x in (meal.get("ingredients") or [])]:
             n = _norm(ing)
-            if not _V7_SECO_RE.search(n) or not _V7_SECABLES_RE.search(n):
+            # [P1-PLAN-LOTE-62] «40 g de arroz blanco crudo» / «quinoa cruda»: el mismo estado que «seco» para lo secable
+            if not (_V7_SECO_RE.search(n) or _V7C_CRUDO_RE.search(n)) or not _V7_SECABLES_RE.search(n):
                 continue
             crudos = list(find_catalog_foods(ing, index))
             if not crudos:
                 continue
             food = crudos[0]
             cabeza = _norm(food).split()[0]
+            # [P1-PLAN-LOTE-62] si ningún paso lo nombra, no es una cocción que falta: es un ingrediente huérfano (V3)
+            if not any(re.search(r"\b" + re.escape(cabeza) + r"\w*", pn) for pn in pasos_norm):
+                continue
             # Se busca un paso que nombre ESE alimento Y lo cueza. Basta el sustantivo cabeza: la
             # prosa dice «las habichuelas», no «las habichuelas blancas», y exigir el nombre
             # completo produciría el mismo falso positivo que `_mencionado_por_prefijo` documenta.
@@ -1479,7 +1546,10 @@ def _v7c_seco_sin_coccion(day, meal, index) -> list:
             for pn in pasos_norm:
                 for m in re.finditer(r"\b" + re.escape(cabeza) + r"\w*", pn):
                     ini, fin = _clause_bounds(pn, m.start())
-                    if _V7_COCCION_RE.search(pn[ini:fin]):
+                    clausula = pn[ini:fin]
+                    # [P1-PLAN-LOTE-62] «agrega los garbanzos y cocina 3 minutos» no cuece una legumbre seca
+                    if _V7_COCCION_RE.search(clausula) and not (not _V7C_RAPIDOS_RE.search(n)
+                                                                 and _coccion_insuficiente(clausula)):
                         cocido = True
                         break
                 if cocido:
@@ -1691,6 +1761,218 @@ def _v7d_masa_sobrante(day, meal, index) -> list:
 # decir que falta. Las dos nacen `minor` y no reparables: el reparador de tiempos/equipo es CUL-P1-04.
 # tooltip-anchor: P1-PLAN-LOTE-26-V8
 
+# ─────────────────────────────────────────────────────────────────────────────────────────────
+# [P1-PLAN-LOTE-62 · 2026-09-15] (lote 39 del plan · C5 · CUL-P1-05) V7f · la cocción que falta.
+#
+# `coccion_faltante` era la 3.ª clase más frecuente de la anotación del dueño, 8 de 8 high, y ningún código la cubría.
+# Leídas a mano, las 8 comparten la señal: un VÍVER (yuca, ñame, batata, plátano, papa: se cuecen siempre) o una PROTEÍNA
+# ANIMAL cruda (pollo, pescado, huevo) que la lista no declara cocida y que ningún paso cuece —sólo se «calienta 2
+# minutos», se «incorpora», se «licúa»— o que un paso usa YA cocida («maja el plátano verde cocido», «aplasta el ñame»,
+# «desmenuza la pechuga») antes de haberla cocido. Los 9 `ok` del dueño no la cumplen. Las legumbres y granos secos son
+# de V7c; las verduras que se comen crudas y los listos-para-comer quedan fuera.
+#
+# La cocción se busca en la CLÁUSULA que nombra el alimento (la misma noción de V1/V7c), o en la cláusula siguiente del
+# mismo paso si cuece sin nombrar otro alimento («…; hornéalo 25 minutos»). En víveres, dorar o saltear menos de
+# `_V7F_MIN_MINUTOS_VIVERES` no cuece («calienta la yuca en la plancha 4-5 minutos, girándola para dorarla»); hervir,
+# hornear, freír o guisar sí, con la duración que sea. Las notas de seguridad no cuentan: «cocina el huevo por completo»
+# en una nota no cuece el huevo que el paso 2 licúa. `warn` (minor, no reparable); knob `MEALFIT_CULINARY_V7F`.
+# tooltip-anchor: P1-PLAN-LOTE-62-V7F
+_V7F_ANIMAL_RE = re.compile(r"\b(pollo|pechuga|muslo|pavo|pescado|filete|salmon|tilapia|mero|bacalao|chillo|camaron|"
+                            r"camarones|langost\w*|pulpo|calamar|carne|res|cerdo|chuleta|chivo|cordero|conejo|higado|"
+                            r"huevo|huevos|clara|claras|yema|yemas)\b")
+_V7F_DECLARADO_COCIDO_RE = re.compile(r"\b(cocid|hervid|asad|hornead|frit|sancochad|precocid|enlatad|lata|vapor|guisad|"
+                                      r"plancha|saltead|majad|desmenuzad|dur[oa]s?\b|pochad|escalfad|ahumad|pure)",
+                                      re.IGNORECASE)
+_V7F_COCCION_RE = re.compile(r"\b(hierv|hervi|hervor|coce|cocin|cuec|sancoch|horne|asa\b|asar|asal|fri[eo]|frei|saltea|"
+                             r"sofri|sofrei|guisa|dor[aeo]|pocha|escalfa|plancha|parrilla|grill|airfryer|freidora|vapor|cuaj|"
+                             r"sell)", re.IGNORECASE)
+#: Fuego y tiempo sin verbo de cocción: «ponlo en una sartén a fuego medio-alto, unos 4-5 minutos por lado».
+_V7F_FUEGO_RE = re.compile(r"\b(fuego|sarten|horno|olla|plancha|parrilla|freidora|airfryer)\b", re.IGNORECASE)
+#: Verbos que MEZCLAN el alimento en una preparación: desde ahí, la cocción de la preparación lo cuece.
+_V7F_MEZCLA_RE = re.compile(r"\b(mezcl|integr|incorpor|combin|bat[ea]\b|bate\w|amas|ensart|licu|maj[ae]\w*\s+(?:\S+\s+){0,3}con\b)",
+                            re.IGNORECASE)
+#: Un verbo con pronombre ENCLÍTICO («hornéalas», «incorpóralos», «ponlo»): habla de lo que nombró la cláusula anterior.
+_V7F_ENCLITICO_RE = re.compile(r"\b(pon|coloca|corta|pela|hornea|cocina|hierve|frie|dora|saltea|sofrie|incorpora|anade|"
+                               r"agrega|pasa|lleva|voltea|deja|echa|cubre|tapa|retira|escurre|sella|asa|sazona|unta|bana|"
+                               r"mete|saca|devuelve|sumerge|cuece|calienta|trocea|rellena|monta|acomoda)(?:lo|la|los|las)\b",
+                               re.IGNORECASE)
+_V7F_PROFUNDA_RE = re.compile(r"\b(hierv|hervi|sancoch|horne|asa\b|asar|asal|fri[eo]|frei|guisa|vapor|airfryer|freidora)",
+                              re.IGNORECASE)
+_V7F_GENERICAS = frozenset({"blanco", "blanca", "verde", "verdes", "maduro", "madura", "negro", "negra", "rojo", "roja",
+                            "magra", "magro", "fresco", "fresca", "entero", "entera", "pelado", "pelada", "grande",
+                            "mediano", "mediana", "sin", "piel", "hueso"})
+_V7F_MIN_MINUTOS_VIVERES = 8
+
+
+def _v7f_enabled() -> bool:
+    """Knob `MEALFIT_CULINARY_V7F` (default True). Apagarlo quita V7f sin redeploy."""
+    try:
+        from knobs import _env_bool
+        return _env_bool("MEALFIT_CULINARY_V7F", True)
+    except Exception:
+        return True
+
+
+def _v7f_clase(food: str, meta: dict):
+    """`"proteina"` / `"viver"` si el alimento se CUECE siempre; `None` si no es de V7f."""
+    if not isinstance(meta, dict) or meta.get("ready_to_eat") is True:
+        return None
+    nf = _norm(food)
+    if _V7_SECABLES_RE.search(nf):
+        return None                                  # legumbres y granos secos: V7c
+    prep = {str(p).strip().lower() for p in (meta.get("prep_methods") or [])}
+    if _V7F_ANIMAL_RE.search(nf) and meta.get("ready_to_eat") is False:
+        return "proteina"
+    if _norm(meta.get("category") or "") == "viveres" and not (prep & {"crudo", "ninguno"}):
+        return "viver"
+    return None
+
+
+#: Un PARTICIPIO describe, no cuece: «el salteado de repollo», «el ñame horneado», «los frijoles guisados».
+_PARTICIPIO_RE = re.compile(r"(?:ad|id)[oa]s?$")
+#: La marca de «ya cocido» va PEGADA al alimento: el verbo justo antes («aplasta los ½ pedazo de ñame», «desmenuza la
+#: pechuga») o el adjetivo justo después, dentro de su frase («el plátano verde cocido», «las papas crujientes»).
+_V7F_VERBO_COCIDO_RE = re.compile(r"\b(aplasta|maja|desmenuza|tritura|pisa)\w*\s+"
+                                  r"(?:(?:el|la|los|las|un|una|unos|unas|de|del|\d+\S*|[½¼¾⅓⅔⅛]|pedazos?|trozos?|mitad)\s+){0,4}$")
+_V7F_ADJ_COCIDO_RE = re.compile(r"^\W*(?:\S+\s+){0,3}?(cocid[oa]s?|majad[oa]s?|crujientes?|hervid[oa]s?)\b")
+_V7F_FIN_FRASE_RE = re.compile(r"[,;:.()]|\s(?:y|e|o|u|con)\s")
+
+
+def _cuece_verbo(clausula: str) -> bool:
+    """¿Hay un verbo de cocción en la cláusula que NO sea un participio?"""
+    for m in _V7F_COCCION_RE.finditer(clausula):
+        palabra = re.match(r"\w+", clausula[m.start():])
+        if not palabra:
+            continue
+        if not _PARTICIPIO_RE.search(palabra.group(0)):
+            return True
+        # «…hasta que estén completamente cuajados»: el participio de RESULTADO dice que se coció
+        if _HASTA_QUE_RE.search(clausula[max(0, m.start() - 40):m.start()]):
+            return True
+    return False
+
+
+_HASTA_QUE_RE = re.compile(r"\bhasta\s+que\s+(?:\w+\s+){0,3}$")
+
+
+def _v7f_usado_cocido(cl: str, rx) -> bool:
+    for m in rx.finditer(cl):
+        antes = cl[max(0, m.start() - 60):m.start()]
+        antes = antes[max(antes.rfind(","), antes.rfind(";")) + 1:]
+        if _V7F_VERBO_COCIDO_RE.search(antes):
+            return True
+        despues = cl[m.end():]
+        corte = _V7F_FIN_FRASE_RE.search(despues)
+        if _V7F_ADJ_COCIDO_RE.search(despues[:corte.start()] if corte else despues):
+            return True
+    return False
+
+
+def _v7f_evidencia(clausula: str) -> bool:
+    """¿La cláusula cuece algo? Un verbo de cocción (no participio), o fuego y tiempo sin verbo."""
+    if _cuece_verbo(clausula):
+        return True
+    return bool(_V7F_FUEGO_RE.search(clausula) and _duracion_max_min(clausula) is not None)
+
+
+def _v7f_otros_alimentos(clausula: str, index: dict) -> bool:
+    """¿Nombra la cláusula algún alimento que no sea un condimento, grasa o agua?"""
+    for f in find_catalog_foods(clausula, index):
+        nf = _norm(f)
+        if nf in ("agua", "hielo") or nf.startswith("aceite") or any(rx.search(nf) for rx in _CONDIMENT_EXEMPT_RES):
+            continue
+        return True
+    return False
+
+
+def _v7f_cuece(clausula: str, clase: str) -> bool:
+    if not _v7f_evidencia(clausula):
+        return False
+    if clase == "viver" and not _V7F_PROFUNDA_RE.search(clausula):
+        d = _duracion_max_min(clausula)
+        if d is not None and d < _V7F_MIN_MINUTOS_VIVERES:
+            return False                             # dorar la yuca 4-5 minutos no la cuece
+    return True
+
+
+def _v7f_estado(pasos_norm: list, rx, clase: str, index: dict) -> str:
+    """`cocido` · `usado_cocido` (un paso lo trata como cocido antes de cocerlo) · `sin_coccion` · `no_mencionado`.
+
+    Recorre las cláusulas EN ORDEN. En la del alimento: si la cuece, cocido; si lo usa como ya cocido, usado_cocido; si
+    lo mezcla en una preparación, lo recuerda. En las siguientes (aunque no lo nombren) cuece también: la que habla de lo
+    anterior con un pronombre enclítico («…; hornéalas 10-12 minutos»), la que cuece sin nombrar ningún otro alimento
+    («Hornea unos 20-25 minutos») y, si ya se mezcló, cualquiera que cueza la preparación («vierte la masa y cocina»)."""
+    mencionado = mezclado = previa_lo_nombra = False
+    for pn in pasos_norm:
+        for a, b in clause_bounds(pn):
+            cl = pn[a:b]
+            nombra = bool(rx.search(cl))
+            if nombra:
+                mencionado = True
+                if _v7f_cuece(cl, clase):
+                    return "cocido"
+                if _v7f_usado_cocido(cl, rx):
+                    return "usado_cocido"
+                if _V7F_MEZCLA_RE.search(cl):
+                    mezclado = True
+            elif mencionado and _v7f_cuece(cl, clase):
+                if mezclado:
+                    return "cocido"                  # lo que cuece la preparación cuece lo que lleva
+                if _V7F_ENCLITICO_RE.search(cl):
+                    if previa_lo_nombra:
+                        return "cocido"              # «córtalos…; hornéalas 10-12 minutos»
+                elif not _v7f_otros_alimentos(cl, index):
+                    return "cocido"                  # «Hornea unos 20-25 minutos»: no hay otro a quien atribuirlo
+            previa_lo_nombra = nombra
+    return "sin_coccion" if mencionado else "no_mencionado"
+
+
+def _v7f_coccion_faltante(day, meal, index) -> list:
+    """[P1-PLAN-LOTE-62] V7f: víver o proteína animal que la lista no declara cocido y ningún paso cuece. Fail-open."""
+    out = []
+    try:
+        if not _v7f_enabled():
+            return []
+        pasos = [str(x) for x in (meal.get("recipe") or []) if not _V5_NOTA.search(str(x))]
+        if not pasos:
+            return []
+        pasos_norm = [_norm(p) for p in pasos]
+        vistos, usados, sin = set(), [], []
+        for ing in [str(x) for x in (meal.get("ingredients") or [])]:
+            if _V7F_DECLARADO_COCIDO_RE.search(_norm(ing)):
+                continue
+            for food in find_catalog_foods(ing, index):
+                meta = index.get(_norm(food)) or {}
+                clase = _v7f_clase(food, meta)
+                if not clase or food in vistos:
+                    continue
+                vistos.add(food)
+                toks = [t for t in _norm(food).split() if (len(t) >= 4 or t in ("res",)) and t not in _V7F_GENERICAS]
+                if not toks:
+                    continue
+                rx = re.compile(r"\b(?:" + "|".join(re.escape(t) for t in toks) + r")(?:s|es)?\b")
+                estado = _v7f_estado(pasos_norm, rx, clase, index)
+                if estado == "usado_cocido":
+                    usados.append(food)
+                elif estado == "sin_coccion":
+                    sin.append(food)
+                break                                # una línea, un alimento
+        # UN hallazgo por comida: el dueño anota «Batata y pechuga de pollo» como un defecto, no como dos
+        if usados or sin:
+            todos = usados + sin
+            partes = []
+            if usados:
+                partes.append(f"{', '.join('«' + f + '»' for f in usados)}: un paso lo usa ya cocido sin cocerlo antes")
+            if sin:
+                partes.append(f"{', '.join('«' + f + '»' for f in sin)}: ningún paso lo cuece (sólo se calienta, se "
+                              f"incorpora o se sirve)")
+            out.append(_viol(day, meal, "V7f", todos[0], "no está cocido en la lista — " + "; ".join(partes),
+                             "minor", False))
+    except Exception:
+        return []
+    return out
+
+
 def _v8a_tiempo_oculto(day, meal, index) -> list:
     try:
         from culinary_context import check_hidden_time
@@ -1740,7 +2022,7 @@ def _viol(day, meal, check, food, detail, severity, repairable):
 
 
 #: Los checks de la capa 1, en el orden en que corren.
-CHECKS_CAPA1 = ("V1", "V2", "V3", "V4", "V5", "V6", "V7a", "V7b", "V7c", "V7d", "V7e", "V8a", "V8b", "V9")
+CHECKS_CAPA1 = ("V1", "V2", "V3", "V4", "V5", "V6", "V7a", "V7b", "V7c", "V7d", "V7e", "V7f", "V8a", "V8b", "V9")
 
 #: [P1-PLAN-LOTE-22 · 2026-09-12] (C1 · CUL-P0-01) Versión del ESQUEMA de hallazgo: desde aquí cada violación (capa 1 y
 #: juez) lleva `meal_index`, la posición de la comida en su día. Cambia cuando cambie la forma del hallazgo.
@@ -1818,6 +2100,7 @@ def culinary_contract_scan(plan_data: dict, catalog: list, _estado: "dict | None
             out.extend(_v7c_seco_sin_coccion(day, meal, index))
             out.extend(_v7d_masa_sobrante(day, meal, index))
             out.extend(_v7e_paso_pide_mas_piezas(day, meal, index))
+            out.extend(_v7f_coccion_faltante(day, meal, index))          # [P1-PLAN-LOTE-62] la cocción que falta
             out.extend(_v8a_tiempo_oculto(day, meal, index))
             out.extend(_v8b_equipo_no_disponible(day, meal, _declared))
             out.extend(_v9_estructura(day, meal, index))
