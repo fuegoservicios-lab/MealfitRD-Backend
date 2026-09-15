@@ -5033,7 +5033,13 @@ _RE_MEAL_WORDS = re.compile(
 def _claim_backed_by_other_write(text: str, messages: list) -> bool:
     if not _tool_called_this_turn(messages, _OTHER_WRITE_TOOLS):
         return False
-    return not any(_RE_MEAL_WORDS.search(f) for f in _diary_claim_sentences(text))
+    # [P1-PLAN-LOTE-58] El nombre de un BOTÓN no es comida: «usa el botón 'Actualizar platos'… tu
+    # alergia quedó registrada» (tras `update_form_field`) disparaba el nudge por «platos» y el
+    # usuario veía la respuesta entera DOS veces (mini-batería, F7). Lo citado se ignora.
+    return not any(_RE_MEAL_WORDS.search(_RE_TEXTO_CITADO.sub(" ", f)) for f in _diary_claim_sentences(text))
+
+
+_RE_TEXTO_CITADO = re.compile(r"['‘’\"“”«»][^'‘’\"“”«»\n]{1,40}['‘’\"“”«»]")
 
 
 def _diary_claim_sentences(text: str) -> list:
@@ -6082,7 +6088,8 @@ _TOOL_ANNOUNCE_RX = re.compile(
     r"[^.!?…:\d]*[.!?…:]*\s*$",
     re.IGNORECASE,
 )
-_CORTE_DE_FRASE_RX = re.compile(r"[.!?…:]+\s+|\n+")
+# La raya también corta: «Tienes toda la razón, disculpa — te lo guardo ahora mismo…» (mini-batería, H4).
+_CORTE_DE_FRASE_RX = re.compile(r"[.!?…:]+\s+|\n+|\s+[—–]\s+")
 
 
 def _strip_tool_announcement(text: str) -> str:
@@ -6098,7 +6105,7 @@ def _strip_tool_announcement(text: str) -> str:
         ultima = t[inicio:]
         if _TIENE_CIFRA_RX.search(ultima) or not _TOOL_ANNOUNCE_RX.match(ultima):
             break
-        t = t[:inicio].rstrip()
+        t = t[:inicio].rstrip().rstrip("—–").rstrip()
     return t
 
 

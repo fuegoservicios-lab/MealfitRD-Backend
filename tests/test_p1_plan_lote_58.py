@@ -35,6 +35,8 @@ def test_marcador_del_lote():
      "Los sumo a tu Nevera para que no se te olviden:",
      "¡Bién, Angelo! Zanahoria y cilantro fresquito — perfecto para mañana 🥕"),
     ("Lo anoto...", ""),
+    ("Tienes toda la razón, disculpa — te lo guardo ahora mismo para que no vuelva a salir pescado.",
+     "Tienes toda la razón, disculpa"),
     ("Voy a registrarlo ahora.", ""),
     ("Déjame guardarlo en tu perfil.", ""),
 ])
@@ -92,6 +94,27 @@ def test_el_knob_lo_apaga(monkeypatch):
     assert A._strip_tool_announcement("Te las añado a tu Nevera.") == "Te las añado a tu Nevera."
     out = A._build_final_content_from_messages(_turno("Te las añado a tu Nevera.", "Listo."))
     assert "Te las añado" in out
+
+
+def _turno_escritura(tool: str, texto: str) -> list:
+    return [HumanMessage(content="x"),
+            AIMessage(content="", tool_calls=[{"name": tool, "args": {}, "id": "t1"}]),
+            ToolMessage(content="¡Éxito!", tool_call_id="t1"),
+            AIMessage(content=texto)]
+
+
+def test_el_nombre_de_un_boton_no_dispara_el_nudge_del_diario():
+    """Mini-batería F7: tras guardar la alergia, «'Actualizar platos'» se leía como comida y el
+    nudge reescribía la respuesta — el usuario la veía DOS veces en el stream."""
+    texto = ("Anotado, Angelo: alergia a la **leche** guardada en tu perfil. Para actualizar los "
+             "cambios, usa el botón **'Actualizar platos'** en la página Plan — ya el sistema tiene "
+             "tu alergia registrada para futuros planes.")
+    assert A.route_tools({"messages": _turno_escritura("update_form_field", texto)}) != "nudge_diary_tool"
+
+
+def test_una_comida_de_verdad_sigue_disparando_aunque_haya_un_boton():
+    texto = "Listo, tu cena quedó registrada con 520 kcal; si quieres, usa 'Cambiar Plato'."
+    assert A.route_tools({"messages": _turno_escritura("log_water_glass", texto)}) == "nudge_diary_tool"
 
 
 def test_el_stream_quita_el_anuncio_en_el_mismo_punto_que_emite_la_narracion():

@@ -192,6 +192,20 @@ narración antes de la tool (F7/H3/H4).
 La v2 no se puntuó: ahí apareció la regresión de F1 (el alérgico sin aviso), que llevó a la regla «seguridad
 por encima de la brevedad», y la corrida quedó superada por la v3.
 
+**LOTE-58: anunciar la acción y confirmarla.** En la v6, B8, F7 y J4 anunciaban la acción antes de la
+tool («Te las añado a tu Nevera.») y la confirmaban después («Listo ✅ Ya están en tu Nevera…»). La
+regla 3 del prompt lo prohíbe desde julio. Ahora `_strip_tool_announcement` quita las frases finales de
+anuncio del texto previo a la PRIMERA tool: primera persona, sin cifras, cortando en `.`, `:`, salto de
+línea o raya. Lo hace a la vez en el stream y en el texto final (el `done` y el historial), así que nunca
+se muestra y no hay nada que «desaparezca». La narración con contenido se queda
+(P1-CHAT-NARRATION-KEPT). Knob `MEALFIT_CHAT_STRIP_TOOL_ANNOUNCE`.
+
+La primera mini-batería (9 casos, US$0,04) destapó además un doble texto en F7. Tras guardar la alergia,
+«usa el botón **'Actualizar platos'**… tu alergia quedó registrada» disparaba el nudge del DIARIO por la
+palabra «platos», el modelo reescribía y el usuario veía la respuesta entera dos veces. Ahora lo citado
+(nombres de botones) no cuenta como palabra de comida. En la segunda mini-batería (F7, H4, D6, J4 y B8;
+US$0,02) salen 0 nudges, ninguna respuesta repetida y ningún anuncio seguido de su confirmación.
+
 **Criterio de despliegue, decidido por la otra sesión en nombre del dueño:**
 
 - ninguna de las dos corridas finales con fallos de seguridad (ni FD3 ni dosis);
