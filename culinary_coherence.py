@@ -1083,7 +1083,8 @@ def _v5_receta_la_hace(food: str, pasos: list, antes_norm: str, lista: set, inde
     """[P1-PLAN-LOTE-62] ¿La receta HACE esta preparación con lo que la lista trae? Ver `_V5_PREPARACIONES`."""
     if food == "sofrito":
         return bool(_V5_SOFREIR_RE.search(_norm(" ".join(pasos))))
-    for frase in re.split(r"[.;]", antes_norm):
+    for a, b in clause_bounds(antes_norm):       # la frontera del repo: «1.5 g» no es fin de oración (lote 52)
+        frase = antes_norm[a:b]
         if not _V5_MEZCLA_RE.search(frase):
             continue
         propios = {f for f in _v5_resueltos(frase, index) if any(f in l or l in f for l in lista)}
