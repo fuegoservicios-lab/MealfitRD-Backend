@@ -1107,6 +1107,54 @@ cambiada. Ningún detector pasa de `warn` a bloqueo. Test:
 [`test_p1_plan_lote_62.py`](../tests/test_p1_plan_lote_62.py).
 
 
+## El juez por código: la sustancia acierta, el código no (C5/C6 · `P1-PLAN-LOTE-63` · 2026-09-15)
+
+Lote 40 del plan 38-44. Precisión del juez culinario por código contra la anotación del dueño, con el adjudicador estricto
+del lote 60 y la columna refrescada del lote 38 (`maquina_juez_2026-09-15`: el juez de producción, glm-5.3-flash, una comida
+por llamada): `culinary_golden_score.py --anotaciones docs/culinary_golden_anotaciones_angelo.json --juez-por-codigo
+<columna>`. «Por sustancia» empareja igual —1:1 y con el mismo alimento— pero deja que cada código del juez cubra también
+las clases que su queja describe (`SUSTANCIA_JUEZ`, sólo en el marcador; el juez no cambia de voz): `paso_incoherente` →
+cantidad, «usa lo que no está», huérfano y seco sin cocción; `tecnica_impropia` → seco sin cocción, cocción que falta,
+verbo-alimento y paso incoherente; `nombre_no_corresponde` → «usa lo que no está»; `slot_inapropiado` → seco sin cocción;
+`combo_absurdo` → nada más.
+
+| Código | n (seguras) | dudosas | tp | fp | Precisión estricta | Por sustancia |
+|---|---|---|---|---|---|---|
+| `paso_incoherente` | 16 | 4 | 0 | 16 | 0 % | 87,5 % (14) |
+| `tecnica_impropia` | 6 | 1 | 0 | 6 | 0 % | 100 % (6) |
+| `nombre_no_corresponde` | 5 | 1 | 0 | 5 | 0 % | 60 % (3) |
+| `combo_absurdo` | 1 | 1 | 0 | 1 | 0 % | 0 % |
+| **Total, columna del 15-sep** | **28** | **7** | **0** | **28** | **0 %** | **82,1 % (23)** |
+| Total, columna del 06-sep | 34 | 0 | 2 | 32 | 5,9 % | 52,9 % (18) |
+
+**Leídos uno a uno** (los 28 fp del 15-sep, frente a la evidencia del dueño del mismo caso): 24 acusan el MISMO alimento
+que un defecto que el dueño anotó en esa comida con otra clase —la lista dice 1 tostada de casabe y el paso tuesta 2
+(`cantidad_inconsistente`); las almendras fileteadas que la lista no trae (`usa_lo_que_no_esta`); los garbanzos secos que un
+paso da por cocidos (`seco_sin_coccion`)—. De los 4 restantes, 2 son el mismo defecto con el alimento mal atado (el dueño
+dejó vacío el `alimento` de las chinolas; el batido con parmesano que el dueño anotó por el yogur que falta) y 2 son
+defectos reales que el dueño no anotó en ese caso (el queso blanco y las aceitunas que el nombre promete y la lista no
+trae). **Errores de juicio: ninguno. Errores de código: todos.** La precisión estricta es 0 por construcción: la rúbrica
+reparte los defectos de pasos y lista entre clases del determinista, y el juez sólo tiene cinco palabras para nombrarlos.
+
+**Observación** (`MEALFIT_CULINARY_JUDGE_OBSERVACION_CODES`, default `paso_incoherente,tecnica_impropia,nombre_no_corresponde`).
+El criterio del plan —precisión estricta < 25 % con n ≥ 4, fijado antes de medir— da esos tres (en la columna del 06-sep
+daría también `combo_absurdo`, con n = 5). El post-proceso de `run_culinary_judge` los marca `certeza="dudosa"`: el juez emite
+y guarda los mismos hallazgos, no deciden `blocked` y el marcador estricto no los cuenta salvo `--con-dudosas` (con ellos en
+observación, el juez de la columna del 15-sep queda en tp 0 / fp 1 / fn 9). El criterio no se cambió al ver los datos, a
+propósito: lo que los datos dicen va a la recomendación.
+
+**Recomendación para C6** (firmada por el agente, 2026-09-15). (1) Producción ya corre el juez en `warn`
+(`prod_profile.py`, leído del `.env` del VPS el 2026-09-06): la fila C6 del plan —«nace off; promover a warn»— estaba
+desactualizada, y el paso que queda es `warn` → `block`. (2) **No pasar a `block` todavía.** Con la observación, `block`
+sólo actuaría sobre `combo_absurdo` y `slot_inapropiado` seguros (1 hallazgo en la columna del 15-sep); sin ella,
+bloquearía con precisión estricta 0 %. (3) La señal está en la sustancia (82,1 %): el camino es alinear el vocabulario, no
+silenciar al juez — llevar a la rúbrica, en el INSTRUMENTO, el mapa códigos↔clases que aquí vive como `SUSTANCIA_JUEZ`, y
+validarlo con un 2.º anotador. Entonces se re-mide y la lista de observación se vacía sola por el mismo criterio. (4) Lo que
+falta es del dueño: el 2.º anotador (C1) y la decisión del flip.
+
+Test: [`test_p1_plan_lote_63.py`](../tests/test_p1_plan_lote_63.py).
+
+
 ## El reparador de estructura: adaptar sin desmontar (CUL-P1-04 · `P1-PLAN-LOTE-29` · 2026-09-12)
 
 **Corrección primero.** El lote 28 dijo que el postfix del día degradado «introducía 21 hallazgos». Era el adaptador del

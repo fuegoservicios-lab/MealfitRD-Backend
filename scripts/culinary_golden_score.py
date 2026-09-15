@@ -15,6 +15,8 @@ juez, que es un LLM opinando sobre sí mismo.
         --comparar-maquina 2026-09-15 --json                 # [lote 60] antes/después del refresco: la línea base estricta
     python scripts/culinary_golden_score.py --estricto --anotaciones docs/culinary_golden_anotaciones_angelo.json \
         --desde 2026-09-15 --comparar-maquina 2026-09-15-lote62   # [lote 62] contra la línea base del lote 38
+    python scripts/culinary_golden_score.py --anotaciones docs/culinary_golden_anotaciones_angelo.json \
+        --juez-por-codigo maquina_juez_2026-09-15 [--observacion paso_incoherente,...]   # [lote 63] el juez por código
 
 ## Cómo se corrige el sesgo del muestreo
 
@@ -144,6 +146,26 @@ RUBRICA = {
 }
 SEVERIDADES = ("minor", "high")
 _CODIGOS_DET = {"V1", "V2", "V3", "V4", "V5", "V6", "V7a", "V7b", "V7c", "V7d", "V7e", "V7f", "V8a", "V8b", "V9"}
+
+#: [P1-PLAN-LOTE-63 · 2026-09-15] (lote 40 del plan · C5/C6) Lo que cada código del JUEZ puede describir además de su clase
+#: homónima, para la adjudicación «por sustancia»: el juez tiene 5 códigos y la rúbrica reparte los defectos de pasos y
+#: lista entre clases que asigna al determinista, así que dice `paso_incoherente` donde el dueño dice
+#: `cantidad_inconsistente` y la precisión estricta le da 0 por construcción. SÓLO en el marcador — el instrumento puede
+#: ser generoso, el juez no cambia de voz — y siempre con el filtro de alimento del adjudicador (el mismo alimento que el
+#: defecto del dueño: eso es lo que ata `slot_inapropiado` a «el arroz crudo que se incorpora»).
+#: tooltip-anchor: P1-PLAN-LOTE-63-SUSTANCIA
+SUSTANCIA_JUEZ = {
+    "paso_incoherente": {"cantidad_inconsistente", "usa_lo_que_no_esta", "ingrediente_huerfano", "seco_sin_coccion"},
+    "tecnica_impropia": {"seco_sin_coccion", "coccion_faltante", "verbo_alimento", "paso_incoherente"},
+    "nombre_no_corresponde": {"usa_lo_que_no_esta"},
+    "slot_inapropiado": {"seco_sin_coccion"},
+    "combo_absurdo": set(),
+}
+
+
+def rubrica_por_sustancia() -> dict:
+    """[P1-PLAN-LOTE-63] La RUBRICA con cada código del juez añadido a las clases que su sustancia describe."""
+    return {cl: set(cods) | {k for k, cls in SUSTANCIA_JUEZ.items() if cl in cls} for cl, cods in RUBRICA.items()}
 BOOTSTRAP_N = 1000
 BOOTSTRAP_SEMILLA = 20260912
 
@@ -349,15 +371,23 @@ def _codigo(texto: str) -> str:
 #: falso positivo ni como acierto salvo `--con-dudosas`. El estado incierto tiene que poder decirse sin pagar precisión.
 INCLUIR_DUDOSAS = False
 MARCA_DUDOSA = "[dudosa]"
+#: [P1-PLAN-LOTE-63] Códigos del juez que cuentan como `[dudosa]` aunque la columna no lo diga: simula
+#: `MEALFIT_CULINARY_JUDGE_OBSERVACION_CODES` sobre una columna escrita antes del post-proceso (`--observacion`).
+OBSERVACION: frozenset = frozenset()
 
 
-def _hallazgos_maquina(caso, clave) -> list:
+def _es_dudosa(texto: str, observacion=None) -> bool:
+    obs = OBSERVACION if observacion is None else observacion
+    return MARCA_DUDOSA in texto or _codigo(texto).replace(MARCA_DUDOSA, "").strip() in obs
+
+
+def _hallazgos_maquina(caso, clave, observacion=None) -> list:
     """Hallazgos de la máquina deduplicados (mismo texto = mismo hallazgo): los duplicados no multiplican TP.
-    Las `[dudosa]` del juez se excluyen salvo `INCLUIR_DUDOSAS`."""
+    Las `[dudosa]` del juez se excluyen salvo `INCLUIR_DUDOSAS`; también los códigos en observación (lote 63)."""
     vistos, out = set(), []
     for t in caso.get(clave) or []:
         k = str(t).strip()
-        if MARCA_DUDOSA in k and not INCLUIR_DUDOSAS:
+        if _es_dudosa(k, observacion) and not INCLUIR_DUDOSAS:
             continue
         if k and k not in vistos:
             vistos.add(k)
@@ -366,7 +396,7 @@ def _hallazgos_maquina(caso, clave) -> list:
 
 
 def contar_dudosas(d: dict, clave: str = "maquina_juez") -> int:
-    return sum(1 for c in (d.get("casos") or []) for t in (c.get(clave) or []) if MARCA_DUDOSA in str(t))
+    return sum(1 for c in (d.get("casos") or []) for t in (c.get(clave) or []) if _es_dudosa(str(t)))
 
 
 def excluir_casos(d: dict, ids) -> dict:
@@ -460,7 +490,7 @@ def _verdad_estricta(caso, externas: dict) -> dict:
 
 
 def _adjudicar_hallazgos(maquina: list, defectos: list, codigos_capa: set,
-                         vocabulario: set | None = None) -> tuple[int, int, int, list]:
+                         vocabulario: set | None = None, rubrica: dict | None = None) -> tuple[int, int, int, list]:
     """Emparejamiento hallazgo↔defecto, cada uno como mucho una vez. Devuelve (tp, fp, fn, detalle).
 
     [P1-PLAN-LOTE-60 · 2026-09-15] El `alimento` del defecto sólo restringe cuando el hallazgo NOMBRA algún alimento
@@ -473,7 +503,7 @@ def _adjudicar_hallazgos(maquina: list, defectos: list, codigos_capa: set,
     tp = 0
     detalle = []
     for df in defectos:
-        codigos = RUBRICA.get(df.get("clase"), set()) & codigos_capa
+        codigos = (rubrica or RUBRICA).get(df.get("clase"), set()) & codigos_capa   # [P1-PLAN-LOTE-63] o la «por sustancia»
         alimento = _palabras_de_alimento(df.get("alimento") or "")
         elegido, por = None, None
         for i, h in enumerate(maquina):
@@ -582,6 +612,61 @@ def puntuar_estricto(d: dict, externas: dict | None = None, columnas: dict | Non
     salida["promocion_habilitada"] = bool(salida["completo"] and estados.get("pendiente_adjudicacion", 0) == 0
                                           and (salida["acuerdo"] or {}).get("anotadores", 0) >= 2)
     return salida
+
+
+def tabla_juez_por_codigo(d: dict, externas: dict | None = None, columna: str = "maquina_juez",
+                          observacion=frozenset()) -> dict:
+    """[P1-PLAN-LOTE-63] El juez POR CÓDIGO contra la verdad estricta. Por código: `n` (hallazgos seguros), `dudosas` (las
+    de la columna más las de `observacion`), `tp`/`fp` con el adjudicador estricto y `sustancia` = aciertos con la rúbrica
+    por sustancia (`SUSTANCIA_JUEZ`, mismo alimento, emparejamiento 1:1 igual que el estricto)."""
+    externas = externas or {}
+    codigos = set().union(*[RUBRICA[k] for k in RUBRICA]) - _CODIGOS_DET
+    rub = rubrica_por_sustancia()
+    por = collections.defaultdict(collections.Counter)
+    for c in d.get("casos") or []:
+        v = _verdad_estricta(c, externas)
+        if v["estado"] != "completo" or (columna not in _COLUMNAS_BASE and columna not in c):
+            continue
+        for t in c.get(columna) or []:
+            if _es_dudosa(str(t), observacion):
+                por[_codigo(str(t)).replace(MARCA_DUDOSA, "").strip()]["dudosas"] += 1
+        seguras = _hallazgos_maquina(c, columna, observacion) if not INCLUIR_DUDOSAS else [
+            h for h in _hallazgos_maquina(c, columna, observacion) if not _es_dudosa(h["texto"], observacion)]
+        voc = vocabulario_de_comida(c)
+        for h in seguras:
+            por[h["codigo"]]["n"] += 1
+        for clave, rubrica in (("tp", None), ("sustancia", rub)):
+            r = rubrica or RUBRICA
+            defectos = [df for df in v["defectos"] if r.get(df.get("clase"), set()) & codigos]
+            _, _, _, det = _adjudicar_hallazgos(seguras, defectos, codigos, voc, rubrica=rubrica)
+            for x in det:
+                if x["resultado"] == "tp":
+                    por[_codigo(x["hallazgo"]).replace(MARCA_DUDOSA, "").strip()][clave] += 1
+    filas = {}
+    for cod in sorted(por, key=lambda k: (-por[k]["n"], k)):
+        x = por[cod]
+        filas[cod] = {"n": x["n"], "dudosas": x["dudosas"], "tp": x["tp"], "fp": x["n"] - x["tp"],
+                      "sustancia": x["sustancia"], "precision": _r(x["tp"], x["n"] - x["tp"]),
+                      "precision_sustancia": _r(x["sustancia"], x["n"] - x["sustancia"])}
+    tot = {k: sum(f[k] for f in filas.values()) for k in ("n", "dudosas", "tp", "fp", "sustancia")}
+    tot["precision"] = _r(tot["tp"], tot["fp"])
+    tot["precision_sustancia"] = _r(tot["sustancia"], tot["n"] - tot["sustancia"])
+    return {"columna": columna, "observacion": sorted(observacion), "codigos": filas, "total": tot}
+
+
+def codigos_en_observacion(tabla: dict, umbral: float = 25.0, n_min: int = 4) -> list:
+    """[P1-PLAN-LOTE-63] El criterio del plan: precisión ESTRICTA < `umbral` % con n ≥ `n_min`."""
+    return sorted(c for c, f in tabla["codigos"].items()
+                  if f["n"] >= n_min and (f["precision"] is None or f["precision"] < umbral))
+
+
+def render_juez_por_codigo(t: dict) -> str:
+    out = [f"[juez por código] columna {t['columna']} · observación {', '.join(t['observacion']) or '—'}",
+           "  código                    n  dudosas  tp  fp  sustancia   precisión estricta · por sustancia"]
+    for cod, f in list(t["codigos"].items()) + [("TOTAL", t["total"])]:
+        out.append(f"  {cod:24s} {f['n']:3d} {f['dudosas']:8d} {f['tp']:3d} {f['fp']:3d} {f['sustancia']:10d}   "
+                   f"{f['precision']} · {f['precision_sustancia']}")
+    return "\n".join(out)
 
 
 def acuerdo(d: dict, externas: dict | None = None) -> dict | None:
@@ -731,9 +816,13 @@ def main() -> int:
     ap.add_argument("--maquina", help="[P1-PLAN-LOTE-60] puntua con las columnas maquina_<capa>_<FECHA> del refresco")
     ap.add_argument("--comparar-maquina", help="[P1-PLAN-LOTE-60] con --estricto: antes (09-06) y despues (<FECHA>) a la vez")
     ap.add_argument("--desde", help="[P1-PLAN-LOTE-62] con --comparar-maquina: el ANTES es la columna de esta fecha, no la del 09-06")
+    ap.add_argument("--juez-por-codigo", metavar="COLUMNA", help="[P1-PLAN-LOTE-63] el juez por codigo (estricta y por sustancia)")
+    ap.add_argument("--observacion", default="", help="[P1-PLAN-LOTE-63] codigos del juez que cuentan como [dudosa] (simula el knob "
+                                                      "MEALFIT_CULINARY_JUDGE_OBSERVACION_CODES sobre una columna ya escrita)")
     a = ap.parse_args()
-    global INCLUIR_DUDOSAS
+    global INCLUIR_DUDOSAS, OBSERVACION
     INCLUIR_DUDOSAS = bool(a.con_dudosas)
+    OBSERVACION = frozenset(x.strip() for x in (a.observacion or "").split(",") if x.strip())
     if not GOLDEN.exists():
         print(f"no existe {GOLDEN.name}: crealo con scripts/culinary_golden_sample.py")
         return 1
@@ -746,6 +835,12 @@ def main() -> int:
               f"particiones k={part['k']} · planes por fold {part['planes_por_fold']} · cruzados {len(part['cruzados'])}")
         return 0 if not part["cruzados"] else 3
     columnas, notas = columnas_de(d, a.maquina)
+    if a.juez_por_codigo:
+        t = tabla_juez_por_codigo(d, cargar_anotaciones(a.anotaciones), a.juez_por_codigo, OBSERVACION)
+        t["en_observacion_por_el_criterio"] = codigos_en_observacion(t)
+        print(json.dumps(t, ensure_ascii=False, indent=2) if a.json
+              else render_juez_por_codigo(t) + f"\n  criterio del plan (estricta < 25 %, n >= 4): {t['en_observacion_por_el_criterio']}")
+        return 0
     if a.estricto and a.comparar_maquina:
         # [P1-PLAN-LOTE-60] la línea base estricta: el MISMO adjudicador sobre las columnas del 09-06 y las refrescadas
         ext = cargar_anotaciones(a.anotaciones)

@@ -230,7 +230,11 @@ _PROCESS_START_ISO = datetime.now(timezone.utc).isoformat()
 # paso cuece (o que un paso usa ya cocidos), V7c lee «crudo» y no da por cocida una legumbre seca con «cocina 3 minutos»,
 # y V5 mira la frase del alimento. Contra la línea base del lote 38: coccion_faltante 0/8 → 8/8, seco_sin_coccion
 # 3/11 → 11/11 y 0 hallazgos sobre los 9 `ok`. Todo warn; knob MEALFIT_CULINARY_V7F.
-_LAST_KNOWN_PFIX = "P1-PLAN-LOTE-62 · 2026-09-15"
+# [P1-PLAN-LOTE-63 · 2026-09-15] (lote 40 del plan 38-44) El juez por código: contra la anotación del dueño da 0 % de
+# precisión estricta y 82,1 % por sustancia (el mismo defecto, con otro código). `paso_incoherente`, `tecnica_impropia` y
+# `nombre_no_corresponde` pasan a observación (`MEALFIT_CULINARY_JUDGE_OBSERVACION_CODES`: `dudosa`, no bloquean) y el
+# marcador gana la tabla por código y el mapa por sustancia. Recomendación C6: no pasar a `block` todavía.
+_LAST_KNOWN_PFIX = "P1-PLAN-LOTE-63 · 2026-09-15"
 
 # [P1-SENTRY-SAMPLE-COST · 2026-05-12] Sentry sampling driven from env vars
 # con default seguro 0.1 (10%). Pre-fix tenía `traces_sample_rate=1.0` y

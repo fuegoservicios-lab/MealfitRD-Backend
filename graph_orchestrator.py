@@ -5324,6 +5324,35 @@ class CulinaryJudgeReport(BaseModel):
     violations: list[CulinaryViolation] = []
 
 
+# [P1-PLAN-LOTE-63 · 2026-09-15] (lote 40 del plan · C5/C6) Códigos del juez en OBSERVACIÓN: el post-proceso de
+# `run_culinary_judge` los marca `certeza="dudosa"`. Se siguen emitiendo y guardando igual (`_culinary_judge_history`),
+# pero no deciden `blocked` (sólo las `segura`, P1-PLAN-LOTE-28) y el marcador estricto no los cuenta salvo
+# `--con-dudosas`. Default medido: precisión estricta < 25 % con n ≥ 4 en la columna refrescada del lote 38 (tabla y
+# lectura por sustancia en `culinary_coherence.md`, «El juez por código»). "" = ninguno. Los 5 del schema, no otros.
+# tooltip-anchor: P1-PLAN-LOTE-63-OBSERVACION
+_CULINARY_JUDGE_TIPOS = ("combo_absurdo", "tecnica_impropia", "paso_incoherente", "slot_inapropiado", "nombre_no_corresponde")
+
+
+def _culinary_judge_observacion_codes(raw) -> frozenset:
+    """Los códigos de una lista separada por comas que existen en el schema del juez; el resto se ignora."""
+    return frozenset(x.strip() for x in str(raw or "").lower().split(",") if x.strip() in _CULINARY_JUDGE_TIPOS)
+
+
+CULINARY_JUDGE_OBSERVACION_CODES = _culinary_judge_observacion_codes(_env_str(
+    "MEALFIT_CULINARY_JUDGE_OBSERVACION_CODES", "paso_incoherente,tecnica_impropia,nombre_no_corresponde"))
+
+
+def _culinary_judge_observacion(report, codigos=None):
+    """Marca `certeza="dudosa"` en las violaciones cuyo `tipo` está en observación. No quita, no añade, no reescribe."""
+    codigos = CULINARY_JUDGE_OBSERVACION_CODES if codigos is None else codigos
+    if report is None or not codigos:
+        return report
+    for v in getattr(report, "violations", None) or []:
+        if getattr(v, "tipo", None) in codigos:
+            v.certeza = "dudosa"
+    return report
+
+
 _CULINARY_JUDGE_SLOT_LABELS = {"desayuno": "Desayuno", "almuerzo": "Almuerzo",
                                "cena": "Cena", "merienda": "Merienda"}
 
@@ -5692,7 +5721,8 @@ async def run_culinary_judge(plan: dict, country: str = "DO", form_data=None):
             HumanMessage(content=json.dumps({"meals": _meals, **_ctx_judge(form_data, country)}, ensure_ascii=False)),
         ]
         # [P1-CULINARY-JUDGE-RETRY] el exterior debe caber (1 + reintentos) intentos, o mata el reintento
-        return await asyncio.wait_for(_judge.ainvoke(_msg), timeout=CULINARY_JUDGE_TIMEOUT_S * (1 + CULINARY_JUDGE_MAX_RETRIES) + 5)
+        _rep = await asyncio.wait_for(_judge.ainvoke(_msg), timeout=CULINARY_JUDGE_TIMEOUT_S * (1 + CULINARY_JUDGE_MAX_RETRIES) + 5)
+        return _culinary_judge_observacion(_rep)   # [P1-PLAN-LOTE-63] los códigos en observación salen `dudosa`
     except Exception as _cj_e:
         logger.warning(
             f"⚖️ [P1-CULINARY-JUDGE] fail-open ({type(_cj_e).__name__}): el plan sigue su "

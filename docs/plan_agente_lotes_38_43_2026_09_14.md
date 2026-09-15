@@ -11,7 +11,7 @@ y se anota la discrepancia en el informe. El protocolo largo (entorno, gate, che
 |---|---|---|---|
 | 38 | C1 (cierre) · C0 | ✅ HECHO (`P1-PLAN-LOTE-60` · 2026-09-15): adjudicador arreglado, columnas de la máquina refrescadas, línea base ESTRICTA publicada — determinista 11/30/36 → 18/60/29 (tp/fp/fn; recall 23,4 → 38,3 %, precisión 26,8 → 23,1 %), juez 2/32/7 → 0/28/9. Ver la sección «Lote 38» | — |
 | 39 | C5 / CUL-P1-05 | ✅ HECHO (`P1-PLAN-LOTE-62` · 2026-09-15): V7f `coccion_faltante` 0/8 → 8/8, `seco_sin_coccion` 3/11 → 11/11 (V7c lee «crudo» y la cocción de 3 minutos), `usa_lo_que_no_esta` 1/9 → 2/9; 0 hallazgos sobre los 9 `ok`; ningún detector a bloqueo | 1 sesión |
-| 40 | C5 / C6 (parte medible) | Precisión del juez por código sobre la verdad humana; códigos con precisión baja pasan a observación; recomendación para el flip de C6 (que decide el dueño) | ½-1 sesión |
+| 40 | C5 / C6 (parte medible) | ✅ HECHO (`P1-PLAN-LOTE-63` · 2026-09-15): juez 0 % estricta y 82,1 % por sustancia (28 hallazgos de la columna del lote 38: errores de código, no de juicio); `paso_incoherente`, `tecnica_impropia` y `nombre_no_corresponde` en observación; recomendación C6: no pasar a `block` todavía | ½-1 sesión |
 | 41 | Tarea propuesta 13-sep | La tormenta de reintentos del catálogo con la base caída: caché negativa corta en `get_master_ingredients` y `catalog_capability` | ½ sesión |
 | 42 | E1 (operativo) | Retirar los worktrees viejos que estén limpios y ya mergeados; los demás, listados para el dueño (G4) | ¼ sesión |
 | 43 | B6 · E5 · D7 · B9 | Re-mediciones con FECHA: los tres scripts del lote 36 el **2026-10-10**; el embudo B9 a las 2 semanas del lanzamiento | ¼ sesión, en su fecha |
@@ -231,6 +231,16 @@ producción (C6); promoverlo es del dueño **cuando C1 haga interpretable el ver
 
 Doc `culinary_coherence.md` §C6 con la tabla por código y la recomendación firmada con fecha; knob registrado; el juez de producción
 emite los mismos hallazgos que antes, sólo cambia la marca de los códigos en observación.
+
+### Estado · ✅ HECHO (`P1-PLAN-LOTE-63` · 2026-09-15)
+
+Tabla por código, lectura uno a uno y recomendación en [`culinary_coherence.md`](culinary_coherence.md) §«El juez por
+código». Discrepancias con este plan, anotadas: (1) producción ya corre el juez en `warn` (`prod_profile.py`, VPS 09-06),
+no en `off`; (2) el 11,8 % medido al escribir el plan es hoy 5,9 % sobre la misma columna del 06-sep, porque el
+adjudicador del lote 38 exige el mismo alimento (y 0 % sobre la refrescada); (3) el test es `test_p1_plan_lote_63.py` y
+no `_40` (el enlace marker↔test exige el número del marker). Sin gasto de LLM: la observación se mide sobre la columna ya
+escrita (`--observacion`), porque re-juzgar cambiaría las quejas (16 de 69 comidas cambian entre dos corridas) y
+mezclaría dos efectos.
 
 ---
 

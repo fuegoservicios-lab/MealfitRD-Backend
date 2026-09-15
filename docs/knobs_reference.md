@@ -410,6 +410,12 @@ Los planes recientes (el día determinista y el revisor) cuentan sólo los plane
 |---|---|---|
 | `MEALFIT_CULINARY_V7F` | `True` | V7f `coccion_faltante` en la capa 1 del escáner culinario (`culinary_coherence._v7f_coccion_faltante`): víveres y proteínas animales que la lista no declara cocidos y ningún paso cuece, o que un paso usa ya cocidos. `warn` (`minor`, no reparable), un hallazgo por comida. `False` lo quita sin redeploy (0 hallazgos V7f; el resto del escáner, igual). El día determinista (`verifica_comida`) descarta al candidato con cualquier hallazgo: con la biblioteca encendida, V7f aparta 2 desayunos de 192 (el huevo revuelto sin paso que lo revuelva). |
 
+### El juez por código (C5/C6 · lote 40 del plan · `P1-PLAN-LOTE-63` · 2026-09-15)
+
+| Knob | Default | Efecto |
+|---|---|---|
+| `MEALFIT_CULINARY_JUDGE_OBSERVACION_CODES` | `paso_incoherente,tecnica_impropia,nombre_no_corresponde` | Códigos del juez culinario en OBSERVACIÓN: el post-proceso de `run_culinary_judge` les pone `certeza="dudosa"`. Se emiten y se guardan igual (`_culinary_judge_history`); no deciden `blocked` cuando `MEALFIT_CULINARY_JUDGE_GUARD=block` y el marcador estricto no los cuenta salvo `--con-dudosas`. Default medido: precisión estricta < 25 % con n ≥ 4 en la columna del lote 38 (los tres dan 0 % estricta y 60-100 % por sustancia; tabla en `culinary_coherence.md`, «El juez por código»). `""` = ninguno; lo que no sea uno de los 5 códigos del schema se ignora. |
+
 ## Cómo añadir un knob nuevo
 
 ```python
