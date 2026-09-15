@@ -222,7 +222,9 @@ def _veg_va_dentro(veg: str, pasos_norm: str) -> bool:
     """False si el vegetal sólo aparece en cláusulas de ensalada/acompañamiento («aliña el repollo», «sirve con»)."""
     cabeza = veg.split()[0]
     vistas = 0
-    for cl in re.split(r"[.;]", pasos_norm):
+    from culinary_coherence import clause_bounds        # [P1-PLAN-LOTE-52] la MISMA frontera: «0.5 taza» no parte la oración
+    for c_ini, c_fin in clause_bounds(pasos_norm):
+        cl = pasos_norm[c_ini:c_fin]
         if re.search(r"\b" + re.escape(cabeza), cl):
             vistas += 1
             if not _VEG_FUERA_RE.search(cl):

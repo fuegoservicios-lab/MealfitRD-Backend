@@ -1265,7 +1265,26 @@ biblioteca su paso va al emplatado («al lado») o después del último paso con
 línea de huevo entero de la compra cuando no se empareja por alimento. Tras un cambio de lata se quitan «escurridas» y
 «el líquido de la lata»; lo breve recibe un tiempo breve. Réplica de solo lectura sobre el plan entregado a059d7bb: en la cola del guardado el día 1 recupera 38 g de aguacate en el guacamole (tenía 5), 8 g de maní (5) y 7 g de mantequilla de maní (3), y pasa del 89 % al 92 % de sus kcal y del 71 % al 86 % de su grasa; los días 2 y 3 no cambian (el 2 ya está en su techo). La primera versión medía los gramos con el lector de la lista del contrato, que lee «57.2 g» como 2 g, y en la réplica «subió» la soya de la cena del día 3 de 57 a 18 g: ahora mide con el lector de la base y nunca baja.
 
-**Hallazgo aparte, sin tocar.** El lector de la lista del contrato (`recipe_contract._cantidades_lista`, V4) lee mal los
-decimales con punto: «57.2 g» → 2 g, «2.69 g» → 69 g, «57.37 g» → 37 g (con coma, bien). Las líneas de la compra llevan
-decimales con punto. Cambiarlo mueve todas las mediciones del contrato: va a otro lote, medido. Test:
+**Hallazgo aparte, cerrado en el lote 52.** El lector de la lista del contrato (`recipe_contract._cantidades_lista`, V4)
+leía mal los decimales con punto: «57.2 g» → 2 g, «2.69 g» → 69 g, «57.37 g» → 37 g (con coma, bien). Test:
 `tests/test_p1_plan_lote_49.py`.
+
+## El punto entre dos cifras no es un fin de oración (`P1-PLAN-LOTE-52` · 2026-09-15)
+
+**Qué pasaba.** El defecto no estaba en `recipe_contract`, sino en la frontera de oración que comparten el medidor y el
+reparador. `_SENTENCE_BOUNDARY_RE = [.;]` partía «0.23 g de Sal» en «0» | «23 g de sal», así que V4 y
+`_cantidades_lista` leían 23 g (×100 en los condimentos) y «57.2 g» como 2 g. `dish_structure._veg_va_dentro` partía
+con la misma expresión: «Sirve con 1.5 tazas de repollo rallado» metía el repollo dentro del plato. Y la plantilla «a la
+plancha» del cerrador se comía la frase sólo hasta el «2» de «2.5 min».
+
+**Qué cambia.** La frontera pasa a ser `(?<!\d)\.|\.(?!\d)|;`: el punto con una cifra a cada lado no parte, y «Añade 2.
+Luego…» sigue partiendo. `dish_structure` usa `clause_bounds` (la misma frontera, no una copia) y la plantilla de la
+plancha admite el decimal. Un test impide volver a escribir `r"[.;]"` pelado en un módulo de producción.
+
+**Medido** (solo lectura, sobre los 11 planes de los últimos 21 días). 69 de 172 comidas llevan alguna mención con
+decimal de punto: 21 de 1.388 líneas de `ingredients`, 100 de 1.394 de `ingredients_raw` y 3 de 712 pasos, casi todas de
+condimentos («0.23 g de Sal», «1.19 g de Ajo»). Con una frontera y con la otra, el scan da las MISMAS violaciones por
+código y el reparador el MISMO resultado en las 112 comidas vivas. Además, ningún paso entregado dice el número de detrás
+del punto. Hoy es inerte porque los pasos casi nunca citan gramos de un condimento, pero no lo será mañana:
+`formatear_cantidad` escribe los decimales con punto. El único camino donde sí mordió, la identidad del plato, ya medía
+con el lector de la base desde el lote 49. Test: `tests/test_p1_plan_lote_52.py`.

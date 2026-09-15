@@ -119,6 +119,31 @@ except Exception as _e_go_eager:  # pragma: no cover - depende del entorno
     print(f"[P1-CONFTEST-EAGER-GO] no se pudo pre-importar graph_orchestrator: "
           f"{type(_e_go_eager).__name__}: {_e_go_eager}", file=_sys_go.stderr)
 
+# [P1-PLAN-LOTE-52 · 2026-09-15] El MISMO patrón, extendido a los demás módulos del backend que algún test suplanta al
+# importarse. `graph_orchestrator` arrastra `db`, `db_core`, `db_facts`, `db_inventory`, `schemas` y `shopping_calculator`,
+# pero NO `agent`, `memory_manager`, `services`, `ai_helpers` ni `auth`. Con `test_p0_b_synthesis_per_user_circuit_breaker`
+# → `test_p1_plan_display_i18n` → `test_p1_plan_lote_15` en ese orden, el primero dejaba módulos VACÍOS con esos nombres
+# y los otros dos daban 15 fallos y 2 errores («cannot import name 'summarize_and_prune' from 'memory_manager' (unknown
+# location)»); cada uno pasaba solo. La suite completa no lo veía porque otro fichero cargaba antes los reales.
+# Esta tupla es el SSOT que vigila `test_p1_plan_lote_52`: todo módulo del backend que un test suplante al importarse
+# tiene que estar aquí. Coste medido: +1,4 s por sesión. Fail-open, como el bloque de arriba.
+_EAGER_BACKEND_MODULES = (
+    "graph_orchestrator", "db", "db_core", "db_facts", "db_inventory", "schemas", "shopping_calculator",
+    "agent", "memory_manager", "services", "ai_helpers", "auth",
+)
+# Y de terceros, lo que el backend importa y algún test suplanta al importarse. `cron_tasks` importa
+# `apscheduler.triggers.cron` a nivel de módulo, y 19 tests lo dejaban con `CronTrigger=object`. Con
+# `test_chunked_learning_propagation` delante, el cron zombie y el de reservas huérfanas daban `TypeError: object() takes
+# no arguments`. `supabase` y `langchain_google_genai` también se suplantan, pero el backend ya no los importa.
+_EAGER_THIRD_PARTY_MODULES = ("apscheduler.triggers.cron",)
+for _mod_eager in _EAGER_BACKEND_MODULES + _EAGER_THIRD_PARTY_MODULES:
+    try:
+        __import__(_mod_eager)
+    except Exception as _e_mod_eager:  # pragma: no cover - depende del entorno
+        import sys as _sys_mod_eager
+        print(f"[P1-PLAN-LOTE-52] no se pudo pre-importar {_mod_eager}: "
+              f"{type(_e_mod_eager).__name__}: {_e_mod_eager}", file=_sys_mod_eager.stderr)
+
 import ast
 import sys
 import uuid

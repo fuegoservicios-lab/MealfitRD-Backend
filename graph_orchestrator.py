@@ -13779,7 +13779,7 @@ def _sanitize_swapped_protein_steps(steps: list, new_disps: list) -> tuple:
                     break
                 # (b) plantilla de cocción heredada → re-derivar wording del SSOT para el nombre actual
                 _pat_ck = _re.compile(
-                    r"\bcocina\s+" + _re.escape(nd_s) + r"\s+a\s+la\s+plancha[^.!?]*[.!?]?",
+                    r"\bcocina\s+" + _re.escape(nd_s) + r"\s+a\s+la\s+plancha(?:[^.!?]|(?<=\d)\.(?=\d))*[.!?]?",
                     _re.IGNORECASE)
                 s2 = _pat_ck.sub(_closer_protein_step_text(nd_s, no_cook=False), s)
                 if s2 != s:

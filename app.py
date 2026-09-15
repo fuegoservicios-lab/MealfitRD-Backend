@@ -198,7 +198,11 @@ _PROCESS_START_ISO = datetime.now(timezone.utc).isoformat()
 # registré…»: el detector del diario tomaba el SUSTANTIVO «registro» por una afirmación, el nudge (ya visible) no decía
 # que la respuesta nueva sustituye a la anterior, y el texto final sumaba las dos pasadas y se comía el saludo. Detector
 # solo de formas perfectivas y fuera de preguntas; tras un nudge cuenta solo lo posterior; hilo nuevo sin el mensaje doble.
-_LAST_KNOWN_PFIX = "P1-PLAN-LOTE-51 · 2026-09-15"
+# [P1-PLAN-LOTE-52 · 2026-09-15] Dos defectos de medida: el punto entre dos cifras partía la oración (V4 y el reparador
+# leían «0.23 g de Sal» como 23 g y «57.2 g» como 2 g; inerte hoy en los 11 planes medidos, no mañana) y 20 tests legacy
+# dejaban módulos VACÍOS del backend al importarse (una batería dirigida daba 15 fallos y 2 errores): el conftest
+# pre-importa todo módulo del backend que un test suplante, y un test vigila que la lista no se quede corta.
+_LAST_KNOWN_PFIX = "P1-PLAN-LOTE-52 · 2026-09-15"
 
 # [P1-SENTRY-SAMPLE-COST · 2026-05-12] Sentry sampling driven from env vars
 # con default seguro 0.1 (10%). Pre-fix tenía `traces_sample_rate=1.0` y

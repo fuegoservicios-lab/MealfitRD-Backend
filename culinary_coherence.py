@@ -148,7 +148,14 @@ _RE_MONTAJE_STEP = re.compile(r"^\s*montaje\s*:", re.IGNORECASE)
 # ahora corre hasta la FRONTERA DE ORACIÓN (siguiente '.'/';' o fin del
 # paso): una frase adverbial de tiempo/fuego no es otra cláusula, así que no
 # debe cortar la ventana antes de tiempo.
-_SENTENCE_BOUNDARY_RE = re.compile(r"[.;]")
+#
+# [P1-PLAN-LOTE-52 · 2026-09-15] El punto ENTRE DOS CIFRAS es un decimal, no un fin de oración. Con `[.;]`, «0.23 g de
+# Sal» se partía en «0» | «23 g de sal» y V4 y el reparador leían 23 g (×100); «57.2 g» se leía como 2 g. La coma nunca
+# fue frontera: por eso «57,2 g» sí se leía bien. Medido sobre los 11 planes de los últimos 21 días: 69 de 172 comidas
+# tienen alguna mención así, y el scan y el reparador dan lo MISMO con una frontera y con otra. Hoy es inerte, porque los
+# pasos casi nunca citan gramos de un condimento, pero `formatear_cantidad` escribe los decimales con punto. «Añade 2.
+# Luego…» sigue partiendo: basta con que falte la cifra a un lado.
+_SENTENCE_BOUNDARY_RE = re.compile(r"(?<!\d)\.|\.(?!\d)|;")
 
 
 # [P1-CULINARY-CONTRACT-FP round 2 · 2026-08-01, FP-C] La ventana hasta
