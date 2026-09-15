@@ -88,6 +88,20 @@ vecinos, ahí está la caída.
 3. Antes de publicarlo a usuarios nuevos, `MEALFIT_PLAN_POLICY_MODE=enforce` global (Fase 3): el
    formulario promete franjas y bandas que el motor solo obedece en `enforce`.
 
+## El tiempo de cocina, en el panel (`P1-PLAN-LOTE-54` · 2026-09-15)
+
+**Qué pasaba.** El revisor ya medía cuántas comidas pasan del tiempo de cocina que el usuario marcó
+(`horizon._prep_time_issues`: código `prep_time_over_budget`, con `minutes` y `budget`, lista de hasta 10 en
+`_fidelity_report.issues`), pero el panel sólo leía `_fidelity_report.mode`. En las 5 pruebas del dueño del 14-sep, con
+«Nada» (unos 10 min por comida), el informe traía de 6 a 10 comidas por plan de hasta 70 min y la pantalla no lo decía.
+El armador no tiene con qué: la biblioteca DO tiene 2 de 63 almuerzos y 1 de 56 cenas de 10 min (lote 49).
+
+**Qué cambia.** `config/planPolicy.js` (`prepTimeFact`, `prepTimeCopy`) resume esas comidas: cuántas, el máximo de
+minutos y el presupuesto. El panel las cuenta como un ajuste más, con título «Tiempo de cocina», y remite a «Cambiar
+Plato». Con el tope del backend (10) dice «al menos 10»; con una sola, en singular. El distintivo dice «1 ajuste», no
+«1 ajustes». El contrato entre los dos repos (el código, los campos y el tope) lo vigila
+`tests/test_p1_plan_lote_54.py`; el render, `src/__tests__/PlanPolicyPanel.p1_lote_54.test.jsx`.
+
 ## Fuera de alcance (Fase 5+)
 
 Estados de proyección (`plan_jobs.shopping_projection`) en Dashboard/Nevera; edición de la política

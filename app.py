@@ -207,7 +207,10 @@ _PROCESS_START_ISO = datetime.now(timezone.utc).isoformat()
 # que duplicaba el texto y una causa inventada. Reglas de voz compartidas, personas sin caricatura, nudge que respeta
 # otras escrituras del turno y tiempo de cocina real. Escáneres: photo-scan con limitador y coste, botón solo con
 # visión real y nombre de plato de reemplazo legible. Método y antes/después: docs/coach_bateria_2026_09_15.md.
-_LAST_KNOWN_PFIX = "P1-PLAN-LOTE-53 · 2026-09-15"
+# [P1-PLAN-LOTE-54 · 2026-09-15] El panel «solicitaste / aplicamos / por qué» dice cuándo el plan pasa del tiempo de
+# cocina pedido: el revisor ya medía `prep_time_over_budget` (6 a 10 comidas por plan en las 5 pruebas del dueño con
+# «Nada», de hasta 70 min) y el panel sólo leía el modo. Cuenta como un ajuste, con la cifra real y «Cambiar Plato».
+_LAST_KNOWN_PFIX = "P1-PLAN-LOTE-54 · 2026-09-15"
 
 # [P1-SENTRY-SAMPLE-COST · 2026-05-12] Sentry sampling driven from env vars
 # con default seguro 0.1 (10%). Pre-fix tenía `traces_sample_rate=1.0` y
