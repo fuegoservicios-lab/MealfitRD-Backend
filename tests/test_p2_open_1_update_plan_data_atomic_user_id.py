@@ -316,6 +316,15 @@ _KNOWN_CALLERS_BY_FILE: set[str] = {
     # `user_id=user_id` al helper, así que el `SELECT … FOR UPDATE` y el `UPDATE`
     # llevan el filtro. Defensa en profundidad, no confianza en el llamante.
     "backend/plan_display_i18n.py",
+    # [P1-CHAT-TOOLS-AUDIT · registrado 2026-09-14 tras el rojo del deploy-gate]
+    # restock_cycle.py 1 sitio documentado:
+    #   - mark_plan_restocked → _mutator (las 3 claves que `/restock` posee)
+    # Su único llamador es `tools.mark_shopping_list_purchased`: `user_id` llega
+    # force-overrideado por `execute_tools` (P0-AGENT-1) y el plan sale de
+    # `get_latest_usable_meal_plan_with_id(user_id)`, que filtra por ese user_id —
+    # la misma cadena que el sitio de `tools.py` de arriba. Pasa `user_id=user_id`
+    # al helper, así que el `SELECT … FOR UPDATE` y el `UPDATE` llevan el filtro.
+    "backend/restock_cycle.py",
 }
 
 

@@ -225,6 +225,26 @@ def test_botar_con_cantidad_descuenta_solo_esa_cantidad_sin_ledger(nevera):
     assert "se eliminaron 1" in out, out
 
 
+def test_botar_encuentra_la_fila_aunque_el_catalogo_canonice_el_nombre(nevera, monkeypatch):
+    """Con el catálogo real cargado `_parse_quantity("arroz")` devuelve «Arroz blanco»: la tool
+    buscaba ESE nombre y no encontraba la fila «Arroz» (rojo del gate, verde sin catálogo). Se
+    simula la canonización para que el caso falle en CUALQUIER entorno."""
+    import shopping_calculator
+    real = shopping_calculator._parse_quantity
+
+    def _canoniza(item):
+        q, u, n = real(item)
+        return q, u, ("Arroz blanco" if str(n).strip().lower() == "arroz" else n)
+
+    monkeypatch.setattr(shopping_calculator, "_parse_quantity", _canoniza)
+    nevera["rows"] = [{"id": "a1", "ingredient_name": "Arroz", "quantity": 2.0, "unit": "lb"}]
+    out = _nevera(items_to_remove=["arroz"])
+    assert nevera["deletes"] == ["a1"], out
+    nevera["rows"] = [{"id": "a2", "ingredient_name": "Arroz", "quantity": 1000.0, "unit": "g"}]
+    _nevera(items_to_remove=["200 g de arroz"])
+    assert ("Arroz", -200.0, "g", "discard") in nevera["adds"], nevera["adds"]
+
+
 def test_botar_algo_que_no_esta_no_cuenta_como_eliminado(nevera):
     out = _nevera(items_to_remove=["caviar"])
     assert "se eliminaron" not in out, f"contó como eliminado algo ausente: {out!r}"

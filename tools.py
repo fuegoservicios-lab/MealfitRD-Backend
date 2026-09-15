@@ -3738,6 +3738,22 @@ def modify_pantry_inventory(user_id: str, items_to_add: list[str] = None, items_
                 _q, _u, _n = 0.0, "", str(item)
             return float(_q or 0), _u, str(_n or item).strip()
 
+        # [P1-CHAT-TOOLS-AUDIT · 2026-09-14] `_parse_quantity` CANONIZA contra el catálogo:
+        # «arroz» → «Arroz blanco». Buscar SOLO ese nombre no encontraba la fila «Arroz» ni
+        # «Arroz integral» (visto en el gate con el catálogo real cargado; sin catálogo pasaba).
+        # Si el canónico no casa, se reintenta con lo que dijo el usuario, sin la cantidad —
+        # siempre por el SSOT, jamás por subcadena.
+        _RE_CANTIDAD_PREFIJO = re.compile(r"^\s*[\d.,/½¼¾]+\s*[a-záéíóúñ.]*\s+(?:de\s+)?", re.IGNORECASE)
+
+        def _filas_para(item, canonico: str, snapshot: list):
+            rows, lvl = find_pantry_rows_for_name(user_id, canonico, prefetched_rows=snapshot)
+            if rows:
+                return rows, lvl
+            crudo = _RE_CANTIDAD_PREFIJO.sub("", str(item)).strip()
+            if crudo and crudo.lower() != canonico.lower():
+                return find_pantry_rows_for_name(user_id, crudo, prefetched_rows=snapshot)
+            return rows, lvl
+
         def _borrar_filas(rows) -> list:
             """DELETE por id con `AND user_id` (I2); devuelve los ids que la base CONFIRMÓ borrados."""
             borrados = []
@@ -3778,7 +3794,7 @@ def modify_pantry_inventory(user_id: str, items_to_add: list[str] = None, items_
             now_iso = _dt.now(_tz.utc).isoformat()
             for item in items_to_deplete:
                 _q, _u, lookup = _nombre_pedido(item)
-                rows, _lvl = find_pantry_rows_for_name(user_id, lookup, prefetched_rows=_snapshot)
+                rows, _lvl = _filas_para(item, lookup, _snapshot)
                 if not rows:
                     logger.info(f"🪫 [P3-AGENT-DEPLETE] '{item}' no está en la Nevera — no se toca nada.")
                     no_encontrados.append(str(item))
@@ -3826,7 +3842,7 @@ def modify_pantry_inventory(user_id: str, items_to_add: list[str] = None, items_
             # de arroz, se dañó») se resta esa cantidad. En ningún caso va al ledger de consumo.
             for item in items_to_remove:
                 qty, unit, lookup = _nombre_pedido(item)
-                rows, _lvl = find_pantry_rows_for_name(user_id, lookup, prefetched_rows=_snapshot)
+                rows, _lvl = _filas_para(item, lookup, _snapshot)
                 if not rows:
                     no_encontrados.append(str(item))
                     continue
