@@ -194,7 +194,11 @@ _PROCESS_START_ISO = datetime.now(timezone.utc).isoformat()
 # formulario recortaba, tool_calls huérfanos que inutilizaban la sesión, hechos clínicos perdidos o retirados por
 # una preferencia, Nevera por subcadena («sal»⊂Salami), compra por chat sin marcar el plan, sesiones y checkpoints
 # sin dueño que sobrevivían al borrado de la cuenta, y el frontend colgado en «escribiendo».
-_LAST_KNOWN_PFIX = "P1-PLAN-LOTE-50 · 2026-09-14"
+# [P1-PLAN-LOTE-51 · 2026-09-15] = [P1-DIARY-CLAIM-PERFECTIVE] El dueño dijo «hola» y el coach contestó «Aclarado: no
+# registré…»: el detector del diario tomaba el SUSTANTIVO «registro» por una afirmación, el nudge (ya visible) no decía
+# que la respuesta nueva sustituye a la anterior, y el texto final sumaba las dos pasadas y se comía el saludo. Detector
+# solo de formas perfectivas y fuera de preguntas; tras un nudge cuenta solo lo posterior; hilo nuevo sin el mensaje doble.
+_LAST_KNOWN_PFIX = "P1-PLAN-LOTE-51 · 2026-09-15"
 
 # [P1-SENTRY-SAMPLE-COST · 2026-05-12] Sentry sampling driven from env vars
 # con default seguro 0.1 (10%). Pre-fix tenía `traces_sample_rate=1.0` y
