@@ -10,8 +10,8 @@ los 9 `ok`. Aquí:
     comer, acusa lo que un paso usa ya cocido, da UN hallazgo por comida y el knob apagado lo quita;
 (b) V7c amplía la FORMA, no la severidad: «crudo» como «seco» (el plato mínimo del plan: arroz crudo + «incorpora»), y
     «cocina 3 minutos» no cuece una legumbre seca;
-(c) V5 mira la frase del alimento, no ±28 caracteres que cruzan a la vecina, y el sofrito que hace la receta no falta en
-    la lista;
+(c) V5 mira la frase del alimento, no ±28 caracteres que cruzan a la vecina, y lo que la receta HACE (el sofrito que
+    sofríe, el adobo que mezcla) no falta en la lista; los cinco buenos del golden, sin hallazgos también sin base;
 (d) el instrumento: la RUBRICA trae V7f, `--desde` compara con la línea base del lote 38 y la capa que no se re-corrió cae
     a esa misma columna; el escáner de hoy sostiene las cifras sobre los casos del dueño;
 (e) docs, knob documentado y marker ≥ 62.
@@ -48,6 +48,10 @@ _CAT = [
     {"name": "Cebolla", "aliases": ["cebollas"], "category": "Vegetales", "ready_to_eat": False, "prep_methods": ["crudo", "sofrito"]},
     {"name": "Tomate", "aliases": ["tomates"], "category": "Vegetales", "ready_to_eat": True, "prep_methods": ["crudo"]},
     {"name": "Sofrito", "aliases": [], "category": "Condimentos", "ready_to_eat": True, "prep_methods": ["ninguno"]},
+    {"name": "Adobo", "aliases": ["adobo seco"], "category": "Despensa", "ready_to_eat": True, "prep_methods": ["ninguno"]},
+    {"name": "Aceite de oliva", "aliases": [], "category": "Grasas", "ready_to_eat": True, "prep_methods": ["ninguno"]},
+    {"name": "Ajo", "aliases": ["ajos"], "category": "Vegetales", "ready_to_eat": False, "prep_methods": ["crudo", "sofrito"]},
+    {"name": "Naranja", "aliases": ["naranjas"], "category": "Frutas", "ready_to_eat": True, "prep_methods": ["crudo"]},
 ]
 _INDEX = cc.build_culinary_index(_CAT)
 
@@ -186,6 +190,26 @@ def test_v5_el_sofrito_que_hace_la_receta_no_falta():
     # sin «sofríe» en los pasos, el sofrito sí es un alimento que la lista no trae
     pasos = ["Calienta la cebolla 3 minutos; agrega el sofrito y el arroz, y hiérvelo 18 minutos."]
     assert [v for v in _v5(ings, pasos) if "sofrito" in cc._norm(v["food"])]
+
+
+def test_v5_el_adobo_que_la_receta_mezcla_no_falta():
+    # la forma del fixture bueno golden_02, que el gate cazó: el paso 1 mezcla, el paso 2 unta «con el adobo»
+    ings = ["160 g de pechuga de pollo", "6 g de aceite de oliva", "5 g de ajo", "10 g de naranja", "12 g de cebolla"]
+    pasos = ["Mezcla el aceite de oliva con el ajo y la naranja.",
+             "Unta la pechuga de pollo con el adobo y añade la cebolla en rodajas."]
+    assert not [v for v in _v5(ings, pasos) if "adobo" in cc._norm(v["food"])]
+    # sin el paso que lo mezcla, el adobo es un producto de despensa que la lista no trae
+    assert [v for v in _v5(ings, pasos[1:]) if "adobo" in cc._norm(v["food"])]
+
+
+def test_los_cinco_buenos_del_golden_sin_hallazgos_tambien_sin_base():
+    # `test_p1_culinary_golden` los mide con el catálogo de la BASE y sin ella se salta (así se escapó golden_02 del
+    # worktree): aquí, con el del corpus fijo, que tiene la misma huella que el vivo.
+    cat = json.loads(_CORPUS.read_text(encoding="utf-8"))["catalogo_filas"]
+    fx = _BACKEND / "tests" / "fixtures" / "culinary_golden"
+    for i in range(1, 6):
+        plan = json.loads((fx / f"golden_{i:02d}_bueno.json").read_text(encoding="utf-8"))
+        assert not cc.culinary_contract_scan(plan, cat), f"golden_{i:02d}_bueno"
 
 
 # ─────────────────────────────── (d) el instrumento

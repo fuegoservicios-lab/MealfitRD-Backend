@@ -1058,7 +1058,8 @@ toque de sartén de 3-4 minutos que no cuece una yuca ni unas lentejas, y «crud
   y cruzaba a la frase vecina: «lava los arándanos; separa las almendras fileteadas» daba las almendras por declaradas
   porque los arándanos sí están en la lista, y «125 ml de leche y 1 cucharada de…» encontraba «cucharada». Ahora va de la
   última coma o conjunción antes del alimento a la primera después, sin unidades de medida. Además, un hallazgo por
-  alimento y comida, y el sofrito que la receta HACE («sofríe la cebolla…») no falta.
+  alimento y comida, y lo que la receta HACE con lo que la lista trae no falta: el sofrito si un paso sofríe (el verbo,
+  no la palabra «sofrito»), el adobo si antes de usarlo una frase mezcla dos o más de sus alimentos.
 
 **Resultado.** Estricto, anotación del dueño, 75 casos adjudicables; `culinary_golden_score.py --estricto --desde
 2026-09-15 --comparar-maquina 2026-09-15-lote62`. La columna nueva la escribió `culinary_golden_refresh.py` con el
@@ -1092,8 +1093,13 @@ de rechazar 23 a 25 de 192 platos: esos dos desayunos, hasta que su receta diga 
 su default (apagado) no se sirve ninguna receta de la biblioteca y nada cambia. Añadir el paso toca la redacción que el
 dueño juzgó a ciegas: propuesto, no aplicado.
 
-**Corpus fijo.** Cambian las reglas (`8f19140121f98a95` → `6ff0a9de99a70902`) y no las cifras por comida (44 de 64 con
+**Corpus fijo.** Cambian las reglas (`8f19140121f98a95` → `5b2a479ef69aef85`) y no las cifras por comida (44 de 64 con
 hallazgo determinista, +0); re-congelado con `culinary_baseline.py --congelar`.
+
+**Lo que cazó el gate.** Con la ventana nueva, el fixture BUENO `golden_02` («mezcla el aceite con el ajo, la naranja…»
+→ «unta la pechuga con el adobo») salía como adobo que falta en la lista. `test_p1_culinary_golden` sólo corre con el
+catálogo de la base y en el worktree se saltaba. Arreglado en el escáner (el adobo que la receta mezcla), jamás en el
+fixture; y los cinco buenos se miden ahora también con el catálogo del corpus, sin base.
 
 **Lo que NO hace.** No re-corre el juez (cero gasto) ni toca su mapa de códigos (lote 40). La regla «lo que el nombre del
 plato declara no es un fantasma» sigue callando unos 4 de los 9 `usa_lo_que_no_esta` del dueño: es política, medida y no

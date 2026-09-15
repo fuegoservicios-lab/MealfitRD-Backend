@@ -107,7 +107,7 @@
       },
       "hallazgos": 102,
       "casos_con_hallazgo": 56,
-      "reglas_huella": "6ff0a9de99a70902",
+      "reglas_huella": "5b2a479ef69aef85",
       "no_aplica": [
         "recipe_usage (cuentas exactas de V3/V6/V7a/V7e): el caso no guarda la asignación de receta de biblioteca",
         "V8b (equipo): el caso no guarda el formulario, así que no hay equipo declarado"
@@ -117,8 +117,8 @@
         "filas": 349,
         "huella": "1f4f95b33a191dfe"
       },
-      "commit": "909d5cb7+cambios_sin_commit",
-      "generado_at": "2026-09-15T20:52:45+00:00"
+      "commit": "91598d2c+cambios_sin_commit",
+      "generado_at": "2026-09-15T21:50:29+00:00"
     }
   ],
   "casos": [

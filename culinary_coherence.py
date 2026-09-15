@@ -1070,8 +1070,26 @@ def _v5_paso_mas_especifico(pnorm: str, pos: int, crudo_norm: str) -> bool:
 #: [P1-PLAN-LOTE-62] Dónde termina la frase de un alimento: puntuación o una conjunción/preposición que lo separa del
 #: vecino («los arándanos y las almendras»). Y las unidades, que están en toda lista y no nombran nada.
 _V5_FRASE_CORTE = re.compile(r"[,;:.()]|\s(?:y|e|o|u|con|sobre|encima|junto)\s")
-#: [P1-PLAN-LOTE-62] El VERBO sofreír (sofríe, sofreír, sofriendo…) y no el sustantivo: «agrega el sofrito» no lo hace.
+#: [P1-PLAN-LOTE-62] Preparaciones que la receta HACE con lo que la lista sí trae. El catálogo tiene las dos como producto
+#: de despensa («Adobo», «Sofrito») y V5 las acusaba como compra que falta: el sofrito, si algún paso sofríe (el VERBO, no
+#: el sustantivo: «agrega el sofrito» no lo hace); el adobo, si antes de usarlo una frase mezcla dos o más alimentos de la
+#: lista («mezcla el aceite con el ajo, la naranja…» → «unta la pechuga con el adobo»: el fixture bueno golden_02).
+_V5_PREPARACIONES = frozenset({"sofrito", "adobo"})
 _V5_SOFREIR_RE = re.compile(r"\bsofr[ie](?!tos?\b)")
+_V5_MEZCLA_RE = re.compile(r"\b(mezcl|combin|licu|machac|maj[ae]|adob[ae])")
+
+
+def _v5_receta_la_hace(food: str, pasos: list, antes_norm: str, lista: set, index: dict) -> bool:
+    """[P1-PLAN-LOTE-62] ¿La receta HACE esta preparación con lo que la lista trae? Ver `_V5_PREPARACIONES`."""
+    if food == "sofrito":
+        return bool(_V5_SOFREIR_RE.search(_norm(" ".join(pasos))))
+    for frase in re.split(r"[.;]", antes_norm):
+        if not _V5_MEZCLA_RE.search(frase):
+            continue
+        propios = {f for f in _v5_resueltos(frase, index) if any(f in l or l in f for l in lista)}
+        if len(propios) >= 2:
+            return True
+    return False
 _V5_UNIDADES = frozenset({"cucharada", "cucharadas", "cucharadita", "cucharaditas", "tazas", "gramos", "litros",
                           "mililitros", "onzas", "libras", "unidades", "rebanada", "rebanadas", "lonjas", "pedazo",
                           "pedazos", "dientes", "ramitas", "pizca", "porcion", "porciones", "mediano", "mediana",
@@ -1094,7 +1112,7 @@ def _v5_paso_usa_lo_que_no_esta(day, meal, index) -> list:
         crudo = _norm(" | ".join(ings) + " | " + str(meal.get("name") or ""))
 
         acusados = set()                           # [P1-PLAN-LOTE-62] una acusación por alimento y comida
-        for paso in pasos:
+        for i_paso, paso in enumerate(pasos):
             if _V5_NOTA.search(paso) or _V5_NEGACION.search(paso):
                 continue
             pnorm = _norm(paso)
@@ -1103,8 +1121,6 @@ def _v5_paso_usa_lo_que_no_esta(day, meal, index) -> list:
                     continue                       # el mismo alimento con otro alias
                 if any(rx.search(food) for rx in _CONDIMENT_EXEMPT_RES):
                     continue                       # condimentos: reusa CONDIMENT_EXEMPT
-                if food == "sofrito" and _V5_SOFREIR_RE.search(_norm(" ".join(pasos))):
-                    continue                       # [P1-PLAN-LOTE-62] el sofrito lo HACE la receta («sofríe la cebolla…»)
                 cabeza = (_v5_mas_especifico(food) or [""])[0]
                 if not cabeza:
                     continue
@@ -1117,6 +1133,9 @@ def _v5_paso_usa_lo_que_no_esta(day, meal, index) -> list:
                     continue                       # «chuleta de cerdo» cuando la lista dice «chuleta»
                 if not _V5_ENTRADA.search(pnorm[max(0, m.start() - 60):m.start()]):
                     continue                       # la receta lo PRODUCE, no lo consume
+                if food in _V5_PREPARACIONES and _v5_receta_la_hace(
+                        food, pasos, " ".join(_norm(p) for p in pasos[:i_paso]) + " ; " + pnorm[:m.start()], lista, index):
+                    continue                       # [P1-PLAN-LOTE-62] la preparación la HACE la receta (sofrito, adobo)
                 if food in acusados:
                     continue                       # «los pasos 1 y 3 piden almendras» es UN defecto, no dos
                 acusados.add(food)
