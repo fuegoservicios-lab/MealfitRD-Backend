@@ -388,34 +388,28 @@ def get_avg_meal_hour(user_id: str, meal_type: str, days_back: int = 14) -> Opti
         logger.error(f"Error calculando avg_meal_hour para {meal_type}: {e}")
         return None
 
-def acquire_fact_lock(user_id: str) -> bool:
-    """Intenta adquirir el bloqueo para extracción de hechos. Retorna True si lo logra, False si ya está bloqueado."""
+def acquire_fact_lock(user_id: str):
+    """Intenta adquirir el bloqueo para extracción de hechos.
+
+    [P1-CHAT-FACTS-AUDIT · 2026-09-14] Devuelve el TOKEN del propietario (el
+    `fact_locked_at` que escribió; truthy) si lo logra, o `False` si ya está
+    bloqueado. Pasa ese token a `release_fact_lock(user_id, token)` para liberar
+    SOLO tu lock. Además la adquisición es UN UPDATE condicional: antes era SELECT +
+    UPDATE y dos extracciones concurrentes podían «adquirirlo» ambas entre medias.
+    Un lock de más de 5 minutos se considera abandonado (proceso muerto)."""
     if not connection_pool: return True
     try:
         from datetime import datetime, timedelta, timezone
         now = datetime.now(timezone.utc)
-
-        # Verificar estado actual en user_profiles.
-        # [P1-NEON-DB-MIGRATION · 2026-06-12] psycopg devuelve timestamptz como
-        # datetime tz-aware — desaparece el parse manual del string ISO de PostgREST.
-        res = execute_sql_query(
-            "SELECT fact_locked_at FROM user_profiles WHERE id = %s",
-            (user_id,),
-            fetch_one=True,
-        )
-        if res:
-            locked_at = res.get("fact_locked_at")
-            if locked_at and (now - locked_at) < timedelta(minutes=5):
-                return False
-
-        # Intentar establecer el timestamp (RETURNING preserva el contrato
-        # "True solo si una fila fue actualizada" del `.data` de PostgREST).
+        # [P1-NEON-DB-MIGRATION · 2026-06-12] psycopg maneja timestamptz tz-aware.
+        # RETURNING preserva el contrato «adquirido solo si una fila fue actualizada».
         updated = execute_sql_write(
-            "UPDATE user_profiles SET fact_locked_at = %s WHERE id = %s RETURNING id",
-            (now, user_id),
+            "UPDATE user_profiles SET fact_locked_at = %s WHERE id = %s "
+            "AND (fact_locked_at IS NULL OR fact_locked_at < %s) RETURNING id",
+            (now, user_id, now - timedelta(minutes=5)),
             returning=True,
         )
-        return bool(updated)
+        return now if updated else False
     except Exception as e:
         # [P3-PROD-AUDIT-3 · 2026-05-30] Fail-CLOSED (return False), no fail-open.
         # ANTES un error de DB hacía `return True` ("lock adquirido") → dos
@@ -427,14 +421,27 @@ def acquire_fact_lock(user_id: str) -> bool:
         logger.error(f"Error acquiring fact lock: {e}")
         return False
 
-def release_fact_lock(user_id: str):
-    """Libera el bloqueo de extracción de hechos."""
+def release_fact_lock(user_id: str, token=None):
+    """Libera el bloqueo de extracción de hechos.
+
+    [P1-CHAT-FACTS-AUDIT · 2026-09-14] Con `token` (lo que devolvió
+    `acquire_fact_lock`) solo libera si el lock sigue siendo TUYO
+    (`fact_locked_at = token`): una extracción lenta cuyo lock ya expiró no le quita
+    el lock a la que lo tomó después. Sin token (llamador legado, p.ej. dreaming) se
+    conserva la liberación incondicional."""
     if not connection_pool: return
     try:
-        execute_sql_write(
-            "UPDATE user_profiles SET fact_locked_at = NULL WHERE id = %s",
-            (user_id,),
-        )
+        if token is not None and not isinstance(token, bool):
+            execute_sql_write(
+                "UPDATE user_profiles SET fact_locked_at = NULL "
+                "WHERE id = %s AND fact_locked_at = %s",
+                (user_id, token),
+            )
+        else:
+            execute_sql_write(
+                "UPDATE user_profiles SET fact_locked_at = NULL WHERE id = %s",
+                (user_id,),
+            )
     except Exception as e:
         logger.error(f"Error releasing fact lock: {e}")
 
@@ -445,7 +452,11 @@ def save_user_fact(user_id: str, fact: str, embedding: list, metadata: Optional[
         # [P1-NEON-DB-MIGRATION · 2026-06-12] embedding list → literal pgvector
         # '[0.1,0.2,...]' con cast explícito ::vector. Metadata omitido cae al
         # default '{}'::jsonb de la columna (paridad con el INSERT PostgREST).
-        emb_str = f"[{','.join(map(str, embedding))}]"
+        # [P1-CHAT-FACTS-AUDIT · 2026-09-14] Sin embedding (Cohere caído o sin key)
+        # se guarda con `embedding` NULL — mismo contrato que
+        # `dreaming._insert_canonical_fact`. Antes `[]` producía el literal `'[]'`,
+        # que el cast a vector rechaza, y el hecho se perdía.
+        emb_str = f"[{','.join(map(str, embedding))}]" if embedding else None
         res = execute_sql_write(
             "INSERT INTO user_facts (user_id, fact, embedding, metadata) "
             "VALUES (%s, %s, %s::extensions.vector, %s) RETURNING id",
@@ -596,28 +607,29 @@ def search_user_facts_hybrid(user_id: str, query_embedding: list, filter_metadat
         logger.error(f"Error en búsqueda híbrida vectorial (metadatos): {e}")
         return []
 
-def delete_user_fact(fact_id: str):
-    """Hace un soft delete cambiando is_active a False"""
-    if not connection_pool: return None
-    try:
-        # Extraer user_id antes de borrar para invalidar su caché
-        # (::text — el prefijo `rag_<user_id>_` de la caché espera string)
-        res_user = execute_sql_query(
-            "SELECT user_id::text AS user_id FROM user_facts WHERE id = %s",
-            (fact_id,),
-            fetch_one=True,
-        )
-        user_id = res_user["user_id"] if res_user else None
+def delete_user_fact(fact_id: str, user_id: str):
+    """Soft delete (is_active = FALSE) de UN hecho del usuario.
 
+    [P1-CHAT-FACTS-AUDIT · 2026-09-14] Invariante I2: la mutación filtra
+    `AND user_id = %s`. Antes borraba por id a secas y el pipeline de hechos le
+    pasaba ids propuestos por un LLM: un id de otra cuenta que se colara se
+    desactivaba. `user_id` es obligatorio; sin él no se toca nada."""
+    if not connection_pool: return None
+    if not user_id:
+        logger.error("[P1-CHAT-FACTS-AUDIT] delete_user_fact sin user_id — rechazado (I2).")
+        return None
+    try:
         # En lugar de DELETE, soft delete via UPDATE
         res = execute_sql_write(
-            "UPDATE user_facts SET is_active = FALSE WHERE id = %s RETURNING id",
-            (fact_id,),
+            "UPDATE user_facts SET is_active = FALSE "
+            "WHERE id = %s AND user_id = %s RETURNING id",
+            (fact_id, user_id),
             returning=True,
         )
 
-        if user_id:
-            _invalidate_rag_cache(user_id)
+        if res:
+            # (str — el prefijo `rag_<user_id>_` de la caché espera string)
+            _invalidate_rag_cache(str(user_id))
 
         return res
     except Exception as e:

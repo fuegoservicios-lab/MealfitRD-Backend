@@ -51274,7 +51274,11 @@ async def arun_plan_pipeline(form_data: dict, history: list = None, taste_profil
             # P1-3: aget (no get) — el call site está dentro de arun_plan_pipeline
             # async; .get síncrono bloqueaba el event loop esperando Redis (típicamente
             # 5-50ms, pero acumulativo si Redis está lento o caído con DB fallback).
-            rag_cache_key = f"rag_{user_id}_{dynamic_query}"
+            # [P2-RAG-KEY-NO-PII · 2026-09-14] La consulta dinámica lleva el perfil de salud
+            # en texto plano («Objetivo… Alergias… Condiciones…») y acababa en el NOMBRE de
+            # la clave de `app_kv_store`. Se hashea: misma semántica de caché y el prefijo
+            # `rag_{user_id}_` que borra `db_facts._invalidate_rag_cache` no cambia.
+            rag_cache_key = f"rag_{user_id}_{hashlib.sha256(str(dynamic_query).encode('utf-8')).hexdigest()[:16]}"
             cached_rag = await _LLM_CACHE.aget(rag_cache_key)
             if cached_rag is not None:
                 logger.info(f"⚡ [CACHE HIT] Reutilizando contexto RAG para la misma query dinámica.")

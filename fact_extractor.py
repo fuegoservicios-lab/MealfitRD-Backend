@@ -4,6 +4,7 @@ import logging
 import hashlib
 import threading
 import time as _time_module
+from datetime import datetime, timedelta, timezone
 from typing import Any, Callable
 from cache_manager import centralized_cache
 # [P0-LLM-PROVIDER-MIGRATION · 2026-06-12] Gemini → GLM (router por tier en
@@ -237,6 +238,48 @@ def _diff_contradiction_result(pro_result: Any, flash_result: Any) -> dict:
     }
 
 
+# [P1-CHAT-FACTS-AUDIT · 2026-09-14] Observabilidad del gasto LLM del extractor.
+# Antes ni el router (`should_extract_facts`) ni el extractor ni el batch de
+# contradicciones escribían en `llm_usage_events`: el coste del coach en segundo
+# plano era invisible. Best-effort: un fallo de telemetría jamás tumba la extracción.
+# Import diferido: los tests que stubbean `db` sin esta función importan este módulo.
+def _log_fact_llm_usage(raw: Any, *, model: str, node: str, user_id: Optional[str]) -> None:
+    try:
+        usage = getattr(raw, "usage_metadata", None) or {}
+        if not isinstance(usage, dict):
+            usage = {}
+        details = usage.get("input_token_details") or {}
+        cached = details.get("cache_read") if isinstance(details, dict) else None
+        from db import log_llm_usage_event
+        log_llm_usage_event(
+            user_id=user_id or None,
+            model=model,
+            node=node,
+            input_tokens=usage.get("input_tokens"),
+            output_tokens=usage.get("output_tokens"),
+            cached_tokens=cached,
+        )
+    except Exception as e:
+        logger.debug(f"[P1-CHAT-FACTS-AUDIT] log de uso LLM falló (no fatal): {e}")
+
+
+def _unwrap_structured(result: Any, *, model: str, node: str, user_id: Optional[str]) -> Any:
+    """[P1-CHAT-FACTS-AUDIT · 2026-09-14] Desenvuelve la salida de
+    `with_structured_output(..., include_raw=True)` (`{raw, parsed, parsing_error}`),
+    registra los tokens del `raw` y devuelve `parsed`.
+
+    Un error de parseo se RELANZA: mismo contrato que sin `include_raw` (el caller lo
+    trata como fallo, no como «no había nada»). Un objeto ya parseado (mocks) pasa tal cual.
+    """
+    if isinstance(result, dict) and "parsed" in result and "raw" in result:
+        _log_fact_llm_usage(result.get("raw"), model=model, node=node, user_id=user_id)
+        err = result.get("parsing_error")
+        if err is not None and result.get("parsed") is None:
+            raise err if isinstance(err, BaseException) else ValueError(str(err))
+        return result.get("parsed")
+    return result
+
+
 def _invoke_with_shadow(
     *,
     prompt: str,
@@ -255,12 +298,20 @@ def _invoke_with_shadow(
     + skip. Cero impacto sobre la respuesta del endpoint.
     """
     pro_t0 = _time_module.monotonic()
+    # [P1-CHAT-FACTS-AUDIT · 2026-09-14] `include_raw=True` para leer los tokens del
+    # AIMessage y registrarlos en `llm_usage_events`; `_unwrap_structured` devuelve el
+    # objeto parseado igual que antes (el contrato de los callers no cambia).
     pro_llm = ChatGLM(
         model=pro_model,
         temperature=pro_temperature,
         timeout=_fact_extractor_llm_timeout_s(),  # [P2-LLM-TIMEOUT-SWEEP · 2026-05-30]
-    ).with_structured_output(output_schema)
-    pro_result = pro_llm.invoke(prompt)
+    ).with_structured_output(output_schema, include_raw=True)
+    pro_result = _unwrap_structured(
+        pro_llm.invoke(prompt),
+        model=pro_model,
+        node=f"fact_extractor_{callsite_tag}",
+        user_id=user_id,
+    )
     pro_duration_ms = int((_time_module.monotonic() - pro_t0) * 1000)
 
     if not _should_run_shadow(user_id):
@@ -341,8 +392,11 @@ class RouterResult(BaseModel):
     has_relevant_info: bool = Field(description="True si el mensaje contiene datos médicos, preferencias alimenticias, alergias, síntomas u objetivos. False si es conversación casual (ej: hola, gracias, ok).")
     confidence_score: int = Field(description="Nivel de confianza de tu decisión, de 1 a 10. 10=Completamente seguro. 1=Muy inseguro/confuso (ej. sarcasmo, texto ambiguo).", default=10)
 
-def should_extract_facts(user_message: str) -> bool:
-    """Verifica rápidamente si el mensaje vale la pena analizarse para extraer hechos."""
+def should_extract_facts(user_message: str, user_id: Optional[str] = None) -> bool:
+    """Verifica rápidamente si el mensaje vale la pena analizarse para extraer hechos.
+
+    [P1-CHAT-FACTS-AUDIT · 2026-09-14] `user_id` solo atribuye el gasto en
+    `llm_usage_events` (node `fact_extractor_router`)."""
     if not user_message or len(user_message.strip()) < 5:
         return False
         
@@ -365,10 +419,15 @@ def should_extract_facts(user_message: str) -> bool:
         model=_fact_extractor_router_model_name(),
         temperature=0.0,
         timeout=_fact_extractor_router_llm_timeout_s(),  # [P2-LLM-TIMEOUT-SWEEP · 2026-05-30]
-    ).with_structured_output(RouterResult)
-    
+    ).with_structured_output(RouterResult, include_raw=True)  # [P1-CHAT-FACTS-AUDIT] tokens
+
     try:
-        res = llm.invoke(prompt)
+        res = _unwrap_structured(
+            llm.invoke(prompt),
+            model=_fact_extractor_router_model_name(),
+            node="fact_extractor_router",
+            user_id=user_id,
+        )
         if not res:
             return False
             
@@ -436,6 +495,11 @@ def extract_facts(user_message: str, recent_history: str = "", user_id: Optional
     shadow A/B PRO→FLASH determinístico. Sin user_id el shadow se salta
     (no podemos samplear estable); con user_id, el bucket se decide vía
     `_should_run_shadow`. Cero impacto UX — siempre retorna el output de PRO.
+
+    [P1-CHAT-FACTS-AUDIT · 2026-09-14] Devuelve `None` si la llamada al LLM FALLA
+    y `[]` si no había hechos. Antes ambos casos eran `[]`: una alergia dicha
+    durante una caída del proveedor se perdía sin rastro y la cola marcaba el
+    mensaje como procesado. Los llamadores reintentan ante `None`.
     """
     if not user_message or len(user_message.strip()) < 5:
         return []
@@ -495,8 +559,9 @@ def extract_facts(user_message: str, recent_history: str = "", user_id: Optional
             logger.info("➡️ No se encontraron hechos relevantes.")
         return facts
     except Exception as e:
-        logger.warning(f"⚠️ Error al extraer hechos: {e}")
-        return []
+        # [P1-CHAT-FACTS-AUDIT · 2026-09-14] `None` = FALLÓ (≠ `[]` = no había nada).
+        logger.warning(f"⚠️ [P1-CHAT-FACTS-AUDIT] Error al extraer hechos (se reintentará): {e}")
+        return None
 
 CACHE_TTL_PERMANENT = 3153600000  # ~100 years — embeddings are deterministic for the same input
 
@@ -572,11 +637,112 @@ def get_embedding(text: str, purpose: str = "query") -> list:
 CRITICAL_CATEGORIES = {"condicion_medica", "alergia", "dieta", "objetivo"}
 
 
-def _run_fact_pipeline(user_id: str, fact_items: list, log_prefix: str = ""):
+# ============================================================
+# [P1-CHAT-FACTS-AUDIT · 2026-09-14] Protección de los hechos CLÍNICOS en el
+# pipeline en línea. Antes, un hecho de `preferencia` podía «contradecir» una
+# alergia y `delete_user_fact` la desactivaba, y una fusión heredaba la metadata
+# del hecho NUEVO (una alergia fusionada perdía `category='alergia'`). Espejo de
+# la exención de Dreaming (`dreaming._soft_delete_facts`): un hecho clínico
+# existente NO lo retira ni lo absorbe un hecho no clínico. Retirar una alergia
+# es una acción del usuario en Configuración (ver P0-CHAT-ALLERGY-MERGE en tools.py).
+# ============================================================
+def _clinical_categories() -> Optional[tuple]:
+    """SSOT: `dreaming.CLINICAL_CATEGORIES` (no una lista nueva). Import diferido:
+    dreaming arrastra `db`/`db_core` y hay tests que stubbean `db` e importan este
+    módulo. Si el import falla devuelve `None` y los llamadores tratan TODO hecho
+    existente como protegido (fail-secure)."""
+    try:
+        from dreaming import CLINICAL_CATEGORIES
+        return tuple(CLINICAL_CATEGORIES)
+    except Exception as e:
+        logger.error(
+            f"🚨 [P1-CHAT-FACTS-AUDIT] no se pudo importar dreaming.CLINICAL_CATEGORIES "
+            f"({type(e).__name__}: {e}); se protegen TODOS los hechos existentes."
+        )
+        return None
+
+
+def _is_clinical_new_fact(category: str, clinical: Optional[tuple]) -> bool:
+    """¿El hecho NUEVO es clínico? Sin SSOT disponible, se asume que sí (fail-secure:
+    se guarda aunque falte el embedding)."""
+    return clinical is None or category in clinical
+
+
+def _existing_fact_protected(existing_cat: str, new_cat: str, clinical: Optional[tuple]) -> bool:
+    """Un hecho existente clínico no lo retira ni lo absorbe uno nuevo no clínico."""
+    if clinical is None:
+        return True
+    return existing_cat in clinical and new_cat not in clinical
+
+
+def _fact_metadata_dict(md: Any) -> dict:
+    if isinstance(md, dict):
+        return dict(md)
+    if isinstance(md, str):
+        try:
+            _parsed = json.loads(md)
+            return _parsed if isinstance(_parsed, dict) else {}
+        except Exception:
+            return {}
+    return {}
+
+
+def _filter_deletable_ids(
+    ids: Any,
+    new_cat: str,
+    existing_cat_by_id: dict,
+    clinical: Optional[tuple],
+    *,
+    log_prefix: str = "",
+    motivo: str = "",
+) -> list:
+    """Filtra los ids que el LLM propone retirar. Solo sobreviven los que (a) se le
+    MOSTRARON (un id inventado no se toca) y (b) no son un hecho clínico protegido."""
+    out: list = []
+    for raw_id in ids or []:
+        fid = str(raw_id)
+        if fid in out:
+            continue
+        if fid not in existing_cat_by_id:
+            logger.warning(
+                f"{log_prefix}🛡 [P1-CHAT-FACTS-AUDIT] {motivo}: el id {fid} no estaba entre "
+                f"los hechos mostrados al LLM — no se toca."
+            )
+            continue
+        if _existing_fact_protected(existing_cat_by_id[fid], new_cat, clinical):
+            logger.warning(
+                f"{log_prefix}🛡 [P1-CHAT-FACTS-AUDIT] {motivo}: el hecho {fid} "
+                f"(category={existing_cat_by_id[fid] or '?'}) está protegido frente a un hecho "
+                f"nuevo de category={new_cat or '?'} — NO se retira; retirar una alergia o una "
+                f"condición es una acción del usuario en Configuración."
+            )
+            continue
+        out.append(fid)
+    return out
+
+
+def _embeddings_enabled() -> bool:
+    """¿Hay proveedor de embeddings configurado? Sin él, reintentar no sirve de nada
+    (degradación de diseño: el RAG cae a keyword/recency). Ante la duda → True
+    (se trata como fallo transitorio y se reintenta, acotado por la cola)."""
+    try:
+        from embeddings_provider import is_embeddings_enabled
+        return bool(is_embeddings_enabled())
+    except Exception:
+        return True
+
+
+def _run_fact_pipeline(user_id: str, fact_items: list, log_prefix: str = "") -> bool:
     """
     Pipeline compartido de Fases 1-3: Preparar hechos, verificar contradicciones/fusiones en batch,
-    borrar obsoletos y guardar nuevos. Usado por async_extract_and_save_facts y _process_single_extraction.
+    guardar nuevos y retirar obsoletos. Usado por async_extract_and_save_facts y _process_single_extraction.
+
+    [P1-CHAT-FACTS-AUDIT · 2026-09-14] Devuelve `True` si todo quedó persistido y
+    `False` si algún hecho quedó sin guardar y conviene reintentar el mensaje.
     """
+    clinical = _clinical_categories()
+    complete = True
+
     # FASE 1: Generar embeddings y buscar similares para TODOS los hechos
     prepared_facts = []
 
@@ -595,11 +761,41 @@ def _run_fact_pipeline(user_id: str, fact_items: list, log_prefix: str = ""):
         # user_facts.embedding para retrieval asimétrico (las queries del RAG
         # del chat/pipeline llegan con search_query). La similar-search de
         # abajo compara doc-vs-doc (simétrica dentro del espacio document).
+        category = metadata.get("category", "")
         emb = get_embedding(fact_text, purpose="document")
         if not emb:
+            # [P1-CHAT-FACTS-AUDIT · 2026-09-14] Antes: `continue` — el hecho se
+            # descartaba en silencio si Cohere caía o faltaba COHERE_API_KEY, alergias
+            # incluidas. Ahora:
+            #   · clínico, o proveedor desactivado (reintentar no cambiaría nada) → se
+            #     GUARDA sin embedding: invisible al RAG vectorial, pero visible para
+            #     `get_user_facts_by_metadata` (el filtro de alergias) y para la UI.
+            #     Sin búsqueda de similares: no hay vector con qué buscar.
+            #   · no clínico con fallo transitorio → `complete=False` y el caller
+            #     re-encola el mensaje; el reintento traerá su embedding.
+            _degradado = not _embeddings_enabled()
+            if _degradado or _is_clinical_new_fact(category, clinical):
+                _saved = save_user_fact(user_id, fact_text, None, metadata=metadata)
+                if _saved:
+                    logger.warning(
+                        f"{log_prefix}⚠️ [P1-CHAT-FACTS-AUDIT] embedding vacío: hecho guardado SIN "
+                        f"embedding (category={category}, proveedor_activo={not _degradado}): '{fact_text}'"
+                    )
+                else:
+                    logger.error(
+                        f"{log_prefix}🚨 [P1-CHAT-FACTS-AUDIT] embedding vacío y save sin embedding "
+                        f"falló (category={category}): '{fact_text}'"
+                    )
+                    if not _degradado:
+                        complete = False
+            else:
+                logger.warning(
+                    f"{log_prefix}⚠️ [P1-CHAT-FACTS-AUDIT] embedding vacío (fallo transitorio) para "
+                    f"hecho no clínico (category={category}) — se reintentará el mensaje: '{fact_text}'"
+                )
+                complete = False
             continue
-        
-        category = metadata.get("category", "")
+
         filter_meta = {"category": category} if category in CRITICAL_CATEGORIES else None
         
         similar_facts = search_user_facts_hybrid(user_id, emb, filter_metadata=filter_meta, threshold=0.6, limit=5)
@@ -616,14 +812,28 @@ def _run_fact_pipeline(user_id: str, fact_items: list, log_prefix: str = ""):
         })
 
     if not prepared_facts:
-        return
+        return complete
 
     # FASE 2: Verificar contradicciones en BATCH (una sola llamada LLM)
     facts_with_similar = [pf for pf in prepared_facts if pf["similar_facts"]]
-    
-    ids_to_delete_all = set()
+
+    contradiction_ids_by_text: dict = {}
     merged_facts_to_save = []
     skipped_new_facts = set()
+
+    # [P1-CHAT-FACTS-AUDIT · 2026-09-14] Categoría de cada hecho EXISTENTE que se le
+    # muestra al LLM: decide qué puede retirarse (ver `_filter_deletable_ids`).
+    existing_cat_by_id: dict = {}
+    existing_md_by_id: dict = {}
+    for pf in facts_with_similar:
+        for f in pf["similar_facts"]:
+            if isinstance(f, dict) and f.get("id") is not None:
+                _md = _fact_metadata_dict(f.get("metadata"))
+                existing_md_by_id[str(f["id"])] = _md
+                existing_cat_by_id[str(f["id"])] = str(_md.get("category") or "")
+    new_cat_by_text = {
+        pf["fact_text"]: str((pf["metadata"] or {}).get("category") or "") for pf in prepared_facts
+    }
 
     if facts_with_similar:
         logger.info(f"{log_prefix}🔄 [BATCH] Verificando contradicciones para {len(facts_with_similar)} hechos...")
@@ -679,36 +889,72 @@ def _run_fact_pipeline(user_id: str, fact_items: list, log_prefix: str = ""):
         
             if response and response.contradictions:
                 for contradiction in response.contradictions:
-                    if contradiction.ids_to_delete:
-                        logger.warning(f"{log_prefix}⚠️ [CONTRADICCIÓN] \"{contradiction.new_fact}\" → Borrar IDs: {contradiction.ids_to_delete}")
-                        ids_to_delete_all.update(contradiction.ids_to_delete)
-        
+                    if not contradiction.ids_to_delete:
+                        continue
+                    # [P1-CHAT-FACTS-AUDIT] un hecho no clínico no retira uno clínico.
+                    _new_cat = new_cat_by_text.get(contradiction.new_fact, "")
+                    _ids_ok = _filter_deletable_ids(
+                        contradiction.ids_to_delete, _new_cat, existing_cat_by_id, clinical,
+                        log_prefix=log_prefix, motivo="contradicción",
+                    )
+                    if _ids_ok:
+                        logger.warning(f"{log_prefix}⚠️ [CONTRADICCIÓN] \"{contradiction.new_fact}\" → Borrar IDs: {_ids_ok}")
+                        contradiction_ids_by_text.setdefault(contradiction.new_fact, set()).update(_ids_ok)
+
             if response and response.merges:
                 for merge in response.merges:
-                    if merge.ids_to_delete and merge.merged_fact:
-                        logger.info(f"{log_prefix}🔀 [FUSIÓN] \"{merge.merged_fact}\" ← Absorbe IDs: {merge.ids_to_delete}")
-                        ids_to_delete_all.update(merge.ids_to_delete)
-                        skipped_new_facts.add(merge.skip_new_fact)
-                    
-                        original_metadata = {}
-                        for pf in facts_with_similar:
-                            if pf["fact_text"] == merge.skip_new_fact:
-                                original_metadata = pf["metadata"]
-                                break
-                    
-                        merged_facts_to_save.append({
-                            "fact_text": merge.merged_fact,
-                            "metadata": original_metadata
-                        })
-                    
+                    if not (merge.ids_to_delete and merge.merged_fact):
+                        continue
+                    # [P1-CHAT-FACTS-AUDIT] una fusión que absorbería un hecho clínico
+                    # desde uno no clínico (o un id que no se le mostró) se descarta ENTERA:
+                    # el hecho nuevo se guarda por separado y los viejos se conservan.
+                    _new_cat = new_cat_by_text.get(merge.skip_new_fact, "")
+                    _ids_req = {str(_i) for _i in merge.ids_to_delete}
+                    _ids_ok = _filter_deletable_ids(
+                        merge.ids_to_delete, _new_cat, existing_cat_by_id, clinical,
+                        log_prefix=log_prefix, motivo="fusión",
+                    )
+                    if len(_ids_ok) != len(_ids_req):
+                        logger.warning(
+                            f"{log_prefix}🛡 [P1-CHAT-FACTS-AUDIT] fusión descartada: "
+                            f"\"{merge.merged_fact}\" — el hecho nuevo se guarda por separado."
+                        )
+                        continue
+                    logger.info(f"{log_prefix}🔀 [FUSIÓN] \"{merge.merged_fact}\" ← Absorbe IDs: {_ids_ok}")
+                    skipped_new_facts.add(merge.skip_new_fact)
+
+                    original_metadata = {}
+                    for pf in facts_with_similar:
+                        if pf["fact_text"] == merge.skip_new_fact:
+                            original_metadata = dict(pf["metadata"] or {})
+                            break
+                    # [P1-CHAT-FACTS-AUDIT] si absorbe un hecho clínico, la fusión CONSERVA
+                    # la categoría clínica (antes heredaba la metadata del nuevo, o `{}`).
+                    if clinical:
+                        _md_clinico = next(
+                            (existing_md_by_id[_i] for _i in _ids_ok
+                             if existing_cat_by_id.get(_i) in clinical),
+                            None,
+                        )
+                        if _md_clinico is not None and original_metadata.get("category") not in clinical:
+                            _base = dict(_md_clinico)
+                            _base.update({k: v for k, v in original_metadata.items() if k != "category"})
+                            original_metadata = _base
+
+                    merged_facts_to_save.append({
+                        "fact_text": merge.merged_fact,
+                        "metadata": original_metadata,
+                        "ids": set(_ids_ok),
+                    })
+
         except Exception as e:
             logger.warning(f"{log_prefix}⚠️ [Error en validación batch de contradicciones/fusiones]: {e}")
 
-    # FASE 3: Borrar contradictorios/redundantes y guardar hechos
-    if ids_to_delete_all:
-        logger.info(f"{log_prefix}🗑️ [BATCH] Borrando {len(ids_to_delete_all)} hechos (contradictorios + redundantes)...")
-        for f_id in ids_to_delete_all:
-            delete_user_fact(f_id)
+    # FASE 3: GUARDAR primero y RETIRAR después.
+    # [P1-CHAT-FACTS-AUDIT · 2026-09-14] Antes se soft-borraban los contradictorios y
+    # absorbidos ANTES de guardar sus reemplazos: un save fallido (o un embedding vacío
+    # en la fusión) dejaba el perfil sin el hecho viejo NI el nuevo. Ahora un hecho
+    # viejo solo se retira si su reemplazo quedó persistido.
 
     # [P2-FACT-SAVE-FAIL-LOUD · 2026-05-30] Chequear el return de
     # save_user_fact ANTES de contar el éxito. Pre-fix: FASE 3 soft-borraba los
@@ -726,6 +972,7 @@ def _run_fact_pipeline(user_id: str, fact_items: list, log_prefix: str = ""):
     # marcando la categoría crítica para que SRE vea la pérdida.
     # Tooltip-anchor: P2-FACT-SAVE-FAIL-LOUD.
     saved_count = 0
+    failed_new_texts = set()
     for pf in prepared_facts:
         if pf["fact_text"] in skipped_new_facts:
             logger.info(f"{log_prefix}⏭️ Hecho absorbido en fusión: '{pf['fact_text']}'")
@@ -735,6 +982,8 @@ def _run_fact_pipeline(user_id: str, fact_items: list, log_prefix: str = ""):
             logger.info(f"{log_prefix}📦 Nuevo hecho guardado: '{pf['fact_text']}' | Metadatos: {pf['metadata']}")
             saved_count += 1
         else:
+            failed_new_texts.add(pf["fact_text"])
+            complete = False
             _cat = (pf.get("metadata") or {}).get("category")
             logger.error(
                 f"{log_prefix}🚨 [P2-FACT-SAVE-FAIL-LOUD] save_user_fact NO persistió "
@@ -742,31 +991,95 @@ def _run_fact_pipeline(user_id: str, fact_items: list, log_prefix: str = ""):
                 f"— si reemplazaba un hecho contradictorio ya soft-deleted, el perfil quedó SIN ese dato."
             )
 
+    ids_to_delete_all = set()
     merge_count = 0
     for mf in merged_facts_to_save:
         merged_emb = get_embedding(mf["fact_text"], purpose="document")  # [P1-COHERE-EMBED-V4] se persiste
         if not merged_emb:
+            # [P1-CHAT-FACTS-AUDIT] antes: `continue` con los absorbidos YA borrados.
+            # Ahora se guarda sin embedding (el hecho vale más que su vector).
             _cat = (mf.get("metadata") or {}).get("category")
-            logger.error(
-                f"{log_prefix}🚨 [P2-FACT-SAVE-FAIL-LOUD] embedding vacío para hecho fusionado "
-                f"'{mf['fact_text']}' (category={_cat}) — NO se guarda; los hechos absorbidos ya "
-                f"fueron soft-deleted (pérdida potencial)."
+            logger.warning(
+                f"{log_prefix}⚠️ [P2-FACT-SAVE-FAIL-LOUD] embedding vacío para hecho fusionado "
+                f"'{mf['fact_text']}' (category={_cat}) — se guarda SIN embedding."
             )
-            continue
+            merged_emb = None
         _saved = save_user_fact(user_id, mf["fact_text"], merged_emb, metadata=mf["metadata"])
         if _saved:
             logger.info(f"{log_prefix}🔀 Hecho fusionado guardado: '{mf['fact_text']}' | Metadatos: {mf['metadata']}")
             merge_count += 1
+            ids_to_delete_all.update(mf.get("ids") or ())
         else:
+            complete = False
             _cat = (mf.get("metadata") or {}).get("category")
             logger.error(
                 f"{log_prefix}🚨 [P2-FACT-SAVE-FAIL-LOUD] save_user_fact NO persistió hecho "
                 f"fusionado '{mf['fact_text']}' (category={_cat}, critical={_cat in CRITICAL_CATEGORIES}) "
-                f"— hechos absorbidos ya soft-deleted; pérdida neta."
+                f"— los hechos absorbidos se CONSERVAN (P1-CHAT-FACTS-AUDIT)."
             )
+
+    for _new_text, _ids in contradiction_ids_by_text.items():
+        if _new_text in failed_new_texts:
+            logger.warning(
+                f"{log_prefix}⚠️ [P1-CHAT-FACTS-AUDIT] '{_new_text}' no se guardó: se conservan "
+                f"los hechos que contradecía ({sorted(_ids)})."
+            )
+            continue
+        ids_to_delete_all.update(_ids)
+
+    if ids_to_delete_all:
+        logger.info(f"{log_prefix}🗑️ [BATCH] Retirando {len(ids_to_delete_all)} hechos (contradictorios + redundantes)...")
+        for f_id in ids_to_delete_all:
+            delete_user_fact(f_id, user_id)  # [P1-CHAT-FACTS-AUDIT] I2: filtra por user_id
 
     total_deleted = len(ids_to_delete_all)
     logger.info(f"{log_prefix}✅ [BATCH COMPLETO] {saved_count} nuevos + {merge_count} fusionados, {total_deleted} eliminados.")
+    return complete
+
+
+class FactExtractionIncomplete(Exception):
+    """[P1-CHAT-FACTS-AUDIT · 2026-09-14] La extracción falló (LLM) o dejó hechos sin
+    persistir. `process_pending_queue_sync` NO marca como procesado el ítem que la lanza."""
+
+
+def _is_guest_user_id(user_id: Any) -> bool:
+    """[P1-CHAT-FACTS-AUDIT · 2026-09-14] Sin usuario real no hay a quién guardarle
+    hechos: `user_facts` y el lock de `user_profiles` son por cuenta. Un invitado
+    gastaba el router LLM, no conseguía el lock (no tiene fila en `user_profiles`) y
+    su mensaje acababa en la cola persistente. Defensa en profundidad: el router de
+    chat ya no debería pasar session_ids."""
+    return not user_id or str(user_id).strip().lower() == "guest"
+
+
+# [P1-CHAT-FACTS-AUDIT · 2026-09-14] Cola persistente: tope y espaciado de reintentos.
+# Antes, un ítem que fallaba se marcaba como procesado ("evitar loop infinito") y el
+# hecho se perdía. `pending_facts_queue` no tiene contador de intentos (y el DDL en
+# runtime está prohibido), así que el tope va por ANTIGÜEDAD (`created_at`) y el
+# espaciado vive en memoria del proceso (el cron del drenaje corre cada minuto).
+def _pending_fact_max_age_h() -> int:
+    return _env_int("MEALFIT_PENDING_FACT_MAX_AGE_H", 72, validator=lambda v: 1 <= v <= 720)
+
+
+def _pending_fact_retry_backoff_s() -> int:
+    return _env_int("MEALFIT_PENDING_FACT_RETRY_BACKOFF_S", 300, validator=lambda v: 0 <= v <= 86400)
+
+
+_PENDING_RETRY_NOT_BEFORE: dict = {}
+_PENDING_RETRY_GUARD = threading.Lock()
+
+
+def _pending_item_too_old(pending: Any) -> bool:
+    created = pending.get("created_at") if isinstance(pending, dict) else None
+    if isinstance(created, str):
+        try:
+            created = datetime.fromisoformat(created.replace("Z", "+00:00"))
+        except Exception:
+            return False
+    if not isinstance(created, datetime):
+        return False
+    if created.tzinfo is None:
+        created = created.replace(tzinfo=timezone.utc)
+    return datetime.now(timezone.utc) - created > timedelta(hours=_pending_fact_max_age_h())
 
 
 def async_extract_and_save_facts(user_id: str, message: str, recent_history: str = ""):
@@ -774,85 +1087,136 @@ def async_extract_and_save_facts(user_id: str, message: str, recent_history: str
     Función orquestadora para ser ejecutada en background.
     Extrae hechos estructurados de un mensaje, revisa contradicciones con la DB
     usando BATCHING (una sola llamada LLM para todos los hechos),
-    borra los obsoletos y guarda los nuevos vectorizados y etiquetados.
+    guarda los nuevos vectorizados y etiquetados y retira los obsoletos.
     """
+    # [P1-CHAT-FACTS-AUDIT · 2026-09-14] Guarda de invitado ANTES de gastar LLM.
+    if _is_guest_user_id(user_id):
+        logger.info("⏭️ [P1-CHAT-FACTS-AUDIT] Extracción omitida: sin usuario real (invitado).")
+        return
+
+    # [P1-CHAT-FACTS-AUDIT · 2026-09-14] Token del lock: se libera SOLO si se adquirió,
+    # y solo el lock propio. Antes el `finally` llamaba a `release_fact_lock` también en
+    # los caminos «el router dice que no hay nada» y «no conseguí el lock, encolo»:
+    # le quitaba el lock a la extracción concurrente que sí lo tenía.
+    lock_token = None
     try:
-        if not should_extract_facts(message):
+        if not should_extract_facts(message, user_id=user_id):
             logger.info("⏭️ [ROUTER] Mensaje ignorado. No contiene hechos relevantes para el perfil.")
             return
 
         import time
         max_retries = 5
         retry_delay = 2
-        lock_acquired = False
-        
+
         for attempt in range(max_retries):
-            if acquire_fact_lock(user_id):
-                lock_acquired = True
+            _token = acquire_fact_lock(user_id)
+            if _token:
+                lock_token = _token
                 break
             logger.warning(f"⚠️ [FACT EXTRACTOR] Extracción en progreso para el usuario {user_id}. Esperando {retry_delay}s ({attempt+1}/{max_retries})...")
             time.sleep(retry_delay)
-            
-        if not lock_acquired:
+
+        if not lock_token:
             # ====== COLA PERSISTENTE: Nunca perder datos clínicos ======
             enqueue_pending_fact(user_id, message, recent_history)
             logger.info(f"📋 [FACT EXTRACTOR] Mensaje encolado en la DB para procesamiento posterior.")
             return
-            
+
         fact_items = extract_facts(message, recent_history, user_id=user_id)
+        if fact_items is None:
+            # [P1-CHAT-FACTS-AUDIT] El LLM FALLÓ (≠ «no había hechos»): se encola.
+            enqueue_pending_fact(user_id, message, recent_history)
+            logger.warning("⚠️ [P1-CHAT-FACTS-AUDIT] Extracción fallida; mensaje encolado para reintento.")
+            return
         if not fact_items:
-            release_fact_lock(user_id)
             return
 
-        _run_fact_pipeline(user_id, fact_items, log_prefix="")
+        if _run_fact_pipeline(user_id, fact_items, log_prefix="") is False:
+            enqueue_pending_fact(user_id, message, recent_history)
+            logger.warning("⚠️ [P1-CHAT-FACTS-AUDIT] Hechos sin persistir; mensaje encolado para reintento.")
 
     except Exception as e:
         import traceback
         logger.error(f"❌ [CRÍTICO] Fallo general en orquestación de hechos: {e}")
         track = traceback.format_exc()
         logger.info(f"Trazabilidad extendida de error: {track}")
+        if lock_token:
+            # [P1-CHAT-FACTS-AUDIT] murió a medias con el lock tomado: se encola para
+            # no perder un dato clínico (la cola tiene tope de antigüedad).
+            try:
+                enqueue_pending_fact(user_id, message, recent_history)
+            except Exception:
+                pass
     finally:
-        # Liberar el lock de BD para que la respuesta de FastAPI/UI no se bloquee ni devuelva timeout
-        release_fact_lock(user_id)
-        
-        # PROCESAR COLA PERSISTENTE (WEBHOOKS)
-        # El hilo asíncrono daemonizado (Fire-and-Forget local) fue removido debido a inestabilidad
-        # en entornos serverless/PaaS donde el proceso muere tras devolver la respuesta HTTP.
-        # Un TRIGGER AFTER INSERT en la DB llama de forma robusta a nuestro endpoint especial.
-        logger.info(f"✅ Extracción en línea terminada. Webhook externo procesará la cola si quedaron pendientes.")
+        if lock_token:
+            release_fact_lock(user_id, lock_token)
+
+        # PROCESAR COLA PERSISTENTE: la drena el cron `drain_pending_facts_queue`
+        # (cron_tasks.py) vía `process_pending_queue_sync`.
+        logger.info(f"✅ Extracción en línea terminada. El cron procesará la cola si quedaron pendientes.")
 
 
 def process_pending_queue_sync(user_id: str):
-    """Worker síncrono para drenar la cola de pendientes. Llamado por el Webhook de DB de manera robusta."""
-    
-    if not acquire_fact_lock(user_id):
+    """Worker síncrono para drenar la cola de pendientes (cron `drain_pending_facts_queue`
+    y endpoint webhook).
+
+    [P1-CHAT-FACTS-AUDIT · 2026-09-14] Solo se borran de la cola los ítems procesados
+    con ÉXITO (o descartados por superar `MEALFIT_PENDING_FACT_MAX_AGE_H`, con
+    `logger.error`). Un ítem que falla se conserva y no se reintenta antes de
+    `MEALFIT_PENDING_FACT_RETRY_BACKOFF_S`.
+    """
+    lock_token = acquire_fact_lock(user_id)
+    if not lock_token:
         logger.warning(f"⚠️ [WEBHOOK QUEUE] Lock ocupado para {user_id}. Se procesará luego.")
         return
-        
+
     try:
         pending_items = dequeue_pending_facts(user_id)
         if not pending_items:
             logger.info("➡️ [WEBHOOK QUEUE] No hay hechos pendientes en cola.")
             return
-            
+
         logger.info(f"\n📋 [FACT EXTRACTOR WEBHOOK] Iniciando drenaje estructurado para {len(pending_items)} mensajes pendientes...")
         processed_ids = []
+        now_m = _time_module.monotonic()
+        with _PENDING_RETRY_GUARD:
+            for _k in [k for k, v in _PENDING_RETRY_NOT_BEFORE.items() if v < now_m - 86400]:
+                _PENDING_RETRY_NOT_BEFORE.pop(_k, None)
         for idx, pending in enumerate(pending_items, 1):
+            _pid = str(pending["id"])
+            if _pending_item_too_old(pending):
+                logger.error(
+                    f"🚨 [P1-CHAT-FACTS-AUDIT] Pendiente {_pid} descartado tras "
+                    f"{_pending_fact_max_age_h()}h sin procesarse con éxito: "
+                    f"'{str(pending.get('message', ''))[:80]}'"
+                )
+                processed_ids.append(pending["id"])
+                with _PENDING_RETRY_GUARD:
+                    _PENDING_RETRY_NOT_BEFORE.pop(_pid, None)
+                continue
+            with _PENDING_RETRY_GUARD:
+                _not_before = _PENDING_RETRY_NOT_BEFORE.get(_pid)
+            if _not_before is not None and now_m < _not_before:
+                continue
             try:
                 logger.info(f"   📋 [{idx}/{len(pending_items)}] Procesando: '{pending['message'][:50]}...'")
                 _process_single_extraction(user_id, pending["message"], pending.get("recent_history", ""))
                 processed_ids.append(pending["id"])
+                with _PENDING_RETRY_GUARD:
+                    _PENDING_RETRY_NOT_BEFORE.pop(_pid, None)
             except Exception as pe:
-                logger.warning(f"   ⚠️ Error procesando pendiente #{idx}: {pe}")
-                processed_ids.append(pending["id"]) # Evitar loop infinito fallido
-        
+                # [P1-CHAT-FACTS-AUDIT] antes: se marcaba procesado igual y el hecho se perdía.
+                logger.warning(f"   ⚠️ Error procesando pendiente #{idx} (se conserva para reintento): {pe}")
+                with _PENDING_RETRY_GUARD:
+                    _PENDING_RETRY_NOT_BEFORE[_pid] = now_m + _pending_fact_retry_backoff_s()
+
         if processed_ids:
             delete_pending_facts(processed_ids)
         logger.info(f"✅ [FACT EXTRACTOR] Cola pendiente finalizada en Hilo Secundario.")
     except Exception as qe:
         logger.warning(f"⚠️ Error general en hilo secundario de cola: {qe}")
     finally:
-        release_fact_lock(user_id)
+        release_fact_lock(user_id, lock_token)
 
 
 def _process_single_extraction(user_id: str, message: str, recent_history: str = ""):
@@ -860,12 +1224,18 @@ def _process_single_extraction(user_id: str, message: str, recent_history: str =
     Procesa una sola extracción de hechos SIN manejar el lock.
     Usado internamente para drenar la cola de pendientes.
     Delega al pipeline compartido _run_fact_pipeline.
+
+    [P1-CHAT-FACTS-AUDIT · 2026-09-14] Lanza `FactExtractionIncomplete` si el LLM
+    falla o quedan hechos sin persistir: el ítem se conserva en la cola.
     """
-    if not should_extract_facts(message):
+    if not should_extract_facts(message, user_id=user_id):
         return
-    
+
     fact_items = extract_facts(message, recent_history, user_id=user_id)
+    if fact_items is None:
+        raise FactExtractionIncomplete("extract_facts falló (LLM)")
     if not fact_items:
         return
 
-    _run_fact_pipeline(user_id, fact_items, log_prefix="   ")
+    if _run_fact_pipeline(user_id, fact_items, log_prefix="   ") is False:
+        raise FactExtractionIncomplete("hechos sin persistir")
