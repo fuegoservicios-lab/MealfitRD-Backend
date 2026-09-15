@@ -105,6 +105,20 @@ def test_el_tiempo_de_cocina_llega_resumido_y_con_la_respuesta_honesta():
     assert src.count("_prep_time_context_for_chat(plan_vigente)") == 2, "paridad stream / no-stream"
 
 
+def test_la_meta_diaria_llega_con_su_distancia_al_mantenimiento(monkeypatch):
+    """«superávit de ~2100 kcal» salió dos veces (B4 antes, F5 v3): la causa era el contexto."""
+    import nutrition_calculator as nc
+    monkeypatch.setattr(nc, "get_nutrition_targets", lambda fd: {"tdee": 1750, "target_calories": 2000})
+    txt = A._daily_goal_context({}, {"calories": 2100})
+    assert "META DIARIA: 2100 kcal" in txt and "unas 350 kcal por encima de su mantenimiento, ~1750 kcal" in txt
+    assert "nunca la meta entera" in txt
+    assert A._daily_goal_context({}, None).startswith("\n\n🎯 META DIARIA: 2000 kcal")
+    monkeypatch.setattr(nc, "get_nutrition_targets", lambda fd: {})
+    assert A._daily_goal_context({}, None) == ""
+    src = (_BACKEND / "agent.py").read_text(encoding="utf-8")
+    assert src.count("_daily_goal_context(form_data, plan_vigente)") == 2, "paridad stream / no-stream"
+
+
 def _turno(tool: str, texto: str) -> list:
     return [
         HumanMessage(content="x"),

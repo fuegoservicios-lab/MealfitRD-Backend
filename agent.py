@@ -376,6 +376,33 @@ def _plan_vigente_para_prompt(user_id, current_plan):
     return current_plan
 
 
+def _daily_goal_context(form_data, plan) -> str:
+    """[P1-PLAN-LOTE-53 · 2026-09-15] La meta del día y su distancia REAL al mantenimiento.
+
+    La batería del 15-sep dio dos veces «superávit de ~2100 kcal» (B4 en el «antes», F5 en la v3):
+    el contexto solo decía `"calories": 2100` y «ganar músculo», y el modelo unía las dos cosas. No
+    había nada que inventar si se le da la cifra: meta, mantenimiento (TDEE de
+    `get_nutrition_targets`, la misma función pura del contador) y la diferencia. Sin datos ⇒ "".
+    """
+    try:
+        from nutrition_calculator import get_nutrition_targets
+        targets = get_nutrition_targets(form_data or {}) or {}
+        meta = plan.get("calories") if isinstance(plan, dict) else None
+        meta = int(float(meta or targets.get("target_calories") or 0))
+        if meta <= 0:
+            return ""
+        tdee = int(float(targets.get("tdee") or 0))
+        linea = f"\n\n🎯 META DIARIA: {meta} kcal"
+        if tdee > 0 and abs(meta - tdee) >= 50:
+            lado = "por encima" if meta > tdee else "por debajo"
+            linea += f" (unas {abs(meta - tdee)} kcal {lado} de su mantenimiento, ~{tdee} kcal)"
+        return linea + (f". Cuando hables de sus calorías di «tu meta de ~{meta} kcal»: el superávit o "
+                        "el déficit es SOLO esa diferencia, nunca la meta entera.")
+    except Exception as e:
+        logger.debug(f"[P1-PLAN-LOTE-53] meta diaria ilegible: {e!r}")
+        return ""
+
+
 def _prep_time_context_for_chat(plan) -> str:
     """[P1-PLAN-LOTE-53 · 2026-09-15] El dato real del tiempo de cocina, dicho en claro.
 
@@ -6404,6 +6431,7 @@ def chat_with_agent(session_id: str, prompt: str, current_plan: Optional[dict] =
         # coach solo se enteraba de una alergia por la inyección RAG (probabilística) o
         # yendo a buscarla él. Ver `build_clinical_guard_context`.
         system_prompt += build_clinical_guard_context(form_data or {})
+        system_prompt += _daily_goal_context(form_data, plan_vigente)  # [P1-PLAN-LOTE-53]
         # [P1-COUNTRY-SYSTEM-F2 · Task 3 · 2026-08-17] Addendum §2: `locale` mueve la PROSA
         # del coach; comida/tool calls SIGUEN en español (frontera dura, ver
         # `build_language_directive`). es-DO/None/garbage ⇒ "" (byte-idéntico a hoy).
@@ -6999,6 +7027,7 @@ def chat_with_agent_stream(session_id: str, prompt: str, current_plan: Optional[
         # coach solo se enteraba de una alergia por la inyección RAG (probabilística) o
         # yendo a buscarla él. Ver `build_clinical_guard_context`.
         system_prompt += build_clinical_guard_context(form_data or {})
+        system_prompt += _daily_goal_context(form_data, plan_vigente)  # [P1-PLAN-LOTE-53]
         # [P1-COUNTRY-SYSTEM-F2 · Task 3 · 2026-08-17] Addendum §2: `locale` mueve la PROSA
         # del coach; comida/tool calls SIGUEN en español (frontera dura, ver
         # `build_language_directive`). es-DO/None/garbage ⇒ "" (byte-idéntico a hoy).
