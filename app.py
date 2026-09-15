@@ -202,7 +202,12 @@ _PROCESS_START_ISO = datetime.now(timezone.utc).isoformat()
 # leían «0.23 g de Sal» como 23 g y «57.2 g» como 2 g; inerte hoy en los 11 planes medidos, no mañana) y 20 tests legacy
 # dejaban módulos VACÍOS del backend al importarse (una batería dirigida daba 15 fallos y 2 errores): el conftest
 # pre-importa todo módulo del backend que un test suplante, y un test vigila que la lista no se quede corta.
-_LAST_KNOWN_PFIX = "P1-PLAN-LOTE-52 · 2026-09-15"
+# [P1-PLAN-LOTE-53 · 2026-09-15] Batería de escritura del coach (63 mensajes reales, BD de solo lectura, tools en
+# dry-run): media 9,7/12 y 3 fallos duros por respuestas largas, agua como coletilla, «soldado 🪖», un nudge falso
+# que duplicaba el texto y una causa inventada. Reglas de voz compartidas, personas sin caricatura, nudge que respeta
+# otras escrituras del turno y tiempo de cocina real. Escáneres: photo-scan con limitador y coste, botón solo con
+# visión real y nombre de plato de reemplazo legible. Método y antes/después: docs/coach_bateria_2026_09_15.md.
+_LAST_KNOWN_PFIX = "P1-PLAN-LOTE-53 · 2026-09-15"
 
 # [P1-SENTRY-SAMPLE-COST · 2026-05-12] Sentry sampling driven from env vars
 # con default seguro 0.1 (10%). Pre-fix tenía `traces_sample_rate=1.0` y

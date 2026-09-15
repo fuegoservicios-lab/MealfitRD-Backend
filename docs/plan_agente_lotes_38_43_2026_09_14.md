@@ -81,9 +81,10 @@ cierran hoy en ~10 min con techo de 30). Un lote que sólo toca docs/scripts de 
 
 **Numeración (P1-PLAN-LOTE-45 · 14-sep).** El marker nunca baja: cada test de lote exige `N` ≥ el suyo. El 41 y el 45 ya
 están cerrados y desplegados, y del 46 al 49 también, así que los lotes pendientes de este plan (38, 39, 40, 42, 43,
-44) se cierran con el **siguiente número libre ≥ 52** —marker, `tests/test_p1_plan_lote_<N>.py` y memoria con ese número— y el título del commit
-cita su número de plan («`P1-PLAN-LOTE-52` (lote 38 del plan)»). Cerrar con el número del plan haría fallar los tests 41 y 45 a 51.
-El 50 y el 51 los tomó la sesión del coach (14-15 sep, `P0-CHAT-IDENTITY-FROM-TOKEN` y `P1-DIARY-CLAIM-PERFECTIVE`), ajenos a este plan.
+44) se cierran con el **siguiente número libre ≥ 55** —marker, `tests/test_p1_plan_lote_<N>.py` y memoria con ese número— y el título del commit
+cita su número de plan («`P1-PLAN-LOTE-55` (lote 38 del plan)»). Cerrar con el número del plan haría fallar los tests 41 y 45 a 53.
+El 50, el 51 y el 53 los tomó la sesión del coach (14-15 sep, `P0-CHAT-IDENTITY-FROM-TOKEN`, `P1-DIARY-CLAIM-PERFECTIVE` y la
+batería de escritura del coach y los escáneres), ajenos a este plan; el 54 está reservado (panel del tiempo de cocina).
 
 ---
 
