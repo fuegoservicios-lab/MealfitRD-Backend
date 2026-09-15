@@ -659,6 +659,31 @@ sigue pendiente hasta tenerlas.
 
 Tests: [`test_p1_plan_lote_22.py`](../tests/test_p1_plan_lote_22.py).
 
+## La anotación del dueño entra al instrumento (C1 cierre · `P1-PLAN-LOTE-60` · 2026-09-15)
+
+Lote 38 del plan 38-44. Con la anotación con rúbrica del dueño (80/80, ciega) el marcador estricto daba **0 aciertos
+por construcción**: exigía el `alimento` del defecto como subcadena del texto de la máquina, y el de V4 no nombra
+ninguno — «V4: ingrediente declara 85 g, pasos declaran 140 g» es exactamente el defecto del caso `0108f857ae` y salía
+FN + FP. Tres cambios, todos en el instrumento y ninguno en los detectores:
+
+- **Adjudicador** (`culinary_golden_score._adjudicar_hallazgos`): el alimento sólo restringe si el hallazgo nombra uno
+  —una palabra de la lista de ingredientes de esa comida, o el que declara acusar—, y entonces basta con que coincida
+  cualquier palabra, sin acentos y en singular. Cada acierto dice `emparejado_por`. «defecto» sin defectos de la rúbrica
+  queda `sin_rubrica` y el informe lo nombra. Sin ningún filtro, el juez ganaba dos aciertos que eran quejas de OTRO
+  alimento (`098d23388f`, `0ee6d0a81c`): el filtro los descarta a propósito.
+- **Refresco** ([`scripts/culinary_golden_refresh.py`](../scripts/culinary_golden_refresh.py)): las columnas `maquina_*`
+  eran los hallazgos PERSISTIDOS el 09-06 (V1-V5, el juez sin `[dudosa]`). El script pasa la máquina de hoy por los 80
+  casos y escribe `maquina_<capa>_<fecha>` AL LADO —nunca pisa las del 09-06— con el alimento acusado al final (`(alimento:
+  X)`, el `food` que el builder tiraba: un V7e cuyo detalle cita el paso nombra OTROS alimentos). El juez es el de
+  producción, una comida por llamada, con las escrituras a la base sustituidas por dobles y el coste contado en proceso
+  (total $0,0387 de $0,50).
+- **Línea base estricta** ([`culinary_baseline_estricto_2026-09-15.md`](culinary_baseline_estricto_2026-09-15.md) + `.json`, que
+  es la salida literal de `--comparar-maquina`): antes y después del refresco con el mismo adjudicador. No se toca después.
+
+Resultado: determinista 11/30/36 → 18/60/29 (tp/fp/fn; recall 23,4 → 38,3 %, precisión 26,8 → 23,1 %), juez 2/32/7 → 0/28/9. El determinista de hoy ve más (V7c ya caza 3 de los 11 «seco sin cocción») y acusa más cosas que el
+dueño no marcó (V3, V7a); `coccion_faltante` (8) sigue sin ningún código. Test:
+[`test_p1_plan_lote_60.py`](../tests/test_p1_plan_lote_60.py).
+
 ## El contrato sobre la receta final (C2 · `P1-PLAN-LOTE-23` · 2026-09-12)
 
 CUL-P0-03 del paquete del 09-07: «sustituciones y ajustes dejan técnicas del alimento anterior, cantidades

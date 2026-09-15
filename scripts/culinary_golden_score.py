@@ -10,6 +10,9 @@ juez, que es un LLM opinando sobre sí mismo.
     python scripts/culinary_golden_score.py --estricto      # [C1] por hallazgo: ¿marcó EL defecto que la persona vio?
     python scripts/culinary_golden_score.py --estricto --anotaciones docs/culinary_golden_anotaciones_B.json
     python scripts/culinary_golden_score.py --particiones   # [C1] folds por linaje (plan), sin parientes cruzados
+    python scripts/culinary_golden_score.py --estricto --anotaciones docs/culinary_golden_anotaciones_angelo.json --maquina 2026-09-15
+    python scripts/culinary_golden_score.py --estricto --anotaciones docs/culinary_golden_anotaciones_angelo.json \
+        --comparar-maquina 2026-09-15 --json                 # [lote 60] antes/después del refresco: la línea base estricta
 
 ## Cómo se corrige el sesgo del muestreo
 
@@ -29,7 +32,8 @@ vio que la quinoa no se cocina — cuenta como TP. El estricto adjudica **hallaz
 
   · cada defecto humano trae `clase` (de `RUBRICA`), `severidad`, `evidencia` localizada y, si aplica, `alimento`;
   · un hallazgo de la máquina cuenta como TP sólo si su clase corresponde a un defecto humano de ESA comida
-    (y, si el defecto nombra `alimento`, el texto de la máquina lo menciona); si no, es un FP localizado y el
+    (y, si el defecto nombra `alimento` y el hallazgo nombra alguno, que sea ése — lote 60, abajo); si no, es un FP
+    localizado y el
     defecto humano queda como FN — «un error distinto produce FP y deja FN del esperado»;
   · los hallazgos duplicados de la máquina se cuentan UNA vez (no multiplican TP);
   · cero división devuelve `null`, nunca 0 ni 100.
@@ -49,6 +53,36 @@ percentiles 2,5 y 97,5 sobre 1.000 remuestreos con semilla fija.
 Particiones por linaje: `--particiones` reparte los PLANES (no las comidas) en k folds por su hash — ningún plan
 queda a ambos lados, así que un umbral ajustado en un fold no se evalúa sobre hermanas del mismo plan.
 
+## [P1-PLAN-LOTE-60 · 2026-09-15] (lote 38 del plan · C1 cierre) El alimento sólo restringe si el hallazgo nombra uno
+
+Con la anotación del dueño (80/80, 2026-09-13) el estricto daba 0 aciertos POR CONSTRUCCIÓN: el `alimento` del defecto
+se exigía como SUBCADENA del texto de la máquina, el dueño lo rellenó en casi todos («Carne de res magra», «Casabe y
+queso fresco.») y los textos de V4 no nombran alimento — «V4: ingrediente declara 85 g, pasos declaran 140 g» es
+exactamente el defecto del caso `0108f857ae` («Lista: 85 g de res; paso 1: porción de 140 g») y salía FN + FP. Ahora:
+
+  · el hallazgo NOMBRA un alimento si alguna de sus palabras está en la lista de ingredientes de ESA comida (sin
+    cantidades, unidades, estados ni colores: `_GENERICAS`); sin lista —fixtures— cualquier palabra no genérica cuenta;
+  · si lo nombra, el defecto se empareja sólo si CUALQUIER palabra de ≥ 4 letras de su `alimento` (o una de las cortas
+    de comida: ajo, ají, res, pan, sal, uva) aparece en el hallazgo, sin acentos y en singular; si no nombra ninguno,
+    se empareja sólo por código;
+  · si el hallazgo DECLARA el alimento que acusa —las columnas refrescadas terminan en `(alimento: X)`, el `food` de la
+    violación, o `(componente: X)` en el juez; el builder del 09-06 los tiraba— se compara con ése y no con el texto:
+    un V7e cuyo detalle cita el paso («…corta la ciruela…») acusa al casabe, no a la ciruela;
+  · cada acierto dice `emparejado_por: codigo | codigo+alimento` y cada capa publica cuántos de cada;
+  · «defecto» sin ningún defecto de la rúbrica no es `completo`: queda `sin_rubrica` (no puntúa) y el informe lo nombra.
+
+Se midieron tres formas de decidir «nombra un alimento» (palabras entre comillas, comillas validadas contra la lista,
+palabras de la lista en cualquier sitio): las tres dan los mismos aciertos sobre la anotación del dueño y se eligió la
+última porque es la única que ve un alimento sin comillas (el texto libre del juez, el paso que cita V5). Sin ningún
+filtro el juez ganaba dos aciertos que no lo son — `098d23388f` («Queso Cottage» frente al merey sin tostar del dueño) y
+`0ee6d0a81c` (la nota de seguridad del queso frente a la masa que ningún paso prepara) —: el filtro los descarta a
+propósito. *Un veredicto vale lo que valga el instrumento que lo produjo.*
+
+`--maquina FECHA` puntúa con las columnas refrescadas (`maquina_<capa>_FECHA`, `scripts/culinary_golden_refresh.py`);
+una capa sin columna de esa fecha usa la del 09-06 y el informe lo dice. `--comparar-maquina FECHA` saca antes y
+después a la vez: es la forma de la línea base estricta (`docs/culinary_baseline_estricto_2026-09-15.md`).
+tooltip-anchor: P1-PLAN-LOTE-60-ADJUDICADOR
+
 ## Lo que NO calcula
 
 Una «nota de calidad culinaria» de 1 a 10. Precisión y recall son propiedades del DETECTOR; la
@@ -62,6 +96,7 @@ import collections
 import hashlib
 import json
 import random
+import re
 import sys
 import unicodedata
 from pathlib import Path
@@ -73,6 +108,8 @@ except Exception:
 
 _BACKEND = Path(__file__).resolve().parents[1]
 GOLDEN = _BACKEND / "docs" / "culinary_golden_set.json"
+#: [P1-PLAN-LOTE-60] Las columnas de la máquina del 2026-09-06. Un refresco escribe `maquina_<capa>_<fecha>` AL LADO.
+_COLUMNAS_BASE = ("maquina_determinista", "maquina_juez")
 
 MINIMO_ETIQUETAS = 20
 
@@ -112,6 +149,87 @@ BOOTSTRAP_SEMILLA = 20260912
 def _sin_acentos(s) -> str:
     t = unicodedata.normalize("NFD", str(s or ""))
     return "".join(ch for ch in t if unicodedata.category(ch) != "Mn").lower()
+
+
+#: [P1-PLAN-LOTE-60 · 2026-09-15] Palabras que acompañan a un alimento sin serlo (cantidades, unidades, estados, colores)
+#: y las de las plantillas de los hallazgos: no cuentan para decidir si un hallazgo nombra un alimento ni para emparejarlo.
+#: Sin acentos, como las compara `_palabras_de_alimento`.
+_GENERICAS = frozenset("""
+    taza tazas cucharada cucharadas cucharadita cucharaditas cdas cdta cdtas gramo gramos kilo kilos libra libras onza
+    onzas litro litros unidad unidades porcion porciones rebanada rebanadas lonja lonjas pedazo pedazos pizca pizcas
+    chorrito punado ramita ramitas hoja hojas diente dientes rodaja rodajas trozo trozos
+    mediano mediana medianos medianas grande grandes pequeno pequena pequenos pequenas entero entera enteros enteras
+    cocido cocida cocidos cocidas crudo cruda crudos crudas seco seca secos secas fresco fresca frescos frescas picado
+    picada picados picadas rallado rallada rallados ralladas molido molida light bajo baja grasa integral integrales
+    blanco blanca blancos blancas negro negra negros negras rojo roja rojos rojas verde verdes maduro madura maduros
+    maduras magro magra magros magras dominicano dominicana natural criollo criolla tostado tostada tostados tostadas
+    para sobre entre como pero desde hasta cada todo toda todos todas mismo misma este esta estos estas otro otra otros
+    otras solo sola gusto
+    lista paso pasos receta plato platos ingrediente ingredientes declara declaran declarado declarada declarados listado
+    ningun ninguna menciona aplica listo comer viene compra usan trae pide piden aparece incompatibles habla hablan
+    siempre singular espera minutos horas tiempo persona tenerlo evidencia preparacion nombre montaje mise place toque
+    fuego sirve servir alimento alimentos componente
+""".split())
+#: Alimentos de tres letras que sí cuentan (el mínimo general es 4): «res» de «Carne de res magra», «ajo», «pan»…
+_ALIMENTOS_CORTOS = frozenset({"ajo", "aji", "res", "pan", "sal", "uva"})
+
+
+def _singular(w: str) -> str:
+    """Singular de andar por casa, suficiente para comparar nombres de alimentos: nueces → nuez, limones → limon,
+    tomates → tomate, rábanos → rabano. Se aplica a los DOS lados, así que un error simétrico no rompe el emparejamiento."""
+    if w.endswith("ces") and len(w) > 5:
+        return w[:-3] + "z"
+    if w.endswith("es") and len(w) > 5 and w[-3] in "lnrdzj":
+        return w[:-2]
+    if w.endswith("s") and len(w) > 4:
+        return w[:-1]
+    return w
+
+
+def _palabras_de_alimento(texto) -> set:
+    """[P1-PLAN-LOTE-60] Palabras sin acentos, en minúscula y en singular, de ≥ 4 letras (o de las cortas de comida), sin
+    las genéricas. Es la unidad de comparación del adjudicador: «Rábanos.» y «rabano» son la misma palabra."""
+    out = set()
+    for w in re.findall(r"[a-z]+", _sin_acentos(texto)):
+        if (len(w) >= 4 or w in _ALIMENTOS_CORTOS) and w not in _GENERICAS:
+            out.add(_singular(w))
+    return out
+
+
+def vocabulario_de_comida(caso) -> set:
+    """[P1-PLAN-LOTE-60] Las palabras de alimento de la lista de ingredientes de la comida: con ellas se decide si un
+    hallazgo NOMBRA un alimento. Vacío si el caso no trae lista (fixtures sintéticos)."""
+    voc = set()
+    for linea in caso.get("ingredientes") or []:
+        voc |= _palabras_de_alimento(linea)
+    return voc
+
+
+def _cuerpo_del_hallazgo(texto: str) -> str:
+    """El texto sin el código (`"V4: ..."` → `"..."`): «paso_incoherente» no es un alimento."""
+    t = str(texto or "")
+    return t.split(":", 1)[1] if ":" in t else t
+
+
+#: [P1-PLAN-LOTE-60] El alimento que el hallazgo DECLARA acusar, al final del texto de una columna refrescada.
+_EXPLICITO = re.compile(r"\((?:alimento|componente): ([^()]+)\)\s*$")
+
+
+def _alimento_explicito(texto: str) -> set:
+    """[P1-PLAN-LOTE-60] Las palabras del alimento que el hallazgo declara acusar (`(alimento: X)` de capa 1,
+    `(componente: X)` del juez). Las columnas del 09-06 no lo traen: `set()`, y manda el texto."""
+    m = _EXPLICITO.search(str(texto or ""))
+    return _palabras_de_alimento(m.group(1)) if m else set()
+
+
+def _nombra_alimento(texto: str, vocabulario) -> bool:
+    """[P1-PLAN-LOTE-60] ¿El hallazgo nombra algún alimento? Si declara el que acusa, sí. Si no, con lista de
+    ingredientes: alguna de sus palabras está en ella; sin lista, cualquier palabra no genérica cuenta (restringir de
+    más en un fixture es mejor que emparejar dos alimentos distintos)."""
+    if _alimento_explicito(texto):
+        return True
+    palabras = _palabras_de_alimento(_cuerpo_del_hallazgo(texto))
+    return bool(palabras & vocabulario) if vocabulario else bool(palabras)
 
 
 def _verdad(caso) -> bool | None:
@@ -164,8 +282,11 @@ def _bootstrap(casos, conteo_fn, n=BOOTSTRAP_N, semilla=BOOTSTRAP_SEMILLA):
     return {"precision": _pct(ps), "recall": _pct(rs), "conglomerados": len(claves), "remuestreos": n}
 
 
-def puntuar(d: dict) -> dict:
-    """El marcador BINARIO (por comida): ¿la capa marcó una comida que la persona marcó?"""
+def puntuar(d: dict, columnas: dict | None = None) -> dict:
+    """El marcador BINARIO (por comida): ¿la capa marcó una comida que la persona marcó?
+
+    [P1-PLAN-LOTE-60] `columnas` = `{"determinista": "maquina_determinista_<fecha>", ...}` puntúa una columna refrescada;
+    un caso sin esa columna no se juzgó con ella y queda fuera de la capa (`sin_columna`)."""
     casos = d.get("casos") or []
     disp = d.get("disponibles_por_estrato") or {}
     muestreados = collections.Counter(c.get("estrato") for c in casos)
@@ -183,10 +304,13 @@ def puntuar(d: dict) -> dict:
     salida = {"casos": len(casos), "etiquetados": len(etiquetados),
               "dudosos": dudosos, "sin_etiquetar": sin_etiquetar, "capas": {}}
 
+    columnas = columnas or {}
     for capa, clave in (("determinista", "maquina_determinista"), ("juez", "maquina_juez")):
+        clave = columnas.get(capa) or clave
+        de_la_capa = etiquetados if clave in _COLUMNAS_BASE else [c for c in etiquetados if clave in c]
         tp = fp = fn = tn = 0.0
         tp_n = fp_n = fn_n = tn_n = 0
-        for c in etiquetados:
+        for c in de_la_capa:
             marco = bool(c.get(clave))
             real = _verdad(c)
             w = peso(c)
@@ -206,7 +330,8 @@ def puntuar(d: dict) -> dict:
             "crudo": {"tp": tp_n, "fp": fp_n, "fn": fn_n, "tn": tn_n,
                       "precision": _r(tp_n, fp_n), "recall": _r(tp_n, fn_n)},
             "ponderado": {"precision": _r(tp, fp), "recall": _r(tp, fn)},
-            "ic95_crudo": _bootstrap(etiquetados, _conteo),   # [C1] por conglomerado (plan)
+            "ic95_crudo": _bootstrap(de_la_capa, _conteo),   # [C1] por conglomerado (plan)
+            "columna": clave, "sin_columna": len(etiquetados) - len(de_la_capa),
         }
     return salida
 
@@ -238,8 +363,8 @@ def _hallazgos_maquina(caso, clave) -> list:
     return out
 
 
-def contar_dudosas(d: dict) -> int:
-    return sum(1 for c in (d.get("casos") or []) for t in (c.get("maquina_juez") or []) if MARCA_DUDOSA in str(t))
+def contar_dudosas(d: dict, clave: str = "maquina_juez") -> int:
+    return sum(1 for c in (d.get("casos") or []) for t in (c.get(clave) or []) if MARCA_DUDOSA in str(t))
 
 
 def excluir_casos(d: dict, ids) -> dict:
@@ -284,15 +409,25 @@ def _defectos_validos(defectos):
     return ok, raros
 
 
+def _sin_rubrica_por_defecto_vacio(por, raros) -> dict:
+    """[P1-PLAN-LOTE-60] «defecto» sin ningún defecto de la RUBRICA: no hay contra qué emparejar, así que no puntúa —ni
+    como FP de todo lo que marcó la máquina ni como acierto de nada—. El informe lo nombra para completarlo en la hoja."""
+    return {"estado": "sin_rubrica", "motivo": "defecto_sin_defectos", "defectos": [], "veredicto": True, "por": por,
+            "raros": raros}
+
+
 def _verdad_estricta(caso, externas: dict) -> dict:
     """Qué se toma como verdad para el estricto: `adjudicacion` > anotación única > acuerdo entre varias.
-    Estados: `completo`, `sin_rubrica` (sólo binaria), `pendiente_adjudicacion`, `sin_anotar`, `dudoso`."""
+    Estados: `completo`, `sin_rubrica` (sólo binaria, o «defecto» sin ningún defecto de la rúbrica — lote 60),
+    `pendiente_adjudicacion`, `sin_anotar`, `dudoso`."""
     adj = caso.get("adjudicacion") or externas.get(("adjudicacion", str(caso.get("id"))))
     if isinstance(adj, dict) and adj.get("veredicto") is not None:
         vb = _veredicto_bin(adj.get("veredicto"))
         if vb is None:
             return {"estado": "dudoso", "defectos": [], "veredicto": None, "por": "adjudicacion"}
         defs, raros = _defectos_validos(adj.get("defectos") or [])
+        if vb and not defs:
+            return _sin_rubrica_por_defecto_vacio("adjudicacion", raros)
         return {"estado": "completo", "defectos": defs if vb else [], "veredicto": vb, "por": "adjudicacion", "raros": raros}
     anots = _anotaciones_de(caso, externas)
     con_rubrica = [a for a in anots if isinstance(a.get("defectos"), list)]
@@ -306,6 +441,8 @@ def _verdad_estricta(caso, externas: dict) -> dict:
         if vb is None:
             return {"estado": "dudoso", "defectos": [], "veredicto": None, "por": a.get("anotador")}
         defs, raros = _defectos_validos(a.get("defectos"))
+        if vb and not defs:
+            return _sin_rubrica_por_defecto_vacio(a.get("anotador"), raros)
         return {"estado": "completo", "defectos": defs if vb else [], "veredicto": vb, "por": a.get("anotador"), "raros": raros}
     # dos o más con rúbrica: coinciden en veredicto Y en el conjunto de clases ⇒ completo; si no, pendiente
     vbs = {_veredicto_bin(a.get("veredicto")) for a in con_rubrica}
@@ -313,31 +450,47 @@ def _verdad_estricta(caso, externas: dict) -> dict:
     if len(vbs) == 1 and None not in vbs and len(set(clases)) == 1:
         a = con_rubrica[0]
         defs, raros = _defectos_validos(a.get("defectos"))
+        if vbs == {True} and not defs:
+            return _sin_rubrica_por_defecto_vacio("acuerdo:" + "+".join(str(x.get("anotador")) for x in con_rubrica), raros)
         return {"estado": "completo", "defectos": defs if vbs == {True} else [], "veredicto": vbs.pop(),
                 "por": "acuerdo:" + "+".join(str(x.get("anotador")) for x in con_rubrica), "raros": raros}
     return {"estado": "pendiente_adjudicacion", "defectos": [], "veredicto": None, "por": None}
 
 
-def _adjudicar_hallazgos(maquina: list, defectos: list, codigos_capa: set) -> tuple[int, int, int, list]:
-    """Emparejamiento hallazgo↔defecto, cada uno como mucho una vez. Devuelve (tp, fp, fn, detalle)."""
+def _adjudicar_hallazgos(maquina: list, defectos: list, codigos_capa: set,
+                         vocabulario: set | None = None) -> tuple[int, int, int, list]:
+    """Emparejamiento hallazgo↔defecto, cada uno como mucho una vez. Devuelve (tp, fp, fn, detalle).
+
+    [P1-PLAN-LOTE-60 · 2026-09-15] El `alimento` del defecto sólo restringe cuando el hallazgo NOMBRA algún alimento
+    (`_nombra_alimento` con el `vocabulario` de la lista de ingredientes de la comida): entonces basta con que CUALQUIER
+    palabra del `alimento` aparezca en el que el hallazgo DECLARA acusar (`(alimento: X)` / `(componente: X)`, columnas
+    refrescadas) o, si no declara ninguno, en su texto. Si no nombra ninguno (V4: «ingrediente declara 85 g, pasos declaran
+    140 g») se empareja sólo por código. Antes se exigía el `alimento` entero como subcadena: 0 aciertos con la
+    anotación del dueño. Cada acierto dice `emparejado_por`. tooltip-anchor: P1-PLAN-LOTE-60-ADJUDICADOR"""
     usados = set()
     tp = 0
     detalle = []
     for df in defectos:
         codigos = RUBRICA.get(df.get("clase"), set()) & codigos_capa
-        alimento = _sin_acentos(df.get("alimento") or "").strip()
-        elegido = None
+        alimento = _palabras_de_alimento(df.get("alimento") or "")
+        elegido, por = None, None
         for i, h in enumerate(maquina):
             if i in usados or h["codigo"] not in codigos:
                 continue
-            if alimento and alimento not in _sin_acentos(h["texto"]):
-                continue
+            if alimento and _nombra_alimento(h["texto"], vocabulario):
+                acusado = _alimento_explicito(h["texto"]) or _palabras_de_alimento(_cuerpo_del_hallazgo(h["texto"]))
+                if not alimento & acusado:
+                    continue
+                por = "codigo+alimento"
+            else:
+                por = "codigo"
             elegido = i
             break
         if elegido is not None:
             usados.add(elegido)
             tp += 1
-            detalle.append({"defecto": df.get("clase"), "hallazgo": maquina[elegido]["texto"][:80], "resultado": "tp"})
+            detalle.append({"defecto": df.get("clase"), "hallazgo": maquina[elegido]["texto"][:80], "resultado": "tp",
+                            "emparejado_por": por})
         elif codigos:
             detalle.append({"defecto": df.get("clase"), "hallazgo": None, "resultado": "fn"})
         else:
@@ -350,8 +503,12 @@ def _adjudicar_hallazgos(maquina: list, defectos: list, codigos_capa: set) -> tu
     return tp, fp, fn, detalle
 
 
-def puntuar_estricto(d: dict, externas: dict | None = None) -> dict:
-    """El marcador ESTRICTO (por hallazgo). `externas`: anotaciones cargadas de ficheros, por `id` de caso."""
+def puntuar_estricto(d: dict, externas: dict | None = None, columnas: dict | None = None) -> dict:
+    """El marcador ESTRICTO (por hallazgo). `externas`: anotaciones cargadas de ficheros, por `id` de caso.
+
+    [P1-PLAN-LOTE-60] `columnas` = `{"determinista": "maquina_determinista_<fecha>", "juez": ...}` puntúa columnas
+    refrescadas; un caso sin esa columna queda fuera de la capa (`sin_columna`). Cada capa publica `emparejados`
+    (`codigo` / `codigo+alimento`) y la salida nombra los «defecto» sin defectos (`sin_rubrica_casos`)."""
     externas = externas or {}
     casos = d.get("casos") or []
     disp = d.get("disponibles_por_estrato") or {}
@@ -374,6 +531,7 @@ def puntuar_estricto(d: dict, externas: dict | None = None) -> dict:
               "minimo": MINIMO_ETIQUETAS, "completo": len(completos) >= MINIMO_ETIQUETAS,
               "promocion_habilitada": False, "capas": {}, "por_clase": {}, "no_mecanizable": collections.Counter(),
               "detalle": []}
+    salida["sin_rubrica_casos"] = [c.get("id") for c, v in verdades if v.get("motivo") == "defecto_sin_defectos"]
     por_clase = collections.defaultdict(lambda: {"tp": 0, "fp": 0, "fn": 0})
     # Los defectos que ninguna capa mecaniza se cuentan UNA vez, como FN del sistema entero, no de cada capa.
     for c, v in completos:
@@ -384,14 +542,17 @@ def puntuar_estricto(d: dict, externas: dict | None = None) -> dict:
                                           "hallazgo": None, "resultado": "fn_no_mecanizable"})
     for capa, clave, codigos in (("determinista", "maquina_determinista", _CODIGOS_DET),
                                  ("juez", "maquina_juez", set().union(*[RUBRICA[k] for k in RUBRICA]) - _CODIGOS_DET)):
+        clave = (columnas or {}).get(capa) or clave
+        de_la_capa = completos if clave in _COLUMNAS_BASE else [(c, v) for c, v in completos if clave in c]
         tp_n = fp_n = fn_n = 0
         tp_w = fp_w = fn_w = 0.0
         conteos = {}
-        for c, v in completos:
+        emparejados = collections.Counter()
+        for c, v in de_la_capa:
             maquina = _hallazgos_maquina(c, clave)
             # a cada capa sólo se le exigen los defectos de SU competencia (los que algún código suyo cubre)
             defectos = [df for df in v["defectos"] if RUBRICA.get(df.get("clase"), set()) & codigos]
-            tp, fp, fn, det = _adjudicar_hallazgos(maquina, defectos, codigos)
+            tp, fp, fn, det = _adjudicar_hallazgos(maquina, defectos, codigos, vocabulario_de_comida(c))
             w = peso(c)
             tp_n += tp; fp_n += fp; fn_n += fn
             tp_w += tp * w; fp_w += fp * w; fn_w += fn * w
@@ -399,6 +560,7 @@ def puntuar_estricto(d: dict, externas: dict | None = None) -> dict:
             for x in det:
                 if x["resultado"] == "tp":
                     por_clase[x["defecto"]]["tp"] += 1
+                    emparejados[x.get("emparejado_por")] += 1
                 elif x["resultado"] == "fn":
                     por_clase[x["defecto"]]["fn"] += 1
                 elif x["resultado"] == "fn_no_mecanizable":
@@ -407,8 +569,10 @@ def puntuar_estricto(d: dict, externas: dict | None = None) -> dict:
         salida["capas"][capa] = {
             "crudo": {"tp": tp_n, "fp": fp_n, "fn": fn_n, "precision": _r(tp_n, fp_n), "recall": _r(tp_n, fn_n)},
             "ponderado": {"precision": _r(tp_w, fp_w), "recall": _r(tp_w, fn_w)},
-            "ic95_crudo": _bootstrap([c for c, _ in completos], lambda c, k=conteos: k.get(id(c), (0, 0, 0))),
+            "ic95_crudo": _bootstrap([c for c, _ in de_la_capa], lambda c, k=conteos: k.get(id(c), (0, 0, 0))),
+            "columna": clave, "sin_columna": len(completos) - len(de_la_capa), "emparejados": dict(emparejados),
         }
+    salida["columnas"] = {k: v["columna"] for k, v in salida["capas"].items()}
     salida["por_clase"] = {k: {**v, "precision": _r(v["tp"], v["fp"]), "recall": _r(v["tp"], v["fn"])}
                            for k, v in sorted(por_clase.items())}
     salida["no_mecanizable"] = dict(salida["no_mecanizable"])
@@ -463,6 +627,21 @@ def particiones_por_linaje(d: dict, k: int = 2) -> dict:
             "cruzados": cruzados}
 
 
+def columnas_de(d: dict, fecha: str | None) -> tuple[dict, list]:
+    """[P1-PLAN-LOTE-60] Las columnas de la máquina de una fecha: `maquina_<capa>_<fecha>` si ALGÚN caso la trae; si no,
+    la del 09-06, y una nota que lo dice (sin `--con-juez` el refresco no escribe la del juez)."""
+    out, notas = {}, []
+    for capa in ("determinista", "juez"):
+        k = f"maquina_{capa}_{fecha}"
+        if fecha and any(k in c for c in d.get("casos") or []):
+            out[capa] = k
+        else:
+            out[capa] = f"maquina_{capa}"
+            if fecha:
+                notas.append(f"{capa}: sin columna del {fecha}; se usa `maquina_{capa}` (2026-09-06)")
+    return out, notas
+
+
 def cargar_anotaciones(paths: list) -> dict:
     """Ficheros de anotación externos, uno por anotador:
         {"anotador": "B", "casos": {"<id>": {"veredicto": "ok|defecto|dudoso",
@@ -512,12 +691,18 @@ def render_estricto(r: dict) -> str:
         o.append(f"  {capa:14s}  {str(c['precision']):>5s} -> {str(p['precision']):<6s} "
                  f"{str(c['recall']):>5s} -> {str(p['recall']):<6s}  (tp={c['tp']} fp={c['fp']} fn={c['fn']})"
                  f"  p={ic.get('precision')} r={ic.get('recall')}")
+        if v.get("emparejados") or v.get("columna") not in (None,) + _COLUMNAS_BASE or v.get("sin_columna"):
+            o.append(f"  {'':14s}  columna {v.get('columna')} · emparejados {v.get('emparejados') or {}}"
+                     + (f" · casos sin la columna {v['sin_columna']}" if v.get("sin_columna") else ""))
     if r["por_clase"]:
         o.append("  por clase (tp/fp/fn · precision · recall):")
         for k, v in r["por_clase"].items():
             o.append(f"    {k:26s} {v['tp']}/{v['fp']}/{v['fn']} · {v['precision']} · {v['recall']}")
     if r["no_mecanizable"]:
         o.append(f"  defectos que ninguna capa mecaniza (FN del sistema entero): {r['no_mecanizable']}")
+    if r.get("sin_rubrica_casos"):
+        o.append("  «defecto» sin ningun defecto de la rubrica (no puntuan; completarlos en la hoja): "
+                 + ", ".join(str(x) for x in r["sin_rubrica_casos"]))
     a = r.get("acuerdo") or {}
     o.append(f"  acuerdo: anotadores={a.get('anotadores')} comunes={a.get('comunes')} kappa={a.get('kappa')} "
              f"discrepancias={len(a.get('discrepancias') or [])}")
@@ -535,6 +720,8 @@ def main() -> int:
     ap.add_argument("--particiones", type=int, default=0, help="[C1] k folds por linaje (plan)")
     ap.add_argument("--con-dudosas", action="store_true", help="[P1-PLAN-LOTE-28] cuenta tambien los hallazgos [dudosa] del juez")
     ap.add_argument("--excluir-dev", help="[P1-PLAN-LOTE-28] JSON con ids de casos de desarrollo que NO son holdout")
+    ap.add_argument("--maquina", help="[P1-PLAN-LOTE-60] puntua con las columnas maquina_<capa>_<FECHA> del refresco")
+    ap.add_argument("--comparar-maquina", help="[P1-PLAN-LOTE-60] con --estricto: antes (09-06) y despues (<FECHA>) a la vez")
     a = ap.parse_args()
     global INCLUIR_DUDOSAS
     INCLUIR_DUDOSAS = bool(a.con_dudosas)
@@ -549,13 +736,32 @@ def main() -> int:
         print(json.dumps(part, ensure_ascii=False, indent=2) if a.json else
               f"particiones k={part['k']} · planes por fold {part['planes_por_fold']} · cruzados {len(part['cruzados'])}")
         return 0 if not part["cruzados"] else 3
+    columnas, notas = columnas_de(d, a.maquina)
+    if a.estricto and a.comparar_maquina:
+        # [P1-PLAN-LOTE-60] la línea base estricta: el MISMO adjudicador sobre las columnas del 09-06 y las refrescadas
+        ext = cargar_anotaciones(a.anotaciones)
+        despues_cols, notas = columnas_de(d, a.comparar_maquina)
+        out = {"anotaciones": [Path(p).name for p in a.anotaciones], "notas": notas,
+               "antes": puntuar_estricto(d, ext), "despues": puntuar_estricto(d, ext, despues_cols)}
+        for k in ("antes", "despues"):
+            out[k]["dudosas_excluidas"] = 0 if INCLUIR_DUDOSAS else contar_dudosas(d, out[k]["columnas"]["juez"])
+            out[k]["excluidos_dev"] = d.get("excluidos_dev", 0)
+        if a.json:
+            print(json.dumps(out, ensure_ascii=False, indent=2, default=str))
+        else:
+            print("\n".join(["== ANTES · columnas de la maquina del 2026-09-06 ==", render_estricto(out["antes"]), "",
+                             f"== DESPUES · {out['despues']['columnas']} ==", *[f"  nota: {n}" for n in notas],
+                             render_estricto(out["despues"])]))
+        return 0 if (out["antes"]["completo"] and out["despues"]["completo"]) else 4
     if a.estricto:
-        r = puntuar_estricto(d, cargar_anotaciones(a.anotaciones))
-        r["dudosas_excluidas"] = 0 if INCLUIR_DUDOSAS else contar_dudosas(d)
+        r = puntuar_estricto(d, cargar_anotaciones(a.anotaciones), columnas)
+        r["dudosas_excluidas"] = 0 if INCLUIR_DUDOSAS else contar_dudosas(d, r["columnas"]["juez"])
         r["excluidos_dev"] = d.get("excluidos_dev", 0)
-        print(json.dumps(r, ensure_ascii=False, indent=2, default=str) if a.json else render_estricto(r))
+        r["notas_columnas"] = notas
+        print(json.dumps(r, ensure_ascii=False, indent=2, default=str) if a.json
+              else "\n".join([*[f"  nota: {n}" for n in notas], render_estricto(r)]))
         return 0 if r["completo"] else 4
-    r = puntuar(d)
+    r = puntuar(d, columnas)
     print(json.dumps(r, ensure_ascii=False, indent=2) if a.json else render(r))
     # [P1-SCORE-INCOMPLETE-EXIT · 2026-09-07] Un experimento SIN etiquetas suficientes salia con
     # codigo 0 y metricas `null`: para CI y para cualquier consumidor eso es indistinguible de

@@ -218,7 +218,11 @@ _PROCESS_START_ISO = datetime.now(timezone.utc).isoformat()
 # [P1-PLAN-LOTE-58 · 2026-09-15] El coach anunciaba la acción antes de la tool («Te las añado a tu Nevera.») y la
 # confirmaba después («Listo ✅ Ya están…»): el usuario la leía dos veces (batería v6: B8, F7, J4). La frase de anuncio
 # se quita del texto previo a la primera tool en el stream Y en el texto final a la vez. Knob MEALFIT_CHAT_STRIP_TOOL_ANNOUNCE.
-_LAST_KNOWN_PFIX = "P1-PLAN-LOTE-58 · 2026-09-15"
+# [P1-PLAN-LOTE-60 · 2026-09-15] (lote 38 del plan 38-44) La anotación del dueño entra al instrumento: el estricto daba 0
+# aciertos por construcción (exigía el alimento del dueño como subcadena del texto de V4, que no nombra ninguno); ahora el
+# alimento sólo restringe si el hallazgo nombra uno, las columnas de la máquina se refrescan con fecha al lado de las del
+# 09-06 y la línea base estricta queda publicada (docs/culinary_baseline_estricto_2026-09-15.md).
+_LAST_KNOWN_PFIX = "P1-PLAN-LOTE-60 · 2026-09-15"
 
 # [P1-SENTRY-SAMPLE-COST · 2026-05-12] Sentry sampling driven from env vars
 # con default seguro 0.1 (10%). Pre-fix tenía `traces_sample_rate=1.0` y

@@ -9,7 +9,7 @@ y se anota la discrepancia en el informe. El protocolo largo (entorno, gate, che
 
 | Lote | Ítem del plan | Qué se entrega | Tamaño |
 |---|---|---|---|
-| 38 | C1 (cierre) · C0 | La anotación del dueño entra al instrumento: adjudicador arreglado, columnas de la máquina refrescadas, línea base ESTRICTA publicada | 1 sesión |
+| 38 | C1 (cierre) · C0 | ✅ HECHO (`P1-PLAN-LOTE-60` · 2026-09-15): adjudicador arreglado, columnas de la máquina refrescadas, línea base ESTRICTA publicada — determinista 11/30/36 → 18/60/29 (tp/fp/fn; recall 23,4 → 38,3 %, precisión 26,8 → 23,1 %), juez 2/32/7 → 0/28/9. Ver la sección «Lote 38» | — |
 | 39 | C5 / CUL-P1-05 | Detector para `coccion_faltante` (8 high sin ningún código) y recall de `seco_sin_coccion` (10 high, 0 detectados) y `usa_lo_que_no_esta` (1 de 9) | 1 sesión |
 | 40 | C5 / C6 (parte medible) | Precisión del juez por código sobre la verdad humana; códigos con precisión baja pasan a observación; recomendación para el flip de C6 (que decide el dueño) | ½-1 sesión |
 | 41 | Tarea propuesta 13-sep | La tormenta de reintentos del catálogo con la base caída: caché negativa corta en `get_master_ingredients` y `catalog_capability` | ½ sesión |
@@ -81,7 +81,7 @@ cierran hoy en ~10 min con techo de 30). Un lote que sólo toca docs/scripts de 
 
 **Numeración (P1-PLAN-LOTE-45 · 14-sep).** El marker nunca baja: cada test de lote exige `N` ≥ el suyo. El 41 y el 45 ya
 están cerrados y desplegados, y del 46 al 49 también, así que los lotes pendientes de este plan (38, 39, 40, 42, 43,
-44) se cierran con el **siguiente número libre ≥ 56** —marker, `tests/test_p1_plan_lote_<N>.py` y memoria con ese número— y el título del commit
+44) se cierran con el **siguiente número libre** (≥ 56 al escribirlo; el 38 cerró como `P1-PLAN-LOTE-60` el 15-sep, así que hoy ≥ 61) —marker, `tests/test_p1_plan_lote_<N>.py` y memoria con ese número— y el título del commit
 cita su número de plan («`P1-PLAN-LOTE-56` (lote 38 del plan)»). Cerrar con el número del plan haría fallar los tests 41 y 45 a 53.
 El 50, el 51 y el 53 los tomó la sesión del coach (14-15 sep, `P0-CHAT-IDENTITY-FROM-TOKEN`, `P1-DIARY-CLAIM-PERFECTIVE` y la
 batería de escritura del coach y los escáneres), ajenos a este plan; el 54 (panel del tiempo de cocina) y el 55 (minutos de los pasos del registry) están reservados.
@@ -89,6 +89,14 @@ batería de escritura del coach y los escáneres), ajenos a este plan; el 54 (pa
 ---
 
 ## Lote 38 · C1 (cierre): la anotación del dueño entra al instrumento
+
+**Estado: ✅ HECHO · `P1-PLAN-LOTE-60` · 2026-09-15.** determinista 11/30/36 → 18/60/29 (tp/fp/fn; recall 23,4 → 38,3 %, precisión 26,8 → 23,1 %), juez 2/32/7 → 0/28/9; detalle, tablas por clase y coste en
+[`culinary_baseline_estricto_2026-09-15.md`](culinary_baseline_estricto_2026-09-15.md). Discrepancias con lo escrito abajo, anotadas:
+(1) «nombra algún alimento» se decide con la lista de ingredientes de la comida, no con las comillas (las tres formas dan
+los mismos aciertos con las columnas del 09-06; ésta es la única que ve un alimento sin comillas); (2) el refresco escribe
+también el alimento que el detector acusa, porque el detalle de V6/V7e cita el paso y nombra otros; (3) el juez se llamó
+con una comida por llamada (el golden set no guarda el día) y dos veces: la primera corrida perdió 9 casos por timeout y no
+llevaba el componente; (4) V7a frente a `cantidad_inconsistente` es una frontera de la RÚBRICA —medida, no aplicada—.
 
 ### Qué hay (medido 2026-09-14)
 

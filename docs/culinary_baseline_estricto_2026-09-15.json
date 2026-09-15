@@ -1,0 +1,2330 @@
+{
+  "anotaciones": [
+    "culinary_golden_anotaciones_angelo.json"
+  ],
+  "notas": [],
+  "antes": {
+    "casos": 80,
+    "completos": 75,
+    "estados": {
+      "completo": 75,
+      "dudoso": 5
+    },
+    "minimo": 20,
+    "completo": true,
+    "promocion_habilitada": false,
+    "capas": {
+      "determinista": {
+        "crudo": {
+          "tp": 11,
+          "fp": 30,
+          "fn": 36,
+          "precision": 26.8,
+          "recall": 23.4
+        },
+        "ponderado": {
+          "precision": 32.4,
+          "recall": 8.0
+        },
+        "ic95_crudo": {
+          "precision": [
+            10.7,
+            40.7
+          ],
+          "recall": [
+            9.4,
+            32.7
+          ],
+          "conglomerados": 47,
+          "remuestreos": 1000
+        },
+        "columna": "maquina_determinista",
+        "sin_columna": 0,
+        "emparejados": {
+          "codigo": 8,
+          "codigo+alimento": 3
+        }
+      },
+      "juez": {
+        "crudo": {
+          "tp": 2,
+          "fp": 32,
+          "fn": 7,
+          "precision": 5.9,
+          "recall": 22.2
+        },
+        "ponderado": {
+          "precision": 5.7,
+          "recall": 7.9
+        },
+        "ic95_crudo": {
+          "precision": [
+            0.0,
+            13.3
+          ],
+          "recall": [
+            0.0,
+            50.0
+          ],
+          "conglomerados": 47,
+          "remuestreos": 1000
+        },
+        "columna": "maquina_juez",
+        "sin_columna": 0,
+        "emparejados": {
+          "codigo+alimento": 2
+        }
+      }
+    },
+    "por_clase": {
+      "cantidad_inconsistente": {
+        "tp": 7,
+        "fp": 0,
+        "fn": 12,
+        "precision": 100.0,
+        "recall": 36.8
+      },
+      "estructura_del_plato": {
+        "tp": 0,
+        "fp": 0,
+        "fn": 1,
+        "precision": null,
+        "recall": 0.0
+      },
+      "ingrediente_huerfano": {
+        "tp": 2,
+        "fp": 0,
+        "fn": 3,
+        "precision": 100.0,
+        "recall": 40.0
+      },
+      "masa_sobrante": {
+        "tp": 0,
+        "fp": 0,
+        "fn": 1,
+        "precision": null,
+        "recall": 0.0
+      },
+      "nombre_no_corresponde": {
+        "tp": 0,
+        "fp": 0,
+        "fn": 2,
+        "precision": null,
+        "recall": 0.0
+      },
+      "paso_incoherente": {
+        "tp": 2,
+        "fp": 0,
+        "fn": 5,
+        "precision": 100.0,
+        "recall": 28.6
+      },
+      "seco_sin_coccion": {
+        "tp": 0,
+        "fp": 0,
+        "fn": 11,
+        "precision": null,
+        "recall": 0.0
+      },
+      "usa_lo_que_no_esta": {
+        "tp": 1,
+        "fp": 0,
+        "fn": 8,
+        "precision": 100.0,
+        "recall": 11.1
+      },
+      "verbo_alimento": {
+        "tp": 1,
+        "fp": 0,
+        "fn": 0,
+        "precision": 100.0,
+        "recall": 100.0
+      }
+    },
+    "no_mecanizable": {
+      "coccion_faltante": 8,
+      "otro": 2
+    },
+    "detalle": [
+      {
+        "caso": "0d16ef69e3",
+        "capa": null,
+        "defecto": "coccion_faltante",
+        "hallazgo": null,
+        "resultado": "fn_no_mecanizable"
+      },
+      {
+        "caso": "05145657e1",
+        "capa": null,
+        "defecto": "coccion_faltante",
+        "hallazgo": null,
+        "resultado": "fn_no_mecanizable"
+      },
+      {
+        "caso": "078dcac1d0",
+        "capa": null,
+        "defecto": "coccion_faltante",
+        "hallazgo": null,
+        "resultado": "fn_no_mecanizable"
+      },
+      {
+        "caso": "26910ac91d",
+        "capa": null,
+        "defecto": "coccion_faltante",
+        "hallazgo": null,
+        "resultado": "fn_no_mecanizable"
+      },
+      {
+        "caso": "2697e63381",
+        "capa": null,
+        "defecto": "coccion_faltante",
+        "hallazgo": null,
+        "resultado": "fn_no_mecanizable"
+      },
+      {
+        "caso": "46c02301b2",
+        "capa": null,
+        "defecto": "coccion_faltante",
+        "hallazgo": null,
+        "resultado": "fn_no_mecanizable"
+      },
+      {
+        "caso": "69d4dcbd6f",
+        "capa": null,
+        "defecto": "coccion_faltante",
+        "hallazgo": null,
+        "resultado": "fn_no_mecanizable"
+      },
+      {
+        "caso": "00e3c06383",
+        "capa": null,
+        "defecto": "otro",
+        "hallazgo": null,
+        "resultado": "fn_no_mecanizable"
+      },
+      {
+        "caso": "028f7003f6",
+        "capa": null,
+        "defecto": "otro",
+        "hallazgo": null,
+        "resultado": "fn_no_mecanizable"
+      },
+      {
+        "caso": "049fbef8b5",
+        "capa": null,
+        "defecto": "coccion_faltante",
+        "hallazgo": null,
+        "resultado": "fn_no_mecanizable"
+      },
+      {
+        "caso": "0108f857ae",
+        "capa": "determinista",
+        "defecto": "cantidad_inconsistente",
+        "hallazgo": "V4: ingrediente declara 85 g, pasos declaran 140 g",
+        "resultado": "tp",
+        "emparejado_por": "codigo"
+      },
+      {
+        "caso": "0468ff03aa",
+        "capa": "determinista",
+        "defecto": "cantidad_inconsistente",
+        "hallazgo": "V4: ingrediente declara 45 g, pasos declaran 20 g",
+        "resultado": "tp",
+        "emparejado_por": "codigo"
+      },
+      {
+        "caso": "05856e2162",
+        "capa": "determinista",
+        "defecto": null,
+        "hallazgo": "V1: paso aplica 'hervir' a un listo-para-comer: El Toque de Fuego: hierve la pas",
+        "resultado": "fp"
+      },
+      {
+        "caso": "06416aacbb",
+        "capa": "determinista",
+        "defecto": "cantidad_inconsistente",
+        "hallazgo": "V4: ingrediente declara 5 g, pasos declaran 15 g",
+        "resultado": "tp",
+        "emparejado_por": "codigo"
+      },
+      {
+        "caso": "0b1f190ac9",
+        "capa": "determinista",
+        "defecto": "ingrediente_huerfano",
+        "hallazgo": "V3: listado ('½ taza de habichuelas blancas seco') pero ningún paso lo menciona",
+        "resultado": "tp",
+        "emparejado_por": "codigo+alimento"
+      },
+      {
+        "caso": "0d16ef69e3",
+        "capa": "determinista",
+        "defecto": null,
+        "hallazgo": "V3: listado ('½ hoja de laurel') pero ningún paso lo menciona",
+        "resultado": "fp"
+      },
+      {
+        "caso": "0d4eeb64eb",
+        "capa": "determinista",
+        "defecto": "seco_sin_coccion",
+        "hallazgo": null,
+        "resultado": "fn"
+      },
+      {
+        "caso": "0d4eeb64eb",
+        "capa": "determinista",
+        "defecto": null,
+        "hallazgo": "V4: ingrediente declara 45 g, pasos declaran 250 g",
+        "resultado": "fp"
+      },
+      {
+        "caso": "0ef0ba50b7",
+        "capa": "determinista",
+        "defecto": "masa_sobrante",
+        "hallazgo": null,
+        "resultado": "fn"
+      },
+      {
+        "caso": "0ef0ba50b7",
+        "capa": "determinista",
+        "defecto": null,
+        "hallazgo": "V3: listado ('5 cdas de queso ricotta') pero ningún paso lo menciona",
+        "resultado": "fp"
+      },
+      {
+        "caso": "119f0e6a06",
+        "capa": "determinista",
+        "defecto": "cantidad_inconsistente",
+        "hallazgo": "V4: ingrediente declara 25 g, pasos declaran 35 g",
+        "resultado": "tp",
+        "emparejado_por": "codigo"
+      },
+      {
+        "caso": "1794ad8c1d",
+        "capa": "determinista",
+        "defecto": "usa_lo_que_no_esta",
+        "hallazgo": null,
+        "resultado": "fn"
+      },
+      {
+        "caso": "1794ad8c1d",
+        "capa": "determinista",
+        "defecto": null,
+        "hallazgo": "V3: listado ('¾ taza de queso parmesano') pero ningún paso lo menciona",
+        "resultado": "fp"
+      },
+      {
+        "caso": "1794ad8c1d",
+        "capa": "determinista",
+        "defecto": null,
+        "hallazgo": "V3: listado ('125 ml de queso parmesano') pero ningún paso lo menciona",
+        "resultado": "fp"
+      },
+      {
+        "caso": "1794ad8c1d",
+        "capa": "determinista",
+        "defecto": null,
+        "hallazgo": "V3: listado ('½ manzana') pero ningún paso lo menciona",
+        "resultado": "fp"
+      },
+      {
+        "caso": "17fda2a839",
+        "capa": "determinista",
+        "defecto": "cantidad_inconsistente",
+        "hallazgo": "V4: ingrediente declara 300 g, pasos declaran 460 g",
+        "resultado": "tp",
+        "emparejado_por": "codigo"
+      },
+      {
+        "caso": "1929f8cf78",
+        "capa": "determinista",
+        "defecto": "estructura_del_plato",
+        "hallazgo": null,
+        "resultado": "fn"
+      },
+      {
+        "caso": "1929f8cf78",
+        "capa": "determinista",
+        "defecto": null,
+        "hallazgo": "V2: '(ya viene cocido)' sobre alimento fresco: El Toque de Fuego: Calienta el ac",
+        "resultado": "fp"
+      },
+      {
+        "caso": "19b13609c9",
+        "capa": "determinista",
+        "defecto": "seco_sin_coccion",
+        "hallazgo": null,
+        "resultado": "fn"
+      },
+      {
+        "caso": "19b13609c9",
+        "capa": "determinista",
+        "defecto": null,
+        "hallazgo": "V3: listado ('1 tomate') pero ningún paso lo menciona",
+        "resultado": "fp"
+      },
+      {
+        "caso": "19b13609c9",
+        "capa": "determinista",
+        "defecto": null,
+        "hallazgo": "V3: listado ('½ tomate') pero ningún paso lo menciona",
+        "resultado": "fp"
+      },
+      {
+        "caso": "1c0c5e6582",
+        "capa": "determinista",
+        "defecto": "usa_lo_que_no_esta",
+        "hallazgo": null,
+        "resultado": "fn"
+      },
+      {
+        "caso": "1c0c5e6582",
+        "capa": "determinista",
+        "defecto": null,
+        "hallazgo": "V3: listado ('300 g de manzana') pero ningún paso lo menciona",
+        "resultado": "fp"
+      },
+      {
+        "caso": "2168899312",
+        "capa": "determinista",
+        "defecto": "cantidad_inconsistente",
+        "hallazgo": "V4: ingrediente declara 120 g, pasos declaran 30 g",
+        "resultado": "tp",
+        "emparejado_por": "codigo"
+      },
+      {
+        "caso": "24dbfaebdb",
+        "capa": "determinista",
+        "defecto": "seco_sin_coccion",
+        "hallazgo": null,
+        "resultado": "fn"
+      },
+      {
+        "caso": "24dbfaebdb",
+        "capa": "determinista",
+        "defecto": null,
+        "hallazgo": "V3: listado ('½ manzana') pero ningún paso lo menciona",
+        "resultado": "fp"
+      },
+      {
+        "caso": "2546d9d030",
+        "capa": "determinista",
+        "defecto": null,
+        "hallazgo": "V1: 'tostar' no está en prep_methods('hervir', 'ninguno'): El Toque de Fuego: tu",
+        "resultado": "fp"
+      },
+      {
+        "caso": "2878e78af8",
+        "capa": "determinista",
+        "defecto": null,
+        "hallazgo": "V1: 'tostar' no está en prep_methods('hervir', 'ninguno'): El Toque de Fuego: tu",
+        "resultado": "fp"
+      },
+      {
+        "caso": "292b09e344",
+        "capa": "determinista",
+        "defecto": "ingrediente_huerfano",
+        "hallazgo": "V3: listado ('40 g de arroz blanco crudo') pero ningún paso lo menciona",
+        "resultado": "tp",
+        "emparejado_por": "codigo+alimento"
+      },
+      {
+        "caso": "00fae1c079",
+        "capa": "determinista",
+        "defecto": "usa_lo_que_no_esta",
+        "hallazgo": null,
+        "resultado": "fn"
+      },
+      {
+        "caso": "01606d0573",
+        "capa": "determinista",
+        "defecto": "seco_sin_coccion",
+        "hallazgo": null,
+        "resultado": "fn"
+      },
+      {
+        "caso": "06d4e17091",
+        "capa": "determinista",
+        "defecto": "cantidad_inconsistente",
+        "hallazgo": null,
+        "resultado": "fn"
+      },
+      {
+        "caso": "0a22373d6b",
+        "capa": "determinista",
+        "defecto": "seco_sin_coccion",
+        "hallazgo": null,
+        "resultado": "fn"
+      },
+      {
+        "caso": "0bd5722712",
+        "capa": "determinista",
+        "defecto": "cantidad_inconsistente",
+        "hallazgo": null,
+        "resultado": "fn"
+      },
+      {
+        "caso": "1191a15521",
+        "capa": "determinista",
+        "defecto": "cantidad_inconsistente",
+        "hallazgo": null,
+        "resultado": "fn"
+      },
+      {
+        "caso": "12dc5c0e78",
+        "capa": "determinista",
+        "defecto": "cantidad_inconsistente",
+        "hallazgo": null,
+        "resultado": "fn"
+      },
+      {
+        "caso": "15ddcb26c1",
+        "capa": "determinista",
+        "defecto": "cantidad_inconsistente",
+        "hallazgo": null,
+        "resultado": "fn"
+      },
+      {
+        "caso": "19f304d513",
+        "capa": "determinista",
+        "defecto": "usa_lo_que_no_esta",
+        "hallazgo": null,
+        "resultado": "fn"
+      },
+      {
+        "caso": "1d6d7dc439",
+        "capa": "determinista",
+        "defecto": "cantidad_inconsistente",
+        "hallazgo": null,
+        "resultado": "fn"
+      },
+      {
+        "caso": "1ea600db80",
+        "capa": "determinista",
+        "defecto": "seco_sin_coccion",
+        "hallazgo": null,
+        "resultado": "fn"
+      },
+      {
+        "caso": "0dbc337c25",
+        "capa": "determinista",
+        "defecto": "verbo_alimento",
+        "hallazgo": "V1: paso aplica 'hervir' a un listo-para-comer: El Toque de Fuego: cuece las 3 y",
+        "resultado": "tp",
+        "emparejado_por": "codigo+alimento"
+      },
+      {
+        "caso": "17285dfa78",
+        "capa": "determinista",
+        "defecto": "seco_sin_coccion",
+        "hallazgo": null,
+        "resultado": "fn"
+      },
+      {
+        "caso": "17285dfa78",
+        "capa": "determinista",
+        "defecto": null,
+        "hallazgo": "V1: paso aplica 'plancha' a un listo-para-comer: El Toque de Fuego: calienta el ",
+        "resultado": "fp"
+      },
+      {
+        "caso": "17285dfa78",
+        "capa": "determinista",
+        "defecto": null,
+        "hallazgo": "V1: 'saltear' no está en prep_methods('hervir', 'freir', 'hornear', 'guisar'): E",
+        "resultado": "fp"
+      },
+      {
+        "caso": "17285dfa78",
+        "capa": "determinista",
+        "defecto": null,
+        "hallazgo": "V5: el paso lo usa pero la lista no lo trae: Montaje: forma una cama de repollo,",
+        "resultado": "fp"
+      },
+      {
+        "caso": "20fdfb4de7",
+        "capa": "determinista",
+        "defecto": "cantidad_inconsistente",
+        "hallazgo": "V4: ingrediente declara 25 g, pasos declaran 1 g",
+        "resultado": "tp",
+        "emparejado_por": "codigo"
+      },
+      {
+        "caso": "20fdfb4de7",
+        "capa": "determinista",
+        "defecto": null,
+        "hallazgo": "V4: ingrediente declara 48 g, pasos declaran 1 g",
+        "resultado": "fp"
+      },
+      {
+        "caso": "2538fbe6a2",
+        "capa": "determinista",
+        "defecto": null,
+        "hallazgo": "V4: ingrediente declara 10 g, pasos declaran 35 g",
+        "resultado": "fp"
+      },
+      {
+        "caso": "340665859e",
+        "capa": "determinista",
+        "defecto": "usa_lo_que_no_esta",
+        "hallazgo": "V5: el paso lo usa pero la lista no lo trae: Montaje: sirve el revoltillo calien",
+        "resultado": "tp",
+        "emparejado_por": "codigo"
+      },
+      {
+        "caso": "340665859e",
+        "capa": "determinista",
+        "defecto": null,
+        "hallazgo": "V3: listado ('1 clara de huevo') pero ningún paso lo menciona",
+        "resultado": "fp"
+      },
+      {
+        "caso": "3b8dd7ce2c",
+        "capa": "determinista",
+        "defecto": "seco_sin_coccion",
+        "hallazgo": null,
+        "resultado": "fn"
+      },
+      {
+        "caso": "3b8dd7ce2c",
+        "capa": "determinista",
+        "defecto": null,
+        "hallazgo": "V4: ingrediente declara 40 g, pasos declaran 25 g",
+        "resultado": "fp"
+      },
+      {
+        "caso": "456feecd3a",
+        "capa": "determinista",
+        "defecto": null,
+        "hallazgo": "V3: listado ('2 claras de huevo') pero ningún paso lo menciona",
+        "resultado": "fp"
+      },
+      {
+        "caso": "46c02301b2",
+        "capa": "determinista",
+        "defecto": null,
+        "hallazgo": "V4: ingrediente declara 40 g, pasos declaran 160 g",
+        "resultado": "fp"
+      },
+      {
+        "caso": "4f073559b3",
+        "capa": "determinista",
+        "defecto": null,
+        "hallazgo": "V2: '(ya viene cocido)' sobre alimento fresco: El Toque de Fuego: hierve el plát",
+        "resultado": "fp"
+      },
+      {
+        "caso": "55fef36cd9",
+        "capa": "determinista",
+        "defecto": "usa_lo_que_no_esta",
+        "hallazgo": null,
+        "resultado": "fn"
+      },
+      {
+        "caso": "55fef36cd9",
+        "capa": "determinista",
+        "defecto": null,
+        "hallazgo": "V3: listado ('95 g de queso mozzarella light rallado') pero ningún paso lo menci",
+        "resultado": "fp"
+      },
+      {
+        "caso": "69d4dcbd6f",
+        "capa": "determinista",
+        "defecto": null,
+        "hallazgo": "V1: 'licuar' no está en prep_methods('hervir', 'plancha', 'freir', 'hornear', 'g",
+        "resultado": "fp"
+      },
+      {
+        "caso": "77c78d3990",
+        "capa": "determinista",
+        "defecto": null,
+        "hallazgo": "V1: 'tostar' no está en prep_methods('hervir', 'ninguno'): El Toque de Fuego: tu",
+        "resultado": "fp"
+      },
+      {
+        "caso": "7ef0b23dd8",
+        "capa": "determinista",
+        "defecto": "seco_sin_coccion",
+        "hallazgo": null,
+        "resultado": "fn"
+      },
+      {
+        "caso": "7ef0b23dd8",
+        "capa": "determinista",
+        "defecto": null,
+        "hallazgo": "V3: listado ('2 ramitas de cilantro 1 cucharada') pero ningún paso lo menciona",
+        "resultado": "fp"
+      },
+      {
+        "caso": "8474cf4488",
+        "capa": "determinista",
+        "defecto": "ingrediente_huerfano",
+        "hallazgo": null,
+        "resultado": "fn"
+      },
+      {
+        "caso": "8474cf4488",
+        "capa": "determinista",
+        "defecto": null,
+        "hallazgo": "V1: paso aplica 'saltear' a un listo-para-comer: El Toque de Fuego: calienta el ",
+        "resultado": "fp"
+      },
+      {
+        "caso": "84c2e6d4f0",
+        "capa": "determinista",
+        "defecto": "usa_lo_que_no_esta",
+        "hallazgo": null,
+        "resultado": "fn"
+      },
+      {
+        "caso": "84c2e6d4f0",
+        "capa": "determinista",
+        "defecto": null,
+        "hallazgo": "V3: listado ('1 tomate') pero ningún paso lo menciona",
+        "resultado": "fp"
+      },
+      {
+        "caso": "01b41535b1",
+        "capa": "determinista",
+        "defecto": "cantidad_inconsistente",
+        "hallazgo": null,
+        "resultado": "fn"
+      },
+      {
+        "caso": "01c22c6847",
+        "capa": "determinista",
+        "defecto": "seco_sin_coccion",
+        "hallazgo": null,
+        "resultado": "fn"
+      },
+      {
+        "caso": "01c46fd2a5",
+        "capa": "determinista",
+        "defecto": "ingrediente_huerfano",
+        "hallazgo": null,
+        "resultado": "fn"
+      },
+      {
+        "caso": "02068c1382",
+        "capa": "determinista",
+        "defecto": "cantidad_inconsistente",
+        "hallazgo": null,
+        "resultado": "fn"
+      },
+      {
+        "caso": "023da1766e",
+        "capa": "determinista",
+        "defecto": "usa_lo_que_no_esta",
+        "hallazgo": null,
+        "resultado": "fn"
+      },
+      {
+        "caso": "028ad9ed64",
+        "capa": "determinista",
+        "defecto": "ingrediente_huerfano",
+        "hallazgo": null,
+        "resultado": "fn"
+      },
+      {
+        "caso": "033afcafbf",
+        "capa": "determinista",
+        "defecto": "cantidad_inconsistente",
+        "hallazgo": null,
+        "resultado": "fn"
+      },
+      {
+        "caso": "03e16ec7fb",
+        "capa": "determinista",
+        "defecto": "cantidad_inconsistente",
+        "hallazgo": null,
+        "resultado": "fn"
+      },
+      {
+        "caso": "045b2e2131",
+        "capa": "determinista",
+        "defecto": "cantidad_inconsistente",
+        "hallazgo": null,
+        "resultado": "fn"
+      },
+      {
+        "caso": "04d25439d9",
+        "capa": "determinista",
+        "defecto": "usa_lo_que_no_esta",
+        "hallazgo": null,
+        "resultado": "fn"
+      },
+      {
+        "caso": "04eb731253",
+        "capa": "determinista",
+        "defecto": "cantidad_inconsistente",
+        "hallazgo": null,
+        "resultado": "fn"
+      },
+      {
+        "caso": "060b4fda6a",
+        "capa": "determinista",
+        "defecto": "seco_sin_coccion",
+        "hallazgo": null,
+        "resultado": "fn"
+      },
+      {
+        "caso": "05856e2162",
+        "capa": "juez",
+        "defecto": "paso_incoherente",
+        "hallazgo": null,
+        "resultado": "fn"
+      },
+      {
+        "caso": "00fae1c079",
+        "capa": "juez",
+        "defecto": null,
+        "hallazgo": "combo_absurdo: El revoltillo criollo con casabe y aguacate es un desayuno domini",
+        "resultado": "fp"
+      },
+      {
+        "caso": "01606d0573",
+        "capa": "juez",
+        "defecto": null,
+        "hallazgo": "slot_inapropiado: El desayuno incluye 40 g de arroz blanco crudo que se 'incorpo",
+        "resultado": "fp"
+      },
+      {
+        "caso": "05145657e1",
+        "capa": "juez",
+        "defecto": null,
+        "hallazgo": "paso_incoherente: El paso de mise en place ordena 'pica el ají cubanela, la cebo",
+        "resultado": "fp"
+      },
+      {
+        "caso": "06d4e17091",
+        "capa": "juez",
+        "defecto": null,
+        "hallazgo": "paso_incoherente: El montaje menciona 'el queso cottage', pero la lista de ingre",
+        "resultado": "fp"
+      },
+      {
+        "caso": "078dcac1d0",
+        "capa": "juez",
+        "defecto": null,
+        "hallazgo": "nombre_no_corresponde: El nombre declara 'gratinada con parmesano', pero la list",
+        "resultado": "fp"
+      },
+      {
+        "caso": "098d23388f",
+        "capa": "juez",
+        "defecto": "nombre_no_corresponde",
+        "hallazgo": null,
+        "resultado": "fn"
+      },
+      {
+        "caso": "098d23388f",
+        "capa": "juez",
+        "defecto": null,
+        "hallazgo": "nombre_no_corresponde: El nombre declara 'Queso Cottage', pero la lista de ingre",
+        "resultado": "fp"
+      },
+      {
+        "caso": "0a22373d6b",
+        "capa": "juez",
+        "defecto": null,
+        "hallazgo": "tecnica_impropia: El ingrediente es '½ taza de lentejas secas' pero la receta so",
+        "resultado": "fp"
+      },
+      {
+        "caso": "0bd5722712",
+        "capa": "juez",
+        "defecto": null,
+        "hallazgo": "paso_incoherente: Los ingredientes listan '½ kiwi', pero el mise en place indica",
+        "resultado": "fp"
+      },
+      {
+        "caso": "0ee6d0a81c",
+        "capa": "juez",
+        "defecto": "paso_incoherente",
+        "hallazgo": null,
+        "resultado": "fn"
+      },
+      {
+        "caso": "0ee6d0a81c",
+        "capa": "juez",
+        "defecto": null,
+        "hallazgo": "paso_incoherente: La nota de seguridad ordena 'cocinar la preparación con queso ",
+        "resultado": "fp"
+      },
+      {
+        "caso": "0eeebbee4d",
+        "capa": "juez",
+        "defecto": "paso_incoherente",
+        "hallazgo": "paso_incoherente: Los pasos tratan la pechuga de pollo como si fuera huevo: 'bat",
+        "resultado": "tp",
+        "emparejado_por": "codigo+alimento"
+      },
+      {
+        "caso": "1191a15521",
+        "capa": "juez",
+        "defecto": null,
+        "hallazgo": "paso_incoherente: Los ingredientes y el paso de mise en place indican queso blan",
+        "resultado": "fp"
+      },
+      {
+        "caso": "12dc5c0e78",
+        "capa": "juez",
+        "defecto": null,
+        "hallazgo": "slot_inapropiado: Sopón espeso de garbanzos con batata (la receta misma indica '",
+        "resultado": "fp"
+      },
+      {
+        "caso": "15ddcb26c1",
+        "capa": "juez",
+        "defecto": null,
+        "hallazgo": "paso_incoherente: La lista de ingredientes declara '½ guineíto verde' (sin indic",
+        "resultado": "fp"
+      },
+      {
+        "caso": "19f304d513",
+        "capa": "juez",
+        "defecto": null,
+        "hallazgo": "nombre_no_corresponde: El plato se llama 'Yogurt frío con lechosa, nueces y lina",
+        "resultado": "fp"
+      },
+      {
+        "caso": "1d6d7dc439",
+        "capa": "juez",
+        "defecto": null,
+        "hallazgo": "paso_incoherente: La lista de ingredientes declara 6 chinolas pero el paso de mi",
+        "resultado": "fp"
+      },
+      {
+        "caso": "1ea600db80",
+        "capa": "juez",
+        "defecto": null,
+        "hallazgo": "tecnica_impropia: Las habichuelas negras secas se añaden al guiso sin remojo ni ",
+        "resultado": "fp"
+      },
+      {
+        "caso": "26910ac91d",
+        "capa": "juez",
+        "defecto": null,
+        "hallazgo": "paso_incoherente: El mise en place indica 'corta guineo' y el montaje 'termina c",
+        "resultado": "fp"
+      },
+      {
+        "caso": "2697e63381",
+        "capa": "juez",
+        "defecto": null,
+        "hallazgo": "paso_incoherente: La receta pocha los huevos 3 minutos (técnicamente yema líquid",
+        "resultado": "fp"
+      },
+      {
+        "caso": "0dbc337c25",
+        "capa": "juez",
+        "defecto": null,
+        "hallazgo": "tecnica_impropia: La receta indica hervir el yogurt griego en agua hirviendo dur",
+        "resultado": "fp"
+      },
+      {
+        "caso": "17285dfa78",
+        "capa": "juez",
+        "defecto": null,
+        "hallazgo": "tecnica_impropia: Las lentejas se listan como 'secas' y el mise en place solo in",
+        "resultado": "fp"
+      },
+      {
+        "caso": "20fdfb4de7",
+        "capa": "juez",
+        "defecto": null,
+        "hallazgo": "combo_absurdo: El revoltillo de huevo con espinaca, tomate y cebolla es un desay",
+        "resultado": "fp"
+      },
+      {
+        "caso": "2538fbe6a2",
+        "capa": "juez",
+        "defecto": "paso_incoherente",
+        "hallazgo": null,
+        "resultado": "fn"
+      },
+      {
+        "caso": "2538fbe6a2",
+        "capa": "juez",
+        "defecto": null,
+        "hallazgo": "tecnica_impropia: El paso de cocción dice 'pela ½ toronja separando sus gajos (~",
+        "resultado": "fp"
+      },
+      {
+        "caso": "340665859e",
+        "capa": "juez",
+        "defecto": null,
+        "hallazgo": "nombre_no_corresponde: El plato se llama 'Revoltillo de papa, auyama y queso bla",
+        "resultado": "fp"
+      },
+      {
+        "caso": "3b8dd7ce2c",
+        "capa": "juez",
+        "defecto": null,
+        "hallazgo": "combo_absurdo: 'Wrap dominicano de arroz, queso de freír y kale con Soya Texturi",
+        "resultado": "fp"
+      },
+      {
+        "caso": "456feecd3a",
+        "capa": "juez",
+        "defecto": "paso_incoherente",
+        "hallazgo": "paso_incoherente: La lista de ingredientes declara 3 huevos + 2 claras, pero la ",
+        "resultado": "tp",
+        "emparejado_por": "codigo+alimento"
+      },
+      {
+        "caso": "46c02301b2",
+        "capa": "juez",
+        "defecto": null,
+        "hallazgo": "tecnica_impropia: El plato lleva un filete de pescado blanco como proteína princ",
+        "resultado": "fp"
+      },
+      {
+        "caso": "4f073559b3",
+        "capa": "juez",
+        "defecto": "paso_incoherente",
+        "hallazgo": null,
+        "resultado": "fn"
+      },
+      {
+        "caso": "4f073559b3",
+        "capa": "juez",
+        "defecto": null,
+        "hallazgo": "combo_absurdo: Bollitos de plátano verde con salsa criolla, huevo escalfado y sa",
+        "resultado": "fp"
+      },
+      {
+        "caso": "55fef36cd9",
+        "capa": "juez",
+        "defecto": null,
+        "hallazgo": "nombre_no_corresponde: El plato se llama 'tortitas de mozzarella... con ensalada",
+        "resultado": "fp"
+      },
+      {
+        "caso": "69d4dcbd6f",
+        "capa": "juez",
+        "defecto": null,
+        "hallazgo": "paso_incoherente: Los pasos de la receta indican agregar el huevo crudo directam",
+        "resultado": "fp"
+      },
+      {
+        "caso": "77c78d3990",
+        "capa": "juez",
+        "defecto": null,
+        "hallazgo": "nombre_no_corresponde: El nombre declara 'huevo, mango y maní', pero la lista de",
+        "resultado": "fp"
+      },
+      {
+        "caso": "7ef0b23dd8",
+        "capa": "juez",
+        "defecto": null,
+        "hallazgo": "nombre_no_corresponde: El nombre declara '...y aceitunas' y la receta indica reb",
+        "resultado": "fp"
+      },
+      {
+        "caso": "7ef0b23dd8",
+        "capa": "juez",
+        "defecto": null,
+        "hallazgo": "tecnica_impropia: El plato usa lentejas SECAS, pero la receta las agrega al sofr",
+        "resultado": "fp"
+      },
+      {
+        "caso": "8474cf4488",
+        "capa": "juez",
+        "defecto": null,
+        "hallazgo": "combo_absurdo: Wrap salado de queso de hoja, rábano y tomate con '15 g de granol",
+        "resultado": "fp"
+      },
+      {
+        "caso": "84c2e6d4f0",
+        "capa": "juez",
+        "defecto": null,
+        "hallazgo": "slot_inapropiado: La pasta integral es el plato base de la cena; la regla dura d",
+        "resultado": "fp"
+      },
+      {
+        "caso": "023e151c4e",
+        "capa": "juez",
+        "defecto": "paso_incoherente",
+        "hallazgo": null,
+        "resultado": "fn"
+      },
+      {
+        "caso": "03c57e55a5",
+        "capa": "juez",
+        "defecto": "nombre_no_corresponde",
+        "hallazgo": null,
+        "resultado": "fn"
+      }
+    ],
+    "sin_rubrica_casos": [],
+    "columnas": {
+      "determinista": "maquina_determinista",
+      "juez": "maquina_juez"
+    },
+    "acuerdo": {
+      "anotadores": 1,
+      "kappa": null,
+      "comunes": 0,
+      "discrepancias": [],
+      "nombres": [
+        "angelo"
+      ]
+    },
+    "dudosas_excluidas": 0,
+    "excluidos_dev": 0
+  },
+  "despues": {
+    "casos": 80,
+    "completos": 75,
+    "estados": {
+      "completo": 75,
+      "dudoso": 5
+    },
+    "minimo": 20,
+    "completo": true,
+    "promocion_habilitada": false,
+    "capas": {
+      "determinista": {
+        "crudo": {
+          "tp": 18,
+          "fp": 60,
+          "fn": 29,
+          "precision": 23.1,
+          "recall": 38.3
+        },
+        "ponderado": {
+          "precision": 28.6,
+          "recall": 40.6
+        },
+        "ic95_crudo": {
+          "precision": [
+            12.7,
+            31.5
+          ],
+          "recall": [
+            20.0,
+            51.0
+          ],
+          "conglomerados": 47,
+          "remuestreos": 1000
+        },
+        "columna": "maquina_determinista_2026-09-15",
+        "sin_columna": 0,
+        "emparejados": {
+          "codigo+alimento": 18
+        }
+      },
+      "juez": {
+        "crudo": {
+          "tp": 0,
+          "fp": 28,
+          "fn": 9,
+          "precision": 0.0,
+          "recall": 0.0
+        },
+        "ponderado": {
+          "precision": 0.0,
+          "recall": 0.0
+        },
+        "ic95_crudo": {
+          "precision": [
+            0.0,
+            0.0
+          ],
+          "recall": [
+            0.0,
+            0.0
+          ],
+          "conglomerados": 47,
+          "remuestreos": 1000
+        },
+        "columna": "maquina_juez_2026-09-15",
+        "sin_columna": 2,
+        "emparejados": {}
+      }
+    },
+    "por_clase": {
+      "cantidad_inconsistente": {
+        "tp": 10,
+        "fp": 0,
+        "fn": 9,
+        "precision": 100.0,
+        "recall": 52.6
+      },
+      "estructura_del_plato": {
+        "tp": 0,
+        "fp": 0,
+        "fn": 1,
+        "precision": null,
+        "recall": 0.0
+      },
+      "ingrediente_huerfano": {
+        "tp": 3,
+        "fp": 0,
+        "fn": 2,
+        "precision": 100.0,
+        "recall": 60.0
+      },
+      "masa_sobrante": {
+        "tp": 0,
+        "fp": 0,
+        "fn": 1,
+        "precision": null,
+        "recall": 0.0
+      },
+      "nombre_no_corresponde": {
+        "tp": 0,
+        "fp": 0,
+        "fn": 2,
+        "precision": null,
+        "recall": 0.0
+      },
+      "paso_incoherente": {
+        "tp": 0,
+        "fp": 0,
+        "fn": 7,
+        "precision": null,
+        "recall": 0.0
+      },
+      "seco_sin_coccion": {
+        "tp": 3,
+        "fp": 0,
+        "fn": 8,
+        "precision": 100.0,
+        "recall": 27.3
+      },
+      "usa_lo_que_no_esta": {
+        "tp": 1,
+        "fp": 0,
+        "fn": 8,
+        "precision": 100.0,
+        "recall": 11.1
+      },
+      "verbo_alimento": {
+        "tp": 1,
+        "fp": 0,
+        "fn": 0,
+        "precision": 100.0,
+        "recall": 100.0
+      }
+    },
+    "no_mecanizable": {
+      "coccion_faltante": 8,
+      "otro": 2
+    },
+    "detalle": [
+      {
+        "caso": "0d16ef69e3",
+        "capa": null,
+        "defecto": "coccion_faltante",
+        "hallazgo": null,
+        "resultado": "fn_no_mecanizable"
+      },
+      {
+        "caso": "05145657e1",
+        "capa": null,
+        "defecto": "coccion_faltante",
+        "hallazgo": null,
+        "resultado": "fn_no_mecanizable"
+      },
+      {
+        "caso": "078dcac1d0",
+        "capa": null,
+        "defecto": "coccion_faltante",
+        "hallazgo": null,
+        "resultado": "fn_no_mecanizable"
+      },
+      {
+        "caso": "26910ac91d",
+        "capa": null,
+        "defecto": "coccion_faltante",
+        "hallazgo": null,
+        "resultado": "fn_no_mecanizable"
+      },
+      {
+        "caso": "2697e63381",
+        "capa": null,
+        "defecto": "coccion_faltante",
+        "hallazgo": null,
+        "resultado": "fn_no_mecanizable"
+      },
+      {
+        "caso": "46c02301b2",
+        "capa": null,
+        "defecto": "coccion_faltante",
+        "hallazgo": null,
+        "resultado": "fn_no_mecanizable"
+      },
+      {
+        "caso": "69d4dcbd6f",
+        "capa": null,
+        "defecto": "coccion_faltante",
+        "hallazgo": null,
+        "resultado": "fn_no_mecanizable"
+      },
+      {
+        "caso": "00e3c06383",
+        "capa": null,
+        "defecto": "otro",
+        "hallazgo": null,
+        "resultado": "fn_no_mecanizable"
+      },
+      {
+        "caso": "028f7003f6",
+        "capa": null,
+        "defecto": "otro",
+        "hallazgo": null,
+        "resultado": "fn_no_mecanizable"
+      },
+      {
+        "caso": "049fbef8b5",
+        "capa": null,
+        "defecto": "coccion_faltante",
+        "hallazgo": null,
+        "resultado": "fn_no_mecanizable"
+      },
+      {
+        "caso": "0108f857ae",
+        "capa": "determinista",
+        "defecto": "cantidad_inconsistente",
+        "hallazgo": null,
+        "resultado": "fn"
+      },
+      {
+        "caso": "0108f857ae",
+        "capa": "determinista",
+        "defecto": null,
+        "hallazgo": "V6: el paso pide 2 cdta y la lista compra 1: Mise en place: Si compras la carne ",
+        "resultado": "fp"
+      },
+      {
+        "caso": "0108f857ae",
+        "capa": "determinista",
+        "defecto": null,
+        "hallazgo": "V6: el paso pide 2 cdta y la lista compra 1: El Toque de Fuego: Calienta 2 cdtas",
+        "resultado": "fp"
+      },
+      {
+        "caso": "0108f857ae",
+        "capa": "determinista",
+        "defecto": null,
+        "hallazgo": "V7a: la lista compra 1.5 y los pasos usan 1 (alimento: Tomate)",
+        "resultado": "fp"
+      },
+      {
+        "caso": "0468ff03aa",
+        "capa": "determinista",
+        "defecto": "cantidad_inconsistente",
+        "hallazgo": "V7e: el paso pide 2 y la lista compra 1: El Toque de Fuego: tuesta ligeramente 2",
+        "resultado": "tp",
+        "emparejado_por": "codigo+alimento"
+      },
+      {
+        "caso": "05856e2162",
+        "capa": "determinista",
+        "defecto": null,
+        "hallazgo": "V1: paso aplica 'hervir' a un listo-para-comer: El Toque de Fuego: hierve la pas",
+        "resultado": "fp"
+      },
+      {
+        "caso": "05856e2162",
+        "capa": "determinista",
+        "defecto": null,
+        "hallazgo": "V1: paso aplica 'hervir' a un listo-para-comer: El Toque de Fuego: hierve la pas",
+        "resultado": "fp"
+      },
+      {
+        "caso": "06416aacbb",
+        "capa": "determinista",
+        "defecto": "cantidad_inconsistente",
+        "hallazgo": "V4: ingrediente declara 5 g, pasos declaran 15 g (alimento: Semillas de girasol)",
+        "resultado": "tp",
+        "emparejado_por": "codigo+alimento"
+      },
+      {
+        "caso": "0b1f190ac9",
+        "capa": "determinista",
+        "defecto": "ingrediente_huerfano",
+        "hallazgo": "V3: listado ('½ taza de habichuelas blancas seco') pero ningún paso lo menciona ",
+        "resultado": "tp",
+        "emparejado_por": "codigo+alimento"
+      },
+      {
+        "caso": "0d16ef69e3",
+        "capa": "determinista",
+        "defecto": null,
+        "hallazgo": "V3: listado ('½ hoja de laurel') pero ningún paso lo menciona (alimento: Laurel)",
+        "resultado": "fp"
+      },
+      {
+        "caso": "0d16ef69e3",
+        "capa": "determinista",
+        "defecto": null,
+        "hallazgo": "V8a: los pasos piden 8 h de espera («mise en place remoja los frijoles pintos la",
+        "resultado": "fp"
+      },
+      {
+        "caso": "0d4eeb64eb",
+        "capa": "determinista",
+        "defecto": "seco_sin_coccion",
+        "hallazgo": null,
+        "resultado": "fn"
+      },
+      {
+        "caso": "0d4eeb64eb",
+        "capa": "determinista",
+        "defecto": null,
+        "hallazgo": "V7a: la lista compra 2 y los pasos usan 1.75 (alimento: Ají cubanela)",
+        "resultado": "fp"
+      },
+      {
+        "caso": "0d4eeb64eb",
+        "capa": "determinista",
+        "defecto": null,
+        "hallazgo": "V7b: aparece en dos unidades incompatibles: 2 ajíes / 205 g de Ají cubanela (ali",
+        "resultado": "fp"
+      },
+      {
+        "caso": "0d4eeb64eb",
+        "capa": "determinista",
+        "defecto": null,
+        "hallazgo": "V7e: el paso pide 1 y la lista compra 0.5: Mise en place: mide ¼ taza de quinoa ",
+        "resultado": "fp"
+      },
+      {
+        "caso": "0ef0ba50b7",
+        "capa": "determinista",
+        "defecto": "masa_sobrante",
+        "hallazgo": null,
+        "resultado": "fn"
+      },
+      {
+        "caso": "119f0e6a06",
+        "capa": "determinista",
+        "defecto": "cantidad_inconsistente",
+        "hallazgo": "V7e: el paso pide 1.75 y la lista compra 1.5: Mise en place: lava y corta 65 g d",
+        "resultado": "tp",
+        "emparejado_por": "codigo+alimento"
+      },
+      {
+        "caso": "119f0e6a06",
+        "capa": "determinista",
+        "defecto": null,
+        "hallazgo": "V7b: aparece en dos unidades incompatibles: 1½ tortas pequeño de casabe / 25 g d",
+        "resultado": "fp"
+      },
+      {
+        "caso": "1794ad8c1d",
+        "capa": "determinista",
+        "defecto": "usa_lo_que_no_esta",
+        "hallazgo": null,
+        "resultado": "fn"
+      },
+      {
+        "caso": "1794ad8c1d",
+        "capa": "determinista",
+        "defecto": null,
+        "hallazgo": "V3: listado ('¾ taza de queso parmesano') pero ningún paso lo menciona (alimento",
+        "resultado": "fp"
+      },
+      {
+        "caso": "1794ad8c1d",
+        "capa": "determinista",
+        "defecto": null,
+        "hallazgo": "V3: listado ('125 ml de queso parmesano') pero ningún paso lo menciona (alimento",
+        "resultado": "fp"
+      },
+      {
+        "caso": "1794ad8c1d",
+        "capa": "determinista",
+        "defecto": null,
+        "hallazgo": "V3: listado ('½ manzana') pero ningún paso lo menciona (alimento: Manzana)",
+        "resultado": "fp"
+      },
+      {
+        "caso": "1794ad8c1d",
+        "capa": "determinista",
+        "defecto": null,
+        "hallazgo": "V6: el paso pide 1 cucharada y la lista compra 0.75: Mise en place: pela la nara",
+        "resultado": "fp"
+      },
+      {
+        "caso": "1794ad8c1d",
+        "capa": "determinista",
+        "defecto": null,
+        "hallazgo": "V7b: aparece en dos unidades incompatibles: ¾ taza de queso parmesano / 125 ml d",
+        "resultado": "fp"
+      },
+      {
+        "caso": "17fda2a839",
+        "capa": "determinista",
+        "defecto": "cantidad_inconsistente",
+        "hallazgo": "V4: ingrediente declara 300 g, pasos declaran 460 g (alimento: Edamame)",
+        "resultado": "tp",
+        "emparejado_por": "codigo+alimento"
+      },
+      {
+        "caso": "17fda2a839",
+        "capa": "determinista",
+        "defecto": null,
+        "hallazgo": "V7a: la lista compra 3 y los pasos hablan de una sola (tomate, siempre en singul",
+        "resultado": "fp"
+      },
+      {
+        "caso": "1929f8cf78",
+        "capa": "determinista",
+        "defecto": "estructura_del_plato",
+        "hallazgo": null,
+        "resultado": "fn"
+      },
+      {
+        "caso": "1929f8cf78",
+        "capa": "determinista",
+        "defecto": null,
+        "hallazgo": "V2: '(ya viene cocido)' sobre alimento fresco: El Toque de Fuego: Calienta el ac",
+        "resultado": "fp"
+      },
+      {
+        "caso": "19b13609c9",
+        "capa": "determinista",
+        "defecto": "seco_sin_coccion",
+        "hallazgo": null,
+        "resultado": "fn"
+      },
+      {
+        "caso": "19b13609c9",
+        "capa": "determinista",
+        "defecto": null,
+        "hallazgo": "V3: listado ('1 tomate') pero ningún paso lo menciona (alimento: Tomate)",
+        "resultado": "fp"
+      },
+      {
+        "caso": "19b13609c9",
+        "capa": "determinista",
+        "defecto": null,
+        "hallazgo": "V3: listado ('½ tomate') pero ningún paso lo menciona (alimento: Tomate)",
+        "resultado": "fp"
+      },
+      {
+        "caso": "1c0c5e6582",
+        "capa": "determinista",
+        "defecto": "usa_lo_que_no_esta",
+        "hallazgo": null,
+        "resultado": "fn"
+      },
+      {
+        "caso": "1c0c5e6582",
+        "capa": "determinista",
+        "defecto": null,
+        "hallazgo": "V3: listado ('300 g de manzana') pero ningún paso lo menciona (alimento: Manzana",
+        "resultado": "fp"
+      },
+      {
+        "caso": "1c0c5e6582",
+        "capa": "determinista",
+        "defecto": null,
+        "hallazgo": "V7b: aparece en dos unidades incompatibles: 25 g de queso parmesano / ½ taza de ",
+        "resultado": "fp"
+      },
+      {
+        "caso": "2168899312",
+        "capa": "determinista",
+        "defecto": "cantidad_inconsistente",
+        "hallazgo": null,
+        "resultado": "fn"
+      },
+      {
+        "caso": "2168899312",
+        "capa": "determinista",
+        "defecto": null,
+        "hallazgo": "V7a: la lista compra 1.5 y los pasos usan 0.5 (alimento: Tomate)",
+        "resultado": "fp"
+      },
+      {
+        "caso": "24dbfaebdb",
+        "capa": "determinista",
+        "defecto": "seco_sin_coccion",
+        "hallazgo": null,
+        "resultado": "fn"
+      },
+      {
+        "caso": "24dbfaebdb",
+        "capa": "determinista",
+        "defecto": null,
+        "hallazgo": "V3: listado ('½ manzana') pero ningún paso lo menciona (alimento: Manzana)",
+        "resultado": "fp"
+      },
+      {
+        "caso": "292b09e344",
+        "capa": "determinista",
+        "defecto": "ingrediente_huerfano",
+        "hallazgo": "V3: listado ('40 g de arroz blanco crudo') pero ningún paso lo menciona (aliment",
+        "resultado": "tp",
+        "emparejado_por": "codigo+alimento"
+      },
+      {
+        "caso": "292b09e344",
+        "capa": "determinista",
+        "defecto": null,
+        "hallazgo": "V7a: la lista compra 2 y los pasos hablan de una sola (casabe, siempre en singul",
+        "resultado": "fp"
+      },
+      {
+        "caso": "00fae1c079",
+        "capa": "determinista",
+        "defecto": "usa_lo_que_no_esta",
+        "hallazgo": null,
+        "resultado": "fn"
+      },
+      {
+        "caso": "01606d0573",
+        "capa": "determinista",
+        "defecto": "seco_sin_coccion",
+        "hallazgo": null,
+        "resultado": "fn"
+      },
+      {
+        "caso": "06d4e17091",
+        "capa": "determinista",
+        "defecto": "cantidad_inconsistente",
+        "hallazgo": null,
+        "resultado": "fn"
+      },
+      {
+        "caso": "06d4e17091",
+        "capa": "determinista",
+        "defecto": null,
+        "hallazgo": "V7a: la lista compra 2.5 y los pasos usan 2 (alimento: Guineo verde)",
+        "resultado": "fp"
+      },
+      {
+        "caso": "0a22373d6b",
+        "capa": "determinista",
+        "defecto": "seco_sin_coccion",
+        "hallazgo": "V7c: declarado seco ('¼ taza de lentejas secas') y un paso lo da por COCIDO sin ",
+        "resultado": "tp",
+        "emparejado_por": "codigo+alimento"
+      },
+      {
+        "caso": "0bd5722712",
+        "capa": "determinista",
+        "defecto": "cantidad_inconsistente",
+        "hallazgo": "V7e: el paso pide 2 y la lista compra 0.5: Mise en place: pela y corta los 2 kiw",
+        "resultado": "tp",
+        "emparejado_por": "codigo+alimento"
+      },
+      {
+        "caso": "0eeebbee4d",
+        "capa": "determinista",
+        "defecto": null,
+        "hallazgo": "V7e: el paso pide 2 y la lista compra 0.5: Mise en place: corta el calabacín en ",
+        "resultado": "fp"
+      },
+      {
+        "caso": "1191a15521",
+        "capa": "determinista",
+        "defecto": "cantidad_inconsistente",
+        "hallazgo": "V7e: el paso pide 1 y la lista compra 0.5: Mise en place: corta 1 durazno en gaj",
+        "resultado": "tp",
+        "emparejado_por": "codigo+alimento"
+      },
+      {
+        "caso": "1191a15521",
+        "capa": "determinista",
+        "defecto": null,
+        "hallazgo": "V7e: el paso pide 2 y la lista compra 1: Mise en place: corta 1 durazno en gajos",
+        "resultado": "fp"
+      },
+      {
+        "caso": "12dc5c0e78",
+        "capa": "determinista",
+        "defecto": "cantidad_inconsistente",
+        "hallazgo": "V6: el paso pide 1 diente y la lista compra 0.5: Mise en place: pela y corta 60 ",
+        "resultado": "tp",
+        "emparejado_por": "codigo+alimento"
+      },
+      {
+        "caso": "12dc5c0e78",
+        "capa": "determinista",
+        "defecto": null,
+        "hallazgo": "V7e: el paso pide 2 y la lista compra 0.5: Mise en place: pela y corta 60 g de b",
+        "resultado": "fp"
+      },
+      {
+        "caso": "12dc5c0e78",
+        "capa": "determinista",
+        "defecto": null,
+        "hallazgo": "V7e: el paso pide 1 y la lista compra 0.5: Mise en place: pela y corta 60 g de b",
+        "resultado": "fp"
+      },
+      {
+        "caso": "12dc5c0e78",
+        "capa": "determinista",
+        "defecto": null,
+        "hallazgo": "V7e: el paso pide 1 y la lista compra 0.5: Mise en place: pela y corta 60 g de b",
+        "resultado": "fp"
+      },
+      {
+        "caso": "15ddcb26c1",
+        "capa": "determinista",
+        "defecto": "cantidad_inconsistente",
+        "hallazgo": null,
+        "resultado": "fn"
+      },
+      {
+        "caso": "15ddcb26c1",
+        "capa": "determinista",
+        "defecto": null,
+        "hallazgo": "V7e: el paso pide 2 y la lista compra 0.5: Mise en place: pela y aplasta 2 guine",
+        "resultado": "fp"
+      },
+      {
+        "caso": "19f304d513",
+        "capa": "determinista",
+        "defecto": "usa_lo_que_no_esta",
+        "hallazgo": null,
+        "resultado": "fn"
+      },
+      {
+        "caso": "1d6d7dc439",
+        "capa": "determinista",
+        "defecto": "cantidad_inconsistente",
+        "hallazgo": null,
+        "resultado": "fn"
+      },
+      {
+        "caso": "1d6d7dc439",
+        "capa": "determinista",
+        "defecto": null,
+        "hallazgo": "V7a: la lista compra 6 y los pasos usan 2 (alimento: Chinola)",
+        "resultado": "fp"
+      },
+      {
+        "caso": "1ea600db80",
+        "capa": "determinista",
+        "defecto": "seco_sin_coccion",
+        "hallazgo": null,
+        "resultado": "fn"
+      },
+      {
+        "caso": "0dbc337c25",
+        "capa": "determinista",
+        "defecto": "verbo_alimento",
+        "hallazgo": "V1: paso aplica 'hervir' a un listo-para-comer: El Toque de Fuego: cuece las 3 y",
+        "resultado": "tp",
+        "emparejado_por": "codigo+alimento"
+      },
+      {
+        "caso": "17285dfa78",
+        "capa": "determinista",
+        "defecto": "seco_sin_coccion",
+        "hallazgo": null,
+        "resultado": "fn"
+      },
+      {
+        "caso": "17285dfa78",
+        "capa": "determinista",
+        "defecto": null,
+        "hallazgo": "V1: paso aplica 'plancha' a un listo-para-comer: El Toque de Fuego: calienta el ",
+        "resultado": "fp"
+      },
+      {
+        "caso": "17285dfa78",
+        "capa": "determinista",
+        "defecto": null,
+        "hallazgo": "V1: 'saltear' no está en prep_methods('hervir', 'freir', 'hornear', 'guisar'): E",
+        "resultado": "fp"
+      },
+      {
+        "caso": "17285dfa78",
+        "capa": "determinista",
+        "defecto": null,
+        "hallazgo": "V5: el paso lo usa pero la lista no lo trae: Montaje: forma una cama de repollo,",
+        "resultado": "fp"
+      },
+      {
+        "caso": "20fdfb4de7",
+        "capa": "determinista",
+        "defecto": "cantidad_inconsistente",
+        "hallazgo": "V4: ingrediente declara 0.25 g, pasos declaran 1 g (alimento: Ajo)",
+        "resultado": "tp",
+        "emparejado_por": "codigo+alimento"
+      },
+      {
+        "caso": "20fdfb4de7",
+        "capa": "determinista",
+        "defecto": null,
+        "hallazgo": "V4: ingrediente declara 0.1 g, pasos declaran 1 g (alimento: Orégano dominicano)",
+        "resultado": "fp"
+      },
+      {
+        "caso": "340665859e",
+        "capa": "determinista",
+        "defecto": "usa_lo_que_no_esta",
+        "hallazgo": "V5: el paso lo usa pero la lista no lo trae: Montaje: sirve el revoltillo calien",
+        "resultado": "tp",
+        "emparejado_por": "codigo+alimento"
+      },
+      {
+        "caso": "340665859e",
+        "capa": "determinista",
+        "defecto": null,
+        "hallazgo": "V3: listado ('1 clara de huevo') pero ningún paso lo menciona (alimento: Clara d",
+        "resultado": "fp"
+      },
+      {
+        "caso": "3b8dd7ce2c",
+        "capa": "determinista",
+        "defecto": "seco_sin_coccion",
+        "hallazgo": null,
+        "resultado": "fn"
+      },
+      {
+        "caso": "3b8dd7ce2c",
+        "capa": "determinista",
+        "defecto": null,
+        "hallazgo": "V7a: la lista compra 2 y los pasos hablan de una sola (tortilla, siempre en sing",
+        "resultado": "fp"
+      },
+      {
+        "caso": "3b8dd7ce2c",
+        "capa": "determinista",
+        "defecto": null,
+        "hallazgo": "V7a: la lista compra 2.5 y los pasos usan 1 (alimento: Ajo)",
+        "resultado": "fp"
+      },
+      {
+        "caso": "456feecd3a",
+        "capa": "determinista",
+        "defecto": null,
+        "hallazgo": "V3: listado ('2 claras de huevo') pero ningún paso lo menciona (alimento: Clara ",
+        "resultado": "fp"
+      },
+      {
+        "caso": "4f073559b3",
+        "capa": "determinista",
+        "defecto": null,
+        "hallazgo": "V2: '(ya viene cocido)' sobre alimento fresco: El Toque de Fuego: hierve el plát",
+        "resultado": "fp"
+      },
+      {
+        "caso": "4f073559b3",
+        "capa": "determinista",
+        "defecto": null,
+        "hallazgo": "V2: '(ya viene cocido)' sobre alimento fresco: El Toque de Fuego: hierve el plát",
+        "resultado": "fp"
+      },
+      {
+        "caso": "4f073559b3",
+        "capa": "determinista",
+        "defecto": null,
+        "hallazgo": "V2: '(ya viene cocido)' sobre alimento fresco: El Toque de Fuego: hierve el plát",
+        "resultado": "fp"
+      },
+      {
+        "caso": "55fef36cd9",
+        "capa": "determinista",
+        "defecto": "usa_lo_que_no_esta",
+        "hallazgo": null,
+        "resultado": "fn"
+      },
+      {
+        "caso": "69d4dcbd6f",
+        "capa": "determinista",
+        "defecto": null,
+        "hallazgo": "V1: 'licuar' no está en prep_methods('hervir', 'plancha', 'freir', 'hornear', 'g",
+        "resultado": "fp"
+      },
+      {
+        "caso": "7ef0b23dd8",
+        "capa": "determinista",
+        "defecto": "seco_sin_coccion",
+        "hallazgo": null,
+        "resultado": "fn"
+      },
+      {
+        "caso": "7ef0b23dd8",
+        "capa": "determinista",
+        "defecto": null,
+        "hallazgo": "V3: listado ('2 ramitas de cilantro 1 cucharada') pero ningún paso lo menciona (",
+        "resultado": "fp"
+      },
+      {
+        "caso": "8474cf4488",
+        "capa": "determinista",
+        "defecto": "ingrediente_huerfano",
+        "hallazgo": null,
+        "resultado": "fn"
+      },
+      {
+        "caso": "8474cf4488",
+        "capa": "determinista",
+        "defecto": null,
+        "hallazgo": "V1: paso aplica 'saltear' a un listo-para-comer: El Toque de Fuego: calienta el ",
+        "resultado": "fp"
+      },
+      {
+        "caso": "8474cf4488",
+        "capa": "determinista",
+        "defecto": null,
+        "hallazgo": "V1: paso aplica 'saltear' a un listo-para-comer: El Toque de Fuego: calienta el ",
+        "resultado": "fp"
+      },
+      {
+        "caso": "84c2e6d4f0",
+        "capa": "determinista",
+        "defecto": "usa_lo_que_no_esta",
+        "hallazgo": null,
+        "resultado": "fn"
+      },
+      {
+        "caso": "84c2e6d4f0",
+        "capa": "determinista",
+        "defecto": null,
+        "hallazgo": "V3: listado ('1 tomate') pero ningún paso lo menciona (alimento: Tomate)",
+        "resultado": "fp"
+      },
+      {
+        "caso": "01b41535b1",
+        "capa": "determinista",
+        "defecto": "cantidad_inconsistente",
+        "hallazgo": null,
+        "resultado": "fn"
+      },
+      {
+        "caso": "01b41535b1",
+        "capa": "determinista",
+        "defecto": null,
+        "hallazgo": "V7b: aparece en dos unidades incompatibles: ½ ají / 50 g de ají cubanela en tira",
+        "resultado": "fp"
+      },
+      {
+        "caso": "01c22c6847",
+        "capa": "determinista",
+        "defecto": "seco_sin_coccion",
+        "hallazgo": "V7c: declarado seco ('25 g de lentejas secas') y un paso lo da por COCIDO sin co",
+        "resultado": "tp",
+        "emparejado_por": "codigo+alimento"
+      },
+      {
+        "caso": "01c22c6847",
+        "capa": "determinista",
+        "defecto": null,
+        "hallazgo": "V7c: declarado seco ('20 g de habichuelas negras secas') y un paso lo da por COC",
+        "resultado": "fp"
+      },
+      {
+        "caso": "01c46fd2a5",
+        "capa": "determinista",
+        "defecto": "ingrediente_huerfano",
+        "hallazgo": null,
+        "resultado": "fn"
+      },
+      {
+        "caso": "02068c1382",
+        "capa": "determinista",
+        "defecto": "cantidad_inconsistente",
+        "hallazgo": null,
+        "resultado": "fn"
+      },
+      {
+        "caso": "02068c1382",
+        "capa": "determinista",
+        "defecto": null,
+        "hallazgo": "V7a: la lista compra 2 y los pasos hablan de una sola (tortilla, siempre en sing",
+        "resultado": "fp"
+      },
+      {
+        "caso": "023da1766e",
+        "capa": "determinista",
+        "defecto": "usa_lo_que_no_esta",
+        "hallazgo": null,
+        "resultado": "fn"
+      },
+      {
+        "caso": "028ad9ed64",
+        "capa": "determinista",
+        "defecto": "ingrediente_huerfano",
+        "hallazgo": "V3: listado ('40g de harina de trigo') pero ningún paso lo menciona (alimento: H",
+        "resultado": "tp",
+        "emparejado_por": "codigo+alimento"
+      },
+      {
+        "caso": "028f7003f6",
+        "capa": "determinista",
+        "defecto": null,
+        "hallazgo": "V9: 170 g de relleno para 20 g de almendras tostadas (8.5×, umbral 5×) — evidenc",
+        "resultado": "fp"
+      },
+      {
+        "caso": "033afcafbf",
+        "capa": "determinista",
+        "defecto": "cantidad_inconsistente",
+        "hallazgo": "V6: el paso pide 1 cda y la lista compra 0.5: Mise en place: Pela el ñame y córt",
+        "resultado": "tp",
+        "emparejado_por": "codigo+alimento"
+      },
+      {
+        "caso": "03e16ec7fb",
+        "capa": "determinista",
+        "defecto": "cantidad_inconsistente",
+        "hallazgo": null,
+        "resultado": "fn"
+      },
+      {
+        "caso": "03e16ec7fb",
+        "capa": "determinista",
+        "defecto": null,
+        "hallazgo": "V7a: la lista compra 2 y los pasos hablan de una sola (tortilla, siempre en sing",
+        "resultado": "fp"
+      },
+      {
+        "caso": "045b2e2131",
+        "capa": "determinista",
+        "defecto": "cantidad_inconsistente",
+        "hallazgo": "V6: el paso pide 2 rebanada y la lista compra 1: Mise en place: Corta la manzana",
+        "resultado": "tp",
+        "emparejado_por": "codigo+alimento"
+      },
+      {
+        "caso": "045b2e2131",
+        "capa": "determinista",
+        "defecto": null,
+        "hallazgo": "V6: el paso pide 2 rebanada y la lista compra 1: El Toque de Fuego: Calienta 1 c",
+        "resultado": "fp"
+      },
+      {
+        "caso": "04d25439d9",
+        "capa": "determinista",
+        "defecto": "usa_lo_que_no_esta",
+        "hallazgo": null,
+        "resultado": "fn"
+      },
+      {
+        "caso": "04d25439d9",
+        "capa": "determinista",
+        "defecto": null,
+        "hallazgo": "V3: listado ('1 ají') pero ningún paso lo menciona (alimento: Ají cubanela)",
+        "resultado": "fp"
+      },
+      {
+        "caso": "04d25439d9",
+        "capa": "determinista",
+        "defecto": null,
+        "hallazgo": "V3: listado ('½ ají') pero ningún paso lo menciona (alimento: Ají cubanela)",
+        "resultado": "fp"
+      },
+      {
+        "caso": "04eb731253",
+        "capa": "determinista",
+        "defecto": "cantidad_inconsistente",
+        "hallazgo": null,
+        "resultado": "fn"
+      },
+      {
+        "caso": "04eb731253",
+        "capa": "determinista",
+        "defecto": null,
+        "hallazgo": "V1: paso aplica 'saltear' a un listo-para-comer: El Toque de Fuego: Calienta 1 c",
+        "resultado": "fp"
+      },
+      {
+        "caso": "04eb731253",
+        "capa": "determinista",
+        "defecto": null,
+        "hallazgo": "V1: paso aplica 'saltear' a un listo-para-comer: El Toque de Fuego: Calienta 1 c",
+        "resultado": "fp"
+      },
+      {
+        "caso": "04eb731253",
+        "capa": "determinista",
+        "defecto": null,
+        "hallazgo": "V7a: la lista compra 3 y los pasos hablan de una sola (tayota, siempre en singul",
+        "resultado": "fp"
+      },
+      {
+        "caso": "060b4fda6a",
+        "capa": "determinista",
+        "defecto": "seco_sin_coccion",
+        "hallazgo": "V7c: declarado seco ('50 g de habichuelas rojas secas') y un paso lo da por COCI",
+        "resultado": "tp",
+        "emparejado_por": "codigo+alimento"
+      },
+      {
+        "caso": "0468ff03aa",
+        "capa": "juez",
+        "defecto": null,
+        "hallazgo": "paso_incoherente: La lista de ingredientes especifica 1 tostada de casabe, pero ",
+        "resultado": "fp"
+      },
+      {
+        "caso": "05856e2162",
+        "capa": "juez",
+        "defecto": "paso_incoherente",
+        "hallazgo": null,
+        "resultado": "fn"
+      },
+      {
+        "caso": "0d4eeb64eb",
+        "capa": "juez",
+        "defecto": null,
+        "hallazgo": "tecnica_impropia: La receta incorpora la quinoa CRUDA directamente al salteado y",
+        "resultado": "fp"
+      },
+      {
+        "caso": "119f0e6a06",
+        "capa": "juez",
+        "defecto": null,
+        "hallazgo": "paso_incoherente: La lista de ingredientes indica 1½ tortas pequeñas de casabe, ",
+        "resultado": "fp"
+      },
+      {
+        "caso": "1794ad8c1d",
+        "capa": "juez",
+        "defecto": null,
+        "hallazgo": "combo_absurdo: El plato es un batido dulce-tropical de yogur griego con frutas (",
+        "resultado": "fp"
+      },
+      {
+        "caso": "1794ad8c1d",
+        "capa": "juez",
+        "defecto": null,
+        "hallazgo": "nombre_no_corresponde: El nombre declara 'mango y naranja', pero el mango no fig",
+        "resultado": "fp"
+      },
+      {
+        "caso": "1794ad8c1d",
+        "capa": "juez",
+        "defecto": null,
+        "hallazgo": "paso_incoherente: El paso 1 dice 'mide ¾ taza de yogurt griego... y el yogurt gr",
+        "resultado": "fp"
+      },
+      {
+        "caso": "19b13609c9",
+        "capa": "juez",
+        "defecto": null,
+        "hallazgo": "paso_incoherente: La lista de ingredientes declara '½ taza de garbanzos secos', ",
+        "resultado": "fp"
+      },
+      {
+        "caso": "1c0c5e6582",
+        "capa": "juez",
+        "defecto": null,
+        "hallazgo": "nombre_no_corresponde: El plato se llama 'Cottage con piña' pero ni el queso cot",
+        "resultado": "fp"
+      },
+      {
+        "caso": "1c0c5e6582",
+        "capa": "juez",
+        "defecto": null,
+        "hallazgo": "paso_incoherente: La receta contradice los ingredientes: pide 'queso cottage' y ",
+        "resultado": "fp"
+      },
+      {
+        "caso": "24dbfaebdb",
+        "capa": "juez",
+        "defecto": null,
+        "hallazgo": "nombre_no_corresponde: El nombre y el paso 2 declaran 'queso blanco', pero la li",
+        "resultado": "fp"
+      },
+      {
+        "caso": "292b09e344",
+        "capa": "juez",
+        "defecto": null,
+        "hallazgo": "paso_incoherente: El plato incluye '40 g de arroz blanco crudo' en la lista de i",
+        "resultado": "fp"
+      },
+      {
+        "caso": "00fae1c079",
+        "capa": "juez",
+        "defecto": null,
+        "hallazgo": "paso_incoherente: La mise en place y el montaje usan 'almendras fileteadas', per",
+        "resultado": "fp"
+      },
+      {
+        "caso": "01606d0573",
+        "capa": "juez",
+        "defecto": null,
+        "hallazgo": "tecnica_impropia: El paso indica 'incorpora también arroz blanco crudo durante l",
+        "resultado": "fp"
+      },
+      {
+        "caso": "098d23388f",
+        "capa": "juez",
+        "defecto": "nombre_no_corresponde",
+        "hallazgo": null,
+        "resultado": "fn"
+      },
+      {
+        "caso": "0bd5722712",
+        "capa": "juez",
+        "defecto": null,
+        "hallazgo": "paso_incoherente: El paso de mise en place instruye pelar y cortar \"los 2 kiwis ",
+        "resultado": "fp"
+      },
+      {
+        "caso": "0ee6d0a81c",
+        "capa": "juez",
+        "defecto": "paso_incoherente",
+        "hallazgo": null,
+        "resultado": "fn"
+      },
+      {
+        "caso": "0eeebbee4d",
+        "capa": "juez",
+        "defecto": "paso_incoherente",
+        "hallazgo": null,
+        "resultado": "fn"
+      },
+      {
+        "caso": "0eeebbee4d",
+        "capa": "juez",
+        "defecto": null,
+        "hallazgo": "tecnica_impropia: La receta trata la pechuga de pollo como si fuera huevo: 'bate",
+        "resultado": "fp"
+      },
+      {
+        "caso": "12dc5c0e78",
+        "capa": "juez",
+        "defecto": null,
+        "hallazgo": "paso_incoherente: El paso de mise en place contradice la lista de ingredientes: ",
+        "resultado": "fp"
+      },
+      {
+        "caso": "15ddcb26c1",
+        "capa": "juez",
+        "defecto": null,
+        "hallazgo": "paso_incoherente: La lista de ingredientes declara '½ guineíto verde', pero los ",
+        "resultado": "fp"
+      },
+      {
+        "caso": "1d6d7dc439",
+        "capa": "juez",
+        "defecto": null,
+        "hallazgo": "paso_incoherente: La lista de ingredientes declara 6 chinolas, pero el paso 1 in",
+        "resultado": "fp"
+      },
+      {
+        "caso": "1ea600db80",
+        "capa": "juez",
+        "defecto": null,
+        "hallazgo": "paso_incoherente: Las habichuelas negras SECAS se enjuagan en el mise en place y",
+        "resultado": "fp"
+      },
+      {
+        "caso": "0dbc337c25",
+        "capa": "juez",
+        "defecto": null,
+        "hallazgo": "tecnica_impropia: La receta manda cocer el yogur griego en agua hirviendo 8 minu",
+        "resultado": "fp"
+      },
+      {
+        "caso": "17285dfa78",
+        "capa": "juez",
+        "defecto": null,
+        "hallazgo": "paso_incoherente: La mise en place dice 'escurre ½ taza de lentejas secas' (escu",
+        "resultado": "fp"
+      },
+      {
+        "caso": "20fdfb4de7",
+        "capa": "juez",
+        "defecto": null,
+        "hallazgo": "paso_incoherente: La lista de ingredientes declara solo 95 ml de leche descremad",
+        "resultado": "fp"
+      },
+      {
+        "caso": "2538fbe6a2",
+        "capa": "juez",
+        "defecto": "paso_incoherente",
+        "hallazgo": null,
+        "resultado": "fn"
+      },
+      {
+        "caso": "340665859e",
+        "capa": "juez",
+        "defecto": null,
+        "hallazgo": "nombre_no_corresponde: El plato se llama 'Revoltillo de papa, auyama y queso bla",
+        "resultado": "fp"
+      },
+      {
+        "caso": "456feecd3a",
+        "capa": "juez",
+        "defecto": "paso_incoherente",
+        "hallazgo": null,
+        "resultado": "fn"
+      },
+      {
+        "caso": "4f073559b3",
+        "capa": "juez",
+        "defecto": "paso_incoherente",
+        "hallazgo": null,
+        "resultado": "fn"
+      },
+      {
+        "caso": "55fef36cd9",
+        "capa": "juez",
+        "defecto": null,
+        "hallazgo": "paso_incoherente: El mise en place ordena 'rebana las aceitunas' y el montaje la",
+        "resultado": "fp"
+      },
+      {
+        "caso": "7ef0b23dd8",
+        "capa": "juez",
+        "defecto": null,
+        "hallazgo": "tecnica_impropia: La receta agrega 45 g de lentejas SECAS al sofrito y las cocin",
+        "resultado": "fp"
+      },
+      {
+        "caso": "7ef0b23dd8",
+        "capa": "juez",
+        "defecto": null,
+        "hallazgo": "nombre_no_corresponde: El nombre declara \"...y aceitunas\" y la receta instruye r",
+        "resultado": "fp"
+      },
+      {
+        "caso": "01c22c6847",
+        "capa": "juez",
+        "defecto": null,
+        "hallazgo": "paso_incoherente: Los ingredientes listan lentejas y habichuelas negras SECAS (2",
+        "resultado": "fp"
+      },
+      {
+        "caso": "023e151c4e",
+        "capa": "juez",
+        "defecto": "paso_incoherente",
+        "hallazgo": null,
+        "resultado": "fn"
+      },
+      {
+        "caso": "03c57e55a5",
+        "capa": "juez",
+        "defecto": "nombre_no_corresponde",
+        "hallazgo": null,
+        "resultado": "fn"
+      },
+      {
+        "caso": "049fbef8b5",
+        "capa": "juez",
+        "defecto": null,
+        "hallazgo": "tecnica_impropia: La yuca cruda se pone directamente en la plancha por solo 4-5 ",
+        "resultado": "fp"
+      }
+    ],
+    "sin_rubrica_casos": [],
+    "columnas": {
+      "determinista": "maquina_determinista_2026-09-15",
+      "juez": "maquina_juez_2026-09-15"
+    },
+    "acuerdo": {
+      "anotadores": 1,
+      "kappa": null,
+      "comunes": 0,
+      "discrepancias": [],
+      "nombres": [
+        "angelo"
+      ]
+    },
+    "dudosas_excluidas": 7,
+    "excluidos_dev": 0
+  }
+}

@@ -488,7 +488,11 @@ def test_docs_plan_y_marker():
     assert "culinary_contract_scan_status" in doc and "resolve_judge_violations" in doc and "--estricto" in doc
     assert "las 80 etiquetas BINARIAS existen desde el 2026-09-07" in doc
     plan = (_BACKEND / "docs" / "plan_pendientes_2026_09_11.md").read_text(encoding="utf-8")
-    assert "| C1 | ✅ 2026-09-12 · software listo · 👤 anotación con rúbrica + 2º anotador |" in plan
+    # [P1-PLAN-LOTE-60 · 2026-09-15] el lote 38 del plan cerró el instrumento con la anotación del dueño y la fila C1 cambió de
+    # estado («✅ 2026-09-15 · instrumento con la anotación del dueño…»): lo que este lote fija es que C1 tenga su fila con
+    # estado y la cita del lote 22, no que siga pendiente de la rúbrica.
+    assert re.search(r"^\| C1 \| ✅ 2026-09-1[25] · ", plan, re.M), "C1 con estado en el plan de pendientes"
+    assert "`P1-PLAN-LOTE-22`: CUL-P0-01" in plan
     assert "| C0 | ✅ 2026-09-12 · corpus fijo + etiquetas binarias (09-07) · 👤 rúbrica |" in plan
     app = (_BACKEND / "app.py").read_text(encoding="utf-8", errors="ignore")
     m = re.search(r'_LAST_KNOWN_PFIX = "([^"]+)"', app)
