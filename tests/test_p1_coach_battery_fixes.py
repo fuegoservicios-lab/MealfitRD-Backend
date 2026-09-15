@@ -39,9 +39,25 @@ def test_los_cuatro_prompts_llevan_las_reglas_de_voz(nombre):
     texto = _PROMPTS[nombre]
     for marca in ("VOZ, LONGITUD Y CIERRE", "LO IMPORTANTE PRIMERO", "Máximo 2 emojis",
                   "El agua NO es coletilla", "idioma en que el usuario te escribe ESTE mensaje",
-                  "nunca inventes por qué el plan salió", "SÍNTOMAS", "NADA INTERNO", "SIN RELLENO"):
+                  "nunca inventes por qué el plan salió", "SÍNTOMAS", "NADA INTERNO", "SIN RELLENO", "TEMAS DE RIESGO",
+                  "nunca digas \"superávit de 2100\"", "Nunca des dosis"):
         assert marca in texto, f"{nombre}: falta «{marca}»"
     assert "SIEMPRE para listar" not in texto, "las viñetas obligatorias inflaban cada respuesta"
+
+
+def test_la_alergia_va_primero_aunque_solo_pida_el_menu():
+    """«Después» v2: con las reglas de brevedad, «qué me toca hoy» de un alérgico a maní y mariscos
+    listó el menú (con maní y camarones) SIN avisar (FD3). La prioridad va en el bloque clínico."""
+    txt = P.build_clinical_guard_context({"allergies": ["Maní", "Mariscos"]})
+    assert "AVÍSALO EN LA PRIMERA FRASE" in txt and "también cuando solo te pide el menú" in txt
+    assert "nunca cuenta como «dato extra»" in txt
+    assert "NUNCA es un dato extra" in P.CHAT_STREAM_INLINE_PROMPT
+
+
+def test_una_bebida_con_calorias_es_consumo_no_agua():
+    """«Después» v2: «me tomé 3 Presidente» se leyó como agua y no se registró."""
+    txt = P.build_tools_instructions_stream("u")
+    assert "'me tomé 3 Presidente'" in txt and "`log_water_glass` es SOLO para agua" in txt
 
 
 def test_el_bloque_de_voz_es_una_sola_constante():
