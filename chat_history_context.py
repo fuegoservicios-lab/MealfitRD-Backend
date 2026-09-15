@@ -82,7 +82,7 @@ def _to_local_date(value: Any, tz_offset_mins: int = 240) -> Optional[date]:
     return (dt - timedelta(minutes=tz_offset_mins)).date()
 
 
-def _live_anchor(live: list, plan_data: dict, today: date):
+def _live_anchor(live: list, plan_data: dict, today: date, tz_offset_mins: int = 240):
     """(idx, fecha) del día vivo que sirve de ancla. Ver spec §3 Pieza 1.
 
     Cuatro tiers, en este orden y por estas razones (las 2ª y 3ª nacieron de dos
@@ -116,20 +116,24 @@ def _live_anchor(live: list, plan_data: dict, today: date):
         stamped = _parse_date(d.get("date"))
         if stamped:
             return i, stamped
-    gsd = _to_local_date(plan_data.get("grocery_start_date"))
+    # [P2-CHAT-PAST-DAYS-USER-TZ · 2026-09-14] Con el huso del USUARIO, no el de RD fijo:
+    # un `grocery_start_date` persistido como timestamp UTC anclaba un día tarde (o
+    # temprano) para un usuario de Madrid, y el bloque «DÍAS QUE YA PASARON» fechaba mal
+    # lo prescrito.
+    gsd = _to_local_date(plan_data.get("grocery_start_date"), tz_offset_mins)
     if gsd:
         return 0, gsd
     wd_today = _WEEKDAYS_ES[today.weekday()]
     for i, d in enumerate(live):
         if str(d.get("day_name") or "").strip().lower() == wd_today:
             return i, today
-    cs = _to_local_date(plan_data.get("cycle_start_date"))
+    cs = _to_local_date(plan_data.get("cycle_start_date"), tz_offset_mins)
     if cs:
         return 0, cs
     return None, None
 
 
-def resolve_day_dates(plan_data: Any, today: date) -> list[dict]:
+def resolve_day_dates(plan_data: Any, today: date, tz_offset_mins: int = 240) -> list[dict]:
     """Fecha calendario de cada día del plan (archivados + vivos).
 
     Devuelve `[{"date", "day", "inferred", "archived"}]` en orden cronológico
@@ -143,7 +147,7 @@ def resolve_day_dates(plan_data: Any, today: date) -> list[dict]:
         if not live and not archived:
             return []
 
-        anchor_idx, anchor_date = _live_anchor(live, plan_data, today)
+        anchor_idx, anchor_date = _live_anchor(live, plan_data, today, tz_offset_mins)
         if anchor_date is None:
             return []
 
@@ -176,9 +180,10 @@ def resolve_day_dates(plan_data: Any, today: date) -> list[dict]:
         return []
 
 
-def find_plan_day_for_date(plan_data: Any, target: date, today: date) -> Optional[dict]:
+def find_plan_day_for_date(plan_data: Any, target: date, today: date,
+                           tz_offset_mins: int = 240) -> Optional[dict]:
     """El registro (`resolve_day_dates`) cuya fecha sea exactamente `target`."""
-    for row in resolve_day_dates(plan_data, today):
+    for row in resolve_day_dates(plan_data, today, tz_offset_mins):
         if row["date"] == target:
             return row
     return None
@@ -595,7 +600,8 @@ def _assemble(header: str, lines: list, footer: str, max_chars: int, label: str)
 
 def build_past_plan_days_block(plan_data: Any, today: date,
                                days_back: Optional[int] = None,
-                               max_chars: Optional[int] = None) -> str:
+                               max_chars: Optional[int] = None,
+                               tz_offset_mins: int = 240) -> str:
     """Pieza 2 del spec: índice compacto de lo que el plan MANDABA en los días
     que ya pasaron. Solo nombre + slot + kcal — las cantidades y las recetas
     las sirve la tool `consultar_dia_del_plan` bajo demanda."""
@@ -604,7 +610,8 @@ def build_past_plan_days_block(plan_data: Any, today: date,
     if days_back <= 0:
         return ""
     floor = today - timedelta(days=days_back)
-    past = [r for r in resolve_day_dates(plan_data, today) if floor <= r["date"] < today]
+    past = [r for r in resolve_day_dates(plan_data, today, tz_offset_mins)
+            if floor <= r["date"] < today]
     if not past:
         return ""
 

@@ -269,6 +269,20 @@ def _get_dummy_purge_graph():
         return graph
 
 
+def _purge_cut_index(messages: list, keep_recent: int) -> int:
+    """[P1-CHAT-ORPHAN-TOOLCALL-SANITIZE · 2026-09-14] Índice del primer mensaje que se
+    CONSERVA: el HumanMessage más cercano en o antes de `len - keep_recent`. 0 = no purgar.
+
+    tooltip-anchor: _purge_cut_index (test_p1_chat_core_audit.py)
+    """
+    from langchain_core.messages import HumanMessage
+
+    corte = max(0, len(messages) - keep_recent)
+    while corte > 0 and not isinstance(messages[corte], HumanMessage):
+        corte -= 1
+    return corte
+
+
 def purge_langgraph_checkpoint(
     session_id: str,
     keep_recent: int = KEEP_RECENT,
@@ -328,7 +342,13 @@ def purge_langgraph_checkpoint(
             return
         
         # Calcular qué mensajes eliminar (todos excepto los keep_recent más recientes)
-        messages_to_remove = messages[:-keep_recent]
+        # [P1-CHAT-ORPHAN-TOOLCALL-SANITIZE · 2026-09-14] El corte se alinea al inicio
+        # de un turno del usuario. Cortar por número podía dejar como primer superviviente
+        # un ToolMessage cuyo AIMessage con el tool_call ya se había borrado: historial
+        # inválido que el proveedor rechaza en CADA turno siguiente. Se retrocede hasta el
+        # HumanMessage más cercano (se conserva de más, nunca de menos); si no hay ninguno,
+        # no se purga.
+        messages_to_remove = messages[:_purge_cut_index(messages, keep_recent)]
         
         # Crear RemoveMessage para cada mensaje a eliminar
         remove_messages = [RemoveMessage(id=m.id) for m in messages_to_remove if hasattr(m, 'id') and m.id]

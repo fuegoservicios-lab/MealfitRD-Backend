@@ -51,9 +51,15 @@ def _read(path: Path) -> str:
 #    `chat_with_agent_stream`.
 # ===========================================================================
 
+# [P1-CHAT-STREAM-TOOLCALL-CHUNKS · 2026-09-14] El bucle ya no itera
+# `msg_chunk.tool_calls` directamente: el `progress` sale UNA vez por AIMessage
+# (la tool_call llega troceada en muchos chunks). El ancla sigue al bucle nuevo.
+_LOOP_ANCHOR = "for idx, tool_call in enumerate([_named_tc] if _emit_progress else []):"
+
+
 def test_generic_progress_fallback_present_after_named_branches():
     src = _read(_AGENT_PY)
-    idx = src.index("for idx, tool_call in enumerate(msg_chunk.tool_calls):")
+    idx = src.index(_LOOP_ANCHOR)
     # Región que cubre las 6 ramas nombradas + el fallback nuevo (holgada
     # para acomodar el comentario explicativo del fallback).
     region = src[idx: idx + 5000]
@@ -98,7 +104,7 @@ def test_generic_progress_fallback_present_after_named_branches():
 
 def test_every_known_tool_name_reaches_some_progress_branch():
     src = _read(_AGENT_PY)
-    idx = src.index("for idx, tool_call in enumerate(msg_chunk.tool_calls):")
+    idx = src.index(_LOOP_ANCHOR)
     region = src[idx: idx + 3500]
 
     named_tool_names = set(re.findall(r'tool_name == "([^"]+)"', region))

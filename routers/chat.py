@@ -188,6 +188,35 @@ def _resolve_user_id_for_db(
     return user_id_input
 
 
+def _resolve_chat_identity(
+    body_user_id: Optional[str], session_id: Optional[str], verified_user_id: Optional[str]
+) -> str:
+    """[P0-CHAT-IDENTITY-FROM-TOKEN · 2026-09-14] La identidad del turno sale SOLO del token.
+
+    Antes, los endpoints del chat tomaban `user_id` del BODY y lo validaban contra el
+    token únicamente cuando `user_id != session_id`. Una petición SIN token con
+    `session_id = user_id = <UUID de la víctima>` saltaba ese guard y también el de
+    dueño de sesión (la sesión aún no existía), y `verify_coach_quota` deja pasar sin
+    token. El agente recibía ese UUID como si estuviera autenticado: cargaba plan,
+    alergias, Nevera y diario de la víctima en el prompt, y el override P0-AGENT-1
+    fijaba el `user_id` de las TOOLS a ese mismo valor — escrituras sobre la víctima.
+
+    Contrato:
+      - Con token: el turno es del `verified_user_id`. Un `user_id` del body distinto
+        (que no sea "guest" ni el session_id del propio cliente) es 401, como antes.
+      - Sin token: SIEMPRE "guest", diga lo que diga el body. El invitado sigue
+        teniendo su conversación (vive en `session_id`); lo que pierde es la
+        posibilidad de nombrar a otra persona.
+
+    tooltip-anchor: _resolve_chat_identity (test_p0_chat_identity_from_token.py)
+    """
+    if verified_user_id:
+        if body_user_id and body_user_id not in ("guest", session_id, verified_user_id):
+            raise HTTPException(status_code=401, detail="No autorizado.")
+        return verified_user_id
+    return "guest"
+
+
 def _resolve_chat_local_time(local_date, tz_offset, verified_user_id):
     """[P3-CHAT-NOSTREAM-CONTEXTO-TEMPORAL-RD · 2026-08-23] Resuelve el "hoy" del usuario
     SERVER-SIDE cuando el cliente no lo manda.
@@ -457,12 +486,8 @@ def api_save_chat_message(data: dict = Body(...), verified_user_id: str = Depend
     session_id = data.get("session_id")
     role = data.get("role")
     content = data.get("content")
-    user_id = data.get("user_id", session_id)
-
-    # Validación de seguridad IDOR
-    if user_id and user_id != "guest" and user_id != session_id:
-        if not verified_user_id or verified_user_id != user_id:
-            raise HTTPException(status_code=401, detail="No autorizado. Token inválido o no coincide.")
+    # [P0-CHAT-IDENTITY-FROM-TOKEN · 2026-09-14] Identidad solo del token (ver helper).
+    user_id = _resolve_chat_identity(data.get("user_id"), session_id, verified_user_id)
 
     # [P2-CHAT-WRITE-IDOR · 2026-05-28] El guard de arriba se SALTA cuando
     # user_id == session_id (atacante envía session_id=<sesión de la víctima>,
@@ -781,7 +806,8 @@ def api_chat_stream(background_tasks: BackgroundTasks, data: dict = Body(...), v
     try:
         session_id = data.get("session_id", "default_session")
         prompt = data.get("prompt", "")
-        user_id = data.get("user_id", session_id)
+        # [P0-CHAT-IDENTITY-FROM-TOKEN · 2026-09-14] Identidad solo del token (ver helper).
+        user_id = _resolve_chat_identity(data.get("user_id"), session_id, verified_user_id)
         current_plan = data.get("current_plan", None)
         form_data = data.get("form_data", None)
         local_date = data.get("local_date", None)
@@ -809,11 +835,6 @@ def api_chat_stream(background_tasks: BackgroundTasks, data: dict = Body(...), v
             assert_valid_uuid(str(regenerate_message_id))
         regenerate_response_content = data.get("regenerate_response_content")
         
-        # Validación de seguridad IDOR
-        if user_id and user_id != "guest" and user_id != session_id:
-            if not verified_user_id or verified_user_id != user_id:
-                raise HTTPException(status_code=401, detail="No autorizado.")
-
         # [P2-CHAT-WRITE-IDOR · 2026-05-28] Cierra el bypass user_id==session_id
         # (ver /message): si la sesión ya tiene dueño, exigir match con el token.
         from db_chat import get_session_owner
@@ -946,6 +967,9 @@ def api_chat_stream(background_tasks: BackgroundTasks, data: dict = Body(...), v
 
         def event_generator():
             nonlocal _billed, _chunk_observed
+            # [P2-CHAT-SINGLE-ERROR-EVENT · 2026-09-14] Si el agente ya emitió su evento
+            # `error`, el router no emite un segundo.
+            _error_seen = False
             try:
                 for chunk in chat_with_agent_stream(
                     session_id=session_id,
@@ -973,6 +997,8 @@ def api_chat_stream(background_tasks: BackgroundTasks, data: dict = Body(...), v
                             # `error` no justifican facturar la cuota.
                             if _chunk_type == "chunk":
                                 _chunk_observed = True
+                            elif _chunk_type == "error":
+                                _error_seen = True
 
                             if _chunk_type == "done":
                                 response_text = data_obj.get("response", "")
@@ -991,18 +1017,29 @@ def api_chat_stream(background_tasks: BackgroundTasks, data: dict = Body(...), v
                                     # closure scope. Persiste el ownership
                                     # de la respuesta del modelo al user
                                     # que envió el prompt.
-                                    if _regenerate_target_id:
-                                        replaced = replace_model_response_for_regeneration(
-                                            session_id,
-                                            _regenerate_target_id,
-                                            response_text,
-                                        )
-                                        if not replaced:
-                                            raise RuntimeError("No se pudo sustituir la respuesta regenerada")
-                                    else:
-                                        save_message(
-                                            session_id, "model", response_text,
-                                            user_id=_db_user_id,
+                                    # [P2-CHAT-DONE-PERSIST-LOUD · 2026-09-14] Un fallo al
+                                    # guardar caía en el `except` de «Error parseando chunk
+                                    # de fin» y se saltaba también `bg_tasks` (hechos y
+                                    # resumen). Ahora se registra como lo que es y el
+                                    # turno sigue.
+                                    try:
+                                        if _regenerate_target_id:
+                                            replaced = replace_model_response_for_regeneration(
+                                                session_id,
+                                                _regenerate_target_id,
+                                                response_text,
+                                            )
+                                            if not replaced:
+                                                raise RuntimeError("No se pudo sustituir la respuesta regenerada")
+                                        else:
+                                            save_message(
+                                                session_id, "model", response_text,
+                                                user_id=_db_user_id,
+                                            )
+                                    except Exception as _persist_err:
+                                        clog.exception(
+                                            f"[P2-CHAT-DONE-PERSIST-LOUD] la respuesta del modelo "
+                                            f"NO se guardó en el historial: {type(_persist_err).__name__}"
                                         )
                                     # `done` con response no-vacío también garantiza
                                     # consumo de tokens incluso si por alguna razón
@@ -1077,7 +1114,10 @@ def api_chat_stream(background_tasks: BackgroundTasks, data: dict = Body(...), v
                 clog.exception(f"[CHAT STREAM] Error mid-stream: {e}")
                 # `chunk_observed` puede ser True (excepción tras emitir chunks)
                 # o False (excepción pre-LLM). El finally factura solo si True.
-                yield f"data: {json.dumps({'type': 'error', 'message': str(e)})}\n\n"
+                # [P2-CHAT-SINGLE-ERROR-EVENT · 2026-09-14] Sin `str(e)` (detalle interno
+                # visible en Network) y sin segundo evento si el agente ya emitió el suyo.
+                if not _error_seen:
+                    yield f"data: {json.dumps({'type': 'error', 'code': 'internal', 'message': 'El asistente tuvo un problema. Intenta de nuevo.'})}\n\n"
             finally:
                 # [P2-AUDIT-NEW-2] Billing idempotente. Cubre TODOS los exits:
                 # done OK, GeneratorExit (abort), exception mid-stream.
@@ -1126,7 +1166,8 @@ def api_chat(background_tasks: BackgroundTasks, data: dict = Body(...), verified
     try:
         session_id = data.get("session_id", "default_session")
         prompt = data.get("prompt", "")
-        user_id = data.get("user_id", session_id)
+        # [P0-CHAT-IDENTITY-FROM-TOKEN · 2026-09-14] Identidad solo del token (ver helper).
+        user_id = _resolve_chat_identity(data.get("user_id"), session_id, verified_user_id)
         current_plan = data.get("current_plan", None)
         form_data = data.get("form_data", None)
         local_date = data.get("local_date", None)
@@ -1137,11 +1178,6 @@ def api_chat(background_tasks: BackgroundTasks, data: dict = Body(...), verified
         # no mandaba estos dos campos. Se resuelve desde el `verified_user_id`, que ya está
         # delante: es la opción que no depende de que el caller colabore.
         local_date, tz_offset = _resolve_chat_local_time(local_date, tz_offset, verified_user_id)
-
-        # Validación de seguridad IDOR
-        if user_id and user_id != "guest" and user_id != session_id:
-            if not verified_user_id or verified_user_id != user_id:
-                raise HTTPException(status_code=401, detail="No autorizado.")
 
         # [P2-CHAT-WRITE-IDOR · 2026-05-30] Tercer hermano del guard de escritura
         # IDOR. El check inline de arriba se SALTA cuando user_id == session_id

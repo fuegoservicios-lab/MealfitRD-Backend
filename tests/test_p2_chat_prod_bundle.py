@@ -124,9 +124,12 @@ def test_p2_1_emit_after_record_success(agent_src: str) -> None:
     # entre el lazy import y la llamada (prod insertó el comment que explica el
     # `node='chat_call_model'` explícito). El intent del assert es idéntico:
     # `try:` → lazy import → emit, todo dentro del mismo bloque try/except.
+    # [P1-CHAT-COST-ATTRIBUTION · 2026-09-14] El import trae además `user_id_var` y,
+    # entre el import y el emit, se fija el user_id del coste (ContextVar) en un
+    # try/finally interno. El intent es el mismo: `try:` exterior → import → emit.
     assert re.search(
-        r"try:\s*\n\s*from graph_orchestrator import _emit_llm_usage_event_best_effort\s*\n"
-        r"(?:\s*#[^\n]*\n)*"
+        r"try:\s*\n\s*from graph_orchestrator import _emit_llm_usage_event_best_effort[^\n]*\n"
+        r"(?:[^\n]*\n)*?"
         r"\s*_emit_llm_usage_event_best_effort\(",
         body,
     ), (

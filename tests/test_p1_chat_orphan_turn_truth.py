@@ -27,13 +27,52 @@ def test_registro_de_turnos_vivos_con_tope_de_edad():
 
 
 def test_el_stream_registra_al_entrar_y_retira_en_el_finally():
-    i = _AGENT.index("def chat_with_agent_stream(")
-    head = _AGENT[i:i + 1500]
-    assert "_ACTIVE_TURNS[session_id] = time.time()" in head, "el turno no se registra al entrar"
-    # el pop vive en el `finally` del stream (todos los exits: normal, excepción, GeneratorExit)
-    m = re.search(r"\n    finally:\r?\n        _ACTIVE_TURNS\.pop\(session_id, None\)", _AGENT)
-    assert m, "el finally del stream no retira el turno"
-    assert m.start() > i
+    """[P1-CHAT-ACTIVE-TURN-WHOLE · 2026-09-14] El registro y la retirada viven en el
+    decorador `_tracks_active_turn`, que envuelve el generador ENTERO (el `finally` del
+    bucle no cubría el preámbulo) y solo retira el turno si sigue siendo el suyo."""
+    i = _AGENT.index("def _tracks_active_turn(")
+    body = _AGENT[i:_AGENT.index("def _chat_stream_error_payload(")]
+    assert "_ACTIVE_TURNS[session_id] = token" in body, "el turno no se registra al entrar"
+    assert re.search(r"finally:\r?\n\s+_release_active_turn\(session_id, token\)", body), (
+        "el finally del decorador no retira el turno"
+    )
+    assert "@_tracks_active_turn\ndef chat_with_agent_stream(" in _AGENT.replace("\r\n", "\n")
+
+
+def test_el_decorador_retira_en_todos_los_exits_y_solo_su_turno():
+    import sys
+    sys.path.insert(0, str(_BACKEND))
+    import agent as A
+
+    @A._tracks_active_turn
+    def _gen(session_id, falla=False):
+        yield "a"
+        if falla:
+            raise RuntimeError("boom")
+        yield "b"
+
+    list(_gen(session_id="s-ok"))
+    assert "s-ok" not in A._ACTIVE_TURNS
+
+    try:
+        list(_gen("s-err", falla=True))
+    except RuntimeError:
+        pass
+    assert "s-err" not in A._ACTIVE_TURNS, "una excepción dejó el turno registrado"
+
+    g = _gen(session_id="s-cut")
+    next(g)
+    assert A.is_turn_active("s-cut")
+    g.close()  # el cliente corta
+    assert "s-cut" not in A._ACTIVE_TURNS
+
+    # Dos turnos en la misma sesión: el primero que termina no borra al segundo.
+    g1 = _gen(session_id="s-dup")
+    next(g1)
+    A._ACTIVE_TURNS["s-dup"] = A._ACTIVE_TURNS["s-dup"] + 1.0  # otro turno lo pisó
+    g1.close()
+    assert "s-dup" in A._ACTIVE_TURNS, "el turno viejo borró el marcador del nuevo"
+    A._ACTIVE_TURNS.pop("s-dup", None)
 
 
 def test_history_devuelve_turn_active():

@@ -37,6 +37,7 @@ from knobs import _env_str, _env_float, _env_int, _env_bool  # [P3-CHAT-MODEL-KN
 # a un módulo neutro.
 from graph_orchestrator import _get_circuit_breaker, clinical_backstop_for_meal, UPDATE_CLINICAL_GUARD, renal_protein_trim_for_update, food_safety_backstop_for_meal, condition_substitution_backstop_for_meal, slot_coherence_backstop_for_meal, SLOT_APPROPRIATENESS_GATE_ENABLED, appetibility_fix_for_update, _meal_has_sweet_savory_clash, UPDATE_APPETIBILITY_GUARD
 import concurrent.futures
+import functools
 import traceback
 from datetime import date, datetime, timezone, timedelta
 from cpu_tasks import _calcular_frecuencias_regex_cpu_bound
@@ -4085,19 +4086,115 @@ class ChatState(MessagesState):
     # Default: ausente (falsy) — un turno normal nunca la escribe.
     diary_claim_retried: bool
 
+# [P1-CHAT-ORPHAN-TOOLCALL-SANITIZE · 2026-09-14] Un historial con un tool_call sin su
+# ToolMessage (o un ToolMessage sin el AIMessage que lo pidió) lo rechaza el proveedor
+# OpenAI-compatible, y lo rechaza EN CADA TURNO siguiente: la sesión queda inservible hasta
+# abrir otro chat. Tres caminos lo producían: una tool que lanza una excepción no
+# capturada (`execute_tools` solo atrapaba `ValidationError`), el cliente que cierra la
+# pestaña mientras corre una tool, y la purga del checkpoint (`purge_langgraph_checkpoint`),
+# que cortaba por número de mensajes y podía dejar un ToolMessage como primer superviviente.
+# En vez de cazar cada camino por separado, el payload que se manda al modelo se sanea
+# siempre aquí: los ToolMessage huérfanos se descartan y a cada tool_call sin respuesta se
+# le añade una respuesta sintética que dice la verdad («no terminó»). El checkpoint no se
+# toca: se sanea lo que se ENVÍA.
+_TOOL_INTERRUPTED_TEXT = (
+    "[TOOL_INTERRUPTED] Esta herramienta no llegó a terminar (el turno se interrumpió). "
+    "No asumas que la acción se realizó; si sigue siendo relevante, vuelve a llamarla o "
+    "dile al usuario que no se completó."
+)
+
+
+def _tool_call_id(tc) -> Optional[str]:
+    return tc.get("id") if isinstance(tc, dict) else getattr(tc, "id", None)
+
+
+def _sanitize_tool_call_history(messages: list) -> list:
+    """[P1-CHAT-ORPHAN-TOOLCALL-SANITIZE · 2026-09-14] Empareja tool_calls y ToolMessages.
+
+    tooltip-anchor: _sanitize_tool_call_history (test_p1_chat_core_audit.py)
+    """
+    result: list = []
+    abiertos: list = []  # ids de tool_call del último AIMessage aún sin respuesta
+
+    def _cerrar_abiertos():
+        for tcid in abiertos:
+            result.append(ToolMessage(content=_TOOL_INTERRUPTED_TEXT, tool_call_id=tcid))
+        abiertos.clear()
+
+    for m in messages:
+        if isinstance(m, ToolMessage):
+            tcid = getattr(m, "tool_call_id", None)
+            if tcid in abiertos:
+                abiertos.remove(tcid)
+                result.append(m)
+            # si no, es huérfano (su AIMessage se purgó o no le corresponde): fuera
+            continue
+        _cerrar_abiertos()
+        result.append(m)
+        if isinstance(m, AIMessage):
+            for tc in (getattr(m, "tool_calls", None) or []):
+                tcid = _tool_call_id(tc)
+                if tcid:
+                    abiertos.append(tcid)
+    _cerrar_abiertos()
+    return result
+
+
+def _llm_messages_from_state(messages: list, sys_prompt: str) -> list:
+    """Payload del modelo: system prompt fresco + historial saneado.
+
+    [P1-DIARY-NUDGE-VISIBLE · 2026-09-14] Los SystemMessage del historial se descartaban
+    TODOS (el system prompt se reconstruye cada turno), incluido el que acaba de
+    inyectar `nudge_diary_tool`: el reintento volvía a llamar al modelo con la MISMA
+    entrada, costaba el doble y la verificación P1-DIARY-CLAIM-VERIFY no hacía nada.
+    Ahora los SystemMessage posteriores al último turno del usuario (los de ESTE turno)
+    se conservan, y se envían con rol de usuario: un mensaje de sistema a mitad de
+    conversación no todos los proveedores OpenAI-compatibles lo aceptan, uno de usuario
+    sí. Los de turnos anteriores siguen fuera (son exigencias ya caducadas).
+    """
+    ultimo_humano = -1
+    for idx, m in enumerate(messages):
+        if isinstance(m, HumanMessage):
+            ultimo_humano = idx
+    historial = []
+    for idx, m in enumerate(messages):
+        if isinstance(m, SystemMessage):
+            if idx > ultimo_humano and ultimo_humano >= 0:
+                historial.append(HumanMessage(content=f"[Instrucción del sistema] {m.content}"))
+            continue
+        historial.append(m)
+    llm_messages = [SystemMessage(content=sys_prompt)] if sys_prompt else []
+    llm_messages.extend(_sanitize_tool_call_history(historial))
+    return llm_messages
+
+
+def _is_client_request_error(exc: BaseException) -> bool:
+    """[P1-CHAT-CB-CLIENT-ERRORS · 2026-09-14] ¿Es un 4xx del proveedor (petición mal
+    formada), no una caída suya?
+
+    Un 400 por un historial inválido es un fallo de UNA sesión. Contarlo en el breaker
+    compartido del modelo dejaba que tres mensajes de un solo usuario con la sesión rota
+    abrieran el breaker 30 s para TODOS. 408 (timeout) y 429 (rate limit) quedan fuera:
+    el primero sí es degradación del proveedor y el segundo ya tiene su propia rama.
+    """
+    status = getattr(exc, "status_code", None)
+    if status is None:
+        status = getattr(getattr(exc, "response", None), "status_code", None)
+    try:
+        status = int(status)
+    except (TypeError, ValueError):
+        return False
+    return 400 <= status < 500 and status not in (408, 429)
+
+
 def call_model(state: ChatState):
     logger.info(f"🧠 [LANGGRAPH NODE] call_model")
     messages = state["messages"]
     sys_prompt = state.get("sys_prompt", "")
-    
-    llm_messages = []
-    if sys_prompt:
-        llm_messages.append(SystemMessage(content=sys_prompt))
-        
-    for m in messages:
-        if not isinstance(m, SystemMessage):
-            llm_messages.append(m)
-            
+
+    # [P1-CHAT-ORPHAN-TOOLCALL-SANITIZE + P1-DIARY-NUDGE-VISIBLE · 2026-09-14]
+    llm_messages = _llm_messages_from_state(messages, sys_prompt)
+
     # [P0-LLM-PROVIDER-MIGRATION] Identidad para tier-routing (paid→pro). Guests
     # (session_id) resuelven a flash via fail-cheap del router.
     _model_uid = state.get("user_id") or state.get("session_id")
@@ -4174,6 +4271,14 @@ def call_model(state: ChatState):
             raise LLMRateLimitedError(
                 f"chat LLM rate limited for model={_cb_model}: {_invoke_exc!r}"
             ) from _invoke_exc
+        # [P1-CHAT-CB-CLIENT-ERRORS · 2026-09-14] Un 4xx es la petición de ESTA
+        # sesión, no el proveedor caído: no abre el breaker de todos.
+        if _is_client_request_error(_invoke_exc):
+            logger.warning(
+                f"⚠️ [P1-CHAT-CB-CLIENT-ERRORS] 4xx del proveedor model={_cb_model!r} "
+                f"exc_type={type(_invoke_exc).__name__} — NO cuenta como CB failure."
+            )
+            raise
         # Resto: timeout, DeadlineExceeded, 5xx, parse error. El repo usa
         # broad-catch (graph_orchestrator.py:1423) — la excepción se
         # re-raises para que LangGraph la propague al caller.
@@ -4262,22 +4367,85 @@ def call_model(state: ChatState):
     # `response` (AIMessage con `usage_metadata`) y `llm` para resolver
     # el model name. Cualquier fallo en el emit NO debe romper el chat.
     try:
-        from graph_orchestrator import _emit_llm_usage_event_best_effort
-        # [P3-CHAT-NODE-EXPLICIT · 2026-05-20] Pasamos `node='chat_call_model'`
-        # explícito porque el chat-flow NO setea el ContextVar `_current_node_var`
-        # que el helper consulta por default. Sin esto, todas las filas del
-        # chat en `llm_usage_events` quedan con `node=NULL` y SRE no puede
-        # filtrar costos chat vs plan-gen.
-        _emit_llm_usage_event_best_effort(
-            llm=chat_llm,
-            result=response,
-            duration_s=_time_chat.time() - _chat_invoke_start,
-            node='chat_call_model',
+        from graph_orchestrator import _emit_llm_usage_event_best_effort, user_id_var as _cost_uid_var
+        # [P1-CHAT-COST-ATTRIBUTION · 2026-09-14] El helper toma el user_id del
+        # ContextVar `user_id_var`, que el flujo del chat nunca fijaba: las 160 filas
+        # `chat_call_model` de producción tenían user_id NULL (sin coste por usuario y
+        # sin borrado con la cuenta). Se fija solo durante el emit.
+        _cost_uid = state.get("user_id")
+        _cost_tok = (
+            _cost_uid_var.set(_cost_uid)
+            if _cost_uid and _cost_uid != "guest" and _cost_uid != state.get("session_id")
+            else None
         )
+        try:
+            # [P3-CHAT-NODE-EXPLICIT · 2026-05-20] Pasamos `node='chat_call_model'`
+            # explícito porque el chat-flow NO setea el ContextVar `_current_node_var`
+            # que el helper consulta por default. Sin esto, todas las filas del
+            # chat en `llm_usage_events` quedan con `node=NULL` y SRE no puede
+            # filtrar costos chat vs plan-gen.
+            _emit_llm_usage_event_best_effort(
+                llm=chat_llm,
+                result=response,
+                duration_s=_time_chat.time() - _chat_invoke_start,
+                node='chat_call_model',
+            )
+        finally:
+            if _cost_tok is not None:
+                _cost_uid_var.reset(_cost_tok)
     except Exception:
         pass
 
     return {"messages": [response]}
+
+def _form_field_updates_after_write(field: str, parsed_value, user_id: Optional[str], raw_value=None) -> dict:
+    """[P0-CHAT-ALLERGY-FRONTEND-TRUTH · 2026-09-14] Lo que el formulario del navegador debe
+    adoptar tras una escritura ACEPTADA de `update_form_field`.
+
+    El formulario del navegador acaba persistido (la sincronización del Dashboard hace PATCH
+    del formulario entero), así que debe recibir lo que la tool GUARDÓ, no lo que dijo el
+    modelo:
+      - alergias/condiciones: la tool ACUMULA (P0-CHAT-ALLERGY-MERGE) — el valor es la unión;
+      - selects y números: la tool CANONIZA (P1-CHAT-TOOLS-AUDIT: «ganar peso» → gain_muscle,
+        «80 kg» sobre un perfil en libras → libras) — mandar el valor crudo haría que el
+        Dashboard escribiera «ganar peso» encima de `gain_muscle`;
+      - el peso arrastra `weightUnit` si la tool lo fijó.
+    Usuario: se relee `health_profile`. Invitado: no hay base; se aplica la misma
+    canonización pura que usa la tool. Si algo falla se devuelve el valor parseado (para
+    las listas clínicas el frontend UNE, P0-CHAT-ALLERGY-FRONTEND-UNION).
+
+    tooltip-anchor: _form_field_updates_after_write (test_p1_chat_core_audit.py)
+    """
+    _LISTAS = ("allergies", "medicalConditions", "dislikes", "struggles")
+    if not user_id or user_id == "guest":
+        if field in _LISTAS:
+            return {field: parsed_value}
+        try:
+            from tools import _valor_de_campo_para_perfil, _valor_canonico_del_formulario
+            _ok1, _v1 = _valor_de_campo_para_perfil(field, raw_value if raw_value is not None else parsed_value)
+            _ok2, _v2, _ = _valor_canonico_del_formulario(field, _v1) if _ok1 else (False, None, None)
+            if _ok2:
+                return {field: f"{_v2:g}" if isinstance(_v2, float) else _v2}
+        except Exception as e:
+            logger.warning(f"[P0-CHAT-ALLERGY-FRONTEND-TRUTH] canonización de invitado falló: {type(e).__name__}")
+        return {field: parsed_value}
+    try:
+        perfil = get_user_profile(user_id) or {}
+        hp = perfil.get("health_profile") or {}
+        if isinstance(hp, str):
+            hp = json.loads(hp)
+        if isinstance(hp, dict) and hp.get(field) is not None:
+            out = {field: hp[field]}
+            if field == "weight" and hp.get("weightUnit"):
+                out["weightUnit"] = hp["weightUnit"]
+            return out
+    except Exception as e:
+        logger.warning(
+            f"[P0-CHAT-ALLERGY-FRONTEND-TRUTH] no se pudo releer {field}: "
+            f"{type(e).__name__}; se envía el valor parseado."
+        )
+    return {field: parsed_value}
+
 
 def execute_tools(state: ChatState):
     messages = state["messages"]
@@ -4381,14 +4549,36 @@ def execute_tools(state: ChatState):
                             new_value = extracted
 
                     if field in ['allergies', 'medicalConditions', 'dislikes', 'struggles']:
-                        updated_fields[field] = [item.strip() for item in (new_value if isinstance(new_value, str) else "").split(",") if item.strip()]
+                        _parsed_value = [item.strip() for item in (new_value if isinstance(new_value, str) else "").split(",") if item.strip()]
                     else:
-                        updated_fields[field] = new_value
+                        _parsed_value = new_value
 
                     # Re-inject the sanitized new_value into tool_args so the tool itself gets the clean version if it uses it directly
                     # (Aunque ya limpiamos adentro del tool, es buena práctica pasarlo limpio)
                     tool_args["new_value"] = new_value
+
+                    # [P0-CHAT-ALLERGY-FRONTEND-TRUTH · 2026-09-14] `updated_fields` se
+                    # rellenaba ANTES de invocar la tool y con la lista NUEVA sola. La tool
+                    # fusiona alergias/condiciones en la base (P0-CHAT-ALLERGY-MERGE), pero
+                    # el navegador recibía `["Lacteos"]`, `updateData` la marcaba como
+                    # tocada y la sincronización del Dashboard (PATCH del formulario entero,
+                    # merge `||` superficial) volvía a escribir la lista recortada: se
+                    # perdían las alergias previas. Además un valor que la tool RECHAZABA
+                    # llegaba igual al formulario y esa misma sincronización lo persistía.
+                    # Ahora: solo se propaga lo que la tool aceptó («¡Éxito!»), y se
+                    # propaga lo que GUARDÓ (unión clínica, valor canónico, unidad).
+                    _es_invitado = not _trusted_user_id or _trusted_user_id == "guest"
+                    if _es_invitado:
+                        # Invitado: la tool valida y canoniza pero NO escribe (no hay
+                        # perfil); el formulario de la sesión es el único destino.
+                        tool_args["user_id"] = "guest"
                     tool_result = update_form_field.invoke(tool_args)
+                    if str(tool_result).startswith("¡Éxito!"):
+                        updated_fields.update(_form_field_updates_after_write(
+                            field, _parsed_value,
+                            None if _es_invitado else _trusted_uid,
+                            raw_value=new_value,
+                        ))
 
                 elif tool_name == "generate_new_plan_from_chat":
                     user_instructions = tool_args.get("instructions", "")
@@ -4632,6 +4822,21 @@ def execute_tools(state: ChatState):
                     f"argumentos enviados no cumplen el schema esperado. Detalle: "
                     f"{_val_summary}. Reintenta con los tipos correctos o pide "
                     f"aclaración al usuario antes de re-invocar la tool."
+                )
+            except Exception as _tool_exc:
+                # [P1-CHAT-ORPHAN-TOOLCALL-SANITIZE · 2026-09-14] Cualquier otra excepción
+                # de una tool (breaker abierto o 429 dentro de `modify_single_meal`, un
+                # fallo de base) tumbaba el turno y dejaba el AIMessage con su tool_call
+                # sin ToolMessage: el proveedor rechazaba cada turno siguiente. Ahora la
+                # tool responde con un error que el modelo puede contar con honestidad.
+                logger.exception(
+                    f"❌ [P1-CHAT-ORPHAN-TOOLCALL-SANITIZE] tool={tool_name} lanzó "
+                    f"{type(_tool_exc).__name__}; se responde con [TOOL_ERROR]."
+                )
+                tool_result = (
+                    f"[TOOL_ERROR] La herramienta '{tool_name}' falló por un problema interno "
+                    "y NO completó la acción. No afirmes que se hizo: dile al usuario que no se "
+                    "pudo completar ahora y que lo intente de nuevo en un momento."
                 )
 
             tool_messages.append(ToolMessage(content=str(tool_result), tool_call_id=tool_id))
@@ -5331,7 +5536,9 @@ def _build_past_days_context(user_id: str, current_plan, local_date_str: Optiona
         tz_offset_mins = (_clamp_tz_offset_mins(tz_offset) if tz_offset is not None
                           else _DEFAULT_TZ_OFFSET_MIN)
 
-        out = build_past_plan_days_block(current_plan, today, days_back=days_back)
+        # [P2-CHAT-PAST-DAYS-USER-TZ · 2026-09-14] El ancla del plan en el huso del usuario.
+        out = build_past_plan_days_block(current_plan, today, days_back=days_back,
+                                         tz_offset_mins=tz_offset_mins)
         # [P2-CHUNK-OVERDUE-SIGNAL · 2026-08-04] MISMO bloque, MISMA llamada (no
         # una 2ª pasada al LLM ni un bloque nuevo): días PENDIENTE/ATRASADO.
         out += _build_pending_days_lines_block(user_id, current_plan, today, plan_id=plan_id)
@@ -6282,9 +6489,15 @@ def chat_with_agent(session_id: str, prompt: str, current_plan: Optional[dict] =
     #   - El thread pool externo de FastAPI queda libre inmediatamente.
     _graph_timeout_s = _chat_graph_total_timeout_s()
     try:
-        with concurrent.futures.ThreadPoolExecutor(
+        # [P2-CHAT-NONSTREAM-TIMEOUT-REAL · 2026-09-14] Antes era `with ThreadPoolExecutor
+        # (...)`: su `__exit__` hace `shutdown(wait=True)`, así que el `raise TimeoutError`
+        # ESPERABA a que el grafo terminara — el timeout no cortaba nada. Sin `with` y con
+        # `shutdown(wait=False)` el endpoint responde al vencer el plazo; el hilo sigue hasta
+        # que lo abata el timeout por llamada del LLM (no es cancelable cooperativamente).
+        _ex = concurrent.futures.ThreadPoolExecutor(
             max_workers=1, thread_name_prefix="chat_graph_invoke"
-        ) as _ex:
+        )
+        try:
             _fut = _ex.submit(chat_graph_app.invoke, inputs, config=config)
             try:
                 final_state = _fut.result(timeout=_graph_timeout_s)
@@ -6298,6 +6511,8 @@ def chat_with_agent(session_id: str, prompt: str, current_plan: Optional[dict] =
                 raise TimeoutError(
                     f"chat_graph exceeded {_graph_timeout_s}s timeout"
                 ) from _to_exc
+        finally:
+            _ex.shutdown(wait=False)
     except Exception:
         # [P1-TOOLS-LLM-HARDENING · 2026-05-20] Si _chat_total_outcome no
         # fue marcado por el branch específico de timeout, marca 'error'
@@ -6374,6 +6589,53 @@ def is_turn_active(session_id: str) -> bool:
     return True
 
 
+def _release_active_turn(session_id: str, token: float) -> None:
+    """Retira el turno SOLO si sigue siendo el suyo: con dos turnos en la misma sesión,
+    el primero que terminaba borraba el marcador del segundo, aún vivo."""
+    if _ACTIVE_TURNS.get(session_id) == token:
+        _ACTIVE_TURNS.pop(session_id, None)
+
+
+def _tracks_active_turn(gen_fn):
+    """[P1-CHAT-ACTIVE-TURN-WHOLE · 2026-09-14] Registra el turno al entrar y lo retira en
+    TODOS los exits del generador. El `finally` interno del stream solo cubría el `try`
+    del bucle: si fallaba el preámbulo (RAG, `get_state`) o el cliente cortaba durante
+    los primeros `yield` de progreso, la marca quedaba 300 s y `/history` decía
+    `turn_active=true` — el sondeo inútil que P1-CHAT-ORPHAN-TURN-TRUTH quería cerrar.
+
+    tooltip-anchor: _tracks_active_turn (test_p1_chat_orphan_turn_truth.py)
+    """
+    @functools.wraps(gen_fn)
+    def wrapper(*args, **kwargs):
+        session_id = kwargs["session_id"] if "session_id" in kwargs else (args[0] if args else None)
+        token = time.time()
+        _ACTIVE_TURNS[session_id] = token
+        try:
+            yield from gen_fn(*args, **kwargs)
+        finally:
+            _release_active_turn(session_id, token)
+    return wrapper
+
+
+def _chat_stream_error_payload(exc: BaseException) -> dict:
+    """[P2-CHAT-SINGLE-ERROR-EVENT · 2026-09-14] Evento `error` sin detalle interno.
+
+    Antes viajaba `str(e)`: mensajes del proveedor, SQL o el TimeoutError interno,
+    visibles en la pestaña Network. El detalle queda en el log (`logger.exception`);
+    al cliente va un código canónico y un texto genérico (el frontend pinta su propio
+    copy traducido)."""
+    if isinstance(exc, LLMRateLimitedError):
+        code, msg = "rate_limited", "El asistente está procesando muchas peticiones. Intenta de nuevo en unos segundos."
+    elif isinstance(exc, LLMCircuitBreakerOpen):
+        code, msg = "unavailable", "El asistente está temporalmente saturado. Intenta de nuevo en unos segundos."
+    elif isinstance(exc, TimeoutError):
+        code, msg = "timeout", "El asistente tardó demasiado en responder. Intenta de nuevo."
+    else:
+        code, msg = "internal", "El asistente tuvo un problema. Intenta de nuevo."
+    return {"type": "error", "code": code, "message": msg}
+
+
+@_tracks_active_turn
 def chat_with_agent_stream(session_id: str, prompt: str, current_plan: Optional[dict] = None, user_id: Optional[str] = None, form_data: Optional[dict] = None, local_date: Optional[str] = None, tz_offset: Optional[int] = None, is_call_mode: bool = False, plan_tier: str = "gratis", vision: Optional[dict] = None) -> Generator[str, None, None]:
     """Generador síncrono de chat que emite eventos del modelo y herramientas mediante SSE (JSONlines).
     FastAPI ejecuta esto en un threadpool externo, liberando el Event Loop para concurrencia real."""
@@ -6383,7 +6645,7 @@ def chat_with_agent_stream(session_id: str, prompt: str, current_plan: Optional[
     #  donde solo depende de sus parametros: cada vez que un consumidor nuevo
     #  aparecia mas arriba habia que volver a moverlo, y una de esas veces se
     #  colo un NameError. Aqui ya no puede quedar por debajo de nadie.
-    _ACTIVE_TURNS[session_id] = time.time()  # [P1-CHAT-ORPHAN-TURN-TRUTH] se retira en el finally del stream
+    # [P1-CHAT-ORPHAN-TURN-TRUTH] El registro del turno vivo lo hace `_tracks_active_turn`.
     plan_vigente = _plan_vigente_para_prompt(user_id, current_plan)
 
     # [P1-COACH-PERSONA-CURIOSIDAD-DO · 2026-08-23] País resuelto antes de
@@ -6773,9 +7035,18 @@ def chat_with_agent_stream(session_id: str, prompt: str, current_plan: Optional[
         "current_plan": current_plan or {},
         "sys_prompt": system_prompt,
         "updated_fields": {},
-        "new_plan": None
+        "new_plan": None,
+        # [P2-CHAT-STATE-TURN-RESET · 2026-09-14] Estos campos no tienen reducer y
+        # sobrevivían en el checkpoint de un turno al siguiente: cada `done` volvía a
+        # mandar los avisos de coherencia y los «agotados» de turnos viejos, y tras el
+        # primer nudge `diary_claim_retried=True` apagaba la verificación del diario
+        # para el resto de la sesión. Son del TURNO: se reinician al empezar.
+        "coherence_warnings": [],
+        "pantry_modified_at": None,
+        "pantry_depleted_items": None,
+        "diary_claim_retried": False,
     }
-    
+
     if not existing_state.values:
         messages = []
         for msg in memory["recent_messages"]:
@@ -6876,6 +7147,11 @@ def chat_with_agent_stream(session_id: str, prompt: str, current_plan: Optional[
     _pretool_max = _chat_pretool_narration_max_chars()
     _pretool_buf: list[str] = []
     _tool_seen = False
+    _progress_keys: set = set()  # [P1-CHAT-STREAM-TOOLCALL-CHUNKS · 2026-09-14]
+    # [P2-CHAT-SINGLE-ERROR-EVENT · 2026-09-14] Un solo evento `error` por turno: el
+    # budget emitía el suyo y luego su propio TimeoutError volvía a emitir otro (dos
+    # burbujas de error, cada una con su «Reintentar»).
+    _error_emitted = False
 
     try:
         for event in stream_iter:
@@ -6894,27 +7170,48 @@ def chat_with_agent_stream(session_id: str, prompt: str, current_plan: Optional[
                     f"{_total_elapsed:.1f}s > {_stream_total_budget}s "
                     f"session={session_id} user={user_id!r}"
                 )
-                yield f"data: {json.dumps({'type': 'error', 'message': 'El asistente excedió el tiempo máximo del turno. Intenta de nuevo en unos segundos.'})}\n\n"
+                _error_emitted = True
+                yield f"data: {json.dumps({'type': 'error', 'code': 'timeout', 'message': 'El asistente excedió el tiempo máximo del turno. Intenta de nuevo en unos segundos.'})}\n\n"
                 raise TimeoutError(
                     f"chat_with_agent_stream exceeded {_stream_total_budget}s total budget"
                 )
             if _gap_since_last > _stream_inactivity_budget:
-                _stream_outcome = "timeout_inactivity"
-                logger.error(
-                    f"⏱️ [P1-CHAT-STREAM-BUDGET] inactivity budget excedido "
-                    f"{_gap_since_last:.1f}s > {_stream_inactivity_budget}s "
-                    f"session={session_id} user={user_id!r}"
-                )
-                yield f"data: {json.dumps({'type': 'error', 'message': 'El asistente dejó de responder. Intenta de nuevo.'})}\n\n"
-                raise TimeoutError(
-                    f"chat_with_agent_stream inactivity {_gap_since_last:.1f}s > {_stream_inactivity_budget}s"
+                # [P2-CHAT-STREAM-INACTIVITY-POSTHOC · 2026-09-14] Este chequeo solo corre
+                # cuando LLEGA un evento, así que nunca detectó un cuelgue: detectaba una
+                # tool larga que ya había terminado (un `modify_single_meal` de 40 s) y
+                # entonces abortaba el turno con el plato YA guardado — «dejó de responder»
+                # sobre un turno vivo. La llegada del evento prueba que hay actividad: se
+                # registra y se sigue. El cuelgue real lo acotan el timeout por llamada al
+                # LLM y el presupuesto total de arriba.
+                logger.warning(
+                    f"⏱️ [P2-CHAT-STREAM-INACTIVITY-POSTHOC] {_gap_since_last:.1f}s sin eventos "
+                    f"(> {_stream_inactivity_budget}s) antes de este; el turno sigue vivo. "
+                    f"session={session_id}"
                 )
             _last_event_at = _now
             # Identificar el contenido exacto del evento 'messages' (tupla mensaje, dict)
             if isinstance(event, tuple) and len(event) == 2:
                 msg_chunk, metadata = event
-                if isinstance(msg_chunk, AIMessage) and msg_chunk.content:
-                    if not msg_chunk.tool_calls:
+                # [P1-CHAT-STREAM-NODE-FILTER · 2026-09-14] `stream_mode="messages"` emite
+                # los tokens de TODA llamada LLM dentro del grafo, incluidas las que hacen
+                # las tools por dentro (p.ej. la regeneración de `modify_single_meal`): ese
+                # texto interno llegaba al usuario como si fuera el coach. Solo el nodo
+                # `call_model` habla con el usuario.
+                _node = metadata.get("langgraph_node") if isinstance(metadata, dict) else None
+                if _node is not None and _node != "call_model":
+                    continue
+                # [P1-CHAT-STREAM-TOOLCALL-CHUNKS · 2026-09-14] Los chunks de una tool_call
+                # llegan con `content=""`: el `if ... and msg_chunk.content` los saltaba, así
+                # que `_tool_seen` jamás se activaba, no salía ningún `progress` de tool y
+                # TODO el texto (deliberación incluida) se soltaba al final sin separador.
+                # Se detectan por `tool_calls` o, si los args aún no parsean, por
+                # `tool_call_chunks`.
+                _chunk_tool_calls = (
+                    list(getattr(msg_chunk, "tool_calls", None) or [])
+                    or list(getattr(msg_chunk, "tool_call_chunks", None) or [])
+                ) if isinstance(msg_chunk, AIMessage) else []
+                if isinstance(msg_chunk, AIMessage) and (msg_chunk.content or _chunk_tool_calls):
+                    if not _chunk_tool_calls:
                         chunk_content = msg_chunk.content
                         if isinstance(chunk_content, list):
                             chunk_content = "".join([str(c.get("text", "")) if isinstance(c, dict) else str(c) for c in chunk_content])
@@ -6949,7 +7246,18 @@ def chat_with_agent_stream(session_id: str, prompt: str, current_plan: Optional[
                                 # Narración corta: se emite (P1-CHAT-NARRATION-KEPT).
                                 yield f"data: {json.dumps({'type': 'chunk', 'text': _retenido})}\n\n"
                                 _chunks_yielded += 1
-                        for idx, tool_call in enumerate(msg_chunk.tool_calls):
+                        # [P1-CHAT-STREAM-TOOLCALL-CHUNKS · 2026-09-14] Una tool_call llega
+                        # troceada en muchos chunks: el `progress` sale UNA vez por
+                        # AIMessage (el primer chunk que trae el nombre de la tool).
+                        _named_tc = next(
+                            (tc for tc in _chunk_tool_calls if isinstance(tc, dict) and tc.get("name")),
+                            None,
+                        )
+                        _progress_key = getattr(msg_chunk, "id", None) or (_named_tc or {}).get("id")
+                        _emit_progress = _named_tc is not None and _progress_key not in _progress_keys
+                        if _emit_progress:
+                            _progress_keys.add(_progress_key)
+                        for idx, tool_call in enumerate([_named_tc] if _emit_progress else []):
                             if idx == 0:  # Mostrar el mensaje 1 sola vez por llamada múltiple
                                 tool_name = tool_call.get("name", "")
                                 if tool_name == "generate_new_plan_from_chat":
@@ -7070,10 +7378,13 @@ def chat_with_agent_stream(session_id: str, prompt: str, current_plan: Optional[
         if _stream_outcome == "ok":
             _stream_outcome = "error"
         logger.exception(f"❌ [CHAT STREAM] Error en astream nativo: {e}")
-        yield f"data: {json.dumps({'type': 'error', 'message': str(e)})}\n\n"
+        if not _error_emitted:
+            _error_emitted = True
+            yield f"data: {json.dumps(_chat_stream_error_payload(e))}\n\n"
         return
     finally:
-        _ACTIVE_TURNS.pop(session_id, None)  # [P1-CHAT-ORPHAN-TURN-TRUTH] el turno ya no está vivo
+        # [P1-CHAT-ORPHAN-TURN-TRUTH] El turno se retira en `_tracks_active_turn`, que
+        # envuelve el generador ENTERO (este `finally` no cubría el preámbulo).
         # [P1-CHAT-STREAM-FINALLY-CLOSE · 2026-05-19] Cleanup defensivo
         # del iterator de LangGraph en TODOS los exits (normal, exception,
         # GeneratorExit). Garbage collection eventualmente lo cerraría

@@ -203,9 +203,12 @@ def test_chat_stream_emits_duration_in_finally():
     assert "_emit_chat_stream_total_duration_best_effort" in body, (
         "Emit del duration no se invoca dentro de chat_with_agent_stream."
     )
-    # `outcome` debe estar entre los kwargs/args (ok|cancelled|error|timeout_*).
-    # Verificamos los 4 valores canónicos en el código (set en distintas ramas).
-    for outcome_val in ('"ok"', '"cancelled"', '"error"', '"timeout_total"', '"timeout_inactivity"'):
+    # `outcome` debe estar entre los kwargs/args (ok|cancelled|error|timeout_total).
+    # Verificamos los valores canónicos en el código (set en distintas ramas).
+    # [P2-CHAT-STREAM-INACTIVITY-POSTHOC · 2026-09-14] `"timeout_inactivity"` salió: el
+    # chequeo a posteriori ya no aborta un turno vivo (solo registra el hueco), así que
+    # ese outcome no puede ocurrir.
+    for outcome_val in ('"ok"', '"cancelled"', '"error"', '"timeout_total"'):
         assert outcome_val in body, (
             f"Outcome canónico {outcome_val} no se asigna a _stream_outcome — "
             f"telemetría incompleta."
