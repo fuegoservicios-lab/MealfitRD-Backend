@@ -188,7 +188,13 @@ _PROCESS_START_ISO = datetime.now(timezone.utc).isoformat()
 # desayuno y merienda, ningún curado, su paso en su sitio), el tope de huevos reescribe también la compra, los planes
 # recientes no cuentan la fila vacía del plan en curso, el tiempo de cocina es falta del armador y el texto de los cambios
 # de lata y de los pasos breves deja de contradecirse.
-_LAST_KNOWN_PFIX = "P1-PLAN-LOTE-49 · 2026-09-14"
+# [P0-CHAT-IDENTITY-FROM-TOKEN · 2026-09-14] Auditoría del coach (5 revisores + forense de producción): sin token,
+# `session_id = user_id = <UUID de la víctima>` abría un turno del chat sobre la cuenta ajena (lectura del perfil
+# clínico y escrituras de las tools); la identidad sale ya SOLO del token. Con él: alergias fusionadas que el
+# formulario recortaba, tool_calls huérfanos que inutilizaban la sesión, hechos clínicos perdidos o retirados por
+# una preferencia, Nevera por subcadena («sal»⊂Salami), compra por chat sin marcar el plan, sesiones y checkpoints
+# sin dueño que sobrevivían al borrado de la cuenta, y el frontend colgado en «escribiendo».
+_LAST_KNOWN_PFIX = "P0-CHAT-IDENTITY-FROM-TOKEN · 2026-09-14"
 
 # [P1-SENTRY-SAMPLE-COST · 2026-05-12] Sentry sampling driven from env vars
 # con default seguro 0.1 (10%). Pre-fix tenía `traces_sample_rate=1.0` y
@@ -2604,7 +2610,8 @@ def api_delete_user_fact(fact_id: str, verified_user_id: Optional[str] = Depends
         if not check_fact_ownership(fact_id, verified_user_id):
             raise HTTPException(status_code=403, detail="No tienes permiso para borrar este hecho.")
         
-        result = delete_user_fact(fact_id)
+        # [P1-CHAT-FACTS-AUDIT · 2026-09-14] I2: el DELETE filtra también por user_id.
+        result = delete_user_fact(fact_id, verified_user_id)
         return {"success": True, "message": "Hecho eliminado de la IA."}
     except HTTPException:
         raise
