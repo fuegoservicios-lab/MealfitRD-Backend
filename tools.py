@@ -284,6 +284,177 @@ def _valor_de_campo_para_perfil(field: str, new_value):
     return False, None
 
 
+# ─────────────────────────────────────────────────────────────────────────────
+# [P1-CHAT-TOOLS-AUDIT · 2026-09-14] Los VALORES que el chat puede escribir.
+#
+# La whitelist de arriba decide QUÉ campos; nada decidía qué VALORES. `update_form_field` escribía
+# `dietType="keto"`, `budget="alto"` o `age="300"` tal cual, y su mini-mapeo de objetivo miraba
+# `'peso'` antes que `'ganar'`/`'mantener'`: «ganar peso» y «mantener mi peso» quedaban `lose_fat`.
+# Un objetivo invertido cambia el signo del déficit calórico de todo el plan.
+#
+# Los valores son los de los chips del wizard (`frontend/src/components/assessment/questions/Q*.jsx`)
+# y los rangos los de `_BIO_RANGES` de `routers/plans.py` (= `BIO_RANGES` de `formValidation.js`),
+# espejados aquí porque importar el router desde una tool arrastra el módulo HTTP entero; la
+# paridad la vigila `test_p1_chat_tools_audit.py`. Lo que no canoniza se RECHAZA con un mensaje que
+# el modelo puede repetir: un fallback silencioso es indistinguible de haber obedecido.
+# tooltip-anchor: P1-CHAT-TOOLS-AUDIT-FORM-VALUES
+_FORM_SELECT_VALUES = {
+    "gender": ("male", "female"),
+    "dietType": ("balanced", "vegetarian", "vegan"),
+    "mainGoal": ("lose_fat", "gain_muscle", "maintenance", "performance"),
+    "activityLevel": ("sedentary", "light", "moderate", "active", "athlete"),
+    "budget": ("low", "medium", "high", "unlimited"),
+    "cookingTime": ("none", "30min", "1hour", "plenty"),
+}
+# Etiquetas españolas de los mismos chips (claves ya normalizadas por `_norm_txt`). La dieta NO
+# tiene vegano/vegetariano aquí: eso lo resuelve el SSOT `canonicalize_diet_type`.
+_FORM_SELECT_SYNONYMS = {
+    "gender": {"hombre": "male", "masculino": "male", "varon": "male", "man": "male",
+               "mujer": "female", "femenino": "female", "woman": "female"},
+    "dietType": {"balanceada": "balanced", "balanceado": "balanced", "equilibrada": "balanced",
+                 "equilibrado": "balanced", "omnivora": "balanced", "omnivoro": "balanced",
+                 "de todo": "balanced", "normal": "balanced"},
+    "activityLevel": {"sedentario": "sedentary", "sedentaria": "sedentary", "ligero": "light",
+                      "ligera": "light", "leve": "light", "moderado": "moderate",
+                      "moderada": "moderate", "activo": "active", "activa": "active",
+                      "atleta": "athlete", "deportista": "athlete"},
+    "budget": {"economico": "low", "economica": "low", "bajo": "low", "barato": "low",
+               "basico": "low", "moderado": "medium", "medio": "medium", "normal": "medium",
+               "alto": "high", "sin limite": "unlimited", "ilimitado": "unlimited"},
+    "cookingTime": {"nada": "none", "sin tiempo": "none", "poco": "30min", "30 min": "30min",
+                    "30 minutos": "30min", "media hora": "30min", "medio": "1hour",
+                    "1 hora": "1hour", "una hora": "1hour", "sin limite": "plenty",
+                    "mucho": "plenty", "me gusta cocinar": "plenty"},
+}
+# Espejo de `routers/plans.py::_BIO_RANGES` (paridad en test_p1_chat_tools_audit.py).
+_CHAT_BIO_RANGES = {"age": (12, 100), "weight_kg": (30.0, 300.0), "height_cm": (100, 250)}
+_LB_POR_KG = 2.20462
+
+
+def _norm_txt(v) -> str:
+    """minúsculas, sin acentos, `_`/`-` como espacio, espacios colapsados."""
+    s = strip_accents(str(v or "").lower())
+    s = re.sub(r"[_\-]+", " ", s)
+    return re.sub(r"\s+", " ", s).strip()
+
+
+def _numero_de(raw) -> Optional[float]:
+    m = re.search(r"\d+(?:[.,]\d+)?", str(raw or ""))
+    return float(m.group().replace(",", ".")) if m else None
+
+
+def _rango_peso(unidad: Optional[str]) -> tuple:
+    lo, hi = _CHAT_BIO_RANGES["weight_kg"]
+    if unidad == "kg":
+        return lo, hi
+    if unidad == "lb":
+        return round(lo * _LB_POR_KG), round(hi * _LB_POR_KG)
+    return lo, round(hi * _LB_POR_KG)  # sin unidad conocida: la unión de ambos rangos
+
+
+def _valor_canonico_del_formulario(field: str, new_value):
+    """[P1-CHAT-TOOLS-AUDIT · 2026-09-14] `(ok, valor | mensaje_de_rechazo, unidad_de_peso)`.
+
+    `ok=False` ⇒ el segundo elemento es el texto para el modelo (nunca empieza por «¡Éxito!»).
+    Campos sin enum ni rango (listas, país ya canonicalizado) pasan tal cual.
+    tooltip-anchor: _valor_canonico_del_formulario (test_p1_chat_tools_audit.py)"""
+    raw = str(new_value if new_value is not None else "").strip()
+    v = _norm_txt(raw)
+
+    def _rechazo(detalle: str):
+        return (False, f"No actualicé '{field}': {detalle} Pregúntale al usuario y vuelve a llamar "
+                       f"con un valor válido; NO digas que se cambió.", None)
+
+    if field in _FORM_SELECT_VALUES:
+        permitidos = _FORM_SELECT_VALUES[field]
+        _opciones = f"Valores permitidos: {', '.join(permitidos)}."
+        por_norma = {_norm_txt(a): a for a in permitidos}
+        if v in por_norma:
+            return True, por_norma[v], None
+        sinonimos = _FORM_SELECT_SYNONYMS.get(field, {})
+        if v in sinonimos:
+            return True, sinonimos[v], None
+
+        if field == "mainGoal":
+            # Orden-independiente a propósito: el defecto era un `if 'peso'` evaluado ANTES que
+            # `'ganar'`. Se marcan las cuatro intenciones y solo una intención inequívoca escribe.
+            _intenciones = {
+                "performance": bool(re.search(r"\brendimiento\b|\bperformance\b|\bcompet", v)),
+                "maintenance": bool(re.search(r"\bmanten|\bmaintain|\bmaintenance\b", v)),
+                "gain_muscle": bool(re.search(r"\b(ganar|subir|aumentar|gain|bulk|volumen)\b|muscul|\bmasa\b", v)),
+                "lose_fat": bool(re.search(r"\b(perder|bajar|adelgazar|quemar|definir|lose|cut)\b|grasa|\bfat\b", v)),
+            }
+            _hits = [k for k, on in _intenciones.items() if on]
+            if len(_hits) == 1:
+                return True, _hits[0], None
+            if len(_hits) > 1:
+                return _rechazo(f"«{raw}» mezcla objetivos ({', '.join(_hits)}); el formulario admite "
+                                f"uno solo. {_opciones}")
+            return _rechazo(f"«{raw}» no dice si quiere subir, bajar o mantener. {_opciones}")
+
+        if field == "dietType":
+            _canon = {canonicalize_diet_type(t) for t in [raw, *v.split()]} - {"balanced"}
+            if len(_canon) == 1:
+                _d = _canon.pop()
+                if _d in permitidos:
+                    return True, _d, None
+                return _rechazo(f"la app solo ofrece {', '.join(permitidos)} y «{raw}» ({_d}) no es "
+                                f"una de esas opciones.")
+            return _rechazo(f"«{raw}» no es un tipo de dieta del formulario. {_opciones}")
+
+        _hits = {can for clave, can in sinonimos.items()
+                 if re.search(rf"(?<![a-z0-9]){re.escape(clave)}(?![a-z0-9])", v)}
+        if len(_hits) == 1:
+            return True, _hits.pop(), None
+        return _rechazo(f"«{raw}» no es un valor válido. {_opciones}")
+
+    if field in ("weight", "height", "age"):
+        n = _numero_de(raw)
+        if n is None:
+            return _rechazo(f"«{raw}» no trae un número.")
+        if field == "age":
+            lo, hi = _CHAT_BIO_RANGES["age"]
+            if not lo <= n <= hi:
+                return _rechazo(f"una edad de {n:g} años está fuera del rango del formulario ({lo}-{hi}).")
+            return True, str(int(n)), None
+        if field == "height":
+            if "'" in raw or '"' in raw or re.search(r"\bpies?\b|\bft\b|\bfeet\b", v):
+                return _rechazo("la estatura se guarda en centímetros; pídele el valor en cm.")
+            if n < 3:  # «1.80» son metros
+                n = round(n * 100, 1)
+            lo, hi = _CHAT_BIO_RANGES["height_cm"]
+            if not lo <= n <= hi:
+                return _rechazo(f"una estatura de {n:g} cm está fuera del rango del formulario ({lo}-{hi} cm).")
+            return True, f"{n:g}", None
+        unidad = "kg" if re.search(r"\bkgs?\b|\bkilo", v) else (
+            "lb" if re.search(r"\blbs?\b|\blibra|\bpound", v) else None)
+        lo, hi = _rango_peso(unidad)
+        if not lo <= n <= hi:
+            return _rechazo(f"un peso de {n:g} {unidad or ''} está fuera del rango del formulario "
+                            f"({lo}-{hi} {unidad or 'kg/lb'}).".replace("  ", " "))
+        return True, n, unidad
+
+    return True, new_value, None
+
+
+def _peso_para_perfil(hp: dict, valor: float, unidad_explicita: Optional[str]):
+    """[P1-CHAT-TOOLS-AUDIT · 2026-09-14] `(ok, peso_str | mensaje, weightUnit_a_escribir)`.
+
+    El peso del perfil vive en la unidad de `weightUnit` (lb o kg). «Peso 80 kg» sobre un perfil en
+    libras se escribía como 80 LIBRAS: se convierte a la unidad del perfil. Si el perfil no tiene
+    unidad y el usuario la dijo, se escribe también. Corre dentro del mutator: CPU puro."""
+    prof = str((hp or {}).get("weightUnit") or "").strip().lower()
+    prof = prof if prof in ("kg", "lb") else None
+    w = float(valor)
+    if unidad_explicita and prof and unidad_explicita != prof:
+        w = round(w * _LB_POR_KG if prof == "lb" else w / _LB_POR_KG, 1)
+    final = prof or unidad_explicita
+    lo, hi = _rango_peso(final)
+    if not lo <= w <= hi:
+        return (False, f"No actualicé 'weight': {w:g} {final or ''} está fuera del rango del formulario "
+                       f"({lo}-{hi} {final or 'kg/lb'}). Confírmalo con el usuario; NO digas que se cambió.", None)
+    return True, f"{w:g}", (unidad_explicita if (not prof and unidad_explicita) else None)
+
 
 @tool
 def update_form_field(user_id: str, field: str, new_value: str) -> str:
@@ -323,52 +494,53 @@ def update_form_field(user_id: str, field: str, new_value: str) -> str:
 
     logger.debug(f"🔧 [TOOL EXECUTION] Actualizando form del usuario {user_id}: {field} -> {new_value}")
     
-    # Auto-corrección de valores comunes al formato esperado por la UI
-    new_value_lower = str(new_value).lower().strip()
-    if field == 'dietType':
-        if 'vegetariano' in new_value_lower or 'vegetariana' in new_value_lower: new_value = 'vegetarian'
-        elif 'vegano' in new_value_lower or 'vegana' in new_value_lower: new_value = 'vegan'
-        elif 'balanceado' in new_value_lower or 'balanceada' in new_value_lower: new_value = 'balanced'
-    elif field == 'mainGoal':
-        if 'perder' in new_value_lower or 'bajar' in new_value_lower or 'grasa' in new_value_lower or 'peso' in new_value_lower: new_value = 'lose_fat'
-        elif 'ganar' in new_value_lower or 'musculo' in new_value_lower or 'masa' in new_value_lower: new_value = 'gain_muscle'
-        elif 'mantener' in new_value_lower or 'mantenimiento' in new_value_lower: new_value = 'maintenance'
-        elif 'rendimiento' in new_value_lower: new_value = 'performance'
-    elif field == 'gender':
-        if 'hombre' in new_value_lower or 'masculino' in new_value_lower: new_value = 'male'
-        elif 'mujer' in new_value_lower or 'femenino' in new_value_lower: new_value = 'female'
-        
-    if field in ['weight', 'height', 'age']:
-        extracted = re.search(r'\d+\.?\d*', str(new_value))
-        if extracted:
-            new_value = extracted.group()
-            
-    if user_id and user_id != "guest":
+    # [P2-COUNTRY-HOUSEKEEPING · 2026-08-21] La puerta: sin whitelist, la LLM elegía el NOMBRE de
+    # la clave del perfil que se escribía. Rechazar aquí —y decir por qué— es mejor que escribir
+    # algo que un canonicalizador descarta después en silencio.
+    _ok_campo, _valor_validado = _valor_de_campo_para_perfil(field, new_value)
+    if not _ok_campo:
+        logger.warning(
+            "[P2-COUNTRY-HOUSEKEEPING] update_form_field rechazado: field=%r value=%r "
+            "(fuera de la whitelist o valor no canonicalizable)", field, new_value,
+        )
+        return (f"No pude actualizar '{field}': no es un campo que yo pueda editar, o el "
+                f"valor '{new_value}' no es válido para ese campo. Dile al usuario que lo "
+                f"cambie desde Configuración.")
+
+    # [P1-CHAT-TOOLS-AUDIT · 2026-09-14] El VALOR, contra lo que el formulario admite. Sustituye
+    # al mini-mapeo que vivía aquí: miraba `'peso'` antes que `'ganar'`/`'mantener'` («ganar
+    # peso» → lose_fat) y tenía su propia tabla de dietas en vez del SSOT
+    # `canonicalize_diet_type` (la cuarta tabla que P1-DIET-CANON-SSOT prohíbe).
+    _ok_valor, _valor_final, _unidad_peso = _valor_canonico_del_formulario(field, _valor_validado)
+    if not _ok_valor:
+        logger.warning("[P1-CHAT-TOOLS-AUDIT] update_form_field rechazado: field=%r value=%r", field, new_value)
+        return _valor_final
+
+    _ES_LISTA = ('allergies', 'medicalConditions', 'dislikes', 'struggles')
+    if field in _ES_LISTA:
+        _new_field_value = [item.strip() for item in str(new_value).split(",") if item.strip()]
+    else:
+        _new_field_value = _valor_final
+
+    if not user_id or user_id == "guest":
+        # Invitado: no hay perfil en la base; el formulario de su sesión (que agent.py actualiza con
+        # este campo) ES el destino. Se contesta con el valor CANÓNICO, ya validado.
+        _mostrar = ", ".join(_new_field_value) if isinstance(_new_field_value, list) else (
+            f"{_new_field_value:g}" if isinstance(_new_field_value, float) else _new_field_value)
+        return (f"¡Éxito! El campo '{field}' ha sido actualizado a '{_mostrar}' (solo en el "
+                f"formulario de esta sesión: el usuario no ha iniciado sesión).")
+
+    # [P1-CHAT-TOOLS-AUDIT · 2026-09-14] Por qué el mutator no escribió (peso fuera de rango en la
+    # unidad del perfil). `update_user_health_profile_atomic` devuelve el perfil también cuando el
+    # mutator aborta, así que el retorno no basta para saberlo.
+    _abortado: dict = {}
+
+    if user_id and user_id != "guest":  # (el invitado ya salió arriba)
         # [P1-2] Mutator atómico. Antes era `get_user_profile + mutate +
         # update_user_health_profile` no atómico: si el chat-agent y el
-        # wizard del frontend tocaban el mismo `user_id` en paralelo (raro
-        # pero observado: usuario chatea con el agente mientras la app
-        # autocompleta el form en background), el último UPDATE pisaba al
-        # otro y se perdía silenciosamente la edición de un field. El
-        # mutator solo escribe el field que estamos cambiando; los demás
-        # quedan intactos bajo FOR UPDATE.
-        # [P2-COUNTRY-HOUSEKEEPING · 2026-08-21] La puerta: sin whitelist, la LLM elegía el
-        # NOMBRE de la clave del perfil que se escribía. Rechazar aquí —y decir por qué— es mejor
-        # que escribir algo que un canonicalizador descarta después en silencio.
-        _ok_campo, _valor_validado = _valor_de_campo_para_perfil(field, new_value)
-        if not _ok_campo:
-            logger.warning(
-                "[P2-COUNTRY-HOUSEKEEPING] update_form_field rechazado: field=%r value=%r "
-                "(fuera de la whitelist o valor no canonicalizable)", field, new_value,
-            )
-            return (f"No pude actualizar '{field}': no es un campo que yo pueda editar, o el "
-                    f"valor '{new_value}' no es válido para ese campo. Dile al usuario que lo "
-                    f"cambie desde Configuración.")
-
-        if field in ['allergies', 'medicalConditions', 'dislikes', 'struggles']:
-            _new_field_value = [item.strip() for item in str(new_value).split(",") if item.strip()]
-        else:
-            _new_field_value = _valor_validado
+        # wizard del frontend tocaban el mismo `user_id` en paralelo, el último
+        # UPDATE pisaba al otro. El mutator solo escribe el field que estamos
+        # cambiando; los demás quedan intactos bajo FOR UPDATE.
 
         # [P0-CHAT-ALLERGY-MERGE · 2026-08-11] Las alergias y las condiciones médicas se
         # FUNDEN; no se reemplazan.
@@ -413,13 +585,34 @@ def update_form_field(user_id: str, field: str, new_value: str) -> str:
                         f"modelo no repitió ({_previos} + {_new_field_value} → {_union})"
                     )
                 _hp[field] = _union
+            elif field == "weight":
+                _okp, _vp, _up = _peso_para_perfil(_hp, _new_field_value, _unidad_peso)
+                if not _okp:
+                    _abortado["msg"] = _vp
+                    return False
+                _hp["weight"] = _vp
+                if _up:
+                    _hp["weightUnit"] = _up
             else:
                 _hp[field] = _new_field_value
             return None
 
-        update_user_health_profile_atomic(user_id, _field_mutator)
+        # [P1-CHAT-TOOLS-AUDIT · 2026-09-14] Contrato con agent.py: «¡Éxito!» SOLO si se escribió.
+        # Antes una excepción aquí tumbaba el turno entero y un `None` (perfil inexistente) se
+        # contestaba igual con «¡Éxito!»: el coach le confirmaba al usuario un cambio que no existía.
+        try:
+            _resultado = update_user_health_profile_atomic(user_id, _field_mutator)
+        except Exception:
+            logger.exception("[P1-CHAT-TOOLS-AUDIT] update_form_field: fallo escribiendo health_profile")
+            return (f"No pude guardar '{field}' por un error interno. NO digas que se actualizó; "
+                    f"pídele al usuario que lo cambie desde Configuración o que lo intente más tarde.")
+        if _abortado.get("msg"):
+            return _abortado["msg"]
+        if not _resultado:
+            return (f"No pude guardar '{field}': no encontré el perfil del usuario. NO digas que se "
+                    f"actualizó; pídele que lo cambie desde Configuración.")
 
-        # --- NUEVA LÓGICA DE LIMPIEZA DE VECTORES ---
+        # --- LIMPIEZA DE VECTORES --- (post-escritura, best-effort: jamás deshace el cambio)
         category_map = {
             'allergies': 'alergia',
             'medicalConditions': 'condicion_medica',
@@ -430,11 +623,21 @@ def update_form_field(user_id: str, field: str, new_value: str) -> str:
         if field in category_map:
             cat = category_map[field]
             logger.info(f"🧹 [CLEANUP] Borrando vectores de categoría '{cat}' para evitar conflictos con el formulario.")
-            delete_user_facts_by_metadata(user_id, {"category": cat})
-        # ---------------------------------------------
+            try:
+                delete_user_facts_by_metadata(user_id, {"category": cat})
+            except Exception:
+                logger.exception("[P1-CHAT-TOOLS-AUDIT] limpieza de user_facts falló (el campo SÍ se guardó)")
 
+        if field in _ES_LISTA:
+            _final = _resultado.get(field) if isinstance(_resultado, dict) else _new_field_value
+            _mostrar = ", ".join(str(x) for x in _final) if isinstance(_final, list) else str(_final)
+        elif field == "weight" and isinstance(_resultado, dict):
+            _mostrar = f"{_resultado.get('weight')} {_resultado.get('weightUnit') or ''}".strip()
+        else:
+            _mostrar = _new_field_value
+        return f"¡Éxito! El campo '{field}' ha sido actualizado a '{_mostrar}'."
 
-    return f"¡Éxito! El campo '{field}' ha sido actualizado a '{new_value}'."
+    return f"No pude actualizar '{field}'."
 
 # ============================================================
 # TOOL: Generar nuevo plan desde el Chat
@@ -603,9 +806,116 @@ def _clamp_days_ago(days_ago) -> int:
     return max(0, min(_CONSUMED_MAX_DAYS_AGO, d))
 
 
+# [P1-CHAT-TOOLS-AUDIT · 2026-09-14] El coach habla 5 idiomas (P1-I18N-DASHBOARD) y emite el tipo de
+# comida en el suyo: `breakfast`/`almoço`/`dîner`/`pranzo` caían a `snack` EN SILENCIO — y un
+# almuerzo registrado como snack se salta el dup-guard de comida principal y el hueco de la cena.
+# Claves normalizadas (`_norm_txt`: sin acentos, `-`/`_` como espacio). «comida» y «brunch» NO
+# están a propósito: son ambiguas (en México «comida» es el almuerzo; en RD, cualquier comida).
+_MEAL_TYPES_CANON = ("desayuno", "almuerzo", "cena", "merienda", "snack")
+_MEAL_TYPE_SYNONYMS = {
+    # en-US
+    "breakfast": "desayuno", "lunch": "almuerzo", "dinner": "cena", "supper": "cena",
+    "snacks": "snack", "afternoon snack": "merienda",
+    # pt-BR
+    "cafe da manha": "desayuno", "desjejum": "desayuno", "almoco": "almuerzo", "jantar": "cena",
+    "ceia": "cena", "lanche": "snack", "lanche da tarde": "merienda",
+    # fr-FR (en Francia «déjeuner» es el almuerzo)
+    "petit dejeuner": "desayuno", "petit dej": "desayuno", "dejeuner": "almuerzo",
+    "diner": "cena", "souper": "cena", "gouter": "merienda", "collation": "snack", "en cas": "snack",
+    # it-IT («cena» ya es canónica)
+    "colazione": "desayuno", "pranzo": "almuerzo", "merenda": "merienda", "spuntino": "snack",
+    # es (variantes)
+    "tentempie": "snack", "picadera": "snack", "picoteo": "snack", "media manana": "merienda",
+}
+
+
+def _resolver_meal_type(meal_type) -> Optional[str]:
+    """Tipo canónico o None si no se reconoce (el caller decide: registrar como snack y AVISAR, o
+    rechazar la corrección). tooltip-anchor: P1-CHAT-TOOLS-AUDIT-MEAL-TYPE"""
+    mt = _norm_txt(meal_type)
+    if not mt:
+        return None
+    if mt in _MEAL_TYPES_CANON:
+        return mt
+    return _MEAL_TYPE_SYNONYMS.get(mt)
+
+
 def _normalize_meal_type(meal_type) -> str:
-    mt = str(meal_type or "").strip().lower()
-    return mt if mt in ("desayuno", "almuerzo", "cena", "merienda", "snack") else "snack"
+    return _resolver_meal_type(meal_type) or "snack"
+
+
+# [P1-CHAT-TOOLS-AUDIT · 2026-09-14] Rangos de una comida. Sin ellos `log_consumed_meal` aceptaba
+# -300 kcal o 50.000 kcal: el primero RESTA del día y el segundo revienta metas, rachas y el
+# resumen semanal del coach. Los topes son holgados (un atracón real cabe); lo que se rechaza es lo
+# físicamente imposible, que en la práctica es un error de unidades del modelo (kJ, mg, ×100).
+_CHAT_MEAL_MAX_KCAL = _env_int("MEALFIT_CHAT_MEAL_MAX_KCAL", 6000, lambda v: 500 <= v <= 20000)
+_CHAT_MEAL_LIMITES = {
+    "calories": ("kcal", None), "protein": ("g", 400), "carbs": ("g", 800), "healthy_fats": ("g", 400),
+}
+
+
+def _validar_macros_comida(**campos):
+    """`(valores_int, error | None)`. Un campo en None se respeta (en una corrección significa «no
+    lo toques»). tooltip-anchor: _validar_macros_comida (test_p1_chat_tools_audit.py)"""
+    out = {}
+    for k, v in campos.items():
+        if v is None:
+            out[k] = None
+            continue
+        unidad, tope = _CHAT_MEAL_LIMITES[k]
+        tope = _CHAT_MEAL_MAX_KCAL if tope is None else tope
+        if isinstance(v, bool):
+            return out, f"'{k}' debe ser un número."
+        try:
+            f = float(str(v).replace(",", ".").strip())
+        except (TypeError, ValueError):
+            return out, f"'{k}'={v!r} no es un número."
+        if f != f or f in (float("inf"), float("-inf")):
+            return out, f"'{k}' no es un número finito."
+        if f < 0:
+            return out, f"'{k}' no puede ser negativo ({f:g} {unidad})."
+        if f > tope:
+            return out, (f"'{k}'={f:g} {unidad} es imposible para una sola comida (máximo {tope} {unidad}); "
+                         f"revisa las unidades (¿kJ en vez de kcal? ¿mg en vez de g?).")
+        out[k] = int(round(f))
+    return out, None
+
+
+def _leer_fila_diario(user_id: str, meal_id: str) -> Optional[dict]:
+    """Fila original de `consumed_meals` (`AND user_id`, I2). Best-effort: None si no se pudo leer;
+    el caller degrada a la conducta previa, nunca inventa la fila."""
+    try:
+        from db import execute_sql_query as _esq_fd
+        return _esq_fd(
+            "SELECT meal_type, consumed_at, inventory_synced_at FROM consumed_meals "
+            "WHERE id = %s AND user_id = %s",
+            (meal_id, user_id), fetch_one=True,
+        ) or None
+    except Exception as _e_fd:
+        logger.warning(f"[P1-CHAT-TOOLS-AUDIT] lectura de la fila del diario falló: {type(_e_fd).__name__}")
+        return None
+
+
+def _consumed_at_para_dia(original_at, days_ago: int, tz_off_min: int) -> str:
+    """[P1-CHAT-TOOLS-AUDIT · 2026-09-14] Mover un registro a OTRO DÍA conservando SU hora local.
+
+    Antes `days_ago` reescribía `consumed_at` con la hora de AHORA: el desayuno de las 8:00 movido a
+    ayer a las 23:00 quedaba como «desayuno a las 23:00», y el orden del día y el rescate de la cena
+    (que mide horas entre comidas) leían una hora falsa. Sin hora original ⇒ la conducta previa.
+    Nunca a futuro: si la hora conservada aún no llegó hoy, se usa ahora."""
+    from datetime import datetime, timezone, timedelta
+    now = datetime.now(timezone.utc)
+    if original_at is None:
+        return (now - timedelta(days=days_ago)).isoformat()
+    orig = datetime.fromisoformat(str(original_at).replace("Z", "+00:00")) \
+        if isinstance(original_at, str) else original_at
+    if orig.tzinfo is None:
+        orig = orig.replace(tzinfo=timezone.utc)
+    off = timedelta(minutes=int(tz_off_min))
+    dia_local = (now - off).date() - timedelta(days=days_ago)
+    hora_local = (orig.astimezone(timezone.utc) - off).time()
+    nuevo = (datetime.combine(dia_local, hora_local) + off).replace(tzinfo=timezone.utc)
+    return min(nuevo, now).isoformat()
 
 
 _DINNER_RESCUE_ENABLED = _env_bool("MEALFIT_DIARY_DINNER_RESCUE", True)
@@ -724,9 +1034,26 @@ def log_consumed_meal(user_id: str, meal_name: str, calories: int, protein: int,
 
     logger.debug(f"🔧 [TOOL EXECUTION] Registrando comida consumida para user {user_id}: {meal_name} ({calories} kcal, {protein}g proteina, {carbs}g carbos, {healthy_fats}g grasas). Ingredientes a deducir: {ingredients}")
 
+    # [P1-CHAT-TOOLS-AUDIT · 2026-09-14] Rangos antes de escribir nada (ni diario ni Nevera).
+    if calories is None:
+        return ("⚠️ NO REGISTRADO: faltan las calorías de la comida. Estímalas (o pregúntaselas al "
+                "usuario) y vuelve a llamar. NO digas que quedó registrado.")
+    _macros, _err_macros = _validar_macros_comida(
+        calories=calories, protein=protein if protein is not None else 0,
+        carbs=carbs if carbs is not None else 0, healthy_fats=healthy_fats if healthy_fats is not None else 0)
+    if _err_macros:
+        logger.warning(f"[P1-CHAT-TOOLS-AUDIT] log_consumed_meal rechazado: {_err_macros}")
+        return (f"⚠️ NO REGISTRADO: {_err_macros} Confirma los valores con el usuario (o estímalos de "
+                f"nuevo) y vuelve a llamar. NO digas que quedó registrado.")
+    calories, protein, carbs, healthy_fats = (
+        _macros["calories"], _macros["protein"], _macros["carbs"], _macros["healthy_fats"])
+
     # [P1-CONSUMED-BACKDATE · 2026-07-12] Fecha real de consumo + guard dup.
     from datetime import datetime, timezone as _tz, timedelta as _td
     _days_ago = _clamp_days_ago(days_ago)
+    # [P1-CHAT-TOOLS-AUDIT · 2026-09-14] Multi-idioma; lo irreconocible sigue siendo `snack` (no se
+    # pierde el registro) pero ya NO en silencio: se le dice al modelo para que lo corrija.
+    _mt_reconocido = meal_type is None or _resolver_meal_type(meal_type) is not None
     _meal_type = _normalize_meal_type(meal_type)
     # [P1-DIARY-DINNER-SLOT · 2026-07-30] ANTES del dup-guard a propósito: si esto reclasifica a
     # `cena`, la cena reclasificada tiene que pasar por su propia comprobación de duplicado como
@@ -807,6 +1134,9 @@ def log_consumed_meal(user_id: str, meal_name: str, calories: int, protein: int,
     if result is not None:
         _cuando = "" if _days_ago == 0 else (" (con fecha de AYER — no cuenta en las macros de hoy)" if _days_ago == 1 else f" (con fecha de hace {_days_ago} días — no cuenta en las macros de hoy)")
         msg = f"¡Éxito! Se ha registrado el consumo de '{meal_name}' ({calories} kcal, {protein}g proteína, {carbs}g carbohidratos, {healthy_fats}g grasas saludables) como {_meal_type}{_cuando} en tu diario."
+        if not _mt_reconocido:
+            msg += (f" (Aviso para el asistente: no reconocí el tipo de comida '{meal_type}' y quedó como "
+                    f"snack; si era desayuno, almuerzo o cena, corrígelo con correct_consumed_meal.)")
         # [P1-CHAT-DIARY-CORRECT · 2026-07-29] Devolver el id de la fila
         # insertada EN el ToolMessage. Sin esto, si el usuario dice después
         # "eso quedó mal" la LLM no tiene forma de nombrar ESTA fila
@@ -915,6 +1245,7 @@ def correct_consumed_meal(
     meal_type: str = None,
     days_ago: int = None,
     ingredients: list[str] = None,
+    force: bool = False,
 ) -> str:
     """
     Corrige EN SITIO una comida que YA está en el diario del usuario porque
@@ -940,6 +1271,11 @@ def correct_consumed_meal(
       nada — dile la verdad y pregúntale a cuál comida se refiere; usa
       `log_consumed_meal` solo si de verdad es una comida DISTINTA que aún
       no está registrada.
+    - Mover la comida a otro día conserva su hora. Si ese día ya hay otra
+      comida principal del mismo tipo, la herramienta NO corrige y te lo dice:
+      repite con force=true SOLO si el usuario confirma que fueron dos.
+    - ingredients: si cambian, la Nevera se ajusta (devuelve lo anterior y
+      descuenta lo nuevo) cuando es seguro; si no, la respuesta te lo dice.
     """
     # [P3-DOC-2 · 2026-05-11] LIVE-TOOL CONTRACT — LEER ANTES DE MODIFICAR.
     # ────────────────────────────────────────────────────────────────────────
@@ -972,23 +1308,105 @@ def correct_consumed_meal(
             "ID_REGISTRO_DIARIO que esa llamada te devolvió, nunca lo inventes."
         )
 
-    # `meal_type=None` debe dejar la fila intacta — a diferencia de
-    # `log_consumed_meal` (donde `_normalize_meal_type(None)` cae a
-    # "snack" porque SIEMPRE hay que guardar algo), aquí None significa
-    # "el usuario no está corrigiendo esto".
-    _meal_type = _normalize_meal_type(meal_type) if meal_type is not None else None
+    # [P1-CHAT-TOOLS-AUDIT · 2026-09-14] Tipo de comida multi-idioma. Lo que NO se reconoce se
+    # RECHAZA: en una corrección, caer a «snack» sería reescribir la fila con un dato inventado.
+    # `meal_type=None` sigue significando «el usuario no está corrigiendo esto».
+    _meal_type = None
+    if meal_type is not None:
+        _meal_type = _resolver_meal_type(meal_type)
+        if _meal_type is None:
+            return (f"ERROR: no reconocí el tipo de comida '{meal_type}'. Usa 'desayuno' | 'almuerzo' | "
+                    f"'cena' | 'merienda' | 'snack'. No se corrigió nada.")
 
+    _macros, _err_macros = _validar_macros_comida(
+        calories=calories, protein=protein, carbs=carbs, healthy_fats=healthy_fats)
+    if _err_macros:
+        return f"ERROR: {_err_macros} No se corrigió nada; confirma el valor con el usuario."
+    calories, protein, carbs, healthy_fats = (
+        _macros["calories"], _macros["protein"], _macros["carbs"], _macros["healthy_fats"])
+
+    _mid = str(meal_id).strip()
+    _fila = _leer_fila_diario(user_id, _mid) if (
+        days_ago is not None or _meal_type is not None or ingredients is not None) else None
+
+    def _tz_off() -> int:
+        try:
+            _o = user_tz_offset_min(user_id)
+            return int(_o) if isinstance(_o, (int, float)) and not isinstance(_o, bool) else _DEFAULT_TZ_OFFSET_MIN
+        except Exception:
+            return _DEFAULT_TZ_OFFSET_MIN
+
+    # [P1-CHAT-TOOLS-AUDIT · 2026-09-14] Otro día, MISMA hora local del registro original.
     _consumed_at_override = None
     _dia_txt = ""
     if days_ago is not None:
-        from datetime import datetime, timezone as _tz, timedelta as _td
         _d = _clamp_days_ago(days_ago)
-        _consumed_at_override = (datetime.now(_tz.utc) - _td(days=_d)).isoformat()
+        _orig_at = (_fila or {}).get("consumed_at")
+        _consumed_at_override = _consumed_at_para_dia(_orig_at, _d, _tz_off() if _orig_at is not None else 0)
         _dia_txt = "hoy" if _d == 0 else ("ayer" if _d == 1 else f"hace {_d} días")
+
+    # [P1-CHAT-TOOLS-AUDIT · 2026-09-14] El guard «una comida principal por día» de
+    # `log_consumed_meal`, aplicado también a la corrección: cambiar el tipo o el día era la puerta
+    # trasera para dejar dos desayunos el mismo día. Best-effort como allá.
+    _tipo_final = _meal_type or (_fila or {}).get("meal_type")
+    _at_final = _consumed_at_override or (_fila or {}).get("consumed_at")
+    if ((_meal_type is not None or days_ago is not None) and not force
+            and _tipo_final in _CONSUMED_MAIN_MEAL_TYPES and _at_final is not None):
+        try:
+            from db import execute_sql_query as _esq_cg
+            _off_cg = _tz_off()
+            _at_txt = _at_final.isoformat() if hasattr(_at_final, "isoformat") else str(_at_final)
+            _dup = _esq_cg(
+                "SELECT meal_name, calories FROM consumed_meals "
+                "WHERE user_id = %s AND meal_type = %s AND id <> %s "
+                "AND (consumed_at - make_interval(mins => %s))::date = "
+                "((%s::timestamptz) - make_interval(mins => %s))::date "
+                "ORDER BY consumed_at DESC LIMIT 1",
+                (user_id, _tipo_final, _mid, _off_cg, _at_txt, _off_cg),
+                fetch_one=True,
+            )
+            if _dup:
+                return (
+                    f"⚠️ NO CORREGIDO: ese día el usuario YA tiene un {_tipo_final} registrado "
+                    f"('{_dup.get('meal_name')}', {int(_dup.get('calories') or 0)} kcal). Pregúntale si "
+                    f"de verdad fueron dos {_tipo_final}s (si lo confirma, repite esta corrección con "
+                    f"force=true) o si el otro registro es el que sobra."
+                )
+        except Exception as _e_cg:
+            logger.warning(f"[P1-CHAT-TOOLS-AUDIT] dup-guard de la corrección falló (procediendo): {type(_e_cg).__name__}")
+
+    # [P1-CHAT-TOOLS-AUDIT · 2026-09-14] Cambiar `ingredients` no movía la Nevera. Solo se ajusta
+    # cuando es SEGURO: (a) si el registro original aún no descontó (`inventory_synced_at` NULL), la
+    # conciliación descontará la lista corregida sola; (b) si descontó y hay rastro en el ledger,
+    # se devuelve lo anterior y se descuenta lo nuevo; (c) si descontó SIN rastro (anterior al
+    # ledger, o el ledger falló), NO se toca: devolver a ciegas contaría la comida dos veces.
+    _ajustar_nevera = False
+    _nota_nevera = ""
+    if ingredients is not None:
+        if _fila is None:
+            _nota_nevera = (" La Nevera NO se ajustó (no pude leer el registro original); si hace falta, "
+                            "corrígela con modify_pantry_inventory.")
+        elif _fila.get("inventory_synced_at") is None:
+            _nota_nevera = " La Nevera se descontará con la lista corregida en la próxima conciliación."
+        else:
+            try:
+                from db import execute_sql_query as _esq_ev
+                _ev = _esq_ev(
+                    "SELECT COUNT(*) AS c FROM inventory_consumption_events "
+                    "WHERE consumed_meal_id = %s AND user_id = %s AND reverted_at IS NULL",
+                    (_mid, user_id), fetch_one=True,
+                )
+                _ajustar_nevera = bool(_ev and int(_ev.get("c") or 0) > 0)
+            except Exception:
+                _ajustar_nevera = False
+            if not _ajustar_nevera:
+                _nota_nevera = (" La Nevera NO se ajustó: no hay rastro de qué descontó el registro "
+                                "original y devolverlo a ciegas lo contaría dos veces. Si hace falta, "
+                                "corrígela con modify_pantry_inventory.")
 
     updated_id = db_update_consumed_meal(
         user_id,
-        str(meal_id).strip(),
+        _mid,
         meal_name=meal_name,
         calories=calories,
         protein=protein,
@@ -1000,6 +1418,22 @@ def correct_consumed_meal(
     )
 
     if updated_id:
+        if _ajustar_nevera:
+            try:
+                import db_inventory
+                _rev = db_inventory.revert_consumption_events(user_id, _mid) or {}
+                _ded = db_inventory.deduct_consumed_meal_from_inventory(
+                    user_id, list(ingredients), consumed_meal_id=_mid, source="chat",
+                ) if ingredients else None
+                _nota_nevera = (f" Nevera ajustada: se devolvió lo del registro anterior "
+                                f"({len(_rev.get('reverted') or [])} ítem(s)) y se descontó la lista corregida.")
+                _ausentes = (_ded or {}).get("not_in_pantry") or [] if isinstance(_ded, dict) else []
+                if _ausentes:
+                    _nota_nevera += f" No estaban en la Nevera (no bajaron): {', '.join(_ausentes[:5])}."
+            except Exception:
+                logger.exception("[P1-CHAT-TOOLS-AUDIT] ajuste de Nevera tras corregir el diario falló")
+                _nota_nevera = (" ⚠️ El diario quedó corregido, pero NO pude ajustar la Nevera: díselo "
+                                "al usuario.")
         bits = []
         if meal_name is not None:
             bits.append(f"nombre → '{meal_name}'")
@@ -1009,10 +1443,12 @@ def correct_consumed_meal(
             bits.append(f"día → {_dia_txt}")
         if calories is not None:
             bits.append(f"{calories} kcal")
+        if ingredients is not None:
+            bits.append("ingredientes")
         detalle = ", ".join(bits) if bits else "los campos indicados"
         return (
             f"¡Corregido! Actualicé el registro existente ({detalle}) — no se creó "
-            f"ninguna fila nueva. [ID_REGISTRO_DIARIO: {updated_id} — uso interno "
+            f"ninguna fila nueva.{_nota_nevera} [ID_REGISTRO_DIARIO: {updated_id} — uso interno "
             f"tuyo, NO se lo menciones ni se lo leas al usuario.]"
         )
     else:
@@ -3154,9 +3590,9 @@ def check_shopping_list(user_id: str) -> str:
             
         formatted_list = "\n".join(formatted_sections).strip()
         return f"RESULTADO MATEMÁTICO DE LA LISTA DE COMPRAS (SOLO LO QUE FALTA COMPRAR):\n{formatted_list}"
-    except Exception as e:
-        logger.error(f"❌ [TOOL] Error calculando lista de compras: {e}")
-        return f"Error interno matemático al calcular la lista de ingredientes: {str(e)}"
+    except Exception:
+        logger.exception("❌ [TOOL] Error calculando lista de compras")  # [P1-CHAT-TOOLS-AUDIT · 2026-09-14]
+        return "No pude calcular la lista de compras ahora mismo (error interno). No inventes cantidades; sugiérele verla en la pestaña de Compras."
 
 @tool
 def check_current_pantry(user_id: str) -> str:
@@ -3178,9 +3614,9 @@ def check_current_pantry(user_id: str) -> str:
         res_str = f"RESULTADO DEL INVENTARIO FÍSICO ACTUAL EN LA DESPENSA:\n{formatted_list}"
         return res_str
         
-    except Exception as e:
-        logger.error(f"❌ [TOOL] Error consultando despensa actual física: {e}")
-        return f"Error consultando la base de datos de la despensa: {str(e)}"
+    except Exception:
+        logger.exception("❌ [TOOL] Error consultando despensa actual física")  # [P1-CHAT-TOOLS-AUDIT · 2026-09-14]
+        return "No pude consultar la Nevera ahora mismo (error interno). No inventes su contenido."
 
 @tool
 def modify_pantry_inventory(user_id: str, items_to_add: list[str] = None, items_to_remove: list[str] = None, items_to_deplete: list[str] = None) -> str:
@@ -3199,13 +3635,20 @@ def modify_pantry_inventory(user_id: str, items_to_add: list[str] = None, items_
       NO usar para items que el usuario "botó" o "se dañaron" (usa
       items_to_remove para esos).
 
-    - `items_to_remove`: BORRA definitivamente del inventario sin marcarlo
-      como agotado. Usa solo cuando el usuario diga "bota X", "se me dañó
-      el X", "elimina X de mi nevera". Es destrucción real, no consumo.
+    - `items_to_remove`: DESCARTE (se dañó / lo botó), nunca consumo. Usa solo
+      cuando el usuario diga "bota X", "se me dañó el X", "elimina X de mi
+      nevera". Sin cantidad ('arroz') BORRA la fila entera sin marcarla como
+      agotada. Con cantidad ('200 g de Arroz') descuenta SOLO esa cantidad.
+      Ninguno de los dos cuenta como comida consumida.
+
+    Los nombres se buscan en la Nevera tal cual (sin importar mayúsculas,
+    acentos ni plural); lo que no aparezca NO se toca y te lo digo en la
+    respuesta — nunca afirmes haber cambiado algo que la respuesta dice que
+    no encontró. Un ítem a agregar SIN cantidad no se agrega: pregunta cuánto.
 
     Parámetros:
     - items_to_add: Lista de strings con cantidad+unidad+ingrediente a sumar.
-    - items_to_remove: Lista de strings a eliminar definitivamente (dañado/botado).
+    - items_to_remove: Lista de strings a descartar (dañado/botado), con o sin cantidad.
     - items_to_deplete: Lista de strings (nombres) a marcar como agotados (se acabaron).
     """
     # [P3-DOC-2 · 2026-05-11] LIVE-TOOL CONTRACT — LEER ANTES DE MODIFICAR.
@@ -3241,132 +3684,188 @@ def modify_pantry_inventory(user_id: str, items_to_add: list[str] = None, items_
         from datetime import datetime as _dt, timezone as _tz
         from db_inventory import (
             add_or_update_inventory_item,
-            deduct_consumed_meal_from_inventory,
+            find_pantry_rows_for_name,
             get_raw_user_inventory,
         )
+        from db import execute_sql_write as _sql_write
         from shopping_calculator import _parse_quantity
 
         added_count = 0
         removed_count = 0
         depleted_count = 0
         depleted_payload: list[dict] = []
-        # [P1-CHAT-PANTRY-AWARE · 2026-07-12] Nombres tocados en esta llamada —
-        # al final se consulta su estado REAL post-cambio y se anexa al
-        # ToolMessage. Vivo: el agente confirmó "ya van 4 leches evaporadas"
-        # contando su memoria conversacional; la fila real decía 6 (el usuario
-        # también edita desde la UI).
+        # [P1-CHAT-TOOLS-AUDIT · 2026-09-14] Lo que NO se hizo, dicho al modelo. Antes un ítem sin
+        # cantidad, uno ausente o una escritura fallida contaban igual que un éxito (o se callaban).
+        sin_cantidad: list[str] = []
+        no_encontrados: list[str] = []
+        fallidos: list[str] = []
+        _parciales: list[tuple] = []  # (pedido, nombre_fila, {id: qty_antes})
+        # [P1-CHAT-PANTRY-AWARE · 2026-07-12] Nombres tocados en esta llamada — al final se
+        # consulta su estado REAL post-cambio y se anexa al ToolMessage.
         _touched_names: set = set()
 
         def _strip_lower(s: str) -> str:
             nfd = _ucd.normalize("NFD", str(s or ""))
             return "".join(c for c in nfd if _ucd.category(c) != "Mn").lower().strip()
 
+        def _estado_real(post_rows) -> str:
+            """[P1-CHAT-PANTRY-AWARE · 2026-07-12] Estado REAL de los ítems tocados: la LLM
+            confirma con ESTOS números, no con su memoria (el usuario también edita desde la UI)."""
+            _touched_keys = {_strip_lower(n) for n in _touched_names if n}
+            _states, _present_keys = [], set()
+            for r in post_rows:
+                rk = _strip_lower(r.get("ingredient_name"))
+                if rk in _touched_keys:
+                    _present_keys.add(rk)
+                    q = float(r.get("quantity") or 0)
+                    qs = str(int(q)) if q.is_integer() else f"{q:g}"
+                    _b = r.get("brand")
+                    _states.append(f"{r.get('ingredient_name')}: {qs} {r.get('unit')}" + (f" ({_b})" if _b else ""))
+            _gone = sorted(n for n in _touched_names if _strip_lower(n) not in _present_keys)
+            if not (_states or _gone):
+                return ""
+            out = "\n\n📊 Estado REAL en la Nevera tras el cambio (confirma al usuario con ESTOS números): "
+            if _states:
+                out += "; ".join(sorted(_states))
+            if _gone:
+                out += (". " if _states else "") + "Ya no quedan: " + ", ".join(_gone) + "."
+            return out
+
+        def _nombre_pedido(item) -> tuple:
+            try:
+                _q, _u, _n = _parse_quantity(item)
+            except Exception:
+                _q, _u, _n = 0.0, "", str(item)
+            return float(_q or 0), _u, str(_n or item).strip()
+
+        def _borrar_filas(rows) -> list:
+            """DELETE por id con `AND user_id` (I2); devuelve los ids que la base CONFIRMÓ borrados."""
+            borrados = []
+            for r in rows:
+                try:
+                    if _sql_write(
+                        "DELETE FROM public.user_inventory WHERE id = %s AND user_id = %s RETURNING id",
+                        (r.get("id"), user_id), returning=True,
+                    ):
+                        borrados.append(r.get("id"))
+                except Exception as _del_err:
+                    logger.warning(f"[P1-CHAT-TOOLS-AUDIT] DELETE row id={r.get('id')} falló: {_del_err}")
+            return borrados
+
         if items_to_add:
             for item in items_to_add:
                 qty, unit, name = _parse_quantity(item)
-                if name and qty > 0:
-                    add_or_update_inventory_item(user_id, name, qty, unit)
-                    added_count += 1
-                    _touched_names.add(name)
+                if not name or not qty or qty <= 0:
+                    # [P1-CHAT-TOOLS-AUDIT · 2026-09-14] Antes se descartaba en silencio.
+                    sin_cantidad.append(str(item))
+                    continue
+                if not add_or_update_inventory_item(user_id, name, qty, unit):
+                    fallidos.append(str(item))
+                    continue
+                added_count += 1
+                _touched_names.add(name)
+
+        # [P1-CHAT-TOOLS-AUDIT · 2026-09-14] Identidad de filas SOLO por el SSOT
+        # (`find_pantry_rows_for_name` → exacto, luego `constants.pantry_names_match`). Antes era
+        # subcadena (`lookup_key in key or key in lookup_key`) seguida de un DELETE: «se acabó la
+        # sal» BORRABA «Salami». Sin match no se toca nada y se le dice al modelo.
+        _snapshot = (get_raw_user_inventory(user_id) or []) if (items_to_deplete or items_to_remove) else []
 
         if items_to_deplete:
-            # [P3-AGENT-DEPLETE · 2026-05-22 · upgrade P3-DEPLETED-BD · 2026-05-22]
-            # Snapshot + delete inventory row + INSERT a `user_depleted_items` BD
-            # (cross-device sync). Pre-fix (P3-AGENT-DEPLETE) emitía marker JSON
-            # inline para que AgentPage.jsx hiciera merge a localStorage — eso
-            # limitaba el feature a un solo browser. Ahora la BD es la fuente
-            # de verdad, el localStorage es solo cache local del frontend.
+            # [P3-AGENT-DEPLETE · 2026-05-22 · upgrade P3-DEPLETED-BD] Snapshot + DELETE de la fila +
+            # INSERT en `user_depleted_items` (sección «Agotados», cross-device).
             from db_inventory import add_depleted_item as _bd_add_depleted
-            current_rows = get_raw_user_inventory(user_id)
-
-            row_by_name: dict[str, dict] = {}
-            for r in current_rows:
-                key = _strip_lower(r.get("ingredient_name", ""))
-                if key:
-                    row_by_name[key] = r
-
             now_iso = _dt.now(_tz.utc).isoformat()
             for item in items_to_deplete:
-                try:
-                    _q, _u, parsed_name = _parse_quantity(item)
-                except Exception:
-                    parsed_name = item
-                lookup_key = _strip_lower(parsed_name) or _strip_lower(item)
-                row = row_by_name.get(lookup_key)
-                if not row:
-                    for key, candidate_row in row_by_name.items():
-                        if lookup_key and (lookup_key in key or key in lookup_key):
-                            row = candidate_row
-                            break
-                if not row:
-                    logger.info(
-                        f"🪫 [P3-AGENT-DEPLETE] '{item}' no encontrado en pantry — "
-                        f"skip (puede ya estar agotado o no haberse comprado)."
-                    )
+                _q, _u, lookup = _nombre_pedido(item)
+                rows, _lvl = find_pantry_rows_for_name(user_id, lookup, prefetched_rows=_snapshot)
+                if not rows:
+                    logger.info(f"🪫 [P3-AGENT-DEPLETE] '{item}' no está en la Nevera — no se toca nada.")
+                    no_encontrados.append(str(item))
                     continue
-                qty_snapshot = float(row.get("quantity") or 0)
+                first = rows[0]
+                ingredient_name = first.get("ingredient_name")
+                unit0 = first.get("unit") or "unidad"
+                qty_snapshot = sum(float(r.get("quantity") or 0) for r in rows if (r.get("unit") or "unidad") == unit0)
                 if qty_snapshot <= 0:
                     qty_snapshot = 1.0
-                ingredient_name = row.get("ingredient_name")
-                master_id = row.get("master_ingredient_id")
+                # Borrar PRIMERO: un «Agotado» de algo que sigue en la Nevera sería un zombi.
+                borrados = _borrar_filas(rows)
+                if not borrados:
+                    fallidos.append(str(item))
+                    continue
+                _snapshot = [r for r in _snapshot if r.get("id") not in borrados]
                 _touched_names.add(str(ingredient_name))
-
-                # [P3-DEPLETED-BD] INSERT a user_depleted_items vía helper que
-                # hace upsert idempotente por (user_id, master_id) o (user_id,
-                # lower(name)). Si el item ya estaba agotado, actualiza la
-                # qty + depleted_at — escenario edge legítimo.
-                _bd_ok = _bd_add_depleted(
+                if not _bd_add_depleted(
                     user_id,
                     ingredient_name=str(ingredient_name),
                     quantity=qty_snapshot,
-                    unit=str(row.get("unit") or "unidad"),
-                    master_ingredient_id=master_id,
+                    unit=str(unit0),
+                    master_ingredient_id=first.get("master_ingredient_id"),
                     category=None,
                     shelf_life_days=None,
                     depleted_at=now_iso,
-                )
-                if not _bd_ok:
-                    logger.warning(
-                        f"[P3-DEPLETED-BD] add_depleted_item falló para "
-                        f"name={ingredient_name!r} — skip BD insert pero "
-                        f"continuar con delete del inventory (best-effort)."
-                    )
-
+                ):
+                    logger.warning(f"[P3-DEPLETED-BD] add_depleted_item falló para name={ingredient_name!r} (best-effort).")
                 depleted_payload.append({
-                    "master_ingredient_id": master_id,
+                    "master_ingredient_id": first.get("master_ingredient_id"),
                     "ingredient_name": ingredient_name,
                     "quantity": qty_snapshot,
-                    "unit": row.get("unit"),
+                    "unit": unit0,
                     "category": None,
                     "shelf_life_days": None,
                     "depleted_at": now_iso,
                 })
-                try:
-                    # [P1-NEON-DB-MIGRATION · 2026-06-12] PostgREST → SQL
-                    # directo (Neon). Preserva el filtro `AND user_id`
-                    # (invariante I2).
-                    from db import execute_sql_write as _sql_del
-                    _sql_del(
-                        "DELETE FROM public.user_inventory WHERE id = %s AND user_id = %s",
-                        (row.get("id"), user_id),
-                    )
-                    depleted_count += 1
-                except Exception as _del_err:
-                    logger.warning(
-                        f"[P3-AGENT-DEPLETE] DELETE row id={row.get('id')} falló: {_del_err}"
-                    )
+                depleted_count += 1
 
         if items_to_remove:
-            deduct_consumed_meal_from_inventory(user_id, items_to_remove)
-            removed_count += len(items_to_remove)
+            # [P1-CHAT-TOOLS-AUDIT · 2026-09-14] «Bota el arroz» es DESCARTE, no consumo. Antes pasaba
+            # por `deduct_consumed_meal_from_inventory`: restaba UNA porción, dejaba la fila y lo
+            # anotaba en el ledger de consumo (con `removed_count` sumando incluso lo ausente).
+            # Decisión del dueño: sin cantidad se BORRA la fila entera; con cantidad («bota 200 g
+            # de arroz, se dañó») se resta esa cantidad. En ningún caso va al ledger de consumo.
             for item in items_to_remove:
-                try:
-                    _q, _u, _n = _parse_quantity(item)
-                    _touched_names.add(_n or str(item))
-                except Exception:
-                    _touched_names.add(str(item))
+                qty, unit, lookup = _nombre_pedido(item)
+                rows, _lvl = find_pantry_rows_for_name(user_id, lookup, prefetched_rows=_snapshot)
+                if not rows:
+                    no_encontrados.append(str(item))
+                    continue
+                row_name = str(rows[0].get("ingredient_name") or lookup)
+                if qty > 0:
+                    _antes = {r.get("id"): float(r.get("quantity") or 0) for r in rows}
+                    if add_or_update_inventory_item(user_id, row_name, -qty, unit, mutation_type="discard") is False:
+                        fallidos.append(str(item))
+                        continue
+                    _parciales.append((str(item), row_name, _antes))
+                    _touched_names.add(row_name)
+                    continue
+                borrados = _borrar_filas(rows)
+                if not borrados:
+                    fallidos.append(str(item))
+                    continue
+                _snapshot = [r for r in _snapshot if r.get("id") not in borrados]
+                removed_count += 1
+                _touched_names.add(row_name)
 
-        # Construir mensaje human-friendly para la LLM.
+        _post_rows = None
+        if _touched_names:
+            try:
+                _post_rows = get_raw_user_inventory(user_id) or []
+            except Exception as _state_err:
+                logger.warning(f"[P1-CHAT-PANTRY-AWARE] estado post-cambio falló (best-effort): {_state_err}")
+
+        # Un descuento parcial en una unidad que no convierte (200 g contra una fila en «unidad» sin
+        # peso) devuelve True sin mover nada. Se verifica contra la fila real, no contra el retorno.
+        for pedido, row_name, antes in _parciales:
+            if _post_rows is None:
+                removed_count += 1
+                continue
+            despues = {r.get("id"): float(r.get("quantity") or 0) for r in _post_rows if r.get("id") in antes}
+            if any(rid not in despues or despues[rid] != q for rid, q in antes.items()):
+                removed_count += 1
+            else:
+                fallidos.append(f"{pedido} (la unidad no es compatible con la de la Nevera)")
+
         parts = []
         if added_count:
             parts.append(f"se agregaron {added_count} ítem(s)")
@@ -3374,53 +3873,32 @@ def modify_pantry_inventory(user_id: str, items_to_add: list[str] = None, items_
             parts.append(f"se marcaron {depleted_count} como agotado(s)")
         if removed_count:
             parts.append(f"se eliminaron {removed_count} ítem(s)")
-        if not parts:
-            msg = "No se modificó la despensa (nada coincidió con lo solicitado)."
-        else:
-            msg = "¡Despensa actualizada! " + ", ".join(parts) + "."
+        msg = ("¡Despensa actualizada! " + ", ".join(parts) + ".") if parts else \
+            "No se modificó la despensa (nada coincidió con lo solicitado)."
 
-        # [P1-CHAT-PANTRY-AWARE · 2026-07-12] Anexar el estado REAL post-cambio
-        # de los items tocados — la LLM debe confirmar con ESTOS números, no con
-        # su memoria conversacional (el usuario también edita desde la UI).
-        if _touched_names:
-            try:
-                _post_rows = get_raw_user_inventory(user_id) or []
-                _touched_keys = {_strip_lower(n) for n in _touched_names if n}
-                _states = []
-                _present_keys = set()
-                for r in _post_rows:
-                    rk = _strip_lower(r.get("ingredient_name"))
-                    if rk in _touched_keys:
-                        _present_keys.add(rk)
-                        q = float(r.get("quantity") or 0)
-                        qs = str(int(q)) if q.is_integer() else f"{q:g}"
-                        _b = r.get("brand")
-                        _states.append(
-                            f"{r.get('ingredient_name')}: {qs} {r.get('unit')}"
-                            + (f" ({_b})" if _b else "")
-                        )
-                _gone = sorted(n for n in _touched_names if _strip_lower(n) not in _present_keys)
-                if _states or _gone:
-                    msg += "\n\n📊 Estado REAL en la Nevera tras el cambio (confirma al usuario con ESTOS números): "
-                    if _states:
-                        msg += "; ".join(sorted(_states))
-                    if _gone:
-                        msg += (". " if _states else "") + "Ya no quedan: " + ", ".join(_gone) + "."
-            except Exception as _state_err:
-                logger.warning(f"[P1-CHAT-PANTRY-AWARE] estado post-cambio falló (best-effort): {_state_err}")
+        if sin_cantidad:
+            msg += (f"\n\n⚠️ Aviso para el asistente: NO agregué {', '.join(sin_cantidad)} porque no traía(n) "
+                    f"cantidad. Pregúntale al usuario cuánto compró (ej. '2 lb', '1 paquete') y vuelve a "
+                    f"llamar con la cantidad en el texto. NO digas que se agregó.")
+        if no_encontrados:
+            msg += (f"\n\nℹ️ Aviso para el asistente: NO encontré en la Nevera: {', '.join(no_encontrados)}. "
+                    f"No se borró ni se marcó nada por esos. NO digas que lo hiciste; pregúntale cómo "
+                    f"aparece en su Nevera (check_current_pantry) si hace falta.")
+        if fallidos:
+            msg += (f"\n\n⚠️ Aviso para el asistente: NO se pudo aplicar: {', '.join(fallidos)}. "
+                    f"Díselo al usuario; no afirmes que se hizo.")
+        if _post_rows is not None:
+            msg += _estado_real(_post_rows)
 
-        # [P3-AGENT-DEPLETE · 2026-05-22] Inyectar marker JSON inline al final
-        # del tool_result. `agent.py:execute_tools` lo extrae con regex,
-        # propaga al state field `pantry_depleted_items`, y lo strip-ea del
-        # ToolMessage antes de pasarlo al siguiente call_model — la LLM NO
-        # ve el JSON raw (sería ruido en su contexto).
+        # [P3-AGENT-DEPLETE · 2026-05-22] Marker JSON inline que `agent.py:execute_tools` extrae,
+        # propaga al state (`pantry_depleted_items`) y strip-ea antes de devolverlo al modelo.
         if depleted_payload:
             msg += f"\n\n<<PANTRY_DEPLETED_JSON: {_json.dumps(depleted_payload, ensure_ascii=False)}>>"
 
         return msg
-    except Exception as e:
-        logger.error(f"❌ [TOOL] Error modificando despensa manualmente: {e}")
-        return f"Error al modificar el inventario físico: {str(e)}"
+    except Exception:
+        logger.exception("❌ [TOOL] Error modificando despensa manualmente")  # [P1-CHAT-TOOLS-AUDIT · 2026-09-14]
+        return "No pude modificar la Nevera (error interno). NO digas que quedó actualizada; sugiérele hacerlo desde la Nevera en la app."
 
 # ============================================================
 # [P3-WATER-TRACKER · 2026-05-16] TOOLS DE HIDRATACION
@@ -3467,6 +3945,15 @@ def _local_date_str_for_user(user_id: str | None = None) -> str:
     240. Un usuario sin huso registrado no puede quedarse sin fecha.
     tooltip-anchor: P2-LOCAL-DATE-STR-UTC4"""
     from datetime import datetime, timezone, timedelta
+    _off = _tz_offset_para_usuario(user_id)
+    return (datetime.now(timezone.utc) - timedelta(minutes=_off)).date().isoformat()
+
+
+def _tz_offset_para_usuario(user_id: str | None = None) -> int:
+    """[P1-CHAT-TOOLS-AUDIT · 2026-09-14] El huso con el que `_local_date_str_for_user` calcula
+    «hoy», expuesto para que quien necesite AMBOS (la fecha y el huso) no los resuelva por dos
+    caminos que puedan divergir. Convención `getTimezoneOffset()` (positivo = oeste; RD = 240).
+    Fail-safe: sin `user_id`, invitado, sin perfil o huso ilegible ⇒ 240."""
     _off = _LOCAL_DATE_FALLBACK_OFFSET_MIN
     if user_id and str(user_id) != "guest":
         try:
@@ -3476,7 +3963,7 @@ def _local_date_str_for_user(user_id: str | None = None) -> str:
             _off = int(_o)
         except Exception:
             _off = _LOCAL_DATE_FALLBACK_OFFSET_MIN
-    return (datetime.now(timezone.utc) - timedelta(minutes=_off)).date().isoformat()
+    return _off
 
 
 @tool
@@ -3533,9 +4020,9 @@ def check_hydration_today(user_id: str) -> str:
         else:
             msg_parts.append("Meta default (el usuario no tiene peso registrado o el sistema usa fallback).")
         return " ".join(msg_parts)
-    except Exception as e:
-        logger.error(f"❌ [TOOL] check_hydration_today error: {e}")
-        return f"Error consultando hidratacion: {str(e)}"
+    except Exception:
+        logger.exception("❌ [TOOL] check_hydration_today error")  # [P1-CHAT-TOOLS-AUDIT · 2026-09-14]
+        return "No pude consultar la hidratación ahora mismo (error interno). No inventes el conteo."
 
 
 @tool
@@ -3627,9 +4114,9 @@ def log_water_glass(user_id: str, count_delta: float = 1) -> str:
             f"Listo: se {verb} {abs(count_delta):g} vaso(s). "
             f"El usuario ahora lleva {new_count:g} de {goal} vasos hoy.{reached}{boundary}"
         )
-    except Exception as e:
-        logger.error(f"❌ [TOOL] log_water_glass error: {e}")
-        return f"Error registrando vaso de agua: {str(e)}"
+    except Exception:
+        logger.exception("❌ [TOOL] log_water_glass error")  # [P1-CHAT-TOOLS-AUDIT · 2026-09-14]
+        return "No pude registrar el vaso de agua (error interno). NO digas que quedó registrado; sugiérele marcarlo en el card de Hidratación."
 
 
 @tool
@@ -3639,6 +4126,9 @@ def mark_shopping_list_purchased(user_id: str, excluded_items: list[str] = None,
     Usa esta herramienta cuando el usuario indique que FUE AL SUPERMERCADO.
     - excluded_items (Opcional): Lista de nombres de ingredientes que el usuario explícitamente NO compró o no encontró (ej: ["Aguacate", "Atún"]).
     - modified_items (Opcional): Lista de ingredientes que compró con una CANTIDAD diferente a la esperada, o ingredientes EXTRA (ej: ["3 lbs de Pollo", "2 paquetes de Galletas"]).
+    Hace lo mismo que el botón «Ya compré la lista»: suma a la Nevera y marca el plan como comprado.
+    Es idempotente dentro del ciclo de compra: lo que ya se registró y sigue en la Nevera se salta
+    (no la llames dos veces por la misma compra; para una compra ADICIONAL usa modify_pantry_inventory).
     """
     # [P3-DOC-2 · 2026-05-11] LIVE-TOOL CONTRACT — LEER ANTES DE MODIFICAR.
     # ────────────────────────────────────────────────────────────────────────
@@ -3661,140 +4151,176 @@ def mark_shopping_list_purchased(user_id: str, excluded_items: list[str] = None,
     # Tooltip-anchor: P3-DOC-2-LIVE-TOOL-CONTRACT
 
     logger.info(f"🛒 [TOOL EXECUTION] Registrando compra completa/parcial para user {user_id}")
-    
+
+    # [P1-CHAT-TOOLS-AUDIT · 2026-09-14] Mismo contrato que `/restock`: sin cuenta no hay Nevera.
+    if not user_id or str(user_id) == "guest":
+        return ("El usuario no ha iniciado sesión: la Nevera virtual solo existe con cuenta. "
+                "NO digas que se registró la compra; invítalo a iniciar sesión.")
+
     try:
         from db_inventory import restock_inventory
         from shopping_calculator import get_shopping_list_delta, _parse_quantity
         from constants import strip_accents, normalize_ingredient_for_tracking
-        
-        plan = get_latest_usable_meal_plan(user_id)
+        import restock_cycle
+
+        # [P1-CHAT-TOOLS-AUDIT · 2026-09-14] El plan CON su id. Antes solo se leía `plan_data`, así
+        # que la tool no tenía cómo marcar el plan como comprado: `is_restocked`/`restocked_items`
+        # los escribía SOLO `/restock`, y quien compraba por chat caía en la pausa
+        # `awaiting_first_purchase` (`cron_tasks._first_purchase_pause_applies`) y además podía
+        # SUMAR la misma compra dos veces (sin ledger por ciclo no hay dedupe).
+        _plan_row = get_latest_usable_meal_plan_with_id(user_id)
+        plan = _plan_row.get("plan_data") if isinstance(_plan_row, dict) else None
+        _plan_id = _plan_row.get("id") if isinstance(_plan_row, dict) else None
         if not plan:
             return "El usuario no tiene un plan activo para extraer la lista de compras."
-            
+
         shop_list = get_shopping_list_delta(user_id, plan, structured=True)
         if not shop_list and not modified_items:
             return "La lista de compras Delta (ingredientes faltantes) está vacía, no hay nada nuevo que añadir a la despensa."
-            
-        # Normalizar bases a excluir
-        #
-        # [P2-I18N-TOOLCALL-NOMBRE-SIN-CANONICALIZAR · 2026-08-22] Se recuerda QUÉ pidió
-        # excluir el usuario, no sólo la base normalizada.
-        #
-        # Esta resolución es español-canónico y punto: si el usuario chatea en otro idioma,
-        # el coach emite el nombre en ESE idioma, la base no casa con ninguna, y la
-        # herramienta devolvía éxito habiendo excluido cero. El usuario dice «no compré el
-        # aguacate», la app dice «hecho», y el aguacate sigue marcado como comprado.
-        #
-        # No hay diccionario multilingüe de alimentos que consultar —el catálogo sólo tiene
-        # `name_en`, un gloss inglés— así que lo que se arregla no es la resolución: es el
-        # silencio. Un no-op indistinguible del éxito es peor que un fallo declarado.
-        excluded_bases = set()
-        _excl_pedidos = {}
-        if excluded_items:
-            for item in excluded_items:
-                _, _, name = _parse_quantity(item)
-                base = normalize_ingredient_for_tracking(name) or strip_accents(name.lower().strip())
-                if base:
-                    excluded_bases.add(base)
-                    _excl_pedidos[base] = name
-                
-        # Normalizar bases a modificar
-        modified_bases = set()
-        _mod_pedidos = {}
-        if modified_items:
-            for item in modified_items:
-                _, _, name = _parse_quantity(item)
-                base = normalize_ingredient_for_tracking(name) or strip_accents(name.lower().strip())
-                if base:
-                    modified_bases.add(base)
-                    _mod_pedidos[base] = item
-                
-        # Filtrar shop_list original (excluyendo o si fue modificado con otra cantidad)
-        _excl_casadas = set()
-        _mod_casadas = set()
+
+        def _base_of(name: str) -> str:
+            return normalize_ingredient_for_tracking(name) or strip_accents(str(name).lower().strip())
+
+        def _nombre_del_item(it) -> str:
+            if isinstance(it, dict) and it.get("name"):
+                return str(it["name"])
+            val = it.get("display_string", str(it)) if isinstance(it, dict) else str(it)
+            _, _, nm = _parse_quantity(val)
+            return nm or val
+
+        def _item_de_compra(it):
+            """[P1-CHAT-TOOLS-AUDIT · 2026-09-14] El MISMO payload estructurado que manda el botón
+            (`Dashboard.jsx` → `/restock`): `{name, quantity, unit, package_grams, brand_product_id}`.
+            Con el `display_string` la fila iba por la ruta legacy de `restock_inventory`, que no
+            conoce `package_grams`, y nacía en «paquetes» que ninguna receta sabe descontar."""
+            if isinstance(it, dict) and it.get("name"):
+                try:
+                    q = float(it.get("market_qty_numeric") or 0)
+                except (TypeError, ValueError):
+                    q = 0.0
+                if q <= 0:
+                    try:
+                        q = float(_parse_quantity(str(it.get("display_qty") or ""))[0] or 0)
+                    except Exception:
+                        q = 0.0
+                d = {"name": str(it["name"]), "quantity": q if q > 0 else 1.0,
+                     "unit": it.get("market_unit") or it.get("unit") or "unidad"}
+                try:
+                    if float(it.get("package_grams") or 0) > 0:
+                        d["package_grams"] = float(it["package_grams"])
+                except (TypeError, ValueError):
+                    pass
+                if isinstance(it.get("brand_product_id"), str) and it["brand_product_id"]:
+                    d["brand_product_id"] = it["brand_product_id"]
+                return d
+            return it.get("display_string", str(it)) if isinstance(it, dict) else str(it)
+
+        # [P2-I18N-TOOLCALL-NOMBRE-SIN-CANONICALIZAR · 2026-08-22] Se recuerda QUÉ pidió excluir el
+        # usuario (no solo la base): si chatea en otro idioma la base no casa con ninguna, y un no-op
+        # indistinguible del éxito es peor que un fallo declarado.
+        excluded_bases, _excl_pedidos = set(), {}
+        for item in excluded_items or []:
+            _, _, name = _parse_quantity(item)
+            base = _base_of(name)
+            if base:
+                excluded_bases.add(base)
+                _excl_pedidos[base] = name
+        modified_bases, _mod_pedidos = set(), {}
+        for item in modified_items or []:
+            _, _, name = _parse_quantity(item)
+            base = _base_of(name)
+            if base:
+                modified_bases.add(base)
+                _mod_pedidos[base] = item
+
+        # Filtrar la lista (excluido, o sustituido por la cantidad de modified_items).
+        _excl_casadas, _mod_casadas = set(), set()
         final_shop_list = []
-        for item in shop_list:
-            val = item.get("display_string", str(item)) if isinstance(item, dict) else str(item)
-            _, _, name = _parse_quantity(val)
-            base = normalize_ingredient_for_tracking(name) or strip_accents(name.lower().strip())
-            
+        for item in shop_list or []:
+            base = _base_of(_nombre_del_item(item))
             if base in excluded_bases or base in modified_bases:
-                # [P2-I18N-TOOLCALL-NOMBRE-SIN-CANONICALIZAR · 2026-08-22] Anotar la base
-                # que SÍ casó. Sin esto no hay forma de distinguir «excluí tres» de
-                # «no encontré ninguno de los tres».
+                # [P2-I18N-TOOLCALL-NOMBRE-SIN-CANONICALIZAR] / [P3-I18N-TOOLCALL-MODIFIED-ITEMS-SIN-RED]
+                # anotar lo que SÍ casó: distingue «excluí tres» de «no encontré ninguno».
                 if base in excluded_bases:
                     _excl_casadas.add(base)
-                # [P3-I18N-TOOLCALL-MODIFIED-ITEMS-SIN-RED · 2026-08-23] y la que casó
-                # como MODIFICADA: sin esto no se distingue «cambié la cantidad de tres»
-                # de «añadí tres extras con nombres que no están en la lista».
                 if base in modified_bases:
                     _mod_casadas.add(base)
-                continue # Fue excluido o lo agregaremos con la nueva cantidad de modified_items
-                
-            final_shop_list.append(val)
-            
-        # Agregar los items modificados crudos
+                continue
+            final_shop_list.append(_item_de_compra(item))
         if modified_items:
             final_shop_list.extend(modified_items)
-            
-        # [P0-RESTOCK-DEDUP-NAME · 2026-05-20] restock_inventory ahora retorna
-        # (success, persisted_names). El agent tool solo necesita `success`.
-        _restock_res = restock_inventory(user_id, final_shop_list)
-        success = bool(_restock_res[0]) if isinstance(_restock_res, tuple) else bool(_restock_res)
-        if success:
-            msg = f"¡Felicidades! Se han agregado los {len(final_shop_list)} ingredientes a tu Nevera Virtual."
-            if excluded_items:
-                # [P2-I18N-TOOLCALL-NOMBRE-SIN-CANONICALIZAR · 2026-08-22] Se cuenta lo
-                # EXCLUIDO, no lo pedido. Antes decía «se excluyeron 3» aunque no hubiera
-                # casado ninguno — que es justo lo que pasa cuando el usuario chatea en
-                # otro idioma y el coach emite «Avocado» contra un catálogo en español.
-                _no_casaron = sorted(
-                    _excl_pedidos[b] for b in excluded_bases if b not in _excl_casadas
-                )
-                msg += f" (Se excluyeron {len(_excl_casadas)} ítems que indicaste)."
-                if _excl_casadas:
-                    msg += f"\n\n[ALERTA INTERNA PARA LA IA]: El usuario no pudo comprar: {', '.join(excluded_items)}. "
-                    msg += "Debes disparar INMEDIATAMENTE una recomendación proactiva en el chat preguntando si quiere que sustituyas los platos de esta semana que requerían esos ingredientes faltantes."
-                if _no_casaron:
-                    # Fail-loud hacia el propio agente: es la única capa que puede
-                    # preguntar «¿cuál de estos?» en el idioma del usuario. Callarlo deja
-                    # al usuario creyendo que excluyó algo que sigue en la lista.
-                    msg += (
-                        f"\n\n[ALERTA INTERNA PARA LA IA]: NO encontré en la lista de "
-                        f"compras estos ítems que el usuario dijo no haber comprado: "
-                        f"{', '.join(_no_casaron)}. La lista está en español canónico y "
-                        f"puede que el usuario los nombrara en otro idioma. NO afirmes que "
-                        f"se excluyeron: pregúntale a cuál de los ítems de la lista se "
-                        f"refería."
-                    )
-            if modified_items:
-                # [P3-I18N-TOOLCALL-MODIFIED-ITEMS-SIN-RED · 2026-08-23] La red que
-                # `excluded_items` ya tenía y ésta no. Un ítem modificado que no casa con la
-                # lista no se pierde: entra a la Nevera como EXTRA, tal cual lo escribió el
-                # usuario — y si chatea en inglés, eso es una fila «3 lbs of chicken» que
-                # `pantry_names_match` no resolverá nunca contra las recetas en español.
-                # Callarlo deja al usuario creyendo que cambió la cantidad del pollo.
-                _mod_no_casaron = sorted(
-                    _mod_pedidos[b] for b in modified_bases if b not in _mod_casadas
-                )
-                msg += f" (Se modificaron {len(_mod_casadas)} ítems de la lista"
-                msg += f" y se añadieron {len(_mod_no_casaron)} extras)." if _mod_no_casaron else ")."
-                if _mod_no_casaron:
-                    msg += (
-                        f"\n\n[ALERTA INTERNA PARA LA IA]: Estos ítems modificados NO casaron "
-                        f"con ningún ítem de la lista de compras y se añadieron a la Nevera "
-                        f"como EXTRA con el nombre tal cual: {', '.join(_mod_no_casaron)}. La "
-                        f"lista está en español canónico y puede que el usuario los nombrara "
-                        f"en otro idioma: si se refería a un ítem de la lista, pregúntale a "
-                        f"cuál y NO afirmes que cambiaste su cantidad."
-                    )
-            return msg
+
+        # [P1-CHAT-TOOLS-AUDIT · 2026-09-14] Dedupe por ciclo de `/restock`: una re-emisión del LLM
+        # (o «ya te dije que fui al súper») no vuelve a SUMAR lo que ya entró y sigue en la Nevera.
+        _ciclo = restock_cycle.filter_purchase_for_cycle(user_id, plan, final_shop_list)
+        _a_comprar, _saltados = _ciclo["filtered"], _ciclo["skipped"]
+        if not _a_comprar:
+            return (
+                "No se añadió nada a la Nevera: todo lo de esta compra ya estaba registrado en este "
+                f"ciclo ({', '.join(_saltados[:8])}). NO digas que se agregó otra vez. Si el usuario "
+                "de verdad compró MÁS de algo, usa modify_pantry_inventory con items_to_add y la cantidad."
+            )
+        restock_cycle.resolve_purchase_brands(_a_comprar)
+
+        # [P0-RESTOCK-DEDUP-NAME · 2026-05-20] restock_inventory retorna (success, persisted_names):
+        # se marca y se cuenta SOLO lo que llegó a la base.
+        _restock_res = restock_inventory(user_id, _a_comprar)
+        if isinstance(_restock_res, tuple):
+            success, persisted_names = bool(_restock_res[0]), list(_restock_res[1] or [])
         else:
-            return "Hubo un error al intentar agregar los ingredientes a la despensa."
-            
-    except Exception as e:
-        logger.error(f"❌ [TOOL] Error en mark_shopping_list_purchased: {e}")
-        return f"Error interno al realizar el registro de la compra: {str(e)}"
+            success, persisted_names = bool(_restock_res), []
+            if success:
+                persisted_names = [restock_cycle.purchase_item_name(i) for i in _a_comprar]
+        if not persisted_names:
+            return "Hubo un error al intentar agregar los ingredientes a la despensa. NO digas que se registró la compra."
+
+        restock_cycle.mark_plan_restocked(
+            user_id, _plan_id, persisted_names, self_heal_reset=_ciclo["self_heal_reset"])
+        _efectos = restock_cycle.after_purchase_side_effects(user_id, _plan_id, persisted_names)
+
+        msg = f"¡Felicidades! Se han agregado los {len(persisted_names)} ingredientes a tu Nevera Virtual."
+        _no_guardados = len(_a_comprar) - len(persisted_names)
+        if not success and _no_guardados > 0:
+            msg += (f" (⚠️ {_no_guardados} ítem(s) no se pudieron guardar: díselo al usuario y NO "
+                    f"afirmes que entró toda la lista.)")
+        if _saltados:
+            msg += (f" (Se saltaron {len(_saltados)} ítem(s) que ya estaban registrados en este ciclo: "
+                    f"{', '.join(_saltados[:8])}.)")
+        if _efectos.get("plan_unfrozen"):
+            msg += " Su plan estaba en pausa por la Nevera vacía y ya se reanudó."
+        if excluded_items:
+            _no_casaron = sorted(_excl_pedidos[b] for b in excluded_bases if b not in _excl_casadas)
+            msg += f" (Se excluyeron {len(_excl_casadas)} ítems que indicaste)."
+            if _excl_casadas:
+                msg += f"\n\n[ALERTA INTERNA PARA LA IA]: El usuario no pudo comprar: {', '.join(excluded_items)}. "
+                msg += "Debes disparar INMEDIATAMENTE una recomendación proactiva en el chat preguntando si quiere que sustituyas los platos de esta semana que requerían esos ingredientes faltantes."
+            if _no_casaron:
+                msg += (
+                    f"\n\n[ALERTA INTERNA PARA LA IA]: NO encontré en la lista de "
+                    f"compras estos ítems que el usuario dijo no haber comprado: "
+                    f"{', '.join(_no_casaron)}. La lista está en español canónico y "
+                    f"puede que el usuario los nombrara en otro idioma. NO afirmes que "
+                    f"se excluyeron: pregúntale a cuál de los ítems de la lista se "
+                    f"refería."
+                )
+        if modified_items:
+            _mod_no_casaron = sorted(_mod_pedidos[b] for b in modified_bases if b not in _mod_casadas)
+            msg += f" (Se modificaron {len(_mod_casadas)} ítems de la lista"
+            msg += f" y se añadieron {len(_mod_no_casaron)} extras)." if _mod_no_casaron else ")."
+            if _mod_no_casaron:
+                msg += (
+                    f"\n\n[ALERTA INTERNA PARA LA IA]: Estos ítems modificados NO casaron "
+                    f"con ningún ítem de la lista de compras y se añadieron a la Nevera "
+                    f"como EXTRA con el nombre tal cual: {', '.join(_mod_no_casaron)}. La "
+                    f"lista está en español canónico y puede que el usuario los nombrara "
+                    f"en otro idioma: si se refería a un ítem de la lista, pregúntale a "
+                    f"cuál y NO afirmes que cambiaste su cantidad."
+                )
+        return msg
+
+    except Exception:
+        logger.exception("❌ [TOOL] Error en mark_shopping_list_purchased")  # [P1-CHAT-TOOLS-AUDIT · 2026-09-14]
+        return "No pude registrar la compra (error interno). NO digas que quedó registrada; sugiérele usar «Ya compré la lista» en la app."
 
 
 # [P3-MICRO-FOOD-SUGGEST · 2026-06-15] Tabla nutriente (es/en) → columna del
@@ -3905,8 +4431,14 @@ def suggest_foods_for_nutrient(user_id: str, nutrient: str, top_n: int = 6) -> s
         # list o como string "Lacteos, Gluten".
         allergies, dislikes, diet_type = [], [], "balanced"
         _clin_form = {}
+        hp = {}
+        # [P1-CHAT-TOOLS-AUDIT · 2026-09-14] `get_user_profile` se traga sus propios errores y
+        # devuelve None: un perfil vacío/None es «no pude leerlo», no «no tiene restricciones».
+        _perfil_leido = False
         try:
             profile = get_user_profile(user_id) or {}
+            if not profile:
+                raise LookupError("perfil vacío o ilegible")
             hp = profile.get("health_profile") or {}
 
             def _as_list(v):
@@ -3926,6 +4458,7 @@ def suggest_foods_for_nutrient(user_id: str, nutrient: str, top_n: int = 6) -> s
                 "medicalConditions": _as_list(hp.get("medicalConditions")),
                 "medications": _as_list(hp.get("medications")),
             }
+            _perfil_leido = True
         except Exception as _pe:
             logger.warning(f"⚠ [TOOL] suggest_foods_for_nutrient: perfil no disponible ({_pe})")
 
@@ -4043,11 +4576,23 @@ def suggest_foods_for_nutrient(user_id: str, nutrient: str, top_n: int = 6) -> s
             _avisos.append("sus alergias declaradas")
         if diet_type and diet_type != "balanced":
             _avisos.append("su tipo de dieta")
-        _filtrado = (
-            f"La lista YA excluye lo incompatible con {' y '.join(_avisos)}."
-            if _avisos else
-            "El perfil no declara alergias ni dieta restrictiva, así que la lista va sin filtrar."
-        )
+        # [P1-CHAT-TOOLS-AUDIT · 2026-09-14] Fail-secure. Si el perfil NO se pudo leer, las listas
+        # de alergias y dieta están vacías por DEFECTO, no por declaración — y la frase de abajo le
+        # decía al modelo «el perfil no declara alergias», que es justo lo que no sabemos. Leer
+        # mal el perfil de un alérgico no puede sonar igual que leer el de alguien sin alergias.
+        if not _perfil_leido:
+            _filtrado = (
+                "⚠️ NO pude leer el perfil del usuario, así que NO sé sus alergias ni su dieta: "
+                "esta lista NO está filtrada por sus restricciones. Antes de recomendar, usa las "
+                "alergias/dieta que ya conozcas por esta conversación o pregúntaselas, y descarta "
+                "cualquier alimento dudoso."
+            )
+        else:
+            _filtrado = (
+                f"La lista YA excluye lo incompatible con {' y '.join(_avisos)}."
+                if _avisos else
+                "El perfil no declara alergias ni dieta restrictiva, así que la lista va sin filtrar."
+            )
 
         _clinico = ""
         try:
@@ -4075,9 +4620,9 @@ def suggest_foods_for_nutrient(user_id: str, nutrient: str, top_n: int = 6) -> s
         )
         return f"ALIMENTOS {verb.upper()} {label.upper()} (catálogo, por 100g):\n{body}\n\n{guidance}"
 
-    except Exception as e:
-        logger.error(f"❌ [TOOL] suggest_foods_for_nutrient error: {e}")
-        return f"Error consultando el catálogo de alimentos: {str(e)}"
+    except Exception:
+        logger.exception("❌ [TOOL] suggest_foods_for_nutrient error")  # [P1-CHAT-TOOLS-AUDIT · 2026-09-14]
+        return "No pude consultar el catálogo de alimentos ahora mismo (error interno). No inventes valores: sugiere fuentes generales con prudencia."
 
 
 # ============================================================
@@ -4217,9 +4762,11 @@ def check_clinical_profile(user_id: str) -> str:
             + "\n\nRecuerda al responder: cita los valores tal cual, interpreta con prudencia "
             "(eres coach, no médico) y recomiéndale confirmar con un profesional de salud."
         )
-    except Exception as e:
-        logger.error(f"❌ [TOOL] check_clinical_profile error: {e}")
-        return f"Error consultando el perfil clínico: {str(e)}"
+    except Exception:
+        # [P1-CHAT-TOOLS-AUDIT · 2026-09-14] El detalle va al log, no al modelo: `str(e)` le
+        # entregaba al LLM rutas, SQL o nombres de tablas que podía repetirle al usuario.
+        logger.exception("❌ [TOOL] check_clinical_profile error")
+        return "No pude consultar el perfil clínico ahora mismo (error interno). Díselo al usuario y sugiérele intentarlo más tarde."
 
 
 def _chat_plan_mutation_tools_enabled() -> bool:
@@ -4295,7 +4842,9 @@ def consultar_dia_del_plan(user_id: str, fecha: str) -> str:
         # quien preguntaba a la hora de cenar; en Madrid, el de AYER. Mismo mecanismo que
         # P2-LOCAL-DATE-STR-UTC4 cerró para el diario, en la superficie que aquella pasada dejó.
         _hoy_usuario = _dt.strptime(_local_date_str_for_user(user_id), "%Y-%m-%d").date()
-        row = find_plan_day_for_date(plan, target, _hoy_usuario)
+        # [P1-CHAT-TOOLS-AUDIT · 2026-09-14] Y el MISMO huso con el que se calculó ese «hoy»:
+        # `find_plan_day_for_date` fecha los días del plan con él (antes asumía RD, 240).
+        row = find_plan_day_for_date(plan, target, _hoy_usuario, _tz_offset_para_usuario(user_id))
         if not row:
             return (f"No tengo el día {target.isoformat()} en el plan de este usuario. "
                     f"Puede que sea anterior al plan actual, o que ese día ya se haya "

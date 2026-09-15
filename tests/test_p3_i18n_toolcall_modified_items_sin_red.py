@@ -29,6 +29,17 @@ def nevera(monkeypatch):
 
     monkeypatch.setattr(db_inventory, "restock_inventory", _restock)
     monkeypatch.setattr(tools, "get_latest_usable_meal_plan", lambda uid: {"id": "p1", "plan_data": {"days": []}})
+    # [P1-CHAT-TOOLS-AUDIT · 2026-09-14] La tool ahora lee el plan CON su id (para marcarlo como
+    # comprado, igual que /restock) y pasa por el dedupe por ciclo + la marca atómica: dobles de
+    # base para esos pasos, que no son lo que este test mide.
+    import restock_cycle
+    monkeypatch.setattr(tools, "get_latest_usable_meal_plan_with_id",
+                        lambda uid: {"id": "p1", "plan_data": {"days": []}})
+    monkeypatch.setattr(restock_cycle, "filter_purchase_for_cycle",
+                        lambda uid, plan, items: {"filtered": list(items), "skipped": [], "rebought": [],
+                                                  "self_heal_reset": False})
+    monkeypatch.setattr(restock_cycle, "mark_plan_restocked", lambda *a, **k: True)
+    monkeypatch.setattr(restock_cycle, "after_purchase_side_effects", lambda *a, **k: {"plan_unfrozen": False})
     monkeypatch.setattr(
         shopping_calculator, "get_shopping_list_delta",
         lambda uid, plan, structured=True: [

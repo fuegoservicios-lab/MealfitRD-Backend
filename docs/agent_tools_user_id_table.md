@@ -6,7 +6,7 @@
 
 El nodo LangGraph `execute_tools` ([`backend/agent.py`](../agent.py)) force-overridea `tool_args["user_id"] = _trusted_uid` para CADA tool_call ANTES de cualquier branch específico del if/elif/else. Cubre TODAS las tools de `agent_tools` ([`backend/tools.py::agent_tools`](../tools.py)) porque el override es genérico al tope del loop — no depende de que cada branch nuevo se "acuerde" de hacerlo.
 
-**Razón**: la LLM recibe el `user_id` autenticado en plano dentro del system prompt vía `build_tools_instructions(user_id)` ([`prompts/chat_agent.py:128, 148`](../prompts/chat_agent.py#L128)). Eso es **prompt-trustable, NO enforced**. Una entrada adversaria del usuario (mensaje hostil, contenido importado vía `vision_agent`, recetas externas) puede inducir a la LLM a emitir `tool_call` con `user_id` ajeno, abriendo IDOR cross-user sobre `user_inventory`, `consumed_meals`, `user_facts`, `health_profile`, `meal_plans`, `hydration_log`.
+**Razón**: la LLM recibe el `user_id` autenticado en plano dentro del system prompt vía `build_tools_instructions(user_id)` ([`prompts/chat_agent.py:128, 148`](../prompts/chat_agent.py#L128)). Eso es **prompt-trustable, NO enforced**. Una entrada adversaria del usuario (mensaje hostil, contenido importado vía `vision_agent`, recetas externas) puede inducir a la LLM a emitir `tool_call` con `user_id` ajeno, abriendo IDOR cross-user sobre `user_inventory`, `consumed_meals`, `user_facts`, `health_profile`, `meal_plans`, `water_intake_log`. [P1-CHAT-TOOLS-AUDIT · 2026-09-14] La tabla real de hidratación es `water_intake_log`; `hydration_log` no existe y el doc la citaba desde P3-WATER-TRACKER.
 
 Es la simétrica de las invariantes I2/I6 (filtros server-side `AND user_id = %s` en SQL + endpoints backend que no aceptan user_id arbitrario del cliente) aplicada al chat-agent layer.
 
@@ -19,10 +19,10 @@ Es la simétrica de las invariantes I2/I6 (filtros server-side `AND user_id = %s
 | 3 | `search_deep_memory` | leak de summaries cross-user |
 | 4 | `check_shopping_list` | leak de pantry/plan cross-user |
 | 5 | `check_current_pantry` | leak de pantry cross-user |
-| 6 | `modify_pantry_inventory` | `add_or_update_inventory_item` + `deduct_consumed_meal_from_inventory` |
-| 7 | `mark_shopping_list_purchased` | `restock_inventory` |
-| 8 | `check_hydration_today` | leak de `hydration_log` cross-user (read-only) |
-| 9 | `log_water_glass` | INSERT/UPDATE en `hydration_log` cross-user |
+| 6 | `modify_pantry_inventory` | `add_or_update_inventory_item` + DELETE de `user_inventory` (`AND user_id = %s`) + `add_depleted_item` — el descarte («bota X») ya NO pasa por `deduct_consumed_meal_from_inventory` (P1-CHAT-TOOLS-AUDIT · 2026-09-14) |
+| 7 | `mark_shopping_list_purchased` | `restock_inventory` + marca `is_restocked`/`restocked_items` del plan vía `update_plan_data_atomic(..., user_id=)` (`restock_cycle.py`, P1-CHAT-TOOLS-AUDIT · 2026-09-14) |
+| 8 | `check_hydration_today` | leak de `water_intake_log` cross-user (read-only) |
+| 9 | `log_water_glass` | INSERT/UPDATE en `water_intake_log` cross-user |
 | 10 | `suggest_foods_for_nutrient` | leak del `health_profile` cross-user (lee alergias/dislikes/dieta del `user_id` para filtrar la sugerencia del catálogo) |
 | 11 | `check_clinical_profile` | leak del `health_profile.clinical_profile` cross-user (laboratorios, historial de peso — el dato más sensible del sistema) (P1-CHAT-CLINICAL-TOOL · 2026-07-12) |
 | 12 | `consultar_dia_del_plan` | leak del `plan_data` (menú, ingredientes y recetas) de otro usuario — [P1-CHAT-PAST-DAYS · 2026-07-27] |
