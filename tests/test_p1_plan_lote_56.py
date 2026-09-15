@@ -85,6 +85,33 @@ def test_llm_usage_events_sale_de_la_lista_de_borrado():
         assert t in db_profiles._USER_SCOPED_TABLES_USERID
 
 
+# ─────────────────────────────────────────── 1-bis. el día que nombra el usuario
+@pytest.mark.parametrize("texto,esperado", [
+    ("ayer me comí un chimi en la calle", 1),
+    ("anoche cené 2 panes con queso", 1),
+    ("antier me comí un sancocho", 2),
+    ("anteayer almorcé arroz", 2),
+    ("me comí un mangú con 2 huevos", None),
+    ("hoy desayuné avena y ayer también", None),  # dos días: no decide el guard
+    ("desayuné avena con guineo", None),          # «desayuné» no contiene «ayer» como palabra
+])
+def test_el_dia_nombrado_por_el_usuario(texto, esperado):
+    from langchain_core.messages import AIMessage, HumanMessage, SystemMessage
+    import agent as A
+    msgs = [HumanMessage(content="hola"), AIMessage(content="¡Hola!"), HumanMessage(content=texto),
+            SystemMessage(content="nota interna de ayer")]
+    assert A._days_ago_named_by_user(msgs) == esperado
+
+
+def test_el_guard_de_dias_va_despues_del_override_de_identidad():
+    """Batería v6 B, caso B6: days_ago=0 con «ayer» y la respuesta afirmaba «la cena de ayer»."""
+    src = (_BACKEND / "agent.py").read_text(encoding="utf-8")
+    i_uid = src.index('tool_args["user_id"] = _trusted_uid')
+    i_dia = src.index("_days_ago_named_by_user(state.get(\"messages\") or [])")
+    assert i_uid < i_dia < src.index('tool_result = ""', i_uid)
+    assert 'tool_name == "log_consumed_meal" and not tool_args.get("days_ago")' in src
+
+
 # ─────────────────────────────────────────── 4. gate
 def test_el_gate_corre_a_dos_workers_con_volcado_del_test_colgado():
     src = (_BACKEND / "scripts" / "run_ci.ps1").read_text(encoding="utf-8")

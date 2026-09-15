@@ -4585,6 +4585,15 @@ def execute_tools(state: ChatState):
                         f"prompt injection — verificar último mensaje del usuario."
                     )
                 tool_args["user_id"] = _trusted_uid
+                # [P1-PLAN-LOTE-56] «ayer me comí un chimi» → days_ago=0 y la respuesta decía «quedó
+                # como la cena de ayer»: el diario de HOY se llevó 750 kcal. El día que el usuario
+                # NOMBRA manda (regla 8 del prompt), así que no depende de que el modelo lo copie.
+                if tool_name == "log_consumed_meal" and not tool_args.get("days_ago"):
+                    _dias = _days_ago_named_by_user(state.get("messages") or [])
+                    if _dias:
+                        logger.warning(f"🛡️ [P1-PLAN-LOTE-56] log_consumed_meal days_ago "
+                                       f"{tool_args.get('days_ago')!r} → {_dias} (el usuario nombró el día)")
+                        tool_args["days_ago"] = _dias
 
             tool_result = ""
             logger.debug(f"🔧 [LANGGRAPH TOOL] Ejecutando {tool_name}")
@@ -4984,6 +4993,27 @@ _RE_NEGACION = re.compile(r"\b(?:no|nunca|tampoco|sin)\b", re.IGNORECASE)
 def _reply_claims_diary_write(text: str) -> bool:
     """True si el texto AFIRMA haber registrado algo en el diario."""
     return bool(_diary_claim_sentences(text))
+
+
+# [P1-PLAN-LOTE-56 · 2026-09-15] El día que el USUARIO nombra en su último mensaje («ayer», «anoche»,
+# «anteayer»/«antier»), o None. Con «hoy» en el mismo mensaje no se decide nada: puede contar dos días.
+_RE_DIA_ANTEAYER = re.compile(r"\b(?:anteayer|antier|antes de ayer)\b", re.IGNORECASE)
+_RE_DIA_AYER = re.compile(r"\b(?:ayer|anoche)\b", re.IGNORECASE)
+_RE_DIA_HOY = re.compile(r"\b(?:hoy|esta mañana|ahorita)\b", re.IGNORECASE)
+
+
+def _days_ago_named_by_user(messages: list):
+    for msg in reversed(messages):
+        if isinstance(msg, HumanMessage):
+            c = msg.content
+            texto = c if isinstance(c, str) else " ".join(
+                p.get("text", "") for p in (c or []) if isinstance(p, dict))
+            if _RE_DIA_HOY.search(texto):
+                return None
+            if _RE_DIA_ANTEAYER.search(texto):
+                return 2
+            return 1 if _RE_DIA_AYER.search(texto) else None
+    return None
 
 
 # [P1-PLAN-LOTE-53 · 2026-09-15] Batería del 15-sep: «Quedan anotados 2 de 8 vasos» (tras

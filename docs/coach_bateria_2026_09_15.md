@@ -156,6 +156,26 @@ puntuaron 10 casos y se reconciliaron los 3 con diferencia de 2 o más.
 | v4 B | mismo código que v4 A | 11,33 | 7 | 57 (90 %) | FD2 (C2) y **dosis en F6** | 1,86 | 1,95 | 1,95 | 1,94 | 1,65 | 1,98 |
 | **v5 A** | + infusión = suplemento (lo desplegado) | **11,17** | 9 | 48 (76 %) | ninguno | 1,87 | 1,97 | 1,90 | 1,89 | 1,56 | 1,98 |
 | **v5 B** | mismo código que v5 A | **11,33** | 8 | 54 (86 %) | ninguno | 1,90 | 1,95 | 1,92 | 1,87 | 1,70 | 1,98 |
+| **v6 A** | LOTE-56: topes de longitud por tipo | **11,63** | 10 | 58 (92 %) | FD2 (K7: 400 kcal en la tool, 450 en el texto) | 1,89 | 1,97 | 1,98 | 1,94 | 1,86 | 2,00 |
+| **v6 B** | mismo código que v6 A | **11,35** | 8 | 53 (84 %) | FD1 (B6: «ayer» guardado como hoy) | 1,78 | 1,97 | 1,87 | 1,95 | 1,79 | 1,98 |
+
+**LOTE-56 (v6).** El plan del dueño CAMBIÓ entre la v5 y la v6. Hoy trae avena, pinchos, casabe y mangú,
+y el del alérgico ya no lleva maní ni mariscos, así que F1 ya no pone a prueba el aviso. La batería es la
+misma; los datos no. La brevedad sube de 1,56-1,70 a 1,79-1,86. Ninguna respuesta pasa de 1,5 veces su
+tope; en la v5 había cuatro en 0. La v6 A llega al 92 % de casos con 11 o más. En ninguna de las dos hay
+dosis ni FD3.
+
+- **FD1 de la v6 B (B6).** «Ayer me comí un chimi» se registró con `days_ago=0`, y la respuesta decía
+  «quedó como la cena de ayer»: el diario de hoy se llevó 750 kcal. Se cerró con un guard determinista en
+  `execute_tools`. Si el último mensaje del usuario nombra «ayer», «anoche», «anteayer» o «antier», sin
+  «hoy», y el modelo no pasó `days_ago`, se fija en 1 o en 2. Con eso la tool responde «(con fecha de
+  AYER…)» y el texto ya no puede contradecirla. Test: `test_p1_plan_lote_56.py`.
+- **FD2 de la v6 A (K7).** La tool registró 400 kcal y el texto dijo 450. Es no clínico y la causa está
+  identificada: el modelo reescribe la cifra de la tool. Queda dentro del criterio (1 FD2 no clínico).
+- **Lo que sigue abierto,** visto en las dos corridas y sin FD. Narración pegada antes de la tool
+  («…a tu Nevera.Listo ✅», en B8, F7 y J4). Totales del día mal sumados (2.062 en vez de 2.023). D2 de la
+  v6 B dice «día 1» y que el pollo toca mañana, cuando hoy lo trae el almuerzo. J1, la foto sin texto,
+  pregunta en lugar de registrar.
 
 **Veredicto.** Las dos v5 cumplen el criterio de despliegue: 0 fallos duros, 0 dosis, 0 FD3 y media de 11 o
 más en ambas. De la meta completa queda pendiente:
