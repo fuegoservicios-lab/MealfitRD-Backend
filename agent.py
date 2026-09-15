@@ -4893,8 +4893,14 @@ _DIARY_WRITE_TOOLS = ("log_consumed_meal", "correct_consumed_meal")
 # Afirmaciones de registro. Sin `\b` final en las raíces verbales a propósito:
 # cubre "registrada/registrado/registré/anotada/anoté/apunté" sin enumerar cada
 # flexión, que es justo la lista que caduca al primer sinónimo nuevo.
+# [P1-DIARY-CLAIM-PERFECTIVE · 2026-09-15] SOLO formas que afirman un registro YA hecho
+# (registré, anoté, apunté, registrada/o, anotada/o…). La raíz suelta cazaba el SUSTANTIVO y
+# las ofertas: «¿te ayudo con el plan, registro de comidas…?» y «cuando me digas, lo anoto»
+# disparaban el nudge. Caso vivo del dueño (15-sep, «hola»): el saludo decía «registro de
+# comidas», el nudge saltó y — ya visible desde P1-DIARY-NUDGE-VISIBLE — el modelo le contestó
+# a la NOTA («Aclarado: no registré…») en vez de al usuario.
 _RE_CLAIM_DIARY = re.compile(
-    r"\b(?:regist[rn]?[aeéio]\w*|anot[aeéio]\w*|apunt[aeéio]\w*)\b",
+    r"\b(?:registr|anot|apunt)(?:é|e|ado|ada|ados|adas)\b",
     re.IGNORECASE,
 )
 # Una negación cerca ANTES del verbo lo convierte en lo contrario ("no pude
@@ -4908,9 +4914,21 @@ def _reply_claims_diary_write(text: str) -> bool:
     if not text:
         return False
     for m in _RE_CLAIM_DIARY.finditer(text):
+        if m.group(0).lower().endswith("e") and not m.group(0).lower().endswith(("é",)):
+            # «registre/anote» sin tilde es subjuntivo («¿quieres que lo anote?»), no una
+            # afirmación; el pretérito lleva tilde.
+            continue
         previo = text[max(0, m.start() - 40):m.start()]
         if _RE_NEGACION.search(previo):
             continue  # "no pude registrarlo" — el modelo está siendo honesto
+        # [P1-DIARY-CLAIM-PERFECTIVE · 2026-09-15] Dentro de una pregunta es una oferta
+        # («¿quieres que lo deje registrado?»), no una afirmación.
+        _ini = max(text.rfind(c, 0, m.start()) for c in ".!?\n")
+        _fin_c = [i for i in (text.find(c, m.end()) for c in ".!?\n") if i != -1]
+        _fin = min(_fin_c) if _fin_c else len(text)
+        _frase = text[_ini + 1:_fin + 1]
+        if "¿" in _frase or _frase.rstrip().endswith("?"):
+            continue
         return True
     return False
 
@@ -4948,7 +4966,10 @@ def nudge_diary_tool(state: ChatState):
             "`meal_type` correcto. Si el usuario dijo que fue de otro día, pasa "
             "`days_ago`.\n"
             "Si de verdad NO hay nada que registrar (el usuario no dijo que "
-            "comiera algo), responde sin afirmar que registraste nada."
+            "comiera algo), vuelve a escribir tu respuesta al usuario COMPLETA, sin "
+            "afirmar que registraste nada. Esta nota es interna: el usuario NO la ve, "
+            "así que no la menciones, no te disculpes ni aclares nada sobre ella — "
+            "tu respuesta nueva sustituye a la anterior."
         ))],
         "diary_claim_retried": True,
     }
@@ -5907,6 +5928,28 @@ def _is_pure_filler(text: str) -> bool:
     return bool(_FILLER_RX.match(t))
 
 
+def _seed_thread_messages(recent_messages: list, prompt: str) -> list:
+    """[P1-CHAT-SEED-NO-DUP · 2026-09-15] Mensajes con los que nace un hilo del checkpoint.
+
+    El router guarda el mensaje del usuario ANTES de llamar al agente, así que en un hilo nuevo
+    `recent_messages` ya lo trae — y se añadía otra vez: el modelo veía «hola» dos veces
+    (checkpoint del dueño 734a5820, 15-sep). Si el último mensaje sembrado ya ES este prompt,
+    no se repite.
+
+    tooltip-anchor: _seed_thread_messages (test_p1_diary_claim_perfective.py)
+    """
+    messages = []
+    for msg in recent_messages or []:
+        if msg.get("role") == "user":
+            messages.append(HumanMessage(content=msg.get("content") or ""))
+        elif msg.get("role") == "model":
+            messages.append(AIMessage(content=msg.get("content") or ""))
+    if not (messages and isinstance(messages[-1], HumanMessage)
+            and (messages[-1].content or "").strip() == (prompt or "").strip()):
+        messages.append(HumanMessage(content=prompt))
+    return messages
+
+
 def _build_final_content_from_messages(messages: list) -> str:
     """[P1-CHAT-NARRATION-KEPT · 2026-07-28] Reconstruye el texto final del
     turno a partir de TODAS las AIMessage con contenido no vacío emitidas
@@ -5943,6 +5986,19 @@ def _build_final_content_from_messages(messages: list) -> str:
         if isinstance(m, HumanMessage) or getattr(m, "type", None) == "human":
             last_human_idx = i
     tail = messages[last_human_idx + 1:] if last_human_idx >= 0 else messages
+
+    # [P1-DIARY-CLAIM-PERFECTIVE · 2026-09-15] Si en el turno hubo un nudge del diario
+    # (SystemMessage de `nudge_diary_tool`), lo anterior a él era la respuesta que el guard
+    # RECHAZÓ: la nueva la sustituye, no se suma. Sin esto, el turno del «hola» del dueño
+    # juntaba las dos y el filtro de deliberación se comía el saludo (>300 chars) y dejaba
+    # solo la aclaración.
+    _ultimo_nudge = max(
+        (i for i, m in enumerate(tail)
+         if isinstance(m, SystemMessage) or getattr(m, "type", None) == "system"),
+        default=-1,
+    )
+    if _ultimo_nudge >= 0:
+        tail = tail[_ultimo_nudge + 1:]
 
     seen_texts = set()
     parts = []
@@ -6462,14 +6518,7 @@ def chat_with_agent(session_id: str, prompt: str, current_plan: Optional[dict] =
     
     if not existing_state.values:
         logger.debug(f"🔄 [LANGGRAPH] Inicializando nuevo thread O restaurando tras reinicio para session_id: {session_id}")
-        messages = []
-        for msg in memory["recent_messages"]:
-            if msg["role"] == "user":
-                messages.append(HumanMessage(content=msg["content"]))
-            elif msg["role"] == "model":
-                messages.append(AIMessage(content=msg["content"]))
-        messages.append(HumanMessage(content=prompt))
-        inputs["messages"] = messages
+        inputs["messages"] = _seed_thread_messages(memory["recent_messages"], prompt)
     else:
         logger.debug(f"🔄 [LANGGRAPH] Thread existente detectado en Checkpointer. Inyectando solo el prompt actual.")
         inputs["messages"] = [HumanMessage(content=prompt)]
@@ -7048,12 +7097,7 @@ def chat_with_agent_stream(session_id: str, prompt: str, current_plan: Optional[
     }
 
     if not existing_state.values:
-        messages = []
-        for msg in memory["recent_messages"]:
-            if msg["role"] == "user": messages.append(HumanMessage(content=msg["content"]))
-            elif msg["role"] == "model": messages.append(AIMessage(content=msg["content"]))
-        messages.append(HumanMessage(content=prompt))
-        inputs["messages"] = messages
+        inputs["messages"] = _seed_thread_messages(memory["recent_messages"], prompt)
     else:
         inputs["messages"] = [HumanMessage(content=prompt)]
         
@@ -7147,6 +7191,7 @@ def chat_with_agent_stream(session_id: str, prompt: str, current_plan: Optional[
     _pretool_max = _chat_pretool_narration_max_chars()
     _pretool_buf: list[str] = []
     _tool_seen = False
+    _buf_step = None  # [P1-DIARY-CLAIM-PERFECTIVE · 2026-09-15] paso de LangGraph del texto retenido
     _progress_keys: set = set()  # [P1-CHAT-STREAM-TOOLCALL-CHUNKS · 2026-09-14]
     # [P2-CHAT-SINGLE-ERROR-EVENT · 2026-09-14] Un solo evento `error` por turno: el
     # budget emitía el suyo y luego su propio TimeoutError volvía a emitir otro (dos
@@ -7223,6 +7268,13 @@ def chat_with_agent_stream(session_id: str, prompt: str, current_plan: Optional[
                             # bloque de arriba: el texto ANTERIOR a la primera
                             # tool_call se retiene hasta saber cuánto es.
                             if _hold_pretool and not _tool_seen:
+                                # [P1-DIARY-CLAIM-PERFECTIVE · 2026-09-15] Una SEGUNDA pasada de
+                                # `call_model` sin tool de por medio solo ocurre tras el nudge del
+                                # diario: su texto sustituye al retenido, no se le suma.
+                                _step = metadata.get("langgraph_step") if isinstance(metadata, dict) else None
+                                if _step is not None and _buf_step is not None and _step != _buf_step:
+                                    _pretool_buf.clear()
+                                _buf_step = _step
                                 _pretool_buf.append(chunk_content)
                             else:
                                 yield f"data: {json.dumps({'type': 'chunk', 'text': chunk_content})}\n\n"
