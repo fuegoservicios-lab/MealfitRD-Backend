@@ -15,6 +15,7 @@ Dos capas:
 tooltip-anchor: P1-CHAT-PANTRY-AWARE
 """
 import os
+import re
 
 _HERE = os.path.dirname(os.path.abspath(__file__))
 _BACKEND = os.path.dirname(_HERE)
@@ -80,7 +81,11 @@ def test_pantry_context_empty_fridge(monkeypatch):
 def test_tool_appends_real_state_for_touched_items():
     i = _TL.find("def modify_pantry_inventory")
     assert i != -1
-    body = _TL[i:i + 12000]
+    # [P1-CHAT-TOOLS-AUDIT · 2026-09-14] Hasta la siguiente definición de nivel superior, no una
+    # ventana fija: 12.000 chars dejó fuera el `_touched_names.add` de la rama de botar en cuanto
+    # la tool creció (rojo del deploy-gate sin cambio de conducta).
+    _m = re.compile(r"\n(?:@tool|def |class )").search(_TL, i + 1)
+    body = _TL[i:_m.start() if _m else None]
     assert "_touched_names" in body, "los items tocados se rastrean"
     assert "Estado REAL en la Nevera tras el cambio" in body, \
         "el ToolMessage lleva los totales reales — la LLM confirma con la DB"
