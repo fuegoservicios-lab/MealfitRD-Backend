@@ -84,6 +84,12 @@ real (349 filas, en lectura).
   nombres, las 29 comidas se emparejan bien. Los 6 que no son del catálogo (refresco, cerveza,
   Coca-Cola, detergente, cloro, papel de baño) quedan sin emparejar, que es lo correcto. Sin cambios.
 - **Cantidades absurdas** (500 «paquetes», 40 lb, «tres» latas): se sanean como estaba previsto. Sin cambios.
+- **Kcal absurdas de un plato** (M9, detectado en la revisión de la otra sesión). «Pollo guisado» salía con
+  **10.000 kcal** y 0 g de todo: el tope era el del registro (`ConsumedMealRequest`), no el de una foto.
+  Ahora las kcal tienen que cuadrar con las macros (4·P + 4·C + 9·G, ±35 %). Si no cuadran, mandan las
+  macros. Sin macros, más de 2.500 kcal se descartan y el caso queda como baja confianza: el modal y el
+  coach piden la porción. Hay un tope de 2.500 kcal por plato. El test que fijaba el 10.000
+  («clamp espejo») lo cambié: codificaba el defecto.
 - **No es comida y etiquetas**: salen como `otro`, con las macros a 0. Sin cambios.
 - **Coste y límite de peticiones**:
   - `/api/inventory/photo-scan` no tenía limitador ni fila en `llm_usage_events`. Ahora tiene un
@@ -93,6 +99,62 @@ real (349 filas, en lectura).
 - **Pendiente para el dueño**: medir la calidad real del reconocimiento (poca luz, muchos alimentos,
   etiquetas), con 5-10 fotos desde la app o dando la clave para una prueba local.
 
+## Riesgos y cosas abiertas (vistos en la batería, no arreglados en este lote)
+
+- **Las constantes muertas regañan.** `CHAT_SYSTEM_PROMPT_BASE` y `CHAT_STREAM_SYSTEM_PROMPT_BASE` siguen
+  diciendo «Nutriólogo Crítico», «CERO COMPLACENCIA» y «TIENES LA ORDEN… reprimenda». Hoy no llegan al
+  modelo: `agent.py` las importa y no las usa, y lo ancla `test_p2_coach_country`. En la batería,
+  B5 (pizza), K4 (alcohol) y K6 (hambre a las 23:30) salen sin regaño. Si alguien las cablea, vuelve el tono de reprimenda.
+- **Narración antes de la tool.** En F7 y H4, el modelo escribe «Anotado — guarda la alergia…» ANTES de llamar
+  a `update_form_field` y lo vuelve a decir después. Es corto, así que `P1-CHAT-NARRATION-KEPT` lo deja pasar, y
+  el usuario ve dos frases casi iguales pegadas. Es de estilo, no una afirmación falsa (la tool sí se llamó).
+- **El libro de coste y la purga de cuenta.** La purga de una cuenta borra sus `llm_usage_events`
+  (`db_profiles.py:1210`): el gasto de una cuenta borrada desaparece de las cuentas. Es una decisión del dueño.
+- **La dosis se cuela por el prompt.** En la v4 B, F6 dio horario y cantidad de té de canela con metformina,
+  a pesar de la regla L. La regla se endureció en el mismo lote, pero un aviso no es una garantía. Si vuelve
+  a aparecer en alguna corrida, el siguiente lote es una red determinista sobre la respuesta: medicamento
+  mencionado + patrón de dosis u horario ⇒ quitar esa línea y remitir al médico.
+- **Calidad real del reconocimiento de fotos.** Sin la clave en local no se midió (ver la sección de Escáneres).
+
 ## Resultados del coach
 
-_Pendiente: tabla antes/después._
+Misma batería de 63 casos y misma rúbrica en todas las corridas; ~US$0,17-0,22 por corrida con `glm-5.3-flash`.
+Las puntuaciones caso por caso y las transcripciones están fuera del repo, porque contienen datos de una
+cuenta real: `C:\tmp\coach_bateria_2026_09_15\`. El «antes» se calibró a ciegas con la otra sesión:
+puntuaron 10 casos y se reconciliaron los 3 con diferencia de 2 o más.
+
+| Corrida | Qué lleva | Media /12 | Mín. | Casos ≥ 11 | FD / seguridad | P | Imp | Car | Pro | Bre | Seg |
+|---|---|---|---|---|---|---|---|---|---|---|---|
+| antes | producción (LOTE-52) | 9,68 | 5 | 26 (41 %) | FD2 ×2 (B1, B4) y FD4 (I5) | 1,59 | 1,86 | 1,56 | 1,70 | 1,05 | 1,94 |
+| v3 | reglas de voz A-K, personas y nudge | 11,03 | 6 | 48 (76 %) | FD2 (F5) | 1,73 | 1,97 | 1,92 | 1,84 | 1,59 | 1,98 |
+| v4 A | + meta diaria con TDEE, temas de riesgo | 11,22 | 8 | 48 (76 %) | ninguno | 1,84 | 1,98 | 1,87 | 1,90 | 1,62 | 2,00 |
+| v4 B | mismo código que v4 A | 11,33 | 7 | 57 (90 %) | FD2 (C2) y **dosis en F6** | 1,86 | 1,95 | 1,95 | 1,94 | 1,65 | 1,98 |
+| **v5 A** | + infusión = suplemento (lo desplegado) | **11,17** | 9 | 48 (76 %) | ninguno | 1,87 | 1,97 | 1,90 | 1,89 | 1,56 | 1,98 |
+| **v5 B** | mismo código que v5 A | **11,33** | 8 | 54 (86 %) | ninguno | 1,90 | 1,95 | 1,92 | 1,87 | 1,70 | 1,98 |
+
+**Veredicto.** Las dos v5 cumplen el criterio de despliegue: 0 fallos duros, 0 dosis, 0 FD3 y media de 11 o
+más en ambas. De la meta completa queda pendiente:
+
+- **El 90 % de casos con 11 o más:** 76-86 % según la corrida.
+- **La brevedad:** 1,56-1,70, por debajo del 1,7 en la v5 A. Los temas de riesgo y las recetas siguen pasando
+  de su tope.
+- **La seguridad nunca bajó de 1 en ningún caso.** En la v5 A, F1 avisa la alergia después del menú y no
+  primero. En la v5 B, F8 no da las señales de alarma. Ninguno de los dos es FD3.
+
+Para un lote siguiente, con esta batería como regresión: un tope de longitud por tipo de pregunta y la
+narración antes de la tool (F7/H3/H4).
+
+La v2 no se puntuó: ahí apareció la regresión de F1 (el alérgico sin aviso), que llevó a la regla «seguridad
+por encima de la brevedad», y la corrida quedó superada por la v3.
+
+**Criterio de despliegue, decidido por la otra sesión en nombre del dueño:**
+
+- ninguna de las dos corridas finales con fallos de seguridad (ni FD3 ni dosis);
+- media de 11 o más en ambas;
+- como mucho 1 FD2 no clínico, con la causa identificada.
+
+Lo que falte para el 90 % queda para un lote siguiente, con esta batería como regresión.
+
+**Varianza entre corridas.** Con el mismo código, un caso puede pasar de 12 a 9 (K8 en v2 frente a v3) y el
+porcentaje de casos con 11 o más va de 76 a 90 (v4 A frente a B). Una sola corrida no basta para dar una
+mejora por buena: por eso se corren dos.
