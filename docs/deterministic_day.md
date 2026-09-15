@@ -18,6 +18,7 @@ tope y pega la receta congelada de la biblioteca de 140. Si cualquier paso no cu
 | `MEALFIT_RECIPE_LIBRARY_SELECT` | `False` | Knob maestro de la biblioteca de recetas. **Sin él, el día determinista no construye NADA.** |
 | `MEALFIT_DETERMINISTIC_DAY_CANDIDATES` | `25` | Candidatos por franja, clamp `[3, 60]`. |
 | `MEALFIT_DETERMINISTIC_DAY_W_CARB_SURPLUS` | `1.0` | Peso del EXCESO de carbohidrato en el scorer (`P1-PLAN-LOTE-10`). `1.0` = simétrico (conducta anterior). `2.0` es el mejor compromiso medido en tres dianas — **encenderlo lo decide el dueño** (canario). |
+| `MEALFIT_DETERMINISTIC_DAY_W_CARB_SURPLUS_CANARY` | `1.0` | Peso del exceso de carbohidrato SÓLO para `MEALFIT_DETERMINISTIC_DAY_USERS` (`P1-PLAN-LOTE-61`); el global no se toca. Inerte por defecto: ver «B7 en el canario», abajo. |
 | `MEALFIT_DETERMINISTIC_DAY_W_FAT_DEFICIT` | `1.0` | Peso del DÉFICIT de grasa. Subirlo a `2.0` arregla la grasa en la diana estándar pero hunde la proteína en pérdida (−12 %): se deja en `1.0`. |
 
 > ⚠️ **`MEALFIT_DETERMINISTIC_DAY` solo no hace nada.** `construir_comida` devuelve `None` cuando
@@ -259,6 +260,17 @@ anterior. Dos cambios:
   planes y no con 3.
 
 Test: `tests/test_p1_plan_lote_49.py`.
+
+## B7 en el canario: medido y apagado (`P1-PLAN-LOTE-61` · 2026-09-15)
+
+La decisión delegada del 14-sep era «2.0/1.0 sólo en el canario del dueño». El peso ya sigue al usuario: `build_day_for_skeleton`
+pasa `pesos=_pesos_scorer(_uid)` a `elegir_plantillas`, y `_pesos_scorer(user_id)` usa
+`MEALFIT_DETERMINISTIC_DAY_W_CARB_SURPLUS_CANARY` para quien está en `MEALFIT_DETERMINISTIC_DAY_USERS`. Pero antes de
+encenderlo se midió en el perfil del canario, que no es el de la diana estándar del lote 10: perfil del canario (ganancia muscular, 2600 kcal · 180/300/80 g, 14 días, `measure_deterministic_day_macros.py`): con 1.0 el carbohidrato queda en −5,5 % y la grasa en +4,7 % (en banda: C 8, G 7 de 14); con 2.0, −16,5 % y +22,9 % (C 5, G 5 de 14); la proteína, 14/14 en los dos (−4,5 → −5,1 %). En ganancia la
+biblioteca ya se queda corta de carbohidrato, y castigar su exceso empuja la selección a platos grasos. Por eso el default del
+knob es `1.0` (inerte). En pérdida y estándar, 2.0 sí recorta el carbohidrato (lote 10): para un canario con ese perfil
+basta la variable de entorno. *Una decisión tomada con la diana de otro perfil se re-mide con el del canario antes de
+encenderla.*
 
 ## Seguridad: el backstop no es opcional
 

@@ -792,7 +792,23 @@ con huevo del gate de variedad y la regla «1 comida con huevo por día» del pr
 sigue bajo el canary de la política (`MEALFIT_PLAN_POLICY_ENFORCE_USERS`, E5 fase B).
 
 
+**Claras en botella a partir de 4 (`P1-PLAN-LOTE-61`, 2026-09-15): medido, no construido.** La decisión delegada del
+14-sep era «botella de claras pasteurizadas cuando una comida pide 4 o más». Contadas con el mismo parser de formas del
+huevo que V7 (`recipe_contract.egg_forms_in_list`): en el corpus fijo del 09-12, de 64 comidas, 14 llevan alguna forma de
+huevo y las claras por comida son {1: 2, 2: 2, 3: 2, 5: 1}, así que **una** cruza el umbral (5 claras); en el golden set,
+2 de 80 (4 y 5). La regla toca el agregador de compras —`_consolidate_inline_canon` funde `Clara de huevo` en `Huevo`
+sobre una lista plana, sin la comida— en las 6 superficies que escriben la lista, y `shopping_calculator.py` está a unas
+150 líneas de su tope. Queda para su propio lote, con estas cifras; la fila de la botella («Clara de huevo pasteurizada ·
+Don Papito · 400 g») existe desde el 07-sep.
+
 ## Asignación paso↔ingrediente en la receta congelada (C4 · `P1-PLAN-LOTE-25` · 2026-09-12)
+
+**Las tres recetas que quedaban en `revisar` (`P1-PLAN-LOTE-61`, 2026-09-15).** Redactadas por delegación del dueño (Hoja,
+documento `angelo`, veredicto «corregida») y copiadas tal cual: el aceite de los yaniqueques en tres tercios, el del pollo
+en mitad + cuarto + último cuarto, y la auyama de las lentejas con su paso. El parser no entendía «otro tercio» ni «el
+último tercio/cuarto» (leía 1/3 y 3/4 y las dejaba `a_medias`): «otro tercio/cuarto» son fracciones fijas y «el último
+tercio/cuarto» CIERRA como «el resto». Resultado: `revisar` 3 → 0 (exacta 156, estimada 37); sólo cambian esas tres. Los
+dos tests del lote 25 que usaban las recetas defectuosas como ejemplo llevan ahora los pasos del 09-12 como fixture.
 
 **Qué decía el gap (H8 de la auditoría del 09-11).** Extender la receta congelada con `pasos[i].usa: [{ingredient_id,
 fraccion}]` para las recetas DO (se escribe una vez); V6 pasa de «puede repartir» a suma exacta. Coste previsto: revisión

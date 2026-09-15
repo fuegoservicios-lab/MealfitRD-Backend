@@ -222,7 +222,11 @@ _PROCESS_START_ISO = datetime.now(timezone.utc).isoformat()
 # aciertos por construcción (exigía el alimento del dueño como subcadena del texto de V4, que no nombra ninguno); ahora el
 # alimento sólo restringe si el hallazgo nombra uno, las columnas de la máquina se refrescan con fecha al lado de las del
 # 09-06 y la línea base estricta queda publicada (docs/culinary_baseline_estricto_2026-09-15.md).
-_LAST_KNOWN_PFIX = "P1-PLAN-LOTE-60 · 2026-09-15"
+# [P1-PLAN-LOTE-61 · 2026-09-15] (lote 44 del plan 38-44) Las decisiones que el dueño delegó el 14-sep: sus tres recetas en la
+# biblioteca (y `recipe_usage` entiende «otro tercio» / «el último tercio»), el peso del canario del día determinista por
+# usuario (inerte por defecto: medido, 2.0 empeora su perfil de ganancia) y PayPal en `block` también cuando no existe
+# ningún cupón para el tier. Claras en botella (1 de 64 comidas) y la fase B de la lista canónica (su gate no pasa): medidas.
+_LAST_KNOWN_PFIX = "P1-PLAN-LOTE-61 · 2026-09-15"
 
 # [P1-SENTRY-SAMPLE-COST · 2026-05-12] Sentry sampling driven from env vars
 # con default seguro 0.1 (10%). Pre-fix tenía `traces_sample_rate=1.0` y

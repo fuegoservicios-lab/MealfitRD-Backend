@@ -492,18 +492,44 @@ def _empate_max() -> int:
     return _env_int("MEALFIT_DETERMINISTIC_DAY_TIE_MAX", 10, validator=lambda v: 1 <= v <= 50)
 
 
-def _pesos_scorer() -> tuple:
+def _en_canario(user_id) -> bool:
+    """[P1-PLAN-LOTE-61] ¿Está este usuario en `MEALFIT_DETERMINISTIC_DAY_USERS`? La lista, sin mirar el knob global:
+    con el global encendido todos reciben días deterministas, pero el canario sigue siendo quien está en la lista."""
+    if not user_id:
+        return False
+    try:
+        import os
+        crudo = os.environ.get("MEALFIT_DETERMINISTIC_DAY_USERS", "") or ""
+        return str(user_id).strip().lower() in {u.strip().lower() for u in crudo.split(",") if u.strip()}
+    except Exception:
+        return False
+
+
+def _pesos_scorer(user_id=None) -> tuple:
     """[P1-PLAN-LOTE-10 · 2026-09-11 · B7] Pesos del scorer para la dirección en que la biblioteca se equivoca de
     forma SISTEMÁTICA: exceso de carbohidrato y déficit de grasa. Default `1.0`/`1.0` = el scorer simétrico anterior,
     byte a byte. Medido en TRES dianas (14 días cada una; pérdida 1600·140/130/55, estándar 2000·150/200/60, ganancia 2600·180/300/80): con 1.0/1.0 el carbohidrato queda en +21,9 / +18,0 / −7,6 % y la grasa en −9,5 / −17,7 / +7,3 %; con 2.0/1.0 pasa a +15,4 / +10,7 / −9,0 % y −0,1 / −6,9 / +10,7 %, la proteína cede ~2 pts en pérdida (−6,9 → −9,1 %) y se sirven 2-4 platos distintos menos; con 2.0/2.0 la proteína en pérdida cae a −12,2 %. Ninguna forma simétrica (cuadrados, minimax) domina: todas hunden la proteína.
     Encender `2.0`/`1.0` es una decisión de producto (proteína y variedad contra carbohidrato): canario del dueño,
     rollback sin redeploy. Clamp [0.5, 5.0].
-    tooltip-anchor: MEALFIT_DETERMINISTIC_DAY_W_CARB_SURPLUS (test_p1_plan_lote_10.py)"""
+    tooltip-anchor: MEALFIT_DETERMINISTIC_DAY_W_CARB_SURPLUS (test_p1_plan_lote_10.py)
+
+    [P1-PLAN-LOTE-61 · 2026-09-15] (B7, decisión delegada del dueño el 14-sep: «canario») Para quien está en
+    `MEALFIT_DETERMINISTIC_DAY_USERS`, el peso del exceso de carbohidrato es `MEALFIT_DETERMINISTIC_DAY_W_CARB_SURPLUS_CANARY`
+    en lugar del global; el del déficit de grasa sigue siendo el global. Sin `user_id`, o fuera de la lista, exactamente
+    lo de antes. El default es 1.0 (inerte), NO el 2.0 de la decisión: medido para el perfil del canario (ganancia
+    muscular, 2600 kcal · 180/300/80, 14 días), 2.0 lleva el carbohidrato de −5,5 % a −16,5 % y la grasa de +4,7 % a
+    +22,9 % (días en banda C 8 → 5, G 7 → 5): la biblioteca ya se queda CORTA de carbohidrato en ganancia, y castigar
+    su exceso empuja a platos grasos. 2.0 ayuda en pérdida/estándar (lote 10); ponerlo es una variable de entorno.
+    tooltip-anchor: MEALFIT_DETERMINISTIC_DAY_W_CARB_SURPLUS_CANARY"""
     try:
         from knobs import _env_float
         ok = lambda v: 0.5 <= v <= 5.0
-        return (_env_float("MEALFIT_DETERMINISTIC_DAY_W_CARB_SURPLUS", 1.0, validator=ok),
-                _env_float("MEALFIT_DETERMINISTIC_DAY_W_FAT_DEFICIT", 1.0, validator=ok))
+        cs = _env_float("MEALFIT_DETERMINISTIC_DAY_W_CARB_SURPLUS", 1.0, validator=ok)
+        fd = _env_float("MEALFIT_DETERMINISTIC_DAY_W_FAT_DEFICIT", 1.0, validator=ok)
+        canario = _env_float("MEALFIT_DETERMINISTIC_DAY_W_CARB_SURPLUS_CANARY", 1.0, validator=ok)
+        if _en_canario(user_id):
+            cs = canario
+        return (cs, fd)
     except Exception:
         return (1.0, 1.0)
 
@@ -536,7 +562,7 @@ def _rotacion_de(day_num, slot: str) -> int:
 
 def elegir_plantillas(tids, objetivo, catalogo: dict, por_id: dict, slot: str = "",
                       rotacion: int = 0, saturados: Optional[dict] = None,
-                      max_rep: Optional[int] = None) -> list:
+                      max_rep: Optional[int] = None, pesos: Optional[tuple] = None) -> list:
     """Los candidatos ELEGIBLES para esta franja, del mejor al peor dentro del empate, rotados por
     el día. Lista vacía si ninguno sirve.
 
@@ -556,6 +582,8 @@ def elegir_plantillas(tids, objetivo, catalogo: dict, por_id: dict, slot: str = 
     of = max(float(objetivo.get("fats_g") or 0), 1.0)
     ok = float(objetivo.get("kcal") or 0)
     _w_cs, _w_fd = _pesos_scorer()
+    if pesos:                                    # [P1-PLAN-LOTE-61] los del usuario, si quien arma el día los pasa
+        _w_cs, _w_fd = pesos
     cands = []
     for tid in (tids or []):
         t = por_id.get(tid)
@@ -1823,7 +1851,8 @@ def build_day_for_skeleton(nutrition, form_data, skeleton_day, day_num, user_id=
             _reserva_faltas = 0
             _elegibles = elegir_con_tiempo(tids, obj, catalogo, por_id, slot, _presup_min,
                                            rotacion=_rotacion_de(day_index, slot),
-                                           saturados=_saturados, max_rep=_max_rep)
+                                           saturados=_saturados, max_rep=_max_rep,
+                                           pesos=_pesos_scorer(_uid))   # [P1-PLAN-LOTE-61] B7: el canario, por usuario
             # Primero los que no se han servido hoy; los ya usados quedan de RESPALDO al final, no
             # descartados: quedarse sin día por no repetir es peor que repetir.
             for _t, _f in sorted(_elegibles, key=lambda p: str(p[0].get("template_id")) in usadas_hoy):

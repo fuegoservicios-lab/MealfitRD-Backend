@@ -20,6 +20,8 @@ escrita con lo mismo. Fuente de las opciones: `plan_pendientes_2026_09_11.md` y 
 | g1 | `block` | MEALFIT_BILLING_VERIFY_AMOUNT = block: sin cupón activo, un importe por debajo del plan se bloquea. |
 | f9 | `tengo` | Nutricionista: Juan Carlos Brito. Fecha de la revisión por confirmar. |
 
+**Aplicado el 15-sep (`P1-PLAN-LOTE-61`)**: recetas y `block` tal cual; `b7` con el mecanismo por usuario pero INERTE (medido en el perfil del dueño, ganancia: 2.0 lleva el carbohidrato a −16,5 % y la grasa a +22,9 %); `claras` medida (1 de 64 comidas) para su propio lote; `e5b` no entra: el gate de la fase B no pasa (21 de ≥ 30 planes). Revertir o encender cualquiera es una variable de entorno.
+
 Lo que disparan: **lote 44** del [plan 38-43](plan_agente_lotes_38_43_2026_09_14.md) (recetas a la biblioteca, claras en
 botella a partir de 4, cohorte B de la lista canónica = canario del dueño, pesos 2.0/1.0 solo en el canario, `block` en el
 importe de PayPal); la calibración del juez espera al lote 38 (instrumento); D8 se cierra sin código; V7a y el equipo no

@@ -1,6 +1,6 @@
 {
  "country": "DO",
- "generado_el": "2026-09-12",
+ "generado_el": "2026-09-15",
  "indice_huella": "1f4f95b33a191dfe",
  "por_id": {
   "tpl_02895f974ed3": {
@@ -597,23 +597,16 @@
   },
   "tpl_14c76a1c346e": {
    "cuentas": {
-    "aceite_vegetal": 1.0,
+    "aceite_vegetal": 0.9999,
     "cebolla": 1.0,
     "harina_de_trigo": 1.0,
     "huevo": 1.0,
     "pimienta_negra": 1.0,
     "sal": 1.0
    },
-   "estado": "revisar",
-   "hallazgos": [
-    {
-     "alimento": "Aceite vegetal",
-     "detalle": "«el resto» / «la otra mitad» aparece dos veces: la receta reparte más de lo que compra",
-     "ingredient_id": "aceite_vegetal",
-     "tipo": "sobre_asignado"
-    }
-   ],
-   "pasos_hash": "09e743e66427c82b",
+   "estado": "estimada",
+   "hallazgos": [],
+   "pasos_hash": "487f1a4d71b00d52",
    "usa": [
     [
      {
@@ -621,7 +614,7 @@
       "ingredient_id": "harina_de_trigo"
      },
      {
-      "fraccion": 0.5,
+      "fraccion": 0.3333,
       "ingredient_id": "aceite_vegetal"
      },
      {
@@ -636,11 +629,15 @@
     ],
     [
      {
-      "fraccion": 0.5,
+      "fraccion": 0.3333,
       "ingredient_id": "aceite_vegetal"
      }
     ],
     [
+     {
+      "fraccion": 0.3333,
+      "ingredient_id": "aceite_vegetal"
+     },
      {
       "fraccion": 1.0,
       "ingredient_id": "cebolla"
@@ -5975,16 +5972,9 @@
     "repollo": 1.0,
     "zanahoria": 1.0
    },
-   "estado": "revisar",
-   "hallazgos": [
-    {
-     "alimento": "Aceite de oliva",
-     "detalle": "«el resto» / «la otra mitad» aparece dos veces: la receta reparte más de lo que compra",
-     "ingredient_id": "aceite_de_oliva",
-     "tipo": "sobre_asignado"
-    }
-   ],
-   "pasos_hash": "3009649499fb75b9",
+   "estado": "estimada",
+   "hallazgos": [],
+   "pasos_hash": "ebf8612060e05707",
    "usa": [
     [
      {
@@ -5993,8 +5983,7 @@
       "ingredient_id": "muslo_de_pollo"
      },
      {
-      "estimada": true,
-      "fraccion": 0.5,
+      "fraccion": 1.0,
       "ingredient_id": "batata"
      }
     ],
@@ -6004,7 +5993,7 @@
       "ingredient_id": "limon"
      },
      {
-      "fraccion": 1.0,
+      "fraccion": 0.75,
       "ingredient_id": "aceite_de_oliva"
      }
     ],
@@ -6014,11 +6003,6 @@
       "estimada": true,
       "fraccion": 0.5,
       "ingredient_id": "muslo_de_pollo"
-     },
-     {
-      "estimada": true,
-      "fraccion": 0.5,
-      "ingredient_id": "batata"
      },
      {
       "fraccion": 1.0,
@@ -6031,6 +6015,10 @@
      {
       "fraccion": 0.5,
       "ingredient_id": "limon"
+     },
+     {
+      "fraccion": 0.25,
+      "ingredient_id": "aceite_de_oliva"
      }
     ]
    ]
@@ -8655,20 +8643,14 @@
    "cuentas": {
     "aceite_de_oliva": 1.0,
     "ajo": 1.0,
-    "auyama": 0,
+    "auyama": 1.0,
     "batata": 1.0,
     "cebolla": 1.0,
     "lentejas": 1.0,
     "sal": 0
    },
-   "estado": "revisar",
+   "estado": "exacta",
    "hallazgos": [
-    {
-     "alimento": "Auyama",
-     "detalle": "comprado y ningún paso lo nombra",
-     "ingredient_id": "auyama",
-     "tipo": "sin_uso"
-    },
     {
      "alimento": "Sal",
      "detalle": "comprado y ningún paso lo nombra",
@@ -8676,12 +8658,16 @@
      "tipo": "sin_uso_condimento"
     }
    ],
-   "pasos_hash": "c839e675b9e024ce",
+   "pasos_hash": "643eba576bb489dd",
    "usa": [
     [
      {
       "fraccion": 1.0,
       "ingredient_id": "lentejas"
+     },
+     {
+      "fraccion": 1.0,
+      "ingredient_id": "auyama"
      },
      {
       "fraccion": 1.0,
@@ -8877,18 +8863,15 @@
  },
  "resumen": {
   "constituyentes": 1017,
-  "constituyentes_con_suma_1": 1004,
+  "constituyentes_con_suma_1": 1005,
   "estados": {
-   "estimada": 35,
-   "exacta": 155,
-   "revisar": 3
+   "estimada": 37,
+   "exacta": 156
   },
-  "fracciones_estimadas": 95,
+  "fracciones_estimadas": 93,
   "hallazgos": {
    "fuera_de_plantilla": 4,
-   "sin_uso": 1,
-   "sin_uso_condimento": 12,
-   "sobre_asignado": 2
+   "sin_uso_condimento": 12
   },
   "recetas": 193,
   "top": [
@@ -8903,29 +8886,14 @@
     "tipo": "fuera_de_plantilla"
    },
    {
-    "alimento": "Aceite vegetal",
-    "n": 1,
-    "tipo": "sobre_asignado"
-   },
-   {
     "alimento": "espaguetis",
     "n": 1,
     "tipo": "fuera_de_plantilla"
    },
    {
-    "alimento": "Aceite de oliva",
-    "n": 1,
-    "tipo": "sobre_asignado"
-   },
-   {
     "alimento": "cuajada",
     "n": 1,
     "tipo": "fuera_de_plantilla"
-   },
-   {
-    "alimento": "Auyama",
-    "n": 1,
-    "tipo": "sin_uso"
    }
   ]
  },

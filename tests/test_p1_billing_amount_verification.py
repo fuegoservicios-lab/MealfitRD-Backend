@@ -127,10 +127,19 @@ def test_d_pure_price_helpers():
     assert b._extract_override_price(_sub(True, "0.01")) == 0.01
 
 
-def _run_verify(b, monkeypatch, *, mode, overridden, price, disc, list_price):
+def _run_verify(b, monkeypatch, *, mode, overridden, price, disc, list_price, hay_cupon=True):
     """Ejecuta _verify_subscription_amount con deps mockeadas; devuelve
-    (raised_409: bool, alerts: list)."""
+    (raised_409: bool, alerts: list).
+
+    [P1-PLAN-LOTE-61] `hay_cupon` es la respuesta de `_active_coupon_exists_for_tier` (True/False/None). Por defecto
+    True: hay cupones para el tier, así que un override sin cupón válido sigue siendo AMBIGUO, como en los casos
+    anteriores al lote. Mockeado SIEMPRE: con la base local a mano, la consulta real leería producción."""
     monkeypatch.setenv("MEALFIT_BILLING_VERIFY_AMOUNT", mode)
+
+    async def _fake_hay_cupon(tier):
+        return hay_cupon
+
+    monkeypatch.setattr(b, "_active_coupon_exists_for_tier", _fake_hay_cupon)
 
     async def _fake_validate(code, tier):
         return {"discount_percent": disc} if disc is not None else None

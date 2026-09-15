@@ -149,9 +149,14 @@ _PISTAS = (
     ("resto", re.compile(r"\b(?:el|lo)\s+(?:resto|restante|sobrante)" + _DE + _COLA)),
     ("resto", re.compile(r"\b(?:el|lo)\s+que\s+(?:queda|quede|sobra|sobre)" + _DE + _COLA)),
     ("resto", re.compile(r"\b(?:el|la|los|las)\s+[a-z]+\s+restantes?\s*$")),
+    # [P1-PLAN-LOTE-61 · 2026-09-15] (C4) «el último tercio del aceite» / «el último cuarto» / «el tercer tercio» CIERRAN
+    # (toman lo que queda, como «el resto»), y «otro tercio» / «otro cuarto» son fracciones fijas como «un tercio». Las
+    # recetas del dueño del 14-sep reparten el aceite así y el parser leía 1/3 y 3/4: `a_medias`, cuando suman 1.
+    # Antes que «tercio»/«cuarto» fijos: la frase que cierra contiene la palabra. tooltip-anchor: P1-PLAN-LOTE-61-TERCIOS
+    ("resto", re.compile(r"\b(?:el|la)\s+(?:ultim[oa]|tercer[oa]?)\s+(?:tercio|cuarto|cuarta\s+parte)" + _DE + _COLA)),
     ("dos_tercios", re.compile(r"\bdos\s+tercios" + _DE + _COLA)),
-    ("tercio", re.compile(r"\bun\s+tercio" + _DE + _COLA)),
-    ("cuarto", re.compile(r"\b(?:un\s+cuarto|la\s+cuarta\s+parte)" + _DE + _COLA)),
+    ("tercio", re.compile(r"\b(?:un|otro)\s+tercio" + _DE + _COLA)),
+    ("cuarto", re.compile(r"\b(?:(?:un|otro)\s+cuarto|(?:la|otra)\s+cuarta\s+parte)" + _DE + _COLA)),
     ("parte", re.compile(r"\b(?:una\s+)?parte" + _DE + _COLA)),
     ("parte", re.compile(r"\buna?\s+pizca" + _DE + _COLA)),
     ("parte", re.compile(r"\bun\s+poco" + _DE + _COLA)),

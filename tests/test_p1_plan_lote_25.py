@@ -286,7 +286,47 @@ def rows():
     return _corpus()["catalogo_filas"]
 
 
-def test_tres_mitades_que_la_heuristica_no_veia_salen_como_V6_exacto(snap, rows, monkeypatch):
+#: [P1-PLAN-LOTE-61 · 2026-09-15] Los pasos de estas dos recetas ANTES de que el dueño las corrigiera (C4, 14-sep): el
+#: aceite de los yaniqueques en «la mitad» + «la otra mitad» dos veces, y las lentejas sin ningún paso para la auyama. Los
+#: dos tests de abajo prueban el detector CON ese defecto; la biblioteca viva ya no lo tiene, así que viaja como fixture
+#: (verbatim de la biblioteca del 09-12) con una asignación derivada de esos mismos pasos.
+_PASOS_09_12 = {
+    "tpl_14c76a1c346e": [
+        "Precalienta el horno a 200 °C. En un bate mezcla la harina de trigo (se pesa en crudo) con la mitad de la sal y un toque de pimienta; añade la mitad del aceite vegetal y un poco de agua, y amasa hasta formar una masa suave que no se pegue a las manos. Déjala reposar unos 10 minutos, hasta que esté manejable y con cuerpo.",
+        "Divide la masa en porciones, aplánalas bien finitas sobre una bandeja de horno, báñalas con la otra mitad del aceite frotándolas con los dedos y hornea unos 12-15 minutos, hasta que estén doradas por encima y al partir una el interior no esté crudo. Estos son tus yaniqueques horneados.",
+        "Mientras se hornean, pica la cebolla bien chiquita y sofríela en un sartén antiadherente a fuego medio con la otra mitad del aceite, unos 3-4 minutos, hasta que esté transparente y blandita.",
+        "Bate el huevo (se pesa sin cáscara) con la otra mitad de la sal y el resto de la pimienta. Baja el fuego a bajo, vierte el huevo en el sartén con la cebolla y revuelve despacito hasta que cuaje por completo y no escurra en ninguna parte. Ten cuidao' que no se pase, que el huevo recio no vale na'.",
+        "Sirve los yaniqueques calientes acompañados del huevo revuelto con cebolla encima, y a desayuná."
+    ],
+    "tpl_fc758e30f5e7": [
+        "Enjuaga las lentejas y escúrrelas; pela la batata y córtala en cubos parejos.",
+        "Sofríe la cebolla y el ajo picados en el aceite a fuego medio, hasta que la cebolla se vea transparente.",
+        "Añade las lentejas, cubre con agua y cocina 20 minutos a fuego medio, removiendo de vez en cuando.",
+        "Incorpora la batata y sigue cocinando 15 minutos más, hasta que esté tierna y el guiso haya espesado."
+    ]
+}
+
+
+@pytest.fixture
+def biblioteca_09_12(rows, monkeypatch):
+    """`_pasos_index` y `cargar_uso` de una biblioteca con los pasos del 09-12 en esas dos recetas: copia del snapshot
+    vivo con la asignación de esas dos derivada de sus pasos viejos (`derivar_biblioteca` lee la biblioteca VIVA)."""
+    import copy
+    from culinary_coherence import build_culinary_index
+    ru.clear_caches()
+    pasos = dict(ru._pasos_index("DO"))
+    pasos.update(_PASOS_09_12)
+    snap = copy.deepcopy(ru.cargar_uso("DO"))
+    index, cond = build_culinary_index(rows), ru._condimento_predicado()
+    for tid, p in _PASOS_09_12.items():
+        snap["por_id"][tid] = ru.derivar_uso(p, dr.templates_by_id("DO")[tid].get("constituents") or [], index,
+                                             condimentos=cond)
+    monkeypatch.setattr(ru, "_pasos_index", lambda country="DO": pasos)
+    monkeypatch.setattr(ru, "cargar_uso", lambda country="DO": snap)
+    return snap
+
+
+def test_tres_mitades_que_la_heuristica_no_veia_salen_como_V6_exacto(biblioteca_09_12, rows, monkeypatch):
     monkeypatch.delenv("MEALFIT_RECIPE_USAGE_EXACT", raising=False)
     plan = {"days": [{"day": 1, "meals": [_meal_de(_tid("Yaniqueques horneados")), _meal_de(_tid("Lentejas guisadas con auyama y batata")),
                                           _meal_de(_tid("Pinchos de pollo"))]}]}
@@ -298,7 +338,7 @@ def test_tres_mitades_que_la_heuristica_no_veia_salen_como_V6_exacto(snap, rows,
     assert not [v for v in viol if v["meal_index"] == 2], "los pinchos reparten bien: cero hallazgos, y evaluados"
 
 
-def test_con_el_knob_apagado_vuelve_la_heuristica(snap, rows, monkeypatch):
+def test_con_el_knob_apagado_vuelve_la_heuristica(biblioteca_09_12, rows, monkeypatch):
     monkeypatch.setenv("MEALFIT_RECIPE_USAGE_EXACT", "0")
     plan = {"days": [{"day": 1, "meals": [_meal_de(_tid("Yaniqueques horneados")), _meal_de(_tid("Lentejas guisadas con auyama y batata"))]}]}
     viol, est = cc.culinary_contract_scan_status(plan, rows)

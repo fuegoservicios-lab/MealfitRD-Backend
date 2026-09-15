@@ -143,6 +143,11 @@ consola con su propio `billing_cycles` paga $0.01 y obtiene Max; queda un críti
 Cierre disponible cuando se decida: bloquear el override cuando no existe **ningún** cupón
 activo aplicable al tier. Deja intacto el caso que el fail-cheap protege.
 
+**Cerrado el 2026-09-15 (`P1-PLAN-LOTE-61`)**, por la decisión del dueño delegada el 14-sep («block»): el default es
+`block` y `_active_coupon_exists_for_tier` decide si puede haber un cupón detrás del override (cuenta uno agotado y uno
+vencido hace menos de 24 h). Si no existe ninguno, el override por debajo de la lista se bloquea con 409 y alerta crítica.
+Si existe alguno, o la consulta falla, sigue siendo ambiguo: alerta y no bloquea.
+
 ### 2. `plan_tier` nace `'free'` en la DB y el código escribe `'gratis'`
 
 El default del esquema es `'free'::text`; 13 de 14 perfiles lo tienen. El degradador

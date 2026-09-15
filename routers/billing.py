@@ -625,14 +625,70 @@ def _redeem_discount_code(code: str) -> None:
         logger.warning(f"[P1-BILLING-AMOUNT] No se pudo redimir cupón {code}: {type(e).__name__}")
 
 
+#: [P1-PLAN-LOTE-61 · 2026-09-15] Un cupón que venció hace menos de esto todavía «existe» para decidir si un override
+#: sin cupón válido PUEDE ser legítimo: el caso del fail-cheap es el cupón que caducó entre crear la suscripción y /verify.
+_CUPON_GRACIA_H = 24
+
+
+async def _active_coupon_exists_for_tier(tier: str) -> Optional[bool]:
+    """[P1-PLAN-LOTE-61 · 2026-09-15] (G1) ¿Existe ALGÚN cupón activo que pudiera aplicar a este tier? `True`/`False`, o
+    `None` si no se pudo consultar (fail-cheap: sin respuesta no se bloquea nada).
+
+    Las reglas son las de `_validate_discount_code` (`is_active`, vigencia, `applicable_tiers`) con dos holguras a
+    propósito, porque aquí la pregunta no es «¿vale ESTE cupón?» sino «¿podría haber un cupón detrás de este override?»:
+    un cupón agotado (`max_uses`) sigue contando, y uno vencido hace menos de `_CUPON_GRACIA_H` horas también. La
+    auditoría del 22-ago lo midió: `discount_codes` estaba VACÍA, así que cualquier override era ilegítimo por
+    definición — y el acceso se concedía igual. tooltip-anchor: P1-PLAN-LOTE-61-SIN-CUPON"""
+    tier = (tier or "").strip().lower()
+    try:
+        rows = await _run_sync_db_in_thread(
+            lambda: execute_sql_query(
+                """
+                SELECT applicable_tiers, valid_from::text AS valid_from, valid_until::text AS valid_until
+                  FROM public.discount_codes
+                 WHERE is_active = TRUE
+                """,
+                None,
+                fetch_all=True,
+            )
+        )
+    except Exception as e:
+        logger.warning(f"[P1-PLAN-LOTE-61] no se pudo consultar discount_codes ({type(e).__name__}): no se bloquea")
+        return None
+    if rows is None:
+        return None
+    from datetime import datetime, timedelta, timezone
+    now = datetime.now(timezone.utc)
+    for d in rows:
+        try:
+            if d.get("valid_from") and now < datetime.fromisoformat(str(d["valid_from"]).replace("Z", "+00:00")):
+                continue
+            if d.get("valid_until") and now - timedelta(hours=_CUPON_GRACIA_H) > datetime.fromisoformat(
+                    str(d["valid_until"]).replace("Z", "+00:00")):
+                continue
+        except (ValueError, AttributeError, TypeError):
+            return True          # una fila ilegible podría ser un cupón: no se asume que no existe
+        applicable = d.get("applicable_tiers") or []
+        if applicable and tier and tier not in applicable:
+            continue
+        return True
+    return False
+
+
 async def _verify_subscription_amount(
     *, sub_data, verified_plan_id, tier, coupon_code, access_token, paypal_api_base,
     user_id, subscription_id,
 ) -> None:
     """Verifica que el monto pactado en la suscripción NO fue manipulado por debajo
     del precio de lista (menos un descuento re-validado server-side). Alerta siempre
-    ante sospecha; en modo 'block' 409ea SOLO con underpayment PROBADO (fail-cheap)."""
-    mode = _env_str("MEALFIT_BILLING_VERIFY_AMOUNT", "warn", {"off", "warn", "block"}).lower()
+    ante sospecha; en modo 'block' 409ea SOLO con underpayment PROBADO (fail-cheap).
+
+    [P1-PLAN-LOTE-61 · 2026-09-15] (G1, decisión del dueño delegada el 14-sep: `block`) El default pasa de `warn` a
+    `block`, y «probado» incluye ahora el override por debajo de la lista cuando NO existe ningún cupón activo aplicable
+    al tier (`_active_coupon_exists_for_tier` → `False`): ningún cupón puede justificarlo. Si existe alguno (el del
+    usuario no llegó o caducó) o no se pudo consultar, sigue siendo ambiguo: alerta y no bloquea. Rollback sin
+    redeploy: `MEALFIT_BILLING_VERIFY_AMOUNT=warn`."""
+    mode = _env_str("MEALFIT_BILLING_VERIFY_AMOUNT", "block", {"off", "warn", "block"}).lower()
     if mode == "off" or not sub_data:
         return
     # Sin override → precio estándar del plan, sin manipulación posible.
@@ -672,6 +728,13 @@ async def _verify_subscription_amount(
     if not suspicious:
         return  # cupón válido + monto coherente
 
+    # [P1-PLAN-LOTE-61] Sin cupón válido y por debajo de la lista: ¿existe ALGÚN cupón que pudiera explicarlo? Si no
+    # existe ninguno, el override es ilegítimo por definición y el ambiguo deja de serlo.
+    sin_cupon_posible = False
+    if (discount_pct is None and actual_price is not None and list_price is not None
+            and actual_price < list_price * (1.0 - tol)):
+        sin_cupon_posible = (await _active_coupon_exists_for_tier(tier)) is False
+
     _persist_billing_alert(
         alert_key=f"billing_price_tampering:{user_id}:{subscription_id}",
         severity="critical",
@@ -680,25 +743,26 @@ async def _verify_subscription_amount(
             f"User {user_id}: sub {subscription_id} (plan {verified_plan_id}, tier {tier}) "
             f"tiene plan_overridden con precio={actual_price} vs esperado_min={expected_min} "
             f"(lista={list_price}, cupón={coupon_code or '∅'} → {discount_pct}%). "
-            f"proven_underpaid={proven_underpaid}, modo={mode}."
+            f"proven_underpaid={proven_underpaid}, sin_cupon_posible={sin_cupon_posible}, modo={mode}."
         ),
         metadata={
             "user_id": user_id, "sub_id": subscription_id, "tier": tier,
             "actual_price": actual_price, "list_price": list_price,
             "expected_min": expected_min, "coupon": coupon_code or None,
             "discount_pct": discount_pct, "proven_underpaid": proven_underpaid,
+            "sin_cupon_posible": sin_cupon_posible,
         },
     )
     logger.warning(
         f"⚠️ [P1-BILLING-AMOUNT] Sospecha de manipulación de monto: user={user_id} "
         f"sub={subscription_id} actual={actual_price} expected_min={expected_min} "
-        f"proven_underpaid={proven_underpaid} modo={mode}"
+        f"proven_underpaid={proven_underpaid} sin_cupon_posible={sin_cupon_posible} modo={mode}"
     )
     # Bloquear SOLO con underpayment PROBADO bajo un cupón re-validado (precio <
     # piso del cupón). El caso ambiguo (sin cupón válido / no-parseable / cupón no
     # reenviado) queda en warn+alerta → fail-cheap, nunca bloquea un pago que no
     # podemos PROBAR fraudulento.
-    if mode == "block" and proven_underpaid:
+    if mode == "block" and (proven_underpaid or sin_cupon_posible):
         raise HTTPException(
             status_code=409,
             detail="El monto de la suscripción no coincide con el precio del plan. Contacta soporte.",

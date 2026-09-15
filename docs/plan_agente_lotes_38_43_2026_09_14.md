@@ -15,7 +15,7 @@ y se anota la discrepancia en el informe. El protocolo largo (entorno, gate, che
 | 41 | Tarea propuesta 13-sep | La tormenta de reintentos del catálogo con la base caída: caché negativa corta en `get_master_ingredients` y `catalog_capability` | ½ sesión |
 | 42 | E1 (operativo) | Retirar los worktrees viejos que estén limpios y ya mergeados; los demás, listados para el dueño (G4) | ¼ sesión |
 | 43 | B6 · E5 · D7 · B9 | Re-mediciones con FECHA: los tres scripts del lote 36 el **2026-10-10**; el embudo B9 a las 2 semanas del lanzamiento | ¼ sesión, en su fecha |
-| 44 | Decisiones del dueño 14-sep | Aplicar lo delegado: 3 recetas a la biblioteca, claras en botella ≥ 4, cohorte B de la lista canónica = canario, pesos 2.0/1.0 en el canario, `block` en PayPal | 1-2 sesiones |
+| 44 | Decisiones del dueño 14-sep | ✅ HECHO en lo que se podía (`P1-PLAN-LOTE-61` · 2026-09-15): recetas, PayPal `block` y peso del canario (inerte: medido, empeora su perfil); claras (1 de 64 comidas) y cohorte B (su gate no pasa) medidas y no aplicadas — ver «Lote 44». Lo pedido era: aplicar lo delegado: 3 recetas a la biblioteca, claras en botella ≥ 4, cohorte B de la lista canónica = canario, pesos 2.0/1.0 en el canario, `block` en PayPal | 1-2 sesiones |
 | 49 | Prueba RD 5 del dueño 14-sep (fuera del plan) | ✅ HECHO en otra sesión (`P1-PLAN-LOTE-49`): el ingrediente que da nombre sube a su piso al final si el día cabe; el cerrador busca un lácteo que el día no tenga en desayuno y merienda, no añade curados y deja su paso en su sitio; el tope de huevos reescribe la compra; los planes recientes cuentan sólo planes con días; el tiempo es falta del armador; texto de latas y pasos breves. Ver la sección «Lote 49» | — |
 | 48 | Prueba RD 4 del dueño 14-sep (fuera del plan) | ✅ HECHO en otra sesión (`P1-PLAN-LOTE-48`): los cerradores escalan la base propia en vez de colgar otra, en un jugo el lácteo va al lado, el «queso» a secas toma el nombre del plato, el desalado se quita como cláusula y la pulpa tiene techo; el armador prefiere el plato que ya llega al piso de proteína (por debajo de la cuota de repetición) y la re-elección re-mide la cola. Ver la sección «Lote 48» | — |
 | 47 | Prueba RD 3 del dueño 14-sep (fuera del plan) | ✅ HECHO en otra sesión (`P1-PLAN-LOTE-47`): la autocrítica y la regeneración re-eligen un día determinista en vez de reescribirlo con el LLM, lo que el corrector deja igual vuelve con su procedencia, el armador conoce las reglas fijas de la autocrítica; parches de tiempo, casabe y queso. Ver la sección «Lote 47» | — |
@@ -298,6 +298,18 @@ son del dueño. Antes de la fecha, no se corre: una medición repetida sobre la 
 ---
 
 ## Lote 44 · Aplicar las decisiones del dueño (delegadas el 14-sep)
+
+**Estado: ✅ HECHO en lo aplicable · `P1-PLAN-LOTE-61` · 2026-09-15.**
+1. **Recetas**: copiadas de la hoja tal cual; `recipe_usage` no entendía «otro tercio» ni «el último tercio/cuarto» y se
+   le enseñó (fijas / cierra). `revisar` 3 → 0 y sólo esas tres cambian. El registry no las lee: sin re-anclar.
+2. **Claras**: medido y NO construido: 1 de 64 comidas del corpus fijo cruza N=4 (2 de 80 en el golden set). Toca el
+   agregador en 6 superficies con el god-file a ~150 líneas del tope: su propio lote.
+3. **Cohorte B**: NO aplicada. El gate de salida de la fase A no pasa: `measure_canonical_shadow.py` da NO CONCLUYENTE
+   (21 de ≥ 30 planes) y cada plan diverge un 5,6-20,6 % (umbral 5 %), sobre todo por topes y densidades (cebolla
+   1.575 → 600 g, papa 1.633 → 750 g). Delegar la cohorte no salta el gate.
+4. **Pesos**: el peso sigue al usuario del canario, pero con default 1.0: medido en el perfil del canario (ganancia muscular, 2600 kcal · 180/300/80 g, 14 días, `measure_deterministic_day_macros.py`): con 1.0 el carbohidrato queda en −5,5 % y la grasa en +4,7 % (en banda: C 8, G 7 de 14); con 2.0, −16,5 % y +22,9 % (C 5, G 5 de 14); la proteína, 14/14 en los dos (−4,5 → −5,1 %).
+5. **PayPal**: default `block`, y sin NINGÚN cupón activo aplicable al tier el override por debajo de la lista se bloquea
+   (el cierre de la auditoría del 22-ago); con cupones, o sin respuesta de la base, sigue ambiguo (alerta, no bloquea).
 
 Registro y razones: [`decisiones_dueno_2026_09_14.md`](decisiones_dueno_2026_09_14.md). La hoja (documento `angelo`) tiene el
 texto íntegro de las recetas. Cada punto se mide antes y después con el instrumento que ya existe; nada de esto se decide
