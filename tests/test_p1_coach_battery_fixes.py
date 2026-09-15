@@ -40,7 +40,8 @@ def test_los_cuatro_prompts_llevan_las_reglas_de_voz(nombre):
     for marca in ("VOZ, LONGITUD Y CIERRE", "LO IMPORTANTE PRIMERO", "Máximo 2 emojis",
                   "El agua NO es coletilla", "idioma en que el usuario te escribe ESTE mensaje",
                   "nunca inventes por qué el plan salió", "SÍNTOMAS", "NADA INTERNO", "SIN RELLENO", "TEMAS DE RIESGO",
-                  "nunca digas \"superávit de 2100\"", "Nunca des dosis"):
+                  "nunca digas \"superávit de 2100\"", "Nunca des dosis",
+                  "un té, una infusión o un alimento que se toma PARA bajar el azúcar"):
         assert marca in texto, f"{nombre}: falta «{marca}»"
     assert "SIEMPRE para listar" not in texto, "las viñetas obligatorias inflaban cada respuesta"
 
