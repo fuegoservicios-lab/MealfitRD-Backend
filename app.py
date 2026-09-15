@@ -183,7 +183,12 @@ _PROCESS_START_ISO = datetime.now(timezone.utc).isoformat()
 # receta —la base propia se escala en vez de colgar otra, en un jugo el lácteo va al lado, el «queso» a secas toma el
 # nombre del plato, el desalado se quita como cláusula y la pulpa tiene techo—; el armador prefiere el plato que ya llega
 # al piso de proteína y la re-elección re-mide la cola antes de llamar al LLM.
-_LAST_KNOWN_PFIX = "P1-PLAN-LOTE-48 · 2026-09-14"
+# [P1-PLAN-LOTE-49 · 2026-09-14] Quinta prueba RD del dueño (plan a059d7bb): el ingrediente que da nombre al plato sube a
+# su piso al final del guardado si el día tiene sitio, el cerrador lee el día y la receta (un lácteo que el día no tenga en
+# desayuno y merienda, ningún curado, su paso en su sitio), el tope de huevos reescribe también la compra, los planes
+# recientes no cuentan la fila vacía del plan en curso, el tiempo de cocina es falta del armador y el texto de los cambios
+# de lata y de los pasos breves deja de contradecirse.
+_LAST_KNOWN_PFIX = "P1-PLAN-LOTE-49 · 2026-09-14"
 
 # [P1-SENTRY-SAMPLE-COST · 2026-05-12] Sentry sampling driven from env vars
 # con default seguro 0.1 (10%). Pre-fix tenía `traces_sample_rate=1.0` y

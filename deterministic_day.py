@@ -661,6 +661,25 @@ def _minutos_de(t) -> Optional[int]:
     return m if m > 0 else None
 
 
+def _falta_tiempo(t, presupuesto) -> float:
+    """[P1-PLAN-LOTE-49 · 2026-09-14] Cuánto pesa, como falta del armador, servir un plato más lento que el tiempo que la
+    persona dijo tener. Hasta 2× el presupuesto no pesa (lo ordenan los tramos); hasta 3×, 0,35 (menos que una cuota de
+    repetición agotada); hasta 4,5×, 1 (como una regla de la autocrítica); más allá, 1,5. Plan a059d7bb («Nada» = 10 min):
+    una cena de 65 min ganaba a una de 30 con una falta menor, porque el tiempo no era falta y cualquier regla deshacía el
+    orden por tramos. Knob `MEALFIT_DETERMINISTIC_DAY_TIME_FAULT`, APAGADO: medido en réplica del run (7 días), ningún peso
+    mejora el tiempo sin romper otra regla — con estos, almuerzos y cenas 36,4 → 35,0 min pero el 2.º bloque pasa de «guiso
+    ×3» a «pollo ×4»; con 2,5 para lo de más de 4,5× desaparece la cena de 65 min pero dos platos pasan su tope de 7 días.
+    La biblioteca DO tiene 2 de 63 almuerzos y 1 de 56 cenas de 10 min: la palanca espera a que haya platos rápidos.
+    tooltip-anchor: P1-PLAN-LOTE-49-FALTA-TIEMPO"""
+    if not presupuesto:
+        return 0.0
+    m = _minutos_de(t)
+    if not m:
+        return 0.0
+    r = m / float(presupuesto)
+    return 0.0 if r <= 2.0 else 0.35 if r <= 3.0 else 1.0 if r <= 4.5 else 1.5
+
+
 def elegir_con_tiempo(tids, objetivo, catalogo: dict, por_id: dict, slot: str = "",
                       presupuesto: Optional[int] = None, **kw) -> list:
     """`elegir_plantillas` por tramos de tiempo. Sin presupuesto es exactamente `elegir_plantillas`."""
@@ -1320,6 +1339,12 @@ def _conteo_ventana(memoria, offset, form_data=None, user_id=None, por_id=None, 
 # Se prefiere, no se descarta: si todo está saturado, se sirve igual. tooltip-anchor: P1-PLAN-LOTE-46-PLANES-RECIENTES
 # ---------------------------------------------------------------------------
 _PLANES_RECIENTES = 3
+# [P1-PLAN-LOTE-49 · 2026-09-14] Un plan cuenta como reciente si tiene días (vivos o archivados). La fila del plan que se está
+# generando ya existe, vacía, y ocupaba uno de los 3 huecos: el día comparaba con 2 planes y 6 de 12 platos del plan a059d7bb
+# repitieron el tercero. tooltip-anchor: P1-PLAN-LOTE-49-PLANES-CON-DIAS
+_SQL_CON_DIAS = ("(CASE WHEN jsonb_typeof(plan_data->'days') = 'array' THEN jsonb_array_length(plan_data->'days') ELSE 0 END"
+                 " + CASE WHEN jsonb_typeof(plan_data->'_archived_days') = 'array'"
+                 " THEN jsonb_array_length(plan_data->'_archived_days') ELSE 0 END) > 0")
 _RECIENTES_TTL_S = 300          # los 3-4 días de un bloque y sus reintentos caben de sobra; el plan en curso no se guarda antes
 _RECIENTES_CACHE: dict = {}     # {user_id: (monotonic, frozenset(template_id))}
 
@@ -1351,7 +1376,8 @@ def _plantillas_de_planes_recientes(memoria, form_data, user_id, por_id, offset)
             import json
             from db import execute_sql_query
             filas = execute_sql_query(
-                "SELECT plan_data FROM meal_plans WHERE user_id = %s ORDER BY created_at DESC LIMIT %s",
+                "SELECT plan_data FROM meal_plans WHERE user_id = %s AND " + _SQL_CON_DIAS
+                + " ORDER BY created_at DESC LIMIT %s",
                 (str(uid), _PLANES_RECIENTES), fetch_all=True) or []
             indice = _indice_nombres(por_id)
             for fila in filas:
@@ -1765,6 +1791,7 @@ def build_day_for_skeleton(nutrition, form_data, skeleton_day, day_num, user_id=
                         else set())
         _franja_on = _knob_on("MEALFIT_DETERMINISTIC_DAY_SLOT_COHERENCE")
         _piso_prot = _knob_on("MEALFIT_DETERMINISTIC_DAY_PROTEIN_FLOOR")   # [P1-PLAN-LOTE-48]
+        _tiempo_falta = _knob_on("MEALFIT_DETERMINISTIC_DAY_TIME_FAULT", False)   # [P1-PLAN-LOTE-49] apagada: ver _falta_tiempo
         _bases_plato_vet = (_platos_base_vetados(memoria, _fd) if _knob_on("MEALFIT_DETERMINISTIC_DAY_BLOCK_DISH_BASE")
                             else set())
         _ev = evitar if isinstance(evitar, dict) else {}
@@ -1871,7 +1898,9 @@ def build_day_for_skeleton(nutrition, form_data, skeleton_day, day_num, user_id=
                            # 3 días); entera, empataba con las que hacen saltar la autocrítica y ganaba la avena de dos días
                            + 0.5 * bool(_max_rep and int(_saturados.get(str(_t.get("template_id")), 0)) >= int(_max_rep))
                            + bool(str(_t.get("template_id")) in _evitar_t)
-                           + bool(_puerta_bases and (_bl & _bases_hoy)))
+                           + bool(_puerta_bases and (_bl & _bases_hoy))
+                           # [P1-PLAN-LOTE-49] el tiempo de cocina del formulario, como falta proporcional al exceso
+                           + (_falta_tiempo(_t, _presup_min) if _tiempo_falta else 0.0))
                 if _faltas:
                     if _reserva_var is None or _faltas < _reserva_faltas:
                         _reserva_var = (_c, _t, _na)

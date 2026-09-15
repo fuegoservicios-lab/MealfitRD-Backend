@@ -20461,6 +20461,12 @@ def _close_protein_gap_for_meal(meal: dict, slot_protein_target: float, db, cand
                 if any(t in nlow for t in _RAW_EGG_TERMS):
                     continue
             _pool.append((info, nlow))
+        # [P1-PLAN-LOTE-49] Un cerrador no añade un curado (arenque, bacalao, salami…): el tope de sodio lo deja en migajas
+        # («10 g de arenque cocido» con su paso «a la plancha», plan a059d7bb). Sin otro candidato, se conserva el pool.
+        if _pool and _ccr.sin_curados_on():
+            _pool_nc = [(i_nc, n_nc) for (i_nc, n_nc) in _pool if not any(t in n_nc for t in _SALTCURED_TOKEN_SET)]
+            if _pool_nc:
+                _pool = _pool_nc
         # [P1-GAINMUSCLE-DINNER-CLOSER · 2026-09-05] «carne vegetal» (soya texturizada/tofu/tempeh/seitán) solo en
         # dietas vegetarianas o veganas: en una cena dominicana omnívora es un pegote (plan vivo 9b73656d).
         # Sin otro candidato ⇒ se conserva (el piso de proteína manda, misma asimetría que el guard dulce).
@@ -20628,6 +20634,22 @@ def _close_protein_gap_for_meal(meal: dict, slot_protein_target: float, db, cand
                 if any(h in nlow for h in _pref) and not _collides_day(nlow):
                     chosen = info
                     break
+            # [P1-PLAN-LOTE-49] Franja LIGERA: antes de repetir la proteína del día o de pegar pescado a una merienda, un
+            # lácteo que el día no tenga — el pool denso no trae yogurt ni cottage (plan a059d7bb: huevo al desayuno con
+            # huevo en la cena, dos días; 10 g de arenque en una merienda). tooltip-anchor: P1-PLAN-LOTE-49-FRANJA-LIGERA
+            if chosen is None and db is not None and _meal_slot_is_light(meal, _sa) and _ccr.franja_ligera_limpia_on():
+                _salado_fl = _meal_is_hot_cooked(meal, _sa) and not _is_sweet_meal(meal, _sa)
+                for _ln_fl, _nm_fl, _info_fl in _safe_high_density_proteins(
+                        allergies, db, min_protein=CLOSER_SWEET_DAIRY_MIN_PROTEIN, diet=diet, country=country):
+                    _nl_fl = _sa(str(_info_fl.name).lower())
+                    if (any(t in _nl_fl for t in ("yogur", "cottage", "ricotta", "requeson", "queso"))
+                            and not _collides_day(_nl_fl)
+                            and not (no_cook and not any(h in _nl_fl for h in _NO_COOK_SAFE_PROTEIN_HINT))
+                            and not (_salado_fl and any(t in _nl_fl for t in _SWEET_DAIRY_TOKENS))):
+                        chosen = _info_fl
+                        logger.info(f"🥛 [P1-PLAN-LOTE-49] franja ligera: {_info_fl.name!r} en vez de repetir la "
+                                    f"proteína del día | meal={str(meal.get('name'))[:40]}")
+                        break
             if chosen is None:
                 for info, nlow in _pool:
                     if any(h in nlow for h in _pref):
@@ -23656,6 +23678,10 @@ def _inject_recipe_time_temp_defaults(meal: dict) -> bool:
                 return False  # ya trae tiempo/temp — contrato cumplido
             if _ps.paso_frio(step):
                 return False  # [P1-PLAN-LOTE-47] el paso ENFRÍA («pásalos a agua fría»): no lleva tiempo de fuego
+            if _ps.paso_breve(step):  # [P1-PLAN-LOTE-49] «brevemente»: un tiempo corto, no el de la técnica (~10-12 min)
+                rec[i] = step.rstrip().rstrip(".") + f" (~{_ps.TIEMPO_BREVE})."
+                meal["_recipe_timetemp_injected"] = True
+                return True
             hay = _strip_food_words_for_technique(
                 _sa_tt((str(meal.get("name") or "") + " " + step).lower()))
             default = _TIMETEMP_FALLBACK_DEFAULT
@@ -29545,6 +29571,8 @@ def _day_sodium_autofix(days: list, form_data=None, db=None) -> int:
                         _strip_desalt_instructions(_bm)
                     except Exception as _f5e:
                         logger.info(f"[P1-PLAN-LOTE-6] _day_sodium_autofix: `_strip_desalt_instructions` tragado sin rastro ({type(_f5e).__name__}: {_f5e})")
+                else:
+                    _ps.limpiar_pasos_enlatado(_bm)   # [P1-PLAN-LOTE-49] fresco: ni «escurridas» ni «el líquido de la lata»
                 actions += 1
                 _swaps_left -= 1
         if actions:
@@ -31001,8 +31029,8 @@ def _repair_gainmuscle_day_kcal(days: list, nutrition: dict, form_data: dict, db
                 day_carbs += add_g * _sd_c
                 added_kcal += _dk
         if added_kcal:
-            logger.info(f"🍚 [P1-GAINMUSCLE-KCAL-FLOOR] +{round(added_kcal)} kcal (arroz cocido en comidas "
-                        f"principales) para subir días de superávit muscular bajo banda "
+            logger.info(f"🍚 [P1-GAINMUSCLE-KCAL-FLOOR] +{round(added_kcal)} kcal (base propia del plato o arroz/"
+                        f"batata en comidas principales) para subir días de superávit muscular bajo banda "
                         f"({int(GAINMUSCLE_DAY_KCAL_FLOOR_PCT*100)}% de {round(target_kcal)} kcal).")
         return int(round(added_kcal))
     except Exception as _gm_e:
@@ -32878,6 +32906,8 @@ def _cap_daily_whole_eggs(days, db=None, *, max_whole: int = None) -> int:
                 old = str(ings[idx])
                 raw = m.get("ingredients_raw")
                 _ri_eg = _raw_idx_for_display(raw, old, idx, ings)  # ANTES de mutar `ings`, desde la línea VIEJA
+                if _ri_eg is None:
+                    _ri_eg = _ccr.indice_huevo_entero_raw(raw)   # [P1-PLAN-LOTE-49] «3 huevos» ↔ «165 g de huevo cocido»
                 ings[idx] = new_lines[0]
                 if _ri_eg is not None:
                     raw[_ri_eg] = new_lines[0]
@@ -35655,6 +35685,7 @@ def _integrate_complement_steps(days) -> int:
         for _m in (_d.get("meals") or []):
             if not isinstance(_m, dict):
                 continue
+            n += _ccr.ubicar_pasos_del_cerrador(_m)   # [P1-PLAN-LOTE-49] receta de biblioteca: el 💪 en su sitio
             rec = _m.get("recipe")
             if not isinstance(rec, list) or len(rec) < 2:
                 continue

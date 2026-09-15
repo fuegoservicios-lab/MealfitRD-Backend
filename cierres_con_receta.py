@@ -196,3 +196,82 @@ def nombrar_quesos_genericos(days) -> int:
             except Exception as e:                                             # noqa: BLE001
                 logger.debug(f"[P1-PLAN-LOTE-48] nombrar el queso no-op en {str(meal.get('name'))[:40]}: {e!r}")
     return tocadas
+
+
+# ─────────────── [P1-PLAN-LOTE-49 · 2026-09-14] lo que el cerrador añade lee el día y la receta ───────────────
+# Quinta prueba RD del dueño (plan a059d7bb). Knobs `MEALFIT_CLOSER_LIGHT_SLOT_CLEAN`, `MEALFIT_CLOSER_NO_SALTCURED`,
+# `MEALFIT_CLOSER_STEP_PLACEMENT` y `MEALFIT_EGGCAP_RAW_WHOLE_EGG` (True). tooltip-anchor: P1-PLAN-LOTE-49-CERRADOR-LEE
+def franja_ligera_limpia_on() -> bool:
+    return _knob("MEALFIT_CLOSER_LIGHT_SLOT_CLEAN")
+
+
+def sin_curados_on() -> bool:
+    return _knob("MEALFIT_CLOSER_NO_SALTCURED")
+
+
+def _es_montaje(s) -> bool:
+    return _sa(s).lstrip().startswith("montaje")
+
+
+def _es_nota(s) -> bool:
+    return str(s).lstrip().startswith(("⚠", "💡"))
+
+
+_AL_LADO_RE = re.compile(r"^\s*sirve\b.{0,80}\bal\s+lado\b", re.IGNORECASE | re.DOTALL)
+
+
+def ubicar_pasos_del_cerrador(meal) -> int:
+    """El 💪 del cerrador, donde la receta lo haría (receta de biblioteca). Desde el lote 45 el rótulo «El Toque de Fuego»
+    va en el PRIMER paso con fuego de la receta congelada, y la fusión de siempre (`_integrate_complement_steps`) metía el
+    añadido ahí: «Añade camarones al guiso en los últimos minutos» dentro del paso que hierve la yuca, «Sirve queso cottage
+    al lado» dentro del que calienta la leche (plan a059d7bb, 6 comidas). Ahora «Sirve X al lado» va al emplatado y lo
+    demás, como paso propio, justo después del ÚLTIMO paso con fuego. Sin paso con fuego no toca nada (queda la fusión de
+    siempre). Devuelve cuántos pasos colocó. tooltip-anchor: P1-PLAN-LOTE-49-PASO-EN-SU-SITIO"""
+    if not _knob("MEALFIT_CLOSER_STEP_PLACEMENT") or not isinstance(meal, dict) or meal.get("_recipe_source") != "library":
+        return 0
+    rec = meal.get("recipe")
+    if not isinstance(rec, list):
+        return 0
+    bolts = [s for s in rec if isinstance(s, str) and s.lstrip().startswith("💪")]
+    if not bolts:
+        return 0
+    import pasos_sustitucion as ps
+    resto = [s for s in rec if not (isinstance(s, str) and s.lstrip().startswith("💪"))]
+    for b in bolts:
+        txt = b.split("💪", 1)[1].strip()
+        if not txt:
+            continue
+        i_mont = next((j for j, s in enumerate(resto) if isinstance(s, str) and _es_montaje(s)), None)
+        if i_mont is not None and _AL_LADO_RE.match(txt):
+            base = str(resto[i_mont]).rstrip()
+            resto[i_mont] = base + ("" if base.endswith((".", "!", "…")) else ".") + " " + txt
+            continue
+        tope = i_mont if i_mont is not None else len(resto)
+        i_fuego = None
+        for j in range(tope):
+            s = resto[j]
+            if (isinstance(s, str) and not _es_nota(s) and not _sa(s).lstrip().startswith("mise en place")
+                    and ps.tiene_fuego(s)):
+                i_fuego = j
+        if i_fuego is None:
+            return 0                 # sin paso con fuego: decide la fusión de siempre (no se reescribe a medias)
+        resto.insert(i_fuego + 1, txt[0].upper() + txt[1:])
+    meal["recipe"] = resto
+    logger.info(f"🍽️ [P1-PLAN-LOTE-49] «{str(meal.get('name'))[:40]}»: {len(bolts)} paso(s) del cerrador en su sitio")
+    return len(bolts)
+
+
+_HUEVO_RE = re.compile(r"\bhuevos?\b")
+_PARTE_HUEVO_RE = re.compile(r"\b(?:claras?|yemas?)\b")
+
+
+def indice_huevo_entero_raw(raw) -> "int | None":
+    """El índice de la ÚNICA línea de huevo entero de la compra, para el tope diario de huevos cuando la línea de la lista
+    y la de la compra no se emparejan por alimento («3 huevos» ↔ «165 g de huevo cocido»: el cerrador escribe «huevo
+    cocido» y la lista lo humaniza a unidades). Plan a059d7bb: el desayuno mostraba «3 claras de huevo» y la compra y la
+    Mise seguían con 165 g de huevo entero. `None` si hay cero o más de una: no se adivina."""
+    if not _knob("MEALFIT_EGGCAP_RAW_WHOLE_EGG") or not isinstance(raw, list):
+        return None
+    hits = [i for i, r in enumerate(raw) if isinstance(r, str) and _HUEVO_RE.search(_sa(r))
+            and not _PARTE_HUEVO_RE.search(_sa(r))]
+    return hits[0] if len(hits) == 1 else None

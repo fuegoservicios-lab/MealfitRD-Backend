@@ -245,6 +245,21 @@ maní de desayuno (5 g de proteína de 25) salió con 185 g de edamame encima. D
 
 Réplica de solo lectura del día determinista sobre el blueprint del run del plan 358a2cdf (7 días en dos bloques, «Nada» de tiempo, presupuesto bajo, contra los planes que eran recientes a esa hora): sin el piso, 5 de 28 comidas quedaban por debajo del piso de proteína de su franja (el desayuno medio, al 76 % de su objetivo). Con el piso pesando 1,5 quedaban 0 de 28, pero servía «Sardinas en lata con casabe» 4 veces en 7 días (3 en su bloque): el piso le ganaba a la cuota de repetición que el formulario («equilibrado») pide respetar. Con 0,4 —por debajo de la cuota— quedan 3 de 28 y la variedad no se mueve (0 sobre el tope de 7 días, 2 repetidos en bloque, 21 platos distintos, 6 de planes recientes; minutos medios 28,2 → 29,3). Los cambios de receta, comprobados sobre los platos del plan: la batida «con queso cottage» compra queso cottage (antes, «queso» ⇒ queso blanco), el jugo de chinola sirve el queso al lado, el locrio conserva «el filete de pescado blanco (en trozos)… y añade el arroz blanco», la chinola baja de 335 a 120 g y el piso de calorías escala el plátano del mofongo (×1,5 como mucho) en vez de colgarle arroz. Test: `tests/test_p1_plan_lote_48.py`.
 
+## Quinta prueba RD: el tiempo del formulario y los planes de verdad (P1-PLAN-LOTE-49 · 2026-09-14)
+
+El plan `a059d7bb` fue el mejor de la serie (144 s, 3/3 días deterministas, 12/12 recetas de biblioteca, juez 0), pero
+con «Nada» de tiempo (10 min) 7 de 12 comidas se pasaban, con una cena de 65 min, y 6 de 12 platos repetían un plan
+anterior. Dos cambios:
+
+- **El tiempo, como falta** (`_falta_tiempo`, `MEALFIT_DETERMINISTIC_DAY_TIME_FAULT`): los tramos de tiempo ordenaban
+  los candidatos, pero cualquier regla deshacía ese orden y el tiempo no pesaba. Ahora el exceso sobre el presupuesto
+  suma una falta proporcional. La falta de tiempo se midió en réplica del run (7 días, «Nada», contra los planes recientes) con cuatro pesos, y ninguno mejora el tiempo sin romper otra regla: con 0,35/1/1,5 los almuerzos y cenas bajan de 36,4 a 35,0 min de media y el primer bloque deja de hacer saltar la autocrítica, pero el segundo pasa de «guiso ×3» a «pollo ×4»; con 0/1/2,5 desaparece la cena de 65 min (máximo 35, media 28,9) pero dos platos pasan su tope de 7 días; con 0/0,5/2,5 el máximo baja a 45 y un plato pasa el tope. La biblioteca DO tiene 2 de 63 almuerzos y 1 de 56 cenas de 10 min: el armador no tiene con qué. Queda APAGADA, con los pesos 0,35/1/1,5 (los únicos que no pasan el tope de 7 días), lista para cuando haya platos rápidos.
+- **Los planes recientes son los que tienen días** (`_SQL_CON_DIAS`): la fila del plan en curso se crea antes de
+  generar, vacía, y ocupaba uno de los 3 huecos — el día (y el revisor: «contra 24 platos recientes») comparaba con 2
+  planes y no con 3.
+
+Test: `tests/test_p1_plan_lote_49.py`.
+
 ## Seguridad: el backstop no es opcional
 
 Un día que sale de aquí **sí pasa por `assemble_plan_node` y `review_plan_node`** (las aristas del grafo

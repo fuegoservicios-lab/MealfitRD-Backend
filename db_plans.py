@@ -1440,7 +1440,8 @@ def _finalize_plan_data_for_insert(data: dict, *, surface: str = "pre-INSERT",
                     import identidad_plato as _idp_tail
                     _pol_eff = ((_pd.get("_plan_policy") or {}).get("effective") or {}) if isinstance(_pd.get("_plan_policy"), dict) else {}
                     _idp_tail.restaurar_identidad(_pd.get("days") or [], db=_db_ins,
-                                                  allergies=((_pol_eff.get("diet") or {}).get("allergies") or []))
+                                                  allergies=((_pol_eff.get("diet") or {}).get("allergies") or []),
+                                                  objetivos=_idp_tail.objetivos_de(_pd))   # [P1-PLAN-LOTE-49] sube lo pobre si cabe
                 except Exception as _idp_e:
                     logger.debug(f"[P1-PLAN-LOTE-46] identidad (cola) no-op: {type(_idp_e).__name__}: {_idp_e}")
                 # [P1-PLAN-LOTE-24 · 2026-09-12] (C3 · CUL-P0-04) El contrato sobre la receta final corre AQUÍ, en la
@@ -2023,7 +2024,14 @@ def get_recent_meals_from_plans(user_id: str, days: int = 5):
     if not connection_pool: return []
     try:
         rows = execute_sql_query(
-            "SELECT plan_data, meal_names FROM meal_plans WHERE user_id = %s ORDER BY created_at DESC LIMIT %s",
+            # [P1-PLAN-LOTE-49 · 2026-09-14] Sin la fila vacía del plan que se está generando: se crea antes de generar y
+            # ocupaba uno de los huecos («contra 24 platos recientes» eran 2 planes, no 3; plan a059d7bb).
+            # tooltip-anchor: P1-PLAN-LOTE-49-PLANES-CON-DIAS
+            "SELECT plan_data, meal_names FROM meal_plans WHERE user_id = %s AND "
+            "(CASE WHEN jsonb_typeof(plan_data->'days') = 'array' THEN jsonb_array_length(plan_data->'days') ELSE 0 END"
+            " + CASE WHEN jsonb_typeof(plan_data->'_archived_days') = 'array'"
+            " THEN jsonb_array_length(plan_data->'_archived_days') ELSE 0 END) > 0"
+            " ORDER BY created_at DESC LIMIT %s",
             (user_id, days), fetch_all=True
         )
         meals = set() # 👈 Usar un Set evita enviar nombres duplicados al LLM y ahorra tokens

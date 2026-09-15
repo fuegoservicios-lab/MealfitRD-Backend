@@ -175,8 +175,109 @@ def _remedir(meal: dict, db) -> None:
         logger.debug(f"[P1-PLAN-LOTE-46] re-medición tras restaurar la identidad no-op: {type(e).__name__}: {e}")
 
 
-def restaurar_meal(meal: dict, index: dict, *, db=None, allergies=None) -> list:
-    """Un plato. Devuelve lo que añadió (`["+38 g de Aguacate"]`); `[]` si no tocó nada."""
+# ─────────────── [P1-PLAN-LOTE-49 · 2026-09-14] lo presente pero pobre, hasta el final ───────────────
+# Quinta prueba RD del dueño (plan a059d7bb): «Guacamole criollo» con 5 g de aguacate (la plantilla pide 100 × 1,525),
+# «Maní tostado con pasas» con 5 g de maní y el casabe con mantequilla de maní con 2,7 g. Los recortes de grasa lo dejaron
+# en migajas y este módulo sólo devolvía lo que FALTABA: 5 g cuentan como «presente». Y el día 1 terminó al 71 % de su
+# grasa y al 89 % de sus kcal: el recorte ni siquiera hacía falta. En la cola del guardado (después de TODOS los recortes)
+# lo que quedó por debajo del piso sube al piso si el día tiene sitio; el sitio se mide (lote 46: subir sin medir llevaba la
+# grasa al 116-122 %). Knob `MEALFIT_DISH_IDENTITY_RAISE` (True).
+KCAL_TECHO = 1.05
+GRASA_TECHO = 1.05
+
+
+def subir_on() -> bool:
+    try:
+        from knobs import _env_bool
+        return _env_bool("MEALFIT_DISH_IDENTITY_RAISE", True)
+    except Exception:                                                          # noqa: BLE001
+        return True
+
+
+def _num(v) -> float:
+    m = re.search(r"-?\d+(?:[.,]\d+)?", str(v if v is not None else ""))
+    return float(m.group(0).replace(",", ".")) if m else 0.0
+
+
+def objetivos_de(plan_data) -> Optional[dict]:
+    """`{"kcal", "grasa"}` del plan (`calories` y `macros.fats`); `None` si falta alguno."""
+    if not isinstance(plan_data, dict):
+        return None
+    kcal, grasa = _num(plan_data.get("calories")), _num((plan_data.get("macros") or {}).get("fats"))
+    return {"kcal": kcal, "grasa": grasa} if kcal > 0 and grasa > 0 else None
+
+
+def _margen_del_dia(meals, objetivos) -> Optional[dict]:
+    """Lo que al día le queda hasta su techo de kcal y de grasa; `None` sin objetivos o con el knob apagado."""
+    if not objetivos or not subir_on():
+        return None
+    kcal = sum(_num(m.get("cals") or m.get("calories")) for m in meals if isinstance(m, dict))
+    grasa = sum(_num(m.get("fats")) for m in meals if isinstance(m, dict))
+    return {"kcal": float(objetivos["kcal"]) * KCAL_TECHO - kcal, "grasa": float(objetivos["grasa"]) * GRASA_TECHO - grasa}
+
+
+def _lineas_de(lineas, canon, index) -> tuple:
+    """`(índices, gramos)` de las líneas del alimento `canon`, por alimento (el resolutor del contrato de la lista)."""
+    from recipe_contract import _cantidades_lista
+    idx, gramos = [], 0.0
+    for i, s in enumerate(lineas or []):
+        if not isinstance(s, str):
+            continue
+        c = _cantidades_lista([s], index)
+        if any(k[0] == canon for k in c):
+            idx.append(i)
+            gramos += sum(v for k, v in c.items() if k[0] == canon and k[1] == "g")
+    return idx, gramos
+
+
+def _subir_linea(meal, canon, piso, index, db, margen) -> Optional[str]:
+    """El alimento está, pero por debajo de su piso: sube AL piso, en la lista y en la compra, si al día le cabe."""
+    if db is None or margen is None:
+        return None
+    ings, raw = meal.get("ingredients"), meal.get("ingredients_raw")
+    i_d, _g = _lineas_de(ings, canon, index)
+    i_r, _g = _lineas_de(raw, canon, index) if isinstance(raw, list) else ([], 0.0)
+    if len(i_d) != 1 or len(i_r) > 1:
+        return None                      # dos líneas del mismo alimento: no se adivina cuál sube
+    # Los gramos, con el lector de la base (el de la lista del contrato leía «57.2 g» como 2 g y «subía» la soya a 18).
+    g_cur = 0.0
+    for linea_act in ([raw[i_r[0]]] if i_r else []) + [ings[i_d[0]]]:
+        try:
+            g_cur = float(db.grams_from_ingredient_string(str(linea_act)) or 0)
+        except Exception:                                                      # noqa: BLE001
+            g_cur = 0.0
+        if g_cur > 0:
+            break
+    if g_cur <= 0 or g_cur >= piso:
+        return None                      # sin gramos legibles no se toca; y nunca se baja
+    mac = db.macros_from_ingredient_string(f"{piso - g_cur:.0f} g de {canon}") or {}
+    dk, dg = float(mac.get("kcal") or 0), float(mac.get("fats") or 0)
+    if dk <= 0 or dk > margen["kcal"] or dg > margen["grasa"]:
+        logger.info(f"🧩 [P1-PLAN-LOTE-49] «{str(meal.get('name'))[:40]}»: {canon} en {g_cur:.0f} g (piso {piso}) y el día "
+                    f"no tiene sitio (+{dk:.0f} kcal / +{dg:.1f} g de grasa; quedan {margen['kcal']:.0f} y {margen['grasa']:.1f})")
+        return None
+    linea = f"{piso} g de {canon}"
+    # Por ALIMENTO, nunca por índice (la familia `raw[idx]`): se sustituye la línea de `canon` —ya se comprobó que es una.
+    from recipe_contract import _cantidades_lista
+
+    def _es_de(s) -> bool:
+        return isinstance(s, str) and any(k[0] == canon for k in _cantidades_lista([s], index))
+    vieja = next(x for x in ings if _es_de(x))
+    ings.insert(ings.index(vieja), linea)
+    ings.remove(vieja)
+    if i_r:
+        meal["ingredients_raw"] = [linea if _es_de(r) else r for r in raw]
+    elif isinstance(raw, list):
+        raw.append(linea)
+    margen["kcal"] -= dk
+    margen["grasa"] -= dg
+    return f"↑{g_cur:.0f}→{piso} g de {canon}"
+
+
+def restaurar_meal(meal: dict, index: dict, *, db=None, allergies=None, margen=None) -> list:
+    """Un plato. Devuelve lo que añadió o subió (`["+38 g de Aguacate"]`, `["↑5→38 g de Aguacate"]`); `[]` si no tocó
+    nada. Sin `margen` sólo vuelve lo que FALTA (lote 46); con `margen` (lo que al día le queda hasta su techo de kcal y de
+    grasa, `_margen_del_dia`) sube además lo presente por debajo del piso, si cabe."""
     if not isinstance(meal, dict) or meal.get("_recipe_source") != "library" or meal.get("_sodium_autofix_applied"):
         return []
     tpl = plantilla(meal.get("_template_id") or meal.get("_recipe_template_id"))
@@ -195,9 +296,14 @@ def restaurar_meal(meal: dict, index: dict, *, db=None, allergies=None) -> list:
         if set(_palabras(nom)) & subs or _choca_alergia(nom, allergies):
             continue
         canon = _canonico(nom, index)
-        if not canon or canon in presentes:
-            continue            # sin resolver en el catálogo no se inventa; presente (aunque sea poco) no se toca
+        if not canon:
+            continue            # sin resolver en el catálogo no se inventa
         piso = max(PISO_MIN_G, int(round(PISO_FRACCION * g_tpl * factor)))
+        if canon in presentes:
+            sub = _subir_linea(meal, canon, piso, index, db, margen) if margen is not None else None
+            if sub:
+                hechos.append(sub)
+            continue            # presente: sin margen del día (o sin sitio en él) no se toca
         linea = f"{piso} g de {canon}"
         ings.append(linea)
         raw = meal.get("ingredients_raw")
@@ -205,6 +311,10 @@ def restaurar_meal(meal: dict, index: dict, *, db=None, allergies=None) -> list:
             raw.append(linea)
         presentes.add(canon)
         hechos.append(f"+{linea}")
+        if margen is not None and db is not None:
+            mac = db.macros_from_ingredient_string(linea) or {}
+            margen["kcal"] -= float(mac.get("kcal") or 0)
+            margen["grasa"] -= float(mac.get("fats") or 0)
     if hechos:
         meal["_identidad_restaurada"] = hechos
         meal.pop("_display", None)        # la capa de traducción espeja `ingredients` por índice: se regenera
@@ -212,8 +322,10 @@ def restaurar_meal(meal: dict, index: dict, *, db=None, allergies=None) -> list:
     return hechos
 
 
-def restaurar_identidad(days, *, db=None, index=None, allergies=None) -> int:
-    """Todos los días. Devuelve cuántos platos tocó. Fail-open: sin catálogo no hace nada."""
+def restaurar_identidad(days, *, db=None, index=None, allergies=None, objetivos=None) -> int:
+    """Todos los días. Devuelve cuántos platos tocó. Fail-open: sin catálogo no hace nada. Con `objetivos` (`objetivos_de`
+    del plan: la cola del guardado, que corre después de todos los recortes) sube también lo presente por debajo del piso
+    cuando el día tiene sitio. tooltip-anchor: P1-PLAN-LOTE-49-IDENTIDAD-HASTA-EL-FINAL"""
     if not enabled() or not isinstance(days, list):
         return 0
     if index is None:
@@ -226,9 +338,11 @@ def restaurar_identidad(days, *, db=None, index=None, allergies=None) -> int:
         return 0
     tocados = 0
     for d in days:
-        for m in ((d.get("meals") or []) if isinstance(d, dict) else []):
+        meals = [m for m in ((d.get("meals") or []) if isinstance(d, dict) else []) if isinstance(m, dict)]
+        margen = _margen_del_dia(meals, objetivos)
+        for m in meals:
             try:
-                hechos = restaurar_meal(m, index, db=db, allergies=allergies)
+                hechos = restaurar_meal(m, index, db=db, allergies=allergies, margen=margen)
             except Exception as e:                                             # noqa: BLE001
                 logger.debug(f"[P1-PLAN-LOTE-46] identidad no-op en {str((m or {}).get('name'))[:40]}: {e!r}")
                 hechos = []

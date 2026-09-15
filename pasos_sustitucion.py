@@ -142,6 +142,63 @@ def quitar_clausula_desalado(texto) -> str:
     return re.sub(r"\s{2,}", " ", t).replace(" ,", ",").replace("( ", "(")
 
 
+# ─────────────── [P1-PLAN-LOTE-49 · 2026-09-14] el paso breve y el enlatado que ya no está ───────────────
+_BREVE_RE = re.compile(r"\b(?:brevemente|un\s+momento|unos\s+segundos|un\s+par\s+de\s+segundos|rapidamente|al\s+instante)\b")
+TIEMPO_BREVE = "1-2 min a fuego medio"      # el contrato pide un tiempo concreto; éste no contradice «brevemente»
+
+
+def paso_breve(paso) -> bool:
+    """¿El paso ya dice que dura poco? «Tuesta el casabe brevemente» no lleva «(~10-12 min a fuego medio)» (plan a059d7bb:
+    diez minutos queman un casabe): lleva `TIEMPO_BREVE`. Knob `MEALFIT_TIMETEMP_SKIP_BRIEF_STEP`."""
+    if not _knob("MEALFIT_TIMETEMP_SKIP_BRIEF_STEP") or not isinstance(paso, str):
+        return False
+    return bool(_BREVE_RE.search(_sa(paso)))
+
+
+def tiene_fuego(paso) -> bool:
+    """¿El paso calienta? Se mira el cuerpo, sin el rótulo del pilar."""
+    if not isinstance(paso, str):
+        return False
+    t = _sa(paso)
+    if ":" in t[:32]:
+        t = t.split(":", 1)[1]
+    return bool(_FUEGO_RE.search(t))
+
+
+_ESCURRIDO_RE = re.compile(r",?\s*(?:ya\s+)?escurrid[oa]s?\s*,?\s*", re.IGNORECASE)
+_DESHECHO_RE = re.compile(r"\bdeshech[oa]s?\s+en\s+trozos\b", re.IGNORECASE)
+_LIQUIDO_LATA_RE = re.compile(
+    r"\s*,?\s*(?:y\s+|con\s+)?(?:un\s+pellizco|un\s+chorrito|un\s+poco|unas\s+gotas|una\s+cucharada)\s+del?\s+"
+    r"(?:l[ií]quido|jugo|aceite|agua|caldo)\s+de\s+la\s+lata(?:\s+de\s+[^,.;]+?)?"
+    r"(?:\s+si\s+quieres(?:\s+darle)?\s+(?:m[aá]s\s+)?sabor)?(?=[,.;])", re.IGNORECASE)
+
+
+def quitar_clausula_enlatado(texto) -> str:
+    """Tras cambiar un enlatado por uno fresco (sardinas → filete de pescado, por el tope de sodio), el paso no puede seguir
+    escurriéndolo ni usando «el líquido de la lata»: «Incorpora filete de pescado blanco, ya escurridas, deshechas en trozos
+    grandes» → «Incorpora filete de pescado blanco en trozos grandes»; «… y un pellizco del líquido de la lata de filete de
+    pescado blanco si quieres darle sabor, …» se va (plan a059d7bb). Knob `MEALFIT_CANNED_SWAP_CLAUSES`."""
+    if not _knob("MEALFIT_CANNED_SWAP_CLAUSES") or not isinstance(texto, str):
+        return texto
+    t = _LIQUIDO_LATA_RE.sub("", texto)
+    t = _ESCURRIDO_RE.sub(" ", t)
+    t = _DESHECHO_RE.sub("en trozos", t)
+    t = re.sub(r"\s{2,}", " ", t)
+    return re.sub(r"\s+([,.;])", r"\1", t).strip()
+
+
+def limpiar_pasos_enlatado(meal) -> int:
+    """`quitar_clausula_enlatado` en todos los pasos del plato. Devuelve cuántos cambió."""
+    rec = meal.get("recipe") if isinstance(meal, dict) else None
+    if not isinstance(rec, list):
+        return 0
+    nuevos = [quitar_clausula_enlatado(s) if isinstance(s, str) else s for s in rec]
+    n = sum(1 for a, b in zip(rec, nuevos) if a != b)
+    if n:
+        meal["recipe"] = nuevos
+    return n
+
+
 # ─────────────── lo que se hacía con el huevo no se hace con el queso ───────────────
 _QUESOS = ("queso", "mozzarella", "cheddar", "gouda", "ricotta", "cottage", "parmesano", "requeson")
 _QUESOS_DE_FREIR = ("queso blanco", "queso de freir", "queso fresco", "queso paisa", "queso de hoja", "halloumi")

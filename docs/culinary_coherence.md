@@ -1246,3 +1246,26 @@ promete (en el nombre o, si no, en sus pasos), en las dos listas, antes de que e
 de que el barrido de líneas muertas lo tome por sobrante; con ninguno o con dos, no se adivina. Del desalado se quita la
 cláusula, no la frase. Las frutas de pulpa tienen techo propio (120 g, `MEALFIT_REALISM_PULP_CAP_G`). Test:
 `tests/test_p1_plan_lote_48.py`.
+
+## El plato, el día y la receta, hasta el final (`P1-PLAN-LOTE-49` · 2026-09-14)
+
+**Qué pasaba.** En la quinta prueba del dueño (plan a059d7bb) los platos de biblioteca llegaron sin su ingrediente:
+guacamole con 5 g de aguacate, «maní tostado» con 5 g de maní, casabe con 2,7 g de mantequilla de maní — y el día 1 al
+71 % de su grasa: el recorte ni siquiera hacía falta. El lote 46 sólo devolvía lo que FALTABA, y 5 g cuentan como
+presente. El cerrador de proteína puso huevo al desayuno de dos días que ya tenían huevo en otra comida y 10 g de
+arenque en una merienda, y su paso se fundía en el primer paso con fuego («Añade camarones al guiso en los últimos
+minutos» dentro del que hierve la yuca). El tope de huevos dejó «3 claras de huevo» en la lista y 165 g de huevo entero
+en la compra. Tras cambiar las sardinas por pescado fresco, el locrio seguía con «ya escurridas» y «el líquido de la
+lata», y un «Tuesta el casabe brevemente» recibió «(~10-12 min a fuego medio)».
+
+**Qué cambia** (`identidad_plato`, `cierres_con_receta`, `pasos_sustitucion`). En la cola del guardado, lo que quedó por
+debajo del piso sube al piso si el día cabe en su techo (medido; nunca baja). En desayuno y merienda el cerrador busca un
+lácteo que el día no tenga antes de repetir o de pegar pescado, ningún cerrador añade un curado, y en recetas de
+biblioteca su paso va al emplatado («al lado») o después del último paso con fuego. El tope de huevos reescribe la única
+línea de huevo entero de la compra cuando no se empareja por alimento. Tras un cambio de lata se quitan «escurridas» y
+«el líquido de la lata»; lo breve recibe un tiempo breve. Réplica de solo lectura sobre el plan entregado a059d7bb: en la cola del guardado el día 1 recupera 38 g de aguacate en el guacamole (tenía 5), 8 g de maní (5) y 7 g de mantequilla de maní (3), y pasa del 89 % al 92 % de sus kcal y del 71 % al 86 % de su grasa; los días 2 y 3 no cambian (el 2 ya está en su techo). La primera versión medía los gramos con el lector de la lista del contrato, que lee «57.2 g» como 2 g, y en la réplica «subió» la soya de la cena del día 3 de 57 a 18 g: ahora mide con el lector de la base y nunca baja.
+
+**Hallazgo aparte, sin tocar.** El lector de la lista del contrato (`recipe_contract._cantidades_lista`, V4) lee mal los
+decimales con punto: «57.2 g» → 2 g, «2.69 g» → 69 g, «57.37 g» → 37 g (con coma, bien). Las líneas de la compra llevan
+decimales con punto. Cambiarlo mueve todas las mediciones del contrato: va a otro lote, medido. Test:
+`tests/test_p1_plan_lote_49.py`.
