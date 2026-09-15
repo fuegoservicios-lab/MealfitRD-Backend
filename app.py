@@ -215,7 +215,10 @@ _PROCESS_START_ISO = datetime.now(timezone.utc).isoformat()
 # borrarlo, el tope de 2.500 kcal por plato baja también las macros (prueba REAL de visión en el VPS, 14 fotos,
 # US$0,05) y el gate corre a -n 2 con faulthandler_timeout=300 (el -n 3 se colgó al 99 % el 15-sep). La batería v6
 # destapó «ayer» registrado como hoy: el día que nombra el usuario manda sobre `days_ago` (guard determinista).
-_LAST_KNOWN_PFIX = "P1-PLAN-LOTE-56 · 2026-09-15"
+# [P1-PLAN-LOTE-58 · 2026-09-15] El coach anunciaba la acción antes de la tool («Te las añado a tu Nevera.») y la
+# confirmaba después («Listo ✅ Ya están…»): el usuario la leía dos veces (batería v6: B8, F7, J4). La frase de anuncio
+# se quita del texto previo a la primera tool en el stream Y en el texto final a la vez. Knob MEALFIT_CHAT_STRIP_TOOL_ANNOUNCE.
+_LAST_KNOWN_PFIX = "P1-PLAN-LOTE-58 · 2026-09-15"
 
 # [P1-SENTRY-SAMPLE-COST · 2026-05-12] Sentry sampling driven from env vars
 # con default seguro 0.1 (10%). Pre-fix tenía `traces_sample_rate=1.0` y

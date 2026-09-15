@@ -58,10 +58,13 @@ def _read(path: Path) -> str:
 # ===========================================================================
 
 def test_narrate_then_act_keeps_both_ai_texts_in_order():
+    # [P1-PLAN-LOTE-58 · 2026-09-15] La narración era «Lo anoto...»: un anuncio puro de la acción,
+    # que ahora se quita a la vez en el stream y aquí (nunca se muestra, así que no «desaparece»).
+    # Lo que este test protege —que la narración CON contenido sobreviva, en orden— sigue igual.
     messages = [
         HumanMessage(content="me desayuné mangú con salami"),
         AIMessage(
-            content="Lo anoto...",
+            content="¡Qué buen desayuno criollo! Lo anoto...",
             tool_calls=[{"name": "log_consumed_meal", "args": {}, "id": "call_1"}],
         ),
         ToolMessage(content="ok registrado", tool_call_id="call_1"),
@@ -70,11 +73,12 @@ def test_narrate_then_act_keeps_both_ai_texts_in_order():
 
     result = _build_final_content_from_messages(messages)
 
-    assert "Lo anoto..." in result
+    assert "¡Qué buen desayuno criollo!" in result
+    assert "Lo anoto" not in result
     assert "Listo, quedó anotado" in result
     # Orden: la narración PRIMERO, la confirmación DESPUÉS — cualquier otro
     # orden significa que el join no respetó la secuencia real del turno.
-    assert result.index("Lo anoto...") < result.index("Listo, quedó anotado")
+    assert result.index("¡Qué buen desayuno criollo!") < result.index("Listo, quedó anotado")
 
 
 # ===========================================================================

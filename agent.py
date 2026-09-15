@@ -6061,6 +6061,47 @@ def _is_pure_filler(text: str) -> bool:
     return bool(_FILLER_RX.match(t))
 
 
+# [P1-PLAN-LOTE-58 · 2026-09-15] El anuncio de la acción antes de la tool, repetido después.
+#
+# Batería del coach (v6, B8/F7/J4): «¡Buenas esas zanahorias! Te las añado a tu Nevera.» + tool +
+# «Listo ✅ Ya están en tu Nevera…». El usuario lee la misma acción dos veces: anunciada y
+# confirmada. La regla 3 del prompt lo prohíbe desde julio y el modelo la sigue saltando; un
+# prompt es una petición. P1-CHAT-NARRATION-KEPT conserva la narración porque se MOSTRABA en vivo
+# y luego desaparecía; aquí se quita en los DOS sitios a la vez (el stream la retiene hasta la
+# tool y el `done`/historial la reconstruye igual), así que nunca aparece: no hay nada que se
+# desvanezca. Solo cae la ÚLTIMA frase (o frases) del texto previo a la PRIMERA tool, y solo si
+# es un anuncio en primera persona de la acción y no lleva cifras; el resto del bloque se queda.
+STRIP_TOOL_ANNOUNCE_ENABLED = _env_bool("MEALFIT_CHAT_STRIP_TOOL_ANNOUNCE", True)
+_ANUNCIO_VERBOS = (r"anot\w*|añad\w*|agreg\w*|sum\w*|registr\w*|guard\w*|apunt\w*|actualiz\w*"
+                   r"|marc\w*|quit\w*|borr\w*|corrij\w*|correg\w*")
+_TOOL_ANNOUNCE_RX = re.compile(
+    r"^[^\w¿¡]*(?:(?:ya|ahora(?:\s+mismo)?|enseguida)\s+)?"
+    r"(?:(?:te|se)\s+)?(?:(?:lo|la|los|las|le|les)\s+)?"
+    r"(?:(?:anoto|añado|agrego|sumo|registro|guardo|apunto|actualizo|marco|quito|borro|corrijo)"
+    rf"|(?:voy|vamos)\s+a\s+(?:{_ANUNCIO_VERBOS})|d[eé]jame\s+(?:{_ANUNCIO_VERBOS}))\b"
+    r"[^.!?…:\d]*[.!?…:]*\s*$",
+    re.IGNORECASE,
+)
+_CORTE_DE_FRASE_RX = re.compile(r"[.!?…:]+\s+|\n+")
+
+
+def _strip_tool_announcement(text: str) -> str:
+    """Quita del FINAL del texto las frases que anuncian la acción que la tool va a hacer.
+
+    tooltip-anchor: _strip_tool_announcement (test_p1_plan_lote_58.py)"""
+    t = (text or "").rstrip()
+    if not STRIP_TOOL_ANNOUNCE_ENABLED:
+        return t
+    while t:
+        cortes = [m.end() for m in _CORTE_DE_FRASE_RX.finditer(t) if m.end() < len(t)]
+        inicio = cortes[-1] if cortes else 0
+        ultima = t[inicio:]
+        if _TIENE_CIFRA_RX.search(ultima) or not _TOOL_ANNOUNCE_RX.match(ultima):
+            break
+        t = t[:inicio].rstrip()
+    return t
+
+
 def _seed_thread_messages(recent_messages: list, prompt: str) -> list:
     """[P1-CHAT-SEED-NO-DUP · 2026-09-15] Mensajes con los que nace un hilo del checkpoint.
 
@@ -6135,6 +6176,9 @@ def _build_final_content_from_messages(messages: list) -> str:
 
     seen_texts = set()
     parts = []
+    # [P1-PLAN-LOTE-58] Espejo del stream: allí solo se retiene el texto previo a la PRIMERA tool
+    # (el de la primera AIMessage con contenido), así que solo ese pierde su anuncio aquí.
+    _anuncio_pendiente = STRIP_TOOL_ANNOUNCE_ENABLED and _chat_hold_pretool_text()
     for m in tail:
         # [P1-CHAT-MSG-DUCK-TYPE · 2026-07-30] isinstance + duck-type por `m.type == "ai"` (atributo
         # estable de los mensajes langchain). Solo-isinstance falla cuando el AIMessage del state
@@ -6147,6 +6191,12 @@ def _build_final_content_from_messages(messages: list) -> str:
         text = _extract_ai_message_text(m)
         if not text:
             continue
+        if _anuncio_pendiente:
+            _anuncio_pendiente = False
+            if getattr(m, "tool_calls", None):
+                text = _strip_tool_announcement(text)
+                if not text.strip():
+                    continue
         dedup_key = text.strip()
         if not dedup_key or dedup_key in seen_texts:
             continue
@@ -7432,9 +7482,13 @@ def chat_with_agent_stream(session_id: str, prompt: str, current_plan: Optional[
                                     f"(cap {_pretool_max}). Inicio: {_retenido[:90]!r}"
                                 )
                             elif _retenido:
-                                # Narración corta: se emite (P1-CHAT-NARRATION-KEPT).
-                                yield f"data: {json.dumps({'type': 'chunk', 'text': _retenido})}\n\n"
-                                _chunks_yielded += 1
+                                # Narración corta: se emite (P1-CHAT-NARRATION-KEPT), sin la frase
+                                # que anuncia la acción de la tool (P1-PLAN-LOTE-58): la confirma
+                                # la pasada siguiente y el usuario la leía dos veces.
+                                _retenido = _strip_tool_announcement(_retenido)
+                                if _retenido.strip():
+                                    yield f"data: {json.dumps({'type': 'chunk', 'text': _retenido})}\n\n"
+                                    _chunks_yielded += 1
                         # [P1-CHAT-STREAM-TOOLCALL-CHUNKS · 2026-09-14] Una tool_call llega
                         # troceada en muchos chunks: el `progress` sale UNA vez por
                         # AIMessage (el primer chunk que trae el nombre de la tool).
