@@ -110,12 +110,18 @@ def test_la_meta_diaria_llega_con_su_distancia_al_mantenimiento(monkeypatch):
     """«superávit de ~2100 kcal» salió dos veces (B4 antes, F5 v3): la causa era el contexto."""
     import nutrition_calculator as nc
     monkeypatch.setattr(nc, "get_nutrition_targets", lambda fd: {"tdee": 1750, "target_calories": 2000})
-    txt = A._daily_goal_context({}, {"calories": 2100})
+    fd = {"weight": "123", "height": "168", "age": "21"}
+    txt = A._daily_goal_context(fd, {"calories": 2100})
     assert "META DIARIA: 2100 kcal" in txt and "unas 350 kcal por encima de su mantenimiento, ~1750 kcal" in txt
     assert "nunca la meta entera" in txt
-    assert A._daily_goal_context({}, None).startswith("\n\n🎯 META DIARIA: 2000 kcal")
+    assert A._daily_goal_context(fd, None).startswith("\n\n🎯 META DIARIA: 2000 kcal")
+    # Sin plan ni formulario real NO se inventa una meta (get_nutrition_targets rellenaría supuestos).
+    assert A._daily_goal_context({"country": "DO"}, None) == ""
+    # Con plan pero sin formulario: la meta del plan, sin mantenimiento inventado.
+    solo_plan = A._daily_goal_context({}, {"calories": 2100})
+    assert "META DIARIA: 2100 kcal." in solo_plan and "mantenimiento" not in solo_plan
     monkeypatch.setattr(nc, "get_nutrition_targets", lambda fd: {})
-    assert A._daily_goal_context({}, None) == ""
+    assert A._daily_goal_context(fd, None) == ""
     src = (_BACKEND / "agent.py").read_text(encoding="utf-8")
     assert src.count("_daily_goal_context(form_data, plan_vigente)") == 2, "paridad stream / no-stream"
 

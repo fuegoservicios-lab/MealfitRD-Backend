@@ -383,12 +383,23 @@ def _daily_goal_context(form_data, plan) -> str:
     el contexto solo decía `"calories": 2100` y «ganar músculo», y el modelo unía las dos cosas. No
     había nada que inventar si se le da la cifra: meta, mantenimiento (TDEE de
     `get_nutrition_targets`, la misma función pura del contador) y la diferencia. Sin datos ⇒ "".
+
+    SOLO con datos reales: `get_nutrition_targets` rellena lo que falta con supuestos (25 años,
+    154 lb, varón) y sin esta guarda un invitado sin formulario recibía «META DIARIA: 2550 kcal»
+    inventada (lo cazó `test_p1_coach_persona_curiosidad_do` en el gate). La meta sale del plan; el
+    mantenimiento, solo si el formulario trae peso, estatura y edad.
     """
     try:
-        from nutrition_calculator import get_nutrition_targets
-        targets = get_nutrition_targets(form_data or {}) or {}
-        meta = plan.get("calories") if isinstance(plan, dict) else None
-        meta = int(float(meta or targets.get("target_calories") or 0))
+        meta_plan = plan.get("calories") if isinstance(plan, dict) else None
+        con_datos = isinstance(form_data, dict) and all(
+            str(form_data.get(k) or "").strip() for k in ("weight", "height", "age"))
+        if not meta_plan and not con_datos:
+            return ""
+        targets = {}
+        if con_datos:
+            from nutrition_calculator import get_nutrition_targets
+            targets = get_nutrition_targets(form_data) or {}
+        meta = int(float(meta_plan or targets.get("target_calories") or 0))
         if meta <= 0:
             return ""
         tdee = int(float(targets.get("tdee") or 0))
