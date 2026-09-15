@@ -1200,14 +1200,21 @@ def reset_user_account_preferences(user_id: str) -> bool:
 #     abandoned_meal_reasons, meal_plans).
 #   - Telemetría/operacional con user_id → DELETE (no son verdaderamente anónimas:
 #     pipeline_metrics, plan_chunk_metrics, learning_experiments, nudge_outcomes,
-#     chunk_*, ingredient_frequencies, api_usage, llm_usage_events).
+#     chunk_*, ingredient_frequencies, api_usage).
 #   - meal_plans_audit (backup forense) → DELETE (contiene plan_data = PII).
+#   - [P1-PLAN-LOTE-56 · 2026-09-15] llm_usage_events → ANONIMIZAR, no borrar
+#     (`_USER_SCOPED_TABLES_ANONYMIZE`): user_id y plan_id a NULL y fuera `corr`
+#     de metadata (lo único que queda es modelo, nodo, tokens, coste y duración —
+#     medido en prod: las únicas claves de metadata son duration_s y corr). Es la
+#     contabilidad del gasto: la purga de la cuenta del dueño (9-sep) borró sus
+#     filas y el 15-sep pareció que el escáner «no anotaba coste». Decisión del
+#     dueño delegada en la sesión del coach.
 # ───────────────────────────────────────────────────────────────────────────
 _USER_SCOPED_TABLES_USERID = (
     "abandoned_meal_reasons", "agent_messages", "api_usage", "chunk_deferrals",
     "chunk_lesson_telemetry", "chunk_user_locks", "consumed_meals",
     "conversation_summaries", "custom_shopping_items", "failed_inventory_deductions",
-    "ingredient_frequencies", "learning_experiments", "llm_usage_events",
+    "ingredient_frequencies", "learning_experiments",
     "meal_likes", "meal_rejections", "nightly_rotation_queue", "nudge_outcomes",
     "pending_facts_queue", "pipeline_metrics", "plan_chunk_metrics",
     "plan_chunk_queue", "push_subscriptions", "shopping_locks",
@@ -1224,6 +1231,9 @@ _USER_SCOPED_TABLES_USERID = (
     # FK-cascade a él; borrarlas antes evita cualquier orden problemático.
     "meal_plans",
 )
+
+# Tablas cuya fila SOBREVIVE a la purga sin nada que la ate al usuario (ver bloque de arriba).
+_USER_SCOPED_TABLES_ANONYMIZE = ("llm_usage_events",)
 
 
 def _purge_visual_diary_storage(user_id: str) -> int:
@@ -1266,11 +1276,12 @@ def delete_account_data(user_id: str, include_profile: bool = True) -> Dict[str,
             tocar el perfil (e.g. GDPR data-erasure conservando la cuenta auth).
 
     Returns:
-        dict con `deleted` (counts per tabla), `storage_objects_removed`, `errors`.
+        dict con `deleted` y `anonymized` (counts per tabla), `storage_objects_removed`, `errors`.
     """
     result: Dict[str, Any] = {
         "user_id": user_id,
         "deleted": {},
+        "anonymized": {},
         "errors": [],
         "storage_objects_removed": 0,
     }
@@ -1313,6 +1324,18 @@ def delete_account_data(user_id: str, include_profile: bool = True) -> Dict[str,
                 (user_id,), returning=True,
             )
             result["deleted"][tbl] = len(r) if isinstance(r, list) else 0
+        except Exception as e:
+            result["errors"].append(f"{tbl}: {e}")
+
+    # 3-bis. El gasto de IA se conserva ANÓNIMO (P1-PLAN-LOTE-56): sin user_id, plan_id ni corr.
+    for tbl in _USER_SCOPED_TABLES_ANONYMIZE:
+        try:
+            r = execute_sql_write(
+                f"UPDATE {tbl} SET user_id = NULL, plan_id = NULL, metadata = metadata - 'corr' "
+                "WHERE user_id = %s RETURNING id",
+                (user_id,), returning=True,
+            )
+            result["anonymized"][tbl] = len(r) if isinstance(r, list) else 0
         except Exception as e:
             result["errors"].append(f"{tbl}: {e}")
 

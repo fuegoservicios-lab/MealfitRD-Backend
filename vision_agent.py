@@ -470,7 +470,18 @@ def _coerce_meal_scan(data: dict) -> dict:
     elif result["calories"] > _MEAL_KCAL_PLAUSIBLE_MAX:
         result["calories"] = 0
         result["low_confidence"] = True
-    result["calories"] = min(result["calories"], _MEAL_KCAL_PLAUSIBLE_MAX)
+    # [P1-PLAN-LOTE-56 · 2026-09-15] El tope recortaba SOLO las kcal: la prueba real contra Gemini
+    # (foto de dos pizzas enteras) dio 2.500 kcal con 175 P / 460 C / 70 G, que suman ~3.170 — el
+    # diario se habría llevado macros de un plato y kcal de otro. Al topar, las macros bajan en la
+    # misma proporción y la estimación queda marcada como dudosa: probablemente no se comió todo.
+    if result["calories"] > _MEAL_KCAL_PLAUSIBLE_MAX:
+        _base = _kcal_macros if _kcal_macros > 0 else result["calories"]
+        _f = _MEAL_KCAL_PLAUSIBLE_MAX / _base
+        for _k in ("protein", "carbs", "healthy_fats"):
+            result[_k] = int(round(result[_k] * _f))
+        result["calories"] = _MEAL_KCAL_PLAUSIBLE_MAX
+        result["low_confidence"] = True
+        result["description"] += " Parece más de una porción: confirma cuánto comiste."
     if result["calories"] > 0 or result["protein"] > 0:
         # Paridad con el path openai_compatible: la estimación viaja también en
         # la description que se persiste al Diario Visual (contexto del coach).

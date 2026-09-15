@@ -96,8 +96,31 @@ real (349 filas, en lectura).
     límite de 10 por 60 s y registra el coste en `node=pantry_photo_scan`, igual que el escáner de comida.
   - `photo_scan_enabled` ya no ofrece el botón si la visión no está configurada de verdad.
     En producción sí lo estaba; el fallo solo aparecía en otros entornos.
-- **Pendiente para el dueño**: medir la calidad real del reconocimiento (poca luz, muchos alimentos,
-  etiquetas), con 5-10 fotos desde la app o dando la clave para una prueba local.
+- **Reconocimiento real (LOTE-56).** Se corrió en el VPS, donde vive la clave, sin copiarla ni imprimirla.
+  La base quedó en solo lectura por construcción: 0 escrituras intentadas. Tope de US$0,50; gasto real
+  **US$0,052** en 28 llamadas a `gemini-3.8-flash`, unos 2.000 tokens de entrada por foto. Se usaron las 5
+  fotos reales de `backend/uploads` (mangú, bandera en dos resoluciones, pizza, zanahorias) y 9 variantes
+  generadas en local: mangú oscuro, borroso, recortado, rotado y de 140 px; bandera oscura; etiqueta
+  nutricional; factura; pared vacía. Cada foto pasó por los dos caminos de producción:
+  `process_image_with_vision` (Escanear comida) y `analyze_image_structured` con `_VISION_PROMPT` y
+  el emparejamiento con el catálogo (escáner de la Nevera).
+
+  | Foto | Escanear comida | Nevera |
+  |---|---|---|
+  | mangú (original, oscuro, borroso, 140 px, rotado) | «Mangú con salami y queso frito», 770-880 kcal en las 5, macros coherentes | salami → Salami; «mangu» y «queso frito» sin emparejar |
+  | mangú recortado | mismo nombre, 630 kcal (ve 2 rodajas en vez de 3) | «queso de freír» → Queso blanco |
+  | bandera (×2) y bandera oscura | «La bandera (dominicana)», 615-750 kcal | arroz y carne de res bien; «habichuelas guisadas» y «carne guisada» sin emparejar |
+  | pizza | «Dos pizzas de pepperoni», **2.500 kcal con macros de ~3.170** → defecto, arreglado | sin emparejar (no es del catálogo) |
+  | zanahorias | se clasifica como compra (0 kcal), «25 unidades» | Zanahoria ×15 (la cuenta difiere entre los dos caminos) |
+  | etiqueta de yogur | no es comida (correcto: solo hay texto) | «yogurt natural», marca Rica → Yogurt |
+  | factura, pared vacía | no es comida | nada |
+
+  Veredicto: la luz, el desenfoque, el tamaño y la rotación no cambian el reconocimiento, y lo que no es
+  comida se descarta bien. Un defecto nuevo: el tope de 2.500 kcal por plato (M9) recortaba solo las kcal
+  y dejaba las macros de las dos pizzas. Ahora las macros bajan en la misma proporción, la estimación queda
+  como baja confianza y la descripción pide confirmar la porción. Queda sin arreglar, de poco peso: el
+  escáner de la Nevera no empareja platos cocinados («habichuelas guisadas», «queso frito», «mangú»), porque
+  su prompt es para una nevera o una despensa. Añadir alias al catálogo toca la curación del dueño.
 
 ## Riesgos y cosas abiertas (vistos en la batería, no arreglados en este lote)
 
@@ -108,13 +131,15 @@ real (349 filas, en lectura).
 - **Narración antes de la tool.** En F7 y H4, el modelo escribe «Anotado — guarda la alergia…» ANTES de llamar
   a `update_form_field` y lo vuelve a decir después. Es corto, así que `P1-CHAT-NARRATION-KEPT` lo deja pasar, y
   el usuario ve dos frases casi iguales pegadas. Es de estilo, no una afirmación falsa (la tool sí se llamó).
-- **El libro de coste y la purga de cuenta.** La purga de una cuenta borra sus `llm_usage_events`
-  (`db_profiles.py:1210`): el gasto de una cuenta borrada desaparece de las cuentas. Es una decisión del dueño.
+- **El libro de coste y la purga de cuenta.** La purga de una cuenta borraba sus `llm_usage_events`, así
+  que el gasto de una cuenta borrada desaparecía de las cuentas. **Cerrado en el LOTE-56**: ahora se
+  anonimizan. `user_id`, `plan_id` y `corr` pasan a NULL o se quitan, y quedan modelo, nodo, tokens, coste
+  y duración. En producción, `metadata` solo tiene `duration_s` y `corr`.
 - **La dosis se cuela por el prompt.** En la v4 B, F6 dio horario y cantidad de té de canela con metformina,
   a pesar de la regla L. La regla se endureció en el mismo lote, pero un aviso no es una garantía. Si vuelve
   a aparecer en alguna corrida, el siguiente lote es una red determinista sobre la respuesta: medicamento
   mencionado + patrón de dosis u horario ⇒ quitar esa línea y remitir al médico.
-- **Calidad real del reconocimiento de fotos.** Sin la clave en local no se midió (ver la sección de Escáneres).
+- **Calidad real del reconocimiento de fotos.** Medida en el LOTE-56 en el VPS (ver la sección de Escáneres).
 
 ## Resultados del coach
 

@@ -140,7 +140,11 @@ if (-not $SkipBackend -and -not $BackendCrossRepoOnly) {
             #     en orden distinto (parametrize sobre set/dict) y xdist aborta con
             #     "Different tests were collected".
             #   - -n 8 revienta la RAM (16 GB, cada worker importa el backend entero:
-            #     MemoryError en la coleccion). 3 workers es el techo seguro medido.
+            #     MemoryError en la coleccion). 3 workers era el techo medido, pero
+            #     [P1-PLAN-LOTE-56 · 2026-09-15] el 15-sep un gate a -n 3 se colgo al 99 %
+            #     con la CPU a 0 (hubo que matarlo; relanzado, paso): el default baja a 2
+            #     y faulthandler_timeout=300 vuelca la pila del test colgado en el log,
+            #     sin py-spy. Si vuelve a colgarse, esa pila dice QUIEN — no subas a 3.
             #   - --dist loadfile: los tests de este repo asumen ejecucion por-archivo.
             #   - CUARENTENA (fase serial de abajo): 2 archivos de la familia
             #     renewal/chunk matan el worker con salida LIMPIA a mitad de test
@@ -155,8 +159,11 @@ if (-not $SkipBackend -and -not $BackendCrossRepoOnly) {
             # Escotilla: MEALFIT_CI_PYTEST_WORKERS=1 (o 0/serial) vuelve al modo serie
             # historico completo sin tocar codigo.
             $workers = $env:MEALFIT_CI_PYTEST_WORKERS
-            if (-not $workers) { $workers = "3" }
+            if (-not $workers) { $workers = "2" }
             $env:PYTHONHASHSEED = "0"
+            if ($env:PYTEST_ADDOPTS -notmatch "faulthandler_timeout") {
+                $env:PYTEST_ADDOPTS = ("$env:PYTEST_ADDOPTS -o faulthandler_timeout=300").Trim()
+            }
 
             $quarantineFiles = @(
                 "tests/test_chunked_generation.py",

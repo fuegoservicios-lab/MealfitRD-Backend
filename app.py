@@ -210,7 +210,11 @@ _PROCESS_START_ISO = datetime.now(timezone.utc).isoformat()
 # [P1-PLAN-LOTE-54 · 2026-09-15] El panel «solicitaste / aplicamos / por qué» dice cuándo el plan pasa del tiempo de
 # cocina pedido: el revisor ya medía `prep_time_over_budget` (6 a 10 comidas por plan en las 5 pruebas del dueño con
 # «Nada», de hasta 70 min) y el panel sólo leía el modo. Cuenta como un ajuste, con la cifra real y «Cambiar Plato».
-_LAST_KNOWN_PFIX = "P1-PLAN-LOTE-54 · 2026-09-15"
+# [P1-PLAN-LOTE-56 · 2026-09-15] Cierre de lo abierto tras la batería del coach: topes de longitud por tipo de
+# pregunta (charla 80, queja 80, riesgo 90, receta 150), la purga de cuenta ANONIMIZA el gasto de IA en vez de
+# borrarlo, el tope de 2.500 kcal por plato baja también las macros (prueba REAL de visión en el VPS, 14 fotos,
+# US$0,05) y el gate corre a -n 2 con faulthandler_timeout=300 (el -n 3 se colgó al 99 % el 15-sep).
+_LAST_KNOWN_PFIX = "P1-PLAN-LOTE-56 · 2026-09-15"
 
 # [P1-SENTRY-SAMPLE-COST · 2026-05-12] Sentry sampling driven from env vars
 # con default seguro 0.1 (10%). Pre-fix tenía `traces_sample_rate=1.0` y

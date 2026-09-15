@@ -83,6 +83,23 @@ def test_las_kcal_de_un_plato_cuadran_con_sus_macros(raw, esperadas):
     assert out["calories"] == esperadas
 
 
+def test_el_tope_por_plato_baja_tambien_las_macros():
+    """[P1-PLAN-LOTE-56] Gemini real, foto de dos pizzas: 175 P / 460 C / 70 G (~3.170 kcal) quedaba
+    en 2.500 kcal con las macros intactas. Al topar, las macros cuadran con las kcal y se avisa."""
+    import vision_agent as va
+    out = va._coerce_meal_scan({"is_food": True, "photo_kind": "plato", "meal_name": "Dos pizzas de pepperoni",
+                                "description": "Dos pizzas completas de pepperoni.",
+                                "calories": 3170, "protein": 175, "carbs": 460, "healthy_fats": 70})
+    assert out["calories"] == 2500 and out.get("low_confidence") is True
+    kcal = 4 * out["protein"] + 4 * out["carbs"] + 9 * out["healthy_fats"]
+    assert abs(kcal - 2500) <= 0.02 * 2500, (out, kcal)
+    assert "confirma cuánto comiste" in out["description"]
+    # Un plato por debajo del tope no se toca ni se marca.
+    normal = va._coerce_meal_scan({"is_food": True, "photo_kind": "plato", "meal_name": "", "description": "Plato.",
+                                   "calories": 840, "protein": 30, "carbs": 80, "healthy_fats": 48})
+    assert normal["protein"] == 30 and "low_confidence" not in normal
+
+
 def test_m10_peso_impreso_como_piezas_sigue_saneado():
     import vision_agent as va
     out = va._coerce_meal_scan({"is_food": True, "photo_kind": "items", "description": "Compra.",
