@@ -300,6 +300,9 @@ class _MealVisionResult(BaseModel):
 # Clamps espejo de ConsumedMealRequest (routers/diary.py) — el registro final
 # los revalida, esto solo evita precargar absurdos en el modal.
 _MEAL_MACRO_CAPS = {"calories": 10000, "protein": 1000, "carbs": 2000, "healthy_fats": 1000}
+# [P1-PLAN-LOTE-53] Tope de UN plato fotografiado (el clamp de arriba es el del registro, no el de
+# una foto): una bandeja de 2.500 kcal ya es excepcional; más es casi siempre un error de lectura.
+_MEAL_KCAL_PLAUSIBLE_MAX = 2500
 
 
 def _sane_item_qty(qty, unit) -> float:
@@ -454,6 +457,20 @@ def _coerce_meal_scan(data: dict) -> dict:
         "carbs": _macro("carbs"),
         "healthy_fats": _macro("healthy_fats"),
     }
+    # [P1-PLAN-LOTE-53 · 2026-09-15] Las kcal de UN plato tienen que cuadrar con sus macros. El
+    # clamp de 10.000 (espejo de ConsumedMealRequest) dejaba pasar «Pollo guisado» con 10.000 kcal
+    # y 0 g de todo (batería de escáneres, caso M9): si el usuario confirmaba, su diario se llevaba
+    # +10.000 kcal. Con macros, manda 4·P + 4·C + 9·G cuando la cifra del modelo se aleja más de
+    # un 35 %; sin macros, unas kcal inverosímiles para un plato (> 2.500) se descartan — sin
+    # estimación, el modal y el coach piden la porción en vez de precargar un disparate.
+    _kcal_macros = 4 * result["protein"] + 4 * result["carbs"] + 9 * result["healthy_fats"]
+    if _kcal_macros > 0:
+        if result["calories"] == 0 or abs(result["calories"] - _kcal_macros) > 0.35 * _kcal_macros:
+            result["calories"] = int(round(_kcal_macros))
+    elif result["calories"] > _MEAL_KCAL_PLAUSIBLE_MAX:
+        result["calories"] = 0
+        result["low_confidence"] = True
+    result["calories"] = min(result["calories"], _MEAL_KCAL_PLAUSIBLE_MAX)
     if result["calories"] > 0 or result["protein"] > 0:
         # Paridad con el path openai_compatible: la estimación viaja también en
         # la description que se persiste al Diario Visual (contexto del coach).

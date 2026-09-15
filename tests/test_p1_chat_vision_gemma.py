@@ -98,7 +98,9 @@ def test_coerce_meal_scan_clamps_and_not_food_zeroes():
         "calories": 99999, "protein": -5, "carbs": "310.6", "healthy_fats": None,
     })
     assert out["is_food"] is True
-    assert out["calories"] == 10000, "clamp espejo de ConsumedMealRequest"
+    # [P1-PLAN-LOTE-53 · 2026-09-15] Era `== 10000` («clamp espejo de ConsumedMealRequest»): el test
+    # fijaba el defecto. 99.999 kcal con 311 g de carbohidratos se recalcula desde las macros (4·311).
+    assert out["calories"] == 1244, "kcal coherentes con las macros, no el clamp del registro"
     assert out["protein"] == 0, "negativo → 0"
     assert out["carbs"] == 311, "string numérica → int redondeado"
     assert out["healthy_fats"] == 0

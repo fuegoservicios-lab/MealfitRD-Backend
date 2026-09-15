@@ -59,6 +59,39 @@ def test_el_guard_sigue_cazando_lo_inventado():
     assert meal_name_backed_by_description("Sándwich vegetal de pollo", DESC_04) is False
 
 
+def test_m9_kcal_absurdas_sin_macros_no_se_precargan():
+    """Caso M9 exacto de la batería: 99.999 kcal y todo lo demás en 0 / basura."""
+    import vision_agent as va
+    out = va._coerce_meal_scan({"is_food": True, "photo_kind": "plato", "meal_name": "Pollo guisado",
+                                "description": "Pollo guisado con arroz blanco.",
+                                "calories": 99999, "protein": -5, "carbs": "mucho", "healthy_fats": None})
+    assert out["calories"] == 0 and out.get("low_confidence") is True
+    assert "Estimación" not in out["description"], "sin cifra fiable, el coach pide la porción"
+
+
+@pytest.mark.parametrize("raw,esperadas", [
+    ({"calories": 750, "protein": 40, "carbs": 70, "healthy_fats": 40}, 750),   # cuadra (800 ±35 %)
+    ({"calories": 3000, "protein": 30, "carbs": 60, "healthy_fats": 20}, 540),  # no cuadra → macros
+    ({"calories": 0, "protein": 20, "carbs": 50, "healthy_fats": 10}, 370),     # sin kcal → macros
+    ({"calories": 2400, "protein": 0, "carbs": 0, "healthy_fats": 0}, 2400),    # sin macros, verosímil
+    ({"calories": 4000, "protein": 150, "carbs": 400, "healthy_fats": 150}, 2500),  # tope por plato
+])
+def test_las_kcal_de_un_plato_cuadran_con_sus_macros(raw, esperadas):
+    import vision_agent as va
+    out = va._coerce_meal_scan({"is_food": True, "photo_kind": "plato", "meal_name": "",
+                                "description": "Plato.", **raw})
+    assert out["calories"] == esperadas
+
+
+def test_m10_peso_impreso_como_piezas_sigue_saneado():
+    import vision_agent as va
+    out = va._coerce_meal_scan({"is_food": True, "photo_kind": "items", "description": "Compra.",
+                                "items": [{"name": "arroz", "quantity": 500, "unit": "paquete"},
+                                          {"name": "huevos", "quantity": 30, "unit": "unidad"}]})
+    assert {i["name"]: i["quantity"] for i in out["items"]} == {"arroz": 1.0, "huevos": 30.0}
+    assert out["calories"] == 0
+
+
 def _photo_scan_signature() -> str:
     src = (_BACKEND / "routers" / "user_data.py").read_text(encoding="utf-8")
     i = src.index('@router.post("/inventory/photo-scan")')
