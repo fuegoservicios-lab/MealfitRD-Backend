@@ -172,6 +172,9 @@ _CHAT_PLAN_PRUNE_KEYS = (
     "dish_quality_report",
     "variety_report",
     "_recipe_coherence_errors",
+    # [P1-PLAN-LOTE-53 · 2026-09-15] Hashes y telemetría del gate de fidelidad; lo que el coach
+    # necesita de ahí (el tiempo de cocina) va resumido en `_prep_time_context_for_chat`.
+    "_fidelity_report",
     "_recent_chunk_lessons",
     "_last_chunk_learning",
     "data_provenance",
@@ -371,6 +374,37 @@ def _plan_vigente_para_prompt(user_id, current_plan):
     except Exception as e:
         logger.warning(f"[P1-CHAT-PAUSED-PROMPT-BLOCKS] plan_mode ilegible, asumo 'plan': {e}")
     return current_plan
+
+
+def _prep_time_context_for_chat(plan) -> str:
+    """[P1-PLAN-LOTE-53 · 2026-09-15] El dato real del tiempo de cocina, dicho en claro.
+
+    En la batería del 15-sep, «¿por qué me pusiste platos de 65 minutos si dije que no tengo
+    tiempo?» recibió una causa INVENTADA («el tiempo lo asigné por plato, no total»). El dato
+    existe — `_fidelity_report.issues` con `prep_time_over_budget` (7 comidas de 15-65 min contra
+    10 min pedidos en el plan del dueño) — pero viajaba enterrado en el JSON del plan, entre
+    hashes. Se da resumido y con la respuesta honesta: la biblioteca aún tiene pocos platos de
+    ese tiempo (el panel «solicitaste / aplicamos» de P1-PLAN-LOTE-54 dice lo mismo).
+    Los `day` del reporte son del bloque que se generó, no de los días vivos: solo cuentas y
+    minutos. Sin issues ⇒ "".
+    """
+    try:
+        fr = plan.get("_fidelity_report") if isinstance(plan, dict) else None
+        issues = [i for i in ((fr or {}).get("issues") or [])
+                  if isinstance(i, dict) and i.get("code") == "prep_time_over_budget"]
+        if not issues:
+            return ""
+        mins = sorted(int(i.get("minutes") or 0) for i in issues)
+        return (
+            f"\n\n⏱️ TIEMPO DE COCINA: el usuario dijo tener unos {issues[0].get('budget')} min para "
+            f"cocinar y {len(issues)} comida(s) de su plan lo pasan (declaran entre {mins[0]} y "
+            f"{mins[-1]} min). Si pregunta por eso, la verdad es esta: todavía tenemos pocos platos de "
+            "ese tiempo en el catálogo. Reconócelo sin inventar otra causa y ofrécele cambiar esas "
+            "comidas con el botón 'Cambiar Plato' de la página Plan."
+        )
+    except Exception as e:
+        logger.debug(f"[P1-PLAN-LOTE-53] tiempo de cocina ilegible: {e!r}")
+        return ""
 
 
 def _prune_plan_for_chat(plan):
@@ -4911,8 +4945,34 @@ _RE_NEGACION = re.compile(r"\b(?:no|nunca|tampoco|sin)\b", re.IGNORECASE)
 
 def _reply_claims_diary_write(text: str) -> bool:
     """True si el texto AFIRMA haber registrado algo en el diario."""
-    if not text:
+    return bool(_diary_claim_sentences(text))
+
+
+# [P1-PLAN-LOTE-53 · 2026-09-15] Batería del 15-sep: «Quedan anotados 2 de 8 vasos» (tras
+# `log_water_glass`) y «Anotado: lácteos quedó registrado en tu perfil» (tras `update_form_field`)
+# disparaban el nudge del DIARIO. El modelo reescribía la respuesta y el usuario la veía DOS veces
+# en el stream (la primera pasada ya estaba en pantalla). Una afirmación respaldada por OTRA tool de
+# escritura de este turno, cuya frase no habla de comida, no es un registro de diario inventado.
+_OTHER_WRITE_TOOLS = ("log_water_glass", "modify_pantry_inventory", "mark_shopping_list_purchased",
+                      "update_form_field")
+_RE_MEAL_WORDS = re.compile(
+    r"\b(?:desayun\w*|almorz\w*|almuerzo|cena|cenas|cené|cenaste|cenado|merienda\w*|snack|"
+    r"comida\w*|plato\w*|diario|kcal|calor[ií]as)\b",
+    re.IGNORECASE,
+)
+
+
+def _claim_backed_by_other_write(text: str, messages: list) -> bool:
+    if not _tool_called_this_turn(messages, _OTHER_WRITE_TOOLS):
         return False
+    return not any(_RE_MEAL_WORDS.search(f) for f in _diary_claim_sentences(text))
+
+
+def _diary_claim_sentences(text: str) -> list:
+    """Frases del texto que AFIRMAN un registro ya hecho (ver `_reply_claims_diary_write`)."""
+    if not text:
+        return []
+    out = []
     for m in _RE_CLAIM_DIARY.finditer(text):
         if m.group(0).lower().endswith("e") and not m.group(0).lower().endswith(("é",)):
             # «registre/anote» sin tilde es subjuntivo («¿quieres que lo anote?»), no una
@@ -4929,8 +4989,8 @@ def _reply_claims_diary_write(text: str) -> bool:
         _frase = text[_ini + 1:_fin + 1]
         if "¿" in _frase or _frase.rstrip().endswith("?"):
             continue
-        return True
-    return False
+        out.append(_frase)
+    return out
 
 
 def _diary_tool_called_this_turn(messages: list) -> bool:
@@ -4940,12 +5000,16 @@ def _diary_tool_called_this_turn(messages: list) -> bool:
     con `tool_call_id` pero sin `name` (ver `execute_tools`), así que por sí
     solos no dicen QUÉ tool corrió.
     """
+    return _tool_called_this_turn(messages, _DIARY_WRITE_TOOLS)
+
+
+def _tool_called_this_turn(messages: list, nombres) -> bool:
     for msg in reversed(messages):
         if isinstance(msg, HumanMessage):
             return False  # llegamos al turno anterior sin encontrarla
         for tc in (getattr(msg, "tool_calls", None) or []):
             nombre = tc.get("name") if isinstance(tc, dict) else getattr(tc, "name", None)
-            if nombre in _DIARY_WRITE_TOOLS:
+            if nombre in nombres:
                 return True
     return False
 
@@ -4987,7 +5051,8 @@ def route_tools(state: ChatState):
         contenido = getattr(last_message, "content", "") or ""
         if isinstance(contenido, list):  # algunos providers parten el content
             contenido = " ".join(str(p) for p in contenido)
-        if _reply_claims_diary_write(contenido) and not _diary_tool_called_this_turn(messages):
+        if (_reply_claims_diary_write(contenido) and not _diary_tool_called_this_turn(messages)
+                and not _claim_backed_by_other_write(contenido, messages)):
             return "nudge_diary_tool"
 
     return END
@@ -5866,15 +5931,15 @@ def _build_hydration_context(user_id: Optional[str], local_date_str: Optional[st
         if glasses == 0:
             return (
                 f"\n\n💧 HIDRATACIÓN HOY: El usuario aún no ha registrado ningún vaso de agua "
-                f"hoy (meta diaria: {goal} vasos). Si la conversación lo permite (mañana, "
-                f"comidas, energía), recuérdale amablemente la importancia de hidratarse."
+                f"hoy (meta diaria: {goal} vasos). Sácalo SOLO si el usuario habla de agua, "
+                f"sed, calor, mareo o energía — no lo añadas como coletilla a otras respuestas."
             )
         pct = round((glasses / goal) * 100)
         return (
             f"\n\n💧 HIDRATACIÓN HOY: El usuario lleva {glasses} de {goal} vasos de agua "
             f"({pct}% de su meta diaria). Toma esto en cuenta al hablar de energía, "
-            f"saciedad o digestión. Si lleva menos de la mitad y ya es tarde, sugiérele "
-            f"acelerar el ritmo con amabilidad."
+            f"saciedad o digestión. Si lleva menos de la mitad, ya es tarde y sale el tema, "
+            f"sugiérele acelerar el ritmo con amabilidad — nunca como coletilla."
         )
     except Exception as e:
         logger.warning(f"⚠️ [AGENT-HYDRATION-CONTEXT] error: {e}")
@@ -6354,6 +6419,7 @@ def chat_with_agent(session_id: str, prompt: str, current_plan: Optional[dict] =
         # Este bloque recibe `current_plan` A PROPÓSITO — es el único que debe ver
         # el plan real en pausa (PAUSADO ≠ AMPUTADO).
         system_prompt += _plan_context_for_chat(user_id, current_plan)
+        system_prompt += _prep_time_context_for_chat(plan_vigente)  # [P1-PLAN-LOTE-53]
         
         if form_data and form_data.get("includeSupplements"):
             selected_supps = form_data.get("selectedSupplements", [])
@@ -6946,6 +7012,7 @@ def chat_with_agent_stream(session_id: str, prompt: str, current_plan: Optional[
         # [P1-AGENT-WELCOME-TRACKING · 2026-08-14] Mismo helper que el path
         # no-stream — la divergencia entre ambos ya costó bugs (P1-CHAT-PAST-DAYS).
         system_prompt += _plan_context_for_chat(user_id, current_plan)
+        system_prompt += _prep_time_context_for_chat(plan_vigente)  # [P1-PLAN-LOTE-53]
         
         if form_data and form_data.get("includeSupplements"):
             selected_supps = form_data.get("selectedSupplements", [])
