@@ -12,7 +12,7 @@ y se anota la discrepancia en el informe. El protocolo largo (entorno, gate, che
 | 38 | C1 (cierre) · C0 | ✅ HECHO (`P1-PLAN-LOTE-60` · 2026-09-15): adjudicador arreglado, columnas de la máquina refrescadas, línea base ESTRICTA publicada — determinista 11/30/36 → 18/60/29 (tp/fp/fn; recall 23,4 → 38,3 %, precisión 26,8 → 23,1 %), juez 2/32/7 → 0/28/9. Ver la sección «Lote 38» | — |
 | 39 | C5 / CUL-P1-05 | ✅ HECHO (`P1-PLAN-LOTE-62` · 2026-09-15): V7f `coccion_faltante` 0/8 → 8/8, `seco_sin_coccion` 3/11 → 11/11 (V7c lee «crudo» y la cocción de 3 minutos), `usa_lo_que_no_esta` 1/9 → 2/9; 0 hallazgos sobre los 9 `ok`; ningún detector a bloqueo | 1 sesión |
 | 40 | C5 / C6 (parte medible) | ✅ HECHO (`P1-PLAN-LOTE-63` · 2026-09-15): juez 0 % estricta y 82,1 % por sustancia (28 hallazgos de la columna del lote 38: errores de código, no de juicio); `paso_incoherente`, `tecnica_impropia` y `nombre_no_corresponde` en observación; recomendación C6: no pasar a `block` todavía | ½-1 sesión |
-| 41 | Tarea propuesta 13-sep | La tormenta de reintentos del catálogo con la base caída: caché negativa corta en `get_master_ingredients` y `catalog_capability` | ½ sesión |
+| 41 | Tarea propuesta 13-sep | ✅ HECHO en otra sesión (`P1-PLAN-LOTE-41` · 2026-09-14, commit ec3e7f7f): caché negativa de 30 s (`MEALFIT_CATALOG_NEGATIVE_CACHE_S`) en `get_master_ingredients` y `catalog_capability` — 32.676 llamadas, errores e intentos de conexión por blueprint pasan a 0 durante el blueprint (1 y 1 en todo el proceso) y el blueprint de 0,92 a 0,37 s | ½ sesión |
 | 42 | E1 (operativo) | Retirar los worktrees viejos que estén limpios y ya mergeados; los demás, listados para el dueño (G4) | ¼ sesión |
 | 43 | B6 · E5 · D7 · B9 | Re-mediciones con FECHA: los tres scripts del lote 36 el **2026-10-10**; el embudo B9 a las 2 semanas del lanzamiento | ¼ sesión, en su fecha |
 | 44 | Decisiones del dueño 14-sep | ✅ HECHO en lo que se podía (`P1-PLAN-LOTE-61` · 2026-09-15): recetas, PayPal `block` y peso del canario (inerte: medido, empeora su perfil); claras (1 de 64 comidas) y cohorte B (su gate no pasa) medidas y no aplicadas — ver «Lote 44». Lo pedido era: aplicar lo delegado: 3 recetas a la biblioteca, claras en botella ≥ 4, cohorte B de la lista canónica = canario, pesos 2.0/1.0 en el canario, `block` en PayPal | 1-2 sesiones |
@@ -279,6 +279,15 @@ cada blueprint en decenas de miles de intentos de conexión y líneas de log**.
 `knobs_reference.md` con el knob y las dos cifras; `shopping_calculator.py` no supera 14.400 líneas; `catalog_capability.py` sin
 cambiar la firma pública; la tarea propuesta del 13-sep («Stop the catalog retry storm when the DB is down») queda cerrada citando el
 lote.
+
+### Estado · ✅ HECHO en otra sesión (`P1-PLAN-LOTE-41` · 2026-09-14)
+
+Commit ec3e7f7f, desplegado y vivo desde entonces (producción va por `P1-PLAN-LOTE-63`). Verificado el 2026-09-15 sin
+tocar nada: `tests/test_p1_plan_lote_41.py` 12 verdes, `shopping_calculator.py` 14.248 líneas (tope 14.400),
+`catalog_capability.py` con su firma pública intacta, el knob y las dos cifras en
+[`knobs_reference.md`](knobs_reference.md) §«La tormenta de reintentos del catálogo con la base caída» y la tarea del
+13-sep cerrada en la fila «Tarea 13-sep · tormenta del catálogo» de [`plan_pendientes_2026_09_11.md`](plan_pendientes_2026_09_11.md).
+Lo único que faltaba era esta fila, que seguía diciendo «pendiente».
 
 ---
 
