@@ -22,8 +22,14 @@ def _src(rel: str) -> str:
 
 def test_host_exists_and_is_mounted_once_in_app():
     host = _src("components/common/ConfirmDialogHost.jsx")
-    assert "subscribeConfirmHost" in host and "isBottomSheetOnMobile={true}" in host
-    assert 'role="alertdialog"' in host
+    assert "subscribeConfirmHost" in host
+    # [P2-CI-ARRANQUE-CONFIRM · 2026-09-16] El host escucha desde el arranque; el diálogo (Modal +
+    # framer-motion) vive en su propio trozo y se pide con la primera confirmación. Importado de forma
+    # estática metía 40 kB gz en la carga inicial de todas las rutas (187,4 contra un techo de 148).
+    assert "const ConfirmDialog = lazy(() => import('./ConfirmDialog'));" in host
+    assert "isBottomSheetOnMobile" not in host and "from './Modal'" not in host
+    dialog = _src("components/common/ConfirmDialog.jsx")
+    assert "isBottomSheetOnMobile={true}" in dialog and 'role="alertdialog"' in dialog
     app = _src("App.jsx")
     assert app.count("<ConfirmDialogHost />") == 1
     assert "import ConfirmDialogHost from './components/common/ConfirmDialogHost';" in app
