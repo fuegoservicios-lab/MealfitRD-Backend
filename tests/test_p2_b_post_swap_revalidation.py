@@ -47,8 +47,9 @@ def base_final_state():
     """final_state mínimo aceptado por _recompute_aggregates_after_swap.
 
     Tiene `days` (necesarios para que la función no haga early return) y
-    `form_data` con `user_id=None` (rama guest → aggr listas vacías, sin
-    pegarle a DB).
+    `form_data` con `user_id=None` (rama invitado: desde `P1-PLAN-LOTE-66` construye la
+    lista con overrides vacíos, igual que `assemble_plan_node`; aquí el builder está
+    stubbeado, así que sigue sin pegarle a DB).
     """
     return {
         "plan_result": {

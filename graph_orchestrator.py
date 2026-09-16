@@ -41551,7 +41551,26 @@ async def _recompute_aggregates_after_swap(final_state: dict) -> None:
                  cycle_days=cycle_days_for_duration("monthly"), window_days=_trip_win),
         )
     else:
-        aggr_list_7, aggr_list_15, aggr_list_30 = [], [], []
+        # [P1-PLAN-LOTE-66 · 2026-09-16] El invitado TAMBIÉN conserva su lista. `assemble_plan_node` la construye con
+        # overrides vacíos (`P1-GUEST-SHOPPING` · 2026-06-21: sin `user_id` no hay inventario que descontar) y aquí se
+        # vaciaba, así que tras el swap el plan del invitado se quedaba sin lista — y la re-validación de coherencia de
+        # esta misma función comparaba las recetas contra CERO, escalando decenas de divergencias `cap_swallowed_modifier`
+        # al banner `_swap_coherence_warnings` del usuario. Medido en 4 generaciones reales (bench `--real`, perfiles del
+        # landing con `user_id: guest`): 48 ítems → 0 y 45-51 «críticas» por plan. Mismo builder y mismo fallback que allí.
+        try:
+            aggr_list_7, aggr_list_15, aggr_list_30 = await asyncio.gather(
+                _adb(get_shopping_list_delta, None, plan_result, True, False, True, 1.0 * household,
+                     inventory_override=[], consumed_override=[], window_days=_trip_win),
+                _adb(get_shopping_list_delta, None, plan_result, True, False, True, cycle_qty_multiplier("biweekly") * household,
+                     inventory_override=[], consumed_override=[],
+                     cycle_days=cycle_days_for_duration("biweekly"), window_days=_trip_win),
+                _adb(get_shopping_list_delta, None, plan_result, True, False, True, cycle_qty_multiplier("monthly") * household,
+                     inventory_override=[], consumed_override=[],
+                     cycle_days=cycle_days_for_duration("monthly"), window_days=_trip_win),
+            )
+        except Exception as _e_guest_reagg:
+            logger.warning(f"⚠️ [P1-GUEST-SHOPPING] Re-agregación de invitado falló, lista vacía: {_e_guest_reagg}")
+            aggr_list_7, aggr_list_15, aggr_list_30 = [], [], []
 
     # Hybrid para biweekly/monthly (mismo patrón que assemble_plan_node)
     try:
