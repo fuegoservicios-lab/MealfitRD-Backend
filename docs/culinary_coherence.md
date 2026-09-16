@@ -100,7 +100,7 @@ la invariante vive ahora donde vive el dato, no en un test parser-based. Corpus:
 `tests/fixtures/culinary_beta/`. Test: `test_p1_culinary_metadata_beta.py`.
 
 **[P1-CULINARY-HASTA-DORAR · 2026-08-19] «hasta dorar» ya no es una orden de saltear.**
-`dora(?!d[oa]s?)\w*` excluía los participios («dorado/dorada») pero **no el
+`dora(?!d[oa]s?\b)\w*` excluía los participios («dorado/dorada») pero **no el
 infinitivo**, así que «Hornea las papas hasta dorar» acusaba de salteado a todo alimento
 del paso sin `saltear` en `prep_methods`. Medido sobre 33 planes REALES de producción:
 **12 de 63 violaciones V1 eran esto — 19% de ruido**, y contra quien menos toca el fuego
@@ -114,8 +114,8 @@ planes buenos.
 El fix es `(?<!hasta )dora…`, el mismo mecanismo que el `(?<!para )horno` de la ronda
 anterior y por la misma razón: una palabra que describe el envase o el PUNTO de cocción
 no es una instrucción. Dos alternativas se descartaron **por medición, no por intuición**:
-excluir solo el infinitivo desnudo (`|r`) caza 6 de 12 y deja pasar «hasta dorarlas»;
-añadir `(?<!a )` encima no cambia ni una violación sobre datos reales. El imperativo
+excluir solo el infinitivo desnudo (`|r\b`) caza 6 de 12 y deja pasar «hasta dorarlas»;
+añadir `(?<!\ba )` encima no cambia ni una violación sobre datos reales. El imperativo
 sigue intacto («Dora la cebolla», «Dóralo por ambos lados»): romperlo reviviría la
 regresión que la Task-5 del P-fix original ya pagó. Test:
 [`test_p1_culinary_hasta_dorar.py`](../tests/test_p1_culinary_hasta_dorar.py).
@@ -1491,3 +1491,24 @@ Y el paso que inserta ahora **cuece**: la redacción de plato de olla decía «A
 cocción… Incorpórala», que no es una instrucción de cocción ni para el escáner ni para una cocina. Se conserva el
 espíritu de `P2-CLOSER-STEP-STEW-WORDING` (la proteína entra AL GUISO, no «aparte») con fuego, tiempo y punto
 declarados. La rama del alimento YA cocido no se toca: escurrir e incorporar un precocido al guiso es correcto.
+
+## Lo que la lista compra, algún paso tiene que cocinarlo (P1-PLAN-LOTE-68 · 2026-09-16)
+
+Tercer auto-patch del nodo de review, junto a los otros dos y **antes** del scan: el contrato de ese nodo es
+reparar → medir, y el escáner jamás muta. Repara lo que V7f acusa desde el lote 62 y nadie arreglaba — el alimento
+que la lista compra, los pasos nombran y ningún paso cuece. Caso real del 16-sep: «Ñame Guisado en Salsa Criolla»
+cuyo método sofríe el sofrito y no toca el ñame, más 222,75 g de pechuga que sólo aparecían en el montaje.
+
+Qué está sin cocer **no se re-decide**: lo dice `culinary_coherence.alimentos_sin_coccion`, el mismo recorrido que
+usa V7f (`_v7f_estado`). Escribir un segundo criterio es como nacen las dos verdades. El paso se inserta antes del
+Montaje, con la redacción del cerrador para proteína y una propia para víveres. Knob `MEALFIT_UNCOOKED_FOOD_REPAIR`.
+tooltip-anchor `P1-PLAN-LOTE-68-COCER-LO-QUE-NADIE-CUECE`.
+
+## Tres `\b` convertidos en retroceso (P1-PLAN-LOTE-68 · 2026-09-16)
+
+Escribir código con heredocs convirtió `\b` en el carácter 0x08 **tres veces el mismo día**: en la regex del
+cerrador (lote 67, detectada al depurar), en `_MEZCLA_RE` (lote 67, **desplegada**: el lookahead nunca fallaba, así
+que el participio «licuado» también contaba como mezcla) y en el doble de un test del lote 68 (su regex no casaba
+nunca, así que el test pasaba por la razón equivocada). Las tres reparadas escribiendo el backslash con `chr(92)`,
+y re-medido: el plan vegano sigue dando 1 hallazgo V1 (`Habas`), que era el resultado documentado.
+

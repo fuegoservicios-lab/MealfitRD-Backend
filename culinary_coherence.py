@@ -397,7 +397,7 @@ _MEZCLA_RE = re.compile(
     # linaza, vainilla, canela y sal disparó CINCO V1 (uno por condimento) en un plan real del 16-sep. El
     # umbral de ≥3 alimentos sigue mandando, así que «licúa las habas» a solas SIGUE acusando — y debe.
     # tooltip-anchor: P1-PLAN-LOTE-67-V1-MEZCLA
-    r"|licu(?!ad[oa]s?)\w*"
+    r"|licu(?!ad[oa]s?\b)\w*"
     r"|revuelv\w*"
     r"|bat(?:e|es|imos|en|an|id)\b"
     r"|un(?:e|en|imos)\b"
@@ -1948,6 +1948,42 @@ def _v7f_estado(pasos_norm: list, rx, clase: str, index: dict) -> str:
                     return "cocido"                  # «Hornea unos 20-25 minutos»: no hay otro a quien atribuirlo
             previa_lo_nombra = nombra
     return "sin_coccion" if mencionado else "no_mencionado"
+
+
+def alimentos_sin_coccion(meal: dict, index: dict) -> list:
+    """[P1-PLAN-LOTE-68 · 2026-09-16] Los alimentos de `meal` que la lista NO declara cocidos y que NINGÚN paso
+    cuece, con su clase (`proteina` | `viver`). Es el MISMO recorrido que usa V7f (`_v7f_estado`), expuesto para que
+    un reparador pueda actuar sobre lo que el escáner ya sabe ver — sin escribir un segundo criterio, que es como
+    nacen las dos verdades. Devuelve `[(alimento, clase)]`; fail-open a `[]`.
+
+    Nació de un plato REAL del 16-sep: «Ñame Guisado en Salsa Criolla» con 5,27 g de ñame que ningún paso cocía —
+    el escáner lo acusaba desde el lote 62 y nadie lo reparaba. tooltip-anchor: P1-PLAN-LOTE-68-SIN-COCCION"""
+    out = []
+    try:
+        pasos = [str(x) for x in (meal.get("recipe") or []) if not _V5_NOTA.search(str(x))]
+        if not pasos:
+            return []
+        pasos_norm = [_norm(x) for x in pasos]
+        vistos = set()
+        for ing in [str(x) for x in (meal.get("ingredients") or [])]:
+            if _V7F_DECLARADO_COCIDO_RE.search(_norm(ing)):
+                continue
+            for food in find_catalog_foods(ing, index):
+                meta = index.get(_norm(food)) or {}
+                clase = _v7f_clase(food, meta)
+                if not clase or food in vistos:
+                    continue
+                vistos.add(food)
+                toks = [t for t in _norm(food).split() if (len(t) >= 4 or t in ("res",)) and t not in _V7F_GENERICAS]
+                if not toks:
+                    continue
+                rx = re.compile(r"\b(?:" + "|".join(re.escape(t) for t in toks) + r")(?:s|es)?\b")
+                if _v7f_estado(pasos_norm, rx, clase, index) == "sin_coccion":
+                    out.append((food, clase))
+                break
+    except Exception:
+        return []
+    return out
 
 
 def _v7f_coccion_faltante(day, meal, index) -> list:

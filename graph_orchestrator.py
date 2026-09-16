@@ -33325,6 +33325,28 @@ def _floor_subservible_portions(days, day_kcal_target=None, db=None) -> int:
                                     f"🍖 [P1-RECIPE-VISIBLE-DEFECTS] piso PROTAGONISTA DECLINADO en "
                                     f"'{str(meal.get('name'))[:40]}': {int(cur_g)}g — sin contexto kcal "
                                     f"(day-target/db ausentes); decide el surface con headroom")
+                                # [P1-PLAN-LOTE-68 · 2026-09-16] Declinar el piso de IDENTIDAD no puede saltarse el suelo cocinable: el
+                                # `continue` de esta rama se lo llevaba por delante y la línea se entregaba en 5 g («Ñame Guisado en Salsa
+                                # Criolla» con 5,27 g de ñame, plan REAL del 16-sep). Va DENTRO del rechazo: si el piso de identidad sí
+                                # actuó, tocar aquí re-escalaría desde el valor viejo y pisaría su bump (medido: 60 g → 15 g).
+                                # tooltip-anchor: P1-PLAN-LOTE-68-IDENTIDAD-NO-SALTA-EL-SUELO
+                                if cur_g < floor_g:
+                                    try:
+                                        _new_id = _resc(s, floor_g / cur_g)
+                                    except Exception:
+                                        _new_id = None
+                                    if _new_id and _new_id != s:
+                                        ings[idx] = _new_id
+                                        if _ri is not None and isinstance(raw[_ri], str):
+                                            try:
+                                                raw[_ri] = _resc(str(raw[_ri]), floor_g / cur_g)
+                                            except Exception:
+                                                pass
+                                        touched += 1
+                                        _meal_touched = True
+                                        logger.info(f"🍠 [P1-PLAN-LOTE-68] protagonista al piso cocinable "
+                                                    f"{int(cur_g)}g→{int(floor_g)}g en '{str(meal.get('name'))[:40]}' "
+                                                    f"(el piso de identidad se declinó, pero 5 g no se sirven)")
                                 continue
                             _tgt_pf = float(PROTAGONIST_PROTEIN_MIN_G)
                             if _headroom is not None and _kcal_per_g > 0:
@@ -33359,6 +33381,28 @@ def _floor_subservible_portions(days, day_kcal_target=None, db=None) -> int:
                                     f"🍖 [P1-RECIPE-VISIBLE-DEFECTS] piso PROTAGONISTA DECLINADO en "
                                     f"'{str(meal.get('name'))[:40]}': {int(cur_g)}g, alcanzable "
                                     f"{int(_tgt_pf)}g (<10g de mejora — headroom kcal insuficiente)")
+                                # [P1-PLAN-LOTE-68 · 2026-09-16] Declinar el piso de IDENTIDAD no puede saltarse el suelo cocinable: el
+                                # `continue` de esta rama se lo llevaba por delante y la línea se entregaba en 5 g («Ñame Guisado en Salsa
+                                # Criolla» con 5,27 g de ñame, plan REAL del 16-sep). Va DENTRO del rechazo: si el piso de identidad sí
+                                # actuó, tocar aquí re-escalaría desde el valor viejo y pisaría su bump (medido: 60 g → 15 g).
+                                # tooltip-anchor: P1-PLAN-LOTE-68-IDENTIDAD-NO-SALTA-EL-SUELO
+                                if cur_g < floor_g:
+                                    try:
+                                        _new_id = _resc(s, floor_g / cur_g)
+                                    except Exception:
+                                        _new_id = None
+                                    if _new_id and _new_id != s:
+                                        ings[idx] = _new_id
+                                        if _ri is not None and isinstance(raw[_ri], str):
+                                            try:
+                                                raw[_ri] = _resc(str(raw[_ri]), floor_g / cur_g)
+                                            except Exception:
+                                                pass
+                                        touched += 1
+                                        _meal_touched = True
+                                        logger.info(f"🍠 [P1-PLAN-LOTE-68] protagonista al piso cocinable "
+                                                    f"{int(cur_g)}g→{int(floor_g)}g en '{str(meal.get('name'))[:40]}' "
+                                                    f"(el piso de identidad se declinó, pero 5 g no se sirven)")
                             continue
                     # [P1-RECIPE-POLISH-5 · 2026-07-12] piso PROTAGONISTA para CARBOS (ver knob):
                     # token de víver/almidón presente en la LÍNEA y en el NOMBRE del plato y
@@ -33389,6 +33433,28 @@ def _floor_subservible_portions(days, day_kcal_target=None, db=None) -> int:
                                     f"🍠 [P1-RECIPE-POLISH-5] piso carbo PROTAGONISTA DECLINADO en "
                                     f"'{str(meal.get('name'))[:40]}': {int(cur_g)}g — sin contexto kcal "
                                     f"(day-target/db ausentes); decide el surface con headroom")
+                                # [P1-PLAN-LOTE-68 · 2026-09-16] Declinar el piso de IDENTIDAD no puede saltarse el suelo cocinable: el
+                                # `continue` de esta rama se lo llevaba por delante y la línea se entregaba en 5 g («Ñame Guisado en Salsa
+                                # Criolla» con 5,27 g de ñame, plan REAL del 16-sep). Va DENTRO del rechazo: si el piso de identidad sí
+                                # actuó, tocar aquí re-escalaría desde el valor viejo y pisaría su bump (medido: 60 g → 15 g).
+                                # tooltip-anchor: P1-PLAN-LOTE-68-IDENTIDAD-NO-SALTA-EL-SUELO
+                                if cur_g < floor_g:
+                                    try:
+                                        _new_id = _resc(s, floor_g / cur_g)
+                                    except Exception:
+                                        _new_id = None
+                                    if _new_id and _new_id != s:
+                                        ings[idx] = _new_id
+                                        if _ri is not None and isinstance(raw[_ri], str):
+                                            try:
+                                                raw[_ri] = _resc(str(raw[_ri]), floor_g / cur_g)
+                                            except Exception:
+                                                pass
+                                        touched += 1
+                                        _meal_touched = True
+                                        logger.info(f"🍠 [P1-PLAN-LOTE-68] protagonista al piso cocinable "
+                                                    f"{int(cur_g)}g→{int(floor_g)}g en '{str(meal.get('name'))[:40]}' "
+                                                    f"(el piso de identidad se declinó, pero 5 g no se sirven)")
                                 continue
                             _tgt_cf = float(PROTAGONIST_CARB_MIN_G)
                             if _headroom is not None and _kcal_per_g_cf > 0:
@@ -33418,6 +33484,28 @@ def _floor_subservible_portions(days, day_kcal_target=None, db=None) -> int:
                                 logger.info(
                                     f"🍠 [P1-RECIPE-POLISH-5] piso carbo PROTAGONISTA DECLINADO en "
                                     f"'{str(meal.get('name'))[:40]}': {int(cur_g)}g (headroom insuficiente)")
+                                # [P1-PLAN-LOTE-68 · 2026-09-16] Declinar el piso de IDENTIDAD no puede saltarse el suelo cocinable: el
+                                # `continue` de esta rama se lo llevaba por delante y la línea se entregaba en 5 g («Ñame Guisado en Salsa
+                                # Criolla» con 5,27 g de ñame, plan REAL del 16-sep). Va DENTRO del rechazo: si el piso de identidad sí
+                                # actuó, tocar aquí re-escalaría desde el valor viejo y pisaría su bump (medido: 60 g → 15 g).
+                                # tooltip-anchor: P1-PLAN-LOTE-68-IDENTIDAD-NO-SALTA-EL-SUELO
+                                if cur_g < floor_g:
+                                    try:
+                                        _new_id = _resc(s, floor_g / cur_g)
+                                    except Exception:
+                                        _new_id = None
+                                    if _new_id and _new_id != s:
+                                        ings[idx] = _new_id
+                                        if _ri is not None and isinstance(raw[_ri], str):
+                                            try:
+                                                raw[_ri] = _resc(str(raw[_ri]), floor_g / cur_g)
+                                            except Exception:
+                                                pass
+                                        touched += 1
+                                        _meal_touched = True
+                                        logger.info(f"🍠 [P1-PLAN-LOTE-68] protagonista al piso cocinable "
+                                                    f"{int(cur_g)}g→{int(floor_g)}g en '{str(meal.get('name'))[:40]}' "
+                                                    f"(el piso de identidad se declinó, pero 5 g no se sirven)")
                             continue
                     if cur_g >= floor_g:
                         continue
@@ -40191,6 +40279,48 @@ _FORWARD_PATCH_SYNONYMS = {
 }
 
 
+# [P1-PLAN-LOTE-68 · 2026-09-16] Tercer auto-patch: el alimento que la lista compra, los pasos nombran y NADIE
+# CUECE. V7f lo acusa desde el lote 62 y nadie lo reparaba: el plato real del 16-sep entregaba «Ñame Guisado en
+# Salsa Criolla» cuyo método sofríe el sofrito y jamás toca el ñame, y 222,75 g de pechuga que sólo aparecen en el
+# montaje. Corre AQUÍ, con los otros reparadores y ANTES del scan, porque el contrato de este nodo es reparar →
+# medir y el scan jamás muta. La decisión de QUÉ está sin cocer no se re-escribe: la da `alimentos_sin_coccion`,
+# el mismo recorrido de V7f. Muta el plan; devuelve nº de pasos insertados. Fail-open total.
+# Knob: MEALFIT_UNCOOKED_FOOD_REPAIR. tooltip-anchor: P1-PLAN-LOTE-68-COCER-LO-QUE-NADIE-CUECE
+UNCOOKED_FOOD_REPAIR = _env_bool("MEALFIT_UNCOOKED_FOOD_REPAIR", True)
+
+
+def _auto_patch_uncooked_foods(plan: dict, catalog: list) -> int:
+    if not UNCOOKED_FOOD_REPAIR or not isinstance(plan, dict) or not catalog:
+        return 0
+    n = 0
+    try:
+        from culinary_coherence import alimentos_sin_coccion, build_culinary_index
+        idx = build_culinary_index(catalog)
+        if not idx:
+            return 0
+        for _d in (plan.get("days") or []):
+            for _m in ((_d.get("meals") or []) if isinstance(_d, dict) else []):
+                if not isinstance(_m, dict) or not isinstance(_m.get("recipe"), list):
+                    continue
+                for food, clase in (alimentos_sin_coccion(_m, idx) or []):
+                    if clase == "proteina":
+                        paso = "💪 " + _closer_protein_step_text(food, False, stewy=_meal_is_stewy(_m, strip_accents))
+                    else:
+                        paso = (f"🍠 Añade {food} al guiso y cocínalo 15-20 minutos, hasta que esté tierno por "
+                                f"dentro, antes de servir.")
+                    if any(isinstance(s, str) and s.strip() == paso.strip() for s in _m["recipe"]):
+                        continue
+                    _m["recipe"] = _insert_step_before_montaje(_m["recipe"], paso)
+                    n += 1
+                    logger.info(f"🍳 [P1-PLAN-LOTE-68] '{food}' ({clase}) no lo cocía ningún paso en "
+                                f"'{str(_m.get('name'))[:40]}' → paso de cocción insertado")
+    except Exception as _uc_e:
+        logger.warning(f"[P1-PLAN-LOTE-68] reparador de alimentos sin cocción no-op: {type(_uc_e).__name__}: {_uc_e}")
+        return n
+    return n
+
+
+
 def _auto_patch_recipe_forward_coherence(plan: dict, errors: list) -> tuple[int, list]:
     """[P1-AUTO-PATCH-FORWARD · 2026-05-21] Resuelve la dirección 'forward' de
     la incoherencia receta↔ingrediente: la receta (o el nombre del plato)
@@ -43267,6 +43397,17 @@ Responde ÚNICAMENTE con el JSON de revisión.
         # structural → severity='minor' → retry. Mejor retry que invención.
         if fwd_unpatched:
             structural_coherence_errors.extend(fwd_unpatched)
+    # [P1-PLAN-LOTE-68 · 2026-09-16] …y el alimento que nadie cuece, reparado antes de medirlo (ver la función).
+    if UNCOOKED_FOOD_REPAIR and CULINARY_CONTRACT_GUARD != "off":
+        try:
+            from shopping_calculator import get_master_ingredients as _gmi_uc
+            _n_uc = _auto_patch_uncooked_foods(plan, _gmi_uc())
+            if _n_uc:
+                logger.info(f"🩹 [P1-PLAN-LOTE-68] {_n_uc} paso(s) de cocción insertados para alimentos que "
+                            f"la lista compra y ningún paso cocía.")
+        except Exception as _uc_cs:
+            logger.warning(f"[P1-PLAN-LOTE-68] auto-patch sin-cocción no-op: {type(_uc_cs).__name__}: {_uc_cs}")
+
 
     # [P1-CULINARY-CONTRACT · 2026-07-31] Scan culinario determinista (V1
     # verbo↔alimento, V2 estado imposible, V3 huérfanos residuales). Corre

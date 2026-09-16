@@ -54,7 +54,7 @@ _INVENTARIO = {
         "_remove_one_raw_line_by_food":            (1, "resuelto"),
         "_sync_one_raw_line":                      (1, "resuelto"),
         "_cap_unrealistic_portions":               (3, "resuelto (2 migrados + fallback documentado)"),
-        "_floor_subservible_portions":             (9, "resuelto"),
+        "_floor_subservible_portions":             (13, "resuelto · +4 en P1-PLAN-LOTE-68: las cuatro ramas que declinan un piso PROTAGONISTA caen ahora al suelo cocinable en vez de saltárselo (el plato real entregaba 5,27 g de ñame), y cada una escribe su raw por alimento con `_raw_idx_for_display`"),
         "_repair_name_phantom_dairy":              (1, "resuelto"),
         "_scale_congruent_protein_line":           (1, "antes de los appenders"),
         "_try_scale_existing_protein":             (1, "antes de los appenders"),

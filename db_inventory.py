@@ -878,7 +878,10 @@ def _container_grams(master_item: dict, unit: str) -> Optional[float]:
         # `units` × peso unitario SOLO si el envase cuenta «uds.» genéricas (cartón 30 uds. de
         # Huevo = 30 × 50 g). «4 cabezas» de Ajo NO: density_g_per_unit es por diente, no por
         # cabeza, y 4 × 5 g = 20 g haría que un diente se llevara 1/4 del paquete.
-        if g <= 0 and n > 0 and ug > 0 and re.search(r"u(?:ds?|nid)", label, flags=re.I):
+        # [P1-PLAN-LOTE-68 · 2026-09-16] La marca de límite de palabra de esta regex estaba escrita como 0x08
+        # el envase que declara «30 uds.» se quedaba sin gramos y `_container_grams` caía a otra rama. Un backspace
+        # dentro de una regex no revienta, sólo apaga la regla — por eso el ratchet del lote 68 escanea el backend.
+        if g <= 0 and n > 0 and ug > 0 and re.search(r"\bu(?:ds?|nid)", label, flags=re.I):
             g = n * ug
         if g > 0:
             sized.append((eu, g))

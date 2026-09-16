@@ -496,8 +496,14 @@ def humanize_ingredient(raw_ingredient: str) -> str:
         
         # Si las unidades son menores a 0.25 (muy poquito) o mayores a 10 (muchísimo), mejor dejarlo en taza/cda o gramos
         if 0.25 <= units <= 10:
+            # [P1-PLAN-LOTE-68 · 2026-09-16] El número se REDONDEA a cuartos para mostrarlo, pero el singular/plural
+            # se decidía con el valor sin redondear: 222,75 g de pechuga = 1,11 porciones → se mostraba «1» y se
+            # pluralizaba por 1,11 > 1 ⇒ «1 pechugas de pollo» (plan real del 16-sep), y de paso se perdía el
+            # «(porción)» que lleva la etiqueta singular. La concordancia la manda lo que el usuario VE.
+            # tooltip-anchor: P1-PLAN-LOTE-68-DISPLAY-CONCORDANCIA
+            units_mostradas = round(units * 4) / 4.0
             fraction_str = number_to_fraction_str(units)
-            label = measure["singular"] if units <= 1.0 else measure["plural"]
+            label = measure["singular"] if units_mostradas <= 1.0 else measure["plural"]
             
             # Reemplazar la base del nombre pero preservar adjetivos
             # Ej: Si name es "plátano verde hervido", y label es "plátano verde",
