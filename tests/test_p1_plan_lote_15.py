@@ -131,8 +131,10 @@ def test_owned_plan_id_for_attribution_niega_lo_ajeno_y_lo_invalido(monkeypatch)
 
 def test_el_emisor_lee_el_plan_del_contextvar_y_no_de_otra_tabla():
     src = _src("graph_orchestrator.py")
-    i = src.index("def _emit_llm_usage_event_best_effort(")
-    body = src[i:i + 9000]
+    # [P1-PLAN-LOTE-64] el emisor se mudó a `llm_telemetry.py`; la re-exportación y la identidad siguen en el grafo
+    emisor = _src("llm_telemetry.py")
+    i = emisor.index("def _emit_llm_usage_event_best_effort(")
+    body = emisor[i:i + 9000]
     assert "_attr_pid = plan_id_var.get()" in body and "plan_id=_attr_pid," in body
     # El ContextVar vive en su módulo: graph_orchestrator.py está CONGELADO por tamaño (extraer, no subir el tope).
     assert "from llm_attribution import plan_id_var, set_llm_attribution, reset_llm_attribution" in src

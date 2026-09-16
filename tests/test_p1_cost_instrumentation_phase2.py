@@ -28,6 +28,9 @@ from pathlib import Path
 
 _BACKEND_ROOT = Path(__file__).resolve().parent.parent
 _GO_PY = _BACKEND_ROOT / "graph_orchestrator.py"
+# [P1-PLAN-LOTE-64] el contextvar del nodo y el emisor viven en `llm_telemetry.py`; el decorador `_node_label`,
+# que los usa, se queda en el grafo.
+_LT_PY = _BACKEND_ROOT / "llm_telemetry.py"
 
 
 # ---------------------------------------------------------------------------
@@ -37,7 +40,7 @@ def test_contextvar_defined_module_level():
     """`_current_node_var` debe estar definida como ContextVar con default=None
     para que llamadas fuera del pipeline (e.g., agent tools, scripts) registren
     `node=NULL` sin levantar excepción."""
-    src = _GO_PY.read_text(encoding="utf-8")
+    src = _LT_PY.read_text(encoding="utf-8")
     assert "_current_node_var: contextvars.ContextVar[Optional[str]] = contextvars.ContextVar(" in src, (
         "ContextVar `_current_node_var` no encontrada o sin type hint correcto."
     )
@@ -73,7 +76,7 @@ def test_decorator_node_label_defined():
 def test_emit_helper_reads_contextvar():
     """`_emit_llm_usage_event_best_effort` debe leer el contextvar y pasarlo
     como `node=` a `log_llm_usage_event`."""
-    src = _GO_PY.read_text(encoding="utf-8")
+    src = _LT_PY.read_text(encoding="utf-8")
     fn = re.search(
         r"def _emit_llm_usage_event_best_effort\(.*?(?=\nclass |\n# |\Z)",
         src,

@@ -232,9 +232,11 @@ def test_cost_instrumentation_captures_cached_tokens():
     = cached_tokens / input_tokens). El test ancla que la integración existe;
     P1-COST-INSTRUMENTATION es el dueño del schema, este test solo verifica
     que el helper `_emit_llm_usage_event_best_effort` extrae cached_tokens."""
-    text = _read_graph()
+    # [P1-PLAN-LOTE-64] el emisor vive en `llm_telemetry.py` (el grafo lo re-exporta)
+    text = (_BACKEND_ROOT / "llm_telemetry.py").read_text(encoding="utf-8")
     m = re.search(
-        r"def _emit_llm_usage_event_best_effort.*?^def\s",
+        # [P1-PLAN-LOTE-64] en `llm_telemetry.py` al emisor le sigue una `class`, no un `def`: la frontera admite ambos
+        r"def _emit_llm_usage_event_best_effort.*?^(?:def|class)\s",
         text,
         re.DOTALL | re.MULTILINE,
     )

@@ -30,9 +30,14 @@ _BACKEND = Path(__file__).resolve().parent.parent
 _GRAPH_ORCH = _BACKEND / "graph_orchestrator.py"
 
 
+# [P1-PLAN-LOTE-64] `_emit_llm_timeout_metric` se mudó a `llm_telemetry.py`; `_safe_ainvoke`, que lo despacha, sigue
+# en el grafo. Se lee la unión de los dos: el contrato abarca a ambos.
+_LLM_TELEMETRY = _BACKEND / "llm_telemetry.py"
+
+
 @pytest.fixture(scope="module")
 def orch_src() -> str:
-    return _GRAPH_ORCH.read_text(encoding="utf-8")
+    return _GRAPH_ORCH.read_text(encoding="utf-8") + "\n" + _LLM_TELEMETRY.read_text(encoding="utf-8")
 
 
 def test_helper_defined(orch_src: str):

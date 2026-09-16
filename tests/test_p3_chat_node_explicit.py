@@ -22,6 +22,8 @@ from pathlib import Path
 
 _BACKEND_ROOT = Path(__file__).resolve().parent.parent
 _GRAPH_PY = _BACKEND_ROOT / "graph_orchestrator.py"
+# [P1-PLAN-LOTE-64] el emisor del usage-event vive en `llm_telemetry.py`; el grafo lo re-exporta
+_TELEMETRY_PY = _BACKEND_ROOT / "llm_telemetry.py"
 _AGENT_PY = _BACKEND_ROOT / "agent.py"
 
 
@@ -33,7 +35,7 @@ def test_emit_helper_accepts_explicit_node_kwarg():
     """[P3-CHAT-NODE-EXPLICIT] `_emit_llm_usage_event_best_effort` debe
     aceptar `node: str = None` como kwarg. Sin esto, los callers no pueden
     overridear el ContextVar."""
-    src = _read(_GRAPH_PY)
+    src = _read(_TELEMETRY_PY)
     match = re.search(
         r"def _emit_llm_usage_event_best_effort\(([^)]+)\)",
         src,
@@ -55,7 +57,7 @@ def test_emit_helper_prioritizes_explicit_node():
     """[P3-CHAT-NODE-EXPLICIT] Si el kwarg `node` se pasa, debe tener
     prioridad sobre el ContextVar `_current_node_var`. Sin esto, el chat
     seguiría con `node=NULL` aunque pase el kwarg."""
-    src = _read(_GRAPH_PY)
+    src = _read(_TELEMETRY_PY)
     # Extraer body del helper.
     match = re.search(
         r"def _emit_llm_usage_event_best_effort\(.*?\):(.+?)(?=\ndef |\Z)",

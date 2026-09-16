@@ -24,6 +24,8 @@ import pytest
 _BACKEND = Path(__file__).resolve().parent.parent
 _SERVICES = (_BACKEND / "services.py").read_text(encoding="utf-8")
 _GO = (_BACKEND / "graph_orchestrator.py").read_text(encoding="utf-8")
+# [P1-PLAN-LOTE-64] el emisor del usage-event vive en `llm_telemetry.py`; el grafo lo re-exporta
+_LT = (_BACKEND / "llm_telemetry.py").read_text(encoding="utf-8")
 _SYSTEM = (_BACKEND / "routers" / "system.py").read_text(encoding="utf-8")
 
 from plan_quality_index import compute_plan_quality_index  # noqa: E402
@@ -125,8 +127,8 @@ def test_emisor_adjunta_usuario_y_correlacion():
     # Anclado al marker, NO a `index("log_llm_usage_event(")`: la primera
     # aparición de esa cadena está en un COMENTARIO de la cabecera del módulo,
     # así que la ventana caía a 3.000 líneas del call site real.
-    i = _GO.index("[P1-COST-ATTRIBUTION")
-    win = _GO[i:i + 1800]
+    i = _LT.index("[P1-COST-ATTRIBUTION")
+    win = _LT[i:i + 1800]
     assert "user_id=_attr_uid" in win, "el evento de costo debe llevar user_id"
     assert '"corr"' in win, (
         "debe estampar el id de correlación: durante la generación el plan aún "
