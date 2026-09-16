@@ -1458,3 +1458,36 @@ código y el reparador el MISMO resultado en las 112 comidas vivas. Además, nin
 del punto. Hoy es inerte porque los pasos casi nunca citan gramos de un condimento, pero no lo será mañana:
 `formatear_cantidad` escribe los decimales con punto. El único camino donde sí mordió, la identidad del plato, ya medía
 con el lector de la base desde el lote 49. Test: `tests/test_p1_plan_lote_52.py`.
+
+## Mezclar no es cocer, y mencionar no es trabajar (P1-PLAN-LOTE-67 · 2026-09-16)
+
+Las dos salieron de generar planes REALES con el formulario el 16-sep, no de una auditoría del código.
+
+**V1 · el batido que acusó a sus condimentos.** Una cláusula del plan vegano —«licúa la avena con la leche de avena,
+la mitad del maní, la linaza, la vainilla, la canela y la pizca de sal»— disparó CINCO V1 de golpe, uno por
+condimento. Ya existía la salvaguarda exacta para esto (`_es_clausula_mezcla`: si una cláusula integra ≥3 alimentos
+bajo un verbo de mezcla, el verbo juzga a la MEZCLA, no a cada componente), pero su lista de verbos no incluía
+`licuar`. Se añade ahí y en ningún otro sitio. El umbral de ≥3 sigue mandando, y eso es la defensa: «licúa las habas»
+a solas SIGUE acusando —y debe, porque ahí la cadena de reparación metió habas crudas a la licuadora de una masa de
+crepes—, igual que «Jamón serrano licuado» del corpus absurdo. Medido: 8 hallazgos V1 → **1** en ese plan (el bueno),
+y 24 → 17 en los cuatro. tooltip-anchor `P1-PLAN-LOTE-67-V1-MEZCLA`.
+
+**Lo que se probó primero y estaba mal.** El primer intento eximía `licuar` para todo alimento `ready_to_eat`. Lo
+tumbaron dos tests que ya existían: «Jamón serrano licuado» dejaba de acusar y «Licúa el Casabe y el Bistec de res»
+también. Eran rojos BUENOS: la exención por tipo de alimento silencia el absurdo, la exención por cláusula-mezcla no.
+Tampoco hizo falta migración de catálogo: con la regla arreglada no queda falso positivo vivo que justifique tocar
+`prep_methods`, y añadir métodos por intuición es lo que P1-LIBRARY-V3-SIN-SUSTITUTO prohibió por escrito.
+
+**El cerrador de proteína, el emplatado y el guiso.** `_append_closer_protein_step` no anexa su paso cuando la receta
+«ya trabaja» el alimento (los huevos del revoltillo), pero le bastaba una MENCIÓN en cualquier paso: un
+«Montaje: … Acompaña con pechuga de pollo» la satisfacía y el cerrador se callaba. Resultado medido en el plan real
+(día 1, cena «Ñame Guisado…»): 222,75 g de pechuga con sus 45 g de proteína contados y ningún paso que la cociera —
+lo que V7f acusa desde el lote 62; ahora se sabe quién lo produce. Desde este lote una cláusula que sólo emplata
+(`sirve`, `acompaña`, `corona`, `espolvorea`…) no cuenta como trabajar el alimento si no cuece ni manipula;
+`incorpora`/`mezcla` siguen contando, que son la guarda del yogurt frío. El criterio de cocción es el del escáner
+(`step_has_cooking_verb`), no uno nuevo. tooltip-anchor `P1-PLAN-LOTE-67-CLOSER-EMPLATADO`.
+
+Y el paso que inserta ahora **cuece**: la redacción de plato de olla decía «Añade X al guiso en los últimos minutos de
+cocción… Incorpórala», que no es una instrucción de cocción ni para el escáner ni para una cocina. Se conserva el
+espíritu de `P2-CLOSER-STEP-STEW-WORDING` (la proteína entra AL GUISO, no «aparte») con fuego, tiempo y punto
+declarados. La rama del alimento YA cocido no se toca: escurrir e incorporar un precocido al guiso es correcto.

@@ -242,7 +242,7 @@ _PROCESS_START_ISO = datetime.now(timezone.utc).isoformat()
 # de conftest: los 35 que parchean el catálogo a vacío se quedaban sin nada que medir con el filtro de verificados de
 # producción. Suite bajo el perfil con base: 109 fallos en 34 ficheros → 19 en 17, y la lista de exclusión del paso
 # baja a la mitad. Sin cambios de producción: sólo tests y las listas del paso.
-_LAST_KNOWN_PFIX = "P1-PLAN-LOTE-66 · 2026-09-16"
+_LAST_KNOWN_PFIX = "P1-PLAN-LOTE-67 · 2026-09-16"
 
 # [P1-SENTRY-SAMPLE-COST · 2026-05-12] Sentry sampling driven from env vars
 # con default seguro 0.1 (10%). Pre-fix tenía `traces_sample_rate=1.0` y

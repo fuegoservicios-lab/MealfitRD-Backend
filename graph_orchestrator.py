@@ -19100,11 +19100,24 @@ def _closer_protein_step_text(nm: str, no_cook: bool, blended: bool = False,
     if stewy and CLOSER_STEP_STEW_WORDING:
         _v = ("Incorpóralas" if _fem else "Incorpóralos") if _plural else \
              ("Incorpórala" if _fem else "Incorpóralo")
-        return (f"Añade {nm} al guiso en los últimos minutos de cocción para que tome el sabor. "
-                f"{_v} con cuidado para no deshacer el resto.")
+        # [P1-PLAN-LOTE-67 - 2026-09-16] ...y que la CUEZA. «Anade X al guiso en los ultimos minutos de coccion»
+        # no es una instruccion de coccion ni para el escaner (V7f) ni para una cocina: eran 222,75 g de pechuga
+        # CRUDA en el plan real del 16-sep, con sus 45 g de proteina contados. Se conserva el espiritu de
+        # P2-CLOSER-STEP-STEW-WORDING (la proteina entra AL GUISO, no «aparte»), pero con fuego, tiempo y punto.
+        _v_coc = ("cocínalas" if _fem else "cocínalos") if _plural else ("cocínala" if _fem else "cocínalo")
+        _adj = ("cocidas" if _fem else "cocidos") if _plural else ("cocida" if _fem else "cocido")
+        return (f"Añade {nm} al guiso y {_v_coc} a fuego medio 12-15 minutos, hasta que esté {_adj} por "
+                f"dentro; {_v} con cuidado para no deshacer el resto.")
     _part = ("hervidas" if _fem else "hervidos") if _plural else ("hervida" if _fem else "hervido")
     _imp = ("sírvelas" if _fem else "sírvelos") if _plural else ("sírvela" if _fem else "sírvelo")
     return f"Cocina {nm} a la plancha o {_part} y {_imp} como proteína del plato."
+
+
+# [P1-PLAN-LOTE-67 · 2026-09-16] Verbos de EMPLATADO (sin acentos: el texto llega por `strip_accents`) y de
+# MANIPULACIÓN. Un paso que sólo sirve no prueba que el alimento se haya preparado; uno que lo mezcla o lo incorpora
+# sí. tooltip-anchor: P1-PLAN-LOTE-67-CLOSER-EMPLATADO
+_CLOSER_SOLO_EMPLATA_RE = _re.compile(r"\b(acompan|sirve|servir|sirvel|corona|decora|espolvore|presenta|montaje)")
+_CLOSER_MANIPULA_RE = _re.compile(r"\b(mezcl|incorpor|integr|anade|agrega|bat[ea]|combin|rellena|unta|marina|adob|reparte|coloca|pon\b|vierte|ensart|amas|tritur|maja|aplasta|desmenuz)")
 
 
 def _append_closer_protein_step(meal: dict, nm: str, no_cook: bool) -> bool:
@@ -19127,9 +19140,28 @@ def _append_closer_protein_step(meal: dict, nm: str, no_cook: bool) -> bool:
                  if len(t) >= 4 and t not in ("cocido", "cocida", "cocidos", "cocidas",
                                               "agua", "aceite", "lata", "latas")]
         _stems = {t[:-1] if (t.endswith("s") and len(t) > 4) else t for t in _toks}
-        _steps_blob = _sa_cs(" ".join(
-            str(s) for s in rec
-            if isinstance(s, str) and not _is_recipe_safety_note_step(s) and "💪" not in s).lower())
+        # [P1-PLAN-LOTE-67 · 2026-09-16] Una cláusula de EMPLATADO no es trabajar el alimento. Esta comprobación (b)
+        # existe para no repetir el paso genérico cuando la receta YA cuece o mezcla el alimento (los huevos del
+        # revoltillo), pero le bastaba una MENCIÓN en cualquier paso: un «Montaje: … Acompaña con pechuga de pollo»
+        # la satisfacía y el closer se callaba, así que el plato entregaba 222 g de pechuga CRUDA con sus 45 g de
+        # proteína contados y ningún paso que la cociera (plan real del 16-sep, día 1 cena «Ñame Guisado»; V7f lo
+        # acusa desde el lote 62 y ahora se sabe quién lo produce). Se descartan SOLO las cláusulas que sirven y no
+        # cuecen ni manipulan — «incorpora», «mezcla» y compañía siguen contando, que son el caso del yogurt frío
+        # que esta guarda protege. El criterio de cocción es el del escáner (`step_has_cooking_verb`), no uno nuevo.
+        # tooltip-anchor: P1-PLAN-LOTE-67-CLOSER-EMPLATADO
+        from culinary_coherence import clause_bounds as _cc_bounds_cl, step_has_cooking_verb as _cc_cocina_cl
+        _utiles = []
+        for _s in rec:
+            if not isinstance(_s, str) or _is_recipe_safety_note_step(_s) or "💪" in _s:
+                continue
+            _sn = _sa_cs(str(_s).lower())
+            for _a, _b in _cc_bounds_cl(_sn):
+                _cl = _sn[_a:_b]
+                if (_CLOSER_SOLO_EMPLATA_RE.search(_cl) and not _cc_cocina_cl(_cl)
+                        and not _CLOSER_MANIPULA_RE.search(_cl)):
+                    continue                      # menciona al servir: no prueba que alguien lo preparara
+                _utiles.append(_cl)
+        _steps_blob = " ".join(_utiles)
         # [P2-STEM-BOUNDED · 2026-07-06] límite final ("agua"⊄"aguacate" — el atún-en-agua del
         # plan 6a078619 quedó sin paso porque el Montaje decía "cubos de aguacate").
         if _stems and any(_re.search(r"\b" + _re.escape(st) + r"(?:s|es)?\b", _steps_blob)

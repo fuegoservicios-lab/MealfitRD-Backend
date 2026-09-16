@@ -110,8 +110,6 @@ VERB_TO_METHOD = {
 _VERB_RES = [(re.compile(rf"\b(?:{frag})", re.IGNORECASE), metodo)
              for frag, metodo in VERB_TO_METHOD.items()]
 
-# Exentos de V3 (T5). UNA lista canónica — criterio del audit real 2026-07-31
-# que contó 4/12 huérfanos (condimentos no cuentan).
 CONDIMENT_EXEMPT = frozenset({
     "aceite", "sal", "agua", "pimienta", "oregano", "vinagre", "sazon",
     "condimento", "especia", "caldo", "cubito", "ajo en polvo", "canela", "comino",
@@ -395,6 +393,11 @@ _MEZCLA_RE = re.compile(
     r"|mezcl(?!ad[oa]s?\b)\w*"
     r"|combin(?!ad[oa]s?\b)\w*"
     r"|incorpor(?!ad[oa]s?\b)\w*"
+    # [P1-PLAN-LOTE-67 · 2026-09-16] licuar integra igual que mezclar: un batido de avena, leche, maní,
+    # linaza, vainilla, canela y sal disparó CINCO V1 (uno por condimento) en un plan real del 16-sep. El
+    # umbral de ≥3 alimentos sigue mandando, así que «licúa las habas» a solas SIGUE acusando — y debe.
+    # tooltip-anchor: P1-PLAN-LOTE-67-V1-MEZCLA
+    r"|licu(?!ad[oa]s?)\w*"
     r"|revuelv\w*"
     r"|bat(?:e|es|imos|en|an|id)\b"
     r"|un(?:e|en|imos)\b"
