@@ -242,7 +242,11 @@ _PROCESS_START_ISO = datetime.now(timezone.utc).isoformat()
 # de conftest: los 35 que parchean el catálogo a vacío se quedaban sin nada que medir con el filtro de verificados de
 # producción. Suite bajo el perfil con base: 109 fallos en 34 ficheros → 19 en 17, y la lista de exclusión del paso
 # baja a la mitad. Sin cambios de producción: sólo tests y las listas del paso.
-_LAST_KNOWN_PFIX = "P1-PLAN-LOTE-70 · 2026-09-16"
+# [P1-PLAN-LOTE-71 · 2026-09-16] (frontend) Al volver a iniciar sesión, el Agente abre el chat de HOY: el logout borra
+# la sesión guardada (P2-CHAT-CACHE-XUSER) y la regla del día solo miraba el navegador, así que el dueño recibió un chat
+# en blanco con el suyo de esa mañana en «Recientes». La sesión que abre la regla se cambia por la del servidor al llegar
+# la lista (solo la suya, por el token). Aquí: el marcador y el contrato entre repos (docs/chat_sesion_del_dia.md).
+_LAST_KNOWN_PFIX = "P1-PLAN-LOTE-71 · 2026-09-16"
 
 # [P1-SENTRY-SAMPLE-COST · 2026-05-12] Sentry sampling driven from env vars
 # con default seguro 0.1 (10%). Pre-fix tenía `traces_sample_rate=1.0` y
