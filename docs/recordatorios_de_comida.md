@@ -45,6 +45,12 @@ despliegue a y media) se perdía para todo el día: el cron solo pasa una vez po
 y el cruce de medianoche de las cenas tardías (`P3-AVG-MEAL-HOUR-CIRCULAR`). Sin `ventana`, `get_avg_meal_hour`
 devuelve la media de siempre.
 
+## El verbo de cada comida (P1-PLAN-LOTE-73)
+
+El prompt solo nombraba la comida y el modelo tomó el verbo de otra: el dueño recibió «¿Ya cenaste tu merienda de la
+tarde?». `PROACTIVE_PROMPT` recibe ahora `{verbo}` desde `VERBO_DE_COMIDA` (desayunaste, almorzaste, merendaste,
+cenaste) y prohíbe el verbo de otra comida.
+
 ## Abierto
 
 - **Respuesta tardía**: `handle_nudge_response` solo enlaza la respuesta al aviso si llega en los 60 minutos siguientes.

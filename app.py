@@ -252,7 +252,11 @@ _PROCESS_START_ISO = datetime.now(timezone.utc).isoformat()
 # franja de su comida no mueve el aviso, se avisa la comida que falte y un aviso bloqueado se reintenta unas horas
 # (MEALFIT_PROACTIVE_NUDGE_RETRY_HOURS). Y, por decisión del dueño, el tope diario sube de 2 a 4 avisos, uno por comida
 # (MEALFIT_PROACTIVE_MAX_NUDGES_PER_DAY; docs/recordatorios_de_comida.md).
-_LAST_KNOWN_PFIX = "P1-PLAN-LOTE-72 · 2026-09-16"
+# [P1-PLAN-LOTE-73 · 2026-09-16] (frontend, más el verbo del aviso) El chat del día se renueva solo también con la
+# pestaña abierta, sin cortar nada en curso ni pisar una elección, y una cuenta regresiva bajo «Nuevo chat» dice
+# cuándo. El día de actividad pasa a ser el del último mensaje real (hidratar ya no renueva el día). Y el aviso de
+# comida usa el verbo de esa comida: el dueño recibió «¿Ya cenaste tu merienda?» (docs/chat_sesion_del_dia.md).
+_LAST_KNOWN_PFIX = "P1-PLAN-LOTE-73 · 2026-09-16"
 
 # [P1-SENTRY-SAMPLE-COST · 2026-05-12] Sentry sampling driven from env vars
 # con default seguro 0.1 (10%). Pre-fix tenía `traces_sample_rate=1.0` y

@@ -51,3 +51,31 @@ teléfono nuevo o tras limpiar el navegador.
 **Lo que no cambia.** La lista es solo del dueño del token (IDOR, `routers/chat.py`), así que la adopción no puede abrir
 un chat ajeno; y el logout sigue borrando la sesión guardada. Una sesión de invitado no se adopta (su lista sale de
 los ids del propio navegador).
+
+## Se renueva solo, también con la pestaña abierta (P1-PLAN-LOTE-73)
+
+**Qué pidió el dueño.** «Que no se tenga que dar a nuevo chat ni siquiera, que lo haga automático diario, y que lo diga
+una cuenta regresiva donde dice nuevo chat». Al entrar ya era automático; faltaba el Agente que se queda abierto de un
+día para otro.
+
+**La regla** (`debeRenovarse`, comprobada al volver a la pestaña y una vez por minuto):
+
+1. La sesión abierta no se ha usado ni elegido HOY: su día anotado es anterior. Si escribes pasada la medianoche, o
+   abres a mano un chat viejo, el día anotado ya es hoy y no se toca.
+2. Su conversación es de un día anterior por su último mensaje real, y ese mensaje tiene 15 minutos o más.
+3. No hay turno en curso ni borrador, y si lo dispara el reloj (no la vuelta a la pestaña), no se ha tocado la página
+   en 5 minutos.
+
+La sesión nueva es automática, así que si otro dispositivo ya abrió el chat de hoy, la adopción del lote 71 la cambia
+por ese al llegar la lista.
+
+**Causa raíz de paso.** El día de actividad se anotaba como HOY cada vez que cambiaban los mensajes, y eso incluye
+HIDRATAR: abrir pasada la medianoche un chat de ayer lo convertía en «el de hoy» y al volver a entrar resucitaba. Ahora
+se anota el día del último mensaje real, y nunca retrocede (`diaDeActividad`), para que elegir a mano un chat viejo
+siga contando como el de hoy.
+
+**Cuenta regresiva.** Bajo «Nuevo chat»: «Nuevo chat automático en 6 h 21 min» (en la última hora, solo minutos; en el
+último minuto, «en menos de un minuto»), por minutos y sin segundos, en su propio componente
+(`CuentaRegresivaChat`) para no volver a pintar la página. El bloque conserva sus 84 px
+(0.75rem + 2.75rem + 0.25rem + 1rem + 0.5rem), porque la barra de scroll del hilo arranca a esa altura
+(`P2-CHAT-SCROLLBAR-TWINS`). Textos en los cuatro catálogos.

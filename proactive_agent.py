@@ -89,6 +89,16 @@ FRANJA_DE_COMIDA = {
 }
 
 
+# [P1-PLAN-LOTE-73 · 2026-09-16] El verbo de cada comida para el aviso. El dueño recibió «¿Ya cenaste tu
+# merienda de la tarde?»: el prompt solo nombraba la comida y el modelo tomó el verbo de otra.
+VERBO_DE_COMIDA = {
+    "Desayuno": "desayunaste",
+    "Almuerzo": "almorzaste",
+    "Merienda": "merendaste",
+    "Cena": "cenaste",
+}
+
+
 def _max_avisos_por_dia() -> int:
     """[P1-PLAN-LOTE-72] Tope anti-fatiga de recordatorios por día. Era un `2` fijo, y con cuatro comidas dos
     avisos dejaban sin recordatorio a la merienda y la cena. El dueño lo subió a 4 (16-sep): uno por comida. El
@@ -709,6 +719,7 @@ No uses demasiados emojis. Sé directo, breve y empático.
                 
                 prompt = PROACTIVE_PROMPT.format(
                     missing_meal=meal_to_check,
+                    verbo=VERBO_DE_COMIDA.get(meal_to_check, f"tomaste tu {meal_to_check.lower()}"),
                     trigger_time=trigger_time_str,
                     diet_type=diet_type,
                     goals=goals,
