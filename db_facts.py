@@ -295,8 +295,15 @@ def user_tz_offset_min(user_id: str) -> int:
     return val
 
 
-def get_avg_meal_hour(user_id: str, meal_type: str, days_back: int = 14) -> Optional[float]:
-    """Calcula la hora promedio en la que el usuario registra un tipo de comida (ej: 10.5 para 10:30 AM)."""
+def get_avg_meal_hour(user_id: str, meal_type: str, days_back: int = 14,
+                      ventana: Optional[tuple] = None) -> Optional[float]:
+    """Calcula la hora promedio en la que el usuario registra un tipo de comida (ej: 10.5 para 10:30 AM).
+
+    [P1-PLAN-LOTE-72 · 2026-09-16] `ventana=(desde, hasta)` en hora local descarta los registros que caen fuera de
+    la franja de esa comida (si `desde > hasta`, la franja cruza la medianoche). `consumed_at` es la hora del
+    REGISTRO: un desayuno anotado a las 12:58 no dice cuándo desayuna el usuario, y promediado movía su
+    recordatorio a las 14:30, encima del del almuerzo. Sin registros dentro de la franja ⇒ `None` (el consumidor
+    cae a su hora por defecto). Sin `ventana`, la media de siempre."""
     if not connection_pool: return None
     try:
         from datetime import datetime, timezone, timedelta
@@ -368,6 +375,14 @@ def get_avg_meal_hour(user_id: str, meal_type: str, days_back: int = 14) -> Opti
         import math as _math_circ
 
         horas = [float(r['hr']) + float(r['mn']) / 60.0 for r in res]
+        if ventana:
+            _desde, _hasta = float(ventana[0]), float(ventana[1])
+            if _desde <= _hasta:
+                horas = [h for h in horas if _desde <= h < _hasta]
+            else:
+                horas = [h for h in horas if h >= _desde or h < _hasta]
+            if not horas:
+                return None
         _rad = 2.0 * _math_circ.pi / 24.0
         _sin = sum(_math_circ.sin(h * _rad) for h in horas)
         _cos = sum(_math_circ.cos(h * _rad) for h in horas)

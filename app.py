@@ -246,7 +246,12 @@ _PROCESS_START_ISO = datetime.now(timezone.utc).isoformat()
 # la sesión guardada (P2-CHAT-CACHE-XUSER) y la regla del día solo miraba el navegador, así que el dueño recibió un chat
 # en blanco con el suyo de esa mañana en «Recientes». La sesión que abre la regla se cambia por la del servidor al llegar
 # la lista (solo la suya, por el token). Aquí: el marcador y el contrato entre repos (docs/chat_sesion_del_dia.md).
-_LAST_KNOWN_PFIX = "P1-PLAN-LOTE-71 · 2026-09-16"
+# [P1-PLAN-LOTE-72 · 2026-09-16] El recordatorio del almuerzo no se pierde porque el desayuno se registró tarde: el
+# dueño anotó el desayuno a las 12:58, esa hora pasó a ser «su hora de desayunar», el aviso del desayuno cayó en la
+# hora del almuerzo y el bucle, al ver el desayuno registrado, saltó la hora entera. Ahora un registro fuera de la
+# franja de su comida no mueve el aviso, se avisa la comida que falte y un aviso bloqueado se reintenta unas horas
+# (knobs MEALFIT_PROACTIVE_NUDGE_RETRY_HOURS y MEALFIT_PROACTIVE_MAX_NUDGES_PER_DAY; docs/recordatorios_de_comida.md).
+_LAST_KNOWN_PFIX = "P1-PLAN-LOTE-72 · 2026-09-16"
 
 # [P1-SENTRY-SAMPLE-COST · 2026-05-12] Sentry sampling driven from env vars
 # con default seguro 0.1 (10%). Pre-fix tenía `traces_sample_rate=1.0` y

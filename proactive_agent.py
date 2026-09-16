@@ -76,6 +76,62 @@ def _proactive_tz_offset_min() -> int:
     )
 
 
+# [P1-PLAN-LOTE-72 · 2026-09-16] Franja local (desde, hasta) en la que un registro dice cuándo se COME esa comida.
+# `consumed_at` es la hora del registro: el dueño anotó su desayuno a las 12:58 y, promediado, su recordatorio del
+# desayuno pasó a las 14:30 —encima del del almuerzo, que se perdió—. Fuera de la franja, el registro es tardío (o
+# adelantado) y no mueve el aviso. `desde > hasta` = la franja cruza la medianoche (cenas tardías). Holgadas a
+# propósito: caben el almuerzo español de las 15:00 y su cena de las 23:00.
+FRANJA_DE_COMIDA = {
+    "Desayuno": (4.0, 12.0),
+    "Almuerzo": (10.5, 17.0),
+    "Merienda": (14.0, 20.0),
+    "Cena": (17.0, 3.0),
+}
+
+
+def _max_avisos_por_dia() -> int:
+    """[P1-PLAN-LOTE-72] Tope anti-fatiga de recordatorios por día (antes, un `2` fijo). Con cuatro comidas y el
+    resumen, dos avisos dejan sin recordatorio a la merienda y la cena: subirlo es decisión del dueño."""
+    return _env_int("MEALFIT_PROACTIVE_MAX_NUDGES_PER_DAY", 2, validator=lambda v: 0 <= v <= 8)
+
+
+def _horas_de_reintento() -> int:
+    """[P1-PLAN-LOTE-72] Horas durante las que un aviso sigue tocando desde su hora. El cron corre una vez por hora:
+    con 1 (la conducta de antes) un aviso que no pudo salir en su hora —el coach respondió hace menos de una hora,
+    la IA no contestó, un despliegue a y media— se perdía para todo el día."""
+    return _env_int("MEALFIT_PROACTIVE_NUDGE_RETRY_HOURS", 3, validator=lambda v: 1 <= v <= 6)
+
+
+def _comidas_avisadas_hoy(user_id: str):
+    """[P1-PLAN-LOTE-72] Comidas que YA recibieron recordatorio hoy (día local del usuario), para que el reintento no
+    repita un aviso. `None` si no se puede saber: el llamador vuelve entonces a la hora exacta, sin reintentos."""
+    try:
+        _tz_off = user_tz_offset_min(user_id)
+        filas = execute_sql_query(
+            "SELECT DISTINCT nudge_type FROM nudge_outcomes "
+            "WHERE user_id = %s "
+            "AND (sent_at - make_interval(mins => %s))::date "
+            "= (NOW() - make_interval(mins => %s))::date",
+            (user_id, _tz_off, _tz_off), fetch_all=True,
+        )
+        return {str(f.get("nudge_type") or "") for f in (filas or [])}
+    except Exception as e:
+        logger.error(f"[P1-PLAN-LOTE-72] No se pudieron leer los avisos de hoy de {user_id}: {e}")
+        return None
+
+
+def _comida_ya_registrada(consumed, meal: str) -> bool:
+    """¿Hay hoy un registro de esa comida (por tipo o por nombre)? Misma regla que tenía el bucle, sin reventar con
+    un `meal_type` nulo."""
+    objetivo = str(meal).lower()
+    for m in consumed or []:
+        mt = str(m.get("meal_type") or "").lower()
+        mn = str(m.get("meal_name") or "").lower()
+        if objetivo in mt or objetivo in mn:
+            return True
+    return False
+
+
 def _local_hour_float_for_offset(now_utc, tz_offset_min) -> float:
     """[P1-NUDGE-TZ-PER-USER · 2026-08-21] Hora local del usuario como float (13.5 = 13:30).
 
@@ -374,9 +430,11 @@ def run_proactive_checks():
         now_ast = _now_utc - timedelta(minutes=_user_tz_off)
         current_hour_float = _local_hour_float_for_offset(_now_utc, _user_tz_off)
         # GAP 3: Nudge Budget (max 2 nudges per day to avoid fatigue)
+        # [P1-PLAN-LOTE-72] El tope es el knob `MEALFIT_PROACTIVE_MAX_NUDGES_PER_DAY` (2 por defecto).
+        _tope_diario = _max_avisos_por_dia()
         daily_nudges = get_daily_nudge_count(user_id)
-        if daily_nudges >= 2:
-            logger.info(f"🛑 [CRON] Usuario {user_id} ya agotó su presupuesto de nudges hoy ({daily_nudges}/2). Saltando.")
+        if daily_nudges >= _tope_diario:
+            logger.info(f"🛑 [CRON] Usuario {user_id} ya agotó su presupuesto de nudges hoy ({daily_nudges}/{_tope_diario}). Saltando.")
             continue
             
         # Global stats para el tono base
@@ -397,7 +455,9 @@ def run_proactive_checks():
         meal_to_check = None
         trigger_time_str = ""
         final_tone_instruction = base_tone_instruction
-        
+        # [P1-PLAN-LOTE-72] Las comidas cuyo aviso toca en este tick, la más reciente primero.
+        candidatas = []
+
         # Resumen del día siempre a las 11 PM
         if now_ast.hour == 23:
             meal_to_check = "Resumen del día"
@@ -405,7 +465,7 @@ def run_proactive_checks():
         else:
             from db_facts import get_avg_meal_hour
             import math
-            
+
             # Horarios default (9AM, 1PM, 4PM, 7:30PM)
             defaults = {
                 "Desayuno": 9.0,
@@ -413,9 +473,11 @@ def run_proactive_checks():
                 "Merienda": 16.0,
                 "Cena": 19.5
             }
-            
-            for meal, def_hour in defaults.items():
-                avg_hr = get_avg_meal_hour(user_id, meal)
+            _reintento_h = _horas_de_reintento()
+            _avisadas = _comidas_avisadas_hoy(user_id)
+
+            for _orden, (meal, def_hour) in enumerate(defaults.items()):
+                avg_hr = get_avg_meal_hour(user_id, meal, ventana=FRANJA_DE_COMIDA.get(meal))
                 if avg_hr is None:
                     avg_hr = def_hour
                 
@@ -451,20 +513,40 @@ def run_proactive_checks():
                 # tooltip-anchor: P3-AVG-MEAL-HOUR-CIRCULAR
                 nudge_hour = (avg_hr + delay_hours) % 24
 
-                # Comparamos si el cron actual (hora entera) coincide con la hora entera del nudge
-                if math.floor(current_hour_float) == math.floor(nudge_hour):
-                    meal_to_check = meal
-                    hours = int(nudge_hour)
-                    mins = int((nudge_hour - hours) * 60)
-                    am_pm = "AM" if hours < 12 else "PM"
-                    display_hr = hours if hours <= 12 else hours - 12
-                    if display_hr == 0: display_hr = 12
-                    trigger_time_str = f"{display_hr}:{mins:02d} {am_pm}"
-                    
-                    if meal_rate < 0.30 and meal_total >= 3:
-                        final_tone_instruction = "El usuario frecuentemente ignora o abandona esta comida específica. Pregúntale qué está fallando particularmente con esta comida (ej. tiempo, no le gusta, está fuera de casa) sin sonar acusador."
-                    break
-        
+                # [P1-PLAN-LOTE-72 · 2026-09-16] Antes el aviso tocaba SOLO en la hora exacta y el bucle se quedaba con
+                # la PRIMERA comida que coincidía: si esa ya estaba registrada, el `continue` de más abajo saltaba la
+                # hora entera. El dueño registró el desayuno a las 12:58, su aviso cayó en la hora del almuerzo y el
+                # del almuerzo no salió. Ahora toca desde su hora y durante `_reintento_h` horas (sin cruzar la
+                # medianoche: el atraso se mide sin módulo), salvo que ya se haya enviado hoy; y se elige después,
+                # con lo registrado delante, la primera que falte.
+                _atraso = math.floor(current_hour_float) - math.floor(nudge_hour)
+                if not (0 <= _atraso < _reintento_h):
+                    continue
+                if _avisadas is None and _atraso > 0:
+                    continue  # sin saber qué salió hoy, solo la hora exacta: la conducta de antes, sin repetidos
+                if _avisadas and meal in _avisadas:
+                    continue
+                hours = int(nudge_hour)
+                mins = int((nudge_hour - hours) * 60)
+                am_pm = "AM" if hours < 12 else "PM"
+                display_hr = hours if hours <= 12 else hours - 12
+                if display_hr == 0: display_hr = 12
+                _tono = base_tone_instruction
+                if meal_rate < 0.30 and meal_total >= 3:
+                    _tono = "El usuario frecuentemente ignora o abandona esta comida específica. Pregúntale qué está fallando particularmente con esta comida (ej. tiempo, no le gusta, está fuera de casa) sin sonar acusador."
+                candidatas.append({
+                    "meal": meal, "hora": f"{display_hr}:{mins:02d} {am_pm}", "tono": _tono,
+                    "meal_rate": meal_rate, "meal_total": meal_total, "atraso": _atraso, "orden": _orden,
+                })
+
+            # La más reciente primero; a igual hora, la más tardía del día: a la 1:30 PM se pregunta por el
+            # almuerzo antes que por el desayuno.
+            candidatas.sort(key=lambda c: (c["atraso"], -c["orden"]))
+            if candidatas:
+                meal_to_check = candidatas[0]["meal"]
+                trigger_time_str = candidatas[0]["hora"]
+                final_tone_instruction = candidatas[0]["tono"]
+
         tone_instruction = final_tone_instruction
         
         if not meal_to_check:
@@ -569,19 +651,22 @@ No uses demasiados emojis. Sé directo, breve y empático.
                     # el coach: solo mueve el IDIOMA de la prosa, comida/nombres siguen español.
                     prompt += build_language_directive(_nudge_locale)
             else:
-                # Checar si la comida objetivo o algo con ese nombre ya se consumió
-                already_ate = False
-                for m in consumed:
-                    mt = m.get("meal_type", "").lower()
-                    mn = m.get("meal_name", "").lower()
-                    if meal_to_check.lower() in mt or meal_to_check.lower() in mn:
-                        already_ate = True
-                        break
-                        
-                if already_ate:
-                    logger.info(f"✅ [CRON] Usuario {user_id}: ya registró {meal_to_check}. Todo ok.")
+                # [P1-PLAN-LOTE-72] De las comidas que tocan, la primera que falte. Antes se miraba solo la primera
+                # que coincidía con la hora y, si ya estaba registrada, se abandonaba el tick.
+                elegida = None
+                for cand in candidatas:
+                    if _comida_ya_registrada(consumed, cand["meal"]):
+                        logger.info(f"✅ [CRON] Usuario {user_id}: ya registró {cand['meal']}. Todo ok.")
+                        continue
+                    elegida = cand
+                    break
+                if elegida is None:
                     continue
-                    
+                meal_to_check = elegida["meal"]
+                trigger_time_str = elegida["hora"]
+                tone_instruction = elegida["tono"]
+                meal_rate, meal_total = elegida["meal_rate"], elegida["meal_total"]
+
                 # ESTADO: olvido registrar. Generar mensaje proactivo.
                 logger.info(f"⚠️ [CRON] Usuario {user_id} ({session_id}) no registró {meal_to_check}. Generando mensaje...")
                 
