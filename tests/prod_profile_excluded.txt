@@ -3,37 +3,25 @@
 # línea es un fichero que falló bajo el perfil (109 fallos en 34 ficheros de 24819 tests) con el knob que lo explica.
 # La lista es NEGATIVA a propósito: un test nuevo entra al paso por defecto. Para sacar uno, se mide y se escribe el
 # motivo. Boy scout: al tocar un fichero de aquí, migrarlo a alimentos del catálogo real y borrar su línea.
+# [P1-PLAN-LOTE-65 · 2026-09-16] Re-medido tras hacer que cada arnés DECLARE el knob que necesita
+# (`_f8_verified_only_off`, `monkeypatch.setenv`): 19 fallos en 17 ficheros de 25.332 tests (artefacto
+# `scripts/data/f8_prod_profile_2026_09_16.json`). Salen los 17 que sólo fallaban porque el filtro de verificados
+# dropeaba su catálogo vacío. La lista SIN BASE se mide en la pata `produccion` de la CI (Linux, sin `.env`), no en
+# esta máquina: se queda como estaba hasta que una corrida la re-mida.
 tests/test_p0_hist_1_restore_plan_atomic.py  # MEALFIT_PLAN_JOBS_ENABLED — con el outbox `plan_jobs` encendido el endpoint encola trabajos de proyección: el test fija la conducta con el outbox apagado
-tests/test_p0_shopping_cycle_days.py  # MEALFIT_VERIFIED_INGREDIENTS_ONLY — harness con alimentos sintéticos fuera del catálogo: el filtro de verificados de producción los descarta
-tests/test_p1_1_coherence_edge_cases.py  # MEALFIT_VERIFIED_INGREDIENTS_ONLY — harness con alimentos sintéticos fuera del catálogo: el filtro de verificados de producción los descarta
 tests/test_p1_arq27_f3_bateria.py  # la batería aplica el perfil por dentro y afirma que la suite diverge de producción: corre aparte, con el entorno normal
 tests/test_p1_budget_floor_personalized.py  # MEALFIT_COUNTRY_SYSTEM — fija la conducta con el sistema de países apagado (la suite lo prueba OFF a propósito)
-tests/test_p1_coherence_oversupply_staples.py  # MEALFIT_VERIFIED_INGREDIENTS_ONLY — harness con alimentos sintéticos fuera del catálogo: el filtro de verificados de producción los descarta
-tests/test_p1_coherence_packaging_noise.py  # MEALFIT_VERIFIED_INGREDIENTS_ONLY — harness con alimentos sintéticos fuera del catálogo: el filtro de verificados de producción los descarta
 tests/test_p1_country_system_f1.py  # MEALFIT_COUNTRY_SYSTEM — fija la conducta con el sistema de países apagado (la suite lo prueba OFF a propósito)
 tests/test_p1_dreaming_1_anchors.py  # MEALFIT_DREAMING_RETRIEVAL_ENABLED — fija la memoria del chat con la recuperación de Dreaming apagada (su default de código)
 tests/test_p1_gates_flip_on.py  # combinación MEALFIT_DREAMING_INJECT_PLAN_ENABLED + MEALFIT_SODIUM_EXCESS_GATE + MEALFIT_RECIPE_CONTRACT_GATE + MEALFIT_MICRO_CLOSER_PERDAY — ningún knob solo lo explica: el test fija la conducta de la suite con varios a la vez
 tests/test_p1_harden_crossday_quota.py  # MEALFIT_HARDEN_MAIN_ARITY — fija el endurecimiento de pools con la aridad del plato principal apagada (su default de código)
 tests/test_p1_harden_pools_scaffold.py  # combinación MEALFIT_CARB_TARGET_TRIM + MEALFIT_CARB_TO_PROTEIN_SWAP + MEALFIT_SPICE_UNIT_AS_TSP + MEALFIT_HARDEN_MAIN_ARITY + MEALFIT_HARDEN_POOLS_ENABLED + MEALFIT_SWAP_PER_MEAL_MACRO_CLOSER + MEALFIT_SWAP_TARGET_FROM_SLOT + MEALFIT_UPDATE_MACRO_REBALANCE — ningún knob solo lo explica: el test fija la conducta de la suite con varios a la vez
 tests/test_p1_micro_perday_sodium.py  # MEALFIT_SODIUM_EXCESS_GATE — prueba el camino con el gate de sodio apagado (conftest lo apaga a propósito)
-tests/test_p1_pdf_2_perishable_classification.py  # MEALFIT_VERIFIED_INGREDIENTS_ONLY — harness con alimentos sintéticos fuera del catálogo: el filtro de verificados de producción los descarta
 tests/test_p1_plan_lote_13.py  # MEALFIT_COUNTRY_SYSTEM — fija la conducta con el sistema de países apagado (la suite lo prueba OFF a propósito)
 tests/test_p1_prep_collapse_guard.py  # MEALFIT_COUNTRY_SYSTEM — fija la conducta con el sistema de países apagado (la suite lo prueba OFF a propósito)
 tests/test_p1_recipe_contract_gate.py  # MEALFIT_RECIPE_CONTRACT_GATE — prueba el camino con el gate del contrato de receta apagado (conftest lo apaga a propósito)
 tests/test_p1_renewal_pantry_aware.py  # combinación MEALFIT_RENEWAL_PANTRY_AWARE_ENABLED + MEALFIT_PANTRY_COMPLETION_LIST_ENABLED — ningún knob solo lo explica: el test fija la conducta de la suite con varios a la vez
 tests/test_p1_renewal_pantry_completion.py  # MEALFIT_PANTRY_COMPLETION_LIST_ENABLED — fija la renovación sin la lista de completado de la nevera (su default de código)
-tests/test_p1_shopping_recipe_coherence.py  # MEALFIT_VERIFIED_INGREDIENTS_ONLY — harness con alimentos sintéticos fuera del catálogo: el filtro de verificados de producción los descarta
-tests/test_p1_trip_windowed_perishables.py  # MEALFIT_VERIFIED_INGREDIENTS_ONLY — harness con alimentos sintéticos fuera del catálogo: el filtro de verificados de producción los descarta
-tests/test_p1_veg_backfill_honesty.py  # MEALFIT_VERIFIED_INGREDIENTS_ONLY — harness con alimentos sintéticos fuera del catálogo: el filtro de verificados de producción los descarta
-tests/test_p2_audit_3_coherence_block_full_pipeline.py  # MEALFIT_VERIFIED_INGREDIENTS_ONLY — harness con alimentos sintéticos fuera del catálogo: el filtro de verificados de producción los descarta
 tests/test_p2_audit_v5_batch.py  # MEALFIT_MICRO_CLOSER_PERDAY — prueba el camino con el cerrador de micros por día apagado (conftest lo apaga a propósito)
-tests/test_p2_country_pipeline_composition.py  # MEALFIT_VERIFIED_INGREDIENTS_ONLY — harness con alimentos sintéticos fuera del catálogo: el filtro de verificados de producción los descarta
-tests/test_p2_guard_undersupply_canonical.py  # MEALFIT_VERIFIED_INGREDIENTS_ONLY — harness con alimentos sintéticos fuera del catálogo: el filtro de verificados de producción los descarta
 tests/test_p2_hist_audit_5_restore_cancels_source.py  # MEALFIT_PLAN_JOBS_ENABLED — con el outbox `plan_jobs` encendido el endpoint encola trabajos de proyección: el test fija la conducta con el outbox apagado
 tests/test_p2_panel_soft_reject.py  # MEALFIT_SODIUM_EXCESS_GATE — prueba el camino con el gate de sodio apagado (conftest lo apaga a propósito)
-tests/test_p2_protein_yield_canonical.py  # MEALFIT_VERIFIED_INGREDIENTS_ONLY — harness con alimentos sintéticos fuera del catálogo: el filtro de verificados de producción los descarta
-tests/test_p3_4_pavo_coherence_v3.py  # MEALFIT_VERIFIED_INGREDIENTS_ONLY — harness con alimentos sintéticos fuera del catálogo: el filtro de verificados de producción los descarta
-tests/test_p3_a_coherence_multiplier_e2e.py  # MEALFIT_VERIFIED_INGREDIENTS_ONLY — harness con alimentos sintéticos fuera del catálogo: el filtro de verificados de producción los descarta
-tests/test_p3_herb_1_fresh_herbs_cap.py  # MEALFIT_VERIFIED_INGREDIENTS_ONLY — harness con alimentos sintéticos fuera del catálogo: el filtro de verificados de producción los descarta
-tests/test_p3_protein_yield_decision.py  # MEALFIT_VERIFIED_INGREDIENTS_ONLY — harness con alimentos sintéticos fuera del catálogo: el filtro de verificados de producción los descarta
-tests/test_p6_fruits_large_cap.py  # MEALFIT_VERIFIED_INGREDIENTS_ONLY — harness con alimentos sintéticos fuera del catálogo: el filtro de verificados de producción los descarta

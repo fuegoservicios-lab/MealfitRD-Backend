@@ -238,7 +238,11 @@ _PROCESS_START_ISO = datetime.now(timezone.utc).isoformat()
 # prompts salen del god-file a `llm_telemetry.py` TAL CUAL (el grafo re-exporta): 51.861 líneas (−358) y el tope SSOT
 # baja de 52.600 a 52.240. Se queda el despachador `_submit_best_effort_metric` con su `_METRICS_EXECUTOR`. Cero
 # cambios de conducta; lo que cambia es dónde se parchea en un test: `llm_telemetry.<nombre>`.
-_LAST_KNOWN_PFIX = "P1-PLAN-LOTE-64 · 2026-09-15"
+# [P1-PLAN-LOTE-65 · 2026-09-16] (F8) Cada arnés declara el knob que necesita en vez de heredar el `setdefault` global
+# de conftest: los 35 que parchean el catálogo a vacío se quedaban sin nada que medir con el filtro de verificados de
+# producción. Suite bajo el perfil con base: 109 fallos en 34 ficheros → 19 en 17, y la lista de exclusión del paso
+# baja a la mitad. Sin cambios de producción: sólo tests y las listas del paso.
+_LAST_KNOWN_PFIX = "P1-PLAN-LOTE-65 · 2026-09-16"
 
 # [P1-SENTRY-SAMPLE-COST · 2026-05-12] Sentry sampling driven from env vars
 # con default seguro 0.1 (10%). Pre-fix tenía `traces_sample_rate=1.0` y

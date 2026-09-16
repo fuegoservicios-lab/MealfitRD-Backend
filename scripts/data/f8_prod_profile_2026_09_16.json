@@ -1,0 +1,291 @@
+{
+ "con_base": true,
+ "corrida": {
+  "fallos": 19,
+  "pasados": 25221,
+  "saltados": 92,
+  "tests": 25332
+ },
+ "fecha": "2026-09-16",
+ "ficheros": {
+  "tests/test_p0_hist_1_restore_plan_atomic.py": {
+   "atribucion": {
+    "aislado_fallos": 1,
+    "knobs": [
+     "MEALFIT_PLAN_JOBS_ENABLED"
+    ],
+    "runs": 10,
+    "veredicto": "knob"
+   },
+   "fallos": 1,
+   "pasados": 9,
+   "saltados": 0
+  },
+  "tests/test_p1_arq27_f3_bateria.py": {
+   "atribucion": {
+    "aislado_fallos": 2,
+    "knobs": [
+     "MEALFIT_COUNTRY_SYSTEM",
+     "MEALFIT_VERIFIED_INGREDIENTS_ONLY",
+     "MEALFIT_UPDATE_DISHES_STRICT_ALL_REASONS",
+     "MEALFIT_SHOPPING_COHERENCE_GUARD",
+     "MEALFIT_CULINARY_JUDGE_GUARD",
+     "MEALFIT_FIDELITY_GATE",
+     "MEALFIT_DISH_QUALITY_SOFT_GATE"
+    ],
+    "runs": 7,
+    "veredicto": "combinacion"
+   },
+   "fallos": 2,
+   "pasados": 27,
+   "saltados": 0
+  },
+  "tests/test_p1_budget_floor_personalized.py": {
+   "atribucion": {
+    "aislado_fallos": 1,
+    "knobs": [
+     "MEALFIT_COUNTRY_SYSTEM"
+    ],
+    "runs": 7,
+    "veredicto": "knob"
+   },
+   "fallos": 1,
+   "pasados": 6,
+   "saltados": 0
+  },
+  "tests/test_p1_country_system_f1.py": {
+   "atribucion": {
+    "aislado_fallos": 1,
+    "knobs": [
+     "MEALFIT_COUNTRY_SYSTEM"
+    ],
+    "runs": 7,
+    "veredicto": "knob"
+   },
+   "fallos": 1,
+   "pasados": 293,
+   "saltados": 0
+  },
+  "tests/test_p1_dreaming_1_anchors.py": {
+   "atribucion": {
+    "aislado_fallos": 1,
+    "knobs": [
+     "MEALFIT_DREAMING_RETRIEVAL_ENABLED"
+    ],
+    "runs": 12,
+    "veredicto": "knob"
+   },
+   "fallos": 1,
+   "pasados": 12,
+   "saltados": 0
+  },
+  "tests/test_p1_gates_flip_on.py": {
+   "atribucion": {
+    "aislado_fallos": 1,
+    "knobs": [
+     "MEALFIT_DREAMING_INJECT_PLAN_ENABLED",
+     "MEALFIT_SODIUM_EXCESS_GATE",
+     "MEALFIT_RECIPE_CONTRACT_GATE",
+     "MEALFIT_MICRO_CLOSER_PERDAY"
+    ],
+    "runs": 11,
+    "veredicto": "combinacion"
+   },
+   "fallos": 1,
+   "pasados": 4,
+   "saltados": 0
+  },
+  "tests/test_p1_harden_crossday_quota.py": {
+   "atribucion": {
+    "aislado_fallos": 1,
+    "knobs": [
+     "MEALFIT_HARDEN_MAIN_ARITY"
+    ],
+    "runs": 11,
+    "veredicto": "knob"
+   },
+   "fallos": 1,
+   "pasados": 3,
+   "saltados": 0
+  },
+  "tests/test_p1_harden_pools_scaffold.py": {
+   "atribucion": {
+    "aislado_fallos": 1,
+    "knobs": [
+     "MEALFIT_CARB_TARGET_TRIM",
+     "MEALFIT_CARB_TO_PROTEIN_SWAP",
+     "MEALFIT_SPICE_UNIT_AS_TSP",
+     "MEALFIT_HARDEN_MAIN_ARITY",
+     "MEALFIT_HARDEN_POOLS_ENABLED",
+     "MEALFIT_SWAP_PER_MEAL_MACRO_CLOSER",
+     "MEALFIT_SWAP_TARGET_FROM_SLOT",
+     "MEALFIT_UPDATE_MACRO_REBALANCE"
+    ],
+    "runs": 8,
+    "veredicto": "combinacion"
+   },
+   "fallos": 1,
+   "pasados": 4,
+   "saltados": 0
+  },
+  "tests/test_p1_micro_perday_sodium.py": {
+   "atribucion": {
+    "aislado_fallos": 1,
+    "knobs": [
+     "MEALFIT_SODIUM_EXCESS_GATE"
+    ],
+    "runs": 12,
+    "veredicto": "knob"
+   },
+   "fallos": 1,
+   "pasados": 6,
+   "saltados": 0
+  },
+  "tests/test_p1_plan_lote_13.py": {
+   "atribucion": {
+    "aislado_fallos": 1,
+    "knobs": [
+     "MEALFIT_COUNTRY_SYSTEM"
+    ],
+    "runs": 7,
+    "veredicto": "knob"
+   },
+   "fallos": 1,
+   "pasados": 23,
+   "saltados": 0
+  },
+  "tests/test_p1_prep_collapse_guard.py": {
+   "atribucion": {
+    "aislado_fallos": 1,
+    "knobs": [
+     "MEALFIT_COUNTRY_SYSTEM"
+    ],
+    "runs": 7,
+    "veredicto": "knob"
+   },
+   "fallos": 1,
+   "pasados": 7,
+   "saltados": 0
+  },
+  "tests/test_p1_recipe_contract_gate.py": {
+   "atribucion": {
+    "aislado_fallos": 1,
+    "knobs": [
+     "MEALFIT_RECIPE_CONTRACT_GATE"
+    ],
+    "runs": 12,
+    "veredicto": "knob"
+   },
+   "fallos": 1,
+   "pasados": 6,
+   "saltados": 0
+  },
+  "tests/test_p1_renewal_pantry_aware.py": {
+   "atribucion": {
+    "aislado_fallos": 2,
+    "knobs": [
+     "MEALFIT_RENEWAL_PANTRY_AWARE_ENABLED",
+     "MEALFIT_PANTRY_COMPLETION_LIST_ENABLED"
+    ],
+    "runs": 11,
+    "veredicto": "combinacion"
+   },
+   "fallos": 2,
+   "pasados": 8,
+   "saltados": 0
+  },
+  "tests/test_p1_renewal_pantry_completion.py": {
+   "atribucion": {
+    "aislado_fallos": 1,
+    "knobs": [
+     "MEALFIT_PANTRY_COMPLETION_LIST_ENABLED"
+    ],
+    "runs": 11,
+    "veredicto": "knob"
+   },
+   "fallos": 1,
+   "pasados": 5,
+   "saltados": 0
+  },
+  "tests/test_p2_audit_v5_batch.py": {
+   "atribucion": {
+    "aislado_fallos": 1,
+    "knobs": [
+     "MEALFIT_MICRO_CLOSER_PERDAY"
+    ],
+    "runs": 13,
+    "veredicto": "knob"
+   },
+   "fallos": 1,
+   "pasados": 30,
+   "saltados": 0
+  },
+  "tests/test_p2_hist_audit_5_restore_cancels_source.py": {
+   "atribucion": {
+    "aislado_fallos": 1,
+    "knobs": [
+     "MEALFIT_PLAN_JOBS_ENABLED"
+    ],
+    "runs": 10,
+    "veredicto": "knob"
+   },
+   "fallos": 1,
+   "pasados": 7,
+   "saltados": 0
+  },
+  "tests/test_p2_panel_soft_reject.py": {
+   "atribucion": {
+    "aislado_fallos": 1,
+    "knobs": [
+     "MEALFIT_SODIUM_EXCESS_GATE"
+    ],
+    "runs": 12,
+    "veredicto": "knob"
+   },
+   "fallos": 1,
+   "pasados": 14,
+   "saltados": 0
+  }
+ },
+ "ficheros_con_fallos": 17,
+ "git_sha": "632efeda",
+ "metodo": "la suite (`-m 'not e2e'`, sin la cuarentena de la CI) bajo `prod_profile.perfil_completo()` exportado al entorno; atribución por fichero: el conjunto mínimo de knobs cuya retirada deja el fichero en verde corriendo SOLO ese fichero (primero el sospechoso de la medición del 09-11)",
+ "perfil": {
+  "fuente": "/opt/mealfit/backend/.env (VPS Oracle, producción)",
+  "knobs": {
+   "MEALFIT_CARB_TARGET_TRIM": "true",
+   "MEALFIT_CARB_TO_PROTEIN_SWAP": "true",
+   "MEALFIT_COUNTRY_SYSTEM": "true",
+   "MEALFIT_CULINARY_JUDGE_GUARD": "warn",
+   "MEALFIT_DISH_QUALITY_SOFT_GATE": "true",
+   "MEALFIT_DREAMING_ENABLED": "true",
+   "MEALFIT_DREAMING_INJECT_PLAN_ENABLED": "true",
+   "MEALFIT_DREAMING_RETRIEVAL_ENABLED": "true",
+   "MEALFIT_FIDELITY_GATE": "warn",
+   "MEALFIT_HARDEN_MAIN_ARITY": "true",
+   "MEALFIT_HARDEN_POOLS_ENABLED": "true",
+   "MEALFIT_INITIAL_VIA_QUEUE": "true",
+   "MEALFIT_MACRO_AWARE_RECONCILE": "True",
+   "MEALFIT_MACRO_SOLVER_ENABLED": "true",
+   "MEALFIT_MAX_ATTEMPTS": "3",
+   "MEALFIT_MICRONUTRIENT_CLOSER": "true",
+   "MEALFIT_MICRO_CLOSER_PERDAY": "true",
+   "MEALFIT_PANTRY_COMPLETION_LIST_ENABLED": "true",
+   "MEALFIT_PANTRY_SUFFICIENCY_GATE": "true",
+   "MEALFIT_PLAN_JOBS_ENABLED": "1",
+   "MEALFIT_PLAN_POLICY_MODE": "enforce",
+   "MEALFIT_RECIPE_CONTRACT_GATE": "true",
+   "MEALFIT_RENEWAL_PANTRY_AWARE_ENABLED": "true",
+   "MEALFIT_SHOPPING_COHERENCE_GUARD": "block",
+   "MEALFIT_SODIUM_EXCESS_GATE": "true",
+   "MEALFIT_SPICE_UNIT_AS_TSP": "true",
+   "MEALFIT_SWAP_PER_MEAL_MACRO_CLOSER": "true",
+   "MEALFIT_SWAP_TARGET_FROM_SLOT": "true",
+   "MEALFIT_UPDATE_DISHES_STRICT_ALL_REASONS": "true",
+   "MEALFIT_UPDATE_MACRO_REBALANCE": "true",
+   "MEALFIT_VERIFIED_INGREDIENTS_ONLY": "true"
+  },
+  "leido": "2026-09-06"
+ },
+ "schema": "2026-09-13.f8"
+}

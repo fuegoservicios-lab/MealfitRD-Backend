@@ -309,6 +309,27 @@ cabía en los 50 min; en local, la tercera fase del gate (`EXIT_PROD`). Tiempo d
 con `monkeypatch`) y borrar su línea: el test `tests/test_p1_plan_lote_33.py` exige que la lista sea exactamente la de
 ficheros que fallan bajo el perfil en el artefacto, así que una línea de más o de menos se nota.
 
+**La mitad de la lista, cerrada (`P1-PLAN-LOTE-65` · 2026-09-16).** Los 35 ficheros marcados con
+`MEALFIT_VERIFIED_INGREDIENTS_ONLY` en las dos listas no usaban «alimentos sintéticos» por descuido: parchean el catálogo
+a vacío (`get_master_ingredients → []`) para aislar SU tema, y con el knob en el valor de producción el filtro de
+verificados —que sólo deja pasar lo que resuelve a un `master_ingredients` con precio— los dropea TODOS y no queda nada
+que medir. El arreglo es el que la propia nota del boy scout permitía: cada fichero DECLARA el knob que necesita
+(`_f8_verified_only_off`, fixture autouse con `monkeypatch.setenv` y el motivo escrito) en vez de heredar el `setdefault`
+global de `conftest.py`. Los 35 pasan con los dos valores del knob (788 tests).
+
+Re-medida la suite entera bajo el perfil CON base: **19 fallos en 17 ficheros de 25.332** (eran 109 en 34 de 24.819);
+artefacto `scripts/data/f8_prod_profile_2026_09_16.json`. La lista general baja de 34 a 17 y **no entra ninguno nuevo**.
+Lo que queda son knobs de CONDUCTA, no arneses: `MEALFIT_COUNTRY_SYSTEM` (4 ficheros), `MEALFIT_SODIUM_EXCESS_GATE` (3),
+`MEALFIT_PLAN_JOBS_ENABLED` (2), `MEALFIT_MICRO_CLOSER_PERDAY`, `MEALFIT_RECIPE_CONTRACT_GATE`,
+`MEALFIT_DREAMING_RETRIEVAL_ENABLED`, `MEALFIT_HARDEN_MAIN_ARITY`, `MEALFIT_PANTRY_COMPLETION_LIST_ENABLED` y tres
+combinaciones (más la batería, que aplica el perfil por dentro): cada uno prueba el camino con SU gate apagado, que es su
+tema, y sacarlo exigiría reescribir lo que el test afirma.
+
+**La lista SIN BASE no se tocó, a sabiendas.** Se mide en la pata `produccion` de la CI (Linux, sin `.env`, con el
+layout completo) y en esta máquina no hay forma honesta de reproducirla: un worktree sin `frontend/` ni `migrations/` al
+lado da **1.611 fallos en 344 ficheros** que son de layout —i18n, landing, iOS, Playwright—, no del perfil. Medido y
+descartado; la lista se re-mide cuando la CI vuelva a correr esa pata.
+
 ### La tormenta de reintentos del catálogo con la base caída (tarea propuesta del 13-sep · `P1-PLAN-LOTE-41` · 2026-09-14)
 
 | Knob | Default | Efecto |
