@@ -234,7 +234,11 @@ _PROCESS_START_ISO = datetime.now(timezone.utc).isoformat()
 # precisión estricta y 82,1 % por sustancia (el mismo defecto, con otro código). `paso_incoherente`, `tecnica_impropia` y
 # `nombre_no_corresponde` pasan a observación (`MEALFIT_CULINARY_JUDGE_OBSERVACION_CODES`: `dudosa`, no bloquean) y el
 # marcador gana la tabla por código y el mapa por sustancia. Recomendación C6: no pasar a `block` todavía.
-_LAST_KNOWN_PFIX = "P1-PLAN-LOTE-63 · 2026-09-15"
+# [P1-PLAN-LOTE-64 · 2026-09-15] (E7 / ARQ30-P2-01, 2.ª extracción) La telemetría de la llamada LLM y la caché de
+# prompts salen del god-file a `llm_telemetry.py` TAL CUAL (el grafo re-exporta): 51.861 líneas (−358) y el tope SSOT
+# baja de 52.600 a 52.240. Se queda el despachador `_submit_best_effort_metric` con su `_METRICS_EXECUTOR`. Cero
+# cambios de conducta; lo que cambia es dónde se parchea en un test: `llm_telemetry.<nombre>`.
+_LAST_KNOWN_PFIX = "P1-PLAN-LOTE-64 · 2026-09-15"
 
 # [P1-SENTRY-SAMPLE-COST · 2026-05-12] Sentry sampling driven from env vars
 # con default seguro 0.1 (10%). Pre-fix tenía `traces_sample_rate=1.0` y

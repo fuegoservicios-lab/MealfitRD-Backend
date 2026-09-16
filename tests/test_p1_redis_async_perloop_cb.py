@@ -23,9 +23,11 @@ from pathlib import Path
 
 import graph_orchestrator as g
 
-# [P1-PLAN-LOTE-32] los métodos async del CB viven en llm_circuit_breaker.py; la caché LLM, en el grafo
+# [P1-PLAN-LOTE-32] los métodos async del CB viven en llm_circuit_breaker.py; [P1-PLAN-LOTE-64] la caché LLM, en
+# llm_telemetry.py. Se lee la unión de los tres.
 _SRC = (Path(g.__file__).resolve().parent / "graph_orchestrator.py").read_text(encoding="utf-8") + "\n" + \
-    (Path(g.__file__).resolve().parent / "llm_circuit_breaker.py").read_text(encoding="utf-8")
+    (Path(g.__file__).resolve().parent / "llm_circuit_breaker.py").read_text(encoding="utf-8") + "\n" + \
+    (Path(g.__file__).resolve().parent / "llm_telemetry.py").read_text(encoding="utf-8")
 
 
 def test_marker_present():

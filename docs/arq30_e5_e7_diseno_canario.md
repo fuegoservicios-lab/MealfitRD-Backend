@@ -203,7 +203,7 @@ independiente y el más barato de medir en sombra.
 
 | Gap | Lo que ya hay | Primer paso (medición, sin cambiar conducta) |
 |---|---|---|
-| P2-01 god files | Cap duro en `graph_orchestrator.py`: 53.100 hasta el 13-sep (53.099 ese día); 52.600 tras `P1-PLAN-LOTE-32` (51.956), extracciones ya hechas (`_apply_macro_engine`, `deterministic_day`, `horizon`, `canonical_recipe`) | Mapa de dominios (elegibilidad, receta, porciones, validación, presentación) con conteo de líneas y llamadores; migrar tests parser → comportamiento SOLO al tocar cada contrato |
+| P2-01 god files | Cap duro en `graph_orchestrator.py`: 53.100 hasta el 13-sep (53.099 ese día); 52.600 tras `P1-PLAN-LOTE-32` (51.956) y 52.240 tras `P1-PLAN-LOTE-64` (51.861), extracciones ya hechas (`_apply_macro_engine`, `deterministic_day`, `horizon`, `canonical_recipe`) | Mapa de dominios (elegibilidad, receta, porciones, validación, presentación) con conteo de líneas y llamadores; migrar tests parser → comportamiento SOLO al tocar cada contrato |
 | P2-02 preferencias con evidencia | `user_facts` + Dreaming; `plan_meal_deviation` («comí otra cosa / todavía no») ya distingue registrado de prescrito | Registrar por separado elegido / cocinado / consumido / descartado / motivo del swap; **experimento offline** (reordenar candidatos seguros y comparar contra lo que el usuario eligió) antes de exponer nada |
 | P2-03 disponibilidad y coste por mercado | `pricing_mode_for_country`, catálogo de 347 filas, `MEALFIT_COUNTRY_CATALOG_UNPRICED_KEEP`; `known_ingredients` ya entra al compilador (ARQ27-P1-07) | Medir cuántas filas beta tienen precio y cuántas «0» son en realidad **ausente**; el modelo con confianza y fecha viene después del dato |
 | P2-04 latencia y coste por resultado útil | `llm_usage_events`, `/generation-eta` (p50/p90 real), timeouts por nodo | Instrumentar preflight vs generación vs reparaciones vs validación en `pipeline_metrics`; presupuesto de tokens por run como knob; comparar LLM necesario tras preflight |
@@ -251,6 +251,36 @@ definir (comprobado con `symtable` antes y después). Test: `tests/test_p1_plan_
 
 **Lo que NO se hizo.** Las funciones grandes siguen dentro. El siguiente candidato natural es la caché LLM persistente
 (`PersistentLLMCache`, que ya usa el breaker best-effort); su acoplamiento no se midió en este lote.
+
+### P2-01 · segunda extracción medida (`P1-PLAN-LOTE-64` · 2026-09-15)
+
+**Medido primero**, con el mismo método (AST): 573 símbolos de nivel superior y 1.832 globales; las funciones grandes leen
+entre 37 y 151 globales del módulo cada una (`assemble_plan_node` 2.324 líneas y 151 globales, `review_plan_node` 1.829 y
+104, `arun_plan_pipeline` 1.527 y 37), y el bloque de telemetría de la llamada LLM con la caché de prompts leía **4**:
+`logger` y los dos contextvars de atribución, que se mudan con él.
+
+**Qué se movió, tal cual** a `llm_telemetry.py` (410 líneas): los contextvars `_current_node_var` y `user_id_var`, la
+métrica de timeout (`_emit_llm_timeout_metric`), el emit idempotente del usage-event (`_USAGE_EMIT_SEEN`,
+`_usage_was_emitted`, `_mark_usage_emitted`, `_emit_llm_usage_event_best_effort`), el knob `MEALFIT_LLM_CACHE_TTL_S` y la
+caché persistente (`PersistentLLMCache`, `_LLM_CACHE`, `CACHE_TTL_SECONDS`).
+
+**Qué se quedó, a propósito:** el despachador `_submit_best_effort_metric` con su `_METRICS_EXECUTOR` —la política de
+DÓNDE corre el emit, que comparten otros ocho sitios del pipeline— y `_safe_ainvoke`, que lo llama. Mecanismo fuera,
+política dentro, como en la primera extracción.
+
+**Lo que «mover y re-exportar» rompía, otra vez por donde avisó el lote 32.** Seis tests de
+`test_p0_4_llm_cache_sql_fix` parcheaban `graph_orchestrator.execute_sql_query` / `redis_client` para probar la caché:
+ahora parchean `llm_telemetry`. Dos de sus parches (`graph_orchestrator.redis_async_client`) **no alcanzaban nada antes de
+mover** — la caché async lee el cliente per-loop con `get_redis_async()` desde `P1-REDIS-ASYNC-PERLOOP-CB`— y se
+re-escribieron a lo que el código sí lee. Cuatro ficheros más leían el FUENTE del grafo buscando lo que ahora vive fuera
+(`test_p0_orch_audit_impl`, `test_p1_cost_instrumentation`, `test_p1_redis_async_perloop_cb` y `test_p1_besteffort_db_cb`,
+que **sólo corre donde hay `.env`**: en esta copia se salta y habría fallado en el gate); se re-apuntaron conservando su
+intención.
+
+**Después.** 51.861 líneas (−358). El tope SSOT baja de 52.600 a 52.240: 379 líneas de aire, y quien quiera más tendrá que
+extraer. Cero cambios de conducta: el grafo resuelve los mismos objetos (`go.PersistentLLMCache is
+llm_telemetry.PersistentLLMCache`, y el contextvar es literalmente el mismo) y el logger conserva el nombre
+`graph_orchestrator`. Test: `tests/test_p1_plan_lote_64.py`.
 
 ---
 

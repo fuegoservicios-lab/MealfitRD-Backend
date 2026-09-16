@@ -162,9 +162,9 @@ def test_parchear_el_grafo_ya_no_alcanza_al_breaker(monkeypatch, go):
 
 def test_el_grafo_tiene_aire_y_el_tope_baja_con_la_extraccion():
     n = _src("graph_orchestrator.py").count("\n")
-    assert n <= 52_600, f"graph_orchestrator.py {n} líneas: extraer, no subir el tope"
+    assert n <= 52_240, f"graph_orchestrator.py {n} líneas: extraer, no subir el tope"   # [P1-PLAN-LOTE-64] el tope bajó con la 2.ª extracción
     caps = _src("tests/test_p3_shopping_projection_pkg.py")
-    assert re.search(r'"graph_orchestrator\.py":\s*52_600', caps), "el tope SSOT de los god-files baja con la extracción"
+    assert re.search(r'"graph_orchestrator\.py":\s*52_240', caps), "el tope SSOT de los god-files baja con la extracción"
 
 
 def test_docs_plan_marker_y_anclas():

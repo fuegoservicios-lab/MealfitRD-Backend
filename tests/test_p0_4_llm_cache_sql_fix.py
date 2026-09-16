@@ -34,6 +34,9 @@ from unittest.mock import patch
 import pytest
 
 import graph_orchestrator
+import llm_telemetry
+# [P1-PLAN-LOTE-64] la clase vive en `llm_telemetry.py`; el grafo la re-exporta (por eso se importa de allí) pero
+# lo que ESE código ve (`execute_sql_query`, `redis_client`, `get_redis_async`) se parchea en su propio módulo.
 from graph_orchestrator import PersistentLLMCache
 
 
@@ -62,8 +65,8 @@ def test_get_query_uses_make_interval_not_quoted_interval():
         captured["fetch_one"] = fetch_one
         return None  # simula miss
 
-    with patch.object(graph_orchestrator, "execute_sql_query", side_effect=fake_execute), \
-         patch.object(graph_orchestrator, "redis_client", None):
+    with patch.object(llm_telemetry, "execute_sql_query", side_effect=fake_execute), \
+         patch.object(llm_telemetry, "redis_client", None):
         cache.get("k_test")
 
     assert "query" in captured, "get() no llamó a execute_sql_query"
@@ -85,8 +88,8 @@ def test_get_query_placeholder_count_matches_params():
         captured["params"] = params
         return None
 
-    with patch.object(graph_orchestrator, "execute_sql_query", side_effect=fake_execute), \
-         patch.object(graph_orchestrator, "redis_client", None):
+    with patch.object(llm_telemetry, "execute_sql_query", side_effect=fake_execute), \
+         patch.object(llm_telemetry, "redis_client", None):
         cache.get("k_test")
 
     sql = captured["query"]
@@ -106,8 +109,8 @@ def test_get_passes_ttl_seconds_as_second_param():
         captured["params"] = params
         return None
 
-    with patch.object(graph_orchestrator, "execute_sql_query", side_effect=fake_execute), \
-         patch.object(graph_orchestrator, "redis_client", None):
+    with patch.object(llm_telemetry, "execute_sql_query", side_effect=fake_execute), \
+         patch.object(llm_telemetry, "redis_client", None):
         cache.get("any_key")
 
     assert captured["params"][0] == "any_key"
@@ -130,8 +133,8 @@ def test_aget_query_uses_make_interval_not_quoted_interval():
         return None
 
     async def _run():
-        with patch.object(graph_orchestrator, "aexecute_sql_query", side_effect=fake_aexecute), \
-             patch.object(graph_orchestrator, "redis_async_client", None):
+        with patch.object(llm_telemetry, "aexecute_sql_query", side_effect=fake_aexecute), \
+             patch.object(llm_telemetry, "get_redis_async", lambda: None):
             await cache.aget("k_test_async")
 
     asyncio.run(_run())
@@ -151,8 +154,8 @@ def test_aget_query_placeholder_count_matches_params():
         return None
 
     async def _run():
-        with patch.object(graph_orchestrator, "aexecute_sql_query", side_effect=fake_aexecute), \
-             patch.object(graph_orchestrator, "redis_async_client", None):
+        with patch.object(llm_telemetry, "aexecute_sql_query", side_effect=fake_aexecute), \
+             patch.object(llm_telemetry, "get_redis_async", lambda: None):
             await cache.aget("k_test_async")
 
     asyncio.run(_run())
@@ -199,8 +202,8 @@ def test_get_propagates_db_value_when_redis_unavailable():
         # Simulamos el row real que la DB devuelve (psycopg con dict_row).
         return {"value": expected}
 
-    with patch.object(graph_orchestrator, "execute_sql_query", side_effect=fake_execute), \
-         patch.object(graph_orchestrator, "redis_client", None):
+    with patch.object(llm_telemetry, "execute_sql_query", side_effect=fake_execute), \
+         patch.object(llm_telemetry, "redis_client", None):
         result = cache.get("k_hit")
 
     assert result == expected, f"esperado {expected}, got {result}"
@@ -213,8 +216,8 @@ def test_get_returns_default_on_db_miss():
     def fake_execute(query, params=None, fetch_one=False, **kwargs):
         return None
 
-    with patch.object(graph_orchestrator, "execute_sql_query", side_effect=fake_execute), \
-         patch.object(graph_orchestrator, "redis_client", None):
+    with patch.object(llm_telemetry, "execute_sql_query", side_effect=fake_execute), \
+         patch.object(llm_telemetry, "redis_client", None):
         result = cache.get("k_miss", default="sentinel")
 
     assert result == "sentinel"

@@ -40,12 +40,14 @@ import pytest
 _BACKEND = Path(__file__).parent.parent
 _GO_PY = _BACKEND / "graph_orchestrator.py"
 # [P1-PLAN-LOTE-32] el CB best-effort y el LLMCircuitBreaker (2 de sus 5 callsites) viven en llm_circuit_breaker.py;
-# los otros 3 (caché LLM, AB-TEMP) siguen en el grafo. Se lee la unión.
+# [P1-PLAN-LOTE-64] los dos de la caché LLM, en llm_telemetry.py; el de AB-TEMP sigue en el grafo. Se lee la unión.
 _CB_PY = _BACKEND / "llm_circuit_breaker.py"
+_LT_PY = _BACKEND / "llm_telemetry.py"
 
 
 def _src() -> str:
-    return _GO_PY.read_text(encoding="utf-8") + "\n" + _CB_PY.read_text(encoding="utf-8")
+    return (_GO_PY.read_text(encoding="utf-8") + "\n" + _CB_PY.read_text(encoding="utf-8") + "\n"
+            + _LT_PY.read_text(encoding="utf-8"))
 _ENV_PATH = _BACKEND / ".env"
 
 

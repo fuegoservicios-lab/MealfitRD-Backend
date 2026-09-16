@@ -40,6 +40,8 @@ _BACKEND = Path(__file__).resolve().parent.parent
 _G = (_BACKEND / "graph_orchestrator.py").read_text(encoding="utf-8")
 # [P1-PLAN-LOTE-32] los semáforos distribuidos y su cota local se movieron del grafo a llm_concurrency.py
 _LC = (_BACKEND / "llm_concurrency.py").read_text(encoding="utf-8")
+# [P1-PLAN-LOTE-64] la telemetría del usage-event y la caché de prompts viven en `llm_telemetry.py`
+_LT = (_BACKEND / "llm_telemetry.py").read_text(encoding="utf-8")
 _S = (_BACKEND / "services.py").read_text(encoding="utf-8")
 _DAYGEN_PROMPT = (_BACKEND / "prompts" / "day_generator.py").read_text(encoding="utf-8")
 _SCHEMAS = (_BACKEND / "schemas.py").read_text(encoding="utf-8")
@@ -285,10 +287,10 @@ def test_p2_orch_13_db_executor_knob():
 # P2-ORCH-14 — idempotencia del emit de usage-events
 # ===========================================================================
 def test_p2_orch_14_usage_idempotency():
-    assert "_USAGE_EMIT_SEEN" in _G
-    assert "def _usage_was_emitted(result) -> bool:" in _G
-    assert "def _mark_usage_emitted(result) -> None:" in _G
-    assert "if result is not None and _usage_was_emitted(result):" in _G
+    assert "_USAGE_EMIT_SEEN" in _LT
+    assert "def _usage_was_emitted(result) -> bool:" in _LT
+    assert "def _mark_usage_emitted(result) -> None:" in _LT
+    assert "if result is not None and _usage_was_emitted(result):" in _LT
 
 
 # ===========================================================================

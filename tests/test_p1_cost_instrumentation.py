@@ -31,6 +31,8 @@ import pytest
 _BACKEND_ROOT = Path(__file__).resolve().parent.parent
 _DB_PROFILES_PATH = _BACKEND_ROOT / "db_profiles.py"
 _GRAPH_PATH = _BACKEND_ROOT / "graph_orchestrator.py"
+# [P1-PLAN-LOTE-64] el helper del emit vive en `llm_telemetry.py`; `_safe_ainvoke`, que lo llama, sigue en el grafo
+_TELEMETRY_PATH = _BACKEND_ROOT / "llm_telemetry.py"
 _MIGRATION_PATH = (
     _BACKEND_ROOT / "migrations"
     / "p1_cost_instrumentation_2026_05_15.sql"
@@ -207,19 +209,19 @@ def test_safe_ainvoke_emits_usage_event_on_success():
 
 
 def test_helper_emit_usage_event_defined_top_level():
-    text = _GRAPH_PATH.read_text(encoding="utf-8")
+    text = _TELEMETRY_PATH.read_text(encoding="utf-8")
     assert re.search(
         r"^def _emit_llm_usage_event_best_effort\(", text, re.MULTILINE
     ), (
         "Helper `_emit_llm_usage_event_best_effort` debe estar definido "
-        "top-level en graph_orchestrator.py."
+        "top-level en llm_telemetry.py (P1-PLAN-LOTE-64; el grafo lo re-exporta)."
     )
 
 
 def test_helper_uses_log_llm_usage_event():
     """El helper debe delegar la persistencia a `db_profiles.log_llm_usage_event`
     (SSOT) — no debe duplicar la lógica de INSERT inline."""
-    text = _GRAPH_PATH.read_text(encoding="utf-8")
+    text = _TELEMETRY_PATH.read_text(encoding="utf-8")
     body = _extract_function_body(text, "_emit_llm_usage_event_best_effort")
     assert "log_llm_usage_event" in body, (
         "Helper debe delegar persistencia a db_profiles.log_llm_usage_event."
@@ -229,7 +231,7 @@ def test_helper_uses_log_llm_usage_event():
 def test_helper_is_defensive_against_missing_usage_metadata():
     """Responses sin `usage_metadata` (modelos legacy, fallbacks) no deben
     persistir filas placeholder vacías ni crashear."""
-    text = _GRAPH_PATH.read_text(encoding="utf-8")
+    text = _TELEMETRY_PATH.read_text(encoding="utf-8")
     body = _extract_function_body(text, "_emit_llm_usage_event_best_effort")
     # Debe checkear que usage existe Y es dict ANTES de leer sub-claves.
     assert "if not usage" in body or "if usage is None" in body, (
