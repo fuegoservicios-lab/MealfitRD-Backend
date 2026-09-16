@@ -1512,3 +1512,18 @@ que el participio «licuado» también contaba como mezcla) y en el doble de un 
 nunca, así que el test pasaba por la razón equivocada). Las tres reparadas escribiendo el backslash con `chr(92)`,
 y re-medido: el plan vegano sigue dando 1 hallazgo V1 (`Habas`), que era el resultado documentado.
 
+## El suelo cocinable, también como última palabra (P1-PLAN-LOTE-69 · 2026-09-16)
+
+Salió de generar un plan REAL para comprobar el lote 68: dos líneas seguían bajo el piso (`10 g de Maíz dulce en
+granos`, `10 g de lechosa`) en una comida que YA llevaba `_portion_floor_adjusted`. No era el arreglo del 68: es un
+error de ORDEN, el mismo que el repo cerró dos veces antes —`P1-CAPS-LAST-WORD` para los techos y
+`P1-RECONCILE-LAST-WORD` para el display↔raw— por una tercera puerta.
+
+El último suelo del motor está anidado en `if _rq_fixed:` (sólo corre si el recheck post-quantize rebalanceó algún
+día) y después siguen actuando el micro-closer, el recorte de carbos, el de grasas, el autofix de sodio y el refill
+de gain-muscle. Medido ejecutando el recorte de carbos sobre ese día: deja «5 g de Maíz dulce» y «10 g de ñame»; el
+suelo, re-ejecutado, los repara. Por eso ahora corre una vez más al final del finalize: **después** de los techos
+(que sólo bajan) y **antes** del reconciliador display↔raw (para que la lista compre la cantidad ya corregida).
+Idempotente, y nunca deja una comida sin ingredientes. Knob `MEALFIT_FLOOR_LAST_WORD`; tooltip-anchor
+`P1-PLAN-LOTE-69-SUELO-ULTIMA-PALABRA`.
+

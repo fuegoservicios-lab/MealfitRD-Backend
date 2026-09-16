@@ -10754,6 +10754,10 @@ PAREN_GRAMS_CAP = _env_bool("MEALFIT_PAREN_GRAMS_CAP", True)
 # finalize: los pases aditivos posteriores (refill gain-muscle, cerrador de proteína, closer de
 # micros) vuelven a inflar líneas que un cap ya había bajado. Idempotente y sólo-bajar.
 CAPS_LAST_WORD = _env_bool("MEALFIT_CAPS_LAST_WORD", True)
+# [P1-PLAN-LOTE-69 · 2026-09-16] Simétrico del anterior para el SUELO cocinable: los mismos pases aditivos y los
+# recortes de macros que corren después dejan líneas sub-servibles que nadie vuelve a levantar. Ver su bloque en
+# `finalize_plan_data_coherence`. Rollback sin redeploy: MEALFIT_FLOOR_LAST_WORD=false.
+FLOOR_LAST_WORD = _env_bool("MEALFIT_FLOOR_LAST_WORD", True)
 # [P1-FINALIZE-TAIL-PARITY · 2026-07-25] El refill de gain-muscle dentro de
 # `finalize_plan_data_coherence` es ADITIVO y corre después de la cola de assemble, así que
 # reintroduce duplicados y gramos cocidos. Corre esos dos pases detrás de él — sobre todo por los
@@ -28021,6 +28025,30 @@ def finalize_plan_data_coherence(days: list, db=None, allergies=None, target_fat
                             f"POSTERIORES a los caps previos (refill/cerrador/micro-closer).")
         except Exception as _eclw:
             logger.warning(f"[P1-CAPS-LAST-WORD] no-op: {type(_eclw).__name__}: {_eclw}")
+
+    # [P1-PLAN-LOTE-69 · 2026-09-16] …y el SUELO cocinable, TAMBIÉN como última palabra: tercera puerta del
+    # mismo error de ORDEN que ya cerraron P1-CAPS-LAST-WORD (techos) y P1-RECONCILE-LAST-WORD (display↔raw).
+    #
+    # Evidencia (plan REAL del 16-sep, «Arepitas de Maíz con Mantequilla de Maní, Lechosa y Habas»): la comida
+    # llegó con `_portion_floor_adjusted=True` y aun así entregó `10 g de lechosa` y `10 g de Maíz dulce en
+    # granos`. El suelo del motor está anidado en `if _rq_fixed:` (sólo corre si el recheck post-quantize
+    # rebalanceó algo) y DESPUÉS siguen actuando el micro-closer, el recorte de carbos, el de grasas, el autofix
+    # de sodio y el refill de gain-muscle. Probado aislado: el recorte de carbos deja «5 g de Maíz dulce» y
+    # «10 g de ñame» en ese mismo día, y el suelo re-ejecutado los repara. No falla el suelo: falla el ORDEN.
+    #
+    # Va DESPUÉS de los techos (que sólo bajan: subir antes sería pelearse con un recorte que viene) y ANTES del
+    # reconciliador display↔raw, para que la lista compre la cantidad ya corregida. Idempotente por diseño, y
+    # nunca deja una comida sin ingredientes (el propio suelo exige ≥2 líneas restantes para dropear).
+    # tooltip-anchor: P1-PLAN-LOTE-69-SUELO-ULTIMA-PALABRA
+    if FLOOR_LAST_WORD and PORTION_SHRINK_FLOOR_ENABLED:
+        try:
+            _flw = _floor_subservible_portions(days, day_kcal_target=_sfl_day_kcal_fpc, db=db)
+            if _flw:
+                total += _flw; parts.append(f"floor_last_word={_flw}")
+                logger.info(f"📏 [P1-PLAN-LOTE-69] {_flw} línea(s) sub-servible(s) repuestas al piso cocinable "
+                            f"por pases POSTERIORES al suelo del motor (trims de macros/micro-closer/refill).")
+        except Exception as _eflw:
+            logger.warning(f"[P1-PLAN-LOTE-69] suelo última palabra no-op: {type(_eflw).__name__}: {_eflw}")
 
     # [P1-RECONCILE-LAST-WORD · 2026-07-25] El reconciliador display↔raw, TAMBIÉN como última
     # palabra. Mismo error de orden que ya cerraron P1-CAPS-LAST-WORD y P1-FINALIZE-TAIL-PARITY,
