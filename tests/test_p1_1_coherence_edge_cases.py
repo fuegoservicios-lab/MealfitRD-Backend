@@ -28,6 +28,16 @@ from unittest.mock import patch
 import pytest
 
 
+# [P1-PLAN-LOTE-65 · 2026-09-15] (F8) Este arnés aísla su tema con el catálogo vacío o con alimentos sintéticos: con
+# `MEALFIT_VERIFIED_INGREDIENTS_ONLY` en el valor de PRODUCCIÓN, el filtro de verificados (`master_ingredients` con
+# precio) los dropea todos y no queda nada que medir. El fichero declara el knob que necesita en vez de heredar el
+# `setdefault` global de `conftest.py` — así el paso del gate con el perfil de producción puede correrlo.
+@pytest.fixture(autouse=True)
+def _f8_verified_only_off(monkeypatch):
+    monkeypatch.setenv("MEALFIT_VERIFIED_INGREDIENTS_ONLY", "false")
+
+
+
 @pytest.fixture(autouse=True)
 def _reset_coherence_alias_cache():
     """[test-drift 2026-06-16] `_canonicalize_for_coherence` ahora pasa por

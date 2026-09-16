@@ -44,6 +44,16 @@ import pytest
 import shopping_calculator as sc
 
 
+# [P1-PLAN-LOTE-65 · 2026-09-15] (F8) Este arnés aísla su tema con el catálogo vacío o con alimentos sintéticos: con
+# `MEALFIT_VERIFIED_INGREDIENTS_ONLY` en el valor de PRODUCCIÓN, el filtro de verificados (`master_ingredients` con
+# precio) los dropea todos y no queda nada que medir. El fichero declara el knob que necesita en vez de heredar el
+# `setdefault` global de `conftest.py` — así el paso del gate con el perfil de producción puede correrlo.
+@pytest.fixture(autouse=True)
+def _f8_verified_only_off(monkeypatch):
+    monkeypatch.setenv("MEALFIT_VERIFIED_INGREDIENTS_ONLY", "false")
+
+
+
 def _plan(lineas_receta: list[str], lista: list[dict]) -> dict:
     return {
         "days": [{"day": 1, "meals": [{"name": "Almuerzo", "ingredients": lineas_receta}]}],
