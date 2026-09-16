@@ -33150,6 +33150,43 @@ def _day_kcal_from_target_macros(macros) -> float | None:
         return None
 
 
+# [P1-PLAN-LOTE-70 · 2026-09-16] Palabras del nombre que NO identifican al alimento (estado, corte, presentación):
+# sin esta lista, «Mango Fresco» haría que cualquier línea con «fresco» pareciera dar nombre al plato.
+_FLOOR_NOMBRE_GENERICAS = frozenset({
+    "cocido", "cocida", "cocidos", "cocidas", "crudo", "cruda", "crudos", "crudas", "fresco", "fresca",
+    "frescos", "frescas", "natural", "naturales", "mixta", "mixtas", "mixto", "mixtos", "picado", "picada",
+    "picados", "picadas", "molido", "molida", "entero", "entera", "enteros", "enteras", "granos", "trozos",
+    "cubos", "tiras", "taza", "tazas", "gusto", "medio", "media", "grande", "grandes", "pequeno", "pequena",
+})
+
+
+def _linea_da_nombre_al_plato(linea: str, meal: dict, _sa) -> bool:
+    """[P1-PLAN-LOTE-70 · 2026-09-16] ¿El alimento de esta línea aparece en el NOMBRE del plato?
+
+    El suelo cocinable, cuando no hay headroom kcal, DROPEA la línea sub-servible. Medido en un plan REAL del
+    16-sep: el escudo pre-INSERT quitó «10 g de habas cocidas» de «Mango Fresco con Nueces Mixtas y Habas» — el
+    plato conservó el nombre y perdió el ingrediente. El repo ya tiene la regla escrita para la proteína
+    protagonista («JAMÁS drop — es la identidad del plato»); esto la extiende a cualquier alimento que nombre el
+    plato. Tokens de ≥4 letras, sin las palabras de estado/corte, con límite de palabra.
+    tooltip-anchor: P1-PLAN-LOTE-70-NO-DROPEAR-LA-IDENTIDAD"""
+    try:
+        nombre = _sa(str(meal.get("name") or "").lower())
+        if not nombre:
+            return False
+        cuerpo = _re.sub(r"^\s*[\d.,/½¼¾\s]*"
+                         r"(?:g|gr|gramos|ml|taza|tazas|cda|cdas|cdta|cdtas|unidad|unidades)?\s*(?:de\s+)?",
+                         "", _sa(str(linea).lower()))
+        for tok in _re.findall(r"[a-z]{4,}", cuerpo):
+            if tok in _FLOOR_NOMBRE_GENERICAS:
+                continue
+            if _re.search(r"\b" + _re.escape(tok) + r"(?:s|es)?\b", nombre):
+                return True
+        return False
+    except Exception:
+        return False
+
+
+
 def _floor_subservible_portions(days, day_kcal_target=None, db=None) -> int:
     """[P2-AUDIT-V5-BATCH · 2026-07-02] (GAP-05) Piso cocinable del lado SHRINK — espejo-floor de
     `_cap_unrealistic_portions` (techo puro): solver/reconcile/rebalance componen factores (hasta
@@ -33564,6 +33601,26 @@ def _floor_subservible_portions(days, day_kcal_target=None, db=None) -> int:
                             touched += 1
                             _meal_touched = True
                     else:
+                        # [P1-PLAN-LOTE-70 · 2026-09-16] …salvo que el alimento DÉ NOMBRE al plato: entonces se sube al piso aunque
+                        # no haya headroom. Un «Mango Fresco con Nueces Mixtas y Habas» sin habas miente en el título; unas kcal de
+                        # más, no. Misma asimetría que el piso protagonista de proteína, que ya lo tenía escrito.
+                        if _linea_da_nombre_al_plato(s, meal, _sa):
+                            try:
+                                _new_nm = _resc(s, factor)
+                            except Exception:
+                                _new_nm = None
+                            if _new_nm and _new_nm != s:
+                                ings[idx] = _new_nm
+                                if _ri is not None:
+                                    try:
+                                        raw[_ri] = _resc(str(raw[_ri]), factor)
+                                    except Exception:
+                                        pass
+                                touched += 1
+                                _meal_touched = True
+                                logger.info(f"🍠 [P1-PLAN-LOTE-70] '{str(meal.get('name'))[:40]}' da nombre a su ingrediente: "
+                                            f"{int(cur_g)}g→{int(floor_g)}g en vez de dropearlo (sin headroom)")
+                            continue
                         _drop_idx.append(idx)
                 if _drop_idx and (len(ings) - len(_drop_idx)) >= 2:
                     for _di in sorted(_drop_idx, reverse=True):

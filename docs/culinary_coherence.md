@@ -1527,3 +1527,19 @@ suelo, re-ejecutado, los repara. Por eso ahora corre una vez más al final del f
 Idempotente, y nunca deja una comida sin ingredientes. Knob `MEALFIT_FLOOR_LAST_WORD`; tooltip-anchor
 `P1-PLAN-LOTE-69-SUELO-ULTIMA-PALABRA`.
 
+## El plato no puede perder el ingrediente que le da el nombre (P1-PLAN-LOTE-70 · 2026-09-16)
+
+Salió de comprobar el lote 69 con un plan REAL y reproducir el escudo pre-INSERT: para quitar una línea
+sub-servible, el suelo cocinable **dropeó «10 g de habas cocidas» de «Mango Fresco con Nueces Mixtas y Habas»**. El
+plato conservó el título y perdió el ingrediente — el usuario lee un nombre que la lista no respalda.
+
+El suelo dropea cuando no hay headroom kcal (y siempre que queden ≥2 líneas), y eso está bien para un topping. No
+para la identidad: el piso protagonista de proteína ya tenía escrito «JAMÁS drop — es la identidad del plato», y
+esto extiende la misma regla a cualquier alimento que aparezca en el NOMBRE. Sin headroom se sube al piso igual:
+unas kcal de más no mienten; un título sin su ingrediente, sí.
+
+La identidad se decide por tokens de ≥4 letras del alimento contra el nombre normalizado, descartando palabras de
+estado o corte (`_FLOOR_NOMBRE_GENERICAS`: «fresco», «cocidas», «en cubos»…) — sin esa lista, «Mango **Fresco**»
+haría que cualquier «queso fresco» pareciera dar nombre al plato. tooltip-anchor
+`P1-PLAN-LOTE-70-NO-DROPEAR-LA-IDENTIDAD`.
+
