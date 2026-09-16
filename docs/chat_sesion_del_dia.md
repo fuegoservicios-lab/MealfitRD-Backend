@@ -34,7 +34,12 @@ teléfono nuevo o tras limpiar el navegador.
    borrar el chat abierto) quita la marca. Tampoco con un turno en vuelo, mensajes en pantalla o un borrador escrito.
 4. Si el servidor ya conoce la sesión abierta con mensajes, se queda. Sin chat de hoy, se queda la nueva: el de ayer no
    resucita.
-5. Mientras llega el historial se ve «Cargando mensajes…», no el saludo de un chat que ya no es el del usuario.
+5. **Un solo cambio en pantalla.** Sin nada local que enseñar (sesión abierta por la regla y ninguna lista en caché,
+   que es justo lo que deja el logout) se ve «Cargando mensajes…» desde el principio, sin pedir el historial vacío de
+   esa sesión, y luego la conversación o el saludo. Antes se veía el saludo, a los ~300 ms «Cargando…» y después la
+   conversación: el parpadeo doble que el dueño ya había reportado. La espera termina siempre: al llegar la lista, si
+   la lista falla o si el usuario elige un chat a mano. En la visita normal del día (lista en caché) el saludo sale al
+   instante, como siempre.
 
 **Lo que el frontend lee del backend** (`db_chat._process_and_sort_sessions`):
 
