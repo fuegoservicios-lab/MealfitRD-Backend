@@ -207,17 +207,26 @@ def test_con_la_ventana_en_1_la_conducta_es_la_de_antes(dia, monkeypatch):
     assert dia["avisos_nuevos"] == []
 
 
-def test_el_tope_diario_sigue_en_dos_por_defecto(dia):
-    dia.update(ahora=_utc(16, 21), avisos_hoy=["Desayuno", "Almuerzo"])
-    dia["correr"]()
-    assert dia["avisos_nuevos"] == [], "el tope anti-fatiga (2 al día) no cambia sin decisión del dueño"
-
-
-def test_el_tope_diario_es_un_knob(dia, monkeypatch):
-    monkeypatch.setenv("MEALFIT_PROACTIVE_MAX_NUDGES_PER_DAY", "3")
+def test_con_el_tope_de_cuatro_la_merienda_llega_tras_desayuno_y_almuerzo(dia):
+    # Decisión del dueño (16-sep): un aviso por comida. Con el 2 de antes, este caso se quedaba sin merienda.
     dia.update(ahora=_utc(16, 21), avisos_hoy=["Desayuno", "Almuerzo"])
     dia["correr"]()
     assert dia["avisos_nuevos"] == ["Merienda"]
+
+
+def test_el_tope_de_cuatro_corta_el_quinto(dia):
+    # Sin registrar nada en todo el día y con los cuatro avisos dados, el Resumen de las 23:00 ya no sale.
+    dia.update(ahora=_utc(17, 3), comidas=[], mensajes=[],
+               avisos_hoy=["Desayuno", "Almuerzo", "Merienda", "Cena"])
+    dia["correr"]()
+    assert dia["avisos_nuevos"] == []
+
+
+def test_el_tope_diario_es_un_knob(dia, monkeypatch):
+    monkeypatch.setenv("MEALFIT_PROACTIVE_MAX_NUDGES_PER_DAY", "2")
+    dia.update(ahora=_utc(16, 21), avisos_hoy=["Desayuno", "Almuerzo"])
+    dia["correr"]()
+    assert dia["avisos_nuevos"] == []
 
 
 def test_el_resumen_de_las_23_no_cambia(dia):
@@ -269,6 +278,11 @@ def test_el_consumidor_pasa_la_franja():
     fuente = _src("proactive_agent.py")
     assert "get_avg_meal_hour(user_id, meal, ventana=FRANJA_DE_COMIDA.get(meal))" in fuente
     assert "P1-PLAN-LOTE-72" in fuente
+
+
+def test_el_tope_por_defecto_es_cuatro():
+    import proactive_agent as pa
+    assert pa._max_avisos_por_dia() == 4
 
 
 def test_marcador_y_documento():

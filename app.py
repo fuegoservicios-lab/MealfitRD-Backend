@@ -250,7 +250,8 @@ _PROCESS_START_ISO = datetime.now(timezone.utc).isoformat()
 # dueño anotó el desayuno a las 12:58, esa hora pasó a ser «su hora de desayunar», el aviso del desayuno cayó en la
 # hora del almuerzo y el bucle, al ver el desayuno registrado, saltó la hora entera. Ahora un registro fuera de la
 # franja de su comida no mueve el aviso, se avisa la comida que falte y un aviso bloqueado se reintenta unas horas
-# (knobs MEALFIT_PROACTIVE_NUDGE_RETRY_HOURS y MEALFIT_PROACTIVE_MAX_NUDGES_PER_DAY; docs/recordatorios_de_comida.md).
+# (MEALFIT_PROACTIVE_NUDGE_RETRY_HOURS). Y, por decisión del dueño, el tope diario sube de 2 a 4 avisos, uno por comida
+# (MEALFIT_PROACTIVE_MAX_NUDGES_PER_DAY; docs/recordatorios_de_comida.md).
 _LAST_KNOWN_PFIX = "P1-PLAN-LOTE-72 · 2026-09-16"
 
 # [P1-SENTRY-SAMPLE-COST · 2026-05-12] Sentry sampling driven from env vars

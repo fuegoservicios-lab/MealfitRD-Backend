@@ -90,9 +90,10 @@ FRANJA_DE_COMIDA = {
 
 
 def _max_avisos_por_dia() -> int:
-    """[P1-PLAN-LOTE-72] Tope anti-fatiga de recordatorios por día (antes, un `2` fijo). Con cuatro comidas y el
-    resumen, dos avisos dejan sin recordatorio a la merienda y la cena: subirlo es decisión del dueño."""
-    return _env_int("MEALFIT_PROACTIVE_MAX_NUDGES_PER_DAY", 2, validator=lambda v: 0 <= v <= 8)
+    """[P1-PLAN-LOTE-72] Tope anti-fatiga de recordatorios por día. Era un `2` fijo, y con cuatro comidas dos
+    avisos dejaban sin recordatorio a la merienda y la cena. El dueño lo subió a 4 (16-sep): uno por comida. El
+    Resumen de las 23:00 comparte el tope, así que a quien no registró nada y ya recibió los cuatro no le llega."""
+    return _env_int("MEALFIT_PROACTIVE_MAX_NUDGES_PER_DAY", 4, validator=lambda v: 0 <= v <= 8)
 
 
 def _horas_de_reintento() -> int:
@@ -429,8 +430,8 @@ def run_proactive_checks():
             _user_tz_off = _proactive_tz_offset_min()
         now_ast = _now_utc - timedelta(minutes=_user_tz_off)
         current_hour_float = _local_hour_float_for_offset(_now_utc, _user_tz_off)
-        # GAP 3: Nudge Budget (max 2 nudges per day to avoid fatigue)
-        # [P1-PLAN-LOTE-72] El tope es el knob `MEALFIT_PROACTIVE_MAX_NUDGES_PER_DAY` (2 por defecto).
+        # GAP 3: Nudge Budget (tope diario anti-fatiga)
+        # [P1-PLAN-LOTE-72] El tope es el knob `MEALFIT_PROACTIVE_MAX_NUDGES_PER_DAY`: 4 por defecto (era un 2 fijo).
         _tope_diario = _max_avisos_por_dia()
         daily_nudges = get_daily_nudge_count(user_id)
         if daily_nudges >= _tope_diario:

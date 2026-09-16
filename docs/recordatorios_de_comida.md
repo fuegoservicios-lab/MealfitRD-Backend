@@ -12,8 +12,9 @@ push si tiene dispositivos suscritos). Test ancla: [`test_p1_plan_lote_72.py`](.
     por defecto: desayuno 9:00, almuerzo 13:00, merienda 16:00, cena 19:30.
   - Retraso: 1,5 h (1 h si responde a más del 70 % de los avisos de esa comida, 2,5 h si a menos del 30 %).
 - A las 23:00 locales, en vez de eso, el «Resumen del día» (solo si no registró nada).
-- Tope anti-fatiga: `MEALFIT_PROACTIVE_MAX_NUDGES_PER_DAY` avisos por día local (**2** por defecto). Con cuatro comidas y
-  el resumen, dos avisos dejan sin recordatorio a la merienda y la cena: subirlo es decisión del dueño.
+- Tope anti-fatiga: `MEALFIT_PROACTIVE_MAX_NUDGES_PER_DAY` avisos por día local: **4**, uno por comida (decisión del
+  dueño, 16-sep; era un 2 fijo, que dejaba sin recordatorio a la merienda y la cena). El Resumen de las 23:00 comparte
+  el tope: a quien no registró nada y ya recibió los cuatro avisos no le llega.
 - Anti-spam: no se escribe si el coach escribió en esa sesión hace menos de una hora.
 
 ## Lo que cambió (P1-PLAN-LOTE-72)
@@ -40,14 +41,12 @@ desayuno en `consumed_meals` con `consumed_at` a las 12:58 — la hora del REGIS
 Antes, un aviso que no podía salir en su hora (el coach había respondido hace menos de una hora, la IA no contestó, un
 despliegue a y media) se perdía para todo el día: el cron solo pasa una vez por cada hora.
 
-**Lo que no cambia.** El tope de 2 avisos al día, el anti-spam de una hora, el Resumen de las 23:00, el tono adaptativo
+**Lo que no cambia.** El anti-spam de una hora, el Resumen de las 23:00, el tono adaptativo
 y el cruce de medianoche de las cenas tardías (`P3-AVG-MEAL-HOUR-CIRCULAR`). Sin `ventana`, `get_avg_meal_hour`
 devuelve la media de siempre.
 
 ## Abierto
 
-- **Tope diario** (decisión del dueño): con 2, un día sin registrar nada recibe el aviso del desayuno y el del almuerzo, y
-  ninguno más. Se puede subir sin desplegar con el knob.
 - **Respuesta tardía**: `handle_nudge_response` solo enlaza la respuesta al aviso si llega en los 60 minutos siguientes.
   El dueño contestó el del desayuno 2 h 27 min después y el aviso quedó como «no respondido», y la tasa de respuesta
   decide el tono y si se manda push.
