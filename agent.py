@@ -6703,8 +6703,9 @@ def chat_with_agent(session_id: str, prompt: str, current_plan: Optional[dict] =
     # directiva, repetida al FINAL, es lo último que el modelo lee antes de responder.
     # es-DO/guest ⇒ "" (byte-idéntico). Best-effort: jamás rompe el chat.
     try:
-        system_prompt += build_language_directive(_coach_locale)
+        # [P1-PLAN-LOTE-81] la directiva del MENSAJE va antes: el refuerzo del locale sigue siendo lo último que lee (P1-COACH-LANGUAGE-RECENCY)
         system_prompt += build_message_language_directive(prompt, _coach_locale)   # [P1-PLAN-LOTE-81] el idioma del mensaje manda
+        system_prompt += build_language_directive(_coach_locale)
     except Exception as _exc:
         # [P2-SILENT-DEGRADATION] El `pass` a secas dejaba al coach respondiendo en
         # el idioma equivocado SIN rastro: es justo el sintoma que este refuerzo
@@ -7282,8 +7283,9 @@ def chat_with_agent_stream(session_id: str, prompt: str, current_plan: Optional[
     # bloque, porque a mitad de prompt el modelo la desobedeció con el primer
     # usuario real en-US. Ver el comentario gemelo en chat_with_agent.
     try:
-        system_prompt += build_language_directive(_coach_locale)
+        # [P1-PLAN-LOTE-81] la directiva del MENSAJE va antes: el refuerzo del locale sigue siendo lo último que lee (P1-COACH-LANGUAGE-RECENCY)
         system_prompt += build_message_language_directive(prompt, _coach_locale)   # [P1-PLAN-LOTE-81] el idioma del mensaje manda
+        system_prompt += build_language_directive(_coach_locale)
     except Exception as _exc:
         # [P2-SILENT-DEGRADATION] El `pass` a secas dejaba al coach respondiendo en
         # el idioma equivocado SIN rastro: es justo el sintoma que este refuerzo
