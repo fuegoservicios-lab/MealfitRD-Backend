@@ -148,7 +148,8 @@ def test_marker_doc_and_env_example():
 
 # ── El proveedor vuelve solo por knob y solo en sus superficies ──────────────────────────────────
 
-SUPERFICIES = {"llm_provider.py", "db_profiles.py", "app.py", ".env.example", "docs/llm_tier_routing.md"}
+SUPERFICIES = {"llm_provider.py", "db_profiles.py", "app.py", ".env.example", "docs/llm_tier_routing.md",
+               "docs/coach_bateria_2026_09_15.md"}   # [P1-PLAN-LOTE-77] la batería del coach medida con el proveedor alterno
 
 
 def _menciones(token: str) -> set:

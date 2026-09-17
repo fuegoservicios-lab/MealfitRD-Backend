@@ -469,8 +469,8 @@ def _prune_plan_for_chat(plan):
     # [P1-PLAN-LOTE-77 · 2026-09-17] Poda PROFUNDA: medido en el plan del dueño, el JSON del prompt pesaba 38,7 KB y casi
     # todo era telemetría por comida (`_misalign_trace`, `_solver_raw_by_food`, `_closer_raw_by_food`, `ingredients_raw`…)
     # que el coach no necesita y que le tapa los datos. Fuera toda clave interna (`_…`) a cualquier nivel e
-    # `ingredients_raw` (duplica `ingredients`); y cada día lleva sus sumas hechas (`totales_dia`): en la batería con
-    # DeepSeek el modelo sumó a mano 121 g de proteína donde el plan daba 127 g. El plan original JAMÁS se muta.
+    # `ingredients_raw` (duplica `ingredients`); y cada día lleva sus sumas hechas (`totales_dia`): en la batería del 17-sep
+    # el modelo sumó a mano 121 g de proteína donde el plan daba 127 g. El plan original JAMÁS se muta.
     out = {k: v for k, v in plan.items() if k not in _CHAT_PLAN_PRUNE_KEYS and not _clave_interna_chat(k)}
     _days = out.get("days")
     if isinstance(_days, list):
