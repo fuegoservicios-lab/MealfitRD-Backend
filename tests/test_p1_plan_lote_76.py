@@ -129,7 +129,8 @@ def test_la_bateria_en_seco_comparte_la_nota_y_cuenta_sus_registros(monkeypatch)
     monkeypatch.setattr(db_facts, "get_consumed_meals_today", lambda uid, date_str=None, tz_offset_mins=None: [{"meal_type": "desayuno"}])
     nota = tools._nota_comidas_sin_registrar("u1", 1, rows_extra=[{"meal_type": "almuerzo"}, {"meal_type": "cena"}])
     assert "ayer ya tiene todas sus comidas registradas" in nota
-    assert "hoy sigue sin registrar almuerzo, cena" in tools._nota_comidas_sin_registrar("u1", 0)
+    # [P1-PLAN-LOTE-84] a las 9 de la noche las dos ya pasaron su hora: se ofrecen por su nombre, como antes
+    assert "hoy sigue sin registrar almuerzo, cena" in tools._nota_comidas_sin_registrar("u1", 0, ahora_local=21.0)
     assert "_nota_comidas_sin_registrar" in _src("scripts/coach_battery/run_battery.py")   # el stub en seco la comparte
 
 

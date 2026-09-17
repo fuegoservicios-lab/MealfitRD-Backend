@@ -1003,12 +1003,69 @@ def _rescue_dinner_slot(user_id: str, meal_type: str, calories: int, days_ago: i
         return meal_type
 
 
-def _nota_comidas_sin_registrar(user_id: str, days_ago: int, rows_extra=None) -> str:
+# [P1-PLAN-LOTE-84 · 2026-09-17] El cierre tras registrar sabe qué hora es. El dueño registró el desayuno a las 11:23 y el
+# coach cerró con «¿Te anoto el almuerzo cuando lo comas?»: la nota del lote 76 ofrecía LA QUE FALTA por su nombre sin mirar
+# si ya tocaba. Una comida que aún no ha llegado no se ofrece con una pregunta; se cierra con una frase consciente de la
+# hora («ya casi es hora de almorzar: cuando almuerces, cuéntame qué comiste y lo anoto»). La que ya pasó su hora sí se
+# ofrece por su nombre, como hasta ahora. Hora típica de cada comida: la media real del usuario dentro de su franja
+# (`get_avg_meal_hour`, la misma que usan los recordatorios) o, sin registros, la de siempre.
+_HORA_TIPICA_DE_COMIDA = {"desayuno": 9.0, "almuerzo": 13.0, "merienda": 16.0, "cena": 19.5}
+_CUANDO_COMAS = {"desayuno": "desayunes", "almuerzo": "almuerces", "merienda": "meriendes", "cena": "cenes"}
+_VERBO_HORA_DE = {"desayuno": "desayunar", "almuerzo": "almorzar", "merienda": "merendar", "cena": "cenar"}
+_GRACIA_TRAS_LA_HORA_H = 0.75   # 45 min después de su hora típica una comida sin registrar ya «pasó»
+
+
+def _hora_local_float(user_id: str) -> Optional[float]:
+    """Hora local del usuario como número (11:23 → 11.38); None si no se puede saber."""
+    try:
+        from datetime import timedelta as _td_h, timezone as _tz_h
+        _loc = datetime.now(_tz_h.utc) - _td_h(minutes=int(user_tz_offset_min(user_id)))
+        return _loc.hour + _loc.minute / 60.0
+    except Exception:
+        return None
+
+
+def _fmt_hora_float(h: float) -> str:
+    """11.38 → «11:23 AM»; 13.0 → «1:00 PM»."""
+    hh = int(h) % 24
+    mm = int(round((h - int(h)) * 60)) % 60
+    am_pm = "AM" if hh < 12 else "PM"
+    d = hh if 1 <= hh <= 12 else abs(hh - 12)
+    return f"{d}:{mm:02d} {am_pm}"
+
+
+def _horas_tipicas_de_comida(user_id: str) -> dict:
+    """Hora típica por comida: la media real dentro de su franja (la de los recordatorios) o la de siempre."""
+    horas = dict(_HORA_TIPICA_DE_COMIDA)
+    try:
+        from db_facts import get_avg_meal_hour as _gamh
+        from proactive_agent import FRANJA_DE_COMIDA as _franjas
+        for _slot in list(horas):
+            _nombre = _slot.capitalize()
+            _avg = _gamh(user_id, _nombre, ventana=_franjas.get(_nombre))
+            if isinstance(_avg, (int, float)) and 0 <= float(_avg) < 24:
+                horas[_slot] = float(_avg)
+    except Exception:
+        pass
+    return horas
+
+
+def _comidas_por_hora(faltan, hora_local, horas) -> tuple:
+    """Separa las comidas sin registrar en (ya pasó su hora, aún no toca), en orden del día."""
+    pasadas, proximas = [], []
+    for _slot in (faltan or []):
+        _h = float((horas or {}).get(_slot, _HORA_TIPICA_DE_COMIDA.get(_slot, 12.0)))
+        (pasadas if float(hora_local) >= _h + _GRACIA_TRAS_LA_HORA_H else proximas).append(_slot)
+    return pasadas, proximas
+
+
+def _nota_comidas_sin_registrar(user_id: str, days_ago: int, rows_extra=None, ahora_local=None) -> str:
     """[P1-PLAN-LOTE-76 · 2026-09-17] Qué comidas de ESE día siguen sin registrar, para que el asistente ofrezca la
     que falta POR SU NOMBRE o no pregunte: el dueño recibió «¿Te falta algo más de ayer por registrar?» cuando el
     diario ya sabía la respuesta. Best-effort: nunca rompe el registro (devuelve "" si algo falla). `rows_extra` son
     registros de ese día que aún no están en la base: el arnés de la batería del coach, que corre en seco, pasa los
-    suyos para que la nota sea la misma que en producción."""
+    suyos para que la nota sea la misma que en producción. [P1-PLAN-LOTE-84] `ahora_local` (hora como número) solo
+    para tests; en producción se calcula del huso del usuario."""
     try:
         from datetime import date as _date_n, timedelta as _td_n
         from chat_history_context import comidas_sin_registrar, find_plan_day_for_date
@@ -1027,6 +1084,27 @@ def _nota_comidas_sin_registrar(user_id: str, days_ago: int, rows_extra=None) ->
             _plan_day = None
         _faltan = comidas_sin_registrar(_rows_dia, _plan_day)
         _dia_txt = "hoy" if not days_ago else ("ayer" if int(days_ago) == 1 else f"hace {int(days_ago)} días")
+        # [P1-PLAN-LOTE-84] Hoy, lo que falta se separa por la hora: lo que ya pasó se ofrece; lo que aún no toca, no.
+        if _faltan and not days_ago:
+            _ahora = ahora_local if ahora_local is not None else _hora_local_float(user_id)
+            if _ahora is not None:
+                _pasadas, _proximas = _comidas_por_hora(_faltan, _ahora, _horas_tipicas_de_comida(user_id))
+                _hora_txt = _fmt_hora_float(_ahora)
+                if _proximas:
+                    _prox = _proximas[0]
+                    _prox_h = _horas_tipicas_de_comida(user_id).get(_prox, _HORA_TIPICA_DE_COMIDA.get(_prox, 12.0))
+                    _casi = (0 <= (float(_prox_h) - float(_ahora)) <= 2.0)
+                    _frase = (f"«ya casi es hora de {_VERBO_HORA_DE.get(_prox, 'comer')}: cuando {_CUANDO_COMAS.get(_prox, 'comas')}, "
+                              f"cuéntame qué comiste y lo anoto»" if _casi else
+                              f"«cuando {_CUANDO_COMAS.get(_prox, 'comas')}, cuéntame qué comiste y lo anoto»")
+                    if _pasadas:
+                        return (f" (Para el asistente: son las {_hora_txt}. Hoy sigue sin registrar {', '.join(_pasadas)}, que ya "
+                                f"pasó su hora: cierra ofreciendo agregarla por su nombre en una pregunta corta. "
+                                f"{', '.join(_proximas)} aún no toca: no preguntes por ella.)")
+                    return (f" (Para el asistente: son las {_hora_txt} y hoy ya tiene registrado todo lo que tocaba hasta ahora. "
+                            f"La próxima es {_prox} (~{_fmt_hora_float(float(_prox_h))}) y todavía no ha llegado: NO preguntes si "
+                            f"la anotas ni si la registras. Cierra con UNA frase consciente de la hora, sin pregunta, del tipo "
+                            f"{_frase}.)")
         if _faltan:
             return (f" (Para el asistente: {_dia_txt} sigue sin registrar {', '.join(_faltan)} — cierra "
                     f"ofreciendo agregar LA QUE FALTA por su nombre, en una pregunta corta; nunca la pregunta "
