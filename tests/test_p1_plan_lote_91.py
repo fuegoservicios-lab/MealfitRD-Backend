@@ -45,7 +45,8 @@ def test_solo_el_enlace_se_va_al_final():
 
 
 def test_el_enlace_cierra_con_su_linea_y_la_tarjeta_no():
-    plano = _bloque(_sin_comentarios(_front(_CSS)), "@media (max-width: 480px) {")
+    # [P1-PLAN-LOTE-92] el bloque del teléfono es el de 768, no el de 480
+    plano = _bloque(_sin_comentarios(_front(_CSS)), "@media (max-width: 768px) {")
     assert ".turnOnSlot:has(> .turnOnLink) { border-top: 1px solid var(--border," in plano
     assert "padding-top: 1.5rem;" in plano
     assert ".turnOnCard { border-top" not in plano

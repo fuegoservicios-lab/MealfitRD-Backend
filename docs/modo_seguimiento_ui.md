@@ -73,3 +73,32 @@ leía como una línea DEL «Progreso en Tiempo Real». El defecto no estaba en e
   vacía cobraba dos huecos de rejilla (48px de aire entre el contador y el enlace). Ahora sale del reparto.
 
 Tests: `frontend/src/__tests__/DashboardTracking.dismissed_last.test.jsx` y `backend/tests/test_p1_plan_lote_91.py`.
+
+## El corte del teléfono es 768, no 480 (`P1-PLAN-LOTE-92` · 2026-09-17)
+
+Reporte del dueño con captura de su iPhone, ya con los lotes 88-91 desplegados: «se ve estrecho, mira todo el espacio que
+tiene los bordes de los lados, hay vacíos».
+
+**Lo medido antes de tocar nada.** En el log de nginx, su teléfono cargó a las 22:23 UTC el `index.html`, el
+`Dashboard-la8y58kc.js` y el `Dashboard-CZ2kqYUb.css` de la release vigente (no era caché vieja del PWA); en ese JS
+descargado de producción, `DashboardTracking` pasa `flatOnMobile:!0` a las dos secciones, y en ese CSS está la regla
+`.card.flatMobile{padding:0;border:0;…}`. Sobre la captura, el contenido ocupaba ~75 % del ancho y las líneas divisorias
+tenían margen a los lados: es el número exacto que sale con la tarjeta SIN aplanar (relleno 1,25rem + borde) y la página a
+0,9rem. O sea: el CSS y el JS eran los buenos y aun así el bloque `@media (max-width: 480px)` no casaba en su pantalla.
+
+**Por qué.** El viewport CSS de un teléfono no es fijo: el zoom de sitio de Safari por debajo del 100 % lo ENSANCHA (un
+iPhone de 390 pt al 75 % reporta 520 px). Cualquier iPhone con esa preferencia se salía del diseño. Un diseño que se cae por
+40 px de zoom no es el diseño: es una coincidencia.
+
+**El cambio.** Los tres bloques del teléfono (aplanado del contador, aplanado de la hidratación, y el relleno/líneas de la
+página con el enlace del lote 91) pasan de `max-width: 480px` a `max-width: 768px`, que es el MISMO corte con el que
+`DashboardLayout` ya se vuelve teléfono (`.mainContent { padding: 0.65rem 0.85rem }`) y con el que la tarjeta baja a
+1,25rem y su icono a 40px. Medido en el arnés: a 520px el contenido pasa de 75 % a 93,8 % del ancho; a 392px no cambia
+(91,8 %); a 820px la tarjeta sigue siendo tarjeta.
+
+El bloque de 480 no se borra: sigue llevando lo que sí es cuestión de pantalla pequeña (el aire de la tarjeta del lote 87,
+que actúa en modo plan, donde no hay aplanado).
+
+Tests: `frontend/src/__tests__/DashboardTracking.phone_breakpoint.test.jsx` y `backend/tests/test_p1_plan_lote_92.py`
+(que además ata el corte al del armazón: si `DashboardLayout` mueve su frontera, cae el test y no el teléfono de nadie).
+Las anclas de los lotes 88 y 91 quedaron reconvertidas al bloque de 768.

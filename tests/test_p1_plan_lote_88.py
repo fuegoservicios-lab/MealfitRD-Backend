@@ -23,10 +23,14 @@ def _front(rel: str) -> str:
 
 
 def _bloque_plano(rel: str) -> str:
-    """El ÚLTIMO `@media (max-width: 480px)` del módulo, sin comentarios (que nombran las clases) y con el espacio
-    colapsado. Nada del aplanado puede vivir fuera de él: en tableta y escritorio las tarjetas siguen siéndolo."""
+    """El ÚLTIMO `@media (max-width: 768px)` del módulo, sin comentarios (que nombran las clases) y con el espacio
+    colapsado. Nada del aplanado puede vivir fuera de él: en tableta y escritorio las tarjetas siguen siéndolo.
+
+    [P1-PLAN-LOTE-92 · 2026-09-17] Era el bloque de 480px y no casaba en el teléfono del dueño (basta con que baje
+    el zoom del sitio para que su viewport CSS pase de 480). El aplanado se movió al corte de 768, que es donde el
+    armazón ya decide «esto es un teléfono»."""
     css = re.sub(r"/\*.*?\*/", "", _front(rel), flags=re.S)
-    i = css.rindex("@media (max-width: 480px) {")
+    i = css.rindex("@media (max-width: 768px) {")
     assert "flatMobile" not in css[:i], f"{rel}: el aplanado se salió del bloque de 480px"
     return re.sub(r"\s+", " ", css[i:])
 
