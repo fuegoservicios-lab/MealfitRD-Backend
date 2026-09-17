@@ -300,6 +300,8 @@ planificador (`P1-PLANNER-PRO-FALLBACK`) y el day-gen (`TimeoutError: primary y 
 EXTREMO»). Es un lookup determinista (temp 0): el razonamiento va apagado (`extra_body.thinking=disabled`, que el wrapper honra
 en los dos proveedores). La tostada de casabe entra en `_ALLERGEN_TERM_BASE_EXCUSES` como la sémola de maíz.
 
+**Verificado con los mismos dos perfiles y el arreglo** (02:31-02:46, $0,15): DM2 **339 s** (antes 849) y alérgica **512 s** (antes 919), los 6 días reales (0 de contingencia), 0 expiraciones de la tool médica, 0 aperturas del breaker, y el plan entregado de la alérgica con **0 violaciones** de `_scan_allergen_violations` para lácteos/gluten/huevo/lactosa (el único rechazo por alérgeno fue REAL, «agua fría o leche descremada», y el retry informado lo resolvió).
+
 **Lo que NO se toca aquí, dicho.** El piso de proteína contra los topes de porciones en ganancia muscular (baseline) es una
 decisión vigente (CAPS-LAST-WORD); queda medido. Con razonamiento activo en el resto de nodos, DeepSeek tarda lo mismo que GLM
 en el perfil limpio (276 s frente a 411-650 s del bench del 13-sep) y cuesta 7-9 centavos por bloque de 3 días.
