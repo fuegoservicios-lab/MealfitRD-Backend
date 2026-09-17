@@ -318,3 +318,19 @@ modelo que no razona; con el proveedor alterno y los knobs en su default pasan a
 con Z.ai no cambia nada. Alternativa NO tomada: apagar el razonamiento del day-gen (3-4× más rápido) — el revisor y los gates
 deterministas cazan lo que el modelo se salta, pero la calidad del plato sin razonar no está medida; queda para medir con la
 misma batería antes de decidirlo.
+
+### Las demás superficies, una llamada real cada una (17-sep 05:10, base en solo lectura)
+
+| Superficie | Método estructurado | Resultado con `deepseek-flash` |
+|---|---|---|
+| `expand_recipe_agent` (receta expandida) | function_calling sin razonar (wrapper) | OK · 12,3 s · lista de pasos |
+| `extract_facts` (extractor de hechos, `include_raw`) | function_calling sin razonar | OK · 1,1 s · «alérgico al maní», «no come cerdo desde hoy» |
+| `swap_meal(individual)` (`MealModel`, `include_raw`) | function_calling sin razonar | OK · 13,4 s · un reintento por guardrail |
+| estimador de macros del diario (`json_mode` explícito con su prompt real) | json_object con razonamiento | OK · 12,5 s y 5,8 s (tope del handler 25 s) |
+| título del chat (texto) | — | OK · 2,7 s |
+| juez culinario, revisor, planificador, autocrítica, i18n del plan | (ya en producción desde el cambio) | OK: 2, 6, 2, 3 y 2 llamadas en `llm_usage_events` |
+
+En producción el day-gen va a `gpt-5.6-luna` (hay `OPENAI_API_KEY` en el VPS): el techo del lote 78 solo actúa si el day-gen
+cae al proveedor alterno (sin key o con Luna caída). Y el registro de la noche: un usuario real (no el dueño) chateó a las
+23:57 RD, 30 min antes del cambio de proveedor, y recibió los 429 de Z.ai (`rag_query_router`, clasificador de sentimiento y
+`call_model`); desde el cambio, cero 429.
