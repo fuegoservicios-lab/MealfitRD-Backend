@@ -54,3 +54,22 @@ lo anclan los tests del lote 87. Arnés (no versionado): Vite con raíz fuera de
 `config/api`, `AssessmentContext` y `planModeResume`.
 
 Tests: `frontend/src/__tests__/DashboardTracking.flat_mobile.test.jsx` y `backend/tests/test_p1_plan_lote_88.py`.
+
+## Lo que se descarta no encabeza (`P1-PLAN-LOTE-91` · 2026-09-17)
+
+Reporte del dueño con captura, tras pulsar «Ahora no» en la invitación al plan: «se puso raro lo del progreso en tiempo
+real». Medido en el arnés a 392px: al descartarla, la tarjeta colapsa a un enlace (`.turnOnLink`, 27px de texto tenue) que
+se quedaba en la PRIMERA posición del teléfono (`P1-PLAN-LOTE-87`). Con la tarjeta eso funcionaba —su marco la separaba—,
+pero desde que las secciones van sin marco (`P1-PLAN-LOTE-88`) el enlace quedaba a 24px del título, sin nada en medio, y se
+leía como una línea DEL «Progreso en Tiempo Real». El defecto no estaba en el contador: estaba encima.
+
+- **En ≤900px, con el enlace, las áreas se reordenan a `"main" "side" "plan"`**: el contador abre la pantalla y la
+  invitación la cierra. La puerta no se borra (esa fue la decisión original del «enciéndelo»), solo deja de encabezar.
+  Se reordenan las ÁREAS y no la fila del bloque: en una rejilla con `gap`, una fila vacía sigue cobrando sus dos huecos.
+  `:has()` mira hacia abajo desde `.page`; donde no exista, no casa la regla y el enlace se queda arriba — la conducta previa.
+- **La tarjeta sin descartar no cambia**: sigue primera, que es lo que el dueño pidió en el lote 87.
+- **El enlace cierra con la misma línea fina** que separa la hidratación, para que no parezca su pie.
+- **`.sideCol:empty { display: none }`**: con la hidratación apagada en Preferencias el componente devuelve null y su fila
+  vacía cobraba dos huecos de rejilla (48px de aire entre el contador y el enlace). Ahora sale del reparto.
+
+Tests: `frontend/src/__tests__/DashboardTracking.dismissed_last.test.jsx` y `backend/tests/test_p1_plan_lote_91.py`.
