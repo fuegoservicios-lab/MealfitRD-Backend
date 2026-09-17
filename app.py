@@ -259,7 +259,8 @@ _PROCESS_START_ISO = datetime.now(timezone.utc).isoformat()
 # [P0-DEEPSEEK-FLASH · 2026-09-16] DeepSeek (V4.1 Flash / V4 Pro) como proveedor LLM alterno por knob
 # `MEALFIT_LLM_PROVIDER` (default zai): Z.ai se quedó sin saldo (429/1113) a las 21:30 y toda la IA
 # cayó; el dueño pidió probar DeepSeek Flash. Un knob cambia de proveedor y otro lo deshace.
-_LAST_KNOWN_PFIX = "P0-DEEPSEEK-FLASH · 2026-09-16"
+# [P1-PLAN-LOTE-74 · 2026-09-16] Marcador en la serie del plan (35 tests exigen `P1-PLAN-LOTE-N`).
+_LAST_KNOWN_PFIX = "P1-PLAN-LOTE-74 · 2026-09-16"
 
 # [P1-SENTRY-SAMPLE-COST · 2026-05-12] Sentry sampling driven from env vars
 # con default seguro 0.1 (10%). Pre-fix tenía `traces_sample_rate=1.0` y

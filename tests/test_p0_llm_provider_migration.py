@@ -453,10 +453,14 @@ def test_h2_vision_disabled_soft_fail(monkeypatch):
 # ---------------------------------------------------------------------------
 
 def test_h_previous_provider_name_absent_from_repo():
-    """Decisión del owner: código limpio — cero menciones del proveedor anterior en
+    """Decisión del owner (02-sep): código limpio — cero menciones del proveedor anterior en
     código productivo, docs, scripts, workflows y ejemplos de env. Quedan fuera
     `migrations/` (historia inmutable con checksum en el libro), `venv/`, `.git/` y
-    los tests (que sólo pueden contener el token construido por partes)."""
+    los tests (que sólo pueden contener el token construido por partes).
+
+    [P1-PLAN-LOTE-74 · 2026-09-16] El dueño la revirtió ACOTADA: DeepSeek vuelve solo como proveedor
+    alterno por knob (`MEALFIT_LLM_PROVIDER`, default zai) y solo en sus superficies (la lista vive en
+    `test_p1_plan_lote_74.py`); fuera de ellas sigue siendo un ofensor."""
     import pathlib
     root = pathlib.Path(__file__).resolve().parent.parent
     token = "deep" + "seek"
@@ -480,5 +484,7 @@ def test_h_previous_provider_name_absent_from_repo():
         except OSError:
             continue
         if token in txt:
-            ofensores.append(str(p.relative_to(root)))
-    assert not ofensores, f"menciones del proveedor anterior: {ofensores[:15]}"
+            ofensores.append(p.relative_to(root).as_posix())
+    from test_p1_plan_lote_74 import SUPERFICIES
+    ofensores = [o for o in ofensores if o not in SUPERFICIES]
+    assert not ofensores, f"menciones del proveedor anterior fuera de sus superficies: {ofensores[:15]}"

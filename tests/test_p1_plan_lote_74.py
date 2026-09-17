@@ -1,5 +1,6 @@
 # -*- coding: utf-8 -*-
-"""[P0-DEEPSEEK-FLASH · 2026-09-16] DeepSeek (V4.1 Flash / V4 Pro) como proveedor LLM alterno por knob.
+"""[P0-DEEPSEEK-FLASH · P1-PLAN-LOTE-74 · 2026-09-16] DeepSeek (V4.1 Flash / V4 Pro) como proveedor LLM alterno
+por knob.
 
 Z.ai se quedó sin saldo (429/1113) y cayó toda la IA; el dueño pidió probar DeepSeek Flash. Desde
 `P1-SINGLE-PROVIDER-RESTORE` un proveedor alterno debe nacer con knob + test ancla propios: este es el ancla.
@@ -134,8 +135,40 @@ def test_prices_registered_off_peak():
 
 
 def test_marker_doc_and_env_example():
-    assert "P0-DEEPSEEK-FLASH · 2026-09-16" in _src("app.py")
+    app = _src("app.py")
+    assert '_LAST_KNOWN_PFIX = "P1-PLAN-LOTE-74 · 2026-09-16"' in app and "P0-DEEPSEEK-FLASH · 2026-09-16" in app
     doc = _src("docs/llm_tier_routing.md")
     assert "P0-DEEPSEEK-FLASH" in doc and "MEALFIT_LLM_PROVIDER" in doc and "deepseek-v4-pro" in doc
     env = _src(".env.example")
     assert "DEEPSEEK_API_KEY" in env and "MEALFIT_LLM_PROVIDER" in env
+
+
+# ── El proveedor vuelve solo por knob y solo en sus superficies ──────────────────────────────────
+
+SUPERFICIES = {"llm_provider.py", "db_profiles.py", "app.py", ".env.example", "docs/llm_tier_routing.md"}
+
+
+def _menciones(token: str) -> set:
+    skip = {"venv", "venv-test", ".venv", "test_venv", ".git", "migrations", "__pycache__", ".pytest_cache",
+            "node_modules", "tests"}
+    exts = {".py", ".md", ".yml", ".yaml", ".txt", ".example", ".toml", ".ini", ".cfg", ".json"}
+    out = set()
+    for p in _BACKEND.rglob("*"):
+        if any(part in skip for part in p.parts) or not p.is_file():
+            continue
+        if p.suffix not in exts and p.name != ".env.example":
+            continue
+        if token in p.read_text(encoding="utf-8", errors="ignore").lower():
+            out.add(p.relative_to(_BACKEND).as_posix())
+    return out
+
+
+def test_the_provider_lives_only_in_its_surfaces_and_never_by_its_june_names():
+    """La decisión del 02-sep («cero menciones») la revirtió el dueño el 16-sep, pero acotada: DeepSeek existe
+    solo tras `MEALFIT_LLM_PROVIDER` y solo en estas superficies; un fichero nuevo que lo mencione se añade
+    aquí a propósito. Los nombres de la migración de junio no vuelven."""
+    token = "deep" + "seek"
+    assert _menciones(token) == SUPERFICIES, _menciones(token) ^ SUPERFICIES
+    for legado in (token + "-chat", token + "-reasoner", "chat" + token, "langchain_" + token):
+        assert not _menciones(legado), legado
+    assert '_env_str("MEALFIT_LLM_PROVIDER", "zai"' in _src("llm_provider.py")

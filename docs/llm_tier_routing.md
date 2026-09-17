@@ -243,7 +243,7 @@ Test ancla: [`tests/test_p0_glm_migration.py`](../tests/test_p0_glm_migration.py
 (blanket no-Gemini, matriz del router, fail-cheap, wrapper, no-key-hardcodeada,
 knobs registrados, consistencia CB, pricing, soft-fail de providers pendientes).
 
-## [P0-DEEPSEEK-FLASH · 2026-09-16] Proveedor alterno: DeepSeek V4.1 Flash / V4 Pro por knob
+## [P0-DEEPSEEK-FLASH · P1-PLAN-LOTE-74 · 2026-09-16] Proveedor alterno: DeepSeek V4.1 Flash / V4 Pro por knob
 
 **Por qué.** El 16-sep a las 21:30 RD Z.ai contestó `429 {'code': '1113', 'message': 'Insufficient balance or no
 resource package'}` y cayó toda la IA (chat, planes, escáner, avisos). El dueño pidió probar DeepSeek Flash, que

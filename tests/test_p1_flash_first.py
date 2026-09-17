@@ -79,15 +79,16 @@ def test_retry_knob_off_keeps_flash(monkeypatch):
 
 
 def test_previous_provider_fully_removed():
-    """[P0-GLM-MIGRATION · 2026-09-02] Z.ai GLM-5.3 es el ÚNICO provider OpenAI-compatible
-    del stack; el anterior no sobrevive ni como nombre (decisión del owner: código limpio).
-    El token se construye por partes para que este archivo tampoco lo contenga."""
+    """[P0-GLM-MIGRATION · 2026-09-02] Z.ai GLM-5.3 es el provider OpenAI-compatible POR DEFECTO
+    del stack. [P1-PLAN-LOTE-74 · 2026-09-16] El anterior vuelve solo como alterno por knob
+    (`MEALFIT_LLM_PROVIDER`, default zai) dentro de `llm_provider.py`; el orquestador sigue sin
+    nombrarlo. El token se construye por partes para que este archivo tampoco lo contenga."""
     _old = "deep" + "seek"
     assert hasattr(lp, "GLM_FLASH") and hasattr(lp, "GLM_PRO")
     import pathlib
     lp_src = pathlib.Path(lp.__file__).read_text(encoding="utf-8")
     g_src = pathlib.Path(g.__file__).read_text(encoding="utf-8")
-    assert _old not in lp_src.lower()
+    assert '_env_str("MEALFIT_LLM_PROVIDER", "zai"' in lp_src
     assert _old not in g_src.lower()
     assert "z.ai" in lp_src
     # en el orquestador no debe quedar el model id de glm ni el knob
