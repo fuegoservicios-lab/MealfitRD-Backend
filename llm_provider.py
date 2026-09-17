@@ -89,6 +89,16 @@ _GLM_TO_DEEPSEEK = {GLM_FLASH: DEEPSEEK_FLASH, GLM_PRO: DEEPSEEK_PRO}
 _LLM_PROVIDERS = frozenset({"zai", "deepseek"})
 
 
+def provider_razona_largo() -> bool:
+    """[P1-PLAN-LOTE-78 · 2026-09-17] True si el proveedor vigente razona miles de tokens antes de contestar (el alterno
+    del lote 74: medido, ~9.000 tokens de razonamiento por día generado con effort low). Los nodos que fijan techos de
+    tiempo preguntan aquí, no por el nombre del proveedor: el nombre vive solo en este módulo."""
+    try:
+        return llm_provider_name() == "deepseek"
+    except Exception:
+        return False
+
+
 def llm_provider_name() -> str:
     """Proveedor por defecto del wrapper: `MEALFIT_LLM_PROVIDER` (zai|deepseek). Se lee en cada
     llamada, no al importar: el rollback es cambiar el knob y reiniciar, sin redeploy."""

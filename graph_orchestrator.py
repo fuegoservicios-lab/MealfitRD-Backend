@@ -7097,6 +7097,30 @@ SKELETON_FIDELITY_SKIP_DETERMINISTIC = _env_bool("MEALFIT_SKELETON_FIDELITY_SKIP
 DETERMINISTIC_MEMORY_SEES_RECYCLED = _env_bool("MEALFIT_DETERMINISTIC_MEMORY_SEES_RECYCLED", True)
 
 
+# [P1-PLAN-LOTE-78 · 2026-09-17] Techo del day-gen por proveedor. Medido a solas con el flash del proveedor alterno y effort low:
+# 11.752 tokens de salida y 57 s para un día de 5 comidas (≈ 9.000 son razonamiento) frente a 2.752 y 15 s sin razonar; en
+# el 3.er bench real de la noche (cohorte alérgica a mariscos/frutos secos/soya, 5 comidas, ~3.000 kcal) primary y hedge
+# pasaron de 170 s y el día 1 salió de contingencia matemática (1 de 15 días). El techo de 170 s y el hedge a 120 s se
+# midieron con un modelo que no razona; con el que razona se ensanchan a 240 / 150 s. Un knob puesto a mano sigue mandando
+# (el ensanche solo aplica al DEFAULT), y con Z.ai no cambia nada. Fail-safe: cualquier error deja los valores de entrada.
+_DAYGEN_SLOW_PROVIDER_HEDGE_AFTER_S = 150.0
+_DAYGEN_SLOW_PROVIDER_HARD_CEILING_S = 240.0
+
+
+def _daygen_hedge_ceiling_for_provider(hedge_after_base: float, hard_ceiling: float) -> tuple:
+    """(hedge_after_base, hard_ceiling) efectivos para el proveedor LLM vigente. tooltip-anchor: P1-PLAN-LOTE-78"""
+    try:
+        from llm_provider import provider_razona_largo
+        if provider_razona_largo():
+            if "MEALFIT_HEDGE_AFTER_BASE_S" not in os.environ:
+                hedge_after_base = max(float(hedge_after_base), _DAYGEN_SLOW_PROVIDER_HEDGE_AFTER_S)
+            if "MEALFIT_HARD_CEILING_S" not in os.environ:
+                hard_ceiling = max(float(hard_ceiling), _DAYGEN_SLOW_PROVIDER_HARD_CEILING_S)
+    except Exception:
+        pass
+    return hedge_after_base, hard_ceiling
+
+
 @_node_label("day_generator")
 async def generate_days_parallel_node(state: PlanState) -> dict:
     """Genera los 7 días completos en PARALELO usando el esqueleto del planificador."""
@@ -7709,8 +7733,10 @@ async def generate_days_parallel_node(state: PlanState) -> dict:
     # y `MEALFIT_HARD_CEILING_S`. Defaults idénticos al hardcode previo.
     # Las variables locales mantienen los nombres originales para no romper
     # el resto de la lógica/logs del nodo.
-    HEDGE_AFTER_BASE = HEDGE_AFTER_BASE_S
-    HARD_CEILING = HARD_CEILING_S
+    # [P1-PLAN-LOTE-78 · 2026-09-17] Con el proveedor alterno (lote 74) el day-gen razona ~9.000 tokens antes de
+    # contestar y un día grande no cabe en 170 s bajo la carga del bloque → día de contingencia. Techo y hedge más
+    # anchos SOLO para ese proveedor y SOLO si los knobs siguen en su default.
+    HEDGE_AFTER_BASE, HARD_CEILING = _daygen_hedge_ceiling_for_provider(HEDGE_AFTER_BASE_S, HARD_CEILING_S)
     hedge_after = HEDGE_AFTER_BASE + max(0, days_in_chunk - 4) * 10.0
     # [P2-HEDGE-LIMITER-RAISE · 2026-05-16] Antes: hardcoded `max(1, max_concurrent // 2)`
     # que daba 2 con LLM_MAX_CONCURRENT=4. Ahora knob explícito con default 3.

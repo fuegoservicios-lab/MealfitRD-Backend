@@ -305,3 +305,16 @@ en los dos proveedores). La tostada de casabe entra en `_ALLERGEN_TERM_BASE_EXCU
 **Lo que NO se toca aquí, dicho.** El piso de proteína contra los topes de porciones en ganancia muscular (baseline) es una
 decisión vigente (CAPS-LAST-WORD); queda medido. Con razonamiento activo en el resto de nodos, DeepSeek tarda lo mismo que GLM
 en el perfil limpio (276 s frente a 411-650 s del bench del 13-sep) y cuesta 7-9 centavos por bloque de 3 días.
+
+### El techo del day-gen por proveedor (P1-PLAN-LOTE-78 · 2026-09-17)
+
+Tercer bench real de la noche (vegana con DM2 y alérgica a mariscos/frutos secos/soya, $0,23): la vegana limpia (460 s); en la
+alérgica el **día 1 salió de contingencia matemática** («Huevos y Avena» de 1.141 kcal, «Pavo con Vegetales») por
+`TimeoutError: primary y hedge excedieron ceiling de 170 s` — sin tool médica ni breaker de por medio (1 de 15 días de la noche).
+Medido a solas con `deepseek-flash` para un día de 5 comidas: **effort low = 11.752 tokens de salida y 57 s** (≈ 9.000 son
+razonamiento, a 208 tok/s) frente a **2.752 tokens y 15 s sin razonar**. El techo de 170 s y el hedge a 120 s se calibraron con un
+modelo que no razona; con el proveedor alterno y los knobs en su default pasan a **240 / 150 s**
+(`_daygen_hedge_ceiling_for_provider`); `MEALFIT_HARD_CEILING_S` / `MEALFIT_HEDGE_AFTER_BASE_S` puestos a mano siguen mandando y
+con Z.ai no cambia nada. Alternativa NO tomada: apagar el razonamiento del day-gen (3-4× más rápido) — el revisor y los gates
+deterministas cazan lo que el modelo se salta, pero la calidad del plato sin razonar no está medida; queda para medir con la
+misma batería antes de decidirlo.

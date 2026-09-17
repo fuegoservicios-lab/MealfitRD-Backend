@@ -90,7 +90,9 @@ def test_el_bloque_del_prompt_lo_dice():
 def test_el_stub_de_la_bateria_y_el_documento():
     assert "_nota_comidas_sin_registrar" in _src("scripts/coach_battery/run_battery.py")
     assert "P1-PLAN-LOTE-77" in _src("docs/coach_bateria_2026_09_15.md")
-    assert 'P1-PLAN-LOTE-77 · 2026-09-17' in _src("app.py")
+    import re
+    m = re.search(r'_LAST_KNOWN_PFIX = "P1-PLAN-LOTE-(\d+) · 2026-', _src("app.py"))
+    assert m and int(m.group(1)) >= 77                                # la serie del marcador nunca baja
 
 
 # ── El generador (bench real de 4 planes con DeepSeek, 17-sep) ──────────────────────────────────
