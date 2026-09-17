@@ -144,7 +144,7 @@ def test_deviations_block_includes_today_and_never_affirms():
 
 
 def test_agent_reads_deviations_after_the_diary_block():
-    i_diary = _AGENT.index("out += build_past_diary_block(rows, today, days_back=days_back, tz_offset_mins=tz_offset_mins)")
+    i_diary = _AGENT.index("out += build_past_diary_block(rows, today, days_back=days_back, tz_offset_mins=tz_offset_mins,")  # [P1-PLAN-LOTE-76] la llamada sigue en la línea siguiente (plan_data)
     i_dev = _AGENT.index("out += build_plan_deviations_block(devs, today, days_back=days_back, tz_offset_mins=tz_offset_mins)")
     assert i_diary < i_dev
     assert "get_plan_meal_deviations_since(user_id, since)" in _AGENT

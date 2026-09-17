@@ -56,7 +56,8 @@ def test_la_tool_no_resuelve_hoy_en_hora_dominicana(tools_src):
     """EL CASO. `rd_today()` dentro de `consultar_dia_del_plan` le da la fecha de RD a un mexicano
     que pregunta a la hora de cenar."""
     codigo = _codigo(tools_src)
-    i = codigo.index("find_plan_day_for_date(")
+    # [P1-PLAN-LOTE-76] la PRIMERA `find_plan_day_for_date(` del módulo ya no es la de esta tool: se ancla en la tool
+    i = codigo.index("find_plan_day_for_date(", codigo.index("def consultar_dia_del_plan("))
     ventana = codigo[max(0, i - 400): i + 200]
     assert "rd_today()" not in ventana, (
         "`consultar_dia_del_plan` vuelve a resolver «hoy» en hora dominicana. Tiene `user_id` "
@@ -68,7 +69,7 @@ def test_la_tool_usa_la_fecha_local_del_usuario(tools_src):
     """No basta con quitar `rd_today()`: si se quedara sin ninguna fecha, la tool dejaría de saber
     qué día es «hoy» y el coach respondería sobre el día equivocado igual."""
     codigo = _codigo(tools_src)
-    i = codigo.index("find_plan_day_for_date(")
+    i = codigo.index("find_plan_day_for_date(", codigo.index("def consultar_dia_del_plan("))
     ventana = codigo[max(0, i - 400): i + 200]
     assert "_local_date_str_for_user" in ventana, (
         "la tool no deriva «hoy» del huso del usuario. El helper vive en este mismo módulo"

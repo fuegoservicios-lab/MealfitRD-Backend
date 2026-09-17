@@ -36,6 +36,12 @@ load_dotenv(_ENV)
 os.environ["MEALFIT_LLM_COST_TRACKING_ENABLED"] = "1"  # el emit llega a nuestro recolector, no a la base
 
 
+try:  # [P1-PLAN-LOTE-76] la consola cp1252 de Windows mataba la corrida al imprimir «≠» (48 casos perdidos)
+    sys.stdout.reconfigure(encoding="utf-8", errors="replace")
+except Exception:
+    pass
+
+
 def _out(msg: str) -> None:
     sys.stdout.write(msg + "\n")
     sys.stdout.flush()

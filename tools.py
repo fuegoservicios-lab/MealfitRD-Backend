@@ -1010,19 +1010,19 @@ def _nota_comidas_sin_registrar(user_id: str, days_ago: int, rows_extra=None) ->
     registros de ese día que aún no están en la base: el arnés de la batería del coach, que corre en seco, pasa los
     suyos para que la nota sea la misma que en producción."""
     try:
-        from datetime import datetime as _dt_n, timezone as _tz_n, timedelta as _td_n
+        from datetime import date as _date_n, timedelta as _td_n
         from chat_history_context import comidas_sin_registrar, find_plan_day_for_date
         from db_facts import get_consumed_meals_today as _gcmt
         _tz_off_f = user_tz_offset_min(user_id)
-        _ahora_local = _dt_n.now(_tz_n.utc) - _td_n(minutes=int(_tz_off_f))
-        _fecha = (_ahora_local - _td_n(days=int(days_ago or 0))).date()
+        _hoy_local = _date_n.fromisoformat(_local_date_str_for_user(user_id))   # «hoy» del huso del usuario (SSOT)
+        _fecha = _hoy_local - _td_n(days=int(days_ago or 0))
         _rows_dia = list(_gcmt(user_id, date_str=_fecha.isoformat(), tz_offset_mins=_tz_off_f) or [])
         _rows_dia.extend(r for r in (rows_extra or []) if isinstance(r, dict))
         _plan_day = None
         try:
             _pd = get_latest_usable_meal_plan(user_id)
             if isinstance(_pd, dict):
-                _plan_day = find_plan_day_for_date(_pd, _fecha, _ahora_local.date(), int(_tz_off_f))
+                _plan_day = find_plan_day_for_date(_pd, _fecha, _hoy_local, int(_tz_off_f))
         except Exception:
             _plan_day = None
         _faltan = comidas_sin_registrar(_rows_dia, _plan_day)
