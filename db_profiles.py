@@ -798,6 +798,10 @@ _DEFAULT_LLM_PRICING_MICROS_PER_M: Dict[str, Dict[str, int]] = {
     # Longest-prefix: "glm-5.3-flash" gana a "glm-5.3" para el flash.
     "glm-5.3-flash": {"input": 150_000,   "output": 500_000,   "cached": 30_000},
     "glm-5.3":       {"input": 1_400_000, "output": 4_400_000, "cached": 260_000},
+    # [P0-DEEPSEEK-FLASH · 2026-09-16] Tarifa FUERA de pico (api-docs.deepseek.com); en pico
+    # (01-04 y 06-10 UTC, L-V) es el doble: la contabilidad subestima esas horas a sabiendas.
+    "deepseek-flash":  {"input": 150_000, "output": 600_000,   "cached": 3_000},
+    "deepseek-v4-pro": {"input": 660_000, "output": 1_980_000, "cached": 22_000},
     # [P1-LUNA-PRICING · 2026-07-26] Familia gpt-5.6 (pricing oficial OpenAI, tier STANDARD).
     # Los tres se registran aunque no todos estén en uso: sin fila de precio,
     # `compute_llm_cost_micros` devuelve None y el evento se persiste con tokens pero

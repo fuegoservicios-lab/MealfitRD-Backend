@@ -97,4 +97,8 @@ def test_e_marker_bumped_and_no_old_name_in_provider_module():
     _m = _re.search(r'_LAST_KNOWN_PFIX = "P\d-[A-Z0-9-]+ · (\d{4}-\d{2}-\d{2})"', app_src)
     assert _m and _m.group(1) >= "2026-09-02", "marker anterior a la migración GLM"
     lp_src = (_BACKEND / "llm_provider.py").read_text(encoding="utf-8").lower()
-    assert ("deep" + "seek") not in lp_src
+    # [P0-DEEPSEEK-FLASH · 2026-09-16] El proveedor de junio vuelve, pero solo como ALTERNO por knob
+    # (Z.ai sin saldo el 16-sep; decisión del dueño): el default sigue siendo zai y DeepSeek nace con
+    # knob + test ancla propios (`test_p0_deepseek_flash.py`), como pedía P1-SINGLE-PROVIDER-RESTORE.
+    assert '_env_str("mealfit_llm_provider", "zai"' in lp_src
+    assert "p0-deepseek-flash" in lp_src

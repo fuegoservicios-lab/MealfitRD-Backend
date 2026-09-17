@@ -74,6 +74,26 @@ logger = logging.getLogger(__name__)
 GLM_FLASH = "glm-5.3-flash"
 GLM_PRO = "glm-5.3"
 
+# [P0-DEEPSEEK-FLASH · 2026-09-16] DeepSeek como proveedor alterno, elegido por el knob
+# `MEALFIT_LLM_PROVIDER` (zai|deepseek; default zai = conducta idéntica a hoy). IDs oficiales
+# (api-docs.deepseek.com, 2026-09-16): `deepseek-flash` = DeepSeek-V4.1-Flash (1M ctx, 384K out,
+# $0.15/$0.60 por 1M in/out fuera de pico, el doble en pico 01-04 y 06-10 UTC L-V) y
+# `deepseek-v4-pro` = DeepSeek-V4-Pro-0813 ($0.66/$1.98). Su API OpenAI-compatible usa la MISMA
+# forma que Z.ai para el razonamiento: `extra_body.thinking.type` (enabled|disabled — aquí sí se
+# puede apagar) y `reasoning_effort` ∈ {low, high, max}. Con el knob en deepseek, los IDs GLM que
+# llegan de los ~12 defaults por feature se TRADUCEN (flash→flash, pro→pro) para que el cambio
+# de proveedor sea un solo knob y el rollback otro; un ID deepseek explícito pasa tal cual.
+DEEPSEEK_FLASH = "deepseek-flash"
+DEEPSEEK_PRO = "deepseek-v4-pro"
+_GLM_TO_DEEPSEEK = {GLM_FLASH: DEEPSEEK_FLASH, GLM_PRO: DEEPSEEK_PRO}
+_LLM_PROVIDERS = frozenset({"zai", "deepseek"})
+
+
+def llm_provider_name() -> str:
+    """Proveedor por defecto del wrapper: `MEALFIT_LLM_PROVIDER` (zai|deepseek). Se lee en cada
+    llamada, no al importar: el rollback es cambiar el knob y reiniciar, sin redeploy."""
+    return _env_str("MEALFIT_LLM_PROVIDER", "zai", choices=set(_LLM_PROVIDERS)) or "zai"
+
 # [P1-NET-LUNA · P1-REVIEWER-TIER-MODELS · P1-REVIEWER-SOL-HARD · 2026-07-31]
 # IDs OpenAI gpt-5.6 en uso: luna = red cross-provider del pipeline + reviewer
 # clínico free; terra = reviewer clínico tiers pagados; sol = reviewer clínico
@@ -117,12 +137,59 @@ def _glm_reasoning_effort(value) -> str:
 PAID_TIERS = frozenset({"basic", "plus", "ultra"})
 
 _MISSING_KEY_PLACEHOLDER = "MISSING_ZAI_API_KEY"
+_MISSING_DEEPSEEK_KEY_PLACEHOLDER = "MISSING_DEEPSEEK_API_KEY"
+_warned_missing_deepseek_key = False
 _warned_missing_key = False
 
 
 def _zai_base_url() -> str:
     """Base URL OpenAI-compatible de GLM. Knob para entornos proxy/test."""
     return _env_str("MEALFIT_ZAI_BASE_URL", "https://api.z.ai/api/paas/v4")
+
+
+def _deepseek_base_url() -> str:
+    """[P0-DEEPSEEK-FLASH] Base OpenAI-compatible de DeepSeek (knob `MEALFIT_DEEPSEEK_BASE_URL`)."""
+    return _env_str("MEALFIT_DEEPSEEK_BASE_URL", "https://api.deepseek.com")
+
+
+def _default_base_url() -> str:
+    """Base por defecto del wrapper según el proveedor elegido por knob."""
+    return _deepseek_base_url() if llm_provider_name() == "deepseek" else _zai_base_url()
+
+
+def _is_deepseek_provider(base_url: Optional[str] = None) -> bool:
+    """True si el `base_url` efectivo apunta a DeepSeek (host-based, como `_is_glm_provider`)."""
+    resolved = (base_url or _default_base_url() or "").lower()
+    return "deepseek" in resolved
+
+
+def _deepseek_api_key() -> str:
+    """API key desde env `DEEPSEEK_API_KEY`; sin ella, placeholder NO-vacío (misma semántica que
+    `_zai_api_key`: el boot no cae, la invocación falla con 401 explícito y el log lo dice una vez)."""
+    global _warned_missing_deepseek_key
+    key = (os.environ.get("DEEPSEEK_API_KEY") or "").strip()
+    if key:
+        return key
+    if not _warned_missing_deepseek_key:
+        logger.error(
+            "❌ [LLM-PROVIDER] MEALFIT_LLM_PROVIDER=deepseek sin DEEPSEEK_API_KEY en el entorno. "
+            "Toda invocación LLM fallará con 401 hasta setearla (.env local / VPS) y reiniciar."
+        )
+        _warned_missing_deepseek_key = True
+    return _MISSING_DEEPSEEK_KEY_PLACEHOLDER
+
+
+def _default_api_key() -> str:
+    return _deepseek_api_key() if llm_provider_name() == "deepseek" else _zai_api_key()
+
+
+def _model_for_provider(model: str, base_url: Optional[str] = None) -> str:
+    """[P0-DEEPSEEK-FLASH] Con el proveedor en DeepSeek, un ID GLM se traduce a su par DeepSeek.
+    Solo cuando la instancia va a DeepSeek (base por defecto o explícita): una instancia apuntada a
+    OpenAI/Gemini conserva su ID. Un ID que ya es de DeepSeek pasa tal cual."""
+    if not _is_deepseek_provider(base_url):
+        return model
+    return _GLM_TO_DEEPSEEK.get(str(model or "").strip().lower(), model)
 
 
 def _is_glm_provider(base_url: Optional[str] = None) -> bool:
@@ -154,7 +221,7 @@ def _is_glm_provider(base_url: Optional[str] = None) -> bool:
     resuelto, puede venir `None`) y (b) cualquier caller sin forma de leer el
     atributo de instancia — preserva el comportamiento GLM-only de hoy.
     """
-    resolved = (base_url or _zai_base_url() or "").lower()
+    resolved = (base_url or _default_base_url() or "").lower()
     return ("z.ai" in resolved) or ("bigmodel" in resolved)
 
 
@@ -376,10 +443,30 @@ class ChatGLM(ChatOpenAI):
             else:
                 kwargs["reasoning_effort"] = _glm_reasoning_effort(kwargs["reasoning_effort"])
             kwargs["extra_body"] = _extra
+        elif _is_deepseek_provider(base_url):
+            # [P0-DEEPSEEK-FLASH · 2026-09-16] Misma forma de API que Z.ai, con una diferencia: DeepSeek
+            # SÍ apaga el razonamiento (`thinking.type=disabled`), así que la petición heredada de un
+            # callsite se respeta en vez de traducirse a `low`. Con razonamiento, el esfuerzo sigue el
+            # mismo vocabulario (low|high|max) y el mismo default del knob.
+            _extra = dict(kwargs.get("extra_body") or {})
+            _think = _extra.get("thinking")
+            _legacy_eff = _think.get("effort") if isinstance(_think, dict) else None
+            if isinstance(_think, dict) and _think.get("type") == "disabled":
+                _extra["thinking"] = {"type": "disabled"}
+                kwargs.pop("reasoning_effort", None)
+            else:
+                _extra["thinking"] = {"type": "enabled"}
+                if "reasoning_effort" not in kwargs:
+                    kwargs["reasoning_effort"] = _glm_reasoning_effort(
+                        _legacy_eff if _legacy_eff is not None else _GLM_DEFAULT_REASONING_EFFORT
+                    )
+                else:
+                    kwargs["reasoning_effort"] = _glm_reasoning_effort(kwargs["reasoning_effort"])
+            kwargs["extra_body"] = _extra
         super().__init__(
-            model=model,
-            api_key=api_key or _zai_api_key(),
-            base_url=base_url or _zai_base_url(),
+            model=_model_for_provider(model, base_url),
+            api_key=api_key or _default_api_key(),
+            base_url=base_url or _default_base_url(),
             **kwargs,
         )
 
@@ -403,6 +490,20 @@ class ChatGLM(ChatOpenAI):
         _instance_base_url = getattr(self, "openai_api_base", None)
         if kwargs["method"] == "json_mode" and _is_glm_provider(_instance_base_url):
             kwargs["method"] = "function_calling"
+        if _is_deepseek_provider(_instance_base_url) and kwargs["method"] != "json_mode":
+            # [P0-DEEPSEEK-FLASH · 2026-09-16] Medido en vivo (deepseek-flash): con razonamiento activo,
+            # `tool_choice` forzado (nombre o `required`) responde 400 «Thinking mode does not support
+            # this tool_choice», `json_schema` responde 400 «unavailable now», y `tool_choice=auto`
+            # contesta bien pero no garantiza la llamada. Con el razonamiento APAGADO el function_calling
+            # forzado respeta el esquema (1,1 s). Así que la salida estructurada va en una COPIA de la
+            # instancia sin razonamiento: los ~15 callsites son relleno de esquema (títulos, extractores,
+            # router, veredictos) y no pierden nada que el effort `low` les diera. `json_mode` explícito
+            # se honra tal cual (DeepSeek exige la palabra «json» en el prompt; esos callers ya la llevan).
+            _extra = dict(self.extra_body or {})
+            _extra["thinking"] = {"type": "disabled"}
+            _sin_razonar = self.model_copy(update={"extra_body": _extra, "reasoning_effort": None})
+            kwargs["method"] = "function_calling"
+            return ChatOpenAI.with_structured_output(_sin_razonar, schema, **kwargs)
         return ChatOpenAI.with_structured_output(self, schema, **kwargs)
 
 

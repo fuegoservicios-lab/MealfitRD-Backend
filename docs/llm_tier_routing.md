@@ -242,3 +242,38 @@ reporta `output_token_details.reasoning` y `input_token_details.cache_read`
 Test ancla: [`tests/test_p0_glm_migration.py`](../tests/test_p0_glm_migration.py)
 (blanket no-Gemini, matriz del router, fail-cheap, wrapper, no-key-hardcodeada,
 knobs registrados, consistencia CB, pricing, soft-fail de providers pendientes).
+
+## [P0-DEEPSEEK-FLASH · 2026-09-16] Proveedor alterno: DeepSeek V4.1 Flash / V4 Pro por knob
+
+**Por qué.** El 16-sep a las 21:30 RD Z.ai contestó `429 {'code': '1113', 'message': 'Insufficient balance or no
+resource package'}` y cayó toda la IA (chat, planes, escáner, avisos). El dueño pidió probar DeepSeek Flash, que
+además tiene saldo propio. Desde `P1-SINGLE-PROVIDER-RESTORE` (2026-07-04) un proveedor alterno debe nacer con
+**knob + test ancla propios**: este es el knob y `test_p0_deepseek_flash.py` el ancla.
+
+**Cómo.** `MEALFIT_LLM_PROVIDER` ∈ {`zai` (default, conducta idéntica), `deepseek`}. Con `deepseek`, el wrapper
+`ChatGLM` apunta a `MEALFIT_DEEPSEEK_BASE_URL` (default `https://api.deepseek.com`) con `DEEPSEEK_API_KEY`, y
+**traduce los IDs GLM** que llegan de los ~12 defaults por feature: `glm-5.3-flash` → `deepseek-flash`
+(DeepSeek-V4.1-Flash, 1M ctx / 384K out) y `glm-5.3` → `deepseek-v4-pro` (DeepSeek-V4-Pro-0813). Un ID
+`deepseek-*` explícito pasa tal cual; una instancia apuntada a OpenAI o Gemini no se toca.
+
+**Razonamiento.** La API de DeepSeek usa la misma forma que Z.ai (`extra_body.thinking.type` +
+`reasoning_effort` low|high|max, default high en su lado; aquí el default del knob `MEALFIT_GLM_REASONING_EFFORT`
+= low), con una diferencia: DeepSeek **sí apaga** el razonamiento (`thinking.type=disabled`), así que la petición
+heredada de un callsite se respeta en vez de traducirse a `low`. En modo thinking, `temperature`,
+`presence_penalty` y `frequency_penalty` se ignoran sin error y `top_p` sube a ≥0,95. Tool calls: soportados con
+razonamiento (el agente del chat hizo su vuelta completa, 1,0 s + 1,1 s).
+
+**Salida estructurada, medida en vivo el 16-sep** (deepseek-flash): con razonamiento activo, `tool_choice`
+forzado (nombre o `required`) → 400 «Thinking mode does not support this tool_choice»; `json_schema` → 400
+«unavailable now»; `tool_choice=auto` contesta bien (1,9 s) pero no garantiza la llamada; `json_mode` exige la
+palabra «json» en el prompt. Con el razonamiento apagado, el `function_calling` forzado respeta el esquema en
+1,1 s. Por eso `with_structured_output` en DeepSeek va en una COPIA de la instancia sin razonar + function_calling
+(los ~15 callsites son relleno de esquema); un `json_mode` explícito se honra tal cual (en GLM se reenruta).
+
+**Precio** (`db_profiles._DEFAULT_LLM_PRICING_MICROS_PER_M`, fuera de pico): flash $0,15 / $0,60 / $0,003
+(entrada / salida / caché) por 1M; pro $0,66 / $1,98 / $0,022. En pico (01-04 y 06-10 UTC, L-V = 21:00-00:00 y
+02:00-06:00 RD) es el doble y la contabilidad lo subestima a sabiendas.
+
+**Operación.** Cambio: `MEALFIT_LLM_PROVIDER=deepseek` + `DEEPSEEK_API_KEY` en el `.env` del VPS y reinicio
+(un despliegue lo hace). Rollback: `MEALFIT_LLM_PROVIDER=zai` y reinicio. El breaker por modelo
+(`llm_circuit_breaker:deepseek-flash`) nace solo. La visión sigue en Gemini y los embeddings en Cohere.
