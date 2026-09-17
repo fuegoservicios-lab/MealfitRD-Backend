@@ -57,7 +57,7 @@ Medido en producción (solo lectura): `nudge_outcomes` tiene el aviso de Cena a 
 
 Dos cierres, los dos en el código real que decide el disparo:
 
-- `get_avg_meal_hour` deja fuera todo registro cuyo día local no sea el de su `created_at`: un registro de un día pasado no dice a qué hora se comió.
+- `get_avg_meal_hour` deja fuera todo registro anotado más de 18 h después de su `consumed_at` (un «ayer» resta días enteros): un registro de un día pasado no dice a qué hora se comió.
 - Horas de silencio: ningún recordatorio de comida antes de las 6:00 locales (`MEALFIT_PROACTIVE_QUIET_UNTIL_HOUR`, 6; 0 = sin silencio). Es una decisión: quien cena de verdad a las 23:30 ya no recibe el aviso de la 1:00 que `P3-AVG-MEAL-HOUR-CIRCULAR` quiso conservar; un push a la 1:00 es peor que ninguno, y el Resumen de las 23:00 cubre ese día.
 
 ## Abierto

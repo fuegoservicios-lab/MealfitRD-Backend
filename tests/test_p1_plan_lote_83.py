@@ -63,9 +63,10 @@ def test_un_registro_de_un_dia_pasado_no_entra_en_la_hora_media(monkeypatch):
     monkeypatch.setattr(db_facts, "execute_sql_query", _q, raising=True)
     assert db_facts.get_avg_meal_hour("u-1", "Cena") == pytest.approx(19.67, abs=0.01)
     q = re.sub(r"\s+", " ", capturado["query"])
-    assert "(consumed_at - make_interval(mins => %s))::date = (created_at - make_interval(mins => %s))::date" in q
+    assert "AND consumed_at >= created_at - interval '18 hours'" in q
+    assert q.count("consumed_at - make_interval(mins => %s)") == 2   # contrato de P1-AVG-MEAL-HOUR-SIGN intacto
     p = capturado["params"]
-    assert len(p) == 7 and p[0] == 240 and p[1] == 240 and p[5] == 240 and p[6] == 240   # el huso, en las cuatro
+    assert len(p) == 5 and p[0] == 240 and p[1] == 240
 
 
 def test_marcador_y_documento():

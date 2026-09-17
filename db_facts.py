@@ -307,7 +307,8 @@ def get_avg_meal_hour(user_id: str, meal_type: str, days_back: int = 14,
     [P1-PLAN-LOTE-83 · 2026-09-17] Un registro de un DÍA PASADO («ayer cené…», anotado a las 00:38) tampoco dice
     a qué hora se comió: `consumed_at` lleva la hora del registro restada en días enteros, y esa cena a las 00:38
     cabía en la franja de cena (17→3) → hora media 00:38 → aviso a las 2:08 de la madrugada. Fuera de la media
-    todo registro cuyo día local no sea el de su `created_at`."""
+    todo registro anotado más de 18 h después de su `consumed_at` (un «ayer» resta días enteros: ≥ 24 h; una hora
+    elegida a mano del mismo día cabe en 18 h). Sin huso: el contrato de P1-AVG-MEAL-HOUR-SIGN sigue siendo dos restas."""
     if not connection_pool: return None
     try:
         from datetime import datetime, timezone, timedelta
@@ -348,11 +349,10 @@ def get_avg_meal_hour(user_id: str, meal_type: str, days_back: int = 14,
                    EXTRACT(MINUTE FROM (consumed_at - make_interval(mins => %s))) as mn
             FROM consumed_meals
             WHERE user_id = %s AND meal_type ILIKE %s AND consumed_at >= %s
-              AND (consumed_at - make_interval(mins => %s))::date = (created_at - make_interval(mins => %s))::date
+              AND consumed_at >= created_at - interval '18 hours'
         """
         # [P1-PLAN-LOTE-83] la última condición deja fuera los registros de un día pasado (su hora es la del registro)
-        res = execute_sql_query(query, (_tz_off, _tz_off, user_id, f"%{meal_type}%", cutoff, _tz_off, _tz_off),
-                                fetch_all=True)
+        res = execute_sql_query(query, (_tz_off, _tz_off, user_id, f"%{meal_type}%", cutoff), fetch_all=True)
         if not res:
             return None
 
