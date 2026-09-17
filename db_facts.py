@@ -303,7 +303,11 @@ def get_avg_meal_hour(user_id: str, meal_type: str, days_back: int = 14,
     la franja de esa comida (si `desde > hasta`, la franja cruza la medianoche). `consumed_at` es la hora del
     REGISTRO: un desayuno anotado a las 12:58 no dice cuándo desayuna el usuario, y promediado movía su
     recordatorio a las 14:30, encima del del almuerzo. Sin registros dentro de la franja ⇒ `None` (el consumidor
-    cae a su hora por defecto). Sin `ventana`, la media de siempre."""
+    cae a su hora por defecto). Sin `ventana`, la media de siempre.
+    [P1-PLAN-LOTE-83 · 2026-09-17] Un registro de un DÍA PASADO («ayer cené…», anotado a las 00:38) tampoco dice
+    a qué hora se comió: `consumed_at` lleva la hora del registro restada en días enteros, y esa cena a las 00:38
+    cabía en la franja de cena (17→3) → hora media 00:38 → aviso a las 2:08 de la madrugada. Fuera de la media
+    todo registro cuyo día local no sea el de su `created_at`."""
     if not connection_pool: return None
     try:
         from datetime import datetime, timezone, timedelta
@@ -344,8 +348,11 @@ def get_avg_meal_hour(user_id: str, meal_type: str, days_back: int = 14,
                    EXTRACT(MINUTE FROM (consumed_at - make_interval(mins => %s))) as mn
             FROM consumed_meals
             WHERE user_id = %s AND meal_type ILIKE %s AND consumed_at >= %s
+              AND (consumed_at - make_interval(mins => %s))::date = (created_at - make_interval(mins => %s))::date
         """
-        res = execute_sql_query(query, (_tz_off, _tz_off, user_id, f"%{meal_type}%", cutoff), fetch_all=True)
+        # [P1-PLAN-LOTE-83] la última condición deja fuera los registros de un día pasado (su hora es la del registro)
+        res = execute_sql_query(query, (_tz_off, _tz_off, user_id, f"%{meal_type}%", cutoff, _tz_off, _tz_off),
+                                fetch_all=True)
         if not res:
             return None
 

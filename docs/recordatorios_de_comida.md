@@ -51,6 +51,15 @@ El prompt solo nombraba la comida y el modelo tomó el verbo de otra: el dueño 
 tarde?». `PROACTIVE_PROMPT` recibe ahora `{verbo}` desde `VERBO_DE_COMIDA` (desayunaste, almorzaste, merendaste,
 cenaste) y prohíbe el verbo de otra comida.
 
+## El «¿ya cenaste?» de las 2:30 de la madrugada (`P1-PLAN-LOTE-83` · 2026-09-17)
+
+Medido en producción (solo lectura): `nudge_outcomes` tiene el aviso de Cena a las 06:30 UTC del 17-sep (2:30 en RD) y el dueño lo vio a las 10:10 al abrir el chat, que no muestra la hora. La cadena: a las 00:38 anotó por el chat la «cena de ayer» y `consumed_at` quedó en las 00:38 del día 16 (la hora del registro, restada en días enteros); esa hora cae dentro de la franja de cena (17→3, holgada para cenas tardías), la hora media de cenar pasó a ser las 00:38 y el aviso (+1,5 h) cayó a las 2:08; el tick de las 2:30 buscó una cena «de hoy» (día 17) y no la había. El registro del almuerzo de ayer, a las 00:29, no hizo daño porque su franja (10:30→17) lo dejó fuera.
+
+Dos cierres, los dos en el código real que decide el disparo:
+
+- `get_avg_meal_hour` deja fuera todo registro cuyo día local no sea el de su `created_at`: un registro de un día pasado no dice a qué hora se comió.
+- Horas de silencio: ningún recordatorio de comida antes de las 6:00 locales (`MEALFIT_PROACTIVE_QUIET_UNTIL_HOUR`, 6; 0 = sin silencio). Es una decisión: quien cena de verdad a las 23:30 ya no recibe el aviso de la 1:00 que `P3-AVG-MEAL-HOUR-CIRCULAR` quiso conservar; un push a la 1:00 es peor que ninguno, y el Resumen de las 23:00 cubre ese día.
+
 ## Abierto
 
 - **Respuesta tardía**: `handle_nudge_response` solo enlaza la respuesta al aviso si llega en los 60 minutos siguientes.

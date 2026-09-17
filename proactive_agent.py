@@ -113,6 +113,16 @@ def _horas_de_reintento() -> int:
     return _env_int("MEALFIT_PROACTIVE_NUDGE_RETRY_HOURS", 3, validator=lambda v: 1 <= v <= 6)
 
 
+def _hora_de_silencio() -> int:
+    """[P1-PLAN-LOTE-83 · 2026-09-17] Hora local hasta la que NO sale ningún recordatorio de comida. El dueño recibió
+    «Aún no veo registrada tu cena; ¿ya cenaste?» a las 2:30 de la madrugada: había anotado a las 00:38 la cena de
+    AYER, el registro quedó como una cena a las 00:38 (dentro de la franja 17→3) y la hora media la arrastró. La media
+    ya no cuenta registros de días pasados, y además a esas horas no se pregunta nada: quien cena de verdad a las
+    23:30 no recibe el aviso de la 1:00 (P3-AVG-MEAL-HOUR-CIRCULAR lo quería «nunca» ≠ «a la 1:00»; el Resumen de
+    las 23:00 ya cubre ese día). 0 = sin silencio."""
+    return _env_int("MEALFIT_PROACTIVE_QUIET_UNTIL_HOUR", 6, validator=lambda v: 0 <= v <= 12)
+
+
 def _comidas_avisadas_hoy(user_id: str):
     """[P1-PLAN-LOTE-72] Comidas que YA recibieron recordatorio hoy (día local del usuario), para que el reintento no
     repita un aviso. `None` si no se puede saber: el llamador vuelve entonces a la hora exacta, sin reintentos."""
@@ -476,6 +486,13 @@ def run_proactive_checks():
         else:
             from db_facts import get_avg_meal_hour
             import math
+
+            # [P1-PLAN-LOTE-83] Horas de silencio: de madrugada no se recuerda ninguna comida.
+            _silencio_hasta = _hora_de_silencio()
+            if current_hour_float < _silencio_hasta:
+                logger.info(f"🌙 [P1-PLAN-LOTE-83] Usuario {user_id}: {current_hour_float:.1f} h local, horas de "
+                            f"silencio hasta las {_silencio_hasta}:00. Saltando.")
+                continue
 
             # Horarios default (9AM, 1PM, 4PM, 7:30PM)
             defaults = {
