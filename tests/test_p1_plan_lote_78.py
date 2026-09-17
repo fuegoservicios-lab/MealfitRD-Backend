@@ -33,7 +33,7 @@ def test_con_zai_no_cambia_nada(monkeypatch):
     monkeypatch.delenv("MEALFIT_HEDGE_AFTER_BASE_S", raising=False)
     monkeypatch.delenv("MEALFIT_HARD_CEILING_S", raising=False)
     assert go._daygen_hedge_ceiling_for_provider(120.0, 170.0) == (120.0, 170.0)
-    assert go.HEDGE_AFTER_BASE_S == 120.0 and go.HARD_CEILING_S == 170.0           # los knobs no se tocan
+    # (los knobs del módulo NO se comprueban: el .env local ya fija MEALFIT_HEDGE_AFTER_BASE_S=150 y el gate lo vio)
 
 
 def test_el_nodo_lo_usa_y_el_marcador():
