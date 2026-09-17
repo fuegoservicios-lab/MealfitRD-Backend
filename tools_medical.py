@@ -68,6 +68,12 @@ def consultar_base_datos_medica(query: str) -> str:
             # [P2-LLM-TIMEOUT-SWEEP · 2026-05-30] deadline < 20s del _FACT_CHECK
             # _TOOL_TIMEOUT para que el LLM corte primero y libere el slot del pool.
             timeout=_medical_tool_llm_timeout_s(),
+            # [P1-PLAN-LOTE-77 · 2026-09-17] Es un LOOKUP, y el tope de 15 s no espera a que el modelo razone:
+            # medido con deepseek-flash, 9,8 s y 1.325 tokens de salida con razonamiento (bajo carga expira) frente a
+            # 3,1 s y 309 tokens sin él. Cada expiración cuenta como fallo del circuit breaker de flash, que se abre a
+            # la tercera y tumba revisor, planificador y day-gen (bench real 17-sep: el plan de la alérgica salió
+            # entero de contingencia). Razonamiento apagado: el wrapper honra `disabled` en los dos proveedores.
+            extra_body={"thinking": {"type": "disabled"}},
         )
         
         sys_prompt = """

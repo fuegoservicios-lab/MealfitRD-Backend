@@ -91,3 +91,40 @@ def test_el_stub_de_la_bateria_y_el_documento():
     assert "_nota_comidas_sin_registrar" in _src("scripts/coach_battery/run_battery.py")
     assert "P1-PLAN-LOTE-77" in _src("docs/coach_bateria_2026_09_15.md")
     assert 'P1-PLAN-LOTE-77 · 2026-09-17' in _src("app.py")
+
+
+# ── El generador (bench real de 4 planes con DeepSeek, 17-sep) ──────────────────────────────────
+
+def _viol(ingredientes, alergias=("Gluten",)):
+    import graph_orchestrator as go
+    plan = {"days": [{"meals": [{"name": "Tostadas Crujientes de Casabe", "ingredients": list(ingredientes)}]}]}
+    return [(i, t) for _, i, t in go._scan_allergen_violations(plan, list(alergias))]
+
+
+def test_tostada_de_casabe_no_es_gluten_y_la_de_trigo_si():
+    assert _viol(["1 tostadas de casabe (15 g)", "2 tostadas de maíz", "1 tostada de arroz"]) == []
+    v = _viol(["1 tostada integral", "2 tostadas de trigo", "1 tostada"])
+    assert len(v) == 3 and all(t in ("tostada", "trigo") for _, t in v)      # las de trigo siguen marcadas
+    assert _viol(["1 tostadas de casabe (15 g)"], alergias=("Lacteos",)) == []
+
+
+def test_la_tool_medica_no_razona(monkeypatch):
+    import tools_medical
+    src = (_BACKEND / "tools_medical.py").read_text(encoding="utf-8")
+    assert 'extra_body={"thinking": {"type": "disabled"}}' in src and "timeout=_medical_tool_llm_timeout_s()" in src
+    capturado = {}
+
+    class _Falso:
+        def __init__(self, **kw):
+            capturado.update(kw)
+
+        def invoke(self, messages):
+            class _R:
+                content = "Sin contraindicaciones médicas conocidas"
+            return _R()
+
+    monkeypatch.setattr(tools_medical, "ChatGLM", _Falso)
+    fn = tools_medical.consultar_base_datos_medica
+    out = fn.func("metformina y alcohol") if hasattr(fn, "func") else fn("metformina y alcohol")
+    assert "Sin contraindicaciones" in out
+    assert capturado["extra_body"] == {"thinking": {"type": "disabled"}} and capturado["temperature"] == 0.0

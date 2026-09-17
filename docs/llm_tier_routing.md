@@ -277,3 +277,29 @@ palabra «json» en el prompt. Con el razonamiento apagado, el `function_calling
 **Operación.** Cambio: `MEALFIT_LLM_PROVIDER=deepseek` + `DEEPSEEK_API_KEY` en el `.env` del VPS y reinicio
 (un despliegue lo hace). Rollback: `MEALFIT_LLM_PROVIDER=zai` y reinicio. El breaker por modelo
 (`llm_circuit_breaker:deepseek-flash`) nace solo. La visión sigue en Gemini y los embeddings en Cohere.
+
+## Bench real de planes con DeepSeek (P1-PLAN-LOTE-77 · 2026-09-17)
+
+`scripts/bench_superficies_culinarias.py --real` con 4 perfiles del wizard (baseline masculino de ganancia muscular, DM2 con
+metformina, vegetariana, alérgica a lácteos/gluten/huevo), bloque síncrono de 3 días, `MEALFIT_LLM_PROVIDER=deepseek`, sin
+escribir en la base (215 escrituras suprimidas): **$0,33 en total**, 62 llamadas.
+
+| Perfil | Segundos | Llamadas | Coste | Qué pasó |
+|---|---|---|---|---|
+| baseline (piso 198 g de proteína) | 490 | 12 | $0,072 | 3 rechazos deterministas por el piso de proteína tras los recortes (152 → 167 → 176 g; el tope tiene la última palabra por diseño) → entregado degradado |
+| DM2 + metformina | 849 | 19 | $0,094 | la tool médica expiró (15 s) varias veces → circuit breaker de flash ABIERTO → revisor y planificador caídos → **día 1 de contingencia matemático** (`Vegetales al vapor`, `Fruta de temporada`) |
+| vegetariana | 276 | 13 | $0,087 | limpio: sin rechazos, sin degradación |
+| alérgica lácteos/gluten/huevo | 919 | 18 | $0,074 | mismo breaker abierto + `tostada` (gluten) casó «1 tostadas de casabe» → rechazo CRÍTICO → **los 3 días del plan matemático** (`Pollo y Arroz`, `Pescado y Batata`, 1.557 kcal idénticas cada día) |
+
+**Causa raíz de los dos planes malos: la tool médica.** `consultar_base_datos_medica` es una llamada a flash con tope de
+15 s (`MEALFIT_MEDICAL_TOOL_LLM_TIMEOUT_S`, por debajo del cap de 20 s del fact-check). Medido a solas con `deepseek-flash`:
+**9,8 s y 1.325 tokens de salida con razonamiento** (la mayor parte, pensamiento) frente a **3,1 s y 309 tokens sin él**; bajo
+la carga del pipeline (day-gen + hedge + fact-check en paralelo) expira. Cada expiración cuenta como fallo del circuit breaker
+del modelo, que abre a la tercera, y con el breaker abierto caen el revisor (`LLMCircuitOpenError` → «error transitorio»), el
+planificador (`P1-PLANNER-PRO-FALLBACK`) y el day-gen (`TimeoutError: primary y hedge excedieron ceiling de 170 s` → «FALLBACK
+EXTREMO»). Es un lookup determinista (temp 0): el razonamiento va apagado (`extra_body.thinking=disabled`, que el wrapper honra
+en los dos proveedores). La tostada de casabe entra en `_ALLERGEN_TERM_BASE_EXCUSES` como la sémola de maíz.
+
+**Lo que NO se toca aquí, dicho.** El piso de proteína contra los topes de porciones en ganancia muscular (baseline) es una
+decisión vigente (CAPS-LAST-WORD); queda medido. Con razonamiento activo en el resto de nodos, DeepSeek tarda lo mismo que GLM
+en el perfil limpio (276 s frente a 411-650 s del bench del 13-sep) y cuesta 7-9 centavos por bloque de 3 días.

@@ -14321,6 +14321,10 @@ _PLANT_ADJ_EXCUSE_RX = _re_mod.compile(
 # tooltip-anchor: P3-SEMOLA-MAIZ-GLUTEN-FP
 _ALLERGEN_TERM_BASE_EXCUSES = {
     "semola": ("maiz", "yuca", "arroz"),
+    # [P1-PLAN-LOTE-77 · 2026-09-17] «1 tostadas de casabe (15 g)» casaba 'tostada' (gluten) y mandó el plan entero de
+    # una alérgica al gluten al fallback matemático (bench real): el casabe es yuca. Acotado al término, como la sémola:
+    # «tostada integral» y «tostadas de trigo» siguen marcadas, y «tostada» desnuda también.
+    "tostada": ("casabe", "yuca", "maiz", "arroz", "platano"),
 }
 _ALLERGEN_TERM_BASE_EXCUSE_RX = {
     _t: _re_mod.compile(r"^\s*de\s+(?:" + "|".join(_re_mod.escape(_b) for _b in _bases) + r")\b")
