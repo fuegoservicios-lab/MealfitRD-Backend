@@ -40,5 +40,7 @@ def test_el_nodo_lo_usa_y_el_marcador():
     src = (_BACKEND / "graph_orchestrator.py").read_text(encoding="utf-8")
     i = src.index("async def generate_days_parallel_node(")
     assert "HEDGE_AFTER_BASE, HARD_CEILING = _daygen_hedge_ceiling_for_provider(HEDGE_AFTER_BASE_S, HARD_CEILING_S)" in src[i:i + 60000]
-    assert 'P1-PLAN-LOTE-78 · 2026-09-17' in (_BACKEND / "app.py").read_text(encoding="utf-8")
+    import re
+    m = re.search(r'_LAST_KNOWN_PFIX = "P1-PLAN-LOTE-(\d+) · 2026-', (_BACKEND / "app.py").read_text(encoding="utf-8"))
+    assert m and int(m.group(1)) >= 78                                # la serie del marcador nunca baja
     assert "P1-PLAN-LOTE-78" in (_BACKEND / "docs" / "llm_tier_routing.md").read_text(encoding="utf-8")

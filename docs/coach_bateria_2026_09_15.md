@@ -227,6 +227,7 @@ casos, con el código del lote 76 (la nota «sigue sin registrar…» ya en el s
 |---|---|---|---|---|---|---|
 | **v7 DeepSeek A** | lote 76 · `deepseek-flash` | US$ 0,08 (2,49 M de 2,78 M tokens de entrada en caché) | 100 | 856 | 18/63: 15 por longitud (todas < 1,5× del tope), C6 sin `consultar_dia_del_plan` (contestó desde el índice, con datos correctos), J1 (foto sin texto) pregunta en vez de registrar | ninguno; 1 FD2 no clínico (I3: «121 g» de proteína del día donde el plan suma 127) |
 
+| **v7 DeepSeek C (lote 79)** | topes 65/65/120 (riesgo 90) + sin emojis de cabecera de tool | US$ 0,12 | 99 | 846 | 10/63: 6 por longitud (D7 es la lista de compras completa, que puede pasar), B6 pidió la comida en vez de registrar (varianza: en A y B registró), C6 y J1 igual, I3 falso positivo del detector | ninguno |
 | **v7 DeepSeek B (lote 77)** | poda profunda + `totales_dia` + reglas M-P | US$ 0,12 (la caché se rehace al cambiar el prompt) | 98 | 890 | 22/63: 19 por longitud, C6 desde el índice (ahora con el total del día correcto: 2.081 kcal / 115 g), J1 igual, dos «idioma» que son falsos positivos del detector (F8 en español, I3 en francés con platos en español) | ninguno; I3 ya suma bien (127 g) |
 
 Puntuado con la rúbrica: media ≈ 11,3 sobre 12, 0 FD1, 0 FD3, 0 FD4, 0 dosis. A la par de las v6 con GLM. La confirmación con el lote 77 (v7 B): la receta del almuerzo sigue saliendo por `consultar_dia_del_plan` (E1) sin tenerla en el prompt, los totales del día salen del dato y no de la suma a mano (C6, I3), y la longitud NO mejora con la regla P (19 casos sobre el tope, todos < 1,5×; D7 copió los 5 emojis de cabecera de la tool): la brevedad de DeepSeek queda en ~1,7 de media, en el límite del criterio. Lo que la corrida A enseñó y este lote corrige:
@@ -249,3 +250,5 @@ Puntuado con la rúbrica: media ≈ 11,3 sobre 12, 0 FD1, 0 FD3, 0 FD4, 0 dosis.
 Fuera de este lote, como decisión de producto: J1 (una foto de un plato sin texto a las 08:40) sigue confirmando en una
 línea en vez de registrar; «registra y que deshaga» es lo que pide la proactividad del dueño, pero una foto no siempre es
 suya. Se deja en la lista de decisiones.
+
+**Lote 79 (topes medidos, `P1-PLAN-LOTE-79`).** La regla P («apunta a tres cuartos») no movió la longitud: 19-20 casos sobre el tope en dos corridas. Bajar los topes del prompt a 65/65/120 (el de riesgo se queda en 90) sí: 20 → 6 casos sobre el tope, ratio medio palabras/tope 0,89 → 0,77, 76 → 67 palabras de media, 0 fallos duros. El modelo no obedece «apunta a menos»; obedece el número. Los emojis de cabecera que trae `check_shopping_list` (🥛, 🛒…) se copiaban (D7 con 5 emojis): la regla E lo prohíbe; no se re-midió.

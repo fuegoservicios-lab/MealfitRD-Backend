@@ -31,8 +31,8 @@ def test_los_topes_de_longitud_van_por_tipo_en_los_cuatro_prompts():
     for nombre in ("CHAT_SYSTEM_PROMPT_BASE", "CHAT_STREAM_SYSTEM_PROMPT_BASE",
                    "CHAT_AGENT_INLINE_PROMPT", "CHAT_STREAM_INLINE_PROMPT"):
         txt = getattr(P, nombre)
-        for marca in ("TOPES POR TIPO", "MÁXIMO 80 palabras", "Queja o frustración", "MÁXIMO 90 palabras",
-                      "MÁXIMO 150 palabras", "recorta en este orden", "NUNCA se recorta"):
+        for marca in ("TOPES POR TIPO", "MÁXIMO 65 palabras", "Queja o frustración", "MÁXIMO 90 palabras",
+                      "MÁXIMO 120 palabras", "recorta en este orden", "NUNCA se recorta"):   # [P1-PLAN-LOTE-79] topes medidos
             assert marca in txt, f"{nombre}: falta «{marca}»"
     assert "Máximo unas 6 frases" not in P._CHAT_VOICE_RULES, "el tope de riesgo se cuenta en palabras"
 
