@@ -5710,7 +5710,8 @@ def _build_past_days_context(user_id: str, current_plan, local_date_str: Optiona
         except Exception as e:
             logger.warning(f"[P1-CHAT-PAST-DAYS] no se pudo leer el diario multi-día: {e}")
             rows = []
-        out += build_past_diary_block(rows, today, days_back=days_back, tz_offset_mins=tz_offset_mins)
+        out += build_past_diary_block(rows, today, days_back=days_back, tz_offset_mins=tz_offset_mins,
+                                      plan_data=current_plan)  # [P1-PLAN-LOTE-76] para «sin registrar: …»
         # [P1-DIARY-FREETEXT-ESTIMATE · 2026-09-04] tercera vía: lo que el usuario NEGÓ haber comido
         try:
             from db_facts import get_plan_meal_deviations_since

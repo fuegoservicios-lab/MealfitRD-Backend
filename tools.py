@@ -1134,6 +1134,34 @@ def log_consumed_meal(user_id: str, meal_name: str, calories: int, protein: int,
     if result is not None:
         _cuando = "" if _days_ago == 0 else (" (con fecha de AYER — no cuenta en las macros de hoy)" if _days_ago == 1 else f" (con fecha de hace {_days_ago} días — no cuenta en las macros de hoy)")
         msg = f"¡Éxito! Se ha registrado el consumo de '{meal_name}' ({calories} kcal, {protein}g proteína, {carbs}g carbohidratos, {healthy_fats}g grasas saludables) como {_meal_type}{_cuando} en tu diario."
+        # [P1-PLAN-LOTE-76 · 2026-09-17] Qué comidas de ESE día siguen sin registrar, para que el asistente
+        # ofrezca la que falta POR SU NOMBRE o no pregunte: el dueño recibió «¿Te falta algo más de ayer por
+        # registrar?» cuando el diario ya sabía la respuesta. Best-effort: nunca rompe el registro.
+        try:
+            from chat_history_context import comidas_sin_registrar, find_plan_day_for_date
+            from db_facts import get_consumed_meals_today as _gcmt
+            _tz_off_f = user_tz_offset_min(user_id)
+            _ahora_local = datetime.now(_tz.utc) - _td(minutes=int(_tz_off_f))
+            _fecha = (_ahora_local - _td(days=_days_ago)).date()
+            _rows_dia = _gcmt(user_id, date_str=_fecha.isoformat(), tz_offset_mins=_tz_off_f) or []
+            _plan_day = None
+            try:
+                _pd = get_latest_usable_meal_plan(user_id)
+                if isinstance(_pd, dict):
+                    _plan_day = find_plan_day_for_date(_pd, _fecha, _ahora_local.date(), int(_tz_off_f))
+            except Exception:
+                _plan_day = None
+            _faltan = comidas_sin_registrar(_rows_dia, _plan_day)
+            _dia_txt = "hoy" if _days_ago == 0 else ("ayer" if _days_ago == 1 else f"hace {_days_ago} días")
+            if _faltan:
+                msg += (f" (Para el asistente: {_dia_txt} sigue sin registrar {', '.join(_faltan)} — cierra "
+                        f"ofreciendo agregar LA QUE FALTA por su nombre, en una pregunta corta; nunca la pregunta "
+                        f"genérica de si le falta algo.)")
+            else:
+                msg += (f" (Para el asistente: {_dia_txt} ya tiene todas sus comidas registradas — NO preguntes si "
+                        f"le falta algo de ese día.)")
+        except Exception as _falta_err:
+            logger.warning(f"[P1-PLAN-LOTE-76] comidas sin registrar no calculadas: {_falta_err}")
         if not _mt_reconocido:
             msg += (f" (Aviso para el asistente: no reconocí el tipo de comida '{meal_type}' y quedó como "
                     f"snack; si era desayuno, almuerzo o cena, corrígelo con correct_consumed_meal.)")

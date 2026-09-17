@@ -322,3 +322,13 @@ el peor caso es **2×** el knob, no 1×.
    los dos bloques del mismo día. Una métrica numérica de adherencia seguiría
    dependiendo del matching difuso que ya existe en los crons.
 3. **No repara los cinco modos de rotura de `_archived_days`** (§3, Pieza 1).
+
+## 8. La comida que falta, por su nombre (P1-PLAN-LOTE-76 · 2026-09-17)
+
+El dueño registró la cena de ayer y el coach cerró con «¿Te falta algo más de ayer por registrar?»: con el diario
+delante, esa respuesta ya la sabía. Ahora `comidas_sin_registrar(rows_del_dia, plan_day)` (SSOT en
+`chat_history_context.py`) dice qué comidas de ESE día faltan — las tres principales siempre, la merienda solo si el
+plan de ese día la trae — y lo usan dos superficies: la respuesta de `log_consumed_meal` («ayer sigue sin registrar
+merienda — cierra ofreciendo agregar LA QUE FALTA por su nombre» / «ya tiene todas sus comidas — NO preguntes») y el
+bloque `DIARIO REAL DE DÍAS ANTERIORES` («· sin registrar: merienda» en cada día con registros). El prompt prohíbe
+la pregunta genérica. Best-effort: si el cálculo falla, el registro se responde igual.

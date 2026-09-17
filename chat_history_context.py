@@ -690,10 +690,49 @@ def build_plan_deviations_block(deviation_rows: Any, today: date, days_back: int
     return _assemble(header, lines, footer, max_chars, "deviations")
 
 
+# [P1-PLAN-LOTE-76 · 2026-09-17] Qué comidas de un día siguen sin registrar — SSOT para la respuesta de
+# `log_consumed_meal` y para el bloque del diario de días anteriores. El dueño, tras registrar la cena de
+# ayer, recibió «¿Te falta algo más de ayer por registrar?»: el diario ya sabía la respuesta. Las tres
+# comidas principales cuentan siempre; la merienda solo si el plan de ESE día la trae (sin plan del día,
+# solo las tres): ofrecer cada noche «¿agregar la merienda?» a quien no merienda es ruido.
+_ORDEN_SLOTS = ("desayuno", "almuerzo", "merienda", "cena")
+_SLOTS_PRINCIPALES = frozenset({"desayuno", "almuerzo", "cena"})
+
+
+def slot_canonico(value: Any) -> Optional[str]:
+    """desayuno | almuerzo | merienda | cena, o None si no se reconoce (snack/colación ⇒ merienda)."""
+    import unicodedata
+    v = "".join(ch for ch in unicodedata.normalize("NFKD", str(value or "")) if not unicodedata.combining(ch)).lower()
+    if "desayun" in v:
+        return "desayuno"
+    if "almuer" in v or v.strip().startswith("comida"):
+        return "almuerzo"
+    if "cena" in v:
+        return "cena"
+    if "merienda" in v or "snack" in v or "colaci" in v:
+        return "merienda"
+    return None
+
+
+def comidas_sin_registrar(rows_del_dia: Any, plan_day: Any = None) -> list:
+    """Comidas de ESE día que faltan en el diario, en orden del día. `plan_day` es el registro de
+    `resolve_day_dates`/`find_plan_day_for_date` (o el dict del día del plan): solo decide si la merienda cuenta."""
+    registradas = {slot_canonico(r.get("meal_type")) for r in (rows_del_dia or []) if isinstance(r, dict)}
+    slots = set(_SLOTS_PRINCIPALES)
+    dia = plan_day.get("day") if isinstance(plan_day, dict) and isinstance(plan_day.get("day"), dict) else plan_day
+    meals = dia.get("meals") if isinstance(dia, dict) else None
+    if isinstance(meals, list) and any(
+        slot_canonico(m.get("meal") or m.get("meal_type")) == "merienda" for m in meals if isinstance(m, dict)
+    ):
+        slots.add("merienda")
+    return [s for s in _ORDEN_SLOTS if s in slots and s not in registradas]
+
+
 def build_past_diary_block(consumed_rows: Any, today: date,
                            days_back: Optional[int] = None,
                            max_chars: Optional[int] = None,
-                           tz_offset_mins: int = 240) -> str:
+                           tz_offset_mins: int = 240,
+                           plan_data: Any = None) -> str:
     """Pieza 3 del spec: lo que el usuario REGISTRÓ haber comido en los días
     anteriores a hoy. Declara explícitamente los días sin registro — esa es la
     guarda que impide que el modelo rellene el hueco con el plan."""
@@ -726,6 +765,11 @@ def build_past_diary_block(consumed_rows: Any, today: date,
                 if isinstance(cal, (int, float)) and cal:
                     seg += f" ({int(cal)} kcal)"
                 parts.append(seg)
+            # [P1-PLAN-LOTE-76] lo que falta de ese día, por su nombre
+            _pd = find_plan_day_for_date(plan_data, cursor, today, tz_offset_mins) if isinstance(plan_data, dict) else None
+            _faltan = comidas_sin_registrar(rows, _pd)
+            if _faltan:
+                parts.append("sin registrar: " + ", ".join(_faltan))
             lines.append(f"- {_fmt_date_es(cursor)}: " + " · ".join(parts))
         else:
             lines.append(f"- {_fmt_date_es(cursor)}: SIN REGISTRO")
@@ -752,5 +796,7 @@ def build_past_diary_block(consumed_rows: Any, today: date,
               "Cada línea de aquí lleva SU fecha y esa fecha manda: NUNCA presentes una de "
               "estas comidas como si fuera de hoy, ni la cites para decirle que hoy ya tiene "
               "algo registrado. Lo registrado hoy es SOLO lo que diga el bloque DIARIO DE HOY, "
-              "incluido cuando dice que hoy todavía no hay nada.")
+              "incluido cuando dice que hoy todavía no hay nada. «sin registrar: …» enumera las comidas de ese "
+              "día que faltan en el diario (las tres principales, y la merienda solo si el plan la traía): si "
+              "ofreces completar un día, ofrece ESAS por su nombre.")
     return _assemble(header, lines, footer, max_chars, "diary")

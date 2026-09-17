@@ -263,7 +263,10 @@ _PROCESS_START_ISO = datetime.now(timezone.utc).isoformat()
 # [P1-PLAN-LOTE-75 · 2026-09-17] El tier admin es ilimitado también en la cuota del coach (faltaba la fila:
 # 57/60 en la captura del dueño) y el registro de uso LLM anota el modelo efectivo (DeepSeek, no el ID GLM
 # del knob), para que el costo salga con su tarifa.
-_LAST_KNOWN_PFIX = "P1-PLAN-LOTE-75 · 2026-09-17"
+# [P1-PLAN-LOTE-76 · 2026-09-17] (frontend + coach) «Nuevo chat» bloqueado mientras el chat de hoy está abierto
+# (decisión del dueño: se renueva solo a medianoche) y el coach ofrece POR SU NOMBRE la comida que falta de ese
+# día tras registrar, o no pregunta (`comidas_sin_registrar`, SSOT en chat_history_context.py).
+_LAST_KNOWN_PFIX = "P1-PLAN-LOTE-76 · 2026-09-17"
 
 # [P1-SENTRY-SAMPLE-COST · 2026-05-12] Sentry sampling driven from env vars
 # con default seguro 0.1 (10%). Pre-fix tenía `traces_sample_rate=1.0` y

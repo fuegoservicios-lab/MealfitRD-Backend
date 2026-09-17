@@ -79,3 +79,11 @@ siga contando como el de hoy.
 (`CuentaRegresivaChat`) para no volver a pintar la página. El bloque conserva sus 84 px
 (0.75rem + 2.75rem + 0.25rem + 1rem + 0.5rem), porque la barra de scroll del hilo arranca a esa altura
 (`P2-CHAT-SCROLLBAR-TWINS`). Textos en los cuatro catálogos.
+
+## El botón «Nuevo chat» queda bloqueado (P1-PLAN-LOTE-76)
+
+Decisión del dueño («prefiero un bloqueo total hasta medianoche»): mientras el chat abierto es el de HOY (día anotado
+= hoy, sea automático o elegido a mano), el botón va deshabilitado con el mismo tooltip de la cuenta regresiva, y
+`handleNewChat` lo ignora aunque llegue por otro camino. Se habilita solo en el estado degenerado en que el día
+anotado no es hoy (renovación imposible o almacenamiento borrado): es la salida de emergencia para no quedarse sin
+chat. La regla vive en `nuevoChatBloqueado` (`utils/chatSessionDay.js`); la cabecera conserva sus 84 px.
