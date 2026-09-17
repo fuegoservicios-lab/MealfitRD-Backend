@@ -102,3 +102,29 @@ que actúa en modo plan, donde no hay aplanado).
 Tests: `frontend/src/__tests__/DashboardTracking.phone_breakpoint.test.jsx` y `backend/tests/test_p1_plan_lote_92.py`
 (que además ata el corte al del armazón: si `DashboardLayout` mueve su frontera, cae el test y no el teléfono de nadie).
 Las anclas de los lotes 88 y 91 quedaron reconvertidas al bloque de 768.
+
+## Revisión a fondo del móvil (`P1-PLAN-LOTE-94` · 2026-09-17)
+
+El dueño pidió una revisión completa («a ver si no hay ningún otro bug o diseño visual mal hecho»). Se barrió el armazón
+real —`DashboardLayout` con Hoy, Nevera, Historial y Configuración— a 320, 392, 430, 520 y 768 px, en claro y oscuro, con
+una sonda que mide desborde horizontal y detecta hijos mucho más estrechos que su padre. Dos defectos con arreglo:
+
+- **El desplegable del tipo de comida cortaba su valor por defecto.** En el componedor, «Extra (fuera del plan)» se veía
+  como «Extra (fuera del» a 392 px y «Extra (fuel» a 320. Los dos desplegables se repartían la fila a partes iguales
+  (`flex: 1`) aunque, medido con la tipografía real, el primero pide 185 px y el segundo 85. Ahora la fila es una rejilla
+  `minmax(0, 1fr) auto` (el día ocupa lo que mide su texto) y por debajo de 380 px se apilan. `text-overflow: ellipsis` como
+  red de seguridad para traducciones más largas.
+- **En tema claro el contador se leía sobre las burbujas.** Desde el lote 88 las secciones no tienen tarjeta, así que el
+  texto queda sobre `DashboardLayout .container::before` (la imagen decorativa al 85 %): el subtítulo `#64748B` ronda 4,1:1
+  ahí, cuando sobre la tarjeta blanca daba 4,9:1 — por debajo del 4,5:1 que pide AA para texto pequeño. La página se apoya
+  ahora en el color liso (`--bg-page`) **solo en claro**; en oscuro el contraste sobra y el degradado superior es parte de
+  la identidad que el dueño eligió. Mismo criterio que `SETTINGS-MOBILE-WHITE-BG`.
+
+Lo que se revisó y salió limpio: sin desborde horizontal en ninguna página ni ancho (320-768); las cuatro pestañas y sus
+estados vacíos; el componedor, el escáner y el diario de días anteriores; la campana atracada y su cajón; el contador con y
+sin comidas, con la hidratación apagada y con el plan en pausa.
+
+Queda anotado para el dueño, porque es decisión suya y no un defecto: en claro, el fondo de burbujas se ve ahora en el
+resto de páginas con tarjeta (donde nunca estorbó) y ya no en el contador.
+
+Tests: `frontend/src/__tests__/MobileReview.lote94.test.jsx` y `backend/tests/test_p1_plan_lote_94.py`.
