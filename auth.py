@@ -105,6 +105,14 @@ def _uid_si_la_identidad_vive(uid: Optional[str], via: str) -> Optional[str]:
 # degradación a Bearer-only (comportamiento actual, cero regresión).
 # ---------------------------------------------------------------------------
 SESSION_COOKIE_NAME = "__Host-mf_session"
+# [P1-PLAN-LOTE-90 · 2026-09-17] Marcador de «aquí hay (o hubo) sesión first-party». NO lleva secreto
+# (vale "1") y NO es HttpOnly: existe para que el JS del cliente lo LEA. El arranque del frontend solo
+# llamaba a /api/auth/me si encontraba el token en localStorage (NO-401-NOISE); medido el 17-sep en el
+# PWA de iOS del dueño: OTP verificado dos veces, sesión emitida, y tras recargar no había token en
+# localStorage → jamás preguntó y la cookie válida no sirvió de nada. El marcador viaja CON la cookie
+# de sesión (misma vida, mismo borrado), así que no depende de localStorage y el visitante anónimo
+# sigue sin generar un 401.
+SESSION_MARKER_COOKIE_NAME = "__Host-mf_has_session"
 _SESSION_SECRET = (os.environ.get("MEALFIT_SESSION_SECRET") or "").strip()
 # Secreto ANTERIOR (opcional): durante una rotación, las cookies firmadas con el
 # secreto viejo siguen aceptándose un período de gracia → rotar sin desloguear a
@@ -383,7 +391,14 @@ async def get_verified_user_id(
         if uid:
             # [P1-AUTH-CUENTA-BORRADA] La cookie se acuñó desde un Bearer vivo,
             # pero sobrevive al borrado igual que el token que la originó.
-            return await asyncio.to_thread(_uid_si_la_identidad_vive, uid, "cookie")
+            # [P1-PLAN-LOTE-90 · 2026-09-17] Una cookie de identidad BORRADA ya no decide sola:
+            # antes devolvía None aquí mismo y el header `X-MF-Session` ni se miraba, así que una
+            # cookie vieja (cuenta purgada) TAPABA un token nuevo y válido de otra cuenta en el
+            # mismo navegador. El header se verifica por su cuenta (firma + guard), de modo que
+            # seguir solo AÑADE una segunda credencial comprobada; no concede nada.
+            uid = await asyncio.to_thread(_uid_si_la_identidad_vive, uid, "cookie")
+            if uid:
+                return uid
 
     # 3) [P1-FIRST-PARTY-SESSION] Header `X-MF-Session` = el MISMO token de sesión
     #    pero guardado en localStorage (no en cookie). Necesario porque los PWA
@@ -448,6 +463,17 @@ def set_session_cookie(response: Response, uid: str, iat: Optional[int] = None) 
     token = mint_session_cookie(uid, iat=iat)
     if not token:
         return None
+    # [P1-PLAN-LOTE-90] El marcador PRIMERO y la de sesión al final: es la última la que llevan los
+    # dobles de test que guardan solo la última llamada, y la que importa que sea HttpOnly.
+    response.set_cookie(
+        key=SESSION_MARKER_COOKIE_NAME,
+        value="1",
+        max_age=_SESSION_TTL_S,
+        path="/",
+        secure=True,
+        httponly=False,
+        samesite="strict",
+    )
     response.set_cookie(
         key=SESSION_COOKIE_NAME,
         value=token,
@@ -461,7 +487,10 @@ def set_session_cookie(response: Response, uid: str, iat: Optional[int] = None) 
 
 
 def clear_session_cookie(response: Response) -> None:
-    """Borra `__Host-mf_session` (mismos atributos para que el browser la matchee)."""
+    """Borra `__Host-mf_session` (mismos atributos para que el browser la matchee) y su marcador."""
+    response.delete_cookie(
+        key=SESSION_MARKER_COOKIE_NAME, path="/", secure=True, httponly=False, samesite="strict"
+    )
     response.delete_cookie(
         key=SESSION_COOKIE_NAME, path="/", secure=True, httponly=True, samesite="strict"
     )

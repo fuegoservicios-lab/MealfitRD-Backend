@@ -37,6 +37,7 @@ from auth import (
     session_cookies_enabled,
     derive_form_key,
     SESSION_COOKIE_NAME,
+    verify_session_cookie,
 )
 from rate_limiter import RateLimiter
 
@@ -96,12 +97,23 @@ async def session_me(
         return resp
     # Re-issue deslizante: preserva el `iat` original (del cookie O del header —
     # el PWA iOS usa el header). `session_cookie_iat` aplica el cap absoluto.
-    src = mf_session or x_mf_session
+    # [P1-PLAN-LOTE-90 · 2026-09-17] El `iat` sale de la credencial que de verdad ES de este uid:
+    # con una cookie vieja de otra cuenta y un header válido, `mf_session or x_mf_session`
+    # heredaba la antigüedad de la sesión ajena.
+    src = next((c for c in (mf_session, x_mf_session) if c and verify_session_cookie(c) == uid), None)
+    if mf_session and not x_mf_session:
+        # Diagnóstico barato: cuántos arranques se sostienen SOLO por la cookie (el cliente no
+        # tenía el token en localStorage). Es la huella del incidente que motivó el marcador.
+        logger.info(f"🔐 [P1-PLAN-LOTE-90] /me resuelto solo por cookie (uid={uid[:8]}…).")
     new_token = None
     if src:
         iat = session_cookie_iat(src)
         if iat:
             new_token = set_session_cookie(response, uid, iat=iat)
+    elif mf_session or x_mf_session:
+        # Llegó una credencial first-party que NO es de este uid (el uid lo dio el Bearer): se re-emite
+        # con `iat` fresco —lo mismo que haría POST /session— para que la cookie ajena deje de viajar.
+        new_token = set_session_cookie(response, uid)
     # [P1-FORM-KEY · 2026-06-21] Llave estable para cifrar el form sensible (ver
     # /session). Se entrega en /me para que el cliente la tenga al reabrir la app
     # vía sesión first-party (cuando ya no hay sesión de Neon ni access_token).
