@@ -260,7 +260,10 @@ _PROCESS_START_ISO = datetime.now(timezone.utc).isoformat()
 # `MEALFIT_LLM_PROVIDER` (default zai): Z.ai se quedó sin saldo (429/1113) a las 21:30 y toda la IA
 # cayó; el dueño pidió probar DeepSeek Flash. Un knob cambia de proveedor y otro lo deshace.
 # [P1-PLAN-LOTE-74 · 2026-09-16] Marcador en la serie del plan (35 tests exigen `P1-PLAN-LOTE-N`).
-_LAST_KNOWN_PFIX = "P1-PLAN-LOTE-74 · 2026-09-16"
+# [P1-PLAN-LOTE-75 · 2026-09-17] El tier admin es ilimitado también en la cuota del coach (faltaba la fila:
+# 57/60 en la captura del dueño) y el registro de uso LLM anota el modelo efectivo (DeepSeek, no el ID GLM
+# del knob), para que el costo salga con su tarifa.
+_LAST_KNOWN_PFIX = "P1-PLAN-LOTE-75 · 2026-09-17"
 
 # [P1-SENTRY-SAMPLE-COST · 2026-05-12] Sentry sampling driven from env vars
 # con default seguro 0.1 (10%). Pre-fix tenía `traces_sample_rate=1.0` y

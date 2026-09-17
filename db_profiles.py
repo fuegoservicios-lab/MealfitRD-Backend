@@ -923,6 +923,15 @@ def log_llm_usage_event(
         return
     if not model:
         return
+    # [P1-PLAN-LOTE-75 · 2026-09-17] El modelo EFECTIVO: con `MEALFIT_LLM_PROVIDER=deepseek` los callsites
+    # siguen pasando el ID GLM de su knob (el extractor de hechos registró `glm-5.3-flash` en llamadas que
+    # salieron por `deepseek-flash`) y el costo se calculaba con la tarifa equivocada. La traducción es la
+    # misma que aplica el wrapper; un ID que no sea GLM pasa tal cual.
+    try:
+        from llm_provider import _model_for_provider
+        model = _model_for_provider(model)
+    except Exception:
+        pass
     try:
         cost_micros = compute_llm_cost_micros(
             model, input_tokens, output_tokens, cached_tokens or 0

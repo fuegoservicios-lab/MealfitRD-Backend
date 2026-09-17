@@ -475,6 +475,9 @@ _COACH_LIMITS = {
     "basic": int(os.environ.get("MEALFIT_COACH_LIMIT_BASIC", "300")),
     "plus": int(os.environ.get("MEALFIT_COACH_LIMIT_PLUS", "1500")),
     "ultra": int(os.environ.get("MEALFIT_COACH_LIMIT_ULTRA", "5000")),
+    # [P1-PLAN-LOTE-75 · 2026-09-17] `admin` faltaba y caía a la fila de gratis (60): el dueño, probando,
+    # llegó a 57/60. Ilimitado como ya lo es en `_TIER_LIMITS` para los planes.
+    "admin": int(os.environ.get("MEALFIT_COACH_LIMIT_ADMIN", "999999")),
 }
 
 

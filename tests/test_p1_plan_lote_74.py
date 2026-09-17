@@ -136,7 +136,10 @@ def test_prices_registered_off_peak():
 
 def test_marker_doc_and_env_example():
     app = _src("app.py")
-    assert '_LAST_KNOWN_PFIX = "P1-PLAN-LOTE-74 · 2026-09-16"' in app and "P0-DEEPSEEK-FLASH · 2026-09-16" in app
+    import re
+    m = re.search(r'_LAST_KNOWN_PFIX = "P1-PLAN-LOTE-(\d+) · (\d{4}-\d{2}-\d{2})"', app)
+    assert m and int(m.group(1)) >= 74 and m.group(2) >= "2026-09-16"   # la serie sigue; el marker nunca baja
+    assert "[P1-PLAN-LOTE-74 · 2026-09-16]" in app and "P0-DEEPSEEK-FLASH · 2026-09-16" in app
     doc = _src("docs/llm_tier_routing.md")
     assert "P0-DEEPSEEK-FLASH" in doc and "MEALFIT_LLM_PROVIDER" in doc and "deepseek-v4-pro" in doc
     env = _src(".env.example")
