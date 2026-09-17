@@ -222,6 +222,12 @@ def _stub_log_consumed_meal(**kw):
     msg = (f"¡Éxito! Se ha registrado el consumo de '{kw.get('meal_name')}' ({calories} kcal, "
            f"{kw.get('protein')}g proteína, {kw.get('carbs') or 0}g carbohidratos, "
            f"{kw.get('healthy_fats') or 0}g grasas saludables) como {meal_type}{cuando} en tu diario.")
+    # [P1-PLAN-LOTE-76] la misma nota que la tool real («sigue sin registrar…»), contando los registros en seco de ese día
+    try:
+        _extra = [{"meal_type": v.get("meal_type")} for v in FAKE_DIARY.values() if v.get("days_ago") == days_ago]
+        msg += tools._nota_comidas_sin_registrar(kw.get("user_id") or CTX.get("uid"), days_ago, rows_extra=_extra)
+    except Exception:
+        pass
     if not mt_ok:
         msg += (f" (Aviso para el asistente: no reconocí el tipo de comida '{kw.get('meal_type')}' y "
                 f"quedó como snack; si era desayuno, almuerzo o cena, corrígelo con correct_consumed_meal.)")

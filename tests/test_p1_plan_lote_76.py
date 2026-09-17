@@ -121,6 +121,18 @@ def test_el_calculo_es_best_effort(herramienta, monkeypatch):
     assert "¡Éxito!" in out and "Para el asistente" not in out
 
 
+def test_la_bateria_en_seco_comparte_la_nota_y_cuenta_sus_registros(monkeypatch):
+    import tools
+    import db_facts
+    monkeypatch.setattr(tools, "user_tz_offset_min", lambda uid: 240)
+    monkeypatch.setattr(tools, "get_latest_usable_meal_plan", lambda uid: {"days": []})
+    monkeypatch.setattr(db_facts, "get_consumed_meals_today", lambda uid, date_str=None, tz_offset_mins=None: [{"meal_type": "desayuno"}])
+    nota = tools._nota_comidas_sin_registrar("u1", 1, rows_extra=[{"meal_type": "almuerzo"}, {"meal_type": "cena"}])
+    assert "ayer ya tiene todas sus comidas registradas" in nota
+    assert "hoy sigue sin registrar almuerzo, cena" in tools._nota_comidas_sin_registrar("u1", 0)
+    assert "_nota_comidas_sin_registrar" in _src("scripts/coach_battery/run_battery.py")   # el stub en seco la comparte
+
+
 def test_el_prompt_prohibe_la_pregunta_generica():
     p = _src("prompts/chat_agent.py")
     assert "[P1-PLAN-LOTE-76] LA COMIDA QUE FALTA, POR SU NOMBRE" in p
