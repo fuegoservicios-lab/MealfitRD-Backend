@@ -29,3 +29,28 @@ estar arriba de primero; se siente muy encogido lo del contador de macros».
   0,9 → 1,15). Letras y altura de barra intactas: sus dos correcciones de agosto («no las vuelvas más pequeñas») siguen.
 
 Tests: `frontend/src/__tests__/DashboardTracking.mobile_order.test.jsx` y `backend/tests/test_p1_plan_lote_87.py`.
+
+## El contador en el teléfono, sin «tarjeticas» (`P1-PLAN-LOTE-88` · 2026-09-17)
+
+Pregunta del dueño con captura a 392px, tras el lote 87: «¿qué opinas si quitamos eso de las tarjeticas en móviles? hay
+menos espacio y quiero que sea lo más cómodo visualmente». Medido en un arnés local a ese ancho: el relleno del shell
+(13,6px), el de la página (14,4), el borde (1) y el relleno de la tarjeta (18,4) sumaban **47,4px perdidos por lado**; las
+barras usaban 297 de 392px (75,8 %).
+
+- **Las dos secciones grandes van planas en ≤480px**: progreso e hidratación pierden borde, fondo, sombra y relleno y
+  usan el ancho entero (360px, canal de 16). Es opt-in por prop (`flatOnMobile` → clase `.flatMobile`): las tarjetas se
+  comparten con el dashboard de plan, que NO cambia en este lote. La regla oscura va en el mismo selector —
+  `html[data-theme="dark"] .card` (0,2,1) le ganaría fondo y borde a un `.card.flatMobile` (0,2,0) suelto.
+- **Lo que tiene marco, se toca (o se descarta)**: la invitación al plan sigue siendo tarjeta —es un aviso— y algo más
+  compacta (156 → 143px: el texto ocupa dos líneas a ese ancho y acortarlo es copy en 4 catálogos); también conservan su
+  forma las filas de comidas, el vaso y los botones.
+- **Una línea entre secciones**, con 1,5rem a cada lado, sobre `.sideCol:not(:empty)` (con la hidratación apagada el
+  componente devuelve null y la línea colgaría sobre nada).
+- **Sin marco, una sección se presenta por su título**: en plano la cabecera «Hidratación» va antes del vaso
+  (`display: contents` en `.body` + `order: -1`); con tarjeta el vaso podía ir primero porque el marco ya agrupaba.
+
+El bloque del aplanado va al FINAL de cada módulo: el primer `@media (max-width: 480px)` de `TrackingProgress.module.css`
+lo anclan los tests del lote 87. Arnés (no versionado): Vite con raíz fuera del repo, `DashboardTracking` real y stubs de
+`config/api`, `AssessmentContext` y `planModeResume`.
+
+Tests: `frontend/src/__tests__/DashboardTracking.flat_mobile.test.jsx` y `backend/tests/test_p1_plan_lote_88.py`.
