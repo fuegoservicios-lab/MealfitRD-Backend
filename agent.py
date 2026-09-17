@@ -543,6 +543,7 @@ from prompts.chat_agent import (
     build_user_identity_context,
     build_clinical_guard_context,
     build_language_directive,
+    build_message_language_directive,   # [P1-PLAN-LOTE-81]
 )
 # [P1-CHAT-PAST-DAYS · 2026-07-27] Memoria de días pasados — doc:
 # backend/docs/chat_past_days_memory.md
@@ -6569,6 +6570,7 @@ def chat_with_agent(session_id: str, prompt: str, current_plan: Optional[dict] =
         # del coach; comida/tool calls SIGUEN en español (frontera dura, ver
         # `build_language_directive`). es-DO/None/garbage ⇒ "" (byte-idéntico a hoy).
         system_prompt += build_language_directive(_coach_locale)
+        system_prompt += build_message_language_directive(prompt, _coach_locale)   # [P1-PLAN-LOTE-81] el idioma del mensaje manda
     except Exception as _id_err:
         logger.warning(f"[P3-CHAT-IDENTITY] No se pudo inyectar identidad al chat: {_id_err}")
 
@@ -6702,6 +6704,7 @@ def chat_with_agent(session_id: str, prompt: str, current_plan: Optional[dict] =
     # es-DO/guest ⇒ "" (byte-idéntico). Best-effort: jamás rompe el chat.
     try:
         system_prompt += build_language_directive(_coach_locale)
+        system_prompt += build_message_language_directive(prompt, _coach_locale)   # [P1-PLAN-LOTE-81] el idioma del mensaje manda
     except Exception as _exc:
         # [P2-SILENT-DEGRADATION] El `pass` a secas dejaba al coach respondiendo en
         # el idioma equivocado SIN rastro: es justo el sintoma que este refuerzo
@@ -7165,6 +7168,7 @@ def chat_with_agent_stream(session_id: str, prompt: str, current_plan: Optional[
         # del coach; comida/tool calls SIGUEN en español (frontera dura, ver
         # `build_language_directive`). es-DO/None/garbage ⇒ "" (byte-idéntico a hoy).
         system_prompt += build_language_directive(_coach_locale)
+        system_prompt += build_message_language_directive(prompt, _coach_locale)   # [P1-PLAN-LOTE-81] el idioma del mensaje manda
     except Exception as _id_err:
         logger.warning(f"[P3-CHAT-IDENTITY] No se pudo inyectar identidad al chat: {_id_err}")
 
@@ -7279,6 +7283,7 @@ def chat_with_agent_stream(session_id: str, prompt: str, current_plan: Optional[
     # usuario real en-US. Ver el comentario gemelo en chat_with_agent.
     try:
         system_prompt += build_language_directive(_coach_locale)
+        system_prompt += build_message_language_directive(prompt, _coach_locale)   # [P1-PLAN-LOTE-81] el idioma del mensaje manda
     except Exception as _exc:
         # [P2-SILENT-DEGRADATION] El `pass` a secas dejaba al coach respondiendo en
         # el idioma equivocado SIN rastro: es justo el sintoma que este refuerzo

@@ -5,6 +5,7 @@ Elimina la duplicación entre chat_with_agent() y chat_stream().
 """
 from datetime import datetime, timedelta, timezone
 from typing import Optional
+import re   # [P1-PLAN-LOTE-81]
 
 
 # ============================================================
@@ -1040,3 +1041,52 @@ def build_language_directive(locale) -> str:
         )
     _LANGUAGE_DIRECTIVE_CACHE[locale] = rendered
     return rendered
+
+
+# [P1-PLAN-LOTE-81 · 2026-09-17] El idioma del MENSAJE manda sobre el de la app. La regla F del prompt lo dice, y en la
+# batería final el dueño (app en es-DO) escribió «can you tell me how much protein I have left today?» y recibió la
+# respuesta en español (1 de 4 corridas). La directiva nativa por locale demostró que instrucción + demostración en el
+# idioma destino sí se obedece: aquí se añade POR TURNO cuando el mensaje viene en otro idioma que el de la app.
+# Detección por marcadores: ≥ 2 aciertos y ≥ 20 % de las palabras; ningún marcador es también palabra española
+# («que», «les», «cosa», «dia», «comer», «comi» quedan fuera a propósito). Sin acierto ⇒ "" (fail-safe).
+_MESSAGE_LANG_MARKERS = {
+    "en-US": frozenset({"the", "and", "you", "your", "have", "how", "what", "what's", "much", "today", "left", "can",
+                        "tell", "my", "is", "for", "with", "dinner", "lunch", "breakfast", "i", "should", "eat", "did",
+                        "hi", "hello", "please", "tonight", "ate", "had", "want", "need"}),
+    "fr-FR": frozenset({"je", "est", "salut", "bonjour", "aujourd'hui", "mange", "pour", "avec", "des", "du", "ce",
+                        "mon", "qu'est-ce", "c'est", "suis", "manger", "j'ai", "petit-déjeuner", "dîner", "déjeuner",
+                        "quoi", "faim"}),
+    "pt-BR": frozenset({"oi", "olá", "você", "hoje", "manhã", "café", "ovos", "pão", "almoço", "jantar", "quero",
+                        "não", "obrigado", "obrigada", "bom", "tenho", "estou", "posso", "fome", "geladeira"}),
+    "it-IT": frozenset({"ciao", "ho", "frigo", "oggi", "pranzo", "voglio", "non", "sono", "grazie", "mangiato",
+                        "fame", "mangiare", "posso", "vorrei", "colazione", "stasera"}),
+}
+_MESSAGE_LANG_TOKEN_RX = re.compile(r"[a-záéíóúàèìòùâêôãõçñ'’?-]+")
+
+
+def detect_message_locale(text) -> Optional[str]:
+    """Locale del idioma en que está escrito `text` (en-US/fr-FR/pt-BR/it-IT) o None si no se reconoce (español incluido)."""
+    if not isinstance(text, str):
+        return None
+    tokens = _MESSAGE_LANG_TOKEN_RX.findall(text.lower().replace("’", "'"))
+    if len(tokens) < 2:
+        return None
+    mejor, hits_mejor = None, 0
+    for loc, marcas in _MESSAGE_LANG_MARKERS.items():
+        hits = sum(1 for t in tokens if t in marcas or t.rstrip("?!.,") in marcas)
+        if hits > hits_mejor:
+            mejor, hits_mejor = loc, hits
+    if hits_mejor >= 2 and hits_mejor / len(tokens) >= 0.2:
+        return mejor
+    return None
+
+
+def build_message_language_directive(prompt, locale) -> str:
+    """Directiva nativa del idioma del MENSAJE cuando no coincide con el de la app; "" si coincide o no se reconoce."""
+    try:
+        det = detect_message_locale(prompt)
+        if not det or det == locale:
+            return ""
+        return build_language_directive(det)
+    except Exception:
+        return ""
