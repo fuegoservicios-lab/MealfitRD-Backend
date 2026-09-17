@@ -329,7 +329,8 @@ def _plan_context_for_chat(user_id, current_plan):
         f"activo:\n{plan_json}\n\n"
         "Usa esta información para responder con exactitud preguntas sobre lo que "
         "le toca comer hoy o sugerir cambios basados en lo que ya tiene asignado "
-        "(como desayuno, almuerzo o cena)."
+        "(como desayuno, almuerzo o cena). `totales_dia` son las sumas del día ya hechas: úsalas, no sumes a mano. "
+        "Los pasos de cada receta NO vienen aquí: los da la herramienta `consultar_dia_del_plan`."
     )
 
 
@@ -465,25 +466,58 @@ def _prune_plan_for_chat(plan):
     muta (side-effect-free: este helper recibe el plan VIVO del state del chat)."""
     if not isinstance(plan, dict):
         return plan
-    out = {k: v for k, v in plan.items() if k not in _CHAT_PLAN_PRUNE_KEYS}
+    # [P1-PLAN-LOTE-77 · 2026-09-17] Poda PROFUNDA: medido en el plan del dueño, el JSON del prompt pesaba 38,7 KB y casi
+    # todo era telemetría por comida (`_misalign_trace`, `_solver_raw_by_food`, `_closer_raw_by_food`, `ingredients_raw`…)
+    # que el coach no necesita y que le tapa los datos. Fuera toda clave interna (`_…`) a cualquier nivel e
+    # `ingredients_raw` (duplica `ingredients`); y cada día lleva sus sumas hechas (`totales_dia`): en la batería con
+    # DeepSeek el modelo sumó a mano 121 g de proteína donde el plan daba 127 g. El plan original JAMÁS se muta.
+    out = {k: v for k, v in plan.items() if k not in _CHAT_PLAN_PRUNE_KEYS and not _clave_interna_chat(k)}
     _days = out.get("days")
     if isinstance(_days, list):
-        out["days"] = [
-            (
-                {
-                    **_d,
-                    "meals": [
-                        ({k: v for k, v in _m.items() if k != "_display"}
-                         if isinstance(_m, dict) and "_display" in _m else _m)
-                        for _m in _d["meals"]
-                    ],
-                }
-                if isinstance(_d, dict) and isinstance(_d.get("meals"), list)
-                else _d
-            )
-            for _d in _days
-        ]
+        _dias = []
+        for _d in _days:
+            if isinstance(_d, dict) and isinstance(_d.get("meals"), list):
+                _meals = [
+                    ({k: v for k, v in _m.items() if k != "_display" and not _clave_interna_chat(k)}
+                     if isinstance(_m, dict) else _m)
+                    for _m in _d["meals"]
+                ]
+                _dd = {k: v for k, v in _d.items() if not _clave_interna_chat(k)}
+                _dd["meals"] = _meals
+                _dd["totales_dia"] = _totales_dia_para_chat(_meals)
+                _dias.append(_dd)
+            else:
+                _dias.append(_d)
+        out["days"] = _dias
     return out
+
+
+# [P1-PLAN-LOTE-77 · 2026-09-17] Claves por comida que el coach no necesita además de las internas (`_…`):
+# `ingredients_raw` duplica `ingredients`, y la receta paso a paso la sirve `consultar_dia_del_plan` bajo demanda
+# (en la batería el coach la llamaba para «cómo preparo…» aunque tuviera la receta delante).
+_CHAT_PLAN_PRUNE_MEAL_KEYS = frozenset({"ingredients_raw", "recipe"})
+
+
+def _clave_interna_chat(k) -> bool:
+    """[P1-PLAN-LOTE-77] Una clave del plan que NO va al prompt del coach: interna (`_…`) o de la denylist por comida."""
+    return isinstance(k, str) and (k.startswith("_") or k in _CHAT_PLAN_PRUNE_MEAL_KEYS)
+
+
+def _totales_dia_para_chat(meals) -> dict:
+    """[P1-PLAN-LOTE-77] Las sumas del día ya hechas (kcal y macros) para que el modelo no sume a mano."""
+    kcal = p = c = g = 0.0
+    for m in meals or []:
+        if not isinstance(m, dict):
+            continue
+        try:
+            kcal += float(m.get("cals") if m.get("cals") is not None else (m.get("calories") or 0))
+            p += float(m.get("protein") or 0)
+            c += float(m.get("carbs") or 0)
+            g += float(m.get("fats") or 0)
+        except (TypeError, ValueError):
+            continue
+    return {"kcal": int(round(kcal)), "proteina_g": int(round(p)), "carbohidratos_g": int(round(c)),
+            "grasas_g": int(round(g))}
 
 
 from schemas import MacrosModel, MealModel, DailyPlanModel, PlanModel

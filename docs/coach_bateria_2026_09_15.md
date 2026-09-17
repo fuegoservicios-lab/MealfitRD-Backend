@@ -217,3 +217,33 @@ Lo que falte para el 90 % queda para un lote siguiente, con esta batería como r
 **Varianza entre corridas.** Con el mismo código, un caso puede pasar de 12 a 9 (K8 en v2 frente a v3) y el
 porcentaje de casos con 11 o más va de 76 a 90 (v4 A frente a B). Una sola corrida no basta para dar una
 mejora por buena: por eso se corren dos.
+
+## La batería con DeepSeek (P1-PLAN-LOTE-77 · 2026-09-17)
+
+La noche del 16-17 Z.ai se quedó sin saldo y el coach pasó a DeepSeek V4.1 Flash (`P1-PLAN-LOTE-74`). La MISMA batería de 63
+casos, con el código del lote 76 (la nota «sigue sin registrar…» ya en el stub en seco del arnés) y `MEALFIT_LLM_PROVIDER=deepseek`:
+
+| Corrida | Qué lleva | Coste | Llamadas | Segundos | Banderas automáticas | Fallos duros |
+|---|---|---|---|---|---|---|
+| **v7 DeepSeek A** | lote 76 · `deepseek-flash` | US$ 0,08 (2,49 M de 2,78 M tokens de entrada en caché) | 100 | 856 | 18/63: 15 por longitud (todas < 1,5× del tope), C6 sin `consultar_dia_del_plan` (contestó desde el índice, con datos correctos), J1 (foto sin texto) pregunta en vez de registrar | ninguno; 1 FD2 no clínico (I3: «121 g» de proteína del día donde el plan suma 127) |
+
+Puntuado con la rúbrica: media ≈ 11,3 sobre 12, 0 FD1, 0 FD3, 0 FD4, 0 dosis. A la par de las v6 con GLM. Lo que la corrida enseñó y este lote corrige:
+
+- **C5 guardó una petición puntual como rechazo permanente.** «Cámbiame la cena de hoy por algo sin pescado» llamó a
+  `update_form_field(dislikes='Pescado')`: desde ese turno ningún plan futuro traería pescado. Regla M: lo puntual no es perfil.
+- **B7 ofreció un recordatorio** («¿te suena el recordatorio para el próximo vaso?») que el coach no puede programar, y **B5**
+  dijo «la ubico ahí» de una pizza futura sin haber hecho nada. Regla N: nada que no pueda hacer.
+- **I3 (francés) e I4 (italiano) con palabras sueltas en español** («unos 2081 kcal», «está vacía»). Regla O: idioma íntegro.
+- **A3 («buenas» a las 19:30) no nombró la cena**; la mitad de los casos largos se pasan del tope entre un 5 y un 20 %.
+  Regla P: si solo saluda, la próxima comida por su nombre; el tope es techo, no meta.
+- **El plan que ve el coach pesaba 38,7 KB por turno**: `_misalign_trace`, `_solver_raw_by_food`, `_closer_raw_by_food`,
+  `ingredients_raw`, `_recipe_contract_final`… por comida, y sin las sumas del día (de ahí el 121 ≠ 127 de I3). La poda de
+  `_prune_plan_for_chat` pasa a ser profunda (toda clave `_…` a cualquier nivel, `ingredients_raw` y la receta paso a
+  paso, que sirve `consultar_dia_del_plan` bajo demanda: el coach ya la llamaba para «cómo preparo…» con la receta
+  delante, E1 y H1) y cada día lleva `totales_dia` ya sumados. Medido en el plan del dueño (2 días): 38,7 KB → 26,3 KB
+  sin claves internas → 15,9 KB sin la receta. La caché de DeepSeek escondía el coste; la precisión no se escondía.
+- **El arnés murió al imprimir «≠» con consola cp1252** tras 48 casos (sin `results.json`): ahora escribe UTF-8 (lote 76).
+
+Fuera de este lote, como decisión de producto: J1 (una foto de un plato sin texto a las 08:40) sigue confirmando en una
+línea en vez de registrar; «registra y que deshaga» es lo que pide la proactividad del dueño, pero una foto no siempre es
+suya. Se deja en la lista de decisiones.
