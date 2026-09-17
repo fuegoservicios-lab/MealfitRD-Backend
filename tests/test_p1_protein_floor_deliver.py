@@ -19,11 +19,11 @@ import graph_orchestrator as go
 _NUTR = {"target_calories": 2000, "macros": {"protein_g": 120, "carbs_g": 200, "fats_g": 60}}
 
 
-def _breach(plan, *, renal_capped, form_data=None):  # firma de _protein_floor_shortfall (P3-BARIATRIC-FLOOR-RELAX añadió form_data)
+def _breach(plan, *, renal_capped, form_data=None, **_kw):  # firma de _protein_floor_shortfall (P3-BARIATRIC-FLOOR-RELAX añadió form_data; P1-PLAN-LOTE-82 tolerance_pct)
     return [("Día 1", 50.0, 120.0)]
 
 
-def _no_breach(plan, *, renal_capped, form_data=None):
+def _no_breach(plan, *, renal_capped, form_data=None, **_kw):
     return []
 
 

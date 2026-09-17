@@ -334,3 +334,9 @@ En producción el day-gen va a `gpt-5.6-luna` (hay `OPENAI_API_KEY` en el VPS): 
 cae al proveedor alterno (sin key o con Luna caída). Y el registro de la noche: un usuario real (no el dueño) chateó a las
 23:57 RD, 30 min antes del cambio de proveedor, y recibió los 429 de Z.ai (`rag_query_router`, clasificador de sentimiento y
 `call_model`); desde el cambio, cero 429.
+
+### El piso de proteína: tolerancia del rechazo, no del piso (P1-PLAN-LOTE-82 · 2026-09-17)
+
+El bench de arriba dejó un plan (perfil 90 kg, target 198 g, piso 90 % = 178,2 g) en `max_attempts` y entregado DEGRADADO con el banner «regenéralo». Leído intento a intento: el 1 salió a 177 g (1,2 g bajo el piso), el 2 a 167 g y el 3 a 176 g; el plan entregado, tras el último re-encuadre, medía 184/199/201 g. El déficit no lo abre el modelo: lo abren los topes de porción que corren DESPUÉS del cerrador (`P1-PROTEIN-FLOOR-LAST-WORD`: el cap tiene la última palabra por diseño), así que otro intento del LLM vuelve a caer en el mismo recorte — dos intentos y ~5 min para acabar donde empezó, con un banner que pide quemar otro crédito. En producción (90 días, 11 planes con días, solo lectura) ninguno cayó por esto y los dos que quedaron entre el 85 y el 90 % se entregaron válidos.
+
+Cambio: `MEALFIT_PROTEIN_FLOOR_RETRY_TOLERANCE_PCT` (0,05) rebaja el umbral de RECHAZO a 85 % en los tres sitios que deciden «¿vale otro intento?» (gate de review, promoción del surgical regen y backstop final). El piso sigue en 90 %: los cerradores apuntan a él, la directiva del reintento lo pide y el módulo del último recorte lo mide sin tolerancia; un día tolerado queda escrito en `plan_data._protein_floor_tolerated`. Bariátrica (80 %, relajada a propósito) y renal (exento) no cambian; 0 = conducta anterior sin redeploy. Con la tolerancia, aquel plan se habría entregado válido en el intento 1.

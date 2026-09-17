@@ -437,6 +437,12 @@ Los planes recientes (el día determinista y el revisor) cuentan sólo los plane
 |---|---|---|
 | `MEALFIT_CULINARY_JUDGE_OBSERVACION_CODES` | `paso_incoherente,tecnica_impropia,nombre_no_corresponde` | Códigos del juez culinario en OBSERVACIÓN: el post-proceso de `run_culinary_judge` les pone `certeza="dudosa"`. Se emiten y se guardan igual (`_culinary_judge_history`); no deciden `blocked` cuando `MEALFIT_CULINARY_JUDGE_GUARD=block` y el marcador estricto no los cuenta salvo `--con-dudosas`. Default medido: precisión estricta < 25 % con n ≥ 4 en la columna del lote 38 (los tres dan 0 % estricta y 60-100 % por sustancia; tabla en `culinary_coherence.md`, «El juez por código»). `""` = ninguno; lo que no sea uno de los 5 códigos del schema se ignora. |
 
+### El piso de proteína: tolerancia del rechazo (`P1-PLAN-LOTE-82` · 2026-09-17)
+
+| Knob | Default | Efecto |
+|---|---|---|
+| `MEALFIT_PROTEIN_FLOOR_RETRY_TOLERANCE_PCT` | `0.05` | Puntos por debajo del piso de proteína (90 %) que NO valen otro intento del LLM: un día entre el 85 y el 90 % del target se entrega aprobado y queda escrito en `_protein_floor_tolerated`; por debajo se rechaza «high» como antes. Solo sobre el piso estándar (bariátrica 80 % y renal exento no cambian). Validador `[0, 0.10]`; `0` = conducta anterior. Medido: el bench del 17-sep rechazó 3 veces por 1,2 g y entregó degradado un plan que medía 184/199/201 g de 198. |
+
 ## Cómo añadir un knob nuevo
 
 ```python

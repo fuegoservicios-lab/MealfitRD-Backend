@@ -11620,6 +11620,18 @@ PROTEIN_FLOOR_HARD_PCT = _env_float("MEALFIT_PROTEIN_FLOOR_HARD_PCT", 0.90)  # g
 PROTEIN_FLOOR_HARD_PCT_BARIATRIC = _env_float("MEALFIT_PROTEIN_FLOOR_HARD_PCT_BARIATRIC", 0.80,
                                               validator=lambda v: 0.5 <= v <= 0.95)
 PROTEIN_FLOOR_HARD_GATE = _env_bool("MEALFIT_PROTEIN_FLOOR_HARD_GATE", True)
+# [P1-PLAN-LOTE-82 · 2026-09-17] Tolerancia del RECHAZO, no del piso. El piso (90 %) sigue siendo la meta de los
+# cerradores y lo que el módulo del último recorte deja escrito (`_protein_floor_delivered`); esto decide solo si un
+# día corto VALE OTRO INTENTO del LLM. Medido en el bench real del 17-sep (perfil 90 kg, target 198 g, piso 178,2 g):
+# el intento 1 salió a 177 g (1,2 g bajo el piso, 89,4 %) → rechazo «high» → intento 2 a 167 g → intento 3 a 176 g →
+# `max_attempts` y entrega DEGRADADA con el banner «regenéralo», y el plan entregado, tras el último re-encuadre,
+# medía 184/199/201 g. El déficit lo abren los topes de porción DESPUÉS del cerrador (P1-PROTEIN-FLOOR-LAST-WORD: el
+# cap tiene la última palabra por diseño), así que otro intento del LLM vuelve a caer en el mismo recorte: dos
+# intentos y ~5 min para acabar donde empezó, con un banner que pide quemar otro crédito. En producción (90 días,
+# 11 planes) ninguno cayó por esto y los dos que quedaron entre 85 y 90 % se entregaron válidos. Bariátrica (80 %,
+# relajada a propósito) y renal (exento) no cambian. 0 = conducta anterior (rollback sin redeploy).
+PROTEIN_FLOOR_RETRY_TOLERANCE_PCT = _env_float("MEALFIT_PROTEIN_FLOOR_RETRY_TOLERANCE_PCT", 0.05,
+                                               validator=lambda v: 0.0 <= v <= 0.10)
 # [P2-PROTEIN-FLOOR-FAILHARD · 2026-06-21] Garantía DURA del piso de proteína (Fase 2 del
 # build "todo terreno" pedido por el owner). Hasta ahora el piso era best-effort: si el LLM
 # no convergía tras los retries (o se agotaba el budget de tiempo), un plan bajo el piso se
@@ -12791,7 +12803,7 @@ def _meal_macro_num(x) -> float:
         return 0.0
 
 
-def _protein_floor_shortfall(plan, *, renal_capped: bool, form_data: dict = None):
+def _protein_floor_shortfall(plan, *, renal_capped: bool, form_data: dict = None, tolerance_pct: float = 0.0):
     """[P3-PROTEIN-FLOOR / P2-PROTEIN-FLOOR-FAILHARD · 2026-06-21] Días bajo el piso de
     proteína (HARD_PCT × target diario). SSOT compartido por `review_plan_node` (gate de
     retry, severity 'high') y `_apply_critical_review_guardrails` (backstop fail-hard al
@@ -12803,6 +12815,9 @@ def _protein_floor_shortfall(plan, *, renal_capped: bool, form_data: dict = None
     son FÍSICOS (plantillas reescaladas + truth-up), no target×ratio asertado — un fallback
     podría medir bajo el piso, pero NUNCA se re-verifica: el backstop fail-hard está gateado
     por `not already_fallback` (cero riesgo de loop de sustitución).
+    [P1-PLAN-LOTE-82] `tolerance_pct` rebaja el umbral de RECHAZO (no el piso) y solo sobre el piso
+    estándar: los tres sitios que deciden «¿vale otro intento?» (review, promoción del surgical regen y el
+    backstop final) lo pasan; el módulo del último recorte mide contra el 90 % sin tolerancia.
     Tooltip-anchor: P2-PROTEIN-FLOOR-FAILHARD."""
     if not PROTEIN_FLOOR_HARD_GATE or renal_capped or not isinstance(plan, dict):
         return []
@@ -12819,12 +12834,18 @@ def _protein_floor_shortfall(plan, *, renal_capped: bool, form_data: dict = None
         # [P3-BARIATRIC-PROTEIN-FLOOR-RELAX · 2026-06-28] Piso bariátrico relajado (el pouch limita la ingesta; el
         # target ya está capeado a 80g — 90% es inviable en comidas diminutas/dulces y rompe grasa/kcal al forzarlo).
         _pct = PROTEIN_FLOOR_HARD_PCT
+        _piso_estandar = True
         try:
             from constants import BARIATRIC_CONDITION_TERMS as _BT_PF
             if form_data and any(any(_t in _c for _t in _BT_PF) for _c in _condition_strings(form_data)):
                 _pct = PROTEIN_FLOOR_HARD_PCT_BARIATRIC
+                _piso_estandar = False
         except Exception:
             pass
+        # [P1-PLAN-LOTE-82] la tolerancia rebaja el umbral de RECHAZO (no el piso) y solo sobre el piso estándar:
+        # el bariátrico ya se relajó a propósito (80 %) y el renal está exento arriba.
+        if tolerance_pct and _piso_estandar:
+            _pct = max(0.0, float(_pct) - float(tolerance_pct))
         _short = []
         for _i, _day in enumerate(plan.get("days", []) or [], 1):
             _dp = sum(_meal_macro_num(_mm.get("protein")) for _mm in (_day.get("meals", []) or []))
@@ -16469,7 +16490,8 @@ def _surgical_promote_blocked_reason(new_plan_result: dict, form_data: dict):
         return None
     try:
         _renal_capped = bool((new_plan_result.get("renal_protein_cap") or {}).get("applied"))
-        _short = _protein_floor_shortfall(new_plan_result, renal_capped=_renal_capped, form_data=form_data)
+        _short = _protein_floor_shortfall(new_plan_result, renal_capped=_renal_capped, form_data=form_data,
+                                          tolerance_pct=PROTEIN_FLOOR_RETRY_TOLERANCE_PCT)   # [P1-PLAN-LOTE-82]
         if _short:
             return "piso de proteína: " + "; ".join(f"Día {d}: {p}g de {t}g" for d, p, t in _short[:4])
         if DIET_HARD_GUARD:
@@ -42743,7 +42765,8 @@ Responde ÚNICAMENTE con el JSON de revisión.
     # (SSOT compartido con el backstop fail-hard de `_apply_critical_review_guardrails`). Aquí el
     # gate sigue marcando severity 'high' → retry: el LLM puede arreglarlo en otro intento. La
     # garantía DURA (sustituir por fallback si se agotan los retries) vive en el backstop al finalizar.
-    _short_days = _protein_floor_shortfall(plan, renal_capped=_renal_capped_plan, form_data=form_data)
+    _short_days = _protein_floor_shortfall(plan, renal_capped=_renal_capped_plan, form_data=form_data,
+                                           tolerance_pct=PROTEIN_FLOOR_RETRY_TOLERANCE_PCT)   # [P1-PLAN-LOTE-82]
     if _short_days:
         _tgt_p = _short_days[0][2]
         _sd_str = "; ".join(f"Día {d}: {p}g de {t}g" for d, p, t in _short_days)
@@ -42769,6 +42792,24 @@ Responde ÚNICAMENTE con el JSON de revisión.
         issues.append(_protein_floor_directive_text(
             _sd_str, _eff_pct, _tgt_p, (form_data or {}).get("dietType"), _motivo))
         severity = _severity_max(severity, "high")
+
+    # [P1-PLAN-LOTE-82] Lo tolerado queda escrito (el veredicto no miente): un día bajo el piso del 90 % pero dentro
+    # de la tolerancia del rechazo se entrega aprobado y con su número en el plan; el último recorte lo vuelve a medir.
+    try:
+        if PROTEIN_FLOOR_RETRY_TOLERANCE_PCT > 0 and isinstance(plan, dict):
+            _tolerados = [_x for _x in _protein_floor_shortfall(plan, renal_capped=_renal_capped_plan, form_data=form_data)
+                          if _x not in _short_days]
+            if _tolerados:
+                plan["_protein_floor_tolerated"] = {
+                    "tolerancia_pct": PROTEIN_FLOOR_RETRY_TOLERANCE_PCT,
+                    "dias": [{"dia": _d, "proteina_g": _p, "target_g": _t} for _d, _p, _t in _tolerados],
+                }
+                logger.warning(f"🥩 [P1-PLAN-LOTE-82] {len(_tolerados)} día(s) bajo el piso de proteína pero dentro de la "
+                               f"tolerancia del rechazo ({int(round(PROTEIN_FLOOR_RETRY_TOLERANCE_PCT * 100))} puntos): "
+                               + "; ".join(f"Día {_d}: {_p}g de {_t}g" for _d, _p, _t in _tolerados)
+                               + " → se entrega sin otro intento (los topes de porción tienen la última palabra).")
+    except Exception as _tol_e:
+        logger.debug(f"[P1-PLAN-LOTE-82] registro de tolerados no-op: {type(_tol_e).__name__}: {_tol_e}")
 
     # [P1-RENAL-CAP-FAILHARD-GATE · 2026-06-15] (gap-audit G3) Techo renal de proteína como GATE, no
     # telemetría. El cap renal (KDIGO 0.8 g/kg) es seguridad iatrogénica: en ERC el EXCESO de proteína
@@ -50181,7 +50222,8 @@ def _apply_critical_review_guardrails(
             and isinstance(plan_result, dict) and not already_fallback):
         _renal_capped_final = bool((plan_result.get("renal_protein_cap") or {}).get("applied"))
         _pf_short = _protein_floor_shortfall(plan_result, renal_capped=_renal_capped_final,
-                                             form_data=final_state.get("form_data"))
+                                             form_data=final_state.get("form_data"),
+                                             tolerance_pct=PROTEIN_FLOOR_RETRY_TOLERANCE_PCT)   # [P1-PLAN-LOTE-82]
         if _pf_short:
             _protein_floor_breach = True
             logger.error(
