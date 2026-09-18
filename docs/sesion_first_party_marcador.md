@@ -47,8 +47,20 @@ Tests: `backend/tests/test_p1_plan_lote_90.py` (comportamiento del resolvedor, d
 `frontend/src/__tests__/firstPartySession.marker.test.js` (anónimo no pregunta · sin token pero con marcador entra · 401 limpia
 los dos · logout sin red también cierra).
 
+## Google pregunta siempre qué cuenta usar (`P1-PLAN-LOTE-95` · 2026-09-17)
+
+Decidido por el dueño. «Continuar con Google» entraba con la sesión de Google activa en el dispositivo: en su iPhone creó
+una identidad nueva (`0f3ca99f…`, otro correo) sin preguntar. Ahora la URL de autorización lleva `prompt=select_account`.
+
+No se puede pedir por petición: el endpoint `/sign-in/social` de Better Auth 1.4.18 solo acepta `loginHint` y
+`additionalData` (el `prompt` es configuración del proveedor en el servidor de Neon) y el adaptador Supabase de
+`@neondatabase/auth` no reenvía `queryParams`. El cliente (`authClient.js`) pide la URL con `disableRedirect: true` —el
+servidor responde `redirect: false` y el `redirectPlugin` del cliente no navega—, le añade el parámetro con
+`conSelectorDeCuenta` (solo en `accounts.google.com`, sin duplicar, respetando `none`) y navega. Misma petición, mismas
+cookies, mismo cliente. Si el cliente Better Auth no está expuesto, el acceso sigue por el camino de siempre.
+
+Tests: `frontend/src/__tests__/authClient.google_select_account.test.js` y `backend/tests/test_p1_plan_lote_95.py`.
+
 ## Abierto (decisión del dueño)
 
-- «Continuar con Google» entra con la cuenta de Google predeterminada del dispositivo: en el iPhone del dueño creó una
-  identidad nueva (`0f3ca99f…`, otro correo) sin avisar. Pedir siempre el selector de cuentas (`prompt=select_account`) lo evita.
 - Esa identidad vacía sigue existiendo; borrarla es una escritura en producción (o «Eliminar cuenta» desde la propia app).
