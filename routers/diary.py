@@ -1451,14 +1451,34 @@ def api_get_consumed_today(user_id: str, date: Optional[str] = None, tzOffset: O
         total_pro = sum(m.get("protein", 0) for m in meals)
         total_car = sum(m.get("carbs", 0) for m in meals)
         total_fat = sum(m.get("healthy_fats", 0) for m in meals)
-        
+
+        # [P1-PLAN-LOTE-103 · 2026-09-18] «Micros de hoy»: cada comida resuelve sus `ingredients` contra el
+        # catálogo (mismo resolutor que el informe del plan) y aporta sus micros; sin ingredientes (foto, macros
+        # propias) → `micros: None`, y el total dice con cuántas comidas se calculó. Los ingredientes NO viajan
+        # al cliente: son la materia prima, no la respuesta. Fail-open: si el catálogo no carga, el diario sigue.
+        _resumen = {"micros": None, "micros_coverage": {"con_datos": 0, "total": len(meals)}}
+        try:
+            from diary_micros import micros_de_ingredientes, resumen_micros
+            from nutrition_db import IngredientNutritionDB
+            _ndb = IngredientNutritionDB()
+            for m in meals:
+                m["micros"] = micros_de_ingredientes(m.pop("ingredients", None), _ndb)
+            _resumen = resumen_micros(meals)
+        except Exception as _e:
+            logger.warning(f"[P1-PLAN-LOTE-103] micros del día no calculados: {_e}")
+            for m in meals:
+                m.pop("ingredients", None)
+                m.setdefault("micros", None)
+
         return {
             "meals": meals,
             "totals": {
                 "calories": total_cal,
                 "protein": total_pro,
                 "carbs": total_car,
-                "healthy_fats": total_fat
+                "healthy_fats": total_fat,
+                "micros": _resumen["micros"],
+                "micros_coverage": _resumen["micros_coverage"],
             }
         }
     except HTTPException as he:

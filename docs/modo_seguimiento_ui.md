@@ -91,6 +91,18 @@ Cuatro peticiones del dueño tras probar en el iPhone:
 
 Test `test_p1_plan_lote_102.py` (+ `lote102.test.jsx`).
 
+## «Micros de hoy» y la pestaña «Progreso» del modo plan (`P1-PLAN-LOTE-103` · 2026-09-18)
+
+El dueño: «un contador para micronutrientes, así tendríamos progreso en tiempo real para macros y micros; y con el generador encendido, dividir lo que es progreso (macros, micros, hidratación) en un apartado aparte». Aprobó los ocho: fibra, sodio, potasio, calcio, hierro, vitamina C, vitamina A y vitamina D.
+
+**De dónde salen los micros.** De lo que ya guarda cada comida registrada: `consumed_meals.ingredients` (cadenas «150 g de Pechuga de pollo») — las escriben el componedor (líneas del catálogo), «me lo comí» (los ingredientes del plato del plan) y el coach. `GET /api/diary/consumed/{user_id}` las resuelve con el MISMO resolutor que el informe de micros del plan (`IngredientNutritionDB.micros_from_ingredient_string`, SSOT en `diary_micros.py`) y devuelve por comida `micros: {values, resolved, total}` o `null`, y en `totals` la suma y `micros_coverage: {con_datos, total}`. **Los ingredientes no viajan al cliente.** Una comida por foto o con macros propias no trae ingredientes → no trae micros, y la tarjeta lo dice («con datos de 1 de 2 comidas»; «las comidas por foto o con macros propias no traen micros»): mostrar 0 mg de calcio por un plato escaneado sería mentir con número. Fail-open: si el catálogo no carga, el diario responde sin micros.
+
+**Metas.** `/api/nutrition/targets.micros` = `diary_micros.metas_micros` sobre `micronutrients.dri_targets` (DRI/IOM + OMS por sexo/edad/embarazo): el sodio es TECHO (<2000 mg; la barra avisa al pasarse), el resto SUELO. Sin sexo/edad no hay metas y la tarjeta muestra los totales sin barra.
+
+**La división.** `dashboardNav`: en modo plan aparece `progress` («Progreso», `/dashboard/progress`) tras «Plan» — 6 pestañas abajo en el teléfono, medido a 392 px sin recortes. `ProgressPage` = `DashboardTracking modo="plan"` (metas del plan vigente, sin invitación a encenderlo; macros, micros e hidratación). `Dashboard.jsx` deja de montar `TrackingProgress` y `WaterTracker`; lo que necesita saber de hoy («Tu Menú» atenúa el plato ya comido y bloquea «Cambiar plato») le llega por `useTodaysConsumedMeals`: adopta `mealfit:today-consumed-updated` si el contador está montado y, si no, pide el diario él mismo con las mismas señales (`mealfit:refresh-inventory`, `mealfit:diary-changed` —nuevo, lo emite `TrackingProgress` al borrar—, `visibilitychange`); una época invalida los fetches en vuelo cuando llega un evento, para que el fetch del montaje no pise lo adoptado. En modo contador nada cambia de sitio: «Progreso» sigue siendo la primera pestaña y gana la sección de micros.
+
+Tests: `test_p1_plan_lote_103.py` (módulo + anclas), `MicrosTracker.lote103.test.jsx` (tarjeta, hook y división), `Dashboard.eaten_slot_unlock.test.jsx` (reescrito: el round trip pasa por el hook).
+
 ## El corte del teléfono es 768, no 480 (`P1-PLAN-LOTE-92` · 2026-09-17)
 
 Reporte del dueño con captura de su iPhone, ya con los lotes 88-91 desplegados: «se ve estrecho, mira todo el espacio que

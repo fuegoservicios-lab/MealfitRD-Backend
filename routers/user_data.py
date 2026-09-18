@@ -942,6 +942,8 @@ async def api_nutrition_targets(
             },
             "goal_label": t.get("goal_label"),
             "kinematics": t.get("kinematics"),
+            # [P1-PLAN-LOTE-103 · 2026-09-18] las metas de los ocho micros del contador (DRI por sexo/edad/embarazo)
+            "micros": _metas_micros_de(hp),
         }
     except Exception as e:
         logger.error(f"[P1-PLAN-MODE] /nutrition/targets falló: {e}")
@@ -966,6 +968,22 @@ async def api_nutrition_targets(
 # idioma es literalmente escribir un escalar y no tiene efectos laterales, así
 # que un endpoint propio solo añadiría un limitador más, una fila más en la
 # tabla de exención de cuota y una segunda puerta al mismo UPDATE.
+def _metas_micros_de(hp: dict) -> dict:
+    """[P1-PLAN-LOTE-103] Metas de micros del contador desde el perfil de salud. Fail-open a `{}`: sin metas el
+    cliente pinta los totales sin barra, nunca una barra contra un cero inventado."""
+    try:
+        from diary_micros import metas_micros
+        try:
+            from nutrition_calculator import _is_pregnancy_or_lactation
+            _preg = bool(_is_pregnancy_or_lactation(hp))
+        except Exception:
+            _preg = False
+        return metas_micros(hp.get("gender"), hp.get("age"), pregnant=_preg)
+    except Exception as e:
+        logger.warning(f"[P1-PLAN-LOTE-103] metas de micros no calculadas: {e}")
+        return {}
+
+
 _PROFILE_SCALAR_WHITELIST = frozenset({"full_name", "locale"})
 
 # [P1-I18N-DASHBOARD · 2026-08-15] Valores admitidos de `locale`.

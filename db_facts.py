@@ -1092,9 +1092,11 @@ def get_consumed_meals_today(user_id: str, date_str: Optional[str] = None, tz_of
             # existentes (`agent.py`, `/api/diary/consumed/{user_id}`)
             # iteran los dicts por KEY (`m.get("calories")` etc.), nunca
             # desempaquetan posicionalmente — una columna extra no rompe nada.
+            # [P1-PLAN-LOTE-103 · 2026-09-18] + `ingredients`: la fuente del contador de micros del día
+            # (routers/diary.py los resuelve y NO los devuelve al cliente).
             _COLUMNS = (
                 "id, meal_name, calories, protein, carbs, healthy_fats, "
-                "consumed_at, meal_type"
+                "consumed_at, meal_type, ingredients"
             )
             # [P1-NEON-DB-MIGRATION · 2026-06-12] Eliminado el fallback PostgREST.
             if not connection_pool:
