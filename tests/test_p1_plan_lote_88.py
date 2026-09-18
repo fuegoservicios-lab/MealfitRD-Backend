@@ -37,9 +37,13 @@ def _bloque_plano(rel: str) -> str:
 
 def test_solo_el_contador_pide_las_secciones_planas():
     tracking = _front(_DASH + "DashboardTracking.jsx")
-    assert "<TrackingProgress planData={targets} userId={userProfile?.id} flatOnMobile />" in tracking
+    # [P1-PLAN-LOTE-103] `metasMacros` (era `targets`): las del plan en modo plan, las del perfil en modo contador
+    assert "<TrackingProgress planData={metasMacros} userId={userProfile?.id} flatOnMobile />" in tracking
     assert "|| 'guest'} flatOnMobile />" in tracking
-    assert "flatOnMobile" not in _front("src/pages/Dashboard.jsx"), "el dashboard de plan no se aplana en este lote"
+    dash = _front("src/pages/Dashboard.jsx")
+    assert "flatOnMobile" not in dash, "el dashboard de plan no se aplana en este lote"
+    # [P1-PLAN-LOTE-103] y ya no monta el contador: vive en la pestaña «Progreso» (ProgressPage → modo="plan")
+    assert "<TrackingProgress" not in dash and "<WaterTracker" not in dash
     assert "flatOnMobile = false" in _front(_DASH + "TrackingProgress.jsx")
     assert "flatOnMobile = false" in _front(_DASH + "WaterTracker.jsx")
 

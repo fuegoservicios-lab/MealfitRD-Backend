@@ -237,61 +237,21 @@ def test_watertracker_uses_local_date_not_utc():
     )
 
 
-def test_dashboard_imports_and_renders_watertracker():
-    src = _DASHBOARD_JSX.read_text(encoding="utf-8")
-    assert "import WaterTracker from '../components/dashboard/WaterTracker'" in src, (
-        "Dashboard.jsx no importa WaterTracker."
+def test_water_tracker_vive_en_la_pantalla_de_progreso():
+    """[P3-WATER-TRACKER · 2026-05-16 → P1-PLAN-LOTE-103 · 2026-09-18] SUPERSEDED en lo del sitio: el
+    WaterTracker se mudó del dashboard del plan a la pestaña «Progreso» (ProgressPage → DashboardTracking
+    modo="plan"), UNA instancia sin render por viewport (el dueño: «dividir lo que tenga que ver con progreso
+    —macros, micros, hidratación— en un apartado aparte»). Lo que sigue vigente: se monta una sola vez y NO está
+    gateado por el plan (la hidratación es independiente del ciclo)."""
+    dash = _DASHBOARD_JSX.read_text(encoding="utf-8")
+    assert "<WaterTracker" not in dash and "import WaterTracker" not in dash, (
+        "Dashboard.jsx volvió a montar WaterTracker: desde el lote 103 vive en ProgressPage."
     )
-    assert "<WaterTracker" in src, "Dashboard.jsx no renderiza WaterTracker."
-
-
-def test_dashboard_mobile_renders_water_tracker_above_meals():
-    """[P3-WATER-TRACKER · 2026-05-16] En mobile el WaterTracker DEBE
-    renderizar ENCIMA del menu de comidas (`.main-grid`). Esto requiere:
-      1. Hook `isMobileViewport` definido (matchMedia con breakpoint 768px).
-      2. Un render gated por `isMobileViewport && <WaterTracker />` ANTES
-         del `<div className="main-grid">`.
-      3. Un render gated por `!isMobileViewport && <WaterTracker />`
-         DENTRO de la columna derecha (sigue siendo el render de desktop).
-    Una sola instancia activa a la vez (mobile XOR desktop) — el render
-    condicional evita doble fetch y divergencia de state.
-    """
-    src = _DASHBOARD_JSX.read_text(encoding="utf-8")
-    assert "isMobileViewport" in src, (
-        "Hook `isMobileViewport` ausente — sin el, no hay forma de elegir "
-        "donde renderizar WaterTracker."
-    )
-    # [reapuntado 2026-07-28] El matchMedia crudo migró al hook SSOT `useMediaQuery`
-    # (SSR-safe, useSyncExternalStore sobre window.matchMedia). El contrato — breakpoint
-    # canónico 768px alineado con las media queries del Dashboard — vive en el callsite
-    # del hook; el matchMedia real se ancla en el archivo del hook.
-    assert "useMediaQuery('(max-width: 768px)')" in src, (
-        "Detector de mobile debe usar `useMediaQuery('(max-width: 768px)')` "
-        "para alinearse con las media queries existentes del Dashboard."
-    )
-    _hook_src = (_DASHBOARD_JSX.parent.parent / "hooks" / "useMediaQuery.js").read_text(
-        encoding="utf-8"
-    )
-    assert "window.matchMedia(query)" in _hook_src, (
-        "useMediaQuery ya no envuelve window.matchMedia — el detector de viewport "
-        "cambió de mecanismo, re-anclar."
-    )
-    # Mobile render ANTES del .main-grid (orden textual = orden visual).
-    mobile_marker = "isMobileViewport && <WaterTracker"
-    grid_marker = '<div className="main-grid">'
-    assert mobile_marker in src, (
-        "No se encontro `{isMobileViewport && <WaterTracker />}` (render mobile)."
-    )
-    assert grid_marker in src, "No se encontro `.main-grid` container."
-    assert src.index(mobile_marker) < src.index(grid_marker), (
-        "El render mobile de WaterTracker debe aparecer ANTES de "
-        "`.main-grid` (textual y visualmente)."
-    )
-    # Desktop render gated explicitamente por NOT mobile.
-    assert "!isMobileViewport && <WaterTracker" in src, (
-        "El render dentro de la columna derecha debe estar gated por "
-        "`!isMobileViewport` — sin esa guarda se duplicaria con el mobile."
-    )
+    dt = (_DASHBOARD_JSX.parent.parent / "components" / "dashboard" / "DashboardTracking.jsx").read_text(encoding="utf-8")
+    assert dt.count("<WaterTracker") == 1, "una sola instancia del WaterTracker en la pantalla de progreso"
+    assert "isPlanExpired" not in dt, "la hidratación no se gatea por el plan"
+    pp = (_DASHBOARD_JSX.parent / "ProgressPage.jsx").read_text(encoding="utf-8")
+    assert '<DashboardTracking modo="plan" />' in pp
 
 
 def test_dashboard_removed_mi_nevera_card():
