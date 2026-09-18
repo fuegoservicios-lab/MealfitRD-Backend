@@ -1,7 +1,7 @@
 # -*- coding: utf-8 -*-
-"""[P1-PLAN-LOTE-102 · 2026-09-18] Un icono de cámara, «Progreso» y «Tus macros de hoy», y peso/altura en tiempo real.
+"""[P1-PLAN-LOTE-102 · 2026-09-18] Un icono de cámara, «Progreso» y «Tus macros y micros de hoy», y peso/altura en tiempo real.
 
-La sección del contador se llama «Tus macros de hoy» (antes «Progreso en Tiempo Real») y la pestaña «Progreso»
+La sección del contador se llama «Tus macros y micros de hoy» (antes «Progreso en Tiempo Real») y la pestaña «Progreso»
 (antes «Hoy»). El coach remite al usuario a esa sección POR SU NOMBRE (prompts/chat_agent.py): si el prompt
 conservara el viejo, mandaría al usuario a buscar algo que ya no existe con ese nombre — la misma trampa que cerró
 `todayRemaining.p1_i18n_eaten_claim`. En modo contador, Configuración guarda peso/altura/edad/sexo al momento
@@ -30,10 +30,10 @@ def _sin_comentarios_py(src: str) -> str:
 
 def test_el_coach_nombra_la_seccion_como_la_ve_el_usuario():
     prompt = _sin_comentarios_py((_BACKEND / "prompts" / "chat_agent.py").read_text(encoding="utf-8"))
-    assert "Tus macros de hoy" in prompt
+    assert "Tus macros y micros de hoy" in prompt
     assert "Progreso en Tiempo Real" not in prompt, "el coach mandaría al usuario a una sección que ya no se llama así"
     tp = _front("src/components/dashboard/TrackingProgress.jsx")
-    assert "t('Tus macros de hoy')" in tp and "t('Progreso en Tiempo Real')" not in tp
+    assert "t('Tus macros y micros de hoy')" in tp and "t('Progreso en Tiempo Real')" not in tp
 
 
 def test_pestana_progreso_y_un_solo_icono_de_camara():

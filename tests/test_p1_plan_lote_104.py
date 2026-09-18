@@ -1,5 +1,5 @@
 # -*- coding: utf-8 -*-
-"""[P1-PLAN-LOTE-104 · 2026-09-18] Bajo «Tus macros de hoy» el subtítulo dice «N comidas registradas», sin repetir «hoy»
+"""[P1-PLAN-LOTE-104 · 2026-09-18] Bajo «Tus macros y micros de hoy» el subtítulo dice «N comidas registradas», sin repetir «hoy»
 (el dueño, con captura: «la palabra hoy no quiero que se repita dos veces aquí»)."""
 from __future__ import annotations
 

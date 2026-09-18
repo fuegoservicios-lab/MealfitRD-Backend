@@ -103,6 +103,24 @@ El dueño: «un contador para micronutrientes, así tendríamos progreso en tiem
 
 Tests: `test_p1_plan_lote_103.py` (módulo + anclas), `MicrosTracker.lote103.test.jsx` (tarjeta, hook y división), `Dashboard.eaten_slot_unlock.test.jsx` (reescrito: el round trip pasa por el hook).
 
+## Macros y micros en una tarjeta, y el diario de días anteriores completo (`P1-PLAN-LOTE-105` · 2026-09-18)
+
+El dueño: «¿y qué tal si fusionas lo de micros con lo de macro? en "ver días anteriores" quiero también ver el historial de micros y solo se ve el de macros [...] revisa si el sistema de "días anteriores" está en su 100% posible [...] y lo de la fototeca directa en la app nativa Capacitor hazlo también». Decisión mía (me lo delegó): fusionar. Razón técnica además de la de producto: «Micros de hoy» hacía un SEGUNDO fetch del mismo `GET /api/diary/consumed/{user_id}` que ya hacía «Tus macros de hoy»; dos fuentes de la misma verdad que podían divergir tras un borrado.
+
+**La tarjeta.** «Tus macros y micros de hoy» (`TrackingProgress`): calorías y las tres barras, después la sección «Micros» (`MicrosList`, antes `MicrosTracker` con fetch propio; ahora solo pinta) con la cobertura honesta, después la lista de comidas y «Ver días anteriores». El snapshot cacheado (`_buildConsumedSnapshot`) lleva `micros`/`microsCoverage` y los recalcula desde `meals[].micros` con la aritmética de `diary_micros.resumen_micros` (`resumirMicros`), así el borrado optimista deja macros y micros coherentes sin esperar al servidor. Las metas (`microTargets`) las pasa `DashboardTracking` desde `/api/nutrition/targets.micros` en los dos modos — en modo plan el plan trae las macros, no las metas DRI de los micros. El endpoint devuelve `micros` también con `ok:false` cuando hay sexo y edad (es lo único que las DRI necesitan; el perfil de seguimiento en modo plan puede estar incompleto). El nombre cambia también en el prompt del coach y en `todayRemaining`.
+
+**El diario de días anteriores (`DiaryHistory`), auditado.** Lo que le faltaba:
+- **Micros del día**: `totals.micros` de ese día (el endpoint ya los traía para cualquier fecha) con `MicrosList compact` y sus metas (`targetMicros`).
+- **Comidas «extra» invisibles** — bug real: el componedor registra `meal_type='extra'` POR DEFECTO (`ManualMealRequest`) y el cajón solo dibujaba las cuatro franjas + `snack`; la comida contaba en el total y no salía en ninguna fila. Ahora todo lo que no es franja va al grupo «Extras y snacks».
+- **Borrar desde cualquier día** (solo hoy tenía papelera, en la tarjeta): mismo `DELETE /api/diary/consumed/{meal_id}` filtrado por `user_id`; tras borrar se vuelve a pedir el día y la tira, y se emite `mealfit:diary-changed` con `detail.source='diary-history'`. `TrackingProgress` lo escucha y vuelve a pedir hoy salvo que el evento sea suyo (`source='tracking-progress'`, ya actualizó el estado optimista).
+- **Registrar en el día que miras**: «Registrar en este día» abre el componedor con `initialDaysAgo` (hasta 7, el tope de `days_ago` en el backend; más atrás se dice «solo hasta 7 días»); si es más atrás que «Antier», el día pedido se añade como chip con su fecha para que el usuario lo vea y pueda cambiarlo. Sin `onScan`: la foto no es retrodatable.
+- **Más de 14 días**: «+14» al principio de la tira, hasta 90 (el clamp de `/consumed-range`). **La semana en una línea**: media de kcal en los días con registro de los últimos 7.
+- **Refresco en caliente**: mientras está abierto escucha `mealfit:refresh-inventory` (el componedor, el escáner y el chat) y `mealfit:diary-changed` (la tarjeta) — antes había que cerrarlo y abrirlo.
+
+**Fototeca directa en la app nativa.** En iOS el `<input type="file" accept="image/*">` abre SIEMPRE la hoja de tres opciones (Fototeca / Tomar foto / Seleccionar archivo) y no hay forma de evitarla desde la web (queja del dueño con captura, lote 102). En nativo, «Elegir de galería» del escáner usa `Camera.chooseFromGallery` (`chooseNativeGalleryImage`, mismo módulo que el chat ya usaba) con selección única; cancelar no es error y cualquier otro fallo cae al input de siempre. El plugin ya estaba en `Package.swift` y el permiso en `Info.plist`. **Requiere un build nativo nuevo** (Codemagic): la PWA no cambia.
+
+Tests: `test_p1_plan_lote_105.py`, `lote105.test.jsx` (tarjeta fusionada, cajón con micros/extras/borrar/registrar/+14, componedor en el día pedido), `MicrosList.lote103.test.jsx` (reanclado).
+
 ## El corte del teléfono es 768, no 480 (`P1-PLAN-LOTE-92` · 2026-09-17)
 
 Reporte del dueño con captura de su iPhone, ya con los lotes 88-91 desplegados: «se ve estrecho, mira todo el espacio que

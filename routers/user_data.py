@@ -927,7 +927,13 @@ async def api_nutrition_targets(
         _requeridos = ("gender", "age", "height", "weight", "weightUnit", "activityLevel", "mainGoal", "medicalConditions")
         faltan = [c for c in _requeridos if not hp.get(c)]
         if faltan:
-            return {"ok": False, "missing_fields": faltan}
+            # [P1-PLAN-LOTE-105 · 2026-09-18] Las metas de MICROS solo necesitan sexo y edad (DRI): en modo plan el
+            # perfil de seguimiento puede estar incompleto y el plan traer las macros; sin esto la tarjeta pintaba
+            # los micros sin barra aunque supiéramos las metas.
+            out = {"ok": False, "missing_fields": faltan}
+            if hp.get("gender") and hp.get("age"):
+                out["micros"] = _metas_micros_de(hp)
+            return out
 
         from nutrition_calculator import get_nutrition_targets
         t = await asyncio.to_thread(get_nutrition_targets, hp)

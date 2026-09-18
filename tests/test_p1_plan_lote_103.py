@@ -87,14 +87,14 @@ def test_frontend_progreso_en_modo_plan_y_micros_en_los_dos_modos():
     dash = _front("src/pages/Dashboard.jsx")
     assert "<TrackingProgress" not in dash and "<WaterTracker" not in dash
     assert "useTodaysConsumedMeals(" in dash
-    dt = _front("src/components/dashboard/DashboardTracking.jsx")
-    assert "<MicrosTracker userId={userProfile?.id} flatOnMobile />" in dt
-    mt = _front("src/components/dashboard/MicrosTracker.jsx")
+    # [P1-PLAN-LOTE-105] la tarjeta aparte se fusionó con las macros: la lista vive en MicrosList y la monta
+    # TrackingProgress (ver test_p1_plan_lote_105.py)
+    mt = _front("src/components/dashboard/MicrosList.jsx")
     for k in ("fiber_g", "sodium_mg", "potassium_mg", "calcium_mg", "iron_mg", "vit_c_mg", "vit_a_mcg", "vit_d_mcg"):
         assert f"key: '{k}'" in mt
     for loc in ("en-US", "pt-BR", "fr-FR", "it-IT"):
         d = json.loads(_front(f"src/i18n/locales/{loc}.json"))
-        for k in ("Micros de hoy", "Fibra", "Sodio", "Potasio", "Calcio", "Hierro", "Vitamina C", "Vitamina A", "Vitamina D"):
+        for k in ("Micros", "Fibra", "Sodio", "Potasio", "Calcio", "Hierro", "Vitamina C", "Vitamina A", "Vitamina D"):
             assert d.get(k), f"{loc}: {k}"
 
 

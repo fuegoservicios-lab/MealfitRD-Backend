@@ -10,7 +10,7 @@ el coach respondió:
 
 El journal de ese turno completo son DOS líneas: `call_model` y `Finalizado con
 éxito`. Ni un `execute_tools`, ni un `🍽️ [DIARY]`, ni una fila en
-`consumed_meals`. El panel "Tus macros de hoy" seguía en 0 comidas.
+`consumed_meals`. El panel "Tus macros y micros de hoy" seguía en 0 comidas.
 
 El modelo NARRÓ el registro. `build_tools_instructions_stream` ya se lo prohíbe
 literalmente ("NUNCA digas 'lo registro' o 'anotado' si no llamaste la
@@ -61,7 +61,7 @@ RESPUESTA_DEL_INCIDENTE = (
     "Cena registrada. Asumo 2 panes de molde (~60g c/u) con 40g de queso en total.\n"
     "~400 kcal\nP: 18g · C: 48g · G: 15g\n"
     "Quedó anotada como tu cena de hoy. Si el estimado no cuadra con lo que "
-    "comiste, ajústalo o bórralo desde 'Tus macros de hoy'."
+    "comiste, ajústalo o bórralo desde 'Tus macros y micros de hoy'."
 )
 
 
@@ -79,7 +79,7 @@ def test_detecta_la_afirmacion_de_registro(texto):
 
 
 @pytest.mark.parametrize("texto", [
-    "No pude registrarlo, hazlo desde 'Tus macros de hoy'.",
+    "No pude registrarlo, hazlo desde 'Tus macros y micros de hoy'.",
     "No quedó anotada porque falta el tipo de comida.",
     "Todavía no te lo he registrado: ¿fue almuerzo o cena?",
     "Sin registrar aún — dime cuántos panes fueron.",
