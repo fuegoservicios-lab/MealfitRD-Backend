@@ -32,3 +32,7 @@ El dueño, con captura del teléfono: «incómodo de interactuar y entender… q
 - El único `<select>` que queda (la unidad de cada línea) hereda el tratamiento de `P1-LOGMEAL-SELECT-DARK` (flecha propia + `color-scheme`); el test de ese P-fix apunta ahora a `.lineUnit`. `test_p1_plan_lote_94.py` (el select que cortaba «Extra (fuera del plan)») queda superseded en esa parte.
 
 Tests: `test_p1_plan_lote_99.py` (ancla), `LogMealModal.lote99.test.jsx` (contrato fino), y los de siempre (`LogMealModal.p1_manual_food_log`, `LogMealModal.freetext_estimate`) sin tocar: el flujo y el contrato con el backend no cambian.
+
+### Al cerrar, el dashboard vuelve a donde estaba (`P1-PLAN-LOTE-100` · 2026-09-18)
+
+En el iPhone, para revelar el campo enfocado iOS desplaza el DOCUMENTO de fondo aunque el body lleve `overflow: hidden`, y al cerrar la hoja la página aparecía movida «un poco hacia abajo». El componedor recuerda `window.scrollY` al abrir y lo restaura al desmontar (y cuando el visual viewport recupera su alto). El teclado NO tapaba el buscador (el dueño lo confirmó), así que no se toca la posición de la hoja. Test `test_p1_plan_lote_100.py`.
