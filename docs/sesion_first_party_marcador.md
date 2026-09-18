@@ -64,8 +64,27 @@ la URL a Better Auth con `disableRedirect: true` y se la añadía si el host era
   `additionalData`, y el adaptador Supabase no reenvía `queryParams`.
 
 El envoltorio se revirtió (código que no podía actuar, con un test que afirmaba lo contrario) y la explicación quedó junto a
-`signInWithOAuth` en `authClient.js`. Vías reales, ninguna aplicada: pedírselo a Neon (que su proveedor acepte `prompt`), o
-un aviso en la app cuando Google cree una cuenta NUEVA en un dispositivo que ya tuvo otra.
+`signInWithOAuth` en `authClient.js`. Queda pedírselo a Neon (que su proveedor acepte `prompt`).
+
+## El aviso «¿Es la cuenta que querías?» (`P1-PLAN-LOTE-97` · 2026-09-18)
+
+Lo que sí se puede desde este lado, elegido por el dueño. El dispositivo recuerda con qué cuentas se entra
+(`utils/cuentasDelDispositivo.js`, clave `mf_cuentas_dispositivo`: id, correo ENMASCARADO «an***@gmail.com» y cuándo se
+vio; máximo 5, nunca el correo completo porque la lista sobrevive al cierre de sesión a propósito). El login marca el
+inicio de un acceso con Google (`mf_google_inicio`, en localStorage porque en el PWA de iOS la vuelta del OAuth no
+siempre conserva la pestaña). Al cargar el perfil, `AvisoCuentaGoogle` (montado en `App`, perezoso y fuera del apex)
+pregunta **solo** si: el acceso vino de Google hace menos de 15 min, el dispositivo ya conocía OTRA cuenta, y esta no la
+había visto nunca. Dice si la cuenta es nueva (creada hace menos de 15 min) o solo nueva en el teléfono.
+
+- «Sí, seguir con esta» → la cuenta pasa a conocida; no se vuelve a preguntar por ella en ese dispositivo.
+- «No, salir» → cierre de sesión SIN recordarla, de vuelta al login. La nota explica que para entrar con la de antes
+  hay que usar «Continuar con correo» (Google volvería a elegir la cuenta abierta del teléfono).
+- Cerrar con Escape o tocando fuera no decide: el próximo acceso con Google a esa cuenta vuelve a preguntar.
+- El marcador de Google se consume siempre: un aviso por acceso, no uno por recarga. Un login con correo no pregunta
+  nunca (es deliberado) y enseña al dispositivo la cuenta habitual.
+
+Tests: `frontend/src/__tests__/cuentasDelDispositivo.test.js`, `frontend/src/__tests__/AvisoCuentaGoogle.test.jsx` y
+`backend/tests/test_p1_plan_lote_97.py`.
 
 Tests: `backend/tests/test_p1_plan_lote_96.py` (impide que el envoltorio vuelva sin una vía que funcione).
 
