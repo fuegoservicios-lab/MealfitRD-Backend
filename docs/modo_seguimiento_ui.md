@@ -80,6 +80,17 @@ El lote 91 colapsaba la invitación descartada a un enlace tenue al final del co
 
 El hueco «plan» de la rejilla queda vacío: `.turnOnSlot:empty { display: none; }` lo saca del reparto y, en el teléfono, `.page:has(.turnOnSlot:empty)` deja las áreas en `"main" "side"` — una fila vacía PRIMERA seguiría cobrando su hueco (1,5rem de aire muerto sobre el título). Sin `:has()` queda ese hueco y nada roto. Las dos claves salieron de los cuatro catálogos. Test `test_p1_plan_lote_98.py`; `test_p1_plan_lote_91.py` conserva solo lo que no dependía del enlace.
 
+## «Progreso», «Tus macros de hoy», un icono de cámara y el peso en tiempo real (`P1-PLAN-LOTE-102` · 2026-09-18)
+
+Cuatro peticiones del dueño tras probar en el iPhone:
+
+- **Un solo icono de cámara** en «Escanear comida»: se va el tile del título, queda el de «Usar la cámara».
+- **Nombres**: la pestaña del contador es «Progreso» (antes «Hoy»: no decía de qué) y la sección «Tus macros de hoy» (antes «Progreso en Tiempo Real»). El aviso «Bórralo en «…» para desbloquear» (`todayRemaining.js`) y el prompt del coach (`prompts/chat_agent.py`) nombran la sección como se ve: mandar al usuario a un nombre que ya no existe es la trampa que cerró `todayRemaining.p1_i18n_eaten_claim`.
+- **Peso/altura/edad/sexo en tiempo real en modo contador**: sin generador de planes no hay plan que regenerar ni crédito que gastar. Configuración muestra UN botón «Guardar» (`handleSaveTracking`), persiste en `health_profile` y avisa con `mealfit:targets-changed`; `DashboardTracking` vuelve a pedir `/api/nutrition/targets` (que ya leía `health_profile`) y las barras cambian sin recargar. En modo plan todo sigue igual («Actualizar Plan con Nuevos Datos» regenera).
+- **«Elegir de galería» en iOS abre la hoja de tres opciones (Fototeca / Tomar foto / Seleccionar archivo)**: la decide iOS para todo `<input type="file" accept="image/*">` sin `capture`; desde la web no se puede ir directo a la fototeca. La vía directa existe en el cascarón nativo (Capacitor `Camera.getPhoto({ source: Photos })`) — pendiente de decisión del dueño.
+
+Test `test_p1_plan_lote_102.py` (+ `lote102.test.jsx`).
+
 ## El corte del teléfono es 768, no 480 (`P1-PLAN-LOTE-92` · 2026-09-17)
 
 Reporte del dueño con captura de su iPhone, ya con los lotes 88-91 desplegados: «se ve estrecho, mira todo el espacio que
