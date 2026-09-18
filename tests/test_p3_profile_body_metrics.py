@@ -250,7 +250,8 @@ def test_commit_button_distinct_from_save_button():
     src = _read(_SETTINGS_JSX)
     # Botón condicional: ternary `{bodyMetricsChanged ? ... : ...}`.
     assert re.search(
-        r"\{\s*bodyMetricsChanged\s*\?",
+        # [P1-PLAN-LOTE-102] en modo contador va una rama antes (`{enModoContador ? … : bodyMetricsChanged ?`)
+        r"[{:]\s*bodyMetricsChanged\s*\?",
         src,
     ), (
         "Render condicional `{bodyMetricsChanged ?` ausente. Sin esto, "
