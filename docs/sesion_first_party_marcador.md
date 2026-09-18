@@ -47,19 +47,27 @@ Tests: `backend/tests/test_p1_plan_lote_90.py` (comportamiento del resolvedor, d
 `frontend/src/__tests__/firstPartySession.marker.test.js` (anónimo no pregunta · sin token pero con marcador entra · 401 limpia
 los dos · logout sin red también cierra).
 
-## Google pregunta siempre qué cuenta usar (`P1-PLAN-LOTE-95` · 2026-09-17)
+## Que Google pregunte siempre qué cuenta usar: no se puede desde este lado (`P1-PLAN-LOTE-95` → revertido en `P1-PLAN-LOTE-96`)
 
-Decidido por el dueño. «Continuar con Google» entraba con la sesión de Google activa en el dispositivo: en su iPhone creó
-una identidad nueva (`0f3ca99f…`, otro correo) sin preguntar. Ahora la URL de autorización lleva `prompt=select_account`.
+Decidido por el dueño: «Continuar con Google» entraba con la sesión de Google activa en el dispositivo (en su iPhone creó
+la identidad vacía `0f3ca99f…` con su otro correo). El lote 95 intentó forzar el selector con `prompt=select_account`: pedía
+la URL a Better Auth con `disableRedirect: true` y se la añadía si el host era `accounts.google.com`.
 
-No se puede pedir por petición: el endpoint `/sign-in/social` de Better Auth 1.4.18 solo acepta `loginHint` y
-`additionalData` (el `prompt` es configuración del proveedor en el servidor de Neon) y el adaptador Supabase de
-`@neondatabase/auth` no reenvía `queryParams`. El cliente (`authClient.js`) pide la URL con `disableRedirect: true` —el
-servidor responde `redirect: false` y el `redirectPlugin` del cliente no navega—, le añade el parámetro con
-`conSelectorDeCuenta` (solo en `accounts.google.com`, sin duplicar, respetando `none`) y navega. Misma petición, mismas
-cookies, mismo cliente. Si el cliente Better Auth no está expuesto, el acceso sigue por el camino de siempre.
+**No hacía nada en producción**, y se vio al comprobarlo con la Navigation API tras desplegar:
 
-Tests: `frontend/src/__tests__/authClient.google_select_account.test.js` y `backend/tests/test_p1_plan_lote_95.py`.
+- La URL que devuelve Neon no es la de Google sino un salto en SU dominio,
+  `…/neondb/auth/sign-in/social/init?token=<uuid>`, que redirige a Google desde el servidor.
+- Añadirle `&prompt=select_account` a ese salto tampoco llega: en las URLs finales de Google
+  (`/v3/signin/accountchooser?…`) están client_id, PKCE, scope y state, y ningún `prompt`.
+- El proveedor de Google de Neon solo acepta client ID y secret (`neonctl neon-auth oauth-provider add|update`:
+  `--oauth-client-id`, `--oauth-client-secret`); el endpoint `/sign-in/social` solo acepta `loginHint` y
+  `additionalData`, y el adaptador Supabase no reenvía `queryParams`.
+
+El envoltorio se revirtió (código que no podía actuar, con un test que afirmaba lo contrario) y la explicación quedó junto a
+`signInWithOAuth` en `authClient.js`. Vías reales, ninguna aplicada: pedírselo a Neon (que su proveedor acepte `prompt`), o
+un aviso en la app cuando Google cree una cuenta NUEVA en un dispositivo que ya tuvo otra.
+
+Tests: `backend/tests/test_p1_plan_lote_96.py` (impide que el envoltorio vuelva sin una vía que funcione).
 
 ## Abierto (decisión del dueño)
 
