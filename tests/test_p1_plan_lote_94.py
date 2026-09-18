@@ -29,19 +29,11 @@ def _plano(s: str) -> str:
     return re.sub(r"\s+", " ", s)
 
 
-def test_la_fila_de_los_desplegables_reparte_por_contenido():
+def test_el_componedor_ya_no_tiene_desplegables_que_cortar():
+    """[P1-PLAN-LOTE-99 · 2026-09-18] SUPERSEDED: el tipo de comida y el día son chips con todas las opciones a la
+    vista; no queda `<select>` que corte su valor. El contrato nuevo vive en `test_p1_plan_lote_99.py`."""
     css = _front(_DASH + "LogMealModal.module.css")
-    i = css.index(".selectors {")
-    regla = _plano(css[i:css.index("}", i)])
-    assert "display: grid;" in regla and "grid-template-columns: minmax(0, 1fr) auto;" in regla
-    assert "display: flex;" not in regla, "el reparto a partes iguales es justo lo que cortaba el valor"
-    assert "@media (max-width: 380px) { .selectors { grid-template-columns: 1fr; } }" in _plano(css)
-
-
-def test_el_select_degrada_con_puntos_suspensivos():
-    css = _front(_DASH + "LogMealModal.module.css")
-    i = css.index(".select {")
-    assert "text-overflow: ellipsis;" in _plano(css[i:css.index("}", i)])
+    assert ".selectors {" not in css and "\n.select {" not in css
 
 
 def test_en_claro_el_contador_se_apoya_en_el_color_de_pagina():
