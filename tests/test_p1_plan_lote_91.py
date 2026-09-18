@@ -4,7 +4,11 @@
 Reporte del dueño con captura, tras pulsar «Ahora no»: «se puso raro lo del progreso en tiempo real». Medido en el arnés a
 392px: la tarjeta colapsa a un enlace tenue de 27px que se quedaba en la PRIMERA posición y, desde que las secciones van sin
 marco (`P1-PLAN-LOTE-88`), a 24px del título se leía como una línea del propio «Progreso en Tiempo Real». Ahora cierra la
-pantalla —la puerta sigue ahí— con la misma línea fina que separa las demás secciones."""
+pantalla —la puerta sigue ahí— con la misma línea fina que separa las demás secciones.
+
+[P1-PLAN-LOTE-98 · 2026-09-18] SUPERSEDED en lo del enlace: el dueño lo quitó del todo («ya está el interruptor en
+configuración»). Quedan vigentes las reglas que no dependían de él: la tarjeta sin descartar sigue primera, se reordenan
+ÁREAS y no filas, y la columna lateral vacía sale del reparto. El contrato nuevo vive en `test_p1_plan_lote_98.py`."""
 from __future__ import annotations
 
 import re
@@ -33,23 +37,14 @@ def _bloque(css: str, cabecera: str) -> str:
     return re.sub(r"\s+", " ", css[i:css.index("\n}\n", css.index("{", i))])
 
 
-def test_solo_el_enlace_se_va_al_final():
+def test_la_tarjeta_sin_descartar_sigue_primera_y_se_reordenan_areas():
     css = _sin_comentarios(_front(_CSS))
     movil = _bloque(css, "@media (max-width: 900px) {")
     assert 'grid-template-areas: "plan" "main" "side";' in movil, "la tarjeta SIN descartar sigue primera (lote 87)"
-    assert '.page:has(.turnOnSlot > .turnOnLink) { grid-template-areas: "main" "side" "plan"; }' in movil
     # se reordenan las ÁREAS y no la fila del bloque: una fila vacía sigue cobrando sus dos huecos
     assert "grid-row:" not in movil
     escritorio = re.sub(r"\s+", " ", css[:css.index("@media")])
     assert 'grid-template-areas: "main side" "main plan";' in escritorio
-
-
-def test_el_enlace_cierra_con_su_linea_y_la_tarjeta_no():
-    # [P1-PLAN-LOTE-92] el bloque del teléfono es el de 768, no el de 480
-    plano = _bloque(_sin_comentarios(_front(_CSS)), "@media (max-width: 768px) {")
-    assert ".turnOnSlot:has(> .turnOnLink) { border-top: 1px solid var(--border," in plano
-    assert "padding-top: 1.5rem;" in plano
-    assert ".turnOnCard { border-top" not in plano
 
 
 def test_la_columna_lateral_vacia_sale_del_reparto():
@@ -58,10 +53,10 @@ def test_la_columna_lateral_vacia_sale_del_reparto():
     assert ".sideCol:not(:empty) {" in css
 
 
-def test_el_descarte_sigue_siendo_una_puerta_y_persiste():
-    """Lo que cambia es DÓNDE se ve, no que exista: el enlace sigue llevando al formulario y el descarte se recuerda."""
+def test_el_descarte_persiste():
+    """[P1-PLAN-LOTE-98] Ya no hay enlace; lo que sigue es que el descarte se recuerda."""
     jsx = _front("src/components/dashboard/DashboardTracking.jsx")
-    assert "styles.turnOnLink" in jsx and "_DISMISS_KEY = 'mealfit_turnon_card_dismissed'" in jsx
+    assert "_DISMISS_KEY = 'mealfit_turnon_card_dismissed'" in jsx
     assert "safeLocalStorageSet(_DISMISS_KEY, '1')" in jsx
 
 

@@ -74,6 +74,12 @@ leía como una línea DEL «Progreso en Tiempo Real». El defecto no estaba en e
 
 Tests: `frontend/src/__tests__/DashboardTracking.dismissed_last.test.jsx` y `backend/tests/test_p1_plan_lote_91.py`.
 
+## Descartada, no queda nada (`P1-PLAN-LOTE-98` · 2026-09-18)
+
+El lote 91 colapsaba la invitación descartada a un enlace tenue al final del contador («¿Quieres el plan completo? Enciéndelo aquí» / «Tu plan está en pausa. Reanúdalo aquí»). El dueño, con captura: **«quítalo, ya está el interruptor en configuración»**. `TurnOnPlanCard` devuelve `null` al descartar, en las dos ofertas; la puerta de vuelta es Configuración → Capacidades. El descarte sigue persistiendo en `mealfit_turnon_card_dismissed`.
+
+El hueco «plan» de la rejilla queda vacío: `.turnOnSlot:empty { display: none; }` lo saca del reparto y, en el teléfono, `.page:has(.turnOnSlot:empty)` deja las áreas en `"main" "side"` — una fila vacía PRIMERA seguiría cobrando su hueco (1,5rem de aire muerto sobre el título). Sin `:has()` queda ese hueco y nada roto. Las dos claves salieron de los cuatro catálogos. Test `test_p1_plan_lote_98.py`; `test_p1_plan_lote_91.py` conserva solo lo que no dependía del enlace.
+
 ## El corte del teléfono es 768, no 480 (`P1-PLAN-LOTE-92` · 2026-09-17)
 
 Reporte del dueño con captura de su iPhone, ya con los lotes 88-91 desplegados: «se ve estrecho, mira todo el espacio que
