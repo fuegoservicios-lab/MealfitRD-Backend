@@ -43,7 +43,6 @@ _SETTINGS_JSX = _FRONTEND_SRC / "pages" / "Settings.jsx"
 _DASHBOARD_JSX = _FRONTEND_SRC / "pages" / "Dashboard.jsx"
 _PANTRY_JSX = _FRONTEND_SRC / "pages" / "Pantry.jsx"
 _PLAN_JSX = _FRONTEND_SRC / "pages" / "Plan.jsx"
-_IOS_PROMPT_JSX = _FRONTEND_SRC / "components" / "IOSInstallPrompt.jsx"
 
 
 def _read(path: Path) -> str:
@@ -146,7 +145,7 @@ _HOT_PATH_FILES_AND_KEYS = (
     (_DASHBOARD_JSX, "mealfit_push_onboarding_seen"),
     (_PANTRY_JSX, "mealfit_plan"),
     (_PLAN_JSX, "mealfit_guest_session_id"),
-    (_IOS_PROMPT_JSX, "dismissed_ios_prompt"),
+    # [P1-PLAN-LOTE-109] aquí iba IOSInstallPrompt.jsx: el aviso de instalación se retiró.
 )
 
 

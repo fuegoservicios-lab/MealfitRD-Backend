@@ -60,7 +60,6 @@ _PRICING = _FRONTEND_SRC / "components" / "home" / "Pricing.jsx"
 # (archivo, min_anchors, min_aria_attrs)
 # min_aria_attrs cuenta: aria-label= + aria-expanded= + aria-pressed=
 _PATCHED: tuple[tuple[Path, int, int], ...] = (
-    (_IOS_PROMPT, 1, 1),    # 1 dismiss button
     (_HEADER, 1, 2),        # mobile toggle: aria-label + aria-expanded
     (_PRICING, 1, 3),       # 2 aria-pressed + 1 aria-label en role="group"
 )
@@ -128,28 +127,13 @@ def test_b_aria_attrs_count(path: Path, _min_anchors: int, min_aria: int):
     )
 
 
-# C) Sentinel anti-regresión: callsites específicos no pueden perder aria-label.
-def test_c_ios_prompt_dismiss_button_has_aria_label():
-    src = _read(_IOS_PROMPT)
-    # El <button> de dismiss usa `onClick={dismissPrompt}`. Buscar el
-    # bloque del botón y verificar que tiene aria-label.
-    block_match = re.search(
-        r"<button\s+[^>]*onClick=\{dismissPrompt\}[^>]*>",
-        src,
-        re.DOTALL,
-    )
-    assert block_match, (
-        "P2-A11Y-LOGGING: el `<button onClick={dismissPrompt}>` en "
-        "IOSInstallPrompt.jsx no fue localizado. Si renombraste el "
-        "handler, ajustar este sentinel."
-    )
-    block = block_match.group(0)
-    assert "aria-label=" in block, (
-        "P2-A11Y-LOGGING: el dismiss `<button>` en IOSInstallPrompt.jsx "
-        "perdió `aria-label`. Es icon-only (<X size=18/>) — sin label "
-        "los lectores de pantalla narran 'botón' sin contexto. "
-        "Restaurar `aria-label=\"Cerrar aviso de instalación\"` "
-        "(o equivalente)."
+# C) [P1-PLAN-LOTE-109 · 2026-09-19] Aquí vivía el sentinel del botón de cierre de
+# IOSInstallPrompt.jsx. El dueño retiró el aviso de instalación entero; lo que se ancla
+# ahora es que no vuelva por accidente con un botón sin etiqueta.
+def test_c_ios_install_prompt_retirado():
+    assert not _IOS_PROMPT.exists(), (
+        "IOSInstallPrompt.jsx volvió. Se retiró en P1-PLAN-LOTE-109 por decisión del dueño; "
+        "si regresa, restaura también su sentinel de aria-label."
     )
 
 
