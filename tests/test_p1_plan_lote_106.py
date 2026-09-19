@@ -54,7 +54,8 @@ def test_la_revision_son_cuatro_preguntas_y_manda_days_ago():
         assert q in sm, q
     assert "<select" not in sm
     assert "days_ago: daysAgo," in sm
-    assert "options={_getDayOptions(t)} value={daysAgo} onChange={setDaysAgo}" in sm
+    # [P1-PLAN-LOTE-124] los chips vienen de ./dayOptions.js e incluyen el día pedido (el escáner se abre desde el diario)
+    assert "options={_getDayOptionsCon(t, initialDaysAgo)} value={daysAgo} onChange={setDaysAgo}" in sm
     assert "t('Quedó en el diario de {dia}; la ves en «Ver días anteriores».', { dia })" in sm
     # el backend acepta 0..7 en el POST del escáner (ConsumedMealRequest)
     diary = (_BACKEND / "routers" / "diary.py").read_text(encoding="utf-8")

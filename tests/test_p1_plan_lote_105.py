@@ -68,7 +68,9 @@ def test_el_diario_de_dias_anteriores_esta_completo():
     assert "detail: { source: 'diary-history', date: selected }" in dh
     # registrar en el día que miras, hasta el tope del backend
     assert "const DIAS_ATRAS_REGISTRO = 7;" in dh
-    assert "<LogMealModal onClose={cerrarComponedor} initialDaysAgo={atras} />" in dh
+    # [P1-PLAN-LOTE-124] el montaje ganó `onScan` (el escáner también desde el diario) y `userId`; lo que este test
+    # protege no cambia: el componedor nace en el día que se mira.
+    assert "<LogMealModal onClose={cerrarComponedor} onScan={pasarAlEscaner} initialDaysAgo={atras} userId={userId} />" in dh
     # más días (tope del endpoint) y la semana
     assert "const DIAS_MAX = 90;" in dh and "t('Ver 2 semanas más')" in dh
     assert "'Últimos 7 días: media de {kcal} kcal en {n} días con registro'" in dh
