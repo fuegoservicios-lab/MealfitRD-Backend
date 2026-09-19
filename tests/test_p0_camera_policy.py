@@ -67,10 +67,15 @@ def test_camera_no_esta_fijada_a_allowlist_vacia():
     )
 
 
-def test_microfono_y_geolocalizacion_siguen_cerrados():
-    """Abrir la cámara no es excusa para abrir lo demás."""
+def test_microfono_por_host_y_geolocalizacion_cerrada():
+    """Abrir la cámara no es excusa para abrir lo demás.
+
+    [P1-PLAN-LOTE-125 · 2026-09-19] El micrófono dejó de estar cerrado A SABIENDAS: el chat dicta por voz y con
+    `microphone=()` el navegador lo niega sin preguntar. Lo que este test sigue protegiendo: jamás un `(self)` o un
+    `*` literal (abriría también los hosts que no son la app) — sale del mismo mapa por host que la cámara."""
     d = _directiva_permissions_policy(_texto())
-    assert "microphone=()" in d, "el micrófono debe seguir con allowlist vacía"
+    assert "microphone=$pp_camera" in d, "el micrófono se decide por host, con el mismo mapa que la cámara"
+    assert "microphone=(self)" not in d and "microphone=*" not in d, "nunca abierto a fuego para todos los hosts"
     assert "geolocation=()" in d, "la geolocalización debe seguir con allowlist vacía"
 
 
