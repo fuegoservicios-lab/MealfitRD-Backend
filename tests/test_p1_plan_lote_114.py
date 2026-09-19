@@ -31,7 +31,8 @@ def test_en_nativo_el_inset_no_depende_del_parpadeo_de_innerheight():
     kv = _front("src/utils/keyboardViewport.js")
     assert "export function resolverInsetNativo({ kb = 0, vvOffsetTop = 0 } = {}) {" in kv
     ap = _front("src/pages/AgentPage.jsx")
-    assert "const insetMedido = nativo ? resolverInsetNativo({ kb, vvOffsetTop: vv.offsetTop }) : layoutInset;" in ap
+    # [115] el paneo solo se descuenta en la medición de asiento
+    assert "const insetMedido = nativo ? resolverInsetNativo({ kb, vvOffsetTop: forzarMedicion ? vv.offsetTop : 0 }) : layoutInset;" in ap
     assert "const encogeDeVerdad = nativo ? false : documentoEncoge;" in ap
     assert "forzar: forzarMedicion || encogeDeVerdad," in ap
     assert "layoutInset: insetMedido," in ap, "la PWA y Safari siguen con layoutInset: solo nativo cambia"
