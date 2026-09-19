@@ -23,7 +23,9 @@ def _front(rel: str) -> str:
 
 
 def test_el_scroll_del_fondo_se_recuerda_y_se_restaura():
-    jsx = _front("src/components/dashboard/LogMealModal.jsx")
+    # [P1-PLAN-LOTE-106] vive en el hook compartido con el escáner (useBottomSheet); el componedor lo monta
+    assert "const hoja = useBottomSheet({ containerRef, bodyRef, onClose, disabled: saving });" in _front("src/components/dashboard/LogMealModal.jsx")
+    jsx = _front("src/hooks/useBottomSheet.js")
     assert "const scrollY0 = window.scrollY;" in jsx
     assert "if (Math.abs(window.scrollY - scrollY0) > 1) window.scrollTo(0, scrollY0);" in jsx
     i = jsx.index("vv.removeEventListener('resize', alCambiar);")

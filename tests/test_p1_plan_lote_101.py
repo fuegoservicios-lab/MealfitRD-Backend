@@ -23,14 +23,16 @@ def _front(rel: str) -> str:
 
 
 def test_el_pan_que_el_cuerpo_no_consume_se_cancela_y_la_hoja_sigue_al_dedo():
-    jsx = _front("src/components/dashboard/LogMealModal.jsx")
-    assert "el.addEventListener('touchmove', block, { passive: false });" in jsx
-    assert "if (!scrollable) { e.preventDefault(); return; }" in jsx
-    assert "if ((dir > 0 && atTop) || (dir < 0 && atBottom)) e.preventDefault();" in jsx
-    for h in ("onTouchStart={onSheetTouchStart}", "onTouchMove={onSheetTouchMove}", "onTouchEnd={onSheetTouchEnd}", "onTouchCancel={onSheetTouchEnd}"):
-        assert h in jsx, h
+    # [P1-PLAN-LOTE-106] el gesto vive en el hook compartido con el escáner (useBottomSheet)
+    hook = _front("src/hooks/useBottomSheet.js")
+    assert "el.addEventListener('touchmove', block, { passive: false });" in hook
+    assert "if (!scrollable) { e.preventDefault(); return; }" in hook
+    assert "if ((dir > 0 && atTop) || (dir < 0 && atBottom)) e.preventDefault();" in hook
     # mismos umbrales que la hoja de actualizar platos (v4)
-    assert "if (y > 70 || vy > 0.35 || y + vy * 150 > 100) {" in jsx
+    assert "if (y > 70 || vy > 0.35 || y + vy * 150 > 100) {" in hook
+    jsx = _front("src/components/dashboard/LogMealModal.jsx")
+    for h in ("onTouchStart={hoja.onTouchStart}", "onTouchMove={hoja.onTouchMove}", "onTouchEnd={hoja.onTouchEnd}", "onTouchCancel={hoja.onTouchEnd}"):
+        assert h in jsx, h
     css = _front("src/components/dashboard/LogMealModal.module.css")
     i = css.index("\n.body {")
     assert "touch-action: pan-y;" in css[i:css.index("}", i)]
