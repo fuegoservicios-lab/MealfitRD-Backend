@@ -98,7 +98,8 @@ def test_el_conteo_esperado_de_archivos_sigue_siendo_verificable():
     reales = sum(1 for _ in _TESTS_DIR.rglob("*.test.js")) + \
         sum(1 for _ in _TESTS_DIR.rglob("*.test.jsx"))
     assert reales >= 200, f"solo {reales} archivos de test encontrados: ¿ruta mala?"
-    documentado = 368  # 2026-09-04: +49 archivos desde el 08-23 (chat, diario, wizard, política F4)
+    # 2026-09-04: 368 (+49 desde el 08-23). 2026-09-19: 409 (+41: lotes 85-112 del plan).
+    documentado = 409
     assert abs(reales - documentado) <= 40, (
         f"el config documenta {documentado} archivos y hay {reales}: actualiza la nota "
         "o la referencia deja de detectar una corrida incompleta")
