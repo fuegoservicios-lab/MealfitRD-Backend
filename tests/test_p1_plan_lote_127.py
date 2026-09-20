@@ -44,6 +44,18 @@ def test_encender_el_microfono_repone_el_teclado_que_ios_esconde():
     assert "campo.focus({ preventScroll: true });" in efecto
 
 
+def test_el_toque_del_microfono_no_mueve_el_foco():
+    # Desplegada la reposicion, el dueno: se cierra unos milisegundos y se vuelve a abrir, y al pausar se cierra.
+    # Que PAUSAR tambien lo cierre senala al TOQUE: iOS mueve el foco al sintetizar mousedown/click tras el touchend.
+    ap = _front("src/pages/AgentPage.jsx")
+    assert "onTouchEnd={handleMicTouchEnd}" in ap
+    assert "onMouseDown={(e) => e.preventDefault()}" in ap
+    toque = ap[ap.index("const handleMicTouchEnd = (e) => {"):]
+    toque = toque[:toque.index("useEffect(")]
+    assert "if (!e.cancelable) return;" in toque and "e.preventDefault();" in toque
+    assert "if (Date.now() - micPorToqueRef.current < MIC_CLIC_FANTASMA_MS) return;" in ap, "un clic del mismo gesto no alterna dos veces"
+
+
 def test_la_sonda_acepta_marcas_con_nombre():
     sonda = _front("src/utils/keyboardProbe.js")
     assert "export function marcarSondaTeclado(nombre) {" in sonda
