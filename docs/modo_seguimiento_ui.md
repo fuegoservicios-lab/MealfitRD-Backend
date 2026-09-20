@@ -203,3 +203,40 @@ un plan pausado que el contador no muestra (no gasta créditos; solo con `MEALFI
 se limpia al cerrar sesión (el perfil lo corrige al cargar); la sección Suscripción enseña créditos que el contador no usa.
 
 Tests: `frontend/src/__tests__/lote136.test.jsx`, `backend/tests/test_p1_plan_lote_136.py`.
+
+## La app ENTERA con el generador apagado (lote 137)
+
+[P1-PLAN-LOTE-137 · 2026-09-20] El dueño, tras el lote 136: «quiero saber si en general con el generador apagado todo está al
+100 % listo para producción». Cinco auditorías de solo lectura en paralelo (rutas y efectos globales del cliente, Nevera +
+Historial, Agente IA, crons/notificaciones/endpoints de plan, ciclo de vida de la cuenta); cada hallazgo se verificó a mano
+antes de contarlo y la base de producción se leyó en solo lectura (2 usuarios en contador, 0 planes, 0 colas vivas).
+
+**Lo del SERVIDOR que se cerró:**
+
+| # | Defecto | Cierre |
+|---|---|---|
+| 1 | **«Encender el plan» desde el contador dejaba la generación colgada.** `POST /generation-runs` encolaba el chunk 0 sin tocar `plan_mode`; el reencendido (`ensure_plan_generation_enabled`) vivía solo en el postprocess, que en la cola corre DESPUÉS del pickup, y el pickup lleva el gate H1. Run `PAUSED` para siempre, hasta 70 min de pantalla de carga y un «Plan en preparación» vacío como plan vigente. El SSE legacy no lo sufría: lo rompió el flip a la cola | la bandera PRIMERO: se enciende antes de encolar; si encolar falla, el usuario vuelve a su contador |
+| 2 | Encender por esa vía solo movía la bandera: los planes viejos quedaban sellados `paused_by_user` con el usuario ya en modo plan, y «Reactivar» uno copiaba el sello al plan activo | `_restore_paused_plan_status`: un UPDATE, dos llamadores (reanudar y encender-al-generar). La cola NO se revive ahí: se pidió un plan nuevo |
+| 3 | «Reactivar este Plan» en pausa: `/restore` solo cancelaba los 5 estados vivos; las filas `cancelled` firmadas por la pausa sobrevivían y al reanudar revivían sobre el contenido restaurado | los dos cancels de `/restore` las cubren (un `OR` fuera del `IN`), las vuelven terminales y les quitan la firma |
+| 4 | El coach citaba como «meta» de hoy las macros del plan EN PAUSA (y «134gg»), 20 líneas después de que las kcal ya salieran del contador | `_macro_totals_line(consumed, plan_vigente, form_data)`: sin plan que mande, `coach_day_context.metas_del_dia` |
+| 5 | «Lo que el plan MANDABA» se inyectaba con el plan en pausa (el shift no corre en contador: días congelados citados como prescritos) | en pausa no hay índice ni «sin registrar» del plan; el diario multi-día sigue |
+| 6 | El modo solo llegaba al prompt colgado de un plan pausado: al contador SIN plan el coach le decía «usa los botones de la página Plan» y afirmaba «su plan actual»; nada nombraba la puerta real | tercer caso `contador_sin_plan` (bullet propio: Configuración → Capacidades), `build_inventory_context(sin_plan=…)` |
+| 7 | Cada tarde el prompt mandaba a una tool de mutación que el agente no tiene enlazada y daba por hecho un déficit | frase neutral, por objetivo |
+| 8 | `scheduleType` ausente (la rama corta no lo pregunta) se sembraba como «Día Clásico… rigor estricto» | ausente ⇒ «no ha dicho su horario» |
+| 9 | «Fui al súper» (`mark_shopping_list_purchased`) metía en la Nevera el delta del plan pausado y lo marcaba comprado; `check_shopping_list` lo daba como compra pendiente | guarda de modo en la primera; encuadre «lista del plan en pausa» en la segunda |
+| 10 | `/retry-chunk`, `/regenerate-simplified` y `/regen-degraded` (pestaña vieja) revivían filas firmadas sin snapshot, pisaban `paused_by_user` y cobraban un crédito por bloques que el pickup no recoge | `_rechazar_si_generador_apagado` ⇒ 409 con la puerta real |
+| 11 | El escalado de «chunk atascado» mandaba «Optimizando tu plan…» cada ~24 h a un contador con un chunk vivo detrás de la pausa | mismo `NOT EXISTS` que el gate del pickup |
+| 12 | El bot de ayuda no conocía el modo contador y citaba 15 créditos gratis y «Max ilimitado» (son 10 y 500) | bloque de producto al día + cuota del Agente |
+
+**Verificado y BIEN (no tocar):** el gate del pickup en las dos ramas y el bg-refill; `/shift-plan` con soft-skip; el sweep de
+huérfanos no toca planes pausados; la purga respeta la firma dentro de la ventana; recordatorios de comidas e hidratación no
+leen `meal_plans`; `/api/nutrition/targets` falla cerrado (`ok:false`), nunca 500; la Nevera no exige plan ni pasa por el paywall.
+
+**Abierto a sabiendas:** pausar re-estampa TODOS los planes y eso sube su `revision` ⇒ el barrido de `plan_jobs` puede
+traducir planes históricos de un usuario no hispano (gasto único y acotado; el sello global es load-bearing: varios crons se
+apagan por lista blanca de estados, no por `plan_mode`); `/swap-meal`, `/regenerate-day` y `/recipe/expand` no miran el modo
+(solo alcanzables por URL directa a Recetas, que el cliente ahora redirige en contador).
+
+La mitad del CLIENTE del lote (rutas directas, Historial, chips del Agente, campana, interruptor sin plan, espejo del modo)
+vive en el repo del frontend: `frontend/src/__tests__/lote137.test.jsx`. Tests del servidor: `backend/tests/test_p1_plan_lote_137.py`.
+
