@@ -65,9 +65,9 @@ def test_la_sonda_acepta_marcas_con_nombre():
 def test_la_caja_del_chat_es_simetrica():
     ap = _front("src/pages/AgentPage.jsx")
     assert "'0.5rem 0.5rem 0.5rem 1rem'" not in ap, "volvió el relleno de 16 px a la izquierda"
-    css = ap[ap.index(".attachment-btn {"):ap.index(".chat-mic-btn {")]
-    assert "background: color-mix(in srgb, var(--text-main) 9%, transparent);" in css, "el «+» es un círculo visible"
-    assert "margin-left: 2px;" in css, "el mismo margen al borde que ENVIAR (marginRight: 2px)"
+    # [P1-PLAN-LOTE-128] el círculo gris del «+» se retiró a pedido del dueño («ese gris no le queda»): con la caja
+    # apilada ya no hacía falta para igualar márgenes. Lo que este test sigue protegiendo es el relleno simétrico.
+    assert "padding: '0.5rem'," in ap
 
 
 def test_con_foto_adjunta_la_caja_se_apila():
