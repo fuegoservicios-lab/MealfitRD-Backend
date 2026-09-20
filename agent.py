@@ -5755,8 +5755,11 @@ def _build_past_days_context(user_id: str, current_plan, local_date_str: Optiona
         # sesión. El DIARIO multi-día de abajo no depende del plan y sigue: es la memoria del contador.
         _plan_en_pausa = (isinstance(current_plan, dict)
                           and str(current_plan.get("generation_status") or "") == "paused_by_user")
-        out = "" if _plan_en_pausa else build_past_plan_days_block(
-            current_plan, today, days_back=days_back, tz_offset_mins=tz_offset_mins)
+        if _plan_en_pausa:
+            out = ""
+        else:
+            out = build_past_plan_days_block(current_plan, today, days_back=days_back,
+                                             tz_offset_mins=tz_offset_mins)
         # [P2-CHUNK-OVERDUE-SIGNAL · 2026-08-04] MISMO bloque, MISMA llamada (no
         # una 2ª pasada al LLM ni un bloque nuevo): días PENDIENTE/ATRASADO.
         out += _build_pending_days_lines_block(user_id, current_plan, today, plan_id=plan_id)

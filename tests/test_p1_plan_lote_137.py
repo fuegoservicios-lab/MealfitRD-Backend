@@ -89,15 +89,18 @@ def test_resume_y_ensure_comparten_el_mismo_update():
 
 def test_restore_vuelve_terminales_los_chunks_de_la_pausa():
     s = _src("routers/plans.py")
-    i = s.index('("restore_source_archived", source_plan_id)')
-    bloque = s[i:i + 2600]
-    assert "PAUSE_CANCEL_REASON" in bloque
-    sql = bloque[bloque.index("UPDATE plan_chunk_queue"):]
-    sql = sql[:sql.index('"""')]
-    assert "dead_lettered_at = NOW()" in sql
-    assert "status = 'cancelled'" in sql and "dead_lettered_at IS NULL" in sql
-    assert "meal_plan_id IN (%s, %s)" in sql, "target Y source"
-    assert '"restore_overwrite_paused", target_plan_id, source_plan_id, _PAUSA_FIRMA' in bloque
+    from routers.plans import api_restore_plan
+    import inspect
+    src = inspect.getsource(api_restore_plan)
+    assert "from plan_mode import PAUSE_CANCEL_REASON as _PAUSA_FIRMA" in src
+    # los DOS cancels (target y source) cubren también las filas firmadas por la pausa, y les quitan la firma
+    assert src.count("OR (status = 'cancelled' AND dead_letter_reason = %s") == 2
+    assert src.count("WHEN status = 'cancelled' THEN %s") == 2
+    assert '("restore_overwrite", "restore_overwrite", target_plan_id, _PAUSA_FIRMA)' in src
+    assert '("restore_source_archived", "restore_source_archived", source_plan_id, _PAUSA_FIRMA)' in src
+    # …sin tocar el SSOT de 5 estados vivos ni añadir una tercera sentencia sobre la cola
+    assert src.count("UPDATE plan_chunk_queue") == 2
+    assert src.count("dead_lettered_at = COALESCE(") == 2
 
 
 def test_el_revive_exige_justo_lo_que_restore_quita():

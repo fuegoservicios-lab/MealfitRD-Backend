@@ -75,7 +75,8 @@ def test_el_bloque_del_diario_dice_que_falta_por_dia():
 
 
 def test_el_agente_pasa_el_plan_al_bloque():
-    assert "plan_data=current_plan)  # [P1-PLAN-LOTE-76]" in _src("agent.py")
+    # [P1-PLAN-LOTE-137] …el plan que MANDA: con el plan en pausa el «sin registrar» no sale del plan congelado
+    assert "plan_data=None if _plan_en_pausa else current_plan)" in _src("agent.py")
 
 
 # ── La herramienta lo dice tras registrar ─────────────────────────────────────────────────────────

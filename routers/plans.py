@@ -13887,6 +13887,17 @@ def api_restore_plan(
                         # puede contender filas MVCC con un worker del source, pero es pre-existente y no afecta I7.
                         from db_plans import acquire_meal_plan_advisory_lock as _restore_acquire_lock
                         _restore_acquire_lock(cur, target_plan_id, purpose="general")
+                        # 3a-ter) [P1-PLAN-LOTE-137 · 2026-09-20] Los chunks que la PAUSA canceló (modo contador) no
+                        #     están en ninguno de los 5 estados vivos: son `cancelled` con la firma de la pausa y
+                        #     `dead_lettered_at` NULL — justo lo que `_revive_paused_chunks` busca al reanudar. Sin
+                        #     cubrirlos, «Reactivar este Plan» con el generador apagado dejaba las semanas pendientes
+                        #     del plan REEMPLAZADO listas para revivir sobre el contenido restaurado (la fila target
+                        #     sigue siendo la última por `created_at`, que es la que el revive elige): la corrupción
+                        #     que P0-HIST-1 cierra en modo plan, reabierta por la puerta de la pausa. Van DENTRO de
+                        #     los dos cancels (un `OR` fuera del `IN`, que sigue siendo el SSOT de 5 estados): se
+                        #     vuelven terminales (`dead_lettered_at`) y pierden la firma, para que el Historial no
+                        #     las anuncie «en pausa — se retoma al reanudar».
+                        from plan_mode import PAUSE_CANCEL_REASON as _PAUSA_FIRMA
                         # 3a) Cancelar TODOS los chunks "vivos" del target.
                         #     [P0-AUDIT-HIST-1 · 2026-05-09] El filtro
                         #     histórico era `('pending', 'processing')`,
@@ -13916,20 +13927,26 @@ def api_restore_plan(
                             """
                             UPDATE plan_chunk_queue
                             SET status = 'cancelled',
-                                dead_letter_reason = COALESCE(
-                                    dead_letter_reason, %s
-                                ),
+                                dead_letter_reason = CASE
+                                    WHEN status = 'cancelled' THEN %s
+                                    ELSE COALESCE(dead_letter_reason, %s)
+                                END,
                                 dead_lettered_at = COALESCE(
                                     dead_lettered_at, NOW()
                                 ),
                                 updated_at = NOW()
                             WHERE meal_plan_id = %s
-                              AND status IN (
-                                  'pending', 'processing', 'stale',
-                                  'pending_user_action', 'failed'
+                              AND (
+                                  status IN (
+                                      'pending', 'processing', 'stale',
+                                      'pending_user_action', 'failed'
+                                  )
+                                  -- [P1-PLAN-LOTE-137] + los que la PAUSA firmó (ver 3a-ter abajo)
+                                  OR (status = 'cancelled' AND dead_letter_reason = %s
+                                      AND dead_lettered_at IS NULL)
                               )
                             """,
-                            ("restore_overwrite", target_plan_id),
+                            ("restore_overwrite", "restore_overwrite", target_plan_id, _PAUSA_FIRMA),
                         )
                         cancelled_chunks = cur.rowcount or 0
 
@@ -13958,46 +13975,28 @@ def api_restore_plan(
                             """
                             UPDATE plan_chunk_queue
                             SET status = 'cancelled',
-                                dead_letter_reason = COALESCE(
-                                    dead_letter_reason, %s
-                                ),
+                                dead_letter_reason = CASE
+                                    WHEN status = 'cancelled' THEN %s
+                                    ELSE COALESCE(dead_letter_reason, %s)
+                                END,
                                 dead_lettered_at = COALESCE(
                                     dead_lettered_at, NOW()
                                 ),
                                 updated_at = NOW()
                             WHERE meal_plan_id = %s
-                              AND status IN (
-                                  'pending', 'processing', 'stale',
-                                  'pending_user_action', 'failed'
+                              AND (
+                                  status IN (
+                                      'pending', 'processing', 'stale',
+                                      'pending_user_action', 'failed'
+                                  )
+                                  -- [P1-PLAN-LOTE-137] + los que la PAUSA firmó (ver 3a-ter abajo)
+                                  OR (status = 'cancelled' AND dead_letter_reason = %s
+                                      AND dead_lettered_at IS NULL)
                               )
                             """,
-                            ("restore_source_archived", source_plan_id),
+                            ("restore_source_archived", "restore_source_archived", source_plan_id, _PAUSA_FIRMA),
                         )
                         cancelled_source_chunks = cur.rowcount or 0
-
-                        # 3a-ter) [P1-PLAN-LOTE-137 · 2026-09-20] Los chunks que la PAUSA canceló (modo contador) no
-                        #     están en ninguno de los 5 estados vivos: son `cancelled` con la firma de la pausa y
-                        #     `dead_lettered_at` NULL — justo lo que `_revive_paused_chunks` busca al reanudar. Sin
-                        #     este paso, «Reactivar este Plan» con el generador apagado dejaba las semanas pendientes
-                        #     del plan REEMPLAZADO listas para revivir sobre el contenido restaurado (la fila target
-                        #     sigue siendo la última por `created_at`, que es la que el revive elige): la corrupción
-                        #     que P0-HIST-1 cierra en modo plan, reabierta por la puerta de la pausa. Se vuelven
-                        #     terminales igual que el resto (razón propia + `dead_lettered_at`), target y source.
-                        from plan_mode import PAUSE_CANCEL_REASON as _PAUSA_FIRMA
-                        cur.execute(
-                            """
-                            UPDATE plan_chunk_queue
-                            SET dead_letter_reason = %s,
-                                dead_lettered_at = NOW(),
-                                updated_at = NOW()
-                            WHERE meal_plan_id IN (%s, %s)
-                              AND status = 'cancelled'
-                              AND dead_letter_reason = %s
-                              AND dead_lettered_at IS NULL
-                            """,
-                            ("restore_overwrite_paused", target_plan_id, source_plan_id, _PAUSA_FIRMA),
-                        )
-                        cancelled_chunks += cur.rowcount or 0
 
                         # 3b) Liberar locks asociados a chunks del
                         #     target Y del source. `chunk_user_locks`
