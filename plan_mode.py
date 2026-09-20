@@ -229,9 +229,17 @@ def _revive_paused_chunks(user_id: str) -> dict:
                           AND status = 'cancelled'
                           AND dead_letter_reason = %s
                           AND dead_lettered_at IS NULL
+                          -- [P1-PLAN-LOTE-136 · 2026-09-20] SOLO el plan VIGENTE (el último del usuario). La firma de
+                          -- la pausa sobrevive en las filas de un plan ya SUSTITUIDO (pausar A -> generar B, que
+                          -- reenciende -> pausar -> reanudar): sin este filtro las semanas de A volvian a `pending`,
+                          -- el worker gastaba IA en un plan que nadie ve y, por `created_at ASC`, iban delante de
+                          -- las de B. Las de A se quedan canceladas y la purga se las lleva al vencer la ventana.
+                          AND meal_plan_id = (
+                              SELECT id FROM meal_plans WHERE user_id = %s ORDER BY created_at DESC LIMIT 1
+                          )
                         RETURNING id, meal_plan_id, days_count
                         """,
-                        (user_id, PAUSE_CANCEL_REASON),
+                        (user_id, PAUSE_CANCEL_REASON, user_id),
                     )
                     filas = cursor.fetchall() or []
                     planes = sorted({str(f["meal_plan_id"]) for f in filas if f.get("meal_plan_id")})

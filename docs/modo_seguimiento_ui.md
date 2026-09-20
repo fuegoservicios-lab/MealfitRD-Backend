@@ -175,3 +175,31 @@ Queda anotado para el dueño, porque es decisión suya y no un defecto: en claro
 resto de páginas con tarjeta (donde nunca estorbó) y ya no en el contador.
 
 Tests: `frontend/src/__tests__/MobileReview.lote94.test.jsx` y `backend/tests/test_p1_plan_lote_94.py`.
+
+## Configuración con el generador APAGADO: auditoría y cierre (lote 136)
+
+[P1-PLAN-LOTE-136 · 2026-09-20] El dueño: «revisa en general el apartado de configuración cuando el generador de planes está
+apagado: ¿funciona todo al 100 %? ¿No hay ninguna contradicción?». Se leyó `Settings.jsx` entero y cada endpoint que dispara.
+**Lo que salió limpio:** ningún acceso a `planData` sin guarda, ninguna validación que exija campos que la rama corta no
+preguntó, ningún endpoint por el paywall (cero 402), y guardar el perfil no encola generación ni gasta créditos.
+
+**Lo que se cerró** (regla de fondo: *contador manda* en TODA la pantalla, no solo cuando no hay plan):
+
+| # | Contradicción | Cierre |
+|---|---|---|
+| 1 | «Modo automático» («no pausaremos tu plan…») visible en contador; `logging_preference` solo lo lee el worker de bloques, apagado ahí | la tarjeta se pinta solo con el generador encendido |
+| 2 | Con un plan EN PAUSA, «Plan & Objetivo» enseñaba las kcal congeladas del plan y vendía «Evaluar de nuevo» (1 crédito) o «sin créditos»; el contador usa `/api/nutrition/targets` | en contador las metas salen de targets con o sin plan, el panel escucha `mealfit:targets-changed`, y el botón es «Reanudar el plan» (gratis, `reanudarPlanes`) |
+| 3 | El interruptor no actualizaba `userProfile.plan_mode` en memoria y sin plan no hay recarga: «Guardar», la navegación y el dashboard seguían en el modo viejo | `refreshProfileAndPlan()` tras el PUT sin plan; reanudar devuelve `appMode` a `plan` |
+| 4 | El diálogo y la tarjeta prometían «tu plan queda en el Historial» a quien nunca tuvo plan | copy propio sin plan |
+| 5 | Si fallaba `GET /api/profile/plan-mode`, el interruptor —la única puerta de vuelta (lote 98)— desaparecía sin aviso | un reintento y, si no, una fila con «Reintentar» |
+| 6 | Con `MEALFIT_PLAN_MODE_SWITCH=false` el PUT contesta éxito sin hacer nada y la pantalla pintaba «Planes en pausa» | manda el `plan_mode` que CONTESTA el servidor |
+| 7 | Móvil: «0 kcal · 0 g» sin metas (el escritorio pintaba «—») | «—» también en `PlanObjetivo` |
+| 8 | «Guardar» escribía el formulario ENTERO en `health_profile` (los 12 campos nunca preguntados, `appMode`) | perfil del servidor + lo editado |
+| 9 | El aviso de salir sin guardar decía «no actualizaste tu plan» | copy propio en contador |
+| 10 | SERVIDOR: `_revive_paused_chunks` revivía las filas firmadas de TODOS los planes del usuario, también de uno ya sustituido | solo el plan vigente (el último); las demás se quedan canceladas hasta la purga |
+
+Abierto a sabiendas (LOW, medido como inofensivo hoy): cambiar de idioma o pausar puede encolar traducción `display_i18n` de
+un plan pausado que el contador no muestra (no gasta créditos; solo con `MEALFIT_PLAN_JOBS_ENABLED`); `mealfit_plan_mode` no
+se limpia al cerrar sesión (el perfil lo corrige al cargar); la sección Suscripción enseña créditos que el contador no usa.
+
+Tests: `frontend/src/__tests__/lote136.test.jsx`, `backend/tests/test_p1_plan_lote_136.py`.
