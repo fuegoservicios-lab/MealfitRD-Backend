@@ -32,7 +32,10 @@ def test_la_apertura_se_anticipa_solo_en_nativo_y_con_cerrojo():
     cuerpo = ap[i:i + 1600]
     assert "if (!isNativeApp() ||" in cuerpo
     assert "if (recordado < KB_UMBRAL_PX ||" in cuerpo
-    assert "abriendoRef.current = true;" in cuerpo
+    # [P1-PLAN-LOTE-129] colocar el chat pasó a `anticiparApertura`, que comparten el foco y el aviso nativo de UIKit
+    assert "anticiparApertura(recordado);" in cuerpo
+    j = ap.index("const anticiparApertura = (inset) => {")
+    assert "abriendoRef.current = true;" in ap[j:j + 1400]
     assert re.search(r"if \(abriendoRef\.current\) \{\s*if \(!abiertoMedido\) return;", ap)
     assert "document.addEventListener('focusin', alGanarElFoco);" in ap
     assert "document.removeEventListener('focusin', alGanarElFoco);" in ap
