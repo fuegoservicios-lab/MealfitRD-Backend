@@ -225,6 +225,23 @@ def test_el_estado_por_usuario_caduca_y_se_borra_con_la_cuenta():
     assert 'DELETE FROM app_kv_store WHERE key = ANY(%s) RETURNING key' in _src("db_profiles.py")
 
 
+# ── 4 · «ni se inmuta»: el interruptor de alertas en el binario que YA trae el plugin ───────────────────────────────────
+def test_el_plugin_de_capacitor_viaja_en_una_caja_nunca_suelto():
+    """Una función async que DEVUELVE el plugin de Capacitor (un Proxy que responde a `.then` con una llamada nativa que
+    jamás resuelve) cuelga su promesa para siempre: `estadoDeAvisos()` no volvía, el canal quedaba en `null` y el
+    interruptor nacía deshabilitado. Solo fallaba en el binario CON el plugin. Contrato vivo: `lote135.proxy.test.js`."""
+    import pytest
+    f = _BACKEND.parent / "frontend" / "src" / "utils" / "avisosDeComida.js"
+    if not f.exists():
+        pytest.skip("sin el repo del frontend al lado")
+    av = f.read_text(encoding="utf-8").replace("\r\n", "\n")
+    assert "return mod.LocalNotifications ? { LN: mod.LocalNotifications } : null;" in av
+    assert "return mod.LocalNotifications || null;" not in av
+    assert av.count("const LN = (await _pluginLocal())?.LN;") == 5
+    assert "const LN = await _pluginLocal();" not in av
+    assert (f.parent.parent / "__tests__" / "lote135.proxy.test.js").exists()
+
+
 def test_marcador():
     m = re.search(r'_LAST_KNOWN_PFIX = "P1-PLAN-LOTE-(\d+) · 2026-', _src("app.py"))
     assert m and int(m.group(1)) >= 135
