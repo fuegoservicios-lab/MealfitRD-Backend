@@ -153,9 +153,16 @@ def test_script_de_firma_aborta_al_primer_fallo():
 
 
 def test_yaml_sube_a_testflight():
+    """Lo que SUBE el IPA es el bloque `publishing.app_store_connect` (con su `auth`), no `submit_to_testflight`.
+
+    [P1-PLAN-LOTE-128 · 2026-09-19] `submit_to_testflight` pide la REVISIÓN BETA para testers externos; sin grupo
+    externo ni «Test Information» fallaba y dejaba cada build en «post-processing failed» con el IPA ya subido e
+    instalable por el grupo interno (builds 13 y 16). El dueño pidió apagarlo. El día que haya grupo externo vuelve a
+    `true` — y este test se actualiza con él, a sabiendas."""
     y = _yaml()
     assert re.search(r"publishing:\s*\n(?:.*\n)*?\s+app_store_connect:", y), "Falta `publishing.app_store_connect`."
-    assert "submit_to_testflight: true" in y
+    assert re.search(r"app_store_connect:\s*\n\s+auth: integration", y), "sin `auth` el IPA no se sube a App Store Connect"
+    assert "submit_to_testflight: false" in y and "submit_to_testflight: true" not in y
 
 
 def test_yaml_corre_cap_sync_en_la_mac():
