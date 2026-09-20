@@ -672,12 +672,12 @@ def test_build_tools_instructions_no_gana_parametro_locale():
     este test lo atrapa: la frontera dura del Addendum exige que las tool calls sigan en
     español canónico SIEMPRE, sin ningún camino condicional por idioma."""
     src = _read(_CHAT_AGENT_PY)
-    assert "def build_tools_instructions(user_id: str, plan_en_pausa: bool = False) -> str:" in src
-    assert "def build_tools_instructions_stream(user_id: str, plan_en_pausa: bool = False) -> str:" in src
+    assert "def build_tools_instructions(user_id: str, plan_en_pausa: bool = False, contador_sin_plan: bool = False) -> str:" in src
+    assert "def build_tools_instructions_stream(user_id: str, plan_en_pausa: bool = False, contador_sin_plan: bool = False) -> str:" in src
 
-    body_inline = _fn_body(src, "def build_tools_instructions(user_id: str, plan_en_pausa: bool = False) -> str:",
+    body_inline = _fn_body(src, "def build_tools_instructions(user_id: str, plan_en_pausa: bool = False, contador_sin_plan: bool = False) -> str:",
                             end_marker="def build_tools_instructions_stream(")
-    body_stream = _fn_body(src, "def build_tools_instructions_stream(user_id: str, plan_en_pausa: bool = False) -> str:",
+    body_stream = _fn_body(src, "def build_tools_instructions_stream(user_id: str, plan_en_pausa: bool = False, contador_sin_plan: bool = False) -> str:",
                             end_marker="def build_inventory_context(")
     assert "locale" not in body_inline
     assert "locale" not in body_stream

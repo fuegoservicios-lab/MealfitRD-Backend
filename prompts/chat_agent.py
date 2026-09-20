@@ -451,8 +451,7 @@ TIENES HERRAMIENTAS DISPONIBLES:
 El user_id del usuario actual es: {user_id}"""
 
 
-def build_tools_instructions_stream(user_id: str, plan_en_pausa: bool = False,
-                                    contador_sin_plan: bool = False) -> str:
+def build_tools_instructions_stream(user_id: str, plan_en_pausa: bool = False, contador_sin_plan: bool = False) -> str:
     """Genera el bloque de instrucciones de herramientas para el stream (versión compacta)."""
     return f"""
 TIENES HERRAMIENTAS DISPONIBLES:
