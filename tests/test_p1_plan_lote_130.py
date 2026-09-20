@@ -40,11 +40,12 @@ def test_el_touchend_se_cancela_solo_si_el_gesto_ya_se_atendio():
     assert "onTouchEnd={handleComposerTouchEnd('send')}" in ap
 
 
-def test_enviar_no_cierra_el_teclado_y_sigue_a_la_respuesta():
+def test_si_el_teclado_se_queda_en_pantalla_el_envio_sigue_a_la_respuesta():
+    """[P1-PLAN-LOTE-134 · 2026-09-20] El dueño RESTAURA el cierre al enviar («que se cierre automáticamente el teclado
+    para enfocarnos en el mensaje»): el `blur()` vuelve (contrato en el lote 134). De aquí sigue en pie la rama «abajo»,
+    ahora para el teclado que NO se cierra, y el «+» (arriba), que sigue sin llevárselo."""
     ap = _front("src/pages/AgentPage.jsx")
-    i = ap.index("const _tecladoVirtual = tecladoAbiertoRef.current || medirTecladoDeVentana(window).abierto;")
-    assert ".blur()" not in ap[i:i + 700]
-    assert re.search(r"\} else if \(_tecladoVirtual\) \{[\s\S]{0,700}_setMode\('bottom'\);\s*\} else \{[\s\S]{0,300}_setMode\('anchored'\);", ap)
+    assert re.search(r"\} else if \(_tecladoVirtual && !_cierraTeclado\) \{[\s\S]{0,700}_setMode\('bottom'\);\s*\} else \{[\s\S]{0,300}_setMode\('anchored'\);", ap)
 
 
 def test_marcador():
