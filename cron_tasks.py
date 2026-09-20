@@ -25935,6 +25935,14 @@ def _detect_and_escalate_stuck_chunks():
                     EXTRACT(EPOCH FROM (NOW() - execute_after))::int - COALESCE(expected_preemption_seconds, 0)
                   ) > 86400
               AND (escalated_at IS NULL OR escalated_at < NOW() - INTERVAL '30 minutes')
+              -- [P1-PLAN-LOTE-137 · 2026-09-20] Un chunk vivo detrás de la pausa (pestaña vieja, carrera) NO está
+              -- «atascado»: el pickup no lo recoge A PROPÓSITO. Sin este filtro, el escalado le mandaba cada ~24 h
+              -- «Optimizando tu plan… estará listo en breve» a quien tiene el generador apagado, y nunca llegaba a
+              -- la rama terminal (attempts se queda en 0). Mismo NOT EXISTS que el gate del pickup.
+              AND NOT EXISTS (
+                  SELECT 1 FROM user_profiles up
+                  WHERE up.id = plan_chunk_queue.user_id AND up.plan_mode = 'tracking'
+              )
             ORDER BY execute_after ASC
             LIMIT 50
             """, fetch_all=True

@@ -45,7 +45,8 @@ def test_macro_line_fail_open_empty():
 
 
 def test_injected_in_both_prompt_paths():
-    assert _AG.count("system_prompt += _macro_totals_line(consumed_today, current_plan)") >= 2, \
+    # [P1-PLAN-LOTE-137] el plan VIGENTE, no el real: en pausa la «meta» era la del plan congelado
+    assert _AG.count("system_prompt += _macro_totals_line(consumed_today, plan_vigente, form_data)") >= 2, \
         "ambos paths del DIARIO DE HOY (non-stream y stream) llevan las macros"
 
 

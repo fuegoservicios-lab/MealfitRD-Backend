@@ -321,8 +321,9 @@ def _plan_context_for_chat(user_id, current_plan):
             "estuviera vigente: hoy el usuario decide libremente qué come y tu "
             "papel es ayudarle a registrarlo y a cuadrar sus macros. Si ÉL "
             "pregunta por su plan pausado, respóndele con estos datos y "
-            "recuérdale que puede reanudarlo desde su Historial (es gratis y "
-            "retoma donde quedó)."
+            "recuérdale que puede reanudarlo desde su Historial o en Configuración → "
+            "Capacidades (es gratis y retoma donde quedó; si la pausa fue muy larga, "
+            "la app le ofrecerá generar uno nuevo)."
         )
     return (
         "\n\nCONTEXTO CRÍTICO: El usuario actualmente tiene este plan de comidas "
@@ -375,6 +376,22 @@ def _plan_vigente_para_prompt(user_id, current_plan):
     except Exception as e:
         logger.warning(f"[P1-CHAT-PAUSED-PROMPT-BLOCKS] plan_mode ilegible, asumo 'plan': {e}")
     return current_plan
+
+
+def _contador_sin_plan_para_prompt(user_id, current_plan) -> bool:
+    """[P1-PLAN-LOTE-137 · 2026-09-20] El tercer caso que `plan_vigente` no cubre: generador APAGADO y NINGÚN plan.
+
+    `_plan_vigente_para_prompt` corta pronto sin plan («el resultado sería None en los dos modos»), y por eso el modo
+    solo llegaba al prompt colgado de un plan pausado. Al usuario del onboarding corto —contador desde el primer día,
+    sin plan jamás— el coach le hablaba como a uno en modo plan: «usa los botones de la página Plan». Un roundtrip
+    por turno SOLO para quien no tiene plan; invitados fuera. Fail-open a False (comportamiento histórico)."""
+    if current_plan or not user_id or user_id == "guest":
+        return False
+    try:
+        return _plan_mode_for_chat(user_id) == "tracking"
+    except Exception as e:
+        logger.warning(f"[P1-PLAN-LOTE-137] plan_mode ilegible, asumo 'plan': {e}")
+        return False
 
 
 def _daily_goal_context(form_data, plan) -> str:
@@ -5732,8 +5749,14 @@ def _build_past_days_context(user_id: str, current_plan, local_date_str: Optiona
                           else _DEFAULT_TZ_OFFSET_MIN)
 
         # [P2-CHAT-PAST-DAYS-USER-TZ · 2026-09-14] El ancla del plan en el huso del usuario.
-        out = build_past_plan_days_block(current_plan, today, days_back=days_back,
-                                         tz_offset_mins=tz_offset_mins)
+        # [P1-PLAN-LOTE-137 · 2026-09-20] Con el plan EN PAUSA no hay «lo que el plan MANDABA»: el shift no corre en
+        # modo contador, los días congelados se van quedando atrás y el coach los citaba como prescritos en días en
+        # que el plan estaba apagado. Se pregunta al DATO (como el bloque hermano de días pendientes), no al modo de
+        # sesión. El DIARIO multi-día de abajo no depende del plan y sigue: es la memoria del contador.
+        _plan_en_pausa = (isinstance(current_plan, dict)
+                          and str(current_plan.get("generation_status") or "") == "paused_by_user")
+        out = "" if _plan_en_pausa else build_past_plan_days_block(
+            current_plan, today, days_back=days_back, tz_offset_mins=tz_offset_mins)
         # [P2-CHUNK-OVERDUE-SIGNAL · 2026-08-04] MISMO bloque, MISMA llamada (no
         # una 2ª pasada al LLM ni un bloque nuevo): días PENDIENTE/ATRASADO.
         out += _build_pending_days_lines_block(user_id, current_plan, today, plan_id=plan_id)
@@ -5746,7 +5769,8 @@ def _build_past_days_context(user_id: str, current_plan, local_date_str: Optiona
             logger.warning(f"[P1-CHAT-PAST-DAYS] no se pudo leer el diario multi-día: {e}")
             rows = []
         out += build_past_diary_block(rows, today, days_back=days_back, tz_offset_mins=tz_offset_mins,
-                                      plan_data=current_plan)  # [P1-PLAN-LOTE-76] para «sin registrar: …»
+                                      # [P1-PLAN-LOTE-76] para «sin registrar: …» — [137] de un plan que MANDA, no del pausado
+                                      plan_data=None if _plan_en_pausa else current_plan)
         # [P1-DIARY-FREETEXT-ESTIMATE · 2026-09-04] tercera vía: lo que el usuario NEGÓ haber comido
         try:
             from db_facts import get_plan_meal_deviations_since
@@ -5761,21 +5785,33 @@ def _build_past_days_context(user_id: str, current_plan, local_date_str: Optiona
         return ""
 
 
-def _macro_totals_line(consumed_today: list, current_plan) -> str:
+def _macro_totals_line(consumed_today: list, plan_vigente, form_data=None) -> str:
     """[P1-CHAT-MACRO-CONTEXT · 2026-07-12] Macros ACUMULADAS del día (proteína/
-    carbos/grasas) con sus metas del plan — el DIARIO DE HOY solo llevaba kcal,
+    carbos/grasas) con sus metas — el DIARIO DE HOY solo llevaba kcal,
     así que el agente no podía razonar '33g de 125g de proteína' como la card
-    'Progreso en Tiempo Real'. Fail-open a "" ante cualquier shape rara."""
+    'Progreso en Tiempo Real'. Fail-open a "" ante cualquier shape rara.
+
+    [P1-PLAN-LOTE-137 · 2026-09-20] Recibe el plan VIGENTE, no el real: con el generador apagado llegaban
+    aquí las macros del plan EN PAUSA como «meta» de hoy, veinte líneas después de que las kcal del mismo
+    bloque ya salieran del contador — dos metas de proteína en un prompt, y ninguna la del dashboard. Sin
+    plan que mande hoy, las metas son las del contador (`coach_day_context.metas_del_dia`, la misma fuente
+    que «LO QUE LE FALTA HOY»). De paso: el plan guarda «134g» y la línea decía «meta 134gg»."""
     try:
         _p = sum(float(m.get("protein") or 0) for m in consumed_today if isinstance(m, dict))
         _c = sum(float(m.get("carbs") or 0) for m in consumed_today if isinstance(m, dict))
         _f = sum(float(m.get("healthy_fats") or 0) for m in consumed_today if isinstance(m, dict))
-        _tm = current_plan.get("macros") if isinstance(current_plan, dict) else None
-        if isinstance(_tm, dict) and _tm.get("protein"):
+        from coach_day_context import _num as _n, metas_del_dia
+        _tm = plan_vigente.get("macros") if isinstance(plan_vigente, dict) else None
+        if isinstance(_tm, dict) and _n(_tm.get("protein")):
+            _metas = {"protein_g": _n(_tm.get("protein")), "carbs_g": _n(_tm.get("carbs")),
+                      "fats_g": _n(_tm.get("fats"))}
+        else:
+            _metas = metas_del_dia(form_data, None) or {}
+        if _metas.get("protein_g"):
             return (
-                f" Macros acumuladas hoy: {round(_p)}g proteína (meta {_tm.get('protein')}g), "
-                f"{round(_c)}g carbohidratos (meta {_tm.get('carbs')}g), "
-                f"{round(_f)}g grasas (meta {_tm.get('fats')}g)."
+                f" Macros acumuladas hoy: {round(_p)}g proteína (meta {round(_metas['protein_g'])}g), "
+                f"{round(_c)}g carbohidratos (meta {round(_metas.get('carbs_g') or 0)}g), "
+                f"{round(_f)}g grasas (meta {round(_metas.get('fats_g') or 0)}g)."
             )
         return (
             f" Macros acumuladas hoy: {round(_p)}g proteína, "
@@ -5871,9 +5907,12 @@ def _build_today_remaining_context(current_plan, consumed_today: list, target_ca
                 f"\n🚨 ALERTA DE MICRO-ADAPTACIÓN (MEJORA 6): Al usuario le quedan solo "
                 f"~{round(remaining)} kcal estimadas para el resto del día. TIENES LA "
                 f"OBLIGACIÓN PROACTIVA de hacerle notar este ajustado presupuesto con "
-                f"amabilidad de coach. Sugiérele usar tu herramienta 'modify_single_meal' "
-                f"para recalcular y reducir las porciones de sus próximas comidas de hoy "
-                f"para mantener su déficit."
+                # [P1-PLAN-LOTE-137 · 2026-09-20] Esta frase mandaba a una tool de mutación del plan que el
+                # agente NO tiene enlazada (knob OFF por decisión del dueño), y daba por hecho un déficit y unas
+                # «próximas comidas» del plan: cada tarde, también a quien usa la app solo como contador.
+                f"amabilidad de coach y ayúdale a repartir lo que le queda en las comidas que aún le falten "
+                f"hoy (porciones más ligeras, proteína y vegetales primero), según SU objetivo. "
+                f"NO prometas recalcular ni cambiar platos de su plan salvo que tengas la herramienta para hacerlo."
             )
         else:
             # [P1-TODAY-REMAINING] Tier factual — sin alarma, sin 🚨. Cubre el
@@ -6371,6 +6410,7 @@ def chat_with_agent(session_id: str, prompt: str, current_plan: Optional[dict] =
     #  aparecia mas arriba habia que volver a moverlo, y una de esas veces se
     #  colo un NameError. Aqui ya no puede quedar por debajo de nadie.
     plan_vigente = _plan_vigente_para_prompt(user_id, current_plan)
+    _contador_sin_plan = _contador_sin_plan_para_prompt(user_id, current_plan)
 
 
     # Obtener contexto de memoria inteligente (resúmenes + mensajes recientes)
@@ -6445,7 +6485,9 @@ def chat_with_agent(session_id: str, prompt: str, current_plan: Optional[dict] =
         rag_context += "⚠️ REGLA DE CONFLICTO: Si hay conflicto entre el historial reciente o los resúmenes y estos Hechos Permanentes, LOS HECHOS PERMANENTES SON LA LEY y tienen prioridad absoluta.\n"
         rag_context += "---------------------------------------------\n"
 
-    schedule_type = form_data.get("scheduleType", "standard") if form_data else "standard"
+    # [P1-PLAN-LOTE-137] AUSENTE no es «standard»: la rama corta del contador no pregunta el horario, y sembrar
+    # «Día Clásico» le aplicaba «rigor estricto» de crononutrición a quien nunca dijo a qué hora vive.
+    schedule_type = (form_data.get("scheduleType") or "") if form_data else ""
     _diario_de_hoy = None   # [P1-PLAN-LOTE-132] lo llena el bloque DIARIO DE HOY; None = no se pudo leer
     # [P2-COACH-COUNTRY · 2026-08-21] La `<biblioteca_culinaria_local>` son SEIS platos
     # dominicanos con sus tiempos de digestión, y el prompt no los ofrece: ORDENA citarlos.
@@ -6467,7 +6509,8 @@ def chat_with_agent(session_id: str, prompt: str, current_plan: Optional[dict] =
         system_prompt = CHAT_AGENT_INLINE_PROMPT
         system_prompt += coach_country_context(_coach_country)
         system_prompt += f"\n{culinary_knowledge_base_for_country(_coach_country)}"
-        system_prompt += build_tools_instructions(user_id, plan_en_pausa=bool(current_plan) and plan_vigente is None)
+        system_prompt += build_tools_instructions(user_id, plan_en_pausa=bool(current_plan) and plan_vigente is None,
+                                                  contador_sin_plan=_contador_sin_plan)
         # --- bloques dinámicos (volátiles) al final ---
         system_prompt += build_temporal_context(local_date=local_date, tz_offset=tz_offset)
         system_prompt += build_circadian_context(schedule_type)
@@ -6483,7 +6526,8 @@ def chat_with_agent(session_id: str, prompt: str, current_plan: Optional[dict] =
         system_prompt += f"\n{culinary_knowledge_base_for_country(_coach_country)}"
         if rag_context:
             system_prompt += f"\n{rag_context}"
-        system_prompt += build_tools_instructions(user_id, plan_en_pausa=bool(current_plan) and plan_vigente is None)
+        system_prompt += build_tools_instructions(user_id, plan_en_pausa=bool(current_plan) and plan_vigente is None,
+                                                  contador_sin_plan=_contador_sin_plan)
 
     inventory_str = ""
     shopping_delta_str = ""
@@ -6543,6 +6587,7 @@ def chat_with_agent(session_id: str, prompt: str, current_plan: Optional[dict] =
     system_prompt += build_inventory_context(
         inventory_str, shopping_delta_str,
         plan_en_pausa=bool(current_plan) and plan_vigente is None,
+        sin_plan=not current_plan,   # [P1-PLAN-LOTE-137] sin plan no hay «lista para su plan actual»
     )
 
     # [P1-SUPERPERSONALIZATION-1 · 2026-06-19] Inyecta el bloque de súper
@@ -6663,7 +6708,7 @@ def chat_with_agent(session_id: str, prompt: str, current_plan: Optional[dict] =
                 )
                 # [P1-CHAT-MACRO-CONTEXT · 2026-07-12] Macros desglosadas del
                 # día — las MISMAS que la card 'Progreso en Tiempo Real'.
-                system_prompt += _macro_totals_line(consumed_today, current_plan)
+                system_prompt += _macro_totals_line(consumed_today, plan_vigente, form_data)
 
                 if target_calories:
                     try:
@@ -6949,6 +6994,7 @@ def chat_with_agent_stream(session_id: str, prompt: str, current_plan: Optional[
     #  colo un NameError. Aqui ya no puede quedar por debajo de nadie.
     # [P1-CHAT-ORPHAN-TURN-TRUTH] El registro del turno vivo lo hace `_tracks_active_turn`.
     plan_vigente = _plan_vigente_para_prompt(user_id, current_plan)
+    _contador_sin_plan = _contador_sin_plan_para_prompt(user_id, current_plan)
 
     # [P1-COACH-PERSONA-CURIOSIDAD-DO · 2026-08-23] País resuelto antes de
     # cosechar sentimiento: la instrucción se normaliza una sola vez aguas
@@ -7052,7 +7098,9 @@ def chat_with_agent_stream(session_id: str, prompt: str, current_plan: Optional[
         if visual_facts_text: rag_context += f"Inventario Visual:\n{visual_facts_text}\n"
         rag_context += "Úsalo para responder de forma súper personalizada.\n⚠️ REGLA DE CONFLICTO: LOS HECHOS PERMANENTES SON LEY.\n---------------------------------------------\n"
 
-    schedule_type = form_data.get("scheduleType", "standard") if form_data else "standard"
+    # [P1-PLAN-LOTE-137] AUSENTE no es «standard»: la rama corta del contador no pregunta el horario, y sembrar
+    # «Día Clásico» le aplicaba «rigor estricto» de crononutrición a quien nunca dijo a qué hora vive.
+    schedule_type = (form_data.get("scheduleType") or "") if form_data else ""
     _diario_de_hoy = None   # [P1-PLAN-LOTE-132] lo llena el bloque DIARIO DE HOY; None = no se pudo leer
     _base_inline = CHAT_VOICE_MODE_PROMPT if is_call_mode else CHAT_STREAM_INLINE_PROMPT
 
@@ -7063,7 +7111,8 @@ def chat_with_agent_stream(session_id: str, prompt: str, current_plan: Optional[
         system_prompt = _base_inline
         system_prompt += coach_country_context(_coach_country)
         system_prompt += f"\n{culinary_knowledge_base_for_country(_coach_country)}"
-        system_prompt += build_tools_instructions_stream(user_id, plan_en_pausa=bool(current_plan) and plan_vigente is None)
+        system_prompt += build_tools_instructions_stream(user_id, plan_en_pausa=bool(current_plan) and plan_vigente is None,
+                                                         contador_sin_plan=_contador_sin_plan)
         # --- bloques dinámicos (volátiles) al final ---
         system_prompt += build_temporal_context(local_date=local_date, tz_offset=tz_offset)
         # [P3-I18N-PROMPT-VISION-CLIENTE-ESPANOL] la foto es contexto de SISTEMA, no turno del usuario.
@@ -7088,7 +7137,8 @@ def chat_with_agent_stream(session_id: str, prompt: str, current_plan: Optional[
         system_prompt += coach_country_context(_coach_country)
         system_prompt += f"\n{culinary_knowledge_base_for_country(_coach_country)}"
         if rag_context: system_prompt += f"\n{rag_context}"
-        system_prompt += build_tools_instructions_stream(user_id, plan_en_pausa=bool(current_plan) and plan_vigente is None)
+        system_prompt += build_tools_instructions_stream(user_id, plan_en_pausa=bool(current_plan) and plan_vigente is None,
+                                                         contador_sin_plan=_contador_sin_plan)
 
     inventory_str = ""
     shopping_delta_str = ""
@@ -7148,6 +7198,7 @@ def chat_with_agent_stream(session_id: str, prompt: str, current_plan: Optional[
     system_prompt += build_inventory_context(
         inventory_str, shopping_delta_str,
         plan_en_pausa=bool(current_plan) and plan_vigente is None,
+        sin_plan=not current_plan,   # [P1-PLAN-LOTE-137] sin plan no hay «lista para su plan actual»
     )
 
     # [P1-SUPERPERSONALIZATION-1 · 2026-06-19] Inyecta el bloque de súper
@@ -7261,7 +7312,7 @@ def chat_with_agent_stream(session_id: str, prompt: str, current_plan: Optional[
                 )
                 # [P1-CHAT-MACRO-CONTEXT · 2026-07-12] Macros desglosadas del
                 # día — las MISMAS que la card 'Progreso en Tiempo Real'.
-                system_prompt += _macro_totals_line(consumed_today, current_plan)
+                system_prompt += _macro_totals_line(consumed_today, plan_vigente, form_data)
                 
                 if target_calories:
                     try:

@@ -251,6 +251,9 @@ def build_circadian_context(schedule_type: str) -> str:
         return "\n⚠️ RITMO CIRCADIANO: El usuario tiene un 'Turno Nocturno' (duerme de día, trabaja de noche). INVIERTE LAS REGLAS DE CRONONUTRICIÓN: las madrugadas son su 'cena' y las tardes son su 'desayuno'. JAMÁS lo reprimas por comer de madrugada."
     elif schedule_type == "variable":
         return "\n⚠️ RITMO CIRCADIANO: Horario 'Rotativo/Variable'. Sé benévolo al evaluar horas (crononutrición), asume que sus horas de sueño pueden estar alteradas por turnos."
+    elif not schedule_type:
+        # [P1-PLAN-LOTE-137 · 2026-09-20] Un default sembrado es indistinguible de una elección: sin dato, sin rigor.
+        return "\n⚠️ RITMO CIRCADIANO: El usuario NO ha dicho qué horario lleva. No lo reprendas por la hora a la que come ni asumas que duerme de noche; si la hora importa para tu consejo, pregúntasela."
     else:
         return "\n⚠️ RITMO CIRCADIANO: 'Día Clásico'. Aplica con rigor estricto la regla de crononutrición si cena muy pesado o desayuna arroz a las deshoras indicadas en tu sistema."
 
@@ -299,24 +302,48 @@ _PLAN_TOOLS_DISABLED_BULLET_PAUSA = (
     "ni regenerar un día, ni generar un plan nuevo (esas herramientas están desactivadas). Además, "
     "este usuario tiene su plan EN PAUSA y usa la app como contador de macros: NO le mandes a "
     "pantallas ni botones de edición de platos, porque en su modo no existen. Si te pide cambios "
-    "del plan, dile que puede reanudarlo desde su Historial cuando quiera, y ofrécele lo que SÍ "
+    "del plan, dile que puede reanudarlo desde su Historial (o en Configuración → Capacidades) cuando "
+    "quiera, y ofrécele lo que SÍ "
     "puedes hacer ahora (registrar comidas, gestionar su Nevera, hidratación, sugerencias de "
-    "alimentos). NUNCA prometas modificar el plan ni digas que lo hiciste."
+    "alimentos). NUNCA prometas modificar el plan ni digas que lo hiciste. Esto MANDA sobre cualquier "
+    "otra regla de este prompt que mencione la página Plan o el botón 'Cambiar Plato'."
+)
+
+# [P1-PLAN-LOTE-137 · 2026-09-20] El tercer caso, el del onboarding corto: contador SIN plan. El modo solo llegaba al
+# prompt colgado de un plan pausado (`plan_en_pausa = hay plan y no manda`), así que a quien jamás generó un plan el
+# coach le contestaba «usa los botones de la página Plan — 'Cambiar Plato'…»: una pantalla que su navegación no tiene.
+# Y nada en todo el backend nombraba la puerta real para pedir un plan (Configuración → Capacidades).
+_PLAN_TOOLS_DISABLED_BULLET_CONTADOR = (
+    "- ❌ Este usuario usa la app como CONTADOR de macros y diario: tiene la generación de planes "
+    "APAGADA y NO tiene ningún plan de comidas. No le hables de «tu plan» ni de lo que «le toca» comer, "
+    "ni le mandes a la página Plan, a Recetas, a la lista de compras o a botones como 'Cambiar Plato': "
+    "en su modo no existen. Si te pide que le armes un plan o un menú, dile que la IA se lo arma cuando "
+    "encienda «Generación de planes» en Configuración → Capacidades (le hará unas preguntas más y usa "
+    "1 crédito), y mientras tanto ayúdale con lo que SÍ puedes: proponerle comidas que cuadren con sus "
+    "macros, registrar lo que come, su Nevera y su hidratación. NUNCA prometas generar ni modificar un "
+    "plan. Esto MANDA sobre cualquier otra regla de este prompt que mencione la página Plan o el botón "
+    "'Cambiar Plato'."
 )
 
 
-def _plan_tools_bullets_inline(plan_en_pausa: bool = False) -> str:
+def _bullet_sin_tools_de_plan(plan_en_pausa: bool, contador_sin_plan: bool) -> str:
+    if contador_sin_plan:
+        return _PLAN_TOOLS_DISABLED_BULLET_CONTADOR
+    return _PLAN_TOOLS_DISABLED_BULLET_PAUSA if plan_en_pausa else _PLAN_TOOLS_DISABLED_BULLET
+
+
+def _plan_tools_bullets_inline(plan_en_pausa: bool = False, contador_sin_plan: bool = False) -> str:
     if not _plan_tools_enabled():
-        return _PLAN_TOOLS_DISABLED_BULLET_PAUSA if plan_en_pausa else _PLAN_TOOLS_DISABLED_BULLET
+        return _bullet_sin_tools_de_plan(plan_en_pausa, contador_sin_plan)
     return """- Usa `generate_new_plan_from_chat` SOLO cuando el usuario pida explícitamente generar un plan nuevo (ej: 'hazme un plan', 'genera mi rutina', 'quiero un menú diferente'). Esta herramienta ejecuta el pipeline completo y genera un plan personalizado al instante.
 - NO uses generate_new_plan_from_chat si el usuario solo da información de salud o pregunta sobre su plan actual.
 - Usa `modify_single_meal` cuando el usuario pida un CAMBIO PUNTUAL a una comida específica de su plan (ej: 'cámbiale el salami al mangú por huevos', 'ponle más proteína al almuerzo del lunes', 'cámbiame el desayuno de hoy por otra cosa'). Esta herramienta modifica SOLO esa comida, no regenera todo el plan. day_number = posición 1-based del día en el plan activo (1 = primer día visible, ej. Domingo; cuenta los días del plan que tienes en contexto) y meal_type ('Desayuno', 'Almuerzo', 'Cena', 'Merienda'). Si el usuario no especifica el día, asume 1. Si el usuario pide expresamente ingredientes nuevos o ir de compras, pasa allow_pantry_expansion=true; si no, el sistema intenta primero con SOLO su Nevera y, si no converge, reintenta solo con 1-2 ingredientes extra AUTOMÁTICAMENTE (te avisará en el resultado para que se lo digas). NO te rindas ni le digas que 'no se pudo' sin haber llamado la herramienta.
 - Usa `regenerate_full_day` SOLO cuando el usuario pida renovar TODOS los platos de un día completo (ej: 'actualízame todos los platos del domingo', 'regenérame el día 2 entero') — equivale al botón 'Actualizar platos'. Cuesta 1 crédito y tarda ~2 minutos: CONFIRMA con el usuario ANTES de llamarla. Corre en segundo plano: avisa que la página Plan mostrará el progreso y NO afirmes que ya terminó. Para UN solo plato usa modify_single_meal."""
 
 
-def _plan_tools_bullets_stream(plan_en_pausa: bool = False) -> str:
+def _plan_tools_bullets_stream(plan_en_pausa: bool = False, contador_sin_plan: bool = False) -> str:
     if not _plan_tools_enabled():
-        return _PLAN_TOOLS_DISABLED_BULLET_PAUSA if plan_en_pausa else _PLAN_TOOLS_DISABLED_BULLET
+        return _bullet_sin_tools_de_plan(plan_en_pausa, contador_sin_plan)
     return """- Usa `generate_new_plan_from_chat` SOLO cuando el usuario pida explícitamente generar un plan nuevo (ej: 'hazme un plan', 'genera mi rutina', 'quiero un menú diferente').
 - NO uses generate_new_plan_from_chat si el usuario solo da información de salud o pregunta sobre su plan actual.
 - Usa `modify_single_meal` para cambios puntuales a UNA comida específica del plan (ej: 'cámbiale el salami al mangú por huevos', 'cámbiame la cena del lunes'). day_number = posición 1-based del día en el plan (1 = primer día visible); meal_type = 'Desayuno'/'Almuerzo'/'Cena'/'Merienda'. Si pide ingredientes nuevos explícitamente, allow_pantry_expansion=true; si no, el sistema intenta con SOLO su Nevera y auto-reintenta con 1-2 ingredientes extra si no converge (avísale cuando pase).
@@ -397,12 +424,12 @@ def _meal_proposal_bullet() -> str:
     return _MEAL_PROPOSAL_BULLET_ENABLED if _meal_proposal_tool_enabled() else _MEAL_PROPOSAL_BULLET_DISABLED
 
 
-def build_tools_instructions(user_id: str, plan_en_pausa: bool = False) -> str:
+def build_tools_instructions(user_id: str, plan_en_pausa: bool = False, contador_sin_plan: bool = False) -> str:
     """Genera el bloque de instrucciones de herramientas disponibles para el agente."""
     return f"""
 TIENES HERRAMIENTAS DISPONIBLES:
 - OBLIGATORIO: Usa `update_form_field` INMEDIATAMENTE y SIN EXCEPCIÓN cada vez que el usuario mencione un nuevo dato sobre sí mismo que deba actualizarse en su perfil (ej: "a partir de hoy soy vegano", "peso 80kg", "tengo diabetes", "soy intolerante a la lactosa", "no me gusta el tomate"). Si no usas esta herramienta para esos casos, la Interfaz Gráfica del usuario quedará desincronizada. ATENCIÓN: Lee atentamente los parámetros de esta herramienta, debes usar valores exactos en INGLÉS como 'lose_fat', 'vegetarian', 'male', etc. para que la UI los reconozca.
-{_plan_tools_bullets_inline(plan_en_pausa)}
+{_plan_tools_bullets_inline(plan_en_pausa, contador_sin_plan)}
 - Usa `log_consumed_meal` para registrar en el diario EN EL MISMO TURNO en que el usuario declare, en tiempo pasado, que comió algo ('me desayuné esto', 'me comí X', 'almorcé Y') — así sea la respuesta a una foto que acabas de analizar. Esa frase en pasado YA ES la confirmación: actúa, no le preguntes si se lo comió ni si lo registras. [P1-PLAN-LOTE-80] Tampoco le preguntes la FRANJA si no la dice: asume la más probable por el plato y la hora («ayer me comí un chimi en la calle» → cena de AYER; «me comí un mangú» a las 9 → desayuno), regístrala y dilo en la respuesta — si no era esa, te lo corrige y usas `correct_consumed_meal`. Llama la herramienta con los macros estimados (calorías, proteína, carbohidratos y grasas saludables), pasándolos todos. Que la comida real sea distinta a la que el plan tenía prescrita para ese slot es normal y NO requiere permiso — menciona la diferencia en una frase si suma como coaching, pero registra primero. Después de llamar la herramienta dile con claridad qué quedó anotado; puede ajustarlo o borrarlo desde la card 'Tus macros y micros de hoy' si el estimado no cuadra, así que eso reemplaza cualquier pregunta previa. [P1-CHAT-DIARY-WHERE] OJO CON DONDE LE DICES QUE LO VEA: 'Tus macros y micros de hoy' muestra SOLO el dia de HOY. Si registraste con `days_ago` > 0, ese panel seguira en cero y remitirle ahi es mandarlo a buscar algo que no puede aparecer — digale explicitamente que quedo en el diario de ESE dia (ayer, o el que sea) y que por eso no lo vera en el progreso de hoy; [P1-PLAN-LOTE-105] ahi SI puede verlo y borrarlo: en 'Ver dias anteriores', al pie de esa misma card, tocando ese dia. Solo con `days_ago=0` le remites a 'Tus macros y micros de hoy'. NUNCA digas 'lo registro', 'lo guardé' o 'anotado' si no llamaste la herramienta en ese turno — si por lo que sea no puedes registrarlo, dilo explícitamente en vez de sonar como que ya quedó guardado. [P1-CONSUMED-BACKDATE] Pasa SIEMPRE `meal_type` (desayuno/almuerzo/cena/merienda/snack) y, si el usuario dice que la comió OTRO día ('es el almuerzo de ayer'), pasa `days_ago` (1=ayer, 2=antier, máx 7) para que NO cuente en las macros de hoy. Si la herramienta responde que ese día YA tiene esa comida principal registrada, esa sí es una pregunta legítima — la ÚNICA que te permites en esta respuesta: díselo y solo repite con `force=true` si él confirma que comió dos. [P1-CHAT-DIARY-CORRECT] El día y la comida (`days_ago`/`meal_type`) SIEMPRE deben salir de una afirmación explícita del usuario, o ser la única lectura posible — NUNCA de qué era el tema de tu propia pregunta anterior; si genuinamente no está claro cuál día o cuál comida fue, pregúntalo ANTES de llamar la herramienta en vez de adivinar. [P1-PLAN-LOTE-76] LA COMIDA QUE FALTA, POR SU NOMBRE: la herramienta te dice qué comidas de ESE día siguen sin registrar. Si falta alguna, tu cierre es ofrecer LA QUE FALTA por su nombre ('¿Quieres agregar la merienda de ayer?'), una sola; si dice que ya no falta ninguna, no preguntes por ese día. Prohibida la pregunta genérica '¿Te falta algo más por registrar?': con el diario delante, esa respuesta ya la sabes.
 - Usa `correct_consumed_meal` cuando el usuario te diga que una comida YA REGISTRADA en el diario quedó mal (día equivocado, comida equivocada, macros equivocados) — ej. 'eso quedó mal', 'no, ese fue el desayuno de hoy, no el almuerzo de ayer'. Pásale el `meal_id` EXACTO que recibiste como ID_REGISTRO_DIARIO en el ToolMessage de la llamada a `log_consumed_meal` (o de una corrección previa) DENTRO DE ESTA MISMA CONVERSACIÓN — nunca lo inventes; si no lo tienes en tu contexto, pregúntale a cuál comida se refiere en vez de llamarla a ciegas o de usar `log_consumed_meal` (eso crearía una SEGUNDA fila para la misma comida real). Pasa SOLO los campos que hay que corregir. NUNCA digas 'quedó corregido' si no llamaste esta herramienta en ese turno.
 - Usa `check_shopping_list` SIEMPRE que el usuario pregunte qué ingredientes necesita comprar desde cero, o pida un resumen de su lista de compras original (lo que tenía que ir a comprar inicialmente).
@@ -424,12 +451,13 @@ TIENES HERRAMIENTAS DISPONIBLES:
 El user_id del usuario actual es: {user_id}"""
 
 
-def build_tools_instructions_stream(user_id: str, plan_en_pausa: bool = False) -> str:
+def build_tools_instructions_stream(user_id: str, plan_en_pausa: bool = False,
+                                    contador_sin_plan: bool = False) -> str:
     """Genera el bloque de instrucciones de herramientas para el stream (versión compacta)."""
     return f"""
 TIENES HERRAMIENTAS DISPONIBLES:
 - OBLIGATORIO: Usa `update_form_field` INMEDIATAMENTE al haber nuevos datos de perfil. IMPORTANTE: Revisa los valores permitidos, la UI usa nombres clave (ej: 'lose_fat', 'vegetarian', 'male'). [P1-PLAN-LOTE-53] Un gusto también es un dato de perfil: 'no me gusta el pescado' → `dislikes`; 'soy alérgico a X' → `allergies`; 'tengo diabetes' → `medicalConditions`. Guárdalo aunque el usuario lo diga molesto o diga que ya te lo había dicho.
-{_plan_tools_bullets_stream(plan_en_pausa)}
+{_plan_tools_bullets_stream(plan_en_pausa, contador_sin_plan)}
 - Usa `log_consumed_meal` para registrar en el diario EN EL MISMO TURNO en que el usuario diga, en pasado, que comió algo ('me desayuné esto', 'me comí X') — incluso tras analizar una foto. [P1-PLAN-LOTE-53] Una bebida con calorías también es consumo ('me tomé 3 Presidente', 'un jugo de chinola'): va a `log_consumed_meal`; `log_water_glass` es SOLO para agua. Esa frase en pasado YA ES la confirmación: no le preguntes si se lo comió ni si lo registras, actúa con los macros estimados. [P1-PLAN-LOTE-80] Tampoco le preguntes la FRANJA si no la dice: asume la más probable por el plato y la hora («ayer me comí un chimi en la calle» → cena de AYER; «me comí un mangú» a las 9 → desayuno), regístrala y dilo — si no era esa, te lo corrige y usas `correct_consumed_meal`. Comer distinto a lo que el plan tenía prescrito es normal y NO requiere permiso — regístralo igual, y comenta la diferencia en una frase solo si suma. Tras registrar, dile qué quedó anotado y que puede ajustarlo o borrarlo desde 'Tus macros y micros de hoy' si el estimado no cuadra. [P1-CHAT-DIARY-WHERE] OJO CON DONDE LE DICES QUE LO VEA: 'Tus macros y micros de hoy' muestra SOLO el dia de HOY. Si registraste con `days_ago` > 0, ese panel seguira en cero y remitirle ahi es mandarlo a buscar algo que no puede aparecer — digale explicitamente que quedo en el diario de ESE dia (ayer, o el que sea) y que por eso no lo vera en el progreso de hoy; [P1-PLAN-LOTE-105] ahi SI puede verlo y borrarlo: en 'Ver dias anteriores', al pie de esa misma card, tocando ese dia. Solo con `days_ago=0` le remites a 'Tus macros y micros de hoy'. NUNCA digas 'lo registro' o 'anotado' si no llamaste la herramienta en ese turno; si no puedes registrarlo, dilo explícitamente. [P1-CONSUMED-BACKDATE] Pasa SIEMPRE `meal_type`; si fue de OTRO día ('el almuerzo de ayer'), pasa `days_ago` (1=ayer, máx 7) para no contaminar hoy. Si responde que ese día ya tiene esa comida principal, esa sí es tu única pregunta permitida en esta respuesta: avísale y usa `force=true` solo si él confirma. [P1-CHAT-DIARY-CORRECT] El día y la comida (`days_ago`/`meal_type`) SIEMPRE salen de lo que el usuario afirmó explícitamente, NUNCA del tema de tu propia pregunta anterior; si no está claro, pregunta ANTES de llamar la herramienta.
 - Usa `correct_consumed_meal` cuando el usuario diga que una comida YA REGISTRADA quedó mal (día equivocado, comida equivocada, macros equivocados) — ej. 'eso quedó mal', 'no, ese fue el desayuno de hoy'. Pásale el `meal_id` EXACTO del ID_REGISTRO_DIARIO que recibiste en el ToolMessage de `log_consumed_meal` (o de una corrección previa) EN ESTA CONVERSACIÓN — nunca lo inventes; si no lo tienes, pregúntale a cuál comida se refiere en vez de usar `log_consumed_meal` (eso crearía una SEGUNDA fila). Pasa solo los campos a corregir. NUNCA digas 'quedó corregido' si no llamaste la herramienta en ese turno. [P1-PLAN-LOTE-53] Si dice que NO se comió algo que ya quedó registrado, o te pide borrarlo: tú no puedes borrar filas — díselo y que lo quite con «Deshacer registro» (la papelera del diario: 'Tus macros y micros de hoy' si es de hoy; 'Ver días anteriores' si fue otro día); no lo «corrijas» a otra comida que no dijo.
 - Usa `check_shopping_list` SIEMPRE que el usuario pregunte qué ingredientes necesita comprar, cuánto necesita de un ingrediente, o pida su lista de compras. NUNCA sumes ingredientes manualmente mirando el plan, esta herramienta hace el cálculo matemático exacto.
@@ -450,8 +478,12 @@ El user_id actual es: {user_id}"""
 
 
 def build_inventory_context(inventory_str: str, shopping_delta_str: str,
-                            plan_en_pausa: bool = False) -> str:
+                            plan_en_pausa: bool = False, sin_plan: bool = False) -> str:
     """Genera el bloque de estado de despensa y compras en tiempo real.
+
+    [P1-PLAN-LOTE-137 · 2026-09-20] `sin_plan`: quien no tiene plan (el contador del onboarding corto, con la Nevera
+    ya escaneada) recibía «LISTA DE COMPRAS PENDIENTE: ¡Vacía!… para su plan actual» — el prompt afirmando un plan
+    que no existe. Sin plan no hay lista, ni llena ni vacía: la línea no se escribe.
 
     [P1-CHAT-PAUSED-PROMPT-BLOCKS · 2026-08-14] `plan_en_pausa` reencuadra SOLO la
     parte de compras. El INVENTARIO sigue siendo verdad literal en modo contador
@@ -478,7 +510,7 @@ def build_inventory_context(inventory_str: str, shopping_delta_str: str,
                     "reanudar su plan; NUNCA le digas que 'debe comprar' esto.")
         else:
             ctx += f"\n- 📝 [LISTA DE COMPRAS PENDIENTE]: {shopping_delta_str}. Esto es lo que el usuario AÚN DEBE COMPRAR en el supermercado para completar su plan alimenticio."
-    elif not plan_en_pausa:
+    elif not plan_en_pausa and not sin_plan:
         ctx += f"\n- 📝 [LISTA DE COMPRAS PENDIENTE]: ¡Vacía! El usuario ya tiene todos los ingredientes necesarios en su inventario físico para su plan actual.\n"
 
     return ctx

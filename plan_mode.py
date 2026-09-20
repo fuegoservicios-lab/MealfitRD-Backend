@@ -379,28 +379,7 @@ def resume_plan_generation(user_id: str) -> dict:
 
     # 2. Restaurar el estado del plan desde el SNAPSHOT — con guard del CHECK I8:
     #    jamás devolver a 'complete' un plan cuyos days quedaron vacíos.
-    filas = execute_sql_write(
-        """
-        UPDATE meal_plans
-        SET plan_data = (plan_data - '_paused_at' - '_paused_prev_generation_status')
-                || jsonb_build_object(
-                    'generation_status',
-                    CASE
-                        WHEN COALESCE(plan_data->>'_paused_prev_generation_status', 'partial') = 'complete'
-                             AND jsonb_array_length(COALESCE(plan_data->'days', '[]'::jsonb)) = 0
-                        THEN 'partial'
-                        ELSE COALESCE(plan_data->>'_paused_prev_generation_status', 'partial')
-                    END
-                ),
-            updated_at = NOW()
-        WHERE user_id = %s
-          AND plan_data->>'generation_status' = 'paused_by_user'
-        RETURNING id,
-                  plan_data->>'generation_status' AS restored_status,
-                  (plan_data->>'_paused_at') AS paused_at
-        """,
-        (user_id,), returning=True,
-    ) or []
+    filas = _restore_paused_plan_status(user_id)
 
     # 3. Revivir la cola que ESTA pausa canceló (firma exacta) + rebase de offsets
     #    contra la ventana viva. DESPUÉS de la bandera (paso 1): revivir con el gate
@@ -426,6 +405,37 @@ def resume_plan_generation(user_id: str) -> dict:
     }
 
 
+def _restore_paused_plan_status(user_id: str) -> list:
+    """El sello de la pausa fuera: cada plan `paused_by_user` vuelve al estado de su SNAPSHOT (guard I8 incluido).
+
+    [P1-PLAN-LOTE-137 · 2026-09-20] Extraído de `resume_plan_generation` porque el OTRO camino que enciende
+    (`ensure_plan_generation_enabled`, al generar un plan desde el contador) solo movía la bandera: los planes viejos se
+    quedaban sellados para siempre con el usuario ya en modo plan, y «Reactivar» uno de ellos copiaba el sello al plan
+    activo — dashboard del plan diciendo «Planes en pausa» con la generación encendida. Un solo UPDATE, dos llamadores."""
+    return execute_sql_write(
+        """
+        UPDATE meal_plans
+        SET plan_data = (plan_data - '_paused_at' - '_paused_prev_generation_status')
+                || jsonb_build_object(
+                    'generation_status',
+                    CASE
+                        WHEN COALESCE(plan_data->>'_paused_prev_generation_status', 'partial') = 'complete'
+                             AND jsonb_array_length(COALESCE(plan_data->'days', '[]'::jsonb)) = 0
+                        THEN 'partial'
+                        ELSE COALESCE(plan_data->>'_paused_prev_generation_status', 'partial')
+                    END
+                ),
+            updated_at = NOW()
+        WHERE user_id = %s
+          AND plan_data->>'generation_status' = 'paused_by_user'
+        RETURNING id,
+                  plan_data->>'generation_status' AS restored_status,
+                  (plan_data->>'_paused_at') AS paused_at
+        """,
+        (user_id,), returning=True,
+    ) or []
+
+
 def ensure_plan_generation_enabled(user_id: str) -> bool:
     """[P1-PLAN-MODE] El re-encendido automático de `_postprocess_pipeline_result`.
 
@@ -448,4 +458,10 @@ def ensure_plan_generation_enabled(user_id: str) -> bool:
     ) or []
     if filas:
         logger.info(f"▶ [P1-PLAN-MODE] user {user_id}: re-encendido automático al generar plan")
+        # [P1-PLAN-LOTE-137] Encender es encender: el sello `paused_by_user` no puede sobrevivir a la bandera. La cola
+        # NO se revive aquí a propósito — el usuario pidió un plan NUEVO, no continuar el pausado (lote 136).
+        try:
+            _restore_paused_plan_status(user_id)
+        except Exception as e:
+            logger.warning(f"[P1-PLAN-LOTE-137] sello de pausa no retirado al reencender (se cura al reanudar): {e}")
     return bool(filas)

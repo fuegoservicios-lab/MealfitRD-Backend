@@ -13412,6 +13412,26 @@ def api_blocked_reasons(
         raise HTTPException(status_code=500, detail=safe_error_detail(e))
 
 
+def _rechazar_si_generador_apagado(user_id) -> None:
+    """[P1-PLAN-LOTE-137 · 2026-09-20] 409 si el usuario tiene la generación de planes APAGADA (modo contador).
+
+    Para los endpoints que REVIVEN bloques de un plan (`/retry-chunk`, `/regenerate-simplified`, `/regen-degraded`):
+    en pausa el pickup no recoge nada, así que lo único que consiguen es romper el estado de la pausa (pisan
+    `paused_by_user` con 'partial', reviven filas firmadas sin snapshot) y cobrar un crédito. Fail-open: si el modo
+    no se puede leer, el endpoint sigue como siempre."""
+    try:
+        from plan_mode import get_plan_mode
+        en_pausa = str((get_plan_mode(str(user_id)) or {}).get("plan_mode") or "plan") == "tracking"
+    except Exception as e:
+        logger.warning(f"[P1-PLAN-LOTE-137] plan_mode ilegible, no se bloquea: {e}")
+        return
+    if en_pausa:
+        raise HTTPException(
+            status_code=409,
+            detail="La generación de planes está en pausa. Reanúdala en Configuración → Capacidades y vuelve a intentarlo.",
+        )
+
+
 @router.post("/{plan_id}/retry-chunk/{chunk_id}")
 def api_retry_chunk(plan_id: str, chunk_id: str, verified_user_id: Optional[str] = Depends(verify_api_quota)):
     """[P0-HIST-IDOR-1 · 2026-05-10] Reenvía un chunk fallido a la cola.
@@ -13459,6 +13479,13 @@ def api_retry_chunk(plan_id: str, chunk_id: str, verified_user_id: Optional[str]
             # Devolvemos 404 (no 403) para no filtrar la existencia del
             # plan ajeno. Mismo patrón que `DELETE /{plan_id}` línea 4389.
             raise HTTPException(status_code=404, detail="Plan no encontrado")
+
+        # 1-bis) [P1-PLAN-LOTE-137 · 2026-09-20] Con el generador APAGADO no se reintenta nada. Este endpoint revive
+        #    TODO `cancelled` del plan (la firma de la pausa incluida, sin reconstruir el snapshot que el GC ya
+        #    vació), pisa `paused_by_user` con 'partial' —`resume` deja de reconocer el plan y los crons vuelven a
+        #    verlo «activo»— y cobra un crédito por bloques que el pickup NO va a recoger. Solo se llega con una
+        #    pestaña vieja del plan; se rechaza con un mensaje que dice la puerta real.
+        _rechazar_si_generador_apagado(verified_user_id)
 
         # 2) Resetear el chunk fallido a 'pending'. Filtro por
         #    meal_plan_id + (subquery user_id) defense-in-depth: si
@@ -13947,6 +13974,30 @@ def api_restore_plan(
                             ("restore_source_archived", source_plan_id),
                         )
                         cancelled_source_chunks = cur.rowcount or 0
+
+                        # 3a-ter) [P1-PLAN-LOTE-137 · 2026-09-20] Los chunks que la PAUSA canceló (modo contador) no
+                        #     están en ninguno de los 5 estados vivos: son `cancelled` con la firma de la pausa y
+                        #     `dead_lettered_at` NULL — justo lo que `_revive_paused_chunks` busca al reanudar. Sin
+                        #     este paso, «Reactivar este Plan» con el generador apagado dejaba las semanas pendientes
+                        #     del plan REEMPLAZADO listas para revivir sobre el contenido restaurado (la fila target
+                        #     sigue siendo la última por `created_at`, que es la que el revive elige): la corrupción
+                        #     que P0-HIST-1 cierra en modo plan, reabierta por la puerta de la pausa. Se vuelven
+                        #     terminales igual que el resto (razón propia + `dead_lettered_at`), target y source.
+                        from plan_mode import PAUSE_CANCEL_REASON as _PAUSA_FIRMA
+                        cur.execute(
+                            """
+                            UPDATE plan_chunk_queue
+                            SET dead_letter_reason = %s,
+                                dead_lettered_at = NOW(),
+                                updated_at = NOW()
+                            WHERE meal_plan_id IN (%s, %s)
+                              AND status = 'cancelled'
+                              AND dead_letter_reason = %s
+                              AND dead_lettered_at IS NULL
+                            """,
+                            ("restore_overwrite_paused", target_plan_id, source_plan_id, _PAUSA_FIRMA),
+                        )
+                        cancelled_chunks += cur.rowcount or 0
 
                         # 3b) Liberar locks asociados a chunks del
                         #     target Y del source. `chunk_user_locks`
@@ -16860,6 +16911,7 @@ def api_regenerate_dead_lettered_simplified(
             raise HTTPException(status_code=404, detail="Plan no encontrado")
         if verified_user_id and str(plan_row["user_id"]) != str(verified_user_id):
             raise HTTPException(status_code=403, detail="No autorizado")
+        _rechazar_si_generador_apagado(verified_user_id)   # [P1-PLAN-LOTE-137]
 
         chunk_row = execute_sql_query(
             """
@@ -17052,6 +17104,7 @@ def api_regen_degraded_chunks(plan_id: str, verified_user_id: Optional[str] = De
             raise HTTPException(status_code=404, detail="Plan no encontrado")
         if verified_user_id and str(plan_row["user_id"]) != str(verified_user_id):
             raise HTTPException(status_code=403, detail="No autorizado")
+        _rechazar_si_generador_apagado(verified_user_id)   # [P1-PLAN-LOTE-137]
 
         # 2. Buscar chunks degradados completados que tengan snapshot recuperable
         degraded_chunks = execute_sql_query("""

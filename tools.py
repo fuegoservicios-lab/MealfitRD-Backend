@@ -3660,6 +3660,19 @@ def search_deep_memory(user_id: str, query: str) -> str:
 # TOOL: Herramienta de Consulta Matemática del Carrito
 # ============================================================
 
+def _usuario_en_modo_contador(user_id) -> bool:
+    """[P1-PLAN-LOTE-137 · 2026-09-20] ¿Tiene el generador de planes APAGADO? Fail-open a False (modo plan): si el
+    modo no se puede leer, las tools se comportan como siempre en vez de negarse."""
+    try:
+        if not user_id or str(user_id) == "guest":
+            return False
+        from plan_mode import get_plan_mode
+        return str((get_plan_mode(str(user_id)) or {}).get("plan_mode") or "plan") == "tracking"
+    except Exception as e:
+        logger.warning(f"[P1-PLAN-LOTE-137] plan_mode ilegible en una tool del chat, asumo 'plan': {e!r}")
+        return False
+
+
 @tool
 def check_shopping_list(user_id: str) -> str:
     """
@@ -3674,13 +3687,23 @@ def check_shopping_list(user_id: str) -> str:
     logger.info(f"🛒 [TOOL EXECUTION] Calculando lista de compras matemática para user {user_id}")
             
     plan = get_latest_usable_meal_plan(user_id)
+    # [P1-PLAN-LOTE-137] En modo contador la única lista posible es la de un plan EN PAUSA: se entrega, pero con su
+    # encuadre (mismo criterio que el bloque del prompt: PAUSADO ≠ AMPUTADO, y jamás «debes comprar esto»).
+    _en_contador = _usuario_en_modo_contador(user_id)
     if not plan:
+        if _en_contador:
+            return ("El usuario usa la app como contador (generación de planes APAGADA) y no tiene ningún plan: no "
+                    "existe una lista de compras. Díselo con naturalidad; si quiere que la IA le arme un plan con "
+                    "su lista, se enciende en Configuración → Capacidades → «Generación de planes».")
         return "El usuario no tiene un plan de comidas activo estructurado para calcular la lista de compras."
-        
+
     try:
         from shopping_calculator import get_shopping_list_delta
         shop_list = get_shopping_list_delta(user_id, plan, categorize=True, structured=True)
         if not shop_list:
+            if _en_contador:
+                return ("Su plan está EN PAUSA (modo contador) y, de todas formas, no le faltaría nada de esa lista. "
+                        "No hay compras pendientes.")
             return "¡Buenas noticias! El usuario tiene todos los ingredientes necesarios en su despensa física para el plan actual. No necesita comprar nada adicional."
         
         formatted_sections = []
@@ -3704,6 +3727,10 @@ def check_shopping_list(user_id: str) -> str:
             formatted_sections.append("")
             
         formatted_list = "\n".join(formatted_sections).strip()
+        if _en_contador:
+            return ("LISTA DEL PLAN EN PAUSA (el usuario usa la app como contador; NO es una compra pendiente — "
+                    "preséntala como «lo que pedía tu plan pausado», nunca como algo que deba comprar):\n"
+                    f"{formatted_list}")
         return f"RESULTADO MATEMÁTICO DE LA LISTA DE COMPRAS (SOLO LO QUE FALTA COMPRAR):\n{formatted_list}"
     except Exception:
         logger.exception("❌ [TOOL] Error calculando lista de compras")  # [P1-CHAT-TOOLS-AUDIT · 2026-09-14]
@@ -4287,6 +4314,15 @@ def mark_shopping_list_purchased(user_id: str, excluded_items: list[str] = None,
     if not user_id or str(user_id) == "guest":
         return ("El usuario no ha iniciado sesión: la Nevera virtual solo existe con cuenta. "
                 "NO digas que se registró la compra; invítalo a iniciar sesión.")
+
+    # [P1-PLAN-LOTE-137 · 2026-09-20] Con el generador APAGADO no hay «lista de compras del plan»: la que queda es
+    # la de un plan EN PAUSA. Sin esta guarda, un «fui al súper» metía en la Nevera el delta entero de ese plan y
+    # marcaba el plan pausado como comprado — inventario que el usuario no compró, en la pantalla que él mismo lleva
+    # a mano. Lo que SÍ compró se anota con la tool de la Nevera, ítem por ítem.
+    if _usuario_en_modo_contador(user_id):
+        return ("El usuario tiene la generación de planes APAGADA (usa la app como contador): no hay una lista de "
+                "compras activa que marcar como comprada. NO digas que registraste la compra. Pídele que te diga "
+                "QUÉ compró y en qué cantidad, y anótalo en su Nevera con `modify_pantry_inventory`.")
 
     try:
         from db_inventory import restock_inventory

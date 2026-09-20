@@ -143,6 +143,19 @@ async def api_create_generation_run(
         "totalDays": inputs["total_days_requested"],
         "use_chunking": inputs["use_chunking"],
     }
+    # [P1-PLAN-LOTE-137 · 2026-09-20] LA BANDERA PRIMERO. «Generar un plan ES el consentimiento de generar»
+    # (`ensure_plan_generation_enabled`), pero su único call site vivía en el postprocess — que en la cola corre
+    # DENTRO del worker, o sea DESPUÉS del pickup. Y el pickup lleva el gate H1 (`plan_mode='tracking'` no genera):
+    # quien pulsaba «Encender el plan» desde el contador encolaba un chunk 0 que nadie iba a recoger jamás — run
+    # PAUSED, pantalla de carga hasta 70 min, y un «Plan en preparación» vacío como plan vigente. El SSE legacy no
+    # lo sufría (generaba inline y reencendía antes de encolar las semanas 2..N); el flip a la cola lo rompió.
+    # Encolar con el gate puesto deja chunks invisibles: mismo orden que `resume_plan_generation`.
+    _encendido_aqui = False
+    try:
+        from plan_mode import ensure_plan_generation_enabled
+        _encendido_aqui = bool(await asyncio.to_thread(ensure_plan_generation_enabled, user_id))
+    except Exception as _pm_e:
+        logger.warning(f"[P1-PLAN-LOTE-137] no se pudo reencender plan_mode antes de encolar (run sigue): {_pm_e}")
     try:
         plan_id, chunk_id = await asyncio.to_thread(
             create_placeholder_plan_and_enqueue_initial,
@@ -151,6 +164,13 @@ async def api_create_generation_run(
         )
     except Exception as e:
         logger.exception(f"[ARQ25-F1] no se pudo encolar el chunk 0 run={str(run['id'])[:8]}: {e}")
+        if _encendido_aqui:
+            # No hay plan que generar: devolver al usuario a SU contador en vez de dejarlo en «modo plan sin plan».
+            try:
+                from plan_mode import pause_plan_generation
+                await asyncio.to_thread(pause_plan_generation, user_id)
+            except Exception as _pm_e:
+                logger.warning(f"[P1-PLAN-LOTE-137] no se pudo devolver plan_mode a tracking: {_pm_e}")
         from generation_lifecycle import mark_run_error
         await asyncio.to_thread(mark_run_error, str(run["id"]), "enqueue_failed", str(e)[:200], completed=True)
         raise HTTPException(status_code=503, detail={"code": "enqueue_failed", "message": "No pudimos programar la generación. Inténtalo de nuevo."})
