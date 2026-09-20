@@ -162,7 +162,8 @@ def _vision_disabled_payload() -> dict:
 _MEAL_VISION_SCHEMA = {
     "type": "object",
     "properties": {
-        "photo_kind": {"type": "string", "enum": ["plato", "items", "otro"]},
+        # [P1-PLAN-LOTE-132] 'etiqueta': la tabla nutricional / el envase de UN producto — se LEE, no se estima.
+        "photo_kind": {"type": "string", "enum": ["plato", "items", "otro", "etiqueta"]},
         "is_food": {"type": "boolean"},
         "meal_name": {"type": "string"},
         "description": {"type": "string"},
@@ -201,6 +202,18 @@ _MEAL_VISION_PROMPT = (
     "sandwich, desayuno servido); 'items' si son alimentos SUELTOS o una "
     "compra (funda del super, productos con empaque, frutas o verduras "
     "crudas, el interior de una nevera o despensa); 'otro' si no hay comida. "
+    # [P1-PLAN-LOTE-132 · 2026-09-20] El coach pide «una foto de la tabla nutricional del pote» antes de anotar una
+    # proteina en polvo: entre dos marcas hay el doble de calorias. Esa foto caia en 'items' (producto con empaque)
+    # y el chat ofrecia meterla a la Nevera, con los numeros de la etiqueta perdidos. En 'etiqueta' NO se estima: se lee.
+    "'etiqueta' si la foto muestra la TABLA NUTRICIONAL (informacion nutricional / nutrition facts) de UN producto "
+    "empacado, o el frente de UN solo envase de suplemento o producto de proteina (pote de proteina en polvo, barra, "
+    "batida lista) donde se lee la marca - gana sobre 'items' cuando es un solo producto y se lee su etiqueta. "
+    "SI ES 'etiqueta': NO estimes nada, LEE. is_food=true, items vacio. 'meal_name' = marca y producto tal como se "
+    "leen (ej: 'Gold Standard Whey chocolate'). En calories, protein, carbs y healthy_fats pon los valores POR "
+    "PORCION que se LEEN en la tabla (healthy_fats = grasa total); lo que no se lea, 0. En 'description' escribe: "
+    "marca; producto; tamano de la porcion TAL COMO lo dice la etiqueta (ej: '1 scoop (31 g)'); porciones por envase "
+    "si se lee; y los valores por porcion. Si la tabla nutricional NO se ve o no se puede leer (solo el frente del "
+    "pote), deja los numeros en 0 y dilo en 'description': 'no se lee la tabla nutricional'. "
     "SI ES 'otro': is_food=false, macros en 0, meal_name vacio, items vacio. "
     # [P1-VISION-PLATO-ITEMS · 2026-08-07] Antes decia "deja items vacio" para
     # 'plato', asi que escanear comida NUNCA podia descontar la Nevera: el
@@ -286,7 +299,7 @@ class _MealVisionItem(BaseModel):
 
 class _MealVisionResult(BaseModel):
     """Mirror Pydantic de `_MEAL_VISION_SCHEMA` — ver comentario arriba."""
-    photo_kind: str = Field(description="'plato' (comida servida), 'items' (alimentos sueltos/compra) u 'otro' (no es comida).")
+    photo_kind: str = Field(description="'plato' (comida servida), 'items' (alimentos sueltos/compra), 'etiqueta' (tabla nutricional o envase de UN producto: se lee, no se estima) u 'otro' (no es comida).")
     is_food: bool = Field(description="¿Contiene esta imagen comida, ingredientes o una nevera/despensa?")
     meal_name: str = Field(default="", description="Nombre corto del platillo en español dominicano. Vacío si no aplica.")
     description: str = Field(default="", description="Inventario completo de componentes (modo plato) o resumen de la compra (modo items).")
@@ -368,7 +381,9 @@ def _coerce_meal_scan(data: dict) -> dict:
     # No se descarta a ciegas: se sustituye por un rótulo derivado de la propia
     # descripción. El modal lo precarga en un campo EDITABLE, así que el peor caso
     # es un nombre más largo y literal, nunca un plato que el usuario no comió.
-    if meal_name and description and not meal_name_backed_by_description(meal_name, description):
+    # [P1-PLAN-LOTE-132] una etiqueta se LEE: su rótulo es la marca, no un inventario de componentes que respaldar
+    _es_etiqueta = str(data.get("photo_kind") or "").strip().lower() == "etiqueta"
+    if (not _es_etiqueta) and meal_name and description and not meal_name_backed_by_description(meal_name, description):
         _derivado = derive_meal_name_from_description(description)
         logger.warning(
             "[P1-MEAL-NAME-BACKED] el rótulo no está respaldado por el inventario: "
@@ -379,9 +394,29 @@ def _coerce_meal_scan(data: dict) -> dict:
             meal_name = _derivado[:120]
 
     kind = str(data.get("photo_kind") or "").strip().lower()
-    if kind not in ("plato", "items", "otro"):
+    if kind not in ("plato", "items", "otro", "etiqueta"):
         # Compat: salida vieja/parcial sin photo_kind → derivar de is_food.
         kind = "plato" if is_food else "otro"
+
+    # ---- Modo ETIQUETA: tabla nutricional / envase de UN producto → valores LEÍDOS, por porción ----
+    # [P1-PLAN-LOTE-132 · 2026-09-20] `is_food=True` e `items=[]` a propósito: en el escáner del Dashboard una
+    # etiqueta cae al flujo de plato y precarga UNA porción del producto con las cifras de su tabla — que es lo que
+    # el usuario quiere registrar. Aquí NO corre el ajuste «kcal = 4P+4C+9G» del modo plato: una etiqueta declara sus
+    # propias kcal (fibra, polialcoholes y redondeos legales las separan de esa cuenta) y lo leído manda.
+    if kind == "etiqueta":
+        leido = {k: _macro(k) for k in ("calories", "protein", "carbs", "healthy_fats")}
+        sin_tabla = not any(leido.values())
+        return {
+            "photo_kind": "etiqueta",
+            "is_food": True,
+            "items": [],
+            "description": ((description or "Envase de un producto.")
+                            + (" (No se lee la tabla nutricional en la foto.)" if sin_tabla
+                               and "no se lee" not in (description or "").lower() else ""))[:900],
+            "meal_name": meal_name,
+            "label_read": not sin_tabla,
+            **leido,
+        }
 
     # ---- Modo ITEMS: compra/alimentos sueltos → lista para la Nevera ----
     if kind == "items":

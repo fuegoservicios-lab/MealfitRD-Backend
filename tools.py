@@ -5009,8 +5009,120 @@ def consultar_dia_del_plan(user_id: str, fecha: str) -> str:
         return "No pude consultar ese día del plan ahora mismo."
 
 
+def _chat_meal_proposal_tool_enabled() -> bool:
+    """[P1-PLAN-LOTE-132 · 2026-09-20] Kill switch de `proponer_comida` (default True; espejo de
+    `_chat_plan_day_tool_enabled`: vive en la lista literal y el knob la RETIRA).
+    tooltip-anchor: P1-PLAN-LOTE-132-TOOL-KNOB"""
+    from knobs import _env_bool as _mp_env_bool
+    return _mp_env_bool("MEALFIT_CHAT_MEAL_PROPOSAL_TOOL", True)
+
+
+def _contexto_del_dia_para_propuesta(user_id: str) -> dict:
+    """Lo que `proponer_comida` necesita saber del día del usuario: formulario, plan que manda hoy (None en pausa),
+    diario de hoy, hora local, comidas sin registrar y los nombres de su Nevera. Todo lectura; cada pieza falla sola."""
+    ctx = {"hp": {}, "plan": None, "diario": [], "hora": _hora_local_float(user_id), "faltan": [], "nevera": [],
+           "n_comidas": 4}
+    try:
+        ctx["hp"] = dict((get_user_profile(user_id) or {}).get("health_profile") or {})
+    except Exception as e:
+        logger.warning(f"[P1-PLAN-LOTE-132] perfil ilegible: {e!r}")
+    try:
+        from plan_mode import get_plan_mode
+        if str((get_plan_mode(user_id) or {}).get("plan_mode") or "plan") != "tracking":
+            _p = get_latest_usable_meal_plan(user_id)
+            ctx["plan"] = _p if isinstance(_p, dict) else None
+    except Exception as e:
+        logger.warning(f"[P1-PLAN-LOTE-132] plan ilegible: {e!r}")
+    try:
+        from datetime import date as _date_p
+        from chat_history_context import comidas_sin_registrar, find_plan_day_for_date
+        from db_facts import get_consumed_meals_today as _gcmt
+        _tz = user_tz_offset_min(user_id)
+        _hoy = _date_p.fromisoformat(_local_date_str_for_user(user_id))
+        ctx["diario"] = list(_gcmt(user_id, date_str=_hoy.isoformat(), tz_offset_mins=_tz) or [])
+        _dia = find_plan_day_for_date(ctx["plan"], _hoy, _hoy, int(_tz)) if ctx["plan"] else None
+        ctx["faltan"] = list(comidas_sin_registrar(ctx["diario"], _dia) or [])
+        _d = _dia.get("day") if isinstance(_dia, dict) and isinstance(_dia.get("day"), dict) else _dia
+        if isinstance(_d, dict) and isinstance(_d.get("meals"), list) and _d["meals"]:
+            ctx["n_comidas"] = max(2, min(6, len(_d["meals"])))
+        else:   # sin día de plan (modo contador): las comidas/día que su perfil clínico pide, el SSOT del solver
+            from nutrition_calculator import decide_meals_per_day as _dmpd
+            _n = (_dmpd(ctx["hp"]) or {}).get("num_meals")
+            if isinstance(_n, int) and 2 <= _n <= 6:
+                ctx["n_comidas"] = _n
+    except Exception as e:
+        logger.warning(f"[P1-PLAN-LOTE-132] diario de hoy ilegible: {e!r}")
+    try:
+        from db import execute_sql_query as _esq_pc
+        _rows = _esq_pc(
+            "SELECT ingredient_name FROM user_inventory WHERE user_id = %s AND quantity > 0 LIMIT 200",
+            (user_id,), fetch_all=True) or []
+        ctx["nevera"] = [str(r.get("ingredient_name")) for r in _rows if r.get("ingredient_name")]
+    except Exception as e:
+        logger.warning(f"[P1-PLAN-LOTE-132] Nevera ilegible: {e!r}")
+    return ctx
+
+
+@tool
+def proponer_comida(user_id: str, meal_type: str = None, kcal_objetivo: int = None, proteina_objetivo: int = None,
+                    solo_con_nevera: bool = False, excluir: list[str] = None, max_minutos: int = None) -> str:
+    """
+    Propone una comida o receta A LA MEDIDA de lo que al usuario le falta hoy. Devuelve hasta 3 platos del catálogo de
+    recetas con gramos, macros calculadas con la tabla de alimentos, tiempo, pasos y qué tiene ya en su Nevera —
+    filtrados por sus alergias, dieta y rechazos. NO registra nada ni toca el plan.
+    Úsala cuando pida qué comer, una idea de comida o una receta ('dame una receta para hoy', 'dame una comida para el
+    desayuno', 'qué ceno con lo que tengo', 'necesito algo con más proteína').
+    - meal_type: 'desayuno' | 'almuerzo' | 'merienda' | 'cena'. Si el usuario no lo dice, déjalo vacío: se deduce de la
+      hora y de lo que le falta por registrar.
+    - kcal_objetivo / proteina_objetivo: SOLO si el usuario pide una cifra ('algo de 400 calorías', 'con 40 g de
+      proteína'). Vacíos = se calculan de lo que le falta hoy.
+    - solo_con_nevera: true si pide cocinar SOLO con lo que tiene en casa.
+    - excluir: nombres de platos ya propuestos que no quiso, para que salgan otros.
+    - max_minutos: si dice cuánto tiempo tiene para cocinar.
+    """
+    try:
+        import coach_day_context as cdc
+        ctx = _contexto_del_dia_para_propuesta(user_id)
+        franja = _resolver_meal_type(meal_type)
+        if franja == "snack":
+            franja = "merienda"
+        if franja not in cdc.FRANJAS:
+            franja = cdc.franja_por_hora(ctx["hora"], ctx["faltan"])
+        metas = cdc.metas_del_dia(ctx["hp"], ctx["plan"])
+        falta = cdc.falta_hoy(metas, cdc.consumido_hoy(ctx["diario"])) if metas else None
+        # De noche (con su reloj: un turno nocturno no cuenta) la comida de cierre es más corta y, si él no dijo cuánto
+        # tiempo tiene, se prefiere lo que se hace en ~25 min: nadie se pone a guisar una hora a las 9 pm.
+        _de_noche = cdc.momento_del_dia(ctx["hora"], ctx["hp"].get("scheduleType")) == "noche"
+        if _de_noche and not max_minutos:
+            max_minutos = 25
+        objetivo = cdc.objetivo_de_la_comida(franja, metas, falta, ctx["hora"], n_comidas=ctx["n_comidas"],
+                                             kcal=kcal_objetivo, proteina=proteina_objetivo, de_noche=_de_noche,
+                                             faltan=ctx["faltan"], hay_registros=bool(ctx["diario"]))
+        if not objetivo:
+            return ("No tengo su meta de calorías (su perfil no trae peso, estatura y edad, y no hay plan vigente). "
+                    "(Para el asistente: pregúntale cuántas calorías quiere para esa comida y vuelve a llamar esta "
+                    "herramienta con `kcal_objetivo`.)")
+        _comido = [str(m.get("meal_name")) for m in ctx["diario"] if isinstance(m, dict) and m.get("meal_name")]
+        from datetime import date as _date_r
+        propuestas = cdc.proponer_comidas(
+            ctx["hp"], franja, objetivo, nevera_nombres=ctx["nevera"], excluir=list(excluir or []) + _comido,
+            solo_nevera=bool(solo_con_nevera), max_minutos=max_minutos, n=3,
+            rotacion=_date_r.fromisoformat(_local_date_str_for_user(user_id)).toordinal())
+        contexto = ""
+        if falta and falta.get("kcal") is not None and not kcal_objetivo:
+            contexto = (f" — hoy le faltan ~{int(round(max(falta['kcal'], 0)))} kcal"
+                        + (f" y ~{int(round(max(falta['protein_g'], 0)))} g de proteína"
+                           if falta.get("protein_g") is not None else ""))
+        return cdc.formatear_propuestas(propuestas, franja, objetivo, con_nevera=bool(ctx["nevera"]), contexto=contexto,
+                                        solo_nevera=bool(solo_con_nevera), falta=falta)
+    except Exception as e:
+        logger.error(f"❌ [TOOL] proponer_comida falló: {e}")
+        return ("No pude armar la propuesta ahora mismo (error interno). (Para el asistente: díselo y ofrécele una idea "
+                "sencilla con lo que hay en su Nevera, marcando las macros como estimadas.)")
+
+
 # Lista de tools disponibles para el agente
-agent_tools = [update_form_field, log_consumed_meal, correct_consumed_meal, search_deep_memory, check_shopping_list, check_current_pantry, modify_pantry_inventory, mark_shopping_list_purchased, check_hydration_today, log_water_glass, suggest_foods_for_nutrient, check_clinical_profile, consultar_dia_del_plan]
+agent_tools = [update_form_field, log_consumed_meal, correct_consumed_meal, search_deep_memory, check_shopping_list, check_current_pantry, modify_pantry_inventory, mark_shopping_list_purchased, check_hydration_today, log_water_glass, suggest_foods_for_nutrient, check_clinical_profile, consultar_dia_del_plan, proponer_comida]
 
 # [P1-CHAT-PLAN-TOOLS-OFF · 2026-07-12] Mutación de plan detrás del knob
 # (OFF por ahora — ver _chat_plan_mutation_tools_enabled).
@@ -5039,6 +5151,8 @@ def _apply_chat_tool_knobs(base: list) -> list:
     out = list(base)
     if not _chat_plan_day_tool_enabled():
         out = [t for t in out if getattr(t, "name", "") != "consultar_dia_del_plan"]
+    if not _chat_meal_proposal_tool_enabled():   # [P1-PLAN-LOTE-132]
+        out = [t for t in out if getattr(t, "name", "") != "proponer_comida"]
     if _chat_plan_mutation_tools_enabled():
         out = out + _PLAN_MUTATION_TOOLS
     return out

@@ -97,6 +97,23 @@ O. IDIOMA ÍNTEGRO: la regla F aplica a TODA la respuesta — ni una palabra sue
 P. SI SOLO SALUDA: UNA cosa útil de hoy según la hora — la próxima comida del plan POR SU NOMBRE (a las 19:30, la cena) o lo que le falta por registrar — y el cierre de la regla D. Y en todo tipo de respuesta, el tope de la regla B es techo, no meta: apunta a tres cuartos.
 """
 
+# [P1-PLAN-LOTE-132 · 2026-09-20] Resolver lo que el usuario NECESITA. El encargo del dueño: «al usuario le falta
+# proteína y calorías y son las 9 de la noche, y le dice al agente "tengo proteína en mi casa": el agente debe pedir
+# pruebas para registrar (¿déjame ver la marca?), y si lo ve mal por la hora, decirlo… que pueda decirle "dame una receta
+# para comer hoy" o "dame una comida para el desayuno" y resuelva de acuerdo a lo que el usuario necesita».
+# Las cifras (lo que falta) y las comidas (con sus macros) las pone el SISTEMA — `coach_day_context.py` —; estas reglas
+# solo dicen cuándo usarlas. La regla T está calibrada contra la evidencia a propósito: «no puedes tomar proteína tan
+# tarde» es un mito, y un coach que lo repite le quita al usuario la forma más fácil de llegar a su meta. Lo que de
+# noche sí pesa es lo pesado/frito, la cafeína y el líquido justo antes de acostarse.
+# Va DESPUÉS de `_CHAT_VOICE_RULES` y compartido por las 4 constantes: que una edición no pueda arreglar 3 de 4.
+_CHAT_RESOLVE_RULES = """
+RESOLVER LO QUE NECESITA (OBLIGATORIAS):
+Q. COMIDA O RECETA A PEDIDO: si pide qué comer, una comida para una franja o una receta («dame una receta para hoy», «dame una comida para el desayuno», «qué ceno con lo que tengo», «algo con más proteína»), llama `proponer_comida` EN ESE TURNO, sin preguntarle nada antes: la franja sale de lo que dijo y, si no la dijo, la deduce la herramienta por la hora. Excepción: si tiene plan vigente y pregunta qué LE TOCA («¿qué ceno hoy?»), la respuesta es la comida de SU plan; la herramienta es para cuando quiere otra cosa, una idea extra, cerrar lo que le falta, o no tiene plan. Nunca escribas de memoria una receta «con macros»: sin la herramienta, toda cifra tuya lleva «~».
+R. LE FALTA PROTEÍNA O CALORÍAS: el bloque «LO QUE LE FALTA HOY» trae la resta hecha. Cuando hable de lo que le falta, de cerrar el día, o diga que tiene algo en casa para cubrirlo, usa esas cifras y di en una frase cuánto cubre lo que propone («una batida de ~24 g te deja a ~28 g de tu meta»). Si lo que tiene no alcanza, propón UNA cosa más, no una lista. Si dice que TIENE algo para cubrirlo («tengo proteína en mi casa», «tengo atún»), trabaja con ESO: no llames `proponer_comida` ni le ofrezcas otro plato. Y «proteína», dicha así a secas, es casi siempre proteína en polvo: aplica la regla S directamente.
+S. PRUEBA ANTES DE ANOTAR UN PRODUCTO DE PROTEÍNA DE ENVASE: las macros de una proteína en polvo, un ganador de peso, una barra o una batida lista las decide la ETIQUETA, no tú — entre dos marcas hay el doble de calorías. Si el usuario dice que tiene, se va a tomar o se tomó uno y no sabes la marca Y la porción (no lo dijo, no está con su marca en su Nevera, no salió antes en esta conversación), pídele UNA prueba, la que le sea más fácil: «mándame una foto de la tabla nutricional del pote, o dime la marca y cuántos scoops». Con la prueba, usa las cifras de la etiqueta × las porciones que tomó, y dilas. Si no puede o no quiere dártela, NO insistas: usa un estimado genérico marcado como aproximado (proteína whey: ~120 kcal y ~24 g de proteína por scoop de 30 g) y dile que lo puede ajustar. Es la ÚNICA excepción a «pasado = registra sin preguntar», y solo para estos productos: la comida casera o de la calle se sigue estimando y registrando en el mismo turno, y una cerveza, un refresco o un jugo también.
+T. LA HORA SE JUZGA CON CRITERIO, NO CON MITOS: de noche lo que pesa es la comida pesada, frita o muy azucarada, la cafeína y beber mucho justo antes de acostarse. Una batida de proteína, un yogurt o unos huevos a las 9-10 pm NO son una deshora: son la forma correcta de cerrar la proteína del día — nunca le digas que «no puede» tomar proteína de noche, ni lo regañes por eso. Si la hora SÍ es un problema para lo que va a comer (un plato pesado a punto de acostarse, un pre-entreno con cafeína de noche), dilo en UNA frase con el porqué y da la versión que sí le conviene. Sus condiciones médicas mandan sobre esto.
+"""
+
 CHAT_SYSTEM_PROMPT_BASE = """Eres el Nutriólogo Crítico e IA Central de Bioboros. Tu objetivo principal es ayudar a los usuarios con dudas sobre su plan o dieta, dando respuestas al grano, conversacionales pero CLÍNICAMENTE FIRMES.
 IMPORTANTE: NUNCA saludes con 'Hola' ni repitas saludos introductorios.
 REGLA CRUCIAL: Los días del plan son días REALES del calendario, no opciones intercambiables. Llámalos SIEMPRE por su nombre ("el Domingo", "el Lunes") o por su fecha. Nunca los etiquetes con letras (A, B o C).
@@ -104,7 +121,7 @@ REGLA CRUCIAL: Los días del plan son días REALES del calendario, no opciones i
 REGLAS DE CONCIENCIA NUTRICIONAL Y CRÍTICA (OBLIGATORIAS):
 1. CRONONUTRICIÓN Y RITMO CIRCADIANO: Evalúa SIEMPRE la pesadez nutricional de los alimentos cruzando el "CONTEXTO TEMPORAL ACTUAL" con el "RITMO CIRCADIANO" del usuario (ambos proporcionados más abajo). Solo alerta de "deshoras" si la comida rompe la lógica de SU propio reloj biológico (ej. Si tiene turno nocturno, las 5 AM es su cena, no lo reprimas. Si tiene turno de día, las 5 AM con arroz es terrible).
 2. CULTURA GASTRONÓMICA DOMINICANA Y TIEMPOS DE DIGESTIÓN: Tienes acceso a una <biblioteca_culinaria_local>. Si el usuario consume uno de esos platos pesados fuera de sus horas óptimas de digestión activa, TIENES LA ORDEN de citar explícitamente sus horas estimadas de digestión documentadas (ej. "Toma 5 horas digerir ese Mofongo") para darle fundamento científico a la reprimenda.
-3. CERO COMPLACENCIA: NO felicites platos destructivos ni desfasados en hora. Sé estricto si el plato u horario biológico es inadecuado.""" + _CHAT_BREVITY_RULES + _CHAT_VOICE_RULES
+3. CERO COMPLACENCIA: NO felicites platos destructivos ni desfasados en hora. Sé estricto si el plato u horario biológico es inadecuado.""" + _CHAT_BREVITY_RULES + _CHAT_VOICE_RULES + _CHAT_RESOLVE_RULES
 
 CHAT_STREAM_SYSTEM_PROMPT_BASE = """Eres el Nutriólogo Crítico e IA Central de Bioboros. Tu objetivo principal es ayudar a los usuarios con dudas sobre su plan o dieta, dando respuestas al grano, conversacionales pero CLÍNICAMENTE FIRMES.
 IMPORTANTE: NUNCA saludes con 'Hola' ni repitas saludos introductorios.
@@ -118,7 +135,7 @@ REGLAS DE CONCIENCIA NUTRICIONAL Y CRÍTICA (OBLIGATORIAS):
 REGLAS DE FORMATO VISUAL (ESTRICTAS):
 1. Usa **negritas** para resaltar nombres de alimentos, cantidades (ej. **350 kcal**, **35g de proteína**) y conceptos clave.
 2. Usa viñetas (`-` o `•`) cuando listes 3 o más cosas (las comidas del día, ingredientes, pasos); uno o dos datos van en una frase.
-3. Aplica saltos de línea (párrafos cortos) para que el texto respire y no sea un bloque denso.""" + _CHAT_BREVITY_RULES + _CHAT_VOICE_RULES
+3. Aplica saltos de línea (párrafos cortos) para que el texto respire y no sea un bloque denso.""" + _CHAT_BREVITY_RULES + _CHAT_VOICE_RULES + _CHAT_RESOLVE_RULES
 
 
 # ============================================================
@@ -132,7 +149,7 @@ REGLA CRUCIAL: Los días del plan son días REALES del calendario, no opciones i
 REGLAS DE FORMATO VISUAL (ESTRICTAS):
 1. Usa **negritas** para resaltar nombres de alimentos, cantidades (ej. **350 kcal**, **35g de proteína**) y conceptos clave.
 2. Usa viñetas (`-` o `•`) cuando listes 3 o más cosas (las comidas del día, ingredientes, pasos); uno o dos datos van en una frase.
-3. Aplica saltos de línea (párrafos cortos) para que el texto respire y no sea un bloque denso.""" + _CHAT_BREVITY_RULES + _CHAT_VOICE_RULES
+3. Aplica saltos de línea (párrafos cortos) para que el texto respire y no sea un bloque denso.""" + _CHAT_BREVITY_RULES + _CHAT_VOICE_RULES + _CHAT_RESOLVE_RULES
 
 
 # ============================================================
@@ -160,7 +177,7 @@ REGLA CRUCIAL: Los días del plan son días REALES del calendario, no opciones i
 REGLAS DE FORMATO VISUAL (ESTRICTAS):
 1. Usa **negritas** para resaltar nombres de alimentos, cantidades (ej. **350 kcal**, **35g de proteína**) y conceptos clave.
 2. Usa viñetas (`-` o `•`) cuando listes 3 o más cosas (las comidas del día, ingredientes, pasos); uno o dos datos van en una frase.
-3. Aplica saltos de línea (párrafos cortos) para que el texto respire y no sea un bloque denso.""" + _CHAT_BREVITY_RULES + _CHAT_VOICE_RULES
+3. Aplica saltos de línea (párrafos cortos) para que el texto respire y no sea un bloque denso.""" + _CHAT_BREVITY_RULES + _CHAT_VOICE_RULES + _CHAT_RESOLVE_RULES
 
 
 # ============================================================
@@ -212,6 +229,20 @@ def build_temporal_context(local_date: Optional[str] = None,
     return (f"\n\n🕒 CONTEXTO TEMPORAL ACTUAL: Hoy es {dias_chat[now_chat.weekday()]}, "
             f"{now_chat.day} de {meses_chat[now_chat.month - 1]} de {now_chat.year}. "
             f"La hora local es {now_chat.strftime('%H:%M')} (formato 24 h).")
+
+
+def hora_local_del_chat(tz_offset: Optional[int] = None) -> float:
+    """[P1-PLAN-LOTE-132] La hora local del usuario como número (21:05 → 21.08), con el mismo huso y el mismo
+    saneado que `build_temporal_context` — para que «son las 21:05» y «ya es de noche» salgan del mismo reloj."""
+    offset_min = 240
+    if tz_offset is not None:
+        try:
+            _cand = int(tz_offset)
+            offset_min = _cand if -840 <= _cand <= 840 else 240
+        except (TypeError, ValueError):
+            pass
+    ahora = datetime.now(timezone.utc) - timedelta(minutes=offset_min)
+    return ahora.hour + ahora.minute / 60.0
 
 
 def build_circadian_context(schedule_type: str) -> str:
@@ -337,6 +368,35 @@ def _plan_day_tool_bullet() -> str:
     return _PLAN_DAY_TOOL_BULLET_ENABLED if _plan_day_tool_enabled() else _PLAN_DAY_TOOL_BULLET_DISABLED
 
 
+# [P1-PLAN-LOTE-132 · 2026-09-20] Bullet de `proponer_comida`, detrás de MEALFIT_CHAT_MEAL_PROPOSAL_TOOL (default True).
+# Con el knob OFF la tool sale de `agent_tools` y este bullet cambia: no se le ordena llamar lo que ya no tiene.
+def _meal_proposal_tool_enabled() -> bool:
+    try:
+        from tools import _chat_meal_proposal_tool_enabled
+        return _chat_meal_proposal_tool_enabled()
+    except Exception:
+        return True
+
+
+_MEAL_PROPOSAL_BULLET_ENABLED = (
+    "- Usa `proponer_comida` cuando pida qué comer, una comida para una franja o una receta (regla Q): devuelve hasta 3 "
+    "platos del catálogo ya escalados a lo que le falta hoy, con gramos, macros reales, tiempo, pasos y qué tiene en su "
+    "Nevera, filtrados por sus alergias, dieta y rechazos. Pasa `meal_type` solo si él nombró la franja; "
+    "`kcal_objetivo`/`proteina_objetivo` solo si él pidió una cifra; `solo_con_nevera=true` si pide cocinar con lo que "
+    "tiene; `excluir` con los platos que ya le propusiste si pide «otra»; `max_minutos` si dice cuánto tiempo tiene. "
+    "NO registra nada: cuando diga que se la comió, ahí usas `log_consumed_meal` con las macros e ingredientes que te "
+    "dio esta herramienta."
+)
+_MEAL_PROPOSAL_BULLET_DISABLED = (
+    "- Por ahora NO tienes herramienta para armar comidas a medida: si pide una receta o qué comer, propón algo sencillo "
+    "con lo que hay en su Nevera y marca TODA cifra como estimada con «~»."
+)
+
+
+def _meal_proposal_bullet() -> str:
+    return _MEAL_PROPOSAL_BULLET_ENABLED if _meal_proposal_tool_enabled() else _MEAL_PROPOSAL_BULLET_DISABLED
+
+
 def build_tools_instructions(user_id: str, plan_en_pausa: bool = False) -> str:
     """Genera el bloque de instrucciones de herramientas disponibles para el agente."""
     return f"""
@@ -354,6 +414,7 @@ TIENES HERRAMIENTAS DISPONIBLES:
 - Usa `suggest_foods_for_nutrient` cuando el usuario pregunte qué comer para mejorar un micronutriente específico de su plan (ej: '¿qué como para más fibra?', 'necesito más hierro', 'cómo subo la vitamina D', 'cómo bajo el sodio'). Devuelve alimentos del catálogo (criollos) y te dice en su propia respuesta QUÉ excluyó y qué NO — léelo, porque el filtro cubre alergias, rechazos y dieta pero NO el cruce medicamento↔nutriente. [P0-CHAT-ALLERGY-SSOT · 2026-08-11] Antes esta línea te prometía la lista depurada de antemano, y era falso: el filtro comparaba la etiqueta del chip contra el nombre del alimento y no bloqueaba ni un lácteo. Ya está arreglado, pero la afirmación NO vuelve: darte una garantía por adelantado te quita el único motivo para revisar, y el filtro sigue sin cubrirlo todo. Úsalos para recomendarle 2-3 opciones prácticas con cantidades realistas, NO inventes valores de nutrientes.
 - Usa `check_clinical_profile` SOLO cuando el usuario pregunte por sus laboratorios o valores clínicos ('¿cómo está mi glucosa?', '¿qué dice mi colesterol?', '¿mis labs afectan el plan?'). Cita los valores tal cual, interpreta con prudencia de coach (NO diagnostiques) y recuérdale que no sustituye una consulta médica.
 {_plan_day_tool_bullet()}
+{_meal_proposal_bullet()}
 
 🚨 REGLAS CRÍTICAS DE INTERFAZ (GATILLOS REACTIVOS) 🚨:
 {_ui_rule_plan()}
@@ -378,6 +439,7 @@ TIENES HERRAMIENTAS DISPONIBLES:
 - Usa `suggest_foods_for_nutrient` cuando pregunte qué comer para mejorar un micronutriente (ej: '¿qué como para más fibra?', 'necesito hierro', 'cómo bajo el sodio'). Devuelve alimentos del catálogo y te dice en su respuesta QUÉ excluyó y qué NO — léelo: cubre alergias, rechazos y dieta, pero NO el cruce medicamento↔nutriente. [P0-CHAT-ALLERGY-SSOT · 2026-08-11] No te fíes de una garantía por adelantado: antes esta línea daba una que era falsa. Recomiéndale 2-3 opciones prácticas con cantidades.
 - Usa `check_clinical_profile` SOLO si pregunta por sus laboratorios/valores clínicos ('¿cómo está mi glucosa?'). Cita valores tal cual, prudencia de coach (NO diagnostiques), recuerda que no sustituye consulta médica.
 {_plan_day_tool_bullet()}
+{_meal_proposal_bullet()}
 
 🚨 REGLAS CRÍTICAS DE INTERFAZ (GATILLOS REACTIVOS) 🚨:
 {_ui_rule_plan()}
@@ -876,6 +938,8 @@ def build_vision_context(vision) -> str:
             if item_kind == "items":
                 label = "ALIMENTOS SUELTOS/COMPRA"
                 has_loose_items = True
+            elif item_kind == "etiqueta":   # [P1-PLAN-LOTE-132]
+                label = "ETIQUETA DE PRODUCTO (cifras LEÍDAS de la tabla, por porción)"
             elif item_kind == "otro":
                 label = "SIN COMIDA DETECTADA"
             elif item_kind == "unavailable":
@@ -916,6 +980,18 @@ def build_vision_context(vision) -> str:
             f"\n\n📷 CONTEXTO DE FOTO: El usuario subió una imagen pero el análisis NO detectó comida "
             f"en ella. Lo que se vio: \"{desc}\". Dile amablemente que no reconociste comida en la "
             f"foto (menciona brevemente lo que sí se ve) y pídele otra toma del plato o de los alimentos."
+        )
+    if kind == "etiqueta":
+        # [P1-PLAN-LOTE-132 · 2026-09-20] La prueba que pide la regla S. Las cifras vienen LEÍDAS de la tabla, por porción.
+        return (
+            f"\n\n📷 CONTEXTO DE FOTO: El usuario mandó la ETIQUETA o el envase de un producto. Lo que se leyó: \"{desc}\". "
+            "Las cifras que aparezcan ahí son POR PORCIÓN y están leídas de la tabla nutricional, no estimadas: úsalas tal "
+            "cual. Si dice que no se lee la tabla, pídele otra foto de la tabla nutricional (la parte de atrás del pote) o "
+            "que te diga la porción — no inventes los números. Si ya dijo en pasado que se lo tomó y cuántas porciones "
+            "(scoops), registra EN ESTE TURNO con `log_consumed_meal`: cifras de la etiqueta × porciones, con la marca en "
+            "`meal_name`. Si no ha dicho cuántas porciones ni si ya se lo tomó, dile en una frase lo que aporta UNA porción "
+            "y cómo deja su día (bloque LO QUE LE FALTA HOY), y pregunta SOLO lo que falta (cuántos scoops, o si ya se lo "
+            "tomó). NO lo ofrezcas para la Nevera salvo que él lo pida."
         )
     if kind == "items":
         base = (

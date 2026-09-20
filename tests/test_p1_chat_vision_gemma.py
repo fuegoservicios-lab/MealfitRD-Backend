@@ -49,7 +49,8 @@ def test_prompt_classifies_photo_kind():
 def test_schema_has_kind_and_items():
     req = _MEAL_VISION_SCHEMA["required"]
     assert "photo_kind" in req and "items" in req
-    assert _MEAL_VISION_SCHEMA["properties"]["photo_kind"]["enum"] == ["plato", "items", "otro"]
+    # [P1-PLAN-LOTE-132] cuarto tipo: 'etiqueta' (la tabla nutricional se LEE, no se estima)
+    assert _MEAL_VISION_SCHEMA["properties"]["photo_kind"]["enum"] == ["plato", "items", "otro", "etiqueta"]
     item_req = _MEAL_VISION_SCHEMA["properties"]["items"]["items"]["required"]
     assert set(item_req) == {"name", "quantity", "unit"}
 

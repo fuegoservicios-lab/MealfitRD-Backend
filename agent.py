@@ -5942,6 +5942,24 @@ def _build_today_remaining_context(current_plan, consumed_today: list, target_ca
         return ""
 
 
+def _day_gap_context_for_chat(form_data, plan_vigente, diario_de_hoy, tz_offset, schedule_type) -> str:
+    """[P1-PLAN-LOTE-132 · 2026-09-20] El bloque «LO QUE LE FALTA HOY»: kcal y gramos que faltan (la resta hecha, no
+    delegada al modelo), la hora, y cómo se cierra un día A ESA HORA. El motor es `coach_day_context`; aquí solo se
+    decide que sin diario legible (`None`) no se afirma nada — «le falta todo» sobre un diario que no se pudo leer
+    sería la peor cifra posible. La hora sale del MISMO reloj que `build_temporal_context`.
+    tooltip-anchor: P1-PLAN-LOTE-132-DAY-GAP"""
+    if diario_de_hoy is None:
+        return ""
+    try:
+        from coach_day_context import build_day_gap_context
+        from prompts.chat_agent import hora_local_del_chat
+        return build_day_gap_context(form_data, plan_vigente, diario_de_hoy,
+                                     hora_local_del_chat(tz_offset), schedule_type)
+    except Exception as e:
+        logger.warning(f"[P1-PLAN-LOTE-132] bloque de lo que falta hoy: {e!r}")
+        return ""
+
+
 def _build_pantry_context(user_id: Optional[str]) -> str:
     """[P1-CHAT-PANTRY-AWARE · 2026-07-12] Snapshot REAL de `user_inventory`
     al system prompt (bloque VOLÁTIL → va al final, no rompe el prefix-cache
@@ -6428,6 +6446,7 @@ def chat_with_agent(session_id: str, prompt: str, current_plan: Optional[dict] =
         rag_context += "---------------------------------------------\n"
 
     schedule_type = form_data.get("scheduleType", "standard") if form_data else "standard"
+    _diario_de_hoy = None   # [P1-PLAN-LOTE-132] lo llena el bloque DIARIO DE HOY; None = no se pudo leer
     # [P2-COACH-COUNTRY · 2026-08-21] La `<biblioteca_culinaria_local>` son SEIS platos
     # dominicanos con sus tiempos de digestión, y el prompt no los ofrece: ORDENA citarlos.
     # A un español eso le llega como una reprimenda por una yaroa que no comió. El país sale
@@ -6609,6 +6628,7 @@ def chat_with_agent(session_id: str, prompt: str, current_plan: Optional[dict] =
             # stream y que este path nunca heredó.
             _tz_diario = _clamp_tz_offset_mins(tz_offset) if tz_offset is not None else None
             consumed_today = get_consumed_meals_today(user_id, date_str=local_date, tz_offset_mins=_tz_diario)
+            _diario_de_hoy = list(consumed_today or [])   # [P1-PLAN-LOTE-132]
             if consumed_today:
                 total_consumed = sum(m.get('calories', 0) for m in consumed_today)
                 meals_text = ", ".join([  # [P1-DIARY-FREETEXT-ESTIMATE v2] slot delante del plato
@@ -6666,6 +6686,8 @@ def chat_with_agent(session_id: str, prompt: str, current_plan: Optional[dict] =
         except Exception as e:
             logger.error(f"⚠️ Error inyectando contexto de diario (non-stream): {e}")
 
+        # [P1-PLAN-LOTE-132 · 2026-09-20] Lo que le FALTA hoy, con la resta hecha y la hora (SSOT de los dos paths).
+        system_prompt += _day_gap_context_for_chat(form_data, plan_vigente, _diario_de_hoy, tz_offset, schedule_type)
         # [P3-AGENT-HYDRATION-CONTEXT · 2026-05-27] Inyectar hidratación
         # viva si el toggle está activo.
         # [P3-CHAT-NOSTREAM-CONTEXTO-TEMPORAL-RD · 2026-08-23] Este bloque NO estaba roto
@@ -7031,6 +7053,7 @@ def chat_with_agent_stream(session_id: str, prompt: str, current_plan: Optional[
         rag_context += "Úsalo para responder de forma súper personalizada.\n⚠️ REGLA DE CONFLICTO: LOS HECHOS PERMANENTES SON LEY.\n---------------------------------------------\n"
 
     schedule_type = form_data.get("scheduleType", "standard") if form_data else "standard"
+    _diario_de_hoy = None   # [P1-PLAN-LOTE-132] lo llena el bloque DIARIO DE HOY; None = no se pudo leer
     _base_inline = CHAT_VOICE_MODE_PROMPT if is_call_mode else CHAT_STREAM_INLINE_PROMPT
 
     # [P2-CHAT-PROMPT-STATIC-PREFIX · 2026-06-01] Estáticos al frente, volátiles
@@ -7203,6 +7226,7 @@ def chat_with_agent_stream(session_id: str, prompt: str, current_plan: Optional[
             # ventana de los clientes que no mandan offset.
             _tz_diario = _clamp_tz_offset_mins(tz_offset) if tz_offset is not None else None
             consumed_today = get_consumed_meals_today(user_id, date_str=local_date, tz_offset_mins=_tz_diario)
+            _diario_de_hoy = list(consumed_today or [])   # [P1-PLAN-LOTE-132]
             if consumed_today:
                 total_consumed = sum(m.get('calories', 0) for m in consumed_today)
                 meals_text = ", ".join([  # [P1-DIARY-FREETEXT-ESTIMATE v2] slot delante del plato
@@ -7257,6 +7281,8 @@ def chat_with_agent_stream(session_id: str, prompt: str, current_plan: Optional[
         except Exception as e:
             logger.error(f"⚠️ Error inyectando contexto de diario: {e}")
 
+        # [P1-PLAN-LOTE-132 · 2026-09-20] Lo que le FALTA hoy, con la resta hecha y la hora (SSOT de los dos paths).
+        system_prompt += _day_gap_context_for_chat(form_data, plan_vigente, _diario_de_hoy, tz_offset, schedule_type)
         # [P3-AGENT-HYDRATION-CONTEXT · 2026-05-27] Inyectar hidratación
         # viva si el toggle está activo. El stream path SÍ recibe
         # `local_date` del cliente, que pasamos al helper para mayor

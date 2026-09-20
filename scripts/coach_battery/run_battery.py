@@ -178,6 +178,33 @@ chat_prompts.datetime = _SimDatetime
 def set_hora(hhmm: str) -> None:
     h, m = (int(x) for x in hhmm.split(":"))
     SIM["utc"] = datetime(2026, 9, 15, h, m, tzinfo=timezone.utc) + timedelta(hours=4)
+    SIM["hora"] = h + m / 60.0
+
+
+# [P1-PLAN-LOTE-132] Las tools leen su propio reloj y su propia fecha: `proponer_comida` deduce la franja de la hora,
+# así que sin esto el caso «21:05» corría con la hora real de la máquina.
+tools._hora_local_float = lambda _uid=None: SIM.get("hora", 12.67)
+tools._local_date_str_for_user = lambda _uid=None: "2026-09-15"
+
+# [P1-PLAN-LOTE-132] Diario de HOY simulado por caso (`"diario": [{meal_type, meal_name, calories, protein, carbs,
+# healthy_fats}]`): «le falta proteína a las 9 pm» necesita un día a medias, y el diario real del 15-sep es el que es.
+# `None` = se lee el de producción, como siempre. Los días anteriores (date_str ≠ hoy) siguen saliendo de producción.
+DIARIO_SIM = {"rows": None}
+import db_facts as _db_facts  # noqa: E402
+
+_orig_consumed_today = _db_facts.get_consumed_meals_today
+
+
+def _consumed_today_sim(user_id, date_str=None, tz_offset_mins=None, *a, **kw):
+    if DIARIO_SIM["rows"] is not None and (date_str is None or str(date_str)[:10] == "2026-09-15"):
+        return copy.deepcopy(DIARIO_SIM["rows"])
+    return _orig_consumed_today(user_id, date_str=date_str, tz_offset_mins=tz_offset_mins, *a, **kw)
+
+
+_db_facts.get_consumed_meals_today = _consumed_today_sim
+agent.get_consumed_meals_today = _consumed_today_sim
+if hasattr(db, "get_consumed_meals_today"):
+    db.get_consumed_meals_today = _consumed_today_sim
 
 
 # Persona activa (locale y formulario).
@@ -542,6 +569,7 @@ def main() -> int:
         CTX["uid"], CTX["hp"] = persona["uid"], persona["form_data"]
         FAKE_DIARY.clear()
         set_hora(case.get("hora", "12:40"))
+        DIARIO_SIM["rows"] = case.get("diario")   # [P1-PLAN-LOTE-132] None = el diario real de producción
         sid = str(uuid.uuid4())  # la columna es uuid; la sesión no existe en la base (lectura vacía)
         turns = []
         for i, prompt in enumerate(case["turns"]):
