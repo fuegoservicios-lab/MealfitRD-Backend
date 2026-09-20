@@ -80,7 +80,9 @@ def test_plan_y_objetivo_contador_manda_tambien_con_plan_en_pausa():
 
 def test_el_interruptor_obedece_al_servidor_y_refresca_el_perfil_sin_plan():
     st = _front("src/pages/Settings.jsx")
-    h = st[st.index("const handleTogglePlanMode"):st.index("const handleTogglePlanMode") + 6500]
+    # ventana SEMÁNTICA (hasta el siguiente `useEffect`): la fija de 6500 caducó al crecer el handler en el lote 137
+    _i = st.index("const handleTogglePlanMode")
+    h = st[_i:st.index("    useEffect(() => {", _i)]
     assert "const quedo = (data.plan_mode === 'plan' || data.plan_mode === 'tracking') ? data.plan_mode : next;" in h
     assert h.index("if (quedo !== next) {") < h.index("safeLocalStorageSet('mealfit_plan_mode', next);")
     assert re.search(r"\} else \{[\s\S]{0,700}await refreshProfileAndPlan\(\);", h)
