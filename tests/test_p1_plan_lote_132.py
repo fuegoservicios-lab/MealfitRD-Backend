@@ -315,6 +315,17 @@ def test_el_chat_usa_las_cifras_de_la_etiqueta_y_no_la_manda_a_la_nevera():
     multi = ca.build_vision_context({"kind": "multi", "has_text": True, "items": [
         {"kind": "etiqueta", "description": "120 kcal por scoop"}, {"kind": "plato", "description": "arroz"}]})
     assert "ETIQUETA DE PRODUCTO" in multi
+    assert "cifras de la etiqueta × porciones" in multi, \
+        "el cliente manda SIEMPRE `multi`, también con una sola foto: la instrucción tiene que ir en esa rama"
+
+
+def test_el_cliente_del_chat_deja_pasar_la_etiqueta():
+    """`AgentPage.jsx` convertía todo tipo desconocido en 'plato': sin esto el coach recibía la etiqueta como un plato."""
+    front = _BACKEND.parent / "frontend" / "src" / "pages" / "AgentPage.jsx"
+    if not front.exists():
+        pytest.skip("sin el repo del frontend al lado")
+    src = front.read_text(encoding="utf-8")
+    assert "item.kind === 'etiqueta' ? 'etiqueta'" in src
 
 
 def test_la_bateria_tiene_los_casos_del_encargo():

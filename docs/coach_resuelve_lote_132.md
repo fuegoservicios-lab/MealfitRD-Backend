@@ -43,6 +43,6 @@ receta para comer hoy" o "dame una comida para el desayuno" y resuelva de acuerd
 
 - Sin IA (cero gasto): `scripts/coach_battery/propuesta_smoke.py` — bloque + herramienta contra los datos reales de la
   cuenta de la batería, en solo lectura. Cazó tres fallos antes del primer céntimo (ver el test).
-- Con IA (dirigida, ~US$0,002 por caso con DeepSeek Flash): casos `R1`-`R11` de `battery.json` (`--only R1,R2,…`). El
+- Con IA (dirigida, ~US$0,002 por caso con el modelo flash): casos `R1`-`R11` de `battery.json` (`--only R1,R2,…`). El
   arnés ganó `diario` por caso (día a medias simulado) y el reloj simulado llega también a las tools.
 - Anclas: `tests/test_p1_plan_lote_132.py`.

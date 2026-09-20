@@ -919,6 +919,19 @@ _VISION_REASONS = {
 }
 
 
+# [P1-PLAN-LOTE-132 · 2026-09-20] Qué hacer con la foto de una ETIQUETA (la prueba que pide la regla S). Constante
+# compartida por la rama de una foto y la de varias: el cliente manda SIEMPRE `kind: 'multi'`, también con una sola.
+_ETIQUETA_INSTRUCCION = (
+    "ETIQUETA: las cifras que trae son POR PORCIÓN y están LEÍDAS de la tabla nutricional, no estimadas: úsalas tal "
+    "cual. Si dice que no se lee la tabla, pídele otra foto de la tabla nutricional (la parte de atrás del pote) o que "
+    "te diga la porción — no inventes los números. Si ya dijo en pasado que se lo tomó y cuántas porciones (scoops), "
+    "registra EN ESTE TURNO con `log_consumed_meal`: cifras de la etiqueta × porciones, con la marca en `meal_name`. Si "
+    "no ha dicho cuántas porciones ni si ya se lo tomó, dile en una frase lo que aporta UNA porción y cómo deja su día "
+    "(bloque LO QUE LE FALTA HOY), y pregunta SOLO lo que falta (cuántos scoops, o si ya se lo tomó). NO lo ofrezcas "
+    "para la Nevera salvo que él lo pida."
+)
+
+
 def build_vision_context(vision) -> str:
     """Bloque de contexto para el system prompt cuando el turno trae una foto. "" si no hay."""
     if not isinstance(vision, dict) or not vision.get("kind"):
@@ -931,6 +944,7 @@ def build_vision_context(vision) -> str:
             return ""
         lines = []
         has_loose_items = False
+        has_label = False
         unavailable = 0
         for index, item in enumerate(items, start=1):
             item_kind = str(item.get("kind") or "unavailable")
@@ -940,6 +954,7 @@ def build_vision_context(vision) -> str:
                 has_loose_items = True
             elif item_kind == "etiqueta":   # [P1-PLAN-LOTE-132]
                 label = "ETIQUETA DE PRODUCTO (cifras LEÍDAS de la tabla, por porción)"
+                has_label = True
             elif item_kind == "otro":
                 label = "SIN COMIDA DETECTADA"
             elif item_kind == "unavailable":
@@ -957,6 +972,8 @@ def build_vision_context(vision) -> str:
                 " Para las fotos de compra, ofrece agregarlas a la Nevera y usa "
                 "modify_pantry_inventory solo después de confirmación."
             )
+        if has_label:   # [P1-PLAN-LOTE-132] el cliente manda SIEMPRE `multi`, también con una sola foto: la instrucción va aquí
+            instruction += " " + _ETIQUETA_INSTRUCCION
         if unavailable:
             instruction += (
                 f" Indica brevemente que {unavailable} de {len(items)} foto(s) no pudo analizarse; "
@@ -985,13 +1002,7 @@ def build_vision_context(vision) -> str:
         # [P1-PLAN-LOTE-132 · 2026-09-20] La prueba que pide la regla S. Las cifras vienen LEÍDAS de la tabla, por porción.
         return (
             f"\n\n📷 CONTEXTO DE FOTO: El usuario mandó la ETIQUETA o el envase de un producto. Lo que se leyó: \"{desc}\". "
-            "Las cifras que aparezcan ahí son POR PORCIÓN y están leídas de la tabla nutricional, no estimadas: úsalas tal "
-            "cual. Si dice que no se lee la tabla, pídele otra foto de la tabla nutricional (la parte de atrás del pote) o "
-            "que te diga la porción — no inventes los números. Si ya dijo en pasado que se lo tomó y cuántas porciones "
-            "(scoops), registra EN ESTE TURNO con `log_consumed_meal`: cifras de la etiqueta × porciones, con la marca en "
-            "`meal_name`. Si no ha dicho cuántas porciones ni si ya se lo tomó, dile en una frase lo que aporta UNA porción "
-            "y cómo deja su día (bloque LO QUE LE FALTA HOY), y pregunta SOLO lo que falta (cuántos scoops, o si ya se lo "
-            "tomó). NO lo ofrezcas para la Nevera salvo que él lo pida."
+            + _ETIQUETA_INSTRUCCION
         )
     if kind == "items":
         base = (
