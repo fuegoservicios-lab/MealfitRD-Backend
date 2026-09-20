@@ -26,12 +26,16 @@ def _agent_page() -> str:
     return p.read_text(encoding="utf-8")
 
 
-def test_enviar_cierra_el_teclado_virtual_y_conserva_el_foco_con_teclado_fisico():
+def test_enviar_ya_no_cierra_el_teclado_y_con_el_en_pantalla_sigue_a_la_respuesta():
+    """[P1-PLAN-LOTE-130 · 2026-09-19] El dueño REVIRTIÓ el cierre del teclado al enviar («haz lo mismo con el + y
+    enviar» = que no lo cierren). Lo que este lote protegía —que la respuesta no nazca fuera de cuadro en una ventana
+    de ~300 px— se conserva de otra forma: con el teclado en pantalla el envío va en modo «abajo»."""
     ap = _agent_page()
     i = ap.index("const _tecladoVirtual = tecladoAbiertoRef.current || medirTecladoDeVentana(window).abierto;")
-    bloque = ap[i:i + 600]
-    assert re.search(r"if \(_hadFocusPreSend && _tecladoVirtual\) \{\s*try \{ chatInputRef\.current\?\.blur\(\); \}", bloque)
-    assert re.search(r"\} else if \(_hadFocusPreSend && !callModeRef\.current\) \{\s*setTimeout\(", bloque)
+    bloque = ap[i:i + 700]
+    assert ".blur()" not in bloque
+    assert re.search(r"if \(_hadFocusPreSend && !callModeRef\.current\) \{\s*setTimeout\(", bloque)
+    assert re.search(r"\} else if \(_tecladoVirtual\) \{[\s\S]{0,700}_setMode\('bottom'\);", ap)
 
 
 def test_el_ancla_recupera_el_alto_de_la_ventana_y_la_foto_mira_al_final():
