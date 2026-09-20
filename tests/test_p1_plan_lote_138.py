@@ -42,10 +42,11 @@ def _front(rel: str) -> str:
     return p.read_text(encoding="utf-8").replace("\r\n", "\n")
 
 
-def test_la_coreografia_viene_encendida_y_fluido_es_el_interruptor_de_vuelta():
+def test_la_coreografia_sigue_siendo_de_la_app_nativa_y_con_duracion_conocida():
+    # [P1-PLAN-LOTE-139] Este lote la ENCENDIÓ por defecto; el 139 lo deshizo (ver test_p1_plan_lote_139.py). Lo demás
+    # del 138 —una animación por apertura, relevo sin scroll suave, miniatura inmediata— sigue en pie.
     kc = _front("src/utils/keyboardChoreography.js")
-    assert "return safeLocalStorageGet(CLAVE_COREOGRAFIA, null) !== '0';" in kc
-    assert "safeLocalStorageSet(CLAVE_COREOGRAFIA, '0');" in kc, "apagar GUARDA la decisión; encender vuelve al defecto"
+    assert "return safeLocalStorageGet(CLAVE_COREOGRAFIA, null) === '1';" in kc
     ap = _front("src/pages/AgentPage.jsx")
     assert "if (isNativeApp() && textToSend.trim().toLowerCase() === '/fluido') {" in ap
     # y sigue siendo SOLO de la app nativa, con una duración conocida

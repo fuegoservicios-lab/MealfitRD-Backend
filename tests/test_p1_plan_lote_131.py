@@ -38,11 +38,10 @@ def _front(rel: str) -> str:
     return p.read_text(encoding="utf-8").replace("\r\n", "\n")
 
 
-def test_nacio_como_modo_de_prueba_y_el_lote_138_lo_enciende_por_defecto():
-    # [P1-PLAN-LOTE-138] Nació APAGADO (`=== '1'`). La captura del dueño con el modo apagado midió los atascos del
-    # camino viejo, y el 138 lo enciende por defecto: `/fluido` pasa a ser el interruptor de vuelta (guarda '0').
+def test_es_un_modo_de_prueba_apagado_por_defecto():
+    # El lote 138 lo encendió por defecto y el 139 lo devolvió aquí (en el iPhone iOS panea la página al abrir).
     kc = _front("src/utils/keyboardChoreography.js")
-    assert "return safeLocalStorageGet(CLAVE_COREOGRAFIA, null) !== '0';" in kc
+    assert "return safeLocalStorageGet(CLAVE_COREOGRAFIA, null) === '1';" in kc
     ap = _front("src/pages/AgentPage.jsx")
     assert "if (isNativeApp() && textToSend.trim().toLowerCase() === '/fluido') {" in ap
     assert "if (!isNativeApp() || !coreografiaEncendida() || !(msVigente > 0)) return false;" in ap
