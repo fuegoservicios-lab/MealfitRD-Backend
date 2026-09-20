@@ -266,7 +266,7 @@ _PROCESS_START_ISO = datetime.now(timezone.utc).isoformat()
 # [P1-PLAN-LOTE-76 · 2026-09-17] (frontend + coach) «Nuevo chat» bloqueado mientras el chat de hoy está abierto
 # (decisión del dueño: se renueva solo a medianoche) y el coach ofrece POR SU NOMBRE la comida que falta de ese
 # día tras registrar, o no pregunta (`comidas_sin_registrar`, SSOT en chat_history_context.py).
-_LAST_KNOWN_PFIX = "P1-PLAN-LOTE-134 · 2026-09-20"
+_LAST_KNOWN_PFIX = "P1-PLAN-LOTE-135 · 2026-09-20"
 
 # [P1-SENTRY-SAMPLE-COST · 2026-05-12] Sentry sampling driven from env vars
 # con default seguro 0.1 (10%). Pre-fix tenía `traces_sample_rate=1.0` y
@@ -1598,6 +1598,10 @@ async def lifespan(app: FastAPI):
         # [P1-PLAN-LOTE-133] con `id`: era el único cron sin nombre (no se podía consultar ni re-registrar sin duplicarlo)
         _add_job_jittered(scheduler, run_proactive_checks, "cron", minute=30,
                           id="proactive_meal_reminders", replace_existing=True)
+        # [P1-PLAN-LOTE-135] Avisos de hidratacion (11/15/19 h locales) y el apagado automatico a las 48 h sin un vaso.
+        from hydration_reminders import run_hydration_checks
+        _add_job_jittered(scheduler, run_hydration_checks, "cron", minute=32,
+                          id="hydration_reminders", replace_existing=True)
         # [P2-NEW-C · 2026-05-08] `background_rolling_refill` se movió al SSOT
         # `register_plan_chunk_scheduler` (cron_tasks.py) junto al resto del
         # chunk system. Ya no se registra acá.

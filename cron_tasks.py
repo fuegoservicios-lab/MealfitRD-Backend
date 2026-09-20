@@ -4448,6 +4448,30 @@ def _sweep_stale_emit_locks_kv() -> None:
 #   sweep único centralizado (vs N crons separados) reduce overhead +
 #   concentra la lista de prefixes para auditarla fácil.
 _KV_SWEEP_PREFIXES: list[dict] = [
+    # [P1-PLAN-LOTE-135 · 2026-09-20] Estado POR USUARIO de los avisos (hidratacion, canal local del telefono e
+    # invitacion semanal al plan). Se reescriben mientras el usuario esta activo; lo que lleva semanas sin tocarse es
+    # de alguien que ya no vuelve. La purga de la cuenta los borra ademas de forma explicita (db_profiles).
+    {
+        "prefix": "hydration_state:",
+        "knob": "MEALFIT_KV_TTL_HYDRATION_STATE_HOURS",
+        "default_h": 720,
+        "clamp": (72, 2160),
+        "owner": "hydration_reminders.py::_guardar_estado",
+    },
+    {
+        "prefix": "avisos_locales:",
+        "knob": "MEALFIT_KV_TTL_AVISOS_LOCALES_HOURS",
+        "default_h": 168,
+        "clamp": (72, 720),
+        "owner": "hydration_reminders.py::marcar_canal_local (alcance = 72 h)",
+    },
+    {
+        "prefix": "plan_invite:",
+        "knob": "MEALFIT_KV_TTL_PLAN_INVITE_HOURS",
+        "default_h": 720,
+        "clamp": (192, 2160),
+        "owner": "plan_invite.py::_guardar (la semana de la invitacion: nunca por debajo de 8 dias)",
+    },
     {
         "prefix": "title_gen_inflight:",
         "knob": "MEALFIT_KV_TTL_TITLE_GEN_INFLIGHT_HOURS",

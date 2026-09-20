@@ -57,7 +57,9 @@ def test_el_descarte_persiste():
     """[P1-PLAN-LOTE-98] Ya no hay enlace; lo que sigue es que el descarte se recuerda."""
     jsx = _front("src/components/dashboard/DashboardTracking.jsx")
     assert "_DISMISS_KEY = 'mealfit_turnon_card_dismissed'" in jsx
-    assert "safeLocalStorageSet(_DISMISS_KEY, '1')" in jsx
+    # [P1-PLAN-LOTE-135 · 2026-09-20] …una SEMANA y por USUARIO: el descarte lo guarda utils/planInvite.js (servidor +
+    # espejo local). El «1» eterno en el localStorage de cada dispositivo era justo por lo que la tarjeta volvía.
+    assert "anotarInvitacion(_DISMISS_KEY, userId, 'dismiss');" in jsx
 
 
 def test_marcador_y_documento():

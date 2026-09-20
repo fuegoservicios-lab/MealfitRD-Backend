@@ -133,6 +133,11 @@ async def api_set_water_tracker_enabled(
         f"[P3-WATER-TRACKER] user={verified_user_id} "
         f"water_tracker_enabled={body.water_tracker_enabled}"
     )
+    # [P1-PLAN-LOTE-135] Encenderla pone a cero la cuenta de avisos ignorados: sin esto, quien la reactiva tras un
+    # apagado automático la vería apagarse otra vez en el siguiente tick del cron.
+    if body.water_tracker_enabled:
+        import hydration_reminders
+        await asyncio.to_thread(hydration_reminders.al_encender, verified_user_id)
     return {"water_tracker_enabled": body.water_tracker_enabled}
 
 
@@ -198,3 +203,43 @@ async def api_get_ai_training_consent(
     profile = await asyncio.to_thread(get_user_profile, verified_user_id)
     consent = bool(profile.get("ai_training_consent")) if profile else False
     return {"ai_training_consent": consent}
+
+
+# [P1-PLAN-LOTE-135 · 2026-09-20] La invitación «¿Quieres que la IA te arme el plan?» del contador: una vez por SEMANA
+# y por USUARIO (el descarte vivía en el localStorage de cada dispositivo y volvía con cada binario o navegador nuevo).
+# Cero LLM; `get_verified_user_id` como el resto del router. Motor y regla: plan_invite.py.
+
+
+class PlanInviteBody(BaseModel):
+    action: str
+
+
+@router.get("/plan-invite")
+async def api_get_plan_invite(
+    verified_user_id: str = Depends(get_verified_user_id),
+):
+    if not verified_user_id:
+        raise HTTPException(status_code=401, detail="No autenticado.")
+    import plan_invite
+    try:
+        return await asyncio.to_thread(plan_invite.leer_invitacion, verified_user_id)
+    except Exception as e:
+        logger.warning(f"[P1-PLAN-LOTE-135] invitación al plan de {verified_user_id} no leída: {e}")
+        raise HTTPException(status_code=503, detail="No disponible.")
+
+
+@router.patch("/plan-invite")
+async def api_set_plan_invite(
+    body: PlanInviteBody = Body(...),
+    verified_user_id: str = Depends(get_verified_user_id),
+):
+    if not verified_user_id:
+        raise HTTPException(status_code=401, detail="No autenticado.")
+    if body.action not in ("seen", "dismiss"):
+        raise HTTPException(status_code=400, detail="`action` debe ser 'seen' o 'dismiss'.")
+    import plan_invite
+    try:
+        return await asyncio.to_thread(plan_invite.anotar, verified_user_id, body.action)
+    except Exception as e:
+        logger.warning(f"[P1-PLAN-LOTE-135] invitación al plan de {verified_user_id} no anotada: {e}")
+        raise HTTPException(status_code=503, detail="No disponible.")

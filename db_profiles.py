@@ -1248,6 +1248,11 @@ _USER_SCOPED_TABLES_USERID = (
 # Tablas cuya fila SOBREVIVE a la purga sin nada que la ate al usuario (ver bloque de arriba).
 _USER_SCOPED_TABLES_ANONYMIZE = ("llm_usage_events",)
 
+# [P1-PLAN-LOTE-135 · 2026-09-20] Estado por usuario que vive en `app_kv_store` con la clave `<prefijo><user_id>`
+# (no tiene columna user_id: la lista de tablas de arriba no lo ve). Tambien caduca por TTL (`_KV_SWEEP_PREFIXES`),
+# pero una cuenta borrada no espera al barrido.
+_USER_SCOPED_KV_PREFIXES = ("hydration_state:", "avisos_locales:", "plan_invite:")
+
 
 def _purge_visual_diary_storage(user_id: str) -> int:
     """Best-effort: borra los objetos del bucket `visual_diary_images/{user_id}/`.
@@ -1351,6 +1356,16 @@ def delete_account_data(user_id: str, include_profile: bool = True) -> Dict[str,
             result["anonymized"][tbl] = len(r) if isinstance(r, list) else 0
         except Exception as e:
             result["errors"].append(f"{tbl}: {e}")
+
+    # 3-ter. [P1-PLAN-LOTE-135] Estado por usuario en app_kv_store (avisos de agua, canal local, invitacion al plan).
+    try:
+        r = execute_sql_write(
+            "DELETE FROM app_kv_store WHERE key = ANY(%s) RETURNING key",
+            ([f"{pref}{user_id}" for pref in _USER_SCOPED_KV_PREFIXES],), returning=True,
+        )
+        result["deleted"]["app_kv_store"] = len(r) if isinstance(r, list) else 0
+    except Exception as e:
+        result["errors"].append(f"app_kv_store: {e}")
 
     # 4. Storage (best-effort, no transaccional con Postgres).
     result["storage_objects_removed"] = _purge_visual_diary_storage(user_id)

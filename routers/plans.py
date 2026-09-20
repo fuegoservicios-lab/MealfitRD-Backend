@@ -11654,6 +11654,16 @@ def api_get_water_intake(
         # water-tracker en el mount (reduce roundtrips y elimina race entre
         # los dos fetches).
         from db_profiles import get_water_tracker_enabled
+        _agua_encendida = get_water_tracker_enabled(verified_user_id)
+        # [P1-PLAN-LOTE-135] Si la hidratacion se apago SOLA (48 h de avisos sin un vaso), el dashboard lo dice una vez.
+        # Solo se mira con el interruptor apagado: el GET del contador no paga una lectura mas en el caso normal.
+        _auto_off_at = None
+        if not _agua_encendida:
+            try:
+                import hydration_reminders
+                _auto_off_at = hydration_reminders.apagado_automatico_de(verified_user_id)
+            except Exception:
+                _auto_off_at = None
         return {
             "success": True,
             "date": log_date,
@@ -11668,7 +11678,8 @@ def api_get_water_intake(
             # [P3-WATER-HALF-GLASS · 2026-06-24] Racha de días consecutivos
             # cumpliendo la meta (para el card rediseñado). Fail-open a 0.
             "streak": _compute_water_streak(verified_user_id, goal_meta["goal"], log_date),
-            "enabled": get_water_tracker_enabled(verified_user_id),
+            "enabled": _agua_encendida,
+            "auto_off_at": _auto_off_at,
             "updated_at": updated_at,
         }
     except HTTPException:

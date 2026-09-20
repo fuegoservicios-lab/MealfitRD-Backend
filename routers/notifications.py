@@ -146,7 +146,28 @@ async def unsubscribe_push(request: Request, user_id: str = Depends(_PUSH_UNSUBS
 _MEAL_REMINDERS_LIMITER = RateLimiter(max_calls=30, period_seconds=60)
 
 
-def _meal_reminders_sync(user_id: str) -> dict:
+def _agua_para_el_telefono(user_id: str, locale: str, hoy_local: str, schedule: str) -> dict:
+    """[P1-PLAN-LOTE-135] Los avisos de hidratacion que el telefono programa junto a los de comida. Fail-open a «sin
+    avisos»: el agua jamas tumba los recordatorios de comida."""
+    apagado = {"enabled": False, "reminders": []}
+    try:
+        import hydration_reminders as hr
+        from db import get_water_tracker_enabled, get_water_intake_glasses_today
+        if not hr._encendidos() or schedule in ("night_shift", "variable"):
+            return apagado
+        if not get_water_tracker_enabled(user_id):
+            return apagado
+        from routers.plans import _compute_water_goal
+        meta = int((_compute_water_goal(user_id) or {}).get("goal") or 8)
+        vasos = float(get_water_intake_glasses_today(user_id, hoy_local) or 0)
+        return {"enabled": True, "days": hr.DIAS_EN_EL_TELEFONO, "url": hr.RUTA, "glasses": vasos, "goal": meta,
+                "reminders": hr.horario_de_avisos_de_agua(locale, vasos, meta)}
+    except Exception as e:
+        logger.warning(f"[P1-PLAN-LOTE-135] avisos de agua de {user_id} no calculados: {e!r}")
+        return apagado
+
+
+def _meal_reminders_sync(user_id: str, canal: str = "") -> dict:
     from datetime import datetime, timedelta, timezone
     from db import get_user_profile, get_consumed_meals_today, user_tz_offset_min
     import meal_reminders
@@ -163,23 +184,30 @@ def _meal_reminders_sync(user_id: str) -> dict:
             "max_per_day": pa._max_avisos_por_dia()}
     # La misma puerta que el cron: con turno nocturno o rotativo las horas «de comida» no significan nada.
     schedule = str(health.get("scheduleType") or "standard")
+    hoy_local = (datetime.now(timezone.utc) - timedelta(minutes=tz_off)).strftime("%Y-%m-%d")
+    # [P1-PLAN-LOTE-135] El telefono que pide su horario es un canal VIVO: el cron de hidratacion solo cuenta avisos
+    # «ignorados» a quien alguno le llega (suscripcion push o esta marca, 72 h).
+    if canal == "local":
+        import hydration_reminders
+        hydration_reminders.marcar_canal_local(user_id)
+    base["water"] = _agua_para_el_telefono(user_id, locale, hoy_local, schedule)
     if schedule in ("night_shift", "variable"):
         return {**base, "enabled": False, "reason": "schedule", "reminders": []}
     if base["max_per_day"] <= 0:
         return {**base, "enabled": False, "reason": "disabled", "reminders": []}
-    hoy_local = (datetime.now(timezone.utc) - timedelta(minutes=tz_off)).strftime("%Y-%m-%d")
     consumed = get_consumed_meals_today(user_id, date_str=hoy_local, tz_offset_mins=tz_off) or []
     return {**base, "enabled": True, "reason": None, "local_date": hoy_local,
             "reminders": meal_reminders.horario_de_avisos(user_id, locale=locale, consumed_today=consumed)}
 
 
 @router.get("/meal-reminders")
-async def get_meal_reminders(user_id: str = Depends(_MEAL_REMINDERS_LIMITER)):
-    """A qué hora local toca recordar cada comida, qué dice el aviso y cuáles ya están registradas hoy."""
+async def get_meal_reminders(canal: str = "", user_id: str = Depends(_MEAL_REMINDERS_LIMITER)):
+    """A qué hora local toca recordar cada comida, qué dice el aviso y cuáles ya están registradas hoy. Desde el lote
+    135 trae también `water` (avisos de hidratación); `?canal=local` lo manda la app nativa al programarlos."""
     if not user_id:
         raise HTTPException(status_code=401, detail="User ID en token no válido.")
     try:
-        return await asyncio.to_thread(_meal_reminders_sync, user_id)
+        return await asyncio.to_thread(_meal_reminders_sync, user_id, "local" if canal == "local" else "")
     except Exception as e:
         logger.error(f"[P1-PLAN-LOTE-133] recordatorios de comida de {user_id}: {e}")
         raise HTTPException(status_code=500, detail="No se pudieron calcular los recordatorios")
