@@ -70,6 +70,15 @@ def test_la_caja_del_chat_es_simetrica():
     assert "margin-left: 2px;" in css, "el mismo margen al borde que ENVIAR (marginRight: 2px)"
 
 
+def test_con_foto_adjunta_la_caja_se_apila():
+    # El dueno, con una captura de referencia: el + abajo y el texto de acorde a la imagen. Con order + flex-wrap,
+    # sin mover el JSX (el input de fichero sigue dentro del span del +, donde iOS ancla su menu).
+    ap = _front("src/pages/AgentPage.jsx")
+    assert "const cajaApilada = attachments.length > 0;" in ap
+    assert "flexWrap: cajaApilada ? 'wrap' : 'nowrap'," in ap
+    assert "order: cajaApilada ? -1 : 0," in ap and "flex: cajaApilada ? '1 0 100%' : 1," in ap
+
+
 def test_marcador():
     m = re.search(r'_LAST_KNOWN_PFIX = "P1-PLAN-LOTE-(\d+) · 2026-', (_BACKEND / "app.py").read_text(encoding="utf-8"))
     assert m and int(m.group(1)) >= 127
