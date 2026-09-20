@@ -17,7 +17,7 @@ _PUSH_HTTP_TIMEOUT_S = _env_float(
     "MEALFIT_PUSH_HTTP_TIMEOUT_S", 10.0, validator=lambda v: 0 < v <= 120
 )
 
-def send_push_notification(user_id: str, title: str, body: str, url: str = "/dashboard") -> bool:
+def send_push_notification(user_id: str, title: str, body: str, url: str = "/dashboard", tag: str = None) -> bool:
     """
     Sends a web push notification to all subscribed devices for a given user.
     Returns True if at least one notification was attempted successfully.
@@ -89,11 +89,16 @@ def send_push_notification(user_id: str, title: str, body: str, url: str = "/das
         except Exception as _tr_err:  # noqa: BLE001
             logger.debug(f"[P1-I18N-PUSH-CRON-ESPANOL] traducción no aplicada ({_tr_err!r})")
 
-        push_payload = json.dumps({
+        _payload = {
             "title": title,
             "body": body,
             "url": url
-        })
+        }
+        # [P1-PLAN-LOTE-133 · 2026-09-20] Con `tag`, la notificación nueva SUSTITUYE a la anterior de la misma etiqueta
+        # en vez de apilarse (cuatro recordatorios de comida = cuatro notificaciones pegajosas que cerrar a mano).
+        if tag:
+            _payload["tag"] = str(tag)[:64]
+        push_payload = json.dumps(_payload)
 
         success_count = 0
         for sub_row in subs:

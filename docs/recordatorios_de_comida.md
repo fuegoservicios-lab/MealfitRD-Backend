@@ -60,8 +60,28 @@ Dos cierres, los dos en el código real que decide el disparo:
 - `get_avg_meal_hour` deja fuera todo registro anotado más de 18 h después de su `consumed_at` (un «ayer» resta días enteros): un registro de un día pasado no dice a qué hora se comió.
 - Horas de silencio: ningún recordatorio de comida antes de las 6:00 locales (`MEALFIT_PROACTIVE_QUIET_UNTIL_HOUR`, 6; 0 = sin silencio). Es una decisión: quien cena de verdad a las 23:30 ya no recibe el aviso de la 1:00 que `P3-AVG-MEAL-HOUR-CIRCULAR` quiso conservar; un push a la 1:00 es peor que ninguno, y el Resumen de las 23:00 cubre ese día.
 
+## Que el aviso LLEGUE a la pantalla (`P1-PLAN-LOTE-133` · 2026-09-20)
+
+El dueño, con la captura del interruptor «Alertas Inteligentes · BETA»: «revisa a profundidad el sistema de notificaciones… quiero que le avise al usuario si no ha desayunado, almorzado, merendado… 100 % listo para producción, y quítale ese beta».
+
+Medido en producción (solo lectura): el motor funciona —38 avisos en 5 días, a las 10:30 / 14:30 / 17:30 / 21:00— y `push_subscriptions` tiene UNA fila, cuyos envíos salen «exitosos» en el journal. La Web Push y sus llaves están bien: lo que fallaba era que casi nadie tenía CÓMO recibirlos. La app nativa de iOS es un WKWebView (sin Service Worker ni `PushManager`): ahí el interruptor daba «Tu navegador no soporta notificaciones Push».
+
+| Canal | Dónde | Quién lo manda |
+|---|---|---|
+| Web Push | navegador de escritorio, Android, PWA de iOS instalada | el servidor (`utils_push.send_push_notification`), al generar el aviso del chat |
+| Avisos locales | app nativa de iOS (`@capacitor/local-notifications`) | EL TELÉFONO: pide `GET /api/notifications/meal-reminders` y los programa para 7 días; salen con la app cerrada, sin APNs ni red, y el de hoy se cancela al registrar la comida (`mealfit:diary-changed`) |
+
+- **Una sola cuenta**: `proactive_agent.hora_de_aviso` (hora habitual + espera, `% 24`) la usan el cron y el endpoint. El aviso local va a `floor(hora)`:35 — cinco minutos después del tick del cron (a y media), para que al tocarlo el mensaje del coach ya esté en el chat. Un aviso dentro de las horas de silencio no se programa.
+- **Textos del aviso local y del aviso «fijo»**: `meal_reminders.py`, cortos (pantalla de bloqueo) y en los 5 idiomas.
+- **El interruptor es un consentimiento explícito**: fuera el `send_push = False` que apagaba la pantalla para siempre a los 5 avisos «ignorados». La tasa de respuesta cambia el TONO y la espera, nada más.
+- **«Respondió»** = contestó en el chat O registró una comida en la ventana tras el aviso (`_SQL_TASA_DE_RESPUESTA`); la ventana pasa de 60 min fijos a `MEALFIT_PROACTIVE_RESPONSE_WINDOW_MIN` (180). Cierra lo que aquí abajo figuraba como abierto desde el lote 72.
+- **Suscriptor sin chat reciente**: la lista del cron salía solo de `agent_sessions` (3 días). Quien encendió las alertas y dejó de abrir el chat entra ahora con `id = None`: aviso corto y fijo a su pantalla, sin LLM y sin escribir en un chat viejo; queda en `nudge_outcomes` (`nudge_style = 'fijo'`), así que el tope diario y el «no repetir» siguen valiendo.
+- **Etiqueta por comida** (`tag = comida-almuerzo`): la notificación nueva sustituye a la anterior en vez de apilarse; el Service Worker lleva la app ya abierta al chat en vez de abrir otra ventana.
+- **Cerrar sesión** borra la suscripción de ESE navegador (y cancela los avisos locales): antes los recordatorios del usuario A le llegaban al B que entrara después.
+- El cron tiene `id="proactive_meal_reminders"`.
+
+Lo que el interruptor NO hace, a sabiendas: apagar el mensaje del coach en el chat. «Recibe avisos en tu pantalla» habla de la pantalla; el recordatorio dentro del chat es parte de la conversación.
+
 ## Abierto
 
-- **Respuesta tardía**: `handle_nudge_response` solo enlaza la respuesta al aviso si llega en los 60 minutos siguientes.
-  El dueño contestó el del desayuno 2 h 27 min después y el aviso quedó como «no respondido», y la tasa de respuesta
-  decide el tono y si se manda push.
+- APNs (push remota en la app nativa) no está montada: haría falta la llave de Apple del dueño y el entitlement. Los avisos locales cubren el caso pedido sin ella. El plugin `@capacitor/push-notifications` sigue instalado y sin usar.

@@ -1595,7 +1595,9 @@ async def lifespan(app: FastAPI):
         # el spread (default 45s). CronTrigger acepta `jitter` igual que
         # IntervalTrigger.
         from cron_tasks import _add_job_jittered, register_plan_chunk_scheduler
-        _add_job_jittered(scheduler, run_proactive_checks, "cron", minute=30)
+        # [P1-PLAN-LOTE-133] con `id`: era el único cron sin nombre (no se podía consultar ni re-registrar sin duplicarlo)
+        _add_job_jittered(scheduler, run_proactive_checks, "cron", minute=30,
+                          id="proactive_meal_reminders", replace_existing=True)
         # [P2-NEW-C · 2026-05-08] `background_rolling_refill` se movió al SSOT
         # `register_plan_chunk_scheduler` (cron_tasks.py) junto al resto del
         # chunk system. Ya no se registra acá.

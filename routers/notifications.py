@@ -139,6 +139,52 @@ async def unsubscribe_push(request: Request, user_id: str = Depends(_PUSH_UNSUBS
         logger.error(f"Error borrando push subscription: {e}")
         raise HTTPException(status_code=500, detail="Error de BDD borrando suscripción")
 
+# [P1-PLAN-LOTE-133 · 2026-09-20] Los recordatorios de comida como DATO, para la app nativa de iOS: un WKWebView no
+# tiene Service Worker ni PushManager, así que la Web Push no existe ahí. La app programa estos avisos EN EL TELÉFONO
+# (notificaciones locales) a las mismas horas que el cron del chat — `proactive_agent.hora_de_aviso` es la cuenta de
+# los dos — y los cancela cuando la comida queda registrada. Cero LLM, solo lecturas: 30 por minuto por usuario.
+_MEAL_REMINDERS_LIMITER = RateLimiter(max_calls=30, period_seconds=60)
+
+
+def _meal_reminders_sync(user_id: str) -> dict:
+    from datetime import datetime, timedelta, timezone
+    from db import get_user_profile, get_consumed_meals_today, user_tz_offset_min
+    import meal_reminders
+    import proactive_agent as pa
+
+    profile = get_user_profile(user_id) or {}
+    health = profile.get("health_profile") or {}
+    locale = profile.get("locale") or "es-DO"
+    try:
+        tz_off = int(user_tz_offset_min(user_id))
+    except Exception:
+        tz_off = pa._proactive_tz_offset_min()
+    base = {"tz_offset_min": tz_off, "quiet_until_hour": pa._hora_de_silencio(), "url": "/dashboard/agent",
+            "max_per_day": pa._max_avisos_por_dia()}
+    # La misma puerta que el cron: con turno nocturno o rotativo las horas «de comida» no significan nada.
+    schedule = str(health.get("scheduleType") or "standard")
+    if schedule in ("night_shift", "variable"):
+        return {**base, "enabled": False, "reason": "schedule", "reminders": []}
+    if base["max_per_day"] <= 0:
+        return {**base, "enabled": False, "reason": "disabled", "reminders": []}
+    hoy_local = (datetime.now(timezone.utc) - timedelta(minutes=tz_off)).strftime("%Y-%m-%d")
+    consumed = get_consumed_meals_today(user_id, date_str=hoy_local, tz_offset_mins=tz_off) or []
+    return {**base, "enabled": True, "reason": None, "local_date": hoy_local,
+            "reminders": meal_reminders.horario_de_avisos(user_id, locale=locale, consumed_today=consumed)}
+
+
+@router.get("/meal-reminders")
+async def get_meal_reminders(user_id: str = Depends(_MEAL_REMINDERS_LIMITER)):
+    """A qué hora local toca recordar cada comida, qué dice el aviso y cuáles ya están registradas hoy."""
+    if not user_id:
+        raise HTTPException(status_code=401, detail="User ID en token no válido.")
+    try:
+        return await asyncio.to_thread(_meal_reminders_sync, user_id)
+    except Exception as e:
+        logger.error(f"[P1-PLAN-LOTE-133] recordatorios de comida de {user_id}: {e}")
+        raise HTTPException(status_code=500, detail="No se pudieron calcular los recordatorios")
+
+
 @router.get("/test")
 async def test_push_route(user_id: str, request: Request):
     """[P1-NOTIF-TEST-1 · 2026-05-11] Ruta de depuración admin-only para

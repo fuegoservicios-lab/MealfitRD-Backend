@@ -99,11 +99,68 @@ VERBO_DE_COMIDA = {
 }
 
 
+# [P1-PLAN-LOTE-133 · 2026-09-20] Las horas por defecto y la hora del aviso, fuera del bucle del cron: la app nativa
+# programa los MISMOS recordatorios en el teléfono (`GET /api/notifications/meal-reminders`) y dos copias de esta cuenta
+# habrían acabado avisando a horas distintas en el chat y en la pantalla.
+HORAS_POR_DEFECTO_DE_COMIDA = {"Desayuno": 9.0, "Almuerzo": 13.0, "Merienda": 16.0, "Cena": 19.5}
+
+
+def hora_de_aviso(user_id: str, meal: str, def_hour: float):
+    """`(nudge_hour, meal_rate, meal_total)`: la hora local (0..23,99) a la que toca recordar `meal`.
+
+    Hora habitual del usuario para esa comida (media circular de 14 días dentro de su franja; sin datos, la de por
+    defecto) + la espera: 1,5 h; 1,0 si suele responder a ese aviso (> 70 % con ≥ 3); 2,5 si suele ignorarlo (< 30 %)."""
+    from db_facts import get_avg_meal_hour
+    avg_hr = get_avg_meal_hour(user_id, meal, ventana=FRANJA_DE_COMIDA.get(meal))
+    if avg_hr is None:
+        avg_hr = def_hour
+
+    # GAP 3: Cadencia por comida
+    meal_rate, meal_total = get_nudge_response_rate(user_id, meal)
+    delay_hours = 1.5 # Default
+
+    if meal_total >= 3:
+        if meal_rate > 0.70:
+            delay_hours = 1.0 # Responde rápido y seguro, mandamos antes
+        elif meal_rate < 0.30:
+            delay_hours = 2.5 # Evitar presión, retrasamos el nudge
+
+    # Nudge dinámico ajustado según historial de adherencia específica.
+    #
+    # [P3-AVG-MEAL-HOUR-CIRCULAR · 2026-08-23] El `% 24` es LOAD-BEARING y va
+    # ANTES que el arreglo de la media, no después. `avg_hr` es una hora de
+    # reloj (0..23,99) y `delay_hours` llega hasta 2,5: la suma se sale del
+    # reloj en cuanto la comida es tardía. `current_hour_float` sólo vale
+    # 0..23, así que un `nudge_hour` de 24,0 NUNCA iguala a nada y el nudge
+    # de esa comida no se envía JAMÁS — silenciosamente, sin log ni error.
+    #
+    # Es un defecto con sesgo de país: una cena dominicana (~19:00) + 1,5 h
+    # cae en 20,5 y no se nota; una cena española (21:00-23:00, con picoteo)
+    # cae en 22,5-25,5 y se cae del reloj. Y ES PRERREQUISITO de la media
+    # circular: la media circular de [21,22,23,0] es ~22,5 (correcta), pero
+    # sumarle el delay sin `% 24` la empuja fuera del reloj más a menudo que
+    # la media aritmética rota, que tendía al centro del día. Arreglar la
+    # media sin arreglar esto EMPEORA el caso español.
+    #
+    # El nudge cruza la medianoche a propósito: si comes a las 23:30, el
+    # recordatorio de esa comida es a la 1:00 del día siguiente, no "nunca".
+    # tooltip-anchor: P3-AVG-MEAL-HOUR-CIRCULAR
+    nudge_hour = (avg_hr + delay_hours) % 24
+    return nudge_hour, meal_rate, meal_total
+
+
 def _max_avisos_por_dia() -> int:
     """[P1-PLAN-LOTE-72] Tope anti-fatiga de recordatorios por día. Era un `2` fijo, y con cuatro comidas dos
     avisos dejaban sin recordatorio a la merienda y la cena. El dueño lo subió a 4 (16-sep): uno por comida. El
     Resumen de las 23:00 comparte el tope, así que a quien no registró nada y ya recibió los cuatro no le llega."""
     return _env_int("MEALFIT_PROACTIVE_MAX_NUDGES_PER_DAY", 4, validator=lambda v: 0 <= v <= 8)
+
+
+def _ventana_de_respuesta_min() -> int:
+    """[P1-PLAN-LOTE-133 · 2026-09-20] Minutos durante los que un mensaje del usuario cuenta como RESPUESTA al último
+    aviso. Eran 60 fijos: el dueño contestó el del desayuno a las 2 h 27 min y quedó como «ignorado» (abierto desde el
+    lote 72). Nadie contesta una notificación en menos de una hora por obligación."""
+    return _env_int("MEALFIT_PROACTIVE_RESPONSE_WINDOW_MIN", 180, validator=lambda v: 15 <= v <= 720)
 
 
 def _horas_de_reintento() -> int:
@@ -207,7 +264,23 @@ def get_active_users_for_proactive() -> list:
             "ORDER BY user_id, created_at DESC"
         )
         res = execute_sql_query(query, fetch_all=True)
-        return res if res else []
+        res = list(res) if res else []
+        # [P1-PLAN-LOTE-133 · 2026-09-20] Quien encendió «Alertas Inteligentes» y lleva más de 3 días sin abrir el chat
+        # es justo a quien más falta le hace el recordatorio, y aquí dejaba de existir: la lista salía solo de
+        # `agent_sessions`. Entra con `id = None`: recibe el aviso corto en su pantalla, sin LLM y sin escribir un
+        # mensaje en un chat viejo que nadie va a abrir.
+        try:
+            _con_chat = {str(r.get("user_id")) for r in res}
+            _subs = execute_sql_query("SELECT DISTINCT user_id FROM push_subscriptions WHERE user_id IS NOT NULL",
+                                      fetch_all=True) or []
+            for _r in _subs:
+                _uid = str(_r.get("user_id"))
+                if _uid and _uid not in _con_chat:
+                    res.append({"id": None, "user_id": _uid})
+                    _con_chat.add(_uid)
+        except Exception as _e_subs:
+            logger.warning(f"[P1-PLAN-LOTE-133] suscriptores sin chat reciente no leídos: {_e_subs}")
+        return res
     except Exception as e:
         logger.error(f"Error fetching active sessions for proactive check: {e}")
         return []
@@ -262,12 +335,24 @@ def log_nudge_outcome(user_id, nudge_type, context_embedding=None, context_summa
     except Exception as e:
         logger.error(f"Error logging nudge outcome: {e}")
 
+# [P1-PLAN-LOTE-133 · 2026-09-20] «Respondió» = contestó en el chat O registró una comida en la ventana tras el aviso.
+# Solo contaba lo primero: quien toca la notificación y anota su almuerzo desde el Dashboard —lo que el aviso PIDE—
+# figuraba como que lo ignoró, y esa tasa decide el tono («has estado ignorando…») y la espera del siguiente aviso.
+_SQL_TASA_DE_RESPUESTA = (
+    "SELECT COUNT(*) as total, SUM(CASE WHEN n.responded OR EXISTS ("
+    "SELECT 1 FROM consumed_meals c WHERE c.user_id::text = n.user_id::text AND c.created_at >= n.sent_at "
+    "AND c.created_at < n.sent_at + make_interval(mins => %s)) THEN 1 ELSE 0 END) as responded_count "
+    "FROM nudge_outcomes n WHERE n.user_id = %s"
+)
+
+
 def get_nudge_response_rate(user_id: str, nudge_type: str = None):
     try:
         if nudge_type:
-            res = execute_sql_query("SELECT COUNT(*) as total, SUM(CASE WHEN responded THEN 1 ELSE 0 END) as responded_count FROM nudge_outcomes WHERE user_id = %s AND nudge_type = %s", (user_id, nudge_type), fetch_one=True)
+            res = execute_sql_query(_SQL_TASA_DE_RESPUESTA + " AND n.nudge_type = %s",
+                                    (_ventana_de_respuesta_min(), user_id, nudge_type), fetch_one=True)
         else:
-            res = execute_sql_query("SELECT COUNT(*) as total, SUM(CASE WHEN responded THEN 1 ELSE 0 END) as responded_count FROM nudge_outcomes WHERE user_id = %s", (user_id,), fetch_one=True)
+            res = execute_sql_query(_SQL_TASA_DE_RESPUESTA, (_ventana_de_respuesta_min(), user_id), fetch_one=True)
             
         if res and res.get("total", 0) > 0:
             return float(res["responded_count"] or 0) / res["total"], res["total"]
@@ -348,8 +433,9 @@ Devuelve ÚNICAMENTE un JSON válido con las claves "sentiment", "meal_logged" y
 def handle_nudge_response(user_id: str, content: str):
     try:
         pending = execute_sql_query(
-            "SELECT id, nudge_type FROM nudge_outcomes WHERE user_id = %s AND responded = false AND sent_at >= NOW() - INTERVAL '60 minutes' LIMIT 1",
-            (user_id,), fetch_one=True
+            "SELECT id, nudge_type FROM nudge_outcomes WHERE user_id = %s AND responded = false "
+            "AND sent_at >= NOW() - make_interval(mins => %s) ORDER BY sent_at DESC LIMIT 1",
+            (user_id, _ventana_de_respuesta_min()), fetch_one=True
         )
         if pending:
             nudge_id = pending['id']
@@ -439,7 +525,7 @@ def run_proactive_checks():
                 f"alcanzado; abortando resto del tick."
             )
             break
-        session_id = str(s.get("id"))
+        session_id = str(s.get("id")) if s.get("id") else None   # [P1-PLAN-LOTE-133] None = suscriptor sin chat reciente
         user_id = str(s.get("user_id"))
         # [P1-NUDGE-TZ-PER-USER · 2026-08-21] El reloj, DENTRO del bucle. `user_tz_offset_min` ya
         # estaba importado en este mismo archivo y se usaba 100 líneas más arriba: la maquinaria
@@ -467,7 +553,11 @@ def run_proactive_checks():
         if global_total >= 5:
             if global_rate < 0.20:
                 logger.info(f"📉 [CRON] Usuario {user_id} tiene response rate muy bajo ({global_rate:.0%}). Cambiando a tono empático.")
-                send_push = False
+                # [P1-PLAN-LOTE-133 · 2026-09-20] Aquí había `send_push = False`: con 5 avisos «ignorados» el usuario
+                # dejaba de recibir la notificación PARA SIEMPRE, sin señal en la interfaz y con el interruptor
+                # encendido. Y «ignorado» se mide con respuestas en el chat dentro de una ventana corta: quien toca la
+                # notificación y registra su comida desde el Dashboard cuenta como que ignoró. El interruptor es un
+                # consentimiento explícito: la tasa cambia el TONO, no apaga la pantalla. Se apaga en Configuración.
                 base_tone_instruction = "El usuario ha estado ignorando notificaciones recientemente. Usa un tono empático, pregúntale si hay algún obstáculo, estrés o falta de tiempo que le impida registrar sus comidas. NO asumas que se le olvidó, asume que podría estar ocupado o desmotivado. Sé muy breve y sin presiones."
             elif global_rate > 0.70:
                 logger.info(f"🌟 [CRON] Usuario {user_id} tiene response rate alto ({global_rate:.0%}). Usando tono de refuerzo positivo.")
@@ -484,7 +574,6 @@ def run_proactive_checks():
             meal_to_check = "Resumen del día"
             trigger_time_str = "11:00 PM"
         else:
-            from db_facts import get_avg_meal_hour
             import math
 
             # [P1-PLAN-LOTE-83] Horas de silencio: de madrugada no se recuerda ninguna comida.
@@ -505,41 +594,8 @@ def run_proactive_checks():
             _avisadas = _comidas_avisadas_hoy(user_id)
 
             for _orden, (meal, def_hour) in enumerate(defaults.items()):
-                avg_hr = get_avg_meal_hour(user_id, meal, ventana=FRANJA_DE_COMIDA.get(meal))
-                if avg_hr is None:
-                    avg_hr = def_hour
-                
-                # GAP 3: Cadencia por comida
-                meal_rate, meal_total = get_nudge_response_rate(user_id, meal)
-                delay_hours = 1.5 # Default
-                
-                if meal_total >= 3:
-                    if meal_rate > 0.70:
-                        delay_hours = 1.0 # Responde rápido y seguro, mandamos antes
-                    elif meal_rate < 0.30:
-                        delay_hours = 2.5 # Evitar presión, retrasamos el nudge
-                        
-                # Nudge dinámico ajustado según historial de adherencia específica.
-                #
-                # [P3-AVG-MEAL-HOUR-CIRCULAR · 2026-08-23] El `% 24` es LOAD-BEARING y va
-                # ANTES que el arreglo de la media, no después. `avg_hr` es una hora de
-                # reloj (0..23,99) y `delay_hours` llega hasta 2,5: la suma se sale del
-                # reloj en cuanto la comida es tardía. `current_hour_float` sólo vale
-                # 0..23, así que un `nudge_hour` de 24,0 NUNCA iguala a nada y el nudge
-                # de esa comida no se envía JAMÁS — silenciosamente, sin log ni error.
-                #
-                # Es un defecto con sesgo de país: una cena dominicana (~19:00) + 1,5 h
-                # cae en 20,5 y no se nota; una cena española (21:00-23:00, con picoteo)
-                # cae en 22,5-25,5 y se cae del reloj. Y ES PRERREQUISITO de la media
-                # circular: la media circular de [21,22,23,0] es ~22,5 (correcta), pero
-                # sumarle el delay sin `% 24` la empuja fuera del reloj más a menudo que
-                # la media aritmética rota, que tendía al centro del día. Arreglar la
-                # media sin arreglar esto EMPEORA el caso español.
-                #
-                # El nudge cruza la medianoche a propósito: si comes a las 23:30, el
-                # recordatorio de esa comida es a la 1:00 del día siguiente, no "nunca".
-                # tooltip-anchor: P3-AVG-MEAL-HOUR-CIRCULAR
-                nudge_hour = (avg_hr + delay_hours) % 24
+                # [P1-PLAN-LOTE-133] la cuenta vive en `hora_de_aviso`: el teléfono programa los mismos recordatorios
+                (nudge_hour, meal_rate, meal_total) = hora_de_aviso(user_id, meal, def_hour)
 
                 # [P1-PLAN-LOTE-72 · 2026-09-16] Antes el aviso tocaba SOLO en la hora exacta y el bucle se quedaba con
                 # la PRIMERA comida que coincidía: si esa ya estaba registrada, el `continue` de más abajo saltaba la
@@ -585,7 +641,7 @@ def run_proactive_checks():
         try:
             # Regla Anti-Spam: Solo bloquear si ya enviamos un mensaje PROACTIVO (model) en la última hora.
             # Los mensajes del usuario NO bloquean recordatorios — chatear no impide recibir nudges.
-            recent = get_recent_messages(session_id, limit=5)
+            recent = get_recent_messages(session_id, limit=5) if session_id else None
             spam_blocked = False
             if recent:
                 for msg in recent:
@@ -747,6 +803,17 @@ No uses demasiados emojis. Sé directo, breve y empático.
                 # "Resumen del día" arriba — ver esa nota para el contrato completo.
                 prompt += build_language_directive(_nudge_locale)
                 
+            if not session_id:
+                # [P1-PLAN-LOTE-133] Sin chat reciente: el aviso corto y fijo en su idioma, directo a la pantalla.
+                from utils_push import send_push_notification
+                from meal_reminders import texto_del_aviso, etiqueta_del_aviso
+                _t_fijo, _b_fijo = texto_del_aviso(meal_to_check, _nudge_locale)
+                log_nudge_outcome(user_id, meal_to_check, nudge_content=_b_fijo, nudge_style="fijo")
+                send_push_notification(user_id=user_id, title=_t_fijo, body=_b_fijo, url="/dashboard/agent",
+                                       tag=etiqueta_del_aviso(meal_to_check))
+                logger.info(f"✅ [CRON] Aviso fijo de {meal_to_check} a {user_id} (suscriptor sin chat reciente)")
+                continue
+
             chat_llm = ChatGLM(
                 model=_proactive_model_name(),
                 temperature=0.8,
@@ -787,7 +854,8 @@ No uses demasiados emojis. Sé directo, breve y empático.
                         user_id=user_id,
                         title=push_nudge_title(_nudge_locale),
                         body=content,
-                        url=f"/dashboard/agent?session_id={session_id}"
+                        url=f"/dashboard/agent?session_id={session_id}",
+                        tag=f"comida-{str(meal_to_check).lower().split()[0]}",   # [P1-PLAN-LOTE-133]
                     )
                 
         except Exception as e:
