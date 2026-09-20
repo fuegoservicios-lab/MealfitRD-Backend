@@ -235,7 +235,7 @@ leen `meal_plans`; `/api/nutrition/targets` falla cerrado (`ok:false`), nunca 50
 **Abierto a sabiendas:** pausar re-estampa TODOS los planes y eso sube su `revision` ⇒ el barrido de `plan_jobs` puede
 traducir planes históricos de un usuario no hispano (gasto único y acotado; el sello global es load-bearing: varios crons se
 apagan por lista blanca de estados, no por `plan_mode`); `/swap-meal`, `/regenerate-day` y `/recipe/expand` no miran el modo
-(solo alcanzables por URL directa a Recetas, que el cliente ahora redirige en contador).
+(sin camino de UI en modo contador: la nav oculta Recetas y el cliente ahora redirige esa ruta).
 
 La mitad del CLIENTE del lote (rutas directas, Historial, chips del Agente, campana, interruptor sin plan, espejo del modo)
 vive en el repo del frontend: `frontend/src/__tests__/lote137.test.jsx`. Tests del servidor: `backend/tests/test_p1_plan_lote_137.py`.
