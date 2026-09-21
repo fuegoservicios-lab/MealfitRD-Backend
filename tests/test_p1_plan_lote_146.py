@@ -1,5 +1,5 @@
 # -*- coding: utf-8 -*-
-"""[P1-PLAN-LOTE-146 · 2026-09-20] «Continuar con Apple» NATIVO — la parte del backend, APAGADA por knob.
+"""[P1-PLAN-LOTE-146 · 2026-09-20] «Continuar con Apple» NATIVO — la parte del backend (interruptor de emergencia por knob).
 
 El dueño preguntó por qué el iPhone no ofrece Google: el OAuth por redirección no vuelve a la app, y Apple (4.8)
 exige su propio botón si se ofrece Google. Neon Auth no tiene Apple como proveedor ⇒ flujo nativo: el binario pide
@@ -18,9 +18,9 @@ def _src(rel: str) -> str:
     return (_BACKEND / rel).read_text(encoding="utf-8").replace("\r\n", "\n")
 
 
-def test_el_algoritmo_es_fijo_y_el_login_nace_apagado():
+def test_el_algoritmo_es_fijo_y_hay_interruptor_de_emergencia():
     v = _src("apple_auth.py")
-    assert 'algorithms=["RS256"]' in v and 'return _env_bool("MEALFIT_APPLE_SIGNIN", False)' in v
+    assert 'algorithms=["RS256"]' in v and 'return _env_bool("MEALFIT_APPLE_SIGNIN", True)' in v
     assert "hmac.compare_digest" in v, "el nonce se compara en tiempo constante"
 
 

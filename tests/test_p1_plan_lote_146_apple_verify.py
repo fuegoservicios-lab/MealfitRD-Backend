@@ -90,6 +90,8 @@ def test_correo_oculto_y_correo_sin_verificar(firma):
     assert sin_correo["email"] is None and sin_correo["email_verified"] is False
 
 
-def test_apagado_por_defecto(monkeypatch):
+def test_encendido_por_defecto_con_interruptor_de_emergencia(monkeypatch):
     monkeypatch.delenv("MEALFIT_APPLE_SIGNIN", raising=False)
+    assert apple_auth.apple_signin_enabled() is True
+    monkeypatch.setenv("MEALFIT_APPLE_SIGNIN", "false")
     assert apple_auth.apple_signin_enabled() is False

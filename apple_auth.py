@@ -16,8 +16,9 @@ Contrato (fail-secure, simétrico a `neon_auth.verify_neon_jwt` y a P0-AUDIT-1):
   * cualquier duda → `None`. NUNCA se devuelve un claim sin verificar.
 
 Cero secretos: Sign in with Apple nativo no usa client secret ni `.p8` (eso es del flujo web).
-Apagado por defecto: `MEALFIT_APPLE_SIGNIN` (el botón solo tiene sentido con el build que trae el
-puente nativo y la capacidad firmada)."""
+Encendido por defecto; `MEALFIT_APPLE_SIGNIN=false` es el INTERRUPTOR DE EMERGENCIA (sin redeploy). No nace
+apagado porque encenderlo sería tocar el `.env` del VPS —cosa del dueño— y no añade riesgo: un token con
+nuestro `aud` solo lo puede obtener nuestro binario firmado, y el botón no existe en binarios sin el plugin."""
 from __future__ import annotations
 
 import hashlib
@@ -46,7 +47,7 @@ _jwks_cache: dict = {"keys": None, "fetched_at": 0.0, "last_fail_at": 0.0}
 
 
 def apple_signin_enabled() -> bool:
-    return _env_bool("MEALFIT_APPLE_SIGNIN", False)
+    return _env_bool("MEALFIT_APPLE_SIGNIN", True)
 
 
 def _audiences() -> list:

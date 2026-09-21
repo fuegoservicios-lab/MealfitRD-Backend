@@ -12,7 +12,7 @@ verificado por esta cookie.
   GET  /api/auth/me       — cookie/Bearer → {user_id} + re-issue deslizante (cap absoluto).
   POST /api/auth/logout   — borra la cookie.
   POST /api/auth/apple/native — [P1-PLAN-LOTE-146] identity token de Sign in with Apple NATIVO
-      (verificado aquí contra el JWKS de Apple) → sesión first-party. Apagado por knob.
+      (verificado aquí contra el JWKS de Apple) → sesión first-party. Knob de emergencia.
   POST /api/auth/email-otp/verify — [P1-OTP-FIRST-PARTY · 2026-07-03] verifica el código
       OTP contra Neon Auth SERVER-SIDE y emite la sesión first-party directo.
 """
@@ -325,7 +325,7 @@ async def apple_native_sign_in(
     `name` es lo único no verificado que se acepta (Apple solo lo entrega al cliente, y solo la primera
     vez): se usa como nombre visible de una cuenta NUEVA, nunca para decidir identidad.
 
-    Apagado por defecto (`MEALFIT_APPLE_SIGNIN`): 404, como si no existiera.
+    Interruptor de emergencia `MEALFIT_APPLE_SIGNIN=false`: 404, como si no existiera.
     Fail-secure: token inválido → 401 sin cookie. tooltip-anchor: P1-PLAN-LOTE-146-ENDPOINT"""
     from apple_auth import apple_signin_enabled, verify_apple_identity_token
     from apple_identity import AppleIdentityError, resolve_apple_user
