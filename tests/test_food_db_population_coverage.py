@@ -86,11 +86,24 @@ def _neon_conn():
     url = os.environ.get("NEON_DATABASE_URL_POOLED") or os.environ.get("NEON_DATABASE_URL")
     if not url:
         return None
-    try:
-        import psycopg
-        return psycopg.connect(url, connect_timeout=8)
-    except Exception:
-        return None
+    # [P1-PLAN-LOTE-146 · 2026-09-20] `connect_timeout` NO cubre un arranque de sesión que se queda a medias:
+    # dos gates de la misma noche murieron aquí (15 min colgado en `_connect_gen`, con TCP a Neon sano y
+    # producción respondiendo) hasta que pytest-timeout mató al worker entero. La conexión se abre en un
+    # hilo con plazo DURO: si no vuelve, este test de integración se salta, como ya hacía sin red.
+    import threading
+    caja = {}
+
+    def _abrir():
+        try:
+            import psycopg
+            caja["conn"] = psycopg.connect(url, connect_timeout=8)
+        except Exception:
+            pass
+
+    hilo = threading.Thread(target=_abrir, daemon=True)
+    hilo.start()
+    hilo.join(25)
+    return caja.get("conn")
 
 
 def test_db_coverage_and_atwater_consistency():
