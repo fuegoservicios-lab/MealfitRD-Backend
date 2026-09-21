@@ -53,6 +53,32 @@ def test_micros_en_espera_es_una_fila():
     assert "border-style: dashed;" in css[k:css.index("}", k)]
 
 
+def test_los_controles_con_estilo_en_linea_responden_al_raton():
+    """«hay muchos botones que deben tener su sombreado o algo cuando le pasan el mouse por encima» — un `style={{}}`
+    no admite :hover; el control declara `data-hover` y la respuesta vive en index.css, solo con puntero fino."""
+    css = _front("src/index.css")
+    k = css.index("[P1-PLAN-LOTE-144 · 2026-09-20] Respuesta al ratón")
+    regla = css[k:]
+    assert "@media (hover: hover) and (pointer: fine) {" in regla
+    for tipo in ("boton", "fila", "icono"):
+        assert f'[data-hover="{tipo}"]:not(:disabled):hover {{' in regla, tipo
+    assert re.search(r'data-hover="fila"\s+onClick=\{\(\) => setShowDespensaDropdown', _front("src/pages/Dashboard.jsx"))
+    assert re.search(r'disabled=\{isExportingData\}\s+data-hover="boton"', _front("src/pages/Settings.jsx"))
+
+
+def test_la_demo_del_login_y_la_ilustracion_del_movil():
+    """«mejora el diseño de esto radicalmente, y anima el de móviles»."""
+    demo = _front("src/components/auth/PlanShowcase.jsx")
+    for ident in ("mfRingP", "mfRingC", "mfRingG"):
+        assert f'id="{ident}"' in demo, ident
+    assert "reduced.current" not in demo, "reduce-motion volvió a leerse de un ref que ya no existe"
+    illu = _front("src/components/auth/HeroIllustration.jsx")
+    assert "{!reduced && GOTAS.map(" in illu, "las gotas (SMIL) no se apagan con un media query: no se montan"
+    css = _front("src/pages/Login.css")
+    assert ".mf-illu-linea, .mf-illu-bol, .mf-illu-tallo { stroke-dasharray: 1; stroke-dashoffset: 0; }" in css, (
+        "el estado BASE de la ilustración debe ser el final: sin animación tiene que verse entera")
+
+
 def test_marcador():
     m = re.search(r'_LAST_KNOWN_PFIX = "P1-PLAN-LOTE-(\d+) · 2026-', (_BACKEND / "app.py").read_text(encoding="utf-8"))
     assert m and int(m.group(1)) >= 144
