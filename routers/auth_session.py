@@ -11,6 +11,8 @@ verificado por esta cookie.
   POST /api/auth/session  — Bearer Neon válido → emite/renueva la cookie (iat fresco).
   GET  /api/auth/me       — cookie/Bearer → {user_id} + re-issue deslizante (cap absoluto).
   POST /api/auth/logout   — borra la cookie.
+  POST /api/auth/apple/native — [P1-PLAN-LOTE-146] identity token de Sign in with Apple NATIVO
+      (verificado aquí contra el JWKS de Apple) → sesión first-party. Apagado por knob.
   POST /api/auth/email-otp/verify — [P1-OTP-FIRST-PARTY · 2026-07-03] verifica el código
       OTP contra Neon Auth SERVER-SIDE y emite la sesión first-party directo.
 """
@@ -20,6 +22,7 @@ from typing import Optional
 
 import httpx
 from fastapi import APIRouter, Body, Depends, Response, Cookie, Header
+from fastapi.responses import JSONResponse
 
 # [P1-OTP-FIRST-PARTY / P1-OAUTH-FIRST-PARTY · 2026-07-03] La fila espejo de
 # `user_profiles` se creaba SOLO en el path Bearer de auth.py — un usuario NUEVO
@@ -286,6 +289,84 @@ async def oauth_adopt(
         "token": token,
         "form_key": derive_form_key(uid),
         "session_cookie": True,
+    }
+
+
+# [P1-PLAN-LOTE-146 · 2026-09-20] Sign in with Apple NATIVO. Mismo perfil de throttle que el OTP:
+# cada llamada es un intento de login (y una verificación de firma RSA en el threadpool).
+_APPLE_NATIVE_LIMITER = RateLimiter(max_calls=10, period_seconds=60)
+
+# código estable de `apple_identity.AppleIdentityError` → HTTP
+_APPLE_ERROR_STATUS = {
+    "apple_token_invalid": 401,
+    "apple_no_email": 409,
+    "apple_email_unverified": 409,
+    "account_banned": 403,
+    "apple_signup_failed": 503,
+}
+
+
+@router.post("/apple/native")
+async def apple_native_sign_in(
+    response: Response,
+    data: dict = Body(...),
+    _rl: object = Depends(_APPLE_NATIVE_LIMITER),
+):
+    """[P1-PLAN-LOTE-146 · 2026-09-20] «Continuar con Apple» en la app de iOS.
+
+    Neon Auth no ofrece Apple como proveedor y el OAuth por redirección no vuelve a la app nativa
+    (`P1-IOS-OAUTH-GATE`), así que el binario pide la credencial con el SDK de Apple y manda aquí su
+    identity token + el nonce crudo. QUE DECIDA EL SERVIDOR (la lección de P1-OAUTH-CHALLENGE-COOKIE):
+    no se confía en nada del cliente salvo un JWT que podamos verificar — firma RS256 contra el JWKS de
+    Apple, `aud` = nuestro bundle, nonce y frescura (`apple_auth`). Con la identidad verificada,
+    `apple_identity` la resuelve a un usuario de `neon_auth` (enlazado, por correo verificado, o nuevo)
+    y se emite la MISMA sesión first-party que el OTP.
+
+    `name` es lo único no verificado que se acepta (Apple solo lo entrega al cliente, y solo la primera
+    vez): se usa como nombre visible de una cuenta NUEVA, nunca para decidir identidad.
+
+    Apagado por defecto (`MEALFIT_APPLE_SIGNIN`): 404, como si no existiera.
+    Fail-secure: token inválido → 401 sin cookie. tooltip-anchor: P1-PLAN-LOTE-146-ENDPOINT"""
+    from apple_auth import apple_signin_enabled, verify_apple_identity_token
+    from apple_identity import AppleIdentityError, resolve_apple_user
+
+    if not apple_signin_enabled():
+        return Response(status_code=404)
+    token = str((data or {}).get("identity_token") or "").strip()
+    nonce = str((data or {}).get("nonce") or "").strip()
+    if not token or not nonce:
+        return Response(status_code=401)
+    if not session_cookies_enabled():
+        logger.error("[P1-PLAN-LOTE-146] session_cookies deshabilitadas — el login con Apple requiere la feature.")
+        return Response(status_code=503)
+    identidad = await asyncio.to_thread(verify_apple_identity_token, token, nonce)
+    if not identidad:
+        return Response(status_code=401)
+    try:
+        usuario = await asyncio.to_thread(resolve_apple_user, identidad, (data or {}).get("name"))
+    except AppleIdentityError as e:
+        logger.info(f"[P1-PLAN-LOTE-146] Apple no resolvió a un usuario: {e.code}")
+        return JSONResponse(status_code=_APPLE_ERROR_STATUS.get(e.code, 401), content={"ok": False, "error_code": e.code})
+    except Exception as e:
+        logger.error(f"[P1-PLAN-LOTE-146] resolve_apple_user lanzó {type(e).__name__}: {e}")
+        return Response(status_code=503)
+    uid = usuario["user_id"]
+    try:
+        await asyncio.to_thread(ensure_user_profile_exists, uid, usuario.get("email"), usuario.get("name"))
+    except Exception as _ens_e:
+        logger.warning(f"[P1-PLAN-LOTE-146] ensure_user_profile_exists lanzó {type(_ens_e).__name__} (auth continúa)")
+    sesion = set_session_cookie(response, uid)
+    if not sesion:
+        return Response(status_code=503)
+    logger.info(f"🔐 [P1-PLAN-LOTE-146] Apple nativo → sesión first-party (uid={uid[:8]}…, nueva={usuario['created']}).")
+    return {
+        "ok": True,
+        "user_id": uid,
+        "email": usuario.get("email"),
+        "token": sesion,
+        "form_key": derive_form_key(uid),
+        "session_cookie": True,
+        "created": bool(usuario["created"]),
     }
 
 
