@@ -266,7 +266,7 @@ _PROCESS_START_ISO = datetime.now(timezone.utc).isoformat()
 # [P1-PLAN-LOTE-76 · 2026-09-17] (frontend + coach) «Nuevo chat» bloqueado mientras el chat de hoy está abierto
 # (decisión del dueño: se renueva solo a medianoche) y el coach ofrece POR SU NOMBRE la comida que falta de ese
 # día tras registrar, o no pregunta (`comidas_sin_registrar`, SSOT en chat_history_context.py).
-_LAST_KNOWN_PFIX = "P1-PLAN-LOTE-151 · 2026-09-21"
+_LAST_KNOWN_PFIX = "P1-PLAN-LOTE-152 · 2026-09-21"
 
 # [P1-SENTRY-SAMPLE-COST · 2026-05-12] Sentry sampling driven from env vars
 # con default seguro 0.1 (10%). Pre-fix tenía `traces_sample_rate=1.0` y
@@ -2507,8 +2507,17 @@ app.add_middleware(
         # App Store) vive en este origen y llama a app.bioboros.com: es la
         # PRIMERA vez que esta lista deja de ser inerte. Sin la entrada, toda
         # fetch de la app muere en el preflight (medido con TestClient:
-        # «Disallowed CORS origin»). Android sería https://localhost.
+        # «Disallowed CORS origin»).
         "capacitor://localhost",
+        # [P1-PLAN-LOTE-152 · 2026-09-21] …y el de Android, que aquel comentario ya
+        # anticipaba («Android sería https://localhost») y nadie añadió: no existía
+        # binario de Android que lo necesitara. Ahora sí. El WebView de Android sirve
+        # la app desde `https://localhost` (`androidScheme: 'https'`, fijado EXPLÍCITO
+        # en capacitor.config.ts para que no se mueva con una versión de Capacitor),
+        # y sin esta línea la app de Android arranca y muere en la primera llamada:
+        # login, diario, avisos, todo. No es `http://localhost`, que abriría la lista
+        # a cualquier servidor local en el puerto 80.
+        "https://localhost",
     ], # Dominios de producción (servidos por nginx en el VPS Oracle) + app nativa
     allow_credentials=True,
     allow_methods=["GET", "POST", "PUT", "PATCH", "DELETE", "OPTIONS"],
