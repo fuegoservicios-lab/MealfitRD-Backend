@@ -30,11 +30,14 @@ def test_a_las_2_30_de_la_madrugada_no_se_pregunta_por_la_cena(dia):
 
 
 def test_la_cena_de_verdad_se_sigue_recordando_por_la_noche(dia):
-    # 01:30 UTC del 18 = 21:30 en RD; cena habitual a las 19:40 → aviso a las 21:10 → toca en este tick
+    # 01:30 UTC del 18 = 21:30 en RD; cena habitual a las 19:37 → aviso a las 19:22 → sigue tocando en este tick por
+    # la ventana de reintento de 3 h. [P1-PLAN-LOTE-150] Antes la hora era 21:07 (la habitual + 1,5 h); ahora el aviso
+    # se ADELANTA 15 min. Lo que este test protege no cambia: la cena de verdad se recuerda de noche, y el silencio
+    # de madrugada del lote 83 no se la come.
     dia.update(ahora=_utc(18, 1), registros={"Cena": ["19:40", "19:35"]}, comidas=[], avisos_hoy=[], mensajes=[])
     dia["correr"]()
     assert dia["avisos_nuevos"] == ["Cena"]
-    assert "9:07 PM" in dia["prompts"][0]
+    assert "7:22 PM" in dia["prompts"][0]
 
 
 def test_el_silencio_es_un_knob_y_cero_lo_apaga(dia, monkeypatch):
