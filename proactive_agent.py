@@ -131,6 +131,7 @@ def hora_de_aviso(user_id: str, meal: str, def_hour: float):
     avg_hr = get_avg_meal_hour(user_id, meal, ventana=FRANJA_DE_COMIDA.get(meal))
     if avg_hr is None:
         avg_hr = def_hour
+    avg_hr = _acotar_a_su_franja(avg_hr, def_hour, meal)
 
     meal_rate, meal_total = get_nudge_response_rate(user_id, meal)
     delay_hours = -_antelacion_del_aviso_h()
@@ -160,6 +161,34 @@ def hora_de_aviso(user_id: str, meal: str, def_hour: float):
     # tooltip-anchor: P3-AVG-MEAL-HOUR-CIRCULAR
     nudge_hour = (avg_hr + delay_hours) % 24
     return nudge_hour, meal_rate, meal_total
+
+
+def _banda_del_aviso_h() -> float:
+    """[P1-PLAN-LOTE-151] Cuánto puede alejarse el aviso de la hora normal de esa comida, en horas."""
+    return _env_float("MEALFIT_PROACTIVE_NUDGE_BAND_H", 1.5, validator=lambda v: 0.5 <= v <= 12.0)
+
+
+def _acotar_a_su_franja(avg_hr: float, def_hour: float, meal: str) -> float:
+    """[P1-PLAN-LOTE-151 · 2026-09-21] La hora habitual, acotada por ARRIBA a la franja de su comida.
+
+    Medido en la cuenta del dueño el 21-sep, con los avisos ya encendidos en su teléfono: el del almuerzo salía a
+    las **15:06** y el de la merienda a las 15:45 — dos avisos a 39 minutos, y el del almuerzo a una hora que ya no
+    es de almorzar. No es un fallo de la cuenta: la hora sale de la MEDIA de lo que registra, y con 4-5 muestras una
+    comida tardía arrastra la media fuera de cualquier rango sensato. El dueño eligió acotar («la 1»).
+
+    **Solo se acota el lado TARDÍO, y es deliberado.** Acotar por abajo rompería lo que el lote 150 vino a
+    conseguir: a quien de verdad desayuna a las 7:05 le movería el aviso de las 6:50 a las 7:15, o sea DESPUÉS de
+    su desayuno — el defecto original, reintroducido por el arreglo. Con una sola dirección, el acotado nunca puede
+    retrasar un aviso: o lo adelanta o lo deja igual.
+
+    La distancia se mide en el reloj (circular), no restando: para una cena de las 19:30, una media de las 00:06 no
+    está «19 horas antes», está 4,6 h DESPUÉS. Restar daría lo contrario y adelantaría el aviso a media tarde.
+    """
+    banda = _banda_del_aviso_h()
+    distancia = (float(avg_hr) - float(def_hour) + 12.0) % 24.0 - 12.0
+    if distancia > banda:
+        return (float(def_hour) + banda) % 24.0
+    return float(avg_hr) % 24.0
 
 
 def avisos_de_comida_activos(health: dict) -> bool:

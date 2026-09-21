@@ -61,8 +61,10 @@ def test_la_hora_del_aviso_es_la_habitual_MENOS_la_antelacion(monkeypatch):
     monkeypatch.setattr(pa, "get_nudge_response_rate", lambda _u, _m=None: (1.0, 0))
     assert pa.hora_de_aviso("u", "Cena", 19.5)[0] == pytest.approx(19.25), "sin historial, la hora por defecto"
     monkeypatch.setattr(db_facts, "get_avg_meal_hour", lambda _u, _m, ventana=None: 0.1)
-    assert pa.hora_de_aviso("u", "Cena", 19.5)[0] == pytest.approx(23.85), \
-        "el `% 24` sigue, ahora por el otro lado: cenar a las 00:06 no manda el aviso a las -0:09"
+    assert pa.hora_de_aviso("u", "Cena", 19.5)[0] == pytest.approx(20.75), \
+        "[P1-PLAN-LOTE-151] cenar a las 00:06 ya no manda el aviso a las 23:51: la media se acota al tope de su " \
+        "franja (19:30 + 1,5 h). El `% 24` sigue siendo load-bearing, ahora para medir la distancia en el RELOJ — " \
+        "restar diría que las 00:06 están 19 h antes de las 19:30, cuando están 4,6 h después"
     monkeypatch.setenv("MEALFIT_PROACTIVE_NUDGE_LEAD_H", "0")
     monkeypatch.setattr(db_facts, "get_avg_meal_hour", lambda _u, _m, ventana=None: 8.5)
     assert pa.hora_de_aviso("u", "Desayuno", 9.0)[0] == pytest.approx(8.5), "con la antelación en 0, a la hora exacta"
