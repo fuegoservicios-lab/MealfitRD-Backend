@@ -11,7 +11,8 @@ Contexto del paciente:
 - Objetivos: {goals}
 
 Escribe un SOLO mensaje conversacional (corto, máximo 2-3 oraciones) sobre su {missing_meal}.
-Si le preguntas si ya la hizo, usa el verbo de esa comida: «¿Ya {verbo}?». Nunca el verbo de otra comida (nada de «¿Ya cenaste tu merienda?»).
+[P1-PLAN-LOTE-150] Este mensaje llega JUSTO ANTES de su hora habitual, no después: anímale a comer ahora. No des por hecho que ya comió ni le preguntes si se le olvidó anotar.
+Usa el verbo de ESA comida —«{infinitivo}»— y nunca el de otra (nada de «cenar tu merienda»). Si aun así necesitas preguntar, el verbo sigue siendo el suyo: «¿Ya {verbo}?».
 ¡MUY IMPORTANTE! NO SALUDES CON Hola, el usuario verá este mensaje en la interfaz del chat que ya está abierto. Entra directo al tema como una nota de seguimiento.
 {tone_instruction}
 

@@ -30,7 +30,11 @@ from typing import Optional
 
 logger = logging.getLogger(__name__)
 
-MINUTO_DEL_AVISO_LOCAL = 35
+# [P1-PLAN-LOTE-150 · 2026-09-21] El minuto SALE de la hora calculada; esta constante es solo el respaldo de cuando
+# no se pudo calcular. Con la espera de 1,5 h daba igual clavarlo en :35 (nadie nota 5 minutos en un aviso que llega
+# una hora tarde), pero con 15 minutos de antelación sí importa: una cena habitual a las 19:30 avisada a las «19:35»
+# llegaba DESPUÉS de la cena. Ahora da 19:15.
+MINUTO_DEL_AVISO_DE_RESPALDO = 35
 COMIDAS = ("Desayuno", "Almuerzo", "Merienda", "Cena")
 
 _TITULO = {
@@ -38,32 +42,32 @@ _TITULO = {
 }
 _CUERPO = {
     "Desayuno": {
-        "es-DO": "¿Ya desayunaste? Cuéntame qué comiste y lo anoto en tu diario.",
-        "en-US": "Had breakfast yet? Tell me what you ate and I'll log it.",
-        "pt-BR": "Já tomou café da manhã? Me conta o que comeu e eu anoto no seu diário.",
-        "fr-FR": "Tu as pris ton petit-déjeuner ? Dis-moi ce que tu as mangé et je le note.",
-        "it-IT": "Hai già fatto colazione? Dimmi cosa hai mangiato e lo segno nel diario.",
+        "es-DO": "Es tu hora de desayunar. Cuando comas, cuéntamelo y lo anoto.",
+        "en-US": "Time for breakfast. When you eat, tell me and I'll log it.",
+        "pt-BR": "É sua hora do café da manhã. Quando comer, me conta e eu anoto.",
+        "fr-FR": "C'est l'heure de ton petit-déjeuner. Quand tu manges, dis-le-moi et je le note.",
+        "it-IT": "È la tua ora di colazione. Quando mangi, dimmelo e lo segno.",
     },
     "Almuerzo": {
-        "es-DO": "¿Ya almorzaste? Cuéntame qué comiste y lo anoto en tu diario.",
-        "en-US": "Had lunch yet? Tell me what you ate and I'll log it.",
-        "pt-BR": "Já almoçou? Me conta o que comeu e eu anoto no seu diário.",
-        "fr-FR": "Tu as déjeuné ? Dis-moi ce que tu as mangé et je le note.",
-        "it-IT": "Hai già pranzato? Dimmi cosa hai mangiato e lo segno nel diario.",
+        "es-DO": "Es tu hora de almorzar. Cuando comas, cuéntamelo y lo anoto.",
+        "en-US": "Time for lunch. When you eat, tell me and I'll log it.",
+        "pt-BR": "É sua hora do almoço. Quando comer, me conta e eu anoto.",
+        "fr-FR": "C'est l'heure de ton déjeuner. Quand tu manges, dis-le-moi et je le note.",
+        "it-IT": "È la tua ora di pranzo. Quando mangi, dimmelo e lo segno.",
     },
     "Merienda": {
-        "es-DO": "¿Ya merendaste? Si comiste algo, cuéntamelo y lo anoto.",
-        "en-US": "Had a snack? If you ate something, tell me and I'll log it.",
-        "pt-BR": "Já lanchou? Se comeu algo, me conta e eu anoto.",
-        "fr-FR": "Tu as pris un goûter ? Si tu as mangé quelque chose, dis-le-moi et je le note.",
-        "it-IT": "Hai fatto merenda? Se hai mangiato qualcosa, dimmelo e lo segno.",
+        "es-DO": "Es tu hora de merendar. Si comes algo, cuéntamelo y lo anoto.",
+        "en-US": "Time for a snack. If you eat something, tell me and I'll log it.",
+        "pt-BR": "É sua hora do lanche. Se comer algo, me conta e eu anoto.",
+        "fr-FR": "C'est l'heure de ton goûter. Si tu manges quelque chose, dis-le-moi et je le note.",
+        "it-IT": "È la tua ora di merenda. Se mangi qualcosa, dimmelo e lo segno.",
     },
     "Cena": {
-        "es-DO": "¿Ya cenaste? Cuéntame qué comiste y cierro tu día.",
-        "en-US": "Had dinner yet? Tell me what you ate and I'll close out your day.",
-        "pt-BR": "Já jantou? Me conta o que comeu e eu fecho o seu dia.",
-        "fr-FR": "Tu as dîné ? Dis-moi ce que tu as mangé et je clôture ta journée.",
-        "it-IT": "Hai già cenato? Dimmi cosa hai mangiato e chiudo la tua giornata.",
+        "es-DO": "Es tu hora de cenar. Cuando comas, cuéntamelo y cierro tu día.",
+        "en-US": "Time for dinner. When you eat, tell me and I'll close out your day.",
+        "pt-BR": "É sua hora do jantar. Quando comer, me conta e eu fecho o seu dia.",
+        "fr-FR": "C'est l'heure de ton dîner. Quand tu manges, dis-le-moi et je clôture ta journée.",
+        "it-IT": "È la tua ora di cena. Quando mangi, dimmelo e chiudo la tua giornata.",
     },
     # El aviso de las 23:00 del cron, para el suscriptor sin chat reciente (no se programa en el teléfono).
     "Resumen del día": {
@@ -102,13 +106,16 @@ def horario_de_avisos(user_id: str, locale: Optional[str] = None, consumed_today
             nudge_hour, _rate, _total = pa.hora_de_aviso(user_id, meal, def_hour)
         except Exception as e:
             logger.warning(f"[P1-PLAN-LOTE-133] hora del aviso de {meal} no calculada ({e!r}); se usa la de por defecto")
-            nudge_hour = (def_hour + 1.5) % 24
-        hora = int(math.floor(float(nudge_hour))) % 24
+            nudge_hour = (math.floor(def_hour) + MINUTO_DEL_AVISO_DE_RESPALDO / 60.0) % 24
+        # [P1-PLAN-LOTE-150] Hora y minuto salen LOS DOS de `nudge_hour`. Redondear a minutos de una vez evita
+        # que un 59,7 acabe en «:60».
+        total = int(round(float(nudge_hour) * 60)) % (24 * 60)
+        hora, minuto = divmod(total, 60)
         if hora < silencio:
             continue
         titulo, cuerpo = texto_del_aviso(meal, locale)
         out.append({
-            "meal": meal.lower(), "hour": hora, "minute": MINUTO_DEL_AVISO_LOCAL, "title": titulo, "body": cuerpo,
+            "meal": meal.lower(), "hour": hora, "minute": minuto, "title": titulo, "body": cuerpo,
             "tag": etiqueta_del_aviso(meal),
             "logged_today": bool(pa._comida_ya_registrada(consumed_today, meal)),
         })

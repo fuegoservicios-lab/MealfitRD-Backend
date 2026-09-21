@@ -132,14 +132,15 @@ def test_el_almuerzo_de_las_1430_sale_aunque_el_desayuno_se_registrara_a_las_125
         "el recordatorio del almuerzo se pierde: el desayuno registrado tarde le roba la hora"
     )
     assert dia["guardados"] == [(SID, "model", "Recordatorio: Almuerzo")]
-    assert "2:30 PM" in dia["prompts"][0]
+    assert "12:45 PM" in dia["prompts"][0], "[P1-PLAN-LOTE-150] su hora, ya no 1,5 h después"
 
 
-def test_manana_el_desayuno_se_recuerda_a_las_1030_y_no_a_las_1430(dia):
+def test_manana_el_desayuno_se_recuerda_a_su_hora_y_no_a_las_1430(dia):
     dia.update(ahora=_utc(17, 14), comidas=[], avisos_hoy=[], mensajes=[])
     dia["correr"]()
     assert dia["avisos_nuevos"] == ["Desayuno"], "un registro a las 12:58 movió el aviso del desayuno a la tarde"
-    assert "10:30 AM" in dia["prompts"][0]
+    # 10:30 sigue dentro de su ventana de reintento (8-10); la hora que dice el mensaje es la suya: 8:45.
+    assert "8:45 AM" in dia["prompts"][0]
 
     dia.update(ahora=_utc(17, 18), avisos_hoy=[], avisos_nuevos=[])
     dia["comidas"] = [{"meal_type": "almuerzo", "meal_name": "arroz con habichuelas"}]
@@ -148,11 +149,11 @@ def test_manana_el_desayuno_se_recuerda_a_las_1030_y_no_a_las_1430(dia):
 
 
 def test_un_registro_en_su_franja_si_personaliza_la_hora(dia):
-    # Desayuna a las 7:05 de verdad: el aviso se adelanta a las 8:34, como antes.
+    # Desayuna a las 7:05 de verdad: su aviso es a las 6:50, no el de las 8:45 de quien no tiene historial.
     dia.update(ahora=_utc(17, 12), registros={"Desayuno": ["07:00", "07:10"]}, comidas=[], avisos_hoy=[], mensajes=[])
     dia["correr"]()
     assert dia["avisos_nuevos"] == ["Desayuno"]
-    assert "8:34 AM" in dia["prompts"][0]
+    assert "6:50 AM" in dia["prompts"][0]
 
 
 def test_dos_comidas_en_la_misma_hora_se_avisa_la_que_falta(dia):
@@ -174,26 +175,29 @@ def test_si_faltan_las_dos_se_avisa_la_mas_reciente(dia):
 # ── Un aviso bloqueado se reintenta, sin repetirse ────────────────────────────────────────────────
 
 def test_un_aviso_bloqueado_por_la_conversacion_se_reintenta_la_hora_siguiente(dia):
-    # 15:30: el coach respondió hace 20 min → anti-spam. 16:30: ya puede salir, y el almuerzo sigue pendiente.
-    dia.update(ahora=_utc(16, 19))
-    dia["mensajes"] = [{"role": "model", "created_at": "2026-09-16 19:10:00+00"}] + dia["mensajes"]
+    # [P1-PLAN-LOTE-150] 13:30 local en vez de 15:30: con la antelación, a las 15:30 la pendiente ya es la
+    # MERIENDA y el escenario dejaría de hablar del almuerzo. 13:30: el coach respondió hace 20 min →
+    # anti-spam. 14:30: ya puede salir, y el almuerzo sigue pendiente.
+    dia.update(ahora=_utc(16, 17))
+    dia["mensajes"] = [{"role": "model", "created_at": "2026-09-16 17:10:00+00"}] + dia["mensajes"]
     dia["correr"]()
     assert dia["avisos_nuevos"] == []
-    dia.update(ahora=_utc(16, 20))
+    dia.update(ahora=_utc(16, 18))
     dia["correr"]()
     assert dia["avisos_nuevos"] == ["Almuerzo"]
-    assert "2:30 PM" in dia["prompts"][0], "el aviso dice la hora en que tocaba"
+    assert "12:45 PM" in dia["prompts"][0], "el aviso dice la hora en que tocaba"
 
 
 def test_un_aviso_ya_enviado_hoy_no_se_repite(dia, monkeypatch):
     monkeypatch.setenv("MEALFIT_PROACTIVE_MAX_NUDGES_PER_DAY", "4")
-    dia.update(ahora=_utc(16, 19), avisos_hoy=["Desayuno", "Almuerzo"])
+    # [P1-PLAN-LOTE-150] 13:30: a las 15:30 ya tocaría la merienda y el caso dejaría de ser «no se repite».
+    dia.update(ahora=_utc(16, 17), avisos_hoy=["Desayuno", "Almuerzo"])
     dia["correr"]()
     assert dia["avisos_nuevos"] == []
 
 
 def test_pasada_la_ventana_toca_la_siguiente_comida(dia, monkeypatch):
-    # 17:30: el almuerzo (14:30) ya no se reintenta; toca la merienda (16:00 + 1,5).
+    # 17:30: el almuerzo (12:45) ya no se reintenta; toca la merienda (16:00 − 15 min = 15:45, ventana 15-17).
     monkeypatch.setenv("MEALFIT_PROACTIVE_MAX_NUDGES_PER_DAY", "4")
     dia.update(ahora=_utc(16, 21))
     dia["correr"]()

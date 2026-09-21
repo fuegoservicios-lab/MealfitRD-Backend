@@ -30,18 +30,23 @@ def _front(rel: str) -> str:
 
 # ── El verbo del aviso ────────────────────────────────────────────────────────────────────────────
 
-@pytest.mark.parametrize("comida,verbo", [
-    ("Desayuno", "desayunaste"), ("Almuerzo", "almorzaste"), ("Merienda", "merendaste"), ("Cena", "cenaste"),
+@pytest.mark.parametrize("comida,verbo,infinitivo", [
+    ("Desayuno", "desayunaste", "desayunar"), ("Almuerzo", "almorzaste", "almorzar"),
+    ("Merienda", "merendaste", "merendar"), ("Cena", "cenaste", "cenar"),
 ])
-def test_el_aviso_pide_el_verbo_de_su_comida(comida, verbo):
+def test_el_aviso_pide_el_verbo_de_su_comida(comida, verbo, infinitivo):
     import proactive_agent as pa
     from prompts.proactive import PROACTIVE_PROMPT
+    assert pa.INFINITIVO_DE_COMIDA[comida] == infinitivo
     prompt = PROACTIVE_PROMPT.format(
-        missing_meal=comida, verbo=pa.VERBO_DE_COMIDA[comida], trigger_time="5:30 PM",
+        missing_meal=comida, verbo=pa.VERBO_DE_COMIDA[comida], infinitivo=infinitivo, trigger_time="5:30 PM",
         diet_type="balanceada", goals="ganar músculo", tone_instruction="", style_instruction="",
     )
+    # [P1-PLAN-LOTE-150] El aviso llega ANTES de la comida, así que el prompt manda ANIMAR. Lo que este test
+    # protege sigue igual: que el verbo sea el de SU comida y nunca el de otra.
+    assert f"«{infinitivo}»" in prompt
     assert f"«¿Ya {verbo}?»" in prompt
-    assert "Nunca el verbo de otra comida" in prompt
+    assert "nunca el de otra" in prompt
 
 
 def test_el_bucle_pasa_el_verbo_al_prompt():

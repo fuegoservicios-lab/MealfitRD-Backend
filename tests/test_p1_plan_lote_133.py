@@ -45,21 +45,27 @@ def _src(rel: str) -> str:
 
 # ───────────────────────── 1. La hora del aviso, una sola cuenta ─────────────────────────
 
-def test_la_hora_del_aviso_es_la_habitual_mas_la_espera(monkeypatch):
+def test_la_hora_del_aviso_es_la_habitual_MENOS_la_antelacion(monkeypatch):
+    """[P1-PLAN-LOTE-150] Era «+ la espera» (1,5 h, y hasta 2,5 a quien lo ignoraba). El dueño: «solo avisa al rato
+    después del horario». Ahora el aviso se ADELANTA 15 min a tu hora habitual, para que puedas hacer algo con él."""
     import db_facts
     import proactive_agent as pa
     monkeypatch.setattr(db_facts, "get_avg_meal_hour", lambda _u, _m, ventana=None: 8.5)
     monkeypatch.setattr(pa, "get_nudge_response_rate", lambda _u, _m=None: (1.0, 0))
-    assert pa.hora_de_aviso("u", "Desayuno", 9.0)[0] == pytest.approx(10.0)
-    monkeypatch.setattr(pa, "get_nudge_response_rate", lambda _u, _m=None: (0.9, 5))
-    assert pa.hora_de_aviso("u", "Desayuno", 9.0)[0] == pytest.approx(9.5), "responde casi siempre: se le avisa antes"
-    monkeypatch.setattr(pa, "get_nudge_response_rate", lambda _u, _m=None: (0.1, 5))
-    assert pa.hora_de_aviso("u", "Desayuno", 9.0)[0] == pytest.approx(11.0), "lo ignora casi siempre: se le avisa más tarde"
+    assert pa.hora_de_aviso("u", "Desayuno", 9.0)[0] == pytest.approx(8.25), "desayuna a las 8:30 → aviso 8:15"
+    # La tasa de respuesta YA NO mueve la hora: retrasar el aviso de quien lo ignora lo hacía aún más inútil.
+    for tasa, total in ((0.9, 5), (0.1, 5)):
+        monkeypatch.setattr(pa, "get_nudge_response_rate", lambda _u, _m=None, _t=(tasa, total): _t)
+        assert pa.hora_de_aviso("u", "Desayuno", 9.0)[0] == pytest.approx(8.25), "responda o no, el aviso es a su hora"
     monkeypatch.setattr(db_facts, "get_avg_meal_hour", lambda _u, _m, ventana=None: None)
     monkeypatch.setattr(pa, "get_nudge_response_rate", lambda _u, _m=None: (1.0, 0))
-    assert pa.hora_de_aviso("u", "Cena", 19.5)[0] == pytest.approx(21.0), "sin historial, la hora por defecto"
-    monkeypatch.setattr(db_facts, "get_avg_meal_hour", lambda _u, _m, ventana=None: 23.5)
-    assert pa.hora_de_aviso("u", "Cena", 19.5)[0] == pytest.approx(1.0), "el `% 24` sigue: nunca se sale del reloj"
+    assert pa.hora_de_aviso("u", "Cena", 19.5)[0] == pytest.approx(19.25), "sin historial, la hora por defecto"
+    monkeypatch.setattr(db_facts, "get_avg_meal_hour", lambda _u, _m, ventana=None: 0.1)
+    assert pa.hora_de_aviso("u", "Cena", 19.5)[0] == pytest.approx(23.85), \
+        "el `% 24` sigue, ahora por el otro lado: cenar a las 00:06 no manda el aviso a las -0:09"
+    monkeypatch.setenv("MEALFIT_PROACTIVE_NUDGE_LEAD_H", "0")
+    monkeypatch.setattr(db_facts, "get_avg_meal_hour", lambda _u, _m, ventana=None: 8.5)
+    assert pa.hora_de_aviso("u", "Desayuno", 9.0)[0] == pytest.approx(8.5), "con la antelación en 0, a la hora exacta"
 
 
 def test_el_cron_usa_esa_misma_cuenta_y_no_otra_copia():
@@ -82,12 +88,13 @@ def test_el_horario_que_programa_el_telefono(monkeypatch):
     monkeypatch.setattr(pa, "hora_de_aviso", lambda _u, meal, _d: (horas[meal], 1.0, 0))
     monkeypatch.delenv("MEALFIT_PROACTIVE_QUIET_UNTIL_HOUR", raising=False)
     out = mr.horario_de_avisos("u", locale="es-DO", consumed_today=[{"meal_type": "desayuno", "meal_name": "Mangú"}])
-    assert [(r["meal"], r["hour"], r["minute"]) for r in out] == [("desayuno", 10, 35), ("almuerzo", 14, 35), ("merienda", 17, 35)], \
-        "a y 35: cinco minutos después del tick del cron (a y media), para que el mensaje del coach ya esté en el chat"
+    assert [(r["meal"], r["hour"], r["minute"]) for r in out] == [("desayuno", 10, 48), ("almuerzo", 14, 30), ("merienda", 17, 30)], \
+        "[P1-PLAN-LOTE-150] el minuto SALE de la hora calculada; clavarlo en :35 mandaba el aviso de una cena de " \
+        "las 19:30 a las 19:35, es decir DESPUÉS de la cena"
     assert out[0]["logged_today"] is True and out[1]["logged_today"] is False
     assert "cena" not in [r["meal"] for r in out], "un aviso a la 1:00 cae en las horas de silencio: el cron tampoco lo manda"
     assert out[1]["tag"] == "comida-almuerzo" and out[1]["title"] == "Bioboros"
-    assert out[1]["body"] == "¿Ya almorzaste? Cuéntame qué comiste y lo anoto en tu diario."
+    assert out[1]["body"] == "Es tu hora de almorzar. Cuando comas, cuéntamelo y lo anoto."
 
 
 def test_los_textos_estan_en_los_cinco_idiomas_y_caen_al_espanol():
@@ -98,7 +105,10 @@ def test_los_textos_estan_en_los_cinco_idiomas_y_caen_al_espanol():
         assert all(len(c) <= 110 for c in cuerpos), "los lee una pantalla de bloqueo: cortos"
     assert mr.texto_del_aviso("Almuerzo", "xx-YY") == mr.texto_del_aviso("Almuerzo", "es-DO")
     assert mr.texto_del_aviso("Almuerzo", None) == mr.texto_del_aviso("Almuerzo", "es-DO")
-    assert mr.texto_del_aviso("Merienda", "en-US")[1].startswith("Had a snack?")
+    assert mr.texto_del_aviso("Merienda", "en-US")[1].startswith("Time for a snack.")
+    # [P1-PLAN-LOTE-150] Llega ANTES de comer: ninguno puede dar por hecho que ya comiste.
+    for comida in mr.COMIDAS:
+        assert "Ya " not in mr.texto_del_aviso(comida, "es-DO")[1], f"{comida}: el aviso pregunta en vez de animar"
 
 
 def test_el_endpoint_usa_la_misma_puerta_que_el_cron(monkeypatch):
@@ -126,7 +136,8 @@ def test_el_endpoint_usa_la_misma_puerta_que_el_cron(monkeypatch):
 def test_ignorar_avisos_cambia_el_tono_pero_no_apaga_la_pantalla(dia, monkeypatch):
     import proactive_agent as pa
     monkeypatch.setattr(pa, "get_nudge_response_rate", lambda _u, nudge_type=None: (0.0, 9))   # «ignoró» nueve
-    dia["ahora"] = _dt_real(2026, 9, 16, 19, 30, 5, tzinfo=timezone.utc)   # 15:30 en RD: el almuerzo (13 + 2,5 h)
+    # [P1-PLAN-LOTE-150] 13:30 en RD: el almuerzo (13:00 − 15 min). A las 15:30 la pendiente ya sería la merienda.
+    dia["ahora"] = _dt_real(2026, 9, 16, 17, 30, 5, tzinfo=timezone.utc)
     dia["mensajes"] = []
     dia["correr"]()
     assert dia["avisos_nuevos"] == ["Almuerzo"]
@@ -177,10 +188,10 @@ def test_sin_chat_reciente_el_aviso_es_corto_fijo_y_sin_llm(dia, monkeypatch):
     dia["correr"]()
     assert dia["prompts"] == [], "sin LLM"
     assert dia["guardados"] == [], "sin escribir un mensaje en un chat que nadie va a abrir"
-    assert logs == [("Almuerzo", {"nudge_content": "¿Ya almorzaste? Cuéntame qué comiste y lo anoto en tu diario.",
+    assert logs == [("Almuerzo", {"nudge_content": "Es tu hora de almorzar. Cuando comas, cuéntamelo y lo anoto.",
                                   "nudge_style": "fijo"})], "queda anotado: el tope diario y el «no repetir» siguen valiendo"
     assert dia["push"] == [{"user_id": UID, "title": "Bioboros",
-                            "body": "¿Ya almorzaste? Cuéntame qué comiste y lo anoto en tu diario.",
+                            "body": "Es tu hora de almorzar. Cuando comas, cuéntamelo y lo anoto.",
                             "url": "/dashboard/agent", "tag": "comida-almuerzo"}]
 
 

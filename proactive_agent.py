@@ -91,6 +91,11 @@ FRANJA_DE_COMIDA = {
 
 # [P1-PLAN-LOTE-73 · 2026-09-16] El verbo de cada comida para el aviso. El dueño recibió «¿Ya cenaste tu
 # merienda de la tarde?»: el prompt solo nombraba la comida y el modelo tomó el verbo de otra.
+# [P1-PLAN-LOTE-150] El aviso llega ANTES de la comida, así que el prompt necesita el infinitivo («es tu hora de
+# desayunar») además del pretérito. Se mantienen los dos: el verbo de cada comida sigue siendo suyo (lote 73).
+INFINITIVO_DE_COMIDA = {
+    "Desayuno": "desayunar", "Almuerzo": "almorzar", "Merienda": "merendar", "Cena": "cenar",
+}
 VERBO_DE_COMIDA = {
     "Desayuno": "desayunaste",
     "Almuerzo": "almorzaste",
@@ -109,21 +114,26 @@ def hora_de_aviso(user_id: str, meal: str, def_hour: float):
     """`(nudge_hour, meal_rate, meal_total)`: la hora local (0..23,99) a la que toca recordar `meal`.
 
     Hora habitual del usuario para esa comida (media circular de 14 días dentro de su franja; sin datos, la de por
-    defecto) + la espera: 1,5 h; 1,0 si suele responder a ese aviso (> 70 % con ≥ 3); 2,5 si suele ignorarlo (< 30 %)."""
+    defecto) MENOS la antelación (`MEALFIT_PROACTIVE_NUDGE_LEAD_H`, 15 min): el aviso llega cuando aún puedes comer.
+
+    [P1-PLAN-LOTE-150 · 2026-09-21] Antes era una ESPERA de 1,5 h y el dueño lo dijo claro: «solo avisa al rato
+    después del horario… quiero que a las 8:45 me anime a desayunarme si todavía no he registrado ningún desayuno».
+    Con el desayuno a las 9:00 el aviso caía a las 10:35, cuando o ya comiste —y es ruido— o ya vas tarde —y es un
+    reproche—; en ninguno de los dos casos puedes hacer nada con él. **Se MUEVE, no se añade otro**: dos avisos por
+    comida serían ocho al día con los del agua, y en iOS quien se harta no apaga un ajuste, apaga TODAS las
+    notificaciones de la app y se lleva por delante las que importan (plan listo, semana nueva). Eso no se revierte
+    desde aquí.
+
+    También se retira la modulación de la HORA por tasa de respuesta (1,0 / 1,5 / 2,5). Iba en la dirección
+    equivocada: a quien ignoraba el aviso se le avisaba MÁS TARDE, con lo que era aún menos útil y se ignoraba más.
+    `meal_rate` sigue calculándose y sigue usándose donde sí ayuda: el TONO del mensaje del cron."""
     from db_facts import get_avg_meal_hour
     avg_hr = get_avg_meal_hour(user_id, meal, ventana=FRANJA_DE_COMIDA.get(meal))
     if avg_hr is None:
         avg_hr = def_hour
 
-    # GAP 3: Cadencia por comida
     meal_rate, meal_total = get_nudge_response_rate(user_id, meal)
-    delay_hours = 1.5 # Default
-
-    if meal_total >= 3:
-        if meal_rate > 0.70:
-            delay_hours = 1.0 # Responde rápido y seguro, mandamos antes
-        elif meal_rate < 0.30:
-            delay_hours = 2.5 # Evitar presión, retrasamos el nudge
+    delay_hours = -_antelacion_del_aviso_h()
 
     # Nudge dinámico ajustado según historial de adherencia específica.
     #
@@ -144,9 +154,37 @@ def hora_de_aviso(user_id: str, meal: str, def_hour: float):
     #
     # El nudge cruza la medianoche a propósito: si comes a las 23:30, el
     # recordatorio de esa comida es a la 1:00 del día siguiente, no "nunca".
+    # [P1-PLAN-LOTE-150] Con la antelación el `% 24` sigue siendo load-bearing, ahora por el otro lado: un desayuno
+    # a las 00:10 menos 15 min da -0,08, y en Python el módulo de un negativo con divisor positivo vuelve al reloj
+    # (23,92). El cruce de medianoche se conserva en las DOS direcciones.
     # tooltip-anchor: P3-AVG-MEAL-HOUR-CIRCULAR
     nudge_hour = (avg_hr + delay_hours) % 24
     return nudge_hour, meal_rate, meal_total
+
+
+def avisos_de_comida_activos(health: dict) -> bool:
+    """[P1-PLAN-LOTE-150 · 2026-09-21] ¿Quiere esta persona los recordatorios de COMIDA?
+
+    El dueño: «quiero que se pueda desactivar y activar en configuraciones esa opción, ya que con eso tendría la
+    opción de tener más tranquilidad al tener menos notificaciones». Son DOS interruptores y no uno global porque
+    «menos notificaciones» casi siempre significa «unas sí y otras no».
+
+    Vive en `user_profiles.health_profile`, que ya es jsonb libre y ya tiene su endpoint de merge
+    (`PATCH /api/profile`): ni columna nueva ni migración. **Ausente ⇒ ACTIVO**: quien ya los tenía no se queda sin
+    ellos por un despliegue, y solo apagarlo explícitamente los quita. Lo consultan las DOS vías —el horario que
+    programa el teléfono y el cron que manda el aviso— para que apagarlo signifique lo mismo en las dos."""
+    return (health or {}).get("avisos_comida") is not False
+
+
+def avisos_de_agua_activos(health: dict) -> bool:
+    """[P1-PLAN-LOTE-150] El gemelo del de arriba para la hidratación. Ausente ⇒ activo."""
+    return (health or {}).get("avisos_agua") is not False
+
+
+def _antelacion_del_aviso_h() -> float:
+    """[P1-PLAN-LOTE-150] Cuánto ANTES de tu hora habitual llega el recordatorio de esa comida. 0 = a la hora exacta.
+    El tope de 2 h evita que el aviso de una comida se solape con el de la anterior."""
+    return _env_float("MEALFIT_PROACTIVE_NUDGE_LEAD_H", 0.25, validator=lambda v: 0.0 <= v <= 2.0)
 
 
 def _max_avisos_por_dia() -> int:
@@ -610,8 +648,10 @@ def run_proactive_checks():
                     continue  # sin saber qué salió hoy, solo la hora exacta: la conducta de antes, sin repetidos
                 if _avisadas and meal in _avisadas:
                     continue
-                hours = int(nudge_hour)
-                mins = int((nudge_hour - hours) * 60)
+                # [P1-PLAN-LOTE-150] Los minutos se REDONDEAN, igual que en `meal_reminders`: truncando, el mensaje
+                # del coach decía «6:49» y la notificación del teléfono sonaba a las 6:50 — el mismo aviso con dos
+                # horas distintas según por dónde llegara.
+                hours, mins = divmod(int(round(nudge_hour * 60)) % (24 * 60), 60)
                 am_pm = "AM" if hours < 12 else "PM"
                 display_hr = hours if hours <= 12 else hours - 12
                 if display_hr == 0: display_hr = 12
@@ -678,6 +718,11 @@ def run_proactive_checks():
             schedule = health.get("scheduleType", "standard")
             if schedule == "night_shift" or schedule == "variable":
                 logger.info(f"🚫 [CRON] Usuario {user_id}: turno {schedule}. Saltando.")
+                continue
+            # [P1-PLAN-LOTE-150] El interruptor de Configuración. Va aquí, junto a la puerta del turno, para que
+            # apagarlo pare el aviso ANTES de gastar nada: ni consulta de lo registrado ni llamada a la IA.
+            if not avisos_de_comida_activos(health):
+                logger.info(f"🔕 [CRON] Usuario {user_id}: recordatorios de comida apagados. Saltando.")
                 continue
                 
             # Validar el consumo de HOY
@@ -793,6 +838,7 @@ No uses demasiados emojis. Sé directo, breve y empático.
                 prompt = PROACTIVE_PROMPT.format(
                     missing_meal=meal_to_check,
                     verbo=VERBO_DE_COMIDA.get(meal_to_check, f"tomaste tu {meal_to_check.lower()}"),
+                    infinitivo=INFINITIVO_DE_COMIDA.get(meal_to_check, f"tomar tu {meal_to_check.lower()}"),
                     trigger_time=trigger_time_str,
                     diet_type=diet_type,
                     goals=goals,

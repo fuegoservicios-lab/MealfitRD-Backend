@@ -235,7 +235,10 @@ def usuarios_alcanzables_con_agua() -> list:
         "SELECT p.id::text AS user_id, p.locale AS locale, p.health_profile->>'scheduleType' AS schedule, "
         "       EXISTS (SELECT 1 FROM push_subscriptions s WHERE s.user_id::text = p.id::text) AS con_push "
         "FROM user_profiles p "
+        # [P1-PLAN-LOTE-150] El interruptor de Configuración, en la MISMA consulta: quien lo apaga deja de estar
+        # entre los alcanzables y el cron ni lo mira. `COALESCE` ⇒ ausente es activo.
         "WHERE COALESCE(p.water_tracker_enabled, TRUE) = TRUE "
+        "  AND COALESCE((p.health_profile->>'avisos_agua')::boolean, TRUE) = TRUE "
         "  AND (EXISTS (SELECT 1 FROM push_subscriptions s WHERE s.user_id::text = p.id::text) "
         "       OR EXISTS (SELECT 1 FROM app_kv_store k WHERE k.key = %s || p.id::text "
         "                  AND k.updated_at >= NOW() - make_interval(hours => %s)))",

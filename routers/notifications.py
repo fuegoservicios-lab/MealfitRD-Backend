@@ -190,7 +190,13 @@ def _meal_reminders_sync(user_id: str, canal: str = "") -> dict:
     if canal == "local":
         import hydration_reminders
         hydration_reminders.marcar_canal_local(user_id)
-    base["water"] = _agua_para_el_telefono(user_id, locale, hoy_local, schedule)
+    # [P1-PLAN-LOTE-150] Los dos interruptores de Configuración. El del agua vacía su lista; el de las comidas
+    # responde `enabled:false`, que es lo que el teléfono ya sabe interpretar (cancela lo programado y no reprograma).
+    base["water"] = _agua_para_el_telefono(user_id, locale, hoy_local, schedule) if pa.avisos_de_agua_activos(health) else []
+    base["meal_reminders_enabled"] = pa.avisos_de_comida_activos(health)
+    base["water_reminders_enabled"] = pa.avisos_de_agua_activos(health)
+    if not pa.avisos_de_comida_activos(health):
+        return {**base, "enabled": False, "reason": "prefs", "reminders": []}
     if schedule in ("night_shift", "variable"):
         return {**base, "enabled": False, "reason": "schedule", "reminders": []}
     if base["max_per_day"] <= 0:
