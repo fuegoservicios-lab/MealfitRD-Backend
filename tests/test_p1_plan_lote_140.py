@@ -65,11 +65,11 @@ def test_el_chat_espera_al_binario_y_bajo_la_captura_no_anima_nada():
     k = ap.index("const alTecladoNativo = (e) => {")
     cuerpo = ap[k:ap.index("\n        };", k)]
     assert "if (atenderCoberturaNativa(e.detail, aviso)) return;" in cuerpo
-    a = ap.index("const abrirBajoCobertura = (contenedor, inset, id, veniaDelFoco) => {")
+    a = ap.index("const abrirBajoCobertura = (contenedor, inset, id, veniaDelFoco")   # [142] ganó un parámetro detrás
     abrir = ap[a:ap.index("\n        };", a)]
     assert abrir.index("congelarAlto(contenedor);") < abrir.index("contenedor.style.setProperty('--kb-inset', `${inset}px`);")
     assert "root.toggleAttribute('data-kb-scroll-lock', true);" in abrir
-    assert "confirmarAlNativo(contenedor, id, true);" in abrir
+    assert "confirmarAlNativo(contenedor, id, true" in abrir
     # sin aviso a tiempo, el camino de siempre
     assert "alGanarElFoco({ target: campo, sinNativo: true });" in ap
     assert "alPerderElFoco({ relatedTarget: null, deNativo: true });" in ap
