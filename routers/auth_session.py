@@ -13,6 +13,8 @@ verificado por esta cookie.
   POST /api/auth/logout   — borra la cookie.
   POST /api/auth/apple/native — [P1-PLAN-LOTE-146] identity token de Sign in with Apple NATIVO
       (verificado aquí contra el JWKS de Apple) → sesión first-party. Knob de emergencia.
+  POST /api/auth/google/native — [P1-PLAN-LOTE-147] código PKCE de la sesión web nativa de iOS:
+      se canjea con Google, se verifica el id_token y se emite la sesión first-party.
   POST /api/auth/email-otp/verify — [P1-OTP-FIRST-PARTY · 2026-07-03] verifica el código
       OTP contra Neon Auth SERVER-SIDE y emite la sesión first-party directo.
 """
@@ -297,12 +299,13 @@ async def oauth_adopt(
 _APPLE_NATIVE_LIMITER = RateLimiter(max_calls=10, period_seconds=60)
 
 # código estable de `apple_identity.AppleIdentityError` → HTTP
-_APPLE_ERROR_STATUS = {
-    "apple_token_invalid": 401,
-    "apple_no_email": 409,
-    "apple_email_unverified": 409,
+# [P1-PLAN-LOTE-147] compartido con Google: el resolvedor de identidad es el mismo.
+_SOCIAL_ERROR_STATUS = {
+    "social_token_invalid": 401,
+    "social_no_email": 409,
+    "social_email_unverified": 409,
     "account_banned": 403,
-    "apple_signup_failed": 503,
+    "social_signup_failed": 503,
 }
 
 
@@ -328,7 +331,7 @@ async def apple_native_sign_in(
     Interruptor de emergencia `MEALFIT_APPLE_SIGNIN=false`: 404, como si no existiera.
     Fail-secure: token inválido → 401 sin cookie. tooltip-anchor: P1-PLAN-LOTE-146-ENDPOINT"""
     from apple_auth import apple_signin_enabled, verify_apple_identity_token
-    from apple_identity import AppleIdentityError, resolve_apple_user
+    from social_identity import SocialIdentityError, resolve_social_user
 
     if not apple_signin_enabled():
         return Response(status_code=404)
@@ -343,12 +346,12 @@ async def apple_native_sign_in(
     if not identidad:
         return Response(status_code=401)
     try:
-        usuario = await asyncio.to_thread(resolve_apple_user, identidad, (data or {}).get("name"))
-    except AppleIdentityError as e:
+        usuario = await asyncio.to_thread(resolve_social_user, "apple", identidad, (data or {}).get("name"))
+    except SocialIdentityError as e:
         logger.info(f"[P1-PLAN-LOTE-146] Apple no resolvió a un usuario: {e.code}")
-        return JSONResponse(status_code=_APPLE_ERROR_STATUS.get(e.code, 401), content={"ok": False, "error_code": e.code})
+        return JSONResponse(status_code=_SOCIAL_ERROR_STATUS.get(e.code, 401), content={"ok": False, "error_code": e.code})
     except Exception as e:
-        logger.error(f"[P1-PLAN-LOTE-146] resolve_apple_user lanzó {type(e).__name__}: {e}")
+        logger.error(f"[P1-PLAN-LOTE-146] resolve_social_user lanzó {type(e).__name__}: {e}")
         return Response(status_code=503)
     uid = usuario["user_id"]
     try:
@@ -359,6 +362,81 @@ async def apple_native_sign_in(
     if not sesion:
         return Response(status_code=503)
     logger.info(f"🔐 [P1-PLAN-LOTE-146] Apple nativo → sesión first-party (uid={uid[:8]}…, nueva={usuario['created']}).")
+    return {
+        "ok": True,
+        "user_id": uid,
+        "email": usuario.get("email"),
+        "token": sesion,
+        "form_key": derive_form_key(uid),
+        "session_cookie": True,
+        "created": bool(usuario["created"]),
+    }
+
+
+# [P1-PLAN-LOTE-147 · 2026-09-21] Mismo perfil de throttle que Apple y el OTP: cada llamada es un intento de
+# login, y además hace un canje de red contra Google y una verificación RSA en el threadpool.
+_GOOGLE_NATIVE_LIMITER = RateLimiter(max_calls=10, period_seconds=60)
+
+
+@router.post("/google/native")
+async def google_native_sign_in(
+    response: Response,
+    data: dict = Body(...),
+    _rl: object = Depends(_GOOGLE_NATIVE_LIMITER),
+):
+    """[P1-PLAN-LOTE-147 · 2026-09-21] «Continuar con Google» en la app de iOS.
+
+    El dueño: «¿por qué en la app nativa no está el botón de continuar con Google?». Porque el OAuth por
+    redirección no vuelve a la app (`P1-IOS-OAUTH-GATE`): Neon Auth manda al navegador y `capacitor://localhost`
+    no es una dirección que Safari acepte. El binario abre ahora la pantalla de Google en una
+    `ASWebAuthenticationSession` —marco del propio iOS, sin dependencias nuevas— que vuelve por un esquema propio
+    y trae un código de autorización. Aquí se canjea (PKCE, sin secreto) y se verifica el `id_token`.
+
+    QUE DECIDA EL SERVIDOR, otra vez: del cliente solo se acepta el código, su `code_verifier` y el nonce; la
+    identidad sale de un JWT que verificamos contra el JWKS de Google. El `redirect_uri` lo fija el servidor.
+
+    Quien YA entraba por Google en la web cae en el primer camino de `resolve_social_user` sin que nadie escriba
+    nada: Better Auth ya guardó su fila en `neon_auth.account` con `providerId='google'` y el mismo `sub`.
+
+    Interruptor de emergencia `MEALFIT_GOOGLE_SIGNIN=false`: 404, como si no existiera.
+    Fail-secure: canje o firma que no cuadran → 401 sin cookie. tooltip-anchor: P1-PLAN-LOTE-147-ENDPOINT"""
+    from google_auth import exchange_code_for_id_token, google_signin_enabled, verify_google_id_token
+    from social_identity import SocialIdentityError, resolve_social_user
+
+    if not google_signin_enabled():
+        return Response(status_code=404)
+    code = str((data or {}).get("code") or "").strip()
+    verifier = str((data or {}).get("code_verifier") or "").strip()
+    nonce = str((data or {}).get("nonce") or "").strip()
+    redirect_uri = str((data or {}).get("redirect_uri") or "").strip()
+    if not code or not verifier or not nonce or not redirect_uri:
+        return Response(status_code=401)
+    if not session_cookies_enabled():
+        logger.error("[P1-PLAN-LOTE-147] session_cookies deshabilitadas — el login con Google requiere la feature.")
+        return Response(status_code=503)
+    id_token = await asyncio.to_thread(exchange_code_for_id_token, code, verifier, redirect_uri)
+    if not id_token:
+        return Response(status_code=401)
+    identidad = await asyncio.to_thread(verify_google_id_token, id_token, nonce)
+    if not identidad:
+        return Response(status_code=401)
+    try:
+        usuario = await asyncio.to_thread(resolve_social_user, "google", identidad, identidad.get("name"))
+    except SocialIdentityError as e:
+        logger.info(f"[P1-PLAN-LOTE-147] Google no resolvió a un usuario: {e.code}")
+        return JSONResponse(status_code=_SOCIAL_ERROR_STATUS.get(e.code, 401), content={"ok": False, "error_code": e.code})
+    except Exception as e:
+        logger.error(f"[P1-PLAN-LOTE-147] resolve_social_user lanzó {type(e).__name__}: {e}")
+        return Response(status_code=503)
+    uid = usuario["user_id"]
+    try:
+        await asyncio.to_thread(ensure_user_profile_exists, uid, usuario.get("email"), usuario.get("name"))
+    except Exception as _ens_e:
+        logger.warning(f"[P1-PLAN-LOTE-147] ensure_user_profile_exists lanzó {type(_ens_e).__name__} (auth continúa)")
+    sesion = set_session_cookie(response, uid)
+    if not sesion:
+        return Response(status_code=503)
+    logger.info(f"🔐 [P1-PLAN-LOTE-147] Google nativo → sesión first-party (uid={uid[:8]}…, nueva={usuario['created']}).")
     return {
         "ok": True,
         "user_id": uid,

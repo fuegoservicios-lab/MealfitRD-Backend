@@ -25,7 +25,7 @@ def test_el_algoritmo_es_fijo_y_hay_interruptor_de_emergencia():
 
 
 def test_el_enlace_vive_en_las_tablas_de_better_auth_sin_ddl():
-    i = _src("apple_identity.py")
+    i = _src("social_identity.py")
     assert 'INSERT INTO neon_auth.account ("accountId", "providerId", "userId", "updatedAt")' in i
     assert "CREATE TABLE" not in i.upper().replace("CREATE TABLE`", "")
     k = i.index('if not identidad.get("email_verified"):')

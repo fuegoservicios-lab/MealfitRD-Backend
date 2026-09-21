@@ -1,10 +1,11 @@
-"""[P1-PLAN-LOTE-146 · 2026-09-20] De un `sub` de Apple YA VERIFICADO a un usuario de Bioboros.
+"""[P1-PLAN-LOTE-146 · 2026-09-20 · genérico en el 147] De una identidad social YA VERIFICADA a un usuario de Bioboros.
 
 La identidad de Bioboros vive en `neon_auth."user"` (Better Auth gestionado por Neon) y el backend
 RECHAZA a quien no tenga fila ahí (`P1-AUTH-CUENTA-BORRADA`). Neon Auth no ofrece Apple como
 proveedor, así que el enlace lo escribimos nosotros — pero en SUS tablas y con SU forma: una fila en
-`neon_auth.account` con `providerId='apple'` y `accountId=<sub>`, exactamente lo que Better Auth
-guarda para un proveedor social. Sin tablas propias ni DDL, y la purga de cuenta ya lo limpia (el
+`neon_auth.account` con `providerId='<proveedor>'` y `accountId=<sub>`, exactamente lo que Better Auth
+guarda para un proveedor social. Con `google` eso significa que quien ya entraba por la WEB con Google
+cae en el camino 1 sin tocar nada: su fila ya existe, escrita por Better Auth. Sin tablas propias ni DDL, y la purga de cuenta ya lo limpia (el
 DELETE de `user` arrastra `account` en cascada). Esquema medido en producción el 2026-09-20:
 
     user     id uuid DEFAULT · name NOT NULL · email NOT NULL · "emailVerified" NOT NULL · banned NULL
@@ -27,10 +28,10 @@ from db import execute_sql_query, execute_sql_write
 
 logger = logging.getLogger(__name__)
 
-PROVIDER = "apple"
+PROVEEDORES = ("apple", "google")
 
 
-class AppleIdentityError(Exception):
+class SocialIdentityError(Exception):
     """`code` es estable: el router lo traduce a HTTP y el cliente a un mensaje."""
 
     def __init__(self, code: str):
@@ -51,20 +52,20 @@ def _vetado(fila: dict) -> bool:
     return bool(fila.get("banned"))
 
 
-def _enlazar(uid: str, sub: str) -> None:
+def _enlazar(proveedor: str, uid: str, sub: str) -> None:
     execute_sql_write(
         'INSERT INTO neon_auth.account ("accountId", "providerId", "userId", "updatedAt") '
         "VALUES (%s, %s, %s, CURRENT_TIMESTAMP)",
-        (sub, PROVIDER, uid),
+        (sub, proveedor, uid),
     )
 
 
-def _por_sub(sub: str) -> Optional[dict]:
+def _por_sub(proveedor: str, sub: str) -> Optional[dict]:
     filas = execute_sql_query(
         'SELECT u.id::text AS id, u.email, u.name, u.banned FROM neon_auth.account a '
         'JOIN neon_auth."user" u ON u.id = a."userId" '
         'WHERE a."providerId" = %s AND a."accountId" = %s LIMIT 1',
-        (PROVIDER, sub), fetch_all=True,
+        (proveedor, sub), fetch_all=True,
     )
     return filas[0] if filas else None
 
@@ -77,34 +78,35 @@ def _por_correo(email: str) -> Optional[dict]:
     return filas[0] if filas else None
 
 
-def resolve_apple_user(identidad: dict, name: Optional[str] = None) -> dict:
-    """`identidad` es la salida de `apple_auth.verify_apple_identity_token` (ya verificada).
+def resolve_social_user(proveedor: str, identidad: dict, name: Optional[str] = None) -> dict:
+    """`identidad` es la salida del verificador del proveedor (`{sub, email, email_verified, is_private_email}`), YA verificada.
     Devuelve `{user_id, email, name, created, linked}` o lanza `AppleIdentityError`.
     tooltip-anchor: P1-PLAN-LOTE-146-RESOLVE"""
     sub = str(identidad.get("sub") or "").strip()
     email = str(identidad.get("email") or "").strip().lower()
     if not sub:
-        raise AppleIdentityError("apple_token_invalid")
+        raise SocialIdentityError("social_token_invalid")
 
-    fila = _por_sub(sub)
+    assert proveedor in PROVEEDORES, proveedor
+    fila = _por_sub(proveedor, sub)
     if fila:
         if _vetado(fila):
-            raise AppleIdentityError("account_banned")
+            raise SocialIdentityError("account_banned")
         return {"user_id": fila["id"], "email": fila.get("email"), "name": fila.get("name"), "created": False, "linked": False}
 
     # Desde aquí hace falta un correo, y que Apple lo dé por verificado: es la ÚNICA prueba de que
     # quien entra es dueño de la cuenta a la que se le va a enlazar.
     if not email:
-        raise AppleIdentityError("apple_no_email")
+        raise SocialIdentityError("social_no_email")
     if not identidad.get("email_verified"):
-        raise AppleIdentityError("apple_email_unverified")
+        raise SocialIdentityError("social_email_unverified")
 
     fila = _por_correo(email)
     if fila:
         if _vetado(fila):
-            raise AppleIdentityError("account_banned")
-        _enlazar(fila["id"], sub)
-        logger.info(f"🍎 [P1-PLAN-LOTE-146] Apple enlazado a una cuenta existente (uid={fila['id'][:8]}…).")
+            raise SocialIdentityError("account_banned")
+        _enlazar(proveedor, fila["id"], sub)
+        logger.info(f"🔗 [P1-PLAN-LOTE-146] {proveedor} enlazado a una cuenta existente (uid={fila['id'][:8]}…).")
         return {"user_id": fila["id"], "email": fila.get("email"), "name": fila.get("name"), "created": False, "linked": True}
 
     nombre = _nombre(name, email, bool(identidad.get("is_private_email")))
@@ -120,13 +122,13 @@ def resolve_apple_user(identidad: dict, name: Optional[str] = None) -> dict:
     if not nuevas:
         fila = _por_correo(email)
         if not fila or _vetado(fila):
-            raise AppleIdentityError("apple_signup_failed")
-        if not _por_sub(sub):
-            _enlazar(fila["id"], sub)
+            raise SocialIdentityError("social_signup_failed")
+        if not _por_sub(proveedor, sub):
+            _enlazar(proveedor, fila["id"], sub)
         return {"user_id": fila["id"], "email": fila.get("email"), "name": fila.get("name"), "created": False, "linked": True}
     uid = nuevas[0]["id"]
     # Si este INSERT fallara, la identidad queda sin enlace: el próximo intento la encuentra POR CORREO
     # (camino 2) y la enlaza — se cura solo, no deja a nadie fuera.
-    _enlazar(uid, sub)
-    logger.info(f"🍎 [P1-PLAN-LOTE-146] identidad nueva por Apple (uid={uid[:8]}…, relay={bool(identidad.get('is_private_email'))}).")
+    _enlazar(proveedor, uid, sub)
+    logger.info(f"🆕 [P1-PLAN-LOTE-146] identidad nueva por {proveedor} (uid={uid[:8]}…, relay={bool(identidad.get('is_private_email'))}).")
     return {"user_id": uid, "email": email, "name": nombre, "created": True, "linked": True}

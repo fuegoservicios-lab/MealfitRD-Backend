@@ -1,5 +1,5 @@
 # -*- coding: utf-8 -*-
-"""[P1-PLAN-LOTE-146 · 2026-09-20] De la identidad de Apple verificada a un usuario, y el endpoint que la canjea.
+"""[P1-PLAN-LOTE-146 · 2026-09-20 · genérico en el 147] De una identidad social verificada a un usuario, y el endpoint que la canjea.
 
 La base va SIMULADA en memoria (dos dicts con la forma de `neon_auth."user"` y `neon_auth.account`): ningún test
 escribe en la base real. Cada caso es una decisión de seguridad del diseño."""
@@ -12,7 +12,7 @@ import pytest
 from fastapi import FastAPI
 from fastapi.testclient import TestClient
 
-import apple_identity
+import social_identity
 import routers.auth_session as auth_session
 
 
@@ -50,8 +50,8 @@ class _Base:
 @pytest.fixture()
 def base(monkeypatch):
     b = _Base()
-    monkeypatch.setattr(apple_identity, "execute_sql_query", b.query)
-    monkeypatch.setattr(apple_identity, "execute_sql_write", b.write)
+    monkeypatch.setattr(social_identity, "execute_sql_query", b.query)
+    monkeypatch.setattr(social_identity, "execute_sql_write", b.write)
     return b
 
 
@@ -63,47 +63,47 @@ def _ident(**k):
 
 def test_correo_verificado_con_cuenta_entra_a_ESA_cuenta_y_queda_enlazado(base):
     base.users["u-1"] = {"id": "u-1", "email": "Ana@Example.com", "name": "Ana", "banned": None}
-    r = apple_identity.resolve_apple_user(_ident())
+    r = social_identity.resolve_social_user("apple", _ident())
     assert r["user_id"] == "u-1" and r["created"] is False and r["linked"] is True
     assert base.accounts == [{"accountId": "001.abc", "providerId": "apple", "userId": "u-1"}]
     # segunda vez: por el enlace, sin volver a mirar el correo ni duplicar la fila
-    r2 = apple_identity.resolve_apple_user(_ident(email=None, email_verified=False))
+    r2 = social_identity.resolve_social_user("apple", _ident(email=None, email_verified=False))
     assert r2["user_id"] == "u-1" and len(base.accounts) == 1
 
 
 def test_un_correo_SIN_verificar_jamas_enlaza_una_cuenta_ajena(base):
     base.users["u-victima"] = {"id": "u-victima", "email": "ana@example.com", "name": "Ana", "banned": None}
-    with pytest.raises(apple_identity.AppleIdentityError) as e:
-        apple_identity.resolve_apple_user(_ident(email_verified=False))
-    assert e.value.code == "apple_email_unverified" and base.accounts == []
+    with pytest.raises(social_identity.SocialIdentityError) as e:
+        social_identity.resolve_social_user("apple", _ident(email_verified=False))
+    assert e.value.code == "social_email_unverified" and base.accounts == []
 
 
 def test_nadie_con_ese_correo_nace_la_identidad_en_neon_auth(base):
-    r = apple_identity.resolve_apple_user(_ident(), name="Ana  <b>Pérez</b>")
+    r = social_identity.resolve_social_user("apple", _ident(), name="Ana  <b>Pérez</b>")
     assert r["created"] is True and r["user_id"] in base.users
     assert base.users[r["user_id"]]["name"] == "Ana  bPérez/b", "el nombre del cliente se limpia de < >"
     assert base.accounts[0]["userId"] == r["user_id"]
 
 
 def test_correo_oculto_cuenta_nueva_con_el_relay_y_nombre_neutro(base):
-    r = apple_identity.resolve_apple_user(_ident(email="x9z@privaterelay.appleid.com", is_private_email=True))
+    r = social_identity.resolve_social_user("apple", _ident(email="x9z@privaterelay.appleid.com", is_private_email=True))
     assert r["created"] is True and base.users[r["user_id"]]["name"] == "Usuario"
 
 
 def test_vetado_no_entra_ni_por_enlace_ni_por_correo(base):
     base.users["u-b"] = {"id": "u-b", "email": "ana@example.com", "name": "Ana", "banned": True}
-    with pytest.raises(apple_identity.AppleIdentityError) as e:
-        apple_identity.resolve_apple_user(_ident())
+    with pytest.raises(social_identity.SocialIdentityError) as e:
+        social_identity.resolve_social_user("apple", _ident())
     assert e.value.code == "account_banned"
     base.accounts.append({"accountId": "001.abc", "providerId": "apple", "userId": "u-b"})
-    with pytest.raises(apple_identity.AppleIdentityError):
-        apple_identity.resolve_apple_user(_ident())
+    with pytest.raises(social_identity.SocialIdentityError):
+        social_identity.resolve_social_user("apple", _ident())
 
 
 def test_sin_correo_y_sin_enlace_no_se_inventa_una_identidad(base):
-    with pytest.raises(apple_identity.AppleIdentityError) as e:
-        apple_identity.resolve_apple_user(_ident(email=None, email_verified=False))
-    assert e.value.code == "apple_no_email" and not base.users
+    with pytest.raises(social_identity.SocialIdentityError) as e:
+        social_identity.resolve_social_user("apple", _ident(email=None, email_verified=False))
+    assert e.value.code == "social_no_email" and not base.users
 
 
 def test_doble_toque_el_alta_que_choca_se_resuelve_por_correo(base, monkeypatch):
@@ -115,8 +115,8 @@ def test_doble_toque_el_alta_que_choca_se_resuelve_por_correo(base, monkeypatch)
             raise RuntimeError("unique_violation")      # la OTRA petición ganó la carrera
         return original(sql, params, returning, **k)
 
-    monkeypatch.setattr(apple_identity, "execute_sql_write", _choque)
-    r = apple_identity.resolve_apple_user(_ident())
+    monkeypatch.setattr(social_identity, "execute_sql_write", _choque)
+    r = social_identity.resolve_social_user("apple", _ident())
     assert r["user_id"] == "u-otra" and len(base.accounts) == 1
 
 
@@ -127,12 +127,12 @@ def _cliente(monkeypatch, *, encendido=True, identidad=None, usuario=None, error
     monkeypatch.setattr(apple_auth, "apple_signin_enabled", lambda: encendido)
     monkeypatch.setattr(apple_auth, "verify_apple_identity_token", lambda t, n: identidad)
 
-    def _resolver(ident, name=None):
+    def _resolver(proveedor, ident, name=None):
         if error:
-            raise apple_identity.AppleIdentityError(error)
+            raise social_identity.SocialIdentityError(error)
         return usuario
 
-    monkeypatch.setattr(apple_identity, "resolve_apple_user", _resolver)
+    monkeypatch.setattr(social_identity, "resolve_social_user", _resolver)
     monkeypatch.setattr(auth_session, "session_cookies_enabled", lambda: True)
     monkeypatch.setattr(auth_session, "set_session_cookie", lambda resp, uid, iat=None: f"mf-token-{uid}")
     monkeypatch.setattr(auth_session, "derive_form_key", lambda uid: f"fk-{uid}")
@@ -168,9 +168,9 @@ def test_identidad_verificada_emite_la_misma_sesion_que_el_otp(monkeypatch):
 
 
 def test_los_errores_de_identidad_salen_con_su_codigo(monkeypatch):
-    c = _cliente(monkeypatch, identidad=_ident(), error="apple_email_unverified")
+    c = _cliente(monkeypatch, identidad=_ident(), error="social_email_unverified")
     r = c.post("/api/auth/apple/native", json=_CUERPO)
-    assert r.status_code == 409 and r.json() == {"ok": False, "error_code": "apple_email_unverified"}
+    assert r.status_code == 409 and r.json() == {"ok": False, "error_code": "social_email_unverified"}
     c = _cliente(monkeypatch, identidad=_ident(), error="account_banned")
     assert c.post("/api/auth/apple/native", json=_CUERPO).status_code == 403
 
@@ -178,5 +178,5 @@ def test_los_errores_de_identidad_salen_con_su_codigo(monkeypatch):
 def test_tiene_su_propio_limitador_y_verifica_ANTES_de_tocar_la_base():
     src = inspect.getsource(auth_session.apple_native_sign_in)
     assert "Depends(_APPLE_NATIVE_LIMITER)" in src
-    assert src.index("verify_apple_identity_token, token, nonce") < src.index("resolve_apple_user, identidad")
-    assert src.index("if not identidad:") < src.index("resolve_apple_user, identidad")
+    assert src.index("verify_apple_identity_token, token, nonce") < src.index("resolve_social_user, \"apple\", identidad")
+    assert src.index("if not identidad:") < src.index("resolve_social_user, \"apple\", identidad")
