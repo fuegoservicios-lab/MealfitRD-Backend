@@ -51,9 +51,10 @@ def apple_signin_enabled() -> bool:
 
 
 def _audiences() -> list:
-    """Bundle id de la app (flujo nativo). Lista separada por comas para poder sumar un Services ID
-    el día que exista el flujo web; vacío ⇒ el default del binario."""
-    raw = (_env_str("MEALFIT_APPLE_AUDIENCES", "com.bioboros.app") or "com.bioboros.app").strip()
+    """Destinatarios válidos: el bundle id (flujo nativo de iOS) y el Services ID (flujo web, lote 148)."""
+    # El binario (bundle id) y la web (Services ID). Los dos son NUESTROS y cada token dice para cuál se emitió.
+    por_defecto = "com.bioboros.app,com.bioboros.app.web"
+    raw = (_env_str("MEALFIT_APPLE_AUDIENCES", por_defecto) or por_defecto).strip()
     return [a.strip() for a in raw.split(",") if a.strip()]
 
 
@@ -118,8 +119,12 @@ def verify_apple_identity_token(token: str, raw_nonce: str) -> Optional[dict]:
     except Exception as e:
         logger.info(f"[P1-PLAN-LOTE-146] identity token rechazado: {type(e).__name__}")
         return None
-    esperado = hashlib.sha256(raw_nonce.encode("utf-8")).hexdigest()
-    if not hmac.compare_digest(str(claims.get("nonce") or ""), esperado):
+    # [P1-PLAN-LOTE-148] El nativo manda el SHA-256 del nonce (lo exige Apple) y la librería web no documenta si
+    # hashea el suyo. Se aceptan las dos formas: ambas salen del mismo aleatorio de 32 bytes de ESTA sesión, así que
+    # no se afloja nada — lo que se sigue exigiendo es conocer el nonce.
+    visto = str(claims.get("nonce") or "")
+    if not (hmac.compare_digest(visto, hashlib.sha256(raw_nonce.encode("utf-8")).hexdigest())
+            or hmac.compare_digest(visto, raw_nonce)):
         logger.warning("[P1-PLAN-LOTE-146] identity token con nonce ajeno o ausente — rechazado.")
         return None
     try:
