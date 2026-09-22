@@ -269,7 +269,11 @@ _PROCESS_START_ISO = datetime.now(timezone.utc).isoformat()
 # [P1-PLAN-LOTE-154 · 2026-09-22] (frontend) «Saltar a la última pregunta» se pintaba mirando la HISTORIA del
 # usuario y se validaba, un click más tarde, contra el CONTRATO: el dueño lo vio en el paso 2 de 26 con la
 # obligatoria en blanco, y el botón lo devolvía justo ahí. Ahora sólo existe cuando el salto es real.
-_LAST_KNOWN_PFIX = "P1-PLAN-LOTE-154 · 2026-09-22"
+# [P1-PLAN-LOTE-155 · 2026-09-22] (coach, los tres NATIVOS) las cabeceras de la cuota se publican en CORS —sin
+# `expose_headers` el navegador se las comía y en la app quedaba el copy genérico, que invita a mejorar de plan—,
+# ese copy de respaldo respeta `nativeHidesCommerce()`, un motor web anterior a `color-mix()` avisa en vez de
+# pintarse descolorido, y el `code` del error del stream vuelve a significar algo en el cliente.
+_LAST_KNOWN_PFIX = "P1-PLAN-LOTE-155 · 2026-09-22"
 
 # [P1-SENTRY-SAMPLE-COST · 2026-05-12] Sentry sampling driven from env vars
 # con default seguro 0.1 (10%). Pre-fix tenía `traces_sample_rate=1.0` y
@@ -2546,7 +2550,28 @@ app.add_middleware(
     # [H2 / P3-CORRELATION-ID · 2026-05-20] expose_headers permite que el
     # browser JS lea `X-Correlation-ID` de la response — útil para que el
     # frontend lo muestre en reportes de bug ("incluye este ID al reportar").
-    expose_headers=["X-Correlation-ID"],
+    #
+    # [P1-PLAN-LOTE-155 · 2026-09-22] Y las tres del medidor del coach. `verify_coach_quota`
+    # las manda con cada 402 desde el 2-sep para que el chat pueda decir «llegaste a tus 60
+    # mensajes, se renueva el 1 de octubre» en vez de un «actualiza tu plan» a secas — pero
+    # un header que no está en esta lista NO EXISTE para el JS: el navegador lo entrega al
+    # túnel y no al `fetch`. En la web no se notaba (nginx sirve API y front en el MISMO
+    # origen: sin CORS, sin filtro); en la app nativa TODA llamada es cross-origin —medido
+    # en el log de nginx, con su preflight— así que ahí la función nacía muerta.
+    #
+    # Y no era solo un mensaje peor: sin las cabeceras, el chat cae al copy genérico, que
+    # invita a MEJORAR DE PLAN. Eso es justo lo que `nativeHidesCommerce()` existe para que
+    # no ocurra dentro de la app (Apple 3.1.1). Una cabecera que no se expone convirtió una
+    # mejora de producto en una regresión de cumplimiento, en silencio.
+    #
+    # *Mandar una cabecera personalizada no es publicarla: sin `expose_headers` el emisor
+    # cree que informa y el receptor no ve nada.*
+    expose_headers=[
+        "X-Correlation-ID",
+        "X-Coach-Quota-Limit",
+        "X-Coach-Quota-Used",
+        "X-Coach-Quota-Resets-At",
+    ],
 )
 
 
