@@ -295,7 +295,11 @@ _PROCESS_START_ISO = datetime.now(timezone.utc).isoformat()
 # siempre a quien abandonaba la app. Los avisos leen la dieta y el objetivo reales y reciben las alergias. Sentry del
 # backend estaba APAGADO (el DSN se leía antes de cargar el `.env`). Borrar la cuenta olvida la identidad cacheada. Un
 # invitado ya no puede usar como sesión el id de una cuenta, ni `/api/auth/migrate` mover datos de cuentas ajenas.
-_LAST_KNOWN_PFIX = "P1-PLAN-LOTE-161 · 2026-09-22"
+# [P1-PLAN-LOTE-162 · 2026-09-22] (frontend, por OTA) en Android 14+ encender los avisos sacaba al tester a «Alarmas
+# y recordatorios» en cada reprogramación: ahora la alarma es exacta solo con el permiso dado y se pide desde
+# Configuración. El primer vaso de la mañana ya no pisa el total de ayer; los interruptores de avisos guardan solo su
+# clave; la memoria del coach se ve en toda cuenta; el Historial vacío del contador lleva a los días anteriores.
+_LAST_KNOWN_PFIX = "P1-PLAN-LOTE-162 · 2026-09-22"
 
 # [P1-SENTRY-SAMPLE-COST · 2026-05-12] Sentry sampling driven from env vars
 # con default seguro 0.1 (10%). Pre-fix tenía `traces_sample_rate=1.0` y

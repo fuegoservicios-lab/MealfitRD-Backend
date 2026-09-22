@@ -66,7 +66,9 @@ def test_sin_columna_nueva_ni_migracion():
 
 def test_el_frontend_los_guarda_en_el_perfil_y_reprograma():
     st = _front("src/pages/Settings.jsx")
-    assert "safeUpdateHealthProfile({ [clave]: valor })" in st
+    # [P1-PLAN-LOTE-162] En el perfil, sí — pero SOLO su clave: `safeUpdateHealthProfile` mandaba el formulario entero
+    # y la copia local congelada de la otra preferencia la devolvía a su valor viejo.
+    assert "body: JSON.stringify({ health_profile: { [clave]: valor } })," in st
     assert "await sincronizarAvisosLocales();" in st
 
 
