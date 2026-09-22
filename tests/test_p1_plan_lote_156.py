@@ -137,6 +137,24 @@ def test_con_algunos_abiertos_solo_se_cierran_los_demas():
     assert params[0] == ["llm_circuit_breaker_open:deepseek-flash"]
 
 
+def test_la_consulta_pide_las_filas_explicitamente():
+    """`execute_sql_query` SIN `fetch_all` devuelve `[]` aunque la consulta traiga filas.
+
+    No es una preferencia de estilo: el helper lo dice en su propia docstring y ya enmascaró 8
+    callsites en producción. Escribí este cron sin el flag y ninguno de los tests de arriba lo
+    vio, porque todos mockean el helper: habría corrido cada 10 min informando de que todo
+    está bien, para siempre.
+
+      *Un mock del transporte no prueba el transporte.*
+    """
+    with patch("cron_tasks.execute_sql_query", return_value=[]) as q, \
+         patch("cron_tasks.execute_sql_write"):
+        cron_tasks._llm_breaker_open_alert_job()
+    assert q.call_args.kwargs.get("fetch_all") is True, (
+        "Sin `fetch_all=True` el vigilante lee una lista vacía siempre: nunca alertaría."
+    )
+
+
 def test_la_ventana_acota_la_consulta_y_es_configurable():
     """Sin ventana, una fila de hace días alertaría como si fuese de ahora."""
     with patch("cron_tasks.execute_sql_query", return_value=[]) as q, \

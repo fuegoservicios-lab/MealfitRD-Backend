@@ -6638,6 +6638,12 @@ def _llm_breaker_open_alert_job():
                   > (EXTRACT(EPOCH FROM NOW())::float - (%s::float * 60.0))
             """,
             (ventana_min,),
+            # [P1-FETCH-EXPLICIT] Sin esto `execute_sql_query` devuelve `[]` AUNQUE la consulta
+            # haya traído filas, y solo deja un WARNING en el log. O sea: el vigilante habría
+            # corrido cada 10 min diciendo que todo está bien, para siempre. Lo escribí sin el
+            # flag y los tests no lo vieron porque mockean el helper — que es exactamente lo que
+            # avisa su docstring. *Un mock del transporte no prueba el transporte.*
+            fetch_all=True,
         ) or []
 
         for fila in filas:
