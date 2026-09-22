@@ -400,24 +400,52 @@ async def google_native_sign_in(
 
     Interruptor de emergencia `MEALFIT_GOOGLE_SIGNIN=false`: 404, como si no existiera.
     Fail-secure: canje o firma que no cuadran → 401 sin cookie. tooltip-anchor: P1-PLAN-LOTE-147-ENDPOINT"""
-    from google_auth import exchange_code_for_id_token, google_signin_enabled, verify_google_id_token
+    from google_auth import (exchange_code_for_id_token, google_android_audience, google_signin_enabled,
+                             verify_google_id_token)
     from social_identity import SocialIdentityError, resolve_social_user
 
     if not google_signin_enabled():
         return Response(status_code=404)
-    code = str((data or {}).get("code") or "").strip()
-    verifier = str((data or {}).get("code_verifier") or "").strip()
     nonce = str((data or {}).get("nonce") or "").strip()
-    redirect_uri = str((data or {}).get("redirect_uri") or "").strip()
-    if not code or not verifier or not nonce or not redirect_uri:
+    if not nonce:
         return Response(status_code=401)
     if not session_cookies_enabled():
         logger.error("[P1-PLAN-LOTE-147] session_cookies deshabilitadas — el login con Google requiere la feature.")
         return Response(status_code=503)
-    id_token = await asyncio.to_thread(exchange_code_for_id_token, code, verifier, redirect_uri)
-    if not id_token:
-        return Response(status_code=401)
-    identidad = await asyncio.to_thread(verify_google_id_token, id_token, nonce)
+
+    # [P1-PLAN-LOTE-160 · 2026-09-22] DOS formas de entrar por el mismo sitio, porque Google cerró una de ellas.
+    #
+    # iOS manda un CÓDIGO (PKCE sobre esquema propio). Android no puede: «Custom URI schemes are no longer
+    # supported on Android» — su camino es Credential Manager, que entrega el `id_token` ya emitido y deja
+    # el canje sin nada que canjear. Lo que sigue después (verificar, resolver al usuario, crear perfil y
+    # sellar la cookie) es IDÉNTICO, y por eso es un endpoint y no dos: duplicarlo dejaría dos copias de la
+    # parte que de verdad decide quién eres.
+    #
+    # La rama la elige la FORMA del cuerpo, no un campo `plataforma` que diga el cliente: un cliente que
+    # miente sobre su plataforma solo consigue que se le verifique contra la audiencia equivocada.
+    # El nombre NO empieza por `id_token`, a propósito: `test_p1_plan_lote_147_google` ancla el orden
+    # «canjear antes que verificar» buscando la PRIMERA llamada al verificador por el nombre de su segundo
+    # argumento. Una variable que empezara igual adelantaría ese índice hasta esta rama y pondría en rojo
+    # una invariante que sigue siendo cierta. (Este comentario tampoco puede citar la cadena que el test
+    # busca: la primera versión lo hacía y falló exactamente por lo que venía a explicar.)
+    token_de_android = str((data or {}).get("id_token") or "").strip()
+    if token_de_android:
+        audiencia = google_android_audience()
+        if not audiencia:
+            # Sin audiencia configurada no se puede saber para quién se emitió: 404, como el interruptor.
+            logger.warning("[P1-PLAN-LOTE-160] id_token de Android sin MEALFIT_GOOGLE_ANDROID_CLIENT_ID — cerrado.")
+            return Response(status_code=404)
+        identidad = await asyncio.to_thread(verify_google_id_token, token_de_android, nonce, audiencia)
+    else:
+        code = str((data or {}).get("code") or "").strip()
+        verifier = str((data or {}).get("code_verifier") or "").strip()
+        redirect_uri = str((data or {}).get("redirect_uri") or "").strip()
+        if not code or not verifier or not redirect_uri:
+            return Response(status_code=401)
+        id_token = await asyncio.to_thread(exchange_code_for_id_token, code, verifier, redirect_uri)
+        if not id_token:
+            return Response(status_code=401)
+        identidad = await asyncio.to_thread(verify_google_id_token, id_token, nonce)
     if not identidad:
         return Response(status_code=401)
     try:

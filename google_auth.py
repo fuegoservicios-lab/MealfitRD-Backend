@@ -61,6 +61,33 @@ def google_ios_client_id() -> str:
                      "323329713741-7o63vat4382kpdg00vun714ag6i2em23.apps.googleusercontent.com") or "").strip()
 
 
+def google_android_audience() -> str:
+    """[P1-PLAN-LOTE-160] El `aud` que trae un `id_token` de Credential Manager en Android.
+
+    **No es el cliente de tipo Android.** Google lo dice explícitamente: en Android se pasa el ID del cliente
+    de tipo **Web** como `serverClientId`, y ése es el que acaba en el `aud` del token. El cliente de tipo
+    Android existe igual —es lo que ata la app a su paquete y a la huella SHA-1 de su clave de firma— pero
+    nunca aparece en el token; como mucho viaja en `azp`.
+
+    Vacío ⇒ el camino de Android queda CERRADO (el endpoint responde 404). Fail-secure a propósito: sin este
+    valor no hay forma de saber para quién se emitió el token, y caer al `aud` de iOS aceptaría como válido
+    un token emitido para otra app nuestra. Un login que no funciona se ve; uno que acepta de más, no.
+
+    El valor por defecto es el cliente Web `Bioboros Web` del proyecto `mealfitt`, creado el 2026-09-22.
+    Público, como el de iOS: viaja dentro del binario de Android y en cada petición. El *secreto* de ese
+    cliente NO se usa aquí y no debe llegar nunca a este proceso — no hay canje que firmar.
+
+    `MEALFIT_GOOGLE_ANDROID_SIGNIN=false` apaga SOLO Android y deja iOS y la web en pie. Existe como knob
+    propio porque `MEALFIT_GOOGLE_SIGNIN` los tumba a los tres: si el día de mañana falla el camino nuevo,
+    el rollback no debería castigar a quien entraba por el viejo. Y no se apaga vaciando el client_id —
+    `_env_str` cae al default cuando la env está vacía, así que ese «apagado» no apagaría nada.
+    """
+    if not _env_bool("MEALFIT_GOOGLE_ANDROID_SIGNIN", True):
+        return ""
+    return (_env_str("MEALFIT_GOOGLE_ANDROID_CLIENT_ID",
+                     "323329713741-qqcajd7sslluuegc1hq0pcdcrik0mvkb.apps.googleusercontent.com") or "").strip()
+
+
 def _max_age_s() -> int:
     return max(60, min(3600, _env_int("MEALFIT_GOOGLE_TOKEN_MAX_AGE_S", 600)))
 
@@ -137,17 +164,25 @@ def _redirect_uri_esperado() -> str:
     return f"com.googleusercontent.apps.{base}:/oauth2redirect"
 
 
-def verify_google_id_token(token: str, raw_nonce: str) -> Optional[dict]:
+def verify_google_id_token(token: str, raw_nonce: str, audience: Optional[str] = None) -> Optional[dict]:
     """Devuelve `{sub, email, email_verified, is_private_email}` o `None`.
+
+    [P1-PLAN-LOTE-160] `audience` explícita para el camino de Android, cuyo token se emite para el cliente
+    de tipo Web. Se pasa por parámetro y NO se acumulan las dos en una lista: una lista haría que un token
+    de iOS pasara por la puerta de Android y al revés, y la única defensa que distingue a nuestras dos apps
+    es precisamente el `aud`. Ausente ⇒ iOS, que es quien ya llamaba.
     tooltip-anchor: P1-PLAN-LOTE-147-VERIFY"""
     if not token or not raw_nonce or len(raw_nonce) < 16 or len(token) > 8192:
+        return None
+    aud = (audience or google_ios_client_id() or "").strip()
+    if not aud:
         return None
     try:
         key = _signing_key(token)
         claims = jwt.decode(
             token, key,
             algorithms=["RS256"],              # FIJO: nunca el `alg` del header
-            audience=google_ios_client_id(),
+            audience=aud,
             issuer=list(GOOGLE_ISSUERS),
             options={"require": ["exp", "iat", "sub", "aud", "iss"]},
             leeway=30,
