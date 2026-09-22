@@ -302,7 +302,11 @@ _PROCESS_START_ISO = datetime.now(timezone.utc).isoformat()
 # [P1-PLAN-LOTE-163 · 2026-09-22] (APK 103 + build de iOS) el gesto «atrás» de Android cerraba la app: sin
 # `@capacitor/app` nadie lo escuchaba. Ahora cierra el diálogo de arriba, minimiza en las pestañas raíz y retrocede en
 # el resto. El icono y la pantalla de arranque eran el logo de Capacitor: ahora son los de Bioboros.
-_LAST_KNOWN_PFIX = "P1-PLAN-LOTE-163 · 2026-09-22"
+# [P1-PLAN-LOTE-164 · 2026-09-22] (frontend, por OTA) en el iPhone encender el generador «no hacía nada»: el diálogo de
+# confirmación no se veía sobre Configuración. Ahora abre el formulario directo y este pregunta SOLO lo que la rama del
+# contador se saltó. Un 422 ya no se disfraza de «tu plan se sigue generando»; «Otra condición» no cierra el contador;
+# «Tus Medidas» dice qué está mal; el idioma elegido en el formulario se guarda en la cuenta.
+_LAST_KNOWN_PFIX = "P1-PLAN-LOTE-164 · 2026-09-22"
 
 # [P1-SENTRY-SAMPLE-COST · 2026-05-12] Sentry sampling driven from env vars
 # con default seguro 0.1 (10%). Pre-fix tenía `traces_sample_rate=1.0` y
