@@ -273,7 +273,11 @@ _PROCESS_START_ISO = datetime.now(timezone.utc).isoformat()
 # `expose_headers` el navegador se las comía y en la app quedaba el copy genérico, que invita a mejorar de plan—,
 # ese copy de respaldo respeta `nativeHidesCommerce()`, un motor web anterior a `color-mix()` avisa en vez de
 # pintarse descolorido, y el `code` del error del stream vuelve a significar algo en el cliente.
-_LAST_KNOWN_PFIX = "P1-PLAN-LOTE-155 · 2026-09-22"
+# [P1-PLAN-LOTE-156 · 2026-09-22] (coach) el proveedor caído era invisible Y sin huella: el cortacircuitos
+# abre a los 3 fallos y nadie emitía nada, mientras `_sweep_stale_llm_circuit_breakers` borraba la única fila
+# a las 2 h. Ahora un cron cada 10 min lo alerta por modelo. Y en el cliente, un corte de red a media
+# respuesta ya no pierde la respuesta que el backend SÍ guardó.
+_LAST_KNOWN_PFIX = "P1-PLAN-LOTE-156 · 2026-09-22"
 
 # [P1-SENTRY-SAMPLE-COST · 2026-05-12] Sentry sampling driven from env vars
 # con default seguro 0.1 (10%). Pre-fix tenía `traces_sample_rate=1.0` y
