@@ -213,6 +213,83 @@ def avisos_de_agua_activos(health: dict) -> bool:
     return (health or {}).get("avisos_agua") is not False
 
 
+# [P1-PLAN-LOTE-161] Los centinelas de «nada declarado» del formulario: no son datos clínicos.
+_SIN_DATO_CLINICO = {"", "ninguna", "ninguno", "no", "n/a", "na", "nada", "none"}
+
+
+def _lista_del_perfil(health: dict, *claves) -> list:
+    """Los valores declarados bajo `claves` (lista o texto separado por comas), sin centinelas ni repetidos."""
+    out = []
+    for clave in claves:
+        v = (health or {}).get(clave)
+        if isinstance(v, str):
+            v = [x.strip() for x in v.split(",")]
+        if not isinstance(v, list):
+            continue
+        for x in v:
+            s = str(x or "").strip()
+            if s and s.lower() not in _SIN_DATO_CLINICO and s not in out:
+                out.append(s)
+    return out
+
+
+def contexto_del_aviso(health: dict) -> dict:
+    """[P1-PLAN-LOTE-161 · 2026-09-22] Lo que el aviso de comida tiene que saber de la persona.
+
+    El cron leía `dietTypes` y `goals`, que el formulario NO guarda (guarda `dietType` y `mainGoal`): todos los
+    avisos salían con «balanceada / mantener de manera saludable». Y no recibía ni alergias ni condiciones: un tercio
+    de las veces el estilo sorteado pide «aportar opciones», así que un vegano o un alérgico al huevo podía leer
+    «¿qué tal unos huevos revueltos?». Es el único texto del coach sin filtro determinista detrás.
+
+    Devuelve `dieta` y `objetivo` para la plantilla (con los nombres viejos como respaldo, por si algún perfil antiguo
+    los tiene), el `bloque` de restricciones que se AÑADE al prompt ("" si no hay nada que decir: un bloque vacío que
+    dice «ninguna alergia» da una certeza que no se tiene) y `restringido`, que apaga el estilo que nombra comida.
+    tooltip-anchor: P1-PLAN-LOTE-161-AVISO-CON-RESTRICCIONES
+    """
+    h = health if isinstance(health, dict) else {}
+    dieta = h.get("dietType")
+    if not isinstance(dieta, str) or not dieta.strip():
+        _viejas = h.get("dietTypes")
+        dieta = str(_viejas[0]) if isinstance(_viejas, list) and _viejas else "balanceada"
+    objetivo = h.get("mainGoal")
+    if not isinstance(objetivo, str) or not objetivo.strip():
+        _viejos = h.get("goals")
+        objetivo = ", ".join(str(x) for x in _viejos) if isinstance(_viejos, list) and _viejos else "mantener de manera saludable"
+
+    alergias = _lista_del_perfil(h, "allergies", "otherAllergies")
+    condiciones = _lista_del_perfil(h, "medicalConditions", "otherConditions")
+    no_le_gusta = _lista_del_perfil(h, "dislikes", "otherDislikes")
+    try:
+        from constants import canonicalize_diet_type
+        dieta_restrictiva = canonicalize_diet_type(dieta) != "balanced"
+    except Exception:
+        dieta_restrictiva = False
+
+    lineas = []
+    if alergias:
+        lineas.append(f"- ALERGIAS / INTOLERANCIAS: {', '.join(alergias)}.")
+    if dieta_restrictiva:
+        lineas.append(f"- DIETA: {dieta}.")
+    if condiciones:
+        lineas.append(f"- CONDICIONES MÉDICAS: {', '.join(condiciones)}.")
+    if no_le_gusta:
+        lineas.append(f"- NO LE GUSTA: {', '.join(no_le_gusta)}.")
+    bloque = ""
+    if lineas:
+        bloque = (
+            "\n\n🛑 RESTRICCIONES DEL PACIENTE — PRIORIDAD 1, POR ENCIMA DEL ESTILO Y DEL TONO:\n"
+            + "\n".join(lineas)
+            + "\nNUNCA nombres un alimento que choque con esto, ni siquiera como ejemplo. Si dudas de que un alimento sea "
+              "compatible, no lo nombres: anima sin sugerir platos.\n"
+        )
+    return {
+        "dieta": dieta,
+        "objetivo": objetivo,
+        "bloque": bloque,
+        "restringido": bool(alergias or dieta_restrictiva or condiciones),
+    }
+
+
 def _antelacion_del_aviso_h() -> float:
     """[P1-PLAN-LOTE-150] Cuánto ANTES de tu hora habitual llega el recordatorio de esa comida. 0 = a la hora exacta.
     El tope de 2 h evita que el aviso de una comida se solape con el de la anterior."""
@@ -382,14 +459,27 @@ def get_active_users_for_proactive() -> list:
     """Busca session_ids que pertenezcan a usuarios registrados con actividad reciente."""
     try:
         # Obtenemos sesiones que sí tienen un user_id y han estado activas en los últimos 3 días (72 hrs)
+        #
+        # [P1-PLAN-LOTE-161 · 2026-09-22] «Activo» lo decide una sesión que abrió una PERSONA en los últimos 3
+        # días: la que tiene algún mensaje suyo, o la vacía que abre el cliente al renovar el chat del día. NO
+        # cuenta la que abre este mismo cron para escribir un aviso (solo mensajes del modelo): desde el lote 159
+        # el cron crea una sesión al día, y medido solo por `created_at` quien abandonaba la app seguía «activo»
+        # para siempre — cuatro avisos diarios con IA escritos en chats que nadie abre. La sesión DEVUELTA sigue
+        # siendo la más reciente del usuario (también la del aviso de hoy), para que el segundo aviso del día caiga
+        # en el mismo chat que el primero y no abra otro. tooltip-anchor: P1-PLAN-LOTE-161-ACTIVO-POR-PERSONA
         if not connection_pool: return []
         query = (
-            "SELECT DISTINCT ON (user_id) id, user_id "
-            "FROM agent_sessions "
-            "WHERE user_id IS NOT NULL "
-            "AND user_id::text != 'guest' "
-            "AND created_at >= NOW() - INTERVAL '3 days' "
-            "ORDER BY user_id, created_at DESC"
+            "WITH activos AS ("
+            " SELECT DISTINCT s.user_id FROM agent_sessions s"
+            " WHERE s.user_id IS NOT NULL"
+            " AND s.user_id::text != 'guest'"
+            " AND s.created_at >= NOW() - INTERVAL '3 days'"
+            " AND (EXISTS (SELECT 1 FROM agent_messages m WHERE m.session_id = s.id AND m.role = 'user')"
+            " OR NOT EXISTS (SELECT 1 FROM agent_messages m WHERE m.session_id = s.id))"
+            ") "
+            "SELECT DISTINCT ON (s.user_id) s.id, s.user_id "
+            "FROM agent_sessions s JOIN activos a ON a.user_id = s.user_id "
+            "ORDER BY s.user_id, s.created_at DESC"
         )
         res = execute_sql_query(query, fetch_all=True)
         res = list(res) if res else []
@@ -681,7 +771,13 @@ def run_proactive_checks():
         # El corte es por el ÚLTIMO MENSAJE, no por `created_at`: una sesión abierta anoche en
         # la que se sigue hablando a las 00:30 es la de hoy, y mirar su nacimiento la partiría
         # en dos. Es el mismo criterio que usa el cliente.
-        session_id = _sesion_del_dia_para_aviso(session_id, user_id, _now_utc, _user_tz_off)
+        #
+        # [P1-PLAN-LOTE-161 · 2026-09-22] La llamada a `_sesion_del_dia_para_aviso` ya NO va aquí:
+        # iba antes de TODOS los filtros (tope diario, horas de silencio, interruptor, comida ya
+        # registrada), así que el primer tick de cada día —las 00:30, en pleno silencio— abría un
+        # chat nuevo para cada usuario aunque no fuera a recibir nada. Y como «activo» se medía por
+        # `agent_sessions.created_at`, ese chat lo mantenía activo para siempre. Ahora la sesión del
+        # día se decide justo antes de escribir el aviso (más abajo, junto a `save_message`).
         # GAP 3: Nudge Budget (tope diario anti-fatiga)
         # [P1-PLAN-LOTE-72] El tope es el knob `MEALFIT_PROACTIVE_MAX_NUDGES_PER_DAY`: 4 por defecto (era un 2 fijo).
         _tope_diario = _max_avisos_por_dia()
@@ -907,9 +1003,10 @@ No uses demasiados emojis. Sé directo, breve y empático.
                 # ESTADO: olvido registrar. Generar mensaje proactivo.
                 logger.info(f"⚠️ [CRON] Usuario {user_id} ({session_id}) no registró {meal_to_check}. Generando mensaje...")
                 
-                diet_types = health.get("dietTypes", ["balanceada"])
-                diet_type = diet_types[0] if diet_types else "balanceada"
-                goals = ", ".join(health.get("goals", ["mantener de manera saludable"]))
+                # [P1-PLAN-LOTE-161] Dieta, objetivo y restricciones REALES del perfil (ver `contexto_del_aviso`).
+                _ctx_aviso = contexto_del_aviso(health)
+                diet_type = _ctx_aviso["dieta"]
+                goals = _ctx_aviso["objetivo"]
                 
                 # --- GAP 3: Embedding-based Nudge Personalization ---
                 context_summary = f"Usuario ignoró {meal_to_check} {int((1-meal_rate)*meal_total)} veces de {meal_total} registradas. Tono base: {tone_instruction}"
@@ -940,6 +1037,11 @@ No uses demasiados emojis. Sé directo, breve y empático.
                     style_instruction = "Haz una pregunta directa y al grano sin rodeos."
                 elif nudge_style == "sugestivo":
                     style_instruction = "Haz una sugerencia suave y comprensiva, aportando opciones."
+                    # [P1-PLAN-LOTE-161] «Aportando opciones» es pedirle al modelo que nombre comida. Con alergias, una
+                    # dieta restrictiva o una condición declaradas, el aviso anima sin nombrar platos: es el único
+                    # texto del coach que no pasa por ningún filtro determinista, así que la regla es no darle ocasión.
+                    if _ctx_aviso["restringido"]:
+                        style_instruction = "Haz una sugerencia suave y comprensiva, sin nombrar alimentos concretos."
                 elif nudge_style == "gamificado":
                     style_instruction = "Usa un tono de reto amistoso, motivando como si fuera un logro a desbloquear."
                 
@@ -953,6 +1055,9 @@ No uses demasiados emojis. Sé directo, breve y empático.
                     tone_instruction=final_tone,
                     style_instruction=style_instruction
                 )
+                # [P1-PLAN-LOTE-161] Las restricciones van DESPUÉS de la plantilla (no como hueco): un placeholder nuevo
+                # obligaría a cada `.format()` que la arma a conocerlo, y la cadena vacía no añade nada si no hay nada.
+                prompt += _ctx_aviso["bloque"]
                 # [P1-COUNTRY-SYSTEM-F2 · Task 3 · 2026-08-17] Mismo directive que el bloque
                 # "Resumen del día" arriba — ver esa nota para el contrato completo.
                 prompt += build_language_directive(_nudge_locale)
@@ -982,6 +1087,9 @@ No uses demasiados emojis. Sé directo, breve y empático.
                 content = str(raw_content).strip()
             
             if content:
+                # [P1-PLAN-LOTE-161] El chat de HOY se elige aquí, cuando ya hay un aviso que escribir: si no toca
+                # avisar, no se abre ninguna conversación.
+                session_id = _sesion_del_dia_para_aviso(session_id, user_id, _now_utc, _user_tz_off)
                 # Enviar a la base de datos con rol de modelo
                 save_message(session_id, "model", content)
                 logger.info(f"✅ [CRON] Mensaje proactivo enviado a {session_id} -> '{content[:40]}...'")

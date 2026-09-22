@@ -214,6 +214,14 @@ def _resolve_chat_identity(
         if body_user_id and body_user_id not in ("guest", session_id, verified_user_id):
             raise HTTPException(status_code=401, detail="No autorizado.")
         return verified_user_id
+    # [P1-PLAN-LOTE-161 · 2026-09-22] El invitado no puede tomar como `session_id` el id de una CUENTA. Su turno ya
+    # era «guest», pero las herramientas del coach usan el `session_id` del invitado como su identidad (es donde
+    # vive su diario y su Nevera de prueba): con el UUID de otra persona leían su perfil clínico y escribían en su
+    # diario. Una sesión de invitado nace de un UUID aleatorio del cliente; si coincide con una cuenta, no es de
+    # un invitado. `None` (no se pudo comprobar) falla abierto, como el resto de chequeos que dependen de la base.
+    from db import uuid_es_de_una_cuenta
+    if session_id and uuid_es_de_una_cuenta(session_id) is True:
+        raise HTTPException(status_code=403, detail="Prohibido. Inicia sesión para continuar esta conversación.")
     return "guest"
 
 

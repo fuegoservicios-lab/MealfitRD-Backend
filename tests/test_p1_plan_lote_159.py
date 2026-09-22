@@ -127,12 +127,21 @@ def test_si_no_se_puede_crear_el_chat_del_dia_tampoco():
 
 
 def test_el_bucle_del_cron_usa_el_selector():
-    """El ancla: que la decisión esté enchufada donde se elige la sesión del aviso."""
+    """El ancla: que la decisión esté enchufada donde se ESCRIBE el aviso.
+
+    [P1-PLAN-LOTE-161 · 2026-09-22] Este test fijaba la llamada al principio del bucle, junto al reloj del
+    usuario — y ahí estaba el defecto: iba antes de todos los filtros, así que a las 00:30 (silencio) ya abría un
+    chat por usuario sin tener nada que decirle. El selector sigue siendo obligatorio; lo que cambia es el sitio:
+    justo antes de `save_message`, cuando ya hay un aviso que escribir."""
     from pathlib import Path
     src = (Path(proactive_agent.__file__)).read_text(encoding="utf-8")
-    i = src.find("_user_tz_off = user_tz_offset_min(user_id)")
+    i = src.find('save_message(session_id, "model", content)')
     assert i != -1
-    bloque = src[i:i + 2200]
+    bloque = src[max(0, i - 700):i]
     assert "_sesion_del_dia_para_aviso(session_id, user_id, _now_utc, _user_tz_off)" in bloque, (
-        "El selector existe pero el bucle no lo llama: el aviso volvería al chat de ayer."
+        "El selector existe pero el bucle no lo llama al escribir el aviso: volvería al chat de ayer."
+    )
+    j = src.find("_user_tz_off = user_tz_offset_min(user_id)")
+    assert "_sesion_del_dia_para_aviso(session_id" not in src[j:j + 2200].split("GAP 3: Nudge Budget")[0], (
+        "El selector volvió al principio del bucle, antes de los filtros: abriría chats en horas de silencio."
     )

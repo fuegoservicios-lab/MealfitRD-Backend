@@ -289,7 +289,13 @@ _PROCESS_START_ISO = datetime.now(timezone.utc).isoformat()
 # últimos 3 días sin mirar de qué día era: a las 10:00 caía dentro de la conversación de AYER y la dejaba
 # pegada (el cliente no renueva un chat cuyo último mensaje es de hoy). Ahora abre el chat del día local del
 # usuario. Y el APK de los testers se firma con una clave FIJA: sin eso, cada reparto exigía desinstalar.
-_LAST_KNOWN_PFIX = "P1-PLAN-LOTE-160 · 2026-09-22"
+# [P1-PLAN-LOTE-161 · 2026-09-22] (auditoría de la beta en modo contador) el aviso de la mañana caía en un chat que
+# la app no abría: el 159 decidía la sesión ANTES de los filtros (a las 00:30 abría un chat por usuario) y el servidor
+# marcaba `empty` la sesión que solo tenía el aviso, que el cliente descarta; además el cron mantenía «activo» para
+# siempre a quien abandonaba la app. Los avisos leen la dieta y el objetivo reales y reciben las alergias. Sentry del
+# backend estaba APAGADO (el DSN se leía antes de cargar el `.env`). Borrar la cuenta olvida la identidad cacheada. Un
+# invitado ya no puede usar como sesión el id de una cuenta, ni `/api/auth/migrate` mover datos de cuentas ajenas.
+_LAST_KNOWN_PFIX = "P1-PLAN-LOTE-161 · 2026-09-22"
 
 # [P1-SENTRY-SAMPLE-COST · 2026-05-12] Sentry sampling driven from env vars
 # con default seguro 0.1 (10%). Pre-fix tenía `traces_sample_rate=1.0` y
@@ -312,6 +318,16 @@ _LAST_KNOWN_PFIX = "P1-PLAN-LOTE-160 · 2026-09-22"
 #     sample rates inmediatamente — los `captureException` reales se
 #     pierden cuando la cuota está saturada, y eso es regresión visible.
 # Ningún cambio aquí — solo doc. Los 3 knobs ya son ajustables sin redeploy.
+#
+# [P1-PLAN-LOTE-161 · 2026-09-22] SENTRY ESTABA APAGADO EN PRODUCCIÓN. El VPS no pasa el `.env` por systemd (la unidad
+# no tiene `EnvironmentFile`): lo carga `load_dotenv()` en `db_core`, que este fichero importa ~150 líneas MÁS ABAJO.
+# Así que el `SENTRY_DSN` (y los dos knobs de muestreo) se leían antes de existir: `dsn=None` y ni un error del
+# backend llegó a Sentry. Reproducido en el VPS con el código desplegado: el DSN está en el `.env` y no en el entorno
+# en el momento de leerlo. El `.env` se carga aquí, ANTES de la primera lectura. Los tests no cambian: `conftest.py`
+# fija `SENTRY_DSN=""` antes de cualquier import (lote 37) y `load_dotenv` no pisa lo que ya existe.
+# tooltip-anchor: P1-PLAN-LOTE-161-SENTRY-DOTENV
+from dotenv import load_dotenv as _load_dotenv_antes_de_sentry
+_load_dotenv_antes_de_sentry()
 _SENTRY_TRACES_SAMPLE_RATE = _knob_env_float(
     "MEALFIT_SENTRY_TRACES_SAMPLE_RATE",
     0.1,
@@ -2799,10 +2815,12 @@ async def api_delete_my_account(
       3. Invalida la cookie de sesión first-party server-side (belt-and-suspenders
          con el `resetApp()`/signOut del cliente).
 
-    Limitación conocida (documentada): la identidad de Neon Auth NO se borra aún
-    (admin API no cableada, ver routers/system.py). Tras eliminar, la data está
-    100% borrada y la sesión invalidada; si el usuario vuelve a iniciar sesión con
-    el mismo correo obtiene una cuenta NUEVA vacía (re-registro), no la anterior.
+    [P1-PLAN-LOTE-161 · 2026-09-22] Aquí decía que la identidad de Neon Auth «NO se
+    borra aún». Ya no es cierto: desde el lote 2 (G3) `delete_account_data` borra
+    `neon_auth."user"` (sesiones y cuentas caen en cascada) y, desde el 161, además
+    OLVIDA el positivo cacheado de `auth_user_row_exists`, así que los tokens de esa
+    cuenta en otros dispositivos dejan de valer en este proceso en el acto. Si la
+    persona vuelve a entrar con el mismo correo obtiene una cuenta NUEVA vacía.
     """
     if not verified_user_id or verified_user_id == "guest":
         raise HTTPException(status_code=401, detail="Autenticación requerida.")

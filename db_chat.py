@@ -679,8 +679,14 @@ def _process_and_sort_sessions(sessions: list):
                     # Como no hay SYSTEM_TITLE, es fallback
                     s["is_fallback"] = True
                 else:
+                    # [P1-PLAN-LOTE-161 · 2026-09-22] Hay mensajes y ninguno del usuario: es el chat que abrió el AVISO
+                    # del coach (lote 159). Marcarla `empty` —como a una sesión sin mensajes— hacía que el cliente la
+                    # descartara al elegir «tu chat de hoy» (`sesionDeHoyEnServidor` salta `empty`): el aviso quedaba
+                    # en una conversación que la app no abría y en Recientes aparecía un «Nuevo chat» suelto con él.
+                    # `coach` no es `empty`, así que se adopta como el chat del día; el cliente sin rótulo propio para
+                    # esta clave pinta «Nuevo chat», igual que antes. `empty` queda SOLO para 0 mensajes.
                     s["title"] = None
-                    s["title_key"] = "empty"
+                    s["title_key"] = "coach"
                     
                 s["last_activity"] = s_msgs[-1].get("created_at", s.get("created_at", ""))
                 valid_sessions.append(s)

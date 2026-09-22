@@ -3,6 +3,7 @@ import json
 import threading
 import uuid
 import unicodedata as _uc
+import re as _re_cuenta
 from datetime import datetime, timezone
 from typing import Optional, List, Dict, Any, Tuple, Union
 import os
@@ -256,6 +257,46 @@ def auth_user_row_exists(user_id: str) -> Optional[bool]:
         _AUTH_ROW_ALIVE_IDS.add(user_id)
         return True
     return False
+
+
+_UUID_DE_CUENTA_RX = _re_cuenta.compile(
+    r"^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}$"
+)
+
+
+def uuid_es_de_una_cuenta(valor) -> Optional[bool]:
+    """[P1-PLAN-LOTE-161 · 2026-09-22] ¿Es `valor` el id de una cuenta REGISTRADA?
+
+    El invitado vive en su `session_id`: sin token, el chat usa ese valor como identidad de las
+    herramientas y la subida de fotos como dueño de lo que guarda. Nada impedía mandar como
+    `session_id` el UUID de OTRA persona —su id de usuario—, y entonces las herramientas leían su
+    perfil clínico y escribían en su diario y su Nevera. El lote 50 cerró la identidad del TURNO
+    (sin token ⇒ «guest»), pero la de las herramientas seguía colgando del `session_id`.
+
+    Tres valores, igual que `auth_user_row_exists`: `True` hay cuenta con ese id; `False` no la
+    hay (o no es un UUID, que jamás puede serlo); `None` no se pudo saber. El caller decide qué
+    hacer con `None`; el chat falla ABIERTO, como el resto de comprobaciones de identidad que
+    dependen de la base (un hipo de la base no debe dejar sin coach a los invitados).
+
+    Mira las dos tablas: `user_profiles` (el perfil) y `neon_auth."user"` (la identidad), porque
+    entre el alta en Neon Auth y el primer request el perfil todavía no existe.
+    Tooltip-anchor: P1-PLAN-LOTE-161-UUID-DE-CUENTA.
+    """
+    s = str(valor or "").strip()
+    if not _UUID_DE_CUENTA_RX.match(s):
+        return False
+    if not connection_pool:
+        return None
+    try:
+        fila = execute_sql_query(
+            'SELECT 1 AS hay FROM public.user_profiles WHERE id = %s '
+            'UNION ALL SELECT 1 AS hay FROM neon_auth."user" WHERE id = %s LIMIT 1',
+            (s, s), fetch_one=True,
+        )
+    except Exception as e:                                             # noqa: BLE001
+        logger.warning(f"[P1-PLAN-LOTE-161] no se pudo comprobar si {s} es una cuenta: {type(e).__name__}")
+        return None
+    return bool(fila)
 
 
 def build_clinical_form_from_profile(user_id: str) -> dict:
@@ -1068,9 +1109,25 @@ def migrate_guest_data(session_ids: list, new_user_id: str):
         # como text[] y `uuid = ANY(text[])` no resuelve operador.
         # meal_rejections.session_id es TEXT — esa va sin cast.
         ids = list(session_ids)
+        # [P1-PLAN-LOTE-161 · 2026-09-22] Solo se migra lo que era de un INVITADO. Los ids llegan del cliente, y el
+        # endpoint solo comprobaba que el token fuera del DESTINO: con el UUID de otra cuenta en `session_ids`, los
+        # UPDATE de abajo movían sus planes, su diario, su Nevera y sus recuerdos a la cuenta de quien llamaba (un
+        # robo que además se los quita a la víctima). Un id que es una cuenta registrada nunca es una sesión de
+        # invitado: fuera, salvo el propio destino (migrarse a sí mismo es un no-op). Si no se puede saber, no se
+        # migra nada de ese id: perder la migración de un invitado es recuperable; mover datos ajenos, no.
+        _ajenos = [i for i in ids if str(i) != str(new_user_id) and uuid_es_de_una_cuenta(i) is not False]
+        if _ajenos:
+            logger.warning(
+                f"🛡️ [P1-PLAN-LOTE-161] migrate_guest_data: {len(_ajenos)} id(s) no son sesiones de invitado "
+                f"verificables (cuenta registrada o sin poder comprobarlo) — se excluyen de la migración a {new_user_id}."
+            )
+        ids = [i for i in ids if i not in _ajenos]
+        if not ids:
+            return False
         execute_sql_transaction([
-            # 1. agent_sessions: vincular historiales de chat (filtro por PK id)
-            ("UPDATE agent_sessions SET user_id = %s WHERE id = ANY(%s::uuid[])", (new_user_id, ids)),
+            # 1. agent_sessions: vincular historiales de chat (filtro por PK id). [P1-PLAN-LOTE-161] Solo las que no
+            # tienen dueño: la sesión de otra cuenta no se adopta aunque su id llegue en la lista.
+            ("UPDATE agent_sessions SET user_id = %s WHERE id = ANY(%s::uuid[]) AND user_id IS NULL", (new_user_id, ids)),
             # 2. visual_diary (Vectores/Diario Visual)
             ("UPDATE visual_diary SET user_id = %s WHERE user_id = ANY(%s::uuid[])", (new_user_id, ids)),
             # 3. user_facts (Vectores/Memoria a largo plazo)
@@ -1401,6 +1458,13 @@ def delete_account_data(user_id: str, include_profile: bool = True) -> Dict[str,
             result["deleted"]["neon_auth_user"] = len(r) if isinstance(r, list) else 0
         except Exception as e:
             result["errors"].append(f"neon_auth.user: {e}")
+        # [P1-PLAN-LOTE-161 · 2026-09-22] Olvidar el positivo cacheado de `auth_user_row_exists`. La purga del
+        # admin lo hacía (lote 2, G3) y el borrado que pide el propio usuario NO: el proceso que acababa de
+        # borrar la identidad seguía aceptando los tokens de esa cuenta en sus OTROS dispositivos hasta
+        # reiniciar (el positivo se cachea sin TTL a propósito), y la ruta Bearer recreaba el perfil vacío —
+        # P1-AUTH-CUENTA-BORRADA reabierto por la puerta de «Eliminar cuenta». Va siempre, haya borrado filas
+        # o no: olvidar un positivo que no estaba cuesta nada.
+        forget_auth_row_alive(user_id)
 
     logger.info(
         f"[P1-PROD-AUDIT-2] delete_account_data({user_id}): "
