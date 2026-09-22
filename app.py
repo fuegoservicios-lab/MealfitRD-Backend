@@ -266,7 +266,10 @@ _PROCESS_START_ISO = datetime.now(timezone.utc).isoformat()
 # [P1-PLAN-LOTE-76 · 2026-09-17] (frontend + coach) «Nuevo chat» bloqueado mientras el chat de hoy está abierto
 # (decisión del dueño: se renueva solo a medianoche) y el coach ofrece POR SU NOMBRE la comida que falta de ese
 # día tras registrar, o no pregunta (`comidas_sin_registrar`, SSOT en chat_history_context.py).
-_LAST_KNOWN_PFIX = "P1-PLAN-LOTE-152 · 2026-09-21"
+# [P1-PLAN-LOTE-154 · 2026-09-22] (frontend) «Saltar a la última pregunta» se pintaba mirando la HISTORIA del
+# usuario y se validaba, un click más tarde, contra el CONTRATO: el dueño lo vio en el paso 2 de 26 con la
+# obligatoria en blanco, y el botón lo devolvía justo ahí. Ahora sólo existe cuando el salto es real.
+_LAST_KNOWN_PFIX = "P1-PLAN-LOTE-154 · 2026-09-22"
 
 # [P1-SENTRY-SAMPLE-COST · 2026-05-12] Sentry sampling driven from env vars
 # con default seguro 0.1 (10%). Pre-fix tenía `traces_sample_rate=1.0` y
