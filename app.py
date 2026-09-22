@@ -285,7 +285,11 @@ _PROCESS_START_ISO = datetime.now(timezone.utc).isoformat()
 # un botón y no como una fila: el anillo de 1 px que dibujaba su contorno —útil en una lista, un recuadro
 # de la nada en un botón, y un segundo borde en el que ya tenía el suyo— se cambia por superficie + el
 # texto subiendo a primer plano.
-_LAST_KNOWN_PFIX = "P1-PLAN-LOTE-158 · 2026-09-22"
+# [P1-PLAN-LOTE-159 · 2026-09-22] (coach + Android) el aviso proactivo iba a la sesión MÁS RECIENTE de los
+# últimos 3 días sin mirar de qué día era: a las 10:00 caía dentro de la conversación de AYER y la dejaba
+# pegada (el cliente no renueva un chat cuyo último mensaje es de hoy). Ahora abre el chat del día local del
+# usuario. Y el APK de los testers se firma con una clave FIJA: sin eso, cada reparto exigía desinstalar.
+_LAST_KNOWN_PFIX = "P1-PLAN-LOTE-159 · 2026-09-22"
 
 # [P1-SENTRY-SAMPLE-COST · 2026-05-12] Sentry sampling driven from env vars
 # con default seguro 0.1 (10%). Pre-fix tenía `traces_sample_rate=1.0` y

@@ -5,7 +5,10 @@ from datetime import datetime, timezone, timedelta
 from llm_provider import ChatGLM, GLM_FLASH
 
 from db_core import connection_pool, execute_sql_query, execute_sql_write
-from db_chat import save_message, get_recent_messages
+import uuid
+# [P1-PLAN-LOTE-159] `get_or_create_session`: el aviso de hoy abre el chat de hoy cuando la
+# última conversación es de un día anterior.
+from db_chat import save_message, get_recent_messages, get_or_create_session
 from db import get_consumed_meals_today, get_user_profile, user_tz_offset_min
 from fact_extractor import get_embedding
 from knobs import _env_int, _env_float
@@ -317,6 +320,64 @@ def _usuario_en_modo_contador(user_id) -> bool:
         return False
 
 
+def _sesion_del_dia_para_aviso(session_id, user_id, ahora_utc, tz_offset_min):
+    """[P1-PLAN-LOTE-159 · 2026-09-22] La sesión donde escribir el aviso de HOY.
+
+    Devuelve `session_id` si esa conversación ya es la del día del usuario, y una sesión NUEVA
+    si la última actividad es de un día anterior. La frontera es el día LOCAL de cada usuario
+    (`tz_offset_min`), el mismo reloj con el que se decide la hora del aviso dos líneas arriba.
+
+    Tres decisiones que no son obvias:
+
+    · **Por el último mensaje, no por `created_at`.** Una sesión abierta anoche en la que se
+      sigue hablando a las 00:30 es la de hoy; mirar su nacimiento la partiría en dos justo
+      cuando el usuario está escribiendo. Es el criterio del cliente (`debeRenovarse`).
+    · **Una sesión sin mensajes se respeta.** Es una recién creada —por el propio cliente, que
+      la abre vacía al renovar— y fabricar otra dejaría dos chats vacíos el mismo día.
+    · **Fail-open.** Si la consulta falla, se devuelve la sesión que había: un aviso en el chat
+      de ayer es peor que uno de hoy, pero mucho mejor que ninguno.
+
+    `session_id` a `None` (suscriptor sin chat reciente, P1-PLAN-LOTE-133) se devuelve tal cual:
+    esa rama manda el aviso a la pantalla A PROPÓSITO, sin escribir en ningún chat.
+    """
+    if not session_id or not user_id:
+        return session_id
+    try:
+        fila = execute_sql_query(
+            "SELECT MAX(created_at) AS ultima FROM public.agent_messages WHERE session_id = %s",
+            (str(session_id),),
+            fetch_one=True,
+        )
+        ultima = (fila or {}).get("ultima")
+        if ultima is None:
+            return session_id          # sesión aún vacía: es la que el cliente acaba de abrir
+        hoy_local = (ahora_utc - timedelta(minutes=tz_offset_min)).date()
+        dia_de_la_sesion = (ultima - timedelta(minutes=tz_offset_min)).date()
+        if dia_de_la_sesion >= hoy_local:
+            return session_id          # ya es la conversación de hoy
+    except Exception as e:
+        logger.warning(
+            f"[P1-PLAN-LOTE-159] no se pudo fechar la sesión {session_id}: {e}. "
+            f"Se usa la que había (conducta previa)."
+        )
+        return session_id
+
+    nueva = str(uuid.uuid4())
+    try:
+        get_or_create_session(nueva, user_id=user_id)
+    except Exception as e:
+        logger.error(
+            f"❌ [P1-PLAN-LOTE-159] no se pudo abrir el chat del día para {user_id}: {e}. "
+            f"El aviso va a la sesión anterior."
+        )
+        return session_id
+    logger.info(
+        f"🗓️ [P1-PLAN-LOTE-159] chat del día para {user_id}: {nueva} "
+        f"(la anterior, {session_id}, es de {dia_de_la_sesion})"
+    )
+    return nueva
+
+
 def get_active_users_for_proactive() -> list:
     """Busca session_ids que pertenezcan a usuarios registrados con actividad reciente."""
     try:
@@ -603,6 +664,24 @@ def run_proactive_checks():
             _user_tz_off = _proactive_tz_offset_min()
         now_ast = _now_utc - timedelta(minutes=_user_tz_off)
         current_hour_float = _local_hour_float_for_offset(_now_utc, _user_tz_off)
+        # [P1-PLAN-LOTE-159 · 2026-09-22] El aviso de HOY va al chat de HOY.
+        #
+        # `get_active_users_for_proactive` elige la sesión MÁS RECIENTE de los últimos 3 días,
+        # sin mirar de qué día es. Así que a las 10:00 de hoy el aviso caía dentro de la
+        # conversación de AYER — y el cliente, que sí sabe de días, dibujaba su separador «HOY»
+        # en medio: dos días en el mismo chat, que es justo lo que el dueño no quiere.
+        #
+        # Y el daño no se deshacía solo: la regla del cliente (`debeRenovarse`) no renueva un
+        # chat cuyo último mensaje ES de hoy. Al escribir ahí, el servidor convertía la
+        # conversación de ayer en «la de hoy» y la dejaba pegada para siempre.
+        #
+        #   *Cuando dos lados comparten una regla —«un chat por día»— y solo uno la conoce, el
+        #   que no la conoce no es neutral: la rompe para los dos.*
+        #
+        # El corte es por el ÚLTIMO MENSAJE, no por `created_at`: una sesión abierta anoche en
+        # la que se sigue hablando a las 00:30 es la de hoy, y mirar su nacimiento la partiría
+        # en dos. Es el mismo criterio que usa el cliente.
+        session_id = _sesion_del_dia_para_aviso(session_id, user_id, _now_utc, _user_tz_off)
         # GAP 3: Nudge Budget (tope diario anti-fatiga)
         # [P1-PLAN-LOTE-72] El tope es el knob `MEALFIT_PROACTIVE_MAX_NUDGES_PER_DAY`: 4 por defecto (era un 2 fijo).
         _tope_diario = _max_avisos_por_dia()
