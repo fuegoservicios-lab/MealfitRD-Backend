@@ -55,28 +55,28 @@ _CUERPO_CERO = {
     "es-DO": "Hoy no has anotado agua. ¿Empezamos con un vaso?",
     "en-US": "You haven't logged any water today. Start with a glass?",
     "pt-BR": "Hoje você ainda não anotou água. Começamos com um copo?",
-    "fr-FR": "Tu n'as pas encore noté d'eau aujourd'hui. On commence par un verre ?",
+    "fr-FR": "Vous n'avez pas encore noté d'eau aujourd'hui. On commence par un verre\u202f?",
     "it-IT": "Oggi non hai ancora segnato acqua. Iniziamo con un bicchiere?",
 }
 _CUERPO_PARCIAL = {
     "es-DO": "Llevas {n} de {meta} vasos hoy. ¿Un vaso de agua ahora?",
     "en-US": "You're at {n} of {meta} glasses today. A glass of water now?",
     "pt-BR": "Você está em {n} de {meta} copos hoje. Um copo de água agora?",
-    "fr-FR": "Tu en es à {n} verres sur {meta} aujourd'hui. Un verre d'eau maintenant ?",
+    "fr-FR": "Vous en êtes à {n} verres sur {meta} aujourd'hui. Un verre d'eau maintenant\u202f?",
     "it-IT": "Sei a {n} bicchieri su {meta} oggi. Un bicchiere d'acqua adesso?",
 }
 _CUERPO_GENERICO = {
     "es-DO": "¿Cómo va tu agua de hoy? Anota tus vasos para llevar la cuenta.",
     "en-US": "How's your water today? Log your glasses to keep count.",
     "pt-BR": "Como vai sua água hoje? Anote seus copos para manter a conta.",
-    "fr-FR": "Où en es-tu avec l'eau aujourd'hui ? Note tes verres pour garder le compte.",
+    "fr-FR": "Où en êtes-vous avec l'eau aujourd'hui\u202f? Notez vos verres pour garder le compte.",
     "it-IT": "Come va l'acqua oggi? Segna i tuoi bicchieri per tenere il conto.",
 }
 _CUERPO_APAGADO = {
     "es-DO": "Pausamos la hidratación: llevas 2 días sin anotar agua. Puedes volver a encenderla en Configuración.",
     "en-US": "We paused hydration: 2 days without logging water. You can turn it back on in Settings.",
     "pt-BR": "Pausamos a hidratação: 2 dias sem anotar água. Você pode reativá-la em Configurações.",
-    "fr-FR": "Hydratation en pause : 2 jours sans noter d'eau. Tu peux la réactiver dans les Réglages.",
+    "fr-FR": "Hydratation en pause\u00a0: 2 jours sans noter d'eau. Vous pouvez la réactiver dans les Réglages.",
     "it-IT": "Idratazione in pausa: 2 giorni senza segnare acqua. Puoi riattivarla nelle Impostazioni.",
 }
 

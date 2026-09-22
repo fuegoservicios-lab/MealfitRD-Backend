@@ -316,7 +316,11 @@ _PROCESS_START_ISO = datetime.now(timezone.utc).isoformat()
 # chips): ahora todos leen `profile_with_free_text`, la unión del generador; el camino degradado también. El cron de
 # arranque en frío filtra por `dietType` (leía `dietTypes`, que nadie escribe). En la app: Configuración alcanzable
 # desde el formulario (App Store 5.1.1(v)), cerrar sesión a mitad del alta dice la verdad, el OTA se confirma al pintar.
-_LAST_KNOWN_PFIX = "P1-PLAN-LOTE-166 · 2026-09-22"
+# [P1-PLAN-LOTE-167 · 2026-09-22] (este backend + frontend por OTA) francés con UNA forma de tratamiento: todo a «vous»
+# (catálogo, avisos de comida y agua, textos y directiva de idioma del coach) y tipografía francesa también aquí. En la
+# app: errores del generador por código fuera del español, saludo que sigue al idioma, hora en el formato de cada idioma,
+# la palabra de «borrar cuenta» traducida, plural de las semanas de la meta, avisos reprogramados al cambiar de idioma.
+_LAST_KNOWN_PFIX = "P1-PLAN-LOTE-167 · 2026-09-22"
 
 # [P1-SENTRY-SAMPLE-COST · 2026-05-12] Sentry sampling driven from env vars
 # con default seguro 0.1 (10%). Pre-fix tenía `traces_sample_rate=1.0` y

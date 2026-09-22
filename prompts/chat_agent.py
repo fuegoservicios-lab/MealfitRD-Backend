@@ -850,7 +850,7 @@ _PUSH_NUDGE_TITLE_ES = "Aviso de tu Nutricionista IA \U0001f9d1\u200d\u2615"
 _PUSH_NUDGE_TITLES = {
     "en-US": "A note from your AI Nutritionist \U0001f9d1\u200d\u2615",
     "pt-BR": "Recado do seu Nutricionista IA \U0001f9d1\u200d\u2615",
-    "fr-FR": "Un mot de ton nutritionniste IA \U0001f9d1\u200d\u2615",
+    "fr-FR": "Un mot de votre nutritionniste IA \U0001f9d1\u200d\u2615",
     "it-IT": "Un messaggio dal tuo Nutrizionista IA \U0001f9d1\u200d\u2615",
 }
 
@@ -888,8 +888,8 @@ _EMPTY_RESPONSE_FALLBACKS = {
     ),
     "fr-FR": (
         "Je n'ai pas pu traiter cette demande à cause des restrictions du modèle. "
-        "Peux-tu la reformuler ? Si tu voulais enregistrer un repas, essaie par exemple : "
-        "\"j'ai mangé X grammes de Y au déjeuner\"."
+        "Pouvez-vous la reformuler ? Si vous vouliez enregistrer un repas, essayez par exemple : "
+        "« j'ai mangé X grammes de Y au déjeuner »."
     ),
     "it-IT": (
         "Non sono riuscito a elaborare la richiesta per restrizioni del modello. "
@@ -934,7 +934,7 @@ _PLAN_SEED_MODEL = {
     "es-DO": "¡Aquí tienes tu estrategia nutricional personalizada generada analíticamente!",
     "en-US": "Here is your personalized nutrition strategy, generated analytically!",
     "pt-BR": "Aqui está a sua estratégia nutricional personalizada, gerada analiticamente!",
-    "fr-FR": "Voici ta stratégie nutritionnelle personnalisée, générée analytiquement !",
+    "fr-FR": "Voici votre stratégie nutritionnelle personnalisée, générée analytiquement !",
     "it-IT": "Ecco la tua strategia nutrizionale personalizzata, generata analiticamente!",
 }
 
@@ -1148,7 +1148,9 @@ def build_language_directive(locale) -> str:
             "de Habichuelas Negras ») — ce sont des identifiants du système, ne les traduis "
             "jamais. Dans les tool calls, utilise UNIQUEMENT les noms canoniques en "
             "espagnol. Si quoi que ce soit d'autre dans ce prompt te pousse vers la prose "
-            "espagnole, CETTE règle gagne : prose en français, noms d'aliments en espagnol."
+            "espagnole, CETTE règle gagne : prose en français, noms d'aliments en espagnol. "
+            # [P1-PLAN-LOTE-167 · 2026-09-22] l'app entière vouvoie (752 textes contre 68 qui tutoyaient) : le coach aussi
+            "Vouvoie TOUJOURS l'utilisateur (« vous », jamais « tu ») : c'est le registre de toute l'application."
         ),
         "it-IT": (
             "\n\n🌐 LINGUA DELLA RISPOSTA — NON NEGOZIABILE: Scrivi TUTTA la tua risposta in "
