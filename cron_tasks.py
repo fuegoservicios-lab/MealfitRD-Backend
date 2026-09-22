@@ -6583,6 +6583,141 @@ def _auth_failure_alert_job():
             pass
 
 
+def _llm_breaker_open_alert_job():
+    """[P1-PLAN-LOTE-156 · 2026-09-22] Que el proveedor de IA esté caído deje de ser algo
+    que se descubre por los usuarios.
+
+    EL HUECO. El `LLMCircuitBreaker` abre tras 3 fallos seguidos de un modelo y persiste
+    `{failures, last_failure, is_open}` en `app_kv_store`. A partir de ahí el coach contesta
+    «el asistente está temporalmente saturado» a todo el mundo, y ESO ES TODO lo que ocurre:
+    ningún alert, ningún correo, nada. El 16-sep Z.ai se quedó sin saldo a las 21:30 y toda
+    la IA cayó; el dueño se enteró porque lo estaba usando. Con 5 testers y un solo proveedor
+    vivo (DeepSeek), esa misma caída de madrugada son horas de coach muerto sin que nadie lo
+    sepa.
+
+    Y hay algo peor que el silencio: el ÚNICO rastro que quedaba se BORRA SOLO.
+    `_sweep_stale_llm_circuit_breakers` (P2-NEW-D) resetea a cero las filas cuyo
+    `last_failure` pasa de `MEALFIT_CB_KV_STALENESS_HOURS` (2 h) — por una buena razón (un
+    `is_open=true` viejo confunde a quien lee la tabla), pero el efecto compuesto era que a
+    las dos horas no quedaba ni la huella. Por eso este cron corre cada 10 min: tiene que
+    ver la fila ANTES que el barrendero.
+
+      *Una condición que solo se ve mientras dura, y cuyo rastro se limpia solo, es una
+      condición que nadie va a ver nunca.*
+
+    QUÉ MIRA. Filas `llm_circuit_breaker%` con `is_open=true` cuyo `last_failure` cae dentro
+    de la ventana (default 90 min). La ventana es deliberada en las dos direcciones: sin ella
+    una fila de hace días alertaría como si fuese de ahora, y demasiado corta perdería el caso
+    normal —proveedor caído y nadie escribiendo al coach, así que el último fallo envejece
+    aunque la avería siga—.
+
+    Un alert POR MODELO (`llm_circuit_breaker_open:<modelo>`): el router usa modelos distintos
+    por superficie y tier, y colapsarlos en una sola fila escondería que el chat está caído
+    mientras el reviewer respira. La clave legacy sin sufijo se reporta como `default`.
+
+    Auto-resuelve (modelo «Auto explicit»): cuando una fila deja de estar abierta, su alert se
+    cierra en el mismo tick. No se toca ninguna fila de `app_kv_store` — leer es leer; el
+    reseteo sigue siendo del sweep, que es su dueño.
+
+    Knobs: MEALFIT_LLM_BREAKER_ALERT_INTERVAL_MIN (10, clamp [5,120]),
+           MEALFIT_LLM_BREAKER_ALERT_WINDOW_MIN (90, clamp [10,1440]).
+    Tooltip-anchor: P1-PLAN-LOTE-156."""
+    ventana_min = max(10, min(_env_int("MEALFIT_LLM_BREAKER_ALERT_WINDOW_MIN", 90), 1440))
+    abiertos: list = []
+    fallo = False
+    try:
+        filas = execute_sql_query(
+            """
+            SELECT key,
+                   COALESCE((value->>'failures')::int, 0) AS failures,
+                   COALESCE((value->>'last_failure')::float, 0) AS last_failure
+            FROM app_kv_store
+            WHERE key LIKE 'llm_circuit_breaker%%'
+              AND value->>'is_open' = 'true'
+              AND (value->>'last_failure')::float
+                  > (EXTRACT(EPOCH FROM NOW())::float - (%s::float * 60.0))
+            """,
+            (ventana_min,),
+        ) or []
+
+        for fila in filas:
+            clave = fila["key"] if isinstance(fila, dict) else fila[0]
+            fallos = fila["failures"] if isinstance(fila, dict) else fila[1]
+            ultimo = fila["last_failure"] if isinstance(fila, dict) else fila[2]
+            # `llm_circuit_breaker:<modelo>` → modelo; la clave legacy sin sufijo → default.
+            modelo = clave.split(":", 1)[1] if ":" in clave else "default"
+            abiertos.append(modelo)
+            # `time` no está importado en este módulo (y no vale la pena traerlo por una
+            # resta): el epoch sale del mismo reloj UTC que usa el resto del fichero.
+            _ahora_epoch = datetime.now(timezone.utc).timestamp()
+            hace_min = max(0, int((_ahora_epoch - float(ultimo or 0)) / 60))
+            execute_sql_write(
+                """
+                INSERT INTO system_alerts (alert_key, alert_type, severity, title, message, metadata)
+                VALUES (%s, 'reliability_degradation', 'critical', %s, %s, %s::jsonb)
+                ON CONFLICT (alert_key) DO UPDATE
+                SET triggered_at = NOW(), message = EXCLUDED.message,
+                    metadata = EXCLUDED.metadata, resolved_at = NULL
+                """,
+                (
+                    f"llm_circuit_breaker_open:{modelo}",
+                    f"Cortacircuitos abierto para {modelo}",
+                    f"El modelo {modelo} acumuló {fallos} fallo(s) seguidos y su cortacircuitos "
+                    f"está ABIERTO (último fallo hace ~{hace_min} min). Mientras siga así, toda "
+                    f"superficie que use ese modelo responde «temporalmente saturado» sin llamar "
+                    f"al proveedor. Causas típicas: saldo agotado, clave revocada o caída del "
+                    f"proveedor. Comprueba el saldo y, si hace falta, cambia MEALFIT_LLM_PROVIDER.",
+                    json.dumps({
+                        "modelo": modelo, "failures": int(fallos or 0),
+                        "last_failure_epoch": float(ultimo or 0),
+                        "minutos_desde_el_ultimo_fallo": hace_min,
+                        "ventana_min": ventana_min,
+                    }, ensure_ascii=False),
+                ),
+            )
+            logger.error(
+                f"🚨 [P1-PLAN-LOTE-156] cortacircuitos ABIERTO modelo={modelo} "
+                f"failures={fallos} hace~{hace_min}min → alert emitido."
+            )
+
+        # Auto-resuelve lo que ya no está abierto. `NOT IN ()` es SQL inválido, así que el
+        # caso «ninguno abierto» (el normal) va por su propia rama.
+        if abiertos:
+            execute_sql_write(
+                """
+                UPDATE system_alerts SET resolved_at = NOW()
+                WHERE alert_key LIKE 'llm_circuit_breaker_open:%%'
+                  AND resolved_at IS NULL
+                  AND alert_key <> ALL(%s)
+                """,
+                ([f"llm_circuit_breaker_open:{m}" for m in abiertos],),
+            )
+        else:
+            execute_sql_write(
+                """
+                UPDATE system_alerts SET resolved_at = NOW()
+                WHERE alert_key LIKE 'llm_circuit_breaker_open:%%' AND resolved_at IS NULL
+                """,
+                (),
+            )
+    except Exception as e:
+        fallo = True
+        logger.error(
+            f"❌ [P1-PLAN-LOTE-156] el vigilante del cortacircuitos falló: {type(e).__name__}: {e}"
+        )
+    finally:
+        try:
+            execute_sql_write(
+                "INSERT INTO pipeline_metrics (node, duration_ms, retries, tokens_estimated, confidence, metadata) "
+                "VALUES ('llm_breaker_open_watch', 0, 0, 0, %s, %s::jsonb)",
+                (float(len(abiertos)),
+                 json.dumps({"abiertos": abiertos, "ventana_min": ventana_min,
+                             "job_failed": fallo}, ensure_ascii=False)),
+            )
+        except Exception:
+            pass
+
+
 def _chunk_overdue_alert_job():
     """[P2-CHUNK-OVERDUE-SIGNAL · 2026-08-04] Detección horaria de chunks atrasados.
 
@@ -7541,6 +7676,22 @@ def register_plan_chunk_scheduler(scheduler) -> None:
             replace_existing=True,
         )
         logger.info(f"⏰ [P2-AUTH-FAILURE-OBS] Cron _auth_failure_alert_job registrado cada {_AF_INT} min.")
+
+    # [P1-PLAN-LOTE-156 · 2026-09-22] Vigilante del cortacircuitos del LLM. Cada 10 min por
+    # una razón concreta: el sweep de P2-NEW-D borra la fila a las 2 h, así que un cron
+    # horario podría no ver nunca la avería que vino a vigilar.
+    if not scheduler.get_job("llm_breaker_open_alert_job"):
+        _CB_INT = max(5, min(_env_int("MEALFIT_LLM_BREAKER_ALERT_INTERVAL_MIN", 10), 120))
+        _add_job_jittered(scheduler,
+            _llm_breaker_open_alert_job,
+            "interval",
+            minutes=_CB_INT,
+            id="llm_breaker_open_alert_job",
+            max_instances=1,
+            coalesce=True,
+            replace_existing=True,
+        )
+        logger.info(f"⏰ [P1-PLAN-LOTE-156] Cron _llm_breaker_open_alert_job registrado cada {_CB_INT} min.")
 
     # [P2-6 · 2026-05-08] Alerta proactiva sobre fallback no-atómico del pool.
     # Cubre el hueco "fallback_count > 0 invisible hasta polling manual del
