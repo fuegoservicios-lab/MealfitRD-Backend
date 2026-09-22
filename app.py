@@ -277,7 +277,11 @@ _PROCESS_START_ISO = datetime.now(timezone.utc).isoformat()
 # abre a los 3 fallos y nadie emitía nada, mientras `_sweep_stale_llm_circuit_breakers` borraba la única fila
 # a las 2 h. Ahora un cron cada 10 min lo alerta por modelo. Y en el cliente, un corte de red a media
 # respuesta ya no pierde la respuesta que el backend SÍ guardó.
-_LAST_KNOWN_PFIX = "P1-PLAN-LOTE-156 · 2026-09-22"
+# [P1-PLAN-LOTE-157 · 2026-09-22] (coach, 3.ª pasada) el turno MUDO tiene techo: el presupuesto del
+# servidor solo se comprueba cuando llega un evento, así que ante un cuelgue de verdad no dispara —
+# el reloj que sí corre mientras el servidor calla es el del cliente (5 min, y el corte va por el
+# rescate del 156). Y el knob de inactividad deja de prometer un aborto que no hace desde el 14-sep.
+_LAST_KNOWN_PFIX = "P1-PLAN-LOTE-157 · 2026-09-22"
 
 # [P1-SENTRY-SAMPLE-COST · 2026-05-12] Sentry sampling driven from env vars
 # con default seguro 0.1 (10%). Pre-fix tenía `traces_sample_rate=1.0` y

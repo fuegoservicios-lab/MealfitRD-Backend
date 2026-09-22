@@ -871,22 +871,30 @@ def _chat_stream_total_timeout_s() -> float:
     )
 
 
-# [P1-CHAT-STREAM-INACTIVITY · 2026-05-20] Inactivity timeout entre eventos
-# emitidos por `chat_graph_app.stream(...)`. Si entre dos `next(stream_iter)`
-# pasan más de N segundos sin que llegue ningún evento (chunk del LLM,
-# tool_call, etc.), abortamos el stream. El per-LLM timeout (15s) ya cubre
-# el caso "Gemini bloquea una invocación", pero NO cubre stalls en el
-# middleware de LangGraph entre nodes ni cuelgues de checkpointer Postgres.
+# [P1-CHAT-STREAM-INACTIVITY · 2026-05-20 · YA NO ABORTA desde
+#  P2-CHAT-STREAM-INACTIVITY-POSTHOC · 2026-09-14] Umbral del hueco entre eventos
+# de `chat_graph_app.stream(...)`.
 #
-# Default 25s: holgura sobre el per-LLM timeout (15s) + buffer para
-# checkpoint write y route_tools. Si baja de eso se vuelve flaky bajo
-# carga normal. Clamp (0, 120].
+# ⚠️ LEE ESTO ANTES DE SUBIRLO ESPERANDO PROTECCIÓN: hoy este knob **solo decide
+# cuándo se registra un WARNING**. No corta nada. El texto original prometía que
+# cortaba el stream, y era cierto hasta el 14-sep; se quitó porque la
+# comprobación vive al principio del `for event in stream_iter` y por tanto
+# **solo corre cuando LLEGA un evento**: nunca detectaba un cuelgue, detectaba
+# una tool larga que ya había terminado, y mataba el turno con el trabajo YA
+# persistido («dejó de responder» sobre un turno vivo).
 #
-# NOTA: implementado vía wall-clock check al tope del for-loop, NO via
-# thread-watchdog (eso doblaría el thread count por request). Si Gemini
-# emite UN chunk cada 26s seguidos, el check no dispara (porque hay
-# actividad). Es válido — el caso problemático es "0 chunks por N
-# segundos", no "chunks regulares pero lentos".
+# [P1-PLAN-LOTE-157 · 2026-09-22] La descripción se corrige aquí porque el knob
+# se auto-registra en `_KNOBS_REGISTRY` y se publica en `/health/version`: un
+# operador que lo lea tiene que saber que subirlo NO alarga ninguna protección.
+# Es la misma clase de trampa que este repo cierra una y otra vez — una defensa
+# anunciada que ya no está. El cuelgue real lo acotan el timeout POR LLAMADA al
+# LLM y el presupuesto total (que comparte la misma limitación post-hoc), y
+# desde el 157 el CLIENTE tiene su propio techo de silencio de 5 min
+# (`utils/silencioDelStream.js`), que es el único que corre mientras el
+# servidor está mudo.
+#
+# Default 25s: holgura sobre el timeout por llamada + buffer para checkpoint
+# write y route_tools. Clamp (0, 360] — ver la nota de las tools largas abajo.
 def _chat_stream_inactivity_timeout_s() -> float:
     # [P2-CHAT-STREAM-TIMEOUT-TOOLS · 2026-07-12] Clamp 120→360: las tools
     # largas corren DENTRO de un solo nodo sin emitir eventos — con el retry
