@@ -3608,6 +3608,15 @@ def canonicalize_diet_type(diet) -> str:
     return _DIET_CANON_LOOKUP.get(strip_accents(diet.strip().lower()), "balanced")
 
 
+def diet_type_aliases(diet) -> list:
+    """[P1-PLAN-LOTE-166 · 2026-09-22] Todas las grafías (sin tildes, en minúscula) que `canonicalize_diet_type` lleva
+    a la MISMA dieta que `diet`, más la canónica. Para filtrar en SQL por dieta canónica sin escribir una 4ª tabla:
+    sale de `_DIET_CANON_MAP`, el SSOT. `balanced` no tiene grafías (es «todo lo demás»): quien filtra por ella debe
+    decidir aparte que no filtra."""
+    canon = canonicalize_diet_type(diet)
+    return sorted(set(_DIET_CANON_MAP.get(canon, ())) | {canon})
+
+
 # ─────────────────────────────────────────────────────────────────────────────
 # [P1-COUNTRY-SYSTEM-F0 · 2026-08-16] El país del usuario, canónico.
 #

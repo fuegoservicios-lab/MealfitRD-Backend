@@ -49,9 +49,35 @@ _RIESGOS_POR_CONDICION = (
 PENA_POR_RIESGO_CLINICO = 0.6
 
 
+def _con_texto_libre(d) -> dict:
+    """[P1-PLAN-LOTE-166 · 2026-09-22] El perfil con lo tecleado en «Otra…» sumado a sus listas (la unión del
+    generador, `profile_with_free_text`). El perfil GUARDADO no los une: sin esto, «Maní» escrito a mano no existía
+    para las propuestas de comida del coach, que en el modo contador son su recomendación principal."""
+    try:
+        from graph_orchestrator import profile_with_free_text
+    except Exception as e:  # pragma: no cover — sin el grafo no arranca ni la app
+        logger.error(f"[P1-PLAN-LOTE-166] propuestas sin el texto libre del perfil: {e!r}")
+        return d if isinstance(d, dict) else {}
+    return profile_with_free_text(d)
+
+
+def restricciones_del_perfil(form_data) -> tuple:
+    """(alergias, dieta, excluidos) con que se eligen platos: los chips del formulario MÁS lo tecleado en «Otra
+    alergia» / «Otro que no te gusta». Primero el perfil guardado; lo que mande el llamador, de respaldo."""
+    fd = form_data if isinstance(form_data, dict) else {}
+    hp = fd.get("health_profile") if isinstance(fd.get("health_profile"), dict) else {}
+    hp_u, fd_u = _con_texto_libre(hp), _con_texto_libre(fd)
+    alergias = [str(a) for a in (hp_u.get("allergies") or fd_u.get("allergies") or []) if a]
+    dieta = hp.get("dietType") or fd.get("dietType") or fd.get("diet_type")
+    excluidos = [str(x) for x in (hp_u.get("dislikes") or fd_u.get("dislikes") or []) if x]
+    return alergias, dieta, excluidos
+
+
 def riesgos_a_evitar(form_data) -> set:
     fd = form_data if isinstance(form_data, dict) else {}
     hp = fd.get("health_profile") if isinstance(fd.get("health_profile"), dict) else {}
+    # [P1-PLAN-LOTE-166] una condición escrita a mano («Gota») también cuenta
+    fd, hp = _con_texto_libre(fd), _con_texto_libre(hp)
     cond = hp.get("medicalConditions") or fd.get("medicalConditions") or []
     if isinstance(cond, str):
         cond = [cond]
@@ -397,15 +423,12 @@ def proponer_comidas(form_data: dict, franja: str, objetivo: dict, nevera_nombre
     from shopping_calculator import get_master_ingredients
 
     fd = form_data if isinstance(form_data, dict) else {}
-    hp = fd.get("health_profile") if isinstance(fd.get("health_profile"), dict) else {}
     country = cultural_country_for_form_data(fd) or "DO"
     catalogo = dd._CatalogoPorNombre(get_master_ingredients() or [])
     por_id = dr.templates_by_id(country) or {}
     if not catalogo or not por_id:
         return []
-    alergias = [str(a) for a in (hp.get("allergies") or fd.get("allergies") or []) if a]
-    dieta = hp.get("dietType") or fd.get("dietType") or fd.get("diet_type")
-    excluidos = [str(x) for x in (hp.get("dislikes") or fd.get("dislikes") or []) if x]
+    alergias, dieta, excluidos = restricciones_del_perfil(fd)   # [P1-PLAN-LOTE-166] con el texto libre
     try:
         from culinary_context import declared_equipment
         equipo = declared_equipment(fd)

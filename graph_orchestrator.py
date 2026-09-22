@@ -47124,6 +47124,30 @@ def _merge_other_text_fields(form_data: dict) -> int:
     return added_total
 
 
+def profile_with_free_text(profile) -> dict:
+    """[P1-PLAN-LOTE-166 · 2026-09-22] Copia del perfil con lo TECLEADO en «Otra…» sumado a sus listas.
+
+    El generador une `otherAllergies`/`otherConditions`/`otherDislikes`/`otherStruggles` a sus arrays al EMPEZAR
+    (`_merge_other_text_fields` sobre su propia copia del formulario), pero el perfil GUARDADO no se une nunca: el
+    formulario necesita los chips y el texto por separado para volver a pintarlos. Y todo lector que va al perfil
+    guardado veía solo los chips — el bloque clínico del coach, las dos herramientas con que el coach recomienda comida
+    en el modo contador, el camino degradado del generador. Medido (22-sep, solo lectura): 1 de 9 perfiles con texto
+    libre fuera del array («Shrimp» junto al chip «Mariscos»).
+
+    Es la MISMA unión del generador —centinela «Ninguna» incluido— sobre una copia: el perfil del llamador no se toca
+    (es el que se guarda y el que pinta el formulario).
+    tooltip-anchor: profile_with_free_text (test_p1_plan_lote_166.py)
+    """
+    if not isinstance(profile, dict):
+        return {}
+    copia = dict(profile)
+    try:
+        _merge_other_text_fields(copia)
+    except Exception as e:  # pragma: no cover — la unión es defensiva por dentro
+        logging.getLogger(__name__).error(f"[P1-PLAN-LOTE-166] no se pudo unir el texto libre del perfil: {e!r}")
+    return copia
+
+
 def _sanitize_text_normalize(text: str) -> str:
     """P1-Q8: normaliza un string para detección anti-injection.
 

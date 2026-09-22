@@ -17583,7 +17583,14 @@ def get_similar_user_patterns(user_id: str, health_profile: dict):
     """Para usuarios sin historial, busca que funciono para perfiles similares (Mejora 4)."""
     goal = health_profile.get('mainGoal')
     activity = health_profile.get('activityLevel')
-    diet_types = health_profile.get('dietTypes', [])
+    # [P1-PLAN-LOTE-166 · 2026-09-22] Leía `dietTypes`, que el formulario NO escribe (guarda `dietType`, texto; medido:
+    # 0 de 9 perfiles con la clave vieja). La segmentación por dieta estaba MUERTA: a un vegano le llegaban de pista
+    # los platos populares entre omnívoros. Ahora la dieta canónica (SSOT `canonicalize_diet_type`); `balanced` no
+    # filtra (sin restricción, cualquier plato popular le sirve), las restrictivas filtran por TODAS sus grafías.
+    from constants import canonicalize_diet_type, diet_type_aliases
+    diet = canonicalize_diet_type(
+        health_profile.get('dietType') or ((health_profile.get('dietTypes') or [None])[0])
+    )
     country = _coldstart_country_filter(health_profile)
     
     if not goal or not activity:
@@ -17604,11 +17611,10 @@ def get_similar_user_patterns(user_id: str, health_profile: dict):
         params = [goal, activity]
         
         # 2. Segmentacion de Dieta
-        if diet_types and len(diet_types) > 0:
-            import json
-            diet = diet_types[0]
-            query += " AND up.health_profile->'dietTypes' @> %s::jsonb"
-            params.append(json.dumps([diet]))
+        if diet != "balanced":
+            query += (" AND translate(lower(coalesce(up.health_profile->>'dietType', '')), 'áéíóú', 'aeiou')"
+                      " = ANY(%s)")
+            params.append(diet_type_aliases(diet))
             
         # 3. Segmentacion Cultural
         if country:
@@ -29519,8 +29525,13 @@ __PLAN_MODE_GATE__
                     else:
                         user_res = execute_sql_query("SELECT health_profile FROM user_profiles WHERE id = %s", (user_id,), fetch_one=True)
                         health_profile = user_res.get("health_profile", {}) if user_res else {}
-                    current_allergies = health_profile.get("allergies", [])
-                    current_dislikes = health_profile.get("dislikes", [])
+                    # [P1-PLAN-LOTE-166 · 2026-09-22] Chips + lo tecleado en «Otra alergia / Otro que no te gusta»: el
+                    # perfil guardado los tiene por separado y este camino —que arma días SIN LLM ni review— solo veía
+                    # los chips. Misma unión que el generador (`profile_with_free_text`).
+                    from graph_orchestrator import profile_with_free_text as _pwft_deg
+                    _hp_union = _pwft_deg(health_profile)
+                    current_allergies = _hp_union.get("allergies", [])
+                    current_dislikes = _hp_union.get("dislikes", [])
                     current_diet = (
                         health_profile.get("dietType")
                         or ((health_profile.get("dietTypes") or [None])[0])

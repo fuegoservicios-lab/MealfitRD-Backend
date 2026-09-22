@@ -39,7 +39,9 @@ def _f(rel: str) -> str:
 def test_alarma_exacta_solo_con_el_permiso_dado():
     av = _f("src/utils/avisosDeComida.js")
     assert "const exacta = (await _alarmaExactaConcedida(LN)) === true;" in av
-    assert ".map((n) => ({ ...n, isExactNotification: exacta }));" in av
+    # [P1-PLAN-LOTE-166] la misma línea suma el canal propio de Android (solo si se pudo crear); lo que se vigila aquí
+    # —exacta SOLO con el permiso dado— no cambia.
+    assert ".map((n) => ({ ...n, isExactNotification: exacta, ...(canal ? { channelId: CANAL_ANDROID } : {}) }));" in av
     # la consulta tiene tope: un método que no contesta no puede colgar la reprogramación
     assert "_TOPE_CONSULTA_ALARMA_MS" in av and "Promise.race([" in av
     # el permiso lo pide la PERSONA, desde Configuración

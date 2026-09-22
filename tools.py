@@ -1777,7 +1777,9 @@ def execute_modify_single_meal(user_id: str, day_number: int, meal_type: str, ch
 
     if UPDATE_CLINICAL_GUARD:
         try:
-            _clin_allergies = _hp.get("allergies") or []
+            # [P1-PLAN-LOTE-166] chips + lo tecleado en «Otra alergia» (el perfil guardado no los une)
+            from graph_orchestrator import profile_with_free_text as _pwft_clin
+            _clin_allergies = _pwft_clin(_hp).get("allergies") or []
             _clin_diet = _hp.get("dietType") or _hp.get("diet_type")
             if form_data:  # union con lo que mande el caller (defensa-en-profundidad)
                 _clin_allergies = list({*[str(a) for a in _clin_allergies], *[str(a) for a in (form_data.get("allergies") or [])]})
@@ -2859,6 +2861,7 @@ def execute_modify_single_meal(user_id: str, day_number: int, meal_type: str, ch
         if _recompute_micros_on:
             try:
                 from graph_orchestrator import _close_micro_gaps_for_plan as _cmg_pre
+                from graph_orchestrator import profile_with_free_text as _pwft_cm   # [P1-PLAN-LOTE-166]
                 # [P1-MICRO-CLINICAL-FREETEXT · 2026-07-01] merge estilo P1-FORM-6: otherConditions
                 # (free-text) se pliega en medicalConditions → renal-skip del closer + techo K renal
                 # ven condiciones declaradas a mano; otherMedications alimenta el detector K-elevador.
@@ -2878,7 +2881,7 @@ def execute_modify_single_meal(user_id: str, day_number: int, meal_type: str, ch
                     # [P2-MICRO-SEED-CLINICAL-CTX · 2026-07-29] (audit solver+seeder v4) idéntico al de
                     # `/swap-meal/persist`: sin estas 3 claves el scan de alérgenos del path de SIEMBRA
                     # no corre (se gatea por presencia de key) y el closer puede añadir un alérgeno.
-                    "allergies": [str(a).strip() for a in (_hp.get("allergies") or []) if str(a).strip()],
+                    "allergies": [str(a).strip() for a in (_pwft_cm(_hp).get("allergies") or []) if str(a).strip()],
                     "dietType": _hp.get("dietType") or _hp.get("diet_type"),
                     "dislikes": _hp.get("dislikes") or [],
                 }
@@ -4606,7 +4609,11 @@ def suggest_foods_for_nutrient(user_id: str, nutrient: str, top_n: int = 6) -> s
             profile = get_user_profile(user_id) or {}
             if not profile:
                 raise LookupError("perfil vacío o ilegible")
-            hp = profile.get("health_profile") or {}
+            # [P1-PLAN-LOTE-166] con lo tecleado en «Otra alergia / Otro que no te gusta»: el perfil guardado guarda
+            # los chips y el texto por separado, y esta herramienta —la que el coach usa en el contador para
+            # recomendar alimentos— solo veía los chips.
+            from graph_orchestrator import profile_with_free_text
+            hp = profile_with_free_text(profile.get("health_profile") or {})
 
             def _as_list(v):
                 if isinstance(v, list):

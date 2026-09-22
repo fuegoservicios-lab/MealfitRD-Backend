@@ -311,7 +311,12 @@ _PROCESS_START_ISO = datetime.now(timezone.utc).isoformat()
 # escáner glosadas; errores del servidor por código; «o», «P · C · G» y el ritmo de la meta traducidos. Teclado: las
 # hojas de registrar comida y del escáner suben por encima del teclado del iPhone; fuera del chat, la barra de
 # pestañas se esconde con un campo enfocado.
-_LAST_KNOWN_PFIX = "P1-PLAN-LOTE-165 · 2026-09-22"
+# [P1-PLAN-LOTE-166 · 2026-09-22] (este backend + frontend por OTA) lo TECLEADO en «Otra alergia / condición /
+# medicamento» no llegaba al coach ni a sus herramientas de recomendar comida (el perfil guardado lo tiene aparte de los
+# chips): ahora todos leen `profile_with_free_text`, la unión del generador; el camino degradado también. El cron de
+# arranque en frío filtra por `dietType` (leía `dietTypes`, que nadie escribe). En la app: Configuración alcanzable
+# desde el formulario (App Store 5.1.1(v)), cerrar sesión a mitad del alta dice la verdad, el OTA se confirma al pintar.
+_LAST_KNOWN_PFIX = "P1-PLAN-LOTE-166 · 2026-09-22"
 
 # [P1-SENTRY-SAMPLE-COST · 2026-05-12] Sentry sampling driven from env vars
 # con default seguro 0.1 (10%). Pre-fix tenía `traces_sample_rate=1.0` y

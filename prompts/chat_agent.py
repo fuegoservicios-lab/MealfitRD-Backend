@@ -738,6 +738,18 @@ def build_clinical_guard_context(form_data: dict) -> str:
     if not isinstance(form_data, dict):
         return ""
 
+    # [P1-PLAN-LOTE-166 · 2026-09-22] Lo TECLEADO en «Otra alergia / Otra condición / Otro medicamento» también es
+    # clínico, y este bloque solo leía los chips: un «Maní» escrito a mano no llegaba al coach (y con solo texto libre
+    # el bloque callaba entero, o sea «no ha declarado nada»). La unión es la MISMA del generador de planes
+    # (`profile_with_free_text`, centinela «Ninguna» incluido); los medicamentos no están en esa unión —el generador
+    # los lee sueltos por `medication_rules`—, así que aquí se suman aparte.
+    try:
+        from graph_orchestrator import profile_with_free_text
+        form_data = profile_with_free_text(form_data)
+    except Exception as e:  # pragma: no cover — sin el grafo no arranca ni la app
+        import logging
+        logging.getLogger(__name__).error(f"[P1-PLAN-LOTE-166] bloque clínico sin el texto libre: {e!r}")
+
     def _lista(clave):
         v = form_data.get(clave)
         if isinstance(v, str):
@@ -751,6 +763,8 @@ def build_clinical_guard_context(form_data: dict) -> str:
     alergias = _lista("allergies")
     condiciones = _lista("medicalConditions")
     medicamentos = _lista("medications")
+    _vistos = {m.lower() for m in medicamentos}
+    medicamentos += [m for m in _lista("otherMedications") if m.lower() not in _vistos]
     if not (alergias or condiciones or medicamentos):
         return ""
 
