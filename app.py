@@ -281,7 +281,11 @@ _PROCESS_START_ISO = datetime.now(timezone.utc).isoformat()
 # servidor solo se comprueba cuando llega un evento, así que ante un cuelgue de verdad no dispara —
 # el reloj que sí corre mientras el servidor calla es el del cliente (5 min, y el corte va por el
 # rescate del 156). Y el knob de inactividad deja de prometer un aborto que no hace desde el 14-sep.
-_LAST_KNOWN_PFIX = "P1-PLAN-LOTE-157 · 2026-09-22"
+# [P1-PLAN-LOTE-158 · 2026-09-22] (frontend) el botón secundario («Ahora no», «Cancelar») responde como
+# un botón y no como una fila: el anillo de 1 px que dibujaba su contorno —útil en una lista, un recuadro
+# de la nada en un botón, y un segundo borde en el que ya tenía el suyo— se cambia por superficie + el
+# texto subiendo a primer plano.
+_LAST_KNOWN_PFIX = "P1-PLAN-LOTE-158 · 2026-09-22"
 
 # [P1-SENTRY-SAMPLE-COST · 2026-05-12] Sentry sampling driven from env vars
 # con default seguro 0.1 (10%). Pre-fix tenía `traces_sample_rate=1.0` y
