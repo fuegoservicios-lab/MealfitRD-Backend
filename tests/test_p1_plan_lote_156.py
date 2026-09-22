@@ -4,7 +4,7 @@ descubre por los usuarios.
 EL HUECO. El `LLMCircuitBreaker` abre tras 3 fallos seguidos y persiste `is_open=true` en
 `app_kv_store`. A partir de ese momento el coach contesta «temporalmente saturado» a TODO el
 mundo sin llegar a llamar al proveedor — y eso es todo lo que pasa: ni alert, ni correo, ni
-una fila que alguien mire. El 16-sep Z.ai se quedó sin saldo a las 21:30 y toda la IA cayó; el
+una fila que alguien mire. El 16-sep el proveedor de entonces se quedó sin saldo a las 21:30 y la IA cayó; el
 dueño se enteró porque estaba usándola. Con 5 testers y UN solo proveedor vivo, la misma caída
 de madrugada son horas de coach muerto en silencio.
 
@@ -68,18 +68,18 @@ def _resoluciones(escrituras):
 def test_un_breaker_abierto_emite_alerta_con_su_modelo():
     """El caso del 16-sep: el modelo del chat deja de responder y hay que enterarse."""
     escrituras = _correr([
-        {"key": "llm_circuit_breaker:deepseek-flash", "failures": 3, "last_failure": _AHORA - 300},
+        {"key": "llm_circuit_breaker:modelo-flash", "failures": 3, "last_failure": _AHORA - 300},
     ])
     alertas = _alertas(escrituras)
     assert len(alertas) == 1, "Un breaker abierto tiene que emitir exactamente un alert."
     _sql, params = alertas[0]
-    assert params[0] == "llm_circuit_breaker_open:deepseek-flash", (
+    assert params[0] == "llm_circuit_breaker_open:modelo-flash", (
         "La key lleva el MODELO: colapsarlos escondería que el chat está caído mientras otra "
         "superficie respira."
     )
     assert "'critical'" in _sql, "El coach caído para todo el mundo no es un warning."
     metadata = json.loads(params[3])
-    assert metadata["modelo"] == "deepseek-flash"
+    assert metadata["modelo"] == "modelo-flash"
     assert metadata["failures"] == 3
     assert metadata["minutos_desde_el_ultimo_fallo"] == 5
 
@@ -87,7 +87,7 @@ def test_un_breaker_abierto_emite_alerta_con_su_modelo():
 def test_el_mensaje_dice_que_mirar():
     """Un alert que no dice qué hacer se archiva sin leer."""
     escrituras = _correr([
-        {"key": "llm_circuit_breaker:deepseek-flash", "failures": 4, "last_failure": _AHORA - 60},
+        {"key": "llm_circuit_breaker:modelo-flash", "failures": 4, "last_failure": _AHORA - 60},
     ])
     mensaje = _alertas(escrituras)[0][1][2]
     assert "saldo" in mensaje.lower(), "La causa número uno (saldo agotado) tiene que estar."
@@ -104,13 +104,13 @@ def test_la_clave_legacy_sin_sufijo_se_reporta_como_default():
 
 def test_varios_modelos_abiertos_dan_varias_alertas():
     escrituras = _correr([
-        {"key": "llm_circuit_breaker:deepseek-flash", "failures": 3, "last_failure": _AHORA - 60},
-        {"key": "llm_circuit_breaker:gpt-5.6-luna", "failures": 5, "last_failure": _AHORA - 90},
+        {"key": "llm_circuit_breaker:modelo-flash", "failures": 3, "last_failure": _AHORA - 60},
+        {"key": "llm_circuit_breaker:modelo-pro", "failures": 5, "last_failure": _AHORA - 90},
     ])
     claves = {p[0] for _s, p in _alertas(escrituras)}
     assert claves == {
-        "llm_circuit_breaker_open:deepseek-flash",
-        "llm_circuit_breaker_open:gpt-5.6-luna",
+        "llm_circuit_breaker_open:modelo-flash",
+        "llm_circuit_breaker_open:modelo-pro",
     }
 
 
@@ -130,11 +130,11 @@ def test_sin_breakers_abiertos_no_alerta_y_cierra_lo_que_hubiera():
 
 def test_con_algunos_abiertos_solo_se_cierran_los_demas():
     escrituras = _correr([
-        {"key": "llm_circuit_breaker:deepseek-flash", "failures": 3, "last_failure": _AHORA - 60},
+        {"key": "llm_circuit_breaker:modelo-flash", "failures": 3, "last_failure": _AHORA - 60},
     ])
     sql, params = _resoluciones(escrituras)[0]
     assert "<> ALL(" in sql, "Cerrar TODO en el mismo tick borraría la alerta recién emitida."
-    assert params[0] == ["llm_circuit_breaker_open:deepseek-flash"]
+    assert params[0] == ["llm_circuit_breaker_open:modelo-flash"]
 
 
 def test_la_consulta_pide_las_filas_explicitamente():
@@ -176,7 +176,7 @@ def test_el_cron_no_toca_el_kv_del_breaker():
     """Leer es leer. El reseteo es del sweep de P2-NEW-D, que es su dueño: dos escritores
     sobre la misma fila con reglas distintas es como nacen los estados imposibles."""
     escrituras = _correr([
-        {"key": "llm_circuit_breaker:deepseek-flash", "failures": 3, "last_failure": _AHORA - 60},
+        {"key": "llm_circuit_breaker:modelo-flash", "failures": 3, "last_failure": _AHORA - 60},
     ])
     for sql, _p in escrituras:
         assert "app_kv_store" not in sql, f"El vigilante escribió en el KV del breaker: {sql[:120]}"
@@ -214,6 +214,6 @@ def test_la_alerta_esta_documentada_en_la_tabla_canonica():
 @pytest.mark.parametrize("campo", ["modelo", "failures", "ventana_min"])
 def test_la_metadata_lleva_lo_necesario_para_diagnosticar(campo):
     escrituras = _correr([
-        {"key": "llm_circuit_breaker:deepseek-flash", "failures": 3, "last_failure": _AHORA - 60},
+        {"key": "llm_circuit_breaker:modelo-flash", "failures": 3, "last_failure": _AHORA - 60},
     ])
     assert campo in json.loads(_alertas(escrituras)[0][1][3])

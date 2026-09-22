@@ -39,8 +39,16 @@ def _block():
 
 def test_orphan_detection_and_indicator():
     blk = _block()
-    assert "last.role === 'user' && !isLoading && !isLoadingHistory" in blk, \
-        "huérfano = último mensaje del user sin nada en vuelo"
+    # [P1-PLAN-LOTE-156 · 2026-09-22] La condición salió del efecto a una función pura
+    # (`utils/rescateDelTurno.js`) porque le faltaba un caso: el corte de red EN VIVO deja una
+    # burbuja de error, así que el último mensaje ya NO es del usuario y el sondeo no arrancaba —
+    # mientras el backend terminaba el turno y GUARDABA la respuesta. Lo que este test defiende
+    # («huérfano = mensaje del usuario sin nada en vuelo») sigue intacto: es el primer caso del
+    # predicado, y sus cinco casos se miden en `frontend/src/__tests__/lote156.test.js`.
+    assert "hayTurnoQueRescatar({" in blk, \
+        "huérfano = lo decide el predicado (mensaje del usuario sin nada en vuelo, + corte de red)"
+    assert "ocupado: isLoading" in blk and "cargandoHistorial: isLoadingHistory" in blk, \
+        "…y sigue sin arrancar con un turno en vuelo o el historial cargando"
     assert "(isLoading || recoveringTurn) && (" in _AP, \
         "el indicador pensando también se muestra durante la recuperación"
     assert "Recuperando tu respuesta…" in _AP

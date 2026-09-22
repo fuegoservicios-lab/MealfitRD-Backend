@@ -6590,10 +6590,14 @@ def _llm_breaker_open_alert_job():
     EL HUECO. El `LLMCircuitBreaker` abre tras 3 fallos seguidos de un modelo y persiste
     `{failures, last_failure, is_open}` en `app_kv_store`. A partir de ahí el coach contesta
     «el asistente está temporalmente saturado» a todo el mundo, y ESO ES TODO lo que ocurre:
-    ningún alert, ningún correo, nada. El 16-sep Z.ai se quedó sin saldo a las 21:30 y toda
-    la IA cayó; el dueño se enteró porque lo estaba usando. Con 5 testers y un solo proveedor
-    vivo (DeepSeek), esa misma caída de madrugada son horas de coach muerto sin que nadie lo
+    ningún alert, ningún correo, nada. El 16-sep el proveedor de entonces se quedó sin saldo a
+    las 21:30 y toda la IA cayó; el dueño se enteró porque lo estaba usando. Con 5 testers y un
+    solo proveedor vivo, esa misma caída de madrugada son horas de coach muerto sin que nadie lo
     sepa.
+
+    (Los NOMBRES de proveedor no se escriben aquí a propósito: viven en `llm_provider.py` y sus
+    superficies declaradas, y `test_p1_plan_lote_74` vigila que no se derramen a otros ficheros
+    — es lo que hace posible cambiar de proveedor tocando un knob y no veinte docstrings.)
 
     Y hay algo peor que el silencio: el ÚNICO rastro que quedaba se BORRA SOLO.
     `_sweep_stale_llm_circuit_breakers` (P2-NEW-D) resetea a cero las filas cuyo

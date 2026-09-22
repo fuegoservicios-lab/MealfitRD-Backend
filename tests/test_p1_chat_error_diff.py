@@ -91,7 +91,16 @@ _ERROR_COPY_DECL_RE = re.compile(
 
 # Valor de un campo de texto: literal `'…'` | envuelto `t('…')`. En ambos casos
 # capturamos la CADENA ESPAÑOLA, que en este motor es a la vez clave y fallback.
-_TEXT_VALUE_RE = r"(?:t\(\s*)?['\"]([^'\"]+)['\"]"
+# [P1-PLAN-LOTE-155 · 2026-09-22] El 402 dejó de ser una cadena y pasó a ser una bifurcación:
+# dentro de la app nativa no puede invitar a mejorar de plan (Apple 3.1.1, `nativeHidesCommerce`).
+# El prefijo opcional deja pasar `<gate>() ? t('…') : ` y captura la cadena de la WEB, que es la
+# que este test compara entre estados. Que la rama nativa exista y NO venda lo vigila
+# `test_p1_plan_lote_155.py`: ahí está su sitio, y aquí se seguiría midiendo la diferenciación
+# de copys aunque mañana haya un tercer caso.
+_TEXT_VALUE_RE = (
+    r"(?:[A-Za-z_$][\w$]*\(\)\s*\?\s*t\(\s*['\"][^'\"]+['\"]\s*\)\s*:\s*)?"
+    r"(?:t\(\s*)?['\"]([^'\"]+)['\"]"
+)
 
 
 def _extract_error_copy_body(src: str) -> str:
