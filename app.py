@@ -306,7 +306,12 @@ _PROCESS_START_ISO = datetime.now(timezone.utc).isoformat()
 # confirmación no se veía sobre Configuración. Ahora abre el formulario directo y este pregunta SOLO lo que la rama del
 # contador se saltó. Un 422 ya no se disfraza de «tu plan se sigue generando»; «Otra condición» no cierra el contador;
 # «Tus Medidas» dice qué está mal; el idioma elegido en el formulario se guarda en la cuenta.
-_LAST_KNOWN_PFIX = "P1-PLAN-LOTE-164 · 2026-09-22"
+# [P1-PLAN-LOTE-165 · 2026-09-22] (frontend por OTA + este backend) cada evento de progreso del coach lleva su
+# FASE y el cliente pinta la frase traducida (salían en español fijo en los cinco idiomas); unidades del catálogo y del
+# escáner glosadas; errores del servidor por código; «o», «P · C · G» y el ritmo de la meta traducidos. Teclado: las
+# hojas de registrar comida y del escáner suben por encima del teclado del iPhone; fuera del chat, la barra de
+# pestañas se esconde con un campo enfocado.
+_LAST_KNOWN_PFIX = "P1-PLAN-LOTE-165 · 2026-09-22"
 
 # [P1-SENTRY-SAMPLE-COST · 2026-05-12] Sentry sampling driven from env vars
 # con default seguro 0.1 (10%). Pre-fix tenía `traces_sample_rate=1.0` y

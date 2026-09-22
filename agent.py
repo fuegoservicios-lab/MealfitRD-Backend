@@ -7425,6 +7425,9 @@ def chat_with_agent_stream(session_id: str, prompt: str, current_plan: Optional[
     else:
         inputs["messages"] = [HumanMessage(content=prompt)]
         
+    # [P1-PLAN-LOTE-165 · 2026-09-22] Cada evento `progress` lleva también su FASE (`phase` = la clave de
+    # abajo): la frase es española y el cliente la pintaba tal cual en los cinco idiomas. Con la fase, el
+    # cliente pinta SU frase traducida; `message` se queda por compatibilidad (paquetes OTA viejos).
     def get_progress_msg(msg_type):
         opts = {
             "analizando": ["Procesando tu solicitud detalladamente...", "Evaluando tu perfil y macros...", "Alineando tu genética con el plan...", "Analizando tu objetivo con Inteligencia Nutricional...", "Revisando tus preferencias y contexto..."],
@@ -7437,7 +7440,7 @@ def chat_with_agent_stream(session_id: str, prompt: str, current_plan: Optional[
         }
         return random.choice(opts.get(msg_type, ["Procesando..."]))
 
-    yield f"data: {json.dumps({'type': 'progress', 'message': get_progress_msg('analizando')})}\n\n"
+    yield f"data: {json.dumps({'type': 'progress', 'phase': 'analizando', 'message': get_progress_msg('analizando')})}\n\n"
     
     # Emitir el sentimiento detectado al frontend
     if sentiment_result.get("sentiment") != "neutral":
@@ -7641,17 +7644,17 @@ def chat_with_agent_stream(session_id: str, prompt: str, current_plan: Optional[
                             if idx == 0:  # Mostrar el mensaje 1 sola vez por llamada múltiple
                                 tool_name = tool_call.get("name", "")
                                 if tool_name == "generate_new_plan_from_chat":
-                                    yield f"data: {json.dumps({'type': 'progress', 'message': get_progress_msg('generando_plan')})}\n\n"
+                                    yield f"data: {json.dumps({'type': 'progress', 'phase': 'generando_plan', 'message': get_progress_msg('generando_plan')})}\n\n"
                                 elif tool_name == "modify_single_meal":
-                                    yield f"data: {json.dumps({'type': 'progress', 'message': get_progress_msg('modificando_comida')})}\n\n"
+                                    yield f"data: {json.dumps({'type': 'progress', 'phase': 'modificando_comida', 'message': get_progress_msg('modificando_comida')})}\n\n"
                                 elif tool_name == "update_form_field":
-                                    yield f"data: {json.dumps({'type': 'progress', 'message': get_progress_msg('actualizando_bd')})}\n\n"
+                                    yield f"data: {json.dumps({'type': 'progress', 'phase': 'actualizando_bd', 'message': get_progress_msg('actualizando_bd')})}\n\n"
                                 elif tool_name == "log_consumed_meal":
-                                    yield f"data: {json.dumps({'type': 'progress', 'message': get_progress_msg('registrando_progreso')})}\n\n"
+                                    yield f"data: {json.dumps({'type': 'progress', 'phase': 'registrando_progreso', 'message': get_progress_msg('registrando_progreso')})}\n\n"
                                 elif tool_name == "check_shopping_list":
-                                    yield f"data: {json.dumps({'type': 'progress', 'message': get_progress_msg('calculando_compras')})}\n\n"
+                                    yield f"data: {json.dumps({'type': 'progress', 'phase': 'calculando_compras', 'message': get_progress_msg('calculando_compras')})}\n\n"
                                 elif tool_name == "search_deep_memory":
-                                    yield f"data: {json.dumps({'type': 'progress', 'message': get_progress_msg('buscando_memoria')})}\n\n"
+                                    yield f"data: {json.dumps({'type': 'progress', 'phase': 'buscando_memoria', 'message': get_progress_msg('buscando_memoria')})}\n\n"
                                 else:
                                     # [P1-CHAT-NARRATION-KEPT-REVIEW-1 · 2026-07-28]
                                     # Fallback genérico para CUALQUIER tool_call sin
@@ -7677,7 +7680,7 @@ def chat_with_agent_stream(session_id: str, prompt: str, current_plan: Optional[
                                     # siempre falso para las 8+ tools sin branch dedicado),
                                     # forzando SIEMPRE la rama 'replace' — reflow visible al
                                     # final del turno. Ver hallazgo de review P1-CHAT-NARRATION-KEPT.
-                                    yield f"data: {json.dumps({'type': 'progress', 'message': get_progress_msg('analizando')})}\n\n"
+                                    yield f"data: {json.dumps({'type': 'progress', 'phase': 'analizando', 'message': get_progress_msg('analizando')})}\n\n"
 
         # [P1-CHAT-DELIBERATION-HIDDEN · 2026-07-31] El turno terminó sin
         # ninguna tool_call ⇒ lo retenido NO era deliberación previa a una
