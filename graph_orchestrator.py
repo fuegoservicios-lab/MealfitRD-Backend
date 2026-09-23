@@ -17,7 +17,7 @@ from llm_provider import (
     ChatOpenAI as _ChatOpenAIBase,
     GLM_FLASH,
     GLM_PRO,
-    GPT56_LUNA,
+    GPT6_LUNA,
     GPT56_SOL,
     GPT56_TERRA,
     PAID_TIERS,
@@ -4128,7 +4128,7 @@ _REVIEWER_RISK_TIER_DEFAULT = GLM_FLASH
 
 # [P1-REVIEWER-TIER-MODELS · 2026-07-31] Modelos del reviewer clínico por tier.
 # Knobs per-tier (convención P3-PREVIEW-MODEL-KNOB — override sin redeploy):
-_REVIEWER_RISK_MODEL_FREE_DEFAULT = GPT56_LUNA
+_REVIEWER_RISK_MODEL_FREE_DEFAULT = GPT6_LUNA  # [P1-PLAN-LOTE-171] GPT-6 Luna
 _REVIEWER_RISK_MODEL_PAID_DEFAULT = GPT56_TERRA
 # [P1-REVIEWER-SOL-HARD · 2026-07-31] Escalón superior para plus/ultra en
 # casos clínicamente DIFÍCILES (decisión owner). Sol = $5/$30 por 1M
@@ -4196,9 +4196,9 @@ def _openai_key_available() -> bool:
 # conserva TODOS los demás nodos (planner, critique, correctores, compressor,
 # fact-checker) y es la RED del chain del day-gen (fallback rápido SIN
 # razonamiento: la red existe para rescatar, no para profundizar).
-_DAYGEN_TIER_MODEL_PLUS_DEFAULT = GPT56_LUNA
+_DAYGEN_TIER_MODEL_PLUS_DEFAULT = GPT6_LUNA  # [P1-PLAN-LOTE-171] GPT-6 Luna
 _DAYGEN_TIER_EFFORT_PLUS_DEFAULT = "medium"
-_DAYGEN_TIER_MODEL_FREE_DEFAULT = GPT56_LUNA
+_DAYGEN_TIER_MODEL_FREE_DEFAULT = GPT6_LUNA
 _DAYGEN_TIER_EFFORT_FREE_DEFAULT = "low"
 _DAYGEN_TIER_EFFORT_VALID = ("none", "low", "medium", "high", "xhigh", "max")
 
@@ -4503,7 +4503,8 @@ def _plan_pro_model_name() -> str:
     # tier (todos van a flash). `_PRO_MODEL_NAME` es EXCLUSIVAMENTE la RED
     # post-fallo: 2º en la cadena del day-gen, fallback del planner con breaker
     # abierto, escalada del corrector quirúrgico, EVALUATOR_USE_PRO.
-    # [P1-NET-LUNA · 2026-07-31] Default de la red → `gpt-5.6-luna` (OpenAI).
+    # [P1-NET-LUNA · 2026-07-31] Default de la red → Luna (OpenAI): `gpt-5.6-luna` hasta el 23-sep,
+    # `gpt-6-luna` desde P1-PLAN-LOTE-171 (mismo papel, mitad de precio).
     # Razón (decisión owner): flash y pro son el MISMO proveedor — el incidente
     # que motivó la red (breaker abierto 172× en el gym baseline) fue GLM
     # rate-limiteando bajo carga, y en ese modo de fallo pro cae JUNTO con
@@ -4517,7 +4518,7 @@ def _plan_pro_model_name() -> str:
     # contra el mismo breaker roto (P1-DAYGEN-RETRY-FLASH-NET,
     # P1-PLANNER-PRO-FALLBACK). Rollback sin redeploy:
     # `MEALFIT_PRO_MODEL=glm-5.3`.
-    _configured = _env_str("MEALFIT_PRO_MODEL", GPT56_LUNA) or GPT56_LUNA
+    _configured = _env_str("MEALFIT_PRO_MODEL", GPT6_LUNA) or GPT6_LUNA
     if is_openai_model(_configured) and not _openai_key_available():
         logger.warning(
             f"⚠ [P1-NET-LUNA] La red post-fallo '{_configured}' requiere OPENAI_API_KEY "
@@ -51172,6 +51173,14 @@ async def arun_plan_pipeline(form_data: dict, history: list = None, taste_profil
             is_rotation = (not _rot_fridge_empty) and bool(
                 actual_form_data.get("current_pantry_ingredients")
                 or actual_form_data.get("current_shopping_list"))
+            # [P1-PLAN-LOTE-171 · 2026-09-23] Una RENOVACIÓN («Quiero variedad», `variety`/`renewal.v1`) ignora la
+            # nevera por diseño (P1-VARIETY-IGNORE-PANTRY) y la guarda de despensa ya se salta con esa MISMA regla:
+            # ordenar aquí «usa SOLO la despensa» le decía al modelo lo contrario de lo que la guarda iba a
+            # comprobar. La rotación de verdad es la de «No me gustan estos platos» (`dislike`): mismas compras,
+            # platos nuevos. Una renovación del mismo día cae en el re-roll de variedad.
+            from horizon import is_renewal_reason as _is_renewal_reason_rot
+            if is_rotation and _is_renewal_reason_rot(actual_form_data.get("update_reason")):
+                is_rotation = False
 
             # Si el plan anterior se generó en el mismo día, interpretamos como RECHAZO o ROTACIÓN
             # P0-NEW-1.h: DB sync. Despachado al executor.

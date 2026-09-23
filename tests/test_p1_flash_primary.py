@@ -141,8 +141,10 @@ def test_e_pro_net_not_collapsed():
         re.DOTALL,
     )
     assert m, "no encontré _plan_pro_model_name"
-    assert m.group(1) == "GPT56_LUNA", (
-        "la RED post-fallo debe ser cross-provider (GPT56_LUNA) — "
+    # [P1-PLAN-LOTE-171 · 2026-09-23] La Luna por defecto pasó a GPT-6 Luna (`GPT6_LUNA`, mitad de precio). La
+    # invariante no cambia: la red es Luna, de OTRO proveedor que flash — nunca GLM ni flash.
+    assert m.group(1) == "GPT6_LUNA", (
+        "la RED post-fallo debe ser cross-provider (GPT6_LUNA) — "
         "ver P1-NET-LUNA; rollback vía MEALFIT_PRO_MODEL=glm-5.3"
     )
     # Fail-safe intra-provider presente: sin OPENAI_API_KEY la red vuelve a pro.

@@ -40,7 +40,8 @@ def test_a_net_default_is_luna_with_key(monkeypatch):
 
     monkeypatch.delenv("MEALFIT_PRO_MODEL", raising=False)
     monkeypatch.setenv("OPENAI_API_KEY", "sk-test-dummy")
-    assert go._plan_pro_model_name() == "gpt-5.6-luna"
+    # [P1-PLAN-LOTE-171 · 2026-09-23] la Luna por defecto es GPT-6 Luna (`gpt-6-luna`, mitad de precio); la 5.6 queda por knob.
+    assert go._plan_pro_model_name() == "gpt-6-luna"
 
 
 def test_a2_failsafe_to_pro_without_key(monkeypatch):

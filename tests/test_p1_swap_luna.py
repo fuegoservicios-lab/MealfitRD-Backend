@@ -29,7 +29,7 @@ from unittest import mock
 import pytest
 
 import agent
-from llm_provider import GPT56_LUNA
+from llm_provider import GPT56_LUNA, GPT6_LUNA
 
 _AGENT_SRC = Path(agent.__file__).read_text(encoding="utf-8")
 
@@ -51,7 +51,8 @@ def _cuerpo_de_swap_meal() -> str:
 
 def test_el_default_del_swap_es_luna():
     with mock.patch.dict(os.environ, {"OPENAI_API_KEY": "sk-test"}, clear=False):
-        assert agent._chat_agent_swap_model_name("u1") == GPT56_LUNA
+        # [P1-PLAN-LOTE-171 · 2026-09-23] la Luna por defecto es GPT-6 Luna (`gpt-6-luna`, mitad de precio); la 5.6 queda por knob.
+        assert agent._chat_agent_swap_model_name("u1") == GPT6_LUNA
 
 
 def test_sin_openai_key_degrada_en_vez_de_reventar():
@@ -64,7 +65,7 @@ def test_sin_openai_key_degrada_en_vez_de_reventar():
     entorno = {k: v for k, v in os.environ.items() if k != "OPENAI_API_KEY"}
     with mock.patch.dict(os.environ, entorno, clear=True):
         elegido = agent._chat_agent_swap_model_name("u1")
-    assert elegido != GPT56_LUNA, "sin key NO puede seguir pidiendo el modelo de OpenAI"
+    assert elegido not in (GPT56_LUNA, GPT6_LUNA), "sin key NO puede seguir pidiendo el modelo de OpenAI"
     assert elegido, "y tampoco puede devolver vacío: el swap tiene que seguir funcionando"
 
 

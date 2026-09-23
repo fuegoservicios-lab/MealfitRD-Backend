@@ -13,7 +13,7 @@ logger = logging.getLogger(__name__)
 from constants import DEFAULT_TZ_OFFSET_MIN as _DEFAULT_TZ_OFFSET_MIN
 from constants import strip_accents, CULINARY_KNOWLEDGE_BASE, coach_country_context, culinary_knowledge_base_for_country, validate_ingredients_against_pantry, _to_base_unit
 # [P0-LLM-PROVIDER-MIGRATION · 2026-06-12] Gemini → GLM con router por tier.
-from llm_provider import (ChatGLM, GLM_FLASH, GPT56_LUNA,
+from llm_provider import (ChatGLM, GLM_FLASH, GPT6_LUNA,
                           build_chat_llm, is_openai_model, resolve_model_for_user)
 from langchain_core.tools import tool
 from langchain_core.messages import SystemMessage, HumanMessage, AIMessage, ToolMessage
@@ -645,7 +645,7 @@ def _chat_agent_model_name(user_id: Optional[str] = None) -> str:
 # user-facing: preferimos degradar al router por tier (flash) que devolverle un 500 al
 # usuario porque falta una env var. Mismo criterio que la red post-fallo P1-NET-LUNA, que
 # degrada a `glm-5.3` cuando la key no está.
-_SWAP_MODEL_DEFAULT = GPT56_LUNA
+_SWAP_MODEL_DEFAULT = GPT6_LUNA  # [P1-PLAN-LOTE-171] GPT-6 Luna
 
 
 def _chat_agent_swap_model_name(user_id: Optional[str] = None) -> str:

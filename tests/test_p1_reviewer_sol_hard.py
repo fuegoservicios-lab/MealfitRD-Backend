@@ -88,7 +88,8 @@ def test_a2_plus_normal_stays_terra(_go, monkeypatch):
 def test_a3_free_hard_stays_luna(_go, monkeypatch):
     monkeypatch.setattr(_go, "get_user_tier", lambda uid: "gratis")
     monkeypatch.setattr(_go, "_is_hard_clinical_profile", lambda fd: True)
-    assert _go._reviewer_model_name(_RISK_FORM) == "gpt-5.6-luna"
+    # [P1-PLAN-LOTE-171 · 2026-09-23] la Luna por defecto es GPT-6 Luna (`gpt-6-luna`, mitad de precio); la 5.6 queda por knob.
+    assert _go._reviewer_model_name(_RISK_FORM) == "gpt-6-luna"
 
 
 # ------------------------------------------------------------------

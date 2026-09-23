@@ -69,7 +69,8 @@ def _mute_alert_writes(monkeypatch):
 def test_a_free_tier_risk_goes_to_luna(_go, monkeypatch):
     writes = _mute_alert_writes(monkeypatch)
     monkeypatch.setattr(_go, "get_user_tier", lambda uid: "gratis")
-    assert _go._reviewer_model_name(_RISK_FORM) == "gpt-5.6-luna"
+    # [P1-PLAN-LOTE-171 · 2026-09-23] la Luna por defecto es GPT-6 Luna (`gpt-6-luna`, mitad de precio); la 5.6 queda por knob.
+    assert _go._reviewer_model_name(_RISK_FORM) == "gpt-6-luna"
     assert not _go._CLINICAL_MODEL_GUARD_WARNED and not writes
 
 
@@ -87,7 +88,7 @@ def test_a2_paid_tiers_risk_go_to_terra(_go, monkeypatch, tier):
 def test_a3_no_user_context_fails_cheap_to_free(_go, monkeypatch):
     # Sin contexto (`user_id_var` default) → gratis → Luna, simétrico al router.
     _mute_alert_writes(monkeypatch)
-    assert _go._reviewer_risk_model_for_tier() == "gpt-5.6-luna"
+    assert _go._reviewer_risk_model_for_tier() == "gpt-6-luna"
 
 
 def test_a4_no_risk_profile_stays_flash(_go, monkeypatch):

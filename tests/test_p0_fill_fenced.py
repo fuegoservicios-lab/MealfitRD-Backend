@@ -156,7 +156,11 @@ def test_la_comprobacion_va_antes_del_update_y_bloquea_la_fila():
     # 8.000 y no 6.000: entre el fencing (offset ~4.000) y el UPDATE (~6.040) van el lock, la lectura del
     # placeholder y el constructor de columnas. Medido, no estimado — un margen corto deja el UPDATE fuera de
     # la ventana y el test pasa a comprobar otra cosa.
-    cuerpo = src[i:i + 8000]
+    # [P1-PLAN-LOTE-171 · 2026-09-23] Y el margen se agotó: con los docstrings posteriores el UPDATE quedó en 7.952 y
+    # una línea más lo sacó. La ventana es ahora el CUERPO de la función (hasta el siguiente `def` de módulo): mide
+    # lo mismo —fencing antes de escribir— sin caducar con cada comentario.
+    fin = src.find("\ndef ", i + 1)
+    cuerpo = src[i:fin if fin != -1 else len(src)]
     a = cuerpo.index("FROM plan_chunk_queue WHERE id = %s FOR UPDATE")
     b = cuerpo.index("UPDATE meal_plans SET")
     assert a < b, "el fencing tiene que preceder a la escritura"

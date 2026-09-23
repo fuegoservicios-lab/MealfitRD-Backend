@@ -58,12 +58,13 @@ def _set_tier(monkeypatch, tier):
 
 
 # ---------------------------------------------------------------- A. tier map
+# [P1-PLAN-LOTE-171 · 2026-09-23] la Luna por defecto es GPT-6 Luna (`gpt-6-luna`, mitad de precio); la 5.6 queda por knob.
 @pytest.mark.parametrize("tier,esperado", [
-    ("plus", ("gpt-5.6-luna", "medium")),
-    ("ultra", ("gpt-5.6-luna", "medium")),
-    ("gratis", ("gpt-5.6-luna", "low")),
-    ("basic", ("gpt-5.6-luna", "low")),
-    ("free", ("gpt-5.6-luna", "low")),   # alias legacy en DB → rama free
+    ("plus", ("gpt-6-luna", "medium")),
+    ("ultra", ("gpt-6-luna", "medium")),
+    ("gratis", ("gpt-6-luna", "low")),
+    ("basic", ("gpt-6-luna", "low")),
+    ("free", ("gpt-6-luna", "low")),   # alias legacy en DB → rama free
 ])
 def test_tier_map(_clean, monkeypatch, tier, esperado):
     _set_tier(monkeypatch, tier)
@@ -75,7 +76,7 @@ def test_sin_contexto_cae_a_free(_clean, monkeypatch):
     def _boom(_uid):
         raise RuntimeError("db caída")
     monkeypatch.setattr(go, "get_user_tier", _boom)
-    assert go._daygen_tier_profile() == ("gpt-5.6-luna", "low")
+    assert go._daygen_tier_profile() == ("gpt-6-luna", "low")
 
 
 # ---------------------------------------------------------------- B. knobs
@@ -107,7 +108,7 @@ def test_cadena_pone_tier_delante_y_flash_de_red(_clean, monkeypatch):
     monkeypatch.setattr(go, "DAYGEN_CANARY_MODEL", "")
     monkeypatch.setattr(go, "DAYGEN_CANARY_PCT", 0)
     ch = go._day_model_chain(_NON, 1)
-    assert ch[0] == "gpt-5.6-luna", "el primario del tier va DELANTE"
+    assert ch[0] == "gpt-6-luna", "el primario del tier va DELANTE"
     assert "glm-5.3-flash" in ch[1:], "flash DEBE quedar de red"
 
 

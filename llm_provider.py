@@ -60,11 +60,39 @@ import threading
 import time
 from typing import Optional
 
-from langchain_openai import ChatOpenAI
+from langchain_openai import ChatOpenAI as _LangChainChatOpenAI
 
 from knobs import _env_int, _env_str, _env_bool
 
 logger = logging.getLogger(__name__)
+
+# [P1-PLAN-LOTE-171 · 2026-09-23] Modelos OpenAI que SOLO aceptan la temperatura por defecto y que
+# langchain-openai 1.3.0 no reconoce: su filtro mira `startswith("gpt-5")` (base.py, en el validador y en el
+# payload de Responses). Medido contra la API real con la clave del VPS: `gpt-6-luna` + `temperature=0.1` →
+# HTTP 400 «Only the default (1) value is supported». Sin esto, cambiar la Luna por defecto a GPT-6 rompía
+# cada llamada con temperatura (red post-fallo del planner a 0,95, reviewer a 0,1…) en vez de ignorarla
+# como hacía la 5.6. Prefijos, no nombres: la familia entera comparte la restricción.
+_OPENAI_DEFAULT_TEMPERATURE_ONLY_PREFIXES = ("gpt-6",)
+
+
+def openai_model_only_default_temperature(model) -> bool:
+    """¿El API rechaza cualquier `temperature` ≠ 1 para este modelo (y LangChain no la quita solo)?"""
+    return str(model or "").strip().lower().startswith(_OPENAI_DEFAULT_TEMPERATURE_ONLY_PREFIXES)
+
+
+class ChatOpenAI(_LangChainChatOpenAI):
+    """`ChatOpenAI` de LangChain + el filtro de temperatura que su versión aún no aplica a la familia gpt-6.
+
+    Punto ÚNICO: `build_chat_llm`, `ChatGLM` y `ChatOpenAIInstrumented` (graph_orchestrator) heredan de aquí,
+    así que ningún call site tiene que acordarse. Se quita en el PAYLOAD (lo que sale por la red), no en el
+    constructor: vale igual para invoke, stream, structured output y la API de Responses."""
+
+    def _get_request_payload(self, input_, *, stop=None, **kwargs) -> dict:
+        payload = super()._get_request_payload(input_, stop=stop, **kwargs)
+        if openai_model_only_default_temperature(payload.get("model") or self.model_name):
+            if payload.get("temperature") not in (None, 1, 1.0):
+                payload.pop("temperature", None)
+        return payload
 
 # [P0-GLM-MIGRATION · 2026-09-02] IDs oficiales del API Z.ai (docs.z.ai, verificados
 # EN VIVO 2026-09-02): `glm-5.3-flash` (320B MoE/18B activos, multimodal, 1M ctx,
@@ -112,6 +140,12 @@ def llm_provider_name() -> str:
 GPT56_LUNA = "gpt-5.6-luna"
 GPT56_TERRA = "gpt-5.6-terra"
 GPT56_SOL = "gpt-5.6-sol"
+# [P1-PLAN-LOTE-171 · 2026-09-23] GPT-6 Luna (OpenAI, 22-sep): mismo papel que la 5.6 Luna —red post-fallo,
+# reviewer clínico free, day-gen y swaps— a la MITAD de precio ($0,10 in / $0,01 cacheado / $0,50 out por 1M,
+# ficha oficial developers.openai.com/api/docs/models/gpt-6-luna). Chat Completions + JSON estructurado +
+# `reasoning_effort` none|low|medium|high|xhigh|max: lo mismo que ya usamos. `GPT56_LUNA` se queda para los
+# precios y para quien lo fije por knob. Terra no tiene versión 6; Sol sí (`gpt-6-sol`), sin adoptar aún.
+GPT6_LUNA = "gpt-6-luna"
 
 # [P0-GLM-MIGRATION · 2026-09-02] GLM-5.3 razona SIEMPRE (no existe "thinking off":
 # el API responde 400/1210). Lo que sí se gobierna es el ESFUERZO, y el esfuerzo es

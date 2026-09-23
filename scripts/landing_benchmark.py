@@ -72,11 +72,13 @@ from landing_benchmarks import (
 # mueven el pipeline (flash nodes + router por tier + red post-fallo); el reviewer
 # (Luna/Terra/Sol), day-gen (Luna por tier) y swap (Luna fijo) YA son OpenAI por
 # default y conservan su routing fail-secure propio.
+# [P1-PLAN-LOTE-171 · 2026-09-23] Luna = GPT-6 Luna (la misma que ahora usan por defecto el reviewer free, el
+# day-gen, los swaps y la red post-fallo).
 _OPENAI_FORCE_KNOBS = {
-    "MEALFIT_FLASH_MODEL": "gpt-5.6-luna",
-    "MEALFIT_MODEL_FREE_TIER": "gpt-5.6-luna",
-    "MEALFIT_MODEL_PAID_TIER": "gpt-5.6-luna",
-    "MEALFIT_PRO_MODEL": "gpt-5.6-luna",
+    "MEALFIT_FLASH_MODEL": "gpt-6-luna",
+    "MEALFIT_MODEL_FREE_TIER": "gpt-6-luna",
+    "MEALFIT_MODEL_PAID_TIER": "gpt-6-luna",
+    "MEALFIT_PRO_MODEL": "gpt-6-luna",
 }
 
 

@@ -331,7 +331,12 @@ _PROCESS_START_ISO = datetime.now(timezone.utc).isoformat()
 # [P1-PLAN-LOTE-170 · 2026-09-23] (binario Android: APK 104; aquí el marcador y el contrato) en Android el teclado
 # seguía tapando el formulario con el paquete OTA ya puesto: SystemBars de Capacitor 8 sustituía el `adjustResize` por
 # su propio padding. `insetsHandling: 'disable'` devuelve el de Android (la ventana no es de borde a borde).
-_LAST_KNOWN_PFIX = "P1-PLAN-LOTE-170 · 2026-09-23"
+# [P1-PLAN-LOTE-171 · 2026-09-23] (solo backend) generación de prueba del dueño: dos regresiones del 2-sep (Bloque 1 como
+# placeholder). El relleno sacaba el `user_id` antes del escudo pre-INSERT → sin re-cap clínico DM2/bariátrico ni
+# techos de micros; y «¿plan de hoy?» contaba el placeholder en curso → todo plan nuevo era «regenerar hoy» (con
+# Nevera, «usa SOLO la despensa» pese a «desde cero»). Y la Luna por defecto pasa a GPT-6 Luna (mitad de precio),
+# con el filtro de temperatura que langchain-openai 1.3.0 solo aplica a gpt-5.
+_LAST_KNOWN_PFIX = "P1-PLAN-LOTE-171 · 2026-09-23"
 
 # [P1-SENTRY-SAMPLE-COST · 2026-05-12] Sentry sampling driven from env vars
 # con default seguro 0.1 (10%). Pre-fix tenía `traces_sample_rate=1.0` y

@@ -223,8 +223,9 @@ def test_plan_model_defaults_preserved():
     assert pro_default is not None, "no _env_str call for MEALFIT_PRO_MODEL"
     assert flash_default is not None, "no _env_str call for MEALFIT_FLASH_MODEL"
 
-    assert pro_default.group(1) == "GPT56_LUNA", (
-        f"Default de la red debe ser la constante `GPT56_LUNA` "
+    # [P1-PLAN-LOTE-171 · 2026-09-23] la Luna por defecto es GPT-6 Luna (`gpt-6-luna`, mitad de precio); la 5.6 queda por knob.
+    assert pro_default.group(1) == "GPT6_LUNA", (
+        f"Default de la red debe ser la constante `GPT6_LUNA` "
         f"(P1-NET-LUNA · 2026-07-31, cross-provider) — got {pro_default.group(1)!r}. "
         f"Rollback via env var `MEALFIT_PRO_MODEL=glm-5.3` sin tocar el default."
     )

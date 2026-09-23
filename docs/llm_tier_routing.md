@@ -1,5 +1,25 @@
 # Router de modelos LLM por tier (P0-LLM-PROVIDER-MIGRATION · 2026-06-12 · P1-FLASH-PRIMARY · 2026-07-31)
 
+## [P1-PLAN-LOTE-171 · 2026-09-23] Luna = GPT-6 Luna (`gpt-6-luna`)
+
+OpenAI publicó GPT-6 Sol y GPT-6 Luna el 22-sep. Desde este lote **toda Luna por defecto es `gpt-6-luna`**
+(`llm_provider.GPT6_LUNA`): la red post-fallo (`MEALFIT_PRO_MODEL`), el reviewer clínico free, el day-gen por tier
+y los swaps del chat. Terra no tiene versión 6 y sigue en `gpt-5.6-terra`; Sol (`gpt-6-sol`) existe pero no se ha
+adoptado. `gpt-5.6-luna` sigue disponible por knob y con su fila de precio.
+
+| | gpt-5.6-luna | gpt-6-luna |
+|---|---|---|
+| Entrada / cacheado / salida por 1M | $0,20 / $0,02 / $1,20 | **$0,10 / $0,01 / $0,50** |
+| Contexto / salida máx. | — | 1.050.000 / 128.000 |
+| `reasoning_effort` | none…xhigh | none, low, medium (defecto), high, xhigh, max |
+
+Verificado EN VIVO con la clave del VPS antes de cambiar el default: Chat Completions + `response_format=json_object`
+con esfuerzo `low`, `medium` y `none` → 200 (JSON válido); streaming con `stream_options.include_usage` → 200 con
+usage; **`temperature=0.1` → HTTP 400** («Only the default (1) value is supported»). langchain-openai 1.3.0 solo
+quita la temperatura a `gpt-5*`, así que `llm_provider.ChatOpenAI` (base de `build_chat_llm`, `ChatGLM` y
+`ChatOpenAIInstrumented`) la quita del payload para la familia `gpt-6` (`openai_model_only_default_temperature`).
+Sin ese filtro, cada llamada con temperatura (la red del planner a 0,95, el reviewer a 0,1…) habría fallado.
+
 ## [P0-GLM-MIGRATION · 2026-09-02] Provider: Z.ai GLM-5.3 (sustituye al anterior)
 
 Decisión del owner: **Z.ai GLM-5.3** es el provider OpenAI-compatible del stack; el anterior

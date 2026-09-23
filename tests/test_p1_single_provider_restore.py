@@ -159,7 +159,8 @@ def test_healthy_risk_tier_no_alert(_go, monkeypatch):
     monkeypatch.setenv("OPENAI_API_KEY", "sk-test-dummy")
     monkeypatch.delenv("MEALFIT_REVIEWER_RISK_MODEL_FREE", raising=False)
     resolved = _go._reviewer_model_name(_RISK_FORM)
-    assert resolved == "gpt-5.6-luna"
+    # [P1-PLAN-LOTE-171 · 2026-09-23] la Luna por defecto es GPT-6 Luna (`gpt-6-luna`, mitad de precio); la 5.6 queda por knob.
+    assert resolved == "gpt-6-luna"
     assert not _go._CLINICAL_MODEL_GUARD_WARNED
     assert not writes
 

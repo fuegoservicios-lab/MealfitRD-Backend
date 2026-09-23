@@ -350,11 +350,21 @@ def check_recent_regen_day(user_id: str, plan_id: str, day_index: int, max_secon
 
 
 def check_meal_plan_generated_today(user_id: str) -> bool:
-    """Valida si el último plan generado por el usuario se realizó el día actual."""
+    """Valida si el último plan ENTREGADO al usuario se realizó el día actual.
+
+    [P1-PLAN-LOTE-171 · 2026-09-23] Solo cuentan planes entregados. Desde el 2-sep el Bloque 1 nace como
+    PLACEHOLDER (`generation_status='generating'`, fila creada ANTES del pipeline), así que «el último plan»
+    era el que se estaba generando: CADA plan nuevo parecía «regenerar hoy». Con Nevera, el orquestador
+    ordenaba «usa SOLO la despensa» aunque el formulario dijera «desde cero»; sin ella, re-roll a
+    temperatura 0,95 con «cambia las opciones de HOY» (esqueletos de 1/3 días el 2-sep). Medido en el
+    journal: hasta el 27-ago lo normal era «NUEVO DÍA» (25 de 25 el 08-ago); desde el 2-sep, casi todo
+    re-roll/rotación. Un placeholder que se agotó (`failed`) tampoco es un plan que el usuario viera."""
     if not connection_pool: return False
     try:
         from datetime import datetime, timezone
-        query = "SELECT created_at FROM meal_plans WHERE user_id = %s ORDER BY created_at DESC LIMIT 1"
+        query = ("SELECT created_at FROM meal_plans WHERE user_id = %s "
+                 "AND COALESCE(plan_data->>'generation_status', '') NOT IN ('generating', 'failed') "
+                 "ORDER BY created_at DESC LIMIT 1")
         res = execute_sql_query(query, (user_id,), fetch_one=True)
         
         if res and "created_at" in res:
@@ -1782,6 +1792,13 @@ def save_new_meal_plan_atomic(user_id: str, insert_data: dict, return_id: bool =
     return plan_id if return_id else True
 
 
+# [P1-PLAN-LOTE-171 · 2026-09-23] En el relleno el `user_id` sale de `safe` DESPUÉS del escudo, no antes. El
+# escudo arma el contexto clínico desde el PERFIL por `data["user_id"]` (P1-PREINSERT-CLINICAL-CTX): sacándolo
+# primero recibía `{}` = «no sé», el motor de macros OMITÍA el re-cap DM2/bariátrico y el panel de micros salía
+# sin techos (sodio en HTA, potasio en ERC). Desde el 2-sep TODO Bloque 1 pasa por aquí: el aviso
+# `P1-UPDATE-CLINICAL-RECAP … sin form_data` apareció ese día (33 veces hasta el 23) y nunca antes. Sigue
+# saliendo antes del UPDATE, que se arma con las claves de `safe` (no se reescribe el `user_id` de la fila).
+# El comentario vive aquí y no dentro: `test_p0_fill_fenced` mide una ventana desde la cabecera.
 def fill_placeholder_meal_plan_atomic(plan_id: str, user_id: str, insert_data: dict,
                                       outcome: Optional[dict] = None) -> Optional[str]:
     """[P1-ARQ25-F1-LIFECYCLE · 2026-09-02] Rellena el PLACEHOLDER que creó la cola
@@ -1822,8 +1839,9 @@ def fill_placeholder_meal_plan_atomic(plan_id: str, user_id: str, insert_data: d
     from psycopg.types.json import Jsonb
 
     safe = copy.deepcopy(insert_data)
-    safe.pop("user_id", None)
+    safe["user_id"] = user_id   # P1-PLAN-LOTE-171
     _finalize_plan_data_for_insert(safe)
+    safe.pop("user_id", None)
     pd_new = safe.get("plan_data") if isinstance(safe.get("plan_data"), dict) else None
     if pd_new is None:
         _out("invalid_plan_data")
