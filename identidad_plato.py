@@ -369,6 +369,39 @@ def _piso_de(canon: str, db) -> int:
     return int(_PISO_POR_CATEGORIA.get(cat, 0))
 
 
+# [P1-PLAN-LOTE-176 · 2026-09-23] El alimento que ABRE el nombre del plato es su protagonista y pide ración, no guarnición:
+# «Guiso ligero de berenjena…» con 30 g de berenjena pasaba el piso de verdura (30 g) — batería real, DM2+insulina. Sólo
+# sobre líneas ya escritas en gramos («½ tomate mediano» no se reescribe a «100 g de tomate») y sólo en las categorías:
+# granos, frutos secos y lácteos ya tienen su piso por palabra. tooltip-anchor: P1-PLAN-LOTE-176-PROTAGONISTA
+_PISO_PROTAGONISTA = {"vegetales": 100, "viveres": 100, "frutas": 100, "proteinas": 90}
+_EN_GRAMOS = re.compile(r"^\s*\d+(?:[.,]\d+)?\s*g\b", re.IGNORECASE)
+
+
+def _protagonista(meal: dict) -> Optional[str]:
+    """La línea del alimento que el nombre del plato menciona PRIMERO (o `None`)."""
+    nombre = _palabras(meal.get("name"))
+    mejor, pos = None, None
+    for linea in meal.get("ingredients") or []:
+        if not isinstance(linea, str):
+            continue
+        for p in _palabras_del_alimento(linea):
+            i = next((k for k, w in enumerate(nombre) if w in _variantes(p)), None)
+            if i is not None and (pos is None or i < pos):
+                mejor, pos = linea, i
+    return mejor
+
+
+def _piso_protagonista(canon: str, db) -> int:
+    n = _sa(canon)
+    if any(re.search(rf"\b{w}", n) for w, _g in _PISO_POR_PALABRA):
+        return 0
+    try:
+        cat = _sa(db.category_of(canon) or "")
+    except Exception:                                                          # noqa: BLE001
+        cat = ""
+    return int(_PISO_PROTAGONISTA.get(cat, 0))
+
+
 # «0 g de almendras…»: el lector de la lista no la resuelve (sin gramos no hay alimento), así que sube por su propio camino.
 _CERO = re.compile(r"^\s*0+(?:[.,]0+)?\s*(?:g|gr|gramos)\s+de\s+(.+)$", re.IGNORECASE)
 
@@ -409,6 +442,7 @@ def _subir_identidad_del_modelo(meal: dict, index: dict, *, db=None, allergies=N
         return []
     from recipe_contract import _cantidades_lista
     hechos = []
+    prota = _protagonista(meal)
     for linea in list(meal.get("ingredients") or []):
         if not isinstance(linea, str) or not nombrada_en_el_nombre(meal, linea):
             continue
@@ -431,6 +465,8 @@ def _subir_identidad_del_modelo(meal: dict, index: dict, *, db=None, allergies=N
         piso = _piso_de(canon, db)
         if not piso:
             continue
+        if linea == prota and _EN_GRAMOS.match(linea):
+            piso = max(piso, _piso_protagonista(canon, db))      # [P1-PLAN-LOTE-176] el que da nombre, en ración
         sub = _subir_linea(meal, canon, piso, index, db, margen)
         if sub:
             hechos.append(sub)

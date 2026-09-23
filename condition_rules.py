@@ -97,6 +97,11 @@ _DM2_GLYCEMIC_SUBS = (
     # («125 g de cundeamor … efectos hipoglucemiantes aditivos» con metformina). Mismo reemplazo que en embarazo: tayota.
     (("cundeamor", "melon amargo", "melón amargo", "bitter melon"), "Tayota",
      "cundeamor (hipoglucemiante: se suma al antidiabético)", True),
+    # [P1-PLAN-LOTE-176 · 2026-09-23] Plátano maduro → verde (almidón resistente, índice glucémico más bajo): el revisor
+    # lo marcó en las TRES corridas reales de DM2+insulina («plátano maduro en dos comidas… preferir plátano verde»), y
+    # un «como mucho una vez cada 3 días» en el prompt no se puede cumplir: cada día se genera por separado.
+    (("platano maduro", "platanos maduros", "plátano maduro", "plátanos maduros"), "Plátano verde",
+     "plátano maduro (índice glucémico alto: el verde lleva almidón resistente)", True),
 )
 
 _HTA_SODIUM_SUBS = (

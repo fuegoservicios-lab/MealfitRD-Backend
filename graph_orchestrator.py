@@ -35432,10 +35432,10 @@ _SINGULAR_UNIT_MAP = {
     "unidades": "unidad", "paquetes": "paquete", "botellas": "botella",
     "rebanadas": "rebanada", "fundas": "funda", "potes": "pote", "tarros": "tarro",
     # [P1-MENU-COHERENCE-1 · 2026-07-29] "1 pedazos de yautía (≈250 g)" vivo (73db1e79).
-    "pedazos": "pedazo", "lonjas": "lonja", "ramitas": "ramita",
+    "pedazos": "pedazo", "lonjas": "lonja", "ramitas": "ramita", "porciones": "porción",  # [P1-PLAN-LOTE-176]
 }
 _SINGULAR_ONE_RE = _re.compile(
-    r"^(\s*1)\s+(tazas|cdas|cditas|cdtas|cucharadas|cucharaditas|latas|unidades|paquetes|botellas|rebanadas|fundas|potes|tarros|pedazos|lonjas|ramitas)\b",
+    r"^(\s*(?:1|[½¼¾⅓⅔⅛]))\s+(tazas|cdas|cditas|cdtas|cucharadas|cucharaditas|latas|unidades|paquetes|botellas|rebanadas|fundas|potes|tarros|pedazos|lonjas|ramitas|porciones)\b",
     _re.IGNORECASE,
 )
 # [P1-MENU-COHERENCE-1 · 2026-07-29] El pan va en REBANADAS, no en "lonjas" (unidad de
@@ -35721,7 +35721,7 @@ _DESC_NEG_RX = _re.compile(r"\b(sin|no|nada\s+de|libre\s+de|en\s+vez\s+de|en\s+l
                            r"sustituy\w+|reemplaz\w+)\b[^.;:!?]{0,24}$", _re.IGNORECASE)
 # adjetivos con género que sabemos re-concordar tras un swap; cualquier OTRA palabra en -o/-a
 # tras la mención aborta el swap (no sabemos si es adjetivo del alimento).
-_DESC_ADJ_OK_RX = _re.compile(r"^(madur|fresc|jugos|cremos|dulce|picad|tostad|asad|hornead|"
+_DESC_ADJ_OK_RX = _re.compile(r"^(madur|fresc|jugos|cremos|dulce|picad|tostad|asad|hornead|cocid|dorad|guisad|"
                               r"troceado|cortad|natural)", _re.IGNORECASE)
 
 
@@ -35746,10 +35746,10 @@ _DESC_SWAP_SUBGROUP = {
     "mango": "dulce", "lechosa": "dulce", "pina": "dulce", "melon": "dulce", "ciruela": "dulce",
     "guayaba": "dulce", "fresa": "dulce", "uva": "dulce", "guineo": "dulce", "manzana": "dulce",
     "naranja": "dulce", "toronja": "dulce",
-    "atun": "carne", "mero": "carne", "pollo": "carne", "camaron": "carne", "salmon": "carne", "pavo": "carne", "cerdo": "carne", "chivo": "carne",
+    "huevo": "carne", "atun": "carne", "mero": "carne", "pollo": "carne", "camaron": "carne", "salmon": "carne", "pavo": "carne", "cerdo": "carne", "chivo": "carne",
     "queso": "lacteo", "yogurt": "lacteo",
-    # huevo sin subgrupo: no hay swap honesto genérico ("claras"→"queso" solo valdría en
-    # construcciones concretas); se cubre con retirada de cláusula final o telemetría.
+    # [P1-PLAN-LOTE-176] el huevo, con las proteínas de plato: el diversificador de huevo lo cambia por pollo y la
+    # descripción seguía «coronada con huevo bien cocido» (batería real). Con queso (lácteo) sigue sin cambio genérico.
     "arroz": "vivere", "papa": "vivere", "batata": "vivere", "yuca": "vivere",
     "platano": "vivere", "avena": "vivere",
 }
@@ -36450,7 +36450,7 @@ def _desc_food_honesty_pass(days) -> int:
                     if _DESC_NEG_RX.search(nuevo[:i]):
                         continue  # mención negada = honesta
                     resto = nuevo[j:]
-                    _mm_nx = _re.match(r"\s+([a-záéíóúñA-ZÁÉÍÓÚÑ]+)", resto)
+                    _mm_nx = _re.match(r"\s+(?:(?:bien|muy)\s+)?([a-záéíóúñA-ZÁÉÍÓÚÑ]+)", resto)  # [P1-PLAN-LOTE-176] «huevo bien cocido»
                     _nx = (_mm_nx.group(1).lower() if _mm_nx else "")
                     _nx_ok = (not _nx) or (_nx in _DESC_NEXT_CONNECTORS)                         or bool(_DESC_ADJ_OK_RX.match(_nx))
                     _sub = _DESC_SWAP_SUBGROUP.get(key)
@@ -36517,6 +36517,7 @@ def _polish_finalize_display(days) -> int:
         def _shared_clean(s: str) -> str:
             """Reglas 2+3+4 — aplican a display Y raw."""
             out = _BRAND_PAREN_RE.sub("", s)
+            out = _re.sub(r"\b([A-Za-zÁÉÍÓÚÜÑáéíóúüñ]{4,})(\s+\1)+\b", r"\1", out, flags=_re.IGNORECASE)  # [P1-PLAN-LOTE-176]
             out = _BRAND_PAREN_LOWER_RE.sub("", out)  # [P3-1-BRAND-LOWERCASE-STRIP]
             out = _UNIT_FOOD_DUP_RE.sub(r"\1 de", out)
             # [P1-DISPLAY-PLURAL-POLISH · 2026-07-12] "1 tazas" → "1 taza";

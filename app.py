@@ -351,7 +351,10 @@ _PROCESS_START_ISO = datetime.now(timezone.utc).isoformat()
 # nodo (embarazo caía al plan de emergencia por queso sin «pasteurizado» que un cerrador reescribía), atún claro, edamame
 # cocido, yuca sin su agua, la nota de sodio de HTA visible, los medicamentos en el resumen; el abaratador ya no crea
 # «arroz de noche»; y el nombre tras un swap («Aguacate fresca» → «aguacate fresco», descripción incluida).
-_LAST_KNOWN_PFIX = "P1-PLAN-LOTE-175 · 2026-09-23"
+# [P1-PLAN-LOTE-176 · 2026-09-23] (solo backend) quinta vuelta: la costura de los swaps de PROTEÍNA («pechuga de pollo bien
+# cocidos», descripción que seguía diciendo «huevo»), DM2 plátano maduro → verde, el alimento que abre el nombre del plato
+# en ración (30 g de berenjena en un «Guiso de berenjena»), el sustituto en la caja del título, «½ porción», «natural natural».
+_LAST_KNOWN_PFIX = "P1-PLAN-LOTE-176 · 2026-09-23"
 
 # [P1-SENTRY-SAMPLE-COST · 2026-05-12] Sentry sampling driven from env vars
 # con default seguro 0.1 (10%). Pre-fix tenía `traces_sample_rate=1.0` y

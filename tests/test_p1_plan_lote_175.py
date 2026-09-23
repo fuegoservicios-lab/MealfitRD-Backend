@@ -166,5 +166,5 @@ def test_sustituir_alimento_respeta_numero_y_nombre_propio():
 
 
 def test_marker():
-    src = _src("app.py")
-    assert '_LAST_KNOWN_PFIX = "P1-PLAN-LOTE-175 · 2026-09-23"' in src
+    m = re.search(r'_LAST_KNOWN_PFIX = "P1-PLAN-LOTE-(\d+) · (\d{4}-\d{2}-\d{2})"', _src("app.py"))
+    assert m and int(m.group(1)) >= 175 and m.group(2) >= "2026-09-23", "el marker nunca baja"

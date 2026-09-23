@@ -138,6 +138,33 @@ def _es_femenino(nombre: str) -> bool:
     return cab in _NAME_FEM_FOODS or (cab.endswith("a") and cab not in _NAME_MASC_FOODS)
 
 
+# [P1-PLAN-LOTE-176 · 2026-09-23] «… con pechuga de pollo bien cocidos …» (batería real, lactancia): el modelo escribió
+# «huevos bien cocidos» —el prompt de embarazo/lactancia pide «huevo bien cocido»— y el diversificador de huevo cambió
+# el alimento dejando el participio del viejo. «bien/muy + participio» concuerda con la CABEZA del sintagma que lo
+# precede («pechuga» en «pechuga de pollo»), que es lo que el cambio de alimento desalinea.
+_BIEN_PARTICIPIO = __import__("re").compile(
+    r"\b(?P<cab>[A-Za-zÁÉÍÓÚÑáéíóúñ]+)(?:\s+de\s+(?P<de>[A-Za-zÁÉÍÓÚÑáéíóúñ]+))?\s+(?:bien|muy)\s+"
+    r"(?:cocid|asad|hornead|dorad|tostad|guisad|picad|cortad|rallad)(?P<fin>os|as|o|a)\b", __import__("re").IGNORECASE)
+
+
+def _terminacion(sustantivo: str) -> str:
+    c = _sa(sustantivo)
+    plural = c.endswith("s") and len(c) > 3
+    sing = c[:-1] if plural else c
+    fem = sing in _NAME_FEM_FOODS or (sing.endswith("a") and sing not in _NAME_MASC_FOODS)
+    return ("a" if fem else "o") + ("s" if plural else "")
+
+
+def _concordar_bien(m) -> str:
+    """Si el participio ya concuerda con el núcleo o con el sustantivo más cercano, las dos lecturas valen
+    («guiso de lentejas bien cocidas»); sólo se corrige cuando no concuerda con ninguno, y entonces con el núcleo."""
+    actual = m.group("fin").lower()
+    fin = _terminacion(m.group("cab"))
+    if actual == fin or (m.group("de") and actual == _terminacion(m.group("de"))):
+        return m.group(0)
+    return m.group(0)[:m.start("fin") - m.start()] + fin
+
+
 def pulir_nombre(name):
     """Concordancia de los alimentos MASCULINOS («Aguacate fresca» → «Aguacate fresco») y caja de los alimentos
     comunes dentro de un título en frase normal («…tomate con Aguacate» → «…tomate con aguacate»). Devuelve el nombre
@@ -166,6 +193,7 @@ def pulir_nombre(name):
             if adj_raw.endswith((",", ".", ";", ":")):
                 nuevo += adj_raw[-1]
             out[i + 1] = nuevo
+        out = _BIEN_PARTICIPIO.sub(_concordar_bien, " ".join(out)).split()
         sig = [w for w in out[1:] if len(w) >= 3 and w.lower() not in _NAME_STOPWORDS and w[:1].isalpha()]
         if sig and sum(1 for w in sig if w[:1].islower()) * 2 > len(sig):
             for i in range(1, len(out)):
@@ -271,9 +299,12 @@ def sustituir_alimento(meal: dict, pat, repl: str) -> str:
     `pat` es el patrón del alimento viejo, con frontera de palabra. Fail-safe: la descripción queda como estaba."""
     nombre = str(meal.get("name") or "")
     bajo = repl[:1].lower() + repl[1:]
+    # [P1-PLAN-LOTE-176] en la caja del título que lo acoge: «…Tomate y Aguacate» en Title Case (el 175 lo escribía siempre
+    # en minúscula en mitad del nombre: «Revoltillo de Huevo, Tomate y aguacate»).
+    en_titulo = _food_display_for_title(repl, nombre) or bajo
 
     def _en_nombre(m):
-        lbl = repl if m.start() == 0 else bajo
+        lbl = repl if m.start() == 0 else en_titulo
         return lbl + ("s" if m.group(0).lower().endswith("s") and not lbl.endswith("s") else "")
     nuevo = pat.sub(_en_nombre, nombre)
     try:
