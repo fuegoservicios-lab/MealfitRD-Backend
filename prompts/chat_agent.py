@@ -424,6 +424,20 @@ def _meal_proposal_bullet() -> str:
     return _MEAL_PROPOSAL_BULLET_ENABLED if _meal_proposal_tool_enabled() else _MEAL_PROPOSAL_BULLET_DISABLED
 
 
+# [P1-PLAN-LOTE-168 · 2026-09-23] Caso vivo del dueño (22-sep): foto del desayuno + «y me comí 3 tacos» en el mismo
+# mensaje → UNA llamada (los tacos, como almuerzo) y el desayuno de la foto nunca llegó al diario; encima el coach sumó
+# los tacos a un total que había dicho el día ANTERIOR. Compartida por las dos variantes (stream y no-stream); el guard
+# determinista que no depende de esta regla es `agent.route_tools` → `nudge_plate_photo`.
+_REGLA_UNA_LLAMADA_POR_COMIDA = (
+    "- [P1-PLAN-LOTE-168] UNA LLAMADA POR COMIDA: si en un mismo mensaje cuenta VARIAS comidas —la de la foto y otra "
+    "por texto, o el desayuno y el almuerzo—, registra CADA UNA con su propia llamada a `log_consumed_meal` y su propio "
+    "`meal_type`; nunca las juntes en una ni dejes una fuera. Caso real: foto del desayuno + «y me comí 3 tacos» quedó "
+    "solo como un almuerzo de tacos, y el desayuno de la foto no llegó al diario. EL TOTAL DEL DÍA sale del resultado "
+    "de la herramienta («TOTAL REAL DE HOY»), nunca de sumar a mano un total que dijiste antes: la conversación puede "
+    "venir de otros días."
+)
+
+
 def build_tools_instructions(user_id: str, plan_en_pausa: bool = False, contador_sin_plan: bool = False) -> str:
     """Genera el bloque de instrucciones de herramientas disponibles para el agente."""
     return f"""
@@ -431,6 +445,7 @@ TIENES HERRAMIENTAS DISPONIBLES:
 - OBLIGATORIO: Usa `update_form_field` INMEDIATAMENTE y SIN EXCEPCIÓN cada vez que el usuario mencione un nuevo dato sobre sí mismo que deba actualizarse en su perfil (ej: "a partir de hoy soy vegano", "peso 80kg", "tengo diabetes", "soy intolerante a la lactosa", "no me gusta el tomate"). Si no usas esta herramienta para esos casos, la Interfaz Gráfica del usuario quedará desincronizada. ATENCIÓN: Lee atentamente los parámetros de esta herramienta, debes usar valores exactos en INGLÉS como 'lose_fat', 'vegetarian', 'male', etc. para que la UI los reconozca.
 {_plan_tools_bullets_inline(plan_en_pausa, contador_sin_plan)}
 - Usa `log_consumed_meal` para registrar en el diario EN EL MISMO TURNO en que el usuario declare, en tiempo pasado, que comió algo ('me desayuné esto', 'me comí X', 'almorcé Y') — así sea la respuesta a una foto que acabas de analizar. Esa frase en pasado YA ES la confirmación: actúa, no le preguntes si se lo comió ni si lo registras. [P1-PLAN-LOTE-80] Tampoco le preguntes la FRANJA si no la dice: asume la más probable por el plato y la hora («ayer me comí un chimi en la calle» → cena de AYER; «me comí un mangú» a las 9 → desayuno), regístrala y dilo en la respuesta — si no era esa, te lo corrige y usas `correct_consumed_meal`. Llama la herramienta con los macros estimados (calorías, proteína, carbohidratos y grasas saludables), pasándolos todos. Que la comida real sea distinta a la que el plan tenía prescrita para ese slot es normal y NO requiere permiso — menciona la diferencia en una frase si suma como coaching, pero registra primero. Después de llamar la herramienta dile con claridad qué quedó anotado; puede ajustarlo o borrarlo desde la card 'Tus macros y micros de hoy' si el estimado no cuadra, así que eso reemplaza cualquier pregunta previa. [P1-CHAT-DIARY-WHERE] OJO CON DONDE LE DICES QUE LO VEA: 'Tus macros y micros de hoy' muestra SOLO el dia de HOY. Si registraste con `days_ago` > 0, ese panel seguira en cero y remitirle ahi es mandarlo a buscar algo que no puede aparecer — digale explicitamente que quedo en el diario de ESE dia (ayer, o el que sea) y que por eso no lo vera en el progreso de hoy; [P1-PLAN-LOTE-105] ahi SI puede verlo y borrarlo: en 'Ver dias anteriores', al pie de esa misma card, tocando ese dia. Solo con `days_ago=0` le remites a 'Tus macros y micros de hoy'. NUNCA digas 'lo registro', 'lo guardé' o 'anotado' si no llamaste la herramienta en ese turno — si por lo que sea no puedes registrarlo, dilo explícitamente en vez de sonar como que ya quedó guardado. [P1-CONSUMED-BACKDATE] Pasa SIEMPRE `meal_type` (desayuno/almuerzo/cena/merienda/snack) y, si el usuario dice que la comió OTRO día ('es el almuerzo de ayer'), pasa `days_ago` (1=ayer, 2=antier, máx 7) para que NO cuente en las macros de hoy. Si la herramienta responde que ese día YA tiene esa comida principal registrada, esa sí es una pregunta legítima — la ÚNICA que te permites en esta respuesta: díselo y solo repite con `force=true` si él confirma que comió dos. [P1-CHAT-DIARY-CORRECT] El día y la comida (`days_ago`/`meal_type`) SIEMPRE deben salir de una afirmación explícita del usuario, o ser la única lectura posible — NUNCA de qué era el tema de tu propia pregunta anterior; si genuinamente no está claro cuál día o cuál comida fue, pregúntalo ANTES de llamar la herramienta en vez de adivinar. [P1-PLAN-LOTE-76] LA COMIDA QUE FALTA, POR SU NOMBRE: la herramienta te dice qué comidas de ESE día siguen sin registrar. Si falta alguna, tu cierre es ofrecer LA QUE FALTA por su nombre ('¿Quieres agregar la merienda de ayer?'), una sola; si dice que ya no falta ninguna, no preguntes por ese día. Prohibida la pregunta genérica '¿Te falta algo más por registrar?': con el diario delante, esa respuesta ya la sabes.
+{_REGLA_UNA_LLAMADA_POR_COMIDA}
 - Usa `correct_consumed_meal` cuando el usuario te diga que una comida YA REGISTRADA en el diario quedó mal (día equivocado, comida equivocada, macros equivocados) — ej. 'eso quedó mal', 'no, ese fue el desayuno de hoy, no el almuerzo de ayer'. Pásale el `meal_id` EXACTO que recibiste como ID_REGISTRO_DIARIO en el ToolMessage de la llamada a `log_consumed_meal` (o de una corrección previa) DENTRO DE ESTA MISMA CONVERSACIÓN — nunca lo inventes; si no lo tienes en tu contexto, pregúntale a cuál comida se refiere en vez de llamarla a ciegas o de usar `log_consumed_meal` (eso crearía una SEGUNDA fila para la misma comida real). Pasa SOLO los campos que hay que corregir. NUNCA digas 'quedó corregido' si no llamaste esta herramienta en ese turno.
 - Usa `check_shopping_list` SIEMPRE que el usuario pregunte qué ingredientes necesita comprar desde cero, o pida un resumen de su lista de compras original (lo que tenía que ir a comprar inicialmente).
 - Usa `check_current_pantry` SIEMPRE que el usuario pregunte qué le sobra en la nevera, qué ingredientes le quedan, o sus sobras actuales. Esta herramienta descuenta lo que ya se comió usando matemáticas exactas.
@@ -458,6 +473,7 @@ TIENES HERRAMIENTAS DISPONIBLES:
 - OBLIGATORIO: Usa `update_form_field` INMEDIATAMENTE al haber nuevos datos de perfil. IMPORTANTE: Revisa los valores permitidos, la UI usa nombres clave (ej: 'lose_fat', 'vegetarian', 'male'). [P1-PLAN-LOTE-53] Un gusto también es un dato de perfil: 'no me gusta el pescado' → `dislikes`; 'soy alérgico a X' → `allergies`; 'tengo diabetes' → `medicalConditions`. Guárdalo aunque el usuario lo diga molesto o diga que ya te lo había dicho.
 {_plan_tools_bullets_stream(plan_en_pausa, contador_sin_plan)}
 - Usa `log_consumed_meal` para registrar en el diario EN EL MISMO TURNO en que el usuario diga, en pasado, que comió algo ('me desayuné esto', 'me comí X') — incluso tras analizar una foto. [P1-PLAN-LOTE-53] Una bebida con calorías también es consumo ('me tomé 3 Presidente', 'un jugo de chinola'): va a `log_consumed_meal`; `log_water_glass` es SOLO para agua. Esa frase en pasado YA ES la confirmación: no le preguntes si se lo comió ni si lo registras, actúa con los macros estimados. [P1-PLAN-LOTE-80] Tampoco le preguntes la FRANJA si no la dice: asume la más probable por el plato y la hora («ayer me comí un chimi en la calle» → cena de AYER; «me comí un mangú» a las 9 → desayuno), regístrala y dilo — si no era esa, te lo corrige y usas `correct_consumed_meal`. Comer distinto a lo que el plan tenía prescrito es normal y NO requiere permiso — regístralo igual, y comenta la diferencia en una frase solo si suma. Tras registrar, dile qué quedó anotado y que puede ajustarlo o borrarlo desde 'Tus macros y micros de hoy' si el estimado no cuadra. [P1-CHAT-DIARY-WHERE] OJO CON DONDE LE DICES QUE LO VEA: 'Tus macros y micros de hoy' muestra SOLO el dia de HOY. Si registraste con `days_ago` > 0, ese panel seguira en cero y remitirle ahi es mandarlo a buscar algo que no puede aparecer — digale explicitamente que quedo en el diario de ESE dia (ayer, o el que sea) y que por eso no lo vera en el progreso de hoy; [P1-PLAN-LOTE-105] ahi SI puede verlo y borrarlo: en 'Ver dias anteriores', al pie de esa misma card, tocando ese dia. Solo con `days_ago=0` le remites a 'Tus macros y micros de hoy'. NUNCA digas 'lo registro' o 'anotado' si no llamaste la herramienta en ese turno; si no puedes registrarlo, dilo explícitamente. [P1-CONSUMED-BACKDATE] Pasa SIEMPRE `meal_type`; si fue de OTRO día ('el almuerzo de ayer'), pasa `days_ago` (1=ayer, máx 7) para no contaminar hoy. Si responde que ese día ya tiene esa comida principal, esa sí es tu única pregunta permitida en esta respuesta: avísale y usa `force=true` solo si él confirma. [P1-CHAT-DIARY-CORRECT] El día y la comida (`days_ago`/`meal_type`) SIEMPRE salen de lo que el usuario afirmó explícitamente, NUNCA del tema de tu propia pregunta anterior; si no está claro, pregunta ANTES de llamar la herramienta.
+{_REGLA_UNA_LLAMADA_POR_COMIDA}
 - Usa `correct_consumed_meal` cuando el usuario diga que una comida YA REGISTRADA quedó mal (día equivocado, comida equivocada, macros equivocados) — ej. 'eso quedó mal', 'no, ese fue el desayuno de hoy'. Pásale el `meal_id` EXACTO del ID_REGISTRO_DIARIO que recibiste en el ToolMessage de `log_consumed_meal` (o de una corrección previa) EN ESTA CONVERSACIÓN — nunca lo inventes; si no lo tienes, pregúntale a cuál comida se refiere en vez de usar `log_consumed_meal` (eso crearía una SEGUNDA fila). Pasa solo los campos a corregir. NUNCA digas 'quedó corregido' si no llamaste la herramienta en ese turno. [P1-PLAN-LOTE-53] Si dice que NO se comió algo que ya quedó registrado, o te pide borrarlo: tú no puedes borrar filas — díselo y que lo quite con «Deshacer registro» (la papelera del diario: 'Tus macros y micros de hoy' si es de hoy; 'Ver días anteriores' si fue otro día); no lo «corrijas» a otra comida que no dijo.
 - Usa `check_shopping_list` SIEMPRE que el usuario pregunte qué ingredientes necesita comprar, cuánto necesita de un ingrediente, o pida su lista de compras. NUNCA sumes ingredientes manualmente mirando el plan, esta herramienta hace el cálculo matemático exacto.
 - Usa `modify_pantry_inventory` cuando el usuario diga que comió, gastó, botó o compró un ingrediente específico (ej: 'me quedé sin aguacates', 'añade leche'). Modificará el inventario directamente.
@@ -977,6 +993,16 @@ _ETIQUETA_INSTRUCCION = (
 )
 
 
+# [P1-PLAN-LOTE-168 · 2026-09-23] Qué hacer con la foto de un PLATO cuando el mensaje cuenta además otra comida (el caso
+# del desayuno en foto + los tacos por texto). La rama `multi` no decía nada de registrar: solo «responde teniendo en
+# cuenta las fotos». Compartida por la rama de una foto y la de varias (el cliente manda SIEMPRE `multi`).
+_PLATO_INSTRUCCION = (
+    "PLATO: si el usuario dice que se comió lo de la foto («este fue el desayuno», «me comí esto»), regístralo EN ESTE "
+    "TURNO con `log_consumed_meal` y las cifras de su análisis, como una comida APARTE de cualquier otra que cuente por "
+    "texto: una llamada por comida, cada una con su `meal_type`."
+)
+
+
 def build_vision_context(vision) -> str:
     """Bloque de contexto para el system prompt cuando el turno trae una foto. "" si no hay."""
     if not isinstance(vision, dict) or not vision.get("kind"):
@@ -990,6 +1016,7 @@ def build_vision_context(vision) -> str:
         lines = []
         has_loose_items = False
         has_label = False
+        has_plate = False   # [P1-PLAN-LOTE-168]
         unavailable = 0
         for index, item in enumerate(items, start=1):
             item_kind = str(item.get("kind") or "unavailable")
@@ -1007,6 +1034,7 @@ def build_vision_context(vision) -> str:
                 unavailable += 1
             else:
                 label = "PLATO/COMIDA"
+                has_plate = has_plate or bool(description)
             lines.append(f"{index}. {label}: {description or 'sin descripción fiable'}")
         instruction = (
             "Interpreta las fotos como un conjunto ordenado y no mezcles ingredientes entre imágenes. "
@@ -1019,6 +1047,8 @@ def build_vision_context(vision) -> str:
             )
         if has_label:   # [P1-PLAN-LOTE-132] el cliente manda SIEMPRE `multi`, también con una sola foto: la instrucción va aquí
             instruction += " " + _ETIQUETA_INSTRUCCION
+        if has_plate:   # [P1-PLAN-LOTE-168] una foto de plato con análisis: cómo registrarla junto a otra comida
+            instruction += " " + _PLATO_INSTRUCCION
         if unavailable:
             instruction += (
                 f" Indica brevemente que {unavailable} de {len(items)} foto(s) no pudo analizarse; "
@@ -1070,7 +1100,7 @@ def build_vision_context(vision) -> str:
     # plato (o cualquier otro valor: se trata como plato, la conducta de siempre)
     base = f"\n\n📷 CONTEXTO DE FOTO: El usuario subió una imagen de comida. Análisis de la imagen: \"{desc}\"."
     if has_text:
-        return base + " Responde a su mensaje teniendo en cuenta la foto."
+        return base + " Responde a su mensaje teniendo en cuenta la foto. " + _PLATO_INSTRUCCION   # [P1-PLAN-LOTE-168]
     return base + (
         " Actúa proactivamente. Menciona amigablemente lo que ves en la foto. REGLA VISUAL DE "
         "FORMATO: Usa SIEMPRE una lista con viñetas para desglosar sus macros y usa **negritas** para "

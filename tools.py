@@ -1116,6 +1116,58 @@ def _nota_comidas_sin_registrar(user_id: str, days_ago: int, rows_extra=None, ah
         return ""
 
 
+def _nota_total_del_dia(user_id: str, days_ago: int, rows_extra=None) -> str:
+    """[P1-PLAN-LOTE-168 · 2026-09-23] La suma REAL del día tras escribir en el diario, para que el coach no la saque de
+    su memoria. Caso vivo del dueño (22-sep, 22:28): registró los tacos (1050 kcal) y contestó «el día se te cuadró
+    solo: ~2005 kcal de tus ~2050» — 2005 = los 955 del día ANTERIOR, que él mismo había dicho en ese chat, + los tacos.
+    El diario de hoy decía 1050. La conversación dura días y sus totales viejos siguen en el historial; el único
+    total que vale es el que devuelve la base en el momento. Best-effort: "" si algo falla (nunca rompe el registro).
+    `rows_extra`: registros aún no escritos (la batería en seco pasa los suyos, como en `_nota_comidas_sin_registrar`).
+    tooltip-anchor: P1-PLAN-LOTE-168-TOTAL-DEL-DIA"""
+    try:
+        from datetime import date as _date_t, timedelta as _td_t
+        from coach_day_context import consumido_hoy
+        from db_facts import get_consumed_meals_today as _gcmt
+        _dias = int(days_ago or 0)
+        _fecha = _date_t.fromisoformat(_local_date_str_for_user(user_id)) - _td_t(days=_dias)
+        _rows = list(_gcmt(user_id, date_str=_fecha.isoformat(), tz_offset_mins=user_tz_offset_min(user_id)) or [])
+        _rows.extend(r for r in (rows_extra or []) if isinstance(r, dict))
+        _c = consumido_hoy(_rows)
+        if not _c["registros"]:
+            return ""
+        _dia = "HOY" if not _dias else ("AYER" if _dias == 1 else f"hace {_dias} días")
+        _suma = (f"~{int(round(_c['kcal']))} kcal, ~{int(round(_c['protein_g']))} g de proteína, "
+                 f"~{int(round(_c['carbs_g']))} g de carbohidratos y ~{int(round(_c['fats_g']))} g de grasas "
+                 f"({_c['registros']} registro{'s' if _c['registros'] != 1 else ''})")
+        if not _dias:
+            return (f" (Para el asistente: TOTAL REAL DE HOY en su diario, ya con este registro: {_suma} — es lo que "
+                    f"ve en «Tus macros y micros de hoy». Si hablas del total del día o de lo que le falta, usa ESTA "
+                    f"suma: lo que le falta es la meta del bloque «LO QUE LE FALTA HOY» menos esta suma (ese bloque se "
+                    f"calculó ANTES de este registro). NUNCA partas de un total dicho en mensajes anteriores de la "
+                    f"conversación: pueden ser de otro día.)")
+        return (f" (Para el asistente: el diario de {_dia} suma ahora {_suma}. Si hablas del total de ese día, usa "
+                f"ESTA suma, nunca un total de mensajes anteriores.)")
+    except Exception as _tot_err:
+        logger.warning(f"[P1-PLAN-LOTE-168] total del día no calculado: {_tot_err!r}")
+        return ""
+
+
+def _dias_atras_de_fila(user_id: str, consumed_at) -> Optional[int]:
+    """[P1-PLAN-LOTE-168] Días entre el «hoy» local del usuario y el día local de un registro (0 = hoy), o None."""
+    try:
+        from datetime import date as _date_d, datetime as _dt_d, timedelta as _td_d, timezone as _tz_d
+        if consumed_at is None:
+            return None
+        _at = consumed_at if isinstance(consumed_at, _dt_d) else _dt_d.fromisoformat(str(consumed_at))
+        if _at.tzinfo is not None:   # a UTC primero: la sesión de la base podría no estar en UTC
+            _at = _at.astimezone(_tz_d.utc).replace(tzinfo=None)
+        _dia_local = (_at - _td_d(minutes=int(user_tz_offset_min(user_id)))).date()
+        _d = (_date_d.fromisoformat(_local_date_str_for_user(user_id)) - _dia_local).days
+        return _d if _d >= 0 else None
+    except Exception:
+        return None
+
+
 @tool
 def log_consumed_meal(user_id: str, meal_name: str, calories: int, protein: int, carbs: int = 0, healthy_fats: int = 0, ingredients: list[str] = None, meal_type: str = None, days_ago: int = 0, force: bool = False) -> str:
     """
@@ -1247,6 +1299,8 @@ def log_consumed_meal(user_id: str, meal_name: str, calories: int, protein: int,
     if result is not None:
         _cuando = "" if _days_ago == 0 else (" (con fecha de AYER — no cuenta en las macros de hoy)" if _days_ago == 1 else f" (con fecha de hace {_days_ago} días — no cuenta en las macros de hoy)")
         msg = f"¡Éxito! Se ha registrado el consumo de '{meal_name}' ({calories} kcal, {protein}g proteína, {carbs}g carbohidratos, {healthy_fats}g grasas saludables) como {_meal_type}{_cuando} en tu diario."
+        # [P1-PLAN-LOTE-168 · 2026-09-23] la suma REAL de ese día, ya con este registro (helper; la batería lo comparte)
+        msg += _nota_total_del_dia(user_id, _days_ago)
         # [P1-PLAN-LOTE-76 · 2026-09-17] qué comidas de ESE día siguen sin registrar (helper; la batería en seco lo comparte)
         msg += _nota_comidas_sin_registrar(user_id, _days_ago)
         if not _mt_reconocido:
@@ -1561,9 +1615,17 @@ def correct_consumed_meal(
         if ingredients is not None:
             bits.append("ingredientes")
         detalle = ", ".join(bits) if bits else "los campos indicados"
+        # [P1-PLAN-LOTE-168 · 2026-09-23] Tras corregir, la suma real del día de ESA fila (como tras registrar).
+        _nota_total = ""
+        if days_ago is not None:
+            _nota_total = _nota_total_del_dia(user_id, _clamp_days_ago(days_ago))
+        else:
+            _dias_fila = _dias_atras_de_fila(user_id, (_fila or _leer_fila_diario(user_id, _mid) or {}).get("consumed_at"))
+            if _dias_fila is not None:
+                _nota_total = _nota_total_del_dia(user_id, _dias_fila)
         return (
             f"¡Corregido! Actualicé el registro existente ({detalle}) — no se creó "
-            f"ninguna fila nueva.{_nota_nevera} [ID_REGISTRO_DIARIO: {updated_id} — uso interno "
+            f"ninguna fila nueva.{_nota_nevera}{_nota_total} [ID_REGISTRO_DIARIO: {updated_id} — uso interno "
             f"tuyo, NO se lo menciones ni se lo leas al usuario.]"
         )
     else:

@@ -222,6 +222,23 @@ def _profile_with_locale(uid):
 
 agent.get_user_profile = _profile_with_locale
 
+# [P1-PLAN-LOTE-168] Una conversación que viene de días anteriores (`"historial": [{role, content}]` y
+# `"sesion_desde": "<iso>"` en el caso): el fallo del 22-sep solo existe con los totales de AYER en el hilo.
+HIST = {"rows": None, "desde": None}
+_orig_build_memory_context = agent.build_memory_context
+
+
+def _memory_with_history(session_id, user_id=None):
+    mem = _orig_build_memory_context(session_id, user_id)
+    if HIST["rows"] is not None:
+        mem = dict(mem or {})
+        mem["recent_messages"] = copy.deepcopy(HIST["rows"])
+    return mem
+
+
+agent.build_memory_context = _memory_with_history
+agent._session_created_at = lambda _sid: HIST["desde"]
+
 # ───────────────────────── 3. Tools: registro + dry-run ─────────────────────────
 TOOL_LOG: list[dict] = []
 FAKE_DIARY: dict[str, dict] = {}
@@ -247,6 +264,19 @@ def _stub_log_consumed_meal(**kw):
     mt_ok = tools._resolver_meal_type(kw.get("meal_type")) is not None
     meal_type = tools._normalize_meal_type(kw.get("meal_type"))
     days_ago = tools._clamp_days_ago(kw.get("days_ago") or 0)
+    # [P1-PLAN-LOTE-168] El guard «una comida principal por día» de la tool real, con el MISMO texto: sin él la batería
+    # aceptaba dos desayunos y no podía ver qué hace el modelo con el aviso (ni el guard de `force` de execute_tools).
+    if meal_type in tools._CONSUMED_MAIN_MEAL_TYPES and not kw.get("force"):
+        _previos = [v for v in FAKE_DIARY.values() if v.get("days_ago") == days_ago]
+        if days_ago == 0 and DIARIO_SIM["rows"] is not None:
+            _previos += list(DIARIO_SIM["rows"])
+        _dup = next((v for v in _previos if v.get("meal_type") == meal_type), None)
+        if _dup:
+            _dia = "hoy" if days_ago == 0 else ("ayer" if days_ago == 1 else f"hace {days_ago} días")
+            return (f"⚠️ NO REGISTRADO: el usuario YA tiene un {meal_type} registrado {_dia} "
+                    f"('{_dup.get('meal_name')}', {int(_dup.get('calories') or 0)} kcal). "
+                    f"Díselo amablemente y pregúntale si de verdad comió dos {meal_type}s ese día "
+                    f"(si lo confirma, repite esta herramienta con force=true) o si prefiere no duplicar.")
     rid = _fake_id()
     FAKE_DIARY[rid] = dict(kw, meal_type=meal_type, days_ago=days_ago)
     cuando = "" if days_ago == 0 else (
@@ -255,6 +285,13 @@ def _stub_log_consumed_meal(**kw):
     msg = (f"¡Éxito! Se ha registrado el consumo de '{kw.get('meal_name')}' ({calories} kcal, "
            f"{kw.get('protein')}g proteína, {kw.get('carbs') or 0}g carbohidratos, "
            f"{kw.get('healthy_fats') or 0}g grasas saludables) como {meal_type}{cuando} en tu diario.")
+    # [P1-PLAN-LOTE-168] la misma suma real del día que la tool, contando los registros en seco de ese día
+    try:
+        _filas = [{k: v.get(k) for k in ("meal_type", "calories", "protein", "carbs", "healthy_fats")}
+                  for v in FAKE_DIARY.values() if v.get("days_ago") == days_ago]
+        msg += tools._nota_total_del_dia(kw.get("user_id") or CTX.get("uid"), days_ago, rows_extra=_filas)
+    except Exception:
+        pass
     # [P1-PLAN-LOTE-76] la misma nota que la tool real («sigue sin registrar…»), contando los registros en seco de ese día
     try:
         _extra = [{"meal_type": v.get("meal_type")} for v in FAKE_DIARY.values() if v.get("days_ago") == days_ago]
@@ -477,6 +514,11 @@ def auto_metrics(case: dict, final: str, tools_called: list[str]) -> dict:
     tope = exp.get("max_palabras")
     if tope and words > tope:
         flags.append(f"largo:{words}>{tope}")
+    # [P1-PLAN-LOTE-168] cuántas comidas tenía que registrar (la foto + los tacos = 2)
+    if exp.get("registros") is not None:
+        n = sum(1 for t in tools_called if t == "log_consumed_meal")
+        if n != exp["registros"]:
+            flags.append(f"registros:{n}≠{exp['registros']}")
     return {"palabras": words, "emojis": len(_EMOJI.findall(final or "")), "idioma": lang, "flags": flags}
 
 
@@ -570,6 +612,7 @@ def main() -> int:
         FAKE_DIARY.clear()
         set_hora(case.get("hora", "12:40"))
         DIARIO_SIM["rows"] = case.get("diario")   # [P1-PLAN-LOTE-132] None = el diario real de producción
+        HIST["rows"], HIST["desde"] = case.get("historial"), case.get("sesion_desde")   # [P1-PLAN-LOTE-168]
         sid = str(uuid.uuid4())  # la columna es uuid; la sesión no existe en la base (lectura vacía)
         turns = []
         for i, prompt in enumerate(case["turns"]):

@@ -4217,6 +4217,11 @@ class ChatState(MessagesState):
     # en bucle call_model→nudge→call_model quemando tokens hasta el timeout.
     # Default: ausente (falsy) — un turno normal nunca la escribe.
     diary_claim_retried: bool
+    # [P1-PLAN-LOTE-168 · 2026-09-23] Las fotos de PLATO de este turno (`_plate_photos_from_vision`) y el tope de su
+    # reintento (ver `route_tools` / `nudge_plate_photo`). Declaradas por lo mismo que `diary_claim_retried`: una clave
+    # fuera del schema se descarta en silencio y el tope no existiría. Son del TURNO: `inputs` las reinicia.
+    turn_plate_photos: list
+    plate_photo_retried: bool
 
 # [P1-CHAT-ORPHAN-TOOLCALL-SANITIZE · 2026-09-14] Un historial con un tool_call sin su
 # ToolMessage (o un ToolMessage sin el AIMessage que lo pidió) lo rechaza el proveedor
@@ -4654,6 +4659,16 @@ def execute_tools(state: ChatState):
                         logger.warning(f"🛡️ [P1-PLAN-LOTE-56] log_consumed_meal days_ago "
                                        f"{tool_args.get('days_ago')!r} → {_dias} (el usuario nombró el día)")
                         tool_args["days_ago"] = _dias
+                # [P1-PLAN-LOTE-168 · 2026-09-23] `force` salta el guard «una comida principal por día» y solo vale como
+                # RESPUESTA a su aviso: el aviso sale en un turno y el usuario confirma en el siguiente. Batería del
+                # caso del dueño (foto del desayuno + «y me comí 3 tacos»): el modelo mandó los tacos como OTRO desayuno
+                # con force=true en la misma tanda, sin aviso ni confirmación. Sin aviso en el turno anterior, se apaga:
+                # el guard avisa y el modelo decide la franja de verdad o pregunta.
+                if (tool_name in ("log_consumed_meal", "correct_consumed_meal") and tool_args.get("force")
+                        and not _duplicado_avisado_en_turno_previo(state.get("messages") or [])):
+                    logger.warning(f"🛡️ [P1-PLAN-LOTE-168] {tool_name} force=true sin aviso de duplicado en el "
+                                   f"turno anterior → force=false")
+                    tool_args["force"] = False
 
             tool_result = ""
             logger.debug(f"🔧 [LANGGRAPH TOOL] Ejecutando {tool_name}")
@@ -5076,6 +5091,22 @@ def _days_ago_named_by_user(messages: list):
     return None
 
 
+# [P1-PLAN-LOTE-168 · 2026-09-23] Los avisos del guard «una comida principal por día» (`log_consumed_meal` y
+# `correct_consumed_meal`, tools.py). `force=true` solo es la respuesta del usuario a uno de ellos.
+_AVISOS_DE_DUPLICADO = ("NO REGISTRADO: el usuario YA tiene un", "NO CORREGIDO: ese día el usuario YA tiene un")
+
+
+def _duplicado_avisado_en_turno_previo(messages: list) -> bool:
+    """¿El turno ANTERIOR (entre los dos últimos mensajes del usuario) trajo un aviso de duplicado de una tool?"""
+    humanos = [i for i, m in enumerate(messages or []) if isinstance(m, HumanMessage)]
+    if len(humanos) < 2:
+        return False
+    for m in messages[humanos[-2] + 1:humanos[-1]]:
+        if isinstance(m, ToolMessage) and any(a in str(m.content or "") for a in _AVISOS_DE_DUPLICADO):
+            return True
+    return False
+
+
 # [P1-PLAN-LOTE-53 · 2026-09-15] Batería del 15-sep: «Quedan anotados 2 de 8 vasos» (tras
 # `log_water_glass`) y «Anotado: lácteos quedó registrado en tu perfil» (tras `update_form_field`)
 # disparaban el nudge del DIARIO. El modelo reescribía la respuesta y el usuario la veía DOS veces
@@ -5173,6 +5204,128 @@ def nudge_diary_tool(state: ChatState):
     }
 
 
+# ============================================================
+# [P1-PLAN-LOTE-168 · 2026-09-23] La foto del plato que se quedó fuera del diario
+# ============================================================
+# Caso vivo del dueño (22-sep, 22:27): foto del desayuno (plátano maduro, huevo, salami, queso y aguacate; el
+# escáner estimó 670 kcal) + «Este fue el desayuno y me comí 3 tacos… no tengo foto». El coach registró los tacos
+# como almuerzo y ahí se quedó: el desayuno de la foto nunca llegó al diario. No afirmó haberlo registrado, así que
+# `P1-DIARY-CLAIM-VERIFY` no tenía nada que cazar — el fallo era una OMISIÓN, no una mentira.
+#
+# La regla del prompt («una llamada por comida») es la primera defensa; ésta es la que no depende de que el modelo
+# la obedezca. Solo dispara con la firma exacta del fallo: una foto de PLATO en el turno + el modelo SÍ registró algo
+# (así que el usuario estaba contando lo que comió) + ninguno de esos registros es la comida de la foto. Sin registro
+# no dispara: «¿esto es saludable?» con foto no es un consumo. UNA vez por turno (`plate_photo_retried`).
+# Tooltip-anchor: P1-PLAN-LOTE-168-PLATE-PHOTO
+
+_RE_KCAL_FOTO = re.compile(r"(?:calor[ií]as\s*:\s*~?\s*(\d{2,5}))|(?:~?\s*(\d{2,5})\s*kcal)", re.IGNORECASE)
+_RE_CORTE_ESTIMACION = re.compile(r"\(?\s*(?:estimaci[oó]n|estimado)\b", re.IGNORECASE)
+# Palabras que describen tamaño, cantidad, cocción o la franja: no dicen QUÉ comida es.
+_PALABRAS_NO_ALIMENTO = frozenset((
+    "con de del la las el los un uno una unos unas al en sin por para mas y e o a the and with of com avec et le les du "
+    "des di il grande grandes pequeno pequena pequenos pequenas mediano mediana medianos medianas big large small "
+    "frito frita fritos fritas fried cocido cocida cocidos cocidas hervido hervida hervidos hervidas guisado guisada "
+    "guisados guisadas asado asada asados asadas plancha horno casero casera caseros caseras fresco fresca frescos "
+    "frescas blanco blanca blancos blancas rodaja trozo lasca lonja unidad unidade porcion porcione racion racione "
+    "plato taza vaso cucharada rebanada pieza gramo slice piece desayuno almuerzo cena merienda snack comida estilo tipo aprox "
+    "aproximado aproximada estimacion estimado calorias caloria proteina carbohidrato grasa saludable kcal media medio "
+    "mitad entero entera relleno rellena dominicano dominicana tipico tipica"
+).split())
+
+
+def _tokens_de_comida(texto) -> set:
+    """Las palabras que nombran alimentos (sin acentos, en singular a lo bruto), para cruzar un registro con la foto."""
+    import unicodedata
+    plano = "".join(c for c in unicodedata.normalize("NFKD", str(texto or "").lower()) if not unicodedata.combining(c))
+    out = set()
+    for w in re.findall(r"[a-zñ]+", plano):
+        w = w[:-1] if len(w) > 3 and w.endswith("s") else w
+        if len(w) >= 3 and w not in _PALABRAS_NO_ALIMENTO:
+            out.add(w)
+    return out
+
+
+def _plate_photos_from_vision(vision) -> list:
+    """Las fotos de PLATO del turno como `[{"desc", "kcal"}]` (el `vision` que manda el cliente: `multi` o suelto).
+    Solo `kind == "plato"` con descripción: compra, etiqueta, «sin comida» o sin análisis no son un plato comido."""
+    if not isinstance(vision, dict):
+        return []
+    if vision.get("kind") == "multi":
+        items = [i for i in (vision.get("items") or [])[:4] if isinstance(i, dict)]
+    else:
+        items = [vision]
+    out = []
+    for item in items:
+        desc = str(item.get("description") or "").strip()
+        if str(item.get("kind") or "") != "plato" or not desc:
+            continue
+        m = _RE_KCAL_FOTO.search(desc)
+        kcal = float(m.group(1) or m.group(2)) if m else None
+        corte = _RE_CORTE_ESTIMACION.search(desc)
+        out.append({"desc": (desc[:corte.start()] if corte else desc).strip()[:220], "kcal": kcal})
+    return out
+
+
+def _registro_es_la_foto(args: dict, foto: dict) -> bool:
+    """¿Este `log_consumed_meal` es la comida de la foto? Por NOMBRE (un alimento en común) o por kcal (±30 %).
+    Los ingredientes no cuentan: «queso al gusto» de unos tacos casaba con el queso del desayuno."""
+    if not isinstance(args, dict):
+        return False
+    if _tokens_de_comida(args.get("meal_name")) & _tokens_de_comida(foto.get("desc")):
+        return True
+    try:
+        kcal, kcal_foto = float(args.get("calories") or 0), float(foto.get("kcal") or 0)
+    except (TypeError, ValueError):
+        return False
+    return kcal > 0 and kcal_foto > 0 and abs(kcal - kcal_foto) <= 0.30 * kcal_foto
+
+
+def _plate_photos_unlogged(state) -> list:
+    """Las fotos de plato de este turno que NINGÚN `log_consumed_meal` del turno registró — pero solo si hubo alguno."""
+    fotos = (state or {}).get("turn_plate_photos") or []
+    if not fotos:
+        return []
+    registros = []
+    for msg in reversed((state or {}).get("messages") or []):
+        if isinstance(msg, HumanMessage):
+            break
+        for tc in (getattr(msg, "tool_calls", None) or []):
+            nombre = tc.get("name") if isinstance(tc, dict) else getattr(tc, "name", None)
+            if nombre == "log_consumed_meal":
+                registros.append((tc.get("args") if isinstance(tc, dict) else getattr(tc, "args", None)) or {})
+    if not registros:
+        return []
+    return [f for f in fotos if isinstance(f, dict) and not any(_registro_es_la_foto(a, f) for a in registros)]
+
+
+def nudge_plate_photo(state: ChatState):
+    """Reinyecta la foto que quedó fuera y devuelve el turno a `call_model` (UNA vez)."""
+    fotos = _plate_photos_unlogged(state)
+    logger.warning(
+        f"🍽️ [P1-PLAN-LOTE-168] {len(fotos)} foto(s) de plato sin registrar tras registrar otra comida "
+        f"(user={str(state.get('user_id'))[:8]}). Forzando reintento."
+    )
+    lista = "; ".join(
+        f"«{f.get('desc')}»" + (f" (~{int(f['kcal'])} kcal según el análisis)" if f.get("kcal") else "")
+        for f in fotos
+    ) or "la foto de este turno"
+    return {
+        "messages": [SystemMessage(content=(
+            f"ALTO. En este turno el usuario te mandó la foto de un plato que NO registraste: {lista}. Lo que "
+            "registraste en este turno es OTRA comida.\n"
+            "Si el usuario dijo que se comió lo de la foto («este fue el desayuno», «me comí esto»), llama AHORA a "
+            "`log_consumed_meal` para ESA comida, como un registro APARTE: con las cifras del análisis de la foto y el "
+            "`meal_type` que él dijo (o el más probable por la hora si no lo dijo).\n"
+            "Si ya la registraste con otro nombre en este turno, o él NO dijo que se la comiera, no registres nada: "
+            "vuelve a escribir tu respuesta COMPLETA sin darla por registrada.\n"
+            "El total del día sale del resultado de la herramienta («TOTAL REAL DE HOY»), no de tu cuenta. Esta nota "
+            "es interna: el usuario NO la ve, así que no la menciones ni te disculpes por ella — tu respuesta nueva "
+            "sustituye a la anterior."
+        ))],
+        "plate_photo_retried": True,
+    }
+
+
 def route_tools(state: ChatState):
     messages = state["messages"]
     last_message = messages[-1]
@@ -5189,6 +5342,10 @@ def route_tools(state: ChatState):
                 and not _claim_backed_by_other_write(contenido, messages)):
             return "nudge_diary_tool"
 
+    # [P1-PLAN-LOTE-168] ¿Registró otra comida y dejó fuera la del plato de la foto?
+    if not state.get("plate_photo_retried") and _plate_photos_unlogged(state):
+        return "nudge_plate_photo"
+
     return END
 
 # Removido el MemorySaver global estático
@@ -5198,12 +5355,15 @@ chat_builder.add_node("call_model", call_model)
 chat_builder.add_node("execute_tools", execute_tools)
 # [P1-DIARY-CLAIM-VERIFY · 2026-07-31] Ver `route_tools`.
 chat_builder.add_node("nudge_diary_tool", nudge_diary_tool)
+# [P1-PLAN-LOTE-168 · 2026-09-23] Ver `route_tools`: la foto del plato que quedó fuera del diario.
+chat_builder.add_node("nudge_plate_photo", nudge_plate_photo)
 chat_builder.add_edge(START, "call_model")
 chat_builder.add_conditional_edges(
-    "call_model", route_tools, ["execute_tools", "nudge_diary_tool", END]
+    "call_model", route_tools, ["execute_tools", "nudge_diary_tool", "nudge_plate_photo", END]
 )
 chat_builder.add_edge("execute_tools", "call_model")
 chat_builder.add_edge("nudge_diary_tool", "call_model")
+chat_builder.add_edge("nudge_plate_photo", "call_model")
 # NOTA: chat_graph_app se compila dinámicamente usando el PostgresSaver en cada petición
 
 # ============================================================
@@ -5992,6 +6152,47 @@ def _build_today_remaining_context(current_plan, consumed_today: list, target_ca
         return ""
 
 
+def _session_created_at(session_id):
+    """[P1-PLAN-LOTE-168] Cuándo nació la sesión del chat (`agent_sessions.created_at`), o None. Aparte para que la
+    batería del coach, que corre sin sesión en la base, pueda simular una conversación que viene de ayer."""
+    from db import execute_sql_query as _esq_c
+    fila = _esq_c("SELECT created_at FROM agent_sessions WHERE id = %s", (str(session_id),), fetch_one=True)
+    return (fila or {}).get("created_at")
+
+
+def _conversacion_de_dias_anteriores(session_id, local_date, tz_offset) -> str:
+    """[P1-PLAN-LOTE-168 · 2026-09-23] Aviso cuando la conversación empezó ANTES de hoy (hora local del usuario).
+
+    El hilo del chat conserva los mensajes de todos sus días, y con ellos los totales que el coach dijo esos días. Caso
+    vivo del dueño: una sesión del 20-sep, y el 22 a las 22:28 el coach sumó los tacos de hoy al «~955 kcal» que él
+    mismo había dicho la noche anterior («el día se te cuadró solo: ~2005 kcal»). El diario de hoy decía 1050.
+    Best-effort: "" si no hay fecha, sesión o lectura.
+    tooltip-anchor: P1-PLAN-LOTE-168-DIAS-ANTERIORES"""
+    try:
+        if not session_id or not local_date:
+            return ""
+        from datetime import date as _date_c, datetime as _dt_c, timedelta as _td_c, timezone as _tz_c
+        creada = _session_created_at(session_id)
+        if creada is None:
+            return ""
+        if not isinstance(creada, _dt_c):
+            creada = _dt_c.fromisoformat(str(creada))
+        if getattr(creada, "tzinfo", None) is not None:
+            creada = creada.astimezone(_tz_c.utc).replace(tzinfo=None)
+        _off = _clamp_tz_offset_mins(tz_offset) if tz_offset is not None else 240
+        dia_creada = (creada - _td_c(minutes=int(_off))).date()
+        hoy = _date_c.fromisoformat(str(local_date)[:10])
+        if dia_creada >= hoy:
+            return ""
+        return ("\n\n📅 ESTA CONVERSACIÓN EMPEZÓ ANTES DE HOY (el " + dia_creada.isoformat() + "): lo que dicen sus "
+                "mensajes anteriores —registros, totales del día, «te faltan X»— puede ser de OTROS días. El total de "
+                "HOY sale SOLO del bloque DIARIO DE HOY y de lo que te devuelva `log_consumed_meal` en este turno "
+                "(«TOTAL REAL DE HOY»): nunca sumes a partir de un total que dijiste antes.")
+    except Exception as e:
+        logger.warning(f"[P1-PLAN-LOTE-168] aviso de conversación de días anteriores: {e!r}")
+        return ""
+
+
 def _day_gap_context_for_chat(form_data, plan_vigente, diario_de_hoy, tz_offset, schedule_type) -> str:
     """[P1-PLAN-LOTE-132 · 2026-09-20] El bloque «LO QUE LE FALTA HOY»: kcal y gramos que faltan (la resta hecha, no
     delegada al modelo), la hora, y cómo se cierra un día A ESA HORA. El motor es `coach_day_context`; aquí solo se
@@ -6744,6 +6945,8 @@ def chat_with_agent(session_id: str, prompt: str, current_plan: Optional[dict] =
 
         # [P1-PLAN-LOTE-132 · 2026-09-20] Lo que le FALTA hoy, con la resta hecha y la hora (SSOT de los dos paths).
         system_prompt += _day_gap_context_for_chat(form_data, plan_vigente, _diario_de_hoy, tz_offset, schedule_type)
+        # [P1-PLAN-LOTE-168 · 2026-09-23] Si el chat viene de días anteriores, sus totales viejos no son los de hoy.
+        system_prompt += _conversacion_de_dias_anteriores(session_id, local_date, tz_offset)
         # [P3-AGENT-HYDRATION-CONTEXT · 2026-05-27] Inyectar hidratación
         # viva si el toggle está activo.
         # [P3-CHAT-NOSTREAM-CONTEXTO-TEMPORAL-RD · 2026-08-23] Este bloque NO estaba roto
@@ -6822,7 +7025,11 @@ def chat_with_agent(session_id: str, prompt: str, current_plan: Optional[dict] =
         "current_plan": current_plan or {},
         "sys_prompt": system_prompt, # Sobre-escribe el prompt dinámicamente en cada ejecución
         "updated_fields": {},        # Reinicia los valores extraídos en cada ejecución
-        "new_plan": None             # Reinicia el plan nuevo en cada ejecución
+        "new_plan": None,            # Reinicia el plan nuevo en cada ejecución
+        # [P1-PLAN-LOTE-168] Este camino no recibe fotos: sin reiniciarlas, las de un turno del stream en el mismo
+        # hilo seguirían en el checkpoint y el guard de la foto dispararía sobre un turno sin foto.
+        "turn_plate_photos": [],
+        "plate_photo_retried": False,
     }
     
     if not existing_state.values:
@@ -7345,6 +7552,8 @@ def chat_with_agent_stream(session_id: str, prompt: str, current_plan: Optional[
 
         # [P1-PLAN-LOTE-132 · 2026-09-20] Lo que le FALTA hoy, con la resta hecha y la hora (SSOT de los dos paths).
         system_prompt += _day_gap_context_for_chat(form_data, plan_vigente, _diario_de_hoy, tz_offset, schedule_type)
+        # [P1-PLAN-LOTE-168 · 2026-09-23] Si el chat viene de días anteriores, sus totales viejos no son los de hoy.
+        system_prompt += _conversacion_de_dias_anteriores(session_id, local_date, tz_offset)
         # [P3-AGENT-HYDRATION-CONTEXT · 2026-05-27] Inyectar hidratación
         # viva si el toggle está activo. El stream path SÍ recibe
         # `local_date` del cliente, que pasamos al helper para mayor
@@ -7418,6 +7627,9 @@ def chat_with_agent_stream(session_id: str, prompt: str, current_plan: Optional[
         "pantry_modified_at": None,
         "pantry_depleted_items": None,
         "diary_claim_retried": False,
+        # [P1-PLAN-LOTE-168] las fotos de plato de ESTE turno y el tope de su reintento
+        "turn_plate_photos": _plate_photos_from_vision(vision),
+        "plate_photo_retried": False,
     }
 
     if not existing_state.values:

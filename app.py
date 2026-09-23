@@ -320,7 +320,11 @@ _PROCESS_START_ISO = datetime.now(timezone.utc).isoformat()
 # (catálogo, avisos de comida y agua, textos y directiva de idioma del coach) y tipografía francesa también aquí. En la
 # app: errores del generador por código fuera del español, saludo que sigue al idioma, hora en el formato de cada idioma,
 # la palabra de «borrar cuenta» traducida, plural de las semanas de la meta, avisos reprogramados al cambiar de idioma.
-_LAST_KNOWN_PFIX = "P1-PLAN-LOTE-167 · 2026-09-22"
+# [P1-PLAN-LOTE-168 · 2026-09-23] (solo backend) foto del desayuno + «y me comí 3 tacos»: el coach registró solo los
+# tacos y dio como total del día el de AYER + los tacos. Ahora la tool devuelve el TOTAL REAL del día, el prompt avisa
+# cuando el chat viene de días anteriores y exige una llamada por comida, un guard devuelve el turno si la foto del
+# plato quedó fuera, y `force` solo vale como respuesta a un aviso de duplicado (batería real: 0/4 → 5/5).
+_LAST_KNOWN_PFIX = "P1-PLAN-LOTE-168 · 2026-09-23"
 
 # [P1-SENTRY-SAMPLE-COST · 2026-05-12] Sentry sampling driven from env vars
 # con default seguro 0.1 (10%). Pre-fix tenía `traces_sample_rate=1.0` y
