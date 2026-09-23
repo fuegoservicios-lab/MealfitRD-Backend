@@ -44,6 +44,9 @@ from graph_orchestrator import _allergen_pool_item_banned, _diet_pool_item_banne
 # (avalancha si Gemini está degradado). El P1-CHAT-CB-EXTEND ya cubrió los
 # 4 callsites de `agent.py`; este fix cierra los 2 de `tools.py`.
 from knobs import _env_str, _env_float, _env_bool, _env_int
+# [P1-NEVERA-OPCIONAL · 2026-09-23] Con la Nevera apagada (modo contador) sus tools responden «desactivada» y el diario
+# no descuenta. A nivel de módulo, como en routers/diary.py: los tests parchean `tools.nevera_activa`.
+from nevera_opcional import nevera_activa, MENSAJE_NEVERA_APAGADA
 
 
 def _tools_pref_agent_model_name() -> str:
@@ -1286,7 +1289,9 @@ def log_consumed_meal(user_id: str, meal_name: str, calories: int, protein: int,
     # db_log_consumed_meal retorna el sentinel "deduped" en ese caso. Sin este
     # gate, la 2ª emisión saltaba el INSERT (calorías OK) pero corría la
     # deducción de nuevo → la nevera se descontaba AL DOBLE del consumo real.
-    if has_ingredients and result != "deduped":
+    # [P1-NEVERA-OPCIONAL · 2026-09-23] Apagada: el registro se guarda igual (y `mark_inventory_synced` no cambia:
+    # apagada hoy no se vuelve un descuento silencioso si mañana la enciende), pero no se descuenta.
+    if has_ingredients and result != "deduped" and nevera_activa(user_id):
         # [P1-CONSUMPTION-LEDGER · 2026-08-07] `result` es el id de la fila
         # recien insertada en `consumed_meals` — atarlo aqui es lo que permite
         # que "Deshacer registro" devuelva despues esta comida a la Nevera.
@@ -1551,6 +1556,10 @@ def correct_consumed_meal(
     # ledger, o el ledger falló), NO se toca: devolver a ciegas contaría la comida dos veces.
     _ajustar_nevera = False
     _nota_nevera = ""
+    # [P1-NEVERA-OPCIONAL · 2026-09-23] Apagada: la lista corregida no se descuenta y ninguna nota la nombra (el coach
+    # no debe mencionarla); lo que el registro original SÍ descontó se devuelve igual (inventario oculto coherente).
+    # Solo se consulta si cambian los ingredientes: es lo único de la corrección que toca la Nevera.
+    _nevera_on = nevera_activa(user_id) if ingredients is not None else True
     if ingredients is not None:
         if _fila is None:
             _nota_nevera = (" La Nevera NO se ajustó (no pude leer el registro original); si hace falta, "
@@ -1593,7 +1602,7 @@ def correct_consumed_meal(
                 _rev = db_inventory.revert_consumption_events(user_id, _mid) or {}
                 _ded = db_inventory.deduct_consumed_meal_from_inventory(
                     user_id, list(ingredients), consumed_meal_id=_mid, source="chat",
-                ) if ingredients else None
+                ) if ingredients and _nevera_on else None
                 _nota_nevera = (f" Nevera ajustada: se devolvió lo del registro anterior "
                                 f"({len(_rev.get('reverted') or [])} ítem(s)) y se descontó la lista corregida.")
                 _ausentes = (_ded or {}).get("not_in_pantry") or [] if isinstance(_ded, dict) else []
@@ -1603,6 +1612,8 @@ def correct_consumed_meal(
                 logger.exception("[P1-CHAT-TOOLS-AUDIT] ajuste de Nevera tras corregir el diario falló")
                 _nota_nevera = (" ⚠️ El diario quedó corregido, pero NO pude ajustar la Nevera: díselo "
                                 "al usuario.")
+        if not _nevera_on:
+            _nota_nevera = ""   # [P1-NEVERA-OPCIONAL] apagada: ninguna nota de Nevera llega al coach
         bits = []
         if meal_name is not None:
             bits.append(f"nombre → '{meal_name}'")
@@ -3808,6 +3819,8 @@ def check_current_pantry(user_id: str) -> str:
     Usa esta herramienta SIEMPRE que el usuario pregunte "qué me queda en la despensa",
     "qué me sobra", o "qué tengo en la nevera ahora mismo". 
     """
+    if not nevera_activa(user_id):   # [P1-NEVERA-OPCIONAL · 2026-09-23] apagada por el usuario: ni se lee ni se nombra
+        return MENSAJE_NEVERA_APAGADA
     logger.info(f"🛒 [TOOL EXECUTION] Consultando despensa física BD para user {user_id}")
             
     try:
@@ -3858,6 +3871,8 @@ def modify_pantry_inventory(user_id: str, items_to_add: list[str] = None, items_
     - items_to_remove: Lista de strings a descartar (dañado/botado), con o sin cantidad.
     - items_to_deplete: Lista de strings (nombres) a marcar como agotados (se acabaron).
     """
+    if not nevera_activa(user_id):   # [P1-NEVERA-OPCIONAL · 2026-09-23] apagada por el usuario: no se toca
+        return MENSAJE_NEVERA_APAGADA
     # [P3-DOC-2 · 2026-05-11] LIVE-TOOL CONTRACT — LEER ANTES DE MODIFICAR.
     # ────────────────────────────────────────────────────────────────────────
     # `user_id` viene de `tool_args` construido por la LLM. P0-AGENT-1 cerró
@@ -4385,6 +4400,10 @@ def mark_shopping_list_purchased(user_id: str, excluded_items: list[str] = None,
     # marcaba el plan pausado como comprado — inventario que el usuario no compró, en la pantalla que él mismo lleva
     # a mano. Lo que SÍ compró se anota con la tool de la Nevera, ítem por ítem.
     if _usuario_en_modo_contador(user_id):
+        # [P1-NEVERA-OPCIONAL · 2026-09-23] Y si además apagó la Nevera no hay dónde anotar lo que compró: no se le
+        # ofrece `modify_pantry_inventory` (respondería «desactivada»). Solo aquí: fuera del contador siempre está activa.
+        if not nevera_activa(user_id):
+            return MENSAJE_NEVERA_APAGADA
         return ("El usuario tiene la generación de planes APAGADA (usa la app como contador): no hay una lista de "
                 "compras activa que marcar como comprada. NO digas que registraste la compra. Pídele que te diga "
                 "QUÉ compró y en qué cantidad, y anótalo en su Nevera con `modify_pantry_inventory`.")
@@ -5157,14 +5176,17 @@ def _contexto_del_dia_para_propuesta(user_id: str) -> dict:
                 ctx["n_comidas"] = _n
     except Exception as e:
         logger.warning(f"[P1-PLAN-LOTE-132] diario de hoy ilegible: {e!r}")
-    try:
-        from db import execute_sql_query as _esq_pc
-        _rows = _esq_pc(
-            "SELECT ingredient_name FROM user_inventory WHERE user_id = %s AND quantity > 0 LIMIT 200",
-            (user_id,), fetch_all=True) or []
-        ctx["nevera"] = [str(r.get("ingredient_name")) for r in _rows if r.get("ingredient_name")]
-    except Exception as e:
-        logger.warning(f"[P1-PLAN-LOTE-132] Nevera ilegible: {e!r}")
+    # [P1-NEVERA-OPCIONAL · 2026-09-23] Apagada por el usuario: no se lee (lista vacía) y el formateador no la nombra.
+    ctx["nevera_activa"] = nevera_activa(user_id)
+    if ctx["nevera_activa"]:
+        try:
+            from db import execute_sql_query as _esq_pc
+            _rows = _esq_pc(
+                "SELECT ingredient_name FROM user_inventory WHERE user_id = %s AND quantity > 0 LIMIT 200",
+                (user_id,), fetch_all=True) or []
+            ctx["nevera"] = [str(r.get("ingredient_name")) for r in _rows if r.get("ingredient_name")]
+        except Exception as e:
+            logger.warning(f"[P1-PLAN-LOTE-132] Nevera ilegible: {e!r}")
     return ctx
 
 
@@ -5185,9 +5207,11 @@ def proponer_comida(user_id: str, meal_type: str = None, kcal_objetivo: int = No
     - excluir: nombres de platos ya propuestos que no quiso, para que salgan otros.
     - max_minutos: si dice cuánto tiempo tiene para cocinar.
     """
+    _nevera_on = True   # [P1-NEVERA-OPCIONAL · 2026-09-23] también decide el mensaje de error de abajo
     try:
         import coach_day_context as cdc
         ctx = _contexto_del_dia_para_propuesta(user_id)
+        _nevera_on = ctx.get("nevera_activa", True)
         franja = _resolver_meal_type(meal_type)
         if franja == "snack":
             franja = "merienda"
@@ -5219,11 +5243,12 @@ def proponer_comida(user_id: str, meal_type: str = None, kcal_objetivo: int = No
                         + (f" y ~{int(round(max(falta['protein_g'], 0)))} g de proteína"
                            if falta.get("protein_g") is not None else ""))
         return cdc.formatear_propuestas(propuestas, franja, objetivo, con_nevera=bool(ctx["nevera"]), contexto=contexto,
-                                        solo_nevera=bool(solo_con_nevera), falta=falta)
+                                        solo_nevera=bool(solo_con_nevera), falta=falta, nevera_activa=_nevera_on)
     except Exception as e:
         logger.error(f"❌ [TOOL] proponer_comida falló: {e}")
         return ("No pude armar la propuesta ahora mismo (error interno). (Para el asistente: díselo y ofrécele una idea "
-                "sencilla con lo que hay en su Nevera, marcando las macros como estimadas.)")
+                "sencilla" + (" con lo que hay en su Nevera" if _nevera_on else "")
+                + ", marcando las macros como estimadas.)")
 
 
 # Lista de tools disponibles para el agente

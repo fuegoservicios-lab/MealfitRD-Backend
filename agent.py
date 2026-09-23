@@ -6220,6 +6220,15 @@ def _build_pantry_context(user_id: Optional[str]) -> str:
     para una nevera de 60 items. Kill-switch: MEALFIT_CHAT_PANTRY_SNAPSHOT."""
     if not user_id or user_id == "guest":
         return ""
+    # [P1-NEVERA-OPCIONAL · 2026-09-23] Apagada por el usuario (modo contador): el coach no ve el inventario y recibe
+    # la orden explícita de no mencionarla. Va en ESTE bloque porque es el que los dos caminos del chat inyectan al
+    # final (el último mandato pesa más que las viñetas estáticas que hablan de «su Nevera»).
+    try:
+        from nevera_opcional import nevera_activa, BLOQUE_PROMPT_NEVERA_APAGADA
+        if not nevera_activa(user_id):
+            return BLOQUE_PROMPT_NEVERA_APAGADA
+    except Exception:
+        pass
     try:
         from knobs import _env_bool as _pc_env_bool
         if not _pc_env_bool("MEALFIT_CHAT_PANTRY_SNAPSHOT", True):
@@ -6752,7 +6761,8 @@ def chat_with_agent(session_id: str, prompt: str, current_plan: Optional[dict] =
     if user_id and user_id != "guest":
         try:
             from db_inventory import get_user_inventory
-            user_phys_inv = get_user_inventory(user_id)
+            from nevera_opcional import nevera_activa   # [P1-NEVERA-OPCIONAL · 2026-09-23] apagada: no se lee
+            user_phys_inv = get_user_inventory(user_id) if nevera_activa(user_id) else []
             if user_phys_inv:
                 inventory_str = ", ".join(user_phys_inv)
                 
@@ -7369,7 +7379,8 @@ def chat_with_agent_stream(session_id: str, prompt: str, current_plan: Optional[
     if user_id and user_id != "guest":
         try:
             from db_inventory import get_user_inventory
-            user_phys_inv = get_user_inventory(user_id)
+            from nevera_opcional import nevera_activa   # [P1-NEVERA-OPCIONAL · 2026-09-23] apagada: no se lee
+            user_phys_inv = get_user_inventory(user_id) if nevera_activa(user_id) else []
             if user_phys_inv:
                 inventory_str = ", ".join(user_phys_inv)
                 

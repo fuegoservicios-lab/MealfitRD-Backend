@@ -524,25 +524,33 @@ def _linea_amigable(g: float, nombre: str) -> str:
 
 
 def formatear_propuestas(propuestas: list, franja: str, objetivo: dict, con_nevera: bool, contexto: str = "",
-                         solo_nevera: bool = False, falta: Optional[dict] = None) -> str:
-    """El texto que lee el modelo. Cifras y pasos EXACTOS; al final, cómo presentarlo."""
+                         solo_nevera: bool = False, falta: Optional[dict] = None, nevera_activa: bool = True) -> str:
+    """El texto que lee el modelo. Cifras y pasos EXACTOS; al final, cómo presentarlo.
+
+    [P1-NEVERA-OPCIONAL · 2026-09-23] `nevera_activa=False` (el usuario la apagó en modo contador): ninguna línea
+    nombra la Nevera —el coach tiene la orden de no mencionarla—. Con `True` (default), el texto de siempre."""
+    con_nevera = con_nevera and nevera_activa
     if not propuestas:
         return (f"No encontré en el catálogo de recetas un plato de {franja} que encaje con ese objetivo y con su "
                 "perfil (dieta, alergias, rechazos" + (", solo con su Nevera" if con_nevera else "") + "). "
-                "(Para el asistente: díselo tal cual y propón TÚ una comida sencilla con lo que hay en su Nevera, "
-                "marcando las macros como estimadas con «~». No inventes una receta «del catálogo».)")
+                "(Para el asistente: díselo tal cual y propón TÚ una comida sencilla"
+                + (" con lo que hay en su Nevera" if nevera_activa else "")
+                + ", marcando las macros como estimadas con «~». No inventes una receta «del catálogo».)")
     cab = (f"PROPUESTAS DE {franja.upper()} a su medida (objetivo de esta comida: ~{int(round(objetivo['kcal']))} kcal, "
            f"~{int(round(objetivo['protein_g']))} g de proteína){contexto}. Platos del catálogo de recetas; los gramos y "
            "las macros salen de la tabla de alimentos (no son estimaciones tuyas):")
     lineas = [cab]
-    if solo_nevera and not con_nevera:
+    if solo_nevera and not nevera_activa:   # sin inventario no se finge saber qué tiene, y sin nombrar la Nevera
+        lineas.append("OJO: pidió cocinar SOLO con lo que tiene, pero no sabes qué hay en su casa: estas son ideas "
+                      "generales. Pregúntale qué tiene para afinar.")
+    elif solo_nevera and not con_nevera:
         lineas.append("OJO: pidió cocinar SOLO con lo que tiene, pero su Nevera está VACÍA en la app: estas son ideas "
                       "generales. Dile que no tienes registrado qué hay en su casa y pregúntale qué tiene (o que "
                       "escanee su Nevera) para afinar.")
     elif solo_nevera and all(c.get("_falta") for c in propuestas):
         lineas.append("OJO: ninguna receta del catálogo se hace SOLO con lo que tiene en la Nevera; estas son las que "
                       "MENOS le piden comprar. Dilo así.")
-    if not con_nevera and not solo_nevera:
+    if not con_nevera and not solo_nevera and nevera_activa:
         lineas.append("(Su Nevera está vacía EN LA APP: eso NO significa que no tenga comida en casa. No le digas que "
                       "«toca comprar»; como mucho, que no tienes registrado qué hay en su cocina.)")
     for i, c in enumerate(propuestas, start=1):
@@ -570,7 +578,9 @@ def formatear_propuestas(propuestas: list, franja: str, objetivo: dict, con_neve
         "(Para el asistente: presenta la nº 1 con sus kcal y proteína y, en una frase, cómo deja su día (la línea «Si se "
         "la come», tal cual — no hagas la resta tú). Da los ingredientes con sus gramos; los PASOS solo si pidió receta o cómo se hace, "
         "resumidos sin cambiarles el sentido ni añadir ingredientes. Nombra la nº 2 como alternativa en media frase. "
-        "No cambies cifras ni gramos. Si le falta algo de la Nevera, dilo. NO la registres: todavía no se la ha comido "
+        "No cambies cifras ni gramos. "
+        + ("Si le falta algo de la Nevera, dilo. " if nevera_activa else "")   # [P1-NEVERA-OPCIONAL]
+        + "NO la registres: todavía no se la ha comido "
         "— cierra ofreciendo anotarla cuando se la coma (entonces `log_consumed_meal` con ESTAS macros y estos "
         "ingredientes). Si pide otra opción, vuelve a llamar esta herramienta pasando en `excluir` los nombres ya "
         "propuestos.)")
