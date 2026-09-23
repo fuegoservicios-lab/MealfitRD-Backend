@@ -405,7 +405,7 @@ La re-elección re-mide además su cola (sin knob propio: va con `MEALFIT_CRITIQ
 
 | Knob | Default | Efecto |
 |---|---|---|
-| `MEALFIT_DISH_IDENTITY_RAISE` | `True` | En la cola del guardado (después de todos los recortes), el ingrediente que da nombre a un plato de biblioteca que quedó por debajo de su piso (25 % de la plantilla × el factor) sube AL piso, en la lista y en la compra, si el día cabe en su techo de kcal y de grasa (×1,05 del objetivo). Mide los gramos con el lector de la base y nunca baja una línea. |
+| `MEALFIT_DISH_IDENTITY_RAISE` | `True` | En la cola del guardado (después de todos los recortes), el ingrediente que da nombre a un plato de biblioteca que quedó por debajo de su piso (25 % de la plantilla × el factor) sube AL piso, en la lista y en la compra, si el día cabe en su techo de kcal y de grasa (×1,05 del objetivo, por knob desde P1-PLAN-LOTE-178) — y si no cabe entero, lo que quepa cuando eso deja el alimento en al menos la mitad de su piso; lo que siga en migajas se paga dentro del día con lo que el nombre no menciona (`MEALFIT_DISH_IDENTITY_COMPENSATE`). Mide los gramos con el lector de la base y nunca baja una línea. |
 | `MEALFIT_CLOSER_LIGHT_SLOT_CLEAN` | `True` | En desayuno y merienda, antes de repetir la proteína que el día ya tiene o de pegar pescado o carne, el cerrador de proteína busca un lácteo (yogurt, cottage, ricotta, queso) que el día no tenga; el pool denso no los traía. |
 | `MEALFIT_CLOSER_NO_SALTCURED` | `True` | El cerrador de proteína no añade un curado (arenque, bacalao, salami, longaniza…): el tope de sodio lo dejaba en migajas. Si no queda otro candidato, se conserva el pool. |
 | `MEALFIT_CLOSER_STEP_PLACEMENT` | `True` | En una receta de biblioteca, el paso 💪 del cerrador va donde la receta lo haría: «Sirve X al lado» al emplatado; lo demás, como paso propio después del último paso con fuego (no dentro del primero, que desde el lote 45 lleva el rótulo «El Toque de Fuego»). |
@@ -476,3 +476,7 @@ entry aparecerá en `/health/version` en el próximo `import` del módulo.
   (e.g., timeouts de LLM, tolerancias de coherence guard, tier limits).
 
 Tooltip-anchor: `P2-KNOBS-OPERATIONAL-DOC-START` | knobs discovery 2026-05-23
+| `MEALFIT_IDENTITY_TAIL_KCAL_CEIL` | `1.05` | [P1-PLAN-LOTE-178] Techo de kcal del día para la cola de identidad del guardado (subir lo que da nombre al plato). Clamp [1,0, 1,15]. |
+| `MEALFIT_IDENTITY_TAIL_FAT_CEIL` | `1.05` | [P1-PLAN-LOTE-178] Techo de grasa del día para esa misma cola. Clamp [1,0, 1,20]. |
+| `MEALFIT_DM2_CASABE_CAP` | `True` | [P1-PLAN-LOTE-178] DM2: deja el primer casabe del bloque y cambia los demás por pan integral (salvo alergia/rechazo al pan, trigo o gluten). |
+| `MEALFIT_DISH_IDENTITY_COMPENSATE` | `True` | [P1-PLAN-LOTE-178] En la cola del guardado, lo que da nombre y sigue por debajo de la mitad de su piso sube pagando con lo que ningún nombre menciona en el mismo día y del mismo macro; se revierte si el día acaba por encima de lo que tenía y de su techo. |

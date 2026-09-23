@@ -13738,7 +13738,8 @@ def _apply_condition_substitutions(plan: dict, form_data: dict) -> int:
         if "dm2" in conds:
             meal["_dm2_sugar_fixed"] = uniq  # flag de compatibilidad hacia atrás
 
-    return _apply_substitutions_core(plan, subs, _note, "Ajuste clínico", _flags) + __import__("etiquetas_clinicas").etiquetar(plan, form_data)  # [P1-PLAN-LOTE-172/173]
+    return (_apply_substitutions_core(plan, subs, _note, "Ajuste clínico", _flags) + __import__("etiquetas_clinicas").etiquetar(plan, form_data)  # [P1-PLAN-LOTE-172/173]
+            + __import__("dm2_seguro").limitar_casabe(plan, form_data))  # [P1-PLAN-LOTE-178] DM2: un casabe por bloque
 
 
 # [P1-DIET-SUBSTITUTION · 2026-09-05] Sustitutos vegetales por categoría de producto animal. Mismo motor que las

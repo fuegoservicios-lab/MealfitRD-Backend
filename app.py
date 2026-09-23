@@ -357,7 +357,10 @@ _PROCESS_START_ISO = datetime.now(timezone.utc).isoformat()
 # [P1-PLAN-LOTE-177 · 2026-09-23] (solo backend) sexta vuelta: el reequilibrio de macros del día ya no deja en migajas lo que
 # da nombre al plato (5 g de queso en «Pastelitos de mapuey y queso blanco»); las demandas de «marca/envasado/refrigeración»
 # del revisor son aviso, no rechazo; yautía bien cocida en embarazo/lactancia; concordancia tras coma; sustituto determinista.
-_LAST_KNOWN_PFIX = "P1-PLAN-LOTE-177 · 2026-09-23"
+# [P1-PLAN-LOTE-178 · 2026-09-23] (solo backend) métrica de calidad sobre 16 planes reales: los ingredientes que dan nombre
+# ya no quedan en migajas (techos de la cola 108/110 % y subida parcial), DM2 con un casabe por bloque (el aviso ámbar salía
+# en todos los planes DM2), «harina de trigo» → avena, Title Case sin inserciones en minúscula, pisos con sentido.
+_LAST_KNOWN_PFIX = "P1-PLAN-LOTE-178 · 2026-09-23"
 
 # [P1-SENTRY-SAMPLE-COST · 2026-05-12] Sentry sampling driven from env vars
 # con default seguro 0.1 (10%). Pre-fix tenía `traces_sample_rate=1.0` y

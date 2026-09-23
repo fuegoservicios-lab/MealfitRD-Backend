@@ -239,6 +239,19 @@ def _remedir(meal: dict, db) -> None:
 # grasa al 116-122 %). Knob `MEALFIT_DISH_IDENTITY_RAISE` (True).
 KCAL_TECHO = 1.05
 GRASA_TECHO = 1.05
+# [P1-PLAN-LOTE-178 · 2026-09-23] Los techos de la cola, por knob. Medido sobre 16 planes de la batería real: subirlos NO es
+# el arreglo de las migajas del nombre —con 1,07/1,10 las migajas bajaban de 20 a 10, pero 8 días salían de ±5 % de kcal
+# (DM2 al 110 %)—; el arreglo es pagarlas dentro del día (`compensar_dia`). Se quedan en 1,05 por defecto.
+# tooltip-anchor: P1-PLAN-LOTE-178-TECHOS-DE-LA-COLA
+
+
+def _techos() -> tuple:
+    try:
+        from knobs import _env_float
+        return (_env_float("MEALFIT_IDENTITY_TAIL_KCAL_CEIL", KCAL_TECHO, lambda v: 1.0 <= v <= 1.15),
+                _env_float("MEALFIT_IDENTITY_TAIL_FAT_CEIL", GRASA_TECHO, lambda v: 1.0 <= v <= 1.20))
+    except Exception:                                                          # noqa: BLE001
+        return KCAL_TECHO, GRASA_TECHO
 
 
 def subir_on() -> bool:
@@ -268,7 +281,8 @@ def _margen_del_dia(meals, objetivos) -> Optional[dict]:
         return None
     kcal = sum(_num(m.get("cals") or m.get("calories")) for m in meals if isinstance(m, dict))
     grasa = sum(_num(m.get("fats")) for m in meals if isinstance(m, dict))
-    return {"kcal": float(objetivos["kcal"]) * KCAL_TECHO - kcal, "grasa": float(objetivos["grasa"]) * GRASA_TECHO - grasa}
+    t_k, t_g = _techos()
+    return {"kcal": float(objetivos["kcal"]) * t_k - kcal, "grasa": float(objetivos["grasa"]) * t_g - grasa}
 
 
 def _lineas_de(lineas, canon, index) -> tuple:
@@ -307,11 +321,22 @@ def _subir_linea(meal, canon, piso, index, db, margen) -> Optional[str]:
         return None                      # sin gramos legibles no se toca; y nunca se baja
     mac = db.macros_from_ingredient_string(f"{piso - g_cur:.0f} g de {canon}") or {}
     dk, dg = float(mac.get("kcal") or 0), float(mac.get("fats") or 0)
-    if dk <= 0 or dk > margen["kcal"] or dg > margen["grasa"]:
+    objetivo = piso
+    if dk > 0 and (dk > margen["kcal"] or dg > margen["grasa"]):
+        # [P1-PLAN-LOTE-178] lo que quepa, si con eso el plato sale de las migajas (≥ la mitad del piso): «5 g de aguacate»
+        # → 30 g cuando no caben los 60. tooltip-anchor: P1-PLAN-LOTE-178-SUBIDA-PARCIAL
+        frac = min(margen["kcal"] / dk, (margen["grasa"] / dg) if dg > 0 else 1.0)
+        objetivo = int(g_cur + (piso - g_cur) * max(0.0, frac))
+        if objetivo >= piso * 0.5 and objetivo > g_cur + 1:
+            mac = db.macros_from_ingredient_string(f"{objetivo - g_cur:.0f} g de {canon}") or {}
+            dk, dg = float(mac.get("kcal") or 0), float(mac.get("fats") or 0)
+        else:
+            dk = -1.0
+    if dk <= 0 or dk > margen["kcal"] + 0.5 or dg > margen["grasa"] + 0.05:
         logger.info(f"🧩 [P1-PLAN-LOTE-49] «{str(meal.get('name'))[:40]}»: {canon} en {g_cur:.0f} g (piso {piso}) y el día "
-                    f"no tiene sitio (+{dk:.0f} kcal / +{dg:.1f} g de grasa; quedan {margen['kcal']:.0f} y {margen['grasa']:.1f})")
+                    f"no tiene sitio (quedan {margen['kcal']:.0f} kcal y {margen['grasa']:.1f} g de grasa)")
         return None
-    linea = f"{piso} g de {canon}"
+    linea = f"{objetivo} g de {canon}"
     # Por ALIMENTO, nunca por índice (la familia `raw[idx]`): se sustituye la línea de `canon` —ya se comprobó que es una.
     from recipe_contract import _cantidades_lista
 
@@ -326,7 +351,7 @@ def _subir_linea(meal, canon, piso, index, db, margen) -> Optional[str]:
         raw.append(linea)
     margen["kcal"] -= dk
     margen["grasa"] -= dg
-    return f"↑{g_cur:.0f}→{piso} g de {canon}"
+    return f"↑{g_cur:.0f}→{objetivo} g de {canon}"
 
 
 # ─────────────── [P1-PLAN-LOTE-174 · 2026-09-23] lo pobre de los platos del MODELO, también hasta el final ───────────────
@@ -343,6 +368,10 @@ _PISO_POR_PALABRA = (
     ("avena", 30), ("quinoa", 30), ("harina", 25), ("casabe", 20), ("pan", 30), ("arroz", 40), ("pasta", 40),
     ("espagueti", 40), ("bulgur", 30), ("cebada", 30),
     ("queso", 20), ("ricotta", 30), ("cottage", 40), ("yogur", 80), ("leche", 100),
+    # [P1-PLAN-LOTE-178] frutas secas y la granada se sirven en puñado o cucharada, no en ración de fruta fresca (60 g)
+    ("datil", 20), ("pasa", 15), ("ciruela pasa", 20), ("arandano seco", 15), ("granada", 30),
+    # el aguacate de acompañante va en láminas (¼ de aguacate ≈ 30-40 g), y un níspero pesa unos 30 g
+    ("aguacate", 30), ("nispero", 30),
 )
 _PISO_POR_CATEGORIA = {"proteinas": 60, "viveres": 60, "frutas": 60, "vegetales": 30, "lacteos": 20}
 
@@ -357,7 +386,7 @@ def _piso_de(canon: str, db) -> int:
     n = _sa(canon)
     # La CABEZA del alimento decide si es hierba/condimento: «almendras tostadas sin sal» no es sal.
     _cab = (_palabras_del_alimento(canon) or [""])[0]
-    if _SIN_PISO.search(_cab):
+    if _SIN_PISO.search(_cab) or re.search(r"\bjugo\s+de\s+(?:limon|lima)\b", n):   # [P1-PLAN-LOTE-178] el jugo de limón aliña
         return 0
     for w, g in _PISO_POR_PALABRA:
         if re.search(rf"\b{w}", n):
@@ -592,4 +621,144 @@ def restaurar_identidad(days, *, db=None, index=None, allergies=None, objetivos=
                     tocados += 1
                     logger.info(f"🧩 [P1-PLAN-LOTE-46] identidad del plato restaurada en «{str(m.get('name'))[:48]}»: "
                                 f"{', '.join(hechos)}")
+        if margen is not None and compensar_on():
+            try:
+                tocados += compensar_dia(meals, index, db, allergies, objetivos=objetivos)
+            except Exception as e:                                             # noqa: BLE001
+                logger.debug(f"[P1-PLAN-LOTE-178] compensación no-op: {e!r}")
     return tocados
+
+
+# ─────────────── [P1-PLAN-LOTE-178 · 2026-09-23] la migaja se paga dentro del día ───────────────
+# Métrica sobre 16 planes reales (rd6-rd8): 20 ingredientes que dan nombre al plato seguían por debajo de la MITAD de su
+# piso («5 g de aguacate» en un «Revoltillo… con aguacate», «½ cdta de mantequilla de maní», «20 g de mandarina») porque el
+# día ya estaba en su techo. Subir el techo cambia migajas por imprecisión. Aquí la migaja sube y lo paga, en el MISMO día,
+# lo que ningún nombre menciona y es del mismo macro dominante (grasa con grasa: el aceite, el aguacate que el plato no
+# nombra; carbohidrato con carbohidrato): el total del día no se mueve. Un donante no baja de `_DONANTE_MIN` de lo que
+# tenía; si los donantes no pagan ni la mitad del piso, la migaja se queda (y la métrica la sigue viendo).
+# Knob `MEALFIT_DISH_IDENTITY_COMPENSATE` (True). tooltip-anchor: P1-PLAN-LOTE-178-COMPENSAR
+_DONANTE_MIN = 0.6
+_DONANTES_CONDIMENTO = frozenset({"aceite", "salsa"})     # sin piso de identidad, pero con macros que pagar
+
+
+def compensar_on() -> bool:
+    try:
+        from knobs import _env_bool
+        return llm_on() and _env_bool("MEALFIT_DISH_IDENTITY_COMPENSATE", True)
+    except Exception:                                                          # noqa: BLE001
+        return llm_on()
+
+
+def _dominante(mac) -> str:
+    kc = {"protein": 4 * float((mac or {}).get("protein") or 0), "carbs": 4 * float((mac or {}).get("carbs") or 0),
+          "fats": 9 * float((mac or {}).get("fats") or 0)}
+    return max(kc, key=kc.get) if any(v > 0 for v in kc.values()) else ""
+
+
+def _delta(meal, vieja, nueva, db) -> None:
+    """Suma a los macros del plato sólo lo que cambia entre dos líneas. No re-mide el plato entero: el nivelado de kcal
+    ajusta los NÚMEROS del plato sin tocar sus líneas, y re-medirlo desde ellas movía el día (medido: hasta +5 %)."""
+    mo = db.macros_from_ingredient_string(vieja) or {}
+    mn = db.macros_from_ingredient_string(nueva) or {}
+    for k in ("protein", "carbs", "fats"):
+        meal[k] = max(0, round(_num(meal.get(k)) + float(mn.get(k) or 0) - float(mo.get(k) or 0)))
+    kc = "cals" if "cals" in meal or "calories" not in meal else "calories"
+    meal[kc] = max(0, round(_num(meal.get(kc)) + float(mn.get("kcal") or 0) - float(mo.get("kcal") or 0)))
+    meal["macros"] = [f"P:{meal['protein']}g", f"C:{meal['carbs']}g", f"G:{meal['fats']}g"]
+
+
+def _totales(meals) -> tuple:
+    return (sum(_num(m.get("cals") or m.get("calories")) for m in meals), sum(_num(m.get("fats")) for m in meals))
+
+
+def compensar_dia(meals, index, db, allergies=None, objetivos=None) -> int:
+    """Devuelve cuántas migajas subió. Muta las comidas del día (lista, compra y macros re-medidos). Cada compensación se
+    revierte si el día termina por encima de lo que tenía Y de su techo (re-medir un plato desde sus líneas puede moverlo):
+    la migaja no se paga con precisión."""
+    if db is None or not meals:
+        return 0
+    import copy
+    t_k, t_g = _techos()
+    tope_k = float((objetivos or {}).get("kcal") or 0) * t_k
+    tope_g = float((objetivos or {}).get("grasa") or 0) * t_g
+    from recipe_contract import _cantidades_lista
+    from nutrition_db import rescale_ingredient_string as _resc, quantize_ingredient_string as _quant
+    import graph_orchestrator as go
+    cands = []
+    for m in meals:
+        if m.get("_recipe_source") == "library" or m.get("_sodium_autofix_applied"):
+            continue
+        for linea in list(m.get("ingredients") or []):
+            if not isinstance(linea, str) or not nombrada_en_el_nombre(m, linea):
+                continue
+            claves = list(_cantidades_lista([linea], index))
+            if len(claves) != 1:
+                continue
+            canon = str(claves[0][0])
+            if _choca_alergia(canon, allergies):
+                continue
+            piso = _piso_de(canon, db)
+            try:
+                g = float(db.grams_from_ingredient_string(linea) or 0)
+            except Exception:                                                  # noqa: BLE001
+                g = 0.0
+            if piso and 0 < g < piso * 0.5:
+                cands.append((g / piso, id(m), m, canon, piso, g, linea))
+    cands.sort(key=lambda x: (x[0], x[1]))
+    subidas = 0
+    for _r, _i, m, canon, piso, g, vieja in cands:
+        mac = db.macros_from_ingredient_string(f"{piso - g:.0f} g de {canon}") or {}
+        dk, grupo = float(mac.get("kcal") or 0), _dominante(mac)
+        if dk <= 0 or not grupo:
+            continue
+        donantes = []
+        for m2 in meals:
+            for l2 in list(m2.get("ingredients") or []):
+                if not isinstance(l2, str) or protege_linea(m2, l2) or nombrada_en_el_nombre(m2, l2):
+                    continue
+                _cab2 = (_palabras_del_alimento(l2) or [""])[0]
+                if _SIN_PISO.search(_cab2) and _cab2 not in _DONANTES_CONDIMENTO:   # hierbas no donan; el aceite sí
+                    continue
+                mac2 = db.macros_from_ingredient_string(l2) or {}
+                k2 = float(mac2.get("kcal") or 0)
+                if k2 > 0 and _dominante(mac2) == grupo:
+                    donantes.append((m2, l2, k2))
+        total = sum(k2 for _m2, _l2, k2 in donantes)
+        libre = total * (1.0 - _DONANTE_MIN)
+        objetivo = piso if libre >= dk else int(g + (piso - g) * (libre / dk))
+        if objetivo < piso * 0.5 or objetivo <= g + 1:
+            continue
+        mac = db.macros_from_ingredient_string(f"{objetivo - g:.0f} g de {canon}") or {}
+        dk = float(mac.get("kcal") or 0)
+        factor = max(_DONANTE_MIN, 1.0 - dk / total)
+        foto, (k0, g0) = [copy.deepcopy(x) for x in meals], _totales(meals)
+        for m2, l2, _k2 in donantes:
+            ings2 = m2.get("ingredients") or []
+            if l2 not in ings2:
+                continue
+            nueva, fq = _quant(_resc(l2, factor))
+            if nueva == l2:
+                continue
+            idx2 = ings2.index(l2)
+            ings2[idx2] = nueva
+            try:
+                go._sync_one_raw_line(m2, idx2, l2, factor * fq)
+            except Exception:                                                  # noqa: BLE001
+                pass
+            m2.pop("_display", None)
+            _delta(m2, l2, nueva, db)
+        sub = _subir_linea(m, canon, objetivo, index, db, {"kcal": dk + 1.0, "grasa": 1e9})
+        if sub:
+            m.pop("_display", None)
+            _delta(m, vieja, f"{objetivo} g de {canon}", db)
+        k1, g1 = _totales(meals)
+        if not sub or (tope_k and k1 > max(k0, tope_k) + 1) or (tope_g and g1 > max(g0, tope_g) + 0.5):
+            for x, f in zip(meals, foto):
+                x.clear()
+                x.update(f)
+            continue
+        m["_identidad_restaurada"] = list(m.get("_identidad_restaurada") or []) + [sub + " (compensado)"]
+        subidas += 1
+        logger.info(f"🧩 [P1-PLAN-LOTE-178] «{str(m.get('name'))[:40]}»: {sub}, pagado con {len(donantes)} "
+                    f"ingrediente(s) sin nombre del mismo macro ({grupo})")
+    return subidas

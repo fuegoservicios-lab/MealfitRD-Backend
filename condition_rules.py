@@ -92,7 +92,10 @@ _DM2_GLYCEMIC_SUBS = (
     (("arroz blanco", "arroz pulido"), "Arroz integral", "arroz blanco refinado (IG alto)", True),
     (("pan blanco", "pan rallado", "pan de molde blanco", "pan de agua"), "Pan integral", "pan blanco/refinado (IG alto)", True),
     (("tortilla de trigo", "tortilla de harina"), "Pan integral", "tortilla de trigo refinada (IG alto)", True),
-    (("harina de trigo refinada", "harina blanca de trigo"), "Avena", "harina refinada (IG alto)", True),
+    # [P1-PLAN-LOTE-178] + «harina de trigo» a secas: el revisor la marcó («harina de trigo refinada (15 g)») en unos
+    # panqueques de avena de un plan DM2 real. El motor compara por subcadena y las negativas son de la regla entera, así
+    # que la integral también pasa a avena: a sabiendas, en DM2 la avena es la base preferida.
+    (("harina de trigo refinada", "harina blanca de trigo", "harina de trigo"), "Avena", "harina refinada (IG alto)", True),
     # [P1-PLAN-LOTE-173 · 2026-09-23] Cundeamor (melón amargo) en DM2: el revisor lo rechazó CRÍTICO en la batería real
     # («125 g de cundeamor … efectos hipoglucemiantes aditivos» con metformina). Mismo reemplazo que en embarazo: tayota.
     (("cundeamor", "melon amargo", "melón amargo", "bitter melon"), "Tayota",

@@ -71,7 +71,9 @@ def test_queso_crema_batido_NO_se_toca():
 
 def test_la_redundancia_de_palabras_NO_se_toca():
     """Decision explicita: «pescado blanco … Arroz Blanco» son dos alimentos distintos."""
-    assert _fix("Croquetas de Filete de pescado blanco al Horno con Arroz Blanco") is None
+    # [P1-PLAN-LOTE-178] La caja sí se normaliza: en un título en Title Case, lo que un swap metió en minúscula
+    # («Filete de pescado blanco» es el nombre del catálogo) sube. La redundancia sigue intacta: las dos «Blanco».
+    assert _fix("Croquetas de Filete de pescado blanco al Horno con Arroz Blanco") ==         "Croquetas de Filete de Pescado Blanco al Horno con Arroz Blanco"
     assert _fix("Salteado de Berro Salteado con Queso Mozzarella y Limón") is None
 
 

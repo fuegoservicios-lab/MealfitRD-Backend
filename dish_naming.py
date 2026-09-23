@@ -125,6 +125,7 @@ _ALIMENTO_COMUN = _NAME_FEM_FOODS | _NAME_MASC_FOODS | {
     "mapuey", "platanos", "guineos", "mangos", "aguacates", "semillas", "quinoa", "cebada", "molondrones",
 }
 _PROSA_ADJ = ("fresc", "madur", "jugos", "cremos", "picad", "tostad", "asad", "hornead", "cortad", "rallad", "cocid")
+_PREPOSICIONES = {"para", "por", "sobre", "entre", "hasta", "desde", "sin", "con", "tras", "bajo", "ante", "contra"}
 
 
 def _sa(s: str) -> str:
@@ -202,6 +203,15 @@ def pulir_nombre(name):
                 if (len(core) >= 3 and core[:1].isupper() and core[1:].islower()
                         and _sa(core) in _ALIMENTO_COMUN):
                     out[i] = out[i].replace(core, core[:1].lower() + core[1:], 1)
+        elif sig and sum(1 for w in sig if w[:1].isupper()) * 2 > len(sig):
+            # [P1-PLAN-LOTE-178] el espejo: en un título en Title Case, lo que un swap metió en minúscula sube
+            # («…Chinola y Yogurt natural Entero», «Bowl Fresco de Arroz integral y Habichuelas…»). Las preposiciones
+            # siguen en minúscula. tooltip-anchor: P1-PLAN-LOTE-178-TITLE-CASE
+            for i in range(1, len(out)):
+                core = out[i].strip(",.;:()")
+                if (len(core) >= 3 and core[:1].islower() and core.isalpha()
+                        and core.lower() not in _NAME_STOPWORDS and core.lower() not in _PREPOSICIONES):
+                    out[i] = out[i].replace(core, core[:1].upper() + core[1:], 1)
         res = " ".join(out)
         return res if res != name else None
     except Exception:
