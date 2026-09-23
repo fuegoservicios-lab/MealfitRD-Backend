@@ -18,7 +18,19 @@ es TECHO (OMS <2000 mg), el resto SUELO.
 """
 from __future__ import annotations
 
+import logging
 from typing import Any, Optional
+
+from knobs import _env_float
+
+logger = logging.getLogger(__name__)
+
+
+def _ratio_max() -> float:
+    """[P1-DIARY-MICROS-PLAUSIBLE · 2026-09-23] Cuántas veces pueden superar las kcal de los renglones resueltos a las
+    kcal guardadas de la comida antes de descartar sus micros. Clamp [1.05, 10]."""
+    return _env_float("MEALFIT_DIARY_MICROS_KCAL_RATIO_MAX", 1.5, validator=lambda v: 1.05 <= v <= 10.0)
+
 
 # Orden de pantalla. Clave del contador → clave del dict que devuelve `micros_from_ingredient_string`.
 MICROS_CONTADOR: tuple[tuple[str, str], ...] = (
@@ -46,6 +58,8 @@ def micros_de_ingredientes(ingredients: Any, db) -> Optional[dict]:
     acc = {k: 0.0 for k in CLAVES}
     resolved = 0
     total = 0
+    kcal = 0.0
+    con_macros = hasattr(db, "macros_from_ingredient_string")
     for ing in ingredients:
         if not isinstance(ing, str) or not ing.strip():
             continue
@@ -57,13 +71,45 @@ def micros_de_ingredientes(ingredients: Any, db) -> Optional[dict]:
         if not m:
             continue
         resolved += 1
+        if con_macros:
+            try:
+                mac = db.macros_from_ingredient_string(ing)
+                if mac and mac.get("kcal") is not None:
+                    kcal += float(mac["kcal"])
+            except Exception:
+                pass
         for clave, src in MICROS_CONTADOR:
             v = m.get(src)
             if v is not None:
                 acc[clave] += float(v)
     if total == 0:
         return None
-    return {"values": {k: round(v, 1) for k, v in acc.items()}, "resolved": resolved, "total": total}
+    out = {"values": {k: round(v, 1) for k, v in acc.items()}, "resolved": resolved, "total": total}
+    if con_macros:
+        out["kcal"] = round(kcal, 1)
+    return out
+
+
+def micros_plausibles(micros: Optional[dict], kcal_comida) -> Optional[dict]:
+    """[P1-DIARY-MICROS-PLAUSIBLE · 2026-09-23] Descarta los micros de UNA comida cuando sus renglones resueltos pesan
+    más energía de la que la comida dice tener. Caso real: «8 rodajas de plátano maduro hervido» = 8 plátanos
+    enteros (2.240 g, ~3.000 kcal) dentro de un almuerzo de 695 kcal ⇒ potasio 9,8 g en la tarjeta. Sin kcal de la
+    comida o sin kcal resueltas no se juzga (no hay con qué comparar). `None` = «sin datos», que la cobertura ya
+    cuenta honestamente («con datos de 1 de 2 comidas»)."""
+    if not micros:
+        return micros
+    try:
+        kcal_res = float(micros.get("kcal") or 0.0)
+        kcal_m = float(kcal_comida or 0.0)
+    except (TypeError, ValueError):
+        return micros
+    if kcal_m <= 0 or kcal_res <= 0:
+        return micros
+    if kcal_res > _ratio_max() * kcal_m:
+        logger.warning(
+            f"[P1-DIARY-MICROS-PLAUSIBLE] micros descartados: renglones {kcal_res:.0f} kcal vs comida {kcal_m:.0f} kcal")
+        return None
+    return micros
 
 
 def resumen_micros(meals: list[dict]) -> dict:

@@ -1174,7 +1174,7 @@ def log_consumed_meal(user_id: str, meal_name: str, calories: int, protein: int,
     Registra una comida que el usuario afirma haber consumido realmente en su diario de consumo ("fuera del plan").
     Úsala SOLO cuando el usuario confirme que se ha comido lo que le analizaste o subió en la foto, o cuando explícitamente diga que comió algo.
     Incluye carbohidratos y grasas saludables si están disponibles.
-    NUEVO IMPORTANTE: Si sabes o puedes inferir los ingredientes exactos (ej. ["2 huevos", "1 pan", "100g queso"]), envíalos en la lista 'ingredients' para un registro más detallado.
+    NUEVO IMPORTANTE: Si sabes o puedes inferir los ingredientes exactos (ej. ["2 huevos", "1 pan", "100g queso"]), envíalos en la lista 'ingredients' para un registro más detallado. Cada renglón con cantidad Y peso aproximado en gramos entre paréntesis, p. ej. "8 rodajas de plátano maduro (≈180 g)": sin el peso, "rodajas"/"lascas"/"trozos" se cuentan como piezas enteras.
     - meal_type: 'desayuno' | 'almuerzo' | 'cena' | 'merienda' | 'snack'. Dedúcelo de lo que diga el usuario o de la hora.
     - days_ago: 0 = hoy (default), 1 = ayer, 2 = antier. ÚSALO cuando el usuario diga que la comió OTRO día (ej. "es el almuerzo de ayer" → days_ago=1, meal_type='almuerzo') para que NO contamine las macros de hoy. Máximo 7 días atrás; el diario nunca registra a futuro.
     - Si ya existe una comida principal del MISMO tipo ese día, la tool NO inserta y te lo informa: pregúntale al usuario si de verdad quiere registrar dos (repite con force=true SOLO si él confirma) o si prefiere corregir.

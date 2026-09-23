@@ -1458,11 +1458,13 @@ def api_get_consumed_today(user_id: str, date: Optional[str] = None, tzOffset: O
         # al cliente: son la materia prima, no la respuesta. Fail-open: si el catálogo no carga, el diario sigue.
         _resumen = {"micros": None, "micros_coverage": {"con_datos": 0, "total": len(meals)}}
         try:
-            from diary_micros import micros_de_ingredientes, resumen_micros
+            from diary_micros import micros_de_ingredientes, micros_plausibles, resumen_micros
             from nutrition_db import IngredientNutritionDB
             _ndb = IngredientNutritionDB()
             for m in meals:
                 m["micros"] = micros_de_ingredientes(m.pop("ingredients", None), _ndb)
+                # [P1-DIARY-MICROS-PLAUSIBLE · 2026-09-23] renglones que pesan más energía que la comida ⇒ sin micros
+                m["micros"] = micros_plausibles(m["micros"], m.get("calories"))
             _resumen = resumen_micros(meals)
         except Exception as _e:
             logger.warning(f"[P1-PLAN-LOTE-103] micros del día no calculados: {_e}")
