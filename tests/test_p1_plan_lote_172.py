@@ -240,7 +240,8 @@ def test_embarazo_el_plan_dice_la_especie_del_pescado_y_que_el_queso_es_pasteuri
     assert e.etiquetar(otro, {"medicalConditions": ["Ninguna"]}) == 0, "sin embarazo no se toca nada"
     import graph_orchestrator as g
     import inspect
-    assert "embarazo_seguro" in inspect.getsource(g._apply_condition_substitutions)
+    # [P1-PLAN-LOTE-173] la puerta es ahora `etiquetas_clinicas` (embarazo + HTA), que delega en `embarazo_seguro`.
+    assert "etiquetas_clinicas" in inspect.getsource(g._apply_condition_substitutions)
 
 
 def test_el_cerrador_de_proteina_respeta_lo_que_no_le_gusta():

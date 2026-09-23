@@ -341,7 +341,10 @@ _PROCESS_START_ISO = datetime.now(timezone.utc).isoformat()
 # empate del cuantizador; peso fingido en el pulido). Además: el tiempo de cocina viaja en claro y el planificador sólo
 # elige técnicas que caben en él; el alimento que da nombre al plato no baja a migajas (solver y recortes); embarazo con
 # especie del pescado y queso pasteurizado; el cerrador de proteína respeta los rechazos; descripciones honestas.
-_LAST_KNOWN_PFIX = "P1-PLAN-LOTE-172 · 2026-09-23"
+# [P1-PLAN-LOTE-173 · 2026-09-23] (solo backend) segunda vuelta de la batería real: etiquetas clínicas al final del escudo
+# (embarazo: leche y pasos; HTA: «bajo en sodio»), el plan de emergencia con lista de compras, pechuga de pavo fresca en
+# gramos (no «lonjas» de embutido), HTA/DM2 más explícitos en el prompt y cundeamor → tayota en DM2.
+_LAST_KNOWN_PFIX = "P1-PLAN-LOTE-173 · 2026-09-23"
 
 # [P1-SENTRY-SAMPLE-COST · 2026-05-12] Sentry sampling driven from env vars
 # con default seguro 0.1 (10%). Pre-fix tenía `traces_sample_rate=1.0` y

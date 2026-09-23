@@ -13738,7 +13738,7 @@ def _apply_condition_substitutions(plan: dict, form_data: dict) -> int:
         if "dm2" in conds:
             meal["_dm2_sugar_fixed"] = uniq  # flag de compatibilidad hacia atrás
 
-    return _apply_substitutions_core(plan, subs, _note, "Ajuste clínico", _flags) + __import__("embarazo_seguro").etiquetar(plan, form_data)  # [P1-PLAN-LOTE-172]
+    return _apply_substitutions_core(plan, subs, _note, "Ajuste clínico", _flags) + __import__("etiquetas_clinicas").etiquetar(plan, form_data)  # [P1-PLAN-LOTE-172/173]
 
 
 # [P1-DIET-SUBSTITUTION · 2026-09-05] Sustitutos vegetales por categoría de producto animal. Mismo motor que las
@@ -18920,8 +18920,7 @@ _PRECOOKED_PROTEIN_HINT = ("en lata", "enlatad", "atun en agua", "atun en aceite
 # HIERVE — no se hace a la plancha — y en un plato dominicano es acompañante, no "la proteína del plato".
 # Para legumbres (no pre-cocidas ni enlatadas) → wording de cocción EN AGUA. Rollback: =false. tooltip-anchor: P1-CLOSER-LEGUME-WORDING
 PROTEIN_STEP_LEGUME_WORDING = _env_bool("MEALFIT_PROTEIN_STEP_LEGUME_WORDING", True)
-_LEGUME_PROTEIN_HINT = ("guisante", "arveja", "chicharo", "lenteja", "garbanzo", "habichuela",
-                        "frijol", "gandul", "guandul", "edamame", "soya", "haba")  # [P1-PLAN-LOTE-172] habas con fruta en 3 meriendas
+_LEGUME_PROTEIN_HINT = ("guisante", "arveja", "chicharo", "lenteja", "garbanzo", "habichuela", "frijol", "gandul", "guandul", "edamame", "soya", "haba")  # [P1-PLAN-LOTE-172] habas
 
 
 # [P2-CLOSER-STEP-STEW-WORDING · 2026-07-24] Marcadores de plato de OLLA. En un guiso la
@@ -52007,6 +52006,7 @@ async def arun_plan_pipeline(form_data: dict, history: list = None, taste_profil
             actual_form_data=actual_form_data,
             requested_days=requested_days,
         )
+        if (final_state.get("plan_result") or {}).get("_is_fallback") and not (final_state.get("plan_result") or {}).get("aggregated_shopping_list"): await asyncio.gather(_recompute_aggregates_after_swap(final_state), return_exceptions=True)  # [P1-PLAN-LOTE-173] el plan de emergencia salía SIN lista de compras
 
         # GAP 4 / P1-A5 / [P1-1]: Score holístico + persistencia async.
         # ANTES, esta llamada ocurría ANTES de los dos guardrails de arriba: si el

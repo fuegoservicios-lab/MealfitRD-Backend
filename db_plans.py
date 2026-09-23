@@ -1558,6 +1558,15 @@ def _finalize_plan_data_for_insert(data: dict, *, surface: str = "pre-INSERT",
                 except Exception as _rmr_e:
                     logger.debug(f"[P1-MICRO-PANEL-POST-FINALIZE] pre-INSERT no-op: "
                                  f"{type(_rmr_e).__name__}: {_rmr_e}")
+                # [P1-PLAN-LOTE-173 · 2026-09-23] Las etiquetas clínicas (embarazo: especie y pasteurizado; HTA: «bajo en
+                # sodio») también AL FINAL: los cerradores añaden alimentos después de la sustitución clínica, y este
+                # escudo es a la vez la cola de assemble ANTES del revisor. Batería real: el cottage del cerrador salía
+                # sin «pasteurizado» y el revisor rechazaba CRÍTICO el primer intento de un plan de embarazo.
+                try:
+                    import etiquetas_clinicas as _etq
+                    _etq.etiquetar(_pd, _clin_ctx)
+                except Exception as _etq_e:
+                    logger.debug(f"[P1-PLAN-LOTE-173] etiquetas clínicas pre-INSERT no-op: {type(_etq_e).__name__}: {_etq_e}")
         except Exception as _fce:
             logger.warning(f"[P1-COHERENCE-FINALIZE] {surface} no-op: {type(_fce).__name__}: {_fce}")
 

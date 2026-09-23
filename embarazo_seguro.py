@@ -12,8 +12,11 @@ rechaza.
 Este pase escribe lo que el plan ya debía decir, sin cambiar el plato:
   · pescado genérico («pescado», «pescado blanco», «filete(s) de pescado [blanco]») → tilapia, especie baja en mercurio
     que el catálogo resuelve («Tilapia», alias «filete de tilapia»), en `ingredients` y en `ingredients_raw` (la compra);
-    y en el nombre del plato. Los pasos no se tocan: la lista ya identifica la especie.
+    y en el nombre del plato. Los pasos no cambian de pescado: la lista ya identifica la especie.
   · queso fresco/blando sin la palabra «pasteurizado» → se le añade. Los quesos curados/duros no la necesitan.
+  · [P1-PLAN-LOTE-173] también la LECHE de origen animal, y el queso en los PASOS (el revisor leía «desmenuza el queso
+    blanco fresco» en la receta aunque la lista dijera «pasteurizado»). Lo llama `etiquetas_clinicas.etiquetar`, al
+    sustituir por condición y AL FINAL del escudo: el cerrador de proteína añade el cottage después de la sustitución.
 
 Sólo con la regla `pregnancy` activa (`condition_rules.detect_active_rules`). Idempotente. Knob
 `MEALFIT_PREGNANCY_LABELS` (True). tooltip-anchor: P1-PLAN-LOTE-172-EMBARAZO-ETIQUETAS
@@ -35,7 +38,9 @@ _ADJ_FEM = {"dorado": "dorada", "horneado": "horneada", "asado": "asada", "guisa
             "gratinado": "gratinada", "desmenuzado": "desmenuzada", "cocido": "cocida", "tierno": "tierna",
             "jugoso": "jugosa", "criollo": "criolla", "blanco": "blanca", "fresco": "fresca", "ligero": "ligera"}
 _QUESO_FRESCO = re.compile(r"\b(?:queso(?!\s+(?:cheddar|parmesano|gouda|provolone|edam|de\s+papa|de\s+bola|amarillo|"
-                           r"suizo|manchego|curado|azul))|ricotta|cottage|reques[oó]n|mozzarella)\b[^,;()]*", re.IGNORECASE)
+                           r"suizo|manchego|curado|azul))|ricotta|cottage|reques[oó]n|mozzarella|"
+                           # [P1-PLAN-LOTE-173] el yogur también: el revisor lo pidió a una madre lactante
+                           r"yogur(?:t)?(?!\s+de\s+(?:coco|soya|soja|almendras?)))\b[^,;()]*", re.IGNORECASE)
 
 
 def enabled() -> bool:
@@ -54,10 +59,15 @@ def aplica(form_data) -> bool:
         return False
 
 
+# [P1-PLAN-LOTE-173] El mero (FDA «buena elección», una ración a la semana) junto al atún se lo rechazó CRÍTICO el revisor
+# a una madre lactante («mero o tilapia» + 175 g de atún). En embarazo/lactancia el pescado blanco es tilapia.
+_MERO = re.compile(r"\bmero(?:\s+o\s+tilapia)?\b|\btilapia\s+o\s+mero\b", re.IGNORECASE)
+
+
 def _linea_pescado(s: str) -> str:
     def _sub(m):
         return (m.group(1) or "") + "tilapia"
-    return _PESCADO_LINEA.sub(_sub, s)
+    return _MERO.sub("tilapia", _PESCADO_LINEA.sub(_sub, s))
 
 
 def _nombre_pescado(nombre: str) -> str:
@@ -84,7 +94,39 @@ def _linea_queso(s: str) -> str:
     fin = m.end()
     while fin > m.start() and s[fin - 1] == " ":
         fin -= 1
-    return s[:fin] + " pasteurizado" + s[fin:]
+    return s[:fin] + _concuerda(m.group(0)) + s[fin:]
+
+
+# [P1-PLAN-LOTE-173] La leche de origen animal también (el revisor: «no se especifica que la leche ni el queso sean
+# pasteurizados»). Las bebidas vegetales, la evaporada, la condensada y la de polvo no la necesitan.
+_LECHE_LINEA = re.compile(r"\bleche\b(?!\s+(?:de\s+(?:coco|almendras?|soya|soja|avena|arroz|cabra)\b|evaporada|condensada|"
+                          r"en\s+polvo|materna))[^,;()]*", re.IGNORECASE)
+
+
+def _linea_leche(s: str) -> str:
+    if "pasteuriz" in s.lower():
+        return s
+    m = _LECHE_LINEA.search(s)
+    if not m:
+        return s
+    fin = m.end()
+    while fin > m.start() and s[fin - 1] == " ":
+        fin -= 1
+    return s[:fin] + " pasteurizada" + s[fin:]
+
+
+# [P1-PLAN-LOTE-173] En los PASOS, sólo la frase del alimento (sin arrastrar el resto de la oración) y en cada mención
+# que aún no lo diga: el revisor leía «desmenuza el queso blanco fresco» en la receta aunque la lista dijera «pasteurizado».
+_QUESO_PASO = re.compile(r"\b(queso\s+blanco\s+fresco|queso\s+(?:blanco|fresco|de\s+hoja|cottage|ricotta|crema|mozzarella)|"
+                         r"ricotta|cottage|reques[oó]n)\b(?!\s+(?:fresco\s+)?pasteuriz)", re.IGNORECASE)
+
+
+def _concuerda(frase: str) -> str:
+    return " pasteurizada" if frase.strip().lower().startswith("ricotta") else " pasteurizado"
+
+
+def _paso_queso(s: str) -> str:
+    return _QUESO_PASO.sub(lambda m: m.group(1) + _concuerda(m.group(1)), s)
 
 
 def etiquetar(plan: dict, form_data) -> int:
@@ -101,9 +143,15 @@ def etiquetar(plan: dict, form_data) -> int:
                 lineas = m.get(campo)
                 if not isinstance(lineas, list):
                     continue
-                nuevas = [(_linea_queso(_linea_pescado(x)) if isinstance(x, str) else x) for x in lineas]
+                nuevas = [(_linea_leche(_linea_queso(_linea_pescado(x))) if isinstance(x, str) else x) for x in lineas]
                 if nuevas != lineas:
                     m[campo] = nuevas
+                    cambio = True
+            pasos = m.get("recipe")
+            if isinstance(pasos, list):
+                nuevos = [(_paso_queso(p) if isinstance(p, str) else p) for p in pasos]
+                if nuevos != pasos:
+                    m["recipe"] = nuevos
                     cambio = True
             nombre = m.get("name")
             if isinstance(nombre, str):

@@ -94,7 +94,10 @@ DOMINICAN_HOUSEHOLD_MEASURES = {
     "queso blanco fresco": {"weight": 25.0, "singular": "lonja de queso blanco fresco", "plural": "lonjas de queso blanco fresco"},
     "queso ricotta": {"weight": 15.0, "singular": "cda de queso ricotta", "plural": "cdas de queso ricotta"},
     "jamon": {"weight": 20.0, "singular": "lonja de jamón", "plural": "lonjas de jamón"},
-    "pechuga de pavo": {"weight": 20.0, "singular": "lonja de pechuga de pavo", "plural": "lonjas de pechuga de pavo"}
+    # [P1-PLAN-LOTE-173 · 2026-09-23] Aquí vivía «pechuga de pavo» → «lonja» de 20 g: la presentación del EMBUTIDO. El
+    # catálogo «Pechuga de pavo» es la pechuga FRESCA (USDA, cruda; el embutido es «Jamón de pavo»), así que «195 g de
+    # pechuga de pavo» se leía «9¾ lonjas» y el revisor médico lo rechazó CRÍTICO en un plan de hipertensión como un
+    # embutido alto en sodio. Sin entrada, la pechuga de pavo queda en gramos. tooltip-anchor: P1-PLAN-LOTE-173-PAVO
 }
 
 # [P1-COUNTRY-SYSTEM-F2 · Task 8 · 2026-08-17] Auditoría "medidas caseras por país": corrida de

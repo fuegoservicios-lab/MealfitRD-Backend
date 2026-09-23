@@ -93,6 +93,10 @@ _DM2_GLYCEMIC_SUBS = (
     (("pan blanco", "pan rallado", "pan de molde blanco", "pan de agua"), "Pan integral", "pan blanco/refinado (IG alto)", True),
     (("tortilla de trigo", "tortilla de harina"), "Pan integral", "tortilla de trigo refinada (IG alto)", True),
     (("harina de trigo refinada", "harina blanca de trigo"), "Avena", "harina refinada (IG alto)", True),
+    # [P1-PLAN-LOTE-173 · 2026-09-23] Cundeamor (melón amargo) en DM2: el revisor lo rechazó CRÍTICO en la batería real
+    # («125 g de cundeamor … efectos hipoglucemiantes aditivos» con metformina). Mismo reemplazo que en embarazo: tayota.
+    (("cundeamor", "melon amargo", "melón amargo", "bitter melon"), "Tayota",
+     "cundeamor (hipoglucemiante: se suma al antidiabético)", True),
 )
 
 _HTA_SODIUM_SUBS = (
@@ -278,7 +282,10 @@ CONDITION_RULES: tuple = (
             "hipoglucemia severa. Usa otras frutas bajas en índice glucémico (fresa, manzana, cítricos pequeños).\n"
             "   • PROHIBIDAS las bebidas azucaradas y los azúcares añadidos (miel, sirope, dulces); endulza con "
             "fruta o estevia.\n"
-            "   • Combina SIEMPRE el carbohidrato con proteína + grasa saludable + fibra en la misma comida."),
+            "   • Combina SIEMPRE el carbohidrato con proteína + grasa saludable + fibra en la misma comida.\n"
+            # [P1-PLAN-LOTE-173] el revisor rechazó CRÍTICO «pan, cebada y mango» en un mismo desayuno.
+            "   • UNA SOLA fuente principal de almidón por comida: no juntes pan + cereal/víver + fruta dulce en el mismo "
+            "plato; la fruta, entera y en otra comida."),
     ),
     ConditionRule(
         id="hta", label="Hipertensión arterial", terms=HTA_CONDITION_TERMS,
@@ -290,7 +297,11 @@ CONDITION_RULES: tuple = (
             "   • POTASIO/MAGNESIO/CALCIO ALTOS: prioriza vegetales, frutas (guineo, aguacate con moderación), "
             "leguminosas, lácteos bajos en grasa, vegetales de hoja verde.\n"
             "   • Sabor sin sal: ajo, cebolla, orégano, comino, cilantro, limón, vinagre.\n"
-            "   • Evita ultra-procesados y enlatados altos en sodio."),
+            "   • Evita ultra-procesados y enlatados altos en sodio.\n"
+            # [P1-PLAN-LOTE-173] los tres motivos del rechazo CRÍTICO medido en la batería real (queso, pavo, polvo).
+            "   • QUESO medido: máximo ~30 g por comida y no en todas las comidas del día; quesos frescos bajos en sodio.\n"
+            "   • NADA de polvo de hornear ni bicarbonato (sodio oculto): nada de tortitas/panes con levadura química.\n"
+            "   • Pavo y pollo FRESCOS (pechuga a la plancha/horno): nunca pavo en lonjas, jamón de pavo ni ahumados."),
     ),
     ConditionRule(
         id="dyslipidemia", label="Dislipidemia / colesterol alto", terms=DYSLIPIDEMIA_CONDITION_TERMS,
