@@ -354,7 +354,10 @@ _PROCESS_START_ISO = datetime.now(timezone.utc).isoformat()
 # [P1-PLAN-LOTE-176 · 2026-09-23] (solo backend) quinta vuelta: la costura de los swaps de PROTEÍNA («pechuga de pollo bien
 # cocidos», descripción que seguía diciendo «huevo»), DM2 plátano maduro → verde, el alimento que abre el nombre del plato
 # en ración (30 g de berenjena en un «Guiso de berenjena»), el sustituto en la caja del título, «½ porción», «natural natural».
-_LAST_KNOWN_PFIX = "P1-PLAN-LOTE-176 · 2026-09-23"
+# [P1-PLAN-LOTE-177 · 2026-09-23] (solo backend) sexta vuelta: el reequilibrio de macros del día ya no deja en migajas lo que
+# da nombre al plato (5 g de queso en «Pastelitos de mapuey y queso blanco»); las demandas de «marca/envasado/refrigeración»
+# del revisor son aviso, no rechazo; yautía bien cocida en embarazo/lactancia; concordancia tras coma; sustituto determinista.
+_LAST_KNOWN_PFIX = "P1-PLAN-LOTE-177 · 2026-09-23"
 
 # [P1-SENTRY-SAMPLE-COST · 2026-05-12] Sentry sampling driven from env vars
 # con default seguro 0.1 (10%). Pre-fix tenía `traces_sample_rate=1.0` y

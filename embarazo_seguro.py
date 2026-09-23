@@ -177,6 +177,26 @@ def _paso_yuca(meal: dict) -> bool:
     return True
 
 
+# [P1-PLAN-LOTE-177] Yautía/malanga/ñame: el revisor rechazó CRÍTICO a una madre lactante «no se indica que la yautía
+# quede bien cocida» (oxalato de calcio: cruda o a medio cocer irrita). Sirve para cualquier técnica; la harina no cuenta.
+_YAUTIA = re.compile(r"\b(?:yaut[ií]as?|malangas?|ñames?)\b", re.IGNORECASE)
+_YAUTIA_PROCESADA = re.compile(r"\b(?:harina|almid[oó]n)\s+de\s+(?:yaut[ií]a|malanga|ñame)s?\b", re.IGNORECASE)
+_PASO_YAUTIA = ("⚠️ Seguridad alimentaria: cocina la yautía (o malanga, o ñame) hasta que esté completamente blanda por "
+                "dentro; cruda o a medio cocer irrita la boca y la garganta.")
+
+
+def _paso_vianda(meal: dict) -> bool:
+    ings = _YAUTIA_PROCESADA.sub(" ", " ".join(str(x) for x in (meal.get("ingredients") or [])))
+    pasos = meal.get("recipe")
+    if not _YAUTIA.search(ings) or not isinstance(pasos, list):
+        return False
+    texto = " ".join(str(p) for p in pasos).lower()
+    if "completamente blanda" in texto and "yaut" in texto:
+        return False
+    pasos.append(_PASO_YAUTIA)
+    return True
+
+
 def etiquetar(plan: dict, form_data) -> int:
     """Devuelve cuántas comidas tocó. Muta `plan` (display, raw y nombre)."""
     if not (enabled() and isinstance(plan, dict) and aplica(form_data)):
@@ -203,6 +223,8 @@ def etiquetar(plan: dict, form_data) -> int:
                     m["recipe"] = nuevos
                     cambio = True
             if _paso_yuca(m):
+                cambio = True
+            if _paso_vianda(m):
                 cambio = True
             nombre = m.get("name")
             if isinstance(nombre, str):

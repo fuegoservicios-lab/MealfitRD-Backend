@@ -369,6 +369,37 @@ def _piso_de(canon: str, db) -> int:
     return int(_PISO_POR_CATEGORIA.get(cat, 0))
 
 
+# [P1-PLAN-LOTE-177 · 2026-09-23] El reequilibrio de macros del día (`_rebalance_day_macros_to_target`) escalaba con el
+# MISMO factor todas las fuentes de grasa, y en tres pasadas: las líneas en unidades («½ aguacate») se resisten al
+# redondeo y las líneas en gramos absorben el recorte entero. Batería real (familia de 4): «Pastelitos ligeros de mapuey y
+# queso blanco…» acabó con 5 g de queso (tenía 31) y el ½ aguacate que el nombre no menciona, entero; el día siguió 24 %
+# por encima de su grasa. El alimento que da nombre al plato puede bajar, pero no por debajo de su piso de identidad.
+# tooltip-anchor: P1-PLAN-LOTE-177-REEQUILIBRIO-RESPETA-EL-NOMBRE
+def piso_de_linea(linea, db) -> int:
+    """El piso de identidad del alimento de una línea con cantidad («30 g de queso blanco fresco» → 20)."""
+    pal = _palabras_del_alimento(linea)
+    return _piso_de(" ".join(pal) if pal else str(linea or ""), db)
+
+
+def no_bajo_del_piso(orig: str, nueva: str, k: float, db) -> tuple:
+    """`(línea, factor efectivo)`: `nueva` si no baja del piso; la línea AL piso si lo cruzaría; `orig` si ya estaba en
+    él o por debajo (no baja más). Fail-safe: ante la duda, lo que propuso el reequilibrio."""
+    try:
+        g0 = float(db.grams_from_ingredient_string(str(orig)) or 0)
+        g1 = float(db.grams_from_ingredient_string(str(nueva)) or 0)
+        piso = piso_de_linea(orig, db)
+        if not piso or g0 <= 0 or g1 >= piso:
+            return nueva, k
+        if g0 <= piso:
+            return orig, 1.0
+        from nutrition_db import rescale_ingredient_string as _resc, quantize_ingredient_string as _quant
+        f = piso / g0
+        q, fq = _quant(_resc(str(orig), f))
+        return q, f * fq
+    except Exception:                                                          # noqa: BLE001
+        return nueva, k
+
+
 # [P1-PLAN-LOTE-176 · 2026-09-23] El alimento que ABRE el nombre del plato es su protagonista y pide ración, no guarnición:
 # «Guiso ligero de berenjena…» con 30 g de berenjena pasaba el piso de verdura (30 g) — batería real, DM2+insulina. Sólo
 # sobre líneas ya escritas en gramos («½ tomate mediano» no se reescribe a «100 g de tomate») y sólo en las categorías:

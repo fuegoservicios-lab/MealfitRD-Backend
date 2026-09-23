@@ -14748,7 +14748,9 @@ _VERIFICATION_DEMAND_RX = _re_mod.compile(
     r"(certificaci[oó]n|certificad[oa]s?|contaminaci[oó]n cruzada|debe(?:n)? verificarse|"
     r"requiere[n]? verificaci[oó]n|verificar (?:la |las )?etiquetas?|sin indicar certificaci[oó]n|"
     r"requiere[n]? confirmaci[oó]n|debe[n]? confirmarse|requiere[n]? vigilancia|"
-    r"vigilancia de (?:la )?funci[oó]n|requiere[n]? supervisi[oó]n)",
+    r"vigilancia de (?:la )?funci[oó]n|requiere[n]? supervisi[oó]n|"
+    r"marca regulad[ao]|de marca (?:regulad|reconocid|comercial)|procesamiento (?:verificado|seguro|industrial)|"
+    r"envasado industrial|envase (?:industrial|sellado)|se mantenga[n]? refrigerad|cadena de fr[ií]o)",  # [P1-PLAN-LOTE-177]
     _re_mod.IGNORECASE,
 )
 
@@ -21458,6 +21460,9 @@ def _rebalance_day_macros_to_target(meals: list, target_carbs: float, target_fat
                 ings = m.get("ingredients")
                 orig = str(ings[idx])
                 quant, _f = _quant(_resc(orig, factor))   # escala al target + re-snap cocinable
+                _k = factor * _f
+                if factor < 1 and _identidad_protege(m, orig):  # [P1-PLAN-LOTE-177] el que da nombre, no bajo su piso
+                    quant, _k = __import__("identidad_plato").no_bajo_del_piso(orig, quant, _k, db)
                 if quant == orig:
                     continue
                 _mo = db.macros_from_ingredient_string(orig) or {}
@@ -21473,7 +21478,7 @@ def _rebalance_day_macros_to_target(meals: list, target_carbs: float, target_fat
                 # índice ciego. Es el paso 1 del motor de updates: corre en TODAS las superficies
                 # que persisten, y el paso 2 (refinador global) ya usaba el contrato by-food —
                 # los pasos 1 y 3 se habían quedado con el guard viejo.
-                _sync_one_raw_line(m, idx, orig, factor * _f)
+                _sync_one_raw_line(m, idx, orig, _k)
                 applied_any = True
 
         # Re-apunta las 3 macros (Gauss-Seidel): escalar carbo/grasa-dominantes movía la pequeña proteína que
@@ -36454,7 +36459,7 @@ def _desc_food_honesty_pass(days) -> int:
                     _nx = (_mm_nx.group(1).lower() if _mm_nx else "")
                     _nx_ok = (not _nx) or (_nx in _DESC_NEXT_CONNECTORS)                         or bool(_DESC_ADJ_OK_RX.match(_nx))
                     _sub = _DESC_SWAP_SUBGROUP.get(key)
-                    mate = next((p for p in presentes
+                    mate = next((p for p in sorted(presentes, key=lambda q: (q == "huevo" and key != "huevo", q))  # [P1-PLAN-LOTE-177]
                                  if _sub and _DESC_SWAP_SUBGROUP.get(p) == _sub), None)
                     if mate and _nx_ok:
                         tv = _DESC_FOOD_VOCAB[mate]

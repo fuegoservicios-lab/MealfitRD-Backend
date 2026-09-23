@@ -186,7 +186,8 @@ def pulir_nombre(name):
             adj = _sa(adj_raw).strip(",.;:")
             if _sa(out[i]).strip(",.;:") not in _NAME_MASC_FOODS or adj not in _ADJ_MASC:
                 continue
-            if i > 0 and _sa(out[i - 1]).strip(",.;:") not in ("y", "con", "e"):
+            # [P1-PLAN-LOTE-177] tras coma también es núcleo: «…con tomate y cebolla, aguacate fresca» (batería real)
+            if i > 0 and _sa(out[i - 1]).strip(",.;:") not in ("y", "con", "e") and not out[i - 1].endswith(","):
                 continue
             nuevo = _ADJ_MASC[adj]
             nuevo = nuevo.capitalize() if adj_raw[:1].isupper() else nuevo
@@ -241,7 +242,7 @@ def fix_name_gender_agreement(name):
             # el sustantivo debe ser NÚCLEO: inicio del nombre o tras y/con/de/e
             if _i > 0:
                 _prev = _sa_ng(_toks[_i - 1].lower()).strip(",.;:")
-                if _prev not in ("y", "con", "de", "e"):
+                if _prev not in ("y", "con", "de", "e") and not _toks[_i - 1].endswith(","):  # [P1-PLAN-LOTE-177]
                     continue
             _fem = _NAME_ADJ_FEM[_adj]
             _orig = _toks[_i + 1]
