@@ -26,6 +26,10 @@ _QUESO_HTA = re.compile(r"\b(?:queso(?!\s+(?:cheddar|parmesano|gouda|provolone|e
                         r"manchego|curado|azul))|ricotta|cottage|reques[oó]n|mozzarella)\b[^,;()]*", re.IGNORECASE)
 # [P1-PLAN-LOTE-175] + el palmito en conserva (batería real, HTA: «250 g de palmito, si es en conserva… que se enjuague»).
 _LATA_HTA = re.compile(r"\b(?:at[uú]n|sardinas?|palmitos?)\b[^,;()]*", re.IGNORECASE)
+# [P1-PLAN-LOTE-183] + los frutos secos y las semillas, «sin sal» (rd12, HTA: «el maní fileteado y la mantequilla de maní
+# no están especificados como sin sal»). tooltip-anchor: P1-PLAN-LOTE-183-SIN-SAL
+_FRUTO_SECO_HTA = re.compile(r"\b(?:mantequilla de man[ií]|man[ií]|almendras?|nueces|nuez(?!\s+moscada)|merey|pistachos?|"
+                             r"semillas? de (?:girasol|calabaza|auyama))\b[^,;()]*", re.IGNORECASE)
 _YA_BAJO = re.compile(r"bajo\s+en\s+sodio|baja\s+en\s+sodio|sin\s+sal|sin\s+sodio|reducid[oa]\s+en\s+sodio", re.IGNORECASE)
 
 
@@ -61,7 +65,7 @@ def _linea_hta(s: str) -> str:
     s = _sufijo(s, _QUESO_HTA, " bajo en sodio")
     sufijo = (" bajas en sodio" if re.search(r"\bsardinas\b", s, re.IGNORECASE)
               else " bajos en sodio" if re.search(r"\bpalmitos\b", s, re.IGNORECASE) else " bajo en sodio")
-    return _sufijo(s, _LATA_HTA, sufijo)
+    return _sufijo(_sufijo(s, _LATA_HTA, sufijo), _FRUTO_SECO_HTA, " sin sal")   # [P1-PLAN-LOTE-183]
 
 
 def _etiquetar_hta(plan: dict) -> int:
@@ -114,11 +118,41 @@ def _nota_ceviche_de_carne(plan: dict) -> int:
     return tocadas
 
 
+# [P1-PLAN-LOTE-182 · 2026-09-23] Habichuelas SECAS: el revisor rechazó CRÍTICO un plan de embarazo por «habichuelas rojas
+# secas sin indicar que deben hervirse al menos 10 minutos» (fitohemaglutinina: crudas o a medio cocer son tóxicas, para
+# cualquiera). La nota de embarazo que ya existía decía «hasta que estén tiernas» y se omitía si la receta nombraba el
+# remojo. Ésta va a todo plato con una habichuela declarada seca, para todos, salvo que la receta ya diga los 10 minutos.
+# tooltip-anchor: P1-PLAN-LOTE-182-HABICHUELAS-SECAS
+_LEGUMBRE_SECA = re.compile(r"\b(?:habichuelas?|frijol(?:es)?|jud[ií]as?|alubias?|porotos?)\b[^,;()]*\bsec[oa]s?\b",
+                            re.IGNORECASE)
+_YA_HIERVE_10 = re.compile(r"\bhi[eé]rv\w*[^.]{0,80}?\b(?:10|diez)\s*min", re.IGNORECASE)
+_NOTA_HABICHUELAS = ("⚠️ Seguridad alimentaria: remoja las habichuelas secas y hiérvelas a fuego fuerte al menos 10 minutos "
+                     "antes de bajar el fuego; crudas o a medio cocer son tóxicas.")
+
+
+def _nota_habichuelas_secas(plan: dict) -> int:
+    tocadas = 0
+    for d in plan.get("days") or []:
+        for m in (d.get("meals") or []) if isinstance(d, dict) else []:
+            if not isinstance(m, dict):
+                continue
+            if not any(isinstance(x, str) and _LEGUMBRE_SECA.search(x) for x in (m.get("ingredients") or [])):
+                continue
+            pasos = m.get("recipe")
+            if not isinstance(pasos, list) or any(_YA_HIERVE_10.search(str(p)) for p in pasos):
+                continue
+            pasos.append(_NOTA_HABICHUELAS)
+            m.pop("_display", None)
+            tocadas += 1
+    return tocadas
+
+
 def etiquetar(plan: dict, form_data) -> int:
     """Devuelve cuántas comidas tocó (sumando condiciones). Muta `plan`."""
     if not (enabled() and isinstance(plan, dict)):
         return 0
     n = _nota_ceviche_de_carne(plan)                        # [P1-PLAN-LOTE-180] para todos, antes de las condiciones
+    n += _nota_habichuelas_secas(plan)                      # [P1-PLAN-LOTE-182] ídem
     reglas = _reglas(form_data)
     if not reglas:
         return n

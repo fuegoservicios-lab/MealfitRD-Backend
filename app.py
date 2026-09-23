@@ -368,7 +368,13 @@ _PROCESS_START_ISO = datetime.now(timezone.utc).isoformat()
 # [P1-PLAN-LOTE-181 · 2026-09-23] (solo backend) el último pulido de lo que el usuario lee, al final de la cola del
 # escudo: 37 de 817 líneas con el alimento en mayúscula, «0.5 pepino», «1 orégano», «0.06 g de chía», «1 pechugas»;
 # la base implícita de los platos criollos (majarete = maíz + leche) y los postres criollos cuentan como dulces.
-_LAST_KNOWN_PFIX = "P1-PLAN-LOTE-181 · 2026-09-23"
+# [P1-PLAN-LOTE-182 · 2026-09-23] (solo backend) batería rd11: un alérgico a lácteos acabó en el plan de EMERGENCIA
+# (el prompt del día le sugería «yogurt… OK siempre»; alergia ahora como línea dura, sugerencias filtradas; «confirme si
+# mariscos incluye pescado» es aviso); nota de habichuelas secas; el paso no pide más gramos de los que pesa la lista.
+# [P1-PLAN-LOTE-183 · 2026-09-23] (solo backend) el prompt del día pedía panqueques «especialmente en merienda y CENA»
+# y la puerta de horario los rechaza en la cena (rd11, HTA: «Crepas saladas… en la cena» = un reintento); la línea
+# dura de alergias nombra primero leche, queso, yogur… en vez del orden alfabético.
+_LAST_KNOWN_PFIX = "P1-PLAN-LOTE-183 · 2026-09-23"
 
 # [P1-SENTRY-SAMPLE-COST · 2026-05-12] Sentry sampling driven from env vars
 # con default seguro 0.1 (10%). Pre-fix tenía `traces_sample_rate=1.0` y

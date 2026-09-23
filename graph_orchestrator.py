@@ -7268,6 +7268,7 @@ async def generate_days_parallel_node(state: PlanState) -> dict:
             culture_weights=_culture_weights_for_form_data(form_data),
             # [P1-GAINMUSCLE-DINNER-PROTEIN] la cena de ganancia muscular pide proteína animal magra como plato
             goal=(form_data or {}).get("mainGoal") or (form_data or {}).get("goal"),
+            allergies=(form_data or {}).get("allergies"), dislikes=(form_data or {}).get("dislikes"),  # [P1-PLAN-LOTE-182]
         )
 
         random_seed = __import__("horizon").run_seed(form_data, attempt=state.get("attempt")) or random.randint(10000, 99999)  # [P1-PLAN-LOTE-3 · B4] semilla del run: reproducible por intento
@@ -10094,7 +10095,7 @@ PLAN A EVALUAR (días generados):
                             f"\n⚠️ ASIGNACIÓN OBLIGATORIA DEL PLANIFICADOR (no la ignores):\n"
                             # [P1-COUNTRY-SYSTEM-F1 · 2026-08-16 (T4)] reusa `_critique_country`
                             # (T3's shadow work) — DO ⇒ camino byte-idéntico.
-                            f"{build_day_assignment_context(skeleton_day, day_num, user_staples=_raw_staple_foods(form_data), small_universe=_small_universe_active(form_data), kitchen_equipment=_ctx_equipment_labels(form_data), diet_type=(form_data or {}).get('dietType'), country=_critique_country)}"
+                            f"{build_day_assignment_context(skeleton_day, day_num, user_staples=_raw_staple_foods(form_data), small_universe=_small_universe_active(form_data), kitchen_equipment=_ctx_equipment_labels(form_data), allergies=(form_data or {}).get('allergies'), dislikes=(form_data or {}).get('dislikes'), diet_type=(form_data or {}).get('dietType'), country=_critique_country)}"
                         )
 
                     # [P5-PROMPT-D] Usa `nutrition_context_minimal` en vez del
@@ -12065,6 +12066,8 @@ CLINICAL_MEAL_COUNT_ENABLED = _env_bool("MEALFIT_CLINICAL_MEAL_COUNT", True)
 # directiva del prompt). Recupera las calorías escalando los ingredientes NO-almidón del plato → mantiene las
 # kcal en banda (los carbos bajan, que es el objetivo DM2). Default ON. Rollback: =false. Anchor: P1-DM2-GLYCEMIC-PORTION-CAP
 DM2_GLYCEMIC_PORTION_CAP_ENABLED = _env_bool("MEALFIT_DM2_GLYCEMIC_PORTION_CAP", True)
+# [P1-PLAN-LOTE-182] La fruta DULCE también (DM2 + insulina: «300 g de piña en un batido», rechazo CRÍTICO). 0 = apagado.
+DM2_SWEET_FRUIT_CAP_G = _env_int("MEALFIT_DM2_SWEET_FRUIT_CAP_G", 120, validator=lambda v: 0 <= v <= 400)
 DM2_HIGH_GI_CAP_G = _env_int("MEALFIT_DM2_HIGH_GI_CAP_G", 100, validator=lambda v: 60 <= v <= 400)  # [P1-DM2-MAIZ-CAP] 150→100: alineado al criterio del reviewer (~100g/comida)
 
 # [P1-BARIATRIC-CLINICAL-RULES · 2026-06-27] Para pacientes post-cirugía bariátrica, cap DURO de la porción de
@@ -14755,6 +14758,10 @@ _VERIFICATION_DEMAND_RX = _re_mod.compile(
     r"origen industrial)",  # [P1-PLAN-LOTE-180] «casabe de origen industrial/controlado» (embarazo)
     _re_mod.IGNORECASE,
 )
+# [P1-PLAN-LOTE-182] «Confirme si la alergia a mariscos incluye pescado» es aclaración, no defecto (rd11: 2.º CRÍTICO ⇒ EMERGENCIA);
+# aparte para excluir pasteurizar (embarazo). tooltip-anchor: P1-PLAN-LOTE-182-CONFIRMAR-ES-AVISO
+_CONFIRM_DEMAND_RX = _re_mod.compile(r"confirm(?:e|ar)\s+(?:si|su alcance|el alcance)", _re_mod.IGNORECASE)
+_PASTEURIZ_RX = _re_mod.compile(r"pasteuriz", _re_mod.IGNORECASE)
 
 
 def _downgrade_reviewer_verification_demands(approved, issues, severity):
@@ -14769,7 +14776,9 @@ def _downgrade_reviewer_verification_demands(approved, issues, severity):
         return approved, list(issues or []), severity, []
     real, advisories = [], []
     for it in issues:
-        (advisories if _VERIFICATION_DEMAND_RX.search(str(it)) else real).append(it)
+        (advisories if (_VERIFICATION_DEMAND_RX.search(str(it))
+                        or (_CONFIRM_DEMAND_RX.search(str(it)) and not _PASTEURIZ_RX.search(str(it))))  # [P1-PLAN-LOTE-182]
+         else real).append(it)
     if not advisories:
         return approved, real, severity, []
     if real:
@@ -18128,6 +18137,11 @@ _PREGNANCY_SAFETY_CLAUSES = (
     ("huevo", ("huevo", "huevos", "clara", "claras", "yema", "yemas"),
      ("yema y clara firmes",),
      "cocina el huevo POR COMPLETO (yema y clara firmes, sin puntos líquidos)"),
+    # [P1-PLAN-LOTE-183] Carnes y aves (rd12: «pollo guisado sin 74 °C» ⇒ EMERGENCIA). tooltip-anchor: P1-PLAN-LOTE-183-CARNES-EMBARAZO
+    ("carnes", ("pollo", "pechuga", "pechugas", "pavo", "cerdo", "res", "carne", "chivo", "cordero",
+                "muslo", "muslos", "higado", "costilla", "costillas", "chuleta", "chuletas", "molida"),
+     ("74 °c", "74°c", "sin partes rosadas"),
+     "cocina las carnes y el pollo POR COMPLETO (74 °C por dentro, sin partes rosadas)"),
     ("deli", ("jamon", "salami", "mortadela", "fiambre", "embutido", "deli",
               "salchicha", "salchichon", "pepperoni", "tocineta", "tocino",
               # [P0-PREG-CURED-BETA · 2026-08-23] Curados/embutidos de los cinco
@@ -18476,7 +18490,7 @@ def _meal_safety_notes_for_summary(meal: dict) -> str:
                  and ("Seguridad alimentaria" in s or "Nota clínica" in s or _LOWSODIUM_NOTE_SENTINEL in s)]  # [P1-PLAN-LOTE-175] + sodio
         if not notes:
             return ""
-        return " [" + " | ".join(n[:300] for n in notes[:3]) + "]"  # [P1-PLAN-LOTE-180] 3: la del ceviche iba tercera
+        return " [" + " | ".join(n[:450] for n in notes[:3]) + "]"  # [P1-PLAN-LOTE-180] 3 notas · [P1-PLAN-LOTE-183] 450
     except Exception:
         return ""
 
@@ -26044,6 +26058,9 @@ def _enforce_meal_count(days: list, target_meal_types: list) -> int:
 # criterio clínico del reviewer; rollback sin redeploy vía MEALFIT_DM2_HIGH_GI_CAP_G.
 _DM2_HIGH_GI_STARCH_TOKENS = ("batata", "yuca", "yautia", "name", "platano maduro", "mangu", "casabe", "papa", "maiz dulce")
 _DM2_HIGH_GI_CAP_EXCLUDE = ("papaya", "harina de", "leche de", "vinagre de", "agua de")
+_DM2_SWEET_FRUIT_TOKENS = ("pina", "mango", "sandia", "melon", "uva", "uvas", "mamey", "datil", "datiles", "pasas", "guineo",
+                           "guineos", "lechosa", "cereza", "cerezas")  # [P1-PLAN-LOTE-182] el guineo VERDE queda fuera (bajo IG)
+_DM2_SWEET_FRUIT_EXCLUDE = ("guineo verde", "guineos verdes")
 
 
 def _ing_kcal_estimate(mc: dict) -> float:
@@ -26108,7 +26125,12 @@ def cap_dm2_high_gi_portions(days: list, form_data: dict, db=None, *, cap_g: int
                     low = _norm_text(ing)
                     if any(ex in low for ex in _DM2_HIGH_GI_CAP_EXCLUDE):
                         continue
-                    if not any(_name_has_token(t, low) for t in _DM2_HIGH_GI_STARCH_TOKENS):
+                    if any(_name_has_token(t, low) for t in _DM2_HIGH_GI_STARCH_TOKENS):
+                        _cap_i = cap
+                    elif (DM2_SWEET_FRUIT_CAP_G and any(_name_has_token(t, low) for t in _DM2_SWEET_FRUIT_TOKENS)
+                          and not any(x in low for x in _DM2_SWEET_FRUIT_EXCLUDE)):
+                        _cap_i = DM2_SWEET_FRUIT_CAP_G                 # [P1-PLAN-LOTE-182] fruta dulce
+                    else:
                         continue
                     mc = db.macros_from_ingredient_string(ing) or {}
                     grams = mc.get("grams")
@@ -26117,9 +26139,9 @@ def cap_dm2_high_gi_portions(days: list, form_data: dict, db=None, *, cap_g: int
                             grams = db.grams_from_ingredient_string(ing)
                         except Exception:
                             grams = None
-                    if not grams or float(grams) <= cap:
+                    if not grams or float(grams) <= _cap_i:
                         continue
-                    factor = cap / float(grams)
+                    factor = _cap_i / float(grams)
                     new_ing = _resc(ing, factor)
                     if new_ing == ing:
                         continue
@@ -26127,7 +26149,7 @@ def cap_dm2_high_gi_portions(days: list, form_data: dict, db=None, *, cap_g: int
                     ings[i] = new_ing
                     capped_idx.add(i)
                     capped += 1
-                    logger.info(f"🩸 [P1-DM2-GLYCEMIC-PORTION-CAP] '{str(ing)[:40]}' {round(float(grams))}g→{cap}g (DM2)")
+                    logger.info(f"🩸 [P1-DM2-GLYCEMIC-PORTION-CAP] '{str(ing)[:40]}' {round(float(grams))}g→{_cap_i}g (DM2)")
                 if not capped_idx:
                     continue
                 # [P1-PLAN-DISPLAY-I18N-MUTATOR-capdm2 · Ola final FF-1] DELETE-on-write: este meal
@@ -41024,7 +41046,7 @@ async def surgical_marker_regen_node(state: PlanState) -> dict:
                 # también en el regen quirúrgico (no solo en el day-gen inicial).
                 # [P1-COUNTRY-SYSTEM-F1 · 2026-08-16 (T4)] reusa `_surgical_country` (derivado
                 # arriba, una sola vez) — DO ⇒ camino byte-idéntico.
-                f"{build_day_assignment_context(skeleton_day, day_num, user_staples=_raw_staple_foods(form_data), small_universe=_small_universe_active(form_data), diet_type=(form_data or {}).get('dietType'), country=_surgical_country)}"
+                f"{build_day_assignment_context(skeleton_day, day_num, user_staples=_raw_staple_foods(form_data), small_universe=_small_universe_active(form_data), allergies=(form_data or {}).get('allergies'), dislikes=(form_data or {}).get('dislikes'), diet_type=(form_data or {}).get('dietType'), country=_surgical_country)}"
             )
 
         # [P5-PROMPT-D] Mismo prompt mínimo que self_critique correction.
