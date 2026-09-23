@@ -1618,6 +1618,37 @@ def fidelity_issues(days: list, sl: Optional[dict], effective: Optional[dict], *
 # Personalización sí (`kitchenEquipment`) — desde P1-PLAN-LOTE-26 se mide cuando está declarado y se dice cuando no.
 
 _COOKING_TIME_BUDGET_MIN = {"none": 10, "30min": 30, "1hour": 60}   # `plenty` ⇒ sin techo
+
+# [P1-PLAN-LOTE-172 · 2026-09-23] El modelo recibe el formulario como JSON crudo y `"cookingTime": "none"` se lee como
+# «sin restricción» — en el asistente es «Nada: opciones directas, de 5 min». Batería real del 23-sep (camino del modelo,
+# «Nada»): 8 de 12 comidas por encima de 10 min, almuerzos de 30. La auditoría de fidelidad lo marcaba en `warn` y nadie
+# se lo había dicho al generador. Los minutos salen de `_COOKING_TIME_BUDGET_MIN` (SSOT de la auditoría): el tope que se
+# pide es el mismo que se mide. tooltip-anchor: P1-PLAN-LOTE-172-TIEMPO-EN-EL-PROMPT
+_COOKING_TIME_PROMPT = {
+    "none": ("none = NO TIENE TIEMPO para cocinar: cada comida se prepara en {m} minutos o menos (ensamblar, licuar, "
+             "tostar o calentar; proteínas listas o de cocción rápida como huevo, atún o sardina en lata, queso, "
+             "embutido magro, pollo ya cocido). Nada de guisos, horno, víveres hervidos ni cocciones largas; "
+             "`prep_time` de cada comida ≤ {m} min."),
+    "30min": "30min = cada comida en {m} minutos o menos en total; `prep_time` de cada comida ≤ {m} min.",
+    "1hour": "1hour = cada comida en {m} minutos o menos en total; `prep_time` de cada comida ≤ {m} min.",
+    "plenty": "plenty = sin límite de tiempo: le gusta cocinar.",
+}
+
+
+def explain_form_codes_for_prompt(form_for_prompt):
+    """El formulario que ve el modelo, con los códigos que el modelo NO puede adivinar escritos en claro. Copia; el
+    dict de entrada no se toca. Sin clave o con un valor desconocido, el valor queda como vino."""
+    if not isinstance(form_for_prompt, dict):
+        return form_for_prompt
+    ct = str(form_for_prompt.get("cookingTime") or "").strip().lower()
+    txt = _COOKING_TIME_PROMPT.get(ct)
+    if not txt:
+        return form_for_prompt
+    out = dict(form_for_prompt)
+    out["cookingTime"] = txt.format(m=_COOKING_TIME_BUDGET_MIN.get(ct, 0))
+    return out
+
+
 _PERSONALIZATION_MIN_IDENTIFIED = 4
 _CULTURE_SHARE_TOLERANCE = 0.25
 _PIECE_UNITS = ("unidad", "unidades", "ud", "uds", "pieza", "piezas")

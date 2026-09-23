@@ -3267,8 +3267,10 @@ def test_ff1_quantize_pops_display_on_the_meal_it_rewrites():
 def test_ff1_carbtrim_pops_display_on_the_meal_it_trims():
     import graph_orchestrator as go
 
+    # [P1-PLAN-LOTE-172] El nombre ya no puede nombrar la línea: los recortes no tocan el alimento que da nombre al
+    # plato (identidad de los platos del modelo). Lo que se mide aquí es el `_display`, no la identidad.
     meal = {
-        "name": "Arroz", "protein": 5, "carbs": 100, "fats": 1, "cals": 430,
+        "name": "Plato del día", "protein": 5, "carbs": 100, "fats": 1, "cals": 430,
         "ingredients": ["300 g de arroz"],
         "recipe": ["Servir."],
         "_display": _ola_display("STALE — dice 300 g"),
@@ -3285,8 +3287,9 @@ def test_ff1_fatstrim_pops_display_on_the_meal_it_trims():
     TODOS los días con grasas sobre banda, así que también alcanza días colaterales."""
     import graph_orchestrator as go
 
+    # [P1-PLAN-LOTE-172] Ver el test de carbos de arriba: el nombre no nombra la línea que se recorta.
     meal = {
-        "name": "Ensalada con aceite", "protein": 5, "carbs": 10, "fats": 60, "cals": 600,
+        "name": "Ensalada verde", "protein": 5, "carbs": 10, "fats": 60, "cals": 600,
         "ingredients": ["60 g de aceite"],
         "recipe": ["Aliñar."],
         "_display": _ola_display("STALE — dice 60 g"),

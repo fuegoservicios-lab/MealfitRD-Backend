@@ -124,11 +124,66 @@ def _identidad_de(meal) -> list:
 
 
 def protege_linea(meal, linea) -> bool:
-    """¿Esta línea es de un alimento que da identidad a un plato de biblioteca? Los recortes de macros no la tocan."""
+    """¿Esta línea es de un alimento que da identidad al plato? Los recortes de macros no la tocan. Plato de biblioteca:
+    la plantilla lo dice. Plato del MODELO (sin plantilla): lo dice su NOMBRE (`nombrada_en_el_nombre`, P1-PLAN-LOTE-172)."""
     try:
-        return any(_contiene(nom, linea) for nom, _g in _identidad_de(meal))
+        if isinstance(meal, dict) and meal.get("_recipe_source") == "library":
+            return any(_contiene(nom, linea) for nom, _g in _identidad_de(meal))
+        return llm_on() and nombrada_en_el_nombre(meal, linea)
     except Exception:                                                          # noqa: BLE001
         return False
+
+
+# ─────────────── [P1-PLAN-LOTE-172 · 2026-09-23] la identidad de los platos del MODELO ───────────────
+# Batería real del generador: «Maní tostado con pasas…» con 1,44 g de maní (el solver lo dejó en su cota inferior),
+# «Panqueques de avena» con 15 g de avena y «Panqueques de trigo» con 10 g de harina. Este módulo sólo protegía los platos
+# de biblioteca, porque sólo ellos traen plantilla; en los del modelo la identidad está escrita en el NOMBRE. La palabra
+# con contenido del alimento (sin cantidades, unidades ni descriptores como «blanco» o «tostado») que aparece en el
+# nombre lo marca. Knob `MEALFIT_DISH_IDENTITY_LLM` (True). tooltip-anchor: P1-PLAN-LOTE-172-IDENTIDAD-DEL-MODELO
+_UNIDADES = frozenset({
+    "g", "gr", "gramo", "gramos", "kg", "ml", "mililitros", "litro", "litros", "oz", "lb", "taza", "tazas", "cda", "cdas",
+    "cdta", "cdtas", "cucharada", "cucharadas", "cucharadita", "cucharaditas", "unidad", "unidades", "lonja", "lonjas",
+    "rebanada", "rebanadas", "pieza", "piezas", "torta", "tortas", "diente", "dientes", "lata", "latas", "pote",
+    "potes", "paquete", "paquetes", "pizca", "puñado", "punado", "pedazo", "pedazos", "porcion", "porciones", "rodaja",
+    "rodajas", "tira", "tiras", "hoja", "hojas", "ramita", "ramitas", "sobre", "sobres", "vaso", "vasos",
+})
+_DESCRIPTORES = frozenset({
+    "blanco", "blanca", "blancos", "blancas", "verde", "verdes", "fresco", "fresca", "frescos", "frescas", "natural",
+    "naturales", "integral", "integrales", "tostado", "tostada", "tostados", "tostadas", "cocido", "cocida", "cocidos",
+    "cocidas", "crudo", "cruda", "rojo", "roja", "rojos", "rojas", "negro", "negra", "negros", "negras", "grande",
+    "grandes", "mediano", "mediana", "medianos", "medianas", "pequeno", "pequena", "pequenos", "pequenas", "picado",
+    "picada", "picados", "picadas", "rallado", "rallada", "entero", "entera", "enteros", "enteras", "light", "bajo",
+    "baja", "grasa", "sin", "azucar", "sal", "molido", "molida", "seco", "seca", "secos", "secas", "maduro", "madura",
+    "maduros", "maduras", "dulce", "dulces", "criollo", "criolla", "dominicano", "dominicana", "casero", "casera",
+    "extra", "virgen", "polvo", "hojuelas", "trozos", "cubos", "griego", "griega", "descremada", "descremado",
+    "desnatada", "semidescremada", "ligero", "ligera", "suave", "tierno", "tierna", "fina", "fino", "cruda",
+})
+
+
+def llm_on() -> bool:
+    try:
+        from knobs import _env_bool
+        return enabled() and _env_bool("MEALFIT_DISH_IDENTITY_LLM", True)
+    except Exception:                                                          # noqa: BLE001
+        return enabled()
+
+
+def _palabras_del_alimento(linea) -> list:
+    toks = re.findall(r"[a-z]+", re.sub(r"\([^)]*\)", " ", _sa(linea)))
+    while toks and (toks[0] in _UNIDADES or toks[0] in _VACIAS):
+        toks.pop(0)
+    return [t for t in toks if len(t) >= 3 and t not in _VACIAS and t not in _DESCRIPTORES and t not in _UNIDADES]
+
+
+def nombrada_en_el_nombre(meal_o_nombre, linea) -> bool:
+    """¿El nombre del plato nombra el alimento de esta línea? («1.44 g de maní tostado» en «Maní tostado con pasas»)."""
+    if not enabled():
+        return False
+    nombre = meal_o_nombre.get("name") if isinstance(meal_o_nombre, dict) else meal_o_nombre
+    en_nombre = set(_palabras(nombre))
+    if not en_nombre:
+        return False
+    return any(_variantes(p) & en_nombre for p in _palabras_del_alimento(linea))
 
 
 def _sustituidos(meal: dict) -> set:

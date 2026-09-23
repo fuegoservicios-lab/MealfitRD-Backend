@@ -90,4 +90,7 @@ def test_markers_and_knobs_anchored():
     assert 'CLOSER_SWEET_DAIRY_ENABLED = _env_bool("MEALFIT_CLOSER_SWEET_DAIRY", True)' in _GO
     assert "_is_savory_cheese_name(nlow)" in _GO
     # ambos callers de producción pasan allergies
-    assert _GO.count("allergies=form_data.get(\"allergies\")") >= 2
+    # [P1-PLAN-LOTE-172 · 2026-09-23] …y desde el 172 también los rechazos (`constants.alergias_y_rechazos`): el
+    # cerrador pegó atún a quien declaró «No me gusta: Pescado». El contrato sigue: el cerrador recibe las restricciones.
+    assert (_GO.count("allergies=form_data.get(\"allergies\")")
+            + _GO.count("allergies=__import__(\"constants\").alergias_y_rechazos(form_data)")) >= 2

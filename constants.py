@@ -3360,6 +3360,41 @@ for family, techs in TECHNIQUE_FAMILIES.items():
     for t in techs:
         TECH_TO_FAMILY[t] = family
 
+# [P1-PLAN-LOTE-172 · 2026-09-23] Las técnicas que caben en el tiempo que la persona dijo tener. El planificador elegía 3
+# técnicas al azar de TODO el catálogo y se las imponía al día: con «Nada» de tiempo (10 min) salían «Pastelón gratinado»
+# (30 min), tilapia al horno, canoas rellenas y pollo a la parrilla (batería real del 23-sep: 8 de 12 comidas por
+# encima del tope aun con el tiempo escrito en claro en el prompt). Sin entrada para un tiempo ⇒ el catálogo entero,
+# como siempre. tooltip-anchor: P1-PLAN-LOTE-172-TECNICAS-POR-TIEMPO
+TECHNIQUES_BY_COOKING_TIME = {
+    "none": ("A la Plancha con Cítricos", "Estilo Ceviche o Fresco", "Salteado tipo Wok",
+             "Estilo Bowl/Poke Tropical", "Wrap o Burrito Dominicano"),
+}
+
+
+def alergias_y_rechazos(form_data) -> list:
+    """[P1-PLAN-LOTE-172 · 2026-09-23] Lo que el cerrador de proteína NO puede sembrar: alergias Y rechazos. Batería real
+    («No me gusta: Pescado»): el cerrador pegó «80 g de atún en agua» a un desayuno y le cambió el nombre al plato —sus
+    candidatos filtraban sólo por alergia—; el revisor lo marcó y el plan salió igual. El catálogo del modelo ya trataba
+    el rechazo como restricción (`_get_fast_filtered_catalogs`); el cerrador era la puerta que quedaba. Los centinelas
+    («Ninguna»/«Ninguno») no pasan. tooltip-anchor: P1-PLAN-LOTE-172-RECHAZOS-EN-EL-CERRADOR"""
+    fd = form_data or {}
+    out = []
+    for campo in ("allergies", "dislikes"):
+        v = fd.get(campo) or []
+        for x in ([v] if isinstance(v, str) else v):
+            s = str(x or "").strip()
+            if s and strip_accents(s.lower()) not in ("ninguna", "ninguno", "ninguna alergia", "nada", "none"):
+                out.append(s)
+    return out
+
+
+def techniques_for_cooking_time(cooking_time) -> list:
+    """Las técnicas del catálogo que admite el tiempo de cocina del formulario (el orden del catálogo se conserva)."""
+    permitidas = TECHNIQUES_BY_COOKING_TIME.get(str(cooking_time or "").strip().lower())
+    if not permitidas:
+        return list(ALL_TECHNIQUES)
+    return [t for t in ALL_TECHNIQUES if t in permitidas] or list(ALL_TECHNIQUES)
+
 # P1-11: Vocabulario de técnicas culinarias COMPLEJAS para análisis de complejidad
 # del plan en graph_orchestrator._calculate_complexity_score. Antes el orquestador
 # hardcodeaba una lista corta de 7 términos en español; si el LLM usaba sinónimos,

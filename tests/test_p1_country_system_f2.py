@@ -4294,9 +4294,13 @@ def test_household_measure_residual_documentado_especias_arroz(hz):
     """El ÚNICO residual del fallback GENÉRICO (no de la tabla RD): 'Especias para arroz con
     dulce' (PR) sigue mostrando '½ taza' -- 'arroz' es palabra COMPLETA ahí (no un substring roto),
     así que el word-boundary no lo cierra; queda documentado como baja severidad (mezcla de
-    especias en gramos de un dígito, cosmético) en vez de sumar un 3er guard por un solo caso."""
+    especias en gramos de un dígito, cosmético) en vez de sumar un 3er guard por un solo caso.
+
+    [P1-PLAN-LOTE-172 · 2026-09-23] El residual sigue (una mezcla de especias en tazas), pero ahora «¾»: la taza del
+    fallback de granos pesa lo que dice el catálogo del GRANO (arroz, 185 g) y no 200 g para todo — la avena, 80 g, salía
+    en «½ taza» para 115 g. La mezcla no tiene densidad en el catálogo, así que hereda la del arroz."""
     out = hz.humanize_ingredient("120 g de Especias para arroz con dulce")
-    assert out == "½ taza de Especias para arroz con dulce"
+    assert out == "¾ taza de Especias para arroz con dulce"
 
 
 def test_household_measures_do_byte_identico_44_claves_propias_siguen_resolviendo(hz):

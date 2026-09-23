@@ -236,6 +236,9 @@ SOLVER_FEASIBILITY_SIGNAL = _envb("MEALFIT_SOLVER_FEASIBILITY_SIGNAL", True)
 SOLVER_MIN_SCALE = _envf("MEALFIT_SOLVER_MIN_SCALE", 0.3, lambda v: 0.05 <= v <= 1.0)
 SOLVER_MAX_SCALE = _envf("MEALFIT_SOLVER_MAX_SCALE", 3.5, lambda v: 1.0 <= v <= 8.0)
 SOLVER_MAX_SCALE_PROTEIN = _envf("MEALFIT_SOLVER_MAX_SCALE_PROTEIN", 5.0, lambda v: 1.0 <= v <= 8.0)
+# [P1-PLAN-LOTE-172 · 2026-09-23] Cota inferior del alimento que da NOMBRE al plato (ver `solve_meal_macros`). 0 la
+# apaga (vuelve a `SOLVER_MIN_SCALE` para todo). tooltip-anchor: P1-PLAN-LOTE-172-SOLVER-IDENTIDAD
+SOLVER_IDENTITY_MIN_SCALE = _envf("MEALFIT_SOLVER_IDENTITY_MIN_SCALE", 0.6, lambda v: 0.0 <= v <= 1.0)
 # [S-P3-a · 2026-07-07] Guard de INVERSIÓN post-validators: aun con cada knob en su rango, un swap
 # (MIN=1.0/MAX=1.0 imposible, pero MIN cerca de MAX, o proteína < general) degeneraría el clamp
 # por-coordenada de `_box_lsq` (todo forzado a un bound). Fail-safe a defaults + WARNING. tooltip-anchor: S-P3-a
@@ -417,7 +420,9 @@ def _compute_scale_factors(entries: list, tgt: dict, min_scale: float, max_scale
     _pin = [(SOLVER_PIN_FROZEN and not entries[i].get("movable", True)) for i in sc]
     _hi_sc = [(1.0 if _pin[j] else (_mxp if entries[i]["group"] == "protein" else max_scale))
               for j, i in enumerate(sc)]  # hi por-coordenada
-    _lo_sc = [(1.0 if p else min_scale) for p in _pin]  # lo por-coordenada (pin ⇒ lo == hi == 1.0)
+    # lo por-coordenada (pin ⇒ lo == hi == 1.0). [P1-PLAN-LOTE-172] `lo_min`: el alimento que da NOMBRE al plato no baja
+    # de su cota propia (`solve_meal_macros(dish_name=…)`); sin la clave, `min_scale` como siempre.
+    _lo_sc = [(1.0 if p else max(min_scale, float(entries[i].get("lo_min") or 0.0))) for p, i in zip(_pin, sc)]
     # [P3-LSQ-ERROR-PER-CALL · 2026-08-04] local a la LLAMADA (no global de módulo): permanece `None`
     # salvo que el `except` de abajo lo estampe con el crash de ESTA invocación.
     _lsq_err = None
@@ -790,11 +795,16 @@ def solve_meal_macros(
     max_scale: float = None,
     max_scale_protein: float = None,
     tolerance_pct: float = None,
+    dish_name: str = None,
 ) -> dict:
     """Variante para los ingredientes-STRING de un meal del plan ("0.5 taza de avena
     (50g)"). Mismo algoritmo que `solve_portion_macros` pero re-escribe los strings
     (cantidad líder + hint de gramos) en vez de un campo `quantity`, preservando el
     formato que consumen el coherence guard + shopping aggregator + frontend.
+
+    [P1-PLAN-LOTE-172 · 2026-09-23] `dish_name`: las líneas del alimento que el NOMBRE del plato nombra
+    (`identidad_plato.nombrada_en_el_nombre`) no bajan de `SOLVER_IDENTITY_MIN_SCALE` (0,6) en vez de
+    `min_scale` (0,3). Batería real: «Maní tostado con pasas…» salía con 1,44 g de maní.
 
     Returns dict con `ingredients` (lista de strings re-escalados), `achieved`,
     `target`, `report`, `resolved_count`, `unresolved`, `converged`.
@@ -834,7 +844,15 @@ def solve_meal_macros(
             _movable = rescale_ingredient_string(s, 2.0) != s
         except Exception:
             pass
-        entries.append({"s": s, "macros": macros, "group": group, "movable": _movable})
+        _e = {"s": s, "macros": macros, "group": group, "movable": _movable}
+        if dish_name and SOLVER_IDENTITY_MIN_SCALE > 0:
+            try:
+                import identidad_plato as _idp
+                if _idp.nombrada_en_el_nombre(dish_name, s):
+                    _e["lo_min"] = SOLVER_IDENTITY_MIN_SCALE
+            except Exception:
+                pass
+        entries.append(_e)
 
     # [M2-SOLVER-NNLS] Factor POR-INGREDIENTE (LSQ multi-macro; greedy fallback). Reemplaza el
     # factor único por-grupo. El `report` greedy se conserva como telemetría por-macro.

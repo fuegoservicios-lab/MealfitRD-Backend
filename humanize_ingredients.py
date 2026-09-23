@@ -416,6 +416,46 @@ def _polish_countunit_display(raw_ingredient: str, qty_str: str, name: str) -> s
     return raw_ingredient
 
 
+# [P1-PLAN-LOTE-172 · 2026-09-23] La taza del fallback de granos pesaba 200 g para TODO. La avena pesa 80 (catálogo):
+# «115 g de avena» salía «½ taza» —40 g— y el pase que alinea la lista con el display (`_reconcile_display_raw_lines`,
+# el display manda) copió esa media taza a lo que se compra y a los macros. Batería real del 23-sep: desayuno de
+# 456 → ~200 kcal reales y el día 1 de 2.119 a 1.987 kcal. La densidad sale del catálogo (`density_g_per_cup`, el
+# mismo dato con el que el resto del sistema VUELVE a leer esa taza); la tabla de abajo es solo el respaldo sin
+# catálogo, con los valores del catálogo de hoy. tooltip-anchor: P1-PLAN-LOTE-172-TAZA-DEL-CATALOGO
+_GRAIN_CUP_TOKENS = ("arroz", "avena", "lentejas", "habichuela", "garbanzo", "yogurt", "pasta", "quinoa", "pure")
+_GRAIN_CUP_FALLBACK_G = {"arroz": 185.0, "avena": 80.0, "lentejas": 192.0, "habichuela": 180.0, "garbanzo": 164.0,
+                         "yogurt": 245.0, "pasta": 140.0, "quinoa": 185.0, "pure": 240.0}
+_CUP_CATALOG = {"src": None, "map": {}}
+
+
+def _cup_grams_for(name_clean: str, token: str) -> float:
+    """Gramos de UNA taza de este alimento: el catálogo por nombre (exacto, o el más largo que encabeza la línea:
+    «avena en hojuelas» → «avena»); si no, el respaldo por palabra."""
+    try:
+        from shopping_calculator import get_master_ingredients
+        rows = get_master_ingredients() or []
+        if rows is not _CUP_CATALOG["src"]:
+            _m = {}
+            for _r in rows:
+                _n = strip_accents(str((_r or {}).get("name") or "").lower().strip())
+                try:
+                    _v = float((_r or {}).get("density_g_per_cup") or 0)
+                except (TypeError, ValueError):
+                    _v = 0.0
+                if _n and _v > 0:
+                    _m[_n] = _v
+            _CUP_CATALOG["src"], _CUP_CATALOG["map"] = rows, _m
+        _m = _CUP_CATALOG["map"]
+        if name_clean in _m:
+            return _m[name_clean]
+        _cands = [k for k in _m if name_clean.startswith(k + " ")]
+        if _cands:
+            return _m[max(_cands, key=len)]
+    except Exception:
+        pass
+    return _GRAIN_CUP_FALLBACK_G.get(token, 200.0)
+
+
 def humanize_ingredient(raw_ingredient: str) -> str:
     """
     Convierte un ingrediente en gramos/ml a medidas caseras si aplica.
@@ -527,10 +567,11 @@ def humanize_ingredient(raw_ingredient: str) -> str:
             elif base_qty <= 60:
                 return f"{number_to_fraction_str(base_qty / 15.0)} cda de {name}"
 
-        # Granos crudos / cocidos (arroz, avena, lentejas, yogurt) (1 taza = ~200-240g)
-        if any(x in name_clean for x in ['arroz', 'avena', 'lentejas', 'habichuela', 'garbanzo', 'yogurt', 'pasta', 'quinoa', 'pure']):
+        # Granos crudos / cocidos (arroz, avena, lentejas, yogurt): gramos por taza del CATÁLOGO.
+        _tok_taza = next((x for x in _GRAIN_CUP_TOKENS if x in name_clean), None)
+        if _tok_taza:
             if base_qty >= 50:
-                tazas = base_qty / 200.0 # Aproximación genérica
+                tazas = base_qty / _cup_grams_for(name_clean, _tok_taza)
                 return f"{number_to_fraction_str(tazas)} taza de {name}"
 
     # Si no hubo match, devolver el original

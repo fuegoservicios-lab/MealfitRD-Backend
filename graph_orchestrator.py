@@ -3075,7 +3075,7 @@ def _run_sync_cb_safe(cb, payload):
             )
 
 
-def _select_techniques(user_id: str | None, successful_techniques: list = None, abandoned_techniques: list = None) -> list:
+def _select_techniques(user_id: str | None, successful_techniques: list = None, abandoned_techniques: list = None, cooking_time=None) -> list:
     """Selecciona 3 técnicas de cocción diversificadas por familia con decaimiento temporal y cruzado de éxito."""
     technique_freq = {}
     if user_id:
@@ -3105,7 +3105,7 @@ def _select_techniques(user_id: str | None, successful_techniques: list = None, 
 
     selected_techniques = []
     used_families = set()
-    _pool_t = [(t, 1.0 / (technique_freq.get(t, 0) + 1)) for t in ALL_TECHNIQUES]
+    _pool_t = [(t, 1.0 / (technique_freq.get(t, 0) + 1)) for t in __import__("constants").techniques_for_cooking_time(cooking_time)]  # [P1-PLAN-LOTE-172]
     
     if successful_techniques or abandoned_techniques:
         successful_techniques = successful_techniques or []
@@ -4465,11 +4465,11 @@ def _sanitize_form_data_for_prompt(form_data: dict) -> dict:
     # completo y colaba el campo por ese segundo canal sin gate.
     if not PROMPT_TRIM_FORM_DATA:
         return {k: v for k, v in form_data.items() if k != "country"}
-    return {
+    return __import__("horizon").explain_form_codes_for_prompt({  # [P1-PLAN-LOTE-172] cookingTime en claro
         k: v
         for k, v in form_data.items()
         if not (isinstance(k, str) and k.startswith("_")) and k != "country"
-    }
+    })
 # [P3-PLAN-MODEL-KNOBS · 2026-05-20] Modelos del plan-gen pipeline ahora
 # via knobs (no hardcoded). Cierre del gap C4 del audit
 # `docs/gaps-audit-2026-05.md`: pre-fix estos eran string literals
@@ -6056,7 +6056,7 @@ async def plan_skeleton_node(state: PlanState) -> dict:
             aban_techs = list(set(aban_techs + [t for t in blocked_techs if t]))
             logger.info(f"🚫 [BLOCKED-TECHNIQUES] Técnicas acumuladas bloqueadas: {blocked_techs}")
 
-    selected_techniques = _select_techniques(_uid, succ_techs, aban_techs)
+    selected_techniques = _select_techniques(_uid, succ_techs, aban_techs, cooking_time=form_data.get("cookingTime"))
 
     random_seed = __import__("horizon").run_seed(form_data, attempt=state.get("attempt")) or random.randint(10000, 99999)  # [P1-PLAN-LOTE-3 · B4] semilla del run: reproducible por intento
 
@@ -13738,7 +13738,7 @@ def _apply_condition_substitutions(plan: dict, form_data: dict) -> int:
         if "dm2" in conds:
             meal["_dm2_sugar_fixed"] = uniq  # flag de compatibilidad hacia atrás
 
-    return _apply_substitutions_core(plan, subs, _note, "Ajuste clínico", _flags)
+    return _apply_substitutions_core(plan, subs, _note, "Ajuste clínico", _flags) + __import__("embarazo_seguro").etiquetar(plan, form_data)  # [P1-PLAN-LOTE-172]
 
 
 # [P1-DIET-SUBSTITUTION · 2026-09-05] Sustitutos vegetales por categoría de producto animal. Mismo motor que las
@@ -18627,11 +18627,11 @@ def _apply_macro_solver_to_meal(meal: dict, slot_target: dict, db) -> bool:
                            f"({_n_res}/{_n_quant} líneas) en meal {str(meal.get('name'))[:40]!r} — solver se "
                            f"abstiene (masa no-resuelta significativa; downstream closer/rebalance dimensionan).")
             return False
-        res = (solve_meal_macros(_ing_strs, slot_target, db=db,
+        res = (solve_meal_macros(_ing_strs, slot_target, db=db, dish_name=meal.get("name"),  # [P1-PLAN-LOTE-172] identidad
                                  max_scale=SOLVER_PARTIAL_MAX_SCALE,
                                  max_scale_protein=SOLVER_PARTIAL_MAX_SCALE)
                if _cov < 0.999 else
-               solve_meal_macros(_ing_strs, slot_target, db=db))
+               solve_meal_macros(_ing_strs, slot_target, db=db, dish_name=meal.get("name")))
         if res.get("resolved_count", 0) == 0:
             return False  # nada resoluble → no tocar (degradación grácil)
         meal["ingredients"] = res["ingredients"]
@@ -18921,7 +18921,7 @@ _PRECOOKED_PROTEIN_HINT = ("en lata", "enlatad", "atun en agua", "atun en aceite
 # Para legumbres (no pre-cocidas ni enlatadas) → wording de cocción EN AGUA. Rollback: =false. tooltip-anchor: P1-CLOSER-LEGUME-WORDING
 PROTEIN_STEP_LEGUME_WORDING = _env_bool("MEALFIT_PROTEIN_STEP_LEGUME_WORDING", True)
 _LEGUME_PROTEIN_HINT = ("guisante", "arveja", "chicharo", "lenteja", "garbanzo", "habichuela",
-                        "frijol", "gandul", "guandul", "edamame", "soya")
+                        "frijol", "gandul", "guandul", "edamame", "soya", "haba")  # [P1-PLAN-LOTE-172] habas con fruta en 3 meriendas
 
 
 # [P2-CLOSER-STEP-STEW-WORDING · 2026-07-24] Marcadores de plato de OLLA. En un guiso la
@@ -35701,9 +35701,10 @@ _DESC_FOOD_VOCAB = {
     "huevo":   {"pat": r"claras?\s+de\s+huevo|huevos?", "pres": r"\bhuevos?\b|\bclaras?\b", "cat": "prot", "gen": "m", "lbl": "huevo"},
     "atun":    {"pat": r"at[uú]n",            "pres": r"\bat[uú]n\b",                    "cat": "prot", "gen": "m", "lbl": "atún"},
     "mero":    {"pat": r"mero",               "pres": r"\bmero\b",                       "cat": "prot", "gen": "m", "lbl": "mero"},
-    "pollo":   {"pat": r"pollo",              "pres": r"\bpollo\b|\bpechugas?\b",        "cat": "prot", "gen": "m", "lbl": "pollo"},
+    "pollo":   {"pat": r"pollo",              "pres": r"\bpollo\b|\bpechugas?\b(?!\s+de\s+pavo)", "cat": "prot", "gen": "m", "lbl": "pollo"},
     "camaron": {"pat": r"camar[oó]n(?:es)?",  "pres": r"\bcamar[oó]n(?:es)?\b",          "cat": "prot", "gen": "m", "lbl": "camarón"},
     "salmon":  {"pat": r"salm[oó]n",          "pres": r"\bsalm[oó]n\b",                  "cat": "prot", "gen": "m", "lbl": "salmón"},
+    **{k: {"pat": k, "pres": rf"\b{k}\b", "cat": "prot", "gen": "m", "lbl": k} for k in ("pavo", "cerdo", "chivo")},  # [P1-PLAN-LOTE-172] «pavo guisado» con desc de «pollo»
     "yogurt":  {"pat": r"yogur(?:t)?",        "pres": r"\byogur(?:t)?\b",                "cat": "prot", "gen": "m", "lbl": "yogurt"},
     "queso":   {"pat": r"quesos?",            "pres": r"\bquesos?\b",                    "cat": "prot", "gen": "m", "lbl": "queso"},
     "arroz":   {"pat": r"arroz",              "pres": r"\barroz\b",                      "cat": "carb", "gen": "m", "lbl": "arroz"},
@@ -35743,7 +35744,7 @@ _DESC_SWAP_SUBGROUP = {
     "mango": "dulce", "lechosa": "dulce", "pina": "dulce", "melon": "dulce", "ciruela": "dulce",
     "guayaba": "dulce", "fresa": "dulce", "uva": "dulce", "guineo": "dulce", "manzana": "dulce",
     "naranja": "dulce", "toronja": "dulce",
-    "atun": "carne", "mero": "carne", "pollo": "carne", "camaron": "carne", "salmon": "carne",
+    "atun": "carne", "mero": "carne", "pollo": "carne", "camaron": "carne", "salmon": "carne", "pavo": "carne", "cerdo": "carne", "chivo": "carne",
     "queso": "lacteo", "yogurt": "lacteo",
     # huevo sin subgrupo: no hay swap honesto genérico ("claras"→"queso" solo valdría en
     # construcciones concretas); se cubre con retirada de cláusula final o telemetría.
@@ -37459,7 +37460,7 @@ def _repair_light_slot_protein(days: list, nutrition: dict, form_data: dict, db=
             from nutrition_db import IngredientNutritionDB
             db = IngredientNutritionDB()
         if cands is None:
-            cands = _safe_high_density_proteins((form_data or {}).get("allergies"), db, min_protein=10.0,
+            cands = _safe_high_density_proteins(__import__("constants").alergias_y_rechazos(form_data), db, min_protein=10.0,
                                                 diet=(form_data or {}).get("dietType"),
                                                 country=country_for_form_data(form_data))
         _daily_cal = 4.0 * _pg + 4.0 * _cg + 9.0 * _fg
@@ -37490,7 +37491,7 @@ def _repair_light_slot_protein(days: list, nutrition: dict, form_data: dict, db=
                         _used_others |= _lb
                 _m["_protein_closed"] = False
                 _g = _close_protein_gap_for_meal(_m, _slot_target, db, cands,
-                                                 allergies=(form_data or {}).get("allergies"),
+                                                 allergies=__import__("constants").alergias_y_rechazos(form_data),
                                                  fill_pct=PROTEIN_FLOOR_FILL_PCT, max_add_g=120,
                                                  slot_cal_target=_daily_cal * _share,
                                                  enforce_min_threshold=False,
@@ -37558,7 +37559,7 @@ def _repair_protein_floor_post_caps(days: list, nutrition: dict, form_data: dict
         # (densidad media; cap bariátrico 120g, el add ≤90g es seguro) ADEMÁS de la carne densa. Excluimos QUESOS/leche
         # (cap 30g → 90g los excedería; los caps NO re-corren tras FASE A). En platos SALADOS el closer prefiere la
         # carne densa por categoría; el yogur queda para los dulces vía el no_cook/dairy-egg + sweet-guard.
-        _cands = _safe_high_density_proteins(form_data.get("allergies"), db, min_protein=10.0,
+        _cands = _safe_high_density_proteins(__import__("constants").alergias_y_rechazos(form_data), db, min_protein=10.0,
                                              diet=form_data.get("dietType"),  # [P1-DIET-BLIND-DIRECTIVES]
                                              country=country_for_form_data(form_data))  # [P1-PROTEIN-CLOSER-COUNTRY]
         _DAIRY_EXCLUDE = ("queso", "ricotta", "cottage", "requeson", "leche")  # quesos (cap 30g) + leche; yogur SÍ entra
@@ -37612,7 +37613,7 @@ def _repair_protein_floor_post_caps(days: list, nutrition: dict, form_data: dict
                     if _j != _i:
                         _used_others |= _lb
                 _g = _close_protein_gap_for_meal(_m, _slot_target, db, _cands,
-                                                 allergies=form_data.get("allergies"),
+                                                 allergies=__import__("constants").alergias_y_rechazos(form_data),
                                                  fill_pct=PROTEIN_FLOOR_FILL_PCT, max_add_g=_max_add,
                                                  slot_cal_target=_slot_cal, enforce_min_threshold=False,
                                                  day_used_proteins=_used_others,
@@ -37676,7 +37677,7 @@ def _apply_macro_engine(result, days, skeleton, _daily_cals, _pg, _cg, _fg, form
             # (cierra el déficit que el escalado no puede). Se computan una vez por plan.
             # min_protein=9 incluye yogur (blend-friendly para batidos) + el dish-fit del
             # closer prefiere carne (≥18) para principales y lácteo/yogur para licuados/ligeras.
-            _hd_candidates = (_safe_high_density_proteins(form_data.get("allergies"), _nut_db, min_protein=9.0,
+            _hd_candidates = (_safe_high_density_proteins(__import__("constants").alergias_y_rechazos(form_data), _nut_db, min_protein=9.0,
                                                           diet=form_data.get("dietType"),  # [P1-DIET-BLIND-DIRECTIVES]
                                                           country=country_for_form_data(form_data))  # [P1-PROTEIN-CLOSER-COUNTRY]
                               if PROTEIN_FLOOR_ENABLED else [])
@@ -37742,7 +37743,7 @@ def _apply_macro_engine(result, days, skeleton, _daily_cals, _pg, _cg, _fg, form
                                 _used_mi |= _lb2
                         _g_mi = _close_protein_gap_for_meal(
                             _m, _slot_target["protein"], _nut_db, _egg_cands,
-                            allergies=form_data.get("allergies"),
+                            allergies=__import__("constants").alergias_y_rechazos(form_data),
                             fill_pct=PROTEIN_FLOOR_FILL_PCT,
                             day_used_proteins=_used_mi,
                             diet=form_data.get("dietType"),
@@ -37851,7 +37852,7 @@ def _apply_macro_engine(result, days, skeleton, _daily_cals, _pg, _cg, _fg, form
             if not _renal_capped:
                 from nutrition_db import IngredientNutritionDB as _SwapNDB
                 _swap_db = _SwapNDB()
-                _swap_cands = _safe_high_density_proteins(form_data.get("allergies"), _swap_db, min_protein=18.0,
+                _swap_cands = _safe_high_density_proteins(__import__("constants").alergias_y_rechazos(form_data), _swap_db, min_protein=18.0,
                                                           diet=form_data.get("dietType"),  # [P1-DIET-BLIND-DIRECTIVES]
                                                           country=country_for_form_data(form_data))  # [P1-PROTEIN-CLOSER-COUNTRY]
                 _swapped_days = 0

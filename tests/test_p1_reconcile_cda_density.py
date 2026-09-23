@@ -351,10 +351,15 @@ def test_conteo_de_calabacin_capeado_via_set_derivado():
     """Caso real: "4.54 calabacín mediano en cubos" = 908 g para una persona, y NINGUNA rama lo
     veía (no es taza, no es cdta, y 'calabacin' no estaba en `_REALISM_COUNT_CAPS`).
 
-    [ronda 1] La salida es un ENTERO: 4.54 → 1.25 por masa → `1` por el cuantizador SSOT."""
+    [ronda 1] La salida es un ENTERO: 4.54 → 1.25 por masa → `1` por el cuantizador SSOT.
+
+    [P1-PLAN-LOTE-172 · 2026-09-23] Ya no: 1,25 cae en la rejilla de cuartos y un cuarto de calabacín se MIDE. El `1`
+    salía del empate de `_snap_qty` resuelto siempre hacia abajo (¾ de pechuga → ½, −33 %, en la batería real). El
+    techo sigue siendo el mismo: se afirma por masa, como en el caso de las tazas de rábano."""
     out, n = _cap("4.54 calabacin mediano en cubos")
     assert n == 1, "el conteo de vegetal acuoso seguía sin techo"
-    assert out == "1 calabacin mediano en cubos", out
+    assert out == "1.25 calabacin mediano en cubos", out
+    assert (_db().grams_from_ingredient_string(out) or 0) <= g.REALISM_VEG_VOLUME_CAP_G * 1.10, out
 
 
 def test_tazas_de_rabano_capeadas_via_set_derivado():
@@ -397,9 +402,12 @@ def test_una_unidad_entera_es_el_piso_no_se_capea_por_debajo(linea, antes_medido
 
 
 def test_dos_calabacines_se_capean_a_un_entero():
+    # [P1-PLAN-LOTE-172 · 2026-09-23] Ya no es un entero: el techo por masa da 1,25 y un cuarto de calabacín se mide
+    # (la rejilla del cuantizador es de cuartos para los discretos divisibles). Lo que importa, la masa, se afirma.
     out, n = _cap("2 calabacines")
-    assert out == "1 calabacines", out
+    assert out == "1.25 calabacines", out
     assert n == 1
+    assert (_db().grams_from_ingredient_string(out) or 0) <= g.REALISM_VEG_VOLUME_CAP_G * 1.10, out
 
 
 @pytest.mark.parametrize("linea", ["1 pepino", "1 coliflor", "½ repollo", "2 calabacines",
@@ -444,14 +452,17 @@ def test_tras_el_pulido_de_display_las_dos_listas_siguen_diciendo_lo_mismo(linea
 
 def test_la_salida_del_cap_no_deja_conteos_fraccionarios_raros():
     """Barrido: ninguna línea count-led capeada puede salir con una cantidad que el cuantizador
-    SSOT no aprobaría (enteros o ½ para discretos)."""
+    SSOT no aprobaría (enteros o ½ para discretos).
+
+    [P1-PLAN-LOTE-172 · 2026-09-23] La rejilla es de CUARTOS: ¾ de pechuga o 1¼ calabacín se miden, y el humanizador
+    ya los muestra así (P1-PLAN-LOTE-68). Lo raro sigue prohibido: 2,16 o 0,66 no pasan."""
     for linea in ("1 pepino", "1 coliflor", "½ repollo", "2 calabacines", "9 pepinos",
                   "4.54 calabacin mediano en cubos", "3 coliflores"):
         out, _ = _cap(linea)
         lead = g._realism_lead_qty(out.lower())
         if lead is None:
             continue
-        assert abs(lead * 2 - round(lead * 2)) < 1e-6, f"{linea!r} → {out!r} (lead {lead})"
+        assert abs(lead * 4 - round(lead * 4)) < 1e-6, f"{linea!r} → {out!r} (lead {lead})"
 
 
 def test_porcion_razonable_en_tazas_no_se_toca():
@@ -664,7 +675,8 @@ def test_linea_con_token_acuoso_si_resuelve_macros():
             "ingredients_raw": ["4.54 calabacin mediano en cubos"]}
     g._cap_unrealistic_portions([{"meals": [meal]}], db=espia)
     assert espia.n >= 1
-    assert meal["ingredients"][0] == "1 calabacin mediano en cubos"
+    # [P1-PLAN-LOTE-172] 1,25 y no 1: la rejilla del cuantizador es de cuartos (ver el test del calabacín de arriba).
+    assert meal["ingredients"][0] == "1.25 calabacin mediano en cubos"
 
 
 # ═══════ Sección 4c — [ronda 1] el reconcile corre ANTES de medir la banda ═══════

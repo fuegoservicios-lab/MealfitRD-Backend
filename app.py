@@ -336,7 +336,12 @@ _PROCESS_START_ISO = datetime.now(timezone.utc).isoformat()
 # techos de micros; y «¿plan de hoy?» contaba el placeholder en curso → todo plan nuevo era «regenerar hoy» (con
 # Nevera, «usa SOLO la despensa» pese a «desde cero»). Y la Luna por defecto pasa a GPT-6 Luna (mitad de precio),
 # con el filtro de temperatura que langchain-openai 1.3.0 solo aplica a gpt-5.
-_LAST_KNOWN_PFIX = "P1-PLAN-LOTE-171 · 2026-09-23"
+# [P1-PLAN-LOTE-172 · 2026-09-23] (solo backend) batería REAL del generador (8 perfiles RD, camino del modelo): el pipeline
+# entregaba macros en banda y el escudo pre-INSERT los rompía (taza de 200 g para la avena; ¾ de pechuga → ½ por el
+# empate del cuantizador; peso fingido en el pulido). Además: el tiempo de cocina viaja en claro y el planificador sólo
+# elige técnicas que caben en él; el alimento que da nombre al plato no baja a migajas (solver y recortes); embarazo con
+# especie del pescado y queso pasteurizado; el cerrador de proteína respeta los rechazos; descripciones honestas.
+_LAST_KNOWN_PFIX = "P1-PLAN-LOTE-172 · 2026-09-23"
 
 # [P1-SENTRY-SAMPLE-COST · 2026-05-12] Sentry sampling driven from env vars
 # con default seguro 0.1 (10%). Pre-fix tenía `traces_sample_rate=1.0` y

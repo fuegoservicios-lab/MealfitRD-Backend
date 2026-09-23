@@ -856,7 +856,38 @@ def construir_comida(t: dict, factor: float, catalogo: dict, slot: str, country:
             meal["_prep_time_source"] = _src
     except (TypeError, ValueError):
         pass
+    _d = _descripcion_de(lineas, slot, meal.get("prep_time") if meal.get("_prep_time_source") else None)
+    if _d:
+        meal["desc"] = _d
     return meal
+
+
+# [P1-PLAN-LOTE-172 · 2026-09-23] El plato determinista salía sin `desc` y `assemble` le ponía «Comida saludable y
+# balanceada.» a TODOS: lo único que el usuario lee bajo el nombre era el mismo relleno doce veces al día. Ahora dice lo
+# que el plato lleva (los tres ingredientes con más peso, sin condimentos) y cuánto tarda, sin adjetivos que el plato no
+# pueda sostener («ligera», «saciante»). tooltip-anchor: P1-PLAN-LOTE-172-DESC-DETERMINISTA
+_DESC_APERTURA = {"desayuno": "Para empezar el día", "almuerzo": "Plato fuerte", "cena": "Cena", "merienda": "Merienda"}
+_DESC_SIN = re.compile(r"\b(aceite|sal|pimienta|oregano|ajo|cebolla|cebollin|cilantro|perejil|agua|vinagre|limon|"
+                       r"canela|comino|sazon|caldo|mostaza|adobo)\b")
+
+
+def _descripcion_de(lineas, slot, prep_time=None) -> str:
+    vistos = []
+    for _g, nombre, _c in sorted(lineas or [], key=lambda l: -float(l[0] or 0)):
+        n = str(nombre or "").strip()
+        if not n or _no_escala(n) or _DESC_SIN.search(_norm(n)):
+            continue
+        n = n[:1].lower() + n[1:]
+        if n not in vistos:
+            vistos.append(n)
+        if len(vistos) == 3:
+            break
+    if not vistos:
+        return ""
+    lista = vistos[0] if len(vistos) == 1 else ", ".join(vistos[:-1]) + " y " + vistos[-1]
+    txt = f"{_DESC_APERTURA.get((_norm(slot).split() or [''])[0], 'Comida')} con {lista}."
+    m = re.match(r"\s*(\d+)\s*min", str(prep_time or ""))
+    return txt + (f" Se prepara en unos {m.group(1)} min." if m else "")
 
 
 # [P1-AUDITORIA-ARQ-VERIFICADA · 2026-09-11] «N tazas/litros/ml de agua» en un paso, con número en

@@ -354,6 +354,12 @@ _CUP_FRACS_LEAF = (0.0, 0.5, 1.0)
 _LEAF_TOKENS = ("lechuga", "espinaca", "repollo", "berro", "rucula", "arugula", "kale", "acelga", "hoja")
 _QUANTIZE_DISCRETE_WHOLE_ONLY = os.environ.get("MEALFIT_QUANTIZE_DISCRETE_WHOLE_ONLY", "true").strip().lower() in ("1", "true", "yes", "on")
 _QUANTIZE_LEAF_CUP_NO_THIRDS = os.environ.get("MEALFIT_QUANTIZE_LEAF_CUP_NO_THIRDS", "true").strip().lower() in ("1", "true", "yes", "on")
+# [P1-PLAN-LOTE-172 · 2026-09-23] Un conteo divisible que ya cae en cuartos (¾ pechuga, 1¼ plátano) es MEDIBLE: no se
+# toca. Antes pasaba por `_snap_qty` con (0, ½, 1) y el empate lo resolvía el PRIMERO de la tupla: ¾ → ½ (−33 %),
+# 1¼ → 1 (−20 %), siempre hacia abajo. Batería real del 23-sep: las tres pechugas del almuerzo (160-170 g) salieron
+# en «½ pechuga (≈100 g)» y la proteína del día 1 bajó de 129 a 118 g. tooltip-anchor: P1-PLAN-LOTE-172-CUARTOS
+_QUANTIZE_COUNT_QUARTER_GRID = os.environ.get("MEALFIT_QUANTIZE_COUNT_QUARTER_GRID", "true").strip().lower() in ("1", "true", "yes", "on")
+_APPROX_GRAM_HINT_RE = re.compile(r"\(\s*≈\s*\d+(?:[.,]\d+)?\s*(?:g|gr|gramos|ml)\b[^)]*\)", re.I)
 
 
 def _detect_kind(raw: str) -> str:
@@ -436,6 +442,19 @@ def quantize_ingredient_string(s: str):
         _fr = _COUNT_FRACS
         if _QUANTIZE_DISCRETE_WHOLE_ONLY and any(t in low for t in _WHOLE_ONLY_TOKENS):
             _fr = _COUNT_FRACS_WHOLE  # [P3-HUMAN-WHOLE-DISCRETE] huevo/pan/rebanada → entero (nunca 0.5/2.5)
+        elif _QUANTIZE_COUNT_QUARTER_GRID and abs(qty * 4.0 - round(qty * 4.0)) < 1e-6:
+            # [P1-PLAN-LOTE-172] ¾ de pechuga o 1¼ plátano YA se miden: el humanizador muestra cuartos, y el
+            # empate de `_snap_qty` (0,75 está a la misma distancia de 0,5 que de 1) caía SIEMPRE abajo.
+            return _integerize_gram_hint(raw), 1.0
+        elif _QUANTIZE_COUNT_QUARTER_GRID and _APPROX_GRAM_HINT_RE.search(raw):
+            # [P1-PLAN-LOTE-172] Con «(≈N g)» —el peso que pone el humanizador— la medida es el PESO y el conteo, una guía:
+            # el conteo va a cuartos y el peso no se toca (factor 1). Antes «0,58 pechuga (≈116 g)» salía «½ pechuga
+            # (≈100 g)» con 124 g en la compra. El «(580g)» sin ≈ del modelo sigue el contrato de siempre.
+            _norm_c = _normalize_unicode_fractions(raw.strip())
+            _mq_c = _LEAD_QTY_RE.match(_norm_c)
+            if _mq_c:
+                _nq_c = max(0.25, round(qty * 4.0) / 4.0)
+                return _integerize_gram_hint(_norm_c[:_mq_c.start(1)] + _fmt_num(_nq_c) + _norm_c[_mq_c.end(1):]), 1.0
         new_qty = _snap_qty(qty, _fr)
     if abs(new_qty - qty) < 1e-4:
         return _integerize_gram_hint(raw), 1.0
