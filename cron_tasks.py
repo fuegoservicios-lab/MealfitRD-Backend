@@ -7040,6 +7040,16 @@ def _reconcile_display_i18n_job() -> None:
         logger.warning(f"[P1-I18N-RECONCILE] _reconcile_display_i18n_job falló: {e!r}")
 
 
+def _nevera_auto_off_job() -> None:
+    """[P1-NEVERA-OPCIONAL · 2026-09-23] Apaga la Nevera de las cuentas de contador que llevan 48 h con ella vacía
+    y nunca eligieron (NULL). La regla y el SQL viven en nevera_opcional.py; esto solo la dispara."""
+    try:
+        import nevera_opcional
+        nevera_opcional.apagar_neveras_sin_uso()
+    except Exception as e:
+        logger.warning(f"[P1-NEVERA-OPCIONAL] _nevera_auto_off_job: {e}")
+
+
 def register_plan_chunk_scheduler(scheduler) -> None:
     """Registra el polling del worker de chunks una sola vez en el scheduler global."""
     if not scheduler:
@@ -7492,6 +7502,20 @@ def register_plan_chunk_scheduler(scheduler) -> None:
             f"(batch={_env_int('MEALFIT_FAILED_DEDUCTIONS_RETRY_BATCH', 50)}, "
             f"max_attempts={_env_int('MEALFIT_FAILED_DEDUCTIONS_MAX_ATTEMPTS', 3)})."
         )
+
+    # [P1-NEVERA-OPCIONAL · 2026-09-23] Apagado automático de la Nevera sin uso (modo contador, 48 h vacía).
+    # La regla y el SQL por lotes viven en nevera_opcional.py; este job solo la dispara cada hora.
+    if not scheduler.get_job("nevera_auto_off"):
+        _add_job_jittered(scheduler,
+            _nevera_auto_off_job,
+            "interval",
+            minutes=60,
+            id="nevera_auto_off",
+            max_instances=1,
+            coalesce=True,
+            replace_existing=True,
+        )
+        logger.info("⏰ [P1-NEVERA-OPCIONAL] Cron nevera_auto_off registrado cada 60 min.")
 
     # [P2-SHOPPING-3 · 2026-05-14] Cron burst-detector del evento
     # `pdf_stale_inventory_fallback`. Lee `pipeline_metrics` (donde el

@@ -133,3 +133,49 @@ def test_el_perfil_trae_la_regla_calculada():
     ud = (_BACKEND / "routers" / "user_data.py").read_text(encoding="utf-8")
     i = ud.index("async def api_get_profile(")
     assert '"nevera_activa": nevera_activa_de(profile)' in ud[i:i + 1500]
+
+
+# ── 5. Diario y cron ─────────────────────────────────────────────────────────────────────────────────────────
+def _persistir(monkeypatch, activa: bool):
+    from fastapi import BackgroundTasks
+    from routers import diary
+    import db_inventory
+    llamadas = []
+    monkeypatch.setattr(diary, "log_consumed_meal", lambda *a, **k: "meal-1")
+    monkeypatch.setattr(diary, "nevera_activa", lambda uid: activa)
+    monkeypatch.setattr(db_inventory, "deduct_consumed_meal_from_inventory",
+                        lambda *a, **k: llamadas.append(a) or {"succeeded": ["Huevo"]})
+    r = diary._persist_consumed_meal(
+        user_id="u1", meal_name="Desayuno", meal_type="desayuno", calories=300, protein=20, carbs=10,
+        healthy_fats=15, ingredients=["2 huevos"], days_ago=0, background_tasks=BackgroundTasks(), source="photo")
+    return r, llamadas
+
+
+def test_con_la_nevera_apagada_el_diario_guarda_pero_no_descuenta(monkeypatch):
+    r, llamadas = _persistir(monkeypatch, activa=False)
+    assert r["success"] is True and llamadas == [] and r["deducted"] == []
+
+
+def test_con_la_nevera_activa_descuenta_como_siempre(monkeypatch):
+    r, llamadas = _persistir(monkeypatch, activa=True)
+    assert len(llamadas) == 1 and r["deducted"] == ["Huevo"]
+
+
+def test_el_apagado_automatico_corre_cada_hora():
+    ct = (_BACKEND / "cron_tasks.py").read_text(encoding="utf-8")
+    assert "def _nevera_auto_off_job(" in ct
+    i = ct.index("def register_plan_chunk_scheduler(")
+    assert 'id="nevera_auto_off"' in ct[i:], "el job se registra en el SSOT de crons"
+
+
+def test_el_apagado_roto_es_ruidoso_no_silencioso(monkeypatch, caplog):
+    """[P1-NEVERA-OPCIONAL] Un apagado automático que nunca corre debe quedar en el log como ERROR, no como un
+    warning que nadie revisa — es la única señal de que 48 h de cuentas vacías no se están apagando."""
+    import logging
+
+    def _revienta(*a, **k):
+        raise RuntimeError("db caída")
+    monkeypatch.setattr(no, "execute_sql_write", _revienta)
+    caplog.set_level(logging.ERROR, logger="nevera_opcional")
+    assert no.apagar_neveras_sin_uso() == []
+    assert any(rec.levelname == "ERROR" for rec in caplog.records)

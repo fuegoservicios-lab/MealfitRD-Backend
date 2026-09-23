@@ -37,6 +37,9 @@ from vision_agent import (
 # del handler era frágil: un refactor que renombrara `trigger_incremental_learning`
 # crashearía 500 en runtime en cada POST a `/api/diary/consumed`, no en import-time.
 from cron_tasks import trigger_incremental_learning
+# [P1-NEVERA-OPCIONAL · 2026-09-23] Import a nivel de módulo (no dentro de la función)
+# para que los tests puedan monkeypatchear `routers.diary.nevera_activa`.
+from nevera_opcional import nevera_activa
 
 logger = logging.getLogger(__name__)
 
@@ -855,7 +858,10 @@ def _persist_consumed_meal(
 
     _already_logged = (_logged_ok == "deduped")
     _summary = {}
-    if _ingredients and deduct and not _already_logged:
+    # [P1-NEVERA-OPCIONAL · 2026-09-23] Con la Nevera apagada (modo contador) el diario GUARDA los ingredientes —son
+    # el detalle de la comida y alimentan los micros— pero NO descuenta. `mark_inventory_synced` (arriba) no cambia:
+    # apagada hoy no debe convertirse en un descuento silencioso si mañana la enciende.
+    if _ingredients and deduct and not _already_logged and nevera_activa(user_id):
         import db_inventory
         _summary = db_inventory.deduct_consumed_meal_from_inventory(
             user_id, _ingredients,

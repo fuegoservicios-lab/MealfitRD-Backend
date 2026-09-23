@@ -143,7 +143,9 @@ def apagar_neveras_sin_uso(limite: int = 500) -> list:
     try:
         filas = execute_sql_write(_SQL_APAGAR, (horas, horas, int(limite)), returning=True) or []
     except Exception as e:
-        logger.warning(f"[P1-NEVERA-OPCIONAL] apagado automático no corrió: {e}")
+        # [P1-NEVERA-OPCIONAL · 2026-09-23] error, no warning: un apagado automático roto es silencioso por
+        # naturaleza (nadie lo espera activamente) — debe ser RUIDOSO en los logs o nadie lo va a notar.
+        logger.error(f"❌ [P1-NEVERA-OPCIONAL] apagado automático no corrió: {e}")
         return []
     ids = [str(f.get("id")) for f in filas if isinstance(f, dict) and f.get("id")]
     if ids:
