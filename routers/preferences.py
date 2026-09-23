@@ -153,6 +153,40 @@ async def api_get_water_tracker_enabled(
     return {"water_tracker_enabled": enabled}
 
 
+# [P1-NEVERA-OPCIONAL · 2026-09-23] Interruptor de la Nevera (Configuración → Capacidades, solo en modo contador).
+# La regla y el apagado automático viven en nevera_opcional.py; aquí solo la elección explícita del usuario.
+# Cero LLM ⇒ `get_verified_user_id`, nunca `verify_api_quota` (mismo criterio que water-tracker).
+
+
+class NeveraPreferenceBody(BaseModel):
+    enabled: bool
+
+
+@router.get("/nevera")
+async def api_get_nevera(verified_user_id: str = Depends(get_verified_user_id)):
+    if not verified_user_id:
+        raise HTTPException(status_code=401, detail="No autenticado.")
+    import nevera_opcional
+    return await asyncio.to_thread(nevera_opcional.estado_nevera, verified_user_id)
+
+
+@router.patch("/nevera")
+async def api_set_nevera(
+    body: NeveraPreferenceBody = Body(...),
+    verified_user_id: str = Depends(get_verified_user_id),
+):
+    if not verified_user_id:
+        raise HTTPException(status_code=401, detail="No autenticado.")
+    import nevera_opcional
+    if not nevera_opcional.interruptor_disponible():
+        raise HTTPException(status_code=409, detail="La opción de apagar la Nevera no está disponible.")
+    ok = await asyncio.to_thread(nevera_opcional.fijar_nevera, verified_user_id, body.enabled)
+    if not ok:
+        raise HTTPException(status_code=500, detail="No se pudo actualizar la preferencia.")
+    logger.info(f"[P1-NEVERA-OPCIONAL] user={verified_user_id} nevera_enabled={body.enabled}")
+    return await asyncio.to_thread(nevera_opcional.estado_nevera, verified_user_id)
+
+
 # [P2-AI-TRAINING-CONSENT · 2026-07-04] Consentimiento OPT-IN para uso futuro
 # de datos en entrenamiento de modelos propios de MealfitRD (Configuración →
 # Privacidad). DEFAULT FALSE fail-secure: perfil ausente / campo NULL / error

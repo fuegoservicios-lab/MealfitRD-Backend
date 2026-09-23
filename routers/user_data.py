@@ -1024,7 +1024,9 @@ async def api_get_profile(
     profile = await asyncio.to_thread(get_user_profile, uid)
     if profile is None:
         raise HTTPException(status_code=404, detail="Perfil no encontrado.")
-    return {"profile": profile}
+    # [P1-NEVERA-OPCIONAL · 2026-09-23] LA regla, calculada aquí para que el frontend no la reimplemente.
+    from nevera_opcional import nevera_activa_de
+    return {"profile": {**profile, "nevera_activa": nevera_activa_de(profile)}}
 
 
 @router.patch("/profile")
