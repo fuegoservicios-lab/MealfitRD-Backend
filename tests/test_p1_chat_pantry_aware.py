@@ -32,7 +32,8 @@ with open(os.path.join(_BACKEND, "tools.py"), encoding="utf-8") as f:
 
 def test_pantry_context_injected_in_both_paths():
     assert "def _build_pantry_context" in _AG
-    assert _AG.count("system_prompt += _build_pantry_context(user_id)") >= 2, \
+    # [P1-NEVERA-OPCIONAL · 2026-09-23] sin el paréntesis de cierre: el estado de la Nevera viaja como kwarg
+    assert _AG.count("system_prompt += _build_pantry_context(user_id") >= 2, \
         "ambos paths (non-stream y stream) deben inyectar el snapshot"
 
 

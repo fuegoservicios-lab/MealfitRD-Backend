@@ -197,8 +197,22 @@ def test_con_la_nevera_activa_el_prompt_no_cambia(monkeypatch):
 
 
 def test_los_dos_caminos_del_chat_no_leen_el_inventario_apagado():
+    """[revisión B4] El estado se resuelve UNA vez por turno en cada camino (`_nevera_on`, al tope de la función) y de
+    ese dato cuelgan la lectura, el respaldo desde `form_data`, la línea del inventario y el bloque final."""
     src = (_BACKEND / "agent.py").read_text(encoding="utf-8")
-    assert src.count("get_user_inventory(user_id) if nevera_activa(user_id) else []") == 2
+    for ancla in ("get_user_inventory(user_id) if _nevera_on else []",
+                  "if not inventory_str and form_data and _nevera_on:",
+                  "nevera_activa=_nevera_on,",
+                  "system_prompt += _build_pantry_context(user_id, nevera_on=_nevera_on)"):
+        assert src.count(ancla) == 2, ancla
+    for fn in ("def chat_with_agent(", "def chat_with_agent_stream("):
+        i = src.index(fn)
+        j = src.find("\ndef ", i + 10)   # tras `chat_with_agent_stream` no hay otra función de módulo
+        cuerpo = src[i:j if j > 0 else len(src)]
+        assert cuerpo.count("_nevera_on = _nevera_activa_para_chat(user_id)") == 1, fn
+        assert cuerpo.index("_nevera_on = _nevera_activa_para_chat(user_id)") < cuerpo.index("system_prompt ="), fn
+    stream = src[src.index("def chat_with_agent_stream("):]
+    assert stream.count("system_prompt += build_vision_context(vision, nevera_activa=_nevera_on)") == 2
 
 
 def test_las_tools_de_nevera_responden_desactivada():
@@ -411,6 +425,147 @@ def test_fui_al_super_con_la_nevera_apagada_no_ofrece_anotarlo_en_ella(monkeypat
     monkeypatch.setattr(tools, "get_latest_usable_meal_plan_with_id", _prohibido)
     monkeypatch.setattr(tools, "nevera_activa", lambda uid: False)
     out = _fn(tools.mark_shopping_list_purchased)(user_id="u1")
-    assert out == no.MENSAJE_NEVERA_APAGADA and "modify_pantry_inventory" not in out
+    assert "NO digas que registraste la compra" in out, "la guarda de honestidad del contador se queda"
+    assert no.MENSAJE_NEVERA_APAGADA in out and "modify_pantry_inventory" not in out
     monkeypatch.setattr(tools, "nevera_activa", lambda uid: True)
     assert "modify_pantry_inventory" in _fn(tools.mark_shopping_list_purchased)(user_id="u1")
+
+
+# ── 6b. Revisión de B4: el respaldo del formulario, la foto de compra y el orden del bloque ──────────────────────
+def test_la_orden_no_depende_del_kill_switch_del_snapshot(monkeypatch):
+    import agent
+    monkeypatch.setenv("MEALFIT_CHAT_PANTRY_SNAPSHOT", "false")
+    monkeypatch.setattr(no, "nevera_activa", lambda uid: False)
+    assert agent._build_pantry_context("u1") == no.BLOQUE_PROMPT_NEVERA_APAGADA
+    monkeypatch.setattr(no, "nevera_activa", lambda uid: True)
+    assert agent._build_pantry_context("u1") == "", "encendida, el kill switch del snapshot manda como siempre"
+    # el estado que el camino del chat ya resolvió manda: no se vuelve a consultar
+    monkeypatch.setattr(no, "nevera_activa", lambda uid: pytest.fail("con nevera_on dado no se consulta"))
+    assert agent._build_pantry_context("u1", nevera_on=False) == no.BLOQUE_PROMPT_NEVERA_APAGADA
+
+
+def test_el_bloque_de_inventario_apagado_no_escribe_la_linea_del_inventario():
+    from prompts.chat_agent import build_inventory_context as bic
+    apagada = bic("3 unidades de Huevo", "1 lb de Pollo", plan_en_pausa=True, nevera_activa=False)
+    assert "INVENTARIO FÍSICO ACTUAL" not in apagada and "Huevo" not in apagada
+    assert "[LISTA DEL PLAN EN PAUSA]: 1 lb de Pollo" in apagada, "la parte de compras no cambia"
+    assert bic("3 unidades de Huevo", "", sin_plan=True, nevera_activa=False) == "", "ni «Vacío» ni cabecera suelta"
+    for args, kw in ((("3 unidades de Huevo", "1 lb de Pollo"), {}), (("", "1 lb de Pollo"), {"plan_en_pausa": True}),
+                     (("", ""), {}), (("3 unidades de Huevo", ""), {"sin_plan": True})):
+        assert bic(*args, **kw) == bic(*args, **kw, nevera_activa=True)   # encendida: el texto de siempre
+    assert "[INVENTARIO FÍSICO ACTUAL]: Vacío." in bic("", "1 lb de Pollo")
+
+
+_FOTOS_CON_NEVERA = {
+    "compra_sin_texto": {"kind": "items", "description": "2 manzanas, 1 lb de pollo", "has_text": False},
+    "compra_con_texto": {"kind": "items", "description": "2 manzanas", "has_text": True},
+    "etiqueta": {"kind": "etiqueta", "description": "1 scoop (31 g): 120 kcal, 24 g", "has_text": True},
+    "varias": {"kind": "multi", "has_text": False, "items": [
+        {"kind": "items", "description": "2 manzanas"}, {"kind": "etiqueta", "description": "120 kcal por scoop"},
+        {"kind": "plato", "description": "arroz con pollo"}]},
+}
+
+
+def test_la_foto_de_compra_con_la_nevera_apagada_no_la_ofrece():
+    from prompts.chat_agent import build_vision_context as bvc
+    for caso, foto in _FOTOS_CON_NEVERA.items():
+        apagada = bvc(foto, nevera_activa=False)
+        assert apagada.startswith("\n\n📷 CONTEXTO DE"), caso
+        assert "nevera" not in apagada.lower() and "modify_pantry_inventory" not in apagada, (caso, apagada)
+        assert bvc(foto) == bvc(foto, nevera_activa=True), caso
+    assert "ofrécele registrar ESE plato" in bvc(_FOTOS_CON_NEVERA["compra_sin_texto"], nevera_activa=False)
+    assert "NO registres esto como comida consumida" in bvc(_FOTOS_CON_NEVERA["compra_sin_texto"], nevera_activa=False)
+    assert "cifras de la etiqueta × porciones" in bvc(_FOTOS_CON_NEVERA["etiqueta"], nevera_activa=False)
+    # encendida (el default): las frases de siempre, al pie de la letra
+    assert bvc(_FOTOS_CON_NEVERA["compra_con_texto"]).endswith(
+        " Si el usuario quiere, agrégalos a su Nevera con modify_pantry_inventory tras su confirmación. Responde a su "
+        "mensaje.")
+    assert "y pregúntale si quiere que los agregues a su Nevera. SOLO cuando el usuario confirme, usa la herramienta " \
+           "modify_pantry_inventory con items_to_add" in bvc(_FOTOS_CON_NEVERA["compra_sin_texto"])
+    assert bvc(_FOTOS_CON_NEVERA["etiqueta"]).endswith(" NO lo ofrezcas para la Nevera salvo que él lo pida.")
+    assert (" Para las fotos de compra, ofrece agregarlas a la Nevera y usa modify_pantry_inventory solo después de "
+            "confirmación.") in bvc(_FOTOS_CON_NEVERA["varias"])
+
+
+class _PromptCapturado(RuntimeError):
+    pass
+
+
+def _prompt_del_coach(monkeypatch, path: str, activa: bool, inventario=(), vision=None) -> str:
+    """El system prompt ENTERO de un turno autenticado por el camino real (`chat_with_agent` o `_stream`), cortado en el
+    grafo — el arnés de `test_p1_coach_country_unnamed.py`. Sin DB (`db_core.connection_pool = None`: toda lectura
+    revienta al instante y cae a su fallo abierto, también en un checkout con `.env`) y sin LLM (sentimiento, router
+    RAG y grafo falsos). El `form_data` trae el `current_pantry_ingredients` que la última generación dejó en
+    `health_profile`; el agregador del respaldo se deja pasar tal cual (sin catálogo lo vaciaría y no se vería nada)."""
+    from types import SimpleNamespace
+    import agent
+    import db_core
+    import db_inventory
+    import db_plans
+    import shopping_calculator
+    from prompts.sentiment import PERSONALITY_PROFILES
+
+    capturado = {}
+
+    class _Grafo:
+        def get_state(self, _config):
+            return SimpleNamespace(values={})
+
+        def invoke(self, inputs, **_k):
+            capturado["prompt"] = inputs["sys_prompt"]
+            raise _PromptCapturado
+
+        stream = invoke
+
+    class _Builder:
+        def compile(self, **_k):
+            return _Grafo()
+
+    monkeypatch.setattr(no, "nevera_activa", lambda uid: activa)
+    monkeypatch.setattr(db_core, "connection_pool", None)
+    monkeypatch.setattr(db_inventory, "get_user_inventory", lambda uid: list(inventario))
+    monkeypatch.setattr(db_plans, "get_latest_usable_meal_plan_with_id", lambda uid: None)
+    monkeypatch.setattr(shopping_calculator, "aggregate_shopping_list", lambda items, **k: list(items))
+    monkeypatch.setattr(agent, "build_memory_context", lambda *_a: {"recent_messages": [], "summary_context": ""})
+    monkeypatch.setattr(agent, "classify_sentiment",
+                        lambda _p: {**PERSONALITY_PROFILES["neutral"], "sentiment": "neutral"})
+    monkeypatch.setattr(agent, "rag_query_router", lambda _p: {"skip": True})
+    monkeypatch.setattr(agent, "_emit_chat_stream_total_duration_best_effort", lambda *_a: None)
+    monkeypatch.setattr(agent, "chat_builder", _Builder())
+    monkeypatch.setattr(agent, "chat_checkpoint_pool", None)
+    monkeypatch.setattr(agent, "connection_pool", None)
+    kwargs = dict(session_id="sesion-nevera", prompt="¿Qué ceno hoy?", user_id="u-nevera",
+                  form_data={"current_pantry_ingredients": ["2 lbs de Salchichón Testigo", "1 lb de Queso Testigo"]})
+    with pytest.raises(_PromptCapturado):
+        if path == "stream":
+            list(agent.chat_with_agent_stream(**kwargs, vision=vision))
+        else:
+            agent.chat_with_agent(**kwargs)
+    return capturado["prompt"]
+
+
+@pytest.mark.parametrize("path", ("nonstream", "stream"))
+def test_con_la_nevera_apagada_el_prompt_no_trae_la_nevera_vieja_del_formulario(monkeypatch, path):
+    """[revisión B4] Con la Nevera apagada el inventario queda vacío y el respaldo desde `form_data` corría SIEMPRE:
+    la Nevera de la última renovación salía como «[INVENTARIO FÍSICO ACTUAL] … PRIORIZA SIEMPRE recomendar cocinar
+    con esto», contra el bloque que ordena no mencionarla."""
+    apagada = _prompt_del_coach(monkeypatch, path, activa=False, inventario=["3 unidades de Zarzamora Testigo"])
+    for fuga in ("Salchichón Testigo", "Queso Testigo", "Zarzamora Testigo", "INVENTARIO FÍSICO ACTUAL",
+                 "NEVERA FÍSICA AHORA"):
+        assert fuga not in apagada, fuga
+    assert no.BLOQUE_PROMPT_NEVERA_APAGADA in apagada
+    # encendida: el arnés SÍ ve el inventario real y, sin él, el respaldo del formulario (si no, el test no probaría nada)
+    real = _prompt_del_coach(monkeypatch, path, activa=True, inventario=["3 unidades de Zarzamora Testigo"])
+    assert "[INVENTARIO FÍSICO ACTUAL]: 3 unidades de Zarzamora Testigo." in real
+    respaldo = _prompt_del_coach(monkeypatch, path, activa=True)
+    assert "[INVENTARIO FÍSICO ACTUAL]: 2 lbs de Salchichón Testigo, 1 lb de Queso Testigo." in respaldo
+    assert no.BLOQUE_PROMPT_NEVERA_APAGADA not in respaldo
+
+
+def test_la_foto_de_compra_llega_al_prompt_sin_ofrecer_la_nevera_apagada(monkeypatch):
+    foto = _FOTOS_CON_NEVERA["compra_sin_texto"]
+    apagada = _prompt_del_coach(monkeypatch, "stream", activa=False, vision=foto)
+    assert "ofrécele registrar ESE plato" in apagada
+    assert "quiere que los agregues a su Nevera" not in apagada
+    encendida = _prompt_del_coach(monkeypatch, "stream", activa=True, vision=foto)
+    assert "quiere que los agregues a su Nevera" in encendida

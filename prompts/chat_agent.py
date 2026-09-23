@@ -493,7 +493,7 @@ El user_id actual es: {user_id}"""
 
 
 def build_inventory_context(inventory_str: str, shopping_delta_str: str,
-                            plan_en_pausa: bool = False, sin_plan: bool = False) -> str:
+                            plan_en_pausa: bool = False, sin_plan: bool = False, nevera_activa: bool = True) -> str:
     """Genera el bloque de estado de despensa y compras en tiempo real.
 
     [P1-PLAN-LOTE-137 · 2026-09-20] `sin_plan`: quien no tiene plan (el contador del onboarding corto, con la Nevera
@@ -507,14 +507,20 @@ def build_inventory_context(inventory_str: str, shopping_delta_str: str,
     mantenimiento mientras la generación esté apagada. Decirle al modelo que el
     usuario «AÚN DEBE COMPRAR … para completar su plan alimenticio» lo empuja a
     presionar por un plan que el usuario paró.
+
+    [P1-NEVERA-OPCIONAL · 2026-09-23] `nevera_activa=False` (el usuario la apagó en modo
+    contador): la línea del INVENTARIO no se escribe —ni su contenido ni «Vacío»—; el
+    coach tiene la orden de no mencionarla. La parte de compras no cambia.
     """
+    if not nevera_activa:
+        inventory_str = ""
     if not inventory_str and not shopping_delta_str:
         return ""
 
     ctx = f"\n\n🛒 ESTADO DE LA DESPENSA Y COMPRAS (INFORMACIÓN EN TIEMPO REAL):"
     if inventory_str:
         ctx += f"\n- 📦 [INVENTARIO FÍSICO ACTUAL]: {inventory_str}. ¡Estas son las provisiones que el usuario tiene FÍSICAMENTE en su cocina ahora mismo! PRIORIZA SIEMPRE recomendar cocinar con esto antes de sugerir comprar cosas nuevas."
-    else:
+    elif nevera_activa:
         ctx += f"\n- 📦 [INVENTARIO FÍSICO ACTUAL]: Vacío. El usuario no ha registrado tener ingredientes en casa."
 
     if shopping_delta_str:
@@ -982,15 +988,17 @@ _VISION_REASONS = {
 
 # [P1-PLAN-LOTE-132 · 2026-09-20] Qué hacer con la foto de una ETIQUETA (la prueba que pide la regla S). Constante
 # compartida por la rama de una foto y la de varias: el cliente manda SIEMPRE `kind: 'multi'`, también con una sola.
-_ETIQUETA_INSTRUCCION = (
+# [P1-NEVERA-OPCIONAL · 2026-09-23] Partida en dos: con la Nevera apagada la instrucción va sin la frase que la nombra
+# (`_ETIQUETA_INSTRUCCION` conserva byte a byte el texto de siempre).
+_ETIQUETA_INSTRUCCION_SIN_NEVERA = (
     "ETIQUETA: las cifras que trae son POR PORCIÓN y están LEÍDAS de la tabla nutricional, no estimadas: úsalas tal "
     "cual. Si dice que no se lee la tabla, pídele otra foto de la tabla nutricional (la parte de atrás del pote) o que "
     "te diga la porción — no inventes los números. Si ya dijo en pasado que se lo tomó y cuántas porciones (scoops), "
     "registra EN ESTE TURNO con `log_consumed_meal`: cifras de la etiqueta × porciones, con la marca en `meal_name`. Si "
     "no ha dicho cuántas porciones ni si ya se lo tomó, dile en una frase lo que aporta UNA porción y cómo deja su día "
-    "(bloque LO QUE LE FALTA HOY), y pregunta SOLO lo que falta (cuántos scoops, o si ya se lo tomó). NO lo ofrezcas "
-    "para la Nevera salvo que él lo pida."
+    "(bloque LO QUE LE FALTA HOY), y pregunta SOLO lo que falta (cuántos scoops, o si ya se lo tomó)."
 )
+_ETIQUETA_INSTRUCCION = _ETIQUETA_INSTRUCCION_SIN_NEVERA + " NO lo ofrezcas para la Nevera salvo que él lo pida."
 
 
 # [P1-PLAN-LOTE-168 · 2026-09-23] Qué hacer con la foto de un PLATO cuando el mensaje cuenta además otra comida (el caso
@@ -1003,10 +1011,15 @@ _PLATO_INSTRUCCION = (
 )
 
 
-def build_vision_context(vision) -> str:
-    """Bloque de contexto para el system prompt cuando el turno trae una foto. "" si no hay."""
+def build_vision_context(vision, nevera_activa: bool = True) -> str:
+    """Bloque de contexto para el system prompt cuando el turno trae una foto. "" si no hay.
+
+    [P1-NEVERA-OPCIONAL · 2026-09-23] `nevera_activa=False` (el usuario la apagó en modo contador): ninguna instrucción
+    ofrece llevar lo de la foto a la Nevera ni nombra `modify_pantry_inventory` — la compra se describe y, si cocina con
+    eso, se registra el plato. Con `True` (default), el texto de siempre."""
     if not isinstance(vision, dict) or not vision.get("kind"):
         return ""
+    _etiqueta = _ETIQUETA_INSTRUCCION if nevera_activa else _ETIQUETA_INSTRUCCION_SIN_NEVERA
     kind = str(vision.get("kind"))
     if kind == "multi":
         raw_items = vision.get("items") if isinstance(vision.get("items"), list) else []
@@ -1044,9 +1057,12 @@ def build_vision_context(vision) -> str:
             instruction += (
                 " Para las fotos de compra, ofrece agregarlas a la Nevera y usa "
                 "modify_pantry_inventory solo después de confirmación."
+            ) if nevera_activa else (   # [P1-NEVERA-OPCIONAL · 2026-09-23] apagada: ni se ofrece ni se nombra
+                " Las fotos de compra no son un plato servido: descríbelas y, si luego cocina con eso y se lo "
+                "come, ofrécele registrar ESE plato."
             )
         if has_label:   # [P1-PLAN-LOTE-132] el cliente manda SIEMPRE `multi`, también con una sola foto: la instrucción va aquí
-            instruction += " " + _ETIQUETA_INSTRUCCION
+            instruction += " " + _etiqueta
         if has_plate:   # [P1-PLAN-LOTE-168] una foto de plato con análisis: cómo registrarla junto a otra comida
             instruction += " " + _PLATO_INSTRUCCION
         if unavailable:
@@ -1077,13 +1093,21 @@ def build_vision_context(vision) -> str:
         # [P1-PLAN-LOTE-132 · 2026-09-20] La prueba que pide la regla S. Las cifras vienen LEÍDAS de la tabla, por porción.
         return (
             f"\n\n📷 CONTEXTO DE FOTO: El usuario mandó la ETIQUETA o el envase de un producto. Lo que se leyó: \"{desc}\". "
-            + _ETIQUETA_INSTRUCCION
+            + _etiqueta
         )
     if kind == "items":
         base = (
             f"\n\n📷 CONTEXTO DE FOTO: El usuario subió una foto de ALIMENTOS SUELTOS o una COMPRA (no "
             f"un plato servido). Análisis de la imagen: \"{desc}\"."
         )
+        if not nevera_activa:   # [P1-NEVERA-OPCIONAL · 2026-09-23] apagada: ni se ofrece ni se nombra
+            if has_text:
+                return base + " Responde a su mensaje."
+            return base + (
+                " Lista con viñetas los alimentos detectados (cantidad + nombre en **negritas**). NO registres esto "
+                "como comida consumida (no es un plato): si luego cocina con ellos y se lo come, ofrécele registrar "
+                "ESE plato. Responde directo y conversacional."
+            )
         if has_text:
             return base + (
                 " Si el usuario quiere, agrégalos a su Nevera con modify_pantry_inventory tras su "

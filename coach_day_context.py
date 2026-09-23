@@ -579,7 +579,7 @@ def formatear_propuestas(propuestas: list, franja: str, objetivo: dict, con_neve
         "la come», tal cual — no hagas la resta tú). Da los ingredientes con sus gramos; los PASOS solo si pidió receta o cómo se hace, "
         "resumidos sin cambiarles el sentido ni añadir ingredientes. Nombra la nº 2 como alternativa en media frase. "
         "No cambies cifras ni gramos. "
-        + ("Si le falta algo de la Nevera, dilo. " if nevera_activa else "")   # [P1-NEVERA-OPCIONAL]
+        + ("Si le falta algo de la Nevera, dilo. " if nevera_activa else "")   # [P1-NEVERA-OPCIONAL · 2026-09-23]
         + "NO la registres: todavía no se la ha comido "
         "— cierra ofreciendo anotarla cuando se la coma (entonces `log_consumed_meal` con ESTAS macros y estos "
         "ingredientes). Si pide otra opción, vuelve a llamar esta herramienta pasando en `excluir` los nombres ya "

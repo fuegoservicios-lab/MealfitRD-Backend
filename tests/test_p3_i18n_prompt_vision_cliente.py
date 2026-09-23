@@ -57,7 +57,8 @@ def test_el_bloque_va_al_system_prompt_en_las_dos_ramas():
     src = (_BACKEND / "agent.py").read_text(encoding="utf-8")
     assert "vision: Optional[dict] = None" in src.split("def chat_with_agent_stream", 1)[1][:600]
     cuerpo = src.split("def chat_with_agent_stream", 1)[1]
-    assert cuerpo.count("system_prompt += build_vision_context(vision)") == 2, (
+    # [P1-NEVERA-OPCIONAL · 2026-09-23] sin el paréntesis de cierre: el estado de la Nevera viaja como kwarg
+    assert cuerpo.count("system_prompt += build_vision_context(vision") == 2, (
         f"el bloque de la foto tiene que ir en la rama static-prefix Y en la legacy [{_MARKER}]")
     router = (_BACKEND / "routers" / "chat.py").read_text(encoding="utf-8")
     assert 'data.get("vision")' in router and "vision=vision," in router

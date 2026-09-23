@@ -394,6 +394,22 @@ def _contador_sin_plan_para_prompt(user_id, current_plan) -> bool:
         return False
 
 
+def _nevera_activa_para_chat(user_id) -> bool:
+    """[P1-NEVERA-OPCIONAL · 2026-09-23] ¿Ve el coach la Nevera en ESTE turno? Se resuelve UNA vez, al tope de los dos
+    caminos del chat, y de ese dato cuelgan la lectura del inventario, su respaldo desde `form_data` (el
+    `current_pantry_ingredients` que cada generación guarda en `health_profile`: con la Nevera apagada sería una foto
+    VIEJA presentada como «lo que tiene ahora»), la línea del inventario, la foto de compra y el bloque final de la
+    Nevera. La regla es SSOT en `nevera_opcional`; invitados fuera (sin cuenta no hay interruptor). Fallo abierto."""
+    if not user_id or user_id == "guest":
+        return True
+    try:
+        from nevera_opcional import nevera_activa
+        return bool(nevera_activa(user_id))
+    except Exception as e:
+        logger.warning(f"[P1-NEVERA-OPCIONAL] regla ilegible, la Nevera queda activa: {e}")
+        return True
+
+
 def _daily_goal_context(form_data, plan) -> str:
     """[P1-PLAN-LOTE-53 · 2026-09-15] La meta del día y su distancia REAL al mantenimiento.
 
@@ -6211,7 +6227,7 @@ def _day_gap_context_for_chat(form_data, plan_vigente, diario_de_hoy, tz_offset,
         return ""
 
 
-def _build_pantry_context(user_id: Optional[str]) -> str:
+def _build_pantry_context(user_id: Optional[str], nevera_on: Optional[bool] = None) -> str:
     """[P1-CHAT-PANTRY-AWARE · 2026-07-12] Snapshot REAL de `user_inventory`
     al system prompt (bloque VOLÁTIL → va al final, no rompe el prefix-cache
     P2-CHAT-PROMPT-STATIC-PREFIX). Vivo: el agente confirmó "ya van 4 leches
@@ -6221,11 +6237,12 @@ def _build_pantry_context(user_id: Optional[str]) -> str:
     if not user_id or user_id == "guest":
         return ""
     # [P1-NEVERA-OPCIONAL · 2026-09-23] Apagada por el usuario (modo contador): el coach no ve el inventario y recibe
-    # la orden explícita de no mencionarla. Va en ESTE bloque porque es el que los dos caminos del chat inyectan al
-    # final (el último mandato pesa más que las viñetas estáticas que hablan de «su Nevera»).
+    # la orden explícita de no mencionarla. Va en ESTE bloque porque es de la cola volátil que los dos caminos del chat
+    # inyectan DESPUÉS de las viñetas estáticas que hablan de «su Nevera» (el mandato posterior pesa más). Va ANTES del
+    # kill switch del snapshot: la orden no depende de él. `nevera_on` llega resuelto una vez por turno; sin él, aquí.
     try:
-        from nevera_opcional import nevera_activa, BLOQUE_PROMPT_NEVERA_APAGADA
-        if not nevera_activa(user_id):
+        from nevera_opcional import BLOQUE_PROMPT_NEVERA_APAGADA
+        if not (_nevera_activa_para_chat(user_id) if nevera_on is None else nevera_on):
             return BLOQUE_PROMPT_NEVERA_APAGADA
     except Exception:
         pass
@@ -6632,6 +6649,7 @@ def chat_with_agent(session_id: str, prompt: str, current_plan: Optional[dict] =
     #  colo un NameError. Aqui ya no puede quedar por debajo de nadie.
     plan_vigente = _plan_vigente_para_prompt(user_id, current_plan)
     _contador_sin_plan = _contador_sin_plan_para_prompt(user_id, current_plan)
+    _nevera_on = _nevera_activa_para_chat(user_id)   # [P1-NEVERA-OPCIONAL · 2026-09-23] una vez por turno
 
 
     # Obtener contexto de memoria inteligente (resúmenes + mensajes recientes)
@@ -6761,8 +6779,7 @@ def chat_with_agent(session_id: str, prompt: str, current_plan: Optional[dict] =
     if user_id and user_id != "guest":
         try:
             from db_inventory import get_user_inventory
-            from nevera_opcional import nevera_activa   # [P1-NEVERA-OPCIONAL · 2026-09-23] apagada: no se lee
-            user_phys_inv = get_user_inventory(user_id) if nevera_activa(user_id) else []
+            user_phys_inv = get_user_inventory(user_id) if _nevera_on else []   # [P1-NEVERA-OPCIONAL · 2026-09-23] apagada: no se lee
             if user_phys_inv:
                 inventory_str = ", ".join(user_phys_inv)
                 
@@ -6783,7 +6800,10 @@ def chat_with_agent(session_id: str, prompt: str, current_plan: Optional[dict] =
     # num_days/multiplier reales para que estos dos fallbacks no capen la nevera/lista a 1
     # persona-semana cuando el plan real es multi-semana/household>1.
     _vp_num_days, _vp_multiplier = _virtual_pantry_num_days_and_multiplier(current_plan)
-    if not inventory_str and form_data:
+    # [P1-NEVERA-OPCIONAL · 2026-09-23] Con la Nevera apagada NO hay respaldo: `current_pantry_ingredients` llega en el
+    # `form_data` del chat desde `health_profile` (cada generación guarda ahí su payload) y sería la Nevera de la última
+    # renovación presentada como «lo que tiene AHORA», contra la orden de no mencionarla.
+    if not inventory_str and form_data and _nevera_on:
         current_pantry = form_data.get("current_pantry_ingredients", [])
         if current_pantry and isinstance(current_pantry, list):
             from shopping_calculator import aggregate_shopping_list
@@ -6810,6 +6830,7 @@ def chat_with_agent(session_id: str, prompt: str, current_plan: Optional[dict] =
         inventory_str, shopping_delta_str,
         plan_en_pausa=bool(current_plan) and plan_vigente is None,
         sin_plan=not current_plan,   # [P1-PLAN-LOTE-137] sin plan no hay «lista para su plan actual»
+        nevera_activa=_nevera_on,    # [P1-NEVERA-OPCIONAL · 2026-09-23] apagada: sin línea de inventario (ni «Vacío»)
     )
 
     # [P1-SUPERPERSONALIZATION-1 · 2026-06-19] Inyecta el bloque de súper
@@ -6966,7 +6987,7 @@ def chat_with_agent(session_id: str, prompt: str, current_plan: Optional[dict] =
         # forma en que los bloques de este prompt podían discrepar entre sí sobre qué día es hoy.
         system_prompt += _build_hydration_context(user_id, local_date_str=local_date)
         # [P1-CHAT-PANTRY-AWARE · 2026-07-12] Snapshot real de la Nevera.
-        system_prompt += _build_pantry_context(user_id)
+        system_prompt += _build_pantry_context(user_id, nevera_on=_nevera_on)
         # [P1-CHAT-TODAY-CONTEXT · 2026-07-12] HOY → día del menú + ciclo.
         system_prompt += _build_plan_today_context(plan_vigente, local_date_str=local_date, tz_offset=tz_offset)
         # [P1-CHAT-PAST-DAYS · 2026-07-27] Paridad con el path stream. Este
@@ -7223,6 +7244,7 @@ def chat_with_agent_stream(session_id: str, prompt: str, current_plan: Optional[
     # [P1-CHAT-ORPHAN-TURN-TRUTH] El registro del turno vivo lo hace `_tracks_active_turn`.
     plan_vigente = _plan_vigente_para_prompt(user_id, current_plan)
     _contador_sin_plan = _contador_sin_plan_para_prompt(user_id, current_plan)
+    _nevera_on = _nevera_activa_para_chat(user_id)   # [P1-NEVERA-OPCIONAL · 2026-09-23] una vez por turno
 
     # [P1-COACH-PERSONA-CURIOSIDAD-DO · 2026-08-23] País resuelto antes de
     # cosechar sentimiento: la instrucción se normaliza una sola vez aguas
@@ -7344,7 +7366,7 @@ def chat_with_agent_stream(session_id: str, prompt: str, current_plan: Optional[
         # --- bloques dinámicos (volátiles) al final ---
         system_prompt += build_temporal_context(local_date=local_date, tz_offset=tz_offset)
         # [P3-I18N-PROMPT-VISION-CLIENTE-ESPANOL] la foto es contexto de SISTEMA, no turno del usuario.
-        system_prompt += build_vision_context(vision)
+        system_prompt += build_vision_context(vision, nevera_activa=_nevera_on)
         system_prompt += build_circadian_context(schedule_type)
         system_prompt += build_temporal_proactive_context()
         # 🎭 Personalidad adaptativa basada en el sentimiento detectado (per-turn)
@@ -7356,7 +7378,7 @@ def chat_with_agent_stream(session_id: str, prompt: str, current_plan: Optional[
         system_prompt = _base_inline
         system_prompt += build_temporal_context(local_date=local_date, tz_offset=tz_offset)
         # [P3-I18N-PROMPT-VISION-CLIENTE-ESPANOL] la foto es contexto de SISTEMA, no turno del usuario.
-        system_prompt += build_vision_context(vision)
+        system_prompt += build_vision_context(vision, nevera_activa=_nevera_on)
         system_prompt += build_circadian_context(schedule_type)
         system_prompt += build_temporal_proactive_context()
         # 🎭 Inyectar personalidad adaptativa basada en el sentimiento detectado
@@ -7379,8 +7401,7 @@ def chat_with_agent_stream(session_id: str, prompt: str, current_plan: Optional[
     if user_id and user_id != "guest":
         try:
             from db_inventory import get_user_inventory
-            from nevera_opcional import nevera_activa   # [P1-NEVERA-OPCIONAL · 2026-09-23] apagada: no se lee
-            user_phys_inv = get_user_inventory(user_id) if nevera_activa(user_id) else []
+            user_phys_inv = get_user_inventory(user_id) if _nevera_on else []   # [P1-NEVERA-OPCIONAL · 2026-09-23] apagada: no se lee
             if user_phys_inv:
                 inventory_str = ", ".join(user_phys_inv)
                 
@@ -7401,7 +7422,10 @@ def chat_with_agent_stream(session_id: str, prompt: str, current_plan: Optional[
     # num_days/multiplier reales para que estos dos fallbacks no capen la nevera/lista a 1
     # persona-semana cuando el plan real es multi-semana/household>1.
     _vp_num_days, _vp_multiplier = _virtual_pantry_num_days_and_multiplier(current_plan)
-    if not inventory_str and form_data:
+    # [P1-NEVERA-OPCIONAL · 2026-09-23] Con la Nevera apagada NO hay respaldo: `current_pantry_ingredients` llega en el
+    # `form_data` del chat desde `health_profile` (cada generación guarda ahí su payload) y sería la Nevera de la última
+    # renovación presentada como «lo que tiene AHORA», contra la orden de no mencionarla.
+    if not inventory_str and form_data and _nevera_on:
         current_pantry = form_data.get("current_pantry_ingredients", [])
         if current_pantry and isinstance(current_pantry, list):
             from shopping_calculator import aggregate_shopping_list
@@ -7428,6 +7452,7 @@ def chat_with_agent_stream(session_id: str, prompt: str, current_plan: Optional[
         inventory_str, shopping_delta_str,
         plan_en_pausa=bool(current_plan) and plan_vigente is None,
         sin_plan=not current_plan,   # [P1-PLAN-LOTE-137] sin plan no hay «lista para su plan actual»
+        nevera_activa=_nevera_on,    # [P1-NEVERA-OPCIONAL · 2026-09-23] apagada: sin línea de inventario (ni «Vacío»)
     )
 
     # [P1-SUPERPERSONALIZATION-1 · 2026-06-19] Inyecta el bloque de súper
@@ -7571,7 +7596,7 @@ def chat_with_agent_stream(session_id: str, prompt: str, current_plan: Optional[
         # precisión en zonas horarias no-UTC.
         system_prompt += _build_hydration_context(user_id, local_date_str=local_date)
         # [P1-CHAT-PANTRY-AWARE · 2026-07-12] Snapshot real de la Nevera.
-        system_prompt += _build_pantry_context(user_id)
+        system_prompt += _build_pantry_context(user_id, nevera_on=_nevera_on)
         # [P1-CHAT-TODAY-CONTEXT · 2026-07-12] HOY → día del menú + ciclo.
         system_prompt += _build_plan_today_context(plan_vigente, local_date_str=local_date, tz_offset=tz_offset)
         # [P1-CHAT-PAST-DAYS · 2026-07-27] Días que ya pasaron: plan prescrito

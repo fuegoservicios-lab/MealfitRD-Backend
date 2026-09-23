@@ -1613,7 +1613,7 @@ def correct_consumed_meal(
                 _nota_nevera = (" ⚠️ El diario quedó corregido, pero NO pude ajustar la Nevera: díselo "
                                 "al usuario.")
         if not _nevera_on:
-            _nota_nevera = ""   # [P1-NEVERA-OPCIONAL] apagada: ninguna nota de Nevera llega al coach
+            _nota_nevera = ""   # [P1-NEVERA-OPCIONAL · 2026-09-23] apagada: ninguna nota de Nevera llega al coach
         bits = []
         if meal_name is not None:
             bits.append(f"nombre → '{meal_name}'")
@@ -4400,13 +4400,15 @@ def mark_shopping_list_purchased(user_id: str, excluded_items: list[str] = None,
     # marcaba el plan pausado como comprado — inventario que el usuario no compró, en la pantalla que él mismo lleva
     # a mano. Lo que SÍ compró se anota con la tool de la Nevera, ítem por ítem.
     if _usuario_en_modo_contador(user_id):
-        # [P1-NEVERA-OPCIONAL · 2026-09-23] Y si además apagó la Nevera no hay dónde anotar lo que compró: no se le
-        # ofrece `modify_pantry_inventory` (respondería «desactivada»). Solo aquí: fuera del contador siempre está activa.
+        _sin_lista = ("El usuario tiene la generación de planes APAGADA (usa la app como contador): no hay una lista de "
+                      "compras activa que marcar como comprada. NO digas que registraste la compra.")
+        # [P1-NEVERA-OPCIONAL · 2026-09-23] Y si además apagó la Nevera no hay dónde anotar lo que compró: la guarda de
+        # honestidad se queda y, en vez de `modify_pantry_inventory` (respondería «desactivada»), va la regla de la
+        # Nevera apagada. Solo aquí: fuera del contador siempre está activa.
         if not nevera_activa(user_id):
-            return MENSAJE_NEVERA_APAGADA
-        return ("El usuario tiene la generación de planes APAGADA (usa la app como contador): no hay una lista de "
-                "compras activa que marcar como comprada. NO digas que registraste la compra. Pídele que te diga "
-                "QUÉ compró y en qué cantidad, y anótalo en su Nevera con `modify_pantry_inventory`.")
+            return f"{_sin_lista} {MENSAJE_NEVERA_APAGADA}"
+        return (_sin_lista + " Pídele que te diga QUÉ compró y en qué cantidad, y anótalo en su Nevera con "
+                "`modify_pantry_inventory`.")
 
     try:
         from db_inventory import restock_inventory
