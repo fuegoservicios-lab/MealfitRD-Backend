@@ -4503,8 +4503,7 @@ def _plan_pro_model_name() -> str:
     # tier (todos van a flash). `_PRO_MODEL_NAME` es EXCLUSIVAMENTE la RED
     # post-fallo: 2º en la cadena del day-gen, fallback del planner con breaker
     # abierto, escalada del corrector quirúrgico, EVALUATOR_USE_PRO.
-    # [P1-NET-LUNA · 2026-07-31] Default de la red → Luna (OpenAI): `gpt-5.6-luna` hasta el 23-sep,
-    # `gpt-6-luna` desde P1-PLAN-LOTE-171 (mismo papel, mitad de precio).
+    # [P1-NET-LUNA · 2026-07-31] Default de la red → Luna (OpenAI); `gpt-6-luna` desde P1-PLAN-LOTE-171.
     # Razón (decisión owner): flash y pro son el MISMO proveedor — el incidente
     # que motivó la red (breaker abierto 172× en el gym baseline) fue GLM
     # rate-limiteando bajo carga, y en ese modo de fallo pro cae JUNTO con
@@ -51173,11 +51172,8 @@ async def arun_plan_pipeline(form_data: dict, history: list = None, taste_profil
             is_rotation = (not _rot_fridge_empty) and bool(
                 actual_form_data.get("current_pantry_ingredients")
                 or actual_form_data.get("current_shopping_list"))
-            # [P1-PLAN-LOTE-171 · 2026-09-23] Una RENOVACIÓN («Quiero variedad», `variety`/`renewal.v1`) ignora la
-            # nevera por diseño (P1-VARIETY-IGNORE-PANTRY) y la guarda de despensa ya se salta con esa MISMA regla:
-            # ordenar aquí «usa SOLO la despensa» le decía al modelo lo contrario de lo que la guarda iba a
-            # comprobar. La rotación de verdad es la de «No me gustan estos platos» (`dislike`): mismas compras,
-            # platos nuevos. Una renovación del mismo día cae en el re-roll de variedad.
+            # [P1-PLAN-LOTE-171 · 2026-09-23] Una RENOVACIÓN (`variety`/`renewal.v1`) ignora la nevera (P1-VARIETY-IGNORE-PANTRY)
+            # y «usa SOLO la despensa» contradecía a su guarda. Rotar de verdad es `dislike`; el mismo día cae en re-roll.
             from horizon import is_renewal_reason as _is_renewal_reason_rot
             if is_rotation and _is_renewal_reason_rot(actual_form_data.get("update_reason")):
                 is_rotation = False
