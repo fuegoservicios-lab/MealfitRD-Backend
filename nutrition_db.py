@@ -358,6 +358,9 @@ _QUANTIZE_LEAF_CUP_NO_THIRDS = os.environ.get("MEALFIT_QUANTIZE_LEAF_CUP_NO_THIR
 # toca. Antes pasaba por `_snap_qty` con (0, ½, 1) y el empate lo resolvía el PRIMERO de la tupla: ¾ → ½ (−33 %),
 # 1¼ → 1 (−20 %), siempre hacia abajo. Batería real del 23-sep: las tres pechugas del almuerzo (160-170 g) salieron
 # en «½ pechuga (≈100 g)» y la proteína del día 1 bajó de 129 a 118 g. tooltip-anchor: P1-PLAN-LOTE-172-CUARTOS
+# [P1-PLAN-LOTE-174] Alias que son sólo un descriptor: pierden ante un alimento nombrado en el mismo texto.
+_DESCRIPTOR_ALIASES = frozenset({"maduro", "madura", "maduros", "maduras", "verde", "verdes", "fresco", "fresca",
+                                 "blanco", "blanca", "integral", "light", "dulce", "entero", "entera", "natural"})
 _QUANTIZE_COUNT_QUARTER_GRID = os.environ.get("MEALFIT_QUANTIZE_COUNT_QUARTER_GRID", "true").strip().lower() in ("1", "true", "yes", "on")
 _APPROX_GRAM_HINT_RE = re.compile(r"\(\s*≈\s*\d+(?:[.,]\d+)?\s*(?:g|gr|gramos|ml)\b[^)]*\)", re.I)
 
@@ -620,9 +623,20 @@ class IngredientNutritionDB:
             if n_stripped == alias_stripped:
                 return row
         # Tier 2: alias como palabra dentro del texto (word-boundary)
+        # [P1-PLAN-LOTE-174 · 2026-09-23] Un alias que es SÓLO un descriptor («maduro», alias de «Plátano maduro») gana por
+        # largo a «mango» (6 > 5) y «mango maduro» / «guineo maduro» salían con los macros del plátano (137 vs 67 kcal por
+        # 100 g). El descriptor vale solo («2 maduros fritos»), pero pierde ante un alimento de verdad en el mismo texto.
+        # tooltip-anchor: P1-PLAN-LOTE-174-ALIAS-DESCRIPTOR
+        _desc_row = None
         for _alias_stripped, _pat, row in self._alias_patterns:  # [P1-INGREDIENT-MATCH-PRECOMPILED]
             if _pat.search(n_stripped):
+                if _alias_stripped in _DESCRIPTOR_ALIASES:
+                    if _desc_row is None:
+                        _desc_row = row
+                    continue
                 return row
+        if _desc_row is not None:
+            return _desc_row
         # Tier 3 [P4-UNIFIED-RESOLVER]: delega al resolver canónico (regex clean_n + fuzzy + Cohere
         # semántico) que resuelve lo que los tiers baratos no. Solo con catálogo real (NO en rows
         # inyectados de test, que usan un catálogo distinto al de normalize_name → determinismo offline).

@@ -329,12 +329,129 @@ def _subir_linea(meal, canon, piso, index, db, margen) -> Optional[str]:
     return f"↑{g_cur:.0f}→{piso} g de {canon}"
 
 
-def restaurar_meal(meal: dict, index: dict, *, db=None, allergies=None, margen=None) -> list:
+# ─────────────── [P1-PLAN-LOTE-174 · 2026-09-23] lo pobre de los platos del MODELO, también hasta el final ───────────────
+# Batería real (DM2 + insulina): «Casabe crujiente con queso blanco fresco, maní y huevo» con 0,01 g de maní, «Mandarina
+# con almendras…» con 0 g de almendras, «…y sardinas en lata» con 1,97 g de sardinas: el día 3 entregó 1.450 kcal y 110 g
+# de proteína (meta 1.750/153). Los platos del modelo no tienen plantilla, así que su piso sale del TIPO de alimento; la
+# identidad, de su nombre (`nombrada_en_el_nombre`). Se sube sólo lo PRESENTE y sólo si al día le cabe (el mismo margen de
+# kcal y grasa del lote 49). Knob `MEALFIT_DISH_IDENTITY_LLM` (el de la identidad del modelo, lote 172).
+# tooltip-anchor: P1-PLAN-LOTE-174-PISO-DEL-MODELO
+_PISO_POR_PALABRA = (
+    ("chia", 5), ("linaza", 5), ("ajonjoli", 5), ("semilla", 5),
+    ("mani", 10), ("almendra", 10), ("nuez", 10), ("nueces", 10), ("pistacho", 10), ("maranon", 10),
+    ("mantequilla de mani", 10),
+    ("avena", 30), ("quinoa", 30), ("harina", 25), ("casabe", 20), ("pan", 30), ("arroz", 40), ("pasta", 40),
+    ("espagueti", 40), ("bulgur", 30), ("cebada", 30),
+    ("queso", 20), ("ricotta", 30), ("cottage", 40), ("yogur", 80), ("leche", 100),
+)
+_PISO_POR_CATEGORIA = {"proteinas": 60, "viveres": 60, "frutas": 60, "vegetales": 30, "lacteos": 20}
+
+
+# Hierbas, aromáticos y condimentos dan nombre («al cilantro», «al ajillo») pero no piden ración: sin piso.
+_SIN_PISO = re.compile(r"\b(cilantro|culantro|perejil|oregano|albahaca|hierbabuena|menta|cebollin|puerro|ajo|ajillo|"
+                       r"jengibre|canela|comino|pimienta|pimenton|sal|limon|lima|vinagre|aceite|mostaza|salsa|vainilla|"
+                       r"laurel|tomillo|romero|curcuma|curry|adobo|sazon|agua|hielo|cafe|te)\b")
+
+
+def _piso_de(canon: str, db) -> int:
+    n = _sa(canon)
+    # La CABEZA del alimento decide si es hierba/condimento: «almendras tostadas sin sal» no es sal.
+    _cab = (_palabras_del_alimento(canon) or [""])[0]
+    if _SIN_PISO.search(_cab):
+        return 0
+    for w, g in _PISO_POR_PALABRA:
+        if re.search(rf"\b{w}", n):
+            return g
+    try:
+        cat = _sa(db.category_of(canon) or "")
+    except Exception:                                                          # noqa: BLE001
+        cat = ""
+    return int(_PISO_POR_CATEGORIA.get(cat, 0))
+
+
+# «0 g de almendras…»: el lector de la lista no la resuelve (sin gramos no hay alimento), así que sube por su propio camino.
+_CERO = re.compile(r"^\s*0+(?:[.,]0+)?\s*(?:g|gr|gramos)\s+de\s+(.+)$", re.IGNORECASE)
+
+
+def _rescatar_cero(meal: dict, alimento: str, db, margen, allergies) -> Optional[str]:
+    alimento = alimento.strip()
+    if _choca_alergia(alimento, allergies):
+        return None
+    piso = _piso_de(alimento, db)
+    if not piso:
+        return None
+    nueva = f"{piso} g de {alimento}"
+    mac = db.macros_from_ingredient_string(nueva) or {}
+    dk, dg = float(mac.get("kcal") or 0), float(mac.get("fats") or 0)
+    if dk <= 0 or dk > margen["kcal"] or dg > margen["grasa"]:
+        return None
+    for campo in ("ingredients", "ingredients_raw"):
+        ls = meal.get(campo)
+        if isinstance(ls, list):
+            meal[campo] = [nueva if (isinstance(x, str) and _CERO.match(x)
+                                     and _sa(_CERO.match(x).group(1)).strip() == _sa(alimento)) else x for x in ls]
+    margen["kcal"] -= dk
+    margen["grasa"] -= dg
+    return f"↑0→{piso} g de {alimento}"
+
+
+def _es_proteico(alimento: str, db) -> bool:
+    """≥10 g de proteína por 100 g: la fase que va primero cuando el margen del día es corto."""
+    try:
+        info = db.lookup(alimento)
+        return bool(info) and float(getattr(info, "protein", 0) or 0) >= 10.0
+    except Exception:                                                          # noqa: BLE001
+        return False
+
+
+def _subir_identidad_del_modelo(meal: dict, index: dict, *, db=None, allergies=None, margen=None, fase=None) -> list:
+    if not llm_on() or margen is None or db is None:
+        return []
+    from recipe_contract import _cantidades_lista
+    hechos = []
+    for linea in list(meal.get("ingredients") or []):
+        if not isinstance(linea, str) or not nombrada_en_el_nombre(meal, linea):
+            continue
+        _m0 = _CERO.match(linea)
+        if _m0:
+            if fase is not None and _es_proteico(_m0.group(1), db) != (fase == "proteina"):
+                continue
+            sub = _rescatar_cero(meal, _m0.group(1), db, margen, allergies)
+            if sub:
+                hechos.append(sub)
+            continue
+        claves = list(_cantidades_lista([linea], index))
+        if len(claves) != 1:
+            continue
+        canon = str(claves[0][0])
+        if _choca_alergia(canon, allergies):
+            continue
+        if fase is not None and _es_proteico(canon, db) != (fase == "proteina"):
+            continue
+        piso = _piso_de(canon, db)
+        if not piso:
+            continue
+        sub = _subir_linea(meal, canon, piso, index, db, margen)
+        if sub:
+            hechos.append(sub)
+    if hechos:
+        meal["_identidad_restaurada"] = list(meal.get("_identidad_restaurada") or []) + hechos
+        meal.pop("_display", None)
+        _remedir(meal, db)
+    return hechos
+
+
+def restaurar_meal(meal: dict, index: dict, *, db=None, allergies=None, margen=None, fase=None) -> list:
     """Un plato. Devuelve lo que añadió o subió (`["+38 g de Aguacate"]`, `["↑5→38 g de Aguacate"]`); `[]` si no tocó
     nada. Sin `margen` sólo vuelve lo que FALTA (lote 46); con `margen` (lo que al día le queda hasta su techo de kcal y de
-    grasa, `_margen_del_dia`) sube además lo presente por debajo del piso, si cabe."""
-    if not isinstance(meal, dict) or meal.get("_recipe_source") != "library" or meal.get("_sodium_autofix_applied"):
+    grasa, `_margen_del_dia`) sube además lo presente por debajo del piso, si cabe. [P1-PLAN-LOTE-174] Un plato del
+    modelo (sin plantilla) sube lo que su nombre nombra hasta el piso de su tipo de alimento."""
+    if not isinstance(meal, dict) or meal.get("_sodium_autofix_applied"):
         return []
+    if meal.get("_recipe_source") != "library":
+        return _subir_identidad_del_modelo(meal, index, db=db, allergies=allergies, margen=margen, fase=fase)
+    if fase == "proteina":
+        return []            # la biblioteca va en la segunda pasada, como siempre
     tpl = plantilla(meal.get("_template_id") or meal.get("_recipe_template_id"))
     ings = meal.get("ingredients")
     if not tpl or not isinstance(ings, list) or _alergeno_de_plantilla(tpl, allergies):
@@ -395,14 +512,17 @@ def restaurar_identidad(days, *, db=None, index=None, allergies=None, objetivos=
     for d in days:
         meals = [m for m in ((d.get("meals") or []) if isinstance(d, dict) else []) if isinstance(m, dict)]
         margen = _margen_del_dia(meals, objetivos)
-        for m in meals:
-            try:
-                hechos = restaurar_meal(m, index, db=db, allergies=allergies, margen=margen)
-            except Exception as e:                                             # noqa: BLE001
-                logger.debug(f"[P1-PLAN-LOTE-46] identidad no-op en {str((m or {}).get('name'))[:40]}: {e!r}")
-                hechos = []
-            if hechos:
-                tocados += 1
-                logger.info(f"🧩 [P1-PLAN-LOTE-46] identidad del plato restaurada en «{str(m.get('name'))[:48]}»: "
-                            f"{', '.join(hechos)}")
+        # [P1-PLAN-LOTE-174] con margen, dos pasadas: primero lo PROTEICO (el déficit que el revisor rechaza), después
+        # el resto; sin margen (lote 46) una sola, como siempre.
+        for fase in (("proteina", "resto") if margen is not None else (None,)):
+            for m in meals:
+                try:
+                    hechos = restaurar_meal(m, index, db=db, allergies=allergies, margen=margen, fase=fase)
+                except Exception as e:                                         # noqa: BLE001
+                    logger.debug(f"[P1-PLAN-LOTE-46] identidad no-op en {str((m or {}).get('name'))[:40]}: {e!r}")
+                    hechos = []
+                if hechos:
+                    tocados += 1
+                    logger.info(f"🧩 [P1-PLAN-LOTE-46] identidad del plato restaurada en «{str(m.get('name'))[:48]}»: "
+                                f"{', '.join(hechos)}")
     return tocados

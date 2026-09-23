@@ -344,7 +344,10 @@ _PROCESS_START_ISO = datetime.now(timezone.utc).isoformat()
 # [P1-PLAN-LOTE-173 · 2026-09-23] (solo backend) segunda vuelta de la batería real: etiquetas clínicas al final del escudo
 # (embarazo: leche y pasos; HTA: «bajo en sodio»), el plan de emergencia con lista de compras, pechuga de pavo fresca en
 # gramos (no «lonjas» de embutido), HTA/DM2 más explícitos en el prompt y cundeamor → tayota en DM2.
-_LAST_KNOWN_PFIX = "P1-PLAN-LOTE-173 · 2026-09-23"
+# [P1-PLAN-LOTE-174 · 2026-09-23] (solo backend) tercera vuelta de la batería real: los días CORTOS. Lo pobre de los platos
+# del modelo sube al piso de su tipo si el día tiene sitio (proteína primero; «0 g de almendras» incluido), y «mango
+# maduro» ya no se mide como plátano (el alias descriptor «maduro» pierde ante un alimento nombrado).
+_LAST_KNOWN_PFIX = "P1-PLAN-LOTE-174 · 2026-09-23"
 
 # [P1-SENTRY-SAMPLE-COST · 2026-05-12] Sentry sampling driven from env vars
 # con default seguro 0.1 (10%). Pre-fix tenía `traces_sample_rate=1.0` y
