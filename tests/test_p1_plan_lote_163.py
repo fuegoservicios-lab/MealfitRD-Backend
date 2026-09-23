@@ -44,8 +44,11 @@ def test_el_gesto_atras_tiene_quien_lo_escuche():
 
 def test_version_del_apk_sin_tocar_el_umbral_de_ota():
     gradle = _f("android/app/build.gradle")
-    assert int(re.search(r"versionCode\s+(\d+)", gradle).group(1)) == 103
-    assert 'versionName "1.0.103"' in gradle
+    # [P1-PLAN-LOTE-170] El 103 era el APK de este lote; los siguientes suben (104 = SystemBars sin márgenes). Lo que
+    # este test protege sigue igual: versionCode por encima del umbral y un versionName que diga el número.
+    code = int(re.search(r"versionCode\s+(\d+)", gradle).group(1))
+    assert code >= 103
+    assert f'versionName "1.0.{code}"' in gradle
     assert json.loads(_f("ota.config.json"))["minNativeBuild"] == 13
 
 

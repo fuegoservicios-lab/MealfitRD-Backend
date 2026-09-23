@@ -154,9 +154,16 @@ def test_the_dialog_route_only_mounts_over_a_background_location():
     assert "backgroundLocation" in src, (
         "P1-SETTINGS-DIALOG: App ya no lee `backgroundLocation`."
     )
-    assert re.search(r"<Routes location=\{backgroundLocation \|\| location\}>", src), (
+    # [P1-PLAN-LOTE-169 · 2026-09-23] Sin ventana, `undefined` y NO `location`: en React Router 7 todo lo que
+    # cuelga de un `<Routes location={…}>` ve `navigationType === "POP"` fijo, y pasarle la ubicación SIEMPRE
+    # convertía cada `navigate()` en un «arranque en frío» para las guardas POP de ProtectedRoute (el interruptor
+    # del generador rebotaba al panel). Con ventana sigue resolviéndose contra la ubicación de fondo.
+    assert re.search(r"<Routes location=\{backgroundLocation \|\| undefined\}>", src), (
         "P1-SETTINGS-DIALOG: el árbol de rutas dejó de resolverse contra la "
         "ubicación de fondo — la página de detrás no se pintaría."
+    )
+    assert not re.search(r"<Routes location=\{backgroundLocation \|\| location\}>", src), (
+        "P1-PLAN-LOTE-169: sin ventana hay que pasar `undefined`; con `location` cada navegación es POP."
     )
     assert re.search(r"\{backgroundLocation && \(", src), (
         "P1-SETTINGS-DIALOG: la ruta del diálogo ya no está condicionada a la "
