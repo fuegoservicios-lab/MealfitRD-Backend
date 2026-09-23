@@ -67,9 +67,9 @@ ninguna de las dos etiquetas.
 | `_detect_slot_appropriateness` | `(days, form_data)` — deriva país internamente | 5 | 5 | 0 | — |
 | `slot_coherence_backstop_for_meal` | `(meal, meal_type, country="DO")` | 2 | 1 | 1 | `routers/plans.py:7129` (`_swap_mutator`, dentro del `SELECT...FOR UPDATE` de `update_plan_data_atomic` — P2-MUTATOR-PURITY prohíbe reentrar al pool ahí para resolver país; requiere pre-fetch antes del lock, ver "Parqueado para Fase 2") |
 | `build_meal_timing_rules` | `(meal_type, country="DO")` | 5 | 4 | 1 | `prompts/day_generator.py:244` (precompute import-time de `_SLOT_SSOT_RULES_BLOCK` — SIEMPRE DO por diseño, alimenta la constante estática `DAY_GENERATOR_SYSTEM_PROMPT`; la variante beta vive en `_SLOT_SSOT_RULES_BLOCK_BETA`, call site separado, SÍ wired) |
-| `slot_violations_for_meal_name` | `(name, slot_key, rules_table=None)` | 8 | 7 | 1 | `plan_gym.py:138` (gym/benchmark OFFLINE — `scripts/plan_gym.py`/`scripts/landing_benchmark.py`, nunca corre en el request path de un usuario; puntúa deliberadamente contra la tabla nativa DO como vara de calidad fija) |
+| `slot_violations_for_meal_name` | `(name, slot_key, rules_table=None)` | 9 | 8 | 1 | `plan_gym.py:138` (gym/benchmark OFFLINE — `scripts/plan_gym.py`/`scripts/landing_benchmark.py`, nunca corre en el request path de un usuario; puntúa deliberadamente contra la tabla nativa DO como vara de calidad fija) |
 | `slot_ingredient_violations` | **(ingredients, slot_key) — SIN parámetro de país** | 2 | 0 | 2 | Estructural: la firma no tiene hook de país. `graph_orchestrator.py:10359` (dentro de `_detect_slot_appropriateness`) SÍ es país-consciente pero vía override en el dict del issue, no vía argumento — `"hard": v["hard"] and _country == "DO"`, 18 líneas después del call, documentado en el docstring de la función. `graph_orchestrator.py:14755` (dentro de `slot_coherence_backstop_for_meal`) es el residual disclosed-y-no-cerrado de T4 fix-round 1: sigue siempre `hard=True`, sin override — gap real, ver "Parqueado para Fase 2" |
-| **Total** | | **25** | **20** | **5** | |
+| **Total** | | **26** | **21** | **5** | |
 
 Cómo verificar:
 

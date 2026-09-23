@@ -28,6 +28,11 @@ DEBES verificar estos puntos CRÍTICOS:
    - Creatina o proteína suplementaria (whey/vegana/BCAA) con enfermedad renal.
    (Espejo del gate determinista `SUPPLEMENT_CONTRAINDICATIONS` — si esa tabla cambia, este punto se actualiza con ella.)
 
+6. CALIBRACIÓN — juzga lo que el plan DICE:
+   - Una etiqueta escrita en el ingrediente o en su nota de seguridad («pasteurizado», «bajo en sodio», «atún claro», «cocido», «enjuaga los enlatados») CUMPLE el requisito: no la pidas de nuevo.
+   - Interacciones con fármacos: evalúa SOLO los medicamentos DECLARADOS del paciente; no rechaces por un fármaco que no toma (p. ej., IECA/ARA II si solo toma amlodipino).
+   - Hipertensión SIN enfermedad renal: el potasio de frutas, vegetales y leguminosas (patrón DASH) es lo indicado, no un riesgo.
+
 Tu respuesta DEBE ser EXACTAMENTE en este formato JSON:
 {
     "approved": true/false,

@@ -24,7 +24,8 @@ logger = logging.getLogger(__name__)
 # conversación (el revisor pide moderarlos, no etiquetarlos).
 _QUESO_HTA = re.compile(r"\b(?:queso(?!\s+(?:cheddar|parmesano|gouda|provolone|edam|de\s+papa|de\s+bola|amarillo|suizo|"
                         r"manchego|curado|azul))|ricotta|cottage|reques[oó]n|mozzarella)\b[^,;()]*", re.IGNORECASE)
-_LATA_HTA = re.compile(r"\b(?:at[uú]n|sardinas?)\b[^,;()]*", re.IGNORECASE)
+# [P1-PLAN-LOTE-175] + el palmito en conserva (batería real, HTA: «250 g de palmito, si es en conserva… que se enjuague»).
+_LATA_HTA = re.compile(r"\b(?:at[uú]n|sardinas?|palmitos?)\b[^,;()]*", re.IGNORECASE)
 _YA_BAJO = re.compile(r"bajo\s+en\s+sodio|baja\s+en\s+sodio|sin\s+sal|sin\s+sodio|reducid[oa]\s+en\s+sodio", re.IGNORECASE)
 
 
@@ -58,7 +59,9 @@ def _sufijo(s: str, rx, sufijo: str) -> str:
 
 def _linea_hta(s: str) -> str:
     s = _sufijo(s, _QUESO_HTA, " bajo en sodio")
-    return _sufijo(s, _LATA_HTA, " bajas en sodio" if re.search(r"\bsardinas\b", s, re.IGNORECASE) else " bajo en sodio")
+    sufijo = (" bajas en sodio" if re.search(r"\bsardinas\b", s, re.IGNORECASE)
+              else " bajos en sodio" if re.search(r"\bpalmitos\b", s, re.IGNORECASE) else " bajo en sodio")
+    return _sufijo(s, _LATA_HTA, sufijo)
 
 
 def _etiquetar_hta(plan: dict) -> int:
@@ -103,3 +106,24 @@ def etiquetar(plan: dict, form_data) -> int:
             logger.info(f"🧂 [P1-PLAN-LOTE-173] HTA: «bajo en sodio» escrito en {n_hta} comida(s)")
         n += n_hta
     return n
+
+
+def etiquetar_antes_del_revisor(plan, form_data) -> int:
+    """[P1-PLAN-LOTE-175 · 2026-09-23] La misma puerta, llamada al ENTRAR en `review_plan_node`, y que no lanza nunca.
+
+    Batería real del 23-sep: embarazo y lactancia perdieron un intento entero (~4 min) —y embarazo, el plan: segundo
+    rechazo CRÍTICO y plan de emergencia— porque el revisor leyó «queso blanco fresco» y «ricotta» sin «pasteurizado».
+    La etiqueta ya corría en la sustitución clínica, pero después de ella los cerradores y el re-renderizado de las
+    líneas vuelven a escribir el alimento sin la palabra. Lo que el revisor lee es lo que hay al entrar en su nodo: ahí
+    va la etiqueta. tooltip-anchor: P1-PLAN-LOTE-175-ANTES-DEL-REVISOR"""
+    try:
+        return etiquetar(plan, form_data)
+    except Exception as e:                                                     # noqa: BLE001
+        logger.debug(f"[P1-PLAN-LOTE-175] etiquetas antes del revisor no-op: {type(e).__name__}: {e}")
+        return 0
+
+
+def plan_etiquetado(plan, form_data):
+    """El mismo plan, etiquetado (in situ): la forma que cabe en la primera línea del nodo revisor."""
+    etiquetar_antes_del_revisor(plan, form_data)
+    return plan

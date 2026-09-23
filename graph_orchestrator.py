@@ -14921,7 +14921,7 @@ HTA_LOWSODIUM_NOTE_ENABLED = _env_bool("MEALFIT_HTA_LOWSODIUM_NOTE", True)
 # tokens de riesgo de sodio "oculto" (enlatados/salados/quesos) — accent-free lowercase, estrechos.
 _LOWSODIUM_NOTE_TOKENS = ("atun", "sardina", "en lata", "enlatad", "habichuelas cocidas",
                           "garbanzos cocidos", "lentejas cocidas", "queso blanco", "queso fresco",
-                          "queso de hoja", "aceitunas", "alcaparras")
+                          "queso de hoja", "aceitunas", "alcaparras", "palmito")  # [P1-PLAN-LOTE-175] palmito
 _LOWSODIUM_NOTE_SENTINEL = "bajas en sodio y enjuaga"
 _LOWSODIUM_NOTE = ("⚠️ Sodio (hipertensión/riñón): elige versiones bajas en sodio y enjuaga los "
                    "enlatados (atún, granos) antes de usarlos; el queso, mejor fresco y bajo en sal.")
@@ -18469,7 +18469,7 @@ def _meal_safety_notes_for_summary(meal: dict) -> str:
         # [P1-CONDITION-SAFETY-NOTES] también las notas clínicas por condición viajan al reviewer.
         notes = [str(s).strip() for s in rec
                  if isinstance(s, str)
-                 and ("Seguridad alimentaria" in s or "Nota clínica" in s)]
+                 and ("Seguridad alimentaria" in s or "Nota clínica" in s or _LOWSODIUM_NOTE_SENTINEL in s)]  # [P1-PLAN-LOTE-175] + sodio
         if not notes:
             return ""
         return " [" + " | ".join(n[:300] for n in notes[:2]) + "]"
@@ -28957,8 +28957,8 @@ def _fruit_savory_autofix(days: list, form_data=None, db=None) -> int:
                 fruit = next((fr for fr in _SWEET_DOMINANT_FRUITS if _name_has_token(fr, name_low)), None)
                 if not fruit:
                     continue
-                _pat = _re.compile(_accent_flex_pattern(fruit) + r"\w*", _re.IGNORECASE)
-                meal["name"] = _pat.sub(repl, name)
+                _pat = _re.compile(r"\b" + _accent_flex_pattern(fruit) + r"\w*", _re.IGNORECASE)  # [P1-PLAN-LOTE-175] «piña» ⊂ «es-PIÑA-cas»
+                meal["name"] = __import__("dish_naming").sustituir_alimento(meal, _pat, repl)  # [P1-PLAN-LOTE-175] caja + descripción
                 for _key in ("ingredients", "ingredients_raw"):
                     _lst = meal.get(_key)
                     if isinstance(_lst, list):
@@ -34199,6 +34199,9 @@ def _budget_candidate_collides_same_day(day: dict, meal: dict, candidate: str) -
     Maní/Linaza/Arroz/Yogurt no gatean. Mismo SSOT del detector del reviewer. Fail-open a False
     (en duda, comportamiento previo = sustituir). tooltip-anchor: P1-CHEAPEN-DAY-AWARE"""
     try:
+        from constants import slot_violations_for_meal_name as _svm_bc, canonical_slot_key as _csk_bc, SLOT_INAPPROPRIATE_FOODS as _sif_bc
+        if _svm_bc(candidate, _csk_bc((meal or {}).get("meal", "")), rules_table=_sif_bc):  # tabla nativa: sólo se ABSTIENE
+            return True  # [P1-PLAN-LOTE-175] quinoa→«Arroz integral» en la cena = «arroz de noche» (DM2: 2 intentos)
         _cand_lbls = _protein_gate_labels_in_text(candidate)
         if not _cand_lbls:
             return False
@@ -42215,7 +42218,7 @@ def _review_country_feedback(country: str, kind: str, **values) -> str:
 @_node_label("reviewer")
 async def review_plan_node(state: PlanState) -> dict:
     """Revisa el plan generado para verificar seguridad médica."""
-    plan = state["plan_result"]
+    plan = __import__("etiquetas_clinicas").plan_etiquetado(state["plan_result"], state["form_data"])  # [P1-PLAN-LOTE-175] etiquetas al ENTRAR: lo que el revisor lee
     form_data = state["form_data"]
     # [P1-REVIEW-RETRY-FEEDBACK-DO · 2026-08-23] Hoisted antes de TODOS
     # los gates: el de huevo precedía la derivación histórica dentro del gate
@@ -42517,7 +42520,7 @@ async def review_plan_node(state: PlanState) -> dict:
 
         review_human_content = f"""--- RESTRICCIONES DEL PACIENTE ---
 Alergias declaradas: {json.dumps(allergies) if allergies else "Ninguna"}
-Condiciones médicas: {json.dumps(medical_conditions) if medical_conditions else "Ninguna"}
+Condiciones médicas: {json.dumps(medical_conditions) if medical_conditions else "Ninguna"} · Medicamentos declarados: {json.dumps(form_data.get("medications")) if form_data.get("medications") else "Ninguno"}
 Tipo de dieta: {diet_type}
 Alimentos que no le gustan: {json.dumps(dislikes) if dislikes else "Ninguno"}
 {_baria_note}{_clinical_panel_note}
@@ -49083,51 +49086,9 @@ def fix_ingredient_count_agreement(plan_data: dict) -> int:
 
 
 # [P1-CLOSER-TITLE-CASE · 2026-09-06] `_NAME_FEM_FOODS`, `_NAME_ADJ_FEM` y `participio_concordado`
-# se importan de `dish_naming` al principio del fichero. `_fix_name_gender_agreement` sigue aquí:
-# muta el dict de la comida, que sí es cosa del orquestador.
-def _fix_name_gender_agreement(name):
-    """[P1-NAME-GENDER-POLISH · 2026-07-26] Concuerda el adjetivo cuando el NÚCLEO del sintagma
-    es un alimento femenino. Devuelve el nombre corregido, o `None` si no hay nada que tocar.
-
-    Medido en 60 planes (196 nombres): 2 casos reales —«Maní y **Lechosa Fresco**…» y «**Lechosa
-    Fresco** con Almendras…»— sobre lechosa, que es femenina.
-
-    ⚠️ La regla exige que el sustantivo femenino sea el NÚCLEO, es decir que vaya al principio o
-    justo tras `y`/`con`/`de`/`e`. Sin eso, «Queso **Crema Batido**» se "corregiría" a «Crema
-    Batida» — y ahí el núcleo es *queso* (masculino), así que "batido" ya concuerda bien. Mi
-    primer detector cometió exactamente ese error: 2 de sus 4 hallazgos de género eran falsos.
-    Por la misma razón NO se toca la redundancia de palabras («…pescado **blanco**… Arroz
-    **Blanco**» es correcto: son dos alimentos distintos). Con 5 defectos cosméticos en 196
-    nombres, un reescritor amplio corrompe más de lo que arregla.
-    """
-    try:
-        if not isinstance(name, str) or not name.strip():
-            return None
-        from constants import strip_accents as _sa_ng
-        _toks = name.split()
-        if len(_toks) < 2:
-            return None
-        _cambios = 0
-        for _i in range(len(_toks) - 1):
-            _sust = _sa_ng(_toks[_i].lower()).strip(",.;:")
-            _adj = _sa_ng(_toks[_i + 1].lower()).strip(",.;:")
-            if _sust not in _NAME_FEM_FOODS or _adj not in _NAME_ADJ_FEM:
-                continue
-            # el sustantivo debe ser NÚCLEO: inicio del nombre o tras y/con/de/e
-            if _i > 0:
-                _prev = _sa_ng(_toks[_i - 1].lower()).strip(",.;:")
-                if _prev not in ("y", "con", "de", "e"):
-                    continue
-            _fem = _NAME_ADJ_FEM[_adj]
-            _orig = _toks[_i + 1]
-            _nuevo = _fem.capitalize() if _orig[:1].isupper() else _fem
-            if _orig.endswith((",", ".", ";", ":")):
-                _nuevo += _orig[-1]
-            _toks[_i + 1] = _nuevo
-            _cambios += 1
-        return " ".join(_toks) if _cambios else None
-    except Exception:
-        return None
+# se importan de `dish_naming` al principio del fichero. [P1-PLAN-LOTE-175] `_fix_name_gender_agreement` también:
+# vive allí junto a la regla MASCULINA y la caja de `pulir_nombre` (el nombre se conserva para los call sites).
+from dish_naming import fix_name_gender_agreement as _fix_name_gender_agreement  # noqa: E402
 
 
 def refire_display_polish_post_finalize(plan_data: dict) -> int:

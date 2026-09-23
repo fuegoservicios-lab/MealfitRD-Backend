@@ -18,6 +18,11 @@ Este pase escribe lo que el plan ya debía decir, sin cambiar el plato:
     blanco fresco» en la receta aunque la lista dijera «pasteurizado»). Lo llama `etiquetas_clinicas.etiquetar`, al
     sustituir por condición y AL FINAL del escudo: el cerrador de proteína añade el cottage después de la sustitución.
 
+  · [P1-PLAN-LOTE-175] el atún «claro» (la especie baja en mercurio), el edamame «cocido» y, si hay yuca, el paso de
+    hervirla del todo y botar el agua. Y la etiqueta corre también JUSTO antes del revisor (`review_plan_node`): en la
+    batería del 23-sep dos planes (embarazo y lactancia) perdieron un intento entero por queso sin «pasteurizado» que
+    un paso posterior a la sustitución clínica había vuelto a escribir.
+
 Sólo con la regla `pregnancy` activa (`condition_rules.detect_active_rules`). Idempotente. Knob
 `MEALFIT_PREGNANCY_LABELS` (True). tooltip-anchor: P1-PLAN-LOTE-172-EMBARAZO-ETIQUETAS
 """
@@ -129,6 +134,49 @@ def _paso_queso(s: str) -> str:
     return _QUESO_PASO.sub(lambda m: m.group(1) + _concuerda(m.group(1)), s)
 
 
+# [P1-PLAN-LOTE-175] Yuca en embarazo/lactancia: el revisor rechazó CRÍTICO «no se especifica que la yuca se hierva
+# completamente ni que se descarte el agua de cocción» (la yuca mal cocida libera cianuro). El pase de víveres crudos
+# (`P1-RAW-VIVER-SAFETY`) sólo actúa si la yuca va CRUDA; aquí se deja escrito el paso aunque la receta ya la hierva.
+_YUCA = re.compile(r"\byucas?\b", re.IGNORECASE)
+_PASO_YUCA = ("⚠️ Seguridad alimentaria: hierve la yuca hasta que esté completamente blanda por dentro y desecha el agua "
+              "de cocción antes de servirla o majarla.")
+
+
+# [P1-PLAN-LOTE-175] Mismo revisor, embarazo, batería real: «el atún en agua no especifica que sea atún claro (light o
+# skipjack)» y «el edamame no se indica como cocido» — CRÍTICO, al segundo intento, y plan de emergencia. El catálogo
+# resuelve igual «atún claro en agua» y «edamame cocido» (probado contra el matcher de producción: misma fila, mismas
+# macros), así que la etiqueta no mueve ni la compra ni los números.
+_ATUN = re.compile(r"\bat[uú]n\b(?!\s+(?:claro|rojo|blanco|fresco|aleta|patudo|albacora))", re.IGNORECASE)
+_EDAMAME = re.compile(r"\b(edamames?)\b(?![^,;()]*\b(?:cocid|hervid|al\s+vapor|salteado))", re.IGNORECASE)
+
+
+def _linea_atun_edamame(s: str) -> str:
+    s = _ATUN.sub(lambda m: m.group(0) + " claro", s, count=1)
+    return _EDAMAME.sub(lambda m: m.group(1) + (" cocidos" if m.group(1).lower().endswith("s") else " cocido"), s, count=1)
+
+
+# Sólo la yuca que se HIERVE: la harina, el almidón, el casabe y la yuca rallada de las arepitas no llevan este paso.
+_YUCA_PROCESADA = re.compile(r"\b(?:harina|almid[oó]n|casabe)\s+de\s+yucas?\b|\byucas?\s+rallad[ao]s?\b", re.IGNORECASE)
+_HIERVE = re.compile(r"\b(?:hierv\w*|herv\w*|sancoch\w*|cuec\w*|cocid[ao]s?|cocin\w*\s+(?:la\s+yuca\s+)?en\s+agua)\b",
+                     re.IGNORECASE)
+
+
+def _paso_yuca(meal: dict) -> bool:
+    ings = _YUCA_PROCESADA.sub(" ", " ".join(str(x) for x in (meal.get("ingredients") or [])))
+    if not _YUCA.search(ings):
+        return False
+    pasos = meal.get("recipe")
+    if not isinstance(pasos, list):
+        return False
+    texto = " ".join(str(p) for p in pasos).lower()
+    if not _HIERVE.search(texto):
+        return False
+    if "desecha el agua" in texto or "bota el agua" in texto or "descarta el agua" in texto:
+        return False
+    pasos.append(_PASO_YUCA)
+    return True
+
+
 def etiquetar(plan: dict, form_data) -> int:
     """Devuelve cuántas comidas tocó. Muta `plan` (display, raw y nombre)."""
     if not (enabled() and isinstance(plan, dict) and aplica(form_data)):
@@ -143,7 +191,8 @@ def etiquetar(plan: dict, form_data) -> int:
                 lineas = m.get(campo)
                 if not isinstance(lineas, list):
                     continue
-                nuevas = [(_linea_leche(_linea_queso(_linea_pescado(x))) if isinstance(x, str) else x) for x in lineas]
+                nuevas = [(_linea_atun_edamame(_linea_leche(_linea_queso(_linea_pescado(x)))) if isinstance(x, str) else x)
+                          for x in lineas]
                 if nuevas != lineas:
                     m[campo] = nuevas
                     cambio = True
@@ -153,6 +202,8 @@ def etiquetar(plan: dict, form_data) -> int:
                 if nuevos != pasos:
                     m["recipe"] = nuevos
                     cambio = True
+            if _paso_yuca(m):
+                cambio = True
             nombre = m.get("name")
             if isinstance(nombre, str):
                 n2 = _nombre_pescado(nombre)

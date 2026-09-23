@@ -285,7 +285,11 @@ CONDITION_RULES: tuple = (
             "   • Combina SIEMPRE el carbohidrato con proteína + grasa saludable + fibra en la misma comida.\n"
             # [P1-PLAN-LOTE-173] el revisor rechazó CRÍTICO «pan, cebada y mango» en un mismo desayuno.
             "   • UNA SOLA fuente principal de almidón por comida: no juntes pan + cereal/víver + fruta dulce en el mismo "
-            "plato; la fruta, entera y en otra comida."),
+            "plato; la fruta, entera y en otra comida.\n"
+            # [P1-PLAN-LOTE-175] rechazo CRÍTICO de la batería real (DM2 con insulina): «casabe en dos días, plátano
+            # maduro en dos comidas».
+            "   • Si el plan lleva plátano, que sea VERDE antes que maduro; el plátano maduro y el casabe, como mucho una vez "
+            "cada 3 días cada uno; nada de majarete ni dulces de maíz."),
     ),
     ConditionRule(
         id="hta", label="Hipertensión arterial", terms=HTA_CONDITION_TERMS,
@@ -355,6 +359,13 @@ CONDITION_RULES: tuple = (
             "   • EVITA por listeria/seguridad: embutidos y quesos/lácteos NO pasteurizados, pescado "
             "crudo, carne/huevo poco cocidos, pescados altos en mercurio (tiburón, pez espada, atún "
             "grande), alcohol y exceso de cafeína.\n"
+            # [P1-PLAN-LOTE-175] los tres motivos del rechazo CRÍTICO medido en la batería real (embarazo → plan de
+            # emergencia): 545 g de pescado y mariscos en 3 días, el atún sin especie y el edamame sin «cocido».
+            "   • PESCADO Y MARISCOS (incluidos el atún en lata y los camarones): 2-3 raciones por SEMANA, 227-340 g en "
+            "total, no todos los días; especie SIEMPRE nombrada y baja en mercurio (tilapia, sardina, salmón, atún "
+            "CLARO en lata).\n"
+            "   • Escribe la seguridad en el propio ingrediente: queso/leche/yogur «pasteurizado», edamame y legumbres "
+            "«cocidos», huevo «bien cocido»; la yuca, hervida del todo y sin su agua de cocción.\n"
             "   • Este plan es ORIENTATIVO y NO sustituye el control prenatal."),
     ),
     ConditionRule(

@@ -3883,7 +3883,7 @@ def test_scs_conteo_exacto_por_funcion():
         "_detect_slot_appropriateness": 5,
         "slot_coherence_backstop_for_meal": 2,
         "build_meal_timing_rules": 5,
-        "slot_violations_for_meal_name": 8,
+        "slot_violations_for_meal_name": 9,   # [P1-PLAN-LOTE-175] + el abaratador (tabla nativa: sólo se abstiene)
         "slot_ingredient_violations": 2,
     }
     actual = {fn: len(_scs_classify(fn)) for fn in _SCS_SPECS}
