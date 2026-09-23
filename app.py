@@ -324,7 +324,11 @@ _PROCESS_START_ISO = datetime.now(timezone.utc).isoformat()
 # tacos y dio como total del día el de AYER + los tacos. Ahora la tool devuelve el TOTAL REAL del día, el prompt avisa
 # cuando el chat viene de días anteriores y exige una llamada por comida, un guard devuelve el turno si la foto del
 # plato quedó fuera, y `force` solo vale como respuesta a un aviso de duplicado (batería real: 0/4 → 5/5).
-_LAST_KNOWN_PFIX = "P1-PLAN-LOTE-168 · 2026-09-23"
+# [P1-PLAN-LOTE-169 · 2026-09-23] (frontend por OTA; aquí el marcador y el contrato) encender «Generación de planes» te
+# devolvía al panel: `<Routes location={…}>` fija `navigationType` en POP y la envoltura de la ventana de Configuración
+# se la pasaba SIEMPRE, así que las guardas POP de /assessment y /plan saltaban en cada navegación. Y en el chat la foto
+# del usuario sale de la burbuja gris (el texto conserva la suya, del ancho del texto).
+_LAST_KNOWN_PFIX = "P1-PLAN-LOTE-169 · 2026-09-23"
 
 # [P1-SENTRY-SAMPLE-COST · 2026-05-12] Sentry sampling driven from env vars
 # con default seguro 0.1 (10%). Pre-fix tenía `traces_sample_rate=1.0` y

@@ -335,4 +335,8 @@ def test_la_bateria_reproduce_el_caso_y_comparte_la_nota():
 
 
 def test_marcador_del_lote():
-    assert '_LAST_KNOWN_PFIX = "P1-PLAN-LOTE-168 · 2026-09-23"' in _src("app.py")
+    import re
+    app = (_BACKEND / "app.py").read_text(encoding="utf-8")
+    m = re.search(r'_LAST_KNOWN_PFIX = "P1-PLAN-LOTE-(\d+) · (\d{4}-\d{2}-\d{2})"', app)
+    assert m and int(m.group(1)) >= 168 and m.group(2) >= "2026-09-23"   # la serie sigue; el marker nunca baja
+    assert "[P1-PLAN-LOTE-168 · 2026-09-23]" in app
