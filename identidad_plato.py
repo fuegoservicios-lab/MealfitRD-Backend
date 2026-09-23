@@ -175,12 +175,29 @@ def _palabras_del_alimento(linea) -> list:
     return [t for t in toks if len(t) >= 3 and t not in _VACIAS and t not in _DESCRIPTORES and t not in _UNIDADES]
 
 
+# [P1-PLAN-LOTE-181 · 2026-09-23] Platos cuyo nombre NO dice su base: «Majarete» es maíz con leche, «Mangú» es plátano.
+# Batería real (DM2): «Majarete ligero de coco y canela» con 10 g de maíz y 5 ml de leche — el solver los bajó porque
+# el nombre no los nombraba. La base cuenta como nombrada. tooltip-anchor: P1-PLAN-LOTE-181-BASE-IMPLICITA
+_BASE_IMPLICITA = {
+    "majarete": ("maiz", "leche"), "mangu": ("platano",), "moro": ("arroz",), "locrio": ("arroz",),
+    "concon": ("arroz",), "chenchen": ("maiz",), "tostones": ("platano",), "mofongo": ("platano",),
+}
+
+
+def _con_base_implicita(palabras) -> set:
+    out = set(palabras)
+    for p in palabras:
+        for v in _variantes(p):
+            out.update(_BASE_IMPLICITA.get(v, ()))
+    return out
+
+
 def nombrada_en_el_nombre(meal_o_nombre, linea) -> bool:
     """¿El nombre del plato nombra el alimento de esta línea? («1.44 g de maní tostado» en «Maní tostado con pasas»)."""
     if not enabled():
         return False
     nombre = meal_o_nombre.get("name") if isinstance(meal_o_nombre, dict) else meal_o_nombre
-    en_nombre = set(_palabras(nombre))
+    en_nombre = _con_base_implicita(_palabras(nombre))                   # [P1-PLAN-LOTE-181] + la base implícita
     if not en_nombre:
         return False
     return any(_variantes(p) & en_nombre for p in _palabras_del_alimento(linea))

@@ -86,14 +86,42 @@ def _etiquetar_hta(plan: dict) -> int:
     return tocadas
 
 
+# [P1-PLAN-LOTE-180 · 2026-09-23] «Ceviche» de CARNE: el revisor rechazó CRÍTICO «el almuerzo del día 3 se describe como
+# preparado con pollo crudo al estilo ceviche» (batería real, HTA) — y las recetas guardadas de «ceviche de pollo» SÍ
+# cocinan el pollo («verifica la pechuga a 74 °C»), pero el revisor sólo lee nombre, ingredientes y notas de seguridad.
+# Para todo usuario (no es una condición): la nota que el resumen del revisor copia, y que además es la instrucción
+# correcta. El marisco ya tiene la suya (P1-SEAFOOD-MARINADE-BLANCH). tooltip-anchor: P1-PLAN-LOTE-180-CEVICHE-DE-CARNE
+_CEVICHE = re.compile(r"\b(?:ceviche|cebiche)\b", re.IGNORECASE)
+_CARNE = re.compile(r"\b(?:pollo|pechugas?|pavo|cerdo|res|carne|chivo)\b", re.IGNORECASE)
+_NOTA_CEVICHE = ("⚠️ Seguridad alimentaria: cocina la carne por completo (74 °C por dentro, sin partes rosadas) ANTES de "
+                 "marinarla en el limón; el cítrico sólo da sabor, no la cuece.")
+
+
+def _nota_ceviche_de_carne(plan: dict) -> int:
+    tocadas = 0
+    for d in plan.get("days") or []:
+        for m in (d.get("meals") or []) if isinstance(d, dict) else []:
+            if not isinstance(m, dict) or not _CEVICHE.search(str(m.get("name") or "")):
+                continue
+            if not any(isinstance(x, str) and _CARNE.search(x) for x in (m.get("ingredients") or [])):
+                continue
+            pasos = m.get("recipe")
+            if not isinstance(pasos, list) or any("el cítrico sólo da sabor" in str(p) for p in pasos):
+                continue
+            pasos.append(_NOTA_CEVICHE)
+            m.pop("_display", None)
+            tocadas += 1
+    return tocadas
+
+
 def etiquetar(plan: dict, form_data) -> int:
     """Devuelve cuántas comidas tocó (sumando condiciones). Muta `plan`."""
     if not (enabled() and isinstance(plan, dict)):
         return 0
+    n = _nota_ceviche_de_carne(plan)                        # [P1-PLAN-LOTE-180] para todos, antes de las condiciones
     reglas = _reglas(form_data)
     if not reglas:
-        return 0
-    n = 0
+        return n
     if "pregnancy" in reglas:
         try:
             import embarazo_seguro

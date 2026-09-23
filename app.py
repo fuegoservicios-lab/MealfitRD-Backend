@@ -363,7 +363,12 @@ _PROCESS_START_ISO = datetime.now(timezone.utc).isoformat()
 # [P1-PLAN-LOTE-179 · 2026-09-23] (solo backend) el recorte de grasa del día baja también lo que da nombre, hasta su piso
 # (un día con aguacate nombrado en tres comidas quedaba +24 % de grasa); el revisor mide la proteína como la deja el guardado
 # (embarazo salía «degradado» por un 98/116 g que el guardado dejaba en 114); consejos de absorción ≠ rechazo; «maní tostadas».
-_LAST_KNOWN_PFIX = "P1-PLAN-LOTE-179 · 2026-09-23"
+# [P1-PLAN-LOTE-180 · 2026-09-23] (solo backend) dos rechazos CRÍTICOS que el reintento arreglaba: «pollo crudo estilo
+# ceviche» (nota de seguridad en todo ceviche de carne, que el revisor sí lee) y «casabe de origen industrial» (aviso).
+# [P1-PLAN-LOTE-181 · 2026-09-23] (solo backend) el último pulido de lo que el usuario lee, al final de la cola del
+# escudo: 37 de 817 líneas con el alimento en mayúscula, «0.5 pepino», «1 orégano», «0.06 g de chía», «1 pechugas»;
+# la base implícita de los platos criollos (majarete = maíz + leche) y los postres criollos cuentan como dulces.
+_LAST_KNOWN_PFIX = "P1-PLAN-LOTE-181 · 2026-09-23"
 
 # [P1-SENTRY-SAMPLE-COST · 2026-05-12] Sentry sampling driven from env vars
 # con default seguro 0.1 (10%). Pre-fix tenía `traces_sample_rate=1.0` y

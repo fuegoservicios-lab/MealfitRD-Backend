@@ -478,5 +478,6 @@ entry aparecerá en `/health/version` en el próximo `import` del módulo.
 Tooltip-anchor: `P2-KNOBS-OPERATIONAL-DOC-START` | knobs discovery 2026-05-23
 | `MEALFIT_IDENTITY_TAIL_KCAL_CEIL` | `1.05` | [P1-PLAN-LOTE-178] Techo de kcal del día para la cola de identidad del guardado (subir lo que da nombre al plato). Clamp [1,0, 1,15]. |
 | `MEALFIT_IDENTITY_TAIL_FAT_CEIL` | `1.05` | [P1-PLAN-LOTE-178] Techo de grasa del día para esa misma cola. Clamp [1,0, 1,20]. |
+| `MEALFIT_LINE_POLISH_TAIL` | `True` | [P1-PLAN-LOTE-181] pulido final del display al final de la cola del escudo (mayúscula tras «de», «½ pizca», especias sin unidad, migajas de semillas, «1 pechugas»). Sólo `ingredients`. |
 | `MEALFIT_DM2_CASABE_CAP` | `True` | [P1-PLAN-LOTE-178] DM2: deja el primer casabe del bloque y cambia los demás por pan integral (salvo alergia/rechazo al pan, trigo o gluten). |
 | `MEALFIT_DISH_IDENTITY_COMPENSATE` | `True` | [P1-PLAN-LOTE-178] En la cola del guardado, lo que da nombre y sigue por debajo de la mitad de su piso sube pagando con lo que ningún nombre menciona en el mismo día y del mismo macro; se revierte si el día acaba por encima de lo que tenía y de su techo. |

@@ -1469,6 +1469,15 @@ def _finalize_plan_data_for_insert(data: dict, *, surface: str = "pre-INSERT",
                         logger.info(f"📐 [P1-PLAN-LOTE-24] contrato final en la cola del shield ({surface}): {_rfc_tail_out}")
                 except Exception as _rfc_tail_e:
                     logger.debug(f"[P1-PLAN-LOTE-24] contrato final (cola) no-op: {type(_rfc_tail_e).__name__}: {_rfc_tail_e}")
+                # [P1-PLAN-LOTE-181 · 2026-09-23] Lo último que se escribe en una línea es lo que el usuario lee: la
+                # identidad y el contrato (arriba) reescriben líneas DESPUÉS del pulido de frontera («0.5 pepino»,
+                # «1 pechugas», «⅓ taza de Yogurt»). Sólo display; antes de restaurar los días congelados, que no se
+                # tocan. tooltip-anchor: P1-PLAN-LOTE-181-PULIDO-COLA
+                try:
+                    import pulido_lineas as _pl_tail
+                    _pl_tail.pulir_plan(_pd)
+                except Exception as _pl_e:
+                    logger.debug(f"[P1-PLAN-LOTE-181] pulido de líneas (cola) no-op: {type(_pl_e).__name__}: {_pl_e}")
                 if _rsd_ctx is not None:
                     try:
                         _rsd.finish(_rsd_ctx, _pd)                        # [P1-PLAN-LOTE-27] foto de salida + informe

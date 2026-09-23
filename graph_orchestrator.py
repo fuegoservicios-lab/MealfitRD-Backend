@@ -14751,7 +14751,8 @@ _VERIFICATION_DEMAND_RX = _re_mod.compile(
     r"requiere[n]? confirmaci[oó]n|debe[n]? confirmarse|requiere[n]? vigilancia|"
     r"vigilancia de (?:la )?funci[oó]n|requiere[n]? supervisi[oó]n|"
     r"marca regulad[ao]|de marca (?:regulad|reconocid|comercial)|procesamiento (?:verificado|seguro|industrial)|"
-    r"envasado industrial|envase (?:industrial|sellado)|se mantenga[n]? refrigerad|cadena de fr[ií]o)",  # [P1-PLAN-LOTE-177]
+    r"envasado industrial|envase (?:industrial|sellado)|se mantenga[n]? refrigerad|cadena de fr[ií]o|"  # [P1-PLAN-LOTE-177]
+    r"origen industrial)",  # [P1-PLAN-LOTE-180] «casabe de origen industrial/controlado» (embarazo)
     _re_mod.IGNORECASE,
 )
 
@@ -18475,7 +18476,7 @@ def _meal_safety_notes_for_summary(meal: dict) -> str:
                  and ("Seguridad alimentaria" in s or "Nota clínica" in s or _LOWSODIUM_NOTE_SENTINEL in s)]  # [P1-PLAN-LOTE-175] + sodio
         if not notes:
             return ""
-        return " [" + " | ".join(n[:300] for n in notes[:2]) + "]"
+        return " [" + " | ".join(n[:300] for n in notes[:3]) + "]"  # [P1-PLAN-LOTE-180] 3: la del ceviche iba tercera
     except Exception:
         return ""
 
@@ -19418,7 +19419,11 @@ _SWEET_MEAL_MARKERS = ("yogur", "yogurt", "avena", "batido", "smoothie", "licuad
                        "uva", "durazno", "melocoton", "cereza", "mamey", "nispero", "chocolate", "cacao",
                        # [P1-GAINMUSCLE-CENA-TUBER · 2026-09-05] «Vaso de ricotta con sandía y almendras» no era
                        # dulce para este léxico y recibió huevo (plan vivo 080a91c7). Frutas dulces que faltaban:
-                       "sandia", "sandía", "pera", "toronja", "ciruela", "higo", "datil", "dátil", "tamarindo")
+                       "sandia", "sandía", "pera", "toronja", "ciruela", "higo", "datil", "dátil", "tamarindo",
+                       # [P1-PLAN-LOTE-181 · 2026-09-23] los postres criollos no llevaban marcador: «Majarete ligero de
+                       # coco y canela» recibió mozzarella del cerrador (batería real, DM2).
+                       "majarete", "flan", "natilla", "arroz con leche", "habichuelas con dulce", "compota",
+                       "bizcocho", "budin", "pudin")
 # [P1-SWEET-MARKER-WORDBOUNDARY · 2026-06-28] Match con frontera de palabra IZQUIERDA (`\b<marker>`) en vez de substring
 # naïve: "pina" (piña) matcheaba DENTRO de "es-PINA-ca" (espinaca) → un revoltillo de huevo con espinaca se marcaba DULCE,
 # rompiendo el sweet-guard del closer (le metía lácteo en vez de carne) y el day-kcal-floor (saltaba la comida salada).
