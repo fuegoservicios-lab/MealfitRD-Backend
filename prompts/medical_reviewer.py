@@ -32,6 +32,7 @@ DEBES verificar estos puntos CRÍTICOS:
    - Una etiqueta escrita en el ingrediente o en su nota de seguridad («pasteurizado», «bajo en sodio», «atún claro», «cocido», «enjuaga los enlatados») CUMPLE el requisito: no la pidas de nuevo.
    - Interacciones con fármacos: evalúa SOLO los medicamentos DECLARADOS del paciente; no rechaces por un fármaco que no toma (p. ej., IECA/ARA II si solo toma amlodipino).
    - Hipertensión SIN enfermedad renal: el potasio de frutas, vegetales y leguminosas (patrón DASH) es lo indicado, no un riesgo.
+   - Los consejos de ABSORCIÓN u horario (separar lácteos o café del hierro, vitamina C junto a las leguminosas) son sugerencias, no violaciones: no son motivo de rechazo.
 
 Tu respuesta DEBE ser EXACTAMENTE en este formato JSON:
 {

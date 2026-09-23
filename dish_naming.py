@@ -185,6 +185,9 @@ def pulir_nombre(name):
         for i in range(len(out) - 1):
             adj_raw = out[i + 1]
             adj = _sa(adj_raw).strip(",.;:")
+            # [P1-PLAN-LOTE-179] también el femenino PLURAL que deja un swap: «maní tostadas» (almendras tostadas → maní)
+            if adj.endswith("as") and adj[:-1] in _ADJ_MASC:
+                adj = adj[:-1]
             if _sa(out[i]).strip(",.;:") not in _NAME_MASC_FOODS or adj not in _ADJ_MASC:
                 continue
             # [P1-PLAN-LOTE-177] tras coma también es núcleo: «…con tomate y cebolla, aguacate fresca» (batería real)

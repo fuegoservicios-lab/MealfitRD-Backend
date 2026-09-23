@@ -21050,10 +21050,10 @@ def _trim_day_fats_to_target(meals: list, target_fats: float, db, *, tol: float 
                 _il_ft = _sa_ft(str(ing).lower())
                 if any(t in _il_ft for t in _prot_ascii):
                     continue  # portador del cierre de micros → jamás encogerlo
-                if _identidad_protege(m, ing):
-                    continue  # [P1-PLAN-LOTE-46] el ingrediente que da nombre al plato no se recorta
                 _mc = db.macros_from_ingredient_string(str(ing)) or {}
                 _fv = _mc.get("fats") or 0.0
+                if _identidad_protege(m, ing):  # [P1-PLAN-LOTE-46/179] lo que da nombre sólo cede lo que tiene sobre su piso
+                    _fv = _fv * __import__("identidad_plato").fraccion_sobre_piso(ing, _mc, db)
                 if _fv > 0:
                     movable += _fv
                     items.append((m, idx))
@@ -21081,6 +21081,9 @@ def _trim_day_fats_to_target(meals: list, target_fats: float, db, *, tol: float 
                     continue
                 _factor_line = max(factor, 5.0 / _g_orig)
             quant, _f = _quant(_resc(orig, _factor_line))   # escala hacia target + re-snap a cocinable
+            _k = _factor_line * _f
+            if _identidad_protege(m, orig):  # [P1-PLAN-LOTE-179]
+                quant, _k = __import__("identidad_plato").no_bajo_del_piso(orig, quant, _k, db)
             if quant == orig:
                 continue
             _mo = db.macros_from_ingredient_string(orig) or {}
@@ -21103,7 +21106,7 @@ def _trim_day_fats_to_target(meals: list, target_fats: float, db, *, tol: float 
             # mismo lockstep raw del carb-trim: factor efectivo = escala × re-snap.
             # [P1-UPDATE-RAW-BY-FOOD · 2026-07-30] (audit solver+seeder v5) by-food, no por índice
             # ciego (ver el gemelo en `_trim_day_carbs_to_target`).
-            _sync_one_raw_line(m, idx, orig, _factor_line * _f)
+            _sync_one_raw_line(m, idx, orig, _k)
             applied = True
         return applied
     except Exception as e:
@@ -42225,7 +42228,7 @@ def _review_country_feedback(country: str, kind: str, **values) -> str:
 @_node_label("reviewer")
 async def review_plan_node(state: PlanState) -> dict:
     """Revisa el plan generado para verificar seguridad médica."""
-    plan = __import__("etiquetas_clinicas").plan_etiquetado(state["plan_result"], state["form_data"])  # [P1-PLAN-LOTE-175] etiquetas al ENTRAR: lo que el revisor lee
+    plan = __import__("etiquetas_clinicas").plan_etiquetado(__import__("protein_floor_last_word").reencuadrado(state["plan_result"]), state["form_data"])  # [P1-PLAN-LOTE-175/179] lo que el revisor LEE: etiquetas + proteína del guardado
     form_data = state["form_data"]
     # [P1-REVIEW-RETRY-FEEDBACK-DO · 2026-08-23] Hoisted antes de TODOS
     # los gates: el de huevo precedía la derivación histórica dentro del gate

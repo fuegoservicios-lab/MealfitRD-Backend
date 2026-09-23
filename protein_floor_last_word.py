@@ -186,3 +186,20 @@ def reencuadra_y_mide(plan_data: dict, *, form_data: Optional[dict] = None,
         logger.info(f"🥩 [P1-PROTEIN-FLOOR-LAST-WORD] {surface}: piso de proteína recuperado tras "
                     f"los recortes ({antes['cortos']} → cumple).")
     return informe
+
+
+def reencuadrado(plan_data):
+    """[P1-PLAN-LOTE-179 · 2026-09-23] El mismo re-encuadre de proteína del guardado, al ENTRAR en el nodo revisor.
+
+    Batería real (embarazo): la puerta de proteína del revisor midió el día 1 en 98 g de 116 y lo rechazó; el plan terminó
+    marcado como degradado aunque el guardado —que corre este re-encuadre después— lo dejaba en 114 g. El revisor juzgaba
+    un día que el usuario nunca iba a ver. Sólo re-escala proteínas que YA están en el plato (sin ingredientes nuevos: cero
+    riesgo de alérgeno) e ignora los días en banda, así que en el guardado es un no-op. Devuelve el mismo plan; nunca
+    lanza. tooltip-anchor: P1-PLAN-LOTE-179-PROTEINA-ANTES-DEL-REVISOR"""
+    try:
+        if _habilitado() and isinstance(plan_data, dict):
+            import graph_orchestrator as go
+            go.reconcile_protein_band_post_finalize(plan_data)
+    except Exception as e:                                                     # noqa: BLE001
+        logger.debug(f"[P1-PLAN-LOTE-179] re-encuadre antes del revisor no-op: {type(e).__name__}: {e}")
+    return plan_data

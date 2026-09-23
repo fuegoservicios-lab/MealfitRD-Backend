@@ -360,7 +360,10 @@ _PROCESS_START_ISO = datetime.now(timezone.utc).isoformat()
 # [P1-PLAN-LOTE-178 · 2026-09-23] (solo backend) métrica de calidad sobre 16 planes reales: los ingredientes que dan nombre
 # ya no quedan en migajas (techos de la cola 108/110 % y subida parcial), DM2 con un casabe por bloque (el aviso ámbar salía
 # en todos los planes DM2), «harina de trigo» → avena, Title Case sin inserciones en minúscula, pisos con sentido.
-_LAST_KNOWN_PFIX = "P1-PLAN-LOTE-178 · 2026-09-23"
+# [P1-PLAN-LOTE-179 · 2026-09-23] (solo backend) el recorte de grasa del día baja también lo que da nombre, hasta su piso
+# (un día con aguacate nombrado en tres comidas quedaba +24 % de grasa); el revisor mide la proteína como la deja el guardado
+# (embarazo salía «degradado» por un 98/116 g que el guardado dejaba en 114); consejos de absorción ≠ rechazo; «maní tostadas».
+_LAST_KNOWN_PFIX = "P1-PLAN-LOTE-179 · 2026-09-23"
 
 # [P1-SENTRY-SAMPLE-COST · 2026-05-12] Sentry sampling driven from env vars
 # con default seguro 0.1 (10%). Pre-fix tenía `traces_sample_rate=1.0` y

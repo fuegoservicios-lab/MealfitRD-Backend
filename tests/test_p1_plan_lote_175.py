@@ -41,7 +41,8 @@ def test_el_revisor_lee_el_plan_ya_etiquetado():
     src = _src("graph_orchestrator.py")
     i = src.index("async def review_plan_node(state: PlanState) -> dict:")
     cabeza = src[i:i + 400]
-    assert 'plan = __import__("etiquetas_clinicas").plan_etiquetado(state["plan_result"], state["form_data"])' in cabeza, \
+    # [P1-PLAN-LOTE-179] la misma línea re-encuadra además la proteína como el guardado
+    assert '__import__("etiquetas_clinicas").plan_etiquetado(' in cabeza and 'state["form_data"])' in cabeza, \
         "la etiqueta clínica corre en la PRIMERA línea del nodo revisor, antes de armar lo que el revisor lee"
 
 

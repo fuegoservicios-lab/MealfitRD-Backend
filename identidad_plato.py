@@ -410,6 +410,19 @@ def piso_de_linea(linea, db) -> int:
     return _piso_de(" ".join(pal) if pal else str(linea or ""), db)
 
 
+def fraccion_sobre_piso(linea, mac, db) -> float:
+    """[P1-PLAN-LOTE-179 · 2026-09-23] Qué parte de la línea está por ENCIMA de su piso de identidad (0 si no tiene piso o
+    ya está en él): lo único que el recorte de grasa del día puede tomar de lo que da nombre al plato. Antes lo nombrado
+    no cedía nada, y un día con aguacate nombrado en tres comidas quedaba 24 % sobre su grasa (batería real, familia).
+    tooltip-anchor: P1-PLAN-LOTE-179-GRASA-SOBRE-EL-PISO"""
+    try:
+        piso = piso_de_linea(linea, db)
+        g = float((mac or {}).get("grams") or 0) or float(db.grams_from_ingredient_string(str(linea)) or 0)
+        return max(0.0, 1.0 - piso / g) if (piso and g > 0) else 0.0
+    except Exception:                                                          # noqa: BLE001
+        return 0.0
+
+
 def no_bajo_del_piso(orig: str, nueva: str, k: float, db) -> tuple:
     """`(línea, factor efectivo)`: `nueva` si no baja del piso; la línea AL piso si lo cruzaría; `orig` si ya estaba en
     él o por debajo (no baja más). Fail-safe: ante la duda, lo que propuso el reequilibrio."""
