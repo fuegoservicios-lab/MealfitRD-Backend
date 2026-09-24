@@ -67,7 +67,9 @@ def test_declared_allergy_yields_subs(allergy, expected_cat, expected_repl):
     assert expected_repl in repls
 
 
-@pytest.mark.parametrize("allergy", ["lácteos", "leche", "huevo", "maní", "frutos secos", "nueces"])
+# [P1-PLAN-LOTE-188] lácteos salen de esta lista: el catálogo ya tiene yogur de coco, leches vegetales y tofu (la
+# condición que el docstring de abajo ponía para cambiar la decisión). Huevo, maní y frutos secos siguen fuera.
+@pytest.mark.parametrize("allergy", ["huevo", "maní", "frutos secos", "nueces"])
 def test_unsupported_allergens_not_substituted(allergy):
     """DECISIÓN HONESTA: lácteos/huevo/maní/frutos secos NO se sustituyen (sin target que resuelva
     en el catálogo es-DO) → siguen por el path crítico→fallback. Si esto cambia (se añaden filas de
@@ -179,12 +181,15 @@ def test_preserve_quantity_prefix(go):
     assert any(i.startswith("150g de") and "pollo" in i.lower() for i in ings), ings
 
 
-def test_dairy_allergy_leaves_plan_untouched(go):
-    """Lácteos NO se sustituyen → el plan no cambia (sigue por el path crítico→fallback)."""
+def test_dairy_allergy_is_substituted_since_lote_188(go):
+    """[P1-PLAN-LOTE-188] Lácteos YA se sustituyen (el catálogo tiene yogur de coco, leches vegetales y tofu): el
+    plan conserva sus platos y la guarda deja de ver el alérgeno. Antes caía al path crítico→fallback."""
     plan = _plan(["Queso blanco", "Leche", "Yogurt griego sin azúcar"])
     n = go._apply_allergen_substitutions(plan, {"allergies": ["lácteos"]})
-    assert n == 0
-    assert _ings(plan) == ["queso blanco", "leche", "yogurt griego sin azúcar"]
+    assert n >= 1
+    ings = " ".join(_ings(plan))
+    assert "tofu firme" in ings and "leche de avena" in ings and "yogur de coco" in ings, ings
+    assert go._scan_allergen_violations(plan, ["lácteos"]) == []
 
 
 def test_knob_off_disables_swap(go, monkeypatch):

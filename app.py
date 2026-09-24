@@ -385,7 +385,15 @@ _PROCESS_START_ISO = datetime.now(timezone.utc).isoformat()
 # [P1-PLAN-LOTE-187 · 2026-09-23] (solo backend) embarazo: «460 g de pescado en 3 días» (rd15, crítico) — la regla de
 # 227–340 g/semana del prompt no la puede cumplir un día que no ve los otros: tope determinista que SUSTITUYE (no
 # recorta: el 184 midió el déficit) por una proteína que ese día no se repita (`embarazo_pescado.py`).
-_LAST_KNOWN_PFIX = "P1-PLAN-LOTE-187 · 2026-09-23"
+# [P1-PLAN-LOTE-188 · 2026-09-23] (solo backend) rd16: alergia a lácteos → plan de EMERGENCIA otra vez (yogur en un
+# batido + «Verifique sus etiquetas»/«No se puede confirmar que…»). Sustitución determinista de lácteos (el catálogo
+# ya tiene yogur de coco, leches vegetales y tofu), verificación por raíz verbal, y cebolla/ají en la nota de lavado.
+# [P1-PLAN-LOTE-189 · 2026-09-23] (solo backend) rd17: la emergencia volvió por «Verificar que el pan integral no
+# contenga derivados lácteos» — otra forma verbal. En vez de otra frase: verbo de verificación + «no contenga / libre
+# de / puede contener» = petición de verificación (aviso), salvo pasteurizar; la guarda C2 sigue con la última palabra.
+# Y la otra causa: el huevo crudo de un batido se cambiaba por yogur griego SIN mirar la alergia (2 de 3 violaciones de
+# lácteos de rd11–rd16 eran nuestras; en cambiar plato/chat quedaba guardado). Ahora elige lo que el usuario puede comer.
+_LAST_KNOWN_PFIX = "P1-PLAN-LOTE-189 · 2026-09-23"
 
 # [P1-SENTRY-SAMPLE-COST · 2026-05-12] Sentry sampling driven from env vars
 # con default seguro 0.1 (10%). Pre-fix tenía `traces_sample_rate=1.0` y

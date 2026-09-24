@@ -14750,7 +14750,7 @@ def _scan_diet_violations(plan: dict, diet_type) -> list:
 
 _VERIFICATION_DEMAND_RX = _re_mod.compile(
     r"(certificaci[oó]n|certificad[oa]s?|contaminaci[oó]n cruzada|debe(?:n)? verificarse|"
-    r"requiere[n]? verificaci[oó]n|verificar (?:la |las |sus )?etiquetas?|sin indicar certificaci[oó]n|"
+    r"requiere[n]? verificaci[oó]n|verifi\w*\s+(?:la |las |sus |su )?etiquetas?|sin indicar certificaci[oó]n|"
     r"requiere[n]? confirmaci[oó]n|debe[n]? confirmarse|requiere[n]? vigilancia|"
     r"vigilancia de (?:la )?funci[oó]n|requiere[n]? supervisi[oó]n|"
     r"marca regulad[ao]|de marca (?:regulad|reconocid|comercial)|procesamiento (?:verificado|seguro|industrial)|"
@@ -14759,7 +14759,7 @@ _VERIFICATION_DEMAND_RX = _re_mod.compile(
     _re_mod.IGNORECASE,
 )
 # [P1-PLAN-LOTE-182] «Confirme si…» es aclaración, no defecto; aparte para excluir pasteurizar. tooltip-anchor: P1-PLAN-LOTE-182-CONFIRMAR-ES-AVISO
-_CONFIRM_DEMAND_RX = _re_mod.compile(r"confirm(?:e|ar)\s+(?:si|su alcance|el alcance|las? etiquetas?|con|la tolerancia)|hasta confirmar", _re_mod.IGNORECASE)  # [P1-PLAN-LOTE-184/186]
+_CONFIRM_DEMAND_RX = _re_mod.compile(r"confirm(?:e|ar)\s+(?:si|que|su alcance|el alcance|las? etiquetas?|con|la tolerancia)|hasta confirmar|(?:no se puede|no es posible) confirmar|^(?=[\s\S]*?\b(?:verifi|confirm|aseg[uú]r|compr(?:o|ue)b|revis)\w*)(?=[\s\S]*?(?:puede[n]? contener|podr[ií]a[n]? contener|libres? de|no contenga|sin (?:derivados|trazas)))", _re_mod.IGNORECASE)  # [P1-PLAN-LOTE-184/186/188/189] 189: verbo de verificación + «no contenga / libre de» (estructural)
 _PASTEURIZ_RX = _re_mod.compile(r"pasteuriz", _re_mod.IGNORECASE)
 
 
@@ -15166,7 +15166,7 @@ def renal_protein_trim_for_update(meals: list, protein_ceiling_g: float, db=None
         return False
 
 
-def food_safety_backstop_for_meal(meal: dict) -> int:
+def food_safety_backstop_for_meal(meal: dict, form_data=None, allergies=None) -> int:  # [P1-PLAN-LOTE-189]
     """[P2-FOOD-SAFETY-UPDATE · 2026-06-24] (re-audit P2-1) Re-aplica la mitigación determinista de
     seguridad alimentaria (huevo crudo FS1 + pescado/marisco/carne crudos) en las superficies de UPDATE
     (swap S3 / regenerate-day S2 / chat-modify). S1 la corre en `_apply_deterministic_clinical_layer`
@@ -15180,7 +15180,7 @@ def food_safety_backstop_for_meal(meal: dict) -> int:
     if not FOOD_SAFETY_GUARD or not isinstance(meal, dict):
         return 0
     try:
-        return _apply_food_safety_fixes({"days": [{"meals": [meal]}]})
+        return _apply_food_safety_fixes({"days": [{"meals": [meal]}]}, form_data, allergies)
     except Exception as _fs_e:
         logger.warning(f"[P2-FOOD-SAFETY-UPDATE] food-safety backstop falló (no bloquea): {type(_fs_e).__name__}: {_fs_e}")
         return 0
@@ -17607,7 +17607,7 @@ def _fix_egg_swap_dangling_adjectives(text: str) -> str:
         return text
 
 
-def _substitute_blended_raw_egg(meal: dict, db) -> bool:
+def _substitute_blended_raw_egg(meal: dict, db, replacement=None) -> bool:  # [P1-PLAN-LOTE-189] replacement: lo que ESTE usuario puede comer
     """[P2-RAW-EGG-SUBSTITUTE · 2026-06-15] Reemplaza el huevo crudo de una preparación LICUADA por una
     proteína blend-safe (yogur griego) a nivel de COMPOSICIÓN — preserva el prefijo de cantidad y ajusta
     los macros por DELTA quirúrgico (mismo patrón que `_apply_substitutions_core`). Solo para el caso
@@ -17630,7 +17630,7 @@ def _substitute_blended_raw_egg(meal: dict, db) -> bool:
                 # sustantivo de conteo, así que preservar "N huevos " dejaría el huevo en el string. El
                 # conteo de huevos no mapea a gramos de yogur de todas formas; el delta de macros se
                 # computa del string viejo vs el nuevo. [P2-RAW-EGG-SUBSTITUTE bugfix]
-                new = _BLEND_EGG_REPLACEMENT
+                new = replacement or _BLEND_EGG_REPLACEMENT
                 out.append(new)
                 if key == "ingredients":
                     swaps.append((str(ing), new))
@@ -17954,7 +17954,7 @@ def _insert_step_before_montaje(steps: list, new_step: str) -> list:
         return (steps if isinstance(steps, list) else []) + [new_step]
 
 
-def _apply_food_safety_fixes(plan: dict) -> int:
+def _apply_food_safety_fixes(plan: dict, form_data=None, allergies=None) -> int:  # [P1-PLAN-LOTE-189] alergias → sustituto del huevo del batido
     """[P3-FOOD-SAFETY · 2026-06-13] Aplica mitigación determinista a las violaciones de
     huevo crudo detectadas por `_scan_raw_egg_violations`. Macro-PRESERVANTE (no toca
     cantidades ni macros) y shopping-SAFE (no muta el token canónico del ingrediente, solo
@@ -17962,7 +17962,7 @@ def _apply_food_safety_fixes(plan: dict) -> int:
     introducir divergencias receta↔lista. Idempotente: no duplica una nota ya presente.
     Retorna el número de meals mitigados. Anchor: P3-FOOD-SAFETY."""
     # [P2-RAW-EGG-SUBSTITUTE] DB compartida para el delta de macros del swap (solo si el knob está ON).
-    _fsdb = None
+    _fsdb, _hb = None, __import__("huevo_batido").Eleccion(form_data, allergies)  # [P1-PLAN-LOTE-189]
     if RAW_EGG_BLENDED_SUBSTITUTE_ENABLED:
         try:
             from nutrition_db import IngredientNutritionDB
@@ -17983,11 +17983,11 @@ def _apply_food_safety_fixes(plan: dict) -> int:
         # [P2-RAW-EGG-SUBSTITUTE] Para 'blended' (Salmonella) sustituir el huevo a nivel de COMPOSICIÓN;
         # si la sustitución corre, la nota refleja el swap. 'no_cook' (cocinable) sigue con nota de cocción.
         if (kind == "blended" and RAW_EGG_BLENDED_SUBSTITUTE_ENABLED
-                and _substitute_blended_raw_egg(meal, _fsdb)):
-            note = _FOOD_SAFETY_NOTE_BLENDED_SUBBED
+                and _hb.repl and _substitute_blended_raw_egg(meal, _fsdb, _hb.repl)):
+            note = _hb.nota_sustituido(meal)
             meal["_food_safety_fixed"] = "blended_substituted"
         else:
-            note = _FOOD_SAFETY_NOTE_BLENDED if kind == "blended" else _FOOD_SAFETY_NOTE_NOCOOK
+            note = _hb.nota_batido if kind == "blended" else _FOOD_SAFETY_NOTE_NOCOOK
             # [P3-EGG-BATTER-NOTE · 2026-07-05] huevo integrado en MASA (panqueques/arepitas):
             # la nota "yema y clara firmes" es wording de huevo entero → variante de masa cocida.
             if kind != "blended":
@@ -18158,7 +18158,7 @@ _PREGNANCY_SAFETY_CLAUSES = (
     ("hojas", ("espinaca", "espinacas", "rucula", "arugula", "lechuga", "repollo",
                "berro", "berros", "acelga", "acelgas", "kale", "col rizada", "bok choy",
                "cilantro", "perejil", "albahaca", "tomate", "pepino", "zanahoria", "apio",
-               "remolacha", "mango", "lechosa", "papaya", "pina", "fresa", "fresas",
+               "remolacha", "cebolla", "aji", "pimiento", "mango", "lechosa", "papaya", "pina", "fresa", "fresas",  # [P1-PLAN-LOTE-188] +cebolla/ají
                "guineo", "banana", "melon", "sandia", "uva", "uvas", "manzana", "pera",
                "chinola", "maracuya", "limon", "naranja", "toronja", "aguacate", "kiwi",
                "granada", "guayaba"),
@@ -25080,7 +25080,7 @@ def _apply_deterministic_clinical_layer(plan: dict, form_data: dict, nutrition: 
     # ── Guard 2 (FS1): food-safety / huevo crudo (espejo [P3-FOOD-SAFETY]) ──
     if FOOD_SAFETY_GUARD:
         try:
-            _fs_n = _apply_food_safety_fixes(plan)
+            _fs_n = _apply_food_safety_fixes(plan, form_data)  # [P1-PLAN-LOTE-189] sin meterle su alérgeno al batido
             if _fs_n:
                 logger.warning(f"🥚 [P3-FOOD-SAFETY] Mitigó huevo crudo/poco cocido en {_fs_n} comida(s)")
         except Exception as _fs_e:

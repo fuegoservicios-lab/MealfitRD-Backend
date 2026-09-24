@@ -20,7 +20,7 @@ import pytest
 import condition_rules as cr
 
 _CONDITIONS = ["Diabetes tipo 2", "Hipertensión", "Colesterol alto"]
-_ALLERGIES = ["pescado", "mariscos", "soya", "gluten"]
+_ALLERGIES = ["pescado", "mariscos", "soya", "gluten", "lácteos"]  # [P1-PLAN-LOTE-188] + lácteos
 
 
 def _preserve_qty_replacements():
