@@ -180,8 +180,10 @@ def _meal_reminders_sync(user_id: str, canal: str = "") -> dict:
         tz_off = int(user_tz_offset_min(user_id))
     except Exception:
         tz_off = pa._proactive_tz_offset_min()
+    # [P1-PLAN-LOTE-213] `reminders_before_hour`: Configuración solo deja elegir horas de `quiet_until_hour` a antes
+    # de esta (la del resumen del día), las únicas en las que suenan el teléfono Y el mensaje del chat.
     base = {"tz_offset_min": tz_off, "quiet_until_hour": pa._hora_de_silencio(), "url": "/dashboard/agent",
-            "max_per_day": pa._max_avisos_por_dia()}
+            "max_per_day": pa._max_avisos_por_dia(), "reminders_before_hour": pa.HORA_DEL_RESUMEN}
     # La misma puerta que el cron: con turno nocturno o rotativo las horas «de comida» no significan nada.
     schedule = str(health.get("scheduleType") or "standard")
     hoy_local = (datetime.now(timezone.utc) - timedelta(minutes=tz_off)).strftime("%Y-%m-%d")
@@ -195,6 +197,14 @@ def _meal_reminders_sync(user_id: str, canal: str = "") -> dict:
     base["water"] = _agua_para_el_telefono(user_id, locale, hoy_local, schedule) if pa.avisos_de_agua_activos(health) else []
     base["meal_reminders_enabled"] = pa.avisos_de_comida_activos(health)
     base["water_reminders_enabled"] = pa.avisos_de_agua_activos(health)
+    # [P1-PLAN-LOTE-213] Las cuatro comidas con su interruptor y su hora, para Configuración (también las apagadas, y
+    # también con los avisos de comida apagados: la pantalla las enseña en cuanto se encienden). La lista que programa
+    # el teléfono sigue siendo `reminders`, que solo lleva lo que debe sonar.
+    try:
+        base["comidas"] = meal_reminders.comidas_para_configuracion(user_id, health)
+    except Exception as e:
+        logger.warning(f"[P1-PLAN-LOTE-213] horas de Configuración de {user_id} no calculadas: {e!r}")
+        base["comidas"] = []
     if not pa.avisos_de_comida_activos(health):
         return {**base, "enabled": False, "reason": "prefs", "reminders": []}
     if schedule in ("night_shift", "variable"):
@@ -203,7 +213,7 @@ def _meal_reminders_sync(user_id: str, canal: str = "") -> dict:
         return {**base, "enabled": False, "reason": "disabled", "reminders": []}
     consumed = get_consumed_meals_today(user_id, date_str=hoy_local, tz_offset_mins=tz_off) or []
     return {**base, "enabled": True, "reason": None, "local_date": hoy_local,
-            "reminders": meal_reminders.horario_de_avisos(user_id, locale=locale, consumed_today=consumed)}
+            "reminders": meal_reminders.horario_de_avisos(user_id, locale=locale, consumed_today=consumed, health=health)}
 
 
 @router.get("/meal-reminders")

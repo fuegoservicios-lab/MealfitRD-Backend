@@ -6,12 +6,17 @@ push si tiene dispositivos suscritos). Test ancla: [`test_p1_plan_lote_72.py`](.
 
 ## Cuándo toca cada aviso
 
-- El cron corre **una vez por hora, al minuto 30** (`app.py`, con jitter).
-- Hora del aviso = hora habitual de la comida + retraso, en hora **local del usuario** (`user_tz_offset_min`).
-  - Hora habitual: media circular de sus registros de los últimos 14 días (`db_facts.get_avg_meal_hour`), o la hora
-    por defecto: desayuno 9:00, almuerzo 13:00, merienda 16:00, cena 19:30.
-  - Retraso: 1,5 h (1 h si responde a más del 70 % de los avisos de esa comida, 2,5 h si a menos del 30 %).
-- A las 23:00 locales, en vez de eso, el «Resumen del día» (solo si no registró nada).
+Vigente desde `P1-PLAN-LOTE-213` (2026-09-24); las secciones de abajo son la historia de cómo se llegó aquí.
+
+- **La hora del aviso la elige la persona**, por comida, en Configuración → Recordatorios de comida
+  (`health_profile.avisos_por_comida`, ver abajo). Sin tocar nada: la hora normal de esa comida menos la antelación
+  (`MEALFIT_PROACTIVE_NUDGE_LEAD_H`, 15 min) → **8:45, 12:45, 15:45 y 19:15**, en hora **local del usuario**
+  (`user_tz_offset_min`). Cada comida se puede apagar sola. SSOT: `proactive_agent.hora_del_aviso`, que usan el cron y
+  el endpoint que programa el teléfono.
+- El teléfono (avisos locales de la app nativa) suena a esa hora EXACTA.
+- El cron corre **cada 15 minutos** (`MINUTOS_ENTRE_TICKS`, `app.py`, con jitter) y escribe el mensaje del coach en el
+  chat (y manda la Web Push) en su último tick **antes** de esa hora: al tocar la notificación, el mensaje ya está.
+- A las 23:00 locales, en vez de eso, el «Resumen del día» (solo si no registró nada), una sola vez.
 - Tope anti-fatiga: `MEALFIT_PROACTIVE_MAX_NUDGES_PER_DAY` avisos por día local: **4**, uno por comida (decisión del
   dueño, 16-sep; era un 2 fijo, que dejaba sin recordatorio a la merienda y la cena). El Resumen de las 23:00 comparte
   el tope: a quien no registró nada y ya recibió los cuatro avisos no le llega.
@@ -81,6 +86,22 @@ Medido en producción (solo lectura): el motor funciona —38 avisos en 5 días,
 - El cron tiene `id="proactive_meal_reminders"`.
 
 Lo que el interruptor NO hace, a sabiendas: apagar el mensaje del coach en el chat. «Recibe avisos en tu pantalla» habla de la pantalla; el recordatorio dentro del chat es parte de la conversación.
+
+## La hora la eliges tú (`P1-PLAN-LOTE-213` · 2026-09-24)
+
+El dueño, a la 1:18 p. m.: «hoy nada más me llegó la notificación del desayuno… son la 1 de la tarde y todavía tiene la notificación del desayuno». Dos defectos, uno encima del otro:
+
+1. **La hora salía de lo REGISTRADO.** `consumed_at` es la hora del registro, siempre POSTERIOR a la comida, y el dueño anota después de comer (el 23-sep, desayuno y almuerzo juntos a la 1:36 p. m.). Promediarla empuja el aviso tarde justo a quien anota tarde: su almuerzo iba hacia las 2:15, el techo del lote 151. Los lotes 72, 83 y 151 fueron parches (franja, días pasados, techo) sobre una señal que no dice cuándo se come.
+2. **El chat llegaba DESPUÉS que el teléfono.** Desde el lote 150 el teléfono suena al minuto exacto, pero el cron seguía corriendo a y media y escribía en el tick de la HORA del aviso: con un aviso a las 2:15, teléfono a las 2:15 y mensaje a las 2:30. Con la cena por defecto (19:15) le pasaba a todos.
+
+| Pieza | Regla | Dónde |
+|---|---|---|
+| Configuración | `health_profile.avisos_por_comida = {"almuerzo": {"activo": true, "hora": "12:45"}, …}`. Ausente ⇒ encendida y a la hora normal. Se guarda con `PATCH /api/profile` (merge de primer nivel: la app manda las cuatro); una forma inválida da **400** con el porqué, no se corrige. La hora va de las 6:00 a las 22:59: antes es silencio, y desde las 23:00 (`HORA_DEL_RESUMEN`) el cron solo manda el Resumen, así que el teléfono sonaría sin mensaje en el chat. El endpoint le pasa ese tope a Configuración (`reminders_before_hour`) para que no haya una segunda copia del 23. | `error_en_avisos_por_comida`, `comida_con_aviso`, `hora_elegida` |
+| La hora | Elegida → esa. Si no, la normal − 15 min. El cálculo por historial (lotes 72-151) queda detrás de **`MEALFIT_PROACTIVE_NUDGE_FROM_HISTORY`** (apagado), para volver sin desplegar; una hora elegida gana siempre. | `hora_del_aviso` |
+| El teléfono | `GET /api/notifications/meal-reminders` no programa las comidas apagadas y trae `comidas`: las cuatro, también las apagadas, con su hora efectiva y la normal, para pintar Configuración. | `meal_reminders.horario_de_avisos`, `comidas_para_configuracion` |
+| El chat | Cron cada 15 min; el mensaje sale en el primer tick desde 15 min antes de la hora del aviso y se reintenta `MEALFIT_PROACTIVE_NUDGE_RETRY_HOURS` sin repetirse. El minuto se redondea con UNA función para las dos vías (`minuto_del_dia`). El Resumen de las 23:00 no se repite en los cuatro ticks de esa hora. | `run_proactive_checks`, `MINUTOS_ENTRE_TICKS` |
+
+Lo que no cambia: el tope diario, las horas de silencio (la hora elegida tampoco puede caer antes de las 6:00: el servidor la rechaza y Configuración no deja elegirla), el anti-spam de una hora y el tono adaptativo. Test ancla: [`test_p1_plan_lote_213.py`](../tests/test_p1_plan_lote_213.py).
 
 ## Abierto
 

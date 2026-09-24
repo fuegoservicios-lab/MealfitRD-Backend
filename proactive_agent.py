@@ -1,6 +1,8 @@
 import os
+import re
 import logging
 from datetime import datetime, timezone, timedelta
+from typing import Optional
 # [P0-LLM-PROVIDER-MIGRATION · 2026-06-12] Gemini → GLM.
 from llm_provider import ChatGLM, GLM_FLASH
 
@@ -11,7 +13,7 @@ import uuid
 from db_chat import save_message, get_recent_messages, get_or_create_session
 from db import get_consumed_meals_today, get_user_profile, user_tz_offset_min
 from fact_extractor import get_embedding
-from knobs import _env_int, _env_float
+from knobs import _env_bool, _env_int, _env_float
 
 logger = logging.getLogger(__name__)
 
@@ -113,11 +115,102 @@ VERBO_DE_COMIDA = {
 HORAS_POR_DEFECTO_DE_COMIDA = {"Desayuno": 9.0, "Almuerzo": 13.0, "Merienda": 16.0, "Cena": 19.5}
 
 
-def hora_de_aviso(user_id: str, meal: str, def_hour: float):
-    """`(nudge_hour, meal_rate, meal_total)`: la hora local (0..23,99) a la que toca recordar `meal`.
+# [P1-PLAN-LOTE-213 · 2026-09-24] LA HORA DE CADA AVISO LA ELIGE LA PERSONA.
+#
+# El dueño, a la 1:18 p. m.: «hoy nada más me llegó la notificación del desayuno… son la 1 de la tarde». Su almuerzo
+# estaba programado hacia las 2:15: la «hora habitual» salía de `consumed_at`, que es la hora del REGISTRO, y él anota
+# después de comer (el 23-sep, desayuno y almuerzo juntos a la 1:36 p. m.). Una hora de registro es siempre POSTERIOR a
+# la comida, así que promediarla empuja el aviso tarde justo a quien anota tarde, y el aviso quiere llegar ANTES de
+# comer (lote 150). Los lotes 72, 83 y 151 fueron parches sobre esa misma señal (franja, días pasados, techo): el dato
+# no dice lo que se le pedía.
+#
+# Ahora cada comida tiene en Configuración su interruptor y su hora (`health_profile.avisos_por_comida`). Sin tocar
+# nada: las horas normales menos la antelación → 8:45, 12:45, 15:45 y 19:15. El cálculo por historial queda detrás de
+# `MEALFIT_PROACTIVE_NUDGE_FROM_HISTORY` (apagado), por si hubiera que volver a él sin desplegar; una hora elegida
+# gana siempre. tooltip-anchor: P1-PLAN-LOTE-213-HORA-ELEGIDA
+CLAVE_AVISOS_POR_COMIDA = "avisos_por_comida"
+# La clave de cada comida dentro de `avisos_por_comida` (la misma, en minúscula, que `meal_reminders` manda al teléfono).
+CLAVE_DE_COMIDA = {"Desayuno": "desayuno", "Almuerzo": "almuerzo", "Merienda": "merienda", "Cena": "cena"}
+_HORA_HHMM = re.compile(r"^([01]\d|2[0-3]):([0-5]\d)$")
+# La hora local del «Resumen del día». En esa hora el cron no recuerda comidas (solo manda el resumen), así que una
+# hora elegida tiene que quedar ANTES: a las 23:10 el teléfono sonaría y el chat no escribiría nada.
+HORA_DEL_RESUMEN = 23
 
-    Hora habitual del usuario para esa comida (media circular de 14 días dentro de su franja; sin datos, la de por
-    defecto) MENOS la antelación (`MEALFIT_PROACTIVE_NUDGE_LEAD_H`, 15 min): el aviso llega cuando aún puedes comer.
+
+def minuto_del_dia(hora: float) -> int:
+    """La hora del aviso en minutos del día (0..1439), REDONDEANDO. [P1-PLAN-LOTE-150] El coach truncaba («6:49») y el
+    teléfono redondeaba («6:50»): el mismo aviso con dos horas. [P1-PLAN-LOTE-213] Una sola función para las dos vías
+    (el cron y `meal_reminders`), en vez de dos expresiones que un test comparaba letra a letra."""
+    return int(round(float(hora) * 60)) % (24 * 60)
+
+
+def hora_hhmm_a_float(valor) -> Optional[float]:
+    """`"12:45"` → 12.75. `None` si no es una hora «HH:MM» de 00:00 a 23:59 (lo que no se entiende no se inventa)."""
+    m = _HORA_HHMM.match(valor) if isinstance(valor, str) else None
+    return int(m.group(1)) + int(m.group(2)) / 60.0 if m else None
+
+
+def _config_de_la_comida(health: dict, meal: str) -> dict:
+    todas = (health or {}).get(CLAVE_AVISOS_POR_COMIDA) if isinstance(health, dict) else None
+    propia = todas.get(CLAVE_DE_COMIDA.get(meal, "")) if isinstance(todas, dict) else None
+    return propia if isinstance(propia, dict) else {}
+
+
+def error_en_avisos_por_comida(valor) -> Optional[str]:
+    """Por qué `valor` no vale como `avisos_por_comida`, o `None` si vale. Lo usa `PATCH /api/profile`.
+
+    Forma: `{"almuerzo": {"activo": true, "hora": "12:45"}, ...}` con cualquier subconjunto de las cuatro comidas;
+    `null` borra la configuración (vuelven las horas normales). Se rechaza en vez de corregir: una hora que no se
+    entiende guardada tal cual haría que el lector la ignorara en silencio y el usuario no sabría por qué no le llega."""
+    if valor is None:
+        return None
+    if not isinstance(valor, dict):
+        return "avisos_por_comida debe ser un objeto por comida."
+    for clave, cfg in valor.items():
+        if clave not in CLAVE_DE_COMIDA.values():
+            return f"Comida desconocida en avisos_por_comida: {clave!r}. Permitidas: {sorted(CLAVE_DE_COMIDA.values())}."
+        if not isinstance(cfg, dict) or set(cfg) - {"activo", "hora"}:
+            return f"avisos_por_comida.{clave} solo admite «activo» y «hora»."
+        if "activo" in cfg and not isinstance(cfg["activo"], bool):
+            return f"avisos_por_comida.{clave}.activo debe ser true o false."
+        if cfg.get("hora") is None:
+            continue
+        hora = hora_hhmm_a_float(cfg["hora"])
+        if hora is None:
+            return f"avisos_por_comida.{clave}.hora debe ser «HH:MM» (00:00 a 23:59)."
+        # Solo horas en las que suenan LOS DOS: en el silencio de la madrugada no sale ninguno, y desde la hora del
+        # resumen el cron solo manda el resumen — el teléfono sonaría sin mensaje en el chat.
+        desde = _hora_de_silencio()
+        if not desde <= hora < HORA_DEL_RESUMEN:
+            return (f"avisos_por_comida.{clave}.hora debe estar entre las {desde:02d}:00 y las "
+                    f"{HORA_DEL_RESUMEN - 1:02d}:59: antes son horas de silencio y a las {HORA_DEL_RESUMEN:02d}:00 "
+                    f"llega el resumen del día.")
+    return None
+
+
+def comida_con_aviso(health: dict, meal: str) -> bool:
+    """¿Quiere el recordatorio de ESTA comida? Ausente ⇒ sí, como `avisos_comida`: solo lo apaga un `False` explícito."""
+    return _config_de_la_comida(health, meal).get("activo") is not False
+
+
+def hora_elegida(health: dict, meal: str) -> Optional[float]:
+    """La hora que la persona eligió para el aviso de `meal` (0..23,99), o `None` si no eligió ninguna."""
+    return hora_hhmm_a_float(_config_de_la_comida(health, meal).get("hora"))
+
+
+def _avisos_desde_historial() -> bool:
+    """Knob de vuelta atrás: `True` devuelve la hora calculada con lo registrado a quien no eligió ninguna."""
+    return _env_bool("MEALFIT_PROACTIVE_NUDGE_FROM_HISTORY", False)
+
+
+def hora_del_aviso(user_id: str, meal: str, def_hour: float, health: Optional[dict] = None) -> float:
+    """La hora local (0..23,99) a la que suena el recordatorio de `meal`. La MISMA para el teléfono y el chat.
+
+    1. La que la persona eligió en Configuración, si eligió una.
+    2. Si no, la hora normal de esa comida menos la antelación (`MEALFIT_PROACTIVE_NUDGE_LEAD_H`, 15 min): 8:45,
+       12:45, 15:45, 19:15 — el aviso llega cuando aún puedes comer.
+    3. Solo con `MEALFIT_PROACTIVE_NUDGE_FROM_HISTORY`, la conducta de los lotes 72-151: hora habitual (media circular
+       de 14 días dentro de su franja, acotada por arriba) menos la antelación.
 
     [P1-PLAN-LOTE-150 · 2026-09-21] Antes era una ESPERA de 1,5 h y el dueño lo dijo claro: «solo avisa al rato
     después del horario… quiero que a las 8:45 me anime a desayunarme si todavía no he registrado ningún desayuno».
@@ -125,18 +218,18 @@ def hora_de_aviso(user_id: str, meal: str, def_hour: float):
     reproche—; en ninguno de los dos casos puedes hacer nada con él. **Se MUEVE, no se añade otro**: dos avisos por
     comida serían ocho al día con los del agua, y en iOS quien se harta no apaga un ajuste, apaga TODAS las
     notificaciones de la app y se lleva por delante las que importan (plan listo, semana nueva). Eso no se revierte
-    desde aquí.
+    desde aquí."""
+    elegida = hora_elegida(health, meal)
+    if elegida is not None:
+        return elegida % 24
+    if not _avisos_desde_historial():
+        return (float(def_hour) - _antelacion_del_aviso_h()) % 24
 
-    También se retira la modulación de la HORA por tasa de respuesta (1,0 / 1,5 / 2,5). Iba en la dirección
-    equivocada: a quien ignoraba el aviso se le avisaba MÁS TARDE, con lo que era aún menos útil y se ignoraba más.
-    `meal_rate` sigue calculándose y sigue usándose donde sí ayuda: el TONO del mensaje del cron."""
     from db_facts import get_avg_meal_hour
     avg_hr = get_avg_meal_hour(user_id, meal, ventana=FRANJA_DE_COMIDA.get(meal))
     if avg_hr is None:
         avg_hr = def_hour
     avg_hr = _acotar_a_su_franja(avg_hr, def_hour, meal)
-
-    meal_rate, meal_total = get_nudge_response_rate(user_id, meal)
     delay_hours = -_antelacion_del_aviso_h()
 
     # Nudge dinámico ajustado según historial de adherencia específica.
@@ -163,7 +256,16 @@ def hora_de_aviso(user_id: str, meal: str, def_hour: float):
     # (23,92). El cruce de medianoche se conserva en las DOS direcciones.
     # tooltip-anchor: P3-AVG-MEAL-HOUR-CIRCULAR
     nudge_hour = (avg_hr + delay_hours) % 24
-    return nudge_hour, meal_rate, meal_total
+    return nudge_hour
+
+
+def hora_de_aviso(user_id: str, meal: str, def_hour: float, health: Optional[dict] = None):
+    """`(hora, meal_rate, meal_total)`: la hora de `hora_del_aviso` y la tasa de respuesta a los avisos de esa comida.
+
+    La tasa ya NO mueve la hora (lote 150: a quien ignoraba el aviso se le avisaba MÁS TARDE, con lo que era aún menos
+    útil); sigue sirviendo donde sí ayuda: el TONO del mensaje del cron."""
+    meal_rate, meal_total = get_nudge_response_rate(user_id, meal)
+    return hora_del_aviso(user_id, meal, def_hour, health), meal_rate, meal_total
 
 
 def _banda_del_aviso_h() -> float:
@@ -308,6 +410,16 @@ def _ventana_de_respuesta_min() -> int:
     aviso. Eran 60 fijos: el dueño contestó el del desayuno a las 2 h 27 min y quedó como «ignorado» (abierto desde el
     lote 72). Nadie contesta una notificación en menos de una hora por obligación."""
     return _env_int("MEALFIT_PROACTIVE_RESPONSE_WINDOW_MIN", 180, validator=lambda v: 15 <= v <= 720)
+
+
+# [P1-PLAN-LOTE-213 · 2026-09-24] Cada cuántos minutos corre el cron (app.py lo registra con este mismo número).
+#
+# Corría a y media y escribía el mensaje del chat en el tick de la HORA del aviso, mientras el teléfono sonaba al
+# minuto exacto (lote 150). Con un aviso a las 2:15 el teléfono sonaba a las 2:15 y el coach escribía a las 2:30: al
+# tocar la notificación el chat seguía mostrando el mensaje del desayuno — lo que vio el dueño. Y con la cena por
+# defecto (19:15) le pasaba a todos. Ahora el mensaje sale en el último tick ANTES de que suene el teléfono: nunca
+# después, y como mucho 15 min antes (que es además cuando llega la Web Push, que sale con él).
+MINUTOS_ENTRE_TICKS = 15
 
 
 def _horas_de_reintento() -> int:
@@ -810,14 +922,21 @@ def run_proactive_checks():
         final_tone_instruction = base_tone_instruction
         # [P1-PLAN-LOTE-72] Las comidas cuyo aviso toca en este tick, la más reciente primero.
         candidatas = []
+        # [P1-PLAN-LOTE-213] El perfil se lee UNA vez por usuario y tick: la rama de las comidas lo necesita antes
+        # (interruptor y hora de cada comida) y las puertas de más abajo reutilizan esa misma lectura.
+        _perfil = None
 
         # Resumen del día siempre a las 11 PM
-        if now_ast.hour == 23:
+        if now_ast.hour == HORA_DEL_RESUMEN:
+            # [P1-PLAN-LOTE-213] Con el cron cada 15 min, la hora 23 tiene cuatro ticks: el resumen sale en el primero
+            # que pueda y no se repite (el anti-spam solo lo frenaba a quien tiene chat, no al suscriptor sin chat).
+            _avisadas = _comidas_avisadas_hoy(user_id)
+            if (_avisadas is None and now_ast.minute >= MINUTOS_ENTRE_TICKS) or (
+                    _avisadas and "Resumen del día" in _avisadas):
+                continue
             meal_to_check = "Resumen del día"
             trigger_time_str = "11:00 PM"
         else:
-            import math
-
             # [P1-PLAN-LOTE-83] Horas de silencio: de madrugada no se recuerda ninguna comida.
             _silencio_hasta = _hora_de_silencio()
             if current_hour_float < _silencio_hasta:
@@ -832,30 +951,45 @@ def run_proactive_checks():
                 "Merienda": 16.0,
                 "Cena": 19.5
             }
-            _reintento_h = _horas_de_reintento()
+            _reintento_min = _horas_de_reintento() * 60
+            _ahora_min = current_hour_float * 60.0
             _avisadas = _comidas_avisadas_hoy(user_id)
+            try:
+                _perfil = get_user_profile(user_id)
+            except Exception as e:
+                logger.warning(f"[P1-PLAN-LOTE-213] perfil de {user_id} ilegible ({e}); avisos a las horas normales.")
+            _health = ((_perfil or {}).get("health_profile") or {}) if isinstance(_perfil, dict) else {}
 
             for _orden, (meal, def_hour) in enumerate(defaults.items()):
-                # [P1-PLAN-LOTE-133] la cuenta vive en `hora_de_aviso`: el teléfono programa los mismos recordatorios
-                (nudge_hour, meal_rate, meal_total) = hora_de_aviso(user_id, meal, def_hour)
+                # [P1-PLAN-LOTE-213] El interruptor de ESTA comida (Configuración → Recordatorios de comida).
+                if not comida_con_aviso(_health, meal):
+                    continue
+                # [P1-PLAN-LOTE-133] la cuenta vive en `hora_del_aviso`: el teléfono programa los mismos recordatorios
+                _hora_aviso = hora_del_aviso(user_id, meal, def_hour, _health)
+                _aviso_min = minuto_del_dia(_hora_aviso)
 
                 # [P1-PLAN-LOTE-72 · 2026-09-16] Antes el aviso tocaba SOLO en la hora exacta y el bucle se quedaba con
                 # la PRIMERA comida que coincidía: si esa ya estaba registrada, el `continue` de más abajo saltaba la
                 # hora entera. El dueño registró el desayuno a las 12:58, su aviso cayó en la hora del almuerzo y el
-                # del almuerzo no salió. Ahora toca desde su hora y durante `_reintento_h` horas (sin cruzar la
+                # del almuerzo no salió. Ahora toca desde su hora y durante `_reintento_min` (sin cruzar la
                 # medianoche: el atraso se mide sin módulo), salvo que ya se haya enviado hoy; y se elige después,
                 # con lo registrado delante, la primera que falte.
-                _atraso = math.floor(current_hour_float) - math.floor(nudge_hour)
-                if not (0 <= _atraso < _reintento_h):
+                # [P1-PLAN-LOTE-213] «Su hora» es el último tick ANTES de que suene el teléfono (ver
+                # `MINUTOS_ENTRE_TICKS`): al tocar la notificación, el mensaje de esa comida ya está en el chat.
+                _desde_min = max(0, _aviso_min - MINUTOS_ENTRE_TICKS)
+                _atraso = _ahora_min - _desde_min
+                if not (0 <= _atraso < _reintento_min):
                     continue
-                if _avisadas is None and _atraso > 0:
-                    continue  # sin saber qué salió hoy, solo la hora exacta: la conducta de antes, sin repetidos
+                if _avisadas is None and _atraso >= MINUTOS_ENTRE_TICKS:
+                    continue  # sin saber qué salió hoy, solo su primer tick: sin repetidos
                 if _avisadas and meal in _avisadas:
                     continue
+                # La tasa de respuesta (solo para el TONO) se pide para las comidas que tocan, no para las cuatro.
+                meal_rate, meal_total = get_nudge_response_rate(user_id, meal)
                 # [P1-PLAN-LOTE-150] Los minutos se REDONDEAN, igual que en `meal_reminders`: truncando, el mensaje
                 # del coach decía «6:49» y la notificación del teléfono sonaba a las 6:50 — el mismo aviso con dos
                 # horas distintas según por dónde llegara.
-                hours, mins = divmod(int(round(nudge_hour * 60)) % (24 * 60), 60)
+                hours, mins = divmod(_aviso_min, 60)
                 am_pm = "AM" if hours < 12 else "PM"
                 display_hr = hours if hours <= 12 else hours - 12
                 if display_hr == 0: display_hr = 12
@@ -908,7 +1042,8 @@ def run_proactive_checks():
             # La evaluación de send_push ya se hizo al inicio del bucle por la Mejora 3
             
             # Vemos perfil para checar scheduleType (turno nocturno)
-            profile = get_user_profile(user_id)
+            # [P1-PLAN-LOTE-213] el que ya leyó la rama de las comidas; el Resumen del día lo lee aquí
+            profile = _perfil if _perfil is not None else get_user_profile(user_id)
             if not profile:
                 logger.info(f"🚫 [CRON] Usuario {user_id}: sin perfil. Saltando.")
                 continue

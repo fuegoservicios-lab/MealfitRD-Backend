@@ -194,7 +194,7 @@ def test_el_telefono_recibe_el_agua_junto_a_las_comidas_y_queda_marcado_como_alc
     monkeypatch.setattr(db, "get_water_tracker_enabled", lambda _u: True)
     monkeypatch.setattr(db, "get_water_intake_glasses_today", lambda _u, _f: 1)
     monkeypatch.setattr(rp, "_compute_water_goal", lambda _u: {"goal": 9})
-    monkeypatch.setattr(mr, "horario_de_avisos", lambda _u, locale=None, consumed_today=None: [])
+    monkeypatch.setattr(mr, "horario_de_avisos", lambda _u, locale=None, consumed_today=None, health=None: [])
     monkeypatch.setattr(hr, "marcar_canal_local", lambda u: marcas.append(u))
     r = rn._meal_reminders_sync("u", "local")
     assert marcas == ["u"]

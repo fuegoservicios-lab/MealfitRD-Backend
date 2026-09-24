@@ -75,10 +75,14 @@ def test_el_aviso_no_puede_salirse_por_arriba_de_la_franja_de_su_comida(monkeypa
 
     La hora sale de la MEDIA de lo que registra, y con 4-5 muestras una comida tardía la arrastra fuera de rango.
     El dueño eligió acotar. Comprobado con sus números reales: 15,35 de media ⇒ aviso 14:15, y la merienda queda
-    a hora y media, no a media hora."""
+    a hora y media, no a media hora.
+
+    [P1-PLAN-LOTE-213] El acotado vive ahora en el camino por historial (knob `MEALFIT_PROACTIVE_NUDGE_FROM_HISTORY`):
+    por defecto la hora ya no sale de lo registrado."""
     import db_facts
     import proactive_agent as pa
 
+    monkeypatch.setenv("MEALFIT_PROACTIVE_NUDGE_FROM_HISTORY", "1")
     monkeypatch.setattr(pa, "get_nudge_response_rate", lambda _u, _m=None: (1.0, 0))
     monkeypatch.setattr(db_facts, "get_avg_meal_hour", lambda _u, _m, ventana=None: 15.35)
     assert pa.hora_de_aviso("u", "Almuerzo", 13.0)[0] == pytest.approx(14.25)
@@ -91,10 +95,11 @@ def test_el_lado_TEMPRANO_no_se_acota_a_proposito(monkeypatch):
     """Acotar por abajo devolvería el defecto que el lote 150 vino a cerrar: el aviso DESPUÉS de la comida.
 
     Quien desayuna de verdad a las 7:05 sigue recibiéndolo a las 6:50, no a las 7:15. El acotado, por diseño, solo
-    puede ADELANTAR un aviso; nunca retrasarlo."""
+    puede ADELANTAR un aviso; nunca retrasarlo. [P1-PLAN-LOTE-213] Camino por historial, detrás de su knob."""
     import db_facts
     import proactive_agent as pa
 
+    monkeypatch.setenv("MEALFIT_PROACTIVE_NUDGE_FROM_HISTORY", "1")
     monkeypatch.setattr(pa, "get_nudge_response_rate", lambda _u, _m=None: (1.0, 0))
     monkeypatch.setattr(db_facts, "get_avg_meal_hour", lambda _u, _m, ventana=None: 7.083)
     assert pa.hora_de_aviso("u", "Desayuno", 9.0)[0] == pytest.approx(6.833, abs=1e-3)

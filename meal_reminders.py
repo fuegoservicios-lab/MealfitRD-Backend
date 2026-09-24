@@ -15,9 +15,11 @@ Este módulo sirve a los dos canales con UNA cuenta:
   · la app nativa pide `GET /api/notifications/meal-reminders` y programa esos avisos EN EL TELÉFONO (notificaciones
     locales): salen aunque la app esté cerrada, sin APNs ni servidor, y se cancelan al registrar la comida.
 
-El minuto: el cron corre a y media, así que el aviso del chat de una comida cuyo `nudge_hour` es 10,8 sale a las 10:30.
-La notificación local se programa a `floor(nudge_hour)`:35 — cinco minutos después del tick, para que al tocarla el
-mensaje del coach ya esté en el chat.
+El minuto: [P1-PLAN-LOTE-213] la notificación local suena a la hora EXACTA del aviso (la que la persona eligió en
+Configuración o, si no eligió, la normal de esa comida menos 15 min) y el cron, que corre cada 15 min, escribe el mensaje
+del chat en su último tick ANTES de esa hora: al tocar la notificación, el mensaje del coach ya está en el chat. (Hasta
+el 208 el cron corría a y media y escribía en el tick de la HORA del aviso: con un aviso a las 2:15 el chat llegaba a
+las 2:30, después del teléfono.)
 
 Los textos son fijos y cortos (los lee una pantalla de bloqueo), en los 5 idiomas de la app. El mensaje largo y
 personalizado sigue siendo el del chat.
@@ -92,25 +94,34 @@ def etiqueta_del_aviso(meal: str) -> str:
     return f"comida-{str(meal).lower().split()[0]}"
 
 
-def horario_de_avisos(user_id: str, locale: Optional[str] = None, consumed_today=None) -> list:
+def _hora_y_minuto(user_id: str, meal: str, health: Optional[dict]) -> tuple:
+    """`(hora, minuto)` locales del aviso de `meal`: la cuenta de `proactive_agent.hora_del_aviso`, la misma del cron."""
+    import proactive_agent as pa
+    def_hour = pa.HORAS_POR_DEFECTO_DE_COMIDA[meal]
+    try:
+        hora_aviso = pa.hora_del_aviso(user_id, meal, def_hour, health)
+    except Exception as e:
+        logger.warning(f"[P1-PLAN-LOTE-133] hora del aviso de {meal} no calculada ({e!r}); se usa la de por defecto")
+        hora_aviso = (math.floor(def_hour) + MINUTO_DEL_AVISO_DE_RESPALDO / 60.0) % 24
+    # [P1-PLAN-LOTE-150] Hora y minuto salen LOS DOS de la hora calculada. Redondear a minutos de una vez evita que un
+    # 59,7 acabe en «:60». [P1-PLAN-LOTE-213] con la misma función que el cron: el chat y el teléfono, el mismo minuto.
+    return divmod(pa.minuto_del_dia(hora_aviso), 60)
+
+
+def horario_de_avisos(user_id: str, locale: Optional[str] = None, consumed_today=None,
+                      health: Optional[dict] = None) -> list:
     """Un recordatorio por comida, en orden del día: `{meal, hour, minute, title, body, tag, logged_today}`.
 
     `hour`/`minute` son hora LOCAL del usuario. Un aviso que caería dentro de las horas de silencio (quien cena a las
-    23:30 → la 1:00) no se programa: el cron tampoco lo manda (`MEALFIT_PROACTIVE_QUIET_UNTIL_HOUR`)."""
+    23:30 → la 1:00) no se programa: el cron tampoco lo manda (`MEALFIT_PROACTIVE_QUIET_UNTIL_HOUR`).
+    [P1-PLAN-LOTE-213] Tampoco el de una comida que la persona apagó en Configuración, y la hora es la que eligió."""
     import proactive_agent as pa
     silencio = pa._hora_de_silencio()
     out = []
     for meal in COMIDAS:
-        def_hour = pa.HORAS_POR_DEFECTO_DE_COMIDA[meal]
-        try:
-            nudge_hour, _rate, _total = pa.hora_de_aviso(user_id, meal, def_hour)
-        except Exception as e:
-            logger.warning(f"[P1-PLAN-LOTE-133] hora del aviso de {meal} no calculada ({e!r}); se usa la de por defecto")
-            nudge_hour = (math.floor(def_hour) + MINUTO_DEL_AVISO_DE_RESPALDO / 60.0) % 24
-        # [P1-PLAN-LOTE-150] Hora y minuto salen LOS DOS de `nudge_hour`. Redondear a minutos de una vez evita
-        # que un 59,7 acabe en «:60».
-        total = int(round(float(nudge_hour) * 60)) % (24 * 60)
-        hora, minuto = divmod(total, 60)
+        if not pa.comida_con_aviso(health, meal):
+            continue
+        hora, minuto = _hora_y_minuto(user_id, meal, health)
         if hora < silencio:
             continue
         titulo, cuerpo = texto_del_aviso(meal, locale)
@@ -118,5 +129,22 @@ def horario_de_avisos(user_id: str, locale: Optional[str] = None, consumed_today
             "meal": meal.lower(), "hour": hora, "minute": minuto, "title": titulo, "body": cuerpo,
             "tag": etiqueta_del_aviso(meal),
             "logged_today": bool(pa._comida_ya_registrada(consumed_today, meal)),
+        })
+    return out
+
+
+def comidas_para_configuracion(user_id: str, health: Optional[dict] = None) -> list:
+    """[P1-PLAN-LOTE-213] Las CUATRO comidas como las pinta Configuración: `{meal, active, hour, minute, chosen,
+    default_hour, default_minute}`. Aquí sí salen las apagadas: la pantalla necesita su interruptor para volver a
+    encenderlas. La hora es la efectiva (la que suena); `default_*` es la normal, para «volver a la de siempre»."""
+    import proactive_agent as pa
+    out = []
+    for meal in COMIDAS:
+        hora, minuto = _hora_y_minuto(user_id, meal, health)
+        def_hora, def_minuto = divmod(pa.minuto_del_dia(pa.HORAS_POR_DEFECTO_DE_COMIDA[meal] - pa._antelacion_del_aviso_h()), 60)
+        out.append({
+            "meal": meal.lower(), "active": bool(pa.comida_con_aviso(health, meal)),
+            "hour": hora, "minute": minuto, "chosen": pa.hora_elegida(health, meal) is not None,
+            "default_hour": def_hora, "default_minute": def_minuto,
         })
     return out

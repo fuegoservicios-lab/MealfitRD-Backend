@@ -47,9 +47,13 @@ def _src(rel: str) -> str:
 
 def test_la_hora_del_aviso_es_la_habitual_MENOS_la_antelacion(monkeypatch):
     """[P1-PLAN-LOTE-150] Era «+ la espera» (1,5 h, y hasta 2,5 a quien lo ignoraba). El dueño: «solo avisa al rato
-    después del horario». Ahora el aviso se ADELANTA 15 min a tu hora habitual, para que puedas hacer algo con él."""
+    después del horario». Ahora el aviso se ADELANTA 15 min a tu hora habitual, para que puedas hacer algo con él.
+
+    [P1-PLAN-LOTE-213] La hora habitual ya no es el camino por defecto (la eligen en Configuración; si no, la normal):
+    vive detrás de `MEALFIT_PROACTIVE_NUDGE_FROM_HISTORY`, y esto sigue midiendo que ESE camino hace su cuenta bien."""
     import db_facts
     import proactive_agent as pa
+    monkeypatch.setenv("MEALFIT_PROACTIVE_NUDGE_FROM_HISTORY", "1")
     monkeypatch.setattr(db_facts, "get_avg_meal_hour", lambda _u, _m, ventana=None: 8.5)
     monkeypatch.setattr(pa, "get_nudge_response_rate", lambda _u, _m=None: (1.0, 0))
     assert pa.hora_de_aviso("u", "Desayuno", 9.0)[0] == pytest.approx(8.25), "desayuna a las 8:30 → aviso 8:15"
@@ -75,8 +79,10 @@ def test_el_cron_usa_esa_misma_cuenta_y_no_otra_copia():
     arbol = ast.parse(src)
     asignaciones = [n for n in ast.walk(arbol) if isinstance(n, ast.Assign)
                     and any(isinstance(t, ast.Name) and t.id == "nudge_hour" for t in n.targets)]
-    assert len(asignaciones) == 1, "UNA asignación a `nudge_hour` (la de `hora_de_aviso`): dos copias acaban avisando a horas distintas"
-    assert "(nudge_hour, meal_rate, meal_total) = hora_de_aviso(user_id, meal, def_hour)" in src
+    assert len(asignaciones) == 1, "UNA asignación a `nudge_hour` (la de `hora_del_aviso`): dos copias acaban avisando a horas distintas"
+    # [P1-PLAN-LOTE-213] el cron y el teléfono piden la hora a la MISMA función, con la configuración de la persona
+    assert "_hora_aviso = hora_del_aviso(user_id, meal, def_hour, _health)" in src
+    assert "pa.hora_del_aviso(user_id, meal, def_hour, health)" in _src("meal_reminders.py")
     import proactive_agent as pa
     assert pa.HORAS_POR_DEFECTO_DE_COMIDA == {"Desayuno": 9.0, "Almuerzo": 13.0, "Merienda": 16.0, "Cena": 19.5}
 
@@ -87,7 +93,7 @@ def test_el_horario_que_programa_el_telefono(monkeypatch):
     import meal_reminders as mr
     import proactive_agent as pa
     horas = {"Desayuno": 10.8, "Almuerzo": 14.5, "Merienda": 17.5, "Cena": 1.0}   # quien cena a las 23:30
-    monkeypatch.setattr(pa, "hora_de_aviso", lambda _u, meal, _d: (horas[meal], 1.0, 0))
+    monkeypatch.setattr(pa, "hora_del_aviso", lambda _u, meal, _d, _h=None: horas[meal])
     monkeypatch.delenv("MEALFIT_PROACTIVE_QUIET_UNTIL_HOUR", raising=False)
     out = mr.horario_de_avisos("u", locale="es-DO", consumed_today=[{"meal_type": "desayuno", "meal_name": "Mangú"}])
     assert [(r["meal"], r["hour"], r["minute"]) for r in out] == [("desayuno", 10, 48), ("almuerzo", 14, 30), ("merienda", 17, 30)], \
@@ -121,7 +127,8 @@ def test_el_endpoint_usa_la_misma_puerta_que_el_cron(monkeypatch):
     monkeypatch.setattr(db, "get_user_profile", lambda _u: perfil)
     monkeypatch.setattr(db, "user_tz_offset_min", lambda _u: 240)
     monkeypatch.setattr(db, "get_consumed_meals_today", lambda _u, date_str=None, tz_offset_mins=None: [])
-    monkeypatch.setattr(mr, "horario_de_avisos", lambda _u, locale=None, consumed_today=None: [{"meal": "cena", "locale": locale}])
+    monkeypatch.setattr(mr, "horario_de_avisos",
+                        lambda _u, locale=None, consumed_today=None, health=None: [{"meal": "cena", "locale": locale}])
     r = rn._meal_reminders_sync("u")
     assert r["enabled"] is False and r["reason"] == "schedule" and r["reminders"] == [], \
         "con turno nocturno el cron no avisa: el teléfono tampoco"
@@ -211,8 +218,9 @@ def test_la_etiqueta_viaja_en_el_payload_y_el_service_worker_la_usa():
 
 def test_el_cron_de_avisos_tiene_nombre():
     app = _src("app.py")
-    assert re.search(r'_add_job_jittered\(scheduler, run_proactive_checks, "cron", minute=30,\s+id="proactive_meal_reminders", '
-                     r'replace_existing=True\)', app)
+    # [P1-PLAN-LOTE-213] cada `MINUTOS_ENTRE_TICKS` (15) en vez de a y media: el chat sale antes que el teléfono
+    assert re.search(r'_add_job_jittered\(scheduler, run_proactive_checks, "cron", minute=f"\*/\{MINUTOS_ENTRE_TICKS\}",'
+                     r'\s+id="proactive_meal_reminders", replace_existing=True\)', app)
 
 
 def test_el_interruptor_ya_no_dice_beta():

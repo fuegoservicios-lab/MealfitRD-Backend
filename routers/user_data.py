@@ -1086,6 +1086,15 @@ async def api_patch_profile(
                 detail=str(exc),
             ) from exc
 
+    # [P1-PLAN-LOTE-213 · 2026-09-24] La otra clave del JSONB con forma fija: la hora y el interruptor de cada
+    # recordatorio de comida. Mismo criterio que el país: se RECHAZA con un 400 que explica, no se corrige; guardada
+    # tal cual, una hora ilegible haría que el cron la ignorase en silencio y el aviso sonaría a otra hora sin motivo.
+    if body.health_profile and "avisos_por_comida" in body.health_profile:
+        from proactive_agent import error_en_avisos_por_comida
+        _error_avisos = error_en_avisos_por_comida(body.health_profile["avisos_por_comida"])
+        if _error_avisos:
+            raise HTTPException(status_code=400, detail=_error_avisos)
+
     if not body.health_profile and not fields:
         raise HTTPException(status_code=400, detail="Nada que actualizar.")
 

@@ -38,12 +38,13 @@ def test_una_comida_tardisima_ya_no_arrastra_el_aviso_fuera_de_su_franja(dia, mo
     """
     import db_facts
     import proactive_agent as pa
+    monkeypatch.setenv("MEALFIT_PROACTIVE_NUDGE_FROM_HISTORY", "1")   # [P1-PLAN-LOTE-213] camino por historial
     monkeypatch.setattr(db_facts, "get_avg_meal_hour", lambda _u, _m, ventana=None: 0.633)
     monkeypatch.setattr(pa, "get_nudge_response_rate", lambda _u, _m=None: (1.0, 0))
     assert pa.hora_de_aviso("u", "Cena", 19.5)[0] == pytest.approx(20.75), "la cena de las 00:38 acota a las 21:00"
 
 
-def test_el_silencio_sigue_haciendo_falta_para_quien_come_de_madrugada(dia):
+def test_el_silencio_sigue_haciendo_falta_para_quien_come_de_madrugada(dia, monkeypatch):
     """Acotar no sustituye al silencio: a quien SÍ desayuna a la 1 de la mañana su aviso le toca a esa hora.
 
     El lado temprano NO se acota a propósito (ver `_acotar_a_su_franja`): acotarlo movería el aviso DESPUÉS de la
@@ -51,12 +52,15 @@ def test_el_silencio_sigue_haciendo_falta_para_quien_come_de_madrugada(dia):
     que lo calla son las horas de silencio del lote 83.
     """
     # 09:30 UTC = 05:30 en RD; desayuna de verdad a las 4:15, su aviso son las 4:00, dentro del silencio.
+    # [P1-PLAN-LOTE-213] «su aviso son las 4:00» solo con el knob del historial: por defecto sería el de las 8:45.
+    monkeypatch.setenv("MEALFIT_PROACTIVE_NUDGE_FROM_HISTORY", "1")
     dia.update(ahora=_utc(17, 9), registros={"Desayuno": ["04:10", "04:20"]}, comidas=[], avisos_hoy=[], mensajes=[])
     dia["correr"]()
     assert dia["avisos_nuevos"] == [], "antes de las 6:00 locales salió un aviso"
 
 
-def test_la_cena_de_verdad_se_sigue_recordando_por_la_noche(dia):
+def test_la_cena_de_verdad_se_sigue_recordando_por_la_noche(dia, monkeypatch):
+    monkeypatch.setenv("MEALFIT_PROACTIVE_NUDGE_FROM_HISTORY", "1")   # [P1-PLAN-LOTE-213] la hora sale de lo registrado
     # 01:30 UTC del 18 = 21:30 en RD; cena habitual a las 19:37 → aviso a las 19:22 → sigue tocando en este tick por
     # la ventana de reintento de 3 h. [P1-PLAN-LOTE-150] Antes la hora era 21:07 (la habitual + 1,5 h); ahora el aviso
     # se ADELANTA 15 min. Lo que este test protege no cambia: la cena de verdad se recuerda de noche, y el silencio
@@ -72,6 +76,7 @@ def test_el_silencio_es_un_knob_y_cero_lo_apaga(dia, monkeypatch):
     # cena ya no programa nada de madrugada —la arregla el otro test— y este dejaría de medir el knob. El
     # madrugador de verdad sí llega, y con el silencio en 0 su aviso sale.
     monkeypatch.setenv("MEALFIT_PROACTIVE_QUIET_UNTIL_HOUR", "0")
+    monkeypatch.setenv("MEALFIT_PROACTIVE_NUDGE_FROM_HISTORY", "1")   # [P1-PLAN-LOTE-213] el madrugador sale del historial
     # 04:10 y no 01:00: la franja del desayuno empieza a las 4:00 y un registro anterior no cuenta como desayuno.
     dia.update(ahora=_utc(17, 9), registros={"Desayuno": ["04:10", "04:20"]}, comidas=[], avisos_hoy=[], mensajes=[])
     dia["correr"]()
