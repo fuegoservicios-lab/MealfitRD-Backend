@@ -569,3 +569,20 @@ def test_la_foto_de_compra_llega_al_prompt_sin_ofrecer_la_nevera_apagada(monkeyp
     assert "quiere que los agregues a su Nevera" not in apagada
     encendida = _prompt_del_coach(monkeypatch, "stream", activa=True, vision=foto)
     assert "quiere que los agregues a su Nevera" in encendida
+
+
+# ── 7. La documentación ──────────────────────────────────────────────────────────────────────────────────────
+def test_el_doc_canonico_existe_y_nombra_lo_que_opera():
+    doc = (_BACKEND / "docs" / "nevera_opcional.md").read_text(encoding="utf-8")
+    for trozo in ("nevera_activa_de", "MEALFIT_NEVERA_SWITCH", "MEALFIT_NEVERA_AUTO_OFF",
+                  "MEALFIT_NEVERA_AUTO_OFF_HOURS", "nevera_auto_off", "p1_nevera_opcional_2026_09_23.sql",
+                  "/api/user/preferences/nevera", "nevera_reloj_desde"):
+        assert trozo in doc, trozo
+
+
+def test_claude_md_apunta_al_doc():
+    claude = _BACKEND.parent / "CLAUDE.md"
+    if not claude.exists():
+        pytest.skip("sin el CLAUDE.md de la raíz al lado")
+    txt = claude.read_text(encoding="utf-8")
+    assert "[P1-NEVERA-OPCIONAL · 2026-09-23]" in txt and "backend/docs/nevera_opcional.md" in txt
