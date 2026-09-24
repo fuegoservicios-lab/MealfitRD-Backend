@@ -56,6 +56,33 @@ def _tiene_casabe(meal: dict) -> bool:
     return any(isinstance(x, str) and _CASABE.search(x) for x in (meal.get("ingredients") or []))
 
 
+# [P1-PLAN-LOTE-195 · 2026-09-24] El casabe que QUEDA (uno por bloque, lote 178) lo marcaba el revisor unas veces como
+# aviso y otras como crítico (rd20: «¾ de torta de casabe tiene una carga glucémica alta… no es adecuada para el control
+# de la diabetes»). Quitarlo del todo contradice la decisión del 178 (es parte de la mesa dominicana); lo que faltaba
+# es lo que el revisor LEE: cómo se come. La nota va en los pasos («Nota clínica», que su resumen copia) y le sirve
+# igual al usuario. tooltip-anchor: P1-PLAN-LOTE-195-NOTA-CASABE
+_NOTA_CASABE = ("⚕️ Nota clínica (diabetes): el casabe sube la glucosa rápido. Cómelo en la porción indicada, junto con "
+                "la proteína y los vegetales del plato (nunca solo), y no lo repitas otra vez ese día.")
+
+
+def nota_casabe(plan, form_data) -> int:
+    """Devuelve cuántas comidas anotó. Muta `plan`. Idempotente."""
+    if not (enabled() and isinstance(plan, dict) and aplica(form_data)):
+        return 0
+    n = 0
+    for d in plan.get("days") or []:
+        for m in (d.get("meals") or []) if isinstance(d, dict) else []:
+            if not (isinstance(m, dict) and _tiene_casabe(m)):
+                continue
+            pasos = m.get("recipe")
+            if not isinstance(pasos, list) or any("sube la glucosa" in str(p) for p in pasos):
+                continue
+            pasos.append(_NOTA_CASABE)
+            m.pop("_display", None)
+            n += 1
+    return n
+
+
 def limitar_casabe(plan, form_data, db=None) -> int:
     """Devuelve cuántas comidas cambió. Muta `plan`."""
     if not (enabled() and isinstance(plan, dict) and aplica(form_data)):

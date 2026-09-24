@@ -165,6 +165,8 @@ def etiquetar(plan: dict, form_data) -> int:
             n += __import__("embarazo_pescado").limitar_pescado(plan, form_data)
         except Exception as e:                                                 # noqa: BLE001
             logger.debug(f"[P1-PLAN-LOTE-173] etiquetas de embarazo no-op: {type(e).__name__}: {e}")
+    if "dm2" in reglas:
+        n += __import__("dm2_seguro").nota_casabe(plan, form_data)   # [P1-PLAN-LOTE-195] lo que el revisor lee del casabe
     if "hta" in reglas or "renal" in reglas:
         n_hta = _etiquetar_hta(plan)
         if n_hta:

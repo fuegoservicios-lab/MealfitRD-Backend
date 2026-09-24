@@ -408,7 +408,9 @@ _PROCESS_START_ISO = datetime.now(timezone.utc).isoformat()
 # [P1-PLAN-LOTE-194 · 2026-09-24] (solo backend) traspaso de la sesión del lote 192: «8 rodajas de plátano maduro
 # hervido» contaba 8 plátanos (2.240 g, K 9.815 mg) en el diario — «rodajas» no era unidad y se pegaba al nombre.
 # Rodaja/lasca/tajada/gajo/rueda = fracción de la unidad en los dos parsers (canonical_units.PIECE_FRACTIONS).
-_LAST_KNOWN_PFIX = "P1-PLAN-LOTE-194 · 2026-09-24"
+# [P1-PLAN-LOTE-195 · 2026-09-24] (solo backend) DM2: el casabe que queda (uno por bloque, 178) lo marcaba el revisor
+# unas veces aviso y otras CRÍTICO (rd20). Nota clínica de cómo comerlo, donde el revisor lee.
+_LAST_KNOWN_PFIX = "P1-PLAN-LOTE-195 · 2026-09-24"
 
 # [P1-SENTRY-SAMPLE-COST · 2026-05-12] Sentry sampling driven from env vars
 # con default seguro 0.1 (10%). Pre-fix tenía `traces_sample_rate=1.0` y
