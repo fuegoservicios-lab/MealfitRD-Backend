@@ -14758,9 +14758,8 @@ _VERIFICATION_DEMAND_RX = _re_mod.compile(
     r"origen industrial)",  # [P1-PLAN-LOTE-180] «casabe de origen industrial/controlado» (embarazo)
     _re_mod.IGNORECASE,
 )
-# [P1-PLAN-LOTE-182] «Confirme si la alergia a mariscos incluye pescado» es aclaración, no defecto (rd11: 2.º CRÍTICO ⇒ EMERGENCIA);
-# aparte para excluir pasteurizar (embarazo). tooltip-anchor: P1-PLAN-LOTE-182-CONFIRMAR-ES-AVISO
-_CONFIRM_DEMAND_RX = _re_mod.compile(r"confirm(?:e|ar)\s+(?:si|su alcance|el alcance|las? etiquetas?|con)|hasta confirmar", _re_mod.IGNORECASE)  # [P1-PLAN-LOTE-184]
+# [P1-PLAN-LOTE-182] «Confirme si…» es aclaración, no defecto; aparte para excluir pasteurizar. tooltip-anchor: P1-PLAN-LOTE-182-CONFIRMAR-ES-AVISO
+_CONFIRM_DEMAND_RX = _re_mod.compile(r"confirm(?:e|ar)\s+(?:si|su alcance|el alcance|las? etiquetas?|con|la tolerancia)|hasta confirmar", _re_mod.IGNORECASE)  # [P1-PLAN-LOTE-184/186]
 _PASTEURIZ_RX = _re_mod.compile(r"pasteuriz", _re_mod.IGNORECASE)
 
 
@@ -26059,8 +26058,7 @@ def _enforce_meal_count(days: list, target_meal_types: list) -> int:
 # criterio clínico del reviewer; rollback sin redeploy vía MEALFIT_DM2_HIGH_GI_CAP_G.
 _DM2_HIGH_GI_STARCH_TOKENS = ("batata", "yuca", "yautia", "name", "platano maduro", "mangu", "casabe", "papa", "maiz dulce")
 _DM2_HIGH_GI_CAP_EXCLUDE = ("papaya", "harina de", "leche de", "vinagre de", "agua de")
-_DM2_SWEET_FRUIT_TOKENS = ("pina", "mango", "sandia", "melon", "uva", "uvas", "mamey", "datil", "datiles", "pasas", "guineo",
-                           "guineos", "lechosa", "cereza", "cerezas")  # [P1-PLAN-LOTE-182] el guineo VERDE queda fuera (bajo IG)
+_DM2_SWEET_FRUIT_TOKENS = ("pina", "mango", "sandia", "melon", "uva", "uvas", "mamey", "datil", "datiles", "pasas", "guineo", "guineos", "lechosa", "cereza", "cerezas")  # [P1-PLAN-LOTE-182]
 _DM2_SWEET_FRUIT_EXCLUDE = ("guineo verde", "guineos verdes")
 
 
@@ -43312,6 +43310,8 @@ Responde ÚNICAMENTE con el JSON de revisión.
     if BAND_RETRY_GATE_ENABLED:
         try:
             _bsr = compute_clinical_band_score(plan, {})
+            if (_bsr.get("score") or 0) < 1.0 and _env_bool("MEALFIT_REVIEW_BAND_RECLOSE", True):  # [P1-PLAN-LOTE-186] mide lo que se guarda (rd12, HTA: grasa 0,887 → 1,0 con la misma cadena). tooltip-anchor: P1-PLAN-LOTE-186-BANDA-COMO-SE-GUARDA
+                await _adb(__import__("db").apply_plan_quality_finalize_chain, plan, surface="review-band-gate", form_data=form_data); _bsr = compute_clinical_band_score(plan, {})
             # [P1-SLOT-DRIFT-OBSERVABLE · 2026-08-05] `slot_drift` se calculaba y se
             # TIRABA: nadie leía esa clave. El porqué y la medición que lo destapó,
             # en el docstring de `_emit_slot_drift_metric_best_effort`.

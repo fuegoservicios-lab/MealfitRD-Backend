@@ -379,7 +379,10 @@ _PROCESS_START_ISO = datetime.now(timezone.utc).isoformat()
 # etiquetas», «confirme la etiqueta» y «hasta confirmar con evaluación» son aviso; sin lácteos no se sugiere huevo.
 # [P1-PLAN-LOTE-185 · 2026-09-23] (solo backend) rd14, DM2: rechazo CRÍTICO por «batidos con piña/guineo o lechosa/
 # guineo» — la regla DM2 pedía «fruta entera» pero no prohibía la fruta licuada.
-_LAST_KNOWN_PFIX = "P1-PLAN-LOTE-185 · 2026-09-23"
+# [P1-PLAN-LOTE-186 · 2026-09-23] (solo backend) la puerta de banda del revisor medía un estado que el guardado
+# todavía cerraba (rd12, HTA: grasa 0,887 → rechazo y reintento; la misma cadena lo deja en 1,0): si alguna celda
+# está fuera, re-cierra con la cadena del guardado y vuelve a medir. Knob MEALFIT_REVIEW_BAND_RECLOSE.
+_LAST_KNOWN_PFIX = "P1-PLAN-LOTE-186 · 2026-09-23"
 
 # [P1-SENTRY-SAMPLE-COST · 2026-05-12] Sentry sampling driven from env vars
 # con default seguro 0.1 (10%). Pre-fix tenía `traces_sample_rate=1.0` y
