@@ -79,6 +79,36 @@ CANONICAL_UNIT_MAP: dict = {
 }
 
 
+# [P1-PLAN-LOTE-194 · 2026-09-24] Cortes de una PIEZA («8 rodajas de plátano», «2 lascas de aguacate»). No son
+# unidades canónicas (no se compran ni se agregan así): los dos parsers los convierten, al leer, en FRACCIÓN de la
+# unidad del alimento. Sin esto «rodajas» se pegaba al nombre y contaba como pieza ENTERA: el diario del dueño
+# guardó «8 rodajas de plátano maduro hervido» como 8 plátanos (2.240 g, K 9.815 mg); «5 lascas de plátano maduro
+# frito», 1.400 g; «2 lascas de aguacate», 500 g. Estimaciones de corte casero, no de catálogo: un plátano da ~8
+# rodajas o ~5 tajadas, un aguacate ~8 lascas, una naranja ~10 gajos. «trozo/pedazo/tira/cubo» quedan FUERA a
+# propósito: no dicen de qué tamaño son («3 tiras de tocino», el cubito de caldo). Knob MEALFIT_PIECE_FRACTIONS.
+# tooltip-anchor: P1-PLAN-LOTE-194-CORTES-DE-PIEZA
+PIECE_FRACTIONS: dict = {
+    'rodaja': 1 / 8, 'rodajas': 1 / 8, 'rodajita': 1 / 8, 'rodajitas': 1 / 8,
+    'rueda': 1 / 8, 'ruedas': 1 / 8, 'ruedita': 1 / 8, 'rueditas': 1 / 8,
+    'lasca': 1 / 8, 'lascas': 1 / 8, 'lasquita': 1 / 8, 'lasquitas': 1 / 8,
+    'tajada': 1 / 5, 'tajadas': 1 / 5, 'tajadita': 1 / 5, 'tajaditas': 1 / 5,
+    'gajo': 1 / 10, 'gajos': 1 / 10, 'gajito': 1 / 10, 'gajitos': 1 / 10,
+}
+
+
+def piece_fraction(raw):
+    """Qué fracción de la unidad es un corte («rodajas» → 1/8), o None si la palabra no es un corte de pieza."""
+    if not raw:
+        return None
+    try:
+        from knobs import _env_bool
+        if not _env_bool("MEALFIT_PIECE_FRACTIONS", True):
+            return None
+    except Exception:                                                          # noqa: BLE001
+        pass
+    return PIECE_FRACTIONS.get(str(raw).strip().lower().rstrip('.'))
+
+
 def canonicalize_unit(raw):
     """Normaliza un alias a su unidad canónica.
 

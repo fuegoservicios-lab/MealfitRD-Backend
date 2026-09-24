@@ -197,11 +197,49 @@ def _paso_vianda(meal: dict) -> bool:
     return True
 
 
+# [P1-PLAN-LOTE-193 · 2026-09-24] rd17 (embarazo): rechazo CRÍTICO «varios quesos blandos/frescos pasteurizados (cottage,
+# queso fresco/blanco, mozzarella fresca) aparecen sin indicación de calentarlos hasta que humeen o alcancen ≥74 °C» —
+# lo pedía el propio informe clínico del plan. Es la guía de los CDC para el queso fresco estilo latino en el embarazo
+# (brotes de Listeria con queso ya pasteurizado). La etiqueta «pasteurizado» ya estaba; faltaba la instrucción, en una
+# nota que el revisor LEE. Sólo embarazo (no lactancia); los quesos duros/curados y el queso crema no la llevan.
+# tooltip-anchor: P1-PLAN-LOTE-193-QUESO-QUE-HUMEE
+_QUESO_BLANDO = re.compile(r"\b(?:queso(?!\s+(?:cheddar|parmesano|gouda|provolone|edam|de\s+papa|de\s+bola|amarillo|"
+                           r"suizo|manchego|curado|azul|crema|vegano|de\s+(?:coco|soya|soja|almendras?)))|ricotta|cottage|"
+                           r"reques[oó]n|mozzarella)\b", re.IGNORECASE)
+_NOTA_QUESO_QUE_HUMEE = ("⚠️ Seguridad alimentaria (embarazo): el queso fresco o blando (blanco, de hoja, cottage, ricotta, "
+                         "mozzarella), aunque sea pasteurizado, caliéntalo hasta que humee (74 °C por dentro) antes de "
+                         "comerlo, o cámbialo por un queso duro o curado.")
+_EMBARAZO_SI = ("embaraz", "gestac", "gestante", "pregnan")
+
+
+def _es_embarazo(form_data) -> bool:
+    """Embarazo de verdad: la regla clínica «pregnancy» cubre también la lactancia."""
+    try:
+        from constants import strip_accents
+        fd = form_data or {}
+        texto = " ".join(str(x) for x in (fd.get("medicalConditions") or []) if x) + " " + str(fd.get("otherConditions") or "")
+        texto = strip_accents(texto.lower())
+        return any(t in texto for t in _EMBARAZO_SI)
+    except Exception:                                                          # noqa: BLE001
+        return False
+
+
+def _nota_queso_que_humee(meal: dict) -> bool:
+    if not any(isinstance(x, str) and _QUESO_BLANDO.search(x) for x in (meal.get("ingredients") or [])):
+        return False
+    pasos = meal.get("recipe")
+    if not isinstance(pasos, list) or any("humee" in str(p) for p in pasos):
+        return False
+    pasos.append(_NOTA_QUESO_QUE_HUMEE)
+    return True
+
+
 def etiquetar(plan: dict, form_data) -> int:
     """Devuelve cuántas comidas tocó. Muta `plan` (display, raw y nombre)."""
     if not (enabled() and isinstance(plan, dict) and aplica(form_data)):
         return 0
     tocadas = 0
+    _embarazo = _es_embarazo(form_data)                      # [P1-PLAN-LOTE-193]
     for d in plan.get("days") or []:
         for m in (d.get("meals") or []) if isinstance(d, dict) else []:
             if not isinstance(m, dict):
@@ -218,13 +256,16 @@ def etiquetar(plan: dict, form_data) -> int:
                     cambio = True
             pasos = m.get("recipe")
             if isinstance(pasos, list):
-                nuevos = [(_paso_queso(p) if isinstance(p, str) else p) for p in pasos]
+                nuevos = [(_paso_queso(p) if isinstance(p, str) and "Seguridad alimentaria" not in p else p)  # [P1-PLAN-LOTE-193] las notas no se re-etiquetan
+                          for p in pasos]
                 if nuevos != pasos:
                     m["recipe"] = nuevos
                     cambio = True
             if _paso_yuca(m):
                 cambio = True
             if _paso_vianda(m):
+                cambio = True
+            if _embarazo and _nota_queso_que_humee(m):             # [P1-PLAN-LOTE-193]
                 cambio = True
             nombre = m.get("name")
             if isinstance(nombre, str):

@@ -25,7 +25,7 @@ import re
 from dataclasses import dataclass
 from typing import Optional
 
-from canonical_units import to_base_amount, canonicalize_unit
+from canonical_units import to_base_amount, canonicalize_unit, piece_fraction  # [P1-PLAN-LOTE-194] cortes de pieza
 
 logger = logging.getLogger(__name__)
 # [P1-MICRO-DENSITY-OBSERVABLE · 2026-06-26] (audit gap #6) Dedup de los warnings de "gap de densidad":
@@ -179,7 +179,7 @@ def _strip_qty_prefix(s: str) -> str:
     s2 = _LEAD_QTY_RE.sub("", s2, count=1)
     from canonical_units import canonicalize_unit
     mu = _UNIT_TOKEN_RE.match(s2)
-    if mu and canonicalize_unit(mu.group(1)):
+    if mu and (canonicalize_unit(mu.group(1)) or piece_fraction(mu.group(1))):   # [P1-PLAN-LOTE-194]
         s2 = s2[mu.end():].lstrip()
     s2 = re.sub(r"^(de|del)\s+", "", s2, flags=re.I)
     return s2.strip()
@@ -298,6 +298,11 @@ def _split_qty_unit_name(s: str):
     qty = _frac_to_float(mq.group(1)) or 0.0
     rest = raw[mq.end():]
     mu = _UNIT_TOKEN_RE.match(rest)
+    _pf = piece_fraction(mu.group(1)) if mu else None     # [P1-PLAN-LOTE-194] «8 rodajas de plátano» = 1 plátano
+    if _pf:
+        qty *= _pf
+        rest = rest[mu.end():].lstrip()
+        mu = None
     unit = "unidad"
     if mu and canonicalize_unit(mu.group(1)):
         unit = mu.group(1).lower()

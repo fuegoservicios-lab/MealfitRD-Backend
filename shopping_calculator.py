@@ -6,7 +6,7 @@ from collections import defaultdict
 import logging
 from fractions import Fraction
 from db_core import _storage_client, connection_pool, execute_sql_query
-from canonical_units import canonicalize_unit, to_base_amount as _to_base_amount  # [P1-shop-coh-1] SSOT de unidades; [P1-NEW-10] conversor base
+from canonical_units import canonicalize_unit, piece_fraction, to_base_amount as _to_base_amount  # [P1-PLAN-LOTE-194] cortes; [P1-shop-coh-1] SSOT de unidades; [P1-NEW-10] conversor base
 
 import time as _time
 
@@ -3478,6 +3478,11 @@ def _parse_quantity(s, *, apply_yield_multiplier: bool = True, apply_legumbres_y
     #   - frascos plural (P5-OLIVE-CAP)
     #   - caja/bolsa/tetra/galón/jarra (P1-3 container aliases)
     #   - mazo/atado/manojo (P3-HERB-CAP)
+    _pf = piece_fraction(unit_str) if unit_str else None   # [P1-PLAN-LOTE-194] «8 rodajas de plátano» = 1 plátano
+    if _pf:
+        qty *= _pf
+        unit_str = None
+        rest_str = re.sub(r"^(?:de|del)\s+", "", rest_str.strip(), flags=re.I)
     if unit_str:
         canonical = canonicalize_unit(unit_str)
         if canonical is not None:

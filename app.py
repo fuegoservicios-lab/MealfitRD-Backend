@@ -402,7 +402,13 @@ _PROCESS_START_ISO = datetime.now(timezone.utc).isoformat()
 # [P1-PLAN-LOTE-192 · 2026-09-24] (backend + frontend, número reservado con la sesión del generador) «Compartir» el día
 # (imagen + texto, WhatsApp); la Nevera opcional en modo contador (interruptor en Capacidades y apagado automático tras
 # 48 h vacía; UNA regla en nevera_opcional.py); y una comida cuyos renglones pesan >1,5× sus kcal ya no aporta micros.
-_LAST_KNOWN_PFIX = "P1-PLAN-LOTE-192 · 2026-09-24"
+# [P1-PLAN-LOTE-193 · 2026-09-24] (solo backend) medido sobre las corridas guardadas: el plan de EMERGENCIA servía
+# «14.5 cdas de chía» (semillas/frutos secos ≤ 40 g por línea); embarazo: queso blando «hasta que humee» y el tope de
+# pescado también al entrar al revisor y al final (rd19: 525 g escalados tras el tope); «Pollo crujiente de avena».
+# [P1-PLAN-LOTE-194 · 2026-09-24] (solo backend) traspaso de la sesión del lote 192: «8 rodajas de plátano maduro
+# hervido» contaba 8 plátanos (2.240 g, K 9.815 mg) en el diario — «rodajas» no era unidad y se pegaba al nombre.
+# Rodaja/lasca/tajada/gajo/rueda = fracción de la unidad en los dos parsers (canonical_units.PIECE_FRACTIONS).
+_LAST_KNOWN_PFIX = "P1-PLAN-LOTE-194 · 2026-09-24"
 
 # [P1-SENTRY-SAMPLE-COST · 2026-05-12] Sentry sampling driven from env vars
 # con default seguro 0.1 (10%). Pre-fix tenía `traces_sample_rate=1.0` y

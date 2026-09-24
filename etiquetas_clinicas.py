@@ -160,6 +160,9 @@ def etiquetar(plan: dict, form_data) -> int:
         try:
             import embarazo_seguro
             n += embarazo_seguro.etiquetar(plan, form_data)
+            # [P1-PLAN-LOTE-193] el tope semanal de pescado (187) otra vez aquí, al entrar al revisor: rd19 llegó con
+            # 525 g porque los cerradores escalan el pescado DESPUÉS de la sustitución por condición. Idempotente.
+            n += __import__("embarazo_pescado").limitar_pescado(plan, form_data)
         except Exception as e:                                                 # noqa: BLE001
             logger.debug(f"[P1-PLAN-LOTE-173] etiquetas de embarazo no-op: {type(e).__name__}: {e}")
     if "hta" in reglas or "renal" in reglas:

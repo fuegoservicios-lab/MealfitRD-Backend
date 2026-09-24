@@ -2244,7 +2244,8 @@ SLOT_INAPPROPRIATE_FOODS = {
             "cereal", "hojuelas", "panqueque", "pancake", "waffle", "crepe", "crepa", "avena"),
          "hardness": "soft",
          "exclude": ("harina de avena", "leche de avena", "costra de avena", "empanizado de avena",
-                     "empanizada de avena", "apanado de avena", "croqueta", "albondiga", "albóndiga")},
+                     "empanizada de avena", "apanado de avena", "croqueta", "albondiga", "albóndiga",
+                     " crujiente de avena", " crocante de avena", "rebozado de avena", "rebozada de avena")},  # [P1-PLAN-LOTE-193] «Pollo crujiente de avena» (rd17)
         # [P2-SLOT-CENA-FRITURA · 2026-07-02] (audit v3 slots GAP-C) "frituras pesadas de noche" era
         # prompt-only (day_generator §15d) — 'frito'/'frita' sueltos se omiten A PROPÓSITO (falso positivo
         # en tostones/queso frito como acompañante). Tokens COMPUESTOS de fritura-de-proteína-como-plato
@@ -2283,7 +2284,8 @@ SLOT_INAPPROPRIATE_FOODS = {
             "cereal", "hojuelas", "granola", "panqueque", "pancake", "waffle", "avena"),
          "hardness": "soft",
          "exclude": ("harina de avena", "leche de avena", "costra de avena", "empanizado de avena",
-                     "empanizada de avena", "apanado de avena", "croqueta", "albondiga", "albóndiga")},
+                     "empanizada de avena", "apanado de avena", "croqueta", "albondiga", "albóndiga",
+                     " crujiente de avena", " crocante de avena", "rebozado de avena", "rebozada de avena")},  # [P1-PLAN-LOTE-193] «Pollo crujiente de avena» (rd17)
         {"label": "postre standalone como plato principal del almuerzo (helado/flan)", "tokens": (
             "helado", "flan"), "hardness": "soft"},
     ],
