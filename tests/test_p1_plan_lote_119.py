@@ -40,7 +40,8 @@ def test_el_reparto_es_del_ssot_y_lo_consumen_los_dos():
     assert "export const repartoTelefono = (items) => {" in nav
     assert "const SALEN_PRIMERO = ['history'];" in nav, "el Historial es el primero en salir de la barra"
     barra = _front("src/components/dashboard/BottomTabBar.jsx")
-    assert "repartoTelefono(navItemsFor({ trackingMode: isTrackingMode(userProfile, planData) })).barra" in barra
+    # [P1-NEVERA-OPCIONAL] la nav también depende de la Nevera
+    assert "repartoTelefono(navItemsFor({ trackingMode: isTrackingMode(userProfile, planData), nevera: neveraActiva(userProfile) })).barra" in barra
     layout = _front("src/components/dashboard/DashboardLayout.jsx")
     assert "const menuTelefono = repartoTelefono(menuItems).menu;" in layout
     assert "{menuTelefono.map((item) => {" in layout, "lo que sale de la barra ENTRA en el menú ☰: nada queda sin puerta"
