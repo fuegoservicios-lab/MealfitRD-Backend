@@ -15034,7 +15034,7 @@ def clinical_backstop_for_meal(meal: dict, *, allergies=None, diet_type=None, fo
         return []
     out = []
     try:
-        mini = {"days": [{"meals": [meal]}]}
+        mini = {"days": [{"meals": [__import__("lista_desde_pasos").con_lo_que_miden_los_pasos(meal)]}]}  # [P1-PLAN-LOTE-191] también lo que miden los pasos
         for _mn, _ing, _term in _scan_allergen_violations(mini, allergies or []):
             out.append(f"alérgeno '{_term}' en el ingrediente '{_ing}'")
         if DIET_HARD_GUARD:
@@ -25062,6 +25062,7 @@ def _apply_deterministic_clinical_layer(plan: dict, form_data: dict, nutrition: 
         _eng = None
         logger.warning(f"[P4-CONSTRAINT-ABC] engine no disponible: {type(_eng_e).__name__}: {_eng_e}")
 
+    __import__("lista_desde_pasos").reconciliar(plan, _db)  # [P1-PLAN-LOTE-191] lo que un paso MIDE entra a la lista ANTES de las guardas (la de alérgenos lee la lista)
     # ── Guard 1 (FS6/ERC): enforcement determinista per-comida del cap renal (vía RenalProteinCapConstraint) ──
     # [P4-CONSTRAINT-ABC review] Fallback directo si el engine no cargó (simétrico a Guard 3): el trim
     # renal per-comida es SEGURIDAD iatrogénica — nunca debe saltarse silenciosamente por un import roto.
@@ -30064,7 +30065,7 @@ def _protein_repeat_autofix(days: list, form_data=None, db=None) -> int:
                     _ctx_sweet = _is_sweet_meal(_meal, _sa_pr)
                     _ctx_light = _meal_slot_is_light(_meal, _sa_pr)
                     if _ctx_sweet or _ctx_light:
-                        _allowed = ("queso",) if _ctx_sweet else ("queso", "habichuelas", "lentejas")
+                        _allowed = ("queso",)  # [P1-PLAN-LOTE-190] ligero salado ya SIN legumbres: «habichuelas rojas guisadas» choca SIEMPRE con la regla de horario (merienda «guisada», desayuno «habichuela») — rd18
                         # [P1-CHEAPEN-DAY-AWARE · 2026-07-10] deadlock medido en vivo (plan cb150867):
                         # con gain_muscle la escalera es carnes-only y este branch exige queso/legumbres
                         # → intersección VACÍA → impotencia SIEMPRE → rechazo → PRO. El queso es
