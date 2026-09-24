@@ -6824,8 +6824,11 @@ def chat_with_agent(session_id: str, prompt: str, current_plan: Optional[dict] =
             shopping_delta_str = ", ".join(cleaned_shop)
 
     # [P1-CHAT-PAUSED-PROMPT-BLOCKS · 2026-08-14] En pausa la lista de compras del
-    # plan deja de ser una obligacion pendiente. El inventario NO cambia: la Nevera
-    # funciona igual en modo contador.
+    # plan deja de ser una obligacion pendiente. El inventario se lee igual en modo
+    # contador MIENTRAS la Nevera esté encendida. [P1-NEVERA-OPCIONAL · 2026-09-23]
+    # Apagada (modo contador, a mano o por el apagado automático) `nevera_activa=False`
+    # quita la línea del inventario —ni su contenido ni «Vacío»— y el bloque de
+    # `_build_pantry_context` da la orden de no mencionarla.
     system_prompt += build_inventory_context(
         inventory_str, shopping_delta_str,
         plan_en_pausa=bool(current_plan) and plan_vigente is None,
@@ -7446,8 +7449,11 @@ def chat_with_agent_stream(session_id: str, prompt: str, current_plan: Optional[
             shopping_delta_str = ", ".join(cleaned_shop)
 
     # [P1-CHAT-PAUSED-PROMPT-BLOCKS · 2026-08-14] En pausa la lista de compras del
-    # plan deja de ser una obligacion pendiente. El inventario NO cambia: la Nevera
-    # funciona igual en modo contador.
+    # plan deja de ser una obligacion pendiente. El inventario se lee igual en modo
+    # contador MIENTRAS la Nevera esté encendida. [P1-NEVERA-OPCIONAL · 2026-09-23]
+    # Apagada (modo contador, a mano o por el apagado automático) `nevera_activa=False`
+    # quita la línea del inventario —ni su contenido ni «Vacío»— y el bloque de
+    # `_build_pantry_context` da la orden de no mencionarla.
     system_prompt += build_inventory_context(
         inventory_str, shopping_delta_str,
         plan_en_pausa=bool(current_plan) and plan_vigente is None,

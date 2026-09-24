@@ -527,7 +527,7 @@ def formatear_propuestas(propuestas: list, franja: str, objetivo: dict, con_neve
                          solo_nevera: bool = False, falta: Optional[dict] = None, nevera_activa: bool = True) -> str:
     """El texto que lee el modelo. Cifras y pasos EXACTOS; al final, cómo presentarlo.
 
-    [P1-NEVERA-OPCIONAL · 2026-09-23] `nevera_activa=False` (el usuario la apagó en modo contador): ninguna línea
+    [P1-NEVERA-OPCIONAL · 2026-09-23] `nevera_activa=False` (apagada en modo contador, a mano o sola): ninguna línea
     nombra la Nevera —el coach tiene la orden de no mencionarla—. Con `True` (default), el texto de siempre."""
     con_nevera = con_nevera and nevera_activa
     if not propuestas:

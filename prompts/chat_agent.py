@@ -502,15 +502,17 @@ def build_inventory_context(inventory_str: str, shopping_delta_str: str,
 
     [P1-CHAT-PAUSED-PROMPT-BLOCKS · 2026-08-14] `plan_en_pausa` reencuadra SOLO la
     parte de compras. El INVENTARIO sigue siendo verdad literal en modo contador
-    —la Nevera funciona igual, se escanea y se registra igual—, pero la lista de
-    compras de un plan pausado no es una obligación pendiente: no hay listas de
-    mantenimiento mientras la generación esté apagada. Decirle al modelo que el
-    usuario «AÚN DEBE COMPRAR … para completar su plan alimenticio» lo empuja a
-    presionar por un plan que el usuario paró.
+    MIENTRAS la Nevera esté encendida —se escanea y se registra igual que en modo
+    plan; apagada, ver el párrafo siguiente—, pero la lista de compras de un plan
+    pausado no es una obligación pendiente: no hay listas de mantenimiento mientras
+    la generación esté apagada. Decirle al modelo que el usuario «AÚN DEBE COMPRAR …
+    para completar su plan alimenticio» lo empuja a presionar por un plan que el
+    usuario paró.
 
-    [P1-NEVERA-OPCIONAL · 2026-09-23] `nevera_activa=False` (el usuario la apagó en modo
-    contador): la línea del INVENTARIO no se escribe —ni su contenido ni «Vacío»—; el
-    coach tiene la orden de no mencionarla. La parte de compras no cambia.
+    [P1-NEVERA-OPCIONAL · 2026-09-23] `nevera_activa=False` (apagada en modo contador, a
+    mano o por el apagado automático tras 48 h vacía): la línea del INVENTARIO no se
+    escribe —ni su contenido ni «Vacío»—; la orden de no mencionarla llega aparte, en el
+    bloque de `agent._build_pantry_context`. La parte de compras no cambia.
     """
     if not nevera_activa:
         inventory_str = ""
@@ -1014,7 +1016,7 @@ _PLATO_INSTRUCCION = (
 def build_vision_context(vision, nevera_activa: bool = True) -> str:
     """Bloque de contexto para el system prompt cuando el turno trae una foto. "" si no hay.
 
-    [P1-NEVERA-OPCIONAL · 2026-09-23] `nevera_activa=False` (el usuario la apagó en modo contador): ninguna instrucción
+    [P1-NEVERA-OPCIONAL · 2026-09-23] `nevera_activa=False` (apagada en modo contador, a mano o sola): ninguna instrucción
     ofrece llevar lo de la foto a la Nevera ni nombra `modify_pantry_inventory` — la compra se describe y, si cocina con
     eso, se registra el plato. Con `True` (default), el texto de siempre."""
     if not isinstance(vision, dict) or not vision.get("kind"):

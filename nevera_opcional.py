@@ -32,15 +32,18 @@ from knobs import _env_bool, _env_int
 
 logger = logging.getLogger(__name__)
 
+# [P1-NEVERA-OPCIONAL · ola final · 2026-09-23] Los dos textos son NEUTROS sobre quién la apagó: el apagado automático (48 h vacía)
+# también la deja en FALSE, y «desactivada por el usuario» ponía al coach a afirmar algo que el usuario no hizo.
+# Lo que la frase ORDENA no cambió.
 # Lo que devuelve una herramienta de Nevera del coach cuando la Nevera está apagada.
 MENSAJE_NEVERA_APAGADA = (
-    "La Nevera está DESACTIVADA por el usuario (Configuración → Capacidades). No la uses, no la menciones y no "
+    "La Nevera está DESACTIVADA (Configuración → Capacidades). No la uses, no la menciones y no "
     "ofrezcas añadir alimentos a ella. Si el usuario pregunta por su Nevera, dile que puede encenderla allí."
 )
 
 # El bloque que el system prompt del coach recibe en lugar del inventario.
 BLOQUE_PROMPT_NEVERA_APAGADA = (
-    "\n\n🧊 NEVERA: DESACTIVADA por el usuario (Configuración → Capacidades). No la menciones, no preguntes qué hay "
+    "\n\n🧊 NEVERA: DESACTIVADA (Configuración → Capacidades). No la menciones, no preguntes qué hay "
     "en ella, no ofrezcas escanearla ni añadirle alimentos y no uses sus herramientas. Si pregunta por ella, dile que "
     "puede encenderla en Configuración → Capacidades."
 )
@@ -131,8 +134,13 @@ UPDATE user_profiles p
                     AND (i.quantity > 0 OR i.updated_at > now() - (%s * interval '1 hour')))
          LIMIT %s)
    AND p.nevera_enabled IS NULL
+   AND p.plan_mode = 'tracking'
 RETURNING p.id
 """
+# [P1-NEVERA-OPCIONAL · ola final · 2026-09-23] El UPDATE externo repite sobre `p` lo que el usuario puede cambiar entre el SELECT
+# interno y la escritura: su elección (`nevera_enabled IS NULL`) y el modo (`plan_mode = 'tracking'`). En READ
+# COMMITTED, si otra transacción cambió la fila mientras tanto, Postgres re-evalúa las condiciones de `p` sobre la
+# versión NUEVA; las del subselect `q` quedan con la foto del inicio de la sentencia.
 
 
 def apagar_neveras_sin_uso(limite: int = 500) -> list:

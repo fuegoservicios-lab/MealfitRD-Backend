@@ -78,6 +78,17 @@ def test_el_sql_del_apagado_solo_toca_contador_automatico_y_vacio():
         assert trozo in sql, trozo
 
 
+def test_el_update_externo_repite_lo_que_el_usuario_puede_cambiar_entre_medias():
+    """[Final fix wave] Entre el SELECT interno (foto del inicio de la sentencia) y el UPDATE, el usuario puede elegir
+    (`nevera_enabled`) o encender el generador (`plan_mode`). En READ COMMITTED Postgres re-evalúa sobre la fila NUEVA
+    solo las condiciones del alias que se actualiza (`p`); las del subselect (`q`) se quedan con la foto vieja. Sin
+    repetir las dos en `p`, una cuenta recién pasada a modo plan saldría con la Nevera apagada y la marca del sistema."""
+    sql = no._SQL_APAGAR
+    externo = sql[sql.index("LIMIT %s)"):]
+    assert "p.nevera_enabled IS NULL" in externo
+    assert "p.plan_mode = 'tracking'" in externo
+
+
 def test_apagar_devuelve_ids_y_pasa_horas_y_limite(monkeypatch):
     visto = {}
 
@@ -135,6 +146,22 @@ def test_el_perfil_trae_la_regla_calculada():
     assert '"nevera_activa": nevera_activa_de(profile)' in ud[i:i + 1500]
 
 
+@pytest.mark.parametrize("perfil, esperado", [
+    ({"id": "u1", "plan_mode": "tracking", "nevera_enabled": False}, False),
+    ({"id": "u1", "plan_mode": "plan", "nevera_enabled": False}, True),     # modo plan: vuelve sola, flag intacto
+    ({"id": "u1", "plan_mode": "tracking"}, True),                          # columnas sin migrar: activa
+])
+def test_get_profile_sirve_nevera_activa(monkeypatch, perfil, esperado):
+    """[Final fix wave] El endpoint REAL, no su fuente: `GET /api/profile` añade `nevera_activa` calculada por LA regla
+    (el frontend solo la lee) y devuelve el resto del perfil tal cual."""
+    import db
+    from routers import user_data
+    monkeypatch.setattr(db, "get_user_profile", lambda uid: dict(perfil) if uid == "u1" else None)
+    r = asyncio.run(user_data.api_get_profile(verified_user_id="u1"))
+    assert r["profile"]["nevera_activa"] is esperado
+    assert {k: v for k, v in r["profile"].items() if k != "nevera_activa"} == perfil
+
+
 # ── 5. Diario y cron ─────────────────────────────────────────────────────────────────────────────────────────
 def _persistir(monkeypatch, activa: bool):
     from fastapi import BackgroundTasks
@@ -187,6 +214,16 @@ def test_el_prompt_recibe_la_orden_y_no_el_inventario(monkeypatch):
     monkeypatch.setattr(no, "nevera_activa", lambda uid: False)
     out = agent._build_pantry_context("u1")
     assert out == no.BLOQUE_PROMPT_NEVERA_APAGADA
+
+
+def test_la_orden_no_atribuye_el_apagado_al_usuario():
+    """[Final fix wave] El apagado automático también la deja en FALSE: «desactivada por el usuario» haría al coach
+    afirmar algo que el usuario no hizo («tú la apagaste»). El texto es neutro; las instrucciones, las de siempre."""
+    for texto in (no.MENSAJE_NEVERA_APAGADA, no.BLOQUE_PROMPT_NEVERA_APAGADA):
+        assert "por el usuario" not in texto, texto
+        assert "DESACTIVADA (Configuración → Capacidades)" in texto, texto
+        assert "No la menciones" in texto or "no la menciones" in texto, texto
+    assert "puede encenderla" in no.MENSAJE_NEVERA_APAGADA and "puede encenderla" in no.BLOQUE_PROMPT_NEVERA_APAGADA
 
 
 def test_con_la_nevera_activa_el_prompt_no_cambia(monkeypatch):
@@ -334,11 +371,14 @@ def _corregir(monkeypatch, activa: bool):
     return out, visto
 
 
-def test_corregir_con_la_nevera_apagada_devuelve_lo_anterior_y_no_descuenta(monkeypatch):
+def test_corregir_con_la_nevera_apagada_no_toca_el_inventario(monkeypatch):
+    """[Final fix wave] Apagada, corregir NO toca el inventario: ni devuelve lo que el registro original descontó ni
+    descuenta la lista corregida. Antes devolvía sin volver a descontar, y el inventario oculto quedaba como si la
+    comida nunca hubiera ocurrido — la comida SÍ ocurrió, solo cambió de ingredientes."""
     out, visto = _corregir(monkeypatch, activa=False)
     assert out.startswith("¡Corregido!") and len(visto["updates"]) == 1
-    assert visto["reverts"] == ["m1"], "lo descontado cuando estaba encendida se devuelve: inventario oculto coherente"
-    assert visto["descuentos"] == [] and "nevera" not in out.lower(), out
+    assert visto["reverts"] == [] and visto["descuentos"] == [], "apagada, el inventario oculto queda como estaba"
+    assert "nevera" not in out.lower(), out
 
 
 def test_corregir_con_la_nevera_activa_ajusta_como_siempre(monkeypatch):
@@ -578,6 +618,26 @@ def test_el_doc_canonico_existe_y_nombra_lo_que_opera():
                   "MEALFIT_NEVERA_AUTO_OFF_HOURS", "nevera_auto_off", "p1_nevera_opcional_2026_09_23.sql",
                   "/api/user/preferences/nevera", "nevera_reloj_desde"):
         assert trozo in doc, trozo
+
+
+def test_sin_la_migracion_la_tarjeta_aparece_y_el_patch_da_500(monkeypatch):
+    """[Final fix wave] Lo que el doc (§6) afirma de un despliegue SIN la migración, medido: las lecturas fallan
+    abiertas (activa, sin error), pero la tarjeta de Configuración sí aparece (`disponible` sale del knob, no de la
+    columna) y su PATCH responde 500. El doc decía «nunca un 500»."""
+    from fastapi import HTTPException
+    from routers import preferences as pref
+
+    def _sin_columna(*a, **k):
+        raise RuntimeError('column "nevera_enabled" does not exist')
+    monkeypatch.setattr(no, "execute_sql_query", _sin_columna)
+    monkeypatch.setattr(no, "execute_sql_write", _sin_columna)
+    assert no.nevera_activa("u1") is True
+    assert no.estado_nevera("u1") == {"enabled": None, "activa": True, "auto_off_at": None, "disponible": True}
+    with pytest.raises(HTTPException) as e:
+        asyncio.run(pref.api_set_nevera(body=pref.NeveraPreferenceBody(enabled=False), verified_user_id="u1"))
+    assert e.value.status_code == 500
+    doc = (_BACKEND / "docs" / "nevera_opcional.md").read_text(encoding="utf-8")
+    assert "nunca un 500" not in doc and "responde **500**" in doc
 
 
 def test_claude_md_apunta_al_doc():

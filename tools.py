@@ -1556,11 +1556,14 @@ def correct_consumed_meal(
     # ledger, o el ledger falló), NO se toca: devolver a ciegas contaría la comida dos veces.
     _ajustar_nevera = False
     _nota_nevera = ""
-    # [P1-NEVERA-OPCIONAL · 2026-09-23] Apagada: la lista corregida no se descuenta y ninguna nota la nombra (el coach
-    # no debe mencionarla); lo que el registro original SÍ descontó se devuelve igual (inventario oculto coherente).
-    # Solo se consulta si cambian los ingredientes: es lo único de la corrección que toca la Nevera.
+    # [P1-NEVERA-OPCIONAL · 2026-09-23] Apagada: el inventario NO se toca — ni se devuelve lo que el registro original
+    # descontó ni se descuenta la lista corregida — y ninguna nota la nombra (el coach no debe mencionarla). Devolver
+    # sin volver a descontar dejaba el inventario oculto como si la comida nunca hubiera ocurrido, y la comida SÍ
+    # ocurrió: solo cambió de ingredientes. (Borrar una comida es otra cosa: esa sí no ocurrió, y el DELETE devuelve
+    # lo descontado aunque la Nevera esté apagada.) Solo se consulta si cambian los ingredientes: es lo único de la
+    # corrección que toca la Nevera.
     _nevera_on = nevera_activa(user_id) if ingredients is not None else True
-    if ingredients is not None:
+    if ingredients is not None and _nevera_on:
         if _fila is None:
             _nota_nevera = (" La Nevera NO se ajustó (no pude leer el registro original); si hace falta, "
                             "corrígela con modify_pantry_inventory.")
@@ -1596,13 +1599,13 @@ def correct_consumed_meal(
     )
 
     if updated_id:
-        if _ajustar_nevera:
+        if _ajustar_nevera:   # solo con la Nevera encendida (arriba): apagada, ni se devuelve ni se descuenta
             try:
                 import db_inventory
                 _rev = db_inventory.revert_consumption_events(user_id, _mid) or {}
                 _ded = db_inventory.deduct_consumed_meal_from_inventory(
                     user_id, list(ingredients), consumed_meal_id=_mid, source="chat",
-                ) if ingredients and _nevera_on else None
+                ) if ingredients else None
                 _nota_nevera = (f" Nevera ajustada: se devolvió lo del registro anterior "
                                 f"({len(_rev.get('reverted') or [])} ítem(s)) y se descontó la lista corregida.")
                 _ausentes = (_ded or {}).get("not_in_pantry") or [] if isinstance(_ded, dict) else []
@@ -3819,7 +3822,7 @@ def check_current_pantry(user_id: str) -> str:
     Usa esta herramienta SIEMPRE que el usuario pregunte "qué me queda en la despensa",
     "qué me sobra", o "qué tengo en la nevera ahora mismo". 
     """
-    if not nevera_activa(user_id):   # [P1-NEVERA-OPCIONAL · 2026-09-23] apagada por el usuario: ni se lee ni se nombra
+    if not nevera_activa(user_id):   # [P1-NEVERA-OPCIONAL · 2026-09-23] apagada (a mano o sola): ni se lee ni se nombra
         return MENSAJE_NEVERA_APAGADA
     logger.info(f"🛒 [TOOL EXECUTION] Consultando despensa física BD para user {user_id}")
             
@@ -3871,7 +3874,7 @@ def modify_pantry_inventory(user_id: str, items_to_add: list[str] = None, items_
     - items_to_remove: Lista de strings a descartar (dañado/botado), con o sin cantidad.
     - items_to_deplete: Lista de strings (nombres) a marcar como agotados (se acabaron).
     """
-    if not nevera_activa(user_id):   # [P1-NEVERA-OPCIONAL · 2026-09-23] apagada por el usuario: no se toca
+    if not nevera_activa(user_id):   # [P1-NEVERA-OPCIONAL · 2026-09-23] apagada (a mano o sola): no se toca
         return MENSAJE_NEVERA_APAGADA
     # [P3-DOC-2 · 2026-05-11] LIVE-TOOL CONTRACT — LEER ANTES DE MODIFICAR.
     # ────────────────────────────────────────────────────────────────────────
