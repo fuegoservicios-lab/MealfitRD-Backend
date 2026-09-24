@@ -15217,10 +15217,14 @@ def _recover_pantry_paused_chunks() -> None:
                     _zl_mutations = 0
                     logger.debug(f"[P0-2/ZERO-LOG] Error midiendo actividad inventario {user_id_str}: {_zl_e}")
 
-                if _zl_mutations >= CHUNK_LEARNING_INVENTORY_PROXY_MIN_MUTATIONS:
+                _zl_auto = __import__("modo_automatico").activo(user_id_str, execute_sql_query)  # [P1-PLAN-LOTE-208]
+                if _zl_mutations >= CHUNK_LEARNING_INVENTORY_PROXY_MIN_MUTATIONS or _zl_auto:
                     # Señal de inventario suficiente → reanudar con variety forzada.
                     resumed_snapshot = copy.deepcopy(snap)
-                    _resolve_pantry_pause_markers(resumed_snapshot, "inventory_proxy_resumed")
+                    _resolve_pantry_pause_markers(
+                        resumed_snapshot,
+                        "inventory_proxy_resumed" if _zl_mutations >= CHUNK_LEARNING_INVENTORY_PROXY_MIN_MUTATIONS
+                        else "auto_proxy_resumed")
                     resumed_snapshot["_inventory_proxy_mutations_at_resume"] = _zl_mutations
                     _zl_fd = resumed_snapshot.get("form_data", {})
                     _zl_fd["_force_variety"] = True
@@ -17102,6 +17106,7 @@ def _nudge_chronic_zero_log_users() -> int:
                   OR (p.health_profile->>'last_zero_log_nudge_at')::timestamptz
                      < NOW() - make_interval(hours => %s)
               )
+              """ + __import__("modo_automatico").filtro_nudge() + """
             LIMIT %s
             """,
             (
@@ -25447,6 +25452,7 @@ def _check_chunk_learning_ready(user_id: str, meal_plan_id: str, week_number: in
     _lifetime_total_chunks = _read_proxy_counter(plan_data, snapshot, "_lifetime_total_chunks")
 
     inventory_proxy_used = False
+    _auto_proxy_used = False  # [P1-PLAN-LOTE-208] «Modo automático»: no pausamos por falta de registros
     _signal_too_weak = is_zero_log or ratio_info.get("sparse_logging_proxy")
     if _signal_too_weak:
         if consumption_mutations_count >= CHUNK_LEARNING_INVENTORY_PROXY_MIN_MUTATIONS:
@@ -25499,6 +25505,8 @@ def _check_chunk_learning_ready(user_id: str, meal_plan_id: str, week_number: in
                         f"(lifetime_ratio={_lifetime_ratio:.0%})."
                     )
             inventory_proxy_used = True
+        _auto_proxy_used = not inventory_proxy_used and __import__("modo_automatico").activo(
+            user_id, execute_sql_query, _logging_preference_live)
 
     learning_signal_strength = "none"
     if inventory_proxy_used or _signal_too_weak:
@@ -25506,7 +25514,7 @@ def _check_chunk_learning_ready(user_id: str, meal_plan_id: str, week_number: in
     elif ratio_ready:
         learning_signal_strength = "strong"
 
-    _p12_ready = (ratio_ready and not _signal_too_weak) or inventory_proxy_used
+    _p12_ready = (ratio_ready and not _signal_too_weak) or inventory_proxy_used or _auto_proxy_used
     # [G12 · P2-CRON-OPT-3 · 2026-05-30] Auto-resolve `temporal_gate_proactive:<u>:<p>:<w>`
     # cuando el gate finalmente pasa. El alert (~L21967) se levanta al N-th deferral; sin
     # este resolver quedaba `resolved_at IS NULL` para siempre (el doc system_alerts lo
@@ -25539,6 +25547,7 @@ def _check_chunk_learning_ready(user_id: str, meal_plan_id: str, week_number: in
         # (no la fórmula 0.5 + mutations/total que asumía 50% por defecto).
         "zero_log_no_mutations": ratio_info.get("zero_log_no_mutations", False),
         "inventory_proxy_used": inventory_proxy_used,
+        "auto_proxy_used": _auto_proxy_used,
         "inventory_mutations": inventory_mutations,
         "learning_signal_strength": learning_signal_strength,
         "previous_chunk_start_day": prev_start_day,
@@ -28602,6 +28611,8 @@ __PLAN_MODE_GATE__
             if _learning_signal_strength and _learning_signal_strength != "none":
                 form_data["_learning_signal_strength"] = _learning_signal_strength
 
+            if learning_ready.get("auto_proxy_used"):  # [P1-PLAN-LOTE-208] sin registros por elección: variedad
+                form_data["_force_variety"] = True
             # [P0-D] Si el inventory proxy aprobó el chunk pese a zero-log, marcamos para que
             # learning_metrics y _last_chunk_learning lo registren (telemetría + lección).
             if learning_ready.get("inventory_proxy_used"):

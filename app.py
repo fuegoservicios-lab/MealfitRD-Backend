@@ -441,7 +441,10 @@ _PROCESS_START_ISO = datetime.now(timezone.utc).isoformat()
 # [P1-PLAN-LOTE-207 · 2026-09-24] (solo backend) un bloque recogido antes de que terminara el anterior salía del worker
 # en `processing` y el rescate de zombies lo devolvía sumando un intento (3 rellenos acabaron con attempts=5, el tope);
 # sin la marca de zero-log, además, +12 h y «loguea tus comidas». Ahora espera a la frontera en `pending`.
-_LAST_KNOWN_PFIX = "P1-PLAN-LOTE-207 · 2026-09-24"
+# [P1-PLAN-LOTE-208 · 2026-09-24] (solo backend) «Modo automático» (el default de TODA cuenta) promete «no pausaremos tu
+# plan aunque dejes de registrar comidas», pero el gate sólo lo honraba con descuentos de la Nevera por consumo: sin
+# ellos el bloque se pausaba 6 h y el nudge diario amenazaba con la pausa. Ahora no pausa, reanuda y no amenaza.
+_LAST_KNOWN_PFIX = "P1-PLAN-LOTE-208 · 2026-09-24"
 
 # [P1-SENTRY-SAMPLE-COST · 2026-05-12] Sentry sampling driven from env vars
 # con default seguro 0.1 (10%). Pre-fix tenía `traces_sample_rate=1.0` y
