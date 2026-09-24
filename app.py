@@ -382,7 +382,10 @@ _PROCESS_START_ISO = datetime.now(timezone.utc).isoformat()
 # [P1-PLAN-LOTE-186 · 2026-09-23] (solo backend) la puerta de banda del revisor medía un estado que el guardado
 # todavía cerraba (rd12, HTA: grasa 0,887 → rechazo y reintento; la misma cadena lo deja en 1,0): si alguna celda
 # está fuera, re-cierra con la cadena del guardado y vuelve a medir. Knob MEALFIT_REVIEW_BAND_RECLOSE.
-_LAST_KNOWN_PFIX = "P1-PLAN-LOTE-186 · 2026-09-23"
+# [P1-PLAN-LOTE-187 · 2026-09-23] (solo backend) embarazo: «460 g de pescado en 3 días» (rd15, crítico) — la regla de
+# 227–340 g/semana del prompt no la puede cumplir un día que no ve los otros: tope determinista que SUSTITUYE (no
+# recorta: el 184 midió el déficit) por una proteína que ese día no se repita (`embarazo_pescado.py`).
+_LAST_KNOWN_PFIX = "P1-PLAN-LOTE-187 · 2026-09-23"
 
 # [P1-SENTRY-SAMPLE-COST · 2026-05-12] Sentry sampling driven from env vars
 # con default seguro 0.1 (10%). Pre-fix tenía `traces_sample_rate=1.0` y
