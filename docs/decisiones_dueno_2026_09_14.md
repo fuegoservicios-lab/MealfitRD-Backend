@@ -13,7 +13,7 @@ escrita con lo mismo. Fuente de las opciones: `plan_pendientes_2026_09_11.md` y 
 | e5b_cohorte | `yo` | Solo el usuario del dueño, como canario; la cohorte nace igual al canario del día determinista. |
 | e5b_topes | `heredar` | La canónica hereda los topes del agregador tal cual; se revisan con 30 planes. |
 | claras | `umbral` | N = 4: botella de claras pasteurizadas cuando una comida pide 4 claras o más; por debajo, cartones y el usuario separa. |
-| v7a | `residuo` | Queda en warn; coherente con la decisión previa de no implementar «el paso pide MENOS». |
+| v7a | `residuo` | Queda en warn; coherente con la decisión previa de no implementar «el paso pide MENOS».  **Reemplazada el 24-sep** (el dueño: «soluciónalo»): `P1-PLAN-LOTE-212` alinea el paso que pide menos, con plural (`v7a_plural.py`); knob `MEALFIT_CONTRACT_V7A` para volver atrás. |
 | b7 | `canario` | MEALFIT_DETERMINISTIC_DAY_W_CARB_SURPLUS = 2.0 y _W_FAT_DEFICIT = 1.0 solo en el canario del dueño; global sigue 1.0/1.0. |
 | equipo | `dejar` | Se queda solo en Súper Personalización; el wizard no gana un paso. |
 | d8 | `cerrar` | No construir shopping_commercial: precio y envase ya salen de supermarket_products. |

@@ -14103,7 +14103,7 @@ _ALLERGEN_DECLARATION_ALIASES = {
                      "fruits a coque", "fruits secs", "noix",
                      "frutta a guscio", "frutta secca", "noci",
                      "oleaginosas", "nozes", "castanhas"],
-    "mariscos": ["shellfish", "shellfish allergy", "crustacean", "crustaceans", "mollusc",
+    "mariscos": ["shellfish", "shellfish allergy", "seafood", "seafood allergy", "crustacean", "crustaceans", "mollusc",  # [P1-PLAN-LOTE-210] «seafood» = pez Y marisco
                  "molluscs", "mollusk", "mollusks",
                  # Categorías del Reglamento UE 1169/2011 (nº 2 crustáceos, nº 14 moluscos):
                  # ningún ingrediente se llama así, pero es como se declara en España.

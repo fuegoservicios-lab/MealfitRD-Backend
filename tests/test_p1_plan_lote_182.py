@@ -158,11 +158,12 @@ def test_knob_apagado_no_toca(index, monkeypatch):
     assert m["recipe"][0] == paso
 
 
-def test_la_decision_v7a_sigue_en_gramatical(index):
+def test_la_decision_v7a_ya_se_corrige(index):
+    """[P1-PLAN-LOTE-212] El dueño cambió la decisión V7a el 24-sep: el paso que pide menos se alinea, con plural."""
     from recipe_contract import reconcile_step_quantities
     m = {"ingredients": ["2 tortillas integrales"], "recipe": ["Mise en place: mide 1 tortilla integral."]}
     r = reconcile_step_quantities(m, index)
-    assert m["recipe"][0] == "Mise en place: mide 1 tortilla integral." and r["sin_reparar"] == {"gramatical": 1}
+    assert m["recipe"][0] == "Mise en place: mide 2 tortillas integrales." and r["sin_reparar"] == {}
 
 
 # ─────────────── DM2: la fruta dulce entra en el tope glucémico ───────────────

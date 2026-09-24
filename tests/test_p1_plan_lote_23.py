@@ -98,11 +98,13 @@ def test_el_partitivo_sobra_con_un_entero():
 
 # ────────────────────────────────────────────────────────────── lo que NO se toca, y por qué
 
-def test_cruzar_el_singular_plural_a_ciegas_no_se_hace():
+def test_cruzar_el_singular_plural_hacia_el_plural_ya_se_hace_con_concordancia():
+    """[P1-PLAN-LOTE-212] Antes (decisión V7a del 14-sep) esto quedaba en `gramatical`: cambiar sólo el número dejaba
+    «2½ tomate». El dueño cambió la decisión el 24-sep y `v7a_plural` pluraliza el sustantivo con el número."""
     m = _meal(["2.5 tomates"], ["Mise en place: pica 1 tomate."])
     r = rc.reconcile_step_quantities(m, _INDEX)
-    assert m["recipe"][0] == "Mise en place: pica 1 tomate." and r["sin_reparar"] == {"gramatical": 1}
-    assert "V7a" in _checks(m), "V7a sigue viéndolo: el contrato no lo esconde"
+    assert m["recipe"][0] == "Mise en place: pica 2½ tomates." and r["sin_reparar"] == {}
+    assert "V7a" not in _checks(m)
 
 
 def test_un_reparto_entre_pasos_no_se_sube_pero_el_exceso_si_se_recorta():
@@ -242,7 +244,9 @@ def test_sobre_el_corpus_fijo_el_contrato_cierra_las_cantidades_y_es_idempotente
             despues[v["check"]] += 1
     assert antes["V7e"] >= 30 and antes["V6"] >= 8, "el corpus congelado tiene el defecto que este lote cierra"
     assert despues["V7e"] <= 5 and despues["V6"] == 0 and despues["V4"] == 0
-    assert despues["V7a"] >= 30, "lo gramatical se deja a V7a a propósito"
+    # [P1-PLAN-LOTE-212] V7a se corrige desde el 24-sep (47 → 24 en este corpus): lo que queda no lleva número en el paso
+    # o es un reparto entre pasos, que no se adivina.
+    assert despues["V7a"] <= 30, "el plural de V7a ya se reescribe"
     assert segunda == 0
 
 

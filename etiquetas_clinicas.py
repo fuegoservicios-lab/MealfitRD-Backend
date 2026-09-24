@@ -147,12 +147,70 @@ def _nota_habichuelas_secas(plan: dict) -> int:
     return tocadas
 
 
+# [P1-PLAN-LOTE-210 · 2026-09-24] Alergia a MARISCOS sin alergia a PESCADO: el plan sirve pescado de aleta (es lo que el
+# usuario pidió al marcar sólo el chip «Mariscos», que es distinto del chip «Pescado»), pero el revisor médico preguntó
+# «confirmar si incluye pescado» en 3 de 4 corridas de ese perfil. La duda se resuelve ESCRITA en el plato: para el
+# revisor y para el usuario, que puede marcar también «Pescado» si le hace reacción. Quien declara pescado (o «seafood»,
+# que desde este lote cubre las dos clases) no recibe pescado y no necesita la nota. tooltip-anchor: P1-PLAN-LOTE-210-MARISCOS
+_NOTA_MARISCOS = ("⚕️ Alergia a mariscos: el pescado de aleta (tilapia, mero, atún, sardina…) no es un marisco y tu "
+                  "perfil no lo excluye. Si también te hace reacción, márcalo en tus alergias y lo quitamos.")
+
+
+def _solo_mariscos(form_data) -> bool:
+    fd = form_data if isinstance(form_data, dict) else {}
+    decl = []
+    for k in ("allergies", "otherAllergies"):
+        v = fd.get(k)
+        decl.extend(v if isinstance(v, list) else ([v] if isinstance(v, str) and v.strip() else []))
+    if not decl:
+        return False
+    try:
+        import graph_orchestrator as go
+        exp = go._expand_allergy_declarations(decl)
+        mar = set(go._ALLERGEN_SYNONYMS["mariscos"]) - set(go._ALLERGEN_SYNONYMS["pescado"])
+        pes = set(go._ALLERGEN_SYNONYMS["pescado"]) - set(go._ALLERGEN_SYNONYMS["mariscos"])
+    except Exception:                                                          # noqa: BLE001
+        return False
+    return bool(exp & mar) and not (exp & pes)
+
+
+def _pescado_rx():
+    import graph_orchestrator as go
+    terminos = sorted(set(go._ALLERGEN_SYNONYMS["pescado"]) - set(go._ALLERGEN_SYNONYMS["mariscos"]), key=len, reverse=True)
+    return re.compile(r"\b(?:" + "|".join(re.escape(t) for t in terminos) + r")s?\b", re.IGNORECASE)
+
+
+def _nota_mariscos_no_pescado(plan: dict, form_data) -> int:
+    if not _solo_mariscos(form_data):
+        return 0
+    try:
+        from constants import strip_accents
+        rx = _pescado_rx()
+    except Exception:                                                          # noqa: BLE001
+        return 0
+    tocadas = 0
+    for d in plan.get("days") or []:
+        for m in (d.get("meals") or []) if isinstance(d, dict) else []:
+            if not isinstance(m, dict):
+                continue
+            if not any(isinstance(x, str) and rx.search(strip_accents(x)) for x in (m.get("ingredients") or [])):
+                continue
+            pasos = m.get("recipe")
+            if not isinstance(pasos, list) or any("Alergia a mariscos:" in str(p) for p in pasos):
+                continue
+            pasos.append(_NOTA_MARISCOS)
+            m.pop("_display", None)
+            tocadas += 1
+    return tocadas
+
+
 def etiquetar(plan: dict, form_data) -> int:
     """Devuelve cuántas comidas tocó (sumando condiciones). Muta `plan`."""
     if not (enabled() and isinstance(plan, dict)):
         return 0
     n = _nota_ceviche_de_carne(plan)                        # [P1-PLAN-LOTE-180] para todos, antes de las condiciones
     n += _nota_habichuelas_secas(plan)                      # [P1-PLAN-LOTE-182] ídem
+    n += _nota_mariscos_no_pescado(plan, form_data)        # [P1-PLAN-LOTE-210] mariscos ≠ pescado, escrito
     reglas = _reglas(form_data)
     if not reglas:
         return n

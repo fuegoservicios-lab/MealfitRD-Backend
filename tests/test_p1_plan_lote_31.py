@@ -68,10 +68,10 @@ def test_concordancia_numero_articulo_sustantivo_adjetivos_y_cliticos(index, ing
 def test_la_direccion_v7a_y_lo_que_no_sabe_concordar_siguen_en_gramatical(index):
     from culinary_coherence import build_culinary_index
     from recipe_contract import _singular_span, reconcile_step_quantities
-    # el paso pide MENOS de lo comprado: decisión V7a del dueño, se declara y no se toca (misma conducta que el lote 23)
+    # el paso pide MENOS de lo comprado: [P1-PLAN-LOTE-212] desde el 24-sep se reescribe al plural (V7a, decisión nueva)
     m = {"ingredients": ["3 tomates"], "recipe": ["Mise en place: pica 1 tomate."]}
     r = reconcile_step_quantities(m, index)
-    assert m["recipe"][0] == "Mise en place: pica 1 tomate." and r["sin_reparar"] == {"gramatical": 1} and r["concordancia"] == 0
+    assert m["recipe"][0] == "Mise en place: pica 3 tomates." and r["sin_reparar"] == {} and r["concordancia"] == 1
     # el singular pediría una tilde que el texto no trae («tostón»): no se inventa
     m = {"ingredients": ["1 casabe"], "recipe": ["Mise en place: prepara 1½ tostones de casabe (aprox. 30 g) para tostar."]}
     r = reconcile_step_quantities(m, index)

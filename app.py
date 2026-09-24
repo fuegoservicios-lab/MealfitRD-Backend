@@ -444,7 +444,15 @@ _PROCESS_START_ISO = datetime.now(timezone.utc).isoformat()
 # [P1-PLAN-LOTE-208 · 2026-09-24] (solo backend) «Modo automático» (el default de TODA cuenta) promete «no pausaremos tu
 # plan aunque dejes de registrar comidas», pero el gate sólo lo honraba con descuentos de la Nevera por consumo: sin
 # ellos el bloque se pausaba 6 h y el nudge diario amenazaba con la pausa. Ahora no pausa, reanuda y no amenaza.
-_LAST_KNOWN_PFIX = "P1-PLAN-LOTE-208 · 2026-09-24"
+# [P1-PLAN-LOTE-209 · 2026-09-24] (datos, con permiso del dueño) `shelf_life_days` deja de ser relleno: 256 filas pasan
+# de 14 al plazo del SSOT de durabilidad (pantry/cold/fresh); congelables y curadas a mano no se tocan.
+# [P1-PLAN-LOTE-210 · 2026-09-24] mariscos ≠ pescado, escrito en el plato (el revisor lo preguntaba en 3 de 4 corridas);
+# el chip «Mariscos» deja de usar el icono de pez; «seafood» protege de pescado Y mariscos.
+# [P1-PLAN-LOTE-211 · 2026-09-24] obesidad sin % de grasa ⇒ techo de proteína sobre peso ajustado (grasa por Deurenberg);
+# en diabetes lo liberado va a grasa, no a carbohidratos (DM2 88 kg: 158 → 124 g de proteína).
+# [P1-PLAN-LOTE-212 · 2026-09-24] V7a (decisión nueva del dueño): el paso que pide menos piezas que la lista se alinea
+# con plural («pica 1 tomate» con 3 → «pica 3 tomates»). Corpus fijo: 47 → 24.
+_LAST_KNOWN_PFIX = "P1-PLAN-LOTE-212 · 2026-09-24"
 
 # [P1-SENTRY-SAMPLE-COST · 2026-05-12] Sentry sampling driven from env vars
 # con default seguro 0.1 (10%). Pre-fix tenía `traces_sample_rate=1.0` y

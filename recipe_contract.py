@@ -492,16 +492,19 @@ def reconcile_step_quantities(meal: dict, index: dict) -> dict:
             for m in sorted(ms, key=lambda x: x["ini"], reverse=True):
                 clave = (m["food"], m["familia"])
                 objetivo = objetivos[clave]
-                if clave in aprox and m["valor"] <= objetivo:
+                if clave in aprox and m["valor"] <= objetivo and (conteo[clave] >= 2 or not __import__("v7a_plural").activo()):
                     continue                                   # [P1-PLAN-LOTE-182] contra el peso aproximado, sólo se recorta
+                    #                                            [P1-PLAN-LOTE-212] V7a: con UNA mención, también se sube
                 if _tolera(m["familia"] if m["familia"] == "g" else "n", m["valor"], objetivo):
                     continue
                 if conteo[clave] >= 2 and m["valor"] < objetivo:
                     informe["sin_reparar"]["reparto"] += 1      # varias menciones: sólo se recorta el exceso
                     continue
                 if m["familia"] == "pieza" and _cruza_plural(m["valor"], objetivo):
-                    # [P1-PLAN-LOTE-31] el paso pide MÁS que la lista ⇒ se reescribe con concordancia; pide MENOS ⇒ gramatical
-                    nuevo_paso = _concordar_pieza(paso, m, objetivo, index) if m["valor"] > objetivo else None
+                    # [P1-PLAN-LOTE-31] el paso pide MÁS que la lista ⇒ se reescribe con concordancia al singular;
+                    # [P1-PLAN-LOTE-212] pide MENOS ⇒ al plural (V7a, decisión del dueño del 24-sep); lo que no sabe ⇒ gramatical
+                    nuevo_paso = (_concordar_pieza(paso, m, objetivo, index) if m["valor"] > objetivo
+                                  else __import__("v7a_plural").pluralizar_pieza(paso, m, objetivo, index))
                     if nuevo_paso is None:
                         informe["sin_reparar"]["gramatical"] += 1
                         continue

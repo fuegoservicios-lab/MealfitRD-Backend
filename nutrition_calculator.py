@@ -325,7 +325,7 @@ def _protein_ceiling_g_per_kg() -> float:
 
 
 def calculate_macros(target_calories: int, goal: str, weight_kg: float = None,
-                     body_fat_pct: float = None, diet=None) -> dict:
+                     body_fat_pct: float = None, diet=None, *, freed_to: str = "carbs") -> dict:
     """
     Calcula los gramos exactos de cada macronutriente basándose en:
     - Proteína: 4 cal/g
@@ -371,12 +371,17 @@ def calculate_macros(target_calories: int, goal: str, weight_kg: float = None,
             freed_cals = (protein_g - ceiling_g) * 4.0
             protein_g = ceiling_g
             protein_cals = protein_g * 4.0
-            carbs_cals += freed_cals  # redistribuir a carbos (macro flexible)
+            # [P1-PLAN-LOTE-211] con diabetes, a grasa (`proteina_obesidad.destino_liberado`); si no, a carbos
+            if freed_to == "fats":
+                fats_cals += freed_cals
+            else:
+                carbs_cals += freed_cals  # redistribuir a carbos (macro flexible)
             _wlabel = "ajustado" if abs(_ceiling_wkg - float(weight_kg)) > 0.05 else "total"
             logger.info(
                 f"🩺 [C1-PROTEIN-CEILING] Proteína capeada a {_ceiling_gkg} g/kg "
                 f"× {round(_ceiling_wkg, 1)}kg ({_wlabel}) = {round(protein_g)}g "
-                f"(era {round(target_calories * split['protein_pct'] / 4)}g); {round(freed_cals)} kcal → carbos."
+                f"(era {round(target_calories * split['protein_pct'] / 4)}g); {round(freed_cals)} kcal → "
+                f"{'grasas' if freed_to == 'fats' else 'carbos'}."
             )
 
     return {
@@ -1738,10 +1743,17 @@ def get_nutrition_targets(form_data: dict) -> dict:
     # [P2-PROTEIN-CEILING-ADJ-WEIGHT] `body_fat` → peso ajustado para el techo en obesidad (>30% grasa).
     # [P1-VEGAN-PROTEIN-CEILING] diet → techo vegano 1.8 g/kg en la derivación del target.
     _diet_nc = form_data.get("dietType") or form_data.get("diet")
-    original_macros = calculate_macros(original_target_calories, goal, weight_kg=weight, body_fat_pct=body_fat, diet=_diet_nc)
+    # [P1-PLAN-LOTE-211] obesidad sin % de grasa ⇒ grasa estimada por IMC SÓLO para el techo (el BMR ya se calculó con
+    # la del usuario); con diabetes, lo que libera el techo va a grasa. Ver `proteina_obesidad.py`.
+    _po = __import__("proteina_obesidad")
+    _bf_techo = _po.grasa_para_techo(body_fat, weight, form_data)
+    _libera_a = _po.destino_liberado(form_data)
+    original_macros = calculate_macros(original_target_calories, goal, weight_kg=weight, body_fat_pct=_bf_techo, diet=_diet_nc,
+                                       freed_to=_libera_a)
 
     # 4. Macronutrientes exactos distribuidos en base al objetivo y calorías REVISADAS para la IA
-    macros = calculate_macros(target_calories, goal, weight_kg=weight, body_fat_pct=body_fat, diet=_diet_nc)
+    macros = calculate_macros(target_calories, goal, weight_kg=weight, body_fat_pct=_bf_techo, diet=_diet_nc,
+                              freed_to=_libera_a)
 
     # [P1-BARIATRIC-PROTEIN-TARGET · 2026-06-27] El pouch post-bariátrico no tolera el volumen de proteína
     # de un target estándar por peso (visto en vivo corr=5b30b71f: target 100g → la comida pequeña no lo
