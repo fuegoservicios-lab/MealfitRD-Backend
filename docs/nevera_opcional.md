@@ -4,7 +4,7 @@
 
 ## 1. Qué es y por qué
 
-El dueño: «cuando el generador esté desactivado, que la Nevera también se pueda desactivar: hay gente que solo quiere el contador y el agente». Y sobre el estado inicial: «encendida como hoy, pero si en 48 horas no se usa, igual que con la hidratación, que se desactive sola».
+El dueño: «cuando el generador de planes esté desactivado, que la Nevera también tenga una opción en Configuración para desactivarla: hay gente que solo quiere el contador y el agente». Y sobre el estado inicial: «encendida como hoy, pero si en 48 horas no se usa, igual que con la hidratación, que se desactive sola».
 
 Dato que sostuvo la decisión (medido el 23-sep, solo lectura): **6 cuentas en modo contador, las 6 con la Nevera vacía**; de 6 en modo plan, 4 vacías. Quien usa la app solo como contador casi nunca la llena — mantenerla encendida por defecto para siempre es una tarjeta de Configuración y una entrada de navegación que no sirven a nadie en ese modo.
 
@@ -54,7 +54,7 @@ La nota (una vez por dispositivo y por apagado, sin push): `DashboardTracking.js
 | Escáner de comida (`ScanMealModal.jsx`) | No pide `GET /api/inventory`; «Descontar de tu Nevera» se sustituye por «Ingredientes que detectamos»; foto de compra ⇒ aviso sin «Escanear mi nevera». **Corrección vs. el plan**: no existe un flag `deduct` que el cliente mande — `ConsumedMealRequest` (`routers/diary.py`) no lo tiene. El corte real es 100 % server-side, ver fila del diario |
 | «Registrar comida» (manual/repetir) | Mismo `_persist_consumed_meal`, ver fila del diario |
 | Agente (bienvenida del contador) | Sin «Dime qué hay en tu nevera» (`AgentPage.jsx`, `neveraOn = neveraActiva(userProfile)`) |
-| Ayuda (`help_bot.py`) | Sin la sugerencia «¿Para qué sirve la Nevera?»; el bot dice que la Nevera sale en la nav «si el usuario la tiene encendida» |
+| Ayuda (widget + `prompts/help_bot.py`) | `HelpChatWidget.jsx` (`getSuggestions(t, contador, nevera)`) omite la sugerencia «¿Para qué sirve la Nevera?» cuando `nevera=false` (la pantalla ni existe); `prompts/help_bot.py` dice que la Nevera sale en la nav «si el usuario la tiene encendida (se apaga en Configuración → Capacidades)» |
 | `_persist_consumed_meal` (diario — foto/manual/repetir, `routers/diary.py`) | `deduct AND nevera_activa(user_id)` decide el descuento; `tools.log_consumed_meal` comparte el mismo gate vía el mismo import a nivel de módulo |
 | Coach: contexto (`agent._build_pantry_context`, `build_inventory_context`, `build_vision_context`) | Inventario vacío + `nevera_opcional.BLOQUE_PROMPT_NEVERA_APAGADA` en vez de la línea de inventario. **Cierra también el respaldo `current_pantry_ingredients`**: ese snapshot de la última generación vive en `form_data` y antes se leía siempre como último recurso; ahora `if not inventory_str and form_data and _nevera_on:` — apagada, NO hay respaldo, para no presentar una foto vieja como «lo que tiene ahora». Visión de compra sin «ofrece agregarlas a la Nevera» |
 | Coach: tools (`tools.py`) | `check_current_pantry`/`modify_pantry_inventory` → `MENSAJE_NEVERA_APAGADA` sin tocar la DB; `log_consumed_meal`/`correct_consumed_meal` no descuentan (pero si el registro original SÍ había descontado antes de apagarla, `correct_consumed_meal` sigue **revirtiendo** ese descuento — inventario oculto coherente); `proponer_comida` no lee `user_inventory`; `mark_shopping_list_purchased` responde `MENSAJE_NEVERA_APAGADA` y omite sugerir `modify_pantry_inventory` |
