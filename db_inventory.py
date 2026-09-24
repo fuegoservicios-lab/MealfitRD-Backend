@@ -466,6 +466,7 @@ def get_user_inventory(user_id: str, household_size: float | int | None = None) 
             shelf_life = master_item.get("shelf_life_days")
             if shelf_life is None:
                 shelf_life = _infer_shelf_life_days(name, master_item.get("category", ""))
+            shelf_life = __import__("anotacion_nevera").plazo(name, master_item.get("category"), shelf_life)  # [P1-PLAN-LOTE-201] el 14 del catálogo es relleno
 
             days_left = shelf_life - days_old
             if days_left <= 3:
@@ -505,7 +506,7 @@ def get_user_inventory(user_id: str, household_size: float | int | None = None) 
                 # [P0-3] Escalar consumo por household_size. Antes asumía 1 persona,
                 # lo que contradice el shopping list escalado × household y la adherencia / household.
                 effective_rate = consumption_rate * household_size
-            if effective_rate > 0 and qty_g > 0:
+            if effective_rate > 0 and qty_g > 0 and __import__("anotacion_nevera").masa_conocida(unit, category, _dynamic_rate):  # [P1-PLAN-LOTE-201] sin gramos no hay predicción
                 days_until_empty = qty_g / effective_rate
                 if days_until_empty <= 2.5 and days_left > 3:
                     base_str += f" [⚠️ PREDICCIÓN: Se agotará en ~{round(days_until_empty)} días. Sugiere al usuario alternativas para los días posteriores.]"
@@ -598,6 +599,7 @@ def get_user_inventory_net(user_id: str, household_size: float | int | None = No
             shelf_life = master_item.get("shelf_life_days")
             if shelf_life is None:
                 shelf_life = _infer_shelf_life_days(name, master_item.get("category", ""))
+            shelf_life = __import__("anotacion_nevera").plazo(name, master_item.get("category"), shelf_life)  # [P1-PLAN-LOTE-201] el 14 del catálogo es relleno
 
             days_left = shelf_life - days_old
             if days_left <= 3:
@@ -637,7 +639,7 @@ def get_user_inventory_net(user_id: str, household_size: float | int | None = No
                 # [P0-3] Escalar consumo por household_size. Antes asumía 1 persona,
                 # lo que contradice el shopping list escalado × household y la adherencia / household.
                 effective_rate = consumption_rate * household_size
-            if effective_rate > 0 and qty_g > 0:
+            if effective_rate > 0 and qty_g > 0 and __import__("anotacion_nevera").masa_conocida(unit, category, _dynamic_rate):  # [P1-PLAN-LOTE-201] sin gramos no hay predicción
                 days_until_empty = qty_g / effective_rate
                 if days_until_empty <= 2.5 and days_left > 3:
                     base_str += f" [⚠️ PREDICCIÓN: Se agotará en ~{round(days_until_empty)} días. Sugiere al usuario alternativas para los días posteriores.]"
