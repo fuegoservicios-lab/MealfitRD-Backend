@@ -165,6 +165,13 @@ class ConsumedMealRequest(BaseModel):
     # haría girar el loop de resolución + N queries por item.
     ingredients: Optional[List[str]] = Field(default=None, max_length=40)
 
+    # [P1-PLAN-LOTE-221 · 2026-09-24] «El plato lleva esto» y «sácalo de mi Nevera» dejan de ser la misma casilla.
+    # El escáner ahora recalcula las macros al desmarcar un componente, así que desmarcar ya no puede ser la forma de
+    # decir «esto no salió de mi Nevera» (el arroz del restaurante): eso lo dice un interruptor propio, el mismo del
+    # componedor. `None` (clientes anteriores) = descontar, la conducta de siempre. Con `False` los ingredientes se
+    # GUARDAN igual (son el detalle de la comida) y quedan marcados como sincronizados, como en `/consumed/manual`.
+    deduct_pantry: Optional[bool] = None
+
     model_config = {"extra": "ignore"}
 
     @field_validator("ingredients")
@@ -923,6 +930,8 @@ def api_log_consumed_meal(
             healthy_fats=payload.healthy_fats, ingredients=payload.ingredients,
             days_ago=payload.days_ago, background_tasks=background_tasks,
             source="photo",
+            # [P1-PLAN-LOTE-221] solo un `False` explícito apaga la resta; ausente = la conducta de siempre
+            deduct=payload.deduct_pantry is not False,
         )
     except HTTPException as he:
         raise he

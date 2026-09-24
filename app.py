@@ -472,7 +472,11 @@ _PROCESS_START_ISO = datetime.now(timezone.utc).isoformat()
 # de cada recordatorio salía de la hora de REGISTRO (el almuerzo del dueño, hacia las 2:15) y el cron a y media escribía
 # en el chat después de que sonara el teléfono. Ahora cada comida tiene su interruptor y su hora en Configuración
 # (normales: 8:45/12:45/15:45/19:15) y el cron, cada 15 min, escribe en el último tick antes de que suene.
-_LAST_KNOWN_PFIX = "P1-PLAN-LOTE-220 · 2026-09-24"
+# [P1-PLAN-LOTE-221 · 2026-09-24] (backend + frontend) el escáner de comida: la cantidad de un ingrediente no se dejaba
+# borrar (el 0 volvía y quedaba «010», tester de Android); ahora «− campo +», varios platos por registro (hasta 4
+# fotos, como el chat), el análisis trae lo que aporta cada ingrediente (desmarcar mueve las calorías) y
+# `/consumed` acepta `deduct_pantry` (la Nevera es un interruptor propio, no la casilla del ingrediente).
+_LAST_KNOWN_PFIX = "P1-PLAN-LOTE-221 · 2026-09-24"
 
 # [P1-SENTRY-SAMPLE-COST · 2026-05-12] Sentry sampling driven from env vars
 # con default seguro 0.1 (10%). Pre-fix tenía `traces_sample_rate=1.0` y
