@@ -6236,16 +6236,17 @@ def _build_pantry_context(user_id: Optional[str], nevera_on: Optional[bool] = No
     para una nevera de 60 items. Kill-switch: MEALFIT_CHAT_PANTRY_SNAPSHOT."""
     if not user_id or user_id == "guest":
         return ""
-    # [P1-NEVERA-OPCIONAL · 2026-09-23] Apagada por el usuario (modo contador): el coach no ve el inventario y recibe
-    # la orden explícita de no mencionarla. Va en ESTE bloque porque es de la cola volátil que los dos caminos del chat
-    # inyectan DESPUÉS de las viñetas estáticas que hablan de «su Nevera» (el mandato posterior pesa más). Va ANTES del
-    # kill switch del snapshot: la orden no depende de él. `nevera_on` llega resuelto una vez por turno; sin él, aquí.
+    # [P1-NEVERA-OPCIONAL · 2026-09-23] Nevera apagada (modo contador, por el usuario o por el apagado automático): el
+    # coach no ve el inventario y recibe la orden explícita de no mencionarla. Va en ESTE bloque porque es de la cola
+    # volátil que los dos caminos del chat inyectan DESPUÉS de las viñetas estáticas que hablan de «su Nevera» (el
+    # mandato posterior pesa más). Va ANTES del kill switch del snapshot: la orden no depende de él. `nevera_on` llega
+    # resuelto una vez por turno; sin él, aquí. Si algo falla, fallo abierto (la conducta de siempre), pero con log.
     try:
         from nevera_opcional import BLOQUE_PROMPT_NEVERA_APAGADA
         if not (_nevera_activa_para_chat(user_id) if nevera_on is None else nevera_on):
             return BLOQUE_PROMPT_NEVERA_APAGADA
-    except Exception:
-        pass
+    except Exception as e:
+        logger.warning(f"⚠️ [P1-NEVERA-OPCIONAL] estado de la Nevera ilegible en el chat (queda activa): {e}")
     try:
         from knobs import _env_bool as _pc_env_bool
         if not _pc_env_bool("MEALFIT_CHAT_PANTRY_SNAPSHOT", True):
