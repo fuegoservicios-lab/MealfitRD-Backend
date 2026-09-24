@@ -19,11 +19,31 @@ es TECHO (OMS <2000 mg), el resto SUELO.
 from __future__ import annotations
 
 import logging
+import threading
 from typing import Any, Optional
 
 from knobs import _env_float
 
 logger = logging.getLogger(__name__)
+
+# [P1-DIARY-MICROS-PLAUSIBLE · ola final · 2026-09-23] `GET /consumed` vuelve a juzgar las comidas del día en CADA
+# lectura (el panel refresca al volver a la pestaña, tras registrar…): sin memoria, la MISMA comida inflada dejaba un
+# warning por lectura. Se avisa UNA vez por par (kcal de los renglones, kcal de la comida), redondeado, por proceso.
+# Con tope: al llenarse se vacía — en el peor caso un aviso se repite, nunca crece sin fin.
+_AVISADOS: set = set()
+_AVISADOS_MAX = 512
+_AVISADOS_LOCK = threading.Lock()
+
+
+def _avisar_una_vez(kcal_res: float, kcal_m: float) -> None:
+    clave = (round(kcal_res), round(kcal_m))
+    with _AVISADOS_LOCK:
+        if clave in _AVISADOS:
+            return
+        if len(_AVISADOS) >= _AVISADOS_MAX:
+            _AVISADOS.clear()
+        _AVISADOS.add(clave)
+    logger.warning("[P1-DIARY-MICROS-PLAUSIBLE] micros descartados: renglones %s kcal vs comida %s kcal", *clave)
 
 
 def _ratio_max() -> float:
@@ -106,8 +126,7 @@ def micros_plausibles(micros: Optional[dict], kcal_comida) -> Optional[dict]:
     if kcal_m <= 0 or kcal_res <= 0:
         return micros
     if kcal_res > _ratio_max() * kcal_m:
-        logger.warning(
-            f"[P1-DIARY-MICROS-PLAUSIBLE] micros descartados: renglones {kcal_res:.0f} kcal vs comida {kcal_m:.0f} kcal")
+        _avisar_una_vez(kcal_res, kcal_m)
         return None
     return micros
 

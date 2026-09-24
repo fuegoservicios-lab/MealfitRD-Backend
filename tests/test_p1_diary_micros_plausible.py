@@ -74,6 +74,37 @@ def test_el_umbral_es_un_knob(monkeypatch):
     assert dm.micros_plausibles(m, 200) is m          # 280,5 < 2,0 × 200
 
 
+def _avisos(caplog):
+    return [r for r in caplog.records if "P1-DIARY-MICROS-PLAUSIBLE" in r.getMessage()]
+
+
+def test_la_misma_comida_inflada_avisa_una_sola_vez(monkeypatch, caplog):
+    """[Final fix wave] `GET /consumed` vuelve a juzgar las comidas del día en CADA lectura (el panel refresca): sin
+    memoria, la MISMA comida inflada dejaba un warning por lectura. Se avisa una vez por par de kcal (redondeadas), y
+    con logging perezoso (`%s`), no con un f-string que se formatea aunque nadie lo lea."""
+    import logging
+    monkeypatch.setattr(dm, "_AVISADOS", set())
+    caplog.set_level(logging.WARNING, logger="diary_micros")
+    m = dm.micros_de_ingredientes(
+        ["8 rodajas de plátano maduro hervido", "170 g de pollo al horno", "80 g de zanahoria"], _DBConKcal())
+    for _ in range(5):
+        assert dm.micros_plausibles(m, 695) is None      # la guarda sigue descartando en CADA lectura
+    assert len(_avisos(caplog)) == 1
+    aviso = _avisos(caplog)[0]
+    assert aviso.args and "%s" in aviso.msg, "logging perezoso: plantilla + argumentos"
+    assert aviso.getMessage().endswith(f"renglones {round(m['kcal'])} kcal vs comida 695 kcal")
+    otra = dm.micros_de_ingredientes(["8 rodajas de plátano maduro hervido"], _DBConKcal())
+    assert dm.micros_plausibles(otra, 500) is None
+    assert len(_avisos(caplog)) == 2, "otra comida inflada sí avisa"
+
+
+def test_la_memoria_de_avisos_tiene_tope(monkeypatch):
+    monkeypatch.setattr(dm, "_AVISADOS", set())
+    for i in range(dm._AVISADOS_MAX + 50):
+        assert dm.micros_plausibles({"values": {}, "kcal": 10_000.0 + i}, 100 + i) is None
+    assert 0 < len(dm._AVISADOS) <= dm._AVISADOS_MAX
+
+
 def test_el_endpoint_del_dia_aplica_la_guarda():
     diary = (_BACKEND / "routers" / "diary.py").read_text(encoding="utf-8")
     ancla = 'm["micros"] = micros_de_ingredientes(m.pop("ingredients", None), _ndb)'
