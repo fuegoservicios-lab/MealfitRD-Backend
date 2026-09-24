@@ -399,7 +399,10 @@ _PROCESS_START_ISO = datetime.now(timezone.utc).isoformat()
 # [P1-PLAN-LOTE-191 · 2026-09-24] (solo backend) rd18: «mide 20 g de harina de Negrito» y la lista sin harina. En 921
 # comidas guardadas, 11 pasos miden algo que la lista no trae (queso, nueces, pan rallado, yogur…) — y la guarda de
 # alérgenos lee la LISTA. Ahora entra a la lista antes de las guardas, y las de actualización lo ven en una copia.
-_LAST_KNOWN_PFIX = "P1-PLAN-LOTE-191 · 2026-09-24"
+# [P1-PLAN-LOTE-192 · 2026-09-24] (backend + frontend, número reservado con la sesión del generador) «Compartir» el día
+# (imagen + texto, WhatsApp); la Nevera opcional en modo contador (interruptor en Capacidades y apagado automático tras
+# 48 h vacía; UNA regla en nevera_opcional.py); y una comida cuyos renglones pesan >1,5× sus kcal ya no aporta micros.
+_LAST_KNOWN_PFIX = "P1-PLAN-LOTE-192 · 2026-09-24"
 
 # [P1-SENTRY-SAMPLE-COST · 2026-05-12] Sentry sampling driven from env vars
 # con default seguro 0.1 (10%). Pre-fix tenía `traces_sample_rate=1.0` y
