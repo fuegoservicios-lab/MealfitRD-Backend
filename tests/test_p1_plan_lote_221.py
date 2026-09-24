@@ -15,7 +15,7 @@ posible para el usuario». Lo que toca al backend:
      pasa a decir «lo comí». Solo un `False` explícito apaga la resta; ausente = la conducta de siempre.
 
 Las pruebas funcionales de la pantalla viven en `frontend/src/__tests__/lote221.test.jsx`; aquí, además, las anclas
-que el frontend tiene que conservar (el test las salta si falta el árbol del frontend).
+que el frontend tiene que conservar (el test las salta mientras el frontend de al lado no traiga el lote 221).
 
 Tooltip-anchor: P1-PLAN-LOTE-221
 """
@@ -33,11 +33,16 @@ _FRONT = _BACKEND.parent / "frontend"
 _UID = "11111111-1111-4111-8111-111111111111"
 
 
+# El CI del backend clona el `main` del frontend (su checkout no fija `ref:`). Mientras el lote 221 no llegue allí, ese
+# árbol trae el escáner ANTERIOR: los archivos existen, pero no son estos. La prueba del lote en el frontend dice qué
+# árbol es; con ella presente, un archivo que falte es deriva y el test falla en vez de saltarse.
+_LOTE_EN_EL_FRONTEND = "src/__tests__/lote221.test.jsx"
+
+
 def _front(rel: str) -> str:
-    p = _FRONT / rel
-    if not p.exists():
-        pytest.skip(f"frontend ausente: {rel}")
-    return p.read_text(encoding="utf-8").replace("\r\n", "\n")
+    if not (_FRONT / _LOTE_EN_EL_FRONTEND).exists():
+        pytest.skip("el frontend de este checkout aún no trae el lote 221 (el CI del backend clona su `main`)")
+    return (_FRONT / rel).read_text(encoding="utf-8").replace("\r\n", "\n")
 
 
 def _plato(**over):
