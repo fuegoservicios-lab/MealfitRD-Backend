@@ -27,7 +27,7 @@ REGLAS ESTRICTAS:
    compras lo costee). Ejemplos por staple: harina → panqueques / bollos / arepas / tortillas / empanadas al horno;
    avena → panqueques de avena / overnight oats / avena cremosa; yuca → bollos de yuca / arepitas / casabe / yuca al
    mojo; plátano → mofongo / mangú / tostones; maíz → arepitas / chacá; huevo → tortilla / revoltillo. Aplica
-   ESPECIALMENTE a MERIENDA y CENA (no solo al desayuno). La creatividad es en la PREPARACIÓN, NUNCA en inventar
+   ESPECIALMENTE a MERIENDA y CENA (no solo al desayuno) — pero en la CENA nunca panqueques, crepas, waffles, cereal ni avena: son de desayuno y la cena se rechaza [P1-PLAN-LOTE-183]. La creatividad es en la PREPARACIÓN, NUNCA en inventar
    alimentos fuera del catálogo verificado (regla 5 manda). Mantén la coherencia receta↔ingredientes (regla 8).
    APETECIBILIDAD [P1-DISH-PALATABILITY · 2026-06-30]: la combinación debe ser apetecible para el paladar dominicano,
    NO un disparate. La avena/staples dulces van en preparación DULCE (panqueques/overnight/cremosa), NUNCA en un
@@ -709,7 +709,7 @@ _RULE25_TRANSFORM_DO = (
     '   compras lo costee). Ejemplos por staple: harina → panqueques / bollos / arepas / tortillas / empanadas al horno;\n'
     '   avena → panqueques de avena / overnight oats / avena cremosa; yuca → bollos de yuca / arepitas / casabe / yuca al\n'
     '   mojo; plátano → mofongo / mangú / tostones; maíz → arepitas / chacá; huevo → tortilla / revoltillo. Aplica\n'
-    '   ESPECIALMENTE a MERIENDA y CENA (no solo al desayuno). La creatividad es en la PREPARACIÓN, NUNCA en inventar\n'
+    '   ESPECIALMENTE a MERIENDA y CENA (no solo al desayuno) — pero en la CENA nunca panqueques, crepas, waffles, cereal ni avena: son de desayuno y la cena se rechaza [P1-PLAN-LOTE-183]. La creatividad es en la PREPARACIÓN, NUNCA en inventar\n'
     '   alimentos fuera del catálogo verificado (regla 5 manda). Mantén la coherencia receta↔ingredientes (regla 8).\n'
     '   APETECIBILIDAD [P1-DISH-PALATABILITY · 2026-06-30]: la combinación debe ser apetecible para el paladar dominicano,\n'
     '   NO un disparate. La avena/staples dulces van en preparación DULCE (panqueques/overnight/cremosa), NUNCA en un\n'
@@ -724,7 +724,7 @@ _RULE25_TRANSFORM_BETA = (
     '   `ingredients` (para que la lista de compras lo costee). Ejemplos de transformación: harina → panqueques / tortillas\n'
     '   / panecillos al horno; avena → panqueques de avena / overnight oats / avena cremosa; tubérculos (yuca, papa,\n'
     '   batata) → puré / gratín / tortitas al horno; plátano o banana → puré / tortitas / horneado; maíz → tortitas /\n'
-    '   arepas; huevo → tortilla / revoltillo. Aplica ESPECIALMENTE a MERIENDA y CENA (no solo al desayuno). La\n'
+    '   arepas; huevo → tortilla / revoltillo. Aplica ESPECIALMENTE a MERIENDA y CENA (no solo al desayuno) — pero en la CENA nunca panqueques, crepas, waffles, cereal ni avena: son de desayuno y la cena se rechaza [P1-PLAN-LOTE-183]. La\n'
     '   creatividad es en la PREPARACIÓN, NUNCA en inventar alimentos fuera del catálogo verificado (regla 5 manda).\n'
     '   Mantén la coherencia receta↔ingredientes (regla 8).\n'
     '   APETECIBILIDAD [P1-DISH-PALATABILITY · 2026-06-30]: la combinación debe ser apetecible para el usuario,\n'
@@ -1305,10 +1305,85 @@ def build_slot_targets_block(daily_targets: dict, meal_types: list) -> str:
         return ""
 
 
+# [P1-PLAN-LOTE-182 · 2026-09-23] Las alergias como PROHIBICIÓN en la asignación del día, y ninguna sugerencia que las
+# contradiga. Batería real (alergia a lácteos y a mariscos): el día traía «yogurt griego» en dos meriendas —la guarda
+# determinista lo cazó y quemó un intento; el segundo rechazo crítico acabó en el plan de EMERGENCIA— y el propio prompt
+# se lo había sugerido: «Para diversificar desayuno/merienda usa: huevos, claras, queso fresco, yogurt, frutos secos,
+# mantequilla de maní (estas son OK siempre…)». Igual que la dieta (P1-DAYGEN-VEG-HARD-LINE), la alergia va como línea
+# dura arriba de la asignación, con el vocabulario de la propia guarda (`_expand_allergy_declarations`), y las
+# sugerencias pasan por la MISMA puerta que el pool del esqueleto (`_allergen_pool_item_banned`, alergias y rechazos).
+# Sin alergias ni rechazos, el texto es byte-idéntico. tooltip-anchor: P1-PLAN-LOTE-182-ALERGIA-EN-LA-ASIGNACION
+_SENTINELAS_SIN_DECLARAR = ("ninguna", "ninguno", "ninguna alergia", "nada", "none")
+# [P1-PLAN-LOTE-183] Los alimentos que el generador usa a diario van primero en la línea dura; el resto, por longitud.
+_TERMINOS_COMUNES = ("leche", "queso", "yogur", "yogurt", "mantequilla", "crema", "ricotta", "cottage",
+                     "camaron", "camarones", "langosta", "cangrejo", "pulpo", "calamar", "lambi", "mejillon",
+                     "huevo", "huevos", "clara", "claras", "mani", "mantequilla de mani", "almendra", "almendras",
+                     "nueces", "merey", "trigo", "pan", "harina de trigo", "pasta", "soya", "tofu",
+                     "pescado", "atun", "sardinas", "bacalao", "tilapia")
+
+
+def _declarados(v) -> list:
+    try:
+        from constants import strip_accents as _sa_decl
+    except Exception:                                                          # noqa: BLE001
+        def _sa_decl(s):
+            return s
+    out = []
+    for x in ([v] if isinstance(v, str) else (v or [])):
+        s = str(x or "").strip()
+        if s and _sa_decl(s.lower()) not in _SENTINELAS_SIN_DECLARAR:
+            out.append(s)
+    return out
+
+
+def _vetado(item: str, vetos: list) -> bool:
+    """¿La sugerencia choca con una alergia o un rechazo declarado? Ante la duda, no se sugiere."""
+    if not vetos:
+        return False
+    try:
+        import graph_orchestrator as _go
+        return bool(_go._allergen_pool_item_banned(item, vetos))
+    except Exception:                                                          # noqa: BLE001
+        return True
+
+
+def _sin_vetados(items, vetos) -> list:
+    return [i for i in items if not _vetado(i, vetos)]
+
+
+def _lacteo_vetado(vetos) -> bool:
+    return any(_vetado(x, vetos) for x in ("leche", "yogur", "queso"))
+
+
+def allergy_hard_line(allergies) -> str:
+    """La línea dura de la asignación del día. Vacía sin alergias declaradas."""
+    alg = _declarados(allergies)
+    if not alg:
+        return ""
+    try:
+        import graph_orchestrator as _go
+        terms = sorted((t for t in _go._expand_allergy_declarations(alg) if t),
+                       key=lambda t: (t not in _TERMINOS_COMUNES, len(t), t))     # [P1-PLAN-LOTE-183]
+    except Exception:                                                          # noqa: BLE001
+        terms = []
+    incl = f" (incluye: {', '.join(terms[:20])})" if terms else ""
+    alternativas = ""
+    if _lacteo_vetado(alg):                                            # [P1-PLAN-LOTE-183]
+        _meriendas = _sin_vetados(["fruta con maní", "casabe con aguacate", "tostada integral con aguacate",
+                                   "frutos secos con fruta"], alg) or ["fruta fresca"]   # [P1-PLAN-LOTE-184] sin huevo
+        _liquidos = "agua o hielo" if _vetado("leche de coco", alg) else "agua, hielo o leche de coco"
+        alternativas = (f" Sin lácteos: los batidos van con {_liquidos} (NUNCA yogurt ni leche de vaca), "
+                        f"y las meriendas y desayunos con {', '.join(_meriendas)}.")
+    return (f"\n🚫 ALERGIAS DECLARADAS — PROHIBICIÓN ABSOLUTA: {', '.join(alg)}{incl}. CERO de eso en NINGUNA comida, "
+            f"merienda, topping, bebida ni aderezo: un solo ingrediente invalida el día entero y obliga a regenerarlo. "
+            f"Si una sugerencia de este prompt lo contradice, manda la alergia.{alternativas}")
+
+
 def build_day_assignment_context(skeleton_day: dict, day_num: int, day_name: str = None,
                                  daily_targets: dict = None, user_staples: list = None,
                                  small_universe: bool = False, diet_type=None, country=None,
-                                 culture_weights=None, goal=None, kitchen_equipment=None) -> str:
+                                 culture_weights=None, goal=None, kitchen_equipment=None,
+                                 allergies=None, dislikes=None) -> str:
     """Genera el bloque de contexto con la asignación del planificador para un día.
 
     [P1-STAPLE-FOODS · 2026-08-02] `user_staples` (lista de nombres del catálogo, máx 8 — ver
@@ -1374,6 +1449,9 @@ def build_day_assignment_context(skeleton_day: dict, day_num: int, day_name: str
         prohibited_labels.append(label)
         seen_labels.add(label)
 
+    _vetos = _declarados(allergies) + _declarados(dislikes)          # [P1-PLAN-LOTE-182]
+    _ok_siempre = _sin_vetados(["huevos", "claras", "queso fresco", "yogurt", "frutos secos",
+                                "mantequilla de maní"], _vetos) or ["fruta", "casabe", "aguacate"]
     prohibited_block = ""
     if prohibited_labels:
         prohibited_block = (
@@ -1385,8 +1463,8 @@ def build_day_assignment_context(skeleton_day: dict, day_num: int, day_name: str
             f"merienda cuando el pool dice Lentejas, o res en un desayuno cuando el pool dice Pollo), "
             f"el self-critique lo flageará como repetición de proteína intra-día y forzará un retry "
             f"costoso (~120s) que no mejora el plan. RESPETA el pool — usa SOLO esas proteínas como "
-            f"principal del día. Para diversificar desayuno/merienda usa: huevos, claras, queso fresco, "
-            f"yogurt, frutos secos, mantequilla de maní (estas son OK siempre, no cuentan como 'otra carne')."
+            f"principal del día. Para diversificar desayuno/merienda usa: {', '.join(_ok_siempre)} "
+            f"(estas son OK siempre, no cuentan como 'otra carne')."
         )
 
     from constants import canonicalize_country as _cc_bdac
@@ -1566,9 +1644,13 @@ def build_day_assignment_context(skeleton_day: dict, day_num: int, day_name: str
         )
     # [P2-LIGHT-BASE-NO-REPEAT · 2026-09-05] La regla de arriba solo mira almuerzo↔cena: el plan vivo 82d6f2a5 llevaba
     # 80 g de avena en el desayuno Y 65 g en la merienda del mismo día (dos comidas ligeras con la MISMA base).
+    _alts_ligeras = [a for a in _sin_vetados(["fruta con lácteo", "pan integral", "casabe", "tostada de maíz",
+                                              "frutos secos", "yogur"], _vetos)
+                     if not (a == "fruta con lácteo" and _lacteo_vetado(_vetos))] or ["fruta"]   # [P1-PLAN-LOTE-182]
+    _alts_txt = (", ".join(_alts_ligeras[:-1]) + " o " + _alts_ligeras[-1]) if len(_alts_ligeras) > 1 else _alts_ligeras[0]
     carb_no_repeat_block += (
         "\n• ⛔ TAMPOCO REPITAS LA BASE ENTRE DESAYUNO Y MERIENDA: si el desayuno es de avena, la merienda NO lleva "
-        "avena (usa fruta con lácteo, pan integral, casabe, tostada de maíz, frutos secos o yogur); la misma base de "
+        f"avena (usa {_alts_txt}); la misma base de "
         "cereal dos veces en el día se lee como el mismo plato repetido."
     )
 
@@ -1704,7 +1786,7 @@ def build_day_assignment_context(skeleton_day: dict, day_num: int, day_name: str
         equipment_block = ""
 
     return f"""
---- 📋 ASIGNACIÓN DEL PLANIFICADOR PARA OPCIÓN {day_num} ---{diet_hard_line}
+--- 📋 ASIGNACIÓN DEL PLANIFICADOR PARA OPCIÓN {day_num} ---{diet_hard_line}{allergy_hard_line(allergies)}
 • Concepto Temático: {skeleton_day.get('brief_concept', 'Día variado')}{day_name_block}{breakfast_block}{cross_day_block}
 • Técnica de Cocción Principal: {skeleton_day.get('assigned_technique', 'Libre')}
 • Proteínas Asignadas: {pool_str}
@@ -1714,6 +1796,6 @@ def build_day_assignment_context(skeleton_day: dict, day_num: int, day_name: str
 {dish_library_block}{prohibited_block}
 DEBES basar tus recetas en estos ingredientes asignados para garantizar
 variedad entre los 3 días del plan. Puedes agregar condimentos, especias,
-vegetales complementarios y líquidos (aceite, leche, etc).
+vegetales complementarios y líquidos ({'aceite, agua, caldo, etc' if _lacteo_vetado(_vetos) else 'aceite, leche, etc'}).
 ---------------------------------------------------------
 """

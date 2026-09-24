@@ -53,8 +53,10 @@ def test_deli_gana_74_pero_pavo_fresco_no():
     go._apply_pregnancy_food_safety_annotations(p, _PREG_FD)
     m_deli, m_fresh = p["days"][0]["meals"]
     assert any("74" in s for s in _notes(m_deli)), "deli frío = riesgo listeria (corr=86482b8c)"
-    assert not any("74" in s for s in _notes(m_fresh)), (
-        "pechuga de pavo FRESCA a la plancha no es fiambre — anotarla sería falso positivo")
+    assert not any("embutidos" in s for s in _notes(m_fresh)), (
+        "pechuga de pavo FRESCA a la plancha no es fiambre — la cláusula de embutidos sería falso positivo")
+    # [P1-PLAN-LOTE-183] …pero es carne de ave: lleva la de cocción completa (rd12: «pollo guisado sin 74 °C» ⇒ emergencia)
+    assert any("sin partes rosadas" in s for s in _notes(m_fresh))
 
 
 def test_hojas_lechosa_hongos_mariscos():
@@ -104,8 +106,8 @@ def test_idempotente_y_absolution_aware():
     assert len(_notes(meal)) == 1, "dos pasadas no duplican la nota"
     # absolution: el swap sacó el huevo → la nota debe salir con él (nota stale = clase
     # P1-RAW-COOKED-ABSOLUTION, el step-rewriter renombraba notas viejas)
-    meal["ingredients"] = ["150 g de pechuga de pollo"]
-    meal["name"] = "Pollo guisado"
+    meal["ingredients"] = ["150 g de tofu firme"]      # [P1-PLAN-LOTE-183] el pollo ya tiene su cláusula (carnes)
+    meal["name"] = "Tofu salteado"
     go._apply_pregnancy_food_safety_annotations(p, _PREG_FD)
     assert _notes(meal) == [], "el plato ya no tiene huevo/riesgo — la nota vieja debe removerse"
 

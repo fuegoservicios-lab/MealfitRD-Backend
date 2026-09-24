@@ -368,7 +368,32 @@ _PROCESS_START_ISO = datetime.now(timezone.utc).isoformat()
 # [P1-PLAN-LOTE-181 · 2026-09-23] (solo backend) el último pulido de lo que el usuario lee, al final de la cola del
 # escudo: 37 de 817 líneas con el alimento en mayúscula, «0.5 pepino», «1 orégano», «0.06 g de chía», «1 pechugas»;
 # la base implícita de los platos criollos (majarete = maíz + leche) y los postres criollos cuentan como dulces.
-_LAST_KNOWN_PFIX = "P1-PLAN-LOTE-181 · 2026-09-23"
+# [P1-PLAN-LOTE-182 · 2026-09-23] (solo backend) batería rd11: un alérgico a lácteos acabó en el plan de EMERGENCIA
+# (el prompt del día le sugería «yogurt… OK siempre»; alergia ahora como línea dura, sugerencias filtradas; «confirme si
+# mariscos incluye pescado» es aviso); nota de habichuelas secas; el paso no pide más gramos de los que pesa la lista.
+# [P1-PLAN-LOTE-183 · 2026-09-23] (solo backend) el prompt del día pedía panqueques «especialmente en merienda y CENA»
+# y la puerta de horario los rechaza en la cena (rd11, HTA: «Crepas saladas… en la cena» = un reintento); la línea
+# dura de alergias nombra primero leche, queso, yogur… en vez del orden alfabético.
+# [P1-PLAN-LOTE-184 · 2026-09-23] (solo backend) rd14: embarazo rechazado por «pollo sin 74 °C» con el 74 °C escrito en
+# un PASO (el revisor sólo lee las notas: la cláusula de carnes ya no se da por cubierta con un paso); «verificar sus
+# etiquetas», «confirme la etiqueta» y «hasta confirmar con evaluación» son aviso; sin lácteos no se sugiere huevo.
+# [P1-PLAN-LOTE-185 · 2026-09-23] (solo backend) rd14, DM2: rechazo CRÍTICO por «batidos con piña/guineo o lechosa/
+# guineo» — la regla DM2 pedía «fruta entera» pero no prohibía la fruta licuada.
+# [P1-PLAN-LOTE-186 · 2026-09-23] (solo backend) la puerta de banda del revisor medía un estado que el guardado
+# todavía cerraba (rd12, HTA: grasa 0,887 → rechazo y reintento; la misma cadena lo deja en 1,0): si alguna celda
+# está fuera, re-cierra con la cadena del guardado y vuelve a medir. Knob MEALFIT_REVIEW_BAND_RECLOSE.
+# [P1-PLAN-LOTE-187 · 2026-09-23] (solo backend) embarazo: «460 g de pescado en 3 días» (rd15, crítico) — la regla de
+# 227–340 g/semana del prompt no la puede cumplir un día que no ve los otros: tope determinista que SUSTITUYE (no
+# recorta: el 184 midió el déficit) por una proteína que ese día no se repita (`embarazo_pescado.py`).
+# [P1-PLAN-LOTE-188 · 2026-09-23] (solo backend) rd16: alergia a lácteos → plan de EMERGENCIA otra vez (yogur en un
+# batido + «Verifique sus etiquetas»/«No se puede confirmar que…»). Sustitución determinista de lácteos (el catálogo
+# ya tiene yogur de coco, leches vegetales y tofu), verificación por raíz verbal, y cebolla/ají en la nota de lavado.
+# [P1-PLAN-LOTE-189 · 2026-09-23] (solo backend) rd17: la emergencia volvió por «Verificar que el pan integral no
+# contenga derivados lácteos» — otra forma verbal. En vez de otra frase: verbo de verificación + «no contenga / libre
+# de / puede contener» = petición de verificación (aviso), salvo pasteurizar; la guarda C2 sigue con la última palabra.
+# Y la otra causa: el huevo crudo de un batido se cambiaba por yogur griego SIN mirar la alergia (2 de 3 violaciones de
+# lácteos de rd11–rd16 eran nuestras; en cambiar plato/chat quedaba guardado). Ahora elige lo que el usuario puede comer.
+_LAST_KNOWN_PFIX = "P1-PLAN-LOTE-189 · 2026-09-23"
 
 # [P1-SENTRY-SAMPLE-COST · 2026-05-12] Sentry sampling driven from env vars
 # con default seguro 0.1 (10%). Pre-fix tenía `traces_sample_rate=1.0` y

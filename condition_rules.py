@@ -297,7 +297,10 @@ CONDITION_RULES: tuple = (
             # [P1-PLAN-LOTE-175] rechazo CRÍTICO de la batería real (DM2 con insulina): «casabe en dos días, plátano
             # maduro en dos comidas».
             "   • Si el plan lleva plátano, que sea VERDE antes que maduro; el plátano maduro y el casabe, como mucho una vez "
-            "cada 3 días cada uno; nada de majarete ni dulces de maíz."),
+            "cada 3 días cada uno; nada de majarete ni dulces de maíz.\n"
+            # [P1-PLAN-LOTE-185] rechazo CRÍTICO de rd14: «batidos con piña/guineo o lechosa/guineo» (fruta licuada).
+            "   • La fruta, ENTERA y masticada: NADA de batidos ni licuados con fruta (licuada sube la glucosa más rápido) "
+            "ni jugos; si hay batido, que sea de leche o yogur sin fruta dulce, con canela o avena."),
     ),
     ConditionRule(
         id="hta", label="Hipertensión arterial", terms=HTA_CONDITION_TERMS,
@@ -785,6 +788,8 @@ def contraindicated_supplements(form_data) -> dict:
 # catálogo es-DO NO tiene un target libre del alérgeno que resuelva (no hay leche/queso vegetal, ni
 # mantequilla de semillas). Para esos, el path crítico→fallback existente sigue EXCLUYÉNDOLOS (cero
 # regresión). Habilitar lácteos/huevo requeriría filas nuevas en el catálogo (palanca de DATOS).
+# [P1-PLAN-LOTE-188 · 2026-09-23] La palanca se tiró para LÁCTEOS: ver `_ALLERGEN_DAIRY_SUBS` abajo. Huevo, maní y
+# frutos secos siguen fuera (sin target libre del alérgeno que resuelva).
 #
 # TOKENS accent-free + lowercase (se matchean contra `strip_accents(ingrediente).lower()`) y
 # ESTRECHOS (lección del bug 'soya'/'pana'): nada de raíces ambiguas — 'pan de agua' (NO 'pan'
@@ -842,20 +847,60 @@ _ALLERGEN_GLUTEN_NEGATIVES = ("sin gluten", "libre de gluten", "gluten free", "d
 
 # Detección: alergia DECLARADA (texto del form, strip_accents+lower) → categoría con tabla de swaps.
 # Términos accent-free; matching `term in declared` (substring) — over-detección es la dirección SEGURA.
+# [P1-PLAN-LOTE-188 · 2026-09-23] LÁCTEOS. El catálogo ya tiene «Yogur de coco», «Leche de avena/almendras/coco/soya» y
+# «Tofu firme». Batería real (alergia a lácteos y mariscos, rd11/rd12/rd16): el modelo mete yogur griego en batidos y
+# meriendas aunque la alergia vaya como línea dura; la guarda lo caza, el intento se quema y dos veces acabó en el plan
+# de EMERGENCIA. Cada fila lleva CANDIDATOS: se usa el primero que no choque con otra alergia declarada (avena ↔
+# gluten, almendras ↔ frutos secos, coco, soya/tofu ↔ soya); sin candidato limpio, la fila no se aplica y sigue el
+# camino de siempre (guarda → reintento). «Leche sin lactosa» NO es segura para la alergia (proteína, no lactosa):
+# no es negativo. tooltip-anchor: P1-PLAN-LOTE-188-LACTEOS
+_ALLERGEN_DAIRY_SUBS = (
+    (("yogurt griego", "yogur griego", "yogurt natural", "yogur natural", "yogurt", "yogur"),
+     ("Yogur de coco",), "lácteo (yogur)", True),
+    (("leche descremada", "leche semidescremada", "leche entera", "leche evaporada", "leche en polvo", "leche"),
+     ("Leche de avena", "Leche de almendras", "Leche de coco", "Leche de soya"), "lácteo (leche)", True),
+    (("crema de leche", "crema agria", "crema batida"), ("Leche de coco",), "lácteo (crema)", True),
+    (("queso cottage", "queso ricotta", "queso crema", "queso blanco", "queso fresco", "queso de freir", "queso de hoja",
+      "queso mozzarella", "queso parmesano", "queso cheddar", "cottage", "ricotta", "requeson", "mozzarella", "parmesano",
+      "queso"),
+     ("Tofu firme",), "lácteo (queso)", True),
+    (("mantequilla",), ("Aceite de oliva",), "lácteo (mantequilla)", True),
+)
+_ALLERGEN_DAIRY_NEGATIVES = ("de coco", "de soya", "de soja", "de almendra", "de avena", "de arroz", "de mani",
+                             "de cacahuate", "vegetal", "vegana", "vegano", "dulce de leche")
+_CHOQUES_SUSTITUTO = (("avena", ("gluten", "trigo", "avena", "celiac", "celiaqu", "tacc")),
+                      ("almendra", ("almendra", "fruto seco", "frutos secos", "nuez", "nueces", "tree nut")),
+                      ("coco", ("coco",)), ("soya", ("soya", "soja", "soy")), ("tofu", ("soya", "soja", "soy", "tofu")),
+                      ("oliva", ("oliva",)))
+
+
+def _sustituto_choca(repl: str, declared: list) -> bool:
+    """¿Este reemplazo choca con OTRA alergia declarada? (`declared` ya viene sin acentos y en minúsculas)."""
+    try:
+        from constants import strip_accents as _sa_sc
+    except Exception:
+        _sa_sc = lambda x: x  # noqa: E731
+    r = _sa_sc(str(repl).lower())
+    return any(k in r and any(t in d for t in terms for d in declared) for k, terms in _CHOQUES_SUSTITUTO)
+
+
 _ALLERGEN_DETECT = {
     "fish": ("pescado", "fish", "atun", "salmon", "bacalao", "tilapia", "sardina"),
     "shellfish": ("marisco", "camaron", "langosta", "cangrejo", "shellfish", "crustaceo", "molusco"),
     "soy": ("soya", "soja", "soy", "tofu", "edamame"),
     "gluten": ("gluten", "trigo", "wheat", "celiac", "celiaqu", "tacc"),
+    "dairy": ("lacteo", "leche", "lactosa", "dairy", "milk", "caseina"),        # [P1-PLAN-LOTE-188]
 }
 _ALLERGEN_SUBS_BY_CAT = {
     "fish": _ALLERGEN_FISH_SUBS,
     "shellfish": _ALLERGEN_SHELLFISH_SUBS,
     "soy": _ALLERGEN_SOY_SUBS,
     "gluten": _ALLERGEN_GLUTEN_SUBS,
+    "dairy": _ALLERGEN_DAIRY_SUBS,
 }
 _ALLERGEN_NEGATIVES_BY_CAT = {
     "gluten": _ALLERGEN_GLUTEN_NEGATIVES,
+    "dairy": _ALLERGEN_DAIRY_NEGATIVES,
 }
 
 
@@ -980,6 +1025,10 @@ def collect_allergen_substitutions(form_data, diet_type=None) -> list:
         for sub in _ALLERGEN_SUBS_BY_CAT[cat]:
             tokens, repl, label = sub[0], sub[1], sub[2]
             preserve_qty = bool(sub[3]) if len(sub) > 3 else False
+            if isinstance(repl, tuple):              # [P1-PLAN-LOTE-188] candidatos: el primero que no choque
+                repl = next((r for r in repl if not _sustituto_choca(r, declared)), None)
+                if repl is None:
+                    continue
             repl = _redirect_replacement_for_diet(repl, _dc, allergen_cat=cat)  # [P2-13] diet+allergen-aware
             # [P1-CONDITION-RULES-COUNTRY · 2026-08-21] Corte por ALIMENTO, no por regla: los
             # targets panhispánicos (Arroz blanco, Harina de maíz precocida, Pechuga de pollo,

@@ -7268,6 +7268,7 @@ async def generate_days_parallel_node(state: PlanState) -> dict:
             culture_weights=_culture_weights_for_form_data(form_data),
             # [P1-GAINMUSCLE-DINNER-PROTEIN] la cena de ganancia muscular pide proteína animal magra como plato
             goal=(form_data or {}).get("mainGoal") or (form_data or {}).get("goal"),
+            allergies=(form_data or {}).get("allergies"), dislikes=(form_data or {}).get("dislikes"),  # [P1-PLAN-LOTE-182]
         )
 
         random_seed = __import__("horizon").run_seed(form_data, attempt=state.get("attempt")) or random.randint(10000, 99999)  # [P1-PLAN-LOTE-3 · B4] semilla del run: reproducible por intento
@@ -10094,7 +10095,7 @@ PLAN A EVALUAR (días generados):
                             f"\n⚠️ ASIGNACIÓN OBLIGATORIA DEL PLANIFICADOR (no la ignores):\n"
                             # [P1-COUNTRY-SYSTEM-F1 · 2026-08-16 (T4)] reusa `_critique_country`
                             # (T3's shadow work) — DO ⇒ camino byte-idéntico.
-                            f"{build_day_assignment_context(skeleton_day, day_num, user_staples=_raw_staple_foods(form_data), small_universe=_small_universe_active(form_data), kitchen_equipment=_ctx_equipment_labels(form_data), diet_type=(form_data or {}).get('dietType'), country=_critique_country)}"
+                            f"{build_day_assignment_context(skeleton_day, day_num, user_staples=_raw_staple_foods(form_data), small_universe=_small_universe_active(form_data), kitchen_equipment=_ctx_equipment_labels(form_data), allergies=(form_data or {}).get('allergies'), dislikes=(form_data or {}).get('dislikes'), diet_type=(form_data or {}).get('dietType'), country=_critique_country)}"
                         )
 
                     # [P5-PROMPT-D] Usa `nutrition_context_minimal` en vez del
@@ -12065,6 +12066,8 @@ CLINICAL_MEAL_COUNT_ENABLED = _env_bool("MEALFIT_CLINICAL_MEAL_COUNT", True)
 # directiva del prompt). Recupera las calorías escalando los ingredientes NO-almidón del plato → mantiene las
 # kcal en banda (los carbos bajan, que es el objetivo DM2). Default ON. Rollback: =false. Anchor: P1-DM2-GLYCEMIC-PORTION-CAP
 DM2_GLYCEMIC_PORTION_CAP_ENABLED = _env_bool("MEALFIT_DM2_GLYCEMIC_PORTION_CAP", True)
+# [P1-PLAN-LOTE-182] La fruta DULCE también (DM2 + insulina: «300 g de piña en un batido», rechazo CRÍTICO). 0 = apagado.
+DM2_SWEET_FRUIT_CAP_G = _env_int("MEALFIT_DM2_SWEET_FRUIT_CAP_G", 120, validator=lambda v: 0 <= v <= 400)
 DM2_HIGH_GI_CAP_G = _env_int("MEALFIT_DM2_HIGH_GI_CAP_G", 100, validator=lambda v: 60 <= v <= 400)  # [P1-DM2-MAIZ-CAP] 150→100: alineado al criterio del reviewer (~100g/comida)
 
 # [P1-BARIATRIC-CLINICAL-RULES · 2026-06-27] Para pacientes post-cirugía bariátrica, cap DURO de la porción de
@@ -13739,7 +13742,7 @@ def _apply_condition_substitutions(plan: dict, form_data: dict) -> int:
             meal["_dm2_sugar_fixed"] = uniq  # flag de compatibilidad hacia atrás
 
     return (_apply_substitutions_core(plan, subs, _note, "Ajuste clínico", _flags) + __import__("etiquetas_clinicas").etiquetar(plan, form_data)  # [P1-PLAN-LOTE-172/173]
-            + __import__("dm2_seguro").limitar_casabe(plan, form_data))  # [P1-PLAN-LOTE-178] DM2: un casabe por bloque
+            + __import__("dm2_seguro").limitar_casabe(plan, form_data) + __import__("embarazo_pescado").limitar_pescado(plan, form_data))  # [P1-PLAN-LOTE-178/187] DM2: un casabe por bloque; embarazo: ≤340 g de pescado/semana
 
 
 # [P1-DIET-SUBSTITUTION · 2026-09-05] Sustitutos vegetales por categoría de producto animal. Mismo motor que las
@@ -14747,7 +14750,7 @@ def _scan_diet_violations(plan: dict, diet_type) -> list:
 
 _VERIFICATION_DEMAND_RX = _re_mod.compile(
     r"(certificaci[oó]n|certificad[oa]s?|contaminaci[oó]n cruzada|debe(?:n)? verificarse|"
-    r"requiere[n]? verificaci[oó]n|verificar (?:la |las )?etiquetas?|sin indicar certificaci[oó]n|"
+    r"requiere[n]? verificaci[oó]n|verifi\w*\s+(?:la |las |sus |su )?etiquetas?|sin indicar certificaci[oó]n|"
     r"requiere[n]? confirmaci[oó]n|debe[n]? confirmarse|requiere[n]? vigilancia|"
     r"vigilancia de (?:la )?funci[oó]n|requiere[n]? supervisi[oó]n|"
     r"marca regulad[ao]|de marca (?:regulad|reconocid|comercial)|procesamiento (?:verificado|seguro|industrial)|"
@@ -14755,6 +14758,9 @@ _VERIFICATION_DEMAND_RX = _re_mod.compile(
     r"origen industrial)",  # [P1-PLAN-LOTE-180] «casabe de origen industrial/controlado» (embarazo)
     _re_mod.IGNORECASE,
 )
+# [P1-PLAN-LOTE-182] «Confirme si…» es aclaración, no defecto; aparte para excluir pasteurizar. tooltip-anchor: P1-PLAN-LOTE-182-CONFIRMAR-ES-AVISO
+_CONFIRM_DEMAND_RX = _re_mod.compile(r"confirm(?:e|ar)\s+(?:si|que|su alcance|el alcance|las? etiquetas?|con|la tolerancia)|hasta confirmar|(?:no se puede|no es posible) confirmar|^(?=[\s\S]*?\b(?:verifi|confirm|aseg[uú]r|compr(?:o|ue)b|revis)\w*)(?=[\s\S]*?(?:puede[n]? contener|podr[ií]a[n]? contener|libres? de|no contenga|sin (?:derivados|trazas)))", _re_mod.IGNORECASE)  # [P1-PLAN-LOTE-184/186/188/189] 189: verbo de verificación + «no contenga / libre de» (estructural)
+_PASTEURIZ_RX = _re_mod.compile(r"pasteuriz", _re_mod.IGNORECASE)
 
 
 def _downgrade_reviewer_verification_demands(approved, issues, severity):
@@ -14769,7 +14775,9 @@ def _downgrade_reviewer_verification_demands(approved, issues, severity):
         return approved, list(issues or []), severity, []
     real, advisories = [], []
     for it in issues:
-        (advisories if _VERIFICATION_DEMAND_RX.search(str(it)) else real).append(it)
+        (advisories if (_VERIFICATION_DEMAND_RX.search(str(it))
+                        or (_CONFIRM_DEMAND_RX.search(str(it)) and not _PASTEURIZ_RX.search(str(it))))  # [P1-PLAN-LOTE-182]
+         else real).append(it)
     if not advisories:
         return approved, real, severity, []
     if real:
@@ -15158,7 +15166,7 @@ def renal_protein_trim_for_update(meals: list, protein_ceiling_g: float, db=None
         return False
 
 
-def food_safety_backstop_for_meal(meal: dict) -> int:
+def food_safety_backstop_for_meal(meal: dict, form_data=None, allergies=None) -> int:  # [P1-PLAN-LOTE-189]
     """[P2-FOOD-SAFETY-UPDATE · 2026-06-24] (re-audit P2-1) Re-aplica la mitigación determinista de
     seguridad alimentaria (huevo crudo FS1 + pescado/marisco/carne crudos) en las superficies de UPDATE
     (swap S3 / regenerate-day S2 / chat-modify). S1 la corre en `_apply_deterministic_clinical_layer`
@@ -15172,7 +15180,7 @@ def food_safety_backstop_for_meal(meal: dict) -> int:
     if not FOOD_SAFETY_GUARD or not isinstance(meal, dict):
         return 0
     try:
-        return _apply_food_safety_fixes({"days": [{"meals": [meal]}]})
+        return _apply_food_safety_fixes({"days": [{"meals": [meal]}]}, form_data, allergies)
     except Exception as _fs_e:
         logger.warning(f"[P2-FOOD-SAFETY-UPDATE] food-safety backstop falló (no bloquea): {type(_fs_e).__name__}: {_fs_e}")
         return 0
@@ -17599,7 +17607,7 @@ def _fix_egg_swap_dangling_adjectives(text: str) -> str:
         return text
 
 
-def _substitute_blended_raw_egg(meal: dict, db) -> bool:
+def _substitute_blended_raw_egg(meal: dict, db, replacement=None) -> bool:  # [P1-PLAN-LOTE-189] replacement: lo que ESTE usuario puede comer
     """[P2-RAW-EGG-SUBSTITUTE · 2026-06-15] Reemplaza el huevo crudo de una preparación LICUADA por una
     proteína blend-safe (yogur griego) a nivel de COMPOSICIÓN — preserva el prefijo de cantidad y ajusta
     los macros por DELTA quirúrgico (mismo patrón que `_apply_substitutions_core`). Solo para el caso
@@ -17622,7 +17630,7 @@ def _substitute_blended_raw_egg(meal: dict, db) -> bool:
                 # sustantivo de conteo, así que preservar "N huevos " dejaría el huevo en el string. El
                 # conteo de huevos no mapea a gramos de yogur de todas formas; el delta de macros se
                 # computa del string viejo vs el nuevo. [P2-RAW-EGG-SUBSTITUTE bugfix]
-                new = _BLEND_EGG_REPLACEMENT
+                new = replacement or _BLEND_EGG_REPLACEMENT
                 out.append(new)
                 if key == "ingredients":
                     swaps.append((str(ing), new))
@@ -17946,7 +17954,7 @@ def _insert_step_before_montaje(steps: list, new_step: str) -> list:
         return (steps if isinstance(steps, list) else []) + [new_step]
 
 
-def _apply_food_safety_fixes(plan: dict) -> int:
+def _apply_food_safety_fixes(plan: dict, form_data=None, allergies=None) -> int:  # [P1-PLAN-LOTE-189] alergias → sustituto del huevo del batido
     """[P3-FOOD-SAFETY · 2026-06-13] Aplica mitigación determinista a las violaciones de
     huevo crudo detectadas por `_scan_raw_egg_violations`. Macro-PRESERVANTE (no toca
     cantidades ni macros) y shopping-SAFE (no muta el token canónico del ingrediente, solo
@@ -17954,7 +17962,7 @@ def _apply_food_safety_fixes(plan: dict) -> int:
     introducir divergencias receta↔lista. Idempotente: no duplica una nota ya presente.
     Retorna el número de meals mitigados. Anchor: P3-FOOD-SAFETY."""
     # [P2-RAW-EGG-SUBSTITUTE] DB compartida para el delta de macros del swap (solo si el knob está ON).
-    _fsdb = None
+    _fsdb, _hb = None, __import__("huevo_batido").Eleccion(form_data, allergies)  # [P1-PLAN-LOTE-189]
     if RAW_EGG_BLENDED_SUBSTITUTE_ENABLED:
         try:
             from nutrition_db import IngredientNutritionDB
@@ -17975,11 +17983,11 @@ def _apply_food_safety_fixes(plan: dict) -> int:
         # [P2-RAW-EGG-SUBSTITUTE] Para 'blended' (Salmonella) sustituir el huevo a nivel de COMPOSICIÓN;
         # si la sustitución corre, la nota refleja el swap. 'no_cook' (cocinable) sigue con nota de cocción.
         if (kind == "blended" and RAW_EGG_BLENDED_SUBSTITUTE_ENABLED
-                and _substitute_blended_raw_egg(meal, _fsdb)):
-            note = _FOOD_SAFETY_NOTE_BLENDED_SUBBED
+                and _hb.repl and _substitute_blended_raw_egg(meal, _fsdb, _hb.repl)):
+            note = _hb.nota_sustituido(meal)
             meal["_food_safety_fixed"] = "blended_substituted"
         else:
-            note = _FOOD_SAFETY_NOTE_BLENDED if kind == "blended" else _FOOD_SAFETY_NOTE_NOCOOK
+            note = _hb.nota_batido if kind == "blended" else _FOOD_SAFETY_NOTE_NOCOOK
             # [P3-EGG-BATTER-NOTE · 2026-07-05] huevo integrado en MASA (panqueques/arepitas):
             # la nota "yema y clara firmes" es wording de huevo entero → variante de masa cocida.
             if kind != "blended":
@@ -18128,6 +18136,11 @@ _PREGNANCY_SAFETY_CLAUSES = (
     ("huevo", ("huevo", "huevos", "clara", "claras", "yema", "yemas"),
      ("yema y clara firmes",),
      "cocina el huevo POR COMPLETO (yema y clara firmes, sin puntos líquidos)"),
+    # [P1-PLAN-LOTE-183] Carnes y aves (rd12: «pollo guisado sin 74 °C» ⇒ EMERGENCIA). tooltip-anchor: P1-PLAN-LOTE-183-CARNES-EMBARAZO
+    ("carnes", ("pollo", "pechuga", "pechugas", "pavo", "cerdo", "res", "carne", "chivo", "cordero",
+                "muslo", "muslos", "higado", "costilla", "costillas", "chuleta", "chuletas", "molida"),
+     ("74 °c", "74°c", "sin partes rosadas"),
+     "cocina las carnes y el pollo POR COMPLETO (74 °C por dentro, sin partes rosadas)"),
     ("deli", ("jamon", "salami", "mortadela", "fiambre", "embutido", "deli",
               "salchicha", "salchichon", "pepperoni", "tocineta", "tocino",
               # [P0-PREG-CURED-BETA · 2026-08-23] Curados/embutidos de los cinco
@@ -18145,7 +18158,7 @@ _PREGNANCY_SAFETY_CLAUSES = (
     ("hojas", ("espinaca", "espinacas", "rucula", "arugula", "lechuga", "repollo",
                "berro", "berros", "acelga", "acelgas", "kale", "col rizada", "bok choy",
                "cilantro", "perejil", "albahaca", "tomate", "pepino", "zanahoria", "apio",
-               "remolacha", "mango", "lechosa", "papaya", "pina", "fresa", "fresas",
+               "remolacha", "cebolla", "aji", "pimiento", "mango", "lechosa", "papaya", "pina", "fresa", "fresas",  # [P1-PLAN-LOTE-188] +cebolla/ají
                "guineo", "banana", "melon", "sandia", "uva", "uvas", "manzana", "pera",
                "chinola", "maracuya", "limon", "naranja", "toronja", "aguacate", "kiwi",
                "granada", "guayaba"),
@@ -18284,6 +18297,7 @@ def _apply_pregnancy_food_safety_annotations(plan: dict, form_data: dict) -> int
                     else [str(s) for s in rec]
                 base_rec = [s for s in rec if _PREGNANCY_NOTE_PREFIX not in s]
                 rec_blob = _sa_psn(" ".join(base_rec).lower())
+                _notas_blob = _sa_psn(" ".join(s for s in base_rec if "Seguridad alimentaria" in s or "Nota clínica" in s).lower())  # [P1-PLAN-LOTE-184]
                 clauses = []
                 for _key, _toks, _covered, _text in _PREGNANCY_SAFETY_CLAUSES:
                     _effective_toks = _toks
@@ -18295,7 +18309,7 @@ def _apply_pregnancy_food_safety_annotations(plan: dict, form_data: dict) -> int
                         continue
                     # covered escanea receta + nombre + ingredientes: «canela de Ceilán» o
                     # «leche pasteurizada» EN la línea del ingrediente también absuelven.
-                    if any(_sa_psn(c) in rec_blob or _sa_psn(c) in blob for c in _covered):
+                    if any(_sa_psn(c) in (_notas_blob if _key == "carnes" else rec_blob) or _sa_psn(c) in blob for c in _covered):
                         continue  # el LLM ya escribió la instrucción con sus palabras
                     if _key == "mariscos":
                         # solo lata ("atún en agua" ni siquiera matchea; "sardinas en lata" sí):
@@ -18476,7 +18490,7 @@ def _meal_safety_notes_for_summary(meal: dict) -> str:
                  and ("Seguridad alimentaria" in s or "Nota clínica" in s or _LOWSODIUM_NOTE_SENTINEL in s)]  # [P1-PLAN-LOTE-175] + sodio
         if not notes:
             return ""
-        return " [" + " | ".join(n[:300] for n in notes[:3]) + "]"  # [P1-PLAN-LOTE-180] 3: la del ceviche iba tercera
+        return " [" + " | ".join(n[:450] for n in notes[:3]) + "]"  # [P1-PLAN-LOTE-180] 3 notas · [P1-PLAN-LOTE-183] 450
     except Exception:
         return ""
 
@@ -25066,7 +25080,7 @@ def _apply_deterministic_clinical_layer(plan: dict, form_data: dict, nutrition: 
     # ── Guard 2 (FS1): food-safety / huevo crudo (espejo [P3-FOOD-SAFETY]) ──
     if FOOD_SAFETY_GUARD:
         try:
-            _fs_n = _apply_food_safety_fixes(plan)
+            _fs_n = _apply_food_safety_fixes(plan, form_data)  # [P1-PLAN-LOTE-189] sin meterle su alérgeno al batido
             if _fs_n:
                 logger.warning(f"🥚 [P3-FOOD-SAFETY] Mitigó huevo crudo/poco cocido en {_fs_n} comida(s)")
         except Exception as _fs_e:
@@ -26044,6 +26058,8 @@ def _enforce_meal_count(days: list, target_meal_types: list) -> int:
 # criterio clínico del reviewer; rollback sin redeploy vía MEALFIT_DM2_HIGH_GI_CAP_G.
 _DM2_HIGH_GI_STARCH_TOKENS = ("batata", "yuca", "yautia", "name", "platano maduro", "mangu", "casabe", "papa", "maiz dulce")
 _DM2_HIGH_GI_CAP_EXCLUDE = ("papaya", "harina de", "leche de", "vinagre de", "agua de")
+_DM2_SWEET_FRUIT_TOKENS = ("pina", "mango", "sandia", "melon", "uva", "uvas", "mamey", "datil", "datiles", "pasas", "guineo", "guineos", "lechosa", "cereza", "cerezas")  # [P1-PLAN-LOTE-182]
+_DM2_SWEET_FRUIT_EXCLUDE = ("guineo verde", "guineos verdes")
 
 
 def _ing_kcal_estimate(mc: dict) -> float:
@@ -26108,7 +26124,12 @@ def cap_dm2_high_gi_portions(days: list, form_data: dict, db=None, *, cap_g: int
                     low = _norm_text(ing)
                     if any(ex in low for ex in _DM2_HIGH_GI_CAP_EXCLUDE):
                         continue
-                    if not any(_name_has_token(t, low) for t in _DM2_HIGH_GI_STARCH_TOKENS):
+                    if any(_name_has_token(t, low) for t in _DM2_HIGH_GI_STARCH_TOKENS):
+                        _cap_i = cap
+                    elif (DM2_SWEET_FRUIT_CAP_G and any(_name_has_token(t, low) for t in _DM2_SWEET_FRUIT_TOKENS)
+                          and not any(x in low for x in _DM2_SWEET_FRUIT_EXCLUDE)):
+                        _cap_i = DM2_SWEET_FRUIT_CAP_G                 # [P1-PLAN-LOTE-182] fruta dulce
+                    else:
                         continue
                     mc = db.macros_from_ingredient_string(ing) or {}
                     grams = mc.get("grams")
@@ -26117,9 +26138,9 @@ def cap_dm2_high_gi_portions(days: list, form_data: dict, db=None, *, cap_g: int
                             grams = db.grams_from_ingredient_string(ing)
                         except Exception:
                             grams = None
-                    if not grams or float(grams) <= cap:
+                    if not grams or float(grams) <= _cap_i:
                         continue
-                    factor = cap / float(grams)
+                    factor = _cap_i / float(grams)
                     new_ing = _resc(ing, factor)
                     if new_ing == ing:
                         continue
@@ -26127,7 +26148,7 @@ def cap_dm2_high_gi_portions(days: list, form_data: dict, db=None, *, cap_g: int
                     ings[i] = new_ing
                     capped_idx.add(i)
                     capped += 1
-                    logger.info(f"🩸 [P1-DM2-GLYCEMIC-PORTION-CAP] '{str(ing)[:40]}' {round(float(grams))}g→{cap}g (DM2)")
+                    logger.info(f"🩸 [P1-DM2-GLYCEMIC-PORTION-CAP] '{str(ing)[:40]}' {round(float(grams))}g→{_cap_i}g (DM2)")
                 if not capped_idx:
                     continue
                 # [P1-PLAN-DISPLAY-I18N-MUTATOR-capdm2 · Ola final FF-1] DELETE-on-write: este meal
@@ -41024,7 +41045,7 @@ async def surgical_marker_regen_node(state: PlanState) -> dict:
                 # también en el regen quirúrgico (no solo en el day-gen inicial).
                 # [P1-COUNTRY-SYSTEM-F1 · 2026-08-16 (T4)] reusa `_surgical_country` (derivado
                 # arriba, una sola vez) — DO ⇒ camino byte-idéntico.
-                f"{build_day_assignment_context(skeleton_day, day_num, user_staples=_raw_staple_foods(form_data), small_universe=_small_universe_active(form_data), diet_type=(form_data or {}).get('dietType'), country=_surgical_country)}"
+                f"{build_day_assignment_context(skeleton_day, day_num, user_staples=_raw_staple_foods(form_data), small_universe=_small_universe_active(form_data), allergies=(form_data or {}).get('allergies'), dislikes=(form_data or {}).get('dislikes'), diet_type=(form_data or {}).get('dietType'), country=_surgical_country)}"
             )
 
         # [P5-PROMPT-D] Mismo prompt mínimo que self_critique correction.
@@ -43289,6 +43310,8 @@ Responde ÚNICAMENTE con el JSON de revisión.
     if BAND_RETRY_GATE_ENABLED:
         try:
             _bsr = compute_clinical_band_score(plan, {})
+            if (_bsr.get("score") or 0) < 1.0 and _env_bool("MEALFIT_REVIEW_BAND_RECLOSE", True):  # [P1-PLAN-LOTE-186] mide lo que se guarda (rd12, HTA: grasa 0,887 → 1,0 con la misma cadena). tooltip-anchor: P1-PLAN-LOTE-186-BANDA-COMO-SE-GUARDA
+                await _adb(__import__("db").apply_plan_quality_finalize_chain, plan, surface="review-band-gate", form_data=form_data); _bsr = compute_clinical_band_score(plan, {})
             # [P1-SLOT-DRIFT-OBSERVABLE · 2026-08-05] `slot_drift` se calculaba y se
             # TIRABA: nadie leía esa clave. El porqué y la medición que lo destapó,
             # en el docstring de `_emit_slot_drift_metric_best_effort`.

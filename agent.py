@@ -3619,7 +3619,7 @@ def swap_meal(form_data: dict, surface: str = "individual"):
     # Macro-preservante (solo añade nota a la receta), fail-open, idempotente, gateado por FOOD_SAFETY_GUARD.
     if isinstance(_out, dict):
         try:
-            food_safety_backstop_for_meal(_out)
+            food_safety_backstop_for_meal(_out, form_data=form_data, allergies=allergies)  # [P1-PLAN-LOTE-189]
         except Exception as _fs_e:
             logger.warning(f"[P2-FOOD-SAFETY-UPDATE] food-safety en swap falló (no bloquea): {type(_fs_e).__name__}: {_fs_e}")
 

@@ -418,6 +418,44 @@ def _concordar_articulo(paso: str, ini: int, valor: float) -> str:
     return paso[:m.start(2)] + nuevo + paso[m.end(2):]
 
 
+# ─────────────── [P1-PLAN-LOTE-182 · 2026-09-23] el peso aproximado de la lista ───────────────
+# Batería real (rd9 + rd10, 111 comidas): 12 con un paso que no cuadra con su lista; en 7 de 13 menciones el paso daba
+# GRAMOS de un alimento que la lista cuenta en piezas con su peso: «corta 275 g de pechuga de pollo» con «1 pechuga de
+# pollo (≈134 g)». Ese «(≈N g)» lo pone el humanizador y es el PESO con el que se miden los macros
+# (`nutrition_db.grams_from_ingredient_string` prefiere el paréntesis), pero el paso nunca se comparaba con él: V4 no
+# toma lo aproximado como contrato de MEDICIÓN y aquí no había otro peso con el que alinear el paso. Quien sigue la
+# receta cocinaba el doble de pollo del que el plan cuenta.
+# Sólo en la dirección que el contrato ya repara sin discusión (el paso pide MÁS de lo que la lista pesa: se recorta);
+# «el paso pide MENOS» sigue siendo la decisión V7a del dueño y no se toca.
+# Knob `MEALFIT_CONTRACT_APPROX_GRAMS` (True). tooltip-anchor: P1-PLAN-LOTE-182-PESO-APROXIMADO
+_HINT_APROX_RE = re.compile(r"\(\s*≈\s*(\d+(?:[.,]\d+)?)\s*(?:g|gr|gramos)\b[^)]*\)", re.IGNORECASE)
+
+
+def approx_grams_on() -> bool:
+    try:
+        from knobs import _env_bool
+        return _env_bool("MEALFIT_CONTRACT_APPROX_GRAMS", True)
+    except Exception:                                                          # noqa: BLE001
+        return True
+
+
+def _gramos_aproximados(ings: list, index: dict, lista: dict) -> dict:
+    """{(alimento, "g"): gramos} del «(≈N g)» de las líneas contables de la lista, sólo para alimentos SIN gramos
+    exactos en ella. Se suman entre líneas, como la lista."""
+    out: dict = {}
+    for ing in ings:
+        s = str(ing)
+        mh = _HINT_APROX_RE.search(s)
+        if not mh:
+            continue
+        foods = list(find_catalog_foods(_norm(_HINT_APROX_RE.sub(" ", s)), index))
+        if len(foods) != 1 or (foods[0], "g") in lista:
+            continue
+        clave = (foods[0], "g")
+        out[clave] = out.get(clave, 0.0) + float(mh.group(1).replace(",", "."))
+    return out
+
+
 def reconcile_step_quantities(meal: dict, index: dict) -> dict:
     """Reescribe en `meal["recipe"]` las cantidades que contradicen a `meal["ingredients"]`. Muta `meal` in-place.
     Devuelve el informe: {"reescritas", "familias", "sin_reparar": {"gramatical", "reparto"}, "cambios": [...]}."""
@@ -432,6 +470,9 @@ def reconcile_step_quantities(meal: dict, index: dict) -> dict:
         lista = _cantidades_lista(ings, index)
         if not lista:
             return informe
+        # [P1-PLAN-LOTE-182] el «(≈N g)» de una línea contable es el techo de los gramos del paso
+        aprox = _gramos_aproximados(ings, index, lista) if approx_grams_on() else {}
+        objetivos = {**lista, **aprox}
         # todas las menciones de todos los pasos, para saber cuántas veces aparece cada (alimento, familia)
         por_paso = []
         conteo = Counter()
@@ -439,7 +480,7 @@ def reconcile_step_quantities(meal: dict, index: dict) -> dict:
             if not isinstance(paso, str) or _es_nota(paso):
                 por_paso.append([])
                 continue
-            ms = [m for m in _menciones_paso(paso, index) if (m["food"], m["familia"]) in lista]
+            ms = [m for m in _menciones_paso(paso, index) if (m["food"], m["familia"]) in objetivos]
             por_paso.append(ms)
             for m in ms:
                 conteo[(m["food"], m["familia"])] += 1
@@ -450,7 +491,9 @@ def reconcile_step_quantities(meal: dict, index: dict) -> dict:
             # de derecha a izquierda para que los offsets anteriores sigan valiendo
             for m in sorted(ms, key=lambda x: x["ini"], reverse=True):
                 clave = (m["food"], m["familia"])
-                objetivo = lista[clave]
+                objetivo = objetivos[clave]
+                if clave in aprox and m["valor"] <= objetivo:
+                    continue                                   # [P1-PLAN-LOTE-182] contra el peso aproximado, sólo se recorta
                 if _tolera(m["familia"] if m["familia"] == "g" else "n", m["valor"], objetivo):
                     continue
                 if conteo[clave] >= 2 and m["valor"] < objetivo:

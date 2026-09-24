@@ -2658,7 +2658,7 @@ def execute_modify_single_meal(user_id: str, day_number: int, meal_type: str, ch
         # [P2-FOOD-SAFETY-UPDATE · 2026-06-24] (re-audit P2-1) Mitigación de seguridad alimentaria (huevo/
         # pescado-marisco crudos) — el chat-modify no pasa por el grafo. Macro-preservante, fail-open.
         try:
-            food_safety_backstop_for_meal(new_meal_data)
+            food_safety_backstop_for_meal(new_meal_data, form_data=form_data, allergies=_clin_allergies)  # [P1-PLAN-LOTE-189]
         except Exception as _fs_e:
             logger.warning(f"[P2-FOOD-SAFETY-UPDATE] food-safety en modify falló (no bloquea): {type(_fs_e).__name__}: {_fs_e}")
 

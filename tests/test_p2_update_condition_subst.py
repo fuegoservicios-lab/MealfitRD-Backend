@@ -71,13 +71,13 @@ def test_imported_in_update_surfaces():
 def test_wired_in_swap_after_food_safety():
     # regenerate-day (S2) hereda este call por el loop de swaps.
     assert "condition_substitution_backstop_for_meal(_out" in SWAP, "no cableado en swap_meal"
-    assert SWAP.index("food_safety_backstop_for_meal(_out)") < SWAP.index("condition_substitution_backstop_for_meal(_out"), \
+    assert SWAP.index("food_safety_backstop_for_meal(_out") < SWAP.index("condition_substitution_backstop_for_meal(_out"), \
         "la sustitución por condición debe correr tras food-safety (orden de S1)"
 
 
 def test_wired_in_chat_modify_after_food_safety():
     assert "condition_substitution_backstop_for_meal(new_meal_data" in MODIFY, "no cableado en chat-modify"
-    assert MODIFY.index("food_safety_backstop_for_meal(new_meal_data)") < MODIFY.index("condition_substitution_backstop_for_meal(new_meal_data"), \
+    assert MODIFY.index("food_safety_backstop_for_meal(new_meal_data") < MODIFY.index("condition_substitution_backstop_for_meal(new_meal_data"), \
         "la sustitución por condición debe correr tras food-safety"
     # el chat no envía el wizard form → enriquece medicalConditions desde el perfil server-side
     assert "_cond_form" in MODIFY and "medicalConditions" in MODIFY
