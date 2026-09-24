@@ -1913,6 +1913,14 @@ def _build_hybrid_shopping_list(
     # desde `knobs.py` (cero ciclo); no requiere lazy import / fallback.
     _max_cap = max(7, min(_knob_env_int("MEALFIT_PERISHABLE_CYCLE_DAYS_MAX", 30), 90))
     cycle_days = max(1, min(_knob_env_int("MEALFIT_PERISHABLE_CYCLE_DAYS", 7), _max_cap))
+    # [P1-PLAN-LOTE-215 · 2026-09-24] Compra única (sello `_compra_unica` en la lista del periodo): UNA ida al súper para
+    # todo el ciclo. Lo perecedero no sale con la cantidad «de la semana» —la proyección ya lo dejó en los días que
+    # aguanta, y la semanal es el promedio del ciclo ×7— sino con la del ciclo; y lo ya comprado no vuelve a pedirse
+    # hasta que el ciclo termine. tooltip-anchor: P1-PLAN-LOTE-215-HIBRIDA
+    _ciclo_cu = __import__("compra_unica").ciclo_de_lista(period_items if isinstance(period_items, list) else [])
+    if _ciclo_cu:
+        weekly_items = period_items
+        cycle_days = max(cycle_days, int(_ciclo_cu))
     now_utc = datetime.now(timezone.utc)
 
     def _ts_within_cycle(iso_ts: str) -> bool:
@@ -6275,10 +6283,12 @@ def apply_smart_market_units(name: str, weight_in_lbs: float, unit_str: str, raw
                 _dias_cubiertos = math.floor(cycle_days * float(_cover))
                 if _dias_cubiertos < cycle_days:
                     _dias_cubiertos = max(1, _dias_cubiertos)
+                    # [P1-PLAN-LOTE-215] en una compra única no hay «recompra» (misma cola que la nota del tope)
+                    _cola_env = ("consúmelo en esos primeros días" if _single_trip_notes_on() else "recompra")
                     result["display_qty"] = (
-                        f"{result['display_qty']} · alcanza ~{_dias_cubiertos} de {cycle_days} días — recompra")
+                        f"{result['display_qty']} · alcanza ~{_dias_cubiertos} de {cycle_days} días — {_cola_env}")
                     result["display_string"] = (
-                        f"{result['display_string']} (alcanza ~{_dias_cubiertos} de {cycle_days} días — recompra)")
+                        f"{result['display_string']} (alcanza ~{_dias_cubiertos} de {cycle_days} días — {_cola_env})")
         except (TypeError, ValueError):
             pass
     # [P1-BRAND-DEFAULT-PRESELECTED · 2026-07-06] producto del súper que la lista usa.
@@ -6418,6 +6428,19 @@ def ingredient_demand_is_fresh(plan_data):
         return None
 
 
+def _con_ciclo_de_compra_unica(plan_data, dias: list) -> list:
+    """[P1-PLAN-LOTE-215 · 2026-09-24] En un plan de COMPRA ÚNICA (ciclo > 7 días sin reposición de frescos) con menos
+    días generados que el ciclo, la lista sale del ciclo entero: los días reales + los que faltan, proyectados con la
+    misma sustitución de duraderos que recibirán sus bloques (`compra_unica.dias_de_la_compra`). Aquí, dentro del SSOT
+    de la fuente de días, para que la lista, el lado esperado del guard y su base de días lean el MISMO mes.
+    Fail-open: sin proyección, los días de siempre. tooltip-anchor: P1-PLAN-LOTE-215-SOURCE-DAYS"""
+    try:
+        import compra_unica as _cu
+        return _cu.dias_de_la_compra(plan_data, dias)
+    except Exception:
+        return dias
+
+
 def shopping_source_days(plan_data) -> list:
     """[P0-SHOPPING-CYCLE-DAYS · 2026-08-22] SSOT de "desde qué días se agrega la lista".
 
@@ -6454,12 +6477,12 @@ def shopping_source_days(plan_data) -> list:
     vivos = [d for d in vivos if isinstance(d, dict)] if isinstance(vivos, list) else []
 
     if not _knob_env_bool("MEALFIT_SHOPPING_SOURCE_INCLUDES_ARCHIVED", True):
-        return vivos
+        return _con_ciclo_de_compra_unica(plan_data, vivos)
 
     archivados = plan_data.get("_archived_days")
     archivados = [d for d in archivados if isinstance(d, dict)] if isinstance(archivados, list) else []
     if not archivados:
-        return vivos
+        return _con_ciclo_de_compra_unica(plan_data, vivos)
 
     # Filtro de ciclo: fuera los días anteriores al arranque del plan vivo.
     _cycle = plan_data.get("cycle_start_date") or plan_data.get("grocery_start_date")
@@ -6482,7 +6505,7 @@ def shopping_source_days(plan_data) -> list:
         _tope = 30
     if len(union) > _tope:
         union = union[-_tope:]
-    return union
+    return _con_ciclo_de_compra_unica(plan_data, union)
 
 
 def expected_sum_from_recipes(plan_data: dict, *, apply_yield: bool = False, multiplier: float = 1.0,
@@ -10909,7 +10932,7 @@ def _consolidate_ajo_units(units: dict) -> tuple:
     return out, demand_g
 
 
-def aggregate_and_deduct_shopping_list(plan_ingredients: list[str], consumed_ingredients: list[str] = None, categorize: bool = False, structured: bool = False, multiplier: float = 1.0, brand_prefs: dict | None = None, brand_defaults: dict | None = None, num_days: int | None = None, cycle_days: int | None = None, text_demand_g_map: dict | None = None, apply_protein_yield: bool = False):
+def aggregate_and_deduct_shopping_list(plan_ingredients: list[str], consumed_ingredients: list[str] = None, categorize: bool = False, structured: bool = False, multiplier: float = 1.0, brand_prefs: dict | None = None, brand_defaults: dict | None = None, num_days: int | None = None, cycle_days: int | None = None, text_demand_g_map: dict | None = None, apply_protein_yield: bool = False, compra_unica: bool = False):
     # [P2-PROTEIN-YIELD-CANONICAL · 2026-08-03] `apply_protein_yield`: el caller
     # (`get_shopping_list_delta`) lo activa SOLO cuando `is_new_plan=True` (lista
     # CANÓNICA, sin lado inventario) Y el knob `MEALFIT_PROTEIN_YIELD_ON_CANONICAL`
@@ -12507,6 +12530,13 @@ def aggregate_and_deduct_shopping_list(plan_ingredients: list[str], consumed_ing
     _CANNED_PROTEIN_GRAMS = 184.0  # lata estándar atún
 
     _canned_cap_latas = max(2, int(round(_person_weeks)))
+    # [P1-PLAN-LOTE-215 · 2026-09-24] En una compra ÚNICA la lata no es «el atajo del LLM»: es la proteína de los días
+    # que ya no tienen frescos (sin congelador, del 8 al 30). Con 1 lata/semana el plan real de 30 días del dueño compraba
+    # 736 g de atún para 1.266 g de recetas y otro tanto de sardinas: la compra del mes se quedaba sin proteína. Techo
+    # propio para esas listas (3 latas/persona/semana; el atún de la rueda queda en ~2/semana).
+    if compra_unica:
+        _canned_cap_latas = max(_canned_cap_latas, int(round(
+            _person_weeks * max(1.0, _knob_env_float("MEALFIT_SINGLE_TRIP_CANNED_PER_PW", 3.0)))))
     _canned_cap_g = _canned_cap_latas * _CANNED_PROTEIN_GRAMS
 
     for _name, _units in list(aggregated.items()):
@@ -12580,6 +12610,11 @@ def aggregate_and_deduct_shopping_list(plan_ingredients: list[str], consumed_ing
     _HUEVOS_PER_CARTON = 30
     # [P2-1 · 2026-05-08] `_knob_env_float` registra en `_KNOBS_REGISTRY`.
     _EGGS_PER_PERSON_PER_DAY = max(0.5, _knob_env_float("MEALFIT_EGGS_PER_PERSON_PER_DAY", 2.0))
+    # [P1-PLAN-LOTE-215] el huevo aguanta 35 días: en una compra única es proteína de TODO el ciclo, no de la semana
+    # (el plan del dueño compraba 60 huevos para 140 de recetas: «alcanza ~13 de 30 días»).
+    if compra_unica:
+        _EGGS_PER_PERSON_PER_DAY = max(_EGGS_PER_PERSON_PER_DAY,
+                                       _knob_env_float("MEALFIT_SINGLE_TRIP_EGGS_PER_DAY", 5.0))
 
     _eggs_cap_units = max(
         _HUEVOS_PER_CARTON,  # mínimo 1 cartón aunque pw sea bajo
@@ -14017,6 +14052,12 @@ def get_shopping_list_delta(
                                 and _shop_pol.get("main_cycle_days"))
     except Exception:
         _cycle_days_eff, _single_trip_eff = (int(cycle_days) if cycle_days else None), False
+    # [P1-PLAN-LOTE-215] la política de la CORRIDA también cuenta: el `result` del bloque 1 aún no lleva el sello
+    # `_plan_policy` (se estampa al persistir), y sin esto su lista no se proyectaba ni se trataba como compra única.
+    _ciclo_cu = __import__("compra_unica").ciclo_de(plan_result)
+    if _ciclo_cu:
+        _single_trip_eff = True
+        _cycle_days_eff = _cycle_days_eff or int(_ciclo_cu)
     set_single_trip_notes(_single_trip_eff)
 
     # [P1-PERSON-WEEKS-CYCLE-AWARE · 2026-07-30] `num_days` viaja al agregador porque los topes por
@@ -14025,7 +14066,7 @@ def get_shopping_list_delta(
     # apretados en un ciclo de 14 días.
     # [P1-SINGLE-TRIP-BADGES · 2026-09-05] el ciclo REAL (15/30) llega a la nota: la pasada principal no lo pasaba y
     # las notas contaban «de 7 días» en un plan quincenal (captura del dueño, plan a2b40e4e).
-    res = aggregate_and_deduct_shopping_list(all_ingredients, items_to_deduct, categorize=categorize, structured=structured, multiplier=effective_multiplier, brand_prefs=brand_prefs, brand_defaults=brand_defaults, num_days=num_days, cycle_days=_cycle_days_eff, text_demand_g_map=_tdg_para_agg, apply_protein_yield=_apply_protein_yield)  # [P1-SINGLE-TRIP-BADGES] ciclo real
+    res = aggregate_and_deduct_shopping_list(all_ingredients, items_to_deduct, categorize=categorize, structured=structured, multiplier=effective_multiplier, brand_prefs=brand_prefs, brand_defaults=brand_defaults, num_days=num_days, compra_unica=bool(_ciclo_cu), cycle_days=_cycle_days_eff, text_demand_g_map=_tdg_para_agg, apply_protein_yield=_apply_protein_yield)  # [P1-SINGLE-TRIP-BADGES] ciclo real · [P1-PLAN-LOTE-215] techos de compra única
 
     # [P1-TRIP-WINDOWED-PERISHABLES · 2026-08-02] Segunda pasada SOLO cuando hay ventana
     # de viaje: mismo agregador, mismos descuentos de inventario, misma aritmética —
@@ -14055,6 +14096,7 @@ def get_shopping_list_delta(
                 brand_prefs=brand_prefs, brand_defaults=brand_defaults,
                 num_days=len(_trip_window), cycle_days=cycle_days,
                 text_demand_g_map=_tdg_para_agg, apply_protein_yield=_apply_protein_yield,
+                compra_unica=bool(_ciclo_cu),
             )
             res = _merge_trip_windowed_result(res, _res_window, window_len=len(_trip_window))
         except Exception as _tw_exc:
@@ -14165,6 +14207,8 @@ def get_shopping_list_delta(
             f"[P1-UNIT-SYSTEM-BY-COUNTRY] proyección métrica no-op (fail-open): "
             f"{type(_us_exc).__name__}: {_us_exc}")
 
+    # [P1-PLAN-LOTE-215] la lista de una compra única lleva los días de su ciclo: la híbrida los honra
+    res = __import__("compra_unica").sellar_lista(res, plan_result)
     return res
 
 

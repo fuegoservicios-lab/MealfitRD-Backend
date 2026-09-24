@@ -80,7 +80,8 @@ def test_substitution_respects_diet_and_policy(monkeypatch):
     veg = {"shopping": SINGLE["shopping"], "diet": {"type": "vegetarian"}}
     days = _days(9, ["150 g de pechuga de pollo"])
     go._single_trip_fresh_substitute(days, db=_NoopDB(), effective=veg, diet="vegetarian")
-    assert days[-1]["meals"][0]["ingredients"] == ["150 g de garbanzos cocidos"]
+    # [P1-PLAN-LOTE-214] la proteína vegetal ROTA por día (garbanzos, lentejas): nunca atún
+    assert days[-1]["meals"][0]["ingredients"][0] in ("150 g de garbanzos cocidos", "150 g de lentejas cocidas")
     weekly = _days(9, ["2 tazas de lechuga"])
     assert go._single_trip_fresh_substitute(weekly, db=_NoopDB(), effective=_eff("never", cycle=7), diet="balanced") == 0
     assert weekly[-1]["meals"][0]["ingredients"] == ["2 tazas de lechuga"]
