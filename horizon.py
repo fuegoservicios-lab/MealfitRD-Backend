@@ -1247,7 +1247,10 @@ def single_trip_prompt_lines(effective: Optional[dict], sl: Optional[dict] = Non
         "manzana, naranja, limón), legumbres, arroz, avena y enlatados; lechuga, berros, tomate maduro, fresas, cilantro y pescado o "
         f"mariscos frescos SOLO en los primeros {FRESH_HORIZON_DAYS} días.",
         {
-            "none": f"- Sin congelador: proteína fresca solo en los primeros {FRESH_HORIZON_DAYS} días; después huevo, legumbres, atún o sardina en lata y queso.",
+            # [P1-PLAN-LOTE-218] sin congelador la proteína fresca aguanta 3 días en la nevera, no la semana
+            "none": (f"- Sin congelador: pollo, carne y pescado frescos SOLO en los primeros "
+                     f"{__import__('pantry_durability')._dias_libres_sin_congelador()} días (en la nevera aguantan 3); "
+                     "después huevo, legumbres, atún o sardina en lata y queso."),
             "full": "- Con congelador: las proteínas se compran una sola vez y se congelan; planifica descongelar la noche anterior.",
         }.get(freezer, f"- Congelador limitado: proteína fresca en los primeros {FRESH_HORIZON_DAYS} días; congelada del día 8 al 14; "
                        "después huevo, legumbres, atún o sardina en lata, bacalao y queso curado."),

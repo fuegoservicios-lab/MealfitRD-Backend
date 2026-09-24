@@ -28,7 +28,8 @@ if str(_BACKEND) not in sys.path:
 def test_la_regla_de_la_nevera_vive_en_un_solo_sitio():
     import nevera_opcional as no
     assert no.nevera_activa_de({"plan_mode": "tracking", "nevera_enabled": False}) is False
-    assert no.nevera_activa_de({"plan_mode": "plan", "nevera_enabled": False}) is True
+    # [P1-PLAN-LOTE-217 · 2026-09-24] la Nevera también se apaga en modo plan (antes: «en modo plan, activa siempre»)
+    assert no.nevera_activa_de({"plan_mode": "plan", "nevera_enabled": False}) is False
     assert no.nevera_activa_de({"plan_mode": "tracking", "nevera_enabled": None}) is True
 
 

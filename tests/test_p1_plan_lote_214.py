@@ -98,9 +98,10 @@ def test_viveres_y_pan_que_no_llegan_al_fin_del_ciclo(monkeypatch):
 
 def test_idempotente_y_la_semana_de_frescos_no_se_toca(monkeypatch):
     _sin_truth_up(monkeypatch)
-    days = _plan({3: ["150 g de pechuga de pollo"], 15: ["300 ml de leche descremada"]})
+    # [P1-PLAN-LOTE-218] sin congelador, los días 1-3 (índices 0-2) no se tocan
+    days = _plan({2: ["150 g de pechuga de pollo"], 15: ["300 ml de leche descremada"]})
     go._single_trip_fresh_substitute(days, db=_NoopDB(), effective=SINGLE, diet="balanced")
-    assert days[3]["meals"][0]["ingredients"] == ["150 g de pechuga de pollo"]
+    assert days[2]["meals"][0]["ingredients"] == ["150 g de pechuga de pollo"]
     assert days[15]["meals"][0]["ingredients"] == ["300 ml de leche UHT"]
     assert go._single_trip_fresh_substitute(days, db=_NoopDB(), effective=SINGLE, diet="balanced") == 0
 

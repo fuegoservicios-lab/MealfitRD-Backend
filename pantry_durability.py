@@ -218,18 +218,35 @@ def template_fits(days_fresh_min: Optional[int], days_with_freezer_min: Optional
     return bool(allow_frozen and days_with_freezer_min is not None and days_with_freezer_min >= int(need_days))
 
 
+def _dias_libres_sin_congelador() -> int:
+    """[P1-PLAN-LOTE-218] Días del ciclo (desde el 0) sin exigencia cuando el usuario NO congela: los de la proteína
+    fresca (3). Knob `MEALFIT_SINGLE_TRIP_NO_FREEZER_FREE_DAYS`; 7 = la semana de frescos entera (conducta previa).
+    tooltip-anchor: MEALFIT_SINGLE_TRIP_NO_FREEZER_FREE_DAYS"""
+    try:
+        from knobs import _env_int
+        return _env_int("MEALFIT_SINGLE_TRIP_NO_FREEZER_FREE_DAYS", 3, validator=lambda v: 1 <= v <= FRESH_HORIZON_DAYS)
+    except Exception:
+        return 3
+
+
 def single_trip_requirements(effective: Optional[dict], day_index: Optional[int]) -> Optional[dict]:
     """Exigencia de durabilidad para un día (0-based) de un ciclo de UNA sola compra; None si el usuario repone
-    frescos, el ciclo es semanal o el día cae en la semana de frescos."""
+    frescos, el ciclo es semanal o el día cae en la semana de frescos.
+
+    [P1-PLAN-LOTE-218 · 2026-09-24] …salvo SIN congelador: la semana de frescos era también la del pollo y el pescado,
+    que en la nevera aguantan 3 días (la misma tabla de este módulo). Batería real del 24-sep (30 días, sin congelador):
+    3 lb de pechuga y 1,4 lb de tilapia en la compra del día 1 para cocinar hasta el día 7. Sin congelador la exigencia
+    empieza el día 4 (índice 3); lo que aguanta más —hojas 7, huevo 35— sigue pasando por su propio plazo, así que la
+    primera semana conserva sus frescos y solo pierde lo que se echaría a perder."""
     try:
         shopping = (effective or {}).get("shopping") or {}
         cycle = int(shopping.get("main_cycle_days") or 0)
         if cycle <= FRESH_HORIZON_DAYS or shopping.get("fresh_topup_days") or day_index is None:
             return None
         d = int(day_index)
-        if d < FRESH_HORIZON_DAYS:
-            return None
         window = freeze_window_days(shopping.get("freezer_mode"), cycle)
+        if d < (FRESH_HORIZON_DAYS if window > 0 else _dias_libres_sin_congelador()):
+            return None
         return {"need_days": d + 1, "allow_frozen": d < window, "freezer_mode": _norm(shopping.get("freezer_mode")) or "limited",
                 "freeze_window_days": window}
     except Exception:

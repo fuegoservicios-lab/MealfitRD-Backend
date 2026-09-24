@@ -41,7 +41,10 @@ _ESPECIA = (r"(?:or[eé]gano|canela|comino|pimienta|nuez moscada|c[uú]rcuma|pap
 _ESPECIA_SIN_UNIDAD = re.compile(rf"^\s*{_LEAD}\s+(?!de\b)({_ESPECIA}\b.*)$", re.IGNORECASE)
 
 # Menos de 1 g de una semilla o un polvo: «0.06 g de semillas de chía» → «1 pizca de semillas de chía».
-_MIGAJA = re.compile(r"^\s*0(?:[.,]\d+)?\s*(?:g|gr|gramos)\s+de\s+(.+)$", re.IGNORECASE)
+# [P1-PLAN-LOTE-219] también con fracción unicode: «⅔ g de semillas de girasol» (batería del 24-sep)
+_MIGAJA = re.compile(r"^\s*(?:0(?:[.,]\d+)?|[½¼¾⅓⅔⅛])\s*(?:g|gr|gramos)\s+de\s+(.+)$", re.IGNORECASE)
+# [P1-PLAN-LOTE-219] lo que se sirve a cucharadas: «1.53 g de yogurt natural» → «1 cdta de yogurt natural»
+_CUCHARABLE = re.compile(r"^(?:yogur|yogurt|leche|crema|queso crema|miel|mantequilla)\b", re.IGNORECASE)
 _PIZCABLE = re.compile(rf"\b(?:semillas?|ch[ií]a|linaza|ajonjol[ií]|s[eé]samo|cacao|sal|{_ESPECIA})\b", re.IGNORECASE)
 # [P1-PLAN-LOTE-203 · 2026-09-24] Entre 1 y 2,5 g con decimales —la zona que el cuantizador deja sin tocar («ya es pesable
 # en báscula de precisión»)—: «1.21 g de Ajo» (plan canario del dueño), «1.23 g de semillas de linaza». Nadie pesa 1,21 g
@@ -97,6 +100,8 @@ def pulir_linea(s: str) -> str:
             out = f"¼ cdta de {nombre}"                  # la sal pesa ~6 g la cucharadita
         elif _PIZCABLE.search(re.sub(r"\bsin\s+sal\b", "", nombre, flags=re.IGNORECASE)):   # «maní … sin sal» no es sal
             out = f"½ cdta de {nombre}"
+        elif _CUCHARABLE.match(nombre):                                        # [P1-PLAN-LOTE-219]
+            out = f"1 cdta de {nombre}"
     if _MEDIA_PIZCA.match(out):
         out = _MEDIA_PIZCA.sub("1 pizca", out, count=1)
     m = _ESPECIA_SIN_UNIDAD.match(out)

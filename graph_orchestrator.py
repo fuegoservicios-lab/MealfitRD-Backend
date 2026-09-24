@@ -32108,6 +32108,13 @@ _REALISM_VOLUME_VEG_TOKENS_FALLBACK_SET = frozenset(_REALISM_VOLUME_VEG_TOKENS_F
 # superset y no debe usarse para esa aserción histórica).
 _REALISM_VOLUME_VEG_TOKENS = _REALISM_VOLUME_VEG_TOKENS_FALLBACK
 REALISM_VEG_VOLUME_CAP_G = _env_int("MEALFIT_REALISM_VEG_VOLUME_CAP_G", 250, lambda v: 100 <= v <= 500)
+# [P1-PLAN-LOTE-219 · 2026-09-24] Maíz dulce en grano: el solver lo infla como base de carbohidrato en los menús SIN
+# cocción («365 g de maíz dulce» en una cena, «415 g» en otra; 10 de 31 líneas de las baterías guardadas pasaban de
+# 250 g, todas en perfiles de muchas calorías; en una compra única de 30 días eran 29 latas). No es acuoso (100 kcal/
+# 100 g), así que el techo de vegetales de volumen no lo veía. Techo servible: una lata escurrida por comida; el cierre
+# de carbohidratos posterior reparte en otra base. Knob `MEALFIT_REALISM_SWEET_CORN_CAP_G`.
+REALISM_SWEET_CORN_CAP_G = _env_int("MEALFIT_REALISM_SWEET_CORN_CAP_G", 250, lambda v: 120 <= v <= 600)
+_REALISM_SWEET_CORN_TOKENS = ("maiz dulce", "granos de maiz", "maiz en grano", "maiz desgranado")
 
 # [P2-VEG-VOLUME-TOKENS-2 · 2026-08-01] (5º incidente en 4 semanas: "470 g de tayota" ×2, plan
 # 8d3f246a, UNA HORA después de parchear a mano los 4 tokens de arriba — 19-22.5 kcal/100g, el
@@ -32168,7 +32175,10 @@ def _watery_veg_tokens() -> frozenset:
         from shopping_calculator import get_master_ingredients
         from constants import strip_accents as _sa_wv
         for row in get_master_ingredients() or []:
-            if row.get("category") != "Vegetales":
+            # [P1-PLAN-LOTE-219] también los VÍVERES acuosos: la auyama (30,9 kcal/100 g) es el mismo relleno barato que
+            # el solver infla («470 g de auyama» en una cena, batería del 24-sep) y quedaba fuera por su categoría. El
+            # umbral de kcal deja fuera a los víveres de verdad (batata 86, yuca 160, plátano 122).
+            if row.get("category") not in ("Vegetales", "Víveres"):
                 continue
             try:
                 kcal = float(row.get("kcal_per_100g"))
@@ -32616,6 +32626,9 @@ def _single_trip_fresh_substitute(days, db=None, *, effective=None, diet=None, d
             req = single_trip_requirements(effective, i)
             if not req:
                 continue
+            # [P1-PLAN-LOTE-216] lo que el día ya lleva va al final de la rueda
+            _presentes_fs = _cu_fs.duraderos_del_dia(
+                str(x) for _m in (d.get("meals") or []) if isinstance(_m, dict) for x in (_m.get("ingredients") or []))
             for mi, m in enumerate(d.get("meals") or []):
                 if not isinstance(m, dict) or not isinstance(m.get("ingredients"), list):
                     continue
@@ -32626,10 +32639,11 @@ def _single_trip_fresh_substitute(days, db=None, *, effective=None, diet=None, d
                     _r_fs = _cu_fs.sustituir_linea(text, i, req, vegetal=_veg, vegano=(_dieta_fs == "vegan"),
                                                    alergias=_alergias_fs, dieta=_dieta_fs,
                                                    contexto=contexto if isinstance(contexto, dict) else None,
-                                                   semilla=i + mi)
+                                                   semilla=i + mi, evitar=_presentes_fs)
                     if not _r_fs:
                         continue
                     new_line, sub, hit_tok = _r_fs
+                    _presentes_fs.add(sub)
                     ings[idx] = new_line
                     if isinstance(raw, list) and idx < len(raw):
                         raw[idx] = new_line
@@ -32904,6 +32918,10 @@ def _cap_unrealistic_portions(days, db=None, *, count_caps=None) -> int:
                         elif (cur_g > float(REALISM_VEG_VOLUME_CAP_G)
                               and any(_re.search(r"\b" + t, il) for t in _watery_tokens)):
                             factor = float(REALISM_VEG_VOLUME_CAP_G) / cur_g
+                        # [P1-PLAN-LOTE-219] 1.65) maíz dulce en grano sobre una lata escurrida por comida
+                        elif (cur_g > float(REALISM_SWEET_CORN_CAP_G)
+                              and any(t in _sa(il) for t in _REALISM_SWEET_CORN_TOKENS)):
+                            factor = float(REALISM_SWEET_CORN_CAP_G) / cur_g
                         # [P2-SNACK-CHEESE-CAP · 2026-07-06] 1.7) queso en MERIENDA sobre el techo
                         # servible ("210 g de queso" con ½ lechosa). Yogurt exento.
                         elif (cur_g > float(SNACK_CHEESE_CAP_G)

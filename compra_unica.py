@@ -50,6 +50,20 @@ PROTEINA_TABLA = "atun en agua"          # el sustituto genérico de la proteín
 PROTEINA_VEGETAL = "garbanzos cocidos"
 _ROTACION_OMNIVORA = ("atun en agua", "sardinas en lata", "garbanzos cocidos")
 _ROTACION_VEGETAL = ("garbanzos cocidos", "lentejas cocidas")
+# [P1-PLAN-LOTE-216] cómo se reconoce en una línea que el día YA lleva ese duradero
+_CLAVE_ROTACION = {"atun en agua": "atun", "sardinas en lata": "sardina", "garbanzos cocidos": "garbanzo",
+                   "lentejas cocidas": "lenteja"}
+
+
+def duraderos_del_dia(lineas) -> set:
+    """Los duraderos de la rueda que ya aparecen en estas líneas (para no repetirlos el mismo día)."""
+    presentes = set()
+    for t in lineas or ():
+        low = _sa(t)
+        for sub, clave in _CLAVE_ROTACION.items():
+            if clave in low:
+                presentes.add(sub)
+    return presentes
 
 # (tokens, duradero). Primer match gana; los tokens se buscan como palabra (singular/plural) en la línea sin acentos.
 # Era `graph_orchestrator._FRESH_SUBSTITUTES` (P1-STEP14-SHOPPING-COOKING); allí queda un alias.
@@ -139,14 +153,17 @@ def es_seguro(nombre: str, alergias=None, *, dieta=None, contexto=None) -> bool:
         return False
 
 
-def sustituto_seguro(sub: str, semilla: int, vegetal: bool, alergias=None, *, dieta=None, contexto=None) -> Optional[str]:
+def sustituto_seguro(sub: str, semilla: int, vegetal: bool, alergias=None, *, dieta=None, contexto=None,
+                     evitar=()) -> Optional[str]:
     """El duradero para `sub`: la proteína rota por `semilla` (día absoluto + comida) y salta lo que choca con una
-    alergia o la dieta; el resto de la tabla solo se comprueba. None si ninguno es seguro."""
+    alergia o la dieta; lo que el día ya lleva (`evitar`) va al final de la rueda. El resto de la tabla solo se
+    comprueba. None si ninguno es seguro."""
     if not activo():
         return PROTEINA_VEGETAL if (sub == PROTEINA_TABLA and vegetal) else sub
     if sub == PROTEINA_TABLA:
         rot = _ROTACION_VEGETAL if vegetal else _ROTACION_OMNIVORA
         candidatos = [rot[(int(semilla) + k) % len(rot)] for k in range(len(rot))]
+        candidatos = [c for c in candidatos if c not in evitar] + [c for c in candidatos if c in evitar]
     else:
         candidatos = [sub]
     for c in candidatos:
@@ -177,7 +194,7 @@ def _aguanta(texto: str, dia_abs: int, req: dict) -> bool:
 
 
 def sustituir_linea(texto, dia_abs: int, req: Optional[dict], *, vegetal: bool = False, vegano: bool = False,
-                    alergias=None, dieta=None, contexto=None, semilla: Optional[int] = None):
+                    alergias=None, dieta=None, contexto=None, semilla: Optional[int] = None, evitar=()):
     """(línea nueva, sustituto, token que casó) si `texto` no aguanta hasta el día `dia_abs` (0-based) de la compra
     única y tiene un duradero seguro; None si aguanta, no tiene equivalente o ninguno es seguro.
     tooltip-anchor: P1-PLAN-LOTE-214-SUSTITUIR-LINEA"""
@@ -202,7 +219,7 @@ def sustituir_linea(texto, dia_abs: int, req: Optional[dict], *, vegetal: bool =
     if sub == "queso parmesano" and vegano:
         sub = PROTEINA_VEGETAL
     sub = sustituto_seguro(sub, int(dia_abs if semilla is None else semilla), vegetal, alergias,
-                           dieta=dieta, contexto=contexto)
+                           dieta=dieta, contexto=contexto, evitar=evitar)
     if not sub:
         return None
     nueva = f"{cantidad_de(text)}{sub}"
@@ -326,6 +343,7 @@ def _proyectar(reales: list, ciclo: int, eff: dict) -> list:
         base = reales[j % n]
         req = single_trip_requirements(eff, j)
         meals = []
+        presentes = duraderos_del_dia(t for m in (base.get("meals") or []) if isinstance(m, dict) for t in _lineas(m))
         for mi, m in enumerate(base.get("meals") or []):
             if not isinstance(m, dict):
                 continue
@@ -333,10 +351,11 @@ def _proyectar(reales: list, ciclo: int, eff: dict) -> list:
             for t in _lineas(m):
                 if req:
                     r = sustituir_linea(t, j, req, vegetal=vegetal, vegano=vegano, alergias=alergias,
-                                        dieta=dieta, semilla=rueda)
+                                        dieta=dieta, semilla=rueda, evitar=presentes)
                     if r:
                         t = r[0]
                         cambios += 1
+                        presentes.add(r[1])
                         if r[1] in _ROTACION_OMNIVORA or r[1] in _ROTACION_VEGETAL:
                             rueda += 1
                     elif not _aguanta(t, j, req):
@@ -373,3 +392,86 @@ def ciclo_de_lista(items) -> int:
         return max([int(i.get("_compra_unica") or 0) for i in (items or []) if isinstance(i, dict)] or [0])
     except Exception:
         return 0
+
+
+# ─────────────────────────────────────────────────────────────── 216 · la Nevera virtual
+# [P1-PLAN-LOTE-216 · 2026-09-24] La lista del día 1 alcanza para el ciclo (215), pero nada obligaba a los bloques
+# siguientes a COCINAR con lo comprado: sin Nevera (vacía porque el usuario no marcó «Ya compré», o apagada) el bloque
+# se generaba libre, podía traer alimentos que no se compraron y la lista del ciclo crecía a mitad de mes. En una compra
+# única, lo comprado ES la Nevera: el bloque 2+ recibe como Nevera la compra del ciclo (los nombres de su lista, sin
+# cantidades) y el revisor la exige como a cualquier Nevera (espejo `nevera_exigida.lista`), así que el sembrador
+# (regla b) y los cerradores (lote 199) eligen de ella. Con la Nevera real en uso (con alimentos), manda la real.
+# Sin cantidades no hay reservas que medir: las guardas de Nevera la eximen (`_pantry_gate_waiver_reason`).
+# Knob `MEALFIT_SINGLE_TRIP_VIRTUAL_PANTRY`.
+
+_SQL_LISTAS_DEL_CICLO = """
+SELECT mp.plan_data->'aggregated_shopping_list' AS activa,
+       mp.plan_data->'aggregated_shopping_list_monthly' AS mensual,
+       mp.plan_data->'aggregated_shopping_list_biweekly' AS quincenal
+  FROM plan_chunk_queue q JOIN meal_plans mp ON mp.id = q.meal_plan_id
+ WHERE q.id = %s AND mp.user_id = %s
+"""
+
+
+def nevera_virtual_activa() -> bool:
+    """tooltip-anchor: MEALFIT_SINGLE_TRIP_VIRTUAL_PANTRY"""
+    try:
+        from knobs import _env_bool
+        return _env_bool("MEALFIT_SINGLE_TRIP_VIRTUAL_PANTRY", True)
+    except Exception:
+        return True
+
+
+def _lista_del_ciclo(fila: dict, ciclo: int) -> list:
+    """La lista de la compra del ciclo: la que lleva el sello `_compra_unica` de ESTE ciclo; si ninguna, la del
+    periodo que le corresponde (30 → mensual, 15 → quincenal)."""
+    candidatas = [fila.get("activa"), fila.get("mensual"), fila.get("quincenal")]
+    for lista in candidatas:
+        if isinstance(lista, list) and ciclo_de_lista(lista) == int(ciclo):
+            return lista
+    lista = fila.get("mensual") if int(ciclo) >= 30 else fila.get("quincenal")
+    return lista if isinstance(lista, list) else []
+
+
+def nevera_virtual(form_data, task_id=None, user_id=None, consultar=None):
+    """El bloque 2+ de una compra única sin Nevera real recibe como Nevera la compra del ciclo. Muta y devuelve
+    `form_data`; fail-open (sin cambios) ante cualquier duda. tooltip-anchor: P1-PLAN-LOTE-216-NEVERA-VIRTUAL"""
+    try:
+        if not nevera_virtual_activa() or not isinstance(form_data, dict) or form_data.get("_pantry_paused"):
+            return form_data
+        eff = form_data.get("_plan_policy_effective")
+        from horizon import single_trip_policy
+        if not single_trip_policy(eff):
+            return form_data
+        if int(form_data.get("_days_offset") or 0) <= 0:
+            return form_data
+        real = [x for x in (form_data.get("current_pantry_ingredients") or []) if x]
+        if real and not form_data.get("_nevera_apagada"):
+            return form_data            # la Nevera real manda
+        if not task_id or not user_id or user_id == "guest":
+            return form_data
+        if consultar is None:
+            from db import execute_sql_query as consultar
+        fila = consultar(_SQL_LISTAS_DEL_CICLO, (task_id, user_id), fetch_one=True) or {}
+        ciclo = int(((eff or {}).get("shopping") or {}).get("main_cycle_days") or 0)
+        nombres, vistos = [], set()
+        for it in _lista_del_ciclo(fila, ciclo):
+            if not isinstance(it, dict) or str(it.get("category") or "").startswith("🚨"):
+                continue
+            n = str(it.get("name") or "").strip()
+            k = _sa(n)
+            if n and k not in vistos:
+                vistos.add(k)
+                nombres.append(n)
+        if len(nombres) < 4:
+            return form_data
+        form_data["current_pantry_ingredients"] = nombres
+        form_data["_fresh_pantry_source"] = "compra_unica_virtual"
+        form_data["_nevera_virtual"] = True
+        form_data.pop("_pantry_advisory_only", None)   # la compra del ciclo SÍ se exige: es lo que hay en casa
+        logger.info(f"🧳 [P1-PLAN-LOTE-216] compra única sin Nevera real (user {str(user_id)[:8]}, bloque desde el día "
+                    f"{int(form_data.get('_days_offset') or 0) + 1}): el bloque cocina con la compra del ciclo "
+                    f"({len(nombres)} alimentos).")
+    except Exception as e:
+        logger.warning(f"[P1-PLAN-LOTE-216] Nevera virtual no-op (fail-open): {type(e).__name__}: {e}")
+    return form_data

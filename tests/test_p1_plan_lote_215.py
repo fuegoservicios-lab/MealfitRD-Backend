@@ -70,7 +70,8 @@ def test_proyecta_el_ciclo_entero_con_duraderos_despues_de_la_semana_de_frescos(
     assert dias[:3] == p["days"], "los días reales van primero y sin tocar"
     semana = _todas(dias[3:7])
     resto = _todas(dias[7:])
-    assert any("pechuga de pollo" in x for x in semana) and any("fresas" in x for x in semana), "lo fresco, en su semana"
+    # [P1-PLAN-LOTE-218] sin congelador el pollo no pasa del día 3; las fresas (7 días) sí llegan a su semana
+    assert not any("pechuga de pollo" in x for x in semana) and any("fresas" in x for x in semana), "lo fresco, en su plazo"
     for fresco in ("pollo", "pescado", "lechosa", "fresas"):
         assert not any(fresco in cu._sa(x) for x in resto), (fresco, [x for x in resto if fresco in cu._sa(x)])
     # el plátano verde aguanta 10 días; después, batata
@@ -135,10 +136,10 @@ def test_la_lista_del_ciclo_es_la_suma_del_mes_y_no_el_x10():
     por_nombre = {cu._sa(i.get("name")): i for i in mes if isinstance(i, dict)}
     assert any("atun" in n for n in por_nombre) and any("sardina" in n for n in por_nombre), sorted(por_nombre)
     assert all(i.get("_compra_unica") == 30 for i in mes if isinstance(i, dict)), "sello del ciclo en cada ítem"
-    # El pollo solo se cocina en la semana de frescos (días 1, 4 y 7 → 3 × 200 g), no «3 días × 10» = 10 × 200 g.
+    # El pollo solo se cocina mientras aguanta (sin congelador, 3 días: el día 1 real → 200 g), no «3 días × 10».
     esperado = sc.expected_sum_from_recipes(p)
     g_pollo = sum((u.get("g") or 0) for n, u in esperado.items() if "pollo" in cu._sa(n))
-    assert g_pollo == pytest.approx(600), esperado
+    assert g_pollo == pytest.approx(200), esperado
 
 
 def test_la_hibrida_no_parte_una_compra_unica_en_semanas():
