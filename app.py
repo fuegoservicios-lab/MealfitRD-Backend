@@ -412,7 +412,10 @@ _PROCESS_START_ISO = datetime.now(timezone.utc).isoformat()
 # unas veces aviso y otras CRÍTICO (rd20). Nota clínica de cómo comerlo, donde el revisor lee.
 # [P1-PLAN-LOTE-196 · 2026-09-24] (solo backend) causa nº 1 de reintentos (4/4 corridas de alergia a lácteos): el huevo
 # repetido el mismo día. Sin lácteos el huevo cuenta como básico → exención «técnica distinta» ya aprobada (Decisión B).
-_LAST_KNOWN_PFIX = "P1-PLAN-LOTE-196 · 2026-09-24"
+# [P1-PLAN-LOTE-197 · 2026-09-24] (solo backend) rd21: el panel le decía a un alérgico a lácteos «Refuerza con lácteos
+# (yogur/queso)» y la directiva del PROMPT pedía «Calcio → lácteos», «Zinc → mariscos». Panel, suplemento y directiva
+# filtran con el escáner SSOT (alergias y rechazos) y ofrecen alternativas.
+_LAST_KNOWN_PFIX = "P1-PLAN-LOTE-197 · 2026-09-24"
 
 # [P1-SENTRY-SAMPLE-COST · 2026-05-12] Sentry sampling driven from env vars
 # con default seguro 0.1 (10%). Pre-fix tenía `traces_sample_rate=1.0` y

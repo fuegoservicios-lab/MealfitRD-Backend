@@ -341,7 +341,7 @@ def build_micronutrient_report(plan: dict, db, sex: str | None = "F",
                                conditions=None, daily_kcal: float | None = None,
                                fiber_per_1000kcal: float = _DM2_FIBER_PER_1000KCAL,
                                age: int | None = None, pregnant: bool = False,
-                               k_elevating_med: bool = False) -> dict:
+                               k_elevating_med: bool = False, allergies=None) -> dict:  # [P1-PLAN-LOTE-197] allergies
     """Reporte advisory: panel de micros diarios vs DRI/WHO con status + nota accionable.
     status ∈ {ok, bajo, alto, estimado_bajo, estimado_alto}. Floors incumplidos con cobertura
     parcial → 'estimado_bajo' (incierto, puede subir con lo no resuelto). Techos en apariencia
@@ -526,7 +526,7 @@ def build_micronutrient_report(plan: dict, db, sex: str | None = "F",
                 elif key == "fiber_g" and _has_renal(conditions):
                     entry["nota"] = _FIBER_RENAL_NOTE   # [P2-RENAL-FIBER-NOTE] no empujar leguminosas en ERC
                 else:
-                    entry["nota"] = _SUPPLEMENT_NOTE.get(key, "")
+                    entry["nota"] = __import__("micros_seguros").nota_panel(key, _SUPPLEMENT_NOTE.get(key, ""), allergies)  # [P1-PLAN-LOTE-197]
                 # [P3-FLOOR-ESTIMADO-CAVEAT · 2026-07-01] (audit v2 micros GAP-6, batch P3-AUDIT-V2-
                 # RESIDUALS) Asimetría de honestidad: la rama ceiling tiene nota dedicada para lo
                 # INCIERTO (_CEILING_ESTIMADO_NOTE) pero el piso mostraba la MISMA nota de "come más X"
@@ -744,7 +744,7 @@ _SUPPLEMENT_RENAL_SUPPRESS = frozenset({"magnesium_mg"})
 
 
 def build_supplement_recommendations(report: dict, sex: str | None = "F", age: int | None = None,
-                                     pregnant: bool = False, conditions=None) -> dict:
+                                     pregnant: bool = False, conditions=None, allergies=None) -> dict:  # [P1-PLAN-LOTE-197]
     """[P3-SUPPLEMENT-ADVICE · 2026-06-13] A partir de los gaps FLOOR del reporte de
     micronutrientes (vit D/calcio/hierro/B12 bajo), construye recomendaciones de
     suplementación ACCIONABLES (suplemento + dosis sex-aware + alternativa alimentaria +
@@ -789,7 +789,7 @@ def build_supplement_recommendations(report: dict, sex: str | None = "F", age: i
             "unidad": g.get("unidad"),
             "suplemento": tpl["nombre"],
             "dosis_sugerida": dose,
-            "primero_alimentos": tpl["alimentos"],
+            "primero_alimentos": __import__("micros_seguros").alimentos_seguros(key, tpl["alimentos"], allergies),  # [P1-PLAN-LOTE-197]
             "precaucion": tpl["precaucion"],
         })
     return {
@@ -809,7 +809,7 @@ def build_micronutrient_targets_directive(sex: str | None = "female", age: int |
                                           pregnant: bool = False,
                                           k_elevating_med: bool = False,
                                           goal: str | None = None,
-                                          diet: str | None = None) -> str:
+                                          diet: str | None = None, allergies=None) -> str:  # [P1-PLAN-LOTE-197]
     """[P1-MICRONUTRIENT-STEER · 2026-06-24] Directiva CUANTITATIVA de micronutrientes para el
     prompt del day-generator. Convierte la guía HEURÍSTICA histórica ("usa legumbres para fibra/
     hierro") en PISOS NUMÉRICOS accionables para los micros ALCANZABLES con alimentos enteros
@@ -912,6 +912,6 @@ def build_micronutrient_targets_directive(sex: str | None = "female", age: int |
                          "espinaca, legumbres y naranja.")
         lines.append("La vitamina D casi nunca se alcanza solo con alimentos: NO la fuerces (se cubre "
                      "con un consejo de suplemento aparte).")
-        return "\n".join(lines)
+        return __import__("micros_seguros").directiva_segura("\n".join(lines), allergies)  # [P1-PLAN-LOTE-197]
     except Exception:
         return ""

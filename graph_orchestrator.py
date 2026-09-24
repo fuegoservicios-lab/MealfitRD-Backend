@@ -3329,7 +3329,7 @@ def _build_shared_context(state: PlanState, force_rebuild: bool = False) -> dict
                 conditions=_condition_strings(form_data), daily_kcal=_mn_kcal,
                 pregnant=_mn_preg, k_elevating_med=_mn_kelev,
                 goal=form_data.get("mainGoal"),  # [P1-MICRONUTRIENT-STEER-PROTEIN-AWARE] gain_muscle → proteína manda
-                diet=form_data.get("dietType"))  # [P1-DIET-BLIND-DIRECTIVES] PRIORIDAD sin "fuente animal" en veg*
+                diet=form_data.get("dietType"), allergies=__import__("constants").alergias_y_rechazos(form_data))  # [P1-DIET-BLIND-DIRECTIVES] PRIORIDAD sin "fuente animal" en veg* · [P1-PLAN-LOTE-197]
         except Exception:
             micronutrient_targets_context = ""
 
@@ -15309,7 +15309,7 @@ def recompute_micronutrient_report_for_plan(plan: dict, form_data: dict, db=None
             plan, db, sex=_sex,
             conditions=_condition_strings(_fd), daily_kcal=_daily_kcal,
             fiber_per_1000kcal=DM2_FIBER_G_PER_1000KCAL,
-            age=_fd.get("age"), pregnant=_pregnant, k_elevating_med=_k_elev,
+            age=_fd.get("age"), pregnant=_pregnant, k_elevating_med=_k_elev, allergies=__import__("constants").alergias_y_rechazos(_fd),  # [P1-PLAN-LOTE-197]
         )
         plan["micronutrient_report"] = _mn
         # [P2-DELIVERED-MACROS · 2026-07-01] este hook corre en las 3 superficies de update → los campos
@@ -15320,7 +15320,7 @@ def recompute_micronutrient_report_for_plan(plan: dict, form_data: dict, db=None
                 from micronutrients import build_supplement_recommendations
                 _supp = build_supplement_recommendations(
                     _mn, sex=_sex, age=_fd.get("age"), pregnant=_pregnant,
-                    conditions=_condition_strings(_fd))  # [P1-SUPPLEMENT-CONDITION-AWARE] suprime Mg en ERC
+                    conditions=_condition_strings(_fd), allergies=__import__("constants").alergias_y_rechazos(_fd))  # [P1-SUPPLEMENT-CONDITION-AWARE] suprime Mg en ERC · [P1-PLAN-LOTE-197]
                 if _supp.get("count"):
                     plan["micronutrient_supplement_advice"] = _supp
             except Exception:
@@ -15507,7 +15507,7 @@ def _close_micro_gaps_for_plan(plan: dict, form_data: dict, db=None, pantry_stri
         _report = build_micronutrient_report(
             plan, db, sex=_sex, conditions=_conditions, daily_kcal=_daily_kcal,
             fiber_per_1000kcal=DM2_FIBER_G_PER_1000KCAL,
-            age=_fd.get("age"), pregnant=_pregnant, k_elevating_med=_k_elev,
+            age=_fd.get("age"), pregnant=_pregnant, k_elevating_med=_k_elev, allergies=__import__("constants").alergias_y_rechazos(_fd),  # [P1-PLAN-LOTE-197]
         )
         floors = {}
         _estimado_bajo_skipped = 0
@@ -20008,7 +20008,7 @@ def build_update_micronutrient_directive(form_data: dict) -> str:
             conditions=_condition_strings(form_data), daily_kcal=_kcal,
             pregnant=_preg, k_elevating_med=_kelev,
             goal=form_data.get("mainGoal") or form_data.get("goal"),
-            diet=form_data.get("dietType"))  # [P1-DIET-BLIND-DIRECTIVES]
+            diet=form_data.get("dietType"), allergies=__import__("constants").alergias_y_rechazos(form_data))  # [P1-DIET-BLIND-DIRECTIVES] · [P1-PLAN-LOTE-197]
     except Exception as _ms_e:
         logger.debug(f"[P2-UPDATE-MICRO-STEER] directiva falló (no bloquea): {type(_ms_e).__name__}: {_ms_e}")
         return ""
@@ -25394,7 +25394,7 @@ def _apply_deterministic_clinical_layer(plan: dict, form_data: dict, nutrition: 
                 fiber_per_1000kcal=DM2_FIBER_G_PER_1000KCAL,
                 age=form_data.get("age"),   # [P2-DRI-AGE-AWARE · 2026-06-15] (G15) hierro/calcio por edad
                 pregnant=_pregnant,          # [P2-DRI-PREGNANCY-AWARE · 2026-06-19] (P2-4) hierro 27/folato/B12
-                k_elevating_med=_k_elev_med) # [P1-POTASSIUM-PANEL-MED-AWARE · 2026-06-19] (P1-1) no maximizar K con fármaco-K
+                k_elevating_med=_k_elev_med, allergies=__import__("constants").alergias_y_rechazos(form_data)) # [P1-POTASSIUM-PANEL-MED-AWARE · 2026-06-19] (P1-1) no maximizar K con fármaco-K · [P1-PLAN-LOTE-197]
             plan["micronutrient_report"] = _mn
             _ngaps = len(_mn.get("gaps", []))
             logger.info(f"🧪 [P3-MICRONUTRIENTS] Panel de micros computado "
@@ -25403,7 +25403,7 @@ def _apply_deterministic_clinical_layer(plan: dict, form_data: dict, nutrition: 
                 from micronutrients import build_supplement_recommendations
                 _supp = build_supplement_recommendations(_mn, sex=_sex, age=form_data.get("age"),
                                                          pregnant=_pregnant,  # [P2-IRON-DOSE-AGE-AWARE / P2-SUPPLEMENT-PREGNANCY-AWARE]
-                                                         conditions=_condition_strings(form_data))  # [P1-SUPPLEMENT-CONDITION-AWARE] suprime Mg en ERC
+                                                         conditions=_condition_strings(form_data), allergies=__import__("constants").alergias_y_rechazos(form_data))  # [P1-SUPPLEMENT-CONDITION-AWARE] suprime Mg en ERC · [P1-PLAN-LOTE-197]
                 if _supp.get("count"):
                     plan["micronutrient_supplement_advice"] = _supp
                     logger.info(f"💊 [P3-SUPPLEMENT-ADVICE] {_supp['count']} recomendación(es) de "
