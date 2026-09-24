@@ -5,9 +5,11 @@ El encargo del dueño: «cuando el generador de planes esté desactivado, que la
 Configuración para desactivarla: hay gente que solo quiere el contador y el agente». Y sobre el estado inicial:
 «encendida como hoy, pero si en 48 horas no se usa, igual que con la hidratación, que se desactive sola».
 
-LA REGLA (una sola, aquí): `nevera_activa = NOT (plan_mode = 'tracking' AND nevera_enabled IS FALSE)`.
-  · En modo plan la Nevera SIEMPRE está activa: la lista de compras, la reposición y «Me lo comí» la necesitan. Por
-    eso encender el generador la devuelve sin tocar el flag, y volver al contador respeta la última elección.
+LA REGLA (una sola, aquí): `nevera_activa = NOT (nevera_enabled IS FALSE AND (plan_mode = 'tracking' OR
+MEALFIT_NEVERA_OFF_IN_PLAN_MODE))`.
+  · [P1-PLAN-LOTE-217 · 2026-09-24] También en modo plan se puede apagar; antes era obligatoria y, vacía 48 h,
+    congelaba el plan. Ver el bloque del final (apagado automático en modo plan y el freno por inactividad). Con el
+    knob en False, en modo plan vuelve a estar SIEMPRE activa (la regla del 23-sep).
   · `nevera_enabled` es TRIESTADO: NULL = automático (encendida y elegible para el apagado automático) · TRUE =
     encendida por el usuario (NUNCA se apaga sola: fue su decisión) · FALSE = apagada (por él o por el sistema).
 
@@ -66,7 +68,10 @@ def nevera_activa_de(perfil: Optional[dict]) -> bool:
     """LA regla, pura. Fallo abierto: sin perfil, sin columnas o con el kill switch, la Nevera está activa."""
     if not interruptor_disponible() or not isinstance(perfil, dict):
         return True
-    return not (perfil.get("plan_mode") == "tracking" and perfil.get("nevera_enabled") is False)
+    if perfil.get("nevera_enabled") is not False:
+        return True
+    # [P1-PLAN-LOTE-217] apagada: en modo contador siempre; en modo plan, con el knob
+    return not (perfil.get("plan_mode") == "tracking" or apagable_en_modo_plan())
 
 
 def nevera_activa(user_id: Optional[str]) -> bool:
@@ -159,3 +164,86 @@ def apagar_neveras_sin_uso(limite: int = 500) -> list:
     if ids:
         logger.info(f"[P1-NEVERA-OPCIONAL] Nevera apagada sola (vacía {horas} h en modo contador): {len(ids)} cuenta(s)")
     return ids
+
+
+# ─────────────────────────────────────────────── [P1-PLAN-LOTE-217 · 2026-09-24] La Nevera opcional TAMBIÉN en modo plan
+# Hasta hoy, en modo plan la Nevera era obligatoria y, vacía 48 h, CONGELABA el plan (P1-PLAN-FREEZE). El caso real:
+# c7b90ca3 creó su plan de 15 días el 17-sep, nunca abrió la Nevera y el plan quedó congelado el 19-sep con 12 días sin
+# generar. El dueño (24-sep): «lo de la nevera opcional, si consideras que es lo mejor, hazlo».
+#
+#   · Apagada (por el usuario en Configuración, o por el sistema): el plan se genera SIN mirarla (sin validación estricta
+#     ni pausas por Nevera), «Me lo comí» no descuenta, el coach no la usa y la lista de compras la pide entera.
+#   · Automática (NULL) y vacía 48 h en modo plan: si el usuario sigue ACTIVO (`activo_reciente`), se apaga sola en vez
+#     de congelar el plan — y si el plan ya estaba congelado por eso, se reanuda. Quien la ENCENDIÓ a mano conserva el
+#     congelado: eligió cocinar con lo que tiene.
+#   · El congelado era también el freno del gasto en cuentas abandonadas. Sin él, el freno es la inactividad: una cuenta
+#     sin actividad en `MEALFIT_NEVERA_ACTIVE_DAYS` (14) no pierde la Nevera sola (se congela como siempre) ni recibe
+#     rellenos con la Nevera apagada.
+# Knob `MEALFIT_NEVERA_OFF_IN_PLAN_MODE` (True): en False, la regla vuelve a ser la del 23-sep (en modo plan, activa).
+
+
+def apagable_en_modo_plan() -> bool:
+    """tooltip-anchor: MEALFIT_NEVERA_OFF_IN_PLAN_MODE"""
+    return _env_bool("MEALFIT_NEVERA_OFF_IN_PLAN_MODE", True)
+
+
+def dias_actividad() -> int:
+    """Ventana de «usuario activo». tooltip-anchor: MEALFIT_NEVERA_ACTIVE_DAYS"""
+    return _env_int("MEALFIT_NEVERA_ACTIVE_DAYS", 14, validator=lambda v: 1 <= v <= 90)
+
+
+_SQL_ULTIMA_ACTIVIDAD = """
+SELECT GREATEST(
+    (SELECT max(created_at) FROM agent_sessions WHERE user_id = %s),
+    (SELECT max(created_at) FROM consumed_meals WHERE user_id = %s),
+    (SELECT max(updated_at) FROM user_inventory WHERE user_id = %s),
+    (SELECT max(created_at) FROM meal_plans WHERE user_id = %s)
+) AS m
+"""
+
+
+def ultima_actividad(user_id: Optional[str]):
+    """Lo último que el usuario HIZO en la app: chatear, registrar una comida, tocar su Nevera o crear un plan. None si
+    nada, invitado o error. (No `api_usage`: también la escriben procesos en segundo plano.)"""
+    if not user_id or user_id == "guest":
+        return None
+    try:
+        row = execute_sql_query(_SQL_ULTIMA_ACTIVIDAD, (user_id, user_id, user_id, user_id), fetch_one=True) or {}
+        return row.get("m")
+    except Exception as e:
+        logger.warning(f"[P1-PLAN-LOTE-217] ultima_actividad({user_id}) sin leer: {e}")
+        return None
+
+
+def activo_reciente(user_id: Optional[str], dias: Optional[int] = None) -> bool:
+    """¿Hizo algo en la app en los últimos `dias` (knob)? Sin dato ⇒ False: sin evidencia de uso no se gasta ni se
+    decide por él."""
+    m = ultima_actividad(user_id)
+    if m is None:
+        return False
+    from datetime import datetime, timedelta, timezone
+    try:
+        if getattr(m, "tzinfo", None) is None:
+            m = m.replace(tzinfo=timezone.utc)
+        return m >= datetime.now(timezone.utc) - timedelta(days=int(dias or dias_actividad()))
+    except Exception:
+        return False
+
+
+def apagar_por_plan_vacio(user_id: str) -> bool:
+    """El apagado automático en modo plan (lo decide el barrido del congelado, que ya mide las 48 h vacías con la gracia
+    del plan). Solo si el usuario nunca eligió (NULL): encenderla a mano es definitivo. Filtra por id (I2)."""
+    if not interruptor_disponible() or not _auto_apagado_encendido() or not apagable_en_modo_plan():
+        return False
+    try:
+        res = execute_sql_write(
+            "UPDATE user_profiles SET nevera_enabled = FALSE, nevera_auto_off_at = now() "
+            "WHERE id = %s AND nevera_enabled IS NULL AND COALESCE(plan_mode, 'plan') <> 'tracking' RETURNING id",
+            (user_id,), returning=True,
+        )
+        if res:
+            logger.info(f"[P1-PLAN-LOTE-217] Nevera apagada sola en modo plan (vacía 48 h, usuario activo): {user_id}")
+        return bool(res)
+    except Exception as e:
+        logger.error(f"❌ [P1-PLAN-LOTE-217] apagar_por_plan_vacio({user_id}): {e}")
+        return False

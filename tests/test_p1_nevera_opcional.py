@@ -21,7 +21,7 @@ _BACKEND = Path(__file__).resolve().parents[1]
     ({"plan_mode": "tracking", "nevera_enabled": False}, False),
     ({"plan_mode": "tracking", "nevera_enabled": None}, True),
     ({"plan_mode": "tracking", "nevera_enabled": True}, True),
-    ({"plan_mode": "plan", "nevera_enabled": False}, True),       # el plan la necesita: vuelve sola
+    ({"plan_mode": "plan", "nevera_enabled": False}, False),      # [P1-PLAN-LOTE-217] también en modo plan
     ({"plan_mode": "tracking"}, True),                            # sin columna todavía: fallo abierto
     ({}, True),
     (None, True),
@@ -148,7 +148,7 @@ def test_el_perfil_trae_la_regla_calculada():
 
 @pytest.mark.parametrize("perfil, esperado", [
     ({"id": "u1", "plan_mode": "tracking", "nevera_enabled": False}, False),
-    ({"id": "u1", "plan_mode": "plan", "nevera_enabled": False}, True),     # modo plan: vuelve sola, flag intacto
+    ({"id": "u1", "plan_mode": "plan", "nevera_enabled": False}, False),    # [P1-PLAN-LOTE-217] también en modo plan
     ({"id": "u1", "plan_mode": "tracking"}, True),                          # columnas sin migrar: activa
 ])
 def test_get_profile_sirve_nevera_activa(monkeypatch, perfil, esperado):

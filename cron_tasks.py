@@ -9978,6 +9978,19 @@ def _refresh_chunk_pantry(
     exactamente 0 < items < piso. Knob CHUNK_PANTRY_STRICT_MIN_ITEMS (default 12, clamp [2,100]);
     rollback: =0 desactiva el piso.
     """
+    # [P1-PLAN-LOTE-217 · 2026-09-24] Nevera APAGADA (modo plan o contador): el bloque no se cocina con ella ni se pausa
+    # por ella. Ni se lee: una Nevera oculta puede guardar datos viejos que el usuario ya no mantiene.
+    try:
+        if user_id and user_id != "guest" and not __import__("nevera_opcional").nevera_activa(user_id):
+            form_data["current_pantry_ingredients"] = []
+            form_data["_fresh_pantry_source"] = "nevera_off"
+            form_data["_nevera_apagada"] = True
+            form_data["_pantry_advisory_only"] = True
+            logger.info(f"🧊 [P1-PLAN-LOTE-217] Nevera apagada para {user_id}: el bloque {week_number} se genera sin ella.")
+            # [P1-PLAN-LOTE-216] …salvo en una compra única: ahí lo comprado ES la Nevera
+            return __import__("compra_unica").nevera_virtual(form_data, task_id, user_id)
+    except Exception as _nv_off_e:
+        logger.debug(f"[P1-PLAN-LOTE-217] regla de la Nevera sin leer (camino de siempre): {_nv_off_e}")
     form_data = _refresh_chunk_pantry_inner(
         user_id, form_data, snapshot_form_data=snapshot_form_data,
         task_id=task_id, week_number=week_number,
@@ -10000,7 +10013,8 @@ def _refresh_chunk_pantry(
                 )
     except Exception as _pvf_e:
         logger.debug(f"[P1-PANTRY-VIABILITY-FLOOR] no-op: {type(_pvf_e).__name__}: {_pvf_e}")
-    return form_data
+    # [P1-PLAN-LOTE-216] compra única sin Nevera real: el bloque cocina con la compra del ciclo
+    return __import__("compra_unica").nevera_virtual(form_data, task_id, user_id)
 
 
 def _refresh_chunk_pantry_inner(
@@ -14463,6 +14477,9 @@ def _pantry_gate_waiver_reason(
         return "flexible_mode"
     if snapshot.get("_pantry_advisory_only") or form_data.get("_pantry_advisory_only"):
         return "advisory_only"
+    # [P1-PLAN-LOTE-216] la Nevera virtual de una compra única son NOMBRES (la lista del ciclo): no hay reservas que medir
+    if snapshot.get("_nevera_virtual") or form_data.get("_nevera_virtual"):
+        return "compra_unica_virtual"
     if fresh_inventory_source == "guest":
         return "guest"
     if chunk_kind == "initial_plan" and _env_bool("MEALFIT_INITIAL_CHUNK_PANTRY_AUTONOMY", True):
@@ -35642,6 +35659,14 @@ def trigger_background_rolling_refill() -> None:
             uid = str(row.get("user_id") or "")
             if not uid:
                 continue
+            # [P1-PLAN-LOTE-217] Con la Nevera apagada no hay congelado que frene a una cuenta abandonada: sin actividad
+            # reciente no se le rellena el plan.
+            try:
+                _nev_bg = __import__("nevera_opcional")
+                if not _nev_bg.nevera_activa(uid) and not _nev_bg.activo_reciente(uid):
+                    continue
+            except Exception:
+                pass
             # [P1-CHAT-PAST-DAYS · 2026-07-28] Resolver la zona del usuario y
             # PASARLA. El parámetro ya existía; este caller no lo usaba, así que
             # el shift fechaba (`day['date']`, `_arch_day['date']`), renombraba
@@ -35988,6 +36013,9 @@ def try_unfreeze_plan_for_user(user_id: str) -> bool:
                 "estado activo (p.ej. el usuario tiene el plan en pausa)."
             )
             return False
+        # [P1-PLAN-LOTE-217] con la Nevera apagada el plan no espera a que se llene
+        if not __import__("nevera_opcional").nevera_activa(user_id):
+            return _resume_frozen_plan(row["plan_id"], user_id, row["frozen_at"])
         inv = execute_sql_query(
             "SELECT ingredient_name FROM user_inventory WHERE user_id = %s AND quantity > 0",
             (user_id,), fetch_all=True,
@@ -36005,7 +36033,7 @@ def _plan_freeze_sweep() -> dict:
     """[P1-PLAN-FREEZE · 2026-07-11] Sweep horario: recordar → congelar → reanudar →
     archivar. Solo el plan ACTIVO (más reciente) por usuario autenticado. La CUENTA
     jamás se toca (decisión explícita: cero borrado/desactivación automática)."""
-    stats = {"checked": 0, "reminded": 0, "frozen": 0, "resumed": 0, "archived": 0}
+    stats = {"checked": 0, "reminded": 0, "frozen": 0, "resumed": 0, "archived": 0, "nevera_off": 0}
     if not _env_bool("MEALFIT_PLAN_FREEZE_ENABLED", True):
         return stats
     _grace_h = max(6, min(720, _env_int("MEALFIT_PLAN_FREEZE_GRACE_HOURS", 48)))
@@ -36019,8 +36047,9 @@ def _plan_freeze_sweep() -> dict:
             "mp.plan_data->>'_frozen_at' AS frozen_at, "
             "mp.plan_data->>'_freeze_reminder_at' AS reminder_at, "
             "mp.plan_data->>'_frozen_archived_at' AS archived_at, "
-            "mp.plan_data->>'_last_unfrozen_at' AS unfrozen_at "
-            "FROM meal_plans mp WHERE mp.user_id IS NOT NULL "
+            "mp.plan_data->>'_last_unfrozen_at' AS unfrozen_at, "
+            "up.plan_mode AS plan_mode, up.nevera_enabled AS nevera_enabled "  # [P1-PLAN-LOTE-217]
+            "FROM meal_plans mp LEFT JOIN user_profiles up ON up.id = mp.user_id WHERE mp.user_id IS NOT NULL "
             "AND mp.created_at > NOW() - INTERVAL '120 days' "
             "ORDER BY mp.user_id, mp.created_at DESC",
             (), fetch_all=True,
@@ -36033,6 +36062,15 @@ def _plan_freeze_sweep() -> dict:
                 continue
             stats["checked"] += 1
             plan_id, user_id = r["plan_id"], r["user_id"]
+            # [P1-PLAN-LOTE-217] Nevera apagada: el plan no depende de ella (ni recordatorio ni congelado; si estaba
+            # congelado por ella, se reanuda). Automática (NULL) + usuario activo: vacía se APAGA en vez de congelar.
+            _nev = __import__("nevera_opcional")
+            if not _nev.nevera_activa_de({"plan_mode": r.get("plan_mode"), "nevera_enabled": r.get("nevera_enabled")}):
+                if r.get("frozen_at") and _resume_frozen_plan(plan_id, user_id, r["frozen_at"]):
+                    stats["resumed"] += 1
+                continue
+            _auto_off_ok = (r.get("nevera_enabled") is None and r.get("plan_mode") != "tracking"
+                            and _nev.apagable_en_modo_plan())
             inv = execute_sql_query(
                 "SELECT ingredient_name FROM user_inventory WHERE user_id = %s AND quantity > 0",
                 (user_id,), fetch_all=True,
@@ -36041,6 +36079,12 @@ def _plan_freeze_sweep() -> dict:
 
             if r.get("frozen_at"):
                 if _meaningful >= _min_items:
+                    if _resume_frozen_plan(plan_id, user_id, r["frozen_at"]):
+                        stats["resumed"] += 1
+                    continue
+                # [P1-PLAN-LOTE-217] congelado por una Nevera que un usuario activo nunca eligió llevar
+                if _auto_off_ok and _nev.activo_reciente(user_id) and _nev.apagar_por_plan_vacio(user_id):
+                    stats["nevera_off"] += 1
                     if _resume_frozen_plan(plan_id, user_id, r["frozen_at"]):
                         stats["resumed"] += 1
                     continue
@@ -36095,6 +36139,19 @@ def _plan_freeze_sweep() -> dict:
                 except Exception:
                     continue
             _hours_empty = (_now - _anchor).total_seconds() / 3600.0
+            _apagar_en_vez = _auto_off_ok and _hours_empty >= _remind_h and _nev.activo_reciente(user_id)
+            if _hours_empty >= _grace_h and _apagar_en_vez and _nev.apagar_por_plan_vacio(user_id):
+                stats["nevera_off"] += 1   # [P1-PLAN-LOTE-217] se apaga la Nevera, el plan sigue
+                try:
+                    _dispatch_pantry_nudge(
+                        user_id,
+                        title="Tu plan sigue sin la Nevera",
+                        body="Tu Nevera seguía vacía, así que la apagamos: tu plan sigue igual y la lista te pide todo. "
+                             "Puedes encenderla en Configuración.",
+                    )
+                except Exception:
+                    pass
+                continue
             if _hours_empty >= _grace_h:
                 execute_sql_write(
                     "UPDATE meal_plans SET plan_data = jsonb_set(jsonb_set(plan_data, "
@@ -36146,11 +36203,12 @@ def _plan_freeze_sweep() -> dict:
                             user_id,
                             body=(f"Tu Nevera está vacía — agrega tus alimentos para que tu plan "
                                   f"empiece a funcionar. Si sigue vacía en ~{max(1, int(_grace_h - _hours_empty))}h, "
-                                  "congelaremos el plan (sin perder días)."),
+                                  + ("la apagaremos y tu plan seguirá sin ella." if _apagar_en_vez  # [P1-PLAN-LOTE-217]
+                                     else "congelaremos el plan (sin perder días).")),
                         )
                     except Exception:
                         pass
-        if any(stats[k] for k in ("reminded", "frozen", "resumed", "archived")):
+        if any(stats[k] for k in ("reminded", "frozen", "resumed", "archived", "nevera_off")):
             logger.info(f"🧊 [P1-PLAN-FREEZE] sweep: {stats}")
         return stats
     except Exception as _pfs_e:

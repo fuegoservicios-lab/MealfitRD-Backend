@@ -68,11 +68,15 @@ def test_el_guard_bloquea_el_atun_fresco_en_el_dia_25():
 
 
 def test_la_semana_de_frescos_sigue_exenta():
-    """El roadmap 2.6 la señala como defecto y no lo es: es la semana de frescos, comprada el día 0."""
-    eff = {"shopping": {"main_cycle_days": 30, "fresh_topup_days": None, "freezer_mode": "none"}}
+    """El roadmap 2.6 la señala como defecto y no lo es: es la semana de frescos, comprada el día 0.
+    [P1-PLAN-LOTE-218 · 2026-09-24] …CON congelador. Sin él, la proteína fresca (3 días en la nevera) no llega al día
+    7: la exigencia empieza el día 4 y cada alimento pasa por su propio plazo (la lechuga y el huevo siguen)."""
+    eff = {"shopping": {"main_cycle_days": 30, "fresh_topup_days": None, "freezer_mode": "limited"}}
     assert pd.single_trip_requirements(eff, 3) is None
     assert pd.single_trip_requirements(eff, 6) is None
     assert pd.single_trip_requirements(eff, 7) is not None
+    sin = {"shopping": {"main_cycle_days": 30, "fresh_topup_days": None, "freezer_mode": "none"}}
+    assert pd.single_trip_requirements(sin, 2) is None and pd.single_trip_requirements(sin, 3) is not None
 
 
 def test_todo_plazo_dice_de_donde_sale():

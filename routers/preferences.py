@@ -153,7 +153,8 @@ async def api_get_water_tracker_enabled(
     return {"water_tracker_enabled": enabled}
 
 
-# [P1-NEVERA-OPCIONAL · 2026-09-23] Interruptor de la Nevera (Configuración → Capacidades, solo en modo contador).
+# [P1-NEVERA-OPCIONAL · 2026-09-23] Interruptor de la Nevera (Configuración → Capacidades; en los dos modos desde
+# P1-PLAN-LOTE-217).
 # La regla y el apagado automático viven en nevera_opcional.py; aquí solo la elección explícita del usuario.
 # Cero LLM ⇒ `get_verified_user_id`, nunca `verify_api_quota` (mismo criterio que water-tracker).
 
@@ -184,6 +185,13 @@ async def api_set_nevera(
     if not ok:
         raise HTTPException(status_code=500, detail="No se pudo actualizar la preferencia.")
     logger.info(f"[P1-NEVERA-OPCIONAL] user={verified_user_id} nevera_enabled={body.enabled}")
+    # [P1-PLAN-LOTE-217] apagarla en modo plan descongela el plan que esperaba a que se llenara
+    if not body.enabled:
+        try:
+            from cron_tasks import try_unfreeze_plan_for_user
+            await asyncio.to_thread(try_unfreeze_plan_for_user, verified_user_id)
+        except Exception as _uf_e:
+            logger.debug(f"[P1-PLAN-LOTE-217] descongelar tras apagar la Nevera: no-op ({_uf_e})")
     return await asyncio.to_thread(nevera_opcional.estado_nevera, verified_user_id)
 
 

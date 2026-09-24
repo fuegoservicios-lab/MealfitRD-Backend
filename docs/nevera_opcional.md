@@ -11,8 +11,11 @@ Dato que sostuvo la decisión (medido el 23-sep, solo lectura): **6 cuentas en m
 ## 2. LA regla (una sola)
 
 ```
-nevera_activa = NOT (plan_mode = 'tracking' AND nevera_enabled IS FALSE)
+nevera_activa = NOT (nevera_enabled IS FALSE AND (plan_mode = 'tracking' OR MEALFIT_NEVERA_OFF_IN_PLAN_MODE))
 ```
+
+[P1-PLAN-LOTE-217 · 2026-09-24] Desde el 24-sep la regla cubre también el modo plan (§8). Lo que este documento cuenta
+del modo plan antes de §8 describe la regla del 23-sep, que vuelve con `MEALFIT_NEVERA_OFF_IN_PLAN_MODE=false`.
 
 `nevera_enabled` es TRIESTADO en `user_profiles`:
 
@@ -107,3 +110,27 @@ API equivalente (autenticada, mismo shape que `estado_nevera`): `GET /api/user/p
 - `frontend/src/__tests__/NeveraOpcional.contract.test.jsx`: `neveraActiva` (modo plan ⇒ activa; perfil sin el campo ⇒ activa; espejo solo sin perfil), nav, ruta y espejo, Configuración, nota única.
 - `frontend/src/__tests__/NeveraOpcional.superficies.test.jsx`: registro manual, Ayuda, bienvenida del Agente y la fuente del escáner.
 - `frontend/src/__tests__/ScanMealModal.photo_deducts.test.jsx` («con la Nevera apagada»): sin `GET /api/inventory`, rótulo neutro, aviso de compra y el cambio del perfil con el escáner montado (apagar ⇒ desaparecen los interruptores de descuento; encender ⇒ vuelve a preguntar el inventario).
+
+## 8. También en modo plan (P1-PLAN-LOTE-217 · 2026-09-24)
+
+El dueño: «lo de la nevera opcional, si consideras que es lo mejor, hazlo». El caso que lo motivó: `c7b90ca3` creó su
+plan de 15 días el 17-sep, nunca abrió la Nevera y P1-PLAN-FREEZE congeló el plan el 19-sep con 12 días por generar.
+
+- **La tarjeta de Configuración existe en los dos modos.** Apagada en modo plan: los bloques se generan sin mirarla
+  (`_refresh_chunk_pantry` devuelve Nevera vacía + `_pantry_advisory_only` sin leer el inventario oculto), ninguna guarda
+  de Nevera pausa, «Me lo comí» no descuenta, el coach no la usa y la lista del Dashboard no resta nada ni recupera lo
+  suprimido (`getDeltaSourceList(..., { conNevera: false })`). Apagarla descongela al instante un plan congelado
+  (`try_unfreeze_plan_for_user` desde `PATCH /api/user/preferences/nevera`).
+- **Automática (NULL) en modo plan:** el barrido del congelado, donde antes CONGELABA a las 48 h vacía, apaga la Nevera
+  (`apagar_por_plan_vacio`) si el usuario sigue activo (`activo_reciente`: chat, diario, Nevera o plan nuevo en
+  `MEALFIT_NEVERA_ACTIVE_DAYS`, 14) y el plan sigue; si ya estaba congelado por eso, se reanuda. Sin uso reciente se
+  congela como siempre: el congelado era el freno del gasto en cuentas abandonadas.
+- **Encendida a mano (TRUE):** conserva el congelado — eligió cocinar con lo que tiene.
+- **El relleno en segundo plano** (`trigger_background_rolling_refill`) no rellena a quien tiene la Nevera apagada y no
+  usa la app: sin congelado, ese es el freno.
+- **Compra única (P1-PLAN-LOTE-216):** con la Nevera apagada o vacía, el bloque 2+ de una compra única recibe como Nevera
+  la compra del ciclo (`compra_unica.nevera_virtual`): lo comprado ES lo que hay en casa, y el revisor lo exige.
+
+Tests: [`tests/test_p1_plan_lote_217.py`](../tests/test_p1_plan_lote_217.py),
+[`tests/test_p1_plan_lote_216.py`](../tests/test_p1_plan_lote_216.py); frontend `NeveraOpcional.contract.test.jsx`.
+

@@ -201,7 +201,7 @@ Esta sección documenta decisiones de producto que un auditor técnico podría c
 
 [P1-PLAN-MODE · 2026-08-11] El usuario puede usar la app SOLO como contador: paso 0 del wizard, o interruptor en Configuración → Capacidades con el plan ya creado. La pausa es DOS capas —gate SQL en el pickup del chunk worker + cancelación de la cola (incluido `pending_user_action`)—, orden flag-first; snapshot `_paused_prev_generation_status` (guard I8: jamás restaurar `complete` con days=[]). SSOT [`backend/plan_mode.py`](backend/plan_mode.py); knob `MEALFIT_PLAN_MODE_SWITCH`; nav SSOT `dashboardNav.js`. Doc + tests: [`backend/docs/plan_mode.md`](backend/docs/plan_mode.md) (`test_p1_plan_mode.py` + `PlanMode.contract.test.jsx`).
 
-[P1-NEVERA-OPCIONAL · 2026-09-23] En contador la Nevera se apaga en Capacidades o sola tras 48 h vacía sin elegir; encenderla a mano es definitivo. Regla `nevera_opcional.nevera_activa_de`. Doc [`backend/docs/nevera_opcional.md`](backend/docs/nevera_opcional.md).
+[P1-NEVERA-OPCIONAL · 2026-09-23] [P1-PLAN-LOTE-217 · 2026-09-24] La Nevera se apaga en Capacidades (los dos modos) o sola tras 48 h vacía sin elegir (en plan, solo con uso reciente: si no, congela); encenderla a mano es definitivo. Regla `nevera_opcional.nevera_activa_de`. Doc [`backend/docs/nevera_opcional.md`](backend/docs/nevera_opcional.md).
 
 ### `P1-IOS-NATIVE-SHELL` (la app nativa NO vende: refleja)
 

@@ -459,6 +459,15 @@ _PROCESS_START_ISO = datetime.now(timezone.utc).isoformat()
 # [P1-PLAN-LOTE-215 · 2026-09-24] (solo backend) compra única de 30 días: la lista del día 1 sale del ciclo entero
 # proyectado (no «3 días × 10»); lista, guard y base de días leen el mismo mes, la híbrida no parte la compra en semanas
 # y la lata y el huevo tienen techo de compra única (el plan del dueño: 736 g de atún para 1.266, 60 huevos para 140).
+# [P1-PLAN-LOTE-216 · 2026-09-24] (solo backend) compra única sin Nevera real: el bloque 2+ recibe como Nevera la compra
+# del ciclo y el revisor la exige; la rueda de la proteína salta lo que el día ya lleva (17 líneas de atún → reparto).
+# [P1-PLAN-LOTE-217 · 2026-09-24] la Nevera opcional también en modo plan: se apaga en Configuración; en automático, a
+# un usuario activo se le apaga sola en vez de congelarle el plan (c7b90ca3, congelado desde el 19-sep, se reanuda).
+# [P1-PLAN-LOTE-218 · 2026-09-24] (solo backend) sin congelador la proteína fresca no pasa del día 3, tampoco en la
+# primera semana (3 lb de pechuga del día 1 para cocinar hasta el día 7).
+# [P1-PLAN-LOTE-219 · 2026-09-24] (solo backend) techos servibles de las bases que el solver infla en los menús sin
+# cocción: maíz dulce ≤ 250 g por comida («365 g», «415 g»), la auyama entra al techo de volumen (470 g), y dos migajas
+# del display («⅔ g de semillas» → 1 pizca, «1.53 g de yogurt» → 1 cdta).
 # [P1-PLAN-LOTE-220 · 2026-09-24] (backend + frontend) a la 1:18 p. m. solo había llegado el aviso del desayuno: la hora
 # de cada recordatorio salía de la hora de REGISTRO (el almuerzo del dueño, hacia las 2:15) y el cron a y media escribía
 # en el chat después de que sonara el teléfono. Ahora cada comida tiene su interruptor y su hora en Configuración

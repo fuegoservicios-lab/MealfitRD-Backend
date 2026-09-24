@@ -28,7 +28,9 @@ _DASH = (_BACKEND.parent / "frontend" / "src" / "pages" / "Dashboard.jsx")
 def test_sweep_ladder_states():
     i = _CRON.find("def _plan_freeze_sweep")
     assert i > 0, "el sweep de congelación desapareció"
-    blk = _CRON[i: i + 9000]
+    # [P1-PLAN-LOTE-217] ventana 9000 → 12000 (la misma del test de al lado): el barrido ganó la rama de la Nevera
+    # apagada/automática en modo plan, y la escalera sigue entera dentro de la función.
+    blk = _CRON[i: i + 12000]
     assert 'MEALFIT_PLAN_FREEZE_ENABLED' in blk, "kill switch"
     assert 'MEALFIT_PLAN_FREEZE_GRACE_HOURS", 48' in blk, "gracia 48h (nevera vacía día 0-1 es NORMAL)"
     assert 'MEALFIT_PLAN_FREEZE_REMINDER_HOURS", 24' in blk, "recordatorio a las 24h"
