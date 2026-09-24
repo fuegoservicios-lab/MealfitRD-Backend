@@ -74,9 +74,10 @@ def test_p0_orch_1_fallback_threads_restricted_tokens():
 
 def test_p0_orch_1_historic_menu_preserved_as_pool_head():
     # pool[0] de cada slot = menú histórico (restricted vacío → comportamiento idéntico).
-    assert '"Huevos y Avena"' in _G
-    assert '"Pollo y Arroz"' in _G
-    assert '"Pescado y Batata"' in _G
+    # [P1-PLAN-LOTE-198] los pools viven en fallback_pools.py (el grafo los re-exporta): se mira el objeto, no el fuente.
+    import graph_orchestrator as _go
+    assert [_go._FALLBACK_MEAL_POOLS[s][0][0] for s in ("Desayuno", "Almuerzo", "Cena")] == [
+        "Huevos y Avena", "Pollo y Arroz", "Pescado y Batata"]
 
 
 # ===========================================================================
