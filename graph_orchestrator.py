@@ -14750,7 +14750,7 @@ def _scan_diet_violations(plan: dict, diet_type) -> list:
 
 _VERIFICATION_DEMAND_RX = _re_mod.compile(
     r"(certificaci[oó]n|certificad[oa]s?|contaminaci[oó]n cruzada|debe(?:n)? verificarse|"
-    r"requiere[n]? verificaci[oó]n|verificar (?:la |las )?etiquetas?|sin indicar certificaci[oó]n|"
+    r"requiere[n]? verificaci[oó]n|verificar (?:la |las |sus )?etiquetas?|sin indicar certificaci[oó]n|"
     r"requiere[n]? confirmaci[oó]n|debe[n]? confirmarse|requiere[n]? vigilancia|"
     r"vigilancia de (?:la )?funci[oó]n|requiere[n]? supervisi[oó]n|"
     r"marca regulad[ao]|de marca (?:regulad|reconocid|comercial)|procesamiento (?:verificado|seguro|industrial)|"
@@ -14760,7 +14760,7 @@ _VERIFICATION_DEMAND_RX = _re_mod.compile(
 )
 # [P1-PLAN-LOTE-182] «Confirme si la alergia a mariscos incluye pescado» es aclaración, no defecto (rd11: 2.º CRÍTICO ⇒ EMERGENCIA);
 # aparte para excluir pasteurizar (embarazo). tooltip-anchor: P1-PLAN-LOTE-182-CONFIRMAR-ES-AVISO
-_CONFIRM_DEMAND_RX = _re_mod.compile(r"confirm(?:e|ar)\s+(?:si|su alcance|el alcance)", _re_mod.IGNORECASE)
+_CONFIRM_DEMAND_RX = _re_mod.compile(r"confirm(?:e|ar)\s+(?:si|su alcance|el alcance|las? etiquetas?|con)|hasta confirmar", _re_mod.IGNORECASE)  # [P1-PLAN-LOTE-184]
 _PASTEURIZ_RX = _re_mod.compile(r"pasteuriz", _re_mod.IGNORECASE)
 
 
@@ -18298,6 +18298,7 @@ def _apply_pregnancy_food_safety_annotations(plan: dict, form_data: dict) -> int
                     else [str(s) for s in rec]
                 base_rec = [s for s in rec if _PREGNANCY_NOTE_PREFIX not in s]
                 rec_blob = _sa_psn(" ".join(base_rec).lower())
+                _notas_blob = _sa_psn(" ".join(s for s in base_rec if "Seguridad alimentaria" in s or "Nota clínica" in s).lower())  # [P1-PLAN-LOTE-184]
                 clauses = []
                 for _key, _toks, _covered, _text in _PREGNANCY_SAFETY_CLAUSES:
                     _effective_toks = _toks
@@ -18309,7 +18310,7 @@ def _apply_pregnancy_food_safety_annotations(plan: dict, form_data: dict) -> int
                         continue
                     # covered escanea receta + nombre + ingredientes: «canela de Ceilán» o
                     # «leche pasteurizada» EN la línea del ingrediente también absuelven.
-                    if any(_sa_psn(c) in rec_blob or _sa_psn(c) in blob for c in _covered):
+                    if any(_sa_psn(c) in (_notas_blob if _key == "carnes" else rec_blob) or _sa_psn(c) in blob for c in _covered):
                         continue  # el LLM ya escribió la instrucción con sus palabras
                     if _key == "mariscos":
                         # solo lata ("atún en agua" ni siquiera matchea; "sardinas en lata" sí):

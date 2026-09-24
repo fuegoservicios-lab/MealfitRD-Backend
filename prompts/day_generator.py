@@ -1369,8 +1369,8 @@ def allergy_hard_line(allergies) -> str:
     incl = f" (incluye: {', '.join(terms[:20])})" if terms else ""
     alternativas = ""
     if _lacteo_vetado(alg):                                            # [P1-PLAN-LOTE-183]
-        _meriendas = _sin_vetados(["fruta con maní", "casabe con aguacate", "huevo duro con fruta",
-                                   "tostada integral con aguacate"], alg) or ["fruta fresca"]
+        _meriendas = _sin_vetados(["fruta con maní", "casabe con aguacate", "tostada integral con aguacate",
+                                   "frutos secos con fruta"], alg) or ["fruta fresca"]   # [P1-PLAN-LOTE-184] sin huevo
         _liquidos = "agua o hielo" if _vetado("leche de coco", alg) else "agua, hielo o leche de coco"
         alternativas = (f" Sin lácteos: los batidos van con {_liquidos} (NUNCA yogurt ni leche de vaca), "
                         f"y las meriendas y desayunos con {', '.join(_meriendas)}.")

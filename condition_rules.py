@@ -297,7 +297,10 @@ CONDITION_RULES: tuple = (
             # [P1-PLAN-LOTE-175] rechazo CRÍTICO de la batería real (DM2 con insulina): «casabe en dos días, plátano
             # maduro en dos comidas».
             "   • Si el plan lleva plátano, que sea VERDE antes que maduro; el plátano maduro y el casabe, como mucho una vez "
-            "cada 3 días cada uno; nada de majarete ni dulces de maíz."),
+            "cada 3 días cada uno; nada de majarete ni dulces de maíz.\n"
+            # [P1-PLAN-LOTE-185] rechazo CRÍTICO de rd14: «batidos con piña/guineo o lechosa/guineo» (fruta licuada).
+            "   • La fruta, ENTERA y masticada: NADA de batidos ni licuados con fruta (licuada sube la glucosa más rápido) "
+            "ni jugos; si hay batido, que sea de leche o yogur sin fruta dulce, con canela o avena."),
     ),
     ConditionRule(
         id="hta", label="Hipertensión arterial", terms=HTA_CONDITION_TERMS,

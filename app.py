@@ -374,7 +374,12 @@ _PROCESS_START_ISO = datetime.now(timezone.utc).isoformat()
 # [P1-PLAN-LOTE-183 · 2026-09-23] (solo backend) el prompt del día pedía panqueques «especialmente en merienda y CENA»
 # y la puerta de horario los rechaza en la cena (rd11, HTA: «Crepas saladas… en la cena» = un reintento); la línea
 # dura de alergias nombra primero leche, queso, yogur… en vez del orden alfabético.
-_LAST_KNOWN_PFIX = "P1-PLAN-LOTE-183 · 2026-09-23"
+# [P1-PLAN-LOTE-184 · 2026-09-23] (solo backend) rd14: embarazo rechazado por «pollo sin 74 °C» con el 74 °C escrito en
+# un PASO (el revisor sólo lee las notas: la cláusula de carnes ya no se da por cubierta con un paso); «verificar sus
+# etiquetas», «confirme la etiqueta» y «hasta confirmar con evaluación» son aviso; sin lácteos no se sugiere huevo.
+# [P1-PLAN-LOTE-185 · 2026-09-23] (solo backend) rd14, DM2: rechazo CRÍTICO por «batidos con piña/guineo o lechosa/
+# guineo» — la regla DM2 pedía «fruta entera» pero no prohibía la fruta licuada.
+_LAST_KNOWN_PFIX = "P1-PLAN-LOTE-185 · 2026-09-23"
 
 # [P1-SENTRY-SAMPLE-COST · 2026-05-12] Sentry sampling driven from env vars
 # con default seguro 0.1 (10%). Pre-fix tenía `traces_sample_rate=1.0` y
