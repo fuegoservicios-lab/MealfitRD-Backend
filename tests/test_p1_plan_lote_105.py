@@ -50,10 +50,15 @@ def test_una_sola_tarjeta_macros_y_micros():
     dt = _front("src/components/dashboard/DashboardTracking.jsx")
     assert "MicrosTracker" not in dt
     assert "microTargets={targets?.micros || null}" in dt
-    ml = _front("src/components/dashboard/MicrosList.jsx")
-    for k in ("fiber_g", "sodium_mg", "potassium_mg", "calcium_mg", "iron_mg", "vit_c_mg", "vit_a_mcg", "vit_d_mcg"):
-        assert f"key: '{k}'" in ml
-    assert "export const resumirMicros" in _front("src/components/dashboard/microsShared.js")
+    # [P1-COMPARTIR-DIA · 2026-09-23] Las ocho filas pasaron de MicrosList a `filasMicros` (microsShared.js), SSOT
+    # que comparten la tarjeta, el diario de días anteriores y la imagen del día; MicrosList la pinta.
+    from diary_micros import CLAVES
+    ms = _front("src/components/dashboard/microsShared.js")
+    filas = ms[ms.index("export const filasMicros"):]
+    filas = filas[:filas.index("];")]
+    assert re.findall(r"key: '(\w+)'", filas) == list(CLAVES), "los ocho micros, en el orden del backend"
+    assert "filasMicros(t)" in _front("src/components/dashboard/MicrosList.jsx")
+    assert "export const resumirMicros" in ms
 
 
 def test_el_diario_de_dias_anteriores_esta_completo():
