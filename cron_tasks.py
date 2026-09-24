@@ -25083,6 +25083,7 @@ def _check_chunk_learning_ready(user_id: str, meal_plan_id: str, week_number: in
                 f"chunk {week_number}: {_p17_err}. Cayendo a cálculo legacy."
             )
 
+    _prev_end_date = __import__("fin_bloque_previo").acotar(_prev_end_date, plan_data, meal_plan_id, week_number)  # [P1-PLAN-LOTE-200] el fin REAL: la última fecha planificada
     _days_until_prev_end = (_prev_end_date - _today_user).days  # >=0 = último día aún no concluyó
 
     # [P0-gamma] Calcular diversidad de despensa

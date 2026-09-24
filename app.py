@@ -420,7 +420,10 @@ _PROCESS_START_ISO = datetime.now(timezone.utc).isoformat()
 # [P1-PLAN-LOTE-199 · 2026-09-24] (solo backend) prod 72 h: 6/8 entregas fallaron la revisión, todas rellenos del único
 # usuario con Nevera; en cada intento «edamame cocido» del cerrador de proteína (no estaba en su Nevera) y su «Compra
 # Urgente» pedía 250 g de edamame y whey. Con Nevera exigida, cerrador de proteína y semillas eligen de la Nevera.
-_LAST_KNOWN_PFIX = "P1-PLAN-LOTE-199 · 2026-09-24"
+# [P1-PLAN-LOTE-200 · 2026-09-24] (solo backend) el gate temporal sumaba el acumulado de shifts a un ancla que el shift ya
+# había movido: el 23-sep dijo que el bloque previo terminaba el 27 (terminó el 22) → pausa, TTL, modo flexible, un día
+# sin plan y 2.707 aplazamientos en 4 días. Se acota por la última fecha planificada del plan.
+_LAST_KNOWN_PFIX = "P1-PLAN-LOTE-200 · 2026-09-24"
 
 # [P1-SENTRY-SAMPLE-COST · 2026-05-12] Sentry sampling driven from env vars
 # con default seguro 0.1 (10%). Pre-fix tenía `traces_sample_rate=1.0` y
