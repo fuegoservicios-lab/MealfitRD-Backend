@@ -25367,13 +25367,15 @@ def _check_chunk_learning_ready(user_id: str, meal_plan_id: str, week_number: in
                         to_jsonb(%s::int),
                         true
                     ),
-                    execute_after = NOW() + make_interval(mins => %s),
+                    execute_after = GREATEST(NOW() + make_interval(mins => %s), %s::timestamptz),
                     updated_at = NOW()
                 WHERE meal_plan_id = %s
                   AND week_number = %s
                   AND status IN ('pending', 'processing', 'stale')
                 """,
-                (_p1c_next_retries, _p14_backoff_min, meal_plan_id, int(week_number)),
+                (_p1c_next_retries, _p14_backoff_min,  # [P1-PLAN-LOTE-207] y no antes de que pueda pasar
+                 __import__("fin_bloque_previo").frontera_utc(_prev_end_date, _tz_offset_min, _proactive_margin),
+                 meal_plan_id, int(week_number)),
             )
         except Exception as _p1c_inc_err:
             # Best-effort: si el UPDATE falla, el counter no avanza y eventualmente
@@ -25396,6 +25398,9 @@ def _check_chunk_learning_ready(user_id: str, meal_plan_id: str, week_number: in
         }
 
     prev_start_iso = (plan_start_dt + timedelta(days=prev_offset)).isoformat()
+    previous_chunk_days, prev_start_iso = __import__("adherencia_previa").ventana_gate(  # [P1-PLAN-LOTE-206] el bloque por FECHAS
+        plan_data, meal_plan_id, week_number, prev_count, previous_chunk_days, prev_start_iso, _tz_offset_min, _today_user,
+        execute_sql_query)
     consumed_records = get_consumed_meals_since(user_id, prev_start_iso) or []
     
     # [P0-D] Evaluar actividad de inventario antes del cálculo para el proxy honesto
@@ -29030,7 +29035,8 @@ __PLAN_MODE_GATE__
                         f"({CHUNK_LEARNING_READY_MAX_DEFERRALS * CHUNK_LEARNING_READY_DELAY_HOURS}h "
                         f"de espera). Forzando path de pausa con TTL corto."
                     )
-                if learning_ready_deferrals < CHUNK_LEARNING_READY_MAX_DEFERRALS:
+                if learning_ready_deferrals < CHUNK_LEARNING_READY_MAX_DEFERRALS and not __import__(
+                        "fin_bloque_previo").es_espera_de_calendario(learning_ready):  # [P1-PLAN-LOTE-207]
                     deferred_snapshot = copy.deepcopy(snap)
                     deferred_snapshot["_learning_ready_deferrals"] = learning_ready_deferrals + 1
                     deferred_snapshot["_last_learning_ready_ratio"] = learning_ready_ratio
@@ -29259,6 +29265,7 @@ __PLAN_MODE_GATE__
                         f"push_at={int(CHUNK_TEMPORAL_GATE_PUSH_AT_RETRY)}). "
                         f"execute_after ya bumpeado por el gate — no pausamos aún."
                     )
+                    __import__("fin_bloque_previo").soltar_a_pendiente(task_id, execute_sql_write)  # [P1-PLAN-LOTE-207]
                     return
                 if _temporal_gate_reason:
                     pause_snapshot = copy.deepcopy(snap)
@@ -30841,7 +30848,7 @@ __PLAN_MODE_GATE__
                     # Diferencia con _meal_level_adherence (EMA por tipo, todo el historial):
                     # esto lista NOMBRES de platos que el usuario consumió/saltó del chunk N-1.
                     # El builder lo traduce a "refuerza variantes de X / evita repetir Y".
-                    if int(week_number) >= 2 and prior_days:
+                    if int(week_number) >= 2 and (prior_days or (prior_plan_data or {}).get("_archived_days")):
                         try:
                             _total_days_for_split = (
                                 (snap.get("form_data", {}) or {}).get("totalDays")
@@ -30851,12 +30858,19 @@ __PLAN_MODE_GATE__
                             _prev_offset, _prev_count = _resolve_previous_chunk_window(
                                 meal_plan_id, int(week_number), int(days_offset or 0), _total_days_for_split
                             )
-                            _breakdown = _compute_prev_chunk_meal_breakdown(
-                                plan_days=prior_days,
-                                prev_offset=_prev_offset,
-                                prev_count=_prev_count,
-                                consumed_records=chunk_consumed_records or [],
-                                prev_chunk_number=int(week_number) - 1,
+                            # [P1-PLAN-LOTE-206] Bloque previo por FECHAS y «no consumió» sólo con registro representativo.
+                            _breakdown = __import__("adherencia_previa").desglose(
+                                legado=lambda: _compute_prev_chunk_meal_breakdown(
+                                    plan_days=prior_days,
+                                    prev_offset=_prev_offset,
+                                    prev_count=_prev_count,
+                                    consumed_records=chunk_consumed_records or [],
+                                    prev_chunk_number=int(week_number) - 1,
+                                ),
+                                plan_data=prior_plan_data, meal_plan_id=meal_plan_id, week_number=int(week_number),
+                                prev_offset=_prev_offset, prev_count=_prev_count, registros=chunk_consumed_records or [],
+                                leer_registros=get_consumed_meals_since, user_id=user_id,
+                                tz_min=tz_offset_min_for_form_data(form_data), consultar=execute_sql_query,
                             )
                             if _breakdown:
                                 form_data["_prev_chunk_adherence"] = _breakdown

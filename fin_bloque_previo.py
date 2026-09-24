@@ -21,7 +21,7 @@ la fórmula de siempre. Knob `MEALFIT_GATE_PREV_END_FROM_DAYS` (True).
 from __future__ import annotations
 
 import logging
-from datetime import date
+from datetime import date, datetime, time, timedelta, timezone
 from typing import Optional
 
 logger = logging.getLogger(__name__)
@@ -70,3 +70,56 @@ def acotar(prev_end: Optional[date], plan_data, meal_plan_id=None, week_number=N
     logger.info(f"📅 [P1-PLAN-LOTE-200] plan {str(meal_plan_id)[:8]} bloque {week_number}: fin del bloque previo "
                 f"{prev_end.isoformat()} (fórmula) → {real.isoformat()} (último día planificado)")
     return real
+
+
+# ─────────────── [P1-PLAN-LOTE-207 · 2026-09-24] esperar al bloque previo sin quemar intentos ───────────────
+# Cuando el worker recoge un bloque ANTES de que termine el anterior (un `execute_after` viejo que el re-anclaje dejó en
+# el pasado y el suelo de NOW() soltó de inmediato — dea00a2f el 23-sep), el gate lo difería con un backoff de minutos
+# pensado para desfases de huso… y el worker salía dejando el bloque en `processing`. Nadie lo devolvía a `pending`: lo
+# hacía el rescate de zombies a los 10 min, SUMANDO un intento cada vez (tope 5 ⇒ `failed`). En producción los bloques
+# 5, 6 y 8 de 3957a669 terminaron con attempts = 5 — a un rescate de morir —, re-evaluados cada ~16 min. Y un bloque sin
+# la marca proactiva de zero-log caía antes en el aplazamiento GENÉRICO de aprendizaje: +12 h y el push «Tu próximo
+# bloque espera más feedback… loguea tus comidas» (4 de 4 medidos eran `temporal_gate`): nada que el usuario pudiera
+# hacer, y 12 h que pueden pasarse de la frontera y dejarle un día sin menú.
+# Aquí: el gate programa el bloque para el primer instante en que va a pasar (la frontera), el worker lo devuelve a
+# `pending` en vez de dejarlo huérfano, y la espera de calendario no pasa por el aplazamiento de aprendizaje.
+# Knob `MEALFIT_TEMPORAL_GATE_WAIT_BOUNDARY` (True).
+RAZON_CALENDARIO = "prev_chunk_day_not_yet_elapsed"
+
+
+def espera_frontera() -> bool:
+    """tooltip-anchor: MEALFIT_TEMPORAL_GATE_WAIT_BOUNDARY"""
+    try:
+        from knobs import _env_bool
+        return _env_bool("MEALFIT_TEMPORAL_GATE_WAIT_BOUNDARY", True)
+    except Exception:
+        return True
+
+
+def frontera_utc(prev_end: Optional[date], tz_min, margen_dias=0) -> Optional[datetime]:
+    """Primer instante en que el gate deja pasar al bloque siguiente: medianoche LOCAL del día `prev_end + 1 − margen`
+    (el gate difiere mientras `prev_end − hoy ≥ margen`), +30 min como el encolado, en UTC. None sin fecha o knob off."""
+    if prev_end is None or not espera_frontera():
+        return None
+    try:
+        dia = prev_end + timedelta(days=1 - max(0, int(margen_dias or 0)))
+        return datetime.combine(dia, time(0), tzinfo=timezone.utc) + timedelta(minutes=int(tz_min or 0) + 30)
+    except Exception:
+        return None
+
+
+def es_espera_de_calendario(learning_ready) -> bool:
+    """El gate difirió porque el bloque previo aún no termina: no es falta de registros y no se aplaza 12 h."""
+    return espera_frontera() and isinstance(learning_ready, dict) and learning_ready.get("reason") == RAZON_CALENDARIO
+
+
+def soltar_a_pendiente(task_id, escribir) -> None:
+    """El worker devuelve el bloque que difirió a `pending` (con el `execute_after` que eligió el gate) en vez de dejarlo
+    en `processing` para que el rescate de zombies lo recoja sumando un intento."""
+    if not espera_frontera():
+        return
+    try:
+        escribir("UPDATE plan_chunk_queue SET status = 'pending', updated_at = NOW() "
+                 "WHERE id = %s AND status = 'processing'", (task_id,))
+    except Exception as e:
+        logger.warning(f"[P1-PLAN-LOTE-207] no se pudo devolver el bloque {task_id} a pending: {e}")
