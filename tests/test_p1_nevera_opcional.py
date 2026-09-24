@@ -586,3 +586,9 @@ def test_claude_md_apunta_al_doc():
         pytest.skip("sin el CLAUDE.md de la raíz al lado")
     txt = claude.read_text(encoding="utf-8")
     assert "[P1-NEVERA-OPCIONAL · 2026-09-23]" in txt and "backend/docs/nevera_opcional.md" in txt
+
+
+# [Fix round 1] La pasada doc-first de P1-PLAN-MODE (P3-CLAUDEMD-MARGIN-RESTORE) movió su párrafo a un doc propio;
+# esto ancla que el destino existe y conserva el knob que gatea la pausa.
+def test_el_doc_de_plan_mode_existe_y_conserva_el_knob():
+    assert "MEALFIT_PLAN_MODE_SWITCH" in (_BACKEND / "docs" / "plan_mode.md").read_text(encoding="utf-8")
