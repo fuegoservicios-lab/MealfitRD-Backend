@@ -15,7 +15,7 @@ Este módulo sirve a los dos canales con UNA cuenta:
   · la app nativa pide `GET /api/notifications/meal-reminders` y programa esos avisos EN EL TELÉFONO (notificaciones
     locales): salen aunque la app esté cerrada, sin APNs ni servidor, y se cancelan al registrar la comida.
 
-El minuto: [P1-PLAN-LOTE-213] la notificación local suena a la hora EXACTA del aviso (la que la persona eligió en
+El minuto: [P1-PLAN-LOTE-216] la notificación local suena a la hora EXACTA del aviso (la que la persona eligió en
 Configuración o, si no eligió, la normal de esa comida menos 15 min) y el cron, que corre cada 15 min, escribe el mensaje
 del chat en su último tick ANTES de esa hora: al tocar la notificación, el mensaje del coach ya está en el chat. (Hasta
 el 208 el cron corría a y media y escribía en el tick de la HORA del aviso: con un aviso a las 2:15 el chat llegaba a
@@ -104,7 +104,7 @@ def _hora_y_minuto(user_id: str, meal: str, health: Optional[dict]) -> tuple:
         logger.warning(f"[P1-PLAN-LOTE-133] hora del aviso de {meal} no calculada ({e!r}); se usa la de por defecto")
         hora_aviso = (math.floor(def_hour) + MINUTO_DEL_AVISO_DE_RESPALDO / 60.0) % 24
     # [P1-PLAN-LOTE-150] Hora y minuto salen LOS DOS de la hora calculada. Redondear a minutos de una vez evita que un
-    # 59,7 acabe en «:60». [P1-PLAN-LOTE-213] con la misma función que el cron: el chat y el teléfono, el mismo minuto.
+    # 59,7 acabe en «:60». [P1-PLAN-LOTE-216] con la misma función que el cron: el chat y el teléfono, el mismo minuto.
     return divmod(pa.minuto_del_dia(hora_aviso), 60)
 
 
@@ -114,7 +114,7 @@ def horario_de_avisos(user_id: str, locale: Optional[str] = None, consumed_today
 
     `hour`/`minute` son hora LOCAL del usuario. Un aviso que caería dentro de las horas de silencio (quien cena a las
     23:30 → la 1:00) no se programa: el cron tampoco lo manda (`MEALFIT_PROACTIVE_QUIET_UNTIL_HOUR`).
-    [P1-PLAN-LOTE-213] Tampoco el de una comida que la persona apagó en Configuración, y la hora es la que eligió."""
+    [P1-PLAN-LOTE-216] Tampoco el de una comida que la persona apagó en Configuración, y la hora es la que eligió."""
     import proactive_agent as pa
     silencio = pa._hora_de_silencio()
     out = []
@@ -134,7 +134,7 @@ def horario_de_avisos(user_id: str, locale: Optional[str] = None, consumed_today
 
 
 def comidas_para_configuracion(user_id: str, health: Optional[dict] = None) -> list:
-    """[P1-PLAN-LOTE-213] Las CUATRO comidas como las pinta Configuración: `{meal, active, hour, minute, chosen,
+    """[P1-PLAN-LOTE-216] Las CUATRO comidas como las pinta Configuración: `{meal, active, hour, minute, chosen,
     default_hour, default_minute}`. Aquí sí salen las apagadas: la pantalla necesita su interruptor para volver a
     encenderlas. La hora es la efectiva (la que suena); `default_*` es la normal, para «volver a la de siempre»."""
     import proactive_agent as pa

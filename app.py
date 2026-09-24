@@ -452,11 +452,11 @@ _PROCESS_START_ISO = datetime.now(timezone.utc).isoformat()
 # en diabetes lo liberado va a grasa, no a carbohidratos (DM2 88 kg: 158 → 124 g de proteína).
 # [P1-PLAN-LOTE-212 · 2026-09-24] V7a (decisión nueva del dueño): el paso que pide menos piezas que la lista se alinea
 # con plural («pica 1 tomate» con 3 → «pica 3 tomates»). Corpus fijo: 47 → 24.
-# [P1-PLAN-LOTE-213 · 2026-09-24] (backend + frontend) a la 1:18 p. m. solo había llegado el aviso del desayuno: la hora
+# [P1-PLAN-LOTE-216 · 2026-09-24] (backend + frontend) a la 1:18 p. m. solo había llegado el aviso del desayuno: la hora
 # de cada recordatorio salía de la hora de REGISTRO (el almuerzo del dueño, hacia las 2:15) y el cron a y media escribía
 # en el chat después de que sonara el teléfono. Ahora cada comida tiene su interruptor y su hora en Configuración
 # (normales: 8:45/12:45/15:45/19:15) y el cron, cada 15 min, escribe en el último tick antes de que suene.
-_LAST_KNOWN_PFIX = "P1-PLAN-LOTE-213 · 2026-09-24"
+_LAST_KNOWN_PFIX = "P1-PLAN-LOTE-216 · 2026-09-24"
 
 # [P1-SENTRY-SAMPLE-COST · 2026-05-12] Sentry sampling driven from env vars
 # con default seguro 0.1 (10%). Pre-fix tenía `traces_sample_rate=1.0` y
@@ -1796,7 +1796,7 @@ async def lifespan(app: FastAPI):
         # IntervalTrigger.
         from cron_tasks import _add_job_jittered, register_plan_chunk_scheduler
         # [P1-PLAN-LOTE-133] con `id`: era el único cron sin nombre (no se podía consultar ni re-registrar sin duplicarlo)
-        # [P1-PLAN-LOTE-213] cada 15 min (era a y media): el mensaje del chat sale en el último tick ANTES de que suene
+        # [P1-PLAN-LOTE-216] cada 15 min (era a y media): el mensaje del chat sale en el último tick ANTES de que suene
         # el teléfono, que suena a la hora exacta que la persona eligió (ver `proactive_agent.MINUTOS_ENTRE_TICKS`).
         from proactive_agent import MINUTOS_ENTRE_TICKS
         _add_job_jittered(scheduler, run_proactive_checks, "cron", minute=f"*/{MINUTOS_ENTRE_TICKS}",
