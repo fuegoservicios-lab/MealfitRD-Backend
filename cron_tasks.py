@@ -25231,13 +25231,16 @@ def _check_chunk_learning_ready(user_id: str, meal_plan_id: str, week_number: in
         # (antes los deferrals se perdían silenciosamente y _detect_chronic_deferrals
         # no podía detectar usuarios con TZ desalineada). No bloqueante: un fallo
         # aquí no impide el deferral del chunk en sí.
-        _record_chunk_deferral(
-            user_id=user_id,
-            meal_plan_id=meal_plan_id,
-            week_number=int(week_number),
-            reason="temporal_gate",
-            days_until_prev_end=int(_days_until_prev_end),
-        )
+        # [P1-PLAN-LOTE-205] Un bloque YA pausado lo re-evalúa `_recover_pantry_paused_chunks` en cada tick: una fila
+        # por minuto (2.707 en 4 días para un usuario) que sólo alimentaba una alerta `chronic_deferrals` engañosa.
+        if not (snapshot or {}).get("_pantry_pause_reason"):
+            _record_chunk_deferral(
+                user_id=user_id,
+                meal_plan_id=meal_plan_id,
+                week_number=int(week_number),
+                reason="temporal_gate",
+                days_until_prev_end=int(_days_until_prev_end),
+            )
 
         # [P1-3] Push notification proactiva al N-th deferral consecutivo del mismo
         # chunk. Antes el único canal de aviso al usuario era `_detect_chronic_deferrals`
@@ -25249,7 +25252,7 @@ def _check_chunk_learning_ready(user_id: str, meal_plan_id: str, week_number: in
         # push directo. Dedupe por (user_id, meal_plan_id, week_number) vía
         # system_alerts con cooldown configurable para evitar spam si el usuario
         # ignora la primera notificación.
-        if _p1c_next_retries == int(CHUNK_TEMPORAL_GATE_PUSH_AT_RETRY):
+        if _p1c_next_retries == int(CHUNK_TEMPORAL_GATE_PUSH_AT_RETRY) and not (snapshot or {}).get("_pantry_pause_reason"):  # [P1-PLAN-LOTE-205] la pausa ya avisó
             _p13_alert_key = f"temporal_gate_proactive:{user_id}:{meal_plan_id}:{int(week_number)}"
             try:
                 _p13_existing = execute_sql_query(

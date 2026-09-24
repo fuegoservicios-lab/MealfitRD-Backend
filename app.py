@@ -433,7 +433,9 @@ _PROCESS_START_ISO = datetime.now(timezone.utc).isoformat()
 # toca). Re-pulido tras ese pase; ajo → «½ diente», semillas/especias → «½ cdta», sal → «¼ cdta».
 # [P1-PLAN-LOTE-204 · 2026-09-24] (solo backend) hueco del 200: si el shift ya archivó todos los días vivos, el gate no
 # tenía fechas y volvía la fórmula inflada (el usuario SIN días). El fin del bloque previo cuenta `_archived_days`.
-_LAST_KNOWN_PFIX = "P1-PLAN-LOTE-204 · 2026-09-24"
+# [P1-PLAN-LOTE-205 · 2026-09-24] (solo backend) un bloque YA pausado se re-evaluaba cada minuto grabando una fila de
+# aplazamiento por tick (2.707 en 4 días) y podía repetir el push de «revisa tu zona horaria»: la pausa ya avisó.
+_LAST_KNOWN_PFIX = "P1-PLAN-LOTE-205 · 2026-09-24"
 
 # [P1-SENTRY-SAMPLE-COST · 2026-05-12] Sentry sampling driven from env vars
 # con default seguro 0.1 (10%). Pre-fix tenía `traces_sample_rate=1.0` y
