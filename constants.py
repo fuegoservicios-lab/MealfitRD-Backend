@@ -5016,7 +5016,7 @@ def _country_catalog_condiment_patterns(country) -> tuple:
     return patterns
 
 
-def validate_ingredients_against_pantry(generated_ingredients: list, pantry_ingredients: list, strict_quantities: bool = True, tolerance: float = 1.30, allow_external_count: int = 0, return_unauthorized: bool = False, country: str = "DO"):
+def validate_ingredients_against_pantry(generated_ingredients: list, pantry_ingredients: list, strict_quantities: bool = True, tolerance: float = 1.30, allow_external_count: int = 0, return_unauthorized: bool = False, country: str = "DO", probe_only: bool = False):
     """
     Función guardrail estricta y matemática. Comprueba:
     1. Que todos los ingredientes generados estén en la despensa.
@@ -5224,7 +5224,9 @@ def validate_ingredients_against_pantry(generated_ingredients: list, pantry_ingr
             # [P0-LLM-PROVIDER-MIGRATION] `get_embedding` puede retornar None
             # (provider disabled/fallo) — en ese caso se omite el matching
             # semántico sin warning por-item y se cae al flujo no-vector.
-            if not matched_pantry_key and len(base) > 2:
+            # [P1-PLAN-LOTE-199] `probe_only`: la sonda de los cerradores (nevera_exigida) no paga una llamada de
+            # embeddings por candidato; sólo puede rechazar DE MÁS, nunca aceptar lo que el revisor rechaza.
+            if not probe_only and not matched_pantry_key and len(base) > 2:
                 try:
                     gen_emb = get_embedding(base)
                     if gen_emb is not None:
@@ -5366,7 +5368,8 @@ def validate_ingredients_against_pantry(generated_ingredients: list, pantry_ingr
             error_msg += f"- Excediste tus CANTIDADES (Tu inventario restringe esto matemáticamente): {', '.join(over_limit)}.\n"
 
         error_msg += "Corrige tu respuesta bajando las porciones estrictamente numéricas al límite exacto, O eliminando/sustituyendo ingredientes."
-        logger.warning(f"🚨 [PANTRY GUARD] RECHAZO | unauthorized={len(unauthorized)} | over_limit={len(over_limit)}")
+        (logger.debug if probe_only else logger.warning)(
+            f"🚨 [PANTRY GUARD] RECHAZO | unauthorized={len(unauthorized)} | over_limit={len(over_limit)}")
         return (error_msg, list(unauthorized)) if return_unauthorized else error_msg
 
     logger.debug(f"✅ [PANTRY GUARD] APROBADO (Cantidades & Confiabilidad validadas)")

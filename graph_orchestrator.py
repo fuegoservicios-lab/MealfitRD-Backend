@@ -15878,7 +15878,7 @@ def _close_micro_gaps_for_plan(plan: dict, form_data: dict, db=None, pantry_stri
                             _MICRO_SEED_SOURCES_ITER = _MICRO_SEED_SOURCES[k]
                         for _cand in _MICRO_SEED_SOURCES_ITER:
                             _cand_low = _sa_seed(_cand.lower())
-                            if any(dk and dk in _cand_low for dk in _seed_dislikes):
+                            if any(dk and dk in _cand_low for dk in _seed_dislikes) or not __import__("nevera_exigida").admite_linea(_cand):  # [P1-PLAN-LOTE-199]
                                 continue
                             if _fd.get("allergies"):
                                 try:
@@ -19698,7 +19698,7 @@ def _safe_high_density_proteins(allergies, db, min_protein: float = 18.0, diet=N
         if info and info.protein >= min_protein and info.kcal > 0:
             out.append((info.protein / info.kcal, name, info))
     out.sort(key=lambda x: x[0], reverse=True)
-    return out
+    return __import__("nevera_exigida").filtrar_proteinas(out)  # [P1-PLAN-LOTE-199] con Nevera exigida, de la Nevera
 
 
 def _meal_slot_is_light(meal: dict, strip_accents_fn) -> bool:
@@ -28802,7 +28802,7 @@ def _night_rice_autofix(days: list, db=None, *, compound: bool = False, country:
                     continue
                 name = str(m.get("name") or "")
                 name_low = _sa(name.lower())
-                sub = _NIGHT_RICE_SUB_ROTATION[di % len(_NIGHT_RICE_SUB_ROTATION)]
+                sub = __import__("nevera_exigida").preferir(_NIGHT_RICE_SUB_ROTATION, di)  # [P1-PLAN-LOTE-199] Nevera primero
                 _sub_low = _sa(sub.lower())
                 ings = m.get("ingredients")
                 if not isinstance(ings, list):
@@ -28977,7 +28977,7 @@ def _fruit_savory_autofix(days: list, form_data=None, db=None) -> int:
                         return False
                 except Exception:
                     return False  # conservador: duda → no usar el candidato
-            return True
+            return __import__("nevera_exigida").admite(cand)  # [P1-PLAN-LOTE-199] sin Nevera exigida ⇒ True
 
         repl = next((c for c in ("Aguacate", "Batata") if _replacement_ok(c)), None)
         if repl is None:
@@ -30436,7 +30436,7 @@ def _breakfast_rice_autofix(days: list, db=None, *, country: str = "DO") -> int:
                 ings = m.get("ingredients")
                 if not isinstance(ings, list):
                     continue
-                sub = _BREAKFAST_RICE_SUB_ROTATION[di % len(_BREAKFAST_RICE_SUB_ROTATION)]
+                sub = __import__("nevera_exigida").preferir(_BREAKFAST_RICE_SUB_ROTATION, di)  # [P1-PLAN-LOTE-199] Nevera primero
                 _sub_low = _sa(sub.lower())
                 _changed = False
                 for j, ing in enumerate(ings):
@@ -51376,7 +51376,7 @@ async def arun_plan_pipeline(form_data: dict, history: list = None, taste_profil
 
     # 3. Estado inicial del grafo
     req_id = str(uuid.uuid4())[:8]
-    _p134_req_token = request_id_var.set(req_id)
+    _p134_req_token = request_id_var.set(req_id); _nx_tok = __import__("nevera_exigida").fijar(actual_form_data)  # [P1-PLAN-LOTE-199] la Nevera que exigirá el revisor, para los cerradores
     # P1-NEW-1: setear user_id en ContextVar para que el wrapper
     # `ChatGoogleGenerativeAI` lo lea y aplique rate limit per-user.
     # Resolución del user_id efectivo:
@@ -51983,7 +51983,7 @@ async def arun_plan_pipeline(form_data: dict, history: list = None, taste_profil
         except (LookupError, ValueError):
             pass
         try:
-            request_id_var.reset(_p134_req_token)
+            __import__("nevera_exigida").soltar(_nx_tok); request_id_var.reset(_p134_req_token)
         except (LookupError, ValueError):
             pass
 

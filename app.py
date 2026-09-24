@@ -417,7 +417,10 @@ _PROCESS_START_ISO = datetime.now(timezone.utc).isoformat()
 # filtran con el escáner SSOT (alergias y rechazos) y ofrecen alternativas.
 # [P1-PLAN-LOTE-198 · 2026-09-24] (solo backend, sin cambio de conducta) graph_orchestrator.py estaba a 1 línea de su
 # tope: las plantillas del plan de emergencia (datos puros) pasan TAL CUAL a fallback_pools.py; el grafo las re-exporta.
-_LAST_KNOWN_PFIX = "P1-PLAN-LOTE-198 · 2026-09-24"
+# [P1-PLAN-LOTE-199 · 2026-09-24] (solo backend) prod 72 h: 6/8 entregas fallaron la revisión, todas rellenos del único
+# usuario con Nevera; en cada intento «edamame cocido» del cerrador de proteína (no estaba en su Nevera) y su «Compra
+# Urgente» pedía 250 g de edamame y whey. Con Nevera exigida, cerrador de proteína y semillas eligen de la Nevera.
+_LAST_KNOWN_PFIX = "P1-PLAN-LOTE-199 · 2026-09-24"
 
 # [P1-SENTRY-SAMPLE-COST · 2026-05-12] Sentry sampling driven from env vars
 # con default seguro 0.1 (10%). Pre-fix tenía `traces_sample_rate=1.0` y
