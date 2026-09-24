@@ -37,15 +37,23 @@ def activo() -> bool:
 
 
 def ultimo_dia_planificado(plan_data) -> Optional[date]:
-    """La fecha más tardía entre los días vivos del plan (`days[*].date`, «YYYY-MM-DD…»), o None si no hay ninguna."""
-    dias = plan_data.get("days") if isinstance(plan_data, dict) else None
+    """La fecha más tardía entre los días del plan —vivos (`days`) y ARCHIVADOS (`_archived_days`, que los dos shifts
+    fechan antes de archivar)—, «YYYY-MM-DD…», o None si no hay ninguna.
+
+    [P1-PLAN-LOTE-204 · 2026-09-24] Con sólo los vivos, un plan cuyo último bloque ya pasó entero (el usuario abre la app
+    tras la medianoche, el shift archiva sus días) llegaba al gate SIN fechas y volvía la fórmula inflada: justo en el
+    usuario que se quedó sin días. Pasa, por ejemplo, con el bloque 2 de un plan de 30 días."""
+    if not isinstance(plan_data, dict):
+        return None
     fechas = []
-    for d in dias if isinstance(dias, list) else []:
-        texto = str((d or {}).get("date") or "")[:10] if isinstance(d, dict) else ""
-        try:
-            fechas.append(date.fromisoformat(texto))
-        except ValueError:
-            continue
+    for clave in ("days", "_archived_days"):
+        dias = plan_data.get(clave)
+        for d in dias if isinstance(dias, list) else []:
+            texto = str((d or {}).get("date") or "")[:10] if isinstance(d, dict) else ""
+            try:
+                fechas.append(date.fromisoformat(texto))
+            except ValueError:
+                continue
     return max(fechas) if fechas else None
 
 

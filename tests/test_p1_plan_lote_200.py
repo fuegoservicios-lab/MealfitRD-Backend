@@ -75,6 +75,17 @@ def test_con_el_knob_apagado_vuelve_la_formula(monkeypatch):
     assert r.get("reason") == "prev_chunk_day_not_yet_elapsed" and r.get("days_until_prev_end") == 5, r
 
 
+def test_con_todos_los_dias_archivados_manda_el_archivo():
+    """[P1-PLAN-LOTE-204] El shift archivó el bloque entero: sin días vivos, la fecha sale de `_archived_days`."""
+    now = datetime.now(timezone.utc).replace(hour=0, minute=30, second=0, microsecond=0)
+    ayer = (now - timedelta(days=1)).date().isoformat()
+    antier = (now - timedelta(days=2)).date().isoformat()
+    pd = {"_shift_days_accumulated": 3, "days": [], "_archived_days": [{"date": antier}, {"date": ayer}]}
+    assert fbp.ultimo_dia_planificado(pd).isoformat() == ayer
+    r = _gate(pd, now)
+    assert r.get("reason") != "prev_chunk_day_not_yet_elapsed", r
+
+
 def test_si_el_bloque_previo_no_termino_sigue_aplazando():
     now = datetime.now(timezone.utc).replace(hour=0, minute=30, second=0, microsecond=0)
     manana = (now + timedelta(days=1)).date().isoformat()
