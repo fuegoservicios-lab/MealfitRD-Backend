@@ -452,7 +452,14 @@ _PROCESS_START_ISO = datetime.now(timezone.utc).isoformat()
 # en diabetes lo liberado va a grasa, no a carbohidratos (DM2 88 kg: 158 → 124 g de proteína).
 # [P1-PLAN-LOTE-212 · 2026-09-24] V7a (decisión nueva del dueño): el paso que pide menos piezas que la lista se alinea
 # con plural («pica 1 tomate» con 3 → «pica 3 tomates»). Corpus fijo: 47 → 24.
-_LAST_KNOWN_PFIX = "P1-PLAN-LOTE-212 · 2026-09-24"
+# [P1-PLAN-LOTE-213 · 2026-09-24] (solo backend) regla (b): con la Nevera EXIGIDA por el revisor (y viable, ≥12), el
+# esqueleto se queda con ella; el catálogo solo completa donde el revisor no la exige.
+# [P1-PLAN-LOTE-214 · 2026-09-24] (solo backend) compra única: el duradero que sustituye al fresco pasa por el backstop
+# clínico (un alérgico al pescado recibía atún después del revisor) y la proteína rota (atún, sardinas, garbanzos).
+# [P1-PLAN-LOTE-215 · 2026-09-24] (solo backend) compra única de 30 días: la lista del día 1 sale del ciclo entero
+# proyectado (no «3 días × 10»); lista, guard y base de días leen el mismo mes, la híbrida no parte la compra en semanas
+# y la lata y el huevo tienen techo de compra única (el plan del dueño: 736 g de atún para 1.266, 60 huevos para 140).
+_LAST_KNOWN_PFIX = "P1-PLAN-LOTE-215 · 2026-09-24"
 
 # [P1-SENTRY-SAMPLE-COST · 2026-05-12] Sentry sampling driven from env vars
 # con default seguro 0.1 (10%). Pre-fix tenía `traces_sample_rate=1.0` y

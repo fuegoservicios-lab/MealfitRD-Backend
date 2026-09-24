@@ -32577,40 +32577,35 @@ def _strip_phantom_sugar_from_steps(days) -> int:
 
 # [P1-STEP14-SHOPPING-COOKING · 2026-09-05] Sustitución DETERMINISTA del fresco fuera de horizonte en compra única.
 # `fresh_beyond_horizon` era solo un aviso (severidad baja, gate warn): el plato llegaba con lechuga el día 20. Tabla
-# por familia → equivalente duradero del catálogo; se conserva la cantidad de la línea. Proteína fresca sin ventana de
-# congelación ⇒ atún en agua (omnívoro) o garbanzos (vegetariano/vegano). Truth-up de macros desde los strings.
+# por familia → equivalente duradero del catálogo; se conserva la cantidad de la línea. Truth-up de macros desde los strings.
+# [P1-PLAN-LOTE-214 · 2026-09-24] La decisión por línea (tabla, alergias, rotación de la proteína, cantidad) vive en
+# `compra_unica.sustituir_linea`: la MISMA que usa la proyección de la lista de compra única (lote 215). Aquí quedan
+# alias de la tabla para quien la importe por su nombre de siempre.
 SINGLE_TRIP_FRESH_SUBSTITUTE = _env_bool("MEALFIT_SINGLE_TRIP_FRESH_SUBSTITUTE", True)
-_FRESH_SUBSTITUTES = (
-    (("lechuga", "berro", "rucula", "arugula", "espinaca", "acelga", "kale", "col rizada"), "repollo"),
-    (("tomate cherry", "tomate"), "zanahoria"),
-    (("pepino", "calabacin", "zucchini", "brocoli", "coliflor", "vainitas", "habichuelas verdes", "esparrago", "champinon", "hongos", "setas"), "zanahoria"),
-    (("cilantro", "perejil", "albahaca", "menta", "cebollin", "cebollino"), "oregano"),
-    (("fresa", "frambuesa", "mora", "arandano", "uva", "lechosa", "papaya", "mango", "pina", "melon", "sandia", "guineo", "banana", "durazno", "melocoton", "pera", "kiwi", "cereza", "mamey", "nispero", "aguacate"), "manzana"),
-    (("pescado", "tilapia", "salmon", "mero", "chillo", "dorado", "bacalao fresco", "merluza", "camaron", "camarones", "mariscos", "calamar", "pulpo", "cangrejo", "langosta", "lambi"), "atun en agua"),
-    (("pechuga de pollo", "pollo", "muslo", "pavo", "carne de res", "res molida", "res", "bistec", "cerdo", "chuleta", "lomo", "chivo", "conejo", "higado"), "atun en agua"),
-    # lácteos: solo la leche tiene sustituto duradero honesto (UHT, misma unidad de volumen); yogurt, cottage y queso
-    # fresco se dejan al prompt (bloque 5 vivo: «305 ml de queso parmesano», «¾ taza de queso parmesano»)
-    (("leche descremada", "leche entera", "leche"), "leche UHT"),
-)
-# [P1-STEP14-CHUNK-PARITY] tokens que NO se sustituyen aunque no aguanten: sin equivalente duradero coherente
-_FRESH_SUB_SKIP = ("yogur", "yogurt", "cottage", "ricotta", "requeson", "queso fresco", "queso blanco", "queso de freir", "leche de coco", "leche de almendra")
-_FRESH_SUB_VEG_PROTEIN = "garbanzos cocidos"
+from compra_unica import (SUSTITUTOS as _FRESH_SUBSTITUTES, SIN_SUSTITUTO as _FRESH_SUB_SKIP,  # noqa: E402
+                          PROTEINA_VEGETAL as _FRESH_SUB_VEG_PROTEIN)
 
 
-def _single_trip_fresh_substitute(days, db=None, *, effective=None, diet=None, days_offset: int = 0) -> int:
+def _single_trip_fresh_substitute(days, db=None, *, effective=None, diet=None, days_offset: int = 0,
+                                  contexto=None) -> int:
     """Sustituye, en los días fuera de la semana de frescos de un ciclo de UNA sola compra, los ingredientes que no
     aguantan (`pantry_durability.ingredient_issue_beyond_horizon`) por su equivalente duradero. Muta in-place; marca
     `_fresh_substituted`; lockstep `ingredients_raw`; truth-up. Sin política de compra única ⇒ 0. Fail-safe.
+    [P1-PLAN-LOTE-214] `contexto` (el formulario / contexto clínico del plan): con él la proteína se elige SEGURA —sin
+    alérgenos, apta para la dieta, sin mercurio en embarazo— y rotando por día y comida, no «atún» los 23 días.
     tooltip-anchor: P1-STEP14-SHOPPING-COOKING"""
     if not SINGLE_TRIP_FRESH_SUBSTITUTE or not days:
         return 0
     try:
-        from pantry_durability import single_trip_requirements, ingredient_issue_beyond_horizon
+        from pantry_durability import single_trip_requirements
         from constants import strip_accents as _sa_fs, canonicalize_diet_type as _cdt_fs
+        import compra_unica as _cu_fs
         if db is None:
             from nutrition_db import IngredientNutritionDB
             db = IngredientNutritionDB()
-        _veg = _cdt_fs(diet) in ("vegan", "vegetarian")
+        _dieta_fs = _cdt_fs(diet)
+        _veg = _dieta_fs in ("vegan", "vegetarian")
+        _alergias_fs = _cu_fs.alergias_de(contexto)
         changed = 0
         # [P1-STEP14-CHUNK-PARITY] el chain del worker pasa solo los días NUEVOS: `days_offset` da el día absoluto
         _off = int(days_offset or 0)
@@ -32621,40 +32616,20 @@ def _single_trip_fresh_substitute(days, db=None, *, effective=None, diet=None, d
             req = single_trip_requirements(effective, i)
             if not req:
                 continue
-            for m in (d.get("meals") or []):
+            for mi, m in enumerate(d.get("meals") or []):
                 if not isinstance(m, dict) or not isinstance(m.get("ingredients"), list):
                     continue
                 ings = m["ingredients"]
                 raw = m.get("ingredients_raw")
                 for idx, line in enumerate(list(ings)):
                     text = str(line)
-                    low = _sa_fs(text.lower())
-                    if any(h in low for h in ("en lata", "enlatad", "congelad", "seco", "secos", "en polvo", "deshidratad")):
+                    _r_fs = _cu_fs.sustituir_linea(text, i, req, vegetal=_veg, vegano=(_dieta_fs == "vegan"),
+                                                   alergias=_alergias_fs, dieta=_dieta_fs,
+                                                   contexto=contexto if isinstance(contexto, dict) else None,
+                                                   semilla=i + mi)
+                    if not _r_fs:
                         continue
-                    code = ingredient_issue_beyond_horizon(text, i, bool(req.get("allow_frozen")))
-                    if not code:
-                        continue
-                    if any(t in low for t in _FRESH_SUB_SKIP):
-                        continue
-                    sub, hit_tok = None, None
-                    for toks, rep_name in _FRESH_SUBSTITUTES:
-                        for t in toks:
-                            if _re.search(r"\b" + _re.escape(t) + r"s?\b", low):
-                                sub, hit_tok = rep_name, t
-                                break
-                        if sub:
-                            break
-                    if not sub:
-                        continue
-                    if sub == "atun en agua" and _veg:
-                        sub = _FRESH_SUB_VEG_PROTEIN
-                    if sub == "queso parmesano" and _cdt_fs(diet) == "vegan":
-                        sub = _FRESH_SUB_VEG_PROTEIN
-                    mm = _re.match(r"^\s*([\d.,/½¼¾⅓⅔]+\s*(?:g|gr|gramos|ml|taza|tazas|cda|cdas|cdta|cdtas|unidad|unidades)?)\s+(?:de\s+)?", text, _re.IGNORECASE)
-                    qty = (mm.group(1).strip() + " de ") if mm else ""
-                    new_line = f"{qty}{sub}"
-                    if new_line == text:
-                        continue
+                    new_line, sub, hit_tok = _r_fs
                     ings[idx] = new_line
                     if isinstance(raw, list) and idx < len(raw):
                         raw[idx] = new_line
@@ -32677,7 +32652,7 @@ def _single_trip_fresh_substitute(days, db=None, *, effective=None, diet=None, d
                                     rec[_ri] = _re.sub(r"(?i)\b" + _re.escape(hit_tok) + r"s?\b", sub, _st)
                     except Exception:
                         pass
-                    logger.info(f"🧳 [P1-STEP14-SHOPPING-COOKING] día {i + 1}: «{text[:40]}» no aguanta ({code}) → «{sub}» | meal={str(m.get('name'))[:40]}")
+                    logger.info(f"🧳 [P1-STEP14-SHOPPING-COOKING] día {i + 1}: «{text[:40]}» no aguanta → «{sub}» | meal={str(m.get('name'))[:40]}")
                 if m.get("_fresh_substituted"):
                     try:
                         _truth_up_meal_macros_from_strings(m, db)

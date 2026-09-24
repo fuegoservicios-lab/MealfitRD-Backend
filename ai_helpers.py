@@ -2327,6 +2327,9 @@ def get_deterministic_variety_prompt(history_text: str, form_data: dict = None, 
         # ahorro) y se completa con el sorteo ponderado hasta el mínimo; solo con suficientes bases
         # propias se activa el lock. tooltip-anchor: P2-PANTRY-ROTATION-FLOOR
         _min_p = PANTRY_ROTATION_MIN_PROTEINS
+        # [P1-PLAN-LOTE-213] Cuando el revisor va a EXIGIR la Nevera (`nevera_exigida.lista`, espejo de su regla), lo que el
+        # sorteo añade fuera de ella es un rechazo seguro: el esqueleto se queda con lo que la Nevera tiene.
+        _nevera_estricta = __import__("nevera_exigida").nevera_manda(form_data)
         # [P1-SINGLE-TRIP-ROTATION] en compra única el sorteo solo completa con lo que aguanta hasta el fin del bloque
         _st_before = (len(unique_proteins), len(unique_carbs), len(unique_veggies), len(unique_fruits))
         unique_proteins = _single_trip_durable_filter(unique_proteins, form_data, _dc)
@@ -2338,8 +2341,12 @@ def get_deterministic_variety_prompt(history_text: str, form_data: dict = None, 
             logger.info(f"🧳 [P1-SINGLE-TRIP-ROTATION] compra única: el sorteo solo completa con duraderos "
                         f"(P/C/V/F {_st_before} → {_st_after}); la Nevera manda.")
         if extracted_p:
-            if len(extracted_p) >= _min_p:
+            if len(extracted_p) >= _min_p or _nevera_estricta:
                 unique_proteins = extracted_p
+                if len(extracted_p) < _min_p:
+                    logger.info(
+                        f"🧊 [P1-PLAN-LOTE-213] la nevera aportó {len(extracted_p)} proteína(s) (<{_min_p}) y el revisor "
+                        f"la EXIGE → el esqueleto se queda con ella (sin sorteo del catálogo).")
             else:
                 _rest = [p for p in unique_proteins if p not in extracted_p]
                 unique_proteins = extracted_p + _rest
@@ -2356,7 +2363,7 @@ def get_deterministic_variety_prompt(history_text: str, form_data: dict = None, 
         # (conserva la prioridad de ahorro) y se completa con el sorteo hasta el mínimo.
         # Umbral 2 para carbos/frutas; 3 para vegetales, que llenan 6 slots (2 por día).
         def _floor_pool(_extracted, _sorteo, _min):
-            if len(_extracted) >= _min:
+            if len(_extracted) >= _min or _nevera_estricta:
                 return _extracted
             return _extracted + [x for x in _sorteo if x not in _extracted]
 
@@ -2373,7 +2380,7 @@ def get_deterministic_variety_prompt(history_text: str, form_data: dict = None, 
         # tras `/inventory/consume`, el plan usaba la base intersectada del ciclo pero SIN la
         # regla de ahorro, o sea el coste del lock sin su beneficio. Acumulativo.
         # tooltip-anchor: P3-CYCLE-LOCK-ADDITIVE
-        _pantry_sustains_rotation = bool(extracted_p) and len(extracted_p) >= _min_p
+        _pantry_sustains_rotation = bool(extracted_p) and len(extracted_p) >= _min_p or (bool(extracted_p) and _nevera_estricta)  # [P1-PLAN-LOTE-213]
         cycle_locked = cycle_locked or _pantry_sustains_rotation
         
     # ======= FORCED INGREDIENT INJECTION (FROM RAG/HISTORY) =======

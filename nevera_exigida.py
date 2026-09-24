@@ -188,3 +188,30 @@ def filtrar_proteinas(cands: list) -> list:
             logger.info(f"🧊 [P1-PLAN-LOTE-199] cerrador de proteína limitado a la Nevera: {len(dentro)}/{len(cands)} "
                         f"candidatos ({', '.join(str(getattr(c[2], 'name', None) or c[1]) for c in dentro[:6])})")
     return dentro or cands
+
+
+def nevera_manda(form_data=None) -> bool:
+    """[P1-PLAN-LOTE-213 · 2026-09-24] ¿El esqueleto debe quedarse con lo que la Nevera tiene?
+
+    Dos reglas del dueño se contradecían: P2-PANTRY-ROTATION-FLOOR («la Nevera es un piso, no una camisa de fuerza»)
+    completaba el esqueleto con el sorteo del catálogo cuando la Nevera traía pocas bases, y el revisor —con la Nevera
+    exigida— rechaza todo ingrediente que no esté en ella. Con pocas proteínas en la Nevera, el esqueleto asignaba hígado
+    o nueces que no tiene: si el modelo las usaba, rechazo por Nevera; si no, rechazo por «omitió proteínas asignadas».
+    El dueño (24-sep): «haz la que consideres mejor». Gana el revisor: cocinar con lo que se compró es también la
+    promesa de la compra única de 30 días. Donde el revisor NO exige la Nevera (renovaciones con variedad, plan nuevo,
+    Nevera sólo de referencia) el piso sigue siendo piso. Tampoco manda una Nevera por debajo del PISO DE VIABILIDAD
+    (`CHUNK_PANTRY_STRICT_MIN_ITEMS`, 12, el mismo env var que lee el worker): con menos, el modo estricto es
+    insatisfacible y el worker ya la baja a referencia (P1-PANTRY-VIABILITY-FLOOR). Mismo knob que los cerradores
+    (`MEALFIT_CLOSERS_RESPECT_PANTRY`).
+    tooltip-anchor: P1-PLAN-LOTE-213-NEVERA-MANDA"""
+    if not activo():
+        return False
+    try:
+        nevera = lista(form_data)
+        if nevera is None:
+            return False
+        import os
+        piso = max(0, min(100, int(os.environ.get("CHUNK_PANTRY_STRICT_MIN_ITEMS", "12") or 12)))
+        return len(nevera) >= piso
+    except Exception:
+        return False
