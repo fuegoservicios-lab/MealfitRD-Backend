@@ -6,7 +6,7 @@ push si tiene dispositivos suscritos). Test ancla: [`test_p1_plan_lote_72.py`](.
 
 ## Cuándo toca cada aviso
 
-Vigente desde `P1-PLAN-LOTE-216` (2026-09-24); las secciones de abajo son la historia de cómo se llegó aquí.
+Vigente desde `P1-PLAN-LOTE-220` (2026-09-24); las secciones de abajo son la historia de cómo se llegó aquí.
 
 - **La hora del aviso la elige la persona**, por comida, en Configuración → Recordatorios de comida
   (`health_profile.avisos_por_comida`, ver abajo). Sin tocar nada: la hora normal de esa comida menos la antelación
@@ -87,7 +87,7 @@ Medido en producción (solo lectura): el motor funciona —38 avisos en 5 días,
 
 Lo que el interruptor NO hace, a sabiendas: apagar el mensaje del coach en el chat. «Recibe avisos en tu pantalla» habla de la pantalla; el recordatorio dentro del chat es parte de la conversación.
 
-## La hora la eliges tú (`P1-PLAN-LOTE-216` · 2026-09-24)
+## La hora la eliges tú (`P1-PLAN-LOTE-220` · 2026-09-24)
 
 El dueño, a la 1:18 p. m.: «hoy nada más me llegó la notificación del desayuno… son la 1 de la tarde y todavía tiene la notificación del desayuno». Dos defectos, uno encima del otro:
 
@@ -101,7 +101,7 @@ El dueño, a la 1:18 p. m.: «hoy nada más me llegó la notificación del desay
 | El teléfono | `GET /api/notifications/meal-reminders` no programa las comidas apagadas y trae `comidas`: las cuatro, también las apagadas, con su hora efectiva y la normal, para pintar Configuración. | `meal_reminders.horario_de_avisos`, `comidas_para_configuracion` |
 | El chat | Cron cada 15 min; el mensaje sale en el primer tick desde 15 min antes de la hora del aviso y se reintenta `MEALFIT_PROACTIVE_NUDGE_RETRY_HOURS` sin repetirse. El minuto se redondea con UNA función para las dos vías (`minuto_del_dia`). El Resumen de las 23:00 no se repite en los cuatro ticks de esa hora. | `run_proactive_checks`, `MINUTOS_ENTRE_TICKS` |
 
-Lo que no cambia: el tope diario, las horas de silencio (la hora elegida tampoco puede caer antes de las 6:00: el servidor la rechaza y Configuración no deja elegirla), el anti-spam de una hora y el tono adaptativo. Test ancla: [`test_p1_plan_lote_216.py`](../tests/test_p1_plan_lote_216.py).
+Lo que no cambia: el tope diario, las horas de silencio (la hora elegida tampoco puede caer antes de las 6:00: el servidor la rechaza y Configuración no deja elegirla), el anti-spam de una hora y el tono adaptativo. Test ancla: [`test_p1_plan_lote_220.py`](../tests/test_p1_plan_lote_220.py).
 
 ## Abierto
 
