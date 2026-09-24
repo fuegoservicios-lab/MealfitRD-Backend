@@ -22004,7 +22004,7 @@ _STAPLE_TECHNIQUE_CANONICAL = {
     "sarten": "sarten",
     "crudo": "crudo", "cruda": "crudo",
     "duro": "duro",
-    "pochado": "pochado", "pochada": "pochado", "escalfado": "pochado",
+    "pochado": "pochado", "pochada": "pochado", "escalfado": "pochado", "cocid": "hervir",  # [P1-PLAN-LOTE-196] «huevo cocido» del cerrador (último: prioridad mínima)
 }
 _STAPLE_TECHNIQUE_TOKENS = tuple(_STAPLE_TECHNIQUE_CANONICAL.keys())
 
@@ -22094,8 +22094,8 @@ def _user_staple_labels(form_data: dict) -> set:
     try:
         staples = _raw_staple_foods(form_data)
         if not staples:
-            return set()
-        return _protein_gate_labels_in_text(" ".join(staples))
+            return __import__("huevo_sin_lacteos").etiquetas_extra(form_data)   # [P1-PLAN-LOTE-196] sin lácteos, el huevo es básico
+        return _protein_gate_labels_in_text(" ".join(staples)) | __import__("huevo_sin_lacteos").etiquetas_extra(form_data)
     except Exception:
         return set()
 
