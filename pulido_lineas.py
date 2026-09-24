@@ -43,6 +43,12 @@ _ESPECIA_SIN_UNIDAD = re.compile(rf"^\s*{_LEAD}\s+(?!de\b)({_ESPECIA}\b.*)$", re
 # Menos de 1 g de una semilla o un polvo: «0.06 g de semillas de chía» → «1 pizca de semillas de chía».
 _MIGAJA = re.compile(r"^\s*0(?:[.,]\d+)?\s*(?:g|gr|gramos)\s+de\s+(.+)$", re.IGNORECASE)
 _PIZCABLE = re.compile(rf"\b(?:semillas?|ch[ií]a|linaza|ajonjol[ií]|s[eé]samo|cacao|sal|{_ESPECIA})\b", re.IGNORECASE)
+# [P1-PLAN-LOTE-203 · 2026-09-24] Entre 1 y 2,5 g con decimales —la zona que el cuantizador deja sin tocar («ya es pesable
+# en báscula de precisión»)—: «1.21 g de Ajo» (plan canario del dueño), «1.23 g de semillas de linaza». Nadie pesa 1,21 g
+# de ajo: medio diente (≈1,5 g) o media cucharadita (semillas, especias, sal) es lo que se mide en una cocina. Sólo con
+# decimales: «2 g de sal» ya es una medida.
+_DECIMAL_1_A_2_5 = re.compile(r"^\s*(\d+[.,]\d+)\s*(?:g|gr|gramos)\s+de\s+(.+)$", re.IGNORECASE)
+_AJO_FRESCO = re.compile(r"^ajos?\b(?!\s+en\s+polvo)", re.IGNORECASE)
 
 # «1 pechugas de pollo (≈134 g)» → «1 pechuga …»: la concordancia con UNO (o una fracción sola) que el re-cuadre de
 # conteos no cubre (su tabla es la del qty-sync de los pasos, y no se toca por esto).
@@ -82,6 +88,15 @@ def pulir_linea(s: str) -> str:
     m = _MIGAJA.match(out)
     if m and _PIZCABLE.search(m.group(1)):
         out = f"1 pizca de {m.group(1).strip()}"
+    m = _DECIMAL_1_A_2_5.match(out)                                          # [P1-PLAN-LOTE-203]
+    if m and 1.0 <= float(m.group(1).replace(",", ".")) < 2.5:
+        nombre = m.group(2).strip()
+        if _AJO_FRESCO.match(nombre):
+            out = f"½ diente de {nombre}"
+        elif re.match(r"^sal\b", nombre, re.IGNORECASE):
+            out = f"¼ cdta de {nombre}"                  # la sal pesa ~6 g la cucharadita
+        elif _PIZCABLE.search(re.sub(r"\bsin\s+sal\b", "", nombre, flags=re.IGNORECASE)):   # «maní … sin sal» no es sal
+            out = f"½ cdta de {nombre}"
     if _MEDIA_PIZCA.match(out):
         out = _MEDIA_PIZCA.sub("1 pizca", out, count=1)
     m = _ESPECIA_SIN_UNIDAD.match(out)

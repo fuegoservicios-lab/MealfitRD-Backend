@@ -160,6 +160,13 @@ def reencuadra_y_mide(plan_data: dict, *, form_data: Optional[dict] = None,
                     go.refresh_delivered_macros(plan_data)
                 except Exception:
                     pass
+                # [P1-PLAN-LOTE-203 · 2026-09-24] En el merge de los rellenos (chunk-T1) este es el ÚLTIMO pase que toca
+                # cantidades y corre DESPUÉS del pulido de la cola del escudo: el bump dejaba «67.56 g de edamame cocido»
+                # en el plan real de un usuario. Lo que se reescala, se vuelve a pulir (sólo display, idempotente).
+                try:
+                    __import__("pulido_lineas").pulir_plan(plan_data)
+                except Exception:
+                    pass
             informe["recuperado"] = subio
         except Exception as e:
             logger.debug(f"[P1-PROTEIN-FLOOR-LAST-WORD] re-encuadre no-op: {type(e).__name__}: {e}")

@@ -428,7 +428,10 @@ _PROCESS_START_ISO = datetime.now(timezone.utc).isoformat()
 # días» con un cartón de 20. Plazo por el SSOT de durabilidad para lo duradero; sin gramos no se predice.
 # [P1-PLAN-LOTE-202 · 2026-09-24] (frontend) el delta de la lista de compras daba por caducados los secos de la Nevera
 # con el shelf_life_days de relleno (14) y volvía a pedirlos: manda el mayor entre el catálogo y la inferencia por nombre.
-_LAST_KNOWN_PFIX = "P1-PLAN-LOTE-202 · 2026-09-24"
+# [P1-PLAN-LOTE-203 · 2026-09-24] (solo backend) gramos con decimales en planes vivos: «67.56 g de edamame» (el último
+# pase de proteína de los rellenos corre después del pulido) y «1.21 g de Ajo» (1-2,5 g, zona que el cuantizador no
+# toca). Re-pulido tras ese pase; ajo → «½ diente», semillas/especias → «½ cdta», sal → «¼ cdta».
+_LAST_KNOWN_PFIX = "P1-PLAN-LOTE-203 · 2026-09-24"
 
 # [P1-SENTRY-SAMPLE-COST · 2026-05-12] Sentry sampling driven from env vars
 # con default seguro 0.1 (10%). Pre-fix tenía `traces_sample_rate=1.0` y
