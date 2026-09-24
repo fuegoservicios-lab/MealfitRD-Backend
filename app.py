@@ -426,7 +426,9 @@ _PROCESS_START_ISO = datetime.now(timezone.utc).isoformat()
 # [P1-PLAN-LOTE-201 · 2026-09-24] (solo backend) la Nevera real que lee la IA: 33 de 41 alimentos «URGENTE: Caducado —
 # prioriza su uso» (canela, sal, pasta, habichuelas secas: shelf_life_days de relleno = 14) y «Huevo: se agotará en ~0
 # días» con un cartón de 20. Plazo por el SSOT de durabilidad para lo duradero; sin gramos no se predice.
-_LAST_KNOWN_PFIX = "P1-PLAN-LOTE-201 · 2026-09-24"
+# [P1-PLAN-LOTE-202 · 2026-09-24] (frontend) el delta de la lista de compras daba por caducados los secos de la Nevera
+# con el shelf_life_days de relleno (14) y volvía a pedirlos: manda el mayor entre el catálogo y la inferencia por nombre.
+_LAST_KNOWN_PFIX = "P1-PLAN-LOTE-202 · 2026-09-24"
 
 # [P1-SENTRY-SAMPLE-COST · 2026-05-12] Sentry sampling driven from env vars
 # con default seguro 0.1 (10%). Pre-fix tenía `traces_sample_rate=1.0` y
