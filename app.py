@@ -393,7 +393,13 @@ _PROCESS_START_ISO = datetime.now(timezone.utc).isoformat()
 # de / puede contener» = petición de verificación (aviso), salvo pasteurizar; la guarda C2 sigue con la última palabra.
 # Y la otra causa: el huevo crudo de un batido se cambiaba por yogur griego SIN mirar la alergia (2 de 3 violaciones de
 # lácteos de rd11–rd16 eran nuestras; en cambiar plato/chat quedaba guardado). Ahora elige lo que el usuario puede comer.
-_LAST_KNOWN_PFIX = "P1-PLAN-LOTE-189 · 2026-09-23"
+# [P1-PLAN-LOTE-190 · 2026-09-24] (solo backend) rd18: el autofix de «misma proteína repetida», en una merienda o un
+# desayuno de un alérgico a lácteos (o vegano), transplantaba «habichuelas rojas guisadas» — y la regla de horario la
+# rechaza SIEMPRE («guisada» en merienda, «habichuela» en desayuno); blanda en el último intento ⇒ podía entregarse.
+# [P1-PLAN-LOTE-191 · 2026-09-24] (solo backend) rd18: «mide 20 g de harina de Negrito» y la lista sin harina. En 921
+# comidas guardadas, 11 pasos miden algo que la lista no trae (queso, nueces, pan rallado, yogur…) — y la guarda de
+# alérgenos lee la LISTA. Ahora entra a la lista antes de las guardas, y las de actualización lo ven en una copia.
+_LAST_KNOWN_PFIX = "P1-PLAN-LOTE-191 · 2026-09-24"
 
 # [P1-SENTRY-SAMPLE-COST · 2026-05-12] Sentry sampling driven from env vars
 # con default seguro 0.1 (10%). Pre-fix tenía `traces_sample_rate=1.0` y
