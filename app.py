@@ -573,7 +573,10 @@ _PROCESS_START_ISO = datetime.now(timezone.utc).isoformat()
 # celíaco y solo la paró el revisor— y las ensaladas con mayonesa del catálogo son huevo.
 # [P1-PLAN-LOTE-269 · 2026-09-25] miel para la vegana y carne oculta (gelatina, grenetina, colágeno, sopita) en el
 # escáner y el filtro de dieta; las alternativas vegetales se excusan acotadas al término («tocino de maple» no).
-_LAST_KNOWN_PFIX = "P1-PLAN-LOTE-269 · 2026-09-25"
+# [P1-PLAN-LOTE-270 · 2026-09-25] dudas de MARCA del revisor («alta probabilidad de contener», «no especificado como
+# libre de», «si contiene») = aviso; nota de etiqueta determinista para pan/galletas/chocolate/embutidos/granola/
+# tortillas/pasta/cubito según la alergia; el aderezo César es pescado/huevo/lácteo; «higaditos» y «palta».
+_LAST_KNOWN_PFIX = "P1-PLAN-LOTE-270 · 2026-09-25"
 
 # [P1-SENTRY-SAMPLE-COST · 2026-05-12] Sentry sampling driven from env vars
 # con default seguro 0.1 (10%). Pre-fix tenía `traces_sample_rate=1.0` y

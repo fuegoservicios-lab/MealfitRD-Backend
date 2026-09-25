@@ -22,8 +22,9 @@ EXTRA = {
                "harina de negrito", "negrito", "farina"),
     "huevo": ("revoltillo", "omelette", "omelet", "frittata", "huevito", "flan", "natilla",
               # [P1-PLAN-LOTE-268] con mayonesa: «Ensalada de macarrones» (alias «ensalada de pasta con mayonesa»)
-              "ensalada de macarrones", "ensalada de coditos", "ensalada rusa"),
-    "lacteos": ("lactosuero",),
+              "ensalada de macarrones", "ensalada de coditos", "ensalada rusa",
+              "cesar"),  # [P1-PLAN-LOTE-270] el aderezo César lleva yema
+    "lacteos": ("lactosuero", "cesar"),  # [P1-PLAN-LOTE-270] el aderezo César lleva parmesano
     "frutos secos": ("macadamia", "pecana", "castana"),
     "soya": ("tamari", "shoyu"),
     "sesamo": ("tahin", "zaatar"),

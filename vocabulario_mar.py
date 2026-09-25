@@ -20,6 +20,7 @@ PESCADOS_EXTRA = (
     "bonito", "melva", "mojama", "huachinango", "guachinango", "pampano", "colirrubia", "bocachico", "mahi mahi",
     "mahi-mahi", "pangasius", "perca", "anguila", "angula", "sabalo", "barracuda", "picua", "pescadilla",
     "bacaladilla", "carpa", "congrio", "marlin", "hueva", "fumet",
+    "cesar",  # [P1-PLAN-LOTE-270] el aderezo/ensalada César lleva anchoas (como la salsa inglesa)
 )
 
 MARISCOS_EXTRA = (

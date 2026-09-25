@@ -14858,7 +14858,7 @@ _VERIFICATION_DEMAND_RX = _re_mod.compile(
     r"vigilancia de (?:la )?funci[oó]n|requiere[n]? supervisi[oó]n|"
     r"marca regulad[ao]|de marca (?:regulad|reconocid|comercial)|procesamiento (?:verificado|seguro|industrial)|"
     r"envasado industrial|envase (?:industrial|sellado)|se mantenga[n]? refrigerad|cadena de fr[ií]o|"  # [P1-PLAN-LOTE-177]
-    r"origen industrial)",  # [P1-PLAN-LOTE-180] «casabe de origen industrial/controlado» (embarazo)
+    r"origen industrial|no est[aá]n? (?:identificad|especificad|indicad|etiquetad|declarad)[oa]s? como libres? de|(?:alta |gran )?probabilidad de contener|podr[ií]an? contener|si (?:el producto |la marca )?contiene)",  # [P1-PLAN-LOTE-180] casabe industrial · [P1-PLAN-LOTE-270] dudas de marca
     _re_mod.IGNORECASE,
 )
 # [P1-PLAN-LOTE-182] «Confirme si…» es aclaración, no defecto; aparte para excluir pasteurizar. tooltip-anchor: P1-PLAN-LOTE-182-CONFIRMAR-ES-AVISO
@@ -25121,7 +25121,7 @@ def _apply_deterministic_clinical_layer(plan: dict, form_data: dict, nutrition: 
     # residual a rechazo crítico → cero regresión de seguridad. fish/shellfish/soy/gluten únicamente.
     if ALLERGEN_SUBSTITUTION_ENABLED:
         try:
-            _al_n = _apply_allergen_substitutions(plan, form_data)
+            _al_n = _apply_allergen_substitutions(plan, form_data) + __import__("etiqueta_alergenos").anotar_plan(plan, form_data)  # [P1-PLAN-LOTE-270] la nota suma 0
             if _al_n:
                 logger.warning(f"🛡️ [P0-ALLERGEN-SUBS] Sustituyó alérgeno(s) declarado(s) por alternativa "
                                f"segura en {_al_n} comida(s)")
