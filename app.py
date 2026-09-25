@@ -639,7 +639,10 @@ _PROCESS_START_ISO = datetime.now(timezone.utc).isoformat()
 # [P1-PLAN-LOTE-320 · 2026-09-25] (frontend) la Nevera abre al instante al venir del Agente: páginas del menú
 # precargadas en reposo (promesa con status/value: sin pantalla de carga) y copia vieja del inventario pintada mientras
 # se refresca; cerrar sesión la borra del todo. Solo frontend.
-_LAST_KNOWN_PFIX = "P1-PLAN-LOTE-320 · 2026-09-25"
+# [P1-PLAN-LOTE-322 · 2026-09-25] (backend + frontend) las dudas de la foto traen OPCIONES de un toque con lo que
+# cambia cada una en las macros (la supuesta en 0): el escáner mueve las calorías al instante y el chat las pinta
+# como respuestas rápidas.
+_LAST_KNOWN_PFIX = "P1-PLAN-LOTE-322 · 2026-09-25"
 
 # [P1-SENTRY-SAMPLE-COST · 2026-05-12] Sentry sampling driven from env vars
 # con default seguro 0.1 (10%). Pre-fix tenía `traces_sample_rate=1.0` y

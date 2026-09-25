@@ -196,7 +196,27 @@ _MEAL_VISION_SCHEMA = {
             "type": "array",
             "items": {
                 "type": "object",
-                "properties": {"sobre": {"type": "string"}, "pregunta": {"type": "string"}},
+                "properties": {
+                    "sobre": {"type": "string"},
+                    "pregunta": {"type": "string"},
+                    # [P1-PLAN-LOTE-322] Respuestas de UN toque, con lo que cambia cada una en el plato entero.
+                    "opciones": {
+                        "type": "array",
+                        "items": {
+                            "type": "object",
+                            "properties": {
+                                "texto": {"type": "string"},
+                                "supuesta": {"type": "boolean"},
+                                "nombre_plato": {"type": "string"},
+                                "ajuste": {
+                                    "type": "object",
+                                    "properties": {k: {"type": "number"} for k in ("calories", "protein", "carbs", "healthy_fats")},
+                                },
+                            },
+                            "required": ["texto"],
+                        },
+                    },
+                },
                 "required": ["pregunta"],
             },
         },
@@ -305,6 +325,12 @@ _MEAL_VISION_PROMPT = (
     "con 'sobre' (el componente) y 'pregunta' (UNA pregunta corta y concreta, en espanol dominicano). NO pongas dudas "
     "de lo que se ve claro (2 rebanadas de pan, un guineo, 1 huevo frito entero) ni de detalles que no cambian la cuenta "
     "(la sal, el oregano). Aunque haya dudas, estima igual con la opcion MAS probable: el usuario la confirma. "
+    # [P1-PLAN-LOTE-322 · 2026-09-25] El dueño: «una forma más fácil de responder esas preguntas».
+    "OPCIONES: cada duda lleva en 'opciones' de 2 a 5 respuestas cortas que el usuario toca (ej: '2 huevos', '3 huevos', "
+    "'4 huevos'; 'Panecillo', 'Arepa', 'Galleta'; 'Frito', 'A la plancha'). Marca con supuesta=true la que usaste para "
+    "estimar (exactamente una) y ponle ajuste 0. En las demas, 'ajuste' = cuanto cambia el PLATO ENTERO si la eligen, en "
+    "calories, protein, carbs y healthy_fats (ej: un huevo mas son unas +72 kcal, +6 g de proteina, +5 g de grasa). Si "
+    "elegirla cambia el nombre del plato, pon el nombre nuevo en 'nombre_plato'. "
     "Responde SOLO el JSON."
 )
 
@@ -332,9 +358,25 @@ class _MealVisionItem(BaseModel):
     healthy_fats: float = Field(default=0, description="Solo si photo_kind='plato': gramos de grasa de ESTE componente.")
 
 
+class _MealVisionAjuste(BaseModel):
+    calories: float = 0
+    protein: float = 0
+    carbs: float = 0
+    healthy_fats: float = 0
+
+
+class _MealVisionOpcion(BaseModel):
+    texto: str = Field(default="", description="Respuesta corta que el usuario toca (ej: '3 huevos', 'Arepa').")
+    supuesta: bool = Field(default=False, description="True en la opción que se usó para estimar (exactamente una).")
+    nombre_plato: str = Field(default="", description="Nombre nuevo del plato si elegirla lo cambia; si no, vacío.")
+    ajuste: _MealVisionAjuste = Field(default_factory=_MealVisionAjuste,
+                                      description="Cuánto cambia el plato ENTERO si la eligen (0 en la supuesta).")
+
+
 class _MealVisionDuda(BaseModel):
     sobre: str = Field(default="", description="El componente del plato al que se refiere la duda.")
     pregunta: str = Field(default="", description="UNA pregunta corta para el usuario, en español dominicano.")
+    opciones: list[_MealVisionOpcion] = Field(default_factory=list, description="2-5 respuestas de un toque.")
 
 
 class _MealVisionResult(BaseModel):
@@ -446,8 +488,53 @@ def _fmt_item_phrase(name: str, qty: float, unit: str) -> str:
     return f"{q} {u} de {name}"
 
 
+_TOPE_AJUSTE = {"calories": 2000.0, "protein": 200.0, "carbs": 300.0, "healthy_fats": 200.0}
+
+
+def _num(v) -> float:
+    try:
+        n = float(v)
+    except (TypeError, ValueError):
+        return 0.0
+    return n if n == n and abs(n) != float("inf") else 0.0
+
+
+def _opciones_de_la_duda(crudas) -> list:
+    """[P1-PLAN-LOTE-322] Opciones de un toque: 2-5, texto corto, UNA supuesta y los ajustes medidos contra ella
+    (la supuesta queda en 0). Menos de 2 opciones válidas no es una elección → []."""
+    ops = []
+    for o in crudas if isinstance(crudas, list) else []:
+        if not isinstance(o, dict):
+            continue
+        texto = " ".join(str(o.get("texto") or "").split())[:40]
+        if not texto:
+            continue
+        aj = o.get("ajuste") if isinstance(o.get("ajuste"), dict) else {}
+        op = {"texto": texto, "supuesta": o.get("supuesta") is True,
+              "ajuste": {k: _num(aj.get(k)) for k in _TOPE_AJUSTE}}
+        nombre = " ".join(str(o.get("nombre_plato") or "").split())[:120]
+        if nombre:
+            op["nombre_plato"] = nombre
+        ops.append(op)
+        if len(ops) == 5:
+            break
+    if len(ops) < 2:
+        return []
+    marcadas = [i for i, o in enumerate(ops) if o["supuesta"]]
+    elegida = marcadas[0] if marcadas else min(range(len(ops)), key=lambda i: abs(ops[i]["ajuste"]["calories"]))
+    base = dict(ops[elegida]["ajuste"])
+    for i, o in enumerate(ops):
+        o["supuesta"] = i == elegida
+        o["ajuste"] = {k: _redondeo(max(-t, min(t, o["ajuste"][k] - base[k])), k) for k, t in _TOPE_AJUSTE.items()}
+    return ops
+
+
+def _redondeo(v: float, k: str):
+    return int(round(v)) if k == "calories" else round(v, 1)
+
+
 def _dudas_del_plato(data) -> list:
-    """[P1-PLAN-LOTE-305] `dudas` del modelo → máx. 2 `{sobre, pregunta}` con pregunta no vacía y recortada."""
+    """[P1-PLAN-LOTE-305] `dudas` del modelo → máx. 2 `{sobre, pregunta, opciones}` con pregunta no vacía y recortada."""
     out = []
     for d in (data.get("dudas") if isinstance(data, dict) else None) or []:
         if not isinstance(d, dict):
@@ -455,10 +542,19 @@ def _dudas_del_plato(data) -> list:
         pregunta = " ".join(str(d.get("pregunta") or "").split())[:160]
         if not pregunta:
             continue
-        out.append({"sobre": " ".join(str(d.get("sobre") or "").split())[:60], "pregunta": pregunta})
+        out.append({"sobre": " ".join(str(d.get("sobre") or "").split())[:60], "pregunta": pregunta,
+                    "opciones": _opciones_de_la_duda(d.get("opciones"))})
         if len(out) == 2:
             break
     return out
+
+
+def _duda_para_el_coach(d: dict) -> str:
+    """[P1-PLAN-LOTE-322] La pregunta con sus opciones (el chat las pinta como botones y el usuario contesta con una)."""
+    ops = d.get("opciones") or []
+    if not ops:
+        return d["pregunta"]
+    return d["pregunta"] + " (opciones: " + " · ".join(o["texto"] + (" (supuesto)" if o["supuesta"] else "") for o in ops) + ")"
 
 
 def _coerce_meal_scan(data: dict) -> dict:
@@ -640,7 +736,7 @@ def _coerce_meal_scan(data: dict) -> dict:
     # (el escáner las muestra) y también en la `description`, que es lo que el coach lee de la foto.
     result["dudas"] = _dudas_del_plato(data) if kind == "plato" else []
     if result["dudas"]:
-        result["description"] += " DUDAS (pregúntale solo esto): " + " ".join(d["pregunta"] for d in result["dudas"])
+        result["description"] += " DUDAS (pregúntale solo esto): " + " ".join(_duda_para_el_coach(d) for d in result["dudas"])
     _repartidas = _repartir_macros_del_plato(crudas, result)
     if _repartidas:
         for _item, _m in zip(plato_items, _repartidas):
