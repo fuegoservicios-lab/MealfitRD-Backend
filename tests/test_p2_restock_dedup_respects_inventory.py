@@ -26,7 +26,8 @@ def _restock_body() -> str:
 
 def test_dedup_skips_only_items_still_present_in_the_pantry():
     body = _restock_body()
-    assert "SELECT ingredient_name FROM user_inventory WHERE user_id = %s AND quantity > 0" in body
+    # [P1-PLAN-LOTE-290] solo alimentos: un suplemento en la Alacena no cuenta como «ya lo tiene»
+    assert "SELECT ingredient_name FROM user_inventory WHERE user_id = %s AND kind = 'food' AND quantity > 0" in body
     assert "if _present_keys is None or key in _present_keys:" in body
     assert "rebought.append(name)" in body
     # sin inventario legible (fallo de lectura) el dedup vuelve al comportamiento previo, no a sumar todo
