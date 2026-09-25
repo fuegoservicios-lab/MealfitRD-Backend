@@ -3253,6 +3253,12 @@ def _calculate_yield_multiplier(raw_name: str, *, only_legumbres_grains: bool = 
     # se hidratan ~3× al cocinarse desde su forma comercial seca.
     if bool(re.search(r'\b(cocid[oa]s?|hervid[oa]s?)\b', n)) and bool(re.search(r'\b(arroz(?:es)?|pastas?|quinoas?|lentejas?|habichuelas?|frijol(?:es)?|guandul(?:es)?|garbanzos?|soyas?|tofu)\b', n)):
         return 0.35
+    # [P1-PLAN-LOTE-285 · 2026-09-25] La legumbre de lata/escurrida también viene cocida: su equivalente seco (0.35×).
+    # «Frijoles horneados/refritos» no: su fila del catálogo ya está en cocido.
+    if (re.search(r'\b(de lata|en lata|enlatad[oa]s?|escurrid[oa]s?)\b', n)
+            and re.search(r'\b(lentejas?|habichuelas?|frijol(?:es)?|guandul(?:es)?|gandul(?:es)?|garbanzos?)\b', n)
+            and not re.search(r'\b(horneados?|refritos?)\b', n)):
+        return 0.35
 
     # 1b. [P1-CITRUS-JUICE-YIELD · 2026-07-24] Jugo de cítrico → FRUTA ENTERA.
     #
@@ -4448,6 +4454,10 @@ _BRAND_DEFAULT_MODIFIER_TOKENS = (
     # cuenta MUFA de oliva). blend/mezcla/girasol fuera del default salvo que el
     # nombre del ítem los pida.
     "blend", "mezcla", "girasol",
+    # [P1-PLAN-LOTE-289 · 2026-09-25] la forma PROCESADA no es el alimento: «Salmón» se resolvía a «Funda Hamburguesas
+    # 680 gr · Wala» (el SKU de salmón más barato: 4 fundas en la lista del dueño) y «Filete de pescado blanco» puede
+    # caer en el empanizado. Fuera del default salvo que el nombre del ítem los pida.
+    "hamburguesa", "empanizad", "nugget", "croqueta", "salchicha", "apanad", "rebozad",
 )
 
 
@@ -5385,7 +5395,10 @@ def apply_smart_market_units(name: str, weight_in_lbs: float, unit_str: str, raw
     
     if master_item is None:
         master_item = {}
-        
+    # [P1-PLAN-LOTE-282 · 2026-09-25] Los envases de una legumbre en la base del catálogo (SECO): la necesidad llega en
+    # gramos secos y una lata de 425 g trae ~90 g de legumbre seca; la funda «800 g seco» del catálogo decía 2000.
+    master_item = __import__("envase_legumbre").en_base_del_catalogo(name, master_item)
+
     cat = (master_item.get("category") or "").lower()
     density_per_u = master_item.get("density_g_per_unit")
     if density_per_u is not None:
@@ -11090,6 +11103,7 @@ def aggregate_and_deduct_shopping_list(plan_ingredients: list[str], consumed_ing
     # esta decisión: detecta si alguien añade `* multiplier` al consumed
     # loop sin documentar la migración.
     plan_names = set()
+    _formas_legumbre: dict = {}  # [P1-PLAN-LOTE-285] legumbre → {True: la receta la pide de lata, False: seca}
     for item in plan_ingredients:
         if not item or len(item) < 3: continue
         qty, unit, name = _parse_quantity(
@@ -11110,6 +11124,7 @@ def aggregate_and_deduct_shopping_list(plan_ingredients: list[str], consumed_ing
         if name.lower() in ["ola", "olas"]: name = "Cebolla"
         aggregated[name][unit] += float(qty) * float(multiplier)  # P2-NEW-11: escalado intencional
         plan_names.add(name)
+        __import__("envase_legumbre").anotar_forma(_formas_legumbre, name, item)  # [P1-PLAN-LOTE-285]
 
     logging.info(f"🛒 [AGGREGATE] {len(plan_ingredients)} raw items → {len(plan_names)} unique names: {sorted(plan_names)[:30]}...")
 
@@ -13194,6 +13209,10 @@ def aggregate_and_deduct_shopping_list(plan_ingredients: list[str], consumed_ing
                     master_item["market_container"] = _def_pkgs[0].get("unit") or "paquete"
                 if not master_item.get("container_weight_g"):
                     master_item["container_weight_g"] = _def_pkgs[0]["grams"]
+        # [P1-PLAN-LOTE-285 · 2026-09-25] la receta pide la legumbre DE LATA y ninguna línea la pide seca: solo envases
+        # listos (lata, cartón, frasco). La marca elegida por el usuario manda (`_pref_pkg`).
+        if _pref_pkg is None and __import__("envase_legumbre").prefiere_listo(_formas_legumbre, name):
+            master_item = __import__("envase_legumbre").solo_listos(name, master_item, master_map.get(name) or {})
 
         weight_in_lbs = 0.0
         has_weight = False

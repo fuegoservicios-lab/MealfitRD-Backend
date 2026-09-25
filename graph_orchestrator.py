@@ -9288,7 +9288,7 @@ def _detect_prep_time_issues(days: list, form_data: dict) -> list:
                     f"{mins} min y el usuario NO TIENE TIEMPO para cocinar ({presupuesto} min por comida como máximo). "
                     f"Cámbialo por un plato que se ARME en {presupuesto} min: ensamblar, licuar, tostar o calentar (wrap, "
                     f"ensalada, bowl, casabe o pan con proteína LISTA: huevo duro ya hecho, atún o sardina en lata, queso, "
-                    f"pollo ya cocido); nada de horno, guisos, asados ni víveres hervidos. Conserva la proteína asignada y "
+                    f"pavo en lonjas, legumbres de lata); nada de horno, guisos, asados ni víveres hervidos. Conserva la proteína asignada y "
                     f"sus calorías, y pon su `prep_time` real (≤ {presupuesto} min).")
         return out
     except Exception:
@@ -34863,7 +34863,7 @@ def _apply_budget_cheapen_pass(days, form_data, force: bool = False, *,
                                         f"en Día {_d.get('day', '?')}: el candidato repetiría proteína "
                                         f"ya presente en otra comida del día (gate same-day).")
                             continue
-                        new_line = _re.sub(rf"\b(?:{rx})\b", candidate, ing, count=1, flags=_re.IGNORECASE)
+                        new_line = __import__("presupuesto_texto").sustituir(ing, rx, candidate)  # [P1-PLAN-LOTE-287]
                         if new_line == ing:
                             continue
                         # [P1-CHEAPEN-RAW-BY-FOOD · 2026-09-07] Índice resuelto ANTES de mutar `ings`
@@ -34877,7 +34877,7 @@ def _apply_budget_cheapen_pass(days, form_data, force: bool = False, *,
                         # (el phantom-protein namefix corre después como backstop).
                         name = meal.get("name")
                         if isinstance(name, str) and _re.search(rf"\b(?:{rx})\b", name, _re.IGNORECASE):
-                            meal["name"] = _re.sub(rf"\b(?:{rx})\b", candidate, name, count=1, flags=_re.IGNORECASE)
+                            meal["name"] = __import__("presupuesto_texto").sustituir(name, rx, candidate, titulo=True)  # [P1-PLAN-LOTE-287]
                         note = f"{m.group(0)} → {candidate}"
                         meal.setdefault("_budget_substitutions", []).append(note)
                         # [P2-AUDIT-V5-BATCH · 2026-07-02] (GAP-08) Reescribir también los PASOS de la
@@ -35256,7 +35256,7 @@ def _apply_budget_driver_aware_pass(days, form_data, weekly_list, *,
                                         f"en Día {_d.get('day', '?')}: el candidato repetiría proteína "
                                         f"ya presente en otra comida del día (gate same-day).")
                             continue
-                        new_line = _re.sub(rf"\b(?:{rx})\b", candidate, ing, count=1, flags=_re.IGNORECASE)
+                        new_line = __import__("presupuesto_texto").sustituir(ing, rx, candidate)  # [P1-PLAN-LOTE-287]
                         if new_line == ing:
                             continue
                         # [P2-SUBST-UNIT-DEDUP · 2026-07-05] "½ filete de mero" + candidato con el mismo lead → "filete de Filete de…" — colapsar (plan 23c958bb).
@@ -35269,8 +35269,7 @@ def _apply_budget_driver_aware_pass(days, form_data, weekly_list, *,
                             raw[_ri_dr] = _dedup_unit_noun_collision(_re.sub(rf"\b(?:{rx})\b", candidate, raw[_ri_dr], count=1, flags=_re.IGNORECASE))
                         name = meal.get("name")
                         if isinstance(name, str) and _re.search(rf"\b(?:{rx})\b", name, _re.IGNORECASE):
-                            meal["name"] = _dedup_unit_noun_collision(
-                                _re.sub(rf"\b(?:{rx})\b", candidate, name, count=1, flags=_re.IGNORECASE))
+                            meal["name"] = __import__("presupuesto_texto").sustituir(name, rx, candidate, titulo=True)  # [P1-PLAN-LOTE-287]
                         note = f"{m.group(0)} → {candidate}"
                         meal.setdefault("_budget_substitutions", []).append(note)
                         if SUBST_RECIPE_REWRITE_ENABLED:
@@ -40008,13 +40007,7 @@ async def assemble_plan_node(state: PlanState) -> dict:
                         # de sustituciones (el frontend las muestra bajo el banner).
                         if result.get("_budget_adjusted"):
                             _p1b_rec["adjusted"] = True
-                            _p1b_rec["substitutions"] = [
-                                s
-                                for _bd in (result.get("days") or [])
-                                for _bm in ((_bd.get("meals") or []) if isinstance(_bd, dict) else [])
-                                if isinstance(_bm, dict)
-                                for s in (_bm.get("_budget_substitutions") or [])
-                            ][:6]
+                            _p1b_rec["substitutions"] = __import__("presupuesto_texto").sustituciones_unicas(result.get("days"))  # [P1-PLAN-LOTE-287]
                         # [P1-BUDGET-TIER-LEVERS] Sugerencias accionables al excederse:
                         # variante más barata del Supermercado RD para los ítems más
                         # caros de la lista semanal (usa el matching de marcas existente).
@@ -40168,13 +40161,7 @@ async def assemble_plan_node(state: PlanState) -> dict:
                         if _bc_rec:
                             _bc_rec["adjusted"] = True
                             _bc_rec["converged_pass"] = True
-                            _bc_rec["substitutions"] = [
-                                s
-                                for _bd in (result.get("days") or [])
-                                for _bm in ((_bd.get("meals") or []) if isinstance(_bd, dict) else [])
-                                if isinstance(_bm, dict)
-                                for s in (_bm.get("_budget_substitutions") or [])
-                            ][:6]
+                            _bc_rec["substitutions"] = __import__("presupuesto_texto").sustituciones_unicas(result.get("days"))  # [P1-PLAN-LOTE-287]
                             if _bc_rec.get("status") == "excedido":
                                 try:
                                     from shopping_calculator import build_budget_suggestions as _bc_sug

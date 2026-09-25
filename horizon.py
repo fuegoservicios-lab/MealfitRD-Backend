@@ -1630,8 +1630,11 @@ _COOKING_TIME_BUDGET_MIN = {"none": 10, "30min": 30, "1hour": 60}   # `plenty` �
 _COOKING_TIME_PROMPT = {
     "none": ("none = NO TIENE TIEMPO para cocinar: cada comida se prepara en {m} minutos o menos (ensamblar, licuar, "
              "tostar o calentar; proteínas listas o de cocción rápida como huevo, atún o sardina en lata, queso, "
-             "embutido magro, pollo ya cocido). Nada de guisos, horno, víveres hervidos ni cocciones largas; "
-             "`prep_time` de cada comida ≤ {m} min."),
+             "embutido magro, pechuga de pavo en lonjas). Lo «ya cocido» solo existe si se COMPRA así (legumbres y "
+             "maíz en lata, escurridos; nunca legumbres secas): el arroz, los víveres, la auyama, la carne y el pescado "
+             "no llegan cocidos — si el plato los lleva, se cocinan dentro de esos {m} minutos (víveres y auyama en el "
+             "microondas) o se cambian por casabe, pan, tortilla o avena. Nada de guisos, horno, víveres hervidos ni "
+             "cocciones largas; `prep_time` de cada comida ≤ {m} min."),  # [P1-PLAN-LOTE-283]
     "30min": "30min = cada comida en {m} minutos o menos en total; `prep_time` de cada comida ≤ {m} min.",
     "1hour": "1hour = cada comida en {m} minutos o menos en total; `prep_time` de cada comida ≤ {m} min.",
     "plenty": "plenty = sin límite de tiempo: le gusta cocinar.",

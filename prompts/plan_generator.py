@@ -1214,17 +1214,10 @@ def build_grocery_duration_context(form_data: dict) -> str:
         f"El usuario compra alimentos para {days_num} días en una sola ida al supermercado.\n"
         f"DEBES priorizar ingredientes que se conserven bien durante {days_num} días.\n"
     )
-    if grocery_duration == "monthly":
-        ctx += (
-            "Usa predominantemente: granos secos, arroz, avena, tubérculos (yuca, batata, plátano verde),\n"
-            "proteínas congelables (pollo, carne, pescado empacado al vacío), leche en polvo o UHT, huevos.\n"
-            "Para cualquier perecedero, incluye instrucciones de congelación en la receta.\n"
-        )
-    elif grocery_duration == "biweekly":
-        ctx += (
-            "Equilibra entre frescos e ingredientes duraderos. Los vegetales de hoja y frutas muy maduras\n"
-            "deben usarse en los primeros días del plan. Planifica congelación para proteínas frescas.\n"
-        )
+    if grocery_duration in ("monthly", "biweekly"):
+        # [P1-PLAN-LOTE-283 · 2026-09-25] qué duradero pedir depende de lo contestado: «sin congelador» no congela y
+        # «Nada» de tiempo no hierve granos secos ni víveres (el modelo lo resolvía con «ya cocido»). Ver guia_compra.
+        ctx += __import__("guia_compra").lineas_duracion(form_data, grocery_duration)
     ctx += (
         f"RECUERDA: Los PLATOS varían cada día, pero los ALIMENTOS BASE se repiten durante los {days_num} días.\n"
         "---------------------------------------------------\n"

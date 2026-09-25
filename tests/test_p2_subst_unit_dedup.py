@@ -38,5 +38,6 @@ def test_clean_lines_untouched():
 def test_applied_in_driver_aware_substitution():
     i = _GO.index("[P1-BUDGET-DRIVER-AWARE] Sustitución driver-aware")
     win = _GO[max(0, i - 3500):i]
-    assert win.count("_dedup_unit_noun_collision") >= 3, \
+    # [P1-PLAN-LOTE-287] raw y nombre colapsan dentro de `presupuesto_texto.sustituir`, que llama a este mismo SSOT
+    assert win.count("_dedup_unit_noun_collision") + win.count('presupuesto_texto").sustituir(') >= 3, \
         "el colapso debe aplicarse a línea, raw y nombre en la sustitución driver-aware"
