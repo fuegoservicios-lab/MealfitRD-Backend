@@ -119,3 +119,16 @@ def guardar(user_id, nombre, marca=None, porciones=None, unidad="scoop", etiquet
         e = etiqueta_valida(base) if base else None
     _upsert(user_id, str(nombre).strip(), marca, porciones, unidad, e, fuente if e else None)
     return {"ok": True, "estado_nevera": estado, "etiqueta": e, "fuente": fuente}
+
+
+def descontar(user_id: str, fila_id, porciones) -> float:
+    """Resta `porciones` del pote (nunca por debajo de 0) y devuelve las que quedan. Lo tomado manda: si tomó más de lo
+    que el pote decía, se registra igual y el pote queda en 0."""
+    from db_core import execute_sql_query
+    fila = execute_sql_query(
+        # [SUPLEMENTOS-OK: descuenta del pote de un suplemento]
+        "UPDATE user_inventory SET quantity = GREATEST(0, quantity - %s), updated_at = now() "
+        "WHERE id = %s AND user_id = %s AND kind = 'supplement' RETURNING quantity::float8 AS quantity",
+        (float(porciones or 0), fila_id, user_id), fetch_one=True,
+    )
+    return float((fila or {}).get("quantity") or 0)

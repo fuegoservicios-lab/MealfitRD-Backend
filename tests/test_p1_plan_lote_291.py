@@ -77,3 +77,63 @@ def test_la_tool_responde_y_avisa_del_estimado(db):
     import tools
     out = tools.guardar_suplemento.func("u", "Creatina", porciones=60, unidad="g", clave="creatine")
     assert "Guardado en su Alacena: Creatina" in out and "ESTIMADO" in out and "[UI_ACTION: REFRESH_INVENTORY]" in out
+
+
+# ── Task 8: registrar una toma con la etiqueta del pote ─────────────────────────────────────────────────────────────
+
+@pytest.fixture
+def toma(monkeypatch):
+    import tools
+    import suplementos
+    import db
+    import db_inventory
+    fila = {"id": 7, "ingredient_name": "Proteína Whey", "quantity": 3, "serving_unit": "scoop", "serving_label": WHEY}
+    estado = {"fila": fila, "restados": [], "registros": []}
+    monkeypatch.setattr(suplementos, "buscar", lambda uid, n: estado["fila"])
+    monkeypatch.setattr(suplementos, "descontar",
+                        lambda uid, fid, n: estado["restados"].append((fid, n)) or max(0.0, 3 - float(n)))
+    monkeypatch.setattr(tools, "db_log_consumed_meal",
+                        lambda *a, **k: estado["registros"].append((a, k)) or "meal-1")
+    monkeypatch.setattr(tools, "_nota_total_del_dia", lambda *a, **k: "")
+    monkeypatch.setattr(tools, "_nota_comidas_sin_registrar", lambda *a, **k: "")
+    monkeypatch.setattr(tools, "_rescue_dinner_slot", lambda uid, mt, cal, d: mt)
+    monkeypatch.setattr(db, "execute_sql_query", lambda *a, **k: None)
+    monkeypatch.setattr(db_inventory, "deduct_consumed_meal_from_inventory", lambda *a, **k: None)
+    return tools, estado
+
+
+def test_dos_scoops_con_la_etiqueta_del_pote(toma):
+    tools, estado = toma
+    out = tools.log_consumed_meal.func("u", "Batida de whey", calories=999, protein=1,
+                                       suplemento="Proteína Whey", porciones=2, meal_type="merienda")
+    a, k = estado["registros"][0]
+    assert a[2:6] == (240, 48, 6, 3)          # la etiqueta manda: el modelo había dicho 999 kcal / 1 g
+    assert estado["restados"] == [(7, 2)]
+    assert "te quedan ~1 scoop" in out
+
+
+def test_mas_scoops_de_los_que_quedan_registra_lo_tomado(toma):
+    tools, estado = toma
+    out = tools.log_consumed_meal.func("u", "Batida", calories=120, protein=24,
+                                       suplemento="Proteína Whey", porciones=5, meal_type="merienda")
+    a, k = estado["registros"][0]
+    assert a[2] == 600 and estado["restados"] == [(7, 5)] and "te quedan ~0" in out
+
+
+def test_sin_pote_o_sin_etiqueta_usa_las_cifras_del_modelo(toma):
+    tools, estado = toma
+    estado["fila"] = None
+    tools.log_consumed_meal.func("u", "Batida", calories=130, protein=25, suplemento="Otra", porciones=1,
+                                 meal_type="merienda")
+    a, k = estado["registros"][0]
+    assert a[2:4] == (130, 25) and estado["restados"] == []
+
+
+def test_descontar_nunca_negativo(monkeypatch):
+    import suplementos
+    import db_core
+    llamadas = []
+    monkeypatch.setattr(db_core, "execute_sql_query",
+                        lambda sql, p, **k: llamadas.append(sql) or {"quantity": 0})
+    assert suplementos.descontar("u", 7, 5) == 0
+    assert "GREATEST(0, quantity - %s)" in llamadas[0] and "kind = 'supplement'" in llamadas[0]

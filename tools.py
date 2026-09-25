@@ -1183,7 +1183,7 @@ def _dias_atras_de_fila(user_id: str, consumed_at) -> Optional[int]:
 
 
 @tool
-def log_consumed_meal(user_id: str, meal_name: str, calories: int, protein: int, carbs: int = 0, healthy_fats: int = 0, ingredients: list[str] = None, meal_type: str = None, days_ago: int = 0, force: bool = False) -> str:
+def log_consumed_meal(user_id: str, meal_name: str, calories: int, protein: int, carbs: int = 0, healthy_fats: int = 0, ingredients: list[str] = None, meal_type: str = None, days_ago: int = 0, force: bool = False, suplemento: str = None, porciones: float = None) -> str:
     """
     Registra una comida que el usuario afirma haber consumido realmente en su diario de consumo ("fuera del plan").
     Úsala SOLO cuando el usuario confirme que se ha comido lo que le analizaste o subió en la foto, o cuando explícitamente diga que comió algo.
@@ -1191,6 +1191,8 @@ def log_consumed_meal(user_id: str, meal_name: str, calories: int, protein: int,
     NUEVO IMPORTANTE: Si sabes o puedes inferir los ingredientes exactos (ej. ["2 huevos", "1 pan", "100g queso"]), envíalos en la lista 'ingredients' para un registro más detallado. Cada renglón con cantidad Y peso aproximado en gramos entre paréntesis, p. ej. "8 rodajas de plátano maduro (≈180 g)": sin el peso, "rodajas"/"lascas"/"trozos" se cuentan como piezas enteras.
     - meal_type: 'desayuno' | 'almuerzo' | 'cena' | 'merienda' | 'snack'. Dedúcelo de lo que diga el usuario o de la hora.
     - days_ago: 0 = hoy (default), 1 = ayer, 2 = antier. ÚSALO cuando el usuario diga que la comió OTRO día (ej. "es el almuerzo de ayer" → days_ago=1, meal_type='almuerzo') para que NO contamine las macros de hoy. Máximo 7 días atrás; el diario nunca registra a futuro.
+    - suplemento / porciones: si tomó un suplemento de su Alacena («me tomé 2 scoops de whey»), pasa su nombre y
+      cuántas porciones: las macros salen de la etiqueta guardada del pote y se restan del pote.
     - Si ya existe una comida principal del MISMO tipo ese día, la tool NO inserta y te lo informa: pregúntale al usuario si de verdad quiere registrar dos (repite con force=true SOLO si él confirma) o si prefiere corregir.
     """
     # [P3-DOC-2 · 2026-05-11] LIVE-TOOL CONTRACT — LEER ANTES DE MODIFICAR.
@@ -1212,6 +1214,22 @@ def log_consumed_meal(user_id: str, meal_name: str, calories: int, protein: int,
     # Tooltip-anchor: P3-DOC-2-LIVE-TOOL-CONTRACT
 
     logger.debug(f"🔧 [TOOL EXECUTION] Registrando comida consumida para user {user_id}: {meal_name} ({calories} kcal, {protein}g proteina, {carbs}g carbos, {healthy_fats}g grasas). Ingredientes a deducir: {ingredients}")
+
+    # [P1-PLAN-LOTE-291 · 2026-09-25] Una toma de un suplemento de su Alacena: las macros salen de la ETIQUETA del pote
+    # × porciones (el modelo no pone cifras) y, tras registrar, se restan del pote. Sin pote o sin etiqueta, las del
+    # modelo como siempre. tooltip-anchor: P1-PLAN-LOTE-291-TOMA
+    _pote = None
+    if suplemento:
+        try:
+            import suplementos as _sup
+            _pote = _sup.buscar(user_id, suplemento)
+            _m = _sup.macros_de_porciones((_pote or {}).get("serving_label"), porciones or 1) if _pote else None
+            if _m:
+                calories, protein = int(round(_m["kcal"])), int(round(_m["protein_g"]))
+                carbs, healthy_fats = int(round(_m["carbs_g"])), int(round(_m["fats_g"]))
+        except Exception as _sup_err:
+            logger.warning(f"[P1-PLAN-LOTE-291] pote de '{suplemento}' ilegible: {_sup_err!r}")
+            _pote = None
 
     # [P1-CHAT-TOOLS-AUDIT · 2026-09-14] Rangos antes de escribir nada (ni diario ni Nevera).
     if calories is None:
@@ -1312,6 +1330,18 @@ def log_consumed_meal(user_id: str, meal_name: str, calories: int, protein: int,
             source="chat",
         )
 
+    _nota_pote = ""
+    if _pote and result is not None and result != "deduped":
+        try:
+            import suplementos as _sup
+            _quedan = _sup.descontar(user_id, _pote.get("id"), porciones or 1)
+            if _quedan <= 3:
+                _u = _pote.get("serving_unit") or "porciones"
+                _nota_pote = (f" (Para el asistente: del pote te quedan ~{int(_quedan)} {_u}; díselo en una frase por si "
+                              f"quiere comprar más.)")
+        except Exception as _des_err:
+            logger.warning(f"[P1-PLAN-LOTE-291] no se pudo restar del pote: {_des_err!r}")
+
     if result is not None:
         _cuando = "" if _days_ago == 0 else (" (con fecha de AYER — no cuenta en las macros de hoy)" if _days_ago == 1 else f" (con fecha de hace {_days_ago} días — no cuenta en las macros de hoy)")
         msg = f"¡Éxito! Se ha registrado el consumo de '{meal_name}' ({calories} kcal, {protein}g proteína, {carbs}g carbohidratos, {healthy_fats}g grasas saludables) como {_meal_type}{_cuando} en tu diario."
@@ -1319,6 +1349,7 @@ def log_consumed_meal(user_id: str, meal_name: str, calories: int, protein: int,
         msg += _nota_total_del_dia(user_id, _days_ago)
         # [P1-PLAN-LOTE-76 · 2026-09-17] qué comidas de ESE día siguen sin registrar (helper; la batería en seco lo comparte)
         msg += _nota_comidas_sin_registrar(user_id, _days_ago)
+        msg += _nota_pote   # [P1-PLAN-LOTE-291]
         if not _mt_reconocido:
             msg += (f" (Aviso para el asistente: no reconocí el tipo de comida '{meal_type}' y quedó como "
                     f"snack; si era desayuno, almuerzo o cena, corrígelo con correct_consumed_meal.)")
