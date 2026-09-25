@@ -573,6 +573,9 @@ _PROCESS_START_ISO = datetime.now(timezone.utc).isoformat()
 # celíaco y solo la paró el revisor— y las ensaladas con mayonesa del catálogo son huevo.
 # [P1-PLAN-LOTE-269 · 2026-09-25] miel para la vegana y carne oculta (gelatina, grenetina, colágeno, sopita) en el
 # escáner y el filtro de dieta; las alternativas vegetales se excusan acotadas al término («tocino de maple» no).
+# [P1-PLAN-LOTE-270 · 2026-09-25] dudas de MARCA del revisor («alta probabilidad de contener», «no especificado como
+# libre de», «si contiene») = aviso; nota de etiqueta determinista para pan/galletas/chocolate/embutidos/granola/
+# tortillas/pasta/cubito según la alergia; el aderezo César es pescado/huevo/lácteo; «higaditos» y «palta».
 # [P1-PLAN-LOTE-280 · 2026-09-25] (backend + frontend) push NATIVA con Firebase Cloud Messaging: el teléfono registra su
 # token (`/api/notifications/device-token`, tabla `device_push_tokens`) y `send_push_notification` envía también por FCM
 # (`fcm_push.py`); los recordatorios de comida y agua van `nativa=False` (en la app ya son avisos locales).

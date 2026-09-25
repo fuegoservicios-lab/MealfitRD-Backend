@@ -15,7 +15,8 @@ _DISLIKE_EXTRA_TERMS = {
     "hongos": ("hongo", "champinon", "champinones", "seta", "setas", "portobello", "shiitake"),
     "hongo": ("hongos", "champinon", "champinones", "seta", "setas", "portobello", "shiitake"),
     "cilantro": ("cilantrico",),
-    "aguacate": ("guacamole",),
+    "aguacate": ("guacamole", "palta"),          # [P1-PLAN-LOTE-270] «palta»
+    "higado": ("higadito", "higaditos"),        # [P1-PLAN-LOTE-270] el diminutivo dominicano
 }
 
 
