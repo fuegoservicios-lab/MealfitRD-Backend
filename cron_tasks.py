@@ -16965,6 +16965,7 @@ def _recover_orphan_chunk_reservations() -> int:
     """
     try:
         rows = execute_sql_query(
+            # [SUPLEMENTOS-OK: reservas: a un suplemento nunca se le reserva nada]
             """
             SELECT id, user_id::text AS user_id, reservation_details
             FROM user_inventory
@@ -36037,7 +36038,7 @@ def try_unfreeze_plan_for_user(user_id: str) -> bool:
         if not __import__("nevera_opcional").nevera_activa(user_id):
             return _resume_frozen_plan(row["plan_id"], user_id, row["frozen_at"])
         inv = execute_sql_query(
-            "SELECT ingredient_name FROM user_inventory WHERE user_id = %s AND quantity > 0",
+            "SELECT ingredient_name FROM user_inventory WHERE user_id = %s AND kind = 'food' AND quantity > 0",
             (user_id,), fetch_all=True,
         ) or []
         _min = max(1, _env_int("MEALFIT_PLAN_FREEZE_MIN_ITEMS", CHUNK_MIN_FRESH_PANTRY_ITEMS))
@@ -36092,7 +36093,7 @@ def _plan_freeze_sweep() -> dict:
             _auto_off_ok = (r.get("nevera_enabled") is None and r.get("plan_mode") != "tracking"
                             and _nev.apagable_en_modo_plan())
             inv = execute_sql_query(
-                "SELECT ingredient_name FROM user_inventory WHERE user_id = %s AND quantity > 0",
+                "SELECT ingredient_name FROM user_inventory WHERE user_id = %s AND kind = 'food' AND quantity > 0",
                 (user_id,), fetch_all=True,
             ) or []
             _meaningful = _count_meaningful_pantry_items([x.get("ingredient_name") for x in inv])
@@ -36145,6 +36146,7 @@ def _plan_freeze_sweep() -> dict:
             if _anchor and _anchor.tzinfo is None:
                 _anchor = _anchor.replace(tzinfo=timezone.utc)
             _last_act = execute_sql_query(
+                # [SUPLEMENTOS-OK: actividad: tocar un suplemento también es usar la Nevera]
                 "SELECT MAX(updated_at) AS m FROM user_inventory WHERE user_id = %s",
                 (user_id,), fetch_one=True,
             ) or {}

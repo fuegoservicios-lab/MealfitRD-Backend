@@ -47,7 +47,16 @@ MENSAJE_NEVERA_APAGADA = (
 BLOQUE_PROMPT_NEVERA_APAGADA = (
     "\n\n🧊 NEVERA: DESACTIVADA (Configuración → Capacidades). No la menciones, no preguntes qué hay "
     "en ella, no ofrezcas escanearla ni añadirle alimentos y no uses sus herramientas. Si pregunta por ella, dile que "
-    "puede encenderla en Configuración → Capacidades."
+    "puede encenderla en Configuración → Capacidades. [P1-PLAN-LOTE-290] Excepción: Si te PIDE guardar algo en ella (un "
+    "alimento, o un suplemento o la foto de su pote), llama igual a modify_pantry_inventory o guardar_suplemento: la "
+    "herramienta decide si la enciende sola o te dice que le preguntes."
+)
+
+# [P1-PLAN-LOTE-290 · 2026-09-25] Lo que devuelve una herramienta que quiso GUARDAR con la Nevera apagada a mano.
+MENSAJE_NEVERA_PREGUNTAR = (
+    "La Nevera de este usuario está APAGADA porque la apagó a mano. (Para el asistente: NO guardaste nada. Pregúntale "
+    "en una frase si quiere que la enciendas para guardarlo; si dice que sí, repite esta herramienta con "
+    "encender_nevera=true.)"
 )
 
 
@@ -124,6 +133,42 @@ def fijar_nevera(user_id: str, enabled: bool) -> bool:
         return False
 
 
+def _perfil_nevera(user_id: str) -> dict:
+    """plan_mode, nevera_enabled y nevera_auto_off_at del perfil ({} si no hay fila o falla la lectura)."""
+    try:
+        fila = execute_sql_query(
+            "SELECT plan_mode, nevera_enabled, nevera_auto_off_at FROM user_profiles WHERE id = %s",
+            (user_id,), fetch_one=True,
+        ) or {}
+        return dict(fila) if isinstance(fila, dict) else {}
+    except Exception as e:
+        logger.warning(f"[P1-PLAN-LOTE-290] perfil de la Nevera de {user_id} sin leer: {e}")
+        return {}
+
+
+def encender_por_uso(user_id: str, *, forzar: bool = False) -> str:
+    """[P1-PLAN-LOTE-290 · 2026-09-25] «La Nevera debe activarse solo cuando se necesite» (el dueño). Guardar algo en
+    ella (coach, formulario) la enciende si la apagó el SISTEMA: vuelve a automático con 48 h nuevas, así que puede
+    volver a apagarse si no se usa. Si la apagó el USUARIO, devuelve 'preguntar' sin escribir nada; solo `forzar=True`
+    (su «sí» al coach, o guardar desde el formulario) la enciende, y entonces de forma definitiva (`fijar_nevera`).
+    Devuelve 'activa' | 'encendida' | 'preguntar'. tooltip-anchor: P1-PLAN-LOTE-290-ENCENDER"""
+    p = _perfil_nevera(user_id)
+    if nevera_activa_de(p):
+        return "activa"
+    if p.get("nevera_auto_off_at") and not forzar:
+        execute_sql_write(
+            "UPDATE user_profiles SET nevera_enabled = NULL, nevera_auto_off_at = NULL, nevera_reloj_desde = now() "
+            "WHERE id = %s",
+            (user_id,),
+        )
+        return "encendida"
+    if forzar:
+        fijar_nevera(user_id, True)
+        return "encendida"
+    return "preguntar"
+
+
+# [SUPLEMENTOS-OK: tener suplementos es usar la Nevera]
 _SQL_APAGAR = """
 UPDATE user_profiles p
    SET nevera_enabled = FALSE, nevera_auto_off_at = now()
@@ -192,6 +237,7 @@ def dias_actividad() -> int:
     return _env_int("MEALFIT_NEVERA_ACTIVE_DAYS", 14, validator=lambda v: 1 <= v <= 90)
 
 
+# [SUPLEMENTOS-OK: tener suplementos es usar la Nevera]
 _SQL_ULTIMA_ACTIVIDAD = """
 SELECT GREATEST(
     (SELECT max(created_at) FROM agent_sessions WHERE user_id = %s),

@@ -299,8 +299,14 @@ def test_las_tools_de_inventario_apagadas_responden_sin_tocar_la_db(monkeypatch)
     monkeypatch.setattr(db, "execute_sql_write", _prohibido)
     assert _fn(tools.check_current_pantry)("u1") == no.MENSAJE_NEVERA_APAGADA
     assert _fn(tools.modify_pantry_inventory)(
-        "u1", items_to_add=["2 unidades de Manzana"], items_to_remove=["arroz"], items_to_deplete=["leche"],
+        "u1", items_to_remove=["arroz"], items_to_deplete=["leche"],
     ) == no.MENSAJE_NEVERA_APAGADA
+    # [P1-PLAN-LOTE-290] AÑADIR con la Nevera apagada A MANO: sigue sin tocar la base y le pide al coach que pregunte
+    # (si la apagó el sistema, la regla la enciende: ver test_p1_plan_lote_290.py).
+    monkeypatch.setattr(no, "encender_por_uso", lambda uid, forzar=False: "preguntar")
+    assert _fn(tools.modify_pantry_inventory)(
+        "u1", items_to_add=["2 unidades de Manzana"], items_to_remove=["arroz"], items_to_deplete=["leche"],
+    ) == no.MENSAJE_NEVERA_PREGUNTAR
 
 
 def test_con_la_nevera_activa_la_despensa_se_lee_como_siempre(monkeypatch):

@@ -93,7 +93,7 @@ def filter_purchase_for_cycle(user_id: str, plan_data: Optional[dict], items: li
     inv_rows = None
     try:
         inv_rows = execute_sql_query(
-            "SELECT ingredient_name, quantity::float8 AS quantity FROM user_inventory WHERE user_id = %s",
+            "SELECT ingredient_name, quantity::float8 AS quantity FROM user_inventory WHERE user_id = %s AND kind = 'food'",
             (user_id,), fetch_all=True,
         ) or []
     except Exception as e:

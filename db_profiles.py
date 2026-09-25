@@ -1223,6 +1223,7 @@ def reset_user_account_preferences(user_id: str) -> bool:
                     # 2. Rejections
                     cursor.execute("DELETE FROM meal_rejections WHERE user_id = %s", (user_id,))
                     # 3. Inventario
+                    # [SUPLEMENTOS-OK: borrado de la cuenta: se va todo]
                     cursor.execute("DELETE FROM user_inventory WHERE user_id = %s", (user_id,))
                     # 4. Knowledge graph / facts aprendidos
                     cursor.execute("DELETE FROM user_facts WHERE user_id = %s", (user_id,))

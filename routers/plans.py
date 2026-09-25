@@ -4189,7 +4189,7 @@ async def api_analyze_stream(
                 from db_core import execute_sql_query as _esq_pf
                 _inv_pf = _esq_pf(
                     "SELECT ingredient_name, quantity::float8 AS quantity, unit FROM user_inventory "
-                    "WHERE user_id = %s AND quantity > 0",
+                    "WHERE user_id = %s AND kind = 'food' AND quantity > 0",
                     (actual_user_id,), fetch_all=True,
                 ) or []
                 _pf_items = []
@@ -11041,7 +11041,7 @@ def api_restock(data: dict = Body(...), verified_user_id: Optional[str] = Depend
                 # con el resto del repo (db_plans.py:215+, db_inventory.py).
                 from db_core import execute_sql_query
                 _inv_count_row = execute_sql_query(
-                    "SELECT COUNT(*) AS c FROM user_inventory WHERE user_id = %s",
+                    "SELECT COUNT(*) AS c FROM user_inventory WHERE user_id = %s AND kind = 'food'",
                     (user_id,),
                     fetch_one=True,
                 )
@@ -11093,7 +11093,7 @@ def api_restock(data: dict = Body(...), verified_user_id: Optional[str] = Depend
         _present_keys = set()
         try:
             _inv_rows = execute_sql_query(
-                "SELECT ingredient_name FROM user_inventory WHERE user_id = %s AND quantity > 0",
+                "SELECT ingredient_name FROM user_inventory WHERE user_id = %s AND kind = 'food' AND quantity > 0",
                 (user_id,), fetch_all=True,
             ) or []
             _present_keys = {strip_accents(str(r.get("ingredient_name") or "").strip().lower()) for r in _inv_rows}
@@ -17835,7 +17835,7 @@ def _pantry_feasibility_report(user_id, days, kcal_day, protein_day):
 
     inv = _esq(
         "SELECT ingredient_name, quantity::float8 AS quantity, unit FROM user_inventory "
-        "WHERE user_id = %s AND quantity > 0",
+        "WHERE user_id = %s AND kind = 'food' AND quantity > 0",
         (user_id,), fetch_all=True,
     ) or []
     master = _esq(

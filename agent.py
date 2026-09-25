@@ -6264,7 +6264,7 @@ def _build_pantry_context(user_id: Optional[str], nevera_on: Optional[bool] = No
         from db import execute_sql_query
         rows = execute_sql_query(
             "SELECT ingredient_name, quantity::float8 AS quantity, unit, brand "
-            "FROM user_inventory WHERE user_id = %s AND quantity > 0 "
+            "FROM user_inventory WHERE user_id = %s AND kind = 'food' AND quantity > 0 "
             "ORDER BY ingredient_name LIMIT 120",
             (user_id,), fetch_all=True,
         ) or []

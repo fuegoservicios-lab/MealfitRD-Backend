@@ -119,7 +119,7 @@ def inject_pantry_first_ingredients(pipeline_data: dict, actual_user_id: Optiona
         from db_core import execute_sql_query
         inv = execute_sql_query(
             "SELECT ingredient_name, quantity::float8 AS quantity, unit FROM user_inventory "
-            "WHERE user_id = %s AND quantity > 0", (actual_user_id,), fetch_all=True,
+            "WHERE user_id = %s AND kind = 'food' AND quantity > 0", (actual_user_id,), fetch_all=True,
         ) or []
         items = []
         for it in inv:

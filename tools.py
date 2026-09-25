@@ -3869,7 +3869,7 @@ def check_current_pantry(user_id: str) -> str:
         return "No pude consultar la Nevera ahora mismo (error interno). No inventes su contenido."
 
 @tool
-def modify_pantry_inventory(user_id: str, items_to_add: list[str] = None, items_to_remove: list[str] = None, items_to_deplete: list[str] = None) -> str:
+def modify_pantry_inventory(user_id: str, items_to_add: list[str] = None, items_to_remove: list[str] = None, items_to_deplete: list[str] = None, encender_nevera: bool = False) -> str:
     """
     Modifica la despensa física del usuario (user_inventory). 3 paths:
 
@@ -3900,9 +3900,19 @@ def modify_pantry_inventory(user_id: str, items_to_add: list[str] = None, items_
     - items_to_add: Lista de strings con cantidad+unidad+ingrediente a sumar.
     - items_to_remove: Lista de strings a descartar (dañado/botado), con o sin cantidad.
     - items_to_deplete: Lista de strings (nombres) a marcar como agotados (se acabaron).
+    - encender_nevera: true SOLO si el usuario acaba de decir que sí a encender su Nevera para guardar algo.
     """
+    _nota_encendida = ""
     if not nevera_activa(user_id):   # [P1-NEVERA-OPCIONAL · 2026-09-23] apagada (a mano o sola): no se toca
-        return MENSAJE_NEVERA_APAGADA
+        if not items_to_add:
+            return MENSAJE_NEVERA_APAGADA
+        # [P1-PLAN-LOTE-290] GUARDAR sí: la regla decide si se enciende sola (la apagó el sistema) o se pregunta.
+        import nevera_opcional as _nev
+        _r = _nev.encender_por_uso(user_id, forzar=bool(encender_nevera))
+        if _r == "preguntar":
+            return _nev.MENSAJE_NEVERA_PREGUNTAR
+        _nota_encendida = (" (Para el asistente: su Nevera estaba apagada y la ENCENDISTE para guardarlo: díselo en "
+                           "una frase.)")
     # [P3-DOC-2 · 2026-05-11] LIVE-TOOL CONTRACT — LEER ANTES DE MODIFICAR.
     # ────────────────────────────────────────────────────────────────────────
     # `user_id` viene de `tool_args` construido por la LLM. P0-AGENT-1 cerró
@@ -4012,6 +4022,7 @@ def modify_pantry_inventory(user_id: str, items_to_add: list[str] = None, items_
             for r in rows:
                 try:
                     if _sql_write(
+                        # [SUPLEMENTOS-OK: borrado por id de una fila ya elegida]
                         "DELETE FROM public.user_inventory WHERE id = %s AND user_id = %s RETURNING id",
                         (r.get("id"), user_id), returning=True,
                     ):
@@ -4163,7 +4174,7 @@ def modify_pantry_inventory(user_id: str, items_to_add: list[str] = None, items_
         if depleted_payload:
             msg += f"\n\n<<PANTRY_DEPLETED_JSON: {_json.dumps(depleted_payload, ensure_ascii=False)}>>"
 
-        return msg
+        return msg + _nota_encendida   # [P1-PLAN-LOTE-290] «la encendí para guardarlo»
     except Exception:
         logger.exception("❌ [TOOL] Error modificando despensa manualmente")  # [P1-CHAT-TOOLS-AUDIT · 2026-09-14]
         return "No pude modificar la Nevera (error interno). NO digas que quedó actualizada; sugiérele hacerlo desde la Nevera en la app."
@@ -5222,7 +5233,7 @@ def _contexto_del_dia_para_propuesta(user_id: str) -> dict:
         try:
             from db import execute_sql_query as _esq_pc
             _rows = _esq_pc(
-                "SELECT ingredient_name FROM user_inventory WHERE user_id = %s AND quantity > 0 LIMIT 200",
+                "SELECT ingredient_name FROM user_inventory WHERE user_id = %s AND kind = 'food' AND quantity > 0 LIMIT 200",
                 (user_id,), fetch_all=True) or []
             ctx["nevera"] = [str(r.get("ingredient_name")) for r in _rows if r.get("ingredient_name")]
         except Exception as e:

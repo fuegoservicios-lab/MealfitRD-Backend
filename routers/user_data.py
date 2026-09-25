@@ -66,6 +66,7 @@ def _require_user(verified_user_id: Optional[str]) -> str:
 # cada row lleva un dict anidado bajo la key 'master_ingredients' (o None si
 # no hay FK). Los consumers (Pantry/Dashboard/useRegeneratePlan) no cambian
 # su lectura — solo el transporte.
+# [SUPLEMENTOS-OK: la pantalla lista los dos tipos]
 _INVENTORY_SELECT = """
     SELECT
         ui.id,
@@ -79,6 +80,7 @@ _INVENTORY_SELECT = """
         ui.source,
         ui.category,
         ui.brand,
+        ui.kind, ui.serving_label, ui.serving_unit, ui.label_source,  -- [P1-PLAN-LOTE-290] suplementos en la Alacena
         CASE WHEN mi.id IS NULL THEN NULL ELSE jsonb_build_object(
             'name', mi.name,
             'category', mi.category,
@@ -261,6 +263,7 @@ async def api_change_inventory_unit(
     def _change():
         from db import execute_sql_write
         return execute_sql_write(
+            # [SUPLEMENTOS-OK: fusión por id de una fila que eligió el usuario]
             """
             WITH src AS (
                 SELECT id, user_id, ingredient_name, quantity
@@ -360,6 +363,7 @@ async def api_delete_inventory_item(
     def _del():
         from db import execute_sql_write
         return execute_sql_write(
+            # [SUPLEMENTOS-OK: borrado por id que pidió el usuario]
             "DELETE FROM user_inventory WHERE id = %s AND user_id = %s RETURNING id",
             (item_id, uid),
             returning=True,
@@ -381,6 +385,7 @@ async def api_delete_all_inventory(
     def _del_all():
         from db import execute_sql_write
         rows = execute_sql_write(
+            # [SUPLEMENTOS-OK: «vaciar la Nevera» vacía también los suplementos]
             "DELETE FROM user_inventory WHERE user_id = %s RETURNING id",
             (uid,),
             returning=True,

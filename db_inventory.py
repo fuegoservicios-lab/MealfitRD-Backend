@@ -241,7 +241,7 @@ def get_raw_user_inventory(user_id: str) -> List[Dict[str, Any]]:
             "master_ingredient_id::text AS master_ingredient_id, "
             "reserved_quantity::float8 AS reserved_quantity, "
             "reservation_details, last_mutation_type, source, category "
-            "FROM user_inventory WHERE user_id = %s AND quantity > 0",
+            "FROM user_inventory WHERE user_id = %s AND kind = 'food' AND quantity > 0",
             (user_id,),
             fetch_all=True,
         ) or []
@@ -1273,7 +1273,7 @@ def reserve_plan_ingredients(user_id: str, chunk_id: str, days: List[Dict[str, A
         batch_rows = execute_sql_query(
             "SELECT id, ingredient_name, quantity::float8 AS quantity, unit, "
             "reserved_quantity::float8 AS reserved_quantity, reservation_details "
-            "FROM user_inventory WHERE user_id = %s",
+            "FROM user_inventory WHERE user_id = %s AND kind = 'food'",
             (user_id,),
             fetch_all=True,
         ) or []
@@ -1314,6 +1314,7 @@ def release_meal_reservation(user_id: str, meal_name: str) -> int:
     released = 0
     try:
         rows = execute_sql_query(
+            # [SUPLEMENTOS-OK: reservas: a un suplemento nunca se le reserva nada]
             "SELECT id, reserved_quantity::float8 AS reserved_quantity, reservation_details "
             "FROM user_inventory WHERE user_id = %s AND reserved_quantity > 0",
             (user_id,),
@@ -1365,6 +1366,7 @@ def release_chunk_reservations(user_id: str, chunk_id: str) -> int:
     rows: List[Dict[str, Any]] = []
     try:
         rows = execute_sql_query(
+            # [SUPLEMENTOS-OK: reservas: a un suplemento nunca se le reserva nada]
             "SELECT id, reserved_quantity, reservation_details FROM user_inventory "
             "WHERE user_id = %s AND reserved_quantity > 0",
             (user_id,),
@@ -1508,7 +1510,7 @@ def find_pantry_rows_for_name(
     _COLS = (
         "SELECT id, ingredient_name, quantity::float8 AS quantity, unit, "
         "reserved_quantity::float8 AS reserved_quantity, reservation_details "
-        "FROM user_inventory WHERE user_id = %s"
+        "FROM user_inventory WHERE user_id = %s AND kind = 'food'"
     )
 
     # Peldaño 1: exacto.
@@ -1845,6 +1847,7 @@ def add_or_update_inventory_item(user_id: str, ingredient_name: str, quantity: f
                         new_qty = round(current_qty + converted_qty, 4)
                         if new_qty < 0.01:
                             execute_sql_write(
+                                # [SUPLEMENTOS-OK: borrado por id de una fila ya elegida]
                                 "DELETE FROM user_inventory WHERE id = %s",
                                 (row_id,),
                             )
@@ -1952,7 +1955,7 @@ def get_inventory_activity_since(user_id: str, since_iso: str) -> Dict[str, Any]
         rows = execute_sql_query(
             "SELECT id, ingredient_name, quantity::float8 AS quantity, "
             "to_jsonb(updated_at) #>> '{}' AS updated_at, last_mutation_type "
-            "FROM user_inventory WHERE user_id = %s AND updated_at >= %s",
+            "FROM user_inventory WHERE user_id = %s AND kind = 'food' AND updated_at >= %s",
             (user_id, since_iso),
             fetch_all=True,
         ) or []
@@ -2458,7 +2461,7 @@ def get_reconciliation_candidates(user_id: str) -> List[Dict[str, Any]]:
                                 ui.created_at)
                    ) AS last_signal
               FROM user_inventory ui
-             WHERE ui.user_id = %s
+             WHERE ui.user_id = %s AND ui.kind = 'food'
                AND ui.quantity > 0
              ORDER BY last_signal ASC
              LIMIT %s
@@ -2526,6 +2529,7 @@ def resolve_reconciliation_item(user_id: str, row_id: Any, action: str) -> Dict[
 
     try:
         row = execute_sql_query(
+            # [SUPLEMENTOS-OK: por id de una fila ya elegida]
             "SELECT ingredient_name, quantity::float8 AS quantity, unit "
             "FROM user_inventory WHERE id = %s AND user_id = %s",
             (row_id, user_id),
@@ -2556,6 +2560,7 @@ def resolve_reconciliation_item(user_id: str, row_id: Any, action: str) -> Dict[
     # used | spoiled → sale de la Nevera.
     try:
         execute_sql_write(
+            # [SUPLEMENTOS-OK: borrado por id de una fila ya elegida]
             "DELETE FROM user_inventory WHERE id = %s AND user_id = %s",
             (row_id, user_id),
         )
@@ -2663,7 +2668,7 @@ def deduct_consumed_meal_from_inventory(
         _pantry_snapshot = execute_sql_query(
             "SELECT id, ingredient_name, quantity::float8 AS quantity, unit, "
             "reserved_quantity::float8 AS reserved_quantity, reservation_details "
-            "FROM user_inventory WHERE user_id = %s",
+            "FROM user_inventory WHERE user_id = %s AND kind = 'food'",
             (user_id,),
             fetch_all=True,
         ) or []
@@ -2999,7 +3004,7 @@ def replace_shopping_list_only_items(user_id: str, ingredients_list: list) -> Di
     try:
         _preserved_row = execute_sql_query(
             "SELECT count(*) AS count FROM user_inventory "
-            "WHERE user_id = %s AND source <> 'shopping_list'",
+            "WHERE user_id = %s AND kind = 'food' AND source <> 'shopping_list'",
             (user_id,),
             fetch_one=True,
         )
@@ -3019,7 +3024,7 @@ def replace_shopping_list_only_items(user_id: str, ingredients_list: list) -> Di
                     "master_ingredient_id::text AS master_ingredient_id, "
                     "reserved_quantity::float8 AS reserved_quantity, "
                     "reservation_details, last_mutation_type, source, category "
-                    "FROM user_inventory WHERE user_id = %s AND source = 'shopping_list'",
+                    "FROM user_inventory WHERE user_id = %s AND kind = 'food' AND source = 'shopping_list'",
                     (user_id,),
                     fetch_all=True,
                 ) or []
@@ -3035,6 +3040,7 @@ def replace_shopping_list_only_items(user_id: str, ingredients_list: list) -> Di
 
         # RETURNING id reemplaza el count='exact' de PostgREST.
         _deleted_rows = execute_sql_write(
+            # [SUPLEMENTOS-OK: solo filas source='shopping_list'; un suplemento nunca lo es]
             "DELETE FROM user_inventory WHERE user_id = %s AND source = 'shopping_list' "
             "RETURNING id",
             (user_id,),
@@ -3147,6 +3153,7 @@ def replace_shopping_list_only_items(user_id: str, ingredients_list: list) -> Di
                     "ingredients_attempted": len(ingredients_list),
                 }
                 alert_message = (
+                    # [SUPLEMENTOS-OK: texto de log, no SQL]
                     f"Rollback parcial al reemplazar shopping_list de user={user_id}. "
                     f"Restauradas {restored}/{total} filas; {total - restored} "
                     f"perdidas en el limbo (snapshot en logs, NO en DB). "
@@ -3198,7 +3205,7 @@ def replace_shopping_list_only_items(user_id: str, ingredients_list: list) -> Di
         try:
             _count_row = execute_sql_query(
                 "SELECT count(*) AS count FROM user_inventory "
-                "WHERE user_id = %s AND source = 'shopping_list'",
+                "WHERE user_id = %s AND kind = 'food' AND source = 'shopping_list'",
                 (user_id,),
                 fetch_one=True,
             )
