@@ -78,3 +78,18 @@ def test_el_router_valida_lo_que_toma():
     from routers import plans
     src = _src("routers/plans.py")
     assert '"currentSupplements"' in src
+
+
+# ── Task 12: lo que toma, a la Alacena ──────────────────────────────────────────────────────────────────────────────
+
+def test_endpoint_guarda_los_que_toma_y_enciende_la_nevera(monkeypatch):
+    import suplementos
+    from routers import user_data
+    guardados = []
+    monkeypatch.setattr(suplementos, "buscar", lambda uid, n: {"id": 1} if n == "Creatina Monohidrato" else None)
+    monkeypatch.setattr(suplementos, "guardar", lambda *a, **k: guardados.append((a, k)) or {"ok": True})
+    r = user_data.guardar_suplementos_del_formulario(
+        user_data.SuplementosFormulario(claves=["creatine", "omega3", "no_existe", "omega3"]), user_id="u")
+    assert r == {"guardados": 1}                      # creatina ya estaba; «no_existe» fuera; omega3 una vez
+    a, k = guardados[0]
+    assert a[1] == "Omega-3 (Aceite de Pescado)" and k["forzar_nevera"] is True and k["usar_estimado"] is False

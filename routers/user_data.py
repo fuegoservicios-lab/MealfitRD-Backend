@@ -1760,3 +1760,34 @@ async def api_put_staple_foods(
         raise HTTPException(status_code=404, detail="Perfil no encontrado.")
 
     return {"staple_foods": cleaned}
+
+
+# ── [P1-PLAN-LOTE-292 · 2026-09-25] «¿Tomas algún suplemento?» → la Alacena ─────────────────────────────────────────
+# El formulario (plan o contador) manda las claves marcadas; cada una se guarda como pote SIN etiqueta (el coach la
+# completa con la foto del pote). Es una acción explícita del usuario: enciende la Nevera aunque la hubiera apagado él.
+_SUP_FORM_LIMITER = RateLimiter(max_calls=10, period_seconds=60)
+
+
+class SuplementosFormulario(BaseModel):
+    claves: List[str] = Field(default_factory=list, max_length=24)
+
+
+@router.post("/inventory/supplements")
+def guardar_suplementos_del_formulario(body: SuplementosFormulario, user_id: str = Depends(_SUP_FORM_LIMITER)):
+    """`def` plano: psycopg síncrono (P3-NOTIF-EVENTLOOP). Idempotente: lo que ya está en la Alacena no se duplica."""
+    if not user_id or user_id == "guest":
+        raise HTTPException(status_code=401, detail="User ID en token no válido.")
+    import suplementos
+    from constants import SUPPLEMENT_NAMES
+    n, vistos = 0, set()
+    for clave in body.claves:
+        if clave in vistos or clave not in SUPPLEMENT_NAMES or clave not in suplementos.ESTIMADOS:
+            continue
+        vistos.add(clave)
+        nombre = SUPPLEMENT_NAMES[clave]
+        if suplementos.buscar(user_id, nombre):
+            continue
+        suplementos.guardar(user_id, nombre, None, None, suplementos.ESTIMADOS[clave]["unidad"], None, "estimado",
+                            clave, forzar_nevera=True, usar_estimado=False)
+        n += 1
+    return {"guardados": n}
