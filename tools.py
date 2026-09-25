@@ -5351,6 +5351,11 @@ def guardar_suplemento(user_id: str, nombre: str, marca: str = None, porciones: 
     - encender_nevera: true SOLO si el usuario acaba de decir que sí a encender su Nevera.
     """
     # [P1-PLAN-LOTE-291 · 2026-09-25] tooltip-anchor: P1-PLAN-LOTE-291-GUARDAR
+    import re as _re_g
+    if not _re_g.match(r"^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$", str(user_id or ""), _re_g.I):
+        # [P1-PLAN-LOTE-300 · detalle M4] invitado: la Alacena es de una cuenta
+        return ("Para guardar suplementos en la Alacena necesitas iniciar sesión. (Para el asistente: díselo en una "
+                "frase y ofrécele crear su cuenta; no digas que quedó guardado.)")
     try:
         import suplementos
         r = suplementos.guardar(user_id, nombre, marca, porciones, unidad, etiqueta, fuente, clave, encender_nevera)

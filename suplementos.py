@@ -82,7 +82,19 @@ def buscar(user_id: str, nombre: str) -> dict | None:
         "FROM user_inventory WHERE user_id = %s AND kind = 'supplement'",
         (user_id,), fetch_all=True,
     ) or []
-    return next((f for f in filas if pantry_names_match(f.get("ingredient_name") or "", nombre or "")), None)
+    # [P1-PLAN-LOTE-300 · detalle M5] Primero el nombre EXACTO (sin mayúsculas ni tildes); si no, un parecido solo si es
+    # el ÚNICO: «proteína» con whey y vegana en la Alacena es ambiguo y no se adivina.
+    from constants import strip_accents
+    _n = lambda s: " ".join(strip_accents(str(s or "")).lower().split())
+    exacto = [f for f in filas if _n(f.get("ingredient_name")) == _n(nombre)]
+    if exacto:
+        return exacto[0]
+    _pal = lambda s: set(_n(s).replace("(", " ").replace(")", " ").replace("/", " ").split())
+    _q = _pal(nombre)
+    parecidos = [f for f in filas
+                 if (_q and _q <= _pal(f.get("ingredient_name")))       # «whey» ⊂ «Proteína Whey»
+                 or pantry_names_match(f.get("ingredient_name") or "", nombre or "")]
+    return parecidos[0] if len(parecidos) == 1 else None
 
 
 def unidad_de_fila(unidad: str) -> str:
@@ -124,6 +136,15 @@ def guardar(user_id, nombre, marca=None, porciones=None, unidad="scoop", etiquet
     if estado == "preguntar":
         return {"ok": False, "estado_nevera": estado, "etiqueta": None, "fuente": fuente}
     unidad = unidad if unidad in UNIDADES else "porcion"
+    # [P1-PLAN-LOTE-300 · detalle M5] Si ya hay un pote con ese nombre (o uno parecido e inequívoco), se actualiza ESE:
+    # «proteína whey» no crea un segundo pote al lado de «Proteína Whey».
+    try:
+        _existente = buscar(user_id, nombre)
+    except Exception:
+        _existente = None
+    if _existente:
+        nombre = _existente.get("ingredient_name") or nombre
+        unidad = _existente.get("serving_unit") or unidad
     e = etiqueta_valida(etiqueta)
     if e is None or fuente not in FUENTES:
         fuente = "estimado"

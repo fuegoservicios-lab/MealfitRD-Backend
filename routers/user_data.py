@@ -1787,6 +1787,10 @@ def guardar_suplementos_del_formulario(body: SuplementosFormulario, user_id: str
         raise HTTPException(status_code=401, detail="User ID en token no válido.")
     import suplementos
     from constants import SUPPLEMENT_NAMES
+    # [P1-PLAN-LOTE-300 · detalle M1] Marcar algo es querer la Nevera: se enciende aunque todos los potes ya existieran.
+    if body.claves:
+        from nevera_opcional import encender_por_uso
+        encender_por_uso(user_id, forzar=True)
     n, vistos = 0, set()
     for clave in body.claves:
         if clave in vistos or clave not in SUPPLEMENT_NAMES or clave not in suplementos.ESTIMADOS:

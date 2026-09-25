@@ -85,3 +85,46 @@ def test_marker():
 def test_la_clave_p8_no_esta_en_el_repo():
     for p in list(_BACKEND.rglob("*.p8")) + list(_BACKEND.parent.glob("*.p8")):
         pytest.fail(f"clave APNs dentro del repo: {p}")
+
+
+# ── Detalles menores de los suplementos (pedido del dueño, 25-sep) ──────────────────────────────────────────────────
+
+def test_M1_el_formulario_enciende_la_nevera_aunque_los_potes_ya_existan(monkeypatch):
+    import suplementos
+    import nevera_opcional
+    from routers import user_data
+    encendidas = []
+    monkeypatch.setattr(nevera_opcional, "encender_por_uso", lambda uid, forzar=False: encendidas.append(forzar) or "encendida")
+    monkeypatch.setattr(suplementos, "buscar", lambda uid, n: {"id": 1})     # todos ya estaban
+    monkeypatch.setattr(suplementos, "guardar", lambda *a, **k: {"ok": True})
+    r = user_data.guardar_suplementos_del_formulario(user_data.SuplementosFormulario(claves=["creatine"]), user_id="u")
+    assert r == {"guardados": 0} and encendidas == [True]
+
+
+def test_M4_invitado_recibe_un_mensaje_claro():
+    import tools
+    out = tools.guardar_suplemento.func("guest-session-123", "Creatina")
+    assert "iniciar sesión" in out and "error interno" not in out
+
+
+def test_M5_nombres_casi_iguales_resuelven_al_pote_correcto(monkeypatch):
+    import suplementos
+    import db_core
+    filas = [{"id": 1, "ingredient_name": "Proteína Whey", "unit": "sup_scoop", "serving_unit": "scoop"},
+             {"id": 2, "ingredient_name": "Proteína Vegana", "unit": "sup_scoop", "serving_unit": "scoop"}]
+    monkeypatch.setattr(db_core, "execute_sql_query", lambda *a, **k: filas)
+    assert suplementos.buscar("u", "proteína whey")["id"] == 1          # exacto (sin mayúsculas ni tildes)
+    assert suplementos.buscar("u", "whey")["id"] == 1                   # único parecido
+    assert suplementos.buscar("u", "proteína") is None                  # ambiguo: no adivina
+
+
+def test_M5_guardar_actualiza_el_pote_existente_con_su_nombre(monkeypatch):
+    import suplementos
+    import nevera_opcional
+    monkeypatch.setattr(nevera_opcional, "encender_por_uso", lambda uid, forzar=False: "activa")
+    monkeypatch.setattr(suplementos, "buscar", lambda uid, n: {"id": 1, "ingredient_name": "Proteína Whey",
+                                                                "serving_unit": "scoop"})
+    escritos = []
+    monkeypatch.setattr(suplementos, "_upsert", lambda *a: escritos.append(a))
+    suplementos.guardar("u", "proteína whey", None, 20, "g", None, "estimado", "whey_protein")
+    assert escritos[0][1] == "Proteína Whey" and escritos[0][4] == "scoop"
