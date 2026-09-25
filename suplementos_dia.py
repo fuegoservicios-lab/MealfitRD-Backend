@@ -93,7 +93,8 @@ def elegidos(form_data) -> list:
     except Exception:
         return []
     out = []
-    for s in form_data.get("selectedSupplements") or []:
+    from suplementos import normalizar_suplementos   # [P1-PLAN-LOTE-292] formulario nuevo o viejo, un solo lector
+    for s in normalizar_suplementos(form_data)["toma"]:
         if s in SUPPLEMENT_NAMES and s not in out:
             out.append(s)
     if out:
@@ -121,7 +122,9 @@ def conservar(corregido, original):
 def completar(result, form_data) -> int:
     """Deja en cada día los suplementos elegidos, ni más ni menos. Devuelve cuántas entradas añadió."""
     try:
-        if not isinstance(result, dict) or not isinstance(form_data, dict) or not form_data.get("includeSupplements"):
+        from suplementos import normalizar_suplementos, RECOMENDABLES
+        _n = normalizar_suplementos(form_data)   # [P1-PLAN-LOTE-292]
+        if not isinstance(result, dict) or not isinstance(form_data, dict) or not (_n["toma"] or _n["recomendar"]):
             return 0
         dias = [d for d in (result.get("days") or []) if isinstance(d, dict)]
         if not dias:
@@ -129,7 +132,7 @@ def completar(result, form_data) -> int:
         pedidos = elegidos(form_data)
         anadidas = quitadas = 0
         if not pedidos:
-            if form_data.get("selectedSupplements"):
+            if _n["toma"]:
                 return 0          # todo lo elegido está vetado: la barredora clínica ya hizo su trabajo
             modelo = next((d["supplements"] for d in dias if d.get("supplements")), None)
             for d in dias:
@@ -149,6 +152,11 @@ def completar(result, form_data) -> int:
                 for s in antes:
                     k = clave_de(_nombre(s))
                     if k in pedidos and k not in vistos:
+                        nuevos.append(s)
+                        vistos.add(k)
+                    elif _n["recomendar"] and k in RECOMENDABLES and k not in vistos:
+                        # [P1-PLAN-LOTE-292] «¿Te recomendamos?» = sí: una recomendación con respaldo se queda
+                        # (el veto clínico ya lo pasó la barredora del orquestador); un quemador, nunca.
                         nuevos.append(s)
                         vistos.add(k)
                     else:

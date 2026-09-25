@@ -1491,6 +1491,19 @@ def _validate_form_data_ranges(data: dict) -> tuple[bool, list[dict]]:
                         "unit": "list of strings (enum)",
                     })
 
+    # --- currentSupplements (P1-PLAN-LOTE-292) ---
+    # «¿Tomas algún suplemento?»: mismo enum y mismo vector de prompt-injection que `selectedSupplements`, pero se
+    # valida SIEMPRE (no depende de un interruptor: lo que toma entra al plan).
+    cur_raw = data.get("currentSupplements")
+    if cur_raw is not None:
+        if not isinstance(cur_raw, list) or any(not isinstance(s, str) or s not in _SUPPLEMENT_ENUM for s in cur_raw):
+            errors.append({
+                "field": "currentSupplements",
+                "value": cur_raw if not isinstance(cur_raw, list) else [s for s in cur_raw if s not in _SUPPLEMENT_ENUM],
+                "accepted_range": sorted(_SUPPLEMENT_ENUM),
+                "unit": "list of strings (enum)",
+            })
+
     # --- targetWeight + goalPace (P1-FORM-AUDIT-BATCH · 2026-07-03, C3) ---
     # El wizard (QGoalTarget) captura peso meta + ritmo. ANTES no se validaba
     # dirección ni rango: `mainGoal=lose_fat` + `targetWeight=250` (sobre un

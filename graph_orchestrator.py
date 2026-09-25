@@ -38163,7 +38163,7 @@ async def assemble_plan_node(state: PlanState) -> dict:
     # apareciendo en planes con includeSupplements=False). Lo limpiamos de raíz aquí
     # en dos sitios: el campo `supplements` Y los `ingredients` de cada meal (donde
     # el LLM también ha colado proteína en polvo, creatina, etc.).
-    if not form_data.get("includeSupplements"):
+    if not __import__("suplementos").suplementos_activos(form_data):   # [P1-PLAN-LOTE-292] formulario nuevo o viejo
         _supp_keywords = (
             "proteína en polvo", "proteina en polvo", "whey", "caseína", "caseina",
             "creatina", "creatine", "bcaa", "glutamina", "pre-entreno", "preentreno",

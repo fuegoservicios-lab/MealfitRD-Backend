@@ -173,3 +173,32 @@ def bloque_para_chat(user_id: str) -> str:
             lineas.append(f"{p.get('ingredient_name')}{marca} — ~{int(float(p.get('quantity') or 0))} {u} — {et}")
         out += " SU ALACENA: " + "; ".join(lineas) + "."
     return out
+
+
+# ── [P1-PLAN-LOTE-292] El formulario: «¿qué tomas?» y «¿te recomendamos?» ──────────────────────────────────────────
+
+# La IA nunca los RECOMIENDA (poca evidencia o riesgo); si el usuario ya los toma, se respetan como suyos.
+NO_RECOMENDAR = frozenset({"fat_burner", "pre_workout", "bcaa"})
+RECOMENDABLES = frozenset(ESTIMADOS) - NO_RECOMENDAR
+
+
+def normalizar_suplementos(fd) -> dict:
+    """{'toma': [claves], 'recomendar': bool} desde el formulario nuevo (`currentSupplements` +
+    `recommendSupplements`) o el viejo (`includeSupplements` + `selectedSupplements`: lo elegido era «lo quiero»,
+    y el interruptor sin elección, «recomiéndame»). Espejo: frontend/src/utils/normalizarSuplementos.js."""
+    fd = fd if isinstance(fd, dict) else {}
+    if isinstance(fd.get("currentSupplements"), list):
+        return {"toma": [s for s in fd["currentSupplements"] if isinstance(s, str)],
+                "recomendar": bool(fd.get("recommendSupplements"))}
+    if not fd.get("includeSupplements"):
+        return {"toma": [], "recomendar": False}
+    sel = [s for s in (fd.get("selectedSupplements") or []) if isinstance(s, str)]
+    if sel:
+        return {"toma": sel, "recomendar": False}
+    return {"toma": [], "recomendar": True}
+
+
+def suplementos_activos(fd) -> bool:
+    """¿El plan lleva suplementos (los que toma o los que se le recomiendan)?"""
+    n = normalizar_suplementos(fd)
+    return bool(n["toma"] or n["recomendar"])

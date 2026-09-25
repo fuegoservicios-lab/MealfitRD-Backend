@@ -6905,8 +6905,10 @@ def chat_with_agent(session_id: str, prompt: str, current_plan: Optional[dict] =
         system_prompt += _plan_context_for_chat(user_id, current_plan)
         system_prompt += _prep_time_context_for_chat(plan_vigente)  # [P1-PLAN-LOTE-53]
         
-        if form_data and form_data.get("includeSupplements"):
-            selected_supps = form_data.get("selectedSupplements", [])
+        from suplementos import normalizar_suplementos   # [P1-PLAN-LOTE-292]
+        _n_sup = normalizar_suplementos(form_data)
+        if form_data and (_n_sup["toma"] or _n_sup["recomendar"]):
+            selected_supps = _n_sup["toma"]
             if selected_supps:
                 from constants import SUPPLEMENT_NAMES as SUPP_NAMES
                 names = [SUPP_NAMES.get(s, s) for s in selected_supps]
@@ -7533,8 +7535,10 @@ def chat_with_agent_stream(session_id: str, prompt: str, current_plan: Optional[
         system_prompt += _plan_context_for_chat(user_id, current_plan)
         system_prompt += _prep_time_context_for_chat(plan_vigente)  # [P1-PLAN-LOTE-53]
         
-        if form_data and form_data.get("includeSupplements"):
-            selected_supps = form_data.get("selectedSupplements", [])
+        from suplementos import normalizar_suplementos   # [P1-PLAN-LOTE-292]
+        _n_sup = normalizar_suplementos(form_data)
+        if form_data and (_n_sup["toma"] or _n_sup["recomendar"]):
+            selected_supps = _n_sup["toma"]
             if selected_supps:
                 from constants import SUPPLEMENT_NAMES as SUPP_NAMES
                 names = [SUPP_NAMES.get(s, s) for s in selected_supps]

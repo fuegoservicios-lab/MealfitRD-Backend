@@ -1073,8 +1073,13 @@ def build_budget_context(form_data: dict) -> str:
 
 
 def build_supplements_context(form_data: dict) -> str:
-    """Genera el bloque de suplementos condicionado a la selección del usuario."""
-    if not form_data.get("includeSupplements"):
+    """Genera el bloque de suplementos condicionado a la selección del usuario.
+
+    [P1-PLAN-LOTE-292 · 2026-09-25] Lee el formulario por `suplementos.normalizar_suplementos`: lo que el usuario TOMA
+    entra siempre (es suyo), y solo con «recomiéndame» se añaden recomendaciones, nunca de `NO_RECOMENDAR`."""
+    from suplementos import normalizar_suplementos, NO_RECOMENDAR
+    _n = normalizar_suplementos(form_data)
+    if not (_n["toma"] or _n["recomendar"]):
         # ANTES devolvía "" (ausencia de instrucción), pero el schema
         # `SingleDayPlanModel.supplements` es Optional → el LLM lo veía y rellenaba
         # por su cuenta con cosas como 'Proteína en polvo' o 'Whey'. Ahora emitimos
@@ -1118,7 +1123,7 @@ def build_supplements_context(form_data: dict) -> str:
             f"{_lineas}\n"
         )
 
-    raw_selected = form_data.get("selectedSupplements", []) or []
+    raw_selected = _n["toma"]
     # [P1-FORM-11] Filtro defensivo: descarta strings que no estén en
     # `SUPPLEMENT_NAMES`. El validador en `routers/plans.py` ya rechaza con 422
     # los valores fuera del enum, pero callers no-router (cron, proactive_agent,
@@ -1154,16 +1159,27 @@ def build_supplements_context(form_data: dict) -> str:
 
         ctx = (
             "\n--- 💊 SUPLEMENTOS SELECCIONADOS (OBLIGATORIO — LEE CON CUIDADO) ---\n"
+            "Estos LO TOMA EL USUARIO: inclúyelos tal cual, con la dosis de su etiqueta y su hora.\n"
             f"LISTA EXACTA de suplementos que DEBES incluir: {', '.join(supp_names)}\n"
-            f"TOTAL: {len(supp_names)} suplemento(s). Ni más, ni menos.\n\n"
-            "⚠️ PROHIBIDO incluir cualquier suplemento que NO esté en la lista de arriba.\n"
         )
-        if not_selected_names:
-            ctx += f"❌ NO INCLUIR (el usuario NO los seleccionó): {', '.join(not_selected_names)}\n"
-        ctx += (
-            "\nPara CADA día del plan, agrega una sección 'supplements' con SOLO los suplementos listados arriba.\n"
-            "Cada suplemento: 'name' (nombre exacto), 'dose' (dosis), 'timing' (momento del día), 'reason' (justificación).\n"
-        )
+        if not _n["recomendar"]:
+            ctx += (
+                f"TOTAL: {len(supp_names)} suplemento(s). Ni más, ni menos.\n\n"
+                "⚠️ PROHIBIDO incluir cualquier suplemento que NO esté en la lista de arriba.\n"
+            )
+            if not_selected_names:
+                ctx += f"❌ NO INCLUIR (el usuario NO los seleccionó): {', '.join(not_selected_names)}\n"
+            ctx += "\nPara CADA día del plan, agrega una sección 'supplements' con SOLO los suplementos listados arriba.\n"
+        else:
+            # [P1-PLAN-LOTE-292] «¿Te recomendamos?» = sí: además de lo suyo, solo lo que tiene respaldo.
+            _ok = sorted(SUPPLEMENT_NAMES[k] for k in SUPPLEMENT_NAMES
+                         if k not in NO_RECOMENDAR and k not in _vetados and k not in selected_supps)
+            ctx += (
+                "Además PUEDES recomendar para su meta, SOLO entre: " + ", ".join(_ok) + ".\n"
+                "NUNCA recomiendes: " + ", ".join(sorted(SUPPLEMENT_NAMES[k] for k in NO_RECOMENDAR)) + ".\n"
+                "\nPara CADA día del plan, agrega una sección 'supplements' con los suyos y, si aplica, esas recomendaciones.\n"
+            )
+        ctx += "Cada suplemento: 'name' (nombre exacto), 'dose' (dosis), 'timing' (momento del día), 'reason' (justificación).\n"
         ctx += _bloque_prohibidos()
         ctx += "---------------------------------------------------\n"
         return ctx
@@ -1175,6 +1191,8 @@ def build_supplements_context(form_data: dict) -> str:
             "Cada suplemento debe tener: 'name' (nombre), 'dose' (dosis), 'timing' (momento del día), 'reason' (justificación breve).\n"
             "Adapta las recomendaciones al objetivo del usuario, su nivel de actividad y condiciones médicas.\n"
             "Ejemplos: Proteína Whey, Creatina Monohidrato, Omega-3, Vitamina D3, Multivitamínico, Magnesio, etc.\n"
+            # [P1-PLAN-LOTE-292] la IA nunca recomienda quemadores, pre-entrenos ni BCAA
+            + "NUNCA recomiendes: " + ", ".join(sorted(SUPPLEMENT_NAMES[k] for k in NO_RECOMENDAR)) + ".\n"
             + _bloque_prohibidos()
             + "---------------------------------------------------\n"
         )

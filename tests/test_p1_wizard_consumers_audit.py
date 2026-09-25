@@ -25,6 +25,8 @@ WIZARD_FIELDS = [
     "otherDislikes", "mealOrganization", "stapleAnchors", "stapleFoods", "medicalConditions", "otherConditions",
     "medications", "otherMedications", "mainGoal", "targetWeight", "goalPace", "struggles", "otherStruggles",
     "motivation", "includeSupplements", "selectedSupplements",
+    # [P1-PLAN-LOTE-292] «¿Tomas algún suplemento?» / «¿Te recomendamos alguno?»
+    "currentSupplements", "recommendSupplements",
 ]
 # Módulos que CONSUMEN (deciden algo con el valor). NO cuentan: routers (plomería), tests, scripts, landing_benchmarks
 # (matriz de perfiles) ni el resumen del formulario (P2-FORM-SNAPSHOT-LOG), que nombra todos los campos sin usarlos.
@@ -33,6 +35,7 @@ CONSUMERS = [
     "condition_rules.py", "medication_rules.py", "nutrition_calculator.py", "ai_helpers.py", "graph_orchestrator.py",
     "plan_policy.py", "horizon.py", "agent.py", "tools.py", "proactive_agent.py", "generation_inputs.py", "cron_tasks.py",
     "constants.py", "cultural_profiles.py", "db_facts.py", "db_profiles.py", "plan_mode.py",
+    "suplementos.py",   # [P1-PLAN-LOTE-292] el único lector de los campos de suplementos (normalizar_suplementos)
 ]
 
 

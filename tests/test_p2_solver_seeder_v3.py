@@ -67,7 +67,8 @@ def test_s_p2_d_helper_and_gate_anchored():
     # empujaba fuera y ponía este test rojo por un cambio ajeno a su contrato. Es la clase que
     # ya caducó cinco veces en este repo. Recorte por ORDEN RELATIVO: hasta el final real del
     # bloque `if`, que crece con él.
-    i = _GO.index("if not form_data.get(\"includeSupplements\"):")
+    # [P1-PLAN-LOTE-292] el interruptor viejo ya no se lee a mano: pasa por suplementos.suplementos_activos
+    i = _GO.index("if not __import__(\"suplementos\").suplementos_activos(form_data):")
     _fin = _GO.index("\n    # ", i)          # primer comentario a nivel de función tras el bloque
     win = _GO[i:_fin if _fin > i else len(_GO)]
     assert len(win) > 600, "el recorte del bloque quedó sospechosamente corto"
