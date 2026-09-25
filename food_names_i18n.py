@@ -120,3 +120,28 @@ def canonicos_para_texto(texto: str) -> tuple:
     if dentro:
         return tuple(dentro)
     return tuple(sorted({c for c, r in _indice() if raices <= r}))
+
+
+def canonicos_de_declaracion(declaracion: str, patron_del_escaner) -> list:
+    """[P1-PLAN-LOTE-224 · 2026-09-24] Los nombres canónicos del catálogo que una alergia o un disgusto nombra en
+    cualquiera de los 5 idiomas («strawberry», «fraise», «fragola», «morango» → «fresas»), normalizados (minúsculas,
+    sin acentos) como los términos de `graph_orchestrator._expand_allergy_declarations`, que es quien los usa.
+
+    Las clases de alérgenos cubren los 14 del Reglamento UE; esto cubre el resto del catálogo, que es donde una alergia
+    en otro idioma caía literal y no casaba con nada. `patron_del_escaner` es el patrón con que el escáner busca un
+    término en el plato (`_patron_termino_alergeno`): el canónico que el literal ya alcanza («fresa» → «fresas»: el
+    escáner tolera el plural) no suma nada. El criterio es ese PATRÓN, no una raíz: «tomato» y «tomate» comparten raíz
+    y el patrón de «tomato» no encuentra «Tomate». Sin léxico (fichero ausente o roto) devuelve [] y la conducta es la
+    de antes. Vivía en `graph_orchestrator.py`: salió aquí para no hacer crecer el god file, cuyo tope baja con cada
+    extracción (`test_p3_shopping_projection_pkg`).
+    """
+    try:
+        from constants import strip_accents
+        out = []
+        for c in canonicos_para_texto(declaracion):
+            canon = strip_accents(str(c).lower())
+            if re.search(patron_del_escaner(declaracion), canon) is None:
+                out.append(canon)
+        return out
+    except Exception:
+        return []

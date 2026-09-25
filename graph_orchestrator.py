@@ -14354,29 +14354,6 @@ def _sinonimo_alimento_casa(a_low: str, termino: str) -> bool:
     return _termino_completo(t, a_low) or _termino_completo(a_low, t)
 
 
-def _nombres_canonicos_de_alimento(a_low: str) -> list:
-    """[P1-PLAN-LOTE-224 · 2026-09-24] Los nombres canónicos del catálogo que la declaración nombra en cualquiera de
-    los 5 idiomas («strawberry», «fraise», «fragola», «morango» → «fresas»), normalizados como el resto de términos.
-
-    Las clases de arriba cubren los 14 alérgenos del Reglamento UE; esto cubre el resto del catálogo, que es donde
-    una alergia en otro idioma caía literal y no casaba con nada. Sin léxico (archivo ausente o roto) devuelve [] y
-    la conducta es la de antes. tooltip-anchor: _nombres_canonicos_de_alimento (test_p1_plan_lote_224.py)"""
-    try:
-        from food_names_i18n import canonicos_para_texto
-        from constants import strip_accents
-        out = []
-        for c in canonicos_para_texto(a_low):
-            canon = strip_accents(str(c).lower())
-            # El canónico que el literal ya alcanza («fresa» → «fresas»: el escáner tolera el plural) no suma nada.
-            # El criterio es el PATRÓN del escáner, no una raíz: «tomato» y «tomate» comparten raíz y el patrón de
-            # «tomato» no encuentra «Tomate».
-            if _re.search(_patron_termino_alergeno(a_low), canon) is None:
-                out.append(canon)
-        return out
-    except Exception:
-        return []
-
-
 def _expand_allergy_declarations(allergies) -> set:
     """[P0-ALLERGEN-VOCAB-I18N · 2026-08-21] SSOT de la expansión declaración → términos a buscar
     en el plato.
@@ -14433,8 +14410,11 @@ def _expand_allergy_declarations(allergies) -> set:
             out.add(a_low)  # alergia free-text → match literal
         # [P1-PLAN-LOTE-224] …y el nombre canónico del alimento cuando está escrito en otro idioma: «Strawberry»,
         # «Fraise», «Fragola» y «Morango» son las «Fresas» del catálogo, y el plato sólo se escribe en español.
-        for canon in _nombres_canonicos_de_alimento(a_low):
-            out.add(canon)
+        try:  # sin léxico, la conducta de antes. tooltip-anchor: canonicos_de_declaracion (test_p1_plan_lote_224.py)
+            from food_names_i18n import canonicos_de_declaracion
+            out.update(canonicos_de_declaracion(a_low, _patron_termino_alergeno))
+        except Exception:
+            pass
     return out
 
 

@@ -118,6 +118,21 @@ def test_la_expansion_anade_el_canonico_sin_perder_lo_escrito(go):
     assert "strawberry" in out and any("fresa" in x for x in out), out
 
 
+def test_el_canonico_de_una_declaracion_vive_en_el_lexico_no_en_el_grafo(go):
+    """`canonicos_de_declaracion` salió de `graph_orchestrator.py` (su tope de líneas baja con cada extracción): el
+    grafo sólo la llama, con su patrón de escáner. Lo que el literal ya alcanza no se repite, y sin patrón o sin
+    léxico no rompe la expansión."""
+    import food_names_i18n as fn
+    p = go._patron_termino_alergeno
+    assert fn.canonicos_de_declaracion("strawberry", p) == ["fresas"]
+    assert fn.canonicos_de_declaracion("allergie aux fraises", p) == ["fresas"]
+    assert fn.canonicos_de_declaracion("fresa", p) == [], "el escáner ya encuentra «Fresas» con el literal"
+    assert fn.canonicos_de_declaracion("strawberry", None) == []
+    src = _src("graph_orchestrator.py")
+    assert "out.update(canonicos_de_declaracion(a_low, _patron_termino_alergeno))" in src
+    assert "def _nombres_canonicos_de_alimento" not in src
+
+
 # ─────────────────────────────────────────────────────────────────────────────
 # 2. El léxico de alimentos
 # ─────────────────────────────────────────────────────────────────────────────
