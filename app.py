@@ -591,7 +591,9 @@ _PROCESS_START_ISO = datetime.now(timezone.utc).isoformat()
 # [P1-PLAN-LOTE-292 · 2026-09-25] (backend + frontend) formulario: «¿Tomas algún suplemento?» (también en contador; a
 # la Alacena por POST /api/inventory/supplements) y «¿te recomendamos?»; un solo lector (`normalizar_suplementos`) en
 # prompt, suplementos por día, orquestador, coach y validación; la IA nunca recomienda quemadores/pre-entrenos/BCAA.
-_LAST_KNOWN_PFIX = "P1-PLAN-LOTE-292 · 2026-09-25"
+# [P1-PLAN-LOTE-300 · 2026-09-25] (backend + iOS) push nativa en iPhone directo a Apple (APNs HTTP/2 + JWT ES256 con la
+# clave .p8 del dueño, fuera del repo): `fcm_push.enviar_a_dispositivos` reparte android→FCM, ios→`apns_push`.
+_LAST_KNOWN_PFIX = "P1-PLAN-LOTE-300 · 2026-09-25"
 
 # [P1-SENTRY-SAMPLE-COST · 2026-05-12] Sentry sampling driven from env vars
 # con default seguro 0.1 (10%). Pre-fix tenía `traces_sample_rate=1.0` y

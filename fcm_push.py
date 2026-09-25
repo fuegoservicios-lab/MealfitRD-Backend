@@ -89,40 +89,67 @@ def _token_muerto(status: int, cuerpo: str) -> bool:
 
 def enviar_a_dispositivos(user_id: str, title: str, body: str, url: str = "/dashboard", tag: str | None = None,
                           solo_si_no_mira: bool = False) -> int:
-    """Envía a todos los teléfonos del usuario. Devuelve cuántos aceptó FCM. Nunca lanza."""
+    """Envía a todos los teléfonos del usuario: android por FCM, ios directo a Apple ([P1-PLAN-LOTE-300]
+    `apns_push`). Devuelve cuántos aceptaron. Token muerto ⇒ fila borrada. Nunca lanza."""
     try:
         from db_core import execute_sql_query, execute_sql_write
-        filas = execute_sql_query("SELECT token FROM device_push_tokens WHERE user_id = %s", (user_id,),
+        filas = execute_sql_query("SELECT token, platform FROM device_push_tokens WHERE user_id = %s", (user_id,),
                                   fetch_all=True) or []
-        tokens = [f["token"] for f in filas if isinstance(f, dict) and f.get("token")]
-        if not tokens:
+        filas = [f for f in filas if isinstance(f, dict) and f.get("token")]
+        if not filas:
             return 0
-        cred, proyecto = _credenciales()
-        if not cred or not proyecto:
-            logger.debug("[P1-PLAN-LOTE-280] FCM sin clave configurada: push nativa no enviada")
-            return 0
-        import requests
-        from utils_push import _PUSH_HTTP_TIMEOUT_S
-        endpoint = f"https://fcm.googleapis.com/v1/projects/{proyecto}/messages:send"
         ok = 0
-        for token in tokens:
-            try:
-                r = requests.post(
-                    endpoint,
-                    headers={"Authorization": f"Bearer {cred.token}", "Content-Type": "application/json; UTF-8"},
-                    data=json.dumps(construir_mensaje(token, title, body, url, tag, solo_si_no_mira)),
-                    timeout=_PUSH_HTTP_TIMEOUT_S,
-                )
-                if r.status_code == 200:
-                    ok += 1
-                elif _token_muerto(r.status_code, r.text or ""):
-                    execute_sql_write("DELETE FROM device_push_tokens WHERE token = %s AND user_id = %s",
-                                      (token, user_id))
-                    logger.info(f"🗑️ [P1-PLAN-LOTE-280] token FCM muerto borrado para {user_id}")
-                else:
-                    logger.warning(f"[P1-PLAN-LOTE-280] FCM {r.status_code} para {user_id}: {(r.text or '')[:200]}")
-            except Exception as e:  # noqa: BLE001
-                logger.warning(f"[P1-PLAN-LOTE-280] envío FCM falló para {user_id}: {e!r}")
+
+        def _borrar(token, via):
+            execute_sql_write("DELETE FROM device_push_tokens WHERE token = %s AND user_id = %s", (token, user_id))
+            logger.info(f"🗑️ [P1-PLAN-LOTE-280] token {via} muerto borrado para {user_id}")
+
+        android = [f["token"] for f in filas if (f.get("platform") or "android") != "ios"]
+        ios = [f["token"] for f in filas if f.get("platform") == "ios"]
+
+        if android:
+            cred, proyecto = _credenciales()
+            if not cred or not proyecto:
+                logger.debug("[P1-PLAN-LOTE-280] FCM sin clave configurada: push Android no enviada")
+            else:
+                import requests
+                from utils_push import _PUSH_HTTP_TIMEOUT_S
+                endpoint = f"https://fcm.googleapis.com/v1/projects/{proyecto}/messages:send"
+                for token in android:
+                    try:
+                        r = requests.post(
+                            endpoint,
+                            headers={"Authorization": f"Bearer {cred.token}",
+                                     "Content-Type": "application/json; UTF-8"},
+                            data=json.dumps(construir_mensaje(token, title, body, url, tag, solo_si_no_mira)),
+                            timeout=_PUSH_HTTP_TIMEOUT_S,
+                        )
+                        if r.status_code == 200:
+                            ok += 1
+                        elif _token_muerto(r.status_code, r.text or ""):
+                            _borrar(token, "FCM")
+                        else:
+                            logger.warning(f"[P1-PLAN-LOTE-280] FCM {r.status_code} para {user_id}: {(r.text or '')[:200]}")
+                    except Exception as e:  # noqa: BLE001
+                        logger.warning(f"[P1-PLAN-LOTE-280] envío FCM falló para {user_id}: {e!r}")
+
+        if ios:
+            import apns_push
+            if not apns_push.apns_configurado():
+                logger.debug("[P1-PLAN-LOTE-300] APNs sin clave configurada: push iOS no enviada")
+            else:
+                for token in ios:
+                    try:
+                        r = apns_push._enviar_uno(token, title, body, url, tag, solo_si_no_mira)
+                        if r.status_code == 200:
+                            ok += 1
+                        elif apns_push.token_muerto(r.status_code, r.text or ""):
+                            _borrar(token, "APNs")
+                        else:
+                            logger.warning(f"[P1-PLAN-LOTE-300] APNs {r.status_code} para {user_id}: {(r.text or '')[:200]}")
+                    except Exception as e:  # noqa: BLE001
+                        logger.warning(f"[P1-PLAN-LOTE-300] envío APNs falló para {user_id}: {e!r}")
+
         if ok:
             logger.info(f"📲 [P1-PLAN-LOTE-280] push nativa a {ok} dispositivo(s) de {user_id}")
         return ok

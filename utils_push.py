@@ -29,7 +29,8 @@ def send_push_notification(user_id: str, title: str, body: str, url: str = "/das
     enviados_nativa = 0
     try:
         from fcm_push import fcm_configurado, enviar_a_dispositivos
-        if nativa and fcm_configurado():
+        from apns_push import apns_configurado   # [P1-PLAN-LOTE-300] iOS va directo a Apple
+        if nativa and (fcm_configurado() or apns_configurado()):
             titulo, cuerpo = _traducidos(user_id, title, body)
             enviados_nativa = enviar_a_dispositivos(user_id, titulo, cuerpo, url=url, tag=tag,
                                                     solo_si_no_mira=solo_si_no_mira)
