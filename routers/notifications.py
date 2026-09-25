@@ -314,3 +314,43 @@ async def test_push_route(user_id: str, request: Request):
     except Exception as e:
         logger.error(f"Error test push subscription: {e}")
         raise HTTPException(status_code=500, detail=safe_error_detail(e))
+
+
+# [P1-PLAN-LOTE-280 · 2026-09-25] Push NATIVA (FCM). La app de Android registra aquí su token al arrancar (y cuando
+# FCM lo rota) y lo borra al cerrar sesión. UPSERT por token: si el teléfono cambia de cuenta, la fila pasa a la nueva
+# y la anterior deja de recibir. Mismo patrón de límites que Web Push (P3-NOTIFICATIONS-RATE-LIMIT).
+_DEVICE_TOKEN_LIMITER = RateLimiter(max_calls=10, period_seconds=60)
+_DEVICE_TOKEN_DELETE_LIMITER = RateLimiter(max_calls=20, period_seconds=60)
+
+
+class DeviceTokenItem(BaseModel):
+    token: str = Field(..., min_length=20, max_length=4096)
+    platform: str = Field("android", pattern="^(android|ios)$")
+
+
+@router.post("/device-token")
+def register_device_token(item: DeviceTokenItem, user_id: str = Depends(_DEVICE_TOKEN_LIMITER)):
+    """Guarda el token FCM de este teléfono para `user_id`. `def` plano: psycopg síncrono (P3-NOTIF-EVENTLOOP)."""
+    if not user_id or user_id == "guest":
+        raise HTTPException(status_code=401, detail="User ID en token no válido.")
+    try:
+        from fcm_push import registrar_token
+        registrar_token(user_id, item.token.strip(), item.platform)
+        return {"status": "success"}
+    except Exception as e:
+        logger.error(f"[P1-PLAN-LOTE-280] error guardando token FCM: {e!r}")
+        raise HTTPException(status_code=500, detail="Error en servidor guardando el dispositivo")
+
+
+@router.delete("/device-token")
+def delete_device_token(item: DeviceTokenItem, user_id: str = Depends(_DEVICE_TOKEN_DELETE_LIMITER)):
+    """Borra el token de este teléfono (cierre de sesión o avisos apagados)."""
+    if not user_id or user_id == "guest":
+        raise HTTPException(status_code=401, detail="User ID en token no válido.")
+    try:
+        from fcm_push import borrar_token
+        borrar_token(user_id, item.token.strip())
+        return {"status": "success"}
+    except Exception as e:
+        logger.error(f"[P1-PLAN-LOTE-280] error borrando token FCM: {e!r}")
+        raise HTTPException(status_code=500, detail="Error en servidor borrando el dispositivo")

@@ -1212,7 +1212,7 @@ No uses demasiados emojis. Sé directo, breve y empático.
                 _t_fijo, _b_fijo = texto_del_aviso(meal_to_check, _nudge_locale)
                 log_nudge_outcome(user_id, meal_to_check, nudge_content=_b_fijo, nudge_style="fijo")
                 send_push_notification(user_id=user_id, title=_t_fijo, body=_b_fijo, url="/dashboard/agent",
-                                       tag=etiqueta_del_aviso(meal_to_check))
+                                       tag=etiqueta_del_aviso(meal_to_check), nativa=False)   # [P1-PLAN-LOTE-280] local
                 logger.info(f"✅ [CRON] Aviso fijo de {meal_to_check} a {user_id} (suscriptor sin chat reciente)")
                 continue
 
@@ -1261,6 +1261,7 @@ No uses demasiados emojis. Sé directo, breve y empático.
                         body=content,
                         url=f"/dashboard/agent?session_id={session_id}",
                         tag=f"comida-{str(meal_to_check).lower().split()[0]}",   # [P1-PLAN-LOTE-133]
+                        nativa=False,   # [P1-PLAN-LOTE-280] en la app nativa el recordatorio ya es un aviso local
                     )
                 
         except Exception as e:

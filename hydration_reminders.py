@@ -298,7 +298,7 @@ def revisar_usuario(user_id: str, locale: Optional[str], con_push: bool, ahora: 
     titulo, cuerpo = texto_del_aviso_de_agua(locale, vasos, meta)
     if con_push:
         from utils_push import send_push_notification
-        send_push_notification(user_id, titulo, cuerpo, url=RUTA, tag=ETIQUETA)
+        send_push_notification(user_id, titulo, cuerpo, url=RUTA, tag=ETIQUETA, nativa=False)  # [P1-PLAN-LOTE-280] en la app, aviso local
     _guardar_estado(user_id, {
         **estado, "fecha": fecha_local, "horas": horas_hoy,
         "nudges": int(estado.get("nudges") or 0) + 1,

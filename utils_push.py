@@ -18,11 +18,42 @@ _PUSH_HTTP_TIMEOUT_S = _env_float(
 )
 
 def send_push_notification(user_id: str, title: str, body: str, url: str = "/dashboard", tag: str = None,
-                           solo_si_no_mira: bool = False) -> bool:
+                           solo_si_no_mira: bool = False, nativa: bool = True) -> bool:
     """
-    Sends a web push notification to all subscribed devices for a given user.
-    Returns True if at least one notification was attempted successfully.
+    Sends a push notification to every device of the user: Web Push (browser/PWA) and, [P1-PLAN-LOTE-280], FCM for
+    the native Android app (`fcm_push.py`). Returns True if at least one was accepted. Nunca lanza.
     """
+    web = _enviar_web_push(user_id, title, body, url=url, tag=tag, solo_si_no_mira=solo_si_no_mira)
+    # [P1-PLAN-LOTE-280] `nativa=False`: los recordatorios de comida y agua. En la app nativa ya salen como avisos
+    # LOCALES programados por el teléfono (utils/avisosDeComida.js); por FCM llegarían dos veces.
+    enviados_nativa = 0
+    try:
+        from fcm_push import fcm_configurado, enviar_a_dispositivos
+        if nativa and fcm_configurado():
+            titulo, cuerpo = _traducidos(user_id, title, body)
+            enviados_nativa = enviar_a_dispositivos(user_id, titulo, cuerpo, url=url, tag=tag,
+                                                    solo_si_no_mira=solo_si_no_mira)
+    except Exception as e:  # noqa: BLE001
+        logger.warning(f"[P1-PLAN-LOTE-280] push nativa no despachada a {user_id}: {e!r}")
+    return bool(web) or enviados_nativa > 0
+
+
+def _traducidos(user_id: str, title: str, body: str) -> tuple:
+    """[P1-PLAN-LOTE-280] Título y cuerpo en el idioma del usuario para la push nativa (misma regla que la web)."""
+    try:
+        _perfil = execute_sql_query("SELECT locale FROM user_profiles WHERE id = %s", (user_id,), fetch_one=True)
+        if isinstance(_perfil, (list, tuple)):
+            _perfil = _perfil[0] if _perfil else None
+        _locale = _perfil.get("locale") if _perfil and hasattr(_perfil, "get") else None
+        from push_i18n import translate_push_text
+        return translate_push_text(title, _locale), translate_push_text(body, _locale)
+    except Exception:  # noqa: BLE001
+        return title, body
+
+
+def _enviar_web_push(user_id: str, title: str, body: str, url: str = "/dashboard", tag: str = None,
+                     solo_si_no_mira: bool = False) -> bool:
+    """Web Push (VAPID) a las suscripciones del navegador/PWA. True si al menos una se envió."""
     try:
         from pywebpush import webpush, WebPushException  # type: ignore[import-untyped]
     except ImportError:

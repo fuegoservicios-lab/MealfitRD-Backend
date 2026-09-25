@@ -201,7 +201,8 @@ def test_sin_chat_reciente_el_aviso_es_corto_fijo_y_sin_llm(dia, monkeypatch):
                                   "nudge_style": "fijo"})], "queda anotado: el tope diario y el «no repetir» siguen valiendo"
     assert dia["push"] == [{"user_id": UID, "title": "Bioboros",
                             "body": "Es tu hora de almorzar. Cuando comas, cuéntamelo y lo anoto.",
-                            "url": "/dashboard/agent", "tag": "comida-almuerzo"}]
+                            "url": "/dashboard/agent", "tag": "comida-almuerzo",
+                            "nativa": False}]   # [P1-PLAN-LOTE-280] en la app nativa el recordatorio es local
 
 
 # ───────────────────────── 4. El transporte ─────────────────────────
@@ -210,7 +211,7 @@ def test_la_etiqueta_viaja_en_el_payload_y_el_service_worker_la_usa():
     up = _src("utils_push.py")
     # [P1-PLAN-LOTE-228] la firma ganó `solo_si_no_mira` (el SW omite el aviso con la app a la vista)
     assert ('def send_push_notification(user_id: str, title: str, body: str, url: str = "/dashboard", tag: str = None,\n'
-            '                           solo_si_no_mira: bool = False) -> bool:') in up
+            '                           solo_si_no_mira: bool = False, nativa: bool = True) -> bool:') in up   # +280
     assert '_payload["tag"] = str(tag)[:64]' in up
     sw = _FRONT / "src" / "custom-sw.js"
     if sw.exists():

@@ -25,6 +25,8 @@ redis==7.4.0
 sentry-sdk[fastapi]==2.59.0
 apscheduler==3.11.2
 pywebpush==2.3.0
+# [P1-PLAN-LOTE-280] push nativa FCM (fcm_push.py): firma OAuth de la cuenta de servicio. Ya venía con google-genai.
+google-auth>=2.30,<3
 httpx==0.28.1
 # [P1-VISION-LUNA · 2026-07-28] Redimensionado defensivo de fotos antes de
 # enviarlas a un proveedor de visión (image_prep.py) — 6,6x más barato en

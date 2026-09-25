@@ -127,7 +127,7 @@ def _tick(monkeypatch, estado, vasos, ahora, con_push=True, agua_desde=False):
     monkeypatch.setattr(db, "update_water_tracker_enabled", lambda _u, v: efectos.__setitem__("apagada", v is False) or True)
     monkeypatch.setattr(rp, "_compute_water_goal", lambda _u: {"goal": 9})
     monkeypatch.setattr(utils_push, "send_push_notification",
-                        lambda uid, t, b, url="/dashboard", tag=None: efectos["push"].append((b, url, tag)) or True)
+                        lambda uid, t, b, url="/dashboard", tag=None, nativa=True: efectos["push"].append((b, url, tag)) or True)
     return hr.revisar_usuario("u", "es-DO", con_push, ahora=ahora), efectos
 
 
