@@ -181,6 +181,21 @@ def _anadir_agua_al_paso(meal, leche_linea, agua_txt: str) -> None:
                     if mm:
                         rec[i] = p[:mm.end()] + f" y {agua_txt}" + p[mm.end():]
                         return
+    # [P1-PLAN-LOTE-317 · 2026-09-25] «cocina la avena con agua a fuego medio»: el agua que el paso ya nombra sin medida
+    # recibe la suya ahí («con 200 ml de agua»), en vez de una frase al final del paso («…deja que se enfríe. Completa el
+    # líquido con 200 ml de agua…», batería renal del 25-sep). tooltip-anchor: P1-PLAN-LOTE-317
+    rx_agua = re.compile(r"\b(con|en)\s+(?:el\s+)?agua\b")
+    for i, p in enumerate(rec):
+        if not isinstance(p, str) or any(e in p for e in _NOTA) or not _COCCION_RE.search(_sa(p)):
+            continue
+        base = _sa(p)
+        av = _AVENA_RE.search(base)
+        if not av or len(base) != len(p):
+            continue
+        mm = rx_agua.search(base, av.end(), av.end() + 60)       # el agua de la AVENA, no la de otro alimento del paso
+        if mm:
+            rec[i] = p[:mm.start()] + p[mm.start(1):mm.end(1)] + f" {agua_txt}" + p[mm.end():]
+            return
     for i, p in enumerate(rec):
         if isinstance(p, str) and not any(e in p for e in _NOTA) and _COCCION_RE.search(_sa(p)):
             s = p.rstrip()

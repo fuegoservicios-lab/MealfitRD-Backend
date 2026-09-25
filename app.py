@@ -630,7 +630,9 @@ _PROCESS_START_ISO = datetime.now(timezone.utc).isoformat()
 # [P1-PLAN-LOTE-314 · 2026-09-25] (backend) el tope de un rango («3-4 cdas») no es una cantidad (salía «3-3 cdas»).
 # [P1-PLAN-LOTE-315 · 2026-09-25] (backend) lo que un paso ya mete en la licuadora no se sirve también «al lado».
 # [P1-PLAN-LOTE-316 · 2026-09-25] (backend) la misma frase dos veces seguidas en un paso se deja una vez.
-_LAST_KNOWN_PFIX = "P1-PLAN-LOTE-316 · 2026-09-25"
+# [P1-PLAN-LOTE-317 · 2026-09-25] (backend) la avena que el paso ya cocina «con agua» recibe ahí su medida
+# («cocina la avena con 170 ml de agua…»), no una frase al final del paso.
+_LAST_KNOWN_PFIX = "P1-PLAN-LOTE-317 · 2026-09-25"
 
 # [P1-SENTRY-SAMPLE-COST · 2026-05-12] Sentry sampling driven from env vars
 # con default seguro 0.1 (10%). Pre-fix tenía `traces_sample_rate=1.0` y
