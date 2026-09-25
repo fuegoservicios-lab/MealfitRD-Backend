@@ -581,7 +581,11 @@ _PROCESS_START_ISO = datetime.now(timezone.utc).isoformat()
 # (`fcm_push.py`); los recordatorios de comida y agua van `nativa=False` (en la app ya son avisos locales).
 # [P1-PLAN-LOTE-281 · 2026-09-25] en compra única el costo del ciclo ES la compra: el presupuesto del dueño (30 días,
 # compra de RD$9.668) salía «RD$25.149, excedido» porque se re-compraban los perecederos cada semana.
-_LAST_KNOWN_PFIX = "P1-PLAN-LOTE-281 · 2026-09-25"
+# [P1-PLAN-LOTE-290 · 2026-09-25] (backend + frontend) suplementos en la Nevera → Alacena: `user_inventory.kind`
+# ('food'|'supplement') + etiqueta por porción; todo lector de INGREDIENTES filtra `kind = 'food'` (guard por AST);
+# la Nevera apagada por el sistema se enciende sola al guardar algo (`nevera_opcional.encender_por_uso`) y, si la
+# apagó el usuario, el coach pregunta. Grupo «Suplementos» en la Alacena.
+_LAST_KNOWN_PFIX = "P1-PLAN-LOTE-290 · 2026-09-25"
 
 # [P1-SENTRY-SAMPLE-COST · 2026-05-12] Sentry sampling driven from env vars
 # con default seguro 0.1 (10%). Pre-fix tenía `traces_sample_rate=1.0` y

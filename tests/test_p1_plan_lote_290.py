@@ -164,3 +164,15 @@ def test_el_prompt_con_la_nevera_apagada_deja_guardar_si_lo_pide():
     import nevera_opcional as n
     b = n.BLOQUE_PROMPT_NEVERA_APAGADA
     assert "Si te PIDE guardar" in b and "modify_pantry_inventory" in b and "guardar_suplemento" in b
+
+
+def test_marker():
+    m = re.search(r'_LAST_KNOWN_PFIX = "P1-PLAN-LOTE-(\d+) · (\d{4}-\d{2}-\d{2})"', _src("app.py"))
+    assert m and int(m.group(1)) >= 290 and m.group(2) >= "2026-09-25"
+
+
+def test_frontend_grupo_de_suplementos():
+    front = _BACKEND.parent / "frontend" / "src"
+    if not (front / "__tests__" / "lote290.test.jsx").exists():
+        pytest.skip("el frontend de este checkout no trae el lote 290")
+    assert "<GrupoSuplementos " in (front / "pages" / "Pantry.jsx").read_text(encoding="utf-8")
