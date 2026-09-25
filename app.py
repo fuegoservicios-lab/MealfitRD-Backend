@@ -497,7 +497,27 @@ _PROCESS_START_ISO = datetime.now(timezone.utc).isoformat()
 # generación a `complete`/`failed` (desde `upsert_pending_pipeline`, solo en la transición; el service worker no la
 # muestra con la app a la vista) y, en la app nativa sin FCM, notificación LOCAL: respaldo al p90 y aviso al momento
 # en cuanto el vigía en segundo plano ve el plan terminado.
-_LAST_KNOWN_PFIX = "P1-PLAN-LOTE-228 · 2026-09-25"
+# [P1-PLAN-LOTE-227 · 2026-09-25] el revisor no quema intentos con no-defectos: «Severidad: none» y las observaciones que
+# se niegan solas pasan a aviso; «aclarar con el paciente» es aclaración; el revisor recibe escrito que el marisco no es
+# pescado (en los dos sentidos); el desayuno que el alérgico no puede comer se reasigna en el esqueleto; el queso con
+# apellido lo conserva; y la nota de embarazo describe el plato final (tras el tope de pescado).
+# [P1-PLAN-LOTE-229 · 2026-09-25] la nota clínica (⚕️) no es un paso de cocción: el clamp de tiempos reescribía «al menos
+# 4 horas de la dosis» de la levotiroxina como «al menos 10-12 min a fuego medio».
+# [P1-PLAN-LOTE-230 · 2026-09-25] G18 para toda condición: un crítico del revisor sin marca de peligro agudo reintenta y
+# se entrega con banner, no cae al plan matemático genérico («Pollo y Arroz» por unas yemas de más).
+# [P1-PLAN-LOTE-231 · 2026-09-25] lo tecleado en «Otra alergia/Otro alimento» llega a swap, regenerar-día, expandir,
+# persistir, el escudo pre-INSERT y el abaratador del bloque; la dieta del perfil manda sobre el «balanced» del cliente.
+# [P1-PLAN-LOTE-232 · 2026-09-25] los rechazos («no me gusta») tienen guard determinista en el revisor («high»).
+# [P1-PLAN-LOTE-233 · 2026-09-25] la última palabra de alergia/dieta/rechazo al final del escudo: retira la línea
+# añadida (rellenos, cerradores, compra única…) que viola una restricción; la identidad del plato la rechaza el revisor.
+# [P1-PLAN-LOTE-234 · 2026-09-25] «Actualizar platos» y la modificación del coach respetan el tiempo de cocina.
+# [P1-PLAN-LOTE-235 · 2026-09-25] colesterol alto: ≤1 yema/día y ≤4/semana (la nota del propio plan); el resto en claras.
+# [P1-PLAN-LOTE-236 · 2026-09-25] la promoción del regen quirúrgico re-valida alérgenos, rechazos y mercurio.
+# [P1-PLAN-LOTE-237 · 2026-09-25] el plan de emergencia pasa cada plantilla por el escáner SSOT (aguacate, semillas…).
+# [P1-PLAN-LOTE-238 · 2026-09-25] el relleno de ganar músculo: carbohidrato listo del país y sin violar restricciones.
+# [P1-PLAN-LOTE-239 · 2026-09-25] el arroz de noche se cambia por un tubérculo que el usuario puede y quiere comer.
+# [P1-PLAN-LOTE-240 · 2026-09-25] aire en el god-file: la lógica nueva de 227-239 y cuatro tablas de datos, fuera.
+_LAST_KNOWN_PFIX = "P1-PLAN-LOTE-240 · 2026-09-25"
 
 # [P1-SENTRY-SAMPLE-COST · 2026-05-12] Sentry sampling driven from env vars
 # con default seguro 0.1 (10%). Pre-fix tenía `traces_sample_rate=1.0` y

@@ -1783,7 +1783,7 @@ def test_finalizer_beta_salta_solo_el_autofix_de_arroz(monkeypatch):
 def test_finalizer_wire_country_en_swap_y_chat_modify():
     agent_src = (_BACKEND / "agent.py").read_text(encoding="utf-8")
     assert (
-        "_fin_rc(_out, pantry_strict=bool(clean_ingredients), allergies=allergies, country=_swap_country)"
+        "_fin_rc(_out, pantry_strict=bool(clean_ingredients), allergies=allergies, country=_swap_country"
         in agent_src
     )
     tools_src = (_BACKEND / "tools.py").read_text(encoding="utf-8")

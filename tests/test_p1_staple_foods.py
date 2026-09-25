@@ -309,7 +309,10 @@ def test_staple_foods_hydrated_server_side_on_swap():
     # hidratación de `country` (nueva, antes de dislikes/staple_foods en el cuerpo de la
     # función) empujó estos dos targets a offset ~4300/4400 — el CONTRATO (staple_foods
     # hidratado server-side) no cambió, solo su posición dentro de la función.
-    blk = _PLANS_SRC[i: i + 4700]
+    # [reapuntado P1-PLAN-LOTE-231 · 2026-09-25] 3.er bump de esta ventana (el texto libre del perfil entró arriba):
+    # se acabaron los números mágicos, cuerpo completo de la función.
+    j = _PLANS_SRC.find("\ndef ", i + 10)
+    blk = _PLANS_SRC[i: j if j > 0 else None]
     assert 'hp.get("staple_foods")' in blk
     assert 'data["staple_foods"]' in blk
 

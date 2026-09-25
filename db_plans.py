@@ -1588,11 +1588,28 @@ def _finalize_plan_data_for_insert(data: dict, *, surface: str = "pre-INSERT",
                 # sodio») también AL FINAL: los cerradores añaden alimentos después de la sustitución clínica, y este
                 # escudo es a la vez la cola de assemble ANTES del revisor. Batería real: el cottage del cerrador salía
                 # sin «pasteurizado» y el revisor rechazaba CRÍTICO el primer intento de un plan de embarazo.
+                # [P1-PLAN-LOTE-235 · 2026-09-25] el tope de yemas otra vez al final: los cerradores de proteína
+                # añaden huevo DESPUÉS de la capa clínica. Antes de las etiquetas (la nota describe lo que queda).
+                # tooltip-anchor: P1-PLAN-LOTE-235-YEMAS
+                try:
+                    import yemas_colesterol as _ycol
+                    _ycol.topar_yemas(_pd, _clin_ctx, db=_db_ins)
+                except Exception as _ycol_e:
+                    logger.debug(f"[P1-PLAN-LOTE-235] tope de yemas pre-INSERT no-op: {type(_ycol_e).__name__}: {_ycol_e}")
                 try:
                     import etiquetas_clinicas as _etq
                     _etq.etiquetar(_pd, _clin_ctx)
                 except Exception as _etq_e:
                     logger.debug(f"[P1-PLAN-LOTE-173] etiquetas clínicas pre-INSERT no-op: {type(_etq_e).__name__}: {_etq_e}")
+                # [P1-PLAN-LOTE-233 · 2026-09-25] La ÚLTIMA palabra de alergia/dieta/rechazo: las pasadas de arriba
+                # (rellenos, cerradores, compra única, embarazo) añaden comida DESPUÉS del escaneo del revisor; aquí se
+                # retira la línea añadida que viola una restricción declarada. Sin contexto (`{}`) no hace nada.
+                # tooltip-anchor: P1-PLAN-LOTE-233-ULTIMA-PALABRA
+                try:
+                    import restricciones_finales as _rfin
+                    _rfin.retirar_prohibidos(_pd, _clin_ctx, db=_db_ins, surface=surface)
+                except Exception as _rfin_e:
+                    logger.debug(f"[P1-PLAN-LOTE-233] última palabra no-op: {type(_rfin_e).__name__}: {_rfin_e}")
         except Exception as _fce:
             logger.warning(f"[P1-COHERENCE-FINALIZE] {surface} no-op: {type(_fce).__name__}: {_fce}")
 

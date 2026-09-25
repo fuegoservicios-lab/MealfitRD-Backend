@@ -346,6 +346,14 @@ def build_clinical_form_from_profile(user_id: str) -> dict:
         _oc = _hp.get("otherConditions") or _hp.get("other_conditions")
         if _oc and str(_oc).strip():
             _mc = list(_mc) + [str(_oc).strip()]
+        # [P1-PLAN-LOTE-231 · 2026-09-25] Alergias y rechazos con lo TECLEADO a mano (`otherAllergies`/
+        # `otherDislikes`), como el generador: las pasadas del escudo que añaden alimentos DESPUÉS del revisor
+        # (rellenos, cerradores, compra única) filtraban solo contra los chips. tooltip-anchor: P1-PLAN-LOTE-231-TEXTO-LIBRE
+        try:
+            from graph_orchestrator import profile_with_free_text as _pwft_ctx
+            _hp_ft = _pwft_ctx(_hp)
+        except Exception:
+            _hp_ft = _hp
         return {
             "gender": _hp.get("gender") or _hp.get("sex"),
             "age": _hp.get("age"),
@@ -353,9 +361,9 @@ def build_clinical_form_from_profile(user_id: str) -> dict:
             "medications": _hp.get("medications"),
             "otherConditions": _oc,
             "otherMedications": _hp.get("otherMedications") or _hp.get("other_medications"),
-            "allergies": [str(a).strip() for a in (_hp.get("allergies") or []) if str(a).strip()],
+            "allergies": [str(a).strip() for a in (_hp_ft.get("allergies") or []) if str(a).strip()],
             "dietType": _hp.get("dietType") or _hp.get("diet_type"),
-            "dislikes": _hp.get("dislikes") or [],
+            "dislikes": _hp_ft.get("dislikes") or [],
         }
     except Exception as _e:
         logger.warning(f"[P1-PREINSERT-CLINICAL-CTX] perfil clínico no hidratado para "

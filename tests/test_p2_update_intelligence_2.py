@@ -73,7 +73,8 @@ def test_p2_4_enrich_hydrates_dislikes_union():
     src = _func_src(PLANS, "_enrich_clinical_from_profile")
     assert "MEALFIT_UPDATE_HYDRATE_DISLIKES" in src
     assert 'data["dislikes"]' in src, "el enrich debe asignar dislikes (UNION body+perfil)"
-    assert 'hp.get("dislikes")' in src, "debe leer dislikes del health_profile"
+    # [reapuntado P1-PLAN-LOTE-231] se lee del health_profile CON el texto libre (`_hp_ft = profile_with_free_text(hp)`)
+    assert 'hp.get("dislikes")' in src or '_hp_ft.get("dislikes")' in src, "debe leer dislikes del health_profile"
 
 
 # ── P2-5: pantry override (ledger reservado) ──────────────────────────────────

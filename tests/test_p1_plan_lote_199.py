@@ -171,7 +171,10 @@ def test_semillas_y_candidatos_consultan_la_nevera():
     src = _src("graph_orchestrator.py")
     assert 'return __import__("nevera_exigida").filtrar_proteinas(out)' in src
     assert re.search(r'_seed_dislikes\).*__import__\("nevera_exigida"\)\.admite_linea\(_cand\)', src)
-    assert src.count('__import__("nevera_exigida").preferir(') == 2, "arroz de noche y de desayuno"
+    # [reapuntado P1-PLAN-LOTE-239/240 · 2026-09-25] el sustituto del arroz de NOCHE vive en `relleno_listo`
+    # (`_night_rice_sub_for`, que además mira alergias/rechazos/tiempo); el de desayuno sigue en el grafo.
+    _rl = _src("relleno_listo.py")
+    assert src.count('__import__("nevera_exigida").preferir(') + _rl.count('__import__("nevera_exigida").preferir(') == 2,         "arroz de noche y de desayuno"
     assert 'return __import__("nevera_exigida").admite(cand)' in src, "fruta dulce+salado → aguacate/batata"
 
 

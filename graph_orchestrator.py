@@ -6549,6 +6549,10 @@ async def plan_skeleton_node(state: PlanState) -> dict:
         except Exception as _sps_e:
             logger.warning(f"[SKELETON PREGNANCY SCRUB] no-op: {type(_sps_e).__name__}: {_sps_e}")
 
+    # [P1-PLAN-LOTE-227 · 2026-09-25] La CATEGORÍA de desayuno también se filtra por alergia (el prompt del día la
+    # impone). Lógica en `desayuno_por_alergia` (P1-PLAN-LOTE-240). tooltip-anchor: P1-PLAN-LOTE-227-DESAYUNO-POR-ALERGIA
+    __import__("desayuno_por_alergia").reasignar(skel_days, form_data)
+
     # 3. Fallback: si algún pool quedó vacío tras scrub, inyectar una proteína SEGURA.
     # [P1-FORM-AUDIT-BATCH · 2026-07-03] (audit form · contradicción C1) El fallback era
     # 'Lentejas' INCONDICIONAL — ciego a las alergias declaradas: un vegano alérgico a
@@ -11854,6 +11858,11 @@ DM2_SUGAR_GUARD = _env_bool("MEALFIT_DM2_SUGAR_GUARD", True)
 # hace diet-aware (SIN esto el fallback servía pollo/huevo/pescado igual — counterproductivo). Safety gate
 # → default True; flip a False revierte a depender solo del LLM. Anchor: P1-DIET-HARD-GUARD.
 DIET_HARD_GUARD = _env_bool("MEALFIT_DIET_HARD_GUARD", True)
+
+# [P1-PLAN-LOTE-232 · 2026-09-25] Guard determinista de los rechazos («no me gusta»; lógica en `rechazos`, fuera del
+# grafo en P1-PLAN-LOTE-240). Knob `MEALFIT_DISLIKE_HARD_GUARD`. tooltip-anchor: P1-PLAN-LOTE-232-RECHAZOS
+DISLIKE_HARD_GUARD = _env_bool("MEALFIT_DISLIKE_HARD_GUARD", True)
+from rechazos import _DISLIKE_EXTRA_TERMS, _dislike_declarations, _scan_dislike_violations  # noqa: E402,F401  [P1-PLAN-LOTE-240]
 # [P1-SURGICAL-PROMOTE-BYPASS · 2026-06-22] (audit fresco P1-2) `surgical_marker_regen_node` promovía el
 # plan re-corrigido a `_best_attempt_review_passed=True` + severity='approved' de forma INCONDICIONAL
 # cuando fixed_count>0. Si la corrección LLM introducía un déficit de proteína (observado en vivo) o un
@@ -14844,7 +14853,7 @@ _VERIFICATION_DEMAND_RX = _re_mod.compile(
     _re_mod.IGNORECASE,
 )
 # [P1-PLAN-LOTE-182] «Confirme si…» es aclaración, no defecto; aparte para excluir pasteurizar. tooltip-anchor: P1-PLAN-LOTE-182-CONFIRMAR-ES-AVISO
-_CONFIRM_DEMAND_RX = _re_mod.compile(r"confirm(?:e|ar)\s+(?:si|que|su alcance|el alcance|las? etiquetas?|con|la tolerancia)|hasta confirmar|(?:no se puede|no es posible) confirmar|^(?=[\s\S]*?\b(?:verifi|confirm|aseg[uú]r|compr(?:o|ue)b|revis)\w*)(?=[\s\S]*?(?:puede[n]? contener|podr[ií]a[n]? contener|libres? de|no contenga|sin (?:derivados|trazas)))", _re_mod.IGNORECASE)  # [P1-PLAN-LOTE-184/186/188/189] 189: verbo de verificación + «no contenga / libre de» (estructural)
+_CONFIRM_DEMAND_RX = _re_mod.compile(r"(?:se debe|debe|hay que|conviene)\s+aclarar|hasta\s+aclarar|aclarar\s+con\s+(?:el|la)\s+(?:paciente|usuari[oa])|antes de aprobar|confirm(?:e|ar)\s+(?:si|que|su alcance|el alcance|las? etiquetas?|con|la tolerancia)|hasta confirmar|(?:no se puede|no es posible) confirmar|^(?=[\s\S]*?\b(?:verifi|confirm|aseg[uú]r|compr(?:o|ue)b|revis)\w*)(?=[\s\S]*?(?:puede[n]? contener|podr[ií]a[n]? contener|libres? de|no contenga|sin (?:derivados|trazas)))", _re_mod.IGNORECASE)  # [P1-PLAN-LOTE-184/186/188/189] 189: verbo de verificación + «no contenga / libre de» (estructural)
 _PASTEURIZ_RX = _re_mod.compile(r"pasteuriz", _re_mod.IGNORECASE)
 
 
@@ -14873,6 +14882,12 @@ def _downgrade_reviewer_verification_demands(approved, issues, severity):
                    f"reviewer eran demandas de verificación → plan aprobado por el LLM (los guards "
                    f"deterministas validan aparte).")
     return True, [], "low", advisories
+
+
+# [P1-PLAN-LOTE-227 · 2026-09-25] El revisor no quema intentos con no-defectos (lógica en `revisor_no_defectos`,
+# fuera del grafo en P1-PLAN-LOTE-240). Knob `MEALFIT_REVIEWER_NON_ISSUES_ADVISORY`. tooltip-anchor: P1-PLAN-LOTE-227-NO-DEFECTOS
+REVIEWER_NON_ISSUES_ADVISORY = _env_bool("MEALFIT_REVIEWER_NON_ISSUES_ADVISORY", True)
+from revisor_no_defectos import _downgrade_reviewer_non_issues  # noqa: E402,F401  [P1-PLAN-LOTE-240]
 
 
 def _allergen_pool_item_banned(item, allergies) -> bool:
@@ -16595,6 +16610,27 @@ def _surgical_promote_blocked_reason(new_plan_result: dict, form_data: dict):
             _viol = _scan_diet_violations(new_plan_result, form_data.get("dietType") if isinstance(form_data, dict) else None)
             if _viol:
                 return "dieta veg*: " + "; ".join(f"'{_ing}' ({_cat}) en {_mn}" for _mn, _ing, _cat in _viol[:4])
+        # [P1-PLAN-LOTE-236 · 2026-09-25] Alérgenos, rechazos y mercurio en embarazo: el gate solo miraba proteína y
+        # dieta. Si el corrector LLM metía un alérgeno, el plan se promovía a «approved»; la re-revisión lo rechazaba
+        # CRÍTICO, pero `_swap_to_best_attempt_if_better` restauraba el snapshot con `review_passed=True` y el fallback
+        # crítico (gateado por `not review_passed`) no corría: el alérgeno se entregaba como aprobado. El texto libre
+        # (`otherAllergies`) ya viene unido en el `form_data` del grafo. tooltip-anchor: P1-PLAN-LOTE-236-PROMOCION
+        _fd_pr = form_data if isinstance(form_data, dict) else {}
+        _alg_pr = _fd_pr.get("allergies") or []
+        if ALLERGEN_HARD_GUARD and _has_real_medical_flags(_alg_pr):
+            _av = _scan_allergen_violations(new_plan_result, _alg_pr)
+            if _av:
+                return "alérgeno: " + "; ".join(f"'{_ing}' ({_t}) en {_mn}" for _mn, _ing, _t in _av[:4])
+        if DISLIKE_HARD_GUARD:
+            _dv = _scan_dislike_violations(new_plan_result, _fd_pr)
+            if _dv:
+                return "rechazo: " + "; ".join(f"'{_ing}' ({_t}) en {_mn}" for _mn, _ing, _t in _dv[:4])
+        for _d_pr in new_plan_result.get("days") or []:
+            for _m_pr in (_d_pr.get("meals") or []) if isinstance(_d_pr, dict) else []:
+                if isinstance(_m_pr, dict):
+                    _mv = _scan_mercury_pregnancy_violations(_m_pr, _fd_pr)
+                    if _mv:
+                        return "mercurio en embarazo: " + "; ".join(str(x) for x in _mv[:2])
     except Exception as _e:
         return f"error de re-validación: {type(_e).__name__}: {_e}"
     return None
@@ -16677,6 +16713,12 @@ def _critical_is_bariatric_regenerable(issues) -> bool:
         if any(m in t for m in _BARIATRIC_NONREGENERABLE_MARKERS):
             return False
     return True
+
+
+# [P1-PLAN-LOTE-230 · 2026-09-25] G18 para toda condición (lógica en `critico_no_agudo`, fuera del grafo en
+# P1-PLAN-LOTE-240). Knob `MEALFIT_NON_ACUTE_CRITICAL_SOFT_REJECT`. tooltip-anchor: P1-PLAN-LOTE-230-CRITICO-NO-AGUDO
+NON_ACUTE_CRITICAL_SOFT_REJECT = _env_bool("MEALFIT_NON_ACUTE_CRITICAL_SOFT_REJECT", True)
+from critico_no_agudo import _critical_is_non_acute  # noqa: E402,F401  [P1-PLAN-LOTE-240]
 
 
 # [P3-FOOD-SAFETY · 2026-06-13] Seguridad alimentaria determinista: el huevo es un alimento
@@ -17894,11 +17936,17 @@ def _is_recipe_safety_note_step(step) -> bool:
     Las superficies que REEMPLAZAN `recipe[]` completo (p.ej. /recipe/expand con los pasos del Chef AI) DEBEN
     preservar estos pasos: los generaron guards deterministas de S1/updates y el LLM de expansión no los re-deriva
     — perderlos deja a un usuario con ceviche sin la advertencia de cocción. tooltip-anchor: P0-EXPAND-CLINICAL-GUARD"""
+    # [P1-PLAN-LOTE-229 · 2026-09-25] + «⚕️» (nota clínica por condición y aclaración de alergia): no la reconocía, y el
+    # clamp de tiempo/temperatura leyó el «al menos 4 horas de la dosis» de la nota de levotiroxina como una cocción de
+    # 240 min y lo reescribió con el default de la técnica — «separa estos alimentos al menos 10-12 min a fuego medio de la
+    # dosis», «2-3 min por lado», «18-20 min a 180 °C» (batería real del 25-sep, 7 de 12 comidas). Un consejo médico
+    # FALSO entregado; el revisor lo rechazó CRÍTICO dos veces y el plan salió degradado. Con el «a fuego medio» inyectado,
+    # el reparador del contrato además la rotulaba «El Toque de Fuego». tooltip-anchor: P1-PLAN-LOTE-229-NOTA-CLINICA
     try:
         s = str(step or "")
     except Exception:
         return False
-    return ("⚠" in s) or ("💡" in s) or ("Seguridad alimentaria" in s)
+    return ("⚠" in s) or ("💡" in s) or ("⚕" in s) or ("Seguridad alimentaria" in s)
 
 
 # [P1-COMPLEMENT-INTO-MONTAJE · 2026-07-26] Kill switch de la fusión en el Montaje. Con False vuelve
@@ -18217,59 +18265,7 @@ def _apply_food_safety_fixes(plan: dict, form_data=None, allergies=None) -> int:
 # es una lista aspiracional. 'atun' EXCLUIDO del bloque mariscos a propósito: el enlatado ya
 # está cocido (mismo criterio que _PREGNANCY_MERCURY_SUBS, que también lo excluye).
 _PREGNANCY_NOTE_PREFIX = "🤰 Seguridad alimentaria (embarazo/lactancia): "
-_PREGNANCY_SAFETY_CLAUSES = (
-    ("huevo", ("huevo", "huevos", "clara", "claras", "yema", "yemas"),
-     ("yema y clara firmes",),
-     "cocina el huevo POR COMPLETO (yema y clara firmes, sin puntos líquidos)"),
-    # [P1-PLAN-LOTE-183] Carnes y aves (rd12: «pollo guisado sin 74 °C» ⇒ EMERGENCIA). tooltip-anchor: P1-PLAN-LOTE-183-CARNES-EMBARAZO
-    ("carnes", ("pollo", "pechuga", "pechugas", "pavo", "cerdo", "res", "carne", "chivo", "cordero",
-                "muslo", "muslos", "higado", "costilla", "costillas", "chuleta", "chuletas", "molida"),
-     ("74 °c", "74°c", "sin partes rosadas"),
-     "cocina las carnes y el pollo POR COMPLETO (74 °C por dentro, sin partes rosadas)"),
-    ("deli", ("jamon", "salami", "mortadela", "fiambre", "embutido", "deli",
-              "salchicha", "salchichon", "pepperoni", "tocineta", "tocino",
-              # [P0-PREG-CURED-BETA · 2026-08-23] Curados/embutidos de los cinco
-              # catálogos beta. El catálogo dinámico de abajo amplía por fila exacta;
-              # estos tokens son el fallback fail-safe si la lectura no está disponible.
-              "chorizo", "sobrasada", "cecina", "embuchado", "morcilla", "butifarra",
-              "chistorra", "panceta", "longaniza", "chuleta ahumada"),
-     ("74 °c", "74°c", "hasta que humee"),
-     "calienta los embutidos/carnes tipo deli hasta que humeen (74 °C) y sírvelos al momento — "
-     "fríos hay riesgo de listeria"),
-    # [P1-REVIEWER-SEES-SAFETY-NOTES · 2026-08-09] Generalizada tras el residual medido
-    # (corr=9909fb32: «lavado… no explicitadas para TODOS los platos» — la versión hojas-only
-    # dejaba frutas/hierbas fuera y el reviewer generalizaba el rechazo). El lavado es guía
-    # válida aunque el producto se cocine después.
-    ("hojas", ("espinaca", "espinacas", "rucula", "arugula", "lechuga", "repollo",
-               "berro", "berros", "acelga", "acelgas", "kale", "col rizada", "bok choy",
-               "cilantro", "perejil", "albahaca", "tomate", "pepino", "zanahoria", "apio",
-               "remolacha", "cebolla", "aji", "pimiento", "mango", "lechosa", "papaya", "pina", "fresa", "fresas",  # [P1-PLAN-LOTE-188] +cebolla/ají
-               "guineo", "banana", "melon", "sandia", "uva", "uvas", "manzana", "pera",
-               "chinola", "maracuya", "limon", "naranja", "toronja", "aguacate", "kiwi",
-               "granada", "guayaba"),
-     ("desinfecta",),
-     "lava y desinfecta las frutas, verduras y hierbas frescas antes de usarlas (aunque "
-     "se vayan a cocinar)"),
-    # [P1-REVIEWER-SEES-SAFETY-NOTES · 2026-08-09] Canela: residual medido corr=9909fb32
-    # («1 cucharadita de canela… debe reducirse a una pizca o sustituirse por canela de
-    # Ceilán» — cumarina de la Cassia). La absolución «ceilan» aplica también si el
-    # ingrediente ya la nombra (covered escanea receta + nombre + ingredientes).
-    ("canela", ("canela",),
-     ("ceilan",),
-     "usa canela de Ceilán (no Cassia) y limítala a una pizca durante el embarazo"),
-    ("papaya", ("lechosa", "papaya"),
-     ("completamente madura",),
-     "usa la lechosa/papaya COMPLETAMENTE madura (verde o pintona está contraindicada)"),
-    ("hongos", ("champinon", "champinones", "hongo", "hongos", "setas", "portobello"),
-     ("champinones por completo", "hongos por completo"),
-     "cocina los champiñones/hongos por completo (nunca crudos)"),
-    ("mariscos", ("pescado", "mejillon", "mejillones", "camaron", "camarones", "pulpo",
-                  "calamar", "cangrejo", "langosta", "tilapia", "salmon", "mero",
-                  "arenque", "bacalao", "sardina", "sardinas"),
-     ("mariscos por completo",),
-     "cocina el pescado y los mariscos POR COMPLETO (opacos y firmes; nada crudo ni a "
-     "medio cocer)"),
-)
+from notas_clinicas_datos import _PREGNANCY_SAFETY_CLAUSES  # noqa: E402,F401  [P1-PLAN-LOTE-240] datos fuera del god-file
 # Lácteos: cláusula aparte porque el match es POR LÍNEA de ingrediente (la excusa vegetal
 # «leche de coco/almendras» debe absolver SU línea sin absolver el queso fresco del mismo plato).
 _PREGNANCY_DAIRY_TOKENS = (
@@ -18453,49 +18449,7 @@ def _apply_pregnancy_food_safety_annotations(plan: dict, form_data: dict) -> int
 # (SSOT detect_active_rules). Tokens ESTRECHOS y word-boundary (lección 'pan'⊂'pana': _name_has_token
 # no tiene frontera FINAL — nada de raíces desnudas ambiguas). covered escanea receta+nombre+
 # ingredientes (misma semántica que las cláusulas de embarazo). Note-only, macro-preservante.
-_CONDITION_SAFETY_CLAUSES = {
-    "dyslipidemia": (
-        ("lacteo_magro", ("yogur", "yogurt", "queso", "leche"),
-         ("descremad", "desnatad", "0%", "bajo en grasa", "light"),
-         "usa los lácteos DESCREMADOS o 0-2% de grasa (yogur/queso/leche)"),
-        ("yemas", ("huevo", "huevos", "yema", "yemas"),
-         ("claras", "solo clara"),
-         "limita las yemas a 3-4 por semana; las claras puedes usarlas libremente"),
-    ),
-    "hta": (
-        ("sodio", ("queso", "jamon", "salami", "embutido", "tocineta", "enlatado",
-                   "pan integral", "pan de agua", "tortilla integral", "atun en agua"),
-         ("bajo en sodio", "baja en sodio", "sin sal"),
-         "elige las versiones BAJAS EN SODIO (queso/pan/enlatados) y no añadas sal en la mesa"),
-    ),
-    "hypothyroid": (
-        # [P1-SWAP-MACRO-REPAIR-BATCH · 2026-08-09] +toronja (rechazo medido run 31311796944:
-        # «la toronja puede reducir la absorción de levotiroxina»). covered pasa de
-        # («levotiroxina») a («4 horas»): mencionar el fármaco SIN la práctica correcta no
-        # absuelve — el mismo run mostró al reviewer leyendo una separación de «1-12 minutos»
-        # (el DESAYUNO con lácteos minutos después de la dosis en ayunas); la separación
-        # horaria del slot es clase aparte (composición del desayuno), documentada en #14.
-        ("levotiroxina", ("leche", "yogur", "yogurt", "queso", "soya", "soja", "tofu",
-                          "linaza", "espinaca", "espinacas", "cafe", "toronja", "pomelo"),
-         ("4 horas",),
-         "toma la levotiroxina en ayunas y separa estos alimentos (lácteos/soya/linaza/"
-         "espinacas/café/toronja) al menos 4 horas de la dosis — interfieren su absorción"),
-    ),
-    "pcos": (
-        ("fruta_ig", ("mango", "lechosa", "papaya", "pina", "guineo", "banana", "uva",
-                      "uvas", "sandia", "melon", "batido"),
-         ("porcion pequena", "media taza", "acompanada de proteina"),
-         "sirve la fruta dulce en porción PEQUEÑA (~½ taza) y acompáñala de proteína o "
-         "grasa (yogur, queso, maní) para suavizar el pico glucémico"),
-    ),
-    "gastritis": (
-        ("irritantes", ("limon", "naranja", "toronja", "pina", "vinagre", "picante",
-                        "aji picante", "cafe", "salsa de tomate"),
-         ("version suave", "sin picante"),
-         "prepara la versión SUAVE: poco cítrico/vinagre, nada de picante, y prefiere "
-         "cocción hervida, guisada u horneada sobre frituras"),
-    ),
-}
+from notas_clinicas_datos import _CONDITION_SAFETY_CLAUSES  # noqa: E402,F401  [P1-PLAN-LOTE-240] datos fuera del god-file
 
 
 def _apply_condition_safety_annotations(plan: dict, form_data: dict) -> int:
@@ -22057,40 +22011,7 @@ def dedup_featured_fruits_in_plan(plan: dict) -> int:
 # mismo básico, no una repetición que fatiga. Fail-safe por diseño: si ningún token matchea, la
 # firma es None y el caller trata la comida como "técnica no determinable" → NUNCA relaja el gate
 # (conservador). tooltip-anchor: P1-STAPLE-FOODS
-_STAPLE_TECHNIQUE_CANONICAL = {
-    # -- compartido con culinary_coherence.VERB_TO_METHOD (mismos nombres canónicos) --
-    "hervid": "hervir", "hervir": "hervir",
-    "plancha": "plancha",
-    "frito": "freir", "frita": "freir", "freir": "freir",
-    "horneado": "hornear", "horno": "hornear", "airfryer": "hornear",
-    "guisad": "guisar",
-    "salteado": "saltear", "saltear": "saltear",
-    "licuado": "licuar", "licuada": "licuar",
-    # NOTA: "tostar"/"tostado"/"tostada" (también en VERB_TO_METHOD) se dejó FUERA a propósito —
-    # "tostada" colisiona por substring con menciones de PAN TOSTADO como acompañante ("con
-    # Tostadas") que no describen la técnica de la proteína principal, produciendo una firma falsa
-    # (detectado en test: "Huevo Revuelto con Tostadas" resolvía a 'tostar' en vez de 'revuelto').
-    # Añadir tostar exigiría word-boundary + desambiguación de rol (¿tostada es el plato o un
-    # acompañante?) que no está en el alcance de este fix — mismo criterio conservador que el
-    # resto del módulo: mejor NO mapear una técnica que mapearla mal.
-    # -- propios (fuera del alcance de VERB_TO_METHOD, que solo valida verbos de cocción) --
-    "asado": "asado", "asar": "asado",
-    "empaniz": "empanizado",
-    "revoltillo": "revuelto", "revuelto": "revuelto",
-    "majado": "majado", "majar": "majado",
-    "batido": "batido", "batida": "batido",
-    "sopa": "sopa",
-    "crema": "crema",
-    "ensalada": "ensalada",
-    "vapor": "vapor",
-    "mechada": "estofado", "mechado": "estofado", "estofado": "estofado",
-    "croqueta": "croqueta",
-    "tortitas": "tortilla", "tortilla": "tortilla",
-    "sarten": "sarten",
-    "crudo": "crudo", "cruda": "crudo",
-    "duro": "duro",
-    "pochado": "pochado", "pochada": "pochado", "escalfado": "pochado", "cocid": "hervir",  # [P1-PLAN-LOTE-196] «huevo cocido» del cerrador (último: prioridad mínima)
-}
+from tecnicas_basicos import _STAPLE_TECHNIQUE_CANONICAL  # noqa: E402,F401  [P1-PLAN-LOTE-240] datos fuera del god-file
 _STAPLE_TECHNIQUE_TOKENS = tuple(_STAPLE_TECHNIQUE_CANONICAL.keys())
 
 
@@ -25218,6 +25139,13 @@ def _apply_deterministic_clinical_layer(plan: dict, form_data: dict, nutrition: 
         except Exception as _sg_e:
             logger.warning(f"[P3-CONDITION-ENGINE] error: {type(_sg_e).__name__}: {_sg_e}")
 
+    # ── Guard 3.1 [P1-PLAN-LOTE-235 · 2026-09-25] colesterol alto: ≤1 yema/día y ≤4/semana, el resto en claras — lo
+    # que dice la nota clínica que el propio plan escribe. tooltip-anchor: P1-PLAN-LOTE-235-YEMAS
+    try:
+        __import__("yemas_colesterol").topar_yemas(plan, form_data, db=_db)
+    except Exception as _yc_e:
+        logger.warning(f"[P1-PLAN-LOTE-235] tope de yemas (capa clínica) no-op: {type(_yc_e).__name__}: {_yc_e}")
+
     # ── Guard 3.5 (FS-embarazo): anotaciones de seguridad alimentaria embarazo/lactancia ──
     # [P1-PREGNANCY-SAFETY-NOTES · 2026-08-09] DESPUÉS de las sustituciones (Guard 2.5/3): la nota
     # describe la composición FINAL del plato (anotar un ingrediente que el sub acaba de sacar
@@ -26817,6 +26745,11 @@ _NIGHT_RICE_CARB_FACTOR = 1.4
 _NIGHT_RICE_NAME_RE = _re.compile(r"\b(arroz\s+(?:blanco|integral|guisado|al\s+vapor)|arroz)\b", _re.I)
 
 
+# [P1-PLAN-LOTE-239 · 2026-09-25] El sustituto del arroz de noche respeta alergias, rechazos, dieta y tiempo (lógica en
+# `relleno_listo`, fuera del grafo en P1-PLAN-LOTE-240). tooltip-anchor: P1-PLAN-LOTE-239-ARROZ-DE-NOCHE
+from relleno_listo import _night_rice_sub_for  # noqa: E402,F401  [P1-PLAN-LOTE-240]
+
+
 # [P1-RECIPE-SLICE-GRAMS · 2026-06-27] Unidades VAGAS de tajada/loncha que NO comunican una cantidad medible cuando
 # son fraccionarias ("0.5 lonja/pedazo de queso"). Alimentos lonjeables + default de gramos por unidad.
 _VAGUE_SLICE_UNITS = ("lonja", "lonjas", "loncha", "lonchas", "pedazo", "pedazos", "tajada", "tajadas")
@@ -28280,7 +28213,8 @@ def finalize_plan_data_coherence(days: list, db=None, allergies=None, target_fat
 
 def finalize_single_meal_recipe_coherence(meal: dict, db=None, pantry_strict: bool = False, allergies=None,
                                           skip_night_rice: bool = False, portion_floors: bool = True,
-                                          day_kcal_target: float | None = None, country: str = "DO") -> int:
+                                          day_kcal_target: float | None = None, country: str = "DO",
+                                          form_data: dict | None = None) -> int:
     """[P1-UPDATE-RECIPE-FINALIZE · 2026-06-29] (audit objetivo · paridad updates ↔ form-gen) Aplica los
     finalizadores deterministas de COHERENCIA DE RECETA de la generación a UN solo plato producido por una
     superficie de UPDATE (swap S3 / chat-modify S4; regenerate-day los hereda porque es un loop de swap_meal).
@@ -28402,7 +28336,9 @@ def finalize_single_meal_recipe_coherence(meal: dict, db=None, pantry_strict: bo
         # lo contrario de lo que pidió. Su deseo explícito gana también aquí.
         try:
             if not skip_night_rice:
-                total += _night_rice_autofix(_wrap, db, country=country)
+                # [P1-PLAN-LOTE-239] con el formulario (o al menos las alergias) para no rotar a lo que no se come
+                _fd_nr = form_data if isinstance(form_data, dict) else ({"allergies": list(allergies)} if allergies else None)
+                total += _night_rice_autofix(_wrap, db, country=country, form_data=_fd_nr)
         except Exception as _enr:
             logger.warning(f"[P2-SLOT-CORRECTOR] night-rice en finalizador de update no-op: {type(_enr).__name__}: {_enr}")
         # [P2-RECIPE-NONEMPTY-BACKSTOP · 2026-06-29] Garantiza pasos cocinables si el LLM del update degradó.
@@ -28898,7 +28834,9 @@ def _night_rice_autofix(days: list, db=None, *, compound: bool = False, country:
                     continue
                 name = str(m.get("name") or "")
                 name_low = _sa(name.lower())
-                sub = __import__("nevera_exigida").preferir(_NIGHT_RICE_SUB_ROTATION, di)  # [P1-PLAN-LOTE-199] Nevera primero
+                sub = _night_rice_sub_for(di, form_data)  # [P1-PLAN-LOTE-199] Nevera primero · [P1-PLAN-LOTE-239] sin violar
+                if not sub:
+                    continue
                 _sub_low = _sa(sub.lower())
                 ings = m.get("ingredients")
                 if not isinstance(ings, list):
@@ -30744,7 +30682,11 @@ _GM_TUBER_FOOD, _GM_TUBER_KCAL_G, _GM_TUBER_CARB_G, _GM_TUBER_PROT_G = "batata c
 GAINMUSCLE_READY_CARB_NO_TIME = _env_bool("MEALFIT_GAINMUSCLE_READY_CARB_NO_TIME", True)
 _GM_READY_FOOD, _GM_READY_KCAL_G, _GM_READY_CARB_G, _GM_READY_PROT_G = "casabe", 3.47, 0.853, 0.013
 _GM_READY_MAX_G = 60
-_GM_READY_LINE_RE = _re.compile(r"^\s*\d+\s*g de casabe\s*$", _re.IGNORECASE)
+# [P1-PLAN-LOTE-238 · 2026-09-25] El carbohidrato listo depende del mercado y de las restricciones (lógica en
+# `relleno_listo`, fuera del grafo en P1-PLAN-LOTE-240). tooltip-anchor: P1-PLAN-LOTE-238-RELLENO-POR-PAIS
+_GM_READY_LINE_RE = _re.compile(r"^\s*\d+\s*g de (?:casabe|tortilla de ma[ií]z|pan integral)\s*$", _re.IGNORECASE)
+from relleno_listo import (_GM_READY_FOODS, _GM_READY_ORDER, _GM_READY_ORDER_DEFAULT,  # noqa: E402,F401
+                           _gm_line_violates, _gm_ready_carb_for)  # [P1-PLAN-LOTE-240]
 
 
 def _repair_gainmuscle_day_kcal(days: list, nutrition: dict, form_data: dict, db=None, *,
@@ -30839,14 +30781,18 @@ def _repair_gainmuscle_day_kcal(days: list, nutrition: dict, form_data: dict, db
                 # [P1-GAINMUSCLE-CENA-TUBER] guarnición por franja: cena → batata; resto → arroz blanco
                 _is_cena_gm = "cena" in _sa_gm(str(m.get("meal", "")).lower())
                 if _sin_tiempo_gm:
-                    _sd_food, _sd_k, _sd_c, _sd_p = _GM_READY_FOOD, _GM_READY_KCAL_G, _GM_READY_CARB_G, _GM_READY_PROT_G
-                    _sd_key, _sd_note = "casabe", "🫓 Acompaña con el casabe de tus ingredientes: está listo para comer, sin cocción."
+                    _ready_gm = _gm_ready_carb_for(form_data)   # [P1-PLAN-LOTE-238] por país y sin violar nada
+                    if _ready_gm is None:
+                        continue
+                    _sd_food, _sd_k, _sd_c, _sd_p, _sd_key, _sd_note = _ready_gm
                 elif _is_cena_gm:
                     _sd_food, _sd_k, _sd_c, _sd_p = _GM_TUBER_FOOD, _GM_TUBER_KCAL_G, _GM_TUBER_CARB_G, _GM_TUBER_PROT_G
                     _sd_key, _sd_note = "batata", "🍠 Cuece la batata de tus ingredientes (hervida o al horno) y sírvela como acompañante."
                 else:
                     _sd_food, _sd_k, _sd_c, _sd_p = "arroz blanco cocido", _GM_RICE_KCAL_G, _GM_RICE_CARB_G, _GM_RICE_PROT_G
                     _sd_key, _sd_note = "arroz blanco", "🍚 Cuece el arroz blanco de tus ingredientes según el paquete y sírvelo como acompañante."
+                if not _sin_tiempo_gm and _gm_line_violates(f"50 g de {_sd_food}", form_data):
+                    continue   # [P1-PLAN-LOTE-238] arroz/batata que el usuario no puede o no quiere comer
                 add_g = int(min(float(GAINMUSCLE_KCAL_FLOOR_MAX_CARB_PER_MEAL_G if not _sin_tiempo_gm else _GM_READY_MAX_G),
                                 _mgm.ceil(_need_k / _sd_k),
                                 _mgm.floor(_kcal_room / _sd_k),
@@ -30889,7 +30835,7 @@ def _repair_gainmuscle_day_kcal(days: list, nutrition: dict, form_data: dict, db
                     continue
                 # [P1-PLAN-LOTE-221] un plato que ya trae su casabe («2 tortas de casabe») no recibe otro: sumar gramos a
                 # una línea en tortas la corrompería
-                if _sin_tiempo_gm and any("casabe" in _sa_gm(str(_gl).lower())
+                if _sin_tiempo_gm and any(_sd_key in _sa_gm(str(_gl).lower())
                                           and not _GM_READY_LINE_RE.match(str(_gl))
                                           for _gl in (m.get("ingredients") or [])):
                     continue
@@ -34975,6 +34921,11 @@ def apply_budget_convergence_for_days(plan_data: dict, form_data: dict | None, *
         days = (plan_data or {}).get("days") or []
         if not days:
             return 0
+        # [P1-PLAN-LOTE-231 · 2026-09-25] El formulario del bloque trae «Otra alergia» sin unir a `allergies` (la une el
+        # grafo en SU copia): el abaratador cambiaba almendras/nueces por «Maní» mirando solo los chips, y el maní no
+        # tiene chip. tooltip-anchor: P1-PLAN-LOTE-231-TEXTO-LIBRE
+        if isinstance(form_data, dict):
+            form_data = profile_with_free_text(form_data)
         # Ventana de ESCRITURA. Con el knob OFF, `days_win is days` y `_inv` es None →
         # las dos llamadas de abajo son byte-idénticas al pre-fix.
         _future_only = BUDGET_CONVERGENCE_FUTURE_ONLY
@@ -42684,11 +42635,20 @@ async def review_plan_node(state: PlanState) -> dict:
         except Exception:
             _clinical_panel_note = ""
 
+        # [P1-PLAN-LOTE-227 · 2026-09-25] «Mariscos» sin «Pescado» y su espejo «Pescado» sin «Mariscos» (chips distintos
+        # del formulario, lote 210): el revisor recibe la aclaración escrita junto a la alergia o al rechazo. Texto en
+        # `etiquetas_clinicas.notas_para_el_revisor` (P1-PLAN-LOTE-240).
+        # tooltip-anchor: P1-PLAN-LOTE-227-MARISCOS-AL-REVISOR · tooltip-anchor: P1-PLAN-LOTE-227-PESCADO-NO-ES-MARISCO
+        try:
+            _mariscos_note, _pescado_note = __import__("etiquetas_clinicas").notas_para_el_revisor(form_data)
+        except Exception:
+            _mariscos_note, _pescado_note = "", ""
+
         review_human_content = f"""--- RESTRICCIONES DEL PACIENTE ---
-Alergias declaradas: {json.dumps(allergies) if allergies else "Ninguna"}
+Alergias declaradas: {json.dumps(allergies) if allergies else "Ninguna"}{_mariscos_note}
 Condiciones médicas: {json.dumps(medical_conditions) if medical_conditions else "Ninguna"} · Medicamentos declarados: {json.dumps(form_data.get("medications")) if form_data.get("medications") else "Ninguno"}
 Tipo de dieta: {diet_type}
-Alimentos que no le gustan: {json.dumps(dislikes) if dislikes else "Ninguno"}
+Alimentos que no le gustan: {json.dumps(dislikes) if dislikes else "Ninguno"}{_pescado_note}
 {_baria_note}{_clinical_panel_note}
 --- REPORTE DE INVESTIGACIÓN CLÍNICA (FACT-CHECKING) ---
 {fact_check_report}
@@ -42823,6 +42783,10 @@ Responde ÚNICAMENTE con el JSON de revisión.
             # ANTES de los guards deterministas y de que envenenen el retry.
             approved, issues, severity, _verif_advisories = \
                 _downgrade_reviewer_verification_demands(approved, issues, severity)
+            # [P1-PLAN-LOTE-227] …y los no-defectos (severidad «none», observaciones que se niegan solas)
+            approved, issues, severity, _non_issue_advisories = \
+                _downgrade_reviewer_non_issues(approved, issues, severity)
+            _verif_advisories = list(_verif_advisories or []) + list(_non_issue_advisories or [])
             if _verif_advisories and isinstance(plan, dict):
                 plan["_reviewer_advisories"] = _verif_advisories
         except Exception as e:
@@ -42880,6 +42844,23 @@ Responde ÚNICAMENTE con el JSON de revisión.
                 f"reemplazarlos por alternativas seguras. Violaciones: {_viol_str}"
             )
             severity = _severity_max(severity, "critical")
+
+    # [P1-PLAN-LOTE-232 · 2026-09-25] Backstop DETERMINISTA de los rechazos («no me gusta»): reintento con directiva
+    # («high»), no fallback. tooltip-anchor: P1-PLAN-LOTE-232-RECHAZOS
+    if DISLIKE_HARD_GUARD:
+        try:
+            _dl_viol = _scan_dislike_violations(plan, form_data)
+            if _dl_viol:
+                _dl_str = "; ".join(f"'{_ing}' (rechazo '{_term}') en {_mn}" for _mn, _ing, _term in _dl_viol[:6])
+                logger.warning(f"🙅 [P1-PLAN-LOTE-232] {len(_dl_viol)} alimento(s) que el usuario rechazó: {_dl_str}")
+                approved = False
+                issues.append(
+                    f"ALIMENTO RECHAZADO POR EL USUARIO (declaró que no le gusta): DEBES quitarlo y reemplazarlo por "
+                    f"otro de la misma función en el plato. Violaciones: {_dl_str}"
+                )
+                severity = _severity_max(severity, "high")
+        except Exception as _dl_e:
+            logger.warning(f"[P1-PLAN-LOTE-232] guard de rechazos no-op: {type(_dl_e).__name__}: {_dl_e}")
 
     # [P1-DIET-HARD-GUARD · 2026-06-15] (gap-audit P1-3) Backstop DETERMINISTA de dietType, espejo del
     # allergen guard. Si un plan veg* (vegano/vegetariano/pescetariano) contiene un producto animal
@@ -44198,6 +44179,17 @@ Responde ÚNICAMENTE con el JSON de revisión.
             logger.warning("🔁 [P1-BARIATRIC-CRITICAL-RETRY] Bariátrico: crítico de elección de comida degradado a 'high' "
                            "→ retry quirúrgico con feedback antes del fallback (el revisor re-gatea cada intento). "
                            f"Razones: {(issues or [])[:2]}")
+            severity = "high"
+
+        # [P1-PLAN-LOTE-230 · 2026-09-25] G18 para toda condición: un crítico del revisor SIN peligro agudo reintenta y se
+        # entrega con banner, no cae al plan matemático genérico. `elif`: DM2/bariátrico ya degradaron lo suyo.
+        # tooltip-anchor: P1-PLAN-LOTE-230-CRITICO-NO-AGUDO
+        elif (NON_ACUTE_CRITICAL_SOFT_REJECT and severity == "critical"
+                and not plan.get("_schema_invalid") and not _had_allergen_critical
+                and not _had_renal_critical and not _had_diet_critical
+                and _critical_is_non_acute(issues)):
+            logger.warning("🩺 [P1-PLAN-LOTE-230] crítico del revisor SIN marca aguda degradado a 'high' → reintento con "
+                           f"feedback y, si no converge, plan real con banner (G18). Razones: {(issues or [])[:2]}")
             severity = "high"
 
         result = {
@@ -47534,27 +47526,7 @@ FALLBACK_ALLERGEN_FILTER = _env_bool("MEALFIT_FALLBACK_ALLERGEN_FILTER", True)
 # token canónico -> keywords (lowercase, sin acentos) que lo delatan en las
 # restricciones declaradas. Las plantillas neutrales (tokens vacíos) cierran
 # la garantía de que SIEMPRE hay un meal seguro por slot.
-_FALLBACK_ALLERGEN_KEYWORDS = {
-    "egg":       ("huevo", "huevos", "egg", "clara de huevo"),
-    "chicken":   ("pollo", "chicken", "pechuga de pollo", "gallina"),
-    "fish":      ("pescado", "pescados", "fish", "atun", "salmon", "tilapia",
-                  "bacalao", "sardina", "mero"),
-    "shellfish": ("marisco", "mariscos", "camaron", "camarones", "langosta",
-                  "cangrejo", "shellfish", "shrimp", "ostra", "calamar", "pulpo"),
-    "beef":      ("carne de res", "ternera", "vacuno", "beef"),
-    "pork":      ("cerdo", "puerco", "pork", "tocino", "jamon", "chorizo",
-                  "salchicha", "embutido"),
-    "dairy":     ("leche", "lacteo", "lacteos", "lactosa", "dairy", "queso",
-                  "yogur", "yogurt", "mantequilla"),
-    "peanut":    ("mani", "peanut", "cacahuate", "cacahuete"),
-    "soy":       ("soya", "soja", "tofu", "edamame"),
-    "gluten":    ("gluten", "trigo", "wheat", "celiaco", "celiaca"),
-    "oats":      ("avena", "oat"),
-    "legume":    ("lenteja", "lentejas", "garbanzo", "garbanzos", "frijol",
-                  "frijoles", "habichuela", "habichuelas", "legumbre", "legumbres"),
-    "nuts":      ("nuez", "nueces", "almendra", "almendras", "frutos secos",
-                  "tree nut", "anacardo", "merey", "pistacho"),
-}
+from fallback_pools import _FALLBACK_ALLERGEN_KEYWORDS  # noqa: E402,F401  [P1-PLAN-LOTE-240] datos fuera del god-file
 
 # Des-acentuado mínimo (es-DO) para normalizar el texto de restricciones.
 _FALLBACK_ACCENT_MAP = str.maketrans("áéíóúüñ", "aeiouun")
@@ -47623,7 +47595,14 @@ def _fallback_restricted_tokens(form_data: dict) -> frozenset:
     return frozenset(tokens)
 
 
-def _select_safe_fallback_meal(pool: list, restricted_tokens: frozenset, day_number: int = 1):
+# [P1-PLAN-LOTE-237 · 2026-09-25] El plan de emergencia pasa cada plantilla por el escáner SSOT (lógica en
+# `emergencia_segura`, fuera del grafo en P1-PLAN-LOTE-240). Knob `MEALFIT_FALLBACK_SSOT_SCAN`.
+# tooltip-anchor: P1-PLAN-LOTE-237-EMERGENCIA
+FALLBACK_SSOT_SCAN = _env_bool("MEALFIT_FALLBACK_SSOT_SCAN", True)
+from emergencia_segura import _fallback_template_violations  # noqa: E402,F401  [P1-PLAN-LOTE-240]
+
+
+def _select_safe_fallback_meal(pool: list, restricted_tokens: frozenset, day_number: int = 1, form_data: dict = None):
     """[P0-ORCH-1] Plantilla del pool cuyos tokens NO intersectan las restricciones.
     El último elemento de cada pool es neutral (tokens vacíos), así que SIEMPRE hay
     un retorno seguro.
@@ -47636,6 +47615,14 @@ def _select_safe_fallback_meal(pool: list, restricted_tokens: frozenset, day_num
     preserva idempotencia del fallback) y cubre también el pool bariátrico curado (mismo callsite).
     tooltip-anchor: P2-FALLBACK-DAY-ROTATION"""
     safe = [tmpl for tmpl in (pool or []) if not (tmpl[1] & restricted_tokens)]
+    # [P1-PLAN-LOTE-237] además del vocabulario propio, el escáner SSOT sobre cada plantilla.
+    if safe and form_data is not None and FALLBACK_SSOT_SCAN:
+        _limpias = [t for t in safe if not _fallback_template_violations(t, form_data)]
+        if _limpias:
+            safe = _limpias
+        else:
+            logger.error("🚨 [P1-PLAN-LOTE-237] ninguna plantilla del slot pasa el escáner SSOT; se usa la del "
+                         "vocabulario propio (la última palabra del escudo retira lo añadido que viole).")
     if safe:
         try:
             _idx = (int(day_number) - 1) % len(safe)
@@ -47766,7 +47753,8 @@ def _build_fallback_day(nutr: dict, day_number: int,
     for meal_type, r in _slots:
         _slot_pool = _pool.get(meal_type) or _FALLBACK_MEAL_POOLS.get(meal_type)
         # [P2-FALLBACK-DAY-ROTATION · 2026-07-01] rota por día entre plantillas seguras (anti-monotonía).
-        tmpl = _select_safe_fallback_meal(_slot_pool, restricted_tokens, day_number=day_number)
+        tmpl = _select_safe_fallback_meal(_slot_pool, restricted_tokens, day_number=day_number,
+                                          form_data=form_data)   # [P1-PLAN-LOTE-237]
         meals.append(create_meal(tmpl, r, r, r, r, meal_type))
 
     # [P2-FALLBACK-PHYSICAL-MACROS · 2026-07-01] (audit macros GAP-5) Los macros del fallback eran ASERTADOS

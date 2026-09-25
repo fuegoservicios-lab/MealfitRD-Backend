@@ -6651,8 +6651,19 @@ def _enrich_clinical_from_profile(data: dict, user_id: str) -> dict:
     try:
         from db import get_user_profile
         hp = (get_user_profile(user_id) or {}).get("health_profile") or {}
-        prof_allergies = hp.get("allergies") or []
-        body_allergies = data.get("allergies") or []
+        # [P1-PLAN-LOTE-231 · 2026-09-25] Lo TECLEADO en «Otra alergia» / «Otro alimento que no te gusta» vive en
+        # `otherAllergies`/`otherDislikes`, fuera de los chips, y aquí solo se unían los chips: «Cambiar plato»,
+        # «Actualizar platos», expandir receta y el re-chequeo del persist no lo veían nunca (auditoría del 25-sep: una
+        # «fresa» escrita a mano con fresas en la Nevera → «Batido de fresa» persistido). Misma unión que el generador
+        # (`profile_with_free_text`), sobre el perfil Y sobre el cuerpo. tooltip-anchor: P1-PLAN-LOTE-231-TEXTO-LIBRE
+        try:
+            from graph_orchestrator import profile_with_free_text as _pwft_enr
+            _hp_ft = _pwft_enr(hp)
+            _body_ft = _pwft_enr(data)
+        except Exception:
+            _hp_ft, _body_ft = hp, data
+        prof_allergies = _hp_ft.get("allergies") or []
+        body_allergies = _body_ft.get("allergies") or []
         data["allergies"] = list({
             *[str(a).strip() for a in body_allergies if str(a).strip()],
             *[str(a).strip() for a in prof_allergies if str(a).strip()],
@@ -6676,8 +6687,8 @@ def _enrich_clinical_from_profile(data: dict, user_id: str) -> dict:
         # usuario marcó "no me gusta" (S1 sí lo respeta). NO es safety (fail-open natural). Knob
         # MEALFIT_UPDATE_HYDRATE_DISLIKES (default ON).
         if os.environ.get("MEALFIT_UPDATE_HYDRATE_DISLIKES", "true").strip().lower() in ("1", "true", "yes", "on"):
-            _prof_dislikes = hp.get("dislikes") or []
-            _body_dislikes = data.get("dislikes") or []
+            _prof_dislikes = _hp_ft.get("dislikes") or []
+            _body_dislikes = _body_ft.get("dislikes") or []
             data["dislikes"] = list({
                 *[str(d).strip() for d in _body_dislikes if str(d).strip()],
                 *[str(d).strip() for d in _prof_dislikes if str(d).strip()],
@@ -6697,9 +6708,12 @@ def _enrich_clinical_from_profile(data: dict, user_id: str) -> dict:
                 *[str(s).strip() for s in _body_staples if str(s).strip()],
                 *[str(s).strip() for s in _prof_staples if str(s).strip()],
             })[:8]
+        # [P1-PLAN-LOTE-231] La dieta del PERFIL manda: el frontend manda `formData.dietType || 'balanced'` y, en la
+        # ventana en que el formulario aún no hidrató, una vegana llegaba como «balanced» y el escáner de dieta del
+        # swap/regenerar-día no veía nada. El cuerpo solo cuenta si el perfil no dice nada.
         data["diet_type"] = (
-            data.get("diet_type") or data.get("dietType")
-            or hp.get("dietType") or hp.get("diet_type") or "balanced"
+            hp.get("dietType") or hp.get("diet_type")
+            or data.get("diet_type") or data.get("dietType") or "balanced"
         )
         # [P1-UPDATE-SUPERPERS · 2026-06-23] (audit inteligencia P1-4) Adjuntar super_personalization
         # del perfil → swap_meal (S3) y regenerate-day (S2) inyectan gustos/cocina/religión/equipo al
@@ -9349,6 +9363,14 @@ def api_regenerate_day(
                 "super_personalization": data.get("super_personalization"),
                 "medicalConditions": data.get("medicalConditions"),
                 "medications": data.get("medications"),
+                # [P1-PLAN-LOTE-234 · 2026-09-25] El tiempo de cocina (hidratado del perfil por el lote 220) no viajaba:
+                # `swap_meal` inyecta `horizon.cooking_time_rule(form_data)` y aquí recibía «», así que «Actualizar
+                # platos» le devolvía guisos de 30-40 min a quien eligió «Nada». Y el texto libre clínico
+                # («tomo espironolactona») que `medication_rules` lee de `otherMedications`.
+                # tooltip-anchor: P1-PLAN-LOTE-234-TIEMPO-EN-REGENERAR-DIA
+                "cookingTime": data.get("cookingTime"),
+                "otherConditions": data.get("otherConditions"),
+                "otherMedications": data.get("otherMedications"),
                 # Pantry reservada (gramos restantes tras los platos ya aceptados de hoy).
                 "current_pantry_ingredients": _ledger_to_pantry_lines(ledger),
                 # [P1-SODIUM-AWARE-PLACEMENT · 2026-08-02] Override explícito del sodio EN VIVO del resto

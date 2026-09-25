@@ -3703,7 +3703,8 @@ def swap_meal(form_data: dict, surface: str = "individual"):
             # finalizer NO inyecta un alérgeno post-backstop (este bloque corre DESPUÉS del scan clínico).
             # [P1-COUNTRY-SYSTEM-F1 · 2026-08-16 (T4 fix-round 1)] reusa `_swap_country` (derivado
             # UNA vez al inicio de swap_meal, T3) — DO ⇒ camino byte-idéntico.
-            _nfix = _fin_rc(_out, pantry_strict=bool(clean_ingredients), allergies=allergies, country=_swap_country)
+            _nfix = _fin_rc(_out, pantry_strict=bool(clean_ingredients), allergies=allergies, country=_swap_country,
+                            form_data=form_data)   # [P1-PLAN-LOTE-239] el cambio de arroz de noche mira el formulario
             if _nfix:
                 logger.info(f"🍳 [P1-UPDATE-RECIPE-FINALIZE] {_nfix} fix(es) de coherencia de receta en plato de swap | meal_type={meal_type}")
         except Exception as _fin_e:

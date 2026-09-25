@@ -149,3 +149,27 @@ _FALLBACK_MEAL_POOLS_BARIATRIC = {
          ["100g zanahoria cocida"]),
     ],
 }
+
+
+# [P1-PLAN-LOTE-240 · 2026-09-25] Vocabulario propio del fallback (antes en el grafo; el escáner SSOT lo complementa desde el lote 237).
+_FALLBACK_ALLERGEN_KEYWORDS = {
+    "egg":       ("huevo", "huevos", "egg", "clara de huevo"),
+    "chicken":   ("pollo", "chicken", "pechuga de pollo", "gallina"),
+    "fish":      ("pescado", "pescados", "fish", "atun", "salmon", "tilapia",
+                  "bacalao", "sardina", "mero"),
+    "shellfish": ("marisco", "mariscos", "camaron", "camarones", "langosta",
+                  "cangrejo", "shellfish", "shrimp", "ostra", "calamar", "pulpo"),
+    "beef":      ("carne de res", "ternera", "vacuno", "beef"),
+    "pork":      ("cerdo", "puerco", "pork", "tocino", "jamon", "chorizo",
+                  "salchicha", "embutido"),
+    "dairy":     ("leche", "lacteo", "lacteos", "lactosa", "dairy", "queso",
+                  "yogur", "yogurt", "mantequilla"),
+    "peanut":    ("mani", "peanut", "cacahuate", "cacahuete"),
+    "soy":       ("soya", "soja", "tofu", "edamame"),
+    "gluten":    ("gluten", "trigo", "wheat", "celiaco", "celiaca"),
+    "oats":      ("avena", "oat"),
+    "legume":    ("lenteja", "lentejas", "garbanzo", "garbanzos", "frijol",
+                  "frijoles", "habichuela", "habichuelas", "legumbre", "legumbres"),
+    "nuts":      ("nuez", "nueces", "almendra", "almendras", "frutos secos",
+                  "tree nut", "anacardo", "merey", "pistacho"),
+}

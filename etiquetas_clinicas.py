@@ -174,6 +174,54 @@ def _solo_mariscos(form_data) -> bool:
     return bool(exp & mar) and not (exp & pes)
 
 
+def _pescado_sin_mariscos(form_data) -> str:
+    """[P1-PLAN-LOTE-227 · 2026-09-25] «alergia»/«rechazo» cuando el usuario excluyó el PESCADO pero no los mariscos
+    (chips distintos del formulario; lote 210: el marisco no es pescado), «» si no. Lo lee el revisor.
+    tooltip-anchor: P1-PLAN-LOTE-227-PESCADO-NO-ES-MARISCO"""
+    fd = form_data if isinstance(form_data, dict) else {}
+
+    def _decl(*keys):
+        out = []
+        for k in keys:
+            v = fd.get(k)
+            out.extend(v if isinstance(v, list) else ([v] if isinstance(v, str) and v.strip() else []))
+        return out
+    try:
+        import graph_orchestrator as go
+        mar = set(go._ALLERGEN_SYNONYMS["mariscos"]) - set(go._ALLERGEN_SYNONYMS["pescado"])
+        pes = set(go._ALLERGEN_SYNONYMS["pescado"]) - set(go._ALLERGEN_SYNONYMS["mariscos"])
+        alergia = go._expand_allergy_declarations(_decl("allergies", "otherAllergies"))
+        rechazo = go._expand_allergy_declarations(_decl("dislikes", "otherDislikes"))
+    except Exception:                                                          # noqa: BLE001
+        return ""
+    if (alergia | rechazo) & mar:
+        return ""
+    if alergia & pes:
+        return "alergia"
+    if rechazo & pes:
+        return "rechazo"
+    return ""
+
+
+def notas_para_el_revisor(form_data) -> tuple:
+    """[P1-PLAN-LOTE-227 · fuera del grafo en P1-PLAN-LOTE-240] (nota de mariscos, nota de pescado) que el revisor lee
+    junto a las alergias y a los rechazos. Cadena vacía cuando no aplica."""
+    mariscos = ""
+    if _solo_mariscos(form_data):
+        mariscos = ("\nAclaración de la alergia a mariscos: son crustáceos y moluscos (camarón, langosta, cangrejo, "
+                    "pulpo, calamar, mejillón, lambí). El pescado de aleta (tilapia, mero, atún, sardina, salmón…) NO "
+                    "es un marisco, y este usuario NO marcó la alergia a pescado, que tiene su propia opción en el "
+                    "formulario: el pescado está PERMITIDO. No lo rechaces ni pidas aclararlo por esta alergia.")
+    pescado = ""
+    _pn = _pescado_sin_mariscos(form_data)
+    if _pn:
+        pescado = (f"\nAclaración del {_pn} al pescado: excluye el pescado de aleta (tilapia, mero, atún, sardina, "
+                   "salmón, bacalao…). Los MARISCOS (camarón, langosta, cangrejo, pulpo, calamar, lambí) NO son pescado "
+                   "y este usuario NO los marcó, que tienen su propia opción en el formulario: están PERMITIDOS. No los "
+                   f"rechaces por este {_pn}.")
+    return mariscos, pescado
+
+
 def _pescado_rx():
     import graph_orchestrator as go
     terminos = sorted(set(go._ALLERGEN_SYNONYMS["pescado"]) - set(go._ALLERGEN_SYNONYMS["mariscos"]), key=len, reverse=True)
@@ -204,6 +252,19 @@ def _nota_mariscos_no_pescado(plan: dict, form_data) -> int:
     return tocadas
 
 
+def _nota_embarazo_recalculada(plan: dict, form_data) -> int:
+    """[P1-PLAN-LOTE-227 · 2026-09-25] La nota combinada de embarazo/lactancia se calcula en la capa clínica, y DESPUÉS
+    el tope de pescado del embarazo (lote 187) cambia el pescado por pollo/pavo/res: la nota seguía diciendo «cocina el
+    pescado y los mariscos» y no decía nada de la carne. El revisor lo leyó así y rechazó CRÍTICO «el pollo no indica
+    74 °C; la nota solo menciona pescado y mariscos» (2 de 3 corridas reales de embarazo, 25-sep). La nota se recalcula
+    donde se etiqueta: al entrar al revisor y en el escudo, después del tope. tooltip-anchor: P1-PLAN-LOTE-227-NOTA-EMBARAZO"""
+    try:
+        import graph_orchestrator as go
+        return int(go._apply_pregnancy_food_safety_annotations(plan, form_data) or 0)
+    except Exception:                                                          # noqa: BLE001
+        return 0
+
+
 def etiquetar(plan: dict, form_data) -> int:
     """Devuelve cuántas comidas tocó (sumando condiciones). Muta `plan`."""
     if not (enabled() and isinstance(plan, dict)):
@@ -211,6 +272,7 @@ def etiquetar(plan: dict, form_data) -> int:
     n = _nota_ceviche_de_carne(plan)                        # [P1-PLAN-LOTE-180] para todos, antes de las condiciones
     n += _nota_habichuelas_secas(plan)                      # [P1-PLAN-LOTE-182] ídem
     n += _nota_mariscos_no_pescado(plan, form_data)        # [P1-PLAN-LOTE-210] mariscos ≠ pescado, escrito
+    n += _nota_embarazo_recalculada(plan, form_data)       # [P1-PLAN-LOTE-227] la nota describe el plato FINAL
     reglas = _reglas(form_data)
     if not reglas:
         return n

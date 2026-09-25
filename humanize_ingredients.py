@@ -530,6 +530,19 @@ def humanize_ingredient(raw_ingredient: str) -> str:
                     best_match_key = key
                     break
 
+    # [P1-PLAN-LOTE-227 · 2026-09-25] «119 g de queso cottage» salía «4¾ lonjas/pedazos de queso»: la clave genérica
+    # «queso» se comía el apellido, y el cottage (que va a cucharadas) se cortaba en lonjas. El revisor lo leía así y
+    # rechazaba «el nombre anuncia queso cottage y la lista no lo trae» (7 veces en la batería del 25-sep). El queso
+    # untable/de cuchara se queda en gramos; el resto conserva su apellido. tooltip-anchor: P1-PLAN-LOTE-227-QUESO-APELLIDO
+    _q_apellido = ""
+    if best_match_key == "queso":
+        _resto_q = re.sub(r"^\s*queso\b", "", name_clean).strip()
+        if _resto_q:
+            if re.search(r"\b(?:cottage|ricotta|requeson|crema|untable)\b", _resto_q):
+                best_match_key = None
+            else:
+                _q_apellido = re.sub(r"^\s*queso\b", "", name.strip(), flags=re.IGNORECASE).strip()
+
     if best_match_key:
         measure = DOMINICAN_HOUSEHOLD_MEASURES[best_match_key]
         weight_per_unit = measure["weight"]
@@ -547,6 +560,8 @@ def humanize_ingredient(raw_ingredient: str) -> str:
             units_mostradas = round(units * 4) / 4.0
             fraction_str = number_to_fraction_str(units)
             label = measure["singular"] if units_mostradas <= 1.0 else measure["plural"]
+            if _q_apellido and label.endswith("de queso"):
+                label = f"{label} {_q_apellido}"          # [P1-PLAN-LOTE-227] «… de queso mozzarella»
             
             # Reemplazar la base del nombre pero preservar adjetivos
             # Ej: Si name es "plátano verde hervido", y label es "plátano verde",

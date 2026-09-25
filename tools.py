@@ -1887,6 +1887,19 @@ def execute_modify_single_meal(user_id: str, day_number: int, meal_type: str, ch
         except Exception as _clin_load_e:
             logger.warning(f"⚠️ [P0-UPDATE-CLINICAL-GUARD] no se procesó perfil clínico (no bloquea): {_clin_load_e}")
 
+    # [P1-PLAN-LOTE-234 · 2026-09-25] El tiempo de cocina del perfil («Nada» = 10 min): la modificación del coach no
+    # lo recibía y reescribía el plato sin tope. El cambio pedido EXPLÍCITAMENTE («hazlo al horno») sigue ganando.
+    # tooltip-anchor: P1-PLAN-LOTE-234-TIEMPO-EN-EL-COACH
+    try:
+        _ct_rule_cm = __import__("horizon").cooking_time_rule(
+            {"cookingTime": _hp.get("cookingTime") or (form_data or {}).get("cookingTime")})
+        if _ct_rule_cm:
+            context_extras = (
+                "\n⏱️ TIEMPO DE COCINA DEL USUARIO (obligatorio salvo que el cambio pida EXPLÍCITAMENTE otra técnica): "
+                + _ct_rule_cm + "\n" + context_extras)
+    except Exception as _ct_cm_e:
+        logger.warning(f"[P1-PLAN-LOTE-234] tiempo de cocina no inyectado (no bloquea): {_ct_cm_e}")
+
     # [P2-AUDIT-V5-BATCH · 2026-07-02] (GAP-07) Presupuesto en chat-modify con expansión: la única
     # superficie de update que realmente "va de compras" no llevaba señal de presupuesto — la tabla
     # de precios (arriba) solo se usaba "si el usuario pide opciones económicas". Paridad con
@@ -1953,8 +1966,11 @@ def execute_modify_single_meal(user_id: str, day_number: int, meal_type: str, ch
     # tooltip-anchor: P2-CHATMODIFY-DISLIKES
     if os.environ.get("MEALFIT_UPDATE_HYDRATE_DISLIKES", "true").strip().lower() in ("1", "true", "yes", "on"):
         try:
+            # [P1-PLAN-LOTE-234] + lo tecleado en «Otro alimento que no te gusta» (el perfil guardado no lo une)
+            from graph_orchestrator import profile_with_free_text as _pwft_dl
             _cm_dislikes = list({
-                *[str(d).strip() for d in (_hp.get("dislikes") or []) if str(d).strip()],
+                *[str(d).strip() for d in (_pwft_dl(_hp).get("dislikes") or []) if str(d).strip()
+                  and str(d).strip().lower() not in ("ninguno", "ninguna", "none")],
                 *[str(d).strip() for d in ((form_data or {}).get("dislikes") or []) if str(d).strip()],
             })
             if _cm_dislikes:

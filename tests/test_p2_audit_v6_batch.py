@@ -124,7 +124,8 @@ def test_p2b_called_from_backstop_seam():
 # ════════════════════════════════════════════════════════════════════════════
 def test_p2c_contract_advisory_in_finalizer_and_boundary():
     fin = _GO.index("def finalize_single_meal_recipe_coherence")
-    assert '_recipe_contract_advisory"] = _rc_issues[:4]' in _GO[fin:fin + 22000]
+    # [reapuntado P1-PLAN-LOTE-239 · 2026-09-25] la ventana de 22000 se quedó corta por 4 líneas: cuerpo completo.
+    assert fin > 0 and '_recipe_contract_advisory"] = _rc_issues[:4]' in _cuerpo_funcion(_GO, "finalize_single_meal_recipe_coherence")
     # [reapuntado 2026-07-28] 2º bump de esta MISMA ventana (17000→26000 el 07-06; hoy el
     # callsite está a ~30.2k). Se acabaron los números mágicos: cuerpo completo de la función.
     assert "contract_advisory=" in _cuerpo_funcion(_GO, "finalize_plan_data_coherence")
