@@ -53,6 +53,27 @@ _ROTACION_VEGETAL = ("garbanzos cocidos", "lentejas cocidas")
 # [P1-PLAN-LOTE-216] cómo se reconoce en una línea que el día YA lleva ese duradero
 _CLAVE_ROTACION = {"atun en agua": "atun", "sardinas en lata": "sardina", "garbanzos cocidos": "garbanzo",
                    "lentejas cocidas": "lenteja"}
+# [P1-PLAN-LOTE-286 · 2026-09-25] Con «Nada» de tiempo la legumbre duradera se compra LISTA. «200 g de garbanzos
+# cocidos» dejaba en la lista del dueño (30 días, sin congelador, «Nada») 1 funda de garbanzos SECOS: remojo de una noche
+# y una hora de olla para quien declaró 5 minutos. La línea dice «de lata, escurridos» y la lista (lote 285) compra la
+# lata; la identidad del duradero (`sub`, la rueda, `evitar`) no cambia. tooltip-anchor: P1-PLAN-LOTE-286-DURADERO-LISTO
+_LISTO_SIN_TIEMPO = {"garbanzos cocidos": "garbanzos de lata, escurridos",
+                     "lentejas cocidas": "lentejas de lata, escurridas"}
+
+
+def sin_tiempo(contexto=None, plan_data=None) -> bool:
+    """¿El usuario declaró «Nada» de tiempo? El formulario (`contexto`), el sello del plan (`_cooking_time`, lote 220)
+    o, en una corrida sin sellar, el formulario que fijó `nevera_exigida`."""
+    try:
+        for fuente in (contexto, plan_data):
+            if isinstance(fuente, dict):
+                v = fuente.get("cookingTime") if "cookingTime" in fuente else fuente.get("_cooking_time")
+                if v is not None:
+                    return str(v).strip().lower() == "none"
+        fd = sys.modules["nevera_exigida"]._FD.get() if "nevera_exigida" in sys.modules else None
+        return isinstance(fd, dict) and str(fd.get("cookingTime") or "").strip().lower() == "none"
+    except Exception:
+        return False
 
 
 def duraderos_del_dia(lineas) -> set:
@@ -187,14 +208,21 @@ def cantidad_de(texto: str) -> str:
 
 def _aguanta(texto: str, dia_abs: int, req: dict) -> bool:
     low = _sa(texto)
-    if any(h in low for h in _DURADERO_EN_TEXTO):
+    pistas = [h for h in _DURADERO_EN_TEXTO if h in low]
+    # [P1-PLAN-LOTE-289 · 2026-09-25] «congelado» es despensa SOLO con congelador, y «previamente congelado» /
+    # «descongelado» ya no lo es: «250 g de salmón previamente congelado» del plan del dueño (sin congelador) pasaba por
+    # duradero y la proyección lo copiaba en los 30 días — 2,5 kg de salmón en la lista del mes.
+    # tooltip-anchor: P1-PLAN-LOTE-289-CONGELADO-SIN-CONGELADOR
+    if pistas and (any(h != "congelad" for h in pistas) or (
+            bool((req or {}).get("allow_frozen")) and not re.search(r"previamente congelad|descongelad", low))):
         return True
     from pantry_durability import ingredient_issue_beyond_horizon
     return not ingredient_issue_beyond_horizon(str(texto), int(dia_abs), bool((req or {}).get("allow_frozen")))
 
 
 def sustituir_linea(texto, dia_abs: int, req: Optional[dict], *, vegetal: bool = False, vegano: bool = False,
-                    alergias=None, dieta=None, contexto=None, semilla: Optional[int] = None, evitar=()):
+                    alergias=None, dieta=None, contexto=None, semilla: Optional[int] = None, evitar=(),
+                    listo: Optional[bool] = None):
     """(línea nueva, sustituto, token que casó) si `texto` no aguanta hasta el día `dia_abs` (0-based) de la compra
     única y tiene un duradero seguro; None si aguanta, no tiene equivalente o ninguno es seguro.
     tooltip-anchor: P1-PLAN-LOTE-214-SUSTITUIR-LINEA"""
@@ -222,7 +250,9 @@ def sustituir_linea(texto, dia_abs: int, req: Optional[dict], *, vegetal: bool =
                            dieta=dieta, contexto=contexto, evitar=evitar)
     if not sub:
         return None
-    nueva = f"{cantidad_de(text)}{sub}"
+    if listo is None:
+        listo = sin_tiempo(contexto)
+    nueva = f"{cantidad_de(text)}{_LISTO_SIN_TIEMPO.get(sub, sub) if listo else sub}"  # [P1-PLAN-LOTE-286]
     if nueva == text:
         return None
     return nueva, sub, hit
@@ -310,10 +340,11 @@ def dias_de_la_compra(plan_data, reales: list) -> list:
         if not ciclo or n == 0 or n >= ciclo:
             return reales
         eff, _off = _politica(plan_data)
-        clave = _clave(reales, ciclo, eff)
+        listo = sin_tiempo(None, plan_data)                      # [P1-PLAN-LOTE-286]
+        clave = _clave(reales, ciclo, eff) + ("|listo" if listo else "")
         proyectados = _MEMO.get(clave)
         if proyectados is None:
-            proyectados = _proyectar(reales, ciclo, eff)
+            proyectados = _proyectar(reales, ciclo, eff, listo=listo)
             _MEMO[clave] = proyectados
             while len(_MEMO) > _MEMO_MAX:
                 _MEMO.popitem(last=False)
@@ -325,7 +356,7 @@ def dias_de_la_compra(plan_data, reales: list) -> list:
         return [d for d in (reales or []) if isinstance(d, dict)]
 
 
-def _proyectar(reales: list, ciclo: int, eff: dict) -> list:
+def _proyectar(reales: list, ciclo: int, eff: dict, listo: bool = False) -> list:
     from pantry_durability import single_trip_requirements
     try:
         from constants import canonicalize_diet_type
@@ -351,7 +382,7 @@ def _proyectar(reales: list, ciclo: int, eff: dict) -> list:
             for t in _lineas(m):
                 if req:
                     r = sustituir_linea(t, j, req, vegetal=vegetal, vegano=vegano, alergias=alergias,
-                                        dieta=dieta, semilla=rueda, evitar=presentes)
+                                        dieta=dieta, semilla=rueda, evitar=presentes, listo=listo)
                     if r:
                         t = r[0]
                         cambios += 1

@@ -836,7 +836,13 @@ class IngredientNutritionDB:
         """Gramos comestibles de un ingrediente-string del plan ("0.5 taza de
         avena (50g)"). Prioriza el hint "(NNg)" del LLM (su propia conversión, lo
         más confiable); si es "(NNml)" usa densidad volumétrica; sin hint, parsea
-        cantidad+unidad y usa `to_grams`. None si no se resuelve."""
+        cantidad+unidad y usa `to_grams`. None si no se resuelve.
+        [P1-PLAN-LOTE-284 · 2026-09-25] En la BASE de la fila: un grano o una legumbre COCIDO (o de lata) contra su fila
+        seca pasa a sus gramos secos — «¾ taza de arroz blanco cocido» contaba 491 kcal (ver cocido_en_catalogo)."""
+        return __import__("cocido_en_catalogo").en_base_de_la_fila(s, self._grams_literales(s), self)
+
+    def _grams_literales(self, s: str) -> Optional[float]:
+        """Los gramos que la línea DICE (hint, cantidad+unidad), sin mirar el estado del alimento."""
         s = str(s)
         mg = _GRAM_ONLY_HINT_RE.search(s)
         if mg:  # peso explícito en g gana siempre (incluso si hay un hint en ml en el mismo paréntesis)
@@ -943,6 +949,8 @@ class IngredientNutritionDB:
         grams = self.to_grams(qty, unit, info)
         if grams is None:
             return None
+        # [P1-PLAN-LOTE-284] el solver llega por aquí: la misma base de la fila que el resolvedor de strings
+        grams = __import__("cocido_en_catalogo").en_base_de_la_fila(f"{qty} {unit} de {raw_name}", grams, self)
         f = grams / 100.0
         return {
             "name": info.name,

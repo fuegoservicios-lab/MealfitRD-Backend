@@ -58,10 +58,12 @@ def test_surplus_goal_vetoed():
 
 
 def test_lose_fat_not_re_capped():
-    # ya en déficit (target < techo) → el techo NUNCA sube kcal ni re-capea
+    # [P1-PLAN-LOTE-288 · 2026-09-25] quien PIERDE grasa tiene el techo de su propia regla bariátrica (1.700): un
+    # déficit por encima se capa a 1.700; el techo NUNCA sube kcal (la regla (d) sigue en pie).
     r = nc.get_nutrition_targets(_baria({"mainGoal": "lose_fat"}))
-    assert r.get("bariatric_kcal_ceiling_applied") is None
-    assert r["target_calories"] < 2000
+    assert r["target_calories"] <= 1700
+    _ap = r.get("bariatric_kcal_ceiling_applied")
+    assert _ap is None or _ap["pre_ceiling_calories"] > _ap["ceiling_to"]
 
 
 def test_stable_thin_bariatric_not_over_restricted():

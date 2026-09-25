@@ -1668,19 +1668,21 @@ def get_nutrition_targets(form_data: dict) -> dict:
             _is_baria_ceiling = any(t in _blob_ct for t in _BARIA_CT)
         except Exception:
             _is_baria_ceiling = False
-        if _is_baria_ceiling and target_calories > BARIATRIC_KCAL_CEILING_KCAL:
+        # [P1-PLAN-LOTE-288] quien PIERDE grasa: el techo de su propia regla (1.700); mantenimiento conserva el general
+        _techo_b = __import__("bariatrico_meta").techo(goal, BARIATRIC_KCAL_CEILING_KCAL)
+        if _is_baria_ceiling and target_calories > _techo_b:
             _pre_ceiling = target_calories
-            target_calories = BARIATRIC_KCAL_CEILING_KCAL
+            target_calories = _techo_b
             _bariatric_kcal_ceiling_applied = {
                 "applied": True,
                 "pre_ceiling_calories": _pre_ceiling,
-                "ceiling_to": BARIATRIC_KCAL_CEILING_KCAL,
+                "ceiling_to": _techo_b,
                 "note": ("🏥 Post-cirugía bariátrica: tu mantenimiento teórico (TDEE) es " + str(_pre_ceiling)
                          + " kcal, pero la capacidad del pouch hace inalcanzable ese volumen de comida. El objetivo del "
-                         "plan se ajusta a " + str(BARIATRIC_KCAL_CEILING_KCAL) + " kcal/día (ingesta realista). Si ya "
+                         "plan se ajusta a " + str(_techo_b) + " kcal/día (ingesta realista). Si ya "
                          "estás en tu peso meta y estable, comenta con tu equipo bariátrico si necesitas más calorías."),
             }
-            logger.info(f"🔻 [P1-BARIATRIC-KCAL-CEILING] target {_pre_ceiling} → {BARIATRIC_KCAL_CEILING_KCAL} kcal "
+            logger.info(f"🔻 [P1-BARIATRIC-KCAL-CEILING] target {_pre_ceiling} → {_techo_b} kcal "
                         f"(pouch realista; alinea el denominador del band con la realidad fisiológica).")
 
     # [P1-GOAL-ETA · 2026-07-03] Plazo estimado hasta la meta — corre DESPUÉS de
@@ -1772,18 +1774,12 @@ def get_nutrition_targets(form_data: dict) -> dict:
         _is_baria = False
     if _is_baria:
         _baria_cap = _nc_env_float("MEALFIT_BARIATRIC_PROTEIN_MAX_G", 80.0)
-        for _mac in (macros, original_macros):
-            try:
-                _p = float(_mac.get("protein_g") or 0)
-                if _p > _baria_cap:
-                    _freed = (_p - _baria_cap) * 4.0
-                    _mac["protein_g"] = round(_baria_cap)
-                    _mac["protein_str"] = f"{round(_baria_cap)}g"
-                    _new_fats = round(float(_mac.get("fats_g") or 0) + _freed / 9.0)
-                    _mac["fats_g"] = _new_fats
-                    _mac["fats_str"] = f"{_new_fats}g"
-            except Exception:
-                pass
+        # [P1-PLAN-LOTE-288 · 2026-09-25] quien pierde grasa: lo liberado va a grasa solo hasta el 35 % de la meta; lo que
+        # sobra no se reasigna (no cabe en el pouch) y la meta baja con él. Mantenimiento: todo a grasa, como antes.
+        _bm_288 = __import__("bariatrico_meta")
+        target_calories = int(round(target_calories - _bm_288.capar_proteina(macros, _baria_cap, target_calories, goal)))
+        original_target_calories = int(round(original_target_calories - _bm_288.capar_proteina(
+            original_macros, _baria_cap, original_target_calories, goal)))
         logger.info(f"🔻 [P1-BARIATRIC-PROTEIN-TARGET] proteína bariátrica capeada a ≤{round(_baria_cap)}g/día "
                     f"(volumen del pouch); kcal liberadas → grasa.")
 

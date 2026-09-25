@@ -591,6 +591,20 @@ _PROCESS_START_ISO = datetime.now(timezone.utc).isoformat()
 # [P1-PLAN-LOTE-292 · 2026-09-25] (backend + frontend) formulario: «¿Tomas algún suplemento?» (también en contador; a
 # la Alacena por POST /api/inventory/supplements) y «¿te recomendamos?»; un solo lector (`normalizar_suplementos`) en
 # prompt, suplementos por día, orquestador, coach y validación; la IA nunca recomienda quemadores/pre-entrenos/BCAA.
+# [P1-PLAN-LOTE-282 · 2026-09-25] (backend) los envases de una legumbre en la base del catálogo (SECO): la lista contaba
+# una lata (425 g con líquido, ~90 g secos) como 425 g secos y la funda «800 g seco» como 2000 (`envase_legumbre`).
+# [P1-PLAN-LOTE-283 · 2026-09-25] (backend) la guía de compra mensual/quincenal según tiempo y congelador (`guia_compra`);
+# con «Nada» de tiempo lo «ya cocido» solo existe si se compra así (legumbres en lata), nunca «pollo ya cocido».
+# [P1-PLAN-LOTE-284 · 2026-09-25] (backend) el resolvedor de macros pasa lo COCIDO a la base de la fila seca: «¾ taza de
+# arroz blanco cocido» contaba 491 kcal (reales ~150); 13 % de las líneas de granos/legumbres (`cocido_en_catalogo`).
+# [P1-PLAN-LOTE-285 · 2026-09-25] (backend) la receta «de lata/escurrida» → la lista compra la forma lista con su 0,35×.
+# [P1-PLAN-LOTE-286 · 2026-09-25] (backend) con «Nada», la rueda duradera de la compra única dice «de lata, escurridos».
+# [P1-PLAN-LOTE-287 · 2026-09-25] (backend) el aviso de presupuesto sin sustituciones repetidas, sin «Filete» en
+# mayúscula a media frase ni «maní fileteado» (`presupuesto_texto`); el god-file baja 13 líneas.
+# [P1-PLAN-LOTE-288 · 2026-09-25] (backend) la bariátrica que PIERDE grasa: techo 1.700 (su regla) y grasa ≤ 35 % de la
+# meta final (antes 2.000 kcal y 42 %); decisión con la delegación del dueño, knobs `MEALFIT_BARIATRIC_LOSS_*`.
+# [P1-PLAN-LOTE-289 · 2026-09-25] (backend) sin congelador lo «congelado» no dura en la compra única y el súper no
+# resuelve un alimento a su forma procesada (el salmón del dueño salía «4 fundas de hamburguesas»).
 # [P1-PLAN-LOTE-300 · 2026-09-25] (backend + iOS) push nativa en iPhone directo a Apple (APNs HTTP/2 + JWT ES256 con la
 # clave .p8 del dueño, fuera del repo): `fcm_push.enviar_a_dispositivos` reparte android→FCM, ios→`apns_push`.
 _LAST_KNOWN_PFIX = "P1-PLAN-LOTE-300 · 2026-09-25"
