@@ -5027,6 +5027,13 @@ def compute_shopping_cost_summary(
             # 5 veces la funda de 3 lb de manzanas que dura el mes entero.
             _cycle_days = _CYCLE_DAYS_BY_DURATION.get(duration, 7)
             _perish_cycle, _ahorro = _perishable_cycle_cost(items, _cycle_days, weeks)
+            # [P1-PLAN-LOTE-281 · 2026-09-25] Compra única (sello `_compra_unica`, lotes 214-216): la lista YA es el ciclo
+            # entero —lo fresco para los días que aguanta y la despensa para el resto—, así que no hay perecederos que
+            # recomprar cada semana. Multiplicarlos otra vez inflaba el costo ×2,3-2,6 (plan de 30 días del dueño: compra
+            # de RD$9.668 → «RD$25.149, excedido» contra RD$14.332) y el ajustador de presupuesto cambiaba comida por un
+            # exceso que no existía. tooltip-anchor: P1-PLAN-LOTE-281-COMPRA-UNICA-COSTO
+            if __import__("compra_unica").ciclo_de_lista(items):
+                _perish_cycle, _ahorro, trips = sums["perishable"], 0.0, 1
             cycle_total = sums["stable"] + _perish_cycle
             by_duration[duration] = {
                 "trip_total_rd": round(sums["total"], 2),

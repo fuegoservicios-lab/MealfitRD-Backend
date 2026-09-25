@@ -579,7 +579,9 @@ _PROCESS_START_ISO = datetime.now(timezone.utc).isoformat()
 # [P1-PLAN-LOTE-280 · 2026-09-25] (backend + frontend) push NATIVA con Firebase Cloud Messaging: el teléfono registra su
 # token (`/api/notifications/device-token`, tabla `device_push_tokens`) y `send_push_notification` envía también por FCM
 # (`fcm_push.py`); los recordatorios de comida y agua van `nativa=False` (en la app ya son avisos locales).
-_LAST_KNOWN_PFIX = "P1-PLAN-LOTE-280 · 2026-09-25"
+# [P1-PLAN-LOTE-281 · 2026-09-25] en compra única el costo del ciclo ES la compra: el presupuesto del dueño (30 días,
+# compra de RD$9.668) salía «RD$25.149, excedido» porque se re-compraban los perecederos cada semana.
+_LAST_KNOWN_PFIX = "P1-PLAN-LOTE-281 · 2026-09-25"
 
 # [P1-SENTRY-SAMPLE-COST · 2026-05-12] Sentry sampling driven from env vars
 # con default seguro 0.1 (10%). Pre-fix tenía `traces_sample_rate=1.0` y
