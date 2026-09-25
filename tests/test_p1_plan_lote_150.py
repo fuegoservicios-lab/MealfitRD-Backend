@@ -36,7 +36,7 @@ def test_el_aviso_se_ADELANTA_y_la_tasa_de_respuesta_ya_no_mueve_la_hora():
 def test_el_minuto_sale_de_la_hora_en_LAS_DOS_vias():
     """El coach truncaba («6:49») y el teléfono redondeaba («6:50»): el mismo aviso con dos horas distintas.
 
-    [P1-PLAN-LOTE-220] Ya no son dos expresiones iguales sino UNA función (`minuto_del_dia`) que llaman las dos vías."""
+    [P1-PLAN-LOTE-223] Ya no son dos expresiones iguales sino UNA función (`minuto_del_dia`) que llaman las dos vías."""
     import proactive_agent as pa
     assert pa.minuto_del_dia(6.8249) == 6 * 60 + 49 and pa.minuto_del_dia(6.8334) == 6 * 60 + 50, "redondea, no trunca"
     assert pa.minuto_del_dia(23.9999) == 0, "un 59,99 no acaba en «:60»: vuelve al reloj"

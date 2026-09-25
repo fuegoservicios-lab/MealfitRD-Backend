@@ -319,7 +319,7 @@ def test_el_glosario_tiene_el_termino_en_cada_idioma() -> None:
 
 
 def test_el_lexico_de_alimentos_cubre_el_ssot() -> None:
-    """[P1-PLAN-LOTE-222 · 2026-09-24] Espejo #19: los nombres de alimento en cada idioma traducido."""
+    """[P1-PLAN-LOTE-225 · 2026-09-24] Espejo #19: los nombres de alimento en cada idioma traducido."""
     src = _leer(_BACKEND / "food_names_i18n.py")
     m = re.search(r"^LOCALES\s*=\s*\(([^)]+)\)", src, re.M)
     assert m, f"no encontré `LOCALES = (...)` en food_names_i18n.py [{_MARKER}]"

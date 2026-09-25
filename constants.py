@@ -4330,7 +4330,7 @@ def _get_fast_filtered_catalogs(allergies: tuple, dislikes: tuple, diet: str, co
         filtered_fruits = DOMINICAN_FRUITS.copy()
 
     restrictions = list(allergies) + list(dislikes)
-    # [P1-PLAN-LOTE-222 · 2026-09-24] Una alergia o un disgusto escrito en otro idioma («Strawberry», «Céleri») no casaba
+    # [P1-PLAN-LOTE-225 · 2026-09-24] Una alergia o un disgusto escrito en otro idioma («Strawberry», «Céleri») no casaba
     # con ningún nombre del catálogo, que está en español, y el alimento seguía en los pools. Se añade su nombre canónico
     # (`food_names_i18n`, el mismo léxico que usa el backstop de alergias); lo escrito se queda, por si nombra otra cosa.
     try:

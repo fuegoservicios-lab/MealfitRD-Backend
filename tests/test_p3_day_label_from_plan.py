@@ -51,10 +51,10 @@ def _load_frontend_sibling_sources(frontend_repo_path):
 
 
 def _ancla_day_name() -> str:
-    """[P1-PLAN-LOTE-222 · 2026-09-24] El backend escribe `day_name` en español («Lunes»): el tab lo sigue leyendo, pero
-    lo pinta con `t()` —las mismas claves del cálculo de respaldo—. Hasta que el lote 222 llegue al `main` del
+    """[P1-PLAN-LOTE-225 · 2026-09-24] El backend escribe `day_name` en español («Lunes»): el tab lo sigue leyendo, pero
+    lo pinta con `t()` —las mismas claves del cálculo de respaldo—. Hasta que el lote 225 llegue al `main` del
     frontend (el que clona el CI del backend), vale la forma anterior."""
-    if (_BACKEND_ROOT.parent / "frontend" / "src" / "__tests__" / "lote222.test.jsx").exists():
+    if (_BACKEND_ROOT.parent / "frontend" / "src" / "__tests__" / "lote225.test.jsx").exists():
         return "if (day?.day_name) return t(day.day_name)"
     return "if (day?.day_name) return day.day_name"
 

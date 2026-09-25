@@ -109,10 +109,10 @@ def test_metas_de_micros_aunque_falten_campos_del_contador():
 
 def test_fototeca_directa_en_la_app_nativa():
     sm = _front("src/components/dashboard/ScanMealModal.jsx")
-    # [P1-PLAN-LOTE-221] el escáner de comida elige VARIAS fotos (un plato por foto); la fototeca sigue siendo directa
-    if (_FRONT / "src" / "__tests__" / "lote221.test.jsx").exists():
+    # [P1-PLAN-LOTE-224] el escáner de comida elige VARIAS fotos (un plato por foto); la fototeca sigue siendo directa
+    if (_FRONT / "src" / "__tests__" / "lote224.test.jsx").exists():
         assert "import { chooseNativeGalleryImages, isNativePickerCancellation } from '../../utils/nativeChatImagePicker';" in sm
-    else:   # el `main` del frontend que clona el CI del backend, hasta que llegue el lote 221
+    else:   # el `main` del frontend que clona el CI del backend, hasta que llegue el lote 224
         assert "import { chooseNativeGalleryImage, isNativePickerCancellation } from '../../utils/nativeChatImagePicker';" in sm
     assert "if (!isNativeApp()) { galleryInputRef.current?.click(); return; }" in sm
     assert "onClick={openGallery}" in sm

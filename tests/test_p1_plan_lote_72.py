@@ -150,7 +150,7 @@ def test_manana_el_desayuno_se_recuerda_a_su_hora_y_no_a_las_1430(dia):
 
 def test_un_registro_en_su_franja_si_personaliza_la_hora(dia, monkeypatch):
     # Desayuna a las 7:05 de verdad: su aviso es a las 6:50, no el de las 8:45 de quien no tiene historial.
-    # [P1-PLAN-LOTE-220] Solo en el camino por historial (knob); por defecto la hora es la elegida o la normal.
+    # [P1-PLAN-LOTE-223] Solo en el camino por historial (knob); por defecto la hora es la elegida o la normal.
     monkeypatch.setenv("MEALFIT_PROACTIVE_NUDGE_FROM_HISTORY", "1")
     dia.update(ahora=_utc(17, 12), registros={"Desayuno": ["07:00", "07:10"]}, comidas=[], avisos_hoy=[], mensajes=[])
     dia["correr"]()
@@ -160,7 +160,7 @@ def test_un_registro_en_su_franja_si_personaliza_la_hora(dia, monkeypatch):
 
 def test_dos_comidas_en_la_misma_hora_se_avisa_la_que_falta(dia, monkeypatch):
     # Desayuno ~11:45 y almuerzo ~12:15, ambos reales: los dos avisos caen en la hora 13.
-    # [P1-PLAN-LOTE-220] El escenario (horas sacadas de lo registrado) solo existe con el knob del historial.
+    # [P1-PLAN-LOTE-223] El escenario (horas sacadas de lo registrado) solo existe con el knob del historial.
     monkeypatch.setenv("MEALFIT_PROACTIVE_NUDGE_FROM_HISTORY", "1")
     dia.update(ahora=_utc(16, 17), registros={"Desayuno": ["11:40", "11:50"], "Almuerzo": ["12:10", "12:20"]},
                avisos_hoy=[], mensajes=[])
@@ -170,7 +170,7 @@ def test_dos_comidas_en_la_misma_hora_se_avisa_la_que_falta(dia, monkeypatch):
 
 
 def test_si_faltan_las_dos_se_avisa_la_mas_reciente(dia, monkeypatch):
-    monkeypatch.setenv("MEALFIT_PROACTIVE_NUDGE_FROM_HISTORY", "1")   # [P1-PLAN-LOTE-220] ver el test de arriba
+    monkeypatch.setenv("MEALFIT_PROACTIVE_NUDGE_FROM_HISTORY", "1")   # [P1-PLAN-LOTE-223] ver el test de arriba
     dia.update(ahora=_utc(16, 17), registros={"Desayuno": ["11:40", "11:50"], "Almuerzo": ["12:10", "12:20"]},
                comidas=[], avisos_hoy=[], mensajes=[])
     dia["correr"]()

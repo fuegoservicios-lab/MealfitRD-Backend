@@ -115,7 +115,7 @@ VERBO_DE_COMIDA = {
 HORAS_POR_DEFECTO_DE_COMIDA = {"Desayuno": 9.0, "Almuerzo": 13.0, "Merienda": 16.0, "Cena": 19.5}
 
 
-# [P1-PLAN-LOTE-220 · 2026-09-24] LA HORA DE CADA AVISO LA ELIGE LA PERSONA.
+# [P1-PLAN-LOTE-223 · 2026-09-24] LA HORA DE CADA AVISO LA ELIGE LA PERSONA.
 #
 # El dueño, a la 1:18 p. m.: «hoy nada más me llegó la notificación del desayuno… son la 1 de la tarde». Su almuerzo
 # estaba programado hacia las 2:15: la «hora habitual» salía de `consumed_at`, que es la hora del REGISTRO, y él anota
@@ -127,7 +127,7 @@ HORAS_POR_DEFECTO_DE_COMIDA = {"Desayuno": 9.0, "Almuerzo": 13.0, "Merienda": 16
 # Ahora cada comida tiene en Configuración su interruptor y su hora (`health_profile.avisos_por_comida`). Sin tocar
 # nada: las horas normales menos la antelación → 8:45, 12:45, 15:45 y 19:15. El cálculo por historial queda detrás de
 # `MEALFIT_PROACTIVE_NUDGE_FROM_HISTORY` (apagado), por si hubiera que volver a él sin desplegar; una hora elegida
-# gana siempre. tooltip-anchor: P1-PLAN-LOTE-220-HORA-ELEGIDA
+# gana siempre. tooltip-anchor: P1-PLAN-LOTE-223-HORA-ELEGIDA
 CLAVE_AVISOS_POR_COMIDA = "avisos_por_comida"
 # La clave de cada comida dentro de `avisos_por_comida` (la misma, en minúscula, que `meal_reminders` manda al teléfono).
 CLAVE_DE_COMIDA = {"Desayuno": "desayuno", "Almuerzo": "almuerzo", "Merienda": "merienda", "Cena": "cena"}
@@ -139,7 +139,7 @@ HORA_DEL_RESUMEN = 23
 
 def minuto_del_dia(hora: float) -> int:
     """La hora del aviso en minutos del día (0..1439), REDONDEANDO. [P1-PLAN-LOTE-150] El coach truncaba («6:49») y el
-    teléfono redondeaba («6:50»): el mismo aviso con dos horas. [P1-PLAN-LOTE-220] Una sola función para las dos vías
+    teléfono redondeaba («6:50»): el mismo aviso con dos horas. [P1-PLAN-LOTE-223] Una sola función para las dos vías
     (el cron y `meal_reminders`), en vez de dos expresiones que un test comparaba letra a letra."""
     return int(round(float(hora) * 60)) % (24 * 60)
 
@@ -412,7 +412,7 @@ def _ventana_de_respuesta_min() -> int:
     return _env_int("MEALFIT_PROACTIVE_RESPONSE_WINDOW_MIN", 180, validator=lambda v: 15 <= v <= 720)
 
 
-# [P1-PLAN-LOTE-220 · 2026-09-24] Cada cuántos minutos corre el cron (app.py lo registra con este mismo número).
+# [P1-PLAN-LOTE-223 · 2026-09-24] Cada cuántos minutos corre el cron (app.py lo registra con este mismo número).
 #
 # Corría a y media y escribía el mensaje del chat en el tick de la HORA del aviso, mientras el teléfono sonaba al
 # minuto exacto (lote 150). Con un aviso a las 2:15 el teléfono sonaba a las 2:15 y el coach escribía a las 2:30: al
@@ -922,13 +922,13 @@ def run_proactive_checks():
         final_tone_instruction = base_tone_instruction
         # [P1-PLAN-LOTE-72] Las comidas cuyo aviso toca en este tick, la más reciente primero.
         candidatas = []
-        # [P1-PLAN-LOTE-220] El perfil se lee UNA vez por usuario y tick: la rama de las comidas lo necesita antes
+        # [P1-PLAN-LOTE-223] El perfil se lee UNA vez por usuario y tick: la rama de las comidas lo necesita antes
         # (interruptor y hora de cada comida) y las puertas de más abajo reutilizan esa misma lectura.
         _perfil = None
 
         # Resumen del día siempre a las 11 PM
         if now_ast.hour == HORA_DEL_RESUMEN:
-            # [P1-PLAN-LOTE-220] Con el cron cada 15 min, la hora 23 tiene cuatro ticks: el resumen sale en el primero
+            # [P1-PLAN-LOTE-223] Con el cron cada 15 min, la hora 23 tiene cuatro ticks: el resumen sale en el primero
             # que pueda y no se repite (el anti-spam solo lo frenaba a quien tiene chat, no al suscriptor sin chat).
             _avisadas = _comidas_avisadas_hoy(user_id)
             if (_avisadas is None and now_ast.minute >= MINUTOS_ENTRE_TICKS) or (
@@ -957,11 +957,11 @@ def run_proactive_checks():
             try:
                 _perfil = get_user_profile(user_id)
             except Exception as e:
-                logger.warning(f"[P1-PLAN-LOTE-220] perfil de {user_id} ilegible ({e}); avisos a las horas normales.")
+                logger.warning(f"[P1-PLAN-LOTE-223] perfil de {user_id} ilegible ({e}); avisos a las horas normales.")
             _health = ((_perfil or {}).get("health_profile") or {}) if isinstance(_perfil, dict) else {}
 
             for _orden, (meal, def_hour) in enumerate(defaults.items()):
-                # [P1-PLAN-LOTE-220] El interruptor de ESTA comida (Configuración → Recordatorios de comida).
+                # [P1-PLAN-LOTE-223] El interruptor de ESTA comida (Configuración → Recordatorios de comida).
                 if not comida_con_aviso(_health, meal):
                     continue
                 # [P1-PLAN-LOTE-133] la cuenta vive en `hora_del_aviso`: el teléfono programa los mismos recordatorios
@@ -974,7 +974,7 @@ def run_proactive_checks():
                 # del almuerzo no salió. Ahora toca desde su hora y durante `_reintento_min` (sin cruzar la
                 # medianoche: el atraso se mide sin módulo), salvo que ya se haya enviado hoy; y se elige después,
                 # con lo registrado delante, la primera que falte.
-                # [P1-PLAN-LOTE-220] «Su hora» es el último tick ANTES de que suene el teléfono (ver
+                # [P1-PLAN-LOTE-223] «Su hora» es el último tick ANTES de que suene el teléfono (ver
                 # `MINUTOS_ENTRE_TICKS`): al tocar la notificación, el mensaje de esa comida ya está en el chat.
                 _desde_min = max(0, _aviso_min - MINUTOS_ENTRE_TICKS)
                 _atraso = _ahora_min - _desde_min
@@ -1042,7 +1042,7 @@ def run_proactive_checks():
             # La evaluación de send_push ya se hizo al inicio del bucle por la Mejora 3
             
             # Vemos perfil para checar scheduleType (turno nocturno)
-            # [P1-PLAN-LOTE-220] el que ya leyó la rama de las comidas; el Resumen del día lo lee aquí
+            # [P1-PLAN-LOTE-223] el que ya leyó la rama de las comidas; el Resumen del día lo lee aquí
             profile = _perfil if _perfil is not None else get_user_profile(user_id)
             if not profile:
                 logger.info(f"🚫 [CRON] Usuario {user_id}: sin perfil. Saltando.")

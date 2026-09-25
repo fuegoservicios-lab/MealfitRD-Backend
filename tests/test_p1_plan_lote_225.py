@@ -1,5 +1,5 @@
 # -*- coding: utf-8 -*-
-"""[P1-PLAN-LOTE-222 · 2026-09-24] El sistema de idiomas, al 100 % para producción.
+"""[P1-PLAN-LOTE-225 · 2026-09-24] El sistema de idiomas, al 100 % para producción.
 
 Un tester con la app en inglés mandó dos capturas: el escáner decía «What is it?: Un tazón de avena cocida con leche»
 y el paso de alergias sugería «Other (e.g. Maní, Fresa...)». El dueño: «el sistema de idiomas no está al 100 %, vamos
@@ -22,10 +22,10 @@ prueba en el backend:
      `traducir_plan_en_memoria` + `POST /api/plans/guest-display`.
   6. **Texto libre fuera del plan** (lo que el coach recuerda, los suplementos del día): `POST /api/i18n/textos`.
 
-Las pruebas de pantalla viven en `frontend/src/__tests__/lote222.test.jsx`; las anclas que miran el frontend se
+Las pruebas de pantalla viven en `frontend/src/__tests__/lote225.test.jsx`; las anclas que miran el frontend se
 saltan mientras el frontend de este checkout no traiga el lote (el CI del backend clona su `main`).
 
-Tooltip-anchor: P1-PLAN-LOTE-222
+Tooltip-anchor: P1-PLAN-LOTE-225
 """
 from __future__ import annotations
 
@@ -39,7 +39,7 @@ import pytest
 
 _BACKEND = Path(__file__).resolve().parents[1]
 _FRONT = _BACKEND.parent / "frontend"
-_LOTE_EN_EL_FRONTEND = "src/__tests__/lote222.test.jsx"
+_LOTE_EN_EL_FRONTEND = "src/__tests__/lote225.test.jsx"
 
 
 def _src(rel: str) -> str:
@@ -48,7 +48,7 @@ def _src(rel: str) -> str:
 
 def _front(rel: str) -> str:
     if not (_FRONT / _LOTE_EN_EL_FRONTEND).exists():
-        pytest.skip("el frontend de este checkout aún no trae el lote 222 (el CI del backend clona su `main`)")
+        pytest.skip("el frontend de este checkout aún no trae el lote 225 (el CI del backend clona su `main`)")
     return (_FRONT / rel).read_text(encoding="utf-8").replace("\r\n", "\n")
 
 
@@ -528,4 +528,4 @@ def test_el_endpoint_de_textos_no_cuesta_creditos():
 # ─────────────────────────────────────────────────────────────────────────────
 
 def test_marker_bumpeado():
-    assert re.search(r'_LAST_KNOWN_PFIX\s*=\s*"P1-PLAN-LOTE-222 · \d{4}-\d{2}-\d{2}"', _src("app.py"))
+    assert re.search(r'_LAST_KNOWN_PFIX\s*=\s*"P1-PLAN-LOTE-225 · \d{4}-\d{2}-\d{2}"', _src("app.py"))

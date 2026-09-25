@@ -1,4 +1,4 @@
-"""[P1-PLAN-LOTE-222 · 2026-09-24] Textos cortos que el motor escribe en español, traducidos PARA LEER.
+"""[P1-PLAN-LOTE-225 · 2026-09-24] Textos cortos que el motor escribe en español, traducidos PARA LEER.
 
 El escáner de comida nombra el plato y sus ingredientes en español dominicano, y así tiene que seguir: el nombre de
 cada ingrediente es el identificador con el que se descuenta la Nevera (`pantry_names_match`), y el backstop del
@@ -13,7 +13,7 @@ costar el registro.
 Los nombres de idioma salen de `prompts.chat_agent._COACH_LANGUAGE_NAMES` (espejo #8 de la doc de idiomas): una tabla
 más aquí sería un espejo nuevo que nadie recordaría al añadir el sexto idioma.
 
-tooltip-anchor: P1-PLAN-LOTE-222
+tooltip-anchor: P1-PLAN-LOTE-225
 """
 from __future__ import annotations
 
@@ -50,7 +50,7 @@ class _Traducciones(BaseModel):
     t: list[str] = Field(default_factory=list)
 
 
-# [P1-PLAN-LOTE-222] Segundo tipo: frases cortas que la app enseña al usuario y no son nombres (lo que el coach
+# [P1-PLAN-LOTE-225] Segundo tipo: frases cortas que la app enseña al usuario y no son nombres (lo que el coach
 # recuerda de él, el momento y el motivo de un suplemento). Mismo contrato de salida.
 _PROMPT_TEXTOS = (
     "Traduce al {idioma} cada texto de la lista que te paso: son frases cortas escritas en español dominicano que "
@@ -115,7 +115,7 @@ def _contexto(node: str, user_id: Optional[str]):
 def _validar(res, limpios: list, node: str, max_chars: int = _MAX_TEXTO) -> Optional[list]:
     traducidos = list(getattr(res, "t", None) or [])
     if len(traducidos) != len(limpios):
-        logger.warning(f"[P1-PLAN-LOTE-222] traducción descartada ({node}): {len(traducidos)} textos para {len(limpios)}")
+        logger.warning(f"[P1-PLAN-LOTE-225] traducción descartada ({node}): {len(traducidos)} textos para {len(limpios)}")
         return None
     out = []
     for original, trad in zip(limpios, traducidos):
@@ -140,12 +140,12 @@ async def traducir_para_mostrar(textos, locale, *, user_id: Optional[str] = None
         mensajes = _mensajes(idioma, limpios)
         reset = _contexto(node, user_id)
     except Exception as e:
-        logger.warning(f"[P1-PLAN-LOTE-222] traducción para mostrar no disponible: {e}")
+        logger.warning(f"[P1-PLAN-LOTE-225] traducción para mostrar no disponible: {e}")
         return None
     try:
         res = await asyncio.wait_for(llm.ainvoke(mensajes), timeout=timeout_s + 1)
     except Exception as e:
-        logger.warning(f"[P1-PLAN-LOTE-222] traducción para mostrar falló ({node}, {locale}): {type(e).__name__}: {e}")
+        logger.warning(f"[P1-PLAN-LOTE-225] traducción para mostrar falló ({node}, {locale}): {type(e).__name__}: {e}")
         return None
     finally:
         reset()
@@ -167,12 +167,12 @@ def traducir_para_mostrar_sync(textos, locale, *, user_id: Optional[str] = None,
         mensajes = _mensajes(idioma, limpios, tipo)
         reset = _contexto(node, user_id)
     except Exception as e:
-        logger.warning(f"[P1-PLAN-LOTE-222] traducción para mostrar no disponible: {e}")
+        logger.warning(f"[P1-PLAN-LOTE-225] traducción para mostrar no disponible: {e}")
         return None
     try:
         res = llm.invoke(mensajes)
     except Exception as e:
-        logger.warning(f"[P1-PLAN-LOTE-222] traducción para mostrar falló ({node}, {locale}): {type(e).__name__}: {e}")
+        logger.warning(f"[P1-PLAN-LOTE-225] traducción para mostrar falló ({node}, {locale}): {type(e).__name__}: {e}")
         return None
     finally:
         reset()

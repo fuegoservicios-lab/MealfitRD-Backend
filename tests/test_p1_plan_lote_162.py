@@ -64,7 +64,7 @@ def test_los_interruptores_de_avisos_guardan_solo_su_clave():
     assert "body: JSON.stringify({ health_profile: { [clave]: valor } })," in cuerpo
     assert "safeUpdateHealthProfile(" not in cuerpo
     sfs = _f("src/config/secureFormStorage.js")
-    # [P1-PLAN-LOTE-220] la lista creció con `avisos_por_comida` (interruptor y hora de cada recordatorio): lo que se
+    # [P1-PLAN-LOTE-223] la lista creció con `avisos_por_comida` (interruptor y hora de cada recordatorio): lo que se
     # vigila aquí —los dos interruptores no viajan en el formulario— no cambia.
     m = re.search(r"export const CLAVES_CON_CONTROL_PROPIO = Object\.freeze\(\[([^\]]*)\]\);", sfs)
     assert m, "CLAVES_CON_CONTROL_PROPIO desapareció de secureFormStorage.js"

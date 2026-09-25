@@ -1,5 +1,5 @@
 # -*- coding: utf-8 -*-
-"""[P1-PLAN-LOTE-220 · 2026-09-24] Los recordatorios de comida, a la hora que elige la persona.
+"""[P1-PLAN-LOTE-223 · 2026-09-24] Los recordatorios de comida, a la hora que elige la persona.
 
 El dueño, a la 1:18 p. m.: «hoy nada más me llegó la notificación del desayuno… son la 1 de la tarde y todavía tiene
 la notificación del desayuno». Dos defectos, uno sobre otro:
@@ -341,17 +341,17 @@ def test_el_knob_del_historial_esta_apagado_y_documentado():
     import proactive_agent as pa
     assert pa._avisos_desde_historial() is False
     doc = _src("docs/recordatorios_de_comida.md")
-    for trozo in ("P1-PLAN-LOTE-220", "MEALFIT_PROACTIVE_NUDGE_FROM_HISTORY", "avisos_por_comida"):
+    for trozo in ("P1-PLAN-LOTE-223", "MEALFIT_PROACTIVE_NUDGE_FROM_HISTORY", "avisos_por_comida"):
         assert trozo in doc, trozo
 
 
 def test_el_marcador_va_con_su_lote():
     m = re.search(r'^_LAST_KNOWN_PFIX = "P1-PLAN-LOTE-(\d+) · (\d{4}-\d{2}-\d{2})"', _src("app.py"), re.M)
-    assert m and int(m.group(1)) >= 220
+    assert m and int(m.group(1)) >= 223
 
 
 def test_configuracion_manda_la_forma_que_el_servidor_valida():
-    """El panel del frontend (lote 220) guarda `{meal: {activo, hora: "HH:MM" | null}}` de las CUATRO comidas: la forma
+    """El panel del frontend (lote 223) guarda `{meal: {activo, hora: "HH:MM" | null}}` de las CUATRO comidas: la forma
     que `error_en_avisos_por_comida` acepta. Y el formulario no la manda (su dueño es el panel)."""
     util = _FRONT / "src" / "utils" / "recordatoriosPorComida.js"
     comp = _FRONT / "src" / "components" / "settings" / "RecordatoriosPorComida.jsx"

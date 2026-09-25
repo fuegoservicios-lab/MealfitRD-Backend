@@ -1074,7 +1074,7 @@ def _display_ya_usable(meal: dict, locale: Optional[str]) -> bool:
     entrada = disp.get(locale)
     if not isinstance(entrada, dict):
         return False
-    # [P1-PLAN-LOTE-222 · 2026-09-24] Una entrada `_provisional` (sólo el nombre de un plato recién cambiado, puesta
+    # [P1-PLAN-LOTE-225 · 2026-09-24] Una entrada `_provisional` (sólo el nombre de un plato recién cambiado, puesta
     # por el cliente) es un anticipo, no la traducción: sin esto, un plato sin receta ni ingredientes la daría por
     # buena y se quedaría con el nombre traducido y la descripción en español.
     if entrada.get("_provisional"):
@@ -2289,14 +2289,14 @@ def enrich_plan_display(
         return {"enriched_meals": 0, "skipped": "exception"}
 
 
-# [P1-PLAN-LOTE-222 · 2026-09-24] Topes del plan de un INVITADO que se traduce en memoria (sin BD). Es la única
+# [P1-PLAN-LOTE-225 · 2026-09-24] Topes del plan de un INVITADO que se traduce en memoria (sin BD). Es la única
 # llamada al LLM sin cuenta detrás aparte de la generación misma: el tope de comidas acota lo que cuesta un abuso.
 _INVITADO_MAX_DIAS = 14
 _INVITADO_MAX_COMIDAS = 60
 
 
 def traducir_plan_en_memoria(plan_data: dict, locale: str, *, user_id: Optional[str] = None) -> dict:
-    """[P1-PLAN-LOTE-222 · 2026-09-24] La traducción de un plan que NO está en la base de datos: el del invitado.
+    """[P1-PLAN-LOTE-225 · 2026-09-24] La traducción de un plan que NO está en la base de datos: el del invitado.
 
     El invitado (el embudo del plan gratis) genera su plan pero no lo persiste —vive en su navegador—, así que
     ningún disparador de `enrich_plan_display` lo alcanza: con la app en inglés, el plato, la descripción y la receta
@@ -2352,7 +2352,7 @@ def traducir_plan_en_memoria(plan_data: dict, locale: str, *, user_id: Optional[
                 llm = build_chat_llm(model_name, temperature=0.2, timeout=timeout_s, max_output_tokens=max_tokens)
                 response = llm.invoke(_build_messages(prompt))
             except Exception as e:
-                logger.warning(f"[P1-PLAN-LOTE-222] traducción del plan invitado falló ({locale}): {e!r}")
+                logger.warning(f"[P1-PLAN-LOTE-225] traducción del plan invitado falló ({locale}): {e!r}")
                 razon = "llm_exception"
                 if presupuesto > 0:
                     pendientes.append(lote)
@@ -2387,7 +2387,7 @@ def traducir_plan_en_memoria(plan_data: dict, locale: str, *, user_id: Optional[
         return {"meals": out_meals, "plan_name": out_nombre, "insights": out_insights,
                 "skipped": None if (out_meals or out_nombre or out_insights) else (razon or "no_valid_meals")}
     except Exception as e:
-        logger.warning(f"[P1-PLAN-LOTE-222] traducir_plan_en_memoria excepción (fail-open) {locale}: {e!r}")
+        logger.warning(f"[P1-PLAN-LOTE-225] traducir_plan_en_memoria excepción (fail-open) {locale}: {e!r}")
         return {**vacio, "skipped": "exception"}
 
 
