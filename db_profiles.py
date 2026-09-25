@@ -1158,6 +1158,7 @@ def migrate_guest_data(session_ids: list, new_user_id: str):
             # 8. meal_likes
             ("UPDATE meal_likes SET user_id = %s WHERE user_id = ANY(%s::uuid[])", (new_user_id, ids)),
             # 9. user_inventory (Inventario Físico / Despensa)
+            # [SUPLEMENTOS-OK: fusión de cuentas: se mueve todo]
             ("UPDATE user_inventory SET user_id = %s WHERE user_id = ANY(%s::uuid[])", (new_user_id, ids)),
         ])
         # 10. Recalcular frecuencias de ingredientes a partir de los planes migrados

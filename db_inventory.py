@@ -299,6 +299,7 @@ def _slug_meal_name(meal_name: str) -> str:
 
 def _update_row_reservation(row_id: str, reserved_quantity: float, reservation_details: Dict[str, float]) -> None:
     execute_sql_write(
+        # [SUPLEMENTOS-OK: reservas por id: a un pote nunca se le reserva nada]
         "UPDATE user_inventory SET reserved_quantity = %s, reservation_details = %s WHERE id = %s",
         (round(max(reserved_quantity, 0.0), 4), Jsonb(reservation_details), row_id),
     )
@@ -330,6 +331,7 @@ def _update_row_reservation_cas(
     # token CAS se compara en espacio numeric (`%s::numeric`) — paridad con
     # PostgREST, que serializaba el float como literal decimal exacto.
     rows = execute_sql_write(
+        # [SUPLEMENTOS-OK: reservas por id: a un pote nunca se le reserva nada]
         "UPDATE user_inventory SET reserved_quantity = %s, reservation_details = %s "
         "WHERE id = %s AND reserved_quantity = %s::numeric RETURNING id",
         (rounded_new, Jsonb(reservation_details), row_id, rounded_expected),
@@ -1430,6 +1432,7 @@ def release_chunk_reservations(user_id: str, chunk_id: str) -> int:
         ]
         queries.extend(
             (
+                # [SUPLEMENTOS-OK: reservas por id: a un pote nunca se le reserva nada]
                 "UPDATE user_inventory SET reserved_quantity = %s, reservation_details = %s WHERE id = %s",
                 (spec["new_reserved"], Jsonb(spec["new_details"]), spec["row_id"]),
             )
@@ -1867,7 +1870,7 @@ def add_or_update_inventory_item(user_id: str, ingredient_name: str, quantity: f
         if updated and brand:
             try:
                 execute_sql_write(
-                    "UPDATE user_inventory SET brand = %s WHERE user_id = %s AND ingredient_name = %s",
+                    "UPDATE user_inventory SET brand = %s WHERE user_id = %s AND kind = 'food' AND ingredient_name = %s",
                     (str(brand).strip(), user_id, ingredient_name),
                 )
             except Exception as _br_e:
@@ -2548,6 +2551,7 @@ def resolve_reconciliation_item(user_id: str, row_id: Any, action: str) -> Dict[
     if action == "keep":
         try:
             execute_sql_write(
+                # [SUPLEMENTOS-OK: por id de una fila ya elegida]
                 "UPDATE user_inventory SET updated_at = NOW() "
                 "WHERE id = %s AND user_id = %s",
                 (row_id, user_id),
@@ -3225,7 +3229,7 @@ def consume_inventory_items_completely(user_id: str, ingredient_names: List[str]
 
         if names_lower:
             execute_sql_write(
-                "UPDATE user_inventory SET quantity = 0 WHERE user_id = %s AND LOWER(TRIM(ingredient_name)) = ANY(%s)",
+                "UPDATE user_inventory SET quantity = 0 WHERE user_id = %s AND kind = 'food' AND LOWER(TRIM(ingredient_name)) = ANY(%s)",
                 (user_id, names_lower)
             )
         return True

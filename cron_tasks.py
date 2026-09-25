@@ -36097,6 +36097,12 @@ def _plan_freeze_sweep() -> dict:
                 (user_id,), fetch_all=True,
             ) or []
             _meaningful = _count_meaningful_pantry_items([x.get("ingredient_name") for x in inv])
+            # [P1-PLAN-LOTE-292 · revisión I1] Tener potes de suplementos ES usar la Nevera: no se apaga sola.
+            if _auto_off_ok and execute_sql_query(
+                    # [SUPLEMENTOS-OK: pregunta justamente si hay potes]
+                    "SELECT 1 FROM user_inventory WHERE user_id = %s AND kind = 'supplement' LIMIT 1",
+                    (user_id,), fetch_one=True):
+                _auto_off_ok = False
 
             if r.get("frozen_at"):
                 if _meaningful >= _min_items:

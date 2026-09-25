@@ -98,3 +98,111 @@ def test_endpoint_guarda_los_que_toma_y_enciende_la_nevera(monkeypatch):
 def test_marker():
     m = re.search(r'_LAST_KNOWN_PFIX = "P1-PLAN-LOTE-(\d+) · (\d{4}-\d{2}-\d{2})"', _src("app.py"))
     assert m and int(m.group(1)) >= 292 and m.group(2) >= "2026-09-25"
+
+
+# ── Revisión final (fix pass) ───────────────────────────────────────────────────────────────────────────────────────
+
+def test_C2_C3_los_potes_viven_en_su_propio_espacio_de_unidades(monkeypatch):
+    """Un suplemento y un alimento con el mismo nombre y unidad no pueden chocar en ON CONFLICT (user_id,
+    ingredient_name, unit): la unidad del pote va con prefijo `sup_` (la real queda en serving_unit)."""
+    import suplementos
+    import db_core
+    import nevera_opcional
+    escritos = []
+    monkeypatch.setattr(nevera_opcional, "encender_por_uso", lambda uid, forzar=False: "activa")
+    monkeypatch.setattr(db_core, "execute_sql_write", lambda sql, params: escritos.append((sql, params)))
+    suplementos.guardar("u", "Creatina Monohidrato", None, 60, "g", None, "estimado", "creatine")
+    sql, params = escritos[0]
+    assert params[3] == "sup_g" and params[5] == "g"
+    assert "kind = 'supplement'" not in sql.split("DO UPDATE", 1)[1], "el upsert no debe convertir filas de alimento"
+
+
+def test_C1_la_pantalla_lista_los_potes_aunque_no_se_sepan_las_porciones():
+    src = _src("routers/user_data.py")
+    assert "OR ui.kind = 'supplement'" in src
+
+
+def test_C1_I1_tener_potes_cuenta_como_usar_la_nevera():
+    import nevera_opcional
+    assert "i.kind = 'supplement'" in nevera_opcional._SQL_APAGAR
+    assert "kind = 'supplement'" in _src("cron_tasks.py").split("def _plan_freeze_sweep", 1)[1][:6000]
+
+
+def test_C1_sin_porciones_conocidas_no_avisa_de_pocas(monkeypatch):
+    import tools
+    import suplementos
+    import db
+    import db_inventory
+    fila = {"id": 7, "ingredient_name": "Creatina", "quantity": 0, "serving_unit": "g",
+            "serving_label": {"serving_g": 5, "kcal": 0, "protein_g": 0, "carbs_g": 0, "fats_g": 0}}
+    monkeypatch.setattr(suplementos, "buscar", lambda uid, n: fila)
+    monkeypatch.setattr(suplementos, "descontar", lambda uid, fid, n: 0.0)
+    monkeypatch.setattr(tools, "db_log_consumed_meal", lambda *a, **k: "meal-1")
+    monkeypatch.setattr(tools, "_nota_total_del_dia", lambda *a, **k: "")
+    monkeypatch.setattr(tools, "_nota_comidas_sin_registrar", lambda *a, **k: "")
+    monkeypatch.setattr(tools, "_rescue_dinner_slot", lambda uid, mt, cal, d: mt)
+    monkeypatch.setattr(db, "execute_sql_query", lambda *a, **k: None)
+    monkeypatch.setattr(db_inventory, "deduct_consumed_meal_from_inventory", lambda *a, **k: None)
+    out = tools.log_consumed_meal.func("u", "Creatina", calories=0, protein=0, suplemento="Creatina", porciones=1,
+                                       meal_type="merienda")
+    assert "te quedan" not in out
+
+
+def test_I2_solo_recomendar_nunca_deja_un_bcaa():
+    import suplementos_dia as sd
+    plan = {"days": [{"supplements": [{"name": "Aminoácidos BCAA / EAA", "dose": "x", "timing": "x", "reason": "x"},
+                                      {"name": "Omega-3 (Aceite de Pescado)", "dose": "x", "timing": "x", "reason": "x"}]},
+                     {"supplements": []}]}
+    sd.completar(plan, {"currentSupplements": [], "recommendSupplements": True})
+    for d in plan["days"]:
+        assert [s["name"] for s in d["supplements"]] == ["Omega-3 (Aceite de Pescado)"]
+
+
+def test_I3_etiqueta_sin_gramos_o_con_calorias_imposibles():
+    import suplementos
+    assert suplementos.etiqueta_valida({"kcal": 1200, "protein_g": 24, "carbs_g": 3, "fats_g": 1}) is None
+    assert suplementos.etiqueta_valida({"serving_g": 200, "kcal": 900, "protein_g": 24, "carbs_g": 3, "fats_g": 1}) is None
+    assert suplementos.etiqueta_valida({"kcal": 120, "protein_g": 24, "carbs_g": 3, "fats_g": 1.5}) is not None
+
+
+def test_I5_porciones_negativas_no_rellenan_el_pote(monkeypatch):
+    import suplementos
+    import db_core
+    llamadas = []
+    monkeypatch.setattr(db_core, "execute_sql_query", lambda sql, p, **k: llamadas.append(p) or {"quantity": 3})
+    suplementos.descontar("u", 7, -2)
+    assert llamadas[0][0] == 0.0
+
+
+def test_I4_toda_escritura_por_nombre_filtra_los_suplementos():
+    """El guard de lecturas no veía UPDATE: `consume_inventory_items_completely` ponía a 0 un pote por nombre."""
+    import ast as _ast
+    faltan = []
+    for py in _BACKEND.rglob("*.py"):
+        if {"tests", "scripts", "migrations", "__pycache__", "docs"} & set(py.relative_to(_BACKEND).parts):
+            continue
+        texto = py.read_text(encoding="utf-8")
+        if "user_inventory" not in texto:
+            continue
+        lineas = texto.splitlines()
+        for nodo in _ast.walk(_ast.parse(texto)):
+            if isinstance(nodo, _ast.Constant) and isinstance(nodo.value, str) \
+                    and re.search(r"\bUPDATE\s+(public\.)?user_inventory\b", nodo.value, re.I):
+                prev = "\n".join(lineas[max(0, nodo.lineno - 7):nodo.lineno])
+                if not re.search(r"kind\s*=\s*'(food|supplement)'", nodo.value) and "[SUPLEMENTOS-OK:" not in prev:
+                    faltan.append(f"{py.relative_to(_BACKEND).as_posix()}:{nodo.lineno}")
+    assert not faltan, "UPDATE de user_inventory sin kind ni marcador: " + ", ".join(faltan)
+
+
+def test_I4_el_inventario_solo_trae_potes_a_quien_los_pide(monkeypatch):
+    from routers import user_data
+    import db
+    sqls = []
+    monkeypatch.setattr(db, "execute_sql_query", lambda sql, p, **k: sqls.append(sql) or [])
+    user_data._fetch_inventory("u", True)
+    user_data._fetch_inventory("u", True, incluir_suplementos=True)
+    assert "ui.kind = 'food'" in sqls[0] and "OR ui.kind = 'supplement'" not in sqls[0]
+    assert "OR ui.kind = 'supplement'" in sqls[1]
+    front = _BACKEND.parent / "frontend" / "src" / "pages" / "Pantry.jsx"
+    if front.exists():
+        assert "/api/inventory?incluir_suplementos=1" in front.read_text(encoding="utf-8")

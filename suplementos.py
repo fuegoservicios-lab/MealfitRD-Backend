@@ -53,6 +53,11 @@ def etiqueta_valida(etiqueta) -> dict | None:
             return None
         if out["protein_g"] + out["carbs_g"] + out["fats_g"] > g + 1:
             return None
+    elif out["kcal"] > 600:
+        return None          # sin gramos no hay techo físico: una porción de más de 600 kcal es una lectura rota
+    # [P1-PLAN-LOTE-292 · revisión I3] Atwater: las kcal no pueden pasar de lo que dan sus macros (+ margen de redondeo).
+    if out["kcal"] > 4 * out["protein_g"] + 4 * out["carbs_g"] + 9 * out["fats_g"] + 40:
+        return None
     return out
 
 
@@ -80,6 +85,14 @@ def buscar(user_id: str, nombre: str) -> dict | None:
     return next((f for f in filas if pantry_names_match(f.get("ingredient_name") or "", nombre or "")), None)
 
 
+def unidad_de_fila(unidad: str) -> str:
+    """[P1-PLAN-LOTE-292 · revisión C2/C3] La `unit` con la que el pote vive en `user_inventory`: con prefijo `sup_`,
+    así un pote y un alimento del mismo nombre y unidad («Creatina» en g) nunca chocan en el ON CONFLICT
+    (user_id, ingredient_name, unit) — ni el alimento suma a las porciones del pote, ni el pote convierte al alimento.
+    La unidad real vive en `serving_unit`."""
+    return f"sup_{unidad}"
+
+
 def _upsert(user_id, nombre, marca, porciones, unidad, etiqueta, fuente):
     import json
     from db_core import execute_sql_write
@@ -90,15 +103,14 @@ def _upsert(user_id, nombre, marca, porciones, unidad, etiqueta, fuente):
         VALUES (%s, %s, %s, %s, 'supplement', %s::jsonb, %s, %s, %s, 'chat', 'manual')
         ON CONFLICT (user_id, ingredient_name, unit) DO UPDATE
            SET quantity = CASE WHEN EXCLUDED.quantity > 0 THEN EXCLUDED.quantity ELSE user_inventory.quantity END,
-               kind = 'supplement',
                serving_label = COALESCE(EXCLUDED.serving_label, user_inventory.serving_label),
                serving_unit = EXCLUDED.serving_unit,
                label_source = COALESCE(EXCLUDED.label_source, user_inventory.label_source),
                brand = COALESCE(EXCLUDED.brand, user_inventory.brand),
                updated_at = now()
         """,
-        (user_id, nombre, float(porciones or 0), unidad, json.dumps(etiqueta) if etiqueta else None, unidad,
-         fuente, marca),
+        (user_id, nombre, float(porciones or 0), unidad_de_fila(unidad), json.dumps(etiqueta) if etiqueta else None,
+         unidad, fuente, marca),
     )
 
 
@@ -129,7 +141,7 @@ def descontar(user_id: str, fila_id, porciones) -> float:
         # [SUPLEMENTOS-OK: descuenta del pote de un suplemento]
         "UPDATE user_inventory SET quantity = GREATEST(0, quantity - %s), updated_at = now() "
         "WHERE id = %s AND user_id = %s AND kind = 'supplement' RETURNING quantity::float8 AS quantity",
-        (float(porciones or 0), fila_id, user_id), fetch_one=True,
+        (max(0.0, float(porciones or 0)), fila_id, user_id), fetch_one=True,   # [revisión I5] nunca rellena
     )
     return float((fila or {}).get("quantity") or 0)
 

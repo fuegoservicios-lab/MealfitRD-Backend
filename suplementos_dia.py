@@ -134,6 +134,14 @@ def completar(result, form_data) -> int:
         if not pedidos:
             if _n["toma"]:
                 return 0          # todo lo elegido está vetado: la barredora clínica ya hizo su trabajo
+            # [P1-PLAN-LOTE-292 · revisión I2] «Recomiéndame»: la IA nunca recomienda quemadores, pre-entrenos ni BCAA
+            # (el prompt lo pide; aquí se CUMPLE aunque el modelo los escriba).
+            from suplementos import NO_RECOMENDAR
+            for d in dias:
+                if d.get("supplements"):
+                    _antes = len(d["supplements"])
+                    d["supplements"] = [s for s in d["supplements"] if clave_de(_nombre(s)) not in NO_RECOMENDAR]
+                    quitadas += _antes - len(d["supplements"])
             modelo = next((d["supplements"] for d in dias if d.get("supplements")), None)
             for d in dias:
                 if modelo and not d.get("supplements"):

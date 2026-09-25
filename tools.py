@@ -1331,7 +1331,8 @@ def log_consumed_meal(user_id: str, meal_name: str, calories: int, protein: int,
         )
 
     _nota_pote = ""
-    if _pote and result is not None and result != "deduped":
+    # [revisión C1] un pote sin porciones conocidas (0: lo marcó en el formulario) no se descuenta ni avisa de «pocas»
+    if _pote and float(_pote.get("quantity") or 0) > 0 and result is not None and result != "deduped":
         try:
             import suplementos as _sup
             _quedan = _sup.descontar(user_id, _pote.get("id"), porciones or 1)

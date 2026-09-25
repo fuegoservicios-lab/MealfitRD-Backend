@@ -93,11 +93,16 @@ _INVENTORY_SELECT = """
 """
 
 
-def _fetch_inventory(user_id: str, only_positive: bool = True):
+def _fetch_inventory(user_id: str, only_positive: bool = True, incluir_suplementos: bool = False):
     from db import execute_sql_query
     where = "WHERE ui.user_id = %s"
+    if not incluir_suplementos:
+        # [P1-PLAN-LOTE-292 · revisión I4] Solo la pantalla de la Nevera pide los potes: el resto de consumidores
+        # (renovar plan, escáner, Dashboard, formulario) trata cada fila como un ALIMENTO.
+        where += " AND ui.kind = 'food'"
     if only_positive:
-        where += " AND ui.quantity > 0"
+        # [revisión C1] un pote del formulario nace sin porciones conocidas (0) y debe verse igual
+        where += (" AND (ui.quantity > 0 OR ui.kind = 'supplement')" if incluir_suplementos else " AND ui.quantity > 0")
     return execute_sql_query(
         f"{_INVENTORY_SELECT} {where} ORDER BY ui.ingredient_name ASC",
         (user_id,),
@@ -108,13 +113,14 @@ def _fetch_inventory(user_id: str, only_positive: bool = True):
 @router.get("/inventory")
 async def api_get_inventory(
     include_zero: bool = False,
+    incluir_suplementos: bool = False,
     verified_user_id: str = Depends(get_verified_user_id),
 ):
     """Inventario del usuario con embed master_ingredients (shape PostgREST).
     Reemplaza los SELECTs directos de Pantry.fetchData, Dashboard
     fetchLiveInventory/refetch/PDF/restock y useRegeneratePlan."""
     uid = _require_user(verified_user_id)
-    items = await asyncio.to_thread(_fetch_inventory, uid, not include_zero)
+    items = await asyncio.to_thread(_fetch_inventory, uid, not include_zero, incluir_suplementos)
     return {"items": items}
 
 
@@ -223,6 +229,7 @@ async def api_increment_inventory(
         # el row desaparece de GET /api/inventory (filtra quantity > 0) pero
         # sigue bloqueando el INSERT 409-dedup por el UNIQUE.
         return execute_sql_write(
+            # [SUPLEMENTOS-OK: ± de la pantalla por id: vale para potes y alimentos]
             """
             UPDATE user_inventory
             SET quantity = GREATEST(0, quantity + %s::numeric), updated_at = NOW()
@@ -266,14 +273,14 @@ async def api_change_inventory_unit(
             # [SUPLEMENTOS-OK: fusión por id de una fila que eligió el usuario]
             """
             WITH src AS (
-                SELECT id, user_id, ingredient_name, quantity
+                SELECT id, user_id, ingredient_name, quantity, kind
                 FROM user_inventory WHERE id = %s AND user_id = %s
             ), dup AS (
                 SELECT ui.id AS dup_id, src.id AS src_id, src.quantity AS src_qty
                 FROM user_inventory ui
                 JOIN src ON ui.user_id = src.user_id
                     AND ui.ingredient_name = src.ingredient_name
-                    AND ui.unit = %s AND ui.id <> src.id
+                    AND ui.unit = %s AND ui.id <> src.id AND ui.kind = src.kind   -- [revisión C2] nunca fusiona un alimento con un pote
             ), merged AS (
                 UPDATE user_inventory SET quantity = user_inventory.quantity + dup.src_qty,
                     updated_at = NOW()
@@ -336,6 +343,7 @@ async def api_patch_inventory_item(
     def _patch():
         from db import execute_sql_write
         return execute_sql_write(
+            # [SUPLEMENTOS-OK: edición por id que pidió el usuario]
             f"""
             UPDATE user_inventory SET {', '.join(sets)}, updated_at = NOW()
             WHERE id = %s AND user_id = %s

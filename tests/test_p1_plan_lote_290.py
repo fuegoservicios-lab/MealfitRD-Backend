@@ -99,7 +99,8 @@ def test_toda_lectura_de_inventario_filtra_los_suplementos():
 
 def test_el_apagado_de_la_nevera_cuenta_los_suplementos():
     import nevera_opcional
-    assert "kind" not in nevera_opcional._SQL_APAGAR
+    # [P1-PLAN-LOTE-292 · revisión C1] un pote cuenta aunque sus porciones sean desconocidas (0)
+    assert "i.kind = 'supplement'" in nevera_opcional._SQL_APAGAR and "kind = 'food'" not in nevera_opcional._SQL_APAGAR
     assert "[SUPLEMENTOS-OK:" in _src("nevera_opcional.py")
 
 

@@ -181,7 +181,8 @@ UPDATE user_profiles p
            AND NOT EXISTS (
                  SELECT 1 FROM user_inventory i
                   WHERE i.user_id = q.id
-                    AND (i.quantity > 0 OR i.updated_at > now() - (%s * interval '1 hour')))
+                    AND (i.quantity > 0 OR i.kind = 'supplement'
+                         OR i.updated_at > now() - (%s * interval '1 hour')))
          LIMIT %s)
    AND p.nevera_enabled IS NULL
    AND p.plan_mode = 'tracking'
