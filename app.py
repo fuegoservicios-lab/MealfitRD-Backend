@@ -632,7 +632,11 @@ _PROCESS_START_ISO = datetime.now(timezone.utc).isoformat()
 # [P1-PLAN-LOTE-316 · 2026-09-25] (backend) la misma frase dos veces seguidas en un paso se deja una vez.
 # [P1-PLAN-LOTE-317 · 2026-09-25] (backend) la avena que el paso ya cocina «con agua» recibe ahí su medida
 # («cocina la avena con 170 ml de agua…»), no una frase al final del paso.
-_LAST_KNOWN_PFIX = "P1-PLAN-LOTE-317 · 2026-09-25"
+# [P1-PLAN-LOTE-318 · 2026-09-25] (backend) la avena cocida se reconoce por la FRASE («mezcla la avena con la leche
+# y cocina 2-3 minutos… hasta que espese»): con 60 caracteres de ventana salía con 5 ml de leche.
+# [P1-PLAN-LOTE-319 · 2026-09-25] (backend) una traza no es un ingrediente: «0.95 ml de leche» sale de la lista y
+# de los pasos (V5 del contrato), nunca especias, sal, aceite ni ácidos.
+_LAST_KNOWN_PFIX = "P1-PLAN-LOTE-319 · 2026-09-25"
 
 # [P1-SENTRY-SAMPLE-COST · 2026-05-12] Sentry sampling driven from env vars
 # con default seguro 0.1 (10%). Pre-fix tenía `traces_sample_rate=1.0` y

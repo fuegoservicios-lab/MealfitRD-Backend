@@ -913,6 +913,7 @@ def _aplicar_meal(meal: dict, index: dict, mode: str, db=None) -> int:
         sombra = _copy.deepcopy(meal)
         r = reconcile_meal(sombra, index)
     else:
+        __import__("pasos_cantidades").quitar_trazas(meal)  # [P1-PLAN-LOTE-319] «0.95 ml de leche»: antes de C2, cuyo V5 limpia los pasos
         r = reconcile_meal(meal, index)
         __import__("pasos_cantidades").sincronizar_exacto(meal)   # [P1-PLAN-LOTE-308] el contrato tolera ±25 %
         __import__("pasos_cantidades").pesos_de_la_lista(meal)    # [P1-PLAN-LOTE-310] «¾ manzana (≈120 g)»

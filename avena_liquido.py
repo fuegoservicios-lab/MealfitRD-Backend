@@ -35,12 +35,20 @@ _AGUA_RE = re.compile(r"^\s*agua\b")
 #: hasta que espese». Sobre texto sin acentos y en minúscula.
 _COCCION_RE = re.compile(
     r"\b(?:cocina|cuece|hierve|calienta|cocinar|cocer|hervir|calentar)\s+(?:la\s+|las\s+)?(?:[a-z]+\s+)?avena\b"
-    r"|\bavena\b[^.;]{0,60}\b(?:microondas|a fuego|en una olla|en la olla|espese|espesa|hierva|hervor)\b")
+    r"|\bavena\b[^.;]{0,60}\b(?:microondas|a fuego|en una olla|en la olla|espese|espesa|hierva|hervor)\b"
+    # [P1-PLAN-LOTE-318 · 2026-09-25] la FRASE que nombra la avena y la cocina, en cualquier orden y a cualquier distancia
+    # («en un tazón apto para microondas mezcla la avena con la leche y cocina 2-3 minutos … hasta que espese»: el verbo
+    # quedaba a >60 caracteres y la avena de la batería de cierre salía con 5 ml de leche). tooltip-anchor: P1-PLAN-LOTE-318
+    r"|\bavena\b[^.;]*\b(?:cocina|cuece|hierve|microondas|a fuego|olla|espese|espesa|hervor)\b"
+    r"|\b(?:cocina|cuece|hierve|microondas|a fuego|olla)\b[^.;]*\bavena\b")
 #: lo que NO es una gacha: remojada en frío, masa, horneado o licuado
 _FRIO_RE = re.compile(r"\b(remoja|remojar|remojada|toda la noche|overnight|en la nevera|refrigera|refrigerar|reposar|"
                       r"panqueques?|pancakes?|tortillas? de avena|galletas?|muffins?|waffles?|crepas?|arepas? de avena|"
-                      r"masa|empaniz\w*|rebozad\w*|batido|smoothie|licua\w*|hornea\w*|horno|"
-                      r"(?:tuesta|tostar|dora|dorar)\s+(?:la\s+)?avena|avena\s+tostada)\b")
+                      r"masa|empaniz\w*|rebozad\w*|licua\w*|hornea\w*|horno|"
+                      r"(?:tuesta|tostar|dora|dorar)\s+(?:la\s+)?avena|avena\s+tostada|avena\s+fria|avena\s+cruda)\b")
+#: [P1-PLAN-LOTE-318] el BATIDO es un plato (su nombre), no un participio: «incorpora el huevo batido» en una avena cremosa
+#: la excluía (batería de cierre, perfil con warfarina: 30 g de avena con ¼ taza de leche)
+_NOMBRE_BATIDO_RE = re.compile(r"\b(batid[oa]s?|smoothies?|licuados?)\b")
 #: el peso entre paréntesis de la línea de avena («1 taza de avena (70 g)») manda sobre la taza estimada
 _HINT_G_RE = re.compile(r"\(\s*[≈~]?\s*(\d+(?:[.,]\d+)?)\s*g\s*\)")
 #: una línea de agua que no se deja medir («½ agua»): no se adivina cuánto líquido hay
@@ -85,7 +93,7 @@ def completar(meal) -> int:
             return 0
         pasos = [p for p in rec if isinstance(p, str) and not any(e in p for e in _NOTA)]
         texto = _sa(" ".join(pasos) + " " + str(meal.get("name") or ""))
-        if not _AVENA_RE.search(texto) or _FRIO_RE.search(texto):
+        if not _AVENA_RE.search(texto) or _FRIO_RE.search(texto) or _NOMBRE_BATIDO_RE.search(_sa(meal.get("name"))):
             return 0
         if not any(_COCCION_RE.search(_sa(p)) for p in pasos):
             return 0

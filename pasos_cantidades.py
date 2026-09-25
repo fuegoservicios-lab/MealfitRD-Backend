@@ -351,6 +351,48 @@ def frases_repetidas(meal) -> int:
         return 0
 
 
+# ── [P1-PLAN-LOTE-319 · 2026-09-25] Una traza no es un ingrediente ─────────────────────────────────────────────────────
+# El motor de macros, al cuadrar el día, deja a veces un alimento en MENOS de 1 g/ml: «0.95 ml de leche descremada», «0.07
+# ml de leche» («Bate 1 clara de huevo con 0.07 ml de leche»), 1 de cada ~15 planes de las baterías del 25-sep. No aporta
+# nada medible y la lista de compras puede comprar un envase entero por él. Sale de la lista (y de `ingredients_raw`, por
+# texto), ANTES del contrato final, cuyo paso V5 (`recipe_repair.retirar_sin_lista`, lote 30) retira su mención de los
+# pasos. Nunca especias, sal, aceite, ácidos ni esencias (una pizca ES su dosis), ni si el plato quedaría casi vacío.
+# tooltip-anchor: P1-PLAN-LOTE-319
+_TRAZA_RE = re.compile(r"^\s*(?:0(?:[.,]\d+)?)\s*(?:g|gr|gramos?|ml)\s+(?:de\s+)?(?P<food>.+)$", re.IGNORECASE)
+_TRAZA_DOSIS_RE = re.compile(
+    r"\b(sal|pimienta|canela|oregano|comino|ajo|cebolla en polvo|pimenton|paprika|curcuma|jengibre|nuez moscada|vainilla|"
+    r"esencia|extracto|stevia|edulcorante|polvo de hornear|levadura|bicarbonato|colorante|aceite|vinagre|limon|lima|jugo|"
+    r"salsa|mostaza|especias?|hierbas?|perejil|cilantro|laurel|tomillo|romero|clavo|anis|cafe|te|cacao|sazon)\b")
+
+
+def quitar_trazas(meal) -> int:
+    """Nº de líneas-traza quitadas de `ingredients` (y sus iguales de `ingredients_raw`). 0 ante cualquier error."""
+    try:
+        ings = meal.get("ingredients") if isinstance(meal, dict) else None
+        if not isinstance(ings, list) or len(ings) < 3:
+            return 0
+        fuera = []
+        for s in ings:
+            m = _TRAZA_RE.match(str(s)) if isinstance(s, str) else None
+            if m and not _TRAZA_DOSIS_RE.search(_sa(m.group("food").lower())):
+                fuera.append(s)
+        if not fuera or len(ings) - len(fuera) < 2:
+            return 0
+        comidas = {_sa(_TRAZA_RE.match(s).group("food").lower()).strip() for s in fuera}
+        meal["ingredients"] = [s for s in ings if s not in fuera]
+        raw = meal.get("ingredients_raw")
+        if isinstance(raw, list):
+            def _es_traza_quitada(r):
+                mr = _TRAZA_RE.match(str(r)) if isinstance(r, str) else None
+                return bool(mr) and _sa(mr.group("food").lower()).strip() in comidas
+            meal["ingredients_raw"] = [r for r in raw if not _es_traza_quitada(r)]
+        meal["_trazas_quitadas"] = list(fuera)
+        meal.pop("_display", None)
+        return len(fuera)
+    except Exception:
+        return 0
+
+
 # ── [P1-PLAN-LOTE-308 · 2026-09-25] El sincronizador exacto, también al final ────────────────────────────────────────
 # El contrato final de receta es la última palabra de los pasos, pero mide los gramos con la tolerancia del medidor V4
 # (±25 %): un cambio TARDÍO de la lista (piso de porción, techo, sustitución) de 50 → 60 g de mango, o de 25 → 30 g de
