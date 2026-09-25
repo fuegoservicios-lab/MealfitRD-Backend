@@ -208,7 +208,9 @@ def test_sin_chat_reciente_el_aviso_es_corto_fijo_y_sin_llm(dia, monkeypatch):
 
 def test_la_etiqueta_viaja_en_el_payload_y_el_service_worker_la_usa():
     up = _src("utils_push.py")
-    assert 'def send_push_notification(user_id: str, title: str, body: str, url: str = "/dashboard", tag: str = None) -> bool:' in up
+    # [P1-PLAN-LOTE-228] la firma ganó `solo_si_no_mira` (el SW omite el aviso con la app a la vista)
+    assert ('def send_push_notification(user_id: str, title: str, body: str, url: str = "/dashboard", tag: str = None,\n'
+            '                           solo_si_no_mira: bool = False) -> bool:') in up
     assert '_payload["tag"] = str(tag)[:64]' in up
     sw = _FRONT / "src" / "custom-sw.js"
     if sw.exists():

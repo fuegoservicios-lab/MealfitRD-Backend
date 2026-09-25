@@ -239,7 +239,8 @@ def test_el_plugin_de_capacitor_viaja_en_una_caja_nunca_suelto():
     assert "return mod.LocalNotifications || null;" not in av
     # [P1-PLAN-LOTE-162] 5 → 7: `alarmaExactaPendiente` y `pedirAlarmaExacta` (permiso de alarmas exactas en Android)
     # usan la MISMA caja. Lo que se vigila no cambia: ningún camino saca el plugin suelto de una función async.
-    assert av.count("const LN = (await _pluginLocal())?.LN;") == 7
+    # [P1-PLAN-LOTE-228] +3: permiso, programar y cancelar un aviso suelto («Tu plan está listo»)
+    assert av.count("const LN = (await _pluginLocal())?.LN;") == 10
     assert "const LN = await _pluginLocal();" not in av
     assert (f.parent.parent / "__tests__" / "lote135.proxy.test.js").exists()
 
