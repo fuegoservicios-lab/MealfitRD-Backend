@@ -10220,6 +10220,8 @@ PLAN A EVALUAR (días generados):
                     _ct_rule = __import__("horizon").cooking_time_rule(state.get("form_data") or {})
                     _ct_block = (f"\nTIEMPO DE COCINA DEL USUARIO (obligatorio, también al corregir): {_ct_rule}\n"
                                  if _ct_rule else "")
+                    _sch_rule = __import__("horizon").schedule_rule(state.get("form_data") or {})  # [P1-PLAN-LOTE-241]
+                    _ct_block += f"\nHORARIO DEL USUARIO (obligatorio, también al corregir): {_sch_rule}\n" if _sch_rule else ""
                     correction_prompt = f"""Eres un nutricionista chef. Corrige SOLO el Día {day_num} del plan alimenticio.
 
 PROBLEMA DETECTADO: {critique.suggestions}{_pt_block}
@@ -14627,6 +14629,8 @@ def _scan_allergen_violations(plan: dict, allergies) -> list:
                         # propio término directo).
                         if _PLANT_ADJ_EXCUSE_RX.match(ing_low[_m_al.end(): _m_al.end() + 18]):
                             continue
+                        if __import__("excusas_vegetales").prefijo_vegetal_excusa(f, ing_low[:_m_al.start()]):
+                            continue  # [P1-PLAN-LOTE-247] la crema que resulta de moler el maní
                         # [P3-SEMOLA-MAIZ-GLUTEN-FP · 2026-08-23] excusa acotada AL TÉRMINO que
                         # casó: «sémola de maíz/yuca/arroz» no lleva gluten. 'pan' y 'harina' no
                         # tienen entrada, así que «Pan de maíz» sigue marcado.
@@ -14837,6 +14841,8 @@ def _scan_diet_violations(plan: dict, diet_type) -> list:
                         continue
                     if _plant_adj.match(ing_low[m.end(): m.end() + 18]):
                         continue  # "carne de soya" / "leche de coco" / "salami vegano" → no viola
+                    if __import__("excusas_vegetales").prefijo_vegetal_excusa(term, ing_low[:m.start()]):
+                        continue  # [P1-PLAN-LOTE-247] «maní molido hasta obtener una crema»
                     violations.append((meal.get("name", "?"), str(ing), label))
                     break
     return violations
@@ -15145,6 +15151,7 @@ def clinical_backstop_for_meal(meal: dict, *, allergies=None, diet_type=None, fo
         # lactancia (el helper es no-op si no). Cierra el hueco de paridad con el swap determinista de S1.
         if form_data is not None:
             out.extend(_scan_mercury_pregnancy_violations(meal, form_data))
+            out.extend(__import__("medication_rules").tyramine_violations(mini, form_data))  # [P1-PLAN-LOTE-246]
     except Exception as _clin_e:
         return [f"error de re-validación clínica ({type(_clin_e).__name__}: {_clin_e}) — bloqueo conservador"]
     return out
@@ -37561,9 +37568,9 @@ def _repair_light_slot_protein(days: list, nutrition: dict, form_data: dict, db=
             from nutrition_db import IngredientNutritionDB
             db = IngredientNutritionDB()
         if cands is None:
-            cands = _safe_high_density_proteins(__import__("constants").alergias_y_rechazos(form_data), db, min_protein=10.0,
+            cands = __import__("proteina_lista").filtrar_listas(_safe_high_density_proteins(__import__("constants").alergias_y_rechazos(form_data), db, min_protein=10.0,
                                                 diet=(form_data or {}).get("dietType"),
-                                                country=country_for_form_data(form_data))
+                                                country=country_for_form_data(form_data)), form_data)  # [P1-PLAN-LOTE-245]
         _daily_cal = 4.0 * _pg + 4.0 * _cg + 9.0 * _fg
         added = 0
         for _d in days or []:
@@ -37660,9 +37667,9 @@ def _repair_protein_floor_post_caps(days: list, nutrition: dict, form_data: dict
         # (densidad media; cap bariátrico 120g, el add ≤90g es seguro) ADEMÁS de la carne densa. Excluimos QUESOS/leche
         # (cap 30g → 90g los excedería; los caps NO re-corren tras FASE A). En platos SALADOS el closer prefiere la
         # carne densa por categoría; el yogur queda para los dulces vía el no_cook/dairy-egg + sweet-guard.
-        _cands = _safe_high_density_proteins(__import__("constants").alergias_y_rechazos(form_data), db, min_protein=10.0,
+        _cands = __import__("proteina_lista").filtrar_listas(_safe_high_density_proteins(__import__("constants").alergias_y_rechazos(form_data), db, min_protein=10.0,
                                              diet=form_data.get("dietType"),  # [P1-DIET-BLIND-DIRECTIVES]
-                                             country=country_for_form_data(form_data))  # [P1-PROTEIN-CLOSER-COUNTRY]
+                                             country=country_for_form_data(form_data)), form_data)  # [P1-PROTEIN-CLOSER-COUNTRY] [P1-PLAN-LOTE-245]
         _DAIRY_EXCLUDE = ("queso", "ricotta", "cottage", "requeson", "leche")  # quesos (cap 30g) + leche; yogur SÍ entra
         _cands = [c for c in _cands if not any(_t in _sa(str(c[1]).lower()) for _t in _DAIRY_EXCLUDE)]
         if not _cands:
@@ -37778,9 +37785,9 @@ def _apply_macro_engine(result, days, skeleton, _daily_cals, _pg, _cg, _fg, form
             # (cierra el déficit que el escalado no puede). Se computan una vez por plan.
             # min_protein=9 incluye yogur (blend-friendly para batidos) + el dish-fit del
             # closer prefiere carne (≥18) para principales y lácteo/yogur para licuados/ligeras.
-            _hd_candidates = (_safe_high_density_proteins(__import__("constants").alergias_y_rechazos(form_data), _nut_db, min_protein=9.0,
+            _hd_candidates = (__import__("proteina_lista").filtrar_listas(_safe_high_density_proteins(__import__("constants").alergias_y_rechazos(form_data), _nut_db, min_protein=9.0,
                                                           diet=form_data.get("dietType"),  # [P1-DIET-BLIND-DIRECTIVES]
-                                                          country=country_for_form_data(form_data))  # [P1-PROTEIN-CLOSER-COUNTRY]
+                                                          country=country_for_form_data(form_data)), form_data)  # [P1-PROTEIN-CLOSER-COUNTRY] [P1-PLAN-LOTE-245]
                               if PROTEIN_FLOOR_ENABLED else [])
             # [P3-CLOSER-EGG-BUDGET · 2026-06-14] Presupuesto de huevo del closer: una vez que el huevo
             # aparece en > cap comidas (mismo cap que VARIETY_HARD_GATE), pasa candidatos SIN huevo →
@@ -37953,9 +37960,9 @@ def _apply_macro_engine(result, days, skeleton, _daily_cals, _pg, _cg, _fg, form
             if not _renal_capped:
                 from nutrition_db import IngredientNutritionDB as _SwapNDB
                 _swap_db = _SwapNDB()
-                _swap_cands = _safe_high_density_proteins(__import__("constants").alergias_y_rechazos(form_data), _swap_db, min_protein=18.0,
+                _swap_cands = __import__("proteina_lista").filtrar_listas(_safe_high_density_proteins(__import__("constants").alergias_y_rechazos(form_data), _swap_db, min_protein=18.0,
                                                           diet=form_data.get("dietType"),  # [P1-DIET-BLIND-DIRECTIVES]
-                                                          country=country_for_form_data(form_data))  # [P1-PROTEIN-CLOSER-COUNTRY]
+                                                          country=country_for_form_data(form_data)), form_data)  # [P1-PROTEIN-CLOSER-COUNTRY] [P1-PLAN-LOTE-245]
                 _swapped_days = 0
                 for _d in (days or []):
                     if _swap_excess_carbs_to_protein_for_day(
@@ -41160,6 +41167,8 @@ async def surgical_marker_regen_node(state: PlanState) -> dict:
         _ct_rule_sg = __import__("horizon").cooking_time_rule(form_data or {})
         _ct_block_sg = (f"\nTIEMPO DE COCINA DEL USUARIO (obligatorio, también al corregir): {_ct_rule_sg}\n"
                         if _ct_rule_sg else "")
+        _sch_rule_sg = __import__("horizon").schedule_rule(form_data or {})  # [P1-PLAN-LOTE-241]
+        _ct_block_sg += f"\nHORARIO DEL USUARIO (obligatorio, también al corregir): {_sch_rule_sg}\n" if _sch_rule_sg else ""
         correction_prompt = f"""Eres un nutricionista chef. Corrige SOLO el Día {day_num} del plan alimenticio.
 
 PROBLEMA DETECTADO (sin resolver en pasada anterior): {original_issue}
@@ -42845,6 +42854,12 @@ Responde ÚNICAMENTE con el JSON de revisión.
             )
             severity = _severity_max(severity, "critical")
 
+    _tyr246 = __import__("medication_rules").tyramine_violations(plan, form_data)  # [P1-PLAN-LOTE-246] IMAO + tiramina
+    if _tyr246:
+        approved = False
+        issues.append("TIRAMINA CON IMAO (interacción medicamentosa peligrosa): quita estos alimentos y usa versiones "
+                      "FRESCAS. Violaciones: " + "; ".join(_tyr246[:6]))
+        severity = _severity_max(severity, "critical")
     # [P1-PLAN-LOTE-232 · 2026-09-25] Backstop DETERMINISTA de los rechazos («no me gusta»): reintento con directiva
     # («high»), no fallback. tooltip-anchor: P1-PLAN-LOTE-232-RECHAZOS
     if DISLIKE_HARD_GUARD:

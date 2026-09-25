@@ -1656,17 +1656,42 @@ def cooking_time_rule(form_data) -> str:
         return ""
 
 
+# [P1-PLAN-LOTE-241 · 2026-09-25] El horario del formulario llegaba al modelo como `"scheduleType": "night_shift"` y
+# nada en el generador lo leía: al turno nocturno le salía «Almuerzo 13:00», a la hora en que duerme. Los nombres de las
+# franjas no cambian (la app los usa); cambia qué va en cada una. Las horas las fija `horario_comidas`.
+# tooltip-anchor: P1-PLAN-LOTE-241-HORARIO
+_SCHEDULE_PROMPT = {
+    "night_shift": ("TURNO NOCTURNO: duerme de día y trabaja de noche. Desayuno = al despertar (~15:30); Almuerzo = la "
+                    "comida principal ANTES del turno (~19:30); Merienda = DURANTE el turno (~01:00): ligera, portátil y "
+                    "sin cocinar (la come en el trabajo); Cena = al SALIR del turno (~07:00), antes de dormir: ligera, "
+                    "fácil de digerir y SIN café ni bebidas con cafeína."),
+    "variable": ("HORARIO ROTATIVO/VARIABLE: sus horas cambian de una semana a otra. Platos que aguanten preparados con "
+                 "antelación y se recalienten bien; la merienda, portátil y sin cocinar."),
+}
+
+
+def schedule_rule(form_data) -> str:
+    """[P1-PLAN-LOTE-241] La regla del horario en claro para quien reescribe un día o un plato sin ver el formulario
+    (corrector, regen quirúrgico, swap). Cadena vacía para el horario estándar o sin clave."""
+    try:
+        return _SCHEDULE_PROMPT.get(str((form_data or {}).get("scheduleType") or "").strip().lower(), "")
+    except Exception:
+        return ""
+
+
 def explain_form_codes_for_prompt(form_for_prompt):
     """El formulario que ve el modelo, con los códigos que el modelo NO puede adivinar escritos en claro. Copia; el
     dict de entrada no se toca. Sin clave o con un valor desconocido, el valor queda como vino."""
     if not isinstance(form_for_prompt, dict):
         return form_for_prompt
+    out = dict(form_for_prompt)
     ct = str(form_for_prompt.get("cookingTime") or "").strip().lower()
     txt = _COOKING_TIME_PROMPT.get(ct)
-    if not txt:
-        return form_for_prompt
-    out = dict(form_for_prompt)
-    out["cookingTime"] = txt.format(m=_COOKING_TIME_BUDGET_MIN.get(ct, 0))
+    if txt:
+        out["cookingTime"] = txt.format(m=_COOKING_TIME_BUDGET_MIN.get(ct, 0))
+    st = schedule_rule(form_for_prompt)   # [P1-PLAN-LOTE-241]
+    if st:
+        out["scheduleType"] = st
     return out
 
 

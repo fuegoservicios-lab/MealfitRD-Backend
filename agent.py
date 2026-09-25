@@ -1527,6 +1527,9 @@ def swap_meal(form_data: dict, surface: str = "individual"):
         _ct_rule_swap = __import__("horizon").cooking_time_rule(form_data)
         if _ct_rule_swap:
             context_extras += f"\n    - ⏱️ TIEMPO DE COCINA DEL USUARIO (obligatorio): {_ct_rule_swap}"
+    _sch_rule_swap = __import__("horizon").schedule_rule(form_data)  # [P1-PLAN-LOTE-241]
+    if _sch_rule_swap:
+        context_extras += f"\n    - 🌙 HORARIO DEL USUARIO (obligatorio): {_sch_rule_swap}"
 
 
     # --- REGLA CRÍTICA: ROTACIÓN CON INGREDIENTES EXISTENTES (ZERO-TRUST) ---

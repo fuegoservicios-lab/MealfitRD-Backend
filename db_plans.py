@@ -1605,6 +1605,13 @@ def _finalize_plan_data_for_insert(data: dict, *, surface: str = "pre-INSERT",
                 # (rellenos, cerradores, compra única, embarazo) añaden comida DESPUÉS del escaneo del revisor; aquí se
                 # retira la línea añadida que viola una restricción declarada. Sin contexto (`{}`) no hace nada.
                 # tooltip-anchor: P1-PLAN-LOTE-233-ULTIMA-PALABRA
+                # [P1-PLAN-LOTE-241 · 2026-09-25] horas por franja según el horario declarado (nocturno / rotativo).
+                # tooltip-anchor: P1-PLAN-LOTE-241-HORARIO
+                try:
+                    import horario_comidas as _hcom
+                    _hcom.asignar_horas(_pd, _clin_ctx)
+                except Exception as _hcom_e:
+                    logger.debug(f"[P1-PLAN-LOTE-241] horas del horario no-op: {type(_hcom_e).__name__}: {_hcom_e}")
                 try:
                     import restricciones_finales as _rfin
                     _rfin.retirar_prohibidos(_pd, _clin_ctx, db=_db_ins, surface=surface)

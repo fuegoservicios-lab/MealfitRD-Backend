@@ -53,7 +53,7 @@ def _nucleo_en_el_nombre(linea, nombre) -> bool:
     return any(_en_el_nombre(w, nombre) for w in palabras)
 
 
-def _motivo(linea, nombre, alergias, dieta, rechazos, go):
+def _motivo(linea, nombre, alergias, dieta, rechazos, go, ctx_farmacos=None):
     mini = {"days": [{"meals": [{"name": nombre, "ingredients": [linea]}]}]}
     if alergias:
         v = go._scan_allergen_violations(mini, alergias)
@@ -67,6 +67,11 @@ def _motivo(linea, nombre, alergias, dieta, rechazos, go):
         v = go._scan_allergen_violations(mini, rechazos)
         if v:
             return "rechazo", str(v[0][2])
+    if ctx_farmacos is not None:   # [P1-PLAN-LOTE-246] IMAO + tiramina
+        import medication_rules as _mr
+        if _mr.tyramine_violations(mini, ctx_farmacos):
+            m = _mr._TYRAMINE_RX.search(_sa(linea)) if _mr._TYRAMINE_RX else None
+            return "farmaco", (m.group(0) if m else "tiramina")
     return None
 
 
@@ -80,7 +85,7 @@ def retirar_prohibidos(plan: dict, ctx: dict, db=None, surface: str = "") -> dic
         alergias = [str(a).strip() for a in (ctx.get("allergies") or []) if _sa(a).strip() not in _SENT]
         dieta = ctx.get("dietType") or ctx.get("diet_type")
         rechazos = go._dislike_declarations(ctx) if hasattr(go, "_dislike_declarations") else []
-        if not (alergias or rechazos or dieta):
+        if not (alergias or rechazos or dieta or ctx.get("medications") or ctx.get("otherMedications")):
             return out
         for day in plan.get("days") or []:
             for meal in (day.get("meals") or []) if isinstance(day, dict) else []:
@@ -92,7 +97,7 @@ def retirar_prohibidos(plan: dict, ctx: dict, db=None, surface: str = "") -> dic
                 nombre = meal.get("name") or ""
                 keep, quitar = [], []
                 for linea in ings:
-                    mot = _motivo(str(linea), nombre, alergias, dieta, rechazos, go)
+                    mot = _motivo(str(linea), nombre, alergias, dieta, rechazos, go, ctx_farmacos=ctx)
                     if mot is None:
                         keep.append(linea)
                         continue
@@ -112,8 +117,8 @@ def retirar_prohibidos(plan: dict, ctx: dict, db=None, surface: str = "") -> dic
                 if isinstance(raw, list) and raw:
                     meal["ingredients_raw"] = [
                         r for r in raw
-                        if _motivo(str(r), nombre, alergias, dieta, rechazos, go) is None
-                        or _en_el_nombre(_motivo(str(r), nombre, alergias, dieta, rechazos, go)[1], nombre)]
+                        if _motivo(str(r), nombre, alergias, dieta, rechazos, go, ctx_farmacos=ctx) is None
+                        or _en_el_nombre(_motivo(str(r), nombre, alergias, dieta, rechazos, go, ctx_farmacos=ctx)[1], nombre)]
                 # La nota determinista que acompañaba al añadido («🫓 Acompaña con el casabe…», «🍚 Cuece el arroz…»)
                 # se va con él: un paso que nombra un alimento que ya no está es otra contradicción.
                 rec = meal.get("recipe")
@@ -124,6 +129,23 @@ def retirar_prohibidos(plan: dict, ctx: dict, db=None, surface: str = "") -> dic
                                               and not p.strip().startswith(("⚠", "⚕", "🤰"))
                                               and any(re.search(r"\b" + re.escape(t) + r"(?:es|s)?\b", _sa(p))
                                                       for t in _terms))]
+                # [P1-PLAN-LOTE-248 · 2026-09-25] Si lo retirado era un ALÉRGENO (o tiramina con IMAO) y un paso de la
+                # receta aún lo nombra, se dice en una nota: el relleno lo había añadido PORQUE el paso lo nombraba, y la
+                # instrucción que el usuario sigue es el paso. (Escanear los pasos en el revisor dio 5 de 5 falsos
+                # positivos en la batería: «semillas tostadas», «claras cuajadas», «hasta lograr una crema».)
+                # tooltip-anchor: P1-PLAN-LOTE-248-NOTA-DE-OMISION
+                _rec248 = meal.get("recipe")
+                if isinstance(_rec248, list):
+                    _pasos248 = " ".join(_sa(p) for p in _rec248 if isinstance(p, str) and p.strip()[:1].isalpha())
+                    for _l248, _k248, _t248 in quitar:
+                        if _k248 not in ("alergia", "farmaco"):
+                            continue
+                        if not re.search(r"\b" + re.escape(_sa(_t248)) + r"(?:es|s)?\b", _pasos248):
+                            continue
+                        _nota248 = (f"⚠️ {'Alergia declarada' if _k248 == 'alergia' else 'Interacción con tu medicamento'}: "
+                                    f"esta receta nombra «{_t248}» — omítelo, no lo añadas.")
+                        if _nota248 not in _rec248:
+                            _rec248.append(_nota248)
                 if db is not None:
                     try:
                         go._truth_up_meal_macros_from_strings(meal, db)

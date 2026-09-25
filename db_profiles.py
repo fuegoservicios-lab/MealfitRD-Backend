@@ -364,6 +364,7 @@ def build_clinical_form_from_profile(user_id: str) -> dict:
             "allergies": [str(a).strip() for a in (_hp_ft.get("allergies") or []) if str(a).strip()],
             "dietType": _hp.get("dietType") or _hp.get("diet_type"),
             "dislikes": _hp_ft.get("dislikes") or [],
+            "scheduleType": _hp.get("scheduleType"),   # [P1-PLAN-LOTE-241] horas del turno nocturno
         }
     except Exception as _e:
         logger.warning(f"[P1-PREINSERT-CLINICAL-CTX] perfil clínico no hidratado para "

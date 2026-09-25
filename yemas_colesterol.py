@@ -28,6 +28,7 @@ _FRAC = {"½": 0.5, "¼": 0.25, "¾": 0.75, "⅓": 1 / 3, "⅔": 2 / 3}
 _LINEA_UNIDADES = re.compile(r"^\s*(\d+(?:[.,]\d+)?)?\s*([½¼¾⅓⅔])?\s*(?:huevos?)\b(?!\s+de\s+codorniz)", re.I)
 _LINEA_GRAMOS = re.compile(r"^\s*(\d+(?:[.,]\d+)?)\s*g(?:r|ramos)?\s+de\s+huevos?\b(?!\s+de\s+codorniz)", re.I)
 _PASO_CUENTA = re.compile(r"\b(\d+|un|una|dos|tres|cuatro|cinco|seis)\s+huevos?\b", re.I)
+_CLARAS_RE = re.compile(r"^\s*(\d+)\s+claras?\s+de\s+huevo\s*$", re.I)
 
 
 def _knob_int(nombre, defecto):
@@ -138,17 +139,31 @@ def topar_yemas(plan: dict, form_data, db=None) -> int:
                         _reescribir_pasos(meal, yemas,
                                           (f"{txt_h} y {claras} claras" if txt_h else f"{claras} claras de huevo"))
                 if tocado:
+                    # [P1-PLAN-LOTE-242] una sola línea de claras por comida y con su número gramatical («1 clara»):
+                    # la batería real dio «1 claras de huevo» + «3 claras de huevo» en el mismo plato.
+                    _total_cl = 0
+                    _sin_cl = []
+                    for _l in nuevos:
+                        _mc = _CLARAS_RE.match(str(_l))
+                        if _mc:
+                            _total_cl += int(_mc.group(1))
+                        else:
+                            _sin_cl.append(_l)
+                    if _total_cl:
+                        _sin_cl.append(f"{_total_cl} clara{'s' if _total_cl != 1 else ''} de huevo")
+                    nuevos = _sin_cl
                     meal["ingredients"] = nuevos
                     raw = meal.get("ingredients_raw")
                     if isinstance(raw, list):
                         raw2 = []
                         for r in raw:
                             y, _f = _yemas_de_linea(r)
-                            if not y:
+                            # [P1-PLAN-LOTE-242] las claras que ya traía el raw también salen: el total de abajo las
+                            # incluye (contarlas dos veces compraría el doble)
+                            if not y and "clara" not in _sa(r):
                                 raw2.append(r)
                         yemas_meal = sum(_yemas_de_linea(x)[0] for x in nuevos)
-                        claras_meal = sum(int(m.group(1)) for x in nuevos
-                                          for m in [re.match(r"^\s*(\d+)\s+claras de huevo", str(x))] if m)
+                        claras_meal = sum(int(m.group(1)) for x in nuevos for m in [_CLARAS_RE.match(str(x))] if m)
                         if yemas_meal:
                             raw2.append(f"{int(round(yemas_meal * _EGG_G))}g de huevo")
                         if claras_meal:

@@ -526,3 +526,38 @@ def vitamin_k_consistency(plan) -> dict:
     variability = "low" if spread <= 1 else ("moderate" if spread <= 3 else "high")
     return {"applicable": True, "per_day": per_day, "spread": spread, "variability": variability,
             "note": note, "method": "name_presence_heuristic"}
+
+
+# [P1-PLAN-LOTE-246 · 2026-09-25] IMAO + tiramina: la regla `maoi` de arriba llama a la interacción «potencialmente
+# LETAL» (crisis hipertensiva) y solo existía como prompt. Auditoría del 25-sep: ni el revisor, ni el swap, ni el escudo
+# la miraban de forma determinista — un cerrador o un relleno podía sembrar parmesano o salsa de soya. Lista ESTRECHA de
+# alimentos altos en tiramina (añejados, curados, fermentados); los quesos FRESCOS no entran (cottage, ricotta,
+# requesón, queso fresco/blanco). Límite de palabra y sin acentos; solo ingredientes. tooltip-anchor: P1-PLAN-LOTE-246-TIRAMINA
+_TYRAMINE_TERMS = (
+    "parmesano", "queso parmesano", "cheddar", "gouda", "manchego", "roquefort", "queso azul", "gorgonzola", "gruyere",
+    "emmental", "camembert", "brie", "provolone", "pecorino", "queso anejo", "queso curado", "queso madurado",
+    "salami", "chorizo", "pepperoni", "salchichon", "jamon serrano", "sobrasada", "longaniza", "cecina",
+    "salsa de soya", "salsa de soja", "salsa teriyaki", "miso", "tempeh", "natto", "kimchi", "chucrut",
+    "salsa de pescado", "extracto de levadura", "habas", "cerveza", "vino tinto",
+    "arenque ahumado", "arenque salado", "bacalao salado",
+)
+_TYRAMINE_RX = re.compile(r"\b(?:" + "|".join(re.escape(t) for t in sorted(_TYRAMINE_TERMS, key=len, reverse=True))
+                          + r")(?:s|es)?\b")
+
+
+def tyramine_violations(plan, form_data) -> list:
+    """[P1-PLAN-LOTE-246] «'<ingrediente>' (tiramina con IMAO) en <comida>» por cada alimento alto en tiramina, SOLO si
+    el perfil toma un IMAO. `plan` = {"days": [{"meals": [...]}]}. Vacío si no aplica. Nunca lanza."""
+    try:
+        if not any(getattr(r, "id", "") == "maoi" for r in detect_active_medications(form_data or {})):
+            return []
+        rx = _TYRAMINE_RX
+        out = []
+        for day in (plan or {}).get("days") or []:
+            for meal in (day.get("meals") or []) if isinstance(day, dict) else []:
+                for ing in (meal.get("ingredients") or []) if isinstance(meal, dict) else []:
+                    if rx.search(_strip_accents(str(ing).lower())):
+                        out.append(f"'{ing}' (tiramina con IMAO) en {meal.get('name')}")
+        return out
+    except Exception:
+        return []

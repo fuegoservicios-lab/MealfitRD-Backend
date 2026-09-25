@@ -517,7 +517,17 @@ _PROCESS_START_ISO = datetime.now(timezone.utc).isoformat()
 # [P1-PLAN-LOTE-238 · 2026-09-25] el relleno de ganar músculo: carbohidrato listo del país y sin violar restricciones.
 # [P1-PLAN-LOTE-239 · 2026-09-25] el arroz de noche se cambia por un tubérculo que el usuario puede y quiere comer.
 # [P1-PLAN-LOTE-240 · 2026-09-25] aire en el god-file: la lógica nueva de 227-239 y cuatro tablas de datos, fuera.
-_LAST_KNOWN_PFIX = "P1-PLAN-LOTE-240 · 2026-09-25"
+# [P1-PLAN-LOTE-241 · 2026-09-25] el horario del formulario (turno nocturno / rotativo) llega al plan: prompt del
+# generador, reescritores y horas deterministas.
+# [P1-PLAN-LOTE-242 · 2026-09-25] una línea de claras por plato, «1 clara», y la compra no las cuenta dos veces.
+# [P1-PLAN-LOTE-243 · 2026-09-25] el día determinista excluye por CLASE los rechazos y ve el texto libre.
+# [P1-PLAN-LOTE-244 · 2026-09-25] el camino degradado tamiza también el plan de respaldo (rechazos y embarazo).
+# [P1-PLAN-LOTE-245 · 2026-09-25] con «Nada» de tiempo los cerradores eligen proteína lista.
+# [P1-PLAN-LOTE-246 · 2026-09-25] IMAO + tiramina con guard determinista (revisor, swap, escudo).
+# [P1-PLAN-LOTE-247 · 2026-09-25] «maní molido hasta obtener una crema» no es un lácteo (dieta y alergia).
+# [P1-PLAN-LOTE-248 · 2026-09-25] si la última palabra retira un alérgeno que un paso aún nombra, lo dice en
+# una nota de omisión (escanear los pasos en el revisor dio 5/5 falsos positivos).
+_LAST_KNOWN_PFIX = "P1-PLAN-LOTE-248 · 2026-09-25"
 
 # [P1-SENTRY-SAMPLE-COST · 2026-05-12] Sentry sampling driven from env vars
 # con default seguro 0.1 (10%). Pre-fix tenía `traces_sample_rate=1.0` y

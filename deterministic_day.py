@@ -326,6 +326,30 @@ def _fijados_para(fijados, day_index, franja):
 _RE_LINEA = re.compile(r"^\s*([\d.]+)\s*g\s+de\s+(.+)$")
 
 
+def restricciones_del_formulario(hp, fd) -> tuple:
+    """[P1-PLAN-LOTE-243 · 2026-09-25] (alergias, alimentos excluidos) del perfil Y del formulario, con lo tecleado a mano.
+
+    La auditoría del 25-sep encontró dos huecos en el día determinista: las alergias salían de `hp or fd` (con el perfil
+    guardado presente, lo escrito en «Otra alergia» no contaba) y los «no me gusta» se comparaban por NOMBRE EXACTO con
+    los constituyentes de la plantilla — el chip «Pescado» no excluía «Sardinas», «Bacalao» ni «Atún». Los rechazos se
+    expanden por clase con el MISMO vocabulario del escáner (`_expand_allergy_declarations`, lote 210: mariscos ≠
+    pescado) más los sinónimos propios del guard de rechazos (lote 232). tooltip-anchor: P1-PLAN-LOTE-243-DIA-DETERMINISTA"""
+    hp = hp if isinstance(hp, dict) else {}
+    fd = fd if isinstance(fd, dict) else {}
+    try:
+        import graph_orchestrator as _go
+        hp_ft, fd_ft = _go.profile_with_free_text(hp), _go.profile_with_free_text(fd)
+        _sent = _go._SENTINEL_NONE_VALUES
+        alergias = sorted({str(a).strip() for a in list(hp_ft.get("allergies") or []) + list(fd_ft.get("allergies") or [])
+                           if str(a).strip() and str(a).strip().lower() not in _sent})
+        rech = list(dict.fromkeys(_go._dislike_declarations(hp_ft) + _go._dislike_declarations(fd_ft)))
+        excluidos = sorted(set(rech) | set(_go._expand_allergy_declarations(rech)))
+        return alergias, excluidos
+    except Exception:
+        alergias = [str(a) for a in (hp.get("allergies") or fd.get("allergies") or []) if a]
+        return alergias, [str(x) for x in (hp.get("dislikes") or fd.get("dislikes") or []) if x]
+
+
 def deterministic_day_enabled() -> bool:
     """Knob. Por defecto APAGADO: encender esto cambia QUÉ come el usuario, y eso se decide."""
     try:
@@ -1790,6 +1814,10 @@ def build_day_for_skeleton(nutrition, form_data, skeleton_day, day_num, user_id=
         # [P1-PLAN-LOTE-3 · B5] los «no me gusta» del formulario y las exclusiones compiladas, al selector
         _excluidos = [str(x) for x in (list(_hp.get("dislikes") or _fd.get("dislikes") or [])
                                         + list(((_eff.get("diet") or {}).get("exclusions")) or [])) if x]
+        # [P1-PLAN-LOTE-243] + texto libre y expansión por clase («Pescado» ⇒ sardina, bacalao, atún…)
+        _alergias_ft, _excl_ft = restricciones_del_formulario(_hp, _fd)
+        _alergias = sorted(set(_alergias) | set(_alergias_ft))
+        _excluidos = sorted(set(_excluidos) | set(_excl_ft))
         # [P1-PLAN-LOTE-26] (CUL-P1-05) el equipo declarado, al selector: `None` si no se declaró (no se poda nada)
         try:
             from culinary_context import declared_equipment as _de_ctx

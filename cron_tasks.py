@@ -25743,7 +25743,7 @@ def _calculate_learning_metrics(new_days: list, prior_meals: list, prior_days: l
 DEGRADED_SAFETY_SCAN = _env_bool("MEALFIT_DEGRADED_SAFETY_SCAN", True)
 
 
-def _degraded_safety_violations(day, allergies, diet) -> list:
+def _degraded_safety_violations(day, allergies, diet, form_data=None) -> list:
     """[P0-DEGRADED-SAFETY-SCAN · 2026-07-31] Violaciones de alérgeno/dieta de UN día del path
     degradado, con el MISMO escáner determinista que corre el path LLM.
 
@@ -25765,7 +25765,13 @@ def _degraded_safety_violations(day, allergies, diet) -> list:
         out = []
         for meal in (day.get("meals") or []):
             if isinstance(meal, dict):
-                out.extend(clinical_backstop_for_meal(meal, allergies=allergies or [], diet_type=diet))
+                out.extend(clinical_backstop_for_meal(meal, allergies=allergies or [], diet_type=diet,
+                                                      form_data=form_data))
+        # [P1-PLAN-LOTE-244 · 2026-09-25] Con el perfil: también los «no me gusta» (por clase, lote 232) — el
+        # mercurio en embarazo ya lo mira `clinical_backstop_for_meal` cuando recibe el formulario.
+        if isinstance(form_data, dict):
+            from graph_orchestrator import _scan_dislike_violations
+            out.extend(f"rechazo '{t}' en '{i}'" for _m, i, t in _scan_dislike_violations({"days": [day]}, form_data))
         return out
     except Exception as _dss_e:
         logger.error(f"[P0-DEGRADED-SAFETY-SCAN] Escáner falló ({type(_dss_e).__name__}: {_dss_e}) — bloqueo conservador.")
@@ -29650,7 +29656,8 @@ __PLAN_MODE_GATE__
                             # Escáner determinista además del substring: el substring compara el
                             # LABEL del chip ('frutos secos' no aparece en 'Almendras fileteadas')
                             # y no sabe nada de la dieta. tooltip-anchor: P0-DEGRADED-SAFETY-SCAN
-                            if _degraded_safety_violations(day, current_allergies, current_diet):
+                            if _degraded_safety_violations(day, current_allergies, current_diet,
+                                                           form_data=locals().get("_hp_union")):   # [P1-PLAN-LOTE-244]
                                 return True
                             return False
 
@@ -29866,6 +29873,19 @@ __PLAN_MODE_GATE__
                     # `SELECT health_profile->'emergency_backup_plan' ... WHERE id = %s`
                     # era un round-trip redundante a la misma fila user_profiles.
                     backup_days = health_profile.get('emergency_backup_plan', []) or []
+                    # [P1-PLAN-LOTE-244 · 2026-09-25] El respaldo se sembró con las restricciones de ENTONCES y saltaba
+                    # el tamiz de arriba: sus días entraban cuando se agotaba el pool y sus comidas sustituían platos
+                    # repetidos (auditoría del 25-sep: «usuario que se volvió vegano + IA caída → Pollo guisado»). Pasa
+                    # por el MISMO escáner, con el perfil actual (alergias, dieta, rechazos, embarazo).
+                    # tooltip-anchor: P1-PLAN-LOTE-244-RESPALDO-TAMIZADO
+                    try:
+                        _hp_u244 = locals().get("_hp_union") or {}
+                        backup_days = [d for d in backup_days if isinstance(d, dict)
+                                       and not _degraded_safety_violations(d, current_allergies, current_diet,
+                                                                           form_data=_hp_u244)]
+                    except Exception as _bk244_e:
+                        logger.warning(f"[P1-PLAN-LOTE-244] tamiz del respaldo falló ({_bk244_e!r}) — respaldo descartado")
+                        backup_days = []
                     used_meal_names = set()
                 
                     last_chosen_hash = None
