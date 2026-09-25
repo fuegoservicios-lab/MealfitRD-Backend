@@ -286,8 +286,9 @@ def test_los_siete_pasos_sin_campo_llevan_id_propio():
         pytest.skip("frontend no presente (repo hermano)")
     s = flow.read_text(encoding="utf-8")
     assert "step_id: step?.id || field || `step_${currentStep}`," in s
-    ids = re.findall(r"^\s+id: '([A-Za-z]+)',$", s, re.M)
-    assert sorted(ids) == sorted(["habits", "shoppingHabits", "stapleFoods", "goalTarget", "supplements", "pantryBuilder", "trackingFinish"]), ids
+    # [P1-PLAN-LOTE-292] 'supplements' vive en las DOS ramas (plan y contador, nunca a la vez): se cuenta el conjunto
+    ids = sorted(set(re.findall(r"^\s+id: '([A-Za-z]+)',$", s, re.M)))
+    assert ids == sorted(["habits", "shoppingHabits", "stapleFoods", "goalTarget", "supplements", "pantryBuilder", "trackingFinish"]), ids
     assert "P1-PLAN-LOTE-13" in _src("docs/plan_policy_f4.md")
 
 
