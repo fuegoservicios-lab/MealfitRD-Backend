@@ -134,7 +134,7 @@ def test_C1_sin_porciones_conocidas_no_avisa_de_pocas(monkeypatch):
     import db
     import db_inventory
     fila = {"id": 7, "ingredient_name": "Creatina", "quantity": 0, "serving_unit": "g",
-            "serving_label": {"serving_g": 5, "kcal": 0, "protein_g": 0, "carbs_g": 0, "fats_g": 0}}
+            "serving_label": {"gramos_porcion": 5, "kcal": 0, "protein_g": 0, "carbs_g": 0, "fats_g": 0}}
     monkeypatch.setattr(suplementos, "buscar", lambda uid, n: fila)
     monkeypatch.setattr(suplementos, "descontar", lambda uid, fid, n: 0.0)
     monkeypatch.setattr(tools, "db_log_consumed_meal", lambda *a, **k: "meal-1")
@@ -161,7 +161,7 @@ def test_I2_solo_recomendar_nunca_deja_un_bcaa():
 def test_I3_etiqueta_sin_gramos_o_con_calorias_imposibles():
     import suplementos
     assert suplementos.etiqueta_valida({"kcal": 1200, "protein_g": 24, "carbs_g": 3, "fats_g": 1}) is None
-    assert suplementos.etiqueta_valida({"serving_g": 200, "kcal": 900, "protein_g": 24, "carbs_g": 3, "fats_g": 1}) is None
+    assert suplementos.etiqueta_valida({"gramos_porcion": 200, "kcal": 900, "protein_g": 24, "carbs_g": 3, "fats_g": 1}) is None
     assert suplementos.etiqueta_valida({"kcal": 120, "protein_g": 24, "carbs_g": 3, "fats_g": 1.5}) is not None
 
 

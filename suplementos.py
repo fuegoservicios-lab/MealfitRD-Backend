@@ -14,18 +14,18 @@ _CAMPOS = ("kcal", "protein_g", "carbs_g", "fats_g")
 
 # Estimados genéricos POR PORCIÓN (unidad típica del producto). Claves = constants.SUPPLEMENT_NAMES.
 ESTIMADOS = {
-    "whey_protein":  {"unidad": "scoop",   "serving_g": 30, "kcal": 120, "protein_g": 24, "carbs_g": 3, "fats_g": 1.5},
-    "vegan_protein": {"unidad": "scoop",   "serving_g": 33, "kcal": 130, "protein_g": 21, "carbs_g": 6, "fats_g": 2.5},
-    "creatine":      {"unidad": "g",       "serving_g": 5,  "kcal": 0,   "protein_g": 0,  "carbs_g": 0, "fats_g": 0},
-    "bcaa":          {"unidad": "scoop",   "serving_g": 10, "kcal": 10,  "protein_g": 0,  "carbs_g": 2, "fats_g": 0},
-    "pre_workout":   {"unidad": "scoop",   "serving_g": 10, "kcal": 5,   "protein_g": 0,  "carbs_g": 1, "fats_g": 0},
-    "fat_burner":    {"unidad": "capsula", "serving_g": 1,  "kcal": 0,   "protein_g": 0,  "carbs_g": 0, "fats_g": 0},
-    "collagen":      {"unidad": "scoop",   "serving_g": 10, "kcal": 36,  "protein_g": 9,  "carbs_g": 0, "fats_g": 0},
-    "multivitamin":  {"unidad": "capsula", "serving_g": 1,  "kcal": 0,   "protein_g": 0,  "carbs_g": 0, "fats_g": 0},
-    "omega3":        {"unidad": "capsula", "serving_g": 1,  "kcal": 10,  "protein_g": 0,  "carbs_g": 0, "fats_g": 1},
-    "magnesium":     {"unidad": "capsula", "serving_g": 1,  "kcal": 0,   "protein_g": 0,  "carbs_g": 0, "fats_g": 0},
-    "probiotics":    {"unidad": "capsula", "serving_g": 1,  "kcal": 0,   "protein_g": 0,  "carbs_g": 0, "fats_g": 0},
-    "electrolytes":  {"unidad": "porcion", "serving_g": 7,  "kcal": 10,  "protein_g": 0,  "carbs_g": 2, "fats_g": 0},
+    "whey_protein":  {"unidad": "scoop",   "gramos_porcion": 30, "kcal": 120, "protein_g": 24, "carbs_g": 3, "fats_g": 1.5},
+    "vegan_protein": {"unidad": "scoop",   "gramos_porcion": 33, "kcal": 130, "protein_g": 21, "carbs_g": 6, "fats_g": 2.5},
+    "creatine":      {"unidad": "g",       "gramos_porcion": 5,  "kcal": 0,   "protein_g": 0,  "carbs_g": 0, "fats_g": 0},
+    "bcaa":          {"unidad": "scoop",   "gramos_porcion": 10, "kcal": 10,  "protein_g": 0,  "carbs_g": 2, "fats_g": 0},
+    "pre_workout":   {"unidad": "scoop",   "gramos_porcion": 10, "kcal": 5,   "protein_g": 0,  "carbs_g": 1, "fats_g": 0},
+    "fat_burner":    {"unidad": "capsula", "gramos_porcion": 1,  "kcal": 0,   "protein_g": 0,  "carbs_g": 0, "fats_g": 0},
+    "collagen":      {"unidad": "scoop",   "gramos_porcion": 10, "kcal": 36,  "protein_g": 9,  "carbs_g": 0, "fats_g": 0},
+    "multivitamin":  {"unidad": "capsula", "gramos_porcion": 1,  "kcal": 0,   "protein_g": 0,  "carbs_g": 0, "fats_g": 0},
+    "omega3":        {"unidad": "capsula", "gramos_porcion": 1,  "kcal": 10,  "protein_g": 0,  "carbs_g": 0, "fats_g": 1},
+    "magnesium":     {"unidad": "capsula", "gramos_porcion": 1,  "kcal": 0,   "protein_g": 0,  "carbs_g": 0, "fats_g": 0},
+    "probiotics":    {"unidad": "capsula", "gramos_porcion": 1,  "kcal": 0,   "protein_g": 0,  "carbs_g": 0, "fats_g": 0},
+    "electrolytes":  {"unidad": "porcion", "gramos_porcion": 7,  "kcal": 10,  "protein_g": 0,  "carbs_g": 2, "fats_g": 0},
 }
 
 
@@ -41,8 +41,8 @@ def etiqueta_valida(etiqueta) -> dict | None:
     """La etiqueta normalizada, o None si falta o es inverosímil (kcal > 9·g + 20, o macros > gramos + 1)."""
     if not isinstance(etiqueta, dict):
         return None
-    g = _num(etiqueta.get("serving_g"))
-    out = {"serving_g": g if g is not None else 0}
+    g = _num(etiqueta.get("gramos_porcion"))
+    out = {"gramos_porcion": g if g is not None else 0}
     for k in _CAMPOS:
         v = _num(etiqueta.get(k, 0))
         if v is None:

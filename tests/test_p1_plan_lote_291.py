@@ -9,7 +9,7 @@ from pathlib import Path
 import pytest
 
 _BACKEND = Path(__file__).resolve().parents[1]
-WHEY = {"serving_g": 31, "kcal": 120, "protein_g": 24, "carbs_g": 3, "fats_g": 1.5}
+WHEY = {"gramos_porcion": 31, "kcal": 120, "protein_g": 24, "carbs_g": 3, "fats_g": 1.5}
 
 
 def _src(rel):

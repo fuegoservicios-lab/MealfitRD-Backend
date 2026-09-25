@@ -16,7 +16,7 @@ def _src(rel):
     return (_BACKEND / rel).read_text(encoding="utf-8")
 
 
-WHEY = {"serving_g": 31, "kcal": 120, "protein_g": 24, "carbs_g": 3, "fats_g": 1.5}
+WHEY = {"gramos_porcion": 31, "kcal": 120, "protein_g": 24, "carbs_g": 3, "fats_g": 1.5}
 
 
 # ── Task 1: datos y SSOT ────────────────────────────────────────────────────────────────────────────────────────────
@@ -33,7 +33,7 @@ def test_etiqueta_absurda_se_rechaza():
     assert s.etiqueta_valida(WHEY) == WHEY
     assert s.etiqueta_valida({**WHEY, "kcal": 1200}) is None          # 1200 kcal en 31 g: foto mal leída
     assert s.etiqueta_valida({**WHEY, "protein_g": 40}) is None       # más macros que gramos de porción
-    assert s.etiqueta_valida({"kcal": 0, "serving_g": 5}) == {"serving_g": 5, "kcal": 0, "protein_g": 0,
+    assert s.etiqueta_valida({"kcal": 0, "gramos_porcion": 5}) == {"gramos_porcion": 5, "kcal": 0, "protein_g": 0,
                                                               "carbs_g": 0, "fats_g": 0}   # creatina
     assert s.etiqueta_valida("no") is None
 
