@@ -476,6 +476,19 @@ CRITIQUE_CROSSDAY_DISH_PARITY_ENABLED = _env_bool("MEALFIT_CRITIQUE_CROSSDAY_DIS
 # owner; también 2 cenas-desayuno el 2026-07-10). Detectores asimétricos critique↔reviewer
 # eran la clase entera. Flip a False revierte.
 CRITIQUE_SLOT_PARITY_ENABLED = _env_bool("MEALFIT_CRITIQUE_SLOT_PARITY", True)
+# [P1-PLAN-LOTE-220 · 2026-09-24] El tiempo de cocina de «sin tiempo» (`cookingTime=none`, 10 min) al corrector del
+# self-critique. Medido sobre las 85 corridas guardadas: con «30 min» y «1 hora», 0 platos fuera de tiempo en 894
+# comidas; con «sin tiempo», 41 de 144 por encima del margen (28 %) y 20 al doble o más (horno, guisos, víveres
+# hervidos: «Bollitos de maíz rellenos» 30 min, «Wrap con auyama asada» 25). El prompt ya lo prohibía y la auditoría
+# de fidelidad solo lo registraba (severidad baja): nadie lo corregía. El recetario determinista no sirve de repuesto
+# (tiene 2 almuerzos y 1 cena de 10 min). Ahora el plato fuera de tiempo es una incoherencia determinista del día: el
+# evaluador la marca, el día entra al piso de corrección y el corrector la recibe literal. Knob
+# `MEALFIT_CRITIQUE_PREP_TIME`.
+# La CAUSA principal resultó ser otra (corrida instrumentada): el generador del día entregó las 12 comidas dentro de
+# 10 min y el CORRECTOR —que no ve el formulario— las reescribió en 15-20 min al arreglar variedad u horario. Con solo
+# el detector, 3 corridas reales dieron 16 de 36 fuera. Por eso el tope viaja SIEMPRE a quien reescribe un día o un
+# plato: corrector del self-critique, regen quirúrgico y swap (`horizon.cooking_time_rule`).
+CRITIQUE_PREP_TIME_ENABLED = _env_bool("MEALFIT_CRITIQUE_PREP_TIME", True)
 
 # [P1-ADVERSARIAL-PAID-ONLY · 2026-07-09] El adversarial self-play (2 candidatos + juez LLM #5) es una
 # capa de calidad ADITIVA, no un gate de seguridad. Restringirla a tiers pagados: free/guest caen al
@@ -9239,6 +9252,44 @@ def _detect_light_base_repeats(days: list) -> list:
         return []
 
 
+def _detect_prep_time_issues(days: list, form_data: dict) -> list:
+    """[P1-PLAN-LOTE-220] «TIEMPO DE COCINA: Día N, franja: «plato» declara M min…» para cada comida de un usuario SIN
+    tiempo para cocinar que pasa el margen de la auditoría (`horizon._prep_time_issues`: 1,25× el presupuesto). Solo
+    `cookingTime=none`: con 30 min y 1 hora el modelo ya cumple (0 de 894 comidas). Puro; nunca lanza.
+    tooltip-anchor: P1-PLAN-LOTE-220-TIEMPO-AL-CORRECTOR"""
+    if not CRITIQUE_PREP_TIME_ENABLED:
+        return []
+    try:
+        import horizon as _hz_pt
+        ct = str((form_data or {}).get("cookingTime") or "").strip().lower()
+        if ct != "none":
+            return []
+        presupuesto = int(_hz_pt._COOKING_TIME_BUDGET_MIN.get(ct) or 0)
+        if presupuesto <= 0:
+            return []
+        out = []
+        for d in days or []:
+            if not isinstance(d, dict):
+                continue
+            dn = d.get("day", "?")
+            for m in (d.get("meals") or []):
+                if not isinstance(m, dict):
+                    continue
+                mins = _hz_pt._prep_minutes(m)
+                if mins is None or mins <= presupuesto * 1.25:
+                    continue
+                out.append(
+                    f"TIEMPO DE COCINA: Día {dn}, {str(m.get('meal') or '').strip().lower()}: «{m.get('name')}» declara "
+                    f"{mins} min y el usuario NO TIENE TIEMPO para cocinar ({presupuesto} min por comida como máximo). "
+                    f"Cámbialo por un plato que se ARME en {presupuesto} min: ensamblar, licuar, tostar o calentar (wrap, "
+                    f"ensalada, bowl, casabe o pan con proteína LISTA: huevo duro ya hecho, atún o sardina en lata, queso, "
+                    f"pollo ya cocido); nada de horno, guisos, asados ni víveres hervidos. Conserva la proteína asignada y "
+                    f"sus calorías, y pon su `prep_time` real (≤ {presupuesto} min).")
+        return out
+    except Exception:
+        return []
+
+
 def _detect_gainmuscle_dinner_issues(days: list, form_data: dict) -> list:
     """[P1-GAINMUSCLE-DINNER-PROTEIN · 2026-09-05] Señal DETERMINISTA para la autocrítica (no opinable), solo
     con objetivo de ganancia muscular: (1) una CENA sin ninguna proteína animal magra (labels pesados del gate:
@@ -9826,6 +9877,11 @@ async def self_critique_node(state: PlanState) -> dict:
                     slot_issues.append(_t)
         except Exception as _sap_e:
             logger.debug(f"[P1-CRITIQUE-SLOT-PARITY] detector no-op: {_sap_e}")
+    # [P1-PLAN-LOTE-220] el plato fuera de tiempo de «sin tiempo»: determinista, como el horario
+    _prep_time_issues = _detect_prep_time_issues(days, state.get("form_data") or {})
+    if _prep_time_issues:
+        logger.info(f"⏱️ [P1-PLAN-LOTE-220] {len(_prep_time_issues)} comida(s) fuera del tiempo de «sin tiempo» → al corrector")
+        slot_issues.extend(_prep_time_issues)
     if slot_issues:
         joined = "\n   - " + "\n   - ".join(slot_issues)
         logger.info(f"🍽️ [SELF-CRITIQUE] Incoherencias de slot detectadas:{joined}")
@@ -10151,12 +10207,21 @@ PLAN A EVALUAR (días generados):
                         if _critique_country == "DO" else
                         "  • Cambia el CARBOHIDRATO de la cena por otro del catálogo."
                     )
+                    # [P1-PLAN-LOTE-220] el tiempo de cocina del día, literal
+                    _pt_dia = [t for t in (_prep_time_issues or []) if _re.search(rf"D[ií]a {day_num}\b", t)]
+                    _pt_block = ("\nTIEMPO DE COCINA (conteo determinístico, no opinable; cámbialo aunque el resto esté "
+                                 "bien):\n- " + "\n- ".join(_pt_dia) + "\n") if _pt_dia else ""
+                    # [P1-PLAN-LOTE-220] el tope del usuario SIEMPRE: el corrector no ve el formulario y reescribía
+                    # en 15-20 min días que el generador había entregado dentro de 10
+                    _ct_rule = __import__("horizon").cooking_time_rule(state.get("form_data") or {})
+                    _ct_block = (f"\nTIEMPO DE COCINA DEL USUARIO (obligatorio, también al corregir): {_ct_rule}\n"
+                                 if _ct_rule else "")
                     correction_prompt = f"""Eres un nutricionista chef. Corrige SOLO el Día {day_num} del plan alimenticio.
 
-PROBLEMA DETECTADO: {critique.suggestions}
+PROBLEMA DETECTADO: {critique.suggestions}{_pt_block}
 
 RESTRICCIONES NUTRICIONALES (respétalas siempre):
-{ctx['nutrition_context_minimal']}
+{ctx['nutrition_context_minimal']}{_ct_block}
 {skeleton_block}
 REGLA DE PRECEDENCIA INVIOLABLE (si hay conflicto, gana esta):
 - La ASIGNACIÓN DEL PLANIFICADOR es HARD CONSTRAINT — NUNCA la violes aunque el critique pida cambiar una proteína/carbohidrato asignado.
@@ -23278,6 +23343,13 @@ _TIMETEMP_TECHNIQUE_DEFAULTS = (
     (("plancha", "sarten", "saltea", "sofrie", "sella"), "3-4 min por lado a fuego medio-alto"),
 )
 _TIMETEMP_FALLBACK_DEFAULT = "10-12 min a fuego medio"
+# [P1-PLAN-LOTE-220 · 2026-09-24] Si el paso de fuego SIN tiempo dice «microondas», ésa es la fuente de calor: «calienta
+# las arepitas horneadas ya preparadas en el microondas» recibía «(~18-20 min a 180 °C)» porque el participio del
+# ALIMENTO casaba `hornea` — un plato de «Nada» de tiempo declarado en 5 min con un paso de 20 (batería real del
+# 24-sep). Sólo en la INYECCIÓN (el paso nombra el microondas); el clamp de outliers no lo usa: «descongela en el
+# microondas y hornea 200 min» debe caer al default del horno, no al del microondas.
+# tooltip-anchor: P1-PLAN-LOTE-220-MICROONDAS
+_TIMETEMP_MICROWAVE_DEFAULT = "2-3 min en el microondas"
 
 # [P2-AUDIT-V6-BATCH · 2026-07-03] (P2-B) Plausibilidad de tiempos/temperaturas PRESENTES: el
 # backstop solo rellenaba AUSENCIAS — un "hornea 200 min" o "a 450 °C" existente se entregaba
@@ -23471,10 +23543,13 @@ def _inject_recipe_time_temp_defaults(meal: dict) -> bool:
             hay = _strip_food_words_for_technique(
                 _sa_tt((str(meal.get("name") or "") + " " + step).lower()))
             default = _TIMETEMP_FALLBACK_DEFAULT
-            for tokens, technique_default in _TIMETEMP_TECHNIQUE_DEFAULTS:
-                if any(t in hay for t in tokens):
-                    default = technique_default
-                    break
+            if "microondas" in _sa_tt(step.lower()):     # [P1-PLAN-LOTE-220] el paso nombra su fuente de calor
+                default = _TIMETEMP_MICROWAVE_DEFAULT
+            else:
+                for tokens, technique_default in _TIMETEMP_TECHNIQUE_DEFAULTS:
+                    if any(t in hay for t in tokens):
+                        default = technique_default
+                        break
             rec[i] = step.rstrip().rstrip(".") + f" (~{default})."
             meal["_recipe_timetemp_injected"] = True
             return True
@@ -27365,7 +27440,7 @@ def _enrich_generic_cheese_display_from_raw(meal: dict) -> int:
 
 
 def finalize_plan_data_coherence(days: list, db=None, allergies=None, target_fats=None, *,
-                                 main_goal=None, target_macros=None, count_caps=None) -> tuple:
+                                 main_goal=None, target_macros=None, count_caps=None, cooking_time=None) -> tuple:
     """[P1-COHERENCE-FINALIZE · 2026-06-28] Aplica el post-engine coherence stack (slice-grams → leaf-cap → quantize) de
     forma DEFENSIVA antes de cualquier persist, para los paths que saltan assemble_plan_node (partial/degradado/SSE-fallback/
     chunk). ORDEN load-bearing: slice-grams ANTES de quantize ("1¼ lonja de queso"→"30 g" antes de redondear gramos);
@@ -27539,7 +27614,8 @@ def finalize_plan_data_coherence(days: list, db=None, allergies=None, target_fat
         if (GAINMUSCLE_DAY_KCAL_FLOOR_ENABLED and GAINMUSCLE_FLOOR_FINAL_REFILL
                 and main_goal and isinstance(target_macros, dict)):
             _gm_ck = _repair_gainmuscle_day_kcal(
-                days, {"macros": target_macros}, {"mainGoal": main_goal}, final_pass=True)
+                days, {"macros": target_macros}, {"mainGoal": main_goal, "cookingTime": cooking_time},  # [P1-PLAN-LOTE-221]
+                final_pass=True)
             if _gm_ck:
                 total += _gm_ck; parts.append(f"gainmuscle_refill={_gm_ck}")
                 if ASSEMBLE_FINAL_QUANTIZE:
@@ -30640,6 +30716,15 @@ _GM_RICE_KCAL_G, _GM_RICE_CARB_G, _GM_RICE_PROT_G = 1.3, 0.28, 0.027
 # el arroz de noche está prohibido y la pasada FINAL de este piso corre DESPUÉS del guard de arroz nocturno
 # (plan vivo 080a91c7: «40 g de arroz blanco crudo» en las habichuelas guisadas de la cena, ya aprobadas).
 _GM_TUBER_FOOD, _GM_TUBER_KCAL_G, _GM_TUBER_CARB_G, _GM_TUBER_PROT_G = "batata cocida", 0.9, 0.21, 0.016
+# [P1-PLAN-LOTE-221 · 2026-09-24] Con «Nada» de tiempo (`cookingTime=none`) el relleno del piso es CASABE, listo para
+# comer (catálogo: 346,7 kcal, 85,3 g de carbo y 1,3 g de proteína por 100 g): la batata hervida (20-25 min) y el arroz
+# (18-20) rompían el tope de 10 min que el plato ya cumplía — «🍠 Cuece la batata de tus ingredientes (hervida o al
+# horno)» en 3 de 8 comidas de la batería real del 24-sep. Tope por comida 60 g (dos tortas). Knob
+# `MEALFIT_GAINMUSCLE_READY_CARB_NO_TIME`. tooltip-anchor: P1-PLAN-LOTE-221-CASABE-SIN-TIEMPO
+GAINMUSCLE_READY_CARB_NO_TIME = _env_bool("MEALFIT_GAINMUSCLE_READY_CARB_NO_TIME", True)
+_GM_READY_FOOD, _GM_READY_KCAL_G, _GM_READY_CARB_G, _GM_READY_PROT_G = "casabe", 3.47, 0.853, 0.013
+_GM_READY_MAX_G = 60
+_GM_READY_LINE_RE = _re.compile(r"^\s*\d+\s*g de casabe\s*$", _re.IGNORECASE)
 
 
 def _repair_gainmuscle_day_kcal(days: list, nutrition: dict, form_data: dict, db=None, *,
@@ -30661,6 +30746,9 @@ def _repair_gainmuscle_day_kcal(days: list, nutrition: dict, form_data: dict, db
         _goal = _sa_gm(str((form_data or {}).get("mainGoal") or (form_data or {}).get("goal") or "").lower())
         if not ("gain_muscle" in _goal or "ganar_musculo" in _goal or "ganancia" in _goal or "bulk" in _goal):
             return 0
+        # [P1-PLAN-LOTE-221] «Nada» de tiempo: el relleno es casabe (listo), no batata ni arroz por cocer
+        _sin_tiempo_gm = bool(GAINMUSCLE_READY_CARB_NO_TIME
+                              and str((form_data or {}).get("cookingTime") or "").strip().lower() == "none")
         macros = (nutrition or {}).get("macros") or {}
         _pg = float(macros.get("protein_g") or 0)
         _cg = float(macros.get("carbs_g") or 0)
@@ -30730,13 +30818,16 @@ def _repair_gainmuscle_day_kcal(days: list, nutrition: dict, form_data: dict, db
                     continue
                 # [P1-GAINMUSCLE-CENA-TUBER] guarnición por franja: cena → batata; resto → arroz blanco
                 _is_cena_gm = "cena" in _sa_gm(str(m.get("meal", "")).lower())
-                if _is_cena_gm:
+                if _sin_tiempo_gm:
+                    _sd_food, _sd_k, _sd_c, _sd_p = _GM_READY_FOOD, _GM_READY_KCAL_G, _GM_READY_CARB_G, _GM_READY_PROT_G
+                    _sd_key, _sd_note = "casabe", "🫓 Acompaña con el casabe de tus ingredientes: está listo para comer, sin cocción."
+                elif _is_cena_gm:
                     _sd_food, _sd_k, _sd_c, _sd_p = _GM_TUBER_FOOD, _GM_TUBER_KCAL_G, _GM_TUBER_CARB_G, _GM_TUBER_PROT_G
                     _sd_key, _sd_note = "batata", "🍠 Cuece la batata de tus ingredientes (hervida o al horno) y sírvela como acompañante."
                 else:
                     _sd_food, _sd_k, _sd_c, _sd_p = "arroz blanco cocido", _GM_RICE_KCAL_G, _GM_RICE_CARB_G, _GM_RICE_PROT_G
                     _sd_key, _sd_note = "arroz blanco", "🍚 Cuece el arroz blanco de tus ingredientes según el paquete y sírvelo como acompañante."
-                add_g = int(min(float(GAINMUSCLE_KCAL_FLOOR_MAX_CARB_PER_MEAL_G),
+                add_g = int(min(float(GAINMUSCLE_KCAL_FLOOR_MAX_CARB_PER_MEAL_G if not _sin_tiempo_gm else _GM_READY_MAX_G),
                                 _mgm.ceil(_need_k / _sd_k),
                                 _mgm.floor(_kcal_room / _sd_k),
                                 _mgm.floor(_carb_room / _sd_c)))
@@ -30776,12 +30867,19 @@ def _repair_gainmuscle_day_kcal(days: list, nutrition: dict, form_data: dict, db
                         f"🍚 [P1-GAINMUSCLE-NO-SECOND-RICE] '{str(m.get('name'))[:40]}' ya lleva "
                         f"arroz — no se le añade un segundo; se prueba con otra comida.")
                     continue
+                # [P1-PLAN-LOTE-221] un plato que ya trae su casabe («2 tortas de casabe») no recibe otro: sumar gramos a
+                # una línea en tortas la corrompería
+                if _sin_tiempo_gm and any("casabe" in _sa_gm(str(_gl).lower())
+                                          and not _GM_READY_LINE_RE.match(str(_gl))
+                                          for _gl in (m.get("ingredients") or [])):
+                    continue
                 # [P1-GAINMUSCLE-FLOOR-FINAL-REFILL] en la pasada final consolida en la línea de arroz ya
                 # sembrada por el floor (evita duplicar "Xg de arroz blanco cocido"); si no hay, la añade.
                 _gm_rice_idx = None
-                if final_pass:
+                if final_pass or _sin_tiempo_gm:
                     for _gi, _gl in enumerate(m.get("ingredients") or []):
-                        if f"de {_sd_food}" in str(_gl).lower():
+                        if f"de {_sd_food}" in str(_gl).lower() and (
+                                not _sin_tiempo_gm or _GM_READY_LINE_RE.match(str(_gl))):
                             _gm_rice_idx = _gi
                             break
                 if _gm_rice_idx is not None:
@@ -30795,7 +30893,7 @@ def _repair_gainmuscle_day_kcal(days: list, nutrition: dict, form_data: dict, db
                         _gm_raw[_gm_rice_idx] = line
                 else:
                     # (literal conservado: lo ancla test_p1_gainmuscle_no_second_rice)
-                    line = f"{add_g} g de arroz blanco cocido" if not _is_cena_gm else f"{add_g} g de {_sd_food}"
+                    line = f"{add_g} g de arroz blanco cocido" if not (_is_cena_gm or _sin_tiempo_gm) else f"{add_g} g de {_sd_food}"
                     m.setdefault("ingredients", []).append(line)
                     if isinstance(m.get("ingredients_raw"), list):
                         m["ingredients_raw"].append(line)
@@ -30833,12 +30931,12 @@ def _repair_gainmuscle_day_kcal(days: list, nutrition: dict, form_data: dict, db
                 try:
                     _rec_gm = m.get("recipe")
                     _sd_step_missing = (not any("arroz blanco" in str(_s).lower() for _s in _rec_gm)
-                                        if not _is_cena_gm else
+                                        if not (_is_cena_gm or _sin_tiempo_gm) else
                                         not any(_sd_key in str(_s).lower() for _s in _rec_gm))
                     if isinstance(_rec_gm, list) and _rec_gm and _sd_step_missing:
                         m["recipe"] = _insert_step_before_montaje(
                             _rec_gm,
-                            _sd_note if _is_cena_gm else
+                            _sd_note if (_is_cena_gm or _sin_tiempo_gm) else
                             "🍚 Cuece el arroz blanco de tus ingredientes según el paquete y "
                             "sírvelo como acompañante.")
                 except Exception:
@@ -38322,6 +38420,11 @@ async def assemble_plan_node(state: PlanState) -> dict:
         "fats": active_macros["fats_str"],
     }
     result["main_goal"] = nutrition["goal_label"]
+    # [P1-PLAN-LOTE-221 · 2026-09-24] El tiempo de cocina viaja con el plan: el escudo pre-INSERT y los bloques 2+ ya no
+    # tienen el formulario y su pasada final del piso de ganancia muscular volvía a poner arroz/batata por cocer a un
+    # usuario de «Nada» de tiempo. tooltip-anchor: P1-PLAN-LOTE-221-COOKING-TIME-EN-EL-PLAN
+    if str((form_data or {}).get("cookingTime") or "").strip():
+        result["_cooking_time"] = str(form_data.get("cookingTime")).strip().lower()
     # [P1-GOAL-ETA · 2026-07-03] Plazo estimado hasta la meta de peso (calculado en
     # nutrition_calculator con el déficit REAL post pisos/techos). Viaja en plan_data
     # para que el Dashboard lo muestre ("Meta: 140 lb · ~14 semanas a tu ritmo").
@@ -40459,10 +40562,14 @@ _FORWARD_PATCH_SYNONYMS = {
 UNCOOKED_FOOD_REPAIR = _env_bool("MEALFIT_UNCOOKED_FOOD_REPAIR", True)
 
 
-def _auto_patch_uncooked_foods(plan: dict, catalog: list) -> int:
+def _auto_patch_uncooked_foods(plan: dict, catalog: list, form_data: dict = None) -> int:
     if not UNCOOKED_FOOD_REPAIR or not isinstance(plan, dict) or not catalog:
         return 0
     n = 0
+    # [P1-PLAN-LOTE-220 · 2026-09-24] Con «Nada» de tiempo, el víver que nadie cuece va en cubos pequeños (8-12 min),
+    # no «al guiso 15-20 minutos»: batería real del 24-sep, «Arepitas con pavo guisado rápido» declaraba 10 min y este
+    # reparador le añadía 20 g de auyama a 15-20. Las 3 veces que disparó en 258 comidas guardadas fueron planes «Nada».
+    _sin_tiempo = str((form_data or {}).get("cookingTime") or "").strip().lower() == "none"
     try:
         from culinary_coherence import alimentos_sin_coccion, build_culinary_index
         idx = build_culinary_index(catalog)
@@ -40475,6 +40582,11 @@ def _auto_patch_uncooked_foods(plan: dict, catalog: list) -> int:
                 for food, clase in (alimentos_sin_coccion(_m, idx) or []):
                     if clase == "proteina":
                         paso = "💪 " + _closer_protein_step_text(food, False, stewy=_meal_is_stewy(_m, strip_accents))
+                    elif _sin_tiempo:
+                        _duro = any(t in strip_accents(str(food).lower())
+                                    for t in ("yuca", "name", "yautia", "malanga"))
+                        paso = (f"🍠 Corta {food} en cubos pequeños (1 cm) y hiérvelos "
+                                f"{'10-12' if _duro else '8-10'} minutos, hasta que estén tiernos, antes de servir.")
                     else:
                         paso = (f"🍠 Añade {food} al guiso y cocínalo 15-20 minutos, hasta que esté tierno por "
                                 f"dentro, antes de servir.")
@@ -41073,12 +41185,16 @@ async def surgical_marker_regen_node(state: PlanState) -> dict:
                 "coherence, pero esa proteína FUE ASIGNADA por el planificador, MANTÉN la proteína y "
                 "resuelve por OTRO medio: cambiar carbohidrato, técnica, vegetal o presentación."
             )
+        # [P1-PLAN-LOTE-220] el tope de tiempo del usuario, como en el corrector del self-critique
+        _ct_rule_sg = __import__("horizon").cooking_time_rule(form_data or {})
+        _ct_block_sg = (f"\nTIEMPO DE COCINA DEL USUARIO (obligatorio, también al corregir): {_ct_rule_sg}\n"
+                        if _ct_rule_sg else "")
         correction_prompt = f"""Eres un nutricionista chef. Corrige SOLO el Día {day_num} del plan alimenticio.
 
 PROBLEMA DETECTADO (sin resolver en pasada anterior): {original_issue}
 
 RESTRICCIONES NUTRICIONALES (respétalas siempre):
-{ctx['nutrition_context_minimal']}
+{ctx['nutrition_context_minimal']}{_ct_block_sg}
 {skeleton_block}
 {_precedence_block}
 
@@ -43592,7 +43708,7 @@ Responde ÚNICAMENTE con el JSON de revisión.
     if UNCOOKED_FOOD_REPAIR and CULINARY_CONTRACT_GUARD != "off":
         try:
             from shopping_calculator import get_master_ingredients as _gmi_uc
-            _n_uc = _auto_patch_uncooked_foods(plan, _gmi_uc())
+            _n_uc = _auto_patch_uncooked_foods(plan, _gmi_uc(), form_data=state.get("form_data"))
             if _n_uc:
                 logger.info(f"🩹 [P1-PLAN-LOTE-68] {_n_uc} paso(s) de cocción insertados para alimentos que "
                             f"la lista compra y ningún paso cocía.")

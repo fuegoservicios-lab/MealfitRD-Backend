@@ -1810,7 +1810,14 @@ _V7F_COCCION_RE = re.compile(r"\b(hierv|hervi|hervor|coce|cocin|cuec|sancoch|hor
                              r"sofri|sofrei|guisa|dor[aeo]|pocha|escalfa|plancha|parrilla|grill|airfryer|freidora|vapor|cuaj|"
                              r"sell)", re.IGNORECASE)
 #: Fuego y tiempo sin verbo de cocción: «ponlo en una sartén a fuego medio-alto, unos 4-5 minutos por lado».
-_V7F_FUEGO_RE = re.compile(r"\b(fuego|sarten|horno|olla|plancha|parrilla|freidora|airfryer)\b", re.IGNORECASE)
+_V7F_FUEGO_RE = re.compile(r"\b(fuego|sarten|horno|olla|plancha|parrilla|freidora|airfryer|microondas)\b", re.IGNORECASE)
+# [P1-PLAN-LOTE-221 · 2026-09-24] Dos falsos «sin cocción» de víveres que el reparador del lote 68 convertía en un
+# segundo paso de cocción (batería real «Nada» de tiempo, 3 de 3 disparos): «caliéntala 4-5 min en el microondas hasta
+# que esté tierna» (la auyama SÍ se coció) y «dora las rodajas de plátano maduro 2 min por lado» (el maduro es blando:
+# 2-3 min por lado lo cuecen; el mínimo de 8 min es de la yuca y el verde). El paso que dice HASTA CUÁNDO («hasta que
+# esté tierna / suave / cocida») cuece, dure lo que dure. tooltip-anchor: P1-PLAN-LOTE-221-V7F-TIERNO
+_V7F_TIERNO_RE = re.compile(r"\bhasta\s+que\s+(?:\S+\s+){0,8}?(?:tiern|suave|blanda|blando|cocid)", re.IGNORECASE)
+_V7F_MADURO_RE = re.compile(r"\bmadur[oa]s?\b", re.IGNORECASE)
 #: Verbos que MEZCLAN el alimento en una preparación: desde ahí, la cocción de la preparación lo cuece.
 _V7F_MEZCLA_RE = re.compile(r"\b(mezcl|integr|incorpor|combin|bat[ea]\b|bate\w|amas|ensart|licu|maj[ae]\w*\s+(?:\S+\s+){0,3}con\b)",
                             re.IGNORECASE)
@@ -1912,6 +1919,8 @@ def _v7f_cuece(clausula: str, clase: str) -> bool:
     if not _v7f_evidencia(clausula):
         return False
     if clase == "viver" and not _V7F_PROFUNDA_RE.search(clausula):
+        if _V7F_TIERNO_RE.search(clausula) or _V7F_MADURO_RE.search(clausula):
+            return True                              # [P1-PLAN-LOTE-221] dice hasta cuándo, o es maduro (blando)
         d = _duracion_max_min(clausula)
         if d is not None and d < _V7F_MIN_MINUTOS_VIVERES:
             return False                             # dorar la yuca 4-5 minutos no la cuece

@@ -1521,6 +1521,12 @@ def swap_meal(form_data: dict, surface: str = "individual"):
     # via su propio context_extras + allow_external_count del validator).
     if swap_reason not in ("cravings", "weekend"):
         context_extras += "\n    - 📦 RESPETA LA NEVERA: Limítate a los ingredientes ya disponibles (la regla de reciclaje a continuación enumera la base exacta). Sin compras nuevas."
+    # [P1-PLAN-LOTE-220 · 2026-09-24] El tope de tiempo del perfil también al cambiar un plato (el swap no veía el
+    # formulario: con «Nada» proponía platos de 20-25 min). «Fin de semana» es el usuario diciendo que hoy SÍ tiene tiempo.
+    if swap_reason != "weekend":
+        _ct_rule_swap = __import__("horizon").cooking_time_rule(form_data)
+        if _ct_rule_swap:
+            context_extras += f"\n    - ⏱️ TIEMPO DE COCINA DEL USUARIO (obligatorio): {_ct_rule_swap}"
 
 
     # --- REGLA CRÍTICA: ROTACIÓN CON INGREDIENTES EXISTENTES (ZERO-TRUST) ---

@@ -193,7 +193,7 @@ def test_el_reparador_es_idempotente():
 def test_el_reparador_corre_antes_del_scan_que_mide():
     """El contrato del nodo es reparar → medir; si alguien lo mueve debajo del scan, el residuo medido mentiría."""
     src = _src(_BACKEND / "graph_orchestrator.py")
-    i_rep = src.index("_auto_patch_uncooked_foods(plan, _gmi_uc())")
+    i_rep = src.index("_auto_patch_uncooked_foods(plan, _gmi_uc()")    # [lote 220] + form_data=...
     i_scan = src.index("culinary_contract_scan_status(plan, _cul_cat")
     assert i_rep < i_scan, "el reparador quedó DESPUÉS del scan"
 

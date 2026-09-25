@@ -468,7 +468,16 @@ _PROCESS_START_ISO = datetime.now(timezone.utc).isoformat()
 # [P1-PLAN-LOTE-219 · 2026-09-24] (solo backend) techos servibles de las bases que el solver infla en los menús sin
 # cocción: maíz dulce ≤ 250 g por comida («365 g», «415 g»), la auyama entra al techo de volumen (470 g), y dos migajas
 # del display («⅔ g de semillas» → 1 pizca, «1.53 g de yogurt» → 1 cdta).
-_LAST_KNOWN_PFIX = "P1-PLAN-LOTE-219 · 2026-09-24"
+# [P1-PLAN-LOTE-220 · 2026-09-24] (solo backend) el tope de tiempo de cocina («Nada» = 10 min) llega a quien reescribe
+# un día o un plato: el generador lo cumplía y el corrector del self-critique lo rompía (15-20 min); también el regen
+# quirúrgico y el swap (hidratado del perfil). El plato fuera de tiempo es además incoherencia determinista del día.
+# [P1-PLAN-LOTE-221 · 2026-09-24] (solo backend) la compra única cubre el mes también en lo que tenía tope: lo que
+# aguanta el ciclo no pasa por los topes de realismo (cebolla 15/30, batata 22/30, habichuelas 19/30, leche de soya
+# 25/30 en el plan real del dueño); y sin congelador el fresco dice para cuántos días es, no su vida congelado. La
+# Nevera virtual del bloque sólo ofrece lo que llega a sus días; con «Nada» de tiempo el piso de ganancia muscular se
+# rellena con casabe; V7f ya no da por crudos la auyama del microondas «hasta que esté tierna» ni el maduro dorado; y la
+# concordancia del display no convierte «2 tortas pequeñas» en «2 tortas pequeño» (33 líneas en las baterías).
+_LAST_KNOWN_PFIX = "P1-PLAN-LOTE-221 · 2026-09-24"
 
 # [P1-SENTRY-SAMPLE-COST · 2026-05-12] Sentry sampling driven from env vars
 # con default seguro 0.1 (10%). Pre-fix tenía `traces_sample_rate=1.0` y
