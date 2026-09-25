@@ -63,3 +63,59 @@ def macros_de_porciones(etiqueta, porciones) -> dict | None:
     if not e or not n:
         return None
     return {k: round(e[k] * n, 1) for k in _CAMPOS}
+
+
+# ── [P1-PLAN-LOTE-291] Escritura y lectura de los potes ──────────────────────────────────────────────────────────────
+
+def buscar(user_id: str, nombre: str) -> dict | None:
+    """El pote de `nombre` en la Alacena del usuario (mismo criterio de nombre que la Nevera), o None."""
+    from db_core import execute_sql_query
+    from constants import pantry_names_match
+    filas = execute_sql_query(
+        # [SUPLEMENTOS-OK: lee justamente los suplementos]
+        "SELECT id, ingredient_name, brand, quantity::float8 AS quantity, unit, serving_unit, serving_label, label_source "
+        "FROM user_inventory WHERE user_id = %s AND kind = 'supplement'",
+        (user_id,), fetch_all=True,
+    ) or []
+    return next((f for f in filas if pantry_names_match(f.get("ingredient_name") or "", nombre or "")), None)
+
+
+def _upsert(user_id, nombre, marca, porciones, unidad, etiqueta, fuente):
+    import json
+    from db_core import execute_sql_write
+    execute_sql_write(
+        """
+        INSERT INTO user_inventory (user_id, ingredient_name, quantity, unit, kind, serving_label, serving_unit,
+                                    label_source, brand, source, last_mutation_type)
+        VALUES (%s, %s, %s, %s, 'supplement', %s::jsonb, %s, %s, %s, 'chat', 'manual')
+        ON CONFLICT (user_id, ingredient_name, unit) DO UPDATE
+           SET quantity = CASE WHEN EXCLUDED.quantity > 0 THEN EXCLUDED.quantity ELSE user_inventory.quantity END,
+               kind = 'supplement',
+               serving_label = COALESCE(EXCLUDED.serving_label, user_inventory.serving_label),
+               serving_unit = EXCLUDED.serving_unit,
+               label_source = COALESCE(EXCLUDED.label_source, user_inventory.label_source),
+               brand = COALESCE(EXCLUDED.brand, user_inventory.brand),
+               updated_at = now()
+        """,
+        (user_id, nombre, float(porciones or 0), unidad, json.dumps(etiqueta) if etiqueta else None, unidad,
+         fuente, marca),
+    )
+
+
+def guardar(user_id, nombre, marca=None, porciones=None, unidad="scoop", etiqueta=None, fuente="estimado",
+            clave=None, forzar_nevera=False, usar_estimado=True) -> dict:
+    """Guarda (o actualiza) el pote. Pasa antes por la regla de la Nevera: si la apagó el usuario, no escribe y
+    devuelve ok=False con estado 'preguntar'. Etiqueta inverosímil o ausente ⇒ el estimado de `clave` (si
+    `usar_estimado`) marcado como tal, o sin etiqueta."""
+    from nevera_opcional import encender_por_uso
+    estado = encender_por_uso(user_id, forzar=bool(forzar_nevera))
+    if estado == "preguntar":
+        return {"ok": False, "estado_nevera": estado, "etiqueta": None, "fuente": fuente}
+    unidad = unidad if unidad in UNIDADES else "porcion"
+    e = etiqueta_valida(etiqueta)
+    if e is None or fuente not in FUENTES:
+        fuente = "estimado"
+        base = ESTIMADOS.get(clave or "") if usar_estimado else None
+        e = etiqueta_valida(base) if base else None
+    _upsert(user_id, str(nombre).strip(), marca, porciones, unidad, e, fuente if e else None)
+    return {"ok": True, "estado_nevera": estado, "etiqueta": e, "fuente": fuente}

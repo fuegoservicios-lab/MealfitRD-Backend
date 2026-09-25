@@ -5303,7 +5303,44 @@ def proponer_comida(user_id: str, meal_type: str = None, kcal_objetivo: int = No
 
 
 # Lista de tools disponibles para el agente
-agent_tools = [update_form_field, log_consumed_meal, correct_consumed_meal, search_deep_memory, check_shopping_list, check_current_pantry, modify_pantry_inventory, mark_shopping_list_purchased, check_hydration_today, log_water_glass, suggest_foods_for_nutrient, check_clinical_profile, consultar_dia_del_plan, proponer_comida]
+@tool
+def guardar_suplemento(user_id: str, nombre: str, marca: str = None, porciones: float = None, unidad: str = "scoop",
+                       etiqueta: dict = None, fuente: str = "estimado", clave: str = None,
+                       encender_nevera: bool = False) -> str:
+    """
+    Guarda un SUPLEMENTO (proteína en polvo, creatina, multivitamínico, omega 3…) en la Nevera → Alacena del usuario,
+    con su etiqueta por porción. Úsala cuando pida guardarlo, o cuando mande la foto de la etiqueta o del pote y diga
+    que es suyo. Funciona aunque su Nevera esté apagada: la herramienta decide si la enciende o te pide preguntar.
+    - etiqueta: {"serving_g","kcal","protein_g","carbs_g","fats_g"} POR PORCIÓN, tal como la lee la foto o la dice él.
+    - fuente: 'foto' | 'marca' | 'estimado'. Sin etiqueta, fuente='estimado' y `clave` del tipo: whey_protein,
+      vegan_protein, creatine, collagen, multivitamin, omega3, magnesium, probiotics, electrolytes, bcaa,
+      pre_workout, fat_burner.
+    - porciones: cuántas trae el pote (2 lb de whey ≈ 30 scoops); unidad: scoop | capsula | porcion | g.
+    - encender_nevera: true SOLO si el usuario acaba de decir que sí a encender su Nevera.
+    """
+    # [P1-PLAN-LOTE-291 · 2026-09-25] tooltip-anchor: P1-PLAN-LOTE-291-GUARDAR
+    try:
+        import suplementos
+        r = suplementos.guardar(user_id, nombre, marca, porciones, unidad, etiqueta, fuente, clave, encender_nevera)
+        if not r["ok"]:
+            from nevera_opcional import MENSAJE_NEVERA_PREGUNTAR
+            return MENSAJE_NEVERA_PREGUNTAR
+        e = r["etiqueta"]
+        txt = f"Guardado en su Alacena: {nombre}" + (f" ({marca})" if marca else "")
+        if e:
+            txt += f" — 1 {unidad}: {int(round(e['kcal']))} kcal, {e['protein_g']:g} g de proteína"
+        if r["fuente"] == "estimado":
+            txt += (" (Para el asistente: la etiqueta es un ESTIMADO genérico" if e else " (Para el asistente: SIN etiqueta")
+            txt += "; díselo y que la ajuste mandando una foto de la tabla nutricional del pote.)"
+        if r["estado_nevera"] == "encendida":
+            txt += " (Para el asistente: su Nevera estaba apagada y se ENCENDIÓ para guardarlo; díselo en una frase.)"
+        return txt + " [UI_ACTION: REFRESH_INVENTORY]"
+    except Exception:
+        logger.exception("❌ [P1-PLAN-LOTE-291] guardar_suplemento falló")
+        return "No pude guardar el suplemento (error interno). NO digas que quedó guardado."
+
+
+agent_tools = [update_form_field, log_consumed_meal, correct_consumed_meal, search_deep_memory, check_shopping_list, check_current_pantry, modify_pantry_inventory, mark_shopping_list_purchased, check_hydration_today, log_water_glass, suggest_foods_for_nutrient, check_clinical_profile, consultar_dia_del_plan, proponer_comida, guardar_suplemento]
 
 # [P1-CHAT-PLAN-TOOLS-OFF · 2026-07-12] Mutación de plan detrás del knob
 # (OFF por ahora — ver _chat_plan_mutation_tools_enabled).

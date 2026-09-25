@@ -10,7 +10,7 @@ El nodo LangGraph `execute_tools` ([`backend/agent.py`](../agent.py)) force-over
 
 Es la simétrica de las invariantes I2/I6 (filtros server-side `AND user_id = %s` en SQL + endpoints backend que no aceptan user_id arbitrario del cliente) aplicada al chat-agent layer.
 
-## Las 14 tools cubiertas
+## Las 15 tools cubiertas
 
 | # | Tool | Mutación cross-user que el override impide |
 |---|---|---|
@@ -28,6 +28,7 @@ Es la simétrica de las invariantes I2/I6 (filtros server-side `AND user_id = %s
 | 12 | `consultar_dia_del_plan` | leak del `plan_data` (menú, ingredientes y recetas) de otro usuario — [P1-CHAT-PAST-DAYS · 2026-07-27] |
 | 13 | `correct_consumed_meal` | `db_update_consumed_meal` (UPDATE atómico sobre `consumed_meals` filtrado `AND user_id = %s`) — sin el override, un `meal_id` ajeno adivinado/alucinado por la LLM sería un IDOR de escritura sobre el diario de OTRO usuario — [P1-CHAT-DIARY-CORRECT · 2026-07-29] |
 | 14 | `proponer_comida` | leak cross-user de SOLO LECTURA: el `health_profile` (alergias, dieta, rechazos, metas), el diario de hoy y la Nevera de otro usuario, que la herramienta lee para armar la propuesta a su medida. No escribe nada (P1-PLAN-LOTE-132 - 2026-09-20) |
+| 15 | `guardar_suplemento` | escritura cross-user: un suplemento (con su etiqueta y porciones) en la Alacena de otro usuario, y el encendido de SU Nevera; `encender_nevera` solo vale con el sí del dueño de la cuenta (P1-PLAN-LOTE-291 - 2026-09-25) |
 
 ### Retiradas temporalmente del set activo (P1-CHAT-PLAN-TOOLS-OFF · 2026-07-12)
 
