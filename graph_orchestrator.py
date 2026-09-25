@@ -10013,7 +10013,7 @@ async def self_critique_node(state: PlanState) -> dict:
     human_content = f"""
 PLAN A EVALUAR (días generados):
 {days_summary_json}
-{policy_block}{staples_block}{spread_block}{slot_block}{crossday_block}{light_base_block}{gm_dinner_block}{user_context}
+{policy_block}{staples_block}{spread_block}{slot_block}{crossday_block}{light_base_block}{gm_dinner_block}{user_context}{__import__('horizon').restrictions_rule(form_data, para='evaluador')}
 {pista_dia}
 """.strip()
 
@@ -10222,7 +10222,7 @@ PLAN A EVALUAR (días generados):
                     _ct_block = (f"\nTIEMPO DE COCINA DEL USUARIO (obligatorio, también al corregir): {_ct_rule}\n"
                                  if _ct_rule else "")
                     _sch_rule = __import__("horizon").schedule_rule(state.get("form_data") or {})  # [P1-PLAN-LOTE-241]
-                    _ct_block += f"\nHORARIO DEL USUARIO (obligatorio, también al corregir): {_sch_rule}\n" if _sch_rule else ""
+                    _ct_block += (f"\nHORARIO DEL USUARIO (obligatorio, también al corregir): {_sch_rule}\n" if _sch_rule else "") + __import__("horizon").restrictions_rule(state.get("form_data") or {})  # [P1-PLAN-LOTE-265]
                     correction_prompt = f"""Eres un nutricionista chef. Corrige SOLO el Día {day_num} del plan alimenticio.
 
 PROBLEMA DETECTADO: {critique.suggestions}{_pt_block}
@@ -13743,7 +13743,7 @@ def _apply_substitutions_core(plan: dict, subs: list, note_builder, note_sentine
                     # que rechazó el plan c5ba1681 («Pechuga de pollo…» con soya dentro). Se hace aunque el
                     # reescritor de pasos esté apagado: son dos knobs porque son dos riesgos distintos.
                     try:
-                        _rewrite_meal_name_after_subs(meal, recipe_token_subs)
+                        __import__("desc_tras_sustitucion").titulo_y_desc(meal, recipe_token_subs)  # [P1-PLAN-LOTE-267] título Y descripción
                     except Exception:
                         pass
                 if SUBST_RECIPE_REWRITE_ENABLED and recipe_token_subs:
@@ -26560,7 +26560,7 @@ def cap_bariatric_portions(days: list, form_data: dict, db=None) -> int:
                         _truth_up_meal_macros_from_strings(m, db)
                     except Exception:
                         pass
-        return capped
+        return capped + __import__("bariatrico_texturas").moler_frutos_secos(days)  # [P1-PLAN-LOTE-266] nunca enteros
     except Exception as _bgc_e:
         logger.warning(f"[P1-BARIATRIC-PORTION-CAP] falló (no bloquea): {type(_bgc_e).__name__}: {_bgc_e}")
         return 0
@@ -41173,7 +41173,7 @@ async def surgical_marker_regen_node(state: PlanState) -> dict:
         _ct_block_sg = (f"\nTIEMPO DE COCINA DEL USUARIO (obligatorio, también al corregir): {_ct_rule_sg}\n"
                         if _ct_rule_sg else "")
         _sch_rule_sg = __import__("horizon").schedule_rule(form_data or {})  # [P1-PLAN-LOTE-241]
-        _ct_block_sg += f"\nHORARIO DEL USUARIO (obligatorio, también al corregir): {_sch_rule_sg}\n" if _sch_rule_sg else ""
+        _ct_block_sg += (f"\nHORARIO DEL USUARIO (obligatorio, también al corregir): {_sch_rule_sg}\n" if _sch_rule_sg else "") + __import__("horizon").restrictions_rule(form_data or {})  # [P1-PLAN-LOTE-265]
         correction_prompt = f"""Eres un nutricionista chef. Corrige SOLO el Día {day_num} del plan alimenticio.
 
 PROBLEMA DETECTADO (sin resolver en pasada anterior): {original_issue}

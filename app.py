@@ -563,7 +563,13 @@ _PROCESS_START_ISO = datetime.now(timezone.utc).isoformat()
 # [P1-PLAN-LOTE-264 · 2026-09-25] la guarda que añade a la lista el vegetal que nombran los pasos leía también la
 # nota clínica «se sustituyó cundeamor…» y le devolvía 100 g de cundeamor a un diabético con metformina (y a una
 # embarazada: uterotónico). Las notas del sistema (`recipe_contract._es_nota`) no son pasos de cocina.
-_LAST_KNOWN_PFIX = "P1-PLAN-LOTE-264 · 2026-09-25"
+# [P1-PLAN-LOTE-265 · 2026-09-25] el evaluador y los correctores de la autocrítica reciben alergias, rechazos,
+# dieta y condiciones (sugería «fruta+maní» a un alérgico al maní): `horizon.restrictions_rule`.
+# [P1-PLAN-LOTE-266 · 2026-09-25] bariátrico: frutos secos y semillas siempre molidos (riesgo de obstrucción del
+# pouch); la regla clínica solo era una instrucción al modelo y el tope limitaba gramos, no la textura.
+# [P1-PLAN-LOTE-267 · 2026-09-25] tras una sustitución determinista la DESCRIPCIÓN tampoco nombra lo quitado
+# (la verificación del 264 dejó «con cundeamor salteado» en un plato ya con tayota).
+_LAST_KNOWN_PFIX = "P1-PLAN-LOTE-267 · 2026-09-25"
 
 # [P1-SENTRY-SAMPLE-COST · 2026-05-12] Sentry sampling driven from env vars
 # con default seguro 0.1 (10%). Pre-fix tenía `traces_sample_rate=1.0` y

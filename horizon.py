@@ -1679,6 +1679,65 @@ def schedule_rule(form_data) -> str:
         return ""
 
 
+# [P1-PLAN-LOTE-265 · 2026-09-25] Lo que la dieta excluye, en claro (la clave canónica sale de
+# `constants.canonicalize_diet_type`, el único SSOT de la dieta).
+_DIETA_EN_CLARO = {
+    "vegan": "vegana: sin carne, pollo, pescado, mariscos, huevo, lácteos ni miel",
+    "vegetarian": "vegetariana: sin carne, pollo, pescado ni mariscos",
+    "pescatarian": "pescetariana: sin carne ni pollo (pescado y mariscos sí)",
+}
+
+
+def restrictions_rule(form_data, para: str = "corrector") -> str:
+    """[P1-PLAN-LOTE-265 · 2026-09-25] Las restricciones DURAS del formulario (alergias, rechazos, dieta y condiciones), en
+    claro, para quien reescribe un día sin ver el formulario: el evaluador de la autocrítica y sus correctores (Flash,
+    re-corrección y Pro, que recibe el mismo prompt). Hermana de `cooking_time_rule` y `schedule_rule`.
+
+    Batería final (alergia al maní y al sésamo): el evaluador sugirió «cambia la merienda por fruta+maní» y el corrector,
+    que tampoco veía las alergias, podía obedecer; el guard de alérgenos lo cazaba después a costa de un reintento (y, si
+    se repetía, del plan de emergencia). Lee lo mismo que el generador: el formulario con lo tecleado en «Otra…»
+    (`profile_with_free_text`, centinela «Ninguna» incluido) y los rechazos declarados (`rechazos._dislike_declarations`).
+    Cadena vacía sin restricciones. tooltip-anchor: P1-PLAN-LOTE-265-RESTRICCIONES-A-LOS-CORRECTORES"""
+    try:
+        import graph_orchestrator as go
+        from constants import canonicalize_diet_type
+        fd = go.profile_with_free_text(form_data if isinstance(form_data, dict) else {})
+        centinelas = go._SENTINEL_NONE_VALUES
+
+        def _lista(valor, tope=12):
+            vals = valor if isinstance(valor, list) else ([valor] if isinstance(valor, str) else [])
+            out, vistos = [], set()
+            for v in vals:
+                s = " ".join(str(v or "").split())[:60]
+                if s and s.lower() not in centinelas and s.lower() not in vistos:
+                    vistos.add(s.lower())
+                    out.append(s)
+            return out[:tope]
+
+        lineas = []
+        alergias = _lista(fd.get("allergies"))
+        if alergias:
+            lineas.append(f"- Alergias: {', '.join(alergias)} (ni el alimento ni sus derivados).")
+        rechazos = _lista(__import__("rechazos")._dislike_declarations(fd))
+        if rechazos:
+            lineas.append(f"- No le gusta: {', '.join(rechazos)}.")
+        dieta = _DIETA_EN_CLARO.get(canonicalize_diet_type(fd.get("dietType")))
+        if dieta:
+            lineas.append(f"- Dieta {dieta}.")
+        condiciones = _lista(fd.get("medicalConditions"))
+        if condiciones:
+            lineas.append(f"- Condiciones médicas: {', '.join(condiciones)}.")
+        if not lineas:
+            return ""
+        cabecera = ("RESTRICCIONES DEL USUARIO (de su formulario): tus sugerencias NUNCA pueden proponer nada que las rompa."
+                    if para == "evaluador" else
+                    "RESTRICCIONES DEL USUARIO (de su formulario; obligatorias también al corregir y por encima de "
+                    "cualquier sugerencia del problema detectado):")
+        return "\n" + cabecera + "\n" + "\n".join(lineas) + "\n"
+    except Exception:
+        return ""
+
+
 def explain_form_codes_for_prompt(form_for_prompt):
     """El formulario que ve el modelo, con los códigos que el modelo NO puede adivinar escritos en claro. Copia; el
     dict de entrada no se toca. Sin clave o con un valor desconocido, el valor queda como vino."""
