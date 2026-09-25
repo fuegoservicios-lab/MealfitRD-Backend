@@ -6707,6 +6707,10 @@ def _enrich_clinical_from_profile(data: dict, user_id: str) -> dict:
         # se reintroducía en updates sin esto.
         if not data.get("super_personalization") and isinstance(hp.get("super_personalization"), dict):
             data["super_personalization"] = hp.get("super_personalization")
+        # [P1-PLAN-LOTE-220 · 2026-09-24] el tope de tiempo de cocina del perfil («Nada» = 10 min): el swap lo inyecta
+        # al prompt (`horizon.cooking_time_rule`) y el frontend no lo manda. Fill-si-falta, crudo, como `country`.
+        if not data.get("cookingTime") and hp.get("cookingTime"):
+            data["cookingTime"] = hp.get("cookingTime")
         # [P1-UPDATE-MICROS · 2026-06-23] (audit inteligencia P1-7) Adjuntar condiciones/medicamentos
         # del perfil → los updates inyectan directivas de condición + pisos de micro (paridad con S1).
         # [P1-MICRO-CLINICAL-FREETEXT · 2026-07-01] (audit micros P1-2) + otherConditions/otherMedications:

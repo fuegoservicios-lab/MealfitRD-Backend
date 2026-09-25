@@ -46,7 +46,9 @@ def test_sin_nevera_el_bloque_recibe_la_compra_del_ciclo():
     fd = cu.nevera_virtual(_fd(), task_id=7, user_id="u1", consultar=q)
     assert fd["_nevera_virtual"] is True and fd["_fresh_pantry_source"] == "compra_unica_virtual"
     assert "Atún en agua" in fd["current_pantry_ingredients"] and "Leche" not in fd["current_pantry_ingredients"]
-    assert len(fd["current_pantry_ingredients"]) == 15
+    # [P1-PLAN-LOTE-221] 14, no 15: la pechuga fresca del día 1 no llega al bloque del día 7 sin congelador
+    assert len(fd["current_pantry_ingredients"]) == 14
+    assert "Pechuga de pollo" not in fd["current_pantry_ingredients"]
     sql, params = llamadas[0]
     assert "q.id = %s AND mp.user_id = %s" in sql and params == (7, "u1")
     # y el revisor la EXIGE como a cualquier Nevera (la regla b del sembrador también manda con ella)
