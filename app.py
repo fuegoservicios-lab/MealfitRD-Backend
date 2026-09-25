@@ -569,7 +569,11 @@ _PROCESS_START_ISO = datetime.now(timezone.utc).isoformat()
 # pouch); la regla clínica solo era una instrucción al modelo y el tope limitaba gramos, no la textura.
 # [P1-PLAN-LOTE-267 · 2026-09-25] tras una sustitución determinista la DESCRIPCIÓN tampoco nombra lo quitado
 # (la verificación del 264 dejó «con cundeamor salteado» en un plato ya con tayota).
-_LAST_KNOWN_PFIX = "P1-PLAN-LOTE-267 · 2026-09-25"
+# [P1-PLAN-LOTE-268 · 2026-09-25] «Harina de Negrito» (crema de trigo) es gluten —el catálogo se la ofrecía al
+# celíaco y solo la paró el revisor— y las ensaladas con mayonesa del catálogo son huevo.
+# [P1-PLAN-LOTE-269 · 2026-09-25] miel para la vegana y carne oculta (gelatina, grenetina, colágeno, sopita) en el
+# escáner y el filtro de dieta; las alternativas vegetales se excusan acotadas al término («tocino de maple» no).
+_LAST_KNOWN_PFIX = "P1-PLAN-LOTE-269 · 2026-09-25"
 
 # [P1-SENTRY-SAMPLE-COST · 2026-05-12] Sentry sampling driven from env vars
 # con default seguro 0.1 (10%). Pre-fix tenía `traces_sample_rate=1.0` y

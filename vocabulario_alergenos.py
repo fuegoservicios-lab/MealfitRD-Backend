@@ -16,8 +16,13 @@ tooltip-anchor: P1-PLAN-LOTE-252-VOCABULARIO-ALERGENOS
 
 EXTRA = {
     "gluten": ("granola", "teriyaki", "wrap", "espelta", "kamut", "farro", "triticale", "semolina", "pita", "croissant",
-               "cruasan", "brioche", "yaniqueque", "crepa", "crepe"),
-    "huevo": ("revoltillo", "omelette", "omelet", "frittata", "huevito", "flan", "natilla"),
+               "cruasan", "brioche", "yaniqueque", "crepa", "crepe",
+               # [P1-PLAN-LOTE-268] «Harina de Negrito» = crema de trigo (farina): fila del catálogo que se le
+               # OFRECÍA al celíaco; la cazó el revisor de IA, no el escáner (batería final, mariscos + gluten).
+               "harina de negrito", "negrito", "farina"),
+    "huevo": ("revoltillo", "omelette", "omelet", "frittata", "huevito", "flan", "natilla",
+              # [P1-PLAN-LOTE-268] con mayonesa: «Ensalada de macarrones» (alias «ensalada de pasta con mayonesa»)
+              "ensalada de macarrones", "ensalada de coditos", "ensalada rusa"),
     "lacteos": ("lactosuero",),
     "frutos secos": ("macadamia", "pecana", "castana"),
     "soya": ("tamari", "shoyu"),

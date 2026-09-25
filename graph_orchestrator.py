@@ -14707,7 +14707,7 @@ _DIET_FLESH_TERMS = (  # carne de tierra + aves
     # receta comercial real (fdc USDA citado: "Beans, baked, canned, WITH PORK and tomato
     # sauce") sin que el nombre del catálogo lo revele -- mismo patrón que 'salsa inglesa'/
     # 'worcestershire' en `_DIET_SEAFOOD_TERMS` (lleva anchoas, no evidente por el nombre).
-    "pavochon", "pepperoni", "frijoles horneados",
+    "pavochon", "pepperoni", "frijoles horneados", *__import__("vocabulario_dieta").CARNE_OCULTA,  # [P1-PLAN-LOTE-269]
 )
 _DIET_SEAFOOD_TERMS = (  # pescado + mariscos
     "pescado", "atun", "salmon", "tilapia", "bacalao", "sardina", "mero", "chillo", "dorado",
@@ -14815,7 +14815,7 @@ def _scan_diet_violations(plan: dict, diet_type) -> list:
         forbidden = ([(t, "carne") for t in _DIET_FLESH_TERMS]
                      + [(t, "pescado/marisco") for t in _DIET_SEAFOOD_TERMS]
                      + [(t, "huevo") for t in _DIET_EGG_TERMS]
-                     + [(t, "lácteo") for t in _DIET_DAIRY_TERMS])
+                     + [(t, "lácteo") for t in _DIET_DAIRY_TERMS] + [(t, "producto animal") for t in __import__("vocabulario_dieta").SOLO_VEGANO])  # [P1-PLAN-LOTE-269] miel
     elif canon == "vegetarian":
         forbidden = ([(t, "carne") for t in _DIET_FLESH_TERMS]
                      + [(t, "pescado/marisco") for t in _DIET_SEAFOOD_TERMS])
@@ -14844,7 +14844,7 @@ def _scan_diet_violations(plan: dict, diet_type) -> list:
                         continue
                     if _plant_adj.match(ing_low[m.end(): m.end() + 18]):
                         continue  # "carne de soya" / "leche de coco" / "salami vegano" → no viola
-                    if __import__("excusas_vegetales").prefijo_vegetal_excusa(term, ing_low[:m.start()]):
+                    if __import__("excusas_vegetales").excusa_contextual(term, ing_low, m.start(), m.end()):  # [P1-PLAN-LOTE-269]
                         continue  # [P1-PLAN-LOTE-247] «maní molido hasta obtener una crema»
                     violations.append((meal.get("name", "?"), str(ing), label))
                     break

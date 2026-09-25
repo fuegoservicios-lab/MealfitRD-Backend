@@ -58,6 +58,10 @@ _HOJA_PARA_WRAP_RX = re.compile(
     r"(?:(?:el|los|la|las|un|unos|una|unas|hacer|armar|formar)\s+)*$")
 _PAN_RX = re.compile(r"\b(?:tortillas?|pan(?:es)?|harinas?|trigo|pitas?|arabes?|integral(?:es)?|wheat)\b")
 _TOSTADA_RX = re.compile(r"(?<![a-z0-9])tostadas?(?![a-z0-9])")
+# [P1-PLAN-LOTE-269] Alternativas vegetales de la carne oculta y de la miel, ACOTADAS al término (una excusa genérica
+# «de maple» absolvería al «tocino de maple»).
+_GELATINA_VEGETAL_RX = re.compile(r"^\s*(?:de\s+)?(?:agar(?:[\s-]*agar)?|pectina|vegetal|vegana|origen\s+vegetal)\b")
+_MIEL_VEGETAL_RX = re.compile(r"^\s*de\s+(?:agave|cana|maple|arce|palma|datil(?:es)?|coco|yacon)\b")
 
 
 def excusa_contextual(termino: str, linea: str, ini: int, fin: int) -> bool:
@@ -76,6 +80,10 @@ def excusa_contextual(termino: str, linea: str, ini: int, fin: int) -> bool:
             if _PAN_RX.search(s):
                 return False
             return bool(_WRAP_DE_HOJA_RX.match(s[fin:]) or _HOJA_PARA_WRAP_RX.search(s[:ini]))
+        if t in ("gelatina", "grenetina"):                     # [P1-PLAN-LOTE-269] gelatina de agar/pectina
+            return bool(_GELATINA_VEGETAL_RX.match(s[fin:]))
+        if t == "miel":                                        # [P1-PLAN-LOTE-269] miel de agave/caña/maple
+            return bool(_MIEL_VEGETAL_RX.match(s[fin:]))
         return False
     except Exception:
         return False

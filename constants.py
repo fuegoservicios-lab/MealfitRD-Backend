@@ -4343,11 +4343,11 @@ def _get_fast_filtered_catalogs(allergies: tuple, dislikes: tuple, diet: str, co
     # literal de variantes que se olvidó de los femeninos legacy. tooltip-anchor: P1-DIET-CANON-SSOT
     _diet_canon = canonicalize_diet_type(diet)
     if _diet_canon == "vegan":
-        restrictions.extend(["pollo", "cerdo", "res", "pescado", "atún", "huevos", "queso", "salami", "camarones", "chuleta", "longaniza", "carne", "marisco", "lácteo", "leche"])
+        restrictions.extend(["pollo", "cerdo", "res", "pescado", "atún", "huevos", "queso", "salami", "camarones", "chuleta", "longaniza", "carne", "marisco", "lácteo", "leche", *__import__("vocabulario_dieta").CARNE_OCULTA, *__import__("vocabulario_dieta").SOLO_VEGANO])  # [P1-PLAN-LOTE-269]
     elif _diet_canon == "vegetarian":
-        restrictions.extend(["pollo", "cerdo", "res", "pescado", "atún", "salami", "camarones", "chuleta", "longaniza", "carne", "marisco"])
+        restrictions.extend(["pollo", "cerdo", "res", "pescado", "atún", "salami", "camarones", "chuleta", "longaniza", "carne", "marisco", *__import__("vocabulario_dieta").CARNE_OCULTA])  # [P1-PLAN-LOTE-269]
     elif _diet_canon == "pescatarian":
-        restrictions.extend(["pollo", "cerdo", "res", "salami", "chuleta", "longaniza", "carne"])
+        restrictions.extend(["pollo", "cerdo", "res", "salami", "chuleta", "longaniza", "carne", *__import__("vocabulario_dieta").CARNE_OCULTA])  # [P1-PLAN-LOTE-269]
 
     if not restrictions:
         return filtered_proteins, filtered_carbs, filtered_veggies, filtered_fruits
