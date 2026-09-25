@@ -547,7 +547,23 @@ _PROCESS_START_ISO = datetime.now(timezone.utc).isoformat()
 # [P1-PLAN-LOTE-257 · 2026-09-25] el techo renal de proteína se cumple en lo ENTREGADO: el recorte baja también
 # huevo y lácteos (recorte_renal.py) y la identidad del plato no re-sube la pechuga por encima del techo (el plan
 # de emergencia renal salía con 96/75/75 g sobre un techo de 60).
-_LAST_KNOWN_PFIX = "P1-PLAN-LOTE-257 · 2026-09-25"
+# [P1-PLAN-LOTE-258 · 2026-09-25] un rechazo que nombra la CLASE («Pescado») excluye la clase; uno que nombra un
+# ALIMENTO («corvina», «atún») excluye ese alimento — con la alergia la expansión por clase no cambia.
+# [P1-PLAN-LOTE-259 · 2026-09-25] el motor de macros (cierre final de banda, cambiar plato, coach) devuelve el día
+# al techo renal tras escalar carbohidratos (arrastraban la proteína: 60 → 73/87/70 g).
+# [P1-PLAN-LOTE-260 · 2026-09-25] un plan renal de la IA que un redondeo sube sobre el techo se vuelve a recortar
+# antes de cambiarlo por el de emergencia (los tres rechecks solo marcaban y el gate duro lo tiraba).
+# [P1-PLAN-LOTE-261 · 2026-09-25] G20 para el revisor: un crítico que SOLO habla de potasio/fósforo en renal no es
+# agudo (reintento y banner, nunca el plan de emergencia); la hiperpotasemia, la arritmia y la diálisis sí.
+# [P1-PLAN-LOTE-262 · 2026-09-25] «almendras/semillas TOSTADAS» y el wrap DE hojas no son pan: el escáner de
+# alérgenos ya no rechaza el plan del celíaco por ellas y la sustitución proactiva no los vuelve «Casabe».
+# El 259 recorta solo la proteína que el motor sube (nunca peor que antes; lo pidió el gate).
+# [P1-PLAN-LOTE-263 · 2026-09-25] los suplementos elegidos llegan a CADA día, ni más ni menos: la autocrítica
+# los borraba (su corrector no tiene el campo) y «ni más» era solo una instrucción del prompt.
+# [P1-PLAN-LOTE-264 · 2026-09-25] la guarda que añade a la lista el vegetal que nombran los pasos leía también la
+# nota clínica «se sustituyó cundeamor…» y le devolvía 100 g de cundeamor a un diabético con metformina (y a una
+# embarazada: uterotónico). Las notas del sistema (`recipe_contract._es_nota`) no son pasos de cocina.
+_LAST_KNOWN_PFIX = "P1-PLAN-LOTE-264 · 2026-09-25"
 
 # [P1-SENTRY-SAMPLE-COST · 2026-05-12] Sentry sampling driven from env vars
 # con default seguro 0.1 (10%). Pre-fix tenía `traces_sample_rate=1.0` y

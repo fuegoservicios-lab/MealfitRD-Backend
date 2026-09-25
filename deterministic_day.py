@@ -343,7 +343,7 @@ def restricciones_del_formulario(hp, fd) -> tuple:
         alergias = sorted({str(a).strip() for a in list(hp_ft.get("allergies") or []) + list(fd_ft.get("allergies") or [])
                            if str(a).strip() and str(a).strip().lower() not in _sent})
         rech = list(dict.fromkeys(_go._dislike_declarations(hp_ft) + _go._dislike_declarations(fd_ft)))
-        excluidos = sorted(set(rech) | set(_go._expand_allergy_declarations(rech)))
+        excluidos = sorted(set(rech) | set(__import__("rechazos").terminos_de_rechazo({"dislikes": rech})))  # [P1-PLAN-LOTE-258]
         return alergias, excluidos
     except Exception:
         alergias = [str(a) for a in (hp.get("allergies") or fd.get("allergies") or []) if a]

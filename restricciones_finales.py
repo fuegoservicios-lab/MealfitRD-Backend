@@ -64,7 +64,7 @@ def _motivo(linea, nombre, alergias, dieta, rechazos, go, ctx_farmacos=None):
         if v:
             return "dieta", str(v[0][2])
     if rechazos and getattr(go, "DISLIKE_HARD_GUARD", True):
-        v = go._scan_allergen_violations(mini, rechazos)
+        v = go._scan_allergen_violations(mini, [], terminos=rechazos)   # [P1-PLAN-LOTE-258] términos, no declaraciones
         if v:
             return "rechazo", str(v[0][2])
     if ctx_farmacos is not None:   # [P1-PLAN-LOTE-246] IMAO + tiramina
@@ -87,7 +87,7 @@ def retirar_prohibidos(plan: dict, ctx: dict, db=None, surface: str = "") -> dic
         import graph_orchestrator as go
         alergias = [str(a).strip() for a in (ctx.get("allergies") or []) if _sa(a).strip() not in _SENT]
         dieta = ctx.get("dietType") or ctx.get("diet_type")
-        rechazos = go._dislike_declarations(ctx) if hasattr(go, "_dislike_declarations") else []
+        rechazos = __import__("rechazos").terminos_de_rechazo(ctx)   # [P1-PLAN-LOTE-258] clase solo si la nombra
         if not (alergias or rechazos or dieta or ctx.get("medications") or ctx.get("otherMedications")):
             return out
         for day in plan.get("days") or []:

@@ -24,9 +24,11 @@ NO_AGUDOS = [
     "Día 1, almuerzo: incluye ajo, señalado como posible agravante de la gastritis.",
     "El menú incluye yuca y casabe repetidamente durante los tres días, pese a la recomendación clínica de evitar su "
     "consumo diario y moderar la carga por el hipotiroidismo.",
+    # [P1-PLAN-LOTE-261] G20: potasio/fósforo en ERC es ORIENTATIVO — era AGUDO aquí hasta el lote 261.
+    "Para la enfermedad renal, el plan acumula fuentes de potasio potencialmente elevadas: 375 g de yautía.",
 ]
 AGUDOS = [
-    "Para la enfermedad renal, el plan acumula fuentes de potasio potencialmente elevadas: 375 g de yautía.",
+    "Para la enfermedad renal, el potasio del plan supone riesgo de hiperkalemia: 375 g de yautía.",
     "El informe clínico recomienda evitar soya texturizada y tofu hasta una evaluación alergológica.",
     "Arroz blanco con ceviche fresco: pescado crudo en embarazo.",
     "Queso parmesano curado con fenelzina (IMAO): la tiramina puede causar una crisis hipertensiva.",

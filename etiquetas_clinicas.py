@@ -201,7 +201,7 @@ def _pescado_sin_mariscos(form_data) -> str:
     try:
         import graph_orchestrator as go
         alergia = go._expand_allergy_declarations(_decl("allergies", "otherAllergies"))
-        rechazo = go._expand_allergy_declarations(_decl("dislikes", "otherDislikes"))
+        rechazo = set(__import__("rechazos").terminos_de_rechazo({"dislikes": _decl("dislikes", "otherDislikes")}))  # [P1-PLAN-LOTE-258]
     except Exception:                                                          # noqa: BLE001
         return ""
     if _clase_declarada(alergia, "mariscos") or _clase_declarada(rechazo, "mariscos"):

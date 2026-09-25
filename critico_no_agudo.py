@@ -19,7 +19,22 @@ import unicodedata
 _ACUTE_EXTRA_MARKERS = (
     "tiramina", "imao", "crisis hipertensiva", "hipoglucem", "insulina", "sulfonilurea", "litio",
     "anticoagul", "sangrado", "hiperkalem", "hiperpotasem", "atragant", "asfixia",
+    "arritmia", "dialisis",   # [P1-PLAN-LOTE-261] con el potasio renal, lo agudo es esto
 )
+
+# [P1-PLAN-LOTE-261 · 2026-09-25] G20 (`docs/clinical_enforcement_decisions.md`): en ERC el potasio y el fósforo son
+# ORIENTATIVOS (dependen de estadio, diálisis y analíticas; el panel los reporta y el nefrólogo decide). El revisor de IA
+# los rechazaba como CRÍTICO («el plan acumula fuentes importantes de potasio en el contexto de enfermedad renal: yautía,
+# yuca…») y «renal»/«potasio»/«fósforo» contaban como marca aguda: un reintento y, si el último intento repetía, el plan
+# de EMERGENCIA (batería rd260, renal + gota). Un crítico cuyas ÚNICAS marcas son esas tres y que habla de potasio o
+# fósforo baja a «high»: reintenta y se entrega el plan real con banner. El techo renal de PROTEÍNA sigue agudo (tiene su
+# propio gate duro) y la hiperpotasemia, la arritmia o la diálisis también. tooltip-anchor: P1-PLAN-LOTE-261-KP-RENAL
+_SOLO_KP_RENAL = frozenset({"renal", "potasio", "fosforo"})
+
+
+def _solo_kp_renal(t: str, marcas) -> bool:
+    presentes = {m for m in marcas if m in t}
+    return bool(presentes) and presentes <= _SOLO_KP_RENAL and ("potasio" in t or "fosforo" in t)
 
 
 def _sin_acentos(s) -> str:
@@ -38,5 +53,7 @@ def _critical_is_non_acute(issues) -> bool:
     for raw in issues:
         t = _sin_acentos(str(raw).lower())
         if any(m in t for m in marcas):
+            if _solo_kp_renal(t, marcas):
+                continue          # [P1-PLAN-LOTE-261] G20: K/P renal es orientativo
             return False
     return True

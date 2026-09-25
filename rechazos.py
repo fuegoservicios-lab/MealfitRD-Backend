@@ -33,13 +33,54 @@ def _dislike_declarations(form_data) -> list:
         return []
 
 
+# [P1-PLAN-LOTE-258 · 2026-09-25] Un rechazo que nombra la CLASE («Pescado», «Mariscos», «fish», «lácteos») excluye la
+# clase; uno que nombra un ALIMENTO («corvina», «atún», «tilapia») excluye ese alimento. Batería rd257: «no me gusta la
+# corvina» escrito a mano quemó dos reintentos rechazando tilapia y bacalao — el guard expandía por clase como con una
+# alergia, y la nota del revisor (lote 249) lo leía como «rechazo al pescado». Con la ALERGIA la expansión por clase es la
+# prudencia clínica y no se toca; un «no me gusta» es una preferencia. tooltip-anchor: P1-PLAN-LOTE-258-RECHAZO-LITERAL
+def _nombra_clase(decl, go) -> bool:
+    import re
+    a = go._norm_declaracion(decl)
+    if not a:
+        return False
+    for cat in go._ALLERGEN_SYNONYMS:
+        cat_n = go._norm_declaracion(cat)
+        if re.search(go._patron_termino_alergeno(cat_n), a) or re.search(go._patron_termino_alergeno(a), cat_n):
+            return True
+        if any(go._declaracion_casa(a, al) for al in go._ALLERGEN_DECLARATION_ALIASES.get(cat, ())):
+            return True
+    return False
+
+
+def terminos_de_rechazo(form_data) -> list:
+    """Lo que el guard de rechazos busca en el plato: la clase entera si el rechazo la nombra; si no, el alimento
+    literal (con su nombre canónico si viene en otro idioma). Puro; nunca lanza."""
+    try:
+        import graph_orchestrator as go
+        out = set()
+        for d in _dislike_declarations(form_data):
+            if _nombra_clase(d, go):
+                out |= set(go._expand_allergy_declarations([d]))
+                continue
+            a = go._norm_declaracion(d)
+            if a:
+                out.add(a)
+                try:
+                    out |= {go._norm_declaracion(c) for c in go._nombres_canonicos_de_alimento(a)}
+                except Exception:
+                    pass
+        return sorted(t for t in out if t)
+    except Exception:
+        return []
+
+
 def _scan_dislike_violations(plan: dict, form_data) -> list:
     """(comida, ingrediente, término) de cada alimento rechazado en los ingredientes del plan."""
-    decl = _dislike_declarations(form_data)
-    if not decl or not isinstance(plan, dict):
+    terminos = terminos_de_rechazo(form_data)
+    if not terminos or not isinstance(plan, dict):
         return []
     try:
         import graph_orchestrator as _go
-        return _go._scan_allergen_violations(plan, decl)
+        return _go._scan_allergen_violations(plan, [], terminos=terminos)
     except Exception:
         return []

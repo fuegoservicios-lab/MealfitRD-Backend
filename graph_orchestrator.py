@@ -10281,7 +10281,7 @@ Devuelve el Día {day_num} corregido con EXACTAMENTE la misma estructura JSON y 
                         _current_node_var.reset(_crit_node_token)
                     await _corrector_cb.arecord_success()  # P1-Q3
                     if corrected_result:
-                        corrected_day = corrected_result.model_dump()
+                        corrected_day = __import__("suplementos_dia").conservar(corrected_result.model_dump(), target_day)  # [P1-PLAN-LOTE-263]
                         corrected_day["day"] = day_num
                         _bf = _backfill_corrected_day_desc(corrected_day, target_day)  # [P2-CRITIQUE-FIX-DESC-BACKFILL]
                         if _bf:
@@ -13652,7 +13652,7 @@ def _apply_substitutions_core(plan: dict, subs: list, note_builder, note_sentine
 
     def _match(ing_norm):
         for s in subs:
-            if any(neg in ing_norm for neg in s["negatives"]):
+            if any(neg in ing_norm for neg in s["negatives"]) or __import__("excusas_vegetales").sustitucion_excusada(s, ing_norm):  # [P1-PLAN-LOTE-262]
                 continue
             if s.get("word_match"):
                 if any(_token_word_re(t).search(ing_norm) for t in s["tokens"]):
@@ -14041,10 +14041,10 @@ _ALLERGEN_SYNONYMS = {
                # (P0-ALLERGEN-SUBS) — el backstop determinista no los reconocía si la sustitución
                # fallaba. Ninguno está en el catálogo HOY, pero SÍ son objetivo de sustitución
                # vivo en producción (T5-T8 los dará de alta).
-               # [fix-round 1 · fuera-de-stone accepted over-detection] 'tostada' bare también
-               # matchea 'almendras tostadas' (frutos secos, sin gluten) — mismo token que ya usa
-               # `condition_rules._ALLERGEN_GLUTEN_SUBS` (swap 'pan tostado'→Casabe); costo
-               # documentado en test_tostada_sobre_detecta_almendras_tostadas_aceptado, NO se quita.
+               # [fix-round 1] 'tostada' bare casaba también 'almendras tostadas' (frutos secos, sin
+               # gluten) y el plan del celíaco caía a fallback. [P1-PLAN-LOTE-262] El TÉRMINO se queda (el
+               # swap 'pan tostado'→Casabe de `condition_rules` lo usa): el adjetivo tras un fruto seco o una
+               # semilla lo excusa `excusas_vegetales.excusa_contextual` (test_p1_plan_lote_262 + F2).
                "tostada", "macarron", "coditos", "fideo", "tallarin", "penne",
                "ravioli", "noqui", "tortilla de harina",
                # [fix-round 1 · P1-COUNTRY-SYSTEM-F2 T4 review · 2026-08-17] 'avena' REINCORPORADA
@@ -14597,7 +14597,7 @@ _GLUTEN_NO_GF_VARIANT_TERMS = frozenset({
 })
 
 
-def _scan_allergen_violations(plan: dict, allergies) -> list:
+def _scan_allergen_violations(plan: dict, allergies, terminos=None) -> list:
     """[C2-ALLERGEN-GUARD · 2026-06-13] Backstop DETERMINISTA de seguridad de alérgenos
     (encima del revisor LLM, que puede fallar). Escanea cada ingrediente del plan contra
     las alergias declaradas + sinónimos comunes DD; retorna lista de violaciones
@@ -14613,7 +14613,7 @@ def _scan_allergen_violations(plan: dict, allergies) -> list:
     import re as _re
     # [P0-ALLERGEN-VOCAB-I18N · 2026-08-21] La expansión vive en `_expand_allergy_declarations`
     # (SSOT) — antes estaba copiada aquí y en `_verified_catalog_excluded_tokens`.
-    forbidden = _expand_allergy_declarations(allergies)
+    forbidden = set(terminos) if terminos is not None else _expand_allergy_declarations(allergies)  # [P1-PLAN-LOTE-258]
     if not forbidden:
         return []
     violations = []
@@ -14632,8 +14632,8 @@ def _scan_allergen_violations(plan: dict, allergies) -> list:
                         # propio término directo).
                         if _PLANT_ADJ_EXCUSE_RX.match(ing_low[_m_al.end(): _m_al.end() + 18]):
                             continue
-                        if __import__("excusas_vegetales").prefijo_vegetal_excusa(f, ing_low[:_m_al.start()]):
-                            continue  # [P1-PLAN-LOTE-247] la crema que resulta de moler el maní
+                        if __import__("excusas_vegetales").excusa_contextual(f, ing_low, _m_al.start(), _m_al.end()):
+                            continue  # [P1-PLAN-LOTE-247/262] crema de maní molido · almendras TOSTADAS · wrap DE lechuga
                         # [P3-SEMOLA-MAIZ-GLUTEN-FP · 2026-08-23] excusa acotada AL TÉRMINO que
                         # casó: «sémola de maíz/yuca/arroz» no lleva gluten. 'pan' y 'harina' no
                         # tienen entrada, así que «Pan de maíz» sigue marcado.
@@ -25347,7 +25347,7 @@ def _apply_deterministic_clinical_layer(plan: dict, form_data: dict, nutrition: 
                     _rc_final_ok = False
                     break
             plan["renal_protein_cap"]["meals_enforced"] = _rc_final_ok
-            if not _rc_final_ok:
+            if not _rc_final_ok and not __import__("recorte_renal").reenforzar(plan, _pg, _db):  # [P1-PLAN-LOTE-260]
                 logger.warning("🛑 [P1-RENAL-RECHECK-POST-SUBS] proteína sobre el cap tras cuantización — "
                                "meals_enforced=False (exit-net re-trima / fail-hard gate escala).")
         except Exception as _rcf_e:
@@ -25804,7 +25804,7 @@ def _apply_deterministic_clinical_layer(plan: dict, form_data: dict, nutrition: 
                     _rc_tu_ok = False
                     break
             plan["renal_protein_cap"]["meals_enforced"] = _rc_tu_ok
-            if not _rc_tu_ok:
+            if not _rc_tu_ok and not __import__("recorte_renal").reenforzar(plan, _pg, _db):  # [P1-PLAN-LOTE-260]
                 logger.warning("🛑 [P1-RENAL-TRUTHUP-RECHECK] proteína renal sobre el cap tras truth-up (8z) — "
                                "meals_enforced=False (exit-net re-trima / fail-hard gate escala).")
         except Exception as _rctu_e:
@@ -28751,7 +28751,7 @@ def _add_missing_recipe_step_vegetables(days, *, max_kcal=60.0, max_per_meal=3, 
                 # dedup por TOKEN: "lechuga romana picada" ya trae el token 'lechuga' aunque normalice distinto que el
                 # canónico "Lechuga" → evita añadir un duplicado de variedad.
                 _ing_text = _sa(" ".join(str(i) for i in (meal.get("ingredients") or [])).lower())
-                recipe_txt = _sa(" ".join(str(s) for s in (meal.get("recipe") or [])).lower())
+                recipe_txt = _sa(" ".join(str(s) for s in (meal.get("recipe") or []) if not __import__("recipe_contract")._es_nota(s)).lower())  # [P1-PLAN-LOTE-264] la nota CITA lo que se quitó
                 if not recipe_txt:
                     continue
                 added_this = 0
@@ -38035,7 +38035,7 @@ def _apply_macro_engine(result, days, skeleton, _daily_cals, _pg, _cg, _fg, form
                     _rc_reb_ok = False
                     break
             result["renal_protein_cap"]["meals_enforced"] = _rc_reb_ok
-            if not _rc_reb_ok:
+            if not _rc_reb_ok and not __import__("recorte_renal").reenforzar(result, _pg, None):  # [P1-PLAN-LOTE-260]
                 logger.warning("🛑 [P2-MACRO-REBALANCE-RENAL-STALE] proteína renal sobre el cap tras macro-rebalance "
                                "— meals_enforced=False (exit-net re-trima / fail-hard gate escala).")
         except Exception as _rcreb_e:
@@ -38253,6 +38253,7 @@ async def assemble_plan_node(state: PlanState) -> dict:
                     f"🛡 [P1-SUPPLEMENT-CLINICAL-GATE] {_gate_removed} suplemento(s) "
                     f"contraindicados barridos del plan (vetados: {sorted(_gate_vetados)})."
                 )
+        __import__("suplementos_dia").completar(result, form_data)  # [P1-PLAN-LOTE-263] los elegidos, ni más ni menos, CADA día
 
     # [EGG-WHITE-CAP] Cap programático de claras de huevo por meal y por día.
     # El planner las usa como proteína fácil sin límite (visto 2026-05-06: 16
@@ -41199,7 +41200,7 @@ Devuelve el Día {day_num} corregido con EXACTAMENTE la misma estructura JSON y 
             )
             await _corrector_cb.arecord_success()
             if corrected_result:
-                corrected_day = corrected_result.model_dump()
+                corrected_day = __import__("suplementos_dia").conservar(corrected_result.model_dump(), target_day)  # [P1-PLAN-LOTE-263]
                 corrected_day["day"] = day_num
                 _bf = _backfill_corrected_day_desc(corrected_day, target_day)  # [P2-CRITIQUE-FIX-DESC-BACKFILL]
                 if _bf:
@@ -48560,7 +48561,8 @@ def apply_update_macro_engine(plan_data: dict, *, surface: str, db=None,
             _meals = [m for m in (_day.get("meals") or []) if isinstance(m, dict)]
             if not _meals or not _out_of_band(_meals):
                 continue
-            _hit = bool(_rebalance_day_macros_to_target(_meals, _cg, _fg, db, target_protein=_tp))
+            _p0_ume, _hit = sum(_meal_macro_num(m.get("protein")) for m in _meals), bool(_rebalance_day_macros_to_target(_meals, _cg, _fg, db, target_protein=_tp))
+            _hit = bool(__import__("recorte_renal").retrim_dia(_meals, plan_data, db, antes=_p0_ume)) or _hit  # [P1-PLAN-LOTE-259] solo lo que el motor sube
             if not _renal and GLOBAL_DAY_REFINE_ENABLED and _out_of_band(_meals):
                 try:
                     from portion_solver import refine_day_portions_integer as _rdi_u

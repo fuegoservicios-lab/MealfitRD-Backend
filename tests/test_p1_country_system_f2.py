@@ -992,20 +992,17 @@ def test_leche_sin_lactosa_no_se_excusa_por_la_excusa_forward_de_gluten(go):
 
 
 def test_tostada_sobre_detecta_almendras_tostadas_aceptado(go):
-    """[finding 4 del fix-round 1 · documented-accept, NO remover el término] 'tostada' bare
-    (gluten) también matchea 'almendras tostadas' (frutos secos tostados, sin relación con
-    gluten) — mismo token pre-existe en `condition_rules._ALLERGEN_GLUTEN_SUBS` (swap 'pan
-    tostado'/'tostada'→Casabe). Sesgo a SOBRE-detectar es la dirección de seguridad declarada de
-    este vocabulario (docstring de `_ALLERGEN_SYNONYMS`, C2-ALLERGEN-GUARD) — el costo (un plan
-    con almendras tostadas cae a fallback para un alérgico a gluten, aunque las almendras no
-    tengan gluten) se documenta aquí para que sea VISIBLE, no silencioso. Comportamiento
-    PRE-EXISTENTE (no introducido por este fix-round) — verificado idéntico antes y después."""
+    """[finding 4 del fix-round 1 · NO remover el término] 'tostada' bare (gluten) casaba también
+    'almendras tostadas' (frutos secos tostados, sin gluten) y el coste documentado aquí era real: el
+    plan del alérgico al gluten caía a fallback. [P1-PLAN-LOTE-262 · 2026-09-25] El TÉRMINO se queda
+    (lo usa el swap 'pan tostado'/'tostada'→Casabe de `condition_rules._ALLERGEN_GLUTEN_SUBS` y «2
+    tostadas» sigue marcada); el ADJETIVO tras un fruto seco o una semilla se excusa, acotado al
+    término como la sémola y la tostada de casabe (lote 77)."""
     plan = {"days": [{"meals": [{"name": "Snack", "ingredients": ["Almendras tostadas"]}]}]}
-    v = go._scan_allergen_violations(plan, ["gluten"])
-    assert v and v[0][2] == "tostada", (
-        "'Almendras tostadas' debe seguir disparando 'tostada' — sobre-detección aceptada, "
-        "NO remover el término"
-    )
+    assert go._scan_allergen_violations(plan, ["gluten"]) == [], "almendras tostadas no llevan gluten (lote 262)"
+    pan = {"days": [{"meals": [{"name": "Desayuno", "ingredients": ["2 tostadas"]}]}]}
+    v = go._scan_allergen_violations(pan, ["gluten"])
+    assert v and v[0][2] == "tostada", "'tostada' sigue en el vocabulario — NO remover el término"
 
 
 # ── G1-bis. fix-round 2: el leak del relleno libre `{0,2}` en `_GLUTEN_FORWARD_EXCUSE_RX` ──────

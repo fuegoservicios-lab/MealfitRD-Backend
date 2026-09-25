@@ -34,3 +34,61 @@ def prefijo_vegetal_excusa(termino: str, antes: str) -> bool:
         return bool(_RESULTADO_RX.search(a) and _VEGETAL_RX.search(a))
     except Exception:
         return False
+
+
+# ─── [P1-PLAN-LOTE-262 · 2026-09-25] el ADJETIVO «tostada(s)» y el wrap hecho DE hojas ──────────────────────────────
+# Batería final (sin gluten + huevo) y medido contra el código: el escáner de alérgenos marcaba como GLUTEN «almendras/
+# nueces/avellanas tostadas», «semillas de sésamo tostadas», «pepitas de auyama tostadas», «wrap de lechuga» y «hojas de
+# lechuga para wrap» — el plan del celíaco se rechazaba (reintento y, si se repetía, el de EMERGENCIA; el F2 lo dejó
+# escrito como coste aceptado). Peor aún: la sustitución proactiva del gluten (tostada→Casabe, por subcadena) convertía
+# «10 g de semillas de sésamo tostadas» en «10 g de Casabe» y los pasos en «mide 10 g de semillas de sésamo casabe».
+# Los TÉRMINOS se quedan («1 tostada», «tostadas integrales», «1 wrap», «wrap integral» siguen siendo pan): se excusa solo
+# el adjetivo pegado a un fruto seco o una semilla, y el wrap hecho DE hojas sin tortilla, pan, harina ni trigo en la
+# línea. Acotado al término, como la sémola y la tostada de casabe (lote 77). tooltip-anchor: P1-PLAN-LOTE-262-ADJETIVO
+_SEMILLA = (r"almendras?|nuez|nueces|avellanas?|pistachos?|anacardos?|maranon(?:es)?|cajuil(?:es)?|cacahuates?|"
+            r"cacahuetes?|mani(?:es)?|pepitas?|semillas?|ajonjoli|sesamo|linaza|chia|girasol|calabaza|auyama|coco|"
+            r"macadamias?|pecanas?|castanas?|pinon(?:es)?|cacao|amapola")
+_TOSTADA_ADJETIVO_RX = re.compile(
+    r"\b(?:" + _SEMILLA + r")(?:\s+de\s+(?:" + _SEMILLA + r"))?"
+    r"(?:\s+[a-z]+(?:adas?|idas?|ados?|idos?)|\s+enteras?)?\s*$")
+_HOJA = r"lechugas?|repollos?|col(?:es)?|acelgas?|berzas?|nori"
+_WRAP_DE_HOJA_RX = re.compile(r"^\s*de\s+(?:hojas?\s+de\s+)?(?:" + _HOJA + r")\b")
+_HOJA_PARA_WRAP_RX = re.compile(
+    r"\b(?:" + _HOJA + r")(?:\s+[a-z]+)?\s+(?:para|como|en\s+forma\s+de|a\s+modo\s+de)\s+"
+    r"(?:(?:el|los|la|las|un|unos|una|unas|hacer|armar|formar)\s+)*$")
+_PAN_RX = re.compile(r"\b(?:tortillas?|pan(?:es)?|harinas?|trigo|pitas?|arabes?|integral(?:es)?|wheat)\b")
+_TOSTADA_RX = re.compile(r"(?<![a-z0-9])tostadas?(?![a-z0-9])")
+
+
+def excusa_contextual(termino: str, linea: str, ini: int, fin: int) -> bool:
+    """¿El término de alérgeno que casó en `linea[ini:fin]` (sin acentos, minúsculas) es inocuo por su CONTEXTO?
+
+    Reúne la excusa del 247 (la crema que resulta de moler un vegetal) y las del 262 (el adjetivo «tostada(s)» tras un
+    fruto seco o una semilla; el wrap hecho DE hojas). Acotada al TÉRMINO: nunca absuelve a otro que case en la línea."""
+    try:
+        t = str(termino or "").strip().lower()
+        s = str(linea or "")
+        if prefijo_vegetal_excusa(t, s[:ini]):
+            return True
+        if t == "tostada":
+            return bool(_TOSTADA_ADJETIVO_RX.search(s[:ini]))
+        if t == "wrap":
+            if _PAN_RX.search(s):
+                return False
+            return bool(_WRAP_DE_HOJA_RX.match(s[fin:]) or _HOJA_PARA_WRAP_RX.search(s[:ini]))
+        return False
+    except Exception:
+        return False
+
+
+def sustitucion_excusada(sub, linea: str) -> bool:
+    """[P1-PLAN-LOTE-262] True si en `linea` (sin acentos, minúsculas) la ÚNICA razón para aplicar la sustitución `sub`
+    es un «tostada(s)» que es adjetivo de un fruto seco o semilla: «semillas de sésamo tostadas» no es pan tostado."""
+    try:
+        toks = [str(x) for x in ((sub or {}).get("tokens") or ()) if str(x) in linea]
+        if not toks or any(not x.startswith("tostada") for x in toks):
+            return False
+        apariciones = list(_TOSTADA_RX.finditer(linea))
+        return bool(apariciones) and all(excusa_contextual("tostada", linea, m.start(), m.end()) for m in apariciones)
+    except Exception:
+        return False
