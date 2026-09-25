@@ -773,6 +773,8 @@ async def api_diary_upload(
             # agent/modify_pantry_inventory), 'otro'. `items` sanitizados.
             "photo_kind": vision_result.get("photo_kind") or ("plato" if is_food else "otro"),
             "items": items_out,
+            # [P1-PLAN-LOTE-305] lo que la foto no deja saber: el modal lo muestra junto al plato
+            "dudas": vision_result.get("dudas") or [],
             "description": description,
             "image_url": image_url,
             "attachment_id": attachment_id,

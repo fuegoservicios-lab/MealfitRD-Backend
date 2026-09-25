@@ -1007,11 +1007,27 @@ _ETIQUETA_INSTRUCCION = _ETIQUETA_INSTRUCCION_SIN_NEVERA + " NO lo ofrezcas para
 # [P1-PLAN-LOTE-168 · 2026-09-23] Qué hacer con la foto de un PLATO cuando el mensaje cuenta además otra comida (el caso
 # del desayuno en foto + los tacos por texto). La rama `multi` no decía nada de registrar: solo «responde teniendo en
 # cuenta las fotos». Compartida por la rama de una foto y la de varias (el cliente manda SIEMPRE `multi`).
+# [P1-PLAN-LOTE-305 · 2026-09-25] El dueño: «que me pregunte de manera proactiva la duda que le falte, pero lo que es
+# obvio debe apuntarlo de una vez». El análisis trae `DUDAS (pregúntale solo esto): …` cuando algo no se ve.
+_DUDAS_INSTRUCCION = (
+    "DUDAS DE LA FOTO: si el análisis trae «DUDAS (pregúntale solo esto)», lo obvio se anota de una vez: registra con "
+    "la mejor estimación del análisis, di en una frase qué supusiste («lo anoté como 3 huevos revueltos, ~280 kcal») y "
+    "haz UNA sola pregunta, la primera de las DUDAS, tal cual o más natural. Cuando conteste, corrige ESE registro con "
+    "`correct_consumed_meal` (con su ID_REGISTRO_DIARIO), nunca registres otro. Excepción: si la duda es QUÉ plato o "
+    "alimento principal es (no una cantidad ni el aceite), pregunta ANTES de registrar. Sin DUDAS, no preguntes nada "
+    "de la foto: registra y sigue."
+)
 _PLATO_INSTRUCCION = (
     "PLATO: si el usuario dice que se comió lo de la foto («este fue el desayuno», «me comí esto»), regístralo EN ESTE "
     "TURNO con `log_consumed_meal` y las cifras de su análisis, como una comida APARTE de cualquier otra que cuente por "
     "texto: una llamada por comida, cada una con su `meal_type`."
 )
+# La regla de dudas va SOLO cuando el análisis trae dudas: una foto clara no paga ese texto en el prompt.
+_MARCA_DUDAS = "DUDAS (pregúntale solo esto)"
+
+
+def _con_dudas(texto: str) -> str:
+    return (" " + _DUDAS_INSTRUCCION) if _MARCA_DUDAS in (texto or "") else ""
 
 
 def build_vision_context(vision, nevera_activa: bool = True) -> str:
@@ -1068,6 +1084,7 @@ def build_vision_context(vision, nevera_activa: bool = True) -> str:
             instruction += " " + _etiqueta
         if has_plate:   # [P1-PLAN-LOTE-168] una foto de plato con análisis: cómo registrarla junto a otra comida
             instruction += " " + _PLATO_INSTRUCCION
+            instruction += _con_dudas(" ".join(lines))   # [P1-PLAN-LOTE-305]
         if unavailable:
             instruction += (
                 f" Indica brevemente que {unavailable} de {len(items)} foto(s) no pudo analizarse; "
@@ -1127,7 +1144,8 @@ def build_vision_context(vision, nevera_activa: bool = True) -> str:
     # plato (o cualquier otro valor: se trata como plato, la conducta de siempre)
     base = f"\n\n📷 CONTEXTO DE FOTO: El usuario subió una imagen de comida. Análisis de la imagen: \"{desc}\"."
     if has_text:
-        return base + " Responde a su mensaje teniendo en cuenta la foto. " + _PLATO_INSTRUCCION   # [P1-PLAN-LOTE-168]
+        return (base + " Responde a su mensaje teniendo en cuenta la foto. " + _PLATO_INSTRUCCION   # [P1-PLAN-LOTE-168]
+                + _con_dudas(desc))   # [P1-PLAN-LOTE-305]
     return base + (
         " Actúa proactivamente. Menciona amigablemente lo que ves en la foto. REGLA VISUAL DE "
         "FORMATO: Usa SIEMPRE una lista con viñetas para desglosar sus macros y usa **negritas** para "
@@ -1140,7 +1158,7 @@ def build_vision_context(vision, nevera_activa: bool = True) -> str:
         "registra EN ESE TURNO con log_consumed_meal usando los macros del análisis, pasando "
         "meal_type; si dice que fue de OTRO día (ej: 'es el almuerzo de ayer'), pasa también days_ago "
         "(1=ayer) para que NO cuente en las macros de hoy. Sólo responde directo y conversacional."
-    )
+    ) + _con_dudas(desc)   # [P1-PLAN-LOTE-305]
 
 
 _LANGUAGE_DIRECTIVE_CACHE: dict = {}

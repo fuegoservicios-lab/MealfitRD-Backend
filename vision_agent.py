@@ -191,6 +191,15 @@ _MEAL_VISION_SCHEMA = {
                 "required": ["name", "quantity", "unit"],
             },
         },
+        # [P1-PLAN-LOTE-305 · 2026-09-25] Lo que NO se puede saber mirando y cambia la cuenta (máx. 2). Opcional.
+        "dudas": {
+            "type": "array",
+            "items": {
+                "type": "object",
+                "properties": {"sobre": {"type": "string"}, "pregunta": {"type": "string"}},
+                "required": ["pregunta"],
+            },
+        },
     },
     "required": ["photo_kind", "is_food", "meal_name", "description",
                  "calories", "protein", "carbs", "healthy_fats", "items"],
@@ -288,6 +297,14 @@ _MEAL_VISION_PROMPT = (
     "amarilla o verde, se come cruda) - NO lo llames platano. El PLATANO es "
     "mas grande y grueso, de cascara dura (verde o maduro), y se cocina. Si "
     "es la fruta dulce de comer cruda, llamala 'guineo'. "
+    # [P1-PLAN-LOTE-305 · 2026-09-25] El dueño: «lo que es obvio debe apuntarlo de una vez; la duda, preguntarla».
+    "DUDAS (solo 'plato'): en 'dudas' pon como MAXIMO 2 cosas que NO se pueden saber mirando la foto Y que cambian "
+    "mucho las calorias: una cantidad que no se puede contar (ej: huevos revueltos fusionados -> 'Cuantos huevos "
+    "eran?'; un bowl hondo de arroz -> 'Cuanto arroz, 1 taza o 2?'), un alimento que se confunde con otro (queso "
+    "blanco o tofu, pollo o cerdo) o la grasa de coccion que no se ve si es mucha (frito vs. a la plancha). Cada una "
+    "con 'sobre' (el componente) y 'pregunta' (UNA pregunta corta y concreta, en espanol dominicano). NO pongas dudas "
+    "de lo que se ve claro (2 rebanadas de pan, un guineo, 1 huevo frito entero) ni de detalles que no cambian la cuenta "
+    "(la sal, el oregano). Aunque haya dudas, estima igual con la opcion MAS probable: el usuario la confirma. "
     "Responde SOLO el JSON."
 )
 
@@ -315,6 +332,11 @@ class _MealVisionItem(BaseModel):
     healthy_fats: float = Field(default=0, description="Solo si photo_kind='plato': gramos de grasa de ESTE componente.")
 
 
+class _MealVisionDuda(BaseModel):
+    sobre: str = Field(default="", description="El componente del plato al que se refiere la duda.")
+    pregunta: str = Field(default="", description="UNA pregunta corta para el usuario, en español dominicano.")
+
+
 class _MealVisionResult(BaseModel):
     """Mirror Pydantic de `_MEAL_VISION_SCHEMA` — ver comentario arriba."""
     photo_kind: str = Field(description="'plato' (comida servida), 'items' (alimentos sueltos/compra), 'etiqueta' (tabla nutricional o envase de UN producto: se lee, no se estima) u 'otro' (no es comida).")
@@ -326,6 +348,8 @@ class _MealVisionResult(BaseModel):
     carbs: float = Field(default=0, description="Gramos de carbohidratos totales estimados. 0 si no aplica.")
     healthy_fats: float = Field(default=0, description="Gramos de grasas saludables totales estimados. 0 si no aplica.")
     items: list[_MealVisionItem] = Field(default_factory=list, description="Alimentos sueltos (photo_kind='items') o componentes del plato con lo que aporta cada uno (photo_kind='plato').")
+    # [P1-PLAN-LOTE-305] solo 'plato': lo que no se puede saber mirando y cambia la cuenta
+    dudas: list[_MealVisionDuda] = Field(default_factory=list, description="Solo si photo_kind='plato': máx. 2 dudas reales (cantidad no contable, alimento ambiguo, grasa de cocción invisible). Vacío si todo se ve claro.")
 
 
 # Clamps espejo de ConsumedMealRequest (routers/diary.py) — el registro final
@@ -422,6 +446,21 @@ def _fmt_item_phrase(name: str, qty: float, unit: str) -> str:
     return f"{q} {u} de {name}"
 
 
+def _dudas_del_plato(data) -> list:
+    """[P1-PLAN-LOTE-305] `dudas` del modelo → máx. 2 `{sobre, pregunta}` con pregunta no vacía y recortada."""
+    out = []
+    for d in (data.get("dudas") if isinstance(data, dict) else None) or []:
+        if not isinstance(d, dict):
+            continue
+        pregunta = " ".join(str(d.get("pregunta") or "").split())[:160]
+        if not pregunta:
+            continue
+        out.append({"sobre": " ".join(str(d.get("sobre") or "").split())[:60], "pregunta": pregunta})
+        if len(out) == 2:
+            break
+    return out
+
+
 def _coerce_meal_scan(data: dict) -> dict:
     """Normaliza la salida cruda de gemma al contrato de process_image_with_vision.
     Pura (sin IO) para testearla directo: clamps, is_food=False ⇒ macros 0,
@@ -486,6 +525,7 @@ def _coerce_meal_scan(data: dict) -> dict:
                                and "no se lee" not in (description or "").lower() else ""))[:900],
             "meal_name": meal_name,
             "label_read": not sin_tabla,
+            "dudas": [],   # [P1-PLAN-LOTE-305] una etiqueta se lee: no hay dudas que preguntar
             **leido,
         }
 
@@ -509,6 +549,7 @@ def _coerce_meal_scan(data: dict) -> dict:
                 "description": description or "No se detectaron alimentos identificables en la imagen.",
                 "meal_name": "",
                 "calories": 0, "protein": 0, "carbs": 0, "healthy_fats": 0,
+                "dudas": [],   # [P1-PLAN-LOTE-305]
             }
         frases = ", ".join(_fmt_item_phrase(i["name"], i["quantity"], i["unit"]) for i in items)
         return {
@@ -520,6 +561,7 @@ def _coerce_meal_scan(data: dict) -> dict:
             "description": f"Alimentos detectados (compra/items, no es un plato servido): {frases}."[:900],
             "meal_name": "",
             "calories": 0, "protein": 0, "carbs": 0, "healthy_fats": 0,
+            "dudas": [],   # [P1-PLAN-LOTE-305] solo un plato trae dudas
         }
 
     # ---- Modo OTRO / no-comida ----
@@ -531,6 +573,7 @@ def _coerce_meal_scan(data: dict) -> dict:
             "description": description or "No se detectó comida en la imagen.",
             "meal_name": "",
             "calories": 0, "protein": 0, "carbs": 0, "healthy_fats": 0,
+            "dudas": [],   # [P1-PLAN-LOTE-305] solo un plato trae dudas
         }
 
     # ---- Modo PLATO: contrato v3 + componentes estructurados ----
@@ -593,6 +636,11 @@ def _coerce_meal_scan(data: dict) -> dict:
         result["description"] += " Parece más de una porción: confirma cuánto comiste."
     # [P1-PLAN-LOTE-224 · 2026-09-24] Con los totales ya definitivos, cada componente se lleva su parte (`macros`).
     # Sin desglose usable no se inventa: los componentes van sin `macros` y el modal registra el total.
+    # [P1-PLAN-LOTE-305 · 2026-09-25] Las dudas (solo en un plato): máx. 2, cortas, sin basura. Viajan estructuradas
+    # (el escáner las muestra) y también en la `description`, que es lo que el coach lee de la foto.
+    result["dudas"] = _dudas_del_plato(data) if kind == "plato" else []
+    if result["dudas"]:
+        result["description"] += " DUDAS (pregúntale solo esto): " + " ".join(d["pregunta"] for d in result["dudas"])
     _repartidas = _repartir_macros_del_plato(crudas, result)
     if _repartidas:
         for _item, _m in zip(plato_items, _repartidas):
