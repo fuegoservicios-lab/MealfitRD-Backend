@@ -585,7 +585,13 @@ _PROCESS_START_ISO = datetime.now(timezone.utc).isoformat()
 # ('food'|'supplement') + etiqueta por porción; todo lector de INGREDIENTES filtra `kind = 'food'` (guard por AST);
 # la Nevera apagada por el sistema se enciende sola al guardar algo (`nevera_opcional.encender_por_uso`) y, si la
 # apagó el usuario, el coach pregunta. Grupo «Suplementos» en la Alacena.
-_LAST_KNOWN_PFIX = "P1-PLAN-LOTE-290 · 2026-09-25"
+# [P1-PLAN-LOTE-291 · 2026-09-25] (backend) el coach y los scoops: `guardar_suplemento` (pote en la Alacena con su
+# etiqueta por porción; etiqueta inverosímil ⇒ estimado marcado), `log_consumed_meal(suplemento=, porciones=)` registra
+# con la ETIQUETA y descuenta del pote (avisa con ≤3), bloque 💊 de conocimiento + SU ALACENA en el system prompt.
+# [P1-PLAN-LOTE-292 · 2026-09-25] (backend + frontend) formulario: «¿Tomas algún suplemento?» (también en contador; a
+# la Alacena por POST /api/inventory/supplements) y «¿te recomendamos?»; un solo lector (`normalizar_suplementos`) en
+# prompt, suplementos por día, orquestador, coach y validación; la IA nunca recomienda quemadores/pre-entrenos/BCAA.
+_LAST_KNOWN_PFIX = "P1-PLAN-LOTE-292 · 2026-09-25"
 
 # [P1-SENTRY-SAMPLE-COST · 2026-05-12] Sentry sampling driven from env vars
 # con default seguro 0.1 (10%). Pre-fix tenía `traces_sample_rate=1.0` y

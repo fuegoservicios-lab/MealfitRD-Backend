@@ -93,3 +93,8 @@ def test_endpoint_guarda_los_que_toma_y_enciende_la_nevera(monkeypatch):
     assert r == {"guardados": 1}                      # creatina ya estaba; «no_existe» fuera; omega3 una vez
     a, k = guardados[0]
     assert a[1] == "Omega-3 (Aceite de Pescado)" and k["forzar_nevera"] is True and k["usar_estimado"] is False
+
+
+def test_marker():
+    m = re.search(r'_LAST_KNOWN_PFIX = "P1-PLAN-LOTE-(\d+) · (\d{4}-\d{2}-\d{2})"', _src("app.py"))
+    assert m and int(m.group(1)) >= 292 and m.group(2) >= "2026-09-25"
