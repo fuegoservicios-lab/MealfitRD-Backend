@@ -2024,8 +2024,24 @@ def _build_hybrid_shopping_list(
         # nace en esta etapa (el intento anterior corría antes y nunca la veía).
         try:
             _ocr = float(out_item.get("pkg_cover_ratio") or 0)
-            if (out_item["is_perishable"] and _ocr >= 2.0
-                    and "alcanza" not in str(out_item.get("display_qty", ""))):
+            # [P1-PLAN-LOTE-221 · 2026-09-24] compra única SIN congelador: lo fresco dura lo que dura en la nevera. El
+            # filete de pescado de 32 oz (el envase mínimo, 5,5× la necesidad de los días 1-3) salía «alcanza ~14 días —
+            # consúmelo en esos días»: 14 es su vida CONGELADO y el usuario no congela. Se dice para cuántos días es.
+            _df_sc = None
+            if out_item.get("_compra_unica_sin_congelador") and out_item["is_perishable"]:
+                try:
+                    from pantry_durability import classify as _pd_classify
+                    _df_sc = int(_pd_classify(name_canon, (master_item or {}).get("category"))["days_fresh"])
+                except Exception:
+                    _df_sc = None
+            if (_df_sc is not None and _df_sc < 8 and _ocr >= 2.0
+                    and "alcanza" not in str(out_item.get("display_qty", ""))
+                    and "sin congelador" not in str(out_item.get("display_qty", ""))):
+                out_item["display_qty"] = (f"{out_item.get('display_qty', '')} · para los primeros {max(1, _df_sc)} "
+                                           f"días — sin congelador no aguanta más")
+            elif (out_item["is_perishable"] and _ocr >= 2.0
+                    and "alcanza" not in str(out_item.get("display_qty", ""))
+                    and "sin congelador" not in str(out_item.get("display_qty", ""))):
                 _cubre_d = 7.0 * _ocr
                 _vida_d = float(out_item.get("shelf_life_days") or 0)
                 if _vida_d > 0:
@@ -11473,6 +11489,36 @@ def aggregate_and_deduct_shopping_list(plan_ingredients: list[str], consumed_ing
     _IGNORE_SHOPPING_PREFIXES = ('agua', 'hielo')
     _IGNORE_SHOPPING_EXACT = {'cubos de hielo'}
 
+    # [P1-PLAN-LOTE-221 · 2026-09-24] En una compra ÚNICA lo que aguanta el ciclo entero no pasa por los topes de
+    # realismo. Los topes (P3-HERB … P6-BROTHS) nacieron en mayo contra listas mensuales EXTRAPOLADAS (semana × 4,3 y
+    # «1 cebolla en cada comida»); desde el lote 215 la lista de una compra única es la Σ exacta de su mes proyectado,
+    # y un tope ahí no ahorra nada: deja al usuario sin comida a mitad de mes. Plan real de 30 días del dueño,
+    # recalculado: cebolla 2,55 de 4,9 kg («alcanza ~15 de 30 días»), batata 22/30, habichuelas secas 19/30 y leche de
+    # soya 25/30 — cuatro segundas idas al súper en una lista que promete una. Se apartan ANTES de los topes los
+    # alimentos cuya vida útil del catálogo cubre el ciclo y se devuelven DESPUÉS en su orden; lo perecedero sigue
+    # con sus topes (la proyección ya lo sustituye o lo deja en sus días). Knob `MEALFIT_SINGLE_TRIP_DURABLES_UNCAPPED`.
+    # tooltip-anchor: P1-PLAN-LOTE-221-DURADEROS-SIN-TOPE
+    _cu_apartados: dict = {}
+    _cu_orden: list = []
+    if compra_unica and _knob_env_bool("MEALFIT_SINGLE_TRIP_DURABLES_UNCAPPED", True):
+        try:
+            _cu_ciclo = int(cycle_days or 0) or 30
+            _cu_orden = list(aggregated.keys())
+            for _cu_n in list(aggregated.keys()):
+                _cu_mi = (master_map.get(_cu_n) or master_map.get(str(_cu_n).lower())
+                          or master_map.get(str(_cu_n).title()) or {})
+                try:
+                    _cu_vida = int(float(_cu_mi.get("shelf_life_days") or 0))
+                except (TypeError, ValueError):
+                    _cu_vida = 0
+                if _cu_vida >= _cu_ciclo:
+                    _cu_apartados[_cu_n] = aggregated.pop(_cu_n)
+        except Exception as _cu_e:
+            logging.debug(f"[P1-PLAN-LOTE-221] apartado de duraderos no-op: {type(_cu_e).__name__}: {_cu_e}")
+            for _cu_n, _cu_u in _cu_apartados.items():
+                aggregated.setdefault(_cu_n, _cu_u)
+            _cu_apartados = {}
+
     def _should_ignore_shopping(name_str: str) -> bool:
         n = strip_accents(name_str.lower()).strip()
         if not n:
@@ -13046,6 +13092,20 @@ def aggregate_and_deduct_shopping_list(plan_ingredients: list[str], consumed_ing
                     f"[P6-BROTHS-CAP] '{_name}' {_unit_key} cap: "
                     f"{_old:.1f} → {_cap_lbs:.1f} lbs"
                 )
+
+    # [P1-PLAN-LOTE-221] los duraderos de la compra única vuelven, sin tope, en el orden en que estaban
+    if _cu_apartados:
+        _cu_resto = dict(aggregated)
+        aggregated.clear()
+        for _cu_n in _cu_orden:
+            if _cu_n in _cu_apartados:
+                aggregated[_cu_n] = _cu_apartados[_cu_n]
+            elif _cu_n in _cu_resto:
+                aggregated[_cu_n] = _cu_resto.pop(_cu_n)
+        for _cu_n, _cu_u in _cu_resto.items():
+            aggregated.setdefault(_cu_n, _cu_u)
+        _cap_log(f"[P1-PLAN-LOTE-221] compra única: {len(_cu_apartados)} alimento(s) que aguantan el ciclo, "
+                 f"sin topes de realismo")
 
     # [2026-05-06 PROTEIN-UNIT-FALLBACK] Fallback portion para proteínas que
     # llegan en unidades sueltas sin peso explícito.

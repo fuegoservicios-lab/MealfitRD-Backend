@@ -376,11 +376,22 @@ def sellar_lista(res, plan_data):
         ciclo = ciclo_de(plan_data)
         if not ciclo:
             return res
+        # [P1-PLAN-LOTE-221 · 2026-09-24] …y si el ciclo va sin congelador, para que la nota de cobertura de un fresco
+        # diga cuánto aguanta EN LA NEVERA (el filete de 32 oz salía «alcanza ~14 días» sin congelador).
+        sin_congelador = False
+        try:
+            from pantry_durability import freeze_window_days
+            eff, _off = _politica(plan_data)
+            sin_congelador = freeze_window_days(((eff or {}).get("shopping") or {}).get("freezer_mode"), int(ciclo)) <= 0
+        except Exception:
+            sin_congelador = False
         items = res if isinstance(res, list) else (
             [x for v in res.values() if isinstance(v, list) for x in v] if isinstance(res, dict) else [])
         for it in items:
             if isinstance(it, dict):
                 it["_compra_unica"] = int(ciclo)
+                if sin_congelador:
+                    it["_compra_unica_sin_congelador"] = True
     except Exception:
         pass
     return res
@@ -454,12 +465,24 @@ def nevera_virtual(form_data, task_id=None, user_id=None, consultar=None):
             from db import execute_sql_query as consultar
         fila = consultar(_SQL_LISTAS_DEL_CICLO, (task_id, user_id), fetch_one=True) or {}
         ciclo = int(((eff or {}).get("shopping") or {}).get("main_cycle_days") or 0)
+        # [P1-PLAN-LOTE-221 · 2026-09-24] Sólo lo que LLEGA a este bloque: el yogur o el pescado del día 1 no están en la
+        # nevera del día 22 (sin congelador el filete aguanta 3 días). Mismo criterio que la proyección
+        # (`_aguanta` + `single_trip_requirements`); sin exigencia para el día del bloque, todo vale.
+        # tooltip-anchor: P1-PLAN-LOTE-221-NEVERA-VIRTUAL-LO-QUE-LLEGA
+        dia0 = int(form_data.get("_days_offset") or 0)
+        try:
+            from pantry_durability import single_trip_requirements
+            req = single_trip_requirements(eff, dia0)
+        except Exception:
+            req = None
         nombres, vistos = [], set()
         for it in _lista_del_ciclo(fila, ciclo):
             if not isinstance(it, dict) or str(it.get("category") or "").startswith("🚨"):
                 continue
             n = str(it.get("name") or "").strip()
             k = _sa(n)
+            if n and req and not _aguanta(n, dia0, req):
+                continue
             if n and k not in vistos:
                 vistos.add(k)
                 nombres.append(n)

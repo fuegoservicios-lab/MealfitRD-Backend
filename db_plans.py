@@ -1184,8 +1184,15 @@ def _finalize_plan_data_for_insert(data: dict, *, surface: str = "pre-INSERT",
                     _cc_ins = _bcco(_pd.get("_plan_policy"), _rcc)
                 except Exception:
                     _cc_ins = None
+                # [P1-PLAN-LOTE-221] el tiempo de cocina del plan (sellado en assemble) para la pasada final del piso
+                _ct_ins = None
+                try:
+                    _fd_ct = _pd.get("form_data") or data.get("form_data")
+                    _ct_ins = _pd.get("_cooking_time") or (_fd_ct.get("cookingTime") if isinstance(_fd_ct, dict) else None)
+                except Exception:
+                    _ct_ins = None
                 _n, _summ = _fpc(_pd["days"], db=_db_ins, target_fats=_tf_ins, count_caps=_cc_ins,
-                                 main_goal=_pd.get("main_goal"), target_macros=_tm_ins)
+                                 main_goal=_pd.get("main_goal"), target_macros=_tm_ins, cooking_time=_ct_ins)
                 if _n:
                     logger.info(f"🧩 [P1-COHERENCE-FINALIZE] {surface} aplicó coherencia a un plan no-finalizado ({_summ}).")
                 # [P1-PROTEIN-BAND-POST-FINALIZE · 2026-07-09] El truth-up de _fpc recomputa la proteína HONESTA

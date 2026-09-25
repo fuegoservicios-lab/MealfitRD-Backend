@@ -819,7 +819,25 @@ def _fix_display_grammar(s: str) -> str:
             _sing_form = _GRAMMAR_PLURAL_TO_SING.get(new_word.lower(), new_word.lower())
             _feminine = _sing_form.endswith("a")
             _noun_plural = new_word.lower() in _GRAMMAR_PLURAL_TO_SING
-            m_adj = _GRAMMAR_ADJ_ADJACENT_RE.match(rest)
+            # [P1-PLAN-LOTE-221 · 2026-09-24] Un sustantivo que el mapa NO conoce se tomaba por singular masculino si
+            # acababa en «s»: «2 tortas pequeñas de casabe» → «2 tortas pequeño de casabe» (33 líneas en las baterías
+            # guardadas; el humanizador escribe bien y este pase lo estropeaba). Sin mapa, el número y el género salen
+            # de la terminación sólo cuando es inequívoca (-as/-os/-a/-o); si no, el adjetivo no se toca.
+            # tooltip-anchor: P1-PLAN-LOTE-221-CONCORDANCIA-SUSTANTIVO-DESCONOCIDO
+            _nw_low = new_word.lower()
+            _noun_ok = True
+            if _nw_low not in _GRAMMAR_PLURAL_TO_SING and _nw_low not in _DISPLAY_PLURAL:
+                if _nw_low.endswith("as"):
+                    _noun_plural, _feminine = True, True
+                elif _nw_low.endswith("os"):
+                    _noun_plural, _feminine = True, False
+                elif _nw_low.endswith("a"):
+                    _noun_plural, _feminine = False, True
+                elif _nw_low.endswith("o"):
+                    _noun_plural, _feminine = False, False
+                else:
+                    _noun_ok = False
+            m_adj = _GRAMMAR_ADJ_ADJACENT_RE.match(rest) if _noun_ok else None
             if m_adj and m_adj.group(2) not in _GRAMMAR_CONNECTORS:
                 _adj_low = m_adj.group(2).lower()
                 _infl = _grammar_inflect_adj(_adj_low, _noun_plural, _feminine)

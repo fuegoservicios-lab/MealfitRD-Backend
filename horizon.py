@@ -1638,6 +1638,24 @@ _COOKING_TIME_PROMPT = {
 }
 
 
+def cooking_time_rule(form_data) -> str:
+    """[P1-PLAN-LOTE-220 · 2026-09-24] El tope de tiempo de cocina del formulario, en claro, para quien REESCRIBE un día o
+    un plato sin ver el formulario: el corrector del self-critique, el regen quirúrgico y el swap. Batería real con
+    «Nada» (instrumentada): el generador del día entregó las 12 comidas dentro de 10 min y el corrector del
+    self-critique —que no recibía el tope— las reescribió en 15-20 min («Pinchos de pollo a la plancha con yuca
+    hervida», 20). Mismo texto que ve el generador (`_COOKING_TIME_PROMPT`), sin el código del formulario delante.
+    Cadena vacía sin tope (`plenty`, sin clave, valor desconocido). tooltip-anchor: P1-PLAN-LOTE-220-TIEMPO-A-LOS-CORRECTORES"""
+    try:
+        ct = str((form_data or {}).get("cookingTime") or "").strip().lower()
+        txt = _COOKING_TIME_PROMPT.get(ct)
+        m = _COOKING_TIME_BUDGET_MIN.get(ct)
+        if not txt or not m:
+            return ""
+        return txt.split(" = ", 1)[-1].format(m=m)
+    except Exception:
+        return ""
+
+
 def explain_form_codes_for_prompt(form_for_prompt):
     """El formulario que ve el modelo, con los códigos que el modelo NO puede adivinar escritos en claro. Copia; el
     dict de entrada no se toca. Sin clave o con un valor desconocido, el valor queda como vino."""
